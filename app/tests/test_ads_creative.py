@@ -607,6 +607,7 @@ class CreativeMatrixTest(_BaseCreativeTest):
         _wait_progress(self.client, f"/brands/{self.bid}/ads/{self.cycle_id}/creatives/progress?run=1")
         sent = provider.calls[0]["messages"][0]["content"]
         # 只在人物出鏡才套 DNA、產圖硬規則——已隨 creative-matrix.md 整份塞進 prompt（票 11 接線）。
+        # 承重字串：釘在 creative-matrix.md 第 2 節開頭，改那句話就要同步改這裡。
         self.assertIn("只套用在「人物出鏡」欄標示是／可", sent)
         self.assertIn("圖上文字用「」寫死", sent)
         self.assertIn("數字獨立成行", sent)

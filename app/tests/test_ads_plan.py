@@ -340,7 +340,9 @@ class PlanGenerationTest(_BasePlanTest):
         self.assertIn("【方法論：ads.md】", sent)
         self.assertIn("【方法論：ab-testing.md】", sent)
         self.assertIn("【方法論：customer-voice.md】", sent)
-        self.assertIn("Meta 現行打法", sent)  # ads.md 內文一角，確認不是只帶檔名沒帶內容
+        # ads.md 內文一角，確認不是只帶檔名沒帶內容。
+        # 這是承重字串：釘在 ads.md 第 1 節標題，改那個標題就要同步改這裡。
+        self.assertIn("Meta 現行打法", sent)
 
     def test_include_methodology_false_skips_methodology_for_blind_test(self):
         """票 11 效果盲測：include_methodology=False 時同一條生產管線要略過方法論區塊，
