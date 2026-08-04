@@ -32,7 +32,7 @@ PROVIDER = providers.AnthropicProvider()  # 測試整包換掉
 
 CREATIVE_MAX_TOKENS = 16000  # 也是花費上限攔截（票 M2）的呼叫前保守估計依據，見 generate()
 
-# 對應 docs/methodology/README.md 對照表的列名（票 11）；一次生成同時出 Hook／文案／
+# 對應 app/methodology/README.md 對照表的列名（票 11）；一次生成同時出 Hook／文案／
 # 圖片提示詞，兩列都要吃，改對照表內容不必改這裡。
 METHODOLOGY_TASK_LABELS = ["Hook／文案生成", "圖片 Prompt 生成"]
 

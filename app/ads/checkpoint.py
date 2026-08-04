@@ -9,7 +9,7 @@
 2. 錢有沒有在花。
 3.（第 7 天加）素材有沒有出現疲勞訊號（讀 `app.core.rule_cards` 的示範規則卡）。
 
-這是 `docs/methodology/ab-testing.md` 第 4、7 節 Peeking Problem 紀律在產品裡的具體落地：
+這是 `app/methodology/ab-testing.md` 第 4、7 節 Peeking Problem 紀律在產品裡的具體落地：
 `run()` 刻意不呼叫 `reading.judge()`，回傳的 dict 不含 status／ROAS／打平線等任何會被讀成
 「贏了／輸了」的欄位。
 

@@ -14,11 +14,11 @@ from app.core import db
 from app.llm import methodology
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-METHODOLOGY_DIR = REPO_ROOT / "docs" / "methodology"
+METHODOLOGY_DIR = REPO_ROOT / "app" / "methodology"
 
 
 class MethodologyTableParseTest(unittest.TestCase):
-    """對真實 docs/methodology/README.md 的解析——回歸鎖定既有對照表內容。"""
+    """對真實 app/methodology/README.md 的解析——回歸鎖定既有對照表內容。"""
 
     def test_real_readme_parses_known_task_labels(self):
         table = methodology.load_table()

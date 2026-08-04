@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """app/ads/creative_matrix.py — 創意矩陣接線用的封閉枚舉（票 7，決策 0023 第 10、11 點）。
 
-docs/methodology/creative-matrix.md 是角度與規則的權威內容——完整表格已經透過
+app/methodology/creative-matrix.md 是角度與規則的權威內容——完整表格已經透過
 app/llm/methodology.py 整份塞進生成 prompt（見 app/ads/creative.py 的
 METHODOLOGY_TASK_LABELS）。這裡不重抄一次 35 個角度的說明文字，只放「驗形要用的
 封閉枚舉」：角度編號的合法範圍、Hook 切法的封閉詞彙。改文件內容不用改這裡；

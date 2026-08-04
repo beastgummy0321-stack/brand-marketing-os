@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """app/llm/methodology.py — 方法論載入器（票 11，決策 0023/0024）。
 
-生成計畫／素材時，把 docs/methodology/README.md「任務型別 → 必讀方法論檔」對照表指定的
+生成計畫／素材時，把 app/methodology/README.md「任務型別 → 必讀方法論檔」對照表指定的
 方法論內容組進 prompt。對照表是唯一權威——本檔不寫死任務型別對應哪些檔案，只負責解析表格、
 讀檔、組字串；改對照表，行為就跟著變，不必改這裡的程式。
 
@@ -17,7 +17,7 @@ from typing import NamedTuple, Optional
 from app.core.audit import write_audit
 from app.core.db import APP_DIR
 
-METHODOLOGY_DIR = APP_DIR.parent / "docs" / "methodology"
+METHODOLOGY_DIR = APP_DIR / "methodology"
 README_PATH = METHODOLOGY_DIR / "README.md"
 
 _ROW_RE = re.compile(r"^\|\s*([^|]+?)\s*\|\s*(.+?)\s*\|\s*$")

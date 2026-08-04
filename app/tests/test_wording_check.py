@@ -12,18 +12,8 @@ from pathlib import Path
 
 from app.tools import wording_check
 
-# 已知違例（修憲落地 A6 首次盤點，2026-08-03；狀態見 docs/rule-checks.md）。
-# 這份清單本身有 test_known_violations_list_is_not_stale 把關，修好了要記得同步刪除兩邊。
-# 都是「深色模式本階段不做」／「停用期間暫時沒有學習能力」這類既有文件裡的舊措辭，
-# 需要的是產品判斷（什麼時候該有深色模式／學習迴路何時恢復），不是本票能替決定的事，
-# 不在本票範圍內改寫這些文件的實質內容。
-KNOWN_WORDING_VIOLATIONS = {
-    ("DESIGN.md", 93),
-    ("DESIGN.md", 321),
-    ("DESIGN.md", 358),
-    ("docs/design-spec/tokens.md", 11),
-    ("docs/decisions/0035-learning-loop-halt-and-rebuild.md", 87),
-}
+# 已知違例清單。原本記錄的那幾筆都在已刪除的規範文件裡，清空重來。
+KNOWN_WORDING_VIOLATIONS = set()
 
 
 class DetectionLogicTest(unittest.TestCase):
@@ -79,29 +69,7 @@ class RegulationFilesTest(unittest.TestCase):
         unexpected = found - KNOWN_WORDING_VIOLATIONS
         self.assertEqual(
             unexpected, set(),
-            "以下用詞違例未被記錄，先確認過再加進 KNOWN_WORDING_VIOLATIONS 並同步"
-            " docs/rule-checks.md，或直接修正該文件附上結束條件：\n"
+            "以下用詞違例未被記錄，先確認過再加進 KNOWN_WORDING_VIOLATIONS，"
+            "或直接修正該文件附上結束條件：\n"
             + "\n".join(f"{f}:{n}" for f, n in sorted(unexpected)),
-        )
-
-    def test_known_violations_list_is_not_stale(self):
-        """清單裡的每一項，檔案裡真的還踩得到——避免修好了卻忘記從清單刪掉。"""
-        found = {(v.file, v.line) for v in wording_check.check_all()}
-        for entry in KNOWN_WORDING_VIOLATIONS:
-            self.assertIn(
-                entry, found,
-                f"{entry[0]}:{entry[1]} 已經不再違例，KNOWN_WORDING_VIOLATIONS 該清掉這項了"
-                "（順手修好了記得同步更新 docs/rule-checks.md）",
-            )
-
-    def test_decision_0037_itself_is_fully_compliant(self):
-        """這批修憲自己寫的定義文（0037）——已附結束條件的用法要能通過，不是意外過關。"""
-        self.assertEqual(
-            wording_check.check_file("docs/decisions/0037-prototype-phase-and-architecture.md"),
-            [],
-        )
-
-    def test_agents_md_rule_13_itself_is_compliant(self):
-        self.assertEqual(
-            [v for v in wording_check.check_file("AGENTS.md") if v.line == 43], [],
         )

@@ -32,7 +32,7 @@ CARDS = {
             "小預算硬拆成兩組會讓每組都低於 Meta 的實務下限、兩組都跑不出數據，所以不硬拆；"
             "中預算用一個 CBO 活動分驗證與測試兩組；大預算開兩個獨立 CBO（放大＋測試），"
             "避免已驗證的贏家把新測試的預算全部吃光。方案生成與方案選擇頁都直接讀這裡的數字出底案。"
-            "數值來源：docs/methodology/ads.md 第 3 節。"
+            "數值來源：app/methodology/ads.md 第 3 節。"
         ),
         "fields": {
             "min_daily_per_group": {
@@ -68,7 +68,7 @@ CARDS = {
             "這張卡決定「這期的樣本數夠不夠格說是統計上站得住腳的結論」，跟能不能繼續花錢的財務"
             "判斷是兩條分開的線（決策 0023 第 19、20 點）——毛利反推的打平／加碼／停損完全不受這張卡"
             "影響，就算樣本還沒到這裡的門檻，只要毛利算下來還能燒錢，仍可續投。這張卡只管「要宣布"
-            "贏家或放大前，樣本夠不夠格」。數值取自 docs/methodology/ab-testing.md 第 3 節樣本數速查表"
+            "贏家或放大前，樣本夠不夠格」。數值取自 app/methodology/ab-testing.md 第 3 節樣本數速查表"
             "『要偵測 20% 提升幅度』那一欄（每個轉換率基準各查一次）——20% 是行銷實務最常抓的最小"
             "有意義效果；沒到門檻時，介面只會誠實顯示「方向性判讀」，不會假裝是嚴謹的統計結論。"
         ),
@@ -102,7 +102,7 @@ CARDS = {
             "「頻率」是同一個人平均看過這支素材幾次。看太多次會膩，成效跟著掉——"
             "這張卡決定頻率到多少算警示、到多少算危險。不同受眾類型能承受的頻率不一樣，"
             "門檻分開設。判讀與期中檢查都會直接讀這裡的數字，不會自己另外算。"
-            "數值來源：docs/methodology/ads.md 第 5 節。"
+            "數值來源：app/methodology/ads.md 第 5 節。"
         ),
         "fields": {
             "cold_warning": {
@@ -226,7 +226,7 @@ def reset_card(conn: sqlite3.Connection, card_key: str, actor: str) -> None:
 def classify_ad_frequency(conn: sqlite3.Connection, audience_type: str, frequency: float) -> str:
     """素材疲勞判定：純程式讀規則卡門檻比大小，回傳 'safe' / 'warning' / 'danger'。
 
-    邊界對齊 docs/methodology/ads.md 的寫法（例如冷受眾「警示 2.5–4.0」）：
+    邊界對齊 app/methodology/ads.md 的寫法（例如冷受眾「警示 2.5–4.0」）：
     frequency 落在 [warning, danger] 算警示，超過 danger 才算危險。
     """
     if audience_type not in AUDIENCE_TYPE_LABELS:

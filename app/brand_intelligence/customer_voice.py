@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """app/brand_intelligence/customer_voice.py — 顧客原話抽取的唯一生成邏輯。
 
-見 GitHub issue #14、決策 0023 第 18a 條、決策 0024 第 2 條、docs/methodology/customer-voice.md。
+見 GitHub issue #14、決策 0023 第 18a 條、決策 0024 第 2 條、app/methodology/customer-voice.md。
 
 使用者貼入一段顧客原話全文（評論／留言／客服對話）＋出處，AI 依 customer-voice.md 的規則
 （JTBD 三層任務、痛點判準、頻率×強度、原文用詞優先）抽出可用於文案的痛點與用語，逐條標記
@@ -34,7 +34,7 @@ _SYSTEM = (
 )
 
 _RULES = (
-    "抽取規則（來自 docs/methodology/customer-voice.md）：\n"
+    "抽取規則（來自 app/methodology/customer-voice.md）：\n"
     "1. JTBD 三類任務要分開記：functional（字面上要完成的事）、emotional（想要的感覺）、"
     "social（想在別人眼中呈現的形象），一段原話可能同時抽出多層。\n"
     "2. 痛點判準：優先收「未被提示且帶情緒」的內容（顧客自己主動講、用情緒字眼），"

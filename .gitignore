@@ -14,3 +14,4 @@ __pycache__/
 
 # 工作暫存區，不進版控
 .scratch/
+.pytest_cache/

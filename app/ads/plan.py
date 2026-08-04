@@ -41,7 +41,7 @@ MIN_OPTION_COUNT = 2
 MAX_OPTION_COUNT = 4
 PLAN_MAX_TOKENS = 24000  # 也是花費上限攔截（票 M2）的呼叫前保守估計依據，見 generate_options()
 
-# 對應 docs/methodology/README.md 對照表的列名（票 11）；改對照表內容不必改這裡。
+# 對應 app/methodology/README.md 對照表的列名（票 11）；改對照表內容不必改這裡。
 METHODOLOGY_TASK_LABELS = ["檔期計畫生成"]
 
 PARSE_FAIL_MESSAGE = "AI 有回覆，但格式讀不成預期的樣子。可以再試一次。"
