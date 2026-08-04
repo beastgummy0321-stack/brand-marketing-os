@@ -135,12 +135,12 @@ class MethodologyCompileTest(unittest.TestCase):
 
 
 class MethodologyReviewDueDateTest(unittest.TestCase):
-    """修憲落地 L5（決策 0034 第 10 條）：8 份方法論檔的 frontmatter 都要有複查到期日，
-    否則這批檔案「Meta 新演算法讓舊打法效果轉弱」卻永遠不會被觸發重新核對。"""
+    """每份方法論檔的 frontmatter 都要有複查到期日，否則「Meta 新演算法讓舊打法效果轉弱」
+    這類會過期的內容永遠不會被觸發重新核對。"""
 
     EXPECTED_FILES = [
         "ads.md", "ad-creative.md", "ab-testing.md", "copywriting.md",
-        "creative-matrix.md", "customer-voice.md", "ui-copy.md", "README.md",
+        "creative-matrix.md", "customer-voice.md", "README.md",
     ]
 
     def test_every_methodology_file_has_a_review_due_date(self):
@@ -151,6 +151,22 @@ class MethodologyReviewDueDateTest(unittest.TestCase):
             match = re.search(r"複查到期日:\s*(\d{4}-\d{2}-\d{2})", frontmatter)
             self.assertIsNotNone(match, f"{name} frontmatter 缺複查到期日")
             self.assertEqual(match.group(1), "2027-02-01", f"{name} 複查到期日不是預期值")
+
+
+class MethodologyLineCapTest(unittest.TestCase):
+    """方法論檔是無條件整份注入 prompt 的程式零件（ADR 0001），每一行每次生成都要付 token。
+    這裡是唯一沒有 progressive disclosure 可用的地方，所以上限卡死。"""
+
+    LINE_CAP = 150
+
+    def test_no_methodology_file_exceeds_the_line_cap(self):
+        for path in sorted(METHODOLOGY_DIR.glob("*.md")):
+            lines = len(path.read_text(encoding="utf-8").splitlines())
+            self.assertLessEqual(
+                lines, self.LINE_CAP,
+                f"{path.name} 有 {lines} 行，超過 {self.LINE_CAP} 行上限。"
+                "請精簡內容，不要放寬上限——這個檔每次生成都會被整份塞進 prompt。",
+            )
 
 
 if __name__ == "__main__":
