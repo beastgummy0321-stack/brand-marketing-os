@@ -1,0 +1,334 @@
+{% extends "_layouts/console.html" %}
+{% from "_components/breadcrumb.html" import breadcrumb %}
+{% from "_components/badge.html" import badge %}
+{% from "_components/banner.html" import banner %}
+{% from "_components/definition_list.html" import definition_list %}
+{% from "_components/wizard_steps.html" import progress_rail %}
+{% from "_components/detail.html" import detail %}
+
+{% block title %}成效 — {{ cycle.start_date }} 檔期 — {{ brand.name }}{% endblock %}
+
+{% block content %}
+{{ breadcrumb(breadcrumb_items) }}
+{{ progress_rail(stage_items, collapsed=True, aria_label='檔期進度') }}
+
+{% if banner_msg %}
+{{ banner(banner_kind or 'ok', banner_msg, dismiss_url=request.url.path) }}
+{% endif %}
+
+<h1>這期的成效</h1>
+
+{% if is_simulation %}
+{{ banner('warn', simulation_note) }}
+{% endif %}
+
+{# 判讀後回溯提醒：投放前檢查清單還有沒勾完的項目（決策 0023 第 17 點） #}
+{% if reading.cycle and checklist.unchecked_labels %}
+{{ banner('warn', '投放前檢查清單還有沒勾的項目：' ~ (checklist.unchecked_labels | join('、')) ~ '（不影響這次判讀，回去看看）',
+   extra_link_text='去檢查清單', extra_link_url='/brands/' ~ brand.id ~ '/ads/' ~ cycle.id ~ '/checklist') }}
+{% endif %}
+
+{# ②算出來的數字（拆層 GitHub issue #47：原始數字與匯入表單搬到資料操作子頁） #}
+<section class="card">
+  <h2>算出來的數字</h2>
+  {% if summary.rows %}
+  {{ definition_list([
+    ('點擊率', '{:.2%}'.format(summary.kpis.ctr) if summary.kpis.ctr is not none else '資料不足', True),
+    ('每次點擊成本', '{:,.1f}'.format(summary.kpis.cpc) if summary.kpis.cpc is not none else '資料不足', True),
+    ('每筆成交成本', '{:,.0f}'.format(summary.kpis.cpa) if summary.kpis.cpa is not none else '還沒有成交', True),
+    ('廣告投報率', '{:.2f} 倍'.format(summary.kpis.roas) if summary.kpis.roas is not none else '資料不足', True),
+  ]) }}
+  {% if summary.kpis.ctr is none or summary.kpis.cpa is none or summary.kpis.roas is none %}
+  {% call detail() %}
+  <p class="section-desc">「資料不足」是誠實的答案——分母是 0 的時候算不出來，系統不會硬給一個 0 讓你誤會。</p>
+  {% endcall %}
+  {% endif %}
+  {% else %}
+  <p class="page-lede">這期還沒有任何成效資料，去<a class="link" href="/brands/{{ brand.id }}/ads/{{ cycle.id }}/performance/data">資料操作頁</a>匯入或填數字。</p>
+  {% endif %}
+</section>
+
+{# 判讀：狀態由規則判定，AI 只負責把結論講成人話（決策 0016 硬性原則 4） #}
+{% if reading.cycle %}
+{# ①判讀結論＋成色標籤 #}
+<section class="card reading-card">
+  <div class="reconcile-head">
+    <h2>這期該怎麼看</h2>
+    {{ badge(reading.cycle.status_label, 'warn' if reading.cycle.status in ('pause_candidate', 'insufficient_data', 'unclear_economics') else 'ok') }}
+    {{ badge(reading.cycle.result.statistical_level_label, 'ok' if reading.cycle.result.statistical_level == 'statistical' else 'neutral') }}
+    {% if reading.cycle.result.data_grade %}
+    {{ badge(reading.cycle.result.data_grade.label, 'ok' if reading.cycle.result.data_grade.kind == 'calibrated' else 'neutral') }}
+    {% endif %}
+    {% if settlement and settlement.settlement_version > 1 %}
+    {{ badge('第 ' ~ settlement.settlement_version ~ ' 版' ~ ('・已結案仍在校正' if settlement.is_post_close else ''), 'neutral') }}
+    {% endif %}
+  </div>
+
+  {% if reading.cycle.llm_explanation %}
+  <p class="reading-text">{{ reading.cycle.llm_explanation }}</p>
+  {% endif %}
+
+  {% if settlement and settlement.diff_summary %}
+  {% call detail() %}
+  <p><strong>這一版跟上一版差在哪：</strong></p>
+  <p class="reading-text">{{ settlement.diff_summary }}</p>
+  {% endcall %}
+  {% endif %}
+
+  {% call detail() %}
+  {% if reading.cycle.result.statistical_note %}
+  <p class="section-desc">{{ reading.cycle.result.statistical_note }}</p>
+  {% endif %}
+  {% if reading.cycle.result.is_tentative and reading.cycle.result.unsettled_note %}
+  <p class="section-desc">{{ reading.cycle.result.unsettled_note }}</p>
+  {% endif %}
+  <ul class="reading-reasons">
+    {% for reason in reading.cycle.result.reasons %}<li>{{ reason }}</li>{% endfor %}
+  </ul>
+  <p class="section-desc">
+    這些建議是程式依門檻規則算的，AI 只負責把結論講成白話，不會決定是否加碼或停止。
+    要照做的話，還是你自己去 Meta 調整。
+  </p>
+  {% endcall %}
+
+  {% set rline = reading.cycle.result.repurchase_line %}
+  {% if rline %}
+  {% call detail() %}
+  <p><strong>含 90 天回購的實質判讀：</strong></p>
+  {% if rline.available %}
+  <p class="reading-text">
+    回購倍數 {{ '%.2f'|format(rline.multiplier) }} 倍（樣本 {{ rline.sample_size }} 位滿 90 天顧客），
+    回購實質打平線 {{ '%.2f'|format(rline.breakeven) }} 倍 → {{ rline.status_label }}。
+  </p>
+  <ul class="reading-reasons">
+    {% for reason in rline.reasons %}<li>{{ reason }}</li>{% endfor %}
+  </ul>
+  {% if rline.conflict %}
+  {{ badge('兩線結論相反，待複核', 'warn') }}
+  {% for d in repurchase_dissents %}
+  <p class="section-desc">{{ d.suggestion }}</p>
+  <div class="form-actions">
+    <form method="post" action="/brands/{{ brand.id }}/ads/{{ cycle.id }}/dissents/{{ d.id }}/decide" class="inline-form">
+      <input type="hidden" name="decision" value="adopted">
+      <button type="submit" class="btn-text">採納回購線</button>
+    </form>
+    <form method="post" action="/brands/{{ brand.id }}/ads/{{ cycle.id }}/dissents/{{ d.id }}/decide" class="inline-form">
+      <input type="hidden" name="decision" value="rejected">
+      <button type="submit" class="btn-text">維持首單線</button>
+    </form>
+  </div>
+  {% endfor %}
+  {% endif %}
+  {% elif rline.insufficient_sample %}
+  <p class="section-desc">
+    回購樣本只有 {{ rline.sample_size }} 位滿 90 天顧客，未達 30 位門檻，暫不啟用實質打平線。
+  </p>
+  {% else %}
+  <p class="section-desc">還沒有足夠的訂單資料算出回購倍數。</p>
+  {% endif %}
+  {% endcall %}
+  {% endif %}
+
+  {% set bl = reading.cycle.result.baseline_comparison %}
+  {% if bl %}
+  {% call detail() %}
+  <p><strong>基線比較（去年同期／全年平均）：</strong></p>
+  {% if bl.season.level %}
+  <p class="reading-text">
+    {{ bl.season.label }}：這期跟去年同期相比，是全年平均的 {{ '%.2f'|format(bl.season.ratio) }} 倍。
+  </p>
+  {% else %}
+  <p class="section-desc">{{ bl.season.label }}</p>
+  {% endif %}
+  {% if bl.cross_ruler_note %}
+  <p class="section-desc">{{ bl.cross_ruler_note }}</p>
+  {% endif %}
+  {% endcall %}
+  {% endif %}
+
+  {% set ch = reading.cycle.result.channel_comparison %}
+  {% if ch %}
+  {% call detail() %}
+  <p><strong>通路對照（蝦皮／藥局）：</strong></p>
+  {% if ch.light %}
+  {{ badge(ch.label ~ '燈', ch.badge_kind) }}
+  {% endif %}
+  <p class="reading-text">{{ ch.message }}</p>
+  {% if ch.gray_light_debt %}
+  <p class="section-desc">連兩期都沒有通路資料，這期判讀可信度降級顯示。</p>
+  {% endif %}
+  <p class="section-desc">{{ ch.repurchase_caution }}</p>
+  {% if shopee_code and shopee_code.code %}
+  <p class="section-desc">目前記錄的蝦皮期別碼：{{ shopee_code.code }}
+    {% if shopee_code.redemption_count is not none %}（回收數 {{ shopee_code.redemption_count }}）{% endif %}。</p>
+  {% endif %}
+  <a class="link" href="/brands/{{ brand.id }}/ads/{{ cycle.id }}/performance/data">去資料操作頁填蝦皮期別碼</a>
+  {% endcall %}
+  {% endif %}
+
+  {% set leak = reading.cycle.result.ga4_leak %}
+  {% if leak %}
+  {% call detail() %}
+  <p><strong>GA4 漏率反偵測：</strong></p>
+  {% if leak.available %}
+  <p class="reading-text">{{ leak.note }}</p>
+  {% else %}
+  <p class="section-desc">{{ leak.reason }}</p>
+  {% endif %}
+  {% endcall %}
+  {% endif %}
+
+  {# 兌現預言卡出口(a)：判讀頁掛第①塊「判讀結論」卡內（票 F5，決策 0039 第 15 條），
+     沒存過快照的期（forecast_snapshot 回 None）prediction 就是 None，這裡整段不出現。
+     這張卡文字量已經很滿（decision 0026 §20.1 規則 4），整段收進詳情，不多佔卡面字數。 #}
+  {% if prediction %}
+  {% call detail() %}
+  {% include "_components/prediction_settlement.html" %}
+  {% endcall %}
+  {% endif %}
+
+  <a class="btn-text" href="/brands/{{ brand.id }}/ads/{{ cycle.id }}/reading/progress">重新判讀一次</a>
+  {% include "_components/hypothesis_review.html" %}
+</section>
+
+{% set asset_breakdown = reading.cycle.result.asset_breakdown if reading.cycle else [] %}
+{# ③分開看每個產品／每則素材：獨立於判讀結論卡之外，是五塊裡自己的一塊。統計等級與為什麼收進
+   詳情，跟①同一個做法——卡面只留「哪個產品、什麼建議」，理由是深度內容。
+   素材層（修憲落地 G2，決策 0035 第二節第 4 點）併進同一張卡而不新開卡：只有廣告名稱對得回
+   已授權素材的資料才會有值，對不上就誠實不顯示，不硬湊一列（鐵則 16）。 #}
+{% if reading.products or asset_breakdown %}
+<section class="card">
+  {% if reading.products %}
+  <h3>分開看每個產品</h3>
+  <div class="table-wrap">
+    <table class="data-table">
+      <thead><tr><th>產品</th><th>建議</th></tr></thead>
+      <tbody>
+      {% for row in reading.products %}
+        <tr>
+          <td class="primary-cell">{{ row.product_name }}</td>
+          <td>{{ row.status_label }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% call detail() %}
+  <ul class="reading-reasons">
+    {% for row in reading.products %}
+    <li><strong>{{ row.product_name }}</strong>（{{ row.result.statistical_level_label }}）：{{ row.result.reasons | join('；') }}</li>
+    {% endfor %}
+  </ul>
+  {% endcall %}
+  {% endif %}
+
+  {% if asset_breakdown %}
+  <h3>分開看每則素材</h3>
+  <p class="section-desc">只有廣告名稱對得回已授權素材的資料才列在這裡；沒對到的仍算在上面的整體數字裡。</p>
+  <div class="table-wrap">
+    <table class="data-table">
+      <thead><tr><th>素材（廣告名稱）</th><th>花費</th><th>營收</th><th>投報率</th></tr></thead>
+      <tbody>
+      {% for row in asset_breakdown %}
+        <tr>
+          <td class="primary-cell">{{ row.asset_name }}</td>
+          <td>{{ '{:,.0f}'.format(row.spend) }}</td>
+          <td>{{ '{:,.0f}'.format(row.revenue) }}</td>
+          <td>{{ '%.2f'|format(row.kpis.roas) ~ ' 倍' if row.kpis.roas is not none else '算不出來' }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+</section>
+{% endif %}
+
+{# 下期草案：判讀的同時就備好，往下滑就看得到（決策 0022 第 15 點） #}
+{# ④下一期就這樣開 #}
+{% if next_cycle %}
+{% set draft = next_cycle.content %}
+<section class="card gate-card">
+  <h3>下一期就這樣開</h3>
+  <p>{{ draft.budget.advice }}。</p>
+
+  {{ definition_list([
+    ('這期', '{:,.0f}'.format(draft.budget.current_budget), True),
+    ('下期', '{:,.0f}'.format(draft.budget.proposed_budget), True),
+  ]) }}
+
+  {% if (draft.budget.cap_ratio is not none and draft.budget.proposed_budget > draft.budget.current_budget) or draft.echo_chamber or draft.rule_cards_created %}
+  {% call detail() %}
+  {% if draft.budget.cap_ratio is not none and draft.budget.proposed_budget > draft.budget.current_budget %}
+  <p class="creative-why">
+    加碼幅度上限是 {{ '{:.0%}'.format(draft.budget.cap_ratio) }}，因為這期累積了
+    {{ '%.0f'|format(draft.budget.conversions) }} 筆成交。成交筆數越多，之後可以加的幅度就越大——
+    這是為了防止一期運氣好就把預算翻好幾倍。
+  </p>
+  {% endif %}
+  {% if draft.echo_chamber %}
+  <div class="compliance-flag compliance-info">
+    這批素材跟過去用過的太像了。下期會刻意留一組不一樣的來試，避免越做越像自己。
+  </div>
+  {% endif %}
+  {% if draft.rule_cards_created %}
+  <p class="creative-why">另外整理了 {{ draft.rule_cards_created }} 條「以後不要再這樣寫」的建議，
+    會在下期的計畫確認那一步問你。</p>
+  {% endif %}
+  {% endcall %}
+  {% endif %}
+
+  <div class="form-actions">
+    <a class="btn btn-primary" href="/brands/{{ brand.id }}/ads/new">開下一期</a>
+  </div>
+</section>
+{% endif %}
+{% elif summary.rows %}
+<div class="card gate-card">
+  <h3>看看這期該怎麼辦</h3>
+  <p>系統會依門檻規則判斷該加碼、維持還是停下來。</p>
+  {% call detail() %}
+  <p class="section-desc">會用白話說明為什麼，資料不夠時會直說，不硬下結論。</p>
+  {% endcall %}
+  <a class="btn btn-primary" href="/brands/{{ brand.id }}/ads/{{ cycle.id }}/reading/progress">判讀這期成效</a>
+</div>
+{% endif %}
+
+{# ⑤本期判讀可信度 #}
+{% if summary.rows %}
+<section class="card reconcile-card">
+  <div class="reconcile-head">
+    <h3>本期判讀可信度</h3>
+    {{ badge(reconciliation.label, 'ok' if reconciliation.confidence >= 0.9 else 'warn') }}
+  </div>
+
+  {% for row in reconciliation.rows %}
+  <div class="compliance-flag compliance-{{ row.severity }}">{{ row.message }}</div>
+  {% endfor %}
+
+  {% call detail() %}
+  <p class="section-desc">{{ reconciliation.note }}</p>
+  <p class="section-desc">對這期跟計畫比較的三題自答、蝦皮期別碼與營收校準，都在資料操作頁填寫，答完會反映在這裡的可信度。</p>
+  {% endcall %}
+
+  <a class="btn-text" href="/brands/{{ brand.id }}/ads/{{ cycle.id }}/performance/data">去資料操作頁</a>
+</section>
+{% endif %}
+
+{% if quarantined %}
+{{ banner('warn', '有 ' ~ (quarantined | length) ~ ' 筆資料的數字不合理（例如點擊比曝光還多、或是負數），已經擱在一旁不列入上面的計算。') }}
+{% endif %}
+
+{% if is_simulation %}
+<section class="card">
+  <h3>產生一組模擬數字</h3>
+  <p class="section-desc">
+    系統會依你設定的預算，用合理的點擊成本與成交率推算出一組數字，讓你看看判讀長什麼樣。
+    數字有隨機浮動，但同一期重看永遠是同一組——不會每次重整就變一個結果。
+  </p>
+  <form method="post" action="/brands/{{ brand.id }}/ads/{{ cycle.id }}/performance/simulate">
+    <button type="submit" class="btn btn-primary">{{ '重新產生' if summary.rows else '產生模擬成效' }}</button>
+  </form>
+</section>
+{% endif %}
+{% endblock %}

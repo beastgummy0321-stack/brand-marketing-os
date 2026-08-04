@@ -1,0 +1,40 @@
+{% extends "_layouts/console.html" %}
+{% from "_components/banner.html" import banner %}
+{% from "_components/field.html" import field %}
+
+{% block title %}規則卡 — 行銷作業系統{% endblock %}
+
+{% block content %}
+{% if banner_msg %}
+{{ banner(banner_kind or 'ok', banner_msg, dismiss_url='/rule-cards') }}
+{% endif %}
+
+<div class="form-page">
+<h1>規則卡</h1>
+
+{% for card in cards %}
+<section class="settings-section" aria-labelledby="rule-card-{{ card.key }}-title">
+  <h2 id="rule-card-{{ card.key }}-title">{{ card.title }}</h2>
+  <p class="settings-desc">{{ card.description }}</p>
+
+  <form method="post" action="/rule-cards/{{ card.key }}/edit" novalidate>
+    {% for f in card.fields %}
+    {% call field(card.key ~ '-' ~ f.key, f.label ~ '（' ~ f.unit ~ '）', required=True, hint=f.help,
+                  error=(errors.get(card.key) or {}).get(f.key)) %}
+    <input type="number" step="0.1" min="0" inputmode="decimal"
+           id="{{ card.key }}-{{ f.key }}" name="{{ f.key }}" value="{{ f.value }}">
+    {% endcall %}
+    {% endfor %}
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary">儲存這張卡</button>
+    </div>
+  </form>
+
+  <form method="post" action="/rule-cards/{{ card.key }}/reset" class="inline-form"
+        onsubmit="return confirm('確定要把「{{ card.title }}」的所有欄位重設回預設值？')">
+    <button type="submit" class="btn-text">重設為預設值</button>
+  </form>
+</section>
+{% endfor %}
+</div>
+{% endblock %}

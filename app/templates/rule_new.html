@@ -1,0 +1,67 @@
+{% extends "_layouts/console.html" %}
+{% from "_components/breadcrumb.html" import breadcrumb %}
+{% from "_components/error_summary.html" import error_summary %}
+{% from "_components/field.html" import field %}
+
+{% block title %}新增限制規則 — {{ brand.name }} — 行銷作業系統{% endblock %}
+
+{% block content %}
+{{ breadcrumb([('品牌總覽', '/'), (brand.name, '/brands/' ~ brand.id), ('品牌智庫', '/brands/' ~ brand.id ~ '/hub'), ('限制規則', '/brands/' ~ brand.id ~ '/hub/rules'), ('新增限制規則', None)]) }}
+<a class="back-link" href="/brands/{{ brand.id }}/hub/rules"><span aria-hidden="true">←</span> 回到 限制規則</a>
+<div class="form-page">
+<h1>新增限制規則</h1>
+
+{{ error_summary(errors) }}
+
+<form method="post" action="/brands/{{ brand.id }}/rules/new" novalidate>
+  {% call field('rule_type', '這是哪一種規則？', required=True, error=errors.rule_type) %}
+  <select id="rule_type" name="rule_type">
+    <option value="" {% if not values.rule_type %}selected{% endif %} disabled>請選擇</option>
+    {% for v, label in RULE_TYPES %}
+    <option value="{{ v }}" {% if values.rule_type == v %}selected{% endif %}>{{ label }}</option>
+    {% endfor %}
+  </select>
+  {% endcall %}
+
+  {% call field('content', '規則內容', required=True, hint='寫清楚具體禁止或要求的做法，越具體越好判斷。', error=errors.content) %}
+  <textarea id="content" name="content" rows="4" placeholder="例如「文案禁止出現『療效』『治療』等字樣，圖片上的文字也算。」">{{ values.content }}</textarea>
+  {% endcall %}
+
+  <div class="field{% if errors.severity %} has-error{% endif %}">
+    <div class="field-legend">違反的後果有多嚴重？（必填）</div>
+    <div class="radio-group">
+      <label class="radio-option">
+        <input type="radio" name="severity" value="hard" {% if values.severity == 'hard' %}checked{% endif %}>
+        <span><span class="radio-label">必須遵守</span><span class="radio-sub">違反了就是錯的，內容產出時一定要擋下來。</span></span>
+      </label>
+      <label class="radio-option">
+        <input type="radio" name="severity" value="soft" {% if values.severity != 'hard' %}checked{% endif %}>
+        <span><span class="radio-label">建議遵守</span><span class="radio-sub">盡量照做，但不是絕對不能違反。</span></span>
+      </label>
+    </div>
+    {% if errors.severity %}<div class="field-error">{{ errors.severity }}</div>{% endif %}
+  </div>
+
+  {% call field('product_id', '適用範圍', required=False, hint='不選就套用到整個品牌；也可以只套用在某個產品。', error=errors.product_id) %}
+  <select id="product_id" name="product_id">
+    <option value="" {% if not values.product_id %}selected{% endif %}>整個品牌</option>
+    {% for p in products %}
+    <option value="{{ p.id }}" {% if values.product_id == p.id %}selected{% endif %}>{{ p.name }}</option>
+    {% endfor %}
+  </select>
+  {% endcall %}
+
+  <details class="field-details">
+    <summary><span class="marker" aria-hidden="true">▸</span> 資料來源（選填）</summary>
+    <div class="details-body">
+      <input type="text" id="source_reference" name="source_reference" value="{{ values.source_reference }}" placeholder="例如「2025-03 客戶提供的品牌手冊」">
+    </div>
+  </details>
+
+  <div class="form-actions">
+    <button type="submit" class="btn btn-primary">新增這條限制規則</button>
+    <a class="btn-text" href="/brands/{{ brand.id }}/hub/rules">取消</a>
+  </div>
+</form>
+</div>
+{% endblock %}

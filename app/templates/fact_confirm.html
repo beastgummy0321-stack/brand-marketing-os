@@ -1,0 +1,33 @@
+{% extends "_layouts/console.html" %}
+{% from "_components/breadcrumb.html" import breadcrumb %}
+{% from "_components/error_summary.html" import error_summary %}
+{% from "_components/field.html" import field %}
+{% from "_components/definition_list.html" import definition_list %}
+
+{% set kind_label = '產品' if product is defined and product else '品牌' %}
+{% block title %}確認這條{{ kind_label }}事實 — {{ brand.name }} — 行銷作業系統{% endblock %}
+
+{% block content %}
+{{ breadcrumb(breadcrumb_items) }}
+<a class="back-link" href="{{ back_url }}"><span aria-hidden="true">←</span> 回到 {{ back_label }}</a>
+<div class="form-page">
+<h1>確認這條{{ kind_label }}事實</h1>
+<p class="page-lede">確認之後，這條內容就會被系統當成{{ kind_label }}事實使用。確認紀錄會留存，之後可以查到是誰、什麼時候確認的。</p>
+
+<div class="mb-6">{{ definition_list([('類型', type_label, False), ('名稱', fact.label, False), ('內容', fact.value, False)], subtle=True) }}</div>
+
+{{ error_summary(errors) }}
+
+<form method="post" action="{{ form_action }}" novalidate>
+  {% call field('confirmed_by', '確認人是誰？', required=True, hint='留下名字是為了之後能追溯這條事實是誰確認的。', error=errors.confirmed_by) %}
+  <input type="text" id="confirmed_by" name="confirmed_by" value="{{ values.confirmed_by }}" placeholder="例如「小陳」">
+  {% endcall %}
+
+  <div class="form-actions">
+    <button type="submit" class="btn btn-primary">確認這條事實</button>
+    <a class="btn-text" href="{{ back_url }}">先不要，回上一頁</a>
+  </div>
+</form>
+<p class="field-hint">內容需要修改？<a class="link" href="{{ edit_url }}">先去編輯這條事實</a>。</p>
+</div>
+{% endblock %}

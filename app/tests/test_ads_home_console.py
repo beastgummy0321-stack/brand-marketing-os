@@ -1,0 +1,176 @@
+# -*- coding: utf-8 -*-
+"""app/tests/test_ads_home_console.py — 修憲落地 V3：廣告首頁遷 B｜工作台式
+（DESIGN.md §21，決策 0033／0038）。
+
+驗收重點：
+1. 頁面確實 extends console.html（側欄結構存在，取代 base.html 頂欄）。
+2. 說明句改成資料（console-ui skill 硬規則1）：進行中檔期顯示「第 N 步／共 5 步」；
+   已判讀的最近結案檔期顯示 ROAS＋賺賠狀態膠囊；沒判讀過的已結案檔期整塊不出現
+   （principles.md 鐵則16：拿不到就不要放，不放假資料或 0 佔位）。
+3. 收件匣待辦數：inbox_count 反映該品牌的打斷佇列筆數，顯示在側欄徽章。
+4. 每頁最多一個主要按鈕（DESIGN.md §10.1）：空狀態與有資料狀態都只有一顆 .btn-primary。
+5. 動作列（歷期戰績／累積智慧／資料與連線）不管有沒有檔期都在，不是「開了檔期才看得到」。
+
+品牌與產品名一律虛構，絕不使用真實客戶品牌。
+"""
+
+import atexit
+import os
+import shutil
+import tempfile
+import unittest
+from pathlib import Path
+
+_tmpdir = tempfile.mkdtemp(prefix="brand_os_ads_home_console_")
+os.environ["BRAND_OS_DB"] = str(Path(_tmpdir) / "test.db")
+os.environ["BRAND_OS_BACKUP_DIR"] = str(Path(_tmpdir) / "backups")
+os.environ["BRAND_OS_UPLOADS"] = str(Path(_tmpdir) / "uploads")
+
+from fastapi.testclient import TestClient  # noqa: E402
+
+import app.main as main  # noqa: E402
+from app.ads import performance as ads_perf  # noqa: E402
+from app.ads import reading as ads_reading  # noqa: E402
+from app.ads import repository as ads_repo  # noqa: E402
+from app.brand_intelligence import repository as bi_repo  # noqa: E402
+from app.llm.providers import FakeProvider, ProviderResponse, Usage  # noqa: E402
+
+main.reopen_connection()
+
+ACTOR = "測試員"
+
+
+def _cleanup():
+    try:
+        main.conn.close()
+    except Exception:
+        pass
+    shutil.rmtree(_tmpdir, ignore_errors=True)
+
+
+atexit.register(_cleanup)
+
+
+def _fake(text: str) -> ProviderResponse:
+    return ProviderResponse(output_text=text, structured=None,
+                            usage=Usage(input_tokens=200, output_tokens=100),
+                            stop_reason="end_turn")
+
+
+class _BaseTest(unittest.TestCase):
+    def setUp(self):
+        self.client = TestClient(main.app)
+        self.client.post("/settings/operator", data={"name": ACTOR, "next": "/"},
+                         follow_redirects=False)
+        self.brand = bi_repo.create_brand(main.conn, name=f"虛構晨露茶行{self.id()[-6:]}",
+                                          client_name=None, actor=ACTOR)
+        self.bid = self.brand["id"]
+
+    def _open_cycle(self, **overrides):
+        data = {"slider_index": "5", "objective": "sales"}
+        data.update(overrides)
+        resp = self.client.post(f"/brands/{self.bid}/ads/new", data=data,
+                                follow_redirects=False)
+        return resp.headers["location"].split("/ads/")[1].split("?")[0]
+
+    def _hub(self):
+        return self.client.get(f"/brands/{self.bid}/ads")
+
+
+class ConsoleLayoutTest(_BaseTest):
+    def test_extends_console_sidebar_not_old_header(self):
+        resp = self._hub()
+        self.assertIn('class="console-sidebar"', resp.text)
+        self.assertIn('class="console-content"', resp.text)
+        self.assertNotIn('class="site-header"', resp.text)
+
+
+class SinglePrimaryButtonTest(_BaseTest):
+    """DESIGN.md §10.1：每個頁面最多一個主要按鈕。"""
+
+    def test_empty_state_has_exactly_one_primary_button(self):
+        resp = self._hub()
+        self.assertEqual(resp.text.count("btn-primary"), 1)
+        self.assertIn(f'href="/brands/{self.bid}/ads/new"', resp.text)
+
+    def test_active_cycle_still_has_exactly_one_primary_button(self):
+        self._open_cycle()
+        resp = self._hub()
+        self.assertEqual(resp.text.count("btn-primary"), 1)
+
+
+class ActionRowAlwaysPresentTest(_BaseTest):
+    """歷期戰績／累積智慧／資料與連線不是「開了檔期才看得到」的東西，空狀態也要能到得了。"""
+
+    def test_history_learnings_connections_reachable_even_when_empty(self):
+        resp = self._hub()
+        self.assertIn(f'href="/brands/{self.bid}/ads/history"', resp.text)
+        self.assertIn(f'href="/brands/{self.bid}/ads/learnings"', resp.text)
+        self.assertIn(f'href="/brands/{self.bid}/ads/connections"', resp.text)
+
+
+class StageWordingTest(_BaseTest):
+    def test_shows_step_index_out_of_five(self):
+        self._open_cycle()
+        resp = self._hub()
+        self.assertIn("第 1 步／共 5 步", resp.text)
+
+
+class ClosedCycleSummaryTest(_BaseTest):
+    """最近結案的檔期：ROAS／賺賠狀態膠囊直接讀已存的判讀快照，沒判讀過就誠實不顯示。"""
+
+    def setUp(self):
+        super().setUp()
+        self.product = bi_repo.create_product(main.conn, self.bid, name="虛構烏龍茶包",
+                                              actor=ACTOR)["id"]
+        bi_repo.save_product_economics(main.conn, self.bid, self.product, selling_price=1000,
+                                       unit_variable_cost=400, currency="TWD",
+                                       confirmed_by=ACTOR, actor=ACTOR)
+
+    def _judge(self, cycle_id):
+        orig = ads_reading.PROVIDER
+        ads_reading.PROVIDER = FakeProvider(response=_fake('{"text": "加碼"}'))
+        try:
+            ads_perf.import_manual(main.conn, self.bid, cycle_id,
+                                   {"spend": 10000, "impressions": 20000, "clicks": 400,
+                                    "conversions": 10, "revenue": 40000}, actor=ACTOR)
+            ok, err = ads_reading.run(main.conn, self.bid, cycle_id, ACTOR)
+            self.assertTrue(ok, err)
+        finally:
+            ads_reading.PROVIDER = orig
+
+    def test_judged_closed_cycle_shows_roas_and_verdict_badge(self):
+        cycle_id = self._open_cycle(product_ids=[self.product], custom_amount="10000")
+        self._judge(cycle_id)
+        ads_repo.update_cycle_status(main.conn, self.bid, cycle_id, status="CLOSED", actor=ACTOR)
+        resp = self._hub()
+        self.assertIn("最近結案的檔期", resp.text)
+        self.assertIn("4.00 倍", resp.text)  # revenue 40000 / spend 10000
+        self.assertIn(f'href="/brands/{self.bid}/ads/{cycle_id}"', resp.text)
+
+    def test_unjudged_closed_cycle_shows_nothing_not_fake_data(self):
+        """principles.md 鐵則16：拿不到就不要放，不放假資料或 0 佔位。"""
+        cycle_id = self._open_cycle()
+        ads_repo.update_cycle_status(main.conn, self.bid, cycle_id, status="CLOSED", actor=ACTOR)
+        resp = self._hub()
+        self.assertNotIn("最近結案的檔期", resp.text)
+        self.assertNotIn(f'href="/brands/{self.bid}/ads/{cycle_id}"', resp.text)
+
+
+class InboxBadgeTest(_BaseTest):
+    def test_inbox_count_reflects_open_interrupts_for_this_brand(self):
+        main.core_interrupts.enqueue(
+            main.conn, category="cycle_reminder", dedupe_key=f"test-{self.bid}",
+            message="測試提醒", brand_id=self.bid)
+        main.conn.commit()
+        resp = self._hub()
+        self.assertIn("badge badge-warn", resp.text)
+        self.assertIn(">1<", resp.text)
+
+    def test_no_badge_when_inbox_empty(self):
+        resp = self._hub()
+        self.assertNotIn("badge badge-warn", resp.text)
+
+
+if __name__ == "__main__":
+    unittest.main()

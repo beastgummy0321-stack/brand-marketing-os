@@ -1,0 +1,44 @@
+{# 兌現預言（決策 0039 第 13–16 條，票 F5）：對帳口徑＝既有預告（calibration_forecast 的
+   點擊／成交筆數區間，票 F1 存的快照）＋一行事實性花費對比，不做金額預測。資料組裝在
+   app/ads/reading.py:prediction_settlement()，這裡只管排版。
+
+   兩個出口共用同一份 partial（判讀頁①塊判讀結論卡內、第二期檔期內頁頂部常駐卡，比照
+   決策 0030 第 20 點的掛法：獨立 partial，host 頁只多一行 include）。host 頁各自決定要不要
+   外包一層 {% call detail() %}（DESIGN.md §20.1 規則 4 單卡文字上限，判讀頁那張卡文字
+   已經很滿，這裡整段收進詳情，不多佔視覺文字額度；此規則對 kind=content 卡片同樣適用，
+   第二期內頁那張新卡也整段收進詳情，只在卡面留一行短結論）。
+
+   context 需求：
+   - prediction：{forecast:{clicks_low, clicks_high, conversions_low, conversions_high,
+     basis_note}, clicks, conversions, spend, budget, gap:{direction, segment}}
+     direction 三選一：'within'（落在區間內）／'above'（好於區間，預測偏保守）／
+     'below'（低於區間，三段式：承認→拆解→下期改用自身數據）。
+     segment 只有 direction='below' 時有值：'clicks'（點擊量本身不如預告，CPC 比預期高）
+     或 'conversion_rate'（點擊量正常但轉換率比預期低）。
+#}
+{% if prediction %}
+<p>
+  <strong>兌現預言：</strong>
+  當初預告這期大概會拿到
+  <strong>{{ '{:,}'.format(prediction.forecast.clicks_low) }}～{{ '{:,}'.format(prediction.forecast.clicks_high) }}</strong> 次點擊、
+  <strong>{{ prediction.forecast.conversions_low }}～{{ prediction.forecast.conversions_high }}</strong> 筆成交
+  （粗估範圍，未經校準）；實際拿到
+  <strong>{{ '{:,}'.format(prediction.clicks) }}</strong> 次點擊、<strong>{{ prediction.conversions }}</strong> 筆成交。
+</p>
+{% if prediction.gap.direction == 'within' %}
+<p class="section-desc">落在預告範圍內。</p>
+{% elif prediction.gap.direction == 'above' %}
+<p class="section-desc">比預告的上限還好——預測偏保守，不是低估了難度。</p>
+{% else %}
+<p class="section-desc">實際成交比預告的下限還少，落在區間之外。</p>
+{% if prediction.gap.segment == 'clicks' %}
+<p class="section-desc">拆解：這期點擊量本身就沒到預告下限，代表每次點擊的成本比預期高。</p>
+{% else %}
+<p class="section-desc">拆解：點擊量落在預告範圍內，是成交轉換率比預期低拖累了結果。</p>
+{% endif %}
+<p class="section-desc">下一期的預估基準已經改用這個品牌自己的實際數據，不再套用第一期的產業通例。</p>
+{% endif %}
+<p class="section-desc">
+  花費對比：預算 {{ '{:,.0f}'.format(prediction.budget) }}，實際花費 {{ '{:,.0f}'.format(prediction.spend) }}。
+</p>
+{% endif %}

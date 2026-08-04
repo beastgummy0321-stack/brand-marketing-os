@@ -1,0 +1,56 @@
+{% extends "_layouts/console.html" %}
+{% from "_components/breadcrumb.html" import breadcrumb %}
+{% from "_components/section_header.html" import section_header %}
+{% from "_components/badge.html" import badge %}
+{% from "_components/empty_state.html" import empty_state %}
+
+{% block title %}適用宣稱 — {{ product.name }} — 行銷作業系統{% endblock %}
+
+{% block content %}
+{{ breadcrumb(breadcrumb_items) }}
+
+{{ section_header('claims', '適用宣稱') }}
+{% if claims %}
+  {% set approved = claims | selectattr('claim_type', 'equalto', 'approved') | list %}
+  {% set high_risk = claims | selectattr('claim_type', 'equalto', 'high_risk') | list %}
+  {% set forbidden = claims | selectattr('claim_type', 'equalto', 'forbidden') | list %}
+  {% if approved %}
+  <div class="claim-block claim-block-approved">
+    <h3>可用（{{ approved|length }}）</h3>
+    {% for c in approved %}
+    <div class="claim-row">
+      <div class="claim-text">{{ c.claim_text }}</div>
+      <div class="claim-meta">
+        {% if c.evidence_source_reference %}佐證：{{ c.evidence_source_reference }}{% else %}尚未填寫佐證來源{% endif %}
+        {% if not c.product_id %}<span class="dot-sep" aria-hidden="true">・</span>{{ badge('來自品牌設定', 'neutral') }} <a class="link" href="/brands/{{ brand.id }}/hub/claims">到品牌智庫修改</a>{% endif %}
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+  {% if high_risk %}
+  <div class="claim-block claim-block-high_risk">
+    <h3>高風險（{{ high_risk|length }}）</h3>
+    {% for c in high_risk %}
+    <div class="claim-row">
+      <div class="claim-text">{{ c.claim_text }}{% if not c.evidence_source_reference %} <span class="claim-warn"><span aria-hidden="true">⚠</span> 尚未附上佐證來源</span>{% endif %}</div>
+      <div class="claim-meta">{% if not c.product_id %}{{ badge('來自品牌設定', 'neutral') }} <a class="link" href="/brands/{{ brand.id }}/hub/claims">到品牌智庫修改</a>{% endif %}</div>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+  {% if forbidden %}
+  <div class="claim-block claim-block-forbidden">
+    <h3>禁用（{{ forbidden|length }}）</h3>
+    {% for c in forbidden %}
+    <div class="claim-row">
+      <div class="claim-text">{{ c.claim_text }}</div>
+      <div class="claim-meta">{% if not c.product_id %}{{ badge('來自品牌設定', 'neutral') }} <a class="link" href="/brands/{{ brand.id }}/hub/claims">到品牌智庫修改</a>{% endif %}</div>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+{% else %}
+{{ empty_state('這個產品沒有專屬的宣稱', '品牌層的宣稱仍然適用。', '到品牌智庫新增', '/brands/' ~ brand.id ~ '/claims/new') }}
+{% endif %}
+{% endblock %}

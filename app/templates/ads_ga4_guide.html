@@ -1,0 +1,70 @@
+{% extends "_layouts/console.html" %}
+{% from "_components/breadcrumb.html" import breadcrumb %}
+{% from "_components/banner.html" import banner %}
+{% from "_components/section_header.html" import section_header %}
+{% from "_components/card.html" import card_block %}
+
+{% block title %}GA4 服務帳戶教學 — {{ brand.name }} — 行銷作業系統{% endblock %}
+
+{% block content %}
+{{ breadcrumb(breadcrumb_items) }}
+
+{% if banner_msg %}
+{{ banner(banner_kind or 'ok', banner_msg, dismiss_url=request.url.path) }}
+{% endif %}
+
+<h1>GA4 服務帳戶設定教學</h1>
+<p class="page-lede">
+  「GA4」是 Google 提供的網站數據分析工具，記錄網站有多少工作階段（訪客造訪次數）、
+  從哪個來源／媒介進站、有沒有完成購買。設定一次服務帳戶連線後，系統會自動抓回這些數據，
+  不用每次手動登入 GA4 後台查看。設定約需 15 分鐘，此估計以熟悉 Google Cloud 者為前提，
+  不熟悉 Google Cloud 操作介面者可能需要更久。
+</p>
+
+{% call card_block('設定之前要知道的兩件事', kind='content') %}
+  <ul class="plan-angles">
+    <li>服務帳戶只需要設定一次，不是每期廣告都要重設。</li>
+    <li>金鑰只會存在你自己電腦上的資料庫，畫面上不會顯示完整金鑰內容。</li>
+  </ul>
+{% endcall %}
+
+{{ section_header('steps', '設定步驟') }}
+
+{% call card_block('1. 建立服務帳戶', kind='content') %}
+  <p class="section-desc">在你的 Google Cloud 專案裡建立一個服務帳戶（Service Account），
+    這是給系統用的專屬帳號，不是你自己的 Google 帳號。</p>
+  <a class="btn btn-secondary" href="https://cloud.google.com/iam/docs/service-accounts-create" target="_blank" rel="noopener">看官方教學：建立服務帳戶</a>
+{% endcall %}
+
+{% call card_block('2. 產生 JSON 金鑰', kind='content') %}
+  <p class="section-desc">替剛建好的服務帳戶產生一把 JSON 格式的金鑰並下載，
+    這份 JSON 檔的內容之後要整份貼進「設定」頁。</p>
+  <a class="btn btn-secondary" href="https://cloud.google.com/iam/docs/keys-create-delete" target="_blank" rel="noopener">看官方教學：建立金鑰</a>
+{% endcall %}
+
+{% call card_block('3. 開通 Analytics Data API', kind='content') %}
+  <p class="section-desc">在同一個 Google Cloud 專案裡開通 Analytics Data API，
+    系統要靠這個 API 才抓得到 GA4 的數據。</p>
+  <a class="btn btn-secondary" href="https://developers.google.com/analytics/devguides/reporting/data/v1/quickstart-client-libraries" target="_blank" rel="noopener">看官方教學：開通 API</a>
+{% endcall %}
+
+{% call card_block('4. 把服務帳戶加進 GA4 資源，權限選「檢視者」', kind='content') %}
+  <p class="section-desc">到 GA4 後台的資源存取權管理，把服務帳戶的 email
+    （在 JSON 金鑰裡的 client_email 欄位）加進來，權限選「檢視者」（唯讀，
+    改不了、也刪不了任何資料）。同時把 GA4 資源編號（在 GA4 後台「資源設定」可以看到，
+    格式是一串數字）記下來。</p>
+  <a class="btn btn-secondary" href="https://support.google.com/analytics/answer/9305587" target="_blank" rel="noopener">看官方教學：資源存取權管理</a>
+{% endcall %}
+
+{% call card_block('5. 貼進設定頁', kind='content') %}
+  <p class="section-desc">把 GA4 資源編號與整份 JSON 金鑰內容貼進「設定」頁的
+    GA4 區塊，儲存後回這個品牌的廣告頁按「從 GA4 抓一次最新資料」。</p>
+  <a class="btn btn-secondary" href="/settings">前往設定頁</a>
+{% endcall %}
+
+<p class="section-desc">
+  設定完成後，回<a class="link" href="/brands/{{ brand.id }}/ads/ga4">GA4 網站數據頁</a>
+  同步一次；同步結果會誠實顯示 purchase 事件有沒有收到——沒收到不會假裝有，
+  會提示回頭確認第 4 步的轉換事件設定。
+</p>
+{% endblock %}

@@ -1,0 +1,59 @@
+{% extends "_layouts/console.html" %}
+{% from "_components/breadcrumb.html" import breadcrumb %}
+{% from "_components/badge.html" import badge %}
+{% from "_components/banner.html" import banner %}
+{% from "_components/card.html" import card %}
+
+{% block title %}{{ product.name }} — {{ brand.name }} — 行銷作業系統{% endblock %}
+
+{% block content %}
+{{ breadcrumb([('品牌總覽', '/'), (brand.name, '/brands/' ~ brand.id), ('品牌智庫', '/brands/' ~ brand.id ~ '/hub'), (product.name, None)]) }}
+
+{% if banner_msg %}
+{{ banner(banner_kind or 'ok', banner_msg, dismiss_url=request.url.path, extra_link_text='再新增一筆' if banner_again else None, extra_link_url=banner_again) }}
+{% endif %}
+
+<div class="page-title-row">
+  <h1>{{ product.name }}</h1>
+  <div class="fact-row-actions">
+    <form method="post" action="/brands/{{ brand.id }}/products/{{ product.id }}/archive">
+      <button type="submit" class="btn btn-secondary">{{ '恢復使用' if product.status == 'archived' else '封存' }}</button>
+    </form>
+  </div>
+</div>
+<p class="page-subtitle">所屬品牌：{{ brand.name }}<span class="dot-sep" aria-hidden="true">・</span>{{ '使用中' if product.status == 'active' else '已封存' }}<span class="dot-sep" aria-hidden="true">・</span>第 {{ product.knowledge_version }} 版</p>
+
+<div class="rescan-block">
+  <form method="post" action="/brands/{{ brand.id }}/products/{{ product.id }}/rescan" class="form-actions">
+    <input type="url" name="url" value="{{ rescan_url }}" placeholder="https://example.com/products/xxx" aria-label="產品頁網址" required>
+    <button type="submit" class="btn btn-secondary">AI 再次調研（預估 {{ money2(research_cost) }}）</button>
+    <a class="btn btn-secondary" href="/brands/{{ brand.id }}/products/{{ product.id }}/handoff">深入調研</a>
+  </form>
+  <p class="field-hint">「AI 再次調研」會照這個網址重新讀一次，整理成待確認的產品事實，同標題自動略過不重複堆積；「深入調研」則產生交接包，帶去外部 AI 網頁版跑更完整的調研。</p>
+</div>
+
+{% if economics and economics.status == 'pending' %}
+<div class="pending-block">
+  <h3>{{ badge('待確認', 'warn') }} 產品經濟數字：AI 調研抓到售價，尚未有人核對</h3>
+  <p class="pending-note">固定成本／單位變動成本／運費可能還沒填，可以先到「產品經濟數字」補齊，或先一鍵確認售價沒問題。</p>
+  <form method="post" action="/brands/{{ brand.id }}/products/{{ product.id }}/economics/confirm" class="inline-form">
+    <button type="submit" class="btn btn-secondary">確認無誤</button>
+  </form>
+</div>
+{% endif %}
+
+<div class="menu-grid">
+  {% for c in cards %}
+  {{ card(c.title, url='/brands/' ~ brand.id ~ '/products/' ~ product.id ~ '/' ~ c.key,
+          stats='共 ' ~ c.count ~ ' 筆' ~ (' ・ ' ~ badge('待確認 ' ~ c.pending ~ ' 項', 'warn') if c.pending else '')) }}
+  {% endfor %}
+</div>
+
+{% if product.status == 'archived' %}
+<div class="danger-zone">
+  <h2>永久刪除產品</h2>
+  <p>把這個產品與底下所有資料從系統徹底移除，不能復原。下一頁會列出會消失的資料，並要求你輸入產品名稱確認。</p>
+  <a class="btn btn-danger" href="/brands/{{ brand.id }}/products/{{ product.id }}/delete">永久刪除這個產品…</a>
+</div>
+{% endif %}
+{% endblock %}

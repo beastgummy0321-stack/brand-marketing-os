@@ -1,0 +1,34 @@
+{% extends "_layouts/console.html" %}
+{% from "_components/breadcrumb.html" import breadcrumb %}
+{% from "_components/section_header.html" import section_header %}
+{% from "_components/badge.html" import badge %}
+{% from "_components/empty_state.html" import empty_state %}
+
+{% block title %}適用規則 — {{ product.name }} — 行銷作業系統{% endblock %}
+
+{% block content %}
+{{ breadcrumb(breadcrumb_items) }}
+
+{{ section_header('rules', '適用規則') }}
+{% if rules %}
+<div class="table-wrap">
+  <table class="data-table">
+    <thead><tr><th>嚴重度</th><th>類型</th><th>內容</th><th>來源</th></tr></thead>
+    <tbody>
+    {% for r in rules %}
+      <tr>
+        <td data-label="嚴重度">{{ badge('必須遵守' if r.severity == 'hard' else '建議遵守', 'danger' if r.severity == 'hard' else 'neutral') }}</td>
+        <td data-label="類型">{{ badge(rule_type_label(r.rule_type), 'neutral') }}</td>
+        <td data-label="內容" class="primary-cell">{{ r.content }}</td>
+        <td data-label="來源">
+          {% if r.product_id %}{{ badge('本產品專屬', 'neutral') }}{% else %}{{ badge('來自品牌設定', 'neutral') }} <a class="link" href="/brands/{{ brand.id }}/hub/rules">到品牌智庫修改</a>{% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+{{ empty_state('這個產品沒有專屬的規則', '品牌層的規則仍然適用。', '到品牌智庫新增', '/brands/' ~ brand.id ~ '/rules/new') }}
+{% endif %}
+{% endblock %}

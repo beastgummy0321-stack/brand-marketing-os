@@ -1,0 +1,93 @@
+{% extends "_layouts/console.html" %}
+{% from "_components/banner.html" import banner %}
+
+{% block title %}品牌總覽 — 行銷作業系統{% endblock %}
+
+{% block content %}
+{% if banner_msg %}
+{{ banner(banner_kind or 'ok', banner_msg, dismiss_url='/') }}
+{% endif %}
+
+<div class="overview-header">
+  <div>
+    <h1>品牌總覽</h1>
+  </div>
+  <div class="overview-actions">
+    <a class="btn btn-primary" href="/brands/intake/new">智能引導建立品牌</a>
+    <a class="btn btn-secondary" href="/brands/new">自己手動建立</a>
+  </div>
+</div>
+
+{# 今天要處理的事：各品牌到期的廣告提醒（鐵則 15 聚合待辦） #}
+{% if todos %}
+<div class="card todo-card">
+  <h3>今天要處理的事</h3>
+  <ul class="todo-list">
+    {% for todo in todos %}
+    <li>
+      {% if todo.action_url %}<a class="link" href="{{ todo.action_url }}">{{ todo.brand_name }}</a>{% else %}{{ todo.brand_name }}{% endif %}
+      <span class="dot-sep" aria-hidden="true">・</span>{{ todo.message }}
+    </li>
+    {% endfor %}
+  </ul>
+</div>
+{% endif %}
+
+{% if not rows %}
+<div class="empty-state">
+  <h3>還沒有任何品牌</h3>
+  <p>建立第一個品牌之後，就可以開始填入品牌事實、產品與限制規則。</p>
+  <a class="btn btn-primary" href="/brands/intake/new">智能引導建立品牌</a>
+  <p class="mt-2"><a class="link" href="/brands/new">自己手動建立</a></p>
+</div>
+{% else %}
+<div class="table-wrap">
+  <table class="data-table">
+    <thead>
+      <tr><th>品牌</th><th>所屬客戶</th><th>產品</th><th>待確認</th><th>最後更新</th></tr>
+    </thead>
+    <tbody>
+    {% for row in rows %}
+      <tr>
+        <td data-label="品牌" class="primary-cell">
+          <a class="link" href="/brands/{{ row.brand.id }}">{{ row.brand.name }}</a>
+          {% if row.draft %}
+          <div class="draft-progress-note">建檔進行中（第 {{ row.draft.step }} 步，共 5 步）・<a class="link" href="{{ row.draft.resume_path }}">繼續建檔</a></div>
+          {% endif %}
+        </td>
+        <td data-label="所屬客戶">{{ row.brand.client_name or '未填寫' }}</td>
+        <td data-label="產品">{{ (row.product_count ~ ' 個') if row.product_count > 0 else '尚未建立' }}</td>
+        <td data-label="待確認" class="pending-cell">
+          {% if row.pending > 0 %}<a href="/brands/{{ row.brand.id }}/hub/facts"><span aria-hidden="true">⬤</span> {{ row.pending }} 項</a>{% else %}<span class="dash">－</span>{% endif %}
+        </td>
+        <td data-label="最後更新">{{ relative_time(row.brand.updated_at) }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+<details class="archived-box">
+  <summary><span class="marker" aria-hidden="true">▸</span> 已封存品牌（{{ archived|length }}）</summary>
+  <div class="archived-body">
+    {% if archived %}
+    <div class="table-wrap">
+      <table class="data-table">
+        <thead><tr><th>品牌</th><th>所屬客戶</th></tr></thead>
+        <tbody>
+        {% for b in archived %}
+          <tr>
+            <td data-label="品牌" class="primary-cell"><a class="link" href="/brands/{{ b.id }}">{{ b.name }}</a></td>
+            <td data-label="所屬客戶">{{ b.client_name or '未填寫' }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <p class="section-desc">目前沒有已封存的品牌。</p>
+    {% endif %}
+  </div>
+</details>
+{% endblock %}

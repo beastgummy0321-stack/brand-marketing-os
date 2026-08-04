@@ -1,0 +1,8 @@
+# CLAUDE.md
+
+品牌行銷作業系統：Python + FastAPI + SQLite + Jinja/HTMX，單機單人使用。
+
+- 啟動：雙擊 `啟動行銷系統.bat`，介面在 http://localhost:8710/
+- 資料庫：`data/app.db`（不進版控），每日備份在 `backups/`
+- AI 金鑰：`.env` 裡的 `ANTHROPIC_API_KEY`（不進版控）
+- 測試：`python -m pytest app/tests`

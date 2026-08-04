@@ -1,0 +1,113 @@
+{% extends "_layouts/console.html" %}
+{% from "_components/breadcrumb.html" import breadcrumb %}
+{% from "_components/banner.html" import banner %}
+{% from "_components/card.html" import card_block %}
+
+{% block title %}累積智慧 — {{ brand.name }} — 行銷作業系統{% endblock %}
+
+{% block content %}
+{{ breadcrumb(breadcrumb_items) }}
+
+{% if banner_msg %}
+{{ banner(banner_kind or 'ok', banner_msg, dismiss_url=request.url.path) }}
+{% endif %}
+
+<h1>累積智慧</h1>
+{{ banner('warn', '野路子解禁還停用中，重建中：這個自動學習機制目前不會自動長出新內容'
+  '（不是壞掉，是刻意關掉）——體檢發現它容易把巧合當規律。規則卡門檻與假設結案入帳都'
+  '已經修好、重新開回來了：規則卡改算相對比例不再只數次數，假設結案改成只有系統算得出'
+  '明確方向才預選「成立」、打平不再算正面訊號、小樣本不准喊加碼停損。'
+  '手動登記的規則與禁用宣稱、以及既有內容不受影響。') }}
+<p class="page-lede">系統從過去每一期累積下來的判斷依據，會進入之後每一次生成的 prompt。
+  有老品牌過去的經驗想一次交給系統？<a class="link" href="/brands/{{ brand.id }}/ads/interview">前朝教訓訪談</a></p>
+
+{% call card_block('已確認學習', kind='content') %}
+{% if learnings %}
+<div class="table-wrap">
+  <table class="data-table">
+    <thead><tr><th>內容</th><th>依據</th><th>操作</th></tr></thead>
+    <tbody>
+    {% for entry in learnings %}
+      <tr>
+        <td class="primary-cell">{{ entry.learning_text }}</td>
+        <td>{{ entry.meta_line }}</td>
+        <td>
+          <form method="post" action="/brands/{{ brand.id }}/ads/learnings/ledger/{{ entry.id }}/deactivate"
+                class="inline-form" onsubmit="return confirm('確定這條學習不適用了？下架後不會再進入生成內容的依據。')">
+            <button type="submit" class="btn-text btn-text-danger">這條不適用了</button>
+          </form>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<p class="page-lede">還沒有已確認的學習——判讀頁把假設結案標「成立」，就會出現在這裡。</p>
+{% endif %}
+{% endcall %}
+
+{% call card_block('生效中的禁令', kind='content') %}
+{% if active_bans %}
+<div class="table-wrap">
+  <table class="data-table">
+    <thead><tr><th>內容</th><th>依據</th><th>操作</th></tr></thead>
+    <tbody>
+    {% for ban in active_bans %}
+      <tr>
+        <td class="primary-cell">{{ ban.proposed_rule_text }}</td>
+        <td>{{ ban.axis_label }}：{{ ban.value_label }} ・
+          {% if ban.self_reported %}你在前朝教訓訪談自述{% else %}被退 {{ ban.reject_count }} 次後升級{% endif %}</td>
+        <td>
+          <form method="post" action="/brands/{{ brand.id }}/ads/learnings/rules/{{ ban.promoted_rule_id }}/deactivate"
+                class="inline-form" onsubmit="return confirm('確定這條禁令不適用了？下架後不會再避開這個方向。')">
+            <button type="submit" class="btn-text btn-text-danger">這條不適用了</button>
+          </form>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<p class="page-lede">目前沒有生效中的禁令。</p>
+{% endif %}
+{% endcall %}
+
+{% call card_block('還沒處理的候選', kind='content') %}
+{% if pending_cards or pending_hypotheses or observing_signals %}
+{% if pending_cards %}
+<p class="section-desc"><strong>待決的候選規則</strong>（下一期計畫確認時處理）：</p>
+<ul class="reading-reasons">
+  {% for c in pending_cards %}
+  <li>
+    {% if c.is_overclaim_claim %}
+    這句話講得太滿，要不要登記成禁用宣稱：「{{ c.proposed_rule_text }}」
+    {% else %}
+    {{ c.axis_label }}：{{ c.value_label }}（{% if c.self_reported %}你自己說的{% else %}被退 {{ c.reject_count }} 次{% endif %}）
+    {% endif %}
+  </li>
+  {% endfor %}
+</ul>
+{% endif %}
+{% if observing_signals %}
+<p class="section-desc"><strong>觀察中</strong>（被退的比例還沒明顯高於其他同類素材，先看看，不會拿去避開）：</p>
+<ul class="reading-reasons">
+  {% for s in observing_signals %}
+  <li>{{ s.axis_label }}：{{ s.value_label }}（出現 {{ s.appearances }} 次，被退 {{ s.reject_count }} 次）</li>
+  {% endfor %}
+</ul>
+{% endif %}
+{% if pending_hypotheses %}
+<p class="section-desc"><strong>未結案的策略假設</strong>（判讀頁結案）：</p>
+<ul class="reading-reasons">
+  {% for h in pending_hypotheses %}
+  <li>{{ h.statement }}（{{ h.status_label }}）</li>
+  {% endfor %}
+</ul>
+{% endif %}
+{% else %}
+<p class="page-lede">目前沒有待處理的候選。</p>
+{% endif %}
+{% endcall %}
+{% endblock %}

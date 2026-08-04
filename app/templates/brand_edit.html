@@ -1,0 +1,57 @@
+{% extends "_layouts/console.html" %}
+{% from "_components/breadcrumb.html" import breadcrumb %}
+{% from "_components/error_summary.html" import error_summary %}
+{% from "_components/field.html" import field %}
+
+{% block title %}編輯品牌基本資料 — {{ brand.name }} — 行銷作業系統{% endblock %}
+
+{% block content %}
+{{ breadcrumb([('品牌總覽', '/'), (brand.name, '/brands/' ~ brand.id), ('編輯品牌基本資料', None)]) }}
+<a class="back-link" href="/brands/{{ brand.id }}"><span aria-hidden="true">←</span> 回到 {{ brand.name }}</a>
+<div class="form-page">
+<h1>編輯品牌基本資料</h1>
+<p class="page-lede">平常請用「封存」：封存後這個品牌不會出現在切換器，只留在品牌總覽的「已封存品牌」清單，事實資料仍會保留。確定不再需要的話，封存之後可以在這一頁最下面永久刪除。</p>
+
+{{ error_summary(errors) }}
+
+<form method="post" action="/brands/{{ brand.id }}/edit" novalidate>
+  {% call field('name', '品牌名稱', required=True, error=errors.name) %}
+  <input type="text" id="name" name="name" value="{{ values.name }}" placeholder="例如「青原生活」">
+  {% endcall %}
+
+  {% call field('client_name', '所屬客戶', required=False, hint='純文字備註，例如「自營」或客戶公司名稱。', error=errors.client_name) %}
+  <input type="text" id="client_name" name="client_name" value="{{ values.client_name }}" placeholder="例如「自營」">
+  {% endcall %}
+
+  <div class="field{% if errors.status %} has-error{% endif %}">
+    <div class="field-legend">這個品牌目前狀態？（必填）</div>
+    <div class="radio-group">
+      <label class="radio-option">
+        <input type="radio" name="status" value="active" {% if values.status == 'active' %}checked{% endif %}>
+        <span><span class="radio-label">使用中</span><span class="radio-sub">正常顯示在品牌總覽與切換器。</span></span>
+      </label>
+      <label class="radio-option">
+        <input type="radio" name="status" value="archived" {% if values.status == 'archived' %}checked{% endif %}>
+        <span><span class="radio-label">已封存</span><span class="radio-sub">不出現在切換器，只留在品牌總覽的「已封存品牌」清單。</span></span>
+      </label>
+    </div>
+    {% if errors.status %}<div class="field-error">{{ errors.status }}</div>{% endif %}
+  </div>
+
+  <div class="form-actions">
+    <button type="submit" class="btn btn-primary">儲存品牌基本資料</button>
+    <a class="btn-text" href="/brands/{{ brand.id }}">取消</a>
+  </div>
+</form>
+
+<div class="danger-zone">
+  <h2>永久刪除品牌</h2>
+  {% if brand.status == 'archived' %}
+  <p>把這個品牌與底下所有資料從系統徹底移除，不能復原。下一頁會列出會消失的資料，並要求你輸入品牌名稱確認。</p>
+  <a class="btn btn-danger" href="/brands/{{ brand.id }}/delete">永久刪除這個品牌…</a>
+  {% else %}
+  <p>只有已封存的品牌可以永久刪除。要刪除的話，請先把上面的狀態改成「已封存」並儲存。</p>
+  {% endif %}
+</div>
+</div>
+{% endblock %}

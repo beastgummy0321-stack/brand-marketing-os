@@ -1,0 +1,26 @@
+{% extends "_layouts/console.html" %}
+{% from "_components/breadcrumb.html" import breadcrumb %}
+{% from "_components/wizard_steps.html" import wizard_steps %}
+{% from "_components/cost_meter.html" import cost_meter %}
+{% from "_components/definition_list.html" import definition_list %}
+
+{% block title %}{{ title }} — {{ brand.name }} — 行銷作業系統{% endblock %}
+
+{% block head_extra %}<meta http-equiv="refresh" content="{{ refresh }};url={{ run_url }}">{% endblock %}
+
+{% block content %}
+{{ breadcrumb(breadcrumb_items) }}
+
+<h1>{{ title }}</h1>
+<p class="page-lede">{{ wait_hint }}本頁會自動更新，不需手動重新整理。你也可以現在就離開，跑完了進度會留著。</p>
+
+{{ wizard_steps(draft, step) }}
+{{ cost_meter(draft, request.url.path) }}
+<hr class="rule">
+
+<div class="mb-6">{{ definition_list(rows, subtle=True) }}</div>
+
+<div class="wizard-actions">
+  <a class="btn-text" href="/brands/{{ brand.id }}">先離開，之後再回來</a>
+</div>
+{% endblock %}

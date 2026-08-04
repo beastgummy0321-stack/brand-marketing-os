@@ -1,0 +1,49 @@
+{% extends "_layouts/console.html" %}
+{% from "_components/breadcrumb.html" import breadcrumb %}
+{% from "_components/error_summary.html" import error_summary %}
+{% from "_components/field.html" import field %}
+
+{% block title %}上傳官方素材 — {{ brand.name }} — 行銷作業系統{% endblock %}
+
+{% block content %}
+{{ breadcrumb([('品牌總覽', '/'), (brand.name, '/brands/' ~ brand.id), ('品牌智庫', '/brands/' ~ brand.id ~ '/hub'), ('官方素材', '/brands/' ~ brand.id ~ '/hub/assets'), ('上傳官方素材', None)]) }}
+<a class="back-link" href="/brands/{{ brand.id }}/hub/assets"><span aria-hidden="true">←</span> 回到 官方素材</a>
+<div class="form-page">
+<h1>上傳官方素材</h1>
+
+{{ error_summary(errors) }}
+
+<form method="post" action="/brands/{{ brand.id }}/assets/new" enctype="multipart/form-data" novalidate>
+  {% call field('file', '圖檔', required=True, hint='支援 png、jpg、jpeg、webp、gif。', error=errors.file) %}
+  <input type="file" id="file" name="file" accept=".png,.jpg,.jpeg,.webp,.gif">
+  {% endcall %}
+
+  {% call field('asset_kind', '種類', required=True, error=errors.asset_kind) %}
+  <select id="asset_kind" name="asset_kind">
+    <option value="" {% if not values.asset_kind %}selected{% endif %} disabled>請選擇</option>
+    {% for v, label in ASSET_KINDS %}
+    <option value="{{ v }}" {% if values.asset_kind == v %}selected{% endif %}>{{ label }}</option>
+    {% endfor %}
+  </select>
+  {% endcall %}
+
+  {% call field('product_id', '掛在哪個產品？', required=False, hint='不選＝屬於整個品牌，不特別掛在某個產品下。', error=errors.product_id) %}
+  <select id="product_id" name="product_id">
+    <option value="" {% if not values.product_id %}selected{% endif %}>整個品牌</option>
+    {% for p in products %}
+    <option value="{{ p.id }}" {% if values.product_id == p.id %}selected{% endif %}>{{ p.name }}</option>
+    {% endfor %}
+  </select>
+  {% endcall %}
+
+  {% call field('title', '標題', required=False, hint='方便辨識用的名稱，例如「2026 春季包裝正面」。', error=errors.title) %}
+  <input type="text" id="title" name="title" value="{{ values.title }}" placeholder="例如「主要 Logo 透明底」">
+  {% endcall %}
+
+  <div class="form-actions">
+    <button type="submit" class="btn btn-primary">上傳這個素材</button>
+    <a class="btn-text" href="/brands/{{ brand.id }}/hub/assets">取消</a>
+  </div>
+</form>
+</div>
+{% endblock %}

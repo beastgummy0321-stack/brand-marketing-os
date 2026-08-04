@@ -1,0 +1,142 @@
+{% extends "_layouts/console.html" %}
+{% from "_components/breadcrumb.html" import breadcrumb %}
+{% from "_components/badge.html" import badge %}
+{% from "_components/banner.html" import banner %}
+{% from "_components/empty_state.html" import empty_state %}
+
+{% block title %}歷期戰績 — {{ brand.name }} — 行銷作業系統{% endblock %}
+
+{% macro cycle_rows(cycles, brand_id) %}
+{% for cycle in cycles %}
+<tr>
+  <td class="primary-cell">
+    <a class="link" href="/brands/{{ brand_id }}/ads/{{ cycle.id }}">{{ cycle.start_date }} ～ {{ cycle.end_date }}</a>
+    {% if cycle.phase_label %} {{ badge(cycle.phase_label, 'neutral') }}{% endif %}
+  </td>
+  <td>{{ cycle.objective_label }}</td>
+  <td class="num">{{ '{:,.0f}'.format(cycle.budget) }}</td>
+  <td>
+    {% if cycle.product_names %}{{ cycle.product_names | join('、') }}{% else %}<span class="dash">整個品牌</span>{% endif %}
+  </td>
+  <td>{{ cycle.status_label }}</td>
+  <td>
+    <form method="post" action="/brands/{{ brand_id }}/ads/{{ cycle.id }}/archive" class="inline-form">
+      <button type="submit" class="btn-text">封存</button>
+    </form>
+  </td>
+</tr>
+{% endfor %}
+{% endmacro %}
+
+{% block content %}
+{{ breadcrumb(breadcrumb_items) }}
+
+{% if banner_msg %}
+{{ banner(banner_kind or 'ok', banner_msg, dismiss_url=request.url.path) }}
+{% endif %}
+
+<h1>歷期戰績</h1>
+
+{% if trend_rows %}
+<h2 class="menu-section-title">跨期趨勢</h2>
+<div class="table-wrap">
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>期別</th><th class="num">花費</th><th class="num">實收營收</th><th class="num">ROAS</th>
+        <th>賺賠</th><th>成色</th><th>vs 上期</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for row in trend_rows %}
+      <tr>
+        <td class="primary-cell">
+          <a class="link" href="/brands/{{ brand.id }}/ads/{{ row.id }}">{{ row.start_date }} ～ {{ row.end_date }}</a>
+        </td>
+        <td class="num">{{ '{:,.0f}'.format(row.spend) }}</td>
+        <td class="num">{{ '{:,.0f}'.format(row.revenue) }}</td>
+        <td class="num">{{ '{:.2f} 倍'.format(row.roas) if row.roas is not none else '算不出' }}</td>
+        <td>{{ badge(row.status_label, row.verdict_kind) }}</td>
+        <td>{% if row.data_grade %}{{ badge(row.data_grade.label, 'ok' if row.data_grade.kind == 'calibrated' else 'neutral') }}{% endif %}</td>
+        <td class="num">{{ row.vs_previous or '' }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+{% if not in_progress_cycles and not closed_cycles and not archived_cycles %}
+{{ empty_state('還沒有跑過任何一期廣告',
+   '開一期廣告，系統會讀取品牌智庫的資料，準備好計畫、素材與投放設定，貼到 Meta 即可。',
+   '開新檔期', '/brands/' ~ brand.id ~ '/ads/new') }}
+{% else %}
+
+<h2 class="menu-section-title">進行中（{{ in_progress_cycles|length }}）</h2>
+{% if in_progress_cycles %}
+<div class="table-wrap">
+  <table class="data-table">
+    <thead>
+      <tr><th>檔期</th><th>目標</th><th class="num">預算</th><th>產品</th><th>狀態</th><th>動作</th></tr>
+    </thead>
+    <tbody>
+    {{ cycle_rows(in_progress_cycles, brand.id) }}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<p class="section-desc">目前沒有進行中的檔期。</p>
+{% endif %}
+
+<h2 class="menu-section-title">已結案（{{ closed_cycles|length }}）</h2>
+{% if closed_cycles %}
+<div class="table-wrap">
+  <table class="data-table">
+    <thead>
+      <tr><th>檔期</th><th>目標</th><th class="num">預算</th><th>產品</th><th>狀態</th><th>動作</th></tr>
+    </thead>
+    <tbody>
+    {{ cycle_rows(closed_cycles, brand.id) }}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<p class="section-desc">目前沒有已結案的檔期。</p>
+{% endif %}
+
+<details class="archived-box">
+  <summary><span class="marker" aria-hidden="true">▸</span> 已封存檔期（{{ archived_cycles|length }}）</summary>
+  <div class="archived-body">
+    {% if archived_cycles %}
+    <div class="table-wrap">
+      <table class="data-table">
+        <thead>
+          <tr><th>檔期</th><th>目標</th><th>狀態</th><th>動作</th></tr>
+        </thead>
+        <tbody>
+        {% for cycle in archived_cycles %}
+          <tr>
+            <td class="primary-cell">
+              <a class="link" href="/brands/{{ brand.id }}/ads/{{ cycle.id }}">{{ cycle.start_date }} ～ {{ cycle.end_date }}</a>
+            </td>
+            <td>{{ cycle.objective_label }}</td>
+            <td>{{ cycle.status_label }}</td>
+            <td>
+              <form method="post" action="/brands/{{ brand.id }}/ads/{{ cycle.id }}/archive" class="inline-form">
+                <button type="submit" class="btn-text">恢復</button>
+              </form>
+              <a class="btn-text" href="/brands/{{ brand.id }}/ads/{{ cycle.id }}/delete">永久刪除</a>
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <p class="section-desc">目前沒有已封存的檔期。</p>
+    {% endif %}
+  </div>
+</details>
+
+{% endif %}
+{% endblock %}

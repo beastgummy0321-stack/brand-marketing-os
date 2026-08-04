@@ -1,0 +1,245 @@
+{% extends "_layouts/console.html" %}
+{% from "_components/breadcrumb.html" import breadcrumb %}
+{% from "_components/badge.html" import badge %}
+{% from "_components/banner.html" import banner %}
+{% from "_components/field.html" import field %}
+{% from "_components/error_summary.html" import error_summary %}
+
+{% block title %}開新檔期 — {{ brand.name }} — 行銷作業系統{% endblock %}
+
+{% block content %}
+{{ breadcrumb(breadcrumb_items) }}
+<a class="back-link" href="/brands/{{ brand.id }}/ads"><span aria-hidden="true">←</span> 回到 廣告</a>
+<div class="form-page">
+<h1>開一期新的廣告</h1>
+
+{{ error_summary(errors) }}
+
+{% for note in readiness_notes %}
+{{ banner('warn', note.message, extra_link_text=note.action_label, extra_link_url=note.action_url) }}
+{% endfor %}
+
+<form method="post" action="/brands/{{ brand.id }}/ads/new" novalidate>
+
+  {# 0. 第一次開廣告：預設先跑一次模擬，零成本走完整圈。跑過任一期後這一區就消失 #}
+  {% if offer_simulation %}
+  <div class="field">
+    <div class="field-legend">你還沒跑過任何一期廣告，要不要先看看整個流程長什麼樣？</div>
+    <div class="radio-group">
+      <label class="radio-option">
+        <input type="radio" name="mode" value="simulation" checked>
+        <span>
+          <span class="radio-label">先跑一次模擬（推薦）</span>
+          <span class="radio-sub">計畫與素材皆為實際產出，僅最後的成效數字為模擬值。不用花任何廣告費，走完一整圈就知道自己要做哪些決定。</span>
+        </span>
+      </label>
+      <label class="radio-option">
+        <input type="radio" name="mode" value="real">
+        <span>
+          <span class="radio-label">我不用，直接開真的</span>
+          <span class="radio-sub">跳過模擬，直接進入會實際投放的檔期。</span>
+        </span>
+      </label>
+    </div>
+  </div>
+  {% endif %}
+
+  {# 1. 產品：預設全勾（反對制），使用者只需要把不推的取消 #}
+  <div class="field">
+    <div class="field-legend">這期要推哪些產品？（預設全選，把不推的取消勾選就好）</div>
+    {% if products %}
+    <div class="radio-group">
+      {% for product in products %}
+      <label class="radio-option">
+        <input type="checkbox" name="product_ids" value="{{ product.id }}"
+               {% if not form.product_ids or product.id in form.product_ids %}checked{% endif %}>
+        <span><span class="radio-label">{{ product.name }}</span></span>
+      </label>
+      {% endfor %}
+    </div>
+    {% else %}
+    <div class="field-hint">這個品牌底下還沒有產品，這期會以整個品牌為範圍。</div>
+    {% endif %}
+  </div>
+
+  {# 2. 預算：滑桿問使用者能承受的最大虧損總額，期長與日預算由系統反推 #}
+  <div class="field">
+    <label for="slider">這期投多少？拉到你能承受的最大虧損金額</label>
+    <input type="range" id="slider" name="slider_index" class="pain-slider"
+           min="0" max="{{ slider_options | length - 1 }}" step="1" value="{{ default_index }}"
+           aria-describedby="slider-readout">
+    <div class="slider-scale" aria-hidden="true">
+      <span>{{ slider_options[0].amount_label }}</span>
+      <span>{{ slider_options[-1].amount_label }}</span>
+    </div>
+
+    {% set current = slider_options[default_index] %}
+    <div class="slider-readout" id="slider-readout">
+      <div class="slider-amount"><span id="readout-amount">{{ current.amount_label }}</span> 元</div>
+      <div class="slider-derived">
+        系統換算：跑 <strong id="readout-days">{{ current.duration_days }}</strong> 天，
+        每天約 <strong id="readout-daily">{{ current.daily_budget_label }}</strong> 元
+      </div>
+      <div class="slider-note" id="readout-note">{{ current.note }}</div>
+    </div>
+
+    <details class="field-details">
+      <summary><span class="marker" aria-hidden="true">▸</span> 我知道要投多少，直接填</summary>
+      <div class="details-body">
+        {% call field('custom_amount', '這期總預算', required=False,
+                      hint='填了這裡就以這個數字為準，上面的滑桿不算數。',
+                      error=errors.amount) %}
+        <input type="number" id="custom_amount" name="custom_amount" min="1" step="1"
+               value="{{ form.custom_amount or '' }}" placeholder="例如 12000">
+        {% endcall %}
+      </div>
+    </details>
+  </div>
+
+  {# 2b. 檔期長度：建議值＋白話理由，可自訂 7–30 天與開始日期，即時短評＋日預算連動（票 3） #}
+  <div class="field{% if errors.duration_days %} has-error{% endif %}">
+    <label for="duration_days">這期要跑幾天？</label>
+    <div class="field-hint">{{ duration_suggestion.rationale }}</div>
+    <input type="number" id="duration_days" name="duration_days"
+           min="{{ duration_tier_config.min }}" max="{{ duration_tier_config.max }}" step="1"
+           value="{{ form.duration_days or duration_suggestion.days }}"
+           aria-describedby="duration-readout">
+    <div class="slider-derived" id="duration-readout">
+      <span id="duration-tier-note"></span>
+      每天約 <strong id="duration-daily">—</strong> 元
+    </div>
+    {% if errors.duration_days %}<div class="field-error">{{ errors.duration_days }}</div>{% endif %}
+
+    <details class="field-details">
+      <summary><span class="marker" aria-hidden="true">▸</span> 指定開始日期</summary>
+      <div class="details-body">
+        {% call field('start_date', '開始日期', required=False,
+                      hint='不填就從今天開始算。', error=errors.start_date) %}
+        <input type="date" id="start_date" name="start_date" value="{{ form.start_date or '' }}">
+        {% endcall %}
+      </div>
+    </details>
+  </div>
+
+  {# 2c. 背景：選填，讓 AI 出方案前先知道脈絡（決策 0023 第 2 點） #}
+  <div class="field">
+    <label for="background">這期有什麼背景？（選填）</label>
+    <div class="field-hint">活動、新品、時事——先讓 AI 知道，出方案時才用得上。</div>
+    <textarea id="background" name="background" rows="3"
+              placeholder="例如：母親節檔期、新品剛上架、最近同業在做促銷…">{{ form.background or '' }}</textarea>
+  </div>
+
+  {# 3. 目標：5 選項對齊 Meta，附 AI 推薦（鐵則 20：每個選擇都給推薦答案） #}
+  <div class="field{% if errors.objective %} has-error{% endif %}">
+    <div class="field-legend">這期的成效目標是什麼？（必填）</div>
+    <div class="radio-group">
+      {% for objective in objectives %}
+      <label class="radio-option">
+        <input type="radio" name="objective" value="{{ objective.value }}"
+               {% if (form.objective or recommended_objective) == objective.value %}checked{% endif %}>
+        <span>
+          <span class="radio-label">{{ objective.label }}{% if objective.value == recommended_objective %} {{ badge('AI 推薦', 'ok') }}{% endif %}</span>
+          <span class="radio-sub">{{ objective.hint }}</span>
+        </span>
+      </label>
+      {% endfor %}
+    </div>
+    {% if errors.objective %}<div class="field-error">{{ errors.objective }}</div>{% endif %}
+  </div>
+
+  <div class="form-actions">
+    <button type="submit" class="btn btn-primary">下一步：看這期的計畫</button>
+    <a class="btn-text" href="/brands/{{ brand.id }}/ads">取消</a>
+  </div>
+</form>
+</div>
+{% endblock %}
+
+{% block head_extra %}
+<script id="slider-data" type="application/json">{{ slider_options | tojson }}</script>
+<script id="duration-tiers-data" type="application/json">{{ duration_tier_config | tojson }}</script>
+<script>
+// 這段 script 位於 <head>（head_extra block），執行時 <body> 裡的表單元素還沒解析出來，
+// 兩段 IIFE 一開始的 guard clause（抓不到元素就 return）會全部觸發、事件永遠綁不上
+// ——這正是票 #25「拉桿金額不動」的根因。用 DOMContentLoaded 包起來，等 DOM 就緒再綁定。
+document.addEventListener('DOMContentLoaded', function () {
+
+// 滑桿只做「查表顯示」，不做任何算術——換算規則只有 app/ads/budget.py 一份，
+// 每一檔的結果都由後端先算好放進上面那份 JSON，前端照抄，兩邊不會漂移。
+// 沒有 JavaScript 也不會壞：滑桿送出的是檔位序號，後端自己查同一張表。
+(function () {
+  var data = document.getElementById('slider-data');
+  var slider = document.getElementById('slider');
+  if (!data || !slider) { return; }
+  var options = JSON.parse(data.textContent);
+  var amount = document.getElementById('readout-amount');
+  var days = document.getElementById('readout-days');
+  var daily = document.getElementById('readout-daily');
+  var note = document.getElementById('readout-note');
+  slider.addEventListener('input', function () {
+    var option = options[Number(slider.value)];
+    if (!option) { return; }
+    amount.textContent = option.amount_label;
+    days.textContent = option.duration_days;
+    daily.textContent = option.daily_budget_label;
+    note.textContent = option.note;
+  });
+})();
+
+// 檔期長度：天數變動的即時短評＋日預算連動（票 3，修復拉桿金額不連動的既有 bug——
+// 這裡不管金額是滑桿選的還是「直接填」打的，天數或金額任一個變動都會重算）。
+// 門檻資料（min/max/tiers）由後端算好塞進下面的 JSON，前端只查表比大小，
+// 唯一在前端做的算術是總預算 ÷ 天數這一步單純除法，跟 app/ads/budget.py 的公式一致。
+(function () {
+  var tiersData = document.getElementById('duration-tiers-data');
+  var durationInput = document.getElementById('duration_days');
+  var dailyOut = document.getElementById('duration-daily');
+  var tierOut = document.getElementById('duration-tier-note');
+  var slider = document.getElementById('slider');
+  var customAmount = document.getElementById('custom_amount');
+  var sliderData = document.getElementById('slider-data');
+  if (!tiersData || !durationInput || !dailyOut) { return; }
+  var config = JSON.parse(tiersData.textContent);
+  var options = sliderData ? JSON.parse(sliderData.textContent) : [];
+
+  function currentAmount() {
+    var typed = customAmount ? parseFloat(customAmount.value) : NaN;
+    if (!isNaN(typed) && typed > 0) { return typed; }
+    var option = slider ? options[Number(slider.value)] : null;
+    return option ? option.amount : 0;
+  }
+
+  function tierFor(days) {
+    for (var i = 0; i < config.tiers.length; i++) {
+      if (days <= config.tiers[i].upper) { return config.tiers[i]; }
+    }
+    return config.tiers[config.tiers.length - 1];
+  }
+
+  function render() {
+    var days = parseInt(durationInput.value, 10);
+    if (!days || days < config.min || days > config.max) {
+      dailyOut.textContent = '—';
+      tierOut.textContent = '';
+      return;
+    }
+    var amount = currentAmount();
+    var daily = amount > 0 ? Math.round((amount / days) * 100) / 100 : 0;
+    dailyOut.textContent = daily.toLocaleString('zh-Hant');
+    var tier = tierFor(days);
+    var note = tier.note;
+    if (amount > 0 && daily < config.min_daily_budget) {
+      note += '這個天數下日預算偏低，可能只看得出有沒有人點，看不出能不能賺錢。';
+    }
+    tierOut.textContent = note;
+  }
+
+  durationInput.addEventListener('input', render);
+  if (slider) { slider.addEventListener('input', render); }
+  if (customAmount) { customAmount.addEventListener('input', render); }
+  render();
+})();
+
+});
+</script>
+{% endblock %}

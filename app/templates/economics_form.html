@@ -1,0 +1,60 @@
+{% extends "_layouts/console.html" %}
+{% from "_components/breadcrumb.html" import breadcrumb %}
+{% from "_components/error_summary.html" import error_summary %}
+{% from "_components/field.html" import field %}
+
+{% block title %}{{ '更新產品經濟數字' if is_update else '填寫產品經濟數字' }} — {{ product.name }} — 行銷作業系統{% endblock %}
+
+{% block content %}
+{{ breadcrumb([('品牌總覽', '/'), (brand.name, '/brands/' ~ brand.id), ('品牌智庫', '/brands/' ~ brand.id ~ '/hub'), (product.name, '/brands/' ~ brand.id ~ '/products/' ~ product.id), ('產品經濟數字', '/brands/' ~ brand.id ~ '/products/' ~ product.id ~ '/economics-view'), (('更新產品經濟數字' if is_update else '填寫產品經濟數字'), None)]) }}
+<a class="back-link" href="/brands/{{ brand.id }}/products/{{ product.id }}/economics-view"><span aria-hidden="true">←</span> 回到 產品經濟數字</a>
+<div class="form-page">
+<h1>{{ '更新產品經濟數字' if is_update else '填寫產品經濟數字' }}</h1>
+<p class="page-lede">這些數字之後會用來算 CPA 與 ROAS 的標準，跟單次活動的優惠與成本分開存放。</p>
+
+{{ error_summary(errors) }}
+
+<form method="post" action="/brands/{{ brand.id }}/products/{{ product.id }}/economics" novalidate>
+  {% call field('selling_price', '售價', required=True, hint='含稅零售價，例如 1280。', error=errors.selling_price) %}
+  <div class="currency-prefixed"><span class="prefix">{{ currency_symbol(values.currency) }}</span><input type="number" step="1" inputmode="numeric" id="selling_price" name="selling_price" value="{{ values.selling_price }}" placeholder="例如 1280"></div>
+  {% endcall %}
+
+  {% call field('fixed_cost', '固定成本', required=False, hint='與銷售數量無關的固定支出，例如平台月費、倉租分攤。不確定就先填 0，之後隨時可以再改。', error=errors.fixed_cost) %}
+  <div class="currency-prefixed"><span class="prefix">{{ currency_symbol(values.currency) }}</span><input type="number" step="1" inputmode="numeric" id="fixed_cost" name="fixed_cost" value="{{ values.fixed_cost }}" placeholder="例如 0"></div>
+  {% endcall %}
+
+  {% call field('unit_variable_cost', '單位變動成本', required=False, hint='每賣一件會產生的成本，例如原料與包材。不確定就先抓個大概，之後隨時可以再改。', error=errors.unit_variable_cost) %}
+  <div class="currency-prefixed"><span class="prefix">{{ currency_symbol(values.currency) }}</span><input type="number" step="1" inputmode="numeric" id="unit_variable_cost" name="unit_variable_cost" value="{{ values.unit_variable_cost }}" placeholder="例如 430"></div>
+  {% endcall %}
+
+  {% call field('shipping_cost', '運費', required=False, hint='這筆訂單的平均運費。不確定就先填 0，之後隨時可以再改。', error=errors.shipping_cost) %}
+  <div class="currency-prefixed"><span class="prefix">{{ currency_symbol(values.currency) }}</span><input type="number" step="1" inputmode="numeric" id="shipping_cost" name="shipping_cost" value="{{ values.shipping_cost }}" placeholder="例如 60"></div>
+  {% endcall %}
+
+  {% call field('currency', '幣別', required=True, error=errors.currency) %}
+  <select id="currency" name="currency">
+    {% for v, label in CURRENCIES %}
+    <option value="{{ v }}" {% if values.currency == v %}selected{% endif %}>{{ label }}</option>
+    {% endfor %}
+  </select>
+  {% endcall %}
+
+  {% call field('cpa_roas_basis', '計算口徑', required=False, hint='說明 CPA／ROAS 怎麼算，例如運費算不算在成本裡。', error=errors.cpa_roas_basis) %}
+  <textarea id="cpa_roas_basis" name="cpa_roas_basis" rows="3" placeholder="例如「以完成結帳的訂單計算 CPA，運費由品牌吸收，ROAS 以含稅售價計算」">{{ values.cpa_roas_basis }}</textarea>
+  {% endcall %}
+
+  {% call field('effective_from', '生效日', required=False, hint='這組數字從哪一天開始適用。', error=errors.effective_from) %}
+  <input type="date" id="effective_from" name="effective_from" value="{{ values.effective_from }}">
+  {% endcall %}
+
+  {% call field('confirmed_by', '確認人是誰？', required=True, hint='留下名字方便之後追溯是誰核對的數字。', error=errors.confirmed_by) %}
+  <input type="text" id="confirmed_by" name="confirmed_by" value="{{ values.confirmed_by }}" placeholder="例如「小陳」">
+  {% endcall %}
+
+  <div class="form-actions">
+    <button type="submit" class="btn btn-primary">儲存產品經濟數字</button>
+    <a class="btn-text" href="/brands/{{ brand.id }}/products/{{ product.id }}/economics-view">取消</a>
+  </div>
+</form>
+</div>
+{% endblock %}

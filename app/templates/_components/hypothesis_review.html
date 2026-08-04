@@ -1,0 +1,40 @@
+{# 假設結案（GitHub issue #53，決策 0030 第三節第 8－9 點）：判讀頁列出這期還沒結案的策略
+   假設，AI 已依這期的判讀結論預選一個答案並附一句理由（結論由程式算，AI 只翻人話——
+   決策 0016 硬性原則 4），使用者零操作也能過——直接送出就照 AI 的預選結案，要改就改了再送。
+
+   掛在既有「判讀結論」卡內，不新增第 6 張卡（0029 第 10 點主欄容量已滿）；這是一份獨立
+   partial，成效頁只多一行 {% include %}，D 線第 4 票拆層時只需搬那一行。
+
+   context 需求（由 include 它的頁面透過 render context 傳入，不靠 {% from %} 匯入的 macro）：
+   - brand.id、cycle.id
+   - reading.cycle.hypothesis_reviews：[{id, statement, type_label, preselect, ai_reason}, ...]
+#}
+{% if reading and reading.cycle and reading.cycle.hypothesis_reviews %}
+<h3 class="plan-subhead">這期驗證了什麼</h3>
+<p class="section-desc">
+  開期時提的策略假設，AI 已依這期的判讀結論預選一個答案並附理由，確認或改了再送出。
+</p>
+{{ banner('info', '只有系統算得出明確方向時才會幫你預選「成立」或「不成立」；打平、'
+  '樣本還不夠大時一律預選「看不出來」，不硬套答案。選「成立」才會存進「累積智慧」，'
+  '供之後生成參考。') }}
+<form method="post" action="/brands/{{ brand.id }}/ads/{{ cycle.id }}/performance/hypotheses">
+  {% for item in reading.cycle.hypothesis_reviews %}
+  <div class="field hypothesis-review-item">
+    <div class="field-legend">{{ item.type_label }}：{{ item.statement }}</div>
+    <p class="creative-why">{{ item.ai_reason }}</p>
+    <div class="radio-group">
+      {% for value, label in (('supported', '成立'), ('rejected', '不成立'), ('inconclusive', '看不出來')) %}
+      <label class="radio-option">
+        <input type="radio" name="verdict_{{ item.id }}" value="{{ value }}"
+               {% if item.preselect == value %}checked{% endif %}>
+        <span><span class="radio-label">{{ label }}</span></span>
+      </label>
+      {% endfor %}
+    </div>
+  </div>
+  {% endfor %}
+  <div class="form-actions">
+    <button type="submit" class="btn btn-secondary">送出結案</button>
+  </div>
+</form>
+{% endif %}

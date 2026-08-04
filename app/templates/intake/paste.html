@@ -1,0 +1,93 @@
+{% extends "_layouts/console.html" %}
+{% from "_components/breadcrumb.html" import breadcrumb %}
+{% from "_components/wizard_steps.html" import wizard_steps %}
+{% from "_components/cost_meter.html" import cost_meter %}
+
+{% block title %}把 AI 給你的表格貼回來 — {{ brand.name }} — 行銷作業系統{% endblock %}
+
+{% block content %}
+{{ breadcrumb(breadcrumb_items) }}
+<a class="back-link" href="/brands/{{ brand.id }}"><span aria-hidden="true">←</span> 回到 {{ brand.name }}</a>
+
+<h1>把 AI 給你的表格貼回來</h1>
+<p class="page-lede">整段貼上就好，包含第一列的欄位名。系統會先自動檢查格式，此步驟不需費用。</p>
+
+{{ wizard_steps(draft, 5) }}
+{{ cost_meter(draft, request.url.path) }}
+<hr class="rule">
+
+{% if ai_failed %}
+<div class="banner banner-danger" role="alert">
+  <div class="banner-body"><strong>AI 這次沒有回應</strong><br>{% if ai_error %}{{ ai_error }}<br>{% endif %}你的資料都還在，沒有掉。可以再試一次，或先跳過這一步。</div>
+  <div class="banner-actions">
+    <a class="btn-text" href="/brands/{{ brand.id }}/intake/paste/progress">再試一次（預估 {{ money2(retry_cost | float) }}）</a>
+    <a class="btn-text" href="/brands/{{ brand.id }}/intake/paste/skip">跳過這一步</a>
+    <a class="btn-text" href="/settings">前往設定頁</a>
+  </div>
+</div>
+{% endif %}
+
+{% if errors %}
+  {% if errors[0].line is not none %}
+  <div class="error-summary" role="alert">
+    <h2>有 {{ errors|length }} 列讀不進來{% if total_lines %}，其餘 {{ total_lines - errors|length }} 列沒問題{% endif %}。</h2>
+    <p class="section-desc">哪幾列有問題</p>
+    <ul>
+      {% for e in errors %}<li>{{ e.msg }}</li>{% endfor %}
+    </ul>
+  </div>
+  {% else %}
+  <div class="error-summary" role="alert">
+    <h2>這次讀不進來。</h2>
+    <ul>{% for e in errors %}<li>{{ e.msg }}</li>{% endfor %}</ul>
+  </div>
+  {% endif %}
+
+  {% if unknown_scopes %}
+  {% for name, count in unknown_scopes.items() %}
+  <div class="banner banner-warn" role="status">
+    <div class="banner-body"><strong>有 {{ count }} 列的適用範圍寫成「{{ name }}」</strong><br>
+    系統裡沒有這個產品。不用重跑，選一個處理方式就能直接讀進來：</div>
+    <div class="banner-actions">
+      <form method="post" action="/brands/{{ brand.id }}/intake/paste">
+        <input type="hidden" name="action" value="resolve_scope">
+        <input type="hidden" name="scope_name" value="{{ name }}">
+        <input type="hidden" name="resolve_as" value="create">
+        <button type="submit" class="btn-text">把「{{ name }}」建立成新產品</button>
+      </form>
+      <form method="post" action="/brands/{{ brand.id }}/intake/paste">
+        <input type="hidden" name="action" value="resolve_scope">
+        <input type="hidden" name="scope_name" value="{{ name }}">
+        <input type="hidden" name="resolve_as" value="brand">
+        <button type="submit" class="btn-text">這些列歸到「整個品牌」</button>
+      </form>
+    </div>
+  </div>
+  {% endfor %}
+  {% endif %}
+
+  <form method="post" action="/brands/{{ brand.id }}/intake/paste" class="mb-6">
+    <input type="hidden" name="action" value="fix">
+    <button type="submit" class="btn btn-secondary">{{ '再請 AI 整理一次' if fix_used else '請 AI 幫我整理格式' }}（預估 {{ money2(0.50) }}）</button>
+  </form>
+  <p class="field-hint">會把上面這段原封不動交給 AI，請它照格式重排一次；每按一次收一次費，受花費上限保護。{% if fix_used %}上次整理後仍有問題，可以再試、回交接包重跑，{% else %}也{% endif %}可以自己在下面的框裡改好再送一次，那樣不用花錢。</p>
+{% endif %}
+
+<form method="post" action="/brands/{{ brand.id }}/intake/paste" enctype="multipart/form-data" novalidate>
+  <input type="hidden" name="action" value="validate">
+  <div class="field">
+    <label for="raw_text">AI 輸出的表格（貼上或上傳擇一）</label>
+    <textarea id="raw_text" name="raw_text" rows="16" class="mono-textarea" placeholder="種類 | 分類 | 標題 | 內容 | 適用範圍 | 佐證來源&#10;品牌事實 | 定位 | 價格帶 | … | 整個品牌 | …">{{ raw_value }}</textarea>
+    <div class="field-hint">系統只讀取表格內容，開場白、結語等表格以外的文字會自動忽略；複製時若換行跑掉、表格黏成一條，系統會自動重組。</div>
+  </div>
+  <div class="field">
+    <label for="upload">或上傳外部 AI 匯出的檔案（.md／.txt）</label>
+    <input type="file" id="upload" name="upload" accept=".md,.txt">
+    <div class="field-hint">最不會出錯的方式：在外部 AI 把結果下載成檔案，直接上傳。有選檔案時以檔案內容為準。</div>
+  </div>
+  <div class="wizard-actions">
+    <button type="submit" class="btn btn-primary">{{ '再檢查一次' if errors else '檢查並讀進來' }}</button>
+    <a class="btn-text" href="/brands/{{ brand.id }}">先離開，之後再繼續</a>
+  </div>
+</form>
+{% endblock %}

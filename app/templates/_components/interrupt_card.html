@@ -1,0 +1,22 @@
+{# 全站打斷佇列的卡片（決策 0026／DESIGN.md §20 規則 3、4）：一卡一句＋統一「詳情」連結。
+   item 需含 severity、message，選填 action_url；resolvable=false 用在已結清單（不給「知道了」）。
+
+   kind（選填，修憲落地 V6）：頁頂「當前一件」banner 一律只有一張，渲染在 <main> 之外
+   （§20.2「提醒單一出口」），不受這裡影響。但 /inbox 頁把整條待辦／已結清單攤開在
+   <main> 裡，筆數會隨資料量變動——依 DESIGN.md §20.1 規則 1／§15.2，這是「清單資料」，
+   不是「單卡一句的推播訊息」。呼叫端傳 kind='content' 才會掛 card-content 信號給
+   capacity_check.py 分流（不計入主欄 ≤5）；不傳＝維持原行為，不影響其餘既有呼叫端
+   （console.html／base.html 的「當前一件」banner）。 #}
+{% macro interrupt_card(item, resolvable=True, kind=None) %}
+<div class="card interrupt-card severity-{{ item.severity }}{{ ' card-content' if kind == 'content' else '' }}">
+  <p class="interrupt-card-message">{{ item.message }}</p>
+  <div class="form-actions">
+    {% if item.action_url %}<a class="link" href="{{ item.action_url }}">詳情</a>{% endif %}
+    {% if resolvable %}
+    <form method="post" action="/interrupts/{{ item.id }}/resolve">
+      <button type="submit" class="btn-text">知道了</button>
+    </form>
+    {% endif %}
+  </div>
+</div>
+{% endmacro %}

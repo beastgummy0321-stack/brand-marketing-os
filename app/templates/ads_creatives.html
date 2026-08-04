@@ -1,0 +1,144 @@
+{% extends "_layouts/console.html" %}
+{% from "_components/breadcrumb.html" import breadcrumb %}
+{% from "_components/badge.html" import badge %}
+{% from "_components/banner.html" import banner %}
+{% from "_components/empty_state.html" import empty_state %}
+{% from "_components/copy_block.html" import copy_block %}
+{% from "_components/wizard_steps.html" import progress_rail %}
+
+{% block title %}素材 — {{ cycle.start_date }} 檔期 — {{ brand.name }}{% endblock %}
+
+{% block content %}
+{{ breadcrumb(breadcrumb_items) }}
+{{ progress_rail(stage_items, collapsed=True, aria_label='檔期進度') }}
+
+{% if banner_msg %}
+{{ banner(banner_kind or 'ok', banner_msg, dismiss_url=request.url.path) }}
+{% endif %}
+
+<h1>這期的素材</h1>
+
+{% if groups %}
+<p class="page-lede">
+  <strong>預設全部採用</strong>，可將不想用的項目挑掉；不調整也可以直接繼續。
+  挑掉一則時，系統會詢問原因，並當場改寫一版放回原位。
+</p>
+
+{% if flagged_count %}
+{{ banner('warn', '有 ' ~ flagged_count ~ ' 處用字命中了這個品牌登記的宣稱或規則，已經標在該則素材上。這不會擋住你，但投放前建議看一下。') }}
+{% endif %}
+
+{% if coverage_gaps %}
+{{ banner('warn', '這幾條規則抽不出可比對字詞，沒有被本次掃描涵蓋：' ~ (coverage_gaps | map(attribute='detail') | join('；')) ~ '——不是沒問題，是系統這次沒有能力檢查，請自己再看一眼。') }}
+{% endif %}
+
+{% if auto_held_count %}
+<div class="card compliance-hold-card">
+  <p>其中 <strong>{{ auto_held_count }}</strong> 則命中<strong>法規</strong>禁用字詞，系統已先幫你把它們預設挑掉；要用就一鍵勾回即可，不會擋住你。</p>
+  {% if show_batch_restore %}
+  <form method="post" action="/brands/{{ brand.id }}/ads/{{ cycle.id }}/creatives/restore-batch">
+    <button type="submit" class="btn btn-secondary">一次全部勾回（{{ auto_held_count }} 則）</button>
+  </form>
+  {% endif %}
+</div>
+{% endif %}
+
+{% if methodology_missing %}
+{{ banner('warn', '這批素材生成時，以下專業方法論參考資料缺席：' ~ (methodology_missing | join('、')) ~ '（不影響本期素材照常生成，已留紀錄）') }}
+{% endif %}
+
+{% if missing_creative_type_labels %}
+{{ banner('warn', '這批素材缺少下列型別，已自動補打一次仍未產出：' ~ (missing_creative_type_labels | join('、')) ~ '。可以整批重做再試一次。') }}
+{% endif %}
+
+{% if not customer_voice_available %}
+{{ banner('warn', '這批素材生成時，這個品牌還沒有任何顧客原話語料，無顧客原話支撐——不影響本期素材照常生成；之後在品牌智庫貼入顧客評論或留言，下次生成就能引用。') }}
+{% endif %}
+
+{% for group in groups %}
+<section class="creative-group">
+  <h2 class="creative-group-title">{{ loop.index }}. {{ group.cell.creative_angle }}</h2>
+
+  {% for variant in group.variants %}
+  <div class="card creative-card{% if variant.rejected %} is-rejected{% endif %}">
+    <div class="creative-head">
+      <span class="creative-type">{{ variant.type_label }}</span>
+      {% if variant.creative_angle_number %}<span class="creative-fingerprint">創意角度 #{{ variant.creative_angle_number }}</span>{% endif %}
+      {% if variant.cut_type_label %}<span class="creative-fingerprint">切法：{{ variant.cut_type_label }}</span>{% endif %}
+      {% if variant.on_camera %}{{ badge('人物出鏡（套用真人實拍 DNA）', 'neutral') }}{% endif %}
+      {% if variant.fingerprint_text %}<span class="creative-fingerprint">{{ variant.fingerprint_text }}</span>{% endif %}
+      {% if variant.auto_held %}{{ badge(variant.reject_reason_label, 'warn') }}
+      {% elif variant.rejected %}{{ badge('你挑掉了：' ~ variant.reject_reason_label, 'neutral') }}{% endif %}
+      {% if variant.experiment_variant %}{{ badge('刻意踩禁區的實驗素材：違反「' ~ variant.experiment_rule_text ~ '」', 'warn') }}{% endif %}
+    </div>
+
+    {% if variant.variant_type == 'image_prompt' %}
+      {{ copy_block(variant.content, 'copy-' ~ variant.id) }}
+      <p class="creative-note">把這段貼進生圖工具就能做出這張圖。</p>
+    {% else %}
+      <p class="creative-content">{{ variant.content }}</p>
+    {% endif %}
+
+    {% if variant.rationale %}<p class="creative-why">為什麼這樣寫：{{ variant.rationale }}</p>{% endif %}
+    {% if variant.quote_source %}<p class="creative-why">引用顧客原話，出處：{{ variant.quote_source }}</p>{% endif %}
+
+    {% for flag in flags.get(variant.id, []) %}
+    <div class="compliance-flag compliance-{{ flag.severity }}">
+      <strong>{{ '要注意' if flag.severity == 'warn' else '提醒' }}：</strong>{{ flag.message }}
+    </div>
+    {% endfor %}
+
+    {% if variant.auto_held %}
+    <form method="post" action="/brands/{{ brand.id }}/ads/{{ cycle.id }}/creatives/{{ variant.id }}/restore">
+      <button type="submit" class="btn btn-secondary">勾回，我要用這則</button>
+    </form>
+    {% elif not variant.rejected %}
+    <details class="field-details creative-reject">
+      <summary><span class="marker" aria-hidden="true">▸</span> 我不要這則</summary>
+      <div class="details-body">
+        <form method="post" action="/brands/{{ brand.id }}/ads/{{ cycle.id }}/creatives/{{ variant.id }}/reject">
+          <div class="field">
+            <div class="field-legend">哪裡不對？（單選一項，系統會記住並改寫一版）</div>
+            <div class="radio-group">
+              {% for code, label in reject_reasons %}
+              <label class="radio-option">
+                <input type="radio" name="reason_code" value="{{ code }}" {% if loop.first %}checked{% endif %}>
+                <span><span class="radio-label">{{ label }}</span></span>
+              </label>
+              {% endfor %}
+            </div>
+          </div>
+          <button type="submit" class="btn btn-secondary">挑掉這則，換一版</button>
+        </form>
+      </div>
+    </details>
+    {% endif %}
+  </div>
+  {% endfor %}
+</section>
+{% endfor %}
+
+<div class="card gate-card">
+  <h3>這批素材可以嗎？</h3>
+  <p>目前會採用 <strong>{{ kept }}</strong> 則（沒被你挑掉的都算採用）。按下去之後系統準備投放交接包。</p>
+  <p class="creative-why">{{ compliance_note }}</p>
+  <p class="creative-why">
+    系統會比對你登錄的字詞。系統不會判斷你的宣稱合不合法。食品廣告的法律責任在刊登者，也就是你。
+    食品安全衛生管理法 §28 II 涉醫療效能，罰鍰新台幣 60 萬元起；未取得健康食品許可證卻宣稱法定
+    保健功效，健康食品管理法 §6／§21 可能涉刑事責任（三年以下有期徒刑，得併科新台幣 100 萬元
+    以下罰金）。
+  </p>
+  <div class="form-actions">
+    <form method="post" action="/brands/{{ brand.id }}/ads/{{ cycle.id }}/creatives/approve">
+      <button type="submit" class="btn btn-primary">這些都好，繼續</button>
+    </form>
+    <a class="btn-text" href="/brands/{{ brand.id }}/ads/{{ cycle.id }}/creatives/progress">整批重做</a>
+  </div>
+</div>
+
+{% else %}
+{{ empty_state('這期還沒有素材',
+   '系統會依你剛才確認的計畫，替每個切角產出圖片提示詞、開場白與文案。',
+   '產出這期的素材', '/brands/' ~ brand.id ~ '/ads/' ~ cycle.id ~ '/creatives/progress') }}
+{% endif %}
+{% endblock %}

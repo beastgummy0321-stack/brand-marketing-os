@@ -1,0 +1,22 @@
+{% macro brand_switcher(current_brand, active_brands) %}
+<details class="brand-switcher">
+  <summary>{% if current_brand %}目前品牌：{{ current_brand.name }}{% else %}尚未選擇品牌{% endif %} <span aria-hidden="true">▾</span></summary>
+  <div class="switcher-panel">
+    {% for b in active_brands %}
+      {% set pending = pending_brand_fact_count(b.id) %}
+      {% if current_brand and b.id == current_brand.id %}
+      <div class="switcher-row is-current">
+        <span>{{ b.name }}</span>
+        {% if pending > 0 %}<span class="switcher-pending"><span aria-hidden="true">⬤</span> 待確認 {{ pending }} 項</span>{% endif %}
+      </div>
+      {% else %}
+      <a class="switcher-row" href="/brands/{{ b.id }}?switched=1">
+        <span>{{ b.name }}</span>
+        {% if pending > 0 %}<span class="switcher-pending"><span aria-hidden="true">⬤</span> 待確認 {{ pending }} 項</span>{% endif %}
+      </a>
+      {% endif %}
+    {% endfor %}
+    <a class="switcher-row switcher-all" href="/">查看全部品牌</a>
+  </div>
+</details>
+{% endmacro %}

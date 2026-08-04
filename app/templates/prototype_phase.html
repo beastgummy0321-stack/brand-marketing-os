@@ -1,0 +1,30 @@
+{% extends "_layouts/console.html" %}
+{# prototype_phase.html — 原型階段結束詳情頁（修憲落地 A6 修正）。
+
+   打斷佇列的「原型階段結束提醒」卡片點「詳情」進來這裡，逐項列出決策 0037 第一節
+   第 2 條的四項豁免現況——不是照抄決策當時的舊清單，是 app/core/prototype_phase.py
+   的 EXEMPTIONS（跟旗標判定同一份原始碼），使用者才看得到到底要重新決定什麼。 #}
+
+{% block title %}原型階段結束 — 行銷作業系統{% endblock %}
+
+{% block content %}
+<h1>原型階段結束</h1>
+
+{% if ended %}
+<p class="section-desc">
+  第一次用真錢跑完一期已完成結算，原型階段已結束（決策 0037 第一節第 1 條）。
+  以下四項技術豁免當初是為了原型階段暫時放行，現在要逐項重新決定。
+</p>
+{% else %}
+<p class="section-desc">原型階段尚未結束（還沒有任何檔期用真錢結算完成）。</p>
+{% endif %}
+
+<div class="inbox-list">
+  {% for item in exemptions %}
+  <div class="card">
+    <h2>{{ item.item }}</h2>
+    <p>{{ item.status }}</p>
+  </div>
+  {% endfor %}
+</div>
+{% endblock %}

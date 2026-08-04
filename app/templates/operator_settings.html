@@ -1,0 +1,31 @@
+{% extends "_layouts/console.html" %}
+{% from "_components/error_summary.html" import error_summary %}
+{% from "_components/field.html" import field %}
+
+{% block title %}設定操作人 — 行銷作業系統{% endblock %}
+
+{% block content %}
+<a class="back-link" href="{{ next }}"><span aria-hidden="true">←</span> 回到上一頁</a>
+<div class="form-page">
+<h1>設定操作人</h1>
+{% if blocked %}
+<p class="page-lede">剛才那個動作需要記錄「是誰做的」，所以先帶你來設定操作人；設定好會帶你回去繼續。</p>
+{% endif %}
+<p class="page-lede">這個名字會用在「確認事實」等動作，記錄是誰做的。沒有帳號系統，這裡只是留一個具名字串。</p>
+
+{{ error_summary(errors) }}
+
+<form method="post" action="/settings/operator" novalidate>
+  <input type="hidden" name="next" value="{{ next }}">
+  <input type="hidden" name="blocked" value="{{ '1' if blocked else '0' }}">
+  {% call field('name', '操作人姓名', required=True, hint='之後「確認事實」等動作會預填這個名字，仍可在當次操作中修改。', error=errors.name) %}
+  <input type="text" id="name" name="name" value="{{ values.name }}" placeholder="例如「小陳」">
+  {% endcall %}
+
+  <div class="form-actions">
+    <button type="submit" class="btn btn-primary">儲存操作人</button>
+    <a class="btn-text" href="{{ next }}">取消</a>
+  </div>
+</form>
+</div>
+{% endblock %}

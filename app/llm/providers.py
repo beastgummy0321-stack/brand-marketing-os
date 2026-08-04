@@ -1,0 +1,370 @@
+# -*- coding: utf-8 -*-
+"""app/llm/providers.py — Provider 介面（供應商中立）＋兩個實作。
+
+見 docs/design/06-llm-gateway.md §5–6、docs/decisions/0003。
+
+Provider.complete() 只做「供應商 SDK 呼叫 → 統一回傳物件」的轉換，不改寫模型輸出內容
+（薄殼原則，principles 第 2 條）。上層 gateway 永不接觸供應商原生型別，只認識這裡的
+ProviderResponse／ProviderError。
+"""
+
+from __future__ import annotations
+
+import contextvars
+from dataclasses import dataclass
+from typing import Optional, Protocol
+
+from app.core import settings
+from app.llm import pricing
+
+# 缺金鑰的人話訊息：不出現環境變數名（使用者看不懂），一律指向設定頁（07 §3 規則 3）。
+MISSING_KEY_MESSAGE = "尚未設定 AI 金鑰，請到「設定」頁填入後再試一次"
+
+# ---------------------------------------------------------------------------
+# 模型與思考等級（票 #27）：任務 →（預設模型、思考等級）對照表＋當場覆寫。
+# ---------------------------------------------------------------------------
+
+# 思考等級固定五檔，字面值直接對齊 Anthropic API 的 output_config.effort（claude-api
+# skill 查證：low/medium/high/xhigh/max），不用再另外轉換一次。
+THINKING_LEVEL_ORDER = ["low", "medium", "high", "xhigh", "max"]
+THINKING_LEVEL_LABELS = {
+    "low": "低", "medium": "中", "high": "高", "xhigh": "超高", "max": "極高",
+}
+DEFAULT_THINKING_LEVEL = "medium"  # 任務不在對照表裡時的預設檔——不確定就留中檔
+
+# 支援 output_config.effort 的模型。claude-api skill 查證：這個參數在 Sonnet 4.5／
+# Haiku 4.5 這類舊模型上會被 API 拒絕（400），不能無腦對所有模型都送；claude-haiku-4-5
+# 在本表刻意不列入。之後模型清單異動只需要調整這個集合，呼叫端不用動。
+EFFORT_SUPPORTED_MODELS = {"claude-opus-5", "claude-sonnet-5", "claude-fable-5"}
+
+# 任務 →（人話標籤、模型預設、思考等級預設）。model 為 None 代表沿用全域設定
+# （settings 頁「使用的模型」）——目前只有思考等級依任務性質分檔，模型維持全站一致，
+# 需要哪個任務換模型時再回來改這裡，不用動呼叫端。
+TASK_TYPE_LABELS = {
+    "campaign_plan": "檔期規劃（出方案）",
+    "creative_batch": "素材生成（整批）",
+    "creative_backfill": "素材生成（補打缺型別）",
+    "creative_rewrite": "素材生成（單則改寫）",
+    "intake_scan": "建檔精靈：讀取網址",
+    "intake_question": "建檔精靈：追問",
+    "intake_paste_fix": "建檔精靈：貼上格式修復",
+    "product_scan": "產品建檔：讀取網址",
+    "product_handoff_fix": "產品交接：格式修復",
+    "brand_report": "品牌智庫報告",
+    "customer_voice_extraction": "顧客原話萃取",
+    "performance_reading": "成效判讀",
+    "settlement_diff_explanation": "補件重判差異說明",
+}
+
+TASK_DEFAULTS = {
+    # 規劃：較高思考
+    "campaign_plan": {"model": None, "thinking": "high"},
+    # 素材文案生成：中等思考
+    "creative_batch": {"model": None, "thinking": "medium"},
+    "creative_backfill": {"model": None, "thinking": "medium"},
+    "creative_rewrite": {"model": None, "thinking": "medium"},
+    # 機械性小任務：低思考
+    "intake_scan": {"model": None, "thinking": "low"},
+    "intake_question": {"model": None, "thinking": "low"},
+    "intake_paste_fix": {"model": None, "thinking": "low"},
+    "product_scan": {"model": None, "thinking": "low"},
+    "product_handoff_fix": {"model": None, "thinking": "low"},
+    # 分析型任務：不確定，留中檔
+    "brand_report": {"model": None, "thinking": "medium"},
+    "customer_voice_extraction": {"model": None, "thinking": "medium"},
+    "performance_reading": {"model": None, "thinking": "medium"},
+    # 翻譯既有 diff 明細成人話，不做判斷：低思考即可
+    "settlement_diff_explanation": {"model": None, "thinking": "low"},
+}
+
+
+def task_default_table() -> list:
+    """設定頁顯示用的「任務 → 模型／思考等級」對照表（可視、可核對，票 #27 驗收 1）。"""
+    rows = []
+    for task_type, label in TASK_TYPE_LABELS.items():
+        default = TASK_DEFAULTS.get(task_type, {})
+        model = default.get("model")
+        thinking = default.get("thinking", DEFAULT_THINKING_LEVEL)
+        rows.append({
+            "task_type": task_type,
+            "task_label": label,
+            "model_label": model or "沿用上面設定的模型",
+            "thinking_label": THINKING_LEVEL_LABELS.get(thinking, thinking),
+        })
+    return rows
+
+
+# 本次表單覆寫（票 #27）：生成按鈕旁選單當場改的值，只影響這一次呼叫、不落資料庫，
+# 呼叫完立即清除。用 contextvar 而非模組全域變數，避免併發請求互相汙染——FastAPI
+# 同步路由會跑在各自的 worker thread，anyio 會把呼叫當下的 context 複製過去，
+# 因此同一個請求內設定、讀取都在同一份 context 副本上，彼此請求不會互相干擾。
+_model_override_var: "contextvars.ContextVar[Optional[str]]" = contextvars.ContextVar(
+    "brand_os_model_override", default=None)
+_thinking_override_var: "contextvars.ContextVar[Optional[str]]" = contextvars.ContextVar(
+    "brand_os_thinking_override", default=None)
+
+
+class request_overrides:
+    """with 區塊：本次生成呼叫改用指定的模型／思考等級，離開區塊自動清除。
+
+    model／thinking 都要驗過白名單：model 不在 pricing.PRICING 這張唯一權威表裡
+    （表單被動手腳、瀏覽器手改網址塞 model=hacked-model-xyz）、thinking 不在五檔內，
+    一律視同沒填，退回任務預設，不噴錯、也不會真的打到供應商（票 #27 驗收 7；破壞者
+    情境修復）。用 pricing.PRICING 當權威而不是 main.MODEL_CHOICES，避免 app.llm 反過來
+    匯入 app.main 造成循環依賴。
+    """
+
+    def __init__(self, model: Optional[str] = None, thinking: Optional[str] = None):
+        self._model = model if model in pricing.PRICING else None
+        self._thinking = thinking if thinking in THINKING_LEVEL_ORDER else None
+
+    def __enter__(self) -> "request_overrides":
+        self._model_token = _model_override_var.set(self._model)
+        self._thinking_token = _thinking_override_var.set(self._thinking)
+        return self
+
+    def __exit__(self, *exc) -> bool:
+        _model_override_var.reset(self._model_token)
+        _thinking_override_var.reset(self._thinking_token)
+        return False
+
+
+def resolve_model(override: Optional[str] = None, task_type: Optional[str] = None,
+                  conn=None) -> str:
+    """決定實際呼叫的模型，優先鏈：本次表單覆寫 > 任務預設 > 全域設定（票 #27）。
+
+    全域設定＝ DB > 環境變數 > 預設值，見 core/settings。conn：手上已有資料庫連線時
+    傳入（例如 gateway），沒有就讓 settings 自己開短命連線。
+
+    每一層都要在 pricing.PRICING 白名單內才採用，非法值（表單覆寫、DB 設定值都算）
+    視同沒填、往下一層退，不噴錯——避免手改網址塞不存在的 model 一路通到真的打 API
+    （破壞者情境；與 resolve_thinking 同一套防線）。
+    """
+    if override in pricing.PRICING:
+        return override
+    request_override = _model_override_var.get()
+    if request_override in pricing.PRICING:
+        return request_override
+    task_model = TASK_DEFAULTS.get(task_type, {}).get("model") if task_type else None
+    if task_model in pricing.PRICING:
+        return task_model
+    global_model = settings.get_llm_model(conn)
+    if global_model in pricing.PRICING:
+        return global_model
+    return settings.DEFAULT_LLM_MODEL
+
+
+def resolve_thinking(override: Optional[str] = None, task_type: Optional[str] = None) -> str:
+    """決定實際使用的思考等級，優先鏈與 resolve_model 相同（票 #27）。
+
+    非法值（不在五檔內）視同沒填，逐層退回，不噴錯（驗收 7）。
+    """
+    if override in THINKING_LEVEL_ORDER:
+        return override
+    request_override = _thinking_override_var.get()
+    if request_override in THINKING_LEVEL_ORDER:
+        return request_override
+    task_thinking = TASK_DEFAULTS.get(task_type, {}).get("thinking") if task_type else None
+    if task_thinking in THINKING_LEVEL_ORDER:
+        return task_thinking
+    return DEFAULT_THINKING_LEVEL
+
+
+class ProviderError(Exception):
+    """統一錯誤型別：缺金鑰、供應商婉拒（refusal）、供應商錯誤都包成人話訊息後拋出這個型別。
+
+    gateway 只需要認得這一個型別（及其子類別 ProviderTimeoutError），不用逐一認識
+    供應商原生的例外階層。
+    """
+
+
+class ProviderTimeoutError(ProviderError):
+    """逾時（對應 llm_task.status = timeout，與其他失敗的 status = failed 區分）。"""
+
+
+@dataclass
+class Usage:
+    """對齊 docs/design/06-llm-gateway.md 的 TokenUsage 形狀。"""
+
+    input_tokens: int
+    output_tokens: int
+    cache_read_input_tokens: int = 0
+    cache_creation_input_tokens: int = 0
+
+
+@dataclass
+class ProviderResponse:
+    """統一回傳物件（本輪任務指示）：output_text／structured／usage／stop_reason／raw。
+
+    output_text 與 structured 皆逐字來自模型，gateway 不得再改寫（principles 第 2 條）。
+    """
+
+    output_text: str
+    structured: Optional[dict]
+    usage: Usage
+    stop_reason: str
+    raw: object = None
+
+
+class Provider(Protocol):
+    """供應商中立介面：上層只依賴這個方法簽名，換供應商＝換一個實作（build.md 驗收 16）。"""
+
+    name: str
+
+    def complete(
+        self,
+        *,
+        model: str,
+        system: Optional[str],
+        messages: list,
+        max_tokens: int,
+        timeout_s: float = 120.0,
+        effort: Optional[str] = None,
+    ) -> ProviderResponse: ...
+
+
+class AnthropicProvider:
+    """第一個實作（D3）：官方 anthropic Python SDK。延遲 import，避免未安裝時整包壞掉。
+
+    - 金鑰：呼叫前經 settings.get_api_key() 取得（環境變數優先、DB 設定回退，修憲落地 M4），
+      沒有金鑰時在打出網路請求前就拋出人話錯誤。不快取到模組層——設定頁改完金鑰要立刻生效（07 §3）。
+    - 目標模型 Claude Opus 5 預設即有思考、不傳 thinking 參數時就是 adaptive（claude-api
+      skill 查證），因此本實作刻意不傳 temperature/top_p/top_k/thinking——但思考「深度」
+      經 effort 參數控制（output_config.effort，票 #27），只在 EFFORT_SUPPORTED_MODELS
+      清單內的模型才送，避免對不支援的模型（如 Haiku 4.5）送出會被拒絕的參數。
+    - 回應處理：先檢查 stop_reason == "refusal" 再讀 content，refusal 一律轉成 ProviderError，
+      不嘗試解析可能為空的 content。
+    - 錯誤鏈由專到廣：RateLimitError → APIStatusError → APITimeoutError → APIConnectionError
+      （Timeout 是 Connection 的子類別，須排在其前面才會先被攔截）。
+    """
+
+    name = "anthropic"
+
+    def complete(
+        self,
+        *,
+        model: str,
+        system: Optional[str],
+        messages: list,
+        max_tokens: int,
+        timeout_s: float = 120.0,
+        effort: Optional[str] = None,
+    ) -> ProviderResponse:
+        # 金鑰檢查放在 SDK import 之前：沒金鑰時連套件都不需要，就能給出人話錯誤。
+        api_key = settings.get_api_key()
+        if not api_key:
+            raise ProviderError(MISSING_KEY_MESSAGE)
+
+        import anthropic  # 延遲 import：本檔案本身不強制要求安裝此套件才能被 import
+
+        kwargs = {"model": model, "max_tokens": max_tokens, "messages": messages}
+        if system:
+            kwargs["system"] = system
+        if effort and model in EFFORT_SUPPORTED_MODELS:
+            kwargs["output_config"] = {"effort": effort}
+
+        client = anthropic.Anthropic(api_key=api_key).with_options(timeout=timeout_s)
+
+        try:
+            response = client.messages.create(**kwargs)
+        except TypeError as exc:
+            # 這個 SDK 版本在缺憑證時，是在送出請求當下才拋出 TypeError（訊息含
+            # "authentication"／"api_key"），而不是在建構 client 時；兩種情況都轉成人話錯誤。
+            message = str(exc).lower()
+            if "authentication" in message or "api_key" in message:
+                raise ProviderError(MISSING_KEY_MESSAGE) from exc
+            raise
+        except anthropic.RateLimitError as exc:
+            raise ProviderError("AI 服務暫時無法回應（已達流量限制），請稍後再試。") from exc
+        except anthropic.APIStatusError as exc:
+            # 不把供應商原始回應（JSON、request id 等術語）帶進訊息——所有顯示這個
+            # 錯誤的頁面（設定頁測試連線、建檔精靈錯誤 banner）都只給人話（§12）。
+            lowered = str(exc).lower()
+            if exc.status_code == 401 or "authentication" in lowered:
+                human = "金鑰錯誤：AI 服務不接受這把金鑰。請確認複製時有沒有少字，或到 Anthropic 重新產生一把。"
+            elif "credit" in lowered or "billing" in lowered:
+                human = "餘額不足：金鑰是對的，但帳戶額度不夠。請先到 Anthropic 帳戶儲值再試。"
+            else:
+                human = f"AI 服務回應錯誤（狀態碼 {exc.status_code}），請稍後再試。"
+            raise ProviderError(human) from exc
+        except anthropic.APITimeoutError as exc:
+            raise ProviderTimeoutError("AI 服務逾時未回應，請再試一次。") from exc
+        except anthropic.APIConnectionError as exc:
+            raise ProviderError("無法連線到 AI 服務，請檢查網路後再試一次。") from exc
+        except anthropic.AnthropicError as exc:
+            # 涵蓋建構 client 時就失敗的情況（例如未來 SDK 版本改為即時檢查憑證）。
+            raise ProviderError(MISSING_KEY_MESSAGE) from exc
+
+        if response.stop_reason == "refusal":
+            details = getattr(response, "stop_details", None)
+            category = getattr(details, "category", None) if details else None
+            suffix = f"（分類：{category}）" if category else ""
+            raise ProviderError(f"模型婉拒本次請求{suffix}")
+
+        text = "".join(
+            block.text for block in response.content if getattr(block, "type", None) == "text"
+        )
+        usage = response.usage
+        return ProviderResponse(
+            output_text=text,
+            structured=None,  # 本輪未接 output_config/structured outputs（skeleton，非全功能）
+            usage=Usage(
+                input_tokens=usage.input_tokens,
+                output_tokens=usage.output_tokens,
+                cache_read_input_tokens=getattr(usage, "cache_read_input_tokens", 0) or 0,
+                cache_creation_input_tokens=getattr(usage, "cache_creation_input_tokens", 0) or 0,
+            ),
+            stop_reason=response.stop_reason,
+            raw=response,
+        )
+
+
+class FakeProvider:
+    """測試用 Provider：不發任何真實網路請求，可注入預設回覆／例外。
+
+    - response：每次呼叫回傳的 ProviderResponse（預設一個成功回應）。
+    - exception：若指定，前 fail_first_n 次呼叫拋出這個例外；之後改回傳 response。
+      fail_first_n=0（預設）代表每次呼叫都拋出（用於測試「全部嘗試皆失敗」）。
+    - calls：記錄每次呼叫的參數，供測試斷言呼叫內容（含 effort，票 #27：思考等級解析後
+      實際傳給 provider 的值，供路由層測試核對覆寫有沒有生效）。
+    """
+
+    name = "fake"
+
+    def __init__(
+        self,
+        response: Optional[ProviderResponse] = None,
+        exception: Optional[Exception] = None,
+        fail_first_n: int = 0,
+    ):
+        self.response = response or ProviderResponse(
+            output_text="（假回覆）測試用輸出",
+            structured=None,
+            usage=Usage(input_tokens=100, output_tokens=50),
+            stop_reason="end_turn",
+        )
+        self.exception = exception
+        self.fail_first_n = fail_first_n
+        self.calls: list = []
+
+    def complete(
+        self,
+        *,
+        model: str,
+        system: Optional[str],
+        messages: list,
+        max_tokens: int,
+        timeout_s: float = 120.0,
+        effort: Optional[str] = None,
+    ) -> ProviderResponse:
+        call_no = len(self.calls) + 1
+        self.calls.append(
+            {"model": model, "system": system, "messages": messages,
+             "max_tokens": max_tokens, "timeout_s": timeout_s, "effort": effort}
+        )
+        should_fail = self.exception is not None and (
+            self.fail_first_n == 0 or call_no <= self.fail_first_n
+        )
+        if should_fail:
+            raise self.exception
+        return self.response

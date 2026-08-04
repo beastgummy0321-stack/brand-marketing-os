@@ -1,0 +1,54 @@
+{% extends "_layouts/console.html" %}
+{% from "_components/breadcrumb.html" import breadcrumb %}
+{% from "_components/section_header.html" import section_header %}
+{% from "_components/banner.html" import banner %}
+{% from "_components/empty_state.html" import empty_state %}
+
+{% block title %}宣稱 — {{ brand.name }} — 行銷作業系統{% endblock %}
+
+{% block content %}
+{{ breadcrumb(breadcrumb_items) }}
+
+{% if banner_msg %}
+{{ banner(banner_kind or 'ok', banner_msg, dismiss_url=request.url.path) }}
+{% endif %}
+
+{{ section_header('claims', '宣稱', None, '新增宣稱', '/brands/' ~ brand.id ~ '/claims/new') }}
+{% if claim_total == 0 %}
+  {{ empty_state('還沒有登錄任何宣稱', '建議至少先把不能講的話寫進來，避免之後的產出踩到法規紅線。', '新增宣稱', '/brands/' ~ brand.id ~ '/claims/new') }}
+{% else %}
+  {% if claims_by_type.approved %}
+  <div class="claim-block claim-block-approved">
+    <h3>可用（{{ claims_by_type.approved|length }}）</h3>
+    {% for c in claims_by_type.approved %}
+    <div class="claim-row">
+      <div class="claim-text">{{ c.claim_text }}</div>
+      <div class="claim-meta">{% if c.evidence_source_reference %}佐證：{{ c.evidence_source_reference }}{% else %}尚未填寫佐證來源{% endif %}<span class="dot-sep" aria-hidden="true">・</span>適用：{{ scope_label(brand.id, c.product_id) }}<span class="dot-sep" aria-hidden="true">・</span><a class="btn-text" href="/brands/{{ brand.id }}/claims/{{ c.id }}/edit">修改</a><span class="dot-sep" aria-hidden="true">・</span><form method="post" action="/brands/{{ brand.id }}/claims/{{ c.id }}/delete" class="inline-form" onsubmit="return confirm('確定要刪除這條宣稱？')"><button type="submit" class="btn-text btn-text-danger">刪除</button></form></div>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+  {% if claims_by_type.high_risk %}
+  <div class="claim-block claim-block-high_risk">
+    <h3>高風險（{{ claims_by_type.high_risk|length }}）</h3>
+    {% for c in claims_by_type.high_risk %}
+    <div class="claim-row">
+      <div class="claim-text">{{ c.claim_text }}{% if not c.evidence_source_reference %} <span class="claim-warn"><span aria-hidden="true">⚠</span> 尚未附上佐證來源</span>{% endif %}</div>
+      <div class="claim-meta">適用：{{ scope_label(brand.id, c.product_id) }}<span class="dot-sep" aria-hidden="true">・</span><a class="btn-text" href="/brands/{{ brand.id }}/claims/{{ c.id }}/edit">修改</a><span class="dot-sep" aria-hidden="true">・</span><form method="post" action="/brands/{{ brand.id }}/claims/{{ c.id }}/delete" class="inline-form" onsubmit="return confirm('確定要刪除這條宣稱？')"><button type="submit" class="btn-text btn-text-danger">刪除</button></form></div>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+  {% if claims_by_type.forbidden %}
+  <div class="claim-block claim-block-forbidden">
+    <h3>禁用（{{ claims_by_type.forbidden|length }}）</h3>
+    {% for c in claims_by_type.forbidden %}
+    <div class="claim-row">
+      <div class="claim-text">{{ c.claim_text }}</div>
+      <div class="claim-meta">適用：{{ scope_label(brand.id, c.product_id) }}<span class="dot-sep" aria-hidden="true">・</span><a class="btn-text" href="/brands/{{ brand.id }}/claims/{{ c.id }}/edit">修改</a><span class="dot-sep" aria-hidden="true">・</span><form method="post" action="/brands/{{ brand.id }}/claims/{{ c.id }}/delete" class="inline-form" onsubmit="return confirm('確定要刪除這條宣稱？')"><button type="submit" class="btn-text btn-text-danger">刪除</button></form></div>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+{% endif %}
+{% endblock %}

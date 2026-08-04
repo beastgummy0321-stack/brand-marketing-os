@@ -1,0 +1,84 @@
+{% extends "_layouts/console.html" %}
+{% from "_components/breadcrumb.html" import breadcrumb %}
+{% from "_components/wizard_steps.html" import wizard_steps %}
+{% from "_components/cost_meter.html" import cost_meter %}
+{% from "_components/empty_state.html" import empty_state %}
+{% from "_components/error_summary.html" import error_summary %}
+
+{% block title %}{{ '沒有需要再問的問題了' if no_more else ('第 ' ~ (q_index + 1) ~ ' 題') }} — {{ brand.name }} — 行銷作業系統{% endblock %}
+
+{% block content %}
+{{ breadcrumb(breadcrumb_items) }}
+<a class="back-link" href="/brands/{{ brand.id }}"><span aria-hidden="true">←</span> 回到 {{ brand.name }}</a>
+
+<h1>{{ '沒有需要再問的問題了' if no_more else ('第 ' ~ (q_index + 1) ~ ' 題（最多 ' ~ total_hint ~ ' 題，通常更早結束）') }}</h1>
+{% if not no_more %}<p class="page-lede">這些答案只是幫我把調研方向抓準，之後還是要你確認過才會變成事實。</p>{% endif %}
+
+{{ wizard_steps(draft, 3) }}
+{{ cost_meter(draft, request.url.path) }}
+<hr class="rule">
+
+{% if ai_failed %}
+<div class="banner banner-danger" role="alert">
+  <div class="banner-body"><strong>AI 這次沒有回應</strong><br>{% if ai_error %}{{ ai_error }}<br>{% endif %}你的資料都還在，沒有掉。可以再試一次，或先跳過這一步。</div>
+  <div class="banner-actions">
+    <a class="btn-text" href="/brands/{{ brand.id }}/intake/question/progress">再試一次（預估 {{ money2(retry_cost | float) }}）</a>
+    <a class="btn-text" href="/brands/{{ brand.id }}/intake/question/skip">跳過這一步</a>
+    <a class="btn-text" href="/brands/{{ brand.id }}/intake/handoff">不問了，直接去交接包</a>
+    <a class="btn-text" href="/settings">前往設定頁</a>
+  </div>
+</div>
+{% endif %}
+
+{% if no_more %}
+{{ empty_state('沒有需要再問的問題了', '你提供的資料已經夠組出交接包了。', '前往交接包', '/brands/' ~ brand.id ~ '/intake/handoff') }}
+<div class="wizard-actions">
+  <a class="btn-text" href="/brands/{{ brand.id }}">先離開，之後再繼續</a>
+</div>
+{% elif not q %}
+{# AI 出題失敗（上方 banner 已說明）：這一刻沒有可回答的題目 #}
+<div class="wizard-actions">
+  <a class="btn-text" href="/brands/{{ brand.id }}">先離開，之後再繼續</a>
+</div>
+{% else %}
+
+{{ error_summary(errors) }}
+
+<form method="post" action="/brands/{{ brand.id }}/intake/question" novalidate>
+  <div class="field{% if errors.choice %} has-error{% endif %}">
+    <div class="field-legend">{{ q.question }}（必填，也可以跳過）</div>
+    <div class="radio-group">
+      <label class="radio-option">
+        <input type="radio" name="choice" value="suggested" {% if values.choice == 'suggested' %}checked{% endif %}>
+        <span><span class="radio-label">建議：{{ q.suggested.label }}</span><span class="radio-sub">說明：{{ q.suggested.desc }}</span></span>
+      </label>
+      {% for b in q.branches %}
+      <label class="radio-option">
+        <input type="radio" name="choice" value="branch_{{ loop.index0 }}" {% if values.choice == 'branch_' ~ loop.index0 %}checked{% endif %}>
+        <span><span class="radio-label">{{ b.label }}</span><span class="radio-sub">說明：{{ b.desc }}</span></span>
+      </label>
+      {% endfor %}
+      <label class="radio-option">
+        <input type="radio" name="choice" value="other" {% if values.choice == 'other' %}checked{% endif %}>
+        <span><span class="radio-label">以上都不是，我自己說</span></span>
+      </label>
+    </div>
+    {% if errors.choice %}<div class="field-error">{{ errors.choice }}</div>{% endif %}
+  </div>
+
+  <details class="field-details"{% if values.choice == 'other' or errors.note %} open{% endif %}>
+    <summary><span class="marker" aria-hidden="true">▸</span> 想補充什麼都可以寫（選填）</summary>
+    <div class="details-body">
+      <textarea id="note" name="note" rows="4" placeholder="例如「其實我們最在意的是老客人回購，不是新客第一次買。」">{{ values.note }}</textarea>
+      {% if errors.note %}<div class="field-error">{{ errors.note }}</div>{% endif %}
+    </div>
+  </details>
+
+  <div class="wizard-actions">
+    <button type="submit" name="action" value="answer" class="btn btn-primary">這題答完，下一題</button>
+    <button type="submit" name="action" value="skip" class="btn btn-secondary">跳過這一題</button>
+    <a class="btn-text" href="/brands/{{ brand.id }}">先離開，之後再繼續</a>
+  </div>
+</form>
+{% endif %}
+{% endblock %}

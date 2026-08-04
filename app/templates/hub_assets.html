@@ -1,0 +1,40 @@
+{% extends "_layouts/console.html" %}
+{% from "_components/breadcrumb.html" import breadcrumb %}
+{% from "_components/section_header.html" import section_header %}
+{% from "_components/badge.html" import badge %}
+{% from "_components/banner.html" import banner %}
+{% from "_components/empty_state.html" import empty_state %}
+
+{% block title %}官方素材 — {{ brand.name }} — 行銷作業系統{% endblock %}
+
+{% block content %}
+{{ breadcrumb(breadcrumb_items) }}
+
+{% if banner_msg %}
+{{ banner(banner_kind or 'ok', banner_msg, dismiss_url=request.url.path) }}
+{% endif %}
+
+{{ section_header('assets', '官方素材', None, '上傳素材', '/brands/' ~ brand.id ~ '/assets/new', 'primary') }}
+{% if assets %}
+<div class="asset-grid">
+  {% for a in assets %}
+  <div class="asset-card">
+    <div class="asset-thumb">
+      <img src="/brands/{{ brand.id }}/assets/file/{{ a.id }}/{{ a.filename }}" alt="{{ a.title or asset_kind_label(a.asset_kind) }}" loading="lazy">
+    </div>
+    <div class="asset-card-body">
+      {{ badge(asset_kind_label(a.asset_kind), 'neutral') }}
+      <div class="asset-card-title">{{ a.title or '（未命名）' }}{% if a.product_name %}<span class="dot-sep" aria-hidden="true">・</span>{{ a.product_name }}{% endif %}</div>
+      <div class="asset-card-actions">
+        <form method="post" action="/brands/{{ brand.id }}/assets/{{ a.id }}/delete" class="inline-form" onsubmit="return confirm('確定要刪除這個素材檔案？')">
+          <button type="submit" class="btn-text btn-text-danger">刪除</button>
+        </form>
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% else %}
+{{ empty_state('這個品牌還沒有官方素材', 'Logo、產品照、包裝設計等正式圖檔，上傳後之後產出內容時可以直接取用。', '上傳素材', '/brands/' ~ brand.id ~ '/assets/new') }}
+{% endif %}
+{% endblock %}

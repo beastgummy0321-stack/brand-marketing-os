@@ -1,0 +1,33 @@
+{% extends "_layouts/console.html" %}
+{% from "_components/breadcrumb.html" import breadcrumb %}
+{% from "_components/error_summary.html" import error_summary %}
+{% from "_components/field.html" import field %}
+
+{% block title %}新增產品 — {{ brand.name }} — 行銷作業系統{% endblock %}
+
+{% block content %}
+{{ breadcrumb([('品牌總覽', '/'), (brand.name, '/brands/' ~ brand.id), ('品牌智庫', '/brands/' ~ brand.id ~ '/hub'), ('產品', '/brands/' ~ brand.id ~ '/hub/products'), ('新增產品', None)]) }}
+<a class="back-link" href="/brands/{{ brand.id }}/hub/products"><span aria-hidden="true">←</span> 回到 產品</a>
+<div class="form-page">
+<h1>新增產品</h1>
+<p class="page-lede">建立產品之後，就可以進入產品檔案頁繼續填寫產品事實與產品經濟數字。</p>
+
+{{ error_summary(errors) }}
+
+<form method="post" action="/brands/{{ brand.id }}/products/new" novalidate>
+  {% call field('name', '產品名稱', required=True, hint='之後在系統各處都會用這個名稱顯示。', error=errors.name) %}
+  <input type="text" id="name" name="name" value="{{ values.name }}" placeholder="例如「日常薑黃錠 60 錠」">
+  {% endcall %}
+
+  {% call field('url', '產品頁網址', required=False, hint='填了網址，可以請 AI 幫忙讀那一頁、整理成待確認的產品事實。', error=errors.url) %}
+  <input type="url" id="url" name="url" value="{{ values.url }}" placeholder="https://example.com/products/xxx">
+  {% endcall %}
+
+  <div class="form-actions">
+    <button type="submit" class="btn btn-primary">新增這個產品</button>
+    <button type="submit" formaction="/brands/{{ brand.id }}/products/new/research" class="btn btn-secondary">AI 幫我調研（預估 {{ money2(research_cost) }}）</button>
+    <a class="btn-text" href="/brands/{{ brand.id }}/hub/products">取消</a>
+  </div>
+</form>
+</div>
+{% endblock %}

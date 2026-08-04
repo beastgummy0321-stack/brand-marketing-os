@@ -1,0 +1,76 @@
+{% extends "_layouts/console.html" %}
+{% from "_components/breadcrumb.html" import breadcrumb %}
+{% from "_components/badge.html" import badge %}
+{% from "_components/banner.html" import banner %}
+{% from "_components/card.html" import card %}
+{% from "_components/detail.html" import detail %}
+
+{% block title %}{{ brand.name }} — 行銷作業系統{% endblock %}
+
+{% block content %}
+{{ breadcrumb([('品牌總覽', '/'), (brand.name, None)]) }}
+
+{% if switched %}
+{{ banner('info', '已切換到「' ~ brand.name ~ '」，畫面上只會顯示這個品牌的資料。', dismiss_url=request.url.path) }}
+{% endif %}
+{% if intake_draft and not continue_dismissed %}
+{{ banner('info', '這個品牌的引導建檔還沒完成，停在第 ' ~ intake_draft.step ~ ' 步。', dismiss_url=request.url.path ~ '?continue_dismissed=1', extra_link_text='繼續建檔', extra_link_url=intake_draft.resume_path) }}
+{% endif %}
+{% if banner_msg %}
+{{ banner(banner_kind or 'ok', banner_msg, dismiss_url=request.url.path, extra_link_text='再新增一筆' if banner_again else None, extra_link_url=banner_again) }}
+{% endif %}
+
+<div class="page-title-row">
+  <h1>{{ brand.name }}</h1>
+  <div class="fact-row-actions">
+    <a class="btn btn-secondary" href="/brands/{{ brand.id }}/edit">編輯品牌基本資料</a>
+  </div>
+</div>
+<p class="page-subtitle">所屬客戶：{{ brand.client_name or '未填寫' }}<span class="dot-sep" aria-hidden="true">・</span>{{ '使用中' if brand.status == 'active' else '已封存' }}<span class="dot-sep" aria-hidden="true">・</span>第 {{ brand.knowledge_version }} 版</p>
+
+{% if pending_facts_count or pending_product_layer_count %}
+<div class="card pending-alert-card">
+  <h3>待確認</h3>
+  <ul class="pending-alert-list">
+    {% if pending_facts_count %}<li><a href="/brands/{{ brand.id }}/hub/facts">品牌事實待確認 {{ pending_facts_count }} 項</a></li>{% endif %}
+    {% if pending_product_layer_count %}<li><a href="/brands/{{ brand.id }}/hub/products">產品層待確認 {{ pending_product_layer_count }} 項</a></li>{% endif %}
+  </ul>
+</div>
+{% endif %}
+
+<div class="menu-grid">
+  <div>
+    {{ card('品牌智庫', url='/brands/' ~ brand.id ~ '/hub') }}
+    {% call detail() %}
+    <p><a class="link" href="/brands/{{ brand.id }}/report">顧問分析報告</a> — 根據品牌智庫的資料，自動整理定位、市場觀察、受眾洞察與可用宣稱。</p>
+    {% if not intake_draft and brand.status == 'active' %}
+    <p><a class="link" href="/brands/{{ brand.id }}/intake/restart">重新調研</a> — 用建檔精靈重新掃一次，把新的網址或照片整理成待確認內容。</p>
+    {% endif %}
+    {% endcall %}
+  </div>
+
+  <div>
+    {{ card('投放與成效', url='/brands/' ~ brand.id ~ '/ads') }}
+    {% call detail() %}
+    <p>成效中樞{{ badge('即將推出', 'neutral') }} — 各分支成效的彙整報表。</p>
+    {% endcall %}
+  </div>
+
+  <div>
+    {{ card('內容與曝光' ~ badge('即將推出', 'neutral'), soon=True) }}
+    {% call detail() %}
+    <p>內容經營{{ badge('即將推出', 'neutral') }} — 社群貼文等日常內容的產製與排程。</p>
+    <p>視覺資產{{ badge('即將推出', 'neutral') }} — 圖片與影片素材的產製與管理。</p>
+    <p>搜尋曝光{{ badge('即將推出', 'neutral') }} — 讓品牌被 Google 找到。</p>
+    {% endcall %}
+  </div>
+
+  <div>
+    {{ card('顧客與口碑' ~ badge('即將推出', 'neutral'), soon=True) }}
+    {% call detail() %}
+    <p>顧客關係{{ badge('即將推出', 'neutral') }} — 會員名單與回購溝通。</p>
+    <p>口碑擴散{{ badge('即將推出', 'neutral') }} — 評價推薦與 KOL 合作。</p>
+    {% endcall %}
+  </div>
+</div>
+{% endblock %}

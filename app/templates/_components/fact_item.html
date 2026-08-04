@@ -1,0 +1,32 @@
+{% from "_components/badge.html" import badge %}
+{% macro fact_row(fact, type_label, confirm_url=None, edit_url=None, delete_url=None, brand_id=None) %}
+{% set stale = fact_staleness(fact) %}
+<div class="fact-row" id="{{ fact.id }}">
+  <div class="fact-row-head">
+    <div class="fact-row-title">
+      {{ badge(type_label, 'neutral') }}
+      {% if stale %}{{ badge(stale, 'warn') }}<a class="btn-text" href="/brands/{{ brand_id }}/intake/restart">重新調研</a>{% endif %}
+      <strong>{{ fact.label }}</strong>
+    </div>
+    <div class="fact-row-actions">
+      {% if confirm_url %}<a class="btn btn-secondary" href="{{ confirm_url }}">確認這條</a>{% endif %}
+      {% if edit_url %}<a class="btn-text" href="{{ edit_url }}">修改</a>{% endif %}
+      {% if delete_url %}
+      <form method="post" action="{{ delete_url }}" class="inline-form"
+            onsubmit="return confirm('確定要刪除「{{ fact.label }}」？刪除後會記在稽核紀錄，但資料本身會消失。')">
+        <button type="submit" class="btn-text btn-text-danger">刪除</button>
+      </form>
+      {% endif %}
+    </div>
+  </div>
+  <div class="fact-content">{{ fact.value }}</div>
+  {% if fact.status == 'confirmed' %}
+  <details class="fact-detail">
+    <summary><span class="marker" aria-hidden="true">▸</span> 詳細（確認人、確認時間、資料來源）</summary>
+    <div class="detail-body">
+      確認人：{{ fact.confirmed_by or '—' }}<span class="dot-sep" aria-hidden="true">・</span>確認時間：{{ fact.confirmed_at.strftime('%Y-%m-%d') if fact.confirmed_at else '—' }}<span class="dot-sep" aria-hidden="true">・</span>資料來源：{{ fact.source_reference or '未填寫' }}
+    </div>
+  </details>
+  {% endif %}
+</div>
+{% endmacro %}

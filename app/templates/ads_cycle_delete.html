@@ -1,0 +1,39 @@
+{% extends "_layouts/console.html" %}
+{% from "_components/breadcrumb.html" import breadcrumb %}
+{% from "_components/field.html" import field %}
+
+{% block title %}永久刪除檔期 — {{ cycle_label }} — 行銷作業系統{% endblock %}
+
+{% block content %}
+{{ breadcrumb(breadcrumb_items) }}
+<a class="back-link" href="/brands/{{ brand.id }}/ads/{{ cycle.id }}"><span aria-hidden="true">←</span> 回到 {{ cycle_label }}</a>
+<div class="form-page">
+<h1>永久刪除檔期「{{ cycle_label }}」</h1>
+<p class="page-lede">這個動作不能復原。刪掉之後，這期檔期與底下所有連帶資料都會從系統消失，只在稽核紀錄留下一筆「誰在什麼時候刪了什麼」。</p>
+
+<div class="banner banner-danger">
+  <div class="banner-body">
+    <p><strong>會一起消失的資料：</strong></p>
+    {% if counts %}
+    <ul class="delete-impact">
+      {% for label, n in counts %}<li>{{ label }} {{ n }} 筆</li>{% endfor %}
+    </ul>
+    {% else %}
+    <p>這期檔期目前沒有任何連帶資料。</p>
+    {% endif %}
+    <p class="delete-impact-note">系統會在刪除前自動把整個資料庫備份一份到 backups 資料夾，萬一刪錯還救得回來。</p>
+  </div>
+</div>
+
+<form method="post" action="/brands/{{ brand.id }}/ads/{{ cycle.id }}/delete" novalidate>
+  {% call field('confirm_name', '請輸入檔期名稱以確認', required=True, hint='要刪除的檔期是「' ~ cycle_label ~ '」，請一字不差地打一次。', error=error) %}
+  <input type="text" id="confirm_name" name="confirm_name" value="" autocomplete="off" placeholder="{{ cycle_label }}" aria-describedby="confirm_name-hint">
+  {% endcall %}
+
+  <div class="form-actions">
+    <button type="submit" class="btn btn-danger">永久刪除這期檔期</button>
+    <a class="btn-text" href="/brands/{{ brand.id }}/ads/{{ cycle.id }}">取消</a>
+  </div>
+</form>
+</div>
+{% endblock %}

@@ -1,0 +1,54 @@
+{% extends "_layouts/console.html" %}
+{% from "_components/breadcrumb.html" import breadcrumb %}
+{% from "_components/badge.html" import badge %}
+{% from "_components/banner.html" import banner %}
+{% from "_components/empty_state.html" import empty_state %}
+
+{% block title %}還沒認領的廣告 — {{ brand.name }} — 行銷作業系統{% endblock %}
+
+{% block content %}
+{{ breadcrumb(breadcrumb_items) }}
+
+{% if banner_msg %}
+{{ banner(banner_kind or 'ok', banner_msg, dismiss_url=request.url.path) }}
+{% endif %}
+
+<h1>這些廣告是「{{ brand.name }}」的嗎？</h1>
+<p class="page-lede">
+  <strong>你確認過的才會算進這個品牌的成效</strong>——沒確認的數字一律不收，
+  免得別的品牌的花費被算到這裡來。
+</p>
+
+{% if pending %}
+{# 每筆待認領活動是會隨資料量變動的清單，不用卡片牆——改用品牌智庫宣稱頁（hub_claims.html）
+   同一套 .claim-block／.claim-row 帶分隔線列表樣式（修憲落地 V4，重用既有元件，不新增樣式）。 #}
+<div class="claim-block">
+  {% for row in pending %}
+  <div class="claim-row">
+    <div class="claim-text">
+      {{ row.campaign_name or '（沒有名稱）' }}
+      {% if row.is_suggested %}{{ badge('系統猜是這個品牌', 'ok') }}{% endif %}
+    </div>
+    <div class="claim-meta">
+      編號 {{ row.meta_campaign_id }}
+      {% if row.effective_status %}<span class="dot-sep" aria-hidden="true">・</span>{{ row.effective_status }}{% endif %}
+      <span class="dot-sep" aria-hidden="true">・</span>第一次看到：{{ row.first_seen_at[:10] }}
+      {% if row.suggested_reason and row.is_suggested %}<span class="dot-sep" aria-hidden="true">・</span>為什麼這樣猜：{{ row.suggested_reason }}{% endif %}
+    </div>
+    <div class="form-actions">
+      <form method="post" action="/brands/{{ brand.id }}/ads/claims/{{ row.id }}/claim" class="inline-form">
+        <button type="submit" class="btn btn-primary">是，這是這個品牌的</button>
+      </form>
+      <form method="post" action="/brands/{{ brand.id }}/ads/claims/{{ row.id }}/ignore" class="inline-form">
+        <button type="submit" class="btn-text">不是</button>
+      </form>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% else %}
+{{ empty_state('沒有待認領的廣告活動',
+   '帳號上看到的活動都已經確認過歸屬了。下次同步如果出現新的活動，會列在這裡。',
+   '回到廣告', '/brands/' ~ brand.id ~ '/ads') }}
+{% endif %}
+{% endblock %}

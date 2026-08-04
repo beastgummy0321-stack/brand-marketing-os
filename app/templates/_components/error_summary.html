@@ -1,0 +1,12 @@
+{% macro error_summary(errors) %}
+{% if errors %}
+<div class="error-summary" role="alert">
+  <h2>有 {{ errors|length }} 個欄位需要修正。</h2>
+  <ul>
+    {% for field_id, msg in errors.items() %}
+    <li><a href="#{{ field_id }}">{{ msg }}</a></li>
+    {% endfor %}
+  </ul>
+</div>
+{% endif %}
+{% endmacro %}

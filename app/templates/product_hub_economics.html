@@ -1,0 +1,32 @@
+{% extends "_layouts/console.html" %}
+{% from "_components/breadcrumb.html" import breadcrumb %}
+{% from "_components/section_header.html" import section_header %}
+{% from "_components/banner.html" import banner %}
+{% from "_components/empty_state.html" import empty_state %}
+{% from "_components/definition_list.html" import definition_list %}
+
+{% block title %}產品經濟數字 — {{ product.name }} — 行銷作業系統{% endblock %}
+
+{% block content %}
+{{ breadcrumb(breadcrumb_items) }}
+
+{% if banner_msg %}
+{{ banner(banner_kind or 'ok', banner_msg, dismiss_url=request.url.path) }}
+{% endif %}
+
+{{ section_header('economics', '產品經濟數字', None, ('更新數字' if economics else '填寫產品經濟數字'), '/brands/' ~ brand.id ~ '/products/' ~ product.id ~ '/economics') }}
+{% if economics %}
+{{ definition_list([
+  ('售價', currency_symbol(economics.currency) ~ ' ' ~ (economics.selling_price | thousands), True),
+  ('固定成本', currency_symbol(economics.currency) ~ ' ' ~ (economics.fixed_cost | thousands), True),
+  ('單位變動成本', currency_symbol(economics.currency) ~ ' ' ~ (economics.unit_variable_cost | thousands), True),
+  ('運費', currency_symbol(economics.currency) ~ ' ' ~ (economics.shipping_cost | thousands), True),
+  ('幣別', currency_label(economics.currency), False),
+  ('計算口徑', economics.cpa_roas_basis or '未填寫', False),
+  ('生效日', (economics.effective_from ~ ' 起') if economics.effective_from else '未填寫', False),
+  ('狀態', ('已確認・確認人：' ~ (economics.confirmed_by or '—')) if economics.status == 'confirmed' else '待確認', False),
+]) }}
+{% else %}
+{{ empty_state('還沒有填產品經濟數字', '填了售價與成本之後，之後才算得出這個產品的 CPA 與 ROAS 標準。', '填寫產品經濟數字', '/brands/' ~ brand.id ~ '/products/' ~ product.id ~ '/economics') }}
+{% endif %}
+{% endblock %}

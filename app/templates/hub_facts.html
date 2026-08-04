@@ -1,0 +1,37 @@
+{% extends "_layouts/console.html" %}
+{% from "_components/breadcrumb.html" import breadcrumb %}
+{% from "_components/section_header.html" import section_header %}
+{% from "_components/banner.html" import banner %}
+{% from "_components/empty_state.html" import empty_state %}
+{% from "_components/fact_item.html" import fact_row %}
+
+{% block title %}品牌事實 — {{ brand.name }} — 行銷作業系統{% endblock %}
+
+{% block content %}
+{{ breadcrumb(breadcrumb_items) }}
+
+{% if banner_msg %}
+{{ banner(banner_kind or 'ok', banner_msg, dismiss_url=request.url.path, extra_link_text='再新增一筆' if banner_again else None, extra_link_url=banner_again) }}
+{% endif %}
+
+{{ section_header('facts', '品牌事實', None, '新增品牌事實', '/brands/' ~ brand.id ~ '/facts/new', 'primary') }}
+
+{% if confirmed_facts %}
+<h3>已確認（{{ confirmed_facts|length }}）</h3>
+<div class="fact-list">
+  {% for f in confirmed_facts %}{{ fact_row(f, brand_fact_type_label(f.fact_type), edit_url='/brands/' ~ brand.id ~ '/facts/' ~ f.id ~ '/edit', delete_url='/brands/' ~ brand.id ~ '/facts/' ~ f.id ~ '/delete', brand_id=brand.id) }}{% endfor %}
+</div>
+{% else %}
+{{ empty_state('這個品牌還沒有已確認的品牌事實', '品牌事實是定位、受眾、語調這類長期資訊，是後面所有內容的依據。', '新增品牌事實', '/brands/' ~ brand.id ~ '/facts/new') }}
+{% endif %}
+
+{% if pending_facts %}
+<div class="pending-block">
+  <h3>待確認（{{ pending_facts|length }}）</h3>
+  <p class="pending-note">這些內容還沒被確認，不會被系統當成事實使用。</p>
+  <div class="fact-list">
+    {% for f in pending_facts %}{{ fact_row(f, brand_fact_type_label(f.fact_type), confirm_url='/brands/' ~ brand.id ~ '/facts/' ~ f.id ~ '/confirm', edit_url='/brands/' ~ brand.id ~ '/facts/' ~ f.id ~ '/edit', delete_url='/brands/' ~ brand.id ~ '/facts/' ~ f.id ~ '/delete') }}{% endfor %}
+  </div>
+</div>
+{% endif %}
+{% endblock %}

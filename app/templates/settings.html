@@ -1,0 +1,205 @@
+{% extends "_layouts/console.html" %}
+{% from "_components/banner.html" import banner %}
+{% from "_components/error_summary.html" import error_summary %}
+{% from "_components/field.html" import field %}
+{% from "_components/detail.html" import detail %}
+
+{% block title %}設定 — 行銷作業系統{% endblock %}
+
+{% block content %}
+{% if banner_msg %}
+{{ banner(banner_kind or 'ok', banner_msg, dismiss_url='/settings') }}
+{% endif %}
+
+<div class="form-page">
+<h1>設定</h1>
+
+{{ error_summary(errors) }}
+
+<section class="settings-section" aria-labelledby="settings-meta-title">
+  <h2 id="settings-meta-title">Meta 廣告帳號（唯讀）</h2>
+  <p class="settings-desc">
+    連上之後，廣告成效會自動抓回來，不用手動貼 CSV。這裡只需要**唯讀**金鑰——
+    系統讀得到你的廣告數字，但改不了、也開不了任何廣告。
+    做法：企業管理平台 →「企業設定」→「使用者」→「系統用戶」→ 新增，
+    指派廣告帳號時權限選「查看成效」，產生金鑰時勾 ads_read 與 read_insights，
+    不要勾 60 天過期。
+  </p>
+
+  {% if masked_meta_token %}
+  <p class="settings-current">目前已設定連線金鑰：<span class="masked-key">{{ masked_meta_token }}</span></p>
+  {% endif %}
+
+  <form method="post" action="/settings/meta" novalidate>
+    {% call field('meta_account_id', '廣告帳號編號', required=True,
+                  hint='在廣告管理員的網址列看得到，像 act_1234567890。只填數字也可以。',
+                  error=errors.meta_account_id) %}
+    <input type="text" id="meta_account_id" name="meta_account_id" value="{{ meta_account_id }}"
+           placeholder="act_1234567890">
+    {% endcall %}
+    {% call field('meta_token', '唯讀連線金鑰', required=False,
+                  hint='留白代表沿用目前這一把，不會被清掉。',
+                  error=errors.meta_token) %}
+    <input type="password" id="meta_token" name="meta_token" value="" autocomplete="off"
+           placeholder="貼上系統用戶的存取權杖">
+    {% endcall %}
+    <div class="form-actions">
+      <button type="submit" class="btn btn-secondary">儲存 Meta 設定</button>
+    </div>
+  </form>
+
+  <form method="post" action="/settings/meta/test-connection">
+    <p class="settings-desc">按下後會用目前設定實際向 Meta 要一次廣告帳號的資料，確認連線是否正常。</p>
+    <div class="form-actions">
+      <button type="submit" class="btn btn-secondary">測試連線</button>
+    </div>
+  </form>
+</section>
+
+<section class="settings-section" aria-labelledby="settings-ga4-title">
+  <h2 id="settings-ga4-title">GA4（網站數據，唯讀）</h2>
+  <p class="settings-desc">
+    連上之後，系統會自動抓回來源／媒介的工作階段、轉換與收益，不用手動查看 GA4 後台。
+    設定步驟見任一品牌廣告頁的「GA4 網站數據」教學連結。
+  </p>
+
+  {% if masked_ga4_key %}
+  <p class="settings-current">目前已設定服務帳戶金鑰：<span class="masked-key">{{ masked_ga4_key }}</span></p>
+  {% endif %}
+
+  <form method="post" action="/settings/ga4" novalidate>
+    {% call field('ga4_property_id', 'GA4 資源編號', required=True,
+                  hint='在 GA4 後台「資源設定」可以看到，格式是一串數字。',
+                  error=errors.ga4_property_id) %}
+    <input type="text" id="ga4_property_id" name="ga4_property_id" value="{{ ga4_property_id }}"
+           placeholder="例如 123456789">
+    {% endcall %}
+    {% call field('ga4_service_account_json', '服務帳戶金鑰（JSON 內容）', required=False,
+                  hint='留白代表沿用目前這一把，不會被清掉。把服務帳戶金鑰的完整 JSON 內容貼進來即可。',
+                  error=errors.ga4_service_account_json) %}
+    <textarea id="ga4_service_account_json" name="ga4_service_account_json" rows="4"
+              autocomplete="off" placeholder="貼上服務帳戶金鑰的完整 JSON 內容"></textarea>
+    {% endcall %}
+    <div class="form-actions">
+      <button type="submit" class="btn btn-secondary">儲存 GA4 設定</button>
+    </div>
+  </form>
+
+  <form method="post" action="/settings/ga4/test-connection">
+    <p class="settings-desc">按下後會用目前設定實際向 GA4 要一次網站數據，確認連線是否正常。</p>
+    <div class="form-actions">
+      <button type="submit" class="btn btn-secondary">測試連線</button>
+    </div>
+  </form>
+</section>
+
+<section class="settings-section" aria-labelledby="settings-key-title">
+  <h2 id="settings-key-title">AI 金鑰</h2>
+  <p class="settings-desc">建檔精靈等 AI 功能需要一把 Anthropic 的金鑰才能運作。系統優先採用環境變數裡的金鑰（不進資料庫、不會被備份帶走）；沒有設環境變數時才會用這頁存進資料庫的金鑰（明文）。</p>
+
+  {% if api_key_source == 'env' %}
+  <p class="settings-current">目前使用中的金鑰來自<strong>環境變數</strong> <code>ANTHROPIC_API_KEY</code>：<span class="masked-key">{{ masked_key }}</span>（安全，不會進資料庫或備份）</p>
+  {% elif api_key_source == 'db' %}
+  <div class="warn-box">
+    <span class="warn-box-title">目前使用中的金鑰來自資料庫（明文）</span>
+    <p>目前用的是這頁存進資料庫的金鑰：<span class="masked-key">{{ masked_key }}</span>。如果你有把 <code>backups/</code> 資料夾同步到雲端硬碟，這把金鑰的明文也會被每天的備份一起帶出去。建議改用下面「改用環境變數」的做法。</p>
+  </div>
+  {% endif %}
+
+  <p class="settings-desc">改用環境變數（更安全，不進資料庫）：</p>
+  {% call detail() %}
+  <ol class="op-card-steps">
+    <li>用記事本打開專案資料夾裡的 <code>啟動行銷系統.bat</code>。</li>
+    <li>找到寫著 <code>rem set ANTHROPIC_API_KEY=</code> 的那一行，刪掉最前面的 <code>rem </code>，等號後面貼上你的金鑰（不留空白、不加引號）。</li>
+    <li>存檔，關掉目前開著的伺服器視窗，再重新用 <code>啟動行銷系統.bat</code> 開啟一次。</li>
+    <li>回到這頁重新整理：上面會改成顯示「目前使用中的金鑰來自環境變數」。確認沒問題後，可以用下面的「清除資料庫裡的金鑰」把舊的明文金鑰刪掉。</li>
+  </ol>
+  {% endcall %}
+
+  {% if db_key_present %}
+  <details class="settings-reveal"{% if errors.api_key %} open{% endif %}>
+    <summary><span class="marker" aria-hidden="true">▸</span>更換資料庫裡的金鑰</summary>
+    <form method="post" action="/settings/api-key" novalidate>
+      {% call field('api_key', '新的 AI 金鑰', required=True, hint='貼上後按「儲存金鑰」就會換成新的一把，存進資料庫；舊金鑰不會保留。', error=errors.api_key) %}
+      <input type="password" id="api_key" name="api_key" value="" placeholder="貼上以 sk-ant- 開頭的金鑰" autocomplete="off">
+      {% endcall %}
+      <div class="form-actions">
+        <button type="submit" class="btn btn-secondary">儲存金鑰</button>
+      </div>
+    </form>
+  </details>
+  {% else %}
+  <form method="post" action="/settings/api-key" novalidate>
+    {% call field('api_key', 'AI 金鑰（存進資料庫）', required=True, hint='到 Anthropic 網站的帳戶頁面可以產生金鑰，整串複製過來貼上即可。若已用上方步驟設好環境變數，可以不用填這裡。', error=errors.api_key) %}
+    <input type="password" id="api_key" name="api_key" value="" placeholder="貼上以 sk-ant- 開頭的金鑰" autocomplete="off">
+    {% endcall %}
+    <div class="form-actions">
+      <button type="submit" class="btn btn-secondary">儲存金鑰</button>
+    </div>
+  </form>
+  {% endif %}
+
+  {% if db_key_present %}
+  <form method="post" action="/settings/api-key/clear-db" class="inline-form"
+        onsubmit="return confirm('確定要刪除資料庫裡的金鑰？這個動作無法復原。刪除後如果沒有設定環境變數，AI 功能會顯示尚未設定金鑰。')">
+    <p class="settings-desc">清除資料庫裡存的金鑰（不影響環境變數）。這是不可逆動作，請先確認已照上面步驟設好環境變數再按下去。</p>
+    <div class="form-actions">
+      <button type="submit" class="btn btn-secondary">清除資料庫裡的金鑰</button>
+    </div>
+  </form>
+  {% endif %}
+
+  <form method="post" action="/settings/test-connection">
+    <p class="settings-desc">按下後會用目前的金鑰與模型，向 AI 服務發出一次極小的真實請求，回報金鑰是否可用。會微量扣款（約不到台幣一角）。</p>
+    <div class="form-actions">
+      <button type="submit" class="btn btn-secondary">測試連線</button>
+    </div>
+  </form>
+</section>
+
+<section class="settings-section" aria-labelledby="settings-model-title">
+  <h2 id="settings-model-title">使用的模型</h2>
+  <form method="post" action="/settings/model" novalidate>
+    {% call field('llm_model', '要用哪一個模型？', required=True, hint='費率為美元計價、依用量計費；建檔精靈的花費列會即時換算顯示。', error=errors.llm_model) %}
+    <select id="llm_model" name="llm_model">
+      {% for m in model_choices %}
+      <option value="{{ m.id }}"{% if m.id == current_model %} selected{% endif %}>{{ m.name }} — {{ m.price_text }}</option>
+      {% endfor %}
+    </select>
+    {% endcall %}
+    <div class="form-actions">
+      <button type="submit" class="btn btn-secondary">儲存模型設定</button>
+    </div>
+  </form>
+
+  {% call detail() %}
+  <p class="settings-desc">
+    各任務的預設模型與思考等級：思考等級分五檔：低、中、高、超高、極高，等級愈高，模型想得愈深、花費也愈高。
+    以下是各任務目前的預設值；產出方案與產出素材的頁面上可以當場改，只影響那一次。
+  </p>
+  <table class="data-table">
+    <thead>
+      <tr><th>任務</th><th>預設模型</th><th>預設思考等級</th></tr>
+    </thead>
+    <tbody>
+      {% for row in task_model_thinking_table %}
+      <tr><td>{{ row.task_label }}</td><td>{{ row.model_label }}</td><td>{{ row.thinking_label }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endcall %}
+</section>
+
+<section class="settings-section" aria-labelledby="settings-budget-title">
+  <h2 id="settings-budget-title">花費上限</h2>
+  <form method="post" action="/settings/budget" novalidate>
+    {% call field('intake_budget', 'AI 生成的花費上限', required=True, hint='幣別是美元（US$）。建檔精靈、產品調研，以及廣告分支的計畫與素材生成，累計花費達到上限時都會先停下來問你，不會直接繼續花錢。建檔精靈每次開始時也可以另外調整這次的上限。', error=errors.intake_budget) %}
+    <div class="currency-prefixed"><span class="prefix">US$</span><input type="number" step="1" min="1" inputmode="numeric" id="intake_budget" name="intake_budget" value="{{ values.intake_budget }}" placeholder="例如 30"></div>
+    {% endcall %}
+    <div class="form-actions">
+      <button type="submit" class="btn btn-secondary">儲存花費上限</button>
+    </div>
+  </form>
+</section>
+</div>
+{% endblock %}

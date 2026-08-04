@@ -1,0 +1,41 @@
+{% extends "_layouts/console.html" %}
+{% from "_components/breadcrumb.html" import breadcrumb %}
+{% from "_components/error_summary.html" import error_summary %}
+{% from "_components/copy_block.html" import copy_block %}
+
+{% block title %}調研交接包 — {{ product.name }} — {{ brand.name }} — 行銷作業系統{% endblock %}
+
+{% block content %}
+{{ breadcrumb(breadcrumb_items) }}
+<a class="back-link" href="/brands/{{ brand.id }}/products/{{ product.id }}"><span aria-hidden="true">←</span> 回到 {{ product.name }}</a>
+
+<h1>調研交接包：{{ product.name }}</h1>
+<p class="page-lede">產品快掃只讀一頁網頁，想要更深入的調研，可以把下面這段交接包文字帶去外部 AI（Claude 或 ChatGPT 網頁版）跑，再把結果貼回來。</p>
+
+{{ error_summary(errors) }}
+
+<ol class="op-card-steps">
+  <li>複製下面的交接包文字。</li>
+  <li>開一個全新的對話，貼去 Claude 或 ChatGPT 網頁版（有「深度研究」功能可以打開，查得會更完整）。</li>
+  <li>等它跑完，把回覆整段貼回本頁最下方的框裡，送出。</li>
+</ol>
+<p class="field-hint">這一步不花系統的錢——跑的是你自己的 Claude 或 ChatGPT 額度。貼回來之後，系統才會需要花錢的部分只有「格式讀不出來、請 AI 幫忙整理」這一步。</p>
+
+<h2>要複製的內容</h2>
+{{ copy_block(prompt_text, 'product-handoff-prompt') }}
+
+<hr class="rule">
+<h2>把外部 AI 的回覆貼回來</h2>
+<form method="post" action="/brands/{{ brand.id }}/products/{{ product.id }}/handoff" novalidate>
+  <div class="field{% if errors.raw_text %} has-error{% endif %}">
+    <label for="raw_text">外部 AI 的回覆</label>
+    <textarea id="raw_text" name="raw_text" rows="16" class="mono-textarea" placeholder="把外部 AI 給你的完整回覆貼在這裡">{{ values.raw_text }}</textarea>
+    <div class="field-hint">系統會先嘗試自動讀取（不需費用）；讀取失敗才會請 AI 協助整理格式（預估 {{ money2(fix_cost) }}，受花費上限保護）。系統只讀取格式內的內容，開場白或結語等其餘文字會自動忽略。</div>
+    {% if errors.raw_text %}<div class="field-error">{{ errors.raw_text }}</div>{% endif %}
+  </div>
+  <div class="wizard-actions">
+    <button type="submit" class="btn btn-primary">送出，讀進來</button>
+    <a class="btn-text" href="/brands/{{ brand.id }}/products/{{ product.id }}">先離開，之後再繼續</a>
+  </div>
+</form>
+{% endblock %}

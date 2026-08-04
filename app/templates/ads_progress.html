@@ -1,0 +1,22 @@
+{% extends "_layouts/console.html" %}
+{% from "_components/breadcrumb.html" import breadcrumb %}
+{% from "_components/definition_list.html" import definition_list %}
+
+{% block title %}{{ heading }} — {{ brand.name }} — 行銷作業系統{% endblock %}
+
+{% block head_extra %}<meta http-equiv="refresh" content="{{ refresh }};url={{ run_url }}">{% endblock %}
+
+{% block content %}
+{{ breadcrumb(breadcrumb_items) }}
+
+<h1>{{ heading }}</h1>
+<p class="page-lede">{{ lede }}本頁會自動更新，不需手動重新整理。</p>
+
+{% if progress_rows %}
+<div class="mb-6">{{ definition_list(progress_rows, subtle=True) }}</div>
+{% endif %}
+
+<div class="wizard-actions">
+  <a class="btn-text" href="{{ leave_url }}">先離開，之後再回來</a>
+</div>
+{% endblock %}

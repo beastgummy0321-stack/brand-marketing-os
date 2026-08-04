@@ -1,0 +1,16 @@
+# 唯讀參考區，不進版控
+reference/
+
+# 真實品牌資料、備份與機密，不進版控（決策 0008／0009）
+*.db
+*.sqlite3
+data/
+backups/
+.env
+
+# Python
+__pycache__/
+.venv/
+
+# 工作暫存區，不進版控
+.scratch/

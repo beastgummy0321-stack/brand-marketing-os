@@ -1,0 +1,68 @@
+{% extends "_layouts/console.html" %}
+{% from "_components/breadcrumb.html" import breadcrumb %}
+{% from "_components/badge.html" import badge %}
+{% from "_components/banner.html" import banner %}
+{% from "_components/empty_state.html" import empty_state %}
+{% from "_components/section_header.html" import section_header %}
+
+{% block title %}GA4 網站數據 — {{ brand.name }} — 行銷作業系統{% endblock %}
+
+{% block content %}
+{{ breadcrumb(breadcrumb_items) }}
+
+{% if banner_msg %}
+{{ banner(banner_kind or 'ok', banner_msg, dismiss_url=request.url.path) }}
+{% endif %}
+
+{{ section_header('ga4', 'GA4 網站數據') }}
+
+{% if ga4_configured %}
+<div class="ads-sync-row">
+  <a class="btn btn-secondary" href="/brands/{{ brand.id }}/ads/ga4/sync">從 GA4 抓一次最新資料</a>
+</div>
+{% else %}
+<p class="section-desc">還沒設定 GA4 服務帳戶連線，沒有數據可以看。
+  <a class="link" href="/brands/{{ brand.id }}/ads/ga4-guide">看設定教學</a>
+  ，設定完成後到<a class="link" href="/settings">設定頁</a>貼上金鑰。</p>
+{% endif %}
+
+{% if sync_status %}
+<p class="section-desc">
+  上次同步期間：{{ sync_status.date_range_start }} ～ {{ sync_status.date_range_end }}。
+  {% if sync_status.purchase_event_seen %}
+  {{ badge('purchase 事件有收到', 'ok') }}
+  {% elif sync_status.purchase_event_seen is not none %}
+  {{ badge('purchase 事件沒收到', 'danger') }}
+  <a class="link" href="/brands/{{ brand.id }}/ads/ga4-guide">看設定教學確認轉換事件</a>
+  {% else %}
+  {{ badge('尚未驗證 purchase 事件', 'neutral') }}
+  {% endif %}
+</p>
+
+{% if summary_rows %}
+<div class="table-wrap">
+  <table class="data-table">
+    <thead>
+      <tr><th>來源</th><th>媒介</th><th class="num">工作階段</th><th class="num">轉換</th><th class="num">收益</th></tr>
+    </thead>
+    <tbody>
+    {% for row in summary_rows %}
+      <tr>
+        <td>{{ row.source }}</td>
+        <td>{{ row.medium }}</td>
+        <td class="num">{{ '{:,}'.format(row.sessions) }}</td>
+        <td class="num">{{ '{:,.0f}'.format(row.conversions) }}</td>
+        <td class="num">{{ '{:,.0f}'.format(row.revenue) }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+{{ empty_state('這段期間沒有任何來源／媒介資料', '同步成功，但 GA4 這段期間沒有記錄到任何工作階段。') }}
+{% endif %}
+
+{% else %}
+{{ empty_state('還沒有同步過 GA4 資料', '設定好服務帳戶連線後按「從 GA4 抓一次最新資料」，會顯示來源／媒介的工作階段、轉換與收益。') }}
+{% endif %}
+{% endblock %}

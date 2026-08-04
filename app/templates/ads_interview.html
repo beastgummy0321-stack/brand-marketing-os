@@ -1,0 +1,64 @@
+{% extends "_layouts/console.html" %}
+{% from "_components/breadcrumb.html" import breadcrumb %}
+{% from "_components/banner.html" import banner %}
+
+{% block title %}前朝教訓訪談 — {{ brand.name }} — 行銷作業系統{% endblock %}
+
+{% block content %}
+{{ breadcrumb(breadcrumb_items) }}
+<a class="back-link" href="/brands/{{ brand.id }}/ads"><span aria-hidden="true">←</span> 回到 廣告</a>
+
+{% if banner_msg %}
+{{ banner(banner_kind or 'ok', banner_msg, dismiss_url=request.url.path) }}
+{% endif %}
+
+<div class="form-page">
+<h1>前朝教訓訪談</h1>
+<p class="page-lede">
+  過去投放中，哪些方向試過沒效果、哪些方向確實有效？點選你記得的部分即可，
+  全部欄位都選填，不勾也可以直接送出。「試過不行」的會先記成候選規則，等你確認才會真的
+  避開；「這個有效」的會記成待驗證的假設，下一期開期時自動排進去驗證。
+</p>
+
+<form method="post" action="/brands/{{ brand.id }}/ads/interview" novalidate>
+  {% if next_url %}<input type="hidden" name="next" value="{{ next_url }}">{% endif %}
+  {% for axis_key, axis in axes.items() %}
+  <div class="field">
+    <div class="field-legend">{{ axis.question }}（{{ axis.label }}，選填）</div>
+
+    <div class="field-hint">試過不行</div>
+    <div class="radio-group">
+      {% for value, label in axis['values'].items() %}
+      <label class="radio-option">
+        <input type="checkbox" name="bad_{{ axis_key }}" value="{{ value }}">
+        <span class="radio-label">{{ label }}</span>
+      </label>
+      {% endfor %}
+    </div>
+
+    <div class="field-hint">這個有效</div>
+    <div class="radio-group">
+      {% for value, label in axis['values'].items() %}
+      <label class="radio-option">
+        <input type="checkbox" name="good_{{ axis_key }}" value="{{ value }}">
+        <span class="radio-label">{{ label }}</span>
+      </label>
+      {% endfor %}
+    </div>
+  </div>
+  {% endfor %}
+
+  <div class="field">
+    <label for="note">還有什麼想補充的？（選填）</label>
+    <div class="field-hint">這段文字只會存起來備查，不會進入 AI 生成內容的依據。</div>
+    <textarea id="note" name="note" rows="3"
+              placeholder="例如：曾經找網紅業配效果不好、南部客群對免運特別有反應…"></textarea>
+  </div>
+
+  <div class="form-actions">
+    <button type="submit" class="btn btn-primary">送出</button>
+    <a class="btn-text" href="{{ next_url or ('/brands/' ~ brand.id ~ '/ads') }}">跳過，之後再說</a>
+  </div>
+</form>
+</div>
+{% endblock %}

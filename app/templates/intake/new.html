@@ -1,0 +1,95 @@
+{% extends "_layouts/console.html" %}
+{% from "_components/breadcrumb.html" import breadcrumb %}
+{% from "_components/error_summary.html" import error_summary %}
+{% from "_components/field.html" import field %}
+{% from "_components/wizard_steps.html" import progress_rail %}
+
+{% block title %}{{ '重新調研 — ' ~ restart_brand.name if restart_brand else '智能引導建立品牌' }} — 行銷作業系統{% endblock %}
+
+{% block content %}
+{% if restart_brand %}
+{{ breadcrumb([('品牌總覽', '/'), (restart_brand.name, '/brands/' ~ restart_brand.id), ('重新調研', None)]) }}
+<a class="back-link" href="/brands/{{ restart_brand.id }}"><span aria-hidden="true">←</span> 回到 {{ restart_brand.name }}</a>
+
+<h1>重新調研：{{ restart_brand.name }}</h1>
+<p class="page-lede">對這個品牌再跑一輪調研。上一輪的描述、網址與照片都幫你帶進來了，可以改、可以補。交接包會自動附上已確認的品牌資料，外部 AI 不會重查你確認過的東西。這一步不會花錢。</p>
+{% else %}
+{{ breadcrumb([('品牌總覽', '/'), ('智能引導建立品牌', None)]) }}
+<a class="back-link" href="/"><span aria-hidden="true">←</span> 回到 品牌總覽</a>
+
+<h1>智能引導建立品牌</h1>
+<p class="page-lede">請先提供幾項資料，系統會先讀過一遍，再詢問幾個問題，最後組成一份可提供給 AI 的調研包。這一步不會花錢。</p>
+{% endif %}
+
+{% set new_page_items = [
+  (1, '起始輸入', none, 'current'),
+  (2, '初步印象', none, 'future'),
+  (3, '引導問答', none, 'future'),
+  (4, '交接包', none, 'future'),
+  (5, '貼回', none, 'future'),
+] %}
+{{ progress_rail(new_page_items, collapsed=False, aria_label='精靈步驟') }}
+<div class="cost-meter cost-meter-normal">
+  <div class="cost-meter-row">
+    <span class="cost-meter-text">本次建檔已花費 US$ 0.00 / 上限 US$ 30.00</span>
+  </div>
+</div>
+<hr class="rule">
+
+<div class="form-page">
+{{ error_summary(errors) }}
+
+<form method="post" action="{{ '/brands/' ~ restart_brand.id ~ '/intake/restart' if restart_brand else '/brands/intake/new' }}" enctype="multipart/form-data" novalidate>
+  <input type="hidden" name="photo_token" value="{{ values.photo_token }}">
+  {% if not restart_brand %}
+  {% call field('name', '這個品牌叫什麼名字？', required=True, hint='之後畫面上都會用這個名字稱呼它，隨時可以改。', error=errors.name) %}
+  <input type="text" id="name" name="name" value="{{ values.name }}" placeholder="例如「小滿製茶」">
+  {% endcall %}
+
+  {% call field('client_name', '所屬客戶', required=False, hint='自己的品牌就填「自營」；之後可以再修改。', error=errors.client_name) %}
+  <input type="text" id="client_name" name="client_name" value="{{ values.client_name }}" placeholder="例如「小滿食品」">
+  {% endcall %}
+  {% endif %}
+
+  <div class="field{% if errors.photos %} has-error{% endif %}">
+    <label for="photos">產品照（必填，至少 1 張）</label>
+    <input type="file" id="photos" name="photos" multiple accept=".jpg,.jpeg,.png,.webp">
+    <div class="field-hint">之後要請外部 AI 看照片，所以這裡至少放一張。這些照片不會送進 AI 計費，系統只是幫你留著、到時候提醒你附上。單張上限 10 MB，接受 .jpg .png .webp。</div>
+    {% if errors.photos %}<div class="field-error">{{ errors.photos }}</div>{% endif %}
+    {% if values.photos %}
+    <ul class="photo-list">
+      <li>{{ '上一輪的照片會自動沿用（可再補新照片）：' if restart_brand else '已選擇（這些照片已經留著了，不用重新選）：' }}</li>
+      {% for p in values.photos %}
+      <li><span class="photo-name">{{ p.name }}</span> ・ {{ p.size_mb }} MB</li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+  </div>
+
+  {% call field('description', '用幾句話描述這個品牌或產品', required=True, hint='欄位可先填已知的部分，未填的項目後續會再詢問。', error=errors.description) %}
+  <textarea id="description" name="description" rows="6" placeholder="例如「做台灣中南部小農的烏龍與紅茶，主打單一產區、冷泡也不苦。客人多半是 30 歲以上、會自己泡茶送禮的人。」">{{ values.description }}</textarea>
+  {% endcall %}
+
+  {% set urls_open = errors.url_1 or errors.url_2 or errors.url_3 or errors.url_4 or errors.url_5 %}
+  <details class="field-details"{% if urls_open %} open{% endif %}>
+    <summary><span class="marker" aria-hidden="true">▸</span> 研究網址（選填，可多筆）</summary>
+    <div class="details-body">
+      <p class="field-hint">官網、粉專、商品頁、媒體報導都可以。系統會自動讀取網頁內容，讀取網頁不需費用；讀取不到的網址會直接列出，不會卡住流程。</p>
+      {% for n in range(1, 6) %}
+      {% set field_id = 'url_' ~ n %}
+      <div class="field{% if errors[field_id] %} has-error{% endif %}">
+        <label for="{{ field_id }}">研究網址 {{ n }}（選填）</label>
+        <input type="text" id="{{ field_id }}" name="{{ field_id }}" value="{{ values.urls[n - 1] }}" placeholder="例如「https://example.com/about」">
+        {% if errors[field_id] %}<div class="field-error">{{ errors[field_id] }}</div>{% endif %}
+      </div>
+      {% endfor %}
+    </div>
+  </details>
+
+  <div class="form-actions">
+    <button type="submit" class="btn btn-primary">{{ '開始這一輪調研' if restart_brand else '建立品牌並開始初掃' }}</button>
+    <a class="btn-text" href="{{ '/brands/' ~ restart_brand.id if restart_brand else '/' }}">取消</a>
+  </div>
+</form>
+</div>
+{% endblock %}

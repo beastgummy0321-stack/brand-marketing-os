@@ -1,0 +1,378 @@
+{% extends "_layouts/console.html" %}
+{% from "_components/breadcrumb.html" import breadcrumb %}
+{% from "_components/badge.html" import badge %}
+{% from "_components/banner.html" import banner %}
+{% from "_components/definition_list.html" import definition_list %}
+{% from "_components/section_header.html" import section_header %}
+{% from "_components/wizard_steps.html" import progress_rail %}
+{% from "_components/card.html" import card_block %}
+{% from "_components/detail.html" import detail %}
+
+{% block title %}{{ cycle.start_date }} 檔期 — {{ brand.name }} — 行銷作業系統{% endblock %}
+
+{% block content %}
+{{ breadcrumb(breadcrumb_items) }}
+{{ progress_rail(stage_items, collapsed=True, aria_label='檔期進度') }}
+
+{% if banner_msg %}
+{{ banner(banner_kind or 'ok', banner_msg, dismiss_url=request.url.path) }}
+{% endif %}
+
+<div class="page-title-row">
+  <h1>{{ cycle.start_date }} ～ {{ cycle.end_date }} 檔期</h1>
+  {% if cycle.phase_label %}{{ badge(cycle.phase_label, 'neutral') }}{% endif %}
+  <div class="fact-row-actions">
+    <form method="post" action="/brands/{{ brand.id }}/ads/{{ cycle.id }}/archive">
+      <button type="submit" class="btn btn-secondary">{{ '恢復使用' if cycle.archived else '封存' }}</button>
+    </form>
+  </div>
+</div>
+<p class="page-subtitle">{{ cycle.objective_label }}<span class="dot-sep" aria-hidden="true">・</span>{{ cycle.status_label }}{% if cycle.archived %}<span class="dot-sep" aria-hidden="true">・</span>已封存{% endif %}</p>
+
+{% if is_simulation %}
+{{ banner('warn', '這是一期模擬檔期。計畫與素材都是真的做給你看，但不會實際投放，最後的成效數字也是模擬的。走完一圈之後，開真的檔期就會很熟悉了。') }}
+{% endif %}
+
+{# 投放後第 3／7 天與到期日的提醒卡改走全站打斷佇列（票 #32），見頁頂「當前一件」與 /inbox。 #}
+
+{# 校準期：第一期就先講明預期落點。事先講的叫預期，事後講的叫藉口。
+   顯示值一律讀開期當下寫入的快照（forecast_snapshot，票 F1），不即時重算；
+   本票上線前開的舊校準期沒存過快照，老實顯示「本期未存預告」，不補算（鐵則 16）。 #}
+{% if cycle.phase == 'calibration' %}
+<div class="card forecast-card">
+  <h3>先講清楚這期大概會是什麼樣</h3>
+  {% if forecast %}
+  <p>
+    這是你的第一期，主要目的是<strong>校準</strong>——把這個品牌實際的成本水準摸出來，
+    而不是馬上賺錢。依這筆預算推算，這期大概會拿到
+    <strong>{{ '{:,}'.format(forecast.clicks_low) }}～{{ '{:,}'.format(forecast.clicks_high) }}</strong> 次點擊、
+    <strong>{{ forecast.conversions_low }}～{{ forecast.conversions_high }}</strong> 筆成交。
+  </p>
+  <p class="creative-why">
+    {{ forecast.basis_note }}。此區間為粗估範圍（未經校準）；
+    第二期起改以實際成效數據判讀。
+  </p>
+  {% else %}
+  <p class="creative-why">本期未存預告，不補算。</p>
+  {% endif %}
+</div>
+{% endif %}
+
+{# 兌現預言卡出口(b)：第二期檔期內頁頂部常駐卡（票 F5，決策 0039 第 15 條，DESIGN.md
+   §7.7.3）。屬 kind=content 內容卡，不計入主欄 ≤5 上限；只有上一期存過區間快照
+   （目前只有校準期會存）才會出現，自然只在第二期出現，不用另外判斷「是不是第二期」。
+   卡面只留一行短結論，其餘（數字、拆解、花費對比）收進詳情，守單卡文字上限。 #}
+{% if prediction %}
+{% call card_block('上期預告兌現了嗎', kind='content') %}
+{% if prediction.gap.direction == 'within' %}
+<p class="hub-summary-line">兌現了：落在預告範圍內。</p>
+{% elif prediction.gap.direction == 'above' %}
+<p class="hub-summary-line">超標達成：預測偏保守。</p>
+{% else %}
+<p class="hub-summary-line">沒兌現：實際低於預告下限。</p>
+{% endif %}
+{% call detail() %}
+{% include "_components/prediction_settlement.html" %}
+{% endcall %}
+{% endcall %}
+{% endif %}
+
+{# 差異視圖：第二期起只展開跟上期不一樣的地方 #}
+{% if diff %}
+<div class="card diff-card">
+  <h3>跟上期比，這期改了什麼</h3>
+  {% if diff.changed %}
+  <ul class="diff-list">
+    {% for item in diff.changed %}
+    <li><strong>{{ item.label }}</strong>：{{ item.before }} → {{ item.after }}</li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="creative-why">跟上期完全一樣。</p>
+  {% endif %}
+  {% if diff.same %}
+  <details class="field-details">
+    <summary><span class="marker" aria-hidden="true">▸</span> {{ diff.same | length }} 項與上期相同</summary>
+    <div class="details-body">
+      <ul class="diff-list">
+        {% for item in diff.same %}<li>{{ item.label }}：{{ item.after }}</li>{% endfor %}
+      </ul>
+    </div>
+  </details>
+  {% endif %}
+</div>
+{% endif %}
+
+{% if cycle.daily_below_floor %}
+{{ banner('warn', '這期每天的預算偏低，可能只看得出哪張圖有人點，看不出能不能賺錢。數據不足時系統會直說，不會硬下結論。') }}
+{% endif %}
+
+{% for note in readiness_notes %}
+{{ banner('warn', note.message, extra_link_text=note.action_label, extra_link_url=note.action_url) }}
+{% endfor %}
+
+{% set cycle_facts = [
+  ('總預算', '{:,.0f} {}'.format(cycle.budget, cycle.currency), True),
+  ('檔期長度', '{} 天'.format(cycle.duration_days), False),
+  ('每天約', '{:,.0f}'.format(cycle.daily_budget), True),
+] %}
+{% if cycle.background %}
+{% set cycle_facts = cycle_facts + [('這期背景', cycle.background, False)] %}
+{% endif %}
+{{ definition_list(cycle_facts) }}
+
+{# ---- 本期計畫（關卡一：計畫確認）---- #}
+{% if plan %}
+{{ section_header('plan', '這期打算怎麼打') }}
+
+<div class="card plan-summary">
+  <p class="plan-headline">{{ plan.summary }}</p>
+  {% if plan.difference %}<p class="plan-why">當初選這個方向的原因：{{ plan.difference }}</p>{% endif %}
+</div>
+
+<h3 class="plan-subhead">要打的人：冷／暖／熱三層</h3>
+<ul class="plan-audience-tiers">
+  {% for tier in audience_tier_order %}
+  {% set info = plan.audience.tiers[tier] %}
+  <li>
+    <strong>{{ audience_tier_labels[tier] }}</strong>
+    {% if info.available %}
+      {{ badge('這期可用', 'ok') }}
+      <p>{{ info.description }}</p>
+    {% else %}
+      {{ badge('這期用不到', 'neutral') }}
+      <p class="plan-why">{{ info.reason }}</p>
+    {% endif %}
+  </li>
+  {% endfor %}
+</ul>
+{% if plan.audience.exclusions %}
+<p class="plan-why"><strong>這期要排除：</strong>{{ plan.audience.exclusions | join('、') }}</p>
+{% endif %}
+
+{% if plan.methodology_missing %}
+{{ banner('warn', '這次規劃時，以下專業方法論參考資料缺席：' ~ (plan.methodology_missing | join('、')) ~ '（不影響本期規劃照常進行，已留紀錄）') }}
+{% endif %}
+
+<h3 class="plan-subhead">要試的 {{ plan.angles | length }} 個切角</h3>
+<ol class="plan-angles">
+  {% for angle in plan.angles %}
+  <li>
+    <strong>{{ angle.title }}</strong>
+    <p>{{ angle.message }}</p>
+    {% if angle.why %}<p class="plan-why">為什麼值得試：{{ angle.why }}</p>{% endif %}
+  </li>
+  {% endfor %}
+</ol>
+
+{% if plan.hypotheses %}
+<h3 class="plan-subhead">這期想驗證的事</h3>
+<ul class="plan-hypotheses">
+  {% for hypothesis in plan.hypotheses %}
+  <li>{{ hypothesis.statement }}{% if hypothesis.verify %}<span class="plan-why">（怎麼算驗證成功：{{ hypothesis.verify }}）</span>{% endif %}</li>
+  {% endfor %}
+</ul>
+{% endif %}
+
+{# 漸進揭露（鐵則 17）：來源與推論預設收起來，想追究的人才展開 #}
+<details class="field-details">
+  <summary><span class="marker" aria-hidden="true">▸</span> 這份計畫是根據什麼寫的？</summary>
+  <div class="details-body">
+    <h4 class="plan-grounding-title">依據已確認的品牌資料</h4>
+    {% if plan.grounding.facts %}
+    <ul class="plan-grounding">{% for item in plan.grounding.facts %}<li>{{ item }}</li>{% endfor %}</ul>
+    {% else %}<p class="plan-why">這期沒有可引用的已確認資料。</p>{% endif %}
+
+    <h4 class="plan-grounding-title">AI 自己的推論{{ badge('未經證實', 'warn') }}</h4>
+    {% if plan.grounding.inferences %}
+    <ul class="plan-grounding">{% for item in plan.grounding.inferences %}<li>{{ item }}</li>{% endfor %}</ul>
+    {% else %}<p class="plan-why">沒有額外推論。</p>{% endif %}
+
+    <h4 class="plan-grounding-title">要靠這期投放才知道的事</h4>
+    {% if plan.grounding.to_verify %}
+    <ul class="plan-grounding">{% for item in plan.grounding.to_verify %}<li>{{ item }}</li>{% endfor %}</ul>
+    {% else %}<p class="plan-why">沒有列出待驗證項目。</p>{% endif %}
+
+    {% if plan_cost is not none %}<p class="plan-why">這份計畫的 AI 花費：{{ '%.2f'|format(plan_cost) }} 美元。</p>{% endif %}
+  </div>
+</details>
+
+{% if cycle.status == 'REVIEW' %}
+{# 規則卡掛在這一關裡面，不獨立成第四道關卡（決策 0022 第 13 點） #}
+{% if rule_cards %}
+<div class="card rule-card-box">
+  <h3>我從你上次的挑選裡學到這些</h3>
+  <p class="section-desc">同一類素材你退過不只一次，要不要以後都避開？預設是同意，不要就按「不用」。</p>
+  {% for card in rule_cards %}
+  <div class="rule-card-row">
+    <div>
+      {% if card.is_overclaim_claim %}
+      <strong>要不要把這句話登記成禁用宣稱？</strong>
+      <p class="creative-why">你退過不只一次「講得太滿」：「{{ card.proposed_rule_text }}」。
+        登記後這句就會列入禁用宣稱，之後掃描與生成都會避開它。</p>
+      {% elif card.promoted_rule_id %}
+      <strong>「{{ card.axis_label }}是{{ card.value_label }}」這條禁令可以解除</strong>
+      <p class="creative-why">刻意踩這條禁令的實驗素材這期成效達標，同意的話以後不再避開這個方向。</p>
+      {% else %}
+      <strong>{{ card.axis_label }}是「{{ card.value_label }}」的素材</strong>
+      {% if card.self_reported %}
+      <p class="creative-why">你在前朝教訓訪談說過這個方向試過不行。同意的話，以後產素材會避開它。</p>
+      {% else %}
+      <p class="creative-why">你退過 {{ card.reject_count }} 次。同意的話，以後產素材會避開這個方向。</p>
+      {% endif %}
+      {% endif %}
+    </div>
+    <div class="rule-card-actions">
+      <form method="post" action="/brands/{{ brand.id }}/ads/rule-cards/{{ card.id }}/accept">
+        <button type="submit" class="btn btn-secondary">{% if card.is_overclaim_claim %}登記為禁用宣稱{% elif card.promoted_rule_id %}好，解除{% else %}好，記住{% endif %}</button>
+      </form>
+      <form method="post" action="/brands/{{ brand.id }}/ads/rule-cards/{{ card.id }}/decline">
+        <button type="submit" class="btn-text">不用</button>
+      </form>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+<div class="card gate-card">
+  <h3>確認一下這期的計畫</h3>
+  <p>看過沒問題就按下去，系統接著做素材。想改的話，可以重新產一份。</p>
+  <div class="form-actions">
+    <form method="post" action="/brands/{{ brand.id }}/ads/{{ cycle.id }}/plan/approve">
+      <button type="submit" class="btn btn-primary">就照這個做</button>
+    </form>
+    <a class="btn-text" href="/brands/{{ brand.id }}/ads/{{ cycle.id }}/plan/progress">重新出一批方案</a>
+  </div>
+</div>
+{% endif %}
+
+{% elif cycle.status == 'PLAN_SELECT' %}
+<div class="card gate-card">
+  <h3>方案準備好了</h3>
+  <p>AI 出了 {{ pending_option_count }} 個方案，選一個，或自己寫個方向讓 AI 重新出。</p>
+  <a class="btn btn-primary" href="/brands/{{ brand.id }}/ads/{{ cycle.id }}/plan/select">去選方案</a>
+</div>
+
+{% elif cycle.status == 'PLANNING' %}
+<div class="card gate-card">
+  <h3>還沒有這期的計畫</h3>
+  <p>系統會讀品牌智庫裡已確認的事實、規則與宣稱，出 2 到 4 個方案讓你選。</p>
+  <form method="get" action="/brands/{{ brand.id }}/ads/{{ cycle.id }}/plan/progress" class="inline-form model-thinking-form">
+    <label for="plan-model-select">本次會用</label>
+    <select id="plan-model-select" name="model">
+      {% for m_id, m_name in model_choices %}
+      <option value="{{ m_id }}"{% if m_id == plan_default_model %} selected{% endif %}>{{ m_name }}</option>
+      {% endfor %}
+    </select>
+    <select name="thinking" aria-label="思考等級">
+      {% for t_code, t_label in thinking_choices %}
+      <option value="{{ t_code }}"{% if t_code == plan_default_thinking %} selected{% endif %}>思考等級：{{ t_label }}</option>
+      {% endfor %}
+    </select>
+    <button type="submit" class="btn btn-primary">產出這期的方案</button>
+  </form>
+</div>
+{% endif %}
+
+{# 計畫確認之後：素材那一關的入口 #}
+{% if cycle.status in ('PRODUCTION', 'LIVE', 'EVALUATING', 'CLOSED') %}
+<div class="card gate-card">
+  <h3>素材</h3>
+  {% if has_creatives %}
+  <p>這期已經有 {{ creative_count }} 則素材。</p>
+  <a class="btn btn-secondary" href="/brands/{{ brand.id }}/ads/{{ cycle.id }}/creatives">看素材</a>
+  {% else %}
+  <p>計畫確認了，接下來依每個切角產出圖片提示詞、開場白與文案。</p>
+  <form method="get" action="/brands/{{ brand.id }}/ads/{{ cycle.id }}/creatives/progress" class="inline-form model-thinking-form">
+    <label for="creative-model-select">本次會用</label>
+    <select id="creative-model-select" name="model">
+      {% for m_id, m_name in model_choices %}
+      <option value="{{ m_id }}"{% if m_id == creative_default_model %} selected{% endif %}>{{ m_name }}</option>
+      {% endfor %}
+    </select>
+    <select name="thinking" aria-label="思考等級">
+      {% for t_code, t_label in thinking_choices %}
+      <option value="{{ t_code }}"{% if t_code == creative_default_thinking %} selected{% endif %}>思考等級：{{ t_label }}</option>
+      {% endfor %}
+    </select>
+    <button type="submit" class="btn btn-primary">產出這期的素材</button>
+  </form>
+  {% endif %}
+</div>
+
+{% if cycle.status in ('LIVE', 'EVALUATING', 'CLOSED') %}
+<div class="card gate-card">
+  <h3>成效</h3>
+  {% if snapshot_count %}
+  <p>已經收到 {{ snapshot_count }} 筆成效資料。</p>
+  {% else %}
+  <p>廣告開始跑之後，把成效數字補回來，系統才能告訴你下一步該做什麼。</p>
+  {% endif %}
+  <a class="btn {{ 'btn-secondary' if snapshot_count else 'btn-primary' }}" href="/brands/{{ brand.id }}/ads/{{ cycle.id }}/performance">
+    {{ '看成效' if snapshot_count else '回填成效' }}
+  </a>
+</div>
+{% endif %}
+
+{% if has_adopted and is_simulation %}
+<div class="card gate-card">
+  <h3>投放交接包</h3>
+  <p>模擬期不產生交接包——真的檔期走到這一步時，這裡會是一頁照著貼的清單：
+    命名、預算、排程、文案、網址參數都準備好，你只要一格一格複製到 Meta 廣告管理員。</p>
+  <a class="btn btn-secondary" href="/brands/{{ brand.id }}/ads/{{ cycle.id }}/performance">跳到成效這一步</a>
+</div>
+{% elif has_adopted %}
+<div class="card gate-card">
+  <h3>投放交接包</h3>
+  {% if package_count %}
+  <p>已經準備好 {{ package_count }} 組廣告設定{% if activated_count %}，其中 {{ activated_count }} 組你已回報開始投放{% endif %}。</p>
+  <a class="btn btn-secondary" href="/brands/{{ brand.id }}/ads/{{ cycle.id }}/handoff">看交接包</a>
+  {% else %}
+  <p>系統把命名、預算、排程、文案與網址參數整理成一頁，逐欄複製到 Meta 廣告管理員即可完成設定。</p>
+  <form method="post" action="/brands/{{ brand.id }}/ads/{{ cycle.id }}/handoff/build">
+    <button type="submit" class="btn btn-primary">產出交接包</button>
+  </form>
+  {% endif %}
+  <a class="btn-text" href="/brands/{{ brand.id }}/ads/{{ cycle.id }}/checklist">投放前檢查清單</a>
+</div>
+{% endif %}
+{% endif %}
+
+{{ section_header('allocation', '預算怎麼分') }}
+{% if allocations %}
+<div class="table-wrap">
+  <table class="data-table">
+    <thead>
+      <tr><th>產品</th><th class="num">分到的預算</th><th class="num">佔比</th><th>依據</th></tr>
+    </thead>
+    <tbody>
+    {% for row in allocations %}
+      <tr>
+        <td class="primary-cell">{{ row.product_name }}</td>
+        <td class="num">{{ '{:,.0f}'.format(row.allocated_budget) }}</td>
+        <td class="num">{{ '{:.0%}'.format(row.allocation_ratio) }}</td>
+        <td>
+          {% if row.allocation_basis == 'economics' %}依這個產品的賺頭
+          {% elif row.allocation_basis == 'estimated' %}用其他產品的平均賺頭估的 {{ badge('精準度打折', 'warn') }}
+          {% elif row.allocation_basis == 'even' %}平均分 {{ badge('精準度打折', 'warn') }}
+          {% else %}你自己改過的{% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+<p class="section-desc">分配依據是每個產品賣一件賺多少——賺得多的產品能承受比較高的廣告成本，值得多分一點。你之後可以自己改。</p>
+{% else %}
+<p class="section-desc">這期以整個品牌為範圍，沒有分配到個別產品。</p>
+{% endif %}
+
+{% if cycle.archived %}
+<div class="danger-zone">
+  <h2>永久刪除檔期</h2>
+  <p>把這期檔期與底下所有連帶資料從系統徹底移除，不能復原。下一頁會列出會消失的資料，並要求你輸入檔期名稱確認。</p>
+  <a class="btn btn-danger" href="/brands/{{ brand.id }}/ads/{{ cycle.id }}/delete">永久刪除這期檔期…</a>
+</div>
+{% endif %}
+{% endblock %}

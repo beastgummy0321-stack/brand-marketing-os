@@ -1,0 +1,38 @@
+{% extends "_layouts/console.html" %}
+{% from "_components/breadcrumb.html" import breadcrumb %}
+{% from "_components/section_header.html" import section_header %}
+{% from "_components/badge.html" import badge %}
+{% from "_components/banner.html" import banner %}
+{% from "_components/empty_state.html" import empty_state %}
+
+{% block title %}限制規則 — {{ brand.name }} — 行銷作業系統{% endblock %}
+
+{% block content %}
+{{ breadcrumb(breadcrumb_items) }}
+
+{% if banner_msg %}
+{{ banner(banner_kind or 'ok', banner_msg, dismiss_url=request.url.path) }}
+{% endif %}
+
+{{ section_header('rules', '限制規則', None, '新增限制規則', '/brands/' ~ brand.id ~ '/rules/new') }}
+{% if rules %}
+<div class="table-wrap">
+  <table class="data-table">
+    <thead><tr><th>嚴重度</th><th>類型</th><th>內容</th><th>適用範圍</th><th>操作</th></tr></thead>
+    <tbody>
+    {% for r in rules %}
+      <tr>
+        <td data-label="嚴重度">{{ badge('必須遵守' if r.severity == 'hard' else '建議遵守', 'danger' if r.severity == 'hard' else 'neutral') }}</td>
+        <td data-label="類型">{{ badge(rule_type_label(r.rule_type), 'neutral') }}</td>
+        <td data-label="內容" class="primary-cell">{{ r.content }}</td>
+        <td data-label="適用範圍">{{ scope_label(brand.id, r.product_id) }}</td>
+        <td data-label="操作"><a class="btn-text" href="/brands/{{ brand.id }}/rules/{{ r.id }}/edit">修改</a><form method="post" action="/brands/{{ brand.id }}/rules/{{ r.id }}/delete" class="inline-form" onsubmit="return confirm('確定要刪除這條規則？')"><button type="submit" class="btn-text btn-text-danger">刪除</button></form></td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+{{ empty_state('還沒有任何限制規則', '規則是產出內容時不能踩的線，例如禁用字詞、素材使用規定。', '新增限制規則', '/brands/' ~ brand.id ~ '/rules/new') }}
+{% endif %}
+{% endblock %}

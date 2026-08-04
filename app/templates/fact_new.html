@@ -1,0 +1,68 @@
+{% extends "_layouts/console.html" %}
+{% from "_components/breadcrumb.html" import breadcrumb %}
+{% from "_components/error_summary.html" import error_summary %}
+{% from "_components/field.html" import field %}
+
+{% block title %}{{ '新增產品事實' if scope == 'product' else '新增品牌事實' }} — {{ brand.name }} — 行銷作業系統{% endblock %}
+
+{% block content %}
+{{ breadcrumb(breadcrumb_items) }}
+<a class="back-link" href="{{ back_url }}"><span aria-hidden="true">←</span> 回到 {{ back_label }}</a>
+<div class="form-page">
+<h1>{{ '新增產品事實' if scope == 'product' else '新增品牌事實' }}</h1>
+{% if scope == 'brand' and not editing %}
+<p class="page-lede">如果這件事下個月可能就變了，或還沒跟客戶確認過，請在下方選「待確認」。</p>
+{% endif %}
+
+{{ error_summary(errors) }}
+
+<form method="post" action="{{ form_action }}" novalidate>
+  {% call field('fact_type', '這是哪一類事實？', required=True, hint='選不到合適的類型時，先選最接近的一個。', error=errors.fact_type) %}
+  <select id="fact_type" name="fact_type" aria-describedby="fact_type-hint">
+    <option value="" {% if not values.fact_type %}selected{% endif %} disabled>請選擇</option>
+    {% for v, label in fact_types %}
+    <option value="{{ v }}" {% if values.fact_type == v %}selected{% endif %}>{{ label }}</option>
+    {% endfor %}
+  </select>
+  {% endcall %}
+
+  {% call field('label', '這條事實叫什麼？', required=True, hint='一句話的短標題，方便之後在清單裡找到它。', error=errors.label) %}
+  <input type="text" id="label" name="label" value="{{ values.label }}" placeholder="例如「主要購買者輪廓」" aria-describedby="label-hint">
+  {% endcall %}
+
+  {% call field('value', '內容', required=True, hint='寫得越具體，之後 AI 產出的內容就越貼近真實。', error=errors.value) %}
+  <textarea id="value" name="value" rows="6" placeholder="例如「30–45 歲女性上班族，家中有學齡子女，習慣在 Facebook 與 LINE 群組接收資訊，購買前會查成分表。」" aria-describedby="value-hint">{{ values.value }}</textarea>
+  {% endcall %}
+
+  {% if not editing %}
+  <div class="field{% if errors.status %} has-error{% endif %}">
+    <div class="field-legend">這條已經確認過了嗎？（必填）</div>
+    <div class="radio-group">
+      <label class="radio-option">
+        <input type="radio" name="status" value="confirmed" {% if values.status == 'confirmed' %}checked{% endif %}>
+        <span><span class="radio-label">已確認</span><span class="radio-sub">客戶或我本人已核對過，可以當成事實使用。</span></span>
+      </label>
+      <label class="radio-option">
+        <input type="radio" name="status" value="pending" {% if values.status != 'confirmed' %}checked{% endif %}>
+        <span><span class="radio-label">待確認</span><span class="radio-sub">還需要跟客戶對過，先放著不當成事實使用。</span></span>
+      </label>
+    </div>
+    <div class="field-hint">不確定就選「待確認」。之後隨時可以在{{ '產品' if scope == 'product' else '品牌' }}檔案頁按確認。</div>
+    {% if errors.status %}<div class="field-error">{{ errors.status }}</div>{% endif %}
+  </div>
+  {% endif %}
+
+  <details class="field-details">
+    <summary><span class="marker" aria-hidden="true">▸</span> 資料來源（選填{% if editing %}，留空＝維持原來源{% endif %}）</summary>
+    <div class="details-body">
+      <input type="text" id="source_reference" name="source_reference" value="{{ values.source_reference }}" placeholder="例如「2025-03 客戶提供的品牌手冊 p.12」">
+    </div>
+  </details>
+
+  <div class="form-actions">
+    <button type="submit" class="btn btn-primary">{{ '新增這條產品事實' if scope == 'product' else '新增這條事實' }}</button>
+    <a class="btn-text" href="{{ back_url }}">取消</a>
+  </div>
+</form>
+</div>
+{% endblock %}

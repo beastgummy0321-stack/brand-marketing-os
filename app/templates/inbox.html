@@ -1,0 +1,48 @@
+{% extends "_layouts/console.html" %}
+{% from "_components/banner.html" import banner %}
+{% from "_components/interrupt_card.html" import interrupt_card %}
+{% from "_components/empty_state.html" import empty_state %}
+
+{% block title %}收件匣 — 行銷作業系統{% endblock %}
+
+{% block content %}
+{% if banner_msg %}
+{{ banner(banner_kind or 'ok', banner_msg, dismiss_url='/inbox') }}
+{% endif %}
+
+<h1>收件匣</h1>
+
+<section class="inbox-section">
+  <h2>待辦（{{ open_items|length }}）</h2>
+  {% if open_items %}
+  <div class="inbox-list">
+    {% for item in open_items %}
+    <div class="inbox-item">
+      {% if item.brand_name %}<p class="inbox-item-brand">{{ item.brand_name }}</p>{% endif %}
+      {{ interrupt_card(item, kind='content') }}
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  {{ empty_state("目前沒有待處理的事項", "全站目前沒有需要處理的事項。") }}
+  {% endif %}
+</section>
+
+<details class="archived-box">
+  <summary><span class="marker" aria-hidden="true">▸</span> 已結（{{ done_items|length }}）</summary>
+  <div class="archived-body">
+    {% if done_items %}
+    <div class="inbox-list">
+      {% for item in done_items %}
+      <div class="inbox-item">
+        {% if item.brand_name %}<p class="inbox-item-brand">{{ item.brand_name }}</p>{% endif %}
+        {{ interrupt_card(item, resolvable=False, kind='content') }}
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <p class="section-desc">目前沒有已結案的項目。</p>
+    {% endif %}
+  </div>
+</details>
+{% endblock %}

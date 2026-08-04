@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>顧問分析報告 — {{ brand.name }}</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<div class="report-doc">
+  <h1>{{ brand.name }}</h1>
+  <p class="page-subtitle">所屬客戶：{{ brand.client_name or '未填寫' }}</p>
+  <h2>顧問分析報告</h2>
+  <p class="page-subtitle">生成日期 {{ report.generated_at[:10] }}・依據第 {{ report.brand_version }} 版品牌資料</p>
+
+  {% if staleness %}
+  <p><strong>{{ staleness }}</strong></p>
+  {% endif %}
+  {% if thin_data %}
+  <p><strong>資料尚少，這份報告多半是推論，建議先補充品牌事實再重新生成。</strong></p>
+  {% endif %}
+
+  {% for s in sections %}
+  <section class="section-block">
+    <h2>{{ s.label }}</h2>
+    <p>{{ s.summary }}</p>
+    {% if s.points %}
+    <ul>
+      {% for p in s.points %}<li>{{ p }}</li>{% endfor %}
+    </ul>
+    {% endif %}
+  </section>
+  {% endfor %}
+
+  <p class="page-subtitle">本報告由行銷作業系統於 {{ today }} 生成，市場與競爭觀察為當日判讀。</p>
+</div>
+</body>
+</html>

@@ -1,0 +1,125 @@
+{% extends "_layouts/console.html" %}
+{% from "_components/breadcrumb.html" import breadcrumb %}
+{% from "_components/badge.html" import badge %}
+{% from "_components/banner.html" import banner %}
+{% from "_components/field.html" import field %}
+{% from "_components/section_header.html" import section_header %}
+
+{% block title %}{{ kind_label }} — {{ cycle.start_date }} 檔期 — {{ brand.name }}{% endblock %}
+
+{% block content %}
+{{ breadcrumb(breadcrumb_items) }}
+
+{% if banner_msg %}
+{{ banner(banner_kind or 'ok', banner_msg, dismiss_url=request.url.path) }}
+{% endif %}
+
+<h1>{{ kind_label }}</h1>
+<p class="page-lede">
+  這不是這期的最終判讀，只是先看兩件事：{% if kind == 'day7' %}三件事：{% endif %}
+  學習期正不正常、錢有沒有在花{% if kind == 'day7' %}、素材有沒有開始疲勞{% endif %}。
+  這個階段還太早，不會告訴你這期是贏是輸——那要等資料收得更完整才判讀。
+</p>
+
+{% if latest %}
+{% set r = latest.result %}
+<section class="card">
+  <h3>最新一次結果（{{ latest.created_at[:10] }}）</h3>
+
+  {% if not r.data_sufficient %}
+  <p class="section-desc">{{ r.learning_note }}</p>
+  {% else %}
+  <div class="reconcile-head">
+    <span>錢有在花</span>
+    {{ badge('是' if r.spend_ok else '否', 'ok' if r.spend_ok else 'warn') }}
+  </div>
+  <p class="section-desc">{{ r.spend_note }}</p>
+
+  <div class="reconcile-head">
+    <span>學習期正常</span>
+    {{ badge('正常' if r.learning_normal else '有異常訊號', 'ok' if r.learning_normal else 'warn') }}
+  </div>
+  <p class="section-desc">{{ r.learning_note }}</p>
+
+  {% if r.fatigue %}
+  <div class="reconcile-head">
+    <span>素材疲勞</span>
+    {% if r.fatigue.frequency is not none %}
+    {{ badge(r.fatigue.status_label, 'ok' if r.fatigue.status == 'safe' else 'warn') }}
+    {% else %}
+    {{ badge('看不出來', 'neutral') }}
+    {% endif %}
+  </div>
+  <p class="section-desc">
+    {{ r.fatigue.note }}
+    {% if r.fatigue.frequency is not none %}（頻率 {{ '%.1f'|format(r.fatigue.frequency) }}，
+    比對「{{ r.fatigue.audience_type_label }}」的門檻）{% endif %}
+  </p>
+  {% endif %}
+  {% endif %}
+</section>
+{% endif %}
+
+{% if cycle.status == 'LIVE' %}
+{{ section_header('import', '匯入這期目前的成效') }}
+<section class="card">
+  <p class="section-desc">
+    在 Meta 廣告管理員按「匯出」下載 CSV，再上傳到這裡。也可以不匯入，直接用系統裡已經有的資料跑一次。
+  </p>
+  <form method="post" action="/brands/{{ brand.id }}/ads/{{ cycle.id }}/checkpoint/{{ kind }}"
+        enctype="multipart/form-data">
+    {% call field('csv_file', 'CSV 檔案', required=False) %}
+    <input type="file" id="csv_file" name="csv_file" accept=".csv,text/csv">
+    {% endcall %}
+    <details class="field-details">
+      <summary><span class="marker" aria-hidden="true">▸</span> 或直接把內容貼上來</summary>
+      <div class="details-body">
+        {% call field('csv_text', 'CSV 內容', required=False,
+                      hint='連同第一行的欄位名稱一起貼。要看素材疲勞的話記得帶上「頻率」欄。') %}
+        <textarea id="csv_text" name="csv_text" rows="6"></textarea>
+        {% endcall %}
+      </div>
+    </details>
+    <button type="submit" class="btn btn-primary">匯入並跑健康檢查</button>
+  </form>
+</section>
+{% else %}
+<p class="section-desc">這期已經進入期末判讀，期中檢查併入期末結論，不用再補做。</p>
+{% endif %}
+
+{% if history %}
+{{ section_header('history', '過去的檢查點紀錄') }}
+<div class="table-wrap">
+  <table class="data-table">
+    <thead><tr><th>時間</th><th>類型</th><th>結果</th><th></th></tr></thead>
+    <tbody>
+    {% for c in history %}
+      <tr>
+        <td class="primary-cell">{{ c.created_at[:10] }}</td>
+        <td>{{ c.kind_label }}</td>
+        <td>
+          {% if not c.result.data_sufficient %}資料不足
+          {% else %}
+            錢有在花：{{ '是' if c.result.spend_ok else '否' }}・
+            學習期：{{ '正常' if c.result.learning_normal else '有異常訊號' }}
+            {% if c.result.fatigue and c.result.fatigue.frequency is not none %}
+            ・疲勞：{{ c.result.fatigue.status_label }}
+            {% endif %}
+          {% endif %}
+        </td>
+        <td>
+          <form method="post" action="/brands/{{ brand.id }}/ads/checkpoints/{{ c.id }}/archive" class="inline-form">
+            <button type="submit" class="btn-text">封存</button>
+          </form>
+          <form method="post" action="/brands/{{ brand.id }}/ads/checkpoints/{{ c.id }}/delete" class="inline-form"
+                onsubmit="return confirm('確定要刪除這筆檢查點紀錄？刪除後會記在稽核紀錄，但資料本身會消失。')">
+            <button type="submit" class="btn-text btn-text-danger">刪除</button>
+          </form>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,55 @@
+{% extends "_layouts/console.html" %}
+{% from "_components/breadcrumb.html" import breadcrumb %}
+{% from "_components/error_summary.html" import error_summary %}
+{% from "_components/field.html" import field %}
+
+{% block title %}新增自有渠道 — {{ brand.name }} — 行銷作業系統{% endblock %}
+
+{% block content %}
+{{ breadcrumb([('品牌總覽', '/'), (brand.name, '/brands/' ~ brand.id), ('品牌智庫', '/brands/' ~ brand.id ~ '/hub'), ('自有渠道', '/brands/' ~ brand.id ~ '/hub/channels'), ('新增自有渠道', None)]) }}
+<a class="back-link" href="/brands/{{ brand.id }}/hub/channels"><span aria-hidden="true">←</span> 回到 自有渠道</a>
+<div class="form-page">
+<h1>新增自有渠道</h1>
+
+{{ error_summary(errors) }}
+
+<form method="post" action="/brands/{{ brand.id }}/channels/new" novalidate>
+  {% call field('channel_type', '渠道類型', required=True, error=errors.channel_type) %}
+  <select id="channel_type" name="channel_type">
+    <option value="" {% if not values.channel_type %}selected{% endif %} disabled>請選擇</option>
+    {% for v, label in CHANNEL_TYPES %}
+    <option value="{{ v }}" {% if values.channel_type == v %}selected{% endif %}>{{ label }}</option>
+    {% endfor %}
+  </select>
+  {% endcall %}
+
+  {% call field('name', '名稱', required=True, hint='這個渠道對外顯示的名稱。', error=errors.name) %}
+  <input type="text" id="name" name="name" value="{{ values.name }}" placeholder="例如「青原生活官方商店」">
+  {% endcall %}
+
+  {% call field('identifier', '網址或帳號', required=True, hint='官方網站填網址；社群帳號填 @帳號或粉專連結。', error=errors.identifier) %}
+  <input type="text" id="identifier" name="identifier" value="{{ values.identifier }}" placeholder="例如 https://example.com/store 或 @your-page">
+  {% endcall %}
+
+  <div class="field{% if errors.status %} has-error{% endif %}">
+    <div class="field-legend">目前狀態？（必填）</div>
+    <div class="radio-group">
+      <label class="radio-option">
+        <input type="radio" name="status" value="active" {% if values.status != 'inactive' %}checked{% endif %}>
+        <span class="radio-label">使用中</span>
+      </label>
+      <label class="radio-option">
+        <input type="radio" name="status" value="inactive" {% if values.status == 'inactive' %}checked{% endif %}>
+        <span class="radio-label">停用</span>
+      </label>
+    </div>
+    {% if errors.status %}<div class="field-error">{{ errors.status }}</div>{% endif %}
+  </div>
+
+  <div class="form-actions">
+    <button type="submit" class="btn btn-primary">新增這個渠道</button>
+    <a class="btn-text" href="/brands/{{ brand.id }}/hub/channels">取消</a>
+  </div>
+</form>
+</div>
+{% endblock %}
