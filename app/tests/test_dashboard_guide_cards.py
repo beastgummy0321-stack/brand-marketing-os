@@ -21,9 +21,35 @@ def _facts(**overrides) -> dict:
         "reading_ready": False,
         "next_cycle_draft_ready": False,
         "campaign_reminder": None,
+        "pacing_alert": None,
     }
     base.update(overrides)
     return base
+
+
+class PacingAlertRuleTest(unittest.TestCase):
+    def test_overspend_triggers_with_interrupt_action_url(self):
+        facts = _facts(pacing_alert={"kind": "overspend", "action_url": "/brands/b/ads/c1"})
+        card = guide_cards.RULES["pacing_alert"](facts)
+        self.assertIsNotNone(card)
+        self.assertIn("燒太快", card["title"])
+        self.assertEqual(card["action_url"], "/brands/b/ads/c1")
+
+    def test_underspend_without_action_url_falls_back_to_ads_home(self):
+        facts = _facts(pacing_alert={"kind": "underspend", "action_url": None})
+        card = guide_cards.RULES["pacing_alert"](facts)
+        self.assertIn("花不完", card["title"])
+        self.assertEqual(card["action_url"], f"/brands/{BRAND_ID}/ads")
+
+    def test_does_not_trigger_without_alert(self):
+        self.assertIsNone(guide_cards.RULES["pacing_alert"](_facts()))
+
+    def test_pacing_outranks_reading_unread(self):
+        """錢的步調行動價值最高：pacing 與判讀未讀同時觸發時，pacing 排第一。"""
+        facts = _facts(pacing_alert={"kind": "overspend", "action_url": None},
+                       active_cycle={"id": "ccy_1", "stage_label": None}, reading_ready=True)
+        cards = guide_cards.build(facts)
+        self.assertIn("燒太快", cards[0]["title"])
 
 
 class ReadingUnreadRuleTest(unittest.TestCase):

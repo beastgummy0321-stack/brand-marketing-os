@@ -6,15 +6,15 @@
 RULES 是一個 dict，key＝規則 id，value＝判定函式；dict 順序＝優先序（越早登記代表行動
 價值越高，同 interrupts.py `_CATEGORY_RANK` 的做法），呼叫端不得自行排序。
 
-第一批貨源（規格 0001「指南卡第一批貨源」）：
+第一批貨源（規格 0001「指南卡第一批貨源」，六種到齊）：
+- pacing_alert：pacing 警示（票 08 產生的打斷佇列事件，這裡轉成行動卡；錢的步調
+  最優先，登記在第一位）
 - reading_unread：判讀結果出爐未讀
 - next_cycle_draft：下期草案已備好
 - cycle_stage：檔期卡在哪道關卡
 - pending_facts：待確認事實數
 - campaign_calendar：檔期日曆備戰提醒（票 06-campaign-calendar，純函數在
   app/dashboard/campaign_calendar.py，這裡只負責把結果轉成卡片文字）
-
-（pacing 警示是最後一批貨源，見票 08，不在本票範圍。）
 
 每條規則收一份「這個品牌的原始資料」dict（build() 的 facts 參數，由呼叫端組裝——
 本檔不碰資料庫，見 app/dashboard/repository.py），判斷觸不觸發；觸發回一張卡
@@ -36,11 +36,25 @@ facts 欄位契約（由 app/dashboard/repository.py 組裝）：
 - campaign_reminder: dict|None（app/dashboard/campaign_calendar.py
   next_calendar_reminder() 的回傳值：{id, name, days_until, kind("prep"|"creative"),
   ...}——kind="prep" 才有 weeks_until／tier_label；沒有觸發中的檔期就是 None）
+- pacing_alert: {"kind": "overspend"|"underspend", "action_url": str|None} | None
+  （brand 目前未結的 pacing 打斷事件，list_open 排序後第一筆；沒有就是 None）
 """
 
 from typing import Callable, Optional
 
 MAX_CARDS = 3
+
+
+def _rule_pacing_alert(facts: dict) -> Optional[dict]:
+    """pacing 警示轉行動卡：預算步調出問題是「錢的事」，行動價值最高、登記在第一位。
+    卡片只給行動入口，事件本體仍在警示區／打斷佇列（規格：pacing 同時是指南卡貨源）。"""
+    alert = facts.get("pacing_alert")
+    if not alert:
+        return None
+    title = ("檔期預算燒太快，去看步調" if alert["kind"] == "overspend"
+             else "檔期預算花不完，去看步調")
+    return {"title": title, "action_url": alert.get("action_url")
+            or f"/brands/{facts['brand_id']}/ads"}
 
 
 def _rule_reading_unread(facts: dict) -> Optional[dict]:
@@ -108,6 +122,7 @@ def _rule_campaign_calendar(facts: dict) -> Optional[dict]:
 
 # 登記表：dict 順序＝優先序（越早登記代表行動價值越高，比照 interrupts.py CATEGORIES）。
 RULES: "dict[str, Callable[[dict], Optional[dict]]]" = {
+    "pacing_alert": _rule_pacing_alert,
     "reading_unread": _rule_reading_unread,
     "next_cycle_draft": _rule_next_cycle_draft,
     "cycle_stage": _rule_cycle_stage,

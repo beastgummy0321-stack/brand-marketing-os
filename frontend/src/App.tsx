@@ -13,7 +13,11 @@ import { fetchOverview, type DashboardBrandCard } from "@/lib/api";
  * 直接整理／分享網址會 404；查詢字串留在同一個根路徑，天生就不會撞到這個限制。 */
 function App() {
   const brandId = new URLSearchParams(window.location.search).get("brand");
-  return <AppShell>{brandId ? <CockpitPage brandId={brandId} /> : <Overview />}</AppShell>;
+  return (
+    <AppShell brandId={brandId}>
+      {brandId ? <CockpitPage brandId={brandId} /> : <Overview />}
+    </AppShell>
+  );
 }
 
 /** 跨品牌總覽首頁（票 02-overview-cards）：打儀表板 API，每個品牌一張卡。

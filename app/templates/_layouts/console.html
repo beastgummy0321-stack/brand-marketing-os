@@ -53,6 +53,10 @@
   <nav class="console-sidebar" aria-label="主導覽">
     <div class="console-sidebar-switcher">{{ brand_switcher(brand, active_brands or []) }}</div>
 
+    {# 一鍵回駕駛艙（規格 0001 故事 24：任意深度頁面都要回得去；有品牌 context 就
+       直接回該品牌駕駛艙，沒有就回跨品牌總覽）。 #}
+    <a class="console-nav-item" href="/app/{{ '?brand=' ~ brand.id if brand else '' }}">回駕駛艙</a>
+
     <a class="console-nav-item console-nav-inbox" href="/inbox">
       <span>收件匣</span>
       {%- if inbox_count %}<span class="badge badge-warn">{{ inbox_count }}</span>{%- endif %}

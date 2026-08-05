@@ -34,20 +34,22 @@ def _month_to_date_range(today: str) -> tuple:
     return today[:8] + "01", today
 
 
-def _revenue_and_mom(conn, brand_id: str, today: str) -> tuple:
-    """本月至今營收與環比（規格 KPI 口徑：本月營收＝訂單實收；環比＝與上月同期比較）。
+def _and_mom(today: str, fetch) -> tuple:
+    """KPI 通用形狀：本月至今值＋與上月同期環比。fetch(since, until) 回該區間的值。
 
     上月同期抓不到（沒有上月資料，分母是 0 或 None）時環比回 None——「沒得算」跟
     「等於 0」是兩件事（鐵則 16，比照 app/orders/repository.py stats()）。
     """
     since, until = _month_to_date_range(today)
-    current = orders_repo.stats(conn, brand_id, since=since, until=until, today=today)["net_revenue"]
-    prev_since = ads_sync.months_before(since, 1)
-    prev_until = ads_sync.months_before(until, 1)
-    previous = orders_repo.stats(conn, brand_id, since=prev_since, until=prev_until,
-                                 today=today)["net_revenue"]
-    mom_pct = round((current - previous) / previous * 100, 1) if current is not None and previous else None
-    return current, mom_pct
+    current = fetch(since, until)
+    previous = fetch(ads_sync.months_before(since, 1), ads_sync.months_before(until, 1))
+    return current, _mom_pct(current, previous)
+
+
+def _revenue_and_mom(conn, brand_id: str, today: str) -> tuple:
+    """規格 KPI 口徑：本月營收＝訂單實收；環比＝與上月同期比較。"""
+    return _and_mom(today, lambda s, u: orders_repo.stats(
+        conn, brand_id, since=s, until=u, today=today)["net_revenue"])
 
 
 def _latest_cycle(conn, brand_id: str) -> Optional[dict]:
@@ -86,6 +88,20 @@ def _cycle_stage_label(conn, brand_id: str, cycle: dict) -> Optional[str]:
     return ads_stages.STAGE_LABELS[stage_index - 1] if stage_index < 5 else None
 
 
+_PACING_CATEGORIES = {"pacing_overspend": "overspend", "pacing_underspend": "underspend"}
+
+
+def _pacing_alert(conn, brand_id: str, today: str) -> Optional[dict]:
+    """未結的 pacing 打斷事件轉成指南卡 facts（規格：pacing 警示是指南卡貨源之一）。
+    list_open 已按嚴重度排序，取第一筆 pacing 類即可。"""
+    rows = core_interrupts.list_open(conn, brand_id=brand_id, today=today, archive_stale=False)
+    for row in rows:
+        kind = _PACING_CATEGORIES.get(row["category"])
+        if kind:
+            return {"kind": kind, "action_url": row["action_url"]}
+    return None
+
+
 def _guide_card_facts(conn, brand_id: str, cycle: Optional[dict], today: str, events: list) -> dict:
     pending_facts = bi_repo.list_brand_facts(conn, brand_id, status="pending")
     active_cycle = None
@@ -102,6 +118,7 @@ def _guide_card_facts(conn, brand_id: str, cycle: Optional[dict], today: str, ev
         "reading_ready": reading_ready,
         "next_cycle_draft_ready": next_cycle_draft_ready,
         "campaign_reminder": campaign_calendar.next_calendar_reminder(events, date.fromisoformat(today)),
+        "pacing_alert": _pacing_alert(conn, brand_id, today),
     }
 
 
@@ -170,31 +187,17 @@ def _mom_pct(current, previous) -> Optional[float]:
 
 
 def _spend_and_mom(conn, brand_id: str, today: str) -> tuple:
-    since, until = _month_to_date_range(today)
-    current = ads_performance.brand_period_spend(conn, brand_id, since, until)
-    prev_since = ads_sync.months_before(since, 1)
-    prev_until = ads_sync.months_before(until, 1)
-    previous = ads_performance.brand_period_spend(conn, brand_id, prev_since, prev_until)
-    return current, _mom_pct(current, previous)
+    return _and_mom(today, lambda s, u: ads_performance.brand_period_spend(conn, brand_id, s, u))
 
 
 def _roas_and_mom(conn, brand_id: str, today: str) -> tuple:
-    since, until = _month_to_date_range(today)
-    current = ads_performance.latest_derived_metric(conn, brand_id, "roas", since, until)
-    prev_since = ads_sync.months_before(since, 1)
-    prev_until = ads_sync.months_before(until, 1)
-    previous = ads_performance.latest_derived_metric(conn, brand_id, "roas", prev_since, prev_until)
-    return current, _mom_pct(current, previous)
+    return _and_mom(today, lambda s, u: ads_performance.latest_derived_metric(
+        conn, brand_id, "roas", s, u))
 
 
 def _orders_and_mom(conn, brand_id: str, today: str) -> tuple:
-    since, until = _month_to_date_range(today)
-    current = orders_repo.stats(conn, brand_id, since=since, until=until, today=today)["order_count"]
-    prev_since = ads_sync.months_before(since, 1)
-    prev_until = ads_sync.months_before(until, 1)
-    previous = orders_repo.stats(conn, brand_id, since=prev_since, until=prev_until,
-                                 today=today)["order_count"]
-    return current, _mom_pct(current, previous)
+    return _and_mom(today, lambda s, u: orders_repo.stats(
+        conn, brand_id, since=s, until=u, today=today)["order_count"])
 
 
 def _month_bounds(month: str) -> tuple:

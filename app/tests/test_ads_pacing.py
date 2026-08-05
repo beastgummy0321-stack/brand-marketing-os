@@ -108,7 +108,7 @@ class CheckCycleTest(unittest.TestCase):
             {"spend": amount, "date_start": today, "date_stop": today},
             actor=ACTOR, today=today)
 
-    def test_overspend_enqueues_money_loss_interrupt(self):
+    def test_overspend_enqueues_rule_warning_interrupt(self):
         cycle_id = self._make_cycle()
         self._spend(cycle_id, 8000, today="2026-02-19")
 
@@ -118,7 +118,9 @@ class CheckCycleTest(unittest.TestCase):
         rows = core_interrupts.list_open(self.conn, brand_id=self.bid)
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["category"], "pacing_overspend")
-        self.assertEqual(rows[0]["severity"], "money_loss")
+        # 燒太快是「錢有風險」不是「錢已損失」（code review 2026-08-06 定調）：
+        # money_loss 會把品牌燈號直接判紅，真的賠錢由判讀狀態機負責喊。
+        self.assertEqual(rows[0]["severity"], "rule_warning")
         self.assertEqual(rows[0]["campaign_cycle_id"], cycle_id)
         self.assertEqual(rows[0]["action_url"], f"/brands/{self.bid}/ads/{cycle_id}/performance")
         self.assertLessEqual(len(rows[0]["message"]), 30)

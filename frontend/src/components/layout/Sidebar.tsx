@@ -1,7 +1,7 @@
-import { NAV_TOP, NAV_MODULES, NAV_FOOTER } from "@/config/navigation";
+import { NAV_TOP, navModules, NAV_FOOTER } from "@/config/navigation";
 import { NavGroup } from "./NavGroup";
 
-export function Sidebar() {
+export function Sidebar({ brandId }: { brandId: string | null }) {
   return (
     <nav
       aria-label="主導覽"
@@ -13,7 +13,7 @@ export function Sidebar() {
           <p className="px-3 pb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
             模組
           </p>
-          <NavGroup items={NAV_MODULES} />
+          <NavGroup items={navModules(brandId)} />
         </div>
       </div>
       <NavGroup items={NAV_FOOTER} />

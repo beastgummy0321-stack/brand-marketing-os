@@ -23,12 +23,21 @@ export const NAV_TOP: NavItem[] = [
   { label: "收件匣", href: "/inbox", status: "active" },
 ];
 
-export const NAV_MODULES: NavItem[] = [
-  { label: "品牌智庫", status: "disabled", reason: "請先在跨品牌總覽選擇品牌" },
-  { label: "投放與成效", status: "disabled", reason: "請先在跨品牌總覽選擇品牌" },
-  { label: "內容與曝光", status: "disabled", reason: "即將推出" },
-  { label: "顧客與口碑", status: "disabled", reason: "即將推出" },
-];
+/** 品牌相關模組要有品牌 context 才可點：已進駕駛艙（網址帶 ?brand=）就亮起並連到
+ * 該品牌的舊功能頁（code review 2026-08-06：之前寫死永遠灰掉，選了品牌仍顯示
+ * 「請先選品牌」是錯的，票 01 驗收「連到每個既有模組」實質沒達成）。 */
+export function navModules(brandId: string | null): NavItem[] {
+  return [
+    brandId
+      ? { label: "品牌智庫", href: `/brands/${brandId}/hub`, status: "active" }
+      : { label: "品牌智庫", status: "disabled", reason: "請先在跨品牌總覽選擇品牌" },
+    brandId
+      ? { label: "投放與成效", href: `/brands/${brandId}/ads`, status: "active" }
+      : { label: "投放與成效", status: "disabled", reason: "請先在跨品牌總覽選擇品牌" },
+    { label: "內容與曝光", status: "disabled", reason: "即將推出" },
+    { label: "顧客與口碑", status: "disabled", reason: "即將推出" },
+  ];
+}
 
 export const NAV_FOOTER: NavItem[] = [
   { label: "設定", href: "/settings", status: "active" },
