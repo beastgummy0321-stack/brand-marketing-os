@@ -52,7 +52,7 @@ class RuleCardValueTest(unittest.TestCase):
 
     def test_list_cards_includes_human_readable_metadata(self):
         cards = rule_cards.list_cards(self.conn)
-        self.assertEqual(len(cards), 3)
+        self.assertEqual(len(cards), 4)
         by_key = {c["key"]: c for c in cards}
         card = by_key["ad_creative_fatigue"]
         self.assertIn("素材疲勞", card["title"])
@@ -83,6 +83,11 @@ class RuleCardValueTest(unittest.TestCase):
             rule_cards.get_value(self.conn, "budget_structure", "medium_validation_ratio"), 0.7)
         self.assertEqual(
             rule_cards.get_value(self.conn, "budget_structure", "large_scaling_ratio"), 0.8)
+
+    def test_pacing_seed_value_matches_migration(self):
+        """票 08-pacing-alert：步調偏差門檻種子值（migrations/0009_pacing_card.sql）。"""
+        self.assertEqual(
+            rule_cards.get_value(self.conn, "pacing", "deviation_threshold_ratio"), 0.15)
 
     # -- 改值即時生效 ---------------------------------------------------------
 

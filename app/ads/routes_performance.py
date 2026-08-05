@@ -33,6 +33,7 @@ from app.ads import checkpoint as ads_checkpoint
 from app.ads import guardrails
 from app.ads import inflation as ads_inflation
 from app.ads import nextcycle
+from app.ads import pacing as ads_pacing
 from app.ads import performance as ads_performance
 from app.ads import reading as ads_reading
 from app.ads import reconcile as ads_reconcile_mod
@@ -309,6 +310,7 @@ async def ads_performance_csv(request: Request, brand_id: str, cycle_id: str,
         return main_mod.redirect_with_message(back, result.errors[0], kind="warn")
 
     ads_performance.save_derived_metrics(main_mod.conn, brand_id, cycle_id)
+    ads_pacing.check_cycle(main_mod.conn, brand_id, cycle_id)  # 票 08：新數據落地後判一次步調
     msg = f"匯入 {result.imported} 筆成效資料。"
     if result.quarantined:
         msg += f"其中 {result.quarantined} 筆數字不合理，先擱在一旁不列入計算。"
@@ -342,6 +344,7 @@ async def ads_performance_manual(request: Request, brand_id: str, cycle_id: str,
     if result.errors:
         return main_mod.redirect_with_message(back, result.errors[0], kind="warn")
     ads_performance.save_derived_metrics(main_mod.conn, brand_id, cycle_id)
+    ads_pacing.check_cycle(main_mod.conn, brand_id, cycle_id)  # 票 08：新數據落地後判一次步調
     return main_mod.redirect_with_message(back, "記下來了。")
 
 

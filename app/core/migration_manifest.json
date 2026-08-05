@@ -23,6 +23,7 @@
   "core/0006_interrupts.sql": "c8d4c7a719884fe313f604dcfc695ab14ad300100ae00c1a4155b7f42c42d042",
   "core/0007_interrupt_dedupe_per_brand.sql": "f8565f7660262c45648209d965a8910feac9d189d9f1c8f340700bc8bf49ae0e",
   "core/0008_audit_log_composite_index.sql": "32e55945c7988672621c2675d1fc632245621f5f37387956c4abd55a2a059cd8",
+  "core/0009_pacing_card.sql": "16151ee5aa304d079c7b07508518a012608407d80c90f89c16f0113ba112976b",
   "intake/0001_intake.sql": "4f5776317c42f873136a9a870075614e824ef77f90738a12bd64a795d7e476f8",
   "intake/0002_scan_products.sql": "d4bf1b9561d71caa9f70de8e07e186a6396f0607dcf343a09bd46c10c7ffecbe",
   "orders/0001_orders.sql": "173ab5b6ab8e83d32c619d3b55ed2858daf03d35a6c82c1fc7ff4ad461f96301",
