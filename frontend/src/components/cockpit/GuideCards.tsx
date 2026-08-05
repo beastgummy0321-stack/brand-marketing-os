@@ -4,7 +4,10 @@ import type { GuideCard } from "@/lib/api";
  * 沒有待辦顯示「一切正常」（規格使用者故事 10）。 */
 export function GuideCards({ cards }: { cards: GuideCard[] }) {
   return (
-    <div className="flex flex-col gap-3 rounded-lg border border-border bg-card p-5 shadow-[var(--shadow-card)]">
+    <div
+      data-tour="guide-cards"
+      className="flex flex-col gap-3 rounded-lg border border-border bg-card p-5 shadow-[var(--shadow-card)]"
+    >
       <h2 className="font-display text-base text-foreground">下一步指南</h2>
       {cards.length === 0 ? (
         <p className="text-sm text-muted-foreground">一切正常，目前沒有待辦事項。</p>

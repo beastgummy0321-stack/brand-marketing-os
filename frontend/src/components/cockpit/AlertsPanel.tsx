@@ -47,7 +47,10 @@ export function AlertsPanel({
   }
 
   return (
-    <div className="flex flex-col gap-3 rounded-lg border border-border bg-card p-5 shadow-[var(--shadow-card)]">
+    <div
+      data-tour="alerts"
+      className="flex flex-col gap-3 rounded-lg border border-border bg-card p-5 shadow-[var(--shadow-card)]"
+    >
       <h2 className="font-display text-base text-foreground">異常警示</h2>
       {error && <p className="text-xs text-danger">{error}</p>}
       {alerts.length === 0 ? (

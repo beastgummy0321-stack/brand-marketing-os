@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { AppShell } from "@/components/layout/AppShell";
+import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { EmptyState } from "@/components/layout/EmptyState";
 import { CockpitPage } from "@/components/cockpit/CockpitPage";
 import { BrandCard } from "@/components/overview/BrandCard";
@@ -44,14 +45,13 @@ function Overview() {
     };
   }, []);
 
+  let content: ReactNode;
   if (state.status === "loading") {
-    return <EmptyState title="讀取中…" description="正在載入各品牌總覽。" />;
-  }
-  if (state.status === "error") {
-    return <EmptyState title="讀取失敗" description={state.message} />;
-  }
-  if (state.cards.length === 0) {
-    return (
+    content = <EmptyState title="讀取中…" description="正在載入各品牌總覽。" />;
+  } else if (state.status === "error") {
+    content = <EmptyState title="讀取失敗" description={state.message} />;
+  } else if (state.cards.length === 0) {
+    content = (
       <EmptyState
         title="還沒有任何品牌"
         description="這裡會列出每個品牌的健康度卡片。先到舊版介面建立第一個品牌。"
@@ -59,12 +59,20 @@ function Overview() {
         actionLabel="前往舊版品牌總覽"
       />
     );
+  } else {
+    content = (
+      <div className="grid grid-cols-3 gap-4">
+        {state.cards.map((card) => (
+          <BrandCard key={card.brand_id} card={card} />
+        ))}
+      </div>
+    );
   }
+
   return (
-    <div className="grid grid-cols-3 gap-4">
-      {state.cards.map((card) => (
-        <BrandCard key={card.brand_id} card={card} />
-      ))}
+    <div className="flex flex-col gap-4">
+      <Breadcrumb items={[{ label: "跨品牌總覽" }]} />
+      {content}
     </div>
   );
 }
