@@ -27,7 +27,7 @@ GitHub issue #43；修憲落地 V2 依 §20.1 規則 1 加入 kind 分流）。
    但下拉選單是操作介面本身，不是規則 4 要管的說明句，比照 <details> 排除）——每張卡片
    ≤ 30 全形字。
 
-用 html.parser.HTMLParser（跟 app/intake/ai.py 的 _TextExtractor 同一套 stdlib 寫法，
+用 html.parser.HTMLParser（跟 app/core/net.py 的 _TextExtractor 同一套 stdlib 寫法，
 不加任何新依賴）；不要求標籤完美平衡——遇到未預期的收合順序一律以「往回找同名標籤」的
 寬鬆方式處理，不因為原始碼裡有自我封閉標籤（如 <img>）不平衡而誤判。
 """

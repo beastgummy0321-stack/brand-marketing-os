@@ -26,7 +26,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 import app.main as main  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
 from app.core import settings as coresettings  # noqa: E402
-from app.intake import ai as intake_ai  # noqa: E402
+from app.brand_intelligence import product_ai  # noqa: E402
 from app.llm.providers import (  # noqa: E402
     MISSING_KEY_MESSAGE, AnthropicProvider, FakeProvider, ProviderResponse, Usage,
 )
@@ -79,7 +79,7 @@ class _BaseHandoffTest(unittest.TestCase):
         self._envpatch.start()
         os.environ.pop("ANTHROPIC_API_KEY", None)
         os.environ.pop("BRAND_OS_LLM_MODEL", None)
-        self._orig_provider = intake_ai.PROVIDER
+        self._orig_provider = product_ai.PROVIDER
         self.brand = bi_repo.create_brand(main.conn, name="虛構茶研所", client_name="測試客戶", actor=ACTOR)
         resp = self.client.post(
             f"/brands/{self.brand['id']}/products/new", data={"name": "虛構回甘烏龍"},
@@ -88,7 +88,7 @@ class _BaseHandoffTest(unittest.TestCase):
         self.product_id = resp.headers["location"].split("/products/")[1].split("?")[0]
 
     def tearDown(self):
-        intake_ai.PROVIDER = self._orig_provider
+        product_ai.PROVIDER = self._orig_provider
         self._envpatch.stop()
 
     def _handoff_url(self):
@@ -112,17 +112,17 @@ class HandoffPageTest(_BaseHandoffTest):
         self.assertIn("既有規格", resp.text)
         self.assertIn("虛構回甘烏龍", resp.text)
         # 嚴格回覆格式要求：五類 facts、選填 price，跟 run_product_scan 同形狀
-        for fact_type in intake_ai.PRODUCT_SCAN_FACT_TYPES:
+        for fact_type in product_ai.PRODUCT_SCAN_FACT_TYPES:
             self.assertIn(fact_type, resp.text)
         self.assertIn("price", resp.text)
 
 
 class HandoffPasteDirectParseTest(_BaseHandoffTest):
     def test_valid_json_with_surrounding_noise_lands_pending_no_llm_call(self):
-        intake_ai.PROVIDER = FakeProvider(response=_fake_response("不該被呼叫"))
+        product_ai.PROVIDER = FakeProvider(response=_fake_response("不該被呼叫"))
         resp = self._post(_GOOD_WITH_NOISE)
         self.assertEqual(resp.status_code, 303)
-        self.assertEqual(intake_ai.PROVIDER.calls, [])  # 直接解析成功，完全不花錢
+        self.assertEqual(product_ai.PROVIDER.calls, [])  # 直接解析成功，完全不花錢
 
         facts = bi_repo.list_product_facts(main.conn, self.brand["id"], self.product_id)
         self.assertEqual(len(facts), 2)
@@ -141,7 +141,7 @@ class HandoffPasteDirectParseTest(_BaseHandoffTest):
         bi_repo.create_product_fact(main.conn, self.brand["id"], self.product_id, actor=ACTOR,
                                     fact_type="產品線", label="單一品項", value="舊資料。",
                                     status="confirmed", confirmed_by=ACTOR)
-        intake_ai.PROVIDER = FakeProvider(response=_fake_response("不該被呼叫"))
+        product_ai.PROVIDER = FakeProvider(response=_fake_response("不該被呼叫"))
         resp = self._post(_GOOD_JSON)
         self.assertEqual(resp.status_code, 303)
         facts = bi_repo.list_product_facts(main.conn, self.brand["id"], self.product_id)
@@ -160,33 +160,33 @@ class HandoffPasteDirectParseTest(_BaseHandoffTest):
 
 class HandoffPasteFixTest(_BaseHandoffTest):
     def test_garbled_paste_repaired_by_ai_lands_pending(self):
-        intake_ai.PROVIDER = FakeProvider(response=_fake_response(_GOOD_JSON))
+        product_ai.PROVIDER = FakeProvider(response=_fake_response(_GOOD_JSON))
         resp = self._post(_GARBLED)
         self.assertEqual(resp.status_code, 303)
-        self.assertEqual(len(intake_ai.PROVIDER.calls), 1)  # 直接解析失敗才呼叫一次修復
+        self.assertEqual(len(product_ai.PROVIDER.calls), 1)  # 直接解析失敗才呼叫一次修復
         facts = bi_repo.list_product_facts(main.conn, self.brand["id"], self.product_id)
         self.assertEqual(len(facts), 2)
         for f in facts:
             self.assertEqual(f["status"], "pending")
 
     def test_repair_still_garbled_is_honest_failure_creates_nothing(self):
-        intake_ai.PROVIDER = FakeProvider(response=_fake_response("修復後還是不是 JSON"))
+        product_ai.PROVIDER = FakeProvider(response=_fake_response("修復後還是不是 JSON"))
         resp = self._post(_GARBLED)
         self.assertEqual(resp.status_code, 400)
-        self.assertIn(intake_ai.PARSE_FAIL_MESSAGE, resp.text)
+        self.assertIn(product_ai.PARSE_FAIL_MESSAGE, resp.text)
         self.assertEqual(bi_repo.list_product_facts(main.conn, self.brand["id"], self.product_id), [])
 
     def test_over_budget_blocks_repair_before_any_llm_call(self):
         coresettings.set_setting(main.conn, coresettings.INTAKE_BUDGET_SETTING, "0.1")
-        intake_ai.PROVIDER = FakeProvider(response=_fake_response("不該被呼叫"))
+        product_ai.PROVIDER = FakeProvider(response=_fake_response("不該被呼叫"))
         resp = self._post(_GARBLED)
         self.assertEqual(resp.status_code, 400)
         self.assertIn("花費上限", resp.text)
         self.assertEqual(bi_repo.list_product_facts(main.conn, self.brand["id"], self.product_id), [])
-        self.assertEqual(intake_ai.PROVIDER.calls, [])
+        self.assertEqual(product_ai.PROVIDER.calls, [])
 
     def test_missing_key_shows_human_error_creates_nothing(self):
-        intake_ai.PROVIDER = AnthropicProvider()  # 無金鑰：送網路請求之前就會擋下
+        product_ai.PROVIDER = AnthropicProvider()  # 無金鑰：送網路請求之前就會擋下
         resp = self._post(_GARBLED)
         self.assertEqual(resp.status_code, 400)
         self.assertIn(MISSING_KEY_MESSAGE, resp.text)

@@ -30,13 +30,13 @@ from fastapi.responses import FileResponse, RedirectResponse
 
 from app import mock_data as md
 from app.brand_intelligence import customer_voice as cv_mod
+from app.brand_intelligence import product_ai
 from app.brand_intelligence import report as brand_report_mod
 from app.brand_intelligence import repository as repo
 from app.core import backup as corebackup
 from app.core import interrupts as core_interrupts
 from app.core import prototype_phase as core_prototype_phase
 from app.core.db import new_id
-from app.intake import ai as intake_ai
 from app.intake import repository as intake_repo
 from app.intake import state as intake_state
 from app.shared import web
@@ -108,7 +108,7 @@ def _scan_budget_error(brand_id: str, cost: Optional[float] = None, action: str 
     同一個函式，這裡只是保留原本的呼叫簽名（cost 預設值＝產品快掃的校準值）給既有呼叫端用。
     """
     from app.core import settings as coresettings
-    cost = intake_ai.COST_PRODUCT_SCAN if cost is None else cost
+    cost = product_ai.COST_PRODUCT_SCAN if cost is None else cost
     return coresettings.budget_exceeded_message(
         web.conn, brand_id, cost, action=action, fallback_hint=fallback_hint)
 
@@ -991,7 +991,7 @@ async def product_new_get(request: Request, brand_id: str):
     brand = require_brand(brand_id)
     return templates.TemplateResponse(request, "product_new.html", ctx(
         request, brand=brand, values={"name": "", "url": ""}, errors={},
-        research_cost=intake_ai.COST_PRODUCT_SCAN, nav_current='hub',
+        research_cost=product_ai.COST_PRODUCT_SCAN, nav_current='hub',
     ))
 
 
@@ -1003,7 +1003,7 @@ async def product_new_post(request: Request, brand_id: str, name: str = Form("")
     if not name_c:
         return templates.TemplateResponse(request, "product_new.html", ctx(
             request, brand=brand, values={"name": name, "url": ""}, errors={"name": "請填寫產品名稱。"},
-            research_cost=intake_ai.COST_PRODUCT_SCAN, nav_current='hub',
+            research_cost=product_ai.COST_PRODUCT_SCAN, nav_current='hub',
         ), status_code=400)
     product = repo.create_product(web.conn, brand_id, name=name_c, actor=actor)
     return redirect_with_message(f"/brands/{brand_id}/products/{product['id']}", f"已新增產品「{name_c}」。")
@@ -1030,7 +1030,7 @@ async def product_new_research_post(request: Request, brand_id: str,
     if errors:
         return templates.TemplateResponse(request, "product_new.html", ctx(
             request, brand=brand, values=values, errors=errors,
-            research_cost=intake_ai.COST_PRODUCT_SCAN, nav_current='hub',
+            research_cost=product_ai.COST_PRODUCT_SCAN, nav_current='hub',
         ), status_code=400)
 
     budget_err = _scan_budget_error(brand_id)
@@ -1038,16 +1038,16 @@ async def product_new_research_post(request: Request, brand_id: str,
         errors["url"] = budget_err
         return templates.TemplateResponse(request, "product_new.html", ctx(
             request, brand=brand, values=values, errors=errors,
-            research_cost=intake_ai.COST_PRODUCT_SCAN, nav_current='hub',
+            research_cost=product_ai.COST_PRODUCT_SCAN, nav_current='hub',
         ), status_code=400)
 
     brand_facts = repo.list_brand_facts(web.conn, brand_id, status="confirmed")
-    ok, result = intake_ai.run_product_scan(web.conn, brand_id, name_c, url_c, brand_facts)
+    ok, result = product_ai.run_product_scan(web.conn, brand_id, name_c, url_c, brand_facts)
     if not ok:
         errors["url"] = result
         return templates.TemplateResponse(request, "product_new.html", ctx(
             request, brand=brand, values=values, errors=errors,
-            research_cost=intake_ai.COST_PRODUCT_SCAN, nav_current='hub',
+            research_cost=product_ai.COST_PRODUCT_SCAN, nav_current='hub',
         ), status_code=400)
 
     product = repo.create_product(web.conn, brand_id, name=name_c, actor=actor)
@@ -1089,7 +1089,7 @@ async def product_hub(request: Request, brand_id: str, product_id: str):
     ]
     return templates.TemplateResponse(request, "product_hub.html", ctx(
         request, brand=brand, product=product, cards=cards, economics=economics,
-        rescan_url=rescan_url, research_cost=intake_ai.COST_PRODUCT_SCAN, nav_current='hub',
+        rescan_url=rescan_url, research_cost=product_ai.COST_PRODUCT_SCAN, nav_current='hub',
         **banner_ctx(request),
     ))
 
@@ -1168,7 +1168,7 @@ async def product_rescan_post(request: Request, brand_id: str, product_id: str, 
                                       kind="danger")
 
     brand_facts = repo.list_brand_facts(web.conn, brand_id, status="confirmed")
-    ok, result = intake_ai.run_product_scan(web.conn, brand_id, product["name"], url_c, brand_facts)
+    ok, result = product_ai.run_product_scan(web.conn, brand_id, product["name"], url_c, brand_facts)
     if not ok:
         return redirect_with_message(f"/brands/{brand_id}/products/{product_id}", result,
                                       kind="danger")
@@ -1192,13 +1192,13 @@ async def product_rescan_post(request: Request, brand_id: str, product_id: str, 
 def _product_handoff_prompt(brand: dict, product: dict) -> str:
     brand_facts = repo.list_brand_facts(web.conn, brand["id"], status="confirmed")
     product_facts = repo.list_product_facts(web.conn, brand["id"], product["id"])
-    return intake_ai.build_product_handoff_prompt(brand["name"], product["name"], brand_facts, product_facts)
+    return product_ai.build_product_handoff_prompt(brand["name"], product["name"], brand_facts, product_facts)
 
 
 def _product_handoff_ctx(request: Request, brand: dict, product: dict, values: dict, errors: dict) -> dict:
     return ctx(
         request, brand=brand, product=product, prompt_text=_product_handoff_prompt(brand, product),
-        values=values, errors=errors, fix_cost=intake_ai.COST_PRODUCT_HANDOFF_FIX,
+        values=values, errors=errors, fix_cost=product_ai.COST_PRODUCT_HANDOFF_FIX,
         breadcrumb_items=_product_hub_crumb(brand, product, ("調研交接包", None)), nav_current='hub',
     )
 
@@ -1227,16 +1227,16 @@ async def product_handoff_post(request: Request, brand_id: str, product_id: str,
             request, brand, product, values=values, errors={"raw_text": "請先把外部 AI 的回覆貼進來。"},
         ), status_code=400)
 
-    result = intake_ai.parse_product_handoff_reply(raw_text)
+    result = product_ai.parse_product_handoff_reply(raw_text)
     if result is None:
         budget_err = _scan_budget_error(
-            brand_id, cost=intake_ai.COST_PRODUCT_HANDOFF_FIX, action="請 AI 幫忙整理格式",
+            brand_id, cost=product_ai.COST_PRODUCT_HANDOFF_FIX, action="請 AI 幫忙整理格式",
             fallback_hint="或先自己把貼上的內容改成正確格式，那樣不用花錢。")
         if budget_err:
             return templates.TemplateResponse(request, "product_handoff.html", _product_handoff_ctx(
                 request, brand, product, values=values, errors={"raw_text": budget_err},
             ), status_code=400)
-        ok, fixed = intake_ai.run_product_handoff_fix(web.conn, brand_id, raw_text)
+        ok, fixed = product_ai.run_product_handoff_fix(web.conn, brand_id, raw_text)
         if not ok:
             return templates.TemplateResponse(request, "product_handoff.html", _product_handoff_ctx(
                 request, brand, product, values=values, errors={"raw_text": fixed},

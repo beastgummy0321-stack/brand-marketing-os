@@ -2,7 +2,7 @@
 """app/tests/test_product_scan.py — 產品快掃（GitHub issue #6）。
 
 見 app/main.py 的 /brands/{id}/products/new/research 路由、app/intake/ai.py 的
-run_product_scan。全程用 FakeProvider＋假抓取（monkeypatch intake_ai.fetch_url），
+run_product_scan。全程用 FakeProvider＋假抓取（monkeypatch product_ai.fetch_url），
 不發任何真實網路請求。品牌／產品名一律虛構，絕不可用 Beast Gummy。
 """
 
@@ -26,7 +26,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 import app.main as main  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
 from app.core import settings as coresettings  # noqa: E402
-from app.intake import ai as intake_ai  # noqa: E402
+from app.brand_intelligence import product_ai  # noqa: E402
 from app.llm.providers import (  # noqa: E402
     MISSING_KEY_MESSAGE, AnthropicProvider, FakeProvider, ProviderResponse, Usage,
 )
@@ -82,14 +82,14 @@ class _BaseProductScanTest(unittest.TestCase):
         self._envpatch.start()
         os.environ.pop("ANTHROPIC_API_KEY", None)
         os.environ.pop("BRAND_OS_LLM_MODEL", None)
-        self._orig_provider = intake_ai.PROVIDER
-        self._orig_fetch = intake_ai.fetch_url
-        intake_ai.fetch_url = lambda url: (True, "假抓到的產品頁文字節錄。")
+        self._orig_provider = product_ai.PROVIDER
+        self._orig_fetch = product_ai.fetch_url
+        product_ai.fetch_url = lambda url: (True, "假抓到的產品頁文字節錄。")
         self.brand = bi_repo.create_brand(main.conn, name="虛構茶研所", client_name="測試客戶", actor=ACTOR)
 
     def tearDown(self):
-        intake_ai.PROVIDER = self._orig_provider
-        intake_ai.fetch_url = self._orig_fetch
+        product_ai.PROVIDER = self._orig_provider
+        product_ai.fetch_url = self._orig_fetch
         self._envpatch.stop()
 
     def _post(self, name="虛構回甘烏龍", url="https://example.com/products/oolong"):
@@ -101,7 +101,7 @@ class _BaseProductScanTest(unittest.TestCase):
 
 class ProductScanTest(_BaseProductScanTest):
     def test_scan_success_creates_product_and_pending_facts_with_source(self):
-        intake_ai.PROVIDER = FakeProvider(response=_fake_response(_GOOD_FACTS))
+        product_ai.PROVIDER = FakeProvider(response=_fake_response(_GOOD_FACTS))
         resp = self._post()
         self.assertEqual(resp.status_code, 303)
         product_id = resp.headers["location"].split("/products/")[1].split("?")[0]
@@ -119,27 +119,27 @@ class ProductScanTest(_BaseProductScanTest):
             self.assertEqual(src["title"], "https://example.com/products/oolong")
 
     def test_missing_key_shows_human_error_and_creates_nothing(self):
-        intake_ai.PROVIDER = AnthropicProvider()  # 無金鑰：送網路請求之前就會擋下
+        product_ai.PROVIDER = AnthropicProvider()  # 無金鑰：送網路請求之前就會擋下
         resp = self._post()
         self.assertEqual(resp.status_code, 400)
         self.assertIn(MISSING_KEY_MESSAGE, resp.text)
         self.assertEqual(bi_repo.list_products(main.conn, self.brand["id"]), [])
 
     def test_unparseable_reply_is_honest_failure_and_creates_nothing(self):
-        intake_ai.PROVIDER = FakeProvider(response=_fake_response("這不是 JSON，也不是允許的分類"))
+        product_ai.PROVIDER = FakeProvider(response=_fake_response("這不是 JSON，也不是允許的分類"))
         resp = self._post()
         self.assertEqual(resp.status_code, 400)
-        self.assertIn(intake_ai.PARSE_FAIL_MESSAGE, resp.text)
+        self.assertIn(product_ai.PARSE_FAIL_MESSAGE, resp.text)
         self.assertEqual(bi_repo.list_products(main.conn, self.brand["id"]), [])
 
     def test_over_budget_blocks_before_any_llm_call(self):
         coresettings.set_setting(main.conn, coresettings.INTAKE_BUDGET_SETTING, "0.1")
-        intake_ai.PROVIDER = FakeProvider(response=_fake_response("不該被呼叫"))
+        product_ai.PROVIDER = FakeProvider(response=_fake_response("不該被呼叫"))
         resp = self._post()
         self.assertEqual(resp.status_code, 400)
         self.assertIn("花費上限", resp.text)
         self.assertEqual(bi_repo.list_products(main.conn, self.brand["id"]), [])
-        self.assertEqual(intake_ai.PROVIDER.calls, [])
+        self.assertEqual(product_ai.PROVIDER.calls, [])
 
     def test_blank_url_manual_create_untouched(self):
         """不填網址：原本的「新增這個產品」（純手動）行為完全不變，走 /products/new。"""
@@ -172,19 +172,19 @@ class ProductRescanTest(_BaseProductScanTest):
         )
 
     def test_url_prefilled_from_latest_product_source_reference(self):
-        intake_ai.PROVIDER = FakeProvider(response=_fake_response(_GOOD_FACTS))
+        product_ai.PROVIDER = FakeProvider(response=_fake_response(_GOOD_FACTS))
         resp = self._post()
         product_id = resp.headers["location"].split("/products/")[1].split("?")[0]
         page = self.client.get(f"/brands/{self.brand['id']}/products/{product_id}")
         self.assertIn('value="https://example.com/products/oolong"', page.text)
 
     def test_rescan_success_adds_facts_and_skips_same_label(self):
-        intake_ai.PROVIDER = FakeProvider(response=_fake_response(_GOOD_FACTS))
+        product_ai.PROVIDER = FakeProvider(response=_fake_response(_GOOD_FACTS))
         resp = self._post()
         product_id = resp.headers["location"].split("/products/")[1].split("?")[0]
         self.assertEqual(len(bi_repo.list_product_facts(main.conn, self.brand["id"], product_id)), 2)
 
-        intake_ai.PROVIDER = FakeProvider(response=_fake_response(_RESCAN_ONE_OVERLAP_ONE_NEW))
+        product_ai.PROVIDER = FakeProvider(response=_fake_response(_RESCAN_ONE_OVERLAP_ONE_NEW))
         resp = self._rescan(product_id)
         self.assertEqual(resp.status_code, 303)
         facts = bi_repo.list_product_facts(main.conn, self.brand["id"], product_id)
@@ -196,7 +196,7 @@ class ProductRescanTest(_BaseProductScanTest):
 
     def test_rescan_missing_key_shows_human_error_and_adds_nothing(self):
         product_id = self._create_product()
-        intake_ai.PROVIDER = AnthropicProvider()
+        product_ai.PROVIDER = AnthropicProvider()
         resp = self._rescan(product_id)
         self.assertEqual(resp.status_code, 303)
         page = self.client.get(resp.headers["location"], follow_redirects=True)
@@ -206,17 +206,17 @@ class ProductRescanTest(_BaseProductScanTest):
     def test_rescan_over_budget_blocks_before_any_llm_call(self):
         product_id = self._create_product()
         coresettings.set_setting(main.conn, coresettings.INTAKE_BUDGET_SETTING, "0.1")
-        intake_ai.PROVIDER = FakeProvider(response=_fake_response("不該被呼叫"))
+        product_ai.PROVIDER = FakeProvider(response=_fake_response("不該被呼叫"))
         resp = self._rescan(product_id)
         self.assertEqual(resp.status_code, 303)
         page = self.client.get(resp.headers["location"], follow_redirects=True)
         self.assertIn("花費上限", page.text)
         self.assertEqual(bi_repo.list_product_facts(main.conn, self.brand["id"], product_id), [])
-        self.assertEqual(intake_ai.PROVIDER.calls, [])
+        self.assertEqual(product_ai.PROVIDER.calls, [])
 
     def test_price_found_creates_pending_economics_with_source(self):
         product_id = self._create_product()
-        intake_ai.PROVIDER = FakeProvider(response=_fake_response(_FACTS_WITH_PRICE))
+        product_ai.PROVIDER = FakeProvider(response=_fake_response(_FACTS_WITH_PRICE))
         resp = self._rescan(product_id)
         self.assertEqual(resp.status_code, 303)
         economics = bi_repo.get_product_economics(main.conn, self.brand["id"], product_id)
@@ -230,7 +230,7 @@ class ProductRescanTest(_BaseProductScanTest):
 
     def test_price_missing_leaves_economics_untouched(self):
         product_id = self._create_product()
-        intake_ai.PROVIDER = FakeProvider(response=_fake_response(_GOOD_FACTS))  # 沒有 price 欄位
+        product_ai.PROVIDER = FakeProvider(response=_fake_response(_GOOD_FACTS))  # 沒有 price 欄位
         resp = self._rescan(product_id)
         self.assertEqual(resp.status_code, 303)
         self.assertIsNone(bi_repo.get_product_economics(main.conn, self.brand["id"], product_id))
@@ -241,7 +241,7 @@ class ProductRescanTest(_BaseProductScanTest):
             main.conn, self.brand["id"], product_id, actor=ACTOR,
             selling_price=999.0, currency="USD", confirmed_by=ACTOR,
         )
-        intake_ai.PROVIDER = FakeProvider(response=_fake_response(_FACTS_WITH_PRICE))
+        product_ai.PROVIDER = FakeProvider(response=_fake_response(_FACTS_WITH_PRICE))
         resp = self._rescan(product_id)
         self.assertEqual(resp.status_code, 303)
         economics = bi_repo.get_product_economics(main.conn, self.brand["id"], product_id)
@@ -252,7 +252,7 @@ class ProductRescanTest(_BaseProductScanTest):
 
     def test_pending_economics_one_click_confirm(self):
         product_id = self._create_product()
-        intake_ai.PROVIDER = FakeProvider(response=_fake_response(_FACTS_WITH_PRICE))
+        product_ai.PROVIDER = FakeProvider(response=_fake_response(_FACTS_WITH_PRICE))
         self._rescan(product_id)
         economics = bi_repo.get_product_economics(main.conn, self.brand["id"], product_id)
         self.assertEqual(economics["status"], "pending")
