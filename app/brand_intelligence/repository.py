@@ -128,6 +128,10 @@ BRAND_CHILD_TABLES = (
     ("brand_fact", "品牌事實"),
     ("source_reference", "來源出處"),
     ("brand_report", "品牌報告"),
+    # learning_ledger 平時是 append-only、本層不開 DELETE 入口（鐵則 3，下架只改
+    # expired）。刪整個品牌是那條規則的既有例外：品牌都不存在了，掛在它底下的學習
+    # 留著只會變成指向不存在品牌的孤兒列。
+    ("learning_ledger", "品牌學習紀錄"),
     ("product", "產品"),
 )
 
@@ -265,6 +269,7 @@ PRODUCT_CHILD_TABLES = (
     ("claim", "宣稱"),
     ("official_asset", "官方素材"),
     ("strategy_hypothesis", "策略假設"),
+    ("learning_ledger", "品牌學習紀錄"),
 )
 
 

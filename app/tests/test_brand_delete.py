@@ -59,6 +59,9 @@ class BrandDeleteTest(unittest.TestCase):
         repo.create_brand_report(self.conn, bid, actor="測試員", model="test-model",
                                   llm_task_id=None, brand_version=1, source_fact_count=1,
                                   sections={"定位": "測試段落"})
+        repo.create_learning_ledger_entry(self.conn, bid, learning_text="測試學習",
+                                           applicability_scope="brand", created_by="測試員",
+                                           actor="測試員", source_track="ads", product_id=pid)
         draft = intake_repo.create_draft(self.conn, bid, "測試品牌描述", [], [], actor="測試員")
         intake_repo.create_items(self.conn, bid, draft["id"], [{
             "kind": "品牌事實", "category": "品牌定位", "title": "測試標題",

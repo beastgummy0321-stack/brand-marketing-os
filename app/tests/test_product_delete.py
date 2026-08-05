@@ -45,6 +45,9 @@ class ProductDeleteTest(unittest.TestCase):
         repo.create_brand_performance_baseline(self.conn, brand_id, metric="典型CTR", value=1.2,
                                                 as_of_date="2026-01-01", created_by="測試員",
                                                 product_id=pid, actor="測試員")
+        repo.create_learning_ledger_entry(self.conn, brand_id, learning_text="測試學習",
+                                           applicability_scope="product", created_by="測試員",
+                                           actor="測試員", source_track="ads", product_id=pid)
         return pid
 
     def _row_counts(self, product_id):

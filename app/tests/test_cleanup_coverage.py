@@ -55,9 +55,6 @@ KNOWN_BRAND_GAPS = {
     # 第 5 刀：核心模組接上登記處
     "interrupt",  # 中斷提醒
     "llm_task",   # AI 花費紀錄。留著會讓「這個品牌總共花多少」的統計算錯
-    # 品牌智庫自己的表，卻不在自己的 BRAND_CHILD_TABLES 裡——跟 brand_report 同一種漏。
-    # 這條跟 ads／orders 那些不同，不必等第 4、5 刀，隨時可以補。
-    "learning_ledger",
 }
 
 KNOWN_PRODUCT_GAPS = {
@@ -65,8 +62,6 @@ KNOWN_PRODUCT_GAPS = {
     "campaign_cycle_product", "creative_rule_card", "creative_variant", "derived_metric",
     "experiment_cell", "marketing_goal", "performance_reading", "performance_snapshot",
     "publishing_package", "recommendation",
-    # 同上，品牌智庫自己的表
-    "learning_ledger",
 }
 
 
