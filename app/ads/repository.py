@@ -21,6 +21,7 @@ from typing import Optional
 
 from app.ads import budget as budget_calc
 from app.brand_intelligence import repository as bi
+from app.core import cleanup
 from app.core.audit import write_audit
 from app.core.db import new_id, now_iso
 
@@ -574,16 +575,86 @@ def deactivate_learning_ledger_entry(conn: sqlite3.Connection, brand_id: str, en
     return bi.deactivate_learning_ledger_entry(conn, brand_id, entry_id, actor=actor)
 
 
+# ---------------------------------------------------------------------------
+# 刪品牌（第 4 刀「廣告模組接上清理登記處」）
+#
+# 排序沿用 CYCLE_CASCADE_TABLES（刪檔期時已經按外鍵拓樸排好序的正確答案），條件從
+# campaign_cycle_id 換成 brand_id；扣掉其中兩張不屬於本模組的表——interrupt（core 的
+# 打斷佇列）與 cycle_shopee_code（orders 的蝦皮期別配碼）——刪檔期時本模組去清它們是
+# 既有行為不動，但刪品牌時這兩張歸第 5 刀，不在本模組宣告範圍內。
+#
+# 再接上 CYCLE_CASCADE_TABLES 之外、只在品牌層才要清的表（先子後父）：
+#   - ad_revenue_coefficient_error_log 先於 ad_revenue_coefficient（前者引用後者）
+#   - ad_revenue_coefficient 引用 campaign_cycle，且是判讀之後才累積的校準值，
+#     排在 CYCLE_CASCADE_TABLES 裡的 reading_snapshot 之後
+#   - activation_authorization 排在 campaign_activation 之後（後者引用前者）
+#   - success_criterion 排在 marketing_goal 之前（前者引用後者）；marketing_goal
+#     也被 campaign_cycle_goal 引用，campaign_cycle_goal 已經排在更前面
+#   - offer／brand_checklist_item／ga4_summary／ga4_sync_status 無外鍵，順序不拘
+#   - creative_rule_card 排在 campaign_cycle 之前（前者引用後者）
+#   - campaign_cycle 是這一串（ad_account 之外）全部東西的根，必須最後刪
+_BRAND_ONLY_CASCADE_TABLES = (
+    ("ad_revenue_coefficient_error_log", "灌水係數事後誤差紀錄"),
+    ("ad_revenue_coefficient", "回購灌水校準係數"),
+    ("activation_authorization", "投放啟動具名授權"),
+    ("success_criterion", "成功標準"),
+    ("marketing_goal", "行銷目標"),
+    ("offer", "優惠方案"),
+    ("brand_checklist_item", "品牌層檢查清單項目"),
+    ("ga4_summary", "GA4 流量彙總"),
+    ("ga4_sync_status", "GA4 同步驗證狀態"),
+    ("creative_rule_card", "候選規則卡"),
+    ("campaign_cycle", "廣告檔期"),
+)
+
+# 刪品牌時本模組會清掉的完整表清單。count_brand_data／delete_brand_data 共用同一份，
+# 不各自維護一份——「清點清一份、清除清另一份，兩邊不同步」正是這整串 bug 的根因。
+#
+# ad_account／discovered_campaign 沒有 brand_id 欄位，是帳號層資料，刻意不在這份清單裡：
+# 誤刪它們會弄壞別的品牌。
+BRAND_CASCADE_TABLES = tuple(
+    (table, label) for table, label in CYCLE_CASCADE_TABLES
+    if table not in ("interrupt", "cycle_shopee_code")
+) + _BRAND_ONLY_CASCADE_TABLES
+
+
 def count_brand_data(conn: sqlite3.Connection, brand_id: str) -> list:
-    """刪品牌前的清點（比照 brand_intelligence.count_brand_data 的回傳格式）。"""
+    """刪品牌前的清點（比照 brand_intelligence.count_brand_data 的回傳格式），給刪除
+    確認頁列出「按下去會消失什麼」。跟 delete_brand_data 讀同一份 BRAND_CASCADE_TABLES。"""
     counts = []
-    for table, label in (("campaign_cycle", "廣告檔期"),
-                         ("performance_snapshot", "成效數據"),
-                         ("creative_variant", "廣告素材"),
-                         ("publishing_package", "投放交接包")):
+    for table, label in BRAND_CASCADE_TABLES:
         n = conn.execute(
             f"SELECT COUNT(*) AS c FROM {table} WHERE brand_id = ?", (brand_id,)
         ).fetchone()["c"]
         if n:
             counts.append((label, n))
     return counts
+
+
+def delete_brand_data(conn: sqlite3.Connection, brand_id: str) -> dict:
+    """清掉本模組掛在該品牌下的資料（BRAND_CASCADE_TABLES 這 37 張子表），登記進
+    app.core.cleanup 給 delete_brand() 呼叫用。只下 DELETE、不 commit、不 rollback
+    （Q4 單一交易、全有全無，commit 與 rollback 統一在 brand_intelligence.delete_brand()）。
+    """
+    counts = dict(count_brand_data(conn, brand_id))
+    for table, _label in BRAND_CASCADE_TABLES:
+        conn.execute(f"DELETE FROM {table} WHERE brand_id = ?", (brand_id,))
+    return counts
+
+
+# ---------------------------------------------------------------------------
+# 清理登記處（第 2 刀）：向 app.core.cleanup 登記本模組的清點／清除函式，刪品牌時
+# 由登記處統一呼叫，本模組不必再被別人手寫死「記得通知它」。
+#
+# 登記順序＝跨模組刪除順序：舊資料庫的 learning_ledger 可能帶
+# REFERENCES campaign_cycle(id) 外鍵（新資料庫沒有，見
+# app/brand_intelligence/migrations/0004_learning_ledger.sql 的說明），
+# learning_ledger 由「品牌智庫」清、campaign_cycle 由本模組清，所以「品牌智庫」必須
+# 排在本模組前面登記，DELETE 才不會被 FK 擋下來。這是結構保證、不是巧合：本檔檔頭
+# `from app.brand_intelligence import repository as bi`，Python import 這個模組時
+# 一定會先執行完它檔尾的 cleanup.register("品牌智庫", ...)，本模組的 register() 才會
+# 跟著跑（見 app/tests/test_ads_brand_cleanup.py 的順序釘子測試）。
+# ---------------------------------------------------------------------------
+
+cleanup.register("廣告", count_brand=count_brand_data, delete_brand=delete_brand_data,
+                 brand_tables={t for t, _ in BRAND_CASCADE_TABLES})

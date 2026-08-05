@@ -19,6 +19,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from app.ads import repository as ads_repo  # noqa: F401  # import 才會觸發它的自我登記
 from app.brand_intelligence import repository as repo
 from app.core import cleanup, db
 from app.intake import repository as intake_repo  # noqa: F401  # import 才會觸發它的自我登記
@@ -38,17 +39,6 @@ _PRODUCT_ROOT_TABLES = {"product"}
 # ---------------------------------------------------------------------------
 
 KNOWN_BRAND_GAPS = {
-    # 第 4 刀：廣告模組接上登記處
-    "activation_authorization", "ad_revenue_coefficient", "ad_revenue_coefficient_error_log",
-    "adoption_decision", "brand_checklist_item", "campaign_activation", "campaign_cycle",
-    "campaign_cycle_goal", "campaign_cycle_hypothesis", "campaign_cycle_product",
-    "campaign_plan", "campaign_plan_option", "creative_brief", "creative_rule_card",
-    "creative_variant", "cycle_checklist_item", "cycle_checkpoint", "cycle_code_verification",
-    "cycle_voucher_code", "derived_metric", "experiment_cell", "external_ad_mapping",
-    "final_asset", "finding", "ga4_summary", "ga4_sync_status", "marketing_goal", "offer",
-    "performance_reading", "performance_snapshot", "publishing_package", "reading_snapshot",
-    "reading_snapshot_input", "recommendation", "rule_dissent", "settlement_version",
-    "success_criterion",
     # 第 5 刀：訂單模組接上登記處
     "customer", "cycle_shopee_code", "order_item", "order_record", "pharmacy_batch",
     "policy_change_log", "shopee_report_row", "sku_cost", "sku_cost_version",
