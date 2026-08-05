@@ -1,0 +1,204 @@
+# -*- coding: utf-8 -*-
+"""app/tests/test_dashboard_guide_cards_wiring.py — 票 04-guide-card-engine：
+儀表板 API 接上指南卡引擎真貨源（app/dashboard/guide_cards.py 的純函數邏輯已在
+test_dashboard_guide_cards.py 測過，這裡只驗證 API 有把真實資料組成 facts 餵給引擎，
+以及跨品牌總覽卡／單品牌駕駛艙分別拿到「第一筆」與「完整清單」）。
+
+隔離測試資料庫（BRAND_OS_DB 指向 tmp 檔），TestClient 模式。測試品牌一律虛構。
+"""
+
+import atexit
+import os
+import shutil
+import tempfile
+import unittest
+
+_tmpdir = tempfile.mkdtemp(prefix="brand_os_dashboard_guide_")
+os.environ["BRAND_OS_DB"] = str(os.path.join(_tmpdir, "test.db"))
+os.environ["BRAND_OS_BACKUP_DIR"] = str(os.path.join(_tmpdir, "backups"))
+os.environ["BRAND_OS_UPLOADS"] = str(os.path.join(_tmpdir, "uploads"))
+
+from fastapi.testclient import TestClient  # noqa: E402
+
+import app.main as main  # noqa: E402
+from app.brand_intelligence import repository as bi_repo  # noqa: E402
+from app.core.db import new_id, now_iso  # noqa: E402
+
+main.reopen_connection()
+
+
+def _cleanup():
+    try:
+        main.conn.close()
+    except Exception:
+        pass
+    shutil.rmtree(_tmpdir, ignore_errors=True)
+
+
+atexit.register(_cleanup)
+
+ACTOR = "測試員"
+
+
+def _insert_cycle(conn, brand_id: str, *, status: str, start_date: str = "2026-07-20") -> str:
+    """比照 test_dashboard_overview.py：檔期用公開的 create_cycle 對本票情境過重，
+    直接塞一列（測試檔豁免跨層 SQL 掃描）。"""
+    cycle_id = new_id("ccy")
+    ts = now_iso()
+    conn.execute(
+        "INSERT INTO campaign_cycle (id, brand_id, product_scope_json, objective, budget,"
+        " currency, start_date, end_date, channels_json, status, archived, plan_version,"
+        " phase, created_at, updated_at) VALUES (?, ?, '[]', 'sales', 5000, 'TWD', ?, ?,"
+        " '[\"meta\"]', ?, 0, 0, 'normal', ?, ?)",
+        (cycle_id, brand_id, start_date, start_date, status, ts, ts),
+    )
+    conn.commit()
+    return cycle_id
+
+
+def _insert_reading(conn, brand_id: str, cycle_id: str) -> None:
+    conn.execute(
+        "INSERT INTO performance_reading (id, brand_id, campaign_cycle_id, status,"
+        " rule_result_json, created_at) VALUES (?, ?, ?, 'maintain', '{}', ?)",
+        (new_id("prd"), brand_id, cycle_id, now_iso()),
+    )
+    conn.commit()
+
+
+def _insert_next_cycle_recommendation(conn, brand_id: str, cycle_id: str) -> None:
+    ts = now_iso()
+    conn.execute(
+        "INSERT INTO recommendation (id, brand_id, campaign_cycle_id, recommendation_type,"
+        " content_json, status, created_at, updated_at) VALUES (?, ?, ?, 'next_cycle',"
+        " '{}', 'GENERATED', ?, ?)",
+        (new_id("rec"), brand_id, cycle_id, ts, ts),
+    )
+    conn.commit()
+
+
+class OverviewNextStepWiringTest(unittest.TestCase):
+    """跨品牌總覽卡「最重要一件下一步」＝指南卡引擎排序後的第一筆。"""
+
+    def setUp(self):
+        self.client = TestClient(main.app)
+
+    def _card(self, brand_id):
+        body = self.client.get("/api/dashboard/overview").json()
+        return next(c for c in body["data"] if c["brand_id"] == brand_id)
+
+    def test_pending_facts_surface_as_next_step(self):
+        brand = bi_repo.create_brand(
+            main.conn, name=f"虛構待確認茶行{abs(hash(self.id())) % 100000}",
+            client_name=None, actor=ACTOR)
+        bi_repo.create_brand_fact(
+            main.conn, brand["id"], actor=ACTOR, fact_type="other",
+            label="測試事實", value="測試值", status="pending")
+
+        card = self._card(brand["id"])
+        self.assertIsNotNone(card["next_step"])
+        self.assertIn("1", card["next_step"]["title"])
+        self.assertEqual(card["next_step"]["action_url"], f"/brands/{brand['id']}/hub/facts")
+
+    def test_cycle_stuck_before_launch_surfaces_stage_as_next_step(self):
+        brand = bi_repo.create_brand(
+            main.conn, name=f"虛構卡關雜貨店{abs(hash(self.id())) % 100000}",
+            client_name=None, actor=ACTOR)
+        cycle_id = _insert_cycle(main.conn, brand["id"], status="PLANNING")
+
+        card = self._card(brand["id"])
+        self.assertIsNotNone(card["next_step"])
+        self.assertIn("計畫", card["next_step"]["title"])
+        self.assertEqual(card["next_step"]["action_url"], f"/brands/{brand['id']}/ads/{cycle_id}")
+
+    def test_reading_unread_beats_pending_facts_in_priority(self):
+        """判讀出爐未讀（reading_unread）比待確認事實（pending_facts）先登記，
+        兩條規則同時觸發時 next_step 該是 reading_unread。"""
+        brand = bi_repo.create_brand(
+            main.conn, name=f"虛構判讀待看茶行{abs(hash(self.id())) % 100000}",
+            client_name=None, actor=ACTOR)
+        cycle_id = _insert_cycle(main.conn, brand["id"], status="EVALUATING")
+        _insert_reading(main.conn, brand["id"], cycle_id)
+        bi_repo.create_brand_fact(
+            main.conn, brand["id"], actor=ACTOR, fact_type="other",
+            label="測試事實", value="測試值", status="pending")
+
+        card = self._card(brand["id"])
+        self.assertIsNotNone(card["next_step"])
+        self.assertIn("判讀", card["next_step"]["title"])
+        self.assertEqual(card["next_step"]["action_url"],
+                         f"/brands/{brand['id']}/ads/{cycle_id}/performance")
+
+    def test_next_cycle_draft_ready_surfaces_once_reading_is_used(self):
+        brand = bi_repo.create_brand(
+            main.conn, name=f"虛構下期已備妥雜貨店{abs(hash(self.id())) % 100000}",
+            client_name=None, actor=ACTOR)
+        cycle_id = _insert_cycle(main.conn, brand["id"], status="CLOSED")
+        _insert_reading(main.conn, brand["id"], cycle_id)
+        _insert_next_cycle_recommendation(main.conn, brand["id"], cycle_id)
+
+        card = self._card(brand["id"])
+        self.assertIsNotNone(card["next_step"])
+        self.assertIn("下期草案", card["next_step"]["title"])
+        self.assertEqual(card["next_step"]["action_url"],
+                         f"/brands/{brand['id']}/ads/{cycle_id}/performance")
+
+
+class CockpitGuideCardsWiringTest(unittest.TestCase):
+    """單品牌駕駛艙拿到完整清單（最多 3 件），沒有待辦是空清單。"""
+
+    def setUp(self):
+        self.client = TestClient(main.app)
+
+    def _guide_cards(self, brand_id):
+        body = self.client.get(f"/api/dashboard/brands/{brand_id}/cockpit").json()
+        return body["data"]["guide_cards"]
+
+    def test_empty_list_when_nothing_to_do(self):
+        brand = bi_repo.create_brand(
+            main.conn, name=f"虛構一切正常茶行{abs(hash(self.id())) % 100000}",
+            client_name=None, actor=ACTOR)
+        self.assertEqual(self._guide_cards(brand["id"]), [])
+
+    def test_stuck_cycle_and_pending_facts_both_surface_up_to_three(self):
+        brand = bi_repo.create_brand(
+            main.conn, name=f"虛構雙待辦雜貨店{abs(hash(self.id())) % 100000}",
+            client_name=None, actor=ACTOR)
+        _insert_cycle(main.conn, brand["id"], status="PRODUCTION")
+        bi_repo.create_brand_fact(
+            main.conn, brand["id"], actor=ACTOR, fact_type="other",
+            label="測試事實", value="測試值", status="pending")
+
+        cards = self._guide_cards(brand["id"])
+        self.assertEqual(len(cards), 2)
+        titles = " ".join(c["title"] for c in cards)
+        self.assertIn("素材", titles)
+        self.assertIn("事實", titles)
+
+    def test_cockpit_endpoint_does_not_write_any_row(self):
+        """接口鐵則：只讀。指南卡的資料源多讀了 campaign_cycle／performance_reading／
+        recommendation／brand_fact 幾張表，補進只讀防線的快照清單裡一起驗。"""
+        brand = bi_repo.create_brand(
+            main.conn, name=f"虛構只讀驗證茶行{abs(hash(self.id())) % 100000}",
+            client_name=None, actor=ACTOR)
+        cycle_id = _insert_cycle(main.conn, brand["id"], status="EVALUATING")
+        _insert_reading(main.conn, brand["id"], cycle_id)
+        bi_repo.create_brand_fact(
+            main.conn, brand["id"], actor=ACTOR, fact_type="other",
+            label="測試事實", value="測試值", status="pending")
+
+        tables = ["brand", "campaign_cycle", "performance_reading", "recommendation",
+                 "brand_fact"]
+
+        def _snapshot():
+            return {t: [dict(r) for r in main.conn.execute(f"SELECT * FROM {t} ORDER BY id")]
+                    for t in tables}
+
+        before = _snapshot()
+        self.client.get(f"/api/dashboard/brands/{brand['id']}/cockpit")
+        self.client.get(f"/api/dashboard/brands/{brand['id']}/cockpit")
+        after = _snapshot()
+        self.assertEqual(before, after)
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -2,10 +2,15 @@ import type { DashboardBrandCard } from "@/lib/api";
 import { formatCurrency, formatMomPct } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
-/** 品牌卡片（票 02-overview-cards）：健康度燈號＋本月營收環比＋檔期狀態＋下一步留位。
+/** 品牌卡片（票 02-overview-cards）：健康度燈號＋本月營收環比＋檔期狀態＋
+ * 最重要一件下一步（票 04-guide-card-engine 接上指南卡引擎真貨源）。
  * 點卡片進單品牌駕駛艙（票 03）——`?brand=` 查詢字串而不是路徑片段，直接落在 SPA
  * 掛載根目錄 `/app/`，重新整理／直接貼網址都吃得到（StaticFiles html=True 只認
- * 掛載根目錄的 index.html，子路徑沒有 catch-all 會 404，見票 03 實作筆記）。 */
+ * 掛載根目錄的 index.html，子路徑沒有 catch-all 會 404，見票 03 實作筆記）。
+ *
+ * next_step 連的網址（舊功能頁）跟卡片本身（進新殼駕駛艙）不同，兩個連結不能用巢狀
+ * `<a>`（無效 HTML）；改用 onClick + stopPropagation 讓 next_step 自己跳轉、
+ * 不觸發外層卡片的導覽。 */
 
 const HEALTH_LABEL: Record<DashboardBrandCard["health"], string> = {
   red: "需要關注",
@@ -49,9 +54,28 @@ export function BrandCard({ card }: { card: DashboardBrandCard }) {
         檔期：{card.active_cycle ? card.active_cycle.status_label : "尚無進行中檔期"}
       </p>
 
-      <p className="text-sm text-muted-foreground">
-        {card.next_step ?? "下一步指南卡即將推出"}
-      </p>
+      {card.next_step ? (
+        <span
+          role="link"
+          tabIndex={0}
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            window.location.href = card.next_step!.action_url;
+          }}
+          onKeyDown={(e) => {
+            if (e.key !== "Enter") return;
+            e.preventDefault();
+            e.stopPropagation();
+            window.location.href = card.next_step!.action_url;
+          }}
+          className="text-sm font-medium text-primary underline-offset-4 hover:underline"
+        >
+          {card.next_step.title} →
+        </span>
+      ) : (
+        <p className="text-sm text-muted-foreground">一切正常</p>
+      )}
     </a>
   );
 }

@@ -9,12 +9,16 @@ from calendar import monthrange
 from datetime import date
 from typing import Optional
 
+from app.ads import nextcycle as ads_nextcycle
 from app.ads import performance as ads_performance
+from app.ads import reading as ads_reading
 from app.ads import repository as ads_repo
+from app.ads import stages as ads_stages
 from app.ads import sync as ads_sync
-from app.ads.routes_common import CYCLE_STATUS_LABELS
+from app.ads.routes_common import CYCLE_STATUS_LABELS, derive_cycle_stage
 from app.brand_intelligence import repository as bi_repo
 from app.core import interrupts as core_interrupts
+from app.dashboard import guide_cards
 from app.dashboard.health import brand_health
 from app.orders import repository as orders_repo
 
@@ -42,14 +46,17 @@ def _revenue_and_mom(conn, brand_id: str, today: str) -> tuple:
     return current, mom_pct
 
 
-def _active_cycle_summary(conn, brand_id: str) -> Optional[dict]:
+def _latest_cycle(conn, brand_id: str) -> Optional[dict]:
     """最新一期未封存的檔期（依 list_cycles 既有排序：start_date DESC）。沒有任何檔期就
     回 None——「還沒開過檔期」跟「這期沒在投放」是兩件事，但本票只做狀態呈現，
     細分留給 03／04。"""
     cycles = ads_repo.list_cycles(conn, brand_id)
-    if not cycles:
+    return cycles[0] if cycles else None
+
+
+def _cycle_summary(cycle: Optional[dict]) -> Optional[dict]:
+    if not cycle:
         return None
-    cycle = cycles[0]
     return {
         "id": cycle["id"],
         "status": cycle["status"],
@@ -57,18 +64,57 @@ def _active_cycle_summary(conn, brand_id: str) -> Optional[dict]:
     }
 
 
+# ---------------------------------------------------------------------------
+# 下一步指南卡（票 04-guide-card-engine，規格 0001）：純函數引擎在
+# app/dashboard/guide_cards.py，這裡只負責組 facts。接口鐵則：只透過各模組的公開
+# 查詢函式取數——derive_cycle_stage 是 app.ads.routes_common 公開函式（本票把它從
+# 私有改公開），facts 契約見 guide_cards.py 檔頭說明。
+# ---------------------------------------------------------------------------
+
+def _cycle_stage_label(conn, brand_id: str, cycle: dict) -> Optional[str]:
+    """stage_label 為 None＝已經在成效格（第 5 格），指南卡不算「卡住」。"""
+    stage_index = derive_cycle_stage(conn, brand_id, cycle)
+    return ads_stages.STAGE_LABELS[stage_index - 1] if stage_index < 5 else None
+
+
+def _guide_card_facts(conn, brand_id: str, cycle: Optional[dict]) -> dict:
+    pending_facts = bi_repo.list_brand_facts(conn, brand_id, status="pending")
+    active_cycle = None
+    reading_ready = False
+    next_cycle_draft_ready = False
+    if cycle:
+        active_cycle = {"id": cycle["id"], "stage_label": _cycle_stage_label(conn, brand_id, cycle)}
+        reading_ready = bool(ads_reading.load(conn, brand_id, cycle["id"])["cycle"])
+        next_cycle_draft_ready = ads_nextcycle.load(conn, brand_id, cycle["id"]) is not None
+    return {
+        "brand_id": brand_id,
+        "pending_facts_count": len(pending_facts),
+        "active_cycle": active_cycle,
+        "reading_ready": reading_ready,
+        "next_cycle_draft_ready": next_cycle_draft_ready,
+    }
+
+
+def _guide_cards(conn, brand_id: str, cycle: Optional[dict]) -> list:
+    return guide_cards.build(_guide_card_facts(conn, brand_id, cycle))
+
+
 def _brand_card(conn, brand: dict, today: str) -> dict:
     open_interrupts = core_interrupts.list_open(conn, brand_id=brand["id"], today=today,
                                                 archive_stale=False)
     revenue, revenue_mom_pct = _revenue_and_mom(conn, brand["id"], today)
+    cycle = _latest_cycle(conn, brand["id"])
+    cards = _guide_cards(conn, brand["id"], cycle)
     return {
         "brand_id": brand["id"],
         "brand_name": brand["name"],
         "health": brand_health(row["severity"] for row in open_interrupts),
         "revenue_this_month": revenue,
         "revenue_mom_pct": revenue_mom_pct,
-        "active_cycle": _active_cycle_summary(conn, brand["id"]),
-        "next_step": None,  # 本票先留位，04-guide-card-engine 接上真貨源
+        "active_cycle": _cycle_summary(cycle),
+        # 跨品牌總覽卡「最重要一件下一步」＝指南卡引擎排序後的第一筆（規格：
+        # 「跨品牌總覽卡上的『最重要一件下一步』同時接上真貨源」）。
+        "next_step": cards[0] if cards else None,
     }
 
 
@@ -159,6 +205,7 @@ def cockpit(conn, brand_id: str, *, today: Optional[str] = None) -> dict:
     months = _months_window(today, _TREND_MONTHS)
     trend = _monthly_trend(conn, brand_id, months)
 
+    cycle = _latest_cycle(conn, brand_id)
     return {
         "kpis": {
             "revenue": {"value": revenue, "mom_pct": revenue_mom, "trend": trend["revenue"]},
@@ -167,4 +214,7 @@ def cockpit(conn, brand_id: str, *, today: Optional[str] = None) -> dict:
             "orders": {"value": orders, "mom_pct": orders_mom, "trend": trend["orders"]},
         },
         "chart": {"months": months, "revenue": trend["revenue"], "spend": trend["spend"]},
+        # 駕駛艙常駐下一步指南卡（票 04-guide-card-engine）：最多 3 件，沒有待辦是空清單，
+        # 前端顯示「一切正常」。
+        "guide_cards": _guide_cards(conn, brand_id, cycle),
     }

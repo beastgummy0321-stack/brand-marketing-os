@@ -136,8 +136,10 @@ class DashboardOverviewApiTest(unittest.TestCase):
         card = self._card(body["data"], self.brand_red["id"])
         self.assertIsNone(card["active_cycle"])
 
-    def test_next_step_is_placeholder_for_now(self):
-        """規格：下一步是「本票先留位，04 接上真貨源」——先確認欄位存在且為 None。"""
+    def test_next_step_is_none_when_no_guide_card_rule_triggers(self):
+        """票 04-guide-card-engine：next_step 接上指南卡引擎的真貨源。brand_green 這裡
+        的 LIVE 檔期已經在成效格（stage_label 為 None）、沒有判讀、沒有待確認事實，
+        四條規則都不觸發，next_step 該是 None，不是佔位字串。"""
         body = self.client.get("/api/dashboard/overview").json()
         card = self._card(body["data"], self.brand_green["id"])
         self.assertIn("next_step", card)

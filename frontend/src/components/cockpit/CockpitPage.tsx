@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { CockpitChart } from "@/components/cockpit/CockpitChart";
+import { GuideCards } from "@/components/cockpit/GuideCards";
 import { KpiCard } from "@/components/cockpit/KpiCard";
 import { EmptyState } from "@/components/layout/EmptyState";
 import { fetchCockpit, type CockpitData } from "@/lib/api";
@@ -70,6 +71,8 @@ export function CockpitPage({ brandId }: { brandId: string }) {
       </div>
 
       <CockpitChart chart={data.chart} />
+
+      <GuideCards cards={data.guide_cards} />
     </div>
   );
 }

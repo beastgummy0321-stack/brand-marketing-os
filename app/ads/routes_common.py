@@ -158,10 +158,12 @@ def _cycle_view(conn, brand_id: str, cycle: dict) -> dict:
     }
 
 
-def _derive_cycle_stage(conn, brand_id: str, cycle: dict) -> int:
+def derive_cycle_stage(conn, brand_id: str, cycle: dict) -> int:
     """這期檔期落在五格進度軌的第幾格（1–5）。訊號取法：素材是否已採用、交接包是否已
-    建置／已啟用，交給 app/ads/stages.derive_stage() 判斷（#43）。共用於 hub 卡片（#45）
-    與五個階段頁頂端的進度軌（#46），避免同一套判讀邏輯抄兩份。"""
+    建置／已啟用，交給 app/ads/stages.derive_stage() 判斷（#43）。共用於 hub 卡片（#45）、
+    五個階段頁頂端的進度軌（#46）、駕駛艙指南卡引擎（票 04-guide-card-engine），
+    避免同一套判讀邏輯抄兩份。公開函式（無底線）：dashboard 模組接口鐵則只能透過
+    各模組公開查詢函式取數。"""
     creatives = ads_creative.list_variants(conn, brand_id, cycle["id"])
     packages = ads_handoff.list_packages(conn, brand_id, cycle["id"])
     return stages.derive_stage(
@@ -176,7 +178,7 @@ def _derive_cycle_stage(conn, brand_id: str, cycle: dict) -> int:
 def _hub_stage_info(conn, brand_id: str, cycle: dict) -> dict:
     """hub「進行中檔期」卡用：這期落在五格的哪一格、剩幾天（GitHub issue #45；修憲落地 V3
     補上 stage_index，畫面要顯示「第 N 步／共 5 步」，不再只有格名一個詞）。"""
-    stage_index = _derive_cycle_stage(conn, brand_id, cycle)
+    stage_index = derive_cycle_stage(conn, brand_id, cycle)
     days_left = max(0, (date.fromisoformat(cycle["end_date"]) - date.today()).days)
     return {"stage_index": stage_index, "stage_label": stages.STAGE_LABELS[stage_index - 1],
             "days_left": days_left}
@@ -252,7 +254,7 @@ def _cycle_progress_items(conn, brand_id: str, cycle: dict) -> list:
     progress_rail(items, collapsed=True)：只有當前格與下一格會渲染完整名稱，其餘一律收合成
     序號。已完成的格額外帶上對應階段頁網址——collapsed 模式下 macro 會把它收合成小圖示但
     仍可點（「已完成階段可點回顧」），未完成的格網址一律傳 None，天生不可點。"""
-    stage_index = _derive_cycle_stage(conn, brand_id, cycle)
+    stage_index = derive_cycle_stage(conn, brand_id, cycle)
     cycle_id = cycle["id"]
     stage_urls = [
         f"/brands/{brand_id}/ads/{cycle_id}",

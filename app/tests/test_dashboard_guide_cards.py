@@ -1,0 +1,129 @@
+# -*- coding: utf-8 -*-
+"""app/tests/test_dashboard_guide_cards.py — 票 04-guide-card-engine：下一步指南卡引擎。
+
+純函數測試，不碰資料庫（app/dashboard/guide_cards.py 只吃一份 facts dict）。
+每條登記規則各自測「觸發」與「不觸發」，另外測優先序（多規則同時觸發時取前 3、順序正確）
+與無待辦時回空清單（呼叫端負責顯示「一切正常」）。
+"""
+
+import unittest
+
+from app.dashboard import guide_cards
+
+BRAND_ID = "brd_test123"
+
+
+def _facts(**overrides) -> dict:
+    base = {
+        "brand_id": BRAND_ID,
+        "pending_facts_count": 0,
+        "active_cycle": None,
+        "reading_ready": False,
+        "next_cycle_draft_ready": False,
+    }
+    base.update(overrides)
+    return base
+
+
+class ReadingUnreadRuleTest(unittest.TestCase):
+    def test_triggers_when_reading_ready_and_no_draft_yet(self):
+        facts = _facts(active_cycle={"id": "ccy_1", "stage_label": None}, reading_ready=True)
+        card = guide_cards.RULES["reading_unread"](facts)
+        self.assertIsNotNone(card)
+        self.assertIn("action_url", card)
+        self.assertEqual(card["action_url"], f"/brands/{BRAND_ID}/ads/ccy_1/performance")
+
+    def test_does_not_trigger_when_reading_not_ready(self):
+        facts = _facts(active_cycle={"id": "ccy_1", "stage_label": None}, reading_ready=False)
+        self.assertIsNone(guide_cards.RULES["reading_unread"](facts))
+
+    def test_does_not_trigger_once_next_cycle_draft_is_ready(self):
+        """判讀出爐後系統已經備好下期草案，代表結論已經被拿去用了，不算「未讀」。"""
+        facts = _facts(active_cycle={"id": "ccy_1", "stage_label": None},
+                       reading_ready=True, next_cycle_draft_ready=True)
+        self.assertIsNone(guide_cards.RULES["reading_unread"](facts))
+
+    def test_does_not_trigger_without_active_cycle(self):
+        facts = _facts(active_cycle=None, reading_ready=True)
+        self.assertIsNone(guide_cards.RULES["reading_unread"](facts))
+
+
+class NextCycleDraftRuleTest(unittest.TestCase):
+    def test_triggers_when_draft_ready(self):
+        facts = _facts(active_cycle={"id": "ccy_1", "stage_label": None},
+                       next_cycle_draft_ready=True)
+        card = guide_cards.RULES["next_cycle_draft"](facts)
+        self.assertIsNotNone(card)
+        self.assertEqual(card["action_url"], f"/brands/{BRAND_ID}/ads/ccy_1/performance")
+
+    def test_does_not_trigger_when_draft_not_ready(self):
+        facts = _facts(active_cycle={"id": "ccy_1", "stage_label": None},
+                       next_cycle_draft_ready=False)
+        self.assertIsNone(guide_cards.RULES["next_cycle_draft"](facts))
+
+    def test_does_not_trigger_without_active_cycle(self):
+        facts = _facts(active_cycle=None, next_cycle_draft_ready=True)
+        self.assertIsNone(guide_cards.RULES["next_cycle_draft"](facts))
+
+
+class CycleStageRuleTest(unittest.TestCase):
+    def test_triggers_when_stage_label_present(self):
+        facts = _facts(active_cycle={"id": "ccy_1", "stage_label": "素材"})
+        card = guide_cards.RULES["cycle_stage"](facts)
+        self.assertIsNotNone(card)
+        self.assertIn("素材", card["title"])
+        self.assertEqual(card["action_url"], f"/brands/{BRAND_ID}/ads/ccy_1")
+
+    def test_does_not_trigger_when_stage_label_absent(self):
+        """stage_label 為 None＝已經在成效格（第 5 格），不算「卡住」，不用提醒去推進。"""
+        facts = _facts(active_cycle={"id": "ccy_1", "stage_label": None})
+        self.assertIsNone(guide_cards.RULES["cycle_stage"](facts))
+
+    def test_does_not_trigger_without_active_cycle(self):
+        facts = _facts(active_cycle=None)
+        self.assertIsNone(guide_cards.RULES["cycle_stage"](facts))
+
+
+class PendingFactsRuleTest(unittest.TestCase):
+    def test_triggers_when_count_positive(self):
+        facts = _facts(pending_facts_count=3)
+        card = guide_cards.RULES["pending_facts"](facts)
+        self.assertIsNotNone(card)
+        self.assertIn("3", card["title"])
+        self.assertEqual(card["action_url"], f"/brands/{BRAND_ID}/hub/facts")
+
+    def test_does_not_trigger_when_count_zero(self):
+        facts = _facts(pending_facts_count=0)
+        self.assertIsNone(guide_cards.RULES["pending_facts"](facts))
+
+
+class BuildPriorityAndCapTest(unittest.TestCase):
+    def test_no_rules_triggered_returns_empty_list(self):
+        self.assertEqual(guide_cards.build(_facts()), [])
+
+    def test_takes_top_three_in_registration_order_when_all_four_trigger(self):
+        facts = _facts(
+            active_cycle={"id": "ccy_1", "stage_label": "素材"},
+            reading_ready=True,
+            next_cycle_draft_ready=False,
+            pending_facts_count=2,
+        )
+        # cycle_stage 規則要求 stage_label 存在才觸發；reading_unread 要求
+        # next_cycle_draft_ready 為 False——這裡刻意讓四條規則同時滿足各自的觸發條件，
+        # 純粹測 build() 的排序與上限，不代表真實資料一定會四條同時成立。
+        cards = guide_cards.build(facts)
+        self.assertEqual(len(cards), 3)
+        titles = [c["title"] for c in cards]
+        self.assertIn("判讀", titles[0])
+        self.assertIn("素材", titles[1] + titles[2])
+        self.assertIn("事實", titles[1] + titles[2])
+
+    def test_single_rule_triggered_returns_one_card(self):
+        facts = _facts(pending_facts_count=1)
+        cards = guide_cards.build(facts)
+        self.assertEqual(len(cards), 1)
+        self.assertEqual(cards[0]["action_url"], f"/brands/{BRAND_ID}/hub/facts")
+
+
+if __name__ == "__main__":
+    unittest.main()

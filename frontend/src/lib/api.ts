@@ -7,6 +7,13 @@ export interface ActiveCycle {
   status_label: string;
 }
 
+/** 下一步指南卡（票 04-guide-card-engine）：一件事＋一鍵前往。
+ * 對應 app/dashboard/guide_cards.py build() 的輸出形狀。 */
+export interface GuideCard {
+  title: string;
+  action_url: string;
+}
+
 export interface DashboardBrandCard {
   brand_id: string;
   brand_name: string;
@@ -14,8 +21,8 @@ export interface DashboardBrandCard {
   revenue_this_month: number | null;
   revenue_mom_pct: number | null;
   active_cycle: ActiveCycle | null;
-  /** 本票先留位，04-guide-card-engine 接上真貨源。 */
-  next_step: string | null;
+  /** 指南卡引擎排序後的第一筆；沒有待辦是 null（畫面顯示「一切正常」）。 */
+  next_step: GuideCard | null;
 }
 
 interface Envelope<T> {
@@ -55,6 +62,9 @@ export interface CockpitData {
     revenue: (number | null)[];
     spend: (number | null)[];
   };
+  /** 常駐下一步指南卡（票 04-guide-card-engine）：最多 3 件，優先序排列；
+   * 空陣列＝一切正常。 */
+  guide_cards: GuideCard[];
 }
 
 export async function fetchCockpit(brandId: string): Promise<CockpitData> {
