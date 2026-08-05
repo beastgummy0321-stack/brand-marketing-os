@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 """app/tests/test_ads_codes.py — 配碼歸因＋交接包擴充＋上線前校驗（GitHub issue #35）。
 
-驗收重點（決策 0025 補遺第 2、3、7 點）：
+驗收重點（決策 0025 補遺第 2、3 點；補遺第 7 點的鎖住規則已由 ADR 0006 作廢）：
 1. 期別自動配碼：廣告碼／口播碼各一組，字碼期期換碼不重用，重複產生不洗掉既有碼。
-2. 上線前逐欄校驗：規劃碼 vs 後台實際設定，不符鎖住**僅該期**的開跑動作，通過留紀錄、不擋路。
+2. 上線前逐欄校驗：規劃碼 vs 後台實際設定，不符只留紀錄＋人話警示，不擋開跑（ADR 0006）。
 3. 訂單依碼匹配歸因：廣告碼→淨歸因；口播碼／手動排除→排除；無碼→自然／未歸因。
 4. 用碼暴增但曝光沒動時進打斷佇列（嚴重度：規則警示）。
 
@@ -151,37 +151,38 @@ class VerificationTest(_BaseCodesTest):
         self.assertFalse(result["passed"])
         self.assertTrue(any("折數不符" in m for m in result["mismatches"]))
 
-    def test_mismatch_locks_only_this_cycle_activation(self):
+    def test_mismatch_produces_a_warning_scoped_to_this_cycle(self):
+        """不符只警示，警示只跟這一期有關，不影響其他檔期（ADR 0006：不擋路，但仍逐期提醒）。"""
         codes = self._generate()
         actual = self._actual_matching(codes)
         actual["ad"]["code"] = "WRONGCODE"
         ads_codes.verify(main.conn, self.bid, self.cid, actual=actual, actor=ACTOR)
-        self.assertIsNotNone(ads_codes.is_activation_locked(main.conn, self.bid, self.cid))
+        self.assertIsNotNone(ads_codes.verification_warning(main.conn, self.bid, self.cid))
 
         other_cycle = ads_repo.create_cycle(
             main.conn, self.bid, product_ids=[], pain_value=5000, objective="流量",
             actor=ACTOR, start_date="2026-07-01", duration_days=14)
         self.assertIsNone(
-            ads_codes.is_activation_locked(main.conn, self.bid, other_cycle["id"]))
+            ads_codes.verification_warning(main.conn, self.bid, other_cycle["id"]))
 
-    def test_passing_after_a_failure_unlocks(self):
+    def test_passing_after_a_failure_clears_the_warning(self):
         codes = self._generate()
         actual = self._actual_matching(codes)
         actual["ad"]["code"] = "WRONGCODE"
         ads_codes.verify(main.conn, self.bid, self.cid, actual=actual, actor=ACTOR)
-        self.assertIsNotNone(ads_codes.is_activation_locked(main.conn, self.bid, self.cid))
+        self.assertIsNotNone(ads_codes.verification_warning(main.conn, self.bid, self.cid))
 
         ads_codes.verify(main.conn, self.bid, self.cid,
                          actual=self._actual_matching(codes), actor=ACTOR)
-        self.assertIsNone(ads_codes.is_activation_locked(main.conn, self.bid, self.cid))
+        self.assertIsNone(ads_codes.verification_warning(main.conn, self.bid, self.cid))
 
-    def test_never_verified_does_not_lock(self):
-        """校驗本身可跳過（老手暗門）：從沒校驗過不算「不符」，不擋路。"""
+    def test_never_verified_has_no_warning(self):
+        """校驗本身可跳過（老手暗門）：從沒校驗過不算「不符」，沒有警示。"""
         self._generate()
-        self.assertIsNone(ads_codes.is_activation_locked(main.conn, self.bid, self.cid))
+        self.assertIsNone(ads_codes.verification_warning(main.conn, self.bid, self.cid))
 
 
-class ActivationLockIntegrationTest(_BaseCodesTest):
+class ActivationWarningIntegrationTest(_BaseCodesTest):
     def _insert_package(self):
         pid = core_db.new_id("pkg")
         main.conn.execute(
@@ -193,7 +194,8 @@ class ActivationLockIntegrationTest(_BaseCodesTest):
         main.conn.commit()
         return pid
 
-    def test_authorize_and_map_is_blocked_when_codes_do_not_match(self):
+    def test_authorize_and_map_still_succeeds_when_codes_do_not_match(self):
+        """ADR 0006：校驗不符不擋開跑動作，只留警示——授權跟回填照樣成立。"""
         codes = self._generate()
         actual = {c["source_type"]: {
             "code": "WRONGCODE", "discount_type": c["discount_type"],
@@ -201,16 +203,19 @@ class ActivationLockIntegrationTest(_BaseCodesTest):
             "valid_from": c["valid_from"], "valid_to": c["valid_to"],
         } for c in codes}
         ads_codes.verify(main.conn, self.bid, self.cid, actual=actual, actor=ACTOR)
+        self.assertIsNotNone(ads_codes.verification_warning(main.conn, self.bid, self.cid),
+                             "警示仍要在，只是不擋")
 
         package_id = self._insert_package()
-        with self.assertRaises(ValueError) as ctx:
-            ads_handoff.authorize_and_map(
-                main.conn, self.bid, self.cid, package_id,
-                meta_ids={"meta_campaign_id": "123"}, actor=ACTOR)
-        self.assertIn("校驗", str(ctx.exception))
-        self.assertIsNone(main.conn.execute(
+        result = ads_handoff.authorize_and_map(
+            main.conn, self.bid, self.cid, package_id,
+            meta_ids={"meta_campaign_id": "123"}, actor=ACTOR)
+        self.assertIn("authorization_id", result)
+        self.assertIsNotNone(main.conn.execute(
             "SELECT 1 FROM activation_authorization WHERE scope_ref = ?", (package_id,)
         ).fetchone())
+        # 授權成立後，警示本身不會被清掉——校驗紀錄跟這次授權是兩件事，仍要誠實顯示不符。
+        self.assertIsNotNone(ads_codes.verification_warning(main.conn, self.bid, self.cid))
 
     def test_authorize_and_map_succeeds_without_verification(self):
         """校驗可跳過，沒校驗過不擋開跑（不擋路原則）。"""

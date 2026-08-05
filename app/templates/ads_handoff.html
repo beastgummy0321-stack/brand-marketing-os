@@ -81,7 +81,7 @@
 <section class="card">
   <div class="reconcile-head">
     <h3>期別配碼</h3>
-    {% if lock_reason %}{{ badge('開跑已鎖住', 'warn') }}
+    {% if verification_warning %}{{ badge('校驗不符（仍可開跑）', 'warn') }}
     {% elif verification and verification.passed %}{{ badge('校驗通過', 'ok') }}{% endif %}
   </div>
 
@@ -107,8 +107,8 @@
     </table>
   </div>
 
-  {% if lock_reason %}
-  {{ banner('warn', lock_reason) }}
+  {% if verification_warning %}
+  {{ banner('warn', verification_warning) }}
   {% endif %}
 
   {% if attribution %}
@@ -130,7 +130,8 @@
     <div class="details-body">
       <p class="handoff-note">
         把 EasyStore 後台實際設定的值原封不動填進來，系統逐欄比對；
-        字碼、折數、使用上限、效期只要有一項不符，這期的「確認已經開始投放」就會先鎖住。
+        字碼、折數、使用上限、效期只要有一項不符，系統會提醒你，但不會擋——
+        要不要照這樣開跑由你決定。
       </p>
       <form method="post" action="/brands/{{ brand.id }}/ads/{{ cycle.id }}/handoff/codes/verify">
         {% for c in codes %}

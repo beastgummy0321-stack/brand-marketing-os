@@ -38,7 +38,7 @@ async def ads_handoff_page(request: Request, brand_id: str, cycle_id: str):
                      packages=packages, labels=ads_handoff.FIELD_LABELS, extras=extras,
                      codes=codes, source_labels=ads_codes.SOURCE_LABELS,
                      verification=ads_codes.latest_verification(conn, brand_id, cycle_id),
-                     lock_reason=ads_codes.is_activation_locked(conn, brand_id, cycle_id),
+                     verification_warning=ads_codes.verification_warning(conn, brand_id, cycle_id),
                      attribution=(ads_codes.attribution_summary(conn, brand_id, cycle_id)
                                   if codes else None),
                      stage_items=_cycle_progress_items(conn, brand_id, cycle),
@@ -78,7 +78,7 @@ async def ads_handoff_verify_codes(request: Request, brand_id: str, cycle_id: st
                                    wom_code: str = Form(""), wom_discount_type: str = Form(""),
                                    wom_discount_value: str = Form(""), wom_usage_limit: str = Form(""),
                                    wom_valid_from: str = Form(""), wom_valid_to: str = Form("")):
-    """上線前逐欄校驗：規劃碼 vs 後台實際設定，不符鎖住這期的開跑動作（決策 0025 補遺第 7 點）。"""
+    """上線前逐欄校驗：規劃碼 vs 後台實際設定，不符只提醒不擋（ADR 0006）。"""
     main_mod.require_brand(brand_id)
     actor = main_mod.require_actor(request)
     _require_cycle(brand_id, cycle_id)
@@ -98,7 +98,8 @@ async def ads_handoff_verify_codes(request: Request, brand_id: str, cycle_id: st
     if result["passed"]:
         return main_mod.redirect_with_message(back, "校驗過了，規劃碼跟後台設定一致。")
     return main_mod.redirect_with_message(
-        back, "校驗沒過，這期開跑動作先鎖住，改好後台設定再重新校驗。", kind="warn")
+        back, "校驗沒過，規劃碼跟後台設定不一致，看下面的不符明細；要不要照這樣開跑由你決定。",
+        kind="warn")
 
 
 @router.post("/brands/{brand_id}/ads/{cycle_id}/handoff/build")

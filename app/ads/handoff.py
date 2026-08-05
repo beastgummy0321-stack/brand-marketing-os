@@ -20,7 +20,6 @@ from urllib.parse import quote
 
 from app.ads import account_structure
 from app.ads import checklist as ads_checklist
-from app.ads import codes as ads_codes
 from app.ads import creative as ads_creative
 from app.ads import repository as ads_repo
 from app.brand_intelligence import repository as bi
@@ -278,11 +277,8 @@ def authorize_and_map(conn, brand_id: str, cycle_id: str, package_id: str, *,
     if not actor:
         raise ValueError("需要具名操作人才能授權投放")
 
-    # 上線前校驗不符時只鎖這一期的開跑動作（GitHub issue #35，決策 0025 補遺第 7 點），
-    # 不影響其他任何流程；沒校驗過不鎖，校驗過且不符才鎖。
-    lock_reason = ads_codes.is_activation_locked(conn, brand_id, cycle_id)
-    if lock_reason:
-        raise ValueError(lock_reason)
+    # 上線前校驗不符只提醒不擋（ADR 0006，取代已作廢的 0025 補遺第 7 點鎖住規則）——
+    # 警示由畫面顯示（見 app/ads/codes.verification_warning），這裡不再讀校驗結果。
 
     ts = now_iso()
     auth_id = new_id("ath")

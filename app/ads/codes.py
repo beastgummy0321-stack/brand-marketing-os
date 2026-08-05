@@ -10,9 +10,9 @@
 人的商業判斷，不是可推導的規則）。
 
 上線前校驗：規劃碼（這裡算出來的）vs 後台實際設定（EasyStore 無 API，人工輸入，
-見決策 0025 第 2 點）逐欄比對，不符時鎖住**僅該期**的開跑動作（is_activation_locked，
-由 app/ads/handoff.authorize_and_map 呼叫），通過只留紀錄、不影響其他任何流程
-（0025 補遺第 7 點——跟「不擋路」原則不衝突）。
+見決策 0025 第 2 點）逐欄比對，不符時留紀錄並顯示人話警示（verification_warning，
+由畫面顯示），但不鎖任何動作——全系統一律只提醒、不擋（ADR 0006，取代已作廢的
+0025 補遺第 7 點）。
 
 訂單匹配歸因：voucher_code 比對這裡配的碼——廣告碼→淨歸因（毛歸因含存疑，
 判讀一律用淨歸因）；口播碼／手動排除→排除；無碼→自然／未歸因（0025 補遺第 3 點）。
@@ -146,8 +146,8 @@ def _mismatch_messages(planned: dict, actual: dict, label: str) -> list:
 
 
 def verify(conn, brand_id: str, cycle_id: str, *, actual: dict, actor: str) -> dict:
-    """上線前逐欄校驗：規劃碼 vs 後台實際設定。通過留紀錄；不符也留紀錄並鎖住這期的
-    開跑動作（見 is_activation_locked），重新校驗過關即解鎖，不需要另外的解鎖操作。
+    """上線前逐欄校驗：規劃碼 vs 後台實際設定。通過留紀錄；不符也留紀錄並顯示人話警示
+    （見 verification_warning），但不鎖任何動作，決定權在人（ADR 0006）。
 
     actual 格式：{"ad": {"code","discount_type","discount_value","usage_limit",
                          "valid_from","valid_to"}, "word_of_mouth": {...}}
@@ -191,13 +191,13 @@ def latest_verification(conn, brand_id: str, cycle_id: str) -> Optional[dict]:
     return result
 
 
-def is_activation_locked(conn, brand_id: str, cycle_id: str) -> Optional[str]:
-    """僅鎖這一期的開跑動作（決策 0025 補遺第 7 點）。從沒校驗過＝不鎖（校驗本身可跳過，
-    只有「校驗過且不符」才鎖）；回傳鎖住原因的人話說明，沒鎖回 None。"""
+def verification_warning(conn, brand_id: str, cycle_id: str) -> Optional[str]:
+    """最近一次校驗不符時的人話警示，不擋任何動作（ADR 0006，取代已作廢的鎖住規則）。
+    從沒校驗過＝無警示（校驗本身可跳過）；回傳警示文字，沒有不符或沒校驗過回 None。"""
     latest = latest_verification(conn, brand_id, cycle_id)
     if latest and not latest["passed"]:
         return ("上線前校驗沒過，規劃碼與後台實際設定不一致：" + "；".join(latest["mismatches"])
-                + "改好後台設定，重新校驗過關才能確認開跑。")
+                + "要不要照這樣開跑由你決定，建議先改好後台設定再重新校驗。")
     return None
 
 
