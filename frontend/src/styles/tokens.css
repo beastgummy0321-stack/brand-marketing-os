@@ -34,6 +34,11 @@
   --color-warning: #d97706;
   --color-danger: #dc2626;
 
+  /* 異常警示區嚴重度（票 05-alerts-fuel-pipeline）：money_loss 用 --color-danger、
+   * rule_warning 用 --color-warning、informational 用 --color-muted-foreground——
+   * 只多補 irreversible 專用的橙色，其餘三色沿用既有 token，不重複定義。 */
+  --color-alert-irreversible: #ea580c;
+
   /* 圖表分類色（票 03-cockpit-kpi-chart）：只分類（哪條線是哪個指標），不表數值
    * 大小（規格圖表鐵則）。經 dataviz 技能包 validate_palette.js 驗證（light 模式，
    * 對 --color-card 卡片底色）：CVD 相鄰對 ΔE、正常視力門檻、對比皆過。 */

@@ -114,15 +114,22 @@ def get_intake_budget_limit(conn: Optional[sqlite3.Connection] = None) -> float:
         return script.DEFAULT_BUDGET
 
 
-def brand_llm_spent(conn: sqlite3.Connection, brand_id: str) -> float:
+def brand_llm_spent(conn: sqlite3.Connection, brand_id: str, *, since: Optional[str] = None) -> float:
     """這個品牌到目前為止真的花了多少 AI 生成費用（美元，累加所有成功呼叫的 llm_task.cost）。
 
     跨模組共用的花費上限查詢（票 M2）：品牌智庫調研、廣告分支計畫／素材生成都算進來，
     不分模組各自統計——上限本來就是同一道。
+
+    since：只給下限（票 05 駕駛艙油錢錶「本月已花」用，since＝當月 1 號）。不設上限——
+    llm_task.started_at 是完整時間戳記，跟純日期字串比較會有字串長度誤判（"2026-08-05"
+    小於 "2026-08-05T09:00:00"），且花費紀錄本來就不會有未來時間，不需要上限。
     """
-    row = conn.execute(
-        "SELECT SUM(cost) FROM llm_task WHERE brand_id = ? AND status = 'succeeded'", (brand_id,)
-    ).fetchone()
+    sql = "SELECT SUM(cost) FROM llm_task WHERE brand_id = ? AND status = 'succeeded'"
+    params: list = [brand_id]
+    if since:
+        sql += " AND started_at >= ?"
+        params.append(since)
+    row = conn.execute(sql, params).fetchone()
     return row[0] or 0.0
 
 

@@ -9,6 +9,7 @@ from calendar import monthrange
 from datetime import date
 from typing import Optional
 
+from app.ads import creative_pipeline as ads_creative_pipeline
 from app.ads import nextcycle as ads_nextcycle
 from app.ads import performance as ads_performance
 from app.ads import reading as ads_reading
@@ -18,6 +19,7 @@ from app.ads import sync as ads_sync
 from app.ads.routes_common import CYCLE_STATUS_LABELS, derive_cycle_stage
 from app.brand_intelligence import repository as bi_repo
 from app.core import interrupts as core_interrupts
+from app.core import settings as core_settings
 from app.dashboard import guide_cards
 from app.dashboard.health import brand_health
 from app.orders import repository as orders_repo
@@ -130,6 +132,28 @@ def overview(conn, *, today: Optional[str] = None) -> list:
 # ROAS 取自 derived_metric；環比＝與上月同期比較。
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# 警示區＋AI 油錢錶＋內容產線小計（票 05-alerts-fuel-pipeline）。警示區直接讀打斷
+# 佇列，不另建通知機制；「知道了」／「詳情」沿用既有 core_interrupts.resolve() 與
+# action_url（前端直接打既有 `/interrupts/{id}/resolve`，本模組不重寫、不寫入）。
+# ---------------------------------------------------------------------------
+
+def _alerts(conn, brand_id: str, today: str) -> list:
+    """異常警示區：list_open() 本身已按嚴重度排序（app/core/interrupts.py _sort_key），
+    這裡只挑畫面要的欄位。archive_stale=False：唯讀呼叫端不順手改資料庫狀態。"""
+    rows = core_interrupts.list_open(conn, brand_id=brand_id, today=today, archive_stale=False)
+    return [{"id": r["id"], "severity": r["severity"], "message": r["message"],
+            "action_url": r["action_url"]} for r in rows]
+
+
+def _fuel_gauge(conn, brand_id: str, today: str) -> dict:
+    """AI 油錢錶：本月已花（llm_task 成本紀錄，since＝當月 1 號）／上限（全站共用設定）。"""
+    since, _until = _month_to_date_range(today)
+    return {
+        "spent_this_month": core_settings.brand_llm_spent(conn, brand_id, since=since),
+        "limit": core_settings.get_intake_budget_limit(conn),
+    }
+
 def _mom_pct(current, previous) -> Optional[float]:
     """環比：current／previous 任一邊「沒得算」（None 或 0）就回 None，不硬除
     （鐵則 16，比照 `_revenue_and_mom`）。"""
@@ -217,4 +241,9 @@ def cockpit(conn, brand_id: str, *, today: Optional[str] = None) -> dict:
         # 駕駛艙常駐下一步指南卡（票 04-guide-card-engine）：最多 3 件，沒有待辦是空清單，
         # 前端顯示「一切正常」。
         "guide_cards": _guide_cards(conn, brand_id, cycle),
+        # 票 05-alerts-fuel-pipeline：異常警示區（空清單＝前端顯示「一切正常」）／
+        # AI 油錢錶／內容產線小計。
+        "alerts": _alerts(conn, brand_id, today),
+        "fuel_gauge": _fuel_gauge(conn, brand_id, today),
+        "content_pipeline": ads_creative_pipeline.pipeline_counts(conn, brand_id),
     }

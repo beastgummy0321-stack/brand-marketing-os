@@ -24,6 +24,8 @@ from fastapi.testclient import TestClient  # noqa: E402
 import app.main as main  # noqa: E402
 from app.ads import performance as ads_performance  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
+from app.core import interrupts as core_interrupts  # noqa: E402
+from app.core import settings as core_settings  # noqa: E402
 from app.core.db import new_id, now_iso  # noqa: E402
 from app.orders import repository as orders_repo  # noqa: E402
 
@@ -209,6 +211,132 @@ class DashboardCockpitApiTest(unittest.TestCase):
         self._get(self.brand_full["id"])
         after = _snapshot()
         self.assertEqual(before, after)
+
+
+class AlertsFuelPipelineTest(unittest.TestCase):
+    """票 05-alerts-fuel-pipeline：異常警示區（直接讀打斷佇列）＋AI 油錢錶（本月已花／
+    上限，聚合 llm_task）＋內容產線小計（待審／已發）。"""
+
+    def setUp(self):
+        self.client = TestClient(main.app)
+        self.brand = bi_repo.create_brand(
+            main.conn, name=f"虛構警示茶行{abs(hash(self.id())) % 100000}",
+            client_name=None, actor=ACTOR)
+
+    def _get(self):
+        resp = self.client.get(f"/api/dashboard/brands/{self.brand['id']}/cockpit")
+        return resp.json()["data"]
+
+    # -- 警示區：直接讀打斷佇列，不另建通知機制 --------------------------------------
+
+    def _insert_interrupt(self, *, severity: str, dedupe_key: str, message: str = "測試警報",
+                          action_url=None) -> str:
+        """比照 test_dashboard_overview.py：目前尚無類別登記 money_loss／irreversible，
+        直接塞一列繞過 enqueue（測試檔豁免跨層寫入掃描）。"""
+        interrupt_id = new_id("itr")
+        main.conn.execute(
+            "INSERT INTO interrupt (id, brand_id, dedupe_key, category, severity, message,"
+            " action_url, status, created_at) VALUES (?, ?, ?, 'code_surge_alert', ?, ?, ?,"
+            " 'open', ?)",
+            (interrupt_id, self.brand["id"], dedupe_key, severity, message, action_url,
+             f"{TODAY}T09:00:00"),
+        )
+        main.conn.commit()
+        return interrupt_id
+
+    def test_no_open_alerts_is_empty_list(self):
+        """空狀態：前端顯示「一切正常」，API 就回空陣列，不是省略欄位。"""
+        self.assertEqual(self._get()["alerts"], [])
+
+    def test_alerts_sorted_by_severity(self):
+        self._insert_interrupt(severity="informational", dedupe_key="d-info")
+        self._insert_interrupt(severity="money_loss", dedupe_key="d-money")
+        self._insert_interrupt(severity="rule_warning", dedupe_key="d-rule")
+        self._insert_interrupt(severity="irreversible", dedupe_key="d-irrev")
+        severities = [a["severity"] for a in self._get()["alerts"]]
+        self.assertEqual(severities,
+                         ["money_loss", "irreversible", "rule_warning", "informational"])
+
+    def test_alert_carries_message_and_action_url_for_detail_link(self):
+        self._insert_interrupt(severity="money_loss", dedupe_key="d-1",
+                               message="測試金額損失", action_url="/some/where")
+        alert = self._get()["alerts"][0]
+        self.assertEqual(alert["message"], "測試金額損失")
+        self.assertEqual(alert["action_url"], "/some/where")
+
+    def test_resolving_interrupt_removes_it_from_cockpit_alerts(self):
+        """一鍵「知道了」沿用既有 core_interrupts.resolve()（本測試不動 resolve() 本身
+        或它既有的測試斷言，只驗證駕駛艙讀取面確實反映結果）。"""
+        interrupt_id = self._insert_interrupt(severity="rule_warning", dedupe_key="d-resolve")
+        self.assertEqual(len(self._get()["alerts"]), 1)
+        core_interrupts.resolve(main.conn, interrupt_id, actor=ACTOR)
+        self.assertEqual(self._get()["alerts"], [])
+
+    # -- AI 油錢錶：本月已花／上限，聚合 llm_task 成本紀錄 ---------------------------
+
+    def _spend(self, cost: float, started_at: str) -> None:
+        main.conn.execute(
+            "INSERT INTO llm_task (id, brand_id, task_type, context_scope_json,"
+            " input_context_ids_json, input_context_hash, knowledge_item_ids_json,"
+            " brand_version, prompt_template_id, prompt_template_version, provider, model,"
+            " status, attempt_no, cost, started_at, finished_at)"
+            " VALUES (?, ?, 't', '{}', '[]', '', '[]', 1, 'p', 'v1', 'seed', 'seed',"
+            " 'succeeded', 1, ?, ?, ?)",
+            (new_id("llm"), self.brand["id"], cost, started_at, started_at),
+        )
+        main.conn.commit()
+
+    def test_fuel_gauge_sums_this_months_llm_cost_only(self):
+        self._spend(5.0, "2026-07-20T10:00:00")  # 上月，不該算進本月
+        self._spend(2.5, "2026-08-01T10:00:00")
+        self._spend(1.5, f"{TODAY}T09:00:00")
+        gauge = self._get()["fuel_gauge"]
+        self.assertAlmostEqual(gauge["spent_this_month"], 4.0)
+
+    def test_fuel_gauge_limit_matches_settings(self):
+        core_settings.set_setting(main.conn, core_settings.INTAKE_BUDGET_SETTING, "88")
+        gauge = self._get()["fuel_gauge"]
+        self.assertEqual(gauge["limit"], 88.0)
+
+    def test_fuel_gauge_zero_spend_is_zero_not_none(self):
+        gauge = self._get()["fuel_gauge"]
+        self.assertEqual(gauge["spent_this_month"], 0.0)
+
+    # -- 內容產線小計：待審／已發數 ---------------------------------------------------
+
+    def _insert_variant(self, *, status: str) -> None:
+        """檔期／素材簡報過重，直接塞最小列（比照 test_ads_handoff.py 的作法）。"""
+        cycle_id = new_id("ccy")
+        ts = f"{TODAY}T00:00:00"
+        main.conn.execute(
+            "INSERT INTO campaign_cycle (id, brand_id, product_scope_json, objective, budget,"
+            " currency, start_date, end_date, channels_json, status, archived, plan_version,"
+            " phase, created_at, updated_at) VALUES (?, ?, '[]', 'sales', 5000, 'TWD', ?, ?,"
+            " '[\"meta\"]', 'PLANNING', 0, 0, 'normal', ?, ?)",
+            (cycle_id, self.brand["id"], TODAY, TODAY, ts, ts),
+        )
+        brief_id = new_id("cbf")
+        main.conn.execute(
+            "INSERT INTO creative_brief (id, campaign_cycle_id, brand_id, brief_type, purpose,"
+            " status, created_at, updated_at) VALUES (?, ?, ?, 'copy', '測試', 'draft', ?, ?)",
+            (brief_id, cycle_id, self.brand["id"], ts, ts),
+        )
+        main.conn.execute(
+            "INSERT INTO creative_variant (id, variant_type, creative_brief_id,"
+            " campaign_cycle_id, brand_id, attributes_json, status, created_at)"
+            " VALUES (?, 'copy', ?, ?, ?, '{}', ?, ?)",
+            (new_id("cvr"), brief_id, cycle_id, self.brand["id"], status, ts),
+        )
+        main.conn.commit()
+
+    def test_content_pipeline_zero_when_no_variants(self):
+        self.assertEqual(self._get()["content_pipeline"], {"pending": 0, "published": 0})
+
+    def test_content_pipeline_counts_pending_and_published(self):
+        self._insert_variant(status="DRAFT")
+        self._insert_variant(status="DRAFT")
+        self._insert_variant(status="APPROVED")
+        self.assertEqual(self._get()["content_pipeline"], {"pending": 2, "published": 1})
 
 
 if __name__ == "__main__":

@@ -153,6 +153,29 @@ class BudgetExceededMessageTest(unittest.TestCase):
         self._spend(2.5)
         self.assertAlmostEqual(settings.brand_llm_spent(self.conn, self.brand_id), 4.0)
 
+    def test_brand_llm_spent_since_filters_by_started_at(self):
+        """票 05 油錢錶「本月已花」：since 給了就只算 started_at 落在那之後的（上月花費
+        不該算進本月油錢錶）。"""
+        from app.core.db import new_id
+
+        def _spend_at(cost: float, started_at: str) -> None:
+            self.conn.execute(
+                "INSERT INTO llm_task (id, brand_id, task_type, context_scope_json,"
+                " input_context_ids_json, input_context_hash, knowledge_item_ids_json,"
+                " brand_version, prompt_template_id, prompt_template_version, provider, model,"
+                " status, attempt_no, cost, started_at, finished_at)"
+                " VALUES (?, ?, 't', '{}', '[]', '', '[]', 1, 'p', 'v1', 'seed', 'seed',"
+                " 'succeeded', 1, ?, ?, ?)",
+                (new_id("llm"), self.brand_id, cost, started_at, started_at),
+            )
+
+        _spend_at(3.0, "2026-07-15T10:00:00")  # 上月
+        _spend_at(1.0, "2026-08-03T10:00:00")  # 本月
+        self.conn.commit()
+        self.assertAlmostEqual(
+            settings.brand_llm_spent(self.conn, self.brand_id, since="2026-08-01"), 1.0)
+        self.assertAlmostEqual(settings.brand_llm_spent(self.conn, self.brand_id), 4.0)  # 不給就照舊全算
+
 
 class IntakeMigrationTest(unittest.TestCase):
     """03 §3A.2–§3A.4：兩張表 ＋ 三個索引 ＋ 部分唯一索引。"""
