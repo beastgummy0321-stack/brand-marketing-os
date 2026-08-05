@@ -635,6 +635,17 @@ def brand_period_spend(conn, brand_id: str, since: str, until: str) -> Optional[
     return row["spend"] if row["rows"] else None
 
 
+def last_snapshot_at(conn, brand_id: str) -> Optional[str]:
+    """這個品牌最新一筆成效快照的抓取時間（snapshot_taken_at），給駕駛艙「最後同步
+    時間」用（票 07-auto-sync）。從沒同步過時回 None——「還沒同步過」跟「同步時間是
+    某個值」是兩件事（鐵則 16）。"""
+    row = conn.execute(
+        "SELECT MAX(snapshot_taken_at) AS ts FROM performance_snapshot WHERE brand_id = ?",
+        (brand_id,),
+    ).fetchone()
+    return row["ts"] if row and row["ts"] else None
+
+
 def latest_derived_metric(conn, brand_id: str, metric: str, since: str, until: str) -> Optional[float]:
     """指定區間內最新一筆 derived_metric 數值（規格 KPI 口徑：ROAS 取自 derived_metric，
     不是拿 revenue／spend 重算）。區間比對 computed_at 的日期部分；同一區間多筆時取

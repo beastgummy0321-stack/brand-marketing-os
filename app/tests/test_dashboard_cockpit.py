@@ -339,5 +339,69 @@ class AlertsFuelPipelineTest(unittest.TestCase):
         self.assertEqual(self._get()["content_pipeline"], {"pending": 2, "published": 1})
 
 
+class LastSyncAtTest(unittest.TestCase):
+    """票 07-auto-sync：駕駛艙顯示最後同步時間；超過一天（含從沒同步過）標示
+    「數據可能過期」。"""
+
+    def setUp(self):
+        self.client = TestClient(main.app)
+        self.brand = bi_repo.create_brand(
+            main.conn, name=f"虛構同步茶行{abs(hash(self.id())) % 100000}",
+            client_name=None, actor=ACTOR)
+
+    def _get(self):
+        resp = self.client.get(f"/api/dashboard/brands/{self.brand['id']}/cockpit")
+        return resp.json()["data"]
+
+    def _insert_snapshot(self, snapshot_taken_at: str) -> None:
+        main.conn.execute(
+            "INSERT INTO performance_snapshot (id, brand_id, platform, date_range_start,"
+            " date_range_end, as_of_date, snapshot_taken_at, currency, impressions, clicks,"
+            " spend, conversions, revenue, reconciled, source, quarantined, created_at)"
+            " VALUES (?, ?, 'meta', ?, ?, ?, ?, 'TWD', 0, 0, 0, 0, 0, 1, 'test', 0, ?)",
+            (new_id("psn"), self.brand["id"], TODAY, TODAY, TODAY,
+             snapshot_taken_at, snapshot_taken_at),
+        )
+        main.conn.commit()
+
+    def _insert_ga4_sync_status(self, synced_at: str) -> None:
+        main.conn.execute(
+            "INSERT INTO ga4_sync_status (brand_id, date_range_start, date_range_end, row_count,"
+            " purchase_event_seen, synced_at, updated_at) VALUES (?, ?, ?, 0, 1, ?, ?)",
+            (self.brand["id"], TODAY, TODAY, synced_at, synced_at),
+        )
+        main.conn.commit()
+
+    def test_never_synced_is_null_and_stale(self):
+        data = self._get()
+        self.assertIsNone(data["last_sync_at"])
+        self.assertTrue(data["data_stale"])
+
+    def test_synced_today_is_not_stale(self):
+        self._insert_snapshot(f"{TODAY}T09:00:00+00:00")
+        data = self._get()
+        self.assertEqual(data["last_sync_at"], f"{TODAY}T09:00:00+00:00")
+        self.assertFalse(data["data_stale"])
+
+    def test_synced_yesterday_is_stale(self):
+        self._insert_snapshot("2026-08-04T09:00:00+00:00")
+        data = self._get()
+        self.assertEqual(data["last_sync_at"], "2026-08-04T09:00:00+00:00")
+        self.assertTrue(data["data_stale"])
+
+    def test_ga4_sync_time_counts_too(self):
+        self._insert_ga4_sync_status(f"{TODAY}T08:00:00+00:00")
+        data = self._get()
+        self.assertEqual(data["last_sync_at"], f"{TODAY}T08:00:00+00:00")
+        self.assertFalse(data["data_stale"])
+
+    def test_takes_the_later_of_meta_and_ga4(self):
+        self._insert_snapshot("2026-08-04T09:00:00+00:00")
+        self._insert_ga4_sync_status(f"{TODAY}T08:00:00+00:00")
+        data = self._get()
+        self.assertEqual(data["last_sync_at"], f"{TODAY}T08:00:00+00:00")
+        self.assertFalse(data["data_stale"])
+
+
 if __name__ == "__main__":
     unittest.main()

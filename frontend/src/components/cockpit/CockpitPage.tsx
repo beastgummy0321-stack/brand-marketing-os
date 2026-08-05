@@ -6,6 +6,7 @@ import { ContentPipelineSummary } from "@/components/cockpit/ContentPipelineSumm
 import { FuelGauge } from "@/components/cockpit/FuelGauge";
 import { GuideCards } from "@/components/cockpit/GuideCards";
 import { KpiCard } from "@/components/cockpit/KpiCard";
+import { LastSyncBadge } from "@/components/cockpit/LastSyncBadge";
 import { EmptyState } from "@/components/layout/EmptyState";
 import { fetchCockpit, type CockpitData } from "@/lib/api";
 import { formatCount, formatCurrency, formatRoas } from "@/lib/format";
@@ -64,6 +65,7 @@ export function CockpitPage({ brandId }: { brandId: string }) {
         <div className="flex items-center gap-3">
           <h1 className="font-display text-2xl text-foreground">{data.brand_name}</h1>
           <CampaignStageBadge stage={data.campaign_stage} />
+          <LastSyncBadge lastSyncAt={data.last_sync_at} stale={data.data_stale} />
         </div>
         <a
           href="/app/"

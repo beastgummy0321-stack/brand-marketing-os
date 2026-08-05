@@ -10,6 +10,7 @@ from datetime import date
 from typing import Optional
 
 from app.ads import creative_pipeline as ads_creative_pipeline
+from app.ads import ga4_sync as ads_ga4_sync
 from app.ads import nextcycle as ads_nextcycle
 from app.ads import performance as ads_performance
 from app.ads import reading as ads_reading
@@ -227,6 +228,29 @@ def _monthly_trend(conn, brand_id: str, months: list) -> dict:
     return {"revenue": revenue, "spend": spend, "roas": roas, "orders": orders}
 
 
+# ---------------------------------------------------------------------------
+# 最後同步時間（票 07-auto-sync）：Meta 快照抓取時間與 GA4 同步時間取較新的一筆，
+# 給駕駛艙標示數據新舊——「超過一天沒同步」用 data_stale 提醒使用者，不是默默沿用
+# 舊數字（規格 0001）。
+# ---------------------------------------------------------------------------
+
+def _last_sync_at(conn, brand_id: str) -> Optional[str]:
+    candidates = [ts for ts in (
+        ads_performance.last_snapshot_at(conn, brand_id),
+        (ads_ga4_sync.get_sync_status(conn, brand_id) or {}).get("synced_at"),
+    ) if ts]
+    return max(candidates) if candidates else None
+
+
+def _is_data_stale(last_sync_at: Optional[str], today: str) -> bool:
+    """從沒同步過，或最後一次同步不是今天，都算「數據可能過期」。
+
+    ponytail: 用日期粒度比對（同步日期不是今天就算過期），不做到時分秒精算——本檔其餘
+    環比／檔期判定也都是日期粒度；真要抓「剛過凌晨幾分鐘」這種邊界，再升級成完整
+    時間戳比對。"""
+    return not last_sync_at or last_sync_at[:10] < today
+
+
 def cockpit(conn, brand_id: str, *, today: Optional[str] = None,
             calendar_events: Optional[list] = None) -> dict:
     today = today or date.today().isoformat()
@@ -240,6 +264,7 @@ def cockpit(conn, brand_id: str, *, today: Optional[str] = None,
     trend = _monthly_trend(conn, brand_id, months)
 
     cycle = _latest_cycle(conn, brand_id)
+    last_sync_at = _last_sync_at(conn, brand_id)
     return {
         "kpis": {
             "revenue": {"value": revenue, "mom_pct": revenue_mom, "trend": trend["revenue"]},
@@ -259,4 +284,8 @@ def cockpit(conn, brand_id: str, *, today: Optional[str] = None,
         "alerts": _alerts(conn, brand_id, today),
         "fuel_gauge": _fuel_gauge(conn, brand_id, today),
         "content_pipeline": ads_creative_pipeline.pipeline_counts(conn, brand_id),
+        # 票 07-auto-sync：最後同步時間／是否可能過期（Meta 快照抓取時間或 GA4 同步
+        # 時間取較新者；從沒同步過也算過期）。
+        "last_sync_at": last_sync_at,
+        "data_stale": _is_data_stale(last_sync_at, today),
     }

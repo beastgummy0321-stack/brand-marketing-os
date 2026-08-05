@@ -105,6 +105,10 @@ export interface CockpitData {
   alerts: Alert[];
   fuel_gauge: FuelGauge;
   content_pipeline: ContentPipeline;
+  /** 最後一次成效同步時間（票 07-auto-sync）：Meta 快照抓取時間／GA4 同步時間取
+   * 較新者；從沒同步過是 null。`data_stale`＝從沒同步過，或最後一次同步不是今天。 */
+  last_sync_at: string | null;
+  data_stale: boolean;
 }
 
 export async function fetchCockpit(brandId: string): Promise<CockpitData> {

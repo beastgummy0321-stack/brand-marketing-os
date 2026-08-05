@@ -21,3 +21,10 @@ export function formatMomPct(value: number | null): string {
   const sign = value > 0 ? "+" : "";
   return `（環比 ${sign}${value}%）`;
 }
+
+/** 最後同步時間（票 07-auto-sync）：ISO 時間字串 → `MM/DD HH:mm`（本機時區）。 */
+export function formatSyncTime(iso: string): string {
+  const d = new Date(iso);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${pad(d.getMonth() + 1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
