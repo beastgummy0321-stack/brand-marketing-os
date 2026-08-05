@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-品牌行銷作業系統：Python + FastAPI + SQLite + Jinja/HTMX，單機單人使用。
+品牌行銷作業系統：Python + FastAPI + SQLite，單機單人使用。前端過渡期並存：舊頁 Jinja 直出，新殼 React＋Vite（`frontend/`，`npm run build` 產出掛載於 `/app`，ADR 0003）。
 
 - 啟動：雙擊 `啟動行銷系統.bat`，介面在 http://localhost:8710/
 - 資料庫：`data/app.db`（不進版控），每日備份在 `backups/`
