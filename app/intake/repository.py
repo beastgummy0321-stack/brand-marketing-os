@@ -402,4 +402,5 @@ def resolve_item(conn: sqlite3.Connection, brand_id: str, item_id: str, outcome:
 # 刪品牌時由登記處統一呼叫，本模組不必再被別人手寫死「記得通知它」。
 # ---------------------------------------------------------------------------
 
-cleanup.register("建檔精靈", count_brand=count_brand_data, delete_brand=delete_brand_data)
+cleanup.register("建檔精靈", count_brand=count_brand_data, delete_brand=delete_brand_data,
+                 brand_tables={"intake_draft", "intake_item"})

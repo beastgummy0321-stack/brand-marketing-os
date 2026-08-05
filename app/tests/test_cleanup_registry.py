@@ -87,8 +87,11 @@ class CleanupRegistryTest(unittest.TestCase):
         self.conn.close()
         self._tmpdir.cleanup()
 
-    def _register(self, name, *, count_brand, delete_brand):
-        cleanup.register(name, count_brand=count_brand, delete_brand=delete_brand)
+    def _register(self, name, *, count_brand, delete_brand, brand_tables=frozenset()):
+        # 假模組沒有真的資料表，brand_tables 預設空集合——涵蓋率警報器
+        # （test_cleanup_coverage.py）比對的是真實 schema，空集合不會影響它。
+        cleanup.register(name, count_brand=count_brand, delete_brand=delete_brand,
+                         brand_tables=brand_tables)
         self._registered_names.append(name)
 
     def _make_brand(self, name):
@@ -141,22 +144,30 @@ class CleanupRegistryTest(unittest.TestCase):
 
     # (c) register() 缺參數、或重複註冊同名，都要拋錯 --------------------------
 
-    def test_register_requires_all_three_args(self):
+    def test_register_requires_all_four_args(self):
         noop_count = lambda conn, brand_id: []  # noqa: E731
         noop_delete = lambda conn, brand_id: {}  # noqa: E731
 
         with self.assertRaises(ValueError):
-            cleanup.register(None, count_brand=noop_count, delete_brand=noop_delete)
+            cleanup.register(None, count_brand=noop_count, delete_brand=noop_delete,
+                             brand_tables=set())
         with self.assertRaises(ValueError):
-            cleanup.register("", count_brand=noop_count, delete_brand=noop_delete)
+            cleanup.register("", count_brand=noop_count, delete_brand=noop_delete,
+                             brand_tables=set())
         with self.assertRaises(ValueError):
-            cleanup.register("缺清點函式（清理登記處測試）", count_brand=None, delete_brand=noop_delete)
+            cleanup.register("缺清點函式（清理登記處測試）", count_brand=None,
+                             delete_brand=noop_delete, brand_tables=set())
         with self.assertRaises(ValueError):
-            cleanup.register("缺清除函式（清理登記處測試）", count_brand=noop_count, delete_brand=None)
+            cleanup.register("缺清除函式（清理登記處測試）", count_brand=noop_count,
+                             delete_brand=None, brand_tables=set())
+        with self.assertRaises(ValueError):
+            cleanup.register("缺表名宣告（清理登記處測試）", count_brand=noop_count,
+                             delete_brand=noop_delete, brand_tables=None)
 
         # 上面四次都該失敗、都沒真的登記進去，registered_names 不該多出東西。
         self.assertNotIn("缺清點函式（清理登記處測試）", cleanup.registered_names())
         self.assertNotIn("缺清除函式（清理登記處測試）", cleanup.registered_names())
+        self.assertNotIn("缺表名宣告（清理登記處測試）", cleanup.registered_names())
 
     def test_register_rejects_duplicate_name(self):
         noop_count = lambda conn, brand_id: []  # noqa: E731
@@ -164,7 +175,8 @@ class CleanupRegistryTest(unittest.TestCase):
         self._register("重複命名（清理登記處測試）", count_brand=noop_count, delete_brand=noop_delete)
 
         with self.assertRaises(ValueError):
-            cleanup.register("重複命名（清理登記處測試）", count_brand=noop_count, delete_brand=noop_delete)
+            cleanup.register("重複命名（清理登記處測試）", count_brand=noop_count,
+                             delete_brand=noop_delete, brand_tables=set())
 
     # (d) 真正的 bi_repo.delete_brand()（不是上面 (b) 案自己寫的 _delete_brand_like
     # 模擬版）出錯時也要整批回捲：品牌還在、audit_log 沒有半筆刪除紀錄 ---------------

@@ -1460,4 +1460,5 @@ def mark_learning_ledger_needs_revalidation(conn: sqlite3.Connection, brand_id: 
 # 刪品牌時由登記處統一呼叫，本模組不必再被別人手寫死「記得通知它」。
 # ---------------------------------------------------------------------------
 
-cleanup.register("品牌智庫", count_brand=count_brand_data, delete_brand=delete_brand_data)
+cleanup.register("品牌智庫", count_brand=count_brand_data, delete_brand=delete_brand_data,
+                 brand_tables={t for t, _ in BRAND_CHILD_TABLES})

@@ -13,20 +13,35 @@ Q4 單一交易、全有全無：delete_all() 只下 DELETE、絕對不 commit�
 _REGISTRY: dict = {}
 
 
-def register(name, *, count_brand, delete_brand) -> None:
-    """name／count_brand／delete_brand 三個都必填，缺一個就當場報錯；同一個 name
-    不能重複登記。用 * 強制具名參數，之後要加 count_product／delete_product 時
-    不用回頭改已經寫好的登記呼叫。"""
-    if not name or count_brand is None or delete_brand is None:
-        raise ValueError("register() 的 name、count_brand、delete_brand 都是必填")
+def register(name, *, count_brand, delete_brand, brand_tables) -> None:
+    """四個都必填，缺一個就當場報錯；同一個 name 不能重複登記。用 * 強制具名參數，
+    之後要加 count_product／delete_product 時不用回頭改已經寫好的登記呼叫。
+
+    brand_tables 是「刪品牌時本模組會清掉哪些資料表」的表名集合。它不參與刪除
+    （刪除走 delete_brand），存在的唯一理由是讓涵蓋率警報器
+    （app/tests/test_cleanup_coverage.py）有一份真相可以比對——資料庫裡冒出新的
+    帶 brand_id 的表卻沒人認領時，測試要能自己叫。宣告在這裡而不是另外維護一份
+    清單，是因為「另外維護一份清單」正是這整串 bug 的根因。
+    """
+    if not name or count_brand is None or delete_brand is None or brand_tables is None:
+        raise ValueError("register() 的 name、count_brand、delete_brand、brand_tables 都是必填")
     if name in _REGISTRY:
         raise ValueError(f"「{name}」已經登記過清理函式了，不能重複登記")
-    _REGISTRY[name] = {"count_brand": count_brand, "delete_brand": delete_brand}
+    _REGISTRY[name] = {
+        "count_brand": count_brand,
+        "delete_brand": delete_brand,
+        "brand_tables": frozenset(brand_tables),
+    }
 
 
 def registered_names() -> list:
     """給 main.py 的啟動斷言用：確認該登記的模組都登記了。"""
     return list(_REGISTRY)
+
+
+def declared_brand_tables() -> dict:
+    """給涵蓋率警報器用：{模組名稱: 它宣告會清掉的表名集合}。"""
+    return {name: entry["brand_tables"] for name, entry in _REGISTRY.items()}
 
 
 def count_all(conn, brand_id: str) -> list:
