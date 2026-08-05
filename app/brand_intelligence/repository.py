@@ -24,6 +24,7 @@ import json
 import sqlite3
 from typing import Optional
 
+from app.core import cleanup
 from app.core.audit import write_audit
 from app.core.db import new_id, now_iso
 
@@ -152,10 +153,29 @@ def count_pending_product_layer(conn: sqlite3.Connection, brand_id: str) -> int:
     return fact_n + econ_n
 
 
+def delete_brand_data(conn: sqlite3.Connection, brand_id: str) -> dict:
+    """清掉本模組掛在該品牌下的子表資料（只清 BRAND_CHILD_TABLES 這 13 張子表，
+    不碰 brand 那一列、不寫稽核），登記進 app.core.cleanup 給 delete_brand() 呼叫用。
+    只下 DELETE、不 commit（Q4 單一交易、全有全無，commit 由 delete_brand() 統一做）。
+    """
+    counts = dict(count_brand_data(conn, brand_id))
+    for table, _label in BRAND_CHILD_TABLES:
+        conn.execute(f"DELETE FROM {table} WHERE brand_id = ?", (brand_id,))
+    return counts
+
+
 def delete_brand(conn: sqlite3.Connection, brand_id: str, *, actor: str) -> dict:
-    """硬刪除一個已封存品牌與它在本模組的全部資料，不可逆（決策 0015）。
+    """硬刪除一個已封存品牌與所有登記模組掛在它底下的資料，不可逆（決策 0015）。
 
     只收已封存的品牌：使用中的品牌得先封存，隔一道手續才刪得掉。
+    透過 app.core.cleanup.delete_all() 清掉所有登記模組的資料（本模組「品牌智庫」
+    自己也是登記模組之一，會被 delete_all 一併叫到，這裡不重複清），
+    再刪 brand 本身那一列、寫稽核，整段只有這裡最後這一次 commit（Q4 全有全無）。
+
+    app 全程共用同一條 DB 連線（見 app/core/db.py connect()）：不 commit 不等於自動
+    回捲，中途出錯若不明確 conn.rollback()，懸著的 DELETE 會等到下一個不相干的請求
+    在同一條連線上 commit() 時被一起沖進 DB，而且沒有 audit_log 紀錄。所以這裡明確
+    包 try/except，出錯就 rollback 再往外拋。
     """
     _require(actor, "actor 為必填")
     before = get_brand(conn, brand_id)
@@ -163,14 +183,16 @@ def delete_brand(conn: sqlite3.Connection, brand_id: str, *, actor: str) -> dict
         raise ValueError(f"找不到品牌：{brand_id}")
     if before["status"] != "archived":
         raise ValueError("只有已封存的品牌可以刪除，請先把品牌封存。")
-    counts = dict(count_brand_data(conn, brand_id))
-    for table, _label in BRAND_CHILD_TABLES:
-        conn.execute(f"DELETE FROM {table} WHERE brand_id = ?", (brand_id,))
-    conn.execute("DELETE FROM brand WHERE id = ?", (brand_id,))
-    write_audit(conn, brand_id=brand_id, entity_type="brand", entity_id=brand_id,
-                action="delete", actor=actor, before={**before, "deleted_counts": counts},
-                after=None, reason="把關人刪除已封存品牌（決策 0015）")
-    conn.commit()
+    try:
+        counts = cleanup.delete_all(conn, brand_id)
+        conn.execute("DELETE FROM brand WHERE id = ?", (brand_id,))
+        write_audit(conn, brand_id=brand_id, entity_type="brand", entity_id=brand_id,
+                    action="delete", actor=actor, before={**before, "deleted_counts": counts},
+                    after=None, reason="把關人刪除已封存品牌（決策 0015）")
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
     return counts
 
 
@@ -260,6 +282,10 @@ def delete_product(conn: sqlite3.Connection, brand_id: str, product_id: str, *, 
     """硬刪除一個已封存產品與它在本模組的全部資料，不可逆（決策 0020，比照品牌 0015）。
 
     只收已封存的產品：使用中的產品得先封存，隔一道手續才刪得掉。
+
+    交易處理同 delete_brand()：app 全程共用同一條 DB 連線（見 app/core/db.py connect()），
+    不 commit 不等於自動回捲。中途出錯若不明確 conn.rollback()，懸著的 DELETE 會等到
+    下一個不相干的請求在同一條連線上 commit() 時被一起沖進 DB，而且沒有 audit_log 紀錄。
     """
     _require(actor, "actor 為必填")
     before = get_product(conn, brand_id, product_id)
@@ -268,14 +294,18 @@ def delete_product(conn: sqlite3.Connection, brand_id: str, product_id: str, *, 
     if before["status"] != "archived":
         raise ValueError("只有已封存的產品可以刪除，請先把產品封存。")
     counts = dict(count_product_data(conn, brand_id, product_id))
-    for table, _label in PRODUCT_CHILD_TABLES:
-        conn.execute(f"DELETE FROM {table} WHERE brand_id = ? AND product_id = ?",
-                      (brand_id, product_id))
-    conn.execute("DELETE FROM product WHERE id = ? AND brand_id = ?", (product_id, brand_id))
-    write_audit(conn, brand_id=brand_id, entity_type="product", entity_id=product_id,
-                action="delete", actor=actor, before={**before, "deleted_counts": counts},
-                after=None, reason="把關人刪除已封存產品（決策 0020）")
-    conn.commit()
+    try:
+        for table, _label in PRODUCT_CHILD_TABLES:
+            conn.execute(f"DELETE FROM {table} WHERE brand_id = ? AND product_id = ?",
+                          (brand_id, product_id))
+        conn.execute("DELETE FROM product WHERE id = ? AND brand_id = ?", (product_id, brand_id))
+        write_audit(conn, brand_id=brand_id, entity_type="product", entity_id=product_id,
+                    action="delete", actor=actor, before={**before, "deleted_counts": counts},
+                    after=None, reason="把關人刪除已封存產品（決策 0020）")
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
     return counts
 
 
@@ -1423,3 +1453,11 @@ def mark_learning_ledger_needs_revalidation(conn: sqlite3.Connection, brand_id: 
         "UPDATE learning_ledger SET needs_revalidation = 1 WHERE id = ? AND brand_id = ?",
         (entry_id, brand_id),
     )
+
+
+# ---------------------------------------------------------------------------
+# 清理登記處（第 2 刀）：向 app.core.cleanup 登記本模組的清點／清除函式，
+# 刪品牌時由登記處統一呼叫，本模組不必再被別人手寫死「記得通知它」。
+# ---------------------------------------------------------------------------
+
+cleanup.register("品牌智庫", count_brand=count_brand_data, delete_brand=delete_brand_data)

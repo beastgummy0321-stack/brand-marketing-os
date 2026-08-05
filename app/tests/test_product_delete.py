@@ -73,6 +73,35 @@ class ProductDeleteTest(unittest.TestCase):
         self.assertIsNone(repo.get_product(self.conn, bid, pid))
         self.assertEqual(set(self._row_counts(pid).values()), {0})
 
+    def test_failure_midway_rolls_back_everything(self):
+        """刪除中途出錯要整批回捲：產品與所有子資料原封不動，也不留刪除稽核。
+
+        app 全程共用同一條 DB 連線，不 commit 不等於自動回捲——沒有明確 rollback 的話，
+        懸著的 DELETE 會在下一個不相干的請求 commit 時被一起沖進 DB，而且沒有紀錄。
+        這條測試守的就是那個明確的 rollback。
+        """
+        bid = repo.create_brand(self.conn, name="測試皂坊（產品回捲）", client_name="測試客戶",
+                                 actor="測試員")["id"]
+        pid = self._seed_product(bid, "回捲產品（刪除測試）")
+        before = self._row_counts(pid)
+        repo.update_product(self.conn, bid, pid, name="回捲產品（刪除測試）",
+                             status="archived", actor="測試員")
+
+        # write_audit 在所有 DELETE 之後、commit 之前執行，讓它爆掉最能驗出回捲
+        original = repo.write_audit
+        repo.write_audit = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("故意失敗"))
+        try:
+            with self.assertRaises(RuntimeError):
+                repo.delete_product(self.conn, bid, pid, actor="測試員")
+        finally:
+            repo.write_audit = original
+
+        self.assertIsNotNone(repo.get_product(self.conn, bid, pid), "產品應該原封不動還在")
+        self.assertEqual(self._row_counts(pid), before, "子資料應該一列都沒少")
+        self.assertIsNone(self.conn.execute(
+            "SELECT 1 FROM audit_log WHERE entity_type = 'product' AND action = 'delete' "
+            "AND entity_id = ?", (pid,)).fetchone(), "不該留下刪除稽核")
+
     def test_delete_leaves_audit_trail(self):
         bid = repo.create_brand(self.conn, name="測試皂坊（產品刪除3）", client_name="測試客戶",
                                  actor="測試員")["id"]

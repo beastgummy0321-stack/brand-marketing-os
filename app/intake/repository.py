@@ -15,6 +15,7 @@ import sqlite3
 from typing import Optional
 
 from app.brand_intelligence import repository as bi_repo
+from app.core import cleanup
 from app.core import db
 from app.core.audit import write_audit
 from app.core import settings as coresettings
@@ -56,11 +57,12 @@ def delete_brand_data(conn: sqlite3.Connection, brand_id: str) -> dict:
     """品牌被刪除時，清掉本模組掛在該品牌下的草稿與逐條紀錄（決策 0015）。
 
     稽核由呼叫端（品牌刪除那筆 audit_log）一起記，這裡不另外寫。
+    只下 DELETE，不 commit、不 rollback——交易的開關統一在最外層的
+    brand_intelligence.delete_brand()（Q4 全有全無）。
     """
     counts = dict(count_brand_data(conn, brand_id))
     conn.execute("DELETE FROM intake_item WHERE brand_id = ?", (brand_id,))
     conn.execute("DELETE FROM intake_draft WHERE brand_id = ?", (brand_id,))
-    conn.commit()
     return counts
 
 
@@ -393,3 +395,11 @@ def resolve_item(conn: sqlite3.Connection, brand_id: str, item_id: str, outcome:
         "SELECT * FROM intake_item WHERE brand_id = ? AND id = ?", (brand_id, item_id)
     ).fetchone()
     return _item_to_display(row)
+
+
+# ---------------------------------------------------------------------------
+# 向清理登記處報到（決策：清理登記處 Q2 各模組自我登記）
+# 刪品牌時由登記處統一呼叫，本模組不必再被別人手寫死「記得通知它」。
+# ---------------------------------------------------------------------------
+
+cleanup.register("建檔精靈", count_brand=count_brand_data, delete_brand=delete_brand_data)

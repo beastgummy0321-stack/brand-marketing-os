@@ -72,9 +72,13 @@ class BrandDeleteTest(unittest.TestCase):
             for t in ALL_TABLES}
 
     def _delete(self, brand_id):
-        counts = repo.delete_brand(self.conn, brand_id, actor="測試員")
-        intake_repo.delete_brand_data(self.conn, brand_id)
-        return counts
+        """只叫 delete_brand()——intake 的資料由清理登記處負責清，這裡不補刀。
+
+        故意不再手動呼叫 intake_repo.delete_brand_data()：留著那行的話，就算登記處
+        壞掉沒清到 intake，這個測試照樣會綠。現在 intake_draft / intake_item 歸零
+        是登記處真的有做事的證明。
+        """
+        return repo.delete_brand(self.conn, brand_id, actor="測試員")
 
     def test_active_brand_cannot_be_deleted(self):
         bid = self._seed_brand("未封存品牌（刪除測試）")

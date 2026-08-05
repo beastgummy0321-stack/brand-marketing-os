@@ -34,10 +34,10 @@ from app.brand_intelligence import product_ai
 from app.brand_intelligence import report as brand_report_mod
 from app.brand_intelligence import repository as repo
 from app.core import backup as corebackup
+from app.core import cleanup
 from app.core import interrupts as core_interrupts
 from app.core import prototype_phase as core_prototype_phase
 from app.core.db import new_id
-from app.intake import repository as intake_repo
 from app.intake import state as intake_state
 from app.shared import web
 from app.shared.web import (
@@ -271,8 +271,9 @@ async def brand_edit_post(request: Request, brand_id: str, name: str = Form(""),
 
 
 def _delete_counts(brand_id: str) -> list:
-    """刪除確認頁要列的「會一起消失的資料」，只留有東西的項目。"""
-    rows = repo.count_brand_data(web.conn, brand_id) + intake_repo.count_brand_data(web.conn, brand_id)
+    """刪除確認頁要列的「會一起消失的資料」，只留有東西的項目（改由清理登記處
+    彙整所有登記模組的清點結果，不再由本檔手寫死要問誰）。"""
+    rows = cleanup.count_all(web.conn, brand_id)
     return [(label, n) for label, n in rows if n > 0]
 
 
@@ -302,7 +303,6 @@ async def brand_delete_post(request: Request, brand_id: str, confirm_name: str =
         ), status_code=400)
     corebackup.snapshot(f"before-delete-{brand_id}")
     repo.delete_brand(web.conn, brand_id, actor=actor)
-    intake_repo.delete_brand_data(web.conn, brand_id)
     return redirect_with_message(
         "/", f"已永久刪除品牌「{brand['name']}」。刪除前的備份已存進 backups 資料夾。")
 
