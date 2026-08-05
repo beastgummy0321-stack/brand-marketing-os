@@ -20,6 +20,7 @@ from app.ads.routes_common import CYCLE_STATUS_LABELS, derive_cycle_stage
 from app.brand_intelligence import repository as bi_repo
 from app.core import interrupts as core_interrupts
 from app.core import settings as core_settings
+from app.dashboard import campaign_calendar
 from app.dashboard import guide_cards
 from app.dashboard.health import brand_health
 from app.orders import repository as orders_repo
@@ -71,6 +72,11 @@ def _cycle_summary(cycle: Optional[dict]) -> Optional[dict]:
 # app/dashboard/guide_cards.py，這裡只負責組 facts。接口鐵則：只透過各模組的公開
 # 查詢函式取數——derive_cycle_stage 是 app.ads.routes_common 公開函式（本票把它從
 # 私有改公開），facts 契約見 guide_cards.py 檔頭說明。
+#
+# events（票 06-campaign-calendar 檔期資料）預設吃 campaign_calendar.load_events()
+# 讀內建 JSON；overview()／cockpit() 開 calendar_events 這個測試縫（HTTP API 不暴露，
+# routes.py 呼叫時一律用預設值）——真實檔期日期是外部世界的事實，沒辦法像訂單那樣
+# 隨測試「今天」調整，才需要這個縫讓純函數情境測試以外的整合測試可控。
 # ---------------------------------------------------------------------------
 
 def _cycle_stage_label(conn, brand_id: str, cycle: dict) -> Optional[str]:
@@ -79,7 +85,7 @@ def _cycle_stage_label(conn, brand_id: str, cycle: dict) -> Optional[str]:
     return ads_stages.STAGE_LABELS[stage_index - 1] if stage_index < 5 else None
 
 
-def _guide_card_facts(conn, brand_id: str, cycle: Optional[dict]) -> dict:
+def _guide_card_facts(conn, brand_id: str, cycle: Optional[dict], today: str, events: list) -> dict:
     pending_facts = bi_repo.list_brand_facts(conn, brand_id, status="pending")
     active_cycle = None
     reading_ready = False
@@ -94,19 +100,20 @@ def _guide_card_facts(conn, brand_id: str, cycle: Optional[dict]) -> dict:
         "active_cycle": active_cycle,
         "reading_ready": reading_ready,
         "next_cycle_draft_ready": next_cycle_draft_ready,
+        "campaign_reminder": campaign_calendar.next_calendar_reminder(events, date.fromisoformat(today)),
     }
 
 
-def _guide_cards(conn, brand_id: str, cycle: Optional[dict]) -> list:
-    return guide_cards.build(_guide_card_facts(conn, brand_id, cycle))
+def _guide_cards(conn, brand_id: str, cycle: Optional[dict], today: str, events: list) -> list:
+    return guide_cards.build(_guide_card_facts(conn, brand_id, cycle, today, events))
 
 
-def _brand_card(conn, brand: dict, today: str) -> dict:
+def _brand_card(conn, brand: dict, today: str, events: list) -> dict:
     open_interrupts = core_interrupts.list_open(conn, brand_id=brand["id"], today=today,
                                                 archive_stale=False)
     revenue, revenue_mom_pct = _revenue_and_mom(conn, brand["id"], today)
     cycle = _latest_cycle(conn, brand["id"])
-    cards = _guide_cards(conn, brand["id"], cycle)
+    cards = _guide_cards(conn, brand["id"], cycle, today, events)
     return {
         "brand_id": brand["id"],
         "brand_name": brand["name"],
@@ -120,10 +127,11 @@ def _brand_card(conn, brand: dict, today: str) -> dict:
     }
 
 
-def overview(conn, *, today: Optional[str] = None) -> list:
+def overview(conn, *, today: Optional[str] = None, calendar_events: Optional[list] = None) -> list:
     today = today or date.today().isoformat()
+    events = calendar_events if calendar_events is not None else campaign_calendar.load_events()
     brands = bi_repo.list_brands(conn, status="active")
-    return [_brand_card(conn, brand, today) for brand in brands]
+    return [_brand_card(conn, brand, today, events) for brand in brands]
 
 
 # ---------------------------------------------------------------------------
@@ -219,8 +227,10 @@ def _monthly_trend(conn, brand_id: str, months: list) -> dict:
     return {"revenue": revenue, "spend": spend, "roas": roas, "orders": orders}
 
 
-def cockpit(conn, brand_id: str, *, today: Optional[str] = None) -> dict:
+def cockpit(conn, brand_id: str, *, today: Optional[str] = None,
+            calendar_events: Optional[list] = None) -> dict:
     today = today or date.today().isoformat()
+    events = calendar_events if calendar_events is not None else campaign_calendar.load_events()
     revenue, revenue_mom = _revenue_and_mom(conn, brand_id, today)
     spend, spend_mom = _spend_and_mom(conn, brand_id, today)
     roas, roas_mom = _roas_and_mom(conn, brand_id, today)
@@ -240,7 +250,10 @@ def cockpit(conn, brand_id: str, *, today: Optional[str] = None) -> dict:
         "chart": {"months": months, "revenue": trend["revenue"], "spend": trend["spend"]},
         # 駕駛艙常駐下一步指南卡（票 04-guide-card-engine）：最多 3 件，沒有待辦是空清單，
         # 前端顯示「一切正常」。
-        "guide_cards": _guide_cards(conn, brand_id, cycle),
+        "guide_cards": _guide_cards(conn, brand_id, cycle, today, events),
+        # 票 06-campaign-calendar：進行中檔期目前處於預熱／高潮／衝刺哪個階段
+        # （{id, name, tier, tier_label, stage, days_until}）；沒有檔期在窗口內是 None。
+        "campaign_stage": campaign_calendar.current_campaign_stage(events, date.fromisoformat(today)),
         # 票 05-alerts-fuel-pipeline：異常警示區（空清單＝前端顯示「一切正常」）／
         # AI 油錢錶／內容產線小計。
         "alerts": _alerts(conn, brand_id, today),

@@ -20,6 +20,7 @@ def _facts(**overrides) -> dict:
         "active_cycle": None,
         "reading_ready": False,
         "next_cycle_draft_ready": False,
+        "campaign_reminder": None,
     }
     base.update(overrides)
     return base
@@ -95,6 +96,34 @@ class PendingFactsRuleTest(unittest.TestCase):
     def test_does_not_trigger_when_count_zero(self):
         facts = _facts(pending_facts_count=0)
         self.assertIsNone(guide_cards.RULES["pending_facts"](facts))
+
+
+class CampaignCalendarRuleTest(unittest.TestCase):
+    """票 06-campaign-calendar：檔期日曆備戰提醒轉成指南卡文字。"""
+
+    def test_triggers_prep_reminder_with_weeks_until_in_title(self):
+        facts = _facts(campaign_reminder={
+            "id": "cny_2026", "name": "農曆新年", "tier": "large", "tier_label": "大檔",
+            "days_until": 28, "weeks_until": 4, "kind": "prep",
+        })
+        card = guide_cards.RULES["campaign_calendar"](facts)
+        self.assertIsNotNone(card)
+        self.assertIn("農曆新年", card["title"])
+        self.assertIn("4", card["title"])
+        self.assertEqual(card["action_url"], f"/brands/{BRAND_ID}/ads/new")
+
+    def test_triggers_creative_reminder_with_days_until_in_title(self):
+        facts = _facts(campaign_reminder={
+            "id": "double11_2026", "name": "雙11購物節", "days_until": 10, "kind": "creative",
+        })
+        card = guide_cards.RULES["campaign_calendar"](facts)
+        self.assertIsNotNone(card)
+        self.assertIn("雙11購物節", card["title"])
+        self.assertIn("素材", card["title"])
+        self.assertIn("10", card["title"])
+
+    def test_does_not_trigger_when_no_reminder(self):
+        self.assertIsNone(guide_cards.RULES["campaign_calendar"](_facts(campaign_reminder=None)))
 
 
 class BuildPriorityAndCapTest(unittest.TestCase):

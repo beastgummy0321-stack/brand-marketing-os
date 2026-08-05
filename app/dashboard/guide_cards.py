@@ -6,13 +6,15 @@
 RULES 是一個 dict，key＝規則 id，value＝判定函式；dict 順序＝優先序（越早登記代表行動
 價值越高，同 interrupts.py `_CATEGORY_RANK` 的做法），呼叫端不得自行排序。
 
-第一批貨源（規格 0001「指南卡第一批貨源」，本票範圍）：
+第一批貨源（規格 0001「指南卡第一批貨源」）：
 - reading_unread：判讀結果出爐未讀
 - next_cycle_draft：下期草案已備好
 - cycle_stage：檔期卡在哪道關卡
 - pending_facts：待確認事實數
+- campaign_calendar：檔期日曆備戰提醒（票 06-campaign-calendar，純函數在
+  app/dashboard/campaign_calendar.py，這裡只負責把結果轉成卡片文字）
 
-（檔期日曆備戰提醒、pacing 警示是另外兩批貨源，見票 06／08，不在本票範圍。）
+（pacing 警示是最後一批貨源，見票 08，不在本票範圍。）
 
 每條規則收一份「這個品牌的原始資料」dict（build() 的 facts 參數，由呼叫端組裝——
 本檔不碰資料庫，見 app/dashboard/repository.py），判斷觸不觸發；觸發回一張卡
@@ -31,6 +33,9 @@ facts 欄位契約（由 app/dashboard/repository.py 組裝）：
   （stage_label 為 None＝已經在成效格／沒有進行中檔期，不算「卡在哪道關卡」）
 - reading_ready: bool（最新一期已經跑過判讀）
 - next_cycle_draft_ready: bool（下期草案已經生成）
+- campaign_reminder: dict|None（app/dashboard/campaign_calendar.py
+  next_calendar_reminder() 的回傳值：{id, name, days_until, kind("prep"|"creative"),
+  ...}——kind="prep" 才有 weeks_until／tier_label；沒有觸發中的檔期就是 None）
 """
 
 from typing import Callable, Optional
@@ -87,12 +92,27 @@ def _rule_pending_facts(facts: dict) -> Optional[dict]:
     }
 
 
+def _rule_campaign_calendar(facts: dict) -> Optional[dict]:
+    """檔期日曆備戰提醒（票 06-campaign-calendar）：素材完稿期限比備戰提前期更急迫，
+    reminder["kind"] 已經在 next_calendar_reminder() 決定好要顯示哪一種，這裡只轉文字。
+    一鍵前往固定導去「開檔期」（規格範例：「農曆新年還有 4 週，開始備戰？」）。"""
+    reminder = facts.get("campaign_reminder")
+    if not reminder:
+        return None
+    if reminder["kind"] == "creative":
+        title = f"「{reminder['name']}」素材要完稿了，還有 {reminder['days_until']} 天"
+    else:
+        title = f"「{reminder['name']}」還有 {reminder['weeks_until']} 週，開始備戰？"
+    return {"title": title, "action_url": f"/brands/{facts['brand_id']}/ads/new"}
+
+
 # 登記表：dict 順序＝優先序（越早登記代表行動價值越高，比照 interrupts.py CATEGORIES）。
 RULES: "dict[str, Callable[[dict], Optional[dict]]]" = {
     "reading_unread": _rule_reading_unread,
     "next_cycle_draft": _rule_next_cycle_draft,
     "cycle_stage": _rule_cycle_stage,
     "pending_facts": _rule_pending_facts,
+    "campaign_calendar": _rule_campaign_calendar,
 }
 
 

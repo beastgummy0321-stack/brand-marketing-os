@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { AlertsPanel } from "@/components/cockpit/AlertsPanel";
+import { CampaignStageBadge } from "@/components/cockpit/CampaignStageBadge";
 import { CockpitChart } from "@/components/cockpit/CockpitChart";
 import { ContentPipelineSummary } from "@/components/cockpit/ContentPipelineSummary";
 import { FuelGauge } from "@/components/cockpit/FuelGauge";
@@ -60,7 +61,10 @@ export function CockpitPage({ brandId }: { brandId: string }) {
   return (
     <div className="flex flex-col gap-6">
       <div className="flex items-center justify-between">
-        <h1 className="font-display text-2xl text-foreground">{data.brand_name}</h1>
+        <div className="flex items-center gap-3">
+          <h1 className="font-display text-2xl text-foreground">{data.brand_name}</h1>
+          <CampaignStageBadge stage={data.campaign_stage} />
+        </div>
         <a
           href="/app/"
           className="text-sm font-medium text-primary underline-offset-4 hover:underline"

@@ -72,6 +72,17 @@ export interface ContentPipeline {
   published: number;
 }
 
+/** 檔期日曆第一層（票 06-campaign-calendar）：進行中檔期目前處於三階段中的哪一段。
+ * 對應 app/dashboard/campaign_calendar.py current_campaign_stage() 的輸出形狀。 */
+export interface CampaignStage {
+  id: string;
+  name: string;
+  tier: "large" | "medium" | "small";
+  tier_label: string;
+  stage: "預熱" | "高潮" | "衝刺";
+  days_until: number;
+}
+
 export interface CockpitData {
   brand_id: string;
   brand_name: string;
@@ -89,6 +100,8 @@ export interface CockpitData {
   /** 常駐下一步指南卡（票 04-guide-card-engine）：最多 3 件，優先序排列；
    * 空陣列＝一切正常。 */
   guide_cards: GuideCard[];
+  /** 沒有檔期在提前期窗口內是 null。 */
+  campaign_stage: CampaignStage | null;
   alerts: Alert[];
   fuel_gauge: FuelGauge;
   content_pipeline: ContentPipeline;
