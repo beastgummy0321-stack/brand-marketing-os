@@ -6,7 +6,7 @@ import { Sidebar } from "./Sidebar";
  * （決策 0038／ADR 0003，不做響應式）。內容區給後續票（02 跨品牌總覽、03 駕駛艙）填。 */
 export function AppShell({ children }: { children: ReactNode }) {
   return (
-    <div className="mx-auto flex h-screen w-[var(--width-shell)] flex-col overflow-hidden">
+    <div className="mx-auto flex h-full w-[var(--width-shell)] flex-col overflow-hidden">
       <Topbar />
       <div className="flex flex-1 overflow-hidden">
         <Sidebar />
