@@ -55,6 +55,10 @@ class BrandDeleteTest(unittest.TestCase):
                                                 actor="測試員")
         repo.create_customer_voice(self.conn, bid, actor="測試員", raw_text="測試顧客原話",
                                     source_channel="ptt", source_type="manual", extraction=[])
+        # brand_report 在 DB 層有外鍵指向 brand：沒被清就不是「刪不乾淨」而是「整個刪除失敗」
+        repo.create_brand_report(self.conn, bid, actor="測試員", model="test-model",
+                                  llm_task_id=None, brand_version=1, source_fact_count=1,
+                                  sections={"定位": "測試段落"})
         draft = intake_repo.create_draft(self.conn, bid, "測試品牌描述", [], [], actor="測試員")
         intake_repo.create_items(self.conn, bid, draft["id"], [{
             "kind": "品牌事實", "category": "品牌定位", "title": "測試標題",

@@ -126,6 +126,7 @@ BRAND_CHILD_TABLES = (
     ("customer_voice", "顧客原話"),
     ("brand_fact", "品牌事實"),
     ("source_reference", "來源出處"),
+    ("brand_report", "品牌報告"),
     ("product", "產品"),
 )
 
