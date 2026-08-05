@@ -144,15 +144,39 @@ class DashboardOverviewApiTest(unittest.TestCase):
         self.assertIsNone(card["next_step"])
 
     def test_dashboard_endpoint_does_not_write_any_row(self):
-        """接口鐵則：只讀，不寫任何資料。呼叫兩次前後各資料表列數不變。"""
+        """接口鐵則：只讀，不寫任何資料。呼叫兩次前後各資料表『整列內容』不變（不能只比
+        COUNT——第 2 輪驗證退回的正是 UPDATE 不增減列數、COUNT 抓不到的死角，見票 02
+        second-round review）。"""
         tables = ["brand", "interrupt", "order_record", "campaign_cycle"]
-        before = {t: main.conn.execute(f"SELECT COUNT(*) c FROM {t}").fetchone()["c"]
-                  for t in tables}
+
+        def _snapshot():
+            return {t: [dict(r) for r in main.conn.execute(f"SELECT * FROM {t} ORDER BY id")]
+                    for t in tables}
+
+        before = _snapshot()
         self.client.get("/api/dashboard/overview")
         self.client.get("/api/dashboard/overview")
-        after = {t: main.conn.execute(f"SELECT COUNT(*) c FROM {t}").fetchone()["c"]
-                 for t in tables}
+        after = _snapshot()
         self.assertEqual(before, after)
+
+    def test_dashboard_endpoint_does_not_archive_stale_informational_interrupt(self):
+        """第 2 輪驗證退回的重現案例：list_open() 內部的 _archive_stale_informational
+        會把逾期 14 天以上的 informational 提醒悄悄 UPDATE 成 archived。dashboard 打
+        這支只讀 API 不該觸發這個副作用。"""
+        stale_id = new_id("itr")
+        main.conn.execute(
+            "INSERT INTO interrupt (id, brand_id, dedupe_key, category, severity, message,"
+            " status, visible_from, created_at) VALUES (?, ?, 'dup-stale', 'cycle_reminder',"
+            " 'informational', '測試用逾期提醒', 'open', '2026-07-16', ?)",
+            (stale_id, self.brand_green["id"], now_iso()),
+        )
+        main.conn.commit()
+
+        self.client.get("/api/dashboard/overview")
+
+        row = main.conn.execute("SELECT status FROM interrupt WHERE id = ?",
+                                (stale_id,)).fetchone()
+        self.assertEqual(row["status"], "open")
 
 
 if __name__ == "__main__":

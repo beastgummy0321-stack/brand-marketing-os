@@ -127,12 +127,17 @@ def _sort_key(row: dict):
 
 
 def list_open(conn, brand_id: Optional[str] = None, category: Optional[str] = None,
-              today: Optional[str] = None) -> list:
+              today: Optional[str] = None, archive_stale: bool = True) -> list:
     """待辦清單：已到 visible_from 的 open 項目，嚴重度為主、同級按行動價值排序。
 
     brand_id 省略＝跨品牌查（首頁待辦、全站收件匣用）。
+
+    archive_stale＝False：跳過逾期資訊性項目自動封存（唯讀呼叫端專用，例如
+    app/dashboard——「查詢函式」若順手寫資料庫就不是真的唯讀，見票 02 第 2 輪）。
+    預設 True：保留既有呼叫端（app/shared/web.py、app/ads/onboarding.py 等）原行為。
     """
-    _archive_stale_informational(conn, today)
+    if archive_stale:
+        _archive_stale_informational(conn, today)
     today = today or date.today().isoformat()
     sql = "SELECT * FROM interrupt WHERE status = 'open' AND (visible_from IS NULL OR visible_from <= ?)"
     params: list = [today]

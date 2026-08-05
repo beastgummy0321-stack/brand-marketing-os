@@ -53,7 +53,8 @@ def _active_cycle_summary(conn, brand_id: str) -> Optional[dict]:
 
 
 def _brand_card(conn, brand: dict, today: str) -> dict:
-    open_interrupts = core_interrupts.list_open(conn, brand_id=brand["id"], today=today)
+    open_interrupts = core_interrupts.list_open(conn, brand_id=brand["id"], today=today,
+                                                archive_stale=False)
     revenue, revenue_mom_pct = _revenue_and_mom(conn, brand["id"], today)
     return {
         "brand_id": brand["id"],
