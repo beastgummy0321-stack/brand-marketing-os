@@ -67,8 +67,6 @@ def _question_json(i: int = 0) -> str:
 class IntakeWizardTest(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(main.app)
-        self.client.post("/settings/operator", data={"name": "測試員", "next": "/"},
-                          follow_redirects=False)
         main.conn.execute("DELETE FROM app_setting")
         main.conn.commit()
         # 隔離環境變數：金鑰／模型只看 DB 設定（沒設＝沒金鑰、預設模型 opus）

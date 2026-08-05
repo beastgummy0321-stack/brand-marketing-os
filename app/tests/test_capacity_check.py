@@ -209,8 +209,6 @@ class MainScopeExcludesInterruptQueueTest(unittest.TestCase):
 
     def setUp(self):
         self.client = TestClient(main.app)
-        self.client.post("/settings/operator", data={"name": ACTOR, "next": "/"},
-                         follow_redirects=False)
         self.brand = bi_repo.create_brand(main.conn, name=f"虛構容量驗收{self.id()[-6:]}",
                                           client_name=None, actor=ACTOR)
         self.bid = self.brand["id"]

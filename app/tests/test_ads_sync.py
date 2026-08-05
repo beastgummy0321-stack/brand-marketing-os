@@ -28,6 +28,7 @@ from app.ads import sync as ads_sync  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
 from app.core import settings as coresettings  # noqa: E402
 from app.core.db import new_id, now_iso  # noqa: E402
+from app.shared.web import OPERATOR  # noqa: E402
 
 main.reopen_connection()
 
@@ -93,8 +94,6 @@ class InsightParsingTest(unittest.TestCase):
 class _BaseSyncTest(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(main.app)
-        self.client.post("/settings/operator", data={"name": ACTOR, "next": "/"},
-                         follow_redirects=False)
         # 先子後父：derived_metric 有外鍵指向 performance_snapshot，順序倒過來會被外鍵擋下
         main.conn.execute("DELETE FROM discovered_campaign")
         main.conn.execute("DELETE FROM derived_metric")
@@ -206,13 +205,18 @@ class ClaimGateTest(_BaseSyncTest):
         self.assertEqual(resp.status_code, 303)
         self.assertEqual(ads_sync.list_pending_claims(main.conn, self.bid), [])
 
-    def test_claim_requires_named_operator(self):
+    def test_claim_works_without_operator_cookie(self):
+        """ADR 0004：認領歸屬不再要求先設定操作人。"""
         self._sync(campaigns=[_campaign("666", "某活動")])
         discovered_id = main.conn.execute("SELECT id FROM discovered_campaign").fetchone()["id"]
         self.client.cookies.clear()
         resp = self.client.post(f"/brands/{self.bid}/ads/claims/{discovered_id}/claim",
                                 follow_redirects=False)
-        self.assertIn("/settings/operator", resp.headers["location"])
+        self.assertEqual(resp.status_code, 303)
+        self.assertNotIn("/settings/operator", resp.headers["location"])
+        row = main.conn.execute(
+            "SELECT claimed_by FROM discovered_campaign WHERE id = ?", (discovered_id,)).fetchone()
+        self.assertEqual(row["claimed_by"], OPERATOR)
 
 
 class SanityAndErrorTest(_BaseSyncTest):

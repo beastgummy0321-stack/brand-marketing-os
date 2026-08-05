@@ -14,7 +14,6 @@
    - active_brands：品牌切換器用的品牌清單（見 _components/brand_switcher.html）
    - inbox_count：收件匣待辦數（int，預設 0；> 0 時顯示徽章）
    - nav_current：目前所在的四分類代碼，四擇一或 None：'hub'｜'ads'｜'content'｜'voice'
-   - operator_name：目前操作人，顯示於側欄底部、設定上方（修憲落地 V4 補上，見下方）
    - current_interrupt：全站打斷佇列的「當前一件」（決策 0026），顯示於側欄與內容區之上
      （修憲落地 V4 補上——V3 遷移時漏接，這裡補齊，見 DESIGN.md §20.2「提醒單一出口」）
    - hide_sidebar：True 時不畫側欄，內容區獨佔全寬（修憲落地 V6 修正補上，供
@@ -76,16 +75,9 @@
       <span class="console-nav-item is-soon">顧客與口碑</span>
     </div>
 
-    {# 操作人設定入口（修憲落地 V4 補上，V3 遷移時漏接）：跟「設定」一起安靜釘在側欄底部
-       （§20.2「設定退背景」），沿用既有 _layouts/base.html 的操作人連結邏輯與文案。
-       request 用 `is defined` 防呆——app/tests/test_console_layout.py（V2 既有骨架自檢）
-       直接呼叫 template.render() 不經 FastAPI，context 裡沒有 request，不能讓這裡硬性要求它。 #}
+    {# 操作人設定入口已下架（ADR 0004：單機單人不再具名），只留「設定」釘在側欄底部
+       （§20.2「設定退背景」）。 #}
     <div class="console-nav-footer">
-      {% set next_path = (request.url.path if request is defined and request else '') %}
-      <a class="console-nav-item console-nav-operator{{ '' if operator_name else ' is-unset' }}"
-         href="/settings/operator?next={{ next_path | urlencode }}">
-        {{ '操作人：' ~ operator_name if operator_name else '尚未設定操作人' }}
-      </a>
       <a class="console-nav-item console-nav-settings" href="/settings">設定</a>
     </div>
   </nav>

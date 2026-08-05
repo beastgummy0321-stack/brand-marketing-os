@@ -29,6 +29,7 @@ from app.ads import repository as ads_repo  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
 from app.core.db import new_id, now_iso  # noqa: E402
 from app.llm.providers import FakeProvider, ProviderResponse, Usage  # noqa: E402
+from app.shared.web import OPERATOR  # noqa: E402
 
 main.reopen_connection()
 
@@ -87,8 +88,6 @@ def _wait_progress(client, url, timeout=5.0):
 class _BaseHandoffTest(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(main.app)
-        self.client.post("/settings/operator", data={"name": ACTOR, "next": "/"},
-                         follow_redirects=False)
         self.brand = bi_repo.create_brand(main.conn, name="虛構晨光咖啡",
                                           client_name="測試客戶", actor=ACTOR)
         self.bid = self.brand["id"]
@@ -263,13 +262,13 @@ class ActivationGateTest(_BaseHandoffTest):
         auth = main.conn.execute(
             "SELECT * FROM activation_authorization WHERE scope_ref = ?",
             (package["id"],)).fetchone()
-        self.assertEqual(auth["authorized_by"], ACTOR)
+        self.assertEqual(auth["authorized_by"], OPERATOR)
 
         activation = main.conn.execute(
             "SELECT * FROM campaign_activation WHERE campaign_cycle_id = ?",
             (self.cycle_id,)).fetchone()
         self.assertEqual(activation["authorization_id"], auth["id"])
-        self.assertEqual(activation["activated_by"], ACTOR)
+        self.assertEqual(activation["activated_by"], OPERATOR)
 
         mapping = main.conn.execute(
             "SELECT * FROM external_ad_mapping WHERE publishing_package_id = ?",
@@ -294,15 +293,19 @@ class ActivationGateTest(_BaseHandoffTest):
             "SELECT 1 FROM campaign_activation WHERE campaign_cycle_id = ?",
             (self.cycle_id,)).fetchone())
 
-    def test_activation_requires_named_operator(self):
+    def test_activation_works_without_operator_cookie(self):
+        """ADR 0004：投放授權關卡本身仍要人按一次確認，但不再要求先設定操作人。"""
         self._build()
         package_id = self._packages()[0]["id"]
         self.client.cookies.clear()
         resp = self._activate(package_id)
-        self.assertIn("/settings/operator", resp.headers["location"])
-        self.assertIsNone(main.conn.execute(
-            "SELECT 1 FROM activation_authorization WHERE scope_ref = ?",
-            (package_id,)).fetchone())
+        self.assertEqual(resp.status_code, 303)
+        self.assertNotIn("/settings/operator", resp.headers["location"])
+        auth = main.conn.execute(
+            "SELECT * FROM activation_authorization WHERE scope_ref = ?",
+            (package_id,)).fetchone()
+        self.assertIsNotNone(auth)
+        self.assertEqual(auth["authorized_by"], OPERATOR)
 
     def test_ad_account_is_created_without_a_brand_binding(self):
         """廣告帳號不綁品牌——一個帳號可服務多個品牌（決策 0022 第 6 點）。"""
@@ -328,7 +331,7 @@ class ActivationGateTest(_BaseHandoffTest):
         self._activate(self._packages()[0]["id"])
         page = self.client.get(f"/brands/{self.bid}/ads/{self.cycle_id}/handoff")
         self.assertIn("已回報開始投放", page.text)
-        self.assertIn(ACTOR, page.text)
+        self.assertIn(OPERATOR, page.text)
 
 
 class DailyBudgetInvariantTest(unittest.TestCase):

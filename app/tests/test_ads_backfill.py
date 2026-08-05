@@ -126,8 +126,6 @@ def _insight(cid, **overrides):
 class _BaseMetaBackfillTest(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(main.app)
-        self.client.post("/settings/operator", data={"name": ACTOR, "next": "/"},
-                         follow_redirects=False)
         main.conn.execute("DELETE FROM discovered_campaign")
         main.conn.execute("DELETE FROM derived_metric")
         main.conn.execute("DELETE FROM performance_snapshot")
@@ -240,8 +238,6 @@ class MetaBackfillFlowTest(_BaseMetaBackfillTest):
 class GA4BackfillConfigurationTest(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(main.app)
-        self.client.post("/settings/operator", data={"name": ACTOR, "next": "/"},
-                         follow_redirects=False)
         main.conn.execute("DELETE FROM ga4_summary")
         main.conn.execute("DELETE FROM ga4_sync_status")
         main.conn.commit()
@@ -277,8 +273,6 @@ class GA4BackfillConfigurationTest(unittest.TestCase):
 class GA4BackfillFlowTest(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(main.app)
-        self.client.post("/settings/operator", data={"name": ACTOR, "next": "/"},
-                         follow_redirects=False)
         main.conn.execute("DELETE FROM ga4_summary")
         main.conn.execute("DELETE FROM ga4_sync_status")
         main.conn.commit()

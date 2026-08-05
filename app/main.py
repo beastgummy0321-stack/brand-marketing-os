@@ -30,11 +30,9 @@ import threading
 import time
 from datetime import datetime, timezone
 from typing import Optional
-from urllib.parse import urlencode
 
 from fastapi import FastAPI, Form, Request
 from fastapi.exception_handlers import http_exception_handler
-from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
@@ -53,7 +51,6 @@ from app.llm import providers as llm_providers
 from app.shared import web
 from app.shared.web import (
     MODEL_CHOICES,
-    NeedOperator,
     _num_str,
     _with_brand_names,
     banner_ctx,
@@ -479,12 +476,6 @@ if _missing_cleanup:
 # ---------------------------------------------------------------------------
 # 錯誤處理
 # ---------------------------------------------------------------------------
-
-@app.exception_handler(NeedOperator)
-async def handle_need_operator(request: Request, exc: NeedOperator):
-    url = f"/settings/operator?{urlencode({'next': exc.next_path, 'blocked': '1'})}"
-    return RedirectResponse(url, status_code=303)
-
 
 @app.exception_handler(StarletteHTTPException)
 async def handle_http_exception(request: Request, exc: StarletteHTTPException):

@@ -53,8 +53,6 @@ ACTOR = "測試員"
 class _BaseOnboardingTest(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(main.app)
-        self.client.post("/settings/operator", data={"name": ACTOR, "next": "/"},
-                         follow_redirects=False)
         self.brand = bi_repo.create_brand(main.conn, name="虛構晨光咖啡",
                                           client_name=None, actor=ACTOR)
         self.bid = self.brand["id"]

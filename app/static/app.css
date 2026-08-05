@@ -1039,7 +1039,6 @@ span.console-nav-item.is-soon { color: var(--text-muted); }
   font: var(--text-sm);
 }
 .console-nav-footer .console-nav-item:hover { color: var(--text); }
-.console-nav-operator.is-unset { color: var(--text-muted); }
 
 .console-content {
   flex: 1;

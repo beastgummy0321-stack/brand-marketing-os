@@ -79,8 +79,6 @@ def _import_brand_level_meta(brand_id: str, *, clicks: int, conversions: int, sp
 class _BaseTest(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(main.app)
-        self.client.post("/settings/operator", data={"name": ACTOR, "next": "/"},
-                         follow_redirects=False)
         self.brand = bi_repo.create_brand(main.conn, name=f"虛構搬家茶行{self.id()[-8:]}",
                                           client_name=None, actor=ACTOR)
         self.bid = self.brand["id"]

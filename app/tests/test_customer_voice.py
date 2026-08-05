@@ -155,8 +155,6 @@ class CustomerVoiceHttpTest(unittest.TestCase):
 
     def setUp(self):
         self.client = TestClient(main.app)
-        self.client.post("/settings/operator", data={"name": ACTOR, "next": "/"},
-                          follow_redirects=False)
 
     def _new_brand(self, name):
         b = repo.create_brand(main.conn, name=name, client_name=None, actor=ACTOR)

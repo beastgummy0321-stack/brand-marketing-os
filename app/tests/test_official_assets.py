@@ -42,8 +42,6 @@ _SEQ = [0]
 class OfficialAssetTest(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(main.app)
-        self.client.post("/settings/operator", data={"name": "測試員", "next": "/"},
-                          follow_redirects=False)
 
     def _new_brand(self, name_prefix: str) -> str:
         _SEQ[0] += 1

@@ -55,8 +55,6 @@ def _easystore_xlsx_bytes():
 class OrdersRoutesTest(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(main.app)
-        self.client.post("/settings/operator", data={"name": ACTOR, "next": "/"},
-                         follow_redirects=False)
         self.brand_name = f"虛構晨光茶行{abs(hash(self.id())) % 100000}"
         self.brand = bi_repo.create_brand(main.conn, name=self.brand_name,
                                           client_name=None, actor=ACTOR)

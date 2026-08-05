@@ -29,6 +29,7 @@ from app.ads import plan as ads_plan  # noqa: E402
 from app.ads import repository as ads_repo  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
 from app.llm.providers import FakeProvider, ProviderResponse, Usage  # noqa: E402
+from app.shared.web import OPERATOR  # noqa: E402
 
 main.reopen_connection()
 
@@ -188,8 +189,6 @@ class CoverageGapsTest(unittest.TestCase):
 class ComplianceScanTest(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(main.app)
-        self.client.post("/settings/operator", data={"name": ACTOR, "next": "/"},
-                         follow_redirects=False)
         self.brand = bi_repo.create_brand(main.conn, name="虛構草本工坊",
                                           client_name="測試客戶", actor=ACTOR)
         self.bid = self.brand["id"]
@@ -486,7 +485,7 @@ class DefaultHoldTest(ComplianceScanTest):
             "SELECT * FROM audit_log WHERE entity_id = ? AND action = 'compliance_restore'",
             (variant_id,)).fetchone()
         self.assertIsNotNone(audit_row)
-        self.assertEqual(audit_row["actor"], ACTOR)  # 操作人沿用全站既有 operator cookie
+        self.assertEqual(audit_row["actor"], OPERATOR)  # ADR 0004：操作人固定帶入
 
     def test_reload_after_restore_does_not_re_hold(self):
         """冪等性：勾回之後重新整理，不會把預設挑掉又蓋回去。"""

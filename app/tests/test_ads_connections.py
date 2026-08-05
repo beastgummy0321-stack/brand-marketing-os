@@ -94,8 +94,6 @@ class CapacityTest(unittest.TestCase):
 class ConnectionsRouteTest(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(main.app)
-        self.client.post("/settings/operator", data={"name": ACTOR, "next": "/"},
-                         follow_redirects=False)
         main.conn.execute("DELETE FROM discovered_campaign")
         main.conn.execute("DELETE FROM app_setting WHERE key IN (?, ?, ?, ?)",
                           (ads_sync.ACCOUNT_SETTING, ads_sync.TOKEN_SETTING,

@@ -71,8 +71,6 @@ _GARBLED = "這次調研有點趕，先口頭跟你講重點：單一品項、�
 class _BaseHandoffTest(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(main.app)
-        self.client.post("/settings/operator", data={"name": ACTOR, "next": "/"},
-                          follow_redirects=False)
         main.conn.execute("DELETE FROM app_setting")
         main.conn.commit()
         self._envpatch = mock.patch.dict(os.environ, {}, clear=False)

@@ -32,6 +32,7 @@ from app.core import prototype_phase  # noqa: E402
 from app.llm import context_compiler  # noqa: E402
 from app.llm.providers import FakeProvider, ProviderError, ProviderResponse, Usage  # noqa: E402
 from app.orders import repository as orders_repo  # noqa: E402
+from app.shared.web import OPERATOR  # noqa: E402
 
 main.reopen_connection()
 
@@ -211,8 +212,6 @@ class JudgeRulesTest(unittest.TestCase):
 class ReadingFlowTest(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(main.app)
-        self.client.post("/settings/operator", data={"name": ACTOR, "next": "/"},
-                         follow_redirects=False)
         self.brand = bi_repo.create_brand(main.conn, name="虛構晨光咖啡",
                                           client_name=None, actor=ACTOR)
         self.bid = self.brand["id"]
@@ -334,8 +333,6 @@ class AssetBreakdownTest(unittest.TestCase):
 
     def setUp(self):
         self.client = TestClient(main.app)
-        self.client.post("/settings/operator", data={"name": ACTOR, "next": "/"},
-                         follow_redirects=False)
         self.brand = bi_repo.create_brand(main.conn, name="虛構晨光咖啡",
                                           client_name=None, actor=ACTOR)
         self.bid = self.brand["id"]
@@ -447,8 +444,6 @@ class _ReadingIntegrationBase(unittest.TestCase):
 
     def setUp(self):
         self.client = TestClient(main.app)
-        self.client.post("/settings/operator", data={"name": ACTOR, "next": "/"},
-                         follow_redirects=False)
         self.brand = bi_repo.create_brand(main.conn, name="虛構晨光咖啡（票38）",
                                           client_name=None, actor=ACTOR)
         self.bid = self.brand["id"]
@@ -698,7 +693,7 @@ class RepurchaseLineTest(_ReadingIntegrationBase):
             "SELECT status, decided_by FROM rule_dissent WHERE id = ?", (dissent["id"],)
         ).fetchone()
         self.assertEqual(decided["status"], "adopted")
-        self.assertEqual(decided["decided_by"], ACTOR)
+        self.assertEqual(decided["decided_by"], OPERATOR)
 
     def test_resolving_the_conflict_clears_the_stale_pending_dissent(self):
         """再判讀一次，這次數字不衝突了——舊的 pending 異議要被清掉，不留殭屍紀錄。"""
@@ -843,8 +838,6 @@ class _HypothesisReviewBase(unittest.TestCase):
 
     def setUp(self):
         self.client = TestClient(main.app)
-        self.client.post("/settings/operator", data={"name": ACTOR, "next": "/"},
-                         follow_redirects=False)
         self.brand = bi_repo.create_brand(main.conn, name="虛構晨露茶行",
                                           client_name=None, actor=ACTOR)
         self.bid = self.brand["id"]
@@ -960,7 +953,7 @@ class HypothesisReviewTest(_HypothesisReviewBase):
         self.assertEqual(rows[0]["learning_text"], "通勤族比在家工作者更會下單")
         self.assertEqual(rows[0]["source_cycle_id"], self.cycle_id)
         self.assertEqual(rows[0]["source_hypothesis_id"], hyp["id"])
-        self.assertEqual(rows[0]["created_by"], ACTOR)
+        self.assertEqual(rows[0]["created_by"], OPERATOR)
         self.assertEqual(rows[0]["sample_size"], "10")
         self.assertIsNotNone(rows[0]["confidence"])
         self.assertIsNotNone(rows[0]["source_reading_id"])

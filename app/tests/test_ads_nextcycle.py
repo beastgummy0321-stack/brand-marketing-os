@@ -30,6 +30,7 @@ from app.brand_intelligence import repository as bi_repo  # noqa: E402
 from app.core.db import new_id, now_iso  # noqa: E402
 from app.llm import context_compiler  # noqa: E402
 from app.llm.providers import FakeProvider, ProviderResponse, Usage  # noqa: E402
+from app.shared.web import OPERATOR  # noqa: E402
 
 main.reopen_connection()
 
@@ -112,8 +113,6 @@ class PromptVocabularyLawNoteTest(unittest.TestCase):
 class _BaseNextCycleTest(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(main.app)
-        self.client.post("/settings/operator", data={"name": ACTOR, "next": "/"},
-                         follow_redirects=False)
         self.brand = bi_repo.create_brand(main.conn, name="虛構晨光咖啡",
                                           client_name=None, actor=ACTOR)
         self.bid = self.brand["id"]
@@ -283,7 +282,8 @@ class RuleCardTest(_BaseNextCycleTest):
         nextcycle.build_rule_cards(main.conn, self.bid, ACTOR)
         self.assertEqual(nextcycle.list_pending_rule_cards(main.conn, self.bid), [])
 
-    def test_rule_card_requires_named_operator(self):
+    def test_rule_card_accept_works_without_operator_cookie(self):
+        """ADR 0004：規則卡採納不再要求先設定操作人。"""
         self._reject(_print(tone="blunt"))
         self._reject(_print(tone="blunt"))
         nextcycle.build_rule_cards(main.conn, self.bid, ACTOR)
@@ -291,7 +291,11 @@ class RuleCardTest(_BaseNextCycleTest):
         self.client.cookies.clear()
         resp = self.client.post(f"/brands/{self.bid}/ads/rule-cards/{card['id']}/accept",
                                 follow_redirects=False)
-        self.assertIn("/settings/operator", resp.headers["location"])
+        self.assertEqual(resp.status_code, 303)
+        self.assertNotIn("/settings/operator", resp.headers["location"])
+        row = main.conn.execute(
+            "SELECT decided_by FROM creative_rule_card WHERE id = ?", (card["id"],)).fetchone()
+        self.assertEqual(row["decided_by"], OPERATOR)
 
 
 class RuleCardRelativeThresholdTest(_BaseNextCycleTest):

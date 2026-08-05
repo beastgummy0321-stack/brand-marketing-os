@@ -11,7 +11,7 @@
 4. 額外把關：跨品牌存取回「找不到」、畫面上沒有內部欄位名／狀態英文值外洩、表單驗證錯誤與回填。
 5. 重啟 app（重建連線＋TestClient）後資料仍在 —— 證明真的落地在 DB 檔案，不是活在記憶體。
 6. 建檔精靈（DESIGN.md §19）：12 頁路由全部 200、R5 鐵律（畫面上找不到任何批次接受字樣）、
-   無操作人時精靈 POST 也被導去設定操作人、W10「確認」「先存成待確認」兩個出口真的寫入
+   沒設操作人也能完成操作（ADR 0004）、W10「確認」「先存成待確認」兩個出口真的寫入
    app.brand_intelligence.repository（品牌檔案頁看得到）、花費列三種門檻狀態、W12 超限攔截
    在呼叫前攔下且三個出口都可用。
 
@@ -86,18 +86,23 @@ def _run_checks():
             failures.append(label)
 
     def check_intake_wizard():
-        """建檔精靈（DESIGN.md §19）：12 頁路由、R5 鐵律、無操作人導流、W10 真的寫入、
-        花費三種門檻狀態、W12 在呼叫前攔截且三個出口可用。用獨立、乾淨的 client 走，
-        不動用前面已經設定操作人 cookie 的 client（要單獨驗證「無操作人」那條）。"""
+        """建檔精靈（DESIGN.md §19）：12 頁路由、R5 鐵律、W10 真的寫入、
+        花費三種門檻狀態、W12 在呼叫前攔截且三個出口可用。"""
         anon = TestClient(main_module.app)
-        resp = anon.post("/brands/intake/new", data={"name": "無操作人精靈測試", "description": "x" * 20},
-                          follow_redirects=False)
-        check("無操作人時 POST /brands/intake/new -> 303", resp.status_code == 303)
-        check("無操作人時轉址到 /settings/operator",
-              resp.headers.get("location", "").startswith("/settings/operator"))
+        photo0 = ("photos", ("anon.jpg", io.BytesIO(b"z" * 500), "image/jpeg"))
+        resp = anon.post("/brands/intake/new",
+                          data={"name": "無操作人精靈測試", "description": "x" * 20},
+                          files=[photo0], follow_redirects=False)
+        check("ADR 0004：沒設操作人也能完成 POST /brands/intake/new -> 303（不再轉址去設定操作人）",
+              resp.status_code == 303 and "/settings/operator" not in resp.headers.get("location", ""))
+        anon_brand_id = resp.headers["location"].split("/brands/")[1].split("/")[0]
+        audit_row = main_module.conn.execute(
+            "SELECT actor FROM audit_log WHERE entity_type = 'brand' AND entity_id = ?"
+            " ORDER BY created_at DESC LIMIT 1", (anon_brand_id,)).fetchone()
+        check("稽核紀錄的操作人自動帶入固定值，不是空字串",
+              audit_row is not None and audit_row["actor"] == main_module.web.OPERATOR)
 
         wclient = TestClient(main_module.app)
-        wclient.post("/settings/operator", data={"name": "精靈測試員", "next": "/"}, follow_redirects=False)
 
         # W1：GET 空表單 200 + POST 建立品牌（真的寫入 repository）並開始初掃
         resp = wclient.get("/brands/intake/new")
@@ -356,18 +361,18 @@ def _run_checks():
 
     check_intake_wizard()
 
-    # 尚未設定操作人時，需要 actor 的 POST 要轉址去 /settings/operator（而不是落到 500 錯誤頁）。
-    # 用獨立、沒有 cookie 的 client，確認的是「完全沒設過操作人」這個情境。
+    # ADR 0004：沒設操作人也能完成需要 actor 的 POST（不再轉址去 /settings/operator）。
     anon_client = TestClient(main_module.app)
     resp = anon_client.post("/brands/new", data={"name": "無操作人測試品牌", "client_name": ""},
                              follow_redirects=False)
-    check("無操作人時 POST /brands/new -> 303", resp.status_code == 303)
-    check("無操作人時轉址到 /settings/operator",
-          resp.headers.get("location", "").startswith("/settings/operator"))
-
-    # 先走真正的「設定操作人」流程：後面所有新增／確認操作都需要 actor 才能落地。
-    resp = client.post("/settings/operator", data={"name": "測試員", "next": "/"}, follow_redirects=False)
-    check("POST 設定操作人 -> 303", resp.status_code == 303)
+    check("ADR 0004：沒設操作人也能完成 POST /brands/new -> 303（不再轉址去設定操作人）",
+          resp.status_code == 303 and "/settings/operator" not in resp.headers.get("location", ""))
+    anon_new_brand_id = resp.headers["location"].split("/brands/")[1].split("/")[0].split("?")[0]
+    audit_row = main_module.conn.execute(
+        "SELECT actor FROM audit_log WHERE entity_type = 'brand' AND entity_id = ?"
+        " ORDER BY created_at DESC LIMIT 1", (anon_new_brand_id,)).fetchone()
+    check("稽核紀錄的操作人自動帶入固定值",
+          audit_row is not None and audit_row["actor"] == main_module.web.OPERATOR)
 
     brands = repo.list_brands(main_module.conn, status="active")
     brand_a = next(b for b in brands if "青原生活" in b["name"])
@@ -406,7 +411,6 @@ def _run_checks():
         f"/brands/{brand_a_id}/claims/new",
         f"/brands/{brand_a_id}/channels/new",
         f"/brands/{brand_b_id}",
-        "/settings/operator",
     ]
     for path in get_routes:
         resp = client.get(path)

@@ -48,8 +48,6 @@ ACTOR = "測試員"
 class _BaseCycleDeleteTest(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(main.app)
-        self.client.post("/settings/operator", data={"name": ACTOR, "next": "/"},
-                          follow_redirects=False)
         self.brand = bi_repo.create_brand(main.conn, name="虛構晨光咖啡（檔期刪除）",
                                           client_name="測試客戶", actor=ACTOR)
         self.bid = self.brand["id"]

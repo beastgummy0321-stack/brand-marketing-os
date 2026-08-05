@@ -67,8 +67,6 @@ class _JudgedCycleTest(unittest.TestCase):
 
     def setUp(self):
         self.client = TestClient(main.app)
-        self.client.post("/settings/operator", data={"name": ACTOR, "next": "/"},
-                         follow_redirects=False)
         self.brand = bi_repo.create_brand(main.conn, name="虛構晨露茶行",
                                           client_name=None, actor=ACTOR)
         self.bid = self.brand["id"]
@@ -206,8 +204,6 @@ class DataOpsFormRedirectTest(unittest.TestCase):
 
     def setUp(self):
         self.client = TestClient(main.app)
-        self.client.post("/settings/operator", data={"name": ACTOR, "next": "/"},
-                         follow_redirects=False)
         self.brand = bi_repo.create_brand(main.conn, name="虛構晨露烘焙",
                                           client_name=None, actor=ACTOR)
         self.bid = self.brand["id"]
@@ -302,8 +298,6 @@ class SimulationUnaffectedTest(unittest.TestCase):
 
     def setUp(self):
         self.client = TestClient(main.app)
-        self.client.post("/settings/operator", data={"name": ACTOR, "next": "/"},
-                         follow_redirects=False)
         self.brand = bi_repo.create_brand(main.conn, name="虛構晨露咖啡",
                                           client_name=None, actor=ACTOR)
         self.bid = self.brand["id"]
@@ -332,8 +326,6 @@ class InsufficientDataStillGradesTest(unittest.TestCase):
 
     def setUp(self):
         self.client = TestClient(main.app)
-        self.client.post("/settings/operator", data={"name": ACTOR, "next": "/"},
-                         follow_redirects=False)
         self.brand = bi_repo.create_brand(main.conn, name="虛構晨露花藝",
                                           client_name=None, actor=ACTOR)
         self.bid = self.brand["id"]

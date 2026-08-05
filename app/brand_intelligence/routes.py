@@ -23,7 +23,6 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
-from urllib.parse import quote, urlencode
 
 from fastapi import APIRouter, File, Form, Request, UploadFile
 from fastapi.responses import FileResponse, RedirectResponse
@@ -47,7 +46,6 @@ from app.shared.web import (
     banner_ctx,
     clean,
     ctx,
-    get_operator_name,
     list_archived_brands,
     list_products,
     parse_number,
@@ -702,7 +700,7 @@ async def brand_fact_confirm_get(request: Request, brand_id: str, fact_id: str):
     return templates.TemplateResponse(request, "fact_confirm.html", ctx(
         request, brand=brand, fact=fact, nav_current='hub',
         type_label=md.brand_fact_type_label(fact["fact_type"]),
-        values={"confirmed_by": get_operator_name(request) or ""}, errors={},
+        values={"confirmed_by": ""}, errors={},
         form_action=f"/brands/{brand_id}/facts/{fact_id}/confirm",
         back_url=f"/brands/{brand_id}/hub/facts", back_label="品牌事實",
         edit_url=f"/brands/{brand_id}/facts/new",
@@ -1376,7 +1374,7 @@ async def product_fact_confirm_get(request: Request, brand_id: str, product_id: 
     return templates.TemplateResponse(request, "fact_confirm.html", ctx(
         request, brand=brand, product=product, fact=fact, nav_current='hub',
         type_label=md.product_fact_type_label(fact["fact_type"]),
-        values={"confirmed_by": get_operator_name(request) or ""}, errors={},
+        values={"confirmed_by": ""}, errors={},
         form_action=f"/brands/{brand_id}/products/{product_id}/facts/{fact_id}/confirm",
         back_url=facts_url, back_label="產品事實",
         edit_url=f"/brands/{brand_id}/products/{product_id}/facts/new",
@@ -1567,7 +1565,7 @@ async def economics_get(request: Request, brand_id: str, product_id: str):
     else:
         values = {"selling_price": "", "fixed_cost": "0", "unit_variable_cost": "0", "shipping_cost": "0",
                    "currency": "TWD", "cpa_roas_basis": "", "effective_from": "",
-                   "confirmed_by": get_operator_name(request) or ""}
+                   "confirmed_by": ""}
     return templates.TemplateResponse(request, "economics_form.html", ctx(
         request, brand=brand, product=product, values=values, errors={}, is_update=existing is not None,
         nav_current='hub',
@@ -1737,37 +1735,6 @@ async def asset_file(request: Request, brand_id: str, asset_id: str, filename: s
     ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
     return FileResponse(asset["file_path"], media_type=_ASSET_CONTENT_TYPES.get(ext, "application/octet-stream"),
                          filename=filename)
-
-
-# ---------------------------------------------------------------------------
-# 操作人設定
-# ---------------------------------------------------------------------------
-
-@router.get("/settings/operator")
-async def operator_get(request: Request, next: str = "/", blocked: str = "0"):
-    return templates.TemplateResponse(request, "operator_settings.html", ctx(
-        request, brand=None,
-        values={"name": get_operator_name(request) or ""}, errors={}, next=next,
-        blocked=blocked == "1",
-    ))
-
-
-@router.post("/settings/operator")
-async def operator_post(request: Request, name: str = Form(""), next: str = Form("/"),
-                         blocked: str = Form("0")):
-    name_c = clean(name)
-    if not name_c:
-        return templates.TemplateResponse(request, "operator_settings.html", ctx(
-            request, brand=None, values={"name": name}, errors={"name": "請填寫操作人姓名。"}, next=next,
-            blocked=blocked == "1",
-        ), status_code=400)
-    target = next if next.startswith("/") else "/"
-    sep = "&" if "?" in target else "?"
-    url = f"{target}{sep}{urlencode({'kind': 'ok', 'msg': f'已將操作人設定為「{name_c}」。'})}"
-    response = RedirectResponse(url, status_code=303)
-    response.set_cookie("operator_name", quote(name_c), max_age=60 * 60 * 24 * 365, path="/")
-    return response
-
 
 
 

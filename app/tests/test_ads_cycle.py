@@ -22,6 +22,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 import app.main as main  # noqa: E402
 from app.ads import repository as ads_repo  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
+from app.shared.web import OPERATOR  # noqa: E402
 
 main.reopen_connection()
 
@@ -42,8 +43,6 @@ ACTOR = "測試員"
 class _BaseAdsTest(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(main.app)
-        self.client.post("/settings/operator", data={"name": ACTOR, "next": "/"},
-                         follow_redirects=False)
         self.brand = bi_repo.create_brand(main.conn, name="虛構晨光咖啡",
                                           client_name="測試客戶", actor=ACTOR)
         self.bid = self.brand["id"]
@@ -270,11 +269,19 @@ class CreateCycleTest(_BaseAdsTest):
         self.assertEqual(resp.status_code, 400)
         self.assertIn("大於 0 的金額", resp.text)
 
-    def test_requires_operator_name(self):
+    def test_works_without_operator_cookie(self):
+        """ADR 0004：單機單人不再具名，沒設操作人 cookie 一樣能完成操作，不再被攔下。"""
         self.client.cookies.clear()
         resp = self._open_cycle()
         self.assertEqual(resp.status_code, 303)
-        self.assertIn("/settings/operator", resp.headers["location"])
+        self.assertNotIn("/settings/operator", resp.headers["location"])
+        cycle_id = resp.headers["location"].split("/ads/")[1].split("?")[0]
+        row = main.conn.execute(
+            "SELECT * FROM audit_log WHERE entity_type = 'campaign_cycle' AND entity_id = ?",
+            (cycle_id,),
+        ).fetchone()
+        self.assertIsNotNone(row)
+        self.assertEqual(row["actor"], OPERATOR)
 
     def test_audit_log_written(self):
         resp = self._open_cycle()
@@ -284,7 +291,7 @@ class CreateCycleTest(_BaseAdsTest):
             (cycle_id,),
         ).fetchone()
         self.assertIsNotNone(row)
-        self.assertEqual(row["actor"], ACTOR)
+        self.assertEqual(row["actor"], OPERATOR)
 
 
 class AdsBrandIsolationTest(_BaseAdsTest):

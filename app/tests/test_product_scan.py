@@ -27,6 +27,7 @@ import app.main as main  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
 from app.core import settings as coresettings  # noqa: E402
 from app.brand_intelligence import product_ai  # noqa: E402
+from app.shared.web import OPERATOR  # noqa: E402
 from app.llm.providers import (  # noqa: E402
     MISSING_KEY_MESSAGE, AnthropicProvider, FakeProvider, ProviderResponse, Usage,
 )
@@ -74,8 +75,6 @@ _RESCAN_ONE_OVERLAP_ONE_NEW = json.dumps({"facts": [
 class _BaseProductScanTest(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(main.app)
-        self.client.post("/settings/operator", data={"name": ACTOR, "next": "/"},
-                          follow_redirects=False)
         main.conn.execute("DELETE FROM app_setting")
         main.conn.commit()
         self._envpatch = mock.patch.dict(os.environ, {}, clear=False)
@@ -264,7 +263,7 @@ class ProductRescanTest(_BaseProductScanTest):
         self.assertEqual(resp.status_code, 303)
         economics = bi_repo.get_product_economics(main.conn, self.brand["id"], product_id)
         self.assertEqual(economics["status"], "confirmed")
-        self.assertEqual(economics["confirmed_by"], ACTOR)
+        self.assertEqual(economics["confirmed_by"], OPERATOR)
 
 
 if __name__ == "__main__":

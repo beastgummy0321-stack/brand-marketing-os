@@ -41,8 +41,6 @@ _SEQ = [0]
 class ProductDeleteRouteTest(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(main.app)
-        self.client.post("/settings/operator", data={"name": "測試員", "next": "/"},
-                          follow_redirects=False)
 
     def _new_brand_and_product(self, prefix: str):
         _SEQ[0] += 1

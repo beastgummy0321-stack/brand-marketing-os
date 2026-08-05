@@ -33,6 +33,7 @@ from app.core import settings as coresettings  # noqa: E402
 from app.core.db import new_id, now_iso  # noqa: E402
 from app.llm import methodology  # noqa: E402
 from app.llm.providers import FakeProvider, ProviderError, ProviderResponse, Usage  # noqa: E402
+from app.shared.web import OPERATOR  # noqa: E402
 
 main.reopen_connection()
 
@@ -163,8 +164,6 @@ class _SequencedProvider:
 class _BaseCreativeTest(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(main.app)
-        self.client.post("/settings/operator", data={"name": ACTOR, "next": "/"},
-                         follow_redirects=False)
         self.brand = bi_repo.create_brand(main.conn, name="虛構晨光咖啡",
                                           client_name="測試客戶", actor=ACTOR)
         self.bid = self.brand["id"]
@@ -394,8 +393,6 @@ class ProductScopedComplianceTest(unittest.TestCase):
 
     def setUp(self):
         self.client = TestClient(main.app)
-        self.client.post("/settings/operator", data={"name": ACTOR, "next": "/"},
-                         follow_redirects=False)
         self.brand = bi_repo.create_brand(main.conn, name="虛構晨光咖啡二號",
                                           client_name="測試客戶", actor=ACTOR)
         self.bid = self.brand["id"]
@@ -479,8 +476,6 @@ class MultiProductScopedComplianceTest(unittest.TestCase):
 
     def setUp(self):
         self.client = TestClient(main.app)
-        self.client.post("/settings/operator", data={"name": ACTOR, "next": "/"},
-                         follow_redirects=False)
         self.brand = bi_repo.create_brand(main.conn, name="虛構晨光咖啡三號",
                                           client_name="測試客戶", actor=ACTOR)
         self.bid = self.brand["id"]
@@ -745,12 +740,19 @@ class OppositionSelectionTest(_BaseCreativeTest):
                                 follow_redirects=False)
         self.assertIn("kind=warn", resp.headers["location"])
 
-    def test_approval_requires_named_operator(self):
+    def test_approval_works_without_operator_cookie(self):
+        """ADR 0004：關卡二（素材採用）不再要求先設定操作人。"""
         self._generate()
         self.client.cookies.clear()
         resp = self.client.post(f"/brands/{self.bid}/ads/{self.cycle_id}/creatives/approve",
                                 follow_redirects=False)
-        self.assertIn("/settings/operator", resp.headers["location"])
+        self.assertEqual(resp.status_code, 303)
+        self.assertNotIn("/settings/operator", resp.headers["location"])
+        row = main.conn.execute(
+            "SELECT decided_by FROM adoption_decision WHERE campaign_cycle_id = ? LIMIT 1",
+            (self.cycle_id,)).fetchone()
+        self.assertIsNotNone(row)
+        self.assertEqual(row["decided_by"], OPERATOR)
 
 
 class RejectionMemoryTest(_BaseCreativeTest):

@@ -70,8 +70,6 @@ class GA4ApiTest(unittest.TestCase):
 class _BaseGA4Test(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(main.app)
-        self.client.post("/settings/operator", data={"name": ACTOR, "next": "/"},
-                         follow_redirects=False)
         main.conn.execute("DELETE FROM ga4_summary")
         main.conn.execute("DELETE FROM ga4_sync_status")
         # 先子後父：derived_metric 有外鍵指向 performance_snapshot（比照 test_ads_sync.py）

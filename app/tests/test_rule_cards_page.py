@@ -20,6 +20,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 import app.main as main  # noqa: E402
 from app.core import rule_cards  # noqa: E402
+from app.shared.web import OPERATOR  # noqa: E402
 
 main.reopen_connection()
 
@@ -81,7 +82,8 @@ class RuleCardsPageTest(unittest.TestCase):
         self.assertIn('value="8700"', text)
         self.assertIn('value="4000"', text)
 
-    def test_edit_without_operator_redirects_to_set_operator(self):
+    def test_edit_works_without_operator_cookie(self):
+        """ADR 0004：規則卡編輯不再要求先設定操作人。"""
         resp = self.client.post(
             "/rule-cards/ad_creative_fatigue/edit",
             data={"cold_warning": "3", "cold_danger": "5", "retargeting_warning": "4",
@@ -89,10 +91,15 @@ class RuleCardsPageTest(unittest.TestCase):
             follow_redirects=False,
         )
         self.assertEqual(resp.status_code, 303)
-        self.assertTrue(resp.headers["location"].startswith("/settings/operator"))
+        self.assertFalse(resp.headers["location"].startswith("/settings/operator"))
+        self.assertEqual(rule_cards.get_value(main.conn, "ad_creative_fatigue", "cold_warning"), 3.0)
+        row = main.conn.execute(
+            "SELECT actor FROM audit_log WHERE entity_type = 'rule_card_value'"
+            " ORDER BY created_at DESC LIMIT 1").fetchone()
+        self.assertIsNotNone(row)
+        self.assertEqual(row["actor"], OPERATOR)
 
     def test_edit_saves_and_persists_after_restart(self):
-        self.client.post("/settings/operator", data={"name": "測試員", "next": "/"})
         resp = self.client.post(
             "/rule-cards/ad_creative_fatigue/edit",
             data={"cold_warning": "3", "cold_danger": "5", "retargeting_warning": "4",
@@ -107,7 +114,6 @@ class RuleCardsPageTest(unittest.TestCase):
         self.assertEqual(rule_cards.get_value(main.conn, "ad_creative_fatigue", "cold_warning"), 3.0)
 
     def test_edit_invalid_number_shows_error_and_keeps_other_fields_unchanged(self):
-        self.client.post("/settings/operator", data={"name": "測試員", "next": "/"})
         before = rule_cards.get_value(main.conn, "ad_creative_fatigue", "cold_danger")
         resp = self.client.post(
             "/rule-cards/ad_creative_fatigue/edit",
@@ -120,7 +126,6 @@ class RuleCardsPageTest(unittest.TestCase):
         self.assertEqual(rule_cards.get_value(main.conn, "ad_creative_fatigue", "cold_danger"), before)
 
     def test_reset_restores_default_after_edit(self):
-        self.client.post("/settings/operator", data={"name": "測試員", "next": "/"})
         rule_cards.set_value(main.conn, "ad_creative_fatigue", "cold_warning", 9.9, actor="測試員")
         resp = self.client.post("/rule-cards/ad_creative_fatigue/reset", follow_redirects=True)
         self.assertEqual(resp.status_code, 200)
@@ -128,7 +133,6 @@ class RuleCardsPageTest(unittest.TestCase):
         self.assertIn("已將「素材疲勞頻率門檻」重設為預設值", resp.text)
 
     def test_unknown_card_key_404s(self):
-        self.client.post("/settings/operator", data={"name": "測試員", "next": "/"})
         resp = self.client.post("/rule-cards/沒這張卡/reset")
         self.assertEqual(resp.status_code, 404)
 

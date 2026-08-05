@@ -264,7 +264,8 @@ def authorize_and_map(conn, brand_id: str, cycle_id: str, package_id: str, *,
     2. 建 external_ad_mapping（人工回填的直接算 confirmed 歸屬）。
     3. 建 campaign_activation，必須引用上面那筆授權。
 
-    沒有具名操作人時，呼叫端的 require_actor 會先攔下來，這裡的 NOT NULL 是第二道保險。
+    ADR 0004 起 require_actor 一律回傳固定值，不會再是空字串；這裡的 `if not actor` 是給
+    繞過路由層、直接呼叫本函式的呼叫端（例如測試）留的第二道保險，不是操作人攔截。
     """
     package = conn.execute(
         "SELECT * FROM publishing_package WHERE brand_id = ? AND id = ? AND campaign_cycle_id = ?",

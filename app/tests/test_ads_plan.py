@@ -34,6 +34,7 @@ from app.core import settings as coresettings  # noqa: E402
 from app.core.db import new_id, now_iso  # noqa: E402
 from app.llm import methodology  # noqa: E402
 from app.llm.providers import FakeProvider, ProviderResponse, Usage  # noqa: E402
+from app.shared.web import OPERATOR  # noqa: E402
 
 main.reopen_connection()
 
@@ -160,8 +161,6 @@ def _seed_snapshot(brand_id: str, *, clicks: int = 0, conversions: int = 0) -> N
 class _BasePlanTest(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(main.app)
-        self.client.post("/settings/operator", data={"name": ACTOR, "next": "/"},
-                         follow_redirects=False)
         self.brand = bi_repo.create_brand(main.conn, name="虛構晨光咖啡",
                                           client_name="測試客戶", actor=ACTOR)
         self.bid = self.brand["id"]
@@ -583,7 +582,7 @@ class PlanApprovalTest(_BasePlanTest):
         self.assertEqual(resp.status_code, 303)
         stored = ads_plan.get_latest_plan(main.conn, self.bid, self.cycle_id)
         self.assertEqual(stored["status"], "approved")
-        self.assertEqual(stored["approved_by"], ACTOR)
+        self.assertEqual(stored["approved_by"], OPERATOR)
         self.assertEqual(
             ads_repo.get_cycle(main.conn, self.bid, self.cycle_id)["status"], "PRODUCTION")
 
@@ -594,15 +593,19 @@ class PlanApprovalTest(_BasePlanTest):
         self.assertEqual(
             ads_repo.get_cycle(main.conn, self.bid, self.cycle_id)["status"], "PLANNING")
 
-    def test_approval_requires_named_operator(self):
-        """三道關卡都是具名的人按的，不能匿名通過（鐵則 4）。"""
+    def test_approval_works_without_operator_cookie(self):
+        """ADR 0004：關卡一（計畫確認）仍要人按一次確認，但不再要求先設定操作人。"""
         self._generate_and_select()
         self.client.cookies.clear()
         resp = self.client.post(f"/brands/{self.bid}/ads/{self.cycle_id}/plan/approve",
                                 follow_redirects=False)
-        self.assertIn("/settings/operator", resp.headers["location"])
+        self.assertEqual(resp.status_code, 303)
+        self.assertNotIn("/settings/operator", resp.headers["location"])
+        stored = ads_plan.get_latest_plan(main.conn, self.bid, self.cycle_id)
+        self.assertEqual(stored["status"], "approved")
+        self.assertEqual(stored["approved_by"], OPERATOR)
         self.assertEqual(
-            ads_repo.get_cycle(main.conn, self.bid, self.cycle_id)["status"], "REVIEW")
+            ads_repo.get_cycle(main.conn, self.bid, self.cycle_id)["status"], "PRODUCTION")
 
     def test_regenerating_after_approval_creates_new_version(self):
         self._generate_and_select()
@@ -709,21 +712,23 @@ class DissentTest(_BasePlanTest):
         updated = next(d for d in ads_repo.list_dissents(main.conn, self.bid, self.cycle_id)
                       if d["id"] == dissent_id)
         self.assertEqual(updated["status"], "adopted")
-        self.assertEqual(updated["decided_by"], ACTOR)
+        self.assertEqual(updated["decided_by"], OPERATOR)
         self.assertIsNotNone(updated["decided_at"])
 
-    def test_decide_requires_named_operator(self):
-        """鐵則 4：異議採納結果也要具名，不能匿名決定（比照 plan/approve 的做法）。"""
+    def test_decide_works_without_operator_cookie(self):
+        """ADR 0004：異議採納決定不再要求先設定操作人，稽核仍記下固定的操作人值。"""
         self._generate(reply=_with_dissents(*_DISSENT_ITEMS))
         dissent_id = ads_repo.list_dissents(main.conn, self.bid, self.cycle_id)[0]["id"]
         self.client.cookies.clear()
         resp = self.client.post(
             f"/brands/{self.bid}/ads/{self.cycle_id}/dissents/{dissent_id}/decide",
             data={"decision": "adopted"}, follow_redirects=False)
-        self.assertIn("/settings/operator", resp.headers["location"])
+        self.assertEqual(resp.status_code, 303)
+        self.assertNotIn("/settings/operator", resp.headers["location"])
         updated = next(d for d in ads_repo.list_dissents(main.conn, self.bid, self.cycle_id)
                       if d["id"] == dissent_id)
-        self.assertEqual(updated["status"], "pending")
+        self.assertEqual(updated["status"], "adopted")
+        self.assertEqual(updated["decided_by"], OPERATOR)
 
     def test_decide_unknown_dissent_id_fails_honestly(self):
         self._generate(reply=_with_dissents(*_DISSENT_ITEMS))

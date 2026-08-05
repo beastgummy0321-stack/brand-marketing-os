@@ -8,7 +8,7 @@
 
 本檔放「每一條路由都會用到」的地基：DB 連線（conn，全程共用同一條、可被
 reopen_connection() 換掉）、Jinja2 樣板、request context 組裝（ctx／banner_ctx）、
-品牌存取守門（require_brand／require_product）、操作人與稽核（get_actor／require_actor）、
+品牌存取守門（require_brand／require_product）、稽核用的固定操作人（OPERATOR／require_actor）、
 還有幾個純顯示用的小工具（clean／parse_number／redirect_with_message／鮮度標示等）。
 
 品牌永久層（app.brand_intelligence）在本檔的依賴方向是允許的——「品牌」是每條路由
@@ -16,6 +16,9 @@ reopen_connection() 換掉）、Jinja2 樣板、request context 組裝（ctx／b
 import 任何分支專屬層（app.ads／app.orders／app.intake），那些模組只能單向依賴這裡，
 不能回頭 import app.main（app/ads/routes.py 等改成 `import app.shared.web as main_mod`
 就是為了斷開這個回頭依賴，呼叫端寫法不變）。
+
+ADR 0004（取消具名授權）：系統單機單人，`require_actor()` 不再讀 cookie、不再有
+中斷路徑，一律回傳固定常數 OPERATOR。呼叫端寫法不變（仍是 `actor = require_actor(request)`）。
 
 `conn` 是本檔唯一會被外部重新賦值的名字（reopen_connection 用來模擬「重啟 app」，
 只給測試用，證明資料真的落地在 DB 檔案）；讀取一律用 `模組.conn` 這種即時查值的寫法
@@ -25,7 +28,7 @@ import 任何分支專屬層（app.ads／app.orders／app.intake），那些模�
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
-from urllib.parse import unquote, urlencode
+from urllib.parse import urlencode
 
 from fastapi import Request
 from fastapi.responses import RedirectResponse
@@ -239,31 +242,13 @@ def require_product(brand, product_id: str):
     return product
 
 
-def get_operator_name(request: Request) -> Optional[str]:
-    """Cookie 值可能含中文，需 percent-encode 存取（HTTP header 只能是 latin-1）。"""
-    raw = request.cookies.get("operator_name")
-    return unquote(raw) if raw else None
-
-
-def get_actor(request: Request) -> str:
-    """稽核用的操作人：目前設定的操作人 cookie 值。尚未設定時回空字串。"""
-    return get_operator_name(request) or ""
-
-
-class NeedOperator(Exception):
-    """需要 actor 的 POST 尚未設定操作人時，用這個例外中斷處理、轉址去設定操作人。"""
-
-    def __init__(self, next_path: str):
-        self.next_path = next_path
+OPERATOR = "本人"  # 固定操作人值（ADR 0004）：單機單人，不再具名，全站稽核一律用這個值。
 
 
 def require_actor(request: Request) -> str:
-    """需要 actor 的 POST 一律呼叫這個（取代 get_actor）：尚未設定操作人時直接中斷、轉址去
-    /settings/operator，不讓空字串 actor 流進 repository（那裡會丟 ValueError，落到泛用 500 錯誤頁）。"""
-    actor = get_actor(request)
-    if not actor:
-        raise NeedOperator(request.url.path)
-    return actor
+    """需要 actor 的 POST 一律呼叫這個：ADR 0004 起單機單人不再具名，固定回傳 OPERATOR，
+    不再有任何中斷路徑（取代原本讀 cookie、沒設定就轉址 /settings/operator 的做法）。"""
+    return OPERATOR
 
 
 def ctx(request: Request, brand=None, active_brands=None, **extra):
@@ -274,7 +259,6 @@ def ctx(request: Request, brand=None, active_brands=None, **extra):
         "request": request,
         "brand": brand,
         "active_brands": active_brands if active_brands is not None else list_active_brands(),
-        "operator_name": get_operator_name(request),
         # 頁頂「當前一件」（決策 0026）：有品牌上下文就只看該品牌的，否則跨品牌看最急的那筆。
         "current_interrupt": open_items[0] if open_items else None,
         "inbox_count": len(open_items),
