@@ -81,12 +81,16 @@ def _owner_module(rel: str) -> str:
 
 
 def _is_allowed_branch_importer(rel: str) -> bool:
-    """A1 排除清單（永久豁免）：app/main.py 組裝根部分、app/tests/*、app/orders/*。"""
+    """A1 排除清單（永久豁免）：app/main.py 組裝根部分、app/tests/*、app/orders/*、
+    app/dashboard/*（票 02：跨品牌總覽要讀檔期狀態，資料只活在 app.ads 層，只能靠
+    呼叫該層公開函式取數——見 docs/specs/0001-cockpit-stage0-1.md 接口鐵則）。"""
     if rel == "app/main.py":
         return True
     if rel.startswith("app/tests/"):
         return True
     if rel.startswith("app/orders/"):
+        return True
+    if rel.startswith("app/dashboard/"):
         return True
     return False
 
@@ -199,6 +203,30 @@ class CrossLayerRawSqlScanTest(unittest.TestCase):
                     f"{rel} 已經不再對 {table} 下 SQL，KNOWN_SQL_VIOLATIONS 該清掉這項了"
                     "（順手修好了記得同步更新 docs/rule-checks.md）",
                 )
+
+
+_WRITE_SQL_VERB = re.compile(r"\b(INSERT|UPDATE|DELETE)\b", re.IGNORECASE)
+
+
+class DashboardReadOnlyTest(unittest.TestCase):
+    """票 02-overview-cards 驗收條件：dashboard 模組不寫入任何資料表。只讀 JSON API，
+    只能靠呼叫別層公開函式取數，本身不得出現任何寫入 SQL 字面。"""
+
+    def test_dashboard_module_has_no_write_sql(self):
+        dashboard_dir = APP_DIR / "dashboard"
+        self.assertTrue(dashboard_dir.is_dir(), "app/dashboard 尚未建立")
+        violations = []
+        for path in dashboard_dir.rglob("*.py"):
+            if "__pycache__" in path.parts:
+                continue
+            text = path.read_text(encoding="utf-8")
+            if _WRITE_SQL_VERB.search(text):
+                violations.append(_rel(path))
+        self.assertEqual(
+            violations, [],
+            "以下 dashboard 模組檔案疑似含寫入 SQL，違反票 02「只讀」鐵則：\n"
+            + "\n".join(violations),
+        )
 
 
 if __name__ == "__main__":

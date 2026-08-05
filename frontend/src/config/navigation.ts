@@ -1,9 +1,9 @@
-/** 側邊導覽資料（票 01-react-shell）。
+/** 側邊導覽資料（票 01-react-shell，票 02 更新「跨品牌總覽」連結）。
  *
  * 舊介面的側欄骨架已有原型（app/templates/_layouts/console.html，尚未套用到任何路由），
  * 這裡沿用同一份分類：收件匣／品牌智庫／投放與成效／內容與曝光／顧客與口碑／設定。
  *
- * 品牌智庫、投放與成效兩項要選定品牌才有意義，新殼目前還沒有跨品牌總覽（票 02 才做），
+ * 品牌智庫、投放與成效兩項要選定品牌才有意義，新殼還沒有單品牌駕駛艙（票 03 才做），
  * 所以先灰掉並說明原因，不做成看起來能點但沒反應的假連結（規格使用者故事 23）。
  */
 
@@ -19,7 +19,7 @@ export interface NavItem {
 }
 
 export const NAV_TOP: NavItem[] = [
-  { label: "跨品牌總覽", href: "/", status: "active" },
+  { label: "跨品牌總覽", href: "/app/", status: "active" },
   { label: "收件匣", href: "/inbox", status: "active" },
 ];
 
