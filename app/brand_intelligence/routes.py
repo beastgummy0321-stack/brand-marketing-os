@@ -1268,8 +1268,9 @@ async def product_archive_post(request: Request, brand_id: str, product_id: str)
 
 
 def _product_delete_counts(brand_id: str, product_id: str) -> list:
-    """刪除確認頁要列的「會一起消失的資料」，只留有東西的項目。"""
-    rows = repo.count_product_data(web.conn, brand_id, product_id)
+    """刪除確認頁要列的「會一起消失的資料」，只留有東西的項目（改由清理登記處
+    彙整所有登記模組的清點結果，不再只問品牌智庫自己——第 6 刀）。"""
+    rows = cleanup.count_all_product(web.conn, brand_id, product_id)
     return [(label, n) for label, n in rows if n > 0]
 
 

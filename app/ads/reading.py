@@ -37,8 +37,12 @@ from app.core import prototype_phase
 from app.core import rule_cards
 from app.core.db import new_id, now_iso
 from app.llm import gateway, providers
-from app.orders import channel as orders_channel
-from app.orders import repository as orders_repo
+
+# 第 7 刀（A1 三層地界新規則：app/ads 不得 import app.orders，見
+# test_architecture_boundaries.py）：orders_channel／orders_repo 不在這裡 import，
+# 改由組裝根 app/main.py 啟動時注入真正的 app.orders.channel／repository 模組。
+orders_channel = None
+orders_repo = None
 
 PROVIDER = providers.AnthropicProvider()  # 測試整包換掉
 

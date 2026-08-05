@@ -213,4 +213,5 @@ def delete_brand_data(conn, brand_id: str) -> dict:
 
 
 cleanup.register("中斷提醒", count_brand=count_brand_data, delete_brand=delete_brand_data,
-                 brand_tables={t for t, _ in BRAND_CASCADE_TABLES})
+                 brand_tables={t for t, _ in BRAND_CASCADE_TABLES},
+                 count_product=None, delete_product=None, product_tables=frozenset())

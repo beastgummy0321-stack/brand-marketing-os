@@ -20,7 +20,7 @@ import unittest
 from pathlib import Path
 
 from app.ads import repository as ads_repo  # noqa: F401  # import 才會觸發它的自我登記
-from app.brand_intelligence import repository as repo
+from app.brand_intelligence import repository as repo  # noqa: F401  # 同上，觸發它的自我登記
 from app.core import cleanup, db
 from app.core import interrupts as core_interrupts  # noqa: F401  # 同上，觸發它的自我登記
 from app.intake import repository as intake_repo  # noqa: F401  # import 才會觸發它的自我登記
@@ -43,17 +43,13 @@ _PRODUCT_ROOT_TABLES = {"product"}
 # ---------------------------------------------------------------------------
 
 # 第 5 刀把訂單模組（9 張）、核心模組（interrupt）接上登記處，llm_task 改列進
-# DELIBERATELY_KEPT（刻意保留），品牌層缺口歸零。空集合本身要保留、連同這段註解——
-# 之後有新表帶 brand_id 卻沒人認領，這裡會再長出東西，到時候依樣畫葫蘆補上模組登記
-# 或 DELIBERATELY_KEPT，不要圖方便直接把表名塞回這裡了事。
+# DELIBERATELY_KEPT（刻意保留），品牌層缺口歸零。第 6 刀把廣告模組的產品層清理
+# （10 張表）也接上登記處，產品層缺口跟著歸零。空集合本身要保留、連同這段註解——
+# 之後有新表帶 brand_id／product_id 卻沒人認領，這裡會再長出東西，到時候依樣畫葫蘆
+# 補上模組登記或 DELIBERATELY_KEPT，不要圖方便直接把表名塞回這裡了事。
 KNOWN_BRAND_GAPS = set()
 
-KNOWN_PRODUCT_GAPS = {
-    # 第 4 刀：廣告模組的產品層清理
-    "campaign_cycle_product", "creative_rule_card", "creative_variant", "derived_metric",
-    "experiment_cell", "marketing_goal", "performance_reading", "performance_snapshot",
-    "publishing_package", "recommendation",
-}
+KNOWN_PRODUCT_GAPS = set()
 
 
 def _tables_with_column(conn, column: str) -> set:
@@ -80,7 +76,7 @@ class CleanupCoverageTest(unittest.TestCase):
                 - declared - _ROOT_TABLES - set(DELIBERATELY_KEPT))
 
     def _product_uncovered(self) -> set:
-        declared = {t for t, _ in repo.PRODUCT_CHILD_TABLES}
+        declared = set().union(*cleanup.declared_product_tables().values())
         return (_tables_with_column(self.conn, "product_id")
                 - declared - _PRODUCT_ROOT_TABLES - set(DELIBERATELY_KEPT))
 
@@ -100,6 +96,37 @@ class CleanupCoverageTest(unittest.TestCase):
             unlisted, set(),
             "以下資料表帶 product_id，但刪產品時沒人清，也不在已知缺口清單裡：\n"
             + "\n".join(f"  - {t}" for t in sorted(unlisted)))
+
+    def test_nothing_outside_the_delete_set_still_points_at_it(self):
+        """被刪的表有沒有人還指著它？上面兩條看不到這一類破口。
+
+        上面兩條只問「有 brand_id／product_id 的表有沒有人清」。但還有一類表自己沒有
+        那兩個欄位、卻用外鍵指著會被刪掉的列——父列刪了、子列留著就是懸空外鍵，整個
+        刪除會在 COMMIT 被擋下（實測：刪產品時 creative_brief -> experiment_cell 與
+        external_ad_mapping -> publishing_package 就是這樣把刪除整個擋死的）。
+        這條檢查的是 schema 層的封閉性：刪除集合之外的表，不得指向刪除集合之內的表。
+        """
+        from app.ads import repository as ads_repo
+
+        product_set = ({t for t, _ in repo.PRODUCT_CHILD_TABLES}
+                       | {t for t, _ in ads_repo.PRODUCT_CASCADE_TABLES}
+                       | set(ads_repo._PRODUCT_CASCADE_LABELS)
+                       | _PRODUCT_ROOT_TABLES)
+        dangling = []
+        for (table,) in self.conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"):
+            if table in product_set:
+                continue
+            for fk in self.conn.execute(f"PRAGMA foreign_key_list({table})"):
+                if fk[2] in product_set:
+                    dangling.append(f"{table}.{fk[3]} -> {fk[2]}")
+        self.assertEqual(
+            dangling, [],
+            "以下資料表不會被刪產品清掉，卻用外鍵指著會被清掉的表——刪產品會在 COMMIT\n"
+            "被外鍵擋下、整筆失敗。自己有 product_id 就加進 PRODUCT_CASCADE_TABLES；\n"
+            "沒有的話，_product_cascade_scope() 沿外鍵走本來就會撿到它，只要在\n"
+            "_PRODUCT_CASCADE_LABELS 補一個中文標籤即可：\n"
+            + "\n".join(f"  - {d}" for d in sorted(dangling)))
 
     def test_known_gap_lists_are_not_stale(self):
         """清單裡的每一條都必須真的還是缺口。補好了忘記刪 -> 這裡會叫。

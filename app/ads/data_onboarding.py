@@ -14,7 +14,11 @@ from app.ads import ga4_sync
 from app.ads import performance as ads_performance
 from app.ads import sync as ads_sync
 from app.core import rule_cards
-from app.orders import repository as orders_repo
+
+# 第 7 刀（A1 三層地界新規則：app/ads 不得 import app.orders，見
+# test_architecture_boundaries.py）：orders_repo 不在這裡 import，改由組裝根
+# app/main.py 啟動時注入真正的 app.orders.repository 模組。
+orders_repo = None
 
 # 訂單史成熟門檻（決策 0039 第 4 條新設，180 天）：跟 app/shared/web.py 的
 # FACT_STALE_DAYS（事實鮮度，180 天）數字恰好相同但意義不同（訂單史夠不夠長 vs

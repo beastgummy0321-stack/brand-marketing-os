@@ -23,13 +23,16 @@ from app.core.db import new_id
 _TEST_PRODUCT_ID = "prd_測試用固定產品id"
 
 
-def _seed_table(conn, table: str, brand_id: str, fk_ids: dict):
+def _seed_table(conn, table: str, brand_id: str, fk_ids: dict, product_id: str = _TEST_PRODUCT_ID):
     """依 schema（PRAGMA table_info／foreign_key_list）自動塞一列，只填「必填又沒有
     預設值」的欄位；外鍵欄位接上 fk_ids 裡對應表已經塞好的那一列 id。
 
     37 張表手刻塞資料太容易漏，而且以後 app/ads 新增表也能自動涵蓋，不用回頭補寫
     塞資料的程式碼。回傳這一列的 id（表沒有單一 id 欄位——例如複合主鍵的連結表——
     就回傳 None）。
+
+    product_id 預設用固定假值 _TEST_PRODUCT_ID（品牌層測試不在乎產品層是否存在真實
+    product 列）；第 6 刀的產品層清理測試需要塞進真實 product id，才傳這個參數覆寫。
     """
     columns = conn.execute(f"PRAGMA table_info({table})").fetchall()
     fk_targets = {row[3]: row[2] for row in conn.execute(f"PRAGMA foreign_key_list({table})").fetchall()}
@@ -44,7 +47,7 @@ def _seed_table(conn, table: str, brand_id: str, fk_ids: dict):
         elif name == "brand_id":
             value = brand_id
         elif name == "product_id":
-            value = _TEST_PRODUCT_ID
+            value = product_id
         elif name in fk_targets:
             target = fk_targets[name]
             if target in fk_ids:

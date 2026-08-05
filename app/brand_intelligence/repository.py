@@ -315,14 +315,33 @@ def count_product_data(conn: sqlite3.Connection, brand_id: str, product_id: str)
     ]
 
 
+def delete_product_data(conn: sqlite3.Connection, brand_id: str, product_id: str) -> dict:
+    """清掉本模組掛在該產品下的子表資料（只清 PRODUCT_CHILD_TABLES 這 8 張子表，
+    不碰 product 那一列、不寫稽核），登記進 app.core.cleanup 給 delete_product() 呼叫用。
+    只下 DELETE、不 commit（Q4 單一交易、全有全無，commit 由 delete_product() 統一做）。
+    """
+    counts = dict(count_product_data(conn, brand_id, product_id))
+    for table, _label in PRODUCT_CHILD_TABLES:
+        conn.execute(f"DELETE FROM {table} WHERE brand_id = ? AND product_id = ?",
+                      (brand_id, product_id))
+    return counts
+
+
 def delete_product(conn: sqlite3.Connection, brand_id: str, product_id: str, *, actor: str) -> dict:
-    """硬刪除一個已封存產品與它在本模組的全部資料，不可逆（決策 0020，比照品牌 0015）。
+    """硬刪除一個已封存產品與所有登記模組掛在它底下的資料，不可逆（決策 0020，比照品牌 0015）。
 
     只收已封存的產品：使用中的產品得先封存，隔一道手續才刪得掉。
 
-    交易處理同 delete_brand()：app 全程共用同一條 DB 連線（見 app/core/db.py connect()），
-    不 commit 不等於自動回捲。中途出錯若不明確 conn.rollback()，懸著的 DELETE 會等到
-    下一個不相干的請求在同一條連線上 commit() 時被一起沖進 DB，而且沒有 audit_log 紀錄。
+    交易處理比照 delete_brand()（第 6 刀補齊，之前只有 try/except 沒有 BEGIN 也沒有
+    PRAGMA，跨模組會踩到第 5 刀踩過的兩個坑）：透過 app.core.cleanup.delete_all_product()
+    清掉所有登記模組掛在這顆產品底下的資料（本模組「品牌智庫」自己也是登記模組之一，
+    會被 delete_all_product 一併叫到，這裡不重複清），再刪 product 本身那一列、寫稽核，
+    整段只有這裡最後這一次 commit（Q4 全有全無）。
+
+    app 全程共用同一條 DB 連線（見 app/core/db.py connect()）：不 commit 不等於自動
+    回捲，中途出錯若不明確 conn.rollback()，懸著的 DELETE 會等到下一個不相干的請求
+    在同一條連線上 commit() 時被一起沖進 DB，而且沒有 audit_log 紀錄。所以這裡明確
+    包 try/except，出錯就 rollback 再往外拋。
     """
     _require(actor, "actor 為必填")
     before = get_product(conn, brand_id, product_id)
@@ -330,11 +349,23 @@ def delete_product(conn: sqlite3.Connection, brand_id: str, product_id: str, *, 
         raise ValueError(f"找不到產品：{product_id}")
     if before["status"] != "archived":
         raise ValueError("只有已封存的產品可以刪除，請先把產品封存。")
-    counts = dict(count_product_data(conn, brand_id, product_id))
+
+    # 這條連線是全 app 共用的（app/core/db.py connect()），背景執行緒也在用
+    # （app/ads/routes.py 的 _progress_run，例如 Meta 回填、AI 生成等待頁）。理由同
+    # delete_brand()：撞上「別人已經寫了東西但還沒 commit」的空檔，硬闖會讓 rollback()
+    # 沖銷對方不相干的資料且對方毫無感覺。所以先擋下來、給人話錯誤請他重試。
+    if conn.in_transaction:
+        raise RuntimeError("系統正在處理其他工作，現在不能刪除產品。請等幾秒後再試一次。")
+
     try:
-        for table, _label in PRODUCT_CHILD_TABLES:
-            conn.execute(f"DELETE FROM {table} WHERE brand_id = ? AND product_id = ?",
-                          (brand_id, product_id))
+        # 延後外鍵檢查到 COMMIT 那一刻（同 delete_brand() 的理由）：各登記模組刪各自的表
+        # 時，跨模組登記順序不必協調。BEGIN 必須先於 PRAGMA，理由同 delete_brand()——
+        # Python 的 sqlite3 只在遇到 DML 才隱式開交易，PRAGMA／SELECT 都不會開交易，
+        # 若 PRAGMA 下在交易外面，後面每個模組 delete_product 內部第一步的 SELECT
+        # （count_product_data）就會讓它悄悄被重置回 OFF。
+        conn.execute("BEGIN")
+        conn.execute("PRAGMA defer_foreign_keys = ON")
+        counts = cleanup.delete_all_product(conn, brand_id, product_id)
         conn.execute("DELETE FROM product WHERE id = ? AND brand_id = ?", (product_id, brand_id))
         write_audit(conn, brand_id=brand_id, entity_type="product", entity_id=product_id,
                     action="delete", actor=actor, before={**before, "deleted_counts": counts},
@@ -1498,4 +1529,6 @@ def mark_learning_ledger_needs_revalidation(conn: sqlite3.Connection, brand_id: 
 # ---------------------------------------------------------------------------
 
 cleanup.register("品牌智庫", count_brand=count_brand_data, delete_brand=delete_brand_data,
-                 brand_tables={t for t, _ in BRAND_CHILD_TABLES})
+                 brand_tables={t for t, _ in BRAND_CHILD_TABLES},
+                 count_product=count_product_data, delete_product=delete_product_data,
+                 product_tables={t for t, _ in PRODUCT_CHILD_TABLES})

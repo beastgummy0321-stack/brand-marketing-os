@@ -372,6 +372,51 @@ app.include_router(intake_router)
 app.include_router(ads_router)
 app.include_router(orders_router)
 
+# ---------------------------------------------------------------------------
+# app.ads → app.orders 依賴注入（第 7 刀，A1 三層地界新規則：app/ads 不得 import
+# app.orders；app/orders 允許 import app.ads，方向只能單向，見
+# test_architecture_boundaries.py）。這幾個 app.ads 模組原本各自 import
+# app.orders.repository／channel／dispatch，改成在這裡（唯一合法跨層組裝的組裝根）
+# 把真正的模組指派進去，模組內部呼叫寫法完全不變（等同延用同一顆物件）。
+# ---------------------------------------------------------------------------
+from app.ads import codes as ads_codes  # noqa: E402
+from app.ads import data_onboarding as ads_data_onboarding  # noqa: E402
+from app.ads import inflation as ads_inflation  # noqa: E402
+from app.ads import reading as ads_reading  # noqa: E402
+from app.ads import routes as ads_routes_mod  # noqa: E402
+from app.ads import settlement as ads_settlement  # noqa: E402
+from app.orders import channel as orders_channel  # noqa: E402
+from app.orders import dispatch as orders_dispatch  # noqa: E402
+from app.orders import repository as orders_repo  # noqa: E402
+
+ads_codes.orders_repo = orders_repo
+ads_data_onboarding.orders_repo = orders_repo
+ads_inflation.orders_repo = orders_repo
+ads_reading.orders_repo = orders_repo
+ads_reading.orders_channel = orders_channel
+ads_routes_mod.orders_channel = orders_channel
+ads_routes_mod.orders_dispatch = orders_dispatch
+ads_routes_mod.orders_repo = orders_repo
+ads_settlement.orders_repo = orders_repo
+
+# 啟動斷言：確認上面每一格都真的注入了。那幾個模組裡的預設值是 None——少注入一格
+# 不會當場報錯，要等到使用者剛好走到那條路徑才炸出一句看不懂的
+# 「'NoneType' object has no attribute ...」。這裡當場擋下來，比照清理登記處那道斷言。
+_INJECTIONS = (
+    ("app.ads.codes.orders_repo", ads_codes.orders_repo),
+    ("app.ads.data_onboarding.orders_repo", ads_data_onboarding.orders_repo),
+    ("app.ads.inflation.orders_repo", ads_inflation.orders_repo),
+    ("app.ads.reading.orders_repo", ads_reading.orders_repo),
+    ("app.ads.reading.orders_channel", ads_reading.orders_channel),
+    ("app.ads.routes.orders_channel", ads_routes_mod.orders_channel),
+    ("app.ads.routes.orders_dispatch", ads_routes_mod.orders_dispatch),
+    ("app.ads.routes.orders_repo", ads_routes_mod.orders_repo),
+    ("app.ads.settlement.orders_repo", ads_settlement.orders_repo),
+)
+_missing_injections = [name for name, value in _INJECTIONS if value is None]
+if _missing_injections:
+    raise RuntimeError(f"app.ads → app.orders 依賴注入少了：{_missing_injections}")
+
 # 啟動斷言（第 2 刀「清理登記處」）：確認刪品牌時該連鎖清資料的模組都有登記進
 # app.core.cleanup，少一個就不讓服務起來，避免又漏掉誰。
 from app.core import cleanup as core_cleanup  # noqa: E402

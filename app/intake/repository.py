@@ -403,4 +403,5 @@ def resolve_item(conn: sqlite3.Connection, brand_id: str, item_id: str, outcome:
 # ---------------------------------------------------------------------------
 
 cleanup.register("建檔精靈", count_brand=count_brand_data, delete_brand=delete_brand_data,
-                 brand_tables={"intake_draft", "intake_item"})
+                 brand_tables={"intake_draft", "intake_item"},
+                 count_product=None, delete_product=None, product_tables=frozenset())

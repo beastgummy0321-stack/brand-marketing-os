@@ -87,11 +87,15 @@ class CleanupRegistryTest(unittest.TestCase):
         self.conn.close()
         self._tmpdir.cleanup()
 
-    def _register(self, name, *, count_brand, delete_brand, brand_tables=frozenset()):
-        # 假模組沒有真的資料表，brand_tables 預設空集合——涵蓋率警報器
-        # （test_cleanup_coverage.py）比對的是真實 schema，空集合不會影響它。
+    def _register(self, name, *, count_brand, delete_brand, brand_tables=frozenset(),
+                  count_product=None, delete_product=None, product_tables=frozenset()):
+        # 假模組沒有真的資料表，brand_tables／product_tables 預設空集合——涵蓋率警報器
+        # （test_cleanup_coverage.py）比對的是真實 schema，空集合不會影響它。product 三件套
+        # 預設「沒有產品層資料」（count_product=None、delete_product=None、空集合），
+        # 個別測試需要驗產品層行為時再覆寫。
         cleanup.register(name, count_brand=count_brand, delete_brand=delete_brand,
-                         brand_tables=brand_tables)
+                         brand_tables=brand_tables, count_product=count_product,
+                         delete_product=delete_product, product_tables=product_tables)
         self._registered_names.append(name)
 
     def _make_brand(self, name):
@@ -144,30 +148,110 @@ class CleanupRegistryTest(unittest.TestCase):
 
     # (c) register() 缺參數、或重複註冊同名，都要拋錯 --------------------------
 
-    def test_register_requires_all_four_args(self):
+    def test_register_requires_all_brand_args(self):
         noop_count = lambda conn, brand_id: []  # noqa: E731
         noop_delete = lambda conn, brand_id: {}  # noqa: E731
+        # 這裡測的是品牌維度四參數，產品維度統一給「沒有產品層資料」的合法空值，
+        # 不干擾本測試要驗的東西。
+        p = dict(count_product=None, delete_product=None, product_tables=set())
 
         with self.assertRaises(ValueError):
             cleanup.register(None, count_brand=noop_count, delete_brand=noop_delete,
-                             brand_tables=set())
+                             brand_tables=set(), **p)
         with self.assertRaises(ValueError):
             cleanup.register("", count_brand=noop_count, delete_brand=noop_delete,
-                             brand_tables=set())
+                             brand_tables=set(), **p)
         with self.assertRaises(ValueError):
             cleanup.register("缺清點函式（清理登記處測試）", count_brand=None,
-                             delete_brand=noop_delete, brand_tables=set())
+                             delete_brand=noop_delete, brand_tables=set(), **p)
         with self.assertRaises(ValueError):
             cleanup.register("缺清除函式（清理登記處測試）", count_brand=noop_count,
-                             delete_brand=None, brand_tables=set())
+                             delete_brand=None, brand_tables=set(), **p)
         with self.assertRaises(ValueError):
             cleanup.register("缺表名宣告（清理登記處測試）", count_brand=noop_count,
-                             delete_brand=noop_delete, brand_tables=None)
+                             delete_brand=noop_delete, brand_tables=None, **p)
 
-        # 上面四次都該失敗、都沒真的登記進去，registered_names 不該多出東西。
+        # 上面五次都該失敗、都沒真的登記進去，registered_names 不該多出東西。
         self.assertNotIn("缺清點函式（清理登記處測試）", cleanup.registered_names())
         self.assertNotIn("缺清除函式（清理登記處測試）", cleanup.registered_names())
         self.assertNotIn("缺表名宣告（清理登記處測試）", cleanup.registered_names())
+
+    # (c') register() 的產品維度：宣告了表就必須給函式、給了函式就必須宣告表，
+    # 兩邊對不上要當場報錯；明確傳「沒有」（空值三件套）要能成功登記 -----------------
+
+    def test_register_requires_product_tables_param(self):
+        """product_tables 本身不能整個省略——沒有產品層資料也要明確傳空集合表態。"""
+        noop_count = lambda conn, brand_id: []  # noqa: E731
+        noop_delete = lambda conn, brand_id: {}  # noqa: E731
+        with self.assertRaises(ValueError):
+            cleanup.register("缺產品層表宣告（清理登記處測試）", count_brand=noop_count,
+                             delete_brand=noop_delete, brand_tables=set(),
+                             count_product=None, delete_product=None, product_tables=None)
+        self.assertNotIn("缺產品層表宣告（清理登記處測試）", cleanup.registered_names())
+
+    def test_register_rejects_lopsided_product_functions(self):
+        """count_product／delete_product 只給一個、沒給另一個：當場報錯。"""
+        noop_count = lambda conn, brand_id: []  # noqa: E731
+        noop_delete = lambda conn, brand_id: {}  # noqa: E731
+        noop_count_p = lambda conn, brand_id, product_id: []  # noqa: E731
+        noop_delete_p = lambda conn, brand_id, product_id: {}  # noqa: E731
+
+        with self.assertRaises(ValueError):
+            cleanup.register("只給產品清點函式（清理登記處測試）", count_brand=noop_count,
+                             delete_brand=noop_delete, brand_tables=set(),
+                             count_product=noop_count_p, delete_product=None,
+                             product_tables=set())
+        with self.assertRaises(ValueError):
+            cleanup.register("只給產品清除函式（清理登記處測試）", count_brand=noop_count,
+                             delete_brand=noop_delete, brand_tables=set(),
+                             count_product=None, delete_product=noop_delete_p,
+                             product_tables=set())
+        self.assertNotIn("只給產品清點函式（清理登記處測試）", cleanup.registered_names())
+        self.assertNotIn("只給產品清除函式（清理登記處測試）", cleanup.registered_names())
+
+    def test_register_rejects_product_tables_and_functions_mismatch(self):
+        """宣告了 product_tables 卻沒給函式、或給了函式卻不宣告表：兩邊對不上就報錯。"""
+        noop_count = lambda conn, brand_id: []  # noqa: E731
+        noop_delete = lambda conn, brand_id: {}  # noqa: E731
+        noop_count_p = lambda conn, brand_id, product_id: []  # noqa: E731
+        noop_delete_p = lambda conn, brand_id, product_id: {}  # noqa: E731
+
+        with self.assertRaises(ValueError):
+            cleanup.register("宣告表卻沒給函式（清理登記處測試）", count_brand=noop_count,
+                             delete_brand=noop_delete, brand_tables=set(),
+                             count_product=None, delete_product=None,
+                             product_tables={"某張假表"})
+        with self.assertRaises(ValueError):
+            cleanup.register("給函式卻沒宣告表（清理登記處測試）", count_brand=noop_count,
+                             delete_brand=noop_delete, brand_tables=set(),
+                             count_product=noop_count_p, delete_product=noop_delete_p,
+                             product_tables=set())
+        self.assertNotIn("宣告表卻沒給函式（清理登記處測試）", cleanup.registered_names())
+        self.assertNotIn("給函式卻沒宣告表（清理登記處測試）", cleanup.registered_names())
+
+    def test_register_accepts_explicit_empty_product_dimension(self):
+        """沒有產品層資料的模組，明確傳空值三件套要能成功登記——這是「明確表示沒有」，
+        不是被免除必填。"""
+        noop_count = lambda conn, brand_id: []  # noqa: E731
+        noop_delete = lambda conn, brand_id: {}  # noqa: E731
+        self._register("沒有產品層資料（清理登記處測試）", count_brand=noop_count,
+                       delete_brand=noop_delete)
+        self.assertIn("沒有產品層資料（清理登記處測試）", cleanup.registered_names())
+
+    def test_register_accepts_matching_product_dimension(self):
+        """有產品層資料的模組，表跟函式都給、也對得上，要能成功登記，且
+        declared_product_tables() 讀得到宣告的表名。"""
+        noop_count = lambda conn, brand_id: []  # noqa: E731
+        noop_delete = lambda conn, brand_id: {}  # noqa: E731
+        noop_count_p = lambda conn, brand_id, product_id: []  # noqa: E731
+        noop_delete_p = lambda conn, brand_id, product_id: {}  # noqa: E731
+        self._register("有產品層資料（清理登記處測試）", count_brand=noop_count,
+                       delete_brand=noop_delete, count_product=noop_count_p,
+                       delete_product=noop_delete_p, product_tables={"假產品表"})
+        self.assertIn("有產品層資料（清理登記處測試）", cleanup.registered_names())
+        self.assertEqual(
+            cleanup.declared_product_tables()["有產品層資料（清理登記處測試）"],
+            frozenset({"假產品表"}))
 
     def test_register_rejects_duplicate_name(self):
         noop_count = lambda conn, brand_id: []  # noqa: E731
@@ -176,7 +260,8 @@ class CleanupRegistryTest(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             cleanup.register("重複命名（清理登記處測試）", count_brand=noop_count,
-                             delete_brand=noop_delete, brand_tables=set())
+                             delete_brand=noop_delete, brand_tables=set(),
+                             count_product=None, delete_product=None, product_tables=set())
 
     # (d) 真正的 bi_repo.delete_brand()（不是上面 (b) 案自己寫的 _delete_brand_like
     # 模擬版）出錯時也要整批回捲：品牌還在、audit_log 沒有半筆刪除紀錄 ---------------

@@ -120,6 +120,37 @@ class ImportBoundaryScanTest(unittest.TestCase):
         )
 
 
+class AdsMustNotImportOrdersTest(unittest.TestCase):
+    """第 7 刀：app/ads → app/orders 那 9 處呼叫已經拆光，這裡補一條機器閘門把圈鎖死成
+    單行道——app/orders 允許 import app.ads（見 `_is_allowed_branch_importer`），反過來
+    app/ads import app.orders 一律禁止，不設排除清單，跟上面 `BRANCH_PACKAGES` 的
+    import 掃描同一個風格（靜態 AST，只認 import／from...import 語句本身）。"""
+
+    def test_no_ads_module_imports_orders(self):
+        violations = []
+        for path in _iter_py_files():
+            rel = _rel(path)
+            if not rel.startswith("app/ads/"):
+                continue
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=rel)
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    names = [alias.name for alias in node.names]
+                elif isinstance(node, ast.ImportFrom) and node.module:
+                    names = [node.module]
+                else:
+                    names = []
+                for name in names:
+                    if name == "app.orders" or name.startswith("app.orders."):
+                        violations.append(f"{rel} 竟然 import 了 {name}")
+        self.assertEqual(
+            violations, [],
+            "以下 app/ads 模組 import 了 app.orders，違反第 7 刀單向依賴（app/orders 允許"
+            " import app.ads，反向不行，不設例外——需要訂單資料一律改由呼叫端傳入或由"
+            " app/main.py 這個組裝根注入）：\n" + "\n".join(violations),
+        )
+
+
 class CrossLayerRawSqlScanTest(unittest.TestCase):
     """A1 檢查②：跨層一律走公開函式，不得直接對別層的資料表下原生 SQL（鐵則 7）。
 

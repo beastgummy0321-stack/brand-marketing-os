@@ -30,7 +30,12 @@ from app.ads import repository as ads_repo
 from app.core import interrupts as core_interrupts
 from app.core.audit import write_audit
 from app.core.db import new_id, now_iso
-from app.orders import repository as orders_repo
+
+# 第 7 刀（A1 三層地界新規則：app/ads 不得 import app.orders，見
+# test_architecture_boundaries.py）：orders_repo 不在這裡 import，改由組裝根
+# app/main.py 啟動時注入真正的 app.orders.repository 模組（app/orders 允許 import
+# app.ads，方向只能單向，注入點就設在唯一合法跨層組裝的地方）。
+orders_repo = None
 
 SOURCE_TYPES = ("ad", "word_of_mouth")
 SOURCE_LABELS = {"ad": "廣告碼", "word_of_mouth": "口播碼"}

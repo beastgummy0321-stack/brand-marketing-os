@@ -643,6 +643,155 @@ def delete_brand_data(conn: sqlite3.Connection, brand_id: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# 刪產品（第 6 刀「廣告模組接上刪產品清理登記處」）：品牌智庫的 delete_product() 硬刪
+# 一顆已封存產品時，本模組掛在該產品底下的資料要一併清掉，不然就是孤兒列。
+#
+# 這 10 張表都直接帶 product_id 欄位（不是外鍵、是跨模組引用，見各表 CREATE TABLE 旁
+# 的註解），只挑 product_id 對得上這顆產品的列，同一張表裡 product_id 為 NULL（品牌層
+# 總結）或屬於別的產品的列不會被這個條件選到，不會誤刪品牌層或別的產品的資料。
+#
+# 排序照依賴關係排（子表在前、父表在後——即使 delete_product() 會開
+# PRAGMA defer_foreign_keys=ON、順序本身不影響正確性，這裡仍照拓樸順序排，跟
+# BRAND_CASCADE_TABLES／CYCLE_CASCADE_TABLES 維持同樣的可讀性風格）：
+#   - recommendation 引用 performance_reading，排在它前面
+#   - derived_metric 引用 performance_snapshot，排在它前面
+#   - publishing_package 引用 creative_variant／experiment_cell，排在它們前面
+#   - performance_reading／creative_variant 都引用 experiment_cell，排在它前面
+PRODUCT_CASCADE_TABLES = (
+    ("recommendation", "下一步建議"),
+    ("derived_metric", "衍生成效指標"),
+    ("publishing_package", "投放交接包"),
+    ("performance_reading", "成效判讀"),
+    ("performance_snapshot", "成效數據"),
+    ("creative_variant", "廣告素材"),
+    ("experiment_cell", "實驗組合（受眾×訊息×格式）"),
+    ("creative_rule_card", "候選規則卡"),
+    ("marketing_goal", "行銷目標"),
+    ("campaign_cycle_product", "產品預算分配"),
+)
+
+# 上面那 10 張是「自己就掛著 product_id」的表，照 product_id 篩就刪得掉。
+# 但還有一類表：它們自己沒有 product_id，卻用外鍵指著上面那些會被刪掉的列——
+# 父列被刪、子列留著就是懸空外鍵，整個刪除會在 COMMIT 被擋下（實測過：拿真實資料庫
+# 複本刪一個虛構產品，就是被 creative_brief -> experiment_cell 與
+# external_ad_mapping -> publishing_package 擋下來的）。
+#
+# 而且它有傳遞性：把 external_ad_mapping 納入清理之後，指向它的 campaign_activation
+# 又變成新的懸空來源。手工維護一份清單一定會漏掉第二層、第三層，所以這裡改成沿著
+# 外鍵自動走一遍——只往「誰指著我」的方向走（要刪的列被誰參照），不往「我指著誰」
+# 的方向走（那些是別人的資料，不該跟著刪）。
+#
+# 這份標籤表只負責把走到的表翻成人話給刪除確認頁看；走不走得到由 schema 決定，
+# 不由這份表決定。走到了卻沒登記標籤，就用表名當標籤，不會靜靜漏掉。
+_PRODUCT_CASCADE_LABELS = {
+    "creative_brief": "素材需求簡報",
+    "final_asset": "定稿素材檔",
+    "external_ad_mapping": "Meta 廣告物件對應",
+    "campaign_activation": "投放啟動紀錄",
+    "campaign_cycle_goal": "本期目標關聯",
+    "success_criterion": "成功判準",
+}
+
+
+def _inbound_fks(conn) -> dict:
+    """{被指向的表: [(子表, 子表的外鍵欄位, 父表被指向的欄位), ...]}，從真實 schema 讀。
+
+    不假設父表的主鍵一定叫 id——外鍵可以指向任何欄位，PRAGMA 第 5 欄就是答案
+    （為 None 代表指向父表的主鍵）。
+    """
+    out = {}
+    for (table,) in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"):
+        for fk in conn.execute(f"PRAGMA foreign_key_list({table})"):
+            out.setdefault(fk[2], []).append((table, fk[3], fk[4] or "id"))
+    return out
+
+
+def _product_cascade_scope(conn, brand_id: str, product_id: str) -> dict:
+    """從 PRODUCT_CASCADE_TABLES 那 10 張屬於這顆產品的列出發，沿外鍵反覆找出所有
+    「指著它們」的列，回傳 {表名: set(rowid)}，找到不再有新東西為止（傳遞閉包）。
+
+    用 rowid 而不是 id：連結表（例如 campaign_cycle_goal）是複合主鍵、根本沒有 id 欄位，
+    而 rowid 是 SQLite 每張一般表都有的內建列識別碼。
+    """
+    scope: dict = {}
+    for table, _label in PRODUCT_CASCADE_TABLES:
+        rows = {r[0] for r in conn.execute(
+            f"SELECT rowid FROM {table} WHERE brand_id = ? AND product_id = ?",
+            (brand_id, product_id))}
+        if rows:
+            scope[table] = rows
+    inbound = _inbound_fks(conn)
+    changed = True
+    while changed:
+        changed = False
+        for parent in list(scope):
+            for child, fk_col, parent_col in inbound.get(parent, []):
+                parent_rowids = list(scope[parent])
+                if not parent_rowids:
+                    continue
+                marks = ",".join("?" for _ in parent_rowids)
+                keys = [r[0] for r in conn.execute(
+                    f"SELECT {parent_col} FROM {parent} WHERE rowid IN ({marks})", parent_rowids)
+                    if r[0] is not None]
+                if not keys:
+                    continue
+                kmarks = ",".join("?" for _ in keys)
+                found = {r[0] for r in conn.execute(
+                    f"SELECT rowid FROM {child} WHERE {fk_col} IN ({kmarks})", keys)}
+                new = found - scope.get(child, set())
+                if new:
+                    scope.setdefault(child, set()).update(new)
+                    changed = True
+    return scope
+
+
+def count_product_data(conn: sqlite3.Connection, brand_id: str, product_id: str) -> list:
+    """刪產品前的清點（比照 count_brand_data 的回傳格式），給刪除確認頁列出「按下去會
+    消失什麼」。跟 delete_product_data 共讀同一份 PRODUCT_CASCADE_TABLES，不各寫一份，
+    避免清點與清除不同步（第 4 刀吃過的虧）。"""
+    counts = []
+    for table, label in PRODUCT_CASCADE_TABLES:
+        n = conn.execute(
+            f"SELECT COUNT(*) AS c FROM {table} WHERE brand_id = ? AND product_id = ?",
+            (brand_id, product_id),
+        ).fetchone()["c"]
+        if n:
+            counts.append((label, n))
+    # 沿外鍵走到的連帶列（自己沒有 product_id 的那些表），見 _product_cascade_scope
+    scope = _product_cascade_scope(conn, brand_id, product_id)
+    direct = {t for t, _ in PRODUCT_CASCADE_TABLES}
+    for table in sorted(scope):
+        if table in direct:
+            continue
+        counts.append((_PRODUCT_CASCADE_LABELS.get(table, table), len(scope[table])))
+    return counts
+
+
+def delete_product_data(conn: sqlite3.Connection, brand_id: str, product_id: str) -> dict:
+    """清掉本模組掛在該產品下的資料（PRODUCT_CASCADE_TABLES 這 10 張表），登記進
+    app.core.cleanup 給 brand_intelligence.delete_product() 呼叫用。只下 DELETE、不
+    commit、不 rollback（Q4 單一交易、全有全無，commit 與 rollback 統一在
+    brand_intelligence.delete_product()）。
+    """
+    counts = dict(count_product_data(conn, brand_id, product_id))
+    # 先把整個連帶範圍算出來（含沿外鍵走到的第二層、第三層），再依 id 刪。
+    # 一定要先算完再刪：父列一旦刪掉，子查詢就撈不到它的子列了。
+    scope = _product_cascade_scope(conn, brand_id, product_id)
+    direct = {t for t, _ in PRODUCT_CASCADE_TABLES}
+    for table in scope:
+        if table in direct:
+            continue
+        ids = list(scope[table])
+        marks = ",".join("?" for _ in ids)
+        conn.execute(f"DELETE FROM {table} WHERE rowid IN ({marks})", ids)
+    for table, _label in PRODUCT_CASCADE_TABLES:
+        conn.execute(f"DELETE FROM {table} WHERE brand_id = ? AND product_id = ?",
+                     (brand_id, product_id))
+    return counts
+
+
+# ---------------------------------------------------------------------------
 # 清理登記處（第 2 刀）：向 app.core.cleanup 登記本模組的清點／清除函式，刪品牌時
 # 由登記處統一呼叫，本模組不必再被別人手寫死「記得通知它」。
 #
@@ -659,4 +808,6 @@ def delete_brand_data(conn: sqlite3.Connection, brand_id: str) -> dict:
 # ---------------------------------------------------------------------------
 
 cleanup.register("廣告", count_brand=count_brand_data, delete_brand=delete_brand_data,
-                 brand_tables={t for t, _ in BRAND_CASCADE_TABLES})
+                 brand_tables={t for t, _ in BRAND_CASCADE_TABLES},
+                 count_product=count_product_data, delete_product=delete_product_data,
+                 product_tables={t for t, _ in PRODUCT_CASCADE_TABLES})

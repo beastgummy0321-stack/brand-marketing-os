@@ -27,7 +27,11 @@ from typing import Optional
 
 from app.ads import inflation as ads_inflation
 from app.core.db import new_id, now_iso
-from app.orders import repository as orders_repo
+
+# 第 7 刀（A1 三層地界新規則：app/ads 不得 import app.orders，見
+# test_architecture_boundaries.py）：orders_repo 不在這裡 import，改由組裝根
+# app/main.py 啟動時注入真正的 app.orders.repository 模組。
+orders_repo = None
 
 
 def _next_version(conn, cycle_id: str) -> int:
