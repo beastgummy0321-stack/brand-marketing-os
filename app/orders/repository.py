@@ -14,6 +14,7 @@ import sqlite3
 from datetime import date, timedelta
 from typing import Optional
 
+from app.core import cleanup
 from app.core.audit import write_audit
 from app.core.db import new_id, now_iso
 from app.orders import identity as identity_mod
@@ -495,3 +496,60 @@ def set_attribution_override(conn: sqlite3.Connection, brand_id: str, order_id: 
                 after={"attribution_override": value})
     conn.commit()
     return {"id": order_id, "attribution_override": value}
+
+
+# ---------------------------------------------------------------------------
+# 刪品牌（第 5 刀「訂單模組接上清理登記處」）
+#
+# 這 9 張表都掛 brand_id，彼此之間、跟本模組其他表之間都沒有真的外鍵約束
+# （order_item.order_id、order_record.customer_id 都只是欄位，schema 沒下 REFERENCES）。
+# 唯一的真外鍵是 cycle_shopee_code.campaign_cycle_id -> campaign_cycle(id)
+# （campaign_cycle 是 app/ads 模組的表，由該模組清）。這條外鍵不需要靠「誰先誰後登記」
+# 解決：app/brand_intelligence/repository.py 的 delete_brand() 在交易一開始就下
+# `PRAGMA defer_foreign_keys = ON`，把檢查延到 COMMIT，跨模組清理順序從此不重要
+# （見該檔 delete_brand() 的說明）。
+BRAND_CASCADE_TABLES = (
+    ("customer", "顧客"),
+    ("order_record", "訂單"),
+    ("order_item", "訂單品項"),
+    ("sku_cost", "SKU 成本"),
+    ("sku_cost_version", "SKU 成本版本歷史"),
+    ("pharmacy_batch", "藥局出貨批次"),
+    ("shopee_report_row", "蝦皮賣家中心報表"),
+    ("policy_change_log", "折扣／退款口徑變更紀錄"),
+    ("cycle_shopee_code", "蝦皮期別配碼與回收數"),
+)
+
+
+def count_brand_data(conn: sqlite3.Connection, brand_id: str) -> list:
+    """刪品牌前的清點（比照 app/ads/repository.py 的 count_brand_data），給刪除確認頁
+    列出「按下去會消失什麼」。跟 delete_brand_data 讀同一份 BRAND_CASCADE_TABLES——
+    「清點清一份、清除清另一份，兩邊不同步」正是這整串 bug 的根因。"""
+    counts = []
+    for table, label in BRAND_CASCADE_TABLES:
+        n = conn.execute(
+            f"SELECT COUNT(*) AS c FROM {table} WHERE brand_id = ?", (brand_id,)
+        ).fetchone()["c"]
+        if n:
+            counts.append((label, n))
+    return counts
+
+
+def delete_brand_data(conn: sqlite3.Connection, brand_id: str) -> dict:
+    """清掉本模組掛在該品牌下的資料（BRAND_CASCADE_TABLES 這 9 張表），登記進
+    app.core.cleanup 給 delete_brand() 呼叫用。只下 DELETE、不 commit、不 rollback
+    （Q4 單一交易、全有全無，commit 與 rollback 統一在 brand_intelligence.delete_brand()）。
+    """
+    counts = dict(count_brand_data(conn, brand_id))
+    for table, _label in BRAND_CASCADE_TABLES:
+        conn.execute(f"DELETE FROM {table} WHERE brand_id = ?", (brand_id,))
+    return counts
+
+
+# ---------------------------------------------------------------------------
+# 清理登記處（第 2 刀）：向 app.core.cleanup 登記本模組的清點／清除函式，刪品牌時
+# 由登記處統一呼叫，本模組不必再被別人手寫死「記得通知它」。
+# ---------------------------------------------------------------------------
+
+cleanup.register("訂單", count_brand=count_brand_data, delete_brand=delete_brand_data,
+                 brand_tables={t for t, _ in BRAND_CASCADE_TABLES})

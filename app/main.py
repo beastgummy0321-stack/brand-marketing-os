@@ -373,11 +373,10 @@ app.include_router(ads_router)
 app.include_router(orders_router)
 
 # 啟動斷言（第 2 刀「清理登記處」）：確認刪品牌時該連鎖清資料的模組都有登記進
-# app.core.cleanup，少一個就不讓服務起來，避免又漏掉誰（orders 這家還沒接上登記處，
-# 是第 5 刀的範圍，這裡先不列進來）。
+# app.core.cleanup，少一個就不讓服務起來，避免又漏掉誰。
 from app.core import cleanup as core_cleanup  # noqa: E402
 
-_REQUIRED_CLEANUP_MODULES = ("品牌智庫", "建檔精靈", "廣告")
+_REQUIRED_CLEANUP_MODULES = ("品牌智庫", "建檔精靈", "廣告", "訂單", "中斷提醒")
 _missing_cleanup = [n for n in _REQUIRED_CLEANUP_MODULES if n not in core_cleanup.registered_names()]
 if _missing_cleanup:
     raise RuntimeError(f"清理登記處少登記了：{_missing_cleanup}")

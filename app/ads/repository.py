@@ -646,14 +646,16 @@ def delete_brand_data(conn: sqlite3.Connection, brand_id: str) -> dict:
 # 清理登記處（第 2 刀）：向 app.core.cleanup 登記本模組的清點／清除函式，刪品牌時
 # 由登記處統一呼叫，本模組不必再被別人手寫死「記得通知它」。
 #
-# 登記順序＝跨模組刪除順序：舊資料庫的 learning_ledger 可能帶
-# REFERENCES campaign_cycle(id) 外鍵（新資料庫沒有，見
-# app/brand_intelligence/migrations/0004_learning_ledger.sql 的說明），
-# learning_ledger 由「品牌智庫」清、campaign_cycle 由本模組清，所以「品牌智庫」必須
-# 排在本模組前面登記，DELETE 才不會被 FK 擋下來。這是結構保證、不是巧合：本檔檔頭
-# `from app.brand_intelligence import repository as bi`，Python import 這個模組時
-# 一定會先執行完它檔尾的 cleanup.register("品牌智庫", ...)，本模組的 register() 才會
-# 跟著跑（見 app/tests/test_ads_brand_cleanup.py 的順序釘子測試）。
+# 舊版這裡曾寫死「品牌智庫必須比本模組先登記」，理由是舊資料庫的 learning_ledger
+# 可能帶 REFERENCES campaign_cycle(id) 外鍵，登記順序錯了 DELETE 會被 FK 擋下。
+# 第 5 刀把這個問題連根拔掉：app/brand_intelligence/repository.py 的 delete_brand()
+# 交易一開始就下 `PRAGMA defer_foreign_keys = ON`，外鍵檢查延到 COMMIT 才做一次，
+# 跨模組登記順序從此完全不重要——包含 learning_ledger／campaign_cycle 這條、
+# 也包含 cycle_shopee_code（訂單模組）／campaign_cycle（本模組）那條。
+#
+# app/tests/test_ads_brand_cleanup.py 那條「品牌智庫要比廣告先登記」的順序釘子測試
+# 留著沒刪：現在它驗證的不是「必要條件」而是「回歸保險」——就算哪天真的不小心把
+# PRAGMA 那行刪掉，至少這條舊約束的順序還在，不會立刻整批爆掉。
 # ---------------------------------------------------------------------------
 
 cleanup.register("廣告", count_brand=count_brand_data, delete_brand=delete_brand_data,

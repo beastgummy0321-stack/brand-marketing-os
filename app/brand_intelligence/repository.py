@@ -187,7 +187,39 @@ def delete_brand(conn: sqlite3.Connection, brand_id: str, *, actor: str) -> dict
         raise ValueError(f"找不到品牌：{brand_id}")
     if before["status"] != "archived":
         raise ValueError("只有已封存的品牌可以刪除，請先把品牌封存。")
+
+    # 這條連線是全 app 共用的（app/core/db.py connect()），背景執行緒也在用
+    # （app/ads/routes.py 的 _progress_run，例如 Meta 回填、AI 生成等待頁）。
+    # 如果撞上「別人已經寫了東西但還沒 commit」的空檔：
+    #   - 下面的 BEGIN 會拋 OperationalError（不能在交易裡再開交易），
+    #   - 接著 except 的 rollback() 會把對方那筆還沒 commit、跟刪品牌毫無關係的資料
+    #     一起沖銷掉，而對方之後 commit() 不會報錯，等於資料靜默消失。
+    # 所以這裡先擋下來、給人話錯誤請他重試，而不是硬闖。刪品牌是罕見的手動操作，
+    # 請使用者等一下遠比靜默弄丟別人的資料好。
+
+    if conn.in_transaction:
+        raise RuntimeError("系統正在處理其他工作，現在不能刪除品牌。請等幾秒後再試一次。")
+
     try:
+        # 延後外鍵檢查到 COMMIT 那一刻（第 5 刀）：各登記模組刪各自的表時，例如
+        # cycle_shopee_code（訂單模組）REFERENCES campaign_cycle(id)（廣告模組），
+        # 若哪個先刪錯了順序（父表先於子表），SQLite 預設會當場擋下。開這個 PRAGMA 後，
+        # 外鍵檢查延到整個交易 COMMIT 時才做一次——只要 COMMIT 那一刻資料是乾淨的
+        # （刪品牌就是把相關資料全部清光，最後一定乾淨），中途誰先誰後完全不重要，
+        # 模組之間也不必再協調登記順序。SQLite 會在每次 COMMIT／ROLLBACK 時自動把它
+        # 轉回 OFF，不會外溢到下一個不相干的操作。
+        #
+        # 這裡先明確 BEGIN、才下 PRAGMA，順序不是隨意的，親自測過才知道：Python 的
+        # sqlite3 模組只在遇到第一個 DML（INSERT/UPDATE/DELETE）時才隱式開交易，
+        # PRAGMA 本身、SELECT 都不會開交易。而下面 cleanup.delete_all() 呼叫的每個
+        # 模組的 delete_brand 函式，內部第一步都是 count_brand_data()（一串 SELECT）
+        # 才接 DELETE——若 PRAGMA 下在交易外面，SQLite 會把「沒有顯式交易時的每一句
+        # 陳述式」各自當成一個獨立的隱式交易，那串 SELECT 執行完就會讓 defer_foreign_
+        # keys 悄悄被重置回 OFF，等真正的 DELETE 跑到時保護已經失效（親測過會炸，
+        # 見 app/tests/test_orders_core_brand_cleanup.py 的 PRAGMA 生效證明測試）。
+        # 先 BEGIN 讓交易先開好，PRAGMA 才會跟後面所有 SELECT／DELETE 綁在同一個交易裡。
+        conn.execute("BEGIN")
+        conn.execute("PRAGMA defer_foreign_keys = ON")
         counts = cleanup.delete_all(conn, brand_id)
         conn.execute("DELETE FROM brand WHERE id = ?", (brand_id,))
         write_audit(conn, brand_id=brand_id, entity_type="brand", entity_id=brand_id,

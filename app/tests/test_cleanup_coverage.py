@@ -22,11 +22,15 @@ from pathlib import Path
 from app.ads import repository as ads_repo  # noqa: F401  # import 才會觸發它的自我登記
 from app.brand_intelligence import repository as repo
 from app.core import cleanup, db
+from app.core import interrupts as core_interrupts  # noqa: F401  # 同上，觸發它的自我登記
 from app.intake import repository as intake_repo  # noqa: F401  # import 才會觸發它的自我登記
+from app.orders import repository as orders_repo  # noqa: F401  # 同上，觸發它的自我登記
 
 # 刻意保留、不隨品牌一起刪的表，附理由。加東西進這裡要想清楚。
 DELIBERATELY_KEPT = {
     "audit_log": "稽核軌跡。刪除品牌那筆紀錄本身就存在這裡，清掉就沒有證據可查（決策 0015）。",
+    "llm_task": "AI 花費紀錄（每次呼叫花多少錢）。品牌刪掉不代表那筆支出沒發生，錢已經花了；"
+                "留著才答得出「這個帳號總共花多少錢」（app/core/settings.py 會 SUM 它）。",
 }
 
 # 品牌本身那一列不是「子資料」，由 delete_brand() 在所有登記模組清完之後才刪。
@@ -38,14 +42,11 @@ _PRODUCT_ROOT_TABLES = {"product"}
 # 補完就從這裡刪掉——刪了測試才會綠，這是進度可見的來源。
 # ---------------------------------------------------------------------------
 
-KNOWN_BRAND_GAPS = {
-    # 第 5 刀：訂單模組接上登記處
-    "customer", "cycle_shopee_code", "order_item", "order_record", "pharmacy_batch",
-    "policy_change_log", "shopee_report_row", "sku_cost", "sku_cost_version",
-    # 第 5 刀：核心模組接上登記處
-    "interrupt",  # 中斷提醒
-    "llm_task",   # AI 花費紀錄。留著會讓「這個品牌總共花多少」的統計算錯
-}
+# 第 5 刀把訂單模組（9 張）、核心模組（interrupt）接上登記處，llm_task 改列進
+# DELIBERATELY_KEPT（刻意保留），品牌層缺口歸零。空集合本身要保留、連同這段註解——
+# 之後有新表帶 brand_id 卻沒人認領，這裡會再長出東西，到時候依樣畫葫蘆補上模組登記
+# 或 DELIBERATELY_KEPT，不要圖方便直接把表名塞回這裡了事。
+KNOWN_BRAND_GAPS = set()
 
 KNOWN_PRODUCT_GAPS = {
     # 第 4 刀：廣告模組的產品層清理

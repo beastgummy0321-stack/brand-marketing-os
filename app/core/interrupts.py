@@ -17,6 +17,7 @@
 from datetime import date, timedelta
 from typing import Optional
 
+from app.core import cleanup
 from app.core.audit import write_audit
 from app.core.db import new_id, now_iso
 
@@ -175,3 +176,41 @@ def resolve(conn, interrupt_id: str, *, actor: str) -> None:
     write_audit(conn, brand_id=row["brand_id"], entity_type="interrupt", entity_id=interrupt_id,
                 action="resolve", actor=actor)
     conn.commit()
+
+
+# ---------------------------------------------------------------------------
+# 刪品牌（第 5 刀「核心模組接上清理登記處」）：interrupt 掛 brand_id，刪品牌時要一併
+# 清掉。向 app.core.cleanup 登記——這是 core 內部依賴（cleanup.py 零 app 依賴，本檔
+# import 它不違反「app/core 不得 import 任何上層模組」的地界，本來就在 core 裡面）。
+# ---------------------------------------------------------------------------
+
+BRAND_CASCADE_TABLES = (
+    ("interrupt", "中斷提醒"),
+)
+
+
+def count_brand_data(conn, brand_id: str) -> list:
+    """刪品牌前的清點，給刪除確認頁列出「按下去會消失什麼」。跟 delete_brand_data
+    讀同一份 BRAND_CASCADE_TABLES——不各寫一份，避免清點與清除不同步。"""
+    counts = []
+    for table, label in BRAND_CASCADE_TABLES:
+        n = conn.execute(
+            f"SELECT COUNT(*) AS c FROM {table} WHERE brand_id = ?", (brand_id,)
+        ).fetchone()["c"]
+        if n:
+            counts.append((label, n))
+    return counts
+
+
+def delete_brand_data(conn, brand_id: str) -> dict:
+    """清掉本模組掛在該品牌下的資料，登記進 app.core.cleanup 給 delete_brand() 呼叫用。
+    只下 DELETE、不 commit、不 rollback（commit 與 rollback 統一在
+    brand_intelligence.delete_brand()）。"""
+    counts = dict(count_brand_data(conn, brand_id))
+    for table, _label in BRAND_CASCADE_TABLES:
+        conn.execute(f"DELETE FROM {table} WHERE brand_id = ?", (brand_id,))
+    return counts
+
+
+cleanup.register("中斷提醒", count_brand=count_brand_data, delete_brand=delete_brand_data,
+                 brand_tables={t for t, _ in BRAND_CASCADE_TABLES})
