@@ -116,6 +116,13 @@ def reopen_connection():
 app = FastAPI(title="行銷作業系統（Phase 0 Mock UI）")
 app.mount("/static", StaticFiles(directory=web.BASE_DIR / "static"), name="static")
 
+# 新殼（票 01-react-shell，ADR 0003）：production 掛 frontend/dist 於 /app，
+# 舊 145 條 HTML 路由原封不動。frontend/dist 是建置產物、不進版控，開發期走
+# Vite dev server（npm run dev）不會有這個目錄，所以只有目錄存在才掛載，
+# 沒 build 過的機器（例如測試環境）啟動仍要照常成功。
+_FRONTEND_DIST = web.BASE_DIR.parent / "frontend" / "dist"
+if _FRONTEND_DIST.is_dir():
+    app.mount("/app", StaticFiles(directory=_FRONTEND_DIST, html=True), name="react-shell")
 
 @app.middleware("http")
 async def _daily_backup_middleware(request: Request, call_next):

@@ -1,0 +1,67 @@
+/* 設計 token（票 01-react-shell）
+   來源：ui-ux-pro-max 技能包 --design-system（查詢：marketing operations dashboard
+   cockpit professional light b2b saas），色彩與字體維持工具產出的專業淡色配色，
+   效果改採 shadcn/ui 慣用的「卡片＋細邊框」扁平風格，取代工具原建議的玻璃擬態
+   （與規格「淡色專業風」「不用...精確比較」的簡潔要求較合）。
+
+   這是唯一的 token 來源檔：後續票（02～09）沿用這裡的顏色／字體／圓角變數，
+   不得在元件裡各自重寫 hex 色碼。*/
+
+@import url("https://fonts.googleapis.com/css2?family=Calistoga&family=Inter:wght@400;500;600;700&display=swap");
+@import "tailwindcss";
+
+@theme {
+  /* 色彩：專業 navy + 藍色 CTA，中性淡色背景 */
+  --color-background: #f8fafc;
+  --color-foreground: #0f172a;
+  --color-card: #ffffff;
+  --color-card-foreground: #0f172a;
+  --color-primary: #0369a1;
+  --color-primary-foreground: #ffffff;
+  --color-secondary: #334155;
+  --color-secondary-foreground: #ffffff;
+  --color-muted: #e8ecf1;
+  --color-muted-foreground: #64748b;
+  --color-accent: #0369a1;
+  --color-accent-foreground: #ffffff;
+  --color-border: #e2e8f0;
+  --color-ring: #0f172a;
+  --color-destructive: #dc2626;
+  --color-destructive-foreground: #ffffff;
+
+  /* 健康度燈號（駕駛艙票 02 起沿用）：純規則判定，紅／黃／綠三態 */
+  --color-success: #16a34a;
+  --color-warning: #d97706;
+  --color-danger: #dc2626;
+
+  /* 字體：Calistoga 做大標題、Inter 做內文與介面文字 */
+  --font-display: "Calistoga", "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+
+  /* 圓角 */
+  --radius-sm: 0.375rem;
+  --radius-md: 0.5rem;
+  --radius-lg: 0.75rem;
+
+  /* 陰影：卡片用極淺陰影，不做玻璃模糊 */
+  --shadow-card: 0 1px 2px 0 rgb(15 23 42 / 0.04), 0 1px 3px 0 rgb(15 23 42 / 0.06);
+
+  /* 版面：純桌機固定寬度（決策 0038／ADR 0003，不做響應式） */
+  --width-shell: 1440px;
+  --width-sidebar: 15rem;
+  --height-topbar: 3.75rem;
+}
+
+:root {
+  color-scheme: light;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  @apply bg-background text-foreground font-sans antialiased;
+}
