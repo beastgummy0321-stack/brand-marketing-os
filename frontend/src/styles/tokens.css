@@ -34,6 +34,12 @@
   --color-warning: #d97706;
   --color-danger: #dc2626;
 
+  /* 圖表分類色（票 03-cockpit-kpi-chart）：只分類（哪條線是哪個指標），不表數值
+   * 大小（規格圖表鐵則）。經 dataviz 技能包 validate_palette.js 驗證（light 模式，
+   * 對 --color-card 卡片底色）：CVD 相鄰對 ΔE、正常視力門檻、對比皆過。 */
+  --color-chart-revenue: var(--color-primary);
+  --color-chart-spend: #b45309;
+
   /* 字體：Calistoga 做大標題、Inter 做內文與介面文字 */
   --font-display: "Calistoga", "Inter", ui-sans-serif, system-ui, sans-serif;
   --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;

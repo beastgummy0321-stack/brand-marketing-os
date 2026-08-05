@@ -1,9 +1,11 @@
 import type { DashboardBrandCard } from "@/lib/api";
+import { formatCurrency, formatMomPct } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 /** 品牌卡片（票 02-overview-cards）：健康度燈號＋本月營收環比＋檔期狀態＋下一步留位。
- * 點卡片離開 SPA 導去舊版品牌詳情頁——過渡期做法比照票 01 側欄（03 補上新殼駕駛艙後
- * 再把這個連結換成 SPA 內路徑）。 */
+ * 點卡片進單品牌駕駛艙（票 03）——`?brand=` 查詢字串而不是路徑片段，直接落在 SPA
+ * 掛載根目錄 `/app/`，重新整理／直接貼網址都吃得到（StaticFiles html=True 只認
+ * 掛載根目錄的 index.html，子路徑沒有 catch-all 會 404，見票 03 實作筆記）。 */
 
 const HEALTH_LABEL: Record<DashboardBrandCard["health"], string> = {
   red: "需要關注",
@@ -17,21 +19,10 @@ const HEALTH_DOT_CLASS: Record<DashboardBrandCard["health"], string> = {
   green: "bg-success",
 };
 
-function formatRevenue(value: number | null): string {
-  if (value === null) return "累積中";
-  return `NT$ ${Math.round(value).toLocaleString("zh-TW")}`;
-}
-
-function formatMomPct(value: number | null): string {
-  if (value === null) return "";
-  const sign = value > 0 ? "+" : "";
-  return `（環比 ${sign}${value}%）`;
-}
-
 export function BrandCard({ card }: { card: DashboardBrandCard }) {
   return (
     <a
-      href={`/brands/${card.brand_id}`}
+      href={`/app/?brand=${encodeURIComponent(card.brand_id)}`}
       className="flex flex-col gap-3 rounded-lg border border-border bg-card p-5 shadow-[var(--shadow-card)] transition-shadow hover:shadow-md"
     >
       <div className="flex items-center justify-between gap-2">
@@ -47,7 +38,7 @@ export function BrandCard({ card }: { card: DashboardBrandCard }) {
 
       <div>
         <p className="text-2xl font-semibold text-foreground">
-          {formatRevenue(card.revenue_this_month)}
+          {formatCurrency(card.revenue_this_month)}
         </p>
         <p className="text-sm text-muted-foreground">
           本月營收 {formatMomPct(card.revenue_mom_pct)}

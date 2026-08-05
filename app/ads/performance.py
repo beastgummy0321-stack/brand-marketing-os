@@ -613,6 +613,42 @@ def brand_level_totals(conn, brand_id: str) -> dict:
     return row
 
 
+# ---------------------------------------------------------------------------
+# 駕駛艙 KPI（票 03-cockpit-kpi-chart）：橫跨所有檔期＋品牌層歷史的區間查詢，
+# 給 app/dashboard/repository.py 當公開接縫用（接口鐵則：dashboard 只透過這裡取數，
+# 不直接對 performance_snapshot／derived_metric 下 SQL）。
+# ---------------------------------------------------------------------------
+
+def brand_period_spend(conn, brand_id: str, since: str, until: str) -> Optional[float]:
+    """指定區間的花費加總，不分檔期（規格 KPI 口徑：廣告花費＝成效快照 spend 加總）。
+
+    依資料期間末日（date_range_end）落在區間內判斷歸屬，沿用 `_brand_level_monthly_groups()`
+    「資料期間末月」的既有慣例。只算未隔離資料。區間內完全沒有資料列時回 None，
+    不回 0——「沒得算」跟「花費確實是 0」是兩件事（鐵則 16）。
+    """
+    row = conn.execute(
+        "SELECT SUM(spend) spend, COUNT(*) rows FROM performance_snapshot"
+        " WHERE brand_id = ? AND quarantined = 0"
+        " AND date_range_end >= ? AND date_range_end <= ?",
+        (brand_id, since, until),
+    ).fetchone()
+    return row["spend"] if row["rows"] else None
+
+
+def latest_derived_metric(conn, brand_id: str, metric: str, since: str, until: str) -> Optional[float]:
+    """指定區間內最新一筆 derived_metric 數值（規格 KPI 口徑：ROAS 取自 derived_metric，
+    不是拿 revenue／spend 重算）。區間比對 computed_at 的日期部分；同一區間多筆時取
+    computed_at 最新那筆。區間內沒有任何一筆時回 None（鐵則 16：沒得算不假裝成 0）。
+    """
+    row = conn.execute(
+        "SELECT value FROM derived_metric WHERE brand_id = ? AND metric = ?"
+        " AND substr(computed_at, 1, 10) >= ? AND substr(computed_at, 1, 10) <= ?"
+        " ORDER BY computed_at DESC LIMIT 1",
+        (brand_id, metric, since, until),
+    ).fetchone()
+    return row["value"] if row else None
+
+
 def delete_snapshots(conn, brand_id: str, cycle_id: str, *, source: Optional[str] = None) -> int:
     """刪除某期的成效資料，連同掛在上面的 derived_metric 一起（先子後父）。
 

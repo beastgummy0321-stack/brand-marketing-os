@@ -21,3 +21,17 @@ async def overview():
         "data": dashboard_repo.overview(main_mod.conn),
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }
+
+
+@router.get("/brands/{brand_id}/cockpit")
+async def cockpit(brand_id: str):
+    """單品牌駕駛艙（票 03-cockpit-kpi-chart）：KPI 卡＋主圖時間序列。404 沿用
+    既有 `require_brand`（app/shared/web.py），跟舊介面一致的「找不到品牌」回應。"""
+    brand = main_mod.require_brand(brand_id)
+    data = dashboard_repo.cockpit(main_mod.conn, brand_id)
+    data["brand_id"] = brand["id"]
+    data["brand_name"] = brand["name"]
+    return {
+        "data": data,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
