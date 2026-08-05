@@ -16,6 +16,7 @@ _tmpdir = tempfile.mkdtemp(prefix="brand_os_dashboard_")
 os.environ["BRAND_OS_DB"] = str(os.path.join(_tmpdir, "test.db"))
 os.environ["BRAND_OS_BACKUP_DIR"] = str(os.path.join(_tmpdir, "backups"))
 os.environ["BRAND_OS_UPLOADS"] = str(os.path.join(_tmpdir, "uploads"))
+os.environ["BRAND_OS_TODAY"] = "2026-08-05"  # 凍結時鐘：本檔所有日期斷言都以這天為「今天」
 
 from fastapi.testclient import TestClient  # noqa: E402
 

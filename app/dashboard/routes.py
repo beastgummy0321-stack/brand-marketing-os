@@ -5,6 +5,7 @@
 首頁（跨品牌總覽）打這支端點取資料。
 """
 
+import os
 from datetime import datetime, timezone
 
 from fastapi import APIRouter
@@ -15,10 +16,15 @@ from app.dashboard import repository as dashboard_repo
 router = APIRouter(prefix="/api/dashboard")
 
 
+def _today_override():
+    """測試接縫：BRAND_OS_TODAY 凍結「今天」（比照 BRAND_OS_DB 慣例），未設用真實日期。"""
+    return os.environ.get("BRAND_OS_TODAY") or None
+
+
 @router.get("/overview")
 async def overview():
     return {
-        "data": dashboard_repo.overview(main_mod.conn),
+        "data": dashboard_repo.overview(main_mod.conn, today=_today_override()),
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -28,7 +34,7 @@ async def cockpit(brand_id: str):
     """單品牌駕駛艙（票 03-cockpit-kpi-chart）：KPI 卡＋主圖時間序列。404 沿用
     既有 `require_brand`（app/shared/web.py），跟舊介面一致的「找不到品牌」回應。"""
     brand = main_mod.require_brand(brand_id)
-    data = dashboard_repo.cockpit(main_mod.conn, brand_id)
+    data = dashboard_repo.cockpit(main_mod.conn, brand_id, today=_today_override())
     data["brand_id"] = brand["id"]
     data["brand_name"] = brand["name"]
     return {
