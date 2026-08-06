@@ -31,7 +31,7 @@ COLUMN_ALIASES = {
     "date_start": ["報告開始", "reporting starts", "date start", "開始日期", "day", "日期",
                    "分析報告開始"],
     "date_stop": ["報告結束", "reporting ends", "date stop", "結束日期", "分析報告結束"],
-    "impressions": ["曝光次數", "impressions", "曝光數", "觸及次數"],
+    "impressions": ["曝光次數", "impressions", "曝光數"],
     "clicks": ["連結點擊次數", "link clicks", "點擊次數（全部）", "點擊次數(全部)",
                "clicks (all)", "clicks", "點擊次數"],
     "spend": ["花費金額", "amount spent", "spend", "花費", "已花費金額"],
@@ -42,11 +42,15 @@ COLUMN_ALIASES = {
     # 匯入層用它反推 revenue，不進正規化欄位——見 import_rows 的 _derive_revenue_from_roas。
     "roas_direct": ["成果 roas", "purchase roas", "roas"],
     "frequency": ["頻率", "frequency", "曝光頻率"],  # 素材疲勞判定要用（票 9）
+    # 觸及（reach）：跟曝光（impressions）是兩個不同概念——曝光數含重複看到同一人，
+    # 觸及數是不重複人數。Meta 匯出的正式欄位是「觸及人數」；「觸及次數」是常見口語變體，
+    # 舊版曾誤把它列進 impressions 別名，會把觸及資料搶去當曝光算（票 03-add-reach-metric）。
+    "reach": ["觸及人數", "觸及次數", "觸及", "reach", "people reached"],
 }
 
 REQUIRED_COLUMNS = ["spend"]  # 沒有花費就完全沒得判讀；其餘缺了還能用
 
-MANUAL_FIELDS = ["impressions", "clicks", "spend", "conversions", "revenue"]
+MANUAL_FIELDS = ["impressions", "clicks", "spend", "conversions", "revenue", "reach"]
 
 
 @dataclass
@@ -167,7 +171,7 @@ def parse_csv(text: str) -> tuple:
         row = {"line_no": line_no}
         for concept, column in mapping.items():
             value = raw_row.get(column)
-            if concept in ("impressions", "clicks"):
+            if concept in ("impressions", "clicks", "reach"):
                 row[concept] = to_number(value, int)
             elif concept in ("spend", "conversions", "revenue", "frequency", "roas_direct"):
                 row[concept] = to_number(value)
@@ -242,7 +246,7 @@ def _brand_level_signature(row: dict, date_start: str, date_stop: str, source: s
     本來就允許同時段重複入庫（見 test_snapshots_accumulate_never_overwrite），不動它。"""
     return (date_start, date_stop, row.get("impressions"), row.get("clicks"),
             row.get("spend"), row.get("conversions"), row.get("revenue"),
-            row.get("frequency"), source, currency)
+            row.get("frequency"), row.get("reach"), source, currency)
 
 
 def import_rows(conn, brand_id: str, cycle_id: Optional[str], rows: list, *,
@@ -266,11 +270,11 @@ def import_rows(conn, brand_id: str, cycle_id: Optional[str], rows: list, *,
     if cycle_id is None:
         seen_signatures = {
             (r["date_range_start"], r["date_range_end"], r["impressions"], r["clicks"],
-             r["spend"], r["conversions"], r["revenue"], r["frequency"], r["source"],
-             r["currency"])
+             r["spend"], r["conversions"], r["revenue"], r["frequency"], r["reach"],
+             r["source"], r["currency"])
             for r in conn.execute(
                 "SELECT date_range_start, date_range_end, impressions, clicks, spend,"
-                " conversions, revenue, frequency, source, currency"
+                " conversions, revenue, frequency, reach, source, currency"
                 " FROM performance_snapshot WHERE brand_id = ? AND campaign_cycle_id IS NULL",
                 (brand_id,))
         }
@@ -305,14 +309,14 @@ def import_rows(conn, brand_id: str, cycle_id: Optional[str], rows: list, *,
             " external_ad_mapping_id, platform, meta_campaign_id, meta_adset_id, meta_ad_id,"
             " date_range_start, date_range_end, as_of_date, snapshot_taken_at, currency,"
             " impressions, clicks, spend, conversions, revenue, revenue_source, frequency,"
-            " raw_json, reconciled, source, import_batch_id, quarantined, quarantine_reason,"
-            " created_at)"
+            " reach, raw_json, reconciled, source, import_batch_id, quarantined,"
+            " quarantine_reason, created_at)"
             " VALUES (?, ?, ?, ?, 'meta', NULL, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,"
-            " NULL, 1, ?, ?, ?, ?, ?)",
+            " ?, NULL, 1, ?, ?, ?, ?, ?)",
             (new_id("psn"), brand_id, cycle_id, mapping_id, date_start, date_stop, date_stop, ts,
              currency, row.get("impressions"), row.get("clicks"), row.get("spend"),
              row.get("conversions"), row.get("revenue"), revenue_source, row.get("frequency"),
-             source, batch_id, 1 if quarantined else 0,
+             row.get("reach"), source, batch_id, 1 if quarantined else 0,
              "；".join(f.message for f in sanity) or None, ts),
         )
         result.imported += 1
@@ -361,7 +365,8 @@ def totals(conn, brand_id: str, cycle_id: str, include_quarantined: bool = False
     # 不然沒收營收資料時模板格式化 None 會直接炸掉。
     sql = ("SELECT COALESCE(SUM(impressions),0) impressions, COALESCE(SUM(clicks),0) clicks,"
            " COALESCE(SUM(spend),0) spend, COALESCE(SUM(conversions),0) conversions,"
-           " COALESCE(SUM(revenue),0) revenue, SUM(revenue) revenue_raw, COUNT(*) rows"
+           " COALESCE(SUM(revenue),0) revenue, COALESCE(SUM(reach),0) reach,"
+           " SUM(revenue) revenue_raw, COUNT(*) rows"
            " FROM performance_snapshot WHERE brand_id = ? AND campaign_cycle_id = ?")
     if not include_quarantined:
         sql += " AND quarantined = 0"
@@ -400,6 +405,17 @@ def max_frequency(conn, brand_id: str, cycle_id: str) -> Optional[float]:
         (brand_id, cycle_id),
     ).fetchone()
     return row["freq"] if row and row["freq"] is not None else None
+
+
+def total_reach(conn, brand_id: str, cycle_id: str) -> Optional[int]:
+    """這期目前收到的觸及加總（漏斗上層主指標，票 03-add-reach-metric）。沒有任何一筆
+    帶觸及資料時回 None，不假裝算得出來（鐵則 16；比照 max_frequency 的既有寫法）。"""
+    row = conn.execute(
+        "SELECT SUM(reach) reach FROM performance_snapshot"
+        " WHERE brand_id = ? AND campaign_cycle_id = ? AND quarantined = 0",
+        (brand_id, cycle_id),
+    ).fetchone()
+    return row["reach"] if row and row["reach"] is not None else None
 
 
 def compute_kpis(totals_row: dict) -> dict:

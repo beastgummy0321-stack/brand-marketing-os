@@ -11,6 +11,7 @@
   "ads/0010_inflation_coefficient.sql": "b08f8960b48a4e085b843f91eae5e9bbfc0594c975dea5e0bfc07eea2c551fcd",
   "ads/0011_settlement_snapshot.sql": "547dc905c1f963a511d2ab819cb01a21dce8ca4a5642e00fd8d41e12dd18de56",
   "ads/0012_settlement_diff.sql": "7dff91b1bfa2bd61da1cbe56e8506314be9c77dc847ce592f211aff433a61305",
+  "ads/0013_reach.sql": "d4168de3e196beeff4db38d56042a98e12e6cd8f35152f6c9751bb938e74c1dc",
   "brand_intelligence/0001_tables.sql": "6ea5e39a0886c1df82581a5fa1e98b457327b7fd64d845d69b5c2098b09d55e2",
   "brand_intelligence/0002_brand_report.sql": "0c0a7778a73741a743004a422d89b485d86863d6d83575752c4d9cea79760a2d",
   "brand_intelligence/0003_customer_voice.sql": "1271b103b6a1fba161958a06d8688dd4a4740d2e00981854693599946bca678f",

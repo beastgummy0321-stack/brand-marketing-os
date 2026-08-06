@@ -321,8 +321,8 @@ async def ads_performance_csv(request: Request, brand_id: str, cycle_id: str,
 async def ads_performance_manual(request: Request, brand_id: str, cycle_id: str,
                                  spend: str = Form(""), impressions: str = Form(""),
                                  clicks: str = Form(""), conversions: str = Form(""),
-                                 revenue: str = Form(""), date_start: str = Form(""),
-                                 date_stop: str = Form("")):
+                                 revenue: str = Form(""), reach: str = Form(""),
+                                 date_start: str = Form(""), date_stop: str = Form("")):
     """手動輸入。API 掛掉、CSV 也匯不進來時的最後退路。"""
     main_mod.require_brand(brand_id)
     actor = main_mod.require_actor(request)
@@ -331,7 +331,7 @@ async def ads_performance_manual(request: Request, brand_id: str, cycle_id: str,
 
     values = {}
     for key, raw in (("spend", spend), ("impressions", impressions), ("clicks", clicks),
-                     ("conversions", conversions), ("revenue", revenue)):
+                     ("conversions", conversions), ("revenue", revenue), ("reach", reach)):
         value, ok = main_mod.parse_number(raw)
         if not ok:
             return main_mod.redirect_with_message(back, "數字欄位請只填數字。", kind="warn")

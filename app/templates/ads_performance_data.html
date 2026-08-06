@@ -27,6 +27,7 @@
   {{ definition_list([
     ('花費', '{:,.0f}'.format(summary.spend), True),
     ('曝光', '{:,.0f}'.format(summary.impressions), True),
+    ('觸及', '{:,.0f}'.format(summary.reach), True),
     ('點擊', '{:,.0f}'.format(summary.clicks), True),
     ('成交', '{:,.0f}'.format(summary.conversions), True),
     ('營收', '{:,.0f}'.format(summary.revenue), True),
@@ -72,6 +73,9 @@
     {% endcall %}
     {% call field('impressions', '曝光次數', required=False) %}
     <input type="number" id="impressions" name="impressions" step="1" min="0">
+    {% endcall %}
+    {% call field('reach', '觸及人數', required=False) %}
+    <input type="number" id="reach" name="reach" step="1" min="0">
     {% endcall %}
     {% call field('clicks', '點擊次數', required=False) %}
     <input type="number" id="clicks" name="clicks" step="1" min="0">

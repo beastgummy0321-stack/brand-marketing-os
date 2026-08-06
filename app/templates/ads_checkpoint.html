@@ -16,8 +16,8 @@
 
 <h1>{{ kind_label }}</h1>
 <p class="page-lede">
-  這不是這期的最終判讀，只是先看兩件事：{% if kind == 'day7' %}三件事：{% endif %}
-  學習期正不正常、錢有沒有在花{% if kind == 'day7' %}、素材有沒有開始疲勞{% endif %}。
+  這不是這期的最終判讀，只是先看幾件事：學習期正不正常、錢有沒有在花{% if kind == 'day3' %}、
+  觸及了多少人{% endif %}{% if kind == 'day7' %}、素材有沒有開始疲勞{% endif %}。
   這個階段還太早，不會告訴你這期是贏是輸——那要等資料收得更完整才判讀。
 </p>
 
@@ -40,6 +40,18 @@
     {{ badge('正常' if r.learning_normal else '有異常訊號', 'ok' if r.learning_normal else 'warn') }}
   </div>
   <p class="section-desc">{{ r.learning_note }}</p>
+
+  {% if r.reach %}
+  <div class="reconcile-head">
+    <span>觸及</span>
+    {% if r.reach.reach is not none %}
+    {{ badge('{:,}'.format(r.reach.reach), 'ok') }}
+    {% else %}
+    {{ badge('看不出來', 'neutral') }}
+    {% endif %}
+  </div>
+  <p class="section-desc">{{ r.reach.note }}</p>
+  {% endif %}
 
   {% if r.fatigue %}
   <div class="reconcile-head">
@@ -102,6 +114,9 @@
           {% else %}
             錢有在花：{{ '是' if c.result.spend_ok else '否' }}・
             學習期：{{ '正常' if c.result.learning_normal else '有異常訊號' }}
+            {% if c.result.reach and c.result.reach.reach is not none %}
+            ・觸及：{{ '{:,}'.format(c.result.reach.reach) }}
+            {% endif %}
             {% if c.result.fatigue and c.result.fatigue.frequency is not none %}
             ・疲勞：{{ c.result.fatigue.status_label }}
             {% endif %}

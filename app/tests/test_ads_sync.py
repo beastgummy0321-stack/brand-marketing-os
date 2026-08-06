@@ -81,6 +81,35 @@ class InsightParsingTest(unittest.TestCase):
         insight = meta_api.parse_insight_row({"campaign_id": "1"})
         self.assertEqual((insight.impressions, insight.clicks, insight.spend), (0, 0, 0.0))
 
+    def test_reach_and_frequency_are_parsed(self):
+        row = {"campaign_id": "1", "date_start": "2026-07-01", "date_stop": "2026-07-14",
+               "impressions": "1000", "reach": "800", "frequency": "1.25"}
+        insight = meta_api.parse_insight_row(row)
+        self.assertEqual(insight.reach, 800)
+        self.assertEqual(insight.frequency, 1.25)
+
+    def test_missing_reach_and_frequency_stay_none_not_zero(self):
+        """跟 impressions/clicks 不同：Meta 沒回這兩個欄位時要誠實回 None，不能當 0
+        （鐵則 16——「沒收到」跟「確實是 0」是兩件事，checkpoint 的疲勞判定靠這個分辨）。"""
+        insight = meta_api.parse_insight_row({"campaign_id": "1"})
+        self.assertIsNone(insight.reach)
+        self.assertIsNone(insight.frequency)
+
+    def test_list_insights_requests_reach_and_frequency_fields(self):
+        """根因修正：原本的 fields 清單連 frequency 都沒拉，自動同步進來的資料永遠沒有
+        素材疲勞判定的依據（票 03-add-reach-metric）。"""
+        client = meta_api.MetaClient("fake-token")
+        captured = {}
+
+        def _fake_get(path, params):
+            captured.update(params)
+            return {"data": []}
+
+        client._get = _fake_get
+        client.list_insights("act_1", "2026-07-01", "2026-07-14")
+        self.assertIn("reach", captured["fields"])
+        self.assertIn("frequency", captured["fields"])
+
     def test_account_id_prefix_is_normalised(self):
         self.assertEqual(meta_api._normalise_account_id("1234"), "act_1234")
         self.assertEqual(meta_api._normalise_account_id("act_1234"), "act_1234")
@@ -175,6 +204,19 @@ class ClaimGateTest(_BaseSyncTest):
         self.assertEqual(row["source"], "meta_api")
         self.assertEqual(row["clicks"], 250)
         self.assertEqual(row["spend"], 5000.0)
+
+    def test_reach_and_frequency_land_in_the_normalised_columns(self):
+        """自動同步會拉回觸及與頻率，不再只有手動匯 CSV 才有（票 03-add-reach-metric）。"""
+        self._sync(campaigns=[_campaign("223", f"{self.brand_name}_20260801_sales")])
+        discovered_id = main.conn.execute("SELECT id FROM discovered_campaign").fetchone()["id"]
+        ads_sync.claim(main.conn, self.bid, discovered_id, ACTOR)
+
+        result = self._sync(campaigns=[_campaign("223", f"{self.brand_name}_20260801_sales")],
+                            insights=[_insight("223", reach=7200, frequency=1.4)])
+        self.assertEqual(result.snapshots, 1)
+        row = main.conn.execute("SELECT * FROM performance_snapshot").fetchone()
+        self.assertEqual(row["reach"], 7200)
+        self.assertEqual(row["frequency"], 1.4)
 
     def test_claim_list_never_shows_another_brands_campaign(self):
         """品牌隔離（鐵則 13）：A 品牌的頁面不得出現已認領給 B 的活動。"""

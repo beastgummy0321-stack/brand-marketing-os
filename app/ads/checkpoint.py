@@ -95,6 +95,7 @@ def run(conn, brand_id: str, cycle_id: str, kind: str, *, actor: str,
         "learning_normal": None,
         "learning_note": "這期還沒有任何成效資料，先匯入 CSV 才能看健康訊號。",
         "fatigue": None,
+        "reach": None,
     }
 
     if data_sufficient:
@@ -109,6 +110,22 @@ def run(conn, brand_id: str, cycle_id: str, kind: str, *, actor: str,
         result["learning_normal"] = not sanity
         result["learning_note"] = ("數字沒有出現異常訊號，學習期看起來正常。" if not sanity
                                    else "；".join(f.message for f in sanity))
+
+        if kind == "day3":
+            # 觸及是漏斗上層（曝光期）主指標，第 3 天正是看這個的時候（票 03-add-reach-metric）。
+            # 缺欄不擋匯入，但要有針對性的人話提醒——比照下面 day7 缺頻率欄的既有寫法。
+            reach = ads_performance.total_reach(conn, brand_id, cycle_id)
+            if reach is None:
+                result["reach"] = {
+                    "reach": None,
+                    "note": "這批 CSV 沒有帶「觸及人數」欄位，看不出這期廣告觸及了多少人——"
+                            "匯出時記得勾選觸及欄，或去 Meta 後台直接看。",
+                }
+            else:
+                result["reach"] = {
+                    "reach": reach,
+                    "note": f"目前累積觸及 {reach:,} 人。",
+                }
 
         if kind == "day7":
             frequency = ads_performance.max_frequency(conn, brand_id, cycle_id)

@@ -56,6 +56,11 @@ class Insight:
     # 已刪除／已封存的活動不會出現在 list_campaigns，只能靠這裡補名字
     # 供品牌猜測（issue #73）；Meta 官方欄位，insights 本來就抓得到。
     campaign_name: Optional[str] = None
+    # 觸及（不重複人數）＋頻率（平均每人看過幾次）：漏斗上層主指標＋素材疲勞判定要用
+    # （票 03-add-reach-metric）。跟 impressions／clicks 不同，Meta 缺值時誠實回 None，
+    # 不當 0——「沒收到」跟「確實是 0」是兩件事（鐵則 16）。
+    reach: Optional[int] = None
+    frequency: Optional[float] = None
 
 
 def _normalise_account_id(account_id: str) -> str:
@@ -139,7 +144,7 @@ class MetaClient:
             f"{_normalise_account_id(account_id)}/insights",
             {"level": "ad", "time_range": f'{{"since":"{since}","until":"{until}"}}',
              "fields": "campaign_id,campaign_name,adset_id,ad_id,date_start,date_stop,"
-                       "impressions,clicks,spend,actions,action_values",
+                       "impressions,clicks,spend,actions,action_values,reach,frequency",
              "limit": 200},
         )
         return [parse_insight_row(r) for r in rows]
@@ -153,6 +158,17 @@ def parse_insight_row(row: dict) -> Insight:
         except (TypeError, ValueError):
             return cast(0)
 
+    def _num_optional(key, cast=float):
+        """觸及／頻率專用：Meta 沒回這個欄位時誠實回 None，不當 0——
+        「沒收到」跟「確實是 0」是兩件事（鐵則 16），跟其餘數字欄位缺值當 0 的規則不同。"""
+        value = row.get(key)
+        if value is None:
+            return None
+        try:
+            return cast(value)
+        except (TypeError, ValueError):
+            return None
+
     return Insight(
         campaign_id=str(row.get("campaign_id") or ""),
         adset_id=str(row.get("adset_id")) if row.get("adset_id") else None,
@@ -165,6 +181,8 @@ def parse_insight_row(row: dict) -> Insight:
         conversions=_sum_actions(row.get("actions"), _PURCHASE_ACTIONS),
         revenue=_sum_actions(row.get("action_values"), _PURCHASE_ACTIONS),
         campaign_name=row.get("campaign_name") or None,
+        reach=_num_optional("reach", int),
+        frequency=_num_optional("frequency"),
     )
 
 

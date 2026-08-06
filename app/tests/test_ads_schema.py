@@ -64,7 +64,7 @@ class AdsSchemaTest(unittest.TestCase):
                 "SELECT version FROM schema_migrations WHERE module = 'ads'"
             )
         ]
-        self.assertEqual(versions, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12])
+        self.assertEqual(versions, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13])
 
     def test_all_expected_tables_exist(self):
         names = {
@@ -143,7 +143,8 @@ class AdsSchemaTest(unittest.TestCase):
     def test_performance_snapshot_has_normalised_columns(self):
         """決策 0016 硬性原則 2：三個來源都轉成同一組實欄位，下游只認這一種格式。"""
         cols = self._columns("performance_snapshot")
-        for col in ["impressions", "clicks", "spend", "conversions", "revenue", "frequency"]:
+        for col in ["impressions", "clicks", "spend", "conversions", "revenue", "frequency",
+                    "reach"]:
             self.assertIn(col, cols, f"performance_snapshot 缺正規化欄位 {col}")
         self.assertIn("quarantined", cols)
 

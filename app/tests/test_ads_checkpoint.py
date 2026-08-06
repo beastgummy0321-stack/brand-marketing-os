@@ -132,6 +132,29 @@ class HealthCheckModeTest(_Base):
         self.assertFalse(result["spend_ok"])
         self.assertIn("不正常", result["spend_note"])
 
+    def test_missing_reach_column_is_honest_not_a_guess(self):
+        """觸及是曝光期主指標，第 3 天缺欄不擋匯入，但要有針對性的人話提醒
+        （比照 day7 缺頻率欄的既有寫法，票 03-add-reach-metric）。"""
+        cycle_id = self._live_cycle(start_offset_days=-4)
+        result = checkpoint.run(main.conn, self.bid, cycle_id, "day3", actor=ACTOR,
+                                csv_text=GOOD_CSV)  # 沒有觸及欄
+        self.assertIsNone(result["reach"]["reach"])
+        self.assertIn("沒有帶", result["reach"]["note"])
+
+    def test_reach_present_is_reported(self):
+        cycle_id = self._live_cycle(start_offset_days=-4)
+        csv_text = "報告開始,花費金額,觸及人數\n2026-08-01,3000,7000\n"
+        result = checkpoint.run(main.conn, self.bid, cycle_id, "day3", actor=ACTOR,
+                                csv_text=csv_text)
+        self.assertEqual(result["reach"]["reach"], 7000)
+
+    def test_day7_has_no_reach_field(self):
+        """觸及是第 3 天（曝光期）看的，第 7 天不該有這個欄位，跟 day3 沒有疲勞欄位對稱。"""
+        cycle_id = self._live_cycle(start_offset_days=-8)
+        result = checkpoint.run(main.conn, self.bid, cycle_id, "day7", actor=ACTOR,
+                                csv_text=GOOD_CSV)
+        self.assertIsNone(result["reach"])
+
 
 class FatigueTest(_Base):
     """驗收：疲勞警示讀規則卡（票 2 示範門檻），不是另外拍一個常數。"""

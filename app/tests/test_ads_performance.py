@@ -141,6 +141,52 @@ class CsvParsingTest(unittest.TestCase):
         self.assertEqual(mapping["conversions"], "成果")
         self.assertEqual(mapping["roas_direct"], "成果 ROAS")
 
+    def test_reach_count_is_not_stolen_by_impressions(self):
+        """自檢（票 03-add-reach-metric）：「觸及次數」曾被誤列為 impressions 的別名，
+        加了 reach 概念欄之後必須配到 reach，不能再把觸及資料算成曝光。"""
+        headers = ["行銷活動名稱", "曝光次數", "觸及次數", "花費金額"]
+        mapping, unmatched = perf.match_columns(headers)
+        self.assertEqual(mapping["impressions"], "曝光次數")
+        self.assertEqual(mapping["reach"], "觸及次數")
+        self.assertEqual(unmatched, [])
+
+    def test_reach_alone_is_not_stolen_by_impressions(self):
+        """自檢（票 03 收尾）：上面那條「兩欄並存」的測試只驗『各歸各位』，
+        不會重現真 bug——「曝光次數」排在別名清單較前面，掃到「觸及次數」之前就先
+        配對成功跳出，「觸及次數」根本沒機會被搶。真正重現搶配的組合是「只有
+        觸及次數、沒有曝光次數」：若「觸及次數」被誤列回 impressions 別名，
+        impressions 會先搶到它，reach 完全配不到。"""
+        headers = ["行銷活動名稱", "觸及次數", "花費金額"]
+        mapping, unmatched = perf.match_columns(headers)
+        self.assertEqual(mapping.get("reach"), "觸及次數")
+        self.assertNotIn("impressions", mapping)
+
+    def test_column_aliases_have_no_cross_concept_collisions(self):
+        """結構性防線：同一個別名字串不得同時出現在兩個以上的概念欄清單裡。
+        擋的是整類問題，不只 reach／impressions 這一組——別名表本身違反了
+        「一個表頭只能是一個概念」的前提，才會讓誰先搶到全看 dict 掃描順序。"""
+        seen = {}
+        collisions = []
+        for concept, aliases in perf.COLUMN_ALIASES.items():
+            for alias in aliases:
+                norm = perf._norm(alias)
+                if norm in seen and seen[norm] != concept:
+                    collisions.append((norm, seen[norm], concept))
+                else:
+                    seen[norm] = concept
+        self.assertEqual(collisions, [])
+
+    def test_reach_official_export_alias_is_recognised(self):
+        """Meta 正式匯出欄名是「觸及人數」。"""
+        mapping, _ = perf.match_columns(["觸及人數", "花費金額"])
+        self.assertEqual(mapping["reach"], "觸及人數")
+
+    def test_reach_column_parses_as_integer(self):
+        csv_text = "行銷活動名稱,花費金額,觸及人數\n測試,1000,\"8,500\"\n"
+        rows, result = perf.parse_csv(csv_text)
+        self.assertEqual(result.errors, [])
+        self.assertEqual(rows[0]["reach"], 8500)
+
 
 class KpiTest(unittest.TestCase):
     def test_computes_the_four_numbers(self):
@@ -190,6 +236,22 @@ class CsvImportTest(_BaseImportTest):
         self.assertEqual(row["spend"], 5000.5)
         self.assertEqual(row["clicks"], 340)
         self.assertIsNone(row["raw_json"])  # 判讀只讀正規化欄位，不碰原始資料
+
+    def test_reach_column_lands_separately_from_impressions(self):
+        csv_text = ("行銷活動名稱,曝光次數,觸及人數,花費金額\n"
+                    "測試,12500,9800,5000\n")
+        result = perf.import_csv(main.conn, self.bid, self.cycle_id, csv_text, actor=ACTOR)
+        self.assertEqual(result.imported, 1)
+        row = perf.list_snapshots(main.conn, self.bid, self.cycle_id)[0]
+        self.assertEqual(row["impressions"], 12500)
+        self.assertEqual(row["reach"], 9800)  # 兩個概念欄各自落地，觸及沒有蓋掉曝光
+
+    def test_missing_reach_column_does_not_block_import(self):
+        """缺觸及欄不擋匯入——只有花費是必填。"""
+        result = perf.import_csv(main.conn, self.bid, self.cycle_id, _CSV_ZH, actor=ACTOR)
+        self.assertEqual(result.errors, [])
+        row = perf.list_snapshots(main.conn, self.bid, self.cycle_id)[0]
+        self.assertIsNone(row["reach"])  # 沒收到跟收到 0 是兩件事（鐵則 16）
 
     def test_upload_via_page(self):
         resp = self.client.post(
@@ -296,6 +358,15 @@ class ManualEntryTest(_BaseImportTest):
         self.assertEqual(row["spend"], 3000)
         summary = perf.totals(main.conn, self.bid, self.cycle_id)
         self.assertEqual(summary["kpis"]["roas"], 2.4)
+
+    def test_manual_entry_accepts_reach(self):
+        resp = self.client.post(self._url("/manual"),
+                                data={"spend": "3000", "impressions": "9000", "reach": "6500"},
+                                follow_redirects=False)
+        self.assertEqual(resp.status_code, 303)
+        row = perf.list_snapshots(main.conn, self.bid, self.cycle_id)[0]
+        self.assertEqual(row["reach"], 6500)
+        self.assertEqual(row["impressions"], 9000)
 
     def test_spend_is_required(self):
         resp = self.client.post(self._url("/manual"), data={"clicks": "10"},

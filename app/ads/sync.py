@@ -120,18 +120,19 @@ def _brand_level_signature(account_external: str, insight) -> tuple:
     （見 test_snapshots_accumulate_never_overwrite），不動它。"""
     return (account_external, insight.campaign_id, insight.adset_id, insight.ad_id,
             insight.date_start, insight.date_stop, insight.impressions, insight.clicks,
-            insight.spend, insight.conversions, insight.revenue)
+            insight.spend, insight.conversions, insight.revenue, insight.frequency,
+            insight.reach)
 
 
 def _existing_brand_level_signatures(conn, brand_id: str) -> set:
     return {
         (r["account_id"], r["meta_campaign_id"], r["meta_adset_id"], r["meta_ad_id"],
          r["date_range_start"], r["date_range_end"], r["impressions"], r["clicks"],
-         r["spend"], r["conversions"], r["revenue"])
+         r["spend"], r["conversions"], r["revenue"], r["frequency"], r["reach"])
         for r in conn.execute(
             "SELECT account_id, meta_campaign_id, meta_adset_id, meta_ad_id,"
             " date_range_start, date_range_end, impressions, clicks, spend, conversions,"
-            " revenue FROM performance_snapshot"
+            " revenue, frequency, reach FROM performance_snapshot"
             " WHERE brand_id = ? AND campaign_cycle_id IS NULL", (brand_id,))
     }
 
@@ -310,15 +311,17 @@ def sync_account(conn, actor: str, *, client=None, account_id: Optional[str] = N
             "INSERT INTO performance_snapshot (id, brand_id, campaign_cycle_id,"
             " external_ad_mapping_id, platform, account_id, meta_campaign_id, meta_adset_id,"
             " meta_ad_id, date_range_start, date_range_end, as_of_date, snapshot_taken_at,"
-            " currency, impressions, clicks, spend, conversions, revenue, raw_json,"
-            " reconciled, source, import_batch_id, quarantined, quarantine_reason, created_at)"
-            " VALUES (?, ?, ?, ?, 'meta', ?, ?, ?, ?, ?, ?, ?, ?, 'TWD', ?, ?, ?, ?, ?, NULL,"
-            " 1, 'meta_api', ?, ?, ?, ?)",
+            " currency, impressions, clicks, spend, conversions, revenue, frequency, reach,"
+            " raw_json, reconciled, source, import_batch_id, quarantined, quarantine_reason,"
+            " created_at)"
+            " VALUES (?, ?, ?, ?, 'meta', ?, ?, ?, ?, ?, ?, ?, ?, 'TWD', ?, ?, ?, ?, ?, ?, ?,"
+            " NULL, 1, 'meta_api', ?, ?, ?, ?)",
             (new_id("psn"), brand_id, cycle_id, mapping_id, account_external,
              insight.campaign_id, insight.adset_id, insight.ad_id,
              insight.date_start, insight.date_stop, insight.date_stop, ts,
              insight.impressions, insight.clicks, insight.spend, insight.conversions,
-             insight.revenue, f"sync_{ts}", 1 if quarantined else 0,
+             insight.revenue, insight.frequency, insight.reach, f"sync_{ts}",
+             1 if quarantined else 0,
              "；".join(f.message for f in sanity) or None, ts),
         )
         result.snapshots += 1
