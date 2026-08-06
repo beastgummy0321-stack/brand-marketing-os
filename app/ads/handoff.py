@@ -145,12 +145,7 @@ def build_packages(conn, brand_id: str, cycle_id: str, actor: str) -> int:
     count = 0
     for index, group in enumerate(groups, start=1):
         cell = group["cell"]
-        # 野路子實驗組（票 6a／#57）不參與「這個切角唯一一支正式廣告」的選取——
-        # 它 recommendation_rank 固定是 0（見 creative.py _generate_wildcard_variant），
-        # 若不排除會被下面的 next() 優先選中，讓刻意踩禁區的內容取代正常 Hook 貼進交接包。
-        # 法務掃描（compliance.scan_cycle）走 list_variants，不受這裡影響，行為不變。
-        adopted = [v for v in group["variants"]
-                   if not v["rejected"] and not v.get("experiment_variant")]
+        adopted = [v for v in group["variants"] if not v["rejected"]]
         if not adopted:
             continue
 

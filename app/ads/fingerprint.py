@@ -88,11 +88,19 @@ REJECT_REASON_LABELS = dict(REJECT_REASONS)
 AUTO_HOLD_REASON_CODE = "compliance_law_hit"
 AUTO_HOLD_REASON_LABEL = "命中法規禁用字詞，系統已先幫你挑掉"
 
-# 拒絕理由 → 主要對應的指紋軸。同一軸被拒到門檻就產規則卡（票 13）。
-# 四條只記錄、不升級成長期規則（決策 0030 第二節第 6 點）：
-# too_similar（問題是重複不是切角，反回音室機制已在管）、visual_weird（執行品質問題，
-# format 軸從此不產生規則卡）、overclaim（法規寫法問題，該走 claim／rule 層）、
-# wrong_product（資料錯誤，不是風格偏好）。
+# 拒絕理由 → 主要對應的指紋軸。同一軸被拒到門檻本來就可能產規則卡（票 13），但能不能真的
+# 升級成永久禁令另外由 RULE_UPGRADABLE_REASONS 白名單把關（票 T1，使用者 2026-08-06 拍板）。
+#
+# 四條沒有軸（決策 0030 第二節第 6 點）：too_similar（問題是重複不是切角，反回音室機制
+# 已在管）、visual_weird（執行品質問題，format 軸從此不產生規則卡）、overclaim（法規寫法
+# 問題，該走 claim／rule 層）、wrong_product（資料錯誤，不是風格偏好）——這四條連「觀察中」
+# 都不會出現，_axis_value_stats() 直接跳過。
+#
+# 另有三條有軸、只觀察、永不升級（票 T1，推翻決策 0030 第二節第 6 點原本「本表為定版」的
+# 說法）：too_stiff、too_ad_like、hook_weak——這三條猜的是消費者會怎麼反應，不是使用者
+# 自己的品牌或商業政策，全程沒有真實成效數據驗證過，不該被兩次隨手的拒絕就鑄成永久寫進
+# prompt 的約束。仍可升級的只剩 off_brand（品牌調性）、discount_too_deep（折扣力度）——
+# 這兩條是使用者自己的政策，要改由使用者自己改，見 RULE_UPGRADABLE_REASONS。
 REASON_TO_AXIS = {
     "too_stiff": "tone",
     "off_brand": "tone",
@@ -104,6 +112,10 @@ REASON_TO_AXIS = {
     "visual_weird": None,
     "hook_weak": "angle",
 }
+
+# 能不能升級成永久禁令的白名單（票 T1）。刻意用白名單不用黑名單：日後新增拒絕理由，預設
+# 不能鑄成永久禁令，除非明確把它加進這裡——不讓「忘記排除」意外解鎖新的永久約束。
+RULE_UPGRADABLE_REASONS = {"off_brand", "discount_too_deep"}
 
 
 def is_valid(fingerprint: dict) -> bool:

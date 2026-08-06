@@ -18,8 +18,6 @@ from typing import Callable, NamedTuple, Optional
 
 from app.ads import creative_matrix as cmx
 from app.ads import fingerprint as fp
-from app.ads import learning_halt
-from app.ads import nextcycle as ads_nextcycle
 from app.ads import plan as ads_plan
 from app.ads import repository as ads_repo
 from app.brand_intelligence import repository as bi
@@ -45,8 +43,6 @@ VARIANT_LABELS = {
     "copy": "廣告文案",
     "script": "影片腳本",
 }
-
-WILDCARD_VARIANT_TYPE = "hook"  # 野路子實驗組固定出開場白型別（票 6a／#57）：文字型、成本低、好讀
 
 PARSE_FAIL_MESSAGE = "AI 有回覆，但格式讀不成預期的樣子。可以再試一次。"
 HOOK_DIVERSITY_FAIL_MESSAGE = (
@@ -278,84 +274,6 @@ def _rejection_constraints(conn, brand_id: str, limit: int = 12) -> list:
     return constraints
 
 
-def _build_wildcard_user_text(brand: dict, cell: dict, ban: dict) -> str:
-    axis = ban["fingerprint_axis"]
-    value_label = fp.axis_value_label(axis, ban["fingerprint_value"])
-    return "\n\n".join([
-        f"品牌名稱：{brand['name']}",
-        f"這個品牌目前有一條生效中的禁令：「{ban['proposed_rule_text']}」。",
-        f"這次要刻意違反這條禁令，寫一則{VARIANT_LABELS[WILDCARD_VARIANT_TYPE]}，"
-        f"{fp.AXES[axis]['question']}故意選「{value_label}」（{fp.AXES[axis]['label']}軸），"
-        "用意是重新測試這條禁令現在是不是仍然成立，不用迴避它，其餘寫作水準比照正常素材。",
-        f"要用在的切角：{cell['creative_angle']}",
-        "每一則都要標上四個軸的指紋，值只能從下面挑：\n" + fp.prompt_vocabulary(),
-        '輸出格式：只回傳 {"content": "...", "rationale": "為什麼要測這條禁令", '
-        '"fingerprint": {"angle": "...", "tone": "...", "format": "...", "selling_point": "..."}}',
-    ])
-
-
-def _generate_wildcard_variant(conn, brand: dict, cell: dict, ban: dict, actor: str, *,
-                               brand_id: str, cycle_id: str, knowledge_item_ids: list,
-                               brand_version: int) -> None:
-    """野路子實驗組（票 6a／#57）：挑一個切角，刻意產一則違反現行某條禁令的素材。
-
-    只在有「現行生效中的禁令」（規則卡已接受、升級後的規則仍是 active）時才被呼叫。
-    最佳努力：LLM 失敗或回覆格式不對就靜默略過，不影響本期已產出的正常素材、不報錯
-    （ponytail：目前只固定挑清單第一條禁令、第一個切角，不做輪替，等真的多期使用後再擴充）。
-    禁令軸值強制覆寫成 ban 指定的值，不信任模型自報是否真的踩中——這是這則素材存在的唯一目的，
-    不能因為模型沒聽話而失真。
-    """
-    user_text = _build_wildcard_user_text(brand, cell, ban)
-    task = gateway.run_task(
-        conn, PROVIDER, brand_id=brand_id, task_type="creative_wildcard",
-        prompt_template_id="creative_wildcard", prompt_template_version="v1",
-        system=_SYSTEM, messages=[{"role": "user", "content": user_text}],
-        context=gateway.TaskContext(
-            context_scope={"brand_id": brand_id, "campaign_cycle_id": cycle_id},
-            knowledge_item_ids=knowledge_item_ids, brand_version=brand_version,
-        ),
-        options=gateway.TaskOptions(max_tokens=4000),
-    )
-    if task["status"] != "succeeded":
-        return
-    data = gateway.parse_json_reply(task["rendered_output"])
-    if not isinstance(data, dict) or not isinstance(data.get("content"), str) \
-            or not data["content"].strip():
-        return
-
-    fingerprint = fp.normalize(data.get("fingerprint"))
-    fingerprint[ban["fingerprint_axis"]] = ban["fingerprint_value"]
-
-    ts = now_iso()
-    brief_id = _brief_for_cell(conn, brand_id, cycle_id, cell, ts)
-    conn.execute(
-        "INSERT INTO creative_variant (id, variant_type, creative_brief_id,"
-        " campaign_cycle_id, experiment_cell_id, brand_id, product_id, attributes_json,"
-        " fingerprint_json, rationale, recommendation_rank, status, created_at)"
-        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'DRAFT', ?)",
-        (new_id("cvr"), WILDCARD_VARIANT_TYPE, brief_id, cycle_id, cell["id"], brand_id,
-         cell["product_id"],
-         json.dumps({"content": data["content"].strip(),
-                    "creative_angle_number": None, "on_camera": False, "cut_type": None,
-                    "quote_source": None, "customer_voice_available": True,
-                    "methodology_missing": [], "missing_creative_types": [],
-                    "experiment_variant": True,
-                    "experiment_rule_text": ban["proposed_rule_text"],
-                    "experiment_axis": ban["fingerprint_axis"],
-                    "experiment_value": ban["fingerprint_value"],
-                    "experiment_rule_card_id": ban["id"]},
-                   ensure_ascii=False),
-         json.dumps(fingerprint, ensure_ascii=False),
-         (data.get("rationale") or "").strip() if isinstance(data.get("rationale"), str) else "",
-         ts),
-    )
-    write_audit(conn, brand_id=brand_id, entity_type="campaign_cycle", entity_id=cycle_id,
-                action="generate_wildcard_creative", actor=actor,
-                before=None, after={"rule_card_id": ban["id"], "axis": ban["fingerprint_axis"],
-                                    "value": ban["fingerprint_value"]})
-    conn.commit()
-
-
 def generate(conn, brand_id: str, cycle_id: str, actor: str, *,
             include_methodology: bool = True,
             on_stage: Optional[Callable[[str], None]] = None) -> tuple:
@@ -466,18 +384,6 @@ def generate(conn, brand_id: str, cycle_id: str, actor: str, *,
 
     _persist(conn, brand_id, cycle_id, cells, variants, actor, methodology_result.missing_files,
             customer_voice_available, missing_types)
-
-    # 野路子實驗組（票 6a／#57）：沒有生效中的禁令就不產、也不報錯。
-    # 修憲落地 G1（決策 0035 第一節第 2 點）：野路子解禁連實驗組一起停——只關解禁判定而讓
-    # 實驗組續跑，等於每期花真實預算去測一個永遠不會被採納的東西，因此即使已有生效中的禁令
-    # （例如停用前就存在的），也不再產這則實驗素材。
-    if not learning_halt.LEARNING_LOOP_HALTED:
-        active_bans = ads_nextcycle.list_active_bans(conn, brand_id)
-        if active_bans:
-            _generate_wildcard_variant(conn, brand, cells[0], active_bans[0], actor,
-                                       brand_id=brand_id, cycle_id=cycle_id,
-                                       knowledge_item_ids=knowledge_item_ids,
-                                       brand_version=brand_version)
     return True, None
 
 
@@ -591,8 +497,6 @@ def list_variants(conn, brand_id: str, cycle_id: str) -> list:
         row["cut_type_label"] = cmx.CUT_TYPES.get(row["cut_type"]) if row["cut_type"] else None
         row["quote_source"] = attributes.get("quote_source")
         row["customer_voice_available"] = attributes.get("customer_voice_available", True)
-        row["experiment_variant"] = bool(attributes.get("experiment_variant"))
-        row["experiment_rule_text"] = attributes.get("experiment_rule_text")
         row["fingerprint"] = json.loads(row["fingerprint_json"] or "{}")
         row["fingerprint_text"] = fp.describe(row["fingerprint"])
         row["type_label"] = VARIANT_LABELS.get(row["variant_type"], row["variant_type"])

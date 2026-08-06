@@ -53,7 +53,7 @@ MIN_SPEND_RATIO = 0.25      # 花不到計畫的四分之一，等於還在學�
 MIN_CONVERSIONS_FOR_ROAS = 3  # 轉換少於這個數，ROAS 只是運氣——這個門檻管「要不要算」
 
 # 修憲落地 G4（決策 0035 第三節第 7 點）：3–10 筆轉換的 ROAS 信賴區間跨越打平線兩側，
-# 而 status 是全系統總開關（驅動下期預算、假設預選、解禁），算出來的方向再明確也不准信。
+# 而 status 是全系統總開關（驅動下期預算、假設預選），算出來的方向再明確也不准信。
 # 這個門檻管「算出來的加碼／停損方向能不能信」——跟上面 MIN_CONVERSIONS_FOR_ROAS 是兩條
 # 不同的線。唯一該在小樣本成立的強訊號是既有的「花掉一半預算零轉換」（在這個門檻之前就
 # 判定 pause_candidate），那條不受這裡影響。
@@ -900,12 +900,10 @@ def resolve_hypotheses(conn, brand_id: str, cycle_id: str, verdicts: dict, *, ac
         updated += 1
         if verdict != "supported":
             continue
-        # 修憲落地 G1（決策 0035 第一節第 1 點）曾即刻停用這段入帳——假設結案入帳是確認
-        # 偏誤幫浦，AI 預選加一路下一步等於橡皮圖章。修憲落地 G4（決策 0035 第三節第 6 點）
-        # 修好統計缺陷後重新開回來，不再受 `learning_halt.LEARNING_LOOP_HALTED` 控制（比照
-        # G3 的規則卡門檻）：預選一律改看不出來、只有程式算得出方向才預選成立、maintain
-        # 移出正面訊號、3–10 筆轉換不准喊加碼停損（見 judge()），入帳的產物因此不再是
-        # 橡皮圖章。
+        # 修憲落地 G4（決策 0035 第三節第 6 點）：假設結案入帳原本是確認偏誤幫浦——AI 預選
+        # 加一路下一步等於橡皮圖章。統計缺陷修好後重新開回來：預選一律改看不出來、只有
+        # 程式算得出方向才預選成立、maintain 移出正面訊號、3–10 筆轉換不准喊加碼停損
+        # （見 judge()），入帳的產物因此不再是橡皮圖章。
         sample_size = _conversions_for_hypothesis(conn, brand_id, cycle_id, hyp["product_id"])
         ads_repo.create_learning_ledger_entry(
             conn, brand_id, learning_text=hyp["statement"],

@@ -25,8 +25,6 @@ import app.main as main  # noqa: E402
 from app.ads import creative as ads_creative  # noqa: E402
 from app.ads import creative_matrix as cmx  # noqa: E402
 from app.ads import fingerprint as fp  # noqa: E402
-from app.ads import learning_halt  # noqa: E402
-from app.ads import nextcycle as ads_nextcycle  # noqa: E402
 from app.ads import plan as ads_plan  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
 from app.core import settings as coresettings  # noqa: E402
@@ -129,19 +127,6 @@ def _copy_reply(cell_ids: list) -> str:
     return json.dumps({"variants": variants}, ensure_ascii=False)
 
 
-def _full_reply(cell_ids: list) -> str:
-    """三種型別都齊全的回覆——避免觸發缺型別補打，讓呼叫次數可預期（票 6a／#57 測試用）。"""
-    return json.dumps({"variants": json.loads(_variants_reply(cell_ids))["variants"]
-                       + json.loads(_copy_reply(cell_ids))["variants"]}, ensure_ascii=False)
-
-
-def _wildcard_reply(tone="blunt", content="偷偷用超硬的口氣，別再拐彎抹角了，現在就買") -> str:
-    """票 6a／#57：野路子實驗組那次額外 LLM 呼叫的假回覆。"""
-    return json.dumps({"content": content, "rationale": "測試這條禁令現在是不是還成立",
-                       "fingerprint": {"angle": "pain", "tone": tone, "format": "text_focus",
-                                       "selling_point": "quality"}}, ensure_ascii=False)
-
-
 class _SequencedProvider:
     """依序回傳不同回覆的假 Provider——票 30 測試「第一次生成」與「補打」要拿到不同內容，
     FakeProvider 每次呼叫都回同一份，不夠用。介面（.complete()／.calls）照 FakeProvider 的樣子，
@@ -201,27 +186,6 @@ class _BaseCreativeTest(unittest.TestCase):
     def _variants(self):
         return ads_creative.list_variants(main.conn, self.bid, self.cycle_id)
 
-    def _accept_ban(self, axis="tone", value="blunt", reason_code="too_stiff"):
-        """票 6a／#57：造一條「現行生效中的禁令」——兩次同標籤拒絕 → 規則卡 → 使用者接受。
-
-        沿用既有的 nextcycle 規則卡流程（不繞過它另造捷徑），與正式流程走同一條路。
-        """
-        fingerprint = {"angle": "pain", "tone": "warm", "format": "text_focus",
-                       "selling_point": "quality"}
-        fingerprint[axis] = value
-        for _ in range(2):
-            main.conn.execute(
-                "INSERT INTO adoption_decision (id, brand_id, campaign_cycle_id, target_type,"
-                " target_id, decision, reason_code, fingerprint_json, decided_by, decided_at)"
-                " VALUES (?, ?, ?, 'variant', ?, 'rejected', ?, ?, ?, ?)",
-                (new_id("adp"), self.bid, self.cycle_id, new_id("cvr"), reason_code,
-                 json.dumps(fingerprint, ensure_ascii=False), ACTOR, now_iso()))
-        main.conn.commit()
-        ads_nextcycle.build_rule_cards(main.conn, self.bid, ACTOR)
-        card = ads_nextcycle.list_pending_rule_cards(main.conn, self.bid)[0]
-        return ads_nextcycle.decide_rule_card(main.conn, self.bid, card["id"], accept=True,
-                                              actor=ACTOR)
-
 
 class FingerprintTableTest(unittest.TestCase):
     def test_four_axes_with_closed_enums(self):
@@ -247,6 +211,14 @@ class FingerprintTableTest(unittest.TestCase):
         self.assertEqual(len(fp.REJECT_REASONS), 9)
         no_axis = {code for code, axis in fp.REASON_TO_AXIS.items() if axis is None}
         self.assertEqual(no_axis, {"too_similar", "visual_weird", "overclaim", "wrong_product"})
+
+    def test_only_policy_reasons_are_upgradable_to_permanent_bans(self):
+        """票 T1：白名單只有兩條使用者自己的政策能升級成永久禁令；猜消費者反應的三條
+        （too_stiff、too_ad_like、hook_weak）雖然有軸，仍不在白名單內，永遠停在觀察中。"""
+        self.assertEqual(fp.RULE_UPGRADABLE_REASONS, {"off_brand", "discount_too_deep"})
+        for taste_reason in ("too_stiff", "too_ad_like", "hook_weak"):
+            self.assertIsNotNone(fp.REASON_TO_AXIS[taste_reason])
+            self.assertNotIn(taste_reason, fp.RULE_UPGRADABLE_REASONS)
 
 
 class RejectReasonMenuTest(_BaseCreativeTest):
@@ -892,114 +864,6 @@ class MissingTypeBackfillTest(_BaseCreativeTest):
         self.assertTrue(all(v["missing_creative_types"] == [] for v in variants))
         page = self.client.get(f"/brands/{self.bid}/ads/{self.cycle_id}/creatives")
         self.assertNotIn("已自動補打一次仍未產出", page.text)
-
-
-class WildcardExperimentTest(_BaseCreativeTest):
-    """票 6a／#57：野路子實驗組——每期一組故意違反現行禁令的素材，預設採用、頁面明標。
-
-    修憲落地 G1（決策 0035）停用這個機制，預設 `learning_halt.LEARNING_LOOP_HALTED = True`；
-    這個類別白箱測底層邏輯本身，特意開回 False（重建後靠這份開關重新啟用，不是重寫程式）。
-    真正驗證「預設狀態下不會產實驗素材」的是 WildcardExperimentHaltTest。
-    """
-
-    def setUp(self):
-        super().setUp()
-        self._orig_halt = learning_halt.LEARNING_LOOP_HALTED
-        learning_halt.LEARNING_LOOP_HALTED = False
-
-    def tearDown(self):
-        learning_halt.LEARNING_LOOP_HALTED = self._orig_halt
-        super().tearDown()
-
-    def test_no_active_ban_produces_no_experiment_variant(self):
-        """驗收條件：沒有任何生效禁令時不產實驗組，也不報錯。"""
-        resp = self._generate()
-        self.assertEqual(resp.status_code, 303)
-        variants = self._variants()
-        self.assertEqual(len(variants), 4)
-        self.assertFalse(any(v["experiment_variant"] for v in variants))
-
-    def test_active_ban_produces_one_experiment_variant_that_violates_it(self):
-        self._accept_ban(axis="tone", value="blunt")
-        provider = _SequencedProvider(
-            [_full_reply(self.cell_ids), _wildcard_reply(tone="blunt")])
-        ads_creative.PROVIDER = provider
-        resp = _wait_progress(self.client, f"/brands/{self.bid}/ads/{self.cycle_id}/creatives/progress?run=1")
-        self.assertEqual(resp.status_code, 303)
-        self.assertEqual(len(provider.calls), 2)  # 三型別齊全不觸發補打；一次正常生成、一次野路子實驗
-
-        variants = self._variants()
-        self.assertEqual(len(variants), 7)  # 2 切角 x 3 型別 + 1 則實驗
-        experiment = [v for v in variants if v["experiment_variant"]]
-        self.assertEqual(len(experiment), 1)
-        self.assertEqual(experiment[0]["fingerprint"]["tone"], "blunt")
-        self.assertIsNotNone(experiment[0]["experiment_rule_text"])
-
-    def test_model_ignoring_the_ban_gets_overridden(self):
-        """模型沒聽話、指紋沒填成禁令值時，程式強制覆寫成 ban 指定的值——不信任模型自報。"""
-        self._accept_ban(axis="tone", value="blunt")
-        provider = _SequencedProvider(
-            [_full_reply(self.cell_ids), _wildcard_reply(tone="warm")])
-        ads_creative.PROVIDER = provider
-        _wait_progress(self.client, f"/brands/{self.bid}/ads/{self.cycle_id}/creatives/progress?run=1")
-        experiment = [v for v in self._variants() if v["experiment_variant"]]
-        self.assertEqual(experiment[0]["fingerprint"]["tone"], "blunt")
-
-    def test_experiment_variant_is_adopted_by_default(self):
-        """驗收條件：實驗組預設採用（反對制不變，零操作也能過）。"""
-        self._accept_ban(axis="tone", value="blunt")
-        provider = _SequencedProvider(
-            [_full_reply(self.cell_ids), _wildcard_reply(tone="blunt")])
-        ads_creative.PROVIDER = provider
-        _wait_progress(self.client, f"/brands/{self.bid}/ads/{self.cycle_id}/creatives/progress?run=1")
-        adopted = ads_creative.approve_selection(main.conn, self.bid, self.cycle_id, ACTOR)
-        self.assertEqual(adopted, 7)
-
-    def test_page_shows_the_experiment_badge(self):
-        """驗收條件：頁面明白標示這組是刻意試禁區的。"""
-        self._accept_ban(axis="tone", value="blunt")
-        provider = _SequencedProvider(
-            [_full_reply(self.cell_ids), _wildcard_reply(tone="blunt")])
-        ads_creative.PROVIDER = provider
-        _wait_progress(self.client, f"/brands/{self.bid}/ads/{self.cycle_id}/creatives/progress?run=1")
-        page = self.client.get(f"/brands/{self.bid}/ads/{self.cycle_id}/creatives")
-        self.assertIn("刻意踩禁區的實驗素材", page.text)
-
-    def test_wildcard_failure_does_not_block_normal_variants(self):
-        """驗收條件：實驗組照跑既有流程，行為不因它改變——它失敗也不能拖垮正常那批。"""
-        self._accept_ban(axis="tone", value="blunt")
-        provider = _SequencedProvider([_variants_reply(self.cell_ids), "不是 JSON 格式的回覆"])
-        ads_creative.PROVIDER = provider
-        resp = _wait_progress(self.client, f"/brands/{self.bid}/ads/{self.cycle_id}/creatives/progress?run=1")
-        self.assertEqual(resp.status_code, 303)
-        variants = self._variants()
-        self.assertEqual(len(variants), 4)
-        self.assertFalse(any(v["experiment_variant"] for v in variants))
-
-
-class WildcardExperimentHaltTest(_BaseCreativeTest):
-    """修憲落地 G1（決策 0035 第一節第 2 點）：野路子解禁連實驗組一起停——即使已經有一條
-    生效中的禁令（例如停用生效前就存在的舊資料），停用期間一樣不再產這則實驗素材。只關
-    解禁判定而讓實驗組續跑，等於每期花真實預算去測一個永遠不會被採納的東西。"""
-
-    def setUp(self):
-        super().setUp()
-        self._orig_halt = learning_halt.LEARNING_LOOP_HALTED
-
-    def tearDown(self):
-        learning_halt.LEARNING_LOOP_HALTED = self._orig_halt
-        super().tearDown()
-
-    def test_pre_existing_ban_still_produces_no_experiment_variant(self):
-        learning_halt.LEARNING_LOOP_HALTED = False
-        self._accept_ban(axis="tone", value="blunt")
-        learning_halt.LEARNING_LOOP_HALTED = True
-
-        resp = self._generate()
-        self.assertEqual(resp.status_code, 303)
-        variants = self._variants()
-        self.assertEqual(len(variants), 4)  # 沒有多出那 1 則實驗素材
-        self.assertFalse(any(v["experiment_variant"] for v in variants))
 
 
 if __name__ == "__main__":

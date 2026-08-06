@@ -210,9 +210,6 @@
       <strong>要不要把這句話登記成禁用宣稱？</strong>
       <p class="creative-why">你退過不只一次「講得太滿」：「{{ card.proposed_rule_text }}」。
         登記後這句就會列入禁用宣稱，之後掃描與生成都會避開它。</p>
-      {% elif card.promoted_rule_id %}
-      <strong>「{{ card.axis_label }}是{{ card.value_label }}」這條禁令可以解除</strong>
-      <p class="creative-why">刻意踩這條禁令的實驗素材這期成效達標，同意的話以後不再避開這個方向。</p>
       {% else %}
       <strong>{{ card.axis_label }}是「{{ card.value_label }}」的素材</strong>
       {% if card.self_reported %}
@@ -224,7 +221,7 @@
     </div>
     <div class="rule-card-actions">
       <form method="post" action="/brands/{{ brand.id }}/ads/rule-cards/{{ card.id }}/accept">
-        <button type="submit" class="btn btn-secondary">{% if card.is_overclaim_claim %}登記為禁用宣稱{% elif card.promoted_rule_id %}好，解除{% else %}好，記住{% endif %}</button>
+        <button type="submit" class="btn btn-secondary">{% if card.is_overclaim_claim %}登記為禁用宣稱{% else %}好，記住{% endif %}</button>
       </form>
       <form method="post" action="/brands/{{ brand.id }}/ads/rule-cards/{{ card.id }}/decline">
         <button type="submit" class="btn-text">不用</button>

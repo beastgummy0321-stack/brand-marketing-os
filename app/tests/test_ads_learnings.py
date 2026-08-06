@@ -146,13 +146,13 @@ class LearningsPageRouteTest(unittest.TestCase):
         self.assertIn("目前沒有生效中的禁令", resp.text)
         self.assertIn("目前沒有待處理的候選", resp.text)
 
-    def test_page_shows_learning_halted_notice(self):
-        """修憲落地 G1（決策 0035）：頁面要誠實說明還沒修好的機制正在重建，不能讓使用者
-        以為系統全部都在學（鐵則 16 狀態誠實）。修憲落地 G4：假設結案入帳已經修好重新
-        開回來，頁面文案不能再籠統地說「學習暫停中」——只剩野路子解禁還停用。"""
+    def test_page_shows_the_taste_freeze_notice_not_a_rebuild_notice(self):
+        """票 T1：猜消費者反應的理由永遠停在觀察中、不會鑄成永久禁令，這是刻意的設計決定，
+        不是還沒修好的機制（鐵則 16 狀態誠實）。頁面不得再說「重建中」——機制是永久拿掉，
+        不是暫停等重建（修憲 6）。"""
         resp = self.client.get(f"/brands/{self.bid}/ads/learnings")
-        self.assertIn("野路子解禁", resp.text)
-        self.assertIn("重建中", resp.text)
+        self.assertNotIn("重建中", resp.text)
+        self.assertIn("不會自動變成長期禁令", resp.text)
 
     def test_ledger_entry_shown_and_deactivate_removes_it(self):
         entry = ads_repo.create_learning_ledger_entry(

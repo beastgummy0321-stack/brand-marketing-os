@@ -852,7 +852,7 @@ def deactivate_rule(conn: sqlite3.Connection, brand_id: str, rule_id: str, *, ac
     不同於 `delete_rule`（硬刪）與 `update_rule`（不碰 status）——兩者都接不住「下架但留紀錄」。
     停用後 `list_rules_for_brand`／`list_rules_for_product` 的 `WHERE status = 'active'`
     會自動排除這一列，不再進 `context_compiler` 組出的生成 prompt。
-    屬新增程式碼、不是改 schema（`rule.status` 為無 CHECK 的 TEXT）。#58 解禁卡沿用本函式。"""
+    屬新增程式碼、不是改 schema（`rule.status` 為無 CHECK 的 TEXT）。"""
     _require(actor, "actor 為必填")
     before = get_rule(conn, brand_id, rule_id)
     if before is None:

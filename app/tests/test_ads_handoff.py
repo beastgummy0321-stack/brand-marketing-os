@@ -205,39 +205,6 @@ class PackageBuildTest(_BaseHandoffTest):
         self.assertIn("kind=warn", resp.headers["location"])
 
 
-class WildcardVariantExcludedFromOfficialPickTest(_BaseHandoffTest):
-    """C線票6a 修正（#57）：野路子實驗組不得蓋過交接包裡正式選中的 Hook。
-
-    實驗組 recommendation_rank 固定寫 0（見 creative.py），若交接包選 hook 時沒排除它，
-    `next()` 會優先選到刻意違反禁令的內容，讓交接包顯示的不是真正要貼進 Meta 的正常素材。
-    """
-
-    def _insert_experiment_hook(self):
-        real_hook = main.conn.execute(
-            "SELECT * FROM creative_variant WHERE campaign_cycle_id = ? AND variant_type = 'hook'"
-            " ORDER BY recommendation_rank LIMIT 1", (self.cycle_id,)).fetchone()
-        main.conn.execute(
-            "INSERT INTO creative_variant (id, variant_type, creative_brief_id,"
-            " campaign_cycle_id, experiment_cell_id, brand_id, product_id, attributes_json,"
-            " fingerprint_json, rationale, recommendation_rank, status, created_at)"
-            " VALUES ('cvr_wildcard_test', 'hook', ?, ?, ?, ?, ?, ?, '{}', '', 0, 'DRAFT',"
-            " '2026-08-02T00:00:00')",
-            (real_hook["creative_brief_id"], self.cycle_id, real_hook["experiment_cell_id"],
-             self.bid, real_hook["product_id"],
-             json.dumps({"content": "刻意違反禁令的野路子內容", "experiment_variant": True,
-                        "experiment_rule_text": "測試禁令", "creative_angle_number": None,
-                        "on_camera": False, "cut_type": None, "quote_source": None},
-                       ensure_ascii=False)))
-        main.conn.commit()
-
-    def test_build_packages_picks_real_hook_not_experiment_variant(self):
-        self._insert_experiment_hook()
-        self._build()
-        package = self._packages()[0]
-        self.assertEqual(package["hook_text"], "每天第一杯，別再將就")
-        self.assertNotIn("野路子", package["hook_text"])
-
-
 class MissingFieldReportTest(_BaseHandoffTest):
     def test_report_is_recorded_and_acknowledged(self):
         self._build()

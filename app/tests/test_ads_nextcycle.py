@@ -22,13 +22,11 @@ from fastapi.testclient import TestClient  # noqa: E402
 import app.main as main  # noqa: E402
 from app.ads import creative as ads_creative  # noqa: E402
 from app.ads import fingerprint as fp  # noqa: E402
-from app.ads import learning_halt  # noqa: E402
 from app.ads import nextcycle  # noqa: E402
 from app.ads import performance as perf  # noqa: E402
 from app.ads import reading  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
 from app.core.db import new_id, now_iso  # noqa: E402
-from app.llm import context_compiler  # noqa: E402
 from app.llm.providers import FakeProvider, ProviderResponse, Usage  # noqa: E402
 from app.shared.web import OPERATOR  # noqa: E402
 
@@ -129,15 +127,9 @@ class _BaseNextCycleTest(unittest.TestCase):
         self._orig = reading.PROVIDER
         reading.PROVIDER = FakeProvider(response=_fake(
             json.dumps({"text": "說明文字"}, ensure_ascii=False)))
-        # 修憲落地 G1（決策 0035）停用規則卡門檻／野路子解禁，預設值 True；這個檔案白箱測試
-        # 這兩個機制本身的統計邏輯（重建後靠這份開關重新啟用，不是重寫程式），所以測試時
-        # 開回 False——真正驗證「預設狀態下不會出卡」的另有 LearningLoopHaltTest。
-        self._orig_halt = learning_halt.LEARNING_LOOP_HALTED
-        learning_halt.LEARNING_LOOP_HALTED = False
 
     def tearDown(self):
         reading.PROVIDER = self._orig
-        learning_halt.LEARNING_LOOP_HALTED = self._orig_halt
 
     def _run_cycle(self, **values):
         perf.import_manual(main.conn, self.bid, self.cycle_id, values, actor=ACTOR)
@@ -173,7 +165,7 @@ class _BaseNextCycleTest(unittest.TestCase):
         self._insert_variant(new_id("cvr"), cycle_id, fingerprint)
         main.conn.commit()
 
-    def _reject(self, fingerprint, reason_code="too_stiff", cycle_id=None):
+    def _reject(self, fingerprint, reason_code="off_brand", cycle_id=None):
         cycle_id = cycle_id or self.cycle_id
         variant_id = new_id("cvr")
         self._insert_variant(variant_id, cycle_id, fingerprint)
@@ -552,163 +544,38 @@ class EchoChamberTest(_BaseNextCycleTest):
         self.assertEqual(finding.code, "creatives_too_similar")
 
 
-class UnbanCardTest(_BaseNextCycleTest):
-    """票 6b／#58：野路子實驗組成效達標 → 解禁卡；接受後規則停用、退出生成 prompt。"""
-
-    def _accept_ban(self, axis="tone", value="blunt"):
-        self._reject(_print(**{axis: value}))
-        self._reject(_print(**{axis: value}))
-        nextcycle.build_rule_cards(main.conn, self.bid, ACTOR)
-        card = nextcycle.list_pending_rule_cards(main.conn, self.bid)[0]
-        return nextcycle.decide_rule_card(main.conn, self.bid, card["id"], accept=True, actor=ACTOR)
-
-    def _make_wildcard_variant(self, ban, *, rejected=False, product_id=None):
-        cell_id = new_id("exc")
-        brief_id = new_id("cbf")
-        variant_id = new_id("cvr")
-        ts = now_iso()
-        main.conn.execute(
-            "INSERT INTO experiment_cell (id, campaign_cycle_id, brand_id, created_at)"
-            " VALUES (?, ?, ?, ?)", (cell_id, self.cycle_id, self.bid, ts))
-        main.conn.execute(
-            "INSERT INTO creative_brief (id, campaign_cycle_id, experiment_cell_id, brand_id,"
-            " brief_type, purpose, status, created_at, updated_at)"
-            " VALUES (?, ?, ?, ?, 'copy', '測試', 'dispatched', ?, ?)",
-            (brief_id, self.cycle_id, cell_id, self.bid, ts, ts))
-        fingerprint = {"angle": "pain", "tone": "warm", "format": "text_focus",
-                      "selling_point": "quality"}
-        fingerprint[ban["fingerprint_axis"]] = ban["fingerprint_value"]
-        main.conn.execute(
-            "INSERT INTO creative_variant (id, variant_type, creative_brief_id,"
-            " campaign_cycle_id, experiment_cell_id, brand_id, product_id, attributes_json,"
-            " fingerprint_json, status, created_at)"
-            " VALUES (?, 'hook', ?, ?, ?, ?, ?, ?, ?, 'DRAFT', ?)",
-            (variant_id, brief_id, self.cycle_id, cell_id, self.bid, product_id,
-             json.dumps({"content": "偷偷用超硬的口氣", "experiment_variant": True,
-                        "experiment_rule_text": ban["proposed_rule_text"],
-                        "experiment_rule_card_id": ban["id"]}, ensure_ascii=False),
-             json.dumps(fingerprint, ensure_ascii=False), ts))
-        if rejected:
-            main.conn.execute(
-                "INSERT INTO adoption_decision (id, brand_id, campaign_cycle_id, target_type,"
-                " target_id, decision, reason_code, fingerprint_json, decided_by, decided_at)"
-                " VALUES (?, ?, ?, 'variant', ?, 'rejected', 'too_stiff', ?, ?, ?)",
-                (new_id("adp"), self.bid, self.cycle_id, variant_id,
-                 json.dumps(fingerprint, ensure_ascii=False), ACTOR, now_iso()))
-        main.conn.commit()
-        return variant_id
-
-    def test_no_active_ban_means_no_unban_cards(self):
-        self.assertEqual(nextcycle.build_unban_cards(main.conn, self.bid, self.cycle_id, ACTOR), 0)
-
-    def test_successful_wildcard_produces_an_unban_card(self):
-        ban = self._accept_ban()
-        self._make_wildcard_variant(ban, product_id=self.product)
-        self._run_cycle(spend=10000, impressions=20000, clicks=400, conversions=10, revenue=40000)
-        cards = nextcycle.list_pending_rule_cards(main.conn, self.bid)
-        unban = [c for c in cards if c["promoted_rule_id"]]
-        self.assertEqual(len(unban), 1)
-        self.assertEqual(unban[0]["promoted_rule_id"], ban["promoted_rule_id"])
-        self.assertEqual(unban[0]["reject_count"], 0)
-
-    def test_rejected_wildcard_produces_no_unban_card(self):
-        ban = self._accept_ban()
-        self._make_wildcard_variant(ban, product_id=self.product, rejected=True)
-        self._run_cycle(spend=10000, impressions=20000, clicks=400, conversions=10, revenue=40000)
-        cards = nextcycle.list_pending_rule_cards(main.conn, self.bid)
-        self.assertEqual([c for c in cards if c["promoted_rule_id"]], [])
-
-    def test_losing_product_produces_no_unban_card(self):
-        ban = self._accept_ban()
-        self._make_wildcard_variant(ban, product_id=self.product)
-        self._run_cycle(spend=10000, impressions=20000, clicks=400, conversions=10, revenue=10000)
-        cards = nextcycle.list_pending_rule_cards(main.conn, self.bid)
-        self.assertEqual([c for c in cards if c["promoted_rule_id"]], [])
-
-    def test_accepting_unban_card_deactivates_the_rule(self):
-        ban = self._accept_ban()
-        self._make_wildcard_variant(ban, product_id=self.product)
-        self._run_cycle(spend=10000, impressions=20000, clicks=400, conversions=10, revenue=40000)
-        unban = [c for c in nextcycle.list_pending_rule_cards(main.conn, self.bid)
-                if c["promoted_rule_id"]][0]
-        result = nextcycle.decide_rule_card(main.conn, self.bid, unban["id"], accept=True,
-                                            actor=ACTOR)
-        self.assertEqual(result["status"], "accepted")
-        rule = bi_repo.get_rule(main.conn, self.bid, ban["promoted_rule_id"])
-        self.assertEqual(rule["status"], "inactive")
-        self.assertEqual(nextcycle.list_active_bans(main.conn, self.bid), [])
-
-    def test_deactivated_rule_leaves_generation_prompt(self):
-        """驗收條件明文要求的實測：透過解禁卡停用的規則確實從 context_compiler 組出的 prompt 消失。"""
-        ban = self._accept_ban()
-        self._make_wildcard_variant(ban, product_id=self.product)
-        self._run_cycle(spend=10000, impressions=20000, clicks=400, conversions=10, revenue=40000)
-        unban = [c for c in nextcycle.list_pending_rule_cards(main.conn, self.bid)
-                if c["promoted_rule_id"]][0]
-
-        text_before, _, _, _ = context_compiler.compile(main.conn, self.bid)
-        self.assertIn(ban["proposed_rule_text"], text_before)
-
-        nextcycle.decide_rule_card(main.conn, self.bid, unban["id"], accept=True, actor=ACTOR)
-
-        text_after, _, _, _ = context_compiler.compile(main.conn, self.bid)
-        self.assertNotIn(ban["proposed_rule_text"], text_after)
-
-    def test_declining_unban_card_stops_asking_again(self):
-        ban = self._accept_ban()
-        self._make_wildcard_variant(ban, product_id=self.product)
-        self._run_cycle(spend=10000, impressions=20000, clicks=400, conversions=10, revenue=40000)
-        unban = [c for c in nextcycle.list_pending_rule_cards(main.conn, self.bid)
-                if c["promoted_rule_id"]][0]
-        nextcycle.decide_rule_card(main.conn, self.bid, unban["id"], accept=False, actor=ACTOR)
-        self.assertEqual([c for c in nextcycle.list_pending_rule_cards(main.conn, self.bid)
-                          if c["promoted_rule_id"]], [])
-        rule = bi_repo.get_rule(main.conn, self.bid, ban["promoted_rule_id"])
-        self.assertEqual(rule["status"], "active")
-        # 再跑一次成效達標的週期，同一條規則不再重複產生解禁卡
-        self.assertEqual(nextcycle.build_unban_cards(main.conn, self.bid, self.cycle_id, ACTOR), 0)
-
-
-class LearningLoopHaltTest(_BaseNextCycleTest):
-    """修憲落地 G1（決策 0035 第一節）：野路子解禁（含既有禁令下的實驗素材達標）在停用旗標
-    開著時不會動作——這個檔案其餘測試都是白箱測底層邏輯，特意開回
-    `learning_halt.LEARNING_LOOP_HALTED = False`；這裡才驗證使用者實際會遇到的預設狀態。
-
-    修憲落地 G3（決策 0035 第5點）：規則卡門檻已經修好、重新開回來，不再受這個旗標控制——
-    即使旗標維持預設的停用狀態，規則卡照樣正常運作，這是「把 G1 停用的規則卡機制用新
-    門檻開回來」的驗收點，見 `test_rule_cards_work_even_though_the_flag_is_on`。
+class TasteRejectionFreezeTest(_BaseNextCycleTest):
+    """票 T1（使用者 2026-08-06 拍板）：猜消費者反應的三條理由（too_stiff、too_ad_like、
+    hook_weak）永遠停在「觀察中」，不論被拒幾次都不會鑄成永久禁令；仍可升級的只剩
+    off_brand、discount_too_deep 這兩條使用者自己的政策（`fp.RULE_UPGRADABLE_REASONS`）。
     """
 
-    def setUp(self):
-        super().setUp()
-        learning_halt.LEARNING_LOOP_HALTED = True
+    def test_frozen_taste_reason_never_produces_a_card_even_at_high_counts(self):
+        """就算被拒到 5 次（遠超過門檻），凍結理由也不該被鑄成候選卡。"""
+        for _ in range(5):
+            self._reject(_print(tone="blunt"), reason_code="too_stiff")
+        self.assertEqual(nextcycle.build_rule_cards(main.conn, self.bid, ACTOR), 0)
+        self.assertEqual(nextcycle.list_pending_rule_cards(main.conn, self.bid), [])
 
-    def test_rule_cards_work_even_though_the_flag_is_on(self):
-        self._reject(_print(tone="blunt"))
-        self._reject(_print(tone="blunt"))
-        self.assertEqual(nextcycle.build_rule_cards(main.conn, self.bid, ACTOR), 1)
-        self.assertEqual(len(nextcycle.list_pending_rule_cards(main.conn, self.bid)), 1)
-
-    def test_no_unban_cards_even_for_a_pre_existing_ban(self):
-        """禁令是停用生效前就存在的（例如舊資料），停用期間解禁判定一樣不動作。"""
-        learning_halt.LEARNING_LOOP_HALTED = False
-        self._reject(_print(tone="blunt"))
-        self._reject(_print(tone="blunt"))
+    def test_frozen_taste_reason_shows_up_as_observing_forever(self):
+        """沒鑄成禁令不等於從畫面上消失——凍結理由永遠停在「觀察中」提醒使用者。"""
+        self._reject(_print(tone="blunt"), reason_code="too_stiff")
+        self._reject(_print(tone="blunt"), reason_code="too_stiff")
         nextcycle.build_rule_cards(main.conn, self.bid, ACTOR)
-        card = nextcycle.list_pending_rule_cards(main.conn, self.bid)[0]
-        nextcycle.decide_rule_card(main.conn, self.bid, card["id"], accept=True, actor=ACTOR)
-        learning_halt.LEARNING_LOOP_HALTED = True
+        signals = nextcycle.list_observing_signals(main.conn, self.bid)
+        observed = {(s["axis_label"], s["value_label"]) for s in signals}
+        self.assertIn((fp.AXES["tone"]["label"], fp.axis_value_label("tone", "blunt")), observed)
+        self.assertEqual(nextcycle.list_pending_rule_cards(main.conn, self.bid), [])
 
-        self.assertEqual(nextcycle.build_unban_cards(main.conn, self.bid, self.cycle_id, ACTOR), 0)
-
-    def test_build_reports_unban_zero_but_rule_cards_still_created(self):
-        self._reject(_print(tone="blunt"))
-        self._reject(_print(tone="blunt"))
-        self._run_cycle(spend=10000, impressions=20000, clicks=400, conversions=10, revenue=40000)
-        draft = nextcycle.load(main.conn, self.bid, self.cycle_id)["content"]
-        self.assertEqual(draft["rule_cards_created"], 1)
-        self.assertEqual(draft["unban_cards_created"], 0)
-        self.assertEqual(len(nextcycle.list_pending_rule_cards(main.conn, self.bid)), 1)
+    def test_mixed_policy_and_taste_rejections_still_promote_on_policy_count(self):
+        """同一個 (軸, 值) 混到品味理由也不該被拖死——政策次數單獨算，足夠就照樣升級。"""
+        self._reject(_print(tone="blunt"), reason_code="off_brand")
+        self._reject(_print(tone="blunt"), reason_code="off_brand")
+        self._reject(_print(tone="blunt"), reason_code="too_stiff")
+        self._reject(_print(tone="blunt"), reason_code="too_stiff")
+        self.assertEqual(nextcycle.build_rule_cards(main.conn, self.bid, ACTOR), 1)
+        cards = nextcycle.list_pending_rule_cards(main.conn, self.bid)
+        self.assertEqual(cards[0]["fingerprint_value"], "blunt")
 
 
 if __name__ == "__main__":

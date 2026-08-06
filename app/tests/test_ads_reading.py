@@ -21,7 +21,6 @@ os.environ["BRAND_OS_UPLOADS"] = str(Path(_tmpdir) / "uploads")
 from fastapi.testclient import TestClient  # noqa: E402
 
 import app.main as main  # noqa: E402
-from app.ads import learning_halt  # noqa: E402
 from app.ads import performance as perf  # noqa: E402
 from app.ads import reading  # noqa: E402
 from app.ads import repository as ads_repo  # noqa: E402
@@ -833,8 +832,7 @@ class SimulationExcludedFromBaselineTest(_ReadingIntegrationBase):
 
 
 class _HypothesisReviewBase(unittest.TestCase):
-    """票 #53 判讀頁假設結案共用的建置——各子類別自行決定
-    `learning_halt.LEARNING_LOOP_HALTED` 要開還是關，測試方法不互相繼承。"""
+    """票 #53 判讀頁假設結案共用的建置。"""
 
     def setUp(self):
         self.client = TestClient(main.app)
@@ -854,11 +852,9 @@ class _HypothesisReviewBase(unittest.TestCase):
         self._orig = reading.PROVIDER
         reading.PROVIDER = FakeProvider(response=_fake(
             json.dumps({"reasons": {}}, ensure_ascii=False)))
-        self._orig_halt = learning_halt.LEARNING_LOOP_HALTED
 
     def tearDown(self):
         reading.PROVIDER = self._orig
-        learning_halt.LEARNING_LOOP_HALTED = self._orig_halt
 
     def _link_hypothesis(self, statement, hypothesis_type="audience", product_id=None):
         hyp = bi_repo.create_strategy_hypothesis(
@@ -877,16 +873,7 @@ class _HypothesisReviewBase(unittest.TestCase):
 
 
 class HypothesisReviewTest(_HypothesisReviewBase):
-    """票 #53：判讀頁假設結案（三選一，AI 預選）＋入帳 learning_ledger＋打斷佇列補網。
-
-    修憲落地 G1（決策 0035 第一節第 1 點）停用入帳這件事，預設 `LEARNING_LOOP_HALTED = True`；
-    這個類別白箱測底層邏輯本身（入帳這件事還存不存在），特意開回 False（重建後靠這份開關
-    重新啟用，不是重寫程式）。真正驗證「預設狀態下不會入帳」的是 HypothesisLedgerHaltTest。
-    """
-
-    def setUp(self):
-        super().setUp()
-        learning_halt.LEARNING_LOOP_HALTED = False
+    """票 #53：判讀頁假設結案（三選一，AI 預選）＋入帳 learning_ledger＋打斷佇列補網。"""
 
     def test_ai_preselects_supported_when_scale_candidate(self):
         """判讀結論偏正向 → 三選一預選「成立」，AI 只負責寫理由，不決定選哪個（決策 0016）。"""
@@ -1148,20 +1135,10 @@ class HypothesisReviewTest(_HypothesisReviewBase):
 
 
 class HypothesisLedgerHaltTest(_HypothesisReviewBase):
-    """修憲落地 G1（決策 0035 第一節第 1 點）：假設結案入帳原本是確認偏誤幫浦——AI 預選加
+    """修憲落地 G4（決策 0035 第三節第 6 點）：假設結案入帳原本是確認偏誤幫浦——AI 預選加
     一路下一步等於橡皮圖章，只有「成立」單向累積、產物貼「已驗證的學習」標籤永久寫進
-    prompt，因此即刻停用。這個檔案其餘測試都是白箱測底層邏輯，特意開回
-    `learning_halt.LEARNING_LOOP_HALTED = False`；這裡才驗證使用者實際會遇到的預設狀態。
-
-    修憲落地 G4（決策 0035 第三節第 6 點）：統計缺陷（橡皮圖章式的預選、`maintain` 誤算
-    正面、小樣本喊加碼停損）已經修好，假設結案入帳跟 G3 的規則卡門檻一樣重新開回來，
-    不再受這個旗標控制——即使旗標維持預設的停用狀態，選「成立」照樣入帳，這是
-    「把 G1 停用的假設結案入帳用新規則開回來」的驗收點。仍受這個旗標控制的只剩野路子
-    解禁（`app/ads/nextcycle.py` 的 `build_unban_cards`），留給日後的重建票。"""
-
-    def setUp(self):
-        super().setUp()
-        learning_halt.LEARNING_LOOP_HALTED = True
+    prompt。統計缺陷（橡皮圖章式的預選、`maintain` 誤算正面、小樣本喊加碼停損）修好後，
+    選「成立」照樣入帳，這裡驗證使用者實際會遇到的預設狀態。"""
 
     def test_supported_confirmation_writes_ledger_even_though_the_flag_is_on(self):
         hyp = self._link_hypothesis("通勤族比在家工作者更會下單")

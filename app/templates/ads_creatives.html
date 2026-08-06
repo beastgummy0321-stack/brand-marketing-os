@@ -69,7 +69,6 @@
       {% if variant.fingerprint_text %}<span class="creative-fingerprint">{{ variant.fingerprint_text }}</span>{% endif %}
       {% if variant.auto_held %}{{ badge(variant.reject_reason_label, 'warn') }}
       {% elif variant.rejected %}{{ badge('你挑掉了：' ~ variant.reject_reason_label, 'neutral') }}{% endif %}
-      {% if variant.experiment_variant %}{{ badge('刻意踩禁區的實驗素材：違反「' ~ variant.experiment_rule_text ~ '」', 'warn') }}{% endif %}
     </div>
 
     {% if variant.variant_type == 'image_prompt' %}
