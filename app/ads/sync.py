@@ -216,7 +216,8 @@ def _upsert_discovered_from_insight(conn, ad_account_id: str, insight, ts: str) 
     return True
 
 
-def _claimed_brand_for(conn, ad_account_id: str, meta_campaign_id: str) -> Optional[str]:
+def _claimed_brand_for(conn, ad_account_id: str, meta_campaign_id: str,
+                       meta_ad_id: Optional[str] = None) -> Optional[str]:
     """這個活動的歸屬品牌。只有 claimed 才算數——suggested 是預選，不生效。"""
     row = conn.execute(
         "SELECT claimed_brand_id FROM discovered_campaign WHERE ad_account_id = ?"
@@ -225,7 +226,16 @@ def _claimed_brand_for(conn, ad_account_id: str, meta_campaign_id: str) -> Optio
     ).fetchone()
     if row and row["claimed_brand_id"]:
         return row["claimed_brand_id"]
-    # 人工回填過 ID 的（票 8 關卡三）本來就是確認過歸屬的，直接算數
+    # 人工回填過 ID 的（票 8 關卡三）本來就是確認過歸屬的，直接算數。優先用 meta_ad_id：
+    # 同一活動底下可能有多支廣告，只認 meta_campaign_id 會全部對到同一筆（I1，程式碼自己
+    # 標的既有缺口）。人工回填沒填廣告 ID 時 meta_ad_id 是 None，退回 meta_campaign_id。
+    if meta_ad_id:
+        mapping = conn.execute(
+            "SELECT brand_id FROM external_ad_mapping WHERE meta_ad_id = ?"
+            " AND claim_status = 'confirmed' LIMIT 1", (meta_ad_id,),
+        ).fetchone()
+        if mapping:
+            return mapping["brand_id"]
     mapping = conn.execute(
         "SELECT brand_id FROM external_ad_mapping WHERE meta_campaign_id = ?"
         " AND claim_status = 'confirmed' LIMIT 1", (meta_campaign_id,),
@@ -233,7 +243,19 @@ def _claimed_brand_for(conn, ad_account_id: str, meta_campaign_id: str) -> Optio
     return mapping["brand_id"] if mapping else None
 
 
-def _cycle_for(conn, brand_id: str, meta_campaign_id: str) -> tuple:
+def _cycle_for(conn, brand_id: str, meta_campaign_id: str,
+               meta_ad_id: Optional[str] = None) -> tuple:
+    """哪個檔期／哪筆 mapping。優先用 meta_ad_id：同一活動底下可能有多支廣告分屬不同檔期，
+    只用 meta_campaign_id 查詢會全部對到最後建立的那一筆（I1）。meta_ad_id 缺值（人工回填
+    時沒填廣告 ID）才退回 meta_campaign_id，維持既有行為。"""
+    if meta_ad_id:
+        row = conn.execute(
+            "SELECT campaign_cycle_id, id FROM external_ad_mapping WHERE brand_id = ?"
+            " AND meta_ad_id = ? ORDER BY created_at DESC LIMIT 1",
+            (brand_id, meta_ad_id),
+        ).fetchone()
+        if row:
+            return row["campaign_cycle_id"], row["id"]
     row = conn.execute(
         "SELECT campaign_cycle_id, id FROM external_ad_mapping WHERE brand_id = ?"
         " AND meta_campaign_id = ? ORDER BY created_at DESC LIMIT 1",
@@ -281,13 +303,13 @@ def sync_account(conn, actor: str, *, client=None, account_id: Optional[str] = N
     for insight in insights:
         if _upsert_discovered_from_insight(conn, ad_account_id, insight, ts):
             result.discovered += 1
-        brand_id = _claimed_brand_for(conn, ad_account_id, insight.campaign_id)
+        brand_id = _claimed_brand_for(conn, ad_account_id, insight.campaign_id, insight.ad_id)
         if not brand_id:
             # 沒認領歸屬的活動，成效一律不收——寧可少一筆，也不把別的品牌的數字算進來
             result.skipped_unclaimed += 1
             continue
 
-        cycle_id, mapping_id = _cycle_for(conn, brand_id, insight.campaign_id)
+        cycle_id, mapping_id = _cycle_for(conn, brand_id, insight.campaign_id, insight.ad_id)
 
         if cycle_id is None:
             if brand_id not in brand_level_seen_signatures:

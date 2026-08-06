@@ -87,6 +87,16 @@ def _sum_actions(rows, wanted: tuple) -> float:
 
 _PURCHASE_ACTIONS = ("purchase", "omni_purchase", "offsite_conversion.fb_pixel_purchase")
 
+# 已查證：Meta Marketing API Insights breakdowns 官方文件
+# （https://developers.facebook.com/docs/marketing-api/insights/breakdowns）——
+# 動態素材（DCO）的素材元件層 breakdown 只有這八種名稱，且只搭配 impressions/clicks/
+# spend/reach/actions/action_values 五類指標；image_asset／video_asset 不能在帳號層拉，
+# 要下到活動或廣告層，帳號也要開 DCO 才有意義（I2 供未來素材元件層歸因用）。
+ASSET_BREAKDOWNS = (
+    "ad_format_asset", "body_asset", "call_to_action_asset", "description_asset",
+    "image_asset", "link_url_asset", "title_asset", "video_asset",
+)
+
 
 class MetaClient:
     """真的會發網路請求的用戶端。唯讀——本類別刻意沒有任何 POST／DELETE 方法。"""
@@ -139,14 +149,17 @@ class MetaClient:
                          objective=r.get("objective"),
                          effective_status=r.get("effective_status")) for r in rows]
 
-    def list_insights(self, account_id: str, since: str, until: str) -> list:
-        rows = self._paged(
-            f"{_normalise_account_id(account_id)}/insights",
-            {"level": "ad", "time_range": f'{{"since":"{since}","until":"{until}"}}',
-             "fields": "campaign_id,campaign_name,adset_id,ad_id,date_start,date_stop,"
-                       "impressions,clicks,spend,actions,action_values,reach,frequency",
-             "limit": 200},
-        )
+    def list_insights(self, account_id: str, since: str, until: str,
+                      breakdowns: Optional[tuple] = None) -> list:
+        params = {
+            "level": "ad", "time_range": f'{{"since":"{since}","until":"{until}"}}',
+            "fields": "campaign_id,campaign_name,adset_id,ad_id,date_start,date_stop,"
+                     "impressions,clicks,spend,actions,action_values,reach,frequency",
+            "limit": 200,
+        }
+        if breakdowns:
+            params["breakdowns"] = ",".join(breakdowns)
+        rows = self._paged(f"{_normalise_account_id(account_id)}/insights", params)
         return [parse_insight_row(r) for r in rows]
 
 

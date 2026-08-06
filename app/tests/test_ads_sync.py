@@ -110,6 +110,40 @@ class InsightParsingTest(unittest.TestCase):
         self.assertIn("reach", captured["fields"])
         self.assertIn("frequency", captured["fields"])
 
+    def test_list_insights_without_breakdowns_omits_the_param(self):
+        """I2：純新增能力，沒指定 breakdowns 時參數維持原樣，不影響既有同步行為。"""
+        client = meta_api.MetaClient("fake-token")
+        captured = {}
+
+        def _fake_get(path, params):
+            captured.update(params)
+            return {"data": []}
+
+        client._get = _fake_get
+        client.list_insights("act_1", "2026-07-01", "2026-07-14")
+        self.assertNotIn("breakdowns", captured)
+
+    def test_list_insights_passes_through_asset_breakdowns(self):
+        """I2：D 段成效歸因要用的素材元件層 breakdowns，能原樣傳給 Meta。"""
+        client = meta_api.MetaClient("fake-token")
+        captured = {}
+
+        def _fake_get(path, params):
+            captured.update(params)
+            return {"data": []}
+
+        client._get = _fake_get
+        client.list_insights("act_1", "2026-07-01", "2026-07-14",
+                             breakdowns=("body_asset", "title_asset"))
+        self.assertEqual(captured["breakdowns"], "body_asset,title_asset")
+
+    def test_asset_breakdowns_constant_matches_meta_docs(self):
+        """已查證：Meta Marketing API Insights breakdowns 官方文件，素材元件層只有這八種。"""
+        self.assertEqual(set(meta_api.ASSET_BREAKDOWNS), {
+            "ad_format_asset", "body_asset", "call_to_action_asset", "description_asset",
+            "image_asset", "link_url_asset", "title_asset", "video_asset",
+        })
+
     def test_account_id_prefix_is_normalised(self):
         self.assertEqual(meta_api._normalise_account_id("1234"), "act_1234")
         self.assertEqual(meta_api._normalise_account_id("act_1234"), "act_1234")
@@ -427,6 +461,45 @@ class BrandLevelDuplicateBackfillTest(_BaseSyncTest):
             "SELECT COUNT(*) c FROM performance_snapshot WHERE brand_id = ?"
             " AND campaign_cycle_id = ?", (self.bid, cycle_id)).fetchone()
         self.assertEqual(rows["c"], 2)
+
+    def test_two_ads_under_one_campaign_map_to_their_own_cycle(self):
+        """I1（GRILL 第三部分）：同一活動底下兩支廣告分屬不同檔期，各自的成效要對到
+        各自的 external_ad_mapping，不能因為查詢只認 meta_campaign_id 而全部黏到
+        最後建立的那一筆（程式碼自己標的既有缺口，見 sync.py `_cycle_for`）。"""
+        self._sync(campaigns=[_campaign("960", f"{self.brand_name}_20260804_sales")])
+        discovered_id = main.conn.execute(
+            "SELECT id FROM discovered_campaign WHERE meta_campaign_id = '960'"
+        ).fetchone()["id"]
+        ads_sync.claim(main.conn, self.bid, discovered_id, ACTOR)
+
+        def _new_cycle():
+            resp = self.client.post(f"/brands/{self.bid}/ads/new",
+                                    data={"slider_index": "5", "objective": "sales"},
+                                    follow_redirects=False)
+            return resp.headers["location"].split("/ads/")[1].split("?")[0]
+
+        cycle_a, cycle_b = _new_cycle(), _new_cycle()
+        ts = now_iso()
+        for cycle_id, ad_id in ((cycle_a, "adA"), (cycle_b, "adB")):
+            main.conn.execute(
+                "INSERT INTO external_ad_mapping (id, brand_id, campaign_cycle_id, platform,"
+                " meta_campaign_id, meta_ad_id, claim_status, confirmed_by, confirmed_at,"
+                " created_at) VALUES (?, ?, ?, 'meta', '960', ?, 'confirmed', ?, ?, ?)",
+                (new_id("eam"), self.bid, cycle_id, ad_id, ACTOR, ts, ts),
+            )
+        main.conn.commit()
+
+        self._sync(campaigns=[_campaign("960", f"{self.brand_name}_20260804_sales")],
+                   insights=[_insight("960", ad_id="adA"), _insight("960", ad_id="adB")])
+
+        row_a = main.conn.execute(
+            "SELECT campaign_cycle_id FROM performance_snapshot WHERE meta_ad_id = 'adA'"
+        ).fetchone()
+        row_b = main.conn.execute(
+            "SELECT campaign_cycle_id FROM performance_snapshot WHERE meta_ad_id = 'adB'"
+        ).fetchone()
+        self.assertEqual(row_a["campaign_cycle_id"], cycle_a)
+        self.assertEqual(row_b["campaign_cycle_id"], cycle_b)
 
 
 class BrandLevelMultiMonthBackfillTest(_BaseSyncTest):
