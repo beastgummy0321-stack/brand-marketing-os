@@ -9,3 +9,13 @@
 - `app/methodology/` 是**程式零件不是文件**——內容會被組進 AI 的 prompt，刪掉會讓生成品質下降
 - 共同語彙、文件修剪詞彙：`CONTEXT.md`
 - 過往決策：`docs/adr/`（需要時再查，不必每次讀）
+
+## Agent skills
+
+### Issue tracker
+
+Local markdown under `.scratch/<effort>/issues/`. See `docs/agents/issue-tracker.md`.
+
+### Domain docs
+
+Single-context: root `CONTEXT.md` + `docs/adr/`. See `docs/agents/domain.md`.
