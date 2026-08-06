@@ -3,7 +3,7 @@
 
 純函數情境測試，不碰資料庫（app/dashboard/campaign_calendar.py 只吃 today／event
 dict）。涵蓋提前期分級三種等級（大 90／中 45／小 30 天）各有觸發／不觸發案例、
-素材 14 天完稿提醒的觸發／不觸發案例、三階段（預熱／高潮／衝刺）推導、以及跨
+素材 14 天完稿提醒的觸發／不觸發案例、三階段（遠期備戰／中期備戰／近期備戰）推導、以及跨
 多檔期取最急迫一筆的排序邏輯。
 """
 
@@ -88,25 +88,25 @@ class CreativeReminderTest(unittest.TestCase):
 
 
 class CampaignStageTest(unittest.TestCase):
-    """大檔（90 天）三等分：0-29 天預熱、30-59 天高潮、60-90 天衝刺（elapsed＝已過天數）。"""
+    """大檔（90 天）三等分：0-29 天遠期備戰、30-59 天中期備戰、60-90 天近期備戰（elapsed＝已過天數）。"""
 
     def test_none_before_prep_window_opens(self):
         self.assertIsNone(cal.campaign_stage(date(2026, 8, 12), date(2026, 11, 11), "large"))
 
     def test_warmup_stage_right_after_window_opens(self):
-        self.assertEqual(cal.campaign_stage(date(2026, 8, 13), date(2026, 11, 11), "large"), "預熱")
+        self.assertEqual(cal.campaign_stage(date(2026, 8, 13), date(2026, 11, 11), "large"), "遠期備戰")
 
     def test_peak_stage_in_the_middle(self):
         # elapsed = 90 - 30 = 60... 挑一個明確落在中段的日子
         today = date(2026, 9, 20)  # elapsed ≈ 38 天
-        self.assertEqual(cal.campaign_stage(today, date(2026, 11, 11), "large"), "高潮")
+        self.assertEqual(cal.campaign_stage(today, date(2026, 11, 11), "large"), "中期備戰")
 
     def test_sprint_stage_near_event_date(self):
         today = date(2026, 11, 5)  # elapsed = 84 天
-        self.assertEqual(cal.campaign_stage(today, date(2026, 11, 11), "large"), "衝刺")
+        self.assertEqual(cal.campaign_stage(today, date(2026, 11, 11), "large"), "近期備戰")
 
     def test_sprint_stage_on_event_date_itself(self):
-        self.assertEqual(cal.campaign_stage(date(2026, 11, 11), date(2026, 11, 11), "large"), "衝刺")
+        self.assertEqual(cal.campaign_stage(date(2026, 11, 11), date(2026, 11, 11), "large"), "近期備戰")
 
     def test_none_after_event_has_passed(self):
         self.assertIsNone(cal.campaign_stage(date(2026, 11, 12), date(2026, 11, 11), "large"))

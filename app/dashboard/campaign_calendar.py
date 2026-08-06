@@ -10,8 +10,9 @@ app/dashboard/health.py／guide_cards.py）。零 API 成本——AI 聯網（AD
 {id, name, date(YYYY-MM-DD), tier(large/medium/small)}）。
 
 提前期分級（blueprint 第五節）：大檔 90 天、中檔 45 天、小檔 30 天開始提醒備戰；
-素材一律提前 14 天完稿提醒，與等級無關。檔期內投放分預熱→高潮→衝刺三階段，本檔
-把提前期窗口等分三段推導（規格未進一步訂細節，取等分為最簡單的合理切法）。
+素材一律提前 14 天完稿提醒，與等級無關。備戰倒數分遠期備戰→中期備戰→近期備戰
+三段，本檔把提前期窗口等分三段推導（規格未進一步訂細節，取等分為最簡單的合理
+切法）。「預熱／高潮／衝刺」留給檔期開跑後的排期曲線三階段用，兩者不同義。
 """
 
 import json
@@ -22,7 +23,7 @@ from typing import Optional
 LEAD_DAYS = {"large": 90, "medium": 45, "small": 30}
 TIER_LABELS = {"large": "大檔", "medium": "中檔", "small": "小檔"}
 CREATIVE_LEAD_DAYS = 14
-STAGE_LABELS = ("預熱", "高潮", "衝刺")
+STAGE_LABELS = ("遠期備戰", "中期備戰", "近期備戰")
 
 _DATA_PATH = Path(__file__).parent / "campaign_calendar_data.json"
 
@@ -56,7 +57,7 @@ def in_creative_window(today: date, event_date: date) -> bool:
 def campaign_stage(today: date, event_date: date, tier: str) -> Optional[str]:
     """檔期目前落在三階段的哪一段；不在提前期窗口內（含已過期）回 None。
 
-    提前期窗口等分三段：離窗口開啟越近＝預熱，越接近檔期當天＝衝刺。
+    提前期窗口等分三段：離窗口開啟越近＝遠期備戰，越接近檔期當天＝近期備戰。
     """
     lead = LEAD_DAYS[tier]
     days = _days_until(today, event_date)
@@ -137,8 +138,8 @@ def demo() -> None:
     assert prep_reminder(date(2026, 8, 12), event) is None  # 91 天前，還沒到
     assert creative_reminder(date(2026, 10, 28), event) is not None  # 14 天前
     assert creative_reminder(date(2026, 10, 27), event) is None  # 15 天前
-    assert campaign_stage(date(2026, 8, 13), date(2026, 11, 11), "large") == "預熱"
-    assert campaign_stage(date(2026, 11, 5), date(2026, 11, 11), "large") == "衝刺"
+    assert campaign_stage(date(2026, 8, 13), date(2026, 11, 11), "large") == "遠期備戰"
+    assert campaign_stage(date(2026, 11, 5), date(2026, 11, 11), "large") == "近期備戰"
     assert campaign_stage(date(2026, 11, 12), date(2026, 11, 11), "large") is None
     events = load_events()
     assert len(events) > 0

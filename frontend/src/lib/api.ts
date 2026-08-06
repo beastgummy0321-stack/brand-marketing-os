@@ -79,7 +79,7 @@ export interface CampaignStage {
   name: string;
   tier: "large" | "medium" | "small";
   tier_label: string;
-  stage: "預熱" | "高潮" | "衝刺";
+  stage: "遠期備戰" | "中期備戰" | "近期備戰";
   days_until: number;
 }
 

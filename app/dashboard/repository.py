@@ -279,7 +279,7 @@ def cockpit(conn, brand_id: str, *, today: Optional[str] = None,
         # 駕駛艙常駐下一步指南卡（票 04-guide-card-engine）：最多 3 件，沒有待辦是空清單，
         # 前端顯示「一切正常」。
         "guide_cards": _guide_cards(conn, brand_id, cycle, today, events),
-        # 票 06-campaign-calendar：進行中檔期目前處於預熱／高潮／衝刺哪個階段
+        # 票 06-campaign-calendar：進行中檔期目前處於遠期備戰／中期備戰／近期備戰哪個階段
         # （{id, name, tier, tier_label, stage, days_until}）；沒有檔期在窗口內是 None。
         "campaign_stage": campaign_calendar.current_campaign_stage(events, date.fromisoformat(today)),
         # 票 05-alerts-fuel-pipeline：異常警示區（空清單＝前端顯示「一切正常」）／

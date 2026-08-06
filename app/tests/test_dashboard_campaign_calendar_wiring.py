@@ -58,12 +58,12 @@ class CampaignCalendarCockpitWiringTest(unittest.TestCase):
         self.assertIsNone(data["campaign_stage"])
 
     def test_campaign_stage_surfaces_current_stage_label(self):
-        # 2026-08-05 到 2026-11-03 恰好 90 天，剛進大檔提前期窗口的第一天＝預熱
+        # 2026-08-05 到 2026-11-03 恰好 90 天，剛進大檔提前期窗口的第一天＝遠期備戰
         events = [{"id": "double11", "name": "雙11購物節", "date": "2026-11-03",
                   "tier": "large"}]
         data = self._cockpit(events)
         self.assertIsNotNone(data["campaign_stage"])
-        self.assertEqual(data["campaign_stage"]["stage"], "預熱")
+        self.assertEqual(data["campaign_stage"]["stage"], "遠期備戰")
         self.assertEqual(data["campaign_stage"]["name"], "雙11購物節")
 
     def test_guide_cards_include_campaign_reminder_pointing_to_open_new_cycle(self):
