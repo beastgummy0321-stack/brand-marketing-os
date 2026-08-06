@@ -1,6 +1,9 @@
+import { Link } from "react-router-dom";
+
 export interface BreadcrumbItem {
   label: string;
-  /** 有 href 才是可點的上層；當前頁不給 href。 */
+  /** 有 href 才是可點的上層；當前頁不給 href。SPA 內部路徑（相對 basename `/app`），
+   * 用 react-router 的 `Link` 導航，不是外部 Jinja 頁面連結。 */
   href?: string;
 }
 
@@ -14,9 +17,9 @@ export function Breadcrumb({ items }: { items: BreadcrumbItem[] }) {
         <span key={item.label} className="flex items-center gap-1.5">
           {index > 0 && <span aria-hidden="true">/</span>}
           {item.href ? (
-            <a href={item.href} className="text-primary underline-offset-4 hover:underline">
+            <Link to={item.href} className="text-primary underline-offset-4 hover:underline">
               {item.label}
-            </a>
+            </Link>
           ) : (
             <span aria-current="page" className="text-foreground">
               {item.label}

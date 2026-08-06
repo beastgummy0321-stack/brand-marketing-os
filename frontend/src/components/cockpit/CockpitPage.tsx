@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { Link } from "react-router-dom";
 import { AlertsPanel } from "@/components/cockpit/AlertsPanel";
 import { CampaignStageBadge } from "@/components/cockpit/CampaignStageBadge";
 import { CockpitChart } from "@/components/cockpit/CockpitChart";
@@ -14,7 +15,8 @@ import { formatCount, formatCurrency, formatRoas } from "@/lib/format";
 import { hasSeenCockpitTour, runCockpitTour } from "@/lib/tour";
 
 /** 單品牌駕駛艙第一屏（票 03/05）：四張 KPI 卡＋營收 vs 花費疊線主圖＋下一步指南卡／
- * 異常警示區並排＋窄條（AI 油錢錶／內容產線小計）。由 `?brand=` 查詢字串決定品牌，
+ * 異常警示區並排＋窄條（AI 油錢錶／內容產線小計）。品牌由路徑參數 `/brands/:brandId`
+ * 決定（票 05-spa-routing），呼叫端在 App.tsx 用 `useParams` 取出後傳進來，
  * 見 App.tsx／BrandCard.tsx 的路由筆記。 */
 type LoadState =
   | { status: "loading" }
@@ -57,7 +59,7 @@ export function CockpitPage({ brandId }: { brandId: string }) {
   const breadcrumb = (
     <Breadcrumb
       items={[
-        { label: "跨品牌總覽", href: "/app/" },
+        { label: "跨品牌總覽", href: "/" },
         { label: state.status === "ready" ? state.data.brand_name : "品牌駕駛艙" },
       ]}
     />
@@ -71,7 +73,8 @@ export function CockpitPage({ brandId }: { brandId: string }) {
       <EmptyState
         title="讀取失敗"
         description={state.message}
-        actionHref="/app/"
+        actionHref="/"
+        actionInternal
         actionLabel="回跨品牌總覽"
       />
     );
@@ -93,12 +96,12 @@ export function CockpitPage({ brandId }: { brandId: string }) {
             >
               重新導覽
             </button>
-            <a
-              href="/app/"
+            <Link
+              to="/"
               className="text-sm font-medium text-primary underline-offset-4 hover:underline"
             >
               回跨品牌總覽
-            </a>
+            </Link>
           </div>
         </div>
 

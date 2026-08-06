@@ -1,4 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
+import { Navigate, Route, Routes, useParams, useSearchParams } from "react-router-dom";
 import { AppShell } from "@/components/layout/AppShell";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { EmptyState } from "@/components/layout/EmptyState";
@@ -6,16 +7,44 @@ import { CockpitPage } from "@/components/cockpit/CockpitPage";
 import { BrandCard } from "@/components/overview/BrandCard";
 import { fetchOverview, type DashboardBrandCard } from "@/lib/api";
 
-/** 新殼唯一進入點。沒有路由庫（單頁面切兩顆元件，沒必要拉 react-router）：
- * `?brand=<id>` 存在就進單品牌駕駛艙（票 03），否則是跨品牌總覽（票 02）。
- * 用查詢字串而不是路徑片段，是因為 production 用 StaticFiles(html=True) 掛
- * frontend/dist，只有掛載根目錄會自動回退到 index.html，子路徑沒設 catch-all
- * 直接整理／分享網址會 404；查詢字串留在同一個根路徑，天生就不會撞到這個限制。 */
+/** 新殼唯一進入點。路徑式路由（票 05-spa-routing，裝 react-router-dom，basename="/app"
+ * 見 main.tsx）：`/` 是跨品牌總覽（票 02），`/brands/:brandId` 是單品牌駕駛艙（票 03）。
+ * production 的 `/app` StaticFiles 掛載已加子路徑 catch-all（app/main.py），子路徑
+ * 直接整理／分享網址不會 404，React Router 接手決定畫面。
+ *
+ * 21 支廣告頁重建會在 `/brands/:brandId` 之下疊檔期、步驟這些更深層級——現在只有
+ * 一顆元件掛在這個路徑，之後要加子路徑（如 `/brands/:brandId/cycles/:cycleId`）
+ * 直接在 `<Routes>` 裡加同層或巢狀 `<Route>` 即可，不必重構這裡的結構。
+ *
+ * 舊書籤 `?brand=<id>` 仍要能用：根路徑先看查詢字串，有就轉去新網址（見 RootRoute）。 */
 function App() {
-  const brandId = new URLSearchParams(window.location.search).get("brand");
   return (
-    <AppShell brandId={brandId}>
-      {brandId ? <CockpitPage brandId={brandId} /> : <Overview />}
+    <Routes>
+      <Route path="/" element={<RootRoute />} />
+      <Route path="/brands/:brandId" element={<BrandRoute />} />
+    </Routes>
+  );
+}
+
+/** 根路徑：舊查詢字串網址 `/app/?brand=<id>` 轉到新的 `/app/brands/<id>`，書籤不斷。 */
+function RootRoute() {
+  const [params] = useSearchParams();
+  const legacyBrandId = params.get("brand");
+  if (legacyBrandId) {
+    return <Navigate to={`/brands/${encodeURIComponent(legacyBrandId)}`} replace />;
+  }
+  return (
+    <AppShell brandId={null}>
+      <Overview />
+    </AppShell>
+  );
+}
+
+function BrandRoute() {
+  const { brandId } = useParams<{ brandId: string }>();
+  return (
+    <AppShell brandId={brandId ?? null}>
+      <CockpitPage brandId={brandId ?? ""} />
     </AppShell>
   );
 }

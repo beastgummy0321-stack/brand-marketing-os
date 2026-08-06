@@ -1,16 +1,17 @@
+import { Link } from "react-router-dom";
 import type { DashboardBrandCard } from "@/lib/api";
 import { formatCurrency, formatMomPct } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 /** 品牌卡片（票 02-overview-cards）：健康度燈號＋本月營收環比＋檔期狀態＋
  * 最重要一件下一步（票 04-guide-card-engine 接上指南卡引擎真貨源）。
- * 點卡片進單品牌駕駛艙（票 03）——`?brand=` 查詢字串而不是路徑片段，直接落在 SPA
- * 掛載根目錄 `/app/`，重新整理／直接貼網址都吃得到（StaticFiles html=True 只認
- * 掛載根目錄的 index.html，子路徑沒有 catch-all 會 404，見票 03 實作筆記）。
+ * 點卡片進單品牌駕駛艙（票 03）——路徑式網址 `/brands/:brandId`（票 05-spa-routing），
+ * 用 react-router 的 `Link` 導航；重新整理／直接貼網址都吃得到（後端 `/app` catch-all
+ * 見 app/main.py）。
  *
- * next_step 連的網址（舊功能頁）跟卡片本身（進新殼駕駛艙）不同，兩個連結不能用巢狀
- * `<a>`（無效 HTML）；改用 onClick + stopPropagation 讓 next_step 自己跳轉、
- * 不觸發外層卡片的導覽。 */
+ * next_step 連的網址（舊功能頁）是 SPA 之外的 Jinja 頁面，跟卡片本身（進新殼駕駛艙）
+ * 不是同一個導覽系統，兩個連結也不能用巢狀 `<a>`／`<Link>`（無效 HTML）；next_step
+ * 維持 onClick + stopPropagation 用 window.location 做整頁跳轉。 */
 
 const HEALTH_LABEL: Record<DashboardBrandCard["health"], string> = {
   red: "需要關注",
@@ -26,8 +27,8 @@ const HEALTH_DOT_CLASS: Record<DashboardBrandCard["health"], string> = {
 
 export function BrandCard({ card }: { card: DashboardBrandCard }) {
   return (
-    <a
-      href={`/app/?brand=${encodeURIComponent(card.brand_id)}`}
+    <Link
+      to={`/brands/${encodeURIComponent(card.brand_id)}`}
       className="flex flex-col gap-3 rounded-lg border border-border bg-card p-5 shadow-[var(--shadow-card)] transition-shadow hover:shadow-md"
     >
       <div className="flex items-center justify-between gap-2">
@@ -76,6 +77,6 @@ export function BrandCard({ card }: { card: DashboardBrandCard }) {
       ) : (
         <p className="text-sm text-muted-foreground">一切正常</p>
       )}
-    </a>
+    </Link>
   );
 }

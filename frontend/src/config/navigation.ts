@@ -16,16 +16,21 @@ export interface NavItem {
   status: NavStatus;
   /** disabled 項目要說明原因（規格使用者故事 23：灰掉要附說明，不能沒反應）。 */
   reason?: string;
+  /** href 是不是 SPA 內部路徑（票 05-spa-routing）：true 用 react-router 的 `Link`
+   * 導航（相對 basename `/app`）；預設 false（一般 `<a>`），離開 SPA 去舊版 Jinja 頁面
+   * ——過渡期本來就是獨立頁面，見票 01 驗收條件。 */
+  internal?: boolean;
 }
 
 export const NAV_TOP: NavItem[] = [
-  { label: "跨品牌總覽", href: "/app/", status: "active" },
+  { label: "跨品牌總覽", href: "/", status: "active", internal: true },
   { label: "收件匣", href: "/inbox", status: "active" },
 ];
 
-/** 品牌相關模組要有品牌 context 才可點：已進駕駛艙（網址帶 ?brand=）就亮起並連到
- * 該品牌的舊功能頁（code review 2026-08-06：之前寫死永遠灰掉，選了品牌仍顯示
- * 「請先選品牌」是錯的，票 01 驗收「連到每個既有模組」實質沒達成）。 */
+/** 品牌相關模組要有品牌 context 才可點：已進駕駛艙（網址是 `/brands/:brandId`，
+ * 票 05-spa-routing 起改路徑式）就亮起並連到該品牌的舊功能頁（code review
+ * 2026-08-06：之前寫死永遠灰掉，選了品牌仍顯示「請先選品牌」是錯的，票 01
+ * 驗收「連到每個既有模組」實質沒達成）。 */
 export function navModules(brandId: string | null): NavItem[] {
   return [
     brandId

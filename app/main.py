@@ -149,9 +149,27 @@ app.mount("/static", StaticFiles(directory=web.BASE_DIR / "static"), name="stati
 # 舊 145 條 HTML 路由原封不動。frontend/dist 是建置產物、不進版控，開發期走
 # Vite dev server（npm run dev）不會有這個目錄，所以只有目錄存在才掛載，
 # 沒 build 過的機器（例如測試環境）啟動仍要照常成功。
+
+
+class _SpaStaticFiles(StaticFiles):
+    """票 05-spa-routing：新殼裝了 react-router-dom，子路徑（如 /app/brands/xxx）
+    不對應任何實體檔案，預設 StaticFiles(html=True) 找不到檔案就回 404——這正是
+    ADR 0003 之後「直接貼網址進子路徑會 404」的根因。子路徑一律退回 index.html，
+    交給前端路由庫接手決定畫面；真正存在的檔案（JS/CSS/圖片等靜態資產）不受影響，
+    照舊直接回傳。"""
+
+    async def get_response(self, path: str, scope):
+        try:
+            return await super().get_response(path, scope)
+        except StarletteHTTPException as exc:
+            if exc.status_code == 404:
+                return await super().get_response("index.html", scope)
+            raise
+
+
 _FRONTEND_DIST = web.BASE_DIR.parent / "frontend" / "dist"
 if _FRONTEND_DIST.is_dir():
-    app.mount("/app", StaticFiles(directory=_FRONTEND_DIST, html=True), name="react-shell")
+    app.mount("/app", _SpaStaticFiles(directory=_FRONTEND_DIST, html=True), name="react-shell")
 
 @app.on_event("startup")
 def _register_auto_sync_schedule() -> None:
