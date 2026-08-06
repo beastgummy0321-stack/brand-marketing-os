@@ -118,6 +118,9 @@ def create_cycle(conn: sqlite3.Connection, brand_id: str, *, product_ids: list,
     if not actor:
         raise ValueError("actor 為必填")
 
+    from app.ads import plan as ads_plan  # 延遲匯入避免循環匯入（plan.py 已匯入本模組）
+    funnel_stage = ads_plan.derive_funnel_stage(objective.strip())
+
     plan = budget_calc.plan_from_pain(pain_value)
     if duration_days:
         daily, below_floor = budget_calc.daily_budget_for(pain_value, duration_days)
@@ -137,7 +140,7 @@ def create_cycle(conn: sqlite3.Connection, brand_id: str, *, product_ids: list,
         "ad_account_id": None,
         "product_scope_json": json.dumps(product_ids, ensure_ascii=False),
         "objective": objective.strip(),
-        "funnel_stage": None,
+        "funnel_stage": funnel_stage,
         "budget": plan.total_budget,
         "currency": currency,
         "start_date": start.isoformat(),

@@ -15,6 +15,7 @@ from app.ads import budget as budget_calc
 from app.ads import creative as ads_creative
 from app.ads import handoff as ads_handoff
 from app.ads import performance as ads_performance
+from app.ads import plan as ads_plan
 from app.ads import reading as ads_reading
 from app.ads import repository as ads_repo
 from app.ads import stages
@@ -151,6 +152,7 @@ def _cycle_view(conn, brand_id: str, cycle: dict) -> dict:
         "status_label": CYCLE_STATUS_LABELS.get(cycle["status"], cycle["status"]),
         "phase_label": PHASE_LABELS.get(cycle["phase"]),
         "objective_label": OBJECTIVE_LABELS.get(cycle["objective"], cycle["objective"]),
+        "funnel_stage_label": ads_plan.FUNNEL_STAGE_LABELS.get(cycle["funnel_stage"]),
         "duration_days": plan.get("duration_days"),
         "daily_budget": plan.get("daily_budget"),
         "daily_below_floor": plan.get("daily_below_floor"),

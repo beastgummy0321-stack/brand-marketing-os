@@ -13,7 +13,7 @@
     <a class="link" href="/brands/{{ brand_id }}/ads/{{ cycle.id }}">{{ cycle.start_date }} ～ {{ cycle.end_date }}</a>
     {% if cycle.phase_label %} {{ badge(cycle.phase_label, 'neutral') }}{% endif %}
   </td>
-  <td>{{ cycle.objective_label }}</td>
+  <td>{{ cycle.objective_label }}{% if cycle.funnel_stage_label %} {{ badge(cycle.funnel_stage_label, 'neutral') }}{% endif %}</td>
   <td class="num">{{ '{:,.0f}'.format(cycle.budget) }}</td>
   <td>
     {% if cycle.product_names %}{{ cycle.product_names | join('、') }}{% else %}<span class="dash">整個品牌</span>{% endif %}
@@ -119,7 +119,7 @@
             <td class="primary-cell">
               <a class="link" href="/brands/{{ brand.id }}/ads/{{ cycle.id }}">{{ cycle.start_date }} ～ {{ cycle.end_date }}</a>
             </td>
-            <td>{{ cycle.objective_label }}</td>
+            <td>{{ cycle.objective_label }}{% if cycle.funnel_stage_label %} {{ badge(cycle.funnel_stage_label, 'neutral') }}{% endif %}</td>
             <td>{{ cycle.status_label }}</td>
             <td>
               <form method="post" action="/brands/{{ brand.id }}/ads/{{ cycle.id }}/archive" class="inline-form">

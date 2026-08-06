@@ -54,6 +54,29 @@ OBJECTIVE_TEXT = {
     "sales": "直接帶來訂單",
 }
 
+# 漏斗階段：由「本期目標」推導，不是使用者另外填的欄位（使用者 2026-08-06 grill 第 4 題，
+# 票 04-wire-funnel-stage）。這是唯一一份對照表——判讀依漏斗層換尺（後續票）與畫面顯示
+# 都查這裡，不得另外抄一份。
+FUNNEL_STAGE_LABELS = {
+    "exposure": "曝光層",
+    "consideration": "考慮層",
+    "conversion": "轉換層",
+}
+
+OBJECTIVE_TO_FUNNEL_STAGE = {
+    "awareness": "exposure",
+    "traffic": "consideration",
+    "engagement": "consideration",
+    "leads": "conversion",
+    "sales": "conversion",
+}
+
+
+def derive_funnel_stage(objective: str) -> Optional[str]:
+    """本期目標推導出的漏斗階段。objective 不在對照表裡（理論上不會發生，開期表單已驗證
+    只能是 OBJECTIVE_TEXT 的五個值之一）時老實回 None，不瞎猜（鐵則 16）。"""
+    return OBJECTIVE_TO_FUNNEL_STAGE.get(objective)
+
 # 受眾三層（決策 0023 第 13 點）：順序＝人話理解順序（陌生 → 認識 → 買過），
 # 頁面與 prompt 共用同一份順序與標籤，不各自維護一份。
 AUDIENCE_TIERS = ["cold", "warm", "hot"]

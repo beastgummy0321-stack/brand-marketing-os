@@ -27,7 +27,7 @@
     </form>
   </div>
 </div>
-<p class="page-subtitle">{{ cycle.objective_label }}<span class="dot-sep" aria-hidden="true">・</span>{{ cycle.status_label }}{% if cycle.archived %}<span class="dot-sep" aria-hidden="true">・</span>已封存{% endif %}</p>
+<p class="page-subtitle">{{ cycle.objective_label }}{% if cycle.funnel_stage_label %}<span class="dot-sep" aria-hidden="true">・</span>{{ cycle.funnel_stage_label }}{% endif %}<span class="dot-sep" aria-hidden="true">・</span>{{ cycle.status_label }}{% if cycle.archived %}<span class="dot-sep" aria-hidden="true">・</span>已封存{% endif %}</p>
 
 {% if is_simulation %}
 {{ banner('warn', '這是一期模擬檔期。計畫與素材都是真的做給你看，但不會實際投放，最後的成效數字也是模擬的。走完一圈之後，開真的檔期就會很熟悉了。') }}
