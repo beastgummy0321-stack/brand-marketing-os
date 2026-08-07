@@ -11,6 +11,8 @@ import unittest
 from datetime import date
 from pathlib import Path
 
+from app import mock_data
+from app.brand_intelligence import repository as repo
 from app.core import db
 from app.llm import methodology
 
@@ -23,7 +25,11 @@ class MethodologyTableParseTest(unittest.TestCase):
 
     def test_real_readme_parses_known_task_labels(self):
         table = methodology.load_table()
-        self.assertEqual(table["檔期計畫生成"], ["ads.md", "ab-testing.md", "customer-voice.md"])
+        # load_table() 回傳純檔名清單（條件由 compile() 處理），所以帶（需要：X）的檔名也在裡面
+        self.assertEqual(
+            table["檔期計畫生成"],
+            ["ads-core.md", "ads-commerce.md", "ads-health.md", "ab-testing.md", "customer-voice.md"],
+        )
         self.assertEqual(
             table["Hook／文案生成"],
             ["ad-creative.md", "copywriting.md", "creative-matrix.md", "customer-voice.md"],
@@ -135,6 +141,172 @@ class MethodologyCompileTest(unittest.TestCase):
         self.assertIn("B 檔內容", result_v2.text)  # 對照表多列一個檔，內容就跟著多出來
 
 
+class MethodologyConditionalFileTest(unittest.TestCase):
+    """票 A：檔名後可選加（需要：X）條件，只有品牌對應開關成立才載入。"""
+
+    def setUp(self):
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self.conn = db.connect_and_migrate(Path(self._tmpdir.name) / "test.db")
+        self.meth_dir = Path(self._tmpdir.name) / "methodology"
+        self.meth_dir.mkdir()
+
+    def tearDown(self):
+        self.conn.close()
+        self._tmpdir.cleanup()
+
+    def _write_readme(self, table_rows: str) -> Path:
+        readme = self.meth_dir / "README.md"
+        readme.write_text(
+            "# 索引\n\n## 任務型別 → 必讀方法論檔對照表\n\n"
+            "| 任務型別 | 必讀方法論檔 |\n|---|---|\n" + table_rows + "\n## 維護規則\n之後的段落。\n",
+            encoding="utf-8",
+        )
+        return readme
+
+    def _write_files(self, *names):
+        for name in names:
+            (self.meth_dir / name).write_text(f"{name} 內容", encoding="utf-8")
+
+    def test_load_table_raw_parses_condition_and_load_table_strips_it(self):
+        readme = self._write_readme("| 測試任務 | `a.md`、`b.md`（需要：有商品）、`c.md` |\n")
+        raw = methodology.load_table_raw(readme)
+        self.assertEqual(raw["測試任務"], [("a.md", None), ("b.md", "有商品"), ("c.md", None)])
+        flat = methodology.load_table(readme)  # 向後相容：不含條件，純檔名清單
+        self.assertEqual(flat["測試任務"], ["a.md", "b.md", "c.md"])
+
+    def test_compile_brand_id_none_loads_conditional_file_unfiltered(self):
+        readme = self._write_readme("| 測試任務 | `a.md`（需要：有商品） |\n")
+        self._write_files("a.md")
+        result = methodology.compile(self.conn, ["測試任務"], brand_id=None, actor="測試員",
+                                     methodology_dir=self.meth_dir, readme_path=readme)
+        self.assertIn("a.md 內容", result.text)
+
+    def test_compile_filters_out_conditional_file_when_switch_off(self):
+        readme = self._write_readme("| 測試任務 | `a.md`（需要：有商品） |\n")
+        self._write_files("a.md")
+        bid = repo.create_brand(self.conn, name="虛構品牌無商品", client_name=None, actor="測試員")["id"]
+        result = methodology.compile(self.conn, ["測試任務"], brand_id=bid, actor="測試員",
+                                     methodology_dir=self.meth_dir, readme_path=readme)
+        self.assertNotIn("a.md 內容", result.text)
+        self.assertEqual(result.missing_files, [])  # 條件不成立不是缺檔，不該進 missing_files
+
+    def test_compile_includes_conditional_file_when_switch_on(self):
+        readme = self._write_readme("| 測試任務 | `a.md`（需要：有商品） |\n")
+        self._write_files("a.md")
+        bid = repo.create_brand(self.conn, name="虛構品牌有商品", client_name=None, actor="測試員")["id"]
+        repo.create_product(self.conn, bid, name="虛構產品", actor="測試員")
+        result = methodology.compile(self.conn, ["測試任務"], brand_id=bid, actor="測試員",
+                                     methodology_dir=self.meth_dir, readme_path=readme)
+        self.assertIn("a.md 內容", result.text)
+
+    def test_unconditional_file_always_loads_regardless_of_switch(self):
+        readme = self._write_readme("| 測試任務 | `a.md`、`b.md`（需要：健康類法規） |\n")
+        self._write_files("a.md", "b.md")
+        bid = repo.create_brand(self.conn, name="虛構品牌無法規", client_name=None, actor="測試員")["id"]
+        result = methodology.compile(self.conn, ["測試任務"], brand_id=bid, actor="測試員",
+                                     methodology_dir=self.meth_dir, readme_path=readme)
+        self.assertIn("a.md 內容", result.text)
+        self.assertNotIn("b.md 內容", result.text)
+
+
+class MethodologySwitchComputationTest(unittest.TestCase):
+    """app.brand_intelligence.repository.compute_methodology_switches 四個開關各自的判定條件。"""
+
+    def setUp(self):
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self.conn = db.connect_and_migrate(Path(self._tmpdir.name) / "test.db")
+
+    def tearDown(self):
+        self.conn.close()
+        self._tmpdir.cleanup()
+
+    def test_all_switches_off_by_default(self):
+        bid = repo.create_brand(self.conn, name="虛構品牌空白", client_name=None, actor="測試員")["id"]
+        self.assertEqual(
+            repo.compute_methodology_switches(self.conn, bid),
+            {"有商品": False, "站內交易": False, "有自有網站": False, "健康類法規": False},
+        )
+
+    def test_has_product_switch(self):
+        bid = repo.create_brand(self.conn, name="虛構品牌有貨", client_name=None, actor="測試員")["id"]
+        repo.create_product(self.conn, bid, name="虛構產品", actor="測試員")
+        self.assertTrue(repo.compute_methodology_switches(self.conn, bid)["有商品"])
+
+    def test_purchase_conversion_goal_triggers_transaction_switch(self):
+        bid = repo.create_brand(self.conn, name="虛構品牌購買轉換", client_name=None, actor="測試員")["id"]
+        repo.set_brand_switches(self.conn, bid, market_region="TW", conversion_goal="purchase",
+                                 actor="測試員")
+        self.assertTrue(repo.compute_methodology_switches(self.conn, bid)["站內交易"])
+
+    def test_lead_conversion_goal_does_not_trigger_transaction_switch(self):
+        bid = repo.create_brand(self.conn, name="虛構品牌名單", client_name=None, actor="測試員")["id"]
+        repo.set_brand_switches(self.conn, bid, market_region=None, conversion_goal="lead",
+                                 actor="測試員")
+        self.assertFalse(repo.compute_methodology_switches(self.conn, bid)["站內交易"])
+
+    def test_website_channel_triggers_switch(self):
+        bid = repo.create_brand(self.conn, name="虛構品牌有官網", client_name=None, actor="測試員")["id"]
+        repo.create_channel(self.conn, bid, channel_type="website", name="虛構官網", actor="測試員")
+        self.assertTrue(repo.compute_methodology_switches(self.conn, bid)["有自有網站"])
+
+    def test_non_website_channel_type_does_not_trigger_switch(self):
+        bid = repo.create_brand(self.conn, name="虛構品牌只有粉專", client_name=None, actor="測試員")["id"]
+        repo.create_channel(self.conn, bid, channel_type="fb_page", name="虛構粉專", actor="測試員")
+        self.assertFalse(repo.compute_methodology_switches(self.conn, bid)["有自有網站"])
+
+    def test_confirmed_regulatory_fact_triggers_switch(self):
+        bid = repo.create_brand(self.conn, name="虛構品牌法規", client_name=None, actor="測試員")["id"]
+        repo.create_brand_fact(self.conn, bid, fact_type="regulatory", label="法規限制",
+                                value="測試內容", status="confirmed", confirmed_by="測試員",
+                                actor="測試員")
+        self.assertTrue(repo.compute_methodology_switches(self.conn, bid)["健康類法規"])
+
+    def test_pending_regulatory_fact_does_not_trigger_switch(self):
+        bid = repo.create_brand(self.conn, name="虛構品牌法規待確認", client_name=None,
+                                 actor="測試員")["id"]
+        repo.create_brand_fact(self.conn, bid, fact_type="regulatory", label="法規限制",
+                                value="測試內容", status="pending", actor="測試員")
+        self.assertFalse(repo.compute_methodology_switches(self.conn, bid)["健康類法規"])
+
+
+class BrandSwitchesWriteTest(unittest.TestCase):
+    """app.brand_intelligence.repository.set_brand_switches：寫入 market_region／conversion_goal。"""
+
+    def setUp(self):
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self.conn = db.connect_and_migrate(Path(self._tmpdir.name) / "test.db")
+
+    def tearDown(self):
+        self.conn.close()
+        self._tmpdir.cleanup()
+
+    def test_set_brand_switches_writes_both_fields(self):
+        bid = repo.create_brand(self.conn, name="虛構品牌設定", client_name=None, actor="測試員")["id"]
+        after = repo.set_brand_switches(self.conn, bid, market_region="TW",
+                                         conversion_goal="purchase", actor="測試員")
+        self.assertEqual(after["market_region"], "TW")
+        self.assertEqual(after["conversion_goal"], "purchase")
+
+    def test_set_brand_switches_rejects_unknown_conversion_goal(self):
+        bid = repo.create_brand(self.conn, name="虛構品牌壞值", client_name=None, actor="測試員")["id"]
+        with self.assertRaises(ValueError):
+            repo.set_brand_switches(self.conn, bid, market_region="TW", conversion_goal="checkout",
+                                     actor="測試員")
+
+
+class PersonaSwitchDefaultsTest(unittest.TestCase):
+    """app.mock_data.persona_switch_defaults：人設展開成開關預設值的填表捷徑，不進 DB。"""
+
+    def test_every_persona_expands_to_all_four_switches(self):
+        for code, _label in mock_data.PERSONA_TYPES:
+            defaults = mock_data.persona_switch_defaults(code)
+            self.assertEqual(set(defaults.keys()), {"有商品", "站內交易", "有自有網站", "健康類法規"})
+
+    def test_unknown_persona_raises(self):
+        with self.assertRaises(ValueError):
+            mock_data.persona_switch_defaults("不存在的人設")
+
+
 class MethodologyLastVerifiedDateTest(unittest.TestCase):
     """每份方法論檔的 frontmatter 都要記錄最後查證日：改完內容忘了更新日期，
     下次沒人知道這份檔上次跟來源核對是什麼時候。
@@ -142,21 +314,18 @@ class MethodologyLastVerifiedDateTest(unittest.TestCase):
     只驗「有、且是合法的過去日期」，不設到期紅燈——方法論重萃取要開發環境才做得到，
     到期提醒放這裡會在無關的 commit 上突然變紅（維護規則第 1 條）。"""
 
-    EXPECTED_FILES = [
-        "ads.md", "ad-creative.md", "ab-testing.md", "copywriting.md",
-        "creative-matrix.md", "customer-voice.md", "README.md",
-    ]
+    MIN_FILES = 7  # 拆檔／新增檔不必回來改這裡；掉到門檻以下代表有檔案被誤刪
 
     def test_every_methodology_file_has_a_last_verified_date(self):
         today = date.today()
-        for name in self.EXPECTED_FILES:
-            path = METHODOLOGY_DIR / name
-            self.assertTrue(path.is_file(), f"{path} 不存在")
+        paths = sorted(METHODOLOGY_DIR.glob("*.md"))
+        self.assertGreaterEqual(len(paths), self.MIN_FILES, "方法論檔數量異常，可能被誤刪")
+        for path in paths:
             frontmatter = path.read_text(encoding="utf-8").split("---")[1]
             match = re.search(r"最後查證日:\s*(\d{4}-\d{2}-\d{2})", frontmatter)
-            self.assertIsNotNone(match, f"{name} frontmatter 缺最後查證日")
+            self.assertIsNotNone(match, f"{path.name} frontmatter 缺最後查證日")
             verified = date.fromisoformat(match.group(1))
-            self.assertLessEqual(verified, today, f"{name} 最後查證日是未來日期：{verified}")
+            self.assertLessEqual(verified, today, f"{path.name} 最後查證日是未來日期：{verified}")
 
 
 class MethodologyLineCapTest(unittest.TestCase):

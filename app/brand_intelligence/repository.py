@@ -114,6 +114,63 @@ def update_brand(conn: sqlite3.Connection, brand_id: str, *, name: str,
     return after
 
 
+# 平台中立轉換目標（票 A）：不得存 Meta 事件名，Meta 專屬欄位名只能關在
+# app/ads/meta_api.py（決策 0016 硬性原則 1）。Meta 標準事件對照表由 README 記錄（票 B）。
+CONVERSION_GOALS = ("purchase", "lead", "booking", "awareness")
+
+
+def set_brand_switches(conn: sqlite3.Connection, brand_id: str, *,
+                        market_region: Optional[str], conversion_goal: Optional[str],
+                        actor: str) -> dict:
+    """寫入 brand.market_region／brand.conversion_goal（票 A，方法論開關讀這兩欄）。"""
+    _require(actor, "actor 為必填")
+    if conversion_goal is not None and conversion_goal not in CONVERSION_GOALS:
+        raise ValueError(f"conversion_goal 只能是 {'/'.join(CONVERSION_GOALS)} 其中之一")
+    before = get_brand(conn, brand_id)
+    if before is None:
+        raise ValueError(f"找不到品牌：{brand_id}")
+    ts = now_iso()
+    conn.execute(
+        "UPDATE brand SET market_region = ?, conversion_goal = ?, updated_at = ? WHERE id = ?",
+        (market_region, conversion_goal, ts, brand_id),
+    )
+    after = get_brand(conn, brand_id)
+    write_audit(conn, brand_id=brand_id, entity_type="brand", entity_id=brand_id,
+                action="update", actor=actor, before=before, after=after)
+    conn.commit()
+    return after
+
+
+# 方法論開關名（中文，供 app/methodology/README.md 對照表的（需要：X）條件比對，
+# 見 app/llm/methodology.py）。只有 'website' 屬於網站型——值域見 app/mock_data.py
+# CHANNEL_TYPES，不自己發明值。
+_WEBSITE_CHANNEL_TYPE = "website"
+
+
+def compute_methodology_switches(conn: sqlite3.Connection, brand_id: str) -> dict:
+    """算出方法論開關的四個布林值，供 app/llm/methodology.py 過濾 README 對照表的
+    條件檔（票 A）。只讀既有資料／brand 的新兩欄，不另外新增狀態欄位。"""
+    has_product = conn.execute(
+        "SELECT 1 FROM product WHERE brand_id = ? LIMIT 1", (brand_id,)
+    ).fetchone() is not None
+    brand = get_brand(conn, brand_id)
+    has_transaction = bool(brand) and brand["conversion_goal"] == "purchase"
+    has_website = conn.execute(
+        "SELECT 1 FROM owned_channel WHERE brand_id = ? AND channel_type = ? LIMIT 1",
+        (brand_id, _WEBSITE_CHANNEL_TYPE),
+    ).fetchone() is not None
+    has_regulatory = conn.execute(
+        "SELECT 1 FROM brand_fact WHERE brand_id = ? AND status = 'confirmed' "
+        "AND fact_type = 'regulatory' LIMIT 1", (brand_id,)
+    ).fetchone() is not None
+    return {
+        "有商品": has_product,
+        "站內交易": has_transaction,
+        "有自有網站": has_website,
+        "健康類法規": has_regulatory,
+    }
+
+
 # 刪品牌時要清掉的本模組表，順序＝先子後父（PRAGMA foreign_keys = ON，順序錯就會被擋）。
 BRAND_CHILD_TABLES = (
     ("product_fact", "產品事實"),

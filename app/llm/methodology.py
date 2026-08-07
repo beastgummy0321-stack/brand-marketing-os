@@ -14,6 +14,7 @@ import sqlite3
 from pathlib import Path
 from typing import NamedTuple, Optional
 
+from app.brand_intelligence import repository as repo
 from app.core.audit import write_audit
 from app.core.db import APP_DIR
 
@@ -21,12 +22,15 @@ METHODOLOGY_DIR = APP_DIR / "methodology"
 README_PATH = METHODOLOGY_DIR / "README.md"
 
 _ROW_RE = re.compile(r"^\|\s*([^|]+?)\s*\|\s*(.+?)\s*\|\s*$")
-_FILE_RE = re.compile(r"`([^`]+\.md)`")
+# 檔名後可選加一個全形條件括號：`a.md`（需要：有商品）。開關名見
+# app.brand_intelligence.repository.compute_methodology_switches 的四個中文鍵；
+# 未知開關名一律不成立（優雅略過，同本檔對缺檔的處理哲學），不拋例外。
+_FILE_RE = re.compile(r"`([^`]+\.md)`(?:（需要：([^）]+)）)?")
 _TABLE_HEADING_MARKERS = ("任務型別", "必讀方法論檔")
 
 
-def _parse_table(readme_text: str) -> dict:
-    """解析「任務型別 → 必讀方法論檔對照表」，回傳 {任務型別: [檔名, ...]}。
+def _parse_table_raw(readme_text: str) -> dict:
+    """解析「任務型別 → 必讀方法論檔對照表」，回傳 {任務型別: [(檔名, 開關名或 None), ...]}。
 
     只在對應標題底下的表格生效，不誤吃檔案索引表（同一份 README 裡的另一張表）。
     """
@@ -47,9 +51,9 @@ def _parse_table(readme_text: str) -> dict:
         if not m:
             continue
         label = m.group(1).strip()
-        filenames = _FILE_RE.findall(m.group(2))
-        if filenames:  # 表頭列／分隔列沒有 `xxx.md` 反引號，天然被排除
-            table[label] = filenames
+        pairs = _FILE_RE.findall(m.group(2))  # [(檔名, 開關名或''), ...]
+        if pairs:  # 表頭列／分隔列沒有 `xxx.md` 反引號，天然被排除
+            table[label] = [(filename, condition or None) for filename, condition in pairs]
     return table
 
 
@@ -60,11 +64,18 @@ class MethodologyResult(NamedTuple):
     missing_files: list
 
 
-def load_table(readme_path: Path = README_PATH) -> dict:
-    """讀取並解析對照表；README 不存在時回傳空表（呼叫端優雅缺席，不擋流程）。"""
+def load_table_raw(readme_path: Path = README_PATH) -> dict:
+    """讀取並解析對照表，回傳 {任務型別: [(檔名, 開關名或 None), ...]}——含條件的完整版，
+    供 compile() 判斷過濾用。README 不存在時回傳空表（呼叫端優雅缺席，不擋流程）。"""
     if not readme_path.exists():
         return {}
-    return _parse_table(readme_path.read_text(encoding="utf-8"))
+    return _parse_table_raw(readme_path.read_text(encoding="utf-8"))
+
+
+def load_table(readme_path: Path = README_PATH) -> dict:
+    """讀取並解析對照表，回傳 {任務型別: [檔名, ...]}（不含條件，向後相容既有呼叫端）。"""
+    return {label: [filename for filename, _condition in pairs]
+            for label, pairs in load_table_raw(readme_path).items()}
 
 
 def compile(
@@ -84,14 +95,24 @@ def compile(
     檔案缺失會寫一筆 audit_log（brand_id 可為 None＝系統級事件），且列進回傳值的
     missing_files，供呼叫端在頁面上誠實標注（決策 0024 第 6 條）。
 
+    對照表列出的檔名可帶條件（（需要：X）），只有品牌對應開關成立才載入——見
+    app.brand_intelligence.repository.compute_methodology_switches。
+    brand_id=None 時不查開關、不過濾，帶條件的檔案跟其他檔案一樣全部載入。
+
     methodology_dir／readme_path 留 None 時在呼叫當下才解析模組層預設值
     （而非定義函式時就綁死），測試才能用 monkeypatch 換掉預設路徑。
     """
-    table = load_table(readme_path or README_PATH)
+    table = load_table_raw(readme_path or README_PATH)
     methodology_dir = methodology_dir or METHODOLOGY_DIR
+    switches: Optional[dict] = None  # 懶得算：沒有帶條件的檔案就不必查一次品牌資料
     filenames: list = []
     for label in task_labels:
-        for filename in table.get(label, []):
+        for filename, condition in table.get(label, []):
+            if condition is not None and brand_id is not None:
+                if switches is None:
+                    switches = repo.compute_methodology_switches(conn, brand_id)
+                if not switches.get(condition, False):
+                    continue
             if filename not in filenames:
                 filenames.append(filename)
 

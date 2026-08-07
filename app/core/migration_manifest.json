@@ -17,6 +17,7 @@
   "brand_intelligence/0002_brand_report.sql": "0c0a7778a73741a743004a422d89b485d86863d6d83575752c4d9cea79760a2d",
   "brand_intelligence/0003_customer_voice.sql": "1271b103b6a1fba161958a06d8688dd4a4740d2e00981854693599946bca678f",
   "brand_intelligence/0004_learning_ledger.sql": "ccc04b842436cdf3d59a9c331fb457d64fc188c554688e5d87e8c34dda44114c",
+  "brand_intelligence/0005_brand_switches.sql": "ebc0781efd7bde0b77c34410f2c30dff9de3eecbf700f26edd7b54ff61c6ccab",
   "core/0001_core.sql": "f66b33f3e887d6375a70c517bab7596a7cce3aafdefe8966ecb49b01e2673bdf",
   "core/0002_app_setting.sql": "4cbf53680c6f05c716e9e9833a82634866bbcc35615974775c31cbaf566514db",
   "core/0003_rule_card.sql": "318a9ec65a23c6e7d2193d68774af8315a21869dd2dfd710528160f0d981adac",
