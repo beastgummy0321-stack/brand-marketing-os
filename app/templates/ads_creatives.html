@@ -73,7 +73,10 @@
 
     {% if variant.variant_type == 'image_prompt' %}
       {{ copy_block(variant.content, 'copy-' ~ variant.id) }}
-      <p class="creative-note">把這段貼進生圖工具就能做出這張圖。</p>
+      {# ponytail: 刻意的空殼按鈕，不接後端、不加路由、不加開關；使用者明示要留著當「這功能還沒做」的提醒（ADR 0008 Consequences 第 4 點） #}
+      <button type="button" class="btn btn-secondary" disabled
+              title="這個功能還沒做，先用上面的「複製全部」把提示詞貼到生圖工具。">直接生圖（建置中）</button>
+      <p class="creative-note">直接生圖還沒做。按上面的「複製全部」，把這段貼進生圖工具就能做出這張圖。</p>
     {% else %}
       <p class="creative-content">{{ variant.content }}</p>
     {% endif %}

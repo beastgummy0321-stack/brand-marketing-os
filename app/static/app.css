@@ -253,6 +253,7 @@ a.switcher-row:hover { background: var(--bg-subtle); }
 .btn-secondary:hover { background: var(--bg-subtle); }
 .btn-danger { background: var(--bg-surface); color: var(--danger); border: 1px solid var(--danger); }
 .btn-danger:hover { background: var(--danger-bg); }
+.btn:disabled { opacity: .55; cursor: not-allowed; }
 .btn-text {
   background: none; border: none; color: var(--accent);
   height: auto; width: auto; padding: var(--space-1) 0; display: inline;

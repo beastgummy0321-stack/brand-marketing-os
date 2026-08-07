@@ -624,6 +624,9 @@ class CreativeMatrixTest(_BaseCreativeTest):
         page = self.client.get(f"/brands/{self.bid}/ads/{self.cycle_id}/creatives")
         self.assertIn("人物出鏡（套用真人實拍 DNA）", page.text)
         self.assertIn("創意角度 #12", page.text)
+        # ADR 0008：直接生圖是刻意留下的空殼按鈕，必須存在且必須按不下去
+        self.assertIn('class="btn btn-secondary" disabled', page.text)
+        self.assertIn("直接生圖（建置中）", page.text)
 
     def test_customer_voice_quotes_are_injected_and_cited(self):
         bi_repo.create_customer_voice(
