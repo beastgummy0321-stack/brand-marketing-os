@@ -190,6 +190,33 @@
   {% endcall %}
 </section>
 
+<section class="settings-section" aria-labelledby="settings-creative-title">
+  <h2 id="settings-creative-title">素材圖檔資料夾</h2>
+  <p class="settings-desc">
+    生圖工具做出來的圖不進系統，系統只記得它放在哪。每一期檔期在這個資料夾底下有自己的子資料夾，
+    在檔期頁按「開素材資料夾」就會跳出檔案總管，把下載好的圖直接貼進去即可。一年大約 2.5–4 GB，
+    可以指到雲端同步資料夾或另一顆硬碟。
+  </p>
+  <div class="warn-box">
+    <span class="warn-box-title">刪品牌或刪檔期時，這底下對應的子資料夾會一起被刪掉</span>
+    <p>系統平常永遠不會自己刪圖，只有你刪掉品牌或檔期時才會刪它們的子資料夾。所以這裡請指到一個
+      專門放素材的資料夾，不要指到還放著別的東西的地方（例如整顆雲端硬碟或磁碟機根目錄）。
+      這些圖也不在每日備份範圍內。</p>
+  </div>
+
+  <form method="post" action="/settings/creative-root" novalidate>
+    {% call field('creative_root', '資料夾完整路徑', required=True,
+                  hint='要填完整路徑，例如 D:\\行銷素材。改路徑不會搬動已經倒進去的圖，舊資料夾要自己搬。',
+                  error=errors.creative_root) %}
+    <input type="text" id="creative_root" name="creative_root" value="{{ values.creative_root }}"
+           placeholder="例如 D:\行銷素材">
+    {% endcall %}
+    <div class="form-actions">
+      <button type="submit" class="btn btn-secondary">儲存素材資料夾</button>
+    </div>
+  </form>
+</section>
+
 <section class="settings-section" aria-labelledby="settings-budget-title">
   <h2 id="settings-budget-title">花費上限</h2>
   <form method="post" action="/settings/budget" novalidate>

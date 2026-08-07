@@ -234,11 +234,15 @@ class SettingsPageTest(unittest.TestCase):
         for model_id, _name in main.MODEL_CHOICES:
             self.assertGreater(pricing.calculate_cost(model_id, 1000, 1000), 0)
 
-    # -- 票 #48：5 分區收斂、0 主要按鈕、容量合規 --------------------------------
+    # -- 票 #48：分區收斂、0 主要按鈕、容量合規 ----------------------------------
 
-    def test_settings_page_has_five_sections_no_primary_button_and_passes_capacity(self):
+    def test_settings_page_has_six_sections_no_primary_button_and_passes_capacity(self):
+        """票 #48 原本鎖 5 分區。票 T-G2-1 加第 6 區「素材圖檔資料夾」：決策 0008 指定
+        `creative_asset_root` 要能在設定頁改，而路徑跟另外五區（金鑰／模型／花費／Meta／
+        GA4）沒有任何一區沾得上邊，塞進去只會更難找。數字調成 6，這道閘門照常擋第 7 區。
+        """
         resp = self.client.get("/settings")
-        self.assertEqual(resp.text.count('class="settings-section"'), 5)
+        self.assertEqual(resp.text.count('class="settings-section"'), 6)
         self.assertNotIn("btn-primary", resp.text)  # 全站首個 0 主要按鈕的表單頁（§7.6）
         counts = cc.check_html(resp.text)
         self.assertEqual(cc.violations("/settings", counts), [])

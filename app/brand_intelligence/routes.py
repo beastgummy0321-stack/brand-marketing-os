@@ -34,6 +34,7 @@ from app.brand_intelligence import report as brand_report_mod
 from app.brand_intelligence import repository as repo
 from app.core import backup as corebackup
 from app.core import cleanup
+from app.core import creative_assets
 from app.core import interrupts as core_interrupts
 from app.core import prototype_phase as core_prototype_phase
 from app.core.db import new_id
@@ -319,8 +320,7 @@ async def brand_edit_post(request: Request, brand_id: str, name: str = Form(""),
 def _delete_counts(brand_id: str) -> list:
     """刪除確認頁要列的「會一起消失的資料」，只留有東西的項目（改由清理登記處
     彙整所有登記模組的清點結果，不再由本檔手寫死要問誰）。"""
-    rows = cleanup.count_all(web.conn, brand_id)
-    return [(label, n) for label, n in rows if n > 0]
+    return [(label, n) for label, n in cleanup.count_all(web.conn, brand_id) if n > 0]
 
 
 @router.get("/brands/{brand_id}/delete")
@@ -343,14 +343,14 @@ async def brand_delete_post(request: Request, brand_id: str, confirm_name: str =
                                       "要先把品牌封存，才能永久刪除。", kind="warn")
     if clean(confirm_name) != brand["name"]:
         return templates.TemplateResponse(request, "brand_delete.html", ctx(
-            request, brand=brand, counts=_delete_counts(brand_id),
+            request, brand=brand, counts=_delete_counts(brand_id), nav_current='hub',
             error="輸入的名稱跟品牌名稱不一樣，請照著上面顯示的名稱再打一次。",
-            nav_current='hub',
         ), status_code=400)
     corebackup.snapshot(f"before-delete-{brand_id}")
     repo.delete_brand(web.conn, brand_id, actor=actor)
+    warn = creative_assets.delete_folder(web.conn, brand_id)  # 素材圖檔資料夾一起刪（決策 0008）
     return redirect_with_message(
-        "/", f"已永久刪除品牌「{brand['name']}」。刪除前的備份已存進 backups 資料夾。")
+        "/", f"已永久刪除品牌「{brand['name']}」。刪除前的備份已存進 backups 資料夾。{warn}")
 
 
 # ---------------------------------------------------------------------------

@@ -42,6 +42,7 @@ from app.ads.routes_common import (
     _require_cycle, _slider_options,
 )
 from app.brand_intelligence import repository as bi
+from app.core import creative_assets
 from app.llm import providers as llm_providers
 
 router = APIRouter()
@@ -225,9 +226,23 @@ async def ads_cycle_delete_post(request: Request, brand_id: str, cycle_id: str,
 
     main_mod.corebackup.snapshot(f"before-delete-{cycle_id}")
     ads_repo.delete_cycle(main_mod.conn, brand_id, cycle_id, actor=actor)
+    # 素材圖檔資料夾一起刪（決策 0008 的例外：系統平常不自動刪圖，刪檔期時才刪）。
+    # 排在 DB 刪完之後：圖救不回來，DB 有刪除前備份，先刪救得回來的那個。
+    warn = creative_assets.delete_folder(main_mod.conn, brand_id, cycle_id)
     return main_mod.redirect_with_message(
         f"/brands/{brand_id}/ads",
-        f"已永久刪除 {label} 這期檔期。刪除前的備份已存進 backups 資料夾。")
+        f"已永久刪除 {label} 這期檔期。刪除前的備份已存進 backups 資料夾。{warn}")
+
+
+@router.post("/brands/{brand_id}/ads/{cycle_id}/creative-folder")
+async def ads_cycle_creative_folder_post(request: Request, brand_id: str, cycle_id: str):
+    """開這期的素材圖檔資料夾：沒有就建，然後叫出檔案總管（決策 0008，圖不進系統）。"""
+    main_mod.require_brand(brand_id)
+    _require_cycle(brand_id, cycle_id)
+    path = creative_assets.open_folder(main_mod.conn, brand_id, cycle_id)
+    return main_mod.redirect_with_message(
+        f"/brands/{brand_id}/ads/{cycle_id}",
+        f"已開啟素材資料夾：{path}。把生圖工具下載的圖直接貼進去，檔名不用改。")
 
 
 @router.get("/brands/{brand_id}/ads/{cycle_id}")
@@ -243,6 +258,7 @@ async def ads_cycle(request: Request, brand_id: str, cycle_id: str):
                        if cycle["status"] == "PLAN_SELECT" else [])
     creatives = ads_creative.list_variants(conn, brand_id, cycle_id)
     packages = ads_handoff.list_packages(conn, brand_id, cycle_id)
+    creative_dir = creative_assets.cycle_dir(conn, brand_id, cycle_id)
     return main_mod.templates.TemplateResponse(
         request, "ads_cycle.html",
         main_mod.ctx(request, brand=brand, nav_current='ads', cycle=view, allocations=allocations,
@@ -264,6 +280,10 @@ async def ads_cycle(request: Request, brand_id: str, cycle_id: str):
                                      for v in creatives),
                      package_count=len(packages),
                      activated_count=sum(1 for p in packages if p["mapping"]),
+                     # 素材圖檔資料夾（決策 0008）：路徑與現在佔多少 MB 都是即時算的，
+                     # 圖不進系統、DB 也不記，使用者在檔案總管裡加減檔案這裡就會跟著變。
+                     creative_dir=str(creative_dir),
+                     creative_mb=creative_assets.size_mb(creative_dir),
                      snapshot_count=len(ads_performance.list_snapshots(conn, brand_id, cycle_id)),
                      is_simulation=simulation.is_simulation(cycle),
                      readiness_notes=ads_repo.check_readiness(

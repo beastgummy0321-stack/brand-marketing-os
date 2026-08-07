@@ -29,6 +29,7 @@
 import threading
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional
 
 from fastapi import FastAPI, Form, Request
@@ -42,6 +43,7 @@ from app.ads import ga4_sync  # noqa: E402
 from app.ads import meta_api  # noqa: E402
 from app.ads import sync as ads_sync  # noqa: E402
 from app.core import backup as corebackup
+from app.core import creative_assets as corecreative
 from app.core import db as coredb
 from app.core import retention as core_retention
 from app.core import settings as coresettings
@@ -267,7 +269,10 @@ def settings_ctx(request: Request, values=None, errors=None):
         meta_account_id=ads_sync.get_account_id(web.conn) or "",
         masked_ga4_key=_masked_key(ga4_sync.get_service_account_json(web.conn)),
         ga4_property_id=ga4_sync.get_property_id(web.conn) or "",
-        values=values or {"intake_budget": _num_str(coresettings.get_intake_budget_limit(web.conn))},
+        # 各欄位的預設值先鋪好，再讓某一格的錯誤回顯蓋上去——values 整包取代的話，
+        # 存花費上限失敗時素材資料夾那格會變空白（兩格在同一頁、互不相干）。
+        values={"intake_budget": _num_str(coresettings.get_intake_budget_limit(web.conn)),
+                "creative_root": str(corecreative.get_root(web.conn)), **(values or {})},
         errors=errors or {},
         **banner_ctx(request),
     )
@@ -356,6 +361,25 @@ async def settings_budget_post(request: Request, intake_budget: str = Form("")):
     return redirect_with_message(
         "/settings", f"已將單次建檔的花費上限設為 $ {_num_str(value)}。"
     )
+
+
+@app.post("/settings/creative-root")
+async def settings_creative_root_post(request: Request, creative_root: str = Form("")):
+    """素材圖檔資料夾的根目錄（決策 0008）。三道驗證：有填、是完整路徑、不是磁碟機根目錄
+    ——刪品牌／刪檔期會刪掉這底下對應的子資料夾，指到 `C:\\` 這種地方很危險。
+
+    不驗資料夾存不存在：使用者可能先填好路徑，等一下才插上那顆外接硬碟。
+    """
+    raw = clean(creative_root)
+    path = Path(raw) if raw else None
+    if path is None or not path.is_absolute() or path.parent == path:
+        return templates.TemplateResponse(request, "settings.html", settings_ctx(
+            request, values={"creative_root": creative_root},
+            errors={"creative_root": "請填一個完整的資料夾路徑（例如 D:\\行銷素材），"
+                                     "不要只填資料夾名稱，也不要填磁碟機根目錄。"},
+        ), status_code=400)
+    coresettings.set_setting(web.conn, corecreative.SETTING_KEY, str(path))
+    return redirect_with_message("/settings", f"素材圖檔資料夾已設為 {path}。")
 
 
 @app.post("/settings/test-connection")

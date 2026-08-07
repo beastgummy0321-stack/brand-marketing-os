@@ -296,6 +296,14 @@
     <button type="submit" class="btn btn-primary">產出這期的素材</button>
   </form>
   {% endif %}
+
+  <p class="section-desc">
+    這期的圖檔放在 <code>{{ creative_dir }}</code>，目前 <strong>{{ '{:.1f}'.format(creative_mb) }} MB</strong>。
+    圖不進系統：從生圖工具下載完直接倒進這個資料夾，檔名不用改。
+  </p>
+  <form method="post" action="/brands/{{ brand.id }}/ads/{{ cycle.id }}/creative-folder" class="inline-form">
+    <button type="submit" class="btn btn-secondary">開素材資料夾</button>
+  </form>
 </div>
 
 {% if cycle.status in ('LIVE', 'EVALUATING', 'CLOSED') %}
