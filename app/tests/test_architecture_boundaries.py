@@ -64,6 +64,96 @@ KNOWN_SQL_VIOLATIONS = {
 }
 
 
+# ---- A1 檢查③：套件之間不得形成 import 環 ----
+# 環在執行期不一定炸（Python 只在兩個「模組」直接互 import 才會），但它讓「這層依賴那層」
+# 這句話失去意義：任一邊都無法單獨抽換或單獨測試，重構時無從下手。
+# 既有的環先列進 KNOWN_IMPORT_CYCLES 凍住現況，新增的環當場擋下——比照
+# KNOWN_SQL_VIOLATIONS 的欠帳寫法，欠帳明文記錄，但不准再多欠。
+# 每一項是「參與環的兩個套件」排序後的 tuple；三個以上的環會拆成多組相鄰對出現。
+# 五組全部由同一個成因造成：app.brand_intelligence（品牌永久層）反過來 import 了
+# 上層的三個套件。把這三條邊拆掉，五組環會一起消失——解法與代價見 docs/tech-debt.md 第二節。
+KNOWN_IMPORT_CYCLES = {
+    ("app.brand_intelligence", "app.intake"),   # brand_intelligence/routes.py:40
+    ("app.brand_intelligence", "app.llm"),      # report.py:17／customer_voice.py:21／product_ai.py:19
+    ("app.brand_intelligence", "app.shared"),   # brand_intelligence/routes.py:41-42
+    ("app.intake", "app.llm"),                  # 上面三條的連帶效應，非獨立成因
+    ("app.intake", "app.shared"),               # 同上
+}
+
+# 只有 app/<套件>/ 底下的檔案算「層」；app/*.py（main.py 組裝根、mock_data.py 共用選項清單）
+# 不是層，兩邊都不計入。app/tests 不計入（測試本來就要 import 各層）。
+_NON_LAYER_DIRS = {"tests", "templates", "static", "methodology", "__pycache__"}
+
+
+def _layer_of(dotted_or_rel: str) -> "str | None":
+    """'app/llm/methodology.py' 或 'app.llm.methodology' → 'app.llm'；不是層就回 None。"""
+    parts = dotted_or_rel.replace("/", ".").split(".")
+    if len(parts) < 2 or parts[0] != "app" or parts[1] in _NON_LAYER_DIRS:
+        return None
+    # 是不是層，看檔案系統上它是不是目錄——不能用名稱長度判斷：
+    # `app.llm`（層）與 `app.mock_data`（頂層模組）都只有兩段。
+    if not (APP_DIR / parts[1]).is_dir():
+        return None
+    return f"app.{parts[1]}"
+
+
+def _import_time_modules(node) -> list:
+    """這個節點底下、**import 期真的會執行**的 import 目標模組名。
+
+    只有 import 期執行的 import 會形成硬環——函式／方法內的延遲 import 正是解環的標準手法
+    （例：`app/core/settings.py:108` 就刻意這樣寫並留了註解），把它算成硬邊是誤判。
+    class 主體會在 import 期執行，所以要進去看；def／async def 不進去。
+    """
+    found = []
+    for child in ast.iter_child_nodes(node):
+        if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if isinstance(child, ast.Import):
+            found.extend(alias.name for alias in child.names)
+        elif isinstance(child, ast.ImportFrom) and child.module:
+            found.append(child.module)
+        else:
+            found.extend(_import_time_modules(child))  # if／try／with／class 主體照樣執行
+    return found
+
+
+def _layer_import_graph() -> dict:
+    graph: dict = {}
+    for path in _iter_py_files():
+        src = _layer_of(_rel(path))
+        if src is None:
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=_rel(path))
+        for name in _import_time_modules(tree):
+            dst = _layer_of(name)
+            if dst is not None and dst != src:
+                graph.setdefault(src, set()).add(dst)
+    return graph
+
+
+def _reaches(graph: dict, start: str, target: str) -> bool:
+    seen, stack = set(), [start]
+    while stack:
+        node = stack.pop()
+        if node == target:
+            return True
+        if node in seen:
+            continue
+        seen.add(node)
+        stack.extend(graph.get(node, ()))
+    return False
+
+
+def _cyclic_pairs(graph: dict) -> set:
+    """所有「a import b，而 b 又繞得回 a」的套件對（排序後去重）。"""
+    return {
+        tuple(sorted((src, dst)))
+        for src, dsts in graph.items()
+        for dst in dsts
+        if _reaches(graph, dst, src)
+    }
+
+
 def _iter_py_files():
     for path in APP_DIR.rglob("*.py"):
         if "__pycache__" in path.parts:
@@ -226,6 +316,34 @@ class DashboardReadOnlyTest(unittest.TestCase):
             violations, [],
             "以下 dashboard 模組檔案疑似含寫入 SQL，違反票 02「只讀」鐵則：\n"
             + "\n".join(violations),
+        )
+
+
+class ImportCycleScanTest(unittest.TestCase):
+    """A1 檢查③：套件之間不得形成新的 import 環（既有的先凍在 KNOWN_IMPORT_CYCLES）。
+
+    這道掃描補的是 2026-08-07 發現的盲點：`app.llm` 與 `app.brand_intelligence` 互相
+    import 已經存在很久，但上面兩道掃描都不看環，所以「測試全綠」在這件事上不代表任何東西。
+    """
+
+    def test_no_new_import_cycles_between_layers(self):
+        found = _cyclic_pairs(_layer_import_graph())
+        new = sorted(found - KNOWN_IMPORT_CYCLES)
+        self.assertEqual(
+            new, [],
+            "以下套件之間新形成了 import 環（a 依賴 b、b 又繞得回 a）。\n"
+            "不得自行改依賴方向解環——停下回報（~/.claude/code-rules.md 第三節）：\n"
+            + "\n".join(f"  {a} ⇄ {b}" for a, b in new),
+        )
+
+    def test_known_import_cycles_list_is_not_stale(self):
+        """欠帳清單本身要保持真實：解掉的環要從清單劃掉，否則清單會變成謊言。"""
+        found = _cyclic_pairs(_layer_import_graph())
+        stale = sorted(KNOWN_IMPORT_CYCLES - found)
+        self.assertEqual(
+            stale, [],
+            "以下環已經不存在，請從 KNOWN_IMPORT_CYCLES 劃掉（並更新 docs/tech-debt.md）：\n"
+            + "\n".join(f"  {a} ⇄ {b}" for a, b in stale),
         )
 
 

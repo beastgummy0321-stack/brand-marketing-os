@@ -20,18 +20,34 @@
 **已知違例**：2026-08-07 的票 C 在 `brand_intelligence/routes.py` 加了約 70 行沒有先拆。
 當時的取捨是「先讓開關有寫入路徑」優先於先拆檔，由主控判斷放行，記在此處不隱藏。
 
-## 二、`app/llm` 與 `app/brand_intelligence` 互相依賴
+## 二、四個套件糾成一個 import 環（五組相鄰對）
 
-兩個方向的 import 同時存在，形成套件層級的環：
+2026-08-07 補了機器掃描（`test_architecture_boundaries.py` 的 `ImportCycleScanTest`），
+現況凍在 `KNOWN_IMPORT_CYCLES`：**新增的環當場擋下，既有這五組是欠帳**。
+掃描只算 import 期會執行的 import；函式內的延遲 import（例：`app/core/settings.py:108`）
+是解環的標準手法，不算硬邊。
 
-- `app/llm/context_compiler.py`、`app/llm/methodology.py` → `app.brand_intelligence.repository`
-- `app/brand_intelligence/report.py`、`customer_voice.py`、`product_ai.py` → `app.llm`
+    app.brand_intelligence ⇄ app.intake
+    app.brand_intelligence ⇄ app.llm
+    app.brand_intelligence ⇄ app.shared
+    app.intake             ⇄ app.llm      （連帶效應，非獨立成因）
+    app.intake             ⇄ app.shared   （同上）
 
-`app/tests/test_architecture_boundaries.py` **不檢查 import 環**（它只檢查分支專屬層、
-ads→orders、跨層原生 SQL、dashboard 寫入四件事）。這個環不會被任何測試擋下來。
+**五組出自同一個成因**：`app/brand_intelligence`（品牌永久層）反過來 import 了上層三個套件。
 
-新增這兩個模組之間的依賴前，先確認是否能改走既有邊，不新增第三條。
-要解這個環，方向是把 `brand_intelligence` 那三個檔對 `app.llm` 的呼叫上移到路由層。
+| 要拆的邊 | 位置 | 解法 |
+|---|---|---|
+| → `app.shared` | `brand_intelligence/routes.py:41-42` | 路由屬 web 層，整份移出 `brand_intelligence/` |
+| → `app.intake` | `brand_intelligence/routes.py:40` | 同上，一起解決 |
+| → `app.llm` | `report.py:17`、`customer_voice.py:21`、`product_ai.py:19` | AI 呼叫上移到路由層，這三個檔留純資料函式 |
+
+拆掉這三條邊，五組環一起消失（已用圖驗算：`brand_intelligence` 只剩指向 `app.core`）。
+代價：動 `routes.py` 1854 行 ＋ 三個檔的 `PROVIDER` 模組層變數與其 monkeypatch 測試。
+屬跨模組重構，開工前先提計畫等批准（`~/.claude/workflow.md` 第三節例外清單）。
+
+**層級定義的權威文件已遺失**：`docs/architecture-rules.md`、`docs/rule-checks.md`、
+`docs/design/19-constitution-audit.md` 都不在 repo 裡，程式與測試裡的「A1 三層地界」
+引用全部指向不存在的檔案。要正式定依賴方向，先把層級定義重建成一份新文件。
 
 ## 三、只有台灣市場有內容
 
