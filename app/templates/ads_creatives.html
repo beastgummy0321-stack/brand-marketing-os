@@ -69,6 +69,12 @@
       {% if variant.fingerprint_text %}<span class="creative-fingerprint">{{ variant.fingerprint_text }}</span>{% endif %}
       {% if variant.auto_held %}{{ badge(variant.reject_reason_label, 'warn') }}
       {% elif variant.rejected %}{{ badge('你挑掉了：' ~ variant.reject_reason_label, 'neutral') }}{% endif %}
+      {# 圖片提示詞底下已經有 copy_block 自己的「複製全部」，不再疊第二顆 #}
+      {% if variant.variant_type != 'image_prompt' %}
+      {# writeText 是非同步的：✓ 只能在它真的成功後才顯示，否則沒複製到也會報成功 #}
+      <button type="button" class="creative-copy" aria-label="複製這則{{ variant.type_label }}"
+        onclick="const b=this;navigator.clipboard.writeText(document.getElementById('creative-text-{{ variant.id }}').textContent).then(()=>b.textContent='✓',()=>b.textContent='✗')">⧉</button>
+      {% endif %}
     </div>
 
     {% if variant.variant_type == 'image_prompt' %}
@@ -78,7 +84,7 @@
               title="這個功能還沒做，先用上面的「複製全部」把提示詞貼到生圖工具。">直接生圖（建置中）</button>
       <p class="creative-note">直接生圖還沒做。按上面的「複製全部」，把這段貼進生圖工具就能做出這張圖。</p>
     {% else %}
-      <p class="creative-content">{{ variant.content }}</p>
+      <p class="creative-content" id="creative-text-{{ variant.id }}">{{ variant.content }}</p>
     {% endif %}
 
     {% if variant.rationale %}<p class="creative-why">為什麼這樣寫：{{ variant.rationale }}</p>{% endif %}

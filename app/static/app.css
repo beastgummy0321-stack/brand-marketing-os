@@ -859,6 +859,19 @@ details.settings-reveal form { margin-top: var(--space-3); }
 .creative-type { font: 500 13px/1.5 var(--font-sans); color: var(--text-secondary); }
 .creative-fingerprint { font: var(--text-sm); color: var(--text-muted); }
 .creative-content { font: var(--text-base); line-height: 1.7; }
+/* 純圖示複製鈕：靠右、不搶戲；無障礙名稱走 aria-label，不靠這顆字符 */
+.creative-copy {
+  margin-left: auto;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  font-size: 14px;
+  line-height: 1;
+  padding: var(--space-1) var(--space-2);
+  cursor: pointer;
+}
+.creative-copy:hover { background: var(--bg-subtle); color: var(--text); }
 .creative-note, .creative-why { font: var(--text-sm); color: var(--text-muted); margin-top: var(--space-2); }
 .creative-reject { margin-top: var(--space-3); }
 .creative-reject .btn { margin-top: var(--space-2); }
