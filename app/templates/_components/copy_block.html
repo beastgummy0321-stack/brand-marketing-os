@@ -1,8 +1,9 @@
 {% macro copy_block(text, textarea_id='copy-block-text') %}
 <div class="copy-block">
   <textarea id="{{ textarea_id }}" class="copy-block-textarea" readonly rows="14" onclick="this.select()">{{ text }}</textarea>
+  {# writeText 是非同步的：「已複製」只能掛在 resolve 上，否則沒複製到也會報成功 #}
   <button type="button" class="btn btn-secondary copy-block-btn"
-    onclick="navigator.clipboard.writeText(document.getElementById('{{ textarea_id }}').value); this.textContent='已複製';">複製全部</button>
+    onclick="const b=this;navigator.clipboard.writeText(document.getElementById('{{ textarea_id }}').value).then(()=>b.textContent='已複製',()=>b.textContent='沒複製到')">複製全部</button>
   <p class="field-hint">複製不動時，點一下框內就會全選，再按 Ctrl+C。</p>
 </div>
 {% endmacro %}

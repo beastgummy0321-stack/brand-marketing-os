@@ -453,5 +453,47 @@ class FileLineCapTest(unittest.TestCase):
         )
 
 
+class ClipboardHonestyScanTest(unittest.TestCase):
+    """複製鈕不准謊報成功：writeText 的結果必須等到了才回報。
+
+    `navigator.clipboard.writeText()` 回的是 Promise。同步寫
+    `writeText(...); this.textContent='已複製'` 的話，瀏覽器拒絕時（分頁沒有焦點、
+    沒有權限、非安全來源）按鈕照樣顯示成功——實測確認過剪貼簿真的沒收到東西。
+    後果是使用者把上一次的舊內容貼進投放後台，這是靜默的資料錯誤，不是樣式問題。
+
+    ponytail: 逐行字面掃描，不是 JS parser；把 writeText 跟 .then 拆成兩行寫可以繞過去。
+    真的需要更嚴謹時再升級成 AST 解析。
+    """
+
+    TEMPLATE_DIR = APP_DIR / "templates"
+
+    def _writetext_lines(self) -> list:
+        found = []
+        for path in sorted(self.TEMPLATE_DIR.rglob("*.html")):
+            for lineno, line in enumerate(
+                    path.read_text(encoding="utf-8").splitlines(), start=1):
+                if "clipboard.writeText" in line and "onclick" in line:
+                    found.append((_rel(path), lineno, line.strip()))
+        return found
+
+    def test_scan_actually_finds_the_copy_buttons(self):
+        """掃描腳本自身的體檢：抓不到東西時上面那條會空過，得先確認它真的掃得到。"""
+        self.assertGreaterEqual(
+            len(self._writetext_lines()), 3,
+            "掃不到已知的複製鈕（素材頁、交接包、copy_block）——先修掃描腳本，不要當作沒有違規",
+        )
+
+    def test_every_copy_button_reports_only_after_writetext_resolves(self):
+        problems = [
+            f"  {rel}:{lineno} 同步回報成功，沒等 writeText：{line}"
+            for rel, lineno, line in self._writetext_lines()
+            if ".then(" not in line
+        ]
+        self.assertEqual(
+            problems, [],
+            "複製鈕謊報成功（成功訊息要掛在 .then() 的 resolve 分支上）：\n" + "\n".join(problems),
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

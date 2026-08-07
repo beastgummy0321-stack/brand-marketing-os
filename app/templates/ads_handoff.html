@@ -18,8 +18,9 @@
   </div>
   <div class="paste-value">
     <input type="text" id="{{ row_id }}" value="{{ value }}" readonly onclick="this.select()">
+    {# writeText 是非同步的：「已複製」只能掛在 resolve 上，否則沒複製到也會報成功 #}
     <button type="button" class="btn btn-secondary"
-      onclick="navigator.clipboard.writeText(document.getElementById('{{ row_id }}').value); this.textContent='已複製';">複製</button>
+      onclick="const b=this;navigator.clipboard.writeText(document.getElementById('{{ row_id }}').value).then(()=>b.textContent='已複製',()=>b.textContent='沒複製到')">複製</button>
   </div>
 </div>
 {% endmacro %}
