@@ -58,10 +58,15 @@ def _parse_table_raw(readme_text: str) -> dict:
 
 
 class MethodologyResult(NamedTuple):
-    """compile() 的回傳值：text 進 prompt，missing_files 供呼叫端誠實標注在頁面上。"""
+    """compile() 的回傳值：text 進 prompt，missing_files 供呼叫端誠實標注在頁面上，
+    loaded_files 是這次真的組進 prompt 的檔名（供呼叫端寫進 llm_task 稽核）。
+
+    loaded_files 不能事後從 git 回推：拆檔＋條件載入之後，同一天同一份對照表，
+    不同品牌的開關會載入不同的檔（ADR 0009）。不記下來這段歷史就補不回來。"""
 
     text: str
     missing_files: list
+    loaded_files: list
 
 
 def load_table_raw(readme_path: Path = README_PATH) -> dict:
@@ -116,7 +121,7 @@ def compile(
             if filename not in filenames:
                 filenames.append(filename)
 
-    sections, missing = [], []
+    sections, missing, loaded = [], [], []
     for filename in filenames:
         path = methodology_dir / filename
         if not path.exists():
@@ -130,5 +135,7 @@ def compile(
             continue
         content = path.read_text(encoding="utf-8").strip()
         sections.append(f"【方法論：{filename}】\n{content}")
+        loaded.append(filename)
 
-    return MethodologyResult(text="\n\n".join(sections), missing_files=missing)
+    return MethodologyResult(text="\n\n".join(sections), missing_files=missing,
+                             loaded_files=loaded)

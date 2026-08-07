@@ -199,6 +199,22 @@ class MethodologyConditionalFileTest(unittest.TestCase):
                                      methodology_dir=self.meth_dir, readme_path=readme)
         self.assertIn("a.md 內容", result.text)
 
+    def test_loaded_files_records_exactly_what_went_into_the_prompt(self):
+        """ADR 0009：同一份對照表，不同品牌的開關會載入不同的檔，事後回推不出來。
+        loaded_files 必須只含真的組進 prompt 的檔——條件擋掉的、缺檔的都不算。"""
+        readme = self._write_readme(
+            "| 測試任務 | `a.md`、`b.md`（需要：有商品）、`c.md`（需要：健康類法規）、`missing.md` |\n")
+        self._write_files("a.md", "b.md", "c.md")  # 故意不寫 missing.md
+        bid = repo.create_brand(self.conn, name="虛構品牌只有商品", client_name=None,
+                                actor="測試員")["id"]
+        repo.create_product(self.conn, bid, name="虛構產品", actor="測試員")  # 有商品、無法規
+
+        result = methodology.compile(self.conn, ["測試任務"], brand_id=bid, actor="測試員",
+                                     methodology_dir=self.meth_dir, readme_path=readme)
+        # a 無條件、b 開關成立 → 載入；c 開關不成立 → 不載入；missing 檔案不在 → 不載入
+        self.assertEqual(result.loaded_files, ["a.md", "b.md"])
+        self.assertEqual(result.missing_files, ["missing.md"])
+
     def test_unconditional_file_always_loads_regardless_of_switch(self):
         readme = self._write_readme("| 測試任務 | `a.md`、`b.md`（需要：健康類法規） |\n")
         self._write_files("a.md", "b.md")

@@ -343,6 +343,13 @@ class PlanGenerationTest(_BasePlanTest):
         # 這是承重字串：釘在 ads-core.md 第 1 節標題，改那個標題就要同步改這裡。
         self.assertIn("Meta 現行打法", sent)
 
+        # ADR 0009：載入了哪幾個方法論檔要落進 llm_task 稽核，事後才回推得出來
+        scope = json.loads(main.conn.execute(
+            "SELECT context_scope_json FROM llm_task ORDER BY started_at DESC, id DESC LIMIT 1"
+        ).fetchone()["context_scope_json"])
+        self.assertIn("ads-core.md", scope["methodology_files"])
+        self.assertIn("ab-testing.md", scope["methodology_files"])
+
     def test_include_methodology_false_skips_methodology_for_blind_test(self):
         """票 11 效果盲測：include_methodology=False 時同一條生產管線要略過方法論區塊，
         其餘上下文（受眾可用性、帳戶結構底案）不變——用來產生「接線前」對照組。"""

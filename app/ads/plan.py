@@ -463,7 +463,8 @@ def generate_options(conn, brand_id: str, cycle_id: str, actor: str, *,
     context_text, knowledge_item_ids, brand_version, _ = context_compiler.compile(conn, brand_id)
     methodology_result = (
         methodology.compile(conn, METHODOLOGY_TASK_LABELS, brand_id=brand_id, actor=actor)
-        if include_methodology else methodology.MethodologyResult(text="", missing_files=[])
+        if include_methodology
+        else methodology.MethodologyResult(text="", missing_files=[], loaded_files=[])
     )
     availability = audience_availability(conn, brand_id)
     angle_count = max(angle_count, len(allocations))
@@ -481,7 +482,9 @@ def generate_options(conn, brand_id: str, cycle_id: str, actor: str, *,
         prompt_template_id="campaign_plan_options", prompt_template_version="v1",
         system=_SYSTEM, messages=[{"role": "user", "content": user_text}],
         context=gateway.TaskContext(
-            context_scope={"brand_id": brand_id, "campaign_cycle_id": cycle_id},
+            context_scope={"brand_id": brand_id, "campaign_cycle_id": cycle_id,
+                           # 這次真的組進 prompt 的方法論檔，事後回推不出來（ADR 0009）
+                           "methodology_files": methodology_result.loaded_files},
             knowledge_item_ids=knowledge_item_ids, brand_version=brand_version,
         ),
         options=gateway.TaskOptions(max_tokens=PLAN_MAX_TOKENS),
