@@ -36,3 +36,15 @@
 - **新增檔要同步改上面兩張表**，不能只加檔案不更新索引。
 - **只按消費拉動萃取**：沒有分支在用的方法論不要預先萃取，死文件只會增加維護負擔。
 - **每檔 150 行上限**（`test_methodology.py` 把關）。超過就砍，不要放寬。
+- **數字要有出處**：不在 `reference/` 樹裡的外部數字一律登記在下表。查不到出處的數字不得留在方法論檔裡。
+
+## 外部來源登記（不在 `reference/` 樹裡的數字）
+
+本檔不會被組進 prompt（`methodology.py` 只解析上面的對照表），所以網址寫在這裡不必付 token。
+
+| 方法論位置 | 數字 | 出處 |
+|---|---|---|
+| `ads.md` §1 產能基準 | 保健類微型級距每週 3 則、頂級距 46 則 | Motion Creative Benchmarks 2026（2025-09-01–2026-01-01，578,750 則素材／6,015 帳戶／$1.29B）<https://motionapp.com/library/research/creative-benchmarks-2026/testing-by-vertical> |
+| `ads.md` §3 帳戶 2–3 個活動 | 月花費 $1K–10K 建議 2–3 個活動 | <https://benly.ai/learn/meta-ads/ad-account-structure>（分級表，非 Meta 官方） |
+| `ads.md` §4 ASC 低約 5% | 未設既有顧客預算上限時，每次購買成本降幅 | Meta 官方 <https://www.facebook.com/business/ads/meta-advantage/advantage-plus-shopping-ads>（2023 年的 17% 為舊版說法，勿再引用） |
+| `ads.md` §5 概念壽命 2–3 週、10 天曲線 | 業界回報值，Meta 未公布官方數字 | <https://adlibrary.com/posts/ad-fatigue> |
