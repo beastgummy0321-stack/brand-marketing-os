@@ -2,7 +2,7 @@
 """app/tests/test_rule_cards.py — 規則卡通用機制（issue #12）。
 
 驗：門檻值有預設種子、改值落庫後判定純函數立即用新值、重設回預設值、
-示範卡（素材疲勞頻率門檻）數值與 app/methodology/ads.md 一致。
+示範卡（素材疲勞頻率門檻）數值與 app/methodology/ads-core.md 一致。
 """
 
 import tempfile
@@ -28,7 +28,7 @@ class RuleCardValueTest(unittest.TestCase):
     # -- 種子與預設值 -------------------------------------------------------
 
     def test_seed_values_match_methodology_ads_md(self):
-        """app/methodology/ads.md 第 5 節「疲勞頻率門檻」表：
+        """app/methodology/ads-core.md 第 5 節「疲勞頻率門檻」表：
         冷受眾開發 警示2.5/危險4.0；再行銷 警示4.0/危險6.0；小眾／精準受眾 警示5.0/危險8.0。"""
         self.assertEqual(rule_cards.get_value(self.conn, "ad_creative_fatigue", "cold_warning"), 2.5)
         self.assertEqual(rule_cards.get_value(self.conn, "ad_creative_fatigue", "cold_danger"), 4.0)
@@ -72,7 +72,7 @@ class RuleCardValueTest(unittest.TestCase):
         self.assertEqual(rule_cards.get_value(self.conn, "sample_size", "baseline_20pct"), 4000.0)
 
     def test_budget_structure_seed_values_match_methodology_ads_md(self):
-        """app/methodology/ads.md 第 3 節：每組日預算下限約 NT$300、測試期 70/30、放大期 80/20。"""
+        """app/methodology/ads-core.md 第 3 節：每組日預算下限約 NT$300、測試期 70/30、放大期 80/20。"""
         self.assertEqual(
             rule_cards.get_value(self.conn, "budget_structure", "min_daily_per_group"), 300.0)
         self.assertEqual(
@@ -145,7 +145,7 @@ class RuleCardValueTest(unittest.TestCase):
 
 
 class ClassifyAdFrequencyTest(unittest.TestCase):
-    """三種受眾類型的安全／警示／危險邊界，對照 app/methodology/ads.md 第 5 節的表。"""
+    """三種受眾類型的安全／警示／危險邊界，對照 app/methodology/ads-core.md 第 5 節的表。"""
 
     def setUp(self):
         self._tmpdir = tempfile.TemporaryDirectory()

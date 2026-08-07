@@ -53,7 +53,7 @@ class RuleCardsPageTest(unittest.TestCase):
         self.assertIn("同一個人平均看過這支素材幾次", text)  # 「這個門檻管什麼」說明
         for label in ("冷受眾開發", "再行銷", "小眾／精準受眾"):
             self.assertIn(label, text)
-        # 種子值原樣顯示（DELETE 過 rule_card_value，落回程式預設值也要跟 ads.md 一致）
+        # 種子值原樣顯示（DELETE 過 rule_card_value，落回程式預設值也要跟 ads-core.md 一致）
         self.assertIn('value="2.5"', text)
         self.assertIn('value="4"', text)  # 4.0 顯示成 4（_num_str 慣例不強制，input number 原生即可）
         self.assertIn('value="6"', text)

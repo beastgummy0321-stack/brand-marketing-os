@@ -336,11 +336,11 @@ class PlanGenerationTest(_BasePlanTest):
         _wait_progress(self.client,
                        f"/brands/{self.bid}/ads/{self.cycle_id}/plan/progress?run=1")
         sent = provider.calls[0]["messages"][0]["content"]
-        self.assertIn("【方法論：ads.md】", sent)
+        self.assertIn("【方法論：ads-core.md】", sent)
         self.assertIn("【方法論：ab-testing.md】", sent)
         self.assertIn("【方法論：customer-voice.md】", sent)
-        # ads.md 內文一角，確認不是只帶檔名沒帶內容。
-        # 這是承重字串：釘在 ads.md 第 1 節標題，改那個標題就要同步改這裡。
+        # ads-core.md 內文一角，確認不是只帶檔名沒帶內容。
+        # 這是承重字串：釘在 ads-core.md 第 1 節標題，改那個標題就要同步改這裡。
         self.assertIn("Meta 現行打法", sent)
 
     def test_include_methodology_false_skips_methodology_for_blind_test(self):
@@ -388,8 +388,10 @@ class PlanGenerationTest(_BasePlanTest):
     def test_missing_methodology_file_does_not_block_and_is_shown_honestly(self):
         """票 11：方法論檔缺失時，流程照走、頁面誠實標注、audit 有紀錄。"""
         tmp_dir = Path(tempfile.mkdtemp(prefix="brand_os_methodology_"))
-        for name in ("ab-testing.md", "customer-voice.md"):  # 故意不複製 ads.md，模擬缺檔
-            shutil.copy(methodology.METHODOLOGY_DIR / name, tmp_dir / name)
+        # 故意不複製 ads-core.md，模擬缺檔；其餘全複製，這樣拆檔／加檔都不必回來改這裡
+        for src in methodology.METHODOLOGY_DIR.glob("*.md"):
+            if src.name != "ads-core.md":
+                shutil.copy(src, tmp_dir / src.name)
 
         orig_dir = methodology.METHODOLOGY_DIR
         methodology.METHODOLOGY_DIR = tmp_dir
@@ -403,25 +405,25 @@ class PlanGenerationTest(_BasePlanTest):
         self.assertEqual(resp.status_code, 303)
         options = ads_plan.get_pending_options(main.conn, self.bid, self.cycle_id)
         self.assertTrue(options)
-        self.assertEqual(options[0]["methodology_missing"], ["ads.md"])
+        self.assertEqual(options[0]["methodology_missing"], ["ads-core.md"])
 
         # 方案選擇頁誠實標注
         select_page = self.client.get(f"/brands/{self.bid}/ads/{self.cycle_id}/plan/select")
-        self.assertIn("ads.md", select_page.text)
+        self.assertIn("ads-core.md", select_page.text)
         self.assertIn("方法論參考資料缺席", select_page.text)
 
         self._select()
         stored = ads_plan.get_latest_plan(main.conn, self.bid, self.cycle_id)
-        self.assertEqual(stored["plan"]["methodology_missing"], ["ads.md"])
+        self.assertEqual(stored["plan"]["methodology_missing"], ["ads-core.md"])
 
         # 選定後的檔期頁也誠實標注
         page = self.client.get(f"/brands/{self.bid}/ads/{self.cycle_id}")
-        self.assertIn("ads.md", page.text)
+        self.assertIn("ads-core.md", page.text)
         self.assertIn("方法論參考資料缺席", page.text)
 
         # audit 有紀錄
         rows = [dict(r) for r in main.conn.execute(
-            "SELECT * FROM audit_log WHERE entity_type = 'methodology_file' AND entity_id = 'ads.md'"
+            "SELECT * FROM audit_log WHERE entity_type = 'methodology_file' AND entity_id = 'ads-core.md'"
         )]
         self.assertTrue(any(r["brand_id"] == self.bid for r in rows))
         self.assertEqual(rows[-1]["action"], "missing")

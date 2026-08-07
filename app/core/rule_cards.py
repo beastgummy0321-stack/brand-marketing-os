@@ -32,7 +32,7 @@ CARDS = {
             "小預算硬拆成兩組會讓每組都低於 Meta 的實務下限、兩組都跑不出數據，所以不硬拆；"
             "中預算用一個 CBO 活動分驗證與測試兩組；大預算開兩個獨立 CBO（放大＋測試），"
             "避免已驗證的贏家把新測試的預算全部吃光。方案生成與方案選擇頁都直接讀這裡的數字出底案。"
-            "數值來源：app/methodology/ads.md 第 3 節。"
+            "數值來源：app/methodology/ads-core.md 第 3 節。"
         ),
         "fields": {
             "min_daily_per_group": {
@@ -102,7 +102,7 @@ CARDS = {
             "「頻率」是同一個人平均看過這支素材幾次。看太多次會膩，成效跟著掉——"
             "這張卡決定頻率到多少算警示、到多少算危險。不同受眾類型能承受的頻率不一樣，"
             "門檻分開設。判讀與期中檢查都會直接讀這裡的數字，不會自己另外算。"
-            "數值來源：app/methodology/ads.md 第 5 節。"
+            "數值來源：app/methodology/ads-core.md 第 5 節。"
         ),
         "fields": {
             "cold_warning": {
@@ -244,7 +244,7 @@ def reset_card(conn: sqlite3.Connection, card_key: str, actor: str) -> None:
 def classify_ad_frequency(conn: sqlite3.Connection, audience_type: str, frequency: float) -> str:
     """素材疲勞判定：純程式讀規則卡門檻比大小，回傳 'safe' / 'warning' / 'danger'。
 
-    邊界對齊 app/methodology/ads.md 的寫法（例如冷受眾「警示 2.5–4.0」）：
+    邊界對齊 app/methodology/ads-core.md 的寫法（例如冷受眾「警示 2.5–4.0」）：
     frequency 落在 [warning, danger] 算警示，超過 danger 才算危險。
     """
     if audience_type not in AUDIENCE_TYPE_LABELS:
