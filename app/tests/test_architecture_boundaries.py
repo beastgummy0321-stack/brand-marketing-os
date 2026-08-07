@@ -347,5 +347,111 @@ class ImportCycleScanTest(unittest.TestCase):
         )
 
 
+# ---- A1 檢查④：依賴方向（誰可以 import 誰）----
+# 層級定義原本在 docs/architecture-rules.md，該檔已被 5eca0db「乾淨重啟」清除。
+# 重建成這張表而不是重寫一份文件：文件會腐爛、沒人讀，這張表每次跑測試都會執行。
+# 規則：只准依賴排在自己前面的層。順序由現況推導——這是唯一一種讓違規數收斂到
+# 「只剩 brand_intelligence 那三條」的排法，其餘七個套件零違規。
+LAYER_ORDER = [
+    "app.core",                # 基礎設施：DB、migration、audit、interrupts
+    "app.brand_intelligence",  # 品牌永久層
+    "app.llm",                 # AI gateway 與 prompt 組裝
+    "app.shared",              # web 骨架（app、templates、共用 ctx）
+    "app.intake",              # 建檔精靈
+    "app.ads",                 # 廣告分支
+    "app.orders",              # 訂單
+    "app.dashboard",           # 駕駛艙（只讀，跨分支彙總）
+    "app.tools",               # 一次性工具
+]
+
+# 既有的反向依賴（欠帳，不准再多欠）。三條全部出自品牌永久層反過來依賴上層，
+# 也正是 KNOWN_IMPORT_CYCLES 五組環的根源——解掉這三條，兩張清單一起清空。
+KNOWN_LAYER_VIOLATIONS = {
+    ("app.brand_intelligence", "app.intake"),   # routes.py:40
+    ("app.brand_intelligence", "app.llm"),      # report.py／customer_voice.py／product_ai.py
+    ("app.brand_intelligence", "app.shared"),   # routes.py:41-42
+}
+
+
+class LayerDirectionTest(unittest.TestCase):
+    """A1 檢查④：只准依賴排在 LAYER_ORDER 前面的層。
+
+    與 ImportCycleScanTest 的分工：環是客觀事實（不管誰怎麼排都是環），這張表是
+    我們選的方向。兩者都留——有人日後改了 LAYER_ORDER 的排法，環那道仍然守得住底線。
+    """
+
+    def _violations(self) -> set:
+        rank = {layer: i for i, layer in enumerate(LAYER_ORDER)}
+        graph = _layer_import_graph()
+        unknown = (set(graph) | {d for ds in graph.values() for d in ds}) - set(rank)
+        self.assertEqual(unknown, set(), f"這些套件不在 LAYER_ORDER 裡，請先決定它的位置：{unknown}")
+        return {(src, dst) for src, dsts in graph.items() for dst in dsts
+                if rank[dst] > rank[src]}
+
+    def test_no_new_upward_dependency(self):
+        new = sorted(self._violations() - KNOWN_LAYER_VIOLATIONS)
+        self.assertEqual(
+            new, [],
+            "以下依賴方向反了（只准依賴 LAYER_ORDER 排在自己前面的層）。\n"
+            "不得自行改依賴方向或調整 LAYER_ORDER 來讓測試變綠——停下回報：\n"
+            + "\n".join(f"  {a} → {b}" for a, b in new),
+        )
+
+    def test_known_layer_violations_list_is_not_stale(self):
+        stale = sorted(KNOWN_LAYER_VIOLATIONS - self._violations())
+        self.assertEqual(
+            stale, [],
+            "以下反向依賴已經解掉，請從 KNOWN_LAYER_VIOLATIONS 劃掉並更新 docs/tech-debt.md：\n"
+            + "\n".join(f"  {a} → {b}" for a, b in stale),
+        )
+
+
+# ---- A1 檢查⑤：單檔行數只准變小 ----
+# CLAUDE.md：單檔超過 800 行即為待拆，不得再往裡面加新功能。原本只是一句話沒有閘門，
+# 2026-08-07 票 C 就在 routes.py 加了 48 行淨成長。凍住現況：超標檔只准變小。
+# ponytail: 只鎖「不得超過歷史最大值」，縮小後不強制回來調低數字（每次縮都要改常數是白工）。
+# 真的需要單向棘輪時再升級。
+FILE_LINE_CAP = 800
+KNOWN_OVERSIZED_FILES = {
+    "app/brand_intelligence/routes.py": 1854,
+    "app/brand_intelligence/repository.py": 1591,
+    "app/tests/test_ads_reading.py": 1157,
+    "app/ads/reading.py": 1039,
+    "app/intake/routes.py": 951,
+    "app/tests/test_ads_creative.py": 870,
+    "app/ads/repository.py": 816,
+}
+
+
+class FileLineCapTest(unittest.TestCase):
+    """A1 檢查⑤：沒有新的超標檔，既有超標檔不得再變大。"""
+
+    def _line_counts(self) -> dict:
+        return {_rel(p): len(p.read_text(encoding="utf-8").splitlines())
+                for p in _iter_py_files()}
+
+    def test_no_file_grows_past_its_frozen_size(self):
+        problems = []
+        for rel, count in sorted(self._line_counts().items()):
+            if count <= FILE_LINE_CAP:
+                continue
+            frozen = KNOWN_OVERSIZED_FILES.get(rel)
+            if frozen is None:
+                problems.append(f"  {rel}：{count} 行，新超過 {FILE_LINE_CAP} 行上限——先拆再加")
+            elif count > frozen:
+                problems.append(f"  {rel}：{count} 行，比凍結值 {frozen} 大——只准變小")
+        self.assertEqual(problems, [], "單檔行數違規：\n" + "\n".join(problems))
+
+    def test_known_oversized_list_is_not_stale(self):
+        counts = self._line_counts()
+        stale = sorted(rel for rel in KNOWN_OVERSIZED_FILES
+                       if counts.get(rel, 0) <= FILE_LINE_CAP)
+        self.assertEqual(
+            stale, [],
+            "以下檔案已經拆到上限以下，請從 KNOWN_OVERSIZED_FILES 劃掉並更新 docs/tech-debt.md：\n"
+            + "\n".join(f"  {rel}" for rel in stale),
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

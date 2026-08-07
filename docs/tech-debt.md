@@ -2,6 +2,15 @@
 
 最後盤點：2026-08-07。新增條目時附上盤點日期與當下數字。
 
+**這三筆債全部已上機器閘門**（`app/tests/test_architecture_boundaries.py`）：現況凍成清單，
+新增的當場擋下。本文件是給人讀的說明，**判準本身活在那支測試裡**——文件與清單不一致時以測試為準。
+
+| 閘門 | 凍住什麼 | 常數 |
+|---|---|---|
+| `FileLineCapTest` | 超標檔只准變小，不准有新的超標檔 | `KNOWN_OVERSIZED_FILES` |
+| `LayerDirectionTest` | 只准依賴排在自己前面的層 | `LAYER_ORDER`／`KNOWN_LAYER_VIOLATIONS` |
+| `ImportCycleScanTest` | 不得新增 import 環 | `KNOWN_IMPORT_CYCLES` |
+
 ## 一、超過 800 行的檔案：加新功能前先拆
 
 `CLAUDE.md` 規則：單檔超過 800 行即為待拆，**不得再往裡面加新功能；要加就先拆**。
@@ -46,8 +55,12 @@
 屬跨模組重構，開工前先提計畫等批准（`~/.claude/workflow.md` 第三節例外清單）。
 
 **層級定義的權威文件已遺失**：`docs/architecture-rules.md`、`docs/rule-checks.md`、
-`docs/design/19-constitution-audit.md` 都不在 repo 裡，程式與測試裡的「A1 三層地界」
-引用全部指向不存在的檔案。要正式定依賴方向，先把層級定義重建成一份新文件。
+`docs/design/19-constitution-audit.md` 都在 `5eca0db`「乾淨重啟」被清除，程式與測試裡的
+「A1 三層地界」引用全部指向不存在的檔案。
+
+2026-08-07 重建成 `test_architecture_boundaries.py` 的 `LAYER_ORDER` 常數，**不重寫成文件**——
+文件會腐爛且沒人讀，常數每次跑測試都會執行。順序由現況推導：這是唯一一種讓違規收斂到
+「只剩上表那三條」的排法，其餘七個套件零違規。改 `LAYER_ORDER` 的排法讓測試變綠一律禁止。
 
 ## 三、只有台灣市場有內容
 
