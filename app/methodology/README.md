@@ -1,6 +1,6 @@
 ---
 來源: 各檔 frontmatter
-複查到期日: 2027-02-01
+最後查證日: 2026-08-07
 ---
 
 # 方法論檔索引
@@ -31,7 +31,8 @@
 
 ## 維護規則
 
-- **每檔要有複查到期日**（frontmatter），到期進收件匣提醒。
+- **每檔要有最後查證日**（frontmatter），記錄上次核對來源的日期。不設到期提醒、不進前端收件匣——使用者在介面上做不完重萃取這件事。
+- **會過期的數字一律改寫成相對自身基準**（「較這支素材自己的高峰跌 30%」而非「概念壽命 2–3 週」）。相對值拿自家數據當分母，永不過期。不能相對化的只有平台硬規格與政策，那些由平台當場回饋（截斷、拒登），不需要日曆提醒。
 - **上游更新＝人工重萃取**，來源在 `reference/marketingskills/`，不做自動同步。
 - **新增檔要同步改上面兩張表**，不能只加檔案不更新索引。
 - **只按消費拉動萃取**：沒有分支在用的方法論不要預先萃取，死文件只會增加維護負擔。
@@ -44,7 +45,6 @@
 
 | 方法論位置 | 數字 | 出處 |
 |---|---|---|
-| `ads.md` §1 產能基準 | 保健類微型級距每週 3 則、頂級距 46 則 | Motion Creative Benchmarks 2026（2025-09-01–2026-01-01，578,750 則素材／6,015 帳戶／$1.29B）<https://motionapp.com/library/research/creative-benchmarks-2026/testing-by-vertical> |
 | `ads.md` §3 帳戶 2–3 個活動 | 月花費 $1K–10K 建議 2–3 個活動 | <https://benly.ai/learn/meta-ads/ad-account-structure>（分級表，非 Meta 官方） |
-| `ads.md` §4 ASC 低約 5% | 未設既有顧客預算上限時，每次購買成本降幅 | Meta 官方 <https://www.facebook.com/business/ads/meta-advantage/advantage-plus-shopping-ads>（2023 年的 17% 為舊版說法，勿再引用） |
-| `ads.md` §5 概念壽命 2–3 週、10 天曲線 | 業界回報值，Meta 未公布官方數字 | <https://adlibrary.com/posts/ad-fatigue> |
+
+**2026-08-07 移除的外部數字**（改用相對自身基準或直接刪，不再需要維護）：產能基準每週 3 則（Motion Creative Benchmarks 2026）、ASC 每次購買成本低 5%（Meta 官方頁；2023 年的 17% 為舊說法）、概念壽命 2–3 週與 10 天衰退曲線（`adlibrary.com/posts/ad-fatigue`，業界回報值）。要查原始數字回這個 commit 的訊息。

@@ -1,6 +1,6 @@
 ---
 來源: marketingskills/copywriting 2.0.1、copy-frameworks、natural-transitions、marketing-psychology 2.0.0（精選 15 個模型）
-複查到期日: 2027-02-01
+最後查證日: 2026-08-04
 ---
 
 # 文案方法論

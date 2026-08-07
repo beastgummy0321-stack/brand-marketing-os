@@ -1,6 +1,6 @@
 ---
 來源: marketingskills/ad-creative 2.2.0（SKILL、static-ad-templates、platform-specs）
-複查到期日: 2027-02-01
+最後查證日: 2026-08-04
 ---
 
 # 廣告方法論：素材生成

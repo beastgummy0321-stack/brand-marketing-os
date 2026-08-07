@@ -1,6 +1,6 @@
 ---
 來源: meta-ad-producer-tw.skill（SKILL、creative-types、photoreal-real-shot-dna、raw-creative-intake、production-examples-chicken-essence）＋「9大創意類別 30創意角度」在地化
-複查到期日: 2027-02-01
+最後查證日: 2026-08-07
 ---
 
 # 創意矩陣

@@ -1,6 +1,6 @@
 ---
 來源: marketingskills/customer-research 2.0.0（SKILL、source-guides）＋台灣在地化管道
-複查到期日: 2027-02-01
+最後查證日: 2026-08-04
 ---
 
 # 顧客原話抽取方法論

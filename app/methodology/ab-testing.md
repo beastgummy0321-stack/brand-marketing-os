@@ -1,6 +1,6 @@
 ---
 來源: marketingskills/ab-testing 2.0.0（SKILL、sample-size-guide）
-複查到期日: 2027-02-01
+最後查證日: 2026-08-07
 ---
 
 # 廣告方法論：A/B 測試與統計紀律

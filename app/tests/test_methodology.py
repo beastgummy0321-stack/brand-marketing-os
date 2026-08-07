@@ -8,6 +8,7 @@
 import re
 import tempfile
 import unittest
+from datetime import date
 from pathlib import Path
 
 from app.core import db
@@ -134,23 +135,28 @@ class MethodologyCompileTest(unittest.TestCase):
         self.assertIn("B 檔內容", result_v2.text)  # 對照表多列一個檔，內容就跟著多出來
 
 
-class MethodologyReviewDueDateTest(unittest.TestCase):
-    """每份方法論檔的 frontmatter 都要有複查到期日，否則「Meta 新演算法讓舊打法效果轉弱」
-    這類會過期的內容永遠不會被觸發重新核對。"""
+class MethodologyLastVerifiedDateTest(unittest.TestCase):
+    """每份方法論檔的 frontmatter 都要記錄最後查證日：改完內容忘了更新日期，
+    下次沒人知道這份檔上次跟來源核對是什麼時候。
+
+    只驗「有、且是合法的過去日期」，不設到期紅燈——方法論重萃取要開發環境才做得到，
+    到期提醒放這裡會在無關的 commit 上突然變紅（維護規則第 1 條）。"""
 
     EXPECTED_FILES = [
         "ads.md", "ad-creative.md", "ab-testing.md", "copywriting.md",
         "creative-matrix.md", "customer-voice.md", "README.md",
     ]
 
-    def test_every_methodology_file_has_a_review_due_date(self):
+    def test_every_methodology_file_has_a_last_verified_date(self):
+        today = date.today()
         for name in self.EXPECTED_FILES:
             path = METHODOLOGY_DIR / name
             self.assertTrue(path.is_file(), f"{path} 不存在")
             frontmatter = path.read_text(encoding="utf-8").split("---")[1]
-            match = re.search(r"複查到期日:\s*(\d{4}-\d{2}-\d{2})", frontmatter)
-            self.assertIsNotNone(match, f"{name} frontmatter 缺複查到期日")
-            self.assertEqual(match.group(1), "2027-02-01", f"{name} 複查到期日不是預期值")
+            match = re.search(r"最後查證日:\s*(\d{4}-\d{2}-\d{2})", frontmatter)
+            self.assertIsNotNone(match, f"{name} frontmatter 缺最後查證日")
+            verified = date.fromisoformat(match.group(1))
+            self.assertLessEqual(verified, today, f"{name} 最後查證日是未來日期：{verified}")
 
 
 class MethodologyLineCapTest(unittest.TestCase):
