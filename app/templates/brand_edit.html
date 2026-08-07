@@ -38,6 +38,36 @@
     {% if errors.status %}<div class="field-error">{{ errors.status }}</div>{% endif %}
   </div>
 
+  <hr class="rule">
+  <p class="page-lede">下面三項決定 AI 產文案時套用哪一套方法論（例如判斷要不要寫「加入購物車」這類站內交易文案）。「你是哪一種」只是幫你快速帶出下面兩欄的建議值，本身不會存檔；市場地區與廣告目標才是實際存檔、影響方法論的欄位。</p>
+
+  {% call field('persona', '你是哪一種？', required=False, hint='選一個最接近的，下面兩欄會自動帶入對應的建議值；留空不影響儲存。') %}
+  <select id="persona" name="persona">
+    <option value="" {% if not values.persona %}selected{% endif %}>不套用，我自己選下面兩欄</option>
+    {% for v, label in persona_types %}
+    <option value="{{ v }}" {% if values.persona == v %}selected{% endif %}>{{ label }}</option>
+    {% endfor %}
+  </select>
+  {% endcall %}
+
+  {% call field('market_region', '市場地區', required=False, hint='這一版只有台灣市場有對應的方法論內容，其他地區之後再補。', error=errors.market_region) %}
+  <select id="market_region" name="market_region" aria-describedby="market_region-hint">
+    <option value="" {% if not values.market_region %}selected{% endif %}>未設定</option>
+    {% for v, label in market_regions %}
+    <option value="{{ v }}" {% if values.market_region == v %}selected{% endif %}>{{ label }}</option>
+    {% endfor %}
+  </select>
+  {% endcall %}
+
+  {% call field('conversion_goal', '廣告要讓人做什麼？', required=False, hint='不填的話，選了上面的人設就用人設的建議值；沒選人設就維持未設定。', error=errors.conversion_goal) %}
+  <select id="conversion_goal" name="conversion_goal" aria-describedby="conversion_goal-hint">
+    <option value="" {% if not values.conversion_goal %}selected{% endif %}>未設定</option>
+    {% for v, label in conversion_goals %}
+    <option value="{{ v }}" {% if values.conversion_goal == v %}selected{% endif %}>{{ label }}</option>
+    {% endfor %}
+  </select>
+  {% endcall %}
+
   <div class="form-actions">
     <button type="submit" class="btn btn-primary">儲存品牌基本資料</button>
     <a class="btn-text" href="/brands/{{ brand.id }}">取消</a>

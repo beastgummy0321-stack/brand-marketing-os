@@ -16,6 +16,9 @@ BRAND_ID = "brd_test123"
 def _facts(**overrides) -> dict:
     base = {
         "brand_id": BRAND_ID,
+        # 預設已設定，避免每條既有測試都要額外處理票 C 新規則；
+        # ConversionGoalMissingRuleTest 自己覆寫成 None 來測觸發。
+        "conversion_goal": "purchase",
         "pending_facts_count": 0,
         "active_cycle": None,
         "reading_ready": False,
@@ -25,6 +28,27 @@ def _facts(**overrides) -> dict:
     }
     base.update(overrides)
     return base
+
+
+class ConversionGoalMissingRuleTest(unittest.TestCase):
+    """票 C：conversion_goal 沒設定時方法論篩選沒接電，提醒去品牌編輯頁設定。"""
+
+    def test_triggers_when_conversion_goal_missing(self):
+        facts = _facts(conversion_goal=None)
+        card = guide_cards.RULES["conversion_goal_missing"](facts)
+        self.assertIsNotNone(card)
+        self.assertIn("廣告目標", card["title"])
+        self.assertEqual(card["action_url"], f"/brands/{BRAND_ID}/edit")
+
+    def test_does_not_trigger_when_conversion_goal_set(self):
+        self.assertIsNone(guide_cards.RULES["conversion_goal_missing"](_facts()))
+
+    def test_outranks_pacing_alert(self):
+        """資料正確性前提優先度高於一般提醒，兩條規則同時觸發時排在 pacing_alert 之前。"""
+        facts = _facts(conversion_goal=None,
+                       pacing_alert={"kind": "overspend", "action_url": None})
+        cards = guide_cards.build(facts)
+        self.assertIn("廣告目標", cards[0]["title"])
 
 
 class PacingAlertRuleTest(unittest.TestCase):

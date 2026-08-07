@@ -231,34 +231,82 @@ async def brand_menu(request: Request, brand_id: str, continue_dismissed: Option
     ))
 
 
+# 票 C：conversion_goal 選單選項（值來自 repo.CONVERSION_GOALS，順序不得自創，
+# 標籤來自 md.CONVERSION_GOAL_LABELS）。組出來的 pairs 給 brand_edit.html 的下拉選單用。
+def _conversion_goal_options() -> list:
+    return [(v, md.CONVERSION_GOAL_LABELS[v]) for v in repo.CONVERSION_GOALS]
+
+
+def _persona_conversion_goal_default(persona: str) -> Optional[str]:
+    """人設沒填 conversion_goal 時的預設值：從既有的 persona_switch_defaults() 開關表
+    推回轉換目標，不另外發明第二張人設對照表。推法對齊
+    repo.compute_methodology_switches() 對「站內交易」的定義本身就是
+    conversion_goal == 'purchase'：站內交易開＝purchase；沒有站內交易但有自有網站
+    （服務／預約制）＝booking；兩者都沒有（KOL／其他）＝awareness。"""
+    if persona not in md.PERSONA_SWITCH_DEFAULTS:
+        return None
+    switches = md.persona_switch_defaults(persona)
+    if switches["站內交易"]:
+        return "purchase"
+    if switches["有自有網站"]:
+        return "booking"
+    return "awareness"
+
+
+def _brand_edit_form_ctx(request: Request, brand: dict, values: dict, errors: dict):
+    return ctx(
+        request, brand=brand, values=values, errors=errors, nav_current='hub',
+        persona_types=md.PERSONA_TYPES, market_regions=md.MARKET_REGIONS,
+        conversion_goals=_conversion_goal_options(),
+    )
+
+
 @router.get("/brands/{brand_id}/edit")
 async def brand_edit_get(request: Request, brand_id: str):
     brand = require_brand(brand_id)
-    values = {"name": brand["name"], "client_name": brand["client_name"] or "", "status": brand["status"]}
-    return templates.TemplateResponse(request, "brand_edit.html", ctx(
-        request, brand=brand, values=values, errors={}, nav_current='hub',
-    ))
+    values = {
+        "name": brand["name"], "client_name": brand["client_name"] or "", "status": brand["status"],
+        "persona": "", "market_region": brand["market_region"] or "",
+        "conversion_goal": brand["conversion_goal"] or "",
+    }
+    return templates.TemplateResponse(request, "brand_edit.html",
+                                       _brand_edit_form_ctx(request, brand, values, {}))
 
 
 @router.post("/brands/{brand_id}/edit")
 async def brand_edit_post(request: Request, brand_id: str, name: str = Form(""),
-                           client_name: str = Form(""), status: str = Form("active")):
+                           client_name: str = Form(""), status: str = Form("active"),
+                           persona: str = Form(""), market_region: str = Form(""),
+                           conversion_goal: str = Form("")):
     actor = require_actor(request)
     brand = require_brand(brand_id)
-    values = {"name": name, "client_name": client_name, "status": status}
+    values = {"name": name, "client_name": client_name, "status": status,
+              "persona": persona, "market_region": market_region, "conversion_goal": conversion_goal}
     errors = {}
     name_c = clean(name)
     if not name_c:
         errors["name"] = "請填寫品牌名稱。"
     if status not in ("active", "archived"):
         errors["status"] = "請選擇品牌狀態。"
+    region_c = clean(market_region)
+    if region_c and region_c not in dict(md.MARKET_REGIONS):
+        errors["market_region"] = "請選擇有效的市場地區。"
+    goal_c = clean(conversion_goal)
+    if goal_c and goal_c not in repo.CONVERSION_GOALS:
+        errors["conversion_goal"] = "請選擇有效的廣告目標。"
     if errors:
-        return templates.TemplateResponse(request, "brand_edit.html", ctx(
-            request, brand=brand, values=values, errors=errors, nav_current='hub',
-        ), status_code=400)
+        return templates.TemplateResponse(request, "brand_edit.html",
+                                           _brand_edit_form_ctx(request, brand, values, errors),
+                                           status_code=400)
     was_archived = brand["status"] == "archived"
     repo.update_brand(web.conn, brand_id, name=name_c, client_name=clean(client_name), status=status,
                        actor=actor)
+    # 後兩欄（市場地區／廣告目標）留白就用人設的預設值填；人設本身不入庫，只是填表捷徑。
+    # 市場地區沒有人設可以推——這一版本來就只有「台灣」一個實值，留白＝未設定，不補值。
+    repo.set_brand_switches(
+        web.conn, brand_id, market_region=region_c or None,
+        conversion_goal=goal_c or _persona_conversion_goal_default(persona), actor=actor,
+    )
     if status == "archived" and not was_archived:
         msg = f"已封存品牌「{name_c}」。"
     elif status == "active" and was_archived:

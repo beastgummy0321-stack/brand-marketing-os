@@ -87,6 +87,7 @@ class GuideCardLinksResolveTest(unittest.TestCase):
     def _facts(self, **overrides) -> dict:
         base = {
             "brand_id": self.brand_id,
+            "conversion_goal": "purchase",
             "pending_facts_count": 0,
             "active_cycle": None,
             "reading_ready": False,
@@ -101,6 +102,7 @@ class GuideCardLinksResolveTest(unittest.TestCase):
         """規則 id → 能觸發該規則的 facts。每條規則各一組（有些規則互斥，不能共用一份）。"""
         cycle = {"id": self.cycle_id, "stage_label": "素材"}
         return {
+            "conversion_goal_missing": self._facts(conversion_goal=None),
             # action_url 為 None 時走 fallback，這裡刻意不給，測的是 fallback 那條網址
             "pacing_alert": self._facts(
                 pacing_alert={"kind": "overspend", "action_url": None}),

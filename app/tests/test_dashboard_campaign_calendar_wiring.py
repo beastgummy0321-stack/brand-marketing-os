@@ -47,6 +47,10 @@ class CampaignCalendarCockpitWiringTest(unittest.TestCase):
         self.brand = bi_repo.create_brand(
             main.conn, name=f"虛構備戰茶行{abs(hash(self.id())) % 100000}",
             client_name=None, actor=ACTOR)
+        # 票 C：conversion_goal 沒設定會多冒出一張提醒卡，蓋掉本檔要測的檔期日曆卡；
+        # 先設定好讓本檔繼續只測檔期日曆這一件事。
+        bi_repo.set_brand_switches(main.conn, self.brand["id"], market_region=None,
+                                   conversion_goal="purchase", actor=ACTOR)
 
     def _cockpit(self, events):
         return dashboard_repo.cockpit(main.conn, self.brand["id"], today=TODAY,
@@ -86,6 +90,8 @@ class CampaignCalendarOverviewWiringTest(unittest.TestCase):
         brand = bi_repo.create_brand(
             main.conn, name=f"虛構總覽備戰雜貨店{abs(hash(self.id())) % 100000}",
             client_name=None, actor=ACTOR)
+        bi_repo.set_brand_switches(main.conn, brand["id"], market_region=None,
+                                   conversion_goal="purchase", actor=ACTOR)
         events = [{"id": "double11", "name": "雙11購物節", "date": "2026-11-03",
                   "tier": "large"}]
         cards = dashboard_repo.overview(main.conn, today=TODAY, calendar_events=events)

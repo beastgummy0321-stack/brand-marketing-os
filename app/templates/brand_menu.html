@@ -19,6 +19,9 @@
 {% if banner_msg %}
 {{ banner(banner_kind or 'ok', banner_msg, dismiss_url=request.url.path, extra_link_text='再新增一筆' if banner_again else None, extra_link_url=banner_again) }}
 {% endif %}
+{% if not brand.conversion_goal %}
+{{ banner('warn', '還沒設定廣告目標——AI 現在會用電商預設值寫文案，可能不適合你。', extra_link_text='去設定', extra_link_url='/brands/' ~ brand.id ~ '/edit') }}
+{% endif %}
 
 <div class="page-title-row">
   <h1>{{ brand.name }}</h1>

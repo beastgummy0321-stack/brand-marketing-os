@@ -104,6 +104,7 @@ def _pacing_alert(conn, brand_id: str, today: str) -> Optional[dict]:
 
 def _guide_card_facts(conn, brand_id: str, cycle: Optional[dict], today: str, events: list) -> dict:
     pending_facts = bi_repo.list_brand_facts(conn, brand_id, status="pending")
+    brand = bi_repo.get_brand(conn, brand_id)
     active_cycle = None
     reading_ready = False
     next_cycle_draft_ready = False
@@ -113,6 +114,8 @@ def _guide_card_facts(conn, brand_id: str, cycle: Optional[dict], today: str, ev
         next_cycle_draft_ready = ads_nextcycle.load(conn, brand_id, cycle["id"]) is not None
     return {
         "brand_id": brand_id,
+        # 票 C：guide_cards.conversion_goal_missing 讀這個判斷方法論開關有沒有接電。
+        "conversion_goal": brand["conversion_goal"] if brand else None,
         "pending_facts_count": len(pending_facts),
         "active_cycle": active_cycle,
         "reading_ready": reading_ready,

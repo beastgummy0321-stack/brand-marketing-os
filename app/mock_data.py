@@ -101,6 +101,50 @@ BRAND_COLOR_PALETTE = [
     "#7A4A1E",  # 棕
 ]
 
+# 人設 → 方法論開關預設值（票 A：填表捷徑，不進 DB、不進 prompt。選人設＝一次填好
+# app.brand_intelligence.repository.compute_methodology_switches 四個開關的預設值，
+# 之後每個開關仍可個別覆寫，不做 UI，先只留常數＋展開函式）。
+PERSONA_TYPES = [
+    ("kol", "KOL／創作者"),
+    ("brand", "品牌／商家"),
+    ("solo_seller", "個人賣家"),
+    ("service_booking", "服務／預約制"),
+    ("other", "其他"),
+]
+
+PERSONA_SWITCH_DEFAULTS = {
+    "kol": {"有商品": False, "站內交易": False, "有自有網站": False, "健康類法規": False},
+    "brand": {"有商品": True, "站內交易": True, "有自有網站": True, "健康類法規": False},
+    "solo_seller": {"有商品": True, "站內交易": True, "有自有網站": False, "健康類法規": False},
+    "service_booking": {"有商品": False, "站內交易": False, "有自有網站": True, "健康類法規": False},
+    "other": {"有商品": False, "站內交易": False, "有自有網站": False, "健康類法規": False},
+}
+
+
+def persona_switch_defaults(persona: str) -> dict:
+    """把人設代號展開成方法論開關預設值；只是填表捷徑，每個開關之後都可個別覆寫。"""
+    if persona not in PERSONA_SWITCH_DEFAULTS:
+        raise ValueError(f"未知人設：{persona}")
+    return dict(PERSONA_SWITCH_DEFAULTS[persona])
+
+
+# 品牌編輯頁用語（票 C：market_region／conversion_goal 下拉選單）。
+# MARKET_REGIONS：這一版方法論只有台灣市場的內容，所以只給一個實值；「未設定」是
+# 選單的另一個選項，模板另外手寫，不放進這份清單（比照 fact_new.html「請選擇」的寫法）。
+MARKET_REGIONS = [
+    ("TW", "台灣"),
+]
+
+# conversion_goal 內部值→白話中文，順序對齊
+# app.brand_intelligence.repository.CONVERSION_GOALS（該檔是值域的唯一來源，不得存
+# Meta 事件名，見該檔註解）。畫面只顯示這裡的中文，不印英文值。
+CONVERSION_GOAL_LABELS = {
+    "purchase": "購買",
+    "lead": "留資料",
+    "booking": "預約",
+    "awareness": "認識品牌",
+}
+
 
 def _label(pairs, value):
     for internal, human in pairs:

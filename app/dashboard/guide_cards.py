@@ -7,8 +7,11 @@ RULES 是一個 dict，key＝規則 id，value＝判定函式；dict 順序＝�
 價值越高，同 interrupts.py `_CATEGORY_RANK` 的做法），呼叫端不得自行排序。
 
 第一批貨源（規格 0001「指南卡第一批貨源」，六種到齊）：
+- conversion_goal_missing：品牌沒設定廣告目標（票 C）。方法論的條件過濾整條靠
+  brand.conversion_goal，沒設定＝方法論篩選形同沒接電、AI 會套用電商站內交易的
+  預設寫法，屬於資料正確性前提，登記在所有規則之前（比 pacing_alert 更早）
 - pacing_alert：pacing 警示（票 08 產生的打斷佇列事件，這裡轉成行動卡；錢的步調
-  最優先，登記在第一位）
+  在一般提醒裡最優先，登記在 conversion_goal_missing 之後、其餘規則之前）
 - reading_unread：判讀結果出爐未讀
 - next_cycle_draft：下期草案已備好
 - cycle_stage：檔期卡在哪道關卡
@@ -28,6 +31,8 @@ RULES 是一個 dict，key＝規則 id，value＝判定函式；dict 順序＝�
 
 facts 欄位契約（由 app/dashboard/repository.py 組裝）：
 - brand_id: str
+- conversion_goal: str|None（票 C：brand.conversion_goal 原始值，None／空字串＝
+  沒設定，觸發 conversion_goal_missing）
 - pending_facts_count: int
 - active_cycle: {"id": str, "stage_label": str|None} | None
   （stage_label 為 None＝已經在成效格／沒有進行中檔期，不算「卡在哪道關卡」）
@@ -43,6 +48,18 @@ facts 欄位契約（由 app/dashboard/repository.py 組裝）：
 from typing import Callable, Optional
 
 MAX_CARDS = 3
+
+
+def _rule_conversion_goal_missing(facts: dict) -> Optional[dict]:
+    """品牌沒設定廣告目標：方法論的條件過濾整條靠 brand.conversion_goal，沒設定就等於
+    沒接電，AI 會套用電商站內交易的預設寫法（票 C 明顯提醒需求）。資料正確性前提，
+    優先度高於一般提醒，登記在所有規則之前。"""
+    if facts.get("conversion_goal"):
+        return None
+    return {
+        "title": "還沒設定廣告目標——AI 現在會用電商預設值寫文案，可能不適合你",
+        "action_url": f"/brands/{facts['brand_id']}/edit",
+    }
 
 
 def _rule_pacing_alert(facts: dict) -> Optional[dict]:
@@ -122,6 +139,7 @@ def _rule_campaign_calendar(facts: dict) -> Optional[dict]:
 
 # 登記表：dict 順序＝優先序（越早登記代表行動價值越高，比照 interrupts.py CATEGORIES）。
 RULES: "dict[str, Callable[[dict], Optional[dict]]]" = {
+    "conversion_goal_missing": _rule_conversion_goal_missing,
     "pacing_alert": _rule_pacing_alert,
     "reading_unread": _rule_reading_unread,
     "next_cycle_draft": _rule_next_cycle_draft,
@@ -145,13 +163,21 @@ def build(facts: dict) -> list:
 
 def demo() -> None:
     """python -m app.dashboard.guide_cards —— 純函數的最小自檢（無需資料庫）。"""
-    assert build({"brand_id": "b", "pending_facts_count": 0, "active_cycle": None,
-                  "reading_ready": False, "next_cycle_draft_ready": False}) == []
-    cards = build({"brand_id": "b", "pending_facts_count": 2,
+    assert build({"brand_id": "b", "conversion_goal": "purchase", "pending_facts_count": 0,
+                  "active_cycle": None, "reading_ready": False,
+                  "next_cycle_draft_ready": False}) == []
+    cards = build({"brand_id": "b", "conversion_goal": "purchase", "pending_facts_count": 2,
                   "active_cycle": {"id": "c1", "stage_label": "素材"},
                   "reading_ready": False, "next_cycle_draft_ready": False})
     assert len(cards) == 2
     assert cards[0]["action_url"] == "/brands/b/ads/c1"
+    # 票 C：conversion_goal 沒設定時，提醒排在所有規則之前（比照卡片數上限也蓋得住）。
+    cards_missing_goal = build({"brand_id": "b", "conversion_goal": None,
+                                "pending_facts_count": 2,
+                                "active_cycle": {"id": "c1", "stage_label": "素材"},
+                                "reading_ready": False, "next_cycle_draft_ready": False})
+    assert len(cards_missing_goal) == 3
+    assert cards_missing_goal[0]["action_url"] == "/brands/b/edit"
     print("dashboard.guide_cards 自檢通過")
 
 

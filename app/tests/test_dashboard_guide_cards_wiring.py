@@ -91,6 +91,8 @@ class OverviewNextStepWiringTest(unittest.TestCase):
         brand = bi_repo.create_brand(
             main.conn, name=f"虛構待確認茶行{abs(hash(self.id())) % 100000}",
             client_name=None, actor=ACTOR)
+        bi_repo.set_brand_switches(main.conn, brand["id"], market_region=None,
+                                   conversion_goal="purchase", actor=ACTOR)
         bi_repo.create_brand_fact(
             main.conn, brand["id"], actor=ACTOR, fact_type="other",
             label="測試事實", value="測試值", status="pending")
@@ -104,6 +106,8 @@ class OverviewNextStepWiringTest(unittest.TestCase):
         brand = bi_repo.create_brand(
             main.conn, name=f"虛構卡關雜貨店{abs(hash(self.id())) % 100000}",
             client_name=None, actor=ACTOR)
+        bi_repo.set_brand_switches(main.conn, brand["id"], market_region=None,
+                                   conversion_goal="purchase", actor=ACTOR)
         cycle_id = _insert_cycle(main.conn, brand["id"], status="PLANNING")
 
         card = self._card(brand["id"])
@@ -117,6 +121,8 @@ class OverviewNextStepWiringTest(unittest.TestCase):
         brand = bi_repo.create_brand(
             main.conn, name=f"虛構判讀待看茶行{abs(hash(self.id())) % 100000}",
             client_name=None, actor=ACTOR)
+        bi_repo.set_brand_switches(main.conn, brand["id"], market_region=None,
+                                   conversion_goal="purchase", actor=ACTOR)
         cycle_id = _insert_cycle(main.conn, brand["id"], status="EVALUATING")
         _insert_reading(main.conn, brand["id"], cycle_id)
         bi_repo.create_brand_fact(
@@ -133,6 +139,8 @@ class OverviewNextStepWiringTest(unittest.TestCase):
         brand = bi_repo.create_brand(
             main.conn, name=f"虛構下期已備妥雜貨店{abs(hash(self.id())) % 100000}",
             client_name=None, actor=ACTOR)
+        bi_repo.set_brand_switches(main.conn, brand["id"], market_region=None,
+                                   conversion_goal="purchase", actor=ACTOR)
         cycle_id = _insert_cycle(main.conn, brand["id"], status="CLOSED")
         _insert_reading(main.conn, brand["id"], cycle_id)
         _insert_next_cycle_recommendation(main.conn, brand["id"], cycle_id)
@@ -158,12 +166,26 @@ class CockpitGuideCardsWiringTest(unittest.TestCase):
         brand = bi_repo.create_brand(
             main.conn, name=f"虛構一切正常茶行{abs(hash(self.id())) % 100000}",
             client_name=None, actor=ACTOR)
+        bi_repo.set_brand_switches(main.conn, brand["id"], market_region=None,
+                                   conversion_goal="purchase", actor=ACTOR)
         self.assertEqual(self._guide_cards(brand["id"]), [])
+
+    def test_conversion_goal_missing_surfaces_as_guide_card(self):
+        """票 C：conversion_goal 沒設定本身就是待辦，駕駛艙要看得到。"""
+        brand = bi_repo.create_brand(
+            main.conn, name=f"虛構沒設定目標茶行{abs(hash(self.id())) % 100000}",
+            client_name=None, actor=ACTOR)
+        cards = self._guide_cards(brand["id"])
+        self.assertEqual(len(cards), 1)
+        self.assertIn("廣告目標", cards[0]["title"])
+        self.assertEqual(cards[0]["action_url"], f"/brands/{brand['id']}/edit")
 
     def test_stuck_cycle_and_pending_facts_both_surface_up_to_three(self):
         brand = bi_repo.create_brand(
             main.conn, name=f"虛構雙待辦雜貨店{abs(hash(self.id())) % 100000}",
             client_name=None, actor=ACTOR)
+        bi_repo.set_brand_switches(main.conn, brand["id"], market_region=None,
+                                   conversion_goal="purchase", actor=ACTOR)
         _insert_cycle(main.conn, brand["id"], status="PRODUCTION")
         bi_repo.create_brand_fact(
             main.conn, brand["id"], actor=ACTOR, fact_type="other",
