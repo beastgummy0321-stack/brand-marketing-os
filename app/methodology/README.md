@@ -15,7 +15,7 @@
 | `ad-creative.md` | 三種生成模式、grounding 要求、15 款樣板、Meta 字數規格 |
 | `ab-testing.md` | 樣本數速查表、Peeking 紀律、ICE 排序 |
 | `copywriting.md` | 五大原則、寫作規則、CTA、Hook 公式、改寫範例、心理模型 |
-| `creative-matrix.md` | 35 個創意角度、真人實拍 DNA、產圖硬規則、Hook 切法 |
+| `creative-matrix.md` | 35 個創意角度、真人實拍 DNA、產圖硬規則、Hook 切法、影片腳本框架 |
 | `customer-voice.md` | 顧客原話抽取規則、台灣在地管道 |
 
 ## 任務型別 → 必讀方法論檔對照表
@@ -25,6 +25,7 @@
 | 檔期計畫生成 | `ads.md`、`ab-testing.md`、`customer-voice.md` |
 | Hook／文案生成 | `ad-creative.md`、`copywriting.md`、`creative-matrix.md`、`customer-voice.md` |
 | 圖片 Prompt 生成 | `creative-matrix.md`、`ad-creative.md` |
+| 影片腳本生成 | `creative-matrix.md`、`copywriting.md` |
 | 成效判讀／下期草案 | `ab-testing.md`、`ads.md` |
 | 期中檢查點 | `ab-testing.md`（禁判勝負節） |
 
