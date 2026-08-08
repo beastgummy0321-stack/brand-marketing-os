@@ -4,11 +4,10 @@
 圖檔不上傳進系統，使用者自己把生圖工具下載的檔案倒進系統指定的資料夾。本檔只做四件事
 ——算路徑、叫出檔案總管、即時算佔用空間、刪資料夾——DB 一個位元組都不存。
 
-# ponytail: 這一版掛在「檔期」層（<根目錄>/<品牌 id>/<檔期 id>/），不是決策 0008 寫的
-# 「主題」層。理由：主題目前還不是資料概念（creative_variant 沒有 theme 欄位，翻遍
-# app/ads/migrations 也沒有這張表）。GRILL-PENDING C 段定案、主題有自己的 id 之後另開
-# 票搬成 <根目錄>/<品牌 id>/<檔期 id>/<主題 id>/：本檔四個函式各多收一個參數即可，
-# 已倒好的圖要人工搬一次（系統不自動搬，搬錯了圖找不回來）。
+# 2026-08-09 票 04-single-image-e2e 接續：主題有自己的 id 與資料夾短碼了，`theme_dir()`
+# 把 ponytail 原本規劃的第三層接上（<根目錄>/<品牌 id>/<檔期 id>/<主題名_短碼>/）；
+# `open_folder()` 改收 *ids，讓開檔期資料夾／開主題資料夾共用同一個函式，呼叫端多傳一段
+# 路徑即可，不必另外寫一個 open_theme_folder()。已倒好的圖不會自動搬。
 """
 
 from __future__ import annotations
@@ -38,10 +37,20 @@ def cycle_dir(conn, brand_id: str, cycle_id: str) -> Path:
     return _child(get_root(conn), brand_id, cycle_id)
 
 
-def open_folder(conn, brand_id: str, cycle_id: str) -> Path:
+def theme_dir(conn, brand_id: str, cycle_id: str, theme_folder_name: str) -> Path:
+    """單一主題的素材資料夾路徑（不保證存在）。命名＝人話名＋四碼短碼，由呼叫端組好傳進來
+    （票 04-single-image-e2e；決策 0008「人看得懂的名字在前，四碼短碼在後」）。"""
+    return _child(get_root(conn), brand_id, cycle_id, theme_folder_name)
+
+
+def open_folder(conn, *ids: str) -> Path:
     """沒有就建，然後叫出檔案總管。os.startfile() 只有 Windows 有，這台就是 Windows
-    （決策 0008 指定用它；不為了跨平台包一層抽象）。"""
-    path = cycle_dir(conn, brand_id, cycle_id)
+    （決策 0008 指定用它；不為了跨平台包一層抽象）。
+
+    *ids：開檔期資料夾傳 (brand_id, cycle_id)，開主題資料夾多傳一段
+    (brand_id, cycle_id, theme_folder_name)——同一個函式，_child() 本來就吃任意層數。
+    """
+    path = _child(get_root(conn), *ids)
     path.mkdir(parents=True, exist_ok=True)
     os.startfile(path)
     return path

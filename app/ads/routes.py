@@ -213,3 +213,8 @@ from app.ads import routes_performance  # noqa: E402
 router.include_router(routes_creative.router)
 router.include_router(routes_handoff.router)
 router.include_router(routes_performance.router)
+
+# 票 04-single-image-e2e：主題生成 JSON API，`/api/ads/...` 固定前綴，跟上面任何
+# `/brands/{brand_id}/ads/{cycle_id}` 萬用路由都不會撞（前綴完全不同），掛的順序不影響。
+from app.ads import routes_creative_theme  # noqa: E402
+router.include_router(routes_creative_theme.router)

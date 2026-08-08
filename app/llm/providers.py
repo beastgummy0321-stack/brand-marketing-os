@@ -45,6 +45,7 @@ TASK_TYPE_LABELS = {
     "creative_batch": "素材生成（整批）",
     "creative_backfill": "素材生成（補打缺型別）",
     "creative_rewrite": "素材生成（單則改寫）",
+    "creative_theme": "素材生成（主題，票 04）",
     "intake_scan": "建檔精靈：讀取網址",
     "intake_question": "建檔精靈：追問",
     "intake_paste_fix": "建檔精靈：貼上格式修復",
@@ -63,6 +64,7 @@ TASK_DEFAULTS = {
     "creative_batch": {"model": None, "thinking": "medium"},
     "creative_backfill": {"model": None, "thinking": "medium"},
     "creative_rewrite": {"model": None, "thinking": "medium"},
+    "creative_theme": {"model": None, "thinking": "medium"},
     # 機械性小任務：低思考
     "intake_scan": {"model": None, "thinking": "low"},
     "intake_question": {"model": None, "thinking": "low"},
