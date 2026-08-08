@@ -36,7 +36,8 @@ BRANCH_TABLES = {
     "ad_revenue_coefficient_error_log", "adoption_decision", "brand_checklist_item",
     "campaign_activation", "campaign_cycle", "campaign_cycle_goal", "campaign_cycle_hypothesis",
     "campaign_cycle_product", "campaign_plan", "campaign_plan_option", "creative_brief",
-    "creative_rule_card", "creative_variant", "cycle_checklist_item", "cycle_checkpoint",
+    "creative_rule_card", "creative_theme", "creative_theme_component", "creative_variant",
+    "cycle_checklist_item", "cycle_checkpoint",
     "cycle_code_verification", "cycle_voucher_code", "derived_metric", "discovered_campaign",
     "experiment_cell", "external_ad_mapping", "final_asset", "finding", "ga4_summary",
     "ga4_sync_status", "marketing_goal", "offer", "performance_reading",
@@ -354,6 +355,9 @@ class ImportCycleScanTest(unittest.TestCase):
 # 「只剩 brand_intelligence 那三條」的排法，其餘七個套件零違規。
 LAYER_ORDER = [
     "app.core",                # 基礎設施：DB、migration、audit、interrupts
+    "app.creative",            # 票 04-single-image-e2e：素材生成引擎的規格表／零狀態零件，
+                                # 零內部依賴（不 import app.ads，見 format_specs.py 檔頭），
+                                # 排在 app.core 之後——之後有其他模組要用規格表也不會撞牆。
     "app.brand_intelligence",  # 品牌永久層
     "app.llm",                 # AI gateway 與 prompt 組裝
     "app.shared",              # web 骨架（app、templates、共用 ctx）
@@ -419,7 +423,7 @@ KNOWN_OVERSIZED_FILES = {
     "app/ads/reading.py": 1039,
     "app/intake/routes.py": 951,
     "app/tests/test_ads_creative.py": 870,
-    "app/ads/repository.py": 816,
+    "app/ads/repository.py": 820,
 }
 
 

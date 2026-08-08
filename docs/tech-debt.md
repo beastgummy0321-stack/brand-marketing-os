@@ -24,10 +24,15 @@
 | `app/ads/reading.py` | 1039 | 1.3× | 判讀規則與資料取數分離 |
 | `app/intake/routes.py` | 951 | 1.2× | 依精靈五步分檔 |
 | `app/tests/test_ads_creative.py` | 870 | 1.1× | 測試檔，優先度最低 |
-| `app/ads/repository.py` | 816 | 1.0× | 剛超標，先觀察 |
+| `app/ads/repository.py` | 820 | 1.03× | 剛超標，先觀察 |
 
 **已知違例**：2026-08-07 的票 C 在 `brand_intelligence/routes.py` 加了約 70 行沒有先拆。
 當時的取捨是「先讓開關有寫入路徑」優先於先拆檔，由主控判斷放行，記在此處不隱藏。
+
+2026-08-09 的票 02-theme-tables 在 `app/ads/repository.py` 加了 4 行（`CYCLE_CASCADE_TABLES`
+與 `_PRODUCT_CASCADE_LABELS` 各登記兩張新表：`creative_theme`／`creative_theme_component`）。
+CRUD 本體另開 `app/ads/theme_repository.py` 新檔，不塞進本檔；這 4 行是「刪檔期／刪產品要
+沿用既有 cascade 慣例」的唯一登記點，該機制目前只活在這個檔案裡，不值得為 4 行拆檔。
 
 ## 二、四個套件糾成一個 import 環（五組相鄰對）
 

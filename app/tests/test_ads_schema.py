@@ -26,6 +26,7 @@ ADS_MODULE_TABLES = [
     "campaign_cycle_goal", "campaign_cycle_hypothesis", "offer", "experiment_cell",
     "campaign_plan", "campaign_plan_option", "creative_brief", "creative_variant", "final_asset",
     "adoption_decision", "creative_rule_card", "publishing_package",
+    "creative_theme", "creative_theme_component",  # 票 02-theme-tables：主題與主題元件
     "activation_authorization", "external_ad_mapping", "campaign_activation",
     "performance_snapshot", "derived_metric", "performance_reading", "recommendation",
     "finding", "rule_dissent", "cycle_checkpoint",
@@ -64,7 +65,7 @@ class AdsSchemaTest(unittest.TestCase):
                 "SELECT version FROM schema_migrations WHERE module = 'ads'"
             )
         ]
-        self.assertEqual(versions, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14])
+        self.assertEqual(versions, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15])
 
     def test_all_expected_tables_exist(self):
         names = {

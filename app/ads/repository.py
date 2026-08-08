@@ -351,6 +351,8 @@ CYCLE_CASCADE_TABLES = (
     ("final_asset", "定稿素材檔"),
     ("creative_variant", "廣告素材"),
     ("creative_brief", "素材需求簡報"),
+    ("creative_theme_component", "主題元件"),  # 票 02-theme-tables，先於 creative_theme 清（子表）
+    ("creative_theme", "主題"),  # 票 02-theme-tables，先於 experiment_cell 清（引用它）
     ("experiment_cell", "實驗組合（受眾×訊息×格式）"),
 )
 
@@ -693,6 +695,8 @@ _PRODUCT_CASCADE_LABELS = {
     "campaign_activation": "投放啟動紀錄",
     "campaign_cycle_goal": "本期目標關聯",
     "success_criterion": "成功判準",
+    "creative_theme": "主題",  # 票 02-theme-tables：自己沒 product_id，靠外鍵沿 experiment_cell 走到
+    "creative_theme_component": "主題元件",  # 同上，沿 creative_theme 走到
 }
 
 

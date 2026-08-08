@@ -156,6 +156,19 @@ class _BaseCycleDeleteTest(unittest.TestCase):
             " (?, 'copy', ?, ?, ?, ?, '{}', 'DRAFT', ?)",
             (cvr, cbf, cycle_id, exc, self.bid, ts),
         )
+        cth = new_id("cth")
+        conn.execute(
+            "INSERT INTO creative_theme (id, brand_id, campaign_cycle_id, experiment_cell_id,"
+            " format_key, name, folder_code, status, created_at, updated_at) VALUES"
+            " (?, ?, ?, ?, 'single_image', '測試主題', 'ABCD', 'draft', ?, ?)",
+            (cth, self.bid, cycle_id, exc, ts, ts),
+        )
+        conn.execute(
+            "INSERT INTO creative_theme_component (id, brand_id, campaign_cycle_id,"
+            " creative_theme_id, component_type, content, created_at) VALUES"
+            " (?, ?, ?, ?, 'body', '測試文案', ?)",
+            (new_id("cthc"), self.bid, cycle_id, cth, ts),
+        )
         conn.execute(
             "INSERT INTO adoption_decision (id, brand_id, campaign_cycle_id, target_type, target_id,"
             " decision, decided_by, decided_at) VALUES"
