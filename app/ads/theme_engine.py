@@ -6,9 +6,18 @@
 主要文案／標題／說明，回傳純資料（`generate_single_image_theme`，不落地，供假 gateway
 測試只驗產出形狀）；存檔另一步（`save_generated_theme`：建主題＋元件、配短碼、建資料夾）。
 
+字數守門（票 05-char-guard）：`generate_single_image_theme` 產出後、回傳前跑
+`_apply_char_guard`——超字文字元件重寫一次（同一個 gateway 入口，只送超字那幾則），
+仍超就標 `over_budget` 存檔，不截斷、不擋採用；是存檔前唯一的字數守門點，
+07（輪播）、08（影片）之後共用本函式，不各自另建一套。
+
+同批次相似度標黃（票 06-similarity-flag）：字數守門後緊接著跑 `_apply_similarity_flag`——
+用既有 `fp.distance()` 比對本批新元件彼此、以及對同格既有主題的元件，過近寫
+`similarity_flag`，不擋存檔、不自動重生。
+
 ponytail：引擎目前還在 app/ads——票 14（A 段收尾）要等 04～08 全部格式定形後才整批搬進
 app/creative 變無狀態零件；07（輪播）、08（影片）會在這裡加自己的
-`generate_carousel_theme()`／`generate_video_theme()`，共用本檔的存檔與資料夾函式。
+`generate_carousel_theme()`／`generate_video_theme()`，共用本檔的存檔、資料夾與字數守門函式。
 """
 
 import re
@@ -173,6 +182,104 @@ def _normalize_single_image(data, plan: dict) -> Optional[dict]:
     return {"name": name.strip(), "components": components}
 
 
+def _char_budgets(plan: dict) -> dict:
+    """{component_type: char_budget}——沒有字數預算的型別（image_prompt）不進來。"""
+    return {name: spec["char_budget"] for name, spec in plan.items() if spec.get("char_budget")}
+
+
+def _char_rewrite_user_text(brief: CreativeBrief, items: list) -> str:
+    lines = [
+        f"品牌名稱：{brief.brand['name']}",
+        "以下幾則 Meta 廣告素材超過字數上限，請逐則改寫到規定字數以內：意思、語氣、宣稱範圍"
+        "完全不變，只能精簡用字，不得新增品牌沒有登錄過的宣稱、規格或數據。",
+    ]
+    for i, item in enumerate(items, start=1):
+        lines.append(
+            f"{i}. 型別：{item['component_type']}，上限 {item['char_budget']} 字，"
+            f"原文（{len(item['content'])} 字）：「{item['content']}」")
+    lines.append(
+        '輸出格式：只回傳 {"rewrites": ["改寫後第1則", "改寫後第2則", ...]}，陣列長度與順序'
+        "要跟上面列出的則數完全對應，每一則只放改寫後的內容本身。"
+    )
+    return "\n\n".join(lines)
+
+
+def _call_char_rewrite(conn, brief: CreativeBrief, items: list) -> Optional[list]:
+    """走引擎同一生成入口（同一個 PROVIDER、同一個 gateway.run_task）批次重寫超字元件——
+    一次呼叫帶全部超字則數，不逐則各打一次（票 05 驗收「觸發一次重寫呼叫」）。
+    失敗（AI 沒回、格式讀不成）回 None，呼叫端 fallback＝保留原文、標超字，不擋採用。
+    """
+    task = gateway.run_task(
+        conn, PROVIDER, brand_id=brief.brand["id"], task_type="creative_rewrite",
+        prompt_template_id="creative_theme_char_rewrite", prompt_template_version="v1",
+        system=_SYSTEM, messages=[{"role": "user",
+                                   "content": _char_rewrite_user_text(brief, items)}],
+        context=gateway.TaskContext(
+            context_scope={"brand_id": brief.brand["id"], "campaign_cycle_id": brief.cycle["id"],
+                          "experiment_cell_id": brief.cell["id"], "format_key": brief.format_key},
+            knowledge_item_ids=[], brand_version=0,
+        ),
+        options=gateway.TaskOptions(max_tokens=4000),  # 同 app/ads/creative.py rewrite() 的保守值
+    )
+    if task["status"] != "succeeded":
+        return None
+    data = gateway.parse_json_reply(task["rendered_output"])
+    rewrites = data.get("rewrites") if isinstance(data, dict) else None
+    return rewrites if isinstance(rewrites, list) else None
+
+
+def _apply_char_guard(conn, brief: CreativeBrief, components: list, plan: dict) -> list:
+    """字數守門（票 05）：量每個文字元件長度（預算來自規格表），超字的帶「壓到 N 字內」
+    指令重寫一次，只送超字那幾則（未超字元件零呼叫，不多花錢）；重寫後仍超就標
+    `over_budget`，不截斷、不擋採用。這是 ads 存檔前唯一的字數守門點——與 fp.normalize()
+    （見 _normalize_single_image()）同一路徑，carousel／video（07／08）的
+    generate_*_theme() 之後共用本函式，不各自另建一套。
+    """
+    budgets = _char_budgets(plan)
+    over_idx = [i for i, c in enumerate(components)
+               if c["component_type"] in budgets
+               and len(c["content"]) > budgets[c["component_type"]]]
+    if not over_idx:
+        return components
+
+    items = [{"component_type": components[i]["component_type"],
+             "char_budget": budgets[components[i]["component_type"]],
+             "content": components[i]["content"]} for i in over_idx]
+    rewrites = _call_char_rewrite(conn, brief, items)
+
+    for pos, i in enumerate(over_idx):
+        candidate = rewrites[pos] if rewrites and pos < len(rewrites) else None
+        content = candidate.strip() if isinstance(candidate, str) and candidate.strip() \
+            else components[i]["content"]
+        components[i]["content"] = content
+        components[i]["over_budget"] = len(content) > budgets[components[i]["component_type"]]
+    return components
+
+
+# 相似度標黃門檻（票 06）：兩則元件的指紋 fp.distance()（四軸打分，見
+# app/ads/fingerprint.py）小於等於此值視為「幾乎相同」——四軸裡最多 1 軸不同。只寫旗標、
+# 不擋存檔、不自動重生，對齊 Meta Andromeda 相似度合併機制：太相似的變體投放端可能被判定
+# 成同一支蓋牌，先讓使用者看到、自己決定要不要手動分散。
+SIMILARITY_THRESHOLD = 0.25
+
+
+def _apply_similarity_flag(brief: CreativeBrief, components: list) -> list:
+    """存檔前的同批次相似度查核（票 06）：比對「同切角內的變體」——本批新元件彼此之間，
+    以及對同格既有主題的元件（brief.existing_themes_summary，brief_assembler 已依切角格
+    查好、不再重查 DB）。距離 ≤ SIMILARITY_THRESHOLD 視為幾乎相同，兩則裡較晚出現的那個
+    寫 similarity_flag=True；差異夠大就不標。比對重用既有 fp.distance()，不新寫演算法。
+    """
+    seen = [f for theme in brief.existing_themes_summary for f in theme["fingerprints"] if f]
+    for component in components:
+        fingerprint = component.get("fingerprint_json")
+        if not fingerprint:
+            continue
+        component["similarity_flag"] = any(
+            fp.distance(fingerprint, other) <= SIMILARITY_THRESHOLD for other in seen)
+        seen.append(fingerprint)
+    return components
+
+
 def generate_single_image_theme(conn, brief: CreativeBrief, *, actor: str,
                                 on_stage: Optional[Callable[[str], None]] = None) -> tuple:
     """單圖主題生成。成功回 (generated_dict, None)；失敗回 (None, 人話錯誤)，不落地。
@@ -223,6 +330,8 @@ def generate_single_image_theme(conn, brief: CreativeBrief, *, actor: str,
     generated = _normalize_single_image(gateway.parse_json_reply(task["rendered_output"]), plan)
     if generated is None:
         return None, PARSE_FAIL_MESSAGE
+    generated["components"] = _apply_char_guard(conn, brief, generated["components"], plan)
+    generated["components"] = _apply_similarity_flag(brief, generated["components"])
     return generated, None
 
 

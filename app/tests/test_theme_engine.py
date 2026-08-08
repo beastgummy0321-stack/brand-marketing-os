@@ -265,6 +265,78 @@ class ExistingThemeAntiDuplicateTest(_Base):
         self.assertNotIn("不要撞衫", prompt_text)
 
 
+class SimilarityFlagTest(_Base):
+    """票 06 驗收 1、3：兩則指紋幾乎相同的變體→後者標黃、差異夠大不標；含對同格既有主題
+    的元件；標黃不影響採用流程。"""
+
+    _BASE_FP = {"angle": "benefit", "tone": "warm", "format": "single_image",
+               "selling_point": "quality"}
+
+    def test_near_identical_pair_flags_the_later_one_but_distinct_ones_stay_clean(self):
+        cycle_id, cell_id = self._ready_cell(objective="sales")
+        brief = self._assemble(cycle_id, cell_id)
+        base = self._BASE_FP
+        far = {"angle": "pain", "tone": "urgent", "format": "carousel", "selling_point": "price"}
+        one_axis_off = {**base, "selling_point": "price"}   # distance 0.25：只差 1 軸，達門檻
+        two_axis_off = {**base, "format": "carousel", "selling_point": "price"}  # distance 0.5
+
+        item = lambda i, fingerprint: {"content": f"文案{i}", "fingerprint": fingerprint}
+        self._swap(_theme_reply(image_count=10, text_count=5, extra_fields={"body": [
+            item(0, base),          # 第一則，還沒東西可比 → 不標
+            item(1, base),          # 跟文案0 完全一樣（distance 0）→ 標
+            item(2, far),           # 跟前面都差很多（distance 1.0）→ 不標
+            item(3, two_axis_off),  # 跟文案0 差 2 軸（distance 0.5，超過門檻）→ 不標
+            item(4, one_axis_off),  # 跟文案0 只差 1 軸（distance 0.25，達門檻）→ 標
+        ]}))
+
+        generated, err = theme_engine.generate_single_image_theme(main.conn, brief, actor=ACTOR)
+        self.assertIsNone(err, err)
+        flags = {c["content"]: c["similarity_flag"]
+                for c in generated["components"] if c["component_type"] == "body"}
+        self.assertEqual(flags, {
+            "文案0": False, "文案1": True, "文案2": False,
+            "文案3": False, "文案4": True,
+        })
+
+    def test_matches_existing_theme_in_same_cell_flags_even_the_first_new_component(self):
+        """含對同格既有主題的元件：本批第一則就跟既有主題撞了也要標，不是只比本批內部。"""
+        cycle_id, cell_id = self._ready_cell(objective="sales")
+        theme_repo.create_theme(
+            main.conn, self.bid, campaign_cycle_id=cycle_id, experiment_cell_id=cell_id,
+            format_key="single_image", name="虛構主題：暖金茶席", folder_code="A1B2",
+            actor=ACTOR,
+            components=[{"component_type": "body", "content": "第一杯只要 39 元",
+                        "fingerprint_json": self._BASE_FP}],
+        )
+        brief = self._assemble(cycle_id, cell_id)
+        self.assertEqual(len(brief.existing_themes_summary), 1)
+
+        item = lambda i, fingerprint: {"content": f"文案{i}", "fingerprint": fingerprint}
+        self._swap(_theme_reply(image_count=10, text_count=5, extra_fields={
+            "body": [item(i, self._BASE_FP) for i in range(5)],
+        }))
+
+        generated, err = theme_engine.generate_single_image_theme(main.conn, brief, actor=ACTOR)
+        self.assertIsNone(err, err)
+        first_body = next(c for c in generated["components"]
+                          if c["component_type"] == "body" and c["content"] == "文案0")
+        self.assertTrue(first_body["similarity_flag"])
+
+    def test_similarity_flag_does_not_block_adoption(self):
+        cycle_id, cell_id = self._ready_cell(objective="sales")
+        brief = self._assemble(cycle_id, cell_id)
+        # 預設 fixture 全部文字元件指紋相同 → 這批一定會標到黃旗標，用來驗「標黃不擋採用」。
+        self._swap(_theme_reply(image_count=10, text_count=5))
+        generated, err = theme_engine.generate_single_image_theme(main.conn, brief, actor=ACTOR)
+        self.assertIsNone(err, err)
+        self.assertTrue(any(c.get("similarity_flag") for c in generated["components"]))
+
+        theme = theme_engine.save_generated_theme(main.conn, brief, generated, actor=ACTOR)
+        adopted = theme_repo.update_theme_status(
+            main.conn, self.bid, theme["id"], status="adopted", actor=ACTOR)
+        self.assertEqual(adopted["status"], "adopted")
+
+
 class PersistAndFolderTest(_Base):
     """票 04 驗收 5、6：主題與 25 個元件落庫、指紋經 normalize 才寫入；主題資料夾建立。"""
 
