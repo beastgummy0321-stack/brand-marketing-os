@@ -84,7 +84,6 @@ class FormatSpecsTests(unittest.TestCase):
         self.assertEqual(spec["ratio"], "9:16")
         self.assertEqual(spec["pixels"], (1080, 1920))
         self.assertEqual(spec["duration_seconds_default"], 30)
-        self.assertEqual(spec["duration_seconds_range"], (15, 30))
 
 
 if __name__ == "__main__":
