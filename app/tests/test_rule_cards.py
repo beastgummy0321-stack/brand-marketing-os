@@ -134,10 +134,13 @@ class RuleCardValueTest(unittest.TestCase):
         before = len(self._audit_rows())
         rule_cards.reset_card(self.conn, "ad_creative_fatigue", actor="測試員")
         after_rows = self._audit_rows()
-        # 只有 cold_warning 被改過，reset 應該只再多寫一筆（把它改回 2.5），
-        # 其餘 5 個本來就是預設值的欄位不該產生稽核噪音。
-        self.assertEqual(len(after_rows) - before, 1)
-        self.assertEqual(after_rows[-1]["entity_id"], "ad_creative_fatigue.cold_warning")
+        # cold_warning 被測試改過；cold_danger 的種子值（migration 鎖定、不得再改的 4.0）
+        # 跟現在的程式預設值（3.5，2026-08-08 業界體檢調降）本來就對不上，所以 reset 也會
+        # 把它拉到 3.5——這兩個之外的 4 個欄位本來就是預設值，不該產生稽核噪音。
+        self.assertEqual(len(after_rows) - before, 2)
+        touched = {r["entity_id"] for r in after_rows[-2:]}
+        self.assertEqual(
+            touched, {"ad_creative_fatigue.cold_warning", "ad_creative_fatigue.cold_danger"})
 
     def test_reset_unknown_card_raises(self):
         with self.assertRaises(ValueError):

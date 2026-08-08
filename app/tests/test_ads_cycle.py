@@ -118,13 +118,16 @@ class AdsNewPageTest(_BaseAdsTest):
         self.assertIn("checked", resp.text[index:index + 80])
 
     def test_five_objectives_aligned_to_meta_with_hints(self):
-        """票 3：成效目標改 5 選項，對齊 Meta 官方分類，各附白話說明。"""
+        """票 3：成效目標改 5 選項，對齊 Meta 官方分類，各附白話說明。
+        Meta 官方第六種目標「應用程式推廣」不開放選（本系統不涉 App），頁面用一句說明文字
+        交代原因（2026-08-08 業界體檢），但不會把它列成可選項目。"""
         resp = self.client.get(f"/brands/{self.bid}/ads/new")
         for value in ("awareness", "traffic", "engagement", "leads", "sales"):
             self.assertIn(f'value="{value}"', resp.text)
         for label in ("知名度", "流量", "互動", "潛在顧客", "銷售"):
             self.assertIn(label, resp.text)
-        self.assertNotIn("應用程式推廣", resp.text)
+        self.assertNotIn('value="app_promotion"', resp.text)
+        self.assertIn("應用程式推廣", resp.text)
 
     def test_duration_suggestion_shown_with_rationale(self):
         """票 3：檔期長度顯示建議值（預設 14 天）與白話理由，可自訂 7–30 天。"""
