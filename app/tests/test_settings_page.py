@@ -304,6 +304,29 @@ class SettingsPageTest(unittest.TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertIn("連不上 GA4", resp.text)
 
+    # -- 票 11-copy-flows：整組複製提示詞的自訂開頭（全站一份、不分品牌） -----------
+
+    def test_prompt_header_saved_and_prefilled(self):
+        resp = self.client.post(
+            "/settings/prompt-header",
+            data={"prompt_header": "圖上文字一律平面實填，不要浮雕字"},
+            follow_redirects=False)
+        self.assertEqual(resp.status_code, 303)
+        self.assertEqual(
+            coresettings.get_setting(main.conn, coresettings.IMAGE_PROMPT_HEADER_SETTING),
+            "圖上文字一律平面實填，不要浮雕字")
+
+        page = self.client.get("/settings").text
+        self.assertIn("圖上文字一律平面實填，不要浮雕字", page)
+
+    def test_prompt_header_can_be_saved_empty(self):
+        coresettings.set_setting(main.conn, coresettings.IMAGE_PROMPT_HEADER_SETTING, "舊的開頭")
+        resp = self.client.post(
+            "/settings/prompt-header", data={"prompt_header": "  "}, follow_redirects=False)
+        self.assertEqual(resp.status_code, 303)
+        self.assertEqual(
+            coresettings.get_setting(main.conn, coresettings.IMAGE_PROMPT_HEADER_SETTING), "")
+
 
 if __name__ == "__main__":
     unittest.main()

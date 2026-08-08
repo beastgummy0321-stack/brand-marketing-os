@@ -272,7 +272,10 @@ def settings_ctx(request: Request, values=None, errors=None):
         # 各欄位的預設值先鋪好，再讓某一格的錯誤回顯蓋上去——values 整包取代的話，
         # 存花費上限失敗時素材資料夾那格會變空白（兩格在同一頁、互不相干）。
         values={"intake_budget": _num_str(coresettings.get_intake_budget_limit(web.conn)),
-                "creative_root": str(corecreative.get_root(web.conn)), **(values or {})},
+                "creative_root": str(corecreative.get_root(web.conn)),
+                "prompt_header": coresettings.get_setting(
+                    web.conn, coresettings.IMAGE_PROMPT_HEADER_SETTING, ""),
+                **(values or {})},
         errors=errors or {},
         **banner_ctx(request),
     )
@@ -380,6 +383,15 @@ async def settings_creative_root_post(request: Request, creative_root: str = For
         ), status_code=400)
     coresettings.set_setting(web.conn, corecreative.SETTING_KEY, str(path))
     return redirect_with_message("/settings", f"素材圖檔資料夾已設為 {path}。")
+
+
+@app.post("/settings/prompt-header")
+async def settings_prompt_header_post(request: Request, prompt_header: str = Form("")):
+    """整組複製提示詞的自訂開頭（票 11-copy-flows；ADR 0008 三）：全站一份、不分品牌，
+    存進 app_setting。選填——留白代表整組複製時不加開頭那一行，不是輸入錯誤。"""
+    coresettings.set_setting(
+        web.conn, coresettings.IMAGE_PROMPT_HEADER_SETTING, prompt_header.strip())
+    return redirect_with_message("/settings", "已儲存整組複製提示詞的自訂開頭。")
 
 
 @app.post("/settings/test-connection")

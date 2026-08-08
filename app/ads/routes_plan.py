@@ -36,6 +36,7 @@ from app.ads import reading as ads_reading
 from app.ads import repository as ads_repo
 from app.ads import routes as ads_routes
 from app.ads import simulation
+from app.ads import theme_batch
 from app.ads.routes_common import (
     DEFAULT_STEP_INDEX, DURATION_TIER_CONFIG, OBJECTIVES, OBJECTIVE_LABELS, SLIDER_STEPS,
     _crumb, _cycle_progress_items, _cycle_view, _duration_suggestion, _recommended_objective,
@@ -440,7 +441,17 @@ async def ads_plan_select_submit(request: Request, brand_id: str, cycle_id: str,
 
 @router.post("/brands/{brand_id}/ads/{cycle_id}/plan/approve")
 async def ads_plan_approve(request: Request, brand_id: str, cycle_id: str):
-    """關卡一：計畫確認。這是三道人工關卡的第一道，不可由系統自動代按。"""
+    """關卡一：計畫確認。這是三道人工關卡的第一道，不可由系統自動代按。
+
+    核准成功後立刻觸發預選格批次生成（票 09-preselect-autogen，app/ads/theme_batch.py）：
+    核准本身是已經發生的資料庫異動，批次生成是核准後的最佳努力動作——批次內部已經把
+    「AI 沒回」「費用超過上限」都收成錯誤清單／budget_stopped 旗標，不會拋例外讓這支路由
+    500，即使一個主題都沒生出來，使用者仍看得到「計畫確認了」，矩陣頁那些格維持灰卡，
+    可以再手動點生成。批次生成放在 plan.py 之外（不是 plan.approve() 內部）是刻意的：
+    theme_batch → brief_assembler → plan 已經是一條 import 鏈，plan.py 不能反過來 import
+    theme_batch，否則兩者互相 import 形成環（app/tests/test_architecture_boundaries.py
+    ImportCycleScanTest 這條防線設計上就是要擋這個，只是它只掃跨層 import，這裡先手動避開）。
+    """
     main_mod.require_brand(brand_id)
     actor = main_mod.require_actor(request)
     _require_cycle(brand_id, cycle_id)
@@ -449,5 +460,6 @@ async def ads_plan_approve(request: Request, brand_id: str, cycle_id: str):
     except ValueError as exc:
         return main_mod.redirect_with_message(
             f"/brands/{brand_id}/ads/{cycle_id}", str(exc), kind="warn")
+    theme_batch.generate_preselected_batch(main_mod.conn, brand_id, cycle_id, actor=actor)
     return main_mod.redirect_with_message(
         f"/brands/{brand_id}/ads/{cycle_id}", "計畫確認了，接下來做素材。")

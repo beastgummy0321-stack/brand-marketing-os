@@ -21,6 +21,9 @@ LLM_MODEL_SETTING = "llm_model"
 LLM_MODEL_ENV_VAR = "BRAND_OS_LLM_MODEL"
 DEFAULT_LLM_MODEL = "claude-opus-5"
 INTAKE_BUDGET_SETTING = "intake_budget_limit"
+# 整組複製提示詞的自訂開頭（票 11-copy-flows；ADR 0008 三）：全站一份，不分品牌——
+# 它描述的是「使用者用哪個生圖工具」，不是品牌事實。
+IMAGE_PROMPT_HEADER_SETTING = "image_prompt_batch_header"
 
 
 def get_setting(conn: Optional[sqlite3.Connection], key: str, default=None):

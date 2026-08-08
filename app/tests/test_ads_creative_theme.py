@@ -10,6 +10,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from app.ads import fingerprint as fp
 from app.ads import repository as ads_repo
 from app.ads import theme_repository as theme_repo
 from app.brand_intelligence import repository as bi_repo
@@ -187,6 +188,147 @@ class UpdateStatusTest(_Base):
         with self.assertRaises(ValueError):
             theme_repo.update_theme_status(
                 self.conn, self.bid, "cth_does_not_exist", status="adopted", actor=ACTOR)
+
+
+class AdoptThemeTest(_Base):
+    """票 10-adopt-reject AC1：一鍵採用 → 主題狀態與全部元件標採用，一次動作一筆
+    主題級決策紀錄；AC4：決策紀錄走既有稽核慣例（before/after）。"""
+
+    def test_adopt_sets_theme_status_to_adopted(self):
+        created = self._create(components=[
+            {"component_type": "body", "content": "三分鐘沖一杯好咖啡"},
+            {"component_type": "title", "content": "早晨從一杯開始"},
+        ])
+        adopted = theme_repo.adopt_theme(self.conn, self.bid, created["id"], actor=ACTOR)
+        self.assertEqual(adopted["status"], "adopted")
+        refetched = theme_repo.get_theme(self.conn, self.bid, created["id"])
+        self.assertEqual(refetched["status"], "adopted")
+        # AC1／AC3：沒有逐元件的「已採用」欄位——元件是否算數看主題本身的 status，
+        # 全部元件（body／title 都在）跟著主題一起算採用，不需要逐欄位勾選。
+        for component in refetched["components"]:
+            self.assertFalse(component["rejected"])
+
+    def test_adopt_writes_exactly_one_theme_level_decision(self):
+        created = self._create()
+        theme_repo.adopt_theme(self.conn, self.bid, created["id"], actor=ACTOR)
+        rows = self.conn.execute(
+            "SELECT * FROM adoption_decision WHERE brand_id = ? AND target_type = 'theme'"
+            " AND target_id = ?", (self.bid, created["id"]),
+        ).fetchall()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["decision"], "adopted")
+        self.assertEqual(rows[0]["campaign_cycle_id"], self.cycle_id)
+        self.assertEqual(rows[0]["decided_by"], ACTOR)
+
+    def test_adopt_writes_audit_log_with_before_after(self):
+        created = self._create()
+        theme_repo.adopt_theme(self.conn, self.bid, created["id"], actor=ACTOR)
+        row = self.conn.execute(
+            "SELECT * FROM audit_log WHERE entity_type = 'creative_theme'"
+            " AND action = 'adopt' AND entity_id = ?", (created["id"],)
+        ).fetchone()
+        self.assertIsNotNone(row)
+        before = json.loads(row["before_json"])
+        after = json.loads(row["after_json"])
+        self.assertEqual(before["status"], "draft")
+        self.assertEqual(after["status"], "adopted")
+
+    def test_adopt_missing_theme_raises(self):
+        with self.assertRaises(ValueError):
+            theme_repo.adopt_theme(self.conn, self.bid, "cth_does_not_exist", actor=ACTOR)
+
+    def test_adopt_missing_actor_raises(self):
+        created = self._create()
+        with self.assertRaises(ValueError):
+            theme_repo.adopt_theme(self.conn, self.bid, created["id"], actor="")
+
+
+class RejectComponentTest(_Base):
+    """票 10-adopt-reject AC2：單元件退件＋理由 → 該元件除名、理由碼與指紋進拒絕記憶；
+    AC3：不提供逐欄位勾選採用、退件不影響同主題其他元件；AC4：稽核慣例（before/after）。"""
+
+    def _theme_with_two_body_components(self):
+        return self._create(components=[
+            {"component_type": "body", "content": "三分鐘沖一杯好咖啡",
+             "fingerprint_json": {"angle": "benefit", "tone": "warm",
+                                  "format": "single_image", "selling_point": "quality"}},
+            {"component_type": "body", "content": "辦公室也能沖一杯講究的咖啡",
+             "fingerprint_json": {"angle": "scene", "tone": "professional",
+                                  "format": "single_image", "selling_point": "convenience"}},
+        ])
+
+    def test_reject_marks_only_that_component_rejected(self):
+        created = self._theme_with_two_body_components()
+        target, other = created["components"]
+        result = theme_repo.reject_component(
+            self.conn, self.bid, target["id"], reason_code="off_brand", actor=ACTOR)
+        self.assertTrue(result["rejected"])
+        self.assertEqual(result["reject_reason_label"], fp.REJECT_REASON_LABELS["off_brand"])
+
+        refetched = theme_repo.get_theme(self.conn, self.bid, created["id"])
+        components_by_id = {c["id"]: c for c in refetched["components"]}
+        self.assertTrue(components_by_id[target["id"]]["rejected"])
+        # AC3：退件不影響同主題其他元件——另一則 body 仍然是未退件狀態。
+        self.assertFalse(components_by_id[other["id"]]["rejected"])
+        # 元件本身沒被砍掉（append-only 稽核慣例），內容還在。
+        self.assertEqual(components_by_id[target["id"]]["content"], target["content"])
+
+        # 主題狀態不因單一元件退件而改變。
+        self.assertEqual(refetched["status"], "draft")
+
+    def test_reject_writes_decision_with_reason_code_and_fingerprint_snapshot(self):
+        created = self._theme_with_two_body_components()
+        target = created["components"][0]
+        theme_repo.reject_component(
+            self.conn, self.bid, target["id"], reason_code="off_brand", actor=ACTOR)
+        row = self.conn.execute(
+            "SELECT * FROM adoption_decision WHERE brand_id = ? AND target_type = 'theme_component'"
+            " AND target_id = ?", (self.bid, target["id"]),
+        ).fetchone()
+        self.assertIsNotNone(row)
+        self.assertEqual(row["decision"], "rejected")
+        self.assertEqual(row["reason_code"], "off_brand")
+        self.assertEqual(json.loads(row["fingerprint_json"]), target["fingerprint_json"])
+        self.assertEqual(row["campaign_cycle_id"], self.cycle_id)
+
+    def test_reject_writes_audit_log_with_before_after(self):
+        created = self._theme_with_two_body_components()
+        target = created["components"][0]
+        theme_repo.reject_component(
+            self.conn, self.bid, target["id"], reason_code="hook_weak", actor=ACTOR)
+        row = self.conn.execute(
+            "SELECT * FROM audit_log WHERE entity_type = 'creative_theme_component'"
+            " AND action = 'reject' AND entity_id = ?", (target["id"],)
+        ).fetchone()
+        self.assertIsNotNone(row)
+        before = json.loads(row["before_json"])
+        after = json.loads(row["after_json"])
+        self.assertFalse(before["rejected"])
+        self.assertTrue(after["rejected"])
+        self.assertEqual(after["reason_code"], "hook_weak")
+
+    def test_reject_invalid_reason_code_raises(self):
+        created = self._theme_with_two_body_components()
+        target = created["components"][0]
+        with self.assertRaises(ValueError):
+            theme_repo.reject_component(
+                self.conn, self.bid, target["id"], reason_code="not_a_real_reason", actor=ACTOR)
+
+    def test_reject_missing_component_raises(self):
+        with self.assertRaises(ValueError):
+            theme_repo.reject_component(
+                self.conn, self.bid, "cthc_does_not_exist", reason_code="off_brand", actor=ACTOR)
+
+    def test_reject_component_with_no_fingerprint_does_not_crash(self):
+        """image_prompt 這類型別本來就沒有四軸指紋——退件仍要能記錄，只是拒絕約束
+        推不出具體的軸值文字（app/ads/creative.py _rejection_constraints() 既有行為）。"""
+        created = self._create(components=[
+            {"component_type": "image_prompt", "content": "暖金色茶席上的三入禮盒"},
+        ])
+        target = created["components"][0]
+        result = theme_repo.reject_component(
+            self.conn, self.bid, target["id"], reason_code="visual_weird", actor=ACTOR)
+        self.assertTrue(result["rejected"])
 
 
 if __name__ == "__main__":

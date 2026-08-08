@@ -215,6 +215,25 @@
       <button type="submit" class="btn btn-secondary">儲存素材資料夾</button>
     </div>
   </form>
+
+  <h3>整組複製提示詞的自訂開頭</h3>
+  <p class="settings-desc">
+    素材工作檯的「整組複製」按下去時，會自動接上這段開頭，再接張數與尺寸行，最後才是提示詞本身，
+    貼進生圖工具就能直接用。這裡只寫你慣用的全域風格指令（例如「圖上文字一律平面實填，
+    不要浮雕、液態字、金屬字、粗糙紋理、磨砂感」），不要寫任何佔位符——張數與尺寸由系統自動接上。
+    全站只有一份，不分品牌。
+  </p>
+  <form method="post" action="/settings/prompt-header" novalidate>
+    {% call field('prompt_header', '自訂開頭', required=False,
+                  hint='留白代表整組複製時不加開頭這一行，只有尺寸張數行與提示詞。',
+                  error=errors.prompt_header) %}
+    <textarea id="prompt_header" name="prompt_header" rows="3"
+              placeholder="例如：圖上文字一律平面實填，不要浮雕、液態字、金屬字、粗糙紋理、磨砂感">{{ values.prompt_header }}</textarea>
+    {% endcall %}
+    <div class="form-actions">
+      <button type="submit" class="btn btn-secondary">儲存開頭</button>
+    </div>
+  </form>
 </section>
 
 <section class="settings-section" aria-labelledby="settings-budget-title">
