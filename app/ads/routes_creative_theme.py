@@ -16,11 +16,18 @@ from fastapi.responses import JSONResponse
 import app.shared.web as main_mod
 from app.ads import brief_assembler
 from app.ads import theme_engine
+from app.ads import theme_engine_video
 from app.ads import theme_repository as theme_repo
 from app.ads.routes_common import _require_cycle
 from app.core import creative_assets
 
 router = APIRouter(prefix="/api/ads")
+
+# 格式 key → 生成函式：theme_engine.GENERATORS（單圖／輪播）＋ video（票 08，獨立成檔的理由
+# 見 app/ads/theme_engine_video.py 檔頭——theme_engine.py 逼近 800 行上限，不能再加）。
+# 在這裡合併而不是讓 theme_engine.py 匯入 theme_engine_video 回頭註冊，是為了不讓兩檔互相
+# import（theme_engine_video 已經單向 import theme_engine，反過來會形成循環 import）。
+GENERATORS = {**theme_engine.GENERATORS, "video": theme_engine_video.generate_video_theme}
 
 
 @router.post("/brands/{brand_id}/ads/{cycle_id}/cells/{cell_id}/formats/{format_key}/themes")
@@ -36,13 +43,18 @@ async def generate_theme(request: Request, brand_id: str, cycle_id: str, cell_id
     _require_cycle(brand_id, cycle_id)
     conn = main_mod.conn
 
+    generator = GENERATORS.get(format_key)
+    if generator is None:
+        return JSONResponse(
+            {"error": f"這個格式（{format_key}）的生成引擎還沒做。"}, status_code=400)
+
     try:
         brief, err = brief_assembler.assemble_brief(
             conn, brand_id, cycle_id, cell_id, format_key, theme_count=1, actor=actor)
         if err:
             return JSONResponse({"error": err}, status_code=409)
 
-        generated, err = theme_engine.generate_single_image_theme(conn, brief, actor=actor)
+        generated, err = generator(conn, brief, actor=actor)
         if err:
             # 花費超上限與 AI 沒能產出可用內容都是「這次沒能生出主題，理由如下」，
             # 用同一個狀態碼（422）——跟純輸入錯誤（400）、計畫未核准（409）分開即可，
