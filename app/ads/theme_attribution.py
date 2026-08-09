@@ -27,7 +27,7 @@ from app.core.audit import write_audit
 from app.core.db import now_iso
 
 # Meta breakdown 鍵 → creative_theme_component.component_type（本系統的欄位名沒有
-# _asset 尾碼，見 app/ads/theme_engine.py _normalize_single_image()）。
+# _asset 尾碼，見 app/creative/theme_engine.py normalize_single_image()）。
 _ASSET_FIELD_TO_COMPONENT_TYPE = (
     ("body_asset", "body"), ("title_asset", "title"), ("description_asset", "description"),
 )
