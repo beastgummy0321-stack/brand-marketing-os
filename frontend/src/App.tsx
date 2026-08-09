@@ -5,6 +5,8 @@ import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { EmptyState } from "@/components/layout/EmptyState";
 import { CockpitPage } from "@/components/cockpit/CockpitPage";
 import { BrandCard } from "@/components/overview/BrandCard";
+import { MatrixPage } from "@/components/workbench/MatrixPage";
+import { WorkbenchPage } from "@/components/workbench/WorkbenchPage";
 import { fetchOverview, type DashboardBrandCard } from "@/lib/api";
 
 /** 新殼唯一進入點。路徑式路由（票 05-spa-routing，裝 react-router-dom，basename="/app"
@@ -22,6 +24,8 @@ function App() {
     <Routes>
       <Route path="/" element={<RootRoute />} />
       <Route path="/brands/:brandId" element={<BrandRoute />} />
+      <Route path="/brands/:brandId/workbench" element={<WorkbenchRoute />} />
+      <Route path="/brands/:brandId/workbench/:cycleId" element={<MatrixRoute />} />
     </Routes>
   );
 }
@@ -45,6 +49,26 @@ function BrandRoute() {
   return (
     <AppShell brandId={brandId ?? null}>
       <CockpitPage brandId={brandId ?? ""} />
+    </AppShell>
+  );
+}
+
+/** 素材工作檯入口（畫面1，票 15-workbench-entry）。 */
+function WorkbenchRoute() {
+  const { brandId } = useParams<{ brandId: string }>();
+  return (
+    <AppShell brandId={brandId ?? null}>
+      <WorkbenchPage brandId={brandId ?? ""} />
+    </AppShell>
+  );
+}
+
+/** 矩陣頁（畫面2）路由殼：本票只接路由，內容留給票 16-matrix-page。 */
+function MatrixRoute() {
+  const { brandId, cycleId } = useParams<{ brandId: string; cycleId: string }>();
+  return (
+    <AppShell brandId={brandId ?? null}>
+      <MatrixPage brandId={brandId ?? ""} cycleId={cycleId ?? ""} />
     </AppShell>
   );
 }

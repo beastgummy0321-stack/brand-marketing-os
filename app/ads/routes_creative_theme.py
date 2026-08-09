@@ -126,6 +126,21 @@ async def theme_matrix(request: Request, brand_id: str, cycle_id: str):
     return {"cells": rows}
 
 
+@router.get("/brands/{brand_id}/ads/{cycle_id}/themes/{theme_id}")
+async def get_theme_detail(request: Request, brand_id: str, cycle_id: str, theme_id: str):
+    """單一主題完整內容（票 17-panel-single-image）：矩陣資料端點（`theme_matrix()`）只回
+    id／name／status 摘要給小卡用，側板要逐則顯示元件內容（圖片提示詞／文案／標題／說明），
+    需要另一次完整讀取——直接重用 `theme_repo.get_theme()`，不重寫查詢（該函式已經在
+    generate_theme()／adopt_theme() 兩支路由的回應裡用過同一包資料）。"""
+    main_mod.require_brand(brand_id)
+    _require_cycle(brand_id, cycle_id)
+    conn = main_mod.conn
+    theme = theme_repo.get_theme(conn, brand_id, theme_id)
+    if theme is None or theme["campaign_cycle_id"] != cycle_id:
+        raise main_mod.NotFoundKind("主題")
+    return {"theme": theme}
+
+
 @router.post("/brands/{brand_id}/ads/{cycle_id}/themes/{theme_id}/folder")
 async def open_theme_folder(request: Request, brand_id: str, cycle_id: str, theme_id: str):
     """開這個主題的素材資料夾：沿用既有 os.startfile 先例（app/core/creative_assets.py，

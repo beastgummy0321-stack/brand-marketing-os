@@ -11,6 +11,13 @@ export function formatCount(value: number | null): string {
   return value.toLocaleString("zh-TW");
 }
 
+/** AI 花費估計一律美元計價（app/llm/pricing.py cost_ceiling），跟 formatCurrency 的
+ * NT$ 是兩種幣別，不能共用同一顆格式化函式——文案沿用既有 Jinja 頁面的既定寫法
+ * （app/templates/ads_cycle.html「{{ '%.2f'|format(plan_cost) }} 美元」）。 */
+export function formatUsd(value: number): string {
+  return `${value.toFixed(2)} 美元`;
+}
+
 export function formatRoas(value: number | null): string {
   if (value === null) return "累積中";
   return `${value.toFixed(2)}x`;
