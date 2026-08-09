@@ -218,3 +218,8 @@ router.include_router(routes_performance.router)
 # `/brands/{brand_id}/ads/{cycle_id}` 萬用路由都不會撞（前綴完全不同），掛的順序不影響。
 from app.ads import routes_creative_theme  # noqa: E402
 router.include_router(routes_creative_theme.router)
+
+# 票 13-workbench-cards：素材工作檯任務卡衍生查詢，同樣固定 `/api/ads/...` 前綴，
+# 掛在 routes_creative_theme 之後即可（GENERATORS 需要它先 import 完成）。
+from app.ads import routes_workbench  # noqa: E402
+router.include_router(routes_workbench.router)
