@@ -81,27 +81,55 @@ def _slug(text: str, limit: int = 20) -> str:
     return cleaned[:limit] or "未命名"
 
 
+def cycle_short_code(cycle: dict) -> str:
+    """檔期短碼：跟主題資料夾短碼（`app/ads/theme_engine.py` 的 `folder_code`，
+    ADR 0008 第三節「人看得懂的名字在前，四碼短碼在後」）同一種做法——拿高熵 id 的
+    尾段當短碼。這裡不生新 id：`cycle["id"]` 本身就是 `new_id("ccy")` 產生的高熵 id，
+    重出交接包時取同一個 id 的尾段，短碼才會每次都一樣，不會今天跟明天對不起來。
+    """
+    return cycle["id"][-4:]
+
+
 def build_names(brand: dict, cycle: dict, cell: dict, index: int) -> dict:
-    """命名建議。格式固定，之後同步回來時才解析得回是哪一期哪一格。"""
+    """命名建議。格式固定，之後同步回來時才解析得回是哪一期哪一格。
+
+    campaign_name 尾巴多帶檔期短碼（票 22）：utm_campaign 改用 Meta 動態變數
+    {{campaign.name}} 之後，系統不再把 cycle id 寫死進網址參數，投手得照這裡建議的
+    活動名稱去 Meta 建立，Meta 送廣告時才會把這個名字（含短碼）代回網址，系統才認得回來。
+    """
     day = (cycle["start_date"] or date.today().isoformat()).replace("-", "")
     return {
-        "campaign_name": f"{_slug(brand['name'])}_{day}_{cycle['objective']}",
+        "campaign_name": f"{_slug(brand['name'])}_{day}_{cycle['objective']}_{cycle_short_code(cycle)}",
         "adset_name": f"{_slug(cell.get('creative_angle') or '')}_{index:02d}",
         "ad_name": f"{_slug(cell.get('creative_angle') or '')}_{index:02d}_ad",
     }
 
 
 def build_utm(cycle: dict, cell: dict) -> dict:
+    """票 22：utm_campaign 改用 Meta 官方動態網址變數（Meta for Developers 建議做法，
+    見 `.scratch/creative-studio/issues/22-utm-dynamic-params.md` 背景段的查證），
+    值本身就是字面上的 "{{campaign.name}}"——不是 Python 格式化字串，這串文字原封
+    不動留在網址裡，由 Meta 在廣告送達時代入投手實際在後台建立的行銷活動名稱。就算
+    投手事後在 Meta 後台調整過活動結構，網址參數也會自動跟著走，不像寫死 cycle["id"]
+    那樣跟實際脫鉤又無法自動糾正。
+
+    utm_content 保留 cell["id"]，不跟進改成 {{ad.name}}：cell 是系統內部的切角格
+    （為什麼買，比較優劣的那一層），不是 Meta 的廣告物件；{{ad.name}} 代進來的是
+    投手在 Meta 端實際打的廣告名稱文字，跟這裡要認回「屬於哪個切角」的內部 id 是兩件
+    事，套上去只會讓系統認錯，不是「不一致」的問題。
+    """
     return {
         "utm_source": "facebook",
         "utm_medium": "paid",
-        "utm_campaign": cycle["id"],
+        "utm_campaign": "{{campaign.name}}",
         "utm_content": cell["id"],
     }
 
 
 def utm_query(utm: dict) -> str:
-    return "&".join(f"{k}={quote(str(v))}" for k, v in utm.items())
+    # safe 多加 {}：utm_campaign 的 Meta 動態變數要以字面 {{...}} 留在網址裡讓 Meta 解析，
+    # quote() 預設會把 { } 編碼成 %7B %7D，Meta 就認不出這是動態變數了。
+    return "&".join(f"{k}={quote(str(v), safe='/{}')}" for k, v in utm.items())
 
 
 def _default_destination(conn, brand_id: str) -> Optional[str]:

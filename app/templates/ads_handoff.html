@@ -205,6 +205,13 @@
 
   <h3 class="handoff-step">① 建立行銷活動</h3>
   {{ paste_row(labels.campaign_name, package.campaign_name, 'cn-' ~ package.id, brand.id, cycle.id, 'campaign_name') }}
+  <p class="handoff-note">
+    名字最後 4 碼是系統認回這一期檔期的短碼，整串照抄貼進 Meta，不要自己刪改。
+    下面「{{ labels.destination_url }}」欄位裡會看到一段
+    <code>{% raw %}{{campaign.name}}{% endraw %}</code> 文字，那不是打錯——是 Meta
+    官方的動態變數：只要照這裡的建議把行銷活動命名進去，Meta 送廣告時就會自動把這個
+    名字（連短碼）代回網址，之後就算在 Meta 後台調整過活動結構，網址也認得回來。
+  </p>
   {{ paste_row(labels.objective, package.objective_label, 'ob-' ~ package.id, brand.id, cycle.id, 'objective') }}
 
   <h3 class="handoff-step">② 建立廣告組合</h3>

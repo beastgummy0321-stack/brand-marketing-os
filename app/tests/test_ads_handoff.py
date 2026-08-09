@@ -104,7 +104,7 @@ class _BaseHandoffTest(unittest.TestCase):
                          data={}, follow_redirects=False)
         self.client.post(f"/brands/{self.bid}/ads/{self.cycle_id}/plan/approve",
                          follow_redirects=False)
-        cell_id = main.conn.execute(
+        cell_id = self.cell_id = main.conn.execute(
             "SELECT id FROM experiment_cell WHERE campaign_cycle_id = ?",
             (self.cycle_id,)).fetchone()["id"]
         reply = json.dumps({"variants": [
@@ -162,12 +162,34 @@ class PackageBuildTest(_BaseHandoffTest):
         self.assertIn("sales", package["campaign_name"])
         self.assertTrue(package["adset_name"].startswith("早上第一杯"))
 
-    def test_utm_carries_cycle_and_cell_ids(self):
-        """UTM 帶內部 id，成效回來時才對得回是哪一期哪一個切角。"""
+    def test_campaign_name_ends_with_cycle_short_code(self):
+        """票 22：建議活動名稱尾巴帶檔期短碼，跟主題資料夾短碼同一種風格（尾 4 碼）——
+        投手照抄這個名字，Meta 動態變數代回來的名字裡就找得回是哪一期。"""
+        self._build()
+        package = self._packages()[0]
+        self.assertTrue(package["campaign_name"].endswith(self.cycle_id[-4:]))
+        self.assertEqual(len(self.cycle_id[-4:]), 4)
+
+    def test_utm_campaign_is_meta_dynamic_variable_not_hardcoded_cycle_id(self):
+        """票 22：utm_campaign 改用 Meta 動態變數 {{campaign.name}} 的字面值——寫死
+        cycle id 在投手手動調整過 Meta 活動結構後會跟實際脫鉤，動態變數才能自動跟著走。
+        utm_content 維持 cell id：那是系統內部的切角格，不是 Meta 的廣告物件。"""
         self._build()
         utm = json.loads(self._packages()[0]["utm_json"])
-        self.assertEqual(utm["utm_campaign"], self.cycle_id)
+        self.assertEqual(utm["utm_campaign"], "{{campaign.name}}")
+        self.assertEqual(utm["utm_content"], self.cell_id)
         self.assertEqual(utm["utm_source"], "facebook")
+
+    def test_full_url_leaves_meta_dynamic_variable_unencoded(self):
+        """{{campaign.name}} 要原封不動留在網址裡，quote() 把大括號編碼成 %7B%7D 的話
+        Meta 就認不出這是動態變數了（票 22 UTM 值改動連帶要顧到的編碼細節）。"""
+        bi_repo.create_channel(main.conn, self.bid, channel_type="website",
+                               name="官網", identifier="https://example.test",
+                               actor=ACTOR)
+        self._build()
+        full_url = self._packages()[0]["full_url"]
+        self.assertIn("utm_campaign={{campaign.name}}", full_url)
+        self.assertNotIn("%7B", full_url)
 
     def test_daily_budget_is_computed_not_asked_from_llm(self):
         self._build()
