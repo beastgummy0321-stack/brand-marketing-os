@@ -34,6 +34,12 @@
 CRUD 本體另開 `app/ads/theme_repository.py` 新檔，不塞進本檔；這 4 行是「刪檔期／刪產品要
 沿用既有 cascade 慣例」的唯一登記點，該機制目前只活在這個檔案裡，不值得為 4 行拆檔。
 
+2026-08-09 的票 12-attribution-adjust 原規劃元件層成效開一張新表，經 review 認為規格只要
+「當下相對排名」不要歷史趨勢，精簡成在既有 `creative_theme_component`（票 02-theme-tables
+已登記過 cascade）直接加欄位覆蓋最新成效；`app/ads/repository.py` 因此不必再登記新表，
+`CYCLE_CASCADE_TABLES`／`_PRODUCT_CASCADE_LABELS` 兩處維持原狀。migration 仍是票 12 帶的
+唯一一支 `0016`，只是形狀從 CREATE TABLE 改成 ALTER TABLE 加欄位。
+
 ## 二、四個套件糾成一個 import 環（五組相鄰對）
 
 2026-08-07 補了機器掃描（`test_architecture_boundaries.py` 的 `ImportCycleScanTest`），

@@ -97,6 +97,13 @@ ASSET_BREAKDOWNS = (
     "image_asset", "link_url_asset", "title_asset", "video_asset",
 )
 
+# D 段元件層歸因（票 12-attribution-adjust）實際要拉的三種：image_asset 不拉，理由見
+# ADR 0008 二「圖不生、不逐張歸因」——圖片不進系統，廣告層成效已經等於主題成效，
+# 元件層只留文字三種（同一則廣告的 5 主要文案／5 標題／5 說明才是真的不一樣、才需要
+# 拆開比較）。只搭配五類指標（已查證，見上方 ASSET_BREAKDOWNS 註解）：
+# impressions/clicks/spend/reach/actions/action_values——frequency 不在相容清單內。
+COMPONENT_BREAKDOWNS = ("body_asset", "title_asset", "description_asset")
+
 
 class MetaClient:
     """真的會發網路請求的用戶端。唯讀——本類別刻意沒有任何 POST／DELETE 方法。"""
@@ -162,6 +169,20 @@ class MetaClient:
         rows = self._paged(f"{_normalise_account_id(account_id)}/insights", params)
         return [parse_insight_row(r) for r in rows]
 
+    def list_component_breakdowns(self, account_id: str, since: str, until: str) -> list:
+        """素材元件層（body/title/description）breakdown（票 12 D 段）。不沿用
+        `list_insights()` 那份固定 `fields`——frequency 不在元件層 breakdown 相容的指標
+        清單內（見 COMPONENT_BREAKDOWNS 上方註解），這裡只要相容的欄位，避免整批被拒絕。
+        """
+        params = {
+            "level": "ad", "time_range": f'{{"since":"{since}","until":"{until}"}}',
+            "fields": "ad_id,date_start,date_stop,impressions,clicks,spend,actions,action_values",
+            "breakdowns": ",".join(COMPONENT_BREAKDOWNS),
+            "limit": 200,
+        }
+        rows = self._paged(f"{_normalise_account_id(account_id)}/insights", params)
+        return [parse_component_breakdown_row(r) for r in rows]
+
 
 def parse_insight_row(row: dict) -> Insight:
     """Meta 的一列 insights → 內部統一格式。所有數字欄位缺值一律當 0，不猜、不沿用。"""
@@ -199,12 +220,56 @@ def parse_insight_row(row: dict) -> Insight:
     )
 
 
+@dataclass
+class ComponentBreakdownRow:
+    """DCO／彈性廣告素材元件層一列（票 12 D 段）：某支廣告在某個 body/title/description
+    素材組合下的成效切片。三個 *_asset 欄位是 Meta 回傳的原始 dict（預期帶 id／text），
+    這裡不解讀內容，交給 app/ads/theme_attribution.py 判讀——平台隔離原則，這個檔案
+    只認欄位名，不做業務判斷。"""
+
+    ad_id: str
+    date_start: str
+    date_stop: str
+    impressions: int
+    clicks: int
+    spend: float
+    conversions: float
+    revenue: float
+    body_asset: Optional[dict] = None
+    title_asset: Optional[dict] = None
+    description_asset: Optional[dict] = None
+
+
+def parse_component_breakdown_row(row: dict) -> ComponentBreakdownRow:
+    def _num(key, cast=float):
+        try:
+            return cast(row.get(key) or 0)
+        except (TypeError, ValueError):
+            return cast(0)
+
+    def _asset(key):
+        value = row.get(key)
+        return value if isinstance(value, dict) else None
+
+    return ComponentBreakdownRow(
+        ad_id=str(row.get("ad_id") or ""),
+        date_start=row.get("date_start") or "", date_stop=row.get("date_stop") or "",
+        impressions=_num("impressions", int), clicks=_num("clicks", int), spend=_num("spend"),
+        conversions=_sum_actions(row.get("actions"), _PURCHASE_ACTIONS),
+        revenue=_sum_actions(row.get("action_values"), _PURCHASE_ACTIONS),
+        body_asset=_asset("body_asset"), title_asset=_asset("title_asset"),
+        description_asset=_asset("description_asset"),
+    )
+
+
 class FakeMetaClient:
     """測試用：不發任何網路請求，回放注入的資料或拋出注入的錯誤。"""
 
-    def __init__(self, campaigns=None, insights=None, error: Optional[Exception] = None):
+    def __init__(self, campaigns=None, insights=None, error: Optional[Exception] = None,
+                component_breakdowns=None):
         self._campaigns = campaigns or []
         self._insights = insights or []
+        self._component_breakdowns = component_breakdowns or []
         self.error = error
         self.calls: list = []
 
@@ -219,3 +284,9 @@ class FakeMetaClient:
         if self.error:
             raise self.error
         return list(self._insights)
+
+    def list_component_breakdowns(self, account_id: str, since: str, until: str) -> list:
+        self.calls.append(("component_breakdowns", account_id, since, until))
+        if self.error:
+            raise self.error
+        return list(self._component_breakdowns)

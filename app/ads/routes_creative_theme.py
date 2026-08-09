@@ -15,6 +15,7 @@ from fastapi.responses import JSONResponse
 
 import app.shared.web as main_mod
 from app.ads import brief_assembler
+from app.ads import theme_attribution
 from app.ads import theme_engine
 from app.ads import theme_engine_video
 from app.ads import theme_repository as theme_repo
@@ -138,6 +139,20 @@ async def open_theme_folder(request: Request, brand_id: str, cycle_id: str, them
     path = creative_assets.open_folder(
         conn, brand_id, cycle_id, theme_engine.theme_folder_name(theme))
     return {"folder_path": str(path)}
+
+
+@router.get("/brands/{brand_id}/ads/{cycle_id}/themes/{theme_id}/components/performance")
+async def theme_component_performance(request: Request, brand_id: str, cycle_id: str,
+                                      theme_id: str):
+    """元件層相對排名（票 12-attribution-adjust 驗收 4）：同一則廣告裡 body／title／
+    description 誰贏誰輸，只回排名所需的比較用資料，不提供絕對值對帳介面（ADR 0008 二）。"""
+    main_mod.require_brand(brand_id)
+    _require_cycle(brand_id, cycle_id)
+    conn = main_mod.conn
+    theme = theme_repo.get_theme(conn, brand_id, theme_id)
+    if theme is None or theme["campaign_cycle_id"] != cycle_id:
+        raise main_mod.NotFoundKind("主題")
+    return {"components": theme_attribution.rank_theme_components(conn, brand_id, theme_id)}
 
 
 @router.post("/brands/{brand_id}/ads/{cycle_id}/themes/{theme_id}/adopt")

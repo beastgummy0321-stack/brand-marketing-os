@@ -65,7 +65,7 @@ class AdsSchemaTest(unittest.TestCase):
                 "SELECT version FROM schema_migrations WHERE module = 'ads'"
             )
         ]
-        self.assertEqual(versions, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15])
+        self.assertEqual(versions, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16])
 
     def test_all_expected_tables_exist(self):
         names = {

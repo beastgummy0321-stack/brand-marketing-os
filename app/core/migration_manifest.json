@@ -14,6 +14,7 @@
   "ads/0013_reach.sql": "d4168de3e196beeff4db38d56042a98e12e6cd8f35152f6c9751bb938e74c1dc",
   "ads/0014_funnel_stage_backfill.sql": "b3b850705a6fcf25057890b8f2f8e86f0227602933f450cce7affd08677e786d",
   "ads/0015_creative_theme.sql": "48480c25d3147c39dac9c3d0773da620134d0524cccaff01bd1626f6bd193cdf",
+  "ads/0016_theme_component_performance.sql": "56ca2676149a5d4cb0f75430a1fe61e41b1b31f4630663a572493ef82b6a27ab",
   "brand_intelligence/0001_tables.sql": "6ea5e39a0886c1df82581a5fa1e98b457327b7fd64d845d69b5c2098b09d55e2",
   "brand_intelligence/0002_brand_report.sql": "0c0a7778a73741a743004a422d89b485d86863d6d83575752c4d9cea79760a2d",
   "brand_intelligence/0003_customer_voice.sql": "1271b103b6a1fba161958a06d8688dd4a4740d2e00981854693599946bca678f",

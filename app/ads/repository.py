@@ -320,7 +320,6 @@ def set_cycle_archived(conn: sqlite3.Connection, brand_id: str, cycle_id: str, *
 # 手動拓樸排序：例如 external_ad_mapping 被 campaign_activation/performance_snapshot/
 # performance_reading/derived_metric 引用，得先清那幾張才能清它自己；它又引用
 # publishing_package／final_asset，所以它得排在那兩張之前。
-#
 # learning_ledger 不在這裡：它是跨期累積的學習紀錄（見 repository 檔頭），來源檔期被刪
 # 不代表學習本身作廢，見 delete_cycle() 內的解除關聯處理（不刪列，只把外鍵欄位設為 NULL）。
 CYCLE_CASCADE_TABLES = (
@@ -680,7 +679,6 @@ PRODUCT_CASCADE_TABLES = (
 # 父列被刪、子列留著就是懸空外鍵，整個刪除會在 COMMIT 被擋下（實測過：拿真實資料庫
 # 複本刪一個虛構產品，就是被 creative_brief -> experiment_cell 與
 # external_ad_mapping -> publishing_package 擋下來的）。
-#
 # 而且它有傳遞性：把 external_ad_mapping 納入清理之後，指向它的 campaign_activation
 # 又變成新的懸空來源。手工維護一份清單一定會漏掉第二層、第三層，所以這裡改成沿著
 # 外鍵自動走一遍——只往「誰指著我」的方向走（要刪的列被誰參照），不往「我指著誰」

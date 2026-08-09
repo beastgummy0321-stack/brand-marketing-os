@@ -24,6 +24,7 @@ from app.ads import handoff as ads_handoff
 from app.ads import meta_api
 from app.ads import performance as ads_performance
 from app.ads import repository as ads_repo
+from app.ads import theme_attribution
 from app.brand_intelligence import repository as bi
 from app.core import settings as coresettings
 from app.core.audit import write_audit
@@ -349,6 +350,24 @@ def sync_account(conn, actor: str, *, client=None, account_id: Optional[str] = N
         result.snapshots += 1
         if cycle_id is None:
             brand_ids_with_brand_level_rows.add(brand_id)
+
+    # D 段元件層歸因（票 12）：body／title／description breakdown，image_asset 不拉
+    # （ADR 0008）。這條路掛了（Meta 拒絕 breakdown 請求、格式不相容等）不能拖累廣告層
+    # 同步本身——元件層排名是加分項，廣告層數字才是花錢判讀的地基，這裡單獨接住失敗。
+    try:
+        component_rows = []
+        for chunk_since, chunk_until in _month_windows(since, until):
+            component_rows.extend(
+                client.list_component_breakdowns(account_external, chunk_since, chunk_until))
+    except meta_api.MetaApiError:
+        component_rows = []
+
+    for row in component_rows:
+        brand_id = _claimed_brand_for(conn, ad_account_id, None, row.ad_id)
+        if not brand_id:
+            continue
+        cycle_id, _mapping_id = _cycle_for(conn, brand_id, None, row.ad_id)
+        theme_attribution.record_component_breakdown(conn, brand_id, cycle_id, row, actor=actor)
 
     conn.commit()
     for bid in brand_ids_with_brand_level_rows:

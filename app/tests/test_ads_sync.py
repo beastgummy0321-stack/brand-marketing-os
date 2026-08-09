@@ -524,6 +524,10 @@ class BrandLevelMultiMonthBackfillTest(_BaseSyncTest):
             self.calls.append((since, until))
             return list(self._insights_by_month.get(since[:7], []))
 
+        def list_component_breakdowns(self, account_id, since, until):
+            """票 12：sync_account 每次同步都會呼叫這支，本測試不驗元件層歸因，回空即可。"""
+            return []
+
     def test_multi_month_backfill_produces_one_group_per_data_month(self):
         cid, name = "970", f"{self.brand_name}_20250801_sales"
         self._sync(campaigns=[_campaign(cid, name)])

@@ -463,6 +463,48 @@ def _apply_similarity_flag(brief: CreativeBrief, components: list) -> list:
     return components
 
 
+# ---------------------------------------------------------------------------
+# 元件重打指紋（票 12-attribution-adjust D 段）：無狀態入口——只吃文字回四軸指紋，
+# 不碰 DB、不知道呼叫端是哪個元件。app/ads/theme_attribution.py 偵測到 Meta 端文案跟
+# 系統存檔不一致（被人工改過）時呼叫本函式，自己另外把結果寫回 creative_theme_component
+# 與稽核紀錄——重打指紋這件事本身不在同步碼裡手刻，一律走這個引擎入口（票 12 驗收 3）。
+# ---------------------------------------------------------------------------
+
+COMPONENT_FINGERPRINT_MAX_TOKENS = 1000  # 只分類一則短文案，遠小於整包主題生成
+
+
+def refresh_component_fingerprint(conn, brand_id: str, text: str) -> Optional[dict]:
+    """text 進、fingerprint dict 出。AI 失敗或花費超上限回 None——呼叫端保留舊指紋，
+    不擋文字本身的同步更新（AC2：文字一律跟著 Meta 同步，指紋是錦上添花，不是前提）。
+    """
+    model = providers.resolve_model(task_type="creative_theme", conn=conn)
+    budget_err = coresettings.budget_exceeded_message(
+        conn, brand_id, pricing.cost_ceiling(model, COMPONENT_FINGERPRINT_MAX_TOKENS),
+        action="重打指紋", fallback_hint="可以先跳過這則，之後到設定頁調高上限後再試。")
+    if budget_err:
+        return None
+
+    task = gateway.run_task(
+        conn, PROVIDER, brand_id=brand_id, task_type="creative_theme",
+        prompt_template_id="creative_theme_component_refingerprint", prompt_template_version="v1",
+        system=_SYSTEM,
+        messages=[{"role": "user", "content": (
+            "這則 Meta 廣告文案的內容如下，請幫它標四軸指紋，值只能從下面挑，不可以自己"
+            "發明：\n" + fp.prompt_vocabulary()
+            + f"\n\n文案內容：「{text}」\n\n只回傳 JSON："
+            '{"fingerprint": {"angle":"...","tone":"...","format":"...","selling_point":"..."}}'
+        )}],
+        context=gateway.TaskContext(
+            context_scope={"brand_id": brand_id}, knowledge_item_ids=[], brand_version=0),
+        options=gateway.TaskOptions(max_tokens=COMPONENT_FINGERPRINT_MAX_TOKENS),
+    )
+    if task["status"] != "succeeded":
+        return None
+    data = gateway.parse_json_reply(task["rendered_output"])
+    fingerprint = fp.normalize(data.get("fingerprint")) if isinstance(data, dict) else {}
+    return fingerprint or None
+
+
 def generate_single_image_theme(conn, brief: CreativeBrief, *, actor: str,
                                 on_stage: Optional[Callable[[str], None]] = None) -> tuple:
     """單圖主題生成。成功回 (generated_dict, None)；失敗回 (None, 人話錯誤)，不落地。
