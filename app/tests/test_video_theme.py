@@ -312,6 +312,79 @@ class CombineScriptTest(_Base):
         self.assertIn("找不到這支影片腳本主題", err)
 
 
+class RouteCombineVideoScriptTest(_Base):
+    """接縫二（路由層，票 23）：POST .../themes/{theme_id}/combine-script 包住既有
+    combine_video_script()，前端「複製完整腳本」按鈕（票 19 停用、票 23 解封）打這支。
+    純參數驗證＋轉呼叫，錯誤路徑照抄 CombineScriptTest 對 combine_video_script() 直呼的
+    三種情境，只是這裡驗證的是 HTTP 層的狀態碼與 JSON 形狀。"""
+
+    def test_success_returns_combined_script(self):
+        cycle_id, cell_id = self._ready_cell()
+        theme = self._generate_and_save(
+            cycle_id, cell_id, framework="帶貨五段式",
+            segment_labels=["鉤子", "展示", "賣點", "信任", "轉化"],
+            hook_pool=list(_HOOKS))
+        hook_component = next(
+            c for c in theme["components"]
+            if c["component_type"] == "hook_pool" and c["content"] == _HOOKS[3])
+
+        resp = self.client.post(
+            f"/api/ads/brands/{self.bid}/ads/{cycle_id}"
+            f"/themes/{theme['id']}/combine-script",
+            json={"hook_component_id": hook_component["id"]})
+        self.assertEqual(resp.status_code, 200)
+        script = resp.json()["script"]
+        self.assertIn(_HOOKS[3], script)
+        self.assertNotIn(theme_engine_video.HOOK_SLOT_PLACEHOLDER, script)
+
+    def test_missing_hook_component_id_returns_400(self):
+        cycle_id, cell_id = self._ready_cell()
+        theme = self._generate_and_save(
+            cycle_id, cell_id, framework="PAS", hook_pool=list(_HOOKS))
+        resp = self.client.post(
+            f"/api/ads/brands/{self.bid}/ads/{cycle_id}"
+            f"/themes/{theme['id']}/combine-script",
+            json={})
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("hook_component_id", resp.json()["error"])
+
+    def test_unknown_theme_returns_404_json_error(self):
+        cycle_id, cell_id = self._ready_cell()
+        resp = self.client.post(
+            f"/api/ads/brands/{self.bid}/ads/{cycle_id}"
+            f"/themes/cth_not_real/combine-script",
+            json={"hook_component_id": "cthc_not_real"})
+        self.assertEqual(resp.status_code, 404)
+        self.assertIn("找不到", resp.json()["error"])
+
+    def test_non_video_theme_returns_404_json_error(self):
+        cycle_id, cell_id = self._ready_cell()
+        theme_repo.create_theme(
+            main.conn, self.bid, campaign_cycle_id=cycle_id, experiment_cell_id=cell_id,
+            format_key="single_image", name="虛構主題：不是影片", folder_code="Z8Y8",
+            actor=ACTOR,
+            components=[{"component_type": "body", "content": "不是影片主題"}],
+        )
+        single_image_theme = theme_repo.list_themes_for_cell(main.conn, self.bid, cell_id)[0]
+        resp = self.client.post(
+            f"/api/ads/brands/{self.bid}/ads/{cycle_id}"
+            f"/themes/{single_image_theme['id']}/combine-script",
+            json={"hook_component_id": "cthc_not_real"})
+        self.assertEqual(resp.status_code, 404)
+        self.assertIn("找不到這支影片腳本主題", resp.json()["error"])
+
+    def test_unknown_hook_id_returns_404_json_error(self):
+        cycle_id, cell_id = self._ready_cell()
+        theme = self._generate_and_save(
+            cycle_id, cell_id, framework="PAS", hook_pool=list(_HOOKS))
+        resp = self.client.post(
+            f"/api/ads/brands/{self.bid}/ads/{cycle_id}"
+            f"/themes/{theme['id']}/combine-script",
+            json={"hook_component_id": "cthc_not_real"})
+        self.assertEqual(resp.status_code, 404)
+        self.assertIn("找不到這個 Hook", resp.json()["error"])
+
+
 class CharGuardAndSimilarityReuseTest(_Base):
     """字數守門與相似度標黃必須沿用 theme_engine 既有兩道通用守門，不得另寫。"""
 

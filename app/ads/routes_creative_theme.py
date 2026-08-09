@@ -273,3 +273,30 @@ async def copy_theme_component(request: Request, brand_id: str, cycle_id: str,
     if component is None or component["campaign_cycle_id"] != cycle_id:
         raise main_mod.NotFoundKind("這則素材")
     return {"content": component["content"]}
+
+
+@router.post("/brands/{brand_id}/ads/{cycle_id}/themes/{theme_id}/combine-script")
+async def combine_video_script_route(request: Request, brand_id: str, cycle_id: str,
+                                     theme_id: str):
+    """影片腳本套 Hook 產出完整文字（票 23）：票 19 停用的「複製完整腳本」按鈕打這支。純參數
+    驗證＋轉呼叫既有 theme_engine_video.combine_video_script()——組字邏輯全在
+    app/creative/theme_engine_video.py render_video_script_text()，這裡不重寫。找不到主題／
+    格式不是 video／找不到 Hook 三種情況，該函式已經收斂成統一的 (None, 人話錯誤) 回傳，這裡
+    統一轉成 JSON 404，不逐案判斷狀態碼。cycle_id 只用來對齊既有路徑風格，
+    combine_video_script() 本身不需要它（Hook 靠切角 experiment_cell_id 找，不靠檔期）。"""
+    main_mod.require_brand(brand_id)
+    _require_cycle(brand_id, cycle_id)
+    conn = main_mod.conn
+
+    try:
+        body = await request.json()
+    except ValueError:
+        return JSONResponse({"error": "請求格式不是合法的 JSON"}, status_code=400)
+    if not isinstance(body, dict) or not body.get("hook_component_id"):
+        return JSONResponse({"error": "請帶 hook_component_id。"}, status_code=400)
+
+    script, err = theme_engine_video.combine_video_script(
+        conn, brand_id, theme_id, body["hook_component_id"])
+    if err:
+        return JSONResponse({"error": err}, status_code=404)
+    return {"script": script}

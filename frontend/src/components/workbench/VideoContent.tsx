@@ -3,6 +3,7 @@ import { Check } from "lucide-react";
 import { EmptyState } from "@/components/layout/EmptyState";
 import { cn, PRESS_FEEDBACK } from "@/lib/utils";
 import {
+  combineVideoScript,
   fetchThemeDetail,
   parseVideoScript,
   VIDEO_CHAR_BUDGETS,
@@ -11,6 +12,7 @@ import {
   type VideoScript,
 } from "@/lib/workbenchApi";
 import { ComponentSection } from "./shared/ComponentSection";
+import { CopyIconButton } from "./shared/CopyIconButton";
 
 type LoadState =
   | { status: "loading" }
@@ -32,13 +34,9 @@ interface ScriptEntry {
  * 直接吃 ThemePanel 已抓好的單一 `components` 不同，是因為影片側板天生要橫向比較同一切角
  * 的多支腳本，不是只看被點的那一個。
  *
- * 【AC「呼叫後端組合端點」現況＝blocked】`app/ads/theme_engine_video.py
- * combine_video_script()` 只是純 Python 函式，`app/ads/routes_creative_theme.py` 目前的
- * 9 條路由沒有一條掛它（查證日 2026-08-09，只有 app/tests/test_video_theme.py 直接呼叫這個
- * 函式）。票面明講「若尚無 HTTP 路由，回報 blocked，不得自行新增後端路由」——下面「複製完整
- * 腳本」按鈕因此永久停用並說明原因，不在前端重算一份跟後端 `render_video_script_text()`
- * 重複的組字邏輯（那會變成兩處要同步，規格表一改這裡就悄悄跟丟）。腳本／Hook 選擇本身不
- * 需要這支端點，正常可互動。 */
+ * 「複製完整腳本」打 `POST .../combine-script`（票 23，`app/ads/routes_creative_theme.py
+ * combine_video_script_route()`），純轉發後端 `render_video_script_text()` 組好的內容，
+ * 前端不重算組字邏輯（那會變成兩處要同步，規格表一改這裡就悄悄跟丟）。 */
 export function VideoContent({
   brandId,
   cycleId,
@@ -204,25 +202,23 @@ export function VideoContent({
 
       <div className="rounded-lg border border-border bg-muted/30 p-4">
         {canCombine ? (
-          <p className="text-sm text-foreground">
-            已選：<strong>{selectedScript.parsed.framework}</strong>＋
-            <strong>Hook #{selectedHook.sequence}</strong>，套入插槽即可輸出完整腳本。
-          </p>
+          <>
+            <p className="text-sm text-foreground">
+              已選：<strong>{selectedScript.parsed.framework}</strong>＋
+              <strong>Hook #{selectedHook.sequence}</strong>，套入插槽即可輸出完整腳本。
+            </p>
+            <CopyIconButton
+              className="mt-2"
+              label="複製完整腳本"
+              ariaLabel="複製完整腳本"
+              getText={() =>
+                combineVideoScript(brandId, cycleId, selectedScript.theme.id, selectedHook.id)
+              }
+            />
+          </>
         ) : (
           <p className="text-sm text-muted-foreground">先選一支腳本＋一個 Hook，才能產生完整腳本。</p>
         )}
-        <button
-          type="button"
-          disabled
-          title={
-            canCombine
-              ? "後端組合端點還沒開放（combine_video_script 尚無對應 HTTP 路由），等後端補上再接複製功能"
-              : "先選一支腳本＋一個 Hook"
-          }
-          className="mt-2 cursor-not-allowed whitespace-nowrap rounded-md border border-dashed border-border px-4 py-2 text-sm text-muted-foreground/70"
-        >
-          複製完整腳本（建置中）
-        </button>
       </div>
 
       <ComponentSection

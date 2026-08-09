@@ -319,3 +319,28 @@ export function parseVideoScript(content: string): VideoScript | null {
   }
   return null;
 }
+
+/** 腳本×Hook 組合成完整文字：對應 app/ads/routes_creative_theme.py
+ * combine_video_script_route()（票 23）。Hook 已套入插槽，前端不重算組字邏輯，純轉發後端
+ * 組好的內容。 */
+export async function combineVideoScript(
+  brandId: string,
+  cycleId: string,
+  themeId: string,
+  hookComponentId: string,
+): Promise<string> {
+  const res = await fetch(
+    `/api/ads/brands/${encodeURIComponent(brandId)}/ads/${encodeURIComponent(cycleId)}` +
+      `/themes/${encodeURIComponent(themeId)}/combine-script`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ hook_component_id: hookComponentId }),
+    },
+  );
+  if (!res.ok) {
+    throw new Error(await extractErrorMessage(res, "腳本組合失敗"));
+  }
+  const body: { script: string } = await res.json();
+  return body.script;
+}
