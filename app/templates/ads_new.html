@@ -148,6 +148,70 @@
     {% if errors.objective %}<div class="field-error">{{ errors.objective }}</div>{% endif %}
   </div>
 
+  {# 4. 目標 CPA 三層鏈＋投放量護欄＋三檔預算卡（票 21）：只在轉換型目標（sales／leads）
+     顯示 CPA；非轉換型（awareness／traffic／engagement）改顯示上期同目標實際花費 ±30%
+     建議區間，完全不碰 CPA 三層鏈（不做白工計算）。跟其餘欄位一樣只在頁面載入／驗證
+     失敗回顯時算一次，切換上面的目標／產品勾選不會即時重算（同 readiness_notes）。 #}
+  <div class="field" id="target-cpa">
+    {% if target_cpa_view.kind == 'conversion' %}
+      {% if target_cpa_view.target_cpa %}
+      {% set cpa = target_cpa_view.target_cpa %}
+      <div class="field-legend">這期的目標 CPA</div>
+      <p><strong>{{ '{:,.0f}'.format(cpa.value) }}</strong> 元</p>
+      <p class="creative-why">{{ cpa.basis_label }}</p>
+
+      {% if target_cpa_view.volume %}
+      {% set vol = target_cpa_view.volume %}
+      <p class="creative-why">
+        投放量護欄：這週的預算大約能養出 <strong>{{ vol.weekly_conversions }}</strong> 次轉換，
+        能撐 <strong>{{ vol.groups_sustainable }}</strong> 組受眾（每組建議
+        {{ vol.creatives_per_group_min }}–{{ vol.creatives_per_group_max }} 則素材），
+        這期投放上限建議 <strong>{{ vol.cycle_creative_cap }}</strong> 則素材。純提醒，不擋你送出。
+      </p>
+      {% endif %}
+
+      <div class="field-legend">三檔預算卡（點卡直接帶入下面「這期總預算」欄位）</div>
+      <div class="radio-group" id="cpa-tier-cards">
+        {% for key, tier in target_cpa_view.tiers.items() %}
+        <label class="radio-option">
+          <input type="radio" name="_cpa_tier_display" data-weekly="{{ tier.weekly_budget }}"
+                 {% if tier.get('default') %}checked{% endif %}>
+          <span>
+            <span class="radio-label">{{ tier.label }}：每週約 {{ '{:,.0f}'.format(tier.weekly_budget) }} 元</span>
+            <span class="radio-sub">{{ tier.formula }}{% if tier.get('capped') %}（已套用上期實際週預算 ×2 的上限）{% endif %}</span>
+          </span>
+        </label>
+        {% endfor %}
+      </div>
+      <div class="field-hint">{{ target_cpa_view.learning_note }}</div>
+
+      {% else %}
+      <div class="field-legend">這期的目標 CPA</div>
+      <p class="creative-why">尚無依據，無法估算——不擋你往下走。填下面兩題可以讓系統多一種算法可用。</p>
+
+      <div class="field">
+        <label for="cpa_events">平均幾個轉換事件會成交一個？（選填）</label>
+        <input type="number" id="cpa_events" name="events_per_sale" min="0.1" step="0.1" placeholder="例如 5">
+      </div>
+      <div class="field">
+        <label for="cpa_margin">成交一單大約賺多少（毛利）？（選填）</label>
+        <input type="number" id="cpa_margin" name="margin_per_sale" min="1" step="1" placeholder="例如 1000">
+      </div>
+      <div class="slider-derived" id="cpa-guided-preview">先填上面兩格，這裡會即時算出目標 CPA。</div>
+      <button type="submit" formaction="/brands/{{ brand.id }}/ads/new/target-cpa-guided"
+              class="btn btn-secondary">存這個推算值</button>
+      {% endif %}
+    {% elif target_cpa_view.kind == 'non_conversion' %}
+      <div class="field-legend">這期的建議花費區間</div>
+      {% if target_cpa_view.range %}
+      <p><strong>{{ '{:,.0f}'.format(target_cpa_view.range.low) }}～{{ '{:,.0f}'.format(target_cpa_view.range.high) }}</strong> 元</p>
+      <p class="creative-why">{{ target_cpa_view.range.basis_label }}</p>
+      {% else %}
+      <p class="creative-why">此目標無公式依據。</p>
+      {% endif %}
+    {% endif %}
+  </div>
+
   <div class="form-actions">
     <button type="submit" class="btn btn-primary">下一步：看這期的計畫</button>
     <a class="btn-text" href="/brands/{{ brand.id }}/ads">取消</a>
@@ -239,6 +303,49 @@ document.addEventListener('DOMContentLoaded', function () {
   if (slider) { slider.addEventListener('input', render); }
   if (customAmount) { customAmount.addEventListener('input', render); }
   render();
+})();
+
+// 三檔預算卡點卡直接帶入「這期總預算」欄位（週預算 × 檔期週數，票 21）。只做這一步乘法，
+// 跟後端 target_cpa.budget_tiers() 算出的週預算是同一個數字，不重算 CPA 或任何業務規則；
+// 沒有 JavaScript 時使用者仍可以照卡片上寫的算式自己填「直接填」欄位。
+(function () {
+  var cards = document.querySelectorAll('#cpa-tier-cards input[type="radio"]');
+  var customAmount = document.getElementById('custom_amount');
+  var durationInput = document.getElementById('duration_days');
+  var details = customAmount ? customAmount.closest('details') : null;
+  if (!cards.length || !customAmount || !durationInput) { return; }
+  cards.forEach(function (card) {
+    card.addEventListener('change', function () {
+      var weekly = parseFloat(card.dataset.weekly);
+      var days = parseInt(durationInput.value, 10) || 0;
+      if (!weekly || !days) { return; }
+      customAmount.value = Math.round(weekly * (days / 7));
+      if (details) { details.open = true; }
+      customAmount.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+  });
+})();
+
+// 引導推算目標 CPA：算式即時顯示（票 21 第 3 層），純顯示不送出——跟後端
+// target_cpa.save_guided_target_cpa() 同一條公式（毛利 ÷ 平均幾個轉換事件成交一單）。
+(function () {
+  var events = document.getElementById('cpa_events');
+  var margin = document.getElementById('cpa_margin');
+  var preview = document.getElementById('cpa-guided-preview');
+  if (!events || !margin || !preview) { return; }
+  function render() {
+    var e = parseFloat(events.value);
+    var m = parseFloat(margin.value);
+    if (!e || e <= 0 || !m || m <= 0) {
+      preview.textContent = '先填上面兩格，這裡會即時算出目標 CPA。';
+      return;
+    }
+    var cpa = Math.round((m / e) * 100) / 100;
+    preview.textContent = '算式：毛利 ' + m + ' ÷ 平均 ' + e + ' 個轉換事件成交一單 ＝ 目標 CPA 約 '
+      + cpa.toLocaleString('zh-Hant') + ' 元';
+  }
+  events.addEventListener('input', render);
+  margin.addEventListener('input', render);
 })();
 
 });

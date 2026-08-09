@@ -36,6 +36,7 @@ from app.ads import reading as ads_reading
 from app.ads import repository as ads_repo
 from app.ads import routes as ads_routes
 from app.ads import simulation
+from app.ads import target_cpa
 from app.ads import theme_batch
 from app.ads.routes_common import (
     DEFAULT_STEP_INDEX, DURATION_TIER_CONFIG, OBJECTIVES, OBJECTIVE_LABELS, SLIDER_STEPS,
@@ -60,6 +61,8 @@ def _new_page_ctx(request: Request, conn, brand: dict, brand_id: str, *, selecte
     """開新檔期頁的共用 context（GET 首次載入、POST 驗證失敗回顯都走這裡，避免兩份漂移）。"""
     products = [p for p in bi.list_products(conn, brand_id) if p.get("status") == "active"]
     amount = form.get("_amount") or SLIDER_STEPS[DEFAULT_STEP_INDEX]
+    current_objective = form.get("objective") or recommended_objective
+    weekly_budget = round(budget_calc.plan_from_pain(amount).daily_budget * 7, 2)
     return main_mod.ctx(
         request, brand=brand, nav_current='ads', products=products,
         slider_options=_slider_options(), default_index=DEFAULT_STEP_INDEX,
@@ -69,6 +72,12 @@ def _new_page_ctx(request: Request, conn, brand: dict, brand_id: str, *, selecte
         default_start_date=date.today().isoformat(),
         readiness_notes=ads_repo.check_readiness(conn, brand_id, selected),
         offer_simulation=simulation.offer_simulation(conn, brand_id),
+        # 目標 CPA 三層鏈＋投放量護欄＋三檔預算卡（票 21）：跟其餘欄位一樣，只在 GET 首次
+        # 載入／POST 驗證失敗回顯時算一次，使用者切換 radio／checkbox 不會即時重算
+        # ——readiness_notes 也是同一套規則，兩邊一致。
+        target_cpa_view=target_cpa.guardrail_view(
+            conn, brand_id, objective=current_objective, product_ids=selected,
+            weekly_budget=weekly_budget),
         breadcrumb_items=_crumb(brand, ("開新檔期", None)),
         errors=errors, form=form,
     )
@@ -158,6 +167,30 @@ async def ads_new_post(request: Request, brand_id: str,
     message = ("模擬檔期開好了。接下來的每一步都跟真的一樣，只有最後的成效數字是模擬的。"
                if phase == "simulation" else "檔期已建立，接下來確認這期的計畫。")
     return main_mod.redirect_with_message(f"/brands/{brand_id}/ads/{cycle['id']}", message)
+
+
+@router.post("/brands/{brand_id}/ads/new/target-cpa-guided")
+async def ads_new_target_cpa_guided(request: Request, brand_id: str,
+                                    events_per_sale: str = Form(""),
+                                    margin_per_sale: str = Form("")):
+    """目標 CPA 引導推算表單送出（票 21 第 3 層）：跟開新檔期共用同一個表單頁面，用
+    formaction 送到這支獨立路由，存完導回原頁——這一步可跳過，不擋主表單送出。"""
+    main_mod.require_brand(brand_id)
+    actor = main_mod.require_actor(request)
+    back_url = f"/brands/{brand_id}/ads/new"
+    events, events_ok = main_mod.parse_number(events_per_sale)
+    margin, margin_ok = main_mod.parse_number(margin_per_sale)
+    if not events_ok or not margin_ok or not events or not margin:
+        return main_mod.redirect_with_message(
+            back_url, "請把兩格都填成大於 0 的數字，或直接跳過這一步不用管它。", kind="warn",
+            anchor="target-cpa")
+    try:
+        target_cpa.save_guided_target_cpa(main_mod.conn, brand_id, events_per_sale=events,
+                                          margin_per_sale=margin, actor=actor)
+    except ValueError as exc:
+        return main_mod.redirect_with_message(back_url, str(exc), kind="warn", anchor="target-cpa")
+    return main_mod.redirect_with_message(
+        back_url, "已存好推算的目標 CPA，下面的護欄提醒會用這個數字。", anchor="target-cpa")
 
 
 def _cycle_label(cycle: dict) -> str:
