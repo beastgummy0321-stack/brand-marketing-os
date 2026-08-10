@@ -97,3 +97,13 @@ FORMAT_SPECS = {
         ],
     },
 }
+
+# 快速生成（票 01-quick-generate-endpoint／G12 grill 定案）：素材工作檯「快速生成」四選一
+# 入口，FORMAT_SPECS 既有欄位的子集，不新增欄位定義、不寫 if 類型 == "xxx" 的分支。四類都
+# 不含 title／description（使用者明確排除，見票 Implementation Decisions）。
+QUICK_GENERATE_SCOPES = {
+    "post":   {"base_format": "single_image", "fields": ["image_prompt", "body"]},   # 完整貼文
+    "video":  {"base_format": "video",        "fields": ["hook_pool", "script", "body"]},  # 完整影片
+    "image":  {"base_format": "single_image", "fields": ["image_prompt"]},           # 單張圖片
+    "script": {"base_format": "video",        "fields": ["hook_pool", "script"]},    # 單則腳本
+}

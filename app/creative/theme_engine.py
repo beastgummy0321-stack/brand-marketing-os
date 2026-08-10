@@ -33,7 +33,7 @@ app/ads/theme_engine.py 當呼叫端的orchestration；本檔只管兩件事：�
 
 from typing import Optional
 
-from app.creative.format_specs import FORMAT_SPECS
+from app.creative.format_specs import FORMAT_SPECS, QUICK_GENERATE_SCOPES
 
 # 沿用 app/ads/creative.py CREATIVE_MAX_TOKENS 同一個保守值（票 6／M2 花費上限攔截的呼叫前
 # 估計依據）：單一主題產出量比整批切角小，之後有真實 token 用量校準可以調降。
@@ -116,6 +116,24 @@ def carousel_fields_plan(objective: str) -> dict:
         "card_description": dict(fields["card_description"]),
         "body": dict(fields["body"]),
     }
+
+
+def build_quick_generate_plan(scope: str) -> dict:
+    """快速生成（票 01-quick-generate-endpoint）：scope → 該類型要顯示的欄位子集與數量。
+
+    沒有行銷目標（objective）可查，因此不呼叫 single_image_fields_plan()／
+    video_fields_plan()（那兩支函式的 image_prompt 數量依 media_cap_per_theme 調整），直接
+    從 FORMAT_SPECS 原始欄位定義取 QUICK_GENERATE_SCOPES[scope]["fields"] 那個子集——不是
+    新邏輯，只是換一張表挑欄位。回傳值只給呼叫端拿去判斷「這個類型要顯示哪些欄位」，不是
+    餵給 build_single_image_prompt()／build_video_prompt() 的 plan 參數（那兩支函式的 plan
+    引數結構固定要求 image_prompt/body/title/description 或 body/title/description 全部
+    到齊，是既有生成引擎的介面，不因為快速生成而改）。
+    """
+    if scope not in QUICK_GENERATE_SCOPES:
+        raise ValueError(f"快速生成不支援「{scope}」這個類型")
+    scope_spec = QUICK_GENERATE_SCOPES[scope]
+    fields = FORMAT_SPECS[scope_spec["base_format"]]["fields"]
+    return {name: dict(fields[name]) for name in scope_spec["fields"]}
 
 
 def build_single_image_prompt(brief, plan: dict, fp) -> str:

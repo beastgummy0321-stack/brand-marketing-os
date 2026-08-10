@@ -223,3 +223,14 @@ router.include_router(routes_creative_theme.router)
 # 掛在 routes_creative_theme 之後即可（GENERATORS 需要它先 import 完成）。
 from app.ads import routes_workbench  # noqa: E402
 router.include_router(routes_workbench.router)
+
+# 票 01-quick-generate-endpoint：快速生成，固定 `/api/creative/...` 前綴（不落地，見該檔
+# 檔頭），跟上面 `/api/ads/...` 前綴不會撞，掛的順序不影響。
+from app.ads import routes_quick_generate  # noqa: E402
+router.include_router(routes_quick_generate.router)
+
+# 票 02-qa-reminder-reset：設定中心「廣告層面」詳細頁（規則卡＋上線前提醒），固定
+# `/settings/ads` 前綴，跟上面任何 `/brands/{brand_id}/ads/...` 路由都不會撞，掛的順序
+# 不影響。這頁本來在 app.brand_intelligence，搬過來的原因見該檔案頭註解。
+from app.ads import routes_settings  # noqa: E402
+router.include_router(routes_settings.router)
