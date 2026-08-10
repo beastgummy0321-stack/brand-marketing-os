@@ -68,6 +68,18 @@
   </select>
   {% endcall %}
 
+  <hr class="rule">
+  <p class="page-lede">業種決定節日日曆會不會提醒你——例如母親節提醒只會跳給業種對得上的品牌，不分業種都提醒會太吵。</p>
+
+  {% call field('industry', '業種', required=False, hint='留空就只會收到不分業種的節日提醒（例如雙11這類全民購物節）。', error=errors.industry) %}
+  <select id="industry" name="industry" aria-describedby="industry-hint">
+    <option value="" {% if not values.industry %}selected{% endif %}>未設定</option>
+    {% for v, label in industries %}
+    <option value="{{ v }}" {% if values.industry == v %}selected{% endif %}>{{ label }}</option>
+    {% endfor %}
+  </select>
+  {% endcall %}
+
   <div class="form-actions">
     <button type="submit" class="btn btn-primary">儲存品牌基本資料</button>
     <a class="btn-text" href="/brands/{{ brand.id }}">取消</a>

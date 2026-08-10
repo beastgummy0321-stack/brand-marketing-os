@@ -238,6 +238,12 @@ def _conversion_goal_options() -> list:
     return [(v, md.CONVERSION_GOAL_LABELS[v]) for v in repo.CONVERSION_GOALS]
 
 
+# ADR 0014：業種選單選項（值來自 repo.INDUSTRIES，標籤來自 md.INDUSTRY_LABELS）。
+# 沒有這個選單，brand.industry 永遠是 NULL，節日相關性比對只會命中標「all」的節日。
+def _industry_options() -> list:
+    return [(v, md.INDUSTRY_LABELS[v]) for v in repo.INDUSTRIES]
+
+
 def _persona_conversion_goal_default(persona: str) -> Optional[str]:
     """人設沒填 conversion_goal 時的預設值：從既有的 persona_switch_defaults() 開關表
     推回轉換目標，不另外發明第二張人設對照表。推法對齊
@@ -258,7 +264,7 @@ def _brand_edit_form_ctx(request: Request, brand: dict, values: dict, errors: di
     return ctx(
         request, brand=brand, values=values, errors=errors, nav_current='hub',
         persona_types=md.PERSONA_TYPES, market_regions=md.MARKET_REGIONS,
-        conversion_goals=_conversion_goal_options(),
+        conversion_goals=_conversion_goal_options(), industries=_industry_options(),
     )
 
 
@@ -268,7 +274,7 @@ async def brand_edit_get(request: Request, brand_id: str):
     values = {
         "name": brand["name"], "client_name": brand["client_name"] or "", "status": brand["status"],
         "persona": "", "market_region": brand["market_region"] or "",
-        "conversion_goal": brand["conversion_goal"] or "",
+        "conversion_goal": brand["conversion_goal"] or "", "industry": brand["industry"] or "",
     }
     return templates.TemplateResponse(request, "brand_edit.html",
                                        _brand_edit_form_ctx(request, brand, values, {}))
@@ -278,11 +284,12 @@ async def brand_edit_get(request: Request, brand_id: str):
 async def brand_edit_post(request: Request, brand_id: str, name: str = Form(""),
                            client_name: str = Form(""), status: str = Form("active"),
                            persona: str = Form(""), market_region: str = Form(""),
-                           conversion_goal: str = Form("")):
+                           conversion_goal: str = Form(""), industry: str = Form("")):
     actor = require_actor(request)
     brand = require_brand(brand_id)
     values = {"name": name, "client_name": client_name, "status": status,
-              "persona": persona, "market_region": market_region, "conversion_goal": conversion_goal}
+              "persona": persona, "market_region": market_region, "conversion_goal": conversion_goal,
+              "industry": industry}
     errors = {}
     name_c = clean(name)
     if not name_c:
@@ -295,6 +302,9 @@ async def brand_edit_post(request: Request, brand_id: str, name: str = Form(""),
     goal_c = clean(conversion_goal)
     if goal_c and goal_c not in repo.CONVERSION_GOALS:
         errors["conversion_goal"] = "請選擇有效的廣告目標。"
+    industry_c = clean(industry)
+    if industry_c and industry_c not in repo.INDUSTRIES:
+        errors["industry"] = "請選擇有效的業種。"
     if errors:
         return templates.TemplateResponse(request, "brand_edit.html",
                                            _brand_edit_form_ctx(request, brand, values, errors),
@@ -308,6 +318,8 @@ async def brand_edit_post(request: Request, brand_id: str, name: str = Form(""),
         web.conn, brand_id, market_region=region_c or None,
         conversion_goal=goal_c or _persona_conversion_goal_default(persona), actor=actor,
     )
+    # 業種跟方法論開關是不同功能領域（ADR 0014），沒有人設可以推、留白就是未設定。
+    repo.set_brand_industry(web.conn, brand_id, industry=industry_c or None, actor=actor)
     if status == "archived" and not was_archived:
         msg = f"已封存品牌「{name_c}」。"
     elif status == "active" and was_archived:
