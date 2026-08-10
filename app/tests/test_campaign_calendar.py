@@ -13,8 +13,10 @@ from datetime import date
 from app.dashboard import campaign_calendar as cal
 
 
-def _event(event_id="evt_1", name="測試檔期", event_date="2026-11-11", tier="large") -> dict:
-    return {"id": event_id, "name": name, "date": event_date, "tier": tier}
+def _event(event_id="evt_1", name="測試檔期", event_date="2026-11-11", tier="large",
+           applicable_industries="all") -> dict:
+    return {"id": event_id, "name": name, "date": event_date, "tier": tier,
+            "applicable_industries": applicable_industries}
 
 
 class LeadDaysConstantsTest(unittest.TestCase):
@@ -134,6 +136,111 @@ class NextCalendarReminderTest(unittest.TestCase):
         card = cal.next_calendar_reminder(events, today)
         self.assertEqual(card["id"], "near")
 
+    def test_filters_out_events_not_relevant_to_brand_industry(self):
+        """業種對不到清單 -> 就算在窗口內也不提醒（ADR 0014 第一節）。"""
+        events = [_event(event_date="2026-11-11", tier="large",
+                         applicable_industries=["beauty_personal_care"])]
+        today = date(2026, 8, 13)  # 90 天前，剛好開窗
+        self.assertIsNone(cal.next_calendar_reminder(events, today, "food_beverage"))
+
+    def test_keeps_events_matching_brand_industry(self):
+        """業種對到清單 -> 正常提醒。"""
+        events = [_event(event_date="2026-11-11", tier="large",
+                         applicable_industries=["beauty_personal_care"])]
+        today = date(2026, 8, 13)
+        card = cal.next_calendar_reminder(events, today, "beauty_personal_care")
+        self.assertIsNotNone(card)
+
+    def test_keeps_all_tagged_events_regardless_of_brand_industry(self):
+        """節日標 "all" -> 不分業種都提醒，即使品牌業種沒設定（None）。"""
+        events = [_event(event_date="2026-11-11", tier="large", applicable_industries="all")]
+        today = date(2026, 8, 13)
+        card = cal.next_calendar_reminder(events, today, None)
+        self.assertIsNotNone(card)
+
+
+class IndustryRelevantTest(unittest.TestCase):
+    def test_all_tagged_event_matches_any_industry(self):
+        self.assertTrue(cal.industry_relevant(_event(applicable_industries="all"), None))
+        self.assertTrue(cal.industry_relevant(_event(applicable_industries="all"), "food_beverage"))
+
+    def test_brand_industry_in_list_is_relevant(self):
+        event = _event(applicable_industries=["beauty_personal_care", "fashion_apparel"])
+        self.assertTrue(cal.industry_relevant(event, "beauty_personal_care"))
+
+    def test_brand_industry_not_in_list_is_not_relevant(self):
+        event = _event(applicable_industries=["beauty_personal_care"])
+        self.assertFalse(cal.industry_relevant(event, "food_beverage"))
+        self.assertFalse(cal.industry_relevant(event, None))  # 業種未設定，對不到特定清單
+
+    def test_missing_field_defaults_to_all_for_backward_compat(self):
+        """手刻的 event dict（沒帶 applicable_industries）視為 all，相容既有呼叫端。"""
+        event = {"id": "e", "name": "e", "date": "2026-11-11", "tier": "large"}
+        self.assertTrue(cal.industry_relevant(event, "food_beverage"))
+
+
+class CurrentCampaignStageIndustryTest(unittest.TestCase):
+    def test_filters_out_stage_for_irrelevant_industry(self):
+        events = [_event(event_date="2026-11-11", tier="large",
+                         applicable_industries=["beauty_personal_care"])]
+        self.assertIsNone(cal.current_campaign_stage(
+            events, date(2026, 8, 13), "food_beverage"))
+
+    def test_keeps_stage_for_matching_industry(self):
+        events = [_event(event_date="2026-11-11", tier="large",
+                         applicable_industries=["beauty_personal_care"])]
+        stage = cal.current_campaign_stage(events, date(2026, 8, 13), "beauty_personal_care")
+        self.assertIsNotNone(stage)
+
+
+class DismissedCategoriesFilterTest(unittest.TestCase):
+    """票 02-permanent-dismiss-category（ADR 0014 第二節）：dismissed_categories 濾掉
+    永久關閉的節日類別，即使業種比對判成相關也不再提醒。"""
+
+    def test_next_calendar_reminder_suppressed_when_category_dismissed(self):
+        events = [_event(event_id="cny_2026", event_date="2026-11-11", tier="large")]
+        today = date(2026, 8, 13)  # 90 天前，剛好開窗
+        self.assertIsNone(cal.next_calendar_reminder(events, today, dismissed_categories={"cny"}))
+
+    def test_next_calendar_reminder_kept_when_different_category_dismissed(self):
+        events = [_event(event_id="cny_2026", event_date="2026-11-11", tier="large")]
+        today = date(2026, 8, 13)
+        card = cal.next_calendar_reminder(events, today, dismissed_categories={"valentine"})
+        self.assertIsNotNone(card)
+
+    def test_next_calendar_reminder_kept_when_no_categories_dismissed(self):
+        events = [_event(event_id="cny_2026", event_date="2026-11-11", tier="large")]
+        today = date(2026, 8, 13)
+        self.assertIsNotNone(cal.next_calendar_reminder(events, today, dismissed_categories=None))
+
+    def test_re_enabling_restores_reminder(self):
+        """驗收清單：重新開啟後恢復提醒——不在 dismissed_categories 集合內即視為開啟。"""
+        events = [_event(event_id="cny_2026", event_date="2026-11-11", tier="large")]
+        today = date(2026, 8, 13)
+        self.assertIsNone(cal.next_calendar_reminder(events, today, dismissed_categories={"cny"}))
+        self.assertIsNotNone(
+            cal.next_calendar_reminder(events, today, dismissed_categories=set()))
+
+    def test_current_campaign_stage_suppressed_when_category_dismissed(self):
+        events = [_event(event_id="cny_2026", event_date="2026-11-11", tier="large")]
+        today = date(2026, 8, 13)
+        self.assertIsNone(
+            cal.current_campaign_stage(events, today, dismissed_categories={"cny"}))
+
+    def test_current_campaign_stage_kept_when_different_category_dismissed(self):
+        events = [_event(event_id="cny_2026", event_date="2026-11-11", tier="large")]
+        today = date(2026, 8, 13)
+        self.assertIsNotNone(
+            cal.current_campaign_stage(events, today, dismissed_categories={"valentine"}))
+
+    def test_dismissal_combines_with_industry_filter(self):
+        """業種對到、但類別被永久關閉——兩個濾網都要生效，關閉的優先擋下。"""
+        events = [_event(event_id="cny_2026", event_date="2026-11-11", tier="large",
+                         applicable_industries=["beauty_personal_care"])]
+        today = date(2026, 8, 13)
+        self.assertIsNone(cal.next_calendar_reminder(
+            events, today, "beauty_personal_care", dismissed_categories={"cny"}))
+
 
 class LoadEventsTest(unittest.TestCase):
     def test_loads_bundled_data_file_with_required_fields(self):
@@ -144,6 +251,29 @@ class LoadEventsTest(unittest.TestCase):
             self.assertIn("name", event)
             self.assertIn("date", event)
             self.assertIn(event["tier"], cal.LEAD_DAYS)
+            self.assertIn("applicable_industries", event)
+
+
+class HolidayIdTest(unittest.TestCase):
+    """票 03-cycle-skip-record：holiday_id() 去掉逐年事件 id 的年份尾碼，拿到跨年
+    穩定識別碼——同一節日逐年 id 不同（cny_2026／cny_2027），要靠這個穩定碼才能比對
+    「去年是否跳過」。"""
+
+    def test_strips_trailing_year_suffix(self):
+        self.assertEqual(cal.holiday_id("cny_2026"), "cny")
+        self.assertEqual(cal.holiday_id("cny_2027"), "cny")
+
+    def test_same_holiday_different_years_map_to_same_id(self):
+        self.assertEqual(cal.holiday_id("double11_2026"), cal.holiday_id("double11_2027"))
+
+    def test_id_without_year_suffix_passes_through_unchanged(self):
+        self.assertEqual(cal.holiday_id("evt_1"), "evt_1")
+
+    def test_bundled_data_file_ids_all_strip_to_a_year_independent_holiday_id(self):
+        """真實資料檔逐年 id 都帶年份尾碼——這裡防止資料檔改格式後 holiday_id() 悄悄失效。"""
+        events = cal.load_events()
+        for event in events:
+            self.assertRegex(event["id"], r"_\d{4}$")
 
 
 if __name__ == "__main__":

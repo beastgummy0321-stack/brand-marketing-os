@@ -39,8 +39,12 @@ facts 欄位契約（由 app/dashboard/repository.py 組裝）：
 - reading_ready: bool（最新一期已經跑過判讀）
 - next_cycle_draft_ready: bool（下期草案已經生成）
 - campaign_reminder: dict|None（app/dashboard/campaign_calendar.py
-  next_calendar_reminder() 的回傳值：{id, name, days_until, kind("prep"|"creative"),
-  ...}——kind="prep" 才有 weeks_until／tier_label；沒有觸發中的檔期就是 None）
+  next_calendar_reminder() 的回傳值，經 app/dashboard/repository.py
+  _attach_last_year_skip() 附帶去年跳過脈絡：{id, name, days_until,
+  kind("prep"|"creative"), ...}——kind="prep" 才有 weeks_until／tier_label；
+  去年同一節日有跳過紀錄才有 last_year_skipped(True)／last_year_skip_reason(str|None)
+  （票 03-cycle-skip-record，純顯示脈絡，不影響本規則觸不觸發）；沒有觸發中的檔期
+  就是 None）
 - pacing_alert: {"kind": "overspend"|"underspend", "action_url": str|None} | None
   （brand 目前未結的 pacing 打斷事件，list_open 排序後第一筆；沒有就是 None）
 """
@@ -134,6 +138,11 @@ def _rule_campaign_calendar(facts: dict) -> Optional[dict]:
         title = f"「{reminder['name']}」素材要完稿了，還有 {reminder['days_until']} 天"
     else:
         title = f"「{reminder['name']}」還有 {reminder['weeks_until']} 週，開始備戰？"
+    # 票 03-cycle-skip-record：去年同一節日有跳過紀錄，附帶顯示去年的理由當脈絡
+    # （純顯示，不影響這條規則觸不觸發，也不影響 app/ads/nextcycle.py 下期建議引擎）。
+    if reminder.get("last_year_skipped"):
+        reason = reminder.get("last_year_skip_reason")
+        title += f"（去年跳過：{reason}）" if reason else "（去年跳過）"
     return {"title": title, "action_url": f"/brands/{facts['brand_id']}/ads/new"}
 
 

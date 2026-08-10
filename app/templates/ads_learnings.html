@@ -73,6 +73,52 @@
 {% endif %}
 {% endcall %}
 
+{% if pending_reconfirm_rules %}
+{% call card_block('待確認規則（' ~ pending_reconfirm_rules|length ~ ' 條）', kind='content') %}
+<p class="page-lede">這些規則太久沒有人重新確認，暫時不會用在生成內容的判斷依據上——規則
+  沒有被刪除，按「延續」就能立刻恢復生效，不必重新輸入內容。</p>
+<div class="table-wrap">
+  <table class="data-table">
+    <thead><tr><th>內容</th><th>最近確認時間</th><th>操作</th></tr></thead>
+    <tbody>
+    {% for r in pending_reconfirm_rules %}
+      <tr>
+        <td class="primary-cell">{{ r.content }}</td>
+        <td>{{ r.confirmed_at[:10] if r.confirmed_at else '—' }}</td>
+        <td>
+          <form method="post" action="/brands/{{ brand.id }}/ads/learnings/rules/{{ r.id }}/reconfirm"
+                class="inline-form">
+            <button type="submit" class="btn-text">延續</button>
+          </form>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endcall %}
+{% endif %}
+
+{% if overflow_rules %}
+{% call card_block('因超過上限未生效的規則（' ~ overflow_rules|length ~ ' 條）', kind='content') %}
+<p class="page-lede">這些規則沒有被刪除或下架，只是這次生成內容的規則數超過上限，排比較後面
+  沒有排進去——重新確認過或排到前面就會恢復生效。</p>
+<div class="table-wrap">
+  <table class="data-table">
+    <thead><tr><th>內容</th><th>最近確認時間</th></tr></thead>
+    <tbody>
+    {% for r in overflow_rules %}
+      <tr>
+        <td class="primary-cell">{{ r.content }}</td>
+        <td>{{ r.confirmed_at[:10] if r.confirmed_at else '—' }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endcall %}
+{% endif %}
+
 {% call card_block('還沒處理的候選', kind='content') %}
 {% if pending_cards or pending_hypotheses or observing_signals %}
 {% if pending_cards %}

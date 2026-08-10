@@ -88,7 +88,7 @@ def check_cycle(conn, brand_id: str, cycle_id: str, today: Optional[str] = None)
 
     today = today or date.today().isoformat()
     spend = ads_performance.totals(conn, brand_id, cycle_id)["spend"]
-    threshold = rule_cards.get_value(conn, "pacing", "deviation_threshold_ratio")
+    threshold = rule_cards.get_value(conn, brand_id, "pacing", "deviation_threshold_ratio")
     result = classify(budget=cycle["budget"], spend=spend, start_date=cycle["start_date"],
                       end_date=cycle["end_date"], today=today, threshold_pct=threshold)
 

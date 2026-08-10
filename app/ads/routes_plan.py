@@ -30,6 +30,7 @@ from app.ads import creative as ads_creative
 from app.ads import handoff as ads_handoff
 from app.ads import nextcycle
 from app.ads import onboarding
+from app.ads import pacing_curve
 from app.ads import performance as ads_performance
 from app.ads import plan as ads_plan
 from app.ads import reading as ads_reading
@@ -337,8 +338,31 @@ async def ads_cycle(request: Request, brand_id: str, cycle_id: str):
                          task_type="creative_batch", conn=conn),
                      creative_default_thinking=llm_providers.resolve_thinking(
                          task_type="creative_batch"),
+                     # 排期策略卡＋曲線圖（票 pacing-curve，G9 契約）：STRATEGIES／
+                     # PACING_REASON_PRESETS 給模板畫「其他排法」卡與理由建議清單，
+                     # 天數門檻決定要不要把非連續選項畫成變灰。
+                     pacing_strategies=pacing_curve.STRATEGIES,
+                     pacing_reason_presets=pacing_curve.PACING_REASON_PRESETS,
+                     pacing_short_threshold=pacing_curve.SHORT_DURATION_THRESHOLD_DAYS,
                      **main_mod.banner_ctx(request)),
     )
+
+
+@router.post("/brands/{brand_id}/ads/{cycle_id}/pacing")
+async def ads_cycle_pacing_update(request: Request, brand_id: str, cycle_id: str,
+                                  strategy: str = Form(...), reason: str = Form("")):
+    """使用者手動改排期策略（票 pacing-curve，G9.9「用這個排法，下一步」）。"""
+    main_mod.require_brand(brand_id)
+    actor = main_mod.require_actor(request)
+    _require_cycle(brand_id, cycle_id)
+    try:
+        ads_repo.set_cycle_pacing(main_mod.conn, brand_id, cycle_id, strategy=strategy,
+                                  reason=reason, actor=actor)
+    except ValueError as exc:
+        return main_mod.redirect_with_message(
+            f"/brands/{brand_id}/ads/{cycle_id}", str(exc), kind="warn")
+    return main_mod.redirect_with_message(
+        f"/brands/{brand_id}/ads/{cycle_id}", "排期策略已更新。")
 
 
 def _plan_cost(conn, plan_row: Optional[dict]):
@@ -423,7 +447,7 @@ async def ads_plan_select_page(request: Request, brand_id: str, cycle_id: str):
     if not options:
         return main_mod.redirect_with_message(
             f"/brands/{brand_id}/ads/{cycle_id}", "這期還沒有可選的方案。", kind="warn")
-    structure = account_structure.recommend(conn, ads_repo.derived_plan(cycle)["daily_budget"])
+    structure = account_structure.recommend(conn, brand_id, ads_repo.derived_plan(cycle)["daily_budget"])
     dissents = ads_repo.list_dissents(conn, brand_id, cycle_id, status="pending")
     return main_mod.templates.TemplateResponse(
         request, "ads_plan_select.html",

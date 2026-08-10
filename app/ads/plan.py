@@ -469,7 +469,7 @@ def generate_options(conn, brand_id: str, cycle_id: str, actor: str, *,
     availability = audience_availability(conn, brand_id)
     angle_count = max(angle_count, len(allocations))
     option_count = max(MIN_OPTION_COUNT, min(option_count, MAX_OPTION_COUNT))
-    structure = account_structure.recommend(conn, ads_repo.derived_plan(cycle)["daily_budget"])
+    structure = account_structure.recommend(conn, brand_id, ads_repo.derived_plan(cycle)["daily_budget"])
 
     user_text = _build_options_user_text(
         brand, cycle, allocations, context_text, methodology_result.text, angle_count,

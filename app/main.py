@@ -461,12 +461,14 @@ async def settings_ga4_test_connection_post(request: Request):
 # ---------------------------------------------------------------------------
 
 from app.brand_intelligence.routes import router as brand_intelligence_router  # noqa: E402
+from app.brand_intelligence.routes_settings import router as settings_hub_router  # noqa: E402
 from app.intake.routes import router as intake_router  # noqa: E402
 from app.ads.routes import router as ads_router  # noqa: E402
 from app.orders.routes import router as orders_router  # noqa: E402
 from app.dashboard.routes import router as dashboard_router  # noqa: E402
 
 app.include_router(brand_intelligence_router)
+app.include_router(settings_hub_router)
 app.include_router(intake_router)
 app.include_router(ads_router)
 app.include_router(orders_router)

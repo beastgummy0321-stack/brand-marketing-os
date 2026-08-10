@@ -1785,70 +1785,9 @@ async def asset_file(request: Request, brand_id: str, asset_id: str, filename: s
                          filename=filename)
 
 
-
-# ---------------------------------------------------------------------------
-# 規則卡（issue #12）：門檻數值可看可改可重設，判定純函數一律讀 app.core.rule_cards。
-# ---------------------------------------------------------------------------
-
-from app.core import rule_cards  # noqa: E402
-
-
-def rule_cards_ctx(request: Request, errors=None, raw_values=None):
-    """raw_values＝{card_key: {field_key: 使用者剛送出的原始字串}}：驗證失敗時原樣填回輸入框，
-    不要讓打錯字的使用者看到自己輸入被靜靜換成舊的資料庫值。"""
-    cards = rule_cards.list_cards(web.conn)
-    raw_values = raw_values or {}
-    for card in cards:
-        overrides = raw_values.get(card["key"]) or {}
-        for f in card["fields"]:
-            # 表單驗證失敗時原樣填回使用者剛送出的字串；正常情況把浮點數轉成人看得順的字串
-            # （4.0 顯示成 4，不顯示成 4.0——_num_str 是全站既有慣例，見 /settings 花費上限欄）。
-            f["value"] = overrides[f["key"]] if f["key"] in overrides else _num_str(f["value"])
-    return ctx(
-        request, brand=None,
-        cards=cards,
-        errors=errors or {},
-        **banner_ctx(request),
-    )
-
-
-@router.get("/rule-cards")
-async def rule_cards_get(request: Request):
-    return templates.TemplateResponse(request, "rule_cards.html", rule_cards_ctx(request))
-
-
-@router.post("/rule-cards/{card_key}/edit")
-async def rule_cards_edit_post(request: Request, card_key: str):
-    actor = require_actor(request)
-    if card_key not in rule_cards.CARDS:
-        raise NotFoundKind("規則卡")
-    form = await request.form()
-    field_errors = {}
-    raw_values = {}
-    parsed = {}
-    for field_key in rule_cards.CARDS[card_key]["fields"]:
-        raw = form.get(field_key, "")
-        raw_values[field_key] = raw
-        value, ok = parse_number(raw)
-        if not ok or value is None or value <= 0:
-            field_errors[field_key] = "請填一個大於 0 的數字。"
-            continue
-        parsed[field_key] = value
-    if field_errors:
-        return templates.TemplateResponse(request, "rule_cards.html", rule_cards_ctx(
-            request, errors={card_key: field_errors}, raw_values={card_key: raw_values},
-        ), status_code=400)
-    for field_key, value in parsed.items():
-        rule_cards.set_value(web.conn, card_key, field_key, value, actor)
-    return redirect_with_message("/rule-cards", f"已更新「{rule_cards.CARDS[card_key]['title']}」。")
-
-
-@router.post("/rule-cards/{card_key}/reset")
-async def rule_cards_reset_post(request: Request, card_key: str):
-    actor = require_actor(request)
-    if card_key not in rule_cards.CARDS:
-        raise NotFoundKind("規則卡")
-    rule_cards.reset_card(web.conn, card_key, actor)
-    return redirect_with_message("/rule-cards", f"已將「{rule_cards.CARDS[card_key]['title']}」重設為預設值。")
+# 規則卡（issue #12）改分品牌後搬到 app/brand_intelligence/routes_settings.py（設定中心票
+# 01，/brands/{brand_id}/settings/ads），這裡不再放平台層級的 /rule-cards 路由——
+# app.core.rule_cards 的 CARDS 機制現在每個函式都要求 brand_id，沒有品牌上下文的全域頁面
+# 已經無法運作。
 
 

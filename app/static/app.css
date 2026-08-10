@@ -1105,3 +1105,19 @@ span.console-nav-item.is-soon { color: var(--text-muted); }
 .inbox-list { display: flex; flex-direction: column; gap: var(--space-4); }
 .inbox-item-brand { font: var(--text-sm); color: var(--text-secondary); margin-bottom: var(--space-1); }
 .plan-dissent form { display: inline-block; margin-right: var(--space-3); margin-top: var(--space-1); }
+
+/* ---------- 44. 廣告分支：排期曲線（票 pacing-curve） ---------- */
+.pacing-card h3 { display: flex; align-items: center; gap: var(--space-2); margin-bottom: var(--space-1); }
+.pacing-chart { height: 220px; margin: var(--space-3) 0; }
+.alt-card {
+  display: flex; gap: var(--space-3); align-items: flex-start;
+  border: 1px solid var(--border); border-radius: var(--radius-md);
+  padding: var(--space-3); margin-top: var(--space-2);
+}
+.alt-card form { display: flex; gap: var(--space-2); align-items: center; margin-top: var(--space-2); flex-wrap: wrap; }
+.alt-card input[type="text"] {
+  border: 1px solid var(--border); border-radius: var(--radius-sm); padding: var(--space-1) var(--space-2);
+  font: var(--text-sm); min-width: 220px;
+}
+/* 天數不夠時變灰＋不可點（沿用 .creative-card.is-rejected 的既有「淡出但看得到」處理原則） */
+.alt-card.is-disabled { background: var(--bg-subtle); opacity: .6; }

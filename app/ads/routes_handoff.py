@@ -8,6 +8,7 @@ app/ads/routes.py 拆出）。純搬移，網址與行為不變。
 - `/brands/{b}/ads/{cycle}/handoff/build`                  建立交接包
 - `/brands/{b}/ads/{cycle}/handoff/missing-field`          回報找不到的欄位
 - `/brands/{b}/ads/{cycle}/handoff/{package}/activate`     關卡三：投放授權
+- `/brands/{b}/ads/{cycle}/handoff/qa-launch/{key}`        上線前 QA 五項提醒勾選（票 01）
 - `/brands/{b}/ads/{cycle}/checklist`                      投放前檢查清單
 - `/brands/{b}/ads/{cycle}/checklist/one-time/{key}`       一次性項目勾選
 - `/brands/{b}/ads/{cycle}/checklist/cycle/{key}`          每期項目勾選
@@ -36,6 +37,7 @@ async def ads_handoff_page(request: Request, brand_id: str, cycle_id: str):
         request, "ads_handoff.html",
         main_mod.ctx(request, brand=brand, nav_current='ads', cycle=_cycle_view(conn, brand_id, cycle),
                      packages=packages, labels=ads_handoff.FIELD_LABELS, extras=extras,
+                     qa_launch=ads_checklist.qa_launch_summary(conn, brand_id),
                      codes=codes, source_labels=ads_codes.SOURCE_LABELS,
                      verification=ads_codes.latest_verification(conn, brand_id, cycle_id),
                      verification_warning=ads_codes.verification_warning(conn, brand_id, cycle_id),
@@ -150,6 +152,22 @@ async def ads_handoff_activate(request: Request, brand_id: str, cycle_id: str, p
         return main_mod.redirect_with_message(back, str(exc), kind="warn")
     return main_mod.redirect_with_message(
         back, "記下來了。之後回填成效時，系統就對得上這組廣告的數字。")
+
+
+@router.post("/brands/{brand_id}/ads/{cycle_id}/handoff/qa-launch/{item_key}")
+async def ads_handoff_qa_launch_toggle(request: Request, brand_id: str, cycle_id: str,
+                                       item_key: str, checked: str = Form("1")):
+    """上線前 QA 五項提醒（票 01，決策 0016）：確認／取消確認，只記錄不擋流程——跟下面
+    「確認這組已經開始投放」（關卡三具名授權）完全獨立，不影響彼此的可點擊性。"""
+    main_mod.require_brand(brand_id)
+    actor = main_mod.require_actor(request)
+    _require_cycle(brand_id, cycle_id)
+    back = f"/brands/{brand_id}/ads/{cycle_id}/handoff"
+    try:
+        ads_checklist.set_qa_launch_item(main_mod.conn, brand_id, item_key, checked == "1", actor)
+    except ValueError as exc:
+        return main_mod.redirect_with_message(back, str(exc), kind="warn")
+    return main_mod.redirect_with_message(back, "記下來了。")
 
 
 @router.get("/brands/{brand_id}/ads/{cycle_id}/checklist")

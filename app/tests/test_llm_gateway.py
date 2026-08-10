@@ -8,11 +8,12 @@
 import json
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from app.ads import repository as ads_repo
 from app.brand_intelligence import repository as repo
-from app.core import db
+from app.core import db, rule_cards
 from app.llm import context_compiler, gateway, pricing, providers
 from app.llm.providers import FakeProvider, ProviderError, ProviderResponse, ProviderTimeoutError, Usage
 
@@ -403,6 +404,131 @@ class ContextCompilerTest(unittest.TestCase):
     def test_unknown_brand_raises_value_error(self):
         with self.assertRaises(ValueError):
             context_compiler.compile(self.conn, "brd_不存在")
+
+
+class ContextCompilerPromptCapTest(unittest.TestCase):
+    """票 02-prompt-cap-and-overflow-list（決策 0012 第二、三節）：進 prompt 上限與未生效清單。"""
+
+    def setUp(self):
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self.conn = db.connect_and_migrate(Path(self._tmpdir.name) / "test.db")
+        self.brand = repo.create_brand(self.conn, name="品牌F（規則上限測試）", client_name=None, actor="小陳")
+
+    def tearDown(self):
+        self.conn.close()
+        self._tmpdir.cleanup()
+
+    def _make_rules(self, brand_id, hard_count, soft_count):
+        """建 hard_count 條 hard ＋ soft_count 條 soft 規則。soft 規則的 confirmed_at 直接
+        指定成遞增的固定字串（第 i 條比第 i-1 條晚 1 秒），不靠 now_iso() 的時間精度賭排序斷言。
+
+        基準時間用「現在往前推 1 分鐘」而不是固定日曆日期：票 01-rule-expiry-reconfirm
+        （ADR 0012 第一節）之後，`list_rules_for_brand`／`list_rules_for_product` 讀取前
+        會先掃一次逾期未確認的規則，固定寫死的舊日期一旦超過門檻期數（系統預設 6 期＝84
+        天）就會被判定逾期、退回 pending_reconfirm，不再是這裡要測的「active 但排序較後
+        面」——兩個機制刻意保持互不依賴，這裡只要新到舊排序的相對關係不變，基準點是多久
+        以前不影響本測試類要驗的行為。"""
+        base = datetime.now(timezone.utc) - timedelta(minutes=1)
+        hard_rules = [
+            repo.create_rule(self.conn, brand_id, rule_type="tone", content=f"hard規則{i}",
+                             severity="hard", actor="小陳")
+            for i in range(1, hard_count + 1)
+        ]
+        soft_rules = []
+        for i in range(1, soft_count + 1):
+            rule = repo.create_rule(self.conn, brand_id, rule_type="tone", content=f"soft規則{i:02d}",
+                                    severity="soft", actor="小陳")
+            confirmed_at = (base + timedelta(seconds=i)).isoformat()
+            self.conn.execute("UPDATE rule SET confirmed_at = ? WHERE id = ?",
+                              (confirmed_at, rule["id"]))
+            self.conn.commit()
+            soft_rules.append(rule)
+        return hard_rules, soft_rules
+
+    def test_25_rules_top_20_hard_first_enter_prompt_rest_overflow(self):
+        """驗收條件：25 條 active 規則（3 條 hard＋22 條 soft），只有前 20 條（hard 優先＋
+        soft 依 confirmed_at 新到舊）進提示詞組裝結果，另外 5 條出現在未生效清單。"""
+        hard_rules, soft_rules = self._make_rules(self.brand["id"], hard_count=3, soft_count=22)
+
+        text, knowledge_item_ids, _bv, _pv = context_compiler.compile(self.conn, self.brand["id"])
+        overflow = context_compiler.list_overflow_rules(self.conn, self.brand["id"])
+
+        # 3 條 hard 全部保留 + 17 條最新 soft（confirmed_at 最新的那 17 條）＝ 20 條進 prompt。
+        newest_17 = soft_rules[-17:]
+        oldest_5 = soft_rules[:5]
+        for r in hard_rules + newest_17:
+            self.assertIn(r["content"], text)
+            self.assertIn(r["id"], knowledge_item_ids)
+        for r in oldest_5:
+            self.assertNotIn(r["content"], text)
+            self.assertNotIn(r["id"], knowledge_item_ids)
+
+        self.assertEqual(len(overflow), 5)
+        self.assertEqual({o["id"] for o in overflow}, {r["id"] for r in oldest_5})
+
+    def test_overflow_rules_are_not_deactivated(self):
+        """未生效不等於刪除或下架：overflow 清單裡的規則狀態仍是 active（決策 0012 第三節）。"""
+        _hard, soft_rules = self._make_rules(self.brand["id"], hard_count=0, soft_count=21)
+        overflow = context_compiler.list_overflow_rules(self.conn, self.brand["id"])
+        self.assertEqual(len(overflow), 1)
+        self.assertEqual(overflow[0]["id"], soft_rules[0]["id"])
+        row = repo.get_rule(self.conn, self.brand["id"], overflow[0]["id"])
+        self.assertEqual(row["status"], "active")
+
+    def test_hard_rules_never_truncated_even_past_cap(self):
+        """hard 規則全部保留是硬性不變量：就算 hard 數量本身就超過上限也不截斷 hard，
+        這時所有 soft 規則全部進未生效清單。"""
+        hard_rules, soft_rules = self._make_rules(self.brand["id"], hard_count=21, soft_count=2)
+        text, _ids, _bv, _pv = context_compiler.compile(self.conn, self.brand["id"])
+        for r in hard_rules:
+            self.assertIn(r["content"], text)
+        overflow = context_compiler.list_overflow_rules(self.conn, self.brand["id"])
+        self.assertEqual({o["id"] for o in overflow}, {r["id"] for r in soft_rules})
+
+    def test_cap_threshold_reads_per_brand_rule_cards_override(self):
+        """上限門檻不寫死常數，讀 rule_cards「rule_prompt_cap」的品牌覆寫值（settings-hub/01
+        分品牌機制）：改小上限後同一批規則的未生效清單立刻變多，不用重開程式。"""
+        _hard, soft_rules = self._make_rules(self.brand["id"], hard_count=0, soft_count=5)
+        self.assertEqual(context_compiler.list_overflow_rules(self.conn, self.brand["id"]), [])
+
+        rule_cards.set_value(self.conn, self.brand["id"], "rule_prompt_cap", "max_active_rules",
+                             3.0, actor="小陳")
+        overflow = context_compiler.list_overflow_rules(self.conn, self.brand["id"])
+        self.assertEqual({o["id"] for o in overflow}, {r["id"] for r in soft_rules[:2]})
+
+    def test_product_only_overflow_not_hidden_when_brand_alone_is_within_cap(self):
+        """品牌整體規則本身在上限內，但加上某產品的專屬規則後合併超過上限時，compile()
+        對該產品生成會排除幾條產品專屬規則——這幾條要出現在未生效清單，不能因為「只看品牌
+        整體規則」而回報 0 條（bug 回歸：compile() 跟 list_overflow_rules() 邏輯要一致）。"""
+        rule_cards.set_value(self.conn, self.brand["id"], "rule_prompt_cap", "max_active_rules",
+                             3.0, actor="小陳")
+        _hard, brand_soft = self._make_rules(self.brand["id"], hard_count=0, soft_count=2)
+
+        # 品牌整體 2 條 soft 本身在上限（3）內，未生效清單是空的。
+        self.assertEqual(context_compiler.list_overflow_rules(self.conn, self.brand["id"]), [])
+
+        product = repo.create_product(self.conn, self.brand["id"], name="測試產品", actor="小陳")
+        base = datetime.now(timezone.utc) - timedelta(minutes=1)
+        product_rules = []
+        for i in range(1, 3):
+            rule = repo.create_rule(self.conn, self.brand["id"], rule_type="tone",
+                                    content=f"僅限產品限定規則{i:02d}", severity="soft",
+                                    product_id=product["id"], actor="小陳")
+            confirmed_at = (base + timedelta(seconds=10 + i)).isoformat()
+            self.conn.execute("UPDATE rule SET confirmed_at = ? WHERE id = ?",
+                              (confirmed_at, rule["id"]))
+            self.conn.commit()
+            product_rules.append(rule)
+
+        # compile() 對這個產品生成時，品牌 2 條 + 產品 2 條合併＝4 條 > 上限 3，
+        # 產品規則 confirmed_at 較新、排前面，品牌最舊的 1 條被排除。
+        text, _ids, _bv, _pv = context_compiler.compile(self.conn, self.brand["id"], product["id"])
+        for r in product_rules:
+            self.assertIn(r["content"], text)
+        self.assertNotIn(brand_soft[0]["content"], text)
+
+        overflow = context_compiler.list_overflow_rules(self.conn, self.brand["id"])
+        self.assertIn(brand_soft[0]["id"], {o["id"] for o in overflow})
 
 
 class ContextCompilerLearningLoopTest(unittest.TestCase):

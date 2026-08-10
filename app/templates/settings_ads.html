@@ -1,0 +1,103 @@
+{% extends "_layouts/console.html" %}
+{% from "_components/breadcrumb.html" import breadcrumb %}
+{% from "_components/banner.html" import banner %}
+{% from "_components/field.html" import field %}
+{% from "_components/badge.html" import badge %}
+
+{% block title %}廣告層面設定 — {{ brand.name }} — 行銷作業系統{% endblock %}
+
+{% block content %}
+{{ breadcrumb(breadcrumb_items) }}
+
+{% if banner_msg %}
+{{ banner(banner_kind or 'ok', banner_msg, dismiss_url=request.url.path) }}
+{% endif %}
+
+<h1>廣告層面設定</h1>
+<p class="page-subtitle">
+  這個品牌自己的廣告護欄門檻——沒改過的欄位顯示系統預設值，改過的欄位標「已自訂」，
+  可以隨時改回預設值，不影響其他品牌。
+</p>
+
+{% for card in cards %}
+<section class="settings-section" aria-labelledby="rule-card-{{ card.key }}-title">
+  <h2 id="rule-card-{{ card.key }}-title">{{ card.title }}</h2>
+  <p class="settings-desc">{{ card.description }}</p>
+
+  <form method="post" action="/brands/{{ brand.id }}/settings/ads/{{ card.key }}/edit" novalidate>
+    {% for f in card.fields %}
+    {% call field(card.key ~ '-' ~ f.key,
+                  f.label ~ (' ・ 已自訂' if f.customized else '') ~ '（' ~ f.unit ~ '）',
+                  required=True, hint=f.help, error=(errors.get(card.key) or {}).get(f.key)) %}
+    <input type="number" step="0.1" min="0" inputmode="decimal"
+           id="{{ card.key }}-{{ f.key }}" name="{{ f.key }}" value="{{ f.value }}">
+    {% endcall %}
+    {% endfor %}
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary">儲存這張卡</button>
+    </div>
+  </form>
+
+  <form method="post" action="/brands/{{ brand.id }}/settings/ads/{{ card.key }}/reset" class="inline-form"
+        onsubmit="return confirm('確定要把「{{ card.title }}」的所有欄位重設回系統預設值？')">
+    <button type="submit" class="btn-text">重設為系統預設值</button>
+  </form>
+</section>
+{% endfor %}
+
+<section class="settings-section" aria-labelledby="qa-launch-title">
+  <h2 id="qa-launch-title">上線前提醒</h2>
+  <p class="settings-desc">
+    上線授權頁那五項 QA 確認紀錄。確認過的項目關掉提醒；取消確認後，下次上線授權頁重新顯示警示。
+  </p>
+
+  {% for item in qa_launch.checklist_items %}
+  <div class="claim-block {{ 'claim-block-approved' if item.checked else 'claim-block-forbidden' }}">
+    <div class="claim-row">
+      <div class="claim-text">
+        {{ item.label }}
+        {% if item.checked %}
+        {{ badge('已確認' ~ ('（' ~ item.checked_by ~ '）' if item.checked_by else ''), 'ok') }}
+        {% else %}
+        {{ badge('尚未確認', 'danger') }}
+        {% endif %}
+      </div>
+      <div class="claim-meta">{{ item.help }}</div>
+      <form method="post" action="/brands/{{ brand.id }}/settings/ads/qa-launch/{{ item.key }}" class="inline-form">
+        <input type="hidden" name="checked" value="{{ '0' if item.checked else '1' }}">
+        <button type="submit" class="btn-text">{{ '取消確認' if item.checked else '確認已完成' }}</button>
+      </form>
+    </div>
+  </div>
+  {% endfor %}
+</section>
+
+<section class="settings-section" aria-labelledby="calendar-dismiss-title">
+  <h2 id="calendar-dismiss-title">節日提醒</h2>
+  <p class="settings-desc">
+    系統依業種標籤自動判斷這個節日跟你有沒有關；判斷錯的話可以在這裡永久關掉提醒，
+    隨時可以重新打開。
+  </p>
+
+  {% for cat in calendar_categories %}
+  <div class="claim-block {{ 'claim-block-approved' if cat.enabled else '' }}">
+    <div class="claim-row">
+      <div class="claim-text">
+        {{ cat.label }}
+        {% if cat.enabled %}
+        {{ badge('提醒中', 'ok') }}
+        {% else %}
+        {{ badge('已關閉') }}
+        {% endif %}
+      </div>
+      <div class="claim-meta">關閉後，就算系統判定跟這個節日類別相關，也不會再跳出提醒。</div>
+      <form method="post" action="/brands/{{ brand.id }}/settings/ads/calendar/{{ cat.category }}"
+            class="inline-form">
+        <input type="hidden" name="enabled" value="{{ '0' if cat.enabled else '1' }}">
+        <button type="submit" class="btn-text">{{ '關閉提醒' if cat.enabled else '重新開啟提醒' }}</button>
+      </form>
+    </div>
+  </div>
+  {% endfor %}
+</section>
+{% endblock %}

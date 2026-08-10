@@ -232,6 +232,110 @@ class BudgetProposalTest(_BaseNextCycleTest):
         self.assertIn("加碼幅度上限", page.text)
 
 
+class SampleTrustFlagsTest(unittest.TestCase):
+    """票 03-sample-trust-threshold（ADR 0011 第一至三節）：純函式 cell_trust_flags()，
+    三種驗收情境＋旗標互相獨立的證明。條件不成立的旗標鍵不出現（不是回傳 False）。
+    """
+
+    def test_low_conversions_flag_insufficient_evidence(self):
+        """轉換數 20 次（< 50 可信門檻）：應標證據不足，該切角本身不受影響（純函式只回旗標）。"""
+        flags = nextcycle.cell_trust_flags(conversions=20, spend=100, allocated_budget=1000)
+        self.assertEqual(flags, {"evidence_sufficient": False})
+
+    def test_60_percent_spend_zero_conversions_flags_underperforming(self):
+        """花費達分配預算 60%、零轉換：應標表現差。"""
+        flags = nextcycle.cell_trust_flags(conversions=0, spend=600, allocated_budget=1000)
+        self.assertTrue(flags["underperforming"])
+
+    def test_80_conversions_with_results_flags_neither(self):
+        """轉換數 80 次且有轉換：兩個旗標都不該出現。"""
+        flags = nextcycle.cell_trust_flags(conversions=80, spend=800, allocated_budget=1000)
+        self.assertEqual(flags, {})
+
+    def test_flags_are_independent_and_can_coexist(self):
+        """兩個旗標互相獨立：0 轉換同時符合「未達可信門檻」與「花費過半零轉換」，
+        兩個旗標該同時出現。"""
+        flags = nextcycle.cell_trust_flags(conversions=0, spend=600, allocated_budget=1000)
+        self.assertEqual(flags, {"evidence_sufficient": False, "underperforming": True})
+
+    def test_below_spend_threshold_does_not_flag_underperforming(self):
+        """零轉換但花費還沒到分配預算一半：不該標表現差（仍標證據不足）。"""
+        flags = nextcycle.cell_trust_flags(conversions=0, spend=100, allocated_budget=1000)
+        self.assertNotIn("underperforming", flags)
+        self.assertFalse(flags["evidence_sufficient"])
+
+
+class HistoricalCellPerformanceTest(_BaseNextCycleTest):
+    """historical_cell_performance() 走 performance_snapshot → external_ad_mapping →
+    publishing_package → experiment_cell 既有鏈（比照 test_ads_reading.py
+    AssetBreakdownTest 的既有寫法），證明真實 DB JOIN／均分預算也能算出旗標，
+    不只是純函式 cell_trust_flags() 本身。
+    """
+
+    def _cell_with_ad(self, ad_name, creative_angle="pain"):
+        cell_id = new_id("exc")
+        pkg_id = new_id("pkg")
+        ts = now_iso()
+        main.conn.execute(
+            "INSERT INTO experiment_cell (id, campaign_cycle_id, brand_id, creative_angle,"
+            " created_at) VALUES (?, ?, ?, ?, ?)",
+            (cell_id, self.cycle_id, self.bid, creative_angle, ts))
+        main.conn.execute(
+            "INSERT INTO publishing_package (id, brand_id, campaign_cycle_id, experiment_cell_id,"
+            " campaign_name, adset_name, ad_name, destination_url, utm_json, status, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, '{}', 'ready', ?)",
+            (pkg_id, self.bid, self.cycle_id, cell_id, "測試活動", "測試組合", ad_name,
+             "https://example.test", ts))
+        mapping_id = new_id("xam")
+        main.conn.execute(
+            "INSERT INTO external_ad_mapping (id, brand_id, publishing_package_id,"
+            " campaign_cycle_id, platform, claim_status, confirmed_by, confirmed_at,"
+            " created_at) VALUES (?, ?, ?, ?, 'meta', 'confirmed', ?, ?, ?)",
+            (mapping_id, self.bid, pkg_id, self.cycle_id, ACTOR, ts, ts))
+        main.conn.commit()
+        return cell_id
+
+    def test_even_split_budget_and_join_chain_flags_underperforming(self):
+        """本期預算 10000、兩個切角均分＝每格 5000，50% 門檻＝2500。角 A 花 3000 零轉換
+        該被標 underperforming；角 B 完全沒有成效資料，均分預算算得出來但不該誤標表現差
+        （花費 0 未達門檻）。"""
+        cell_a = self._cell_with_ad("角度A_ad")
+        cell_b = self._cell_with_ad("角度B_ad")
+        csv_text = ("行銷活動名稱,廣告名稱,花費金額,購買次數\n"
+                   "測試活動,角度A_ad,3000,0\n")
+        result = perf.import_csv(main.conn, self.bid, self.cycle_id, csv_text, actor=ACTOR)
+        self.assertEqual(result.matched_assets, 1)
+
+        cells = {c["experiment_cell_id"]: c
+                for c in nextcycle.historical_cell_performance(main.conn, self.bid)}
+        self.assertEqual(cells[cell_a]["allocated_budget"], 5000.0)
+        self.assertEqual(cells[cell_a]["spend"], 3000)
+        self.assertTrue(cells[cell_a]["underperforming"])
+        self.assertFalse(cells[cell_a]["evidence_sufficient"])
+
+        self.assertEqual(cells[cell_b]["allocated_budget"], 5000.0)
+        self.assertEqual(cells[cell_b]["spend"], 0)
+        self.assertNotIn("underperforming", cells[cell_b])
+        self.assertFalse(cells[cell_b]["evidence_sufficient"])
+
+    def test_exclude_cycle_id_omits_that_cycles_cells(self):
+        self._cell_with_ad("角度C_ad")
+        cells = nextcycle.historical_cell_performance(main.conn, self.bid,
+                                                       exclude_cycle_id=self.cycle_id)
+        self.assertEqual(cells, [])
+
+    def test_build_wires_historical_cells_into_next_cycle_content(self):
+        """下期建議回傳結果（recommendation.content_json）要能拿到這份清單——不是寫好沒人
+        呼叫的孤兒函式。build() 排除本期自己（還在打的檔期不算「歷史」）。"""
+        cell_this_cycle = self._cell_with_ad("角度D_ad")
+        self._run_cycle(spend=10000, impressions=20000, clicks=400, conversions=10,
+                        revenue=40000)
+        draft = nextcycle.load(main.conn, self.bid, self.cycle_id)["content"]
+        self.assertIn("historical_cells", draft)
+        cell_ids = {c["experiment_cell_id"] for c in draft["historical_cells"]}
+        self.assertNotIn(cell_this_cycle, cell_ids)
+
+
 class RuleCardTest(_BaseNextCycleTest):
     def test_one_rejection_is_not_enough(self):
         """一次可能只是那則寫得爛，兩次才看得出方向不對。"""
@@ -356,6 +460,94 @@ class RuleCardRelativeThresholdTest(_BaseNextCycleTest):
 
         self.assertEqual(nextcycle.build_rule_cards(main.conn, self.bid, ACTOR), 0)
         self.assertEqual(nextcycle.list_pending_rule_cards(main.conn, self.bid), [])
+
+
+class OccasionWeightedComparisonTest(_BaseNextCycleTest):
+    """票 02-occasion-weighted-recommendations（ADR 0011 第五節）：下期建議引擎比較歷史
+    資料時，跟這次檔期同場合的歷史資料權重加重、不同場合的較低但仍參與比較——不是排除、
+    不做硬性樣本分割。
+    """
+
+    def _set_occasion(self, cycle_id, occasion):
+        main.conn.execute("UPDATE campaign_cycle SET occasion = ? WHERE id = ?",
+                          (occasion, cycle_id))
+        main.conn.commit()
+
+    def test_same_occasion_history_carries_more_weight_than_different(self):
+        """兩個歷史檔期各被拒 2 次同一軸的不同值：跟這次同場合那個權重 1.0 如實計入，
+        不同場合那個權重壓低——仍 > 0（不是排除），但影響力明顯較低。"""
+        same_cycle = self._make_cycle("2026-01-01T00:00:00")
+        diff_cycle = self._make_cycle("2026-01-02T00:00:00")
+        self._set_occasion(same_cycle, "母親節")
+        self._set_occasion(diff_cycle, "618")
+
+        self._reject(_print(tone="blunt"), cycle_id=same_cycle)
+        self._reject(_print(tone="blunt"), cycle_id=same_cycle)
+        self._reject(_print(tone="warm"), cycle_id=diff_cycle)
+        self._reject(_print(tone="warm"), cycle_id=diff_cycle)
+
+        stats = nextcycle._axis_value_stats(
+            main.conn, self.bid, [same_cycle, diff_cycle], current_occasion="母親節")
+        same_weighted = stats[("tone", "blunt")]["weighted_rejections"]
+        diff_weighted = stats[("tone", "warm")]["weighted_rejections"]
+        # 真實次數（給使用者看「被退幾次」用）不受加權影響，兩邊都該是真正的 2 次——
+        # 加權只影響門檻判斷，不能把顯示用的次數也變成看不懂的小數。
+        self.assertEqual(stats[("tone", "blunt")]["rejections"], 2)
+        self.assertEqual(stats[("tone", "warm")]["rejections"], 2)
+
+        self.assertEqual(same_weighted, 2.0)
+        self.assertEqual(diff_weighted, 2 * nextcycle.OCCASION_WEIGHT_DIFFERENT)
+        self.assertGreater(diff_weighted, 0)  # 不同場合仍參與比較，不是排除
+        self.assertGreater(same_weighted, diff_weighted * 3)  # 影響力明顯較高
+
+    def test_falls_back_to_unweighted_when_no_same_occasion_history(self):
+        """窗口內沒有任何一期跟這次同場合：退化成現行的無加權比較，不報錯、不空白。"""
+        cycle_a = self._make_cycle("2026-01-01T00:00:00")
+        cycle_b = self._make_cycle("2026-01-02T00:00:00")
+        self._set_occasion(cycle_a, "618")
+        self._set_occasion(cycle_b, "雙11")
+
+        self._reject(_print(tone="blunt"), cycle_id=cycle_a)
+        self._reject(_print(tone="warm"), cycle_id=cycle_b)
+
+        stats = nextcycle._axis_value_stats(
+            main.conn, self.bid, [cycle_a, cycle_b], current_occasion="母親節")
+        self.assertEqual(stats[("tone", "blunt")]["weighted_rejections"], 1.0)
+        self.assertEqual(stats[("tone", "warm")]["weighted_rejections"], 1.0)
+
+    def test_build_rule_cards_needs_more_evidence_when_history_is_a_different_occasion(self):
+        """端對端：同一批拒絕紀錄，這次檔期跟它不同場合時權重被壓低、達不到候選卡門檻；
+        不加權（沒傳 cycle_id，等同現行比較）時同一批資料照舊直接升級——證明差別是加權
+        造成的，不是資料本身不夠格。"""
+        other_cycle = self._make_cycle("2026-01-01T00:00:00")
+        self._set_occasion(other_cycle, "618")
+        self._reject(_print(tone="blunt"), cycle_id=other_cycle)
+        self._reject(_print(tone="blunt"), cycle_id=other_cycle)
+
+        self._set_occasion(self.cycle_id, "母親節")
+        self.assertEqual(
+            nextcycle.build_rule_cards(main.conn, self.bid, ACTOR, cycle_id=self.cycle_id), 0)
+
+        self.assertEqual(nextcycle.build_rule_cards(main.conn, self.bid, ACTOR), 1)
+
+    def test_reject_count_shown_to_the_user_stays_a_true_integer_even_when_weighted(self):
+        """加權只影響「該不該升級成候選卡」的門檻判斷，卡片上顯示給使用者看的「被退幾次」
+        要維持真實整數次數，不能因為套了權重就變成「被退 2.6 次」這種看不懂的小數。"""
+        same_cycle = self._make_cycle("2026-01-01T00:00:00")
+        diff_cycle = self._make_cycle("2026-01-02T00:00:00")
+        self._set_occasion(same_cycle, "母親節")
+        self._set_occasion(diff_cycle, "618")
+        self._set_occasion(self.cycle_id, "母親節")
+
+        self._reject(_print(tone="blunt"), cycle_id=same_cycle)
+        self._reject(_print(tone="blunt"), cycle_id=same_cycle)
+        self._reject(_print(tone="blunt"), cycle_id=diff_cycle)
+        self._reject(_print(tone="blunt"), cycle_id=diff_cycle)
+
+        self.assertEqual(
+            nextcycle.build_rule_cards(main.conn, self.bid, ACTOR, cycle_id=self.cycle_id), 1)
+        card = nextcycle.list_pending_rule_cards(main.conn, self.bid)[0]
+        self.assertEqual(card["reject_count"], 4)  # 4 次真實拒絕，不是加權後的 2.6
 
 
 class OverclaimClaimCardTest(_BaseNextCycleTest):
@@ -542,6 +734,29 @@ class EchoChamberTest(_BaseNextCycleTest):
         finding = nextcycle.check_echo_chamber(main.conn, self.bid, self.cycle_id)
         self.assertIsNotNone(finding)
         self.assertEqual(finding.code, "creatives_too_similar")
+
+    def test_near_duplicate_from_a_different_occasion_carries_less_weight(self):
+        """票 02-occasion-weighted-recommendations（ADR 0011 第五節）：跟本期候選幾乎一樣
+        （只差一軸，novelty=0.25，正常會觸發回音室）的歷史素材如果來自不同場合的檔期，
+        權重被壓低到不足以判定「太像」；跟本期完全不同的同場合素材本身也不觸發。"""
+        same_cycle = self._make_cycle("2026-01-01T00:00:00")
+        diff_cycle = self._make_cycle("2026-01-02T00:00:00")
+        main.conn.execute("UPDATE campaign_cycle SET occasion = ? WHERE id = ?",
+                          ("母親節", same_cycle))
+        main.conn.execute("UPDATE campaign_cycle SET occasion = ? WHERE id = ?",
+                          ("618", diff_cycle))
+        main.conn.execute("UPDATE campaign_cycle SET occasion = ? WHERE id = ?",
+                          ("母親節", self.cycle_id))
+        main.conn.commit()
+
+        # 同場合：跟本期候選完全不同，本身不該觸發
+        self._adopt(_print(angle="curiosity", tone="warm", fmt="carousel", selling="safety"),
+                   cycle_id=same_cycle)
+        # 不同場合：跟本期候選幾乎一樣（只差賣點），若無加權足以判定太像
+        self._adopt(_print(selling="price"), cycle_id=diff_cycle)
+        self._make_variant(_print())
+
+        self.assertIsNone(nextcycle.check_echo_chamber(main.conn, self.bid, self.cycle_id))
 
 
 class TasteRejectionFreezeTest(_BaseNextCycleTest):

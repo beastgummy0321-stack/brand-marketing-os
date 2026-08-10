@@ -175,6 +175,33 @@ class CampaignCalendarRuleTest(unittest.TestCase):
     def test_does_not_trigger_when_no_reminder(self):
         self.assertIsNone(guide_cards.RULES["campaign_calendar"](_facts(campaign_reminder=None)))
 
+    def test_last_year_skip_reason_appended_to_title(self):
+        """票 03-cycle-skip-record：去年有跳過紀錄時附帶顯示去年的理由。"""
+        facts = _facts(campaign_reminder={
+            "id": "cny_2027", "name": "農曆新年", "tier": "large", "tier_label": "大檔",
+            "days_until": 28, "weeks_until": 4, "kind": "prep",
+            "last_year_skipped": True, "last_year_skip_reason": "收假太晚，沒空間做素材",
+        })
+        card = guide_cards.RULES["campaign_calendar"](facts)
+        self.assertIn("收假太晚，沒空間做素材", card["title"])
+
+    def test_last_year_skip_without_reason_still_notes_it_was_skipped(self):
+        facts = _facts(campaign_reminder={
+            "id": "cny_2027", "name": "農曆新年", "tier": "large", "tier_label": "大檔",
+            "days_until": 28, "weeks_until": 4, "kind": "prep",
+            "last_year_skipped": True, "last_year_skip_reason": None,
+        })
+        card = guide_cards.RULES["campaign_calendar"](facts)
+        self.assertIn("去年跳過", card["title"])
+
+    def test_no_last_year_skip_note_when_not_skipped(self):
+        facts = _facts(campaign_reminder={
+            "id": "cny_2027", "name": "農曆新年", "tier": "large", "tier_label": "大檔",
+            "days_until": 28, "weeks_until": 4, "kind": "prep",
+        })
+        card = guide_cards.RULES["campaign_calendar"](facts)
+        self.assertNotIn("跳過", card["title"])
+
 
 class BuildPriorityAndCapTest(unittest.TestCase):
     def test_no_rules_triggered_returns_empty_list(self):

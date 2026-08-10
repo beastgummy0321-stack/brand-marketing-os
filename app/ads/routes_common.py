@@ -14,6 +14,7 @@ import app.shared.web as main_mod
 from app.ads import budget as budget_calc
 from app.ads import creative as ads_creative
 from app.ads import handoff as ads_handoff
+from app.ads import pacing_curve
 from app.ads import performance as ads_performance
 from app.ads import plan as ads_plan
 from app.ads import reading as ads_reading
@@ -157,6 +158,13 @@ def _cycle_view(conn, brand_id: str, cycle: dict) -> dict:
         "daily_budget": plan.get("daily_budget"),
         "daily_below_floor": plan.get("daily_below_floor"),
         "product_names": names,
+        # 排期策略（票 pacing-curve）：舊資料（本票上線前開的檔期）沒有這三個鍵，
+        # .get() 給空預設，畫面看不到曲線就顯示「這期還沒有排期曲線資料」，不硬猜。
+        "pacing_strategy": plan.get("pacing_strategy"),
+        "pacing_strategy_label": (pacing_curve.STRATEGIES.get(plan.get("pacing_strategy") or "", {})
+                                  .get("title")),
+        "pacing_reason": plan.get("pacing_reason"),
+        "daily_budgets": plan.get("daily_budgets") or [],
     }
 
 

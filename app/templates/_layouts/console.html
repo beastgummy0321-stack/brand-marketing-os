@@ -76,9 +76,11 @@
     </div>
 
     {# 操作人設定入口已下架（ADR 0004：單機單人不再具名），只留「設定」釘在側欄底部
-       （§20.2「設定退背景」）。 #}
+       （§20.2「設定退背景」）。有品牌上下文就進分品牌設定中心（設定中心票 01），
+       跨品牌情境（brand=None）沒有品牌可分，維持指向舊版全域設定頁。 #}
     <div class="console-nav-footer">
-      <a class="console-nav-item console-nav-settings" href="/settings">設定</a>
+      <a class="console-nav-item console-nav-settings"
+         href="{{ '/brands/' ~ brand.id ~ '/settings' if brand else '/settings' }}">設定</a>
     </div>
   </nav>
   {% endif %}

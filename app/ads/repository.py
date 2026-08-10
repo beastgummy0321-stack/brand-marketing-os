@@ -20,6 +20,8 @@ from datetime import date, timedelta
 from typing import Optional
 
 from app.ads import budget as budget_calc
+from app.ads import occasion as ads_occasion
+from app.ads import pacing_curve
 from app.brand_intelligence import repository as bi
 from app.core import cleanup
 from app.core.audit import write_audit
@@ -134,6 +136,11 @@ def create_cycle(conn: sqlite3.Connection, brand_id: str, *, product_ids: list,
 
     cycle_id = new_id("ccy")
     ts = now_iso()
+    # offer_id 開期表單目前還沒有選擇欄位，固定 None／has_offer=False（票 pacing-curve
+    # 範圍內；優惠一旦串接進表單，這裡改讀真正的值即可，不用動 pacing_curve 那一層）。
+    pacing_strategy, pacing_reason = pacing_curve.recommend_pacing_strategy(
+        plan.duration_days, has_offer=False)
+    daily_budgets = pacing_curve.compute_curve(pacing_strategy, plan.duration_days, plan.total_budget)
     row = {
         "id": cycle_id,
         "brand_id": brand_id,
@@ -141,6 +148,7 @@ def create_cycle(conn: sqlite3.Connection, brand_id: str, *, product_ids: list,
         "product_scope_json": json.dumps(product_ids, ensure_ascii=False),
         "objective": objective.strip(),
         "funnel_stage": funnel_stage,
+        "occasion": ads_occasion.for_cycle(start, end),
         "budget": plan.total_budget,
         "currency": currency,
         "start_date": start.isoformat(),
@@ -165,6 +173,9 @@ def create_cycle(conn: sqlite3.Connection, brand_id: str, *, product_ids: list,
             "daily_stop_loss": plan.daily_stop_loss,
             "pause_threshold_spend": plan.pause_threshold_spend,
             "daily_below_floor": plan.daily_below_floor,
+            "pacing_strategy": pacing_strategy,
+            "pacing_reason": pacing_reason,
+            "daily_budgets": daily_budgets,
         }, ensure_ascii=False),
         "diff_snapshot_json": None,
         "created_at": ts,
@@ -172,12 +183,12 @@ def create_cycle(conn: sqlite3.Connection, brand_id: str, *, product_ids: list,
     }
     conn.execute(
         "INSERT INTO campaign_cycle (id, brand_id, ad_account_id, product_scope_json, objective,"
-        " funnel_stage, budget, currency, start_date, end_date, target_market, channels_json,"
-        " placements_json, offer_id, landing_page, background, status, close_reason, blocked,"
-        " needs_information, archived, plan_version, phase, pain_slider_value, derived_plan_json,"
-        " diff_snapshot_json, created_at, updated_at)"
+        " funnel_stage, occasion, budget, currency, start_date, end_date, target_market,"
+        " channels_json, placements_json, offer_id, landing_page, background, status,"
+        " close_reason, blocked, needs_information, archived, plan_version, phase,"
+        " pain_slider_value, derived_plan_json, diff_snapshot_json, created_at, updated_at)"
         " VALUES (:id, :brand_id, :ad_account_id, :product_scope_json, :objective, :funnel_stage,"
-        " :budget, :currency, :start_date, :end_date, :target_market, :channels_json,"
+        " :occasion, :budget, :currency, :start_date, :end_date, :target_market, :channels_json,"
         " :placements_json, :offer_id, :landing_page, :background, :status, :close_reason, :blocked,"
         " :needs_information, :archived, :plan_version, :phase, :pain_slider_value,"
         " :derived_plan_json, :diff_snapshot_json, :created_at, :updated_at)",
@@ -279,6 +290,33 @@ def derived_plan(cycle: dict) -> dict:
     """把 derived_plan_json 解回 dict（介面每頁都要用，集中在這裡解一次）。"""
     raw = cycle.get("derived_plan_json")
     return json.loads(raw) if raw else {}
+
+
+def set_cycle_pacing(conn: sqlite3.Connection, brand_id: str, cycle_id: str, *,
+                     strategy: str, reason: str, actor: str) -> dict:
+    """使用者手動改排期策略（票 pacing-curve，G9.9「用這個排法，下一步」）：重算
+    compute_curve，覆蓋 derived_plan_json 的 pacing_strategy／pacing_reason／daily_budgets
+    三個鍵，其餘既有鍵不動。"""
+    before = get_cycle(conn, brand_id, cycle_id)
+    if before is None:
+        raise ValueError(f"找不到廣告檔期：{cycle_id}")
+    if strategy not in pacing_curve.STRATEGIES:
+        raise ValueError(f"不支援的排期策略：{strategy}")
+    plan = derived_plan(before)
+    if strategy != "continuous" and plan["duration_days"] < pacing_curve.SHORT_DURATION_THRESHOLD_DAYS:
+        raise ValueError("這期檔期天數不足，這次只能選穩定投放（連續）。")
+    plan["pacing_strategy"] = strategy
+    plan["pacing_reason"] = reason.strip() or pacing_curve.PACING_REASON_PRESETS[strategy][0]
+    plan["daily_budgets"] = pacing_curve.compute_curve(strategy, plan["duration_days"], before["budget"])
+    conn.execute(
+        "UPDATE campaign_cycle SET derived_plan_json = ?, updated_at = ? WHERE brand_id = ? AND id = ?",
+        (json.dumps(plan, ensure_ascii=False), now_iso(), brand_id, cycle_id),
+    )
+    after = get_cycle(conn, brand_id, cycle_id)
+    write_audit(conn, brand_id=brand_id, entity_type="campaign_cycle", entity_id=cycle_id,
+                action="pacing_update", actor=actor, before=before, after=after)
+    conn.commit()
+    return plan
 
 
 def list_archived_cycles(conn: sqlite3.Connection, brand_id: str) -> list:

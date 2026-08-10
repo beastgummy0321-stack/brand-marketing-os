@@ -7,8 +7,14 @@
 {% from "_components/wizard_steps.html" import progress_rail %}
 {% from "_components/card.html" import card_block %}
 {% from "_components/detail.html" import detail %}
+{% from "_components/pacing_curve_chart.html" import pacing_curve_chart %}
 
 {% block title %}{{ cycle.start_date }} 檔期 — {{ brand.name }} — 行銷作業系統{% endblock %}
+
+{% block head_extra %}
+<script src="/static/vendor/echarts.min.js"></script>
+<script src="/static/pacing_chart.js"></script>
+{% endblock %}
 
 {% block content %}
 {{ breadcrumb(breadcrumb_items) }}
@@ -120,6 +126,51 @@
 {% set cycle_facts = cycle_facts + [('這期背景', cycle.background, False)] %}
 {% endif %}
 {{ definition_list(cycle_facts) }}
+
+{# ---- 排期策略（票 pacing-curve，G9 契約）：連續／間歇／脈動，系統先選好一個，
+   附白話理由，不放心可以展開看其他排法。跟「本期計畫」（AI 生成打法方案）互相獨立，
+   排期策略在開期當下就自動算好，不用等打法方案生成。 #}
+{% if cycle.pacing_strategy %}
+{% set current_strategy = pacing_strategies[cycle.pacing_strategy] %}
+<div class="card pacing-card">
+  <h3>這次要怎麼投：{{ current_strategy.title }}<span class="plan-why">（{{ current_strategy.tag }}）</span></h3>
+  <p class="plan-why">{{ cycle.pacing_reason }}</p>
+  {% if cycle.pacing_strategy != 'continuous' %}
+  {{ banner('warn', '這個排法會讓投放效果重新累積一小段時間（Meta 學習期跟著重置），是正常現象，不是出問題。') }}
+  {% endif %}
+  {{ pacing_curve_chart('pacing-chart-plan', cycle.daily_budgets) }}
+
+  <details class="field-details">
+    <summary><span class="marker" aria-hidden="true">▸</span> 還有其他排法</summary>
+    <div class="details-body">
+      {% for key, info in pacing_strategies.items() %}
+      {% if key != cycle.pacing_strategy %}
+      {% set disabled = key != 'continuous' and cycle.duration_days < pacing_short_threshold %}
+      <div class="alt-card{{ ' is-disabled' if disabled else '' }}">
+        <div class="body">
+          <strong>{{ info.title }}（{{ info.tag }}）</strong>
+          <p class="plan-why">{{ info.desc }}</p>
+          {% if disabled %}
+          <p class="plan-why">檔期天數不足，這次選不了。</p>
+          {% else %}
+          <form method="post" action="/brands/{{ brand.id }}/ads/{{ cycle.id }}/pacing" class="inline-form">
+            <input type="hidden" name="strategy" value="{{ key }}">
+            <input type="text" name="reason" list="pacing-reason-{{ key }}"
+                   value="{{ pacing_reason_presets[key][0] }}" aria-label="改用這個排法的理由">
+            <datalist id="pacing-reason-{{ key }}">
+              {% for preset in pacing_reason_presets[key] %}<option value="{{ preset }}">{% endfor %}
+            </datalist>
+            <button type="submit" class="btn btn-secondary">改用這個排法</button>
+          </form>
+          {% endif %}
+        </div>
+      </div>
+      {% endif %}
+      {% endfor %}
+    </div>
+  </details>
+</div>
+{% endif %}
 
 {# ---- 本期計畫（關卡一：計畫確認）---- #}
 {% if plan %}

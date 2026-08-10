@@ -7,6 +7,7 @@ app/ads/routes.py 拆出）。純搬移，網址與行為不變。
 - `/brands/{b}/ads/learnings`                          累積智慧頁
 - `/brands/{b}/ads/learnings/ledger/{id}/deactivate`   下架已確認學習
 - `/brands/{b}/ads/learnings/rules/{id}/deactivate`    下架生效中的禁令
+- `/brands/{b}/ads/learnings/rules/{id}/reconfirm`     延續待確認規則（票 01-rule-expiry-reconfirm）
 - `/brands/{b}/ads/rule-cards/{id}/{action}`           規則卡接受／不接受
   （原本在檔案最後段，跟累積智慧頁同一個「學習→規則」流程，搬來同一檔）
 """
@@ -23,6 +24,7 @@ from app.ads import reading as ads_reading
 from app.ads import repository as ads_repo
 from app.ads.routes_common import _crumb
 from app.brand_intelligence import repository as bi
+from app.llm import context_compiler
 
 router = APIRouter()
 
@@ -136,6 +138,11 @@ async def ads_learnings_page(request: Request, brand_id: str):
     for entry in learnings:
         entry["meta_line"] = _learning_meta_line(conn, brand_id, entry)
 
+    # 規則有效期逾期未確認清單（票 01-rule-expiry-reconfirm，ADR 0012 第一節）：先撈這份
+    # ——它內部會先掃一次逾期未確認的規則（rule_lifecycle.sweep_expired_rules），確保
+    # 底下 active_bans／overflow_rules 讀到的是最新狀態，不是掃描前的舊資料。
+    pending_reconfirm_rules = bi.list_pending_reconfirm_rules(conn, brand_id)
+
     active_bans = nextcycle.list_active_bans(conn, brand_id)
     pending_cards = nextcycle.list_pending_rule_cards(conn, brand_id)
     observing_signals = nextcycle.list_observing_signals(conn, brand_id)
@@ -144,13 +151,17 @@ async def ads_learnings_page(request: Request, brand_id: str):
         for h in bi.list_strategy_hypotheses(conn, brand_id)
         if h["status"] in ads_reading.PENDING_HYPOTHESIS_STATUSES
     ]
+    # 規則進 prompt 超過上限而這次未生效的清單（票 02-prompt-cap-and-overflow-list，
+    # 決策 0012 第三節：不悄悄丟棄，累積智慧頁列出來）。
+    overflow_rules = context_compiler.list_overflow_rules(conn, brand_id)
 
     return main_mod.templates.TemplateResponse(
         request, "ads_learnings.html",
         main_mod.ctx(request, brand=brand, nav_current='ads',
                      learnings=learnings, active_bans=active_bans,
                      pending_cards=pending_cards, observing_signals=observing_signals,
-                     pending_hypotheses=pending_hypotheses,
+                     pending_hypotheses=pending_hypotheses, overflow_rules=overflow_rules,
+                     pending_reconfirm_rules=pending_reconfirm_rules,
                      breadcrumb_items=_crumb(brand, ("累積智慧", None)),
                      **main_mod.banner_ctx(request)),
     )
@@ -180,6 +191,20 @@ async def ads_learnings_deactivate_rule(request: Request, brand_id: str, rule_id
     except ValueError as err:
         return main_mod.redirect_with_message(back, str(err), kind="danger")
     return main_mod.redirect_with_message(back, "已下架這條禁令，之後生成內容不會再避開它。")
+
+
+@router.post("/brands/{brand_id}/ads/learnings/rules/{rule_id}/reconfirm")
+async def ads_learnings_reconfirm_rule(request: Request, brand_id: str, rule_id: str):
+    """待確認規則的「延續」（票 01-rule-expiry-reconfirm，ADR 0012 第一節）：恢復生效、
+    更新確認時間，不必重新輸入規則內容。"""
+    main_mod.require_brand(brand_id)
+    actor = main_mod.require_actor(request)
+    back = f"/brands/{brand_id}/ads/learnings"
+    try:
+        bi.reconfirm_rule(main_mod.conn, brand_id, rule_id, actor=actor)
+    except ValueError as err:
+        return main_mod.redirect_with_message(back, str(err), kind="danger")
+    return main_mod.redirect_with_message(back, "已延續這條規則，重新進入生成內容的判斷依據。")
 
 
 @router.post("/brands/{brand_id}/ads/rule-cards/{card_id}/{action}")

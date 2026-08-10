@@ -28,8 +28,6 @@ BRAND_AGNOSTIC_EXCEPTIONS = {
     "brand": "品牌表本身，主鍵 id 就是 brand_id，不適用「有沒有 brand_id 欄位」這個檢查",
     "app_setting": "整台機器的全站設定（AI 金鑰、模型選擇等），不是品牌資料"
         "（migration 0002_app_setting.sql 註解）",
-    "rule_card_value": "平台層級的判定門檻（例如素材疲勞頻率），不分品牌"
-        "（migration 0003_rule_card.sql 註解）",
     "ad_account": "一個廣告帳號可服務多個品牌，歸屬不由帳號推導（決策 0022 第 6 點）",
     "discovered_campaign": "未認領的東西不屬於任何品牌，認領後才寫 external_ad_mapping"
         "（決策 0022 第 7 點）",

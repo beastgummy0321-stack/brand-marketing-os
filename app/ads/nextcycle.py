@@ -17,10 +17,12 @@
 import json
 from typing import Optional
 
+from app.ads import budget as ads_budget
 from app.ads import fingerprint as fp
 from app.ads import guardrails
 from app.ads import reading as ads_reading
 from app.ads import repository as ads_repo
+from app.ads import target_cpa
 from app.core.audit import write_audit
 from app.core.db import new_id, now_iso
 
@@ -96,6 +98,135 @@ def propose_budget(conn, brand_id: str, cycle_id: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# 樣本可信門檻與零轉換警示（票 03-sample-trust-threshold，ADR 0011 第一至三節）
+# ---------------------------------------------------------------------------
+# 可信門檻：轉換數達這個次數才算可信。沿用既有常數（target_cpa.WEEKLY_CONVERSIONS_PER_GROUP），
+# 不另立一個一樣是 50 的新數字——內部既有常數與查證過的 madgicx 業界基準剛好一致。
+
+
+def cell_trust_flags(conversions: float, spend: float, allocated_budget: float) -> dict:
+    """切角歷史成效資料的兩道誠實旗標，只回傳「有值得提醒」的那幾個鍵——條件不成立時
+    對應的鍵不出現（不是回傳 False），呼叫端用 `"evidence_sufficient" in flags` 判斷。
+
+    - `evidence_sufficient: False`：累積轉換數不足可信門檻，仍然顯示該切角，只是誠實
+      標「還不知道」，不排除（ADR 0009 誠實狀態優先）。
+    - `underperforming: True`：花費已達分配預算一半（沿用 `budget.PAUSE_THRESHOLD_RATIO`
+      這個既有比例概念，不是直接呼叫 budget.py 同一段程式碼——那支是檔期層級「該考慮暫停」，
+      這裡是切角層級「這次沒打中」，場景不同、比例概念相同）卻仍零轉換：已經有足夠證據，
+      不是「還不知道」。
+
+    兩者互相獨立，可能同時出現、也可能都不出現。
+    """
+    flags = {}
+    if conversions < target_cpa.WEEKLY_CONVERSIONS_PER_GROUP:
+        flags["evidence_sufficient"] = False
+    if (conversions == 0 and allocated_budget > 0
+            and spend >= allocated_budget * ads_budget.PAUSE_THRESHOLD_RATIO):
+        flags["underperforming"] = True
+    return flags
+
+
+def historical_cell_performance(conn, brand_id: str, exclude_cycle_id: Optional[str] = None) -> list:
+    """品牌歷來每個切角（experiment_cell）累積的成效資料，各自附加 `cell_trust_flags()`
+    的誠實旗標——不影響哪些切角被列出，只影響附加資訊（ADR 0011 第二節）。
+
+    切角沒有自己的「分配預算」欄位：均分該切角所屬檔期的總預算（沿用 `budget.split_budget()`
+    缺乏其他資料時的既有作法——找不到更好的權重就均分）。
+    ponytail：均分假設同期切角預算平分，之後若切角有自己的預算欄位再改用真實值。
+
+    成效資料走既有的 performance_snapshot → external_ad_mapping → publishing_package 鏈
+    （比照 `reading._asset_totals()` 的既有 JOIN 寫法，只是改成依 `experiment_cell_id` 分組）。
+    """
+    cycles = ads_repo.list_cycles(conn, brand_id, include_archived=True)
+    budget_by_cycle = {c["id"]: (c["budget"] or 0) for c in cycles}
+
+    sql = "SELECT id, campaign_cycle_id, creative_angle FROM experiment_cell WHERE brand_id = ?"
+    params = [brand_id]
+    if exclude_cycle_id:
+        sql += " AND campaign_cycle_id != ?"
+        params.append(exclude_cycle_id)
+    cell_rows = conn.execute(sql, params).fetchall()
+    if not cell_rows:
+        return []
+
+    cells_per_cycle: dict = {}
+    for row in cell_rows:
+        cells_per_cycle[row["campaign_cycle_id"]] = cells_per_cycle.get(row["campaign_cycle_id"], 0) + 1
+
+    perf_rows = conn.execute(
+        "SELECT pkg.experiment_cell_id cell_id, COALESCE(SUM(ps.spend),0) spend,"
+        " COALESCE(SUM(ps.conversions),0) conversions"
+        " FROM performance_snapshot ps"
+        " JOIN external_ad_mapping xam ON xam.id = ps.external_ad_mapping_id"
+        " JOIN publishing_package pkg ON pkg.id = xam.publishing_package_id"
+        " WHERE ps.brand_id = ? AND ps.quarantined = 0 AND pkg.experiment_cell_id IS NOT NULL"
+        " GROUP BY pkg.experiment_cell_id", (brand_id,),
+    ).fetchall()
+    perf_by_cell = {r["cell_id"]: {"spend": r["spend"], "conversions": r["conversions"]}
+                    for r in perf_rows}
+
+    results = []
+    for row in cell_rows:
+        perf = perf_by_cell.get(row["id"], {"spend": 0.0, "conversions": 0.0})
+        cycle_budget = budget_by_cycle.get(row["campaign_cycle_id"], 0)
+        cell_count = cells_per_cycle.get(row["campaign_cycle_id"], 1)
+        allocated_budget = round(cycle_budget / cell_count, 2) if cell_count else 0.0
+        results.append({
+            "experiment_cell_id": row["id"],
+            "campaign_cycle_id": row["campaign_cycle_id"],
+            "creative_angle": row["creative_angle"],
+            "spend": perf["spend"],
+            "conversions": perf["conversions"],
+            "allocated_budget": allocated_budget,
+            **cell_trust_flags(perf["conversions"], perf["spend"], allocated_budget),
+        })
+    return results
+
+
+# ---------------------------------------------------------------------------
+# 情境加權比較（票 02-occasion-weighted-recommendations，ADR 0011 第五節）
+# ---------------------------------------------------------------------------
+# 下期建議引擎比較歷史資料時（拒絕記憶指紋比對、新穎度、同溫層比率），跟這次檔期同一個
+# 節日場合（campaign_cycle.occasion）的歷史資料權重加重，不同場合的仍然參與比較、只是
+# 權重較低——不是排除、不做硬性樣本分割（新品牌可能整年只跑過一次某節日，分開比較會讓
+# 它永遠沒有同場合資料可比，見 ADR 0011 第五節「當時排除了什麼」）。
+#
+# SAME／DIFFERENT 的確切倍率 ADR 沒有明文規定（只要求「較高」／「較低但不是排除」），
+# 這裡選一個一眼看得出差異、又不會把不同場合資料壓到近乎消失的比例。
+
+OCCASION_WEIGHT_SAME = 1.0
+OCCASION_WEIGHT_DIFFERENT = 0.3
+
+
+def _occasions_for_cycles(conn, cycle_ids: list) -> dict:
+    """cycle_id → occasion。cycle_id 是 None（例如 adoption_decision 沒綁檔期的舊資料）
+    或查無此檔期時，該筆不會出現在回傳字典裡——呼叫端用 `.get(cid)` 取，取不到視為未知。
+    """
+    ids = sorted({cid for cid in cycle_ids if cid})
+    if not ids:
+        return {}
+    placeholders = ",".join("?" for _ in ids)
+    return {r["id"]: r["occasion"] for r in conn.execute(
+        f"SELECT id, occasion FROM campaign_cycle WHERE id IN ({placeholders})", ids,
+    )}
+
+
+def _occasion_weight_map(conn, cycle_ids: list, current_occasion: Optional[str]) -> dict:
+    """cycle_id → 情境權重。跟 `current_occasion` 同場合的歷史檔期權重較高、不同的較低但
+    仍參與（不是排除）。
+
+    `current_occasion` 缺值，或這批 `cycle_ids` 裡沒有任何一筆真的同場合時，全部退化成
+    1.0（等同現行的無加權比較，不報錯、不空白）——加權只在「真的有同場合資料可比」時才
+    有意義，不然只是無端壓低所有歷史資料的份量，沒有比較基準。
+    """
+    occasions = _occasions_for_cycles(conn, cycle_ids)
+    if not current_occasion or current_occasion not in occasions.values():
+        return {cid: 1.0 for cid in cycle_ids}
+    return {cid: (OCCASION_WEIGHT_SAME if occasions.get(cid) == current_occasion
+                  else OCCASION_WEIGHT_DIFFERENT) for cid in cycle_ids}
+
+
+# ---------------------------------------------------------------------------
 # 規則卡
 # ---------------------------------------------------------------------------
 
@@ -109,10 +240,13 @@ def _recent_cycle_ids(conn, brand_id: str, window: int) -> list:
 
 
 def _empty_stat_entry() -> dict:
-    return {"appearances": 0, "rejections": 0, "policy_rejections": 0, "ids": [], "reasons": set()}
+    return {"appearances": 0, "rejections": 0, "policy_rejections": 0,
+            "weighted_appearances": 0.0, "weighted_rejections": 0.0,
+            "weighted_policy_rejections": 0.0, "ids": [], "reasons": set()}
 
 
-def _axis_value_stats(conn, brand_id: str, cycle_ids: list) -> dict:
+def _axis_value_stats(conn, brand_id: str, cycle_ids: list,
+                      current_occasion: Optional[str] = None) -> dict:
     """視窗內每個 (軸, 值) 出現過幾次、被拒幾次（含拆分出的政策拒絕次數）——相對判準的
     分子分母來源。
 
@@ -123,15 +257,23 @@ def _axis_value_stats(conn, brand_id: str, cycle_ids: list) -> dict:
 
     `rejections` 是總拒絕次數（含猜消費者反應的品味理由），`policy_rejections` 只算
     `reason_code` 落在 `fp.RULE_UPGRADABLE_REASONS` 白名單內的次數（票 T1）——升級成
-    永久禁令只看後者，「觀察中」判準看前者。
+    永久禁令只看後者，「觀察中」判準看前者。這兩個鍵、連同 `appearances`，都是**真實
+    次數**（整數，不受加權影響）——`reject_count` 這類要給使用者看「被退幾次」的地方
+    讀這幾個鍵，不然加權後會印出「被退 2.6 次」這種看不懂的小數。
+
+    `weighted_appearances`／`weighted_rejections`／`weighted_policy_rejections`
+    （票 02-occasion-weighted-recommendations，ADR 0011 第五節）：同一批資料再套一次
+    `_occasion_weight_map()` 算出的情境權重（`current_occasion` 缺省時權重全部是 1.0，
+    數值上等於真實次數），只給 `_rule_card_verdict()` 的門檻判斷用，不進畫面顯示。
     """
     if not cycle_ids:
         return {}
+    weight_by_cycle = _occasion_weight_map(conn, cycle_ids, current_occasion)
     placeholders = ",".join("?" for _ in cycle_ids)
     stats: dict = {}
 
     for row in conn.execute(
-        f"SELECT fingerprint_json FROM creative_variant"
+        f"SELECT campaign_cycle_id, fingerprint_json FROM creative_variant"
         f" WHERE brand_id = ? AND campaign_cycle_id IN ({placeholders})",
         (brand_id, *cycle_ids),
     ):
@@ -139,12 +281,14 @@ def _axis_value_stats(conn, brand_id: str, cycle_ids: list) -> dict:
             raw = json.loads(row["fingerprint_json"]) if row["fingerprint_json"] else {}
         except ValueError:
             continue
+        weight = weight_by_cycle.get(row["campaign_cycle_id"], 1.0)
         for axis, value in fp.normalize(raw).items():
-            stats.setdefault((axis, value), _empty_stat_entry())
-            stats[(axis, value)]["appearances"] += 1
+            entry = stats.setdefault((axis, value), _empty_stat_entry())
+            entry["appearances"] += 1
+            entry["weighted_appearances"] += weight
 
     for row in conn.execute(
-        f"SELECT id, reason_code, fingerprint_json FROM adoption_decision"
+        f"SELECT id, campaign_cycle_id, reason_code, fingerprint_json FROM adoption_decision"
         f" WHERE brand_id = ? AND decision = 'rejected' AND campaign_cycle_id IN ({placeholders})",
         (brand_id, *cycle_ids),
     ):
@@ -157,14 +301,19 @@ def _axis_value_stats(conn, brand_id: str, cycle_ids: list) -> dict:
             continue
         if not value:
             continue
+        weight = weight_by_cycle.get(row["campaign_cycle_id"], 1.0)
         entry = stats.setdefault((axis, value), _empty_stat_entry())
         entry["rejections"] += 1
+        entry["weighted_rejections"] += weight
         if row["reason_code"] in fp.RULE_UPGRADABLE_REASONS:
             entry["policy_rejections"] += 1
+            entry["weighted_policy_rejections"] += weight
         entry["ids"].append(row["id"])
         entry["reasons"].add(row["reason_code"])
         if entry["appearances"] < entry["rejections"]:
             entry["appearances"] = entry["rejections"]
+        if entry["weighted_appearances"] < entry["weighted_rejections"]:
+            entry["weighted_appearances"] = entry["weighted_rejections"]
 
     return stats
 
@@ -181,15 +330,19 @@ def _rule_card_verdict(stats: dict, axis: str, value: str) -> str:
        達門檻 → observing。這段是「永遠停在觀察中」得以成立的關鍵：純品味訊號的
        `policy_rejections` 恆為 0，若只看政策次數會直接掉回 insufficient、從畫面上消失。
     3. 否則 → insufficient，連觀察都不夠格。
+
+    門檻比較一律讀 `weighted_*` 鍵（票 02-occasion-weighted-recommendations，ADR 0011
+    第五節：跟這次檔期同場合的歷史資料權重加重、不同場合較低但仍參與），不是真實次數——
+    真實次數只給使用者看的顯示欄位用，見 `_axis_value_stats()` docstring。
     """
     entry = stats.get((axis, value), _empty_stat_entry())
-    appearances = entry["appearances"]
-    policy_rejections = entry["policy_rejections"]
+    appearances = entry["weighted_appearances"]
+    policy_rejections = entry["weighted_policy_rejections"]
 
     if policy_rejections >= RULE_CARD_MIN_REJECTIONS and appearances >= RULE_CARD_MIN_SAMPLES:
-        other_policy = sum(e["policy_rejections"] for (a, v), e in stats.items()
+        other_policy = sum(e["weighted_policy_rejections"] for (a, v), e in stats.items()
                            if a == axis and v != value)
-        other_appearances = sum(e["appearances"] for (a, v), e in stats.items()
+        other_appearances = sum(e["weighted_appearances"] for (a, v), e in stats.items()
                                 if a == axis and v != value)
         # 沒有其他值可比較時（例如新品牌剛開始），視為門檻自動通過——baseline 比較
         # 一律只用政策次數，跟上面判準的口徑一致。
@@ -199,12 +352,12 @@ def _rule_card_verdict(stats: dict, axis: str, value: str) -> str:
         if (policy_rejections / appearances) >= baseline * RULE_CARD_RELATIVE_MULTIPLIER:
             return "pending"
 
-    if entry["rejections"] >= RULE_CARD_MIN_REJECTIONS and appearances >= RULE_CARD_MIN_SAMPLES:
+    if entry["weighted_rejections"] >= RULE_CARD_MIN_REJECTIONS and appearances >= RULE_CARD_MIN_SAMPLES:
         return "observing"
     return "insufficient"
 
 
-def build_rule_cards(conn, brand_id: str, actor: str) -> int:
+def build_rule_cards(conn, brand_id: str, actor: str, cycle_id: Optional[str] = None) -> int:
     """統計拒絕紀錄，把達相對門檻的指紋標籤變成候選規則卡。回傳新增張數。
 
     純程式統計，不經 LLM——「被退幾次、比例高不高」是數數，不是判斷。
@@ -217,9 +370,17 @@ def build_rule_cards(conn, brand_id: str, actor: str) -> int:
     白名單內的 off_brand／discount_too_deep）——猜消費者反應的三條理由（too_stiff、
     too_ad_like、hook_weak）不論被拒幾次、比例多高，都不會被這裡升級成 pending，永遠
     停在「觀察中」。
+
+    `cycle_id`（票 02-occasion-weighted-recommendations，ADR 0011 第五節）：正在準備下期
+    建議的那個檔期，`build()` 呼叫時會傳入，讀它的 `occasion` 欄位加權比較歷史拒絕紀錄。
+    省略時（例如累積智慧頁的品牌整體統計，沒有「下期」這個概念）不加權，等同現行比較。
     """
     cycle_ids = _recent_cycle_ids(conn, brand_id, RULE_CARD_WINDOW_CYCLES)
-    stats = _axis_value_stats(conn, brand_id, cycle_ids)
+    current_occasion = None
+    if cycle_id:
+        current_cycle = ads_repo.get_cycle(conn, brand_id, cycle_id)
+        current_occasion = current_cycle.get("occasion") if current_cycle else None
+    stats = _axis_value_stats(conn, brand_id, cycle_ids, current_occasion)
 
     created = 0
     ts = now_iso()
@@ -459,8 +620,11 @@ def decide_rule_card(conn, brand_id: str, card_id: str, *, accept: bool, actor: 
 # ---------------------------------------------------------------------------
 
 def adopted_fingerprints(conn, brand_id: str, exclude_cycle_id: Optional[str] = None) -> list:
-    """這個品牌歷來採用過的素材指紋（比對基準）。"""
-    sql = ("SELECT fingerprint_json FROM adoption_decision WHERE brand_id = ?"
+    """這個品牌歷來採用過的素材指紋（比對基準），附上來源檔期 id——情境加權比較
+    （票 02-occasion-weighted-recommendations，ADR 0011 第五節）要知道每筆歷史素材是
+    哪一期採用的，才能跟這次檔期比對場合。回傳 `(fingerprint, campaign_cycle_id)` tuple 列表。
+    """
+    sql = ("SELECT campaign_cycle_id, fingerprint_json FROM adoption_decision WHERE brand_id = ?"
            " AND decision = 'adopted'")
     params = [brand_id]
     if exclude_cycle_id:
@@ -473,21 +637,32 @@ def adopted_fingerprints(conn, brand_id: str, exclude_cycle_id: Optional[str] = 
         except ValueError:
             continue
         if data:
-            prints.append(data)
+            prints.append((data, row["campaign_cycle_id"]))
     return prints
 
 
 def check_echo_chamber(conn, brand_id: str, cycle_id: str) -> Optional[guardrails.Finding]:
-    """本期素材是不是在重複過去。太像就回一條提示（不擋路），否則回 None。"""
+    """本期素材是不是在重複過去。太像就回一條提示（不擋路），否則回 None。
+
+    跟這次檔期同場合的歷史採用素材權重加重、不同場合的較低但仍參與比較
+    （票 02-occasion-weighted-recommendations，ADR 0011 第五節）。
+    """
     from app.ads import creative as ads_creative
 
     candidates = [v["fingerprint"] for v in ads_creative.list_variants(conn, brand_id, cycle_id)
                   if not v["rejected"] and v["fingerprint"]]
-    history = adopted_fingerprints(conn, brand_id, exclude_cycle_id=cycle_id)
-    if not candidates or not history:
+    history_rows = adopted_fingerprints(conn, brand_id, exclude_cycle_id=cycle_id)
+    if not candidates or not history_rows:
         return None
 
-    ratio = fp.echo_chamber_ratio(candidates, history)
+    history = [fingerprint for fingerprint, _ in history_rows]
+    current_cycle = ads_repo.get_cycle(conn, brand_id, cycle_id)
+    current_occasion = current_cycle.get("occasion") if current_cycle else None
+    weight_by_cycle = _occasion_weight_map(
+        conn, [source_cycle_id for _, source_cycle_id in history_rows], current_occasion)
+    weights = [weight_by_cycle.get(source_cycle_id, 1.0) for _, source_cycle_id in history_rows]
+
+    ratio = fp.echo_chamber_ratio(candidates, history, weights)
     if ratio < 0.6:
         return None
     return guardrails.Finding(
@@ -509,7 +684,7 @@ def check_echo_chamber(conn, brand_id: str, cycle_id: str) -> Optional[guardrail
 def build(conn, brand_id: str, cycle_id: str, actor: str) -> dict:
     """判讀之後一次把下期該準備的都備好：預算建議、規則卡、回音室檢查。"""
     budget = propose_budget(conn, brand_id, cycle_id)
-    cards = build_rule_cards(conn, brand_id, actor)
+    cards = build_rule_cards(conn, brand_id, actor, cycle_id=cycle_id)
     overclaim_cards = build_overclaim_claim_cards(conn, brand_id, actor)
 
     echo = check_echo_chamber(conn, brand_id, cycle_id)
@@ -532,6 +707,9 @@ def build(conn, brand_id: str, cycle_id: str, actor: str) -> dict:
              "status_label": row["status_label"]}
             for row in verdict["products"]
         ],
+        # 樣本可信門檻與零轉換警示（票 03-sample-trust-threshold）：歷來每個切角附加誠實旗標，
+        # 不排除任何切角，只是附加資訊供使用者判斷要不要下期沿用。
+        "historical_cells": historical_cell_performance(conn, brand_id, exclude_cycle_id=cycle_id),
     }
 
     ts = now_iso()

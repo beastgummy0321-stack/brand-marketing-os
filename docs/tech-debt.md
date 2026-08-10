@@ -19,12 +19,12 @@
 | 檔案 | 行數 | 倍數 | 先拆什麼 |
 |---|---|---|---|
 | `app/brand_intelligence/routes.py` | 1854 | 2.3× | brand fact 與 product 兩組 CRUD 路由各自獨立成檔 |
-| `app/brand_intelligence/repository.py` | 1591 | 2.0× | 依表分檔（brand／product／rule／claim） |
+| `app/brand_intelligence/repository.py` | 1667 | 2.08× | 依表分檔（brand／product／rule／claim） |
 | `app/tests/test_ads_reading.py` | 1157 | 1.4× | 測試檔，優先度最低 |
 | `app/ads/reading.py` | 1039 | 1.3× | 判讀規則與資料取數分離 |
 | `app/intake/routes.py` | 951 | 1.2× | 依精靈五步分檔 |
 | `app/tests/test_ads_creative.py` | 870 | 1.1× | 測試檔，優先度最低 |
-| `app/ads/repository.py` | 820 | 1.03× | 剛超標，先觀察 |
+| `app/ads/repository.py` | 856 | 1.07× | 剛超標，先觀察 |
 
 **已知違例**：2026-08-07 的票 C 在 `brand_intelligence/routes.py` 加了約 70 行沒有先拆。
 當時的取捨是「先讓開關有寫入路徑」優先於先拆檔，由主控判斷放行，記在此處不隱藏。
@@ -39,6 +39,14 @@ CRUD 本體另開 `app/ads/theme_repository.py` 新檔，不塞進本檔；這 4
 已登記過 cascade）直接加欄位覆蓋最新成效；`app/ads/repository.py` 因此不必再登記新表，
 `CYCLE_CASCADE_TABLES`／`_PRODUCT_CASCADE_LABELS` 兩處維持原狀。migration 仍是票 12 帶的
 唯一一支 `0016`，只是形狀從 CREATE TABLE 改成 ALTER TABLE 加欄位。
+
+2026-08-10 的票 pacing-curve 在 `app/ads/repository.py` 加了約 38 行（820→856）：`create_cycle()`
+開期當下呼叫新模組 `pacing_curve.recommend_pacing_strategy()`／`compute_curve()` 把排期策略
+存進既有 `derived_plan_json`；新函式 `set_cycle_pacing()` 供使用者事後手動改排期策略。
+計算邏輯全部留在新檔 `app/ads/pacing_curve.py`（不記入超標清單），本檔只負責落地／覆寫，
+沒有更省的搬法——`derived_plan_json` 的讀寫入口本來就集中在這裡，另開一個模組代管單一
+JSON 欄位的三個鍵屬於「只有一個呼叫端就先抽象」，不划算。`KNOWN_OVERSIZED_FILES` 凍結值
+同步更新為 856。
 
 ## 二、四個套件糾成一個 import 環（五組相鄰對）
 

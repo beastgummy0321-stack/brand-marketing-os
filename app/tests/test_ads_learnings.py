@@ -28,6 +28,7 @@ import app.main as main  # noqa: E402
 from app.ads import nextcycle  # noqa: E402
 from app.ads import repository as ads_repo  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
+from app.core import rule_cards  # noqa: E402
 from app.llm import context_compiler  # noqa: E402
 
 main.reopen_connection()
@@ -212,6 +213,104 @@ class LearningsPageRouteTest(unittest.TestCase):
         resp = self.client.get(f"/brands/{self.bid}/ads/learnings")
         self.assertIn("痛點", resp.text)
         self.assertIn("親切溫暖的語氣過去有效", resp.text)
+
+    def test_overflow_rules_shown_with_count_and_confirmed_date(self):
+        """票 02-prompt-cap-and-overflow-list（決策 0012 第三節）：超過上限未生效的規則不
+        悄悄消失，累積智慧頁列出清單附最近確認時間；上限用該品牌自己的 rule_cards 覆寫值，
+        不用真的建 20 幾條規則才能測到。
+
+        confirmed_at 刻意選最近幾天內的日期（不是任意舊日期）：這個頁面同時會跑票
+        01-rule-expiry-reconfirm 的逾期未確認掃描（系統預設 6 期＝84 天沒確認就退回
+        pending_reconfirm），confirmed_at 太舊會先被那條掃描收走，測不到「未生效清單」
+        這個獨立的行為——兩個機制刻意保持互不依賴，這裡的日期只是避開兩者疊加的巧合。"""
+        rule_cards.set_value(main.conn, self.bid, "rule_prompt_cap", "max_active_rules",
+                             1.0, actor=ACTOR)
+        kept = bi_repo.create_rule(main.conn, self.bid, actor=ACTOR, rule_type="tone",
+                                   content="留在提示詞裡的規則", severity="soft")
+        main.conn.execute("UPDATE rule SET confirmed_at = '2026-08-06T00:00:00+00:00' WHERE id = ?",
+                          (kept["id"],))
+        overflowed = bi_repo.create_rule(main.conn, self.bid, actor=ACTOR, rule_type="tone",
+                                         content="超過上限未生效的規則", severity="soft")
+        main.conn.execute("UPDATE rule SET confirmed_at = '2026-08-05T00:00:00+00:00' WHERE id = ?",
+                          (overflowed["id"],))
+        main.conn.commit()
+
+        resp = self.client.get(f"/brands/{self.bid}/ads/learnings")
+        self.assertIn("因超過上限未生效的規則（1 條）", resp.text)
+        self.assertIn("超過上限未生效的規則", resp.text)
+        self.assertIn("2026-08-05", resp.text)
+        # 沒被下架、狀態仍是 active——只是這次沒排進生成提示詞。
+        self.assertEqual(bi_repo.get_rule(main.conn, self.bid, overflowed["id"])["status"], "active")
+
+    def test_no_overflow_section_when_within_cap(self):
+        bi_repo.create_rule(main.conn, self.bid, actor=ACTOR, rule_type="tone",
+                            content="唯一一條規則，沒超過上限", severity="soft")
+        resp = self.client.get(f"/brands/{self.bid}/ads/learnings")
+        self.assertNotIn("因超過上限未生效的規則", resp.text)
+
+    def test_pending_reconfirm_rule_shown_and_reconfirm_restores_it(self):
+        """票 01-rule-expiry-reconfirm（ADR 0012 第一節）：太久沒重新確認的規則自動退回
+        待確認、顯示在累積智慧頁，按「延續」恢復生效且不必重新輸入內容。"""
+        rule = bi_repo.create_rule(main.conn, self.bid, actor=ACTOR, rule_type="tone",
+                                   content="太久沒人確認的規則需要延續", severity="soft")
+        main.conn.execute(
+            "UPDATE rule SET confirmed_at = '2020-01-01T00:00:00+00:00' WHERE id = ?",
+            (rule["id"],))
+        main.conn.commit()
+
+        resp = self.client.get(f"/brands/{self.bid}/ads/learnings")
+        self.assertIn("待確認規則（1 條）", resp.text)
+        self.assertIn("太久沒人確認的規則需要延續", resp.text)
+        self.assertEqual(
+            bi_repo.get_rule(main.conn, self.bid, rule["id"])["status"], "pending_reconfirm")
+
+        resp2 = self.client.post(
+            f"/brands/{self.bid}/ads/learnings/rules/{rule['id']}/reconfirm",
+            follow_redirects=False,
+        )
+        self.assertEqual(resp2.status_code, 303)
+        after = bi_repo.get_rule(main.conn, self.bid, rule["id"])
+        self.assertEqual(after["status"], "active")
+        self.assertEqual(after["content"], "太久沒人確認的規則需要延續")  # 不必重新輸入內容
+
+        resp3 = self.client.get(f"/brands/{self.bid}/ads/learnings")
+        self.assertNotIn("待確認規則", resp3.text)  # 延續後從待確認清單消失
+
+    def test_no_pending_reconfirm_section_when_none_stale(self):
+        bi_repo.create_rule(main.conn, self.bid, actor=ACTOR, rule_type="tone",
+                            content="剛接受的規則不該出現在待確認清單", severity="soft")
+        resp = self.client.get(f"/brands/{self.bid}/ads/learnings")
+        self.assertNotIn("待確認規則", resp.text)
+
+    def test_reconfirm_unknown_rule_shows_error_not_500(self):
+        resp = self.client.post(
+            f"/brands/{self.bid}/ads/learnings/rules/rul_nope/reconfirm",
+            follow_redirects=False,
+        )
+        self.assertEqual(resp.status_code, 303)
+
+    def test_expired_active_ban_disappears_from_active_bans_section(self):
+        """票 01-rule-expiry-reconfirm 與既有「生效中的禁令」機制的交集：升級成長期規則的
+        禁令一旦逾期未確認，`nextcycle.list_active_bans` 既有的 `status != 'active'` 過濾
+        （原本只給人工下架用）自然把它排除，不需要另外改 nextcycle.py。"""
+        rule = bi_repo.create_rule(main.conn, self.bid, actor=ACTOR, rule_type="tone",
+                                   content="逾期未確認的禁令", severity="soft")
+        main.conn.execute(
+            "INSERT INTO creative_rule_card (id, brand_id, fingerprint_axis, fingerprint_value,"
+            " proposed_rule_text, evidence_json, reject_count, status, promoted_rule_id,"
+            " created_at, updated_at) VALUES ('rcd_test_expired', ?, 'tone', 'urgent', ?, '{}', 3,"
+            " 'accepted', ?, '2026-01-01T00:00:00', '2026-01-01T00:00:00')",
+            (self.bid, rule["content"], rule["id"]),
+        )
+        main.conn.execute(
+            "UPDATE rule SET confirmed_at = '2020-01-01T00:00:00+00:00' WHERE id = ?",
+            (rule["id"],))
+        main.conn.commit()
+
+        resp = self.client.get(f"/brands/{self.bid}/ads/learnings")
+        self.assertIn("待確認規則（1 條）", resp.text)
+        self.assertIn("目前沒有生效中的禁令", resp.text)  # 「生效中的禁令」段回到空狀態
+        self.assertEqual(nextcycle.list_active_bans(main.conn, self.bid), [])
 
     def test_hub_card_is_clickable(self):
         resp = self.client.get(f"/brands/{self.bid}/ads")

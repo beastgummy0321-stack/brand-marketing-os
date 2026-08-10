@@ -296,9 +296,9 @@ def dual_baseline(conn, brand_id: str, cycle: dict,
            "policy_changes": policy_changes, "cross_ruler_note": cross_ruler_note}
 
 
-def judge(totals: dict, *, plan_budget: float, breakeven: Optional[float],
+def judge(totals: dict, *, plan_budget: float, breakeven: Optional[float], brand_id: str,
           baseline: Optional[dict] = None, conn=None) -> dict:
-    """純函數：一組數字 → 判讀狀態與理由。不碰資料庫（conn 只用來讀規則卡門檻，可傳 None）、
+    """純函數：一組數字 → 判讀狀態與理由。不碰資料庫（conn／brand_id 只用來讀這個品牌的規則卡門檻，conn 可傳 None）、
     不呼叫 LLM。
 
     決策 0023 第 19、20 點：「錢的門檻」（status，打平／加碼／停損）跟「統計的門檻」
@@ -312,7 +312,7 @@ def judge(totals: dict, *, plan_budget: float, breakeven: Optional[float],
     conversions = totals.get("conversions") or 0
     clicks = totals.get("clicks") or 0
     cvr = (conversions / clicks) if clicks else None
-    tier = rule_cards.sample_size_tier(conn, clicks, cvr)
+    tier = rule_cards.sample_size_tier(conn, brand_id, clicks, cvr)
     reasons = []
 
     def verdict(status: str) -> dict:
@@ -429,7 +429,7 @@ def _repurchase_line(conn, brand_id: str, cycle_totals: dict, first_order_breake
     breakeven = repurchase_breakeven_roas(first_order_breakeven, repurchase["multiplier"])
     verdict = None
     if breakeven is not None:
-        verdict = judge(cycle_totals, plan_budget=plan_budget, breakeven=breakeven,
+        verdict = judge(cycle_totals, plan_budget=plan_budget, breakeven=breakeven, brand_id=brand_id,
                         baseline=baseline, conn=conn)
     conflict = (verdict is not None
                and {_verdict_group(first_status), _verdict_group(verdict["status"])}
@@ -535,7 +535,7 @@ def run(conn, brand_id: str, cycle_id: str, actor: str,
         if not totals:
             continue
         economics = bi.get_product_economics(conn, brand_id, allocation["product_id"])
-        verdict = judge(totals, plan_budget=allocation["allocated_budget"] or 0,
+        verdict = judge(totals, plan_budget=allocation["allocated_budget"] or 0, brand_id=brand_id,
                         breakeven=breakeven_roas(economics), baseline=baseline, conn=conn)
         verdict["product_id"] = allocation["product_id"]
         verdict["product_name"] = allocation["product_name"]
@@ -548,7 +548,7 @@ def run(conn, brand_id: str, cycle_id: str, actor: str,
     known = [b for b in breakevens if b]
     if known:
         cycle_breakeven = round(sum(known) / len(known), 2)
-    cycle_verdict = judge(cycle_totals, plan_budget=cycle["budget"] or 0,
+    cycle_verdict = judge(cycle_totals, plan_budget=cycle["budget"] or 0, brand_id=brand_id,
                           breakeven=cycle_breakeven, baseline=baseline, conn=conn)
     cycle_verdict["product_id"] = None
     cycle_verdict["product_name"] = None

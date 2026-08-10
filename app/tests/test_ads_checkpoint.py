@@ -167,7 +167,7 @@ class FatigueTest(_Base):
         self.assertEqual(result["fatigue"]["status"], "danger")
         self.assertEqual(result["fatigue"]["status_label"],
                          rule_cards.FATIGUE_STATUS_LABELS["danger"])
-        expected = rule_cards.classify_ad_frequency(main.conn, "cold", 5.0)
+        expected = rule_cards.classify_ad_frequency(main.conn, self.bid, "cold", 5.0)
         self.assertEqual(result["fatigue"]["status"], expected)
 
     def test_missing_frequency_column_is_honest_not_a_guess(self):

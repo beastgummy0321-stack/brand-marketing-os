@@ -218,7 +218,7 @@ def build_extras(conn, brand_id: str, cycle_id: str) -> dict:
     現場算，不落庫——規則卡改過的話，交接包顯示的永遠是目前的門檻，不是產方案當下的舊值。
     """
     cycle = ads_repo.get_cycle(conn, brand_id, cycle_id)
-    structure = account_structure.recommend(conn, ads_repo.derived_plan(cycle)["daily_budget"])
+    structure = account_structure.recommend(conn, brand_id, ads_repo.derived_plan(cycle)["daily_budget"])
     return {
         "structure": structure,
         "conversion_event": CONVERSION_EVENT_LABEL.get(cycle["objective"], "沒有對應的轉換事件說明。"),

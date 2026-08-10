@@ -46,17 +46,17 @@ def _group(role: str, label: str, ratio: float, daily_budget: float, floor: floa
                       daily_budget=daily_budget, below_floor=daily_budget < floor)
 
 
-def recommend(conn, daily_budget: float) -> StructureRecommendation:
+def recommend(conn, brand_id: str, daily_budget: float) -> StructureRecommendation:
     """算這期的帳戶結構與預算配置底案。daily_budget 已經是程式算好的數字（見 app/ads/budget.py），
-    這裡只負責依規則卡門檻分級距、分組別，不重算日預算本身。"""
+    這裡只負責依規則卡門檻（這個品牌的覆寫值，沒覆寫就用系統預設）分級距、分組別，不重算日預算本身。"""
     if daily_budget is None or daily_budget <= 0:
         raise ValueError("日預算必須大於 0")
 
-    floor = rule_cards.get_value(conn, CARD_KEY, "min_daily_per_group")
-    medium_floor = rule_cards.get_value(conn, CARD_KEY, "medium_tier_floor")
-    large_floor = rule_cards.get_value(conn, CARD_KEY, "large_tier_floor")
-    validation_ratio = rule_cards.get_value(conn, CARD_KEY, "medium_validation_ratio")
-    scaling_ratio = rule_cards.get_value(conn, CARD_KEY, "large_scaling_ratio")
+    floor = rule_cards.get_value(conn, brand_id, CARD_KEY, "min_daily_per_group")
+    medium_floor = rule_cards.get_value(conn, brand_id, CARD_KEY, "medium_tier_floor")
+    large_floor = rule_cards.get_value(conn, brand_id, CARD_KEY, "large_tier_floor")
+    validation_ratio = rule_cards.get_value(conn, brand_id, CARD_KEY, "medium_validation_ratio")
+    scaling_ratio = rule_cards.get_value(conn, brand_id, CARD_KEY, "large_scaling_ratio")
 
     if daily_budget < medium_floor:
         tier = "small"
@@ -106,21 +106,21 @@ def recommend(conn, daily_budget: float) -> StructureRecommendation:
 
 def demo() -> None:
     """python -m app.ads.account_structure — 最小自檢，順便當用法示範（無需資料庫，規則卡走預設值）。"""
-    small = recommend(None, 500)
+    small = recommend(None, "demo_brand", 500)
     assert small.tier == "small" and len(small.groups) == 1, small
     assert small.groups[0].daily_budget == 500
 
-    medium = recommend(None, 1000)
+    medium = recommend(None, "demo_brand", 1000)
     assert medium.tier == "medium" and len(medium.groups) == 2, medium
     assert medium.groups[0].daily_budget == 700.0  # 70%
     assert medium.groups[1].daily_budget == 300.0  # 30%，剛好貼著下限，不算低於
 
-    large = recommend(None, 2000)
+    large = recommend(None, "demo_brand", 2000)
     assert large.tier == "large" and len(large.groups) == 2, large
     assert large.groups[0].daily_budget == 1600.0  # 80%
     assert large.groups[1].daily_budget == 400.0   # 20%
 
-    dipping = recommend(None, 650)  # 中預算但 30% 那組會掉到下限以下
+    dipping = recommend(None, "demo_brand", 650)  # 中預算但 30% 那組會掉到下限以下
     assert dipping.groups[1].below_floor, dipping
     print("account_structure 自檢通過：", small, medium, large, sep="\n")
 

@@ -136,7 +136,7 @@ def run(conn, brand_id: str, cycle_id: str, kind: str, *, actor: str,
                             "匯出時記得勾選頻率欄，或去 Meta 後台直接看。",
                 }
             else:
-                status = rule_cards.classify_ad_frequency(conn, FATIGUE_AUDIENCE_TYPE, frequency)
+                status = rule_cards.classify_ad_frequency(conn, brand_id, FATIGUE_AUDIENCE_TYPE, frequency)
                 result["fatigue"] = {
                     "frequency": frequency,
                     "status": status,

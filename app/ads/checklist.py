@@ -12,6 +12,10 @@
 
 兩類都**不擋流程**（決策 0013）：檢查清單只負責記錄與提醒，沒有任何入口會因為沒勾完
 就擋住下一步。完成度供交接包顯示，成效判讀頁回溯提醒未勾項。
+
+另外還有 `QA_LAUNCH_ITEMS`（票 01，決策 0016）：上線授權頁專用的五項 QA 提醒，同樣是
+品牌層一次性、不擋流程，跟上面兩類分開存放（原因見該常數旁的註解），但共用同一張
+`brand_checklist_item` 表與存取函式。
 """
 
 from typing import Optional
@@ -47,6 +51,46 @@ CYCLE_ITEMS = {
     },
 }
 
+# 上線授權頁的 QA 五項提醒（票 01，決策 0016）：品牌層級一次性提醒＋自行確認，五項統一
+# 介面，不分技術上做不做得到（使用者原話「不要作半套」，見 ADR 0016 第一節）。
+# 跟 ONE_TIME_ITEMS 分開存放（不合併進同一份字典），因為 one_time_status() 的「異常訊號
+# 重新標示」邏輯只認 Pixel 這一項，混進同一份清單會讓其他四項也被誤標成 flagged。
+# link_url 開頭是 "#" 的兩項連到本頁（handoff 頁）已有的對應區塊，不重造新頁面
+# （ADR 0016 第四節：重造 Meta 後台操作教學屬於重複造輪子；同理，系統裡已經顯示的資訊
+# 不用再蓋一個新畫面）。
+QA_LAUNCH_ITEMS = {
+    "qa_pixel_installed": {
+        "label": "Pixel 已正確安裝",
+        "help": "去 Meta 事件管理工具確認 Pixel 有裝在網站上，且能正常觸發事件（例如購買）。",
+        "link_url": "https://www.facebook.com/business/help/952192354843755",
+        "link_label": "看 Meta 官方安裝說明",
+    },
+    "qa_audience_exclusion": {
+        "label": "受眾排除名單已設定",
+        "help": "確認廣告組合有排除既有客戶／已轉換過的名單，避免花錢重複觸及。",
+        "link_url": "https://www.facebook.com/business/help/744354708981227",
+        "link_label": "看 Meta 官方自訂受眾說明",
+    },
+    "qa_capi_emq_quality": {
+        "label": "CAPI／EMQ 事件品質已確認",
+        "help": "去 Meta 事件管理工具檢查 Conversions API 事件比對品質（EMQ）分數是否正常。",
+        "link_url": "https://www.facebook.com/business/help/765081237991954",
+        "link_label": "看 Meta 官方事件比對品質說明",
+    },
+    "qa_budget_line_review": {
+        "label": "預算已逐筆覆核",
+        "help": "對照本頁「帳戶結構怎麼開」列出的各組日預算，跟 Meta 後台實際設定逐筆核對。",
+        "link_url": "#account-structure",
+        "link_label": "看本頁帳戶結構",
+    },
+    "qa_landing_page_click_test": {
+        "label": "到達頁已實點測試",
+        "help": "把下面每組廣告的到達網址實際點開，確認頁面能正常載入、優惠與商品資訊正確。",
+        "link_url": "#handoff-packages",
+        "link_label": "看本頁到達網址",
+    },
+}
+
 
 def _rows(cursor) -> list:
     return [dict(r) for r in cursor.fetchall()]
@@ -69,22 +113,49 @@ def _pixel_anomaly(conn, brand_id: str) -> Optional[str]:
     return None
 
 
-def one_time_status(conn, brand_id: str) -> list:
+def _brand_item_status(conn, brand_id: str, items: dict) -> list:
+    """`brand_checklist_item` 通用讀法：任何一份品牌層一次性項目字典都能套用同一張表，
+    不用各自另開一張表（one_time_status／qa_launch_status 共用這個函式）。"""
     rows = {r["item_key"]: r for r in _rows(conn.execute(
         "SELECT * FROM brand_checklist_item WHERE brand_id = ?", (brand_id,)))}
-    anomaly = _pixel_anomaly(conn, brand_id)
     result = []
-    for key, meta in ONE_TIME_ITEMS.items():
+    for key, meta in items.items():
         row = rows.get(key)
-        checked = bool(row["checked"]) if row else False
         result.append({
-            "key": key, **meta, "checked": checked,
+            "key": key, **meta, "checked": bool(row["checked"]) if row else False,
             "checked_by": row["checked_by"] if row else None,
             "checked_at": row["checked_at"] if row else None,
-            "flagged": bool(checked and anomaly),
-            "flagged_reason": anomaly if (checked and anomaly) else None,
         })
     return result
+
+
+def one_time_status(conn, brand_id: str) -> list:
+    anomaly = _pixel_anomaly(conn, brand_id)
+    result = _brand_item_status(conn, brand_id, ONE_TIME_ITEMS)
+    for item in result:
+        flagged = bool(item["checked"] and anomaly)
+        item["flagged"] = flagged
+        item["flagged_reason"] = anomaly if flagged else None
+    return result
+
+
+def qa_launch_status(conn, brand_id: str) -> list:
+    """上線授權頁 QA 五項提醒的目前狀態（票 01，決策 0016）。刻意不套用 one_time_status
+    的異常重新標示邏輯——那是 Pixel 花錢零轉換專屬的偵測，跟這五項無關。"""
+    return _brand_item_status(conn, brand_id, QA_LAUNCH_ITEMS)
+
+
+def qa_launch_summary(conn, brand_id: str) -> dict:
+    """給 handoff 頁的頂部橫幅用：還有幾項尚未確認。
+
+    鍵名故意不叫 "items"：Jinja 對 dict 做屬性存取時，`qa_launch.items` 會先命中
+    dict 內建的 `items()` 方法（回傳 bound method，不是這裡要的清單），不會退回
+    `qa_launch["items"]`——模板裡就會拿到一個不能疊代的 builtin_function_or_method。
+    """
+    checklist_items = qa_launch_status(conn, brand_id)
+    return {"checklist_items": checklist_items,
+            "unconfirmed": sum(1 for i in checklist_items if not i["checked"]),
+            "total": len(checklist_items)}
 
 
 def _cycle_hints(conn, brand_id: str, cycle_id: str) -> dict:
@@ -130,9 +201,7 @@ def completeness(conn, brand_id: str, cycle_id: str) -> dict:
     }
 
 
-def set_one_time(conn, brand_id: str, item_key: str, checked: bool, actor: str) -> None:
-    if item_key not in ONE_TIME_ITEMS:
-        raise ValueError(f"沒有這個檢查項目：{item_key}")
+def _set_brand_item(conn, brand_id: str, item_key: str, checked: bool, actor: str) -> None:
     ts = now_iso()
     conn.execute(
         "INSERT INTO brand_checklist_item (id, brand_id, item_key, checked, checked_by,"
@@ -147,6 +216,20 @@ def set_one_time(conn, brand_id: str, item_key: str, checked: bool, actor: str) 
                 action="check" if checked else "uncheck", actor=actor, before=None,
                 after={"checked": checked})
     conn.commit()
+
+
+def set_one_time(conn, brand_id: str, item_key: str, checked: bool, actor: str) -> None:
+    if item_key not in ONE_TIME_ITEMS:
+        raise ValueError(f"沒有這個檢查項目：{item_key}")
+    _set_brand_item(conn, brand_id, item_key, checked, actor)
+
+
+def set_qa_launch_item(conn, brand_id: str, item_key: str, checked: bool, actor: str) -> None:
+    """上線授權頁 QA 五項提醒的確認／取消確認（票 01，決策 0016）。跟 set_one_time 共用
+    brand_checklist_item 持久化，所以「確認一次＝對這個品牌持續生效」不用另外實作。"""
+    if item_key not in QA_LAUNCH_ITEMS:
+        raise ValueError(f"沒有這個檢查項目：{item_key}")
+    _set_brand_item(conn, brand_id, item_key, checked, actor)
 
 
 def set_cycle_item(conn, brand_id: str, cycle_id: str, item_key: str, checked: bool,

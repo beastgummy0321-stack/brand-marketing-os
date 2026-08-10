@@ -29,11 +29,17 @@
   "core/0007_interrupt_dedupe_per_brand.sql": "f8565f7660262c45648209d965a8910feac9d189d9f1c8f340700bc8bf49ae0e",
   "core/0008_audit_log_composite_index.sql": "32e55945c7988672621c2675d1fc632245621f5f37387956c4abd55a2a059cd8",
   "core/0009_pacing_card.sql": "16151ee5aa304d079c7b07508518a012608407d80c90f89c16f0113ba112976b",
+  "core/0010_rule_card_per_brand.sql": "b909dfb09514a6f1624100ccab2f3ebca2941dcc052500f958db22ad54ce9089",
   "intake/0001_intake.sql": "4f5776317c42f873136a9a870075614e824ef77f90738a12bd64a795d7e476f8",
   "intake/0002_scan_products.sql": "d4bf1b9561d71caa9f70de8e07e186a6396f0607dcf343a09bd46c10c7ffecbe",
   "orders/0001_orders.sql": "173ab5b6ab8e83d32c619d3b55ed2858daf03d35a6c82c1fc7ff4ad461f96301",
   "orders/0002_attribution.sql": "85cc3aad26323775a8fd3acc1181eedd69bd379da7902c0422d1dc484109c4e9",
   "orders/0003_sku_cost_version.sql": "6cc2c5a5c701b5979c0d3cf2a22b684b8dae476e6220eb0137fc15754fcb9999",
   "orders/0004_policy_change_log.sql": "8d1c15f672cc9dd9977803a3fd5dcbe933a6807e3990c2535a9980b9636c1f6d",
-  "orders/0005_channel.sql": "e5d20beae1e1cf83f6e44b1adab12a037a244c1b67b4279f93ae419b4f3fe3aa"
+  "orders/0005_channel.sql": "e5d20beae1e1cf83f6e44b1adab12a037a244c1b67b4279f93ae419b4f3fe3aa",
+  "brand_intelligence/0006_holiday_relevance_industry.sql": "bc028a706d7797b426b9125f956e5564745188893f440fe79e7dec9d4a1063de",
+  "ads/0017_occasion.sql": "71ef4437e25235535c47deb6838f81da17bb19798a523dd42c5f17e2c8d70944",
+  "core/0011_campaign_skip.sql": "910d3d6a3ef4d0bd5d0dfda7838c54ce12d850a09850bab7ace0253df461a8cf",
+  "core/0012_calendar_dismiss.sql": "30b7cdcfa31eb3e2d126712b29f8866642f684e7f152385a9228ee0bcd230caf",
+  "brand_intelligence/0007_rule_confirmed_at.sql": "20dc718f124b462c4a8faca52b09be7b69f52e27ce9aa1d9ed2f7c4992951a8c"
 }

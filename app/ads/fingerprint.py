@@ -169,22 +169,32 @@ def distance(a: dict, b: dict) -> float:
 ECHO_THRESHOLD = 0.5  # 與歷史素材的最大差異度低於此值，視為在原地打轉
 
 
-def novelty(candidate: dict, history: list) -> float:
+def novelty(candidate: dict, history: list, weights: list = None) -> float:
     """一則素材相對於歷史素材的新鮮度＝與最相近那一則的差異度。
 
     取「最相近」而不是平均：只要跟其中任何一則幾乎一樣，它就是舊東西，
     再多不相干的歷史素材也稀釋不掉這件事。
+
+    `weights`（票 02-occasion-weighted-recommendations，ADR 0011 第五節）：跟 `history`
+    等長、逐筆對應的情境權重，省略時等同全部權重 1.0（現行的無加權比較）。距離除以權重——
+    權重低（跟這次檔期不同場合）的歷史素材要離得更近才會被算進「還在原地打轉」，權重高
+    （同場合）的則按實際距離算，不是直接排除掉權重低的那些。
     """
     if not history:
         return 1.0
-    return min(distance(candidate, old) for old in history)
+    if weights is None:
+        return min(distance(candidate, old) for old in history)
+    return min(distance(candidate, old) / w for old, w in zip(history, weights))
 
 
-def echo_chamber_ratio(candidates: list, history: list) -> float:
-    """這批素材裡有多少比例是在重複過去。用來偵測 AI 讀自己的產出越轉越像自己。"""
+def echo_chamber_ratio(candidates: list, history: list, weights: list = None) -> float:
+    """這批素材裡有多少比例是在重複過去。用來偵測 AI 讀自己的產出越轉越像自己。
+
+    `weights`：見 `novelty()`，逐筆對應 `history` 的情境權重，省略時無加權。
+    """
     if not candidates:
         return 0.0
-    stale = sum(1 for c in candidates if novelty(c, history) < ECHO_THRESHOLD)
+    stale = sum(1 for c in candidates if novelty(c, history, weights) < ECHO_THRESHOLD)
     return round(stale / len(candidates), 3)
 
 

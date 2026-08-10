@@ -2,7 +2,9 @@
 """app/dashboard/repository.py — 跨品牌總覽彙整（票 02-overview-cards，規格 0001）。
 
 接口鐵則：只透過各模組的公開查詢函式取數（app.brand_intelligence／app.orders／
-app.ads／app.core.interrupts），不直接對別層資料表下 SQL、不寫入任何資料表。
+app.ads／app.core.interrupts／app.core.campaign_skip／app.core.calendar_dismiss），
+不直接對別層資料表下 SQL、不寫入任何資料表（本檔只呼叫 campaign_skip.get_skip()／
+calendar_dismiss.list_dismissed() 讀，不呼叫任一模組的寫入函式）。
 """
 
 from calendar import monthrange
@@ -19,6 +21,8 @@ from app.ads import stages as ads_stages
 from app.ads import sync as ads_sync
 from app.ads.routes_common import CYCLE_STATUS_LABELS, derive_cycle_stage
 from app.brand_intelligence import repository as bi_repo
+from app.core import calendar_dismiss as core_calendar_dismiss
+from app.core import campaign_skip as core_campaign_skip
 from app.core import interrupts as core_interrupts
 from app.core import settings as core_settings
 from app.dashboard import campaign_calendar
@@ -102,6 +106,24 @@ def _pacing_alert(conn, brand_id: str, today: str) -> Optional[dict]:
     return None
 
 
+# 票 03-cycle-skip-record（ADR 0015）：next_calendar_reminder() 選中的那張提醒卡，
+# 若去年同一節日有跳過紀錄，附帶顯示去年的理由——純脈絡顯示，跟 app/ads/nextcycle.py
+# 下期建議引擎完全無關（這裡只讀 campaign_skip，不寫、不影響任何演算法輸入）。
+def _attach_last_year_skip(conn, brand_id: str, reminder: Optional[dict],
+                            events: list) -> Optional[dict]:
+    if not reminder:
+        return reminder
+    event = next((e for e in events if e["id"] == reminder["id"]), None)
+    if not event:
+        return reminder
+    event_year = date.fromisoformat(event["date"]).year
+    skip = core_campaign_skip.get_skip(
+        conn, brand_id, campaign_calendar.holiday_id(event["id"]), event_year - 1)
+    if not skip:
+        return reminder
+    return {**reminder, "last_year_skipped": True, "last_year_skip_reason": skip["reason"]}
+
+
 def _guide_card_facts(conn, brand_id: str, cycle: Optional[dict], today: str, events: list) -> dict:
     pending_facts = bi_repo.list_brand_facts(conn, brand_id, status="pending")
     brand = bi_repo.get_brand(conn, brand_id)
@@ -112,6 +134,9 @@ def _guide_card_facts(conn, brand_id: str, cycle: Optional[dict], today: str, ev
         active_cycle = {"id": cycle["id"], "stage_label": _cycle_stage_label(conn, brand_id, cycle)}
         reading_ready = bool(ads_reading.load(conn, brand_id, cycle["id"])["cycle"])
         next_cycle_draft_ready = ads_nextcycle.load(conn, brand_id, cycle["id"]) is not None
+    campaign_reminder = campaign_calendar.next_calendar_reminder(
+        events, date.fromisoformat(today), brand["industry"] if brand else None,
+        dismissed_categories=core_calendar_dismiss.list_dismissed(conn, brand_id))
     return {
         "brand_id": brand_id,
         # 票 C：guide_cards.conversion_goal_missing 讀這個判斷方法論開關有沒有接電。
@@ -120,7 +145,7 @@ def _guide_card_facts(conn, brand_id: str, cycle: Optional[dict], today: str, ev
         "active_cycle": active_cycle,
         "reading_ready": reading_ready,
         "next_cycle_draft_ready": next_cycle_draft_ready,
-        "campaign_reminder": campaign_calendar.next_calendar_reminder(events, date.fromisoformat(today)),
+        "campaign_reminder": _attach_last_year_skip(conn, brand_id, campaign_reminder, events),
         "pacing_alert": _pacing_alert(conn, brand_id, today),
     }
 
@@ -271,6 +296,7 @@ def cockpit(conn, brand_id: str, *, today: Optional[str] = None,
 
     cycle = _latest_cycle(conn, brand_id)
     last_sync_at = _last_sync_at(conn, brand_id)
+    brand = bi_repo.get_brand(conn, brand_id)
     return {
         "kpis": {
             "revenue": {"value": revenue, "mom_pct": revenue_mom, "trend": trend["revenue"]},
@@ -284,7 +310,9 @@ def cockpit(conn, brand_id: str, *, today: Optional[str] = None,
         "guide_cards": _guide_cards(conn, brand_id, cycle, today, events),
         # 票 06-campaign-calendar：進行中檔期目前處於遠期備戰／中期備戰／近期備戰哪個階段
         # （{id, name, tier, tier_label, stage, days_until}）；沒有檔期在窗口內是 None。
-        "campaign_stage": campaign_calendar.current_campaign_stage(events, date.fromisoformat(today)),
+        "campaign_stage": campaign_calendar.current_campaign_stage(
+            events, date.fromisoformat(today), brand["industry"] if brand else None,
+            dismissed_categories=core_calendar_dismiss.list_dismissed(conn, brand_id)),
         # 票 05-alerts-fuel-pipeline：異常警示區（空清單＝前端顯示「一切正常」）／
         # AI 油錢錶／內容產線小計。
         "alerts": _alerts(conn, brand_id, today),

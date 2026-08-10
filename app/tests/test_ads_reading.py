@@ -115,44 +115,44 @@ class JudgeRulesTest(unittest.TestCase):
         return data
 
     def test_barely_started_is_insufficient_data(self):
-        verdict = reading.judge(self._totals(spend=1000), plan_budget=10000, breakeven=2.5)
+        verdict = reading.judge(self._totals(spend=1000), plan_budget=10000, breakeven=2.5, brand_id="demo_brand")
         self.assertEqual(verdict["status"], "insufficient_data")
 
     def test_low_impressions_is_insufficient_data(self):
-        verdict = reading.judge(self._totals(impressions=500), plan_budget=10000, breakeven=2.5)
+        verdict = reading.judge(self._totals(impressions=500), plan_budget=10000, breakeven=2.5, brand_id="demo_brand")
         self.assertEqual(verdict["status"], "insufficient_data")
         self.assertIn("樣本太少", verdict["reasons"][0])
 
     def test_half_budget_zero_conversions_says_stop(self):
         verdict = reading.judge(self._totals(conversions=0, revenue=0),
-                                plan_budget=10000, breakeven=2.5)
+                                plan_budget=10000, breakeven=2.5, brand_id="demo_brand")
         self.assertEqual(verdict["status"], "pause_candidate")
 
     def test_same_roas_different_verdict_by_margin(self):
         """同一個投報率，對不同毛利的產品意義完全不同——這正是固定門檻會出錯的地方。"""
         totals = self._totals(revenue=30000)  # ROAS = 3.0
-        thin = reading.judge(totals, plan_budget=10000, breakeven=2.9)
-        fat = reading.judge(totals, plan_budget=10000, breakeven=1.5)
+        thin = reading.judge(totals, plan_budget=10000, breakeven=2.9, brand_id="demo_brand")
+        fat = reading.judge(totals, plan_budget=10000, breakeven=1.5, brand_id="demo_brand")
         self.assertEqual(thin["status"], "maintain")
         self.assertEqual(fat["status"], "scale_candidate")
 
     def test_losing_money_says_stop(self):
-        verdict = reading.judge(self._totals(revenue=10000), plan_budget=10000, breakeven=2.5)
+        verdict = reading.judge(self._totals(revenue=10000), plan_budget=10000, breakeven=2.5, brand_id="demo_brand")
         self.assertEqual(verdict["status"], "pause_candidate")
 
     def test_too_few_conversions_is_still_learning(self):
         verdict = reading.judge(self._totals(conversions=2, revenue=40000),
-                                plan_budget=10000, breakeven=2.5)
+                                plan_budget=10000, breakeven=2.5, brand_id="demo_brand")
         self.assertEqual(verdict["status"], "learning")
         self.assertIn("不夠穩定", verdict["reasons"][0])
 
     def test_no_economics_does_not_pretend_to_know_profit(self):
-        verdict = reading.judge(self._totals(), plan_budget=10000, breakeven=None)
+        verdict = reading.judge(self._totals(), plan_budget=10000, breakeven=None, brand_id="demo_brand")
         self.assertEqual(verdict["status"], "unclear_economics")
         self.assertIn("算不出", verdict["reasons"][0])
 
     def test_no_economics_still_comments_on_clicks(self):
-        verdict = reading.judge(self._totals(), plan_budget=10000, breakeven=None,
+        verdict = reading.judge(self._totals(), plan_budget=10000, breakeven=None, brand_id="demo_brand",
                                 baseline={"ctr": 0.005})
         self.assertTrue(any("點擊率" in r for r in verdict["reasons"]))
 
@@ -161,7 +161,7 @@ class JudgeRulesTest(unittest.TestCase):
         小預算帳戶（clicks=400）就算毛利算下來夠格加碼，樣本量還是收不到統計等級，
         要誠實標「方向性判讀」，不能包裝成嚴謹的統計結論。"""
         totals = self._totals(revenue=30000)  # ROAS = 3.0
-        verdict = reading.judge(totals, plan_budget=10000, breakeven=1.5)  # 高毛利 → 加碼候選
+        verdict = reading.judge(totals, plan_budget=10000, breakeven=1.5, brand_id="demo_brand")  # 高毛利 → 加碼候選
         self.assertEqual(verdict["status"], "scale_candidate")
         self.assertEqual(verdict["statistical_level"], "directional")
         self.assertEqual(verdict["statistical_level_label"], "方向性判讀")
@@ -169,7 +169,7 @@ class JudgeRulesTest(unittest.TestCase):
     def test_large_sample_scale_candidate_reaches_statistical_level(self):
         """同樣是加碼候選，但樣本量收到速查表門檻時，才能標「統計等級」。"""
         totals = self._totals(clicks=20000, conversions=1000, revenue=30000)
-        verdict = reading.judge(totals, plan_budget=10000, breakeven=1.5)
+        verdict = reading.judge(totals, plan_budget=10000, breakeven=1.5, brand_id="demo_brand")
         self.assertEqual(verdict["status"], "scale_candidate")
         self.assertEqual(verdict["statistical_level"], "statistical")
         self.assertEqual(verdict["statistical_level_label"], "統計等級")
@@ -177,8 +177,8 @@ class JudgeRulesTest(unittest.TestCase):
     def test_money_threshold_status_unchanged_by_conn_argument(self):
         """money 門檻的算法不因傳不傳 conn 而改變（既有毛利門檻行為不變的回歸測試）。"""
         totals = self._totals(revenue=30000)
-        without_conn = reading.judge(totals, plan_budget=10000, breakeven=1.5)
-        with_conn = reading.judge(totals, plan_budget=10000, breakeven=1.5, conn=None)
+        without_conn = reading.judge(totals, plan_budget=10000, breakeven=1.5, brand_id="demo_brand")
+        with_conn = reading.judge(totals, plan_budget=10000, breakeven=1.5, brand_id="demo_brand", conn=None)
         self.assertEqual(without_conn["status"], with_conn["status"])
         self.assertEqual(without_conn["status"], "scale_candidate")
 
@@ -186,25 +186,25 @@ class JudgeRulesTest(unittest.TestCase):
         """修憲落地 G4（決策 0035 第三節第 7 點）：3–10 筆轉換的 ROAS 信賴區間跨越打平線
         兩側，即使算出來的投報率遠高於打平線，也不准輸出加碼——誠實降回「還在學習期」。"""
         totals = self._totals(conversions=5, revenue=50000)  # ROAS = 5.0，遠高於打平線*1.3
-        verdict = reading.judge(totals, plan_budget=10000, breakeven=2.5)
+        verdict = reading.judge(totals, plan_budget=10000, breakeven=2.5, brand_id="demo_brand")
         self.assertEqual(verdict["status"], "learning")
 
     def test_small_sample_pause_signal_is_capped_to_learning(self):
         totals = self._totals(conversions=5, revenue=12500)  # ROAS = 1.25，遠低於打平線*0.7
-        verdict = reading.judge(totals, plan_budget=10000, breakeven=2.5)
+        verdict = reading.judge(totals, plan_budget=10000, breakeven=2.5, brand_id="demo_brand")
         self.assertEqual(verdict["status"], "learning")
 
     def test_large_sample_scale_signal_is_not_capped(self):
         """滿 10 筆轉換（門檻本身）就不再降級，維持原本的加碼／停損判定。"""
         totals = self._totals(conversions=10, revenue=50000)
-        verdict = reading.judge(totals, plan_budget=10000, breakeven=2.5)
+        verdict = reading.judge(totals, plan_budget=10000, breakeven=2.5, brand_id="demo_brand")
         self.assertEqual(verdict["status"], "scale_candidate")
 
     def test_small_sample_maintain_is_not_touched(self):
         """`maintain`（打平）不受這條門檻影響——決策原文只擋加碼／停損，
         打平本來就是這個樣本區間唯一該有信心講出來的錢的結論之一。"""
         totals = self._totals(conversions=5, revenue=18000)  # ROAS = 1.8，落在打平區間
-        verdict = reading.judge(totals, plan_budget=10000, breakeven=1.6667)
+        verdict = reading.judge(totals, plan_budget=10000, breakeven=1.6667, brand_id="demo_brand")
         self.assertEqual(verdict["status"], "maintain")
 
 

@@ -297,6 +297,65 @@ class CreateCycleTest(_BaseAdsTest):
         self.assertEqual(row["actor"], OPERATOR)
 
 
+class PacingCurveTest(_BaseAdsTest):
+    """票 pacing-curve：開期自動算好排期策略、頁面顯示、手動改排法。"""
+
+    def _create(self, **overrides):
+        resp = self._open_cycle(**overrides)
+        return resp.headers["location"].split("/ads/")[1].split("?")[0]
+
+    def test_long_duration_defaults_to_continuous_with_daily_budgets(self):
+        """開期表單目前還沒有優惠選擇欄位，has_offer 固定 False，天數夠長時仍是連續。"""
+        cycle_id = self._create(custom_amount="10000", duration_days="14")
+        cycle = ads_repo.get_cycle(main.conn, self.bid, cycle_id)
+        plan = ads_repo.derived_plan(cycle)
+        self.assertEqual(plan["pacing_strategy"], "continuous")
+        self.assertEqual(len(plan["daily_budgets"]), 14)
+        self.assertAlmostEqual(sum(d["budget"] for d in plan["daily_budgets"]), 10000, delta=1)
+
+    def test_short_duration_is_continuous_with_short_reason(self):
+        cycle_id = self._create(custom_amount="2000", duration_days="7")
+        plan = ads_repo.derived_plan(ads_repo.get_cycle(main.conn, self.bid, cycle_id))
+        self.assertEqual(plan["pacing_strategy"], "continuous")
+        self.assertIn("太短", plan["pacing_reason"])
+
+    def test_cycle_page_renders_pacing_card_and_chart_data(self):
+        cycle_id = self._create(custom_amount="10000", duration_days="14")
+        page = self.client.get(f"/brands/{self.bid}/ads/{cycle_id}")
+        self.assertIn("這次要怎麼投", page.text)
+        self.assertIn("還有其他排法", page.text)
+        self.assertIn("pacing-chart-plan", page.text)
+
+    def test_manual_switch_to_pulse_recomputes_curve(self):
+        cycle_id = self._create(custom_amount="21000", duration_days="21")
+        resp = self.client.post(
+            f"/brands/{self.bid}/ads/{cycle_id}/pacing",
+            data={"strategy": "pulse", "reason": "檔期本身是限時衝刺"}, follow_redirects=False)
+        self.assertEqual(resp.status_code, 303)
+        plan = ads_repo.derived_plan(ads_repo.get_cycle(main.conn, self.bid, cycle_id))
+        self.assertEqual(plan["pacing_strategy"], "pulse")
+        self.assertEqual(plan["pacing_reason"], "檔期本身是限時衝刺")
+        self.assertEqual(len(plan["daily_budgets"]), 21)
+        self.assertAlmostEqual(sum(d["budget"] for d in plan["daily_budgets"]), 21000, delta=1)
+
+    def test_short_duration_rejects_non_continuous_switch(self):
+        """天數不夠時系統不讓使用者選脈動或間歇（G9.4／ADR 0010 第五節）。"""
+        cycle_id = self._create(custom_amount="2000", duration_days="7")
+        resp = self.client.post(
+            f"/brands/{self.bid}/ads/{cycle_id}/pacing",
+            data={"strategy": "intermittent", "reason": "怕受眾疲乏"}, follow_redirects=False)
+        self.assertEqual(resp.status_code, 303)
+        self.assertIn("warn", resp.headers["location"] + "")
+        plan = ads_repo.derived_plan(ads_repo.get_cycle(main.conn, self.bid, cycle_id))
+        self.assertEqual(plan["pacing_strategy"], "continuous")  # 沒被改動
+
+    def test_handoff_page_shows_same_curve(self):
+        cycle_id = self._create(custom_amount="10000", duration_days="14")
+        page = self.client.get(f"/brands/{self.bid}/ads/{cycle_id}/handoff")
+        self.assertIn("這幾天該花多少", page.text)
+        self.assertIn("pacing-chart-handoff", page.text)
+
+
 class AdsBrandIsolationTest(_BaseAdsTest):
     def test_other_brand_cannot_see_or_open_cycle(self):
         resp = self._open_cycle()

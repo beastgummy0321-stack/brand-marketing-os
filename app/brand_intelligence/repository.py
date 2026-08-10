@@ -24,6 +24,7 @@ import json
 import sqlite3
 from typing import Optional
 
+from app.brand_intelligence import rule_lifecycle
 from app.core import cleanup
 from app.core.audit import write_audit
 from app.core.db import new_id, now_iso
@@ -133,6 +134,36 @@ def set_brand_switches(conn: sqlite3.Connection, brand_id: str, *,
     conn.execute(
         "UPDATE brand SET market_region = ?, conversion_goal = ?, updated_at = ? WHERE id = ?",
         (market_region, conversion_goal, ts, brand_id),
+    )
+    after = get_brand(conn, brand_id)
+    write_audit(conn, brand_id=brand_id, entity_type="brand", entity_id=brand_id,
+                action="update", actor=actor, before=before, after=after)
+    conn.commit()
+    return after
+
+
+# 業種標籤（ADR 0014 第一節）：節日日曆比對用，跟節日資料的 applicable_industries
+# 清單（app/dashboard/campaign_calendar_data.json）值域對齊，不得各自發明。目前只涵蓋
+# 這批內建節日（情人節／白色情人節／母親節等送禮檔期）需要區分的業種粒度，之後有新
+# 節日需要更細的業種再擴充——業種清單跟 conversion_goal 一樣可人工增修。
+INDUSTRIES = ("food_beverage", "beauty_personal_care", "fashion_apparel",
+              "home_lifestyle", "service")
+
+
+def set_brand_industry(conn: sqlite3.Connection, brand_id: str, *,
+                        industry: Optional[str], actor: str) -> dict:
+    """寫入 brand.industry（ADR 0014，節日日曆比對用）。獨立於 set_brand_switches——
+    那支管的是方法論開關（票 A），業種是不同功能領域，不合併進同一支函式。"""
+    _require(actor, "actor 為必填")
+    if industry is not None and industry not in INDUSTRIES:
+        raise ValueError(f"industry 只能是 {'/'.join(INDUSTRIES)} 其中之一")
+    before = get_brand(conn, brand_id)
+    if before is None:
+        raise ValueError(f"找不到品牌：{brand_id}")
+    ts = now_iso()
+    conn.execute(
+        "UPDATE brand SET industry = ?, updated_at = ? WHERE id = ?",
+        (industry, ts, brand_id),
     )
     after = get_brand(conn, brand_id)
     write_audit(conn, brand_id=brand_id, entity_type="brand", entity_id=brand_id,
@@ -849,13 +880,16 @@ def create_rule(conn: sqlite3.Connection, brand_id: str, *, actor: str, rule_typ
         "id": rule_id, "brand_id": brand_id, "product_id": product_id, "rule_type": rule_type,
         "content": content, "severity": severity, "status": "active",
         "source_reference_id": source_reference_id, "created_at": ts, "updated_at": ts,
+        "confirmed_at": ts,  # 建立即視為已確認（rule-lifecycle 02，ADR 0012 第二節）；
+        # 重新確認的顯式操作留給 rule-lifecycle 01。
     }
     conn.execute(
         "INSERT INTO rule (id, brand_id, product_id, rule_type, content, severity, status, "
-        "source_reference_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "source_reference_id, created_at, updated_at, confirmed_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (row["id"], row["brand_id"], row["product_id"], row["rule_type"], row["content"],
          row["severity"], row["status"], row["source_reference_id"], row["created_at"],
-         row["updated_at"]),
+         row["updated_at"], row["confirmed_at"]),
     )
     if product_id:
         _bump_product_version(conn, brand_id, product_id)
@@ -931,8 +965,37 @@ def deactivate_rule(conn: sqlite3.Connection, brand_id: str, rule_id: str, *, ac
     return after
 
 
+def reconfirm_rule(conn: sqlite3.Connection, brand_id: str, rule_id: str, *, actor: str) -> dict:
+    """待確認規則的「延續」（rule-lifecycle/01，ADR 0012 第一節）：恢復 active、更新
+    確認時間，不必重新輸入規則內容。不限定 before 一定是 pending_reconfirm——直接呼叫
+    也等同「主動延長效期」，語意上無害（比照 deactivate_rule 不檢查現有狀態的寫法）。"""
+    _require(actor, "actor 為必填")
+    before = get_rule(conn, brand_id, rule_id)
+    if before is None:
+        raise ValueError(f"找不到規則：{rule_id}")
+    ts = now_iso()
+    conn.execute(
+        "UPDATE rule SET status = 'active', confirmed_at = ?, updated_at = ? "
+        "WHERE id = ? AND brand_id = ?",
+        (ts, ts, rule_id, brand_id),
+    )
+    after = get_rule(conn, brand_id, rule_id)
+    if after["product_id"]:
+        _bump_product_version(conn, brand_id, after["product_id"])
+    else:
+        _bump_brand_version(conn, brand_id)
+    write_audit(conn, brand_id=brand_id, entity_type="rule", entity_id=rule_id,
+                action="reconfirm", actor=actor, before=before, after=after,
+                reason="使用者延續，恢復生效並更新確認時間（ADR 0012 第一節）")
+    conn.commit()
+    return after
+
+
 def list_rules_for_brand(conn: sqlite3.Connection, brand_id: str) -> list:
-    """品牌底下所有生效中的規則（含品牌整體與各產品專屬——品牌檔案頁要看到全部）。"""
+    """品牌底下所有生效中的規則（含品牌整體與各產品專屬——品牌檔案頁要看到全部）。
+    讀取前先掃一次逾期未確認的規則（rule-lifecycle/01），比照
+    app/core/interrupts.py 的 list_open() 呼叫 _archive_stale_informational 的寫法。"""
+    rule_lifecycle.sweep_expired_rules(conn, brand_id)
     return _rows(conn.execute(
         "SELECT * FROM rule WHERE brand_id = ? AND status = 'active' ORDER BY created_at",
         (brand_id,),
@@ -940,11 +1003,24 @@ def list_rules_for_brand(conn: sqlite3.Connection, brand_id: str) -> list:
 
 
 def list_rules_for_product(conn: sqlite3.Connection, brand_id: str, product_id: str) -> list:
-    """整個品牌的規則 + 本產品專屬規則（不含其他產品的專屬規則）。"""
+    """整個品牌的規則 + 本產品專屬規則（不含其他產品的專屬規則）。讀取前先掃一次逾期未確認
+    的規則（rule-lifecycle/01），理由同 list_rules_for_brand。"""
+    rule_lifecycle.sweep_expired_rules(conn, brand_id)
     return _rows(conn.execute(
         "SELECT * FROM rule WHERE brand_id = ? AND status = 'active' "
         "AND (product_id IS NULL OR product_id = ?) ORDER BY created_at",
         (brand_id, product_id),
+    ))
+
+
+def list_pending_reconfirm_rules(conn: sqlite3.Connection, brand_id: str) -> list:
+    """待確認清單（累積智慧頁用，rule-lifecycle/01）：先掃一次逾期未確認的規則，確保
+    這裡看到的是最新狀態，再撈目前退回待確認的規則。"""
+    rule_lifecycle.sweep_expired_rules(conn, brand_id)
+    return _rows(conn.execute(
+        "SELECT * FROM rule WHERE brand_id = ? AND status = 'pending_reconfirm' "
+        "ORDER BY updated_at DESC",
+        (brand_id,),
     ))
 
 

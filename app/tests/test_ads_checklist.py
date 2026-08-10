@@ -343,6 +343,139 @@ class HandoffExtrasTest(_BaseHandoffTest):
         self.assertIn("1 / 4", page.text)
 
 
+class QaLaunchReminderTest(_Base):
+    """上線授權頁 QA 五項提醒（票 01，決策 0016）：品牌層級、提醒不擋流程。"""
+
+    def test_fresh_brand_all_five_unconfirmed(self):
+        items = checklist.qa_launch_status(main.conn, self.bid)
+        self.assertEqual(len(items), 5)
+        self.assertTrue(all(not i["checked"] for i in items))
+
+    def test_confirming_one_item_persists_and_records_actor_without_affecting_others(self):
+        checklist.set_qa_launch_item(main.conn, self.bid, "qa_pixel_installed", True, ACTOR)
+        items = checklist.qa_launch_status(main.conn, self.bid)
+        pixel_item = next(i for i in items if i["key"] == "qa_pixel_installed")
+        self.assertTrue(pixel_item["checked"])
+        self.assertEqual(pixel_item["checked_by"], ACTOR)
+        others = [i for i in items if i["key"] != "qa_pixel_installed"]
+        self.assertTrue(all(not i["checked"] for i in others))
+
+    def test_confirmed_item_carries_over_to_a_new_cycle(self):
+        """票上的驗收：同品牌下次上線授權時已確認項目不再顯示警示——品牌層持久化，不是逐檔期。"""
+        checklist.set_qa_launch_item(main.conn, self.bid, "qa_budget_line_review", True, ACTOR)
+        self._live_cycle()
+        self._live_cycle(start_offset_days=-20)
+        item = next(i for i in checklist.qa_launch_status(main.conn, self.bid)
+                    if i["key"] == "qa_budget_line_review")
+        self.assertTrue(item["checked"])
+
+    def test_summary_unconfirmed_count_updates(self):
+        summary = checklist.qa_launch_summary(main.conn, self.bid)
+        self.assertEqual(summary["total"], 5)
+        self.assertEqual(summary["unconfirmed"], 5)
+        checklist.set_qa_launch_item(main.conn, self.bid, "qa_pixel_installed", True, ACTOR)
+        summary = checklist.qa_launch_summary(main.conn, self.bid)
+        self.assertEqual(summary["unconfirmed"], 4)
+
+    def test_rejects_unknown_item_key(self):
+        with self.assertRaises(ValueError):
+            checklist.set_qa_launch_item(main.conn, self.bid, "not_a_real_item", True, ACTOR)
+
+
+class QaLaunchHandoffPageTest(_BaseHandoffTest):
+    def test_page_shows_unconfirmed_banner_with_count(self):
+        page = self.client.get(f"/brands/{self.bid}/ads/{self.cycle_id}/handoff")
+        self.assertEqual(page.status_code, 200)
+        self.assertIn("還有 5 項尚未確認", page.text)
+        self.assertIn("Pixel 已正確安裝", page.text)
+        self.assertIn("受眾排除名單已設定", page.text)
+        self.assertIn("CAPI／EMQ 事件品質已確認", page.text)
+        self.assertIn("預算已逐筆覆核", page.text)
+        self.assertIn("到達頁已實點測試", page.text)
+        self.assertIn("facebook.com/business/help", page.text)
+
+    def test_confirm_one_item_via_route_updates_count(self):
+        resp = self.client.post(
+            f"/brands/{self.bid}/ads/{self.cycle_id}/handoff/qa-launch/qa_pixel_installed",
+            data={"checked": "1"}, follow_redirects=False)
+        self.assertEqual(resp.status_code, 303)
+        page = self.client.get(f"/brands/{self.bid}/ads/{self.cycle_id}/handoff")
+        self.assertIn("還有 4 項尚未確認", page.text)
+
+    def test_confirming_all_five_shows_success_banner(self):
+        for key in checklist.QA_LAUNCH_ITEMS:
+            resp = self.client.post(
+                f"/brands/{self.bid}/ads/{self.cycle_id}/handoff/qa-launch/{key}",
+                data={"checked": "1"}, follow_redirects=False)
+            self.assertEqual(resp.status_code, 303)
+        page = self.client.get(f"/brands/{self.bid}/ads/{self.cycle_id}/handoff")
+        self.assertIn("上線前提醒都確認過了", page.text)
+        self.assertNotIn("尚未確認", page.text)
+
+    def test_activation_succeeds_regardless_of_qa_confirmation_state(self):
+        """票上的驗收：授權上線按鈕的可點擊性完全不受檢查清單狀態影響——這裡故意一項都不勾。"""
+        package_id = ads_handoff.list_packages(main.conn, self.bid, self.cycle_id)[0]["id"]
+        resp = self.client.post(
+            f"/brands/{self.bid}/ads/{self.cycle_id}/handoff/{package_id}/activate",
+            data={"meta_campaign_id": "23851234567890123"}, follow_redirects=False)
+        self.assertEqual(resp.status_code, 303)
+        mapping = ads_handoff.list_packages(main.conn, self.bid, self.cycle_id)[0]["mapping"]
+        self.assertIsNotNone(mapping)
+        self.assertEqual(mapping["meta_campaign_id"], "23851234567890123")
+
+
+class QaLaunchSettingsHubTest(_BaseHandoffTest):
+    """票 02-qa-reminder-reset（決策 0016 第三節）：設定中心「廣告層面」分類的「上線前
+    提醒」小節——確認過的項目在這裡可以重新打開，清掉確認紀錄，上線授權頁恢復顯示警示。"""
+
+    def test_settings_page_shows_five_items_default_unconfirmed(self):
+        page = self.client.get(f"/brands/{self.bid}/settings/ads")
+        self.assertEqual(page.status_code, 200)
+        self.assertIn("上線前提醒", page.text)
+        for meta in checklist.QA_LAUNCH_ITEMS.values():
+            self.assertIn(meta["label"], page.text)
+        self.assertIn("尚未確認", page.text)
+
+    def test_confirmed_item_shows_as_confirmed_in_settings(self):
+        checklist.set_qa_launch_item(main.conn, self.bid, "qa_pixel_installed", True, ACTOR)
+        page = self.client.get(f"/brands/{self.bid}/settings/ads")
+        self.assertIn("已確認", page.text)
+
+    def test_reopen_in_settings_clears_confirmation_and_handoff_shows_warning_again(self):
+        """票上的驗收：確認過的項目在設定中心重新打開後，上線授權頁恢復顯示警示。"""
+        checklist.set_qa_launch_item(main.conn, self.bid, "qa_pixel_installed", True, ACTOR)
+        handoff_before = self.client.get(f"/brands/{self.bid}/ads/{self.cycle_id}/handoff")
+        self.assertIn("還有 4 項尚未確認", handoff_before.text)
+
+        resp = self.client.post(
+            f"/brands/{self.bid}/settings/ads/qa-launch/qa_pixel_installed",
+            data={"checked": "0"}, follow_redirects=False)
+        self.assertEqual(resp.status_code, 303)
+
+        item = next(i for i in checklist.qa_launch_status(main.conn, self.bid)
+                   if i["key"] == "qa_pixel_installed")
+        self.assertFalse(item["checked"])
+
+        handoff_after = self.client.get(f"/brands/{self.bid}/ads/{self.cycle_id}/handoff")
+        self.assertIn("還有 5 項尚未確認", handoff_after.text)
+
+    def test_confirming_via_settings_updates_handoff_unconfirmed_count(self):
+        resp = self.client.post(
+            f"/brands/{self.bid}/settings/ads/qa-launch/qa_budget_line_review",
+            data={"checked": "1"}, follow_redirects=False)
+        self.assertEqual(resp.status_code, 303)
+        page = self.client.get(f"/brands/{self.bid}/ads/{self.cycle_id}/handoff")
+        self.assertIn("還有 4 項尚未確認", page.text)
+
+    def test_unknown_item_key_does_not_change_any_item(self):
+        before = checklist.qa_launch_status(main.conn, self.bid)
+        resp = self.client.post(
+            f"/brands/{self.bid}/settings/ads/qa-launch/not_a_real_item",
+            data={"checked": "1"}, follow_redirects=True)
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(checklist.qa_launch_status(main.conn, self.bid), before)
+
+
 class ReadingRetroReminderTest(_BaseHandoffTest):
     def test_unchecked_items_are_flagged_after_judging(self):
         ads_performance.import_csv(main.conn, self.bid, self.cycle_id, GOOD_CSV, actor=ACTOR)

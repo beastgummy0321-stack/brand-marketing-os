@@ -101,7 +101,7 @@ def meta_click_tier(conn, brand_id: str) -> dict:
     clicks = totals["clicks"] or 0
     conversions = totals["conversions"] or 0
     cvr = (conversions / clicks) if clicks else None
-    return {"tier": rule_cards.sample_size_tier(conn, clicks, cvr), "totals": totals}
+    return {"tier": rule_cards.sample_size_tier(conn, brand_id, clicks, cvr), "totals": totals}
 
 
 def interview_done(conn, brand_id: str) -> bool:

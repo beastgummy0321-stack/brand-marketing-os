@@ -10,6 +10,11 @@ migration（本檔不擁有 SQL，schema 見 app/core/migrations/）。不用碰
 
 沒被使用者改過的欄位，值就是 CARDS 裡的 default——DB 種子列雖然已經寫了同樣的數字，
 但 `get_value` 兩邊都認得，表還沒建起來（極舊的 DB）也優雅回預設值，不噴錯。
+
+分品牌（設定中心票 01）：每個品牌各自一份「系統預設值（CARDS 常數）→ 品牌覆寫值
+（rule_card_value 表，PK 含 brand_id）」，`brand_id` 是本檔每個公開函式的必填參數，
+不留「忘記傳＝悄悄套用平台預設」這種靜默跨品牌風險。A 品牌覆寫值不影響 B 品牌，
+沒覆寫時繼續 fallback 到 CARDS 的 default（既有行為不變，只是查詢多一個過濾條件）。
 """
 
 from __future__ import annotations
@@ -17,6 +22,7 @@ from __future__ import annotations
 import sqlite3
 from typing import Optional
 
+from app.core import cleanup
 from app.core.audit import write_audit
 from app.core.db import now_iso
 
@@ -132,6 +138,40 @@ CARDS = {
             },
         },
     },
+    "rule_prompt_cap": {
+        "title": "品牌智庫規則上限",
+        "description": (
+            "生成 prompt 會把這個品牌全部生效中的 hard 規則整包塞進去；soft 規則依最近確認"
+            "時間排序，只取排在前面的部分——避免規則隨時間單調累積、prompt 被灌到失焦。"
+            "超過上限而這次沒進 prompt 的規則不會消失，累積智慧頁會列出清單。"
+            "數值來源：docs/adr/0012-rule-card-expiry-and-prompt-cap.md 第二、三節。"
+        ),
+        "fields": {
+            "max_active_rules": {
+                "label": "進生成提示詞的規則上限", "unit": "條", "default": 20.0,
+                "help": "hard 規則不受這個數字限制、全部保留；soft 規則超過這個數字後，"
+                        "排比較後面的那些這次不會進生成提示詞（不會被刪除，之後重新確認過"
+                        "或排到前面就會恢復生效）。",
+            },
+        },
+    },
+    "rule_expiry": {
+        "title": "規則有效期",
+        "description": (
+            "品牌智庫的規則被接受後，超過這裡設定的期數沒有人重新確認，狀態會自動退回"
+            "「待確認」，不會再進生成 prompt——但規則本身不會被刪除，使用者到累積智慧頁"
+            "一鍵「延續」即可恢復生效，不必重新輸入規則內容。一期抓檔期預設天數估算"
+            "（app/ads/budget.py 的 DEFAULT_DURATION_DAYS，14 天）。"
+            "數值來源：docs/adr/0012-rule-card-expiry-and-prompt-cap.md 第一節。"
+        ),
+        "fields": {
+            "reconfirm_cycles": {
+                "label": "重新確認門檻", "unit": "期", "default": 6.0,
+                "help": "規則被接受（或上次重新確認）之後，經過這麼多期都沒有人重新確認過，"
+                        "就會自動退回「待確認」狀態，暫時不會用在生成內容的判斷依據上。",
+            },
+        },
+    },
     "pacing": {
         "title": "檔期預算步調門檻",
         "description": (
@@ -181,68 +221,71 @@ def _field_def(card_key: str, field_key: str) -> dict:
         raise ValueError(f"沒有這張規則卡欄位：{card_key}.{field_key}") from None
 
 
-def get_value(conn: Optional[sqlite3.Connection], card_key: str, field_key: str) -> float:
-    """讀一個門檻的目前值：DB 有存就用 DB 的，沒有（或表還沒建起來）就用預設值。"""
+def get_value(conn: Optional[sqlite3.Connection], brand_id: str, card_key: str, field_key: str) -> float:
+    """讀一個門檻的目前值：這個品牌有存就用品牌覆寫值，沒有（或表還沒建起來）就用預設值。"""
     default = _field_def(card_key, field_key)["default"]
     if conn is None:
         return default
     try:
         row = conn.execute(
-            "SELECT value FROM rule_card_value WHERE card_key = ? AND field_key = ?",
-            (card_key, field_key),
+            "SELECT value FROM rule_card_value WHERE brand_id = ? AND card_key = ? AND field_key = ?",
+            (brand_id, card_key, field_key),
         ).fetchone()
     except sqlite3.OperationalError:
         return default
     return row["value"] if row is not None else default
 
 
-def get_card(conn: sqlite3.Connection, card_key: str) -> dict:
-    """整張卡：標題、說明、每個欄位的定義與目前值——規則卡頁直接拿這個渲染。"""
+def get_card(conn: sqlite3.Connection, brand_id: str, card_key: str) -> dict:
+    """整張卡：標題、說明、每個欄位的定義與目前值（這個品牌的）——規則卡頁直接拿這個渲染。"""
     if card_key not in CARDS:
         raise ValueError(f"沒有這張規則卡：{card_key}")
     defn = CARDS[card_key]
     fields = [
-        {"key": field_key, "value": get_value(conn, card_key, field_key), **meta}
+        {"key": field_key, "value": get_value(conn, brand_id, card_key, field_key), **meta}
         for field_key, meta in defn["fields"].items()
     ]
     return {"key": card_key, "title": defn["title"], "description": defn["description"], "fields": fields}
 
 
-def list_cards(conn: sqlite3.Connection) -> list:
-    return [get_card(conn, key) for key in CARDS]
+def list_cards(conn: sqlite3.Connection, brand_id: str) -> list:
+    return [get_card(conn, brand_id, key) for key in CARDS]
 
 
-def set_value(conn: sqlite3.Connection, card_key: str, field_key: str, value: float, actor: str) -> None:
-    """改一個門檻值：落庫＋留稽核（brand_id=None，這是平台層級設定，不是品牌資料）。"""
+def set_value(conn: sqlite3.Connection, brand_id: str, card_key: str, field_key: str,
+             value: float, actor: str) -> None:
+    """改一個門檻值：落庫＋留稽核（brand_id 是真正的品牌事件，見 03 §3.1）。"""
     _field_def(card_key, field_key)  # 順便驗證卡／欄位存在
-    before = get_value(conn, card_key, field_key)
+    before = get_value(conn, brand_id, card_key, field_key)
     conn.execute(
-        """INSERT INTO rule_card_value (card_key, field_key, value, updated_at) VALUES (?, ?, ?, ?)
-           ON CONFLICT(card_key, field_key)
+        """INSERT INTO rule_card_value (brand_id, card_key, field_key, value, updated_at)
+           VALUES (?, ?, ?, ?, ?)
+           ON CONFLICT(brand_id, card_key, field_key)
            DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at""",
-        (card_key, field_key, value, now_iso()),
+        (brand_id, card_key, field_key, value, now_iso()),
     )
     write_audit(
-        conn, brand_id=None, entity_type="rule_card_value", entity_id=f"{card_key}.{field_key}",
+        conn, brand_id=brand_id, entity_type="rule_card_value", entity_id=f"{card_key}.{field_key}",
         action="update", actor=actor, before={"value": before}, after={"value": value},
     )
     conn.commit()
 
 
-def reset_card(conn: sqlite3.Connection, card_key: str, actor: str) -> None:
+def reset_card(conn: sqlite3.Connection, brand_id: str, card_key: str, actor: str) -> None:
     """整張卡重設回預設值。已經是預設值的欄位不重覆寫入、不留無意義的稽核紀錄。"""
     if card_key not in CARDS:
         raise ValueError(f"沒有這張規則卡：{card_key}")
     for field_key, meta in CARDS[card_key]["fields"].items():
-        if get_value(conn, card_key, field_key) != meta["default"]:
-            set_value(conn, card_key, field_key, meta["default"], actor)
+        if get_value(conn, brand_id, card_key, field_key) != meta["default"]:
+            set_value(conn, brand_id, card_key, field_key, meta["default"], actor)
 
 
 # ---------------------------------------------------------------------------
 # 素材疲勞判定（示範卡的純函數消費端）
 # ---------------------------------------------------------------------------
 
-def classify_ad_frequency(conn: sqlite3.Connection, audience_type: str, frequency: float) -> str:
+def classify_ad_frequency(conn: sqlite3.Connection, brand_id: str, audience_type: str,
+                          frequency: float) -> str:
     """素材疲勞判定：純程式讀規則卡門檻比大小，回傳 'safe' / 'warning' / 'danger'。
 
     邊界對齊 app/methodology/ads-core.md 的寫法（例如冷受眾「警示 2.5–4.0」）：
@@ -250,8 +293,8 @@ def classify_ad_frequency(conn: sqlite3.Connection, audience_type: str, frequenc
     """
     if audience_type not in AUDIENCE_TYPE_LABELS:
         raise ValueError(f"不認得的受眾類型：{audience_type}")
-    warning = get_value(conn, "ad_creative_fatigue", f"{audience_type}_warning")
-    danger = get_value(conn, "ad_creative_fatigue", f"{audience_type}_danger")
+    warning = get_value(conn, brand_id, "ad_creative_fatigue", f"{audience_type}_warning")
+    danger = get_value(conn, brand_id, "ad_creative_fatigue", f"{audience_type}_danger")
     if frequency > danger:
         return "danger"
     if frequency >= warning:
@@ -263,8 +306,8 @@ def classify_ad_frequency(conn: sqlite3.Connection, audience_type: str, frequenc
 # 樣本數統計等級（issue #18：把「錢的門檻」與「統計的門檻」分開）
 # ---------------------------------------------------------------------------
 
-def sample_size_tier(conn: Optional[sqlite3.Connection], sample_count: Optional[float],
-                     observed_rate: Optional[float]) -> dict:
+def sample_size_tier(conn: Optional[sqlite3.Connection], brand_id: str,
+                     sample_count: Optional[float], observed_rate: Optional[float]) -> dict:
     """依樣本數速查表判斷這組數字算不算「統計等級」，回傳 'statistical' / 'directional'。
 
     沒有可比的轉換率（分母是 0，算不出比例）時，樣本數再多也無從查表比對——一律視為方向性判讀，
@@ -273,6 +316,44 @@ def sample_size_tier(conn: Optional[sqlite3.Connection], sample_count: Optional[
     if not observed_rate or not sample_count:
         return {"level": "directional", "required": None, "baseline": None}
     nearest = min(SAMPLE_SIZE_BASELINES, key=lambda b: abs(b - observed_rate))
-    required = get_value(conn, "sample_size", f"baseline_{round(nearest * 100)}pct")
+    required = get_value(conn, brand_id, "sample_size", f"baseline_{round(nearest * 100)}pct")
     level = "statistical" if sample_count >= required else "directional"
     return {"level": level, "required": required, "baseline": nearest}
+
+
+# ---------------------------------------------------------------------------
+# 品牌刪除清理登記（第 2 刀清理登記處，app.core.cleanup）：分品牌後 rule_card_value
+# 帶了真正的 brand_id，刪品牌要跟著清掉品牌覆寫值，否則留下指向不存在品牌的孤兒列。
+# ---------------------------------------------------------------------------
+
+BRAND_CASCADE_TABLES = (
+    ("rule_card_value", "規則卡覆寫值"),
+)
+
+
+def count_brand_data(conn, brand_id: str) -> list:
+    """刪品牌前的清點，給刪除確認頁列出「按下去會消失什麼」。跟 delete_brand_data
+    讀同一份 BRAND_CASCADE_TABLES——不各寫一份，避免清點與清除不同步。"""
+    counts = []
+    for table, label in BRAND_CASCADE_TABLES:
+        n = conn.execute(
+            f"SELECT COUNT(*) AS c FROM {table} WHERE brand_id = ?", (brand_id,)
+        ).fetchone()["c"]
+        if n:
+            counts.append((label, n))
+    return counts
+
+
+def delete_brand_data(conn, brand_id: str) -> dict:
+    """清掉本模組掛在該品牌下的資料，登記進 app.core.cleanup 給 delete_brand() 呼叫用。
+    只下 DELETE、不 commit、不 rollback（commit 與 rollback 統一在
+    brand_intelligence.delete_brand()）。"""
+    counts = dict(count_brand_data(conn, brand_id))
+    for table, _label in BRAND_CASCADE_TABLES:
+        conn.execute(f"DELETE FROM {table} WHERE brand_id = ?", (brand_id,))
+    return counts
+
+
+cleanup.register("規則卡覆寫值", count_brand=count_brand_data, delete_brand=delete_brand_data,
+                 brand_tables={t for t, _ in BRAND_CASCADE_TABLES},
+                 count_product=None, delete_product=None, product_tables=frozenset())

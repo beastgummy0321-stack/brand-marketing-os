@@ -21,8 +21,11 @@ from pathlib import Path
 
 from app.ads import repository as ads_repo  # noqa: F401  # import 才會觸發它的自我登記
 from app.brand_intelligence import repository as repo  # noqa: F401  # 同上，觸發它的自我登記
+from app.core import calendar_dismiss as core_calendar_dismiss  # noqa: F401  # 同上，觸發它的自我登記
+from app.core import campaign_skip as core_campaign_skip  # noqa: F401  # 同上，觸發它的自我登記
 from app.core import cleanup, db
 from app.core import interrupts as core_interrupts  # noqa: F401  # 同上，觸發它的自我登記
+from app.core import rule_cards as core_rule_cards  # noqa: F401  # 同上，觸發它的自我登記
 from app.intake import repository as intake_repo  # noqa: F401  # import 才會觸發它的自我登記
 from app.orders import repository as orders_repo  # noqa: F401  # 同上，觸發它的自我登記
 

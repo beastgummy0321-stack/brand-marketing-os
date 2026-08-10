@@ -6,6 +6,12 @@
 {% from "_components/field.html" import field %}
 {% from "_components/definition_list.html" import definition_list %}
 {% from "_components/wizard_steps.html" import progress_rail %}
+{% from "_components/pacing_curve_chart.html" import pacing_curve_chart %}
+
+{% block head_extra %}
+<script src="/static/vendor/echarts.min.js"></script>
+<script src="/static/pacing_chart.js"></script>
+{% endblock %}
 
 {% macro paste_row(label, value, row_id, brand_id, cycle_id, field_key) %}
 <div class="paste-row">
@@ -37,12 +43,59 @@
 
 <h1>投放交接包：照著貼就好</h1>
 
+{# 排期曲線定案顯示（票 pacing-curve，G9 契約：計畫頁即時預覽與這裡共用同一個圖表元件，
+   資料是開期核准當下就算好、存進 derived_plan_json 的逐日陣列，不重算）。 #}
+{% if cycle.pacing_strategy %}
+<section class="card pacing-card">
+  <h3>這幾天該花多少：{{ cycle.pacing_strategy_label if cycle.pacing_strategy_label else cycle.pacing_strategy }}</h3>
+  <p class="plan-why">{{ cycle.pacing_reason }}</p>
+  {{ pacing_curve_chart('pacing-chart-handoff', cycle.daily_budgets) }}
+</section>
+{% endif %}
+
+<section class="card" id="qa-launch-block">
+  <h3>上線前提醒</h3>
+  <p class="section-desc">
+    這五項本來就該投放前自己設定好，系統只負責提醒、不會卡住你送出授權——
+    按「確認已完成」後，這個品牌之後開新檔期不會再看到這項警示。
+  </p>
+
+  {% if qa_launch.unconfirmed > 0 %}
+  {{ banner('danger', '還有 ' ~ qa_launch.unconfirmed ~ ' 項尚未確認') }}
+  {% else %}
+  {{ banner('ok', '上線前提醒都確認過了') }}
+  {% endif %}
+
+  {% for item in qa_launch.checklist_items %}
+  <div class="claim-block {{ 'claim-block-approved' if item.checked else 'claim-block-forbidden' }}">
+    <div class="claim-row">
+      <div class="claim-text">
+        {{ item.label }}
+        {% if item.checked %}
+        {{ badge('已確認' ~ ('（' ~ item.checked_by ~ '）' if item.checked_by else ''), 'ok') }}
+        {% else %}
+        {{ badge('尚未確認', 'danger') }}
+        {% endif %}
+      </div>
+      <div class="claim-meta">{{ item.help }}</div>
+      <div class="claim-meta">
+        <a class="link" href="{{ item.link_url }}"{% if item.link_url.startswith('http') %} target="_blank" rel="noopener"{% endif %}>{{ item.link_label }}</a>
+      </div>
+      <form method="post" action="/brands/{{ brand.id }}/ads/{{ cycle.id }}/handoff/qa-launch/{{ item.key }}" class="inline-form">
+        <input type="hidden" name="checked" value="{{ '0' if item.checked else '1' }}">
+        <button type="submit" class="btn-text">{{ '取消確認' if item.checked else '確認已完成' }}</button>
+      </form>
+    </div>
+  </div>
+  {% endfor %}
+</section>
+
 {% if extras %}
-<section class="card">
+<section class="card" id="account-structure">
   <h3>帳戶結構怎麼開</h3>
   <p class="section-desc">
     {{ extras.structure.tier_label }}：{{ extras.structure.structure_label }}。
-    門檻可以在 <a class="link" href="/rule-cards">規則卡頁</a>看、改。
+    門檻可以在 <a class="link" href="/brands/{{ brand.id }}/settings/ads">設定中心</a>看、改。
   </p>
   <p>{{ extras.structure.note }}</p>
   <ul class="plan-structure-groups">
@@ -191,7 +244,7 @@
 {% endif %}
 
 {% if packages %}
-<p class="page-lede">
+<p class="page-lede" id="handoff-packages">
   打開 Meta 廣告管理員，一格一格照著貼。每個欄位旁邊的「複製」按下去就複製好了，
   貼完一組回來按最下面的「我已經建好了」，填入 Meta 給的編號。
 </p>

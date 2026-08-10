@@ -21,17 +21,64 @@
    （目前唯一存在的分支——見決策 0037 第三節，第 2 條分支尚未上線）。預設
    `include_cross_track=False`：只取這個分支自己學到的東西；開啟後會連別分支的學習一併
    帶入，並在該條目後標示「來源分支：xxx」，不得讓讀者誤以為是本分支自己驗證過的結論。
+7. 規則進 prompt 上限（決策 0012 第二、三節）：hard 規則全部保留；soft 規則依
+   `confirmed_at` 新到舊排序，兩者合計超過上限（`rule_cards`「rule_prompt_cap」卡）時，
+   排比較後面的 soft 規則不進 prompt——不悄悄消失，`list_overflow_rules()` 供累積智慧頁
+   顯示「有 N 條規則因超過上限未生效」清單。
 """
 
 import sqlite3
 from typing import Optional
 
 from app.brand_intelligence import repository as repo
+from app.core import rule_cards
 
 _UNVALIDATED_STATUSES = ("proposed", "testing")
 
 # A4 目前唯一存在的分支代號（第 2 條分支上線前，所有呼叫端實質上都是廣告分支）。
 DEFAULT_TRACK = "ads"
+
+
+def _select_rules_for_prompt(conn: sqlite3.Connection, brand_id: str, rules: list) -> tuple:
+    """規則進 prompt 的上限與排序（決策 0012 第二節）：hard 規則全部保留；soft 規則依
+    `confirmed_at`（越新越優先）排序，兩者合計超過上限（rule_cards「rule_prompt_cap.
+    max_active_rules」，該品牌覆寫值或系統預設 20）時，排比較後面的 soft 規則不進 prompt。
+
+    回傳 (included, overflow)——overflow 供累積智慧頁「未生效清單」顯示用
+    （list_overflow_rules，決策 0012 第三節：超額不悄悄丟棄）。
+    """
+    cap = int(rule_cards.get_value(conn, brand_id, "rule_prompt_cap", "max_active_rules"))
+    hard = [r for r in rules if r["severity"] == "hard"]
+    soft_sorted = sorted(
+        (r for r in rules if r["severity"] != "hard"),
+        key=lambda r: r["confirmed_at"] or r["created_at"],
+        reverse=True,
+    )
+    remaining = max(cap - len(hard), 0)
+    return hard + soft_sorted[:remaining], soft_sorted[remaining:]
+
+
+def list_overflow_rules(conn: sqlite3.Connection, brand_id: str) -> list:
+    """因超過生成提示詞上限而未生效的規則清單（累積智慧頁用，決策 0012 第三節：超額不悄悄
+    丟棄）。跟 compile() 用同一顆 `_select_rules_for_prompt` 排序＋套上限，且涵蓋 compile()
+    實際會組出的每一種組合：品牌層任務（只有品牌整體規則）＋每個生效中產品的產品層任務
+    （品牌整體＋該產品專屬規則合併後才套上限，跟 `list_rules_for_product` 一致）。合併後
+    才超過上限、但品牌整體規則單獨算沒超過的產品專屬規則，只在產品層任務出現，若只算品牌
+    層會被漏掉——這裡一併收進來，依 id 去重後回傳。
+    """
+    brand_rules = [r for r in repo.list_rules_for_brand(conn, brand_id) if r["product_id"] is None]
+    _included, overflow = _select_rules_for_prompt(conn, brand_id, brand_rules)
+    overflow_by_id = {r["id"]: r for r in overflow}
+
+    for product in repo.list_products(conn, brand_id):
+        if product["status"] != "active":
+            continue
+        product_rules = repo.list_rules_for_product(conn, brand_id, product["id"])
+        _included, product_overflow = _select_rules_for_prompt(conn, brand_id, product_rules)
+        for r in product_overflow:
+            overflow_by_id[r["id"]] = r
+
+    return list(overflow_by_id.values())
 
 
 def format_claims(claims: list) -> list:
@@ -103,11 +150,12 @@ def compile(conn: sqlite3.Connection, brand_id: str, product_id: Optional[str] =
     )
 
     if product_id is not None:
-        rules = repo.list_rules_for_product(conn, brand_id, product_id)
+        rules_all = repo.list_rules_for_product(conn, brand_id, product_id)
         claims = repo.list_claims_for_product(conn, brand_id, product_id)
     else:
-        rules = [r for r in repo.list_rules_for_brand(conn, brand_id) if r["product_id"] is None]
+        rules_all = [r for r in repo.list_rules_for_brand(conn, brand_id) if r["product_id"] is None]
         claims = [c for c in repo.list_claims_for_brand(conn, brand_id) if c["product_id"] is None]
+    rules, _overflow_rules = _select_rules_for_prompt(conn, brand_id, rules_all)
 
     learnings = repo.list_learnings_for_prompt(
         conn, brand_id, track=track, product_id=product_id, include_cross_track=include_cross_track)
