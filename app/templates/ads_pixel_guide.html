@@ -6,7 +6,12 @@
 
 {% block title %}Pixel 安裝教學 — {{ brand.name }} — 行銷作業系統{% endblock %}
 
+{% block head_extra %}
+<link rel="stylesheet" href="/static/guide_refresh.css">
+{% endblock %}
+
 {% block content %}
+<div class="guide-refresh">
 {{ breadcrumb(breadcrumb_items) }}
 
 {% if banner_msg %}
@@ -50,4 +55,5 @@
   用的平台不在上面這三個？去該平台的官方說明中心搜尋「Meta Pixel」或「Facebook 像素」，
   多數電商平台都有現成的整合設定，不用自己手動貼程式碼。
 </p>
+</div>
 {% endblock %}

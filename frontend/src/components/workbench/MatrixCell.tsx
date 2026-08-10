@@ -1,6 +1,7 @@
 import { cn, PRESS_FEEDBACK } from "@/lib/utils";
 import { formatUsd } from "@/lib/format";
 import type { MatrixFormatCell } from "@/lib/workbenchApi";
+import { GlossaryTerm } from "./shared/GlossaryTerm";
 
 /** 已採用／候選標籤：沿用 CampaignStageBadge 的圓角膠囊配色手法，直接借 --color-success
  * token，不新增顏色。側板（票 17）也要用同一顆標籤，故 export。
@@ -21,7 +22,17 @@ export function ThemeStatusTag({ status }: { status: string }) {
         adopted ? "border-success/30" : "border-border",
       )}
     >
-      {adopted ? "已採用" : "候選"}
+      {adopted ? (
+        "已採用"
+      ) : (
+        /* 「候選」旁的白話詞彙圖示（票 01-glossary-icon，G11 契約）：只做這個字，「已採用」
+         * 不需要——persona 實測只點名「候選」看不懂，見 CONTEXT.md「詞彙表機制」節。這顆
+         * 標籤側板（ThemePanel）也共用，圖示跟著一起出現在兩處，避免依情境分岔成兩份標籤。 */
+        <span className="inline-flex items-center gap-1">
+          候選
+          <GlossaryTerm termKey="candidate" />
+        </span>
+      )}
     </span>
   );
 }
@@ -62,12 +73,22 @@ export function MatrixCell({
     return (
       <div className="flex flex-col gap-1.5">
         {cell.themes.map((theme) => (
-          <button
+          // 票 01-glossary-icon：這排原本是 <button>，但「候選」徽章旁現在多了個 GlossaryTerm
+          // 的「?」按鈕——<button> 內不得再放互動元素（HTML content model 禁止、螢幕閱讀器也
+          // 不吃這套嵌套），改用 role="button"＋tabIndex 手動補鍵盤啟用，語意等價於原本的
+          // <button>。
+          <div
             key={theme.id}
-            type="button"
+            role="button"
+            tabIndex={0}
             onClick={() => onOpenTheme(theme.id, siblingThemeIds)}
+            onKeyDown={(event) => {
+              if (event.key !== "Enter" && event.key !== " ") return;
+              event.preventDefault();
+              onOpenTheme(theme.id, siblingThemeIds);
+            }}
             className={cn(
-              "flex w-full items-center justify-between gap-2 rounded-lg border border-border bg-card px-3 py-2 text-left shadow-[var(--shadow-card)] hover:border-primary",
+              "flex w-full cursor-pointer items-center justify-between gap-2 rounded-lg border border-border bg-card px-3 py-2 text-left shadow-[var(--shadow-card)] hover:border-primary",
               PRESS_FEEDBACK,
             )}
           >
@@ -75,7 +96,7 @@ export function MatrixCell({
               {theme.name}
             </span>
             <ThemeStatusTag status={theme.status} />
-          </button>
+          </div>
         ))}
       </div>
     );

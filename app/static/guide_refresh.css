@@ -1,0 +1,78 @@
+/* app/static/guide_refresh.css —— 教學頁視覺換皮（票 02-tutorial-pages-visual-refresh）
+
+   範圍：只有 Pixel／GA4／顧客口碑蒐集三張教學頁（ads_pixel_guide.html／ads_ga4_guide.html／
+   customer_voice_guide.html）套用，靠頁面自己包一層 `.guide-refresh` 掛勾，不動
+   app.css 的全站 :root token、不影響其他 70 幾張沿用 console.html 的頁面，也不動側欄
+   （側欄在 .guide-refresh 範圍外，維持全站一致的導覽外觀）。
+
+   決策依據：.scratch/grill/GRILL-DONE-G11-glossary-icon-contract.md 一
+   （「只換視覺、內容不動、留在 Jinja」，命中畫面契約憲章一適用判定表「只改樣式／文案／
+   色彩／間距 → 免」，不必走原型流程）。
+
+   顏色／字體／圓角數值照抄 frontend/src/styles/tokens.css（票 01 立下的唯一 token 來源檔，
+   該檔頭註明「後續票（02～09）沿用這裡的顏色／字體／圓角變數，不得在元件裡各自重寫 hex
+   色碼」）。那份檔案是 React 殼的建置輸入，Jinja 頁面讀不到，這裡是同一組數值的靜態抄本，
+   不是另立一套新配色。app.css 既有的元件規則（.card／.btn／.banner／.breadcrumb／
+   .data-table…）全部沿用不動，只靠 CSS 自訂屬性（--bg-page 等）在 `.guide-refresh`
+   範圍內覆寫成新值，元件規則本身照舊透過 var() 讀值——不重寫任何一條既有規則。
+
+   app.css 沒有對應 token 的兩個值：
+   - --border-strong：新設計系統走 shadcn 單一細邊框風格（tokens.css 頭註「取代玻璃擬態，
+     卡片＋細邊框」），不分兩級粗細，直接沿用 --border 同一個值。
+   - --accent-bg／--ok-bg／--warn-bg／--danger-bg：tokens.css 只給品牌色／狀態「點」用的
+     實色（CTA／圖表／燈號），沒有給大面積底色用的淺色版本，用 color-mix() 從同一個實色
+     token 算淡色，不手選新 hex。
+*/
+
+@import url("https://fonts.googleapis.com/css2?family=Calistoga&family=Inter:wght@400;500;600;700&display=swap");
+
+.guide-refresh {
+  /* 背景／卡片／邊框：對應 tokens.css --color-background／--color-card／--color-muted／--color-border */
+  --bg-page: #f8fafc;
+  --bg-surface: #ffffff;
+  --bg-subtle: #e8ecf1;
+  --border: #e2e8f0;
+  --border-strong: #e2e8f0;
+
+  /* 文字：對應 tokens.css --color-foreground／--color-secondary／--color-muted-foreground */
+  --text: #0f172a;
+  --text-secondary: #334155;
+  --text-muted: #64748b;
+  --text-on-accent: #ffffff;
+
+  /* 品牌強調色：對應 tokens.css --color-primary，底色比照下方狀態色用 color-mix() 算淡色 */
+  --accent: #0369a1;
+  --accent-bg: color-mix(in srgb, #0369a1 12%, white);
+
+  /* 狀態色：色相對齊 tokens.css --color-success／--color-warning／--color-destructive，
+     底色用 color-mix() 從同一實色淡化，不新增未對照過的 hex。 */
+  --ok: #16a34a;
+  --ok-bg: color-mix(in srgb, #16a34a 12%, white);
+  --warn: #d97706;
+  --warn-bg: color-mix(in srgb, #d97706 12%, white);
+  --danger: #dc2626;
+  --danger-bg: color-mix(in srgb, #dc2626 12%, white);
+
+  /* 字體：對應 tokens.css --font-sans（Inter，內文與介面文字） */
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+
+  /* 圓角：對應 tokens.css --radius-sm／--radius-md */
+  --radius-sm: 0.375rem;
+  --radius-md: 0.5rem;
+
+  background: var(--bg-page);
+  color: var(--text);
+  font-family: var(--font-sans);
+}
+
+/* H1 用 tokens.css --font-display（Calistoga，頭註明講「做大標題」），內文與其餘標題
+   維持 --font-sans；只改 font-family 這個子屬性，字重／字級／行高沿用既有 --text-3xl。 */
+.guide-refresh h1 {
+  font-family: "Calistoga", var(--font-sans);
+}
+
+/* 卡片陰影：對應 tokens.css --shadow-card（「卡片用極淺陰影，不做玻璃模糊」），
+   app.css 既有 .card 沒有陰影屬性，這裡只加這一條、不動 app.css 本身。 */
+.guide-refresh .card {
+  box-shadow: 0 1px 2px 0 rgb(15 23 42 / 0.04), 0 1px 3px 0 rgb(15 23 42 / 0.06);
+}

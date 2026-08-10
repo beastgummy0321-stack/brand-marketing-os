@@ -4,6 +4,7 @@ import { EmptyState } from "@/components/layout/EmptyState";
 import { fetchMatrix, generateTheme, type MatrixCellRow, type MatrixFormatCell } from "@/lib/workbenchApi";
 import { MatrixCell } from "./MatrixCell";
 import { ThemePanel } from "./ThemePanel";
+import { GlossaryTerm } from "./shared/GlossaryTerm";
 
 /** 欄＝格式，固定順序與比例標籤（app/creative/format_specs.py FORMAT_SPECS，比例查證日
  * 2026-08-07／08）。矩陣資料的 `formats` 物件本身用格式 key 當鍵，這份表只補人看得懂的
@@ -211,7 +212,13 @@ export function MatrixPage({ brandId, cycleId }: { brandId: string; cycleId: str
       />
       <div>
         <h1 className="font-display text-2xl text-foreground">矩陣頁</h1>
-        <p className="text-sm text-muted-foreground">切角 × 格式的生成矩陣，檔期 {cycleId}</p>
+        <p className="text-sm text-muted-foreground">
+          <span className="inline-flex items-center gap-1">
+            切角
+            <GlossaryTerm termKey="angle" />
+          </span>
+          {" "}× 格式的生成矩陣，檔期 {cycleId}
+        </p>
       </div>
       <CreativeFolderBar />
       {content}

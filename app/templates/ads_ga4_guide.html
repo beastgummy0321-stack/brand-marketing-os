@@ -6,7 +6,12 @@
 
 {% block title %}GA4 服務帳戶教學 — {{ brand.name }} — 行銷作業系統{% endblock %}
 
+{% block head_extra %}
+<link rel="stylesheet" href="/static/guide_refresh.css">
+{% endblock %}
+
 {% block content %}
+<div class="guide-refresh">
 {{ breadcrumb(breadcrumb_items) }}
 
 {% if banner_msg %}
@@ -67,4 +72,5 @@
   同步一次；同步結果會誠實顯示 purchase 事件有沒有收到——沒收到不會假裝有，
   會提示回頭確認第 4 步的轉換事件設定。
 </p>
+</div>
 {% endblock %}

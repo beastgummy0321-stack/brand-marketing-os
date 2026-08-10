@@ -3,7 +3,12 @@
 
 {% block title %}去哪找顧客原話 — {{ brand.name }} — 行銷作業系統{% endblock %}
 
+{% block head_extra %}
+<link rel="stylesheet" href="/static/guide_refresh.css">
+{% endblock %}
+
 {% block content %}
+<div class="guide-refresh">
 {{ breadcrumb(breadcrumb_items) }}
 <a class="back-link" href="/brands/{{ brand.id }}/hub/customer-voice"><span aria-hidden="true">←</span> 回到顧客原話</a>
 <div class="form-page guide-page">
@@ -38,5 +43,6 @@
 
 <p>反例（低價值、不值得收）：</p>
 <p class="guide-example">「好用+1」「推推」「效果不錯」——沒有情境、沒有具體用詞，只是附和，抽不出任何可以放進文案的素材。</p>
+</div>
 </div>
 {% endblock %}
