@@ -1,12 +1,15 @@
 import { useState } from "react";
 import { ImageOff } from "lucide-react";
 import { EmptyState } from "@/components/layout/EmptyState";
+import { Pager } from "@/components/layout/Pager";
 import { deleteAsset, type LibraryAsset, type LibraryProductOption } from "@/lib/libraryApi";
+import { usePagination } from "@/lib/usePagination";
 import { Badge } from "../shared/Badge";
 import { InlineDeleteButton } from "../shared/InlineDeleteButton";
 import { AssetUploadPanel } from "../panels/AssetUploadPanel";
 
-/** 官方素材分頁（契約 S5.23–S5.27）：卡片格線，只有刪除、沒有修改（換圖就刪掉重傳）。 */
+/** 官方素材分頁（契約 S5.23–S5.27）：卡片格線，只有刪除、沒有修改（換圖就刪掉重傳），
+ * 超過 12 張分頁（互動鐵則⑥）。 */
 export function AssetsTab({
   brandId,
   assets,
@@ -19,6 +22,7 @@ export function AssetsTab({
   onChanged: () => void;
 }) {
   const [uploadOpen, setUploadOpen] = useState(false);
+  const { page, pageCount, totalCount, pageItems, goToPage, topRef } = usePagination(assets);
 
   return (
     <div className="flex flex-col gap-4">
@@ -39,15 +43,18 @@ export function AssetsTab({
           description="Logo、產品照、包裝設計等正式圖檔，上傳後之後產出內容時可以直接取用。"
         />
       ) : (
-        <div className="grid grid-cols-4 gap-4">
-          {assets.map((asset) => (
-            <AssetCard
-              key={asset.id}
-              asset={asset}
-              brandId={brandId}
-              onDeleted={onChanged}
-            />
-          ))}
+        <div ref={topRef} className="flex flex-col gap-3">
+          <div className="grid grid-cols-4 gap-4">
+            {pageItems.map((asset) => (
+              <AssetCard
+                key={asset.id}
+                asset={asset}
+                brandId={brandId}
+                onDeleted={onChanged}
+              />
+            ))}
+          </div>
+          <Pager page={page} pageCount={pageCount} totalCount={totalCount} onChange={goToPage} />
         </div>
       )}
 

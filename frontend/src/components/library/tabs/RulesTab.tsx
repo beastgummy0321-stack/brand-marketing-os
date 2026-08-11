@@ -1,13 +1,15 @@
 import { useState } from "react";
 import { EmptyState } from "@/components/layout/EmptyState";
+import { Pager } from "@/components/layout/Pager";
 import { deleteRule, type LibraryProductOption, type LibraryRule } from "@/lib/libraryApi";
+import { usePagination } from "@/lib/usePagination";
 import { Badge } from "../shared/Badge";
 import { InlineDeleteButton } from "../shared/InlineDeleteButton";
 import { RulePanel } from "../panels/RulePanel";
 
 type PanelState = { mode: "closed" } | { mode: "new" } | { mode: "edit"; rule: LibraryRule };
 
-/** 限制規則分頁（契約 S5.14–S5.18）：單一清單，不分段。 */
+/** 限制規則分頁（契約 S5.14–S5.18）：單一清單，不分段，超過 12 列分頁（互動鐵則⑥）。 */
 export function RulesTab({
   brandId,
   rules,
@@ -20,6 +22,7 @@ export function RulesTab({
   onChanged: () => void;
 }) {
   const [panel, setPanel] = useState<PanelState>({ mode: "closed" });
+  const { page, pageCount, totalCount, pageItems, goToPage, topRef } = usePagination(rules);
 
   return (
     <div className="flex flex-col gap-4">
@@ -37,52 +40,55 @@ export function RulesTab({
       {rules.length === 0 ? (
         <EmptyState title="還沒有任何限制規則" description="規則是產出內容時不能踩的線，例如禁用字詞、素材使用規定。" />
       ) : (
-        <div className="overflow-x-auto rounded-md border border-border">
-          <table className="w-full text-left text-sm">
-            <thead className="bg-muted text-muted-foreground">
-              <tr>
-                <th className="px-3 py-2 font-medium">嚴重度</th>
-                <th className="px-3 py-2 font-medium">類型</th>
-                <th className="px-3 py-2 font-medium">內容</th>
-                <th className="px-3 py-2 font-medium">適用範圍</th>
-                <th className="px-3 py-2 font-medium">操作</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rules.map((rule) => (
-                <tr key={rule.id} className="border-t border-border align-top">
-                  <td className="whitespace-nowrap px-3 py-2">
-                    <Badge tone={rule.severity === "hard" ? "danger" : "neutral"}>
-                      {rule.severity === "hard" ? "必須遵守" : "建議遵守"}
-                    </Badge>
-                  </td>
-                  <td className="whitespace-nowrap px-3 py-2">
-                    <Badge>{rule.rule_type_label}</Badge>
-                  </td>
-                  <td className="px-3 py-2 text-foreground">{rule.content}</td>
-                  <td className="whitespace-nowrap px-3 py-2 text-muted-foreground">{rule.scope_label}</td>
-                  <td className="whitespace-nowrap px-3 py-2">
-                    <div className="flex items-center gap-3">
-                      <button
-                        type="button"
-                        onClick={() => setPanel({ mode: "edit", rule })}
-                        className="text-xs text-primary hover:underline"
-                      >
-                        修改
-                      </button>
-                      <InlineDeleteButton
-                        confirmText="確定要刪除這條規則？"
-                        onDelete={async () => {
-                          await deleteRule(brandId, rule.id);
-                          onChanged();
-                        }}
-                      />
-                    </div>
-                  </td>
+        <div ref={topRef} className="flex flex-col gap-3">
+          <div className="overflow-x-auto rounded-md border border-border">
+            <table className="w-full text-left text-sm">
+              <thead className="bg-muted text-muted-foreground">
+                <tr>
+                  <th className="px-3 py-2 font-medium">嚴重度</th>
+                  <th className="px-3 py-2 font-medium">類型</th>
+                  <th className="px-3 py-2 font-medium">內容</th>
+                  <th className="px-3 py-2 font-medium">適用範圍</th>
+                  <th className="px-3 py-2 font-medium">操作</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {pageItems.map((rule) => (
+                  <tr key={rule.id} className="border-t border-border align-top">
+                    <td className="whitespace-nowrap px-3 py-2">
+                      <Badge tone={rule.severity === "hard" ? "danger" : "neutral"}>
+                        {rule.severity === "hard" ? "必須遵守" : "建議遵守"}
+                      </Badge>
+                    </td>
+                    <td className="whitespace-nowrap px-3 py-2">
+                      <Badge>{rule.rule_type_label}</Badge>
+                    </td>
+                    <td className="px-3 py-2 text-foreground">{rule.content}</td>
+                    <td className="whitespace-nowrap px-3 py-2 text-muted-foreground">{rule.scope_label}</td>
+                    <td className="whitespace-nowrap px-3 py-2">
+                      <div className="flex items-center gap-3">
+                        <button
+                          type="button"
+                          onClick={() => setPanel({ mode: "edit", rule })}
+                          className="text-xs text-primary hover:underline"
+                        >
+                          修改
+                        </button>
+                        <InlineDeleteButton
+                          confirmText="確定要刪除這條規則？"
+                          onDelete={async () => {
+                            await deleteRule(brandId, rule.id);
+                            onChanged();
+                          }}
+                        />
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <Pager page={page} pageCount={pageCount} totalCount={totalCount} onChange={goToPage} />
         </div>
       )}
 

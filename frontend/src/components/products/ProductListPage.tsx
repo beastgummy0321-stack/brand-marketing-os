@@ -2,8 +2,10 @@ import { useEffect, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { EmptyState } from "@/components/layout/EmptyState";
+import { Pager } from "@/components/layout/Pager";
 import { Skeleton } from "@/components/layout/Skeleton";
 import { fetchProductList, optionLabel, type ProductListItem } from "@/lib/productsApi";
+import { usePagination } from "@/lib/usePagination";
 import { Badge } from "./shared/Badge";
 import { ProductNewPanel } from "./panels/ProductNewPanel";
 
@@ -24,6 +26,8 @@ export function ProductListPage({ brandId }: { brandId: string }) {
   const [state, setState] = useState<LoadState>({ status: "loading" });
   const [newPanelOpen, setNewPanelOpen] = useState(false);
   const navigate = useNavigate();
+  const items = state.status === "ready" ? state.items : [];
+  const { page, pageCount, totalCount, pageItems, goToPage, topRef } = usePagination(items);
 
   function load() {
     setState({ status: "loading" });
@@ -61,55 +65,58 @@ export function ProductListPage({ brandId }: { brandId: string }) {
     );
   } else {
     content = (
-      <div className="overflow-x-auto rounded-md border border-border">
-        <table className="w-full text-left text-sm">
-          <thead className="bg-muted text-muted-foreground">
-            <tr>
-              <th className="px-3 py-2 font-medium">產品名稱</th>
-              <th className="px-3 py-2 font-medium">事實數</th>
-              <th className="px-3 py-2 font-medium">待確認</th>
-              <th className="px-3 py-2 font-medium">產品經濟數字</th>
-            </tr>
-          </thead>
-          <tbody>
-            {state.items.map((item) => (
-              <tr key={item.id} className="border-t border-border">
-                <td className="px-3 py-2">
-                  <button
-                    type="button"
-                    onClick={() => navigate(`/brands/${brandId}/products/${item.id}`)}
-                    className="text-left font-medium text-primary hover:underline"
-                  >
-                    {item.name}
-                  </button>
-                  {item.status === "archived" && (
-                    <span className="ml-2">
-                      <Badge>已封存</Badge>
-                    </span>
-                  )}
-                </td>
-                <td className="whitespace-nowrap px-3 py-2 text-foreground">{item.fact_count}</td>
-                <td className="whitespace-nowrap px-3 py-2">
-                  {item.pending_fact_count > 0 && (
+      <div ref={topRef} className="flex flex-col gap-3">
+        <div className="overflow-x-auto rounded-md border border-border">
+          <table className="w-full text-left text-sm">
+            <thead className="bg-muted text-muted-foreground">
+              <tr>
+                <th className="px-3 py-2 font-medium">產品名稱</th>
+                <th className="px-3 py-2 font-medium">事實數</th>
+                <th className="px-3 py-2 font-medium">待確認</th>
+                <th className="px-3 py-2 font-medium">產品經濟數字</th>
+              </tr>
+            </thead>
+            <tbody>
+              {pageItems.map((item) => (
+                <tr key={item.id} className="border-t border-border">
+                  <td className="px-3 py-2">
                     <button
                       type="button"
-                      onClick={() => navigate(`/brands/${brandId}/products/${item.id}?tab=facts`)}
-                      className="inline-flex items-center gap-1.5 text-warning hover:underline"
+                      onClick={() => navigate(`/brands/${brandId}/products/${item.id}`)}
+                      className="text-left font-medium text-primary hover:underline"
                     >
-                      <span className="h-1.5 w-1.5 rounded-full bg-warning" aria-hidden="true" />
-                      待確認 {item.pending_fact_count} 項
+                      {item.name}
                     </button>
-                  )}
-                </td>
-                <td className="whitespace-nowrap px-3 py-2">
-                  <Badge tone={item.economics_status === "none" ? "neutral" : item.economics_status === "pending" ? "warning" : "success"}>
-                    {optionLabel(ECONOMICS_LABEL, item.economics_status)}
-                  </Badge>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+                    {item.status === "archived" && (
+                      <span className="ml-2">
+                        <Badge>已封存</Badge>
+                      </span>
+                    )}
+                  </td>
+                  <td className="whitespace-nowrap px-3 py-2 text-foreground">{item.fact_count}</td>
+                  <td className="whitespace-nowrap px-3 py-2">
+                    {item.pending_fact_count > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => navigate(`/brands/${brandId}/products/${item.id}?tab=facts`)}
+                        className="inline-flex items-center gap-1.5 text-warning hover:underline"
+                      >
+                        <span className="h-1.5 w-1.5 rounded-full bg-warning" aria-hidden="true" />
+                        待確認 {item.pending_fact_count} 項
+                      </button>
+                    )}
+                  </td>
+                  <td className="whitespace-nowrap px-3 py-2">
+                    <Badge tone={item.economics_status === "none" ? "neutral" : item.economics_status === "pending" ? "warning" : "success"}>
+                      {optionLabel(ECONOMICS_LABEL, item.economics_status)}
+                    </Badge>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <Pager page={page} pageCount={pageCount} totalCount={totalCount} onChange={goToPage} />
       </div>
     );
   }

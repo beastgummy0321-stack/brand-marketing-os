@@ -1,6 +1,9 @@
-import { useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { EmptyState } from "@/components/layout/EmptyState";
+import { Pager } from "@/components/layout/Pager";
 import { deleteFact, type LibraryBrandFact } from "@/lib/libraryApi";
+import { usePagination } from "@/lib/usePagination";
+import { cn } from "@/lib/utils";
 import { Badge } from "../shared/Badge";
 import { InlineDeleteButton } from "../shared/InlineDeleteButton";
 import { FactConfirmPanel } from "../panels/FactConfirmPanel";
@@ -12,7 +15,8 @@ type PanelState =
   | { mode: "edit"; fact: LibraryBrandFact }
   | { mode: "confirm"; fact: LibraryBrandFact };
 
-/** 品牌事實分頁（契約 S5.5–S5.13）：已確認／待確認兩段落，各自獨立判斷空狀態。 */
+/** 品牌事實分頁（契約 S5.5–S5.13）：已確認／待確認兩段落，各自獨立判斷空狀態、各自分頁
+ * （互動鐵則⑥）。類型篩選 chips 聚合自資料裡出現過的 fact_type，不硬編清單。 */
 export function FactsTab({
   brandId,
   facts,
@@ -23,8 +27,26 @@ export function FactsTab({
   onChanged: () => void;
 }) {
   const [panel, setPanel] = useState<PanelState>({ mode: "closed" });
-  const confirmed = facts.filter((f) => f.status === "confirmed");
-  const pending = facts.filter((f) => f.status === "pending");
+  const [typeFilter, setTypeFilter] = useState<string | null>(null);
+
+  const types = useMemo(() => {
+    const seen = new Map<string, string>();
+    for (const f of facts) if (!seen.has(f.fact_type)) seen.set(f.fact_type, f.fact_type_label);
+    return [...seen.entries()];
+  }, [facts]);
+
+  const filtered = typeFilter ? facts.filter((f) => f.fact_type === typeFilter) : facts;
+  const confirmed = filtered.filter((f) => f.status === "confirmed");
+  const pending = filtered.filter((f) => f.status === "pending");
+
+  const confirmedPage = usePagination(confirmed);
+  const pendingPage = usePagination(pending);
+
+  function selectType(type: string | null) {
+    setTypeFilter(type);
+    confirmedPage.resetPage();
+    pendingPage.resetPage();
+  }
 
   return (
     <div className="flex flex-col gap-6">
@@ -39,7 +61,20 @@ export function FactsTab({
         </button>
       </div>
 
-      <section className="flex flex-col gap-3">
+      {types.length > 1 && (
+        <div className="flex flex-wrap gap-2">
+          <FilterChip active={typeFilter === null} onClick={() => selectType(null)}>
+            全部
+          </FilterChip>
+          {types.map(([type, label]) => (
+            <FilterChip key={type} active={typeFilter === type} onClick={() => selectType(type)}>
+              {label}
+            </FilterChip>
+          ))}
+        </div>
+      )}
+
+      <section ref={confirmedPage.topRef} className="flex flex-col gap-3">
         <h3 className="text-sm font-semibold text-foreground">已確認（{confirmed.length}）</h3>
         {confirmed.length === 0 ? (
           <EmptyState
@@ -47,26 +82,34 @@ export function FactsTab({
             description="品牌事實是定位、受眾、語調這類長期資訊，是後面所有內容的依據。"
           />
         ) : (
-          <ul className="flex flex-col gap-2">
-            {confirmed.map((fact) => (
-              <FactCard
-                key={fact.id}
-                fact={fact}
-                brandId={brandId}
-                onEdit={() => setPanel({ mode: "edit", fact })}
-                onChanged={onChanged}
-              />
-            ))}
-          </ul>
+          <>
+            <ul className="flex flex-col gap-2">
+              {confirmedPage.pageItems.map((fact) => (
+                <FactCard
+                  key={fact.id}
+                  fact={fact}
+                  brandId={brandId}
+                  onEdit={() => setPanel({ mode: "edit", fact })}
+                  onChanged={onChanged}
+                />
+              ))}
+            </ul>
+            <Pager
+              page={confirmedPage.page}
+              pageCount={confirmedPage.pageCount}
+              totalCount={confirmedPage.totalCount}
+              onChange={confirmedPage.goToPage}
+            />
+          </>
         )}
       </section>
 
       {pending.length > 0 && (
-        <section className="flex flex-col gap-3">
+        <section ref={pendingPage.topRef} className="flex flex-col gap-3">
           <h3 className="text-sm font-semibold text-foreground">待確認（{pending.length}）</h3>
           <p className="text-xs text-muted-foreground">這些內容還沒被確認，不會被系統當成事實使用。</p>
           <ul className="flex flex-col gap-2">
-            {pending.map((fact) => (
+            {pendingPage.pageItems.map((fact) => (
               <FactCard
                 key={fact.id}
                 fact={fact}
@@ -77,6 +120,12 @@ export function FactsTab({
               />
             ))}
           </ul>
+          <Pager
+            page={pendingPage.page}
+            pageCount={pendingPage.pageCount}
+            totalCount={pendingPage.totalCount}
+            onChange={pendingPage.goToPage}
+          />
         </section>
       )}
 
@@ -114,6 +163,31 @@ export function FactsTab({
         />
       )}
     </div>
+  );
+}
+
+function FilterChip({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        "rounded-full border px-3 py-1 text-xs font-medium",
+        active
+          ? "border-primary bg-primary text-primary-foreground"
+          : "border-border text-muted-foreground hover:border-primary hover:text-primary",
+      )}
+    >
+      {children}
+    </button>
   );
 }
 

@@ -1,7 +1,9 @@
 import { useState } from "react";
 import { TriangleAlert } from "lucide-react";
 import { EmptyState } from "@/components/layout/EmptyState";
+import { Pager } from "@/components/layout/Pager";
 import { deleteClaim, type ClaimType, type LibraryClaim, type LibraryProductOption } from "@/lib/libraryApi";
+import { usePagination } from "@/lib/usePagination";
 import { InlineDeleteButton } from "../shared/InlineDeleteButton";
 import { ClaimPanel } from "../panels/ClaimPanel";
 
@@ -13,7 +15,8 @@ const GROUPS: { type: ClaimType; title: string }[] = [
   { type: "forbidden", title: "禁用" },
 ];
 
-/** 宣稱分頁（契約 S5.19–S5.22）：三段分類，各自筆數為 0 時該段不顯示。 */
+/** 宣稱分頁（契約 S5.19–S5.22）：三段分類，各自筆數為 0 時該段不顯示，各自超過 12 筆分頁
+ * （互動鐵則⑥）。 */
 export function ClaimsTab({
   brandId,
   claims,
@@ -47,54 +50,15 @@ export function ClaimsTab({
           const group = claims.filter((c) => c.claim_type === type);
           if (group.length === 0) return null;
           return (
-            <section key={type} className="flex flex-col gap-2">
-              <h3 className="text-sm font-semibold text-foreground">
-                {title}（{group.length}）
-              </h3>
-              <ul className="flex flex-col gap-2">
-                {group.map((claim) => (
-                  <li
-                    key={claim.id}
-                    className="flex flex-col gap-1 rounded-md border border-border bg-card p-3 text-sm shadow-[var(--shadow-card)]"
-                  >
-                    <p className="flex flex-wrap items-center gap-1.5 text-foreground">
-                      {claim.claim_text}
-                      {type === "high_risk" && !claim.evidence_source_reference && (
-                        <span className="inline-flex items-center gap-1 text-xs font-medium text-danger">
-                          <TriangleAlert className="h-3.5 w-3.5" aria-hidden="true" />
-                          尚未附上佐證來源
-                        </span>
-                      )}
-                    </p>
-                    <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
-                      {type === "approved" && (
-                        <>
-                          {claim.evidence_source_reference ? `佐證：${claim.evidence_source_reference}` : "尚未填寫佐證來源"}
-                          <span aria-hidden="true">・</span>
-                        </>
-                      )}
-                      適用：{claim.scope_label}
-                      <span aria-hidden="true">・</span>
-                      <button
-                        type="button"
-                        onClick={() => setPanel({ mode: "edit", claim })}
-                        className="text-primary hover:underline"
-                      >
-                        修改
-                      </button>
-                      <span aria-hidden="true">・</span>
-                      <InlineDeleteButton
-                        confirmText="確定要刪除這條宣稱？"
-                        onDelete={async () => {
-                          await deleteClaim(brandId, claim.id);
-                          onChanged();
-                        }}
-                      />
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            </section>
+            <ClaimGroupSection
+              key={type}
+              type={type}
+              title={title}
+              group={group}
+              brandId={brandId}
+              onEdit={(claim) => setPanel({ mode: "edit", claim })}
+              onChanged={onChanged}
+            />
           );
         })
       )}
@@ -112,5 +76,71 @@ export function ClaimsTab({
         />
       )}
     </div>
+  );
+}
+
+function ClaimGroupSection({
+  type,
+  title,
+  group,
+  brandId,
+  onEdit,
+  onChanged,
+}: {
+  type: ClaimType;
+  title: string;
+  group: LibraryClaim[];
+  brandId: string;
+  onEdit: (claim: LibraryClaim) => void;
+  onChanged: () => void;
+}) {
+  const { page, pageCount, totalCount, pageItems, goToPage, topRef } = usePagination(group);
+
+  return (
+    <section ref={topRef} className="flex flex-col gap-2">
+      <h3 className="text-sm font-semibold text-foreground">
+        {title}（{group.length}）
+      </h3>
+      <ul className="flex flex-col gap-2">
+        {pageItems.map((claim) => (
+          <li
+            key={claim.id}
+            className="flex flex-col gap-1 rounded-md border border-border bg-card p-3 text-sm shadow-[var(--shadow-card)]"
+          >
+            <p className="flex flex-wrap items-center gap-1.5 text-foreground">
+              {claim.claim_text}
+              {type === "high_risk" && !claim.evidence_source_reference && (
+                <span className="inline-flex items-center gap-1 text-xs font-medium text-danger">
+                  <TriangleAlert className="h-3.5 w-3.5" aria-hidden="true" />
+                  尚未附上佐證來源
+                </span>
+              )}
+            </p>
+            <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+              {type === "approved" && (
+                <>
+                  {claim.evidence_source_reference ? `佐證：${claim.evidence_source_reference}` : "尚未填寫佐證來源"}
+                  <span aria-hidden="true">・</span>
+                </>
+              )}
+              適用：{claim.scope_label}
+              <span aria-hidden="true">・</span>
+              <button type="button" onClick={() => onEdit(claim)} className="text-primary hover:underline">
+                修改
+              </button>
+              <span aria-hidden="true">・</span>
+              <InlineDeleteButton
+                confirmText="確定要刪除這條宣稱？"
+                onDelete={async () => {
+                  await deleteClaim(brandId, claim.id);
+                  onChanged();
+                }}
+              />
+            </div>
+          </li>
+        ))}
+      </ul>
+      <Pager page={page} pageCount={pageCount} totalCount={totalCount} onChange={goToPage} />
+    </section>
   );
 }

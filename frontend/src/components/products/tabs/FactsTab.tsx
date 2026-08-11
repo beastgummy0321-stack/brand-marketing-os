@@ -1,6 +1,8 @@
 import { useState } from "react";
 import { EmptyState } from "@/components/layout/EmptyState";
+import { Pager } from "@/components/layout/Pager";
 import { deleteProductFact, type ProductFact, type ResearchJobState } from "@/lib/productsApi";
+import { usePagination } from "@/lib/usePagination";
 import { Badge } from "../shared/Badge";
 import { InlineDeleteButton } from "../shared/InlineDeleteButton";
 import { ResearchProgressRow } from "../shared/ResearchProgressRow";
@@ -15,7 +17,8 @@ type PanelState =
 
 /** 產品事實分頁（契約 S6.22–S6.31）：已確認／待確認兩段，頂端可能疊一條背景調研進行中／
  * 失敗列（`job` 由詳情頁統一輪詢後往下傳，見 `ProductDetailPage.tsx`——調研觸發鈕在總覽
- * 區塊、不在這個分頁裡，狀態要能跨分頁存活，所以輪詢邏輯提到父層，這裡只負責顯示）。 */
+ * 區塊、不在這個分頁裡，狀態要能跨分頁存活，所以輪詢邏輯提到父層，這裡只負責顯示）。
+ * 各段超過 12 列分頁（互動鐵則⑥）。 */
 export function FactsTab({
   brandId,
   productId,
@@ -34,6 +37,8 @@ export function FactsTab({
   const [panel, setPanel] = useState<PanelState>({ mode: "closed" });
   const confirmed = facts.filter((f) => f.status === "confirmed");
   const pending = facts.filter((f) => f.status === "pending");
+  const confirmedPage = usePagination(confirmed);
+  const pendingPage = usePagination(pending);
 
   return (
     <div className="flex flex-col gap-6">
@@ -50,7 +55,7 @@ export function FactsTab({
         </button>
       </div>
 
-      <section className="flex flex-col gap-3">
+      <section ref={confirmedPage.topRef} className="flex flex-col gap-3">
         <h3 className="text-sm font-semibold text-foreground">已確認（{confirmed.length}）</h3>
         {confirmed.length === 0 ? (
           <EmptyState
@@ -58,27 +63,35 @@ export function FactsTab({
             description="產品事實包含核心資訊、機制與差異化、使用情境。優惠與活動價不屬於這裡。"
           />
         ) : (
-          <ul className="flex flex-col gap-2">
-            {confirmed.map((fact) => (
-              <FactCard
-                key={fact.id}
-                fact={fact}
-                brandId={brandId}
-                productId={productId}
-                onEdit={() => setPanel({ mode: "edit", fact })}
-                onChanged={onChanged}
-              />
-            ))}
-          </ul>
+          <>
+            <ul className="flex flex-col gap-2">
+              {confirmedPage.pageItems.map((fact) => (
+                <FactCard
+                  key={fact.id}
+                  fact={fact}
+                  brandId={brandId}
+                  productId={productId}
+                  onEdit={() => setPanel({ mode: "edit", fact })}
+                  onChanged={onChanged}
+                />
+              ))}
+            </ul>
+            <Pager
+              page={confirmedPage.page}
+              pageCount={confirmedPage.pageCount}
+              totalCount={confirmedPage.totalCount}
+              onChange={confirmedPage.goToPage}
+            />
+          </>
         )}
       </section>
 
       {pending.length > 0 && (
-        <section className="flex flex-col gap-3">
+        <section ref={pendingPage.topRef} className="flex flex-col gap-3">
           <h3 className="text-sm font-semibold text-foreground">待確認（{pending.length}）</h3>
           <p className="text-xs text-muted-foreground">這些內容還沒被確認，不會被系統當成事實使用。</p>
           <ul className="flex flex-col gap-2">
-            {pending.map((fact) => (
+            {pendingPage.pageItems.map((fact) => (
               <FactCard
                 key={fact.id}
                 fact={fact}
@@ -90,6 +103,12 @@ export function FactsTab({
               />
             ))}
           </ul>
+          <Pager
+            page={pendingPage.page}
+            pageCount={pendingPage.pageCount}
+            totalCount={pendingPage.totalCount}
+            onChange={pendingPage.goToPage}
+          />
         </section>
       )}
 

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { EmptyState } from "@/components/layout/EmptyState";
+import { Pager } from "@/components/layout/Pager";
 import {
   archiveCustomerVoice,
   deleteCustomerVoice,
@@ -8,6 +9,7 @@ import {
   type CustomerVoiceJobStatus,
   type LibraryCustomerVoice,
 } from "@/lib/libraryApi";
+import { usePagination } from "@/lib/usePagination";
 import { Badge } from "../shared/Badge";
 import { InlineDeleteButton } from "../shared/InlineDeleteButton";
 import { CustomerVoiceGuidePanel } from "../panels/CustomerVoiceGuidePanel";
@@ -74,6 +76,8 @@ export function CustomerVoiceTab({
 
   const active = voices.filter((v) => v.status === "active");
   const archived = voices.filter((v) => v.status === "archived");
+  const activePage = usePagination(active);
+  const archivedPage = usePagination(archived);
 
   return (
     <div className="flex flex-col gap-6">
@@ -102,20 +106,28 @@ export function CustomerVoiceTab({
           description="貼入評論、留言、客服對話，AI 會幫你抽出痛點與用語，讓 Hook 與文案有真實顧客聲音支撐。"
         />
       ) : (
-        <ul className="flex flex-col gap-3">
-          {jobs.map((job) => (
-            <PlaceholderCard key={job.jobKey} job={job} onRetry={() => retryJob(job.jobKey)} />
-          ))}
-          {active.map((voice) => (
-            <VoiceCard
-              key={voice.id}
-              voice={voice}
-              brandId={brandId}
-              archived={false}
-              onChanged={onChanged}
-            />
-          ))}
-        </ul>
+        <div ref={activePage.topRef} className="flex flex-col gap-3">
+          <ul className="flex flex-col gap-3">
+            {jobs.map((job) => (
+              <PlaceholderCard key={job.jobKey} job={job} onRetry={() => retryJob(job.jobKey)} />
+            ))}
+            {activePage.pageItems.map((voice) => (
+              <VoiceCard
+                key={voice.id}
+                voice={voice}
+                brandId={brandId}
+                archived={false}
+                onChanged={onChanged}
+              />
+            ))}
+          </ul>
+          <Pager
+            page={activePage.page}
+            pageCount={activePage.pageCount}
+            totalCount={activePage.totalCount}
+            onChange={activePage.goToPage}
+          />
+        </div>
       )}
 
       {archived.length > 0 && (
@@ -123,11 +135,19 @@ export function CustomerVoiceTab({
           <summary className="cursor-pointer text-sm font-semibold text-foreground">
             已封存（{archived.length}）
           </summary>
-          <ul className="mt-3 flex flex-col gap-3">
-            {archived.map((voice) => (
-              <VoiceCard key={voice.id} voice={voice} brandId={brandId} archived onChanged={onChanged} />
-            ))}
-          </ul>
+          <div ref={archivedPage.topRef} className="mt-3 flex flex-col gap-3">
+            <ul className="flex flex-col gap-3">
+              {archivedPage.pageItems.map((voice) => (
+                <VoiceCard key={voice.id} voice={voice} brandId={brandId} archived onChanged={onChanged} />
+              ))}
+            </ul>
+            <Pager
+              page={archivedPage.page}
+              pageCount={archivedPage.pageCount}
+              totalCount={archivedPage.totalCount}
+              onChange={archivedPage.goToPage}
+            />
+          </div>
         </details>
       )}
 
