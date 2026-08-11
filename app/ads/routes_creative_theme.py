@@ -156,6 +156,42 @@ async def open_theme_folder(request: Request, brand_id: str, cycle_id: str, them
     return {"folder_path": str(path)}
 
 
+@router.get("/brands/{brand_id}/ads/{cycle_id}/folder")
+async def cycle_folder(brand_id: str, cycle_id: str):
+    """這期檔期素材資料夾現在多大（畫面契約畫面 2 頂部列「素材資料夾 128 MB」，
+    .scratch/creative-studio/studio-wireframe.html:111）。
+
+    每次都重算、不進 DB：使用者是在檔案總管裡加減檔案的，系統沒有任何寫入路徑會知道
+    （決策 0008，跟舊檔期頁 app/ads/routes_plan.py:321 同一個 size_mb()）。資料夾還沒
+    建立時回 exists=false 而不是 0 MB——「還沒開過資料夾」跟「開了但還沒倒圖進去」對
+    使用者是兩件事，不能長一樣；也不在這裡爆 404／500，沒建立是正常狀態不是錯誤。
+    MB 位數沿用既有顯示慣例（app/templates/ads_cycle.html:352 的 {:.1f} MB）。
+    """
+    main_mod.require_brand(brand_id)
+    _require_cycle(brand_id, cycle_id)
+    path = creative_assets.cycle_dir(main_mod.conn, brand_id, cycle_id)
+    if not path.is_dir():
+        return {"exists": False, "size_label": None}
+    return {"exists": True, "size_label": f"{creative_assets.size_mb(path):.1f} MB"}
+
+
+@router.post("/brands/{brand_id}/ads/{cycle_id}/folder")
+async def open_cycle_folder(brand_id: str, cycle_id: str):
+    """開這期檔期的素材資料夾，沒有就建（畫面 2 的「開資料夾」）。
+
+    跟上面 open_theme_folder() 共用同一個 creative_assets.open_folder()——它收 *ids，
+    多傳一段主題資料夾名就是主題層，所以檔期層／主題層只有一套實作。**防路徑穿越的守衛
+    也因此只有一份**（creative_assets._child()／_inside()：id 帶 .. 或絕對路徑時當場擋下
+    ValueError，建資料夾之前就擋），這裡不再抄一次——抄第二份就會有一天只改到其中一份。
+
+    舊的 app/ads/routes_plan.py:272 `/creative-folder` 不動：那支回 303 轉址＋人話訊息給
+    Jinja 舊頁，新殼要的是裸 JSON（ADR 0003 兩套前端並存），共用同一個 open_folder()。
+    """
+    main_mod.require_brand(brand_id)
+    _require_cycle(brand_id, cycle_id)
+    return {"folder_path": str(creative_assets.open_folder(main_mod.conn, brand_id, cycle_id))}
+
+
 @router.get("/brands/{brand_id}/ads/{cycle_id}/themes/{theme_id}/components/performance")
 async def theme_component_performance(request: Request, brand_id: str, cycle_id: str,
                                       theme_id: str):

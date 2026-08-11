@@ -133,6 +133,85 @@ class CycleFolderTest(_Base):
         self.assertEqual(creative_assets.size_mb(target), 0.0)
 
 
+class MatrixFolderApiTest(_Base):
+    """矩陣頁頂部素材資料夾列（票 W1）：新殼要的裸 JSON 端點，
+    app/ads/routes_creative_theme.py cycle_folder()／open_cycle_folder()。
+    舊頁那支 `/creative-folder`（303 轉址）由上面 CycleFolderTest 顧，兩套並存互不影響。
+    """
+
+    def test_size_endpoint_reports_mb_when_folder_has_files(self):
+        cycle_id = self._open_cycle()
+        self._put_file(ROOT / self.bid / cycle_id, mb=2)
+
+        resp = self.client.get(f"/api/ads/brands/{self.bid}/ads/{cycle_id}/folder")
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json(), {"exists": True, "size_label": "2.0 MB"})
+
+    def test_missing_folder_is_an_explicit_state_not_an_error(self):
+        """還沒開過資料夾是正常狀態：不得爆 500，也不得回 0.0 MB 假裝資料夾在。"""
+        cycle_id = self._open_cycle()
+        self.assertFalse((ROOT / self.bid / cycle_id).exists())
+
+        resp = self.client.get(f"/api/ads/brands/{self.bid}/ads/{cycle_id}/folder")
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json(), {"exists": False, "size_label": None})
+
+    def test_open_endpoint_creates_the_folder_and_launches_explorer(self):
+        cycle_id = self._open_cycle()
+        target = ROOT / self.bid / cycle_id
+        self.assertFalse(target.exists())
+
+        with mock.patch("os.startfile", create=True) as startfile:
+            resp = self.client.post(f"/api/ads/brands/{self.bid}/ads/{cycle_id}/folder")
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["folder_path"], str(target))
+        self.assertTrue(target.is_dir())
+        startfile.assert_called_once_with(target)
+
+    def test_unknown_cycle_is_404_on_both_endpoints(self):
+        with mock.patch("os.startfile", create=True) as startfile:
+            get_resp = self.client.get(f"/api/ads/brands/{self.bid}/ads/ccy_not_real/folder")
+            post_resp = self.client.post(f"/api/ads/brands/{self.bid}/ads/ccy_not_real/folder")
+        self.assertEqual(get_resp.status_code, 404)
+        self.assertEqual(post_resp.status_code, 404)
+        startfile.assert_not_called()
+
+
+class OpenFolderGuardTest(_Base):
+    """開資料夾的路徑守衛。跟下面的刪除守衛共用同一份 _child()／_inside()，但守的是另一側
+    ——**建**資料夾：id 帶 .. 時不能在根目錄外面 mkdir 出東西、更不能把檔案總管開到那裡。
+    """
+
+    def test_refuses_to_create_or_open_anything_outside_the_root(self):
+        outside = Path(_tmpdir) / "根目錄外面"
+        self.assertFalse(outside.exists())
+
+        with mock.patch("os.startfile", create=True) as startfile:
+            with self.assertRaises(ValueError):
+                creative_assets.open_folder(main.conn, "..", "根目錄外面")
+
+        self.assertFalse(outside.exists(), "被擋下的路徑不該被建出來")
+        startfile.assert_not_called()
+
+    def test_traversal_shaped_ids_never_reach_the_filesystem_through_the_route(self):
+        """路由這一側。網址裡的 %2e%2e 解出來就是 ..（實測會原封不動進到路徑參數，不會被
+        用戶端先正規化掉），所以這串真的會被拿去組路徑。品牌查無此 id 先擋成 404，資料夾
+        那一步走不到；就算哪天有人把順序改壞，_child() 還會再擋一次。兩道都不得回 500，
+        也不得在根目錄外面留下 ROOT/../外流 這種東西。"""
+        escaped = Path(_tmpdir) / "外流"   # ＝ ROOT/../外流，穿越成功的話會出現在這
+        self.assertFalse(escaped.exists())
+
+        with mock.patch("os.startfile", create=True) as startfile:
+            resp = self.client.post("/api/ads/brands/%2e%2e/ads/%E5%A4%96%E6%B5%81/folder")
+
+        self.assertEqual(resp.status_code, 404)
+        startfile.assert_not_called()
+        self.assertFalse(escaped.exists(), "被擋下的路徑不該被建出來")
+
+
 class DeleteFolderGuardTest(_Base):
     """刪除路徑守衛：這是全票最不能簡化的一段。"""
 
