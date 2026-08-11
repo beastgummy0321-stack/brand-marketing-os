@@ -487,7 +487,9 @@ def generate_options(conn, brand_id: str, cycle_id: str, actor: str, *,
                            "methodology_files": methodology_result.loaded_files},
             knowledge_item_ids=knowledge_item_ids, brand_version=brand_version,
         ),
-        options=gateway.TaskOptions(max_tokens=PLAN_MAX_TOKENS),
+        # 開網路搜尋（ADR 0005）：出方案要知道當下的檔期與市場氛圍，讓 AI 自己去查。
+        options=gateway.TaskOptions(max_tokens=PLAN_MAX_TOKENS,
+                                    tools=[providers.WEB_SEARCH_TOOL]),
     )
     if task["status"] != "succeeded":
         return False, task["error"]

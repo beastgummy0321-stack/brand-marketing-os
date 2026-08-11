@@ -172,6 +172,30 @@ def resolve_thinking(override: Optional[str] = None, task_type: Optional[str] = 
     return DEFAULT_THINKING_LEVEL
 
 
+# ---------------------------------------------------------------------------
+# 網路搜尋工具（ADR 0005）：同一份外部規格只准有一個真相來源，呼叫端一律引用這個常數。
+# ---------------------------------------------------------------------------
+# 欄位與型別字串全部照官方文件抄，不得自創：
+# https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-search-tool.md
+# （查證日 2026-08-11；不需要 beta header，web_search 是正式功能）
+#
+# type 為什麼選最基本的 web_search_20250305：官方目前有三個版本
+# （20250305 基本／20260209 加動態過濾／20260318 再加 response_inclusion）。後兩個版本的
+# allowed_callers 預設是 ["code_execution_20260120"]，只有 Claude 4.6 以後的模型支援；設定頁
+# 的模型選單（app/shared/web.py MODEL_CHOICES）含 claude-haiku-4-5，用新版會在那台模型上被
+# API 退回 400。基本版對四台模型都成立，一個常數走一條路、不依模型分岔。
+# 代價：沒有動態過濾，搜尋結果整份進 prompt，輸入 token 比新版多。等模型選單不再有 4.6
+# 以前的模型時可直接把 type 換成新版。
+#
+# max_uses：ADR 0005 指定 2–3，取 3。user_location.country 是 ISO 3166-1 alpha-2 兩碼。
+WEB_SEARCH_TOOL = {
+    "type": "web_search_20250305",
+    "name": "web_search",
+    "max_uses": 3,
+    "user_location": {"type": "approximate", "country": "TW"},
+}
+
+
 class ProviderError(Exception):
     """統一錯誤型別：缺金鑰、供應商婉拒（refusal）、供應商錯誤都包成人話訊息後拋出這個型別。
 
@@ -192,6 +216,9 @@ class Usage:
     output_tokens: int
     cache_read_input_tokens: int = 0
     cache_creation_input_tokens: int = 0
+    # 伺服器端工具用量：官方 usage.server_tool_use.web_search_requests（整數，出錯的搜尋
+    # 不計入也不計費）。搜尋另外按次收費，成本要靠這個數字才算得出來（見 pricing.py）。
+    web_search_requests: int = 0
 
 
 @dataclass
@@ -222,6 +249,7 @@ class Provider(Protocol):
         max_tokens: int,
         timeout_s: float = 120.0,
         effort: Optional[str] = None,
+        tools: Optional[list] = None,
     ) -> ProviderResponse: ...
 
 
@@ -251,6 +279,7 @@ class AnthropicProvider:
         max_tokens: int,
         timeout_s: float = 120.0,
         effort: Optional[str] = None,
+        tools: Optional[list] = None,
     ) -> ProviderResponse:
         # 金鑰檢查放在 SDK import 之前：沒金鑰時連套件都不需要，就能給出人話錯誤。
         api_key = settings.get_api_key()
@@ -264,6 +293,9 @@ class AnthropicProvider:
             kwargs["system"] = system
         if effort and model in EFFORT_SUPPORTED_MODELS:
             kwargs["output_config"] = {"effort": effort}
+        # 沒傳工具就完全不放 tools 這個鍵——既有呼叫端送出的 request body 一個字都不變。
+        if tools:
+            kwargs["tools"] = tools
 
         client = anthropic.Anthropic(api_key=api_key).with_options(timeout=timeout_s)
 
@@ -307,6 +339,8 @@ class AnthropicProvider:
             block.text for block in response.content if getattr(block, "type", None) == "text"
         )
         usage = response.usage
+        # server_tool_use 只在真的用了伺服器端工具時才有值，沒開工具時是 None（ADR 0005）。
+        server_tool_use = getattr(usage, "server_tool_use", None)
         return ProviderResponse(
             output_text=text,
             structured=None,  # 本輪未接 output_config/structured outputs（skeleton，非全功能）
@@ -315,6 +349,9 @@ class AnthropicProvider:
                 output_tokens=usage.output_tokens,
                 cache_read_input_tokens=getattr(usage, "cache_read_input_tokens", 0) or 0,
                 cache_creation_input_tokens=getattr(usage, "cache_creation_input_tokens", 0) or 0,
+                web_search_requests=(
+                    getattr(server_tool_use, "web_search_requests", 0) or 0
+                ) if server_tool_use else 0,
             ),
             stop_reason=response.stop_reason,
             raw=response,
@@ -328,7 +365,8 @@ class FakeProvider:
     - exception：若指定，前 fail_first_n 次呼叫拋出這個例外；之後改回傳 response。
       fail_first_n=0（預設）代表每次呼叫都拋出（用於測試「全部嘗試皆失敗」）。
     - calls：記錄每次呼叫的參數，供測試斷言呼叫內容（含 effort，票 #27：思考等級解析後
-      實際傳給 provider 的值，供路由層測試核對覆寫有沒有生效）。
+      實際傳給 provider 的值，供路由層測試核對覆寫有沒有生效；含 tools，ADR 0005：
+      呼叫端有沒有帶網路搜尋工具）。
     """
 
     name = "fake"
@@ -358,11 +396,13 @@ class FakeProvider:
         max_tokens: int,
         timeout_s: float = 120.0,
         effort: Optional[str] = None,
+        tools: Optional[list] = None,
     ) -> ProviderResponse:
         call_no = len(self.calls) + 1
         self.calls.append(
             {"model": model, "system": system, "messages": messages,
-             "max_tokens": max_tokens, "timeout_s": timeout_s, "effort": effort}
+             "max_tokens": max_tokens, "timeout_s": timeout_s, "effort": effort,
+             "tools": tools}
         )
         should_fail = self.exception is not None and (
             self.fail_first_n == 0 or call_no <= self.fail_first_n

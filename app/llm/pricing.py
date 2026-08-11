@@ -29,6 +29,13 @@ PRICING = {
 }
 
 
+# 網路搜尋（ADR 0005）按次計費，與模型無關，不進上面那張表。官方原文：「Web search is
+# available on the Claude API for $10 per 1,000 searches, plus standard token costs」
+# 來源：https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-search-tool.md
+# （查證日 2026-08-11）。搜尋出錯不計費，API 也不會把它算進 web_search_requests。
+WEB_SEARCH_USD_PER_SEARCH = 10.0 / 1000
+
+
 def calculate_cost(model: str, input_tokens: int, output_tokens: int) -> float:
     """回傳美元成本（06 §12：幣別以供應商原生 USD 記錄，顯示幣別換算屬報表層）。
 

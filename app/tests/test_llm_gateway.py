@@ -90,11 +90,14 @@ class LLMGatewayTest(unittest.TestCase):
         self.assertIsNone(row["product_version"])
 
         # 只有一次呼叫，且沒有帶 temperature/top_p/top_k/thinking 之類的參數；effort（票 #27
-        # 思考等級解析結果）是唯一新增的欄位——任務型別不在任務預設對照表裡，退回中檔。
+        # 思考等級解析結果）與 tools（ADR 0005 網路搜尋）是後來新增的欄位——任務型別不在
+        # 任務預設對照表裡，思考等級退回中檔；沒指定工具時 tools 是 None（預設不開）。
         self.assertEqual(len(provider.calls), 1)
         self.assertEqual(set(provider.calls[0].keys()),
-                         {"model", "system", "messages", "max_tokens", "timeout_s", "effort"})
+                         {"model", "system", "messages", "max_tokens", "timeout_s", "effort",
+                          "tools"})
         self.assertEqual(provider.calls[0]["effort"], "medium")
+        self.assertIsNone(provider.calls[0]["tools"])
 
     def test_cost_calculated_from_usage_and_price_table(self):
         fake_response = ProviderResponse(

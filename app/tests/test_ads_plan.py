@@ -33,6 +33,7 @@ from app.brand_intelligence import repository as bi_repo  # noqa: E402
 from app.core import settings as coresettings  # noqa: E402
 from app.core.db import new_id, now_iso  # noqa: E402
 from app.llm import methodology  # noqa: E402
+from app.llm import providers as llm_providers  # noqa: E402
 from app.llm.providers import FakeProvider, ProviderResponse, Usage  # noqa: E402
 from app.shared.web import OPERATOR  # noqa: E402
 
@@ -238,6 +239,14 @@ class PlanGenerationTest(_BasePlanTest):
                                             on_stage=seen.append)
         self.assertTrue(ok, err)
         self.assertEqual(seen, ["ask_ai", "save"])
+
+    def test_generation_asks_ai_with_web_search_tool(self):
+        """ADR 0005：打法生成是首波開通網路搜尋的呼叫點之一，工具定義引用同一個常數。"""
+        provider = FakeProvider(response=_fake(json.dumps(_GOOD_OPTIONS, ensure_ascii=False)))
+        ads_plan.PROVIDER = provider
+        ok, err = ads_plan.generate_options(main.conn, self.bid, self.cycle_id, ACTOR)
+        self.assertTrue(ok, err)
+        self.assertEqual(provider.calls[0]["tools"], [llm_providers.WEB_SEARCH_TOOL])
 
     def test_options_are_stored_and_cycle_waits_for_selection(self):
         resp = self._generate()

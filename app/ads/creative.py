@@ -357,7 +357,11 @@ def generate(conn, brand_id: str, cycle_id: str, actor: str, *,
                            "methodology_files": methodology_result.loaded_files},
             knowledge_item_ids=knowledge_item_ids, brand_version=brand_version,
         ),
-        options=gateway.TaskOptions(max_tokens=CREATIVE_MAX_TOKENS),
+        # 開網路搜尋（ADR 0005）：素材要貼到當下的話題與檔期，讓 AI 自己去查。補打缺型別
+        # （_backfill_missing_types）與單則改寫（rewrite）沿用同一批已經查過的上下文，不重複
+        # 開搜尋——ADR 首波只點名「素材生成」這一處。
+        options=gateway.TaskOptions(max_tokens=CREATIVE_MAX_TOKENS,
+                                    tools=[providers.WEB_SEARCH_TOOL]),
     )
     if task["status"] != "succeeded":
         return False, task["error"]

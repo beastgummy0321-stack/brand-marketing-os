@@ -71,6 +71,9 @@ class TaskOptions:
     max_tokens: int = 16000
     timeout_s: float = 120.0
     max_retries: int = 1  # 失敗重試次數（不含第一次嘗試；06 §11：MVP 同供應商內重試）
+    # 這次呼叫要掛的工具（ADR 0005）。None＝不掛任何工具，送出的 request body 完全不變；
+    # 要開網路搜尋就傳 [providers.WEB_SEARCH_TOOL]，由呼叫端逐一決定。
+    tools: Optional[list] = None
 
 
 def get_task(conn: sqlite3.Connection, task_id: str) -> Optional[dict]:
@@ -165,12 +168,15 @@ def run_task(
     thinking = providers.resolve_thinking(opts.thinking, task_type=task_type)
     provider_name = getattr(provider, "name", "unknown")
 
-    # 思考等級只在 provider.complete() 真的接受 effort 參數時才傳——保留舊版 Provider
-    # 實作（例如測試檔裡手寫、只認 5 個既有參數的假 Provider）不用跟著改也能繼續動。
+    # 思考等級（票 #27）與工具（ADR 0005）都只在 provider.complete() 真的接受該參數時才傳——
+    # 保留舊版 Provider 實作（例如測試檔裡手寫、只認 5 個既有參數的假 Provider）不用跟著改
+    # 也能繼續動。
     try:
-        provider_accepts_effort = "effort" in inspect.signature(provider.complete).parameters
+        accepted = inspect.signature(provider.complete).parameters
     except (TypeError, ValueError):
-        provider_accepts_effort = False
+        accepted = {}
+    provider_accepts_effort = "effort" in accepted
+    provider_accepts_tools = "tools" in accepted
 
     max_attempts = 1 + max(opts.max_retries, 0)
     row = None
@@ -187,6 +193,8 @@ def run_task(
             }
             if provider_accepts_effort:
                 complete_kwargs["effort"] = thinking
+            if provider_accepts_tools and opts.tools:
+                complete_kwargs["tools"] = opts.tools
             response = provider.complete(**complete_kwargs)
         except ProviderTimeoutError as exc:
             _mark_failed(conn, row["id"], status="timeout", error=str(exc))
@@ -197,13 +205,22 @@ def run_task(
             row = get_task(conn, row["id"])
             continue
 
+        # 舊版 Provider 實作（測試檔裡手寫的假 Provider）可能回傳沒有 web_search_requests
+        # 欄位的 Usage，用 getattr 取值，缺就當 0。
+        web_search_requests = getattr(response.usage, "web_search_requests", 0) or 0
         usage = {
             "input_tokens": response.usage.input_tokens,
             "output_tokens": response.usage.output_tokens,
             "cache_read_input_tokens": response.usage.cache_read_input_tokens,
             "cache_creation_input_tokens": response.usage.cache_creation_input_tokens,
+            "web_search_requests": web_search_requests,
         }
-        cost = pricing.calculate_cost(model, response.usage.input_tokens, response.usage.output_tokens)
+        # 網路搜尋按次另外收費（ADR 0005），token 費之外要加上去，llm_task.cost 才是這次呼叫
+        # 的真實花費——全站花費上限讀的就是這個欄位的總和。
+        cost = (
+            pricing.calculate_cost(model, response.usage.input_tokens, response.usage.output_tokens)
+            + web_search_requests * pricing.WEB_SEARCH_USD_PER_SEARCH
+        )
         _mark_succeeded(
             conn, row["id"], structured_output=response.structured,
             rendered_output=response.output_text, usage=usage, cost=cost,
