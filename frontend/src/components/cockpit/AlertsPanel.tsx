@@ -1,25 +1,12 @@
 import { useState } from "react";
-import type { Alert, AlertSeverity } from "@/lib/api";
+import type { Alert } from "@/lib/api";
 import { resolveAlert } from "@/lib/api";
+import { SEVERITY_DOT_CLASS, SEVERITY_LABEL } from "@/lib/severity";
 import { cn } from "@/lib/utils";
 
 /** 異常警示區（票 05-alerts-fuel-pipeline）：直接讀打斷佇列，按嚴重度分色；一鍵
  * 「知道了」／「詳情」沿用既有 resolve 行為（見 `lib/api.ts` resolveAlert 註解）。
  * 沒有警報顯示「一切正常」（規格使用者故事 10 的同一原則，套用到警示區）。 */
-
-const SEVERITY_LABEL: Record<AlertSeverity, string> = {
-  money_loss: "金額損失",
-  irreversible: "不可逆",
-  rule_warning: "規則警示",
-  informational: "資訊性",
-};
-
-const SEVERITY_DOT_CLASS: Record<AlertSeverity, string> = {
-  money_loss: "bg-danger",
-  irreversible: "bg-alert-irreversible",
-  rule_warning: "bg-warning",
-  informational: "bg-muted-foreground",
-};
 
 export function AlertsPanel({
   alerts,

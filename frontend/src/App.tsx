@@ -4,7 +4,9 @@ import { AppShell } from "@/components/layout/AppShell";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { EmptyState } from "@/components/layout/EmptyState";
 import { CockpitPage } from "@/components/cockpit/CockpitPage";
+import { InboxPage } from "@/components/inbox/InboxPage";
 import { BrandCard } from "@/components/overview/BrandCard";
+import { SettingsPage } from "@/components/settings/SettingsPage";
 import { MatrixPage } from "@/components/workbench/MatrixPage";
 import { WorkbenchPage } from "@/components/workbench/WorkbenchPage";
 import { fetchOverview, type DashboardBrandCard } from "@/lib/api";
@@ -23,6 +25,8 @@ function App() {
   return (
     <Routes>
       <Route path="/" element={<RootRoute />} />
+      <Route path="/inbox" element={<InboxRoute />} />
+      <Route path="/settings" element={<SettingsRoute />} />
       <Route path="/brands/:brandId" element={<BrandRoute />} />
       <Route path="/brands/:brandId/workbench" element={<WorkbenchRoute />} />
       <Route path="/brands/:brandId/workbench/:cycleId" element={<MatrixRoute />} />
@@ -40,6 +44,24 @@ function RootRoute() {
   return (
     <AppShell brandId={null}>
       <Overview />
+    </AppShell>
+  );
+}
+
+/** 收件匣（S2，票 B1-inbox）：跨品牌，不掛在 `/brands/:brandId` 之下。 */
+function InboxRoute() {
+  return (
+    <AppShell brandId={null}>
+      <InboxPage />
+    </AppShell>
+  );
+}
+
+/** 設定（S15，票 B1-settings）：跨品牌，不掛在 `/brands/:brandId` 之下。 */
+function SettingsRoute() {
+  return (
+    <AppShell brandId={null}>
+      <SettingsPage />
     </AppShell>
   );
 }

@@ -24,7 +24,7 @@ export interface NavItem {
 
 export const NAV_TOP: NavItem[] = [
   { label: "跨品牌總覽", href: "/", status: "active", internal: true },
-  { label: "收件匣", href: "/inbox", status: "active" },
+  { label: "收件匣", href: "/inbox", status: "active", internal: true },
 ];
 
 /** 品牌相關模組要有品牌 context 才可點：已進駕駛艙（網址是 `/brands/:brandId`，
@@ -53,5 +53,5 @@ export function navModules(brandId: string | null): NavItem[] {
 }
 
 export const NAV_FOOTER: NavItem[] = [
-  { label: "設定", href: "/settings", status: "active" },
+  { label: "設定", href: "/settings", status: "active", internal: true },
 ];
