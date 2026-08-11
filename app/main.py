@@ -670,6 +670,8 @@ async def api_settings_budget_post(request: Request):
 
 from app.brand_intelligence.routes import router as brand_intelligence_router  # noqa: E402
 from app.brand_intelligence.routes_inbox import router as inbox_router  # noqa: E402
+from app.brand_intelligence.routes_library import router as library_router  # noqa: E402
+from app.brand_intelligence.routes_products import router as products_router  # noqa: E402
 from app.brand_intelligence.routes_settings import router as settings_hub_router  # noqa: E402
 from app.intake.routes import router as intake_router  # noqa: E402
 from app.ads.routes import router as ads_router  # noqa: E402
@@ -678,6 +680,8 @@ from app.dashboard.routes import router as dashboard_router  # noqa: E402
 
 app.include_router(brand_intelligence_router)
 app.include_router(inbox_router)
+app.include_router(library_router)
+app.include_router(products_router)
 app.include_router(settings_hub_router)
 app.include_router(intake_router)
 app.include_router(ads_router)

@@ -7,9 +7,7 @@
  *
  * 固定選項清單照抄 `app/mock_data.py:20-156`（查證日 2026-08-11），不自創外部形狀——
  * 沿用 `workbenchApi.ts` REJECT_REASONS 同一個模式：後端常數表沒有列舉端點，前端側板
- * 表單的下拉選項就近抄一份放在對應 API 檔，是「從沒變過的值」（code-rules 第二節）。
- * `mocks/data.ts` 假資料層從這裡 import，不是反過來——app 元件不得 import `mocks/`
- * 目錄（那個目錄是可整包刪除的，見 `main.tsx` 該行 import 註解）。 */
+ * 表單的下拉選項就近抄一份放在對應 API 檔，是「從沒變過的值」（code-rules 第二節）。 */
 
 export interface LibraryBrandFact {
   id: string;

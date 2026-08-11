@@ -28,6 +28,11 @@ SIGNALS = ("unprompted", "prompted")
 
 PARSE_FAIL_MESSAGE = "AI 有回覆，但格式讀不成預期的樣子。可以再試一次。"
 
+# 票 B2-library：背景化之後補上超預算檢查（原本沒有，跟 product_ai 產品掃描不對等，
+# 見 GRILL-B2-library.md「拿不準的點」）。單次抽取呼叫，跟 product_ai.COST_PRODUCT_SCAN
+# 同量級（單次頁面/文字讀取＋一次整理）。
+COST_CUSTOMER_VOICE_EXTRACTION = 0.30
+
 _SYSTEM = (
     "你是資深顧客研究員，正在從一段顧客原話（評論／留言／客服對話）裡抽取對廣告文案有用的"
     "痛點與用語。只回傳 JSON，不要任何 JSON 以外的文字。"

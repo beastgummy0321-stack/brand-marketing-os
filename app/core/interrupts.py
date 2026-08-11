@@ -46,6 +46,10 @@ CATEGORIES = {
     # code review 2026-08-06 定調降為 rule_warning（真的賠錢由判讀狀態機負責喊）。
     "pacing_overspend": {"severity": "rule_warning", "label": "檔期步調－燒太快"},  # 票 08-pacing-alert
     "pacing_underspend": {"severity": "rule_warning", "label": "檔期步調－花不完"},  # 票 08-pacing-alert
+    # 顧客原話貼入後背景 AI 抽取，完成／失敗都進這裡（票 B2-library，五鐵則③生成不擋路）。
+    "customer_voice_extraction_done": {"severity": "informational", "label": "顧客原話分析完成"},
+    # 產品 AI 調研（新建與再次調研共用）背景工作，完成／失敗都進這裡（票 B2-products）。
+    "product_research_done": {"severity": "informational", "label": "產品調研完成"},
 }
 _CATEGORY_RANK = {name: i for i, name in enumerate(CATEGORIES)}
 

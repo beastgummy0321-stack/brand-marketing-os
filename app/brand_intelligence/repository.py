@@ -25,6 +25,16 @@ import sqlite3
 from typing import Optional
 
 from app.brand_intelligence import rule_lifecycle
+# Owned Channel 已拆進 repository_channels.py（票 B2-library，本檔行數頂到
+# docs/tech-debt.md 凍結上限，不得再加）；這裡 re-export，讓既有 `repo.create_channel()`
+# 等呼叫端寫法不必改。
+from app.brand_intelligence.repository_channels import (  # noqa: F401
+    create_channel,
+    delete_channel,
+    get_channel,
+    list_channels,
+    update_channel,
+)
 from app.core import cleanup
 from app.core.audit import write_audit
 from app.core.db import new_id, now_iso
@@ -1112,44 +1122,8 @@ def list_claims_for_product(conn: sqlite3.Connection, brand_id: str, product_id:
 
 
 # ---------------------------------------------------------------------------
-# Owned Channel
+# Owned Channel：已拆進 repository_channels.py（見本檔頭 import），這裡不再放定義。
 # ---------------------------------------------------------------------------
-
-_CHANNEL_PLATFORM_DEFAULT = {"website": "web", "fb_page": "meta", "ig_account": "meta"}
-
-
-def create_channel(conn: sqlite3.Connection, brand_id: str, *, actor: str, channel_type: str,
-                    name: str, identifier: Optional[str] = None, status: str = "active",
-                    platform: Optional[str] = None) -> dict:
-    _require(channel_type, "owned_channel.channel_type 為必填")
-    _require(name, "owned_channel.name 為必填")
-    _require(actor, "actor 為必填")
-    if status not in ("active", "inactive"):
-        raise ValueError("owned_channel.status 只能是 active 或 inactive")
-    resolved_platform = platform or _CHANNEL_PLATFORM_DEFAULT.get(channel_type, "web")
-    channel_id = new_id("och")
-    ts = now_iso()
-    row = {
-        "id": channel_id, "brand_id": brand_id, "channel_type": channel_type,
-        "platform": resolved_platform, "name": name, "identifier": identifier, "status": status,
-        "created_at": ts, "updated_at": ts,
-    }
-    conn.execute(
-        "INSERT INTO owned_channel (id, brand_id, channel_type, platform, name, identifier, status, "
-        "created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (row["id"], row["brand_id"], row["channel_type"], row["platform"], row["name"],
-         row["identifier"], row["status"], row["created_at"], row["updated_at"]),
-    )
-    write_audit(conn, brand_id=brand_id, entity_type="owned_channel", entity_id=channel_id,
-                action="create", actor=actor, before=None, after=row)
-    conn.commit()
-    return row
-
-
-def list_channels(conn: sqlite3.Connection, brand_id: str) -> list:
-    return _rows(conn.execute(
-        "SELECT * FROM owned_channel WHERE brand_id = ? ORDER BY created_at", (brand_id,)
-    ))
 
 
 # ---------------------------------------------------------------------------
