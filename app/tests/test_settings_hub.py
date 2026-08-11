@@ -187,7 +187,9 @@ class SettingsHubBrandIsolationTest(unittest.TestCase):
                   "large_scaling_ratio": "0.8"},
         )
         page_b = self.client.get(f"/brands/{self.brand_b['id']}/settings/ads")
-        self.assertNotIn("999", page_b.text)
+        # 只比對欄位值，不對整頁 HTML 找裸字串「999」——設定頁的側欄會列出共用測試 DB 裡
+        # 所有品牌的名稱與 id，別的測試模組隨機命名的品牌撞到 999 就誤判成外洩。
+        self.assertNotIn('value="999"', page_b.text)
         self.assertIn('value="300"', page_b.text)  # B 品牌仍是系統預設值
 
 

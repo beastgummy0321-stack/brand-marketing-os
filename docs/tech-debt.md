@@ -26,27 +26,11 @@
 | `app/tests/test_ads_creative.py` | 870 | 1.1× | 測試檔，優先度最低 |
 | `app/ads/repository.py` | 856 | 1.07× | 剛超標，先觀察 |
 
-**已知違例**：2026-08-07 的票 C 在 `brand_intelligence/routes.py` 加了約 70 行沒有先拆。
-當時的取捨是「先讓開關有寫入路徑」優先於先拆檔，由主控判斷放行，記在此處不隱藏。
-
-2026-08-09 的票 02-theme-tables 在 `app/ads/repository.py` 加了 4 行（`CYCLE_CASCADE_TABLES`
-與 `_PRODUCT_CASCADE_LABELS` 各登記兩張新表：`creative_theme`／`creative_theme_component`）。
-CRUD 本體另開 `app/ads/theme_repository.py` 新檔，不塞進本檔；這 4 行是「刪檔期／刪產品要
-沿用既有 cascade 慣例」的唯一登記點，該機制目前只活在這個檔案裡，不值得為 4 行拆檔。
-
-2026-08-09 的票 12-attribution-adjust 原規劃元件層成效開一張新表，經 review 認為規格只要
-「當下相對排名」不要歷史趨勢，精簡成在既有 `creative_theme_component`（票 02-theme-tables
-已登記過 cascade）直接加欄位覆蓋最新成效；`app/ads/repository.py` 因此不必再登記新表，
-`CYCLE_CASCADE_TABLES`／`_PRODUCT_CASCADE_LABELS` 兩處維持原狀。migration 仍是票 12 帶的
-唯一一支 `0016`，只是形狀從 CREATE TABLE 改成 ALTER TABLE 加欄位。
-
-2026-08-10 的票 pacing-curve 在 `app/ads/repository.py` 加了約 38 行（820→856）：`create_cycle()`
-開期當下呼叫新模組 `pacing_curve.recommend_pacing_strategy()`／`compute_curve()` 把排期策略
-存進既有 `derived_plan_json`；新函式 `set_cycle_pacing()` 供使用者事後手動改排期策略。
-計算邏輯全部留在新檔 `app/ads/pacing_curve.py`（不記入超標清單），本檔只負責落地／覆寫，
-沒有更省的搬法——`derived_plan_json` 的讀寫入口本來就集中在這裡，另開一個模組代管單一
-JSON 欄位的三個鍵屬於「只有一個呼叫端就先抽象」，不划算。`KNOWN_OVERSIZED_FILES` 凍結值
-同步更新為 856。
+**已知違例**：2026-08-07 票 C 在 `brand_intelligence/routes.py` 加了約 70 行沒先拆（主控放行）；
+2026-08-09～10 的三張票在 `app/ads/repository.py` 共加了約 42 行（cascade 表登記、排期策略落地），
+每次都把計算本體另開新檔，只留「唯一登記點」那幾行在超標檔裡。
+放行理由逐票寫在該 commit 的訊息裡，本檔不複述；當前凍結值一律以
+`KNOWN_OVERSIZED_FILES` 為準。
 
 ## 二、四個套件糾成一個 import 環（五組相鄰對）
 
