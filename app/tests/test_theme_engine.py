@@ -479,5 +479,65 @@ class RouteOpenFolderTest(_Base):
         self.assertEqual(resp.status_code, 404)
 
 
+class MatrixEmptyCellGenerateTest(_Base):
+    """票 W4：矩陣頁「點空白格生成一個新主題」的後端全路徑，一條龍串起來驗。
+
+    前端灰卡打的是哪支路由，從 frontend/src/components/workbench/MatrixPage.tsx
+    handleGenerate() → workbenchApi.ts generateTheme() 反查得到，就是下面 `_post_generate()`
+    的那條 POST。既有測試各驗一段、沒有一條把它們接起來：RouteGenerateThemeTest（本檔）
+    只驗 POST 的回應本身、沒回頭看矩陣那格有沒有變；test_preselect_batch.py
+    MatrixEndpointTest 驗矩陣三態、但主題是批次生的不是灰卡生的；
+    ExistingThemeAntiDuplicateTest（本檔）的既有主題是手寫塞進 DB 的、不是前一次生成留下的。
+    """
+
+    def _matrix_cell(self, cycle_id: str, cell_id: str) -> dict:
+        """矩陣端點裡這個切角格的 single_image 那一格。"""
+        resp = self.client.get(f"/api/ads/brands/{self.bid}/ads/{cycle_id}/matrix")
+        self.assertEqual(resp.status_code, 200, resp.text)
+        row = next(r for r in resp.json()["cells"] if r["experiment_cell_id"] == cell_id)
+        return row["formats"]["single_image"]
+
+    def _post_generate(self, cycle_id: str, cell_id: str):
+        return self.client.post(
+            f"/api/ads/brands/{self.bid}/ads/{cycle_id}/cells/{cell_id}"
+            f"/formats/single_image/themes")
+
+    def test_empty_cell_turns_themed_and_components_match_format_specs(self):
+        cycle_id, cell_id = self._ready_cell(objective="sales")
+        self.assertEqual(self._matrix_cell(cycle_id, cell_id)["state"], "empty")  # 起點是灰卡
+
+        self._swap(_theme_reply(image_count=10, text_count=5, name="虛構主題：晨霧拿鐵"))
+        resp = self._post_generate(cycle_id, cell_id)
+        self.assertEqual(resp.status_code, 200, resp.text)
+        theme_id = resp.json()["theme"]["id"]
+
+        after = self._matrix_cell(cycle_id, cell_id)
+        self.assertEqual(after["state"], "themed")
+        self.assertEqual([t["id"] for t in after["themes"]], [theme_id])
+        self.assertEqual(after["themes"][0]["name"], "虛構主題：晨霧拿鐵")
+        self.assertEqual(after["themes"][0]["status"], "draft")
+
+        # 元件真的落庫，且各型別數量照規格表（拿 FORMAT_SPECS 當預期值，不寫死 10/5/5/5）。
+        stored = theme_repo.get_theme(main.conn, self.bid, theme_id)
+        counts = {}
+        for c in stored["components"]:
+            counts[c["component_type"]] = counts.get(c["component_type"], 0) + 1
+        self.assertEqual(counts, {name: spec["count"] for name, spec in _FIELDS.items()})
+
+    def test_second_generate_in_same_cell_carries_the_first_theme_into_the_prompt(self):
+        """防撞衫約束：第一次生成留下的主題，要出現在第二次生成的簡報／prompt 裡。"""
+        cycle_id, cell_id = self._ready_cell(objective="sales")
+        self._swap(_theme_reply(image_count=10, text_count=5, name="虛構主題：晨霧拿鐵"))
+        self.assertEqual(self._post_generate(cycle_id, cell_id).status_code, 200)
+
+        second = self._swap(_theme_reply(image_count=10, text_count=5, name="虛構主題：夜焙可可"))
+        self.assertEqual(self._post_generate(cycle_id, cell_id).status_code, 200)
+
+        prompt_text = second.calls[0]["messages"][0]["content"]
+        self.assertIn("虛構主題：晨霧拿鐵", prompt_text)
+        self.assertIn("不要撞衫", prompt_text)
+        self.assertEqual(len(self._matrix_cell(cycle_id, cell_id)["themes"]), 2)
+
+
 if __name__ == "__main__":
     unittest.main()
