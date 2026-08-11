@@ -5,7 +5,7 @@ import type { BrandOption, RuleCard } from "@/lib/settingsApi";
 import { fetchBrandOptions, fetchRuleCards, resetRuleCard, saveRuleCard } from "@/lib/settingsApi";
 import { SectionCard } from "./shared/SectionCard";
 import { SaveButton } from "./shared/SaveButton";
-import { useFormSubmit } from "./shared/useFormSubmit";
+import { useFormSubmit } from "@/lib/useFormSubmit";
 
 type BrandsState =
   | { status: "loading" }

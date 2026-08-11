@@ -5,7 +5,10 @@ import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { EmptyState } from "@/components/layout/EmptyState";
 import { CockpitPage } from "@/components/cockpit/CockpitPage";
 import { InboxPage } from "@/components/inbox/InboxPage";
+import { LibraryPage } from "@/components/library/LibraryPage";
 import { BrandCard } from "@/components/overview/BrandCard";
+import { ProductDetailPage } from "@/components/products/ProductDetailPage";
+import { ProductListPage } from "@/components/products/ProductListPage";
 import { SettingsPage } from "@/components/settings/SettingsPage";
 import { MatrixPage } from "@/components/workbench/MatrixPage";
 import { WorkbenchPage } from "@/components/workbench/WorkbenchPage";
@@ -28,6 +31,9 @@ function App() {
       <Route path="/inbox" element={<InboxRoute />} />
       <Route path="/settings" element={<SettingsRoute />} />
       <Route path="/brands/:brandId" element={<BrandRoute />} />
+      <Route path="/brands/:brandId/library" element={<LibraryRoute />} />
+      <Route path="/brands/:brandId/products" element={<ProductListRoute />} />
+      <Route path="/brands/:brandId/products/:productId" element={<ProductDetailRoute />} />
       <Route path="/brands/:brandId/workbench" element={<WorkbenchRoute />} />
       <Route path="/brands/:brandId/workbench/:cycleId" element={<MatrixRoute />} />
     </Routes>
@@ -71,6 +77,36 @@ function BrandRoute() {
   return (
     <AppShell brandId={brandId ?? null}>
       <CockpitPage brandId={brandId ?? ""} />
+    </AppShell>
+  );
+}
+
+/** 品牌智庫（S5，票 B2-library）：合併舊版 7 個 Jinja 頁面成一頁六分頁籤＋側板。 */
+function LibraryRoute() {
+  const { brandId } = useParams<{ brandId: string }>();
+  return (
+    <AppShell brandId={brandId ?? null}>
+      <LibraryPage brandId={brandId ?? ""} />
+    </AppShell>
+  );
+}
+
+/** 產品清單（S6，票 B2-products）。 */
+function ProductListRoute() {
+  const { brandId } = useParams<{ brandId: string }>();
+  return (
+    <AppShell brandId={brandId ?? null}>
+      <ProductListPage brandId={brandId ?? ""} />
+    </AppShell>
+  );
+}
+
+/** 產品詳情（S6，票 B2-products）。 */
+function ProductDetailRoute() {
+  const { brandId, productId } = useParams<{ brandId: string; productId: string }>();
+  return (
+    <AppShell brandId={brandId ?? null}>
+      <ProductDetailPage brandId={brandId ?? ""} productId={productId ?? ""} />
     </AppShell>
   );
 }

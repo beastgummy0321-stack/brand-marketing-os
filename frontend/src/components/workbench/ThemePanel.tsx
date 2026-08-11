@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { X } from "lucide-react";
 import { EmptyState } from "@/components/layout/EmptyState";
-import { cn } from "@/lib/utils";
+import { SidePanel } from "@/components/layout/SidePanel";
 import {
   adoptTheme,
   fetchImagePromptsCopy,
@@ -50,7 +50,6 @@ export function ThemePanel({
   onAdopted: (themeId: string) => void;
 }) {
   const [state, setState] = useState<LoadState>({ status: "loading" });
-  const [entered, setEntered] = useState(false);
   const [adopting, setAdopting] = useState(false);
   const [adoptError, setAdoptError] = useState<string | null>(null);
 
@@ -73,19 +72,6 @@ export function ThemePanel({
       cancelled = true;
     };
   }, [brandId, cycleId, themeId]);
-
-  useEffect(() => {
-    const id = requestAnimationFrame(() => setEntered(true));
-    return () => cancelAnimationFrame(id);
-  }, []);
-
-  useEffect(() => {
-    function handleKey(event: KeyboardEvent) {
-      if (event.key === "Escape") onClose();
-    }
-    document.addEventListener("keydown", handleKey);
-    return () => document.removeEventListener("keydown", handleKey);
-  }, [onClose]);
 
   function handleAdopt() {
     setAdopting(true);
@@ -188,30 +174,9 @@ export function ThemePanel({
   }
 
   return (
-    <>
-      <div
-        aria-hidden="true"
-        onClick={onClose}
-        className={cn(
-          "fixed inset-0 z-40 bg-foreground/20 transition-opacity duration-200 ease-out motion-reduce:duration-0 motion-reduce:transition-none",
-          entered ? "opacity-100" : "opacity-0",
-        )}
-      />
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-label="主題內容側板"
-        className={cn(
-          "fixed inset-y-0 right-0 z-50 flex w-[36rem] max-w-full flex-col gap-5 overflow-y-auto",
-          "border-l border-border bg-card p-6 shadow-[var(--shadow-card)]",
-          "transition-[transform,opacity] duration-[220ms] ease-[cubic-bezier(0.23,1,0.32,1)]",
-          "motion-reduce:transition-none motion-reduce:duration-0",
-          entered ? "translate-x-0 opacity-100" : "translate-x-full opacity-0",
-        )}
-      >
-        {content}
-      </div>
-    </>
+    <SidePanel ariaLabel="主題內容側板" onClose={onClose} widthClassName="w-[36rem]">
+      {content}
+    </SidePanel>
   );
 }
 

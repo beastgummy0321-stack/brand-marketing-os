@@ -4,7 +4,7 @@ import { clearApiKey, saveApiKey } from "@/lib/settingsApi";
 import { SectionCard } from "./shared/SectionCard";
 import { SaveButton } from "./shared/SaveButton";
 import { TestConnectionButton } from "./shared/TestConnectionButton";
-import { useFormSubmit } from "./shared/useFormSubmit";
+import { useFormSubmit } from "@/lib/useFormSubmit";
 
 const CLEAR_CONFIRM_TEXT =
   "確定要刪除資料庫裡的金鑰？這個動作無法復原。刪除後如果沒有設定環境變數，AI 功能會顯示尚未設定金鑰。";

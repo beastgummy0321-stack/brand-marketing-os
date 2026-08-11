@@ -4,7 +4,7 @@ import { saveMeta } from "@/lib/settingsApi";
 import { SectionCard } from "./shared/SectionCard";
 import { SaveButton } from "./shared/SaveButton";
 import { TestConnectionButton } from "./shared/TestConnectionButton";
-import { useFormSubmit } from "./shared/useFormSubmit";
+import { useFormSubmit } from "@/lib/useFormSubmit";
 
 /** Meta 廣告帳號小節（S15.1–S15.6）。文案沿用既有 `app/templates/settings.html:19-56`。 */
 export function MetaSection({ data, onSaved }: { data: SettingsData; onSaved: () => void }) {

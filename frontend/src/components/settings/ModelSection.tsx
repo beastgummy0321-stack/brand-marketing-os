@@ -3,7 +3,7 @@ import type { SettingsData } from "@/lib/settingsApi";
 import { saveModel } from "@/lib/settingsApi";
 import { SectionCard } from "./shared/SectionCard";
 import { SaveButton } from "./shared/SaveButton";
-import { useFormSubmit } from "./shared/useFormSubmit";
+import { useFormSubmit } from "@/lib/useFormSubmit";
 
 /** 使用的模型小節（S15.19–S15.21）。文案沿用既有 `app/templates/settings.html:160-191`。 */
 export function ModelSection({ data, onSaved }: { data: SettingsData; onSaved: () => void }) {

@@ -4,7 +4,7 @@ import { saveGa4 } from "@/lib/settingsApi";
 import { SectionCard } from "./shared/SectionCard";
 import { SaveButton } from "./shared/SaveButton";
 import { TestConnectionButton } from "./shared/TestConnectionButton";
-import { useFormSubmit } from "./shared/useFormSubmit";
+import { useFormSubmit } from "@/lib/useFormSubmit";
 
 /** GA4 小節（S15.7–S15.12）。文案沿用既有 `app/templates/settings.html:59-93`。 */
 export function Ga4Section({ data, onSaved }: { data: SettingsData; onSaved: () => void }) {

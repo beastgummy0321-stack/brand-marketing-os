@@ -3,7 +3,7 @@ import type { SettingsData } from "@/lib/settingsApi";
 import { saveBudget, saveCreativeRoot, savePromptHeader } from "@/lib/settingsApi";
 import { SectionCard } from "./shared/SectionCard";
 import { SaveButton } from "./shared/SaveButton";
-import { useFormSubmit } from "./shared/useFormSubmit";
+import { useFormSubmit } from "@/lib/useFormSubmit";
 
 /** 素材資料夾與花費上限小節（S15.22–S15.28）。文案沿用既有
  * `app/templates/settings.html:193-249`。三個獨立表單（資料夾／提示詞開頭／花費上限），
