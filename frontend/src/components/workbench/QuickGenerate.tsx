@@ -103,7 +103,9 @@ type RunState =
  * 沒有選類型時顯示四張入口卡。結果不排序、不比較、沒有採用動作，只有複製（G12.5）。 */
 export function QuickGenerate({ brandId }: { brandId: string }) {
   const [scope, setScope] = useState<QuickGenerateScope | null>(null);
-  const [products, setProducts] = useState<QuickGenerateProduct[]>([]);
+  // null＝還在讀，[]＝這個品牌真的沒有產品。兩者分開才畫得出空狀態，
+  // 否則「讀取中」跟「沒有產品」長得一樣，看起來就像壞了。
+  const [products, setProducts] = useState<QuickGenerateProduct[] | null>(null);
   const [productsError, setProductsError] = useState<string | null>(null);
   const [productId, setProductId] = useState<string | null>(null);
   const [topic, setTopic] = useState("");
@@ -216,7 +218,7 @@ export function QuickGenerate({ brandId }: { brandId: string }) {
                     selected={productId === null}
                     onSelect={() => setProductId(null)}
                   />
-                  {products.map((product) => (
+                  {(products ?? []).map((product) => (
                     <ProductPill
                       key={product.id}
                       label={product.name}
@@ -226,6 +228,11 @@ export function QuickGenerate({ brandId }: { brandId: string }) {
                   ))}
                 </div>
                 {productsError && <p className="text-xs text-danger">{productsError}</p>}
+                {!productsError && products?.length === 0 && (
+                  <p className="text-xs text-muted-foreground">
+                    這個品牌還沒登錄產品，這次只用品牌資料生成。
+                  </p>
+                )}
               </div>
 
               <div className="flex flex-col gap-2">
