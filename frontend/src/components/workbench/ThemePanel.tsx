@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { FolderOpen, X } from "lucide-react";
+import { X } from "lucide-react";
 import { EmptyState } from "@/components/layout/EmptyState";
-import { cn, PRESS_FEEDBACK } from "@/lib/utils";
+import { cn } from "@/lib/utils";
 import {
   adoptTheme,
   fetchImagePromptsCopy,
@@ -15,6 +15,7 @@ import { CarouselContent } from "./CarouselContent";
 import { ThemeStatusTag } from "./MatrixCell";
 import { ComponentSection } from "./shared/ComponentSection";
 import { CopyIconButton } from "./shared/CopyIconButton";
+import { OpenFolderButton } from "./shared/OpenFolderButton";
 import { VideoContent } from "./VideoContent";
 
 type LoadState =
@@ -253,7 +254,7 @@ function SingleImageContent({
                 return groups.map((g) => g.content).join("\n\n----------\n\n");
               }}
             />
-            <OpenFolderButton brandId={brandId} cycleId={cycleId} themeId={themeId} />
+            <OpenFolderButton onOpen={() => openThemeFolder(brandId, cycleId, themeId)} />
           </div>
         }
       />
@@ -282,54 +283,5 @@ function SingleImageContent({
         onComponentUpdated={onComponentUpdated}
       />
     </div>
-  );
-}
-
-/** 開資料夾按鈕：三態（idle／opening／opened／failed），不是共用元件（只有這一處用），
- * 就近寫在同一檔。伺服器端 os.startfile 開資料夾，成功不代表「複製」，不套用
- * CopyIconButton 那套複製語意，另外寫一顆小狀態機。 */
-function OpenFolderButton({
-  brandId,
-  cycleId,
-  themeId,
-}: {
-  brandId: string;
-  cycleId: string;
-  themeId: string;
-}) {
-  const [state, setState] = useState<"idle" | "opening" | "opened" | "failed">("idle");
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
-
-  async function handleClick() {
-    setState("opening");
-    setErrorMessage(null);
-    try {
-      await openThemeFolder(brandId, cycleId, themeId);
-      setState("opened");
-    } catch (err) {
-      setState("failed");
-      setErrorMessage(err instanceof Error ? err.message : "開資料夾失敗，請稍後再試。");
-    }
-  }
-
-  return (
-    <span className="inline-flex flex-col items-start gap-1">
-      <button
-        type="button"
-        onClick={handleClick}
-        title={state === "failed" ? (errorMessage ?? "開資料夾") : "開資料夾"}
-        className={cn(
-          "inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border border-border px-2 py-1 text-xs font-medium transition-colors hover:border-primary hover:text-primary",
-          state === "failed" ? "text-danger" : "text-muted-foreground",
-          PRESS_FEEDBACK,
-        )}
-      >
-        <FolderOpen className="h-3.5 w-3.5" aria-hidden="true" />
-        {state === "opened" ? "已開啟" : state === "opening" ? "開啟中…" : "開資料夾"}
-      </button>
-      {state === "failed" && errorMessage && (
-        <span className="text-xs text-danger">{errorMessage}</span>
-      )}
-    </span>
   );
 }

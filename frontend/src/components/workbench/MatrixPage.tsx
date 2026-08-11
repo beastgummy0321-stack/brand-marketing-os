@@ -1,10 +1,21 @@
 import { Fragment, useEffect, useState, type ReactNode } from "react";
+import { FolderOpen } from "lucide-react";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { EmptyState } from "@/components/layout/EmptyState";
-import { fetchMatrix, generateTheme, type MatrixCellRow, type MatrixFormatCell } from "@/lib/workbenchApi";
+import { cn } from "@/lib/utils";
+import {
+  fetchCycleFolder,
+  fetchMatrix,
+  generateTheme,
+  openCycleFolder,
+  type CycleFolder,
+  type MatrixCellRow,
+  type MatrixFormatCell,
+} from "@/lib/workbenchApi";
 import { MatrixCell } from "./MatrixCell";
 import { ThemePanel } from "./ThemePanel";
 import { GlossaryTerm } from "./shared/GlossaryTerm";
+import { OpenFolderButton } from "./shared/OpenFolderButton";
 
 /** 欄＝格式，固定順序與比例標籤（app/creative/format_specs.py FORMAT_SPECS，比例查證日
  * 2026-08-07／08）。矩陣資料的 `formats` 物件本身用格式 key 當鍵，這份表只補人看得懂的
@@ -220,7 +231,7 @@ export function MatrixPage({ brandId, cycleId }: { brandId: string; cycleId: str
           {" "}× 格式的生成矩陣，檔期 {cycleId}
         </p>
       </div>
-      <CreativeFolderBar />
+      <CreativeFolderBar brandId={brandId} cycleId={cycleId} />
       {content}
       {openPanel && (
         <ThemePanel
@@ -236,27 +247,49 @@ export function MatrixPage({ brandId, cycleId }: { brandId: string; cycleId: str
   );
 }
 
-/** 頂部素材資料夾入口（票 16 AC5）：後端目前只有「開單一主題資料夾」的 JSON 端點
- * （POST .../themes/{id}/folder），沒有這期檔期整包資料夾的大小／開啟端點，不得編造
- * 一個數字或另外接一支不成文的舊版路由（那支是 HTML 轉址，不是這個模組的裸 JSON
- * 慣例）。比照 QuickGenerateStub 的「按不下去、原因寫清楚」先例，先佔位等後端補。 */
-function CreativeFolderBar() {
+/** 頂部素材資料夾入口（票 16 AC5、線框 .scratch/creative-studio/studio-wireframe.html:111
+ * 「素材資料夾 128 MB ［開資料夾］」）：大小每次重算（使用者是在檔案總管裡加減檔案的，
+ * 系統沒有寫入路徑會知道），所以進頁面讀一次、開完資料夾再讀一次。
+ *
+ * 資料夾還沒建立時後端回 `exists: false`（不是 0 MB），這裡顯示「尚未建立」——「還沒開過」
+ * 跟「開了但還沒倒圖進去」是兩件事。按下開資料夾會順手建起來，所以成功後重讀大小。 */
+function CreativeFolderBar({ brandId, cycleId }: { brandId: string; cycleId: string }) {
+  const [folder, setFolder] = useState<CycleFolder | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setFolder(null);
+    setError(null);
+    fetchCycleFolder(brandId, cycleId)
+      .then((data) => {
+        if (!cancelled) setFolder(data);
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setError(err instanceof Error ? err.message : "資料夾狀態讀取失敗");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [brandId, cycleId]);
+
+  const sizeText = error ?? (folder === null ? "讀取中…" : (folder.size_label ?? "尚未建立"));
+
   return (
     <div className="flex items-center justify-between gap-4 rounded-lg border border-border bg-card px-4 py-3 shadow-[var(--shadow-card)]">
-      <div>
-        <p className="text-sm font-medium text-foreground">素材資料夾</p>
-        <p className="text-xs text-muted-foreground">
-          大小：待後端補上這期檔期的資料夾端點，目前請自己到檔案總管確認。
-        </p>
-      </div>
-      <button
-        type="button"
-        disabled
-        title="這期檔期還沒有可以打的開資料夾端點，先留位置"
-        className="shrink-0 cursor-not-allowed whitespace-nowrap rounded-md border border-dashed border-border px-4 py-2 text-sm text-muted-foreground/70"
-      >
-        開資料夾
-      </button>
+      <p className="flex items-center gap-2 text-sm font-medium text-foreground">
+        <FolderOpen className="h-4 w-4 text-primary" aria-hidden="true" />
+        素材資料夾
+        <span className={cn("text-xs font-normal", error ? "text-danger" : "text-muted-foreground")}>
+          {sizeText}
+        </span>
+      </p>
+      <OpenFolderButton
+        onOpen={async () => {
+          await openCycleFolder(brandId, cycleId);
+          setFolder(await fetchCycleFolder(brandId, cycleId));
+        }}
+      />
     </div>
   );
 }

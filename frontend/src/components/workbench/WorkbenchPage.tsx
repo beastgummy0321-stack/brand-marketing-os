@@ -2,10 +2,10 @@ import { useEffect, useState, type ReactNode } from "react";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { EmptyState } from "@/components/layout/EmptyState";
 import { fetchWorkbenchTasks, type WorkbenchTask } from "@/lib/workbenchApi";
-import { QuickGenerateStub } from "./QuickGenerateStub";
+import { QuickGenerate } from "./QuickGenerate";
 import { TaskCard } from "./TaskCard";
 
-/** 素材工作檯入口（畫面1，票 15-workbench-entry）：列出上游派來的任務卡＋快速生成殼區。
+/** 素材工作檯入口（畫面1，票 15-workbench-entry）：列出上游派來的任務卡＋快速生成區。
  * 品牌由路徑參數 `/brands/:brandId/workbench` 決定，比照 CockpitPage 的 LoadState
  * 判別聯集寫法。 */
 type LoadState =
@@ -74,7 +74,7 @@ export function WorkbenchPage({ brandId }: { brandId: string }) {
         <p className="text-sm text-muted-foreground">上游派來的任務</p>
       </div>
       {content}
-      <QuickGenerateStub />
+      <QuickGenerate brandId={brandId} />
     </div>
   );
 }

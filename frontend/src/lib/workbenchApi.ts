@@ -202,6 +202,38 @@ export async function fetchImagePromptsCopy(
   return body.groups;
 }
 
+/** 這期檔期素材資料夾的大小：對應 app/ads/routes_creative_theme.py cycle_folder()。
+ * `exists: false`＝資料夾還沒建立（`size_label` 為 null），跟「建立了但還是空的」
+ * （`"0.0 MB"`）是兩件事，後端刻意分開，前端不得混成同一句話。 */
+export interface CycleFolder {
+  exists: boolean;
+  size_label: string | null;
+}
+
+export async function fetchCycleFolder(brandId: string, cycleId: string): Promise<CycleFolder> {
+  const res = await fetch(
+    `/api/ads/brands/${encodeURIComponent(brandId)}/ads/${encodeURIComponent(cycleId)}/folder`,
+  );
+  if (!res.ok) {
+    throw new Error(await extractErrorMessage(res, "資料夾狀態讀取失敗"));
+  }
+  return (await res.json()) as CycleFolder;
+}
+
+/** 開這期檔期的素材資料夾（沒有就建）：對應 open_cycle_folder()，跟主題層同一支
+ * creative_assets.open_folder()，只差不傳主題資料夾名。 */
+export async function openCycleFolder(brandId: string, cycleId: string): Promise<string> {
+  const res = await fetch(
+    `/api/ads/brands/${encodeURIComponent(brandId)}/ads/${encodeURIComponent(cycleId)}/folder`,
+    { method: "POST" },
+  );
+  if (!res.ok) {
+    throw new Error(await extractErrorMessage(res, "開資料夾失敗"));
+  }
+  const body: { folder_path: string } = await res.json();
+  return body.folder_path;
+}
+
 /** 開這個主題的素材資料夾：對應 app/ads/routes_creative_theme.py open_theme_folder()
  * （伺服器端 os.startfile，單機單人使用，決策 0008）。 */
 export async function openThemeFolder(
@@ -318,6 +350,70 @@ export function parseVideoScript(content: string): VideoScript | null {
     // 不是合法 JSON，當作解析失敗處理。
   }
   return null;
+}
+
+// ---------------------------------------------------------------------------
+// 快速生成（畫面1 下半，契約 G12）：不開檔期、不落地，端點回應即棄。掛在 /api/creative
+// 前綴下（app/ads/routes_quick_generate.py），不是 /api/ads。
+// ---------------------------------------------------------------------------
+
+/** 快速生成的四種類型，字面值＝後端 `QUICK_GENERATE_SCOPES` 的鍵
+ * （app/creative/format_specs.py:104，查證日 2026-08-11）。 */
+export type QuickGenerateScope = "post" | "video" | "image" | "script";
+
+/** 快速生成回傳的元件：**跟側板的 `ThemeComponentData` 不是同一個形狀**——不落地代表沒有
+ * DB 主鍵（沒有 `id`）、沒有退件與相似度旗標，`sequence` 只有 hook_pool 帶
+ * （app/creative/theme_engine_video.py:200）。因此側板的 ComponentSection／ComponentRow
+ * 不能重用在這裡（那兩顆一定要 `component.id` 才能打退件端點）。 */
+export interface QuickGenerateComponent {
+  component_type: string;
+  content: string;
+}
+
+export interface QuickGenerateResult {
+  scope: QuickGenerateScope;
+  name: string;
+  components: QuickGenerateComponent[];
+}
+
+export interface QuickGenerateProduct {
+  id: string;
+  name: string;
+}
+
+/** 產品 pills 的清單：對應 app/ads/routes_quick_generate.py quick_generate_products()。 */
+export async function fetchQuickGenerateProducts(
+  brandId: string,
+): Promise<QuickGenerateProduct[]> {
+  const res = await fetch(`/api/creative/brands/${encodeURIComponent(brandId)}/products`);
+  if (!res.ok) {
+    throw new Error(await extractErrorMessage(res, "產品清單讀取失敗"));
+  }
+  const body: { products: QuickGenerateProduct[] } = await res.json();
+  return body.products;
+}
+
+/** 快速生成本體：對應 quick_generate()。`productId` 傳 null＝不指定產品（純品牌範圍）。
+ * 失敗一律走既有 `{"error": "人話訊息"}` 慣例（契約 G12.8）。 */
+export async function quickGenerate(
+  brandId: string,
+  scope: QuickGenerateScope,
+  topic: string,
+  productId: string | null,
+): Promise<QuickGenerateResult> {
+  const res = await fetch(
+    `/api/creative/brands/${encodeURIComponent(brandId)}/quick-generate`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ scope, topic, product_id: productId }),
+    },
+  );
+  if (!res.ok) {
+    throw new Error(await extractErrorMessage(res, "生成失敗"));
+  }
+  const body: { result: QuickGenerateResult } = await res.json();
+  return body.result;
 }
 
 /** 腳本×Hook 組合成完整文字：對應 app/ads/routes_creative_theme.py

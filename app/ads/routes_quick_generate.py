@@ -30,9 +30,9 @@ ponytail：多花一點 AI 產出（title／description 生完即丟）換取「
 ——票 Implementation Decisions 沒有列這兩項，且「不落地」代表沒有同格既有主題可比對相似度，
 相似度標黃在這裡本來就是空操作。
 
-對外進入點：`router`（`POST /api/creative/brands/{brand_id}/quick-generate`，掛進
-app/ads/routes.py）。誰依賴它：素材工作檯前端快速生成入口（前端實作見票 Out of Scope，
-本票只做這支端點）。
+對外進入點：`router`（`POST /api/creative/brands/{brand_id}/quick-generate` 生成本體，
+`GET /api/creative/brands/{brand_id}/products` 給產品 pills 用，兩支都掛進 app/ads/routes.py）。
+誰依賴它：素材工作檯前端快速生成入口（frontend/src/components/workbench/QuickGenerate.tsx）。
 """
 
 from fastapi import APIRouter, Request
@@ -173,6 +173,18 @@ def _run_quick_generate(conn, brand: dict, *, scope: str, topic: str, product_id
 
     components = [c for c in merged_components if c["component_type"] in target_fields]
     return {"scope": scope, "name": name, "components": components}, None
+
+
+@router.get("/brands/{brand_id}/products")
+async def quick_generate_products(brand_id: str):
+    """產品 pills 的清單（契約 G12.0）：這個品牌旗下的產品，只回 id／name——pills 用不到
+    其他欄位。沿用既有 `main_mod.list_products()`（app/shared/web.py:71，內部就是
+    `brand_intelligence.repository.list_products()`，契約指名的同一支），不另外查表。
+    「不指定」那顆是前端固定選項，不佔一筆資料。
+    """
+    main_mod.require_brand(brand_id)
+    return {"products": [{"id": p["id"], "name": p["name"]}
+                         for p in main_mod.list_products(brand_id)]}
 
 
 @router.post("/brands/{brand_id}/quick-generate")

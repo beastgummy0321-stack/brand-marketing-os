@@ -238,6 +238,24 @@ class ProductSelectionTest(_Base):
         self.assertEqual(resp.status_code, 404)
 
 
+class ProductListRouteTest(_Base):
+    """契約 G12.0 產品 pills 的資料來源：只回這個品牌的產品、只回 id／name 兩欄。"""
+
+    def test_lists_only_this_brands_products(self):
+        other = bi_repo.create_brand(main.conn, name="虛構隔壁茶行（快速生成票）",
+                                     client_name="測試客戶", actor=ACTOR)
+        bi_repo.create_product(main.conn, other["id"], name="虛構隔壁產品", actor=ACTOR)
+        resp = self.client.get(f"/api/creative/brands/{self.bid}/products")
+        self.assertEqual(resp.status_code, 200, resp.text)
+        products = resp.json()["products"]
+        self.assertEqual([p["name"] for p in products], ["虛構濾掛組"])
+        self.assertEqual(set(products[0]), {"id", "name"})
+
+    def test_unknown_brand_returns_404(self):
+        resp = self.client.get("/api/creative/brands/brd_not_real/products")
+        self.assertEqual(resp.status_code, 404)
+
+
 class InputValidationTest(_Base):
     def test_unknown_scope_returns_400(self):
         resp = self._post(scope="nonsense", topic="第一杯 39 元", product_id=None)
