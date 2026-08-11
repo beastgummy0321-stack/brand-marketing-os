@@ -34,6 +34,7 @@ from typing import Optional
 
 from fastapi import FastAPI, Form, Request
 from fastapi.exception_handlers import http_exception_handler
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
@@ -286,14 +287,129 @@ async def settings_get(request: Request):
     return templates.TemplateResponse(request, "settings.html", settings_ctx(request))
 
 
-@app.post("/settings/api-key")
-async def settings_api_key_post(request: Request, api_key: str = Form("")):
+# ---------------------------------------------------------------------------
+# 設定頁寫入邏輯（純函式，回傳錯誤人話訊息／None＝成功）：HTML 表單路由與下方 JSON API
+# 路由共用同一份，不為了 JSON 契約重寫第二份寫入邏輯（票 B1-settings）。
+# ---------------------------------------------------------------------------
+
+def _write_api_key(api_key: str) -> Optional[str]:
     key = clean(api_key)
     if not key:
-        return templates.TemplateResponse(request, "settings.html", settings_ctx(
-            request, errors={"api_key": "請貼上 AI 金鑰。"},
-        ), status_code=400)
+        return "請貼上 AI 金鑰。"
     coresettings.set_setting(web.conn, coresettings.API_KEY_SETTING, key)
+    return None
+
+
+def _write_meta_settings(account_id: str, token: str) -> Optional[str]:
+    account = clean(account_id)
+    token_c = clean(token)
+    if not account:
+        return "請填入廣告帳號編號。"
+    coresettings.set_setting(web.conn, ads_sync.ACCOUNT_SETTING, account)
+    if token_c:
+        coresettings.set_setting(web.conn, ads_sync.TOKEN_SETTING, token_c)
+    return None
+
+
+def _write_ga4_settings(property_id: str, service_account_json: str) -> Optional[str]:
+    property_id_c = clean(property_id)
+    key_json = (service_account_json or "").strip()
+    if not property_id_c:
+        return "請填入 GA4 資源編號。"
+    coresettings.set_setting(web.conn, ga4_sync.PROPERTY_SETTING, property_id_c)
+    if key_json:
+        coresettings.set_setting(web.conn, ga4_sync.SERVICE_ACCOUNT_SETTING, key_json)
+    return None
+
+
+def _write_model(llm_model: str) -> Optional[str]:
+    labels = {m_id: name for m_id, name in MODEL_CHOICES}
+    if llm_model not in labels:
+        return "請從選單中選一個模型。"
+    coresettings.set_setting(web.conn, coresettings.LLM_MODEL_SETTING, llm_model)
+    return None
+
+
+def _write_budget(raw_budget) -> Optional[str]:
+    """raw_budget 接受字串（表單）或數字（JSON）——先轉字串再走既有 parse_number，
+    驗證規則只寫一份。"""
+    raw = "" if raw_budget is None else str(raw_budget)
+    value, ok = parse_number(raw)
+    if not ok or value is None or value <= 0:
+        return "花費上限請填大於 0 的數字，例如 30。"
+    coresettings.set_setting(web.conn, coresettings.INTAKE_BUDGET_SETTING, _num_str(value))
+    return None
+
+
+def _write_creative_root(raw_root: str) -> Optional[str]:
+    """三道驗證：有填、是完整路徑、不是磁碟機根目錄——刪品牌／刪檔期會刪掉這底下對應的
+    子資料夾，指到 `C:\\` 這種地方很危險。不驗資料夾存不存在：使用者可能先填好路徑，
+    等一下才插上那顆外接硬碟。"""
+    raw = clean(raw_root)
+    path = Path(raw) if raw else None
+    if path is None or not path.is_absolute() or path.parent == path:
+        return ("請填一個完整的資料夾路徑（例如 D:\\行銷素材），"
+                "不要只填資料夾名稱，也不要填磁碟機根目錄。")
+    coresettings.set_setting(web.conn, corecreative.SETTING_KEY, str(path))
+    return None
+
+
+def _write_prompt_header(prompt_header: str) -> None:
+    coresettings.set_setting(
+        web.conn, coresettings.IMAGE_PROMPT_HEADER_SETTING, (prompt_header or "").strip())
+
+
+def _run_ai_test_connection() -> tuple:
+    """回傳 (人話訊息, kind)：kind 沿用 `redirect_with_message` 既有的 'ok'／'warn'／'danger'
+    三種，HTML 與 JSON 路由共用同一份判斷。"""
+    if not coresettings.get_api_key(web.conn):
+        return "尚未設定金鑰。請先在上方填入 AI 金鑰，儲存後再測試。", "warn"
+    try:
+        llm_providers.AnthropicProvider().complete(
+            model=coresettings.get_llm_model(web.conn), system=None,
+            messages=[{"role": "user", "content": "hi"}], max_tokens=1, timeout_s=30.0,
+        )
+    except llm_providers.ProviderError as exc:
+        # providers 已統一把供應商例外轉成人話（含 401＝金鑰錯誤、餘額不足），
+        # 這裡直接顯示同一句，設定頁與建檔精靈才不會兩套說法。
+        return str(exc), "danger"
+    except Exception:
+        return "測試失敗：系統發生問題，請再試一次。", "danger"
+    return "金鑰有效：AI 服務有正常回應，可以開始使用 AI 功能。", "ok"
+
+
+def _run_meta_test_connection() -> tuple:
+    if not ads_sync.is_configured(web.conn):
+        return "尚未設定 Meta 連線。請先在上方填入廣告帳號編號與唯讀金鑰，儲存後再測試。", "warn"
+    try:
+        ads_sync.make_client(web.conn).list_campaigns(ads_sync.get_account_id(web.conn))
+    except meta_api.MetaApiError as exc:
+        return str(exc), "danger"
+    except Exception:
+        return "測試失敗：系統發生問題，請再試一次。", "danger"
+    return "連線正常：可以讀到 Meta 廣告帳號的資料。", "ok"
+
+
+def _run_ga4_test_connection() -> tuple:
+    if not ga4_sync.is_configured(web.conn):
+        return "尚未設定 GA4 連線。請先在上方填入資源編號與服務帳戶金鑰，儲存後再測試。", "warn"
+    today = datetime.now(timezone.utc).date().isoformat()
+    try:
+        ga4_sync.make_client(web.conn).fetch_source_medium(today, today)
+    except ga4_api.GA4ApiError as exc:
+        return str(exc), "danger"
+    except Exception:
+        return "測試失敗：系統發生問題，請再試一次。", "danger"
+    return "連線正常：可以讀到 GA4 網站數據。", "ok"
+
+
+@app.post("/settings/api-key")
+async def settings_api_key_post(request: Request, api_key: str = Form("")):
+    error = _write_api_key(api_key)
+    if error:
+        return templates.TemplateResponse(request, "settings.html", settings_ctx(
+            request, errors={"api_key": error},
+        ), status_code=400)
     return redirect_with_message("/settings", "已儲存 AI 金鑰。之後的 AI 功能會用這把金鑰。")
 
 
@@ -313,15 +429,11 @@ async def settings_api_key_clear_db_post(request: Request):
 async def settings_meta_post(request: Request, meta_token: str = Form(""),
                              meta_account_id: str = Form("")):
     """Meta 廣告帳號的唯讀連線設定（票 9）。金鑰只存在本機資料庫，畫面只顯示遮罩後的樣子。"""
-    account = clean(meta_account_id)
-    token = clean(meta_token)
-    if not account:
+    error = _write_meta_settings(meta_account_id, meta_token)
+    if error:
         return templates.TemplateResponse(request, "settings.html", settings_ctx(
-            request, errors={"meta_account_id": "請填入廣告帳號編號。"},
+            request, errors={"meta_account_id": error},
         ), status_code=400)
-    coresettings.set_setting(web.conn, ads_sync.ACCOUNT_SETTING, account)
-    if token:
-        coresettings.set_setting(web.conn, ads_sync.TOKEN_SETTING, token)
     return redirect_with_message("/settings", "已儲存 Meta 廣告帳號的連線設定。")
 
 
@@ -329,131 +441,227 @@ async def settings_meta_post(request: Request, meta_token: str = Form(""),
 async def settings_ga4_post(request: Request, ga4_property_id: str = Form(""),
                             ga4_service_account_json: str = Form("")):
     """GA4 服務帳戶連線設定（票 34）。金鑰只存在本機資料庫，畫面只顯示遮罩後的樣子。"""
-    property_id = clean(ga4_property_id)
-    key_json = ga4_service_account_json.strip()
-    if not property_id:
+    error = _write_ga4_settings(ga4_property_id, ga4_service_account_json)
+    if error:
         return templates.TemplateResponse(request, "settings.html", settings_ctx(
-            request, errors={"ga4_property_id": "請填入 GA4 資源編號。"},
+            request, errors={"ga4_property_id": error},
         ), status_code=400)
-    coresettings.set_setting(web.conn, ga4_sync.PROPERTY_SETTING, property_id)
-    if key_json:
-        coresettings.set_setting(web.conn, ga4_sync.SERVICE_ACCOUNT_SETTING, key_json)
     return redirect_with_message("/settings", "已儲存 GA4 服務帳戶的連線設定。")
 
 
 @app.post("/settings/model")
 async def settings_model_post(request: Request, llm_model: str = Form("")):
-    labels = {m_id: name for m_id, name in MODEL_CHOICES}
-    if llm_model not in labels:
+    error = _write_model(llm_model)
+    if error:
         return templates.TemplateResponse(request, "settings.html", settings_ctx(
-            request, errors={"llm_model": "請從選單中選一個模型。"},
+            request, errors={"llm_model": error},
         ), status_code=400)
-    coresettings.set_setting(web.conn, coresettings.LLM_MODEL_SETTING, llm_model)
+    labels = {m_id: name for m_id, name in MODEL_CHOICES}
     return redirect_with_message("/settings", f"已將使用的模型設定為「{labels[llm_model]}」。")
 
 
 @app.post("/settings/budget")
 async def settings_budget_post(request: Request, intake_budget: str = Form("")):
-    value, ok = parse_number(intake_budget)
-    if not ok or value is None or value <= 0:
+    error = _write_budget(intake_budget)
+    if error:
         return templates.TemplateResponse(request, "settings.html", settings_ctx(
-            request, values={"intake_budget": intake_budget},
-            errors={"intake_budget": "花費上限請填大於 0 的數字，例如 30。"},
+            request, values={"intake_budget": intake_budget}, errors={"intake_budget": error},
         ), status_code=400)
-    coresettings.set_setting(web.conn, coresettings.INTAKE_BUDGET_SETTING, _num_str(value))
     return redirect_with_message(
-        "/settings", f"已將單次建檔的花費上限設為 $ {_num_str(value)}。"
+        "/settings",
+        f"已將單次建檔的花費上限設為 $ {_num_str(coresettings.get_intake_budget_limit(web.conn))}。"
     )
 
 
 @app.post("/settings/creative-root")
 async def settings_creative_root_post(request: Request, creative_root: str = Form("")):
-    """素材圖檔資料夾的根目錄（決策 0008）。三道驗證：有填、是完整路徑、不是磁碟機根目錄
-    ——刪品牌／刪檔期會刪掉這底下對應的子資料夾，指到 `C:\\` 這種地方很危險。
-
-    不驗資料夾存不存在：使用者可能先填好路徑，等一下才插上那顆外接硬碟。
-    """
-    raw = clean(creative_root)
-    path = Path(raw) if raw else None
-    if path is None or not path.is_absolute() or path.parent == path:
+    error = _write_creative_root(creative_root)
+    if error:
         return templates.TemplateResponse(request, "settings.html", settings_ctx(
-            request, values={"creative_root": creative_root},
-            errors={"creative_root": "請填一個完整的資料夾路徑（例如 D:\\行銷素材），"
-                                     "不要只填資料夾名稱，也不要填磁碟機根目錄。"},
+            request, values={"creative_root": creative_root}, errors={"creative_root": error},
         ), status_code=400)
-    coresettings.set_setting(web.conn, corecreative.SETTING_KEY, str(path))
-    return redirect_with_message("/settings", f"素材圖檔資料夾已設為 {path}。")
+    return redirect_with_message(
+        "/settings", f"素材圖檔資料夾已設為 {corecreative.get_root(web.conn)}。")
 
 
 @app.post("/settings/prompt-header")
 async def settings_prompt_header_post(request: Request, prompt_header: str = Form("")):
     """整組複製提示詞的自訂開頭（票 11-copy-flows；ADR 0008 三）：全站一份、不分品牌，
     存進 app_setting。選填——留白代表整組複製時不加開頭那一行，不是輸入錯誤。"""
-    coresettings.set_setting(
-        web.conn, coresettings.IMAGE_PROMPT_HEADER_SETTING, prompt_header.strip())
+    _write_prompt_header(prompt_header)
     return redirect_with_message("/settings", "已儲存整組複製提示詞的自訂開頭。")
 
 
 @app.post("/settings/test-connection")
 async def settings_test_connection_post(request: Request):
     """發一次極小的真實請求驗證金鑰。沒有金鑰時不發請求，直接給人話提示。"""
-    if not coresettings.get_api_key(web.conn):
-        return redirect_with_message(
-            "/settings", "尚未設定金鑰。請先在上方填入 AI 金鑰，儲存後再測試。", kind="warn",
-        )
-    try:
-        llm_providers.AnthropicProvider().complete(
-            model=coresettings.get_llm_model(web.conn), system=None,
-            messages=[{"role": "user", "content": "hi"}], max_tokens=1, timeout_s=30.0,
-        )
-    except llm_providers.ProviderError as exc:
-        # providers 已統一把供應商例外轉成人話（含 401＝金鑰錯誤、餘額不足），
-        # 這裡直接顯示同一句，設定頁與建檔精靈才不會兩套說法。
-        return redirect_with_message("/settings", str(exc), kind="danger")
-    except Exception:
-        return redirect_with_message(
-            "/settings", "測試失敗：系統發生問題，請再試一次。", kind="danger",
-        )
-    return redirect_with_message("/settings", "金鑰有效：AI 服務有正常回應，可以開始使用 AI 功能。")
+    message, kind = _run_ai_test_connection()
+    return redirect_with_message("/settings", message, kind=kind)
 
 
 @app.post("/settings/meta/test-connection")
 async def settings_meta_test_connection_post(request: Request):
     """驗證 Meta 唯讀連線。沒有設定帳號＋金鑰時不發請求，直接給人話提示（票 48）。"""
-    if not ads_sync.is_configured(web.conn):
-        return redirect_with_message(
-            "/settings", "尚未設定 Meta 連線。請先在上方填入廣告帳號編號與唯讀金鑰，儲存後再測試。",
-            kind="warn",
-        )
-    try:
-        ads_sync.make_client(web.conn).list_campaigns(ads_sync.get_account_id(web.conn))
-    except meta_api.MetaApiError as exc:
-        return redirect_with_message("/settings", str(exc), kind="danger")
-    except Exception:
-        return redirect_with_message(
-            "/settings", "測試失敗：系統發生問題，請再試一次。", kind="danger",
-        )
-    return redirect_with_message("/settings", "連線正常：可以讀到 Meta 廣告帳號的資料。")
+    message, kind = _run_meta_test_connection()
+    return redirect_with_message("/settings", message, kind=kind)
 
 
 @app.post("/settings/ga4/test-connection")
 async def settings_ga4_test_connection_post(request: Request):
     """驗證 GA4 唯讀連線。沒有設定資源編號＋服務帳戶金鑰時不發請求，直接給人話提示（票 48）。"""
-    if not ga4_sync.is_configured(web.conn):
-        return redirect_with_message(
-            "/settings", "尚未設定 GA4 連線。請先在上方填入資源編號與服務帳戶金鑰，儲存後再測試。",
-            kind="warn",
-        )
-    today = datetime.now(timezone.utc).date().isoformat()
+    message, kind = _run_ga4_test_connection()
+    return redirect_with_message("/settings", message, kind=kind)
+
+
+# ---------------------------------------------------------------------------
+# 設定頁 JSON API（票 B1-settings，契約 `.scratch/grill/GRILL-B1-settings.md` S15）。
+# 讀值與寫入邏輯全部重用上面／settings_ctx() 既有函式，這裡只做「解析請求 → 呼叫 →
+# 組 JSON」的薄層。規則卡（S15.29–S15.33）另掛在 app/ads/routes_settings.py 同模組。
+# ---------------------------------------------------------------------------
+
+async def _parse_json_body(request: Request):
+    """回傳 (body, None) 成功；(None, 錯誤回應) 失敗。錯誤文案沿用既有
+    `app/ads/routes_quick_generate.py` 的慣例，不重複發明第二份。"""
     try:
-        ga4_sync.make_client(web.conn).fetch_source_medium(today, today)
-    except ga4_api.GA4ApiError as exc:
-        return redirect_with_message("/settings", str(exc), kind="danger")
-    except Exception:
-        return redirect_with_message(
-            "/settings", "測試失敗：系統發生問題，請再試一次。", kind="danger",
-        )
-    return redirect_with_message("/settings", "連線正常：可以讀到 GA4 網站數據。")
+        body = await request.json()
+    except ValueError:
+        return None, JSONResponse({"error": "請求格式不是合法的 JSON"}, status_code=400)
+    if not isinstance(body, dict):
+        return None, JSONResponse({"error": "請求格式不是合法的 JSON"}, status_code=400)
+    return body, None
+
+
+def _settings_json_data() -> dict:
+    """GET /api/settings 的資料組裝（契約 SettingsData 型別）。讀值邏輯與 settings_ctx()
+    共用同一批底層存取函式，這裡只是換一種給 JSON 用的型別（原始 float／list，不是表單
+    用的字串）。"""
+    return {
+        "masked_key": _masked_key(coresettings.get_api_key(web.conn)),
+        "api_key_source": coresettings.api_key_source(web.conn),
+        "db_key_present": bool(coresettings.get_setting(web.conn, coresettings.API_KEY_SETTING)),
+        "model_choices": _model_choices(),
+        "current_model": coresettings.get_llm_model(web.conn),
+        # 契約 TaskModelThinkingRow 只有這三欄；task_default_table() 另外多回一個
+        # task_type（HTML 頁不用、JSON 契約沒寫），這裡投影掉，不把內部鍵洩漏出去。
+        "task_model_thinking_table": [
+            {"task_label": r["task_label"], "model_label": r["model_label"],
+             "thinking_label": r["thinking_label"]}
+            for r in llm_providers.task_default_table()
+        ],
+        "masked_meta_token": _masked_key(ads_sync.get_token(web.conn)),
+        "meta_account_id": ads_sync.get_account_id(web.conn) or "",
+        "masked_ga4_key": _masked_key(ga4_sync.get_service_account_json(web.conn)),
+        "ga4_property_id": ga4_sync.get_property_id(web.conn) or "",
+        "creative_root": str(corecreative.get_root(web.conn)),
+        "prompt_header": coresettings.get_setting(web.conn, coresettings.IMAGE_PROMPT_HEADER_SETTING, ""),
+        "intake_budget": coresettings.get_intake_budget_limit(web.conn),
+    }
+
+
+@app.get("/api/settings")
+async def api_settings_get():
+    return {"data": _settings_json_data(), "generated_at": datetime.now(timezone.utc).isoformat()}
+
+
+@app.post("/api/settings/meta")
+async def api_settings_meta_post(request: Request):
+    body, err = await _parse_json_body(request)
+    if err:
+        return err
+    error = _write_meta_settings(body.get("meta_account_id", ""), body.get("meta_token", ""))
+    if error:
+        return JSONResponse({"error": error}, status_code=400)
+    return {}
+
+
+@app.post("/api/settings/meta/test-connection")
+async def api_settings_meta_test_connection_post():
+    message, kind = _run_meta_test_connection()
+    return {"message": message, "kind": kind}
+
+
+@app.post("/api/settings/ga4")
+async def api_settings_ga4_post(request: Request):
+    body, err = await _parse_json_body(request)
+    if err:
+        return err
+    error = _write_ga4_settings(body.get("ga4_property_id", ""), body.get("ga4_service_account_json", ""))
+    if error:
+        return JSONResponse({"error": error}, status_code=400)
+    return {}
+
+
+@app.post("/api/settings/ga4/test-connection")
+async def api_settings_ga4_test_connection_post():
+    message, kind = _run_ga4_test_connection()
+    return {"message": message, "kind": kind}
+
+
+@app.post("/api/settings/api-key")
+async def api_settings_api_key_post(request: Request):
+    body, err = await _parse_json_body(request)
+    if err:
+        return err
+    error = _write_api_key(body.get("api_key", ""))
+    if error:
+        return JSONResponse({"error": error}, status_code=400)
+    return {}
+
+
+@app.post("/api/settings/api-key/clear-db")
+async def api_settings_api_key_clear_db_post():
+    """不可逆動作：清空資料庫裡的金鑰。二次確認在前端做（S15.17），這裡跟舊表單路由
+    一樣不再另外確認一次。"""
+    coresettings.clear_api_key_from_db(web.conn)
+    return {}
+
+
+@app.post("/api/settings/test-connection")
+async def api_settings_test_connection_post():
+    message, kind = _run_ai_test_connection()
+    return {"message": message, "kind": kind}
+
+
+@app.post("/api/settings/model")
+async def api_settings_model_post(request: Request):
+    body, err = await _parse_json_body(request)
+    if err:
+        return err
+    error = _write_model(body.get("llm_model", ""))
+    if error:
+        return JSONResponse({"error": error}, status_code=400)
+    return {}
+
+
+@app.post("/api/settings/creative-root")
+async def api_settings_creative_root_post(request: Request):
+    body, err = await _parse_json_body(request)
+    if err:
+        return err
+    error = _write_creative_root(body.get("creative_root", ""))
+    if error:
+        return JSONResponse({"error": error}, status_code=400)
+    return {}
+
+
+@app.post("/api/settings/prompt-header")
+async def api_settings_prompt_header_post(request: Request):
+    body, err = await _parse_json_body(request)
+    if err:
+        return err
+    _write_prompt_header(body.get("prompt_header", ""))
+    return {}
+
+
+@app.post("/api/settings/budget")
+async def api_settings_budget_post(request: Request):
+    body, err = await _parse_json_body(request)
+    if err:
+        return err
+    error = _write_budget(body.get("intake_budget"))
+    if error:
+        return JSONResponse({"error": error}, status_code=400)
+    return {}
 
 
 # ---------------------------------------------------------------------------
@@ -461,6 +669,7 @@ async def settings_ga4_test_connection_post(request: Request):
 # ---------------------------------------------------------------------------
 
 from app.brand_intelligence.routes import router as brand_intelligence_router  # noqa: E402
+from app.brand_intelligence.routes_inbox import router as inbox_router  # noqa: E402
 from app.brand_intelligence.routes_settings import router as settings_hub_router  # noqa: E402
 from app.intake.routes import router as intake_router  # noqa: E402
 from app.ads.routes import router as ads_router  # noqa: E402
@@ -468,6 +677,7 @@ from app.orders.routes import router as orders_router  # noqa: E402
 from app.dashboard.routes import router as dashboard_router  # noqa: E402
 
 app.include_router(brand_intelligence_router)
+app.include_router(inbox_router)
 app.include_router(settings_hub_router)
 app.include_router(intake_router)
 app.include_router(ads_router)

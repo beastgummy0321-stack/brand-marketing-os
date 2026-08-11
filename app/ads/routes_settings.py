@@ -25,7 +25,10 @@ import 一樣違反 A1 三層地界）。
 `app/ads/routes.py`。
 """
 
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Form, Request
+from fastapi.responses import JSONResponse
 
 import app.shared.web as main_mod
 from app.ads import checklist as ads_checklist
@@ -83,6 +86,23 @@ async def settings_ads_get(request: Request, brand_id: str):
         request, "settings_ads.html", _ads_cards_ctx(request, brand))
 
 
+def _validate_card_fields(card_key: str, raw_values: dict) -> tuple:
+    """驗證整卡送出的欄位：每個欄位都要填、且要大於 0（缺欄位視為空字串，同「整卡一起
+    送出」的既有規則）。回傳 (parsed 有效值, field_errors)。HTML 表單路由與下方 JSON API
+    路由共用同一份規則，只是取值來源不同（form.get vs. JSON body.get）。"""
+    field_errors = {}
+    parsed = {}
+    for field_key in rule_cards.CARDS[card_key]["fields"]:
+        raw = raw_values.get(field_key, "")
+        raw_str = "" if raw is None else str(raw)
+        value, ok = main_mod.parse_number(raw_str)
+        if not ok or value is None or value <= 0:
+            field_errors[field_key] = "請填一個大於 0 的數字。"
+            continue
+        parsed[field_key] = value
+    return parsed, field_errors
+
+
 @router.post("/brands/{brand_id}/settings/ads/{card_key}/edit")
 async def settings_ads_edit_post(request: Request, brand_id: str, card_key: str):
     brand = main_mod.require_brand(brand_id)
@@ -90,17 +110,8 @@ async def settings_ads_edit_post(request: Request, brand_id: str, card_key: str)
     if card_key not in rule_cards.CARDS:
         raise main_mod.NotFoundKind("規則卡")
     form = await request.form()
-    field_errors = {}
-    raw_values = {}
-    parsed = {}
-    for field_key in rule_cards.CARDS[card_key]["fields"]:
-        raw = form.get(field_key, "")
-        raw_values[field_key] = raw
-        value, ok = main_mod.parse_number(raw)
-        if not ok or value is None or value <= 0:
-            field_errors[field_key] = "請填一個大於 0 的數字。"
-            continue
-        parsed[field_key] = value
+    raw_values = {k: form.get(k, "") for k in rule_cards.CARDS[card_key]["fields"]}
+    parsed, field_errors = _validate_card_fields(card_key, raw_values)
     if field_errors:
         return main_mod.templates.TemplateResponse(request, "settings_ads.html", _ads_cards_ctx(
             request, brand, errors={card_key: field_errors}, raw_values={card_key: raw_values},
@@ -155,3 +166,68 @@ async def settings_calendar_toggle_post(request: Request, brand_id: str, categor
     else:
         core_calendar_dismiss.dismiss(main_mod.conn, brand_id, category)
     return main_mod.redirect_with_message(f"/brands/{brand_id}/settings/ads", "記下來了。")
+
+
+# ---------------------------------------------------------------------------
+# 規則卡 JSON API（票 B1-settings，契約 `.scratch/grill/GRILL-B1-settings.md` S15.29–
+# S15.33）。路徑照契約指定的 `/api/settings/rule-cards/brands/{brand_id}/...`（不是
+# `/api/ads/...`——契約明文指定這個路徑，掛在本檔只是因為這裡本來就是規則卡的模組）。
+# 讀寫邏輯全部重用 rule_cards 既有函式與上面 `_validate_card_fields()`，這裡只做
+# 「解析請求 → 呼叫 → 組 JSON」的薄層。
+# ---------------------------------------------------------------------------
+
+def _rule_card_json(card: dict) -> dict:
+    """把 `rule_cards.get_card()`／`list_cards()` 回傳的卡片轉成契約 RuleCard 型別：
+    加 `customized` 旗標，判斷邏輯沿用 `_ads_cards_ctx()`（本檔上方）的同一行比對，
+    不是新規則。"""
+    return {
+        "key": card["key"], "title": card["title"], "description": card["description"],
+        "fields": [
+            {"key": f["key"], "label": f["label"], "unit": f["unit"], "help": f["help"],
+             "value": f["value"], "customized": f["value"] != f["default"]}
+            for f in card["fields"]
+        ],
+    }
+
+
+@router.get("/api/settings/rule-cards/brands/{brand_id}")
+async def api_rule_cards_get(brand_id: str):
+    main_mod.require_brand(brand_id)
+    cards = [_rule_card_json(c) for c in rule_cards.list_cards(main_mod.conn, brand_id)]
+    return {
+        "data": {"brand_id": brand_id, "cards": cards},
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+@router.post("/api/settings/rule-cards/brands/{brand_id}/{card_key}")
+async def api_rule_cards_save(request: Request, brand_id: str, card_key: str):
+    main_mod.require_brand(brand_id)
+    actor = main_mod.require_actor(request)
+    if card_key not in rule_cards.CARDS:
+        raise main_mod.NotFoundKind("規則卡")
+    try:
+        body = await request.json()
+    except ValueError:
+        return JSONResponse({"error": "請求格式不是合法的 JSON"}, status_code=400)
+    if not isinstance(body, dict):
+        return JSONResponse({"error": "請求格式不是合法的 JSON"}, status_code=400)
+    parsed, field_errors = _validate_card_fields(card_key, body)
+    if field_errors:
+        return JSONResponse(
+            {"error": "有欄位沒有填一個大於 0 的數字。", "field_errors": field_errors}, status_code=400)
+    for field_key, value in parsed.items():
+        rule_cards.set_value(main_mod.conn, brand_id, card_key, field_key, value, actor)
+    card = rule_cards.get_card(main_mod.conn, brand_id, card_key)
+    return {"data": _rule_card_json(card), "generated_at": datetime.now(timezone.utc).isoformat()}
+
+
+@router.post("/api/settings/rule-cards/brands/{brand_id}/{card_key}/reset")
+async def api_rule_cards_reset(request: Request, brand_id: str, card_key: str):
+    main_mod.require_brand(brand_id)
+    actor = main_mod.require_actor(request)
+    if card_key not in rule_cards.CARDS:
+        raise main_mod.NotFoundKind("規則卡")
+    rule_cards.reset_card(main_mod.conn, brand_id, card_key, actor)
+    card = rule_cards.get_card(main_mod.conn, brand_id, card_key)
+    return {"data": _rule_card_json(card), "generated_at": datetime.now(timezone.utc).isoformat()}
