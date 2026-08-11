@@ -2,6 +2,7 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { BrowserRouter } from 'react-router-dom'
 import './styles/tokens.css'
+import './mocks' // 畫面契約第 1 段（票 B3-intake）：切真後端時刪這一行＋刪 mocks/ 目錄
 import App from './App.tsx'
 
 // basename="/app"：production 掛載於 /app（app/main.py），開發模式 vite.config.ts

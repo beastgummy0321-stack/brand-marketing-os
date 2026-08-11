@@ -1,9 +1,10 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { Navigate, Route, Routes, useParams, useSearchParams } from "react-router-dom";
+import { Link, Navigate, Route, Routes, useParams, useSearchParams } from "react-router-dom";
 import { AppShell } from "@/components/layout/AppShell";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { EmptyState } from "@/components/layout/EmptyState";
 import { CockpitPage } from "@/components/cockpit/CockpitPage";
+import { IntakeWizard } from "@/components/intake/IntakeWizard";
 import { InboxPage } from "@/components/inbox/InboxPage";
 import { LibraryPage } from "@/components/library/LibraryPage";
 import { BrandCard } from "@/components/overview/BrandCard";
@@ -30,7 +31,9 @@ function App() {
       <Route path="/" element={<RootRoute />} />
       <Route path="/inbox" element={<InboxRoute />} />
       <Route path="/settings" element={<SettingsRoute />} />
+      <Route path="/intake/new" element={<IntakeNewRoute />} />
       <Route path="/brands/:brandId" element={<BrandRoute />} />
+      <Route path="/brands/:brandId/intake" element={<IntakeRoute />} />
       <Route path="/brands/:brandId/library" element={<LibraryRoute />} />
       <Route path="/brands/:brandId/products" element={<ProductListRoute />} />
       <Route path="/brands/:brandId/products/:productId" element={<ProductDetailRoute />} />
@@ -77,6 +80,31 @@ function BrandRoute() {
   return (
     <AppShell brandId={brandId ?? null}>
       <CockpitPage brandId={brandId ?? ""} />
+    </AppShell>
+  );
+}
+
+/** 建檔精靈：新品牌（S4，票 B3-intake）。跨品牌總覽「新增品牌」與各處「重新調研」共用
+ * 同一個精靈容器，差別只在 `brandId` 有沒有值。 */
+function IntakeNewRoute() {
+  return (
+    <AppShell brandId={null}>
+      <div className="flex flex-col gap-4">
+        <Breadcrumb items={[{ label: "跨品牌總覽", href: "/" }, { label: "新增品牌" }]} />
+        <IntakeWizard brandId={null} />
+      </div>
+    </AppShell>
+  );
+}
+
+function IntakeRoute() {
+  const { brandId } = useParams<{ brandId: string }>();
+  return (
+    <AppShell brandId={brandId ?? null}>
+      <div className="flex flex-col gap-4">
+        <Breadcrumb items={[{ label: "跨品牌總覽", href: "/" }, { label: "建檔精靈" }]} />
+        <IntakeWizard brandId={brandId ?? ""} />
+      </div>
     </AppShell>
   );
 }
@@ -169,9 +197,10 @@ function Overview() {
     content = (
       <EmptyState
         title="還沒有任何品牌"
-        description="這裡會列出每個品牌的健康度卡片。先到舊版介面建立第一個品牌。"
-        actionHref="/"
-        actionLabel="前往舊版品牌總覽"
+        description="這裡會列出每個品牌的健康度卡片。用建檔精靈建立第一個品牌。"
+        actionHref="/intake/new"
+        actionLabel="新增品牌"
+        actionInternal
       />
     );
   } else {
@@ -186,7 +215,15 @@ function Overview() {
 
   return (
     <div className="flex flex-col gap-4">
-      <Breadcrumb items={[{ label: "跨品牌總覽" }]} />
+      <div className="flex items-center justify-between">
+        <Breadcrumb items={[{ label: "跨品牌總覽" }]} />
+        <Link
+          to="/intake/new"
+          className="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:opacity-90"
+        >
+          新增品牌
+        </Link>
+      </div>
       {content}
     </div>
   );

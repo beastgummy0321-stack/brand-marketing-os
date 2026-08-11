@@ -1,0 +1,119 @@
+import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { EmptyState } from "@/components/layout/EmptyState";
+import type { IntakeDraft } from "@/lib/intakeApi";
+import { fetchIntakeDraft } from "@/lib/intakeApi";
+import { BudgetPanel } from "./BudgetPanel";
+import { CostGauge } from "./CostGauge";
+import { HandoffStep } from "./steps/HandoffStep";
+import { PasteStep } from "./steps/PasteStep";
+import { QuestionStep } from "./steps/QuestionStep";
+import { ScanStep } from "./steps/ScanStep";
+import { StartStep } from "./steps/StartStep";
+import { WizardSteps } from "./WizardSteps";
+
+type LoadState = { status: "loading" } | { status: "error"; message: string } | { status: "notfound" } | { status: "ready"; draft: IntakeDraft };
+
+/** 建檔精靈殼（契約「任務流版型」節）：頂部步驟軌＋中央目前步驟＋右欄花費儀表。
+ * `brandId === null` 是全新品牌（`/intake/new`）：還沒有草稿可讀，直接顯示步驟 1。
+ * 有 `brandId` 時整包讀草稿一次，之後每個動作完成都靠 `refresh()` 重讀（跟品牌智庫／
+ * 產品頁「整包讀」同一個決定，不切成逐步驟各自的 GET）。 */
+export function IntakeWizard({ brandId }: { brandId: string | null }) {
+  const navigate = useNavigate();
+  const [state, setState] = useState<LoadState>(brandId ? { status: "loading" } : { status: "ready", draft: null as unknown as IntakeDraft });
+  const [viewStep, setViewStep] = useState(1);
+  const [budgetOpen, setBudgetOpen] = useState(false);
+
+  function refresh() {
+    if (!brandId) return;
+    fetchIntakeDraft(brandId)
+      .then((draft) => {
+        setState({ status: "ready", draft });
+        setViewStep((prev) => Math.max(prev, draft.step));
+      })
+      .catch((err: unknown) => {
+        if (err instanceof Error && err.message.includes("找不到")) setState({ status: "notfound" });
+        else setState({ status: "error", message: err instanceof Error ? err.message : "讀取失敗，請稍後再試。" });
+      });
+  }
+
+  useEffect(() => {
+    if (brandId) refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [brandId]);
+
+  if (!brandId) {
+    return (
+      <div className="flex flex-col gap-4 lg:flex-row">
+        <div className="flex flex-1 flex-col gap-4">
+          <WizardSteps current={1} onSelect={() => {}} />
+          <StartStep brandId={null} onSubmitted={(res) => navigate(res.quick ? `/brands/${res.brand_id}` : `/brands/${res.brand_id}/intake`)} />
+        </div>
+        <div className="lg:w-72 lg:shrink-0">
+          <CostGauge draft={null} onAdjust={() => {}} />
+        </div>
+      </div>
+    );
+  }
+
+  if (state.status === "loading") {
+    return <div className="rounded-lg border border-border bg-card p-6 text-sm text-muted-foreground">讀取中…</div>;
+  }
+  if (state.status === "notfound") {
+    return <EmptyState title="找不到建檔進度" description="這個品牌目前沒有進行中或已完成的建檔草稿。" actionHref="/" actionLabel="回到跨品牌總覽" actionInternal />;
+  }
+  if (state.status === "error") {
+    return <EmptyState title="讀取失敗" description={state.message} onAction={refresh} actionLabel="重新載入" />;
+  }
+
+  const { draft } = state;
+
+  if (draft.completed) {
+    return (
+      <div className="flex flex-col gap-4 lg:flex-row">
+        <div className="flex flex-1 flex-col gap-4">
+          <WizardSteps current={1} onSelect={() => {}} />
+          <StartStep brandId={brandId} onSubmitted={(res) => (res.quick ? navigate(`/brands/${brandId}`) : refresh())} />
+        </div>
+        <div className="lg:w-72 lg:shrink-0">
+          <CostGauge draft={draft} onAdjust={() => setBudgetOpen(true)} />
+        </div>
+        {budgetOpen && (
+          <BudgetPanel brandId={brandId} draft={draft} onClose={() => setBudgetOpen(false)} onSaved={refresh} />
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-4 lg:flex-row">
+      <div className="flex flex-1 flex-col gap-4">
+        <WizardSteps current={Math.max(viewStep, draft.step)} onSelect={(step) => step <= Math.max(viewStep, draft.step) && setViewStep(step)} />
+        {renderStep(viewStep, brandId, draft, refresh, () => setViewStep((s) => Math.min(5, s + 1)))}
+      </div>
+      <div className="lg:w-72 lg:shrink-0">
+        <CostGauge draft={draft} onAdjust={() => setBudgetOpen(true)} />
+      </div>
+      {budgetOpen && <BudgetPanel brandId={brandId} draft={draft} onClose={() => setBudgetOpen(false)} onSaved={refresh} />}
+    </div>
+  );
+}
+
+function renderStep(step: number, brandId: string, draft: IntakeDraft, refresh: () => void, next: () => void) {
+  switch (step) {
+    case 1:
+      return <StartStep brandId={brandId} onSubmitted={() => next()} />;
+    case 2:
+      return <ScanStep brandId={brandId} draft={draft} onRefresh={refresh} onNext={next} />;
+    case 3:
+      // key={question_index}：每答完一題 index 就 +1，強制重掛 QuestionStep，讓
+      // useIntakeJob 的 startedRef 跟著重置，第 2 題起才會真的自動出題（不然同一個
+      // 元件實例一路活到步驟結束，startedRef 只會在第 1 題觸發過一次）。
+      return <QuestionStep key={draft.question_index} brandId={brandId} draft={draft} onRefresh={refresh} onNext={next} />;
+    case 4:
+      return <HandoffStep brandId={brandId} draft={draft} onRefresh={refresh} onNext={next} />;
+    case 5:
+    default:
+      return <PasteStep brandId={brandId} draft={draft} onRefresh={refresh} />;
+  }
+}
