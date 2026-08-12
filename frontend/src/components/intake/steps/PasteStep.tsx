@@ -21,6 +21,7 @@ export function PasteStep({ brandId, draft, onRefresh }: { brandId: string; draf
 function PasteForm({ brandId, draft, onRefresh }: { brandId: string; draft: IntakeDraft; onRefresh: () => void }) {
   const [rawText, setRawText] = useState(draft.paste_raw);
   const [fileError, setFileError] = useState<string | null>(null);
+  const [fileName, setFileName] = useState<string | null>(null);
   const [validating, setValidating] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [dataLineCount, setDataLineCount] = useState<number | null>(null);
@@ -41,8 +42,10 @@ function PasteForm({ brandId, draft, onRefresh }: { brandId: string; draft: Inta
     const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
     if (!["md", "txt"].includes(ext)) {
       setFileError(`「${file.name}」不是支援的檔案格式，請上傳 .md 或 .txt 檔。`);
+      setFileName(null);
       return;
     }
+    setFileName(file.name);
     setRawText(await file.text());
   }
 
@@ -92,10 +95,23 @@ function PasteForm({ brandId, draft, onRefresh }: { brandId: string; draft: Inta
         className="w-full rounded-md border border-border px-3 py-2 font-mono text-xs text-foreground"
       />
 
-      <label className="flex flex-col gap-1 text-sm">
+      <div className="flex flex-col gap-2 text-sm">
         <span className="text-muted-foreground">或上傳外部 AI 匯出的檔案（.md／.txt），有檔案以檔案內容為準</span>
-        <input type="file" accept={FILE_ACCEPT} onChange={(e) => void handleFile(e.target.files?.[0] ?? null)} className="text-sm text-muted-foreground" />
-      </label>
+        <div className="flex items-center gap-3">
+          <label className="cursor-pointer self-start rounded-md border border-border bg-card px-4 py-2 text-sm font-medium text-foreground hover:bg-muted">
+            選擇檔案
+            <input
+              type="file"
+              accept={FILE_ACCEPT}
+              onChange={(e) => void handleFile(e.target.files?.[0] ?? null)}
+              className="hidden"
+            />
+          </label>
+          <span className={fileName ? "text-sm text-foreground" : "text-sm text-muted-foreground"}>
+            {fileName ?? "未選擇任何檔案"}
+          </span>
+        </div>
+      </div>
       {fileError && <p className="text-sm text-danger">{fileError}</p>}
 
       {formError && <p className="text-sm text-danger">{formError}</p>}
