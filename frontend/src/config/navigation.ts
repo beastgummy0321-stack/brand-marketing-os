@@ -50,7 +50,12 @@ export function navModules(brandId: string | null): NavItem[] {
         }
       : { label: "產品", status: "disabled", reason: "請先在跨品牌總覽選擇品牌" },
     brandId
-      ? { label: "投放與成效", href: `/brands/${brandId}/ads`, status: "active" }
+      ? {
+          label: "投放與成效",
+          href: `/brands/${brandId}/campaigns`,
+          status: "active",
+          internal: true,
+        }
       : { label: "投放與成效", status: "disabled", reason: "請先在跨品牌總覽選擇品牌" },
     brandId
       ? {

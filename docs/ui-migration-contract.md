@@ -73,3 +73,10 @@ B3（2026-08-12，主 Agent 裁定、使用者驗收原型時可退）：
 - 「建檔進行中→繼續建檔」提示併入 B3 第二段：駕駛艙指南卡貨源加一條（總綱第七節貨源清單延伸）
 - 花費儀表不處理窄螢幕（決策 0038：純桌機 1440 固定，不做響應式）
 - 回應形狀以原型驗收定案的 frontend/src/lib/intakeApi.ts 為準：草稿帶 completed／is_restart／created_product_names、job status 不帶 kind、review 帶 severity；resume_path 不出 API（指南卡走後端內部 state.get_draft()）；GRILL-B3-intake.md 檔尾型別已同步實作
+
+B4（2026-08-12，主 Agent 裁定、使用者驗收原型時可退）：
+- 任務流殼升格為共用件 components/layout/TaskFlowShell.tsx，建檔精靈與作戰室共用同一份（intake/WizardSteps.tsx 刪除，禁止再出現第二份殼）
+- 封存／刪除等檔期共用動作由作戰室與檔期清單共用 lib/campaignsApi.ts（同一能力單一路徑優先於「一 feature 一 API 檔」命名慣例）
+- 生成進度單一出口（layout/ActiveJobsBell）原型先聚合 intake／products／library 三個 JobRegistry；ads 舊生成機制（_progress_state）是否併入延至 B4 第二段裁決
+- 前朝教訓訪談維持 S7 側板（照總表 S7 吸收 ads_interview）
+- 檔期清單 API 一次全量＋前端分頁（單機單人量級，未設筆數門檻）

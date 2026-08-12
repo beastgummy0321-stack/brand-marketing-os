@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { EmptyState } from "@/components/layout/EmptyState";
+import { TaskFlowShell } from "@/components/layout/TaskFlowShell";
 import type { IntakeDraft } from "@/lib/intakeApi";
 import { fetchIntakeDraft } from "@/lib/intakeApi";
 import { BudgetPanel } from "./BudgetPanel";
@@ -10,7 +11,8 @@ import { PasteStep } from "./steps/PasteStep";
 import { QuestionStep } from "./steps/QuestionStep";
 import { ScanStep } from "./steps/ScanStep";
 import { StartStep } from "./steps/StartStep";
-import { WizardSteps } from "./WizardSteps";
+
+const STEP_LABELS = ["起始輸入", "初步印象", "引導問答", "交接包", "貼回"];
 
 type LoadState = { status: "loading" } | { status: "error"; message: string } | { status: "notfound" } | { status: "ready"; draft: IntakeDraft };
 
@@ -44,15 +46,9 @@ export function IntakeWizard({ brandId }: { brandId: string | null }) {
 
   if (!brandId) {
     return (
-      <div className="flex flex-col gap-4 lg:flex-row">
-        <div className="flex flex-1 flex-col gap-4">
-          <WizardSteps current={1} onSelect={() => {}} />
-          <StartStep brandId={null} onSubmitted={(res) => navigate(res.quick ? `/brands/${res.brand_id}` : `/brands/${res.brand_id}/intake`)} />
-        </div>
-        <div className="lg:w-72 lg:shrink-0">
-          <CostGauge draft={null} onAdjust={() => {}} />
-        </div>
-      </div>
+      <TaskFlowShell steps={STEP_LABELS} current={1} onSelect={() => {}} rightRail={<CostGauge draft={null} onAdjust={() => {}} />}>
+        <StartStep brandId={null} onSubmitted={(res) => navigate(res.quick ? `/brands/${res.brand_id}` : `/brands/${res.brand_id}/intake`)} />
+      </TaskFlowShell>
     );
   }
 
@@ -70,32 +66,29 @@ export function IntakeWizard({ brandId }: { brandId: string | null }) {
 
   if (draft.completed) {
     return (
-      <div className="flex flex-col gap-4 lg:flex-row">
-        <div className="flex flex-1 flex-col gap-4">
-          <WizardSteps current={1} onSelect={() => {}} />
+      <>
+        <TaskFlowShell steps={STEP_LABELS} current={1} onSelect={() => {}} rightRail={<CostGauge draft={draft} onAdjust={() => setBudgetOpen(true)} />}>
           <StartStep brandId={brandId} onSubmitted={(res) => (res.quick ? navigate(`/brands/${brandId}`) : refresh())} />
-        </div>
-        <div className="lg:w-72 lg:shrink-0">
-          <CostGauge draft={draft} onAdjust={() => setBudgetOpen(true)} />
-        </div>
+        </TaskFlowShell>
         {budgetOpen && (
           <BudgetPanel brandId={brandId} draft={draft} onClose={() => setBudgetOpen(false)} onSaved={refresh} />
         )}
-      </div>
+      </>
     );
   }
 
   return (
-    <div className="flex flex-col gap-4 lg:flex-row">
-      <div className="flex flex-1 flex-col gap-4">
-        <WizardSteps current={Math.max(viewStep, draft.step)} onSelect={(step) => step <= Math.max(viewStep, draft.step) && setViewStep(step)} />
+    <>
+      <TaskFlowShell
+        steps={STEP_LABELS}
+        current={Math.max(viewStep, draft.step)}
+        onSelect={(step) => step <= Math.max(viewStep, draft.step) && setViewStep(step)}
+        rightRail={<CostGauge draft={draft} onAdjust={() => setBudgetOpen(true)} />}
+      >
         {renderStep(viewStep, brandId, draft, refresh, () => setViewStep((s) => Math.min(5, s + 1)))}
-      </div>
-      <div className="lg:w-72 lg:shrink-0">
-        <CostGauge draft={draft} onAdjust={() => setBudgetOpen(true)} />
-      </div>
+      </TaskFlowShell>
       {budgetOpen && <BudgetPanel brandId={brandId} draft={draft} onClose={() => setBudgetOpen(false)} onSaved={refresh} />}
-    </div>
+    </>
   );
 }
 

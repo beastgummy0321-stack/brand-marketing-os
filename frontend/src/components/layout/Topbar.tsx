@@ -1,13 +1,18 @@
+import { ActiveJobsBell } from "./ActiveJobsBell";
+
 export function Topbar() {
   return (
     <header className="flex h-[var(--height-topbar)] shrink-0 items-center justify-between border-b border-border bg-card px-6">
       <span className="font-display text-lg font-medium text-foreground">行銷駕駛艙</span>
-      <a
-        href="/"
-        className="text-sm font-medium text-primary underline-offset-4 hover:underline"
-      >
-        回到舊版介面
-      </a>
+      <div className="flex items-center gap-2">
+        <ActiveJobsBell />
+        <a
+          href="/"
+          className="text-sm font-medium text-primary underline-offset-4 hover:underline"
+        >
+          回到舊版介面
+        </a>
+      </div>
     </header>
   );
 }

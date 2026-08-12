@@ -3,6 +3,7 @@ import { Link, Navigate, Route, Routes, useParams, useSearchParams } from "react
 import { AppShell } from "@/components/layout/AppShell";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { EmptyState } from "@/components/layout/EmptyState";
+import { CampaignListPage } from "@/components/campaigns/CampaignListPage";
 import { CockpitPage } from "@/components/cockpit/CockpitPage";
 import { IntakeWizard } from "@/components/intake/IntakeWizard";
 import { InboxPage } from "@/components/inbox/InboxPage";
@@ -11,6 +12,7 @@ import { BrandCard } from "@/components/overview/BrandCard";
 import { ProductDetailPage } from "@/components/products/ProductDetailPage";
 import { ProductListPage } from "@/components/products/ProductListPage";
 import { SettingsPage } from "@/components/settings/SettingsPage";
+import { WarroomPage } from "@/components/warroom/WarroomPage";
 import { MatrixPage } from "@/components/workbench/MatrixPage";
 import { WorkbenchPage } from "@/components/workbench/WorkbenchPage";
 import { fetchOverview, type DashboardBrandCard } from "@/lib/api";
@@ -37,6 +39,9 @@ function App() {
       <Route path="/brands/:brandId/library" element={<LibraryRoute />} />
       <Route path="/brands/:brandId/products" element={<ProductListRoute />} />
       <Route path="/brands/:brandId/products/:productId" element={<ProductDetailRoute />} />
+      <Route path="/brands/:brandId/campaigns" element={<CampaignListRoute />} />
+      <Route path="/brands/:brandId/campaigns/new" element={<WarroomNewRoute />} />
+      <Route path="/brands/:brandId/campaigns/:cycleId" element={<WarroomRoute />} />
       <Route path="/brands/:brandId/workbench" element={<WorkbenchRoute />} />
       <Route path="/brands/:brandId/workbench/:cycleId" element={<MatrixRoute />} />
     </Routes>
@@ -135,6 +140,37 @@ function ProductDetailRoute() {
   return (
     <AppShell brandId={brandId ?? null}>
       <ProductDetailPage brandId={brandId ?? ""} productId={productId ?? ""} />
+    </AppShell>
+  );
+}
+
+/** 檔期清單（S7，票 B4-campaigns）：搬家舊版 `ads_home`／`ads_history`／`ads_interview`
+ * 三頁合一，見 `.scratch/grill/GRILL-B4-campaigns.md`。 */
+function CampaignListRoute() {
+  const { brandId } = useParams<{ brandId: string }>();
+  return (
+    <AppShell brandId={brandId ?? null}>
+      <CampaignListPage brandId={brandId ?? ""} />
+    </AppShell>
+  );
+}
+
+/** S8 檔期作戰室：開新檔期（票 B4-warroom）。 */
+function WarroomNewRoute() {
+  const { brandId } = useParams<{ brandId: string }>();
+  return (
+    <AppShell brandId={brandId ?? null}>
+      <WarroomPage brandId={brandId ?? ""} cycleId={null} />
+    </AppShell>
+  );
+}
+
+/** S8 檔期作戰室：既有檔期（票 B4-warroom）。 */
+function WarroomRoute() {
+  const { brandId, cycleId } = useParams<{ brandId: string; cycleId: string }>();
+  return (
+    <AppShell brandId={brandId ?? null}>
+      <WarroomPage brandId={brandId ?? ""} cycleId={cycleId ?? ""} />
     </AppShell>
   );
 }
