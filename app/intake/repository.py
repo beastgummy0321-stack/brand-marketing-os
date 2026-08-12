@@ -172,6 +172,61 @@ def get_draft_spend(conn: sqlite3.Connection, draft_id: str) -> float:
 
 
 # ---------------------------------------------------------------------------
+# 已確認資料摘要／重複提示（交接包＋貼回重複提示共用；票 B3-intake 從 routes.py 搬來，
+# HTML 表單與 JSON API 兩套路由共用同一支，不再各自一份，CLAUDE.md 第五節）。
+# ---------------------------------------------------------------------------
+
+def existing_confirmed_data(conn: sqlite3.Connection, brand_id: str) -> dict:
+    """已確認的品牌資料摘要（交接包「不用重查」區塊＋貼回重複提示共用，issue #1）。"""
+    from app import mock_data as md
+    brand_facts = [(f["label"], f["value"])
+                   for f in bi_repo.list_brand_facts(conn, brand_id, status="confirmed")]
+    product_facts = []
+    for p in bi_repo.list_products(conn, brand_id):
+        for f in bi_repo.list_product_facts(conn, brand_id, p["id"], status="confirmed"):
+            product_facts.append((p["name"], f["label"], f["value"]))
+    rules = [r["content"] for r in bi_repo.list_rules_for_brand(conn, brand_id)]
+    claims = [(md.claim_type_label(c["claim_type"]), c["claim_text"])
+              for c in bi_repo.list_claims_for_brand(conn, brand_id)]
+    return {"brand_facts": brand_facts, "product_facts": product_facts,
+            "rules": rules, "claims": claims}
+
+
+def _normalize_title(text: str) -> str:
+    return "".join(ch for ch in (text or "") if ch.isalnum()).lower()
+
+
+def duplicate_hints(conn: sqlite3.Connection, brand_id: str, items: list) -> dict:
+    """待辦列 → 可能重複的既有資料提示 {item_id: 既有內容一句話}。
+
+    正規化後「完全相同」或「一方包含另一方（≥6 字）」就標記；只提醒、不阻擋（決策 0013）。"""
+    existing = []
+    data = existing_confirmed_data(conn, brand_id)
+    for label, value in data["brand_facts"]:
+        existing.append((label, f"品牌事實「{label}」"))
+    for product, label, value in data["product_facts"]:
+        existing.append((label, f"產品事實（{product}）「{label}」"))
+    for content in data["rules"]:
+        title = content.split("：", 1)[0]
+        existing.append((title, f"限制規則「{title}」"))
+    for type_label, text in data["claims"]:
+        existing.append((text, f"宣稱（{type_label}）「{text}」"))
+    norm_existing = [(_normalize_title(t), desc) for t, desc in existing if len(_normalize_title(t)) >= 4]
+    hints = {}
+    for it in items:
+        key = _normalize_title(it["title"])
+        if len(key) < 4:
+            continue
+        for norm, desc in norm_existing:
+            same = key == norm
+            contains = len(key) >= 6 and len(norm) >= 6 and (key in norm or norm in key)
+            if same or contains:
+                hints[it["id"]] = desc
+                break
+    return hints
+
+
+# ---------------------------------------------------------------------------
 # intake_item
 # ---------------------------------------------------------------------------
 

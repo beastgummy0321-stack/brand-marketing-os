@@ -38,10 +38,7 @@ _ESTIMATE = {"scan": script.COST_SCAN, "question": script.COST_QUESTION,
 
 
 def _draft_or_404(brand_id: str) -> dict:
-    draft = state.get_draft(brand_id)
-    if draft is None:
-        raise main_mod.NotFoundKind("建檔進度")
-    return draft
+    return state.require_draft(brand_id, conn=main_mod.conn)
 
 
 def _crumb(brand: dict, label: str) -> list:
@@ -87,54 +84,14 @@ def _known_products(brand_id: str) -> set:
 
 
 def _existing_data(brand_id: str) -> dict:
-    """已確認的品牌資料摘要（交接包「不用重查」區塊＋貼回重複提示共用，issue #1）。"""
-    conn = main_mod.conn
-    from app import mock_data as md
-    brand_facts = [(f["label"], f["value"])
-                   for f in repo.list_brand_facts(conn, brand_id, status="confirmed")]
-    product_facts = []
-    for p in repo.list_products(conn, brand_id):
-        for f in repo.list_product_facts(conn, brand_id, p["id"], status="confirmed"):
-            product_facts.append((p["name"], f["label"], f["value"]))
-    rules = [r["content"] for r in repo.list_rules_for_brand(conn, brand_id)]
-    claims = [(md.claim_type_label(c["claim_type"]), c["claim_text"])
-              for c in repo.list_claims_for_brand(conn, brand_id)]
-    return {"brand_facts": brand_facts, "product_facts": product_facts,
-            "rules": rules, "claims": claims}
-
-
-def _normalize(text: str) -> str:
-    return "".join(ch for ch in (text or "") if ch.isalnum()).lower()
+    """已確認的品牌資料摘要（交接包「不用重查」區塊＋貼回重複提示共用，issue #1）。
+    搬到 `app/intake/repository.py`（HTML／JSON 兩套路由共用，不再各自一份）。"""
+    return ir.existing_confirmed_data(main_mod.conn, brand_id)
 
 
 def _duplicate_hints(brand_id: str, items: list) -> dict:
-    """待辦列 → 可能重複的既有資料提示 {item_id: 既有內容一句話}。
-
-    正規化後「完全相同」或「一方包含另一方（≥6 字）」就標記；只提醒、不阻擋（決策 0013）。"""
-    existing = []
-    data = _existing_data(brand_id)
-    for label, value in data["brand_facts"]:
-        existing.append((label, f"品牌事實「{label}」"))
-    for product, label, value in data["product_facts"]:
-        existing.append((label, f"產品事實（{product}）「{label}」"))
-    for content in data["rules"]:
-        title = content.split("：", 1)[0]
-        existing.append((title, f"限制規則「{title}」"))
-    for type_label, text in data["claims"]:
-        existing.append((text, f"宣稱（{type_label}）「{text}」"))
-    norm_existing = [(_normalize(t), desc) for t, desc in existing if len(_normalize(t)) >= 4]
-    hints = {}
-    for it in items:
-        key = _normalize(it["title"])
-        if len(key) < 4:
-            continue
-        for norm, desc in norm_existing:
-            same = key == norm
-            contains = len(key) >= 6 and len(norm) >= 6 and (key in norm or norm in key)
-            if same or contains:
-                hints[it["id"]] = desc
-                break
-    return hints
+    """待辦列 → 可能重複的既有資料提示；搬到 `app/intake/repository.py` 共用。"""
+    return ir.duplicate_hints(main_mod.conn, brand_id, items)
 
 
 def _category_labels(kind_human: str) -> list:
@@ -151,40 +108,10 @@ def _kind_done(draft: dict, kind: str) -> bool:
     return False  # 整理格式不限次數（issue #1）：每次明確要求都真的執行
 
 
-def _rewrite_scope(raw_text: str, name: str, new_scope: str) -> str:
-    """把貼回文字裡「適用範圍＝name」的資料列改寫成 new_scope（歸到整個品牌用）。
-    直接改在文字上，之後不論重驗幾次都不會忘記這個決定。"""
-    out = []
-    for line in raw_text.splitlines():
-        parts = [p.strip() for p in line.split("|")]
-        if len(parts) == 6 and parts[4] == name and parts != paste_parse.HEADER_COLUMNS:
-            parts[4] = new_scope
-            out.append(" | ".join(parts))
-        else:
-            out.append(line)
-    return "\n".join(out)
-
-
 def _apply_paste(draft: dict, raw_text: str) -> Optional[int]:
-    """驗證＋（全過才）整批落地 intake_item。回傳落地筆數；驗證失敗回 None（錯誤已寫進草稿）。"""
-    conn = main_mod.conn
-    # 換行被剪貼簿吃掉的表格先重組，存重組後的版本——使用者在畫面上看到的就是系統讀懂的樣子
-    raw_text = paste_parse.maybe_reflow(raw_text)
-    draft["paste_raw"] = raw_text
-    rows, errors = paste_parse.parse_paste(raw_text, _known_products(draft["brand_id"]),
-                                           brand_name=draft["brand_name"])
-    draft["paste_errors"] = errors
-    state.save(draft)
-    if rows is None:
-        # 與 Mock 時代行為一致：重貼失敗就清掉上一次還沒處理的待辦列（已處理的留著追溯）
-        conn.execute(
-            "DELETE FROM intake_item WHERE intake_draft_id = ? AND brand_id = ? AND outcome = 'pending'",
-            (draft["id"], draft["brand_id"]),
-        )
-        conn.commit()
-        return None
-    items = ir.create_items(conn, draft["brand_id"], draft["id"], rows)
-    return len(items)
+    """驗證＋（全過才）整批落地 intake_item。搬到 `app/intake/state.py`（HTML／JSON
+    兩套路由共用，`_rewrite_scope` 搬到 `paste_parse.rewrite_scope`）。"""
+    return state.apply_paste(draft, raw_text, conn=main_mod.conn)
 
 
 # ---------------------------------------------------------------------------
@@ -218,13 +145,9 @@ async def intake_new_post(request: Request, name: str = Form(""), client_name: s
         if not p.filename:
             continue
         content = await p.read()
-        size_mb = round(len(content) / (1024 * 1024), 1)
-        ext = p.filename.rsplit(".", 1)[-1].lower() if "." in p.filename else ""
-        if ext not in ("jpg", "jpeg", "png", "webp"):
-            photo_error = f"「{p.filename}」不是支援的圖片格式，請用 .jpg、.png 或 .webp。"
-            continue
-        if size_mb > 10:
-            photo_error = f"「{p.filename}」超過 10 MB，請換一張小一點的照片。"
+        err = state.validate_photo_upload(p.filename, content)
+        if err:
+            photo_error = err
             continue
         state.save_photo(token, p.filename, content)
     photo_list = state.get_pending_photos(token)
@@ -235,12 +158,8 @@ async def intake_new_post(request: Request, name: str = Form(""), client_name: s
     name_c = main_mod.clean(name)
     if not name_c:
         errors["name"] = "請填寫品牌名稱。"
-    if not photo_list:
-        errors["photos"] = "請至少放一張產品照。之後要請外部 AI 看照片，沒有照片它只能用猜的。"
-    elif photo_error:
+    if photo_error:
         errors["photos"] = photo_error
-    if not main_mod.clean(description):
-        errors["description"] = "請用幾句話描述這個品牌或產品。"
     url_clean = []
     for idx, raw in enumerate(url_inputs, start=1):
         u = main_mod.clean(raw)
@@ -258,9 +177,14 @@ async def intake_new_post(request: Request, name: str = Form(""), client_name: s
 
     brand = repo.create_brand(main_mod.conn, name=name_c, client_name=main_mod.clean(client_name) or None,
                                actor=actor)
-    state.new_draft(brand["id"], name_c, description=main_mod.clean(description), urls=url_clean,
-                     photos=photo_list, actor=actor)
+    description_c = main_mod.clean(description)
+    draft = state.start_or_quick(main_mod.conn, brand["id"], name_c, description=description_c,
+                                  urls=url_clean, photos=photo_list, actor=actor)
     state.discard_pending_photos(token)
+    if draft is None:  # S4.9 陽春路徑：只填名稱／客戶，不建草稿、不進任何 AI 步驟
+        return main_mod.redirect_with_message(
+            f"/brands/{brand['id']}",
+            f"已建立品牌「{name_c}」。之後想請 AI 幫忙調研，到品牌頁按「重新調研」隨時可以開始。")
     return RedirectResponse(f"/brands/{brand['id']}/intake/scan/progress", status_code=303)
 
 
@@ -268,25 +192,13 @@ async def intake_new_post(request: Request, name: str = Form(""), client_name: s
 # W1b — 重新調研（對既有品牌開新一輪草稿，issue #1）
 # ---------------------------------------------------------------------------
 
-def _prev_photos(last_draft_row: Optional[dict]) -> list:
-    """上一輪草稿的照片（photos_json 形狀 → 畫面／new_draft 慣用形狀）。"""
-    import json as _json
-    if not last_draft_row:
-        return []
-    return [
-        {"name": p.get("display_name"), "path": p.get("file_path"),
-         "size_mb": round((p.get("size_bytes") or 0) / (1024 * 1024), 1)}
-        for p in _json.loads(last_draft_row["photos_json"] or "[]")
-    ]
-
-
 def _restart_values(brand_id: str, token: str) -> dict:
     import json as _json
     last = ir.get_latest_completed_draft(main_mod.conn, brand_id)
     urls = _json.loads(last["research_urls_json"] or "[]") if last else []
     urls = (urls + ["", "", "", "", ""])[:5]
     return {"name": "", "client_name": "", "description": (last["description"] if last else "") or "",
-            "urls": urls, "photos": _prev_photos(last), "photo_token": token}
+            "urls": urls, "photos": state.prev_photos(last), "photo_token": token}
 
 
 @router.get("/brands/{brand_id}/intake/restart")
@@ -319,28 +231,20 @@ async def intake_restart_post(request: Request, brand_id: str, description: str 
         if not p.filename:
             continue
         content = await p.read()
-        size_mb = round(len(content) / (1024 * 1024), 1)
-        ext = p.filename.rsplit(".", 1)[-1].lower() if "." in p.filename else ""
-        if ext not in ("jpg", "jpeg", "png", "webp"):
-            photo_error = f"「{p.filename}」不是支援的圖片格式，請用 .jpg、.png 或 .webp。"
-            continue
-        if size_mb > 10:
-            photo_error = f"「{p.filename}」超過 10 MB，請換一張小一點的照片。"
+        err = state.validate_photo_upload(p.filename, content)
+        if err:
+            photo_error = err
             continue
         state.save_photo(token, p.filename, content)
 
-    carried = _prev_photos(ir.get_latest_completed_draft(main_mod.conn, brand_id))
+    carried = state.prev_photos(ir.get_latest_completed_draft(main_mod.conn, brand_id))
     photo_list = carried + state.get_pending_photos(token)
 
     values = {"name": "", "client_name": "", "description": description,
               "urls": url_inputs, "photos": photo_list, "photo_token": token}
     errors = {}
-    if not photo_list:
-        errors["photos"] = "請至少放一張產品照。之後要請外部 AI 看照片，沒有照片它只能用猜的。"
-    elif photo_error:
+    if photo_error:
         errors["photos"] = photo_error
-    if not main_mod.clean(description):
-        errors["description"] = "請用幾句話描述這個品牌或產品。"
     url_clean = []
     for idx, raw in enumerate(url_inputs, start=1):
         u = main_mod.clean(raw)
@@ -356,9 +260,13 @@ async def intake_restart_post(request: Request, brand_id: str, description: str 
             request, brand=brand, nav_current='hub', restart_brand=brand, values=values, errors=errors,
         ), status_code=400)
 
-    state.new_draft(brand_id, brand["name"], description=main_mod.clean(description),
-                     urls=url_clean, photos=photo_list, actor=actor)
+    description_c = main_mod.clean(description)
+    draft = state.start_or_quick(main_mod.conn, brand_id, brand["name"], description=description_c,
+                                  urls=url_clean, photos=photo_list, actor=actor)
     state.discard_pending_photos(token)
+    if draft is None:  # S4.9 陽春路徑：這一輪沒有新資料要調研，不開新草稿
+        return main_mod.redirect_with_message(
+            f"/brands/{brand_id}", f"「{brand['name']}」沒有新的調研資料，未建立新一輪。")
     return RedirectResponse(f"/brands/{brand_id}/intake/scan/progress", status_code=303)
 
 
@@ -503,24 +411,13 @@ async def scan_create_products(request: Request, brand_id: str):
     draft = _draft_or_404(brand_id)
     form = await request.form()
     names = [main_mod.clean(n) for n in form.getlist("product_names")]
-    suggested = set(draft["scan_products"])
-    known = _known_products(brand_id)
-    created = 0
-    for name in names:
-        if name and name in suggested and name not in known:
-            repo.create_product(main_mod.conn, brand_id, name=name, actor=actor)
-            created += 1
+    created = state.create_scanned_products(main_mod.conn, brand_id, draft, names, actor)
     return RedirectResponse(f"/brands/{brand_id}/intake/scan?created={created}", status_code=303)
 
 
 # ---------------------------------------------------------------------------
 # W4 — 引導問答
 # ---------------------------------------------------------------------------
-
-def _question_options(q: dict) -> list:
-    return ([("suggested", q["suggested"]["label"])]
-            + [(f"branch_{i}", b["label"]) for i, b in enumerate(q["branches"])]
-            + [("other", "以上都不是，我自己說")])
 
 
 @router.get("/brands/{brand_id}/intake/question")
@@ -558,7 +455,7 @@ async def question_post(request: Request, brand_id: str, action: str = Form("ans
         state.save(draft)
         return RedirectResponse(f"/brands/{brand_id}/intake/question/progress", status_code=303)
 
-    choice_map = dict(_question_options(q))
+    choice_map = dict(state.question_options(q))
     errors = {}
     if choice not in choice_map:
         errors["choice"] = "請選一個選項。"
@@ -707,7 +604,7 @@ async def paste_post(request: Request, brand_id: str, action: str = Form("valida
             if scope_name not in _known_products(brand_id):
                 repo.create_product(main_mod.conn, brand_id, name=scope_name, actor=actor)
         else:
-            raw = _rewrite_scope(raw, scope_name, "整個品牌")
+            raw = paste_parse.rewrite_scope(raw, scope_name, "整個品牌")
         n = _apply_paste(draft, raw)
         if n is None:
             return RedirectResponse(f"/brands/{brand_id}/intake/paste", status_code=303)

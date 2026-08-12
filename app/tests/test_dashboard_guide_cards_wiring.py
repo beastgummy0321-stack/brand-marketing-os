@@ -197,6 +197,22 @@ class CockpitGuideCardsWiringTest(unittest.TestCase):
         self.assertIn("素材", titles)
         self.assertIn("事實", titles)
 
+    def test_intake_draft_in_progress_surfaces_as_guide_card(self):
+        """票 B3-intake：品牌有進行中的建檔精靈草稿，駕駛艙要看得到「繼續建檔」的入口
+        （GRILL-B3-intake.md「拿不準的點」第 3 條裁決：併進本票）。"""
+        resp = self.client.post("/api/intake/brands", data={
+            "brand_name": f"虛構建檔中茶行{abs(hash(self.id())) % 100000}",
+            "description": "一句測試用的品牌描述文字。",
+        })
+        brand_id = resp.json()["brand_id"]
+        bi_repo.set_brand_switches(main.conn, brand_id, market_region=None,
+                                   conversion_goal="purchase", actor=ACTOR)
+        cards = self._guide_cards(brand_id)
+        self.assertEqual(len(cards), 1)
+        self.assertIn("建檔進行中（第 2 步，共 5 步）", cards[0]["title"])
+        self.assertIn("繼續建檔", cards[0]["title"])
+        self.assertEqual(cards[0]["action_url"], f"/brands/{brand_id}/intake/scan/progress")
+
     def test_cockpit_endpoint_does_not_write_any_row(self):
         """接口鐵則：只讀。指南卡的資料源多讀了 campaign_cycle／performance_reading／
         recommendation／brand_fact 幾張表，補進只讀防線的快照清單裡一起驗。"""

@@ -209,6 +209,87 @@ def get_draft(brand_id: str, conn=None) -> Optional[dict]:
     return _row_to_draft(conn, row) if row else None
 
 
+def is_restart_draft(brand_id: str, draft_id: str, conn=None) -> bool:
+    """這份草稿是不是「重新調研」（W1b）開出來的——用「同品牌是否已有其他完成過的草稿」
+    當判準，不另開欄位（票 B3-intake，前端契約 `IntakeDraft.is_restart`）。"""
+    conn = _conn(conn)
+    row = conn.execute(
+        "SELECT COUNT(*) AS c FROM intake_draft WHERE brand_id = ? AND id != ? AND status = 'completed'",
+        (brand_id, draft_id),
+    ).fetchone()
+    return (row["c"] if row else 0) > 0
+
+
+def invalid_url(urls: list) -> Optional[str]:
+    """回傳第一個格式不對的網址；全部合法回 None（S4.5，HTML／JSON 兩套路由共用）。"""
+    return next((u for u in urls if not (u.startswith("http://") or u.startswith("https://"))), None)
+
+
+def prev_photos(last_draft_row: Optional[dict]) -> list:
+    """上一輪草稿的照片（photos_json 形狀 → 畫面／new_draft 慣用形狀）；W1b 重新調研沿用。"""
+    import json as _json
+    if not last_draft_row:
+        return []
+    return [
+        {"name": p.get("display_name"), "path": p.get("file_path"),
+         "size_mb": round((p.get("size_bytes") or 0) / (1024 * 1024), 1)}
+        for p in _json.loads(last_draft_row["photos_json"] or "[]")
+    ]
+
+
+def start_or_quick(conn, brand_id: str, brand_name: str, *, description: str, urls: list,
+                    photos: list, actor: str) -> Optional[dict]:
+    """S4.9／S4.10 共用判斷：描述／網址／照片三者皆空＝陽春路徑，不建草稿（回傳 None）；
+    否則建立草稿並回傳。呼叫端（HTML 表單／JSON API）先各自建好／取得品牌，這裡只管
+    「建不建草稿」這一刀，不重複寫兩次（CLAUDE.md 第五節：同一能力只准一條代碼路徑）。"""
+    if not description and not urls and not photos:
+        return None
+    return new_draft(brand_id, brand_name, description=description, urls=urls, photos=photos,
+                     actor=actor, conn=conn)
+
+
+def apply_paste(draft: dict, raw_text: str, conn=None) -> Optional[int]:
+    """驗證＋（全過才）整批落地 intake_item。回傳落地筆數；驗證失敗回 None（錯誤已寫進草稿）。
+
+    W8 貼回頁的 HTML 表單與 JSON API（paste/validate、paste/resolve-scope、AI 修格式完成後）
+    共用同一支，不寫兩份（CLAUDE.md 第五節；票 B3-intake 從 routes.py `_apply_paste` 搬來）。"""
+    from app.intake import paste_parse
+    from app.brand_intelligence import repository as bi_repo
+    conn = _conn(conn)
+    # 換行被剪貼簿吃掉的表格先重組，存重組後的版本——使用者在畫面上看到的就是系統讀懂的樣子
+    raw_text = paste_parse.maybe_reflow(raw_text)
+    draft["paste_raw"] = raw_text
+    known = {p["name"] for p in bi_repo.list_products(conn, draft["brand_id"])}
+    rows, errors = paste_parse.parse_paste(raw_text, known, brand_name=draft["brand_name"])
+    draft["paste_errors"] = errors
+    save(draft, conn)
+    if rows is None:
+        # 重貼失敗就清掉上一次還沒處理的待辦列（已處理的留著追溯）
+        conn.execute(
+            "DELETE FROM intake_item WHERE intake_draft_id = ? AND brand_id = ? AND outcome = 'pending'",
+            (draft["id"], draft["brand_id"]),
+        )
+        conn.commit()
+        return None
+    items = ir.create_items(conn, draft["brand_id"], draft["id"], rows)
+    return len(items)
+
+
+def create_scanned_products(conn, brand_id: str, draft: dict, names: list, actor: str) -> int:
+    """S4.22 一鍵建立偵測到的產品：只准建「AI 有偵測到、且還沒存在」的名字。"""
+    from app.brand_intelligence import repository as bi_repo
+    suggested = set(draft["scan_products"])
+    known = {p["name"] for p in bi_repo.list_products(conn, brand_id)}
+    created = 0
+    for name in names:
+        name = (name or "").strip()
+        if name and name in suggested and name not in known:
+            bi_repo.create_product(conn, brand_id, name=name, actor=actor)
+            created += 1
+            known.add(name)
+    return created
+
+
 def complete_draft(draft: dict, conn=None) -> None:
     ir.complete_draft(_conn(conn), draft["brand_id"], draft["id"])
 
@@ -278,6 +359,39 @@ def discard_pending_photos(token: str) -> None:
     PENDING_PHOTOS.pop(token, None)
 
 
+PHOTO_EXTS = ("jpg", "jpeg", "png", "webp")
+
+
+def validate_photo_upload(filename: str, content: bytes) -> Optional[str]:
+    """副檔名／單張大小驗證（S4.6）；回傳人話錯誤，通過回 None。HTML 表單與 JSON
+    `/api/intake/photos` 共用同一支，不各自寫一份。"""
+    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+    if ext not in PHOTO_EXTS:
+        return f"「{filename}」不是支援的圖片格式，請用 .jpg、.png 或 .webp。"
+    if round(len(content) / (1024 * 1024), 1) > 10:
+        return f"「{filename}」超過 10 MB，請換一張小一點的照片。"
+    return None
+
+
+def save_new_photo(filename: str, content: bytes) -> dict:
+    """新 API 專用：單檔上傳各自拿一個 token（跟舊表單「一批共用一個 token」語意不同，
+    對應前端 `IntakePhoto{token,name,size_mb}`），底層仍是同一套 `save_photo` 存檔邏輯。"""
+    token = new_photo_token()
+    entry = save_photo(token, filename, content)
+    return {"token": token, "name": entry["name"], "size_mb": entry["size_mb"]}
+
+
+def resolve_photo_tokens(tokens: list) -> list:
+    """把新 API 送來的 token 清單換成已上傳的照片；用完即從暫存區丟掉（草稿已經接手）。"""
+    photos = []
+    for token in tokens:
+        pending = get_pending_photos(token)
+        if pending:
+            photos.append(pending[0])
+        discard_pending_photos(token)
+    return photos
+
+
 # ---------------------------------------------------------------------------
 # 花費（真實 token 成本：即時 SUM llm_task.cost，不存副本）
 # ---------------------------------------------------------------------------
@@ -285,6 +399,31 @@ def discard_pending_photos(token: str) -> None:
 def would_exceed(draft: dict, amount: float) -> bool:
     """R3／W12：呼叫送出之前先判斷「已花費 + 本次預估 > 上限」。"""
     return draft["cost_spent"] + amount > draft["budget_limit"]
+
+
+def require_draft(brand_id: str, conn=None) -> dict:
+    """草稿不存在就丟 404（票 B3-intake：HTML／JSON 兩套路由共用同一個唯一入口）。"""
+    draft = get_draft(brand_id, conn)
+    if draft is None:
+        import app.shared.web as main_mod
+        raise main_mod.NotFoundKind("建檔進度")
+    return draft
+
+
+def require_draft_or_just_completed(brand_id: str, conn=None) -> dict:
+    """給待處理清單三支 JSON 端點用：解決最後一筆待處理項會在同一個請求裡把草稿標成
+    completed（S4.65），前端緊接著會再打一次 GET /review 確認「還有沒有剩」——這時草稿
+    已經不是 active，`require_draft` 會 404，前端就顯示不出「導回品牌頁」的完成訊息
+    （票 B3 第三段實測抓到）。退回去找「最近一筆 completed」草稿，讓這個回合的收尾讀取
+    照樣拿得到（值域仍是空清單），不影響 scan／question／paste 等仍需要 active 草稿的端點。"""
+    draft = get_draft(brand_id, conn)
+    if draft is not None:
+        return draft
+    row = ir.get_latest_completed_draft(_conn(conn), brand_id)
+    if row is not None:
+        return _row_to_draft(_conn(conn), row)
+    import app.shared.web as main_mod
+    raise main_mod.NotFoundKind("建檔進度")
 
 
 def cost_state(draft: dict) -> str:
@@ -328,6 +467,13 @@ def current_entry(draft: dict) -> Optional[dict]:
 
 def question_count(draft: dict) -> int:
     return len(_qa_entries(draft["qa"]))
+
+
+def question_options(q: dict) -> list:
+    """目前這題的可選項清單 [(key,label)]（HTML 表單下拉／JSON 驗證共用，S4.27）。"""
+    return ([("suggested", q["suggested"]["label"])]
+            + [(f"branch_{i}", b["label"]) for i, b in enumerate(q["branches"])]
+            + [("other", "以上都不是，我自己說")])
 
 
 # ---------------------------------------------------------------------------

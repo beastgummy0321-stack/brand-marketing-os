@@ -33,6 +33,7 @@ import app.main as main  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
 from app.core.db import new_id, now_iso  # noqa: E402
 from app.dashboard import guide_cards  # noqa: E402
+from app.intake import state as intake_state  # noqa: E402
 
 main.reopen_connection()
 
@@ -83,6 +84,12 @@ class GuideCardLinksResolveTest(unittest.TestCase):
         cls.brand_id = brand["id"]
         cls.cycle_id = _insert_cycle(main.conn, cls.brand_id)
         cls.client = TestClient(main.app)
+        # 票 B3-intake：intake_in_progress 的網址要真的能接到一份進行中草稿，不能只是
+        # 拼字串——真的開一份草稿，用它算出來的 resume_path 當這條規則的測試網址。
+        draft = intake_state.new_draft(
+            cls.brand_id, brand["name"], description="測試用品牌描述文字。",
+            urls=[], photos=[], actor=ACTOR, conn=main.conn)
+        cls.intake_resume_path = draft["resume_path"]
 
     def _facts(self, **overrides) -> dict:
         base = {
@@ -116,6 +123,8 @@ class GuideCardLinksResolveTest(unittest.TestCase):
             "campaign_calendar": self._facts(campaign_reminder={
                 "id": "cny_2026", "name": "農曆新年", "days_until": 28,
                 "kind": "prep", "weeks_until": 4, "tier_label": "大檔"}),
+            "intake_in_progress": self._facts(
+                intake_draft={"step": 2, "resume_path": self.intake_resume_path}),
         }
 
     def test_every_rule_has_a_link_case(self):

@@ -72,3 +72,4 @@ B3（2026-08-12，主 Agent 裁定、使用者驗收原型時可退）：
 - 陽春路徑（只填名稱）不留草稿紀錄，直接建品牌完成（audit_log 已有建立紀錄）
 - 「建檔進行中→繼續建檔」提示併入 B3 第二段：駕駛艙指南卡貨源加一條（總綱第七節貨源清單延伸）
 - 花費儀表不處理窄螢幕（決策 0038：純桌機 1440 固定，不做響應式）
+- 回應形狀以原型驗收定案的 frontend/src/lib/intakeApi.ts 為準：草稿帶 completed／is_restart／created_product_names、job status 不帶 kind、review 帶 severity；resume_path 不出 API（指南卡走後端內部 state.get_draft()）；GRILL-B3-intake.md 檔尾型別已同步實作

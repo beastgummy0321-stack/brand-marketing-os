@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import type { IntakeDraft } from "@/lib/intakeApi";
 import { DEPTH_OPTIONS, fetchOperatorCard, generateHandoff } from "@/lib/intakeApi";
 
@@ -58,6 +59,10 @@ export function HandoffStep({
       {draft.created_product_names.length === 0 && (
         <div className="rounded-md border border-dashed border-border p-3 text-sm text-muted-foreground">
           交接包會告訴外部 AI「適用範圍只能填『整個品牌』」，因為這個品牌目前還沒有任何產品。
+          {" "}
+          <Link to={`/brands/${brandId}`} className="text-primary hover:underline">
+            回品牌頁建立產品
+          </Link>
         </div>
       )}
 

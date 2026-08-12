@@ -674,6 +674,7 @@ from app.brand_intelligence.routes_library import router as library_router  # no
 from app.brand_intelligence.routes_products import router as products_router  # noqa: E402
 from app.brand_intelligence.routes_settings import router as settings_hub_router  # noqa: E402
 from app.intake.routes import router as intake_router  # noqa: E402
+from app.intake.routes_api import router as intake_api_router  # noqa: E402
 from app.ads.routes import router as ads_router  # noqa: E402
 from app.orders.routes import router as orders_router  # noqa: E402
 from app.dashboard.routes import router as dashboard_router  # noqa: E402
@@ -684,6 +685,7 @@ app.include_router(library_router)
 app.include_router(products_router)
 app.include_router(settings_hub_router)
 app.include_router(intake_router)
+app.include_router(intake_api_router)
 app.include_router(ads_router)
 app.include_router(orders_router)
 app.include_router(dashboard_router)

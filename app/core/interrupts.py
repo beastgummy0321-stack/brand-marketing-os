@@ -50,6 +50,8 @@ CATEGORIES = {
     "customer_voice_extraction_done": {"severity": "informational", "label": "顧客原話分析完成"},
     # 產品 AI 調研（新建與再次調研共用）背景工作，完成／失敗都進這裡（票 B2-products）。
     "product_research_done": {"severity": "informational", "label": "產品調研完成"},
+    # 建檔精靈初掃／貼回修格式背景工作，完成／失敗都進這裡；出下一題不進（票 B3-intake）。
+    "intake_ai_step_done": {"severity": "informational", "label": "建檔精靈 AI 步驟完成"},
 }
 _CATEGORY_RANK = {name: i for i, name in enumerate(CATEGORIES)}
 

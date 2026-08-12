@@ -28,6 +28,7 @@ from app.core import settings as core_settings
 from app.dashboard import campaign_calendar
 from app.dashboard import guide_cards
 from app.dashboard.health import brand_health
+from app.intake import state as intake_state
 from app.orders import repository as orders_repo
 
 # 迷你趨勢線／主圖月數（票 03-cockpit-kpi-chart）：半年給得出趨勢形狀，不必逐日。
@@ -124,6 +125,16 @@ def _attach_last_year_skip(conn, brand_id: str, reminder: Optional[dict],
     return {**reminder, "last_year_skipped": True, "last_year_skip_reason": skip["reason"]}
 
 
+def _intake_draft_fact(conn, brand_id: str) -> Optional[dict]:
+    """票 B3-intake：這個品牌有沒有進行中的建檔精靈草稿——只轉 guide_cards 卡片需要的
+    兩個欄位（step／resume_path），續接判斷沿用 `app/intake/state.py` 的 `_resume_path`，
+    這裡不重算。"""
+    draft = intake_state.get_draft(brand_id, conn)
+    if not draft:
+        return None
+    return {"step": draft["step"], "resume_path": draft["resume_path"]}
+
+
 def _guide_card_facts(conn, brand_id: str, cycle: Optional[dict], today: str, events: list) -> dict:
     pending_facts = bi_repo.list_brand_facts(conn, brand_id, status="pending")
     brand = bi_repo.get_brand(conn, brand_id)
@@ -147,6 +158,7 @@ def _guide_card_facts(conn, brand_id: str, cycle: Optional[dict], today: str, ev
         "next_cycle_draft_ready": next_cycle_draft_ready,
         "campaign_reminder": _attach_last_year_skip(conn, brand_id, campaign_reminder, events),
         "pacing_alert": _pacing_alert(conn, brand_id, today),
+        "intake_draft": _intake_draft_fact(conn, brand_id),
     }
 
 

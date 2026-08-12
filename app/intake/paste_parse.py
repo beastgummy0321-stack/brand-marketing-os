@@ -135,6 +135,21 @@ def parse_paste(raw_text: str, known_products: set, brand_name: str = None) -> t
     return rows, []
 
 
+def rewrite_scope(raw_text: str, name: str, new_scope: str) -> str:
+    """把貼回文字裡「適用範圍＝name」的資料列改寫成 new_scope（歸到整個品牌用）。
+    直接改在文字上，之後不論重驗幾次都不會忘記這個決定。HTML 表單與 JSON API 共用
+    （票 B3-intake 從 routes.py `_rewrite_scope` 搬來）。"""
+    out = []
+    for line in raw_text.splitlines():
+        parts = [p.strip() for p in line.split("|")]
+        if len(parts) == 6 and parts[4] == name and parts != HEADER_COLUMNS:
+            parts[4] = new_scope
+            out.append(" | ".join(parts))
+        else:
+            out.append(line)
+    return "\n".join(out)
+
+
 def _demo() -> None:
     ok_text = (
         "種類 | 分類 | 標題 | 內容 | 適用範圍 | 佐證來源\n"

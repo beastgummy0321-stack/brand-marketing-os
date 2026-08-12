@@ -47,6 +47,9 @@ facts 欄位契約（由 app/dashboard/repository.py 組裝）：
   就是 None）
 - pacing_alert: {"kind": "overspend"|"underspend", "action_url": str|None} | None
   （brand 目前未結的 pacing 打斷事件，list_open 排序後第一筆；沒有就是 None）
+- intake_draft: {"step": int, "resume_path": str} | None（票 B3-intake：這個品牌有沒有
+  進行中的建檔精靈草稿；有就是 `app/intake/state.get_draft()` 回傳草稿的 step／
+  resume_path，沒有就是 None）
 """
 
 from typing import Callable, Optional
@@ -63,6 +66,21 @@ def _rule_conversion_goal_missing(facts: dict) -> Optional[dict]:
     return {
         "title": "還沒設定廣告目標——AI 現在會用電商預設值寫文案，可能不適合你",
         "action_url": f"/brands/{facts['brand_id']}/edit",
+    }
+
+
+def _rule_intake_in_progress(facts: dict) -> Optional[dict]:
+    """建檔精靈有進行中草稿：品牌設定還沒完成，跟 conversion_goal_missing 同樣屬於
+    「這個品牌能不能正常運作」的前提，登記在其之後、其餘一般提醒之前（票 B3-intake，
+    GRILL-B3-intake.md「拿不準的點」第 3 條裁決：併進本票，卡片形狀沿用既有 API 不新增
+    欄位）。「入口存在、點下去去對的地方」用既有 `app/intake/state.py` 的 `_resume_path`
+    續接判斷，這裡只轉文字，不重算。"""
+    draft = facts.get("intake_draft")
+    if not draft:
+        return None
+    return {
+        "title": f"建檔進行中（第 {draft['step']} 步，共 5 步）・繼續建檔",
+        "action_url": draft["resume_path"],
     }
 
 
@@ -149,6 +167,7 @@ def _rule_campaign_calendar(facts: dict) -> Optional[dict]:
 # 登記表：dict 順序＝優先序（越早登記代表行動價值越高，比照 interrupts.py CATEGORIES）。
 RULES: "dict[str, Callable[[dict], Optional[dict]]]" = {
     "conversion_goal_missing": _rule_conversion_goal_missing,
+    "intake_in_progress": _rule_intake_in_progress,
     "pacing_alert": _rule_pacing_alert,
     "reading_unread": _rule_reading_unread,
     "next_cycle_draft": _rule_next_cycle_draft,
@@ -187,6 +206,20 @@ def demo() -> None:
                                 "reading_ready": False, "next_cycle_draft_ready": False})
     assert len(cards_missing_goal) == 3
     assert cards_missing_goal[0]["action_url"] == "/brands/b/edit"
+    # 票 B3-intake：有進行中建檔草稿時出卡，登記在 conversion_goal_missing 之後、
+    # pacing_alert 之前；沒有草稿（None）不出卡。
+    cards_with_draft = build({"brand_id": "b", "conversion_goal": "purchase",
+                              "pending_facts_count": 0, "active_cycle": None,
+                              "reading_ready": False, "next_cycle_draft_ready": False,
+                              "intake_draft": {"step": 2, "resume_path": "/brands/b/intake/scan"}})
+    assert len(cards_with_draft) == 1
+    assert cards_with_draft[0] == {
+        "title": "建檔進行中（第 2 步，共 5 步）・繼續建檔",
+        "action_url": "/brands/b/intake/scan",
+    }
+    assert build({"brand_id": "b", "conversion_goal": "purchase", "pending_facts_count": 0,
+                  "active_cycle": None, "reading_ready": False,
+                  "next_cycle_draft_ready": False, "intake_draft": None}) == []
     print("dashboard.guide_cards 自檢通過")
 
 
