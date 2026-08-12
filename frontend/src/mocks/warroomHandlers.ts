@@ -5,10 +5,14 @@
 import { findCampaign } from "./campaignsData";
 import {
   buildAccountStructure,
+  buildBudgetTiers,
   buildCycle,
   buildDissents,
+  buildDurationSuggestion,
+  buildPainSuggestion,
   buildPlanOptions,
   buildRuleCardsLearned,
+  buildScheduleReminder,
   buildSliderOptions,
   deriveStage,
   NEW_CYCLE_OBJECTIVES,
@@ -20,9 +24,10 @@ import {
   buildCodes,
   buildNamingCheck,
   buildPackages,
+  buildReadinessRing,
   buildUtmCheck,
 } from "./warroomHandoffData";
-import { AI_COST_METER, buildCheckpoint, buildClosingReview, buildPerformanceSummary, buildReadingResult } from "./warroomPerformanceData";
+import { AI_COST_METER, buildCheckpoint, buildClosingReview, buildHealthLights, buildPerformanceSummary, buildReadingResult } from "./warroomPerformanceData";
 import { envelope, errorResponse, jsonResponse, registerRoute } from "./network";
 import { getScenario } from "./state";
 
@@ -43,15 +48,19 @@ async function readBody(init?: RequestInit): Promise<Record<string, unknown>> {
 
 registerRoute("GET", /^\/api\/campaigns\/[^/]+\/new-context$/, () => {
   const empty = getScenario() === "empty";
+  const pain = buildPainSuggestion(empty);
   return jsonResponse(
     envelope({
       offer_simulation: empty, // 品牌一期都沒跑過時才問（契約 S8.1）
       products: empty ? [] : NEW_CYCLE_PRODUCTS,
       slider_options: buildSliderOptions(),
+      budget_tiers: buildBudgetTiers(pain),
       duration_config: { min: 7, max: 30, min_daily_budget: 300 },
+      duration_suggestion: buildDurationSuggestion(),
       objectives: NEW_CYCLE_OBJECTIVES,
       recommended_objective: "sales",
       readiness_notes: ["這個品牌的商品到達頁還沒有掛 Pixel 轉換事件，開檔前建議先確認（不會擋你送出）。"],
+      pain_suggestion: pain,
     }),
   );
 });
@@ -130,6 +139,13 @@ registerRoute("GET", /^\/api\/campaigns\/[^/]+\/([^/]+)\/rule-cards-learned$/, (
   return jsonResponse(envelope(record ? buildRuleCardsLearned(record) : []));
 });
 
+// ---- 企劃排期到期提醒（S8R.9-11）----
+registerRoute("GET", /^\/api\/campaigns\/[^/]+\/([^/]+)\/schedule-reminder$/, (match) => {
+  const record = findCampaign(match[1]);
+  if (!record) return errorResponse(404, "找不到這期檔期");
+  return jsonResponse(envelope(buildScheduleReminder(record)));
+});
+
 // ---- 交接（S8.25-46）----
 
 registerRoute("GET", /^\/api\/campaigns\/[^/]+\/([^/]+)\/checklist$/, (match) => {
@@ -171,6 +187,13 @@ registerRoute("POST", /^\/api\/campaigns\/([^/]+)\/([^/]+)\/handoff\/codes\/veri
 });
 registerRoute("POST", /^\/api\/campaigns\/[^/]+\/[^/]+\/handoff\/[^/]+\/activate$/, () => noContent());
 
+// ---- 交接總分環（S8R.13-19）----
+registerRoute("GET", /^\/api\/campaigns\/[^/]+\/([^/]+)\/readiness$/, (match) => {
+  const record = findCampaign(match[1]);
+  if (!record) return errorResponse(404, "找不到這期檔期");
+  return jsonResponse(envelope(buildReadinessRing(record)));
+});
+
 // ---- 期中檢查點（S8.47-50）----
 
 registerRoute("GET", /^\/api\/campaigns\/[^/]+\/([^/]+)\/checkpoint\/(day3|day7)$/, (match) => {
@@ -189,6 +212,13 @@ registerRoute("GET", /^\/api\/campaigns\/[^/]+\/([^/]+)\/performance$/, (match) 
   );
 });
 registerRoute("POST", /^\/api\/campaigns\/[^/]+\/[^/]+\/performance\/simulate$/, () => noContent());
+
+// ---- 檔期健康燈號（S8R.20-21）----
+registerRoute("GET", /^\/api\/campaigns\/[^/]+\/([^/]+)\/health-lights$/, (match) => {
+  const record = findCampaign(match[1]);
+  if (!record) return errorResponse(404, "找不到這期檔期");
+  return jsonResponse(envelope(buildHealthLights(record)));
+});
 
 // ---- 覆盤（S8.59-66）----
 

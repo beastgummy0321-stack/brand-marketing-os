@@ -41,6 +41,11 @@ export interface CampaignListItem {
   verdict_kind: "ok" | "danger" | "neutral" | null;
   data_grade: CampaignDataGrade | null;
   vs_previous: "▲" | "▼" | "－" | null;
+
+  /** S7.21（GRILL-B4R-performance.md 歷史歸檔頁）：本期日花費曲線縮圖，取自排期規劃的
+   * 逐日陣列，只有 `bucket === "closed"` 且已判讀過的列才有值（S7.22-23：沒有這份資料或
+   * 尚未判讀／未結案一律 `null`，表格顯示「—」，不是空白圖表）。 */
+  trend_daily_budgets: number[] | null;
 }
 
 export interface CampaignDeleteImpact {

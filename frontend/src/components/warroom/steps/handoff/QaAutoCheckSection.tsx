@@ -10,7 +10,10 @@ export function QaAutoCheckSection({ brandId, cycleId }: { brandId: string; cycl
   const [confirmed, setConfirmed] = useState<Set<string>>(new Set());
 
   useEffect(() => {
-    fetchAutoChecks(brandId, cycleId).then(setChecks);
+    fetchAutoChecks(brandId, cycleId).then((data) => {
+      setChecks(data);
+      setConfirmed(new Set(data.filter((c) => c.checked).map((c) => c.key)));
+    });
   }, [brandId, cycleId]);
 
   async function toggleConfirm(key: string) {

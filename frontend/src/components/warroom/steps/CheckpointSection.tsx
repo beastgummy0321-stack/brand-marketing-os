@@ -4,10 +4,9 @@ import { Badge } from "../shared/Badge";
 
 const KIND_LABELS = { day3: "第 3 天健康檢查", day7: "第 7 天健康檢查" } as const;
 
-/** 期中檢查點（S8.47-50，吸收 `ads_checkpoint.html`）：掛在「交接」之後、「成效」之前
- * （契約原文），本票放在成效步驟開頭——只有真的在投放（LIVE 之後）健康檢查才有意義，
- * 跟成效判讀同一個時間點使用者會關心（拿不準的點延伸：卡片分組方式留原型驗收再拍板）。
- * 不判勝負，只看學習期正不正常、錢有沒有在花。 */
+/** 期中檢查點（S8R.19，吸收 `ads_checkpoint.html`）：位置維持在「交接」區塊內（沿用舊分組，
+ * GRILL-B4R-performance.md 交接區條文表），由 `HandoffStep` 掛載——只有真的在投放
+ * （LIVE 之後）健康檢查才有意義，不判勝負，只看學習期正不正常、錢有沒有在花。 */
 export function CheckpointSection({ brandId, cycleId }: { brandId: string; cycleId: string }) {
   const [day3, setDay3] = useState<CheckpointResult | null>(null);
   const [day7, setDay7] = useState<CheckpointResult | null>(null);

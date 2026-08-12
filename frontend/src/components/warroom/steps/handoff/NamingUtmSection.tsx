@@ -17,7 +17,7 @@ export function NamingUtmSection({ brandId, cycleId }: { brandId: string; cycleI
   if (data.utm.length === 0) return null; // 交接包還沒產生，沒有東西可檢查
 
   return (
-    <div className="flex flex-wrap items-center gap-2 rounded-md border border-border p-3 text-sm">
+    <div id="naming-utm-block" className="flex flex-wrap items-center gap-2 rounded-md border border-border p-3 text-sm">
       <Badge tone={data.naming.passed ? "success" : "danger"}>命名檢查：{data.naming.passed ? "通過" : "未過"}</Badge>
       {!data.naming.passed && (
         <span className="text-xs text-muted-foreground">

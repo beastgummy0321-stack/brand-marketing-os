@@ -10,8 +10,21 @@ export type CampaignStage = "intake" | "plan" | "creative" | "handoff" | "prelau
 export type FunnelStage = "exposure" | "consideration" | "conversion";
 export type PacingStrategy = "continuous" | "intermittent" | "pulse";
 
-export const STAGE_BAR_LABELS = ["開檔", "計畫", "素材", "交接包", "投放前檢查", "成效", "覆盤"];
+/** GRILL-B4R-performance.md R1-2：階段條從 7 格收成 5 個自適應單頁區塊（開檔／企劃／交接／
+ * 成效／覆盤）。`STAGE_ORDER` 保留原本 7 段後端階段細節（`deriveStage()` 仍回這 7 種之一），
+ * `BLOCK_OF_STAGE` 是新增的分組對照表（GRILL-B4R-performance.md 194-208 行「新區塊吸收舊哪幾
+ * 格」），不重寫第二份階段判定邏輯。 */
+export const STAGE_BAR_LABELS = ["開檔", "企劃", "交接", "成效", "覆盤"];
 export const STAGE_ORDER: CampaignStage[] = ["intake", "plan", "creative", "handoff", "prelaunch", "performance", "review"];
+export const BLOCK_OF_STAGE: Record<CampaignStage, number> = {
+  intake: 1,
+  plan: 2,
+  creative: 2,
+  handoff: 3,
+  prelaunch: 3,
+  performance: 4,
+  review: 5,
+};
 
 // app/ads/plan.py:60-72（查證日 2026-08-12）
 export const FUNNEL_STAGE_LABELS: Record<FunnelStage, string> = {
@@ -129,6 +142,9 @@ export interface AutoCheckResult {
   available: boolean;
   passed: boolean | null;
   note: string;
+  /** 使用者自行勾選「已確認」（跟 `available`／`passed` 的系統覆核是兩件事，
+   * S8R.16：交接總分環的過關判定看這個欄位，系統覆核只是輔助提示）。 */
+  checked: boolean;
 }
 
 export interface NamingCheckResult {
@@ -205,10 +221,34 @@ export interface NextCycleAdvice {
   echo_chamber: boolean;
 }
 
+/** S8R.24：訂單歸因四分類（`app/ads/codes.py:217-246 attribution_summary()`，查證日
+ * 2026-08-12，形狀原樣沿用）。 */
+export interface AttributionCategory {
+  count: number;
+  net_revenue: number;
+}
+
+export interface AttributionSummary {
+  gross: AttributionCategory;
+  net: AttributionCategory;
+  excluded: AttributionCategory;
+  natural: AttributionCategory;
+}
+
 export interface ClosingReview {
   cycle_id: string;
-  goal_comparison: { objective_label: string; target: string; actual_kpis: PerformanceSummary["kpis"] };
-  gap_attribution: { reasons: string[]; channel_note: string | null; ga4_leak_note: string | null };
+  goal_comparison: {
+    objective_label: string;
+    target: string;
+    /** S8R.23 雙條圖左條：目標 CPA 或建議花費區間中點。 */
+    target_value: number;
+    /** S8R.23 雙條圖右條：實際算出的對應數字，算不出來時為 `null`（不給假的 0）。 */
+    actual_value: number | null;
+    metric_label: string;
+    lower_is_better: boolean;
+    actual_kpis: PerformanceSummary["kpis"];
+  };
+  gap_attribution: { reasons: string[]; channel_note: string | null; ga4_leak_note: string | null; attribution: AttributionSummary };
   learning: {
     hypotheses: { statement: string; verdict: "supported" | "rejected" | "inconclusive" }[];
     ledger_entries: { text: string; created_at: string }[];
@@ -223,14 +263,85 @@ export interface AiCostMeter {
   settings_url: string;
 }
 
+/** S8R.4／S8R.5：最大虧損卡 AI 建議（GRILL-B4R-performance.md 452-457 行既有型別，逐字沿用）。 */
+export interface PainSuggestion {
+  amount: number;
+  is_ai_suggested: boolean;
+  basis_label: string;
+}
+
+export interface SliderOption {
+  amount: number;
+  amount_label: string;
+  duration_days: number;
+  daily_budget: number;
+  daily_budget_label: string;
+  below_floor: boolean;
+  note: string;
+}
+
+/** GRILL-B4R-performance.md 修復票 R2-4：虧損卡「自己調」展開的三檔預算卡（保守／建議／
+ * 積極），形狀＝`SliderOption` 加上檔位識別，直接沿用滑桿檔位（`SLIDER_STEPS`）既有欄位，
+ * 不另外發明第二套金額換算（同「budget_tiers」精神：目標 CPA 三層鏈用同一套保守/建議/積極
+ * 分法，見 `TargetCpaView.tiers`）。`key === "recommended"` 那筆即為 AI 建議（金額同
+ * `pain_suggestion.amount`）。 */
+export interface BudgetTier extends SliderOption {
+  key: "conservative" | "recommended" | "aggressive";
+  label: string;
+}
+
 export interface NewContext {
   offer_simulation: boolean;
   products: { id: string; name: string }[];
-  slider_options: { amount: number; amount_label: string; duration_days: number; daily_budget: number; daily_budget_label: string; below_floor: boolean; note: string }[];
+  slider_options: SliderOption[];
+  budget_tiers: BudgetTier[];
   duration_config: { min: number; max: number; min_daily_budget: number };
+  /** S8R.2：檔期長度建議（真後端 `app/ads/routes_common.py:100 _duration_suggestion()`）。 */
+  duration_suggestion: { value: number; basis_label: string };
   objectives: { value: string; label: string; hint: string }[];
   recommended_objective: string;
   readiness_notes: string[];
+  pain_suggestion: PainSuggestion;
+}
+
+/** S8R.9-11：排期到期提醒（GRILL-B4R-performance.md 459-464 行既有型別，逐字沿用）。
+ * `null` 表示今天不需要調整（`continuous` 策略恆為 `null`）。 */
+export interface ScheduleReminder {
+  date: string;
+  new_daily_budget: number;
+  copy_text: string;
+}
+
+/** S8R.13-17：交接總分環（GRILL-B4R-performance.md 466-479 行既有型別，逐字沿用）。 */
+export interface ReadinessRingItem {
+  key: string;
+  label: string;
+  passed: boolean;
+  section: "one_time_checklist" | "cycle_checklist" | "naming_check" | "utm_check" | "qa_launch";
+  fix_anchor: string;
+}
+
+export interface ReadinessRing {
+  passed: number;
+  total: number;
+  items: ReadinessRingItem[];
+}
+
+/** S8R.20-21／S3P.12：檔期健康燈號（GRILL-B4R-performance.md 429-445 行既有型別，逐字沿用）。 */
+export type HealthLightStatus = "green" | "yellow" | "red" | "insufficient";
+
+export interface HealthLight {
+  status: HealthLightStatus;
+  value: number | null;
+  label: string;
+  note: string;
+}
+
+export interface HealthLights {
+  spend_rate: HealthLight;
+  cpa: HealthLight;
+  roas: HealthLight;
+  fatigue: HealthLight;
 }
 
 interface Envelope<T> {
@@ -318,6 +429,16 @@ export const verifyCodes = (brandId: string, cycleId: string): Promise<{ mismatc
   postJson(`${cycleBase(brandId, cycleId)}/handoff/codes/verify`);
 export const activatePackage = (brandId: string, cycleId: string, packageId: string, metaCampaignId: string): Promise<void> =>
   postJson(`${cycleBase(brandId, cycleId)}/handoff/${encodeURIComponent(packageId)}/activate`, { meta_campaign_id: metaCampaignId });
+
+// ---- 企劃排期到期提醒（S8R.9-11）----
+export const fetchScheduleReminder = (brandId: string, cycleId: string): Promise<ScheduleReminder | null> =>
+  getJson(`${cycleBase(brandId, cycleId)}/schedule-reminder`);
+
+// ---- 交接總分環（S8R.13-17）----
+export const fetchReadiness = (brandId: string, cycleId: string): Promise<ReadinessRing> => getJson(`${cycleBase(brandId, cycleId)}/readiness`);
+
+// ---- 檔期健康燈號（S8R.20-21）----
+export const fetchHealthLights = (brandId: string, cycleId: string): Promise<HealthLights> => getJson(`${cycleBase(brandId, cycleId)}/health-lights`);
 
 // ---- 期中檢查點（S8.47-50）----
 export const fetchCheckpoint = (brandId: string, cycleId: string, kind: "day3" | "day7"): Promise<CheckpointResult> =>

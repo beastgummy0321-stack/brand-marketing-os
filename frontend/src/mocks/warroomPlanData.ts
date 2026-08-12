@@ -4,10 +4,13 @@
  * `cyc-1`…`cyc-15`（`campaignsData.ts` `nextId()`），順序固定，可安全用字面量索引。 */
 import type {
   AccountStructure,
+  BudgetTier,
   Cycle,
   Dissent,
+  PainSuggestion,
   PlanOption,
   RuleCardLearned,
+  ScheduleReminder,
   StructureGroup,
   TargetCpaView,
 } from "@/lib/warroomApi";
@@ -58,11 +61,13 @@ export function buildCycle(record: CampaignRecord): Cycle {
     duration_days: 14,
     daily_budget: daily,
     background: record.background || null,
-    pacing_strategy: record.status === "PLANNING" ? "continuous" : record.id === "cyc-5" ? "pulse" : "continuous",
+    pacing_strategy: record.status === "PLANNING" ? "continuous" : record.id === "cyc-5" ? "pulse" : record.id === "cyc-3" ? "intermittent" : "continuous",
     pacing_reason:
       record.id === "cyc-5"
         ? "這次檔期綁了限時優惠，越接近檔期尾聲買氣通常越集中，把預算重心放到後段。"
-        : "這次檔期沒有綁限時優惠，先用穩定投放，效果最容易判讀。",
+        : record.id === "cyc-3"
+          ? "這個受眾規模不大，連續投放幾天後容易看膩，投3天、緩1天讓素材有喘息空間。"
+          : "這次檔期沒有綁限時優惠，先用穩定投放，效果最容易判讀。",
     archived: record.archived,
     daily_below_floor: daily < 300,
   };
@@ -230,6 +235,77 @@ export function buildSliderOptions() {
       note: `這筆金額約買到 ${days} 天測試，` + (belowFloor ? "但每天預算偏低，可能只看得出哪張圖有人點，看不出能不能賺錢。" : "足夠看出哪些素材有人點、哪些帶得動成交。"),
     };
   });
+}
+
+const DEFAULT_STEP_INDEX = 3; // routes_common.py:29 DEFAULT_STEP_INDEX，查證日 2026-08-12
+
+/** S8R.4/5：最大虧損卡 AI 建議（`.scratch/b4-redesign/blocks.md` 第 3.3 節公式，查證日
+ * 2026-08-13，原樣搬）：目標 CPA × Meta 學習期樣本下限（50 次／週）× 兩週，四捨五入到最近
+ * 滑桿檔位。品牌完全沒有數據可用（`offer_simulation` 場景）退回系統預設檔位（S8R.5）。 */
+export function buildPainSuggestion(offerSimulation: boolean): PainSuggestion {
+  if (offerSimulation) {
+    return {
+      amount: SLIDER_STEPS[DEFAULT_STEP_INDEX],
+      is_ai_suggested: false,
+      basis_label: "這個品牌還沒有數據可以參考，先用系統的保守預設值，之後幾期會抓到你自己的數字。",
+    };
+  }
+  const targetCpa = 180; // 展示用固定值，同 buildTargetCpaView() 既有示範值
+  const raw = targetCpa * 50 * 2;
+  const idx = SLIDER_STEPS.reduce((best, step, i) => (Math.abs(step - raw) < Math.abs(SLIDER_STEPS[best] - raw) ? i : best), 0);
+  return {
+    amount: SLIDER_STEPS[idx],
+    is_ai_suggested: true,
+    basis_label: `依這個品牌的目標 CPA（推算約 ${targetCpa} 元）× Meta 學習期樣本下限，估算兩週建議花費。`,
+  };
+}
+
+const BUDGET_TIER_LABELS: Record<BudgetTier["key"], string> = { conservative: "保守", recommended: "建議", aggressive: "積極" };
+
+/** GRILL-B4R-performance.md 修復票 R2-4：虧損卡「自己調」展開的三檔預算卡。直接從既有
+ * `buildSliderOptions()` 12 檔位裡，以 AI 建議金額（`pain_suggestion.amount`）為中心各取
+ * 一檔（-2／0／+2），不重算金額——保守/建議/積極只是同一把滑桿上的三個標記點。 */
+export function buildBudgetTiers(pain: PainSuggestion): BudgetTier[] {
+  const options = buildSliderOptions();
+  const aiIdx = Math.max(0, SLIDER_STEPS.indexOf(pain.amount));
+  const clamp = (i: number) => Math.min(options.length - 1, Math.max(0, i));
+  return (["conservative", "recommended", "aggressive"] as const).map((key, i) => ({
+    key,
+    label: BUDGET_TIER_LABELS[key],
+    ...options[clamp(aiIdx + (i - 1) * 2)],
+  }));
+}
+
+/** S8R.2：檔期長度建議，理由文字原樣搬真後端 `app/ads/routes_common.py:100 _duration_suggestion()`
+ * （查證日 2026-08-13）——本組假資料的金額都落在 14 天不受日預算下限影響的範圍，恆回兩週建議。 */
+export function buildDurationSuggestion(): { value: number; basis_label: string } {
+  return {
+    value: 14,
+    basis_label: "建議 14 天：兩週是常見的檔期長度，Meta 的學習期大約需要 3–7 天，這樣學習期之後還留得下一段時間看得出數據。",
+  };
+}
+
+/** S8R.9-11：排期到期提醒。`continuous`（穩定投放）恆回 `null`。本組假資料有兩顆對照：
+ * cyc-5（衝刺投放 pulse，GRILL-B4R-performance.md 醜資料段「第 5 天有一次金額變動」）／
+ * cyc-3（喘息投放 intermittent，修復票補充：投3天緩1天，示範「緩」那天要把日預算調低）。 */
+export function buildScheduleReminder(record: CampaignRecord): ScheduleReminder | null {
+  if (record.id === "cyc-5") {
+    const newDaily = 1800;
+    return {
+      date: "2026-07-15",
+      new_daily_budget: newDaily,
+      copy_text: `今天去 Meta 把日預算改成 NT$${newDaily.toLocaleString("zh-TW")}`,
+    };
+  }
+  if (record.id === "cyc-3") {
+    const newDaily = 0;
+    return {
+      date: "2026-08-08",
+      new_daily_budget: newDaily,
+      copy_text: "今天是這期的喘息日（投3天緩1天），去 Meta 把日預算暫時改成 NT$0，明天再改回來。",
+    };
+  }
+  return null;
 }
 
 // app/ads/routes_common.py:33-44（查證日 2026-08-12，原樣搬，5 選項對齊 Meta 官方成效目標分類）

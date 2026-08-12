@@ -1,7 +1,16 @@
 /** S8 作戰室「交接／投放前檢查」假資料（票 B4-warroom）。checklist 三份清單的 label／help
  * 逐字抄 `app/ads/checklist.py:28-92`（查證日 2026-08-12）——這是後端已定版的固定文案，
  * 前端原型照抄，不是自己命名。 */
-import type { AutoCheckResult, ChecklistItem, CodeAssignment, HandoffPackage, NamingCheckResult, UtmCheckResult } from "@/lib/warroomApi";
+import type {
+  AutoCheckResult,
+  ChecklistItem,
+  CodeAssignment,
+  HandoffPackage,
+  NamingCheckResult,
+  ReadinessRing,
+  ReadinessRingItem,
+  UtmCheckResult,
+} from "@/lib/warroomApi";
 import type { CampaignRecord } from "./campaignsData";
 
 // app/ads/checklist.py:28-37
@@ -44,12 +53,14 @@ export function buildChecklist(record: CampaignRecord): ChecklistItem[] {
  * 點」第 1 點，屬既有整合範圍外，不是本票能自己判斷技術上做不做得到）。 */
 export function buildAutoChecks(record: CampaignRecord): AutoCheckResult[] {
   const pixelOk = record.id !== "cyc-5"; // cyc-5 示範「未過」：花了錢卻零轉換的異常訊號
+  // ponytail: checked 一律示範已自行確認過——S8R.13-19 醜資料「3 項未過」只靠 checklist／
+  // naming／utm 三處示範（見 buildReadinessRing 檔頭註解），QA 五項不重複佔用示範額度。
   return [
-    { key: "qa_pixel_installed", label: "Pixel 已正確安裝", available: true, passed: pixelOk, note: pixelOk ? "近期投放有正常收到轉換事件。" : "近期已花費但零轉換，Pixel 可能異常，建議重新確認安裝。" },
-    { key: "qa_audience_exclusion", label: "受眾排除名單已設定", available: false, passed: null, note: "Meta Marketing API 目前的整合範圍讀不到自訂受眾排除設定，維持自行確認。" },
-    { key: "qa_capi_emq_quality", label: "CAPI／EMQ 事件品質已確認", available: false, passed: null, note: "EMQ 分數屬 Events Manager 專屬頁面數據，非標準 insights 欄位，目前讀不到，維持自行確認。" },
-    { key: "qa_budget_line_review", label: "預算已逐筆覆核", available: true, passed: record.id !== "cyc-5", note: record.id === "cyc-5" ? "有一組廣告組的 Meta 實際日預算跟底案不一致，請人工核對。" : "各組 Meta 實際日預算與底案相符。" },
-    { key: "qa_landing_page_click_test", label: "到達頁已實點測試", available: true, passed: true, note: "系統已對每組到達網址送出一次輕量探測，回應碼皆為 2xx。內容正不正確還是要自己看一眼。" },
+    { key: "qa_pixel_installed", label: "Pixel 已正確安裝", available: true, passed: pixelOk, checked: true, note: pixelOk ? "近期投放有正常收到轉換事件。" : "近期已花費但零轉換，Pixel 可能異常，建議重新確認安裝。" },
+    { key: "qa_audience_exclusion", label: "受眾排除名單已設定", available: false, passed: null, checked: true, note: "Meta Marketing API 目前的整合範圍讀不到自訂受眾排除設定，維持自行確認。" },
+    { key: "qa_capi_emq_quality", label: "CAPI／EMQ 事件品質已確認", available: false, passed: null, checked: true, note: "EMQ 分數屬 Events Manager 專屬頁面數據，非標準 insights 欄位，目前讀不到，維持自行確認。" },
+    { key: "qa_budget_line_review", label: "預算已逐筆覆核", available: true, passed: record.id !== "cyc-5", checked: true, note: record.id === "cyc-5" ? "有一組廣告組的 Meta 實際日預算跟底案不一致，請人工核對。" : "各組 Meta 實際日預算與底案相符。" },
+    { key: "qa_landing_page_click_test", label: "到達頁已實點測試", available: true, passed: true, checked: true, note: "系統已對每組到達網址送出一次輕量探測，回應碼皆為 2xx。內容正不正確還是要自己看一眼。" },
   ];
 }
 
@@ -117,6 +128,39 @@ export function buildUtmCheck(packages: HandoffPackage[]): UtmCheckResult[] {
       passed: present.length === 4,
     };
   });
+}
+
+/** S8R.13-19：交接總分環——純聚合 `buildChecklist()`／`buildAutoChecks()`／
+ * `buildNamingCheck()`／`buildUtmCheck()` 既有回傳的「使用者自行勾選」狀態，不重算任何判定
+ * 邏輯（同 S8.59 `compile_closing_review()` 聚合手法，契約 S8R.13）。命名檢查／UTM 檢查各算
+ * 一項（S8R.17：「計入環的分母各算一項」，不是逐筆算）。未過項排最前（S8R.14）。
+ *
+ * cyc-5 刻意留 3 項未過：清單「已看過紅線詞掃描結果」未勾（`buildChecklist` 既有安排）＋
+ * 命名撞名（兩個交接包 campaign_name 撞名，`buildPackages` 既有安排）＋UTM 缺漏（第 2 包缺
+ * `utm_content`，`buildUtmCheck` 既有安排）——三筆都是既有假資料既定行為，這裡只是把它們
+ * 聚合進同一顆環，不是新造醜資料（GRILL-B4R-performance.md 醜資料段「一期交接總分環故意留
+ * 3 項未過」）。 */
+export function buildReadinessRing(record: CampaignRecord): ReadinessRing {
+  const checklist = buildChecklist(record);
+  const autoChecks = buildAutoChecks(record);
+  const packages = buildPackages(record);
+  const naming = buildNamingCheck(packages);
+  const utm = buildUtmCheck(packages);
+
+  const items: ReadinessRingItem[] = [
+    ...checklist.map((it, i) => ({
+      key: it.key,
+      label: it.label,
+      passed: it.checked,
+      section: (i === 0 ? "one_time_checklist" : "cycle_checklist") as ReadinessRingItem["section"],
+      fix_anchor: "checklist-block",
+    })),
+    { key: "naming_check", label: "命名檢查：活動／組合／廣告名稱互不重複", passed: naming.passed, section: "naming_check", fix_anchor: "naming-utm-block" },
+    { key: "utm_check", label: "UTM 檢查：每個交接包 UTM 四參數皆齊全", passed: utm.length === 0 || utm.every((u) => u.passed), section: "utm_check", fix_anchor: "naming-utm-block" },
+    ...autoChecks.map((c) => ({ key: c.key, label: c.label, passed: c.checked, section: "qa_launch" as const, fix_anchor: "qa-launch-block" })),
+  ];
+  items.sort((a, b) => Number(a.passed) - Number(b.passed)); // 未過項（false=0）排最前
+  return { passed: items.filter((it) => it.passed).length, total: items.length, items };
 }
 
 export function buildCodes(record: CampaignRecord): { codes: CodeAssignment[]; mismatches: string[] | null } {

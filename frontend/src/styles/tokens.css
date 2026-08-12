@@ -53,9 +53,14 @@
   --radius-sm: 0.375rem;
   --radius-md: 0.5rem;
   --radius-lg: 0.75rem;
+  /* V3 流體卡片語彙（GRILL-B4R-performance.md R1-3，票 v3-fluid-cards）：卡片殼比既有
+   * --radius-lg 更圓，只給 FluidCard 用，既有卡片維持 --radius-lg 不受影響。 */
+  --radius-xl: 1.25rem;
 
   /* 陰影：卡片用極淺陰影，不做玻璃模糊 */
   --shadow-card: 0 1px 2px 0 rgb(15 23 42 / 0.04), 0 1px 3px 0 rgb(15 23 42 / 0.06);
+  /* FluidCard 深度：hover／展開時陰影加深，視覺參考 v3-fluid-cards.html 的 --shadow-card-hover。 */
+  --shadow-card-hover: 0 2px 4px 0 rgb(15 23 42 / 0.06), 0 12px 28px 0 rgb(15 23 42 / 0.10);
 
   /* 版面：純桌機固定寬度（決策 0038／ADR 0003，不做響應式） */
   --width-shell: 1440px;

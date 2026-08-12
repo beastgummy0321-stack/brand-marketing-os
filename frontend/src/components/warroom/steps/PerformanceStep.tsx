@@ -1,17 +1,20 @@
 import { useEffect, useState } from "react";
 import { formatCurrency, formatRoas } from "@/lib/format";
-import { fetchPerformance, simulatePerformance, type Cycle, type PerformanceSummary, type ReadingResult } from "@/lib/warroomApi";
+import { fetchHealthLights, fetchPerformance, simulatePerformance, type Cycle, type HealthLights, type PerformanceSummary, type ReadingResult } from "@/lib/warroomApi";
+import { HealthLightsRow } from "../shared/HealthLightsRow";
 import { Badge } from "../shared/Badge";
-import { CheckpointSection } from "./CheckpointSection";
 
-/** 成效（S8.51-58，吸收 `ads_performance.html`＋`ads_performance_data.html`）。資料操作
- * 子頁（CSV／手動填寫／蝦皮期別碼／對帳三題／營收校準）契約明講「入口只寫『點下去去這個
- * 子頁』，內部長相不屬本頁」，這裡只留入口訊息，不做死連結（跟 S7「開新檔期」同一慣例）。 */
+/** 成效（S8R.20-22 重設計，吸收舊 `S8.51-58`）：最上方一排健康燈號（S8R.20，全綠收合成一行，
+ * 異常才展開），底下 KPI 表格／判讀結論卡完整細節不變（漸進揭露，S8R.22）。期中檢查點
+ * （原本掛在本步驟開頭）已依 S8R.19 併回「交接」區塊，本步驟不再重複顯示。資料操作子頁
+ * （CSV／手動填寫／蝦皮期別碼／對帳三題／營收校準）契約明講「入口只寫『點下去去這個子頁』，
+ * 內部長相不屬本頁」，這裡只留入口訊息，不做死連結（跟 S7「開新檔期」同一慣例）。 */
 export function PerformanceStep({ brandId, cycle }: { brandId: string; cycle: Cycle }) {
   const [summary, setSummary] = useState<PerformanceSummary | null | undefined>(undefined);
   const [reading, setReading] = useState<ReadingResult | null>(null);
   const [confidence, setConfidence] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
+  const [lights, setLights] = useState<HealthLights | null>(null);
 
   function load() {
     fetchPerformance(brandId, cycle.id).then((res) => {
@@ -21,10 +24,13 @@ export function PerformanceStep({ brandId, cycle }: { brandId: string; cycle: Cy
     });
   }
   useEffect(load, [brandId, cycle.id]);
+  useEffect(() => {
+    fetchHealthLights(brandId, cycle.id).then(setLights);
+  }, [brandId, cycle.id]);
 
   return (
     <div className="flex flex-col gap-4">
-      {(cycle.status === "LIVE" || cycle.status === "EVALUATING") && <CheckpointSection brandId={brandId} cycleId={cycle.id} />}
+      {lights && <HealthLightsRow lights={lights} />}
 
       {cycle.phase === "simulation" && (
         <div className="rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-sm text-warning">

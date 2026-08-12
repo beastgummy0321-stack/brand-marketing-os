@@ -4,6 +4,7 @@ import {
   decideDissent,
   fetchPlanOptions,
   fetchRuleCardsLearned,
+  fetchScheduleReminder,
   selectPlanOption,
   startPlanGeneration,
   updatePacing,
@@ -15,6 +16,7 @@ import {
   type PacingStrategy,
   type PlanOption,
   type RuleCardLearned,
+  type ScheduleReminder,
 } from "@/lib/warroomApi";
 import { Badge } from "../shared/Badge";
 
@@ -37,8 +39,13 @@ export function PlanStep({ brandId, cycle, onApproved, onRefresh }: { brandId: s
   const [ruleCardsDecided, setRuleCardsDecided] = useState(false);
   const [approving, setApproving] = useState(false);
   const [approveError, setApproveError] = useState<string | null>(null);
+  const [reminder, setReminder] = useState<ScheduleReminder | null>(null);
 
   const alreadyGenerated = cycle.status !== "PLANNING";
+
+  useEffect(() => {
+    fetchScheduleReminder(brandId, cycle.id).then(setReminder);
+  }, [brandId, cycle.id]);
 
   useEffect(() => {
     if (!alreadyGenerated) return;
@@ -197,6 +204,22 @@ export function PlanStep({ brandId, cycle, onApproved, onRefresh }: { brandId: s
         )}
         {approved && <p className="mt-1 text-xs text-muted-foreground">理由：{cycle.pacing_reason}</p>}
       </div>
+
+      {reminder && (
+        <div className="rounded-lg border border-warning/40 bg-warning/10 p-4 shadow-[var(--shadow-card)]">
+          <p className="font-medium text-foreground">排期到期提醒・{reminder.date}</p>
+          <p className="mt-1 text-sm text-foreground">{reminder.copy_text}</p>
+          <button
+            type="button"
+            onClick={() => {
+              void navigator.clipboard?.writeText(reminder.copy_text).catch(() => {});
+            }}
+            className="mt-2 rounded-md border border-warning px-3 py-1 text-xs font-medium text-warning hover:bg-warning/20"
+          >
+            複製
+          </button>
+        </div>
+      )}
 
       {ruleCards.length > 0 && (
         <div className="rounded-lg border border-border bg-card p-4 shadow-[var(--shadow-card)]">

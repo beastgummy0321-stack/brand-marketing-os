@@ -24,7 +24,7 @@ export function ChecklistSection({ brandId, cycleId }: { brandId: string; cycleI
   const doneCount = items.filter((i) => i.checked).length;
 
   return (
-    <div className="rounded-lg border border-border bg-card p-4 shadow-[var(--shadow-card)]">
+    <div id="checklist-block" className="rounded-lg border border-border bg-card p-4 shadow-[var(--shadow-card)]">
       <div className="flex items-center justify-between">
         <p className="font-medium text-foreground">投放前檢查清單</p>
         <Badge tone={doneCount === items.length ? "success" : "neutral"}>{doneCount}／{items.length}</Badge>

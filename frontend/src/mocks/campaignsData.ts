@@ -61,6 +61,24 @@ export interface CampaignRecord {
   days_left: number | null;
   reading: CampaignReading | null;
   deleteImpact: CampaignDeleteImpact[];
+  /** S7.21：本期日花費曲線縮圖（取自排期規劃的逐日陣列，`null`＝沒有這份資料，舊檔期
+   * 常見情形，S7.22）。 */
+  dailyBudgets: number[] | null;
+}
+
+function daysBetween(start: string, end: string): number {
+  const ms = new Date(end).getTime() - new Date(start).getTime();
+  return Math.max(1, Math.round(ms / 86400000) + 1);
+}
+
+/** S7.21 假資料：沒有真正的排期規劃逐日陣列可查，用「先穩後衝」的平滑曲線近似
+ * （跟 `pacing_curve.compute_curve()` 常見形狀同精神），純展示縮圖用，不代表真實逐日數字。 */
+function buildDailyBudgetTrend(startDate: string, endDate: string, budget: number): number[] {
+  const days = Math.min(30, daysBetween(startDate, endDate));
+  const dailyAvg = budget / days;
+  return Array.from({ length: days }, (_, i) =>
+    Math.round(dailyAvg * (0.7 + 0.6 * Math.sin((i / Math.max(1, days - 1)) * Math.PI))),
+  );
 }
 
 let idCounter = 0;
@@ -104,7 +122,17 @@ function buildRecord(input: {
   days_left?: number | null;
   reading?: CampaignReading | null;
   deleteImpact?: CampaignDeleteImpact[];
+  /** 只有 S7.23 醜資料（示範「陣列存在但 bucket !== closed 仍顯示『—』」）才需要手動給值；
+   * 其餘記錄由 bucket／已判讀與否自動推算，不必逐筆手填。 */
+  dailyBudgets?: number[] | null;
 }): CampaignRecord {
+  const bucket = input.archived ? "archived" : input.status === "CLOSED" ? "closed" : "in_progress";
+  const dailyBudgets =
+    input.dailyBudgets !== undefined
+      ? input.dailyBudgets
+      : bucket === "closed" && input.reading != null
+        ? buildDailyBudgetTrend(input.start_date, input.end_date, input.budget)
+        : null;
   return {
     id: nextId(),
     start_date: input.start_date,
@@ -121,6 +149,7 @@ function buildRecord(input: {
     days_left: input.days_left ?? null,
     reading: input.reading ?? null,
     deleteImpact: input.deleteImpact ?? [],
+    dailyBudgets,
   };
 }
 
@@ -277,6 +306,9 @@ export const campaignsStore: CampaignRecord[] = [
     objective: "awareness", budget: 4000,
     product_names: ["每日益生菌粉包 30 入"],
     deleteImpact: [], // 對照組：封存但底下沒有任何連帶資料
+    // 醜資料（S7.23）：dailyBudgets 陣列存在但 bucket 是 "archived" 不是 "closed"，
+    // 驗證趨勢欄仍要顯示「—」，不能因為陣列存在就提早畫縮圖。
+    dailyBudgets: buildDailyBudgetTrend("2025-08-01", "2025-08-31", 4000),
   }),
 ];
 
@@ -313,5 +345,7 @@ export function toListItem(record: CampaignRecord): CampaignListItem {
     verdict_kind: reading?.verdict_kind ?? null,
     data_grade: reading?.data_grade ?? null,
     vs_previous: reading?.vs_previous ?? null,
+    // S7.21-23：只有 bucket === "closed" 才可能有值，其餘（進行中／封存）一律 null → 表格顯示「—」。
+    trend_daily_budgets: bucket === "closed" ? record.dailyBudgets : null,
   };
 }

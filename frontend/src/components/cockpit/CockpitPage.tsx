@@ -8,6 +8,7 @@ import { FuelGauge } from "@/components/cockpit/FuelGauge";
 import { GuideCards } from "@/components/cockpit/GuideCards";
 import { KpiCard } from "@/components/cockpit/KpiCard";
 import { LastSyncBadge } from "@/components/cockpit/LastSyncBadge";
+import { PerformancePins } from "@/components/cockpit/pins/PinnedViewsSection";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { EmptyState } from "@/components/layout/EmptyState";
 import { fetchCockpit, type CockpitData } from "@/lib/api";
@@ -111,6 +112,8 @@ export function CockpitPage({ brandId }: { brandId: string }) {
           <KpiCard label="ROAS" kpi={data.kpis.roas} format={formatRoas} />
           <KpiCard label="訂單數" kpi={data.kpis.orders} format={formatCount} />
         </div>
+
+        <PerformancePins brandId={brandId} />
 
         <CockpitChart chart={data.chart} />
 

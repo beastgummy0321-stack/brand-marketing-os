@@ -4,6 +4,7 @@ import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { EmptyState } from "@/components/layout/EmptyState";
 import { Pager } from "@/components/layout/Pager";
 import { Skeleton } from "@/components/layout/Skeleton";
+import { TrendSparkline } from "@/components/layout/TrendSparkline";
 import { formatCurrency, formatRoas } from "@/lib/format";
 import {
   archiveCampaign,
@@ -35,11 +36,12 @@ const BUCKET_LABELS: Record<BucketFilter, string> = {
 
 const BUCKET_ORDER: BucketFilter[] = ["all", "in_progress", "closed", "archived"];
 
-/** 檔期清單（S7，票 B4-campaigns）：舊版 `ads_home.html`／`ads_history.html`／
- * `ads_interview.html` 三頁合一——單一清單＋狀態篩選 chips（鐵則⑥）取代「進行中檔期／
- * 最近結案的檔期」兩張摘要卡與獨立的跨期趨勢表，見 `.scratch/grill/GRILL-B4-campaigns.md`
- * 「這次合併判斷」。起訖日期連去 S8 作戰室、「開新檔期」進 S8 起始頁——票 B4-warroom
- * 落地後這兩處已改真路徑，不再是告知式訊息。 */
+/** 歷史檔期（S7 縮減，票 B4R-cockpit-pins，契約 `.scratch/grill/GRILL-B4R-performance.md`
+ * 第三節）：舊版「檔期」清單降級成查歷史用的歸檔頁（R1-1：一進去就要看到的資訊已移交
+ * 駕駛艙成效釘選區），主要入口改成從駕駛艙／作戰室點「查歷史檔期」次要連結進來，不再是
+ * 側邊導覽的必經之路。`GRILL-B4-campaigns.md` 既有契約（`S7.1-20`）與 `GRILL-B4-warroom.md`
+ * 「這次合併判斷」原樣沿用——單一清單＋狀態篩選 chips（鐵則⑥），不再另立摘要卡；本節只加
+ * S7.21-23 趨勢縮圖欄。 */
 export function CampaignListPage({ brandId }: { brandId: string }) {
   const navigate = useNavigate();
   const [state, setState] = useState<LoadState>({ status: "loading" });
@@ -158,6 +160,7 @@ export function CampaignListPage({ brandId }: { brandId: string }) {
                 <th className="px-3 py-2 font-medium">產品</th>
                 <th className="px-3 py-2 font-medium">ROAS</th>
                 <th className="px-3 py-2 font-medium">成色</th>
+                <th className="px-3 py-2 font-medium">趨勢</th>
                 <th className="px-3 py-2 font-medium">動作</th>
               </tr>
             </thead>
@@ -217,6 +220,13 @@ export function CampaignListPage({ brandId }: { brandId: string }) {
                       )}
                     </td>
                     <td className="whitespace-nowrap px-3 py-2">
+                      {item.trend_daily_budgets ? (
+                        <TrendSparkline data={item.trend_daily_budgets} />
+                      ) : (
+                        <span className="text-muted-foreground">—</span>
+                      )}
+                    </td>
+                    <td className="whitespace-nowrap px-3 py-2">
                       <div className="flex flex-col items-start gap-1">
                         <button
                           type="button"
@@ -251,9 +261,9 @@ export function CampaignListPage({ brandId }: { brandId: string }) {
 
   return (
     <div className="flex flex-col gap-4">
-      <Breadcrumb items={[{ label: "跨品牌總覽", href: "/" }, { label: "檔期" }]} />
+      <Breadcrumb items={[{ label: "跨品牌總覽", href: "/" }, { label: "歷史檔期" }]} />
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <h1 className="font-display text-2xl text-foreground">檔期</h1>
+        <h1 className="font-display text-2xl text-foreground">歷史檔期</h1>
         <div className="flex flex-wrap items-center gap-2">
           <a
             href={`/brands/${brandId}/ads/connections`}

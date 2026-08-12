@@ -5,6 +5,7 @@ import { DevScenarioToggle } from "./DevToggle";
 import "./campaignsHandlers";
 import "./jobsHandlers";
 import "./warroomHandlers";
+import "./pinnedViewsHandlers";
 import { installMockFetch } from "./network";
 
 installMockFetch();
