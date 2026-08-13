@@ -111,6 +111,29 @@ export interface CockpitData {
   data_stale: boolean;
 }
 
+/** SOL R6-2：單一品牌的立刻更新入口，駕駛艙與作戰室共用。 */
+export interface ImmediateSyncResult {
+  updated_at: string;
+}
+
+export async function triggerImmediateSync(brandId: string): Promise<ImmediateSyncResult> {
+  const res = await fetch("/api/dashboard/brands/" + encodeURIComponent(brandId) + "/sync", { method: "POST" });
+  if (!res.ok) {
+    let message = "更新失敗（狀態碼 " + res.status + "）";
+    try {
+      const body = (await res.json()) as { error?: string };
+      if (body.error) message = body.error;
+    } catch {
+      // 回應不是 JSON，用預設訊息。
+    }
+    throw new Error(message);
+  }
+  const body = (await res.json()) as { data?: { updated_at?: string; synced_at?: string; last_sync_at?: string }; updated_at?: string; synced_at?: string; last_sync_at?: string };
+  const data = body.data ?? body;
+  const updatedAt = data.updated_at ?? data.synced_at ?? data.last_sync_at;
+  if (!updatedAt) throw new Error("更新完成，但伺服器沒有回傳更新時間。");
+  return { updated_at: updatedAt };
+}
 export async function fetchCockpit(brandId: string): Promise<CockpitData> {
   const res = await fetch(`/api/dashboard/brands/${encodeURIComponent(brandId)}/cockpit`);
   if (!res.ok) {

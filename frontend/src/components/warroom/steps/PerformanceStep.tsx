@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { formatCurrency, formatRoas } from "@/lib/format";
+import { formatCurrency, formatRelativeHours, formatRoas } from "@/lib/format";
+import { triggerImmediateSync } from "@/lib/api";
 import { fetchHealthLights, fetchPerformance, simulatePerformance, type Cycle, type HealthLights, type PerformanceSummary, type ReadingResult } from "@/lib/warroomApi";
 import { HealthLightsRow } from "../shared/HealthLightsRow";
 import { Badge } from "../shared/Badge";
@@ -15,12 +16,16 @@ export function PerformanceStep({ brandId, cycle }: { brandId: string; cycle: Cy
   const [confidence, setConfidence] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
   const [lights, setLights] = useState<HealthLights | null>(null);
+  const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
+  const [syncing, setSyncing] = useState(false);
+  const [syncError, setSyncError] = useState<string | null>(null);
 
   function load() {
     fetchPerformance(brandId, cycle.id).then((res) => {
       setSummary(res.summary);
       setReading(res.reading);
       setConfidence(res.confidence_label);
+      setLastSyncedAt(res.last_synced_at ?? null);
     });
   }
   useEffect(load, [brandId, cycle.id]);
@@ -28,8 +33,33 @@ export function PerformanceStep({ brandId, cycle }: { brandId: string; cycle: Cy
     fetchHealthLights(brandId, cycle.id).then(setLights);
   }, [brandId, cycle.id]);
 
+  async function updateNow() {
+    setSyncing(true);
+    setSyncError(null);
+    try {
+      const result = await triggerImmediateSync(brandId);
+      setLastSyncedAt(result.updated_at);
+      load();
+      fetchHealthLights(brandId, cycle.id).then(setLights);
+    } catch (err) {
+      setSyncError(err instanceof Error ? err.message : "更新失敗，請稍後再試。");
+    } finally {
+      setSyncing(false);
+    }
+  }
+
   return (
     <div className="flex flex-col gap-4">
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-card px-4 py-3 shadow-[var(--shadow-card)]">
+        <div>
+          <p className="text-sm font-medium text-foreground">成效同步</p>
+          <p className="text-xs text-muted-foreground">{lastSyncedAt ? `更新於 ${formatRelativeHours(lastSyncedAt)}` : "尚未更新"}</p>
+        </div>
+        <button type="button" onClick={() => void updateNow()} disabled={syncing} className="rounded-md border border-primary px-3 py-1.5 text-xs font-medium text-primary hover:bg-primary/10 disabled:cursor-not-allowed disabled:opacity-50">
+          {syncing ? "更新中…" : "立刻更新"}
+        </button>
+      </div>
+      {syncError && <p className="rounded-md border border-danger/30 bg-danger/10 px-3 py-2 text-sm text-danger">{syncError}</p>}
       {lights && <HealthLightsRow lights={lights} />}
 
       {cycle.phase === "simulation" && (

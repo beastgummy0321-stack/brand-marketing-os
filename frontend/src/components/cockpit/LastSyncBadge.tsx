@@ -1,4 +1,4 @@
-import { formatSyncTime } from "@/lib/format";
+import { formatRelativeHours, formatSyncTime } from "@/lib/format";
 
 /** 最後同步時間（票 07-auto-sync）：成效每日自動同步，這裡讓使用者知道數據新舊。
  * `stale`＝從沒同步過，或最後一次同步不是今天——沿用 CampaignStageBadge 同一套
@@ -17,7 +17,7 @@ export function LastSyncBadge({
     <span
       className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium ${colorClass}`}
     >
-      {lastSyncAt ? `最後同步 ${formatSyncTime(lastSyncAt)}` : "尚未同步過"}
+      {lastSyncAt ? `更新於 ${formatRelativeHours(lastSyncAt)}（${formatSyncTime(lastSyncAt)}）` : "尚未更新"}
       {stale ? "・數據可能過期" : ""}
     </span>
   );

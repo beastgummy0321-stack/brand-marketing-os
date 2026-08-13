@@ -344,6 +344,24 @@ export interface HealthLights {
   fatigue: HealthLight;
 }
 
+/** R5-1／R6-3：追蹤鏈儀表的四個固定節點。
+ * 欄位逐欄照 SOL 同步契約：每節點只回傳燈號、白話訊息與修復動作文字。 */
+export type TrackingChainStatus = "green" | "yellow" | "red";
+export type TrackingChainNodeKey = "naming" | "mapping" | "codes" | "landing_utm";
+
+export interface TrackingChainNode {
+  status: TrackingChainStatus;
+  message: string;
+  action: string;
+}
+
+export interface TrackingChain {
+  naming: TrackingChainNode;
+  mapping: TrackingChainNode;
+  codes: TrackingChainNode;
+  landing_utm: TrackingChainNode;
+}
+
 interface Envelope<T> {
   data: T;
   generated_at: string;
@@ -437,6 +455,14 @@ export const fetchScheduleReminder = (brandId: string, cycleId: string): Promise
 // ---- 交接總分環（S8R.13-17）----
 export const fetchReadiness = (brandId: string, cycleId: string): Promise<ReadinessRing> => getJson(`${cycleBase(brandId, cycleId)}/readiness`);
 
+// ---- 追蹤鏈儀表（R5-1／R5-2／R6-3）----
+export const fetchTrackingChain = (brandId: string, cycleId: string): Promise<TrackingChain> =>
+  getJson(`${cycleBase(brandId, cycleId)}/tracking-chain`);
+
+/** mapping 黃燈的唯一確認入口；後端沿用 handoff.authorize_and_map 寫入。 */
+export const confirmTrackingMapping = (brandId: string, cycleId: string): Promise<void> =>
+  postJson(`${cycleBase(brandId, cycleId)}/tracking-chain/mapping/confirm`);
+
 // ---- 檔期健康燈號（S8R.20-21）----
 export const fetchHealthLights = (brandId: string, cycleId: string): Promise<HealthLights> => getJson(`${cycleBase(brandId, cycleId)}/health-lights`);
 
@@ -448,7 +474,7 @@ export const fetchCheckpoint = (brandId: string, cycleId: string, kind: "day3" |
 export const fetchPerformance = (
   brandId: string,
   cycleId: string,
-): Promise<{ summary: PerformanceSummary | null; reading: ReadingResult | null; confidence_label: string }> =>
+): Promise<{ summary: PerformanceSummary | null; reading: ReadingResult | null; confidence_label: string; last_synced_at?: string | null }> =>
   getJson(`${cycleBase(brandId, cycleId)}/performance`);
 export const simulatePerformance = (brandId: string, cycleId: string): Promise<void> =>
   postJson(`${cycleBase(brandId, cycleId)}/performance/simulate`);

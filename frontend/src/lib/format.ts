@@ -30,6 +30,11 @@ export function formatMomPct(value: number | null): string {
 }
 
 /** 最後同步時間（票 07-auto-sync）：ISO 時間字串 → `MM/DD HH:mm`（本機時區）。 */
+/** 同步時間的人話顯示（R6-2）：避免只給使用者一串 ISO 時間。 */
+export function formatRelativeHours(iso: string): string {
+  const elapsedHours = Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 3_600_000));
+  return elapsedHours === 0 ? "不到 1 小時前" : elapsedHours + " 小時前";
+}
 export function formatSyncTime(iso: string): string {
   const d = new Date(iso);
   const pad = (n: number) => String(n).padStart(2, "0");

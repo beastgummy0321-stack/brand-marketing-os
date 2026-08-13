@@ -32,7 +32,6 @@ type LoadState =
  * 伺服器（跳過了什麼：見交付報告）。 */
 export function PlanStep({ brandId, cycle, onApproved, onRefresh }: { brandId: string; cycle: Cycle; onApproved: () => void; onRefresh: () => void }) {
   const [state, setState] = useState<LoadState>({ status: "idle" });
-  const [customDirection, setCustomDirection] = useState("");
   const [pacing, setPacing] = useState<PacingStrategy>(cycle.pacing_strategy);
   const [pacingReason, setPacingReason] = useState(cycle.pacing_reason);
   const [ruleCards, setRuleCards] = useState<RuleCardLearned[]>([]);
@@ -132,58 +131,15 @@ export function PlanStep({ brandId, cycle, onApproved, onRefresh }: { brandId: s
             ))}
           </div>
         )}
-        <div className="grid gap-3 sm:grid-cols-2">
-          {state.options.map((opt) => (
-            <div key={opt.id} className="flex flex-col gap-2 rounded-lg border border-border bg-card p-4 shadow-[var(--shadow-card)]">
-              <div className="flex items-center justify-between">
-                <p className="font-medium text-foreground">{opt.summary}</p>
-                {opt.is_recommended && <Badge tone="success">AI 推薦</Badge>}
-              </div>
-              {opt.difference && <p className="text-xs text-muted-foreground">{opt.difference}</p>}
-              <div className="flex flex-wrap gap-1">
-                {Object.entries(opt.audience.tiers).map(([tier, info]) => (
-                  <Badge key={tier} tone={info.available ? "success" : "neutral"}>
-                    {AUDIENCE_TIER_LABELS[tier] ?? tier}
-                    {!info.available ? "・不可用" : ""}
-                  </Badge>
-                ))}
-              </div>
-              <ul className="flex flex-col gap-0.5 text-xs text-muted-foreground">
-                {opt.angles.map((a, i) => (
-                  <li key={i}>切角：{a.title}</li>
-                ))}
-              </ul>
-              {opt.hypotheses && (
-                <details className="text-xs text-muted-foreground">
-                  <summary className="cursor-pointer text-primary">想驗證的事</summary>
-                  <ul className="mt-1 list-disc pl-4">
-                    {opt.hypotheses.map((h, i) => (
-                      <li key={i}>{h.statement}</li>
-                    ))}
-                  </ul>
-                </details>
-              )}
-              <button type="button" onClick={() => void pickOption(opt.id)} className="self-start rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90">
-                就選這個
-              </button>
-            </div>
-          ))}
-        </div>
-        <details className="rounded-lg border border-dashed border-border p-3 text-sm">
-          <summary className="cursor-pointer text-primary">都不喜歡，我自己寫方向</summary>
-          <textarea value={customDirection} onChange={(e) => setCustomDirection(e.target.value)} rows={2} className="mt-2 w-full rounded-md border border-border px-3 py-2 text-sm text-foreground" />
-          <button type="button" onClick={() => void generate()} className="mt-2 rounded-md border border-primary px-3 py-1.5 text-xs font-medium text-primary hover:bg-primary/10">
-            重新生成
-          </button>
-        </details>
+        <PlanOptionShowcase options={state.options} readOnly={false} onSelect={pickOption} />
       </div>
     );
   }
-
   // REVIEW（或之後——已核准，唯讀回顧）
   const approved = cycle.status !== "REVIEW";
   return (
     <div className="flex flex-col gap-4">
+      <PlanOptionShowcase options={state.options} readOnly={approved} onSelect={pickOption} />
       <AccountStructureCard structure={state.structure} />
       <div className="rounded-lg border border-border bg-card p-4 shadow-[var(--shadow-card)]">
         <p className="font-medium text-foreground">排期策略</p>
@@ -255,6 +211,67 @@ export function PlanStep({ brandId, cycle, onApproved, onRefresh }: { brandId: s
   );
 }
 
+function PlanOptionShowcase({
+  options,
+  readOnly,
+  onSelect,
+}: {
+  options: PlanOption[];
+  readOnly: boolean;
+  onSelect: (optionId: string) => Promise<void>;
+}) {
+  const primary = options.find((option) => option.is_recommended) ?? options[0];
+  const [activeId, setActiveId] = useState(primary?.id ?? "");
+  useEffect(() => setActiveId(primary?.id ?? ""), [primary?.id]);
+  const active = options.find((option) => option.id === activeId) ?? primary;
+  const alternatives = options.filter((option) => option.id !== active?.id).slice(0, 2);
+  if (!active) return null;
+
+  function choose(option: PlanOption) {
+    setActiveId(option.id);
+    if (!readOnly) void onSelect(option.id);
+  }
+
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="rounded-xl border border-primary/40 bg-card p-5 shadow-[var(--shadow-card)]">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <p className="font-display text-xl text-foreground">AI 完整方案</p>
+          <Badge tone="success">已選定</Badge>
+        </div>
+        <p className="mt-3 text-base font-medium text-foreground">{active.summary}</p>
+        {active.difference && <p className="mt-1 text-sm text-muted-foreground">{active.difference}</p>}
+        <div className="mt-4 grid gap-3 sm:grid-cols-2">
+          <div>
+            <p className="text-xs font-medium text-muted-foreground">受眾</p>
+            <div className="mt-1 flex flex-wrap gap-1">
+              {Object.entries(active.audience.tiers).map(([tier, info]) => <Badge key={tier} tone={info.available ? "success" : "neutral"}>{AUDIENCE_TIER_LABELS[tier] ?? tier}{!info.available ? "・不可用" : ""}</Badge>)}
+            </div>
+          </div>
+          <div>
+            <p className="text-xs font-medium text-muted-foreground">投放切角</p>
+            <ul className="mt-1 flex flex-col gap-1 text-sm text-foreground">{active.angles.map((angle, index) => <li key={index}>{angle.title}：{angle.message}</li>)}</ul>
+          </div>
+        </div>
+        {active.hypotheses && <details className="mt-3 text-sm text-muted-foreground"><summary className="cursor-pointer text-primary">想驗證的事</summary><ul className="mt-1 list-disc pl-4">{active.hypotheses.map((hypothesis, index) => <li key={index}>{hypothesis.statement}</li>)}</ul></details>}
+      </div>
+      {alternatives.length > 0 && (
+        <div className="flex flex-col gap-2">
+          <p className="text-xs font-medium text-muted-foreground">另兩案・點一下即換</p>
+          <div className="grid gap-2 sm:grid-cols-2">
+            {alternatives.map((option) => (
+              <button key={option.id} type="button" disabled={readOnly} onClick={() => choose(option)} className="rounded-lg border border-border bg-card p-3 text-left transition-colors hover:border-primary disabled:cursor-default disabled:opacity-70">
+                <span className="block text-sm font-medium text-foreground">{option.summary}</span>
+                {option.difference && <span className="mt-1 block text-xs text-muted-foreground">{option.difference}</span>}
+                <span className="mt-2 block text-xs text-primary">切換到這案</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 export function AccountStructureCard({ structure }: { structure: AccountStructure }) {
   return (
     <div className="rounded-lg border border-border bg-card p-4 shadow-[var(--shadow-card)]">

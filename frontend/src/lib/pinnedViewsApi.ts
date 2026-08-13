@@ -26,6 +26,7 @@ export interface AdOverviewView {
   cycle_id: string;
   summary: PerformanceSummary;
   reading_status: ReadingResult["status"] | null;
+  last_synced_at?: string | null;
 }
 
 export interface PostPlaceholderView {

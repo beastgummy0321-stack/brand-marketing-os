@@ -72,7 +72,7 @@ export function PackagesSection({ brandId, cycleId }: { brandId: string; cycleId
         <p className="mt-1 text-muted-foreground">轉換事件：Purchase／歸因視窗：7 天點擊、1 天瀏覽／異業合作：無</p>
       </div>
 
-      <div className="rounded-lg border border-border bg-card p-4 shadow-[var(--shadow-card)]">
+      <div id="handoff-codes" className="rounded-lg border border-border bg-card p-4 shadow-[var(--shadow-card)]">
         <div className="flex items-center justify-between">
           <p className="font-medium text-foreground">期別配碼</p>
           {data.codes.length === 0 && (

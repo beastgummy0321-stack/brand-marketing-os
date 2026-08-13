@@ -1,7 +1,9 @@
+import { useState } from "react";
 import type { EChartsOption } from "echarts";
 import { Link } from "react-router-dom";
 import { StatusLight } from "@/components/layout/StatusLight";
-import { formatCount, formatCurrency, formatRoas } from "@/lib/format";
+import { formatCount, formatCurrency, formatRelativeHours, formatRoas } from "@/lib/format";
+import { triggerImmediateSync } from "@/lib/api";
 import type { DashboardPerformanceView } from "@/lib/pinnedViewsApi";
 import { useEchart } from "@/lib/useEchart";
 import { READING_STATUS_LABELS } from "@/lib/warroomApi";
@@ -33,9 +35,9 @@ export function NoCycleContent({ brandId }: { brandId: string }) {
 
 /** 依釘選視圖種類畫對應內容（S3P.5-12）。`view` 為 `null` 由呼叫端另外走 `NoCycleContent`
  * （貼文留位視圖除外，那個永遠有值，見 `mocks/pinnedViewsData.ts buildPerformanceView()`）。 */
-export function PinnedViewContent({ brandId, view }: { brandId: string; view: DashboardPerformanceView }) {
+export function PinnedViewContent({ brandId, view, onRefresh }: { brandId: string; view: DashboardPerformanceView; onRefresh?: () => void }) {
   if (view.kind === "post_placeholder") return <PostPlaceholderContent />;
-  if (view.kind === "ad_overview") return <AdOverviewContent brandId={brandId} view={view} />;
+  if (view.kind === "ad_overview") return <AdOverviewContent brandId={brandId} view={view} onRefresh={onRefresh} />;
   if (view.kind === "weekly_burn") return <WeeklyBurnContent view={view} />;
   if (view.kind === "attribution") return <AttributionContent view={view} />;
   return <HealthLightsContent view={view} />;
@@ -54,12 +56,39 @@ function PostPlaceholderContent() {
 
 /** S3P.5-6：廣告總覽——這期曝光／點擊／花費／轉換／營收＋KPI＋判讀結論徽章，下方連結
  * 「看這期完整作戰室」（S8.0b 既有入口）／「查歷史檔期」。 */
-function AdOverviewContent({ brandId, view }: { brandId: string; view: Extract<DashboardPerformanceView, { kind: "ad_overview" }> }) {
+function AdOverviewContent({ brandId, view, onRefresh }: { brandId: string; view: Extract<DashboardPerformanceView, { kind: "ad_overview" }>; onRefresh?: () => void }) {
   const { summary, reading_status } = view;
+  const [syncing, setSyncing] = useState(false);
+  const [syncAt, setSyncAt] = useState<string | null>(view.last_synced_at ?? null);
+  const [syncError, setSyncError] = useState<string | null>(null);
+
+  async function updateNow() {
+    setSyncing(true);
+    setSyncError(null);
+    try {
+      const result = await triggerImmediateSync(brandId);
+      setSyncAt(result.updated_at);
+      onRefresh?.();
+    } catch (err) {
+      setSyncError(err instanceof Error ? err.message : "更新失敗，請稍後再試。");
+    } finally {
+      setSyncing(false);
+    }
+  }
   const statusLabel = reading_status ? READING_STATUS_LABELS[reading_status] : null;
 
   return (
     <div className="flex flex-col gap-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <p className="text-sm font-medium text-foreground">廣告總覽</p>
+          <p className="text-xs text-muted-foreground">{syncAt ? `更新於 ${formatRelativeHours(syncAt)}` : "尚未更新"}</p>
+        </div>
+        <button type="button" onClick={() => void updateNow()} disabled={syncing} className="rounded-md border border-primary px-3 py-1.5 text-xs font-medium text-primary hover:bg-primary/10 disabled:cursor-not-allowed disabled:opacity-50">
+          {syncing ? "更新中…" : "立刻更新"}
+        </button>
+      </div>
+      {syncError && <p className="rounded-md border border-danger/30 bg-danger/10 px-3 py-2 text-sm text-danger">{syncError}</p>}
       <div className="grid grid-cols-3 gap-3 sm:grid-cols-5">
         <Stat label="曝光" value={formatCount(summary.impressions)} />
         <Stat label="點擊" value={formatCount(summary.clicks)} />

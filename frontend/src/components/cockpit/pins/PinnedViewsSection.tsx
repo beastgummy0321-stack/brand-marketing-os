@@ -129,7 +129,7 @@ export function PerformancePins({ brandId }: { brandId: string }) {
           </div>
         )}
         {viewState.status === "ready" &&
-          (viewState.data === null ? <NoCycleContent brandId={brandId} /> : <PinnedViewContent brandId={brandId} view={viewState.data} />)}
+          (viewState.data === null ? <NoCycleContent brandId={brandId} /> : <PinnedViewContent brandId={brandId} view={viewState.data} onRefresh={() => selectedKey && loadView(selectedKey)} />)}
       </FluidCard>
     </div>
   );

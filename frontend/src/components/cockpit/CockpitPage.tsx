@@ -11,7 +11,7 @@ import { LastSyncBadge } from "@/components/cockpit/LastSyncBadge";
 import { PerformancePins } from "@/components/cockpit/pins/PinnedViewsSection";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { EmptyState } from "@/components/layout/EmptyState";
-import { fetchCockpit, type CockpitData } from "@/lib/api";
+import { fetchCockpit, triggerImmediateSync, type CockpitData } from "@/lib/api";
 import { formatCount, formatCurrency, formatRoas } from "@/lib/format";
 import { hasSeenCockpitTour, runCockpitTour } from "@/lib/tour";
 
@@ -26,6 +26,8 @@ type LoadState =
 
 export function CockpitPage({ brandId }: { brandId: string }) {
   const [state, setState] = useState<LoadState>({ status: "loading" });
+  const [syncing, setSyncing] = useState(false);
+  const [syncError, setSyncError] = useState<string | null>(null);
 
   const load = useCallback(() => {
     let cancelled = false;
@@ -48,6 +50,19 @@ export function CockpitPage({ brandId }: { brandId: string }) {
   }, [brandId]);
 
   useEffect(() => load(), [load]);
+
+  async function handleImmediateSync() {
+    setSyncing(true);
+    setSyncError(null);
+    try {
+      await triggerImmediateSync(brandId);
+      load();
+    } catch (err) {
+      setSyncError(err instanceof Error ? err.message : "更新失敗，請稍後再試。");
+    } finally {
+      setSyncing(false);
+    }
+  }
 
   // 首次進駕駛艙自動跑一次 30 秒重點導覽（票 09，規格使用者故事 20）；資料就緒後才跑，
   // 不然 KPI／指南卡／警示區的 data-tour 元素還沒掛上去，driver.js 會找不到目標。
@@ -97,6 +112,9 @@ export function CockpitPage({ brandId }: { brandId: string }) {
             >
               重新導覽
             </button>
+            <button type="button" onClick={() => void handleImmediateSync()} disabled={syncing} className="rounded-md border border-primary px-3 py-1.5 text-sm font-medium text-primary hover:bg-primary/10 disabled:cursor-not-allowed disabled:opacity-50">
+              {syncing ? "更新中…" : "立刻更新"}
+            </button>
             <Link
               to="/"
               className="text-sm font-medium text-primary underline-offset-4 hover:underline"
@@ -112,6 +130,8 @@ export function CockpitPage({ brandId }: { brandId: string }) {
           <KpiCard label="ROAS" kpi={data.kpis.roas} format={formatRoas} />
           <KpiCard label="訂單數" kpi={data.kpis.orders} format={formatCount} />
         </div>
+
+        {syncError && <p className="rounded-md border border-danger/30 bg-danger/10 px-3 py-2 text-sm text-danger">{syncError}</p>}
 
         <PerformancePins brandId={brandId} />
 
