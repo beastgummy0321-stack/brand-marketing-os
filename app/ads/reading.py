@@ -509,12 +509,12 @@ def run(conn, brand_id: str, cycle_id: str, actor: str,
                                           trigger_reason=trigger_reason)
 
     ts = now_iso()
-    # 先子後父：recommendation（下期草案）指向 performance_reading，順序倒過來會被外鍵擋下。
-    # 重新判讀本來就該重出下期草案，所以一起清掉。
-    conn.execute(
-        "DELETE FROM recommendation WHERE brand_id = ? AND campaign_cycle_id = ?",
-        (brand_id, cycle_id),
-    )
+    # 保留花錢煞車紀錄，先解除它對即將刪除的舊判讀列之外鍵；其餘草案重判後重出。
+    preserved_weekly = "recommendation_type = 'weekly_proposal' AND status IN ('ACCEPTED', 'APPLIED')"
+    conn.execute("UPDATE recommendation SET performance_reading_id = NULL WHERE brand_id = ? AND campaign_cycle_id = ? AND " + preserved_weekly,
+                 (brand_id, cycle_id))
+    conn.execute("DELETE FROM recommendation WHERE brand_id = ? AND campaign_cycle_id = ? AND NOT (" + preserved_weekly + ")",
+                 (brand_id, cycle_id))
     # learning_ledger 解除關聯（不刪列，比照 repository.delete_cycle() 既有先例）：假設結案
     # 入帳時可能記下了這一版 performance_reading 的 id，重判必須先斷開，否則 PRAGMA
     # foreign_keys=ON 會擋下面這個 DELETE（append-only 的學習列本身不受影響，只是來源指標

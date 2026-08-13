@@ -6,6 +6,7 @@ import json
 import os
 import shutil
 import tempfile
+import time
 import unittest
 from datetime import date, timedelta
 from pathlib import Path
@@ -43,6 +44,15 @@ def _cleanup():
 atexit.register(_cleanup)
 ACTOR = "測試員"
 TODAY = date(2026, 8, 14)
+
+
+def _wait_progress(client, url, timeout=5.0):
+    deadline = time.time() + timeout
+    response = client.get(url, follow_redirects=False)
+    while response.status_code != 303 and time.time() < deadline:
+        time.sleep(0.02)
+        response = client.get(url, follow_redirects=False)
+    return response
 
 
 class WeeklyProposalSelectionTest(unittest.TestCase):
@@ -90,6 +100,13 @@ class WeeklyProposalPersistenceTest(unittest.TestCase):
             main.conn, name=f"虛構週提案品牌{abs(hash(self.id())) % 100000}",
             client_name=None, actor=ACTOR)
         self.brand_id = brand["id"]
+        self._original_provider = reading.PROVIDER
+        reading.PROVIDER = FakeProvider(response=ProviderResponse(
+            output_text='{"text": "重判測試說明"}', structured=None,
+            usage=Usage(input_tokens=100, output_tokens=50), stop_reason="end_turn"))
+
+    def tearDown(self):
+        reading.PROVIDER = self._original_provider
 
     def _cycle_with_readings(self, statuses):
         product_ids = [
@@ -120,6 +137,43 @@ class WeeklyProposalPersistenceTest(unittest.TestCase):
             )
         main.conn.commit()
         return cycle_id
+
+    def _cycle_ready_for_reading(self, product_name):
+        product_id = bi_repo.create_product(
+            main.conn, self.brand_id, name=product_name, actor=ACTOR)["id"]
+        bi_repo.save_product_economics(
+            main.conn, self.brand_id, product_id, selling_price=1000,
+            unit_variable_cost=400, currency="TWD", confirmed_by=ACTOR, actor=ACTOR)
+        start, end = TODAY - timedelta(days=8), TODAY + timedelta(days=5)
+        cycle = ads_repo.create_cycle(
+            main.conn, self.brand_id, product_ids=[product_id], pain_value=10000,
+            objective="sales", actor=ACTOR, start_date=start.isoformat(),
+            duration_days=(end - start).days + 1)
+        ads_repo.update_cycle_status(
+            main.conn, self.brand_id, cycle["id"], status="LIVE", actor=ACTOR)
+        result = performance.import_manual(
+            main.conn, self.brand_id, cycle["id"],
+            {"date_start": start.isoformat(), "date_stop": end.isoformat(),
+             "spend": 10000, "impressions": 20000, "clicks": 400,
+             "conversions": 10, "revenue": 40000},
+            actor=ACTOR, today=TODAY.isoformat())
+        self.assertEqual(result.errors, [])
+        main.conn.execute(
+            "UPDATE performance_snapshot SET product_id = ? WHERE brand_id = ?"
+            " AND campaign_cycle_id = ?", (product_id, self.brand_id, cycle["id"]))
+        main.conn.commit()
+        return cycle["id"]
+
+    def _approved_real_card(self, status):
+        cycle_id = self._cycle_ready_for_reading(f"虛構重判產品{status}")
+        ok, err = reading.run(main.conn, self.brand_id, cycle_id, ACTOR)
+        self.assertEqual((ok, err), (True, None))
+        card = weekly_proposals.generate(main.conn, self.brand_id, cycle_id)[0]
+        weekly_proposals.approve(main.conn, self.brand_id, cycle_id, actor=ACTOR)
+        if status == "APPLIED":
+            weekly_proposals.complete(
+                main.conn, self.brand_id, cycle_id, card["id"], actor=ACTOR)
+        return cycle_id, card["id"]
 
     def test_generate_persists_cards_and_queues_one_ready_interrupt(self):
         cycle_id = self._cycle_with_readings(["pause_candidate", "scale_candidate"])
@@ -174,6 +228,76 @@ class WeeklyProposalPersistenceTest(unittest.TestCase):
             (card["id"],),
         ).fetchall()
         self.assertEqual(len(audits), 1)
+
+    def test_late_data_rerun_preserves_applied_weekly_proposal(self):
+        cycle_id, card_id = self._approved_real_card("APPLIED")
+
+        reading.rerun_for_late_data(
+            main.conn, self.brand_id, cycle_id, actor=ACTOR)
+
+        row = main.conn.execute(
+            "SELECT status FROM recommendation WHERE id = ?", (card_id,)).fetchone()
+        self.assertIsNotNone(row)
+        self.assertEqual(row["status"], "APPLIED")
+
+    def test_manual_route_rerun_preserves_accepted_and_applied_weekly_proposals(self):
+        observed = []
+        for status in ("ACCEPTED", "APPLIED"):
+            cycle_id, card_id = self._approved_real_card(status)
+            response = _wait_progress(
+                self.client,
+                f"/brands/{self.brand_id}/ads/{cycle_id}/reading/progress?run=1")
+            row = main.conn.execute(
+                "SELECT status FROM recommendation WHERE id = ?", (card_id,)).fetchone()
+            observed.append((response.status_code, row["status"] if row else None))
+
+        self.assertEqual(observed, [(303, "ACCEPTED"), (303, "APPLIED")])
+
+    def test_generate_skips_approved_duplicate_and_keeps_unrelated_new_signal(self):
+        cycle_id = self._cycle_with_readings(["pause_candidate", "scale_candidate"])
+        ts = now_iso()
+        main.conn.execute(
+            "INSERT INTO recommendation (id, brand_id, campaign_cycle_id,"
+            " recommendation_type, content_json, status, created_at, updated_at)"
+            " VALUES (?, ?, ?, 'weekly_proposal', ?, 'APPLIED', ?, ?)",
+            (new_id("rec"), self.brand_id, cycle_id,
+             json.dumps({"action": "停掉", "target": "虛構產品1", "reason": "已處理",
+                         "impact": "已完成", "instruction": "已完成"}, ensure_ascii=False),
+             ts, ts),
+        )
+        main.conn.commit()
+
+        cards = weekly_proposals.generate(main.conn, self.brand_id, cycle_id)
+
+        identities = {(card["action"], card["target"], card["status"]) for card in cards}
+        self.assertEqual(identities, {
+            ("停掉", "虛構產品1", "APPLIED"),
+            ("加碼", "虛構產品2", "GENERATED"),
+        })
+
+    def test_day7_and_final_reruns_do_not_duplicate_applied_card(self):
+        observed = []
+        for trigger in ("day7", "final"):
+            cycle_id, card_id = self._approved_real_card("APPLIED")
+            if trigger == "final":
+                ok, err = reading.finalize(main.conn, self.brand_id, cycle_id, ACTOR)
+            else:
+                ok, err = reading.run(main.conn, self.brand_id, cycle_id, ACTOR)
+            self.assertEqual((ok, err), (True, None))
+
+            cards = weekly_proposals.generate(main.conn, self.brand_id, cycle_id)
+            preserved = next(card for card in cards if card["id"] == card_id)
+            same_action_target = [
+                card for card in cards
+                if (card["action"], card["target"])
+                == (preserved["action"], preserved["target"])
+            ]
+            observed.append((trigger, preserved["status"], len(same_action_target)))
+
+        self.assertEqual(observed, [
+            ("day7", "APPLIED", 1),
+            ("final", "APPLIED", 1),
+        ])
 
     def test_all_maintain_returns_empty_array_without_filler_cards(self):
         cycle_id = self._cycle_with_readings(["maintain", "maintain"])

@@ -80,11 +80,11 @@ def list_cards(conn, brand_id: str, cycle_id: str) -> list:
 
 
 def generate(conn, brand_id: str, cycle_id: str) -> list:
-    """依最新判讀建卡；同一期已建過就直接沿用，不重複通知。"""
+    """依最新判讀建卡；保留已產生卡，並略過已核可／已執行的同動作同目標。"""
     if ads_repo.get_cycle(conn, brand_id, cycle_id) is None:
         raise ValueError("找不到廣告檔期")
     existing = list_cards(conn, brand_id, cycle_id)
-    if existing:
+    if any(card["status"] == "GENERATED" for card in existing):
         return existing
 
     loaded = ads_reading.load(conn, brand_id, cycle_id)
@@ -92,6 +92,11 @@ def generate(conn, brand_id: str, cycle_id: str) -> list:
     historical_cells = nextcycle.historical_cell_performance(
         conn, brand_id, exclude_cycle_id=cycle_id)
     cards = select_cards(loaded["products"], budget, historical_cells)
+    handled = {
+        (card.get("action"), card.get("target"))
+        for card in existing if card["status"] in ("ACCEPTED", "APPLIED")
+    }
+    cards = [card for card in cards if (card["action"], card["target"]) not in handled]
     ts = now_iso()
     for card in cards:
         content = {key: card[key] for key in ("action", "target", "reason", "impact")}
