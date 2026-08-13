@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="LumiBrew 廣告投放循環互動原型">
+    <title>沐光咖啡 LumiBrew｜投放精靈原型</title>
+    <link rel="stylesheet" href="style.css">
+  </head>
+  <body>
+    <!-- PROTOTYPE: 離線、假資料、純記憶體狀態。 -->
+    <header class="topbar">
+      <p class="brand">沐光咖啡 <span>LumiBrew</span></p>
+      <nav id="progress" class="progress" aria-label="投放流程進度"></nav>
+      <button class="text-button reset-button" type="button" data-action="request-reset">重設示範</button>
+    </header>
+
+    <main class="wizard-shell">
+      <div id="launch-notice" class="launch-notice" role="status" aria-live="polite"></div>
+      <section class="step" id="step-1" data-step="1" aria-labelledby="step-1-title"></section>
+      <section class="step" id="step-2" data-step="2" aria-labelledby="step-2-title"></section>
+      <section class="step wide-step" id="step-3" data-step="3" aria-labelledby="step-3-title"></section>
+      <section class="step" id="step-4" data-step="4" aria-labelledby="step-4-title"></section>
+      <section class="step wide-step" id="step-5" data-step="5" aria-labelledby="step-5-title"></section>
+      <section class="step" id="step-6" data-step="6" aria-labelledby="step-6-title"></section>
+    </main>
+
+    <div id="reset-dialog" class="dialog-backdrop" hidden>
+      <section class="dialog" role="dialog" aria-modal="true" aria-labelledby="reset-dialog-title">
+        <p class="eyebrow">重設示範</p>
+        <h2 id="reset-dialog-title">回到開頭重新示範？</h2>
+        <p>連結、素材版本與優化狀態都會清空。</p>
+        <div class="dialog-actions">
+          <button class="secondary-button" type="button" data-action="cancel-reset">保留目前進度</button>
+          <button class="primary-button" type="button" data-action="confirm-reset">確認重設</button>
+        </div>
+      </section>
+    </div>
+
+    <script src="mock-data.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>
