@@ -52,6 +52,9 @@ CATEGORIES = {
     "product_research_done": {"severity": "informational", "label": "產品調研完成"},
     # 建檔精靈初掃／貼回修格式背景工作，完成／失敗都進這裡；出下一題不進（票 B3-intake）。
     "intake_ai_step_done": {"severity": "informational", "label": "建檔精靈 AI 步驟完成"},
+    # 排期到期提醒：選了間歇／脈動策略時，到了要中途調整日預算的那天提醒一次（票
+    # B4R-warroom-redesign，S8R.9-11）。
+    "pacing_schedule_due": {"severity": "rule_warning", "label": "排期到期提醒"},
 }
 _CATEGORY_RANK = {name: i for i, name in enumerate(CATEGORIES)}
 

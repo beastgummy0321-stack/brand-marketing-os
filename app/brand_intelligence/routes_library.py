@@ -250,7 +250,11 @@ async def customer_voice_submit(request: Request, brand_id: str):
         return JSONResponse({"error": budget_err}, status_code=422)
 
     job_key = new_id("cvjob")
-    _cv_jobs.start(job_key, {"status": "running"}, _run_customer_voice_job,
+    # brand_id／started_at：全站生成進度單一出口（票 B4-warroom）聚合端點列舉用，本身
+    # 業務邏輯不讀這兩個鍵。
+    _cv_jobs.start(job_key, {"status": "running", "brand_id": brand_id,
+                             "started_at": datetime.now(timezone.utc).isoformat()},
+                   _run_customer_voice_job,
                    (job_key, brand_id, actor, raw_text, source_channel, source_detail))
     return {"job_key": job_key}
 

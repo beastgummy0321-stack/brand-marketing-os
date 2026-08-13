@@ -139,6 +139,11 @@ def one_time_status(conn, brand_id: str) -> list:
     return result
 
 
+# 公開別名（票 B4R-warroom-redesign，S8.32／S8R.16）：QA 系統覆核①重用同一個判斷，
+# 不重寫第二份——路由層跨模組呼叫一律走公開函式，不直接碰底線開頭的私有名稱。
+pixel_anomaly = _pixel_anomaly
+
+
 def qa_launch_status(conn, brand_id: str) -> list:
     """上線授權頁 QA 五項提醒的目前狀態（票 01，決策 0016）。刻意不套用 one_time_status
     的異常重新標示邏輯——那是 Pixel 花錢零轉換專屬的偵測，跟這五項無關。"""

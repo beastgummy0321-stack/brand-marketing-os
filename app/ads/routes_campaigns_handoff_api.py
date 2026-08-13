@@ -1,0 +1,301 @@
+# -*- coding: utf-8 -*-
+"""app/ads/routes_campaigns_handoff_api.py — S8 交接＋期中檢查點 JSON API（票 B4-warroom
+接線，契約 `.scratch/grill/GRILL-B4-warroom.md`＋`GRILL-B4R-performance.md`，型別逐欄對照
+`frontend/src/lib/warroomApi.ts`）。
+
+對外進入點：本檔的 `router`。誰依賴它：只有 `app/ads/routes.py`。
+"""
+
+from datetime import datetime, timezone
+
+from fastapi import APIRouter, Request
+from fastapi.responses import JSONResponse
+
+import app.shared.web as main_mod
+from app.ads import account_structure
+from app.ads import checklist as ads_checklist
+from app.ads import checkpoint as ads_checkpoint
+from app.ads import codes as ads_codes
+from app.ads import handoff as ads_handoff
+from app.ads import repository as ads_repo
+from app.ads.routes_common import _require_cycle
+
+router = APIRouter()
+
+_KIND_LABEL_TO_TS = {"ad": "ad", "word_of_mouth": "voiceover"}
+
+
+def _envelope(data) -> dict:
+    return {"data": data, "generated_at": datetime.now(timezone.utc).isoformat()}
+
+
+def _error(status_code: int, message: str) -> JSONResponse:
+    return JSONResponse({"error": message}, status_code=status_code)
+
+
+async def _json_body(request: Request) -> dict:
+    try:
+        body = await request.json()
+    except Exception:
+        return {}
+    return body if isinstance(body, dict) else {}
+
+
+# ---- 投放前檢查清單（S8.25-27） ----
+
+@router.get("/api/campaigns/{brand_id}/{cycle_id}/checklist")
+async def checklist_get(brand_id: str, cycle_id: str):
+    main_mod.require_brand(brand_id)
+    conn = main_mod.conn
+    _require_cycle(brand_id, cycle_id)
+    items = ads_checklist.one_time_status(conn, brand_id) + ads_checklist.cycle_status(conn, brand_id, cycle_id)
+    return _envelope(items)
+
+
+@router.post("/api/campaigns/{brand_id}/{cycle_id}/checklist/{scope}/{item_key}")
+async def checklist_toggle(request: Request, brand_id: str, cycle_id: str, scope: str, item_key: str):
+    main_mod.require_brand(brand_id)
+    actor = main_mod.require_actor(request)
+    conn = main_mod.conn
+    _require_cycle(brand_id, cycle_id)
+    try:
+        if scope == "one-time":
+            current = next((i for i in ads_checklist.one_time_status(conn, brand_id) if i["key"] == item_key), None)
+            if current is None:
+                return _error(404, "沒有這個檢查項目")
+            ads_checklist.set_one_time(conn, brand_id, item_key, not current["checked"], actor)
+        elif scope == "cycle":
+            current = next((i for i in ads_checklist.cycle_status(conn, brand_id, cycle_id) if i["key"] == item_key), None)
+            if current is None:
+                return _error(404, "沒有這個檢查項目")
+            ads_checklist.set_cycle_item(conn, brand_id, cycle_id, item_key, not current["checked"], actor)
+        else:
+            return _error(400, "scope 只能是 one-time 或 cycle")
+    except ValueError as exc:
+        return _error(400, str(exc))
+    return JSONResponse(None, status_code=204)
+
+
+@router.post("/api/campaigns/{brand_id}/{cycle_id}/handoff/qa-launch/{item_key}")
+async def qa_launch_toggle(request: Request, brand_id: str, cycle_id: str, item_key: str):
+    main_mod.require_brand(brand_id)
+    actor = main_mod.require_actor(request)
+    conn = main_mod.conn
+    _require_cycle(brand_id, cycle_id)
+    current = next((i for i in ads_checklist.qa_launch_status(conn, brand_id) if i["key"] == item_key), None)
+    if current is None:
+        return _error(404, "沒有這個檢查項目")
+    try:
+        ads_checklist.set_qa_launch_item(conn, brand_id, item_key, not current["checked"], actor)
+    except ValueError as exc:
+        return _error(400, str(exc))
+    return JSONResponse(None, status_code=204)
+
+
+# ---- QA 系統覆核（S8.32-35） ----
+
+def _probe_url(url: str) -> bool:
+    """輕量到達頁探測（S8.34）：HEAD/GET 只看回應碼是否 2xx，抓不到「內容對不對」。"""
+    if not url:
+        return False
+    import urllib.request
+    try:
+        req = urllib.request.Request(url, method="HEAD")
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            return 200 <= resp.status < 300
+    except Exception:  # noqa: BLE001 — 探測失敗一律算沒過，不讓例外傳上去
+        return False
+
+
+@router.get("/api/campaigns/{brand_id}/{cycle_id}/handoff/qa-auto-check")
+async def qa_auto_check(brand_id: str, cycle_id: str):
+    main_mod.require_brand(brand_id)
+    conn = main_mod.conn
+    _require_cycle(brand_id, cycle_id)
+    qa_items = {i["key"]: i for i in ads_checklist.qa_launch_status(conn, brand_id)}
+    packages = ads_handoff.list_packages(conn, brand_id, cycle_id)
+
+    anomaly = ads_checklist.pixel_anomaly(conn, brand_id)
+    pixel_item = qa_items.get("qa_pixel_installed", {"checked": False})
+    results = [{
+        "key": "qa_pixel_installed", "label": "Pixel 已正確安裝", "available": True,
+        "passed": anomaly is None, "checked": pixel_item["checked"],
+        "note": anomaly or "沒有偵測到「花錢卻零轉換」這種異常訊號。",
+    }]
+
+    budget_item = qa_items.get("qa_budget_line_review", {"checked": False})
+    results.append({
+        "key": "qa_budget_line_review", "label": "預算已逐筆覆核", "available": False, "passed": None,
+        "checked": budget_item["checked"],
+        "note": "系統目前還沒有串接 Meta 廣告組日預算讀取，這項先自行確認。",
+    })
+
+    if packages:
+        all_ok = all(_probe_url(p.get("full_url") or "") for p in packages)
+        note = "全部到達網址都能正常打開。" if all_ok else "至少一組到達網址打不開或逾時，系統只確認網址打得開，內容正不正確還是要自己看一眼。"
+    else:
+        all_ok, note = None, "這期還沒有交接包，先產出交接包才能探測到達網址。"
+    landing_item = qa_items.get("qa_landing_page_click_test", {"checked": False})
+    results.append({
+        "key": "qa_landing_page_click_test", "label": "到達頁已實點測試", "available": packages != [],
+        "passed": all_ok, "checked": landing_item["checked"], "note": note,
+    })
+
+    for key, label in (("qa_audience_exclusion", "受眾排除名單已設定"),
+                       ("qa_capi_emq_quality", "CAPI／EMQ 事件品質已確認")):
+        item = qa_items.get(key, {"checked": False})
+        results.append({
+            "key": key, "label": label, "available": False, "passed": None,
+            "checked": item["checked"],
+            "note": "Meta Marketing API 目前沒有公開讀取這項數據的整合範圍，這項先自行確認。",
+        })
+    return _envelope(results)
+
+
+@router.get("/api/campaigns/{brand_id}/{cycle_id}/handoff/naming-check")
+async def naming_check_get(brand_id: str, cycle_id: str):
+    main_mod.require_brand(brand_id)
+    conn = main_mod.conn
+    _require_cycle(brand_id, cycle_id)
+    packages = ads_handoff.list_packages(conn, brand_id, cycle_id)
+    return _envelope({
+        "naming": ads_handoff.naming_check(packages),
+        "utm": ads_handoff.utm_check(packages),
+    })
+
+
+# ---- 交接包本體（S8.37-46） ----
+
+def _package_json(pkg: dict) -> dict:
+    mapping = None
+    if pkg.get("mapping"):
+        m = pkg["mapping"]
+        mapping = {"meta_campaign_id": m["meta_campaign_id"], "confirmed_by": m["confirmed_by"],
+                  "confirmed_at": m["confirmed_at"]}
+    return {
+        "id": pkg["id"], "campaign_name": pkg["campaign_name"], "adset_name": pkg["adset_name"],
+        "ad_name": pkg["ad_name"], "objective_label": pkg["objective_label"],
+        "daily_budget": pkg["daily_budget"], "schedule_text": pkg["schedule_text"],
+        "hook_text": pkg.get("hook_text") or None, "copy_text": pkg.get("copy_text") or None,
+        "full_url": pkg.get("full_url") or None, "image_prompts": pkg.get("image_prompts") or [],
+        "mapping": mapping,
+    }
+
+
+def _code_json(row: dict) -> dict:
+    return {
+        "kind": _KIND_LABEL_TO_TS.get(row["source_type"], row["source_type"]),
+        "kind_label": ads_codes.SOURCE_LABELS.get(row["source_type"], row["source_type"]),
+        "code": row["code"],
+        "discount_pct": row["discount_value"] if row["discount_type"] == "percent" else None,
+        "usage_cap": row["usage_limit"], "valid_until": row["valid_to"],
+    }
+
+
+@router.get("/api/campaigns/{brand_id}/{cycle_id}/handoff")
+async def handoff_get(brand_id: str, cycle_id: str):
+    main_mod.require_brand(brand_id)
+    conn = main_mod.conn
+    _require_cycle(brand_id, cycle_id)
+    packages = ads_handoff.list_packages(conn, brand_id, cycle_id)
+    codes = ads_codes.list_codes(conn, brand_id, cycle_id)
+    verification = ads_codes.latest_verification(conn, brand_id, cycle_id)
+    extras = ads_handoff.build_extras(conn, brand_id, cycle_id)
+    structure = extras["structure"]
+    return _envelope({
+        "packages": [_package_json(p) for p in packages],
+        "codes": [_code_json(c) for c in codes],
+        "codes_verify_mismatch": (verification["mismatches"] if verification and not verification["passed"] else None),
+        "account_structure": {
+            "tier": structure.tier, "tier_label": structure.tier_label,
+            "structure_label": structure.structure_label,
+            "groups": [{"role": g.role, "label": g.label, "ratio": g.ratio,
+                       "daily_budget": g.daily_budget, "below_floor": g.below_floor}
+                      for g in structure.groups],
+            "note": structure.note,
+        },
+    })
+
+
+@router.post("/api/campaigns/{brand_id}/{cycle_id}/handoff/build")
+async def handoff_build(request: Request, brand_id: str, cycle_id: str):
+    main_mod.require_brand(brand_id)
+    actor = main_mod.require_actor(request)
+    _require_cycle(brand_id, cycle_id)
+    try:
+        ads_handoff.build_packages(main_mod.conn, brand_id, cycle_id, actor)
+    except ValueError as exc:
+        return _error(400, str(exc))
+    return JSONResponse(None, status_code=204)
+
+
+@router.post("/api/campaigns/{brand_id}/{cycle_id}/handoff/codes")
+async def handoff_codes_generate(request: Request, brand_id: str, cycle_id: str):
+    main_mod.require_brand(brand_id)
+    actor = main_mod.require_actor(request)
+    body = await _json_body(request)
+    try:
+        ads_codes.generate_codes(main_mod.conn, brand_id, cycle_id, discount_type="percent",
+                                 discount_value=body.get("discount_pct"), actor=actor)
+    except ValueError as exc:
+        return _error(400, str(exc))
+    return JSONResponse(None, status_code=204)
+
+
+@router.post("/api/campaigns/{brand_id}/{cycle_id}/handoff/codes/verify")
+async def handoff_codes_verify(request: Request, brand_id: str, cycle_id: str):
+    main_mod.require_brand(brand_id)
+    actor = main_mod.require_actor(request)
+    body = await _json_body(request)
+    try:
+        result = ads_codes.verify(main_mod.conn, brand_id, cycle_id, actual=body.get("actual") or {}, actor=actor)
+    except ValueError as exc:
+        return _error(400, str(exc))
+    return {"mismatches": result["mismatches"]}
+
+
+@router.post("/api/campaigns/{brand_id}/{cycle_id}/handoff/{package_id}/activate")
+async def handoff_activate(request: Request, brand_id: str, cycle_id: str, package_id: str):
+    main_mod.require_brand(brand_id)
+    actor = main_mod.require_actor(request)
+    body = await _json_body(request)
+    meta_ids = {"meta_campaign_id": body.get("meta_campaign_id")}
+    try:
+        ads_handoff.authorize_and_map(main_mod.conn, brand_id, cycle_id, package_id,
+                                      meta_ids=meta_ids, actor=actor)
+    except ValueError as exc:
+        return _error(400, str(exc))
+    return JSONResponse(None, status_code=204)
+
+
+# ---- 交接總分環（S8R.13-17） ----
+
+@router.get("/api/campaigns/{brand_id}/{cycle_id}/readiness")
+async def readiness(brand_id: str, cycle_id: str):
+    main_mod.require_brand(brand_id)
+    _require_cycle(brand_id, cycle_id)
+    return _envelope(ads_handoff.readiness_ring(main_mod.conn, brand_id, cycle_id))
+
+
+# ---- 期中檢查點（S8.47-50） ----
+
+@router.get("/api/campaigns/{brand_id}/{cycle_id}/checkpoint/{kind}")
+async def checkpoint_get(brand_id: str, cycle_id: str, kind: str):
+    main_mod.require_brand(brand_id)
+    conn = main_mod.conn
+    _require_cycle(brand_id, cycle_id)
+    if kind not in ads_checkpoint.KIND_LABELS:
+        return _error(404, "沒有這個檢查點類型")
+    history = ads_checkpoint.list_checkpoints(conn, brand_id, cycle_id)
+    latest = next((c["result"] for c in history if c["kind"] == kind), None)
+    if latest is None:
+        latest = {"kind": kind, "data_sufficient": False, "spend_ok": None, "learning_normal": None,
+                  "learning_note": "還沒有跑過這個檢查點。", "reach": None, "fatigue": None}
+    elif latest.get("fatigue"):
+        # `CheckpointResult.fatigue.status`（`warroomApi.ts`）只收 "safe"|"warn" 兩態，
+        # `rule_cards.classify_ad_frequency()` 既有三態（safe/warning/danger）——warning／
+        # danger 都算「該注意」，一律收斂成 "warn"，不擴充前端型別（前端不改，後端對齊）。
+        fatigue = dict(latest["fatigue"])
+        fatigue["status"] = "safe" if fatigue.get("status") == "safe" else "warn"
+        latest = {**latest, "fatigue": fatigue}
+    return _envelope(latest)

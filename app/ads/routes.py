@@ -234,3 +234,18 @@ router.include_router(routes_quick_generate.router)
 # 不影響。這頁本來在 app.brand_intelligence，搬過來的原因見該檔案頭註解。
 from app.ads import routes_settings  # noqa: E402
 router.include_router(routes_settings.router)
+
+# 票 B4-campaigns／B4-warroom 接線：S7 檔期清單＋S8 檔期作戰室 JSON API，固定
+# `/api/campaigns/...` 前綴，跟上面任何 `/brands/{brand_id}/ads/...` 頁面路由都不會撞。
+# `routes_campaigns_list_api` 用字面 "brands" 這段（`/api/campaigns/brands/{brand_id}`），
+# `routes_campaigns_open_api` 用通用兩段式萬用路由（`/api/campaigns/{brand_id}/{cycle_id}`）
+# ——同樣是三段路徑，有真實品牌 id 恰好等於字面 "brands" 才會撞（理論上不會發生），
+# list_api 仍必須排在 open_api 之前註冊，先到先贏（見兩檔各自檔頭說明）。
+from app.ads import routes_campaigns_list_api  # noqa: E402
+from app.ads import routes_campaigns_open_api  # noqa: E402
+from app.ads import routes_campaigns_handoff_api  # noqa: E402
+from app.ads import routes_campaigns_performance_api  # noqa: E402
+router.include_router(routes_campaigns_list_api.router)
+router.include_router(routes_campaigns_open_api.router)
+router.include_router(routes_campaigns_handoff_api.router)
+router.include_router(routes_campaigns_performance_api.router)

@@ -213,6 +213,53 @@ def guardrail_view(conn, brand_id: str, *, objective: str, product_ids: list,
             "learning_note": LEARNING_PHASE_NOTE}
 
 
+# ---------------------------------------------------------------------------
+# 最大虧損卡 AI 建議（票 B4R-warroom-redesign，S8R.4／S8R.5；公式來源見
+# .scratch/b4-redesign/blocks.md 第 3.3 節，已查證勿另立機制）。
+# ---------------------------------------------------------------------------
+
+def _nearest_slider_step(amount: float) -> float:
+    """把估算金額四捨五入到最接近的離散滑桿檔位（routes_common.SLIDER_STEPS）。
+    延遲 import routes_common 避免循環匯入（該檔已 import 本模組）。"""
+    from app.ads.routes_common import SLIDER_STEPS
+    return min(SLIDER_STEPS, key=lambda step: abs(step - amount))
+
+
+def suggest_pain_value(conn, brand_id: str, objective: str, product_ids: list) -> dict:
+    """最大虧損卡的 AI 建議值＋依據（`PainSuggestion` 形狀：`amount`／`is_ai_suggested`／
+    `basis_label`）。三層分流，見 blocks.md 3.3 節；三層都算不出來就回退系統預設檔位，
+    `is_ai_suggested=False`（S8R.5）。"""
+    default_amount = _nearest_slider_step(5000)  # DEFAULT_STEP_INDEX 對應的預設檔位
+
+    if objective in CONVERSION_OBJECTIVES:
+        target = resolve_target_cpa(conn, brand_id, objective, product_ids)
+        if target:
+            weekly = target["value"] * WEEKLY_CONVERSIONS_PER_GROUP
+            amount = weekly * 2  # DEFAULT_DURATION_DAYS(14) / 7 週
+            cap_base = previous_actual_weekly_spend(conn, brand_id)
+            if cap_base:
+                amount = min(amount, cap_base * 2 * 2)
+            return {
+                "amount": _nearest_slider_step(amount),
+                "is_ai_suggested": True,
+                "basis_label": f"{target['basis_label']}，估算兩週建議花費",
+            }
+    else:
+        rng = non_conversion_range(conn, brand_id, objective)
+        if rng:
+            midpoint = (rng["low"] + rng["high"]) / 2
+            return {
+                "amount": _nearest_slider_step(midpoint),
+                "is_ai_suggested": True,
+                "basis_label": rng["basis_label"],
+            }
+
+    return {
+        "amount": default_amount, "is_ai_suggested": False,
+        "basis_label": "這個品牌還沒有數據可以參考，先用系統的保守預設值，之後幾期會抓到你自己的數字。",
+    }
+
+
 def demo() -> None:
     """python -m app.ads.target_cpa —— 純函數自檢（無需資料庫）。"""
     tiers = budget_tiers(200)

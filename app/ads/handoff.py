@@ -356,6 +356,91 @@ def authorize_and_map(conn, brand_id: str, cycle_id: str, package_id: str, *,
     return {"authorization_id": auth_id, "mapping_id": mapping_id}
 
 
+# ---------------------------------------------------------------------------
+# 命名與 UTM 檢查（票 B4R-warroom-redesign，S8.28-29／廣告強化第 3 項）：純函數，
+# 不改動 build_names()／build_utm() 本身，只比對已產出的交接包。
+# ---------------------------------------------------------------------------
+
+def naming_check(packages: list) -> dict:
+    """S8.28：這期所有交接包的三層命名互不重複、無空字串。理論上不會發生（命名本來就是
+    程式組出來的固定格式），這顆檢查的價值是「萬一有」。"""
+    duplicates, missing = [], []
+    for field in ("campaign_name", "adset_name", "ad_name"):
+        seen: dict = {}
+        for pkg in packages:
+            value = pkg.get(field) or ""
+            if not value:
+                missing.append({"package_id": pkg["id"], "field": field})
+                continue
+            seen.setdefault(value, []).append(pkg["id"])
+        for value, ids in seen.items():
+            if len(ids) > 1:
+                duplicates.append({"field": field, "value": value, "package_ids": ids})
+    return {"duplicates": duplicates, "missing": missing, "passed": not duplicates and not missing}
+
+
+# UTM 官方標準共 5 個經典參數，本系統刻意不使用 utm_term（來源：Google Analytics 官方說明
+# support.google.com/analytics/answer/10917952，查證日 2026-08-12）——utm_term 官方定義是
+# 「付費關鍵字」，Meta 是興趣／受眾投放不是關鍵字搜尋廣告，沒有對應概念可填。
+_UTM_REQUIRED = ("utm_source", "utm_medium", "utm_campaign", "utm_content")
+_UTM_NOT_APPLICABLE = {
+    "utm_term": "本系統投放對象是 Meta 興趣／受眾投放，不是關鍵字搜尋廣告，"
+                "沒有對應的付費關鍵字概念可填（不適用，非搜尋型廣告）。",
+}
+
+
+def utm_check(packages: list) -> list:
+    """S8.29：確認四個既有 UTM 參數皆非空，逐份交接包各回一筆。"""
+    from urllib.parse import parse_qs
+    results = []
+    for pkg in packages:
+        params = parse_qs(pkg.get("utm_text") or "")
+        present = [k for k in _UTM_REQUIRED if params.get(k) and params[k][0]]
+        results.append({
+            "package_id": pkg["id"], "present": present,
+            "not_applicable": [{"param": k, "reason": v} for k, v in _UTM_NOT_APPLICABLE.items()],
+            "passed": len(present) == len(_UTM_REQUIRED),
+        })
+    return results
+
+
+# ---------------------------------------------------------------------------
+# 交接總分環（票 B4R-warroom-redesign，S8R.13-17）：純聚合既有三組使用者自行勾選狀態＋
+# 本節新增的命名／UTM 檢查通過與否，不重算任何判定邏輯（同 S8.59 compile_closing_review()
+# 的聚合手法）。
+# ---------------------------------------------------------------------------
+
+def readiness_ring(conn, brand_id: str, cycle_id: str) -> dict:
+    """`fix_anchor` 逐值對照前端實際渲染的容器 id（一次性＋每期必看合渲在同一張卡片
+    `id="checklist-block"`，見 `ChecklistSection.tsx:27`；命名／UTM 檢查共卡
+    `id="naming-utm-block"`，見 `NamingUtmSection.tsx:20`；QA 五項 `id="qa-launch-block"`，
+    見 `QaAutoCheckSection.tsx:32`）——前端不改，後端錨點對齊前端既有 id，不是隨意命名。"""
+    items = []
+    for item in ads_checklist.one_time_status(conn, brand_id):
+        items.append({"key": item["key"], "label": item["label"], "passed": item["checked"],
+                      "section": "one_time_checklist", "fix_anchor": "checklist-block"})
+    for item in ads_checklist.cycle_status(conn, brand_id, cycle_id):
+        items.append({"key": item["key"], "label": item["label"], "passed": item["checked"],
+                      "section": "cycle_checklist", "fix_anchor": "checklist-block"})
+
+    packages = list_packages(conn, brand_id, cycle_id)
+    naming = naming_check(packages)
+    items.append({"key": "naming_check", "label": "命名檢查（無撞名、無缺漏）",
+                  "passed": naming["passed"], "section": "naming_check",
+                  "fix_anchor": "naming-utm-block"})
+    utm_results = utm_check(packages)
+    utm_passed = all(r["passed"] for r in utm_results) if utm_results else True
+    items.append({"key": "utm_check", "label": "UTM 檢查（四參數皆非空）", "passed": utm_passed,
+                  "section": "utm_check", "fix_anchor": "naming-utm-block"})
+
+    for item in ads_checklist.qa_launch_status(conn, brand_id):
+        items.append({"key": item["key"], "label": item["label"], "passed": item["checked"],
+                      "section": "qa_launch", "fix_anchor": "qa-launch-block"})
+
+    items.sort(key=lambda i: i["passed"])  # 未過項排最前（False < True）
+    return {"passed": sum(1 for i in items if i["passed"]), "total": len(items), "items": items}
+
+
 def _ensure_ad_account(conn, external_account_id: str, ts: str) -> str:
     """廣告帳號不綁品牌（一個帳號可服務多品牌，決策 0022 第 6 點），有就取、沒有就建。"""
     row = conn.execute(

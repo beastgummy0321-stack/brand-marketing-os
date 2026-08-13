@@ -38,6 +38,12 @@ class JobRegistry:
         """測試用：重置狀態表（比照原本 `_research_jobs: dict = {}` 直接 `.clear()`）。"""
         self._jobs.clear()
 
+    def items(self) -> list:
+        """全站生成進度單一出口（票 B4-warroom）唯一的列舉入口：回傳 `[(key, state), ...]`
+        快照。不改 get／set／start 既有形狀，這是額外新增的公開方法，供聚合端點列舉目前
+        全部工作，不必讓呼叫端直接碰 `_jobs` 這個私有字典（模組邊界：只走公開進入點）。"""
+        return list(self._jobs.items())
+
     def start(self, key: str, running_state: dict, target: Callable, args: tuple,
               *, idempotent: bool = False) -> None:
         """寫入 running 狀態並啟動背景執行緒。

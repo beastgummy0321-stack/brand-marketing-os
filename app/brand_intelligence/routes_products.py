@@ -183,6 +183,8 @@ def _research_start(product_id: str, brand_id: str, actor: str, product_name: st
         "status": "running", "stage": "讀取網址中", "started_at": started_at,
         "usual_range_text": _RESEARCH_USUAL_RANGE,
         "error": None, "added_count": None, "price_created": False,
+        # brand_id：全站生成進度單一出口（票 B4-warroom）聚合端點列舉用，業務邏輯不讀這個鍵。
+        "brand_id": brand_id,
     }
     _research_jobs.start(product_id, running_state, _research_run,
                           (product_id, brand_id, actor, product_name, url), idempotent=True)

@@ -127,6 +127,37 @@ def compute_curve(strategy: str, duration_days: int, total_budget: float) -> lis
     ]
 
 
+# ---------------------------------------------------------------------------
+# 排期到期提醒（票 B4R-warroom-redesign，S8R.9-11）：比對「今天」與「前一天」在
+# `daily_budgets`（`compute_curve()` 既有逐日陣列）裡的金額是否不同，不同就代表今天要去
+# Meta 手動調整日預算。`continuous` 策略每天金額都一樣，天生恆回 None，不用特判策略種類。
+# ---------------------------------------------------------------------------
+
+def due_schedule_change(cycle: dict, daily_budgets: list, today: str):
+    """`cycle` 需要 `start_date`／`end_date`；`daily_budgets` 是這期 `derived_plan_json` 裡
+    存的逐日陣列。今天不在檔期範圍內、是第一天（沒有前一天可比）、或前後金額相同都回 None。
+    """
+    from datetime import date as _date
+    if not daily_budgets:
+        return None
+    start = _date.fromisoformat(cycle["start_date"])
+    end = _date.fromisoformat(cycle["end_date"])
+    today_date = _date.fromisoformat(today)
+    if today_date < start or today_date > end:
+        return None
+    index = (today_date - start).days
+    if index <= 0 or index >= len(daily_budgets):
+        return None
+    new_amount = daily_budgets[index]["budget"]
+    if new_amount == daily_budgets[index - 1]["budget"]:
+        return None
+    return {
+        "date": today,
+        "new_daily_budget": new_amount,
+        "copy_text": f"今天去 Meta 把日預算改成 NT${new_amount:,.0f}",
+    }
+
+
 def demo() -> None:
     """python -m app.ads.pacing_curve — 最小自檢，順便當用法示範。"""
     assert recommend_pacing_strategy(7, has_offer=True)[0] == "continuous"   # 太短，優惠也不推脈動

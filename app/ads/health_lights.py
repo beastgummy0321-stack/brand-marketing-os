@@ -1,0 +1,110 @@
+# -*- coding: utf-8 -*-
+"""app/ads/health_lights.py — 檔期健康燈號（票 B4R-warroom-redesign，GRILL-B4R-performance.md
+「檔期健康燈號」小節，S8R.20／S3P.12 共用同一份邏輯，不重複兩套判定）。
+
+四盞燈全部組裝既有函式算出來的數字，只新增「怎麼分三色」的比較門檻（不發明新資料源）：
+燒錢速度 `pacing.classify()`、CPA/ROAS `performance.totals()`＋`target_cpa`／`reading.breakeven_roas()`、
+疲勞 `performance.max_frequency()`＋`rule_cards.classify_ad_frequency()`。
+
+門檻倍率（CPA×1.3、ROAS×0.8、燒錢速度門檻×0.6）是 grill 新提的合理值，寫死在這裡，
+沒有掛進 rule_cards（見 GRILL-B4R-performance.md「拿不準的點」第 2 條）。
+
+對外進入點：`compute()`。誰依賴它：作戰室成效區＋駕駛艙釘選視圖⑤兩個薄呼叫端。
+"""
+
+from datetime import date
+from typing import Optional
+
+from app.ads import pacing as ads_pacing
+from app.ads import performance as ads_performance
+from app.ads import reading as ads_reading
+from app.ads import repository as ads_repo
+from app.ads import target_cpa as ads_target_cpa
+from app.brand_intelligence import repository as bi
+from app.core import rule_cards
+
+_SPEND_YELLOW_RATIO = 0.6  # 燒錢速度黃燈＝既有門檻的 6 成（GRILL-B4R-performance.md 300 行）
+_CPA_YELLOW_MULTIPLIER = 1.3
+_ROAS_YELLOW_MULTIPLIER = 0.8
+
+
+def _light(status: str, value, label: str, note: str) -> dict:
+    return {"status": status, "value": value, "label": label, "note": note}
+
+
+def _cycle_breakeven(conn, brand_id: str, cycle_id: str) -> Optional[float]:
+    """比照 `reading.run()` 既有算法：這期各產品打平投報率的平均值（reading.py:543-548）。"""
+    allocations = ads_repo.list_cycle_products(conn, brand_id, cycle_id)
+    breakevens = [ads_reading.breakeven_roas(bi.get_product_economics(conn, brand_id, a["product_id"]))
+                  for a in allocations]
+    known = [b for b in breakevens if b]
+    return round(sum(known) / len(known), 2) if known else None
+
+
+def _spend_rate_light(conn, brand_id: str, cycle: dict) -> dict:
+    threshold = rule_cards.get_value(conn, brand_id, "pacing", "deviation_threshold_ratio")
+    spend = ads_performance.totals(conn, brand_id, cycle["id"])["spend"]
+    result = ads_pacing.classify(budget=cycle["budget"], spend=spend, start_date=cycle["start_date"],
+                                 end_date=cycle["end_date"], today=date.today().isoformat(),
+                                 threshold_pct=threshold)
+    deviation = result["deviation"]
+    if result["status"] == "insufficient_sample":
+        return _light("insufficient", None, "燒錢速度", "這期才剛開始，還看不出燒錢速度。")
+    if result["status"] == "normal" and abs(deviation) <= threshold * _SPEND_YELLOW_RATIO:
+        return _light("green", deviation, "燒錢速度", "花費進度跟時間進度差不多，一切正常。")
+    if result["status"] == "normal":
+        return _light("yellow", deviation, "燒錢速度", "花費進度跟時間進度有點落差，先留意。")
+    note = "本期預算恐提前燒完。" if result["status"] == "overspend" else "本期預算恐怕花不完。"
+    return _light("red", deviation, "燒錢速度", note)
+
+
+def _cpa_light(conn, brand_id: str, cycle: dict) -> dict:
+    kpis = ads_performance.compute_kpis(ads_performance.totals(conn, brand_id, cycle["id"]))
+    actual_cpa = kpis.get("cpa")
+    product_ids = [a["product_id"] for a in ads_repo.list_cycle_products(conn, brand_id, cycle["id"])]
+    target = ads_target_cpa.resolve_target_cpa(conn, brand_id, cycle["objective"], product_ids)
+    target_cpa = target["value"] if target else None
+    if actual_cpa is None or not target_cpa:
+        return _light("insufficient", actual_cpa, "CPA", "算不出目標 CPA 或實際 CPA，先看其他指標。")
+    if actual_cpa <= target_cpa:
+        return _light("green", actual_cpa, "CPA", f"實際 CPA {actual_cpa:,.0f}，在目標 {target_cpa:,.0f} 之內。")
+    if actual_cpa <= target_cpa * _CPA_YELLOW_MULTIPLIER:
+        return _light("yellow", actual_cpa, "CPA", f"實際 CPA {actual_cpa:,.0f}，略高於目標 {target_cpa:,.0f}。")
+    return _light("red", actual_cpa, "CPA", f"實際 CPA {actual_cpa:,.0f}，明顯高於目標 {target_cpa:,.0f}。")
+
+
+def _roas_light(conn, brand_id: str, cycle: dict) -> dict:
+    kpis = ads_performance.compute_kpis(ads_performance.totals(conn, brand_id, cycle["id"]))
+    actual_roas = kpis.get("roas")
+    breakeven = _cycle_breakeven(conn, brand_id, cycle["id"])
+    if actual_roas is None or not breakeven:
+        return _light("insufficient", actual_roas, "ROAS", "算不出打平投報率或實際 ROAS，先看其他指標。")
+    if actual_roas >= breakeven:
+        return _light("green", actual_roas, "ROAS", f"實際 ROAS {actual_roas:.2f}，達到打平線 {breakeven:.2f}。")
+    if actual_roas >= breakeven * _ROAS_YELLOW_MULTIPLIER:
+        return _light("yellow", actual_roas, "ROAS", f"實際 ROAS {actual_roas:.2f}，接近打平線 {breakeven:.2f}。")
+    return _light("red", actual_roas, "ROAS", f"實際 ROAS {actual_roas:.2f}，低於打平線 {breakeven:.2f}。")
+
+
+_FATIGUE_STATUS_LIGHT = {"safe": "green", "warning": "yellow", "danger": "red"}
+
+
+def _fatigue_light(conn, brand_id: str, cycle: dict) -> dict:
+    frequency = ads_performance.max_frequency(conn, brand_id, cycle["id"])
+    if frequency is None:
+        return _light("insufficient", None, "疲勞", "還沒有成效資料，算不出頻率。")
+    status = rule_cards.classify_ad_frequency(conn, brand_id, "cold", frequency)
+    return _light(_FATIGUE_STATUS_LIGHT[status], frequency, "疲勞", rule_cards.FATIGUE_STATUS_LABELS[status])
+
+
+def compute(conn, brand_id: str, cycle_id: str) -> dict:
+    """四盞燈：`{spend_rate, cpa, roas, fatigue}`，每盞 `{status, value, label, note}`。"""
+    cycle = ads_repo.get_cycle(conn, brand_id, cycle_id)
+    if cycle is None:
+        raise ValueError("找不到廣告檔期")
+    return {
+        "spend_rate": _spend_rate_light(conn, brand_id, cycle),
+        "cpa": _cpa_light(conn, brand_id, cycle),
+        "roas": _roas_light(conn, brand_id, cycle),
+        "fatigue": _fatigue_light(conn, brand_id, cycle),
+    }

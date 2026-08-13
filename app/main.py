@@ -678,6 +678,8 @@ from app.intake.routes_api import router as intake_api_router  # noqa: E402
 from app.ads.routes import router as ads_router  # noqa: E402
 from app.orders.routes import router as orders_router  # noqa: E402
 from app.dashboard.routes import router as dashboard_router  # noqa: E402
+from app.dashboard.routes_pinned_views_api import router as pinned_views_router  # noqa: E402
+from app.dashboard.routes_jobs_api import router as jobs_active_router  # noqa: E402
 
 app.include_router(brand_intelligence_router)
 app.include_router(inbox_router)
@@ -689,6 +691,8 @@ app.include_router(intake_api_router)
 app.include_router(ads_router)
 app.include_router(orders_router)
 app.include_router(dashboard_router)
+app.include_router(pinned_views_router)
+app.include_router(jobs_active_router)
 
 # ---------------------------------------------------------------------------
 # app.ads → app.orders 依賴注入（第 7 刀，A1 三層地界新規則：app/ads 不得 import
