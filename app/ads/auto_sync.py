@@ -14,7 +14,9 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 
 from app.ads import ga4_sync
+from app.ads import onboarding
 from app.ads import pacing_curve
+from app.ads import reading
 from app.ads import repository as ads_repo
 from app.ads import sync as ads_sync
 from app.ads import tracking
@@ -47,10 +49,24 @@ def check_schedule_reminder(conn, brand_id: str, cycle_id: str, today: str):
     return reminder
 
 
+def run_due_readings(conn, brand_id: str, today: str) -> None:
+    """用既有到期提醒觸發第 7 天判讀與期末結算。"""
+    for reminder in onboarding.due_reminders(conn, brand_id, today=today):
+        if reminder["kind"] == "day7_report":
+            reading.run(conn, brand_id, reminder["campaign_cycle_id"], ACTOR)
+        elif reminder["kind"] == "final_settlement":
+            ok, _ = reading.finalize(
+                conn, brand_id, reminder["campaign_cycle_id"], ACTOR,
+            )
+            if ok:
+                core_interrupts.resolve(conn, reminder["id"], actor=ACTOR)
+
+
 def run_cycle_checks(conn, brand_id: str, today: str, *, url_probe=None) -> None:
     for cycle in ads_repo.list_cycles(conn, brand_id):
         if cycle["status"] in ("LIVE", "EVALUATING"):
             check_schedule_reminder(conn, brand_id, cycle["id"], today)
+    run_due_readings(conn, brand_id, today)
     tracking.run_post_sync_checks(conn, brand_id, today=today, url_probe=url_probe)
 
 
