@@ -20,6 +20,7 @@ from app.ads import reading
 from app.ads import repository as ads_repo
 from app.ads import sync as ads_sync
 from app.ads import tracking
+from app.ads import weekly_proposals
 from app.brand_intelligence import repository as bi_repo
 from app.core import interrupts as core_interrupts
 
@@ -53,12 +54,15 @@ def run_due_readings(conn, brand_id: str, today: str) -> None:
     """用既有到期提醒觸發第 7 天判讀與期末結算。"""
     for reminder in onboarding.due_reminders(conn, brand_id, today=today):
         if reminder["kind"] == "day7_report":
-            reading.run(conn, brand_id, reminder["campaign_cycle_id"], ACTOR)
+            ok, _ = reading.run(conn, brand_id, reminder["campaign_cycle_id"], ACTOR)
+            if ok:
+                weekly_proposals.generate(conn, brand_id, reminder["campaign_cycle_id"])
         elif reminder["kind"] == "final_settlement":
             ok, _ = reading.finalize(
                 conn, brand_id, reminder["campaign_cycle_id"], ACTOR,
             )
             if ok:
+                weekly_proposals.generate(conn, brand_id, reminder["campaign_cycle_id"])
                 core_interrupts.resolve(conn, reminder["id"], actor=ACTOR)
 
 
