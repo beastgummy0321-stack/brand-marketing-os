@@ -361,9 +361,15 @@ def authorize_and_map(conn, brand_id: str, cycle_id: str, package_id: str, *,
 # 不改動 build_names()／build_utm() 本身，只比對已產出的交接包。
 # ---------------------------------------------------------------------------
 
-def naming_check(packages: list) -> dict:
-    """S8.28：這期所有交接包的三層命名互不重複、無空字串。理論上不會發生（命名本來就是
-    程式組出來的固定格式），這顆檢查的價值是「萬一有」。"""
+def naming_check(conn, brand_id: str, cycle_id: str, packages: list) -> dict:
+    """S8.28（B4R 收尾修正）：`adset_name`／`ad_name` 一定要逐份互不相同、無空字串——
+    這兩個名字靠 `build_names()`（:93-105）的 index 分開，撞名代表真的出錯。
+
+    `campaign_name` 不同：`build_names()` 本來就是一檔期一活動名，底下每個切角共用
+    同一個名字（`build_packages()`：165-170 重出交接包時還會留下已授權的舊包，同檔期內
+    自然會有更多份共用同一個名字），同檔期內重複是設計如此、不算撞名。真正該擋的是
+    「同品牌、不同檔期」不小心撞出同一個活動名稱（檔期短碼理論上不會撞，這顆檢查是防萬一）。
+    """
     duplicates, missing = [], []
     for field in ("campaign_name", "adset_name", "ad_name"):
         seen: dict = {}
@@ -373,9 +379,28 @@ def naming_check(packages: list) -> dict:
                 missing.append({"package_id": pkg["id"], "field": field})
                 continue
             seen.setdefault(value, []).append(pkg["id"])
+        if field == "campaign_name":
+            continue  # 同檔期本就共用一個活動名，不比對同檔期內部
         for value, ids in seen.items():
             if len(ids) > 1:
                 duplicates.append({"field": field, "value": value, "package_ids": ids})
+
+    names = {pkg.get("campaign_name") for pkg in packages if pkg.get("campaign_name")}
+    if names:
+        placeholders = ",".join("?" * len(names))
+        rows = conn.execute(
+            "SELECT id, campaign_name FROM publishing_package WHERE brand_id = ?"
+            f" AND campaign_cycle_id != ? AND campaign_name IN ({placeholders})",
+            (brand_id, cycle_id, *names),
+        ).fetchall()
+        other_ids_by_name: dict = {}
+        for row in rows:
+            other_ids_by_name.setdefault(row["campaign_name"], []).append(row["id"])
+        for value, other_ids in other_ids_by_name.items():
+            own_ids = [pkg["id"] for pkg in packages if pkg.get("campaign_name") == value]
+            duplicates.append({"field": "campaign_name", "value": value,
+                               "package_ids": own_ids + other_ids})
+
     return {"duplicates": duplicates, "missing": missing, "passed": not duplicates and not missing}
 
 
@@ -424,7 +449,7 @@ def readiness_ring(conn, brand_id: str, cycle_id: str) -> dict:
                       "section": "cycle_checklist", "fix_anchor": "checklist-block"})
 
     packages = list_packages(conn, brand_id, cycle_id)
-    naming = naming_check(packages)
+    naming = naming_check(conn, brand_id, cycle_id, packages)
     items.append({"key": "naming_check", "label": "命名檢查（無撞名、無缺漏）",
                   "passed": naming["passed"], "section": "naming_check",
                   "fix_anchor": "naming-utm-block"})

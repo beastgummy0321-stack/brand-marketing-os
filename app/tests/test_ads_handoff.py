@@ -433,5 +433,83 @@ class DailyBudgetInvariantTest(unittest.TestCase):
         self.assertAlmostEqual(total, self._plan_total(cycle["id"]), places=2)
 
 
+class NamingCheckTest(unittest.TestCase):
+    """B4R 收尾包項目 1：naming_check 只在「同品牌跨檔期」撞名時才算撞名——同檔期多份
+    交接包共用同一個活動名稱是設計如此（build_names() 一檔期一活動名，多切角共用）。"""
+
+    def setUp(self):
+        self.bid = bi_repo.create_brand(
+            main.conn, name="虛構晨露茶行", client_name="測試客戶", actor=ACTOR)["id"]
+
+    def _cell(self, cycle_id: str, angle: str) -> str:
+        """直接建一個切角＋一組已採用的 hook／copy 素材，不經 LLM 生成管線（比照
+        DailyBudgetInvariantTest._cell()，這裡不綁產品）。"""
+        cell_id = new_id("exc")
+        main.conn.execute(
+            "INSERT INTO experiment_cell (id, campaign_cycle_id, brand_id, product_id,"
+            " audience, creative_angle, created_at) VALUES (?, ?, ?, NULL, ?, ?, ?)",
+            (cell_id, cycle_id, self.bid, "測試受眾", angle, now_iso()),
+        )
+        brief_id = ads_creative._brief_for_cell(
+            main.conn, self.bid, cycle_id, {"id": cell_id, "creative_angle": angle}, now_iso())
+        for variant_type, content in (("hook", f"{angle}主打句"), ("copy", f"{angle}內文")):
+            main.conn.execute(
+                "INSERT INTO creative_variant (id, variant_type, creative_brief_id,"
+                " campaign_cycle_id, experiment_cell_id, brand_id, product_id, attributes_json,"
+                " fingerprint_json, rationale, recommendation_rank, status, created_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, NULL, ?, '{}', '', 1, 'DRAFT', ?)",
+                (new_id("cvr"), variant_type, brief_id, cycle_id, cell_id, self.bid,
+                 json.dumps({"content": content}, ensure_ascii=False), now_iso()),
+            )
+        main.conn.commit()
+        return cell_id
+
+    def _cycle(self, start_date: str) -> dict:
+        return ads_repo.create_cycle(
+            main.conn, self.bid, product_ids=[], pain_value=4000, objective="sales",
+            actor=ACTOR, start_date=start_date, duration_days=10)
+
+    def _built_packages(self, cycle_id: str) -> list:
+        ads_handoff.build_packages(main.conn, self.bid, cycle_id, ACTOR)
+        return ads_handoff.list_packages(main.conn, self.bid, cycle_id)
+
+    def test_same_cycle_shared_campaign_name_passes(self):
+        cycle = self._cycle("2026-08-01")
+        for i in range(4):
+            self._cell(cycle["id"], f"切角{i}")
+        packages = self._built_packages(cycle["id"])
+        self.assertEqual(len(packages), 4)
+        self.assertEqual(len({p["campaign_name"] for p in packages}), 1)  # 同檔期共用一個活動名
+
+        result = ads_handoff.naming_check(main.conn, self.bid, cycle["id"], packages)
+        self.assertEqual(result, {"duplicates": [], "missing": [], "passed": True})
+
+    def test_cross_cycle_campaign_name_collision_fails(self):
+        """短碼撞名機率極低，直接改資料庫模擬「萬一撞到」的情境。"""
+        cycle_a = self._cycle("2026-08-01")
+        self._cell(cycle_a["id"], "切角A")
+        packages_a = self._built_packages(cycle_a["id"])
+
+        cycle_b = self._cycle("2026-09-01")
+        self._cell(cycle_b["id"], "切角B")
+        packages_b = self._built_packages(cycle_b["id"])
+
+        collided_name = "撞名測試活動"
+        main.conn.execute("UPDATE publishing_package SET campaign_name = ? WHERE id = ?",
+                          (collided_name, packages_a[0]["id"]))
+        main.conn.execute("UPDATE publishing_package SET campaign_name = ? WHERE id = ?",
+                          (collided_name, packages_b[0]["id"]))
+        main.conn.commit()
+
+        packages_a = ads_handoff.list_packages(main.conn, self.bid, cycle_a["id"])
+        result = ads_handoff.naming_check(main.conn, self.bid, cycle_a["id"], packages_a)
+        self.assertFalse(result["passed"])
+        self.assertEqual(len(result["duplicates"]), 1)
+        dup = result["duplicates"][0]
+        self.assertEqual(dup["field"], "campaign_name")
+        self.assertEqual(dup["value"], collided_name)
+        self.assertEqual(set(dup["package_ids"]), {packages_a[0]["id"], packages_b[0]["id"]})
+
+
 if __name__ == "__main__":
     unittest.main()

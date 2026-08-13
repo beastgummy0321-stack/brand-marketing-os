@@ -10,6 +10,7 @@ import os
 import shutil
 import tempfile
 import unittest
+import uuid
 from pathlib import Path
 
 _tmpdir = tempfile.mkdtemp(prefix="brand_os_ads_ga4_")
@@ -76,7 +77,9 @@ class _BaseGA4Test(unittest.TestCase):
         main.conn.execute("DELETE FROM derived_metric")
         main.conn.execute("DELETE FROM performance_snapshot")
         main.conn.commit()
-        self.brand = bi_repo.create_brand(main.conn, name=f"虛構晨光咖啡{abs(hash(self.id())) % 10000}",
+        # 用 uuid4 不用 hash(self.id())：hash() 受 PYTHONHASHSEED 隨機化，跟 test_ads_sync.py
+        # 同前綴同 mod 可能撞名（B4R 收尾包踢出的 flaky 根因）。
+        self.brand = bi_repo.create_brand(main.conn, name=f"虛構晨光咖啡{uuid.uuid4().hex[:8]}",
                                           client_name=None, actor=ACTOR)
         self.bid = self.brand["id"]
         coresettings.set_setting(main.conn, ga4_sync.PROPERTY_SETTING, PROPERTY_ID)

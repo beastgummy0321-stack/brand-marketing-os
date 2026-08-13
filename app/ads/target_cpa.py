@@ -276,6 +276,21 @@ def demo() -> None:
     assert guard["weekly_conversions"] == 50.0
     assert guard["groups_sustainable"] == 1
     assert guard["cycle_creative_cap"] == 5
+
+    # suggest_pain_value()：品牌完全沒有歷史資料時三層鏈都算不出來，退回系統預設檔位
+    import tempfile
+    from pathlib import Path
+
+    from app.brand_intelligence import repository as bi_repo
+    from app.core import db as core_db
+
+    with tempfile.TemporaryDirectory() as tmp:
+        conn = core_db.connect_and_migrate(Path(tmp) / "test.db")
+        brand = bi_repo.create_brand(conn, name="虛構示範品牌", client_name=None, actor="demo")
+        suggestion = suggest_pain_value(conn, brand["id"], "sales", [])
+        assert suggestion["is_ai_suggested"] is False
+        assert suggestion["amount"] == _nearest_slider_step(5000)
+        conn.close()
     print("target_cpa 自檢通過")
 
 

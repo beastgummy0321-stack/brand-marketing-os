@@ -6,8 +6,8 @@
 燒錢速度 `pacing.classify()`、CPA/ROAS `performance.totals()`＋`target_cpa`／`reading.breakeven_roas()`、
 疲勞 `performance.max_frequency()`＋`rule_cards.classify_ad_frequency()`。
 
-門檻倍率（CPA×1.3、ROAS×0.8、燒錢速度門檻×0.6）是 grill 新提的合理值，寫死在這裡，
-沒有掛進 rule_cards（見 GRILL-B4R-performance.md「拿不準的點」第 2 條）。
+門檻倍率（CPA×1.3、ROAS×0.8、燒錢速度門檻×0.6）是 grill 新提的合理值，掛進 rule_cards
+的 `health_lights` 卡（人話頁面可看可改可重設），預設值＝這裡原本寫死的數字。
 
 對外進入點：`compute()`。誰依賴它：作戰室成效區＋駕駛艙釘選視圖⑤兩個薄呼叫端。
 """
@@ -22,10 +22,6 @@ from app.ads import repository as ads_repo
 from app.ads import target_cpa as ads_target_cpa
 from app.brand_intelligence import repository as bi
 from app.core import rule_cards
-
-_SPEND_YELLOW_RATIO = 0.6  # 燒錢速度黃燈＝既有門檻的 6 成（GRILL-B4R-performance.md 300 行）
-_CPA_YELLOW_MULTIPLIER = 1.3
-_ROAS_YELLOW_MULTIPLIER = 0.8
 
 
 def _light(status: str, value, label: str, note: str) -> dict:
@@ -50,7 +46,8 @@ def _spend_rate_light(conn, brand_id: str, cycle: dict) -> dict:
     deviation = result["deviation"]
     if result["status"] == "insufficient_sample":
         return _light("insufficient", None, "燒錢速度", "這期才剛開始，還看不出燒錢速度。")
-    if result["status"] == "normal" and abs(deviation) <= threshold * _SPEND_YELLOW_RATIO:
+    spend_yellow_ratio = rule_cards.get_value(conn, brand_id, "health_lights", "spend_yellow_ratio")
+    if result["status"] == "normal" and abs(deviation) <= threshold * spend_yellow_ratio:
         return _light("green", deviation, "燒錢速度", "花費進度跟時間進度差不多，一切正常。")
     if result["status"] == "normal":
         return _light("yellow", deviation, "燒錢速度", "花費進度跟時間進度有點落差，先留意。")
@@ -68,7 +65,8 @@ def _cpa_light(conn, brand_id: str, cycle: dict) -> dict:
         return _light("insufficient", actual_cpa, "CPA", "算不出目標 CPA 或實際 CPA，先看其他指標。")
     if actual_cpa <= target_cpa:
         return _light("green", actual_cpa, "CPA", f"實際 CPA {actual_cpa:,.0f}，在目標 {target_cpa:,.0f} 之內。")
-    if actual_cpa <= target_cpa * _CPA_YELLOW_MULTIPLIER:
+    cpa_yellow_multiplier = rule_cards.get_value(conn, brand_id, "health_lights", "cpa_yellow_multiplier")
+    if actual_cpa <= target_cpa * cpa_yellow_multiplier:
         return _light("yellow", actual_cpa, "CPA", f"實際 CPA {actual_cpa:,.0f}，略高於目標 {target_cpa:,.0f}。")
     return _light("red", actual_cpa, "CPA", f"實際 CPA {actual_cpa:,.0f}，明顯高於目標 {target_cpa:,.0f}。")
 
@@ -81,7 +79,8 @@ def _roas_light(conn, brand_id: str, cycle: dict) -> dict:
         return _light("insufficient", actual_roas, "ROAS", "算不出打平投報率或實際 ROAS，先看其他指標。")
     if actual_roas >= breakeven:
         return _light("green", actual_roas, "ROAS", f"實際 ROAS {actual_roas:.2f}，達到打平線 {breakeven:.2f}。")
-    if actual_roas >= breakeven * _ROAS_YELLOW_MULTIPLIER:
+    roas_yellow_multiplier = rule_cards.get_value(conn, brand_id, "health_lights", "roas_yellow_multiplier")
+    if actual_roas >= breakeven * roas_yellow_multiplier:
         return _light("yellow", actual_roas, "ROAS", f"實際 ROAS {actual_roas:.2f}，接近打平線 {breakeven:.2f}。")
     return _light("red", actual_roas, "ROAS", f"實際 ROAS {actual_roas:.2f}，低於打平線 {breakeven:.2f}。")
 

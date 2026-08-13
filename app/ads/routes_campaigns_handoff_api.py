@@ -159,7 +159,7 @@ async def naming_check_get(brand_id: str, cycle_id: str):
     _require_cycle(brand_id, cycle_id)
     packages = ads_handoff.list_packages(conn, brand_id, cycle_id)
     return _envelope({
-        "naming": ads_handoff.naming_check(packages),
+        "naming": ads_handoff.naming_check(conn, brand_id, cycle_id, packages),
         "utm": ads_handoff.utm_check(packages),
     })
 

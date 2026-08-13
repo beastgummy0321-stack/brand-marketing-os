@@ -11,6 +11,7 @@ import os
 import shutil
 import tempfile
 import unittest
+import uuid
 from pathlib import Path
 
 _tmpdir = tempfile.mkdtemp(prefix="brand_os_ads_sync_")
@@ -176,7 +177,12 @@ class _BaseSyncTest(unittest.TestCase):
         main.conn.commit()
         # 每個測試用不同的品牌名：同名品牌會讓命名猜測猜到先建的那一個
         # （這正是「猜測只能是預選、必須人確認」的原因，見 test_suggested_is_still_not_enough）
-        self.brand_name = f"虛構晨光咖啡{abs(hash(self.id())) % 10000}"
+        # 用 uuid4 不用 hash(self.id())：hash() 受 PYTHONHASHSEED 隨機化，跨進程／跟
+        # test_ads_ga4.py 同前綴同 mod 可能撞名（B4R 收尾包踢出的 flaky 根因）。不用 new_id()：
+        # 它回傳的字串含底線，會被 _guess_brand() 的 campaign_name.split("_")[0] 切壞。
+        # 只取 8 碼十六進位（32 位元亂數，測試規模下撞名機率可忽略）：品牌名要留在
+        # ads_handoff._slug() 的 20 字元截斷門檻內，這裡本來就靠猜品牌測試比對整段名稱。
+        self.brand_name = f"虛構晨光咖啡{uuid.uuid4().hex[:8]}"
         self.brand = bi_repo.create_brand(main.conn, name=self.brand_name,
                                           client_name=None, actor=ACTOR)
         self.bid = self.brand["id"]

@@ -184,6 +184,18 @@ def demo() -> None:
     # 除不盡的組合也要加總精確——這是本票驗收清單明點的守恆要求
     odd = compute_curve("pulse", 17, 12345.67)
     assert round(sum(d["budget"] for d in odd), 2) == 12345.67
+
+    # due_schedule_change()：今天跟前一天的逐日金額不同才要提醒去 Meta 調整
+    cycle = {"start_date": "2026-08-01", "end_date": "2026-08-03"}
+    daily = [{"phase": "normal", "budget": 500}, {"phase": "normal", "budget": 700},
+             {"phase": "normal", "budget": 700}]
+    assert due_schedule_change(cycle, daily, "2026-08-01") is None       # 第一天沒有前一天可比
+    changed = due_schedule_change(cycle, daily, "2026-08-02")
+    assert changed["new_daily_budget"] == 700
+    assert due_schedule_change(cycle, daily, "2026-08-03") is None       # 跟前一天金額相同
+    assert due_schedule_change(cycle, [], "2026-08-02") is None          # 沒有逐日陣列
+    assert due_schedule_change(cycle, daily, "2026-07-31") is None       # 檔期還沒開始
+    assert due_schedule_change(cycle, daily, "2026-08-04") is None       # 檔期已結束
     print("pacing_curve 自檢通過")
 
 
