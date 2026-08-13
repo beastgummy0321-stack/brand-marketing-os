@@ -13,7 +13,9 @@ import os
 import shutil
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest import mock
 
 _tmpdir = tempfile.mkdtemp(prefix="brand_os_ads_auto_sync_")
 os.environ["BRAND_OS_DB"] = str(Path(_tmpdir) / "test.db")
@@ -31,6 +33,7 @@ from app.ads import sync as ads_sync  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
 from app.core import interrupts as core_interrupts  # noqa: E402
 from app.core import settings as coresettings  # noqa: E402
+from app.core.db import new_id, now_iso  # noqa: E402
 
 main.reopen_connection()
 
@@ -47,6 +50,7 @@ atexit.register(_cleanup)
 
 ACTOR = "測試員"
 TODAY = "2026-08-05"
+NO_NETWORK = lambda _url: True
 
 
 class _BaseAutoSyncTest(unittest.TestCase):
@@ -63,7 +67,7 @@ class _BaseAutoSyncTest(unittest.TestCase):
 
 class MetaAutoSyncTest(_BaseAutoSyncTest):
     def test_not_configured_skips_without_error(self):
-        outcome = ads_auto_sync.run(main.conn, today=TODAY)
+        outcome = ads_auto_sync.run(main.conn, today=TODAY, url_probe=NO_NETWORK)
         self.assertIsNone(outcome["meta"])
         self.assertEqual(core_interrupts.list_open(main.conn), [])
 
@@ -71,7 +75,8 @@ class MetaAutoSyncTest(_BaseAutoSyncTest):
         coresettings.set_setting(main.conn, ads_sync.ACCOUNT_SETTING, "act_123")
         coresettings.set_setting(main.conn, ads_sync.TOKEN_SETTING, "fake-token")
         fake = meta_api.FakeMetaClient(campaigns=[], insights=[])
-        outcome = ads_auto_sync.run(main.conn, today=TODAY, meta_client=fake)
+        outcome = ads_auto_sync.run(
+            main.conn, today=TODAY, meta_client=fake, url_probe=NO_NETWORK)
         self.assertIsNotNone(outcome["meta"])
         self.assertIsNone(outcome["meta"].error)
         # sync_account 沒收到 since 就自己往回推 30 天；驗證真的用了注入的 today，
@@ -85,7 +90,8 @@ class MetaAutoSyncTest(_BaseAutoSyncTest):
         coresettings.set_setting(main.conn, ads_sync.ACCOUNT_SETTING, "act_123")
         coresettings.set_setting(main.conn, ads_sync.TOKEN_SETTING, "fake-token")
         fake = meta_api.FakeMetaClient(error=meta_api.MetaApiError("模擬 Meta 連線失敗"))
-        outcome = ads_auto_sync.run(main.conn, today=TODAY, meta_client=fake)
+        outcome = ads_auto_sync.run(
+            main.conn, today=TODAY, meta_client=fake, url_probe=NO_NETWORK)
         self.assertEqual(outcome["meta"].error, "模擬 Meta 連線失敗")
         rows = core_interrupts.list_open(main.conn)
         self.assertEqual(len(rows), 1)
@@ -95,7 +101,7 @@ class MetaAutoSyncTest(_BaseAutoSyncTest):
         coresettings.set_setting(main.conn, ads_sync.ACCOUNT_SETTING, "act_123")
         coresettings.set_setting(main.conn, ads_sync.TOKEN_SETTING, "fake-token")
         fake = meta_api.FakeMetaClient(campaigns=[], insights=[])
-        ads_auto_sync.run(main.conn, today=TODAY, meta_client=fake)
+        ads_auto_sync.run(main.conn, today=TODAY, meta_client=fake, url_probe=NO_NETWORK)
         self.assertEqual(core_interrupts.list_open(main.conn), [])
 
     def test_repeated_same_day_failure_does_not_duplicate_interrupt(self):
@@ -104,14 +110,14 @@ class MetaAutoSyncTest(_BaseAutoSyncTest):
         coresettings.set_setting(main.conn, ads_sync.ACCOUNT_SETTING, "act_123")
         coresettings.set_setting(main.conn, ads_sync.TOKEN_SETTING, "fake-token")
         fake = meta_api.FakeMetaClient(error=meta_api.MetaApiError("模擬 Meta 連線失敗"))
-        ads_auto_sync.run(main.conn, today=TODAY, meta_client=fake)
-        ads_auto_sync.run(main.conn, today=TODAY, meta_client=fake)
+        ads_auto_sync.run(main.conn, today=TODAY, meta_client=fake, url_probe=NO_NETWORK)
+        ads_auto_sync.run(main.conn, today=TODAY, meta_client=fake, url_probe=NO_NETWORK)
         self.assertEqual(len(core_interrupts.list_open(main.conn)), 1)
 
 
 class GA4AutoSyncTest(_BaseAutoSyncTest):
     def test_not_configured_skips_without_error(self):
-        outcome = ads_auto_sync.run(main.conn, today=TODAY)
+        outcome = ads_auto_sync.run(main.conn, today=TODAY, url_probe=NO_NETWORK)
         self.assertEqual(outcome["ga4"], {})
 
     def test_configured_syncs_each_active_brand(self):
@@ -122,7 +128,8 @@ class GA4AutoSyncTest(_BaseAutoSyncTest):
         coresettings.set_setting(main.conn, ga4_sync.SERVICE_ACCOUNT_SETTING,
                                  '{"type": "service_account"}')
         fake = ga4_api.FakeGA4Client(rows=[])
-        outcome = ads_auto_sync.run(main.conn, today=TODAY, ga4_client=fake)
+        outcome = ads_auto_sync.run(
+            main.conn, today=TODAY, ga4_client=fake, url_probe=NO_NETWORK)
         # 跨測試共用同一顆 conn，先前測試建的品牌還在（既有慣例不整表清空，見同檔
         # 其他測試），只斷言「這兩個品牌都有跑到」，不要求剛好等於全部 active 品牌。
         self.assertIn(self.brand["id"], outcome["ga4"])
@@ -138,7 +145,8 @@ class GA4AutoSyncTest(_BaseAutoSyncTest):
         coresettings.set_setting(main.conn, ga4_sync.SERVICE_ACCOUNT_SETTING,
                                  '{"type": "service_account"}')
         fake = ga4_api.FakeGA4Client(error=ga4_api.GA4ApiError("模擬 GA4 連線失敗"))
-        outcome = ads_auto_sync.run(main.conn, today=TODAY, ga4_client=fake)
+        outcome = ads_auto_sync.run(
+            main.conn, today=TODAY, ga4_client=fake, url_probe=NO_NETWORK)
         self.assertEqual(outcome["ga4"][self.brand["id"]].error, "模擬 GA4 連線失敗")
         self.assertEqual(outcome["ga4"][brand_2["id"]].error, "模擬 GA4 連線失敗")
         rows = [r for r in core_interrupts.list_open(main.conn)
@@ -165,6 +173,94 @@ class AutoSyncScheduleSafetyTest(unittest.TestCase):
         client.get("/")
         client.get("/settings")
         self.assertEqual(main._last_auto_sync_check, before)
+
+    def test_live_cycle_runs_every_four_hours(self):
+        brand = bi_repo.create_brand(main.conn, name="虛構四小時排程", client_name=None, actor=ACTOR)
+        ts = now_iso()
+        main.conn.execute(
+            "INSERT INTO campaign_cycle (id, brand_id, product_scope_json, objective, currency,"
+            " start_date, end_date, channels_json, status, phase, created_at, updated_at)"
+            " VALUES (?, ?, '[]', 'sales', 'TWD', '2026-08-01', '2026-08-31', '[\"meta\"]',"
+            " 'LIVE', 'normal', ?, ?)",
+            (new_id("ccy"), brand["id"], ts, ts),
+        )
+        main.conn.commit()
+        main._last_auto_sync_check = None
+        start = datetime(2026, 8, 13, 0, 0, tzinfo=timezone.utc)
+        with mock.patch.object(ads_auto_sync, "run") as run:
+            main._auto_sync_if_due(start)
+            main._auto_sync_if_due(start + timedelta(hours=3, minutes=59))
+            main._auto_sync_if_due(start + timedelta(hours=4))
+        self.assertEqual(run.call_count, 2)
+
+    def test_without_live_cycle_runs_once_per_calendar_day(self):
+        main.conn.execute("UPDATE campaign_cycle SET status = 'CLOSED'")
+        main.conn.commit()
+        main._last_auto_sync_check = None
+        start = datetime(2026, 8, 13, 1, 0, tzinfo=timezone.utc)
+        with mock.patch.object(ads_auto_sync, "run") as run:
+            main._auto_sync_if_due(start)
+            main._auto_sync_if_due(start + timedelta(hours=22))
+            main._auto_sync_if_due(start + timedelta(days=1))
+        self.assertEqual(run.call_count, 2)
+
+    def test_cycle_checks_run_live_reminder_and_post_sync_chain(self):
+        brand = bi_repo.create_brand(main.conn, name="虛構同步檢查", client_name=None, actor=ACTOR)
+        ts = now_iso()
+        cycle_id = new_id("ccy")
+        main.conn.execute(
+            "INSERT INTO campaign_cycle (id, brand_id, product_scope_json, objective, currency,"
+            " start_date, end_date, channels_json, status, phase, created_at, updated_at)"
+            " VALUES (?, ?, '[]', 'sales', 'TWD', '2026-08-01', '2026-08-31', '[\"meta\"]',"
+            " 'LIVE', 'normal', ?, ?)",
+            (cycle_id, brand["id"], ts, ts),
+        )
+        main.conn.commit()
+        with (mock.patch.object(ads_auto_sync, "check_schedule_reminder") as reminder,
+              mock.patch.object(ads_auto_sync.tracking, "run_post_sync_checks") as post_check):
+            ads_auto_sync.run_cycle_checks(
+                main.conn, brand["id"], TODAY, url_probe=NO_NETWORK)
+        reminder.assert_called_once_with(main.conn, brand["id"], cycle_id, TODAY)
+        post_check.assert_called_once_with(
+            main.conn, brand["id"], today=TODAY, url_probe=NO_NETWORK)
+
+
+class ImmediateSyncTest(_BaseAutoSyncTest):
+    def setUp(self):
+        super().setUp()
+        ads_auto_sync._immediate_sync_cache.clear()
+        coresettings.set_setting(main.conn, ads_sync.ACCOUNT_SETTING, "act_123")
+        coresettings.set_setting(main.conn, ads_sync.TOKEN_SETTING, "fake-token")
+        coresettings.set_setting(main.conn, ga4_sync.PROPERTY_SETTING, "123456789")
+        coresettings.set_setting(main.conn, ga4_sync.SERVICE_ACCOUNT_SETTING,
+                                 '{"type": "service_account"}')
+
+    def test_immediate_sync_debounces_repeated_clicks(self):
+        meta = meta_api.FakeMetaClient(campaigns=[], insights=[])
+        ga4 = ga4_api.FakeGA4Client(rows=[])
+        start = datetime(2026, 8, 13, 8, 0, tzinfo=timezone.utc)
+        first = ads_auto_sync.sync_brand_now(
+            main.conn, self.brand["id"], ACTOR, meta_client=meta, ga4_client=ga4, now=start,
+            url_probe=NO_NETWORK)
+        second = ads_auto_sync.sync_brand_now(
+            main.conn, self.brand["id"], ACTOR, meta_client=meta, ga4_client=ga4,
+            now=start + timedelta(seconds=5), url_probe=NO_NETWORK)
+        self.assertEqual(first, second)
+        self.assertEqual(len([c for c in meta.calls if c[0] == "campaigns"]), 1)
+        self.assertEqual(len([c for c in ga4.calls if c[0] == "source_medium"]), 1)
+
+    def test_dashboard_sync_endpoint_returns_frontend_timestamp_shape(self):
+        timestamp = "2026-08-13T08:00:00+00:00"
+        with mock.patch.object(ads_auto_sync, "sync_brand_now", return_value=timestamp):
+            response = TestClient(main.app).post(f"/api/dashboard/brands/{self.brand['id']}/sync")
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["data"], {"updated_at": timestamp})
+
+    def test_dashboard_sync_endpoint_reports_sync_failure(self):
+        with mock.patch.object(ads_auto_sync, "sync_brand_now", side_effect=ValueError("同步失敗")):
+            response = TestClient(main.app).post(f"/api/dashboard/brands/{self.brand['id']}/sync")
+        self.assertEqual(response.status_code, 502, response.text)
+        self.assertEqual(response.json(), {"error": "同步失敗"})
 
 
 if __name__ == "__main__":

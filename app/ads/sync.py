@@ -25,6 +25,7 @@ from app.ads import meta_api
 from app.ads import performance as ads_performance
 from app.ads import repository as ads_repo
 from app.ads import theme_attribution
+from app.ads import tracking
 from app.brand_intelligence import repository as bi
 from app.core import settings as coresettings
 from app.core.audit import write_audit
@@ -267,7 +268,8 @@ def _cycle_for(conn, brand_id: str, meta_campaign_id: str,
 
 def sync_account(conn, actor: str, *, client=None, account_id: Optional[str] = None,
                  since: Optional[str] = None, until: Optional[str] = None,
-                 today: Optional[str] = None) -> SyncResult:
+                 today: Optional[str] = None,
+                 brand_id_filter: Optional[str] = None) -> SyncResult:
     """把帳號上的活動與成效抓回來。失敗一律回帶 error 的結果，不拋例外、不半途留髒資料。"""
     account_external = account_id or get_account_id(conn)
     if not account_external:
@@ -298,19 +300,38 @@ def sync_account(conn, actor: str, *, client=None, account_id: Optional[str] = N
         return SyncResult(error=str(exc))
 
     for campaign in campaigns:
+        previous = conn.execute(
+            "SELECT campaign_name FROM discovered_campaign WHERE ad_account_id = ?"
+            " AND meta_campaign_id = ?", (ad_account_id, campaign.campaign_id),
+        ).fetchone()
         if _upsert_discovered(conn, ad_account_id, campaign, ts):
             result.discovered += 1
+        if previous:
+            tracking.alert_campaign_renamed(
+                conn, ad_account_id, campaign.campaign_id,
+                previous["campaign_name"] or "", campaign.name)
+        tracking.suggest_cycle_mapping(
+            conn, ad_account_id, account_external, campaign.campaign_id)
 
     for insight in insights:
         if _upsert_discovered_from_insight(conn, ad_account_id, insight, ts):
             result.discovered += 1
+        tracking.suggest_cycle_mapping(
+            conn, ad_account_id, account_external, insight.campaign_id)
         brand_id = _claimed_brand_for(conn, ad_account_id, insight.campaign_id, insight.ad_id)
         if not brand_id:
             # 沒認領歸屬的活動，成效一律不收——寧可少一筆，也不把別的品牌的數字算進來
+            tracking.alert_unmapped_spend(
+                conn, ad_account_id, insight.campaign_id, insight.spend, insight.date_stop)
             result.skipped_unclaimed += 1
+            continue
+        if brand_id_filter and brand_id != brand_id_filter:
             continue
 
         cycle_id, mapping_id = _cycle_for(conn, brand_id, insight.campaign_id, insight.ad_id)
+        if cycle_id is None:
+            tracking.alert_unmapped_spend(
+                conn, ad_account_id, insight.campaign_id, insight.spend, insight.date_stop)
 
         if cycle_id is None:
             if brand_id not in brand_level_seen_signatures:

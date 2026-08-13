@@ -28,7 +28,7 @@
 
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -98,24 +98,30 @@ def _purge_expired_llm_task_content_if_new_day() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 每日自動同步（票 07-auto-sync，規格 0001「應用程式啟動時註冊程式內排程」）
+# 自動同步（LIVE 每四小時、其餘每日；應用程式啟動時註冊程式內排程）
 # ---------------------------------------------------------------------------
 
-_last_auto_sync_check: Optional[str] = None  # 同上兩個「跨日才做一次」旗標，同一套慣例
-_AUTO_SYNC_POLL_SECONDS = 3600  # 背景執行緒多久檢查一次是不是跨日了，不必精準到秒
+_last_auto_sync_check: Optional[datetime] = None
+_AUTO_SYNC_POLL_SECONDS = 3600  # 每小時檢查是否已到四小時或跨日門檻
 
 
-def _auto_sync_if_new_day() -> None:
-    """跨日才真的跑一次自動同步（比照 `_backup_if_new_day` 同一套「跨日旗標」寫法）。"""
+def _auto_sync_if_due(now: Optional[datetime] = None) -> None:
+    """LIVE 檔期每四小時同步；其餘狀態維持每日一次。"""
     global _last_auto_sync_check
-    today = datetime.now(timezone.utc).date().isoformat()
-    if today != _last_auto_sync_check:
-        ads_auto_sync.run(web.conn, today=today)
-        _last_auto_sync_check = today
+    now = now or datetime.now(timezone.utc)
+    has_live = bool(web.conn.execute(
+        "SELECT 1 FROM campaign_cycle WHERE status = 'LIVE' AND archived = 0 LIMIT 1"
+    ).fetchone())
+    due = (_last_auto_sync_check is None
+           or (has_live and now - _last_auto_sync_check >= timedelta(hours=4))
+           or (not has_live and now.date() != _last_auto_sync_check.date()))
+    if due:
+        ads_auto_sync.run(web.conn, today=now.date().isoformat())
+        _last_auto_sync_check = now
 
 
 def _auto_sync_loop() -> None:
-    """背景執行緒，每小時檢查一次是否跨日——用背景執行緒而不是像備份那樣掛在
+    """背景執行緒，每小時檢查同步門檻——用背景執行緒而不是像備份那樣掛在
     `_daily_backup_middleware`（每個 HTTP 請求都會跑一次），是因為自動同步會打外部
     API：絕不能讓它被測試的 TestClient 請求意外觸發。這個迴圈只掛在 FastAPI
     `startup` 事件底下才會啟動，而 `TestClient(app)`（不用 `with` context manager，
@@ -123,7 +129,7 @@ def _auto_sync_loop() -> None:
     這條路徑，見 app/tests/test_ads_auto_sync.py 檔頭驗證過的行為。"""
     while True:
         time.sleep(_AUTO_SYNC_POLL_SECONDS)
-        _auto_sync_if_new_day()
+        _auto_sync_if_due()
 
 
 _backup_if_new_day()  # process 啟動時先跑一次（app.shared.web import 時已開好連線）
@@ -177,8 +183,8 @@ if _FRONTEND_DIST.is_dir():
 @app.on_event("startup")
 def _register_auto_sync_schedule() -> None:
     """票 07-auto-sync：應用程式啟動時註冊程式內排程。啟動當下先跑一次（不等第一個
-    小時），之後交給背景執行緒每小時檢查是否跨日。"""
-    _auto_sync_if_new_day()
+    小時），之後交給背景執行緒每小時檢查四小時／每日門檻。"""
+    _auto_sync_if_due()
     threading.Thread(target=_auto_sync_loop, daemon=True).start()
 
 

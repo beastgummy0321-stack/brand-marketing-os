@@ -20,6 +20,7 @@ from fastapi.responses import JSONResponse
 import app.shared.web as main_mod
 from app.ads import budget as budget_calc
 from app.ads import account_structure
+from app.ads import auto_sync as ads_auto_sync
 from app.ads import plan as ads_plan
 from app.ads import repository as ads_repo
 from app.ads import routes as ads_routes
@@ -28,13 +29,11 @@ from app.ads import stages
 from app.ads import target_cpa
 from app.ads import theme_batch
 from app.ads.nextcycle import list_pending_rule_cards
-from app.ads.pacing_curve import due_schedule_change
 from app.ads.routes_common import (
     DURATION_TIER_CONFIG, OBJECTIVES, _crumb, _cycle_view, _duration_suggestion,
     _recommended_objective, _require_cycle, _slider_options, derive_cycle_stage,
 )
 from app.brand_intelligence import repository as bi
-from app.core import interrupts as core_interrupts
 from app.core import settings as core_settings
 
 router = APIRouter()
@@ -337,17 +336,8 @@ async def rule_cards_learned(brand_id: str, cycle_id: str):
 async def schedule_reminder(brand_id: str, cycle_id: str):
     main_mod.require_brand(brand_id)
     conn = main_mod.conn
-    cycle = _require_cycle(brand_id, cycle_id)
-    plan = ads_repo.derived_plan(cycle)
+    _require_cycle(brand_id, cycle_id)
     today = date.today().isoformat()
-    reminder = due_schedule_change(cycle, plan.get("daily_budgets") or [], today)
-    if reminder:
-        # S8R.10：到期當天同一段文字也送進收件匣，去重鍵含日期，同一天不重複轟炸。
-        message = reminder["copy_text"][:30]
-        core_interrupts.enqueue(
-            conn, category="pacing_schedule_due", dedupe_key=f"schedule:{cycle_id}:{today}",
-            brand_id=brand_id, message=message,
-            action_url=f"/brands/{brand_id}/ads/{cycle_id}",
-        )
-        conn.commit()
+    reminder = ads_auto_sync.check_schedule_reminder(conn, brand_id, cycle_id, today)
+    conn.commit()
     return _envelope(reminder)

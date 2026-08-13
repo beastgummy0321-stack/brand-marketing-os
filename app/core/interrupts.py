@@ -42,6 +42,9 @@ CATEGORIES = {
     "hypothesis_unresolved": {"severity": "informational", "label": "假設待結案"},  # 票 #53
     "prototype_phase_ended": {"severity": "rule_warning", "label": "原型階段結束提醒"},  # 修憲落地 A6
     "auto_sync_failed": {"severity": "rule_warning", "label": "自動同步失敗"},  # 票 07-auto-sync
+    "burn_no_cycle": {"severity": "rule_warning", "label": "廣告花費未對應檔期"},
+    "campaign_renamed": {"severity": "informational", "label": "Meta 活動名稱被改"},
+    "tracking_broken": {"severity": "informational", "label": "廣告追蹤斷鏈"},
     # 燒太快是「錢有風險」不是「錢已損失」：money_loss 會把品牌燈號直接判紅，
     # code review 2026-08-06 定調降為 rule_warning（真的賠錢由判讀狀態機負責喊）。
     "pacing_overspend": {"severity": "rule_warning", "label": "檔期步調－燒太快"},  # 票 08-pacing-alert

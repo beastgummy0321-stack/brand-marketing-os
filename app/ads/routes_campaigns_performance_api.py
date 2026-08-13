@@ -52,6 +52,8 @@ async def performance_get(brand_id: str, cycle_id: str):
 
     totals = ads_performance.totals(conn, brand_id, cycle_id)
     snapshots = ads_performance.list_snapshots(conn, brand_id, cycle_id)
+    last_synced_at = max(
+        (s["snapshot_taken_at"] for s in snapshots if s.get("snapshot_taken_at")), default=None)
     # `PerformanceSummary | null`（`warroomApi.ts`）：一筆成效資料都沒有時回 null，
     # 前端顯示「資料不足，還沒有可以算的成效數字」空狀態，不是全 0 的表格（鐵則 16）。
     summary = None if totals["rows"] == 0 else {
@@ -75,7 +77,8 @@ async def performance_get(brand_id: str, cycle_id: str):
         }
         confidence_label = f"{result.get('statistical_level_label', '')}尚未完成對帳三題自答，可信度中等".strip()
 
-    return _envelope({"summary": summary, "reading": reading, "confidence_label": confidence_label})
+    return _envelope({"summary": summary, "reading": reading,
+                      "confidence_label": confidence_label, "last_synced_at": last_synced_at})
 
 
 @router.post("/api/campaigns/{brand_id}/{cycle_id}/performance/simulate")

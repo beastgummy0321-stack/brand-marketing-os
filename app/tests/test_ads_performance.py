@@ -299,6 +299,32 @@ class CsvImportTest(_BaseImportTest):
         self.assertEqual(summary["revenue"], 0)  # 顯示總額仍是 0，不是 None（避免模板格式化炸掉）
 
 
+class MixedGranularityTotalsTest(_BaseImportTest):
+    def _snapshot(self, start: str, end: str, spend: float, clicks: int):
+        ts = now_iso()
+        main.conn.execute(
+            "INSERT INTO performance_snapshot (id, brand_id, campaign_cycle_id, platform,"
+            " account_id, meta_campaign_id, meta_adset_id, meta_ad_id, date_range_start,"
+            " date_range_end, as_of_date, snapshot_taken_at, currency, impressions, clicks,"
+            " spend, conversions, revenue, reconciled, source, quarantined, created_at)"
+            " VALUES (?, ?, ?, 'meta', 'act_1', 'cmp_1', 'set_1', 'ad_1', ?, ?, ?, ?, 'TWD',"
+            " 100, ?, ?, 1, 1000, 1, 'meta_api', 0, ?)",
+            (new_id("psn"), self.bid, self.cycle_id, start, end, end, ts, clicks, spend, ts),
+        )
+        main.conn.commit()
+
+    def test_daily_rows_supersede_overlapping_old_aggregate(self):
+        self._snapshot("2026-08-01", "2026-08-02", 300, 30)
+        self._snapshot("2026-08-01", "2026-08-01", 100, 10)
+        self._snapshot("2026-08-02", "2026-08-02", 200, 20)
+
+        totals = perf.totals(main.conn, self.bid, self.cycle_id)
+
+        self.assertEqual(totals["rows"], 2)
+        self.assertEqual(totals["spend"], 300)
+        self.assertEqual(totals["clicks"], 30)
+
+
 class RoasDirectImportTest(_BaseImportTest):
     """真實檔驗證回饋：使用者的 Meta 樣板沒有 revenue 欄，只有算好的「成果 ROAS」欄。"""
 

@@ -8,9 +8,11 @@
 import os
 from datetime import datetime, timezone
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
+from fastapi.responses import JSONResponse
 
 import app.shared.web as main_mod
+from app.ads import auto_sync as ads_auto_sync
 from app.dashboard import repository as dashboard_repo
 
 router = APIRouter(prefix="/api/dashboard")
@@ -39,5 +41,19 @@ async def cockpit(brand_id: str):
     data["brand_name"] = brand["name"]
     return {
         "data": data,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+@router.post("/brands/{brand_id}/sync")
+async def sync_brand(request: Request, brand_id: str):
+    main_mod.require_brand(brand_id)
+    actor = main_mod.require_actor(request)
+    try:
+        updated_at = ads_auto_sync.sync_brand_now(main_mod.conn, brand_id, actor)
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=502)
+    return {
+        "data": {"updated_at": updated_at},
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }

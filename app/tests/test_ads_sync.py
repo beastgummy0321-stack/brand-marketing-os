@@ -110,6 +110,18 @@ class InsightParsingTest(unittest.TestCase):
         self.assertIn("reach", captured["fields"])
         self.assertIn("frequency", captured["fields"])
 
+    def test_list_insights_requests_daily_rows_from_now_on(self):
+        client = meta_api.MetaClient("fake-token")
+        captured = {}
+
+        def _fake_get(path, params):
+            captured.update(params)
+            return {"data": []}
+
+        client._get = _fake_get
+        client.list_insights("act_1", "2026-08-01", "2026-08-14")
+        self.assertEqual(captured["time_increment"], 1)
+
     def test_list_insights_without_breakdowns_omits_the_param(self):
         """I2：純新增能力，沒指定 breakdowns 時參數維持原樣，不影響既有同步行為。"""
         client = meta_api.MetaClient("fake-token")

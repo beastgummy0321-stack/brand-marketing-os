@@ -157,9 +157,10 @@ class MetaClient:
                          effective_status=r.get("effective_status")) for r in rows]
 
     def list_insights(self, account_id: str, since: str, until: str,
-                      breakdowns: Optional[tuple] = None) -> list:
+                      breakdowns: Optional[tuple] = None, time_increment: int = 1) -> list:
         params = {
             "level": "ad", "time_range": f'{{"since":"{since}","until":"{until}"}}',
+            "time_increment": time_increment,
             "fields": "campaign_id,campaign_name,adset_id,ad_id,date_start,date_stop,"
                      "impressions,clicks,spend,actions,action_values,reach,frequency",
             "limit": 200,
@@ -279,7 +280,8 @@ class FakeMetaClient:
             raise self.error
         return list(self._campaigns)
 
-    def list_insights(self, account_id: str, since: str, until: str) -> list:
+    def list_insights(self, account_id: str, since: str, until: str,
+                      breakdowns: Optional[tuple] = None, time_increment: int = 1) -> list:
         self.calls.append(("insights", account_id, since, until))
         if self.error:
             raise self.error

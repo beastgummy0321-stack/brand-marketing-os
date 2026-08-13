@@ -357,21 +357,53 @@ def import_manual(conn, brand_id: str, cycle_id: str, values: dict, *, actor: st
 # 彙總與 KPI（確定性計算，不經 LLM）
 # ---------------------------------------------------------------------------
 
+def _cycle_rows_for_totals(conn, brand_id: str, cycle_id: str,
+                           include_quarantined: bool) -> list:
+    """日粒度上線後，較細的 Meta 日列取代同一廣告、同期間的舊聚合列。"""
+    sql = ("SELECT * FROM performance_snapshot WHERE brand_id = ?"
+           " AND campaign_cycle_id = ?")
+    if not include_quarantined:
+        sql += " AND quarantined = 0"
+    rows = [dict(row) for row in conn.execute(sql, (brand_id, cycle_id))]
+    daily_dates: dict = {}
+    for row in rows:
+        if (row["source"] != "meta_api" or row["date_range_start"] != row["date_range_end"]
+                or not row.get("meta_campaign_id")):
+            continue
+        identity = (row.get("account_id"), row["meta_campaign_id"], row.get("meta_adset_id"),
+                    row.get("meta_ad_id"))
+        daily_dates.setdefault(identity, set()).add(row["date_range_start"])
+
+    def superseded(row: dict) -> bool:
+        if (row["source"] != "meta_api" or row["date_range_start"] == row["date_range_end"]
+                or not row.get("meta_campaign_id")):
+            return False
+        identity = (row.get("account_id"), row["meta_campaign_id"], row.get("meta_adset_id"),
+                    row.get("meta_ad_id"))
+        return any(row["date_range_start"] <= day <= row["date_range_end"]
+                   for day in daily_dates.get(identity, ()))
+
+    return [row for row in rows if not superseded(row)]
+
+
 def totals(conn, brand_id: str, cycle_id: str, include_quarantined: bool = False) -> dict:
     """本期成效加總。預設**不含**隔離區的資料——壞數字不進結論。"""
     # revenue 額外多算一份不 COALESCE 的版本（revenue_raw）只給 KPI 用：COALESCE 過的 0
     # 分不出「營收確實是 0」跟「這期完全沒收集營收資料」，後者要讓 roas 回 None，
     # 不能悄悄算成 0（issue #23 bug 2；鐵則 16）。顯示用的 revenue 欄位維持 COALESCE，
     # 不然沒收營收資料時模板格式化 None 會直接炸掉。
-    sql = ("SELECT COALESCE(SUM(impressions),0) impressions, COALESCE(SUM(clicks),0) clicks,"
-           " COALESCE(SUM(spend),0) spend, COALESCE(SUM(conversions),0) conversions,"
-           " COALESCE(SUM(revenue),0) revenue, COALESCE(SUM(reach),0) reach,"
-           " SUM(revenue) revenue_raw, COUNT(*) rows"
-           " FROM performance_snapshot WHERE brand_id = ? AND campaign_cycle_id = ?")
-    if not include_quarantined:
-        sql += " AND quarantined = 0"
-    row = dict(conn.execute(sql, (brand_id, cycle_id)).fetchone())
-    revenue_raw = row.pop("revenue_raw")
+    rows = _cycle_rows_for_totals(conn, brand_id, cycle_id, include_quarantined)
+    revenue_values = [r["revenue"] for r in rows if r["revenue"] is not None]
+    row = {
+        "impressions": sum(r["impressions"] or 0 for r in rows),
+        "clicks": sum(r["clicks"] or 0 for r in rows),
+        "spend": sum(r["spend"] or 0 for r in rows),
+        "conversions": sum(r["conversions"] or 0 for r in rows),
+        "revenue": sum(revenue_values),
+        "reach": sum(r["reach"] or 0 for r in rows),
+        "rows": len(rows),
+    }
+    revenue_raw = sum(revenue_values) if revenue_values else None
     row["kpis"] = compute_kpis({**row, "revenue": revenue_raw})
     return row
 

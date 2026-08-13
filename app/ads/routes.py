@@ -245,7 +245,9 @@ from app.ads import routes_campaigns_list_api  # noqa: E402
 from app.ads import routes_campaigns_open_api  # noqa: E402
 from app.ads import routes_campaigns_handoff_api  # noqa: E402
 from app.ads import routes_campaigns_performance_api  # noqa: E402
+from app.ads import routes_tracking_api  # noqa: E402
 router.include_router(routes_campaigns_list_api.router)
 router.include_router(routes_campaigns_open_api.router)
 router.include_router(routes_campaigns_handoff_api.router)
 router.include_router(routes_campaigns_performance_api.router)
+router.include_router(routes_tracking_api.router)
