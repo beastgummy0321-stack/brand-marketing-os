@@ -12,6 +12,7 @@
 對外進入點：本檔的 `router`。誰依賴它：只有 `app/ads/routes.py`。
 """
 
+import time
 from datetime import date
 
 from fastapi import APIRouter, Request
@@ -233,14 +234,31 @@ async def plan_generate(request: Request, brand_id: str, cycle_id: str):
 
 @router.get("/api/campaigns/{brand_id}/{cycle_id}/plan/status")
 async def plan_status(brand_id: str, cycle_id: str):
+    """輪詢端點：沿用舊 Jinja `ads_plan_progress`（routes_plan.py）同一套背景執行緒／逾時
+    判斷，只是把「轉址＋帶訊息」換成「JSON 狀態＋人話訊息」——同一個 `_progress_state`
+    底層，不是第二套生成邏輯。entry 不存在（從沒生成過或已被消化）一律視為 done，
+    這裡本來就是「已經有結果可以看」的意思，不是失敗。"""
     main_mod.require_brand(brand_id)
     _require_cycle(brand_id, cycle_id)
     key = ads_routes._progress_key("plan", brand_id, cycle_id)
     entry = ads_routes._progress_state.get(key)
-    if entry is None or entry["status"] == "done":
-        ads_routes._progress_clear(key)
+    if entry is None:
         return _envelope({"status": "done"})
-    return _envelope({"status": "running"})
+    if entry["status"] != "done":
+        if time.time() - entry["started_at"] > ads_routes._PROGRESS_TIMEOUT_SECONDS:
+            ads_routes._progress_clear(key)
+            return _envelope({"status": "failed",
+                               "message": "AI 這次沒有在時間內回應。你的資料都還在，沒有掉。"
+                                          "可以再試一次，或先跳過這一步。"})
+        return _envelope({"status": "running"})
+    outcome_kind, payload = entry["result"]
+    ads_routes._progress_clear(key)
+    if outcome_kind == "error":
+        return _envelope({"status": "failed", "message": payload})
+    ok, err = payload
+    if not ok:
+        return _envelope({"status": "failed", "message": err})
+    return _envelope({"status": "done"})
 
 
 @router.get("/api/campaigns/{brand_id}/{cycle_id}/plan/options")

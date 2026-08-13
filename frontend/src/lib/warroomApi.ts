@@ -408,7 +408,10 @@ export const archiveCycle = (brandId: string, cycleId: string): Promise<void> =>
 
 // ---- 企劃（S8.12-22）----
 export const startPlanGeneration = (brandId: string, cycleId: string): Promise<void> => postJson(`${cycleBase(brandId, cycleId)}/plan/generate`);
-export const fetchPlanStatus = (brandId: string, cycleId: string): Promise<{ status: "running" | "done" }> =>
+export const fetchPlanStatus = (
+  brandId: string,
+  cycleId: string,
+): Promise<{ status: "running" | "done" | "failed"; message?: string }> =>
   getJson(`${cycleBase(brandId, cycleId)}/plan/status`);
 export const fetchPlanOptions = (
   brandId: string,

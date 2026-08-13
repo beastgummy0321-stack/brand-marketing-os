@@ -1,8 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   approvePlan,
   decideDissent,
   fetchPlanOptions,
+  fetchPlanStatus,
   fetchRuleCardsLearned,
   fetchScheduleReminder,
   selectPlanOption,
@@ -23,15 +24,28 @@ import { Badge } from "../shared/Badge";
 type LoadState =
   | { status: "idle" }
   | { status: "generating" }
+  | { status: "generate-failed"; message: string }
   | { status: "ready"; options: PlanOption[]; structure: AccountStructure; dissents: Dissent[] };
+
+const POLL_INTERVAL_MS = 3000;
+const POLL_TIMEOUT_MS = 180_000;
 
 /** 企劃（S8.12-22，吸收 `ads_plan_select.html`＋`ads_cycle.html` 計畫區塊）：依 `cycle.status`
  * 分三段——PLANNING 沒方案要先產出；PLAN_SELECT 待選方案；REVIEW（含之後）已選定計畫確認卡。
- * 「AI 出方案進行中」真後端沿用既有 `_progress_state` 90 秒逾時機制（契約「背景生成等待態」
- * 節，不是本票新設計）；原型用 1.5 秒 `setTimeout` 示意同一段等待態畫面，不架一套假輪詢
- * 伺服器（跳過了什麼：見交付報告）。 */
+ * 「AI 出方案進行中」真輪詢 `GET .../plan/status`，沿用既有 `_progress_state` 90 秒逾時機制
+ * （routes_campaigns_open_api.py plan_status，跟舊 Jinja `ads_plan_progress` 同一份底層狀態，
+ * 不是兩套邏輯）；前端每 3 秒問一次，180 秒還沒問到 done／failed 就當作卡住讓使用者重試
+ * （本機端額外的保險，後端本身 90 秒就會先回 failed）。 */
 export function PlanStep({ brandId, cycle, onApproved, onRefresh }: { brandId: string; cycle: Cycle; onApproved: () => void; onRefresh: () => void }) {
   const [state, setState] = useState<LoadState>({ status: "idle" });
+  const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pollDeadlineRef = useRef(0);
+
+  useEffect(() => {
+    return () => {
+      if (pollTimerRef.current) clearInterval(pollTimerRef.current);
+    };
+  }, []);
   const [pacing, setPacing] = useState<PacingStrategy>(cycle.pacing_strategy);
   const [pacingReason, setPacingReason] = useState(cycle.pacing_reason);
   const [ruleCards, setRuleCards] = useState<RuleCardLearned[]>([]);
@@ -55,12 +69,46 @@ export function PlanStep({ brandId, cycle, onApproved, onRefresh }: { brandId: s
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [brandId, cycle.id, alreadyGenerated]);
 
+  function stopPolling() {
+    if (pollTimerRef.current) {
+      clearInterval(pollTimerRef.current);
+      pollTimerRef.current = null;
+    }
+  }
+
+  async function pollOnce() {
+    if (Date.now() > pollDeadlineRef.current) {
+      stopPolling();
+      setState({ status: "generate-failed", message: "花比較久，稍後重新整理看看。" });
+      return;
+    }
+    try {
+      const res = await fetchPlanStatus(brandId, cycle.id);
+      if (res.status === "done") {
+        stopPolling();
+        onRefresh();
+      } else if (res.status === "failed") {
+        stopPolling();
+        setState({ status: "generate-failed", message: res.message ?? "產生方案失敗，請稍後再試。" });
+      }
+      // status === "running"：什麼都不做，等下一次輪詢。
+    } catch (err) {
+      stopPolling();
+      setState({ status: "generate-failed", message: err instanceof Error ? err.message : "產生方案失敗，請稍後再試。" });
+    }
+  }
+
   async function generate() {
     setState({ status: "generating" });
-    await startPlanGeneration(brandId, cycle.id);
-    // 真後端沿用 app/ads/routes.py 既有 90 秒逾時的 `_progress_state` 輪詢機制；原型用
-    // 固定延遲示意同一段等待態，不架一套假輪詢伺服器（見交付報告「跳過了什麼」）。
-    setTimeout(() => onRefresh(), 1500);
+    try {
+      await startPlanGeneration(brandId, cycle.id);
+    } catch (err) {
+      setState({ status: "generate-failed", message: err instanceof Error ? err.message : "產生方案失敗，請稍後再試。" });
+      return;
+    }
+    pollDeadlineRef.current = Date.now() + POLL_TIMEOUT_MS;
+    stopPolling();
+    pollTimerRef.current = setInterval(() => void pollOnce(), POLL_INTERVAL_MS);
   }
 
   async function pickOption(optionId: string) {
@@ -94,6 +142,17 @@ export function PlanStep({ brandId, cycle, onApproved, onRefresh }: { brandId: s
       return (
         <div className="rounded-lg border border-border bg-card p-6 text-sm text-muted-foreground shadow-[var(--shadow-card)]">
           AI 正在出方案，通常一到兩分鐘…
+        </div>
+      );
+    }
+    if (state.status === "generate-failed") {
+      return (
+        <div className="flex flex-col gap-3 rounded-lg border border-danger/30 bg-danger/10 p-6 shadow-[var(--shadow-card)]">
+          <h2 className="font-display text-lg text-foreground">出方案失敗</h2>
+          <p className="text-sm text-danger">{state.message}</p>
+          <button type="button" onClick={() => void generate()} className="self-start rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90">
+            再試一次
+          </button>
         </div>
       );
     }
