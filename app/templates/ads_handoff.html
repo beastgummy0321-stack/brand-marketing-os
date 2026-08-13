@@ -141,6 +141,9 @@
 
   {% if codes %}
   <p class="section-desc">
+    官網走 GA4／Pixel 就能追蹤來源，這組配碼只有蝦皮、藥局現場等追不到來源的通路才需要。
+  </p>
+  <p class="section-desc">
     照下面的設定去 EasyStore 後台建立這兩組折扣碼——廣告碼放進廣告的到達頁／文案，
     口播碼給親友、口頭推廣用，訂單用哪組碼系統就認得出是不是廣告帶來的。
   </p>
@@ -226,6 +229,7 @@
   {% endif %}
 
   {% else %}
+  <p class="section-desc">官網走 GA4／Pixel 就能追蹤來源，這組配碼只有蝦皮、藥局現場等追不到來源的通路才需要。</p>
   <p class="section-desc">還沒配碼。字碼、使用上限、效期系統自動決定，折數是行銷決策，填一下就好。</p>
   <form method="post" action="/brands/{{ brand.id }}/ads/{{ cycle.id }}/handoff/codes">
     {% call field('discount_type', '折扣類型', required=True) %}
