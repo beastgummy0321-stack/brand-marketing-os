@@ -32,10 +32,48 @@ from app.brand_intelligence import repository as repo
 from app.core import cleanup
 from app.core import settings as core_settings
 from app.core.db import new_id
+from app.llm import gateway, providers
 from app.shared import web
 from app.shared.web import NotFoundKind, clean, require_actor, require_brand
 
 router = APIRouter()
+
+PROVIDER = providers.AnthropicProvider()
+PARSE_FAIL_MESSAGE = cv_mod.PARSE_FAIL_MESSAGE
+COST_CUSTOMER_VOICE_EXTRACTION = cv_mod.COST_CUSTOMER_VOICE_EXTRACTION
+
+
+def extract(conn, brand_id: str, *, actor: str, raw_text: str, source_channel: str,
+            source_detail: Optional[str] = None, source_type: str = "manual") -> tuple:
+    """抽取一筆顧客原話並入庫。成功回 (True, row)；失敗回 (False, 人話錯誤)，不入庫。"""
+    brand = repo.get_brand(conn, brand_id)
+    if brand is None:
+        raise ValueError(f"找不到品牌：{brand_id}")
+
+    user_text = cv_mod._build_user_text(raw_text, source_channel, source_detail)
+    context = gateway.TaskContext(
+        context_scope={"brand_id": brand_id}, knowledge_item_ids=[],
+        brand_version=brand["knowledge_version"],
+    )
+    task = gateway.run_task(
+        conn, PROVIDER, brand_id=brand_id, task_type="customer_voice_extraction",
+        prompt_template_id="customer_voice_extraction", prompt_template_version="v1",
+        system=cv_mod._SYSTEM, messages=[{"role": "user", "content": user_text}], context=context,
+    )
+    if task["status"] != "succeeded":
+        return False, task["error"]
+
+    data = gateway.parse_json_reply(task["rendered_output"])
+    extraction = cv_mod._normalize_extraction(data)
+    if extraction is None:
+        return False, PARSE_FAIL_MESSAGE
+
+    row = repo.create_customer_voice(
+        conn, brand_id, actor=actor, raw_text=raw_text, source_channel=source_channel,
+        source_detail=source_detail, source_type=source_type, extraction=extraction,
+        llm_task_id=task["id"],
+    )
+    return True, row
 
 
 # ---------------------------------------------------------------------------
@@ -194,7 +232,7 @@ _cv_jobs = background_job.JobRegistry()
 
 def _cv_notify(brand_id: str, job_key: str, message: str) -> None:
     background_job.notify(
-        brand_id, category="customer_voice_extraction_done", dedupe_key=job_key,
+        web.conn, brand_id, category="customer_voice_extraction_done", dedupe_key=job_key,
         message=message, action_url=f"/brands/{brand_id}/hub?tab=customer-voice",
     )
 
@@ -202,7 +240,7 @@ def _cv_notify(brand_id: str, job_key: str, message: str) -> None:
 def _run_customer_voice_job(job_key: str, brand_id: str, actor: str, raw_text: str,
                              source_channel: str, source_detail: Optional[str]) -> None:
     try:
-        ok, result = cv_mod.extract(
+        ok, result = extract(
             web.conn, brand_id, actor=actor, raw_text=raw_text,
             source_channel=source_channel, source_detail=source_detail,
         )

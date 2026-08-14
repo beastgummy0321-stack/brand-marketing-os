@@ -1,23 +1,10 @@
 # -*- coding: utf-8 -*-
-"""app/brand_intelligence/report.py — 顧問分析報告的唯一生成邏輯（決策 0017、GitHub issue #4）。
+"""app/brand_intelligence/report.py — 顧問分析報告的純資料函式（決策 0017、GitHub issue #4）。
 
-同一份品牌資料的第二種出口：context_compiler 組出的已確認事實／規則／宣稱，交給模型
-整理成給人讀的五章報告（品牌定位／市場與競爭觀察／受眾洞察／可用宣稱與紅線／建議節奏方向）。
-
-資料不足也照樣生成（決策 0013 用戶優先，不因資料少就擋按鈕）；生成失敗（無金鑰、逾時、
-格式壞）一律回 (False, 人話錯誤)，不入庫、不留半份報告（principles 誠實狀態）。
-
-測試整包把模組層 PROVIDER 換成 FakeProvider（比照 app/intake/ai.py 的風格），不發真實網路請求。
+組提示詞與驗證模型回覆的資料形狀；AI 呼叫留在 app.brand_web.routes。
 """
 
-from datetime import date
 from typing import Optional
-
-from app.brand_intelligence import repository as repo
-from app.llm import context_compiler, gateway, providers
-
-# 測試可整個換掉
-PROVIDER = providers.AnthropicProvider()
 
 # 五章固定順序、固定 key（只存在程式與 JSON 裡，畫面一律顯示中文章名，見 main.py REPORT_SECTIONS）
 SECTION_KEYS = ("positioning", "market", "audience", "claims", "rhythm")
@@ -96,41 +83,3 @@ def _build_user_text(brand: dict, products: list, context_text: str,
         '}'
     )
     return "\n\n".join(parts)
-
-
-def generate(conn, brand_id: str, actor: str) -> tuple:
-    """生成一份顧問分析報告並入庫。成功回 (True, None)；失敗回 (False, 人話錯誤)，不入庫。"""
-    brand = repo.get_brand(conn, brand_id)
-    if brand is None:
-        raise ValueError(f"找不到品牌：{brand_id}")
-
-    context_text, knowledge_item_ids, brand_version, _ = context_compiler.compile(conn, brand_id)
-    products = [p["name"] for p in repo.list_products(conn, brand_id)]
-    source_fact_count = len(knowledge_item_ids)
-    today = date.today().isoformat()
-
-    user_text = _build_user_text(brand, products, context_text, source_fact_count, today)
-
-    context = gateway.TaskContext(
-        context_scope={"brand_id": brand_id}, knowledge_item_ids=knowledge_item_ids,
-        brand_version=brand_version,
-    )
-    task = gateway.run_task(
-        conn, PROVIDER, brand_id=brand_id, task_type="brand_report",
-        prompt_template_id="brand_report", prompt_template_version="v1",
-        system=_SYSTEM, messages=[{"role": "user", "content": user_text}], context=context,
-        options=gateway.TaskOptions(max_tokens=16000),
-    )
-    if task["status"] != "succeeded":
-        return False, task["error"]
-
-    data = gateway.parse_json_reply(task["rendered_output"])
-    sections = _normalize_sections(data)
-    if sections is None:
-        return False, PARSE_FAIL_MESSAGE
-
-    repo.create_brand_report(
-        conn, brand_id, actor=actor, model=task["model"], llm_task_id=task["id"],
-        brand_version=brand_version, source_fact_count=source_fact_count, sections=sections,
-    )
-    return True, None

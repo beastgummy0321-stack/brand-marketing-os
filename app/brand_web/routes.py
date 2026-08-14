@@ -20,7 +20,7 @@ app/intake 反向 import（main → ads.routes → main 的循環）。拆出來
 
 import os
 import re
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -28,6 +28,7 @@ from fastapi import APIRouter, File, Form, Request, UploadFile
 from fastapi.responses import FileResponse, RedirectResponse
 
 from app import mock_data as md
+from app.brand_web import product_ai_calls
 from app.brand_intelligence import customer_voice as cv_mod
 from app.brand_intelligence import product_ai
 from app.brand_intelligence import report as brand_report_mod
@@ -39,6 +40,7 @@ from app.core import interrupts as core_interrupts
 from app.core import prototype_phase as core_prototype_phase
 from app.core.db import new_id
 from app.intake import state as intake_state
+from app.llm import context_compiler, gateway, providers
 from app.shared import web
 from app.shared.web import (
     NotFoundKind,
@@ -62,6 +64,47 @@ from app.shared.web import (
 )
 
 router = APIRouter()
+
+PROVIDER = providers.AnthropicProvider()
+SECTION_KEYS = brand_report_mod.SECTION_KEYS
+PARSE_FAIL_MESSAGE = brand_report_mod.PARSE_FAIL_MESSAGE
+
+
+def generate(conn, brand_id: str, actor: str) -> tuple:
+    """生成一份顧問分析報告並入庫。成功回 (True, None)；失敗回 (False, 人話錯誤)，不入庫。"""
+    brand = repo.get_brand(conn, brand_id)
+    if brand is None:
+        raise ValueError(f"找不到品牌：{brand_id}")
+
+    context_text, knowledge_item_ids, brand_version, _ = context_compiler.compile(conn, brand_id)
+    products = [p["name"] for p in repo.list_products(conn, brand_id)]
+    source_fact_count = len(knowledge_item_ids)
+    today = date.today().isoformat()
+    user_text = brand_report_mod._build_user_text(
+        brand, products, context_text, source_fact_count, today)
+    context = gateway.TaskContext(
+        context_scope={"brand_id": brand_id}, knowledge_item_ids=knowledge_item_ids,
+        brand_version=brand_version,
+    )
+    task = gateway.run_task(
+        conn, PROVIDER, brand_id=brand_id, task_type="brand_report",
+        prompt_template_id="brand_report", prompt_template_version="v1",
+        system=brand_report_mod._SYSTEM, messages=[{"role": "user", "content": user_text}], context=context,
+        options=gateway.TaskOptions(max_tokens=16000),
+    )
+    if task["status"] != "succeeded":
+        return False, task["error"]
+
+    data = gateway.parse_json_reply(task["rendered_output"])
+    sections = brand_report_mod._normalize_sections(data)
+    if sections is None:
+        return False, PARSE_FAIL_MESSAGE
+
+    repo.create_brand_report(
+        conn, brand_id, actor=actor, model=task["model"], llm_task_id=task["id"],
+        brand_version=brand_version, source_fact_count=source_fact_count, sections=sections,
+    )
+    return True, None
 
 
 # ---------------------------------------------------------------------------
@@ -558,7 +601,8 @@ async def customer_voice_new_post(request: Request, brand_id: str,
                                          ("貼入顧客原話", None)),
         ), status_code=400)
 
-    ok, result = cv_mod.extract(
+    from app.brand_web import routes_library
+    ok, result = routes_library.extract(
         web.conn, brand_id, actor=actor, raw_text=raw_text_c,
         source_channel=source_channel, source_detail=clean(source_detail) or None,
     )
@@ -673,7 +717,7 @@ def brand_report_progress(request: Request, brand_id: str, run: Optional[str] = 
             refresh=intake_state.REFRESH_SECONDS, nav_current='hub',
         ))
 
-    ok, err = brand_report_mod.generate(web.conn, brand_id, actor)
+    ok, err = generate(web.conn, brand_id, actor)
     if not ok:
         return redirect_with_message(result_url, err, kind="warn")
     return redirect_with_message(result_url, "報告已生成。")
@@ -1100,7 +1144,7 @@ async def product_new_research_post(request: Request, brand_id: str,
         ), status_code=400)
 
     brand_facts = repo.list_brand_facts(web.conn, brand_id, status="confirmed")
-    ok, result = product_ai.run_product_scan(web.conn, brand_id, name_c, url_c, brand_facts)
+    ok, result = product_ai_calls.run_product_scan(web.conn, brand_id, name_c, url_c, brand_facts)
     if not ok:
         errors["url"] = result
         return templates.TemplateResponse(request, "product_new.html", ctx(
@@ -1226,7 +1270,8 @@ async def product_rescan_post(request: Request, brand_id: str, product_id: str, 
                                       kind="danger")
 
     brand_facts = repo.list_brand_facts(web.conn, brand_id, status="confirmed")
-    ok, result = product_ai.run_product_scan(web.conn, brand_id, product["name"], url_c, brand_facts)
+    ok, result = product_ai_calls.run_product_scan(
+        web.conn, brand_id, product["name"], url_c, brand_facts)
     if not ok:
         return redirect_with_message(f"/brands/{brand_id}/products/{product_id}", result,
                                       kind="danger")
@@ -1285,7 +1330,7 @@ async def product_handoff_post(request: Request, brand_id: str, product_id: str,
             request, brand, product, values=values, errors={"raw_text": "請先把外部 AI 的回覆貼進來。"},
         ), status_code=400)
 
-    result = product_ai.parse_product_handoff_reply(raw_text)
+    result = product_ai_calls.parse_product_handoff_reply(raw_text)
     if result is None:
         budget_err = _scan_budget_error(
             brand_id, cost=product_ai.COST_PRODUCT_HANDOFF_FIX, action="請 AI 幫忙整理格式",
@@ -1294,7 +1339,7 @@ async def product_handoff_post(request: Request, brand_id: str, product_id: str,
             return templates.TemplateResponse(request, "product_handoff.html", _product_handoff_ctx(
                 request, brand, product, values=values, errors={"raw_text": budget_err},
             ), status_code=400)
-        ok, fixed = product_ai.run_product_handoff_fix(web.conn, brand_id, raw_text)
+        ok, fixed = product_ai_calls.run_product_handoff_fix(web.conn, brand_id, raw_text)
         if not ok:
             return templates.TemplateResponse(request, "product_handoff.html", _product_handoff_ctx(
                 request, brand, product, values=values, errors={"raw_text": fixed},

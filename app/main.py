@@ -7,7 +7,7 @@
 
 1. 本檔：只留 app factory、每日備份／保留策略的啟動節奏、router 註冊、錯誤處理。
 2. `app/shared/web.py`：conn／templates／ctx／require_brand 等全站共用 web 工具。
-3. `app/brand_intelligence/routes.py`：品牌智庫的業務路由本體。
+3. `app/brand_web/routes.py`：品牌智庫的業務路由本體。
 
 拆完後 app/ads、app/orders、app/intake 一律改 import `app.shared.web`，不再 import
 本檔，main → ads.routes → main 的循環自然消失（見 test_no_branch_imports_app_main）。
@@ -685,11 +685,11 @@ async def api_settings_budget_post(request: Request):
 # Router 註冊
 # ---------------------------------------------------------------------------
 
-from app.brand_intelligence.routes import router as brand_intelligence_router  # noqa: E402
-from app.brand_intelligence.routes_inbox import router as inbox_router  # noqa: E402
-from app.brand_intelligence.routes_library import router as library_router  # noqa: E402
-from app.brand_intelligence.routes_products import router as products_router  # noqa: E402
-from app.brand_intelligence.routes_settings import router as settings_hub_router  # noqa: E402
+from app.brand_web.routes import router as brand_intelligence_router  # noqa: E402
+from app.brand_web.routes_inbox import router as inbox_router  # noqa: E402
+from app.brand_web.routes_library import router as library_router  # noqa: E402
+from app.brand_web.routes_products import router as products_router  # noqa: E402
+from app.brand_web.routes_settings import router as settings_hub_router  # noqa: E402
 from app.intake.routes import router as intake_router  # noqa: E402
 from app.intake.routes_api import router as intake_api_router  # noqa: E402
 from app.ads.routes import router as ads_router  # noqa: E402

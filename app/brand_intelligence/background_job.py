@@ -14,7 +14,6 @@ import threading
 from typing import Callable
 
 from app.core import interrupts as core_interrupts
-from app.shared import web
 
 
 class JobRegistry:
@@ -60,13 +59,13 @@ class JobRegistry:
         threading.Thread(target=target, args=args, daemon=True).start()
 
 
-def notify(brand_id: str, *, category: str, dedupe_key: str, message: str, action_url: str) -> None:
+def notify(conn, brand_id: str, *, category: str, dedupe_key: str, message: str, action_url: str) -> None:
     """背景工作完成／失敗時送打斷佇列通知；超過卡片字數上限就截斷
     （`core_interrupts.enqueue` 對超長訊息會直接 raise，兩邊呼叫端原本都是各自截斷）。"""
     if len(message) > core_interrupts.MAX_MESSAGE_LEN:
         message = message[: core_interrupts.MAX_MESSAGE_LEN]
     core_interrupts.enqueue(
-        web.conn, category=category, dedupe_key=dedupe_key,
+        conn, category=category, dedupe_key=dedupe_key,
         brand_id=brand_id, message=message, action_url=action_url,
     )
-    web.conn.commit()
+    conn.commit()

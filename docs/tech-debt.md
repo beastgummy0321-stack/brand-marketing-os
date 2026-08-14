@@ -18,7 +18,7 @@
 
 | 檔案 | 行數 | 倍數 | 先拆什麼 |
 |---|---|---|---|
-| `app/brand_intelligence/routes.py` | 1854 | 2.3× | brand fact 與 product 兩組 CRUD 路由各自獨立成檔 |
+| `app/brand_web/routes.py` | 1854 | 2.3× | brand fact 與 product 兩組 CRUD 路由各自獨立成檔 |
 | `app/brand_intelligence/repository.py` | 1667 | 2.08× | 依表分檔（brand／product／rule／claim） |
 | `app/tests/test_ads_reading.py` | 1157 | 1.4× | 測試檔，優先度最低 |
 | `app/ads/reading.py` | 1039 | 1.3× | 判讀規則與資料取數分離 |
@@ -56,6 +56,9 @@
 拆掉這三條邊，五組環一起消失（已用圖驗算：`brand_intelligence` 只剩指向 `app.core`）。
 代價：動 `routes.py` 1854 行 ＋ 三個檔的 `PROVIDER` 模組層變數與其 monkeypatch 測試。
 屬跨模組重構，開工前先提計畫等批准（`~/.claude/workflow.md` 第三節例外清單）。
+
+2026-08-15 修訂：`background_job.py` 對 `app.shared` 的邊是在 8/7 盤點後才長出來；本票以
+`notify(conn, ...)` 連線注入解掉，不搬進 `app/brand_web`，避免 intake 與 brand_web 形成新環。
 
 **層級定義的權威文件已遺失**：`docs/architecture-rules.md`、`docs/rule-checks.md`、
 `docs/design/19-constitution-audit.md` 都在 `5eca0db`「乾淨重啟」被清除，程式與測試裡的

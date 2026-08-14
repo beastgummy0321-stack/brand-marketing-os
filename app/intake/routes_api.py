@@ -171,7 +171,7 @@ def _notify_scan_done(brand_id: str, brand_name: str, ok: bool) -> None:
     # S4.15／S4.16：初掃完成或失敗都進收件匣；出下一題不進（本輪 grill 裁決，見 GRILL 檔）。
     verb = "初掃完成，可以回去看初步印象" if ok else "初掃失敗，可以回去重試"
     background_job.notify(
-        brand_id, category="intake_ai_step_done", dedupe_key=new_id("itkjob"),
+        web.conn, brand_id, category="intake_ai_step_done", dedupe_key=new_id("itkjob"),
         message=f"「{brand_name}」{verb}", action_url=f"/brands/{brand_id}/intake/scan",
     )
 
@@ -226,7 +226,7 @@ def _notify_paste_fix_done(brand_id: str, brand_name: str, ok: bool) -> None:
     # S4.54：貼回修格式完成或失敗都進收件匣（跟初掃同待遇，不同於出下一題）。
     verb = "貼回格式已修好，可以回去看" if ok else "貼回修格式失敗，可以回去重試"
     background_job.notify(
-        brand_id, category="intake_ai_step_done", dedupe_key=new_id("itkjob"),
+        web.conn, brand_id, category="intake_ai_step_done", dedupe_key=new_id("itkjob"),
         message=f"「{brand_name}」{verb}", action_url=f"/brands/{brand_id}/intake/paste",
     )
 

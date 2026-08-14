@@ -23,7 +23,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 import app.main as main  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
 from app.core import settings as coresettings  # noqa: E402
-from app.brand_intelligence import product_ai  # noqa: E402
+from app.brand_web import product_ai_calls as product_ai  # noqa: E402
 from app.shared.web import OPERATOR  # noqa: E402
 from app.llm.providers import (  # noqa: E402
     MISSING_KEY_MESSAGE, AnthropicProvider, FakeProvider, ProviderResponse, Usage,

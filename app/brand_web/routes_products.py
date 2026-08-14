@@ -33,10 +33,11 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, Response
 
 from app import mock_data as md
+from app.brand_web import product_ai_calls
+from app.brand_web import routes as legacy_routes
 from app.brand_intelligence import background_job
 from app.brand_intelligence import product_ai
 from app.brand_intelligence import repository as repo
-from app.brand_intelligence import routes as legacy_routes
 from app.core import backup as corebackup
 from app.core import cleanup
 from app.core.db import new_id
@@ -44,7 +45,6 @@ from app.shared import web
 from app.shared.web import NotFoundKind, clean, require_actor, require_brand, require_product
 
 router = APIRouter()
-
 
 def _error(status_code: int, message: str) -> JSONResponse:
     return JSONResponse({"error": message}, status_code=status_code)
@@ -192,7 +192,7 @@ def _research_start(product_id: str, brand_id: str, actor: str, product_name: st
 
 def _research_notify(brand_id: str, product_id: str, message: str) -> None:
     background_job.notify(
-        brand_id, category="product_research_done", dedupe_key=new_id("prsjob"),
+        web.conn, brand_id, category="product_research_done", dedupe_key=new_id("prsjob"),
         message=message, action_url=f"/brands/{brand_id}/products/{product_id}",
     )
 
@@ -218,7 +218,8 @@ def _research_run(product_id: str, brand_id: str, actor: str, product_name: str,
             _research_fail(product_id, brand_id, product_name, budget_err)
             return
         brand_facts = repo.list_brand_facts(web.conn, brand_id, status="confirmed")
-        ok, result = product_ai.run_product_scan(web.conn, brand_id, product_name, url, brand_facts)
+        ok, result = product_ai_calls.run_product_scan(
+            web.conn, brand_id, product_name, url, brand_facts)
         if not ok:
             _research_fail(product_id, brand_id, product_name, result)
             return
@@ -484,14 +485,14 @@ async def handoff_submit(request: Request, brand_id: str, product_id: str):
     if not clean(reply_text):
         return _error(400, "請先把外部 AI 的回覆貼進來。")
 
-    result = product_ai.parse_product_handoff_reply(reply_text)
+    result = product_ai_calls.parse_product_handoff_reply(reply_text)
     if result is None:
         budget_err = legacy_routes._scan_budget_error(
             brand_id, cost=product_ai.COST_PRODUCT_HANDOFF_FIX, action="請 AI 幫忙整理格式",
             fallback_hint="或先自己把貼上的內容改成正確格式，那樣不用花錢。")
         if budget_err:
             return _error(400, budget_err)
-        ok, fixed = product_ai.run_product_handoff_fix(web.conn, brand_id, reply_text)
+        ok, fixed = product_ai_calls.run_product_handoff_fix(web.conn, brand_id, reply_text)
         if not ok:
             return _error(400, fixed)
         result = fixed

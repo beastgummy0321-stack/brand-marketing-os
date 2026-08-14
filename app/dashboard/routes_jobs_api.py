@@ -21,8 +21,8 @@ from datetime import datetime, timezone
 from fastapi import APIRouter
 
 from app.brand_intelligence import repository as bi
-from app.brand_intelligence.routes_library import _cv_jobs
-from app.brand_intelligence.routes_products import _research_jobs
+from app.brand_web.routes_library import _cv_jobs
+from app.brand_web.routes_products import _research_jobs
 from app.intake.routes_api import _JOBS as _intake_jobs
 from app.shared import web
 

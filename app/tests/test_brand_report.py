@@ -22,7 +22,7 @@ _tmpdir = tempfile.mkdtemp(prefix="brand_os_brand_report_")
 from fastapi.testclient import TestClient  # noqa: E402
 
 import app.main as main  # noqa: E402
-from app.brand_intelligence import report  # noqa: E402
+from app.brand_web import routes as report  # noqa: E402
 from app.brand_intelligence import repository as repo  # noqa: E402
 from app.llm import providers  # noqa: E402
 

@@ -23,7 +23,7 @@ os.environ.setdefault("ANTHROPIC_API_KEY", "sk-ant-fake-library-api-test")
 from fastapi.testclient import TestClient  # noqa: E402
 
 import app.main as main  # noqa: E402
-from app.brand_intelligence import customer_voice  # noqa: E402
+from app.brand_web import routes_library as customer_voice  # noqa: E402
 from app.brand_intelligence import repository as repo  # noqa: E402
 from app.core import interrupts as core_interrupts  # noqa: E402
 from app.core import settings as core_settings  # noqa: E402
