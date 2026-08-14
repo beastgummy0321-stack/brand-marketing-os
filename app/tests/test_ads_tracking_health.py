@@ -6,6 +6,7 @@ import shutil
 import tempfile
 import time
 import unittest
+from datetime import date, timedelta
 from unittest import mock
 
 _tmpdir = tempfile.mkdtemp(prefix="brand_os_tracking_health_")
@@ -13,8 +14,12 @@ _tmpdir = tempfile.mkdtemp(prefix="brand_os_tracking_health_")
 from fastapi.testclient import TestClient  # noqa: E402
 
 import app.main as main  # noqa: E402
+from app.ads import ga4_api  # noqa: E402
+from app.ads import ga4_sync  # noqa: E402
+from app.ads import meta_api  # noqa: E402
 from app.ads import tracking  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
+from app.core import settings as coresettings  # noqa: E402
 from app.orders import channel as orders_channel  # noqa: E402
 
 
@@ -56,6 +61,28 @@ class TrackingHealthBase(unittest.TestCase):
             main.conn, self.bid, actor=ACTOR, channel_type=channel_type, name=name,
             identifier=identifier)
 
+    def sync_ga4(self, *, sessions=10, days_ago=0):
+        """訊號②測試小工具：跑一次假 GA4 同步，讓 ga4_sync_status／ga4_summary 有資料列。
+        全程 FakeGA4Client，不打真 GA4 API（比照 app/tests/test_ads_ga4.py 既有寫法）。
+        days_ago>0 用來造「同步過但已經不新鮮」的情境，直接改寫 synced_at
+        （sync_brand 一律用當下真實時間戳，測試要驗過期只能事後覆寫）。"""
+        coresettings.set_setting(main.conn, ga4_sync.PROPERTY_SETTING, "123456789")
+        coresettings.set_setting(main.conn, ga4_sync.SERVICE_ACCOUNT_SETTING,
+                                 '{"client_email": "svc@example.iam.gserviceaccount.com"}')
+        row = ga4_api.SourceMediumRow(source="google", medium="organic", sessions=sessions,
+                                      conversions=0.0, revenue=0.0)
+        client = ga4_api.FakeGA4Client(rows=[row], purchase_seen=False)
+        ga4_sync.sync_brand(main.conn, self.bid, ACTOR, client=client)
+        if days_ago:
+            stale = (date.today() - timedelta(days=days_ago)).isoformat() + "T00:00:00+00:00"
+            main.conn.execute(
+                "UPDATE ga4_sync_status SET synced_at = ? WHERE brand_id = ?", (stale, self.bid))
+            main.conn.commit()
+
+    def configure_meta(self):
+        coresettings.set_setting(main.conn, "meta_access_token", "測試唯讀金鑰")
+        coresettings.set_setting(main.conn, "meta_ad_account_id", "act_999")
+
 
 class WebsiteDetectionTest(TrackingHealthBase):
     """GA4／Pixel 特徵偵測：找到／找不到／壞頁面三種情境，假 HTML 字串，不碰真網路。"""
@@ -78,7 +105,8 @@ class WebsiteDetectionTest(TrackingHealthBase):
     def test_only_ga4_found_is_warn_missing_pixel(self):
         self.add_channel("website", identifier="https://example.test")
         node = tracking.check_website_now(
-            main.conn, self.bid, fetch=lambda _url: (True, _GA4_HTML))
+            main.conn, self.bid, fetch=lambda _url: (True, _GA4_HTML),
+            meta_client=meta_api.FakeMetaClient())
         self.assertEqual(node["status"], "warn")
         self.assertEqual(node["action"], {"kind": "install", "missing": ["pixel"]})
 
@@ -89,31 +117,128 @@ class WebsiteDetectionTest(TrackingHealthBase):
         self.assertEqual(node["status"], "warn")
         self.assertEqual(node["action"], {"kind": "install", "missing": ["ga4"]})
 
-    def test_neither_found_is_bad_red(self):
+    def test_neither_found_by_scan_is_warn_not_bad(self):
+        """契約 1.3 修訂（2026-08-14）核心迴歸案例：EasyStore 這類動態注入追蹤碼的平台，
+        原始碼掃描必然掃不到——這不再等於「連不上」，紅燈只留給網站真的連不上。掃描沒掃到、
+        又沒有其他訊號確認時，燈號要是黃（還沒驗到），不是紅（之前的誤判行為）。"""
         self.add_channel("website", identifier="https://example.test")
         node = tracking.check_website_now(
-            main.conn, self.bid, fetch=lambda _url: (True, _NEITHER_HTML))
-        self.assertEqual(node["status"], "bad")
+            main.conn, self.bid, fetch=lambda _url: (True, _NEITHER_HTML),
+            meta_client=meta_api.FakeMetaClient())
+        self.assertEqual(node["status"], "warn")
         self.assertEqual(set(node["action"]["missing"]), {"ga4", "pixel"})
+        self.assertNotIn("沒安裝", node["message"])
+        self.assertNotIn("沒偵測到", node["message"])
+        self.assertIn("還沒驗到", node["message"])
+        self.assertIn("EasyStore", node["message"])
 
-    def test_script_tag_without_config_call_is_not_found(self):
+    def test_script_tag_without_config_call_is_not_confirmed(self):
         """只載入 gtag.js／fbevents.js 函式庫、沒有真的呼叫 config／init，兩個特徵字串
-        缺一不可（AND，不是 OR）——這是裝了函式庫但沒設定測量 ID 的常見半吊子情況。"""
+        缺一不可（AND，不是 OR）——這是裝了函式庫但沒設定測量 ID 的常見半吊子情況。
+        契約 1.3 修訂後這仍然不算確認，但燈號降級成黃（沒有其他訊號時），不是紅。"""
         self.add_channel("website", identifier="https://example.test")
         node = tracking.check_website_now(
-            main.conn, self.bid, fetch=lambda _url: (True, _GA4_SCRIPT_ONLY_HTML))
-        self.assertEqual(node["status"], "bad")
+            main.conn, self.bid, fetch=lambda _url: (True, _GA4_SCRIPT_ONLY_HTML),
+            meta_client=meta_api.FakeMetaClient())
+        self.assertEqual(node["status"], "warn")
         self.assertEqual(set(node["action"]["missing"]), {"ga4", "pixel"})
 
         node = tracking.check_website_now(
-            main.conn, self.bid, fetch=lambda _url: (True, _PIXEL_SCRIPT_ONLY_HTML))
-        self.assertEqual(node["status"], "bad")
+            main.conn, self.bid, fetch=lambda _url: (True, _PIXEL_SCRIPT_ONLY_HTML),
+            meta_client=meta_api.FakeMetaClient())
+        self.assertEqual(node["status"], "warn")
 
     def test_broken_page_fetch_failure_is_bad_not_exception(self):
+        """紅燈只留給這一種情境（契約 1.3 修訂）：網站真的連不上。"""
         self.add_channel("website", identifier="https://example.test")
         node = tracking.check_website_now(
             main.conn, self.bid, fetch=lambda _url: (False, ""))
         self.assertEqual(node["status"], "bad")
+        self.assertIn("連不上", node["message"])
+        self.assertNotIn("沒安裝", node["message"])
+
+    def test_ga4_data_signal_confirms_when_scan_misses(self):
+        """訊號②：掃描沒掃到（模擬 EasyStore），但既有 GA4 同步資料新鮮＝GA4 確認，
+        只剩 Pixel 還沒驗到。全程只讀本地表，不打真 GA4 API（見 sync_ga4 用 FakeGA4Client）。"""
+        self.add_channel("website", identifier="https://example.test")
+        self.sync_ga4()
+        node = tracking.check_website_now(
+            main.conn, self.bid, fetch=lambda _url: (True, _NEITHER_HTML),
+            meta_client=meta_api.FakeMetaClient())
+        self.assertEqual(node["status"], "warn")
+        self.assertEqual(node["action"]["missing"], ["pixel"])
+
+    def test_ga4_data_signal_ignored_when_stale(self):
+        """同步過，但距上次同步太久（超過新鮮天數）——不算確認，跟從沒同步過一樣誠實。"""
+        self.add_channel("website", identifier="https://example.test")
+        self.sync_ga4(days_ago=30)
+        node = tracking.check_website_now(
+            main.conn, self.bid, fetch=lambda _url: (True, _NEITHER_HTML),
+            meta_client=meta_api.FakeMetaClient())
+        self.assertEqual(node["status"], "warn")
+        self.assertIn("ga4", node["action"]["missing"])
+
+    def test_pixel_api_signal_confirms_when_scan_misses(self):
+        """訊號③：掃描沒掃到，但 Meta 唯讀連線查到這個廣告帳號的 Pixel 近期有開火＝Pixel
+        確認，只剩 GA4 還沒驗到。全程 FakeMetaClient，不打真 Meta API。"""
+        self.add_channel("website", identifier="https://example.test")
+        self.configure_meta()
+        fake_meta = meta_api.FakeMetaClient(
+            pixels=[meta_api.Pixel(pixel_id="pix_1", name="測試 Pixel",
+                                   last_fired_time=date.today().isoformat() + "T09:00:00-0700")])
+        node = tracking.check_website_now(
+            main.conn, self.bid, fetch=lambda _url: (True, _NEITHER_HTML), meta_client=fake_meta)
+        self.assertEqual(node["status"], "warn")
+        self.assertEqual(node["action"]["missing"], ["ga4"])
+        self.assertEqual(fake_meta.calls, [("pixels", "act_999")])
+
+    def test_pixel_api_signal_ignores_stale_fire(self):
+        """Pixel 存在但最近一次開火太久以前——不算確認。"""
+        self.add_channel("website", identifier="https://example.test")
+        self.configure_meta()
+        old = (date.today() - timedelta(days=60)).isoformat() + "T09:00:00-0700"
+        fake_meta = meta_api.FakeMetaClient(
+            pixels=[meta_api.Pixel(pixel_id="pix_1", name="測試 Pixel", last_fired_time=old)])
+        node = tracking.check_website_now(
+            main.conn, self.bid, fetch=lambda _url: (True, _NEITHER_HTML), meta_client=fake_meta)
+        self.assertIn("pixel", node["action"]["missing"])
+
+    def test_pixel_api_signal_skipped_gracefully_when_meta_not_configured(self):
+        """沒接 Meta 連線＝這個訊號跳過（回 None），不是錯誤、不擋人，也不誤判成「沒有」。
+        先明確清掉 Meta 設定：這兩把是全站設定，不分品牌，其他測試方法（同一支模組共用
+        一條隔離 DB連線）可能已經設過，這裡強制回到「沒接」的前提，不依賴測試執行順序。"""
+        coresettings.set_setting(main.conn, "meta_access_token", "")
+        coresettings.set_setting(main.conn, "meta_ad_account_id", "")
+        self.add_channel("website", identifier="https://example.test")
+        node = tracking.check_website_now(
+            main.conn, self.bid, fetch=lambda _url: (True, _NEITHER_HTML))
+        self.assertEqual(node["status"], "warn")
+        self.assertIn("pixel", node["action"]["missing"])
+
+    def test_pixel_api_signal_skipped_gracefully_on_meta_error(self):
+        """Meta 連線設定了，但查詢失敗（權限不夠／連不上）——訊號跳過，不拋例外、不擋人
+        （契約 2.4），不誤判成「確認沒有」。"""
+        self.add_channel("website", identifier="https://example.test")
+        self.configure_meta()
+        fake_meta = meta_api.FakeMetaClient(error=meta_api.MetaApiError("模擬 Meta 連線失敗"))
+        node = tracking.check_website_now(
+            main.conn, self.bid, fetch=lambda _url: (True, _NEITHER_HTML), meta_client=fake_meta)
+        self.assertEqual(node["status"], "warn")
+        self.assertIn("pixel", node["action"]["missing"])
+
+    def test_all_three_signals_confirm_is_ok(self):
+        """掃描漏抓，但 GA4 數據與 Pixel API 兩個訊號都確認＝綠燈（契約：兩樣都被任一訊號
+        確認）。"""
+        self.add_channel("website", identifier="https://example.test")
+        self.sync_ga4()
+        self.configure_meta()
+        fake_meta = meta_api.FakeMetaClient(
+            pixels=[meta_api.Pixel(pixel_id="pix_1", name="測試 Pixel",
+                                   last_fired_time=date.today().isoformat() + "T09:00:00-0700")])
+        node = tracking.check_website_now(
+            main.conn, self.bid, fetch=lambda _url: (True, _NEITHER_HTML), meta_client=fake_meta)
+        self.assertEqual(node["status"], "ok")
+        self.assertEqual(node["action"], {"kind": "none", "missing": []})
 
     def test_result_persists_for_next_read(self):
         self.add_channel("website", identifier="https://example.test")

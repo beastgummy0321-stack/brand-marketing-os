@@ -74,8 +74,12 @@ function SegmentBlock({
         <p className="text-sm text-muted-foreground">正在連你的網站找{cfg.shortLabel}代碼…約 10 秒</p>
       ) : justCheckedStillMissing ? (
         <div className="flex flex-col gap-2">
-          <p className="text-sm text-danger">還是沒找到{cfg.shortLabel}。</p>
-          <p className="text-sm text-muted-foreground">剛裝好通常要等幾分鐘才生效；也可能貼錯位置。</p>
+          <p className="text-sm text-danger">
+            還沒驗到{cfg.shortLabel}。動態載入的平台（如 EasyStore）外部驗不到很正常。
+          </p>
+          <p className="text-sm text-muted-foreground">
+            自己驗最準：GA4 開「報表 → 即時」看有沒有自己的瀏覽；Pixel 用 Meta 事件管理工具的「測試事件」。
+          </p>
           <div className="flex gap-3">
             <button
               type="button"
