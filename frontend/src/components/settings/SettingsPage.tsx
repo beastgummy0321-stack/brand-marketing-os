@@ -9,6 +9,7 @@ import { AssetsSection } from "./AssetsSection";
 import { Ga4Section } from "./Ga4Section";
 import { MetaSection } from "./MetaSection";
 import { ModelSection } from "./ModelSection";
+import { AutonomySection } from "./AutonomySection";
 import { RuleCardsSection } from "./RuleCardsSection";
 
 type LoadState =
@@ -67,6 +68,7 @@ export function SettingsPage() {
         <ApiKeySection data={data} onSaved={load} />
         <ModelSection data={data} onSaved={load} />
         <AssetsSection data={data} onSaved={load} />
+        <AutonomySection />
         <RuleCardsSection />
       </div>
     );
