@@ -12,6 +12,8 @@ import { BrandCard } from "@/components/overview/BrandCard";
 import { ProductDetailPage } from "@/components/products/ProductDetailPage";
 import { ProductListPage } from "@/components/products/ProductListPage";
 import { SettingsPage } from "@/components/settings/SettingsPage";
+import { TrackingHealthPage } from "@/components/tracking/TrackingHealthPage";
+import { TrackingSetupPage } from "@/components/tracking/TrackingSetupPage";
 import { WarroomPage } from "@/components/warroom/WarroomPage";
 import { MatrixPage } from "@/components/workbench/MatrixPage";
 import { WorkbenchPage } from "@/components/workbench/WorkbenchPage";
@@ -44,6 +46,8 @@ function App() {
       <Route path="/brands/:brandId/campaigns/:cycleId" element={<WarroomRoute />} />
       <Route path="/brands/:brandId/workbench" element={<WorkbenchRoute />} />
       <Route path="/brands/:brandId/workbench/:cycleId" element={<MatrixRoute />} />
+      <Route path="/brands/:brandId/tracking" element={<TrackingHealthRoute />} />
+      <Route path="/brands/:brandId/tracking/setup" element={<TrackingSetupRoute />} />
     </Routes>
   );
 }
@@ -191,6 +195,26 @@ function MatrixRoute() {
   return (
     <AppShell brandId={brandId ?? null}>
       <MatrixPage brandId={brandId ?? ""} cycleId={cycleId ?? ""} />
+    </AppShell>
+  );
+}
+
+/** T0 追蹤健檢總覽（票 T0-tracking-health）。 */
+function TrackingHealthRoute() {
+  const { brandId } = useParams<{ brandId: string }>();
+  return (
+    <AppShell brandId={brandId ?? null}>
+      <TrackingHealthPage brandId={brandId ?? ""} />
+    </AppShell>
+  );
+}
+
+/** T0 安裝精靈（官網追蹤，票 T0-tracking-health）。 */
+function TrackingSetupRoute() {
+  const { brandId } = useParams<{ brandId: string }>();
+  return (
+    <AppShell brandId={brandId ?? null}>
+      <TrackingSetupPage brandId={brandId ?? ""} />
     </AppShell>
   );
 }
