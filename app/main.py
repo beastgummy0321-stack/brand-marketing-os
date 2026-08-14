@@ -95,13 +95,11 @@ def _purge_expired_llm_task_content_if_new_day() -> None:
     if today != _last_retention_check:
         core_retention.purge_expired_llm_task_content(web.conn)
         _last_retention_check = today
-
-
 # ---------------------------------------------------------------------------
 # 自動同步（LIVE 每四小時、其餘每日；應用程式啟動時註冊程式內排程）
 # ---------------------------------------------------------------------------
-
 _last_auto_sync_check: Optional[datetime] = None
+_last_weekly_engine_check: Optional[datetime] = None
 _AUTO_SYNC_POLL_SECONDS = 3600  # 每小時檢查是否已到四小時或跨日門檻
 
 
@@ -120,6 +118,17 @@ def _auto_sync_if_due(now: Optional[datetime] = None) -> None:
         _last_auto_sync_check = now
 
 
+def _weekly_engine_if_due(now: Optional[datetime] = None) -> None:
+    """每個 ISO 週只跑一次週判讀；process 重啟後會補跑當週。"""
+    global _last_weekly_engine_check
+    now = now or datetime.now(timezone.utc)
+    current_week = now.isocalendar()[:2]
+    last_week = _last_weekly_engine_check.isocalendar()[:2] if _last_weekly_engine_check else None
+    if last_week != current_week:
+        ads_auto_sync.run_weekly_engine(web.conn, today=now.date().isoformat())
+        _last_weekly_engine_check = now
+
+
 def _auto_sync_loop() -> None:
     """背景執行緒，每小時檢查同步門檻——用背景執行緒而不是像備份那樣掛在
     `_daily_backup_middleware`（每個 HTTP 請求都會跑一次），是因為自動同步會打外部
@@ -130,6 +139,7 @@ def _auto_sync_loop() -> None:
     while True:
         time.sleep(_AUTO_SYNC_POLL_SECONDS)
         _auto_sync_if_due()
+        _weekly_engine_if_due()
 
 
 _backup_if_new_day()  # process 啟動時先跑一次（app.shared.web import 時已開好連線）
@@ -185,6 +195,7 @@ def _register_auto_sync_schedule() -> None:
     """票 07-auto-sync：應用程式啟動時註冊程式內排程。啟動當下先跑一次（不等第一個
     小時），之後交給背景執行緒每小時檢查四小時／每日門檻。"""
     _auto_sync_if_due()
+    _weekly_engine_if_due()
     threading.Thread(target=_auto_sync_loop, daemon=True).start()
 
 

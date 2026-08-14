@@ -9,6 +9,7 @@ import { GuideCards } from "@/components/cockpit/GuideCards";
 import { KpiCard } from "@/components/cockpit/KpiCard";
 import { LastSyncBadge } from "@/components/cockpit/LastSyncBadge";
 import { PerformancePins } from "@/components/cockpit/pins/PinnedViewsSection";
+import { WeeklyBattleSection } from "@/components/cockpit/WeeklyBattleSection";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { EmptyState } from "@/components/layout/EmptyState";
 import { fetchCockpit, triggerImmediateSync, type CockpitData } from "@/lib/api";
@@ -124,18 +125,31 @@ export function CockpitPage({ brandId }: { brandId: string }) {
           </div>
         </div>
 
-        <div data-tour="kpis" className="grid grid-cols-4 gap-4">
-          <KpiCard label="本月營收" kpi={data.kpis.revenue} format={formatCurrency} />
-          <KpiCard label="廣告花費" kpi={data.kpis.spend} format={formatCurrency} />
-          <KpiCard label="ROAS" kpi={data.kpis.roas} format={formatRoas} />
-          <KpiCard label="訂單數" kpi={data.kpis.orders} format={formatCount} />
-        </div>
-
         {syncError && <p className="rounded-md border border-danger/30 bg-danger/10 px-3 py-2 text-sm text-danger">{syncError}</p>}
 
-        <PerformancePins brandId={brandId} />
+        <WeeklyBattleSection brandId={brandId} />
 
-        <CockpitChart chart={data.chart} />
+        <section className="flex flex-col gap-4" aria-labelledby="monthly-report-heading">
+          <h2 id="monthly-report-heading" className="font-display text-lg text-foreground">月報</h2>
+          <div data-tour="kpis" className="grid grid-cols-4 gap-4">
+            <KpiCard label="本月營收" kpi={data.kpis.revenue} format={formatCurrency} />
+            <KpiCard label="廣告花費" kpi={data.kpis.spend} format={formatCurrency} />
+            <KpiCard label="ROAS" kpi={data.kpis.roas} format={formatRoas} />
+            <KpiCard label="訂單數" kpi={data.kpis.orders} format={formatCount} />
+          </div>
+          <CockpitChart chart={data.chart} />
+        </section>
+
+        <div className="grid grid-cols-2 gap-4">
+          <div aria-disabled="true" className="rounded-[var(--radius-xl)] border border-dashed border-border bg-muted/50 p-6 text-center text-sm text-muted-foreground">
+            長期系統（T3 開放）
+          </div>
+          <div aria-disabled="true" className="rounded-[var(--radius-xl)] border border-dashed border-border bg-muted/50 p-6 text-center text-sm text-muted-foreground">
+            任務卡（T3 開放）
+          </div>
+        </div>
+
+        <PerformancePins brandId={brandId} />
 
         <div className="grid grid-cols-2 gap-4">
           <GuideCards cards={data.guide_cards} />

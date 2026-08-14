@@ -13,10 +13,64 @@ from app.core.db import new_id, now_iso
 
 RECOMMENDATION_TYPE = "weekly_proposal"
 
+GRADE_BY_ACTION = {
+    "停掉": "save",
+    "加碼": "spend",
+    "換素材": "asset",
+}
+
 
 def _instruction(action: str, target: str) -> str:
     verb = {"停掉": "暫停投放", "加碼": "提高預算", "換素材": "替換素材"}[action]
     return f"前往 Meta 廣告後台，找到「{target}」並{verb}。"
+
+
+def _copy(card: dict) -> str:
+    return f"{card['reason']}——建議{card['action']}「{card['target']}」。"
+
+
+def _action_card(card: dict) -> str | None:
+    if card["status"] not in ("ACCEPTED", "APPLIED"):
+        return None
+    grade = GRADE_BY_ACTION[card["action"]]
+    if grade == "asset":
+        return f"前往素材工作檯，為「{card['target']}」準備新素材。"
+    instruction = card.get("instruction") or _instruction(card["action"], card["target"])
+    if grade == "spend":
+        amount = card.get("confirmed_amount")
+        if amount is None:
+            return None
+        return f"{instruction} 已確認金額為 NT${amount:,.0f}。"
+    return instruction
+
+
+def present(card: dict, brand_id: str) -> dict:
+    """把既有週提案補成 T1 行動卡 API 形狀，不新增資料表。"""
+    grade = GRADE_BY_ACTION[card["action"]]
+    spend_confirmation = None
+    if grade == "spend":
+        spend_confirmation = {
+            "required": True,
+            "suggested_amount": card.get("suggested_amount"),
+            "currency": "TWD",
+        }
+    action_card = _action_card(card)
+    return {
+        **card,
+        "grade": grade,
+        "copy": _copy(card),
+        "spend_confirmation": spend_confirmation,
+        "action_card": action_card,
+        "action_url": f"/brands/{brand_id}/workbench" if action_card and grade == "asset" else None,
+    }
+
+
+def current_cycle(conn, brand_id: str) -> dict | None:
+    """駕駛艙週作戰使用最新一個投放中或等判讀的未封存檔期。"""
+    for cycle in ads_repo.list_cycles(conn, brand_id):
+        if cycle["status"] in ("LIVE", "EVALUATING"):
+            return cycle
+    return None
 
 
 def _budget_impact(action: str, budget: dict) -> str:
@@ -50,6 +104,7 @@ def select_cards(product_readings: list, budget: dict, historical_cells: list) -
             "impact": _budget_impact(action, budget),
             "product_id": reading.get("product_id"),
             "performance_reading_id": reading.get("id"),
+            "suggested_amount": budget.get("proposed_budget") if action == "加碼" else None,
         })
 
     tired_cell = next((cell for cell in historical_cells if cell.get("underperforming")), None)
@@ -79,7 +134,7 @@ def list_cards(conn, brand_id: str, cycle_id: str) -> list:
     return [_card_from_row(row) for row in rows]
 
 
-def generate(conn, brand_id: str, cycle_id: str) -> list:
+def generate(conn, brand_id: str, cycle_id: str, *, enqueue_ready: bool = True) -> list:
     """依最新判讀建卡；保留已產生卡，並略過已核可／已執行的同動作同目標。"""
     if ads_repo.get_cycle(conn, brand_id, cycle_id) is None:
         raise ValueError("找不到廣告檔期")
@@ -94,12 +149,14 @@ def generate(conn, brand_id: str, cycle_id: str) -> list:
     cards = select_cards(loaded["products"], budget, historical_cells)
     handled = {
         (card.get("action"), card.get("target"))
-        for card in existing if card["status"] in ("ACCEPTED", "APPLIED")
+        for card in existing if card["status"] in ("ACCEPTED", "APPLIED", "REJECTED")
     }
     cards = [card for card in cards if (card["action"], card["target"]) not in handled]
     ts = now_iso()
     for card in cards:
         content = {key: card[key] for key in ("action", "target", "reason", "impact")}
+        if card.get("suggested_amount") is not None:
+            content["suggested_amount"] = card["suggested_amount"]
         content["instruction"] = _instruction(card["action"], card["target"])
         conn.execute(
             "INSERT INTO recommendation (id, brand_id, campaign_cycle_id, product_id,"
@@ -109,7 +166,7 @@ def generate(conn, brand_id: str, cycle_id: str) -> list:
              card["performance_reading_id"], RECOMMENDATION_TYPE,
              json.dumps(content, ensure_ascii=False), ts, ts),
         )
-    if cards:
+    if cards and enqueue_ready:
         core_interrupts.enqueue(
             conn, category="weekly_proposal_ready",
             dedupe_key=f"weekly_proposal_ready:{cycle_id}",
@@ -124,15 +181,103 @@ def generate(conn, brand_id: str, cycle_id: str) -> list:
 def view(conn, brand_id: str, cycle_id: str) -> dict:
     cards = list_cards(conn, brand_id, cycle_id)
     return {
-        "proposals": [card for card in cards if card["status"] == "GENERATED"],
+        "proposals": [
+            present(card, brand_id) for card in cards if card["status"] == "GENERATED"
+        ],
         "execution_checklist": [
-            card for card in cards if card["status"] in ("ACCEPTED", "APPLIED")
+            present(card, brand_id)
+            for card in cards if card["status"] in ("ACCEPTED", "APPLIED")
         ],
     }
 
 
+def _resolve_ready_interrupt_if_finished(conn, brand_id: str, cycle_id: str, actor: str) -> None:
+    pending = conn.execute(
+        "SELECT 1 FROM recommendation WHERE brand_id = ? AND campaign_cycle_id = ?"
+        " AND recommendation_type = ? AND status = 'GENERATED' LIMIT 1",
+        (brand_id, cycle_id, RECOMMENDATION_TYPE),
+    ).fetchone()
+    if pending:
+        return
+    for interrupt in core_interrupts.list_open(
+            conn, brand_id=brand_id, category="weekly_proposal_ready", archive_stale=False):
+        if interrupt["campaign_cycle_id"] == cycle_id:
+            core_interrupts.resolve(conn, interrupt["id"], actor=actor)
+
+
+def approve_card(conn, brand_id: str, cycle_id: str, recommendation_id: str, *,
+                 actor: str, confirmed_amount=None) -> dict:
+    """核可單張卡；花錢卡沒有正數確認金額就拒絕。"""
+    row = conn.execute(
+        "SELECT * FROM recommendation WHERE id = ? AND brand_id = ? AND campaign_cycle_id = ?"
+        " AND recommendation_type = ?",
+        (recommendation_id, brand_id, cycle_id, RECOMMENDATION_TYPE),
+    ).fetchone()
+    if row is None:
+        raise ValueError("找不到這張週提案卡")
+    card = _card_from_row(row)
+    if card["status"] in ("ACCEPTED", "APPLIED"):
+        return present(card, brand_id)
+    if card["status"] != "GENERATED":
+        raise ValueError("這張週提案卡已經略過")
+
+    grade = GRADE_BY_ACTION[card["action"]]
+    if grade == "spend":
+        if (isinstance(confirmed_amount, bool)
+                or not isinstance(confirmed_amount, (int, float))
+                or confirmed_amount <= 0):
+            raise ValueError("花錢提案要先確認金額")
+        card["confirmed_amount"] = float(confirmed_amount)
+
+    ts = now_iso()
+    content = {key: value for key, value in card.items() if key not in ("id", "status")}
+    conn.execute(
+        "UPDATE recommendation SET content_json = ?, status = 'ACCEPTED', updated_at = ?"
+        " WHERE id = ?",
+        (json.dumps(content, ensure_ascii=False), ts, recommendation_id),
+    )
+    write_audit(
+        conn, brand_id=brand_id, entity_type="recommendation", entity_id=recommendation_id,
+        action="accept_weekly_proposal", actor=actor,
+        before={"status": row["status"]}, after={"status": "ACCEPTED"},
+    )
+    _resolve_ready_interrupt_if_finished(conn, brand_id, cycle_id, actor)
+    conn.commit()
+    card["status"] = "ACCEPTED"
+    return present(card, brand_id)
+
+
+def skip(conn, brand_id: str, cycle_id: str, recommendation_id: str, *, actor: str) -> dict:
+    """略過單張卡；重送同一張維持略過。"""
+    row = conn.execute(
+        "SELECT * FROM recommendation WHERE id = ? AND brand_id = ? AND campaign_cycle_id = ?"
+        " AND recommendation_type = ?",
+        (recommendation_id, brand_id, cycle_id, RECOMMENDATION_TYPE),
+    ).fetchone()
+    if row is None:
+        raise ValueError("找不到這張週提案卡")
+    if row["status"] == "REJECTED":
+        return present(_card_from_row(row), brand_id)
+    if row["status"] != "GENERATED":
+        raise ValueError("這張週提案卡已經核可")
+    conn.execute(
+        "UPDATE recommendation SET status = 'REJECTED', updated_at = ? WHERE id = ?",
+        (now_iso(), recommendation_id),
+    )
+    write_audit(
+        conn, brand_id=brand_id, entity_type="recommendation", entity_id=recommendation_id,
+        action="skip_weekly_proposal", actor=actor,
+        before={"status": row["status"]}, after={"status": "REJECTED"},
+    )
+    _resolve_ready_interrupt_if_finished(conn, brand_id, cycle_id, actor)
+    conn.commit()
+    card = _card_from_row(row)
+    card["status"] = "REJECTED"
+    return present(card, brand_id)
+
+
 def approve(conn, brand_id: str, cycle_id: str, *, actor: str) -> dict:
-    """一鍵核可同一期全部 GENERATED 卡；重送時直接回現況。"""
+    """一鍵核可省錢與產素材卡；花錢卡保留給逐張確認金額。"""
     if ads_repo.get_cycle(conn, brand_id, cycle_id) is None:
         raise ValueError("找不到廣告檔期")
     rows = conn.execute(
@@ -141,7 +286,13 @@ def approve(conn, brand_id: str, cycle_id: str, *, actor: str) -> dict:
         (brand_id, cycle_id, RECOMMENDATION_TYPE),
     ).fetchall()
     ts = now_iso()
+    approved = []
+    pending_confirmation = []
     for row in rows:
+        card = _card_from_row(row)
+        if GRADE_BY_ACTION[card["action"]] == "spend":
+            pending_confirmation.append(present(card, brand_id))
+            continue
         conn.execute(
             "UPDATE recommendation SET status = 'ACCEPTED', updated_at = ? WHERE id = ?",
             (ts, row["id"]),
@@ -151,12 +302,14 @@ def approve(conn, brand_id: str, cycle_id: str, *, actor: str) -> dict:
             action="accept_weekly_proposal", actor=actor,
             before={"status": row["status"]}, after={"status": "ACCEPTED"},
         )
-    for interrupt in core_interrupts.list_open(
-            conn, brand_id=brand_id, category="weekly_proposal_ready", archive_stale=False):
-        if interrupt["campaign_cycle_id"] == cycle_id:
-            core_interrupts.resolve(conn, interrupt["id"], actor=actor)
+        card["status"] = "ACCEPTED"
+        approved.append(present(card, brand_id))
+    _resolve_ready_interrupt_if_finished(conn, brand_id, cycle_id, actor)
     conn.commit()
-    return view(conn, brand_id, cycle_id)
+    result = view(conn, brand_id, cycle_id)
+    result["approved"] = approved
+    result["pending_confirmation"] = pending_confirmation
+    return result
 
 
 def complete(conn, brand_id: str, cycle_id: str, recommendation_id: str, *, actor: str) -> dict:

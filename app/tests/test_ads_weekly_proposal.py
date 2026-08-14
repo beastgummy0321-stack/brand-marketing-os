@@ -165,7 +165,14 @@ class WeeklyProposalPersistenceTest(unittest.TestCase):
         ok, err = reading.run(main.conn, self.brand_id, cycle_id, ACTOR)
         self.assertEqual((ok, err), (True, None))
         card = weekly_proposals.generate(main.conn, self.brand_id, cycle_id)[0]
-        weekly_proposals.approve(main.conn, self.brand_id, cycle_id, actor=ACTOR)
+        weekly_proposals.approve_card(
+            main.conn,
+            self.brand_id,
+            cycle_id,
+            card["id"],
+            actor=ACTOR,
+            confirmed_amount=12000 if card["action"] == "加碼" else None,
+        )
         if status == "APPLIED":
             weekly_proposals.complete(
                 main.conn, self.brand_id, cycle_id, card["id"], actor=ACTOR)
@@ -183,7 +190,7 @@ class WeeklyProposalPersistenceTest(unittest.TestCase):
             archive_stale=False)
         self.assertEqual(len(ready), 1)
 
-    def test_one_click_approve_moves_all_cards_into_execution_checklist_and_audits(self):
+    def test_one_click_approve_keeps_spend_card_waiting_for_amount(self):
         cycle_id = self._cycle_with_readings(["pause_candidate", "scale_candidate"])
         generated = weekly_proposals.generate(main.conn, self.brand_id, cycle_id)
 
@@ -192,17 +199,18 @@ class WeeklyProposalPersistenceTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         data = response.json()["data"]
-        self.assertEqual(data["proposals"], [])
-        self.assertEqual(len(data["execution_checklist"]), len(generated))
+        self.assertEqual([card["grade"] for card in data["proposals"]], ["spend"])
+        self.assertEqual(len(data["execution_checklist"]), len(generated) - 1)
         self.assertTrue(all(item["status"] == "ACCEPTED" for item in data["execution_checklist"]))
         self.assertTrue(all("Meta 廣告後台" in item["instruction"]
                             for item in data["execution_checklist"]))
+        self.assertEqual([card["grade"] for card in data["pending_confirmation"]], ["spend"])
         audits = main.conn.execute(
             "SELECT * FROM audit_log WHERE brand_id = ? AND entity_type = 'recommendation'"
             " AND action = 'accept_weekly_proposal'",
             (self.brand_id,),
         ).fetchall()
-        self.assertEqual(len(audits), len(generated))
+        self.assertEqual(len(audits), len(generated) - 1)
 
     def test_complete_one_accepted_card_is_idempotent(self):
         cycle_id = self._cycle_with_readings(["pause_candidate"])

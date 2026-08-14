@@ -43,6 +43,7 @@ CATEGORIES = {
     "prototype_phase_ended": {"severity": "rule_warning", "label": "原型階段結束提醒"},  # 修憲落地 A6
     "auto_sync_failed": {"severity": "rule_warning", "label": "自動同步失敗"},  # 票 07-auto-sync
     "weekly_proposal_ready": {"severity": "informational", "label": "週提案待核可"},  # 票 06
+    "weekly_rejudge_done": {"severity": "informational", "label": "本週判讀完成"},
     "burn_no_cycle": {"severity": "rule_warning", "label": "廣告花費未對應檔期"},
     "campaign_renamed": {"severity": "informational", "label": "Meta 活動名稱被改"},
     "tracking_broken": {"severity": "informational", "label": "廣告追蹤斷鏈"},
