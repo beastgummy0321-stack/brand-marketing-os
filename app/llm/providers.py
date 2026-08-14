@@ -294,8 +294,16 @@ class AnthropicProvider:
         if effort and model in EFFORT_SUPPORTED_MODELS:
             kwargs["output_config"] = {"effort": effort}
         # 沒傳工具就完全不放 tools 這個鍵——既有呼叫端送出的 request body 一個字都不變。
+        forced_tool_name = None
         if tools:
             kwargs["tools"] = tools
+            structured_tool = next((tool for tool in tools if tool.get("input_schema")), None)
+            if structured_tool:
+                forced_tool_name = structured_tool["name"]
+                # Anthropic 官方 Tool use：client tool 用 input_schema 定義輸入；tool_choice=tool
+                # 強制指定工具，回應參數位於 tool_use content block 的 input。
+                # https://docs.claude.com/en/docs/agents-and-tools/tool-use/implement-tool-use
+                kwargs["tool_choice"] = {"type": "tool", "name": forced_tool_name}
 
         client = anthropic.Anthropic(api_key=api_key).with_options(timeout=timeout_s)
 
@@ -338,12 +346,19 @@ class AnthropicProvider:
         text = "".join(
             block.text for block in response.content if getattr(block, "type", None) == "text"
         )
+        structured = next(
+            (block.input for block in response.content
+             if getattr(block, "type", None) == "tool_use"
+             and getattr(block, "name", None) == forced_tool_name
+             and isinstance(getattr(block, "input", None), dict)),
+            None,
+        )
         usage = response.usage
         # server_tool_use 只在真的用了伺服器端工具時才有值，沒開工具時是 None（ADR 0005）。
         server_tool_use = getattr(usage, "server_tool_use", None)
         return ProviderResponse(
             output_text=text,
-            structured=None,  # 本輪未接 output_config/structured outputs（skeleton，非全功能）
+            structured=structured,
             usage=Usage(
                 input_tokens=usage.input_tokens,
                 output_tokens=usage.output_tokens,

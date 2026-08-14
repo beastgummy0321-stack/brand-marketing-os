@@ -10,6 +10,11 @@
 保存價值）。
 
 組提示詞與驗證模型回覆的資料形狀；AI 呼叫留在 app.brand_web.routes_library。
+
+對外進入點：save_research_quote() 接收建檔精靈已確認的單句原話。
+誰依賴它：app.intake.repository.resolve_item()，不得直接寫 customer_voice 表。
+依賴方向：intake → 本模組 → brand_intelligence.repository，禁止反向 import intake。
+交易邊界：沿用 repository.create_customer_voice() 的寫入、版本更新、稽核與 commit。
 """
 
 from typing import Optional
@@ -41,6 +46,23 @@ _RULES = (
     "用詞的附和句，不要抽取。如果整段原話都沒有值得收的內容，回傳空陣列，不要硬湊。\n"
     "5. 不要編造原話裡沒有的內容；quote 一定要能在原文裡找到。"
 )
+
+
+def save_research_quote(conn, brand_id: str, *, actor: str, quote: str, insight: str,
+                        task_layer: str, source_detail: Optional[str] = None) -> dict:
+    """把外部調研貼回後已由人確認的單句原話，接進既有 customer_voice 管線。"""
+    if task_layer not in TASK_LAYERS:
+        raise ValueError("顧客原話分類只能是功能任務、情感任務或社會任務")
+    from app.brand_intelligence import repository
+
+    return repository.create_customer_voice(
+        conn, brand_id, actor=actor, raw_text=quote, source_channel="other",
+        source_detail=(source_detail or "").strip() or None, source_type="manual",
+        extraction=[{
+            "task_layer": task_layer, "quote": quote, "insight": insight,
+            "signal": "unprompted",
+        }],
+    )
 
 
 def _normalize_extraction(data) -> Optional[list]:

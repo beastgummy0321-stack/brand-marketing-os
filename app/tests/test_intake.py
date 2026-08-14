@@ -52,9 +52,9 @@ def _fake_response(text: str, in_tok: int = 100, out_tok: int = 50) -> ProviderR
                             stop_reason="end_turn")
 
 
-def _question_json(i: int = 0) -> str:
+def _question_json(i: int = 0, aspect: str = "產品線") -> str:
     q = script.QUESTIONS[i]
-    return json.dumps({"done": False, "question": q["question"],
+    return json.dumps({"done": False, "aspect": aspect, "question": q["question"],
                        "suggested": {"label": q["suggested"]["label"], "desc": q["suggested"]["desc"]},
                        "branches": [{"label": b["label"], "desc": b["desc"]} for b in q["branches"]]},
                       ensure_ascii=False)
@@ -180,7 +180,7 @@ class IntakeWizardTest(unittest.TestCase):
         page = self.client.get(f"/brands/{brand_id}/intake/question")
         self.assertIn(script.QUESTIONS[0]["question"], page.text)
 
-        # 作答後把回答存進 qa_json；下一輪 AI 說 done -> 沒有需要再問的問題了
+        # 作答後把回答存進 qa_json；補齊五面向後 AI 說 done -> 沒有需要再問的問題了
         resp = self.client.post(f"/brands/{brand_id}/intake/question",
                                  data={"action": "answer", "choice": "suggested", "note": "補充"},
                                  follow_redirects=False)
@@ -189,6 +189,11 @@ class IntakeWizardTest(unittest.TestCase):
         self.assertEqual(len(draft["answers"]), 1)
         self.assertEqual(draft["answers"][0]["choice_label"], script.QUESTIONS[0]["suggested"]["label"])
         self.assertEqual(draft["answers"][0]["note"], "補充")
+        for aspect in intake_ai.QUESTION_ASPECTS[1:]:
+            state.append_question(draft, f"{aspect}測試題", script.QUESTIONS[0]["suggested"],
+                                  script.QUESTIONS[0]["branches"], None, aspect=aspect)
+            state.current_entry(draft)["answer_key"] = "suggested"
+        state.save(draft)
 
         intake_ai.PROVIDER = FakeProvider(response=_fake_response(json.dumps({"done": True})))
         self.client.get(f"/brands/{brand_id}/intake/question/progress?run=1",

@@ -7,7 +7,7 @@ load 時把 §3A.2 的欄位（photos_json、scan_impressions_json、qa_json…�
 鍵名；save 時再轉回去。花費（cost_spent / cost_items）不存副本，每次 load 都即時
 SUM llm_task.cost（03 §3A.5 第 5 點）。
 
-qa_json 一筆＝一題：{no, question, options:[{key,label,note}], suggested_key,
+qa_json 一筆＝一題：{no, aspect?, question, options:[{key,label,note}], suggested_key,
 answer_key, answer_text, skipped, llm_task_id}（03 §3A.2）。answer_key 為空＝這題
 還沒答（畫面上的「目前這一題」）。問答結束（AI 說夠了或到達上限）以結尾的
 {"done": true} 哨兵標記——03 §3A 沒有專欄可放這個旗標，先以此代替（見回報）。
@@ -248,7 +248,7 @@ def start_or_quick(conn, brand_id: str, brand_name: str, *, description: str, ur
                      actor=actor, conn=conn)
 
 
-def apply_paste(draft: dict, raw_text: str, conn=None) -> Optional[int]:
+def apply_paste(draft: dict, paste_input, conn=None) -> Optional[int]:
     """驗證＋（全過才）整批落地 intake_item。回傳落地筆數；驗證失敗回 None（錯誤已寫進草稿）。
 
     W8 貼回頁的 HTML 表單與 JSON API（paste/validate、paste/resolve-scope、AI 修格式完成後）
@@ -256,11 +256,16 @@ def apply_paste(draft: dict, raw_text: str, conn=None) -> Optional[int]:
     from app.intake import paste_parse
     from app.brand_intelligence import repository as bi_repo
     conn = _conn(conn)
-    # 換行被剪貼簿吃掉的表格先重組，存重組後的版本——使用者在畫面上看到的就是系統讀懂的樣子
-    raw_text = paste_parse.maybe_reflow(raw_text)
-    draft["paste_raw"] = raw_text
     known = {p["name"] for p in bi_repo.list_products(conn, draft["brand_id"])}
-    rows, errors = paste_parse.parse_paste(raw_text, known, brand_name=draft["brand_name"])
+    if isinstance(paste_input, list):
+        rows, errors = paste_parse.validate_rows(
+            paste_input, known, brand_name=draft["brand_name"])
+    else:
+        # 先去掉 Markdown 外框／分隔線，再處理剪貼簿吃掉換行；草稿保存系統讀懂的版本。
+        raw_text = paste_parse.normalize_markdown_table(str(paste_input))
+        raw_text = paste_parse.maybe_reflow(raw_text)
+        draft["paste_raw"] = raw_text
+        rows, errors = paste_parse.parse_paste(raw_text, known, brand_name=draft["brand_name"])
     draft["paste_errors"] = errors
     save(draft, conn)
     if rows is None:
@@ -440,7 +445,7 @@ def cost_state(draft: dict) -> str:
 # ---------------------------------------------------------------------------
 
 def append_question(draft: dict, question: str, suggested: dict, branches: list,
-                    llm_task_id: Optional[str]) -> None:
+                    llm_task_id: Optional[str], aspect: Optional[str] = None) -> None:
     entries = _qa_entries(draft["qa"])
     options = [{"key": "suggested", "label": suggested.get("label") or "",
                 "note": suggested.get("desc") or ""}]
@@ -448,7 +453,7 @@ def append_question(draft: dict, question: str, suggested: dict, branches: list,
         options.append({"key": f"branch_{i}", "label": b.get("label") or "",
                         "note": b.get("desc") or ""})
     draft["qa"].append({
-        "no": len(entries) + 1, "question": question, "options": options,
+        "no": len(entries) + 1, "aspect": aspect, "question": question, "options": options,
         "suggested_key": "suggested", "answer_key": None, "answer_text": None,
         "skipped": False, "llm_task_id": llm_task_id,
     })

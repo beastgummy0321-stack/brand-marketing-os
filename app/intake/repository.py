@@ -14,6 +14,7 @@ import json
 import sqlite3
 from typing import Optional
 
+from app.brand_intelligence import customer_voice
 from app.brand_intelligence import repository as bi_repo
 from app.core import cleanup
 from app.core import db
@@ -26,6 +27,7 @@ KIND_TO_HUMAN = {
     "product_fact": "產品事實",
     "rule": "限制規則",
     "claim": "宣稱",
+    "customer_voice": "顧客原話",
 }
 HUMAN_TO_KIND = {v: k for k, v in KIND_TO_HUMAN.items()}
 
@@ -382,8 +384,15 @@ def resolve_item(conn: sqlite3.Connection, brand_id: str, item_id: str, outcome:
         # 宣稱的 content 是查核脈絡說明，不是宣稱語句本身；有建 source 時存進它的 note。
         # 決策 0013：不再強制客戶證實來源——有提供就用，沒提供就用 AI 附的依據。
         evidence_text = client_evidence or item["evidence_source"]
-        source_note = item["content"] if kind == "claim" else None
-        src_id = _make_source(conn, brand_id, actor, evidence_text, note=source_note)
+        if kind == "customer_voice":
+            target = customer_voice.save_research_quote(
+                conn, brand_id, actor=actor, quote=item["content"], insight=item["title"],
+                task_layer=category, source_detail=evidence_text,
+            )
+            target_table, target_id = "customer_voice", target["id"]
+        else:
+            source_note = item["content"] if kind == "claim" else None
+            src_id = _make_source(conn, brand_id, actor, evidence_text, note=source_note)
         if kind == "brand_fact":
             target = bi_repo.create_brand_fact(
                 conn, brand_id, actor=actor, fact_type=category, label=item["title"],
@@ -409,7 +418,7 @@ def resolve_item(conn: sqlite3.Connection, brand_id: str, item_id: str, outcome:
                 severity=(rule_severity if rule_severity in ("hard", "soft") else "soft"),
                 product_id=product_id, source_reference_id=src_id)
             target_table, target_id = "rule", target["id"]
-        else:  # claim（evidence_text 即 client_evidence，src_id 已含查核脈絡 note）
+        elif kind == "claim":  # evidence_text 即 client_evidence，src_id 已含查核脈絡 note
             product_id = (None if item["scope_raw"] == "整個品牌"
                           else _ensure_product(conn, brand_id, actor, item["scope_raw"]))
             target = bi_repo.create_claim(
@@ -431,7 +440,7 @@ def resolve_item(conn: sqlite3.Connection, brand_id: str, item_id: str, outcome:
                     label=item["title"], value=item["content"], status="pending",
                     source_reference_id=src_id)
             target_table, target_id = kind, target["id"]
-        # rule / claim 沒有待確認狀態（03 §3A.3）：留在本表等人再處理，不寫目標表。
+        # rule / claim / customer_voice 沒有待確認狀態：留在本表等人再處理，不寫目標表。
 
     conn.execute(
         """UPDATE intake_item SET outcome = ?, client_evidence = ?, target_table = ?,

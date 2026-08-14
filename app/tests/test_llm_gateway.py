@@ -10,6 +10,10 @@ import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
+
+import anthropic
 
 from app.ads import repository as ads_repo
 from app.brand_intelligence import repository as repo
@@ -180,6 +184,51 @@ class LLMGatewayTest(unittest.TestCase):
         self.assertEqual(row["status"], "timeout")
         rows = self._rows_for_brand()
         self.assertTrue(all(r["status"] == "timeout" for r in rows))
+
+
+class AnthropicStructuredToolTest(unittest.TestCase):
+    def test_forced_tool_input_becomes_structured_response(self):
+        captured = []
+        structured = {"rows": [{"kind": "品牌事實"}]}
+        sdk_response = SimpleNamespace(
+            stop_reason="tool_use",
+            content=[SimpleNamespace(type="tool_use", name="submit_rows", input=structured)],
+            usage=SimpleNamespace(input_tokens=10, output_tokens=20, server_tool_use=None),
+        )
+
+        class FakeClient:
+            def __init__(self, **_kwargs):
+                pass
+
+            def with_options(self, **_kwargs):
+                return self
+
+            @property
+            def messages(self):
+                return self
+
+            def create(self, **kwargs):
+                captured.append(kwargs)
+                return sdk_response
+
+        tool = {
+            "name": "submit_rows",
+            "description": "提交整理列。",
+            "input_schema": {"type": "object", "properties": {"rows": {"type": "array"}},
+                             "required": ["rows"]},
+        }
+        with mock.patch.object(providers.settings, "get_api_key", lambda: "sk-ant-fake-test"), \
+                mock.patch.object(anthropic, "Anthropic", FakeClient):
+            response = providers.AnthropicProvider().complete(
+                model="claude-opus-5", system=None,
+                messages=[{"role": "user", "content": "整理"}], max_tokens=1000,
+                tools=[tool],
+            )
+
+        self.assertEqual(captured[0]["tools"], [tool])
+        self.assertEqual(captured[0]["tool_choice"], {"type": "tool", "name": "submit_rows"})
+        self.assertEqual(response.structured, structured)
+        self.assertEqual(response.output_text, "")
 
 
 class TaskModelThinkingDefaultsTest(unittest.TestCase):

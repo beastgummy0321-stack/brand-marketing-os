@@ -22,6 +22,7 @@ os.environ.setdefault("ANTHROPIC_API_KEY", "sk-ant-fake-intake-api-test")
 from fastapi.testclient import TestClient  # noqa: E402
 
 import app.main as main  # noqa: E402
+from app.ads import creative as ads_creative  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
 from app.core import interrupts as core_interrupts  # noqa: E402
 from app.intake import ai as intake_ai  # noqa: E402
@@ -44,8 +45,8 @@ atexit.register(_cleanup)
 _SEQ = [0]
 
 
-def _fake_response(text: str) -> ProviderResponse:
-    return ProviderResponse(output_text=text, structured=None,
+def _fake_response(text: str, structured=None) -> ProviderResponse:
+    return ProviderResponse(output_text=text, structured=structured,
                             usage=Usage(input_tokens=10, output_tokens=10), stop_reason="end_turn")
 
 
@@ -56,9 +57,9 @@ _SCAN_OK = json.dumps({
 }, ensure_ascii=False)
 
 
-def _question_json(i: int = 0) -> str:
+def _question_json(i: int = 0, aspect: str = "產品線") -> str:
     q = script.QUESTIONS[i]
-    return json.dumps({"done": False, "question": q["question"],
+    return json.dumps({"done": False, "aspect": aspect, "question": q["question"],
                        "suggested": {"label": q["suggested"]["label"], "desc": q["suggested"]["desc"]},
                        "branches": [{"label": b["label"], "desc": b["desc"]} for b in q["branches"]]},
                       ensure_ascii=False)
@@ -166,6 +167,35 @@ class PasteValidateTest(_Base):
         self.assertEqual(resp.status_code, 400)
         self.assertEqual(resp.json()["error"], "請先貼上 AI 給你的表格內容。")
 
+    def test_markdown_outer_pipes_are_accepted(self):
+        bid = self._create_full()
+        raw_text = (
+            "| 種類 | 分類 | 標題 | 內容 | 適用範圍 | 佐證來源 |\n"
+            "| 品牌事實 | 定位 | 標題 | 內容 | 整個品牌 | 官網 |"
+        )
+
+        resp = self.client.post(f"/api/intake/brands/{bid}/paste/validate",
+                                json={"raw_text": raw_text})
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["errors"], [])
+        self.assertEqual(resp.json()["data_line_count"], 1)
+
+    def test_markdown_separator_line_is_discarded(self):
+        bid = self._create_full()
+        raw_text = (
+            "| 種類 | 分類 | 標題 | 內容 | 適用範圍 | 佐證來源 |\n"
+            "|---|---|---|---|---|---|\n"
+            "| 品牌事實 | 定位 | 標題 | 內容 | 整個品牌 | 官網 |"
+        )
+
+        resp = self.client.post(f"/api/intake/brands/{bid}/paste/validate",
+                                json={"raw_text": raw_text})
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["errors"], [])
+        self.assertEqual(resp.json()["data_line_count"], 1)
+
 
 # ---------------------------------------------------------------------------
 # 貼回：不認得的適用範圍——建立成新產品／歸到整個品牌，兩個出口都立即重驗、不用重貼
@@ -209,6 +239,27 @@ class PasteResolveScopeTest(_Base):
 # ---------------------------------------------------------------------------
 
 class PasteFixBackgroundTest(_Base):
+    def test_structured_rows_bypass_broken_text_and_land(self):
+        bid = self._create_full()
+        self.client.post(f"/api/intake/brands/{bid}/paste/validate",
+                         json={"raw_text": "沒有表格的原始內容"})
+        structured = {"rows": [{
+            "kind": "品牌事實", "category": "定位", "title": "虛構定位",
+            "content": "只在測試裡存在的定位內容。", "scope": "整個品牌", "evidence": "假官網",
+        }]}
+        intake_ai.PROVIDER = FakeProvider(
+            response=_fake_response("這段文字故意不是表格", structured=structured))
+
+        self.client.post(f"/api/intake/brands/{bid}/paste/fix/start")
+        status = self._poll(bid, "paste_fix")
+
+        self.assertEqual(status["status"], "done")
+        self.assertEqual(state.get_draft(bid)["pending_item_count"], 1)
+        self.assertEqual(intake_ai.PROVIDER.calls[0]["tools"][0]["name"], "submit_paste_rows")
+        sent = intake_ai.PROVIDER.calls[0]["messages"][0]["content"]
+        self.assertIn("不要用 Markdown 表格語法", sent)
+        self.assertIn("顧客原話", sent)
+
     def test_success_reflows_lands_and_notifies(self):
         bid = self._create_full()
         bi_repo.create_product(main.conn, bid, name=script.MOCK_PRODUCT_NAME, actor="測試員")
@@ -299,6 +350,38 @@ class ReviewTest(_Base):
             (bid,)).fetchone()
         self.assertEqual(row["outcome"], "confirmed")
         self.assertIsNotNone(row["target_table"])
+
+    def test_customer_quote_confirm_reaches_existing_prompt_consumer(self):
+        bid = self._create_full()
+        quote = "包裝很漂亮，可是第一次打開時我完全找不到沖泡說明。"
+        raw_text = (
+            "種類 | 分類 | 標題 | 內容 | 適用範圍 | 佐證來源\n"
+            f"顧客原話 | 功能任務 | 找不到使用說明 | {quote} | 整個品牌 | 虛構 Dcard 討論串"
+        )
+        pasted = self.client.post(f"/api/intake/brands/{bid}/paste/validate",
+                                  json={"raw_text": raw_text})
+        self.assertEqual(pasted.json()["errors"], [])
+        item = self.client.get(f"/api/intake/brands/{bid}/review/1").json()["data"]
+        self.assertEqual(item["kind"], "顧客原話")
+
+        confirmed = self.client.post(f"/api/intake/brands/{bid}/review/1", json={
+            "outcome": "confirm", "kind": item["kind"], "category": item["category"],
+            "title": item["title"], "content": item["content"], "scope": item["scope"],
+        })
+
+        self.assertEqual(confirmed.status_code, 204)
+        voices = bi_repo.list_customer_voices(main.conn, bid, status="active")
+        self.assertEqual(len(voices), 1)
+        self.assertEqual(voices[0]["raw_text"], quote)
+        self.assertEqual(voices[0]["source_detail"], "虛構 Dcard 討論串")
+        self.assertEqual(voices[0]["extraction"][0]["task_layer"], "functional")
+        prompt_block, available = ads_creative._customer_voice_block(main.conn, bid)
+        self.assertTrue(available)
+        self.assertIn(quote, prompt_block)
+        row = main.conn.execute(
+            "SELECT target_table FROM intake_item WHERE brand_id = ? AND row_no = 1", (bid,)
+        ).fetchone()
+        self.assertEqual(row["target_table"], "customer_voice")
 
     def test_pending_outcome_does_not_write_rule_table(self):
         bid = self._create_full()
