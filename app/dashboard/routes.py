@@ -6,9 +6,10 @@
 """
 
 import os
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
+from typing import Optional
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 import app.shared.web as main_mod
@@ -37,6 +38,34 @@ async def cockpit(brand_id: str):
     既有 `require_brand`（app/shared/web.py），跟舊介面一致的「找不到品牌」回應。"""
     brand = main_mod.require_brand(brand_id)
     data = dashboard_repo.cockpit(main_mod.conn, brand_id, today=_today_override())
+    data["brand_id"] = brand["id"]
+    data["brand_name"] = brand["name"]
+    return {
+        "data": data,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def _validated_month(month: Optional[str]) -> str:
+    selected = month or (_today_override() or date.today().isoformat())[:7]
+    try:
+        if len(selected) != 7 or selected[4] != "-" or not selected[:4].isdigit() \
+                or not selected[5:].isdigit():
+            raise ValueError
+        date.fromisoformat(f"{selected}-01")
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400,
+                            detail="月份格式需為 YYYY-MM，例如 2026-08")
+    return selected
+
+
+@router.get("/brands/{brand_id}/monthly-report")
+async def monthly_report(brand_id: str, month: Optional[str] = None):
+    """Act3 數字月報：指定月份的花費／訂單／營收／ROAS／CAC 與六個月趨勢。"""
+    brand = main_mod.require_brand(brand_id)
+    data = dashboard_repo.monthly_report(
+        main_mod.conn, brand_id, _validated_month(month),
+    )
     data["brand_id"] = brand["id"]
     data["brand_name"] = brand["name"]
     return {

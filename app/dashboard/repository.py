@@ -271,6 +271,50 @@ def _monthly_trend(conn, brand_id: str, months: list) -> dict:
     return {"revenue": revenue, "spend": spend, "roas": roas, "orders": orders}
 
 
+def _cac(spend: Optional[float], orders: Optional[int]) -> Optional[float]:
+    """月報 CAC＝花費／訂單；沒有訂單時「沒得算」回 None。"""
+    return round(spend / orders, 2) if spend is not None and orders else None
+
+
+def monthly_report(conn, brand_id: str, month: str) -> dict:
+    """指定月份的數字月報與最近六個月趨勢（唯讀）。
+
+    月份邊界與駕駛艙共用 `_month_bounds`／`_monthly_trend`，避免兩支畫面各自長出
+    不同的月份口徑。完全沒有任何數據時，當月訂單數也回 None；有花費但沒有訂單時
+    訂單數回 0，CAC 仍回 None，區分「沒有資料」與「確定沒有訂單」。
+    """
+    months = _months_window(f"{month}-01", _TREND_MONTHS)
+    trend = _monthly_trend(conn, brand_id, months)
+    current_spend = trend["spend"][-1]
+    current_orders = trend["orders"][-1]
+    current_revenue = trend["revenue"][-1]
+    current_roas = trend["roas"][-1]
+
+    no_data = (current_spend is None and current_revenue is None and
+               current_roas is None and current_orders == 0)
+    if no_data:
+        current_orders = None
+
+    cac_trend = [_cac(spend, orders)
+                 for spend, orders in zip(trend["spend"], trend["orders"])]
+    return {
+        "month": month,
+        "spend": current_spend,
+        "orders": current_orders,
+        "revenue": current_revenue,
+        "roas": current_roas,
+        "cac": _cac(current_spend, current_orders),
+        "trend": {
+            "months": months,
+            "spend": trend["spend"],
+            "orders": trend["orders"],
+            "revenue": trend["revenue"],
+            "roas": trend["roas"],
+            "cac": cac_trend,
+        },
+    }
+
+
 # ---------------------------------------------------------------------------
 # 最後同步時間（票 07-auto-sync）：Meta 快照抓取時間與 GA4 同步時間取較新的一筆，
 # 給駕駛艙標示數據新舊——「超過一天沒同步」用 data_stale 提醒使用者，不是默默沿用
