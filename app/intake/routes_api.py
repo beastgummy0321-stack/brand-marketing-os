@@ -21,6 +21,7 @@ key 用 brand_id——同一時間一個品牌只有一份進行中草稿，三�
 """
 
 from datetime import datetime, timezone
+import re
 
 from fastapi import APIRouter, File, Request, UploadFile
 from fastapi.responses import JSONResponse, Response
@@ -33,6 +34,21 @@ from app.shared import web
 from app.shared.web import NotFoundKind, clean, require_actor, require_brand
 
 router = APIRouter()
+
+REPORT_SECTION_TITLES = (
+    "市場與品類",
+    "競品拆解",
+    "消費者洞察與評論探勘",
+    "定價",
+    "通路",
+    "法規備忘",
+    "綜整",
+)
+_REPORT_SECTION_HEADING = re.compile(
+    r"(?m)^[\t #>*-]*(?:(?:[1-7]|[一二三四五六七])[、.．)）]\s*)?"
+    + r"(?P<title>" + "|".join(re.escape(title) for title in REPORT_SECTION_TITLES) + r")"
+    + r"(?=\s|[:：]|[（(]|$)",
+)
 
 
 def _error(status_code: int, message: str) -> JSONResponse:
@@ -137,6 +153,42 @@ async def draft_get(brand_id: str):
     require_brand(brand_id)
     draft = state.require_draft(brand_id)
     return _envelope(_draft_shape(brand_id, draft))
+
+
+# ---------------------------------------------------------------------------
+# 調研報告回顯（T2a 1.2-1.4）
+# ---------------------------------------------------------------------------
+
+def detect_report_sections(raw_text: str) -> tuple[str, list[dict]]:
+    """依深度調研七章標題切出原文區段；每個字元都保留在前言或其中一章。"""
+    matches = list(_REPORT_SECTION_HEADING.finditer(raw_text))
+    if not matches:
+        return raw_text, []
+    sections = []
+    for index, match in enumerate(matches):
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(raw_text)
+        sections.append({"title": match.group("title"), "raw_text": raw_text[match.start():end]})
+    return raw_text[:matches[0].start()], sections
+
+
+def _research_report_json(report: dict) -> dict:
+    leading_text, sections = detect_report_sections(report["paste_raw"])
+    return {**report, "leading_text": leading_text, "sections": sections}
+
+
+@router.get("/api/intake/brands/{brand_id}/research-reports")
+async def research_report_list(brand_id: str):
+    require_brand(brand_id)
+    return _envelope(ir.list_research_reports(web.conn, brand_id))
+
+
+@router.get("/api/intake/brands/{brand_id}/research-reports/{draft_id}")
+async def research_report_get(brand_id: str, draft_id: str):
+    require_brand(brand_id)
+    report = ir.get_research_report(web.conn, brand_id, draft_id)
+    if report is None:
+        raise NotFoundKind("調研報告")
+    return _envelope(_research_report_json(report))
 
 
 # ---------------------------------------------------------------------------

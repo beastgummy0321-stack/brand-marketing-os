@@ -108,6 +108,40 @@ def get_latest_completed_draft(conn: sqlite3.Connection, brand_id: str) -> Optio
     return _row_to_dict(row)
 
 
+def list_research_reports(conn: sqlite3.Connection, brand_id: str) -> list:
+    """有貼回原文的歷次調研，連同每份已確認入檔數。"""
+    rows = conn.execute(
+        """SELECT draft.id, draft.created_at, COUNT(item.id) AS confirmed_count
+           FROM intake_draft AS draft
+           LEFT JOIN intake_item AS item
+             ON item.intake_draft_id = draft.id
+            AND item.brand_id = draft.brand_id
+            AND item.outcome = 'confirmed'
+           WHERE draft.brand_id = ? AND TRIM(COALESCE(draft.paste_raw, '')) <> ''
+           GROUP BY draft.id
+           ORDER BY draft.created_at DESC, draft.id DESC""",
+        (brand_id,),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def get_research_report(conn: sqlite3.Connection, brand_id: str, draft_id: str) -> Optional[dict]:
+    """單份已貼回原文的調研；草稿不屬於此品牌或未貼原文都不回傳。"""
+    row = conn.execute(
+        """SELECT draft.id, draft.created_at, draft.paste_raw, COUNT(item.id) AS confirmed_count
+           FROM intake_draft AS draft
+           LEFT JOIN intake_item AS item
+             ON item.intake_draft_id = draft.id
+            AND item.brand_id = draft.brand_id
+            AND item.outcome = 'confirmed'
+           WHERE draft.brand_id = ? AND draft.id = ?
+             AND TRIM(COALESCE(draft.paste_raw, '')) <> ''
+           GROUP BY draft.id""",
+        (brand_id, draft_id),
+    ).fetchone()
+    return _row_to_dict(row)
+
+
 def get_draft(conn: sqlite3.Connection, brand_id: str, draft_id: str) -> Optional[dict]:
     row = conn.execute(
         "SELECT * FROM intake_draft WHERE brand_id = ? AND id = ?", (brand_id, draft_id)
