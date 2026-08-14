@@ -20,3 +20,6 @@ __pycache__/
 # production 由 FastAPI StaticFiles 掛載，不進版控
 frontend/node_modules/
 frontend/dist/
+
+# 舊工作紀錄封存區（2026-08-14 骨架日），留本機不進版控
+archive/
