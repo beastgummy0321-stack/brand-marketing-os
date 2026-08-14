@@ -13,9 +13,6 @@ import unittest
 from pathlib import Path
 
 _tmpdir = tempfile.mkdtemp(prefix="brand_os_orders_dispatch_")
-os.environ["BRAND_OS_DB"] = str(Path(_tmpdir) / "test.db")
-os.environ["BRAND_OS_BACKUP_DIR"] = str(Path(_tmpdir) / "backups")
-os.environ["BRAND_OS_UPLOADS"] = str(Path(_tmpdir) / "uploads")
 
 import openpyxl  # noqa: E402
 
@@ -26,7 +23,6 @@ from app.brand_intelligence import repository as bi_repo  # noqa: E402
 from app.llm.providers import FakeProvider, ProviderResponse, Usage  # noqa: E402
 from app.orders import dispatch as orders_dispatch  # noqa: E402
 
-main.reopen_connection()
 
 
 def _cleanup():

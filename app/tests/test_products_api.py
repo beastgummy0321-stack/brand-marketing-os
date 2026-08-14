@@ -17,9 +17,6 @@ from pathlib import Path
 
 # 先備好暫存 DB 的環境變數，才能 import app.main（它在 import 當下就會連線＋跑 migrations）。
 _tmpdir = tempfile.mkdtemp(prefix="brand_os_products_api_")
-os.environ["BRAND_OS_DB"] = str(Path(_tmpdir) / "test.db")
-os.environ["BRAND_OS_BACKUP_DIR"] = str(Path(_tmpdir) / "backups")
-os.environ["BRAND_OS_UPLOADS"] = str(Path(_tmpdir) / "uploads")
 os.environ.setdefault("ANTHROPIC_API_KEY", "sk-ant-fake-products-api-test")
 
 from fastapi.testclient import TestClient  # noqa: E402
@@ -33,7 +30,6 @@ from app.core import settings as coresettings  # noqa: E402
 from app.llm.providers import FakeProvider, ProviderResponse, Usage  # noqa: E402
 from app.shared.web import OPERATOR  # noqa: E402
 
-main.reopen_connection()
 
 
 def _cleanup():

@@ -8,9 +8,6 @@ import tempfile
 import unittest
 
 _tmpdir = tempfile.mkdtemp(prefix="brand_os_dashboard_monthly_report_")
-os.environ["BRAND_OS_DB"] = str(os.path.join(_tmpdir, "test.db"))
-os.environ["BRAND_OS_BACKUP_DIR"] = str(os.path.join(_tmpdir, "backups"))
-os.environ["BRAND_OS_UPLOADS"] = str(os.path.join(_tmpdir, "uploads"))
 os.environ["BRAND_OS_TODAY"] = "2026-08-05"
 
 from fastapi.testclient import TestClient  # noqa: E402
@@ -22,7 +19,6 @@ from app.core.db import new_id  # noqa: E402
 from app.dashboard import repository as dashboard_repo  # noqa: E402
 from app.orders import repository as orders_repo  # noqa: E402
 
-main.reopen_connection()
 
 
 def _cleanup():

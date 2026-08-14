@@ -16,16 +16,12 @@ import unittest
 from pathlib import Path
 
 _tmpdir = tempfile.mkdtemp(prefix="brand_os_react_shell_")
-os.environ["BRAND_OS_DB"] = str(Path(_tmpdir) / "test.db")
-os.environ["BRAND_OS_BACKUP_DIR"] = str(Path(_tmpdir) / "backups")
-os.environ["BRAND_OS_UPLOADS"] = str(Path(_tmpdir) / "uploads")
 
 from fastapi.testclient import TestClient  # noqa: E402
 
 import app.main as main  # noqa: E402
 from app.shared import web  # noqa: E402
 
-main.reopen_connection()
 
 _FRONTEND_DIST = web.BASE_DIR.parent / "frontend" / "dist"
 

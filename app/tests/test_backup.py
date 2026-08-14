@@ -28,15 +28,11 @@ from app.core import backup as corebackup
 # 清理交給 atexit（process 結束才清）——app.main 的連線是整個測試 session 共用的全域單例，
 # 每個測試方法各自 close＋rmtree 會把後面其他檔案要用的 main.conn 也一併關掉。
 _tmpdir = tempfile.mkdtemp(prefix="brand_os_backup_test_")
-os.environ["BRAND_OS_DB"] = str(Path(_tmpdir) / "test.db")
-os.environ["BRAND_OS_BACKUP_DIR"] = str(Path(_tmpdir) / "backups")
-os.environ["BRAND_OS_UPLOADS"] = str(Path(_tmpdir) / "uploads")
 
 from fastapi.testclient import TestClient  # noqa: E402
 
 import app.main as main  # noqa: E402
 
-main.reopen_connection()
 
 
 def _cleanup():

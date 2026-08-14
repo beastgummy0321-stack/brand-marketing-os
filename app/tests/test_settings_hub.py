@@ -14,9 +14,6 @@ import unittest
 from pathlib import Path
 
 _tmpdir = tempfile.mkdtemp(prefix="brand_os_settings_hub_")
-os.environ["BRAND_OS_DB"] = str(Path(_tmpdir) / "test.db")
-os.environ["BRAND_OS_BACKUP_DIR"] = str(Path(_tmpdir) / "backups")
-os.environ["BRAND_OS_UPLOADS"] = str(Path(_tmpdir) / "uploads")
 
 from fastapi.testclient import TestClient  # noqa: E402
 
@@ -26,7 +23,6 @@ from app.core import calendar_dismiss  # noqa: E402
 from app.core import rule_cards  # noqa: E402
 from app.shared.web import OPERATOR  # noqa: E402
 
-main.reopen_connection()
 
 
 def _cleanup():

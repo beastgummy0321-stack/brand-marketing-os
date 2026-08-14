@@ -21,9 +21,6 @@ from pathlib import Path
 from urllib.parse import unquote
 
 _tmpdir = tempfile.mkdtemp(prefix="brand_os_ads_connections_")
-os.environ["BRAND_OS_DB"] = str(Path(_tmpdir) / "test.db")
-os.environ["BRAND_OS_BACKUP_DIR"] = str(Path(_tmpdir) / "backups")
-os.environ["BRAND_OS_UPLOADS"] = str(Path(_tmpdir) / "uploads")
 
 import openpyxl  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
@@ -37,7 +34,6 @@ from app.brand_intelligence import repository as bi_repo  # noqa: E402
 from app.core import settings as coresettings  # noqa: E402
 from app.tools import capacity_check  # noqa: E402
 
-main.reopen_connection()
 
 _TEMPLATE_PATH = Path(__file__).resolve().parents[2] / "app" / "templates" / "ads_connections.html"
 

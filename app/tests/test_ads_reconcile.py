@@ -13,9 +13,6 @@ import unittest
 from pathlib import Path
 
 _tmpdir = tempfile.mkdtemp(prefix="brand_os_ads_recon_")
-os.environ["BRAND_OS_DB"] = str(Path(_tmpdir) / "test.db")
-os.environ["BRAND_OS_BACKUP_DIR"] = str(Path(_tmpdir) / "backups")
-os.environ["BRAND_OS_UPLOADS"] = str(Path(_tmpdir) / "uploads")
 
 from fastapi.testclient import TestClient  # noqa: E402
 
@@ -25,7 +22,6 @@ from app.ads import reconcile as recon  # noqa: E402
 from app.ads import repository as ads_repo  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
 
-main.reopen_connection()
 
 
 def _cleanup():

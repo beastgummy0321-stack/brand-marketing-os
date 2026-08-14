@@ -3,9 +3,8 @@
 
 setUp 沿用 test_ads_creative 的 _BaseCreativeTest——該檔已達行數上限（870 行，
 `test_architecture_boundaries.KNOWN_OVERSIZED_FILES` 凍住、只准變小），新測試不得往裡面加，
-比照 test_ads_creative_buttons.py 的既有做法另立本檔。檔名刻意排在 test_ads_creative 隔壁：
-跨檔 import 那份 fixture 會連帶決定 main.conn 綁到哪個測試用資料庫，放在同一段字母序區間
-才不會擾動全套測試的既有順序（放到別處會讓 test_settings_hub 的品牌隔離測試誤判）。
+比照 test_ads_creative_buttons.py 的既有做法另立本檔。跨檔 import 只沿用測試基底；
+資料庫由 app/tests/conftest.py 在本模組執行前另開暫存庫，不依賴檔名或收集順序。
 
 打法（campaign_plan）那個呼叫點的同款測試在 test_ads_plan.py；工具定義本身與成本計算
 在 test_llm_web_search.py。全程 FakeProvider，不發任何真實網路請求。

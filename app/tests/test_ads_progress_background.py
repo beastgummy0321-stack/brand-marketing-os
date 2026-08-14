@@ -23,9 +23,6 @@ from pathlib import Path
 from urllib.parse import unquote
 
 _tmpdir = tempfile.mkdtemp(prefix="brand_os_ads_progress_bg_")
-os.environ["BRAND_OS_DB"] = str(Path(_tmpdir) / "test.db")
-os.environ["BRAND_OS_BACKUP_DIR"] = str(Path(_tmpdir) / "backups")
-os.environ["BRAND_OS_UPLOADS"] = str(Path(_tmpdir) / "uploads")
 
 from fastapi.testclient import TestClient  # noqa: E402
 
@@ -35,7 +32,6 @@ from app.ads import routes as ads_routes  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
 from app.llm.providers import ProviderResponse, Usage  # noqa: E402
 
-main.reopen_connection()
 
 
 def _cleanup():

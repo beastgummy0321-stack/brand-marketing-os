@@ -17,9 +17,6 @@ from pathlib import Path
 from unittest import mock
 
 _tmpdir = tempfile.mkdtemp(prefix="brand_os_intake_api_")
-os.environ["BRAND_OS_DB"] = str(Path(_tmpdir) / "test.db")
-os.environ["BRAND_OS_BACKUP_DIR"] = str(Path(_tmpdir) / "backups")
-os.environ["BRAND_OS_UPLOADS"] = str(Path(_tmpdir) / "uploads")
 os.environ.setdefault("ANTHROPIC_API_KEY", "sk-ant-fake-intake-api-test")
 
 from fastapi.testclient import TestClient  # noqa: E402
@@ -32,7 +29,6 @@ from app.intake import routes_api as api  # noqa: E402
 from app.intake import script, state  # noqa: E402
 from app.llm.providers import FakeProvider, ProviderResponse, Usage  # noqa: E402
 
-main.reopen_connection()
 
 
 def _cleanup():

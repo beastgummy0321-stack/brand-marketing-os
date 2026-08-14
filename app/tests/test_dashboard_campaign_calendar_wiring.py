@@ -17,9 +17,6 @@ import tempfile
 import unittest
 
 _tmpdir = tempfile.mkdtemp(prefix="brand_os_dashboard_campaign_calendar_")
-os.environ["BRAND_OS_DB"] = str(os.path.join(_tmpdir, "test.db"))
-os.environ["BRAND_OS_BACKUP_DIR"] = str(os.path.join(_tmpdir, "backups"))
-os.environ["BRAND_OS_UPLOADS"] = str(os.path.join(_tmpdir, "uploads"))
 
 import app.main as main  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
@@ -27,7 +24,6 @@ from app.core import calendar_dismiss as core_calendar_dismiss  # noqa: E402
 from app.core import campaign_skip as core_campaign_skip  # noqa: E402
 from app.dashboard import repository as dashboard_repo  # noqa: E402
 
-main.reopen_connection()
 
 
 def _cleanup():

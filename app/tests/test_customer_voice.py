@@ -17,9 +17,6 @@ from unittest import mock
 
 # 先備好暫存 DB 的環境變數，才能 import app.main（它在 import 當下就會連線＋跑 migrations）。
 _tmpdir = tempfile.mkdtemp(prefix="brand_os_customer_voice_")
-os.environ["BRAND_OS_DB"] = str(Path(_tmpdir) / "test.db")
-os.environ["BRAND_OS_BACKUP_DIR"] = str(Path(_tmpdir) / "backups")
-os.environ["BRAND_OS_UPLOADS"] = str(Path(_tmpdir) / "uploads")
 
 from fastapi.testclient import TestClient  # noqa: E402
 
@@ -28,7 +25,6 @@ from app.brand_intelligence import customer_voice  # noqa: E402
 from app.brand_intelligence import repository as repo  # noqa: E402
 from app.llm import providers  # noqa: E402
 
-main.reopen_connection()
 
 
 def _cleanup():
