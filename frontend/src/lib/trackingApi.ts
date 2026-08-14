@@ -80,8 +80,10 @@ export const startTrackingRecheck = (brandId: string): Promise<void> => postJson
 export const fetchTrackingRecheckStatus = (brandId: string): Promise<RecheckState> =>
   getJson(`${base(brandId)}/recheck/status`);
 
-/** 精靈頁「我裝好了，幫我檢查」（契約 2.4）：同步，回傳更新後的官網卡。 */
-export const checkWebsiteNow = (brandId: string): Promise<TrackingChannel> => postJson(`${base(brandId)}/website/check`);
+/** 精靈頁「我裝好了，幫我檢查」（契約 2.4）：同步，回傳更新後的官網卡。
+ * 這支 POST 跟 GET 一樣回信封 {data:…}，要拆過才是官網卡。 */
+export const checkWebsiteNow = (brandId: string): Promise<TrackingChannel> =>
+  postJson<Envelope<TrackingChannel>>(`${base(brandId)}/website/check`).then((body) => body.data);
 
 export const setChannelHidden = (brandId: string, channelKey: TrackingChannelKey, hidden: boolean): Promise<void> =>
   postJson(`${base(brandId)}/${encodeURIComponent(channelKey)}/hidden`, { hidden });
