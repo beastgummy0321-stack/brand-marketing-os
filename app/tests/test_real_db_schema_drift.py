@@ -31,10 +31,6 @@ KNOWN_SCHEMA_DRIFT = {
     "（全新庫上的測試驗不到它）",
     "learning_ledger.source_reading_id -> performance_reading.id：**只有真實庫有這條外鍵**"
     "（全新庫上的測試驗不到它）",
-    # 票 T0 新增 app/ads/migrations/0018_channel_tracking_check.sql：真實庫要等下次啟動
-    # app（connect_and_migrate 自動套用）才會補上這張表，屬於自己會消失的暫時性落差——
-    # 補齊後這條要跟著從清單刪掉（test_known_drift_is_not_stale 會提醒）。
-    "只有全新庫有這張表：channel_tracking_check（真實庫還沒 migrate 到）",
 }
 
 
