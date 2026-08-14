@@ -713,6 +713,7 @@ from app.ads import inflation as ads_inflation  # noqa: E402
 from app.ads import reading as ads_reading  # noqa: E402
 from app.ads import routes as ads_routes_mod  # noqa: E402
 from app.ads import settlement as ads_settlement  # noqa: E402
+from app.ads import tracking as ads_tracking  # noqa: E402
 from app.orders import channel as orders_channel  # noqa: E402
 from app.orders import dispatch as orders_dispatch  # noqa: E402
 from app.orders import repository as orders_repo  # noqa: E402
@@ -726,6 +727,7 @@ ads_routes_mod.orders_channel = orders_channel
 ads_routes_mod.orders_dispatch = orders_dispatch
 ads_routes_mod.orders_repo = orders_repo
 ads_settlement.orders_repo = orders_repo
+ads_tracking.orders_channel = orders_channel
 
 # 啟動斷言：確認上面每一格都真的注入了。那幾個模組裡的預設值是 None——少注入一格
 # 不會當場報錯，要等到使用者剛好走到那條路徑才炸出一句看不懂的
@@ -740,6 +742,7 @@ _INJECTIONS = (
     ("app.ads.routes.orders_dispatch", ads_routes_mod.orders_dispatch),
     ("app.ads.routes.orders_repo", ads_routes_mod.orders_repo),
     ("app.ads.settlement.orders_repo", ads_settlement.orders_repo),
+    ("app.ads.tracking.orders_channel", ads_tracking.orders_channel),
 )
 _missing_injections = [name for name, value in _INJECTIONS if value is None]
 if _missing_injections:

@@ -151,6 +151,26 @@ def save_shopee_rows(conn, brand_id: str, rows: list, *, source: str, actor: str
     return result
 
 
+def shopee_latest_import(conn, brand_id: str) -> Optional[str]:
+    """最近一次蝦皮報表匯入時間（依落地列的 created_at 取最新一筆）；從沒匯入過回 None。
+    給追蹤健檢用（票 T0 契約 1.5：曾匯入過＝就緒＋最近匯入日期）。"""
+    row = conn.execute(
+        "SELECT created_at FROM shopee_report_row WHERE brand_id = ? ORDER BY created_at DESC LIMIT 1",
+        (brand_id,),
+    ).fetchone()
+    return row["created_at"] if row else None
+
+
+def pharmacy_latest_batch(conn, brand_id: str) -> Optional[str]:
+    """最近一筆藥局出貨批次日期；從沒記錄過回 None（同上，票 T0 契約 1.5 用）。"""
+    row = conn.execute(
+        "SELECT batch_date FROM pharmacy_batch WHERE brand_id = ?"
+        " ORDER BY batch_date DESC, created_at DESC LIMIT 1",
+        (brand_id,),
+    ).fetchone()
+    return row["batch_date"] if row else None
+
+
 def shopee_revenue(conn, brand_id: str, since: str, until: str) -> Optional[float]:
     """這段日期範圍蝦皮營收加總。沒有任何一列落在範圍內回 None——不知道跟 0 是兩件事。"""
     row = conn.execute(

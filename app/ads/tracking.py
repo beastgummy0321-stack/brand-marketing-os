@@ -10,8 +10,16 @@ from app.ads import ga4_sync
 from app.ads import handoff as ads_handoff
 from app.ads import performance as ads_performance
 from app.ads import repository as ads_repo
+from app.brand_intelligence import repository as bi_repo
 from app.core import interrupts as core_interrupts
+from app.core import net
 from app.core.db import new_id, now_iso
+
+# 第 7 刀（A1 三層地界新規則：app/ads 不得 import app.orders，見
+# test_architecture_boundaries.py）：orders_channel 不在這裡 import，改由組裝根
+# app/main.py 啟動時注入真正的 app.orders.channel 模組（品牌層追蹤健檢——票 T0——
+# 蝦皮／藥局「曾匯入過」要查 app.orders 的表，同 app/ads/reading.py 既有寫法）。
+orders_channel = None
 
 POST_LAUNCH_CHECK_DAYS = 3
 _PAID_MEDIA = {"paid", "paid_social", "cpc", "ppc"}
@@ -304,3 +312,171 @@ def run_post_sync_checks(conn, brand_id: str, *, today: Optional[str] = None,
         created += bool(interrupt_id)
     conn.commit()
     return created
+
+
+# ---------------------------------------------------------------------------
+# 品牌層追蹤健檢（票 T0，契約 1.1-1.8／2.1／2.4／2.6）：五張通路卡就緒狀態。跟上面
+# R5/R6 檔期層追蹤鏈是兩件事——那邊管一期廣告的追蹤鏈，這裡管品牌整體五路（官網／FB／
+# IG／蝦皮／藥局）有沒有把追蹤基本功裝好，供健檢頁與安裝精靈用。
+# ---------------------------------------------------------------------------
+
+TRACKING_CHANNEL_KEYS = ("website", "fb_page", "ig_account", "shopee", "pharmacy")
+
+# GA4／Meta Pixel 安裝特徵字串（官方文件查證，票 T0 契約 1.3）：
+#   GA4：script src 含 googletagmanager.com/gtag/js 且頁面含 gtag('config'
+#     （來源：https://developers.google.com/tag-platform/gtagjs）
+#   Meta Pixel：script src 含 connect.facebook.net/en_US/fbevents.js 且含 fbq('init'
+#     （來源：https://developers.facebook.com/docs/meta-pixel/get-started）
+_GA4_SCRIPT_MARK = "googletagmanager.com/gtag/js"
+_GA4_CONFIG_MARK = "gtag('config'"
+_PIXEL_SCRIPT_MARK = "connect.facebook.net/en_US/fbevents.js"
+_PIXEL_INIT_MARK = "fbq('init'"
+
+
+def _detect_ga4(raw_html: str) -> bool:
+    return _GA4_SCRIPT_MARK in raw_html and _GA4_CONFIG_MARK in raw_html
+
+
+def _detect_pixel(raw_html: str) -> bool:
+    return _PIXEL_SCRIPT_MARK in raw_html and _PIXEL_INIT_MARK in raw_html
+
+
+def _tracking_check_row(conn, brand_id: str, channel_key: str) -> Optional[dict]:
+    row = conn.execute(
+        "SELECT * FROM channel_tracking_check WHERE brand_id = ? AND channel_key = ?",
+        (brand_id, channel_key),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def _hidden(conn, brand_id: str, channel_key: str) -> bool:
+    row = _tracking_check_row(conn, brand_id, channel_key)
+    return bool(row and row["hidden"])
+
+
+def set_channel_hidden(conn, brand_id: str, channel_key: str, hidden: bool) -> None:
+    """通路卡「用不到」旗標（契約 1.2：可收合、可恢復）。"""
+    if channel_key not in TRACKING_CHANNEL_KEYS:
+        raise ValueError(f"不認得的通路：{channel_key}")
+    conn.execute(
+        "INSERT INTO channel_tracking_check (brand_id, channel_key, hidden) VALUES (?, ?, ?)"
+        " ON CONFLICT(brand_id, channel_key) DO UPDATE SET hidden = excluded.hidden",
+        (brand_id, channel_key, int(bool(hidden))),
+    )
+    conn.commit()
+
+
+def _save_website_check(conn, brand_id: str, *, ga4_found: bool, pixel_found: bool, checked_at: str) -> None:
+    conn.execute(
+        "INSERT INTO channel_tracking_check (brand_id, channel_key, ga4_found, pixel_found, checked_at)"
+        " VALUES (?, 'website', ?, ?, ?)"
+        " ON CONFLICT(brand_id, channel_key) DO UPDATE SET"
+        " ga4_found = excluded.ga4_found, pixel_found = excluded.pixel_found,"
+        " checked_at = excluded.checked_at",
+        (brand_id, int(ga4_found), int(pixel_found), checked_at),
+    )
+    conn.commit()
+
+
+def _website_url(conn, brand_id: str) -> Optional[str]:
+    for channel in bi_repo.list_channels(conn, brand_id):
+        if channel.get("channel_type") == "website" and channel.get("identifier"):
+            return channel["identifier"]
+    return None
+
+
+def _website_node(conn, brand_id: str, url: Optional[str]) -> dict:
+    hidden = _hidden(conn, brand_id, "website")
+    if not url:
+        return {"key": "website", "status": "off", "sub": None, "checked_at": None, "hidden": hidden,
+                "message": "還沒有填官網網址，先去品牌資料填。",
+                "action": {"kind": "fill", "missing": []}}
+    row = _tracking_check_row(conn, brand_id, "website")
+    checked_at = row["checked_at"] if row else None
+    if checked_at is None:
+        return {"key": "website", "status": "bad", "sub": url, "checked_at": None, "hidden": hidden,
+                "message": "還沒檢查過，按「重新檢查全部」試試看。",
+                "action": {"kind": "install", "missing": ["ga4", "pixel"]}}
+    missing = [name for name, found in (("ga4", row["ga4_found"]), ("pixel", row["pixel_found"]))
+              if not found]
+    if not missing:
+        status, message = "ok", "GA4 和 Meta Pixel 都偵測到了。"
+    elif missing == ["pixel"]:
+        status, message = "warn", "GA4 偵測到了，Meta Pixel 還沒偵測到。"
+    elif missing == ["ga4"]:
+        status, message = "warn", "Meta Pixel 偵測到了，GA4 還沒偵測到。"
+    else:
+        status, message = "bad", "GA4 和 Meta Pixel 都還沒偵測到。"
+    action = {"kind": "none", "missing": []} if status == "ok" else {"kind": "install", "missing": missing}
+    return {"key": "website", "status": status, "sub": url, "checked_at": checked_at, "hidden": hidden,
+            "message": message, "action": action}
+
+
+def check_website_now(conn, brand_id: str, *, fetch=None) -> dict:
+    """官網 GA4／Pixel 偵測：立刻抓一次，寫回 channel_tracking_check，回官網那張卡。
+    給精靈頁 2.4「我裝好了，幫我檢查」單獨呼叫，也給「重新檢查全部」背景工作呼叫——
+    同一份邏輯，不分岔成兩條路徑。抓不到頁面／找不到特徵字串一律當作沒裝，不拋例外
+    （契約 2.4：失敗不擋人）。"""
+    fetch = fetch or net.fetch_raw_html
+    url = _website_url(conn, brand_id)
+    if url:
+        ok, raw_html = fetch(url)
+        ga4_found = _detect_ga4(raw_html) if ok else False
+        pixel_found = _detect_pixel(raw_html) if ok else False
+        _save_website_check(conn, brand_id, ga4_found=ga4_found, pixel_found=pixel_found,
+                            checked_at=now_iso())
+    return _website_node(conn, brand_id, url)
+
+
+_IDENTIFIER_LABELS = {"fb_page": "FB 粉專", "ig_account": "IG 帳號"}
+
+
+def _identifier_node(conn, brand_id: str, channel_key: str, identifier: Optional[str]) -> dict:
+    hidden = _hidden(conn, brand_id, channel_key)
+    label = _IDENTIFIER_LABELS[channel_key]
+    if identifier:
+        return {"key": channel_key, "status": "ok", "sub": identifier, "checked_at": None, "hidden": hidden,
+                "message": f"已經填了{label}，可以追蹤成效。", "action": {"kind": "none", "missing": []}}
+    return {"key": channel_key, "status": "off", "sub": None, "checked_at": None, "hidden": hidden,
+            "message": f"還沒填{label}，先去品牌資料填。", "action": {"kind": "fill", "missing": []}}
+
+
+_IMPORT_LABELS = {"shopee": "蝦皮", "pharmacy": "藥局"}
+
+
+def _import_node(conn, brand_id: str, channel_key: str, last_date: Optional[str]) -> dict:
+    hidden = _hidden(conn, brand_id, channel_key)
+    label = _IMPORT_LABELS[channel_key]
+    if last_date:
+        return {"key": channel_key, "status": "ok", "sub": last_date, "checked_at": None, "hidden": hidden,
+                "message": f"曾經匯入過{label}資料，最近一次 {last_date}。",
+                "action": {"kind": "none", "missing": []}}
+    return {"key": channel_key, "status": "off", "sub": None, "checked_at": None, "hidden": hidden,
+            "message": f"還沒有匯入過{label}資料。", "action": {"kind": "fill", "missing": []}}
+
+
+def tracking_health(conn, brand_id: str) -> dict:
+    """五張通路卡就緒狀態彙總（契約 1.1-1.8）：官網／FB／IG 讀 owned_channel（品牌永久層，
+    只走 bi_repo.list_channels 公開函式）；蝦皮／藥局讀有沒有匯入過（app.ads 不得 import
+    app.orders，改由 app/main.py 注入 orders_channel，見檔頭「第 7 刀」同款寫法）。
+    ready／total 只算未隱藏（hidden=False）的卡（契約 1.1）。"""
+    owned_by_type: dict = {}
+    for channel in bi_repo.list_channels(conn, brand_id):
+        ct = channel.get("channel_type")
+        if ct in ("website", "fb_page", "ig_account") and ct not in owned_by_type:
+            owned_by_type[ct] = channel
+
+    website = owned_by_type.get("website") or {}
+    fb_page = owned_by_type.get("fb_page") or {}
+    ig_account = owned_by_type.get("ig_account") or {}
+
+    channels = [
+        _website_node(conn, brand_id, website.get("identifier") or None),
+        _identifier_node(conn, brand_id, "fb_page", fb_page.get("identifier") or None),
+        _identifier_node(conn, brand_id, "ig_account", ig_account.get("identifier") or None),
+        _import_node(conn, brand_id, "shopee", orders_channel.shopee_latest_import(conn, brand_id)),
+        _import_node(conn, brand_id, "pharmacy", orders_channel.pharmacy_latest_batch(conn, brand_id)),
+    ]
+    visible = [c for c in channels if not c["hidden"]]
+    ready = sum(1 for c in visible if c["status"] == "ok")
+    return {"channels": channels, "ready": ready, "total": len(visible)}

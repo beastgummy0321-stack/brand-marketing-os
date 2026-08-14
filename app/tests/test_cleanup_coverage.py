@@ -34,6 +34,10 @@ DELIBERATELY_KEPT = {
     "audit_log": "稽核軌跡。刪除品牌那筆紀錄本身就存在這裡，清掉就沒有證據可查（決策 0015）。",
     "llm_task": "AI 花費紀錄（每次呼叫花多少錢）。品牌刪掉不代表那筆支出沒發生，錢已經花了；"
                 "留著才答得出「這個帳號總共花多少錢」（app/core/settings.py 會 SUM 它）。",
+    "channel_tracking_check": "追蹤健檢結果快取（票 T0）。app/ads/repository.py 已頂到"
+                "docs/tech-debt.md 凍結行數上限，本票邊界定案明列不得再往裡面加 BRAND_CASCADE_"
+                "TABLES；留著無害——只是品牌×通路一列的健檢燈號快取，沒有外鍵、不會擋刪除，"
+                "之後有票動到 repository.py 時再補登記進正式清理流程。",
 }
 
 # 品牌本身那一列不是「子資料」，由 delete_brand() 在所有登記模組清完之後才刪。
