@@ -86,9 +86,12 @@ export function IntakeStep({
         <p className="mt-1 text-sm text-muted-foreground">系統會讀取品牌智庫的資料，準備好計畫、素材與投放設定，貼到 Meta 即可。</p>
       </div>
 
-      {ctx.readiness_notes.map((note, i) => (
-        <div key={i} className="rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-sm text-warning">
-          {note}
+      {ctx.readiness_notes.map((note) => (
+        <div key={note.code} className="rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-sm text-warning">
+          {note.message}{" "}
+          <a href={note.action_url} className="font-medium underline underline-offset-4">
+            {note.action_label}
+          </a>
         </div>
       ))}
 

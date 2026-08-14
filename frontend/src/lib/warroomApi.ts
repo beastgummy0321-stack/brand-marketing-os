@@ -122,7 +122,7 @@ export interface Cycle {
 export interface CycleDetail {
   cycle: Cycle;
   stage: CampaignStage;
-  readiness_notes: string[];
+  readiness_notes: ReadinessNote[];
 }
 
 export interface ChecklistItem {
@@ -300,8 +300,17 @@ export interface NewContext {
   duration_suggestion: { value: number; basis_label: string };
   objectives: { value: string; label: string; hint: string }[];
   recommended_objective: string;
-  readiness_notes: string[];
+  readiness_notes: ReadinessNote[];
   pain_suggestion: PainSuggestion;
+}
+
+/** 開檔前提醒（後端 ads_repo.check_readiness 的實際形狀；React 搬家時曾誤標成 string[]，
+ * 2026-08-15 白畫面修正對齊）。 */
+export interface ReadinessNote {
+  code: string;
+  message: string;
+  action_label: string;
+  action_url: string;
 }
 
 export type NewCycleDirection =
