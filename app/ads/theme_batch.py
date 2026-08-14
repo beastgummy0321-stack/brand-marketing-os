@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """app/ads/theme_batch.py — 預選格批次生成（票 09-preselect-autogen）。
 
-計畫核准後自動先生：每個切角格（experiment_cell）先生 THEME_COUNT_PRESELECT 個主題，
-不必等使用者點灰卡。
+計畫核准後自動先生：每個切角格（experiment_cell）以 2 個主題為基準，再由已可信的歷史
+切角成效加減 1，不必等使用者點灰卡。新品牌／資料不足仍完整維持每格 2 個。
 
 **預選格式怎麼選（讀過才別重猜）**：ADR 0008 第四節說「切角層另外算出這個切角建議開幾則
 廣告、各用什麼格式」，但那套建議演算法目前不存在——計畫核准流程（app/ads/plan.py）產出的
@@ -21,7 +21,7 @@ ponytail：`PRESELECT_FORMAT` 是天花板已知的簡化——未來排程層�
 
 批次走跟「生成一個主題」（app/ads/routes_creative_theme.py）完全相同的路徑
 （brief_assembler.assemble_brief → 引擎 → save_generated_theme），只差呼叫端對同一格連續
-呼叫兩次、中間重新組簡報——第二次組簡報時 brief_assembler 會查到剛存的第一個主題，
+呼叫 1～3 次、中間重新組簡報——第二次組簡報時 brief_assembler 會查到剛存的第一個主題，
 `existing_themes_summary` 因此非空，第二個主題的 prompt 自動帶防撞衫指令（沿用
 theme_engine.py 既有機制，不新寫一套）。
 
@@ -35,12 +35,14 @@ theme_engine.py 既有機制，不新寫一套）。
 import sqlite3
 
 from app.ads import brief_assembler
+from app.ads import nextcycle
+from app.ads import theme_feedback
 from app.ads import theme_engine
 from app.core import settings as coresettings
 from app.llm import pricing, providers
 
 PRESELECT_FORMAT = "single_image"
-THEME_COUNT_PRESELECT = 2
+THEME_COUNT_PRESELECT = theme_feedback.BASE_THEME_QUOTA
 
 
 def preselected_cells(conn: sqlite3.Connection, brand_id: str, cycle_id: str) -> list:
@@ -63,8 +65,8 @@ def _budget_blocked(conn: sqlite3.Connection, brand_id: str) -> bool:
 
 def generate_preselected_batch(conn: sqlite3.Connection, brand_id: str, cycle_id: str, *,
                                 actor: str) -> dict:
-    """計畫核准觸發（票 09 驗收 1）：每個切角格生 THEME_COUNT_PRESELECT 個 single_image
-    主題；non-預選格式（carousel／video）零生成——本函式從不呼叫它們的生成器。
+    """計畫核准觸發（票 09 驗收 1）：每個切角格以 THEME_COUNT_PRESELECT 為基準，依可信
+    歷史成效加減 1 個 single_image 主題；non-預選格式（carousel／video）零生成。
 
     回傳 `{"themes": [...新主題...], "budget_stopped": bool, "errors": [...]}`。
 
@@ -73,12 +75,18 @@ def generate_preselected_batch(conn: sqlite3.Connection, brand_id: str, cycle_id
     這是生成過程本身的意外，不是「該收手了」的訊號，不停整批。
     """
     generator = theme_engine.GENERATORS[PRESELECT_FORMAT]
+    historical_cells = nextcycle.historical_cell_performance(
+        conn, brand_id, exclude_cycle_id=cycle_id)
+    anti_echo = theme_feedback.anti_echo_summary(
+        conn, brand_id, cycle_id, PRESELECT_FORMAT)
+    anti_echo_reserved = False
     themes: list = []
     errors: list = []
     budget_stopped = False
 
     for cell in preselected_cells(conn, brand_id, cycle_id):
-        for _ in range(THEME_COUNT_PRESELECT):
+        quota = theme_feedback.theme_quota(cell, historical_cells)
+        for _ in range(quota):
             if _budget_blocked(conn, brand_id):
                 budget_stopped = True
                 break
@@ -91,6 +99,12 @@ def generate_preselected_batch(conn: sqlite3.Connection, brand_id: str, cycle_id
                                "format_key": PRESELECT_FORMAT, "error": err})
                 break  # 這種錯誤（計畫沒核准等）跟這格無關，同格重試也不會過
 
+            # 最近一期亮回音室燈時，第一個能走到生成器的組把歷史指紋與最遠目標放進既有
+            # existing_themes_summary；引擎沿原本的「不要撞衫」段落收到，不新增 prompt 類型。
+            if anti_echo and not anti_echo_reserved:
+                brief = brief._replace(
+                    existing_themes_summary=[*brief.existing_themes_summary, anti_echo])
+
             generated, err = generator(conn, brief, actor=actor)
             if err:
                 errors.append({"experiment_cell_id": cell["id"],
@@ -98,6 +112,8 @@ def generate_preselected_batch(conn: sqlite3.Connection, brand_id: str, cycle_id
                 continue  # AI 這次沒能產出，換下一次嘗試（同格還差的則數）
 
             themes.append(theme_engine.save_generated_theme(conn, brief, generated, actor=actor))
+            if anti_echo and not anti_echo_reserved:
+                anti_echo_reserved = True
         if budget_stopped:
             break
 
