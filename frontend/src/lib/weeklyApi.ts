@@ -48,6 +48,22 @@ export interface WeeklyRejudgeState {
   message?: string;
 }
 
+export type WeeklyReportData =
+  | { status: "empty" | "incomplete" }
+  | {
+      status: "ready";
+      week_start: string;
+      week_end: string;
+      spend: number;
+      orders: number;
+      revenue: number;
+      keep: string;
+      primary_proposal_id: string;
+      primary_copy: string;
+      other_count: number;
+      other_proposal_ids: string[];
+    };
+
 interface Envelope<T> {
   data: T;
   generated_at: string;
@@ -81,6 +97,9 @@ const post = <T>(path: string, body: unknown = {}): Promise<T> =>
 
 export const fetchWeeklyProposals = (brandId: string): Promise<WeeklyProposalsData> =>
   requestData(`${base(brandId)}/proposals`);
+
+export const fetchWeeklyReport = (brandId: string): Promise<WeeklyReportData> =>
+  requestData(`${base(brandId)}/report`);
 
 export const approveWeeklyProposal = (
   brandId: string,

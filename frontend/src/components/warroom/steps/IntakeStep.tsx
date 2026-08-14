@@ -15,7 +15,15 @@ const OBJECTIVE_TO_FUNNEL: Record<string, "exposure" | "consideration" | "conver
 };
 
 /** 開檔（S8.1-11，吸收 `ads_new.html`）：新檔期唯一入口，沒有 `cycle_id` 時顯示。 */
-export function IntakeStep({ brandId, onCreated }: { brandId: string; onCreated: (cycleId: string) => void }) {
+export function IntakeStep({
+  brandId,
+  initialBackground = "",
+  onCreated,
+}: {
+  brandId: string;
+  initialBackground?: string;
+  onCreated: (cycleId: string) => void;
+}) {
   const [ctx, setCtx] = useState<NewContext | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [simulate, setSimulate] = useState(true);
@@ -24,7 +32,7 @@ export function IntakeStep({ brandId, onCreated }: { brandId: string; onCreated:
   const [tierKey, setTierKey] = useState<"conservative" | "recommended" | "aggressive">("recommended");
   const [tierExpanded, setTierExpanded] = useState(false);
   const [durationDays, setDurationDays] = useState(14);
-  const [background, setBackground] = useState("");
+  const [background, setBackground] = useState(initialBackground);
   const [objective, setObjective] = useState("");
   const [guidedEvents, setGuidedEvents] = useState("");
   const [guidedMargin, setGuidedMargin] = useState("");

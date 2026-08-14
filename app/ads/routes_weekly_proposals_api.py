@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse
 import app.shared.web as main_mod
 from app.ads import reading as ads_reading
 from app.ads import routes as ads_routes
+from app.ads import weekly_reports
 from app.ads import weekly_proposals
 from app.ads.routes_common import _require_cycle
 from app.core import interrupts as core_interrupts
@@ -43,6 +44,18 @@ async def _json_body(request: Request) -> dict:
 def _brand_view(brand_id: str, cycle_id: str) -> dict:
     result = weekly_proposals.view(main_mod.conn, brand_id, cycle_id)
     return {"cycle_id": cycle_id, **result}
+
+
+@router.get("/api/campaigns/brands/{brand_id}/weekly/report")
+async def weekly_report_get(brand_id: str):
+    main_mod.require_brand(brand_id)
+    cycle = _current_cycle(brand_id)
+    if cycle is None:
+        return _envelope({"status": "empty"})
+    report = weekly_reports.assemble(main_mod.conn, brand_id, cycle["id"], today=datetime.now().date().isoformat())
+    if report is None:
+        return _envelope({"status": "incomplete"})
+    return _envelope({"status": "ready", **report})
 
 
 @router.get("/api/campaigns/{brand_id}/{cycle_id}/weekly-proposals")

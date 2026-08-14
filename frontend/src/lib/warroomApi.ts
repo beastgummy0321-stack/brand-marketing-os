@@ -304,6 +304,10 @@ export interface NewContext {
   pain_suggestion: PainSuggestion;
 }
 
+export type NewCycleDirection =
+  | { status: "ready"; direction: string }
+  | { status: "empty" | "unavailable" };
+
 /** S8R.9-11：排期到期提醒（GRILL-B4R-performance.md 459-464 行既有型別，逐字沿用）。
  * `null` 表示今天不需要調整（`continuous` 策略恆為 `null`）。 */
 export interface ScheduleReminder {
@@ -395,6 +399,8 @@ const cycleBase = (brandId: string, cycleId: string) => `${base(brandId)}/${enco
 
 // ---- 開檔（S8.1-11）----
 export const fetchNewContext = (brandId: string): Promise<NewContext> => getJson(`${base(brandId)}/new-context`);
+export const fetchNewCycleDirection = (brandId: string): Promise<NewCycleDirection> =>
+  getJson(`${base(brandId)}/new-context/direction`);
 export const createCycle = (brandId: string, payload: Record<string, unknown>): Promise<{ cycle_id: string; message: string }> =>
   postJson(base(brandId), payload);
 export const saveGuidedTargetCpa = (

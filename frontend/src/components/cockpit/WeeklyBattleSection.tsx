@@ -39,7 +39,13 @@ function GradeIcon({ grade }: { grade: WeeklyGrade }) {
   return <Images className={className} aria-hidden="true" />;
 }
 
-export function WeeklyBattleSection({ brandId }: { brandId: string }) {
+export function WeeklyBattleSection({
+  brandId,
+  focusProposalId,
+}: {
+  brandId: string;
+  focusProposalId?: string | null;
+}) {
   const [state, setState] = useState<LoadState>({ status: "loading" });
   const [rejudge, setRejudge] = useState<WeeklyRejudgeState>({ status: "done" });
   const [expanded, setExpanded] = useState(false);
@@ -68,6 +74,10 @@ export function WeeklyBattleSection({ brandId }: { brandId: string }) {
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    if (focusProposalId) setExpanded(true);
+  }, [focusProposalId]);
 
   useEffect(() => {
     if (rejudge.status !== "running") return;
@@ -255,41 +265,18 @@ export function WeeklyBattleSection({ brandId }: { brandId: string }) {
       {data.proposals.length > 0 && (
         <ul className="mt-4 flex flex-col gap-2">
           {data.proposals.map((proposal) => (
-            <li key={proposal.id} className="rounded-lg border border-border px-4 py-3">
-              <div className="flex flex-wrap items-start justify-between gap-3">
-                <p className="flex min-w-0 flex-1 items-start gap-2 text-sm text-foreground">
-                  <GradeIcon grade={proposal.grade} />
-                  <span>{proposal.copy}</span>
-                </p>
-                <span className={cn("shrink-0 rounded-full border px-2.5 py-1 text-xs font-medium", GRADE_CLASS[proposal.grade])}>
-                  {GRADE_LABEL[proposal.grade]}
-                </span>
-              </div>
-
-              {expanded && (
-                <div className="mt-3 border-t border-border pt-3">
-                  <p className="text-xs text-muted-foreground">同意後：{proposal.impact}</p>
-                  {proposal.grade === "spend" && confirmingId === proposal.id && (
-                    <label className="mt-3 flex flex-wrap items-center gap-2 text-sm text-foreground">
-                      確認後金額（元）
-                      <input
-                        type="number"
-                        min="1"
-                        value={amounts[proposal.id] ?? ""}
-                        onChange={(event) => setAmounts((current) => ({ ...current, [proposal.id]: event.target.value }))}
-                        className="w-36 rounded-md border border-border bg-background px-3 py-1.5"
-                      />
-                    </label>
-                  )}
-                  <div className="mt-3 flex gap-2">
-                    <button type="button" onClick={() => void handleApprove(proposal)} disabled={busyId !== null} className="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground disabled:opacity-50">
-                      {busyId === proposal.id ? "處理中…" : proposal.grade === "spend" && confirmingId === proposal.id ? "確認金額並產卡" : "同意"}
-                    </button>
-                    <button type="button" onClick={() => void handleSkip(proposal.id)} disabled={busyId !== null} className="rounded-md border border-border px-3 py-1.5 text-sm text-muted-foreground disabled:opacity-50">略過</button>
-                  </div>
-                </div>
-              )}
-            </li>
+            <ProposalCard
+              key={proposal.id}
+              proposal={proposal}
+              expanded={expanded}
+              focused={proposal.id === focusProposalId}
+              busy={busyId !== null}
+              confirming={confirmingId === proposal.id}
+              amount={amounts[proposal.id] ?? ""}
+              onAmountChange={(amount) => setAmounts((current) => ({ ...current, [proposal.id]: amount }))}
+              onApprove={() => void handleApprove(proposal)}
+              onSkip={() => void handleSkip(proposal.id)}
+            />
           ))}
         </ul>
       )}
@@ -310,5 +297,73 @@ export function WeeklyBattleSection({ brandId }: { brandId: string }) {
         </div>
       )}
     </section>
+  );
+}
+
+/** 駕駛艙與收件匣側板共用的單張週提案卡，核可／略過只走同一組 API。 */
+export function ProposalCard({
+  proposal,
+  expanded,
+  focused,
+  busy,
+  confirming,
+  amount,
+  onAmountChange,
+  onApprove,
+  onSkip,
+}: {
+  proposal: WeeklyProposal;
+  expanded: boolean;
+  focused: boolean;
+  busy: boolean;
+  confirming: boolean;
+  amount: string;
+  onAmountChange: (amount: string) => void;
+  onApprove: () => void;
+  onSkip: () => void;
+}) {
+  return (
+    <li
+      tabIndex={focused ? -1 : undefined}
+      aria-current={focused ? "true" : undefined}
+      className={cn(
+        "rounded-lg border border-border px-4 py-3",
+        focused && "border-primary bg-primary/5 ring-1 ring-primary/30",
+      )}
+    >
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <p className="flex min-w-0 flex-1 items-start gap-2 text-sm text-foreground">
+          <GradeIcon grade={proposal.grade} />
+          <span>{proposal.copy}</span>
+        </p>
+        <span className={cn("shrink-0 rounded-full border px-2.5 py-1 text-xs font-medium", GRADE_CLASS[proposal.grade])}>
+          {GRADE_LABEL[proposal.grade]}
+        </span>
+      </div>
+
+      {expanded && (
+        <div className="mt-3 border-t border-border pt-3">
+          <p className="text-xs text-muted-foreground">同意後：{proposal.impact}</p>
+          {proposal.grade === "spend" && confirming && (
+            <label className="mt-3 flex flex-wrap items-center gap-2 text-sm text-foreground">
+              確認後金額（元）
+              <input
+                type="number"
+                min="1"
+                value={amount}
+                onChange={(event) => onAmountChange(event.target.value)}
+                className="w-36 rounded-md border border-border bg-background px-3 py-1.5"
+              />
+            </label>
+          )}
+          <div className="mt-3 flex gap-2">
+            <button type="button" onClick={onApprove} disabled={busy} className="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground disabled:opacity-50">
+              {busy ? "處理中…" : proposal.grade === "spend" && confirming ? "確認金額並產卡" : "同意"}
+            </button>
+            <button type="button" onClick={onSkip} disabled={busy} className="rounded-md border border-border px-3 py-1.5 text-sm text-muted-foreground disabled:opacity-50">略過</button>
+          </div>
+        </div>
+      )}
+    </li>
   );
 }

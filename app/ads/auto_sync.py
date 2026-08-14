@@ -21,6 +21,7 @@ from app.ads import repository as ads_repo
 from app.ads import sync as ads_sync
 from app.ads import tracking
 from app.ads import weekly_proposals
+from app.ads import weekly_reports
 from app.brand_intelligence import repository as bi_repo
 from app.core import interrupts as core_interrupts
 
@@ -79,6 +80,8 @@ def run_weekly_engine(conn, *, today: str) -> dict:
         try:
             ok, err = reading.run(conn, brand_id, cycle["id"], WEEKLY_ACTOR)
             cards = weekly_proposals.generate(conn, brand_id, cycle["id"]) if ok else []
+            if ok:
+                weekly_reports.enqueue_if_ready(conn, brand_id, cycle["id"], today=today)
             outcome[brand_id] = {
                 "status": "done" if ok else "failed",
                 "error": err,
@@ -161,6 +164,9 @@ def run(conn, *, today: Optional[str] = None, meta_client=None, ga4_client=None,
 
     for brand in bi_repo.list_brands(conn, status="active"):
         run_cycle_checks(conn, brand["id"], today, url_probe=url_probe)
+        cycle = weekly_proposals.current_cycle(conn, brand["id"])
+        if cycle is not None:
+            weekly_reports.enqueue_if_ready(conn, brand["id"], cycle["id"], today=today)
 
     conn.commit()
     return outcome

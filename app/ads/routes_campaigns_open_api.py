@@ -23,6 +23,7 @@ from app.ads import budget as budget_calc
 from app.ads import account_structure
 from app.ads import auto_sync as ads_auto_sync
 from app.ads import plan as ads_plan
+from app.ads import nextcycle
 from app.ads import repository as ads_repo
 from app.ads import routes as ads_routes
 from app.ads import simulation
@@ -130,6 +131,24 @@ async def new_context(brand_id: str):
         "readiness_notes": ads_repo.check_readiness(conn, brand_id, product_ids),
         "pain_suggestion": pain_suggestion,
     })
+
+
+@router.get("/api/campaigns/{brand_id}/new-context/direction")
+async def new_cycle_direction(brand_id: str):
+    """歷來切角讀不到時不擋開檔，前端直接走一般推薦值。"""
+    main_mod.require_brand(brand_id)
+    try:
+        cells = nextcycle.historical_cell_performance(main_mod.conn, brand_id)
+    except Exception:  # noqa: BLE001 — 失敗收斂成不擋人的既有推薦路徑
+        return _envelope({"status": "unavailable"})
+    effective = [
+        cell for cell in cells
+        if cell.get("creative_angle") and (cell.get("conversions") or 0) > 0
+    ]
+    if not effective:
+        return _envelope({"status": "empty"})
+    best = max(effective, key=lambda cell: (cell["conversions"], cell.get("spend") or 0))
+    return _envelope({"status": "ready", "direction": best["creative_angle"]})
 
 
 @router.post("/api/campaigns/{brand_id}")

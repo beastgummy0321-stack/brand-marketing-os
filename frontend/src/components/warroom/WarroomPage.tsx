@@ -7,6 +7,7 @@ import { archiveCampaign, cycleLabel } from "@/lib/campaignsApi";
 import { fetchCycleDetail, BLOCK_OF_STAGE, PACING_STRATEGY_LABELS, STAGE_BAR_LABELS, type CampaignStage, type Cycle } from "@/lib/warroomApi";
 import { AiCostMeter } from "./AiCostMeter";
 import { CycleDeletePanel } from "./panels/CycleDeletePanel";
+import { NewCycleDirectionChoice } from "./NewCycleDirectionChoice";
 import { CreativeStep } from "./steps/CreativeStep";
 import { HandoffStep } from "./steps/HandoffStep";
 import { IntakeStep, IntakeSummary } from "./steps/IntakeStep";
@@ -56,7 +57,9 @@ export function WarroomPage({ brandId, cycleId }: { brandId: string; cycleId: st
       <div className="flex flex-col gap-4">
         <Breadcrumb items={[{ label: "跨品牌總覽", href: "/" }, { label: "歷史檔期", href: `/brands/${brandId}/campaigns` }, { label: "開新檔期" }]} />
         <TaskFlowShell steps={STAGE_BAR_LABELS} current={1} onSelect={() => {}} rightRail={<AiCostMeter brandId={brandId} />}>
-          <IntakeStep brandId={brandId} onCreated={(newId) => navigate(`/brands/${brandId}/campaigns/${newId}`)} />
+          <NewCycleDirectionChoice brandId={brandId}>
+            {(initialBackground) => <IntakeStep brandId={brandId} initialBackground={initialBackground} onCreated={(newId) => navigate(`/brands/${brandId}/campaigns/${newId}`)} />}
+          </NewCycleDirectionChoice>
         </TaskFlowShell>
       </div>
     );

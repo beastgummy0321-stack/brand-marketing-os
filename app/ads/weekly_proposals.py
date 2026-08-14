@@ -170,7 +170,7 @@ def generate(conn, brand_id: str, cycle_id: str, *, enqueue_ready: bool = True) 
         core_interrupts.enqueue(
             conn, category="weekly_proposal_ready",
             dedupe_key=f"weekly_proposal_ready:{cycle_id}",
-            message="本週優化提案已整理好，等你核可",
+            message=f"{len(cards)} 張提案等你核可",
             brand_id=brand_id, campaign_cycle_id=cycle_id,
             action_url=f"/brands/{brand_id}",
         )
