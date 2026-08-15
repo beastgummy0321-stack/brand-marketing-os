@@ -31,9 +31,6 @@ KNOWN_SCHEMA_DRIFT = {
     "（全新庫上的測試驗不到它）",
     "learning_ledger.source_reading_id -> performance_reading.id：**只有真實庫有這條外鍵**"
     "（全新庫上的測試驗不到它）",
-    # T2 已新增 0008_persona.sql，但本票紅線禁止寫 data/app.db；全新暫存庫已驗 migration、
-    # 品牌刪除也已由 cleanup 登記涵蓋。真實庫待使用者之後正常啟動 migration 時補齊。
-    "只有全新庫有這張表：persona（真實庫還沒 migrate 到）",
 }
 
 

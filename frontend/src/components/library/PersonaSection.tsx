@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState } from "react";
+import { SidePanel } from "@/components/layout/SidePanel";
 import { Skeleton } from "@/components/layout/Skeleton";
-import { fetchPersonas, regeneratePersonas, type PersonaBundle } from "@/lib/intakeT2Api";
+import { fetchPersonas, regeneratePersonas, updatePersona, type Persona, type PersonaBundle } from "@/lib/intakeT2Api";
+import { useFormSubmit } from "@/lib/useFormSubmit";
+import { PanelSaveButton } from "./shared/PanelSaveButton";
 
 type LoadState =
   | { status: "loading" }
@@ -12,6 +15,7 @@ export function PersonaSection({ brandId }: { brandId: string }) {
   const [state, setState] = useState<LoadState>({ status: "loading" });
   const [starting, setStarting] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [editing, setEditing] = useState<Persona | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   function stopPolling() {
@@ -91,7 +95,9 @@ export function PersonaSection({ brandId }: { brandId: string }) {
           <h2 className="font-display text-lg text-foreground">👥 典型客人</h2>
           <p className="text-sm text-muted-foreground">依已確認資料和顧客原話整理。</p>
         </div>
-        <button type="button" disabled={starting || running} onClick={() => void generate()} className="rounded-md border border-primary px-3 py-1.5 text-sm font-medium text-primary hover:bg-primary/10 disabled:cursor-not-allowed disabled:opacity-50">
+        <button type="button" disabled={starting || running} onClick={() => {
+          if (empty || window.confirm("會重新產生並取代現有人物誌（含你手動改過的）")) void generate();
+        }} className="rounded-md border border-primary px-3 py-1.5 text-sm font-medium text-primary hover:bg-primary/10 disabled:cursor-not-allowed disabled:opacity-50">
           {starting ? "開始整理中…" : running ? "正在整理…" : empty ? "產生人物誌" : "🔄 重新產生"}
         </button>
       </div>
@@ -104,7 +110,10 @@ export function PersonaSection({ brandId }: { brandId: string }) {
         <div className="grid gap-3 lg:grid-cols-2">
           {data.personas.map((persona) => (
             <article key={persona.id} className="flex flex-col gap-2 rounded-md border border-border p-4 text-sm">
-              <h3 className="font-medium text-foreground">{persona.title}</h3>
+              <div className="flex items-start justify-between gap-3">
+                <h3 className="font-medium text-foreground">{persona.title}</h3>
+                <button type="button" disabled={running} onClick={() => setEditing(persona)} className="rounded-md border border-border px-2 py-1 text-sm font-medium text-foreground hover:border-primary hover:text-primary disabled:cursor-not-allowed disabled:opacity-50">改</button>
+              </div>
               <p className="text-muted-foreground">什麼時候需要：{persona.when_needed}</p>
               <p className="text-muted-foreground">在意：{persona.care_about}</p>
               <p className="text-muted-foreground">猶豫：{persona.hesitation}</p>
@@ -114,6 +123,63 @@ export function PersonaSection({ brandId }: { brandId: string }) {
         </div>
       )}
       {actionError && <p role="alert" className="text-sm text-danger">{actionError}</p>}
+      {editing && <PersonaEditor brandId={brandId} persona={editing} onClose={() => setEditing(null)} onSaved={() => {
+        setEditing(null);
+        load();
+      }} />}
     </section>
+  );
+}
+
+function PersonaEditor({
+  brandId,
+  persona,
+  onClose,
+  onSaved,
+}: {
+  brandId: string;
+  persona: Persona;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [title, setTitle] = useState(persona.title);
+  const [whenNeeded, setWhenNeeded] = useState(persona.when_needed);
+  const [careAbout, setCareAbout] = useState(persona.care_about);
+  const [hesitation, setHesitation] = useState(persona.hesitation);
+  const [whereToFind, setWhereToFind] = useState(persona.where_to_find);
+  const form = useFormSubmit(async () => {
+    await updatePersona(brandId, persona.id, {
+      title, when_needed: whenNeeded, care_about: careAbout, hesitation, where_to_find: whereToFind,
+    });
+    onSaved();
+  });
+
+  const fields = [
+    ["這位典型客人怎麼稱呼？", title, setTitle],
+    ["通常什麼時候需要？", whenNeeded, setWhenNeeded],
+    ["他在意什麼？", careAbout, setCareAbout],
+    ["他會猶豫什麼？", hesitation, setHesitation],
+    ["可以去哪裡找到他？", whereToFind, setWhereToFind],
+  ] as const;
+  return (
+    <SidePanel ariaLabel="修改典型客人" onClose={onClose}>
+      <div className="flex items-start justify-between gap-3 border-b border-border pb-4">
+        <h2 className="font-display text-lg text-foreground">修改典型客人</h2>
+        <button type="button" onClick={onClose} className="rounded-md border border-border px-3 py-1.5 text-sm font-medium text-foreground hover:border-primary hover:text-primary">關閉</button>
+      </div>
+      <form className="flex flex-col gap-4" onSubmit={(event) => {
+        event.preventDefault();
+        void form.submit();
+      }}>
+        {fields.map(([label, value, setValue]) => (
+          <label key={label} className="flex flex-col gap-1 text-sm">
+            <span className="font-medium text-foreground">{label}</span>
+            <textarea value={value} onChange={(event) => setValue(event.target.value)} required rows={3} className="rounded-md border border-border px-3 py-2 text-sm text-foreground" />
+          </label>
+        ))}
+        {form.error && <p role="alert" className="text-sm text-danger">{form.error}</p>}
+        <div><PanelSaveButton saving={form.saving} label="儲存修改" /></div>
+      </form>
+    </SidePanel>
   );
 }

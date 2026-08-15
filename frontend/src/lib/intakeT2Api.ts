@@ -74,6 +74,24 @@ async function postJson<T = void>(path: string, body?: unknown): Promise<T> {
   return (await res.json()) as T;
 }
 
+async function putJson(path: string, body: unknown): Promise<void> {
+  const res = await fetch(path, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    let message = `儲存失敗（狀態碼 ${res.status}）`;
+    try {
+      const data = (await res.json()) as { error?: string };
+      if (data.error) message = data.error;
+    } catch {
+      // 非 JSON 回應就沿用白話預設錯誤。
+    }
+    throw new Error(message);
+  }
+}
+
 const base = (brandId: string) => `/api/intake/brands/${encodeURIComponent(brandId)}`;
 
 export const fetchTruthCard = (brandId: string): Promise<TruthCard> => getJson(`${base(brandId)}/truth-card`);
@@ -87,6 +105,12 @@ export const moveTruthCardItem = (brandId: string, index: number, target: TruthC
   postJson(`${base(brandId)}/truth-card/items/${encodeURIComponent(index)}/move`, { target });
 
 export const fetchPersonas = (brandId: string): Promise<PersonaBundle> => getJson(`${base(brandId)}/personas`);
+
+export const updatePersona = (
+  brandId: string,
+  personaId: string,
+  fields: Pick<Persona, "title" | "when_needed" | "care_about" | "hesitation" | "where_to_find">,
+): Promise<void> => putJson(`${base(brandId)}/personas/${encodeURIComponent(personaId)}`, fields);
 
 /** 後端 202 回傳 {generation}，在 API 邊界直接拆開，元件不碰傳輸包裝。 */
 export const regeneratePersonas = (brandId: string): Promise<PersonaGeneration> =>

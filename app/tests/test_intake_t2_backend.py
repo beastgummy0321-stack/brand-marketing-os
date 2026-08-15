@@ -77,6 +77,57 @@ def _persona_rows(prefix: str):
     ]
 
 
+def test_persona_put_updates_all_fields_and_writes_audit():
+    brand = bi_repo.create_brand(
+        main.conn, name="虛構人物誌手動修改品牌", client_name=None, actor=ACTOR,
+    )
+    persona = personas.replace_personas(main.conn, brand["id"], _persona_rows("原本"))[0]
+
+    response = TestClient(main.app).put(
+        f"/api/intake/brands/{brand['id']}/personas/{persona['id']}",
+        json={
+            "title": "虛構會議送禮採購", "when_needed": "週五活動前",
+            "care_about": "可準時送達", "hesitation": "怕份量不夠",
+            "where_to_find": "虛構社群留言",
+        },
+    )
+
+    assert response.status_code == 204, response.text
+    saved = personas.list_personas(main.conn, brand["id"])[0]
+    assert {field: saved[field] for field in personas.PERSONA_FIELDS} == {
+        "title": "虛構會議送禮採購", "when_needed": "週五活動前",
+        "care_about": "可準時送達", "hesitation": "怕份量不夠",
+        "where_to_find": "虛構社群留言",
+    }
+    audit = main.conn.execute(
+        "SELECT action, actor, before_json, after_json FROM audit_log "
+        "WHERE entity_type = 'persona' AND entity_id = ?", (persona["id"],),
+    ).fetchone()
+    assert dict(audit)["action"] == "update"
+    assert dict(audit)["actor"] == "使用者"
+    assert json.loads(audit["before_json"])["title"] == "原本臨時送禮的人"
+    assert json.loads(audit["after_json"])["title"] == "虛構會議送禮採購"
+
+
+def test_persona_put_rejects_blank_field_without_changing_persona():
+    brand = bi_repo.create_brand(
+        main.conn, name="虛構人物誌空欄品牌", client_name=None, actor=ACTOR,
+    )
+    persona = personas.replace_personas(main.conn, brand["id"], _persona_rows("原本"))[0]
+
+    response = TestClient(main.app).put(
+        f"/api/intake/brands/{brand['id']}/personas/{persona['id']}",
+        json={
+            "title": "虛構手動修改", "when_needed": "", "care_about": "包裝體面",
+            "hesitation": "怕選錯", "where_to_find": "虛構地圖評論",
+        },
+    )
+
+    assert response.status_code == 400, response.text
+    assert response.json()["error"] == "請填寫「什麼時候需要」。"
+    assert personas.list_personas(main.conn, brand["id"])[0]["title"] == "原本臨時送禮的人"
+
+
 def _wait_personas(client: TestClient, brand_id: str):
     deadline = time.time() + 5
     while time.time() < deadline:

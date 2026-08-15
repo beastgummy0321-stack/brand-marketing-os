@@ -146,6 +146,18 @@ async def persona_list(brand_id: str):
     })
 
 
+@router.put("/api/intake/brands/{brand_id}/personas/{persona_id}")
+async def persona_update(request: Request, brand_id: str, persona_id: str):
+    require_brand(brand_id)
+    try:
+        personas.update_persona(web.conn, brand_id, persona_id, await _body(request), actor=CONFIRMED_BY)
+    except LookupError as exc:
+        return _error(404, str(exc))
+    except ValueError as exc:
+        return _error(400, str(exc))
+    return Response(status_code=204)
+
+
 @router.post("/api/intake/brands/{brand_id}/personas/regenerate")
 async def persona_regenerate(brand_id: str):
     require_brand(brand_id)
