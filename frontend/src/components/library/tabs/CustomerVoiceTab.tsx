@@ -14,6 +14,7 @@ import { Badge } from "../shared/Badge";
 import { InlineDeleteButton } from "../shared/InlineDeleteButton";
 import { CustomerVoiceGuidePanel } from "../panels/CustomerVoiceGuidePanel";
 import { CustomerVoicePanel } from "../panels/CustomerVoicePanel";
+import { PersonaSection } from "../PersonaSection";
 
 interface PlaceholderJob {
   jobKey: string;
@@ -81,6 +82,7 @@ export function CustomerVoiceTab({
 
   return (
     <div className="flex flex-col gap-6">
+      <PersonaSection brandId={brandId} />
       <div className="flex items-center justify-between">
         <h2 className="font-display text-lg text-foreground">顧客原話</h2>
         <button

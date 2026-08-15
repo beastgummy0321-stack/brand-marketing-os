@@ -4,16 +4,16 @@ import { COST_PASTE_FIX, fetchPasteFixStatus, resolvePasteScope, startPasteFix, 
 import { IntakeJobRow } from "../shared/IntakeJobRow";
 import { LimitCard } from "../shared/LimitCard";
 import { useIntakeJob } from "../useIntakeJob";
-import { ReviewPanel } from "./ReviewPanel";
+import { TruthCardStep } from "./TruthCardStep";
 
 const FILE_ACCEPT = ".md,.txt";
 
-/** 貼回（契約 S4.46–S4.57）＋緊接其後的待處理清單（S4.58–S4.66，見 `ReviewPanel.tsx`）。
- * 有待處理清單就直接顯示清單（S4.76 續接：只到清單層級，契約的草稿形狀本來就只存
+/** 貼回（契約 S4.46–S4.57）＋真相卡（T2 條文 2.1–2.5）。
+ * 有待處理清單就直接顯示真相卡（S4.76 續接：只到清單層級，契約的草稿形狀本來就只存
  * `pending_item_count`，沒有存「上次看到第幾筆」）；否則顯示貼上表單。 */
 export function PasteStep({ brandId, draft, onRefresh }: { brandId: string; draft: IntakeDraft; onRefresh: () => void }) {
   if (draft.pending_item_count > 0) {
-    return <ReviewPanel brandId={brandId} knownProducts={draft.created_product_names} onRefresh={onRefresh} />;
+    return <TruthCardStep brandId={brandId} knownProducts={draft.created_product_names} onCompleted={onRefresh} />;
   }
   return <PasteForm brandId={brandId} draft={draft} onRefresh={onRefresh} />;
 }

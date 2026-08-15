@@ -6,6 +6,7 @@ import type { IntakeDraft } from "@/lib/intakeApi";
 import { fetchIntakeDraft } from "@/lib/intakeApi";
 import { BudgetPanel } from "./BudgetPanel";
 import { CostGauge } from "./CostGauge";
+import { IntakeCompletedPage } from "./IntakeCompletedPage";
 import { HandoffStep } from "./steps/HandoffStep";
 import { PasteStep } from "./steps/PasteStep";
 import { QuestionStep } from "./steps/QuestionStep";
@@ -65,16 +66,7 @@ export function IntakeWizard({ brandId }: { brandId: string | null }) {
   const { draft } = state;
 
   if (draft.completed) {
-    return (
-      <>
-        <TaskFlowShell steps={STEP_LABELS} current={1} onSelect={() => {}} rightRail={<CostGauge draft={draft} onAdjust={() => setBudgetOpen(true)} />}>
-          <StartStep brandId={brandId} onSubmitted={(res) => (res.quick ? navigate(`/brands/${brandId}`) : refresh())} />
-        </TaskFlowShell>
-        {budgetOpen && (
-          <BudgetPanel brandId={brandId} draft={draft} onClose={() => setBudgetOpen(false)} onSaved={refresh} />
-        )}
-      </>
-    );
+    return <IntakeCompletedPage brandId={brandId} />;
   }
 
   return (

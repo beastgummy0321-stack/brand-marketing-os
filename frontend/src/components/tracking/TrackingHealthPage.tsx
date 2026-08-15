@@ -19,7 +19,7 @@ import {
 /** T0 追蹤健檢總覽（契約 1.1-1.8）：五路固定卡＋隱藏收合。結構與互動照
  * `.scratch/grill/t0-health-prototype.html`，視覺沿用駕駛艙既有語彙（契約 1.9）。 */
 
-const CHANNEL_CONFIG: Record<TrackingChannelKey, { icon: typeof Globe; label: string }> = {
+export const CHANNEL_CONFIG: Record<TrackingChannelKey, { icon: typeof Globe; label: string }> = {
   website: { icon: Globe, label: "官方網站" },
   fb_page: { icon: MessageCircle, label: "Facebook 粉專" },
   ig_account: { icon: Camera, label: "Instagram" },
@@ -29,14 +29,14 @@ const CHANNEL_CONFIG: Record<TrackingChannelKey, { icon: typeof Globe; label: st
 
 /** 短標籤只從狀態燈號通用推導（API 沒有另外給每路的短文案）；細節一律看 `channel.message`
  * （該欄位已是白話句子，不重覆發明第二套文案）。 */
-const STATUS_TAG: Record<TrackingChannel["status"], { text: string; className: string }> = {
+export const STATUS_TAG: Record<TrackingChannel["status"], { text: string; className: string }> = {
   ok: { text: "就緒", className: "border-success text-success" },
   warn: { text: "差一步", className: "border-warning text-warning" },
   bad: { text: "尚未偵測", className: "border-danger text-danger" },
   off: { text: "尚未設定", className: "border-border text-muted-foreground" },
 };
 
-const STATUS_DOT: Record<TrackingChannel["status"], string> = {
+export const STATUS_DOT: Record<TrackingChannel["status"], string> = {
   ok: "bg-success",
   warn: "bg-warning",
   bad: "bg-danger",
