@@ -68,7 +68,34 @@ async def photo_product_skip(request: Request, brand_id: str):
 async def truth_card_get(brand_id: str):
     require_brand(brand_id)
     draft = state.require_draft_or_just_completed(brand_id)
-    return _envelope(truth_card.split_items(ir.list_items(web.conn, brand_id, draft["id"])))
+    return _envelope(truth_card.split_items(
+        ir.list_truth_card_items(web.conn, brand_id, draft["id"]),
+    ))
+
+
+@router.post("/api/intake/brands/{brand_id}/truth-card/items/{i}/move")
+async def truth_card_item_move(request: Request, brand_id: str, i: int):
+    require_brand(brand_id)
+    draft = state.require_draft_or_just_completed(brand_id)
+    item = next((row for row in ir.list_truth_card_items(web.conn, brand_id, draft["id"])
+                 if row["i"] == i), None)
+    if item is None:
+        return _error(404, "找不到這一筆。")
+    target = str((await _body(request)).get("target") or "").strip()
+    if target not in ("accepted", "needs_confirmation", "forbidden"):
+        return _error(400, "搬格目標不正確。")
+    if target == "accepted" and item["outcome"] == "pending" and truth_card.answer_kind(item):
+        return _error(400, "這條請在卡上作答")
+    current = truth_card.bucket_name(item)
+    if current == target and not (target == "accepted" and item["outcome"] == "pending"):
+        return _error(400, "這條已經在這一格。")
+    try:
+        ir.move_truth_card_item(
+            web.conn, brand_id, item["id"], processed_by=CONFIRMED_BY, target=target,
+        )
+    except ValueError as exc:
+        return _error(400, str(exc))
+    return Response(status_code=204)
 
 
 @router.post("/api/intake/brands/{brand_id}/truth-card/confirm")

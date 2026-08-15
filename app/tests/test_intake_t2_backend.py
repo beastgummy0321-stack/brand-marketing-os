@@ -397,7 +397,7 @@ def test_truth_card_mechanical_buckets_cover_default_price_claim_and_forbidden()
     assert [item["id"] for item in data["forbidden"]] == [items[3]["id"]]
 
 
-def test_review_endpoint_updates_resolved_fact_and_moves_forbidden_claim_to_green():
+def test_review_endpoint_updates_resolved_fact_and_forbidden_claim_text_only():
     brand, _draft, items = _new_truth_card_fixture("已落檔編輯")
     ir.resolve_item(
         main.conn, brand["id"], items[0]["id"], "confirmed", processed_by="使用者",
@@ -419,8 +419,8 @@ def test_review_endpoint_updates_resolved_fact_and_moves_forbidden_claim_to_gree
     claim_response = client.post(
         f"/api/intake/brands/{brand['id']}/review/{items[3]['i']}",
         json={
-            "outcome": "confirm", "kind": "宣稱", "category": "可用",
-            "title": "適合日常飲用", "content": "改成一般生活描述。", "scope": "整個品牌",
+            "outcome": "confirm", "kind": "宣稱", "category": "禁用",
+            "title": "治療過敏（人工修正）", "content": "改成更清楚的禁用說明。", "scope": "整個品牌",
         },
     )
 
@@ -429,14 +429,156 @@ def test_review_endpoint_updates_resolved_fact_and_moves_forbidden_claim_to_gree
     fact = next(row for row in bi_repo.list_brand_facts(main.conn, brand["id"])
                 if row["label"] == "產地直送")
     claim = next(row for row in bi_repo.list_claims_for_brand(main.conn, brand["id"])
-                 if row["claim_text"] == "適合日常飲用")
+                 if row["claim_text"] == "治療過敏（人工修正）")
     assert fact["value"] == "改成虛構契作果園直送。"
-    assert claim["claim_type"] == "approved"
+    assert claim["claim_type"] == "forbidden"
     truth = client.get(f"/api/intake/brands/{brand['id']}/truth-card").json()["data"]
-    assert items[3]["id"] not in {item["id"] for item in truth["forbidden"]}
-    assert items[3]["id"] in {item["id"] for item in truth["accepted"]}
-    saved_claim_item = next(item for item in truth["accepted"] if item["id"] == items[3]["id"])
-    assert saved_claim_item["content"] == "改成一般生活描述。"
+    assert items[3]["id"] in {item["id"] for item in truth["forbidden"]}
+    saved_claim_item = next(item for item in truth["forbidden"] if item["id"] == items[3]["id"])
+    assert saved_claim_item["content"] == "改成更清楚的禁用說明。"
+
+
+def _move_truth_card_item(brand_id: str, item: dict, target: str):
+    return TestClient(main.app).post(
+        f"/api/intake/brands/{brand_id}/truth-card/items/{item['i']}/move",
+        json={"target": target},
+    )
+
+
+def _saved_intake_item(item_id: str) -> dict:
+    return dict(main.conn.execute(
+        "SELECT * FROM intake_item WHERE id = ?", (item_id,),
+    ).fetchone())
+
+
+def _truth_card_bucket_ids(brand_id: str) -> dict:
+    response = TestClient(main.app).get(f"/api/intake/brands/{brand_id}/truth-card")
+    assert response.status_code == 200, response.text
+    return {
+        name: {item["id"] for item in rows}
+        for name, rows in response.json()["data"].items()
+    }
+
+
+def _has_audit(entity_type: str, entity_id: str, action: str) -> bool:
+    return main.conn.execute(
+        "SELECT 1 FROM audit_log WHERE entity_type = ? AND entity_id = ? AND action = ?",
+        (entity_type, entity_id, action),
+    ).fetchone() is not None
+
+
+def test_truth_card_move_pending_to_accepted_reuses_confirm_and_rejects_yellow_price():
+    brand, _draft, items = _new_truth_card_fixture("待確認轉採用")
+
+    response = _move_truth_card_item(brand["id"], items[0], "accepted")
+    price_response = _move_truth_card_item(brand["id"], items[1], "accepted")
+
+    assert response.status_code == 204, response.text
+    saved = _saved_intake_item(items[0]["id"])
+    assert saved["outcome"] == "confirmed"
+    assert bi_repo.get_brand_fact(main.conn, brand["id"], saved["target_id"]) is not None
+    assert _has_audit("intake_item", items[0]["id"], "confirm")
+    assert price_response.status_code == 400, price_response.text
+    assert price_response.json()["error"] == "這條請在卡上作答"
+    assert _saved_intake_item(items[1]["id"])["outcome"] == "pending"
+
+
+def test_truth_card_move_accepted_to_needs_confirmation_deletes_fact_and_moves_get_bucket():
+    brand, _draft, items = _new_truth_card_fixture("採用轉待確認")
+    ir.resolve_item(
+        main.conn, brand["id"], items[0]["id"], "confirmed", processed_by="使用者",
+    )
+    target_id = _saved_intake_item(items[0]["id"])["target_id"]
+
+    response = _move_truth_card_item(brand["id"], items[0], "needs_confirmation")
+
+    assert response.status_code == 204, response.text
+    saved = _saved_intake_item(items[0]["id"])
+    assert saved["outcome"] == "pending"
+    assert saved["target_table"] is None and saved["target_id"] is None
+    assert bi_repo.get_brand_fact(main.conn, brand["id"], target_id) is None
+    assert _has_audit("brand_fact", target_id, "delete")
+    assert _has_audit("intake_item", items[0]["id"], "move")
+    assert items[0]["id"] in _truth_card_bucket_ids(brand["id"])["needs_confirmation"]
+
+
+def test_truth_card_move_accepted_to_forbidden_replaces_fact_with_forbidden_claim():
+    brand, _draft, items = _new_truth_card_fixture("採用轉禁止")
+    ir.resolve_item(
+        main.conn, brand["id"], items[0]["id"], "confirmed", processed_by="使用者",
+    )
+    fact_id = _saved_intake_item(items[0]["id"])["target_id"]
+
+    response = _move_truth_card_item(brand["id"], items[0], "forbidden")
+
+    assert response.status_code == 204, response.text
+    saved = _saved_intake_item(items[0]["id"])
+    claim = bi_repo.get_claim(main.conn, brand["id"], saved["target_id"])
+    assert bi_repo.get_brand_fact(main.conn, brand["id"], fact_id) is None
+    assert saved["outcome"] == "confirmed" and saved["target_table"] == "claim"
+    assert claim["claim_text"] == items[0]["title"] and claim["claim_type"] == "forbidden"
+    assert _has_audit("brand_fact", fact_id, "delete")
+    assert _has_audit("claim", claim["id"], "create")
+    assert _has_audit("intake_item", items[0]["id"], "move")
+    assert items[0]["id"] in _truth_card_bucket_ids(brand["id"])["forbidden"]
+
+
+def test_truth_card_move_forbidden_to_accepted_updates_same_claim_and_old_edit_path_cannot_move():
+    brand, _draft, items = _new_truth_card_fixture("禁止轉採用")
+    before = _saved_intake_item(items[3]["id"])
+    old_path = TestClient(main.app).post(
+        f"/api/intake/brands/{brand['id']}/review/{items[3]['i']}",
+        json={
+            "outcome": "confirm", "kind": "宣稱", "category": "可用",
+            "title": items[3]["title"], "content": items[3]["content"], "scope": "整個品牌",
+        },
+    )
+
+    response = _move_truth_card_item(brand["id"], items[3], "accepted")
+
+    assert old_path.status_code == 400, old_path.text
+    assert response.status_code == 204, response.text
+    saved = _saved_intake_item(items[3]["id"])
+    claim = bi_repo.get_claim(main.conn, brand["id"], saved["target_id"])
+    assert saved["target_id"] == before["target_id"]
+    assert claim["claim_type"] == "approved"
+    assert _has_audit("claim", claim["id"], "update")
+    assert _has_audit("intake_item", items[3]["id"], "move")
+    assert items[3]["id"] in _truth_card_bucket_ids(brand["id"])["accepted"]
+
+
+def test_truth_card_move_forbidden_to_needs_confirmation_deletes_claim():
+    brand, _draft, items = _new_truth_card_fixture("禁止轉待確認")
+    claim_id = _saved_intake_item(items[3]["id"])["target_id"]
+
+    response = _move_truth_card_item(brand["id"], items[3], "needs_confirmation")
+
+    assert response.status_code == 204, response.text
+    saved = _saved_intake_item(items[3]["id"])
+    assert saved["outcome"] == "pending"
+    assert saved["target_table"] is None and saved["target_id"] is None
+    assert bi_repo.get_claim(main.conn, brand["id"], claim_id) is None
+    assert _has_audit("claim", claim_id, "delete")
+    assert _has_audit("intake_item", items[3]["id"], "move")
+    assert items[3]["id"] in _truth_card_bucket_ids(brand["id"])["needs_confirmation"]
+
+
+def test_truth_card_move_pending_to_forbidden_creates_claim_without_creating_fact_first():
+    brand, _draft, items = _new_truth_card_fixture("待確認轉禁止")
+
+    response = _move_truth_card_item(brand["id"], items[1], "forbidden")
+
+    assert response.status_code == 204, response.text
+    saved = _saved_intake_item(items[1]["id"])
+    claim = bi_repo.get_claim(main.conn, brand["id"], saved["target_id"])
+    assert saved["outcome"] == "confirmed" and saved["target_table"] == "claim"
+    assert claim["claim_text"] == items[1]["title"] and claim["claim_type"] == "forbidden"
+    assert _has_audit("claim", claim["id"], "create")
+    assert _has_audit("intake_item", items[1]["id"], "move")
+    assert not bi_repo.list_product_facts(
+        main.conn, brand["id"], bi_repo.list_products(main.conn, brand["id"])[0]["id"],
+    )
+    assert items[1]["id"] in _truth_card_bucket_ids(brand["id"])["forbidden"]
 
 
 def test_truth_card_batch_rejects_missing_yellow_answers_before_writing_anything():

@@ -19,6 +19,8 @@ def is_price_item(item: dict) -> bool:
 
 
 def bucket_name(item: dict) -> str:
+    if item.get("_moved_to_needs_confirmation"):
+        return "needs_confirmation"
     if (item.get("kind") == "宣稱" and item.get("outcome") != "pending"
             and item.get("category") == "禁用"):
         return "forbidden"
@@ -39,6 +41,7 @@ def split_items(items: list) -> dict:
     buckets = {"accepted": [], "needs_confirmation": [], "forbidden": []}
     for item in items:
         shaped = {**item, "answer_kind": answer_kind(item)}
+        shaped.pop("_moved_to_needs_confirmation", None)
         buckets[bucket_name(item)].append(shaped)
     return buckets
 
