@@ -394,9 +394,7 @@ async def product_fact_confirm(request: Request, brand_id: str, product_id: str,
     if not fact:
         raise NotFoundKind("產品事實")
     body = await _json_body(request)
-    confirmed_by = clean(_str_field(body, "confirmed_by"))
-    if not confirmed_by:
-        return _error(400, "請填寫確認人是誰。")
+    confirmed_by = clean(_str_field(body, "confirmed_by")) or "使用者"
     repo.confirm_product_fact(web.conn, brand_id, product_id, fact_id, confirmed_by=confirmed_by, actor=actor)
     return Response(status_code=204)
 

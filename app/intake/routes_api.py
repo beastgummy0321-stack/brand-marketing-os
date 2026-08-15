@@ -127,7 +127,8 @@ def _is_restart(brand_id: str, draft: dict) -> bool:
 
 
 def _draft_shape(brand_id: str, draft: dict) -> dict:
-    photos = [{"token": "", "name": p["name"], "size_mb": p["size_mb"]} for p in draft["photos"]]
+    photos = [{"token": p.get("token") or "", "name": p["name"], "size_mb": p["size_mb"]}
+              for p in draft["photos"]]
     created_product_names = sorted(p["name"] for p in repo.list_products(web.conn, brand_id))
     return {
         "id": draft["id"], "brand_id": draft["brand_id"], "brand_name": draft["brand_name"],
@@ -135,6 +136,7 @@ def _draft_shape(brand_id: str, draft: dict) -> dict:
         "description": draft["description"], "urls": draft["urls"], "photos": photos,
         "scan_done": draft["scan_done"], "scan_impressions": draft["scan_impressions"],
         "scan_products": draft["scan_products"], "created_product_names": created_product_names,
+        "product_card_drafts": draft.get("product_card_drafts") or [],
         "url_results": draft["url_results"],
         "qa_done": draft["qa_done"], "current_q": draft["current_q"], "answers": draft["answers"],
         "question_index": draft["question_index"],
@@ -234,7 +236,13 @@ def _run_scan_job(brand_id: str) -> None:
     brand_name = brand["name"] if brand else brand_id
     try:
         draft = state.require_draft(brand_id, conn=web.conn)
-        ok, err = ai.run_scan(web.conn, draft)
+        def on_photo_progress(current: int, total: int) -> None:
+            _JOBS.set(brand_id, {
+                "kind": "scan", "status": "running",
+                "stage": f"正在看照片（第 {current}／{total} 張）", "started_at": started_at,
+                "usual_range_text": _USUAL_RANGE["scan"], "error": None,
+            })
+        ok, err = ai.run_scan(web.conn, draft, on_photo_progress=on_photo_progress)
     except Exception as exc:  # noqa: BLE001 — 背景執行緒最後一道防線，不能讓例外憑空消失
         ok, err = False, f"背景執行發生未預期錯誤：{exc}"
     if ok:
@@ -347,6 +355,7 @@ async def scan_skip(brand_id: str):
     draft["scan_done"] = True
     draft["scan_impressions"] = []
     draft["scan_products"] = []
+    draft["product_card_drafts"] = []
     draft["url_results"] = []
     state.save(draft)
     _JOBS.set(brand_id, _idle_job())
@@ -362,7 +371,14 @@ async def scan_products(request: Request, brand_id: str):
     names = body.get("names")
     names = names if isinstance(names, list) else []
     created = state.create_scanned_products(web.conn, brand_id, draft, names, actor)
-    return {"created_count": created}
+    product_id = None
+    source_photo_token = str(body.get("source_photo_token") or "").strip()
+    if source_photo_token:
+        product_id = state.create_product_from_card(
+            web.conn, brand_id, draft, source_photo_token, actor,
+        )
+        created += 1 if product_id else 0
+    return {"created_count": created, "product_id": product_id}
 
 
 # ---------------------------------------------------------------------------
@@ -478,6 +494,7 @@ async def skip_remaining_ai(brand_id: str):
         draft["scan_done"] = True
         draft["scan_impressions"] = []
         draft["scan_products"] = []
+        draft["product_card_drafts"] = []
         draft["url_results"] = []
     state.mark_qa_done(draft)
     draft["step"] = 4
@@ -672,3 +689,9 @@ async def review_item_post(request: Request, brand_id: str, i: int):
     if not ir.list_pending_items(web.conn, brand_id, draft["id"]):
         state.complete_draft(draft)
     return Response(status_code=204)
+
+
+# T2 新端點拆在小檔；本檔已接近 800 行，不再把新功能直接塞進來。
+from app.intake.routes_t2_api import router as t2_router  # noqa: E402
+
+router.include_router(t2_router)

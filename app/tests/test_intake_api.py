@@ -226,7 +226,7 @@ class DraftShapeTest(_Base):
         expected = {
             "id", "brand_id", "brand_name", "step", "completed", "is_restart",
             "description", "urls", "photos", "scan_done", "scan_impressions", "scan_products",
-            "created_product_names", "url_results", "qa_done", "current_q", "answers",
+            "product_card_drafts", "created_product_names", "url_results", "qa_done", "current_q", "answers",
             "question_index", "handoff_depth", "handoff_generated", "handoff_prompt",
             "paste_raw", "paste_errors", "paste_fix_used", "pending_item_count",
             "budget_limit", "cost_spent", "cost_items",

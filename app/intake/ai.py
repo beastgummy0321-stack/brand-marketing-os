@@ -14,6 +14,7 @@
 """
 
 import json
+from pathlib import Path
 
 from app.core import net
 from app.intake import repository as ir
@@ -34,7 +35,7 @@ _parse_json_reply = gateway.parse_json_reply  # 搬到 gateway.py 公開，這�
 
 
 def _run(conn, draft: dict, *, task_type: str, purpose: str, system: str, user_text: str,
-         options: gateway.TaskOptions = None) -> dict:
+         options: gateway.TaskOptions = None, content_blocks: list = None) -> dict:
     brand_id = draft["brand_id"]
     row = conn.execute("SELECT knowledge_version FROM brand WHERE id = ?", (brand_id,)).fetchone()
     context = gateway.TaskContext(
@@ -45,7 +46,9 @@ def _run(conn, draft: dict, *, task_type: str, purpose: str, system: str, user_t
     task = gateway.run_task(
         conn, PROVIDER, brand_id=brand_id, task_type=task_type,
         prompt_template_id=task_type, prompt_template_version="v1",
-        system=system, messages=[{"role": "user", "content": user_text}], context=context,
+        system=system,
+        messages=[{"role": "user", "content": content_blocks if content_blocks is not None else user_text}],
+        context=context,
         options=options,
     )
     ir.add_llm_task_ref(conn, brand_id, draft["id"], task["id"], purpose)
@@ -61,8 +64,102 @@ _SCAN_SYSTEM = (
     "只回傳 JSON，不要任何 JSON 以外的文字。"
 )
 
+_PHOTO_PRODUCT_SYSTEM = (
+    "你正在替品牌方讀產品照片。只整理照片上看得出來的內容；價格即使看得到也不要抄、"
+    "不要猜，價格一定交給使用者回答。請用指定工具回傳。"
+)
 
-def run_scan(conn, draft: dict) -> tuple:
+_PHOTO_PRODUCT_TOOL = {
+    "name": "submit_photo_product",
+    "description": "提交這張照片中看得到的產品資訊；價格不得提交。",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "readable": {"type": "boolean"},
+            "name": {"type": "string"},
+            "specification": {"type": "string"},
+            "selling_points": {"type": "array", "items": {"type": "string"}, "maxItems": 5},
+            "gaps": {"type": "array", "items": {"type": "string"}, "maxItems": 8},
+        },
+        "required": ["readable", "name", "specification", "selling_points", "gaps"],
+        "additionalProperties": False,
+    },
+}
+
+_PHOTO_MEDIA_TYPES = {
+    ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
+    ".gif": "image/gif", ".webp": "image/webp",
+}
+
+
+def _photo_card(photo: dict, *, status: str, message: str = None, data: dict = None) -> dict:
+    data = data or {}
+    name = str(data.get("name") or "").strip()
+    specification = str(data.get("specification") or "").strip()
+    selling_points = [str(point).strip() for point in (data.get("selling_points") or [])
+                      if str(point).strip()][:5]
+    gaps = [str(gap).strip() for gap in (data.get("gaps") or []) if str(gap).strip()]
+    if not name and "品名" not in gaps:
+        gaps.append("品名")
+    if not specification and "規格" not in gaps:
+        gaps.append("規格")
+    if not selling_points and "賣點" not in gaps:
+        gaps.append("賣點")
+    if "價格" not in gaps:
+        gaps.append("價格")
+    return {
+        "status": status, "name": name, "specification": specification,
+        "selling_points": selling_points, "source_photo_token": photo.get("token") or "",
+        "gaps": gaps, "message": message,
+    }
+
+
+def _read_photo_products(conn, draft: dict, on_photo_progress=None) -> list:
+    cards = []
+    total = len(draft["photos"])
+    for index, photo in enumerate(draft["photos"], start=1):
+        if on_photo_progress:
+            on_photo_progress(index, total)
+        try:
+            path = Path(photo.get("path") or "")
+            if not path.is_file():
+                raise ValueError("找不到照片檔案，可以重試或先跳過。")
+            media_type = _PHOTO_MEDIA_TYPES.get(path.suffix.lower())
+            image = providers.base64_image_block(media_type or "", path.read_bytes())
+            text = {
+                "type": "text",
+                "text": (
+                    "請讀這張產品照片。讀得到時填品名、規格、最多五個賣點與仍缺的資料；"
+                    "讀不到品名就把 readable 設為 false。價格一律列為缺口，不得輸出價格。"
+                ),
+            }
+            task = _run(
+                conn, draft, task_type="intake_photo_scan", purpose=f"讀取第 {index} 張照片",
+                system=_PHOTO_PRODUCT_SYSTEM, user_text="", content_blocks=[image, text],
+                options=gateway.TaskOptions(max_tokens=1200, tools=[_PHOTO_PRODUCT_TOOL]),
+            )
+            if task["status"] != "succeeded":
+                card = _photo_card(photo, status="failed", message=task["error"])
+            else:
+                data = json.loads(task["structured_output_json"] or "null")
+                if not isinstance(data, dict) or not data.get("readable") or not str(data.get("name") or "").strip():
+                    card = _photo_card(
+                        photo, status="unreadable", data=data if isinstance(data, dict) else None,
+                        message="這張照片讀不出產品資訊，可以自己填或略過。",
+                    )
+                else:
+                    card = _photo_card(photo, status="ready", data=data)
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            card = _photo_card(photo, status="failed", message=str(exc))
+        cards.append(card)
+        draft["product_card_drafts"] = list(cards)
+        ready_names = [c["name"] for c in cards if c["status"] == "ready" and c["name"]]
+        draft["scan_products"] = list(dict.fromkeys((draft.get("scan_products") or []) + ready_names))
+        state.save(draft, conn)
+    return cards
+
+
+def run_scan(conn, draft: dict, on_photo_progress=None) -> tuple:
     """讀網址＋整理初步印象。成功回 (True, None) 並更新草稿；失敗回 (False, 人話錯誤)。"""
     url_results = []
     excerpts = []
@@ -104,11 +201,13 @@ def run_scan(conn, draft: dict) -> tuple:
         for i in impressions
     ]
     draft["url_results"] = url_results
-    state.save(draft, conn)
     products = [str(p).strip() for p in ((data or {}).get("products") or [])
                 if isinstance(p, str) and str(p).strip()][:20]
-    ir.update_draft(conn, draft["brand_id"], draft["id"], scan_llm_task_id=task["id"],
-                    scan_products_json=json.dumps(products, ensure_ascii=False))
+    draft["scan_products"] = list(dict.fromkeys(products))
+    draft["product_card_drafts"] = []
+    state.save(draft, conn)
+    ir.update_draft(conn, draft["brand_id"], draft["id"], scan_llm_task_id=task["id"])
+    _read_photo_products(conn, draft, on_photo_progress=on_photo_progress)
     return True, None
 
 
@@ -137,6 +236,13 @@ def run_next_question(conn, draft: dict) -> tuple:
     lines = [f"品牌名稱：{draft['brand_name']}", f"業主描述：{draft['description']}"]
     for imp in draft["scan_impressions"]:
         lines.append(f"初步印象（{imp['looks_like']}）{imp['title']}：{imp['content']}")
+    photo_gaps = []
+    for card in draft.get("product_card_drafts") or []:
+        gaps = [str(gap).strip() for gap in card.get("gaps") or [] if str(gap).strip()]
+        if gaps:
+            photo_gaps.append(f"{card.get('name') or '讀不出品名的照片'}：{'、'.join(gaps)}")
+    if photo_gaps:
+        lines.append("照片產品卡缺口（優先補問）：" + "；".join(photo_gaps))
     for a in draft["answers"]:
         note = f"（補充：{a['note']}）" if a["note"] else ""
         lines.append(f"已問過：{a['question']}／業主選：{a['choice_label']}{note}")

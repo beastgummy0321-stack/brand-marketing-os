@@ -132,9 +132,11 @@ class IntakeWizardTest(unittest.TestCase):
         self.assertTrue(draft["scan_done"])
         self.assertEqual(len(draft["scan_impressions"]), len(script.SCAN_IMPRESSIONS))
         # 花費＝真實 token 成本（usage × pricing），即時 SUM llm_task.cost
-        expected = pricing.calculate_cost("claude-opus-5", 100, 50)
+        # T2：同一批背景流程會再讀一張上傳照片，因此網址掃描＋照片各記一筆成本。
+        expected = pricing.calculate_cost("claude-opus-5", 100, 50) * 2
         self.assertAlmostEqual(draft["cost_spent"], expected, places=9)
         self.assertEqual(draft["cost_items"][0]["label"], "讀取網址與整理初步印象")
+        self.assertEqual(draft["cost_items"][1]["label"], "讀取第 1 張照片")
         # scan_llm_task_id 回填
         row = ir.get_active_draft(main.conn, brand_id)
         self.assertIsNotNone(row["scan_llm_task_id"])

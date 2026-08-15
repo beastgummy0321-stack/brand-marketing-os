@@ -71,11 +71,25 @@ def _answer_label(entry: dict) -> str:
     return key or ""
 
 
+def _scan_product_data(raw) -> tuple[list, list]:
+    """新舊 scan_products_json 相容：舊版是名稱陣列，新版同欄位再帶照片產品卡。"""
+    value = _loads(raw, [])
+    if isinstance(value, dict):
+        names = value.get("names") if isinstance(value.get("names"), list) else []
+        cards = (value.get("product_card_drafts")
+                 if isinstance(value.get("product_card_drafts"), list) else [])
+        return [str(name) for name in names if str(name).strip()], [c for c in cards if isinstance(c, dict)]
+    if isinstance(value, list):
+        return [str(name) for name in value if isinstance(name, str) and name.strip()], []
+    return [], []
+
+
 def _row_to_draft(conn, row: dict) -> dict:
     brand_row = conn.execute("SELECT name FROM brand WHERE id = ?", (row["brand_id"],)).fetchone()
     photos = [
         {"name": p.get("display_name"), "path": p.get("file_path"),
-         "size_mb": round((p.get("size_bytes") or 0) / (1024 * 1024), 1)}
+         "size_mb": round((p.get("size_bytes") or 0) / (1024 * 1024), 1),
+         "token": p.get("token") or ""}
         for p in _loads(row["photos_json"], [])
     ]
     impressions = [
@@ -94,6 +108,7 @@ def _row_to_draft(conn, row: dict) -> dict:
     current = next((e for e in entries if not e.get("answer_key") and not e.get("skipped")), None)
     resolved = len([e for e in entries if e.get("answer_key") or e.get("skipped")])
     validation = _loads(row["paste_validation_json"], None)
+    scan_products, product_card_drafts = _scan_product_data(row["scan_products_json"])
 
     draft = {
         "id": row["id"],
@@ -105,7 +120,8 @@ def _row_to_draft(conn, row: dict) -> dict:
         "budget_limit": row["cost_limit"],
         "scan_done": row["scan_impressions_json"] is not None,
         "scan_impressions": impressions,
-        "scan_products": _loads(row["scan_products_json"], []),
+        "scan_products": scan_products,
+        "product_card_drafts": product_card_drafts,
         "url_results": _loads(row["scan_sources_json"], []),
         "qa": qa,
         "qa_done": qa_done,
@@ -156,7 +172,8 @@ def save(draft: dict, conn=None) -> None:
     conn = _conn(conn)
     photos = [
         {"file_path": p.get("path"), "display_name": p.get("name"),
-         "size_bytes": int(round((p.get("size_mb") or 0) * 1024 * 1024))}
+         "size_bytes": int(round((p.get("size_mb") or 0) * 1024 * 1024)),
+         "token": p.get("token") or ""}
         for p in draft["photos"]
     ]
     impressions = None
@@ -181,7 +198,11 @@ def save(draft: dict, conn=None) -> None:
         scan_sources_json=(json.dumps(draft["url_results"], ensure_ascii=False)
                            if draft["scan_done"] else None),
         scan_impressions_json=(json.dumps(impressions, ensure_ascii=False)
-                               if impressions is not None else None),
+                                if impressions is not None else None),
+        scan_products_json=json.dumps({
+            "names": draft.get("scan_products") or [],
+            "product_card_drafts": draft.get("product_card_drafts") or [],
+        }, ensure_ascii=False),
         qa_json=json.dumps(draft["qa"], ensure_ascii=False) if draft["qa"] else None,
         handoff_depth=draft["handoff_depth"],
         paste_raw=draft["paste_raw"] or None,
@@ -196,7 +217,8 @@ def new_draft(brand_id: str, brand_name: str, *, description: str, urls: list, p
     conn = _conn(conn)
     photos_db = [
         {"file_path": p.get("path"), "display_name": p.get("name"),
-         "size_bytes": int(round((p.get("size_mb") or 0) * 1024 * 1024))}
+         "size_bytes": int(round((p.get("size_mb") or 0) * 1024 * 1024)),
+         "token": p.get("token") or ""}
         for p in photos
     ]
     row = ir.create_draft(conn, brand_id, description, photos_db, urls, actor)
@@ -232,7 +254,8 @@ def prev_photos(last_draft_row: Optional[dict]) -> list:
         return []
     return [
         {"name": p.get("display_name"), "path": p.get("file_path"),
-         "size_mb": round((p.get("size_bytes") or 0) / (1024 * 1024), 1)}
+         "size_mb": round((p.get("size_bytes") or 0) / (1024 * 1024), 1),
+         "token": p.get("token") or ""}
         for p in _json.loads(last_draft_row["photos_json"] or "[]")
     ]
 
@@ -293,6 +316,34 @@ def create_scanned_products(conn, brand_id: str, draft: dict, names: list, actor
             created += 1
             known.add(name)
     return created
+
+
+def create_product_from_card(conn, brand_id: str, draft: dict, source_photo_token: str,
+                             actor: str) -> Optional[str]:
+    """照片產品卡沿用既有產品／產品事實入口；價格不寫入任何欄位。"""
+    from app.brand_intelligence import repository as bi_repo
+    card = next((item for item in draft.get("product_card_drafts") or []
+                 if item.get("status") == "ready"
+                 and item.get("source_photo_token") == source_photo_token), None)
+    if card is None or not str(card.get("name") or "").strip():
+        return None
+    known = {product["name"] for product in bi_repo.list_products(conn, brand_id)}
+    if card["name"] in known:
+        return None
+    product = bi_repo.create_product(conn, brand_id, name=card["name"], actor=actor)
+    facts = []
+    if str(card.get("specification") or "").strip():
+        facts.append(("規格", str(card["specification"]).strip()))
+    selling_points = "、".join(str(point).strip() for point in card.get("selling_points") or []
+                               if str(point).strip())
+    if selling_points:
+        facts.append(("賣點", selling_points))
+    for label, value in facts:
+        bi_repo.create_product_fact(
+            conn, brand_id, product["id"], actor=actor, fact_type="core_info",
+            label=label, value=value, status="confirmed", confirmed_by="使用者",
+        )
+    return product["id"]
 
 
 def complete_draft(draft: dict, conn=None) -> None:
@@ -392,7 +443,7 @@ def resolve_photo_tokens(tokens: list) -> list:
     for token in tokens:
         pending = get_pending_photos(token)
         if pending:
-            photos.append(pending[0])
+            photos.append({**pending[0], "token": token})
         discard_pending_photos(token)
     return photos
 

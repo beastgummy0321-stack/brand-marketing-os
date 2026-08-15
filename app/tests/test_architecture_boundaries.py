@@ -50,7 +50,7 @@ BRANCH_TABLES = {
 # 分支專屬的東西，見 architecture-rules.md A1。
 BRAND_PERMANENT_TABLES = {
     "brand", "brand_fact", "brand_performance_baseline", "brand_report", "claim",
-    "customer_voice", "learning_ledger", "official_asset", "owned_channel", "product",
+    "customer_voice", "learning_ledger", "official_asset", "owned_channel", "persona", "product",
     "product_economics", "product_fact", "rule", "source_reference", "strategy_hypothesis",
 }
 
