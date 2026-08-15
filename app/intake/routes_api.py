@@ -638,7 +638,7 @@ async def review_pending_all(request: Request, brand_id: str):
 async def review_item_get(brand_id: str, i: int):
     require_brand(brand_id)
     draft = state.require_draft_or_just_completed(brand_id)
-    items = ir.list_pending_items(web.conn, brand_id, draft["id"])
+    items = ir.list_items(web.conn, brand_id, draft["id"])
     item = next((it for it in items if it["i"] == i), None)
     if item is None:
         return _error(404, "找不到這一筆。")
@@ -654,7 +654,7 @@ async def review_item_post(request: Request, brand_id: str, i: int):
     actor = require_actor(request)
     require_brand(brand_id)
     draft = state.require_draft_or_just_completed(brand_id)
-    items = ir.list_pending_items(web.conn, brand_id, draft["id"])
+    items = ir.list_items(web.conn, brand_id, draft["id"])
     item = next((it for it in items if it["i"] == i), None)
     if item is None:
         return _error(404, "找不到這一筆。")
@@ -678,11 +678,23 @@ async def review_item_post(request: Request, brand_id: str, i: int):
         if scope and scope != "整個品牌":
             known = {p["name"] for p in repo.list_products(web.conn, brand_id)}
             if scope not in known:
+                if item["outcome"] != "pending" and item["kind"] == "產品事實":
+                    return _error(400, "已落檔的產品事實不能在這裡改掛其他產品。")
                 repo.create_product(web.conn, brand_id, name=scope, actor=actor)
         edits = {"title": title, "content": content,
                  "category": ir._category_to_internal(item["kind"], category), "scope_raw": scope}
 
     severity = body.get("severity") if body.get("severity") in ("soft", "hard") else "soft"
+    if item["outcome"] != "pending":
+        if outcome != "confirm":
+            return _error(400, "已落檔內容只能修改後重新確認。")
+        try:
+            ir.update_resolved_item(
+                web.conn, brand_id, item["id"], processed_by=actor, edits=edits or {},
+            )
+        except ValueError as exc:
+            return _error(400, str(exc))
+        return Response(status_code=204)
     ir.resolve_item(web.conn, brand_id, item["id"], _OUTCOME_MAP[outcome],
                     processed_by=actor, edits=edits, rule_severity=severity)
 

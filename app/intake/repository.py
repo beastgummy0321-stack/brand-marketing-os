@@ -495,6 +495,86 @@ def resolve_item(conn: sqlite3.Connection, brand_id: str, item_id: str, outcome:
     return _item_to_display(row)
 
 
+def update_resolved_item(conn: sqlite3.Connection, brand_id: str, item_id: str, *,
+                         processed_by: str, edits: dict) -> dict:
+    """更新已落檔的真相卡列；目標資料只走 Brand Intelligence 公開更新入口。"""
+    row = conn.execute(
+        "SELECT * FROM intake_item WHERE brand_id = ? AND id = ?", (brand_id, item_id),
+    ).fetchone()
+    if row is None:
+        raise ValueError("找不到這筆內容")
+    item = dict(row)
+    if item["outcome"] == "pending":
+        raise ValueError("這筆還沒落檔，請用原本的確認操作。")
+    allowed = {key: value for key, value in edits.items()
+               if key in ("title", "content", "category", "scope_raw") and value is not None}
+    updated = {**item, **allowed}
+    target_table, target_id = item.get("target_table"), item.get("target_id")
+
+    if target_table == "claim" and target_id:
+        target = bi_repo.get_claim(conn, brand_id, target_id)
+        if target is None:
+            raise ValueError("找不到這筆宣稱的落檔資料。")
+        product_id = (None if updated["scope_raw"] == "整個品牌"
+                      else _ensure_product(conn, brand_id, processed_by, updated["scope_raw"]))
+        bi_repo.update_claim(
+            conn, brand_id, target_id, actor=processed_by, claim_text=updated["title"],
+            claim_type=updated["category"], product_id=product_id,
+            evidence_source_reference_id=target["evidence_source_reference_id"],
+        )
+    elif target_table == "brand_fact" and target_id:
+        target = bi_repo.get_brand_fact(conn, brand_id, target_id)
+        if target is None:
+            raise ValueError("找不到這筆品牌事實的落檔資料。")
+        bi_repo.update_brand_fact(
+            conn, brand_id, target_id, actor=processed_by, fact_type=updated["category"],
+            label=updated["title"], value=updated["content"],
+            source_reference_id=target["source_reference_id"], confidence=target["confidence"],
+        )
+    elif target_table == "product_fact" and target_id:
+        match = next((
+            (product, fact)
+            for product in bi_repo.list_products(conn, brand_id)
+            if (fact := bi_repo.get_product_fact(
+                conn, brand_id, product["id"], target_id,
+            )) is not None
+        ), None)
+        if match is None:
+            raise ValueError("找不到這筆產品事實的落檔資料。")
+        product, target = match
+        if updated["scope_raw"] != product["name"]:
+            raise ValueError("已落檔的產品事實不能在這裡改掛其他產品。")
+        bi_repo.update_product_fact(
+            conn, brand_id, product["id"], target_id, actor=processed_by,
+            fact_type=updated["category"], label=updated["title"], value=updated["content"],
+            source_reference_id=target["source_reference_id"], confidence=target["confidence"],
+        )
+    elif target_id:
+        raise ValueError("這一類已落檔內容目前不能從真相卡修改。")
+
+    before = _item_to_display(row)
+    changed = {key: value for key, value in allowed.items() if item.get(key) != value}
+    if changed:
+        sets = ", ".join(f"{key} = ?" for key in changed)
+        conn.execute(
+            f"UPDATE intake_item SET {sets}, processed_by = ?, processed_at = ? "
+            "WHERE brand_id = ? AND id = ?",
+            (*changed.values(), processed_by, db.now_iso(), brand_id, item_id),
+        )
+    after_row = conn.execute(
+        "SELECT * FROM intake_item WHERE brand_id = ? AND id = ?", (brand_id, item_id),
+    ).fetchone()
+    after = _item_to_display(after_row)
+    if changed:
+        write_audit(
+            conn, brand_id=brand_id, entity_type="intake_item", entity_id=item_id,
+            action="update", actor=processed_by, before=before, after=after,
+            reason="人工編輯已落檔內容（決策 0013）",
+        )
+        conn.commit()
+    return after
+
+
 # ---------------------------------------------------------------------------
 # 向清理登記處報到（決策：清理登記處 Q2 各模組自我登記）
 # 刪品牌時由登記處統一呼叫，本模組不必再被別人手寫死「記得通知它」。

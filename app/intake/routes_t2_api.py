@@ -7,7 +7,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, Response
 
 from app.brand_intelligence import personas
-from app.intake import persona_generation
+from app.intake import ai, persona_generation
 from app.intake import repository as ir
 from app.intake import state, truth_card
 from app.shared import web
@@ -32,6 +32,36 @@ async def _body(request: Request) -> dict:
     except Exception:
         return {}
     return value if isinstance(value, dict) else {}
+
+
+@router.post("/api/intake/brands/{brand_id}/scan/products/retry")
+async def photo_product_retry(request: Request, brand_id: str):
+    require_brand(brand_id)
+    draft = state.require_draft(brand_id)
+    source_photo_token = str((await _body(request)).get("source_photo_token") or "").strip()
+    if not source_photo_token:
+        return _error(400, "缺少照片識別碼，請重新整理後再試。")
+    try:
+        card = ai.retry_photo_product(web.conn, draft, source_photo_token)
+    except ValueError as exc:
+        return _error(404, str(exc))
+    return {"card": card}
+
+
+@router.post("/api/intake/brands/{brand_id}/scan/products/skip")
+async def photo_product_skip(request: Request, brand_id: str):
+    require_brand(brand_id)
+    draft = state.require_draft(brand_id)
+    source_photo_token = str((await _body(request)).get("source_photo_token") or "").strip()
+    if not source_photo_token:
+        return _error(400, "缺少照片識別碼，請重新整理後再試。")
+    card = next((item for item in draft.get("product_card_drafts") or []
+                 if item.get("source_photo_token") == source_photo_token), None)
+    if card is None:
+        return _error(404, "找不到這張照片產品卡。")
+    card["status"] = "skipped"
+    state.save(draft, conn=web.conn)
+    return Response(status_code=204)
 
 
 @router.get("/api/intake/brands/{brand_id}/truth-card")

@@ -114,49 +114,69 @@ def _photo_card(photo: dict, *, status: str, message: str = None, data: dict = N
     }
 
 
+def _read_photo_product(conn, draft: dict, photo: dict, purpose: str) -> dict:
+    try:
+        path = Path(photo.get("path") or "")
+        if not path.is_file():
+            raise ValueError("找不到照片檔案，可以重試或先跳過。")
+        media_type = _PHOTO_MEDIA_TYPES.get(path.suffix.lower())
+        image = providers.base64_image_block(media_type or "", path.read_bytes())
+        text = {
+            "type": "text",
+            "text": (
+                "請讀這張產品照片。讀得到時填品名、規格、最多五個賣點與仍缺的資料；"
+                "讀不到品名就把 readable 設為 false。價格一律列為缺口，不得輸出價格。"
+            ),
+        }
+        task = _run(
+            conn, draft, task_type="intake_photo_scan", purpose=purpose,
+            system=_PHOTO_PRODUCT_SYSTEM, user_text="", content_blocks=[image, text],
+            options=gateway.TaskOptions(max_tokens=1200, tools=[_PHOTO_PRODUCT_TOOL]),
+        )
+        if task["status"] != "succeeded":
+            return _photo_card(photo, status="failed", message=task["error"])
+        data = json.loads(task["structured_output_json"] or "null")
+        if not isinstance(data, dict) or not data.get("readable") or not str(data.get("name") or "").strip():
+            return _photo_card(
+                photo, status="unreadable", data=data if isinstance(data, dict) else None,
+                message="這張照片讀不出產品資訊，可以自己填或略過。",
+            )
+        return _photo_card(photo, status="ready", data=data)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        return _photo_card(photo, status="failed", message=str(exc))
+
+
 def _read_photo_products(conn, draft: dict, on_photo_progress=None) -> list:
     cards = []
     total = len(draft["photos"])
     for index, photo in enumerate(draft["photos"], start=1):
         if on_photo_progress:
             on_photo_progress(index, total)
-        try:
-            path = Path(photo.get("path") or "")
-            if not path.is_file():
-                raise ValueError("找不到照片檔案，可以重試或先跳過。")
-            media_type = _PHOTO_MEDIA_TYPES.get(path.suffix.lower())
-            image = providers.base64_image_block(media_type or "", path.read_bytes())
-            text = {
-                "type": "text",
-                "text": (
-                    "請讀這張產品照片。讀得到時填品名、規格、最多五個賣點與仍缺的資料；"
-                    "讀不到品名就把 readable 設為 false。價格一律列為缺口，不得輸出價格。"
-                ),
-            }
-            task = _run(
-                conn, draft, task_type="intake_photo_scan", purpose=f"讀取第 {index} 張照片",
-                system=_PHOTO_PRODUCT_SYSTEM, user_text="", content_blocks=[image, text],
-                options=gateway.TaskOptions(max_tokens=1200, tools=[_PHOTO_PRODUCT_TOOL]),
-            )
-            if task["status"] != "succeeded":
-                card = _photo_card(photo, status="failed", message=task["error"])
-            else:
-                data = json.loads(task["structured_output_json"] or "null")
-                if not isinstance(data, dict) or not data.get("readable") or not str(data.get("name") or "").strip():
-                    card = _photo_card(
-                        photo, status="unreadable", data=data if isinstance(data, dict) else None,
-                        message="這張照片讀不出產品資訊，可以自己填或略過。",
-                    )
-                else:
-                    card = _photo_card(photo, status="ready", data=data)
-        except (OSError, ValueError, json.JSONDecodeError) as exc:
-            card = _photo_card(photo, status="failed", message=str(exc))
+        card = _read_photo_product(conn, draft, photo, f"讀取第 {index} 張照片")
         cards.append(card)
         draft["product_card_drafts"] = list(cards)
         ready_names = [c["name"] for c in cards if c["status"] == "ready" and c["name"]]
         draft["scan_products"] = list(dict.fromkeys((draft.get("scan_products") or []) + ready_names))
         state.save(draft, conn)
     return cards
+
+
+def retry_photo_product(conn, draft: dict, source_photo_token: str) -> dict:
+    photo = next((p for p in draft["photos"] if p.get("token") == source_photo_token), None)
+    cards = list(draft.get("product_card_drafts") or [])
+    card_index = next((i for i, card in enumerate(cards)
+                       if card.get("source_photo_token") == source_photo_token), None)
+    if photo is None or card_index is None:
+        raise ValueError("找不到這張照片產品卡。")
+    card = _read_photo_product(conn, draft, photo, "重讀指定照片")
+    cards[card_index] = card
+    draft["product_card_drafts"] = cards
+    if card["status"] == "ready" and card["name"]:
+        draft["scan_products"] = list(dict.fromkeys(
+            (draft.get("scan_products") or []) + [card["name"]],
+        ))
+    state.save(draft, conn)
+    return card
 
 
 def run_scan(conn, draft: dict, on_photo_progress=None) -> tuple:
@@ -238,6 +258,8 @@ def run_next_question(conn, draft: dict) -> tuple:
         lines.append(f"初步印象（{imp['looks_like']}）{imp['title']}：{imp['content']}")
     photo_gaps = []
     for card in draft.get("product_card_drafts") or []:
+        if card.get("status") == "skipped":
+            continue
         gaps = [str(gap).strip() for gap in card.get("gaps") or [] if str(gap).strip()]
         if gaps:
             photo_gaps.append(f"{card.get('name') or '讀不出品名的照片'}：{'、'.join(gaps)}")

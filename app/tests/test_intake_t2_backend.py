@@ -269,6 +269,90 @@ def test_photo_card_gaps_feed_existing_question_aspect_context(monkeypatch):
     assert "虛構暮色茶：規格、價格" in prompt
 
 
+def test_retry_one_photo_updates_only_that_card_after_scan_done(monkeypatch):
+    brand = bi_repo.create_brand(
+        main.conn, name="虛構單張重試品牌", client_name=None, actor=ACTOR,
+    )
+    first = state.save_new_photo("retry-one.png", b"fake-retry-one")
+    second = state.save_new_photo("leave-alone.png", b"fake-leave-alone")
+    photos = state.resolve_photo_tokens([first["token"], second["token"]])
+    draft = state.new_draft(
+        brand["id"], brand["name"], description="只重讀指定照片。", urls=[], photos=photos,
+        actor=ACTOR, conn=main.conn,
+    )
+    draft["scan_done"] = True
+    draft["scan_impressions"] = [{
+        "looks_like": "產品線", "title": "保留原掃描", "content": "不可整批重跑", "basis": "測試",
+    }]
+    draft["product_card_drafts"] = [
+        {"status": "failed", "name": "", "specification": "", "selling_points": [],
+         "source_photo_token": first["token"], "gaps": ["品名", "規格", "賣點", "價格"],
+         "message": "第一次失敗"},
+        {"status": "unreadable", "name": "", "specification": "", "selling_points": [],
+         "source_photo_token": second["token"], "gaps": ["品名", "價格"],
+         "message": "保持不動"},
+    ]
+    state.save(draft, conn=main.conn)
+    provider = QueueProvider([_response(structured={
+        "readable": True, "name": "虛構重試果茶", "specification": "10 入",
+        "selling_points": ["獨立包裝"], "gaps": [],
+    })])
+    monkeypatch.setattr(intake_ai, "PROVIDER", provider)
+
+    response = TestClient(main.app).post(
+        f"/api/intake/brands/{brand['id']}/scan/products/retry",
+        json={"source_photo_token": first["token"]},
+    )
+
+    assert response.status_code == 200, response.text
+    saved = state.get_draft(brand["id"], conn=main.conn)
+    assert saved["scan_done"] is True
+    assert saved["scan_impressions"][0]["title"] == "保留原掃描"
+    assert saved["product_card_drafts"][0]["status"] == "ready"
+    assert saved["product_card_drafts"][0]["name"] == "虛構重試果茶"
+    assert saved["product_card_drafts"][1]["message"] == "保持不動"
+    assert len(provider.calls) == 1
+
+
+def test_skip_one_photo_card_persists_and_excludes_its_gaps_from_question(monkeypatch):
+    brand = bi_repo.create_brand(
+        main.conn, name="虛構單卡略過品牌", client_name=None, actor=ACTOR,
+    )
+    draft = state.new_draft(
+        brand["id"], brand["name"], description="略過的卡不能再出題。", urls=[], photos=[],
+        actor=ACTOR, conn=main.conn,
+    )
+    draft["product_card_drafts"] = [{
+        "status": "unreadable", "name": "不該再出現的產品", "specification": "",
+        "selling_points": [], "source_photo_token": "pht_skip_one",
+        "gaps": ["不該再問的規格", "價格"], "message": "讀不出來",
+    }]
+    state.save(draft, conn=main.conn)
+    client = TestClient(main.app)
+
+    response = client.post(
+        f"/api/intake/brands/{brand['id']}/scan/products/skip",
+        json={"source_photo_token": "pht_skip_one"},
+    )
+
+    assert response.status_code == 204, response.text
+    saved = state.get_draft(brand["id"], conn=main.conn)
+    assert saved["product_card_drafts"][0]["status"] == "skipped"
+    provider = QueueProvider([_response(json.dumps({
+        "done": False, "aspect": "產品線", "question": "目前主打哪一款？",
+        "suggested": {"label": "單一主打", "desc": "先聚焦。"},
+        "branches": [{"label": "多款並行", "desc": "一起規劃。"}],
+    }, ensure_ascii=False))])
+    monkeypatch.setattr(intake_ai, "PROVIDER", provider)
+
+    ok, error = intake_ai.run_next_question(main.conn, saved)
+
+    assert ok is True and error is None
+    prompt = provider.calls[0]["messages"][0]["content"]
+    assert "不該再出現的產品" not in prompt
+    assert "不該再問的規格" not in prompt
+
+
 def _new_truth_card_fixture(suffix: str):
     brand = bi_repo.create_brand(
         main.conn, name=f"虛構真相卡品牌{suffix}", client_name=None, actor=ACTOR,
@@ -311,6 +395,48 @@ def test_truth_card_mechanical_buckets_cover_default_price_claim_and_forbidden()
         (items[2]["id"], "claim_permission"),
     ]
     assert [item["id"] for item in data["forbidden"]] == [items[3]["id"]]
+
+
+def test_review_endpoint_updates_resolved_fact_and_moves_forbidden_claim_to_green():
+    brand, _draft, items = _new_truth_card_fixture("已落檔編輯")
+    ir.resolve_item(
+        main.conn, brand["id"], items[0]["id"], "confirmed", processed_by="使用者",
+    )
+    client = TestClient(main.app)
+
+    fact_get = client.get(f"/api/intake/brands/{brand['id']}/review/{items[0]['i']}")
+    claim_get = client.get(f"/api/intake/brands/{brand['id']}/review/{items[3]['i']}")
+    assert fact_get.status_code == 200, fact_get.text
+    assert claim_get.status_code == 200, claim_get.text
+
+    fact_response = client.post(
+        f"/api/intake/brands/{brand['id']}/review/{items[0]['i']}",
+        json={
+            "outcome": "confirm", "kind": "品牌事實", "category": "定位",
+            "title": "產地直送", "content": "改成虛構契作果園直送。", "scope": "整個品牌",
+        },
+    )
+    claim_response = client.post(
+        f"/api/intake/brands/{brand['id']}/review/{items[3]['i']}",
+        json={
+            "outcome": "confirm", "kind": "宣稱", "category": "可用",
+            "title": "適合日常飲用", "content": "改成一般生活描述。", "scope": "整個品牌",
+        },
+    )
+
+    assert fact_response.status_code == 204, fact_response.text
+    assert claim_response.status_code == 204, claim_response.text
+    fact = next(row for row in bi_repo.list_brand_facts(main.conn, brand["id"])
+                if row["label"] == "產地直送")
+    claim = next(row for row in bi_repo.list_claims_for_brand(main.conn, brand["id"])
+                 if row["claim_text"] == "適合日常飲用")
+    assert fact["value"] == "改成虛構契作果園直送。"
+    assert claim["claim_type"] == "approved"
+    truth = client.get(f"/api/intake/brands/{brand['id']}/truth-card").json()["data"]
+    assert items[3]["id"] not in {item["id"] for item in truth["forbidden"]}
+    assert items[3]["id"] in {item["id"] for item in truth["accepted"]}
+    saved_claim_item = next(item for item in truth["accepted"] if item["id"] == items[3]["id"])
+    assert saved_claim_item["content"] == "改成一般生活描述。"
 
 
 def test_truth_card_batch_rejects_missing_yellow_answers_before_writing_anything():
