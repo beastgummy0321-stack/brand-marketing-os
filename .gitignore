@@ -23,3 +23,6 @@ frontend/dist/
 
 # 舊工作紀錄封存區（2026-08-14 骨架日），留本機不進版控
 archive/
+
+# 本機權限設定，不進版控
+.claude/settings.local.json
