@@ -47,3 +47,9 @@
 - 已在 React：收件匣、駕駛艙、品牌智庫、產品清單／詳情、檔期清單、作戰室、素材工作檯、矩陣頁、設定
 - 仍在 Jinja：建檔精靈九步、廣告 20+ 頁、品牌管理三頁、產品編輯面板、報表三頁
 - 遷移順序照 `BOARD.md` 排定執行
+
+## Agent skills
+
+- 議題追蹤：markdown 檔存於 `.scratch/<effort>/issues/`——見 `docs/agents/issue-tracker.md`
+- 分類標籤：五個標準標籤（`needs-triage`／`needs-info`／`ready-for-agent`／`ready-for-human`／`wontfix`）——見 `docs/agents/triage-labels.md`
+- 領域文件：單一 context，根目錄 `CONTEXT.md` ＋ `docs/adr/`——見 `docs/agents/domain.md`
