@@ -7,3 +7,4 @@ openpyxl
 anthropic
 httpx
 pytest
+pytest-xdist
