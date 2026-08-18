@@ -14,6 +14,7 @@
 """
 
 import json
+from pathlib import Path
 
 from app.core import net
 from app.intake import repository as ir
@@ -27,12 +28,14 @@ PROVIDER = providers.AnthropicProvider()
 fetch_url = net.fetch_url
 
 PARSE_FAIL_MESSAGE = "AI 有回覆，但格式讀不成預期的樣子。可以再試一次。"
+QUESTION_ASPECTS = ("產品線", "價格帶", "客群", "語調", "法規風險")
 
 
 _parse_json_reply = gateway.parse_json_reply  # 搬到 gateway.py 公開，這裡留別名（行為零變化）
 
 
-def _run(conn, draft: dict, *, task_type: str, purpose: str, system: str, user_text: str) -> dict:
+def _run(conn, draft: dict, *, task_type: str, purpose: str, system: str, user_text: str,
+         options: gateway.TaskOptions = None, content_blocks: list = None) -> dict:
     brand_id = draft["brand_id"]
     row = conn.execute("SELECT knowledge_version FROM brand WHERE id = ?", (brand_id,)).fetchone()
     context = gateway.TaskContext(
@@ -43,7 +46,10 @@ def _run(conn, draft: dict, *, task_type: str, purpose: str, system: str, user_t
     task = gateway.run_task(
         conn, PROVIDER, brand_id=brand_id, task_type=task_type,
         prompt_template_id=task_type, prompt_template_version="v1",
-        system=system, messages=[{"role": "user", "content": user_text}], context=context,
+        system=system,
+        messages=[{"role": "user", "content": content_blocks if content_blocks is not None else user_text}],
+        context=context,
+        options=options,
     )
     ir.add_llm_task_ref(conn, brand_id, draft["id"], task["id"], purpose)
     return task
@@ -58,8 +64,122 @@ _SCAN_SYSTEM = (
     "只回傳 JSON，不要任何 JSON 以外的文字。"
 )
 
+_PHOTO_PRODUCT_SYSTEM = (
+    "你正在替品牌方讀產品照片。只整理照片上看得出來的內容；價格即使看得到也不要抄、"
+    "不要猜，價格一定交給使用者回答。請用指定工具回傳。"
+)
 
-def run_scan(conn, draft: dict) -> tuple:
+_PHOTO_PRODUCT_TOOL = {
+    "name": "submit_photo_product",
+    "description": "提交這張照片中看得到的產品資訊；價格不得提交。",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "readable": {"type": "boolean"},
+            "name": {"type": "string"},
+            "specification": {"type": "string"},
+            "selling_points": {"type": "array", "items": {"type": "string"}, "maxItems": 5},
+            "gaps": {"type": "array", "items": {"type": "string"}, "maxItems": 8},
+        },
+        "required": ["readable", "name", "specification", "selling_points", "gaps"],
+        "additionalProperties": False,
+    },
+}
+
+_PHOTO_MEDIA_TYPES = {
+    ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
+    ".gif": "image/gif", ".webp": "image/webp",
+}
+
+
+def _photo_card(photo: dict, *, status: str, message: str = None, data: dict = None) -> dict:
+    data = data or {}
+    name = str(data.get("name") or "").strip()
+    specification = str(data.get("specification") or "").strip()
+    selling_points = [str(point).strip() for point in (data.get("selling_points") or [])
+                      if str(point).strip()][:5]
+    gaps = [str(gap).strip() for gap in (data.get("gaps") or []) if str(gap).strip()]
+    if not name and "品名" not in gaps:
+        gaps.append("品名")
+    if not specification and "規格" not in gaps:
+        gaps.append("規格")
+    if not selling_points and "賣點" not in gaps:
+        gaps.append("賣點")
+    if "價格" not in gaps:
+        gaps.append("價格")
+    return {
+        "status": status, "name": name, "specification": specification,
+        "selling_points": selling_points, "source_photo_token": photo.get("token") or "",
+        "gaps": gaps, "message": message,
+    }
+
+
+def _read_photo_product(conn, draft: dict, photo: dict, purpose: str) -> dict:
+    try:
+        path = Path(photo.get("path") or "")
+        if not path.is_file():
+            raise ValueError("找不到照片檔案，可以重試或先跳過。")
+        media_type = _PHOTO_MEDIA_TYPES.get(path.suffix.lower())
+        image = providers.base64_image_block(media_type or "", path.read_bytes())
+        text = {
+            "type": "text",
+            "text": (
+                "請讀這張產品照片。讀得到時填品名、規格、最多五個賣點與仍缺的資料；"
+                "讀不到品名就把 readable 設為 false。價格一律列為缺口，不得輸出價格。"
+            ),
+        }
+        task = _run(
+            conn, draft, task_type="intake_photo_scan", purpose=purpose,
+            system=_PHOTO_PRODUCT_SYSTEM, user_text="", content_blocks=[image, text],
+            options=gateway.TaskOptions(max_tokens=1200, tools=[_PHOTO_PRODUCT_TOOL]),
+        )
+        if task["status"] != "succeeded":
+            return _photo_card(photo, status="failed", message=task["error"])
+        data = json.loads(task["structured_output_json"] or "null")
+        if not isinstance(data, dict) or not data.get("readable") or not str(data.get("name") or "").strip():
+            return _photo_card(
+                photo, status="unreadable", data=data if isinstance(data, dict) else None,
+                message="這張照片讀不出產品資訊，可以自己填或略過。",
+            )
+        return _photo_card(photo, status="ready", data=data)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        return _photo_card(photo, status="failed", message=str(exc))
+
+
+def _read_photo_products(conn, draft: dict, on_photo_progress=None) -> list:
+    cards = []
+    total = len(draft["photos"])
+    for index, photo in enumerate(draft["photos"], start=1):
+        if on_photo_progress:
+            on_photo_progress(index, total)
+        card = _read_photo_product(conn, draft, photo, f"讀取第 {index} 張照片")
+        cards.append(card)
+        draft["product_card_drafts"] = list(cards)
+        ready_names = [c["name"] for c in cards if c["status"] == "ready" and c["name"]]
+        draft["scan_products"] = list(dict.fromkeys((draft.get("scan_products") or []) + ready_names))
+        state.save(draft, conn)
+    return cards
+
+
+def retry_photo_product(conn, draft: dict, source_photo_token: str) -> dict:
+    photo = next((p for p in draft["photos"] if p.get("token") == source_photo_token), None)
+    cards = list(draft.get("product_card_drafts") or [])
+    card_index = next((i for i, card in enumerate(cards)
+                       if card.get("source_photo_token") == source_photo_token), None)
+    if photo is None or card_index is None:
+        raise ValueError("找不到這張照片產品卡。")
+    card = _read_photo_product(conn, draft, photo, "重讀指定照片")
+    cards[card_index] = card
+    draft["product_card_drafts"] = cards
+    if card["status"] == "ready" and card["name"]:
+        draft["scan_products"] = list(dict.fromkeys(
+            (draft.get("scan_products") or []) + [card["name"]],
+        ))
+    state.save(draft, conn)
+    return card
+
+
+def run_scan(conn, draft: dict, on_photo_progress=None) -> tuple:
     """讀網址＋整理初步印象。成功回 (True, None) 並更新草稿；失敗回 (False, 人話錯誤)。"""
     url_results = []
     excerpts = []
@@ -76,7 +196,7 @@ def run_scan(conn, draft: dict) -> tuple:
         parts.append("（沒有可讀取的網址內容，請完全依業主描述推測，並在 basis 註明是推測。）")
     parts.append(
         "請整理 3 到 5 條「初步印象」。每一條指出它看起來像品牌的哪一面向"
-        "（例如：產品線、價格帶、受眾、語調、法規風險），下一句話標題、一段完整說明、"
+        "（例如：產品線、價格帶、客群、語調、法規風險），下一句話標題、一段完整說明、"
         "以及依據（來自哪個網址或「依業主描述推測」）。這些只是印象，不是事實。\n"
         "另外把你在資料裡實際看到的「產品名稱」列成清單（只要名字、最多 20 個；"
         "看不到任何具體產品名就給空陣列，不要猜）。\n"
@@ -101,11 +221,13 @@ def run_scan(conn, draft: dict) -> tuple:
         for i in impressions
     ]
     draft["url_results"] = url_results
-    state.save(draft, conn)
     products = [str(p).strip() for p in ((data or {}).get("products") or [])
                 if isinstance(p, str) and str(p).strip()][:20]
-    ir.update_draft(conn, draft["brand_id"], draft["id"], scan_llm_task_id=task["id"],
-                    scan_products_json=json.dumps(products, ensure_ascii=False))
+    draft["scan_products"] = list(dict.fromkeys(products))
+    draft["product_card_drafts"] = []
+    state.save(draft, conn)
+    ir.update_draft(conn, draft["brand_id"], draft["id"], scan_llm_task_id=task["id"])
+    _read_photo_products(conn, draft, on_photo_progress=on_photo_progress)
     return True, None
 
 
@@ -122,20 +244,42 @@ _QUESTION_SYSTEM = (
 def run_next_question(conn, draft: dict) -> tuple:
     """請 AI 出下一題（含建議選項與分支）。AI 認為問夠了就標記問答結束。"""
     asked = state.question_count(draft)
+    if asked >= script.MAX_QUESTIONS:
+        state.mark_qa_done(draft)
+        state.save(draft, conn)
+        return True, None
+    covered = [aspect for aspect in QUESTION_ASPECTS if any(
+        isinstance(entry, dict) and entry.get("aspect") == aspect
+        for entry in draft.get("qa") or []
+    )]
+    missing = [aspect for aspect in QUESTION_ASPECTS if aspect not in covered]
     lines = [f"品牌名稱：{draft['brand_name']}", f"業主描述：{draft['description']}"]
     for imp in draft["scan_impressions"]:
         lines.append(f"初步印象（{imp['looks_like']}）{imp['title']}：{imp['content']}")
+    photo_gaps = []
+    for card in draft.get("product_card_drafts") or []:
+        if card.get("status") == "skipped":
+            continue
+        gaps = [str(gap).strip() for gap in card.get("gaps") or [] if str(gap).strip()]
+        if gaps:
+            photo_gaps.append(f"{card.get('name') or '讀不出品名的照片'}：{'、'.join(gaps)}")
+    if photo_gaps:
+        lines.append("照片產品卡缺口（優先補問）：" + "；".join(photo_gaps))
     for a in draft["answers"]:
         note = f"（補充：{a['note']}）" if a["note"] else ""
         lines.append(f"已問過：{a['question']}／業主選：{a['choice_label']}{note}")
+    lines.append(f"已覆蓋面向：{'、'.join(covered) if covered else '無'}")
+    lines.append(f"未覆蓋面向：{'、'.join(missing) if missing else '無'}")
     lines.append(
         f"你已經問了 {asked} 題（上限 {script.MAX_QUESTIONS} 題）。"
         "收斂規則（硬性）：問到第 5 題起，除非還有一個「不問就會讓調研方向走錯」的明顯缺口，"
         '一律回 {"done": true} 收尾——寧可少問，不要為了問而問。\n'
-        "還需要問時，每一題要有：問題本身、一個你最建議的答案"
+        "只要還有未覆蓋面向且尚未達題數上限，就不能回 done，必須從未覆蓋面向繼續出題。"
+        "還需要問時，每一題要有：所屬面向、問題本身、一個你最建議的答案"
         "（含一句白話說明為什麼建議、選了調研會往哪去）、2 到 3 個分支選項（各含說明）。"
         "問題要根據前面的回答遞進，不要重複問過的面向。\n"
-        '還需要問：只回傳 {"done": false, "question": "問題", '
+        '還需要問：只回傳 {"done": false, "aspect": "產品線/價格帶/客群/語調/法規風險其中一個", '
+        '"question": "問題", '
         '"suggested": {"label": "建議答案", "desc": "說明"}, '
         '"branches": [{"label": "分支", "desc": "說明"}]}\n'
         '不用再問了：只回傳 {"done": true}'
@@ -148,15 +292,19 @@ def run_next_question(conn, draft: dict) -> tuple:
     if not isinstance(data, dict):
         return False, PARSE_FAIL_MESSAGE
     if data.get("done"):
+        if missing:
+            return False, (f"還有 {len(missing)} 個面向沒問到：{'、'.join(missing)}。"
+                           "請繼續出題。")
         state.mark_qa_done(draft)
         state.save(draft, conn)
         return True, None
-    if not data.get("question") or not isinstance(data.get("suggested"), dict):
+    if (data.get("aspect") not in QUESTION_ASPECTS or not data.get("question")
+            or not isinstance(data.get("suggested"), dict)):
         return False, PARSE_FAIL_MESSAGE
     state.append_question(
         draft, data["question"], data["suggested"],
         [b for b in (data.get("branches") or []) if isinstance(b, dict) and b.get("label")],
-        task["id"],
+        task["id"], aspect=data["aspect"],
     )
     state.save(draft, conn)
     return True, None
@@ -171,9 +319,37 @@ _FIX_SYSTEM = (
     "內容一字不改寫、不新增、不刪減，只調整格式。只輸出表格本身，不要任何其他文字。"
 )
 
+_PASTE_ROWS_TOOL = {
+    "name": "submit_paste_rows",
+    "description": "提交整理完成的調研總結列。只能整理原文格式，不得改寫、新增或刪減內容。",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "rows": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "kind": {"type": "string", "enum": ["品牌事實", "產品事實", "限制規則", "宣稱", "顧客原話"]},
+                        "category": {"type": "string"},
+                        "title": {"type": "string"},
+                        "content": {"type": "string"},
+                        "scope": {"type": "string"},
+                        "evidence": {"type": "string"},
+                    },
+                    "required": ["kind", "category", "title", "content", "scope", "evidence"],
+                    "additionalProperties": False,
+                },
+            },
+        },
+        "required": ["rows"],
+        "additionalProperties": False,
+    },
+}
+
 
 def run_paste_fix(conn, draft: dict) -> tuple:
-    """把貼回原文原封不動交給 AI 照契約格式重排一次。成功回 (True, 修復後文字)。"""
+    """把貼回原文交給 AI 重排；成功回傳結構化列，缺結構時回傳修復文字。"""
     from app.brand_intelligence import repository as bi_repo
     known = sorted(p["name"] for p in bi_repo.list_products(conn, draft["brand_id"]))
     user_text = (
@@ -182,10 +358,14 @@ def run_paste_fix(conn, draft: dict) -> tuple:
         f"{draft['paste_raw']}"
     )
     task = _run(conn, draft, task_type="intake_paste_fix", purpose="請 AI 幫我整理格式",
-                system=_FIX_SYSTEM, user_text=user_text)
+                system=_FIX_SYSTEM, user_text=user_text,
+                options=gateway.TaskOptions(tools=[_PASTE_ROWS_TOOL]))
     if task["status"] != "succeeded":
         return False, task["error"]
     # 額度只在成功時用掉：repair_llm_task_id 非空＝用過（03 §3A.2）
     ir.update_draft(conn, draft["brand_id"], draft["id"], repair_llm_task_id=task["id"])
     draft["paste_fix_used"] = True
+    structured = json.loads(task["structured_output_json"]) if task["structured_output_json"] else None
+    if isinstance(structured, dict) and isinstance(structured.get("rows"), list):
+        return True, structured["rows"]
     return True, task["rendered_output"]

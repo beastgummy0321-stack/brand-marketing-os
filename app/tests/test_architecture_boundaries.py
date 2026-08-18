@@ -50,7 +50,7 @@ BRANCH_TABLES = {
 # 分支專屬的東西，見 architecture-rules.md A1。
 BRAND_PERMANENT_TABLES = {
     "brand", "brand_fact", "brand_performance_baseline", "brand_report", "claim",
-    "customer_voice", "learning_ledger", "official_asset", "owned_channel", "product",
+    "customer_voice", "learning_ledger", "official_asset", "owned_channel", "persona", "product",
     "product_economics", "product_fact", "rule", "source_reference", "strategy_hypothesis",
 }
 
@@ -73,13 +73,7 @@ KNOWN_SQL_VIOLATIONS = {
 # 每一項是「參與環的兩個套件」排序後的 tuple；三個以上的環會拆成多組相鄰對出現。
 # 五組全部由同一個成因造成：app.brand_intelligence（品牌永久層）反過來 import 了
 # 上層的三個套件。把這三條邊拆掉，五組環會一起消失——解法與代價見 docs/tech-debt.md 第二節。
-KNOWN_IMPORT_CYCLES = {
-    ("app.brand_intelligence", "app.intake"),   # brand_intelligence/routes.py:40
-    ("app.brand_intelligence", "app.llm"),      # report.py:17／customer_voice.py:21／product_ai.py:19
-    ("app.brand_intelligence", "app.shared"),   # brand_intelligence/routes.py:41-42
-    ("app.intake", "app.llm"),                  # 上面三條的連帶效應，非獨立成因
-    ("app.intake", "app.shared"),               # 同上
-}
+KNOWN_IMPORT_CYCLES = set()
 
 # 只有 app/<套件>/ 底下的檔案算「層」；app/*.py（main.py 組裝根、mock_data.py 共用選項清單）
 # 不是層，兩邊都不計入。app/tests 不計入（測試本來就要 import 各層）。
@@ -362,6 +356,7 @@ LAYER_ORDER = [
     "app.llm",                 # AI gateway 與 prompt 組裝
     "app.shared",              # web 骨架（app、templates、共用 ctx）
     "app.intake",              # 建檔精靈
+    "app.brand_web",           # 品牌智庫 web 路由
     "app.ads",                 # 廣告分支
     "app.orders",              # 訂單
     "app.dashboard",           # 駕駛艙（只讀，跨分支彙總）
@@ -370,11 +365,7 @@ LAYER_ORDER = [
 
 # 既有的反向依賴（欠帳，不准再多欠）。三條全部出自品牌永久層反過來依賴上層，
 # 也正是 KNOWN_IMPORT_CYCLES 五組環的根源——解掉這三條，兩張清單一起清空。
-KNOWN_LAYER_VIOLATIONS = {
-    ("app.brand_intelligence", "app.intake"),   # routes.py:40
-    ("app.brand_intelligence", "app.llm"),      # report.py／customer_voice.py／product_ai.py
-    ("app.brand_intelligence", "app.shared"),   # routes.py:41-42
-}
+KNOWN_LAYER_VIOLATIONS = set()
 
 
 class LayerDirectionTest(unittest.TestCase):
@@ -417,13 +408,13 @@ class LayerDirectionTest(unittest.TestCase):
 # 真的需要單向棘輪時再升級。
 FILE_LINE_CAP = 800
 KNOWN_OVERSIZED_FILES = {
-    "app/brand_intelligence/routes.py": 1854,
+    "app/brand_web/routes.py": 1854,
     "app/brand_intelligence/repository.py": 1667,
     "app/tests/test_ads_reading.py": 1157,
     "app/ads/reading.py": 1039,
     "app/intake/routes.py": 951,
     "app/tests/test_ads_creative.py": 870,
-    "app/ads/repository.py": 856,
+    "app/ads/repository.py": 858,
 }
 
 

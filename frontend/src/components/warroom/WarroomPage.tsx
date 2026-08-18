@@ -9,6 +9,7 @@ import { AiCostMeter } from "./AiCostMeter";
 import { ProposalBook } from "./ProposalBook";
 import { CycleDeletePanel } from "./panels/CycleDeletePanel";
 import { OpeningSuggestionCard } from "../campaigns/OpeningSuggestionCard";
+import { NewCycleDirectionChoice } from "./NewCycleDirectionChoice";
 import { CreativeStep } from "./steps/CreativeStep";
 import { HandoffStep } from "./steps/HandoffStep";
 import { IntakeSummary } from "./steps/IntakeStep";
@@ -61,7 +62,9 @@ export function WarroomPage({ brandId, cycleId }: { brandId: string; cycleId: st
       <div className="flex flex-col gap-4">
         <Breadcrumb items={[{ label: "跨品牌總覽", href: "/" }, { label: "歷史檔期", href: `/brands/${brandId}/campaigns` }, { label: "開新檔期" }]} />
         <TaskFlowShell steps={STAGE_BAR_LABELS} current={1} onSelect={() => {}} rightRail={<AiCostMeter brandId={brandId} />}>
-          <OpeningSuggestionCard brandId={brandId} onCreated={(newId) => navigate(`/brands/${brandId}/campaigns/${newId}`)} />
+          <NewCycleDirectionChoice brandId={brandId}>
+            {(initialBackground) => <OpeningSuggestionCard brandId={brandId} initialBackground={initialBackground} onCreated={(newId) => navigate(`/brands/${brandId}/campaigns/${newId}`)} />}
+          </NewCycleDirectionChoice>
         </TaskFlowShell>
       </div>
     );

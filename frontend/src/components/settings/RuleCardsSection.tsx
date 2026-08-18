@@ -19,7 +19,8 @@ type CardsState =
   | { status: "ready"; cards: RuleCard[] };
 
 /** 品牌規則卡參數區塊（S15.29–S15.33）：品牌選擇器＋六張規則卡，新設計（見契約「拿不準
- * 的點」1，暫定留在 S15），選了品牌才讀該品牌的卡。 */
+ * 的點」1，暫定留在 S15），選了品牌才讀該品牌的卡。投放自動度由專用
+ * `AutonomySection` 渲染，這裡只保留數字門檻卡，避免同一張卡出現兩次。 */
 export function RuleCardsSection() {
   const [brandsState, setBrandsState] = useState<BrandsState>({ status: "loading" });
   const [brandId, setBrandId] = useState("");
@@ -119,7 +120,7 @@ export function RuleCardsSection() {
           )}
           {cardsState.status === "ready" && (
             <div className="grid grid-cols-2 gap-4">
-              {cardsState.cards.map((card) => (
+              {cardsState.cards.filter((card) => card.key !== "autonomy").map((card) => (
                 <RuleCardItem key={card.key} brandId={brandId} card={card} onUpdated={handleCardUpdated} />
               ))}
             </div>

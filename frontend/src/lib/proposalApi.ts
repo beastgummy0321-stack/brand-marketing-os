@@ -24,7 +24,7 @@ export interface ChannelAsk {
 
 export type OpeningSuggestionResponse =
   | { available: true; summary: string; suggestion: OpeningSuggestion; channel_ask: null }
-  | { available: false; reason: string; channel_ask: ChannelAsk };
+  | { available: false; reason: string; channel_ask?: ChannelAsk };
 
 export interface ProposalBlocks {
   channels: unknown;
@@ -35,12 +35,21 @@ export interface ProposalBlocks {
   schedule: unknown;
 }
 
-export interface ProposalResponse {
-  status: "ready" | "assembling" | "failed";
+export interface ReadyProposalResponse {
+  status: "ready";
   reason: string | null;
   blocks: ProposalBlocks;
   approval: { approved: boolean; warning: string | null };
 }
+
+export interface PendingProposalResponse {
+  status: "assembling" | "failed";
+  reason: string | null;
+  blocks: Record<string, never>;
+  approval: Record<string, never>;
+}
+
+export type ProposalResponse = ReadyProposalResponse | PendingProposalResponse;
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, init);

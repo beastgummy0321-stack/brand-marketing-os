@@ -140,7 +140,7 @@ def historical_cell_performance(conn, brand_id: str, exclude_cycle_id: Optional[
     cycles = ads_repo.list_cycles(conn, brand_id, include_archived=True)
     budget_by_cycle = {c["id"]: (c["budget"] or 0) for c in cycles}
 
-    sql = "SELECT id, campaign_cycle_id, creative_angle FROM experiment_cell WHERE brand_id = ?"
+    sql = "SELECT id, campaign_cycle_id, product_id, creative_angle FROM experiment_cell WHERE brand_id = ?"
     params = [brand_id]
     if exclude_cycle_id:
         sql += " AND campaign_cycle_id != ?"
@@ -174,6 +174,7 @@ def historical_cell_performance(conn, brand_id: str, exclude_cycle_id: Optional[
         results.append({
             "experiment_cell_id": row["id"],
             "campaign_cycle_id": row["campaign_cycle_id"],
+            "product_id": row["product_id"],
             "creative_angle": row["creative_angle"],
             "spend": perf["spend"],
             "conversions": perf["conversions"],

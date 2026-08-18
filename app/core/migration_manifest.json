@@ -41,5 +41,8 @@
   "ads/0017_occasion.sql": "71ef4437e25235535c47deb6838f81da17bb19798a523dd42c5f17e2c8d70944",
   "core/0011_campaign_skip.sql": "910d3d6a3ef4d0bd5d0dfda7838c54ce12d850a09850bab7ace0253df461a8cf",
   "core/0012_calendar_dismiss.sql": "30b7cdcfa31eb3e2d126712b29f8866642f684e7f152385a9228ee0bcd230caf",
-  "brand_intelligence/0007_rule_confirmed_at.sql": "20dc718f124b462c4a8faca52b09be7b69f52e27ce9aa1d9ed2f7c4992951a8c"
+  "brand_intelligence/0007_rule_confirmed_at.sql": "20dc718f124b462c4a8faca52b09be7b69f52e27ce9aa1d9ed2f7c4992951a8c",
+  "brand_intelligence/0008_persona.sql": "f8699987f24b59ee23e2108e00910f33f6400e3abc038d930e60c63f39c2b16a",
+  "ads/0018_channel_tracking_check.sql": "36ae67c86e3ce353817a7865ae64267e371b45686166ac56bcd217dc84854c0b",
+  "ads/0019_channel_plan_task_card.sql": "b47ac37a551ced4df4aa5803925027492e9e58982914228304bb58816d93c82d"
 }

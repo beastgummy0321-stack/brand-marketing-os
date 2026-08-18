@@ -31,6 +31,17 @@ export interface ScanImpression {
   basis: string;
 }
 
+/** 照片直讀產品卡（T2 契約 1.2）：價格只列在 gaps，不會由照片猜值。 */
+export interface ProductCardDraft {
+  status: "ready" | "unreadable" | "failed" | "skipped";
+  name: string;
+  specification: string;
+  selling_points: string[];
+  source_photo_token: string;
+  gaps: string[];
+  message: string | null;
+}
+
 export interface UrlResult {
   url: string;
   ok: boolean;
@@ -96,6 +107,7 @@ export interface IntakeDraft {
   scan_done: boolean;
   scan_impressions: ScanImpression[];
   scan_products: string[];
+  product_card_drafts: ProductCardDraft[];
   created_product_names: string[];
   url_results: UrlResult[];
 
@@ -254,6 +266,25 @@ export function skipScan(brandId: string): Promise<void> {
 
 export function createScannedProducts(brandId: string, names: string[]): Promise<{ created_count: number }> {
   return postJson(`/api/intake/brands/${encodeURIComponent(brandId)}/scan/products`, { names });
+}
+
+/** 從一張已讀出的照片建產品；回傳包裝在既有 scan/products 的資料裡，這裡只交給畫面要用的欄位。 */
+export function createProductFromCard(brandId: string, sourcePhotoToken: string): Promise<{ created_count: number; product_id: string | null }> {
+  return postJson(`/api/intake/brands/${encodeURIComponent(brandId)}/scan/products`, {
+    source_photo_token: sourcePhotoToken,
+  });
+}
+
+export function retryPhotoProduct(brandId: string, sourcePhotoToken: string): Promise<ProductCardDraft> {
+  return postJson<{ card: ProductCardDraft }>(`/api/intake/brands/${encodeURIComponent(brandId)}/scan/products/retry`, {
+    source_photo_token: sourcePhotoToken,
+  }).then((body) => body.card);
+}
+
+export function skipPhotoProduct(brandId: string, sourcePhotoToken: string): Promise<void> {
+  return postJson(`/api/intake/brands/${encodeURIComponent(brandId)}/scan/products/skip`, {
+    source_photo_token: sourcePhotoToken,
+  });
 }
 
 // ---- 引導問答 ----

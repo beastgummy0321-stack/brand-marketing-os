@@ -42,6 +42,9 @@ CATEGORIES = {
     "hypothesis_unresolved": {"severity": "informational", "label": "假設待結案"},  # 票 #53
     "prototype_phase_ended": {"severity": "rule_warning", "label": "原型階段結束提醒"},  # 修憲落地 A6
     "auto_sync_failed": {"severity": "rule_warning", "label": "自動同步失敗"},  # 票 07-auto-sync
+    "weekly_proposal_ready": {"severity": "informational", "label": "週提案待核可"},  # 票 06
+    "weekly_rejudge_done": {"severity": "informational", "label": "本週判讀完成"},
+    "weekly_report_ready": {"severity": "informational", "label": "本週報告"},
     "burn_no_cycle": {"severity": "rule_warning", "label": "廣告花費未對應檔期"},
     "campaign_renamed": {"severity": "informational", "label": "Meta 活動名稱被改"},
     "tracking_broken": {"severity": "informational", "label": "廣告追蹤斷鏈"},
@@ -55,6 +58,7 @@ CATEGORIES = {
     "product_research_done": {"severity": "informational", "label": "產品調研完成"},
     # 建檔精靈初掃／貼回修格式背景工作，完成／失敗都進這裡；出下一題不進（票 B3-intake）。
     "intake_ai_step_done": {"severity": "informational", "label": "建檔精靈 AI 步驟完成"},
+    "personas_ready": {"severity": "informational", "label": "人物誌好了"},
     # 排期到期提醒：選了間歇／脈動策略時，到了要中途調整日預算的那天提醒一次（票
     # B4R-warroom-redesign，S8R.9-11）。
     "pacing_schedule_due": {"severity": "rule_warning", "label": "排期到期提醒"},

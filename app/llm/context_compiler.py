@@ -30,6 +30,7 @@
 import sqlite3
 from typing import Optional
 
+from app.brand_intelligence import personas
 from app.brand_intelligence import repository as repo
 from app.core import rule_cards
 
@@ -37,6 +38,13 @@ _UNVALIDATED_STATUSES = ("proposed", "testing")
 
 # A4 目前唯一存在的分支代號（第 2 條分支上線前，所有呼叫端實質上都是廣告分支）。
 DEFAULT_TRACK = "ads"
+PERSONA_PROMPT_CAP = 4
+PERSONA_FIELD_CHAR_CAP = 80
+
+
+def _persona_text(value) -> str:
+    text = str(value or "").strip()
+    return text[:PERSONA_FIELD_CHAR_CAP]
 
 
 def _select_rules_for_prompt(conn: sqlite3.Connection, brand_id: str, rules: list) -> tuple:
@@ -122,7 +130,8 @@ def _learning_source_note(entry: dict, *, current_track: str) -> str:
 
 
 def compile(conn: sqlite3.Connection, brand_id: str, product_id: Optional[str] = None, *,
-            track: str = DEFAULT_TRACK, include_cross_track: bool = False):
+            track: str = DEFAULT_TRACK, include_cross_track: bool = False,
+            include_personas: bool = True):
     """組出最小必要上下文。
 
     回傳 (text, knowledge_item_ids, brand_version, product_version)：
@@ -144,6 +153,10 @@ def compile(conn: sqlite3.Connection, brand_id: str, product_id: Optional[str] =
             raise ValueError(f"找不到產品：{product_id}（或不屬於品牌 {brand_id}）")
 
     brand_facts = repo.list_brand_facts(conn, brand_id, status="confirmed")
+    persona_rows = (
+        personas.list_personas(conn, brand_id, limit=PERSONA_PROMPT_CAP)
+        if include_personas else []
+    )
     product_facts = (
         repo.list_product_facts(conn, brand_id, product_id, status="confirmed")
         if product_id is not None else []
@@ -178,6 +191,7 @@ def compile(conn: sqlite3.Connection, brand_id: str, product_id: Optional[str] =
         + [f["id"] for f in product_facts]
         + [l["id"] for l in learnings]
         + [h["id"] for h in hypotheses]
+        + [p["id"] for p in persona_rows]
     )
 
     sections = []
@@ -191,6 +205,15 @@ def compile(conn: sqlite3.Connection, brand_id: str, product_id: Optional[str] =
     if product_facts:
         sections.append(
             "【事實】產品事實\n" + "\n".join(f"- {f['label']}：{f['value']}" for f in product_facts)
+        )
+    if persona_rows:
+        sections.append(
+            "【典型客人】\n" + "\n".join(
+                f"- {_persona_text(p['title'])}｜什麼時候需要：{_persona_text(p['when_needed'])}"
+                f"｜在意：{_persona_text(p['care_about'])}｜猶豫：{_persona_text(p['hesitation'])}"
+                f"｜去哪找他：{_persona_text(p['where_to_find'])}"
+                for p in persona_rows
+            )
         )
     if learnings:
         sections.append(

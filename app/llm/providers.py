@@ -10,6 +10,7 @@ ProviderResponse／ProviderError。
 
 from __future__ import annotations
 
+import base64
 import contextvars
 from dataclasses import dataclass
 from typing import Optional, Protocol
@@ -19,6 +20,27 @@ from app.llm import pricing
 
 # 缺金鑰的人話訊息：不出現環境變數名（使用者看不懂），一律指向設定頁（07 §3 規則 3）。
 MISSING_KEY_MESSAGE = "尚未設定 AI 金鑰，請到「設定」頁填入後再試一次"
+
+# Anthropic Vision 官方格式與限制（查證日 2026-08-15）：Messages 的 user content 使用
+# image block，base64 source 需帶 media_type／data；直接 Claude API 的單張 base64 編碼後上限
+# 10 MB、最大尺寸 8000×8000 px，支援 JPEG／PNG／GIF／WebP；像素尺寸由 API 驗證，若拒絕
+# 會由 gateway 留下失敗紀錄，照片卡顯示 failed。來源：
+# https://platform.claude.com/docs/en/build-with-claude/vision
+IMAGE_MEDIA_TYPES = frozenset({"image/jpeg", "image/png", "image/gif", "image/webp"})
+MAX_BASE64_IMAGE_BYTES = 10 * 1024 * 1024
+
+
+def base64_image_block(media_type: str, content: bytes) -> dict:
+    """本機圖片位元組轉成 Anthropic Messages API 的官方 image content block。"""
+    if media_type not in IMAGE_MEDIA_TYPES:
+        raise ValueError("這張照片的格式不支援，請使用 JPG、PNG、GIF 或 WebP。")
+    encoded = base64.b64encode(content).decode("ascii")
+    if len(encoded.encode("ascii")) > MAX_BASE64_IMAGE_BYTES:
+        raise ValueError("這張照片編碼後超過 10 MB，請換一張小一點的照片。")
+    return {
+        "type": "image",
+        "source": {"type": "base64", "media_type": media_type, "data": encoded},
+    }
 
 # ---------------------------------------------------------------------------
 # 模型與思考等級（票 #27）：任務 →（預設模型、思考等級）對照表＋當場覆寫。
@@ -47,6 +69,8 @@ TASK_TYPE_LABELS = {
     "creative_rewrite": "素材生成（單則改寫）",
     "creative_theme": "素材生成（主題，票 04）",
     "intake_scan": "建檔精靈：讀取網址",
+    "intake_photo_scan": "建檔精靈：讀取照片",
+    "intake_persona": "建檔精靈：整理人物誌",
     "intake_question": "建檔精靈：追問",
     "intake_paste_fix": "建檔精靈：貼上格式修復",
     "product_scan": "產品建檔：讀取網址",
@@ -67,6 +91,8 @@ TASK_DEFAULTS = {
     "creative_theme": {"model": None, "thinking": "medium"},
     # 機械性小任務：低思考
     "intake_scan": {"model": None, "thinking": "low"},
+    "intake_photo_scan": {"model": None, "thinking": "low"},
+    "intake_persona": {"model": None, "thinking": "medium"},
     "intake_question": {"model": None, "thinking": "low"},
     "intake_paste_fix": {"model": None, "thinking": "low"},
     "product_scan": {"model": None, "thinking": "low"},
@@ -294,8 +320,16 @@ class AnthropicProvider:
         if effort and model in EFFORT_SUPPORTED_MODELS:
             kwargs["output_config"] = {"effort": effort}
         # 沒傳工具就完全不放 tools 這個鍵——既有呼叫端送出的 request body 一個字都不變。
+        forced_tool_name = None
         if tools:
             kwargs["tools"] = tools
+            structured_tool = next((tool for tool in tools if tool.get("input_schema")), None)
+            if structured_tool:
+                forced_tool_name = structured_tool["name"]
+                # Anthropic 官方 Tool use：client tool 用 input_schema 定義輸入；tool_choice=tool
+                # 強制指定工具，回應參數位於 tool_use content block 的 input。
+                # https://docs.claude.com/en/docs/agents-and-tools/tool-use/implement-tool-use
+                kwargs["tool_choice"] = {"type": "tool", "name": forced_tool_name}
 
         client = anthropic.Anthropic(api_key=api_key).with_options(timeout=timeout_s)
 
@@ -338,12 +372,19 @@ class AnthropicProvider:
         text = "".join(
             block.text for block in response.content if getattr(block, "type", None) == "text"
         )
+        structured = next(
+            (block.input for block in response.content
+             if getattr(block, "type", None) == "tool_use"
+             and getattr(block, "name", None) == forced_tool_name
+             and isinstance(getattr(block, "input", None), dict)),
+            None,
+        )
         usage = response.usage
         # server_tool_use 只在真的用了伺服器端工具時才有值，沒開工具時是 None（ADR 0005）。
         server_tool_use = getattr(usage, "server_tool_use", None)
         return ProviderResponse(
             output_text=text,
-            structured=None,  # 本輪未接 output_config/structured outputs（skeleton，非全功能）
+            structured=structured,
             usage=Usage(
                 input_tokens=usage.input_tokens,
                 output_tokens=usage.output_tokens,

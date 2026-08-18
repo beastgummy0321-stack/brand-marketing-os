@@ -49,9 +49,12 @@ export interface RuleCard {
   fields: RuleCardField[];
 }
 
+/** 品牌層投放自動度的固定編碼：1＝保守檔、2＝放手檔。 */
+export type AutonomyMode = 1 | 2;
+
 export interface RuleCardsData {
   brand_id: string;
-  /** 固定 6 張（S15.30）。 */
+  /** 後端完整清單；投放自動度由 AutonomySection 專用渲染。 */
   cards: RuleCard[];
 }
 

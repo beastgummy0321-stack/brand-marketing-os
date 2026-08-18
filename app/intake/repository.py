@@ -14,6 +14,7 @@ import json
 import sqlite3
 from typing import Optional
 
+from app.brand_intelligence import customer_voice
 from app.brand_intelligence import repository as bi_repo
 from app.core import cleanup
 from app.core import db
@@ -26,6 +27,7 @@ KIND_TO_HUMAN = {
     "product_fact": "產品事實",
     "rule": "限制規則",
     "claim": "宣稱",
+    "customer_voice": "顧客原話",
 }
 HUMAN_TO_KIND = {v: k for k, v in KIND_TO_HUMAN.items()}
 
@@ -102,6 +104,40 @@ def get_latest_completed_draft(conn: sqlite3.Connection, brand_id: str) -> Optio
     row = conn.execute(
         "SELECT * FROM intake_draft WHERE brand_id = ? AND status = 'completed' "
         "ORDER BY completed_at DESC LIMIT 1", (brand_id,)
+    ).fetchone()
+    return _row_to_dict(row)
+
+
+def list_research_reports(conn: sqlite3.Connection, brand_id: str) -> list:
+    """有貼回原文的歷次調研，連同每份已確認入檔數。"""
+    rows = conn.execute(
+        """SELECT draft.id, draft.created_at, COUNT(item.id) AS confirmed_count
+           FROM intake_draft AS draft
+           LEFT JOIN intake_item AS item
+             ON item.intake_draft_id = draft.id
+            AND item.brand_id = draft.brand_id
+            AND item.outcome = 'confirmed'
+           WHERE draft.brand_id = ? AND TRIM(COALESCE(draft.paste_raw, '')) <> ''
+           GROUP BY draft.id
+           ORDER BY draft.created_at DESC, draft.id DESC""",
+        (brand_id,),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def get_research_report(conn: sqlite3.Connection, brand_id: str, draft_id: str) -> Optional[dict]:
+    """單份已貼回原文的調研；草稿不屬於此品牌或未貼原文都不回傳。"""
+    row = conn.execute(
+        """SELECT draft.id, draft.created_at, draft.paste_raw, COUNT(item.id) AS confirmed_count
+           FROM intake_draft AS draft
+           LEFT JOIN intake_item AS item
+             ON item.intake_draft_id = draft.id
+            AND item.brand_id = draft.brand_id
+            AND item.outcome = 'confirmed'
+           WHERE draft.brand_id = ? AND draft.id = ?
+             AND TRIM(COALESCE(draft.paste_raw, '')) <> ''
+           GROUP BY draft.id""",
+        (brand_id, draft_id),
     ).fetchone()
     return _row_to_dict(row)
 
@@ -300,6 +336,20 @@ def list_items(conn: sqlite3.Connection, brand_id: str, draft_id: str) -> list:
     return [_item_to_display(r) for r in rows]
 
 
+def list_truth_card_items(conn: sqlite3.Connection, brand_id: str, draft_id: str) -> list:
+    rows = conn.execute(
+        "SELECT * FROM intake_item WHERE brand_id = ? AND intake_draft_id = ? ORDER BY row_no",
+        (brand_id, draft_id),
+    ).fetchall()
+    return [
+        {**_item_to_display(row),
+         "_moved_to_needs_confirmation": (
+             row["outcome"] == "pending" and row["processed_at"] is not None
+         )}
+        for row in rows
+    ]
+
+
 def count_items_by_outcome(conn: sqlite3.Connection, brand_id: str, draft_id: str) -> dict:
     rows = conn.execute(
         "SELECT outcome, COUNT(*) AS n FROM intake_item WHERE brand_id = ? AND intake_draft_id = ? "
@@ -382,8 +432,15 @@ def resolve_item(conn: sqlite3.Connection, brand_id: str, item_id: str, outcome:
         # 宣稱的 content 是查核脈絡說明，不是宣稱語句本身；有建 source 時存進它的 note。
         # 決策 0013：不再強制客戶證實來源——有提供就用，沒提供就用 AI 附的依據。
         evidence_text = client_evidence or item["evidence_source"]
-        source_note = item["content"] if kind == "claim" else None
-        src_id = _make_source(conn, brand_id, actor, evidence_text, note=source_note)
+        if kind == "customer_voice":
+            target = customer_voice.save_research_quote(
+                conn, brand_id, actor=actor, quote=item["content"], insight=item["title"],
+                task_layer=category, source_detail=evidence_text,
+            )
+            target_table, target_id = "customer_voice", target["id"]
+        else:
+            source_note = item["content"] if kind == "claim" else None
+            src_id = _make_source(conn, brand_id, actor, evidence_text, note=source_note)
         if kind == "brand_fact":
             target = bi_repo.create_brand_fact(
                 conn, brand_id, actor=actor, fact_type=category, label=item["title"],
@@ -409,7 +466,7 @@ def resolve_item(conn: sqlite3.Connection, brand_id: str, item_id: str, outcome:
                 severity=(rule_severity if rule_severity in ("hard", "soft") else "soft"),
                 product_id=product_id, source_reference_id=src_id)
             target_table, target_id = "rule", target["id"]
-        else:  # claim（evidence_text 即 client_evidence，src_id 已含查核脈絡 note）
+        elif kind == "claim":  # evidence_text 即 client_evidence，src_id 已含查核脈絡 note
             product_id = (None if item["scope_raw"] == "整個品牌"
                           else _ensure_product(conn, brand_id, actor, item["scope_raw"]))
             target = bi_repo.create_claim(
@@ -431,7 +488,7 @@ def resolve_item(conn: sqlite3.Connection, brand_id: str, item_id: str, outcome:
                     label=item["title"], value=item["content"], status="pending",
                     source_reference_id=src_id)
             target_table, target_id = kind, target["id"]
-        # rule / claim 沒有待確認狀態（03 §3A.3）：留在本表等人再處理，不寫目標表。
+        # rule / claim / customer_voice 沒有待確認狀態：留在本表等人再處理，不寫目標表。
 
     conn.execute(
         """UPDATE intake_item SET outcome = ?, client_evidence = ?, target_table = ?,
@@ -450,6 +507,200 @@ def resolve_item(conn: sqlite3.Connection, brand_id: str, item_id: str, outcome:
         "SELECT * FROM intake_item WHERE brand_id = ? AND id = ?", (brand_id, item_id)
     ).fetchone()
     return _item_to_display(row)
+
+
+def update_resolved_item(conn: sqlite3.Connection, brand_id: str, item_id: str, *,
+                         processed_by: str, edits: dict) -> dict:
+    """更新已落檔的真相卡列；目標資料只走 Brand Intelligence 公開更新入口。"""
+    row = conn.execute(
+        "SELECT * FROM intake_item WHERE brand_id = ? AND id = ?", (brand_id, item_id),
+    ).fetchone()
+    if row is None:
+        raise ValueError("找不到這筆內容")
+    item = dict(row)
+    if item["outcome"] == "pending":
+        raise ValueError("這筆還沒落檔，請用原本的確認操作。")
+    allowed = {key: value for key, value in edits.items()
+               if key in ("title", "content", "category", "scope_raw") and value is not None}
+    updated = {**item, **allowed}
+    target_table, target_id = item.get("target_table"), item.get("target_id")
+
+    if target_table == "claim" and target_id:
+        target = bi_repo.get_claim(conn, brand_id, target_id)
+        if target is None:
+            raise ValueError("找不到這筆宣稱的落檔資料。")
+        if ((target["claim_type"] == "forbidden")
+                != (updated["category"] == "forbidden")):
+            raise ValueError("要搬到另一格，請用真相卡的搬格操作。")
+        product_id = (None if updated["scope_raw"] == "整個品牌"
+                      else _ensure_product(conn, brand_id, processed_by, updated["scope_raw"]))
+        bi_repo.update_claim(
+            conn, brand_id, target_id, actor=processed_by, claim_text=updated["title"],
+            claim_type=updated["category"], product_id=product_id,
+            evidence_source_reference_id=target["evidence_source_reference_id"],
+        )
+    elif target_table == "brand_fact" and target_id:
+        target = bi_repo.get_brand_fact(conn, brand_id, target_id)
+        if target is None:
+            raise ValueError("找不到這筆品牌事實的落檔資料。")
+        bi_repo.update_brand_fact(
+            conn, brand_id, target_id, actor=processed_by, fact_type=updated["category"],
+            label=updated["title"], value=updated["content"],
+            source_reference_id=target["source_reference_id"], confidence=target["confidence"],
+        )
+    elif target_table == "product_fact" and target_id:
+        match = next((
+            (product, fact)
+            for product in bi_repo.list_products(conn, brand_id)
+            if (fact := bi_repo.get_product_fact(
+                conn, brand_id, product["id"], target_id,
+            )) is not None
+        ), None)
+        if match is None:
+            raise ValueError("找不到這筆產品事實的落檔資料。")
+        product, target = match
+        if updated["scope_raw"] != product["name"]:
+            raise ValueError("已落檔的產品事實不能在這裡改掛其他產品。")
+        bi_repo.update_product_fact(
+            conn, brand_id, product["id"], target_id, actor=processed_by,
+            fact_type=updated["category"], label=updated["title"], value=updated["content"],
+            source_reference_id=target["source_reference_id"], confidence=target["confidence"],
+        )
+    elif target_id:
+        raise ValueError("這一類已落檔內容目前不能從真相卡修改。")
+
+    before = _item_to_display(row)
+    changed = {key: value for key, value in allowed.items() if item.get(key) != value}
+    if changed:
+        sets = ", ".join(f"{key} = ?" for key in changed)
+        conn.execute(
+            f"UPDATE intake_item SET {sets}, processed_by = ?, processed_at = ? "
+            "WHERE brand_id = ? AND id = ?",
+            (*changed.values(), processed_by, db.now_iso(), brand_id, item_id),
+        )
+    after_row = conn.execute(
+        "SELECT * FROM intake_item WHERE brand_id = ? AND id = ?", (brand_id, item_id),
+    ).fetchone()
+    after = _item_to_display(after_row)
+    if changed:
+        write_audit(
+            conn, brand_id=brand_id, entity_type="intake_item", entity_id=item_id,
+            action="update", actor=processed_by, before=before, after=after,
+            reason="人工編輯已落檔內容（決策 0013）",
+        )
+        conn.commit()
+    return after
+
+
+def _delete_landed_item_target(conn: sqlite3.Connection, brand_id: str, item: dict,
+                               actor: str) -> None:
+    target_id = item.get("target_id")
+    if not target_id:
+        return
+    deleter = {
+        "brand_fact": bi_repo.delete_brand_fact,
+        "product_fact": bi_repo.delete_product_fact,
+        "rule": bi_repo.delete_rule,
+        "claim": bi_repo.delete_claim,
+        "customer_voice": bi_repo.delete_customer_voice,
+    }.get(item.get("target_table"))
+    if deleter is None:
+        raise ValueError("這一類已落檔內容目前不能搬格。")
+    deleter(conn, brand_id, target_id, actor=actor)
+
+
+def _save_truth_card_move(conn: sqlite3.Connection, brand_id: str, item: dict, *,
+                          processed_by: str, target: str, changes: dict) -> dict:
+    before = _item_to_display(item)
+    sets = ", ".join(f"{key} = ?" for key in changes)
+    conn.execute(
+        f"UPDATE intake_item SET {sets}, processed_by = ?, processed_at = ? "
+        "WHERE brand_id = ? AND id = ?",
+        (*changes.values(), processed_by, db.now_iso(), brand_id, item["id"]),
+    )
+    row = conn.execute(
+        "SELECT * FROM intake_item WHERE brand_id = ? AND id = ?", (brand_id, item["id"]),
+    ).fetchone()
+    after = _item_to_display(row)
+    write_audit(
+        conn, brand_id=brand_id, entity_type="intake_item", entity_id=item["id"],
+        action="move", actor=processed_by, before=before, after={**after, "target": target},
+        reason="使用者搬動真相卡格位",
+    )
+    conn.commit()
+    return after
+
+
+def move_truth_card_item(conn: sqlite3.Connection, brand_id: str, item_id: str, *,
+                         processed_by: str, target: str) -> dict:
+    """搬動單條真相卡；正式資料只經 Brand Intelligence 公開入口異動。"""
+    if target not in ("accepted", "needs_confirmation", "forbidden"):
+        raise ValueError("搬格目標不正確。")
+    row = conn.execute(
+        "SELECT * FROM intake_item WHERE brand_id = ? AND id = ?", (brand_id, item_id),
+    ).fetchone()
+    if row is None:
+        raise ValueError("找不到這筆內容")
+    item = dict(row)
+
+    if target == "accepted" and item["outcome"] == "pending":
+        return resolve_item(
+            conn, brand_id, item_id, "confirmed", processed_by=processed_by,
+        )
+
+    if target == "accepted":
+        if item.get("target_table") != "claim" or item.get("category") != "forbidden":
+            raise ValueError("這條已經在已採用。")
+        claim = bi_repo.get_claim(conn, brand_id, item["target_id"])
+        if claim is None:
+            raise ValueError("找不到這筆宣稱的落檔資料。")
+        bi_repo.update_claim(
+            conn, brand_id, claim["id"], actor=processed_by, claim_text=item["title"],
+            claim_type="approved", product_id=claim["product_id"],
+            evidence_source_reference_id=claim["evidence_source_reference_id"],
+        )
+        return _save_truth_card_move(
+            conn, brand_id, item, processed_by=processed_by, target=target,
+            changes={"outcome": "confirmed", "category": "approved"},
+        )
+
+    if target == "needs_confirmation":
+        _delete_landed_item_target(conn, brand_id, item, processed_by)
+        return _save_truth_card_move(
+            conn, brand_id, item, processed_by=processed_by, target=target,
+            changes={"outcome": "pending", "target_table": None, "target_id": None},
+        )
+
+    old_target_id = item.get("target_id")
+    if item.get("target_table") == "claim" and old_target_id:
+        claim = bi_repo.get_claim(conn, brand_id, old_target_id)
+        if claim is None:
+            raise ValueError("找不到這筆宣稱的落檔資料。")
+        bi_repo.update_claim(
+            conn, brand_id, old_target_id, actor=processed_by, claim_text=item["title"],
+            claim_type="forbidden", product_id=claim["product_id"],
+            evidence_source_reference_id=claim["evidence_source_reference_id"],
+        )
+        claim_id = old_target_id
+    else:
+        product_id = (None if item["scope_raw"] == "整個品牌"
+                      else _ensure_product(conn, brand_id, processed_by, item["scope_raw"]))
+        source_id = _make_source(
+            conn, brand_id, processed_by, item["evidence_source"], note=item["content"],
+        )
+        claim_id = bi_repo.create_claim(
+            conn, brand_id, actor=processed_by, claim_text=item["title"],
+            claim_type="forbidden", product_id=product_id,
+            evidence_source_reference_id=source_id,
+        )["id"]
+        _delete_landed_item_target(conn, brand_id, item, processed_by)
+    return _save_truth_card_move(
+        conn, brand_id, item, processed_by=processed_by, target=target,
+        changes={
+            "kind": "claim", "category": "forbidden", "outcome": "confirmed",
+            "target_table": "claim", "target_id": claim_id,
+        },
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -15,7 +15,15 @@ const OBJECTIVE_TO_FUNNEL: Record<string, "exposure" | "consideration" | "conver
 };
 
 /** 開檔（S8.1-11，吸收 `ads_new.html`）：新檔期唯一入口，沒有 `cycle_id` 時顯示。 */
-export function IntakeStep({ brandId, onCreated }: { brandId: string; onCreated: (cycleId: string) => void }) {
+export function IntakeStep({
+  brandId,
+  initialBackground = "",
+  onCreated,
+}: {
+  brandId: string;
+  initialBackground?: string;
+  onCreated: (cycleId: string) => void;
+}) {
   const [ctx, setCtx] = useState<NewContext | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [simulate, setSimulate] = useState(true);
@@ -24,7 +32,7 @@ export function IntakeStep({ brandId, onCreated }: { brandId: string; onCreated:
   const [tierKey, setTierKey] = useState<"conservative" | "recommended" | "aggressive">("recommended");
   const [tierExpanded, setTierExpanded] = useState(false);
   const [durationDays, setDurationDays] = useState(14);
-  const [background, setBackground] = useState("");
+  const [background, setBackground] = useState(initialBackground);
   const [objective, setObjective] = useState("");
   const [guidedEvents, setGuidedEvents] = useState("");
   const [guidedMargin, setGuidedMargin] = useState("");
@@ -78,9 +86,12 @@ export function IntakeStep({ brandId, onCreated }: { brandId: string; onCreated:
         <p className="mt-1 text-sm text-muted-foreground">系統會讀取品牌智庫的資料，準備好計畫、素材與投放設定，貼到 Meta 即可。</p>
       </div>
 
-      {ctx.readiness_notes.map((note, i) => (
-        <div key={i} className="rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-sm text-warning">
-          {note}
+      {ctx.readiness_notes.map((note) => (
+        <div key={note.code} className="rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-sm text-warning">
+          {note.message}{" "}
+          <a href={note.action_url} className="font-medium underline underline-offset-4">
+            {note.action_label}
+          </a>
         </div>
       ))}
 

@@ -12,6 +12,9 @@
 {% if banner_msg %}
 {{ banner(banner_kind or 'ok', banner_msg, dismiss_url=request.url.path) }}
 {% endif %}
+{% for message in validation_messages %}
+{{ banner('danger', message) }}
+{% endfor %}
 
 <h1>廣告層面設定</h1>
 <p class="page-subtitle">

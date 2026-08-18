@@ -15,9 +15,6 @@ from unittest import mock
 
 # 先備好暫存 DB 的環境變數，才能 import app.main（它在 import 當下就會連線＋跑 migrations）。
 _tmpdir = tempfile.mkdtemp(prefix="brand_os_settings_page_")
-os.environ["BRAND_OS_DB"] = str(Path(_tmpdir) / "test.db")
-os.environ["BRAND_OS_BACKUP_DIR"] = str(Path(_tmpdir) / "backups")
-os.environ["BRAND_OS_UPLOADS"] = str(Path(_tmpdir) / "uploads")
 
 from fastapi.testclient import TestClient  # noqa: E402
 
@@ -29,7 +26,6 @@ from app.llm import pricing, providers  # noqa: E402
 from app.tools import capacity_check as cc  # noqa: E402
 
 # 若 app.main 在本檔之前就被別的模組 import 過，重開連線確保連到本檔的暫存 DB。
-main.reopen_connection()
 
 
 def _cleanup():

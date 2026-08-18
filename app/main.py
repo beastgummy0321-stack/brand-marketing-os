@@ -7,7 +7,7 @@
 
 1. 本檔：只留 app factory、每日備份／保留策略的啟動節奏、router 註冊、錯誤處理。
 2. `app/shared/web.py`：conn／templates／ctx／require_brand 等全站共用 web 工具。
-3. `app/brand_intelligence/routes.py`：品牌智庫的業務路由本體。
+3. `app/brand_web/routes.py`：品牌智庫的業務路由本體。
 
 拆完後 app/ads、app/orders、app/intake 一律改 import `app.shared.web`，不再 import
 本檔，main → ads.routes → main 的循環自然消失（見 test_no_branch_imports_app_main）。
@@ -95,13 +95,11 @@ def _purge_expired_llm_task_content_if_new_day() -> None:
     if today != _last_retention_check:
         core_retention.purge_expired_llm_task_content(web.conn)
         _last_retention_check = today
-
-
 # ---------------------------------------------------------------------------
 # 自動同步（LIVE 每四小時、其餘每日；應用程式啟動時註冊程式內排程）
 # ---------------------------------------------------------------------------
-
 _last_auto_sync_check: Optional[datetime] = None
+_last_weekly_engine_check: Optional[datetime] = None
 _AUTO_SYNC_POLL_SECONDS = 3600  # 每小時檢查是否已到四小時或跨日門檻
 
 
@@ -120,6 +118,17 @@ def _auto_sync_if_due(now: Optional[datetime] = None) -> None:
         _last_auto_sync_check = now
 
 
+def _weekly_engine_if_due(now: Optional[datetime] = None) -> None:
+    """每個 ISO 週只跑一次週判讀；process 重啟後會補跑當週。"""
+    global _last_weekly_engine_check
+    now = now or datetime.now(timezone.utc)
+    current_week = now.isocalendar()[:2]
+    last_week = _last_weekly_engine_check.isocalendar()[:2] if _last_weekly_engine_check else None
+    if last_week != current_week:
+        ads_auto_sync.run_weekly_engine(web.conn, today=now.date().isoformat())
+        _last_weekly_engine_check = now
+
+
 def _auto_sync_loop() -> None:
     """背景執行緒，每小時檢查同步門檻——用背景執行緒而不是像備份那樣掛在
     `_daily_backup_middleware`（每個 HTTP 請求都會跑一次），是因為自動同步會打外部
@@ -130,6 +139,7 @@ def _auto_sync_loop() -> None:
     while True:
         time.sleep(_AUTO_SYNC_POLL_SECONDS)
         _auto_sync_if_due()
+        _weekly_engine_if_due()
 
 
 _backup_if_new_day()  # process 啟動時先跑一次（app.shared.web import 時已開好連線）
@@ -185,6 +195,7 @@ def _register_auto_sync_schedule() -> None:
     """票 07-auto-sync：應用程式啟動時註冊程式內排程。啟動當下先跑一次（不等第一個
     小時），之後交給背景執行緒每小時檢查四小時／每日門檻。"""
     _auto_sync_if_due()
+    _weekly_engine_if_due()
     threading.Thread(target=_auto_sync_loop, daemon=True).start()
 
 
@@ -674,11 +685,11 @@ async def api_settings_budget_post(request: Request):
 # Router 註冊
 # ---------------------------------------------------------------------------
 
-from app.brand_intelligence.routes import router as brand_intelligence_router  # noqa: E402
-from app.brand_intelligence.routes_inbox import router as inbox_router  # noqa: E402
-from app.brand_intelligence.routes_library import router as library_router  # noqa: E402
-from app.brand_intelligence.routes_products import router as products_router  # noqa: E402
-from app.brand_intelligence.routes_settings import router as settings_hub_router  # noqa: E402
+from app.brand_web.routes import router as brand_intelligence_router  # noqa: E402
+from app.brand_web.routes_inbox import router as inbox_router  # noqa: E402
+from app.brand_web.routes_library import router as library_router  # noqa: E402
+from app.brand_web.routes_products import router as products_router  # noqa: E402
+from app.brand_web.routes_settings import router as settings_hub_router  # noqa: E402
 from app.intake.routes import router as intake_router  # noqa: E402
 from app.intake.routes_api import router as intake_api_router  # noqa: E402
 from app.ads.routes import router as ads_router  # noqa: E402
@@ -713,6 +724,7 @@ from app.ads import inflation as ads_inflation  # noqa: E402
 from app.ads import reading as ads_reading  # noqa: E402
 from app.ads import routes as ads_routes_mod  # noqa: E402
 from app.ads import settlement as ads_settlement  # noqa: E402
+from app.ads import tracking as ads_tracking  # noqa: E402
 from app.orders import channel as orders_channel  # noqa: E402
 from app.orders import dispatch as orders_dispatch  # noqa: E402
 from app.orders import repository as orders_repo  # noqa: E402
@@ -726,6 +738,7 @@ ads_routes_mod.orders_channel = orders_channel
 ads_routes_mod.orders_dispatch = orders_dispatch
 ads_routes_mod.orders_repo = orders_repo
 ads_settlement.orders_repo = orders_repo
+ads_tracking.orders_channel = orders_channel
 
 # 啟動斷言：確認上面每一格都真的注入了。那幾個模組裡的預設值是 None——少注入一格
 # 不會當場報錯，要等到使用者剛好走到那條路徑才炸出一句看不懂的
@@ -740,6 +753,7 @@ _INJECTIONS = (
     ("app.ads.routes.orders_dispatch", ads_routes_mod.orders_dispatch),
     ("app.ads.routes.orders_repo", ads_routes_mod.orders_repo),
     ("app.ads.settlement.orders_repo", ads_settlement.orders_repo),
+    ("app.ads.tracking.orders_channel", ads_tracking.orders_channel),
 )
 _missing_injections = [name for name, value in _INJECTIONS if value is None]
 if _missing_injections:

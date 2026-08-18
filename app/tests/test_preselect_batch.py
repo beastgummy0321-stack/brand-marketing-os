@@ -21,9 +21,6 @@ import unittest
 from pathlib import Path
 
 _tmpdir = tempfile.mkdtemp(prefix="brand_os_preselect_batch_")
-os.environ["BRAND_OS_DB"] = str(Path(_tmpdir) / "test.db")
-os.environ["BRAND_OS_BACKUP_DIR"] = str(Path(_tmpdir) / "backups")
-os.environ["BRAND_OS_UPLOADS"] = str(Path(_tmpdir) / "uploads")
 
 from fastapi.testclient import TestClient  # noqa: E402
 
@@ -39,7 +36,6 @@ from app.core import settings as coresettings  # noqa: E402
 from app.llm import pricing, providers  # noqa: E402
 from app.llm.providers import FakeProvider, ProviderResponse, Usage  # noqa: E402
 
-main.reopen_connection()
 
 ROOT = Path(_tmpdir) / "creative"
 
@@ -180,6 +176,73 @@ class _Base(unittest.TestCase):
         theme_engine.PROVIDER = provider
         return provider
 
+    def _insert_historical_performance(self, cycle_id: str, *, angle: str,
+                                       spend: float, conversions: float) -> str:
+        cell_id = self._insert_cell(cycle_id, angle=angle)
+        package_id = db.new_id("pkg")
+        mapping_id = db.new_id("xam")
+        ts = db.now_iso()
+        main.conn.execute(
+            "INSERT INTO publishing_package (id, brand_id, campaign_cycle_id,"
+            " experiment_cell_id, campaign_name, adset_name, ad_name, destination_url,"
+            " utm_json, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, '{}', 'ready', ?)",
+            (package_id, self.bid, cycle_id, cell_id, "虛構歷史活動", "虛構歷史組合",
+             f"虛構歷史廣告：{angle}", "https://example.test", ts),
+        )
+        main.conn.execute(
+            "INSERT INTO external_ad_mapping (id, brand_id, publishing_package_id,"
+            " campaign_cycle_id, platform, claim_status, confirmed_by, confirmed_at, created_at)"
+            " VALUES (?, ?, ?, ?, 'meta', 'confirmed', ?, ?, ?)",
+            (mapping_id, self.bid, package_id, cycle_id, ACTOR, ts, ts),
+        )
+        main.conn.execute(
+            "INSERT INTO performance_snapshot (id, brand_id, campaign_cycle_id,"
+            " external_ad_mapping_id, platform, date_range_start, date_range_end, as_of_date,"
+            " snapshot_taken_at, currency, spend, conversions, raw_json, source, created_at)"
+            " VALUES (?, ?, ?, ?, 'meta', '2026-01-01', '2026-01-07', '2026-01-07', ?,"
+            " 'TWD', ?, ?, '{}', 'manual', ?)",
+            (db.new_id("psn"), self.bid, cycle_id, mapping_id, ts, spend, conversions, ts),
+        )
+        main.conn.commit()
+        return cell_id
+
+    def _set_cycle_created_at(self, cycle_id: str, created_at: str) -> None:
+        main.conn.execute(
+            "UPDATE campaign_cycle SET created_at = ?, updated_at = ? WHERE id = ?",
+            (created_at, created_at, cycle_id),
+        )
+        main.conn.commit()
+
+    def _insert_adopted_fingerprint(self, cycle_id: str, fingerprint: dict) -> None:
+        main.conn.execute(
+            "INSERT INTO adoption_decision (id, brand_id, campaign_cycle_id, target_type,"
+            " target_id, decision, fingerprint_json, decided_by, decided_at)"
+            " VALUES (?, ?, ?, 'variant', ?, 'adopted', ?, ?, ?)",
+            (db.new_id("adp"), self.bid, cycle_id, db.new_id("cvr"),
+             json.dumps(fingerprint, ensure_ascii=False), ACTOR, db.now_iso()),
+        )
+        main.conn.commit()
+
+    def _insert_variant_fingerprint(self, cycle_id: str, fingerprint: dict) -> None:
+        cell_id = self._insert_cell(cycle_id, angle="虛構切角：前一期")
+        brief_id = db.new_id("cbf")
+        ts = db.now_iso()
+        main.conn.execute(
+            "INSERT INTO creative_brief (id, campaign_cycle_id, experiment_cell_id, brand_id,"
+            " brief_type, purpose, status, created_at, updated_at)"
+            " VALUES (?, ?, ?, ?, 'copy', '虛構回音室測試', 'dispatched', ?, ?)",
+            (brief_id, cycle_id, cell_id, self.bid, ts, ts),
+        )
+        main.conn.execute(
+            "INSERT INTO creative_variant (id, variant_type, creative_brief_id,"
+            " campaign_cycle_id, experiment_cell_id, brand_id, attributes_json,"
+            " fingerprint_json, status, created_at)"
+            " VALUES (?, 'hook', ?, ?, ?, ?, '{}', ?, 'DRAFT', ?)",
+            (db.new_id("cvr"), brief_id, cycle_id, cell_id, self.bid,
+             json.dumps(fingerprint, ensure_ascii=False), ts),
+        )
+        main.conn.commit()
+
 
 class ApproveTriggersBatchTest(_Base):
     """票 09 驗收 1：核准計畫觸發預選格批次生成，每格恰 2 主題；非預選格零生成。"""
@@ -220,6 +283,87 @@ class ApproveTriggersBatchTest(_Base):
         self.assertEqual(resp.status_code, 303)
         self.assertEqual(len(theme_repo.list_themes_for_cell(main.conn, self.bid, cell_a)), 2)
         self.assertEqual(len(theme_repo.list_themes_for_cell(main.conn, self.bid, cell_b)), 2)
+
+
+class HistoricalQuotaFeedbackTest(_Base):
+    """P1：真正帶單／明確沒帶單／還不知道三型切角，直接改變同一個批次迴圈的生成數。"""
+
+    def test_trusted_conversion_gains_one_underperformer_loses_one_and_unknown_stays_neutral(self):
+        history_cycle = self._open_cycle(objective="sales")
+        main.conn.execute("UPDATE campaign_cycle SET budget = 3000 WHERE id = ?", (history_cycle,))
+        self._insert_historical_performance(
+            history_cycle, angle="虛構切角：可信帶單", spend=700, conversions=50)
+        self._insert_historical_performance(
+            history_cycle, angle="虛構切角：花過半沒帶單", spend=600, conversions=0)
+        self._insert_historical_performance(
+            history_cycle, angle="虛構切角：樣本還不足", spend=300, conversions=20)
+
+        cycle_id = self._open_cycle(objective="sales")
+        converting = self._insert_cell(cycle_id, angle="虛構切角：可信帶單")
+        underperforming = self._insert_cell(cycle_id, angle="虛構切角：花過半沒帶單")
+        unknown = self._insert_cell(cycle_id, angle="虛構切角：樣本還不足")
+        self._insert_approved_plan(cycle_id)
+        self._swap_sequenced([
+            _theme_reply(name=f"虛構回流主題 {index}", body_fps=_FAMILY_A)
+            for index in range(6)
+        ])
+
+        result = theme_batch.generate_preselected_batch(
+            main.conn, self.bid, cycle_id, actor=ACTOR)
+
+        self.assertEqual(result["errors"], [])
+        self.assertEqual(len(theme_repo.list_themes_for_cell(main.conn, self.bid, converting)), 3)
+        self.assertEqual(len(theme_repo.list_themes_for_cell(main.conn, self.bid, underperforming)), 1)
+        self.assertEqual(len(theme_repo.list_themes_for_cell(main.conn, self.bid, unknown)), 2)
+
+
+class EchoChamberReservationTest(_Base):
+    """P1：只有最近一期真的亮回音室燈，批次才保留一組遠距指紋方向。"""
+
+    def _ready_three_cycles(self, previous_fingerprint: dict) -> tuple:
+        history_cycle = self._open_cycle(objective="sales")
+        self._set_cycle_created_at(history_cycle, "2026-01-01T00:00:00")
+        self._insert_adopted_fingerprint(history_cycle, _BASE_FP)
+
+        previous_cycle = self._open_cycle(objective="sales")
+        self._set_cycle_created_at(previous_cycle, "2026-01-02T00:00:00")
+        self._insert_variant_fingerprint(previous_cycle, previous_fingerprint)
+
+        cycle_id = self._open_cycle(objective="sales")
+        self._set_cycle_created_at(cycle_id, "2026-01-03T00:00:00")
+        self._insert_cell(cycle_id, angle="虛構切角：本期新方向")
+        self._insert_approved_plan(cycle_id)
+        provider = self._swap_sequenced([
+            _theme_reply(name="虛構遠距主題", body_fps=_FAMILY_B),
+            _theme_reply(name="虛構一般主題", body_fps=_FAMILY_A),
+        ])
+        return cycle_id, provider
+
+    def test_lit_previous_cycle_reserves_exactly_one_group_with_farthest_same_format_target(self):
+        cycle_id, provider = self._ready_three_cycles(_BASE_FP)
+
+        result = theme_batch.generate_preselected_batch(
+            main.conn, self.bid, cycle_id, actor=ACTOR)
+
+        self.assertEqual(result["errors"], [])
+        prompts = [call["messages"][0]["content"] for call in provider.calls]
+        marker = "這組刻意改用"
+        self.assertEqual(sum(marker in prompt for prompt in prompts), 1)
+        # single_image 格式固定不變；其餘三軸挑到與既有指紋距離 0.75 的最遠組合。
+        self.assertIn("點出痛點・專業可靠・單張圖・有感有效", prompts[0])
+        self.assertIn("直說好處・親切溫暖・單張圖・品質好", prompts[0])
+
+    def test_unlit_previous_cycle_keeps_prompts_unchanged(self):
+        cycle_id, provider = self._ready_three_cycles(_FAR_FP)
+
+        result = theme_batch.generate_preselected_batch(
+            main.conn, self.bid, cycle_id, actor=ACTOR)
+
+        self.assertEqual(result["errors"], [])
+        prompts = [call["messages"][0]["content"] for call in provider.calls]
+        self.assertFalse(any("這組刻意改用" in prompt for prompt in prompts))
+        self.assertNotIn("這一格已經有以下主題", prompts[0])
+        self.assertNotIn("直說好處・親切溫暖・單張圖・品質好", prompts[0])
 
 
 class AntiDuplicateChainTest(_Base):

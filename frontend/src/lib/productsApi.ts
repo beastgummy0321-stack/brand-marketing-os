@@ -264,11 +264,10 @@ export function confirmProductFact(
   brandId: string,
   productId: string,
   factId: string,
-  confirmedBy: string,
 ): Promise<void> {
   return postJson(
     `/api/products/brands/${encodeURIComponent(brandId)}/products/${encodeURIComponent(productId)}/facts/${encodeURIComponent(factId)}/confirm`,
-    { confirmed_by: confirmedBy },
+    {},
   );
 }
 

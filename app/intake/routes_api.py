@@ -21,6 +21,7 @@ key 用 brand_id——同一時間一個品牌只有一份進行中草稿，三�
 """
 
 from datetime import datetime, timezone
+import re
 
 from fastapi import APIRouter, File, Request, UploadFile
 from fastapi.responses import JSONResponse, Response
@@ -33,6 +34,21 @@ from app.shared import web
 from app.shared.web import NotFoundKind, clean, require_actor, require_brand
 
 router = APIRouter()
+
+REPORT_SECTION_TITLES = (
+    "市場與品類",
+    "競品拆解",
+    "消費者洞察與評論探勘",
+    "定價",
+    "通路",
+    "法規備忘",
+    "綜整",
+)
+_REPORT_SECTION_HEADING = re.compile(
+    r"(?m)^[\t #>*-]*(?:(?:[1-7]|[一二三四五六七])[、.．)）]\s*)?"
+    + r"(?P<title>" + "|".join(re.escape(title) for title in REPORT_SECTION_TITLES) + r")"
+    + r"(?=\s|[:：]|[（(]|$)",
+)
 
 
 def _error(status_code: int, message: str) -> JSONResponse:
@@ -111,7 +127,8 @@ def _is_restart(brand_id: str, draft: dict) -> bool:
 
 
 def _draft_shape(brand_id: str, draft: dict) -> dict:
-    photos = [{"token": "", "name": p["name"], "size_mb": p["size_mb"]} for p in draft["photos"]]
+    photos = [{"token": p.get("token") or "", "name": p["name"], "size_mb": p["size_mb"]}
+              for p in draft["photos"]]
     created_product_names = sorted(p["name"] for p in repo.list_products(web.conn, brand_id))
     return {
         "id": draft["id"], "brand_id": draft["brand_id"], "brand_name": draft["brand_name"],
@@ -119,6 +136,7 @@ def _draft_shape(brand_id: str, draft: dict) -> dict:
         "description": draft["description"], "urls": draft["urls"], "photos": photos,
         "scan_done": draft["scan_done"], "scan_impressions": draft["scan_impressions"],
         "scan_products": draft["scan_products"], "created_product_names": created_product_names,
+        "product_card_drafts": draft.get("product_card_drafts") or [],
         "url_results": draft["url_results"],
         "qa_done": draft["qa_done"], "current_q": draft["current_q"], "answers": draft["answers"],
         "question_index": draft["question_index"],
@@ -137,6 +155,42 @@ async def draft_get(brand_id: str):
     require_brand(brand_id)
     draft = state.require_draft(brand_id)
     return _envelope(_draft_shape(brand_id, draft))
+
+
+# ---------------------------------------------------------------------------
+# 調研報告回顯（T2a 1.2-1.4）
+# ---------------------------------------------------------------------------
+
+def detect_report_sections(raw_text: str) -> tuple[str, list[dict]]:
+    """依深度調研七章標題切出原文區段；每個字元都保留在前言或其中一章。"""
+    matches = list(_REPORT_SECTION_HEADING.finditer(raw_text))
+    if not matches:
+        return raw_text, []
+    sections = []
+    for index, match in enumerate(matches):
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(raw_text)
+        sections.append({"title": match.group("title"), "raw_text": raw_text[match.start():end]})
+    return raw_text[:matches[0].start()], sections
+
+
+def _research_report_json(report: dict) -> dict:
+    leading_text, sections = detect_report_sections(report["paste_raw"])
+    return {**report, "leading_text": leading_text, "sections": sections}
+
+
+@router.get("/api/intake/brands/{brand_id}/research-reports")
+async def research_report_list(brand_id: str):
+    require_brand(brand_id)
+    return _envelope(ir.list_research_reports(web.conn, brand_id))
+
+
+@router.get("/api/intake/brands/{brand_id}/research-reports/{draft_id}")
+async def research_report_get(brand_id: str, draft_id: str):
+    require_brand(brand_id)
+    report = ir.get_research_report(web.conn, brand_id, draft_id)
+    if report is None:
+        raise NotFoundKind("調研報告")
+    return _envelope(_research_report_json(report))
 
 
 # ---------------------------------------------------------------------------
@@ -171,7 +225,7 @@ def _notify_scan_done(brand_id: str, brand_name: str, ok: bool) -> None:
     # S4.15／S4.16：初掃完成或失敗都進收件匣；出下一題不進（本輪 grill 裁決，見 GRILL 檔）。
     verb = "初掃完成，可以回去看初步印象" if ok else "初掃失敗，可以回去重試"
     background_job.notify(
-        brand_id, category="intake_ai_step_done", dedupe_key=new_id("itkjob"),
+        web.conn, brand_id, category="intake_ai_step_done", dedupe_key=new_id("itkjob"),
         message=f"「{brand_name}」{verb}", action_url=f"/brands/{brand_id}/intake/scan",
     )
 
@@ -182,7 +236,13 @@ def _run_scan_job(brand_id: str) -> None:
     brand_name = brand["name"] if brand else brand_id
     try:
         draft = state.require_draft(brand_id, conn=web.conn)
-        ok, err = ai.run_scan(web.conn, draft)
+        def on_photo_progress(current: int, total: int) -> None:
+            _JOBS.set(brand_id, {
+                "kind": "scan", "status": "running",
+                "stage": f"正在看照片（第 {current}／{total} 張）", "started_at": started_at,
+                "usual_range_text": _USUAL_RANGE["scan"], "error": None,
+            })
+        ok, err = ai.run_scan(web.conn, draft, on_photo_progress=on_photo_progress)
     except Exception as exc:  # noqa: BLE001 — 背景執行緒最後一道防線，不能讓例外憑空消失
         ok, err = False, f"背景執行發生未預期錯誤：{exc}"
     if ok:
@@ -226,7 +286,7 @@ def _notify_paste_fix_done(brand_id: str, brand_name: str, ok: bool) -> None:
     # S4.54：貼回修格式完成或失敗都進收件匣（跟初掃同待遇，不同於出下一題）。
     verb = "貼回格式已修好，可以回去看" if ok else "貼回修格式失敗，可以回去重試"
     background_job.notify(
-        brand_id, category="intake_ai_step_done", dedupe_key=new_id("itkjob"),
+        web.conn, brand_id, category="intake_ai_step_done", dedupe_key=new_id("itkjob"),
         message=f"「{brand_name}」{verb}", action_url=f"/brands/{brand_id}/intake/paste",
     )
 
@@ -295,6 +355,7 @@ async def scan_skip(brand_id: str):
     draft["scan_done"] = True
     draft["scan_impressions"] = []
     draft["scan_products"] = []
+    draft["product_card_drafts"] = []
     draft["url_results"] = []
     state.save(draft)
     _JOBS.set(brand_id, _idle_job())
@@ -310,7 +371,14 @@ async def scan_products(request: Request, brand_id: str):
     names = body.get("names")
     names = names if isinstance(names, list) else []
     created = state.create_scanned_products(web.conn, brand_id, draft, names, actor)
-    return {"created_count": created}
+    product_id = None
+    source_photo_token = str(body.get("source_photo_token") or "").strip()
+    if source_photo_token:
+        product_id = state.create_product_from_card(
+            web.conn, brand_id, draft, source_photo_token, actor,
+        )
+        created += 1 if product_id else 0
+    return {"created_count": created, "product_id": product_id}
 
 
 # ---------------------------------------------------------------------------
@@ -426,6 +494,7 @@ async def skip_remaining_ai(brand_id: str):
         draft["scan_done"] = True
         draft["scan_impressions"] = []
         draft["scan_products"] = []
+        draft["product_card_drafts"] = []
         draft["url_results"] = []
     state.mark_qa_done(draft)
     draft["step"] = 4
@@ -569,7 +638,7 @@ async def review_pending_all(request: Request, brand_id: str):
 async def review_item_get(brand_id: str, i: int):
     require_brand(brand_id)
     draft = state.require_draft_or_just_completed(brand_id)
-    items = ir.list_pending_items(web.conn, brand_id, draft["id"])
+    items = ir.list_items(web.conn, brand_id, draft["id"])
     item = next((it for it in items if it["i"] == i), None)
     if item is None:
         return _error(404, "找不到這一筆。")
@@ -585,7 +654,7 @@ async def review_item_post(request: Request, brand_id: str, i: int):
     actor = require_actor(request)
     require_brand(brand_id)
     draft = state.require_draft_or_just_completed(brand_id)
-    items = ir.list_pending_items(web.conn, brand_id, draft["id"])
+    items = ir.list_items(web.conn, brand_id, draft["id"])
     item = next((it for it in items if it["i"] == i), None)
     if item is None:
         return _error(404, "找不到這一筆。")
@@ -609,14 +678,32 @@ async def review_item_post(request: Request, brand_id: str, i: int):
         if scope and scope != "整個品牌":
             known = {p["name"] for p in repo.list_products(web.conn, brand_id)}
             if scope not in known:
+                if item["outcome"] != "pending" and item["kind"] == "產品事實":
+                    return _error(400, "已落檔的產品事實不能在這裡改掛其他產品。")
                 repo.create_product(web.conn, brand_id, name=scope, actor=actor)
         edits = {"title": title, "content": content,
                  "category": ir._category_to_internal(item["kind"], category), "scope_raw": scope}
 
     severity = body.get("severity") if body.get("severity") in ("soft", "hard") else "soft"
+    if item["outcome"] != "pending":
+        if outcome != "confirm":
+            return _error(400, "已落檔內容只能修改後重新確認。")
+        try:
+            ir.update_resolved_item(
+                web.conn, brand_id, item["id"], processed_by=actor, edits=edits or {},
+            )
+        except ValueError as exc:
+            return _error(400, str(exc))
+        return Response(status_code=204)
     ir.resolve_item(web.conn, brand_id, item["id"], _OUTCOME_MAP[outcome],
                     processed_by=actor, edits=edits, rule_severity=severity)
 
     if not ir.list_pending_items(web.conn, brand_id, draft["id"]):
         state.complete_draft(draft)
     return Response(status_code=204)
+
+
+# T2 新端點拆在小檔；本檔已接近 800 行，不再把新功能直接塞進來。
+from app.intake.routes_t2_api import router as t2_router  # noqa: E402
+
+router.include_router(t2_router)

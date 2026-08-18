@@ -10,17 +10,19 @@ import { ChannelsTab } from "./tabs/ChannelsTab";
 import { ClaimsTab } from "./tabs/ClaimsTab";
 import { CustomerVoiceTab } from "./tabs/CustomerVoiceTab";
 import { FactsTab } from "./tabs/FactsTab";
+import { ResearchReportsTab } from "./tabs/ResearchReportsTab";
 import { RulesTab } from "./tabs/RulesTab";
 
-type TabKey = "facts" | "rules" | "claims" | "assets" | "channels" | "customer-voice";
+type TabKey = "facts" | "rules" | "claims" | "assets" | "channels" | "customer-voice" | "research-reports";
 
-const TABS: { key: TabKey; label: string; count: (data: LibraryData) => number }[] = [
+const TABS: { key: TabKey; label: string; count?: (data: LibraryData) => number }[] = [
   { key: "facts", label: "品牌事實", count: (d) => d.facts.length },
   { key: "rules", label: "限制規則", count: (d) => d.rules.length },
   { key: "claims", label: "宣稱", count: (d) => d.claims.length },
   { key: "assets", label: "官方素材", count: (d) => d.assets.length },
   { key: "channels", label: "自有渠道", count: (d) => d.channels.length },
   { key: "customer-voice", label: "顧客原話", count: (d) => d.customer_voices.length },
+  { key: "research-reports", label: "調研報告" },
 ];
 
 type LoadState =
@@ -29,7 +31,7 @@ type LoadState =
   | { status: "ready"; data: LibraryData };
 
 /** 品牌智庫（S5，票 B2-library）：合併舊版 7 個 Jinja 頁面（`hub_home.html` 選單頁＋6 個
- * `hub_*.html` 子頁）成一個頁面、六個分頁籤、側板做所有寫入動作。一次整包讀（比照
+ * `hub_*.html` 子頁）成一個頁面、七個分頁籤、側板做所有寫入動作。一次整包讀（比照
  * `fetchCockpit()`），分頁切換不重新打 API——契約「要新增的 API」節明講的設計。 */
 export function LibraryPage({ brandId }: { brandId: string }) {
   const [state, setState] = useState<LoadState>({ status: "loading" });
@@ -97,14 +99,16 @@ export function LibraryPage({ brandId }: { brandId: string }) {
                 }
               >
                 {t.label}
-                <span
-                  className={
-                    "rounded-full px-1.5 text-xs " +
-                    (activeTab === t.key ? "bg-primary-foreground/20" : "bg-muted text-muted-foreground")
-                  }
-                >
-                  {t.count(data)}
-                </span>
+                {t.count && (
+                  <span
+                    className={
+                      "rounded-full px-1.5 text-xs " +
+                      (activeTab === t.key ? "bg-primary-foreground/20" : "bg-muted text-muted-foreground")
+                    }
+                  >
+                    {t.count(data)}
+                  </span>
+                )}
               </button>
             ))}
           </div>
@@ -133,6 +137,7 @@ export function LibraryPage({ brandId }: { brandId: string }) {
         {activeTab === "customer-voice" && (
           <CustomerVoiceTab brandId={brandId} voices={data.customer_voices} onChanged={load} />
         )}
+        {activeTab === "research-reports" && <ResearchReportsTab brandId={brandId} />}
 
         {profileOpen && (
           <BrandProfilePanel

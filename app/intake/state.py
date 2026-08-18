@@ -7,7 +7,7 @@ load 時把 §3A.2 的欄位（photos_json、scan_impressions_json、qa_json…�
 鍵名；save 時再轉回去。花費（cost_spent / cost_items）不存副本，每次 load 都即時
 SUM llm_task.cost（03 §3A.5 第 5 點）。
 
-qa_json 一筆＝一題：{no, question, options:[{key,label,note}], suggested_key,
+qa_json 一筆＝一題：{no, aspect?, question, options:[{key,label,note}], suggested_key,
 answer_key, answer_text, skipped, llm_task_id}（03 §3A.2）。answer_key 為空＝這題
 還沒答（畫面上的「目前這一題」）。問答結束（AI 說夠了或到達上限）以結尾的
 {"done": true} 哨兵標記——03 §3A 沒有專欄可放這個旗標，先以此代替（見回報）。
@@ -71,11 +71,25 @@ def _answer_label(entry: dict) -> str:
     return key or ""
 
 
+def _scan_product_data(raw) -> tuple[list, list]:
+    """新舊 scan_products_json 相容：舊版是名稱陣列，新版同欄位再帶照片產品卡。"""
+    value = _loads(raw, [])
+    if isinstance(value, dict):
+        names = value.get("names") if isinstance(value.get("names"), list) else []
+        cards = (value.get("product_card_drafts")
+                 if isinstance(value.get("product_card_drafts"), list) else [])
+        return [str(name) for name in names if str(name).strip()], [c for c in cards if isinstance(c, dict)]
+    if isinstance(value, list):
+        return [str(name) for name in value if isinstance(name, str) and name.strip()], []
+    return [], []
+
+
 def _row_to_draft(conn, row: dict) -> dict:
     brand_row = conn.execute("SELECT name FROM brand WHERE id = ?", (row["brand_id"],)).fetchone()
     photos = [
         {"name": p.get("display_name"), "path": p.get("file_path"),
-         "size_mb": round((p.get("size_bytes") or 0) / (1024 * 1024), 1)}
+         "size_mb": round((p.get("size_bytes") or 0) / (1024 * 1024), 1),
+         "token": p.get("token") or ""}
         for p in _loads(row["photos_json"], [])
     ]
     impressions = [
@@ -94,6 +108,7 @@ def _row_to_draft(conn, row: dict) -> dict:
     current = next((e for e in entries if not e.get("answer_key") and not e.get("skipped")), None)
     resolved = len([e for e in entries if e.get("answer_key") or e.get("skipped")])
     validation = _loads(row["paste_validation_json"], None)
+    scan_products, product_card_drafts = _scan_product_data(row["scan_products_json"])
 
     draft = {
         "id": row["id"],
@@ -105,7 +120,8 @@ def _row_to_draft(conn, row: dict) -> dict:
         "budget_limit": row["cost_limit"],
         "scan_done": row["scan_impressions_json"] is not None,
         "scan_impressions": impressions,
-        "scan_products": _loads(row["scan_products_json"], []),
+        "scan_products": scan_products,
+        "product_card_drafts": product_card_drafts,
         "url_results": _loads(row["scan_sources_json"], []),
         "qa": qa,
         "qa_done": qa_done,
@@ -156,7 +172,8 @@ def save(draft: dict, conn=None) -> None:
     conn = _conn(conn)
     photos = [
         {"file_path": p.get("path"), "display_name": p.get("name"),
-         "size_bytes": int(round((p.get("size_mb") or 0) * 1024 * 1024))}
+         "size_bytes": int(round((p.get("size_mb") or 0) * 1024 * 1024)),
+         "token": p.get("token") or ""}
         for p in draft["photos"]
     ]
     impressions = None
@@ -181,7 +198,11 @@ def save(draft: dict, conn=None) -> None:
         scan_sources_json=(json.dumps(draft["url_results"], ensure_ascii=False)
                            if draft["scan_done"] else None),
         scan_impressions_json=(json.dumps(impressions, ensure_ascii=False)
-                               if impressions is not None else None),
+                                if impressions is not None else None),
+        scan_products_json=json.dumps({
+            "names": draft.get("scan_products") or [],
+            "product_card_drafts": draft.get("product_card_drafts") or [],
+        }, ensure_ascii=False),
         qa_json=json.dumps(draft["qa"], ensure_ascii=False) if draft["qa"] else None,
         handoff_depth=draft["handoff_depth"],
         paste_raw=draft["paste_raw"] or None,
@@ -196,7 +217,8 @@ def new_draft(brand_id: str, brand_name: str, *, description: str, urls: list, p
     conn = _conn(conn)
     photos_db = [
         {"file_path": p.get("path"), "display_name": p.get("name"),
-         "size_bytes": int(round((p.get("size_mb") or 0) * 1024 * 1024))}
+         "size_bytes": int(round((p.get("size_mb") or 0) * 1024 * 1024)),
+         "token": p.get("token") or ""}
         for p in photos
     ]
     row = ir.create_draft(conn, brand_id, description, photos_db, urls, actor)
@@ -232,7 +254,8 @@ def prev_photos(last_draft_row: Optional[dict]) -> list:
         return []
     return [
         {"name": p.get("display_name"), "path": p.get("file_path"),
-         "size_mb": round((p.get("size_bytes") or 0) / (1024 * 1024), 1)}
+         "size_mb": round((p.get("size_bytes") or 0) / (1024 * 1024), 1),
+         "token": p.get("token") or ""}
         for p in _json.loads(last_draft_row["photos_json"] or "[]")
     ]
 
@@ -248,7 +271,7 @@ def start_or_quick(conn, brand_id: str, brand_name: str, *, description: str, ur
                      actor=actor, conn=conn)
 
 
-def apply_paste(draft: dict, raw_text: str, conn=None) -> Optional[int]:
+def apply_paste(draft: dict, paste_input, conn=None) -> Optional[int]:
     """驗證＋（全過才）整批落地 intake_item。回傳落地筆數；驗證失敗回 None（錯誤已寫進草稿）。
 
     W8 貼回頁的 HTML 表單與 JSON API（paste/validate、paste/resolve-scope、AI 修格式完成後）
@@ -256,11 +279,16 @@ def apply_paste(draft: dict, raw_text: str, conn=None) -> Optional[int]:
     from app.intake import paste_parse
     from app.brand_intelligence import repository as bi_repo
     conn = _conn(conn)
-    # 換行被剪貼簿吃掉的表格先重組，存重組後的版本——使用者在畫面上看到的就是系統讀懂的樣子
-    raw_text = paste_parse.maybe_reflow(raw_text)
-    draft["paste_raw"] = raw_text
     known = {p["name"] for p in bi_repo.list_products(conn, draft["brand_id"])}
-    rows, errors = paste_parse.parse_paste(raw_text, known, brand_name=draft["brand_name"])
+    if isinstance(paste_input, list):
+        rows, errors = paste_parse.validate_rows(
+            paste_input, known, brand_name=draft["brand_name"])
+    else:
+        # 先去掉 Markdown 外框／分隔線，再處理剪貼簿吃掉換行；草稿保存系統讀懂的版本。
+        raw_text = paste_parse.normalize_markdown_table(str(paste_input))
+        raw_text = paste_parse.maybe_reflow(raw_text)
+        draft["paste_raw"] = raw_text
+        rows, errors = paste_parse.parse_paste(raw_text, known, brand_name=draft["brand_name"])
     draft["paste_errors"] = errors
     save(draft, conn)
     if rows is None:
@@ -288,6 +316,34 @@ def create_scanned_products(conn, brand_id: str, draft: dict, names: list, actor
             created += 1
             known.add(name)
     return created
+
+
+def create_product_from_card(conn, brand_id: str, draft: dict, source_photo_token: str,
+                             actor: str) -> Optional[str]:
+    """照片產品卡沿用既有產品／產品事實入口；價格不寫入任何欄位。"""
+    from app.brand_intelligence import repository as bi_repo
+    card = next((item for item in draft.get("product_card_drafts") or []
+                 if item.get("status") == "ready"
+                 and item.get("source_photo_token") == source_photo_token), None)
+    if card is None or not str(card.get("name") or "").strip():
+        return None
+    known = {product["name"] for product in bi_repo.list_products(conn, brand_id)}
+    if card["name"] in known:
+        return None
+    product = bi_repo.create_product(conn, brand_id, name=card["name"], actor=actor)
+    facts = []
+    if str(card.get("specification") or "").strip():
+        facts.append(("規格", str(card["specification"]).strip()))
+    selling_points = "、".join(str(point).strip() for point in card.get("selling_points") or []
+                               if str(point).strip())
+    if selling_points:
+        facts.append(("賣點", selling_points))
+    for label, value in facts:
+        bi_repo.create_product_fact(
+            conn, brand_id, product["id"], actor=actor, fact_type="core_info",
+            label=label, value=value, status="confirmed", confirmed_by="使用者",
+        )
+    return product["id"]
 
 
 def complete_draft(draft: dict, conn=None) -> None:
@@ -387,7 +443,7 @@ def resolve_photo_tokens(tokens: list) -> list:
     for token in tokens:
         pending = get_pending_photos(token)
         if pending:
-            photos.append(pending[0])
+            photos.append({**pending[0], "token": token})
         discard_pending_photos(token)
     return photos
 
@@ -440,7 +496,7 @@ def cost_state(draft: dict) -> str:
 # ---------------------------------------------------------------------------
 
 def append_question(draft: dict, question: str, suggested: dict, branches: list,
-                    llm_task_id: Optional[str]) -> None:
+                    llm_task_id: Optional[str], aspect: Optional[str] = None) -> None:
     entries = _qa_entries(draft["qa"])
     options = [{"key": "suggested", "label": suggested.get("label") or "",
                 "note": suggested.get("desc") or ""}]
@@ -448,7 +504,7 @@ def append_question(draft: dict, question: str, suggested: dict, branches: list,
         options.append({"key": f"branch_{i}", "label": b.get("label") or "",
                         "note": b.get("desc") or ""})
     draft["qa"].append({
-        "no": len(entries) + 1, "question": question, "options": options,
+        "no": len(entries) + 1, "aspect": aspect, "question": question, "options": options,
         "suggested_key": "suggested", "answer_key": None, "answer_text": None,
         "skipped": False, "llm_task_id": llm_task_id,
     })

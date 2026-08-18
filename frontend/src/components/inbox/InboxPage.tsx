@@ -4,10 +4,12 @@ import { EmptyState } from "@/components/layout/EmptyState";
 import { Pager } from "@/components/layout/Pager";
 import { Skeleton } from "@/components/layout/Skeleton";
 import { resolveAlert } from "@/lib/api";
-import { fetchInbox, type InboxData } from "@/lib/inboxApi";
+import { fetchInbox, type InboxData, type InboxItem } from "@/lib/inboxApi";
 import { usePagination } from "@/lib/usePagination";
 import { InboxItemCard } from "./InboxItemCard";
 import { PrototypePhasePanel } from "./PrototypePhasePanel";
+import { WeeklyProposalsPanel } from "./WeeklyProposalsPanel";
+import { WeeklyReportPanel } from "./WeeklyReportPanel";
 
 type LoadState =
   | { status: "loading" }
@@ -23,6 +25,8 @@ export function InboxPage() {
   const [resolvingId, setResolvingId] = useState<string | null>(null);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [panelOpen, setPanelOpen] = useState(false);
+  const [reportItem, setReportItem] = useState<InboxItem | null>(null);
+  const [proposalPanel, setProposalPanel] = useState<{ brandId: string; proposalId: string | null } | null>(null);
   const openItems = state.status === "ready" ? state.data.open : [];
   const doneItems = state.status === "ready" ? state.data.done : [];
   const openPage = usePagination(openItems);
@@ -62,6 +66,18 @@ export function InboxPage() {
           [id]: err instanceof Error ? err.message : "「知道了」失敗，請稍後再試。",
         }));
       });
+  }
+
+  function handleWeeklyReport(item: InboxItem) {
+    if (!item.brand_id) return;
+    setReportItem(item);
+    handleResolve(item.id);
+  }
+
+  function handleWeeklyProposals(item: InboxItem) {
+    if (!item.brand_id) return;
+    setProposalPanel({ brandId: item.brand_id, proposalId: null });
+    handleResolve(item.id);
   }
 
   let content: ReactNode;
@@ -113,6 +129,8 @@ export function InboxPage() {
                     error={errors[item.id]}
                     onResolve={handleResolve}
                     onOpenPrototypePanel={() => setPanelOpen(true)}
+                    onOpenWeeklyReport={handleWeeklyReport}
+                    onOpenWeeklyProposals={handleWeeklyProposals}
                   />
                 ))}
               </ul>
@@ -143,7 +161,9 @@ export function InboxPage() {
                       key={item.id}
                       item={item}
                       variant="done"
-                      onOpenPrototypePanel={() => setPanelOpen(true)}
+                    onOpenPrototypePanel={() => setPanelOpen(true)}
+                    onOpenWeeklyReport={handleWeeklyReport}
+                    onOpenWeeklyProposals={handleWeeklyProposals}
                     />
                   ))}
                 </ul>
@@ -167,6 +187,23 @@ export function InboxPage() {
       <h1 className="font-display text-2xl text-foreground">收件匣</h1>
       {content}
       {panelOpen && <PrototypePhasePanel onClose={() => setPanelOpen(false)} />}
+      {reportItem?.brand_id && (
+        <WeeklyReportPanel
+          brandId={reportItem.brand_id}
+          onClose={() => setReportItem(null)}
+          onOpenProposal={(proposalId) => {
+            setReportItem(null);
+            setProposalPanel({ brandId: reportItem.brand_id!, proposalId });
+          }}
+        />
+      )}
+      {proposalPanel && (
+        <WeeklyProposalsPanel
+          brandId={proposalPanel.brandId}
+          focusProposalId={proposalPanel.proposalId}
+          onClose={() => setProposalPanel(null)}
+        />
+      )}
     </div>
   );
 }

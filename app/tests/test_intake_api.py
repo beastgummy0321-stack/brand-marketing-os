@@ -16,9 +16,6 @@ from pathlib import Path
 from unittest import mock
 
 _tmpdir = tempfile.mkdtemp(prefix="brand_os_intake_api_")
-os.environ["BRAND_OS_DB"] = str(Path(_tmpdir) / "test.db")
-os.environ["BRAND_OS_BACKUP_DIR"] = str(Path(_tmpdir) / "backups")
-os.environ["BRAND_OS_UPLOADS"] = str(Path(_tmpdir) / "uploads")
 os.environ.setdefault("ANTHROPIC_API_KEY", "sk-ant-fake-intake-api-test")
 
 from fastapi.testclient import TestClient  # noqa: E402
@@ -31,7 +28,6 @@ from app.intake import routes_api as api  # noqa: E402
 from app.intake import script, state  # noqa: E402
 from app.llm.providers import FakeProvider, ProviderResponse, Usage  # noqa: E402
 
-main.reopen_connection()
 
 
 def _cleanup():
@@ -59,9 +55,9 @@ _SCAN_OK = json.dumps({
 }, ensure_ascii=False)
 
 
-def _question_json(i: int = 0) -> str:
+def _question_json(i: int = 0, aspect: str = "產品線") -> str:
     q = script.QUESTIONS[i]
-    return json.dumps({"done": False, "question": q["question"],
+    return json.dumps({"done": False, "aspect": aspect, "question": q["question"],
                        "suggested": {"label": q["suggested"]["label"], "desc": q["suggested"]["desc"]},
                        "branches": [{"label": b["label"], "desc": b["desc"]} for b in q["branches"]]},
                       ensure_ascii=False)
@@ -230,7 +226,7 @@ class DraftShapeTest(_Base):
         expected = {
             "id", "brand_id", "brand_name", "step", "completed", "is_restart",
             "description", "urls", "photos", "scan_done", "scan_impressions", "scan_products",
-            "created_product_names", "url_results", "qa_done", "current_q", "answers",
+            "product_card_drafts", "created_product_names", "url_results", "qa_done", "current_q", "answers",
             "question_index", "handoff_depth", "handoff_generated", "handoff_prompt",
             "paste_raw", "paste_errors", "paste_fix_used", "pending_item_count",
             "budget_limit", "cost_spent", "cost_items",
@@ -437,6 +433,60 @@ class QuestionBackgroundTest(_Base):
         resp = self.client.post(f"/api/intake/brands/{bid}/question/skip-remaining")
         self.assertEqual(resp.status_code, 204)
         self.assertTrue(state.get_draft(bid)["qa_done"])
+
+    def test_aspect_is_saved_and_next_prompt_lists_coverage(self):
+        bid = self._scanned_brand()
+        intake_ai.PROVIDER = FakeProvider(response=_fake_response(_question_json(0, "價格帶")))
+        self.client.post(f"/api/intake/brands/{bid}/question/start")
+        self._poll(bid, "question")
+        draft = state.get_draft(bid)
+        self.assertEqual(state.current_entry(draft)["aspect"], "價格帶")
+        self.client.post(f"/api/intake/brands/{bid}/question/answer",
+                         json={"choice": "suggested", "note": ""})
+
+        provider = FakeProvider(response=_fake_response(_question_json(1, "客群")))
+        intake_ai.PROVIDER = provider
+        self.client.post(f"/api/intake/brands/{bid}/question/start")
+        self._poll(bid, "question")
+
+        sent = provider.calls[0]["messages"][0]["content"]
+        self.assertIn("已覆蓋面向：價格帶", sent)
+        self.assertIn("未覆蓋面向：產品線、客群、語調、法規風險", sent)
+        self.assertEqual(state.current_entry(state.get_draft(bid))["aspect"], "客群")
+
+    def test_done_is_rejected_while_aspects_are_uncovered(self):
+        bid = self._scanned_brand()
+        intake_ai.PROVIDER = FakeProvider(response=_fake_response(_question_json(0, "產品線")))
+        self.client.post(f"/api/intake/brands/{bid}/question/start")
+        self._poll(bid, "question")
+        self.client.post(f"/api/intake/brands/{bid}/question/answer",
+                         json={"choice": "suggested", "note": ""})
+        intake_ai.PROVIDER = FakeProvider(response=_fake_response(json.dumps({"done": True})))
+
+        self.client.post(f"/api/intake/brands/{bid}/question/start")
+        status = self._poll(bid, "question")
+
+        self.assertEqual(status["status"], "failed")
+        self.assertEqual(status["error"],
+                         "還有 4 個面向沒問到：價格帶、客群、語調、法規風險。請繼續出題。")
+        self.assertFalse(state.get_draft(bid)["qa_done"])
+
+    def test_eight_legacy_questions_hard_stop_without_calling_ai(self):
+        bid = self._scanned_brand()
+        draft = state.get_draft(bid)
+        q = script.QUESTIONS[0]
+        for _ in range(script.MAX_QUESTIONS):
+            state.append_question(draft, q["question"], q["suggested"], q["branches"], None)
+            state.current_entry(draft)["answer_key"] = "suggested"
+        state.save(draft)
+        provider = FakeProvider(response=_fake_response(_question_json(0, "產品線")))
+        intake_ai.PROVIDER = provider
+
+        ok, error = intake_ai.run_next_question(main.conn, state.get_draft(bid))
+
+        self.assertTrue(ok, error)
+        self.assertTrue(state.get_draft(bid)["qa_done"])
+        self.assertEqual(provider.calls, [])
 
 
 # ---------------------------------------------------------------------------

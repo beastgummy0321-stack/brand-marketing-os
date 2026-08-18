@@ -17,7 +17,7 @@ type LoadState =
  * 開檔建議卡（F1 畫面 1）。只有這個元件讀取／回答 opening-suggestion；建立檔期仍走既有
  * `createCycle`，所以建立後的狀態只由後端保存。調整區只使用既有開檔欄位，沒有自創管道資料。
  */
-export function OpeningSuggestionCard({ brandId, onCreated }: { brandId: string; onCreated: (cycleId: string) => void }) {
+export function OpeningSuggestionCard({ brandId, initialBackground, onCreated }: { brandId: string; initialBackground: string; onCreated: (cycleId: string) => void }) {
   const [state, setState] = useState<LoadState>({ status: "loading" });
   const [adjusting, setAdjusting] = useState(false);
   const [answering, setAnswering] = useState(false);
@@ -66,7 +66,7 @@ export function OpeningSuggestionCard({ brandId, onCreated }: { brandId: string;
         product_ids: [productId],
         budget,
         duration_days: durationDays,
-        background: null,
+        background: initialBackground || null,
         objective: state.context.recommended_objective,
       });
       onCreated(result.cycle_id);
@@ -93,12 +93,22 @@ export function OpeningSuggestionCard({ brandId, onCreated }: { brandId: string;
         <div className="rounded-lg border border-warning/40 bg-warning/10 p-4 text-sm text-warning">
           建議產生失敗；可以直接手動開檔，不擋路。
         </div>
-        <IntakeStep brandId={brandId} onCreated={onCreated} />
+        <IntakeStep brandId={brandId} initialBackground={initialBackground} onCreated={onCreated} />
       </div>
     );
   }
 
   if (!state.opening.available) {
+    if (!state.opening.channel_ask) {
+      return (
+        <div className="flex flex-col gap-4">
+          <div className="rounded-lg border border-warning/40 bg-warning/10 p-4 text-sm text-warning">
+            {state.opening.reason}
+          </div>
+          <IntakeStep brandId={brandId} initialBackground={initialBackground} onCreated={onCreated} />
+        </div>
+      );
+    }
     return (
       <section className="rounded-lg border border-border bg-card p-6 shadow-[var(--shadow-card)]">
         <h2 className="font-display text-lg text-foreground">先問一題</h2>

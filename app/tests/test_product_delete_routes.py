@@ -14,15 +14,12 @@ from pathlib import Path
 
 # 先備好暫存 DB 與 backups 目錄的環境變數，才能 import app.main。
 _tmpdir = tempfile.mkdtemp(prefix="brand_os_product_delete_")
-os.environ["BRAND_OS_DB"] = str(Path(_tmpdir) / "test.db")
-os.environ["BRAND_OS_BACKUP_DIR"] = str(Path(_tmpdir) / "backups")
 
 from fastapi.testclient import TestClient  # noqa: E402
 
 import app.main as main  # noqa: E402
 from app.brand_intelligence import repository as repo  # noqa: E402
 
-main.reopen_connection()
 
 
 def _cleanup():

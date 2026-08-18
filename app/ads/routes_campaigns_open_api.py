@@ -23,6 +23,9 @@ from app.ads import budget as budget_calc
 from app.ads import account_structure
 from app.ads import auto_sync as ads_auto_sync
 from app.ads import plan as ads_plan
+from app.ads import nextcycle
+from app.ads import opening_suggestion
+from app.ads import proposal
 from app.ads import repository as ads_repo
 from app.ads import routes as ads_routes
 from app.ads import simulation
@@ -108,6 +111,20 @@ def _budget_tiers(pain_suggestion: dict) -> list:
 
 # ---- 開檔（S8.1-11／S8R.1-7） ----
 
+@router.get("/api/campaigns/brands/{brand_id}/opening-suggestion")
+async def get_opening_suggestion(brand_id: str):
+    main_mod.require_brand(brand_id)
+    return opening_suggestion.opening_suggestion(main_mod.conn, brand_id)
+
+
+@router.post("/api/campaigns/brands/{brand_id}/opening-suggestion/channel-answer")
+async def post_opening_suggestion_channel_answer(request: Request, brand_id: str):
+    main_mod.require_brand(brand_id)
+    body = await _json_body(request)
+    return opening_suggestion.save_channel_answer(
+        main_mod.conn, brand_id, actor=main_mod.require_actor(request), answer=body.get("answer")
+    )
+
 @router.get("/api/campaigns/{brand_id}/new-context")
 async def new_context(brand_id: str):
     main_mod.require_brand(brand_id)
@@ -132,6 +149,24 @@ async def new_context(brand_id: str):
     })
 
 
+@router.get("/api/campaigns/{brand_id}/new-context/direction")
+async def new_cycle_direction(brand_id: str):
+    """歷來切角讀不到時不擋開檔，前端直接走一般推薦值。"""
+    main_mod.require_brand(brand_id)
+    try:
+        cells = nextcycle.historical_cell_performance(main_mod.conn, brand_id)
+    except Exception:  # noqa: BLE001 — 失敗收斂成不擋人的既有推薦路徑
+        return _envelope({"status": "unavailable"})
+    effective = [
+        cell for cell in cells
+        if cell.get("creative_angle") and (cell.get("conversions") or 0) > 0
+    ]
+    if not effective:
+        return _envelope({"status": "empty"})
+    best = max(effective, key=lambda cell: (cell["conversions"], cell.get("spend") or 0))
+    return _envelope({"status": "ready", "direction": best["creative_angle"]})
+
+
 @router.post("/api/campaigns/{brand_id}")
 async def create_cycle(request: Request, brand_id: str):
     main_mod.require_brand(brand_id)
@@ -154,6 +189,7 @@ async def create_cycle(request: Request, brand_id: str):
     cycle = ads_repo.create_cycle(conn, brand_id, product_ids=list(product_ids), pain_value=budget,
                                   objective=objective, actor=actor, phase=phase,
                                   duration_days=duration_days, background=background)
+    proposal.seed_channel_plans(conn, brand_id, cycle["id"])
     message = ("模擬檔期開好了。接下來的每一步都跟真的一樣，只有最後的成效數字是模擬的。"
               if phase == "simulation" else "檔期已建立，接下來確認這期的計畫。")
     return {"cycle_id": cycle["id"], "message": message}
@@ -190,6 +226,34 @@ async def ai_cost_meter(brand_id: str):
 
 
 # ---- 檔期完整狀態＋封存 ----
+
+@router.get("/api/campaigns/brands/{brand_id}/cycles/{cycle_id}/proposal")
+async def proposal_get(brand_id: str, cycle_id: str):
+    main_mod.require_brand(brand_id)
+    _require_cycle(brand_id, cycle_id)
+    return proposal.proposal(main_mod.conn, brand_id, cycle_id)
+
+
+@router.post("/api/campaigns/brands/{brand_id}/cycles/{cycle_id}/proposal/approve")
+async def proposal_approve(request: Request, brand_id: str, cycle_id: str):
+    main_mod.require_brand(brand_id)
+    actor = main_mod.require_actor(request)
+    _require_cycle(brand_id, cycle_id)
+    try:
+        proposal.approve(main_mod.conn, brand_id, cycle_id, actor)
+    except ValueError as exc:
+        return _error(400, str(exc))
+    theme_batch.generate_preselected_batch(main_mod.conn, brand_id, cycle_id, actor=actor)
+    return JSONResponse(None, status_code=204)
+
+
+@router.post("/api/campaigns/brands/{brand_id}/cycles/{cycle_id}/proposal/return")
+async def proposal_return(request: Request, brand_id: str, cycle_id: str):
+    main_mod.require_brand(brand_id)
+    actor = main_mod.require_actor(request)
+    _require_cycle(brand_id, cycle_id)
+    proposal.return_to_opening(main_mod.conn, brand_id, cycle_id, actor)
+    return JSONResponse(None, status_code=204)
 
 @router.get("/api/campaigns/{brand_id}/{cycle_id}")
 async def cycle_detail(brand_id: str, cycle_id: str):

@@ -1,11 +1,10 @@
-import { useState } from "react";
 import { X } from "lucide-react";
 import { SidePanel } from "@/components/layout/SidePanel";
 import { confirmProductFact, type ProductFact } from "@/lib/productsApi";
 import { useFormSubmit } from "@/lib/useFormSubmit";
 import { PanelSaveButton } from "../shared/PanelSaveButton";
 
-/** 確認產品事實側板（契約 S6.26）：唯讀顯示名稱／內容，只填「確認人」。 */
+/** 確認產品事實側板（T2 條文 2.5）：單機單人，確認人由後端自動記為使用者。 */
 export function FactConfirmPanel({
   brandId,
   productId,
@@ -19,9 +18,8 @@ export function FactConfirmPanel({
   onClose: () => void;
   onSaved: () => void;
 }) {
-  const [confirmedBy, setConfirmedBy] = useState("");
   const form = useFormSubmit(async () => {
-    await confirmProductFact(brandId, productId, fact.id, confirmedBy);
+    await confirmProductFact(brandId, productId, fact.id);
     onSaved();
   });
 
@@ -39,7 +37,7 @@ export function FactConfirmPanel({
         </button>
       </div>
       <p className="text-sm text-muted-foreground">
-        確認之後，這條內容就會被系統當成產品事實使用。確認紀錄會留存，之後可以查到是誰、什麼時候確認的。
+        確認之後，這條內容就會被系統當成產品事實使用；系統會自動留下這次確認紀錄。
       </p>
       <dl className="flex flex-col gap-2 rounded-md border border-border bg-muted/40 p-3 text-sm">
         <div className="flex gap-2">
@@ -62,17 +60,6 @@ export function FactConfirmPanel({
           void form.submit();
         }}
       >
-        <label className="flex flex-col gap-1 text-sm">
-          <span className="font-medium text-foreground">確認人是誰？</span>
-          <input
-            type="text"
-            value={confirmedBy}
-            onChange={(e) => setConfirmedBy(e.target.value)}
-            required
-            placeholder="例如「小陳」"
-            className="rounded-md border border-border px-3 py-2 text-sm text-foreground"
-          />
-        </label>
         {form.error && <p className="text-sm text-danger">{form.error}</p>}
         <div>
           <PanelSaveButton saving={form.saving} label="確認這條事實" pendingLabel="處理中…" />

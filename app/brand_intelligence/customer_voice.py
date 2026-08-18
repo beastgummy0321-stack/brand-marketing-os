@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""app/brand_intelligence/customer_voice.py — 顧客原話抽取的唯一生成邏輯。
+"""app/brand_intelligence/customer_voice.py — 顧客原話抽取的純資料函式。
 
 見 GitHub issue #14、決策 0023 第 18a 條、決策 0024 第 2 條、app/methodology/customer-voice.md。
 
@@ -9,19 +9,15 @@
 結果（principles 第 16 條「誠實狀態」），不因此擋住存檔（決策 0013 用戶優先：原文本身仍有
 保存價值）。
 
-生成失敗（無金鑰、逾時、格式壞）一律回 (False, 人話錯誤)，不入庫、不留半筆資料
-（比照 app/brand_intelligence/report.py 的失敗處理）。
+組提示詞與驗證模型回覆的資料形狀；AI 呼叫留在 app.brand_web.routes_library。
 
-測試把模組層 PROVIDER 換成 FakeProvider，不發任何真實網路請求。
+對外進入點：save_research_quote() 接收建檔精靈已確認的單句原話。
+誰依賴它：app.intake.repository.resolve_item()，不得直接寫 customer_voice 表。
+依賴方向：intake → 本模組 → brand_intelligence.repository，禁止反向 import intake。
+交易邊界：沿用 repository.create_customer_voice() 的寫入、版本更新、稽核與 commit。
 """
 
 from typing import Optional
-
-from app.brand_intelligence import repository as repo
-from app.llm import gateway, providers
-
-# 測試可整個換掉
-PROVIDER = providers.AnthropicProvider()
 
 TASK_LAYERS = ("functional", "emotional", "social")
 SIGNALS = ("unprompted", "prompted")
@@ -50,6 +46,23 @@ _RULES = (
     "用詞的附和句，不要抽取。如果整段原話都沒有值得收的內容，回傳空陣列，不要硬湊。\n"
     "5. 不要編造原話裡沒有的內容；quote 一定要能在原文裡找到。"
 )
+
+
+def save_research_quote(conn, brand_id: str, *, actor: str, quote: str, insight: str,
+                        task_layer: str, source_detail: Optional[str] = None) -> dict:
+    """把外部調研貼回後已由人確認的單句原話，接進既有 customer_voice 管線。"""
+    if task_layer not in TASK_LAYERS:
+        raise ValueError("顧客原話分類只能是功能任務、情感任務或社會任務")
+    from app.brand_intelligence import repository
+
+    return repository.create_customer_voice(
+        conn, brand_id, actor=actor, raw_text=quote, source_channel="other",
+        source_detail=(source_detail or "").strip() or None, source_type="manual",
+        extraction=[{
+            "task_layer": task_layer, "quote": quote, "insight": insight,
+            "signal": "unprompted",
+        }],
+    )
 
 
 def _normalize_extraction(data) -> Optional[list]:
@@ -93,36 +106,3 @@ def _build_user_text(raw_text: str, source_channel: str, source_detail: Optional
         '"signal": "unprompted 或 prompted"}\n'
         ']}'
     )
-
-
-def extract(conn, brand_id: str, *, actor: str, raw_text: str, source_channel: str,
-            source_detail: Optional[str] = None, source_type: str = "manual") -> tuple:
-    """抽取一筆顧客原話並入庫。成功回 (True, row)；失敗回 (False, 人話錯誤)，不入庫。"""
-    brand = repo.get_brand(conn, brand_id)
-    if brand is None:
-        raise ValueError(f"找不到品牌：{brand_id}")
-
-    user_text = _build_user_text(raw_text, source_channel, source_detail)
-    context = gateway.TaskContext(
-        context_scope={"brand_id": brand_id}, knowledge_item_ids=[],
-        brand_version=brand["knowledge_version"],
-    )
-    task = gateway.run_task(
-        conn, PROVIDER, brand_id=brand_id, task_type="customer_voice_extraction",
-        prompt_template_id="customer_voice_extraction", prompt_template_version="v1",
-        system=_SYSTEM, messages=[{"role": "user", "content": user_text}], context=context,
-    )
-    if task["status"] != "succeeded":
-        return False, task["error"]
-
-    data = gateway.parse_json_reply(task["rendered_output"])
-    extraction = _normalize_extraction(data)
-    if extraction is None:
-        return False, PARSE_FAIL_MESSAGE
-
-    row = repo.create_customer_voice(
-        conn, brand_id, actor=actor, raw_text=raw_text, source_channel=source_channel,
-        source_detail=source_detail, source_type=source_type, extraction=extraction,
-        llm_task_id=task["id"],
-    )
-    return True, row

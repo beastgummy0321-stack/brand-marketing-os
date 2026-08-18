@@ -18,9 +18,6 @@ from unittest import mock
 
 # 先備好暫存 DB 的環境變數，才能 import app.main（它在 import 當下就會連線＋跑 migrations）。
 _tmpdir = tempfile.mkdtemp(prefix="brand_os_intake_")
-os.environ["BRAND_OS_DB"] = str(Path(_tmpdir) / "test.db")
-os.environ["BRAND_OS_BACKUP_DIR"] = str(Path(_tmpdir) / "backups")
-os.environ["BRAND_OS_UPLOADS"] = str(Path(_tmpdir) / "uploads")
 
 from fastapi.testclient import TestClient  # noqa: E402
 
@@ -34,7 +31,6 @@ from app.llm.providers import (  # noqa: E402
     MISSING_KEY_MESSAGE, AnthropicProvider, FakeProvider, ProviderResponse, Usage,
 )
 
-main.reopen_connection()
 
 
 def _cleanup():
@@ -56,9 +52,9 @@ def _fake_response(text: str, in_tok: int = 100, out_tok: int = 50) -> ProviderR
                             stop_reason="end_turn")
 
 
-def _question_json(i: int = 0) -> str:
+def _question_json(i: int = 0, aspect: str = "產品線") -> str:
     q = script.QUESTIONS[i]
-    return json.dumps({"done": False, "question": q["question"],
+    return json.dumps({"done": False, "aspect": aspect, "question": q["question"],
                        "suggested": {"label": q["suggested"]["label"], "desc": q["suggested"]["desc"]},
                        "branches": [{"label": b["label"], "desc": b["desc"]} for b in q["branches"]]},
                       ensure_ascii=False)
@@ -136,9 +132,11 @@ class IntakeWizardTest(unittest.TestCase):
         self.assertTrue(draft["scan_done"])
         self.assertEqual(len(draft["scan_impressions"]), len(script.SCAN_IMPRESSIONS))
         # 花費＝真實 token 成本（usage × pricing），即時 SUM llm_task.cost
-        expected = pricing.calculate_cost("claude-opus-5", 100, 50)
+        # T2：同一批背景流程會再讀一張上傳照片，因此網址掃描＋照片各記一筆成本。
+        expected = pricing.calculate_cost("claude-opus-5", 100, 50) * 2
         self.assertAlmostEqual(draft["cost_spent"], expected, places=9)
         self.assertEqual(draft["cost_items"][0]["label"], "讀取網址與整理初步印象")
+        self.assertEqual(draft["cost_items"][1]["label"], "讀取第 1 張照片")
         # scan_llm_task_id 回填
         row = ir.get_active_draft(main.conn, brand_id)
         self.assertIsNotNone(row["scan_llm_task_id"])
@@ -184,7 +182,7 @@ class IntakeWizardTest(unittest.TestCase):
         page = self.client.get(f"/brands/{brand_id}/intake/question")
         self.assertIn(script.QUESTIONS[0]["question"], page.text)
 
-        # 作答後把回答存進 qa_json；下一輪 AI 說 done -> 沒有需要再問的問題了
+        # 作答後把回答存進 qa_json；補齊五面向後 AI 說 done -> 沒有需要再問的問題了
         resp = self.client.post(f"/brands/{brand_id}/intake/question",
                                  data={"action": "answer", "choice": "suggested", "note": "補充"},
                                  follow_redirects=False)
@@ -193,6 +191,11 @@ class IntakeWizardTest(unittest.TestCase):
         self.assertEqual(len(draft["answers"]), 1)
         self.assertEqual(draft["answers"][0]["choice_label"], script.QUESTIONS[0]["suggested"]["label"])
         self.assertEqual(draft["answers"][0]["note"], "補充")
+        for aspect in intake_ai.QUESTION_ASPECTS[1:]:
+            state.append_question(draft, f"{aspect}測試題", script.QUESTIONS[0]["suggested"],
+                                  script.QUESTIONS[0]["branches"], None, aspect=aspect)
+            state.current_entry(draft)["answer_key"] = "suggested"
+        state.save(draft)
 
         intake_ai.PROVIDER = FakeProvider(response=_fake_response(json.dumps({"done": True})))
         self.client.get(f"/brands/{brand_id}/intake/question/progress?run=1",

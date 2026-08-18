@@ -1,0 +1,10 @@
+# 行銷系統依賴（2026-08-19 重建；環境毀損時：python -m pip install -r requirements.txt）
+fastapi
+uvicorn
+jinja2
+python-multipart
+openpyxl
+anthropic
+httpx
+pytest
+pytest-xdist

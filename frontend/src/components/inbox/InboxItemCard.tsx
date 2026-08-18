@@ -19,6 +19,8 @@ export function InboxItemCard({
   error,
   onResolve,
   onOpenPrototypePanel,
+  onOpenWeeklyReport,
+  onOpenWeeklyProposals,
 }: {
   item: InboxItem;
   variant: "open" | "done";
@@ -27,8 +29,13 @@ export function InboxItemCard({
   onResolve?: (id: string) => void;
   /** category === "prototype_phase_ended" 時，「詳情」開側板而不是外部連結（S2.7 唯一例外）。 */
   onOpenPrototypePanel?: () => void;
+  onOpenWeeklyReport?: (item: InboxItem) => void;
+  onOpenWeeklyProposals?: (item: InboxItem) => void;
 }) {
   const isPrototypeDetail = item.category === "prototype_phase_ended";
+  const isWeeklyReport = item.category === "weekly_report_ready";
+  const isWeeklyProposal = item.category === "weekly_proposal_ready";
+  const needsAction = isWeeklyReport || isWeeklyProposal;
 
   return (
     <li className="flex flex-col gap-2 rounded-md border border-border bg-card p-4 shadow-[var(--shadow-card)]">
@@ -49,7 +56,7 @@ export function InboxItemCard({
           </span>
           <span className="text-muted-foreground">{item.category_label}</span>
         </div>
-        {item.action_url &&
+        {item.action_url && !needsAction &&
           (isPrototypeDetail ? (
             <button
               type="button"
@@ -77,14 +84,24 @@ export function InboxItemCard({
       {variant === "open" && (
         <div className="flex items-center justify-between gap-3">
           {error ? <p className="text-xs text-danger">{error}</p> : <span />}
-          <button
-            type="button"
-            onClick={() => onResolve?.(item.id)}
-            disabled={resolving}
-            className="shrink-0 rounded-md border border-border px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:border-primary hover:text-primary disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {resolving ? "處理中…" : "知道了"}
-          </button>
+          {isWeeklyReport ? (
+            <button type="button" onClick={() => onOpenWeeklyReport?.(item)} className="shrink-0 rounded-md border border-primary px-3 py-1.5 text-xs font-medium text-primary hover:bg-primary/10">
+              看報告
+            </button>
+          ) : isWeeklyProposal ? (
+            <button type="button" onClick={() => onOpenWeeklyProposals?.(item)} className="shrink-0 rounded-md border border-primary px-3 py-1.5 text-xs font-medium text-primary hover:bg-primary/10">
+              處理
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => onResolve?.(item.id)}
+              disabled={resolving}
+              className="shrink-0 rounded-md border border-border px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:border-primary hover:text-primary disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {resolving ? "處理中…" : "知道了"}
+            </button>
+          )}
         </div>
       )}
     </li>

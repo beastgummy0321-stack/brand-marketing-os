@@ -14,14 +14,19 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 
 from app.ads import ga4_sync
+from app.ads import onboarding
 from app.ads import pacing_curve
+from app.ads import reading
 from app.ads import repository as ads_repo
 from app.ads import sync as ads_sync
 from app.ads import tracking
+from app.ads import weekly_proposals
+from app.ads import weekly_reports
 from app.brand_intelligence import repository as bi_repo
 from app.core import interrupts as core_interrupts
 
 ACTOR = "auto_sync"
+WEEKLY_ACTOR = "weekly_engine"
 
 # 打斷佇列卡片內文上限 30 全形字（app/core/interrupts.py MAX_MESSAGE_LEN）——固定短句，
 # 不把原始錯誤訊息塞進去（原始錯誤訊息通常較長且長度不可控，沿用其他模組固定短句的作法）。
@@ -47,10 +52,60 @@ def check_schedule_reminder(conn, brand_id: str, cycle_id: str, today: str):
     return reminder
 
 
+def run_due_readings(conn, brand_id: str, today: str) -> None:
+    """用既有到期提醒觸發第 7 天判讀與期末結算。"""
+    for reminder in onboarding.due_reminders(conn, brand_id, today=today):
+        if reminder["kind"] == "day7_report":
+            ok, _ = reading.run(conn, brand_id, reminder["campaign_cycle_id"], ACTOR)
+            if ok:
+                weekly_proposals.generate(conn, brand_id, reminder["campaign_cycle_id"])
+        elif reminder["kind"] == "final_settlement":
+            ok, _ = reading.finalize(
+                conn, brand_id, reminder["campaign_cycle_id"], ACTOR,
+            )
+            if ok:
+                weekly_proposals.generate(conn, brand_id, reminder["campaign_cycle_id"])
+                core_interrupts.resolve(conn, reminder["id"], actor=ACTOR)
+
+
+def run_weekly_engine(conn, *, today: str) -> dict:
+    """每個營運中品牌取最新進行中檔期，重跑判讀並產出最多三張週提案。"""
+    outcome = {}
+    for brand in bi_repo.list_brands(conn, status="active"):
+        brand_id = brand["id"]
+        cycle = weekly_proposals.current_cycle(conn, brand_id)
+        if cycle is None:
+            outcome[brand_id] = {"status": "skipped", "reason": "沒有進行中的檔期"}
+            continue
+        try:
+            ok, err = reading.run(conn, brand_id, cycle["id"], WEEKLY_ACTOR)
+            cards = weekly_proposals.generate(conn, brand_id, cycle["id"]) if ok else []
+            if ok:
+                weekly_reports.enqueue_if_ready(conn, brand_id, cycle["id"], today=today)
+            outcome[brand_id] = {
+                "status": "done" if ok else "failed",
+                "error": err,
+                "proposal_count": len([
+                    card for card in cards if card["status"] == "GENERATED"
+                ]),
+                "checked_on": today,
+            }
+        except Exception as exc:  # noqa: BLE001 — 一個品牌失敗不能擋住其他品牌
+            conn.rollback()
+            outcome[brand_id] = {
+                "status": "failed",
+                "error": str(exc),
+                "proposal_count": 0,
+                "checked_on": today,
+            }
+    return outcome
+
+
 def run_cycle_checks(conn, brand_id: str, today: str, *, url_probe=None) -> None:
     for cycle in ads_repo.list_cycles(conn, brand_id):
         if cycle["status"] in ("LIVE", "EVALUATING"):
             check_schedule_reminder(conn, brand_id, cycle["id"], today)
+    run_due_readings(conn, brand_id, today)
     tracking.run_post_sync_checks(conn, brand_id, today=today, url_probe=url_probe)
 
 
@@ -109,6 +164,9 @@ def run(conn, *, today: Optional[str] = None, meta_client=None, ga4_client=None,
 
     for brand in bi_repo.list_brands(conn, status="active"):
         run_cycle_checks(conn, brand["id"], today, url_probe=url_probe)
+        cycle = weekly_proposals.current_cycle(conn, brand["id"])
+        if cycle is not None:
+            weekly_reports.enqueue_if_ready(conn, brand["id"], cycle["id"], today=today)
 
     conn.commit()
     return outcome

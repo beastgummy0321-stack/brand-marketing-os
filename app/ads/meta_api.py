@@ -184,6 +184,24 @@ class MetaClient:
         rows = self._paged(f"{_normalise_account_id(account_id)}/insights", params)
         return [parse_component_breakdown_row(r) for r in rows]
 
+    def list_pixels(self, account_id: str) -> list:
+        """票 T0（追蹤健檢三訊號）：讀這個廣告帳號底下的 Pixel，帶最近一次開火時間。
+
+        查證（官方文件，2026-08-14）：AdsPixel 物件有 `last_fired_time` 欄位——
+        https://developers.facebook.com/docs/marketing-api/reference/ads-pixel/
+        （"last_fired_time (datetime): Time at which the pixel was last fired"）；
+        這個物件透過 ad account 底下的 `adspixels` edge 讀取，該 edge 支援 GET——
+        https://developers.facebook.com/docs/marketing-api/reference/ad-account/adspixels/
+        兩份官方參考頁都沒有明確標出這個 edge 要哪個權限 scope（Marketing API 參考頁
+        普遍沒有逐 edge 標權限，是文件本身的缺口，不是查無此項）；沿用本檔既有
+        `ads_read` 唯讀金鑰（見檔頭「決策0016」段落查證：讀自己廣告帳號不需要 App
+        Review），權限真的不夠時 `_get()` 既有的 401/403 處理會拋 `MetaApiError`，
+        呼叫端（app/ads/tracking.py）收斂成「這個訊號跳過」，不是例外、不擋人。"""
+        rows = self._paged(f"{_normalise_account_id(account_id)}/adspixels",
+                           {"fields": "id,name,last_fired_time", "limit": 100})
+        return [Pixel(pixel_id=str(r.get("id") or ""), name=r.get("name") or "",
+                     last_fired_time=r.get("last_fired_time")) for r in rows]
+
 
 def parse_insight_row(row: dict) -> Insight:
     """Meta 的一列 insights → 內部統一格式。所有數字欄位缺值一律當 0，不猜、不沿用。"""
@@ -219,6 +237,16 @@ def parse_insight_row(row: dict) -> Insight:
         reach=_num_optional("reach", int),
         frequency=_num_optional("frequency"),
     )
+
+
+@dataclass
+class Pixel:
+    """票 T0：一個 Meta Pixel 的唯讀摘要，只留追蹤健檢用得到的欄位——不是完整 AdsPixel
+    物件的映射（那個物件有近 30 個欄位，見 list_pixels() 查證出處）。"""
+
+    pixel_id: str
+    name: str
+    last_fired_time: Optional[str] = None
 
 
 @dataclass
@@ -267,10 +295,11 @@ class FakeMetaClient:
     """測試用：不發任何網路請求，回放注入的資料或拋出注入的錯誤。"""
 
     def __init__(self, campaigns=None, insights=None, error: Optional[Exception] = None,
-                component_breakdowns=None):
+                component_breakdowns=None, pixels=None):
         self._campaigns = campaigns or []
         self._insights = insights or []
         self._component_breakdowns = component_breakdowns or []
+        self._pixels = pixels or []
         self.error = error
         self.calls: list = []
 
@@ -292,3 +321,9 @@ class FakeMetaClient:
         if self.error:
             raise self.error
         return list(self._component_breakdowns)
+
+    def list_pixels(self, account_id: str) -> list:
+        self.calls.append(("pixels", account_id))
+        if self.error:
+            raise self.error
+        return list(self._pixels)

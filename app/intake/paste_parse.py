@@ -13,6 +13,7 @@ KIND_CATEGORY_SOURCE = {
     "產品事實": md.PRODUCT_FACT_TYPES,
     "限制規則": md.RULE_TYPES,
     "宣稱": md.CLAIM_TYPES,
+    "顧客原話": list(md.CUSTOMER_VOICE_TASK_LAYERS.items()),
 }
 KIND_OPTIONS = list(KIND_CATEGORY_SOURCE.keys())
 HEADER_COLUMNS = ["種類", "分類", "標題", "內容", "適用範圍", "佐證來源"]
@@ -22,9 +23,20 @@ def _split_row(line: str) -> list:
     return [p.strip() for p in line.split("|")]
 
 
+def normalize_markdown_table(raw_text: str) -> str:
+    """移除 Markdown 表格外框與分隔線；其餘逐行內容照原順序保留。"""
+    lines = []
+    for raw_line in raw_text.splitlines():
+        line = raw_line.strip().strip("|").strip()
+        if line and re.fullmatch(r"[-:|\s]+", line):
+            continue
+        lines.append(line)
+    return "\n".join(lines)
+
+
 # 從渲染後的畫面複製表格時，換行常被剪貼簿吃掉——整張表黏成一（少數幾）行。
-# 「種類欄只有四種合法值、且一定接著｜」是可靠的列首特徵，用它把每一列重新切回來。
-_ROW_START_RE = re.compile(r"(?:品牌事實|產品事實|限制規則|宣稱)\s*\|")
+# 「種類欄只有五種合法值、且一定接著｜」是可靠的列首特徵，用它把每一列重新切回來。
+_ROW_START_RE = re.compile(r"(?:品牌事實|產品事實|限制規則|宣稱|顧客原話)\s*\|")
 _HEADER_RE = re.compile(r"種類\s*\|\s*分類\s*\|\s*標題\s*\|\s*內容\s*\|\s*適用範圍\s*\|\s*佐證來源")
 
 
@@ -61,6 +73,61 @@ def count_data_lines(raw_text: str) -> int:
     return 0
 
 
+def _validate_parts(parts: list, line_no: int, known_products: set,
+                    brand_name: str = None, raw_row: str = None) -> tuple:
+    if len(parts) != 6:
+        return None, {
+            "line": line_no,
+            "msg": f"第 {line_no} 列：這一列只有 {len(parts)} 欄，需要 6 欄。"
+                   "可能是內容裡有「|」符號把欄位切開了。",
+        }
+    kind, category, title, content, scope, evidence = parts
+    if kind not in KIND_OPTIONS:
+        return None, {
+            "line": line_no,
+            "msg": f"第 {line_no} 列：種類寫成「{kind}」。只能填：{ '、'.join(KIND_OPTIONS) }。",
+        }
+    allowed_categories = [label for _, label in KIND_CATEGORY_SOURCE[kind]]
+    if category not in allowed_categories:
+        return None, {
+            "line": line_no,
+            "msg": f"第 {line_no} 列：分類寫成「{category}」。{kind}的分類只有："
+                   f"{ '、'.join(allowed_categories) }。",
+        }
+    if brand_name and scope == brand_name.strip():
+        scope = "整個品牌"
+    if scope != "整個品牌" and scope not in known_products:
+        return None, {
+            "line": line_no,
+            "msg": f"第 {line_no} 列：適用範圍寫成「{scope}」。只能填「整個品牌」或你已經建立的產品名稱。",
+            "unknown_scope": scope,
+        }
+    return {
+        "kind": kind, "category": category, "title": title, "content": content,
+        "scope": scope, "evidence": evidence,
+        "raw_row": raw_row or " | ".join(parts),
+    }, None
+
+
+def validate_rows(rows: list, known_products: set, brand_name: str = None) -> tuple:
+    """驗證已是六欄 dict 的結構化列；不經文字表格切割。"""
+    if not rows:
+        return None, [{"line": None, "msg": "欄位名之後沒有任何資料列，沒有東西可以讀進來。"}]
+    accepted, errors = [], []
+    keys = ("kind", "category", "title", "content", "scope", "evidence")
+    for line_no, row in enumerate(rows, start=1):
+        if not isinstance(row, dict) or not all(isinstance(row.get(key), str) for key in keys):
+            errors.append({"line": line_no, "msg": f"第 {line_no} 列：結構化資料缺少六個文字欄位。"})
+            continue
+        parsed, error = _validate_parts([row[key].strip() for key in keys], line_no,
+                                        known_products, brand_name, row.get("raw_row"))
+        if error:
+            errors.append(error)
+        else:
+            accepted.append(parsed)
+    return (None, errors) if errors else (accepted, [])
+
+
 def parse_paste(raw_text: str, known_products: set, brand_name: str = None) -> tuple:
     """回傳 (rows, errors)。
 
@@ -94,41 +161,11 @@ def parse_paste(raw_text: str, known_products: set, brand_name: str = None) -> t
     rows = []
     for i, line in enumerate(data_lines, start=1):
         parts = _split_row(line)
-        if len(parts) != 6:
-            errors.append({
-                "line": i,
-                "msg": f"第 {i} 列：這一列只有 {len(parts)} 欄，需要 6 欄。"
-                       "可能是內容裡有「|」符號把欄位切開了。",
-            })
-            continue
-        kind, category, title, content, scope, evidence = parts
-        if kind not in KIND_OPTIONS:
-            errors.append({
-                "line": i,
-                "msg": f"第 {i} 列：種類寫成「{kind}」。只能填：{ '、'.join(KIND_OPTIONS) }。",
-            })
-            continue
-        allowed_categories = [label for _, label in KIND_CATEGORY_SOURCE[kind]]
-        if category not in allowed_categories:
-            errors.append({
-                "line": i,
-                "msg": f"第 {i} 列：分類寫成「{category}」。{kind}的分類只有："
-                       f"{ '、'.join(allowed_categories) }。",
-            })
-            continue
-        if brand_name and scope == brand_name.strip():
-            scope = "整個品牌"
-        if scope != "整個品牌" and scope not in known_products:
-            errors.append({
-                "line": i,
-                "msg": f"第 {i} 列：適用範圍寫成「{scope}」。只能填「整個品牌」或你已經建立的產品名稱。",
-                "unknown_scope": scope,
-            })
-            continue
-        rows.append({
-            "kind": kind, "category": category, "title": title, "content": content,
-            "scope": scope, "evidence": evidence, "raw_row": line,
-        })
+        parsed, error = _validate_parts(parts, i, known_products, brand_name, line)
+        if error:
+            errors.append(error)
+        else:
+            rows.append(parsed)
 
     if errors:
         return None, errors

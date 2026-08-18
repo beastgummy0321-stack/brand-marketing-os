@@ -61,7 +61,11 @@ def _ads_cards_ctx(request: Request, brand: dict, errors=None, raw_values=None):
     """raw_values＝{card_key: {field_key: 使用者剛送出的原始字串}}：驗證失敗時原樣填回輸入框，
     不要讓打錯字的使用者看到自己輸入被靜靜換成舊的資料庫值（沿用既有 /rule-cards 慣例）。"""
     conn = main_mod.conn
-    cards = rule_cards.list_cards(conn, brand["id"])
+    errors = errors or {}
+    cards = [
+        card for card in rule_cards.list_cards(conn, brand["id"])
+        if card["key"] != "autonomy"
+    ]
     raw_values = raw_values or {}
     for card in cards:
         overrides = raw_values.get(card["key"]) or {}
@@ -74,7 +78,13 @@ def _ads_cards_ctx(request: Request, brand: dict, errors=None, raw_values=None):
         cards=cards,
         qa_launch=ads_checklist.qa_launch_summary(conn, brand["id"]),
         calendar_categories=_calendar_categories_ctx(conn, brand["id"]),
-        errors=errors or {},
+        errors=errors,
+        validation_messages=[
+            message
+            for card_key, card_errors in errors.items()
+            if card_key == "autonomy"
+            for message in card_errors.values()
+        ],
         **main_mod.banner_ctx(request),
     )
 
@@ -98,6 +108,9 @@ def _validate_card_fields(card_key: str, raw_values: dict) -> tuple:
         value, ok = main_mod.parse_number(raw_str)
         if not ok or value is None or value <= 0:
             field_errors[field_key] = "請填一個大於 0 的數字。"
+            continue
+        if card_key == "autonomy" and value not in (1.0, 2.0):
+            field_errors[field_key] = "投放自動度只有保守檔（1）與放手檔（2）兩種。"
             continue
         parsed[field_key] = value
     return parsed, field_errors
@@ -214,8 +227,11 @@ async def api_rule_cards_save(request: Request, brand_id: str, card_key: str):
         return JSONResponse({"error": "請求格式不是合法的 JSON"}, status_code=400)
     parsed, field_errors = _validate_card_fields(card_key, body)
     if field_errors:
+        error_message = "有欄位沒有填一個大於 0 的數字。"
+        if card_key == "autonomy" and "mode" in field_errors:
+            error_message = field_errors["mode"]
         return JSONResponse(
-            {"error": "有欄位沒有填一個大於 0 的數字。", "field_errors": field_errors}, status_code=400)
+            {"error": error_message, "field_errors": field_errors}, status_code=400)
     for field_key, value in parsed.items():
         rule_cards.set_value(main_mod.conn, brand_id, card_key, field_key, value, actor)
     card = rule_cards.get_card(main_mod.conn, brand_id, card_key)
