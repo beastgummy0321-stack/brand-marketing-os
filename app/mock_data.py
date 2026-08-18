@@ -54,6 +54,9 @@ CHANNEL_TYPES = [
     ("website", "官方網站"),
     ("fb_page", "粉絲專頁"),
     ("ig_account", "Instagram 帳號"),
+    ("line", "LINE 官方帳號"),
+    ("marketplace", "平台商店"),
+    ("physical_store", "實體店"),
 ]
 
 ASSET_KINDS = [

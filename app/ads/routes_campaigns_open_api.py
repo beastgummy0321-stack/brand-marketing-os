@@ -24,6 +24,7 @@ from app.ads import account_structure
 from app.ads import auto_sync as ads_auto_sync
 from app.ads import plan as ads_plan
 from app.ads import nextcycle
+from app.ads import opening_suggestion
 from app.ads import repository as ads_repo
 from app.ads import routes as ads_routes
 from app.ads import simulation
@@ -108,6 +109,20 @@ def _budget_tiers(pain_suggestion: dict) -> list:
 
 
 # ---- 開檔（S8.1-11／S8R.1-7） ----
+
+@router.get("/api/campaigns/brands/{brand_id}/opening-suggestion")
+async def get_opening_suggestion(brand_id: str):
+    main_mod.require_brand(brand_id)
+    return opening_suggestion.opening_suggestion(main_mod.conn, brand_id)
+
+
+@router.post("/api/campaigns/brands/{brand_id}/opening-suggestion/channel-answer")
+async def post_opening_suggestion_channel_answer(request: Request, brand_id: str):
+    main_mod.require_brand(brand_id)
+    body = await _json_body(request)
+    return opening_suggestion.save_channel_answer(
+        main_mod.conn, brand_id, actor=main_mod.require_actor(request), answer=body.get("answer")
+    )
 
 @router.get("/api/campaigns/{brand_id}/new-context")
 async def new_context(brand_id: str):

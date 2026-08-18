@@ -636,6 +636,8 @@ def deactivate_learning_ledger_entry(conn: sqlite3.Connection, brand_id: str, en
 #   - creative_rule_card 排在 campaign_cycle 之前（前者引用後者）
 #   - campaign_cycle 是這一串（ad_account 之外）全部東西的根，必須最後刪
 _BRAND_ONLY_CASCADE_TABLES = (
+    ("task_card", "任務卡"),
+    ("channel_plan", "管道計畫"),
     ("ad_revenue_coefficient_error_log", "灌水係數事後誤差紀錄"),
     ("ad_revenue_coefficient", "回購灌水校準係數"),
     ("activation_authorization", "投放啟動具名授權"),

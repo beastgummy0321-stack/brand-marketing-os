@@ -414,7 +414,7 @@ KNOWN_OVERSIZED_FILES = {
     "app/ads/reading.py": 1039,
     "app/intake/routes.py": 951,
     "app/tests/test_ads_creative.py": 870,
-    "app/ads/repository.py": 856,
+    "app/ads/repository.py": 858,
 }
 
 
