@@ -6,6 +6,8 @@ import {
   approveProposal,
   fetchProposal,
   returnProposal,
+  updateChannelPlan,
+  type ChannelPlan,
   type ProposalResponse,
 } from "@/lib/proposalApi";
 import { usePagination } from "@/lib/usePagination";
@@ -15,9 +17,17 @@ type LoadState =
   | { status: "error"; message: string }
   | { status: "ready"; proposal: ProposalResponse };
 
+const CHANNEL_LABELS: Record<string, string> = {
+  social: "Meta",
+  google_search: "Google 搜尋",
+  line_email: "LINE／電子報",
+  kol_media: "合作媒體",
+  website_landing: "官網購買頁",
+};
+
 /**
- * 提案書（F1 畫面 2）。這是新 proposal API 的唯一畫面呼叫端；API 回 404 時保留舊
- * `PlanStep` 作為舊資料相容路徑（ponytail：新提案書流程不存在時，不拿舊資料硬湊六區塊）。
+ * 提案書（F1 畫面 2）。這是新 proposal API 的唯一畫面呼叫端；ready 但沒有管道資料時保留舊
+ * `PlanStep` 作為舊資料相容路徑（ponytail：新檔期一定有五列，空陣列代表 T3 前舊檔期）。
  */
 export function ProposalBook({
   brandId,
@@ -37,16 +47,21 @@ export function ProposalBook({
   const [state, setState] = useState<LoadState>({ status: "loading" });
   const [saving, setSaving] = useState<"approve" | "return" | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [channels, setChannels] = useState<ChannelPlan[]>([]);
+  const [channelSaving, setChannelSaving] = useState<string | null>(null);
 
   function load() {
     setState({ status: "loading" });
     fetchProposal(brandId, cycleId)
-      .then((proposal) => setState({ status: "ready", proposal }))
-      .catch((error: unknown) => {
-        if (error instanceof Error && error.name === "404") {
+      .then((proposal) => {
+        if (proposal.status === "ready" && proposal.blocks.channels.length === 0) {
           onFallback();
           return;
         }
+        setState({ status: "ready", proposal });
+        if (proposal.status === "ready") setChannels(proposal.blocks.channels);
+      })
+      .catch((error: unknown) => {
         setState({ status: "error", message: error instanceof Error ? error.message : "讀取失敗，請稍後再試。" });
       });
   }
@@ -76,6 +91,23 @@ export function ProposalBook({
       setActionError(error instanceof Error ? error.message : "送回調整失敗，請稍後再試。");
     } finally {
       setSaving(null);
+    }
+  }
+
+  async function toggleChannel(channel: string) {
+    const previous = channels;
+    const next = previous.map((item) => item.channel === channel ? { ...item, enabled: !item.enabled } : item);
+    setChannels(next);
+    setChannelSaving(channel);
+    setActionError(null);
+    try {
+      const result = await updateChannelPlan(brandId, cycleId, next);
+      setChannels(result.channels);
+    } catch (error) {
+      setChannels(previous);
+      setActionError(error instanceof Error ? error.message : "更新失敗，請稍後再試。");
+    } finally {
+      setChannelSaving(null);
     }
   }
 
@@ -121,7 +153,24 @@ export function ProposalBook({
         </div>
         {proposal.approval.approved ? <span className="rounded-full bg-success/10 px-3 py-1 text-sm font-medium text-success">已核可</span> : <span className="rounded-full bg-warning/10 px-3 py-1 text-sm font-medium text-warning">等你核可</span>}
       </div>
-      <ProposalSection title="1 管道分工" value={proposal.blocks.channels} />
+      <section className="rounded-lg border border-border bg-card p-4 shadow-[var(--shadow-card)]">
+        <h3 className="font-medium text-foreground">1 管道分工</h3>
+        <div className="mt-3 flex flex-col gap-2">
+          {channels.map((item) => (
+            <div key={item.channel} className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-border p-3 text-sm">
+              <span className="font-medium text-foreground">{CHANNEL_LABELS[item.channel] ?? item.channel}</span>
+              <button
+                type="button"
+                disabled={channelSaving === item.channel}
+                onClick={() => void toggleChannel(item.channel)}
+                className="rounded-md border border-border px-3 py-1.5 font-medium text-foreground hover:border-primary hover:text-primary disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {channelSaving === item.channel ? "更新中…" : item.enabled ? "用" : "不用"}
+              </button>
+            </div>
+          ))}
+        </div>
+      </section>
       <ProposalSection title="2 預算配置" value={proposal.blocks.budget} />
       <ProposalSection title="3 素材預覽" value={proposal.blocks.creatives} action={<button type="button" onClick={onOpenWorkbench} className="mt-3 rounded-md border border-border px-3 py-1.5 text-sm font-medium text-foreground hover:border-primary hover:text-primary">前往素材工作檯</button>} />
       <ProposalSection title="4 追蹤健檢" value={proposal.blocks.tracking} />

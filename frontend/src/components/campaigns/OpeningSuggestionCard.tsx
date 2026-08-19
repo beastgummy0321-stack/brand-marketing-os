@@ -3,6 +3,7 @@ import { createCycle, fetchNewContext, type NewContext } from "@/lib/warroomApi"
 import {
   answerOpeningChannel,
   fetchOpeningSuggestion,
+  updateChannelPlan,
   type OpeningSuggestionResponse,
 } from "@/lib/proposalApi";
 import { Skeleton } from "@/components/layout/Skeleton";
@@ -13,9 +14,17 @@ type LoadState =
   | { status: "error" }
   | { status: "ready"; opening: OpeningSuggestionResponse; context: NewContext };
 
+const CHANNEL_OPTIONS = [
+  { channel: "social", label: "Meta" },
+  { channel: "google_search", label: "Google 搜尋" },
+  { channel: "line_email", label: "LINE／電子報" },
+  { channel: "kol_media", label: "合作媒體" },
+  { channel: "website_landing", label: "官網購買頁" },
+];
+
 /**
  * 開檔建議卡（F1 畫面 1）。只有這個元件讀取／回答 opening-suggestion；建立檔期仍走既有
- * `createCycle`，所以建立後的狀態只由後端保存。調整區只使用既有開檔欄位，沒有自創管道資料。
+ * `createCycle`，所以建立後的狀態只由後端保存；有關掉的管道會在建立後立即寫回 channel-plan。
  */
 export function OpeningSuggestionCard({ brandId, initialBackground, onCreated }: { brandId: string; initialBackground: string; onCreated: (cycleId: string) => void }) {
   const [state, setState] = useState<LoadState>({ status: "loading" });
@@ -26,6 +35,10 @@ export function OpeningSuggestionCard({ brandId, initialBackground, onCreated }:
   const [productId, setProductId] = useState("");
   const [budget, setBudget] = useState(0);
   const [durationDays, setDurationDays] = useState(14);
+  const [enabledChannels, setEnabledChannels] = useState<Record<string, boolean>>(
+    () => Object.fromEntries(CHANNEL_OPTIONS.map(({ channel }) => [channel, true])),
+  );
+  const [pendingCycleId, setPendingCycleId] = useState<string | null>(null);
 
   function load() {
     setState({ status: "loading" });
@@ -33,7 +46,7 @@ export function OpeningSuggestionCard({ brandId, initialBackground, onCreated }:
       .then(([opening, context]) => {
         setState({ status: "ready", opening, context });
         if (opening.available) {
-          setProductId(String(opening.suggestion.product_id));
+          setProductId(opening.suggestion.product_id);
           setBudget(opening.suggestion.budget);
           setDurationDays(opening.suggestion.duration_days);
         }
@@ -61,15 +74,23 @@ export function OpeningSuggestionCard({ brandId, initialBackground, onCreated }:
     setSaving(true);
     setActionError(null);
     try {
-      const result = await createCycle(brandId, {
-        simulate: state.context.offer_simulation,
-        product_ids: [productId],
-        budget,
-        duration_days: durationDays,
-        background: initialBackground || null,
-        objective: state.context.recommended_objective,
-      });
-      onCreated(result.cycle_id);
+      let cycleId = pendingCycleId;
+      if (!cycleId) {
+        cycleId = (await createCycle(brandId, {
+          simulate: state.context.offer_simulation,
+          product_ids: [productId],
+          budget,
+          duration_days: durationDays,
+          background: initialBackground || null,
+          objective: state.context.recommended_objective,
+        })).cycle_id;
+        setPendingCycleId(cycleId);
+      }
+      const channels = CHANNEL_OPTIONS.map(({ channel }) => ({ channel, enabled: enabledChannels[channel] }));
+      if (channels.some(({ enabled }) => !enabled)) {
+        await updateChannelPlan(brandId, cycleId, channels);
+      }
+      onCreated(cycleId);
     } catch (error) {
       setActionError(error instanceof Error ? error.message : "建立失敗，請稍後再試。");
     } finally {
@@ -152,7 +173,7 @@ export function OpeningSuggestionCard({ brandId, initialBackground, onCreated }:
           onClick={() => void createFromSuggestion()}
           className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
         >
-          {saving ? "送出中…" : "就這樣做"}
+          {saving ? "送出中…" : adjusting ? "確定調整" : "就這樣做"}
         </button>
         <button
           type="button"
@@ -182,6 +203,19 @@ export function OpeningSuggestionCard({ brandId, initialBackground, onCreated }:
               <input type="number" min={state.context.duration_config.min} max={state.context.duration_config.max} value={durationDays} onChange={(event) => setDurationDays(Number(event.target.value))} className="w-24 rounded-md border border-border bg-card px-3 py-1.5" />
             </label>
           </div>
+          <fieldset className="flex flex-col gap-2">
+            <legend className="font-medium text-foreground">這期要用哪些管道</legend>
+            {CHANNEL_OPTIONS.map(({ channel, label }) => (
+              <label key={channel} className="flex items-center gap-2 text-foreground">
+                <input
+                  type="checkbox"
+                  checked={enabledChannels[channel]}
+                  onChange={() => setEnabledChannels((current) => ({ ...current, [channel]: !current[channel] }))}
+                />
+                {label}（{enabledChannels[channel] ? "用" : "不用"}）
+              </label>
+            ))}
+          </fieldset>
         </div>
       )}
       {actionError && <p className="text-sm text-danger">{actionError}</p>}

@@ -10,7 +10,7 @@
 
 export interface OpeningSuggestion {
   platform: string;
-  product_id: number;
+  product_id: string;
   product_name: string;
   budget: number;
   duration_days: number;
@@ -27,12 +27,17 @@ export type OpeningSuggestionResponse =
   | { available: false; reason: string; channel_ask?: ChannelAsk };
 
 export interface ProposalBlocks {
-  channels: unknown;
+  channels: ChannelPlan[];
   budget: unknown;
   creatives: unknown;
   tracking: unknown;
   brakes: string[];
   schedule: unknown;
+}
+
+export interface ChannelPlan {
+  channel: string;
+  enabled: boolean;
 }
 
 export interface ReadyProposalResponse {
@@ -54,9 +59,14 @@ export type ProposalResponse = ReadyProposalResponse | PendingProposalResponse;
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, init);
   if (!response.ok) {
-    const error = new Error(response.status === 404 ? "找不到這筆資料。" : `讀取失敗（狀態碼 ${response.status}）`);
-    error.name = String(response.status);
-    throw error;
+    let message = `處理失敗（狀態碼 ${response.status}）`;
+    try {
+      const body = (await response.json()) as { error?: string };
+      if (body.error) message = body.error;
+    } catch {
+      // 回應不是 JSON，用預設訊息。
+    }
+    throw new Error(message);
   }
   if (response.status === 204) return undefined as T;
   return response.json() as Promise<T>;
@@ -87,4 +97,16 @@ export function approveProposal(brandId: string, cycleId: string): Promise<void>
 
 export function returnProposal(brandId: string, cycleId: string): Promise<void> {
   return request(proposalBase(brandId, cycleId) + "/return", { method: "POST" });
+}
+
+export function updateChannelPlan(
+  brandId: string,
+  cycleId: string,
+  channels: ChannelPlan[],
+): Promise<{ channels: ChannelPlan[] }> {
+  return request(`${brandBase(brandId)}/cycles/${encodeURIComponent(cycleId)}/channel-plan`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ channels: channels.map(({ channel, enabled }) => ({ channel, enabled })) }),
+  });
 }
