@@ -19,9 +19,9 @@ from app.ads import theme_attribution
 from app.ads import theme_engine
 from app.ads import theme_engine_video
 from app.ads import theme_repository as theme_repo
+from app.ads import style_preference
 from app.ads.routes_common import _require_cycle
 from app.core import creative_assets
-from app.core import settings as coresettings
 from app.creative.format_specs import FORMAT_SPECS
 from app.llm import pricing, providers
 
@@ -293,7 +293,7 @@ async def copy_theme_image_prompts(request: Request, brand_id: str, cycle_id: st
         return JSONResponse(
             {"error": "這個主題沒有圖片提示詞可以複製。"}, status_code=400)
 
-    header = coresettings.get_setting(conn, coresettings.IMAGE_PROMPT_HEADER_SETTING, "") or ""
+    header = style_preference.get_text(conn, brand_id)
     return {"groups": _prompt_copy_groups(theme, header.strip())}
 
 

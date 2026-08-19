@@ -32,10 +32,30 @@ from fastapi.responses import JSONResponse
 
 import app.shared.web as main_mod
 from app.ads import checklist as ads_checklist
+from app.ads import style_preference
 from app.core import calendar_dismiss as core_calendar_dismiss
 from app.core import rule_cards
 
 router = APIRouter()
+
+
+# ponytail: 品牌風格偏好使用 app_setting 的 brand-id namespaced key，沿用既有設定機制而非新表。
+@router.get("/api/settings/brands/{brand_id}/style-preference")
+async def api_style_preference_get(brand_id: str):
+    main_mod.require_brand(brand_id)
+    return {"text": style_preference.get_text(main_mod.conn, brand_id)}
+
+
+@router.put("/api/settings/brands/{brand_id}/style-preference")
+async def api_style_preference_put(request: Request, brand_id: str):
+    main_mod.require_brand(brand_id)
+    try:
+        body = await request.json()
+    except ValueError:
+        body = {}
+    if not isinstance(body, dict) or not isinstance(body.get("text"), str):
+        return JSONResponse({"error": "text 必須是字串"}, status_code=400)
+    return {"text": style_preference.set_text(main_mod.conn, brand_id, body["text"])}
 
 # 有效卡鍵一律問 rule_cards.CARDS 本身，不在這裡另開一份清單（沿用原檔慣例）。
 

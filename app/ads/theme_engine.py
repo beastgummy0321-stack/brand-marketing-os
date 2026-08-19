@@ -151,7 +151,9 @@ def generate_single_image_theme(conn, brief: CreativeBrief, *, actor: str,
     if budget_err:
         return None, budget_err
 
-    user_text = _engine.build_single_image_prompt(brief, plan, fp)
+    from app.ads import style_preference
+    user_text = _engine.build_single_image_prompt(
+        brief, plan, fp, style_preference=style_preference.get_text(conn, brief.brand["id"]))
     if on_stage:
         on_stage("ask_ai")
     task = gateway.run_task(

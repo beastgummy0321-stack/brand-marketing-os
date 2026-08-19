@@ -140,7 +140,7 @@ def _default_destination(conn, brand_id: str) -> Optional[str]:
     return None
 
 
-def build_packages(conn, brand_id: str, cycle_id: str, actor: str) -> int:
+def build_packages(conn, brand_id: str, cycle_id: str, actor: str, *, commit: bool = True) -> int:
     """依採用的素材，每個切角產一份交接包。回傳份數。
 
     重跑會整批換掉——素材改過就該重出，不留舊版交接包讓人貼錯。
@@ -207,7 +207,8 @@ def build_packages(conn, brand_id: str, cycle_id: str, actor: str) -> int:
 
     write_audit(conn, brand_id=brand_id, entity_type="campaign_cycle", entity_id=cycle_id,
                 action="build_handoff", actor=actor, before=None, after={"packages": count})
-    conn.commit()
+    if commit:
+        conn.commit()
     return count
 
 

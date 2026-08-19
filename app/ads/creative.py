@@ -720,7 +720,7 @@ def rewrite(conn, brand_id: str, variant_id: str, *, reason_code: str, actor: st
     return True, new_variant_id
 
 
-def approve_selection(conn, brand_id: str, cycle_id: str, actor: str) -> int:
+def approve_selection(conn, brand_id: str, cycle_id: str, actor: str, *, commit: bool = True) -> int:
     """關卡二：把還沒被退掉的素材一次記為採用（反對制）。回傳採用則數。
 
     反對制的意思就在這裡——使用者什麼都不點也能過關，系統採用的是「他沒有反對的」。
@@ -745,5 +745,6 @@ def approve_selection(conn, brand_id: str, cycle_id: str, actor: str) -> int:
     write_audit(conn, brand_id=brand_id, entity_type="campaign_cycle", entity_id=cycle_id,
                 action="approve_creatives", actor=actor, before=None,
                 after={"adopted": adopted})
-    conn.commit()
+    if commit:
+        conn.commit()
     return adopted

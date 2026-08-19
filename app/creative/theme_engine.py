@@ -136,13 +136,15 @@ def build_quick_generate_plan(scope: str) -> dict:
     return {name: dict(fields[name]) for name in scope_spec["fields"]}
 
 
-def build_single_image_prompt(brief, plan: dict, fp) -> str:
+def build_single_image_prompt(brief, plan: dict, fp, *, style_preference: str = "") -> str:
     parts = [
         f"品牌名稱：{brief.brand['name']}",
         f"本期打法：{brief.plan['summary']}",
         f"這一格的切角：{brief.cell['creative_angle']}",
         brief.brand_context if brief.brand_context else "（目前沒有任何已確認的品牌資料。）",
     ]
+    if style_preference.strip():
+        parts.append("品牌圖片風格偏好：\n" + style_preference.strip())
     if brief.offer:
         parts.append(f"本期優惠：{brief.offer['name']}（{brief.offer['terms']}）")
     if brief.methodology:
