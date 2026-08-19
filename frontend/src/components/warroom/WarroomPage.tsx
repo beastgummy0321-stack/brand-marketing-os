@@ -91,7 +91,7 @@ export function WarroomPage({ brandId, cycleId }: { brandId: string; cycleId: st
     1: <IntakeSummary cycle={cycle} />,
     2: (
       <div className="flex flex-col gap-4">
-        {proposalFallback ? (
+        {cycle.status === "PLANNING" || cycle.status === "PLAN_SELECT" || proposalFallback ? (
           <PlanStep brandId={brandId} cycle={cycle} onApproved={refresh} onRefresh={refresh} />
         ) : (
           <ProposalBook
