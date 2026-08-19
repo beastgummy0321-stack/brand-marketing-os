@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 import app.main as main
 import app.shared.web as web
 from app.ads import creative, delivery, handoff, repository as ads_repo
+from app.ads import repository_channel_plan as channel_repo
 from app.brand_intelligence import repository as bi
 from app.core import db
 from app.core.db import new_id, now_iso
@@ -178,3 +179,24 @@ class DeliveryTest(unittest.TestCase):
         forbidden = ("受眾", "漏斗", "CPA", "CTR", "CPC", "ROAS", "KPI")
         payload = json.dumps(confirmed.json(), ensure_ascii=False)
         self.assertFalse(any(word in payload for word in forbidden))
+
+    def test_channel_plan_put_persists_partial_enabled_changes_and_rejects_unknown_channel(self):
+        social = channel_repo.create_channel_plan(
+            self.conn, self.brand["id"], self.cycle["id"], channel="social", job="社群安排",
+            pct=100, expected="讓更多人看見", enabled=True, depth="full")
+        search = channel_repo.create_channel_plan(
+            self.conn, self.brand["id"], self.cycle["id"], channel="google_search", job="搜尋安排",
+            pct=0, expected="準備搜尋內容", enabled=True, depth="task_card")
+        url = f"/api/campaigns/brands/{self.brand['id']}/cycles/{self.cycle['id']}/channel-plan"
+
+        response = self.client.put(url, json={"channels": [{"channel": "social", "enabled": False}]})
+        self.assertEqual(response.status_code, 200, response.text)
+        returned = {plan["channel"]: plan for plan in response.json()["channels"]}
+        self.assertFalse(returned["social"]["enabled"])
+        self.assertTrue(returned["google_search"]["enabled"])
+        self.assertFalse(channel_repo.get_channel_plan(self.conn, self.brand["id"], social["id"])["enabled"])
+        self.assertTrue(channel_repo.get_channel_plan(self.conn, self.brand["id"], search["id"])["enabled"])
+
+        unknown = self.client.put(url, json={"channels": [{"channel": "missing", "enabled": False}]})
+        self.assertEqual(unknown.status_code, 400)
+        self.assertIn("沒有這個管道", unknown.json()["error"])
