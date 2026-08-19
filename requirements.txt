@@ -8,3 +8,4 @@ anthropic
 httpx
 pytest
 pytest-xdist
+google-analytics-data
