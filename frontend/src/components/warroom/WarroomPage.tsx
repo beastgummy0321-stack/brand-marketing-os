@@ -6,11 +6,13 @@ import { TaskFlowShell } from "@/components/layout/TaskFlowShell";
 import { archiveCampaign, cycleLabel } from "@/lib/campaignsApi";
 import { fetchCycleDetail, BLOCK_OF_STAGE, PACING_STRATEGY_LABELS, STAGE_BAR_LABELS, type CampaignStage, type Cycle } from "@/lib/warroomApi";
 import { AiCostMeter } from "./AiCostMeter";
+import { ProposalBook } from "./ProposalBook";
 import { CycleDeletePanel } from "./panels/CycleDeletePanel";
+import { OpeningSuggestionCard } from "../campaigns/OpeningSuggestionCard";
 import { NewCycleDirectionChoice } from "./NewCycleDirectionChoice";
 import { CreativeStep } from "./steps/CreativeStep";
 import { HandoffStep } from "./steps/HandoffStep";
-import { IntakeStep, IntakeSummary } from "./steps/IntakeStep";
+import { IntakeSummary } from "./steps/IntakeStep";
 import { PerformanceStep } from "./steps/PerformanceStep";
 import { PlanStep } from "./steps/PlanStep";
 import { ReviewStep } from "./steps/ReviewStep";
@@ -31,6 +33,7 @@ export function WarroomPage({ brandId, cycleId }: { brandId: string; cycleId: st
   const navigate = useNavigate();
   const [state, setState] = useState<LoadState>({ status: "loading" });
   const [viewBlock, setViewBlock] = useState(1);
+  const [proposalFallback, setProposalFallback] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [banner, setBanner] = useState<string | null>(null);
 
@@ -52,13 +55,15 @@ export function WarroomPage({ brandId, cycleId }: { brandId: string; cycleId: st
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [brandId, cycleId]);
 
+  useEffect(() => setProposalFallback(false), [brandId, cycleId]);
+
   if (!cycleId) {
     return (
       <div className="flex flex-col gap-4">
         <Breadcrumb items={[{ label: "跨品牌總覽", href: "/" }, { label: "歷史檔期", href: `/brands/${brandId}/campaigns` }, { label: "開新檔期" }]} />
         <TaskFlowShell steps={STAGE_BAR_LABELS} current={1} onSelect={() => {}} rightRail={<AiCostMeter brandId={brandId} />}>
           <NewCycleDirectionChoice brandId={brandId}>
-            {(initialBackground) => <IntakeStep brandId={brandId} initialBackground={initialBackground} onCreated={(newId) => navigate(`/brands/${brandId}/campaigns/${newId}`)} />}
+            {(initialBackground) => <OpeningSuggestionCard brandId={brandId} initialBackground={initialBackground} onCreated={(newId) => navigate(`/brands/${brandId}/campaigns/${newId}`)} />}
           </NewCycleDirectionChoice>
         </TaskFlowShell>
       </div>
@@ -86,7 +91,18 @@ export function WarroomPage({ brandId, cycleId }: { brandId: string; cycleId: st
     1: <IntakeSummary cycle={cycle} />,
     2: (
       <div className="flex flex-col gap-4">
-        <PlanStep brandId={brandId} cycle={cycle} onApproved={refresh} onRefresh={refresh} />
+        {proposalFallback ? (
+          <PlanStep brandId={brandId} cycle={cycle} onApproved={refresh} onRefresh={refresh} />
+        ) : (
+          <ProposalBook
+            brandId={brandId}
+            cycleId={cycle.id}
+            onApproved={refresh}
+            onReturned={() => navigate(`/brands/${brandId}/campaigns/new`)}
+            onOpenWorkbench={() => navigate(`/brands/${brandId}/workbench`)}
+            onFallback={() => setProposalFallback(true)}
+          />
+        )}
         {planApproved && <CreativeStep brandId={brandId} cycle={cycle} />}
       </div>
     ),
