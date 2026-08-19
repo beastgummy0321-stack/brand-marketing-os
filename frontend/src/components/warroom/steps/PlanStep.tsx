@@ -54,7 +54,7 @@ export function PlanStep({ brandId, cycle, onApproved, onRefresh }: { brandId: s
   const [approveError, setApproveError] = useState<string | null>(null);
   const [reminder, setReminder] = useState<ScheduleReminder | null>(null);
 
-  const alreadyGenerated = cycle.status !== "PLANNING";
+  const alreadyGenerated = cycle.status !== "PLANNING" || cycle.plan_version > 0;
 
   useEffect(() => {
     fetchScheduleReminder(brandId, cycle.id).then(setReminder);
@@ -281,6 +281,7 @@ function PlanOptionShowcase({
 }) {
   const primary = options.find((option) => option.is_recommended) ?? options[0];
   const [activeId, setActiveId] = useState(primary?.id ?? "");
+  const [selecting, setSelecting] = useState(false);
   useEffect(() => setActiveId(primary?.id ?? ""), [primary?.id]);
   const active = options.find((option) => option.id === activeId) ?? primary;
   const alternatives = options.filter((option) => option.id !== active?.id).slice(0, 2);
@@ -288,7 +289,16 @@ function PlanOptionShowcase({
 
   function choose(option: PlanOption) {
     setActiveId(option.id);
-    if (!readOnly) void onSelect(option.id);
+  }
+
+  async function selectActive() {
+    if (selecting) return;
+    setSelecting(true);
+    try {
+      await onSelect(active.id);
+    } finally {
+      setSelecting(false);
+    }
   }
 
   return (
@@ -296,7 +306,7 @@ function PlanOptionShowcase({
       <div className="rounded-xl border border-primary/40 bg-card p-5 shadow-[var(--shadow-card)]">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <p className="font-display text-xl text-foreground">AI 完整方案</p>
-          <Badge tone="success">已選定</Badge>
+          <Badge tone="success">{readOnly ? "已選定" : active.is_recommended ? "AI 推薦" : "預覽中"}</Badge>
         </div>
         <p className="mt-3 text-base font-medium text-foreground">{active.summary}</p>
         {active.difference && <p className="mt-1 text-sm text-muted-foreground">{active.difference}</p>}
@@ -313,16 +323,26 @@ function PlanOptionShowcase({
           </div>
         </div>
         {active.hypotheses && <details className="mt-3 text-sm text-muted-foreground"><summary className="cursor-pointer text-primary">想驗證的事</summary><ul className="mt-1 list-disc pl-4">{active.hypotheses.map((hypothesis, index) => <li key={index}>{hypothesis.statement}</li>)}</ul></details>}
+        {!readOnly && (
+          <button
+            type="button"
+            disabled={selecting}
+            onClick={() => void selectActive()}
+            className="mt-4 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {selecting ? "送出中…" : "就用這案，看提案書"}
+          </button>
+        )}
       </div>
       {alternatives.length > 0 && (
         <div className="flex flex-col gap-2">
-          <p className="text-xs font-medium text-muted-foreground">另兩案・點一下即換</p>
+          <p className="text-xs font-medium text-muted-foreground">另兩案・點一下先看內容，確認才定案</p>
           <div className="grid gap-2 sm:grid-cols-2">
             {alternatives.map((option) => (
               <button key={option.id} type="button" disabled={readOnly} onClick={() => choose(option)} className="rounded-lg border border-border bg-card p-3 text-left transition-colors hover:border-primary disabled:cursor-default disabled:opacity-70">
                 <span className="block text-sm font-medium text-foreground">{option.summary}</span>
                 {option.difference && <span className="mt-1 block text-xs text-muted-foreground">{option.difference}</span>}
-                <span className="mt-2 block text-xs text-primary">切換到這案</span>
+                <span className="mt-2 block text-xs text-primary">改看這案</span>
               </button>
             ))}
           </div>

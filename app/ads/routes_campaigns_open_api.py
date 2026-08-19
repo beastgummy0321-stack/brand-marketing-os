@@ -85,6 +85,7 @@ def _cycle_json(view: dict) -> dict:
         "pacing_strategy": view.get("pacing_strategy") or "continuous",
         "pacing_reason": view.get("pacing_reason") or "沒有特別理由，先求穩定",
         "archived": bool(view["archived"]), "daily_below_floor": bool(view.get("daily_below_floor")),
+        "plan_version": int(view["plan_version"] or 0),
     }
 
 

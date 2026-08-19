@@ -82,6 +82,7 @@ export function ProposalBook({
   }
 
   async function returnForAdjustment() {
+    if (!window.confirm("會把這期退回開檔階段重新調整，已選的方案要重新選一次。確定要退回嗎？")) return;
     setSaving("return");
     setActionError(null);
     try {
@@ -145,16 +146,43 @@ export function ProposalBook({
   }
 
   return (
-    <section className="flex flex-col gap-4">
-      <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-card p-4 shadow-[var(--shadow-card)]">
+    <section className="flex max-h-[75vh] flex-col gap-4 overflow-y-auto">
+      <div className="sticky top-0 z-10 rounded-lg border border-border bg-card p-4 shadow-[var(--shadow-card)]">
+        <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="font-display text-lg text-foreground">這期提案書</h2>
           <p className="mt-1 text-sm text-muted-foreground">確認後開始準備素材。</p>
         </div>
-        {proposal.approval.approved ? <span className="rounded-full bg-success/10 px-3 py-1 text-sm font-medium text-success">已核可</span> : <span className="rounded-full bg-warning/10 px-3 py-1 text-sm font-medium text-warning">等你核可</span>}
+          <div className="flex flex-wrap items-center gap-3">
+            {proposal.approval.approved ? <span className="rounded-full bg-success/10 px-3 py-1 text-sm font-medium text-success">已核可</span> : <span className="rounded-full bg-warning/10 px-3 py-1 text-sm font-medium text-warning">等你核可</span>}
+            {!proposal.approval.approved && (
+              <>
+                <button
+                  type="button"
+                  disabled={saving !== null}
+                  onClick={() => void approve()}
+                  className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {saving === "approve" ? "送出中…" : "核可提案書（開始做素材）"}
+                </button>
+                <button
+                  type="button"
+                  disabled={saving !== null}
+                  onClick={() => void returnForAdjustment()}
+                  className="rounded-md border border-border px-4 py-2 text-sm font-medium text-foreground hover:border-primary hover:text-primary disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {saving === "return" ? "送出中…" : "哪裡不對，退回調整"}
+                </button>
+              </>
+            )}
+            <button type="button" onClick={onOpenWorkbench} className="rounded-md border border-border px-3 py-1.5 text-sm font-medium text-foreground hover:border-primary hover:text-primary">前往素材工作檯</button>
+          </div>
+        </div>
+        {proposal.approval.warning && <p className="mt-3 text-sm text-danger">{proposal.approval.warning}</p>}
+        {actionError && <p className="mt-3 text-sm text-danger">{actionError}</p>}
       </div>
-      <section className="rounded-lg border border-border bg-card p-4 shadow-[var(--shadow-card)]">
-        <h3 className="font-medium text-foreground">1 管道分工</h3>
+      <details className="rounded-lg border border-border bg-card p-4 shadow-[var(--shadow-card)]">
+        <summary className="cursor-pointer font-medium text-foreground">1 管道分工・{channels.length === 0 ? "—" : `啟用 ${channels.filter((item) => item.enabled).length} 條`}</summary>
         <div className="mt-3 flex flex-col gap-2">
           {channels.map((item) => (
             <div key={item.channel} className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-border p-3 text-sm">
@@ -170,46 +198,44 @@ export function ProposalBook({
             </div>
           ))}
         </div>
-      </section>
-      <ProposalSection title="2 預算配置" value={proposal.blocks.budget} />
-      <ProposalSection title="3 素材預覽" value={proposal.blocks.creatives} action={<button type="button" onClick={onOpenWorkbench} className="mt-3 rounded-md border border-border px-3 py-1.5 text-sm font-medium text-foreground hover:border-primary hover:text-primary">前往素材工作檯</button>} />
-      <ProposalSection title="4 追蹤健檢" value={proposal.blocks.tracking} />
-      <ProposalSection title="5 煞車" value={proposal.blocks.brakes} />
-      <ProposalSection title="6 排程" value={proposal.blocks.schedule} />
-      {!proposal.approval.approved && (
-        <div className="flex flex-wrap items-center gap-3">
-          <button
-            type="button"
-            disabled={saving !== null}
-            onClick={() => void approve()}
-            className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {saving === "approve" ? "送出中…" : "核可提案書（開始做素材）"}
-          </button>
-          <button
-            type="button"
-            disabled={saving !== null}
-            onClick={() => void returnForAdjustment()}
-            className="rounded-md border border-border px-4 py-2 text-sm font-medium text-foreground hover:border-primary hover:text-primary disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {saving === "return" ? "送出中…" : "哪裡不對，退回調整"}
-          </button>
-          {proposal.approval.warning && <p className="text-sm text-danger">{proposal.approval.warning}</p>}
-        </div>
-      )}
-      {actionError && <p className="text-sm text-danger">{actionError}</p>}
+      </details>
+      <ProposalSection title="2 預算配置" summary={budgetSummary(proposal.blocks.budget)} value={proposal.blocks.budget} />
+      <ProposalSection title="3 素材預覽" summary={countSummary(proposal.blocks.creatives, "則")} value={proposal.blocks.creatives} />
+      <ProposalSection title="4 追蹤健檢" summary={trackingBadCount(proposal.blocks.tracking) === "—" ? "—" : `${trackingBadCount(proposal.blocks.tracking)} 紅燈`} value={proposal.blocks.tracking} />
+      <ProposalSection title="5 煞車" summary={countSummary(proposal.blocks.brakes, "條")} value={proposal.blocks.brakes} />
+      <ProposalSection title="6 排程" summary={scheduleSummary(proposal.blocks.schedule)} value={proposal.blocks.schedule} />
     </section>
   );
 }
 
-function ProposalSection({ title, value, action }: { title: string; value: unknown; action?: ReactNode }) {
+function ProposalSection({ title, summary, value }: { title: string; summary: string; value: unknown }) {
   return (
-    <section className="rounded-lg border border-border bg-card p-4 shadow-[var(--shadow-card)]">
-      <h3 className="font-medium text-foreground">{title}</h3>
+    <details className="rounded-lg border border-border bg-card p-4 shadow-[var(--shadow-card)]">
+      <summary className="cursor-pointer font-medium text-foreground">{title}・{summary}</summary>
       <div className="mt-2 text-sm leading-6 text-foreground"><ProposalValue value={value} /></div>
-      {action}
-    </section>
+    </details>
   );
+}
+
+function budgetSummary(budget: unknown): string {
+  if (!budget || typeof budget !== "object" || !("budget" in budget) || typeof budget.budget !== "number") return "—";
+  return `NT$ ${budget.budget.toLocaleString("zh-TW")}`;
+}
+
+function countSummary(value: unknown, unit: string): string {
+  if (!Array.isArray(value)) return "—";
+  return `${value.length} ${unit}`;
+}
+
+function scheduleSummary(schedule: unknown): string {
+  if (typeof schedule !== "string") return "已排定";
+  const startDate = schedule.match(/^\d{4}-\d{2}-\d{2}/)?.[0];
+  return startDate ?? "已排定";
+}
+
+function trackingBadCount(tracking: unknown): string {
+  if (!tracking || typeof tracking !== "object" || !("channels" in tracking) || !Array.isArray(tracking.channels)) return "—";
+  return String(tracking.channels.filter((channel) => channel && typeof channel === "object" && "status" in channel && channel.status === "bad").length);
 }
 
 function ProposalValue({ value }: { value: unknown }): ReactNode {

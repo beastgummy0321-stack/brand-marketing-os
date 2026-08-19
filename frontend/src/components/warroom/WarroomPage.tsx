@@ -37,7 +37,7 @@ export function WarroomPage({ brandId, cycleId }: { brandId: string; cycleId: st
   const [deleting, setDeleting] = useState(false);
   const [banner, setBanner] = useState<string | null>(null);
 
-  function refresh() {
+  function refresh(forceBlock?: number) {
     if (!cycleId) return;
     setState({ status: "loading" });
     fetchCycleDetail(brandId, cycleId)
@@ -45,7 +45,7 @@ export function WarroomPage({ brandId, cycleId }: { brandId: string; cycleId: st
         setState({ status: "ready", cycle, stage });
         // 第一次讀到資料時，展開的區塊跳到真正進度所在的區塊；之後使用者自己點過哪格
         // 就維持使用者的選擇（跳段不算違規操作，R1-2），不會每次 refresh 被拉回去。
-        setViewBlock((prev) => (prev === 1 ? BLOCK_OF_STAGE[stage] : prev));
+        forceBlock ? setViewBlock(forceBlock) : setViewBlock((prev) => (prev === 1 ? BLOCK_OF_STAGE[stage] : prev));
       })
       .catch((err: unknown) => setState({ status: "error", message: err instanceof Error ? err.message : "讀取失敗，請稍後再試。" }));
   }
@@ -98,7 +98,7 @@ export function WarroomPage({ brandId, cycleId }: { brandId: string; cycleId: st
             brandId={brandId}
             cycleId={cycle.id}
             onApproved={refresh}
-            onReturned={() => navigate(`/brands/${brandId}/campaigns/new`)}
+            onReturned={() => refresh(1)}
             onOpenWorkbench={() => navigate(`/brands/${brandId}/workbench`)}
             onFallback={() => setProposalFallback(true)}
           />

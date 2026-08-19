@@ -117,6 +117,7 @@ export interface Cycle {
   pacing_reason: string;
   archived: boolean;
   daily_below_floor: boolean;
+  plan_version: number;
 }
 
 export interface CycleDetail {
