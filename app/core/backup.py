@@ -12,9 +12,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from app.core.db import get_db_path
+from app.core.db import REPO_ROOT, get_db_path
 
-DEFAULT_BACKUP_DIR = Path("C:/Users/User/Desktop/marketing/backups")
+DEFAULT_BACKUP_DIR = REPO_ROOT / "backups"
 KEEP = 30
 
 

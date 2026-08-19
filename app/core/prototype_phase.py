@@ -39,12 +39,10 @@ EXEMPTIONS = [
                   "重啟即失。待決：要不要把進度落地到 DB。",
     },
     {
-        "item": "四處寫死絕對路徑",
-        "status": "部分緩解：DB 路徑（BRAND_OS_DB）、備份目錄（BRAND_OS_BACKUP_DIR）、"
-                  "上傳目錄（BRAND_OS_UPLOADS）都已有環境變數可覆蓋，"
-                  "但硬編碼的預設值本身還在 app/core/db.py／app/core/backup.py／app/main.py，"
-                  "沒有環境變數時仍會落回 C:/Users/User/Desktop/marketing/...。"
-                  "待決：要不要拔掉硬編碼預設值、改成沒設環境變數就報錯。",
+        "item": "專案資料路徑",
+        "status": "DB、備份與上傳目錄的預設值都由模組位置推導專案根，"
+                  "BRAND_OS_DB／BRAND_OS_BACKUP_DIR／BRAND_OS_UPLOADS 仍可覆寫。"
+                  "待決：原型結束後要不要改成強制由部署環境明確指定資料目錄。",
     },
 ]
 

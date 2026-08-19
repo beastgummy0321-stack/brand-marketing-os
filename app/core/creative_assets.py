@@ -17,13 +17,12 @@ import shutil
 from pathlib import Path
 
 from app.core import settings
+from app.core.db import REPO_ROOT
 
 SETTING_KEY = "creative_asset_root"
 
-# 絕對路徑寫死，比照 app/core/db.py:19 的 DEFAULT_DB_PATH 與 app/core/backup.py:17 的
-# DEFAULT_BACKUP_DIR。不用相對路徑：相對路徑會跟著工作目錄跑，os.startfile() 開出來的
-# 視窗一旦指到別的地方，使用者就會把圖倒進一個系統看不到的資料夾。
-DEFAULT_ROOT = Path("C:/Users/User/Desktop/marketing/data/creative")
+# 預設根目錄以模組位置推導專案根，而不是工作目錄或舊電腦的絕對路徑。
+DEFAULT_ROOT = REPO_ROOT / "data" / "creative"
 
 
 def get_root(conn=None) -> Path:

@@ -19,7 +19,7 @@ import re
 from pathlib import Path
 from typing import Optional
 
-from app.core.db import new_id
+from app.core.db import REPO_ROOT, new_id
 from app.intake import repository as ir
 from app.intake import script
 
@@ -366,7 +366,7 @@ def touch(draft: dict, path: str, step: int, conn=None) -> None:
 # 暫存區留在記憶體沒關係——它只活在「表單還沒送成功」的幾分鐘內，不屬於草稿續接範圍。
 # ---------------------------------------------------------------------------
 
-DEFAULT_UPLOAD_DIR = Path("C:/Users/User/Desktop/marketing/data/uploads/intake")
+DEFAULT_UPLOAD_DIR = REPO_ROOT / "data" / "uploads" / "intake"
 
 _UNSAFE_FILENAME_CHARS = re.compile(r"[^A-Za-z0-9._-]+")
 

@@ -16,7 +16,8 @@ from pathlib import Path
 from typing import Optional
 
 APP_DIR = Path(__file__).resolve().parent.parent  # .../app
-DEFAULT_DB_PATH = Path("C:/Users/User/Desktop/marketing/data/app.db")
+REPO_ROOT = APP_DIR.parent
+DEFAULT_DB_PATH = REPO_ROOT / "data" / "app.db"
 
 _CROCKFORD32 = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 

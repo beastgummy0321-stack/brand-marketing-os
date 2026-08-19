@@ -38,7 +38,7 @@ from app.core import cleanup
 from app.core import creative_assets
 from app.core import interrupts as core_interrupts
 from app.core import prototype_phase as core_prototype_phase
-from app.core.db import new_id
+from app.core.db import REPO_ROOT, new_id
 from app.intake import state as intake_state
 from app.llm import context_compiler, gateway, providers
 from app.shared import web
@@ -1755,7 +1755,7 @@ _UNSAFE_ASSET_FILENAME_CHARS = re.compile(r"[^A-Za-z0-9._-]+")
 
 def _assets_upload_dir() -> Path:
     raw = os.environ.get("BRAND_OS_UPLOADS")
-    base = Path(raw) if raw else Path("C:/Users/User/Desktop/marketing/data/uploads")
+    base = Path(raw) if raw else REPO_ROOT / "data" / "uploads"
     return base / "assets"
 
 
