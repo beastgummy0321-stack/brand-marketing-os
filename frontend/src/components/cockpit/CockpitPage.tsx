@@ -10,6 +10,7 @@ import { KpiCard } from "@/components/cockpit/KpiCard";
 import { LastSyncBadge } from "@/components/cockpit/LastSyncBadge";
 import { PerformancePins } from "@/components/cockpit/pins/PinnedViewsSection";
 import { WeeklyBattleSection } from "@/components/cockpit/WeeklyBattleSection";
+import { CockpitExtrasSection } from "@/components/cockpit/CockpitExtrasSection";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { EmptyState } from "@/components/layout/EmptyState";
 import { fetchCockpit, triggerImmediateSync, type CockpitData } from "@/lib/api";
@@ -140,14 +141,7 @@ export function CockpitPage({ brandId }: { brandId: string }) {
           <CockpitChart chart={data.chart} />
         </section>
 
-        <div className="grid grid-cols-2 gap-4">
-          <div aria-disabled="true" className="rounded-[var(--radius-xl)] border border-dashed border-border bg-muted/50 p-6 text-center text-sm text-muted-foreground">
-            長期系統（T3 開放）
-          </div>
-          <div aria-disabled="true" className="rounded-[var(--radius-xl)] border border-dashed border-border bg-muted/50 p-6 text-center text-sm text-muted-foreground">
-            任務卡（T3 開放）
-          </div>
-        </div>
+        <CockpitExtrasSection brandId={brandId} />
 
         <PerformancePins brandId={brandId} />
 

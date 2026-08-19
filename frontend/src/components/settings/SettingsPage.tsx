@@ -12,6 +12,7 @@ import { ModelSection } from "./ModelSection";
 import { AutonomySection } from "./AutonomySection";
 import { RuleCardsSection } from "./RuleCardsSection";
 import { TrackingHealthEntrySection } from "./TrackingHealthEntrySection";
+import { StylePreferenceSection } from "./StylePreferenceSection";
 
 type LoadState =
   | { status: "loading" }
@@ -71,6 +72,7 @@ export function SettingsPage() {
         <AssetsSection data={data} onSaved={load} />
         <AutonomySection />
         <TrackingHealthEntrySection />
+        <StylePreferenceSection />
         <RuleCardsSection />
       </div>
     );

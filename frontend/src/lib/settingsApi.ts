@@ -123,6 +123,31 @@ export function saveBudget(intakeBudget: number): Promise<void> {
   return postSettings("budget", { intake_budget: intakeBudget });
 }
 
+export async function fetchStylePreference(brandId: string): Promise<{ text: string }> {
+  const res = await fetch(`/api/settings/brands/${encodeURIComponent(brandId)}/style-preference`);
+  if (!res.ok) throw new Error(`風格偏好讀取失敗（狀態碼 ${res.status}）`);
+  return res.json() as Promise<{ text: string }>;
+}
+
+export async function saveStylePreference(brandId: string, text: string): Promise<{ text: string }> {
+  const res = await fetch(`/api/settings/brands/${encodeURIComponent(brandId)}/style-preference`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ text }),
+  });
+  if (!res.ok) {
+    let message = `儲存失敗（狀態碼 ${res.status}）`;
+    try {
+      const body = (await res.json()) as { error?: string };
+      if (body.error) message = body.error;
+    } catch {
+      // 回應不是 JSON，用預設訊息。
+    }
+    throw new Error(message);
+  }
+  return res.json() as Promise<{ text: string }>;
+}
+
 /** 品牌選擇器（S15.29）：不新開端點，沿用跨品牌總覽既有回應，只取 brand_id／brand_name
  * 兩欄（見契約「不用新增」節）。 */
 export async function fetchBrandOptions(): Promise<BrandOption[]> {
