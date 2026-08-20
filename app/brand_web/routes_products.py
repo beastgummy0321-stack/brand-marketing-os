@@ -170,6 +170,22 @@ _research_jobs = background_job.JobRegistry()
 _RESEARCH_USUAL_RANGE = "30 到 60 秒"
 
 
+def active_jobs() -> list[dict]:
+    """回傳進行中的產品調研工作，供 dashboard 聚合；不洩漏 registry 狀態。"""
+    return [
+        {
+            "brand_id": state["brand_id"],
+            "kind": "product_research",
+            "status": state["status"],
+            "stage": state.get("stage") or "",
+            "started_at": state.get("started_at") or "",
+            "action_url": f"/brands/{state['brand_id']}/products/{product_id}",
+        }
+        for product_id, state in _research_jobs.items()
+        if state.get("status") in ("running", "waiting") and state.get("brand_id")
+    ]
+
+
 def _research_state(product_id: str) -> dict:
     return _research_jobs.get(product_id, {
         "status": "done", "stage": "", "started_at": datetime.now(timezone.utc).isoformat(),
