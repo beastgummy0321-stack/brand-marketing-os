@@ -65,11 +65,21 @@ class _BaseHubTest(unittest.TestCase):
         self.bid = self.brand["id"]
 
     def _open_cycle(self, **overrides):
-        data = {"slider_index": "5", "objective": "sales"}
-        data.update(overrides)
-        resp = self.client.post(f"/brands/{self.bid}/ads/new", data=data,
-                                follow_redirects=False)
-        return resp.headers["location"].split("/ads/")[1].split("?")[0]
+        start_date = overrides.get("start_date")
+        if start_date:
+            cycle = ads_repo.create_cycle(
+                main.conn, self.bid, product_ids=[], pain_value=10000,
+                objective=overrides.get("objective", "sales"), actor=ACTOR,
+                start_date=start_date,
+            )
+            return cycle["id"]
+        resp = self.client.post(
+            f"/api/campaigns/{self.bid}",
+            json={"product_ids": [], "budget": 10000,
+                  "objective": overrides.get("objective", "sales")},
+        )
+        self.assertEqual(resp.status_code, 200)
+        return resp.json()["cycle_id"]
 
     def _judge_closed(self, cycle_id, *, spend=10000, impressions=20000, clicks=400,
                       conversions=5, revenue=None):
@@ -203,20 +213,20 @@ class HistoryPageTest(_BaseHubTest):
         label = ads_repo.get_cycle(main.conn, self.bid, cycle_id)
         label = f"{label['start_date']} ～ {label['end_date']}"
 
-        self.client.post(f"/brands/{self.bid}/ads/{cycle_id}/archive", follow_redirects=False)
+        self.client.post(f"/api/campaigns/brands/{self.bid}/{cycle_id}/archive")
         self.assertEqual(ads_repo.get_cycle(main.conn, self.bid, cycle_id)["archived"], 1)
         history = self.client.get(f"/brands/{self.bid}/ads/history")
         self.assertIn("已封存檔期（1）", history.text)
 
-        self.client.post(f"/brands/{self.bid}/ads/{cycle_id}/archive", follow_redirects=False)
+        self.client.post(f"/api/campaigns/brands/{self.bid}/{cycle_id}/archive")
         self.assertEqual(ads_repo.get_cycle(main.conn, self.bid, cycle_id)["archived"], 0)
         history = self.client.get(f"/brands/{self.bid}/ads/history")
         self.assertIn("進行中（1）", history.text)
 
-        self.client.post(f"/brands/{self.bid}/ads/{cycle_id}/archive", follow_redirects=False)
-        resp = self.client.post(f"/brands/{self.bid}/ads/{cycle_id}/delete",
-                                data={"confirm_name": label}, follow_redirects=False)
-        self.assertEqual(resp.status_code, 303)
+        self.client.post(f"/api/campaigns/brands/{self.bid}/{cycle_id}/archive")
+        resp = self.client.post(f"/api/campaigns/brands/{self.bid}/{cycle_id}/delete",
+                                json={"confirm_name": label})
+        self.assertEqual(resp.status_code, 204)
         self.assertIsNone(ads_repo.get_cycle(main.conn, self.bid, cycle_id))
 
     def test_capacity_script_passes_on_history_page(self):

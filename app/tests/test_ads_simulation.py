@@ -48,14 +48,25 @@ class _BaseSimTest(unittest.TestCase):
         self.bid = self.brand["id"]
 
     def _open(self, mode="simulation", amount="10000"):
-        resp = self.client.post(f"/brands/{self.bid}/ads/new",
-                                data={"custom_amount": amount, "objective": "sales",
-                                      "mode": mode},
-                                follow_redirects=False)
-        return resp.headers["location"].split("/ads/")[1].split("?")[0]
+        resp = self.client.post(f"/api/campaigns/{self.bid}",
+                                json={"budget": float(amount), "objective": "sales",
+                                      "simulate": mode == "simulation"})
+        return resp.json()["cycle_id"]
 
 
 class SimulationEntryTest(_BaseSimTest):
+    def test_user_can_skip_straight_to_a_real_cycle(self):
+        """選「直接開真的」就不是模擬期。（第一期真檔期會被標成校準期，見票 15。）"""
+        cycle_id = self._open(mode="real")
+        self.assertNotEqual(ads_repo.get_cycle(main.conn, self.bid, cycle_id)["phase"],
+                            "simulation")
+
+    def test_cannot_sneak_a_simulation_after_the_first_cycle(self):
+        """已經跑過真檔期的品牌不該再開出模擬期，即使表單被動手腳。"""
+        self._open(mode="real")
+        cycle_id = self._open(mode="simulation")
+        self.assertEqual(ads_repo.get_cycle(main.conn, self.bid, cycle_id)["phase"], "normal")
+
     def test_first_time_defaults_to_simulation(self):
         page = self.client.get(f"/brands/{self.bid}/ads/new")
         self.assertIn("先跑一次模擬", page.text)
@@ -68,12 +79,6 @@ class SimulationEntryTest(_BaseSimTest):
         page = self.client.get(f"/brands/{self.bid}/ads/new")
         self.assertNotIn("先跑一次模擬", page.text)
 
-    def test_user_can_skip_straight_to_a_real_cycle(self):
-        """選「直接開真的」就不是模擬期。（第一期真檔期會被標成校準期，見票 15。）"""
-        cycle_id = self._open(mode="real")
-        self.assertNotEqual(ads_repo.get_cycle(main.conn, self.bid, cycle_id)["phase"],
-                            "simulation")
-
     def test_simulation_cycle_is_marked(self):
         cycle_id = self._open()
         self.assertEqual(ads_repo.get_cycle(main.conn, self.bid, cycle_id)["phase"],
@@ -82,11 +87,6 @@ class SimulationEntryTest(_BaseSimTest):
         self.assertIn("這是一期模擬檔期", page.text)
         self.assertIn("不會實際投放", page.text)
 
-    def test_cannot_sneak_a_simulation_after_the_first_cycle(self):
-        """已經跑過真檔期的品牌不該再開出模擬期，即使表單被動手腳。"""
-        self._open(mode="real")
-        cycle_id = self._open(mode="simulation")
-        self.assertEqual(ads_repo.get_cycle(main.conn, self.bid, cycle_id)["phase"], "normal")
 
 
 class SimulatedNumbersTest(_BaseSimTest):

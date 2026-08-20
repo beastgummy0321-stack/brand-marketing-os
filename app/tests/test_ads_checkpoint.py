@@ -66,11 +66,10 @@ class _Base(unittest.TestCase):
                                        confirmed_by=ACTOR, actor=ACTOR)
 
     def _live_cycle(self, start_offset_days=-10):
-        resp = self.client.post(f"/brands/{self.bid}/ads/new",
-                                data={"product_ids": [self.product],
-                                      "custom_amount": "10000", "objective": "sales"},
-                                follow_redirects=False)
-        cycle_id = resp.headers["location"].split("/ads/")[1].split("?")[0]
+        resp = self.client.post(f"/api/campaigns/{self.bid}",
+                                json={"product_ids": [self.product], "budget": 10000,
+                                      "objective": "sales"})
+        cycle_id = resp.json()["cycle_id"]
         start = (date.today() + timedelta(days=start_offset_days)).isoformat()
         end = (date.today() + timedelta(days=start_offset_days + 13)).isoformat()
         main.conn.execute(
@@ -177,11 +176,6 @@ class FatigueTest(_Base):
 class FlowTest(_Base):
     """驗收：提醒卡觸發 → 當場匯入 CSV → 立即跑判讀一條龍可走通。"""
 
-    def test_reminder_links_into_checkpoint_page(self):
-        cycle_id = self._live_cycle(start_offset_days=-4)
-        page = self.client.get(f"/brands/{self.bid}/ads/{cycle_id}")
-        self.assertIn(f"/app/brands/{self.bid}/campaigns/{cycle_id}", page.text)
-
     def test_full_flow_import_then_checkpoint(self):
         cycle_id = self._live_cycle(start_offset_days=-8)
         page = self.client.get(f"/brands/{self.bid}/ads/{cycle_id}/checkpoint/day7")
@@ -204,6 +198,12 @@ class FlowTest(_Base):
                                 data={"csv_text": "not,a,valid,performance,file\n1,2,3,4,5\n"},
                                 follow_redirects=True)
         self.assertIn("花費", resp.text)
+
+    def test_reminder_links_into_checkpoint_page(self):
+        cycle_id = self._live_cycle(start_offset_days=-4)
+        page = self.client.get(f"/brands/{self.bid}/ads/{cycle_id}")
+        self.assertIn(f"/app/brands/{self.bid}/campaigns/{cycle_id}", page.text)
+
 
 
 class EventBasedCheckpointTest(_Base):

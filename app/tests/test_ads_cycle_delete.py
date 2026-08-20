@@ -52,11 +52,10 @@ class _BaseCycleDeleteTest(unittest.TestCase):
 
     def _open_cycle(self):
         resp = self.client.post(
-            f"/brands/{self.bid}/ads/new",
-            data={"product_ids": [self.product_a], "slider_index": "5", "objective": "sales"},
-            follow_redirects=False,
+            f"/api/campaigns/{self.bid}",
+            json={"product_ids": [self.product_a], "budget": 10000, "objective": "sales"},
         )
-        cycle_id = resp.headers["location"].split("/ads/")[1].split("?")[0]
+        cycle_id = resp.json()["cycle_id"]
         return cycle_id
 
     def _cycle_label(self, cycle_id):
@@ -365,12 +364,12 @@ class RepositoryCascadeDeleteTest(_BaseCycleDeleteTest):
 class CycleArchiveRestoreRouteTest(_BaseCycleDeleteTest):
     def test_archive_then_restore_via_route(self):
         cycle_id = self._open_cycle()
-        resp = self.client.post(f"/brands/{self.bid}/ads/{cycle_id}/archive",
+        resp = self.client.post(f"/api/campaigns/brands/{self.bid}/{cycle_id}/archive",
                                 follow_redirects=False)
-        self.assertEqual(resp.status_code, 303)
+        self.assertEqual(resp.status_code, 204)
         self.assertEqual(ads_repo.get_cycle(main.conn, self.bid, cycle_id)["archived"], 1)
 
-        self.client.post(f"/brands/{self.bid}/ads/{cycle_id}/archive", follow_redirects=False)
+        self.client.post(f"/api/campaigns/brands/{self.bid}/{cycle_id}/archive", follow_redirects=False)
         self.assertEqual(ads_repo.get_cycle(main.conn, self.bid, cycle_id)["archived"], 0)
 
     def test_archived_cycle_hidden_from_default_list_shown_when_toggled(self):
@@ -378,7 +377,7 @@ class CycleArchiveRestoreRouteTest(_BaseCycleDeleteTest):
         不再列全部檔期），這裡改看歷期戰績頁，收合區行為（預設不顯示、可切換）不變。"""
         cycle_id = self._open_cycle()
         label = self._cycle_label(cycle_id)
-        self.client.post(f"/brands/{self.bid}/ads/{cycle_id}/archive", follow_redirects=False)
+        self.client.post(f"/api/campaigns/brands/{self.bid}/{cycle_id}/archive", follow_redirects=False)
 
         history = self.client.get(f"/brands/{self.bid}/ads/history")
         self.assertIn("已封存檔期", history.text)
@@ -393,6 +392,51 @@ class CycleArchiveRestoreRouteTest(_BaseCycleDeleteTest):
 
 
 class CycleDeleteRouteTest(_BaseCycleDeleteTest):
+    def test_wrong_name_does_not_delete(self):
+        cycle_id = self._open_cycle()
+        self.client.post(f"/api/campaigns/brands/{self.bid}/{cycle_id}/archive", follow_redirects=False)
+
+        resp = self.client.post(f"/api/campaigns/brands/{self.bid}/{cycle_id}/delete",
+                                json={"confirm_name": "打錯了"}, follow_redirects=False)
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("跟上面顯示的不一樣", resp.text)
+        self.assertIsNotNone(ads_repo.get_cycle(main.conn, self.bid, cycle_id))
+
+    def test_correct_name_deletes_and_snapshots_backup_no_orphans(self):
+        cycle_id = self._open_cycle()
+        self._seed_cascade_rows(cycle_id)
+        label = self._cycle_label(cycle_id)
+        self.client.post(f"/api/campaigns/brands/{self.bid}/{cycle_id}/archive", follow_redirects=False)
+
+        backup_dir = Path(os.environ["BRAND_OS_BACKUP_DIR"])
+        before_snapshots = list(backup_dir.glob(f"before-delete-{cycle_id}-*.db")) \
+            if backup_dir.exists() else []
+        self.assertEqual(before_snapshots, [])
+
+        resp = self.client.post(f"/api/campaigns/brands/{self.bid}/{cycle_id}/delete",
+                                json={"confirm_name": label}, follow_redirects=False)
+        self.assertEqual(resp.status_code, 204)
+        self.assertIsNone(ads_repo.get_cycle(main.conn, self.bid, cycle_id))
+        self.assertEqual(set(self._cascade_row_counts(cycle_id).values()), {0})
+
+        after_snapshots = list(backup_dir.glob(f"before-delete-{cycle_id}-*.db"))
+        self.assertEqual(len(after_snapshots), 1)
+
+        row = main.conn.execute(
+            "SELECT * FROM audit_log WHERE entity_type = 'campaign_cycle' AND action = 'delete' "
+            "AND entity_id = ?", (cycle_id,)).fetchone()
+        self.assertIsNotNone(row)
+
+    def test_delete_page_lists_connected_data(self):
+        cycle_id = self._open_cycle()
+        self._seed_cascade_rows(cycle_id)
+        self.client.post(f"/api/campaigns/brands/{self.bid}/{cycle_id}/archive")
+
+        page = self.client.get(f"/brands/{self.bid}/ads/{cycle_id}/delete")
+        self.assertEqual(page.status_code, 200)
+        self.assertIn("成效判讀", page.text)
+        self.assertIn("廣告素材", page.text)
+
     def test_delete_page_blocked_while_active(self):
         cycle_id = self._open_cycle()
         resp = self.client.get(f"/brands/{self.bid}/ads/{cycle_id}/delete",
@@ -405,50 +449,7 @@ class CycleDeleteRouteTest(_BaseCycleDeleteTest):
         self.assertEqual(resp.status_code, 303)
         self.assertIsNotNone(ads_repo.get_cycle(main.conn, self.bid, cycle_id))
 
-    def test_wrong_name_does_not_delete(self):
-        cycle_id = self._open_cycle()
-        self.client.post(f"/brands/{self.bid}/ads/{cycle_id}/archive", follow_redirects=False)
 
-        resp = self.client.post(f"/brands/{self.bid}/ads/{cycle_id}/delete",
-                                data={"confirm_name": "打錯了"}, follow_redirects=False)
-        self.assertEqual(resp.status_code, 400)
-        self.assertIn("跟上面顯示的不一樣", resp.text)
-        self.assertIsNotNone(ads_repo.get_cycle(main.conn, self.bid, cycle_id))
-
-    def test_delete_page_lists_connected_data(self):
-        cycle_id = self._open_cycle()
-        self._seed_cascade_rows(cycle_id)
-        self.client.post(f"/brands/{self.bid}/ads/{cycle_id}/archive", follow_redirects=False)
-
-        page = self.client.get(f"/brands/{self.bid}/ads/{cycle_id}/delete")
-        self.assertEqual(page.status_code, 200)
-        self.assertIn("成效判讀", page.text)
-        self.assertIn("廣告素材", page.text)
-
-    def test_correct_name_deletes_and_snapshots_backup_no_orphans(self):
-        cycle_id = self._open_cycle()
-        self._seed_cascade_rows(cycle_id)
-        label = self._cycle_label(cycle_id)
-        self.client.post(f"/brands/{self.bid}/ads/{cycle_id}/archive", follow_redirects=False)
-
-        backup_dir = Path(os.environ["BRAND_OS_BACKUP_DIR"])
-        before_snapshots = list(backup_dir.glob(f"before-delete-{cycle_id}-*.db")) \
-            if backup_dir.exists() else []
-        self.assertEqual(before_snapshots, [])
-
-        resp = self.client.post(f"/brands/{self.bid}/ads/{cycle_id}/delete",
-                                data={"confirm_name": label}, follow_redirects=False)
-        self.assertEqual(resp.status_code, 303)
-        self.assertIsNone(ads_repo.get_cycle(main.conn, self.bid, cycle_id))
-        self.assertEqual(set(self._cascade_row_counts(cycle_id).values()), {0})
-
-        after_snapshots = list(backup_dir.glob(f"before-delete-{cycle_id}-*.db"))
-        self.assertEqual(len(after_snapshots), 1)
-
-        row = main.conn.execute(
-            "SELECT * FROM audit_log WHERE entity_type = 'campaign_cycle' AND action = 'delete' "
-            "AND entity_id = ?", (cycle_id,)).fetchone()
-        self.assertIsNotNone(row)
 
 
 if __name__ == "__main__":

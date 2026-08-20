@@ -61,17 +61,23 @@ class _BaseTest(unittest.TestCase):
         self.bid = self.brand["id"]
 
     def _open_cycle(self, **overrides):
-        data = {"slider_index": "5", "objective": "sales"}
+        data = {"budget": 10000, "objective": "sales"}
         data.update(overrides)
-        resp = self.client.post(f"/brands/{self.bid}/ads/new", data=data,
-                                follow_redirects=False)
-        return resp.headers["location"].split("/ads/")[1].split("?")[0]
+        data.pop("slider_index", None)
+        if "custom_amount" in data:
+            data["budget"] = float(data.pop("custom_amount"))
+        resp = self.client.post(f"/api/campaigns/{self.bid}", json=data)
+        self.assertEqual(resp.status_code, 200)
+        return resp.json()["cycle_id"]
 
     def _hub(self):
         return self.client.get(f"/brands/{self.bid}/ads")
 
 
+
 class ConsoleLayoutTest(_BaseTest):
+    pass
+
     def test_extends_console_sidebar_not_old_header(self):
         resp = self._hub()
         self.assertIn('class="console-sidebar"', resp.text)
@@ -164,7 +170,3 @@ class InboxBadgeTest(_BaseTest):
     def test_no_badge_when_inbox_empty(self):
         resp = self._hub()
         self.assertNotIn("badge badge-warn", resp.text)
-
-
-if __name__ == "__main__":
-    unittest.main()

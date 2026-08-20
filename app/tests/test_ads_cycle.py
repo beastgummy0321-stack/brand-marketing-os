@@ -56,8 +56,23 @@ class _BaseAdsTest(unittest.TestCase):
         data = {"product_ids": [self.product_a, self.product_b], "slider_index": "5",
                 "objective": "sales"}
         data.update(overrides)
-        return self.client.post(f"/brands/{self.bid}/ads/new", data=data,
-                                follow_redirects=False)
+        amount = data.get("custom_amount") or 10000
+        try:
+            amount = float(amount)
+            if amount.is_integer():
+                amount = int(amount)
+        except (TypeError, ValueError):
+            pass
+        duration_days = data.get("duration_days")
+        if duration_days:
+            duration_days = int(duration_days)
+        return self.client.post(
+            f"/api/campaigns/{self.bid}",
+            json={"product_ids": data["product_ids"], "budget": amount,
+                  "objective": data["objective"], "duration_days": duration_days,
+                  "background": data.get("background"),
+                  "simulate": data.get("mode") == "simulation"},
+        )
 
 
 class AdsHomeTest(_BaseAdsTest):
@@ -157,14 +172,14 @@ class AdsNewPageTest(_BaseAdsTest):
         resp = self.client.get(f"/brands/{self.bid}/ads/new")
         self.assertIn("還沒有可用的成本售價", resp.text)
         self.assertIn(f"/app/brands/{self.bid}/products", resp.text)
-        self.assertEqual(self._open_cycle().status_code, 303)
+        self.assertEqual(self._open_cycle().status_code, 200)
 
 
 class CreateCycleTest(_BaseAdsTest):
     def test_creates_cycle_with_derived_plan(self):
         resp = self._open_cycle(slider_index="5")  # 10,000
-        self.assertEqual(resp.status_code, 303)
-        cycle_id = resp.headers["location"].split("/ads/")[1].split("?")[0]
+        self.assertEqual(resp.status_code, 200)
+        cycle_id = resp.json()["cycle_id"]
         cycle = ads_repo.get_cycle(main.conn, self.bid, cycle_id)
         self.assertEqual(cycle["budget"], 10000)
         self.assertEqual(cycle["status"], "PLANNING")
@@ -174,14 +189,14 @@ class CreateCycleTest(_BaseAdsTest):
 
     def test_custom_amount_overrides_slider(self):
         resp = self._open_cycle(slider_index="0", custom_amount="25000")
-        cycle_id = resp.headers["location"].split("/ads/")[1].split("?")[0]
+        cycle_id = resp.json()["cycle_id"]
         self.assertEqual(ads_repo.get_cycle(main.conn, self.bid, cycle_id)["budget"], 25000)
 
     def test_budget_split_follows_margin(self):
         self._add_economics(self.product_a, 1000, 400)   # 毛利 600
         self._add_economics(self.product_b, 500, 200)    # 毛利 300
         resp = self._open_cycle(custom_amount="9000")
-        cycle_id = resp.headers["location"].split("/ads/")[1].split("?")[0]
+        cycle_id = resp.json()["cycle_id"]
         rows = {r["product_id"]: r for r in
                 ads_repo.list_cycle_products(main.conn, self.bid, cycle_id)}
         self.assertEqual(rows[self.product_a]["allocated_budget"], 6000)
@@ -191,7 +206,7 @@ class CreateCycleTest(_BaseAdsTest):
     def test_missing_economics_flagged_but_still_allocated(self):
         self._add_economics(self.product_a, 1000, 400)
         resp = self._open_cycle(custom_amount="10000")
-        cycle_id = resp.headers["location"].split("/ads/")[1].split("?")[0]
+        cycle_id = resp.json()["cycle_id"]
         rows = {r["product_id"]: r for r in
                 ads_repo.list_cycle_products(main.conn, self.bid, cycle_id)}
         self.assertEqual(rows[self.product_b]["economics_missing"], 1)
@@ -201,16 +216,17 @@ class CreateCycleTest(_BaseAdsTest):
 
     def test_allocation_sums_to_total(self):
         resp = self._open_cycle(custom_amount="9999.99")
-        cycle_id = resp.headers["location"].split("/ads/")[1].split("?")[0]
+        cycle_id = resp.json()["cycle_id"]
         rows = ads_repo.list_cycle_products(main.conn, self.bid, cycle_id)
         self.assertAlmostEqual(sum(r["allocated_budget"] for r in rows), 9999.99, places=2)
 
     def test_no_products_selected_is_brand_scope(self):
-        resp = self.client.post(f"/brands/{self.bid}/ads/new",
-                                data={"slider_index": "3", "objective": "awareness"},
-                                follow_redirects=False)
-        self.assertEqual(resp.status_code, 303)
-        cycle_id = resp.headers["location"].split("/ads/")[1].split("?")[0]
+        resp = self.client.post(
+            f"/api/campaigns/{self.bid}",
+            json={"product_ids": [], "budget": 5000, "objective": "awareness"},
+        )
+        self.assertEqual(resp.status_code, 200)
+        cycle_id = resp.json()["cycle_id"]
         cycle = ads_repo.get_cycle(main.conn, self.bid, cycle_id)
         self.assertEqual(json.loads(cycle["product_scope_json"]), [])
         # D線票3（#45）：產品範圍這類per-檔期細節搬到歷期戰績頁，hub 卡片不再列出
@@ -220,7 +236,7 @@ class CreateCycleTest(_BaseAdsTest):
         """票 3：自訂天數要連動日預算（單純除法，不套自動縮短天數的演算法）。"""
         import datetime
         resp = self._open_cycle(custom_amount="10000", duration_days="20")
-        cycle_id = resp.headers["location"].split("/ads/")[1].split("?")[0]
+        cycle_id = resp.json()["cycle_id"]
         cycle = ads_repo.get_cycle(main.conn, self.bid, cycle_id)
         plan = ads_repo.derived_plan(cycle)
         self.assertEqual(plan["duration_days"], 20)
@@ -231,16 +247,31 @@ class CreateCycleTest(_BaseAdsTest):
 
     def test_duration_out_of_range_is_rejected(self):
         for value in ("6", "31", "abc"):
-            resp = self._open_cycle(duration_days=value)
+            resp = self.client.post(
+                f"/brands/{self.bid}/ads/new",
+                data={"product_ids": [self.product_a, self.product_b], "slider_index": "5",
+                      "objective": "sales", "duration_days": value},
+                follow_redirects=False,
+            )
             self.assertEqual(resp.status_code, 400)
 
     def test_invalid_start_date_is_rejected(self):
-        resp = self._open_cycle(start_date="not-a-date")
+        resp = self.client.post(
+            f"/brands/{self.bid}/ads/new",
+            data={"product_ids": [self.product_a, self.product_b], "slider_index": "5",
+                  "objective": "sales", "start_date": "not-a-date"},
+            follow_redirects=False,
+        )
         self.assertEqual(resp.status_code, 400)
         self.assertIn("開始日期格式不對", resp.text)
 
     def test_custom_start_date_is_used(self):
-        resp = self._open_cycle(start_date="2026-09-01")
+        resp = self.client.post(
+            f"/brands/{self.bid}/ads/new",
+            data={"product_ids": [self.product_a, self.product_b], "slider_index": "5",
+                  "objective": "sales", "start_date": "2026-09-01"},
+            follow_redirects=False,
+        )
         cycle_id = resp.headers["location"].split("/ads/")[1].split("?")[0]
         cycle = ads_repo.get_cycle(main.conn, self.bid, cycle_id)
         self.assertEqual(cycle["start_date"], "2026-09-01")
@@ -248,13 +279,13 @@ class CreateCycleTest(_BaseAdsTest):
     def test_background_is_saved_and_readable(self):
         """票 3：背景欄落庫，後續計畫生成讀得到。"""
         resp = self._open_cycle(background="七月有一波電商大促，同業都在打折。")
-        cycle_id = resp.headers["location"].split("/ads/")[1].split("?")[0]
+        cycle_id = resp.json()["cycle_id"]
         cycle = ads_repo.get_cycle(main.conn, self.bid, cycle_id)
         self.assertEqual(cycle["background"], "七月有一波電商大促，同業都在打折。")
 
     def test_background_left_blank_is_null(self):
         resp = self._open_cycle()
-        cycle_id = resp.headers["location"].split("/ads/")[1].split("?")[0]
+        cycle_id = resp.json()["cycle_id"]
         cycle = ads_repo.get_cycle(main.conn, self.bid, cycle_id)
         self.assertIsNone(cycle["background"])
 
@@ -272,9 +303,8 @@ class CreateCycleTest(_BaseAdsTest):
         """ADR 0004：單機單人不再具名，沒設操作人 cookie 一樣能完成操作，不再被攔下。"""
         self.client.cookies.clear()
         resp = self._open_cycle()
-        self.assertEqual(resp.status_code, 303)
-        self.assertNotIn("/settings/operator", resp.headers["location"])
-        cycle_id = resp.headers["location"].split("/ads/")[1].split("?")[0]
+        self.assertEqual(resp.status_code, 200)
+        cycle_id = resp.json()["cycle_id"]
         row = main.conn.execute(
             "SELECT * FROM audit_log WHERE entity_type = 'campaign_cycle' AND entity_id = ?",
             (cycle_id,),
@@ -284,7 +314,7 @@ class CreateCycleTest(_BaseAdsTest):
 
     def test_audit_log_written(self):
         resp = self._open_cycle()
-        cycle_id = resp.headers["location"].split("/ads/")[1].split("?")[0]
+        cycle_id = resp.json()["cycle_id"]
         row = main.conn.execute(
             "SELECT * FROM audit_log WHERE entity_type = 'campaign_cycle' AND entity_id = ?",
             (cycle_id,),
@@ -298,7 +328,7 @@ class PacingCurveTest(_BaseAdsTest):
 
     def _create(self, **overrides):
         resp = self._open_cycle(**overrides)
-        return resp.headers["location"].split("/ads/")[1].split("?")[0]
+        return resp.json()["cycle_id"]
 
     def test_long_duration_defaults_to_continuous_with_daily_budgets(self):
         """開期表單目前還沒有優惠選擇欄位，has_offer 固定 False，天數夠長時仍是連續。"""
@@ -355,7 +385,7 @@ class PacingCurveTest(_BaseAdsTest):
 class AdsBrandIsolationTest(_BaseAdsTest):
     def test_other_brand_cannot_see_or_open_cycle(self):
         resp = self._open_cycle()
-        cycle_id = resp.headers["location"].split("/ads/")[1].split("?")[0]
+        cycle_id = resp.json()["cycle_id"]
 
         other = bi_repo.create_brand(main.conn, name="虛構隔壁烘焙", client_name=None, actor=ACTOR)
         other_id = other["id"]

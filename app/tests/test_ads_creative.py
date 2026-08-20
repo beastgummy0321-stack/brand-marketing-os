@@ -151,10 +151,9 @@ class _BaseCreativeTest(unittest.TestCase):
         bi_repo.create_brand_fact(main.conn, self.bid, actor=ACTOR, fact_type="positioning",
                                   label="定位", value="單一產區濾掛咖啡。",
                                   status="confirmed", confirmed_by=ACTOR)
-        resp = self.client.post(f"/brands/{self.bid}/ads/new",
-                                data={"slider_index": "5", "objective": "sales"},
-                                follow_redirects=False)
-        self.cycle_id = resp.headers["location"].split("/ads/")[1].split("?")[0]
+        resp = self.client.post(f"/api/campaigns/{self.bid}",
+                                json={"product_ids": [], "budget": 10000, "objective": "sales"})
+        self.cycle_id = resp.json()["cycle_id"]
 
         self._orig_plan_provider = ads_plan.PROVIDER
         self._orig_creative_provider = ads_creative.PROVIDER
@@ -322,10 +321,9 @@ class GenerationTest(_BaseCreativeTest):
 
     def test_requires_approved_plan(self):
         """計畫還沒確認就不該有素材——關卡順序不能繞過。"""
-        resp = self.client.post(f"/brands/{self.bid}/ads/new",
-                                data={"slider_index": "3", "objective": "awareness"},
-                                follow_redirects=False)
-        other = resp.headers["location"].split("/ads/")[1].split("?")[0]
+        resp = self.client.post(f"/api/campaigns/{self.bid}",
+                                json={"product_ids": [], "budget": 5000, "objective": "awareness"})
+        other = resp.json()["cycle_id"]
         ads_creative.PROVIDER = FakeProvider(response=_fake("{}"))
         ok, err = ads_creative.generate(main.conn, self.bid, other, ACTOR)
         self.assertFalse(ok)
@@ -375,11 +373,10 @@ class ProductScopedComplianceTest(unittest.TestCase):
         self._orig_plan_provider = ads_plan.PROVIDER
         self._orig_creative_provider = ads_creative.PROVIDER
 
-        resp = self.client.post(f"/brands/{self.bid}/ads/new",
-                                data={"slider_index": "5", "objective": "sales",
-                                     "product_ids": [self.pid]},
-                                follow_redirects=False)
-        self.cycle_id = resp.headers["location"].split("/ads/")[1].split("?")[0]
+        resp = self.client.post(f"/api/campaigns/{self.bid}",
+                                json={"product_ids": [self.pid], "budget": 10000,
+                                      "objective": "sales"})
+        self.cycle_id = resp.json()["cycle_id"]
 
         plan_options = {
             "options": [
@@ -460,11 +457,10 @@ class MultiProductScopedComplianceTest(unittest.TestCase):
         self._orig_plan_provider = ads_plan.PROVIDER
         self._orig_creative_provider = ads_creative.PROVIDER
 
-        resp = self.client.post(f"/brands/{self.bid}/ads/new",
-                                data={"slider_index": "5", "objective": "sales",
-                                     "product_ids": [self.pid_a, self.pid_b]},
-                                follow_redirects=False)
-        self.cycle_id = resp.headers["location"].split("/ads/")[1].split("?")[0]
+        resp = self.client.post(f"/api/campaigns/{self.bid}",
+                                json={"product_ids": [self.pid_a, self.pid_b], "budget": 10000,
+                                      "objective": "sales"})
+        self.cycle_id = resp.json()["cycle_id"]
 
         plan_options = {
             "options": [

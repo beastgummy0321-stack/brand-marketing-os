@@ -55,10 +55,9 @@ class _Base(unittest.TestCase):
 
     def _open_cycle(self) -> str:
         resp = self.client.post(
-            f"/brands/{self.bid}/ads/new",
-            data={"product_ids": [self.pid], "slider_index": "5", "objective": "sales"},
-            follow_redirects=False)
-        return resp.headers["location"].split("/ads/")[1].split("?")[0]
+            f"/api/campaigns/{self.bid}",
+            json={"product_ids": [self.pid], "budget": 10000, "objective": "sales"})
+        return resp.json()["cycle_id"]
 
     def _cycle_label(self, cycle_id: str) -> str:
         cycle = ads_repo.get_cycle(main.conn, self.bid, cycle_id)
@@ -109,6 +108,15 @@ class CycleFolderTest(_Base):
         self.assertTrue(target.is_dir())
         startfile.assert_called_once_with(target)
 
+    def test_size_is_computed_live_not_stored(self):
+        """使用者是在檔案總管裡加減檔案，系統沒有任何寫入路徑會知道——所以每次都得重算。"""
+        cycle_id = self._open_cycle()
+        target = ROOT / self.bid / cycle_id
+        self._put_file(target, mb=1)
+        self.assertAlmostEqual(creative_assets.size_mb(target), 1.0, places=1)
+        (target / "圖.png").unlink()
+        self.assertEqual(creative_assets.size_mb(target), 0.0)
+
     def test_cycle_page_shows_the_folder_size_in_mb(self):
         cycle_id = self._open_cycle()
         ads_repo.update_cycle_status(main.conn, self.bid, cycle_id,
@@ -119,14 +127,6 @@ class CycleFolderTest(_Base):
         self.assertIn("2.0 MB", page)
         self.assertIn(str(ROOT / self.bid / cycle_id), page)
 
-    def test_size_is_computed_live_not_stored(self):
-        """使用者是在檔案總管裡加減檔案，系統沒有任何寫入路徑會知道——所以每次都得重算。"""
-        cycle_id = self._open_cycle()
-        target = ROOT / self.bid / cycle_id
-        self._put_file(target, mb=1)
-        self.assertAlmostEqual(creative_assets.size_mb(target), 1.0, places=1)
-        (target / "圖.png").unlink()
-        self.assertEqual(creative_assets.size_mb(target), 0.0)
 
 
 class MatrixFolderApiTest(_Base):
@@ -237,11 +237,11 @@ class DeleteCascadeTest(_Base):
         self._put_file(target, mb=1)
 
         ads_repo.set_cycle_archived(main.conn, self.bid, cycle_id, archived=True, actor=ACTOR)
-        resp = self.client.post(f"/brands/{self.bid}/ads/{cycle_id}/delete",
-                                data={"confirm_name": self._cycle_label(cycle_id)},
+        resp = self.client.post(f"/api/campaigns/brands/{self.bid}/{cycle_id}/delete",
+                                json={"confirm_name": self._cycle_label(cycle_id)},
                                 follow_redirects=False)
 
-        self.assertEqual(resp.status_code, 303)
+        self.assertEqual(resp.status_code, 204)
         self.assertIsNone(ads_repo.get_cycle(main.conn, self.bid, cycle_id))
         self.assertFalse(target.exists())
 
