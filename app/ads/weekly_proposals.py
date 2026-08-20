@@ -61,7 +61,7 @@ def present(card: dict, brand_id: str) -> dict:
         "copy": _copy(card),
         "spend_confirmation": spend_confirmation,
         "action_card": action_card,
-        "action_url": f"/brands/{brand_id}/workbench" if action_card and grade == "asset" else None,
+        "action_url": f"/app/brands/{brand_id}/workbench" if action_card and grade == "asset" else None,
     }
 
 
@@ -172,7 +172,7 @@ def generate(conn, brand_id: str, cycle_id: str, *, enqueue_ready: bool = True) 
             dedupe_key=f"weekly_proposal_ready:{cycle_id}",
             message=f"{len(cards)} 張提案等你核可",
             brand_id=brand_id, campaign_cycle_id=cycle_id,
-            action_url=f"/brands/{brand_id}",
+        action_url=f"/app/brands/{brand_id}",
         )
     conn.commit()
     return list_cards(conn, brand_id, cycle_id)

@@ -273,7 +273,7 @@ def check_surge(conn, brand_id: str, cycle_id: str) -> Optional[str]:
         dedupe_key=f"code_surge_alert:{cycle_id}:{ad_code['code']}",
         message="用碼量遠高於曝光，疑似碼外洩，去看訂單來源。",
         brand_id=brand_id, campaign_cycle_id=cycle_id,
-        action_url=f"/brands/{brand_id}/orders",
+        action_url=f"/app/brands/{brand_id}/orders",
     )
     if interrupt_id:
         conn.commit()

@@ -145,12 +145,9 @@ export async function fetchCockpit(brandId: string): Promise<CockpitData> {
   return body.data;
 }
 
-/** 一鍵「知道了」：沿用既有全站打斷佇列 resolve 端點（app/brand_intelligence/routes.py
- * `/interrupts/{id}/resolve`，非 `/api/dashboard` 之下——那支路由本來就不寫在儀表板
- * 模組，不重寫、不搬家）。該端點是舊版伺服器渲染流程的 PRG 轉址，fetch 預設會
- * 跟著轉址走完，最後拿到的是（跟這次呼叫無關的）HTML；只要 `res.ok` 就代表成功。 */
+/** 一鍵「知道了」：使用 SPA 專用 JSON 端點，避免 fetch 跟隨舊 Jinja 的 PRG 轉址。 */
 export async function resolveAlert(interruptId: string): Promise<void> {
-  const res = await fetch(`/interrupts/${encodeURIComponent(interruptId)}/resolve`, {
+  const res = await fetch(`/api/interrupts/${encodeURIComponent(interruptId)}/resolve`, {
     method: "POST",
   });
   if (!res.ok) {

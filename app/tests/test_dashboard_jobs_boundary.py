@@ -48,7 +48,7 @@ class DashboardJobsBoundaryTest(unittest.TestCase):
         self.assertTrue(all(job["brand_name"] == "進行中工作測試品牌" for job in jobs))
         self.assertEqual(
             {job["action_url"] for job in jobs},
-            {f"/brands/{brand_id}/intake", f"/brands/{brand_id}/products/product_test", f"/brands/{brand_id}/library"},
+            {f"/app/brands/{brand_id}/intake", f"/app/brands/{brand_id}/products/product_test", f"/app/brands/{brand_id}/library"},
         )
         expected_keys = {"brand_id", "brand_name", "kind", "status", "stage", "started_at", "action_url"}
         self.assertTrue(all(set(job) == expected_keys for job in jobs))

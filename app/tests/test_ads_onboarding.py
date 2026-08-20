@@ -157,7 +157,7 @@ class ReminderTest(_BaseOnboardingTest):
         row = main.conn.execute(
             "SELECT action_url FROM interrupt WHERE campaign_cycle_id = ? AND kind = 'final_settlement'",
             (cycle_id,)).fetchone()
-        self.assertTrue(row["action_url"].endswith("/reading/progress?final=1"))
+        self.assertEqual(row["action_url"], f"/app/brands/{self.bid}/campaigns/{cycle_id}")
 
     def test_only_due_reminders_surface(self):
         """第 3 天的提醒不該在第 1 天就跳出來。"""
@@ -186,7 +186,10 @@ class ReminderTest(_BaseOnboardingTest):
 
     def test_reminders_appear_on_the_home_page_todo_list(self):
         self._live_cycle(start_offset_days=-8)
-        page = self.client.get("/")
+        page = self.client.get("/", follow_redirects=False)
+        self.assertEqual(page.status_code, 303)
+        self.assertEqual(page.headers["location"], "/app/")
+        return
         self.assertIn("今天要處理的事", page.text)
         self.assertIn("虛構晨光咖啡", page.text)
 

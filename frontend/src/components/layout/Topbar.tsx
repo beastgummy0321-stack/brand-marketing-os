@@ -1,4 +1,5 @@
 import { ActiveJobsBell } from "./ActiveJobsBell";
+import { Link } from "react-router-dom";
 
 export function Topbar() {
   return (
@@ -6,12 +7,12 @@ export function Topbar() {
       <span className="font-display text-lg font-medium text-foreground">行銷駕駛艙</span>
       <div className="flex items-center gap-2">
         <ActiveJobsBell />
-        <a
-          href="/"
+        <Link
+          to="/"
           className="text-sm font-medium text-primary underline-offset-4 hover:underline"
         >
           回到舊版介面
-        </a>
+        </Link>
       </div>
     </header>
   );

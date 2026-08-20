@@ -179,7 +179,7 @@ def active_jobs() -> list[dict]:
             "status": state["status"],
             "stage": state.get("stage") or "",
             "started_at": state.get("started_at") or "",
-            "action_url": f"/brands/{state['brand_id']}/products/{product_id}",
+        "action_url": f"/app/brands/{state['brand_id']}/products/{product_id}",
         }
         for product_id, state in _research_jobs.items()
         if state.get("status") in ("running", "waiting") and state.get("brand_id")
@@ -209,7 +209,7 @@ def _research_start(product_id: str, brand_id: str, actor: str, product_name: st
 def _research_notify(brand_id: str, product_id: str, message: str) -> None:
     background_job.notify(
         web.conn, brand_id, category="product_research_done", dedupe_key=new_id("prsjob"),
-        message=message, action_url=f"/brands/{brand_id}/products/{product_id}",
+        message=message, action_url=f"/app/brands/{brand_id}/products/{product_id}",
     )
 
 

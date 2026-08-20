@@ -73,7 +73,7 @@ def alert_campaign_renamed(conn, ad_account_id: str, meta_campaign_id: str,
         dedupe_key=f"campaign_renamed:{meta_campaign_id}:{new_name}",
         brand_id=brand_id, campaign_cycle_id=cycle_id,
         message="Meta 活動名稱被改了，請確認追蹤。",
-        action_url=f"/brands/{brand_id}/ads/connections",
+        action_url=f"/app/brands/{brand_id}/tracking",
     )
 
 
@@ -112,7 +112,7 @@ def suggest_cycle_mapping(conn, ad_account_id: str, meta_account_id: str,
                 conn, category="tracking_broken",
                 dedupe_key=f"tracking_conflict:{brand_id}:{meta_campaign_id}:{code}",
                 brand_id=brand_id, message="同一活動跨兩期，請補廣告 ID。",
-                action_url=f"/brands/{brand_id}/ads/connections",
+                action_url=f"/app/brands/{brand_id}/tracking",
             )
         return "conflict" if matches else None
 
@@ -128,7 +128,7 @@ def suggest_cycle_mapping(conn, ad_account_id: str, meta_account_id: str,
             conn, category="tracking_broken",
             dedupe_key=f"tracking_conflict:{brand_id}:{meta_campaign_id}:{cycle_id}",
             brand_id=brand_id, message="同一活動跨兩期，請補廣告 ID。",
-            action_url=f"/brands/{brand_id}/ads/connections",
+            action_url=f"/app/brands/{brand_id}/tracking",
         )
         return "conflict"
     confirmed = conn.execute(
@@ -176,7 +176,7 @@ def alert_unmapped_spend(conn, ad_account_id: str, meta_campaign_id: str,
         conn, category="burn_no_cycle",
         dedupe_key=f"burn_no_cycle:{meta_campaign_id}:{as_of_date}",
         brand_id=brand_id, message=f"NT${amount} 廣告花費沒對應檔期。",
-        action_url=(f"/brands/{brand_id}/ads/connections" if brand_id else "/settings"),
+        action_url=(f"/app/brands/{brand_id}/tracking" if brand_id else "/app/settings"),
     )
 
 
@@ -309,7 +309,7 @@ def run_post_sync_checks(conn, brand_id: str, *, today: Optional[str] = None,
             conn, category="tracking_broken",
             dedupe_key=f"tracking_broken:{cycle['id']}:{node['message']}",
             brand_id=brand_id, campaign_cycle_id=cycle["id"], message=node["message"][:30],
-            action_url=f"/brands/{brand_id}/ads/{cycle['id']}",
+            action_url=f"/app/brands/{brand_id}/campaigns/{cycle['id']}",
         )
         created += bool(interrupt_id)
     conn.commit()

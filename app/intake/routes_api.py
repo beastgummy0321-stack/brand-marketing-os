@@ -213,7 +213,7 @@ def active_jobs() -> list[dict]:
             "status": state["status"],
             "stage": state.get("stage") or "",
             "started_at": state.get("started_at") or "",
-            "action_url": f"/brands/{brand_id}/intake",
+            "action_url": f"/app/brands/{brand_id}/intake",
         }
         for brand_id, state in _JOBS.items()
         if state.get("status") in ("running", "waiting")
@@ -242,7 +242,7 @@ def _notify_scan_done(brand_id: str, brand_name: str, ok: bool) -> None:
     verb = "初掃完成，可以回去看初步印象" if ok else "初掃失敗，可以回去重試"
     background_job.notify(
         web.conn, brand_id, category="intake_ai_step_done", dedupe_key=new_id("itkjob"),
-        message=f"「{brand_name}」{verb}", action_url=f"/brands/{brand_id}/intake/scan",
+        message=f"「{brand_name}」{verb}", action_url=f"/app/brands/{brand_id}/intake",
     )
 
 
@@ -303,7 +303,7 @@ def _notify_paste_fix_done(brand_id: str, brand_name: str, ok: bool) -> None:
     verb = "貼回格式已修好，可以回去看" if ok else "貼回修格式失敗，可以回去重試"
     background_job.notify(
         web.conn, brand_id, category="intake_ai_step_done", dedupe_key=new_id("itkjob"),
-        message=f"「{brand_name}」{verb}", action_url=f"/brands/{brand_id}/intake/paste",
+        message=f"「{brand_name}」{verb}", action_url=f"/app/brands/{brand_id}/intake",
     )
 
 

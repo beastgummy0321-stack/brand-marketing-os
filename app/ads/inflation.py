@@ -230,7 +230,7 @@ def _maybe_enqueue_next_due(conn, brand_id: str, *, today: str) -> Optional[str]
         dedupe_key=f"revenue_reconcile_due:{brand_id}:{due_date}",
         message="灌水係數已逾校準週期，建議重新對帳。",
         brand_id=brand_id, visible_from=due_date,
-        action_url=f"/brands/{brand_id}/ads",
+        action_url=f"/app/brands/{brand_id}/campaigns",
     )
     if interrupt_id:
         conn.commit()

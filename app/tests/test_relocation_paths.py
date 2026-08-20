@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from app.brand_web import routes as brand_routes
+from app.brand_web import routes_library
 from app.core import backup, creative_assets, db
 from app.intake import state as intake_state
 
@@ -18,7 +18,7 @@ class RelocationPathsTest(unittest.TestCase):
             self.assertEqual(backup.get_backup_dir(), db.REPO_ROOT / "backups")
             self.assertEqual(creative_assets.DEFAULT_ROOT, db.REPO_ROOT / "data" / "creative")
             self.assertEqual(intake_state.get_upload_dir(), db.REPO_ROOT / "data" / "uploads" / "intake")
-            self.assertEqual(brand_routes._assets_upload_dir(), db.REPO_ROOT / "data" / "uploads" / "assets")
+            self.assertEqual(routes_library._assets_upload_dir(), db.REPO_ROOT / "data" / "uploads" / "assets")
 
     def test_environment_overrides_are_unchanged(self):
         with mock.patch.dict(os.environ, {
@@ -29,7 +29,7 @@ class RelocationPathsTest(unittest.TestCase):
             self.assertEqual(db.get_db_path(), Path("X:/custom/app.db"))
             self.assertEqual(backup.get_backup_dir(), Path("X:/custom/backups"))
             self.assertEqual(intake_state.get_upload_dir(), Path("X:/custom/uploads"))
-            self.assertEqual(brand_routes._assets_upload_dir(), Path("X:/custom/uploads/assets"))
+            self.assertEqual(routes_library._assets_upload_dir(), Path("X:/custom/uploads/assets"))
 
     def test_app_source_has_no_former_desktop_path(self):
         source = Path(db.REPO_ROOT) / "app"

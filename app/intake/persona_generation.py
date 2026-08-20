@@ -127,7 +127,7 @@ def generation_state(brand_id: str) -> dict:
 def _notify(conn, brand_id: str, message: str) -> None:
     background_job.notify(
         conn, brand_id, category="personas_ready", dedupe_key=new_id("psnjob"),
-        message=message, action_url=f"/brands/{brand_id}/hub?tab=customer-voice",
+        message=message, action_url=f"/app/brands/{brand_id}/library",
     )
 
 

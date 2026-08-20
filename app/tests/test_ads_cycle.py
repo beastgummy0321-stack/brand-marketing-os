@@ -156,7 +156,7 @@ class AdsNewPageTest(_BaseAdsTest):
         """缺資料只提示、附一鍵去補，開期照樣走得下去（決策 0013）。"""
         resp = self.client.get(f"/brands/{self.bid}/ads/new")
         self.assertIn("還沒有可用的成本售價", resp.text)
-        self.assertIn(f"/brands/{self.bid}/hub/products", resp.text)
+        self.assertIn(f"/app/brands/{self.bid}/products", resp.text)
         self.assertEqual(self._open_cycle().status_code, 303)
 
 

@@ -318,7 +318,7 @@ export async function uploadAsset(
   body.append("product_id", fields.product_id);
   body.append("title", fields.title);
   body.append("file", fields.file);
-  const res = await fetch(`/brands/${encodeURIComponent(brandId)}/assets/new`, { method: "POST", body });
+  const res = await fetch(`/api/brands/${encodeURIComponent(brandId)}/assets`, { method: "POST", body });
   if (!res.ok) {
     throw new Error(`上傳失敗（狀態碼 ${res.status}）`);
   }

@@ -99,7 +99,7 @@ def check_cycle(conn, brand_id: str, cycle_id: str, today: Optional[str] = None)
         conn, category=_CATEGORY_BY_STATUS[result["status"]], brand_id=brand_id,
         campaign_cycle_id=cycle_id, dedupe_key=f"pacing:{cycle_id}:{result['status']}",
         message=_MESSAGES[result["status"]],
-        action_url=f"/brands/{brand_id}/ads/{cycle_id}/performance",
+        action_url=f"/app/brands/{brand_id}/campaigns/{cycle_id}",
     )
     if interrupt_id:
         conn.commit()

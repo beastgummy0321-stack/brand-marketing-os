@@ -13,12 +13,12 @@
 
 from datetime import datetime, timezone
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 
 from app.core import interrupts as core_interrupts
 from app.core import prototype_phase as core_prototype_phase
 from app.shared import web
-from app.shared.web import _with_brand_names
+from app.shared.web import _with_brand_names, require_actor
 
 router = APIRouter()
 
@@ -55,6 +55,12 @@ async def api_inbox():
         "data": {"open": open_items, "done": done_items},
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }
+
+
+@router.post("/api/interrupts/{interrupt_id}/resolve")
+async def api_interrupt_resolve(request: Request, interrupt_id: str):
+    core_interrupts.resolve(web.conn, interrupt_id, actor=require_actor(request))
+    return {"ok": True}
 
 
 @router.get("/api/system/prototype-phase")
