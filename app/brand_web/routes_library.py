@@ -230,6 +230,22 @@ async def channel_delete_api(request: Request, brand_id: str, channel_id: str):
 _cv_jobs = background_job.JobRegistry()
 
 
+def active_jobs() -> list[dict]:
+    """回傳進行中的原話轉換工作，供 dashboard 聚合；不洩漏 registry 狀態。"""
+    return [
+        {
+            "brand_id": state["brand_id"],
+            "kind": "library_convert",
+            "status": state["status"],
+            "stage": "分析原話中",
+            "started_at": state.get("started_at") or "",
+            "action_url": f"/brands/{state['brand_id']}/library",
+        }
+        for _job_key, state in _cv_jobs.items()
+        if state.get("status") in ("running", "waiting") and state.get("brand_id")
+    ]
+
+
 def _cv_notify(brand_id: str, job_key: str, message: str) -> None:
     background_job.notify(
         web.conn, brand_id, category="customer_voice_extraction_done", dedupe_key=job_key,

@@ -204,6 +204,22 @@ _STAGE_START = {"scan": "讀取網址中", "question": "正在準備下一題", 
 _ESTIMATE = {"scan": script.COST_SCAN, "question": script.COST_QUESTION, "paste_fix": script.COST_PASTE_FIX}
 
 
+def active_jobs() -> list[dict]:
+    """回傳進行中的建檔工作，供 dashboard 聚合；不洩漏 registry 狀態。"""
+    return [
+        {
+            "brand_id": brand_id,
+            "kind": state.get("kind", "scan"),
+            "status": state["status"],
+            "stage": state.get("stage") or "",
+            "started_at": state.get("started_at") or "",
+            "action_url": f"/brands/{brand_id}/intake",
+        }
+        for brand_id, state in _JOBS.items()
+        if state.get("status") in ("running", "waiting")
+    ]
+
+
 def _idle_job() -> dict:
     return {"status": "done", "stage": "", "started_at": now_iso(), "usual_range_text": "", "error": None}
 
