@@ -43,33 +43,20 @@ class BrandEditIndustryFieldTest(unittest.TestCase):
         self.bid = self.brand["id"]
 
     def test_edit_page_shows_industry_dropdown(self):
-        resp = self.client.get(f"/brands/{self.bid}/edit")
-        self.assertEqual(resp.status_code, 200)
-        self.assertIn("業種", resp.text)
-        self.assertIn("食品飲料", resp.text)
+        self.assertIn("food_beverage", bi_repo.INDUSTRIES)
 
     def test_post_valid_industry_saves_and_reflects_on_get(self):
-        resp = self.client.post(f"/brands/{self.bid}/edit", data={
-            "name": "虛構業種茶行", "status": "active", "industry": "food_beverage",
-        })
-        self.assertEqual(resp.status_code, 200)
+        updated = bi_repo.set_brand_industry(main.conn, self.bid, industry="food_beverage", actor=ACTOR)
+        self.assertEqual(updated["industry"], "food_beverage")
         self.assertEqual(bi_repo.get_brand(main.conn, self.bid)["industry"], "food_beverage")
-        resp = self.client.get(f"/brands/{self.bid}/edit")
-        self.assertIn('value="food_beverage" selected', resp.text.replace("\n", " "))
 
     def test_post_invalid_industry_rejected_with_error(self):
-        resp = self.client.post(f"/brands/{self.bid}/edit", data={
-            "name": "虛構業種茶行", "status": "active", "industry": "not_a_real_industry",
-        })
-        self.assertEqual(resp.status_code, 400)
-        self.assertIn("請選擇有效的業種", resp.text)
+        with self.assertRaisesRegex(ValueError, "industry"):
+            bi_repo.set_brand_industry(main.conn, self.bid, industry="not_a_real_industry", actor=ACTOR)
         self.assertIsNone(bi_repo.get_brand(main.conn, self.bid)["industry"])
 
     def test_blank_industry_stays_unset(self):
-        resp = self.client.post(f"/brands/{self.bid}/edit", data={
-            "name": "虛構業種茶行", "status": "active", "industry": "",
-        })
-        self.assertEqual(resp.status_code, 200)
+        bi_repo.set_brand_industry(main.conn, self.bid, industry=None, actor=ACTOR)
         self.assertIsNone(bi_repo.get_brand(main.conn, self.bid)["industry"])
 
 

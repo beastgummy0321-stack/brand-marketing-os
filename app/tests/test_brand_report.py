@@ -2,7 +2,7 @@
 """app/tests/test_brand_report.py — 顧問分析報告（決策 0017、GitHub issue #4）。
 
 見 app/brand_intelligence/report.py、repository.py 的 create_brand_report／get_latest_brand_report、
-main.py 的三條 /brands/{id}/report* 路由。全程只用 FakeProvider，不發任何真實網路請求。
+顧問分析報告 API。全程只用 FakeProvider，不發任何真實網路請求。
 測試品牌一律虛構名：晨露茶飲、山嵐選物。
 """
 
@@ -11,6 +11,7 @@ import json
 import os
 import shutil
 import tempfile
+import time
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -22,6 +23,7 @@ _tmpdir = tempfile.mkdtemp(prefix="brand_os_brand_report_")
 from fastapi.testclient import TestClient  # noqa: E402
 
 import app.main as main  # noqa: E402
+from app.brand_web import report_service  # noqa: E402
 from app.brand_web import routes as report  # noqa: E402
 from app.brand_intelligence import repository as repo  # noqa: E402
 from app.llm import providers  # noqa: E402
@@ -166,17 +168,13 @@ class BrandReportHttpTest(unittest.TestCase):
 
     def test_empty_state(self):
         bid = self._new_brand("山嵐選物-空狀態")
-        resp = self.client.get(f"/brands/{bid}/report")
+        resp = self.client.get(f"/api/brands/{bid}/report")
         self.assertEqual(resp.status_code, 200)
-        self.assertIn("還沒有顧問分析報告", resp.text)
-        self.assertIn(f"/brands/{bid}/report/progress", resp.text)
-
-        export_resp = self.client.get(f"/brands/{bid}/report/export", follow_redirects=False)
-        self.assertEqual(export_resp.status_code, 303)
-        self.assertIn(f"/brands/{bid}/report", export_resp.headers["location"])
+        self.assertIsNone(resp.json()["report"])
+        self.assertEqual(resp.json()["job"]["status"], "idle")
 
     def test_unknown_brand_is_404(self):
-        resp = self.client.get("/brands/brd_不存在/report")
+        resp = self.client.get("/api/brands/brd_不存在/report")
         self.assertEqual(resp.status_code, 404)
 
     def test_isolation_between_brands(self):
@@ -194,7 +192,8 @@ class BrandReportHttpTest(unittest.TestCase):
         mountain_text = json.dumps(mountain_report["sections"], ensure_ascii=False)
         self.assertNotIn("晨露機密內容", mountain_text)
 
-        page = self.client.get(f"/brands/{mountain_id}/report").text
+        body = self.client.get(f"/api/brands/{mountain_id}/report").json()
+        page = json.dumps(body["report"]["sections"], ensure_ascii=False)
         self.assertNotIn("晨露機密內容", page)
         self.assertIn("山嵐專屬內容", page)
 
@@ -205,26 +204,25 @@ class BrandReportHttpTest(unittest.TestCase):
         self.assertTrue(ok, err)
         stored = repo.get_latest_brand_report(main.conn, bid)
 
-        old_ts = (datetime.now(timezone.utc) - timedelta(days=100)).isoformat()
-        main.conn.execute("UPDATE brand_report SET generated_at = ? WHERE id = ?",
-                           (old_ts, stored["id"]))
-        main.conn.commit()
-        page = self.client.get(f"/brands/{bid}/report").text
-        self.assertIn("重新生成", page)
+        repo.create_brand_fact(main.conn, bid, actor=ACTOR, fact_type="positioning",
+                               label="新事實", value="報告生成後新增", status="confirmed",
+                               confirmed_by=ACTOR)
+        body = self.client.get(f"/api/brands/{bid}/report").json()
+        self.assertIsNotNone(body["report"]["staleness"])
 
-        today_ts = datetime.now(timezone.utc).isoformat()
-        main.conn.execute("UPDATE brand_report SET generated_at = ? WHERE id = ?",
-                           (today_ts, stored["id"]))
+        main.conn.execute("UPDATE brand_report SET brand_version = ? WHERE id = ?",
+                          (repo.get_brand(main.conn, bid)["knowledge_version"], stored["id"]))
         main.conn.commit()
-        page = self.client.get(f"/brands/{bid}/report").text
-        self.assertNotIn("市場與競爭觀察那一章可能過時了", page)
+        body = self.client.get(f"/api/brands/{bid}/report").json()
+        self.assertIsNone(body["report"]["staleness"])
 
     def test_progress_guards_against_duplicate_run(self):
         bid = self._new_brand("山嵐選物-防重複")
         fake = _fake(_sections("山嵐選物"))
         with mock.patch.object(report, "PROVIDER", fake):
-            self.client.get(f"/brands/{bid}/report/progress?run=1", follow_redirects=True)
-            self.client.get(f"/brands/{bid}/report/progress?run=1", follow_redirects=True)
+            ok, error = report.generate(main.conn, bid, ACTOR)
+        self.assertTrue(ok, error)
+        self.assertTrue(report_service.recent(bid))
         self.assertEqual(len(fake.calls), 1)
 
 

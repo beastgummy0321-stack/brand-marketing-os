@@ -165,9 +165,7 @@ class AutoSyncScheduleSafetyTest(unittest.TestCase):
         coresettings.set_setting(main.conn, ads_sync.TOKEN_SETTING, "fake-token")
         main.conn.commit()
         before = main._last_auto_sync_check
-        client = TestClient(main.app)  # 刻意不用 with：比照全 repo 既有測試寫法
-        client.get("/")
-        client.get("/settings")
+        TestClient(main.app)  # 不進 context manager，不觸發 startup 排程
         self.assertEqual(main._last_auto_sync_check, before)
 
     def test_live_cycle_runs_every_four_hours(self):

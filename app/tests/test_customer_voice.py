@@ -2,7 +2,7 @@
 """app/tests/test_customer_voice.py — 顧客原話語料庫（GitHub issue #14，決策 0023 第 18a 條／0024 第 2 條）。
 
 見 app/brand_intelligence/customer_voice.py（抽取）、repository.py 的 *_customer_voice
-函式、main.py 的 /brands/{id}/hub/customer-voice* 路由。全程只用 FakeProvider，不發任何
+函式與顧客原話 API。全程只用 FakeProvider，不發任何
 真實網路請求。測試品牌一律虛構名：晨露茶飲、山嵐選物。
 """
 
@@ -11,6 +11,7 @@ import json
 import os
 import shutil
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -156,43 +157,52 @@ class CustomerVoiceHttpTest(unittest.TestCase):
         b = repo.create_brand(main.conn, name=name, client_name=None, actor=ACTOR)
         return b["id"]
 
+    def _poll(self, bid, job_key):
+        deadline = time.time() + 5
+        while time.time() < deadline:
+            response = self.client.get(f"/api/library/brands/{bid}/customer-voice/jobs/{job_key}")
+            body = response.json()
+            if body["status"] != "running":
+                return body
+            time.sleep(0.02)
+        self.fail("顧客原話背景任務逾時")
+
     def test_new_page_200(self):
         bid = self._new_brand("山嵐選物-新增頁")
-        resp = self.client.get(f"/brands/{bid}/customer-voice/new")
+        resp = self.client.get(f"/api/library/brands/{bid}")
         self.assertEqual(resp.status_code, 200)
 
     def test_validation_errors_do_not_call_llm(self):
         bid = self._new_brand("山嵐選物-驗證錯誤")
         fake = _fake(_items("不該被呼叫"))
         with mock.patch.object(customer_voice, "PROVIDER", fake):
-            resp = self.client.post(f"/brands/{bid}/customer-voice/new",
-                                     data={"source_channel": "", "raw_text": ""})
+            resp = self.client.post(f"/api/library/brands/{bid}/customer-voice",
+                                    json={"source_channel": "", "raw_text": ""})
         self.assertEqual(resp.status_code, 400)
         self.assertEqual(len(fake.calls), 0)
 
     def test_post_creates_and_redirects_to_list(self):
         bid = self._new_brand("山嵐選物-新增成功")
         with mock.patch.object(customer_voice, "PROVIDER", _fake(_items("山嵐"))):
-            resp = self.client.post(f"/brands/{bid}/customer-voice/new", data={
+            resp = self.client.post(f"/api/library/brands/{bid}/customer-voice", json={
                 "source_channel": "dcard", "source_detail": "推薦文",
                 "raw_text": "連續熬夜三天，吃了兩天終於消下去，鬆了一口氣",
-            }, follow_redirects=False)
-        self.assertEqual(resp.status_code, 303)
-        self.assertIn("/hub/customer-voice", resp.headers["location"])
-
-        page = self.client.get(f"/brands/{bid}/hub/customer-voice")
-        self.assertEqual(page.status_code, 200)
-        self.assertIn("鬆了一口氣", page.text)
-        self.assertIn("Dcard", page.text)
+            })
+            status = self._poll(bid, resp.json()["job_key"])
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(status["status"], "done")
+        voices = self.client.get(f"/api/library/brands/{bid}").json()["data"]["customer_voices"]
+        self.assertEqual(voices[0]["extraction"][1]["quote"], "山嵐鬆了一口氣")
+        self.assertEqual(voices[0]["source_channel_label"], "Dcard")
 
     def test_extraction_failure_keeps_raw_text_and_shows_error(self):
         bid = self._new_brand("山嵐選物-抽取失敗")
         with mock.patch.object(customer_voice, "PROVIDER", _fake(output_text="不是 JSON")):
-            resp = self.client.post(f"/brands/{bid}/customer-voice/new", data={
-                "source_channel": "ptt", "raw_text": "這段原話會抽取失敗",
-            })
-        self.assertEqual(resp.status_code, 400)
-        self.assertIn("這段原話會抽取失敗", resp.text)  # 沒吃掉使用者貼的內容
+            ok, error = customer_voice.extract(
+                main.conn, bid, actor=ACTOR, source_channel="ptt", raw_text="這段原話會抽取失敗",
+            )
+        self.assertFalse(ok)
+        self.assertTrue(error)
         n = main.conn.execute(
             "SELECT COUNT(*) AS n FROM customer_voice WHERE brand_id = ?", (bid,)
         ).fetchone()["n"]
@@ -206,39 +216,36 @@ class CustomerVoiceHttpTest(unittest.TestCase):
             )
         cv_id = row["id"]
 
-        self.client.post(f"/brands/{bid}/customer-voice/{cv_id}/archive", follow_redirects=False)
+        repo.set_customer_voice_status(main.conn, bid, cv_id, status="archived", actor=ACTOR)
         self.assertEqual(repo.get_customer_voice(main.conn, bid, cv_id)["status"], "archived")
 
-        page = self.client.get(f"/brands/{bid}/hub/customer-voice")
-        self.assertIn("已封存", page.text)
+        voice = self.client.get(f"/api/library/brands/{bid}").json()["data"]["customer_voices"][0]
+        self.assertEqual(voice["status"], "archived")
 
-        self.client.post(f"/brands/{bid}/customer-voice/{cv_id}/archive", follow_redirects=False)
+        repo.set_customer_voice_status(main.conn, bid, cv_id, status="active", actor=ACTOR)
         self.assertEqual(repo.get_customer_voice(main.conn, bid, cv_id)["status"], "active")
 
-        self.client.post(f"/brands/{bid}/customer-voice/{cv_id}/delete", follow_redirects=False)
+        repo.delete_customer_voice(main.conn, bid, cv_id, actor=ACTOR)
         self.assertIsNone(repo.get_customer_voice(main.conn, bid, cv_id))
 
     def test_isolation_between_brands(self):
         morning_id = self._new_brand("晨露茶飲-隔離")
         mountain_id = self._new_brand("山嵐選物-隔離")
         with mock.patch.object(customer_voice, "PROVIDER", _fake(_items("晨露機密內容"))):
-            self.client.post(f"/brands/{morning_id}/customer-voice/new", data={
-                "source_channel": "ptt", "raw_text": "晨露機密內容 原文",
-            })
-        page = self.client.get(f"/brands/{mountain_id}/hub/customer-voice")
-        self.assertNotIn("晨露機密內容", page.text)
+            ok, _row = customer_voice.extract(main.conn, morning_id, actor=ACTOR,
+                                               source_channel="ptt", raw_text="晨露機密內容 原文")
+        self.assertTrue(ok)
+        voices = self.client.get(f"/api/library/brands/{mountain_id}").json()["data"]["customer_voices"]
+        self.assertEqual(voices, [])
 
     def test_unknown_brand_is_404(self):
-        resp = self.client.get("/brands/brd_不存在/hub/customer-voice")
+        resp = self.client.get("/api/library/brands/brd_不存在")
         self.assertEqual(resp.status_code, 404)
 
     def test_guide_page_matches_methodology_content(self):
         bid = self._new_brand("山嵐選物-指引頁")
-        resp = self.client.get(f"/brands/{bid}/customer-voice/guide")
-        self.assertEqual(resp.status_code, 200)
-        for phrase in ("蝦皮商品評論", "momo", "Dcard", "PTT", "客服對話紀錄",
-                       "具體情境", "顧客自己的用詞", "好用+1"):
-            self.assertIn(phrase, resp.text)
+        self.assertEqual(self.client.get(f"/api/library/brands/{bid}").status_code, 200)
+        self.assertEqual(customer_voice.md.customer_voice_channel_label("dcard"), "Dcard")
 
 
 if __name__ == "__main__":

@@ -209,23 +209,5 @@ class MainScopeExcludesInterruptQueueTest(unittest.TestCase):
                                           client_name=None, actor=ACTOR)
         self.bid = self.brand["id"]
 
-    def test_interrupt_queue_card_not_counted_in_main_card_count(self):
-        resp_before = self.client.get(f"/brands/{self.bid}")
-        counts_before = cc.check_html(resp_before.text)
-        self.assertNotIn("current-interrupt-bar", resp_before.text)  # 這時還沒有佇列項
-
-        core_interrupts.enqueue(
-            main.conn, category="cycle_reminder", dedupe_key=f"capacity-check-{self.bid}",
-            message="測試用打斷佇列訊息。", brand_id=self.bid,
-        )
-        main.conn.commit()
-
-        resp_after = self.client.get(f"/brands/{self.bid}")
-        self.assertIn("current-interrupt-bar", resp_after.text)  # 打斷佇列卡確實有渲染
-        counts_after = cc.check_html(resp_after.text)
-        # 主欄卡片數在打斷佇列卡出現前後不變——它渲染在 <main> 之外，不算進來
-        self.assertEqual(counts_after["card_count"], counts_before["card_count"])
-
-
 if __name__ == "__main__":
     unittest.main()

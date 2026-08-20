@@ -33,6 +33,7 @@ def _cleanup():
 atexit.register(_cleanup)
 
 _SEQ = [0]
+ACTOR = "測試者"
 
 
 class ProductDeleteRouteTest(unittest.TestCase):
@@ -42,50 +43,48 @@ class ProductDeleteRouteTest(unittest.TestCase):
     def _new_brand_and_product(self, prefix: str):
         _SEQ[0] += 1
         name = f"{prefix}{_SEQ[0]}"
-        resp = self.client.post("/brands/new", data={"name": name, "client_name": ""},
-                                 follow_redirects=False)
-        brand_id = resp.headers["location"].split("/brands/")[1].split("?")[0]
-        resp = self.client.post(f"/brands/{brand_id}/products/new", data={"name": f"{name}-產品"},
-                                 follow_redirects=False)
-        product_id = resp.headers["location"].split("/products/")[1].split("?")[0]
+        brand_id = repo.create_brand(main.conn, name=name, client_name=None, actor=ACTOR)["id"]
+        product_id = repo.create_product(
+            main.conn, brand_id, name=f"{name}-產品", actor=ACTOR
+        )["id"]
         return brand_id, product_id, f"{name}-產品"
 
     def test_delete_page_blocked_while_active(self):
         brand_id, product_id, _name = self._new_brand_and_product("未封存產品路由")
-        resp = self.client.get(f"/brands/{brand_id}/products/{product_id}/delete",
-                                follow_redirects=False)
-        self.assertEqual(resp.status_code, 303)
-        self.assertNotIn("/delete", resp.headers["location"])  # 轉回產品頁，不是刪除頁本身
-
-        resp = self.client.post(f"/brands/{brand_id}/products/{product_id}/delete",
-                                 data={"confirm_name": "亂打"}, follow_redirects=False)
-        self.assertEqual(resp.status_code, 303)
+        resp = self.client.post(
+            f"/api/products/brands/{brand_id}/products/{product_id}/delete",
+            json={"confirm_name": "亂打"},
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("先把產品封存", resp.json()["error"])
         self.assertIsNotNone(repo.get_product(main.conn, brand_id, product_id))
 
     def test_wrong_name_does_not_delete(self):
         brand_id, product_id, name = self._new_brand_and_product("打錯名字產品")
-        self.client.post(f"/brands/{brand_id}/products/{product_id}/archive",
-                          follow_redirects=False)
+        self.client.post(f"/api/products/brands/{brand_id}/products/{product_id}/archive")
 
-        resp = self.client.post(f"/brands/{brand_id}/products/{product_id}/delete",
-                                 data={"confirm_name": "打錯了"}, follow_redirects=False)
+        resp = self.client.post(
+            f"/api/products/brands/{brand_id}/products/{product_id}/delete",
+            json={"confirm_name": "打錯了"},
+        )
         self.assertEqual(resp.status_code, 400)
-        self.assertIn("跟產品名稱不一樣", resp.text)
+        self.assertIn("跟產品名稱不一樣", resp.json()["error"])
         self.assertIsNotNone(repo.get_product(main.conn, brand_id, product_id))
 
     def test_correct_name_deletes_and_snapshots_backup(self):
         brand_id, product_id, name = self._new_brand_and_product("成功刪除產品")
-        self.client.post(f"/brands/{brand_id}/products/{product_id}/archive",
-                          follow_redirects=False)
+        self.client.post(f"/api/products/brands/{brand_id}/products/{product_id}/archive")
 
         backup_dir = Path(os.environ["BRAND_OS_BACKUP_DIR"])
         before_snapshots = list(backup_dir.glob(f"before-delete-{product_id}-*.db")) \
             if backup_dir.exists() else []
         self.assertEqual(before_snapshots, [])
 
-        resp = self.client.post(f"/brands/{brand_id}/products/{product_id}/delete",
-                                 data={"confirm_name": name}, follow_redirects=False)
-        self.assertEqual(resp.status_code, 303)
+        resp = self.client.post(
+            f"/api/products/brands/{brand_id}/products/{product_id}/delete",
+            json={"confirm_name": name},
+        )
+        self.assertEqual(resp.status_code, 204)
         self.assertIsNone(repo.get_product(main.conn, brand_id, product_id))
 
         after_snapshots = list(backup_dir.glob(f"before-delete-{product_id}-*.db"))
@@ -98,12 +97,10 @@ class ProductDeleteRouteTest(unittest.TestCase):
 
     def test_archive_then_restore_via_routes(self):
         brand_id, product_id, _name = self._new_brand_and_product("封存恢復路由產品")
-        self.client.post(f"/brands/{brand_id}/products/{product_id}/archive",
-                          follow_redirects=False)
+        self.client.post(f"/api/products/brands/{brand_id}/products/{product_id}/archive")
         self.assertEqual(repo.get_product(main.conn, brand_id, product_id)["status"], "archived")
 
-        self.client.post(f"/brands/{brand_id}/products/{product_id}/archive",
-                          follow_redirects=False)
+        self.client.post(f"/api/products/brands/{brand_id}/products/{product_id}/archive")
         self.assertEqual(repo.get_product(main.conn, brand_id, product_id)["status"], "active")
 
 
