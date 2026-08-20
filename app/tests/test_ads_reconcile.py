@@ -43,10 +43,9 @@ class _BaseReconcileTest(unittest.TestCase):
         self.brand = bi_repo.create_brand(main.conn, name="虛構晨光咖啡",
                                           client_name=None, actor=ACTOR)
         self.bid = self.brand["id"]
-        resp = self.client.post(f"/brands/{self.bid}/ads/new",
-                                data={"custom_amount": "10000", "objective": "sales"},
-                                follow_redirects=False)
-        self.cycle_id = resp.headers["location"].split("/ads/")[1].split("?")[0]
+        resp = self.client.post(f"/api/campaigns/{self.bid}",
+                                json={"product_ids": [], "budget": 10000, "objective": "sales"})
+        self.cycle_id = resp.json()["cycle_id"]
 
     def _spend(self, amount):
         perf.import_manual(main.conn, self.bid, self.cycle_id, {"spend": amount}, actor=ACTOR)

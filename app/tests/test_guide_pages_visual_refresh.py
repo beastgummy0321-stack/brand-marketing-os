@@ -25,8 +25,6 @@ from fastapi.testclient import TestClient  # noqa: E402
 import app.main as main  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
 
-
-
 def _cleanup():
     try:
         main.conn.close()
@@ -90,7 +88,3 @@ class GuidePagesVisualRefreshTest(unittest.TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertNotIn("guide_refresh.css", resp.text)
         self.assertNotIn('class="guide-refresh"', resp.text)
-
-
-if __name__ == "__main__":
-    unittest.main()

@@ -71,11 +71,10 @@ class _JudgedCycleTest(unittest.TestCase):
         bi_repo.save_product_economics(main.conn, self.bid, self.product, selling_price=1000,
                                        unit_variable_cost=400, currency="TWD",
                                        confirmed_by=ACTOR, actor=ACTOR)
-        resp = self.client.post(f"/brands/{self.bid}/ads/new",
-                                data={"product_ids": [self.product],
-                                      "custom_amount": "10000", "objective": "sales"},
-                                follow_redirects=False)
-        self.cycle_id = resp.headers["location"].split("/ads/")[1].split("?")[0]
+        resp = self.client.post(f"/api/campaigns/{self.bid}",
+                                json={"product_ids": [self.product], "budget": 10000,
+                                      "objective": "sales"})
+        self.cycle_id = resp.json()["cycle_id"]
         self._orig = reading.PROVIDER
         # 判讀說明刻意用極短字串：AI 自然語言長度不受本票的版面容量規則管（決策 0026
         # §20.1 規則 4 修訂後僅約束主動推播訊息），但容量腳本目前不分卡片種類、一律計數，
@@ -203,10 +202,9 @@ class DataOpsFormRedirectTest(unittest.TestCase):
         self.brand = bi_repo.create_brand(main.conn, name="虛構晨露烘焙",
                                           client_name=None, actor=ACTOR)
         self.bid = self.brand["id"]
-        resp = self.client.post(f"/brands/{self.bid}/ads/new",
-                                data={"custom_amount": "10000", "objective": "sales"},
-                                follow_redirects=False)
-        self.cycle_id = resp.headers["location"].split("/ads/")[1].split("?")[0]
+        resp = self.client.post(f"/api/campaigns/{self.bid}",
+                                json={"product_ids": [], "budget": 10000, "objective": "sales"})
+        self.cycle_id = resp.json()["cycle_id"]
 
     def _data_path(self):
         return f"/brands/{self.bid}/ads/{self.cycle_id}/performance/data"
@@ -297,10 +295,10 @@ class SimulationUnaffectedTest(unittest.TestCase):
         self.brand = bi_repo.create_brand(main.conn, name="虛構晨露咖啡",
                                           client_name=None, actor=ACTOR)
         self.bid = self.brand["id"]
-        resp = self.client.post(f"/brands/{self.bid}/ads/new",
-                                data={"custom_amount": "10000", "objective": "sales",
-                                      "mode": "simulation"}, follow_redirects=False)
-        self.cycle_id = resp.headers["location"].split("/ads/")[1].split("?")[0]
+        resp = self.client.post(f"/api/campaigns/{self.bid}",
+                                json={"product_ids": [], "budget": 10000, "objective": "sales",
+                                      "simulate": True})
+        self.cycle_id = resp.json()["cycle_id"]
 
     def test_simulate_button_stays_on_performance_page(self):
         page = self.client.get(
@@ -325,10 +323,9 @@ class InsufficientDataStillGradesTest(unittest.TestCase):
         self.brand = bi_repo.create_brand(main.conn, name="虛構晨露花藝",
                                           client_name=None, actor=ACTOR)
         self.bid = self.brand["id"]
-        resp = self.client.post(f"/brands/{self.bid}/ads/new",
-                                data={"custom_amount": "10000", "objective": "sales"},
-                                follow_redirects=False)
-        self.cycle_id = resp.headers["location"].split("/ads/")[1].split("?")[0]
+        resp = self.client.post(f"/api/campaigns/{self.bid}",
+                                json={"product_ids": [], "budget": 10000, "objective": "sales"})
+        self.cycle_id = resp.json()["cycle_id"]
         perf.import_manual(main.conn, self.bid, self.cycle_id, {"spend": 3000}, actor=ACTOR)
 
     def test_performance_page_says_insufficient_not_zero(self):

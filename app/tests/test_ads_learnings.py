@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
 """app/tests/test_ads_learnings.py — 累積智慧頁（三段＋停用規則函式，GitHub issue #56）。
-
 驗收條件（票 #56）：
 - 新 route `/brands/{brand_id}/ads/learnings`，註冊位置早於 `/ads/{cycle_id}` 萬用路由。
 - 三段內容正確：ledger 條目（expired=0）／生效中的 rule／pending 規則卡與未結案假設。
@@ -27,8 +26,6 @@ from app.ads import repository as ads_repo  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
 from app.core import rule_cards  # noqa: E402
 from app.llm import context_compiler  # noqa: E402
-
-
 
 def _cleanup():
     try:
@@ -319,7 +316,3 @@ class LearningsPageRouteTest(unittest.TestCase):
         interview_url = f"/brands/{self.bid}/ads/interview"
         count = hub.count(interview_url) + learnings.count(interview_url)
         self.assertEqual(count, 1)
-
-
-if __name__ == "__main__":
-    unittest.main()

@@ -214,10 +214,9 @@ class _BaseImportTest(unittest.TestCase):
         self.brand = bi_repo.create_brand(main.conn, name="虛構晨光咖啡",
                                           client_name=None, actor=ACTOR)
         self.bid = self.brand["id"]
-        resp = self.client.post(f"/brands/{self.bid}/ads/new",
-                                data={"slider_index": "5", "objective": "sales"},
-                                follow_redirects=False)
-        self.cycle_id = resp.headers["location"].split("/ads/")[1].split("?")[0]
+        resp = self.client.post(f"/api/campaigns/{self.bid}",
+                                json={"product_ids": [], "budget": 10000, "objective": "sales"})
+        self.cycle_id = resp.json()["cycle_id"]
 
     def _url(self, suffix=""):
         return f"/brands/{self.bid}/ads/{self.cycle_id}/performance{suffix}"

@@ -215,11 +215,10 @@ class ReadingFlowTest(unittest.TestCase):
         bi_repo.save_product_economics(main.conn, self.bid, self.product, selling_price=1000,
                                        unit_variable_cost=400, currency="TWD",
                                        confirmed_by=ACTOR, actor=ACTOR)
-        resp = self.client.post(f"/brands/{self.bid}/ads/new",
-                                data={"product_ids": [self.product],
-                                      "custom_amount": "10000", "objective": "sales"},
-                                follow_redirects=False)
-        self.cycle_id = resp.headers["location"].split("/ads/")[1].split("?")[0]
+        resp = self.client.post(f"/api/campaigns/{self.bid}",
+                                json={"product_ids": [self.product], "budget": 10000,
+                                      "objective": "sales"})
+        self.cycle_id = resp.json()["cycle_id"]
         self._orig = reading.PROVIDER
         reading.PROVIDER = FakeProvider(response=_fake(
             json.dumps({"text": "這期表現不錯，成交成本在可以接受的範圍。"},
@@ -331,10 +330,9 @@ class AssetBreakdownTest(unittest.TestCase):
         self.brand = bi_repo.create_brand(main.conn, name="虛構晨光咖啡",
                                           client_name=None, actor=ACTOR)
         self.bid = self.brand["id"]
-        resp = self.client.post(f"/brands/{self.bid}/ads/new",
-                                data={"slider_index": "5", "objective": "sales"},
-                                follow_redirects=False)
-        self.cycle_id = resp.headers["location"].split("/ads/")[1].split("?")[0]
+        resp = self.client.post(f"/api/campaigns/{self.bid}",
+                                json={"product_ids": [], "budget": 10000, "objective": "sales"})
+        self.cycle_id = resp.json()["cycle_id"]
         self._orig = reading.PROVIDER
         reading.PROVIDER = FakeProvider(response=_fake(
             json.dumps({"text": "說明文字"}, ensure_ascii=False)))
@@ -447,11 +445,10 @@ class _ReadingIntegrationBase(unittest.TestCase):
         bi_repo.save_product_economics(main.conn, self.bid, self.product, selling_price=1000,
                                        unit_variable_cost=400, currency="TWD",
                                        confirmed_by=ACTOR, actor=ACTOR)
-        resp = self.client.post(f"/brands/{self.bid}/ads/new",
-                                data={"product_ids": [self.product],
-                                      "custom_amount": "10000", "objective": "sales"},
-                                follow_redirects=False)
-        self.cycle_id = resp.headers["location"].split("/ads/")[1].split("?")[0]
+        resp = self.client.post(f"/api/campaigns/{self.bid}",
+                                json={"product_ids": [self.product], "budget": 10000,
+                                      "objective": "sales"})
+        self.cycle_id = resp.json()["cycle_id"]
         self._orig = reading.PROVIDER
         reading.PROVIDER = FakeProvider(response=_fake('{"text": "測試判讀說明"}'))
 
@@ -840,11 +837,10 @@ class _HypothesisReviewBase(unittest.TestCase):
         bi_repo.save_product_economics(main.conn, self.bid, self.product, selling_price=1000,
                                        unit_variable_cost=400, currency="TWD",
                                        confirmed_by=ACTOR, actor=ACTOR)
-        resp = self.client.post(f"/brands/{self.bid}/ads/new",
-                                data={"product_ids": [self.product],
-                                      "custom_amount": "10000", "objective": "sales"},
-                                follow_redirects=False)
-        self.cycle_id = resp.headers["location"].split("/ads/")[1].split("?")[0]
+        resp = self.client.post(f"/api/campaigns/{self.bid}",
+                                json={"product_ids": [self.product], "budget": 10000,
+                                      "objective": "sales"})
+        self.cycle_id = resp.json()["cycle_id"]
         self._orig = reading.PROVIDER
         reading.PROVIDER = FakeProvider(response=_fake(
             json.dumps({"reasons": {}}, ensure_ascii=False)))

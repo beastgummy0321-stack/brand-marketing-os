@@ -112,11 +112,10 @@ class SettlementFreezeTest(unittest.TestCase):
         bi_repo.save_product_economics(main.conn, self.bid, self.product, selling_price=1000,
                                        unit_variable_cost=400, currency="TWD",
                                        confirmed_by=ACTOR, actor=ACTOR)
-        resp = self.client.post(f"/brands/{self.bid}/ads/new",
-                                data={"product_ids": [self.product],
-                                      "custom_amount": "10000", "objective": "sales"},
-                                follow_redirects=False)
-        self.cycle_id = resp.headers["location"].split("/ads/")[1].split("?")[0]
+        resp = self.client.post(f"/api/campaigns/{self.bid}",
+                                json={"product_ids": [self.product], "budget": 10000,
+                                      "objective": "sales"})
+        self.cycle_id = resp.json()["cycle_id"]
         self._orig = reading.PROVIDER
         reading.PROVIDER = FakeProvider(response=_fake('{"text": "測試判讀說明"}'))
 

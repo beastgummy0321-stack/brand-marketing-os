@@ -451,10 +451,9 @@ class BrandLevelDuplicateBackfillTest(_BaseSyncTest):
         ).fetchone()["id"]
         ads_sync.claim(main.conn, self.bid, discovered_id, ACTOR)
 
-        resp = self.client.post(f"/brands/{self.bid}/ads/new",
-                                data={"slider_index": "5", "objective": "sales"},
-                                follow_redirects=False)
-        cycle_id = resp.headers["location"].split("/ads/")[1].split("?")[0]
+        resp = self.client.post(f"/api/campaigns/{self.bid}",
+                                json={"budget": 10000, "objective": "sales"})
+        cycle_id = resp.json()["cycle_id"]
         main.conn.execute(
             "INSERT INTO external_ad_mapping (id, brand_id, campaign_cycle_id,"
             " platform, meta_campaign_id, claim_status, confirmed_by, confirmed_at,"
@@ -487,10 +486,9 @@ class BrandLevelDuplicateBackfillTest(_BaseSyncTest):
         ads_sync.claim(main.conn, self.bid, discovered_id, ACTOR)
 
         def _new_cycle():
-            resp = self.client.post(f"/brands/{self.bid}/ads/new",
-                                    data={"slider_index": "5", "objective": "sales"},
-                                    follow_redirects=False)
-            return resp.headers["location"].split("/ads/")[1].split("?")[0]
+            resp = self.client.post(f"/api/campaigns/{self.bid}",
+                                    json={"budget": 10000, "objective": "sales"})
+            return resp.json()["cycle_id"]
 
         cycle_a, cycle_b = _new_cycle(), _new_cycle()
         ts = now_iso()

@@ -99,10 +99,9 @@ class _Base(unittest.TestCase):
         self.bid = self.brand["id"]
 
     def _live_cycle(self, start_offset_days=-10):
-        resp = self.client.post(f"/brands/{self.bid}/ads/new",
-                                data={"custom_amount": "10000", "objective": "sales"},
-                                follow_redirects=False)
-        cycle_id = resp.headers["location"].split("/ads/")[1].split("?")[0]
+        resp = self.client.post(f"/api/campaigns/{self.bid}",
+                                json={"product_ids": [], "budget": 10000, "objective": "sales"})
+        cycle_id = resp.json()["cycle_id"]
         start = (date.today() + timedelta(days=start_offset_days)).isoformat()
         end = (date.today() + timedelta(days=start_offset_days + 13)).isoformat()
         main.conn.execute(
@@ -278,11 +277,10 @@ class _BaseHandoffTest(_Base):
         super().setUp()
         self.product = bi_repo.create_product(main.conn, self.bid, name="虛構濾掛組",
                                               actor=ACTOR)["id"]
-        resp = self.client.post(f"/brands/{self.bid}/ads/new",
-                                data={"product_ids": [self.product],
-                                      "custom_amount": "10000", "objective": "sales"},
-                                follow_redirects=False)
-        self.cycle_id = resp.headers["location"].split("/ads/")[1].split("?")[0]
+        resp = self.client.post(f"/api/campaigns/{self.bid}",
+                                json={"product_ids": [self.product], "budget": 10000,
+                                      "objective": "sales"})
+        self.cycle_id = resp.json()["cycle_id"]
 
         self._orig_plan, self._orig_creative = ads_plan.PROVIDER, ads_creative.PROVIDER
         ads_plan.PROVIDER = FakeProvider(

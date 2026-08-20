@@ -87,10 +87,9 @@ class _BaseHandoffTest(unittest.TestCase):
         self.brand = bi_repo.create_brand(main.conn, name="虛構晨光咖啡",
                                           client_name="測試客戶", actor=ACTOR)
         self.bid = self.brand["id"]
-        resp = self.client.post(f"/brands/{self.bid}/ads/new",
-                                data={"slider_index": "5", "objective": "sales"},
-                                follow_redirects=False)
-        self.cycle_id = resp.headers["location"].split("/ads/")[1].split("?")[0]
+        resp = self.client.post(f"/api/campaigns/{self.bid}",
+                                json={"product_ids": [], "budget": 10000, "objective": "sales"})
+        self.cycle_id = resp.json()["cycle_id"]
 
         self._orig_plan, self._orig_creative = ads_plan.PROVIDER, ads_creative.PROVIDER
         ads_plan.PROVIDER = FakeProvider(
@@ -214,10 +213,9 @@ class PackageBuildTest(_BaseHandoffTest):
         self.assertTrue(package["full_url"].startswith("https://example.test?utm_source"))
 
     def test_build_without_adopted_creatives_is_refused_politely(self):
-        resp = self.client.post(f"/brands/{self.bid}/ads/new",
-                                data={"slider_index": "3", "objective": "awareness"},
-                                follow_redirects=False)
-        other = resp.headers["location"].split("/ads/")[1].split("?")[0]
+        resp = self.client.post(f"/api/campaigns/{self.bid}",
+                                json={"product_ids": [], "budget": 5000, "objective": "awareness"})
+        other = resp.json()["cycle_id"]
         resp = self.client.post(f"/brands/{self.bid}/ads/{other}/handoff/build",
                                 follow_redirects=False)
         self.assertIn("kind=warn", resp.headers["location"])

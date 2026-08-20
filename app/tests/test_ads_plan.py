@@ -166,10 +166,10 @@ class _BasePlanTest(unittest.TestCase):
         bi_repo.create_brand_fact(main.conn, self.bid, actor=ACTOR, fact_type="positioning",
                                   label="定位", value="單一產區濾掛咖啡。",
                                   status="confirmed", confirmed_by=ACTOR)
-        resp = self.client.post(f"/brands/{self.bid}/ads/new",
-                                data={"product_ids": [self.product], "slider_index": "5",
-                                      "objective": "sales"}, follow_redirects=False)
-        self.cycle_id = resp.headers["location"].split("/ads/")[1].split("?")[0]
+        resp = self.client.post(f"/api/campaigns/{self.bid}",
+                                json={"product_ids": [self.product], "budget": 10000,
+                                      "objective": "sales"})
+        self.cycle_id = resp.json()["cycle_id"]
         self._orig_provider = ads_plan.PROVIDER
 
     def tearDown(self):
@@ -322,12 +322,11 @@ class PlanGenerationTest(_BasePlanTest):
 
     def test_background_is_included_in_prompt_when_present(self):
         """票 3：開期背景欄落庫後，計畫生成的 prompt 要讀得到。"""
-        resp = self.client.post(f"/brands/{self.bid}/ads/new",
-                                data={"product_ids": [self.product], "slider_index": "5",
+        resp = self.client.post(f"/api/campaigns/{self.bid}",
+                                json={"product_ids": [self.product], "budget": 10000,
                                       "objective": "sales",
-                                      "background": "母親節檔期，同業都在打折促銷。"},
-                                follow_redirects=False)
-        cycle_id = resp.headers["location"].split("/ads/")[1].split("?")[0]
+                                      "background": "母親節檔期，同業都在打折促銷。"})
+        cycle_id = resp.json()["cycle_id"]
         provider = FakeProvider(response=_fake(json.dumps(_GOOD_OPTIONS, ensure_ascii=False)))
         ads_plan.PROVIDER = provider
         _wait_progress(self.client, f"/brands/{self.bid}/ads/{cycle_id}/plan/progress?run=1")
@@ -397,6 +396,38 @@ class PlanGenerationTest(_BasePlanTest):
         sent = ads_plan.PROVIDER.calls[0]["messages"][0]["content"]
         self.assertIn("想主打新品上市", sent)
 
+    def test_bad_json_does_not_store_any_option(self):
+        resp = self._generate(reply="這期我建議先打通勤族，方案有兩個……")
+        self.assertEqual(resp.status_code, 303)
+        self.assertIn("kind=warn", resp.headers["location"])
+        self.assertEqual(ads_plan.get_pending_options(main.conn, self.bid, self.cycle_id), [])
+        self.assertIsNone(ads_plan.get_latest_plan(main.conn, self.bid, self.cycle_id))
+        self.assertEqual(
+            ads_repo.get_cycle(main.conn, self.bid, self.cycle_id)["status"], "PLANNING")
+
+    def test_fewer_than_two_valid_options_is_rejected(self):
+        resp = self._generate(reply=json.dumps(_INSUFFICIENT_OPTIONS, ensure_ascii=False))
+        self.assertIn("kind=warn", resp.headers["location"])
+        self.assertEqual(ads_plan.get_pending_options(main.conn, self.bid, self.cycle_id), [])
+
+    def test_unavailable_tier_description_is_blanked_even_if_model_wrote_one(self):
+        """就算模型硬寫了暖受眾描述，不可用的層也一律清空（程式的事實優先於模型判定）。"""
+        tampered = json.loads(json.dumps(_GOOD_OPTIONS))
+        tampered["options"][0]["audience"]["warm"]["description"] = "模型亂寫的暖受眾內容"
+        self._generate(reply=json.dumps(tampered, ensure_ascii=False))
+        options = ads_plan.get_pending_options(main.conn, self.bid, self.cycle_id)
+        recommended = next(o for o in options if o["is_recommended"])
+        self.assertEqual(recommended["audience"]["tiers"]["warm"]["description"], "")
+
+    def test_exactly_one_recommended_is_enforced(self):
+        """模型兩個方案都標推薦（不誠實）：程式要修正成剛好一個，不是照單全收。"""
+        both_recommended = json.loads(json.dumps(_GOOD_OPTIONS))
+        for option in both_recommended["options"]:
+            option["is_recommended"] = True
+        self._generate(reply=json.dumps(both_recommended, ensure_ascii=False))
+        options = ads_plan.get_pending_options(main.conn, self.bid, self.cycle_id)
+        self.assertEqual(sum(1 for o in options if o["is_recommended"]), 1)
+
     def test_missing_methodology_file_does_not_block_and_is_shown_honestly(self):
         """票 11：方法論檔缺失時，流程照走、頁面誠實標注、audit 有紀錄。"""
         tmp_dir = Path(tempfile.mkdtemp(prefix="brand_os_methodology_"))
@@ -440,37 +471,6 @@ class PlanGenerationTest(_BasePlanTest):
         self.assertTrue(any(r["brand_id"] == self.bid for r in rows))
         self.assertEqual(rows[-1]["action"], "missing")
 
-    def test_bad_json_does_not_store_any_option(self):
-        resp = self._generate(reply="這期我建議先打通勤族，方案有兩個……")
-        self.assertEqual(resp.status_code, 303)
-        self.assertIn("kind=warn", resp.headers["location"])
-        self.assertEqual(ads_plan.get_pending_options(main.conn, self.bid, self.cycle_id), [])
-        self.assertIsNone(ads_plan.get_latest_plan(main.conn, self.bid, self.cycle_id))
-        self.assertEqual(
-            ads_repo.get_cycle(main.conn, self.bid, self.cycle_id)["status"], "PLANNING")
-
-    def test_fewer_than_two_valid_options_is_rejected(self):
-        resp = self._generate(reply=json.dumps(_INSUFFICIENT_OPTIONS, ensure_ascii=False))
-        self.assertIn("kind=warn", resp.headers["location"])
-        self.assertEqual(ads_plan.get_pending_options(main.conn, self.bid, self.cycle_id), [])
-
-    def test_unavailable_tier_description_is_blanked_even_if_model_wrote_one(self):
-        """就算模型硬寫了暖受眾描述，不可用的層也一律清空（程式的事實優先於模型判定）。"""
-        tampered = json.loads(json.dumps(_GOOD_OPTIONS))
-        tampered["options"][0]["audience"]["warm"]["description"] = "模型亂寫的暖受眾內容"
-        self._generate(reply=json.dumps(tampered, ensure_ascii=False))
-        options = ads_plan.get_pending_options(main.conn, self.bid, self.cycle_id)
-        recommended = next(o for o in options if o["is_recommended"])
-        self.assertEqual(recommended["audience"]["tiers"]["warm"]["description"], "")
-
-    def test_exactly_one_recommended_is_enforced(self):
-        """模型兩個方案都標推薦（不誠實）：程式要修正成剛好一個，不是照單全收。"""
-        both_recommended = json.loads(json.dumps(_GOOD_OPTIONS))
-        for option in both_recommended["options"]:
-            option["is_recommended"] = True
-        self._generate(reply=json.dumps(both_recommended, ensure_ascii=False))
-        options = ads_plan.get_pending_options(main.conn, self.bid, self.cycle_id)
-        self.assertEqual(sum(1 for o in options if o["is_recommended"]), 1)
 
 
 class PlanBudgetCapTest(_BasePlanTest):
@@ -549,6 +549,13 @@ class AudienceAvailabilityTest(unittest.TestCase):
 
 
 class PlanPageTest(_BasePlanTest):
+    def test_select_page_shows_recommended_badge_and_difference(self):
+        self._generate()
+        resp = self.client.get(f"/brands/{self.bid}/ads/{self.cycle_id}/plan/select")
+        self.assertIn("AI 推薦", resp.text)
+        self.assertIn("主打通勤族的省錢與快速訴求", resp.text)
+        self.assertIn("不打通勤族，改打願意為風味付費的鑑賞型客群", resp.text)
+
     def test_page_shows_plan_split_by_grounding(self):
         self._generate_and_select()
         resp = self.client.get(f"/brands/{self.bid}/ads/{self.cycle_id}")
@@ -565,13 +572,6 @@ class PlanPageTest(_BasePlanTest):
         self.assertIn("暖受眾（再行銷）", resp.text)
         self.assertIn("這期用不到", resp.text)
         self.assertIn("還沒有廣告帶來過網站流量", resp.text)
-
-    def test_select_page_shows_recommended_badge_and_difference(self):
-        self._generate()
-        resp = self.client.get(f"/brands/{self.bid}/ads/{self.cycle_id}/plan/select")
-        self.assertIn("AI 推薦", resp.text)
-        self.assertIn("主打通勤族的省錢與快速訴求", resp.text)
-        self.assertIn("不打通勤族，改打願意為風味付費的鑑賞型客群", resp.text)
 
     def test_gate_appears_only_in_review(self):
         before = self.client.get(f"/brands/{self.bid}/ads/{self.cycle_id}")

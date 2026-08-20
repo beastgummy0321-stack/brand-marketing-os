@@ -54,11 +54,13 @@ class _BaseOnboardingTest(unittest.TestCase):
         self.bid = self.brand["id"]
 
     def _open(self, amount="10000", objective="sales", mode="real"):
-        resp = self.client.post(f"/brands/{self.bid}/ads/new",
-                                data={"custom_amount": amount, "objective": objective,
-                                      "mode": mode},
-                                follow_redirects=False)
-        return resp.headers["location"].split("/ads/")[1].split("?")[0]
+        resp = self.client.post(
+            f"/api/campaigns/{self.bid}",
+            json={"product_ids": [], "budget": float(amount), "objective": objective,
+                  "simulate": mode == "simulation"},
+        )
+        self.assertEqual(resp.status_code, 200)
+        return resp.json()["cycle_id"]
 
 
 class CalibrationTest(_BaseOnboardingTest):
@@ -74,9 +76,9 @@ class CalibrationTest(_BaseOnboardingTest):
 
     def test_simulation_does_not_consume_the_calibration_slot(self):
         """模擬期不算真的跑過——第一期真檔期還是要當校準期。"""
-        self.client.post(f"/brands/{self.bid}/ads/new",
-                         data={"custom_amount": "5000", "objective": "sales",
-                               "mode": "simulation"}, follow_redirects=False)
+        self.client.post(f"/api/campaigns/{self.bid}",
+                         json={"product_ids": [], "budget": 5000, "objective": "sales",
+                               "simulate": True})
         real = self._open()
         self.assertEqual(ads_repo.get_cycle(main.conn, self.bid, real)["phase"], "calibration")
 
@@ -223,9 +225,9 @@ class DiffViewTest(_BaseOnboardingTest):
 
     def test_simulation_is_not_used_as_the_comparison_baseline(self):
         """模擬期不是真的跑過，不該拿來當「上一期」比較。"""
-        self.client.post(f"/brands/{self.bid}/ads/new",
-                         data={"custom_amount": "5000", "objective": "sales",
-                               "mode": "simulation"}, follow_redirects=False)
+        self.client.post(f"/api/campaigns/{self.bid}",
+                         json={"product_ids": [], "budget": 5000, "objective": "sales",
+                               "simulate": True})
         real = self._open(amount="10000")
         self.assertIsNone(onboarding.diff_with_previous(main.conn, self.bid, real))
 
