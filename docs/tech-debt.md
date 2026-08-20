@@ -22,7 +22,6 @@
 | `app/brand_intelligence/repository.py` | 1667 | 2.08× | 依表分檔（brand／product／rule／claim） |
 | `app/tests/test_ads_reading.py` | 1157 | 1.4× | 測試檔，優先度最低 |
 | `app/ads/reading.py` | 1039 | 1.3× | 判讀規則與資料取數分離 |
-| `app/intake/routes.py` | 951 | 1.2× | 依精靈五步分檔 |
 | `app/tests/test_ads_creative.py` | 870 | 1.1× | 測試檔，優先度最低 |
 | `app/ads/repository.py` | 856 | 1.07× | 剛超標，先觀察 |
 

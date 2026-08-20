@@ -130,27 +130,7 @@ class QuickPathTest(_Base):
         bid = self._create_full()
         self.assertIsNotNone(state.get_draft(bid))
 
-    def test_html_form_only_name_also_quick_no_draft(self):
-        """S4.4／S4.6 放寬後，舊 HTML 表單也可以只填名稱送出（同一支共用函式）。"""
-        name = self._brand_name()
-        resp = self.client.post("/brands/intake/new", data={
-            "name": name, "client_name": "", "description": "",
-            "url_1": "", "url_2": "", "url_3": "", "url_4": "", "url_5": "",
-        }, follow_redirects=False)
-        self.assertEqual(resp.status_code, 303)
-        self.assertNotIn("/intake/scan/progress", resp.headers["location"])
-        brand_id = resp.headers["location"].split("/brands/")[1].split("?")[0]
-        self.assertIsNone(state.get_draft(brand_id))
-        page = self.client.get(resp.headers["location"])
-        self.assertIn(f"已建立品牌「{name}」", page.text)
 
-    def test_html_form_missing_name_still_errors(self):
-        resp = self.client.post("/brands/intake/new", data={
-            "name": "", "client_name": "", "description": "",
-            "url_1": "", "url_2": "", "url_3": "", "url_4": "", "url_5": "",
-        }, follow_redirects=False)
-        self.assertEqual(resp.status_code, 400)
-        self.assertIn("請填寫品牌名稱。", resp.text)
 
     def test_missing_name_json_errors(self):
         resp = self.client.post("/api/intake/brands", data={"brand_name": ""})

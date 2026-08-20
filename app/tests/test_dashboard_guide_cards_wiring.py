@@ -207,7 +207,7 @@ class CockpitGuideCardsWiringTest(unittest.TestCase):
         self.assertEqual(len(cards), 1)
         self.assertIn("建檔進行中（第 2 步，共 5 步）", cards[0]["title"])
         self.assertIn("繼續建檔", cards[0]["title"])
-        self.assertEqual(cards[0]["action_url"], f"/brands/{brand_id}/intake/scan/progress")
+        self.assertEqual(cards[0]["action_url"], f"/app/brands/{brand_id}/intake")
 
     def test_cockpit_endpoint_does_not_write_any_row(self):
         """接口鐵則：只讀。指南卡的資料源多讀了 campaign_cycle／performance_reading／
