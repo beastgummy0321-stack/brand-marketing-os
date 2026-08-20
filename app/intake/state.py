@@ -156,15 +156,7 @@ def _row_to_draft(conn, row: dict) -> dict:
 
 def _resume_path(draft: dict) -> str:
     b = draft["brand_id"]
-    step = draft["step"]
-    if step <= 2:
-        return f"/brands/{b}/intake/scan" if draft["scan_done"] else f"/brands/{b}/intake/scan/progress"
-    if step == 3:
-        return f"/brands/{b}/intake/question"
-    if step == 4:
-        return f"/brands/{b}/intake/handoff"
-    return (f"/brands/{b}/intake/review" if draft["pending_item_count"]
-            else f"/brands/{b}/intake/paste")
+    return f"/app/brands/{b}/intake"
 
 
 def save(draft: dict, conn=None) -> None:

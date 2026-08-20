@@ -28,3 +28,6 @@ archive/
 .claude/settings.local.json
 .playwright-mcp/
 .worktrees/
+
+# pytest --basetemp 暫存區
+.tmp/

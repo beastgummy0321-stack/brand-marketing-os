@@ -211,11 +211,11 @@ def demo() -> None:
     cards_with_draft = build({"brand_id": "b", "conversion_goal": "purchase",
                               "pending_facts_count": 0, "active_cycle": None,
                               "reading_ready": False, "next_cycle_draft_ready": False,
-                              "intake_draft": {"step": 2, "resume_path": "/brands/b/intake/scan"}})
+                              "intake_draft": {"step": 2, "resume_path": "/app/brands/b/intake"}})
     assert len(cards_with_draft) == 1
     assert cards_with_draft[0] == {
         "title": "建檔進行中（第 2 步，共 5 步）・繼續建檔",
-        "action_url": "/brands/b/intake/scan",
+        "action_url": "/app/brands/b/intake",
     }
     assert build({"brand_id": "b", "conversion_goal": "purchase", "pending_facts_count": 0,
                   "active_cycle": None, "reading_ready": False,
