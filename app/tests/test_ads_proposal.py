@@ -3,6 +3,7 @@
 
 import atexit
 import json
+import re
 import shutil
 import tempfile
 import unittest
@@ -34,6 +35,9 @@ def _cleanup():
 atexit.register(_cleanup)
 ACTOR = "測試員"
 FORBIDDEN_WORDS = ("受眾", "漏斗", "CPA", "CTR", "CPC", "ROAS", "KPI")
+# 掃術語前先把 id 拿掉：id 是 Crockford Base32 亂數（app/core/db.py:30），
+# 「CPA」「CPC」「CTR」這些字母組合會隨機出現在 id 裡，讓斷言隨機變紅。
+_ID_RE = re.compile(r"[a-z]+_[0-9A-HJKMNP-TV-Z]{26}")
 
 
 class ProposalTest(unittest.TestCase):
@@ -213,7 +217,7 @@ class ProposalTest(unittest.TestCase):
         self._plan(cycle["id"])
         self._theme(cycle["id"])
         body = proposal.proposal(main.conn, self.bid, cycle["id"])
-        rendered = json.dumps(body, ensure_ascii=False)
+        rendered = _ID_RE.sub("", json.dumps(body, ensure_ascii=False))
         self.assertIn("真實素材內容", rendered)
         for word in FORBIDDEN_WORDS:
             self.assertNotIn(word, rendered)

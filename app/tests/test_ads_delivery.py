@@ -2,6 +2,7 @@
 """T3 交付確認的未完成與人工確認防線。"""
 
 import json
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -15,6 +16,10 @@ from app.ads import repository_channel_plan as channel_repo
 from app.brand_intelligence import repository as bi
 from app.core import db
 from app.core.db import new_id, now_iso
+
+# 掃術語前先把 id 拿掉：id 是 Crockford Base32 亂數（app/core/db.py:30），
+# 「CPA」「CPC」「CTR」這些字母組合會隨機出現在 id 裡，讓這個斷言隨機變紅。
+_ID_RE = re.compile(r"[a-z]+_[0-9A-HJKMNP-TV-Z]{26}")
 
 
 class DeliveryTest(unittest.TestCase):
@@ -177,7 +182,7 @@ class DeliveryTest(unittest.TestCase):
         rejected = self.client.post(f"{root}/items/{item_id}/reject")
         self.assertEqual(rejected.status_code, 200)
         forbidden = ("受眾", "漏斗", "CPA", "CTR", "CPC", "ROAS", "KPI")
-        payload = json.dumps(confirmed.json(), ensure_ascii=False)
+        payload = _ID_RE.sub("", json.dumps(confirmed.json(), ensure_ascii=False))
         self.assertFalse(any(word in payload for word in forbidden))
 
     def test_channel_plan_put_persists_partial_enabled_changes_and_rejects_unknown_channel(self):

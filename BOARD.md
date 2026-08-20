@@ -4,10 +4,7 @@
 標「需批准」的票動工前先提計畫等批准；動到畫面先過畫面契約（草圖 → 後端 → 前端）。
 2026-08-19 重盤：import 環已清零；brand_web/routes.py 1850 超標為現存最大檔。
 
-- [ ] F0 飄動測試隔離（從 T4 提前）：`-n auto` 下時序閃爍的測試逐一定位並修穩，
-  已知 ScanBackgroundTest、PlanBudgetCapTest::test_under_limit_still_generates_normally
-  （2026-08-19 W1 兩輪審查各誤判退件一次，單獨跑皆過）
 - [ ] M1 Meta 官方 MCP 接入：自動建廣告（PAUSED）＋使用者按發布；保守檔同意執行／放手檔執行器；動安全底線（需批准；與 T0–T3 並行）
 - [ ] P1 成效回流接通：帶單切角下期加權＋反回音室自動避開（兌現 nextcycle 既有承諾）
 - [ ] U1 新手五鐵則落地：全站術語大掃除＋禁用詞機器閘門＋步驟指示常駐（契約鐵則 11–12 驗收）；含鐵則 9 清理——weekly 通知雙出口（dashboard/repository.py:207，票 06 起既有）
-- [ ] T4 收尾：訂單頁搬家、Jinja 66 實頁整批刪除（ads 23＋brand_web 34＋intake 9，2026-08-19 盤點為基準清單；含 ReviewPanel 死碼）、顧問報告保留只搬家（2026-08-15 裁決）、dashboard 私有變數越界修正（routes_jobs_api.py:24-26）（前置 T1–T3；飄動測試已抽成 F0 獨立處理）
+- [ ] T4 收尾：訂單頁搬家、Jinja 66 實頁整批刪除（ads 23＋brand_web 34＋intake 9，2026-08-19 盤點為基準清單；含 ReviewPanel 死碼）、顧問報告保留只搬家（2026-08-15 裁決）、dashboard 私有變數越界修正（routes_jobs_api.py:24-26）（前置 T1–T3）

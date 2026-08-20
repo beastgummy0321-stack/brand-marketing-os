@@ -283,14 +283,21 @@ class ScanBackgroundTest(_Base):
         import threading
         bid = self._create_full()
         release = threading.Event()
-        orig_fetch = intake_ai.fetch_url
 
-        def _blocking_fetch(url):
-            release.wait(timeout=5)
-            return orig_fetch(url)
+        class _BlockingProvider(FakeProvider):
+            """卡住第一個背景工作，直到兩個請求都送完。
 
-        intake_ai.fetch_url = _blocking_fetch
-        intake_ai.PROVIDER = FakeProvider(response=_fake_response(_SCAN_OK))
+            原本是卡 `intake_ai.fetch_url`，但 `_create_full()` 的草稿沒有網址，
+            `ai.run_scan` 的抓網址迴圈一次都不會跑（app/intake/ai.py:187），等於完全沒卡到：
+            第一個工作往往在第二個請求送出前就結束，第二個請求就合法地再起一條執行緒，
+            斷言時好時壞。改卡 provider——初掃一定會呼叫它，時序才是確定的。
+            """
+
+            def complete(self, **kwargs):
+                release.wait(timeout=5)
+                return super().complete(**kwargs)
+
+        intake_ai.PROVIDER = _BlockingProvider(response=_fake_response(_SCAN_OK))
         try:
             r1 = self.client.post(f"/api/intake/brands/{bid}/scan/start")
             r2 = self.client.post(f"/api/intake/brands/{bid}/scan/start")

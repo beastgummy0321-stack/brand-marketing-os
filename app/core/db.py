@@ -46,11 +46,47 @@ def get_db_path() -> Path:
     return Path(raw) if raw else DEFAULT_DB_PATH
 
 
+class _Rows:
+    """execute() 的回傳值：已在鎖裡讀完的結果集，介面比照游標的讀取部分。
+
+    呼叫端只用到 fetchone/fetchall/迭代/rowcount（cursor()、fetchmany、lastrowid、
+    description 全站 0 處使用），所以只實作這四項。
+
+    ponytail: 鎖裡一次 fetchall 全量取出，大 SELECT 會整批進記憶體——單機單人、資料量小，
+    可接受；真的撞到記憶體再改成鎖內分批取。
+    """
+
+    __slots__ = ("_rows", "_index", "rowcount")
+
+    def __init__(self, rows, rowcount):
+        self._rows = rows
+        self._index = 0
+        self.rowcount = rowcount
+
+    def fetchone(self):
+        if self._index >= len(self._rows):
+            return None
+        self._index += 1
+        return self._rows[self._index - 1]
+
+    def fetchall(self):
+        rest = self._rows[self._index:]
+        self._index = len(self._rows)
+        return rest
+
+    def __iter__(self):
+        return iter(self.fetchall())
+
+
 class _LockingConnection:
     """sqlite3.Connection 包一層鎖（修憲落地 M3）：db.py 原本假設「同一時間只會有一個請求
     在動用這條連線」，等待頁改背景執行緒生成後不再成立——背景執行緒與其他請求的執行緒
     現在可能同時碰同一條全域連線。包住會進出 sqlite3 底層 C API 的方法，讓呼叫序列化，
-    不留資料損毀的可能；游標的 fetchone/fetchall 等單純讀取回傳值，透傳即可。
+    不留資料損毀的可能。
+
+    execute() 必須在鎖裡就把結果讀完再回傳（回傳 _Rows，不是還沒讀完的游標）：
+    只鎖 execute()、讓 fetchone/fetchall 在鎖外跑是錯的——兩條執行緒會互踩同一條連線的
+    游標，讀到 None、整列 NULL、別筆資料，或直接拋 sqlite3.InterfaceError。
 
     ponytail: 全域單一鎖序列化寫入，不是逐表細粒度鎖——這個應用是單一使用者的原型階段、
     並行量低，真的看到吞吐瓶頸再細分（見 docs/decisions/0037 原型階段結束條件）。
@@ -62,7 +98,9 @@ class _LockingConnection:
 
     def execute(self, *args, **kwargs):
         with self._lock:
-            return self._conn.execute(*args, **kwargs)
+            cursor = self._conn.execute(*args, **kwargs)
+            rows = cursor.fetchall() if cursor.description is not None else []
+            return _Rows(rows, cursor.rowcount)
 
     def executemany(self, *args, **kwargs):
         with self._lock:
