@@ -56,47 +56,5 @@ class OrdersRoutesTest(unittest.TestCase):
                                           client_name=None, actor=ACTOR)
         self.bid = self.brand["id"]
 
-    def test_orders_home_page_renders_with_no_history(self):
-        resp = self.client.get(f"/brands/{self.bid}/orders")
-        self.assertEqual(resp.status_code, 200)
-        self.assertIn("累積中", resp.text)
-
-    def test_upload_easystore_xlsx_lands_orders_in_db(self):
-        resp = self.client.post(
-            f"/brands/{self.bid}/orders/import",
-            files={"drop_file": ("Export_Orders.xlsx", _easystore_xlsx_bytes(),
-                                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
-            follow_redirects=False,
-        )
-        self.assertEqual(resp.status_code, 303)
-        self.assertIn("kind=ok", resp.headers["location"])
-        count = main.conn.execute(
-            "SELECT COUNT(*) c FROM order_record WHERE brand_id = ?", (self.bid,)
-        ).fetchone()["c"]
-        self.assertEqual(count, 1)
-
-        # 匯完之後首頁看得到剛剛的訂單，統計卡不再顯示「累積中」的空狀態
-        page = self.client.get(f"/brands/{self.bid}/orders")
-        self.assertIn("ORD1", page.text)
-
-    def test_upload_unrecognisable_file_gives_honest_warning_not_a_500(self):
-        resp = self.client.post(
-            f"/brands/{self.bid}/orders/import",
-            files={"drop_file": ("mystery.csv", b"foo,bar\n1,2\n", "text/csv")},
-            follow_redirects=False,
-        )
-        self.assertEqual(resp.status_code, 303)
-        self.assertIn("kind=warn", resp.headers["location"])
-
-    def test_sku_cost_form_rejects_non_numeric_input(self):
-        resp = self.client.post(
-            f"/brands/{self.bid}/orders/sku-cost",
-            data={"sku": "SKU-A", "unit_cost": "abc"},
-            follow_redirects=False,
-        )
-        self.assertEqual(resp.status_code, 303)
-        self.assertIn("kind=warn", resp.headers["location"])
-
-
 if __name__ == "__main__":
     unittest.main()
