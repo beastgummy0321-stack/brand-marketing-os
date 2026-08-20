@@ -17,6 +17,7 @@ from app.brand_intelligence import repository as bi
 from app.brand_web.routes_library import active_jobs as library_active_jobs
 from app.brand_web.routes_products import active_jobs as product_research_active_jobs
 from app.brand_web.routes_report_api import active_jobs as brand_report_active_jobs
+from app.ads.routes_onboarding_api import active_jobs as onboarding_active_jobs
 from app.intake.routes_api import active_jobs as intake_active_jobs
 from app.shared import web
 
@@ -33,7 +34,7 @@ async def jobs_active():
     conn = web.conn
     active = (
         intake_active_jobs() + product_research_active_jobs() + library_active_jobs()
-        + brand_report_active_jobs()
+        + brand_report_active_jobs() + onboarding_active_jobs()
     )
     jobs = [{**job, "brand_name": _brand_name(conn, job["brand_id"])} for job in active]
     return {"data": jobs, "generated_at": datetime.now(timezone.utc).isoformat()}

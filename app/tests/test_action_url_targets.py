@@ -36,8 +36,6 @@ class ActionUrlTargetsTest(unittest.TestCase):
         for source in SOURCES:
             files.extend(source.rglob("*.py") if source.is_dir() else [source])
         for path in files:
-            if path.name == "data_onboarding.py":
-                continue  # 這份清單只餵 ads_data_migration.html（票 05 一併刪除），沒有新殼消費者。
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
             for value in _action_url_nodes(tree):
                 if isinstance(value, ast.Constant) and isinstance(value.value, str):

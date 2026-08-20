@@ -104,10 +104,9 @@ class EmptyStateTest(_BaseTest):
     def test_each_tile_has_independent_action_link_no_blocking(self):
         """①四格各自可獨立完成／跳過，任一格未完成不阻擋其他格操作。"""
         resp = self._get()
-        self.assertIn("/settings#settings-meta-title", resp.text)
-        self.assertIn(f"/brands/{self.bid}/ads/connections", resp.text)
-        self.assertIn("/settings#settings-ga4-title", resp.text)
-        self.assertIn(f"/brands/{self.bid}/ads/interview", resp.text)
+        self.assertIn("/app/settings", resp.text)
+        self.assertIn(f"/app/brands/{self.bid}/orders", resp.text)
+        self.assertIn(f"/app/brands/{self.bid}/campaigns", resp.text)
 
 
 class TileStatusTest(_BaseTest):

@@ -133,13 +133,13 @@ def build_checklist(conn, brand_id: str, today: Optional[str] = None) -> list:
     else:
         meta_status = "not_started"
     if not meta_configured:
-        meta_action = ("前往設定頁連線", "/settings#settings-meta-title")
+        meta_action = ("前往設定頁連線", "/app/settings")
     elif pending:
-        meta_action = ("前往認領舊廣告", f"/brands/{brand_id}/ads/claims")
+        meta_action = ("前往認領舊廣告", f"/app/brands/{brand_id}/ads-claims")
     elif not meta_has_data:
-        meta_action = ("回填近 12 個月成效", f"/brands/{brand_id}/ads/connections/meta/backfill")
+        meta_action = ("回填近 12 個月成效", f"/app/brands/{brand_id}/data-onboarding")
     else:
-        meta_action = ("看目前的認領清單", f"/brands/{brand_id}/ads/claims")
+        meta_action = ("看目前的認領清單", f"/app/brands/{brand_id}/ads-claims")
     meta_baseline = None
     if meta_has_data:
         kpis = meta_totals["kpis"]
@@ -183,7 +183,7 @@ def build_checklist(conn, brand_id: str, today: Optional[str] = None) -> list:
         "status": order_status, "has_data": order_has_data,
         "badge_label": _STATUS_BADGE[order_status][0], "badge_kind": _STATUS_BADGE[order_status][1],
         "description": _ORDER_DESC[order_status],
-        "action_text": "前往資料與連線頁匯入", "action_url": f"/brands/{brand_id}/ads/connections",
+        "action_text": "前往訂單頁匯入", "action_url": f"/app/brands/{brand_id}/orders",
         "baseline": order_baseline, "baseline_note": None,
         "hint": _HINTS["order_backfill"],
     })
@@ -199,9 +199,9 @@ def build_checklist(conn, brand_id: str, today: Optional[str] = None) -> list:
     else:
         ga4_status = "not_started"
     if not ga4_configured:
-        ga4_action = ("前往設定頁連線", "/settings#settings-ga4-title")
+        ga4_action = ("前往設定頁連線", "/app/settings")
     else:
-        ga4_action = ("一鍵回填 12 個月", f"/brands/{brand_id}/ads/connections/ga4/backfill")
+        ga4_action = ("開始回填近 12 個月", f"/app/brands/{brand_id}/data-onboarding")
     ga4_baseline = None
     if ga4_has_data:
         ga4_baseline = [
@@ -227,8 +227,7 @@ def build_checklist(conn, brand_id: str, today: Optional[str] = None) -> list:
         "badge_kind": "ok" if done else "neutral",
         "description": "已經記錄過前朝教訓。" if done else "選填，把過去踩過的雷交給系統參考。",
         "action_text": "再訪談一次（選做）" if done else "開始訪談（選做）",
-        "action_url": f"/brands/{brand_id}/ads/interview"
-                       f"?next=/brands/{brand_id}/ads/data-migration",
+        "action_url": f"/app/brands/{brand_id}/campaigns",
         "baseline": None, "baseline_note": None, "hint": None,
     })
 
