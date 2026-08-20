@@ -54,7 +54,7 @@ def check_readiness(conn: sqlite3.Connection, brand_id: str, product_ids: list) 
             "code": "no_brand_facts",
             "message": "這個品牌還沒有已確認的品牌事實，AI 只能靠品牌名稱猜，內容會比較空泛。",
             "action_label": "去補品牌事實",
-            "action_url": f"/brands/{brand_id}/hub/facts",
+            "action_url": f"/app/brands/{brand_id}/library",
         })
 
     missing_economics = []
@@ -71,7 +71,7 @@ def check_readiness(conn: sqlite3.Connection, brand_id: str, product_ids: list) 
             "message": (f"「{names}」還沒有可用的成本售價，預算只能平均分配，"
                         "分完不一定符合各產品的實際賺頭。"),
             "action_label": "去填成本售價",
-            "action_url": f"/brands/{brand_id}/hub/products",
+            "action_url": f"/app/brands/{brand_id}/products",
         })
 
     for product_id in product_ids:
@@ -85,7 +85,7 @@ def check_readiness(conn: sqlite3.Connection, brand_id: str, product_ids: list) 
                 "message": (f"「{product['name']}」還沒有已確認的產品事實，"
                             "這期針對它產出的內容精準度會打折。"),
                 "action_label": "去深入調研",
-                "action_url": f"/brands/{brand_id}/products/{product_id}",
+                "action_url": f"/app/brands/{brand_id}/products/{product_id}",
             })
     return notes
 

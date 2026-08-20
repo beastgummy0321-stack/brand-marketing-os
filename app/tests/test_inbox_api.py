@@ -114,6 +114,22 @@ class InboxApiTest(unittest.TestCase):
         self.assertEqual(len(body["data"]["open"]), 0)
 
 
+class InterruptResolveApiTest(unittest.TestCase):
+    def setUp(self):
+        main.conn.execute("DELETE FROM interrupt")
+        main.conn.commit()
+        self.client = TestClient(main.app)
+
+    def test_resolve_api_returns_json(self):
+        interrupt_id = core_interrupts.enqueue(
+            main.conn, category="cycle_reminder", dedupe_key="api-resolve", message="test",
+        )
+        main.conn.commit()
+        response = self.client.post(f"/api/interrupts/{interrupt_id}/resolve")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"ok": True})
+
+
 class PrototypePhaseApiTest(unittest.TestCase):
     def setUp(self):
         main.conn.execute("DELETE FROM app_setting WHERE key = ?", (core_prototype_phase.FLAG_SETTING,))

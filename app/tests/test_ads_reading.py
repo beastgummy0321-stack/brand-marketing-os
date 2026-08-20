@@ -498,10 +498,10 @@ class FinalizeTest(_ReadingIntegrationBase):
         open_items = core_interrupts.list_open(main.conn)
         matches = [i for i in open_items if i["category"] == "prototype_phase_ended"]
         self.assertTrue(matches)
-        self.assertEqual(matches[0]["action_url"], "/system/prototype-phase")
+        self.assertEqual(matches[0]["action_url"], "/app/inbox")
 
         # 修憲落地 A6 修正：「詳情」連結要能真的看到四項豁免的逐項內容，不是死連結。
-        resp = self.client.get("/system/prototype-phase")
+        resp = self.client.get("/api/system/prototype-phase")
         self.assertEqual(resp.status_code, 200)
         for exemption in prototype_phase.EXEMPTIONS:
             self.assertIn(exemption["item"], resp.text)

@@ -18,11 +18,13 @@
 誰依賴它：只有 `app/main.py`。
 """
 
+import os
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, Form, Request
+from fastapi import APIRouter, File, Form, Request, UploadFile
 from fastapi.responses import JSONResponse, Response
 
 from app import mock_data as md
@@ -31,7 +33,7 @@ from app.brand_intelligence import customer_voice as cv_mod
 from app.brand_intelligence import repository as repo
 from app.core import cleanup
 from app.core import settings as core_settings
-from app.core.db import new_id
+from app.core.db import REPO_ROOT, new_id
 from app.llm import gateway, providers
 from app.shared import web
 from app.shared.web import NotFoundKind, clean, require_actor, require_brand
@@ -41,6 +43,59 @@ router = APIRouter()
 PROVIDER = providers.AnthropicProvider()
 PARSE_FAIL_MESSAGE = cv_mod.PARSE_FAIL_MESSAGE
 COST_CUSTOMER_VOICE_EXTRACTION = cv_mod.COST_CUSTOMER_VOICE_EXTRACTION
+
+_ASSET_CONTENT_TYPES = {
+    "jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png",
+    "webp": "image/webp", "gif": "image/gif",
+}
+_UNSAFE_ASSET_FILENAME_CHARS = re.compile(r"[^A-Za-z0-9._-]+")
+
+
+def _assets_upload_dir() -> Path:
+    raw = os.environ.get("BRAND_OS_UPLOADS")
+    base = Path(raw) if raw else REPO_ROOT / "data" / "uploads"
+    return base / "assets"
+
+
+def _safe_asset_filename(name: str) -> str:
+    name = os.path.basename((name or "").strip())
+    name = _UNSAFE_ASSET_FILENAME_CHARS.sub("_", name)
+    return name or "file"
+
+
+def save_official_asset(brand_id: str, *, actor: str, asset_kind: str, product_id: str,
+                        title: str, filename: str, content: bytes) -> tuple[bool, Optional[str]]:
+    """儲存一筆素材；失敗一律回傳可直接給 API 或表單顯示的訊息。"""
+    if asset_kind not in dict(md.ASSET_KINDS):
+        return False, "請選擇素材類型。"
+    product_id = clean(product_id)
+    if product_id and not repo.get_product(web.conn, brand_id, product_id):
+        return False, "找不到所選產品。"
+    filename = filename or ""
+    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+    if not filename or not content:
+        return False, "請選擇一個圖檔上傳。"
+    if ext not in _ASSET_CONTENT_TYPES:
+        return False, f"「{filename}」不是支援的圖片格式，請用 png、jpg、jpeg、webp 或 gif。"
+
+    dest_path: Optional[Path] = None
+    try:
+        dest_dir = _assets_upload_dir() / new_id("oas")
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        dest_path = dest_dir / _safe_asset_filename(filename)
+        dest_path.write_bytes(content)
+        repo.create_official_asset(
+            web.conn, brand_id, actor=actor, asset_kind=asset_kind, file_path=str(dest_path),
+            product_id=product_id or None, title=clean(title) or None,
+        )
+    except (OSError, ValueError):
+        if dest_path is not None:
+            try:
+                dest_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+        return False, "素材儲存失敗，請稍後再試。"
+    return True, None
 
 
 def extract(conn, brand_id: str, *, actor: str, raw_text: str, source_channel: str,
@@ -177,6 +232,20 @@ async def library_bundle(brand_id: str):
     return {"data": data, "generated_at": datetime.now(timezone.utc).isoformat()}
 
 
+@router.post("/api/brands/{brand_id}/assets")
+async def asset_upload_api(request: Request, brand_id: str, asset_kind: str = Form(""),
+                           product_id: str = Form(""), title: str = Form(""),
+                           file: UploadFile = File(...)):
+    require_brand(brand_id)
+    ok, detail = save_official_asset(
+        brand_id, actor=require_actor(request), asset_kind=asset_kind, product_id=product_id,
+        title=title, filename=file.filename or "", content=await file.read(),
+    )
+    if not ok:
+        return JSONResponse({"detail": detail}, status_code=400)
+    return {"ok": True}
+
+
 # ---------------------------------------------------------------------------
 # 自有渠道編輯／刪除（S5.31：後端本來只有 create_channel／list_channels，本票新補）
 # ---------------------------------------------------------------------------
@@ -239,7 +308,7 @@ def active_jobs() -> list[dict]:
             "status": state["status"],
             "stage": "分析原話中",
             "started_at": state.get("started_at") or "",
-            "action_url": f"/brands/{state['brand_id']}/library",
+        "action_url": f"/app/brands/{state['brand_id']}/library",
         }
         for _job_key, state in _cv_jobs.items()
         if state.get("status") in ("running", "waiting") and state.get("brand_id")
@@ -249,7 +318,7 @@ def active_jobs() -> list[dict]:
 def _cv_notify(brand_id: str, job_key: str, message: str) -> None:
     background_job.notify(
         web.conn, brand_id, category="customer_voice_extraction_done", dedupe_key=job_key,
-        message=message, action_url=f"/brands/{brand_id}/hub?tab=customer-voice",
+        message=message, action_url=f"/app/brands/{brand_id}/library",
     )
 
 

@@ -122,7 +122,7 @@ class CheckCycleTest(unittest.TestCase):
         # money_loss 會把品牌燈號直接判紅，真的賠錢由判讀狀態機負責喊。
         self.assertEqual(rows[0]["severity"], "rule_warning")
         self.assertEqual(rows[0]["campaign_cycle_id"], cycle_id)
-        self.assertEqual(rows[0]["action_url"], f"/brands/{self.bid}/ads/{cycle_id}/performance")
+        self.assertEqual(rows[0]["action_url"], f"/app/brands/{self.bid}/campaigns/{cycle_id}")
         self.assertLessEqual(len(rows[0]["message"]), 30)
 
     def test_underspend_enqueues_rule_warning_interrupt(self):

@@ -150,7 +150,7 @@ class ShortCodeAndAlertTest(TrackingBase):
         alerts = core_interrupts.list_open(main.conn, archive_stale=False)
         burn = next(a for a in alerts if a["dedupe_key"].startswith("burn_no_cycle:cmp_orphan"))
         self.assertIsNone(burn["brand_id"])
-        self.assertEqual(burn["action_url"], "/settings")
+        self.assertEqual(burn["action_url"], "/app/settings")
 
 
 class TrackingChainApiTest(TrackingBase):

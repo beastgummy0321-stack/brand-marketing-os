@@ -34,7 +34,7 @@ from typing import Optional
 
 from fastapi import FastAPI, Form, Request
 from fastapi.exception_handlers import http_exception_handler
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
@@ -224,26 +224,9 @@ def _today_todos() -> list:
 
 
 @app.get("/")
-async def brand_overview(request: Request, empty: Optional[str] = None):
-    show_empty = empty == "1"
-    active = [] if show_empty else list_active_brands()
-    archived = [] if show_empty else list_archived_brands()
-    rows = []
-    for b in active:
-        products = list_products(b["id"])
-        draft = intake_state.get_draft(b["id"])
-        rows.append({
-            "brand": b,
-            "product_count": len(products),
-            "pending": pending_brand_fact_count(b["id"]),
-            "draft": draft,
-        })
-    return templates.TemplateResponse(request, "index.html", ctx(
-        request, brand=None, active_brands=active,
-        rows=rows, archived=archived, show_empty_demo=show_empty,
-        todos=[] if show_empty else _today_todos(),
-        **banner_ctx(request),
-    ))
+async def brand_overview(brand: Optional[str] = None):
+    destination = f"/app/brands/{brand}" if brand else "/app/"
+    return RedirectResponse(destination, status_code=303)
 
 
 # ---------------------------------------------------------------------------
@@ -777,6 +760,10 @@ if _missing_cleanup:
 async def handle_http_exception(request: Request, exc: StarletteHTTPException):
     if exc.status_code == 404:
         kind = exc.detail if isinstance(exc.detail, str) and exc.detail not in ("Not Found",) else "頁面"
+        # /api 一律回 JSON：新殼 fetch 拿到 HTML 會炸在 res.json()，使用者看到的是解析錯誤
+        # 而不是人話。修在這個共用出口，不必逐支端點包 try/except。
+        if request.url.path.startswith("/api/"):
+            return JSONResponse({"detail": f"找不到{kind}"}, status_code=404)
         return templates.TemplateResponse(request, "error_404.html", ctx(
             request, brand=None, kind=kind, hide_sidebar=True,
         ), status_code=404)

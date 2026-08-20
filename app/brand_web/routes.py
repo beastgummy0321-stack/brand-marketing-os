@@ -18,8 +18,6 @@ app/intake 反向 import（main → ads.routes → main 的循環）。拆出來
 這是搬移過程中新發現的既有邊界，非本票新增的例外，詳見票 A4 回報。
 """
 
-import os
-import re
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -38,7 +36,6 @@ from app.core import cleanup
 from app.core import creative_assets
 from app.core import interrupts as core_interrupts
 from app.core import prototype_phase as core_prototype_phase
-from app.core.db import REPO_ROOT, new_id
 from app.intake import state as intake_state
 from app.llm import providers
 from app.shared import web
@@ -63,6 +60,7 @@ from app.shared.web import (
     templates,
 )
 from app.brand_web import report_service
+from app.brand_web.routes_library import save_official_asset
 from app.brand_web.report_service import REPORT_SECTION_LABELS, _report_recent, _report_sections
 
 router = APIRouter()
@@ -1690,20 +1688,6 @@ async def economics_confirm_post(request: Request, brand_id: str, product_id: st
 
 _ASSET_CONTENT_TYPES = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png",
                          "webp": "image/webp", "gif": "image/gif"}
-_UNSAFE_ASSET_FILENAME_CHARS = re.compile(r"[^A-Za-z0-9._-]+")
-
-
-def _assets_upload_dir() -> Path:
-    raw = os.environ.get("BRAND_OS_UPLOADS")
-    base = Path(raw) if raw else REPO_ROOT / "data" / "uploads"
-    return base / "assets"
-
-
-def _safe_asset_filename(name: str) -> str:
-    """os.path.basename 去掉路徑 + 危險字元換成 `_`，比照 intake 照片的檔名驗證做法。"""
-    name = os.path.basename((name or "").strip())
-    name = _UNSAFE_ASSET_FILENAME_CHARS.sub("_", name)
-    return name or "file"
 
 
 @router.get("/brands/{brand_id}/assets/new")
@@ -1730,26 +1714,20 @@ async def asset_new_post(request: Request, brand_id: str, asset_kind: str = Form
     product_id_c = clean(product_id)
     if product_id_c and not repo.get_product(web.conn, brand_id, product_id_c):
         errors["product_id"] = "找不到這個產品，請重新選擇。"
-    content = await file.read()
-    filename = file.filename or ""
-    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
-    if not filename or not content:
-        errors["file"] = "請選擇一個圖檔上傳。"
-    elif ext not in _ASSET_CONTENT_TYPES:
-        errors["file"] = f"「{filename}」不是支援的圖片格式，請用 png、jpg、jpeg、webp 或 gif。"
     if errors:
         return templates.TemplateResponse(request, "asset_new.html", ctx(
             request, brand=brand, values=values, errors=errors, products=products,
             nav_current='hub',
         ), status_code=400)
-    dest_dir = _assets_upload_dir() / new_id("oas")
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    dest_path = dest_dir / _safe_asset_filename(filename)
-    dest_path.write_bytes(content)
-    repo.create_official_asset(
-        web.conn, brand_id, actor=actor, asset_kind=asset_kind, file_path=str(dest_path),
-        product_id=product_id_c or None, title=clean(title) or None,
+    ok, detail = save_official_asset(
+        brand_id, actor=actor, asset_kind=asset_kind, product_id=product_id_c, title=title,
+        filename=file.filename or "", content=await file.read(),
     )
+    if not ok:
+        return templates.TemplateResponse(request, "asset_new.html", ctx(
+            request, brand=brand, values=values, errors={"file": detail}, products=products,
+            nav_current='hub',
+        ), status_code=400)
     return redirect_with_message(
         f"/brands/{brand_id}/hub/assets", f"已上傳「{md.asset_kind_label(asset_kind)}」素材。")
 

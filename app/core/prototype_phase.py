@@ -79,7 +79,7 @@ def check_and_flag(conn, *, actual_spend: float, actor: str,
         conn, category="prototype_phase_ended",
         dedupe_key="prototype_phase_ended",
         message=_REMINDER_MESSAGE, brand_id=None,
-        action_url="/system/prototype-phase",
+        action_url="/app/inbox",
     )
     conn.commit()
     return True

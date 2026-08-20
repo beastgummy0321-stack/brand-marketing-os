@@ -473,7 +473,7 @@ def _repurchase_dissent_check(conn, brand_id: str, cycle_id: str, settlement_ver
             dedupe_key=f"repurchase_conflict:{settlement_version_id}",
             message="回購校正結論跟首單線相反，去複核。", brand_id=brand_id,
             campaign_cycle_id=cycle_id,
-            action_url=f"/brands/{brand_id}/ads/{cycle_id}/performance",
+            action_url=f"/app/brands/{brand_id}/campaigns/{cycle_id}",
         )
 
 
@@ -762,7 +762,7 @@ def rerun_for_late_data(conn, brand_id: str, cycle_id: str, *, actor: str) -> Op
             conn, category="reading_reversal",
             dedupe_key=f"reading_reversal:{after_snapshot['settlement_version_id']}",
             message=REVERSAL_MESSAGE, brand_id=brand_id, campaign_cycle_id=cycle_id,
-            action_url=f"/brands/{brand_id}/ads/{cycle_id}/performance",
+            action_url=f"/app/brands/{brand_id}/campaigns/{cycle_id}",
         )
         conn.commit()
 
@@ -984,7 +984,7 @@ def _flag_unresolved_hypotheses(conn, brand_id: str, cycle_id: str) -> None:
         conn, category="hypothesis_unresolved",
         dedupe_key=f"hypothesis_unresolved:{cycle_id}",
         message="這期還有策略假設沒結案，去看看", brand_id=brand_id, campaign_cycle_id=cycle_id,
-        action_url=f"/brands/{brand_id}/ads/{cycle_id}/performance",
+        action_url=f"/app/brands/{brand_id}/campaigns/{cycle_id}",
     )
     conn.commit()
 

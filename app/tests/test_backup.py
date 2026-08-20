@@ -101,15 +101,15 @@ class MainDailyCheckTest(unittest.TestCase):
         with mock.patch.object(
             main.corebackup, "run_daily_backup", wraps=main.corebackup.run_daily_backup
         ) as backup_spy:
-            resp = self.client.get("/")
-            self.assertEqual(resp.status_code, 200)
+            resp = self.client.get("/", follow_redirects=False)
+            self.assertEqual(resp.status_code, 303)
             self.assertEqual(backup_spy.call_count, 1)  # 跨日快取過期，請求路徑上補了一次備份
 
     def test_second_request_same_day_does_not_trigger_backup_again(self):
-        self.client.get("/")  # 第一次請求，快取已經記到今天
+        self.client.get("/", follow_redirects=False)  # 第一次請求，快取已經記到今天
         with mock.patch.object(main.corebackup, "run_daily_backup") as backup_spy:
-            resp = self.client.get("/")
-            self.assertEqual(resp.status_code, 200)
+            resp = self.client.get("/", follow_redirects=False)
+            self.assertEqual(resp.status_code, 303)
             backup_spy.assert_not_called()  # 同一天不會重複觸發
 
 

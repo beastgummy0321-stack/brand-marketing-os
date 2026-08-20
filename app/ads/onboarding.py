@@ -51,10 +51,10 @@ def _reminder_action_url(brand_id: str, cycle_id: str, kind: str) -> str:
     checkpoint 對照表沿用 app/ads/checkpoint.py 單一權威。"""
     checkpoint_kind = ads_checkpoint.REMINDER_TO_CHECKPOINT_KIND.get(kind)
     if checkpoint_kind:
-        return f"/brands/{brand_id}/ads/{cycle_id}/checkpoint/{checkpoint_kind}"
+        return f"/app/brands/{brand_id}/campaigns/{cycle_id}"
     if kind == "final_settlement":
-        return f"/brands/{brand_id}/ads/{cycle_id}/reading/progress?final=1"
-    return f"/brands/{brand_id}/ads/{cycle_id}/performance"
+        return f"/app/brands/{brand_id}/campaigns/{cycle_id}"
+    return f"/app/brands/{brand_id}/campaigns/{cycle_id}"
 
 
 def create_reminders(conn, brand_id: str, cycle_id: str) -> int:

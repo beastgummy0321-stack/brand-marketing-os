@@ -47,7 +47,7 @@ def check_schedule_reminder(conn, brand_id: str, cycle_id: str, today: str):
         core_interrupts.enqueue(
             conn, category="pacing_schedule_due", dedupe_key=f"schedule:{cycle_id}:{today}",
             brand_id=brand_id, message=reminder["copy_text"][:30],
-            action_url=f"/brands/{brand_id}/ads/{cycle_id}",
+            action_url=f"/app/brands/{brand_id}/campaigns/{cycle_id}",
         )
     return reminder
 
@@ -147,7 +147,7 @@ def run(conn, *, today: Optional[str] = None, meta_client=None, ga4_client=None,
             core_interrupts.enqueue(
                 conn, category="auto_sync_failed",
                 dedupe_key=f"auto_sync_failed:meta:{today}",
-                message=_META_FAILURE_MESSAGE, action_url="/settings",
+                message=_META_FAILURE_MESSAGE, action_url="/app/settings",
             )
 
     if ga4_sync.is_configured(conn):
@@ -159,7 +159,7 @@ def run(conn, *, today: Optional[str] = None, meta_client=None, ga4_client=None,
                     conn, category="auto_sync_failed", brand_id=brand["id"],
                     dedupe_key=f"auto_sync_failed:ga4:{brand['id']}:{today}",
                     message=_GA4_FAILURE_MESSAGE,
-                    action_url=f"/brands/{brand['id']}/ads/ga4",
+                    action_url=f"/app/brands/{brand['id']}/tracking",
                 )
 
     for brand in bi_repo.list_brands(conn, status="active"):

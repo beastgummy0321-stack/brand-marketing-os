@@ -180,7 +180,7 @@ class FlowTest(_Base):
     def test_reminder_links_into_checkpoint_page(self):
         cycle_id = self._live_cycle(start_offset_days=-4)
         page = self.client.get(f"/brands/{self.bid}/ads/{cycle_id}")
-        self.assertIn(f"/brands/{self.bid}/ads/{cycle_id}/checkpoint/day3", page.text)
+        self.assertIn(f"/app/brands/{self.bid}/campaigns/{cycle_id}", page.text)
 
     def test_full_flow_import_then_checkpoint(self):
         cycle_id = self._live_cycle(start_offset_days=-8)
