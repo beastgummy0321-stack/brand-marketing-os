@@ -677,6 +677,7 @@ from app.intake.routes import router as intake_router  # noqa: E402
 from app.intake.routes_api import router as intake_api_router  # noqa: E402
 from app.ads.routes import router as ads_router  # noqa: E402
 from app.ads.routes_claims_api import router as claims_api_router  # noqa: E402
+from app.ads.routes_onboarding_api import router as onboarding_api_router  # noqa: E402
 from app.ads.routes_learnings_api import router as learnings_api_router  # noqa: E402
 from app.orders import routes as orders_routes, routes_api as orders_routes_api  # noqa: E402
 from app.dashboard.routes import router as dashboard_router  # noqa: E402
@@ -693,6 +694,7 @@ app.include_router(intake_router)
 app.include_router(intake_api_router)
 app.include_router(ads_router)
 app.include_router(claims_api_router)
+app.include_router(onboarding_api_router)
 app.include_router(learnings_api_router)
 app.include_router(orders_routes.router)
 app.include_router(orders_routes_api.router)
