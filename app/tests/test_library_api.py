@@ -154,12 +154,10 @@ class ChannelEditDeleteTest(unittest.TestCase):
                                             name="官網", identifier="https://old.example.com")
 
     def test_edit_updates_fields_and_audit(self):
-        resp = self.client.post(
-            f"/brands/{self.bid}/channels/{self.channel['id']}/edit",
-            data={"channel_type": "fb_page", "name": "粉專", "identifier": "https://fb.com/x",
-                  "status": "inactive"},
+        repo.update_channel(
+            main.conn, self.bid, self.channel["id"], actor=ACTOR, channel_type="fb_page",
+            name="粉專", identifier="https://fb.com/x", status="inactive",
         )
-        self.assertEqual(resp.status_code, 200)
         after = repo.get_channel(main.conn, self.bid, self.channel["id"])
         self.assertEqual(after["channel_type"], "fb_page")
         self.assertEqual(after["name"], "粉專")
@@ -171,24 +169,19 @@ class ChannelEditDeleteTest(unittest.TestCase):
         self.assertIsNotNone(audit)
 
     def test_edit_validation_error_returns_400(self):
-        resp = self.client.post(
-            f"/brands/{self.bid}/channels/{self.channel['id']}/edit",
-            data={"channel_type": "", "name": "", "identifier": "", "status": "active"},
-        )
-        self.assertEqual(resp.status_code, 400)
+        with self.assertRaisesRegex(ValueError, "channel_type"):
+            repo.update_channel(main.conn, self.bid, self.channel["id"], actor=ACTOR,
+                                channel_type="", name="", identifier="", status="active")
         unchanged = repo.get_channel(main.conn, self.bid, self.channel["id"])
         self.assertEqual(unchanged["name"], "官網")
 
     def test_edit_unknown_channel_is_404(self):
-        resp = self.client.post(
-            f"/brands/{self.bid}/channels/ch_不存在/edit",
-            data={"channel_type": "website", "name": "x", "identifier": "y", "status": "active"},
-        )
-        self.assertEqual(resp.status_code, 404)
+        with self.assertRaisesRegex(ValueError, "找不到"):
+            repo.update_channel(main.conn, self.bid, "ch_不存在", actor=ACTOR,
+                                channel_type="website", name="x", identifier="y", status="active")
 
     def test_delete_removes_row_and_writes_audit(self):
-        resp = self.client.post(f"/brands/{self.bid}/channels/{self.channel['id']}/delete")
-        self.assertEqual(resp.status_code, 200)
+        repo.delete_channel(main.conn, self.bid, self.channel["id"], actor=ACTOR)
         self.assertIsNone(repo.get_channel(main.conn, self.bid, self.channel["id"]))
         audit = main.conn.execute(
             "SELECT * FROM audit_log WHERE entity_type = 'owned_channel' AND action = 'delete' "
@@ -197,8 +190,8 @@ class ChannelEditDeleteTest(unittest.TestCase):
         self.assertIsNotNone(audit)
 
     def test_delete_unknown_channel_is_404(self):
-        resp = self.client.post(f"/brands/{self.bid}/channels/ch_不存在/delete")
-        self.assertEqual(resp.status_code, 404)
+        with self.assertRaisesRegex(ValueError, "找不到"):
+            repo.delete_channel(main.conn, self.bid, "ch_不存在", actor=ACTOR)
 
 
 class CustomerVoiceBackgroundTest(unittest.TestCase):

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """app/tests/test_product_handoff.py — 產品調研交接包（GitHub issue #7）。
 
-見 app/main.py 的 /brands/{id}/products/{pid}/handoff（GET／POST）、app/intake/ai.py 的
+見產品交接 API（GET／POST）、app/intake/ai.py 的
 build_product_handoff_prompt／parse_product_handoff_reply／run_product_handoff_fix。
 全程用 FakeProvider，不發任何真實網路請求。品牌／產品名一律虛構，絕不可用 Beast Gummy。
 """
@@ -75,25 +75,23 @@ class _BaseHandoffTest(unittest.TestCase):
         os.environ.pop("BRAND_OS_LLM_MODEL", None)
         self._orig_provider = product_ai.PROVIDER
         self.brand = bi_repo.create_brand(main.conn, name="虛構茶研所", client_name="測試客戶", actor=ACTOR)
-        resp = self.client.post(
-            f"/brands/{self.brand['id']}/products/new", data={"name": "虛構回甘烏龍"},
-            follow_redirects=False,
-        )
-        self.product_id = resp.headers["location"].split("/products/")[1].split("?")[0]
+        self.product_id = bi_repo.create_product(
+            main.conn, self.brand["id"], name="虛構回甘烏龍", actor=ACTOR
+        )["id"]
 
     def tearDown(self):
         product_ai.PROVIDER = self._orig_provider
         self._envpatch.stop()
 
     def _handoff_url(self):
-        return f"/brands/{self.brand['id']}/products/{self.product_id}/handoff"
+        return f"/api/products/brands/{self.brand['id']}/products/{self.product_id}/handoff"
 
     def _post(self, raw_text: str):
-        return self.client.post(self._handoff_url(), data={"raw_text": raw_text}, follow_redirects=False)
+        return self.client.post(self._handoff_url(), json={"reply_text": raw_text})
 
 
 class HandoffPageTest(_BaseHandoffTest):
-    def test_page_renders_brand_and_product_facts_and_format_spec(self):
+    def test_handoff_api_returns_brand_and_product_facts_and_format_spec(self):
         bi_repo.create_brand_fact(main.conn, self.brand["id"], actor=ACTOR, fact_type="positioning",
                                   label="單一產區直送定位", value="主打單一產區的烏龍與紅茶。",
                                   status="confirmed", confirmed_by=ACTOR)
@@ -102,20 +100,21 @@ class HandoffPageTest(_BaseHandoffTest):
                                     status="pending")
         resp = self.client.get(self._handoff_url())
         self.assertEqual(resp.status_code, 200)
-        self.assertIn("單一產區直送定位", resp.text)
-        self.assertIn("既有規格", resp.text)
-        self.assertIn("虛構回甘烏龍", resp.text)
+        prompt_text = resp.json()["data"]["prompt_text"]
+        self.assertIn("單一產區直送定位", prompt_text)
+        self.assertIn("既有規格", prompt_text)
+        self.assertIn("虛構回甘烏龍", prompt_text)
         # 嚴格回覆格式要求：五類 facts、選填 price，跟 run_product_scan 同形狀
         for fact_type in product_ai.PRODUCT_SCAN_FACT_TYPES:
-            self.assertIn(fact_type, resp.text)
-        self.assertIn("price", resp.text)
+            self.assertIn(fact_type, prompt_text)
+        self.assertIn("price", prompt_text)
 
 
 class HandoffPasteDirectParseTest(_BaseHandoffTest):
     def test_valid_json_with_surrounding_noise_lands_pending_no_llm_call(self):
         product_ai.PROVIDER = FakeProvider(response=_fake_response("不該被呼叫"))
         resp = self._post(_GOOD_WITH_NOISE)
-        self.assertEqual(resp.status_code, 303)
+        self.assertEqual(resp.status_code, 200)
         self.assertEqual(product_ai.PROVIDER.calls, [])  # 直接解析成功，完全不花錢
 
         facts = bi_repo.list_product_facts(main.conn, self.brand["id"], self.product_id)
@@ -137,7 +136,7 @@ class HandoffPasteDirectParseTest(_BaseHandoffTest):
                                     status="confirmed", confirmed_by=ACTOR)
         product_ai.PROVIDER = FakeProvider(response=_fake_response("不該被呼叫"))
         resp = self._post(_GOOD_JSON)
-        self.assertEqual(resp.status_code, 303)
+        self.assertEqual(resp.status_code, 200)
         facts = bi_repo.list_product_facts(main.conn, self.brand["id"], self.product_id)
         # 原本 1 條（已確認）+ 貼回新增 1 條（「上班族」），「單一品項」同標籤已存在被跳過。
         self.assertEqual(len(facts), 2)
@@ -148,7 +147,7 @@ class HandoffPasteDirectParseTest(_BaseHandoffTest):
     def test_blank_paste_shows_error_creates_nothing(self):
         resp = self._post("   ")
         self.assertEqual(resp.status_code, 400)
-        self.assertIn("請先把外部 AI 的回覆貼進來", resp.text)
+        self.assertIn("請先把外部 AI 的回覆貼進來", resp.json()["error"])
         self.assertEqual(bi_repo.list_product_facts(main.conn, self.brand["id"], self.product_id), [])
 
 
@@ -156,7 +155,7 @@ class HandoffPasteFixTest(_BaseHandoffTest):
     def test_garbled_paste_repaired_by_ai_lands_pending(self):
         product_ai.PROVIDER = FakeProvider(response=_fake_response(_GOOD_JSON))
         resp = self._post(_GARBLED)
-        self.assertEqual(resp.status_code, 303)
+        self.assertEqual(resp.status_code, 200)
         self.assertEqual(len(product_ai.PROVIDER.calls), 1)  # 直接解析失敗才呼叫一次修復
         facts = bi_repo.list_product_facts(main.conn, self.brand["id"], self.product_id)
         self.assertEqual(len(facts), 2)
@@ -167,7 +166,7 @@ class HandoffPasteFixTest(_BaseHandoffTest):
         product_ai.PROVIDER = FakeProvider(response=_fake_response("修復後還是不是 JSON"))
         resp = self._post(_GARBLED)
         self.assertEqual(resp.status_code, 400)
-        self.assertIn(product_ai.PARSE_FAIL_MESSAGE, resp.text)
+        self.assertIn(product_ai.PARSE_FAIL_MESSAGE, resp.json()["error"])
         self.assertEqual(bi_repo.list_product_facts(main.conn, self.brand["id"], self.product_id), [])
 
     def test_over_budget_blocks_repair_before_any_llm_call(self):
@@ -175,7 +174,7 @@ class HandoffPasteFixTest(_BaseHandoffTest):
         product_ai.PROVIDER = FakeProvider(response=_fake_response("不該被呼叫"))
         resp = self._post(_GARBLED)
         self.assertEqual(resp.status_code, 400)
-        self.assertIn("花費上限", resp.text)
+        self.assertIn("花費上限", resp.json()["error"])
         self.assertEqual(bi_repo.list_product_facts(main.conn, self.brand["id"], self.product_id), [])
         self.assertEqual(product_ai.PROVIDER.calls, [])
 
@@ -183,7 +182,7 @@ class HandoffPasteFixTest(_BaseHandoffTest):
         product_ai.PROVIDER = AnthropicProvider()  # 無金鑰：送網路請求之前就會擋下
         resp = self._post(_GARBLED)
         self.assertEqual(resp.status_code, 400)
-        self.assertIn(MISSING_KEY_MESSAGE, resp.text)
+        self.assertIn(MISSING_KEY_MESSAGE, resp.json()["error"])
         self.assertEqual(bi_repo.list_product_facts(main.conn, self.brand["id"], self.product_id), [])
 
 

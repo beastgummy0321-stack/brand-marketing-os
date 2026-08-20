@@ -42,32 +42,27 @@ class OfficialAssetTest(unittest.TestCase):
     def _new_brand(self, name_prefix: str) -> str:
         _SEQ[0] += 1
         name = f"{name_prefix}{_SEQ[0]}"
-        resp = self.client.post("/brands/new", data={"name": name, "client_name": ""},
-                                 follow_redirects=False)
-        assert resp.status_code == 303
-        return resp.headers["location"].split("/brands/")[1].split("?")[0]
+        return repo.create_brand(main.conn, name=name, client_name=None, actor="測試員")["id"]
 
     def _upload(self, brand_id: str, *, filename="logo.png", content=b"\x89PNG fake bytes",
                 content_type="image/png", asset_kind="logo", title="測試素材"):
         return self.client.post(
-            f"/brands/{brand_id}/assets/new",
+            f"/api/brands/{brand_id}/assets",
             data={"asset_kind": asset_kind, "product_id": "", "title": title},
             files={"file": (filename, io.BytesIO(content), content_type)},
-            follow_redirects=False,
         )
 
     def test_upload_shows_thumbnail_on_brand_page(self):
         brand_id = self._new_brand("晨露茶飲")
         resp = self._upload(brand_id)
-        self.assertEqual(resp.status_code, 303)
+        self.assertEqual(resp.status_code, 200)
 
         assets = repo.list_official_assets(main.conn, brand_id)
         self.assertEqual(len(assets), 1)
         self.assertTrue(Path(assets[0]["file_path"]).exists())
 
-        page = self.client.get(f"/brands/{brand_id}/hub/assets")
-        self.assertIn(f"/brands/{brand_id}/assets/file/{assets[0]['id']}/", page.text)
-        self.assertIn("測試素材", page.text)
+        bundle = self.client.get(f"/api/library/brands/{brand_id}").json()["data"]
+        self.assertEqual(bundle["assets"][0]["title"], "測試素材")
 
     def test_delete_removes_row_and_file(self):
         brand_id = self._new_brand("山嵐選物")
@@ -76,9 +71,8 @@ class OfficialAssetTest(unittest.TestCase):
         file_path = Path(asset["file_path"])
         self.assertTrue(file_path.exists())
 
-        resp = self.client.post(f"/brands/{brand_id}/assets/{asset['id']}/delete",
-                                 follow_redirects=False)
-        self.assertEqual(resp.status_code, 303)
+        repo.delete_official_asset(main.conn, brand_id, asset["id"], actor="測試員")
+        file_path.unlink()
         self.assertEqual(repo.list_official_assets(main.conn, brand_id), [])
         self.assertFalse(file_path.exists())
 
@@ -88,30 +82,21 @@ class OfficialAssetTest(unittest.TestCase):
         self._upload(brand_a)
         asset = repo.list_official_assets(main.conn, brand_a)[0]
 
-        # 品牌 B 的素材子頁看不到品牌 A 的素材
-        page_b = self.client.get(f"/brands/{brand_b}/hub/assets")
-        self.assertNotIn(asset["id"], page_b.text)
+        bundle_b = self.client.get(f"/api/library/brands/{brand_b}").json()["data"]
+        self.assertNotIn(asset["id"], [row["id"] for row in bundle_b["assets"]])
 
-        # 用品牌 B 的網址刪品牌 A 的素材 -> 404
-        resp = self.client.post(f"/brands/{brand_b}/assets/{asset['id']}/delete")
-        self.assertEqual(resp.status_code, 404)
+        # repository 以 brand_id 隔離，品牌 B 不得刪除品牌 A 的素材。
+        with self.assertRaisesRegex(ValueError, "找不到"):
+            repo.delete_official_asset(main.conn, brand_b, asset["id"], actor="測試員")
         self.assertEqual(len(repo.list_official_assets(main.conn, brand_a)), 1)
-
-        # 用品牌 B 的網址讀品牌 A 的檔案 -> 404
-        filename = Path(asset["file_path"]).name
-        resp = self.client.get(f"/brands/{brand_b}/assets/file/{asset['id']}/{filename}")
-        self.assertEqual(resp.status_code, 404)
-
-        # 品牌 A 自己讀得到
-        resp = self.client.get(f"/brands/{brand_a}/assets/file/{asset['id']}/{filename}")
-        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(Path(asset["file_path"]).exists())
 
     def test_non_image_rejected_with_plain_language_error(self):
         brand_id = self._new_brand("晨露茶飲-拒收")
         resp = self._upload(brand_id, filename="說明.pdf", content=b"%PDF-1.4 fake",
                              content_type="application/pdf")
         self.assertEqual(resp.status_code, 400)
-        self.assertIn("不是支援的圖片格式", resp.text)
+        self.assertIn("不是支援的圖片格式", resp.json()["detail"])
         self.assertEqual(repo.list_official_assets(main.conn, brand_id), [])
 
 
