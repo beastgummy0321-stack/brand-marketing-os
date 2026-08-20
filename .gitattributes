@@ -1,0 +1,3 @@
+# migration 檔的內容雜湊鎖（app/core/migration_manifest.json）比對 raw bytes，
+# 換行被 git 轉成 CRLF 就必紅；worktree 檢出一律不得轉換。
+*.sql -text
