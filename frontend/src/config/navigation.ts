@@ -67,6 +67,14 @@ export function navModules(brandId: string | null): NavItem[] {
       : { label: "投放與成效", status: "disabled", reason: "請先在跨品牌總覽選擇品牌" },
     brandId
       ? {
+          label: "累積智慧",
+          href: `/brands/${brandId}/learnings`,
+          status: "active",
+          internal: true,
+        }
+      : { label: "累積智慧", status: "disabled", reason: "請先在跨品牌總覽選擇品牌" },
+    brandId
+      ? {
           label: "素材工作檯",
           href: `/brands/${brandId}/workbench`,
           status: "active",

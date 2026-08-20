@@ -20,11 +20,9 @@ import app.shared.web as main_mod
 from app.ads import fingerprint
 from app.ads import interview as ads_interview
 from app.ads import nextcycle
-from app.ads import reading as ads_reading
-from app.ads import repository as ads_repo
+from app.ads import routes_learnings_api as learnings_api
 from app.ads.routes_common import _crumb
 from app.brand_intelligence import repository as bi
-from app.llm import context_compiler
 
 router = APIRouter()
 
@@ -92,37 +90,6 @@ async def ads_interview_post(request: Request, brand_id: str,
     return main_mod.redirect_with_message(back, message)
 
 
-_PENDING_HYPOTHESIS_LABELS = {"proposed": "待驗證", "testing": "驗證中"}
-
-
-def _learning_meta_line(conn, brand_id: str, entry: dict) -> str:
-    """組「依據」欄的人話：適用範圍／來源期別／樣本數／可信度，程式組字不經 LLM
-    （決策 0030 第 11 點：這些值本來就是程式帶入，不是模型判斷）。
-
-    修憲落地 G4（決策 0035 第三節第 8、10 點）：`confidence` 是 ledger 自己的可信度分級
-    （`reading.LEDGER_CONFIDENCE_LABELS`，樣本數＋是否重測過），不是資料成色標籤——兩者
-    意義不同，不能互換顯示。`needs_revalidation` 這個欄位以前全庫沒有一行寫入過，這裡是
-    它第一次真的被讀出來用。"""
-    parts = []
-    if entry["product_id"]:
-        product = bi.get_product(conn, brand_id, entry["product_id"])
-        parts.append(product["name"] if product else "已刪除的產品")
-    else:
-        parts.append("品牌整體")
-    if entry["source_cycle_id"]:
-        cycle = ads_repo.get_cycle(conn, brand_id, entry["source_cycle_id"])
-        if cycle:
-            parts.append(f"來源：{cycle['start_date']} 期")
-    if entry["sample_size"]:
-        parts.append(f"樣本 {entry['sample_size']}")
-    if entry["confidence"]:
-        parts.append(ads_reading.LEDGER_CONFIDENCE_LABELS.get(entry["confidence"],
-                                                              entry["confidence"]))
-    if entry["needs_revalidation"]:
-        parts.append("建議找機會重新驗證")
-    return " ・ ".join(parts)
-
-
 @router.get("/brands/{brand_id}/ads/learnings")
 async def ads_learnings_page(request: Request, brand_id: str):
     """累積智慧頁（GitHub issue #56）：三段——已確認學習／生效中的禁令／還沒處理的候選。
@@ -132,36 +99,12 @@ async def ads_learnings_page(request: Request, brand_id: str):
     的先例）。
     """
     brand = main_mod.require_brand(brand_id)
-    conn = main_mod.conn
-
-    learnings = ads_repo.list_learning_ledger(conn, brand_id)
-    for entry in learnings:
-        entry["meta_line"] = _learning_meta_line(conn, brand_id, entry)
-
-    # 規則有效期逾期未確認清單（票 01-rule-expiry-reconfirm，ADR 0012 第一節）：先撈這份
-    # ——它內部會先掃一次逾期未確認的規則（rule_lifecycle.sweep_expired_rules），確保
-    # 底下 active_bans／overflow_rules 讀到的是最新狀態，不是掃描前的舊資料。
-    pending_reconfirm_rules = bi.list_pending_reconfirm_rules(conn, brand_id)
-
-    active_bans = nextcycle.list_active_bans(conn, brand_id)
-    pending_cards = nextcycle.list_pending_rule_cards(conn, brand_id)
-    observing_signals = nextcycle.list_observing_signals(conn, brand_id)
-    pending_hypotheses = [
-        {**h, "status_label": _PENDING_HYPOTHESIS_LABELS.get(h["status"], h["status"])}
-        for h in bi.list_strategy_hypotheses(conn, brand_id)
-        if h["status"] in ads_reading.PENDING_HYPOTHESIS_STATUSES
-    ]
-    # 規則進 prompt 超過上限而這次未生效的清單（票 02-prompt-cap-and-overflow-list，
-    # 決策 0012 第三節：不悄悄丟棄，累積智慧頁列出來）。
-    overflow_rules = context_compiler.list_overflow_rules(conn, brand_id)
+    sections = learnings_api.learning_sections(main_mod.conn, brand_id)
 
     return main_mod.templates.TemplateResponse(
         request, "ads_learnings.html",
         main_mod.ctx(request, brand=brand, nav_current='ads',
-                     learnings=learnings, active_bans=active_bans,
-                     pending_cards=pending_cards, observing_signals=observing_signals,
-                     pending_hypotheses=pending_hypotheses, overflow_rules=overflow_rules,
-                     pending_reconfirm_rules=pending_reconfirm_rules,
+                     **sections,
                      breadcrumb_items=_crumb(brand, ("累積智慧", None)),
                      **main_mod.banner_ctx(request)),
     )
@@ -172,12 +115,9 @@ async def ads_learnings_deactivate_ledger(request: Request, brand_id: str, entry
     """下架一條已確認學習，下架後不再進 context_compiler 組出的 prompt（票 #56）。"""
     main_mod.require_brand(brand_id)
     actor = main_mod.require_actor(request)
-    back = f"/brands/{brand_id}/ads/learnings"
-    try:
-        ads_repo.deactivate_learning_ledger_entry(main_mod.conn, brand_id, entry_id, actor=actor)
-    except ValueError as err:
-        return main_mod.redirect_with_message(back, str(err), kind="danger")
-    return main_mod.redirect_with_message(back, "已下架這條學習，之後生成內容不會再引用它。")
+    result = learnings_api.deactivate_ledger(main_mod.conn, brand_id, entry_id, actor)
+    return main_mod.redirect_with_message(f"/brands/{brand_id}/ads/learnings", result["message"],
+                                          kind="danger" if not result["ok"] else "ok")
 
 
 @router.post("/brands/{brand_id}/ads/learnings/rules/{rule_id}/deactivate")
@@ -185,12 +125,9 @@ async def ads_learnings_deactivate_rule(request: Request, brand_id: str, rule_id
     """下架一條生效中的禁令，下架後不再進 context_compiler 組出的 prompt（票 #56）。"""
     main_mod.require_brand(brand_id)
     actor = main_mod.require_actor(request)
-    back = f"/brands/{brand_id}/ads/learnings"
-    try:
-        bi.deactivate_rule(main_mod.conn, brand_id, rule_id, actor=actor)
-    except ValueError as err:
-        return main_mod.redirect_with_message(back, str(err), kind="danger")
-    return main_mod.redirect_with_message(back, "已下架這條禁令，之後生成內容不會再避開它。")
+    result = learnings_api.deactivate_rule(main_mod.conn, brand_id, rule_id, actor)
+    return main_mod.redirect_with_message(f"/brands/{brand_id}/ads/learnings", result["message"],
+                                          kind="danger" if not result["ok"] else "ok")
 
 
 @router.post("/brands/{brand_id}/ads/learnings/rules/{rule_id}/reconfirm")
@@ -199,12 +136,9 @@ async def ads_learnings_reconfirm_rule(request: Request, brand_id: str, rule_id:
     更新確認時間，不必重新輸入規則內容。"""
     main_mod.require_brand(brand_id)
     actor = main_mod.require_actor(request)
-    back = f"/brands/{brand_id}/ads/learnings"
-    try:
-        bi.reconfirm_rule(main_mod.conn, brand_id, rule_id, actor=actor)
-    except ValueError as err:
-        return main_mod.redirect_with_message(back, str(err), kind="danger")
-    return main_mod.redirect_with_message(back, "已延續這條規則，重新進入生成內容的判斷依據。")
+    result = learnings_api.reconfirm_rule(main_mod.conn, brand_id, rule_id, actor)
+    return main_mod.redirect_with_message(f"/brands/{brand_id}/ads/learnings", result["message"],
+                                          kind="danger" if not result["ok"] else "ok")
 
 
 @router.post("/brands/{brand_id}/ads/rule-cards/{card_id}/{action}")
