@@ -5,6 +5,7 @@ import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { EmptyState } from "@/components/layout/EmptyState";
 import { CampaignListPage } from "@/components/campaigns/CampaignListPage";
 import { ClaimsPage } from "@/components/campaigns/ClaimsPage";
+import { LearningsPage } from "@/components/campaigns/LearningsPage";
 import { CockpitPage } from "@/components/cockpit/CockpitPage";
 import { IntakeWizard } from "@/components/intake/IntakeWizard";
 import { InboxPage } from "@/components/inbox/InboxPage";
@@ -47,6 +48,7 @@ function App() {
       <Route path="/brands/:brandId/orders" element={<OrdersRoute />} />
       <Route path="/brands/:brandId/campaigns" element={<CampaignListRoute />} />
       <Route path="/brands/:brandId/ads-claims" element={<ClaimsRoute />} />
+      <Route path="/brands/:brandId/learnings" element={<LearningsRoute />} />
       <Route path="/brands/:brandId/campaigns/new" element={<WarroomNewRoute />} />
       <Route path="/brands/:brandId/campaigns/:cycleId" element={<WarroomRoute />} />
       <Route path="/brands/:brandId/workbench" element={<WorkbenchRoute />} />
@@ -179,6 +181,15 @@ function ClaimsRoute() {
   return (
     <AppShell brandId={brandId ?? null}>
       <ClaimsPage brandId={brandId ?? ""} />
+    </AppShell>
+  );
+}
+
+function LearningsRoute() {
+  const { brandId } = useParams<{ brandId: string }>();
+  return (
+    <AppShell brandId={brandId ?? null}>
+      <LearningsPage brandId={brandId ?? ""} />
     </AppShell>
   );
 }
