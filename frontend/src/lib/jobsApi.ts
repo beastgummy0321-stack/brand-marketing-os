@@ -4,7 +4,7 @@
  * 不含 `app.ads` 的生成進度（該節「不碰什麼」明講理由），所以 `kind` 沒有任何 campaigns
  * 分支的值。 */
 
-export type ActiveJobKind = "scan" | "question" | "paste_fix" | "product_research" | "library_convert";
+export type ActiveJobKind = "scan" | "question" | "paste_fix" | "product_research" | "library_convert" | "brand_report";
 export type ActiveJobStatus = "waiting" | "running" | "done" | "failed";
 
 export interface ActiveJob {
@@ -23,6 +23,7 @@ export const ACTIVE_JOB_KIND_LABELS: Record<ActiveJobKind, string> = {
   paste_fix: "建檔貼回修格式",
   product_research: "產品調研",
   library_convert: "智庫轉換",
+  brand_report: "顧問分析報告",
 };
 
 interface Envelope<T> {

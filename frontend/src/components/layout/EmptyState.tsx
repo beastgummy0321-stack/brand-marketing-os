@@ -17,6 +17,7 @@ export function EmptyState({
   actionHref,
   actionLabel,
   actionInternal = false,
+  actionDisabled = false,
   onAction,
 }: {
   title: string;
@@ -24,6 +25,7 @@ export function EmptyState({
   actionHref?: string;
   actionLabel?: string;
   actionInternal?: boolean;
+  actionDisabled?: boolean;
   onAction?: () => void;
 }) {
   return (
@@ -34,7 +36,8 @@ export function EmptyState({
         <button
           type="button"
           onClick={onAction}
-          className="mt-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90"
+          disabled={actionDisabled}
+          className="mt-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
         >
           {actionLabel}
         </button>
