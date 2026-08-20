@@ -693,7 +693,7 @@ from app.brand_web.routes_settings import router as settings_hub_router  # noqa:
 from app.intake.routes import router as intake_router  # noqa: E402
 from app.intake.routes_api import router as intake_api_router  # noqa: E402
 from app.ads.routes import router as ads_router  # noqa: E402
-from app.orders.routes import router as orders_router  # noqa: E402
+from app.orders import routes as orders_routes, routes_api as orders_routes_api  # noqa: E402
 from app.dashboard.routes import router as dashboard_router  # noqa: E402
 from app.dashboard.routes_pinned_views_api import router as pinned_views_router  # noqa: E402
 from app.dashboard.routes_jobs_api import router as jobs_active_router  # noqa: E402
@@ -706,7 +706,8 @@ app.include_router(settings_hub_router)
 app.include_router(intake_router)
 app.include_router(intake_api_router)
 app.include_router(ads_router)
-app.include_router(orders_router)
+app.include_router(orders_routes.router)
+app.include_router(orders_routes_api.router)
 app.include_router(dashboard_router)
 app.include_router(pinned_views_router)
 app.include_router(jobs_active_router)
@@ -767,8 +768,6 @@ _REQUIRED_CLEANUP_MODULES = ("品牌智庫", "建檔精靈", "廣告", "訂單",
 _missing_cleanup = [n for n in _REQUIRED_CLEANUP_MODULES if n not in core_cleanup.registered_names()]
 if _missing_cleanup:
     raise RuntimeError(f"清理登記處少登記了：{_missing_cleanup}")
-
-
 # ---------------------------------------------------------------------------
 # 錯誤處理
 # ---------------------------------------------------------------------------

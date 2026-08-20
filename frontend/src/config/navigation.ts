@@ -65,6 +65,14 @@ export function navModules(brandId: string | null): NavItem[] {
           internal: true,
         }
       : { label: "素材工作檯", status: "disabled", reason: "請先在跨品牌總覽選擇品牌" },
+    brandId
+      ? {
+          label: "訂單與顧客",
+          href: `/brands/${brandId}/orders`,
+          status: "active",
+          internal: true,
+        }
+      : { label: "訂單與顧客", status: "disabled", reason: "請先在跨品牌總覽選擇品牌" },
     { label: "內容與曝光", status: "disabled", reason: "即將推出" },
     { label: "顧客與口碑", status: "disabled", reason: "即將推出" },
   ];

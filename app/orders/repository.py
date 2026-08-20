@@ -426,11 +426,19 @@ def list_policy_changes(conn: sqlite3.Connection, brand_id: str, *,
     return _rows(conn.execute(sql, params))
 
 
-def list_orders(conn: sqlite3.Connection, brand_id: str, limit: int = 50) -> list:
+def list_orders(conn: sqlite3.Connection, brand_id: str, limit: int = 50,
+                offset: int = 0) -> list:
     return _rows(conn.execute(
         "SELECT * FROM order_record WHERE brand_id = ? ORDER BY order_date DESC, created_at DESC"
-        " LIMIT ?", (brand_id, limit),
+        " LIMIT ? OFFSET ?", (brand_id, limit, offset),
     ))
+
+
+def count_orders(conn: sqlite3.Connection, brand_id: str) -> int:
+    """品牌全部訂單筆數，供唯讀清單 API 計算分頁總數。"""
+    return conn.execute(
+        "SELECT COUNT(*) FROM order_record WHERE brand_id = ?", (brand_id,)
+    ).fetchone()[0]
 
 
 # ---------------------------------------------------------------------------

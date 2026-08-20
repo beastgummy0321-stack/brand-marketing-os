@@ -11,6 +11,7 @@ import { LibraryPage } from "@/components/library/LibraryPage";
 import { BrandCard } from "@/components/overview/BrandCard";
 import { ProductDetailPage } from "@/components/products/ProductDetailPage";
 import { ProductListPage } from "@/components/products/ProductListPage";
+import { OrdersPage } from "@/components/orders/OrdersPage";
 import { SettingsPage } from "@/components/settings/SettingsPage";
 import { TrackingHealthPage } from "@/components/tracking/TrackingHealthPage";
 import { TrackingSetupPage } from "@/components/tracking/TrackingSetupPage";
@@ -41,6 +42,7 @@ function App() {
       <Route path="/brands/:brandId/library" element={<LibraryRoute />} />
       <Route path="/brands/:brandId/products" element={<ProductListRoute />} />
       <Route path="/brands/:brandId/products/:productId" element={<ProductDetailRoute />} />
+      <Route path="/brands/:brandId/orders" element={<OrdersRoute />} />
       <Route path="/brands/:brandId/campaigns" element={<CampaignListRoute />} />
       <Route path="/brands/:brandId/campaigns/new" element={<WarroomNewRoute />} />
       <Route path="/brands/:brandId/campaigns/:cycleId" element={<WarroomRoute />} />
@@ -144,6 +146,15 @@ function ProductDetailRoute() {
   return (
     <AppShell brandId={brandId ?? null}>
       <ProductDetailPage brandId={brandId ?? ""} productId={productId ?? ""} />
+    </AppShell>
+  );
+}
+
+function OrdersRoute() {
+  const { brandId } = useParams<{ brandId: string }>();
+  return (
+    <AppShell brandId={brandId ?? null}>
+      <OrdersPage brandId={brandId ?? ""} />
     </AppShell>
   );
 }
