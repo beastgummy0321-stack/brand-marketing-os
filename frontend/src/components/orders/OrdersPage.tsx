@@ -21,7 +21,7 @@ function displayPercent(value: number | null): string {
 }
 
 function displayMargin(value: SkuMargin["margin"]): string {
-  return value === null ? "不知道成本" : formatCurrency(value);
+  return value === null ? "未登記成本" : formatCurrency(value);
 }
 
 /** 訂單總覽：只讀取已匯入資料，不在此頁新增任何訂單寫入動作。 */
@@ -62,15 +62,15 @@ export function OrdersPage({ brandId }: { brandId: string }) {
     const pageCount = Math.ceil(orders.total / orders.page_size);
     content = noData ? (
       <EmptyState
-        title="還沒有 EasyStore 訂單資料"
-        description="匯入 EasyStore 訂單資料後，這裡會顯示營收、顧客與 SKU 毛利。"
+        title="還沒有訂單資料"
+        description="把 EasyStore 訂單匯出檔拖進來，這頁就會出現營收、毛利與回購率。"
       />
     ) : (
       <>
         <div className="flex flex-col gap-1">
-          <Breadcrumb items={[{ label: "跨品牌總覽", href: "/" }, { label: "訂單總覽" }]} />
-          <h1 className="font-display text-2xl text-foreground">{brand.name}・訂單總覽</h1>
-          <p className="text-sm text-muted-foreground">{summary.since} 至 {summary.until}（最近 30 天）</p>
+          <Breadcrumb items={[{ label: "跨品牌總覽", href: "/" }, { label: brand.name, href: `/brands/${brandId}` }, { label: "訂單與顧客" }]} />
+          <h1 className="font-display text-2xl text-foreground">訂單與顧客</h1>
+          <p className="text-sm text-muted-foreground">統計區間 {summary.since} ～ {summary.until}（最近 30 天）</p>
         </div>
         <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
           <StatBig value={formatCurrency(summary.net_revenue)} label="實收營收" />
@@ -80,21 +80,21 @@ export function OrdersPage({ brandId }: { brandId: string }) {
           <StatBig value={displayPercent(summary.repurchase_rate)} label="回購率" />
         </div>
         <section className="flex flex-col gap-3">
-          <h2 className="font-display text-xl text-foreground">SKU 毛利</h2>
+          <h2 className="font-display text-xl text-foreground">逐項商品毛利</h2>
           {summary.sku_margins.length === 0 ? (
             <p className="text-sm text-muted-foreground">這段期間還沒有可統計的 SKU 資料。</p>
           ) : (
             <Table>
               <thead className="bg-muted text-muted-foreground"><tr><Header>SKU</Header><Header>數量</Header><Header>營收</Header><Header>單位成本</Header><Header>毛利</Header></tr></thead>
-              <tbody>{summary.sku_margins.map((item) => <tr key={item.sku} className="border-t border-border"><Cell>{item.sku}</Cell><Cell>{displayNumber(item.quantity)}</Cell><Cell>{formatCurrency(item.revenue)}</Cell><Cell>{item.unit_cost === null ? "不知道成本" : formatCurrency(item.unit_cost)}</Cell><Cell>{displayMargin(item.margin)}</Cell></tr>)}</tbody>
+              <tbody>{summary.sku_margins.map((item) => <tr key={item.sku} className="border-t border-border"><Cell>{item.sku}</Cell><Cell>{displayNumber(item.quantity)}</Cell><Cell>{formatCurrency(item.revenue)}</Cell><Cell>{item.unit_cost === null ? "未登記成本" : formatCurrency(item.unit_cost)}</Cell><Cell>{displayMargin(item.margin)}</Cell></tr>)}</tbody>
             </Table>
           )}
         </section>
         <section className="flex flex-col gap-3">
           <h2 className="font-display text-xl text-foreground">最近訂單</h2>
           <Table>
-            <thead className="bg-muted text-muted-foreground"><tr><Header>訂單編號</Header><Header>日期</Header><Header>金額</Header><Header>訂單狀態</Header><Header>優惠碼</Header><Header>備註</Header></tr></thead>
-            <tbody>{orders.items.map((item) => <tr key={item.id} className="border-t border-border"><Cell>{item.order_number}</Cell><Cell>{item.order_date ?? "—"}</Cell><Cell>{formatCurrency(item.total_amount)}</Cell><Cell>{item.order_status ?? "—"}</Cell><Cell>{item.voucher_code ?? "—"}</Cell><Cell>{item.attribution_override === "excluded" ? "已排除" : "—"}</Cell></tr>)}</tbody>
+            <thead className="bg-muted text-muted-foreground"><tr><Header>訂單編號</Header><Header>日期</Header><Header>金額</Header><Header>訂單狀態</Header><Header>優惠碼</Header><Header>來源</Header></tr></thead>
+            <tbody>{orders.items.map((item) => <tr key={item.id} className="border-t border-border"><Cell>{item.order_number}</Cell><Cell>{item.order_date ?? "—"}</Cell><Cell>{formatCurrency(item.total_amount)}</Cell><Cell>{item.order_status ?? "—"}</Cell><Cell>{item.voucher_code ?? "—"}</Cell><Cell>{item.attribution_override === "excluded" ? "非廣告來源" : "—"}</Cell></tr>)}</tbody>
           </Table>
           <Pager page={orders.page} pageCount={pageCount} totalCount={orders.total} onChange={load} />
         </section>

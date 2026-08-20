@@ -52,6 +52,10 @@ class OrdersApiTest(unittest.TestCase):
         self.assertEqual(body["orders"]["page_size"], 12)
         self.assertEqual(body["orders"]["total"], 13)
         self.assertEqual(len(body["orders"]["items"]), 1)
+        self.assertEqual(set(body["orders"]["items"][0]), {
+            "id", "order_number", "order_date", "total_amount", "order_status",
+            "voucher_code", "attribution_override",
+        })
         self.assertEqual(set(body["summary"]), {
             "since", "until", "has_history", "order_count", "net_revenue",
             "average_order_value", "new_customers", "existing_customers", "repurchase_rate",
