@@ -590,7 +590,6 @@ async def api_settings_meta_post(request: Request):
         return JSONResponse({"error": error}, status_code=400)
     return {}
 
-
 @app.post("/api/settings/meta/test-connection")
 async def api_settings_meta_test_connection_post():
     message, kind = _run_meta_test_connection()
@@ -689,6 +688,7 @@ from app.brand_web.routes import router as brand_intelligence_router  # noqa: E4
 from app.brand_web.routes_inbox import router as inbox_router  # noqa: E402
 from app.brand_web.routes_library import router as library_router  # noqa: E402
 from app.brand_web.routes_products import router as products_router  # noqa: E402
+from app.brand_web.routes_report_api import router as report_api_router  # noqa: E402
 from app.brand_web.routes_settings import router as settings_hub_router  # noqa: E402
 from app.intake.routes import router as intake_router  # noqa: E402
 from app.intake.routes_api import router as intake_api_router  # noqa: E402
@@ -702,6 +702,7 @@ app.include_router(brand_intelligence_router)
 app.include_router(inbox_router)
 app.include_router(library_router)
 app.include_router(products_router)
+app.include_router(report_api_router)
 app.include_router(settings_hub_router)
 app.include_router(intake_router)
 app.include_router(intake_api_router)

@@ -11,6 +11,7 @@ import { LibraryPage } from "@/components/library/LibraryPage";
 import { BrandCard } from "@/components/overview/BrandCard";
 import { ProductDetailPage } from "@/components/products/ProductDetailPage";
 import { ProductListPage } from "@/components/products/ProductListPage";
+import { BrandReportPage } from "@/components/report/BrandReportPage";
 import { OrdersPage } from "@/components/orders/OrdersPage";
 import { SettingsPage } from "@/components/settings/SettingsPage";
 import { TrackingHealthPage } from "@/components/tracking/TrackingHealthPage";
@@ -50,6 +51,7 @@ function App() {
       <Route path="/brands/:brandId/workbench/:cycleId" element={<MatrixRoute />} />
       <Route path="/brands/:brandId/tracking" element={<TrackingHealthRoute />} />
       <Route path="/brands/:brandId/tracking/setup" element={<TrackingSetupRoute />} />
+      <Route path="/brands/:brandId/report" element={<BrandReportRoute />} />
     </Routes>
   );
 }
@@ -226,6 +228,16 @@ function TrackingSetupRoute() {
   return (
     <AppShell brandId={brandId ?? null}>
       <TrackingSetupPage brandId={brandId ?? ""} />
+    </AppShell>
+  );
+}
+
+/** 顧問分析報告（S13，票 03-brand-report-migration）。 */
+function BrandReportRoute() {
+  const { brandId } = useParams<{ brandId: string }>();
+  return (
+    <AppShell brandId={brandId ?? null}>
+      <BrandReportPage brandId={brandId ?? ""} />
     </AppShell>
   );
 }
