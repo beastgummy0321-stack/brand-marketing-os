@@ -14,6 +14,7 @@ import {
   type CampaignListItem,
   type InterviewSubmitResult,
 } from "@/lib/campaignsApi";
+import { fetchClaims } from "@/lib/claimsApi";
 import { usePagination } from "@/lib/usePagination";
 import { cn } from "@/lib/utils";
 import { Badge } from "./shared/Badge";
@@ -50,6 +51,7 @@ export function CampaignListPage({ brandId }: { brandId: string }) {
   const [interviewOpen, setInterviewOpen] = useState(false);
   const [banner, setBanner] = useState<string | null>(null);
   const [actionState, setActionState] = useState<Record<string, { saving: boolean; error: string | null }>>({});
+  const [pendingClaimsCount, setPendingClaimsCount] = useState(0);
 
   function load() {
     setState({ status: "loading" });
@@ -61,6 +63,7 @@ export function CampaignListPage({ brandId }: { brandId: string }) {
           message: err instanceof Error ? err.message : "讀取失敗，請稍後再試。",
         }),
       );
+    fetchClaims(brandId).then((items) => setPendingClaimsCount(items.length)).catch(() => setPendingClaimsCount(0));
   }
 
   useEffect(load, [brandId]);
@@ -295,6 +298,12 @@ export function CampaignListPage({ brandId }: { brandId: string }) {
       </div>
 
       {banner && <p className="rounded-md bg-success/10 px-3 py-2 text-sm text-success">{banner}</p>}
+
+      {pendingClaimsCount > 0 && (
+        <p className="rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-sm text-foreground">
+          有 {pendingClaimsCount} 個廣告活動還沒認領 <Link to={`/brands/${brandId}/ads-claims`} className="font-medium text-primary hover:underline">去認領</Link>
+        </p>
+      )}
 
       {items.length > 0 && (
         <div className="flex flex-wrap gap-2">
