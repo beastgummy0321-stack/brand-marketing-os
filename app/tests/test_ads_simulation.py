@@ -76,8 +76,8 @@ class SimulationEntryTest(_BaseSimTest):
     def test_entry_disappears_after_the_first_cycle(self):
         """跑過一期就別擋熟手的路。"""
         self._open(mode="real")
-        page = self.client.get(f"/brands/{self.bid}/ads/new")
-        self.assertNotIn("先跑一次模擬", page.text)
+        ctx = self.client.get(f"/api/campaigns/{self.bid}/new-context").json()["data"]
+        self.assertFalse(ctx["offer_simulation"])
 
     def test_simulation_cycle_is_marked(self):
         cycle_id = self._open()
@@ -168,8 +168,8 @@ class SimulationPagesTest(_BaseSimTest):
 
     def test_simulated_cycle_can_be_read_like_a_real_one(self):
         """模擬期照樣走判讀——那正是要讓新手先看到的東西。"""
-        self.client.post(f"/brands/{self.bid}/ads/{self.cycle_id}/performance/simulate",
-                         follow_redirects=False)
+        self.client.post(
+            f"/api/campaigns/{self.bid}/{self.cycle_id}/performance/simulate")
         ok, err = reading.run(main.conn, self.bid, self.cycle_id, ACTOR)
         self.assertTrue(ok, err)
         loaded = reading.load(main.conn, self.bid, self.cycle_id)

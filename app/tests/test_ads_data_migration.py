@@ -82,6 +82,12 @@ class _BaseTest(unittest.TestCase):
     def _get(self):
         return self.client.get(f"/brands/{self.bid}/ads/data-migration")
 
+    def _onboarding(self):
+        """同一份四格清單／完成度／成熟門檻，改從 React 新殼用的 JSON 端點取。"""
+        resp = self.client.get(f"/api/campaigns/brands/{self.bid}/data-onboarding")
+        self.assertEqual(resp.status_code, 200)
+        return resp.json()["data"]
+
 
 class RouteRegistrationTest(_BaseTest):
     def test_route_reachable_and_not_swallowed_by_cycle_wildcard(self):
@@ -94,19 +100,23 @@ class RouteRegistrationTest(_BaseTest):
 
 class EmptyStateTest(_BaseTest):
     def test_nothing_done_shows_not_started_and_empty_maturity(self):
-        resp = self._get()
-        self.assertEqual(resp.status_code, 200)
-        self.assertIn("完成度：0 / 3", resp.text)
-        self.assertIn("尚未開始", resp.text)
-        self.assertIn("建議下一步：Meta 認領", resp.text)
-        self.assertIn("還沒有足夠資料可以判斷", resp.text)
+        data = self._onboarding()
+        required = [i for i in data["checklist"] if not i["optional"]]
+        # 「完成度：0 / 3」
+        self.assertEqual((data["progress"]["done"], data["progress"]["total"]), (0, 3))
+        # 三格都掛「尚未開始」徽章
+        self.assertEqual([i["badge_label"] for i in required], ["尚未開始"] * 3)
+        # 「建議下一步：Meta 認領」
+        self.assertEqual(data["progress"]["next_item"]["label"], "Meta 認領")
+        # 一格資料都沒有＝成熟門檻整段換成「還沒有足夠資料可以判斷」空狀態（頁面 any_data 條件）
+        self.assertFalse(any(i["has_data"] for i in required))
 
     def test_each_tile_has_independent_action_link_no_blocking(self):
         """①四格各自可獨立完成／跳過，任一格未完成不阻擋其他格操作。"""
-        resp = self._get()
-        self.assertIn("/app/settings", resp.text)
-        self.assertIn(f"/app/brands/{self.bid}/orders", resp.text)
-        self.assertIn(f"/app/brands/{self.bid}/campaigns", resp.text)
+        urls = [i["action_url"] for i in self._onboarding()["checklist"]]
+        self.assertIn("/app/settings", urls)
+        self.assertIn(f"/app/brands/{self.bid}/orders", urls)
+        self.assertIn(f"/app/brands/{self.bid}/campaigns", urls)
 
 
 class TileStatusTest(_BaseTest):
@@ -187,10 +197,11 @@ class MaturityReportTest(_BaseTest):
         self.assertIsNone(order_row["gap"])
         self.assertEqual(order_row["value_label"], "200 天")
 
-        resp = self._get()
-        self.assertIn("已達標", resp.text)
+        maturity = self._onboarding()["maturity"]
+        self.assertTrue(any(r["met"] for r in maturity["rows"]))  # 有列掛「已達標」
         # 還沒開始的格繼續誠實顯示未達標，不因為訂單史過了就整批蓋成已成熟
-        self.assertIn("未達標", resp.text)
+        self.assertTrue(any(not r["met"] for r in maturity["rows"]))
+        self.assertFalse(maturity["all_met"])
 
 
 class ConnectionsPageEntryCardTest(_BaseTest):

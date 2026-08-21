@@ -385,26 +385,26 @@ class NewPageHttpTest(_BaseTest):
 
     def test_guided_form_saves_and_redirects_back_to_the_same_page(self):
         resp = self.client.post(
-            f"/brands/{self.bid}/ads/new/target-cpa-guided",
-            data={"events_per_sale": "5", "margin_per_sale": "1000"}, follow_redirects=False)
-        self.assertEqual(resp.status_code, 303)
-        self.assertIn(f"/brands/{self.bid}/ads/new", resp.headers["location"])
+            f"/api/campaigns/{self.bid}/target-cpa-guided",
+            json={"events_per_sale": "5", "margin_per_sale": "1000"})
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["value"], 200.0)
         saved = target_cpa._guided_tier(main.conn, self.bid)
         self.assertEqual(saved["value"], 200.0)
 
     def test_skipping_the_guided_form_does_not_block_creating_a_real_cycle(self):
+        # 兩格留白＝跳過這一步：什麼都沒存下來（舊頁用 warn 訊息條、API 用 400 表達同一件事）
         resp = self.client.post(
-            f"/brands/{self.bid}/ads/new/target-cpa-guided",
-            data={"events_per_sale": "", "margin_per_sale": ""}, follow_redirects=False)
-        self.assertEqual(resp.status_code, 303)
+            f"/api/campaigns/{self.bid}/target-cpa-guided",
+            json={"events_per_sale": "", "margin_per_sale": ""})
+        self.assertEqual(resp.status_code, 400)
         self.assertIsNone(target_cpa._guided_tier(main.conn, self.bid))
 
         resp2 = self.client.post(
-            f"/brands/{self.bid}/ads/new",
-            data={"objective": "leads", "custom_amount": "3000", "mode": "real"},
-            follow_redirects=False)
-        self.assertEqual(resp2.status_code, 303)
-        self.assertIn("/ads/", resp2.headers["location"])
+            f"/api/campaigns/{self.bid}",
+            json={"objective": "leads", "budget": 3000, "product_ids": []})
+        self.assertEqual(resp2.status_code, 200)
+        self.assertTrue(resp2.json()["cycle_id"])
 
 
 if __name__ == "__main__":

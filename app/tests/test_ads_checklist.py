@@ -15,7 +15,6 @@ import json
 import os
 import shutil
 import tempfile
-import time
 import unittest
 from datetime import date, timedelta
 from pathlib import Path
@@ -78,17 +77,6 @@ def _fake(text: str) -> ProviderResponse:
     return ProviderResponse(output_text=text, structured=None,
                             usage=Usage(input_tokens=400, output_tokens=200),
                             stop_reason="end_turn")
-
-
-def _wait_progress(client, url, timeout=5.0):
-    """票 M3：進度頁改背景執行緒後，?run=1 不再同步等完；短輪詢模擬瀏覽器 meta refresh，
-    等到真的轉址（303）或逾時為止（FakeProvider 幾乎瞬間完成，正常情況幾毫秒內就會轉址）。"""
-    deadline = time.time() + timeout
-    resp = client.get(url, follow_redirects=False)
-    while resp.status_code != 303 and time.time() < deadline:
-        time.sleep(0.02)
-        resp = client.get(url, follow_redirects=False)
-    return resp
 
 
 class _Base(unittest.TestCase):
@@ -222,38 +210,36 @@ class RoutesDoNotBlockTest(_Base):
 
     def test_checklist_page_renders(self):
         cycle_id = self._live_cycle()
-        page = self.client.get(f"/brands/{self.bid}/ads/{cycle_id}/checklist")
-        self.assertEqual(page.status_code, 200)
-        self.assertIn("Pixel 已安裝並確認轉換事件正常觸發", page.text)
-        self.assertIn("到達頁的訊息跟這期廣告一致", page.text)
+        resp = self.client.get(f"/api/campaigns/{self.bid}/{cycle_id}/checklist")
+        self.assertEqual(resp.status_code, 200)
+        labels = [i["label"] for i in resp.json()["data"]]
+        self.assertIn("Pixel 已安裝並確認轉換事件正常觸發", labels)
+        self.assertIn("到達頁的訊息跟這期廣告一致", labels)
 
     def test_toggle_one_time_item_via_route(self):
         cycle_id = self._live_cycle()
         resp = self.client.post(
-            f"/brands/{self.bid}/ads/{cycle_id}/checklist/one-time/pixel_confirmed",
-            data={"checked": "1"}, follow_redirects=False)
-        self.assertEqual(resp.status_code, 303)
+            f"/api/campaigns/{self.bid}/{cycle_id}/checklist/one-time/pixel_confirmed")
+        self.assertEqual(resp.status_code, 204)
         self.assertTrue(checklist.one_time_status(main.conn, self.bid)[0]["checked"])
 
         resp = self.client.post(
-            f"/brands/{self.bid}/ads/{cycle_id}/checklist/one-time/pixel_confirmed",
-            data={"checked": "0"}, follow_redirects=False)
+            f"/api/campaigns/{self.bid}/{cycle_id}/checklist/one-time/pixel_confirmed")
         self.assertFalse(checklist.one_time_status(main.conn, self.bid)[0]["checked"])
 
     def test_toggle_cycle_item_via_route(self):
         cycle_id = self._live_cycle()
         resp = self.client.post(
-            f"/brands/{self.bid}/ads/{cycle_id}/checklist/cycle/budget_matches_structure",
-            data={"checked": "1"}, follow_redirects=False)
-        self.assertEqual(resp.status_code, 303)
+            f"/api/campaigns/{self.bid}/{cycle_id}/checklist/cycle/budget_matches_structure")
+        self.assertEqual(resp.status_code, 204)
         items = checklist.cycle_status(main.conn, self.bid, cycle_id)
         self.assertTrue(next(i for i in items if i["key"] == "budget_matches_structure")["checked"])
 
     def test_unfinished_checklist_does_not_block_performance_page(self):
         cycle_id = self._live_cycle(start_offset_days=-4)
         ads_performance.import_csv(main.conn, self.bid, cycle_id, GOOD_CSV, actor=ACTOR)
-        page = self.client.get(f"/brands/{self.bid}/ads/{cycle_id}/performance")
-        self.assertEqual(page.status_code, 200)
+        resp = self.client.get(f"/api/campaigns/{self.bid}/{cycle_id}/performance")
+        self.assertEqual(resp.status_code, 200)
 
 
 class PixelGuidePageTest(_Base):
@@ -285,11 +271,9 @@ class _BaseHandoffTest(_Base):
         self._orig_plan, self._orig_creative = ads_plan.PROVIDER, ads_creative.PROVIDER
         ads_plan.PROVIDER = FakeProvider(
             response=_fake(json.dumps(_PLAN_OPTIONS, ensure_ascii=False)))
-        _wait_progress(self.client, f"/brands/{self.bid}/ads/{self.cycle_id}/plan/progress?run=1")
-        self.client.post(f"/brands/{self.bid}/ads/{self.cycle_id}/plan/select",
-                         data={}, follow_redirects=False)
-        self.client.post(f"/brands/{self.bid}/ads/{self.cycle_id}/plan/approve",
-                         follow_redirects=False)
+        ads_plan.generate_options(main.conn, self.bid, self.cycle_id, ACTOR)
+        self.client.post(f"/api/campaigns/{self.bid}/{self.cycle_id}/plan/select", json={})
+        self.client.post(f"/api/campaigns/{self.bid}/{self.cycle_id}/plan/approve")
         cell_id = main.conn.execute(
             "SELECT id FROM experiment_cell WHERE campaign_cycle_id = ?",
             (self.cycle_id,)).fetchone()["id"]
@@ -301,12 +285,9 @@ class _BaseHandoffTest(_Base):
                              "selling_point": "quality"}},
         ]}, ensure_ascii=False)
         ads_creative.PROVIDER = FakeProvider(response=_fake(reply))
-        _wait_progress(self.client,
-                       f"/brands/{self.bid}/ads/{self.cycle_id}/creatives/progress?run=1")
-        self.client.post(f"/brands/{self.bid}/ads/{self.cycle_id}/creatives/approve",
-                         follow_redirects=False)
-        self.client.post(f"/brands/{self.bid}/ads/{self.cycle_id}/handoff/build",
-                         follow_redirects=False)
+        ads_creative.generate(main.conn, self.bid, self.cycle_id, ACTOR)
+        ads_creative.approve_selection(main.conn, self.bid, self.cycle_id, ACTOR)
+        self.client.post(f"/api/campaigns/{self.bid}/{self.cycle_id}/handoff/build")
 
     def tearDown(self):
         ads_plan.PROVIDER, ads_creative.PROVIDER = self._orig_plan, self._orig_creative
@@ -333,8 +314,9 @@ class HandoffExtrasTest(_BaseHandoffTest):
 
     def test_completeness_reflects_checked_items(self):
         checklist.set_one_time(main.conn, self.bid, "pixel_confirmed", True, ACTOR)
-        page = self.client.get(f"/brands/{self.bid}/ads/{self.cycle_id}/handoff")
-        self.assertIn("1 / 4", page.text)
+        extras = ads_handoff.build_extras(main.conn, self.bid, self.cycle_id)
+        self.assertEqual(extras["checklist"]["checked"], 1)
+        self.assertEqual(extras["checklist"]["total"], 4)
 
 
 class QaLaunchReminderTest(_Base):
@@ -390,29 +372,24 @@ class QaLaunchHandoffPageTest(_BaseHandoffTest):
 
     def test_confirm_one_item_via_route_updates_count(self):
         resp = self.client.post(
-            f"/brands/{self.bid}/ads/{self.cycle_id}/handoff/qa-launch/qa_pixel_installed",
-            data={"checked": "1"}, follow_redirects=False)
-        self.assertEqual(resp.status_code, 303)
-        page = self.client.get(f"/brands/{self.bid}/ads/{self.cycle_id}/handoff")
-        self.assertIn("還有 4 項尚未確認", page.text)
+            f"/api/campaigns/{self.bid}/{self.cycle_id}/handoff/qa-launch/qa_pixel_installed")
+        self.assertEqual(resp.status_code, 204)
+        self.assertEqual(checklist.qa_launch_summary(main.conn, self.bid)["unconfirmed"], 4)
 
     def test_confirming_all_five_shows_success_banner(self):
         for key in checklist.QA_LAUNCH_ITEMS:
             resp = self.client.post(
-                f"/brands/{self.bid}/ads/{self.cycle_id}/handoff/qa-launch/{key}",
-                data={"checked": "1"}, follow_redirects=False)
-            self.assertEqual(resp.status_code, 303)
-        page = self.client.get(f"/brands/{self.bid}/ads/{self.cycle_id}/handoff")
-        self.assertIn("上線前提醒都確認過了", page.text)
-        self.assertNotIn("尚未確認", page.text)
+                f"/api/campaigns/{self.bid}/{self.cycle_id}/handoff/qa-launch/{key}")
+            self.assertEqual(resp.status_code, 204)
+        self.assertEqual(checklist.qa_launch_summary(main.conn, self.bid)["unconfirmed"], 0)
 
     def test_activation_succeeds_regardless_of_qa_confirmation_state(self):
         """票上的驗收：授權上線按鈕的可點擊性完全不受檢查清單狀態影響——這裡故意一項都不勾。"""
         package_id = ads_handoff.list_packages(main.conn, self.bid, self.cycle_id)[0]["id"]
         resp = self.client.post(
-            f"/brands/{self.bid}/ads/{self.cycle_id}/handoff/{package_id}/activate",
-            data={"meta_campaign_id": "23851234567890123"}, follow_redirects=False)
-        self.assertEqual(resp.status_code, 303)
+            f"/api/campaigns/{self.bid}/{self.cycle_id}/handoff/{package_id}/activate",
+            json={"meta_campaign_id": "23851234567890123"})
+        self.assertEqual(resp.status_code, 204)
         mapping = ads_handoff.list_packages(main.conn, self.bid, self.cycle_id)[0]["mapping"]
         self.assertIsNotNone(mapping)
         self.assertEqual(mapping["meta_campaign_id"], "23851234567890123")
@@ -438,35 +415,29 @@ class QaLaunchSettingsHubTest(_BaseHandoffTest):
     def test_reopen_in_settings_clears_confirmation_and_handoff_shows_warning_again(self):
         """票上的驗收：確認過的項目在設定中心重新打開後，上線授權頁恢復顯示警示。"""
         checklist.set_qa_launch_item(main.conn, self.bid, "qa_pixel_installed", True, ACTOR)
-        handoff_before = self.client.get(f"/brands/{self.bid}/ads/{self.cycle_id}/handoff")
-        self.assertIn("還有 4 項尚未確認", handoff_before.text)
+        self.assertEqual(checklist.qa_launch_summary(main.conn, self.bid)["unconfirmed"], 4)
 
         resp = self.client.post(
-            f"/brands/{self.bid}/settings/ads/qa-launch/qa_pixel_installed",
-            data={"checked": "0"}, follow_redirects=False)
-        self.assertEqual(resp.status_code, 303)
+            f"/api/campaigns/{self.bid}/{self.cycle_id}/handoff/qa-launch/qa_pixel_installed")
+        self.assertEqual(resp.status_code, 204)
 
         item = next(i for i in checklist.qa_launch_status(main.conn, self.bid)
                    if i["key"] == "qa_pixel_installed")
         self.assertFalse(item["checked"])
 
-        handoff_after = self.client.get(f"/brands/{self.bid}/ads/{self.cycle_id}/handoff")
-        self.assertIn("還有 5 項尚未確認", handoff_after.text)
+        self.assertEqual(checklist.qa_launch_summary(main.conn, self.bid)["unconfirmed"], 5)
 
     def test_confirming_via_settings_updates_handoff_unconfirmed_count(self):
         resp = self.client.post(
-            f"/brands/{self.bid}/settings/ads/qa-launch/qa_budget_line_review",
-            data={"checked": "1"}, follow_redirects=False)
-        self.assertEqual(resp.status_code, 303)
-        page = self.client.get(f"/brands/{self.bid}/ads/{self.cycle_id}/handoff")
-        self.assertIn("還有 4 項尚未確認", page.text)
+            f"/api/campaigns/{self.bid}/{self.cycle_id}/handoff/qa-launch/qa_budget_line_review")
+        self.assertEqual(resp.status_code, 204)
+        self.assertEqual(checklist.qa_launch_summary(main.conn, self.bid)["unconfirmed"], 4)
 
     def test_unknown_item_key_does_not_change_any_item(self):
         before = checklist.qa_launch_status(main.conn, self.bid)
         resp = self.client.post(
-            f"/brands/{self.bid}/settings/ads/qa-launch/not_a_real_item",
-            data={"checked": "1"}, follow_redirects=True)
-        self.assertEqual(resp.status_code, 200)
+            f"/api/campaigns/{self.bid}/{self.cycle_id}/handoff/qa-launch/not_a_real_item")
+        self.assertEqual(resp.status_code, 404)
         self.assertEqual(checklist.qa_launch_status(main.conn, self.bid), before)
 
 
@@ -476,9 +447,10 @@ class ReadingRetroReminderTest(_BaseHandoffTest):
         ok, err = reading.run(main.conn, self.bid, self.cycle_id, ACTOR)
         self.assertTrue(ok, err)
 
-        page = self.client.get(f"/brands/{self.bid}/ads/{self.cycle_id}/performance")
-        self.assertIn("投放前檢查清單還有沒勾的項目", page.text)
-        self.assertIn("Pixel 已安裝並確認轉換事件正常觸發", page.text)
+        resp = self.client.get(f"/api/campaigns/{self.bid}/{self.cycle_id}/performance")
+        self.assertIsNotNone(resp.json()["data"]["reading"])
+        unchecked = checklist.completeness(main.conn, self.bid, self.cycle_id)["unchecked_labels"]
+        self.assertIn("Pixel 已安裝並確認轉換事件正常觸發", unchecked)
 
     def test_no_reminder_once_everything_is_checked(self):
         for item in checklist.ONE_TIME_ITEMS:
@@ -488,14 +460,18 @@ class ReadingRetroReminderTest(_BaseHandoffTest):
         ads_performance.import_csv(main.conn, self.bid, self.cycle_id, GOOD_CSV, actor=ACTOR)
         reading.run(main.conn, self.bid, self.cycle_id, ACTOR)
 
-        page = self.client.get(f"/brands/{self.bid}/ads/{self.cycle_id}/performance")
-        self.assertNotIn("投放前檢查清單還有沒勾的項目", page.text)
+        resp = self.client.get(f"/api/campaigns/{self.bid}/{self.cycle_id}/performance")
+        self.assertIsNotNone(resp.json()["data"]["reading"])
+        self.assertEqual(
+            checklist.completeness(main.conn, self.bid, self.cycle_id)["unchecked_labels"], [])
 
     def test_no_reminder_before_judging_even_if_unchecked(self):
         """成效判讀「回溯」提醒——還沒判讀過就不該冒出這句提示。"""
         ads_performance.import_csv(main.conn, self.bid, self.cycle_id, GOOD_CSV, actor=ACTOR)
-        page = self.client.get(f"/brands/{self.bid}/ads/{self.cycle_id}/performance")
-        self.assertNotIn("投放前檢查清單還有沒勾的項目", page.text)
+        resp = self.client.get(f"/api/campaigns/{self.bid}/{self.cycle_id}/performance")
+        self.assertIsNone(resp.json()["data"]["reading"])
+        self.assertTrue(
+            checklist.completeness(main.conn, self.bid, self.cycle_id)["unchecked_labels"])
 
 
 if __name__ == "__main__":

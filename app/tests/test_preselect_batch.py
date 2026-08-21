@@ -256,9 +256,8 @@ class ApproveTriggersBatchTest(_Base):
             _theme_reply(name="虛構主題：墨青茶席", body_fps=_FAR_FP),
         ])
 
-        resp = self.client.post(f"/brands/{self.bid}/ads/{cycle_id}/plan/approve",
-                                follow_redirects=False)
-        self.assertEqual(resp.status_code, 303)
+        resp = self.client.post(f"/api/campaigns/{self.bid}/{cycle_id}/plan/approve")
+        self.assertEqual(resp.status_code, 204)
 
         themes = theme_repo.list_themes_for_cell(main.conn, self.bid, cell_id)
         by_format: dict = {}
@@ -278,9 +277,8 @@ class ApproveTriggersBatchTest(_Base):
             _theme_reply(name="B1", body_fps=_BASE_FP), _theme_reply(name="B2", body_fps=_FAR_FP),
         ])
 
-        resp = self.client.post(f"/brands/{self.bid}/ads/{cycle_id}/plan/approve",
-                                follow_redirects=False)
-        self.assertEqual(resp.status_code, 303)
+        resp = self.client.post(f"/api/campaigns/{self.bid}/{cycle_id}/plan/approve")
+        self.assertEqual(resp.status_code, 204)
         self.assertEqual(len(theme_repo.list_themes_for_cell(main.conn, self.bid, cell_a)), 2)
         self.assertEqual(len(theme_repo.list_themes_for_cell(main.conn, self.bid, cell_b)), 2)
 

@@ -73,15 +73,33 @@ def _fake(text: str) -> ProviderResponse:
                             stop_reason="end_turn")
 
 
-def _wait_progress(client, url, timeout=5.0):
-    """票 M3：進度頁改背景執行緒後，?run=1 不再同步等完；短輪詢模擬瀏覽器 meta refresh，
-    等到真的轉址（303）或逾時為止（FakeProvider 幾乎瞬間完成，正常情況幾毫秒內就會轉址）。"""
-    deadline = time.time() + timeout
-    resp = client.get(url, follow_redirects=False)
-    while resp.status_code != 303 and time.time() < deadline:
-        time.sleep(0.02)
-        resp = client.get(url, follow_redirects=False)
-    return resp
+def _run_plan_gate(client, brand_id: str, cycle_id: str) -> None:
+    """把一期推到「計畫已確認」——素材測試的共同前置。
+
+    舊頁走的是 `plan/progress?run=1` 背景生成 →  POST `plan/select` →  POST `plan/approve`；
+    這裡生成直接呼叫 ads_plan.generate_options()（背景執行緒那層是舊頁的等待畫面，不是業務
+    行為），選方案與確認走新殼 /api，兩支 handler 的內容與舊頁 handler 完全一致
+    （含 approve 後的 theme_batch 預選格批次）。actor 用 OPERATOR，跟舊頁沒設定操作人時
+    require_actor() 拿到的值相同。"""
+    ads_plan.generate_options(main.conn, brand_id, cycle_id, OPERATOR)
+    client.post(f"/api/campaigns/{brand_id}/{cycle_id}/plan/select", json={})
+    client.post(f"/api/campaigns/{brand_id}/{cycle_id}/plan/approve")
+
+
+def _reject_variant(brand_id: str, variant_id: str, reason_code: str) -> tuple:
+    """舊頁 POST `/creatives/{變體 id}/reject` 的業務等價，照 app/ads/routes_creative.py
+    ads_creative_reject() 的順序：先記下結構化理由與指紋快照，再當場改寫一版放回原位。
+
+    回 (改寫成功嗎, 要給使用者看的那句「我學到了…」)。舊頁把 learned 塞進轉址網址，
+    改寫失敗時補一句並帶 kind=warn——所以「kind=warn」＝這裡的 ok=False。理由碼不合法時
+    ads_creative.reject() 直接拋 ValueError，舊頁就是接住它轉成 kind=warn。
+    actor 用 OPERATOR，跟舊頁沒設定操作人時 require_actor() 拿到的值相同。"""
+    variant = ads_creative.reject(main.conn, brand_id, variant_id,
+                                  reason_code=reason_code, actor=OPERATOR)
+    learned = ads_creative.learned_message(reason_code, variant["fingerprint"])
+    ok, _ = ads_creative.rewrite(main.conn, brand_id, variant_id,
+                                 reason_code=reason_code, actor=OPERATOR)
+    return ok, learned
 
 
 # 票 7：切法要跨多種（>= HOOK_CUT_TYPE_MIN_DISTINCT），依序輪流指派避免測試資料自己違規。
@@ -159,11 +177,7 @@ class _BaseCreativeTest(unittest.TestCase):
         self._orig_creative_provider = ads_creative.PROVIDER
         ads_plan.PROVIDER = FakeProvider(
             response=_fake(json.dumps(_PLAN_OPTIONS, ensure_ascii=False)))
-        _wait_progress(self.client, f"/brands/{self.bid}/ads/{self.cycle_id}/plan/progress?run=1")
-        self.client.post(f"/brands/{self.bid}/ads/{self.cycle_id}/plan/select",
-                         data={}, follow_redirects=False)
-        self.client.post(f"/brands/{self.bid}/ads/{self.cycle_id}/plan/approve",
-                         follow_redirects=False)
+        _run_plan_gate(self.client, self.bid, self.cycle_id)
         self.cell_ids = [r["id"] for r in main.conn.execute(
             "SELECT id FROM experiment_cell WHERE campaign_cycle_id = ? ORDER BY id",
             (self.cycle_id,))]
@@ -173,10 +187,14 @@ class _BaseCreativeTest(unittest.TestCase):
         ads_creative.PROVIDER = self._orig_creative_provider
 
     def _generate(self, reply=None):
+        """跑一次素材生成，回 (成功嗎, 人話錯誤)。
+
+        舊頁那條路是 GET `creatives/progress?run=1`：背景執行緒裡呼叫的就是這支
+        ads_creative.generate()，成功轉去素材頁、失敗轉回檔期頁並帶 kind=warn。
+        所以「303 且不帶 warn」＝ok=True、「kind=warn」＝ok=False。"""
         ads_creative.PROVIDER = FakeProvider(
             response=_fake(reply if reply is not None else _variants_reply(self.cell_ids)))
-        return _wait_progress(
-            self.client, f"/brands/{self.bid}/ads/{self.cycle_id}/creatives/progress?run=1")
+        return ads_creative.generate(main.conn, self.bid, self.cycle_id, ACTOR)
 
     def _variants(self):
         return ads_creative.list_variants(main.conn, self.bid, self.cycle_id)
@@ -252,15 +270,15 @@ class CreativeBudgetCapTest(_BaseCreativeTest):
 
     def test_under_limit_still_generates_normally(self):
         coresettings.set_setting(main.conn, "intake_budget_limit", "1000")
-        resp = self._generate()
-        self.assertEqual(resp.status_code, 303)
+        ok, err = self._generate()
+        self.assertTrue(ok, err)
         self.assertTrue(self._variants())
 
 
 class GenerationTest(_BaseCreativeTest):
     def test_generates_variants_per_cell_with_fingerprints(self):
-        resp = self._generate()
-        self.assertEqual(resp.status_code, 303)
+        ok, err = self._generate()
+        self.assertTrue(ok, err)
         variants = self._variants()
         self.assertEqual(len(variants), 4)
         self.assertTrue(all(v["fingerprint"] for v in variants))
@@ -270,7 +288,7 @@ class GenerationTest(_BaseCreativeTest):
         """票 11：素材包生成的 prompt 要含對照表指定的方法論內容（Hook／文案＋圖片 Prompt 兩列）。"""
         provider = FakeProvider(response=_fake(_variants_reply(self.cell_ids)))
         ads_creative.PROVIDER = provider
-        _wait_progress(self.client, f"/brands/{self.bid}/ads/{self.cycle_id}/creatives/progress?run=1")
+        ads_creative.generate(main.conn, self.bid, self.cycle_id, ACTOR)
         sent = provider.calls[0]["messages"][0]["content"]
         self.assertIn("【方法論：ad-creative.md】", sent)
         self.assertIn("【方法論：copywriting.md】", sent)
@@ -298,12 +316,12 @@ class GenerationTest(_BaseCreativeTest):
         orig_dir = methodology.METHODOLOGY_DIR
         methodology.METHODOLOGY_DIR = tmp_dir
         try:
-            resp = self._generate()
+            ok, err = self._generate()
         finally:
             methodology.METHODOLOGY_DIR = orig_dir
             shutil.rmtree(tmp_dir, ignore_errors=True)
 
-        self.assertEqual(resp.status_code, 303)  # 流程照走
+        self.assertTrue(ok, err)  # 流程照走
         variants = self._variants()
         self.assertTrue(variants)
         self.assertEqual(variants[0]["methodology_missing"], ["ad-creative.md"])
@@ -345,8 +363,8 @@ class GenerationTest(_BaseCreativeTest):
         self.assertEqual(variants[0]["content"], "真的")
 
     def test_bad_json_stores_nothing(self):
-        resp = self._generate(reply="我幫你想了幾個切角……")
-        self.assertIn("kind=warn", resp.headers["location"])
+        ok, _ = self._generate(reply="我幫你想了幾個切角……")
+        self.assertFalse(ok)
         self.assertEqual(self._variants(), [])
 
 
@@ -398,11 +416,7 @@ class ProductScopedComplianceTest(unittest.TestCase):
         }
         ads_plan.PROVIDER = FakeProvider(
             response=_fake(json.dumps(plan_options, ensure_ascii=False)))
-        _wait_progress(self.client, f"/brands/{self.bid}/ads/{self.cycle_id}/plan/progress?run=1")
-        self.client.post(f"/brands/{self.bid}/ads/{self.cycle_id}/plan/select",
-                         data={}, follow_redirects=False)
-        self.client.post(f"/brands/{self.bid}/ads/{self.cycle_id}/plan/approve",
-                         follow_redirects=False)
+        _run_plan_gate(self.client, self.bid, self.cycle_id)
         self.cell_ids = [r["id"] for r in main.conn.execute(
             "SELECT id FROM experiment_cell WHERE campaign_cycle_id = ? ORDER BY id",
             (self.cycle_id,))]
@@ -414,9 +428,8 @@ class ProductScopedComplianceTest(unittest.TestCase):
     def test_product_forbidden_claim_reaches_do_not_say_block(self):
         provider = FakeProvider(response=_fake(_variants_reply(self.cell_ids)))
         ads_creative.PROVIDER = provider
-        resp = _wait_progress(
-            self.client, f"/brands/{self.bid}/ads/{self.cycle_id}/creatives/progress?run=1")
-        self.assertEqual(resp.status_code, 303)
+        ok, err = ads_creative.generate(main.conn, self.bid, self.cycle_id, ACTOR)
+        self.assertTrue(ok, err)
 
         sent = provider.calls[0]["messages"][0]["content"]
         self.assertIn("絕對不能講", sent)
@@ -484,11 +497,7 @@ class MultiProductScopedComplianceTest(unittest.TestCase):
         }
         ads_plan.PROVIDER = FakeProvider(
             response=_fake(json.dumps(plan_options, ensure_ascii=False)))
-        _wait_progress(self.client, f"/brands/{self.bid}/ads/{self.cycle_id}/plan/progress?run=1")
-        self.client.post(f"/brands/{self.bid}/ads/{self.cycle_id}/plan/select",
-                         data={}, follow_redirects=False)
-        self.client.post(f"/brands/{self.bid}/ads/{self.cycle_id}/plan/approve",
-                         follow_redirects=False)
+        _run_plan_gate(self.client, self.bid, self.cycle_id)
         self.cell_ids = [r["id"] for r in main.conn.execute(
             "SELECT id FROM experiment_cell WHERE campaign_cycle_id = ? ORDER BY id",
             (self.cycle_id,))]
@@ -501,9 +510,8 @@ class MultiProductScopedComplianceTest(unittest.TestCase):
         self.assertEqual(len(self.cell_ids), 2)  # 兩個切角各對應一個產品
         provider = FakeProvider(response=_fake(_variants_reply(self.cell_ids)))
         ads_creative.PROVIDER = provider
-        resp = _wait_progress(
-            self.client, f"/brands/{self.bid}/ads/{self.cycle_id}/creatives/progress?run=1")
-        self.assertEqual(resp.status_code, 303)
+        ok, err = ads_creative.generate(main.conn, self.bid, self.cycle_id, ACTOR)
+        self.assertTrue(ok, err)
 
         sent = provider.calls[0]["messages"][0]["content"]
         self.assertIn(self.FORBIDDEN_A, sent)
@@ -550,8 +558,8 @@ class CreativeMatrixTest(_BaseCreativeTest):
     """票 7：素材生成接創意矩陣＋原話引用。"""
 
     def test_variants_carry_angle_number_cut_type_and_on_camera(self):
-        resp = self._generate()
-        self.assertEqual(resp.status_code, 303)
+        ok, err = self._generate()
+        self.assertTrue(ok, err)
         variants = self._variants()
         for v in variants:
             self.assertEqual(v["creative_angle_number"], 16 if v["variant_type"] == "hook" else 9)
@@ -563,7 +571,7 @@ class CreativeMatrixTest(_BaseCreativeTest):
     def test_prompt_includes_angle_vocabulary_and_on_camera_instruction(self):
         provider = FakeProvider(response=_fake(_variants_reply(self.cell_ids)))
         ads_creative.PROVIDER = provider
-        _wait_progress(self.client, f"/brands/{self.bid}/ads/{self.cycle_id}/creatives/progress?run=1")
+        ads_creative.generate(main.conn, self.bid, self.cycle_id, ACTOR)
         sent = provider.calls[0]["messages"][0]["content"]
         # 只在人物出鏡才套 DNA、產圖硬規則——已隨 creative-matrix.md 整份塞進 prompt（票 11 接線）。
         # 承重字串：釘在 creative-matrix.md 第 2 節開頭，改那句話就要同步改這裡。
@@ -585,8 +593,8 @@ class CreativeMatrixTest(_BaseCreativeTest):
              "fingerprint": {"angle": "pain", "tone": "blunt", "format": "text_focus",
                              "selling_point": "quality"}},
         ]}, ensure_ascii=False)
-        resp = self._generate(reply=reply)
-        self.assertIn("kind=warn", resp.headers["location"])
+        ok, _ = self._generate(reply=reply)
+        self.assertFalse(ok)
         self.assertEqual(self._variants(), [])
 
     def test_hook_cut_type_diversity_is_enforced_with_deliberate_violation(self):
@@ -599,8 +607,8 @@ class CreativeMatrixTest(_BaseCreativeTest):
                              "selling_point": "quality"}}
             for i in range(4)
         ]
-        resp = self._generate(reply=json.dumps({"variants": variants}, ensure_ascii=False))
-        self.assertIn("kind=warn", resp.headers["location"])
+        ok, _ = self._generate(reply=json.dumps({"variants": variants}, ensure_ascii=False))
+        self.assertFalse(ok)
         self.assertEqual(self._variants(), [])
 
     def test_on_camera_true_shows_dna_badge_on_page(self):
@@ -626,7 +634,7 @@ class CreativeMatrixTest(_BaseCreativeTest):
         )
         provider = FakeProvider(response=_fake(_variants_reply(self.cell_ids)))
         ads_creative.PROVIDER = provider
-        _wait_progress(self.client, f"/brands/{self.bid}/ads/{self.cycle_id}/creatives/progress?run=1")
+        ads_creative.generate(main.conn, self.bid, self.cycle_id, ACTOR)
         sent = provider.calls[0]["messages"][0]["content"]
         self.assertIn("不會脹氣", sent)
         self.assertIn("蝦皮評論", sent)
@@ -651,7 +659,7 @@ class CreativeMatrixTest(_BaseCreativeTest):
         """語料庫空時照樣生成，頁面標注「無顧客原話支撐」（決策 0023 第 18a 點）。"""
         provider = FakeProvider(response=_fake(_variants_reply(self.cell_ids)))
         ads_creative.PROVIDER = provider
-        _wait_progress(self.client, f"/brands/{self.bid}/ads/{self.cycle_id}/creatives/progress?run=1")
+        ads_creative.generate(main.conn, self.bid, self.cycle_id, ACTOR)
         sent = provider.calls[0]["messages"][0]["content"]
         self.assertIn("沒有任何顧客原話語料", sent)
 
@@ -673,9 +681,8 @@ class OppositionSelectionTest(_BaseCreativeTest):
     def test_zero_clicks_adopts_everything(self):
         """反對制的核心：什麼都不點也能過關，採用的是「他沒有反對的」。"""
         self._generate()
-        resp = self.client.post(f"/brands/{self.bid}/ads/{self.cycle_id}/creatives/approve",
-                                follow_redirects=False)
-        self.assertEqual(resp.status_code, 303)
+        adopted = ads_creative.approve_selection(main.conn, self.bid, self.cycle_id, OPERATOR)
+        self.assertTrue(adopted)  # 舊頁 adopted == 0 才轉成 kind=warn，這裡是正常那條路
         rows = main.conn.execute(
             "SELECT decision, COUNT(*) c FROM adoption_decision WHERE campaign_cycle_id = ?"
             " GROUP BY decision", (self.cycle_id,)).fetchall()
@@ -689,20 +696,17 @@ class OppositionSelectionTest(_BaseCreativeTest):
              "fingerprint": {"angle": "benefit", "tone": "warm",
                              "format": "text_focus", "selling_point": "quality"}},
             ensure_ascii=False)))
-        self.client.post(
-            f"/brands/{self.bid}/ads/{self.cycle_id}/creatives/{target['id']}/reject",
-            data={"reason_code": "too_stiff"}, follow_redirects=False)
-        self.client.post(f"/brands/{self.bid}/ads/{self.cycle_id}/creatives/approve",
-                         follow_redirects=False)
+        _reject_variant(self.bid, target["id"], "too_stiff")
+        ads_creative.approve_selection(main.conn, self.bid, self.cycle_id, OPERATOR)
         adopted_ids = {r["target_id"] for r in main.conn.execute(
             "SELECT target_id FROM adoption_decision WHERE decision = 'adopted'"
             " AND campaign_cycle_id = ?", (self.cycle_id,))}
         self.assertNotIn(target["id"], adopted_ids)
 
     def test_approving_nothing_is_blocked_with_plain_message(self):
-        resp = self.client.post(f"/brands/{self.bid}/ads/{self.cycle_id}/creatives/approve",
-                                follow_redirects=False)
-        self.assertIn("kind=warn", resp.headers["location"])
+        adopted = ads_creative.approve_selection(main.conn, self.bid, self.cycle_id, OPERATOR)
+        # 舊頁就是靠「採用 0 則」這個回傳值決定轉成 kind=warn 的人話提醒
+        self.assertEqual(adopted, 0)
 
     def test_approval_works_without_operator_cookie(self):
         """ADR 0004：關卡二（素材採用）不再要求先設定操作人。"""
@@ -729,9 +733,7 @@ class RejectionMemoryTest(_BaseCreativeTest):
                 ensure_ascii=False)))
         else:
             ads_creative.PROVIDER = FakeProvider(exception=ProviderError("模型暫時無法回應"))
-        return self.client.post(
-            f"/brands/{self.bid}/ads/{self.cycle_id}/creatives/{variant['id']}/reject",
-            data={"reason_code": reason_code}, follow_redirects=False)
+        return _reject_variant(self.bid, variant["id"], reason_code)
 
     def test_rejection_stores_structured_reason_and_fingerprint_snapshot(self):
         self._generate()
@@ -756,15 +758,16 @@ class RejectionMemoryTest(_BaseCreativeTest):
 
     def test_user_is_told_what_the_system_learned(self):
         self._generate()
-        resp = self._reject(self._variants()[0], "too_stiff")
-        self.assertIn("%E6%88%91%E5%AD%B8%E5%88%B0%E4%BA%86", resp.headers["location"])
+        _, learned = self._reject(self._variants()[0], "too_stiff")
+        # 舊頁把這句 URL 編碼後塞進轉址網址（%E6%88%91%E5%AD%B8%E5%88%B0%E4%BA%86＝「我學到了」）
+        self.assertIn("我學到了", learned)
 
     def test_rewrite_failure_keeps_rejection_and_says_so(self):
         """改寫失敗不能吞掉——拒絕仍要記住，訊息要誠實說沒改成。"""
         self._generate()
         target = self._variants()[0]
-        resp = self._reject(target, "too_stiff", rewrite_ok=False)
-        self.assertIn("kind=warn", resp.headers["location"])
+        ok, _ = self._reject(target, "too_stiff", rewrite_ok=False)
+        self.assertFalse(ok)
         row = main.conn.execute(
             "SELECT * FROM adoption_decision WHERE target_id = ?", (target["id"],)).fetchone()
         self.assertEqual(row["decision"], "rejected")
@@ -776,7 +779,7 @@ class RejectionMemoryTest(_BaseCreativeTest):
 
         provider = FakeProvider(response=_fake(_variants_reply(self.cell_ids)))
         ads_creative.PROVIDER = provider
-        _wait_progress(self.client, f"/brands/{self.bid}/ads/{self.cycle_id}/creatives/progress?run=1")
+        ads_creative.generate(main.conn, self.bid, self.cycle_id, ACTOR)
         sent = provider.calls[0]["messages"][0]["content"]
         self.assertIn("這次不要再出現", sent)
         self.assertIn("親切溫暖", sent)
@@ -791,10 +794,9 @@ class RejectionMemoryTest(_BaseCreativeTest):
     def test_invalid_reason_is_rejected(self):
         self._generate()
         target = self._variants()[0]
-        resp = self.client.post(
-            f"/brands/{self.bid}/ads/{self.cycle_id}/creatives/{target['id']}/reject",
-            data={"reason_code": "亂填的"}, follow_redirects=False)
-        self.assertIn("kind=warn", resp.headers["location"])
+        with self.assertRaises(ValueError):
+            ads_creative.reject(main.conn, self.bid, target["id"],
+                                reason_code="亂填的", actor=OPERATOR)
 
 
 class CreativeIsolationTest(_BaseCreativeTest):
@@ -815,8 +817,8 @@ class MissingTypeBackfillTest(_BaseCreativeTest):
         provider = _SequencedProvider(
             [_variants_reply(self.cell_ids), _copy_reply(self.cell_ids)])
         ads_creative.PROVIDER = provider
-        resp = _wait_progress(self.client, f"/brands/{self.bid}/ads/{self.cycle_id}/creatives/progress?run=1")
-        self.assertEqual(resp.status_code, 303)
+        ok, err = ads_creative.generate(main.conn, self.bid, self.cycle_id, ACTOR)
+        self.assertTrue(ok, err)
         self.assertEqual(len(provider.calls), 2)  # 一次原生成、一次補打，不迴圈重試
 
         variants = self._variants()
@@ -832,8 +834,8 @@ class MissingTypeBackfillTest(_BaseCreativeTest):
         provider = _SequencedProvider(
             [_variants_reply(self.cell_ids), _variants_reply(self.cell_ids)])
         ads_creative.PROVIDER = provider
-        resp = _wait_progress(self.client, f"/brands/{self.bid}/ads/{self.cycle_id}/creatives/progress?run=1")
-        self.assertEqual(resp.status_code, 303)
+        ok, err = ads_creative.generate(main.conn, self.bid, self.cycle_id, ACTOR)
+        self.assertTrue(ok, err)
         self.assertEqual(len(provider.calls), 2)  # 補打了一次就不再重試
 
         variants = self._variants()

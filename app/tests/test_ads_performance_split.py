@@ -30,6 +30,8 @@ _tmpdir = tempfile.mkdtemp(prefix="brand_os_ads_perf_split_")
 from fastapi.testclient import TestClient  # noqa: E402
 
 import app.main as main  # noqa: E402
+from app.ads import nextcycle  # noqa: E402
+from app.ads import reconcile as ads_reconcile  # noqa: E402
 from app.ads import performance as perf  # noqa: E402
 from app.ads import reading  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
@@ -270,21 +272,21 @@ class FixtureParityTest(_JudgedCycleTest):
     """本票只搬版面：同一組 fixture 的判讀結論、成色標籤、可信度數值要跟拆層前完全一致。"""
 
     def test_reading_verdict_and_grade_unchanged(self):
-        page = self._perf().text
-        self.assertIn("這期該怎麼看", page)
-        self.assertIn("可以考慮加碼", page)  # scale_candidate 的人話標籤（reading.STATUS_LABELS）
-        self.assertIn("Meta 視角判讀", page)  # 懶人模式資料成色（決策 0025 第 6 點）
+        cycle_reading = reading.load(main.conn, self.bid, self.cycle_id)["cycle"]
+        # scale_candidate 的人話標籤（reading.STATUS_LABELS）
+        self.assertEqual(cycle_reading["status_label"], "可以考慮加碼")
+        # 懶人模式資料成色（決策 0025 第 6 點）
+        self.assertEqual(cycle_reading["result"]["data_grade"]["label"], "Meta 視角判讀")
 
     def test_confidence_defaults_to_trustworthy_without_reconcile_findings(self):
-        page = self._perf().text
-        self.assertIn("本期判讀可信度", page)
-        self.assertIn("可信", page)
+        loaded = ads_reconcile.load(main.conn, self.bid, self.cycle_id)
+        self.assertEqual(loaded["rows"], [])
+        self.assertEqual(loaded["label"], "可信")
 
     def test_next_cycle_draft_numbers_unchanged(self):
-        page = self._perf().text
-        self.assertIn("下一期就這樣開", page)
-        self.assertIn("10,000", page)  # 這期預算
-        self.assertIn("12,000", page)  # 建議下期預算（scale_candidate 上限 20%）
+        budget = nextcycle.load(main.conn, self.bid, self.cycle_id)["content"]["budget"]
+        self.assertEqual(budget["current_budget"], 10000)   # 這期預算
+        self.assertEqual(budget["proposed_budget"], 12000)  # 建議下期預算（scale_candidate 上限 20%）
 
 
 class SimulationUnaffectedTest(unittest.TestCase):
@@ -329,9 +331,11 @@ class InsufficientDataStillGradesTest(unittest.TestCase):
         perf.import_manual(main.conn, self.bid, self.cycle_id, {"spend": 3000}, actor=ACTOR)
 
     def test_performance_page_says_insufficient_not_zero(self):
-        page = self.client.get(
-            f"/brands/{self.bid}/ads/{self.cycle_id}/performance").text
-        self.assertIn("資料不足", page)
+        # 分母是 0 就給 None，頁面才印得出「資料不足」而不是硬給一個 0（鐵則 16）。
+        kpis = perf.totals(main.conn, self.bid, self.cycle_id)["kpis"]
+        self.assertIsNone(kpis["ctr"])
+        self.assertIsNone(kpis["cpc"])
+        self.assertIsNone(kpis["roas"])
 
     def test_data_subpage_shows_accumulated_raw_number(self):
         page = self.client.get(
@@ -348,8 +352,9 @@ class ShopeeCodeReadonlyGlanceTest(_JudgedCycleTest):
         # 蝦皮碼是判讀當下讀的訊號，記錄後要重判讀一次才會反映進通路對照卡（既有行為，票 #40）。
         ok, err = reading.run(main.conn, self.bid, self.cycle_id, ACTOR)
         assert ok, err
-        page = self._perf().text
-        self.assertIn("SHOP0801", page)
+        channel = reading.load(main.conn, self.bid,
+                               self.cycle_id)["cycle"]["result"]["channel_comparison"]
+        self.assertEqual(channel["shopee_code"]["code"], "SHOP0801")
 
 
 if __name__ == "__main__":

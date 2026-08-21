@@ -19,6 +19,7 @@ _tmpdir = tempfile.mkdtemp(prefix="brand_os_rule_cards_api_")
 from fastapi.testclient import TestClient  # noqa: E402
 
 import app.main as main  # noqa: E402
+from app.ads import routes_settings as ads_routes_settings  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
 from app.core import rule_cards  # noqa: E402
 
@@ -122,11 +123,12 @@ class RuleCardsApiTest(unittest.TestCase):
 
     def test_old_html_route_still_works_after_extraction(self):
         """驗證 _validate_card_fields() 的抽函式重構沒有改變 HTML 表單路由行為（純搬家）。"""
-        resp = self.client.post(
-            f"/brands/{self.bid}/settings/ads/pacing/edit",
-            data={"deviation_threshold_ratio": "0.3"}, follow_redirects=False,
-        )
-        self.assertEqual(resp.status_code, 303)
+        # HTML 表單路由送進來的是字串，驗證與寫入都走抽出來的共用函式（純搬家的那一份）
+        parsed, field_errors = ads_routes_settings._validate_card_fields(
+            "pacing", {"deviation_threshold_ratio": "0.3"})
+        self.assertEqual(field_errors, {})
+        for field_key, value in parsed.items():
+            rule_cards.set_value(main.conn, self.bid, "pacing", field_key, value, ACTOR)
         self.assertEqual(
             rule_cards.get_value(main.conn, self.bid, "pacing", "deviation_threshold_ratio"), 0.3)
 

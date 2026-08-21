@@ -10,7 +10,6 @@ import json
 import os
 import shutil
 import tempfile
-import time
 import unittest
 from pathlib import Path
 
@@ -70,17 +69,6 @@ def _fake(text: str) -> ProviderResponse:
                             stop_reason="end_turn")
 
 
-def _wait_progress(client, url, timeout=5.0):
-    """票 M3：進度頁改背景執行緒後，?run=1 不再同步等完；短輪詢模擬瀏覽器 meta refresh，
-    等到真的轉址（303）或逾時為止（FakeProvider 幾乎瞬間完成，正常情況幾毫秒內就會轉址）。"""
-    deadline = time.time() + timeout
-    resp = client.get(url, follow_redirects=False)
-    while resp.status_code != 303 and time.time() < deadline:
-        time.sleep(0.02)
-        resp = client.get(url, follow_redirects=False)
-    return resp
-
-
 class _BaseHandoffTest(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(main.app)
@@ -94,11 +82,10 @@ class _BaseHandoffTest(unittest.TestCase):
         self._orig_plan, self._orig_creative = ads_plan.PROVIDER, ads_creative.PROVIDER
         ads_plan.PROVIDER = FakeProvider(
             response=_fake(json.dumps(_PLAN_OPTIONS, ensure_ascii=False)))
-        _wait_progress(self.client, f"/brands/{self.bid}/ads/{self.cycle_id}/plan/progress?run=1")
-        self.client.post(f"/brands/{self.bid}/ads/{self.cycle_id}/plan/select",
-                         data={}, follow_redirects=False)
-        self.client.post(f"/brands/{self.bid}/ads/{self.cycle_id}/plan/approve",
-                         follow_redirects=False)
+        ok, err = ads_plan.generate_options(main.conn, self.bid, self.cycle_id, ACTOR)
+        self.assertTrue(ok, err)
+        self.client.post(f"/api/campaigns/{self.bid}/{self.cycle_id}/plan/select", json={})
+        self.client.post(f"/api/campaigns/{self.bid}/{self.cycle_id}/plan/approve")
         cell_id = self.cell_id = main.conn.execute(
             "SELECT id FROM experiment_cell WHERE campaign_cycle_id = ?",
             (self.cycle_id,)).fetchone()["id"]
@@ -123,28 +110,26 @@ class _BaseHandoffTest(unittest.TestCase):
                                               "selling_point": "quality"}},
         ]}, ensure_ascii=False)
         ads_creative.PROVIDER = FakeProvider(response=_fake(reply))
-        _wait_progress(self.client,
-                       f"/brands/{self.bid}/ads/{self.cycle_id}/creatives/progress?run=1")
-        self.client.post(f"/brands/{self.bid}/ads/{self.cycle_id}/creatives/approve",
-                         follow_redirects=False)
+        ok, err = ads_creative.generate(main.conn, self.bid, self.cycle_id, ACTOR)
+        self.assertTrue(ok, err)
+        ads_creative.approve_selection(main.conn, self.bid, self.cycle_id, ACTOR)
 
     def tearDown(self):
         ads_plan.PROVIDER, ads_creative.PROVIDER = self._orig_plan, self._orig_creative
 
     def _build(self):
-        return self.client.post(f"/brands/{self.bid}/ads/{self.cycle_id}/handoff/build",
-                                follow_redirects=False)
+        return self.client.post(
+            f"/api/campaigns/{self.bid}/{self.cycle_id}/handoff/build")
 
     def _packages(self):
         return ads_handoff.list_packages(main.conn, self.bid, self.cycle_id)
 
     def _activate(self, package_id, **overrides):
-        data = {"meta_campaign_id": "23851234567890123",
-                "meta_account_id": "act_9876543210"}
+        data = {"meta_campaign_id": "23851234567890123"}
         data.update(overrides)
         return self.client.post(
-            f"/brands/{self.bid}/ads/{self.cycle_id}/handoff/{package_id}/activate",
-            data=data, follow_redirects=False)
+            f"/api/campaigns/{self.bid}/{self.cycle_id}/handoff/{package_id}/activate",
+            json=data)
 
 
 class PackageBuildTest(_BaseHandoffTest):
@@ -216,18 +201,16 @@ class PackageBuildTest(_BaseHandoffTest):
         resp = self.client.post(f"/api/campaigns/{self.bid}",
                                 json={"product_ids": [], "budget": 5000, "objective": "awareness"})
         other = resp.json()["cycle_id"]
-        resp = self.client.post(f"/brands/{self.bid}/ads/{other}/handoff/build",
-                                follow_redirects=False)
-        self.assertIn("kind=warn", resp.headers["location"])
+        built = ads_handoff.build_packages(main.conn, self.bid, other, ACTOR)
+        self.assertEqual(built, 0)
+        self.assertEqual(ads_handoff.list_packages(main.conn, self.bid, other), [])
 
 
 class MissingFieldReportTest(_BaseHandoffTest):
     def test_report_is_recorded_and_acknowledged(self):
         self._build()
-        resp = self.client.post(
-            f"/brands/{self.bid}/ads/{self.cycle_id}/handoff/missing-field",
-            data={"field_key": "daily_budget"}, follow_redirects=False)
-        self.assertEqual(resp.status_code, 303)
+        ads_handoff.report_missing_field(
+            main.conn, self.bid, self.cycle_id, "daily_budget", OPERATOR)
         row = main.conn.execute(
             "SELECT * FROM audit_log WHERE action = 'field_not_found'"
             " ORDER BY created_at DESC LIMIT 1").fetchone()
@@ -240,7 +223,7 @@ class ActivationGateTest(_BaseHandoffTest):
         self._build()
         package = self._packages()[0]
         resp = self._activate(package["id"])
-        self.assertEqual(resp.status_code, 303)
+        self.assertEqual(resp.status_code, 204)
 
         auth = main.conn.execute(
             "SELECT * FROM activation_authorization WHERE scope_ref = ?",
@@ -271,7 +254,7 @@ class ActivationGateTest(_BaseHandoffTest):
     def test_campaign_id_is_required(self):
         self._build()
         resp = self._activate(self._packages()[0]["id"], meta_campaign_id="")
-        self.assertIn("kind=warn", resp.headers["location"])
+        self.assertEqual(resp.status_code, 400)
         self.assertIsNone(main.conn.execute(
             "SELECT 1 FROM campaign_activation WHERE campaign_cycle_id = ?",
             (self.cycle_id,)).fetchone())
@@ -282,8 +265,7 @@ class ActivationGateTest(_BaseHandoffTest):
         package_id = self._packages()[0]["id"]
         self.client.cookies.clear()
         resp = self._activate(package_id)
-        self.assertEqual(resp.status_code, 303)
-        self.assertNotIn("/settings/operator", resp.headers["location"])
+        self.assertEqual(resp.status_code, 204)
         auth = main.conn.execute(
             "SELECT * FROM activation_authorization WHERE scope_ref = ?",
             (package_id,)).fetchone()
@@ -293,7 +275,11 @@ class ActivationGateTest(_BaseHandoffTest):
     def test_ad_account_is_created_without_a_brand_binding(self):
         """廣告帳號不綁品牌——一個帳號可服務多個品牌（決策 0022 第 6 點）。"""
         self._build()
-        self._activate(self._packages()[0]["id"])
+        ads_handoff.authorize_and_map(
+            main.conn, self.bid, self.cycle_id, self._packages()[0]["id"],
+            meta_ids={"meta_campaign_id": "23851234567890123",
+                      "meta_account_id": "act_9876543210"},
+            actor=OPERATOR)
         account = main.conn.execute(
             "SELECT * FROM ad_account WHERE external_account_id = 'act_9876543210'"
         ).fetchone()

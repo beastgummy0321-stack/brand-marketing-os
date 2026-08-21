@@ -150,11 +150,13 @@ class RouteTest(_BaseGA4Test):
     def test_ga4_result_page_shows_utm_layer_data(self):
         self._sync(rows=[_row(source="google", medium="cpc", sessions=321,
                               conversions=9.0, revenue=54321.0)])
-        page = self.client.get(f"/brands/{self.bid}/ads/ga4")
-        self.assertEqual(page.status_code, 200)
-        self.assertIn("google", page.text)
-        self.assertIn("cpc", page.text)
-        self.assertIn("321", page.text)
+        # 票 T4 脫鉤：改讀舊頁本來就是拿去渲染的那份資料（routes_sync.py 的
+        # summary_rows=ga4_sync.latest_summary），驗的還是同一件事：UTM 層資料進得來。
+        rows = ga4_sync.latest_summary(main.conn, self.bid)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["source"], "google")
+        self.assertEqual(rows[0]["medium"], "cpc")
+        self.assertEqual(rows[0]["sessions"], 321)
 
     def test_purchase_not_received_is_shown_honestly_with_link_to_guide(self):
         self._sync(rows=[_row()], purchase_seen=False)
@@ -171,8 +173,10 @@ class RouteTest(_BaseGA4Test):
         main.conn.execute("DELETE FROM app_setting WHERE key IN (?, ?)",
                           (ga4_sync.PROPERTY_SETTING, ga4_sync.SERVICE_ACCOUNT_SETTING))
         main.conn.commit()
-        resp = self.client.get(f"/brands/{self.bid}/ads/ga4/sync", follow_redirects=False)
-        self.assertIn("kind=warn", resp.headers["location"])
+        # 票 T4 脫鉤：舊頁用 303＋kind=warn 表達「還沒設定，不給同步」；
+        # /api 同一道 is_configured 檢查用 400 表達同一件事。
+        resp = self.client.post(f"/api/campaigns/brands/{self.bid}/sync/ga4")
+        self.assertEqual(resp.status_code, 400)
 
     def test_sync_progress_page_renders_wait_screen_when_configured(self):
         """只驗證等待頁本身能正常渲染（不帶 run=1，不會建立任何真實用戶端）。"""

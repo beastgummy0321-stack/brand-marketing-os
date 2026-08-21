@@ -131,15 +131,24 @@ def _fake(text: str) -> ProviderResponse:
                             stop_reason="end_turn")
 
 
-def _wait_progress(client, url, params=None, timeout=5.0):
-    """票 M3：進度頁改背景執行緒後，?run=1 不再同步等完；短輪詢模擬瀏覽器 meta refresh，
-    等到真的轉址（303）或逾時為止（FakeProvider 幾乎瞬間完成，正常情況幾毫秒內就會轉址）。"""
+def _run_plan(client, brand_id, cycle_id, direction=None, timeout=5.0):
+    """票 M3：生成改背景執行緒後不再同步等完；短輪詢等到不再是 running 為止
+    （FakeProvider 幾乎瞬間完成，正常情況幾毫秒內就結束）。
+
+    票 T4 脫鉤：改走 /api 的「啟動生成＋輪詢狀態」兩支端點——背後是同一個
+    `_progress_state` 與同一支 `ads_plan.generate_options`，只是把舊頁的
+    「303 轉去選方案頁／303 帶 kind=warn」換成 JSON 的 done／failed。
+    回傳最終狀態字典（{"status": ..., "message": ...}）。"""
+    body = {"direction": direction} if direction else {}
+    started = client.post(f"/api/campaigns/{brand_id}/{cycle_id}/plan/generate", json=body)
+    assert started.status_code == 204, started.text
+    status_url = f"/api/campaigns/{brand_id}/{cycle_id}/plan/status"
     deadline = time.time() + timeout
-    resp = client.get(url, params=params, follow_redirects=False)
-    while resp.status_code != 303 and time.time() < deadline:
+    state = client.get(status_url).json()["data"]
+    while state["status"] == "running" and time.time() < deadline:
         time.sleep(0.02)
-        resp = client.get(url, params=params, follow_redirects=False)
-    return resp
+        state = client.get(status_url).json()["data"]
+    return state
 
 
 def _seed_snapshot(brand_id: str, *, clicks: int = 0, conversions: int = 0) -> None:
@@ -179,16 +188,12 @@ class _BasePlanTest(unittest.TestCase):
         ads_plan.PROVIDER = FakeProvider(
             response=_fake(reply if reply is not None
                            else json.dumps(_GOOD_OPTIONS, ensure_ascii=False)))
-        params = {"run": "1"}
-        if direction:
-            params["direction"] = direction
-        return _wait_progress(
-            self.client, f"/brands/{self.bid}/ads/{self.cycle_id}/plan/progress", params=params)
+        return _run_plan(self.client, self.bid, self.cycle_id, direction=direction)
 
     def _select(self, option_id=None):
-        data = {"option_id": option_id} if option_id else {}
-        return self.client.post(f"/brands/{self.bid}/ads/{self.cycle_id}/plan/select",
-                                data=data, follow_redirects=False)
+        body = {"option_id": option_id} if option_id else {}
+        return self.client.post(f"/api/campaigns/{self.bid}/{self.cycle_id}/plan/select",
+                                json=body)
 
     def _generate_and_select(self, option_id=None):
         self._generate()
@@ -245,9 +250,8 @@ class PlanGenerationTest(_BasePlanTest):
         self.assertEqual(provider.calls[0]["tools"], [llm_providers.WEB_SEARCH_TOOL])
 
     def test_options_are_stored_and_cycle_waits_for_selection(self):
-        resp = self._generate()
-        self.assertEqual(resp.status_code, 303)
-        self.assertIn("/plan/select", resp.headers["location"])
+        state = self._generate()
+        self.assertEqual(state["status"], "done")  # 舊頁的「303 轉去 /plan/select」
         cycle = ads_repo.get_cycle(main.conn, self.bid, self.cycle_id)
         self.assertEqual(cycle["status"], "PLAN_SELECT")
         self.assertIsNone(ads_plan.get_latest_plan(main.conn, self.bid, self.cycle_id))
@@ -261,7 +265,7 @@ class PlanGenerationTest(_BasePlanTest):
     def test_selecting_recommended_option_persists_plan_and_moves_to_review(self):
         self._generate()
         resp = self._select()
-        self.assertEqual(resp.status_code, 303)
+        self.assertEqual(resp.status_code, 204)
         cycle = ads_repo.get_cycle(main.conn, self.bid, self.cycle_id)
         self.assertEqual(cycle["status"], "REVIEW")
         self.assertEqual(cycle["plan_version"], 1)
@@ -284,7 +288,7 @@ class PlanGenerationTest(_BasePlanTest):
     def test_selecting_unknown_option_id_fails_honestly(self):
         self._generate()
         resp = self._select(option_id="cpo_not_a_real_one")
-        self.assertIn("kind=warn", resp.headers["location"])
+        self.assertEqual(resp.status_code, 400)  # 舊頁的 303＋kind=warn
         self.assertIsNone(ads_plan.get_latest_plan(main.conn, self.bid, self.cycle_id))
 
     def test_experiment_cells_created_one_per_angle(self):
@@ -313,8 +317,7 @@ class PlanGenerationTest(_BasePlanTest):
         """決策 0016 硬性原則 4：預算數字由程式算好餵給模型，不要模型自己算。"""
         provider = FakeProvider(response=_fake(json.dumps(_GOOD_OPTIONS, ensure_ascii=False)))
         ads_plan.PROVIDER = provider
-        _wait_progress(self.client,
-                       f"/brands/{self.bid}/ads/{self.cycle_id}/plan/progress?run=1")
+        _run_plan(self.client, self.bid, self.cycle_id)
         sent = provider.calls[0]["messages"][0]["content"]
         self.assertIn("10,000", sent)
         self.assertIn("14 天", sent)
@@ -329,7 +332,7 @@ class PlanGenerationTest(_BasePlanTest):
         cycle_id = resp.json()["cycle_id"]
         provider = FakeProvider(response=_fake(json.dumps(_GOOD_OPTIONS, ensure_ascii=False)))
         ads_plan.PROVIDER = provider
-        _wait_progress(self.client, f"/brands/{self.bid}/ads/{cycle_id}/plan/progress?run=1")
+        _run_plan(self.client, self.bid, cycle_id)
         sent = provider.calls[0]["messages"][0]["content"]
         self.assertIn("母親節檔期，同業都在打折促銷。", sent)
 
@@ -337,8 +340,7 @@ class PlanGenerationTest(_BasePlanTest):
         """票 11：計畫生成的 prompt 要含對照表指定的方法論內容（ads/ab-testing/customer-voice）。"""
         provider = FakeProvider(response=_fake(json.dumps(_GOOD_OPTIONS, ensure_ascii=False)))
         ads_plan.PROVIDER = provider
-        _wait_progress(self.client,
-                       f"/brands/{self.bid}/ads/{self.cycle_id}/plan/progress?run=1")
+        _run_plan(self.client, self.bid, self.cycle_id)
         sent = provider.calls[0]["messages"][0]["content"]
         self.assertIn("【方法論：ads-core.md】", sent)
         self.assertIn("【方法論：ab-testing.md】", sent)
@@ -370,8 +372,7 @@ class PlanGenerationTest(_BasePlanTest):
         """票 4：受眾三層可用性是程式算好的事實，告訴模型、不是問模型。"""
         provider = FakeProvider(response=_fake(json.dumps(_GOOD_OPTIONS, ensure_ascii=False)))
         ads_plan.PROVIDER = provider
-        _wait_progress(self.client,
-                       f"/brands/{self.bid}/ads/{self.cycle_id}/plan/progress?run=1")
+        _run_plan(self.client, self.bid, self.cycle_id)
         sent = provider.calls[0]["messages"][0]["content"]
         self.assertIn("冷受眾（陌生開發）：可用", sent)
         self.assertIn("暖受眾（再行銷）：這期不能用", sent)
@@ -382,8 +383,7 @@ class PlanGenerationTest(_BasePlanTest):
         pain_value 10,000／14 天 → 日預算約 714，落在中預算級距：CBO 兩組（驗證＋測試）。"""
         provider = FakeProvider(response=_fake(json.dumps(_GOOD_OPTIONS, ensure_ascii=False)))
         ads_plan.PROVIDER = provider
-        _wait_progress(self.client,
-                       f"/brands/{self.bid}/ads/{self.cycle_id}/plan/progress?run=1")
+        _run_plan(self.client, self.bid, self.cycle_id)
         sent = provider.calls[0]["messages"][0]["content"]
         self.assertIn("CBO，兩組（驗證＋測試）", sent)
         self.assertIn("70%", sent)
@@ -391,23 +391,22 @@ class PlanGenerationTest(_BasePlanTest):
 
     def test_custom_direction_is_included_in_prompt(self):
         """票 4：方案選擇頁的自由輸入框——文字要真的送進 prompt，不是擺好看的。"""
-        resp = self._generate(direction="想主打新品上市")
-        self.assertEqual(resp.status_code, 303)
+        state = self._generate(direction="想主打新品上市")
+        self.assertEqual(state["status"], "done")
         sent = ads_plan.PROVIDER.calls[0]["messages"][0]["content"]
         self.assertIn("想主打新品上市", sent)
 
     def test_bad_json_does_not_store_any_option(self):
-        resp = self._generate(reply="這期我建議先打通勤族，方案有兩個……")
-        self.assertEqual(resp.status_code, 303)
-        self.assertIn("kind=warn", resp.headers["location"])
+        state = self._generate(reply="這期我建議先打通勤族，方案有兩個……")
+        self.assertEqual(state["status"], "failed")  # 舊頁的 303＋kind=warn
         self.assertEqual(ads_plan.get_pending_options(main.conn, self.bid, self.cycle_id), [])
         self.assertIsNone(ads_plan.get_latest_plan(main.conn, self.bid, self.cycle_id))
         self.assertEqual(
             ads_repo.get_cycle(main.conn, self.bid, self.cycle_id)["status"], "PLANNING")
 
     def test_fewer_than_two_valid_options_is_rejected(self):
-        resp = self._generate(reply=json.dumps(_INSUFFICIENT_OPTIONS, ensure_ascii=False))
-        self.assertIn("kind=warn", resp.headers["location"])
+        state = self._generate(reply=json.dumps(_INSUFFICIENT_OPTIONS, ensure_ascii=False))
+        self.assertEqual(state["status"], "failed")  # 舊頁的 303＋kind=warn
         self.assertEqual(ads_plan.get_pending_options(main.conn, self.bid, self.cycle_id), [])
 
     def test_unavailable_tier_description_is_blanked_even_if_model_wrote_one(self):
@@ -439,13 +438,13 @@ class PlanGenerationTest(_BasePlanTest):
         orig_dir = methodology.METHODOLOGY_DIR
         methodology.METHODOLOGY_DIR = tmp_dir
         try:
-            resp = self._generate()
+            state = self._generate()
         finally:
             methodology.METHODOLOGY_DIR = orig_dir
             shutil.rmtree(tmp_dir, ignore_errors=True)
 
         # 流程照走：方案仍然入庫，不因缺檔而失敗
-        self.assertEqual(resp.status_code, 303)
+        self.assertEqual(state["status"], "done")
         options = ads_plan.get_pending_options(main.conn, self.bid, self.cycle_id)
         self.assertTrue(options)
         self.assertEqual(options[0]["methodology_missing"], ["ads-core.md"])
@@ -497,9 +496,8 @@ class PlanBudgetCapTest(_BasePlanTest):
 
     def test_under_limit_still_generates_normally(self):
         coresettings.set_setting(main.conn, "intake_budget_limit", "1000")
-        resp = self._generate()
-        self.assertEqual(resp.status_code, 303)
-        self.assertIn("/plan/select", resp.headers["location"])
+        state = self._generate()
+        self.assertEqual(state["status"], "done")  # 舊頁的「303 轉去 /plan/select」
 
     def test_shares_the_same_cap_as_intake_and_product_research(self):
         """M2 要求「同一道上限」：先用掉大半額度的是別的模組（模擬 llm_task 直接入庫），
@@ -591,9 +589,8 @@ class PlanPageTest(_BasePlanTest):
 class PlanApprovalTest(_BasePlanTest):
     def test_approval_freezes_plan_and_advances_cycle(self):
         self._generate_and_select()
-        resp = self.client.post(f"/brands/{self.bid}/ads/{self.cycle_id}/plan/approve",
-                                follow_redirects=False)
-        self.assertEqual(resp.status_code, 303)
+        resp = self.client.post(f"/api/campaigns/{self.bid}/{self.cycle_id}/plan/approve")
+        self.assertEqual(resp.status_code, 204)
         stored = ads_plan.get_latest_plan(main.conn, self.bid, self.cycle_id)
         self.assertEqual(stored["status"], "approved")
         self.assertEqual(stored["approved_by"], OPERATOR)
@@ -601,9 +598,8 @@ class PlanApprovalTest(_BasePlanTest):
             ads_repo.get_cycle(main.conn, self.bid, self.cycle_id)["status"], "PRODUCTION")
 
     def test_cannot_approve_without_a_plan(self):
-        resp = self.client.post(f"/brands/{self.bid}/ads/{self.cycle_id}/plan/approve",
-                                follow_redirects=False)
-        self.assertIn("kind=warn", resp.headers["location"])
+        resp = self.client.post(f"/api/campaigns/{self.bid}/{self.cycle_id}/plan/approve")
+        self.assertEqual(resp.status_code, 400)  # 舊頁的 303＋kind=warn
         self.assertEqual(
             ads_repo.get_cycle(main.conn, self.bid, self.cycle_id)["status"], "PLANNING")
 
@@ -611,10 +607,10 @@ class PlanApprovalTest(_BasePlanTest):
         """ADR 0004：關卡一（計畫確認）仍要人按一次確認，但不再要求先設定操作人。"""
         self._generate_and_select()
         self.client.cookies.clear()
-        resp = self.client.post(f"/brands/{self.bid}/ads/{self.cycle_id}/plan/approve",
-                                follow_redirects=False)
-        self.assertEqual(resp.status_code, 303)
-        self.assertNotIn("/settings/operator", resp.headers["location"])
+        resp = self.client.post(f"/api/campaigns/{self.bid}/{self.cycle_id}/plan/approve")
+        self.assertEqual(resp.status_code, 204)
+        # 舊頁是「沒被踢去 /settings/operator」；/api 成功時根本不轉址，連 Location 都沒有
+        self.assertNotIn("location", resp.headers)
         stored = ads_plan.get_latest_plan(main.conn, self.bid, self.cycle_id)
         self.assertEqual(stored["status"], "approved")
         self.assertEqual(stored["approved_by"], OPERATOR)
@@ -660,8 +656,8 @@ class DissentTest(_BasePlanTest):
 
     def test_no_dissents_key_means_no_opinion_not_a_crash(self):
         """模型沒有意見（或整個沒回這個欄位）：流程照走，異議清單就是空的。"""
-        resp = self._generate()  # _GOOD_OPTIONS 本來就沒有 dissents 欄位
-        self.assertEqual(resp.status_code, 303)
+        state = self._generate()  # _GOOD_OPTIONS 本來就沒有 dissents 欄位
+        self.assertEqual(state["status"], "done")
         self.assertEqual(ads_repo.list_dissents(main.conn, self.bid, self.cycle_id), [])
 
     def test_invalid_target_is_dropped(self):
@@ -720,9 +716,9 @@ class DissentTest(_BasePlanTest):
         self._generate(reply=_with_dissents(*_DISSENT_ITEMS))
         dissent_id = ads_repo.list_dissents(main.conn, self.bid, self.cycle_id)[0]["id"]
         resp = self.client.post(
-            f"/brands/{self.bid}/ads/{self.cycle_id}/dissents/{dissent_id}/decide",
-            data={"decision": "adopted"}, follow_redirects=False)
-        self.assertEqual(resp.status_code, 303)
+            f"/api/campaigns/{self.bid}/{self.cycle_id}/dissents/{dissent_id}/decide",
+            json={"accepted": True})
+        self.assertEqual(resp.status_code, 204)
         updated = next(d for d in ads_repo.list_dissents(main.conn, self.bid, self.cycle_id)
                       if d["id"] == dissent_id)
         self.assertEqual(updated["status"], "adopted")
@@ -735,10 +731,11 @@ class DissentTest(_BasePlanTest):
         dissent_id = ads_repo.list_dissents(main.conn, self.bid, self.cycle_id)[0]["id"]
         self.client.cookies.clear()
         resp = self.client.post(
-            f"/brands/{self.bid}/ads/{self.cycle_id}/dissents/{dissent_id}/decide",
-            data={"decision": "adopted"}, follow_redirects=False)
-        self.assertEqual(resp.status_code, 303)
-        self.assertNotIn("/settings/operator", resp.headers["location"])
+            f"/api/campaigns/{self.bid}/{self.cycle_id}/dissents/{dissent_id}/decide",
+            json={"accepted": True})
+        self.assertEqual(resp.status_code, 204)
+        # 舊頁是「沒被踢去 /settings/operator」；/api 成功時根本不轉址，連 Location 都沒有
+        self.assertNotIn("location", resp.headers)
         updated = next(d for d in ads_repo.list_dissents(main.conn, self.bid, self.cycle_id)
                       if d["id"] == dissent_id)
         self.assertEqual(updated["status"], "adopted")
@@ -747,9 +744,9 @@ class DissentTest(_BasePlanTest):
     def test_decide_unknown_dissent_id_fails_honestly(self):
         self._generate(reply=_with_dissents(*_DISSENT_ITEMS))
         resp = self.client.post(
-            f"/brands/{self.bid}/ads/{self.cycle_id}/dissents/dsn_not_real/decide",
-            data={"decision": "adopted"}, follow_redirects=False)
-        self.assertIn("kind=warn", resp.headers["location"])
+            f"/api/campaigns/{self.bid}/{self.cycle_id}/dissents/dsn_not_real/decide",
+            json={"accepted": True})
+        self.assertEqual(resp.status_code, 400)  # 舊頁的 303＋kind=warn
 
 
 if __name__ == "__main__":

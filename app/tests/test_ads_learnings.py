@@ -129,6 +129,11 @@ class LearningsPageRouteTest(unittest.TestCase):
         self.brand = bi_repo.create_brand(main.conn, name="虛構晨光咖啡三號", client_name=None, actor=ACTOR)
         self.bid = self.brand["id"]
 
+    def _sections(self):
+        resp = self.client.get(f"/api/campaigns/brands/{self.bid}/learnings")
+        self.assertEqual(resp.status_code, 200)
+        return resp.json()["data"]
+
     def test_route_registered_before_cycle_wildcard(self):
         resp = self.client.get(f"/brands/{self.bid}/ads/learnings")
         self.assertEqual(resp.status_code, 200)
@@ -154,16 +159,15 @@ class LearningsPageRouteTest(unittest.TestCase):
             applicability_scope="brand", created_by=ACTOR, actor=ACTOR,
             sample_size="80", confidence="Meta 視角判讀",
         )
-        resp = self.client.get(f"/brands/{self.bid}/ads/learnings")
-        self.assertIn("描繪使用情境的素材成交率比較好", resp.text)
+        texts = [e["learning_text"] for e in self._sections()["learnings"]]
+        self.assertIn("描繪使用情境的素材成交率比較好", texts)
 
         resp2 = self.client.post(
-            f"/brands/{self.bid}/ads/learnings/ledger/{entry['id']}/deactivate",
-            follow_redirects=False,
+            f"/api/campaigns/brands/{self.bid}/learnings/ledger/{entry['id']}/deactivate",
         )
-        self.assertEqual(resp2.status_code, 303)
-        resp3 = self.client.get(f"/brands/{self.bid}/ads/learnings")
-        self.assertNotIn("描繪使用情境的素材成交率比較好", resp3.text)
+        self.assertEqual(resp2.status_code, 200)
+        texts_after = [e["learning_text"] for e in self._sections()["learnings"]]
+        self.assertNotIn("描繪使用情境的素材成交率比較好", texts_after)
 
     def test_active_ban_shown_and_deactivate_removes_it(self):
         rule = bi_repo.create_rule(main.conn, self.bid, actor=ACTOR, rule_type="tone",
@@ -177,18 +181,17 @@ class LearningsPageRouteTest(unittest.TestCase):
         )
         main.conn.commit()
 
-        resp = self.client.get(f"/brands/{self.bid}/ads/learnings")
-        self.assertIn("以後不要再出現畫面感覺怪的素材", resp.text)
+        bans = [b["proposed_rule_text"] for b in self._sections()["active_bans"]]
+        self.assertIn("以後不要再出現畫面感覺怪的素材", bans)
         self.assertEqual(len(nextcycle.list_active_bans(main.conn, self.bid)), 1)
 
         resp2 = self.client.post(
-            f"/brands/{self.bid}/ads/learnings/rules/{rule['id']}/deactivate",
-            follow_redirects=False,
+            f"/api/campaigns/brands/{self.bid}/learnings/rules/{rule['id']}/deactivate",
         )
-        self.assertEqual(resp2.status_code, 303)
+        self.assertEqual(resp2.status_code, 200)
         self.assertEqual(nextcycle.list_active_bans(main.conn, self.bid), [])
-        resp3 = self.client.get(f"/brands/{self.bid}/ads/learnings")
-        self.assertNotIn("以後不要再出現畫面感覺怪的素材", resp3.text)
+        bans_after = [b["proposed_rule_text"] for b in self._sections()["active_bans"]]
+        self.assertNotIn("以後不要再出現畫面感覺怪的素材", bans_after)
 
     def test_pending_rule_card_and_hypothesis_shown_as_candidates(self):
         main.conn.execute(
@@ -203,9 +206,10 @@ class LearningsPageRouteTest(unittest.TestCase):
             main.conn, self.bid, actor=ACTOR, hypothesis_type="message",
             statement="親切溫暖的語氣過去有效", created_by=ACTOR,
         )
-        resp = self.client.get(f"/brands/{self.bid}/ads/learnings")
-        self.assertIn("痛點", resp.text)
-        self.assertIn("親切溫暖的語氣過去有效", resp.text)
+        data = self._sections()
+        self.assertTrue(any("痛點" in card["proposed_rule_text"] for card in data["pending_cards"]))
+        self.assertIn("親切溫暖的語氣過去有效",
+                      [h["statement"] for h in data["pending_hypotheses"]])
 
     def test_overflow_rules_shown_with_count_and_confirmed_date(self):
         """票 02-prompt-cap-and-overflow-list（決策 0012 第三節）：超過上限未生效的規則不
@@ -228,18 +232,17 @@ class LearningsPageRouteTest(unittest.TestCase):
                           (overflowed["id"],))
         main.conn.commit()
 
-        resp = self.client.get(f"/brands/{self.bid}/ads/learnings")
-        self.assertIn("因超過上限未生效的規則（1 條）", resp.text)
-        self.assertIn("超過上限未生效的規則", resp.text)
-        self.assertIn("2026-08-05", resp.text)
+        overflow = self._sections()["overflow_rules"]
+        self.assertEqual(len(overflow), 1)
+        self.assertIn("超過上限未生效的規則", [r["content"] for r in overflow])
+        self.assertTrue(overflow[0]["confirmed_at"].startswith("2026-08-05"))
         # 沒被下架、狀態仍是 active——只是這次沒排進生成提示詞。
         self.assertEqual(bi_repo.get_rule(main.conn, self.bid, overflowed["id"])["status"], "active")
 
     def test_no_overflow_section_when_within_cap(self):
         bi_repo.create_rule(main.conn, self.bid, actor=ACTOR, rule_type="tone",
                             content="唯一一條規則，沒超過上限", severity="soft")
-        resp = self.client.get(f"/brands/{self.bid}/ads/learnings")
-        self.assertNotIn("因超過上限未生效的規則", resp.text)
+        self.assertEqual(self._sections()["overflow_rules"], [])
 
     def test_pending_reconfirm_rule_shown_and_reconfirm_restores_it(self):
         """票 01-rule-expiry-reconfirm（ADR 0012 第一節）：太久沒重新確認的規則自動退回
@@ -251,36 +254,32 @@ class LearningsPageRouteTest(unittest.TestCase):
             (rule["id"],))
         main.conn.commit()
 
-        resp = self.client.get(f"/brands/{self.bid}/ads/learnings")
-        self.assertIn("待確認規則（1 條）", resp.text)
-        self.assertIn("太久沒人確認的規則需要延續", resp.text)
+        pending = self._sections()["pending_reconfirm_rules"]
+        self.assertEqual(len(pending), 1)
+        self.assertIn("太久沒人確認的規則需要延續", [r["content"] for r in pending])
         self.assertEqual(
             bi_repo.get_rule(main.conn, self.bid, rule["id"])["status"], "pending_reconfirm")
 
         resp2 = self.client.post(
-            f"/brands/{self.bid}/ads/learnings/rules/{rule['id']}/reconfirm",
-            follow_redirects=False,
+            f"/api/campaigns/brands/{self.bid}/learnings/rules/{rule['id']}/reconfirm",
         )
-        self.assertEqual(resp2.status_code, 303)
+        self.assertEqual(resp2.status_code, 200)
         after = bi_repo.get_rule(main.conn, self.bid, rule["id"])
         self.assertEqual(after["status"], "active")
         self.assertEqual(after["content"], "太久沒人確認的規則需要延續")  # 不必重新輸入內容
 
-        resp3 = self.client.get(f"/brands/{self.bid}/ads/learnings")
-        self.assertNotIn("待確認規則", resp3.text)  # 延續後從待確認清單消失
+        self.assertEqual(self._sections()["pending_reconfirm_rules"], [])  # 延續後從待確認清單消失
 
     def test_no_pending_reconfirm_section_when_none_stale(self):
         bi_repo.create_rule(main.conn, self.bid, actor=ACTOR, rule_type="tone",
                             content="剛接受的規則不該出現在待確認清單", severity="soft")
-        resp = self.client.get(f"/brands/{self.bid}/ads/learnings")
-        self.assertNotIn("待確認規則", resp.text)
+        self.assertEqual(self._sections()["pending_reconfirm_rules"], [])
 
     def test_reconfirm_unknown_rule_shows_error_not_500(self):
         resp = self.client.post(
-            f"/brands/{self.bid}/ads/learnings/rules/rul_nope/reconfirm",
-            follow_redirects=False,
+            f"/api/campaigns/brands/{self.bid}/learnings/rules/rul_nope/reconfirm",
         )
-        self.assertEqual(resp.status_code, 303)
+        self.assertEqual(resp.status_code, 400)
 
     def test_expired_active_ban_disappears_from_active_bans_section(self):
         """票 01-rule-expiry-reconfirm 與既有「生效中的禁令」機制的交集：升級成長期規則的
@@ -300,9 +299,9 @@ class LearningsPageRouteTest(unittest.TestCase):
             (rule["id"],))
         main.conn.commit()
 
-        resp = self.client.get(f"/brands/{self.bid}/ads/learnings")
-        self.assertIn("待確認規則（1 條）", resp.text)
-        self.assertIn("目前沒有生效中的禁令", resp.text)  # 「生效中的禁令」段回到空狀態
+        data = self._sections()
+        self.assertEqual(len(data["pending_reconfirm_rules"]), 1)
+        self.assertEqual(data["active_bans"], [])  # 「生效中的禁令」段回到空狀態
         self.assertEqual(nextcycle.list_active_bans(main.conn, self.bid), [])
 
     def test_hub_card_is_clickable(self):

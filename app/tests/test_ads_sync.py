@@ -275,8 +275,9 @@ class ClaimGateTest(_BaseSyncTest):
         ads_sync.claim(main.conn, other, discovered_id, ACTOR)
 
         self.assertEqual(ads_sync.list_pending_claims(main.conn, self.bid), [])
-        page = self.client.get(f"/brands/{self.bid}/ads/claims")
-        self.assertNotIn("隔壁的活動", page.text)
+        items = self.client.get(
+            f"/api/campaigns/brands/{self.bid}/claims").json()["data"]["items"]
+        self.assertNotIn("隔壁的活動", [i["campaign_name"] for i in items])
 
     def test_cannot_steal_another_brands_claim(self):
         other = bi_repo.create_brand(main.conn, name="虛構隔壁烘焙2", client_name=None,
@@ -290,9 +291,9 @@ class ClaimGateTest(_BaseSyncTest):
     def test_ignore_removes_it_from_the_list(self):
         self._sync(campaigns=[_campaign("555", f"{self.brand_name}_20260801_sales")])
         discovered_id = main.conn.execute("SELECT id FROM discovered_campaign").fetchone()["id"]
-        resp = self.client.post(f"/brands/{self.bid}/ads/claims/{discovered_id}/ignore",
-                                follow_redirects=False)
-        self.assertEqual(resp.status_code, 303)
+        resp = self.client.post(
+            f"/api/campaigns/brands/{self.bid}/claims/{discovered_id}/ignore")
+        self.assertEqual(resp.status_code, 200)
         self.assertEqual(ads_sync.list_pending_claims(main.conn, self.bid), [])
 
     def test_claim_works_without_operator_cookie(self):
@@ -300,10 +301,9 @@ class ClaimGateTest(_BaseSyncTest):
         self._sync(campaigns=[_campaign("666", "某活動")])
         discovered_id = main.conn.execute("SELECT id FROM discovered_campaign").fetchone()["id"]
         self.client.cookies.clear()
-        resp = self.client.post(f"/brands/{self.bid}/ads/claims/{discovered_id}/claim",
-                                follow_redirects=False)
-        self.assertEqual(resp.status_code, 303)
-        self.assertNotIn("/settings/operator", resp.headers["location"])
+        resp = self.client.post(
+            f"/api/campaigns/brands/{self.bid}/claims/{discovered_id}/claim")
+        self.assertEqual(resp.status_code, 200)  # 沒被擋去設定操作人，直接認領成功
         row = main.conn.execute(
             "SELECT claimed_by FROM discovered_campaign WHERE id = ?", (discovered_id,)).fetchone()
         self.assertEqual(row["claimed_by"], OPERATOR)
@@ -338,8 +338,8 @@ class SanityAndErrorTest(_BaseSyncTest):
         main.conn.execute("DELETE FROM app_setting WHERE key IN (?, ?)",
                           (ads_sync.TOKEN_SETTING, ads_sync.ACCOUNT_SETTING))
         main.conn.commit()
-        resp = self.client.post(f"/brands/{self.bid}/ads/sync", follow_redirects=False)
-        self.assertIn("kind=warn", resp.headers["location"])
+        result = ads_sync.sync_account(main.conn, ACTOR)
+        self.assertEqual(result.error, meta_api.NO_TOKEN_MESSAGE)  # 人話提示，不當機
         self.assertFalse(ads_sync.is_configured(main.conn))
 
     def test_settings_page_offers_readonly_meta_connection(self):

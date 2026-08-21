@@ -219,19 +219,18 @@ class InterviewRouteTest(unittest.TestCase):
         self.assertIn("前朝教訓訪談", resp.text)
 
     def test_post_with_nothing_selected_does_not_block(self):
-        resp = self.client.post(f"/brands/{self.bid}/ads/interview", data={},
-                                follow_redirects=False)
-        self.assertEqual(resp.status_code, 303)
-        self.assertIn("/ads", resp.headers["location"])
+        resp = self.client.post(f"/api/campaigns/brands/{self.bid}/interview", json={})
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["rule_card_count"], 0)
+        self.assertEqual(resp.json()["hypothesis_count"], 0)
 
     def test_post_creates_card_and_hypothesis_via_form(self):
         resp = self.client.post(
-            f"/brands/{self.bid}/ads/interview",
-            data={"bad_tone": ["urgent"], "good_angle": ["testimonial"],
-                 "note": "備註文字"},
-            follow_redirects=False,
+            f"/api/campaigns/brands/{self.bid}/interview",
+            json={"bad": {"tone": ["urgent"]}, "good": {"angle": ["testimonial"]},
+                  "note": "備註文字"},
         )
-        self.assertEqual(resp.status_code, 303)
+        self.assertEqual(resp.status_code, 200)
         cards = main.conn.execute(
             "SELECT * FROM creative_rule_card WHERE brand_id = ?", (self.bid,)
         ).fetchall()

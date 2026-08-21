@@ -20,7 +20,6 @@ import json
 import os
 import shutil
 import tempfile
-import time
 import unittest
 from pathlib import Path
 
@@ -77,17 +76,6 @@ def _fake(text: str) -> ProviderResponse:
                             stop_reason="end_turn")
 
 
-def _wait_progress(client, url, timeout=5.0):
-    """票 M3：進度頁改背景執行緒後，?run=1 不再同步等完；短輪詢模擬瀏覽器 meta refresh，
-    等到真的轉址（303）或逾時為止（FakeProvider 幾乎瞬間完成，正常情況幾毫秒內就會轉址）。"""
-    deadline = time.time() + timeout
-    resp = client.get(url, follow_redirects=False)
-    while resp.status_code != 303 and time.time() < deadline:
-        time.sleep(0.02)
-        resp = client.get(url, follow_redirects=False)
-    return resp
-
-
 def _rail(html: str) -> str:
     start = html.index('aria-label="檔期進度"')
     tag_start = html.rindex("<nav", 0, start)
@@ -118,16 +106,19 @@ class _BaseStageRailTest(unittest.TestCase):
 
     def _advance_to_live(self):
         """走完整個流程：確認計畫 → 產出並採用素材 → 產出交接包 → 具名回報投放，
-        讓檔期狀態變成 LIVE（第 5 格：成效）。"""
+        讓檔期狀態變成 LIVE（第 5 格：成效）。這只是把檔期推到第 5 格的前置動作，不是
+        本檔的斷言對象：企劃／素材生成直接呼叫業務函式（舊頁進度頁與 /api 背景工作跑的
+        就是這兩支），採用素材沒有對應的 /api 端點，同樣直接呼叫業務函式，其餘走 /api。"""
         orig_plan = ads_plan.PROVIDER
         ads_plan.PROVIDER = FakeProvider(
             response=_fake(json.dumps(_PLAN_OPTIONS, ensure_ascii=False)))
-        _wait_progress(self.client, f"/brands/{self.bid}/ads/{self.cycle_id}/plan/progress?run=1")
-        ads_plan.PROVIDER = orig_plan
-        self.client.post(f"/brands/{self.bid}/ads/{self.cycle_id}/plan/select",
-                         data={}, follow_redirects=False)
-        self.client.post(f"/brands/{self.bid}/ads/{self.cycle_id}/plan/approve",
-                         follow_redirects=False)
+        try:
+            ok, err = ads_plan.generate_options(main.conn, self.bid, self.cycle_id, ACTOR)
+        finally:
+            ads_plan.PROVIDER = orig_plan
+        self.assertTrue(ok, err)
+        self.client.post(f"/api/campaigns/{self.bid}/{self.cycle_id}/plan/select", json={})
+        self.client.post(f"/api/campaigns/{self.bid}/{self.cycle_id}/plan/approve")
 
         cell_id = main.conn.execute(
             "SELECT id FROM experiment_cell WHERE campaign_cycle_id = ?",
@@ -141,18 +132,19 @@ class _BaseStageRailTest(unittest.TestCase):
         ]}, ensure_ascii=False)
         orig_creative = ads_creative.PROVIDER
         ads_creative.PROVIDER = FakeProvider(response=_fake(reply))
-        _wait_progress(self.client,
-                       f"/brands/{self.bid}/ads/{self.cycle_id}/creatives/progress?run=1")
-        ads_creative.PROVIDER = orig_creative
-        self.client.post(f"/brands/{self.bid}/ads/{self.cycle_id}/creatives/approve",
-                         follow_redirects=False)
+        try:
+            ok, err = ads_creative.generate(main.conn, self.bid, self.cycle_id, ACTOR)
+        finally:
+            ads_creative.PROVIDER = orig_creative
+        self.assertTrue(ok, err)
+        self.assertTrue(
+            ads_creative.approve_selection(main.conn, self.bid, self.cycle_id, ACTOR))
 
-        self.client.post(f"/brands/{self.bid}/ads/{self.cycle_id}/handoff/build",
-                         follow_redirects=False)
+        self.client.post(f"/api/campaigns/{self.bid}/{self.cycle_id}/handoff/build")
         package = ads_handoff.list_packages(main.conn, self.bid, self.cycle_id)[0]
         self.client.post(
-            f"/brands/{self.bid}/ads/{self.cycle_id}/handoff/{package['id']}/activate",
-            data={"meta_campaign_id": "23851234567890123"}, follow_redirects=False)
+            f"/api/campaigns/{self.bid}/{self.cycle_id}/handoff/{package['id']}/activate",
+            json={"meta_campaign_id": "23851234567890123"})
 
 
 class FreshCycleStage1Test(_BaseStageRailTest):

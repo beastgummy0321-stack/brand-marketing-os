@@ -92,9 +92,11 @@ class AdsHomeTest(_BaseAdsTest):
         產品名與目標這類per-檔期細節不再出現在 hub（hub 卡片有 30 全形字容量上限，
         放不下不定長的產品清單），改到歷期戰績頁確認。"""
         self._open_cycle()
-        resp = self.client.get(f"/brands/{self.bid}/ads/history")
-        self.assertIn("虛構濾掛組", resp.text)
-        self.assertIn("銷售", resp.text)
+        listing = json.dumps(
+            self.client.get(f"/api/campaigns/brands/{self.bid}").json()["data"],
+            ensure_ascii=False)
+        self.assertIn("虛構濾掛組", listing)
+        self.assertIn("銷售", listing)
 
 
 class AdsNewPageTest(_BaseAdsTest):
@@ -266,13 +268,10 @@ class CreateCycleTest(_BaseAdsTest):
         self.assertIn("開始日期格式不對", resp.text)
 
     def test_custom_start_date_is_used(self):
-        resp = self.client.post(
-            f"/brands/{self.bid}/ads/new",
-            data={"product_ids": [self.product_a, self.product_b], "slider_index": "5",
-                  "objective": "sales", "start_date": "2026-09-01"},
-            follow_redirects=False,
-        )
-        cycle_id = resp.headers["location"].split("/ads/")[1].split("?")[0]
+        # /api 開檔期不吃 start_date（新殼一律今天開跑），直接呼叫業務函式驗同一件事
+        cycle_id = ads_repo.create_cycle(
+            main.conn, self.bid, product_ids=[self.product_a, self.product_b],
+            pain_value=10000, objective="sales", actor=ACTOR, start_date="2026-09-01")["id"]
         cycle = ads_repo.get_cycle(main.conn, self.bid, cycle_id)
         self.assertEqual(cycle["start_date"], "2026-09-01")
 
@@ -355,9 +354,9 @@ class PacingCurveTest(_BaseAdsTest):
     def test_manual_switch_to_pulse_recomputes_curve(self):
         cycle_id = self._create(custom_amount="21000", duration_days="21")
         resp = self.client.post(
-            f"/brands/{self.bid}/ads/{cycle_id}/pacing",
-            data={"strategy": "pulse", "reason": "檔期本身是限時衝刺"}, follow_redirects=False)
-        self.assertEqual(resp.status_code, 303)
+            f"/api/campaigns/{self.bid}/{cycle_id}/pacing",
+            json={"pacing_strategy": "pulse", "pacing_reason": "檔期本身是限時衝刺"})
+        self.assertEqual(resp.status_code, 204)
         plan = ads_repo.derived_plan(ads_repo.get_cycle(main.conn, self.bid, cycle_id))
         self.assertEqual(plan["pacing_strategy"], "pulse")
         self.assertEqual(plan["pacing_reason"], "檔期本身是限時衝刺")
@@ -368,10 +367,10 @@ class PacingCurveTest(_BaseAdsTest):
         """天數不夠時系統不讓使用者選脈動或間歇（G9.4／ADR 0010 第五節）。"""
         cycle_id = self._create(custom_amount="2000", duration_days="7")
         resp = self.client.post(
-            f"/brands/{self.bid}/ads/{cycle_id}/pacing",
-            data={"strategy": "intermittent", "reason": "怕受眾疲乏"}, follow_redirects=False)
-        self.assertEqual(resp.status_code, 303)
-        self.assertIn("warn", resp.headers["location"] + "")
+            f"/api/campaigns/{self.bid}/{cycle_id}/pacing",
+            json={"pacing_strategy": "intermittent", "pacing_reason": "怕受眾疲乏"})
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("天數不足", resp.json()["error"])
         plan = ads_repo.derived_plan(ads_repo.get_cycle(main.conn, self.bid, cycle_id))
         self.assertEqual(plan["pacing_strategy"], "continuous")  # 沒被改動
 
@@ -393,7 +392,7 @@ class AdsBrandIsolationTest(_BaseAdsTest):
         self.assertEqual(ads_repo.list_cycles(main.conn, other_id), [])
         self.assertIsNone(ads_repo.get_cycle(main.conn, other_id, cycle_id))
         self.assertEqual(
-            self.client.get(f"/brands/{other_id}/ads/{cycle_id}").status_code, 404)
+            self.client.get(f"/api/campaigns/{other_id}/{cycle_id}").status_code, 404)
         # 自己的品牌查得到，證明過濾條件不是永遠回空
         self.assertIsNotNone(ads_repo.get_cycle(main.conn, self.bid, cycle_id))
 

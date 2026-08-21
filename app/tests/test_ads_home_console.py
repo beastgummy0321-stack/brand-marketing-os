@@ -29,6 +29,7 @@ import app.main as main  # noqa: E402
 from app.ads import performance as ads_perf  # noqa: E402
 from app.ads import reading as ads_reading  # noqa: E402
 from app.ads import repository as ads_repo  # noqa: E402
+from app.ads import stages  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
 from app.llm.providers import FakeProvider, ProviderResponse, Usage  # noqa: E402
 
@@ -73,6 +74,14 @@ class _BaseTest(unittest.TestCase):
     def _hub(self):
         return self.client.get(f"/brands/{self.bid}/ads")
 
+    def _campaign_items(self):
+        """檔期清單 JSON API：hub 兩塊摘要（進行中第幾步／最近結案的判讀）的同一份資料
+        ——`routes_campaigns_list_api._list_item()` 直接重用 hub 用的 `_hub_stage_info()`
+        與 `_closed_cycle_reading()`，不是另算一份。"""
+        resp = self.client.get(f"/api/campaigns/brands/{self.bid}")
+        self.assertEqual(resp.status_code, 200)
+        return {item["id"]: item for item in resp.json()["data"]}
+
 
 
 class ConsoleLayoutTest(_BaseTest):
@@ -111,9 +120,10 @@ class ActionRowAlwaysPresentTest(_BaseTest):
 
 class StageWordingTest(_BaseTest):
     def test_shows_step_index_out_of_five(self):
-        self._open_cycle()
-        resp = self._hub()
-        self.assertIn("第 1 步／共 5 步", resp.text)
+        cycle_id = self._open_cycle()
+        item = self._campaign_items()[cycle_id]
+        self.assertEqual(item["stage_index"], 1)         # 第 1 步
+        self.assertEqual(len(stages.STAGE_LABELS), 5)    # ／共 5 步（hub 的 stage_total）
 
 
 class ClosedCycleSummaryTest(_BaseTest):
@@ -143,18 +153,21 @@ class ClosedCycleSummaryTest(_BaseTest):
         cycle_id = self._open_cycle(product_ids=[self.product], custom_amount="10000")
         self._judge(cycle_id)
         ads_repo.update_cycle_status(main.conn, self.bid, cycle_id, status="CLOSED", actor=ACTOR)
-        resp = self._hub()
-        self.assertIn("最近結案的檔期", resp.text)
-        self.assertIn("4.00 倍", resp.text)  # revenue 40000 / spend 10000
-        self.assertIn(f'href="/brands/{self.bid}/ads/{cycle_id}"', resp.text)
+        item = self._campaign_items()[cycle_id]
+        self.assertEqual(item["bucket"], "closed")  # 就是「最近結案的檔期」那一塊的那期
+        self.assertEqual(item["roas"], 4.0)  # revenue 40000 / spend 10000 → 畫面上的 4.00 倍
+        self.assertIsNotNone(item["verdict_kind"])  # 賺賠狀態膠囊
 
     def test_unjudged_closed_cycle_shows_nothing_not_fake_data(self):
         """principles.md 鐵則16：拿不到就不要放，不放假資料或 0 佔位。"""
         cycle_id = self._open_cycle()
         ads_repo.update_cycle_status(main.conn, self.bid, cycle_id, status="CLOSED", actor=ACTOR)
-        resp = self._hub()
-        self.assertNotIn("最近結案的檔期", resp.text)
-        self.assertNotIn(f'href="/brands/{self.bid}/ads/{cycle_id}"', resp.text)
+        item = self._campaign_items()[cycle_id]
+        self.assertEqual(item["bucket"], "closed")
+        # 沒判讀過就整塊不出現＝這期一個判讀欄位都拿不到，不是 0 或空字串佔位
+        self.assertIsNone(item["roas"])
+        self.assertIsNone(item["verdict_kind"])
+        self.assertIsNone(item["status_label_reading"])
 
 
 class InboxBadgeTest(_BaseTest):

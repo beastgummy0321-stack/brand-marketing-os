@@ -75,16 +75,17 @@ class RootSettingTest(_Base):
 
     def test_setting_page_saves_an_absolute_path(self):
         target = Path(_tmpdir) / "另一顆硬碟"
-        resp = self.client.post("/settings/creative-root",
-                                data={"creative_root": str(target)}, follow_redirects=False)
-        self.assertEqual(resp.status_code, 303)
+        resp = self.client.post("/api/settings/creative-root",
+                                json={"creative_root": str(target)})
+        self.assertEqual(resp.status_code, 200)
         self.assertEqual(creative_assets.get_root(main.conn), target)
         coresettings.set_setting(main.conn, creative_assets.SETTING_KEY, str(ROOT))
 
     def test_setting_page_rejects_relative_path_and_drive_root(self):
         for bad in ("", "行銷素材", "C:\\"):
             with self.subTest(bad=bad):
-                resp = self.client.post("/settings/creative-root", data={"creative_root": bad})
+                resp = self.client.post("/api/settings/creative-root",
+                                        json={"creative_root": bad})
                 self.assertEqual(resp.status_code, 400)
                 self.assertEqual(creative_assets.get_root(main.conn), ROOT)
 
@@ -101,10 +102,9 @@ class CycleFolderTest(_Base):
         self.assertFalse(target.exists())
 
         with mock.patch("os.startfile", create=True) as startfile:
-            resp = self.client.post(f"/brands/{self.bid}/ads/{cycle_id}/creative-folder",
-                                    follow_redirects=False)
+            opened = creative_assets.open_folder(main.conn, self.bid, cycle_id)
 
-        self.assertEqual(resp.status_code, 303)
+        self.assertEqual(opened, target)
         self.assertTrue(target.is_dir())
         startfile.assert_called_once_with(target)
 
@@ -132,7 +132,8 @@ class CycleFolderTest(_Base):
 class MatrixFolderApiTest(_Base):
     """矩陣頁頂部素材資料夾列（票 W1）：新殼要的裸 JSON 端點，
     app/ads/routes_creative_theme.py cycle_folder()／open_cycle_folder()。
-    舊頁那支 `/creative-folder`（303 轉址）由上面 CycleFolderTest 顧，兩套並存互不影響。
+    上面 CycleFolderTest 顧的是同一件事的底層 creative_assets.open_folder()（舊頁那支
+    `/creative-folder` 303 轉址呼叫的也是它），這裡顧的是新殼 JSON 端點這一層。
     """
 
     def test_size_endpoint_reports_mb_when_folder_has_files(self):

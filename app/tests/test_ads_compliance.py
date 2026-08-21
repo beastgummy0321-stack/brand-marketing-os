@@ -10,7 +10,6 @@ import json
 import os
 import shutil
 import tempfile
-import time
 import unittest
 from pathlib import Path
 
@@ -68,17 +67,6 @@ def _fake(text: str) -> ProviderResponse:
     return ProviderResponse(output_text=text, structured=None,
                             usage=Usage(input_tokens=400, output_tokens=200),
                             stop_reason="end_turn")
-
-
-def _wait_progress(client, url, timeout=5.0):
-    """票 M3：進度頁改背景執行緒後，?run=1 不再同步等完；短輪詢模擬瀏覽器 meta refresh，
-    等到真的轉址（303）或逾時為止（FakeProvider 幾乎瞬間完成，正常情況幾毫秒內就會轉址）。"""
-    deadline = time.time() + timeout
-    resp = client.get(url, follow_redirects=False)
-    while resp.status_code != 303 and time.time() < deadline:
-        time.sleep(0.02)
-        resp = client.get(url, follow_redirects=False)
-    return resp
 
 
 class TermExtractionTest(unittest.TestCase):
@@ -195,11 +183,9 @@ class ComplianceScanTest(unittest.TestCase):
         self._orig_plan, self._orig_creative = ads_plan.PROVIDER, ads_creative.PROVIDER
         ads_plan.PROVIDER = FakeProvider(
             response=_fake(json.dumps(_PLAN_OPTIONS, ensure_ascii=False)))
-        _wait_progress(self.client, f"/brands/{self.bid}/ads/{self.cycle_id}/plan/progress?run=1")
-        self.client.post(f"/brands/{self.bid}/ads/{self.cycle_id}/plan/select",
-                         data={}, follow_redirects=False)
-        self.client.post(f"/brands/{self.bid}/ads/{self.cycle_id}/plan/approve",
-                         follow_redirects=False)
+        ads_plan.generate_options(main.conn, self.bid, self.cycle_id, ACTOR)
+        self.client.post(f"/api/campaigns/{self.bid}/{self.cycle_id}/plan/select", json={})
+        self.client.post(f"/api/campaigns/{self.bid}/{self.cycle_id}/plan/approve")
         self.cell_id = main.conn.execute(
             "SELECT id FROM experiment_cell WHERE campaign_cycle_id = ?",
             (self.cycle_id,)).fetchone()["id"]
@@ -217,8 +203,7 @@ class ComplianceScanTest(unittest.TestCase):
                                               "selling_point": selling_point}},
         ]}, ensure_ascii=False)
         ads_creative.PROVIDER = FakeProvider(response=_fake(reply))
-        _wait_progress(self.client,
-                       f"/brands/{self.bid}/ads/{self.cycle_id}/creatives/progress?run=1")
+        ads_creative.generate(main.conn, self.bid, self.cycle_id, ACTOR)
 
     def _make_creatives(self, contents):
         """一批多則 hook，各給不同 cut_type 以通過多樣性驗形（見 creative_matrix.py）。"""
@@ -234,8 +219,18 @@ class ComplianceScanTest(unittest.TestCase):
         ]
         reply = json.dumps({"variants": variants}, ensure_ascii=False)
         ads_creative.PROVIDER = FakeProvider(response=_fake(reply))
-        _wait_progress(self.client,
-                       f"/brands/{self.bid}/ads/{self.cycle_id}/creatives/progress?run=1")
+        ads_creative.generate(main.conn, self.bid, self.cycle_id, ACTOR)
+
+    def _scan_like_page(self):
+        """舊素材頁 GET 的法務副作用，逐行對應 app/ads/routes_creative.py:ads_creatives()：
+        重掃並整批換掉舊結論 → 讀回 flags → 命中內建法規詞庫的預設值翻成「已挑掉」。
+        素材頁沒有對應的 /api 端點，改為直接呼叫路由本來就在呼叫的同一批業務函式。"""
+        ads_repo.replace_findings(main.conn, self.bid, self.cycle_id, "compliance",
+                                  compliance.scan_cycle(main.conn, self.bid, self.cycle_id))
+        flags = compliance.load_findings(main.conn, self.bid, self.cycle_id)
+        if flags:
+            compliance.apply_default_holds(main.conn, self.bid, self.cycle_id, flags,
+                                           compliance.AUTO_HOLD_ACTOR)
 
     def test_forbidden_claim_hit_is_flagged(self):
         bi_repo.create_claim(main.conn, self.bid, claim_text="能治療失眠",
@@ -344,9 +339,9 @@ class ComplianceScanTest(unittest.TestCase):
         bi_repo.create_claim(main.conn, self.bid, claim_text="能治療失眠",
                              claim_type="forbidden", actor=ACTOR)
         self._make_creative("能治療失眠喔")
-        self.client.get(f"/brands/{self.bid}/ads/{self.cycle_id}/creatives")
+        self._scan_like_page()
         first = len(ads_repo.list_findings(main.conn, self.bid, self.cycle_id, "compliance"))
-        self.client.get(f"/brands/{self.bid}/ads/{self.cycle_id}/creatives")
+        self._scan_like_page()
         second = len(ads_repo.list_findings(main.conn, self.bid, self.cycle_id, "compliance"))
         self.assertEqual(first, second)
         self.assertGreater(first, 0)
@@ -427,7 +422,7 @@ class DefaultHoldTest(ComplianceScanTest):
         bi_repo.create_claim(main.conn, self.bid, claim_text="全台銷量第一",
                              claim_type="forbidden", actor=ACTOR)
         self._make_creative("我們是全台銷量第一的品牌")
-        self.client.get(f"/brands/{self.bid}/ads/{self.cycle_id}/creatives")
+        self._scan_like_page()
         variant = self._first_variant()
         self.assertFalse(variant["rejected"])
         self.assertFalse(variant["auto_held"])
@@ -437,17 +432,18 @@ class DefaultHoldTest(ComplianceScanTest):
         bi_repo.create_claim(main.conn, self.bid, claim_text="長期穩定回購保證",
                              claim_type="high_risk", actor=ACTOR)
         self._make_creative("我們主打長期穩定回購保證")
-        self.client.get(f"/brands/{self.bid}/ads/{self.cycle_id}/creatives")
+        self._scan_like_page()
         variant = self._first_variant()
         self.assertFalse(variant["rejected"])
 
     def test_efficacy_selling_point_with_clean_content_does_not_default_reject(self):
         """修憲落地 L4 修正：efficacy／safety 的法規提醒（`source_category="law_advisory"`）
         不是字詞命中，不該被 L2 apply_default_holds() 誤判成命中內建法定詞庫而自動翻成
-        「已挑掉」——內容完全乾淨、一個字都沒踩線，就不該有任何自動判定列。實際走真實路由
-        （不是直接呼叫 scan_cycle），才會踩到 L2 那段用 evidence.source_category 判斷的邏輯。"""
+        「已挑掉」——內容完全乾淨、一個字都沒踩線，就不該有任何自動判定列。要走完整條
+        掃描路徑（scan → load_findings → apply_default_holds，不是只呼叫 scan_cycle），
+        才會踩到 L2 那段用 evidence.source_category 判斷的邏輯。"""
         self._make_creative("每天早晨的一杯好茶", selling_point="efficacy")
-        self.client.get(f"/brands/{self.bid}/ads/{self.cycle_id}/creatives")
+        self._scan_like_page()
         variant = self._first_variant()
         self.assertFalse(variant["rejected"])
         self.assertFalse(variant["auto_held"])
@@ -457,7 +453,7 @@ class DefaultHoldTest(ComplianceScanTest):
 
     def test_safety_selling_point_with_clean_content_does_not_default_reject(self):
         self._make_creative("每天早晨的一杯好茶", selling_point="safety")
-        self.client.get(f"/brands/{self.bid}/ads/{self.cycle_id}/creatives")
+        self._scan_like_page()
         variant = self._first_variant()
         self.assertFalse(variant["rejected"])
         self.assertFalse(variant["auto_held"])
@@ -485,11 +481,11 @@ class DefaultHoldTest(ComplianceScanTest):
     def test_reload_after_restore_does_not_re_hold(self):
         """冪等性：勾回之後重新整理，不會把預設挑掉又蓋回去。"""
         self._make_creative("每天喝一杯，改善你的生活品質")
-        self.client.get(f"/brands/{self.bid}/ads/{self.cycle_id}/creatives")
+        self._scan_like_page()
         variant_id = self._first_variant()["id"]
         ads_creative.restore(main.conn, self.bid, variant_id, actor=ACTOR)
 
-        self.client.get(f"/brands/{self.bid}/ads/{self.cycle_id}/creatives")
+        self._scan_like_page()
         self.assertFalse(self._first_variant()["rejected"])
 
     def test_reload_keeps_the_compliance_explanation_visible(self):

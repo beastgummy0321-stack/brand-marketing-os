@@ -178,15 +178,16 @@ class FlowTest(_Base):
 
     def test_full_flow_import_then_checkpoint(self):
         cycle_id = self._live_cycle(start_offset_days=-8)
-        page = self.client.get(f"/brands/{self.bid}/ads/{cycle_id}/checkpoint/day7")
+        page = self.client.get(f"/api/campaigns/{self.bid}/{cycle_id}/checkpoint/day7")
         self.assertEqual(page.status_code, 200)
 
-        resp = self.client.post(f"/brands/{self.bid}/ads/{cycle_id}/checkpoint/day7",
-                                data={"csv_text": FATIGUE_CSV}, follow_redirects=False)
-        self.assertEqual(resp.status_code, 303)
+        result = checkpoint.run(main.conn, self.bid, cycle_id, "day7", actor=ACTOR,
+                                csv_text=FATIGUE_CSV)
+        self.assertEqual(result["import_errors"], [])
 
-        result_page = self.client.get(f"/brands/{self.bid}/ads/{cycle_id}/checkpoint/day7")
-        self.assertIn("危險", result_page.text)
+        latest = self.client.get(
+            f"/api/campaigns/{self.bid}/{cycle_id}/checkpoint/day7").json()["data"]
+        self.assertIn("危險", latest["fatigue"]["status_label"])
 
         rows = checkpoint.list_checkpoints(main.conn, self.bid, cycle_id)
         self.assertEqual(len(rows), 1)
@@ -194,10 +195,9 @@ class FlowTest(_Base):
 
     def test_bad_csv_shows_the_honest_error(self):
         cycle_id = self._live_cycle(start_offset_days=-4)
-        resp = self.client.post(f"/brands/{self.bid}/ads/{cycle_id}/checkpoint/day3",
-                                data={"csv_text": "not,a,valid,performance,file\n1,2,3,4,5\n"},
-                                follow_redirects=True)
-        self.assertIn("花費", resp.text)
+        result = checkpoint.run(main.conn, self.bid, cycle_id, "day3", actor=ACTOR,
+                                csv_text="not,a,valid,performance,file\n1,2,3,4,5\n")
+        self.assertIn("花費", result["import_errors"][0])
 
     def test_reminder_links_into_checkpoint_page(self):
         cycle_id = self._live_cycle(start_offset_days=-4)

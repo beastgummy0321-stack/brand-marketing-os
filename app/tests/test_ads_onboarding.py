@@ -179,10 +179,8 @@ class ReminderTest(_BaseOnboardingTest):
         cycle_id = self._live_cycle(start_offset_days=-8)
         due = onboarding.due_reminders(main.conn, self.bid)
         self.assertTrue(due)
-        resp = self.client.post(
-            f"/brands/{self.bid}/ads/reminders/{due[0]['id']}/dismiss",
-            follow_redirects=False)
-        self.assertEqual(resp.status_code, 303)
+        resp = self.client.post(f"/api/interrupts/{due[0]['id']}/resolve")
+        self.assertEqual(resp.status_code, 200)
         remaining = [d["id"] for d in onboarding.due_reminders(main.conn, self.bid)]
         self.assertNotIn(due[0]["id"], remaining)
 

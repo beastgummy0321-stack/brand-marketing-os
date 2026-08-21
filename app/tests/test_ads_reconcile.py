@@ -53,6 +53,10 @@ class _BaseReconcileTest(unittest.TestCase):
     def _url(self):
         return f"/brands/{self.bid}/ads/{self.cycle_id}/performance/reconcile"
 
+    # 舊頁表單的三題自答：yes/no/空 → True/False/None（見 routes_performance.ads_reconcile）
+    _UNANSWERED = {"budget_same": None, "schedule_same": None,
+                   "other_campaign_running": None}
+
 
 class ReconcileWiringTest(_BaseReconcileTest):
     def test_matching_spend_produces_no_findings(self):
@@ -116,15 +120,16 @@ class ReconcilePageTest(_BaseReconcileTest):
     def test_answering_nothing_is_allowed(self):
         """自答是補充資訊，不是新的必經關卡——三題都不答也能按。"""
         self._spend(10000)
-        resp = self.client.post(self._url(), data={}, follow_redirects=False)
-        self.assertEqual(resp.status_code, 303)
-        self.assertNotIn("kind=warn", resp.headers["location"])
+        result = recon.run(main.conn, self.bid, self.cycle_id,
+                           self_answers=dict(self._UNANSWERED))
+        self.assertEqual(result["findings"], [])
 
     def test_answers_flow_through_the_page(self):
         self._spend(10000)
-        self.client.post(self._url(), data={"budget_same": "no"}, follow_redirects=False)
-        page = self.client.get(f"/brands/{self.bid}/ads/{self.cycle_id}/performance")
-        self.assertIn("跟交接包不一樣", page.text)
+        recon.run(main.conn, self.bid, self.cycle_id,
+                  self_answers={**self._UNANSWERED, "budget_same": False})
+        rows = ads_repo.list_findings(main.conn, self.bid, self.cycle_id, "external_change")
+        self.assertIn("跟交接包不一樣", rows[0]["message"])
 
 
 if __name__ == "__main__":

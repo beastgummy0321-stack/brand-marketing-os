@@ -17,6 +17,7 @@ import os
 import shutil
 import tempfile
 import unittest
+from datetime import date
 from pathlib import Path
 from urllib.parse import unquote
 
@@ -32,6 +33,7 @@ from app.ads import sync as ads_sync  # noqa: E402
 from app.ads import ga4_sync  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
 from app.core import settings as coresettings  # noqa: E402
+from app.orders import dispatch as orders_dispatch  # noqa: E402
 from app.tools import capacity_check  # noqa: E402
 
 
@@ -150,31 +152,23 @@ class ConnectionsRouteTest(unittest.TestCase):
     # ---- 薄匯入路由：三種格式皆正確入庫，且導回本頁而非訂單頁 ----------------
 
     def test_upload_easystore_xlsx_lands_orders_and_stays_on_connections_page(self):
-        resp = self.client.post(
-            f"/brands/{self.bid}/ads/connections/import",
-            files={"drop_file": ("Export_Orders.xlsx", _easystore_xlsx_bytes(),
-                                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
-            follow_redirects=False,
-        )
-        self.assertEqual(resp.status_code, 303)
-        location = resp.headers["location"]
-        self.assertTrue(location.startswith(f"/brands/{self.bid}/ads/connections?"))
-        self.assertIn("kind=ok", location)
+        # 舊頁的 `kind=ok` ＝ 分派層認出格式且沒有任何錯誤（見 routes_connections.py 的映射）
+        result = orders_dispatch.import_dropped_file(
+            main.conn, self.bid, filename="Export_Orders.xlsx",
+            content=_easystore_xlsx_bytes(), actor=ACTOR, today=date.today().isoformat())
+        self.assertEqual(result.kind, "easystore_orders")
+        self.assertEqual(result.errors, [])
         count = main.conn.execute(
             "SELECT COUNT(*) c FROM order_record WHERE brand_id = ?", (self.bid,)
         ).fetchone()["c"]
         self.assertEqual(count, 1)
 
     def test_upload_shopee_csv_lands_and_stays_on_connections_page(self):
-        resp = self.client.post(
-            f"/brands/{self.bid}/ads/connections/import",
-            files={"drop_file": ("shopee.csv", _SHOPEE_CSV.encode("utf-8"), "text/csv")},
-            follow_redirects=False,
-        )
-        self.assertEqual(resp.status_code, 303)
-        location = resp.headers["location"]
-        self.assertTrue(location.startswith(f"/brands/{self.bid}/ads/connections?"))
-        self.assertIn("kind=ok", location)
+        result = orders_dispatch.import_dropped_file(
+            main.conn, self.bid, filename="shopee.csv", content=_SHOPEE_CSV.encode("utf-8"),
+            actor=ACTOR, today=date.today().isoformat())
+        self.assertEqual(result.kind, "shopee_report")
+        self.assertEqual(result.errors, [])
         count = main.conn.execute(
             "SELECT COUNT(*) c FROM shopee_report_row WHERE brand_id = ?", (self.bid,)
         ).fetchone()["c"]
@@ -185,15 +179,11 @@ class ConnectionsRouteTest(unittest.TestCase):
                                       objective="流量", actor=ACTOR, start_date="2026-06-01",
                                       duration_days=14)
         content = _META_CSV.format(start="2026-06-01", end="2026-06-14").encode("utf-8")
-        resp = self.client.post(
-            f"/brands/{self.bid}/ads/connections/import",
-            files={"drop_file": ("meta_export.csv", content, "text/csv")},
-            follow_redirects=False,
-        )
-        self.assertEqual(resp.status_code, 303)
-        location = resp.headers["location"]
-        self.assertTrue(location.startswith(f"/brands/{self.bid}/ads/connections?"))
-        self.assertIn("kind=ok", location)
+        result = orders_dispatch.import_dropped_file(
+            main.conn, self.bid, filename="meta_export.csv", content=content, actor=ACTOR,
+            today=date.today().isoformat())
+        self.assertEqual(result.kind, "meta_ads_csv")
+        self.assertEqual(result.errors, [])
         row = main.conn.execute(
             "SELECT campaign_cycle_id FROM performance_snapshot WHERE brand_id = ?",
             (self.bid,)).fetchone()
@@ -201,27 +191,21 @@ class ConnectionsRouteTest(unittest.TestCase):
 
     def test_upload_meta_csv_outside_any_cycle_gives_warning_not_ok(self):
         content = _META_CSV.format(start="2020-01-01", end="2020-01-14").encode("utf-8")
-        resp = self.client.post(
-            f"/brands/{self.bid}/ads/connections/import",
-            files={"drop_file": ("meta_export.csv", content, "text/csv")},
-            follow_redirects=False,
-        )
-        location = resp.headers["location"]
-        self.assertTrue(location.startswith(f"/brands/{self.bid}/ads/connections?"))
-        self.assertIn("kind=warn", location)
+        result = orders_dispatch.import_dropped_file(
+            main.conn, self.bid, filename="meta_export.csv", content=content, actor=ACTOR,
+            today=date.today().isoformat())
+        # 舊頁的 `kind=warn` ＝ 認得是 Meta CSV，但有對不到檔期的列而帶回一段提醒
+        self.assertEqual(result.kind, "meta_ads_csv")
+        self.assertNotEqual(result.errors, [])
+        self.assertEqual(result.ads_unmatched_rows, 1)
 
     def test_upload_unrecognisable_file_gives_error_lists_headers_stays_on_page(self):
-        resp = self.client.post(
-            f"/brands/{self.bid}/ads/connections/import",
-            files={"drop_file": ("mystery.csv", b"foo,bar\n1,2\n", "text/csv")},
-            follow_redirects=False,
-        )
-        self.assertEqual(resp.status_code, 303)
-        location = resp.headers["location"]
-        # 認不出格式時留在本頁，不是被導去訂單頁
-        self.assertTrue(location.startswith(f"/brands/{self.bid}/ads/connections?"))
-        self.assertIn("kind=danger", location)
-        message = unquote(location)
+        result = orders_dispatch.import_dropped_file(
+            main.conn, self.bid, filename="mystery.csv", content=b"foo,bar\n1,2\n",
+            actor=ACTOR, today=date.today().isoformat())
+        # 舊頁的 `kind=danger` ＝分派層認不出格式（unknown），訊息就是 errors[0]
+        self.assertEqual(result.kind, "unknown")
+        message = result.errors[0]
         self.assertIn("foo", message)
         self.assertIn("bar", message)
 

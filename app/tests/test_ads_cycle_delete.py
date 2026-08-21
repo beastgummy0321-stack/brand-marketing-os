@@ -58,6 +58,14 @@ class _BaseCycleDeleteTest(unittest.TestCase):
         cycle_id = resp.json()["cycle_id"]
         return cycle_id
 
+    def _list_cycles(self):
+        resp = self.client.get(f"/api/campaigns/brands/{self.bid}")
+        self.assertEqual(resp.status_code, 200)
+        return resp.json()["data"]
+
+    def _item_label(self, item):
+        return f"{item['start_date']} ～ {item['end_date']}"
+
     def _cycle_label(self, cycle_id):
         cycle = ads_repo.get_cycle(main.conn, self.bid, cycle_id)
         return f"{cycle['start_date']} ～ {cycle['end_date']}"
@@ -379,16 +387,16 @@ class CycleArchiveRestoreRouteTest(_BaseCycleDeleteTest):
         label = self._cycle_label(cycle_id)
         self.client.post(f"/api/campaigns/brands/{self.bid}/{cycle_id}/archive", follow_redirects=False)
 
-        history = self.client.get(f"/brands/{self.bid}/ads/history")
-        self.assertIn("已封存檔期", history.text)
-        self.assertIn(label, history.text)  # 出現在收合區塊裡
+        archived = [c for c in self._list_cycles() if c["bucket"] == "archived"]
+        self.assertTrue(archived)  # 有「已封存檔期」這一區
+        self.assertIn(label, [self._item_label(c) for c in archived])  # 出現在收合區塊裡
 
     def test_active_cycle_still_shown_when_not_archived(self):
         """D線票3（#45）：檔期清單搬到 /ads/history，這裡改看歷期戰績頁。"""
         cycle_id = self._open_cycle()
         label = self._cycle_label(cycle_id)
-        history = self.client.get(f"/brands/{self.bid}/ads/history")
-        self.assertIn(label, history.text)
+        shown = [c for c in self._list_cycles() if c["bucket"] != "archived"]
+        self.assertIn(label, [self._item_label(c) for c in shown])
 
 
 class CycleDeleteRouteTest(_BaseCycleDeleteTest):
@@ -432,21 +440,18 @@ class CycleDeleteRouteTest(_BaseCycleDeleteTest):
         self._seed_cascade_rows(cycle_id)
         self.client.post(f"/api/campaigns/brands/{self.bid}/{cycle_id}/archive")
 
-        page = self.client.get(f"/brands/{self.bid}/ads/{cycle_id}/delete")
+        page = self.client.get(f"/api/campaigns/brands/{self.bid}/{cycle_id}/delete-impact")
         self.assertEqual(page.status_code, 200)
-        self.assertIn("成效判讀", page.text)
-        self.assertIn("廣告素材", page.text)
+        labels = [row["label"] for row in page.json()["data"]]
+        self.assertIn("成效判讀", labels)
+        self.assertIn("廣告素材", labels)
 
     def test_delete_page_blocked_while_active(self):
         cycle_id = self._open_cycle()
-        resp = self.client.get(f"/brands/{self.bid}/ads/{cycle_id}/delete",
-                               follow_redirects=False)
-        self.assertEqual(resp.status_code, 303)
-        self.assertNotIn("/delete", resp.headers["location"])
-
-        resp = self.client.post(f"/brands/{self.bid}/ads/{cycle_id}/delete",
-                                data={"confirm_name": "亂打"}, follow_redirects=False)
-        self.assertEqual(resp.status_code, 303)
+        resp = self.client.post(f"/api/campaigns/brands/{self.bid}/{cycle_id}/delete",
+                                json={"confirm_name": "亂打"}, follow_redirects=False)
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("先把檔期封存", resp.text)  # 擋在封存那道，還沒走到刪除
         self.assertIsNotNone(ads_repo.get_cycle(main.conn, self.bid, cycle_id))
 
 

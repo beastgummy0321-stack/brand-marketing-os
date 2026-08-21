@@ -11,7 +11,6 @@ capacity_check.check_html() 餵「實際渲染後」的回應文字，才是這�
 
 import atexit
 import os
-import re
 import shutil
 import tempfile
 import unittest
@@ -26,6 +25,7 @@ from app.ads import meta_api  # noqa: E402
 from app.ads import performance as ads_perf  # noqa: E402
 from app.ads import reading as ads_reading  # noqa: E402
 from app.ads import repository as ads_repo  # noqa: E402
+from app.ads import routes_common  # noqa: E402
 from app.ads import sync as ads_sync  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
 from app.core import settings as coresettings  # noqa: E402
@@ -100,6 +100,26 @@ class _BaseHubTest(unittest.TestCase):
             ads_reading.PROVIDER = orig
         ads_repo.update_cycle_status(main.conn, self.bid, cycle_id, status="CLOSED", actor=ACTOR)
 
+    def _api_cycles(self) -> list:
+        """檔期清單 JSON API：`bucket` 就是歷期戰績頁三段（進行中／已結案／已封存）的同一份
+        歸段依據，`stage_label`／`days_left` 就是 hub 進行中卡的同一份 `_hub_stage_info`。"""
+        resp = self.client.get(f"/api/campaigns/brands/{self.bid}")
+        self.assertEqual(resp.status_code, 200)
+        return resp.json()["data"]
+
+    def _bucket_of(self, cycle_id: str):
+        for item in self._api_cycles():
+            if item["id"] == cycle_id:
+                return item["bucket"]
+        return None
+
+    def _trend_rows(self) -> list:
+        """歷期戰績頁跨期趨勢表的同一份資料來源（模板 `{% if trend_rows %}` 才渲染整張表，
+        每一格直接印這裡的欄位），沒有對應的 /api 端點，直接呼叫業務函式。"""
+        cycles = ads_repo.list_cycles(main.conn, self.bid)
+        closed = [c for c in cycles if c["status"] == "CLOSED"]
+        return routes_common._history_trend_rows(main.conn, self.bid, closed)
+
 
 class HubCapacityTest(_BaseHubTest):
     """驗收條件：廣告首頁容量腳本通過（決策 0029／0033）。修憲落地 V3 把 hub 遷成 B｜工作台式
@@ -132,13 +152,13 @@ class HubInProgressCardTest(_BaseHubTest):
 
     def test_single_active_cycle_shows_stage_and_days_left(self):
         cycle_id = self._open_cycle()
-        resp = self.client.get(f"/brands/{self.bid}/ads")
+        in_progress = [c for c in self._api_cycles() if c["bucket"] == "in_progress"]
         # 剛開的檔期還在 PLANNING，落在五格的第一格「計畫」
-        self.assertIn("計畫", resp.text)
-        self.assertIn("剩", resp.text)
-        self.assertIn(f'href="/brands/{self.bid}/ads/{cycle_id}"', resp.text)
-        # 只有一期進行中，不該出現「另有」這行
-        self.assertNotIn("另有", resp.text)
+        self.assertEqual(in_progress[0]["stage_label"], "計畫")
+        # 「剩 N 天」的 N
+        self.assertIsNotNone(in_progress[0]["days_left"])
+        # 只有這一期進行中，所以沒有第二期可以算進「另有 N 期進行中」
+        self.assertEqual([c["id"] for c in in_progress], [cycle_id])
 
     def test_multiple_active_cycles_show_most_recent_and_link_to_history(self):
         self._open_cycle(start_date="2026-06-01")
@@ -152,9 +172,10 @@ class HubInProgressCardTest(_BaseHubTest):
         """進行中＝非封存且非已結束；只剩已結案檔期時，卡片仍當作沒有進行中處理。"""
         cycle_id = self._open_cycle()
         ads_repo.update_cycle_status(main.conn, self.bid, cycle_id, status="CLOSED", actor=ACTOR)
-        resp = self.client.get(f"/brands/{self.bid}/ads")
-        self.assertIn(f'href="/brands/{self.bid}/ads/new"', resp.text)
-        self.assertNotIn(f'href="/brands/{self.bid}/ads/{cycle_id}"', resp.text)
+        items = self._api_cycles()
+        # 沒有任何進行中檔期＝hub 回到空狀態（只剩「開新檔期」那顆）
+        self.assertEqual([c["id"] for c in items if c["bucket"] == "in_progress"], [])
+        self.assertEqual(self._bucket_of(cycle_id), "closed")
 
 
 class HubSyncAndClaimsMovedTest(_BaseHubTest):
@@ -200,12 +221,9 @@ class HistoryPageTest(_BaseHubTest):
         archived_id = self._open_cycle(start_date="2026-04-01")
         ads_repo.set_cycle_archived(main.conn, self.bid, archived_id, archived=True, actor=ACTOR)
 
-        resp = self.client.get(f"/brands/{self.bid}/ads/history")
-        self.assertIn("進行中（1）", resp.text)
-        self.assertIn("已結案（1）", resp.text)
-        self.assertIn("已封存檔期（1）", resp.text)
-        for cid in (in_progress_id, closed_id, archived_id):
-            self.assertIn(f'href="/brands/{self.bid}/ads/{cid}"', resp.text)
+        buckets = {c["id"]: c["bucket"] for c in self._api_cycles()}
+        self.assertEqual(buckets, {in_progress_id: "in_progress", closed_id: "closed",
+                                   archived_id: "archived"})
 
     def test_restore_and_permanent_delete_from_history_page(self):
         """行為與原本首頁封存收合區完全一致——恢復切換 archived、永久刪除需先封存＋確認名稱。"""
@@ -215,13 +233,11 @@ class HistoryPageTest(_BaseHubTest):
 
         self.client.post(f"/api/campaigns/brands/{self.bid}/{cycle_id}/archive")
         self.assertEqual(ads_repo.get_cycle(main.conn, self.bid, cycle_id)["archived"], 1)
-        history = self.client.get(f"/brands/{self.bid}/ads/history")
-        self.assertIn("已封存檔期（1）", history.text)
+        self.assertEqual(self._bucket_of(cycle_id), "archived")
 
         self.client.post(f"/api/campaigns/brands/{self.bid}/{cycle_id}/archive")
         self.assertEqual(ads_repo.get_cycle(main.conn, self.bid, cycle_id)["archived"], 0)
-        history = self.client.get(f"/brands/{self.bid}/ads/history")
-        self.assertIn("進行中（1）", history.text)
+        self.assertEqual(self._bucket_of(cycle_id), "in_progress")
 
         self.client.post(f"/api/campaigns/brands/{self.bid}/{cycle_id}/archive")
         resp = self.client.post(f"/api/campaigns/brands/{self.bid}/{cycle_id}/delete",
@@ -241,31 +257,28 @@ class HistoryTrendTableTest(_BaseHubTest):
 
     def test_zero_closed_cycles_does_not_render_table(self):
         self._open_cycle()  # 只有進行中檔期，沒有任何已結案期
-        resp = self.client.get(f"/brands/{self.bid}/ads/history")
-        self.assertNotIn("跨期趨勢", resp.text)
+        self.assertEqual(self._trend_rows(), [])  # 空清單＝整張跨期趨勢表不渲染
 
     def test_unjudged_closed_cycle_does_not_render_table(self):
         """已結案但沒判讀過（原則 16：拿不到就不要放，不放假資料或 0 佔位）。"""
         cycle_id = self._open_cycle()
         ads_repo.update_cycle_status(main.conn, self.bid, cycle_id, status="CLOSED", actor=ACTOR)
-        resp = self.client.get(f"/brands/{self.bid}/ads/history")
-        self.assertNotIn("跨期趨勢", resp.text)
+        self.assertEqual(self._trend_rows(), [])  # 空清單＝整張跨期趨勢表不渲染
 
     def test_single_closed_period_shows_data_but_no_vs_previous_arrow(self):
         cycle_id = self._open_cycle(start_date="2026-01-01")
         self._judge_closed(cycle_id, revenue=20000)  # roas = 20000/10000 = 2.0
-        resp = self.client.get(f"/brands/{self.bid}/ads/history")
-        self.assertIn("跨期趨勢", resp.text)
-        self.assertIn("2.00 倍", resp.text)
+        rows = self._trend_rows()
+        self.assertEqual(len(rows), 1)  # 非空清單＝跨期趨勢表有渲染
+        self.assertEqual("{:.2f} 倍".format(rows[0]["roas"]), "2.00 倍")
         # 只有一期，沒有相鄰上一期可比，不該出現任何漲跌箭頭
-        self.assertNotIn("▲", resp.text)
-        self.assertNotIn("▼", resp.text)
+        self.assertIsNone(rows[0]["vs_previous"])
 
     def test_no_revenue_period_shows_roas_cannot_compute(self):
         cycle_id = self._open_cycle()
         self._judge_closed(cycle_id, revenue=None)
-        resp = self.client.get(f"/brands/{self.bid}/ads/history")
-        self.assertIn("算不出", resp.text)
+        # 模板：roas is none 的那一格印「算不出」
+        self.assertIsNone(self._trend_rows()[0]["roas"])
 
     def test_three_periods_compare_against_adjacent_closed_period(self):
         oldest = self._open_cycle(start_date="2026-01-01")
@@ -275,20 +288,15 @@ class HistoryTrendTableTest(_BaseHubTest):
         self._judge_closed(middle, revenue=40000)  # roas 4.0 → 比上一期（oldest）漲
         self._judge_closed(newest, revenue=10000)  # roas 1.0 → 比上一期（middle）跌
 
-        resp = self.client.get(f"/brands/{self.bid}/ads/history")
-        trend_section = resp.text[resp.text.index("跨期趨勢"):resp.text.index("進行中（")]
+        rows = {row["id"]: row for row in self._trend_rows()}
 
         def _row(cycle_id):
-            match = re.search(
-                rf'<a class="link" href="/brands/{self.bid}/ads/{cycle_id}">.*?</tr>',
-                trend_section, re.S)
-            self.assertIsNotNone(match, f"trend row for {cycle_id} not found")
-            return match.group(0)
+            self.assertIn(cycle_id, rows, f"trend row for {cycle_id} not found")
+            return rows[cycle_id]["vs_previous"]
 
-        self.assertIn("▼", _row(newest))
-        self.assertIn("▲", _row(middle))
-        self.assertNotIn("▲", _row(oldest))
-        self.assertNotIn("▼", _row(oldest))
+        self.assertEqual(_row(newest), "▼")
+        self.assertEqual(_row(middle), "▲")
+        self.assertNotIn(_row(oldest), ("▲", "▼"))
 
     def test_capacity_script_passes_with_judged_history(self):
         cycle_id = self._open_cycle()

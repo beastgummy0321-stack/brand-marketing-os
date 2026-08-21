@@ -21,6 +21,7 @@ import app.main as main  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
 from app.core import calendar_dismiss  # noqa: E402
 from app.core import rule_cards  # noqa: E402
+from app.shared import web as shared_web  # noqa: E402
 from app.shared.web import OPERATOR  # noqa: E402
 
 
@@ -36,6 +37,27 @@ def _cleanup():
 atexit.register(_cleanup)
 
 ACTOR = "測試員"
+
+
+# 舊頁脫鉤（T4 前置）：規則卡的讀寫改走 `/api/settings/rule-cards/**`，斷言驗的東西不變
+# ——同一份 `rule_cards` 資料、同一個 customized 判斷（routes_settings.py 的 `_rule_card_json`
+# 與舊頁 `_ads_cards_ctx` 共用 `f["value"] != f["default"]` 這一行）。
+def _cards(client, brand_id: str) -> dict:
+    resp = client.get(f"/api/settings/rule-cards/brands/{brand_id}")
+    assert resp.status_code == 200, resp.text
+    return {card["key"]: card for card in resp.json()["data"]["cards"]}
+
+
+def _field(cards: dict, card_key: str, field_key: str) -> dict:
+    return next(f for f in cards[card_key]["fields"] if f["key"] == field_key)
+
+
+def _last_rule_card_audit(brand_id: str):
+    """入口頁「上次修改」的資料來源（brand_web/routes_settings.py `_ads_last_modified`
+    的同一句查詢）：從沒改過就沒有這一列。"""
+    return main.conn.execute(
+        "SELECT created_at, actor FROM audit_log WHERE entity_type = 'rule_card_value'"
+        " AND brand_id = ? ORDER BY created_at DESC LIMIT 1", (brand_id,)).fetchone()
 
 
 class SettingsHubEntryPageTest(unittest.TestCase):
@@ -54,22 +76,24 @@ class SettingsHubEntryPageTest(unittest.TestCase):
 
     def test_empty_state_shows_system_default_and_no_modified_time(self):
         """G14.8 空態：品牌從沒自訂過，入口頁摘要顯示系統預設值，不假裝有修改時間。"""
-        resp = self.client.get(f"/brands/{self.bid}/settings")
-        text = resp.text
-        self.assertIn("尚未自訂過", text)
-        self.assertIn("300", text)  # min_daily_per_group 系統預設 300
+        field = _field(_cards(self.client, self.bid), "budget_structure", "min_daily_per_group")
+        self.assertFalse(field["customized"])  # 尚未自訂過
+        self.assertEqual(field["value"], 300)  # min_daily_per_group 系統預設 300
+        self.assertIsNone(_last_rule_card_audit(self.bid))  # 沒有修改時間可拿
 
     def test_after_override_entry_page_shows_new_value_and_modified_time(self):
         rule_cards.set_value(main.conn, self.bid, "budget_structure", "min_daily_per_group",
                              450.0, actor=ACTOR)
-        resp = self.client.get(f"/brands/{self.bid}/settings")
-        text = resp.text
-        self.assertIn("450", text)
-        self.assertIn("上次修改", text)
+        field = _field(_cards(self.client, self.bid), "budget_structure", "min_daily_per_group")
+        self.assertEqual(field["value"], 450)
+        self.assertIsNotNone(_last_rule_card_audit(self.bid))  # 有「上次修改」可顯示
 
     def test_unknown_brand_404s(self):
-        resp = self.client.get("/brands/brand_沒這個品牌/settings")
-        self.assertEqual(resp.status_code, 404)
+        # 入口頁的 404 來自 require_brand 這道守門（brand_web/routes_settings.py:65），
+        # 這裡直接驗那道守門本身，不再靠舊頁網址。
+        with self.assertRaises(shared_web.NotFoundKind) as caught:
+            shared_web.require_brand("brand_沒這個品牌")
+        self.assertEqual(caught.exception.status_code, 404)
 
 
 class SettingsAdsPageTest(unittest.TestCase):
@@ -80,19 +104,19 @@ class SettingsAdsPageTest(unittest.TestCase):
         self.bid = self.brand["id"]
 
     def test_page_renders_all_four_cards_with_seed_values(self):
-        resp = self.client.get(f"/brands/{self.bid}/settings/ads")
-        self.assertEqual(resp.status_code, 200)
-        text = resp.text
+        cards = _cards(self.client, self.bid)
+        titles = {card["title"] for card in cards.values()}
         for title in ("帳戶結構與預算配置門檻", "樣本數門檻（統計等級 vs 方向性判讀）",
                       "素材疲勞頻率門檻", "檔期預算步調門檻"):
-            self.assertIn(title, text)
-        self.assertIn('value="2.5"', text)  # ad_creative_fatigue.cold_warning 系統預設值
+            self.assertIn(title, titles)
+        # ad_creative_fatigue.cold_warning 系統預設值（舊頁是輸入框的 value="2.5"）
+        self.assertEqual(_field(cards, "ad_creative_fatigue", "cold_warning")["value"], 2.5)
 
     def test_no_customized_badge_when_untouched(self):
-        """頁面說明句本身會提到「已自訂」這個詞，所以斷言比對帶分隔符的完整標籤，
-        不是裸字串——確認沒有任何欄位真的被標成已自訂，不是巧合命中說明句。"""
-        resp = self.client.get(f"/brands/{self.bid}/settings/ads")
-        self.assertNotIn("・ 已自訂", resp.text)
+        """原本比對帶分隔符的完整標籤「・ 已自訂」以避開說明句的巧合命中；改走 API 之後
+        直接看每個欄位的 customized 旗標（那個標籤就是照它掛的），連巧合的可能都沒有。"""
+        cards = _cards(self.client, self.bid)
+        self.assertFalse(any(f["customized"] for card in cards.values() for f in card["fields"]))
 
     def test_page_subtitle_mentions_customized_label_but_no_field_has_it(self):
         """反向證明前一個測試的斷言真的在測東西：頁面確實含「已自訂」這個詞
@@ -103,33 +127,30 @@ class SettingsAdsPageTest(unittest.TestCase):
 
     def test_edit_saves_and_marks_customized(self):
         resp = self.client.post(
-            f"/brands/{self.bid}/settings/ads/ad_creative_fatigue/edit",
-            data={"cold_warning": "3", "cold_danger": "5", "retargeting_warning": "4",
+            f"/api/settings/rule-cards/brands/{self.bid}/ad_creative_fatigue",
+            json={"cold_warning": "3", "cold_danger": "5", "retargeting_warning": "4",
                   "retargeting_danger": "6", "niche_warning": "5", "niche_danger": "8"},
-            follow_redirects=False,
         )
-        self.assertEqual(resp.status_code, 303)
+        self.assertEqual(resp.status_code, 200)
         self.assertEqual(
             rule_cards.get_value(main.conn, self.bid, "ad_creative_fatigue", "cold_warning"), 3.0)
-        page = self.client.get(f"/brands/{self.bid}/settings/ads")
-        self.assertIn("已自訂", page.text)
+        cards = _cards(self.client, self.bid)
+        self.assertTrue(_field(cards, "ad_creative_fatigue", "cold_warning")["customized"])
 
     def test_edit_works_without_operator_cookie(self):
         """ADR 0004：編輯不再要求先設定操作人。"""
         resp = self.client.post(
-            f"/brands/{self.bid}/settings/ads/pacing/edit",
-            data={"deviation_threshold_ratio": "0.2"}, follow_redirects=False,
+            f"/api/settings/rule-cards/brands/{self.bid}/pacing",
+            json={"deviation_threshold_ratio": "0.2"},
         )
-        self.assertEqual(resp.status_code, 303)
-        row = main.conn.execute(
-            "SELECT actor FROM audit_log WHERE entity_type = 'rule_card_value' AND brand_id = ?"
-            " ORDER BY created_at DESC LIMIT 1", (self.bid,)).fetchone()
+        self.assertEqual(resp.status_code, 200)
+        row = _last_rule_card_audit(self.bid)
         self.assertIsNotNone(row)
         self.assertEqual(row["actor"], OPERATOR)
 
     def test_edit_persists_after_restart(self):
-        self.client.post(f"/brands/{self.bid}/settings/ads/pacing/edit",
-                         data={"deviation_threshold_ratio": "0.25"})
+        self.client.post(f"/api/settings/rule-cards/brands/{self.bid}/pacing",
+                         json={"deviation_threshold_ratio": "0.25"})
         main.reopen_connection()
         self.assertEqual(
             rule_cards.get_value(main.conn, self.bid, "pacing", "deviation_threshold_ratio"), 0.25)
@@ -137,31 +158,35 @@ class SettingsAdsPageTest(unittest.TestCase):
     def test_edit_invalid_number_shows_error_and_keeps_other_fields_unchanged(self):
         before = rule_cards.get_value(main.conn, self.bid, "ad_creative_fatigue", "cold_danger")
         resp = self.client.post(
-            f"/brands/{self.bid}/settings/ads/ad_creative_fatigue/edit",
-            data={"cold_warning": "不是數字", "cold_danger": "5", "retargeting_warning": "4",
+            f"/api/settings/rule-cards/brands/{self.bid}/ad_creative_fatigue",
+            json={"cold_warning": "不是數字", "cold_danger": "5", "retargeting_warning": "4",
                   "retargeting_danger": "6", "niche_warning": "5", "niche_danger": "8"},
         )
         self.assertEqual(resp.status_code, 400)
-        self.assertIn("請填一個大於 0 的數字", resp.text)
+        self.assertIn("請填一個大於 0 的數字", resp.json()["field_errors"]["cold_warning"])
         self.assertEqual(
             rule_cards.get_value(main.conn, self.bid, "ad_creative_fatigue", "cold_danger"), before)
 
     def test_reset_restores_default_after_edit(self):
         rule_cards.set_value(main.conn, self.bid, "ad_creative_fatigue", "cold_warning", 9.9,
                              actor=ACTOR)
-        resp = self.client.post(f"/brands/{self.bid}/settings/ads/ad_creative_fatigue/reset",
-                                follow_redirects=True)
+        resp = self.client.post(
+            f"/api/settings/rule-cards/brands/{self.bid}/ad_creative_fatigue/reset")
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(
             rule_cards.get_value(main.conn, self.bid, "ad_creative_fatigue", "cold_warning"), 2.5)
-        self.assertIn("已將「素材疲勞頻率門檻」重設為系統預設值", resp.text)
+        # 舊頁靠 flash 句「已將『素材疲勞頻率門檻』重設為系統預設值」證明重設的是這張卡、
+        # 且回到系統預設；API 回的是同一件事的資料版：這張卡的欄位全部不再是「已自訂」。
+        card = resp.json()["data"]
+        self.assertEqual(card["title"], "素材疲勞頻率門檻")
+        self.assertFalse(any(f["customized"] for f in card["fields"]))
 
     def test_unknown_card_key_404s(self):
-        resp = self.client.post(f"/brands/{self.bid}/settings/ads/沒這張卡/reset")
+        resp = self.client.post(f"/api/settings/rule-cards/brands/{self.bid}/沒這張卡/reset")
         self.assertEqual(resp.status_code, 404)
 
     def test_unknown_brand_404s(self):
-        resp = self.client.get("/brands/brand_沒這個品牌/settings/ads")
+        resp = self.client.get("/api/settings/rule-cards/brands/brand_沒這個品牌")
         self.assertEqual(resp.status_code, 404)
 
 
@@ -177,16 +202,15 @@ class SettingsHubBrandIsolationTest(unittest.TestCase):
 
     def test_brand_a_edit_does_not_leak_into_brand_b_page(self):
         self.client.post(
-            f"/brands/{self.brand_a['id']}/settings/ads/budget_structure/edit",
-            data={"min_daily_per_group": "999", "medium_tier_floor": "600",
+            f"/api/settings/rule-cards/brands/{self.brand_a['id']}/budget_structure",
+            json={"min_daily_per_group": "999", "medium_tier_floor": "600",
                   "large_tier_floor": "1200", "medium_validation_ratio": "0.7",
                   "large_scaling_ratio": "0.8"},
         )
-        page_b = self.client.get(f"/brands/{self.brand_b['id']}/settings/ads")
-        # 只比對欄位值，不對整頁 HTML 找裸字串「999」——設定頁的側欄會列出共用測試 DB 裡
-        # 所有品牌的名稱與 id，別的測試模組隨機命名的品牌撞到 999 就誤判成外洩。
-        self.assertNotIn('value="999"', page_b.text)
-        self.assertIn('value="300"', page_b.text)  # B 品牌仍是系統預設值
+        field_b = _field(_cards(self.client, self.brand_b["id"]),
+                         "budget_structure", "min_daily_per_group")
+        self.assertNotEqual(field_b["value"], 999)
+        self.assertEqual(field_b["value"], 300)  # B 品牌仍是系統預設值
 
 
 class SettingsCalendarDismissTest(unittest.TestCase):
@@ -200,22 +224,18 @@ class SettingsCalendarDismissTest(unittest.TestCase):
         self.bid = self.brand["id"]
 
     def test_empty_state_all_categories_show_reminding(self):
-        """G14.10：空狀態下節日開關全部預設「提醒中」。"""
-        resp = self.client.get(f"/brands/{self.bid}/settings/ads")
-        self.assertEqual(resp.status_code, 200)
-        text = resp.text
-        self.assertIn("節日提醒", text)
-        self.assertIn("農曆新年", text)
-        self.assertIn("提醒中", text)
-        self.assertNotIn("已關閉", text)
+        """G14.10：空狀態下節日開關全部預設「提醒中」。
+
+        舊頁每一列的「提醒中／已關閉」就是照 `list_dismissed()` 有沒有這個類別掛的
+        （routes_settings.py `_calendar_categories_ctx`），這裡直接驗那份現況。"""
+        categories = calendar_dismiss.list_categories()
+        self.assertIn("農曆新年", {cat["label"] for cat in categories})
+        # 一個都沒關掉＝每一列都是「提醒中」，沒有任何一列是「已關閉」
+        self.assertEqual(calendar_dismiss.list_dismissed(main.conn, self.bid), set())
 
     def test_toggle_off_marks_category_closed_and_persists(self):
-        resp = self.client.post(f"/brands/{self.bid}/settings/ads/calendar/cny",
-                                data={"enabled": "0"}, follow_redirects=False)
-        self.assertEqual(resp.status_code, 303)
+        calendar_dismiss.dismiss(main.conn, self.bid, "cny")
         self.assertEqual(calendar_dismiss.list_dismissed(main.conn, self.bid), {"cny"})
-        page = self.client.get(f"/brands/{self.bid}/settings/ads")
-        self.assertIn("已關閉", page.text)
 
     def test_toggle_off_does_not_affect_other_categories(self):
         self.client.post(f"/brands/{self.bid}/settings/ads/calendar/cny", data={"enabled": "0"})
@@ -225,16 +245,12 @@ class SettingsCalendarDismissTest(unittest.TestCase):
         self.assertIn("claim-block claim-block-approved", page.text)
 
     def test_toggle_on_after_off_restores_reminding(self):
-        self.client.post(f"/brands/{self.bid}/settings/ads/calendar/cny", data={"enabled": "0"})
-        resp = self.client.post(f"/brands/{self.bid}/settings/ads/calendar/cny",
-                                data={"enabled": "1"}, follow_redirects=False)
-        self.assertEqual(resp.status_code, 303)
+        calendar_dismiss.dismiss(main.conn, self.bid, "cny")
+        calendar_dismiss.undismiss(main.conn, self.bid, "cny")
         self.assertEqual(calendar_dismiss.list_dismissed(main.conn, self.bid), set())
-        page = self.client.get(f"/brands/{self.bid}/settings/ads")
-        self.assertNotIn("已關閉", page.text)
 
     def test_persists_after_restart(self):
-        self.client.post(f"/brands/{self.bid}/settings/ads/calendar/cny", data={"enabled": "0"})
+        calendar_dismiss.dismiss(main.conn, self.bid, "cny")
         main.reopen_connection()
         self.assertEqual(calendar_dismiss.list_dismissed(main.conn, self.bid), {"cny"})
 
@@ -246,7 +262,7 @@ class SettingsCalendarDismissTest(unittest.TestCase):
     def test_toggle_does_not_leak_across_brands(self):
         other = bi_repo.create_brand(main.conn, name="虛構節日提醒茶行二號", client_name=None,
                                      actor=ACTOR)
-        self.client.post(f"/brands/{self.bid}/settings/ads/calendar/cny", data={"enabled": "0"})
+        calendar_dismiss.dismiss(main.conn, self.bid, "cny")
         self.assertEqual(calendar_dismiss.list_dismissed(main.conn, other["id"]), set())
 
 

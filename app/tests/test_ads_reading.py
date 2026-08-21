@@ -676,10 +676,10 @@ class RepurchaseLineTest(_ReadingIntegrationBase):
         dissent = ads_repo.list_dissents(main.conn, self.bid, self.cycle_id,
                                          status="pending")[0]
 
-        page = self.client.post(
-            f"/brands/{self.bid}/ads/{self.cycle_id}/dissents/{dissent['id']}/decide",
-            data={"decision": "adopted"}, follow_redirects=False)
-        self.assertEqual(page.status_code, 303)
+        resp = self.client.post(
+            f"/api/campaigns/{self.bid}/{self.cycle_id}/dissents/{dissent['id']}/decide",
+            json={"accepted": True})
+        self.assertEqual(resp.status_code, 204)
 
         decided = main.conn.execute(
             "SELECT status, decided_by FROM rule_dissent WHERE id = ?", (dissent["id"],)
@@ -913,10 +913,9 @@ class HypothesisReviewTest(_HypothesisReviewBase):
         reading.run(main.conn, self.bid, self.cycle_id, ACTOR)
         preselect = reading.load(main.conn, self.bid,
                                  self.cycle_id)["cycle"]["hypothesis_reviews"][0]["preselect"]
-        resp = self.client.post(
-            f"/brands/{self.bid}/ads/{self.cycle_id}/performance/hypotheses",
-            data={f"verdict_{hyp['id']}": preselect}, follow_redirects=False)
-        self.assertEqual(resp.status_code, 303)
+        updated_count = reading.resolve_hypotheses(
+            main.conn, self.bid, self.cycle_id, {hyp["id"]: preselect}, actor=OPERATOR)
+        self.assertEqual(updated_count, 1)
         updated = bi_repo.get_strategy_hypothesis(main.conn, self.bid, hyp["id"])
         self.assertEqual(updated["status"], preselect)
 
@@ -924,8 +923,8 @@ class HypothesisReviewTest(_HypothesisReviewBase):
         hyp = self._link_hypothesis("通勤族比在家工作者更會下單")
         self._spend(spend=10000, impressions=20000, clicks=400, conversions=10, revenue=40000)
         reading.run(main.conn, self.bid, self.cycle_id, ACTOR)
-        self.client.post(f"/brands/{self.bid}/ads/{self.cycle_id}/performance/hypotheses",
-                         data={f"verdict_{hyp['id']}": "supported"})
+        reading.resolve_hypotheses(
+            main.conn, self.bid, self.cycle_id, {hyp["id"]: "supported"}, actor=OPERATOR)
         rows = [dict(r) for r in main.conn.execute(
             "SELECT * FROM learning_ledger WHERE brand_id = ?", (self.bid,))]
         self.assertEqual(len(rows), 1)
@@ -945,8 +944,8 @@ class HypothesisReviewTest(_HypothesisReviewBase):
         hyp = self._link_hypothesis("通勤族比在家工作者更會下單")
         self._spend(spend=10000, impressions=20000, clicks=400, conversions=10, revenue=40000)
         reading.run(main.conn, self.bid, self.cycle_id, ACTOR)
-        self.client.post(f"/brands/{self.bid}/ads/{self.cycle_id}/performance/hypotheses",
-                         data={f"verdict_{hyp['id']}": "supported"})
+        reading.resolve_hypotheses(
+            main.conn, self.bid, self.cycle_id, {hyp["id"]: "supported"}, actor=OPERATOR)
         row = main.conn.execute(
             "SELECT confidence FROM learning_ledger WHERE brand_id = ?", (self.bid,)).fetchone()
         self.assertNotEqual(row["confidence"], "Meta 視角判讀")
@@ -958,8 +957,8 @@ class HypothesisReviewTest(_HypothesisReviewBase):
         hyp = self._link_hypothesis("通勤族比在家工作者更會下單")
         self._spend(spend=10000, impressions=20000, clicks=400, conversions=5, revenue=9000)
         reading.run(main.conn, self.bid, self.cycle_id, ACTOR)
-        self.client.post(f"/brands/{self.bid}/ads/{self.cycle_id}/performance/hypotheses",
-                         data={f"verdict_{hyp['id']}": "supported"})
+        reading.resolve_hypotheses(
+            main.conn, self.bid, self.cycle_id, {hyp["id"]: "supported"}, actor=OPERATOR)
         row = main.conn.execute(
             "SELECT confidence FROM learning_ledger WHERE brand_id = ?", (self.bid,)).fetchone()
         self.assertEqual(row["confidence"], "preliminary")
@@ -971,8 +970,8 @@ class HypothesisReviewTest(_HypothesisReviewBase):
         hyp1 = self._link_hypothesis(statement)
         self._spend(spend=10000, impressions=20000, clicks=400, conversions=10, revenue=40000)
         reading.run(main.conn, self.bid, self.cycle_id, ACTOR)
-        self.client.post(f"/brands/{self.bid}/ads/{self.cycle_id}/performance/hypotheses",
-                         data={f"verdict_{hyp1['id']}": "supported"})
+        reading.resolve_hypotheses(
+            main.conn, self.bid, self.cycle_id, {hyp1["id"]: "supported"}, actor=OPERATOR)
 
         cycle2_id = ads_repo.create_cycle(
             main.conn, self.bid, product_ids=[self.product], pain_value=10000,
@@ -989,8 +988,8 @@ class HypothesisReviewTest(_HypothesisReviewBase):
                            {"spend": 10000, "impressions": 20000, "clicks": 400,
                             "conversions": 10, "revenue": 40000}, actor=ACTOR)
         reading.run(main.conn, self.bid, cycle2_id, ACTOR)
-        self.client.post(f"/brands/{self.bid}/ads/{cycle2_id}/performance/hypotheses",
-                         data={f"verdict_{hyp2['id']}": "supported"})
+        reading.resolve_hypotheses(
+            main.conn, self.bid, cycle2_id, {hyp2["id"]: "supported"}, actor=OPERATOR)
 
         rows = [dict(r) for r in main.conn.execute(
             "SELECT * FROM learning_ledger WHERE brand_id = ? ORDER BY created_at", (self.bid,))]
@@ -1013,8 +1012,8 @@ class HypothesisReviewTest(_HypothesisReviewBase):
         hyp = self._link_hypothesis("通勤族比在家工作者更會下單")
         self._spend(spend=10000, impressions=20000, clicks=400, conversions=10, revenue=40000)
         reading.run(main.conn, self.bid, self.cycle_id, ACTOR)
-        self.client.post(f"/brands/{self.bid}/ads/{self.cycle_id}/performance/hypotheses",
-                         data={f"verdict_{hyp['id']}": "supported"})
+        reading.resolve_hypotheses(
+            main.conn, self.bid, self.cycle_id, {hyp["id"]: "supported"}, actor=OPERATOR)
         entry_id = main.conn.execute(
             "SELECT id FROM learning_ledger WHERE brand_id = ?", (self.bid,)).fetchone()["id"]
 
@@ -1036,8 +1035,8 @@ class HypothesisReviewTest(_HypothesisReviewBase):
         hyp = self._link_hypothesis("通勤族比在家工作者更會下單")
         self._spend(spend=10000, impressions=20000, clicks=400, conversions=10, revenue=40000)
         reading.run(main.conn, self.bid, self.cycle_id, ACTOR)
-        self.client.post(f"/brands/{self.bid}/ads/{self.cycle_id}/performance/hypotheses",
-                         data={f"verdict_{hyp['id']}": "supported"})
+        reading.resolve_hypotheses(
+            main.conn, self.bid, self.cycle_id, {hyp["id"]: "supported"}, actor=OPERATOR)
 
         for _ in range(reading.LEDGER_REVALIDATION_WINDOW_CYCLES):
             self._later_cycle()
@@ -1054,8 +1053,8 @@ class HypothesisReviewTest(_HypothesisReviewBase):
         hyp = self._link_hypothesis("通勤族比在家工作者更會下單")
         self._spend(spend=10000, impressions=20000, clicks=400, conversions=10, revenue=40000)
         reading.run(main.conn, self.bid, self.cycle_id, ACTOR)
-        self.client.post(f"/brands/{self.bid}/ads/{self.cycle_id}/performance/hypotheses",
-                         data={f"verdict_{hyp['id']}": "supported"})
+        reading.resolve_hypotheses(
+            main.conn, self.bid, self.cycle_id, {hyp["id"]: "supported"}, actor=OPERATOR)
 
         # 模擬下一期生成計畫時 plan.py／creative.py 呼叫 compile() 的方式（brand-level）
         text, knowledge_item_ids, _brand_version, _product_version = context_compiler.compile(
@@ -1072,8 +1071,8 @@ class HypothesisReviewTest(_HypothesisReviewBase):
         hyp = self._link_hypothesis("通勤族比在家工作者更會下單")
         self._spend(spend=10000, impressions=20000, clicks=400, conversions=0, revenue=0)
         reading.run(main.conn, self.bid, self.cycle_id, ACTOR)
-        self.client.post(f"/brands/{self.bid}/ads/{self.cycle_id}/performance/hypotheses",
-                         data={f"verdict_{hyp['id']}": "rejected"})
+        reading.resolve_hypotheses(
+            main.conn, self.bid, self.cycle_id, {hyp["id"]: "rejected"}, actor=OPERATOR)
         rows = main.conn.execute(
             "SELECT COUNT(*) c FROM learning_ledger WHERE brand_id = ?", (self.bid,)).fetchone()
         self.assertEqual(rows["c"], 0)
@@ -1084,8 +1083,8 @@ class HypothesisReviewTest(_HypothesisReviewBase):
         hyp = self._link_hypothesis("通勤族比在家工作者更會下單")
         self._spend(spend=10000, impressions=20000, clicks=400, conversions=10, revenue=40000)
         reading.run(main.conn, self.bid, self.cycle_id, ACTOR)
-        self.client.post(f"/brands/{self.bid}/ads/{self.cycle_id}/performance/hypotheses",
-                         data={f"verdict_{hyp['id']}": "supported"})
+        reading.resolve_hypotheses(
+            main.conn, self.bid, self.cycle_id, {hyp["id"]: "supported"}, actor=OPERATOR)
         reviews = reading.load(main.conn, self.bid, self.cycle_id)["cycle"]["hypothesis_reviews"]
         self.assertEqual(reviews, [])
 
@@ -1109,8 +1108,8 @@ class HypothesisReviewTest(_HypothesisReviewBase):
         hyp = self._link_hypothesis("通勤族比在家工作者更會下單")
         self._spend(spend=10000, impressions=20000, clicks=400, conversions=10, revenue=40000)
         reading.run(main.conn, self.bid, self.cycle_id, ACTOR)
-        self.client.post(f"/brands/{self.bid}/ads/{self.cycle_id}/performance/hypotheses",
-                         data={f"verdict_{hyp['id']}": "supported"})
+        reading.resolve_hypotheses(
+            main.conn, self.bid, self.cycle_id, {hyp["id"]: "supported"}, actor=OPERATOR)
         reading.finalize(main.conn, self.bid, self.cycle_id, ACTOR)
         open_items = core_interrupts.list_open(main.conn, brand_id=self.bid)
         self.assertFalse(any(i["category"] == "hypothesis_unresolved" for i in open_items))
@@ -1136,8 +1135,8 @@ class HypothesisLedgerHaltTest(_HypothesisReviewBase):
         hyp = self._link_hypothesis("通勤族比在家工作者更會下單")
         self._spend(spend=10000, impressions=20000, clicks=400, conversions=10, revenue=40000)
         reading.run(main.conn, self.bid, self.cycle_id, ACTOR)
-        self.client.post(f"/brands/{self.bid}/ads/{self.cycle_id}/performance/hypotheses",
-                         data={f"verdict_{hyp['id']}": "supported"})
+        reading.resolve_hypotheses(
+            main.conn, self.bid, self.cycle_id, {hyp["id"]: "supported"}, actor=OPERATOR)
         rows = main.conn.execute(
             "SELECT COUNT(*) c FROM learning_ledger WHERE brand_id = ?", (self.bid,)).fetchone()
         self.assertEqual(rows["c"], 1)
