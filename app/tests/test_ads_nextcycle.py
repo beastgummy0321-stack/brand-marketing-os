@@ -373,13 +373,19 @@ class RuleCardTest(_BaseNextCycleTest):
         nextcycle.build_rule_cards(main.conn, self.bid, ACTOR)
         card = nextcycle.list_pending_rule_cards(main.conn, self.bid)[0]
         self.client.cookies.clear()
-        resp = self.client.post(f"/brands/{self.bid}/ads/rule-cards/{card['id']}/accept",
-                                follow_redirects=False)
-        self.assertEqual(resp.status_code, 303)
-        self.assertNotIn("/settings/operator", resp.headers["location"])
+        resp = self.client.post(
+            f"/api/campaigns/brands/{self.bid}/learnings/rule-cards/{card['id']}/decide",
+            json={"accepted": True})
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(resp.json()["ok"])
         row = main.conn.execute(
-            "SELECT decided_by FROM creative_rule_card WHERE id = ?", (card["id"],)).fetchone()
+            "SELECT decided_by, status, promoted_rule_id FROM creative_rule_card WHERE id = ?",
+            (card["id"],)).fetchone()
         self.assertEqual(row["decided_by"], OPERATOR)
+        self.assertEqual(row["status"], "accepted")
+        self.assertIsNotNone(row["promoted_rule_id"])
+        rules = bi_repo.list_rules_for_brand(main.conn, self.bid)
+        self.assertTrue(any(r["id"] == row["promoted_rule_id"] for r in rules))
 
 
 class RuleCardRelativeThresholdTest(_BaseNextCycleTest):

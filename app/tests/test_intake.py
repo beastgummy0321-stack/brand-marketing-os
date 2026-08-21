@@ -23,7 +23,6 @@ _tmpdir = tempfile.mkdtemp(prefix="brand_os_intake_")
 from fastapi.testclient import TestClient  # noqa: E402
 
 import app.main as main  # noqa: E402
-from app.brand_intelligence import repository as bi_repo  # noqa: E402
 from app.intake import ai as intake_ai  # noqa: E402
 from app.intake import card_test, script, state  # noqa: E402
 from app.intake import repository as ir  # noqa: E402
@@ -160,16 +159,6 @@ class IntakeWizardTest(unittest.TestCase):
 
     # -- 貼回、R10、完成 -------------------------------------------------------
 
-    def _to_review(self, brand_id: str):
-        self._run_scan(brand_id)
-        bi_repo.create_product(main.conn, brand_id, name=script.MOCK_PRODUCT_NAME, actor="測試員")
-        resp = self.client.post(f"/brands/{brand_id}/intake/paste",
-                                 data={"action": "validate", "raw_text": script.PASTE_SAMPLE_SUCCESS},
-                                 follow_redirects=False)
-        assert "/intake/review" in resp.headers["location"]
-
-
-
 
     # -- 操作卡實測工具 --------------------------------------------------------
 
@@ -244,12 +233,6 @@ class ReintakeLoopTest(unittest.TestCase):
     @staticmethod
     def _table(*rows) -> str:
         return "種類 | 分類 | 標題 | 內容 | 適用範圍 | 佐證來源\n" + "\n".join(rows)
-
-    def _paste(self, brand_id: str, text: str):
-        return self.client.post(f"/brands/{brand_id}/intake/paste",
-                                 data={"action": "validate", "raw_text": text},
-                                 follow_redirects=False)
-
 
 
 

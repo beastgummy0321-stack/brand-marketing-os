@@ -181,9 +181,6 @@ class ReminderTest(_BaseOnboardingTest):
         page = self.client.get("/", follow_redirects=False)
         self.assertEqual(page.status_code, 303)
         self.assertEqual(page.headers["location"], "/app/")
-        return
-        self.assertIn("今天要處理的事", page.text)
-        self.assertIn("虛構晨光咖啡", page.text)
 
     def test_closed_cycles_do_not_nag(self):
         cycle_id = self._live_cycle(start_offset_days=-20)

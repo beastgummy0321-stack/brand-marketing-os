@@ -7,7 +7,6 @@
 import atexit
 import json
 import os
-import re
 import shutil
 import tempfile
 import time
@@ -23,6 +22,8 @@ from app.ads import creative as ads_creative  # noqa: E402
 from app.ads import creative_matrix as cmx  # noqa: E402
 from app.ads import fingerprint as fp  # noqa: E402
 from app.ads import plan as ads_plan  # noqa: E402
+from app.ads import routes as ads_routes  # noqa: E402
+from app.ads.routes_creative import _CREATIVE_STAGES  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
 from app.core import settings as coresettings  # noqa: E402
 from app.core.db import new_id, now_iso  # noqa: E402
@@ -508,14 +509,12 @@ class ProgressHonestyTest(_BaseCreativeTest):
     """票 29：等待頁誠實化——階段清單反映真實狀態＋伺服器端計時，不引入前端計時器。"""
 
     def test_progress_elapsed_time_does_not_reset_on_reload(self):
-        first = self.client.get(
-            f"/brands/{self.bid}/ads/{self.cycle_id}/creatives/progress").text
-        first_secs = int(re.search(r"(\d+) 秒／通常範圍", first).group(1))
+        """重新整理（同一個 key 再呼叫一次 `_progress_touch`）不會重置開始時間。"""
+        key = ads_routes._progress_key("creative", self.bid, self.cycle_id)
+        first = ads_routes._progress_touch(key, _CREATIVE_STAGES)
         time.sleep(1.1)
-        second = self.client.get(
-            f"/brands/{self.bid}/ads/{self.cycle_id}/creatives/progress").text
-        second_secs = int(re.search(r"(\d+) 秒／通常範圍", second).group(1))
-        self.assertGreaterEqual(second_secs, first_secs + 1)
+        second = ads_routes._progress_touch(key, _CREATIVE_STAGES)
+        self.assertEqual(second["started_at"], first["started_at"])
 
     def test_generate_reports_real_stages_in_order(self):
         provider = FakeProvider(response=_fake(_variants_reply(self.cell_ids)))

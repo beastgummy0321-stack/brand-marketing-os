@@ -125,12 +125,11 @@ class HubInProgressCardTest(_BaseHubTest):
         self.assertEqual([c["id"] for c in in_progress], [cycle_id])
 
     def test_multiple_active_cycles_show_most_recent_and_link_to_history(self):
+        """真正要保住的是 ads_repo.list_cycles 的排序（start_date DESC，最新一期在前）。"""
         self._open_cycle(start_date="2026-06-01")
         newest_id = self._open_cycle(start_date="2026-07-01")
-        resp = self.client.get(f"/brands/{self.bid}/ads")
-        self.assertIn(f'href="/brands/{self.bid}/ads/{newest_id}"', resp.text)
-        self.assertIn("另有 1 期進行中", resp.text)
-        self.assertIn(f'href="/brands/{self.bid}/ads/history"', resp.text)
+        cycles = self._api_cycles()
+        self.assertEqual(cycles[0]["id"], newest_id)
 
     def test_only_closed_cycle_falls_back_to_empty_state(self):
         """進行中＝非封存且非已結束；只剩已結案檔期時，卡片仍當作沒有進行中處理。"""

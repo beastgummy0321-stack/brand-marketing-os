@@ -243,11 +243,10 @@ class DeleteCascadeTest(_Base):
 
         bi_repo.update_brand(main.conn, self.bid, name=self.brand["name"],
                              client_name="測試客戶", status="archived", actor=ACTOR)
-        resp = self.client.post(f"/brands/{self.bid}/delete",
-                                data={"confirm_name": self.brand["name"]},
-                                follow_redirects=False)
+        resp = self.client.post(f"/api/library/brands/{self.bid}/delete",
+                                json={"confirm_name": self.brand["name"]})
 
-        self.assertEqual(resp.status_code, 303)
+        self.assertEqual(resp.status_code, 200)
         self.assertIsNone(bi_repo.get_brand(main.conn, self.bid))
         self.assertFalse(brand_dir.exists())
         self.assertTrue(other.is_dir(), "只准刪這個品牌自己的資料夾")

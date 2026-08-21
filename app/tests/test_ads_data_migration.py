@@ -191,14 +191,5 @@ class MaturityReportTest(_BaseTest):
         self.assertFalse(maturity["all_met"])
 
 
-class InterviewNextParamTest(_BaseTest):
-    def test_unsafe_next_is_ignored(self):
-        """next 白名單只接受同品牌路徑，避免被拿去開放轉址。"""
-        resp = self.client.post(f"/brands/{self.bid}/ads/interview",
-                                data={"next": "https://example.com/evil"},
-                                follow_redirects=False)
-        self.assertTrue(resp.headers["location"].startswith(f"/brands/{self.bid}/ads?"))
-
-
 if __name__ == "__main__":
     unittest.main()

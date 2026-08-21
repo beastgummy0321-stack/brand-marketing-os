@@ -186,10 +186,22 @@ async def create_cycle(request: Request, brand_id: str):
     if not objective:
         return _error(400, "請選一個本期目標。")
 
+    # 檔期長度範圍與型別驗證，照抄舊頁 routes_plan.py ads_new_post 那段（決策：這道防呆
+    # 要保留，非工程背景的使用者需要白話錯誤訊息擋掉不合理天數）。
+    duration_value = None
+    if duration_days not in (None, ""):
+        try:
+            duration_value = int(duration_days)
+        except (TypeError, ValueError):
+            return _error(400, "檔期長度請填數字。")
+        if not (budget_calc.MIN_DURATION_DAYS <= duration_value <= budget_calc.MAX_DURATION_DAYS):
+            return _error(400, f"檔期長度請填 {budget_calc.MIN_DURATION_DAYS}"
+                                f"–{budget_calc.MAX_DURATION_DAYS} 天之間。")
+
     phase = "simulation" if (body.get("simulate") and simulation.offer_simulation(conn, brand_id)) else "normal"
     cycle = ads_repo.create_cycle(conn, brand_id, product_ids=list(product_ids), pain_value=budget,
                                   objective=objective, actor=actor, phase=phase,
-                                  duration_days=duration_days, background=background)
+                                  duration_days=duration_value, background=background)
     proposal.seed_channel_plans(conn, brand_id, cycle["id"])
     message = ("模擬檔期開好了。接下來的每一步都跟真的一樣，只有最後的成效數字是模擬的。"
               if phase == "simulation" else "檔期已建立，接下來確認這期的計畫。")

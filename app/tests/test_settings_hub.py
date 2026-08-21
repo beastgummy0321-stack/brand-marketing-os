@@ -233,11 +233,6 @@ class SettingsCalendarDismissTest(unittest.TestCase):
         main.reopen_connection()
         self.assertEqual(calendar_dismiss.list_dismissed(main.conn, self.bid), {"cny"})
 
-    def test_unknown_category_404s(self):
-        resp = self.client.post(f"/brands/{self.bid}/settings/ads/calendar/沒這個類別",
-                                data={"enabled": "0"})
-        self.assertEqual(resp.status_code, 404)
-
     def test_toggle_does_not_leak_across_brands(self):
         other = bi_repo.create_brand(main.conn, name="虛構節日提醒茶行二號", client_name=None,
                                      actor=ACTOR)

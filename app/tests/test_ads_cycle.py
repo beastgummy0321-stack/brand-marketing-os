@@ -176,22 +176,11 @@ class CreateCycleTest(_BaseAdsTest):
     def test_duration_out_of_range_is_rejected(self):
         for value in ("6", "31", "abc"):
             resp = self.client.post(
-                f"/brands/{self.bid}/ads/new",
-                data={"product_ids": [self.product_a, self.product_b], "slider_index": "5",
+                f"/api/campaigns/{self.bid}",
+                json={"product_ids": [self.product_a, self.product_b], "budget": 10000,
                       "objective": "sales", "duration_days": value},
-                follow_redirects=False,
             )
             self.assertEqual(resp.status_code, 400)
-
-    def test_invalid_start_date_is_rejected(self):
-        resp = self.client.post(
-            f"/brands/{self.bid}/ads/new",
-            data={"product_ids": [self.product_a, self.product_b], "slider_index": "5",
-                  "objective": "sales", "start_date": "not-a-date"},
-            follow_redirects=False,
-        )
-        self.assertEqual(resp.status_code, 400)
-        self.assertIn("開始日期格式不對", resp.text)
 
     def test_custom_start_date_is_used(self):
         # /api 開檔期不吃 start_date（新殼一律今天開跑），直接呼叫業務函式驗同一件事
