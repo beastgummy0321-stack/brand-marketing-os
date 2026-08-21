@@ -207,6 +207,15 @@ export interface PerformanceSummary {
   discarded_rows: number;
 }
 
+export interface CsvImportResult {
+  imported: number;
+  quarantined: number;
+  skipped: number;
+  matched_assets: number;
+  unmatched_columns: string[];
+  warnings: string[];
+}
+
 export interface ReadingResult {
   status: keyof typeof READING_STATUS_LABELS;
   status_label: string;
@@ -405,6 +414,25 @@ async function postJson<T = void>(path: string, body?: unknown): Promise<T> {
   return (await res.json()) as T;
 }
 
+// 仿 frontend/src/lib/intakeApi.ts:205 的 postForm；這裡的錯誤訊息 envelope 是 {error}
+// （這個模組全檔的慣例），不是 intakeApi 那邊的 extractError 寫法，兩邊各自維持自己檔案
+// 的風格，不跨檔抽共用（container-contract 第八節：兩寫法擇一，取同檔案一致的那個）。
+async function postForm<T = void>(path: string, form: FormData): Promise<T> {
+  const res = await fetch(path, { method: "POST", body: form });
+  if (!res.ok) {
+    let message = `處理失敗（狀態碼 ${res.status}）`;
+    try {
+      const data = (await res.json()) as { error?: string };
+      if (data.error) message = data.error;
+    } catch {
+      // 回應不是 JSON，用預設訊息。
+    }
+    throw new Error(message);
+  }
+  if (res.status === 204) return undefined as T;
+  return (await res.json()) as T;
+}
+
 const base = (brandId: string) => `/api/campaigns/${encodeURIComponent(brandId)}`;
 const cycleBase = (brandId: string, cycleId: string) => `${base(brandId)}/${encodeURIComponent(cycleId)}`;
 
@@ -498,6 +526,13 @@ export const fetchPerformance = (
   getJson(`${cycleBase(brandId, cycleId)}/performance`);
 export const simulatePerformance = (brandId: string, cycleId: string): Promise<void> =>
   postJson(`${cycleBase(brandId, cycleId)}/performance/simulate`);
+export const submitManualPerformance = (brandId: string, cycleId: string, fields: Record<string, string>): Promise<void> =>
+  postJson(`${cycleBase(brandId, cycleId)}/performance/manual`, fields);
+export function importPerformanceCsv(brandId: string, cycleId: string, file: File): Promise<CsvImportResult> {
+  const form = new FormData();
+  form.append("perf_file", file);
+  return postForm(`${cycleBase(brandId, cycleId)}/performance/csv`, form);
+}
 
 // ---- 覆盤（S8.59-66）----
 export const fetchClosingReview = (brandId: string, cycleId: string): Promise<ClosingReview> =>

@@ -1,7 +1,11 @@
 import { useEffect, useState } from "react";
 import { formatCurrency, formatRelativeHours, formatRoas } from "@/lib/format";
 import { triggerImmediateSync } from "@/lib/api";
-import { fetchHealthLights, fetchPerformance, simulatePerformance, type Cycle, type HealthLights, type PerformanceSummary, type ReadingResult } from "@/lib/warroomApi";
+import { useFormSubmit } from "@/lib/useFormSubmit";
+import {
+  fetchHealthLights, fetchPerformance, importPerformanceCsv, simulatePerformance, submitManualPerformance,
+  type Cycle, type CsvImportResult, type HealthLights, type PerformanceSummary, type ReadingResult,
+} from "@/lib/warroomApi";
 import { HealthLightsRow } from "../shared/HealthLightsRow";
 import { Badge } from "../shared/Badge";
 
@@ -106,6 +110,8 @@ export function PerformanceStep({ brandId, cycle }: { brandId: string; cycle: Cy
         </>
       )}
 
+      <ManualCsvPanel brandId={brandId} cycleId={cycle.id} onImported={load} />
+
       <div className="rounded-lg border border-border bg-card p-4 text-sm shadow-[var(--shadow-card)]">
         <p className="font-medium text-foreground">本期判讀可信度</p>
         <p className="mt-1 text-muted-foreground">{confidence}</p>
@@ -124,5 +130,92 @@ function Kpi({ label, value }: { label: string; value: string | null }) {
       <p className="text-xs text-muted-foreground">{label}</p>
       <p className="mt-1 text-lg font-semibold text-foreground">{value ?? "資料不足"}</p>
     </div>
+  );
+}
+
+const MANUAL_FIELDS: { key: string; label: string; required?: boolean }[] = [
+  { key: "spend", label: "花費金額", required: true },
+  { key: "impressions", label: "曝光次數" },
+  { key: "clicks", label: "連結點擊次數" },
+  { key: "conversions", label: "購買次數" },
+  { key: "revenue", label: "購買轉換價值" },
+  { key: "reach", label: "觸及人數" },
+  { key: "date_start", label: "開始日期" },
+  { key: "date_stop", label: "結束日期" },
+];
+
+/** 票 01：T4 清倉把使用者自己填成效／匯入 Meta CSV 的入口一起刪掉了；DECIDED——收合面板
+ * 就地做，不另開 SPA 路由（舊設計指向的 Jinja 子頁已經不在了，不值得為此多開一條路由）。
+ * 送出中鎖按鈕／失敗人話錯誤沿用全站共用的 `useFormSubmit`（lib/useFormSubmit.ts），
+ * 不另刻一份狀態機。 */
+function ManualCsvPanel({ brandId, cycleId, onImported }: { brandId: string; cycleId: string; onImported: () => void }) {
+  const [fields, setFields] = useState<Record<string, string>>({});
+  const manualForm = useFormSubmit(async () => {
+    await submitManualPerformance(brandId, cycleId, fields);
+    setFields({});
+    onImported();
+  });
+
+  const [csvResult, setCsvResult] = useState<CsvImportResult | null>(null);
+  const csvForm = useFormSubmit(async (file: File) => {
+    setCsvResult(await importPerformanceCsv(brandId, cycleId, file));
+    onImported();
+  });
+
+  return (
+    <details className="rounded-lg border border-border bg-card p-4 text-sm shadow-[var(--shadow-card)]">
+      <summary className="cursor-pointer font-medium text-foreground">自己填成效／匯入 Meta CSV</summary>
+      <div className="mt-3 flex flex-col gap-4">
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            void manualForm.submit();
+          }}
+          className="flex flex-col gap-2"
+        >
+          <p className="text-xs text-muted-foreground">API 拉不到、CSV 也匯不進來時的最後退路，花費金額必填。</p>
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+            {MANUAL_FIELDS.map((f) => (
+              <label key={f.key} className="flex flex-col gap-1 text-xs text-muted-foreground">
+                {f.label}{f.required ? "（必填）" : ""}
+                <input
+                  type="text"
+                  value={fields[f.key] ?? ""}
+                  onChange={(e) => setFields((prev) => ({ ...prev, [f.key]: e.target.value }))}
+                  className="rounded-md border border-border bg-background px-2 py-1 text-foreground"
+                />
+              </label>
+            ))}
+          </div>
+          <button type="submit" disabled={manualForm.saving || !fields.spend} className="w-fit rounded-md border border-primary px-3 py-1.5 text-xs font-medium text-primary hover:bg-primary/10 disabled:cursor-not-allowed disabled:opacity-50">
+            {manualForm.saving ? "送出中…" : "記下這筆"}
+          </button>
+          {manualForm.error && <p className="rounded-md border border-danger/30 bg-danger/10 px-3 py-2 text-xs text-danger">{manualForm.error}</p>}
+        </form>
+
+        <div className="flex flex-col gap-2 border-t border-border pt-3">
+          <p className="text-xs text-muted-foreground">從 Meta 廣告管理員匯出的 CSV，直接上傳。</p>
+          <input
+            type="file"
+            accept=".csv"
+            disabled={csvForm.saving}
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              e.target.value = "";
+              if (file) void csvForm.submit(file);
+            }}
+            className="text-xs text-foreground"
+          />
+          {csvForm.error && <p className="rounded-md border border-danger/30 bg-danger/10 px-3 py-2 text-xs text-danger">{csvForm.error}</p>}
+          {csvResult && (
+            <p className="text-xs text-success">
+              匯入 {csvResult.imported} 筆成效資料，對回 {csvResult.matched_assets} 則素材。
+              {csvResult.quarantined > 0 && `${csvResult.quarantined} 筆數字不合理已擱在一旁。`}
+              {csvResult.skipped > 0 && `${csvResult.skipped} 筆重複略過。`}
+            </p>
+          )}
+        </div>
+      </div>
+    </details>
   );
 }

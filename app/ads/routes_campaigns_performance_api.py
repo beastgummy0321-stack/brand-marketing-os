@@ -9,15 +9,16 @@
 對外進入點：本檔的 `router`。誰依賴它：只有 `app/ads/routes.py`。
 """
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, File, Request, UploadFile
 from fastapi.responses import JSONResponse
 
 import app.shared.web as main_mod
 from app.ads import codes as ads_codes
 from app.ads import health_lights as ads_health_lights
 from app.ads import nextcycle
+from app.ads import pacing as ads_pacing
 from app.ads import performance as ads_performance
 from app.ads import reading as ads_reading
 from app.ads import repository as ads_repo
@@ -90,6 +91,80 @@ async def performance_simulate(request: Request, brand_id: str, cycle_id: str):
     if not ok:
         return _error(400, note)
     return JSONResponse(None, status_code=204)
+
+
+_MANUAL_NUMBER_FIELDS = ("spend", "impressions", "clicks", "conversions", "revenue", "reach")
+
+
+@router.post("/api/campaigns/{brand_id}/{cycle_id}/performance/manual")
+async def performance_manual(request: Request, brand_id: str, cycle_id: str):
+    """使用者自己填成效數字——API 掛掉、CSV 也匯不進來時的最後退路（原
+    `ads_performance_manual`，T4 清倉刪掉 Jinja 路由後恢復成 JSON 版本）。"""
+    main_mod.require_brand(brand_id)
+    actor = main_mod.require_actor(request)
+    _require_cycle(brand_id, cycle_id)
+    body = await request.json()
+
+    values = {}
+    for key in _MANUAL_NUMBER_FIELDS:
+        value, ok = main_mod.parse_number(body.get(key))
+        if not ok:
+            return _error(400, "數字欄位請只填數字。")
+        values[key] = value
+    values["date_start"] = body.get("date_start") or None
+    values["date_stop"] = body.get("date_stop") or None
+
+    result = ads_performance.import_manual(main_mod.conn, brand_id, cycle_id, values, actor=actor)
+    if result.errors:
+        return _error(400, result.errors[0])
+
+    ads_performance.save_derived_metrics(main_mod.conn, brand_id, cycle_id)
+    ads_pacing.check_cycle(main_mod.conn, brand_id, cycle_id)  # 新數據落地後判一次步調
+    return JSONResponse(None, status_code=204)
+
+
+@router.post("/api/campaigns/{brand_id}/{cycle_id}/performance/csv")
+async def performance_csv(request: Request, brand_id: str, cycle_id: str,
+                          perf_file: UploadFile = File(None)):
+    """Meta CSV 匯出檔匯入（原 `ads_performance_csv`，同上恢復成 JSON 版本）。"""
+    main_mod.require_brand(brand_id)
+    actor = main_mod.require_actor(request)
+    _require_cycle(brand_id, cycle_id)
+
+    if perf_file is None or not perf_file.filename:
+        return _error(400, "沒有選到檔案。")
+    content = await perf_file.read()
+    if not content:
+        return _error(400, "沒有選到檔案。")
+    # Windows 匯出常見 cp950/big5（繁體中文帳號匯出的 Meta CSV 常見）——errors="replace" 會把中文標題變成
+    # U+FFFD 亂碼，欄名對不到 COLUMN_ALIASES，默默回 imported=0（還是 200），使用者以為成功實則沒匯進任何東西。
+    # 四種編碼視圖依序解，都失敗才回 400（對照 e48c6b8^:app/ads/routes_performance.py 的 _decode_csv_upload，
+    # 同一套現成的已驗證行為，不發明新的）。
+    text = None
+    for encoding in ("utf-8-sig", "utf-8", "cp950", "big5"):
+        try:
+            text = content.decode(encoding)
+            break
+        except UnicodeDecodeError:
+            continue
+    if text is None:
+        return _error(400, "這個檔案的文字編碼讀不出來，請用 Excel 另存成 UTF-8 的 CSV。")
+
+    result = ads_performance.import_csv(main_mod.conn, brand_id, cycle_id, text, actor=actor,
+                                        today=date.today().isoformat())
+    if result.errors:
+        return _error(400, result.errors[0])
+
+    ads_performance.save_derived_metrics(main_mod.conn, brand_id, cycle_id)
+    ads_pacing.check_cycle(main_mod.conn, brand_id, cycle_id)  # 新數據落地後判一次步調
+    return JSONResponse({
+        "imported": result.imported,
+        "quarantined": result.quarantined,
+        "skipped": result.skipped,
+        "matched_assets": result.matched_assets,
+        "unmatched_columns": result.unmatched_columns,
+        "warnings": [],
+    })
 
 
 # ---- 檔期健康燈號（S8R.20-21） ----
