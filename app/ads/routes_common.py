@@ -259,25 +259,6 @@ def _history_trend_rows(conn, brand_id: str, closed_cycles: list) -> list:
     return rows
 
 
-def _cycle_progress_items(conn, brand_id: str, cycle: dict) -> list:
-    """五個階段頁頂端進度軌要的清單（GitHub issue #46），餵給
-    progress_rail(items, collapsed=True)：只有當前格與下一格會渲染完整名稱，其餘一律收合成
-    序號。已完成的格額外帶上對應階段頁網址——collapsed 模式下 macro 會把它收合成小圖示但
-    仍可點（「已完成階段可點回顧」），未完成的格網址一律傳 None，天生不可點。"""
-    stage_index = derive_cycle_stage(conn, brand_id, cycle)
-    cycle_id = cycle["id"]
-    stage_urls = [
-        f"/brands/{brand_id}/ads/{cycle_id}",
-        f"/brands/{brand_id}/ads/{cycle_id}/creatives",
-        f"/brands/{brand_id}/ads/{cycle_id}/handoff",
-        f"/brands/{brand_id}/ads/{cycle_id}/checklist",
-        f"/brands/{brand_id}/ads/{cycle_id}/performance",
-    ]
-    return [(num, label, stage_urls[num - 1] if num < stage_index else None,
-             "current" if num == stage_index else ("done" if num < stage_index else "future"))
-            for num, label in enumerate(stages.STAGE_LABELS, start=1)]
-
-
 def _require_cycle(brand_id: str, cycle_id: str) -> dict:
     cycle = ads_repo.get_cycle(main_mod.conn, brand_id, cycle_id)
     if cycle is None:

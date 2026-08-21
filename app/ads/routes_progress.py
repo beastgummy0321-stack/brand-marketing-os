@@ -1,13 +1,14 @@
 # -*- coding: utf-8 -*-
-"""app/ads/routes_progress.py — 背景進度引擎＋等待頁共用渲染（T4 廣告模組 Jinja 大清倉，
-從 app/ads/routes.py 搬出）。
+"""app/ads/routes_progress.py — 背景進度引擎（T4 廣告模組 Jinja 大清倉第 2 刀刪掉
+`_render_wait_page`：所有等待頁呼叫端——`routes_plan.py::ads_plan_progress`、
+`routes_performance.py::ads_reading_progress`、`routes_sync.py` 的 Meta／GA4 回填
+精靈——都已被對應 /api 端點取代並隨之刪除，見 routes.py 檔頭。本檔現在只剩背景
+執行緒引擎本身，供仍在用同一套機制的 /api 端點（routes_campaigns_open_api.py 的
+plan/generate＋plan/status、routes_tracking_api.py、routes_weekly_proposals_api.py）
+呼叫。
 
-修法前：「先渲染等待頁（meta refresh 導向 ?run=1），?run=1 那一次同步跑完整個生成再
-轉址」——瀏覽器在那一次 ?run=1 導航整整凍住 20–90 秒，且沒有任何冪等保護（按 F5 就
-再打一次付費 API）。決策 0037 第 5 條：正解是把生成丟到背景執行緒，路由只讀既有的
-進度狀態，完成時才 303；meta refresh 機制不變，使用者才真的坐在一張每 3 秒真的會動的
-頁上。用 brand_id/cycle_id 當 key 記一份「目前在哪一階段、狀態、結果」的模組級 dict：
-  - status="waiting"：使用者看過等待頁，但還沒真的觸發生成（對應舊的 run!=1）。
+用 brand_id/cycle_id 當 key 記一份「目前在哪一階段、狀態、結果」的模組級 dict：
+  - status="waiting"：呼叫端記錄過一次「開始等」，但還沒真的觸發生成。
   - status="running"：背景執行緒已經在跑（冪等閘：同一個 key 只會有一個 running 執行緒，
     _progress_start 用鎖判斷「查已有 entry」與「啟動執行緒」這組合是原子的）。
   - status="done"：執行緒跑完，result=(ok, err) 待下一次請求消化並清除。
@@ -17,12 +18,9 @@
 `ads_routes._progress_key(...)` 這套跨檔慣例、以及測試對 `ads_routes._PROGRESS_
 TIMEOUT_SECONDS` 之類的模組級屬性覆寫（test_ads_progress_background.py、
 test_ads_plan_status_json_api.py）繼續原樣可用——名字在哪個模組被 import 進去，
-屬性覆寫／dict 內容互動都是同一份物件，不受影響。仍在用這套引擎的呼叫端：
-app/ads/routes_plan.py（打法生成）、routes_performance.py（判讀）、routes_sync.py
-（Meta／GA4 回填精靈），以及 /api 端點 routes_campaigns_open_api.py、
-routes_tracking_api.py、routes_weekly_proposals_api.py 等——全部一律
-`ads_routes.` 開頭即時查值，不得改成 `from app.ads.routes_progress import X`
-靜態綁死（同 orders_channel 那組注入變數的先例，理由見 app/ads/routes.py 檔頭）。
+屬性覆寫／dict 內容互動都是同一份物件，不受影響。一律 `ads_routes.` 開頭即時查值，
+不得改成 `from app.ads.routes_progress import X` 靜態綁死（同 orders_channel 那組
+注入變數的先例，理由見 app/ads/routes.py 檔頭）。
 
 ponytail: _progress_state 的讀寫多數是單一鍵賦值（CPython 原子），只有「判斷 key 是否
 已在跑、要不要啟動新執行緒」這個複合動作真的需要鎖，其餘沿用單純 dict。
@@ -30,13 +28,6 @@ ponytail: _progress_state 的讀寫多數是單一鍵賦值（CPython 原子）�
 
 import threading
 import time
-from typing import Optional
-
-from fastapi import Request
-
-import app.shared.web as main_mod
-from app.intake import state as intake_state
-from app.ads.routes_common import _crumb
 
 _progress_state: dict = {}
 _progress_lock = threading.Lock()
@@ -131,17 +122,3 @@ def _progress_definition_rows(stages: list, kind: str, entry: dict) -> list:
     elapsed = max(0, int(time.time() - entry["started_at"]))
     rows.append(("已等", f"{elapsed} 秒／通常範圍 {_USUAL_RANGE[kind]}", False))
     return rows
-
-
-def _render_wait_page(request: Request, brand: dict, *, heading: str, lede: str,
-                       run_url: str, leave_url: str, breadcrumb_tail: str,
-                       progress_rows: Optional[list] = None):
-    """等待頁共用渲染（票 M3 從四個進度路由抽出）：run != 1、與 run == 1 但仍在跑，
-    畫面長得一模一樣，差別只在 entry 的來源。"""
-    return main_mod.templates.TemplateResponse(
-        request, "ads_progress.html",
-        main_mod.ctx(request, brand=brand, nav_current='ads', heading=heading, lede=lede,
-                     run_url=run_url, leave_url=leave_url,
-                     refresh=intake_state.REFRESH_SECONDS, progress_rows=progress_rows,
-                     breadcrumb_items=_crumb(brand, (breadcrumb_tail, None))),
-    )

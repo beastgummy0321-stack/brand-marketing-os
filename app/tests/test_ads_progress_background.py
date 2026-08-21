@@ -20,7 +20,6 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
-from urllib.parse import unquote
 
 _tmpdir = tempfile.mkdtemp(prefix="brand_os_ads_progress_bg_")
 
@@ -28,6 +27,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 import app.main as main  # noqa: E402
 from app.ads import plan as ads_plan  # noqa: E402
+from app.ads import repository as ads_repo  # noqa: E402
 from app.ads import routes as ads_routes  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
 from app.llm.providers import ProviderResponse, Usage  # noqa: E402
@@ -81,14 +81,16 @@ class _SlowProvider:
         return self.response
 
 
-def _wait_progress(client, url, timeout=5.0):
-    """短輪詢模擬瀏覽器 meta refresh，等到真的轉址（303）或逾時為止。"""
+def _poll_plan_status(client, brand_id, cycle_id, timeout=5.0):
+    """短輪詢 /api plan/status 直到跑完或逾時（取代已刪等待頁的 meta refresh 模擬；
+    等待頁本來就只是把這份 JSON 狀態轉成「轉址＋人話訊息」，見已刪除的
+    routes_plan.py::ads_plan_progress）。"""
     deadline = time.time() + timeout
-    resp = client.get(url, follow_redirects=False)
-    while resp.status_code != 303 and time.time() < deadline:
+    data = client.get(f"/api/campaigns/{brand_id}/{cycle_id}/plan/status").json()["data"]
+    while data["status"] == "running" and time.time() < deadline:
         time.sleep(0.02)
-        resp = client.get(url, follow_redirects=False)
-    return resp
+        data = client.get(f"/api/campaigns/{brand_id}/{cycle_id}/plan/status").json()["data"]
+    return data
 
 
 class _BaseProgressTest(unittest.TestCase):
@@ -101,54 +103,58 @@ class _BaseProgressTest(unittest.TestCase):
                                 json={"product_ids": [], "budget": 10000, "objective": "sales"})
         self.cycle_id = resp.json()["cycle_id"]
         self._orig_provider = ads_plan.PROVIDER
-        self.url = f"/brands/{self.bid}/ads/{self.cycle_id}/plan/progress?run=1"
+        self.generate_url = f"/api/campaigns/{self.bid}/{self.cycle_id}/plan/generate"
 
     def tearDown(self):
         ads_plan.PROVIDER = self._orig_provider
 
 
 class BackgroundExecutionTest(_BaseProgressTest):
-    def test_run_call_returns_before_generation_finishes(self):
-        """驗收核心：?run=1 那次請求不再同步等完整個生成，遠低於 provider 的等待時間就回應。"""
+    def test_generate_call_returns_before_generation_finishes(self):
+        """驗收核心：觸發生成的請求不再同步等完整個生成跑完，遠低於 provider 的等待時間
+        就回應（等待頁 GET 已隨 T4 大清倉刪除，改打取代它的 /api plan/generate＋
+        /plan/status 輪詢，同一套 _progress_start／_progress_state 背景引擎，斷言意義
+        不變）。"""
         provider = _SlowProvider(_fake(json.dumps(_GOOD_OPTIONS, ensure_ascii=False)), delay=0.4)
         ads_plan.PROVIDER = provider
 
         start = time.time()
-        first = self.client.get(self.url, follow_redirects=False)
+        resp = self.client.post(self.generate_url, json={})
         elapsed = time.time() - start
 
-        self.assertLess(elapsed, 0.3, "?run=1 不該同步等生成跑完——這正是本票要修的凍結問題")
-        self.assertEqual(first.status_code, 200)  # 還在跑，不是轉址
+        self.assertLess(elapsed, 0.3, "不該同步等生成跑完——這正是本票要修的凍結問題")
+        self.assertEqual(resp.status_code, 204)
 
-        final = _wait_progress(self.client, self.url)
-        self.assertEqual(final.status_code, 303)
-        self.assertIn("/plan/select", final.headers["location"])
+        status = _poll_plan_status(self.client, self.bid, self.cycle_id)
+        self.assertEqual(status["status"], "done")
         self.assertEqual(len(provider.calls), 1)
+        cycle = ads_repo.get_cycle(main.conn, self.bid, self.cycle_id)
+        self.assertEqual(cycle["status"], "PLAN_SELECT")
 
 
 class IdempotencyTest(_BaseProgressTest):
-    def test_pressing_f5_while_running_does_not_call_provider_twice(self):
-        """驗收核心：同一個 key 已經在跑，F5／多分頁重整不會讓付費 API 被多打一次。"""
+    def test_pressing_generate_twice_while_running_does_not_call_provider_twice(self):
+        """驗收核心：同一個 key 已經在跑，重複觸發（模擬 F5／多分頁）不會讓付費 API 被
+        多打一次。"""
         provider = _SlowProvider(_fake(json.dumps(_GOOD_OPTIONS, ensure_ascii=False)), delay=0.3)
         ads_plan.PROVIDER = provider
 
-        first = self.client.get(self.url, follow_redirects=False)
-        second = self.client.get(self.url, follow_redirects=False)  # 模擬使用者按 F5
-        self.assertEqual(first.status_code, 200)
-        self.assertEqual(second.status_code, 200)
+        first = self.client.post(self.generate_url, json={})
+        second = self.client.post(self.generate_url, json={})  # 模擬使用者重複觸發
+        self.assertEqual(first.status_code, 204)
+        self.assertEqual(second.status_code, 204)
 
-        final = _wait_progress(self.client, self.url)
-        self.assertEqual(final.status_code, 303)
-        self.assertEqual(len(provider.calls), 1, "F5 不得重複扣款：provider 只該被打一次")
+        status = _poll_plan_status(self.client, self.bid, self.cycle_id)
+        self.assertEqual(status["status"], "done")
+        self.assertEqual(len(provider.calls), 1, "重複觸發不得重複扣款：provider 只該被打一次")
 
-    def test_bare_entry_page_does_not_trigger_generation(self):
-        """安全底線：還沒按下去生成前（沒有 run=1）的等待頁本身絕對不能觸發任何呼叫
-        ——否則測試環境裡預設的（非 Fake）provider 有被誤觸發真實 API 呼叫的風險。"""
+    def test_status_polling_alone_does_not_trigger_generation(self):
+        """安全底線：光是輪詢狀態（從沒呼叫過 plan/generate）絕對不能觸發任何呼叫——否則
+        測試環境裡預設的（非 Fake）provider 有被誤觸發真實 API 呼叫的風險。"""
         provider = _SlowProvider(_fake(json.dumps(_GOOD_OPTIONS, ensure_ascii=False)), delay=0.05)
         ads_plan.PROVIDER = provider
-        bare_url = f"/brands/{self.bid}/ads/{self.cycle_id}/plan/progress"
         for _ in range(3):
-            resp = self.client.get(bare_url)
+            resp = self.client.get(f"/api/campaigns/{self.bid}/{self.cycle_id}/plan/status")
             self.assertEqual(resp.status_code, 200)
         self.assertEqual(provider.calls, [])
 
@@ -164,16 +170,16 @@ class TimeoutTest(_BaseProgressTest):
         original_timeout = ads_routes._PROGRESS_TIMEOUT_SECONDS
         ads_routes._PROGRESS_TIMEOUT_SECONDS = 0.05
         try:
-            self.client.get(self.url, follow_redirects=False)  # 觸發背景執行緒開始跑
+            self.client.post(self.generate_url, json={})  # 觸發背景執行緒開始跑
             time.sleep(0.1)  # 超過壓低後的逾時門檻，但還沒到 provider 的 0.3 秒
-            resp = self.client.get(self.url, follow_redirects=False)
+            status = self.client.get(
+                f"/api/campaigns/{self.bid}/{self.cycle_id}/plan/status").json()["data"]
         finally:
             ads_routes._PROGRESS_TIMEOUT_SECONDS = original_timeout
             time.sleep(delay)  # 讓背景那條「已經被放棄」的執行緒把 sleep 跑完，不留尾巴給下一個測試
 
-        self.assertEqual(resp.status_code, 303)
-        self.assertIn("kind=warn", resp.headers["location"])
-        self.assertIn("沒有在時間內回應", unquote(resp.headers["location"]))
+        self.assertEqual(status["status"], "failed")
+        self.assertIn("沒有在時間內回應", status["message"])
 
 
 class ProgressRunResultShapeTest(unittest.TestCase):

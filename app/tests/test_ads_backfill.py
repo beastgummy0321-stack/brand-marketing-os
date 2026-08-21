@@ -23,7 +23,6 @@ import time
 import unittest
 from datetime import date, timedelta
 from pathlib import Path
-from urllib.parse import unquote_plus
 
 _tmpdir = tempfile.mkdtemp(prefix="brand_os_ads_backfill_")
 
@@ -33,6 +32,7 @@ import app.main as main  # noqa: E402
 from app.ads import ga4_api  # noqa: E402
 from app.ads import ga4_sync  # noqa: E402
 from app.ads import meta_api  # noqa: E402
+from app.ads import routes as ads_routes  # noqa: E402
 from app.ads import sync as ads_sync  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
 from app.core import settings as coresettings  # noqa: E402
@@ -53,18 +53,6 @@ ACTOR = "測試員"
 ACCOUNT = "act_1234567890"
 PROPERTY_ID = "123456789"
 FAKE_KEY_JSON = '{"client_email": "svc@example.iam.gserviceaccount.com"}'
-
-
-def _wait_progress(client, url, timeout=5.0):
-    """短輪詢模擬瀏覽器 meta refresh，等到真的轉址（303）或逾時為止
-    （比照 test_ads_progress_background.py 的同名 helper；各測試檔各自獨立啟動，
-    不便跨檔匯入，複製這幾行不算重寫本票禁區）。"""
-    deadline = time.time() + timeout
-    resp = client.get(url, follow_redirects=False)
-    while resp.status_code != 303 and time.time() < deadline:
-        time.sleep(0.02)
-        resp = client.get(url, follow_redirects=False)
-    return resp
 
 
 class MonthMathTest(unittest.TestCase):
@@ -120,6 +108,15 @@ def _insight(cid, **overrides):
 
 
 class _BaseMetaBackfillTest(unittest.TestCase):
+    """T4 大清倉第 2 刀：回填精靈 Jinja 路由（`/brands/{b}/ads/connections/meta/backfill`）
+    已隨 `_render_wait_page`（app/ads/routes_progress.py）一併刪除——已被
+    `/api/campaigns/brands/{brand_id}/backfill/meta`（app/ads/routes_onboarding_api.py，
+    資料上線 React 頁在用）取代。但新端點的完成通知只回「Meta 成效已完成」這種泛用訊息，
+    不像舊路由那樣把「實際拿到幾個月」「發現幾個新活動」組成一句話回傳——這批 rubric 驗證
+    改直呼舊路由本來就是呼叫的兩個業務函式（`ads_sync.backfill_range`／`sync_account`），
+    斷言意義不變（真正做事的邏輯在這兩個函式裡，路由只是把回傳值組句子），不依賴訊息組字。
+    """
+
     def setUp(self):
         self.client = TestClient(main.app)
         main.conn.execute("DELETE FROM discovered_campaign")
@@ -132,7 +129,6 @@ class _BaseMetaBackfillTest(unittest.TestCase):
         self.bid = self.brand["id"]
         coresettings.set_setting(main.conn, ads_sync.ACCOUNT_SETTING, ACCOUNT)
         coresettings.set_setting(main.conn, ads_sync.TOKEN_SETTING, "fake-token")
-        self.url = f"/brands/{self.bid}/ads/connections/meta/backfill"
         self._orig_make_client = ads_sync.make_client
 
     def tearDown(self):
@@ -154,24 +150,28 @@ class _BaseMetaBackfillTest(unittest.TestCase):
 
 class MetaBackfillConfigurationTest(_BaseMetaBackfillTest):
     def test_not_configured_shows_a_plain_warning(self):
+        """原本打 HTTP 等待頁看轉址警告；頁面已刪，直測路由本來就是靠它把關的
+        `ads_sync.is_configured`。"""
         main.conn.execute("DELETE FROM app_setting WHERE key IN (?, ?)",
                           (ads_sync.TOKEN_SETTING, ads_sync.ACCOUNT_SETTING))
         main.conn.commit()
-        resp = self.client.get(self.url, follow_redirects=False)
-        self.assertIn("kind=warn", resp.headers["location"])
-        self.assertIn("還沒設定 Meta", unquote_plus(resp.headers["location"]))
+        self.assertFalse(ads_sync.is_configured(main.conn))
 
-    def test_bare_entry_page_does_not_trigger_any_sync(self):
+    def test_progress_touch_alone_does_not_trigger_any_sync(self):
+        """安全底線：只是「看過」進度狀態（`_progress_touch`，等待頁 run!=1 那個分支
+        唯一會做的事）不能觸發任何呼叫——同一套背景引擎的通用行為，另見
+        test_ads_progress_background.py IdempotencyTest。"""
         fake = self._patch_client(campaigns=[_campaign("1", "某活動")])
+        key = ads_routes._progress_key("meta_backfill", self.bid, "_brand_")
         for _ in range(3):
-            resp = self.client.get(self.url)
-            self.assertEqual(resp.status_code, 200)
+            ads_routes._progress_touch(key, [("run", "回填 Meta 廣告成效中")])
         self.assertEqual(fake.calls, [])
+        ads_routes._progress_clear(key)
 
 
 class MetaBackfillFlowTest(_BaseMetaBackfillTest):
     def test_full_flow_reports_actual_months_and_requests_twelve_month_range(self):
-        """驗收 rubric ②：回填 route 傳 12 個月範圍，假金鑰隔離 DB 下走完流程。
+        """驗收 rubric ②：回填傳 12 個月範圍，假金鑰隔離 DB 下走完流程。
 
         issue #70 根因修正：Meta `/insights` 沒指定 time_increment 時整段時間範圍只回
         一列聚合資料，回填 12 個月會讓資料全部塌成「最後一天所在的那個月」一組。改成
@@ -179,19 +179,17 @@ class MetaBackfillFlowTest(_BaseMetaBackfillTest):
         精準對上請求的 12 個月，段與段之間不重疊、不留縫」。"""
         fake = self._patch_client(campaigns=[_campaign("1", "某活動")])
 
-        resp = _wait_progress(self.client, f"{self.url}?run=1")
-        self.assertEqual(resp.status_code, 303)
-        message = unquote_plus(resp.headers["location"])
-        self.assertIn("實際拿到 12 個月", message)
-        self.assertIn("發現 1 個新的廣告活動", message)
+        since, until, actual_months = ads_sync.backfill_range(12)
+        result = ads_sync.sync_account(main.conn, ACTOR, since=since, until=until)
+
+        self.assertEqual(actual_months, 12)
+        self.assertEqual(result.discovered, 1)
 
         insight_calls = [c for c in fake.calls if c[0] == "insights"]
         self.assertGreater(len(insight_calls), 1)  # 逐月分開打，不是一次整段問完（issue #70）
         for c in insight_calls:
             self.assertEqual(c[1], ACCOUNT)
 
-        until = date.today().isoformat()
-        since = ads_sync.months_before(until, 12)
         windows = [(c[2], c[3]) for c in insight_calls]
         self.assertEqual(windows[0][0], since)   # 第一段從請求的起點開始
         self.assertEqual(windows[-1][1], until)  # 最後一段在請求的終點結束
@@ -203,35 +201,42 @@ class MetaBackfillFlowTest(_BaseMetaBackfillTest):
                              date.fromisoformat(next_since))
 
     def test_shortened_history_is_displayed_honestly(self):
-        """驗收 rubric ③：夾到比 12 個月短時，完成訊息要誠實顯示實際拿到的月數。"""
-        self._patch_client(campaigns=[])
+        """驗收 rubric ③：夾到比 12 個月短時，`backfill_range` 誠實回報實際拿到的月數。"""
         original = ads_sync.META_MAX_HISTORY_MONTHS
         ads_sync.META_MAX_HISTORY_MONTHS = 2
         try:
-            resp = _wait_progress(self.client, f"{self.url}?run=1")
+            _since, _until, actual_months = ads_sync.backfill_range(12)
         finally:
             ads_sync.META_MAX_HISTORY_MONTHS = original
-        message = unquote_plus(resp.headers["location"])
-        self.assertIn("實際拿到 2 個月", message)
-        self.assertNotIn("12 個月", message)
+        self.assertEqual(actual_months, 2)
 
-    def test_f5_refresh_while_running_does_not_call_client_twice(self):
-        """驗收 rubric ④：F5／多分頁重整不會讓背景任務被多打一次。"""
+    def test_repeated_trigger_does_not_call_client_twice(self):
+        """驗收 rubric ④：F5／多分頁重整（同一個 key 重複觸發）不會讓背景任務被多打一次
+        ——直測進度引擎本身的冪等閘，接上真正的 sync_account 當 work，不只是通用假函式
+        （通用機制另見 test_ads_progress_background.py ProgressRunResultShapeTest）。"""
         fake = self._patch_client(campaigns=[_campaign("1", "某活動")], delay=0.2)
-        url = f"{self.url}?run=1"
+        key = ads_routes._progress_key("meta_backfill", self.bid, "_test_")
 
-        first = self.client.get(url, follow_redirects=False)
-        second = self.client.get(url, follow_redirects=False)  # 模擬使用者按 F5
-        self.assertEqual(first.status_code, 200)
-        self.assertEqual(second.status_code, 200)
+        def work(on_stage):
+            since, until, _months = ads_sync.backfill_range(12)
+            return ads_sync.sync_account(main.conn, ACTOR, since=since, until=until)
 
-        final = _wait_progress(self.client, url)
-        self.assertEqual(final.status_code, 303)
+        ads_routes._progress_start(key, [("run", "回填 Meta 廣告成效中")], work)
+        ads_routes._progress_start(key, [("run", "回填 Meta 廣告成效中")], work)  # 模擬 F5
+
+        deadline = time.time() + 5
+        while (ads_routes._progress_state.get(key, {}).get("status") != "done"
+               and time.time() < deadline):
+            time.sleep(0.02)
+
         campaign_calls = [c for c in fake.calls if c[0] == "campaigns"]
         self.assertEqual(len(campaign_calls), 1, "F5 不得重複觸發：list_campaigns 只該被打一次")
+        ads_routes._progress_clear(key)
 
 
 class GA4BackfillConfigurationTest(unittest.TestCase):
+    """同 _BaseMetaBackfillTest 檔頭說明：GA4 回填精靈 Jinja 路由已刪，改直測業務層。"""
+
     def setUp(self):
         self.client = TestClient(main.app)
         main.conn.execute("DELETE FROM ga4_summary")
@@ -241,7 +246,6 @@ class GA4BackfillConfigurationTest(unittest.TestCase):
             main.conn, name=f"虛構回填晨光咖啡GA{abs(hash(self.id())) % 10000}",
             client_name=None, actor=ACTOR)
         self.bid = self.brand["id"]
-        self.url = f"/brands/{self.bid}/ads/connections/ga4/backfill"
         self._orig_make_client = ga4_sync.make_client
 
     def tearDown(self):
@@ -251,19 +255,18 @@ class GA4BackfillConfigurationTest(unittest.TestCase):
         main.conn.execute("DELETE FROM app_setting WHERE key IN (?, ?)",
                           (ga4_sync.PROPERTY_SETTING, ga4_sync.SERVICE_ACCOUNT_SETTING))
         main.conn.commit()
-        resp = self.client.get(self.url, follow_redirects=False)
-        self.assertIn("kind=warn", resp.headers["location"])
-        self.assertIn("還沒設定 GA4", unquote_plus(resp.headers["location"]))
+        self.assertFalse(ga4_sync.is_configured(main.conn))
 
-    def test_bare_entry_page_does_not_trigger_any_sync(self):
+    def test_progress_touch_alone_does_not_trigger_any_sync(self):
         coresettings.set_setting(main.conn, ga4_sync.PROPERTY_SETTING, PROPERTY_ID)
         coresettings.set_setting(main.conn, ga4_sync.SERVICE_ACCOUNT_SETTING, FAKE_KEY_JSON)
         fake = ga4_api.FakeGA4Client(rows=[])
         ga4_sync.make_client = lambda conn: fake
+        key = ads_routes._progress_key("ga4_backfill", self.bid, "_brand_")
         for _ in range(3):
-            resp = self.client.get(self.url)
-            self.assertEqual(resp.status_code, 200)
+            ads_routes._progress_touch(key, [("connect", "連線 GA4 服務帳戶")])
         self.assertEqual(fake.calls, [])
+        ads_routes._progress_clear(key)
 
 
 class GA4BackfillFlowTest(unittest.TestCase):
@@ -278,7 +281,6 @@ class GA4BackfillFlowTest(unittest.TestCase):
         self.bid = self.brand["id"]
         coresettings.set_setting(main.conn, ga4_sync.PROPERTY_SETTING, PROPERTY_ID)
         coresettings.set_setting(main.conn, ga4_sync.SERVICE_ACCOUNT_SETTING, FAKE_KEY_JSON)
-        self.url = f"/brands/{self.bid}/ads/connections/ga4/backfill"
         self._orig_make_client = ga4_sync.make_client
 
     def tearDown(self):
@@ -298,38 +300,48 @@ class GA4BackfillFlowTest(unittest.TestCase):
         return fake
 
     def test_full_flow_reports_requested_months_and_requests_twelve_month_range(self):
-        """驗收 rubric ②：GA4 回填 route 傳 12 個月範圍，假金鑰隔離 DB 下走完流程。"""
+        """驗收 rubric ②：GA4 回填傳 12 個月範圍，假金鑰隔離 DB 下走完流程。"""
         row = ga4_api.SourceMediumRow(source="google", medium="cpc", sessions=100,
                                       conversions=5.0, revenue=8000.0)
         fake = self._patch_client(rows=[row], purchase_seen=True)
 
-        resp = _wait_progress(self.client, f"{self.url}?run=1")
-        self.assertEqual(resp.status_code, 303)
-        message = unquote_plus(resp.headers["location"])
-        self.assertIn("實際回填 12 個月", message)
-        self.assertIn("抓回 1 列來源／媒介資料", message)
+        until = date.today().isoformat()
+        since = ads_sync.months_before(until, 12)
+        result = ga4_sync.sync_brand(main.conn, self.bid, ACTOR, since=since, until=until)
+
+        self.assertIsNone(result.error)
+        self.assertEqual(result.rows, 1)
 
         source_medium_calls = [c for c in fake.calls if c[0] == "source_medium"]
         self.assertEqual(len(source_medium_calls), 1)
-        _, since, until = source_medium_calls[0]
-        self.assertEqual(until, date.today().isoformat())
-        self.assertEqual(since, ads_sync.months_before(until, 12))
+        _, call_since, call_until = source_medium_calls[0]
+        self.assertEqual(call_until, until)
+        self.assertEqual(call_since, since)
 
-    def test_f5_refresh_while_running_does_not_call_client_twice(self):
-        """驗收 rubric ④：F5／多分頁重整不會讓背景任務被多打一次。"""
+    def test_repeated_trigger_does_not_call_client_twice(self):
+        """驗收 rubric ④：F5／多分頁重整（同一個 key 重複觸發）不會讓背景任務被多打一次。"""
         fake = self._patch_client(rows=[], delay=0.2)
-        url = f"{self.url}?run=1"
+        key = ads_routes._progress_key("ga4_backfill", self.bid, "_test_")
 
-        first = self.client.get(url, follow_redirects=False)
-        second = self.client.get(url, follow_redirects=False)  # 模擬使用者按 F5
-        self.assertEqual(first.status_code, 200)
-        self.assertEqual(second.status_code, 200)
+        def work(on_stage):
+            until = date.today().isoformat()
+            since = ads_sync.months_before(until, 12)
+            return ga4_sync.sync_brand(main.conn, self.bid, ACTOR, since=since, until=until)
 
-        final = _wait_progress(self.client, url)
-        self.assertEqual(final.status_code, 303)
+        stages = [("connect", "連線 GA4 服務帳戶"), ("fetch", "抓取來源／媒介成效與 purchase 事件"),
+                  ("save", "寫入彙總表")]
+        ads_routes._progress_start(key, stages, work)
+        ads_routes._progress_start(key, stages, work)  # 模擬 F5
+
+        deadline = time.time() + 5
+        while (ads_routes._progress_state.get(key, {}).get("status") != "done"
+               and time.time() < deadline):
+            time.sleep(0.02)
+
         source_medium_calls = [c for c in fake.calls if c[0] == "source_medium"]
         self.assertEqual(len(source_medium_calls), 1,
                          "F5 不得重複觸發：fetch_source_medium 只該被打一次")
+        ads_routes._progress_clear(key)
 
 
 class DailySyncUnaffectedTest(unittest.TestCase):

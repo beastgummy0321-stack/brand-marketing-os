@@ -106,7 +106,10 @@ def _rule_reading_unread(facts: dict) -> Optional[dict]:
         return None
     return {
         "title": "本期判讀結果已出爐，還沒看",
-        "action_url": f"/brands/{facts['brand_id']}/ads/{cycle['id']}/performance",
+        # T4 大清倉第 2 刀刪掉舊版 Jinja 成效頁，判讀結論現在顯示在新殼作戰室的成效步驟
+        # （frontend/src/components/warroom/steps/PerformanceStep.tsx），導去同一個
+        # 檔期頁面即可（跟 _rule_cycle_stage 同一個目的地）。
+        "action_url": f"/app/brands/{facts['brand_id']}/campaigns/{cycle['id']}",
     }
 
 
@@ -117,7 +120,8 @@ def _rule_next_cycle_draft(facts: dict) -> Optional[dict]:
         return None
     return {
         "title": "下期草案已備好，等你確認",
-        "action_url": f"/brands/{facts['brand_id']}/ads/{cycle['id']}/performance",
+        # 同上：舊版 Jinja 成效頁已刪，導去新殼作戰室的同一個檔期頁面。
+        "action_url": f"/app/brands/{facts['brand_id']}/campaigns/{cycle['id']}",
     }
 
 

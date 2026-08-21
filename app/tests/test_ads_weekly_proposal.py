@@ -6,7 +6,6 @@ import json
 import os
 import shutil
 import tempfile
-import time
 import unittest
 from datetime import date, timedelta
 from pathlib import Path
@@ -40,15 +39,6 @@ def _cleanup():
 atexit.register(_cleanup)
 ACTOR = "測試員"
 TODAY = date(2026, 8, 14)
-
-
-def _wait_progress(client, url, timeout=5.0):
-    deadline = time.time() + timeout
-    response = client.get(url, follow_redirects=False)
-    while response.status_code != 303 and time.time() < deadline:
-        time.sleep(0.02)
-        response = client.get(url, follow_redirects=False)
-    return response
 
 
 class WeeklyProposalSelectionTest(unittest.TestCase):
@@ -245,17 +235,19 @@ class WeeklyProposalPersistenceTest(unittest.TestCase):
         self.assertEqual(row["status"], "APPLIED")
 
     def test_manual_route_rerun_preserves_accepted_and_applied_weekly_proposals(self):
+        """原本打 HTTP 判讀等待頁路由 `/reading/progress?run=1`；那條路由（連同它借用的
+        等待頁機制）已隨 T4 大清倉刪除——判讀本來就沒有分階段可回報，路由唯一做的事就是
+        呼叫 `reading.run()`，見已刪除的 routes_performance.py 檔頭說明。改直測業務層，
+        斷言意義不變：重判不會讓已核可／已套用的週提案卡跑掉。"""
         observed = []
         for status in ("ACCEPTED", "APPLIED"):
             cycle_id, card_id = self._approved_real_card(status)
-            response = _wait_progress(
-                self.client,
-                f"/brands/{self.brand_id}/ads/{cycle_id}/reading/progress?run=1")
+            ok, err = reading.run(main.conn, self.brand_id, cycle_id, ACTOR)
             row = main.conn.execute(
                 "SELECT status FROM recommendation WHERE id = ?", (card_id,)).fetchone()
-            observed.append((response.status_code, row["status"] if row else None))
+            observed.append(((ok, err), row["status"] if row else None))
 
-        self.assertEqual(observed, [(303, "ACCEPTED"), (303, "APPLIED")])
+        self.assertEqual(observed, [((True, None), "ACCEPTED"), ((True, None), "APPLIED")])
 
     def test_generate_skips_approved_duplicate_and_keeps_unrelated_new_signal(self):
         cycle_id = self._cycle_with_readings(["pause_candidate", "scale_candidate"])

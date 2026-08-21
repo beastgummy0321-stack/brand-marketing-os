@@ -20,12 +20,15 @@ TemplateResponse handler（連同只服務這些舊頁表單的 POST handler）�
 各主題檔開頭都有自己負責哪些頁（或 /api 端點）的清單：
 
 - routes_common.py       共用小工具：麵包屑、檔期讀取、五格進度軌等各檔都要用的函式
-- routes_progress.py     背景進度引擎＋等待頁共用渲染
-- routes_sync.py         Meta／GA4 回填精靈（首頁、歷期戰績、待認領、日常同步已隨 T4 刪除）
-- routes_plan.py         打法生成進度頁（開新檔期、檔期內頁等舊頁已隨 T4 刪除）
+- routes_progress.py     背景進度引擎（等待頁共用渲染 `_render_wait_page` 已隨大清倉
+                          第 2 刀刪除，改走各自的 /api 端點）
+- routes_sync.py         空殼（Meta／GA4 回填精靈已隨大清倉第 2 刀刪除，改走
+                          routes_onboarding_api.py 的 /api 端點）
+- routes_plan.py         空殼（打法生成進度頁已隨大清倉第 2 刀刪除，改走
+                          routes_campaigns_open_api.py 的 plan/generate＋plan/status）
 - routes_creative.py     `_CREATIVE_STAGES`（供測試 import；生成流程已隨 T4 刪除，改走
                           routes_creative_theme.py／routes_workbench.py 的新殼機制）
-- routes_performance.py  成效頁（CSV／手動匯入仍被測試直打舊頁）、判讀進度頁
+- routes_performance.py  空殼（成效頁、CSV／手動匯入、判讀進度頁已隨大清倉第 2 刀刪除）
 - routes_settings.py     設定中心「廣告層面」規則卡／節日提醒 /api 端點（Jinja 舊頁已刪）
 
 `orders_channel`／`orders_dispatch`／`orders_repo`：第 7 刀（A1 三層地界新規則：
@@ -42,7 +45,7 @@ from fastapi import APIRouter
 from app.ads.routes_progress import (  # noqa: F401 — 原樣接回去給 `ads_routes.` 這套慣例用
     _progress_state, _progress_lock, _USUAL_RANGE, _PROGRESS_TIMEOUT_SECONDS,
     _progress_key, _progress_touch, _progress_start, _progress_run,
-    _progress_set_stage, _progress_clear, _progress_definition_rows, _render_wait_page,
+    _progress_set_stage, _progress_clear, _progress_definition_rows,
 )
 
 # 第 7 刀（A1 三層地界新規則：app/ads 不得 import app.orders，見
@@ -55,11 +58,9 @@ orders_repo = None
 
 router = APIRouter()
 
-# T4 廣告模組 Jinja 大清倉：Meta／GA4 回填精靈（背景進度）留在 routes_sync.py，其餘
-# 首頁／歷期戰績／待認領／日常同步／提醒收起舊頁與表單一併刪除。掛的位置沿用既有相對
-# 順序——ads_cycle（下面 `GET /brands/{brand_id}/ads/{cycle_id}` 萬用路由，在
-# routes_plan.py）要在這批之後掛，不然 "connections" 這個固定字會被萬用路由當成
-# cycle_id 吃掉。
+# T4 廣告模組 Jinja 大清倉第 2 刀：routes_sync.py 僅剩的 Meta／GA4 回填精靈也已刪除
+# （改走 routes_onboarding_api.py 的 /api 端點），router 空殼，include_router 保留純為
+# import 路徑不必改（比照 routes_creative.py 的先例）。
 from app.ads import routes_sync  # noqa: E402
 router.include_router(routes_sync.router)
 
@@ -67,9 +68,8 @@ router.include_router(routes_sync.router)
 # 與 routes_interview.py（前朝教訓訪談、累積智慧、規則卡決定）全部路由都已被 /api 等價
 # 端點取代，整檔清空後隨這一刀一併刪除，這裡不再 include_router。
 
-# 打法生成進度頁留在 routes_plan.py（`ads_plan_progress`，test_ads_progress_background.py
-# 直打），開新檔期／封存／刪除／檔期內頁等舊頁與表單一併刪除。掛在這裡（sync 之後）——
-# routes_plan.router 裡的萬用路由要在其他分支的固定字路徑之後才不會誤吃。
+# T4 第 2 刀：routes_plan.py 僅剩的打法生成進度頁 `ads_plan_progress` 也已刪除（改走
+# routes_campaigns_open_api.py 的 plan/generate＋plan/status），router 空殼。
 from app.ads import routes_plan  # noqa: E402
 router.include_router(routes_plan.router)
 
@@ -77,9 +77,9 @@ router.include_router(routes_plan.router)
 # routes_creative.py 只剩 `_CREATIVE_STAGES`（test_ads_creative.py 直接 import）留著，
 # 路由清空（router 沒有任何路徑），純為保留這個 import 路徑，不刪檔。交接包／期別配碼／
 # 投放授權／投放前檢查清單（routes_handoff.py）全部路由都已被 /api 等價端點取代，整檔
-# 清空後隨這一刀一併刪除，不再 include_router。成效頁（CSV／手動匯入仍被測試直打舊頁）、
-# 判讀進度頁留在 routes_performance.py，對帳／營收校準／蝦皮碼／模擬成效／期中檢查點等
-# 舊頁與表單一併刪除。
+# 清空後隨這一刀一併刪除，不再 include_router。T4 第 2 刀：routes_performance.py 僅剩的
+# 成效頁、CSV／手動匯入、判讀進度頁也已刪除（改直測 app/ads/performance.py／reading.py
+# 業務函式或 /api/campaigns/.../performance 端點），router 空殼。
 from app.ads import routes_creative  # noqa: E402
 from app.ads import routes_performance  # noqa: E402
 router.include_router(routes_creative.router)

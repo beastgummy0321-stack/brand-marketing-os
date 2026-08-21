@@ -218,9 +218,6 @@ class _BaseImportTest(unittest.TestCase):
                                 json={"product_ids": [], "budget": 10000, "objective": "sales"})
         self.cycle_id = resp.json()["cycle_id"]
 
-    def _url(self, suffix=""):
-        return f"/brands/{self.bid}/ads/{self.cycle_id}/performance{suffix}"
-
 
 class CsvImportTest(_BaseImportTest):
     def test_import_lands_in_the_shared_normalised_columns(self):
@@ -248,26 +245,26 @@ class CsvImportTest(_BaseImportTest):
         row = perf.list_snapshots(main.conn, self.bid, self.cycle_id)[0]
         self.assertIsNone(row["reach"])  # 沒收到跟收到 0 是兩件事（鐵則 16）
 
-    def test_upload_via_page(self):
-        resp = self.client.post(
-            self._url("/csv"),
-            files={"csv_file": ("export.csv", _CSV_ZH.encode("utf-8"), "text/csv")},
-            follow_redirects=False)
-        self.assertEqual(resp.status_code, 303)
-        self.assertNotIn("kind=warn", resp.headers["location"])
+    def test_import_succeeds_without_errors(self):
+        """原本打「上傳頁」POST /csv；那頁與這條路由已隨 T4 大清倉刪除（改直測業務層
+        `perf.import_csv`），斷言意義不變：成功匯入不出錯，落地一筆快照。"""
+        result = perf.import_csv(main.conn, self.bid, self.cycle_id, _CSV_ZH, actor=ACTOR)
+        self.assertEqual(result.errors, [])
         self.assertEqual(len(perf.list_snapshots(main.conn, self.bid, self.cycle_id)), 1)
 
-    def test_utf8_bom_file_from_excel(self):
-        resp = self.client.post(
-            self._url("/csv"),
-            files={"csv_file": ("export.csv", _CSV_ZH.encode("utf-8-sig"), "text/csv")},
-            follow_redirects=False)
-        self.assertNotIn("kind=warn", resp.headers["location"])
+    def test_bom_prefixed_csv_imports_without_errors(self):
+        """原本測「Excel 匯出的 UTF-8 BOM 檔案上傳」；上傳頁已刪，改直測完整匯入流程
+        （parse_csv 本身的 BOM 處理已有 CsvParsingTest.test_bom_does_not_break_first_column
+        覆蓋，這條額外驗證 BOM 前綴的文字一路匯入落地也不出錯）。"""
+        result = perf.import_csv(main.conn, self.bid, self.cycle_id, "﻿" + _CSV_ZH,
+                                 actor=ACTOR)
+        self.assertEqual(result.errors, [])
+        self.assertEqual(len(perf.list_snapshots(main.conn, self.bid, self.cycle_id)), 1)
 
     def test_bad_file_gives_plain_message_and_imports_nothing(self):
-        resp = self.client.post(self._url("/csv"), data={"csv_text": "這不是 CSV"},
-                                follow_redirects=False)
-        self.assertIn("kind=warn", resp.headers["location"])
+        """原本打 HTTP 表單看轉址 kind=warn；表單已刪，改直測業務層回傳的錯誤訊息。"""
+        result = perf.import_csv(main.conn, self.bid, self.cycle_id, "這不是 CSV", actor=ACTOR)
+        self.assertTrue(result.errors)
         self.assertEqual(perf.list_snapshots(main.conn, self.bid, self.cycle_id), [])
 
     def test_snapshots_accumulate_never_overwrite(self):
@@ -276,12 +273,15 @@ class CsvImportTest(_BaseImportTest):
         self.assertEqual(len(perf.list_snapshots(main.conn, self.bid, self.cycle_id)), 2)
 
     def test_csv_upload_without_date_columns_uses_today_not_blank(self):
-        """匯入時 CSV 沒有日期欄，退回今天的日期，而不是空字串（issue #23 bug 4）。"""
+        """匯入時 CSV 沒有日期欄，退回今天的日期，而不是空字串（issue #23 bug 4）。
+        原本打 HTTP 上傳表單（route 本身就是原樣呼叫 perf.import_csv 並帶入
+        today=date.today()，見已刪除的 ads_performance_csv）；表單已刪，改直測業務層，
+        照樣帶入 today 參數，斷言意義不變。"""
         from datetime import date
         csv_text = "行銷活動名稱,花費金額\n測試,1000\n"
-        resp = self.client.post(self._url("/csv"), data={"csv_text": csv_text},
-                                follow_redirects=False)
-        self.assertNotIn("kind=warn", resp.headers["location"])
+        result = perf.import_csv(main.conn, self.bid, self.cycle_id, csv_text, actor=ACTOR,
+                                 today=date.today().isoformat())
+        self.assertEqual(result.errors, [])
         row = perf.list_snapshots(main.conn, self.bid, self.cycle_id)[0]
         self.assertEqual(row["date_range_start"], date.today().isoformat())
 
@@ -359,21 +359,31 @@ class SanityGateTest(_BaseImportTest):
         result = perf.import_csv(main.conn, self.bid, self.cycle_id, csv_text, actor=ACTOR)
         self.assertEqual(result.quarantined, 1)
 
-    def test_page_says_how_many_were_set_aside(self):
-        csv_text = ("行銷活動名稱,曝光次數,連結點擊次數,花費金額\n" "測試,100,500,1000\n")
-        self.client.post(self._url("/csv"), data={"csv_text": csv_text},
-                         follow_redirects=False)
-        page = self.client.get(self._url())
-        self.assertIn("擱在一旁", page.text)
+    def test_api_reports_how_many_were_set_aside(self):
+        """原本打 HTTP 舊頁斷言 page.text 含「擱在一旁」；那頁已刪，改打取代它的 React
+        資料來源 `/api/campaigns/.../performance`——`discarded_rows` 就是同一個數字
+        （前端 PerformanceStep.tsx 用它顯示「已被系統擱置不列入計算」，措辭不同但意義
+        相同：使用者看得到有幾筆被擱置）。搭一筆正常列，讓 summary 不因為全數被擱置而
+        整包回 null（那是另一種「資料不足」空狀態，不是本測試要驗的東西）。"""
+        csv_text = ("行銷活動名稱,曝光次數,連結點擊次數,花費金額\n"
+                   "正常,1000,50,500\n異常,100,500,1000\n")
+        perf.import_csv(main.conn, self.bid, self.cycle_id, csv_text, actor=ACTOR)
+        resp = self.client.get(f"/api/campaigns/{self.bid}/{self.cycle_id}/performance")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["data"]["summary"]["discarded_rows"], 1)
 
 
 class ManualEntryTest(_BaseImportTest):
+    """原本每個測試都打 HTTP 表單 POST /manual；那條路由（連同成效頁）已隨 T4 大清倉
+    刪除（React 沒有手動填寫入口，見 PerformanceStep.tsx 檔頭註解），改直測業務層
+    `perf.import_manual`（表單路由本來就只是原樣轉呼叫這個函式），斷言意義不變。"""
+
     def test_manual_entry_shares_the_same_format(self):
-        resp = self.client.post(self._url("/manual"),
-                                data={"spend": "3000", "clicks": "120", "impressions": "9000",
-                                      "conversions": "4", "revenue": "7200"},
-                                follow_redirects=False)
-        self.assertEqual(resp.status_code, 303)
+        result = perf.import_manual(
+            main.conn, self.bid, self.cycle_id,
+            {"spend": 3000, "clicks": 120, "impressions": 9000, "conversions": 4,
+             "revenue": 7200}, actor=ACTOR)
+        self.assertEqual(result.errors, [])
         row = perf.list_snapshots(main.conn, self.bid, self.cycle_id)[0]
         self.assertEqual(row["source"], "manual")
         self.assertEqual(row["spend"], 3000)
@@ -381,30 +391,36 @@ class ManualEntryTest(_BaseImportTest):
         self.assertEqual(summary["kpis"]["roas"], 2.4)
 
     def test_manual_entry_accepts_reach(self):
-        resp = self.client.post(self._url("/manual"),
-                                data={"spend": "3000", "impressions": "9000", "reach": "6500"},
-                                follow_redirects=False)
-        self.assertEqual(resp.status_code, 303)
+        result = perf.import_manual(
+            main.conn, self.bid, self.cycle_id,
+            {"spend": 3000, "impressions": 9000, "reach": 6500}, actor=ACTOR)
+        self.assertEqual(result.errors, [])
         row = perf.list_snapshots(main.conn, self.bid, self.cycle_id)[0]
         self.assertEqual(row["reach"], 6500)
         self.assertEqual(row["impressions"], 9000)
 
     def test_spend_is_required(self):
-        resp = self.client.post(self._url("/manual"), data={"clicks": "10"},
-                                follow_redirects=False)
-        self.assertIn("kind=warn", resp.headers["location"])
+        result = perf.import_manual(main.conn, self.bid, self.cycle_id,
+                                    {"clicks": 10}, actor=ACTOR)
+        self.assertTrue(result.errors)
         self.assertEqual(perf.list_snapshots(main.conn, self.bid, self.cycle_id), [])
 
     def test_non_numeric_input_is_refused_politely(self):
-        resp = self.client.post(self._url("/manual"), data={"spend": "五千"},
-                                follow_redirects=False)
-        self.assertIn("kind=warn", resp.headers["location"])
+        """原本打 HTTP 表單驗證非數字輸入；那條表單路由已刪，真正做這件事的驗證函式是
+        `main_mod.parse_number`（表單提交前呼叫，仍在用——見 app/orders/routes_api.py
+        等其他 /api 端點），直測它政策不變：非數字輸入回報 ok=False。"""
+        value, ok = main.parse_number("五千")
+        self.assertFalse(ok)
+        self.assertIsNone(value)
 
     def test_derived_metrics_are_stored_for_traceability(self):
-        self.client.post(self._url("/manual"),
-                         data={"spend": "3000", "clicks": "120", "impressions": "9000",
-                               "conversions": "4", "revenue": "7200"},
-                         follow_redirects=False)
+        """表單路由做兩件事：import_manual 落地快照，再呼叫 save_derived_metrics 存
+        derived_metric——直測業務層要照樣做這兩步，才是同一件事的重寫而不是少測一半。"""
+        perf.import_manual(
+            main.conn, self.bid, self.cycle_id,
+            {"spend": 3000, "clicks": 120, "impressions": 9000, "conversions": 4,
+             "revenue": 7200}, actor=ACTOR)
+        perf.save_derived_metrics(main.conn, self.bid, self.cycle_id)
         rows = main.conn.execute(
             "SELECT metric, value FROM derived_metric WHERE campaign_cycle_id = ?",
             (self.cycle_id,)).fetchall()
@@ -412,11 +428,17 @@ class ManualEntryTest(_BaseImportTest):
         self.assertEqual(metrics["roas"], 2.4)
         self.assertEqual(metrics["cpa"], 750.0)
 
-    def test_page_says_data_is_insufficient_rather_than_showing_zero(self):
-        self.client.post(self._url("/manual"), data={"spend": "3000"},
-                         follow_redirects=False)
-        page = self.client.get(self._url())
-        self.assertIn("資料不足", page.text)
+    def test_api_reports_insufficient_kpis_as_none_rather_than_zero(self):
+        """原本打 HTTP 舊頁斷言 page.text 含「資料不足」；那頁已刪，改打取代它的 React
+        資料來源 `/api/campaigns/.../performance`——`kpis.*` 算不出來時回 None，前端
+        PerformanceStep.tsx 的 `value ?? "資料不足"` 正是靠這個 None 才顯示「資料不足」
+        而不是 0，斷言意義不變。"""
+        perf.import_manual(main.conn, self.bid, self.cycle_id, {"spend": 3000}, actor=ACTOR)
+        resp = self.client.get(f"/api/campaigns/{self.bid}/{self.cycle_id}/performance")
+        kpis = resp.json()["data"]["summary"]["kpis"]
+        self.assertIsNone(kpis["ctr"])
+        self.assertIsNone(kpis["cpa"])
+        self.assertIsNone(kpis["roas"])
 
 
 class AssetAttributionTest(_BaseImportTest):

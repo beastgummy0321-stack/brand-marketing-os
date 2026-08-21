@@ -130,7 +130,7 @@ class OverviewNextStepWiringTest(unittest.TestCase):
         self.assertIsNotNone(card["next_step"])
         self.assertIn("判讀", card["next_step"]["title"])
         self.assertEqual(card["next_step"]["action_url"],
-                         f"/brands/{brand['id']}/ads/{cycle_id}/performance")
+                         f"/app/brands/{brand['id']}/campaigns/{cycle_id}")
 
     def test_next_cycle_draft_ready_surfaces_once_reading_is_used(self):
         brand = bi_repo.create_brand(
@@ -146,7 +146,7 @@ class OverviewNextStepWiringTest(unittest.TestCase):
         self.assertIsNotNone(card["next_step"])
         self.assertIn("下期草案", card["next_step"]["title"])
         self.assertEqual(card["next_step"]["action_url"],
-                         f"/brands/{brand['id']}/ads/{cycle_id}/performance")
+                         f"/app/brands/{brand['id']}/campaigns/{cycle_id}")
 
 
 class CockpitGuideCardsWiringTest(unittest.TestCase):

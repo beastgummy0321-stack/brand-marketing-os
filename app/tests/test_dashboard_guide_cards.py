@@ -82,7 +82,7 @@ class ReadingUnreadRuleTest(unittest.TestCase):
         card = guide_cards.RULES["reading_unread"](facts)
         self.assertIsNotNone(card)
         self.assertIn("action_url", card)
-        self.assertEqual(card["action_url"], f"/brands/{BRAND_ID}/ads/ccy_1/performance")
+        self.assertEqual(card["action_url"], f"/app/brands/{BRAND_ID}/campaigns/ccy_1")
 
     def test_does_not_trigger_when_reading_not_ready(self):
         facts = _facts(active_cycle={"id": "ccy_1", "stage_label": None}, reading_ready=False)
@@ -105,7 +105,7 @@ class NextCycleDraftRuleTest(unittest.TestCase):
                        next_cycle_draft_ready=True)
         card = guide_cards.RULES["next_cycle_draft"](facts)
         self.assertIsNotNone(card)
-        self.assertEqual(card["action_url"], f"/brands/{BRAND_ID}/ads/ccy_1/performance")
+        self.assertEqual(card["action_url"], f"/app/brands/{BRAND_ID}/campaigns/ccy_1")
 
     def test_does_not_trigger_when_draft_not_ready(self):
         facts = _facts(active_cycle={"id": "ccy_1", "stage_label": None},
