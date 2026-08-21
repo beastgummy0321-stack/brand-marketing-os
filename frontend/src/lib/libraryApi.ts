@@ -1,13 +1,16 @@
-/** 品牌智庫 API 型別與呼叫（票 B2-library，契約 `.scratch/grill/GRILL-B2-library.md`）。
- * 型別逐字對照契約「假資料形狀（TypeScript）」一節——那份形狀是照後端既有函式回傳欄位
- * 蒸餾出來的，不是本票自創。信封格式沿用既有慣例 {data, generated_at}，見 lib/api.ts
- * `Envelope<T>`。六個分頁既有寫入動作沿用舊版 Jinja 表單 POST 端點（FormData），拿到
- * res.ok 後由呼叫端重新打 fetchLibrary 刷新整包——契約「不用新增」節，比照 B1
- * resolveAlert() 的做法。
+/** Library API types and calls (ticket B2-library, contract `.scratch/grill/GRILL-B2-library.md`).
+ * Types are copied verbatim from the contract's "mock data shape (TypeScript)" section — that
+ * shape was distilled from the existing backend functions' return fields, not invented here.
+ * Envelope format follows the existing convention {data, generated_at}, see lib/api.ts
+ * `Envelope<T>`. All write actions now call the `/api/library/...` JSON endpoints in
+ * `app/brand_web/routes_library_write.py` (and `routes_library.py` for delete-brand /
+ * assets / customer-voice) — same style as B1 resolveAlert(): fetch JSON, check res.ok,
+ * caller re-fetches fetchLibrary to refresh the whole payload afterwards.
  *
- * 固定選項清單照抄 `app/mock_data.py:20-156`（查證日 2026-08-11），不自創外部形狀——
- * 沿用 `workbenchApi.ts` REJECT_REASONS 同一個模式：後端常數表沒有列舉端點，前端側板
- * 表單的下拉選項就近抄一份放在對應 API 檔，是「從沒變過的值」（code-rules 第二節）。 */
+ * Fixed option lists are copied from `app/mock_data.py:20-156` (verified 2026-08-11), not an
+ * invented external shape — same pattern as `workbenchApi.ts` REJECT_REASONS: the backend
+ * constant table has no enumeration endpoint, so the frontend side-panel dropdown options are
+ * copied here next to the matching API calls as "values that never change" (code-rules §2). */
 
 export interface LibraryBrandFact {
   id: string;
@@ -220,28 +223,13 @@ export async function fetchLibrary(brandId: string): Promise<LibraryData> {
   return body.data;
 }
 
-/** 六分頁既有寫入端點一律沿用舊版表單路徑（FormData），只認 res.ok，不解析回應內容
- * （契約「不用新增」節）。呼叫端送出成功後自行重打 fetchLibrary 刷新整包。 */
-async function postForm(path: string, fields: Record<string, string>): Promise<void> {
-  const body = new FormData();
-  for (const [key, value] of Object.entries(fields)) body.append(key, value);
-  const res = await fetch(path, { method: "POST", body });
-  if (!res.ok) {
-    throw new Error(`儲存失敗（狀態碼 ${res.status}）`);
-  }
-}
-
-async function postEmpty(path: string): Promise<void> {
-  const res = await fetch(path, { method: "POST" });
-  if (!res.ok) {
-    throw new Error(`儲存失敗（狀態碼 ${res.status}）`);
-  }
-}
-
-/** 刪品牌是本檔唯一走真正 `/api` JSON 端點的寫入動作（`routes_library.py`
- * `brand_delete_api()`），錯誤訊息從回應體的 `error` 欄位取，跟 `campaignsApi.ts`
- * `postJson()` 同一套慣例。 */
-async function postJson<T>(path: string, body: unknown): Promise<T> {
+/** Shared JSON POST helper for every write endpoint in this file. Error message is pulled
+ * from whichever shape the backend used: `{error}` (single message, e.g. brand_delete_api),
+ * `{errors}` (per-field validation dict, e.g. routes_library_write.py), or `{detail}`
+ * (StarletteHTTPException / NotFoundKind's 404 JSON shape) — same convention as
+ * `campaignsApi.ts` postJson(). `body` defaults to `{}` for delete/confirm-style calls that
+ * carry no fields. */
+async function postJson<T>(path: string, body: unknown = {}): Promise<T> {
   const res = await fetch(path, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -250,10 +238,12 @@ async function postJson<T>(path: string, body: unknown): Promise<T> {
   if (!res.ok) {
     let message = `處理失敗（狀態碼 ${res.status}）`;
     try {
-      const data = (await res.json()) as { error?: string };
+      const data = (await res.json()) as { error?: string; errors?: Record<string, string>; detail?: string };
       if (data.error) message = data.error;
+      else if (data.errors) message = Object.values(data.errors).join("；");
+      else if (data.detail) message = data.detail;
     } catch {
-      // 回應不是 JSON，用預設訊息。
+      // Response body isn't JSON, use the default message.
     }
     throw new Error(message);
   }
@@ -262,71 +252,81 @@ async function postJson<T>(path: string, body: unknown): Promise<T> {
 
 // ---- 品牌事實 ----
 
-export function createFact(
+export async function createFact(
   brandId: string,
   fields: { fact_type: string; label: string; value: string; status: string; source_reference: string },
 ): Promise<void> {
-  return postForm(`/brands/${encodeURIComponent(brandId)}/facts/new`, fields);
+  await postJson(`/api/library/brands/${encodeURIComponent(brandId)}/facts`, fields);
 }
 
-export function updateFact(
+export async function updateFact(
   brandId: string,
   factId: string,
   fields: { fact_type: string; label: string; value: string; source_reference: string },
 ): Promise<void> {
-  return postForm(`/brands/${encodeURIComponent(brandId)}/facts/${encodeURIComponent(factId)}/edit`, fields);
+  await postJson(
+    `/api/library/brands/${encodeURIComponent(brandId)}/facts/${encodeURIComponent(factId)}/edit`,
+    fields,
+  );
 }
 
-export function confirmFact(brandId: string, factId: string, confirmedBy: string): Promise<void> {
-  return postForm(`/brands/${encodeURIComponent(brandId)}/facts/${encodeURIComponent(factId)}/confirm`, {
-    confirmed_by: confirmedBy,
-  });
+export async function confirmFact(brandId: string, factId: string, confirmedBy: string): Promise<void> {
+  await postJson(
+    `/api/library/brands/${encodeURIComponent(brandId)}/facts/${encodeURIComponent(factId)}/confirm`,
+    { confirmed_by: confirmedBy },
+  );
 }
 
-export function deleteFact(brandId: string, factId: string): Promise<void> {
-  return postEmpty(`/brands/${encodeURIComponent(brandId)}/facts/${encodeURIComponent(factId)}/delete`);
+export async function deleteFact(brandId: string, factId: string): Promise<void> {
+  await postJson(`/api/library/brands/${encodeURIComponent(brandId)}/facts/${encodeURIComponent(factId)}/delete`);
 }
 
 // ---- 限制規則 ----
 
-export function createRule(
+export async function createRule(
   brandId: string,
   fields: { rule_type: string; content: string; severity: string; product_id: string; source_reference: string },
 ): Promise<void> {
-  return postForm(`/brands/${encodeURIComponent(brandId)}/rules/new`, fields);
+  await postJson(`/api/library/brands/${encodeURIComponent(brandId)}/rules`, fields);
 }
 
-export function updateRule(
+export async function updateRule(
   brandId: string,
   ruleId: string,
   fields: { rule_type: string; content: string; severity: string; product_id: string; source_reference: string },
 ): Promise<void> {
-  return postForm(`/brands/${encodeURIComponent(brandId)}/rules/${encodeURIComponent(ruleId)}/edit`, fields);
+  await postJson(
+    `/api/library/brands/${encodeURIComponent(brandId)}/rules/${encodeURIComponent(ruleId)}/edit`,
+    fields,
+  );
 }
 
-export function deleteRule(brandId: string, ruleId: string): Promise<void> {
-  return postEmpty(`/brands/${encodeURIComponent(brandId)}/rules/${encodeURIComponent(ruleId)}/delete`);
+export async function deleteRule(brandId: string, ruleId: string): Promise<void> {
+  await postJson(`/api/library/brands/${encodeURIComponent(brandId)}/rules/${encodeURIComponent(ruleId)}/delete`);
 }
 
 // ---- 宣稱 ----
 
-export function createClaim(
+export async function createClaim(
   brandId: string,
   fields: { claim_text: string; claim_type: string; product_id: string; evidence_source_reference: string },
 ): Promise<void> {
-  return postForm(`/brands/${encodeURIComponent(brandId)}/claims/new`, fields);
+  await postJson(`/api/library/brands/${encodeURIComponent(brandId)}/claims`, fields);
 }
 
-export function updateClaim(
+export async function updateClaim(
   brandId: string,
   claimId: string,
   fields: { claim_text: string; claim_type: string; product_id: string; evidence_source_reference: string },
 ): Promise<void> {
-  return postForm(`/brands/${encodeURIComponent(brandId)}/claims/${encodeURIComponent(claimId)}/edit`, fields);
+  await postJson(
+    `/api/library/brands/${encodeURIComponent(brandId)}/claims/${encodeURIComponent(claimId)}/edit`,
+    fields,
+  );
 }
 
-export function deleteClaim(brandId: string, claimId: string): Promise<void> {
-  return postEmpty(`/brands/${encodeURIComponent(brandId)}/claims/${encodeURIComponent(claimId)}/delete`);
+export async function deleteClaim(brandId: string, claimId: string): Promise<void> {
+  await postJson(`/api/library/brands/${encodeURIComponent(brandId)}/claims/${encodeURIComponent(claimId)}/delete`);
 }
 
 // ---- 官方素材 ----
@@ -346,8 +346,8 @@ export async function uploadAsset(
   }
 }
 
-export function deleteAsset(brandId: string, assetId: string): Promise<void> {
-  return postEmpty(`/brands/${encodeURIComponent(brandId)}/assets/${encodeURIComponent(assetId)}/delete`);
+export async function deleteAsset(brandId: string, assetId: string): Promise<void> {
+  await postJson(`/api/library/brands/${encodeURIComponent(brandId)}/assets/${encodeURIComponent(assetId)}/delete`);
 }
 
 // ---- 自有渠道 ----
@@ -355,26 +355,28 @@ export function deleteAsset(brandId: string, assetId: string): Promise<void> {
 // 若之後確認渠道是故意只增不改，這兩支連同 ChannelPanel 的編輯入口整批刪掉即可，
 // 前端只有這一個檔案跟一個側板元件牽涉到，改動面很小）。
 
-export function createChannel(
+export async function createChannel(
   brandId: string,
   fields: { channel_type: string; name: string; identifier: string; status: string },
 ): Promise<void> {
-  return postForm(`/brands/${encodeURIComponent(brandId)}/channels/new`, fields);
+  await postJson(`/api/library/brands/${encodeURIComponent(brandId)}/channels`, fields);
 }
 
-export function updateChannel(
+export async function updateChannel(
   brandId: string,
   channelId: string,
   fields: { channel_type: string; name: string; identifier: string; status: string },
 ): Promise<void> {
-  return postForm(
-    `/brands/${encodeURIComponent(brandId)}/channels/${encodeURIComponent(channelId)}/edit`,
+  await postJson(
+    `/api/library/brands/${encodeURIComponent(brandId)}/channels/${encodeURIComponent(channelId)}/edit`,
     fields,
   );
 }
 
-export function deleteChannel(brandId: string, channelId: string): Promise<void> {
-  return postEmpty(`/brands/${encodeURIComponent(brandId)}/channels/${encodeURIComponent(channelId)}/delete`);
+export async function deleteChannel(brandId: string, channelId: string): Promise<void> {
+  await postJson(
+    `/api/library/brands/${encodeURIComponent(brandId)}/channels/${encodeURIComponent(channelId)}/delete`,
+  );
 }
 
 // ---- 顧客原話 ----
@@ -410,21 +412,21 @@ export async function fetchCustomerVoiceJob(
   return res.json();
 }
 
-export function archiveCustomerVoice(brandId: string, cvId: string): Promise<void> {
-  return postEmpty(
-    `/brands/${encodeURIComponent(brandId)}/customer-voice/${encodeURIComponent(cvId)}/archive`,
+export async function archiveCustomerVoice(brandId: string, cvId: string): Promise<void> {
+  await postJson(
+    `/api/library/brands/${encodeURIComponent(brandId)}/customer-voice/${encodeURIComponent(cvId)}/archive`,
   );
 }
 
-export function deleteCustomerVoice(brandId: string, cvId: string): Promise<void> {
-  return postEmpty(
-    `/brands/${encodeURIComponent(brandId)}/customer-voice/${encodeURIComponent(cvId)}/delete`,
+export async function deleteCustomerVoice(brandId: string, cvId: string): Promise<void> {
+  await postJson(
+    `/api/library/brands/${encodeURIComponent(brandId)}/customer-voice/${encodeURIComponent(cvId)}/delete`,
   );
 }
 
 // ---- 品牌資料側板 ----
 
-export function saveBrandProfile(
+export async function saveBrandProfile(
   brandId: string,
   fields: {
     name: string;
@@ -436,7 +438,7 @@ export function saveBrandProfile(
     industry: string;
   },
 ): Promise<void> {
-  return postForm(`/brands/${encodeURIComponent(brandId)}/edit`, fields);
+  await postJson(`/api/library/brands/${encodeURIComponent(brandId)}/edit`, fields);
 }
 
 /** 回傳訊息含備份位置與素材資料夾刪除的 warn，呼叫端刪完導頁前先讓使用者看一眼。 */
