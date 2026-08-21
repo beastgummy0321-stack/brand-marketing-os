@@ -16,58 +16,53 @@ app/intake 反向 import（main → ads.routes → main 的循環）。拆出來
 連線設定），而 A2 落地的 import 掃描測試（test_architecture_boundaries.py）目前只允許
 `app/main.py` 這個路徑 import 分支專屬層，本檔不在允許清單內、不能改測試去配合。
 這是搬移過程中新發現的既有邊界，非本票新增的例外，詳見票 A4 回報。
+
+T4 刪除品牌／產品管理舊頁（2026-08-21）：這個檔案原本 68 支 TemplateResponse 頁面
+handler 大多已被 React 新殼取代（品牌智庫走 `/api/library/...`、產品走
+`/api/products/...`、報告走 `/api/brands/{id}/report`），刪光了純頁面渲染的部分。
+但 `frontend/src/lib/libraryApi.ts` 的品牌事實／限制規則／宣稱／官方素材刪除／自有
+渠道新增／品牌編輯這六類寫入動作，設計上直接沿用這裡的舊版表單 POST 端點（見該檔
+檔頭註解），前端只認 `res.ok`——這些 POST 端點會 303 redirect 回對應的 `/hub/*`
+或 `/brands/{id}`頁，因為 fetch 預設跟隨 redirect，redirect 目標也必須留著回
+200，不然寫入動作在畫面上會顯示失敗（即使資料庫其實已經寫入成功）。所以本檔現在
+只留：這些仍被前端直接呼叫的 POST 端點、它們 redirect 落地用的少數 GET hub 頁，
+以及素材檔案服務（FileResponse，不是頁面）。其餘只被舊 Jinja 表單／連結呼叫的頁面
+已整批刪除，改由 React 頁面接手。
 """
 
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, File, Form, Request, UploadFile
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi import APIRouter, Form, Request
+from fastapi.responses import FileResponse
 
 from app import mock_data as md
-from app.brand_web import product_ai_calls
-from app.brand_intelligence import customer_voice as cv_mod
-from app.brand_intelligence import product_ai
 from app.brand_intelligence import report as brand_report_mod
 from app.brand_intelligence import repository as repo
-from app.core import backup as corebackup
-from app.core import cleanup
-from app.core import creative_assets
 from app.core import interrupts as core_interrupts
-from app.core import prototype_phase as core_prototype_phase
 from app.intake import state as intake_state
-from app.llm import providers
 from app.shared import web
 from app.shared.web import (
     NotFoundKind,
-    _num_str,
-    _with_brand_names,
     banner_ctx,
     clean,
     ctx,
-    list_archived_brands,
     list_products,
-    parse_number,
     pending_brand_fact_count,
     pending_product_layer_count,
     redirect_with_message,
-    report_staleness,
     require_actor,
     require_brand,
-    require_product,
     scope_label,
     templates,
 )
 from app.brand_web import report_service
-from app.brand_web.routes_library import save_official_asset
-from app.brand_web.report_service import REPORT_SECTION_LABELS, _report_recent, _report_sections
 
 router = APIRouter()
 
 PROVIDER = report_service.PROVIDER
 SECTION_KEYS = brand_report_mod.SECTION_KEYS
-PARSE_FAIL_MESSAGE = brand_report_mod.PARSE_FAIL_MESSAGE
 
 
 def generate(conn, brand_id: str, actor: str) -> tuple:
@@ -109,48 +104,6 @@ def _augment_fact(brand_id: str, fact: dict) -> dict:
     return fact
 
 
-def _scan_budget_error(brand_id: str, cost: Optional[float] = None, action: str = "這次調研",
-                        fallback_hint: str = "或先用「新增這個產品」手動建立。") -> Optional[str]:
-    """產品快掃／再次調研／調研交接包貼回修復共用的超預算檢查，通過回 None。
-
-    票 M2：核心檢查（已花費 + 這次預估 vs 上限，US$ 三個數字同一幣別直接比）搬進
-    app/core/settings.budget_exceeded_message()——廣告分支的計畫／素材生成現在也共用
-    同一個函式，這裡只是保留原本的呼叫簽名（cost 預設值＝產品快掃的校準值）給既有呼叫端用。
-    """
-    from app.core import settings as coresettings
-    cost = product_ai.COST_PRODUCT_SCAN if cost is None else cost
-    return coresettings.budget_exceeded_message(
-        web.conn, brand_id, cost, action=action, fallback_hint=fallback_hint)
-
-
-def _apply_product_scan_result(brand_id: str, product_id: str, actor: str,
-                                source_reference_id: Optional[str], result: dict) -> tuple:
-    """把快掃／再次調研結果套進一個產品：跳過跟既有事實（不論 pending 或 confirmed）同 label
-    的結果，避免重複堆積；價格有抓到且這個產品目前完全沒有經濟數字列時，才建一筆 pending。
-    回傳 (新增事實數, 跳過事實數, 是否新建了待確認經濟數字)。"""
-    existing_labels = {f["label"] for f in repo.list_product_facts(web.conn, brand_id, product_id)}
-    added, skipped = 0, 0
-    for f in result["facts"]:
-        if f["label"] in existing_labels:
-            skipped += 1
-            continue
-        repo.create_product_fact(web.conn, brand_id, product_id, actor=actor,
-                                 fact_type=f["fact_type"], label=f["label"], value=f["value"],
-                                 status="pending", source_reference_id=source_reference_id)
-        existing_labels.add(f["label"])
-        added += 1
-    price_created = False
-    price = result.get("price")
-    if price and repo.get_product_economics(web.conn, brand_id, product_id) is None:
-        repo.create_pending_product_economics(
-            web.conn, brand_id, product_id, actor=actor,
-            selling_price=price["amount"], currency=price["currency"],
-            source_reference_id=source_reference_id,
-        )
-        price_created = True
-    return added, skipped, price_created
-
-
 def _augment_claim(brand_id: str, claim: dict) -> dict:
     claim = dict(claim)
     claim["evidence_source_reference"] = _source_ref_text(brand_id, claim.get("evidence_source_reference_id"))
@@ -167,30 +120,11 @@ def _augment_asset(brand_id: str, asset: dict) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# 全站打斷佇列（決策 0026）：收件匣頁＋通用「知道了」
+# 全站打斷佇列（決策 0026）：收件匣頁本身已改走 GET /api/inbox（routes_inbox.py），
+# 但收件匣卡片「知道了」這顆按鈕（S2.8）沿用既有這支端點，沒有重新造第二份，所以
+# 這支還在用，不能跟著收件匣頁一起刪（見 test_inbox_api.py
+# test_resolve_still_uses_existing_html_endpoint）。
 # ---------------------------------------------------------------------------
-
-@router.get("/inbox")
-async def inbox(request: Request):
-    return templates.TemplateResponse(request, "inbox.html", ctx(
-        request, brand=None,
-        open_items=_with_brand_names(core_interrupts.list_open(web.conn)),
-        done_items=_with_brand_names(core_interrupts.list_done(web.conn)),
-        **banner_ctx(request),
-    ))
-
-
-@router.get("/system/prototype-phase")
-async def prototype_phase_detail(request: Request):
-    """原型階段結束提醒的「詳情」頁（修憲落地 A6 修正）：唯讀，逐項列出四項技術豁免現況，
-    使用者從打斷佇列卡片點進來才看得到到底要重新決定什麼。"""
-    return templates.TemplateResponse(request, "prototype_phase.html", ctx(
-        request, brand=None,
-        ended=core_prototype_phase.has_ended(web.conn),
-        exemptions=core_prototype_phase.EXEMPTIONS,
-        **banner_ctx(request),
-    ))
-
 
 @router.post("/interrupts/{interrupt_id}/resolve")
 async def interrupt_resolve(request: Request, interrupt_id: str):
@@ -198,29 +132,6 @@ async def interrupt_resolve(request: Request, interrupt_id: str):
     core_interrupts.resolve(web.conn, interrupt_id, actor=actor)
     back = (request.headers.get("referer") or "/inbox").split("?")[0]
     return redirect_with_message(back, "好，知道了。")
-
-
-@router.get("/brands/new")
-async def brand_new_get(request: Request):
-    return templates.TemplateResponse(request, "brand_new.html", ctx(
-        request, brand=None, values={}, errors={}, nav_current='hub',
-    ))
-
-
-@router.post("/brands/new")
-async def brand_new_post(request: Request, name: str = Form(""), client_name: str = Form("")):
-    actor = require_actor(request)
-    values = {"name": name, "client_name": client_name}
-    errors = {}
-    name_c = clean(name)
-    if not name_c:
-        errors["name"] = "請填寫品牌名稱。"
-    if errors:
-        return templates.TemplateResponse(request, "brand_new.html", ctx(
-            request, brand=None, values=values, errors=errors, nav_current='hub',
-        ), status_code=400)
-    brand = repo.create_brand(web.conn, name=name_c, client_name=clean(client_name), actor=actor)
-    return redirect_with_message(f"/brands/{brand['id']}", f"已新增品牌「{name_c}」。")
 
 
 # ---------------------------------------------------------------------------
@@ -279,18 +190,6 @@ def _brand_edit_form_ctx(request: Request, brand: dict, values: dict, errors: di
     )
 
 
-@router.get("/brands/{brand_id}/edit")
-async def brand_edit_get(request: Request, brand_id: str):
-    brand = require_brand(brand_id)
-    values = {
-        "name": brand["name"], "client_name": brand["client_name"] or "", "status": brand["status"],
-        "persona": "", "market_region": brand["market_region"] or "",
-        "conversion_goal": brand["conversion_goal"] or "", "industry": brand["industry"] or "",
-    }
-    return templates.TemplateResponse(request, "brand_edit.html",
-                                       _brand_edit_form_ctx(request, brand, values, {}))
-
-
 @router.post("/brands/{brand_id}/edit")
 async def brand_edit_post(request: Request, brand_id: str, name: str = Form(""),
                            client_name: str = Form(""), status: str = Form("active"),
@@ -340,47 +239,9 @@ async def brand_edit_post(request: Request, brand_id: str, name: str = Form(""),
     return redirect_with_message(f"/brands/{brand_id}", msg)
 
 
-def _delete_counts(brand_id: str) -> list:
-    """刪除確認頁要列的「會一起消失的資料」，只留有東西的項目（改由清理登記處
-    彙整所有登記模組的清點結果，不再由本檔手寫死要問誰）。"""
-    return [(label, n) for label, n in cleanup.count_all(web.conn, brand_id) if n > 0]
-
-
-@router.get("/brands/{brand_id}/delete")
-async def brand_delete_get(request: Request, brand_id: str):
-    brand = require_brand(brand_id)
-    if brand["status"] != "archived":
-        return redirect_with_message(f"/brands/{brand_id}/edit",
-                                      "要先把品牌封存，才能永久刪除。", kind="warn")
-    return templates.TemplateResponse(request, "brand_delete.html", ctx(
-        request, brand=brand, counts=_delete_counts(brand_id), error=None, nav_current='hub',
-    ))
-
-
-@router.post("/brands/{brand_id}/delete")
-async def brand_delete_post(request: Request, brand_id: str, confirm_name: str = Form("")):
-    actor = require_actor(request)
-    brand = require_brand(brand_id)
-    if brand["status"] != "archived":
-        return redirect_with_message(f"/brands/{brand_id}/edit",
-                                      "要先把品牌封存，才能永久刪除。", kind="warn")
-    if clean(confirm_name) != brand["name"]:
-        return templates.TemplateResponse(request, "brand_delete.html", ctx(
-            request, brand=brand, counts=_delete_counts(brand_id), nav_current='hub',
-            error="輸入的名稱跟品牌名稱不一樣，請照著上面顯示的名稱再打一次。",
-        ), status_code=400)
-    corebackup.snapshot(f"before-delete-{brand_id}")
-    repo.delete_brand(web.conn, brand_id, actor=actor)
-    warn = creative_assets.delete_folder(web.conn, brand_id)  # 素材圖檔資料夾一起刪（決策 0008）
-    return redirect_with_message(
-        "/", f"已永久刪除品牌「{brand['name']}」。刪除前的備份已存進 backups 資料夾。{warn}")
-
-
 # ---------------------------------------------------------------------------
-# 品牌智庫（issue #8 決策 0021；issue #49 收斂「限制規則」＋「宣稱」為一張「規則與宣稱」）：
-# 品牌功能選單頁的地基資料收在這裡，入口卡各自對到一個獨立子頁（「規則與宣稱」卡對到
-# /hub/rules，並在詳情內另附 /hub/claims 連結），內容與操作沿用原本各自子頁，只是換
-# 首頁卡片容器；子頁網址與行為不變。
+# 品牌智庫（issue #8 決策 0021）：以下幾支 GET 頁只留著給前端六類舊表單 POST
+# 端點（見檔頭 T4 說明）303 redirect 落地用，本身不再被任何人瀏覽。
 # ---------------------------------------------------------------------------
 
 def _hub_crumb(brand: dict, *tail) -> list:
@@ -394,38 +255,6 @@ def _product_hub_crumb(brand: dict, product: dict, *tail) -> list:
     return [("品牌總覽", "/"), (brand["name"], f"/brands/{brand['id']}"),
             ("品牌智庫", f"/brands/{brand['id']}/hub"),
             (product["name"], f"/brands/{brand['id']}/products/{product['id']}"), *tail]
-
-
-@router.get("/brands/{brand_id}/hub")
-async def brand_hub(request: Request, brand_id: str):
-    brand = require_brand(brand_id)
-    facts_confirmed = len(repo.list_brand_facts(web.conn, brand_id, status="confirmed"))
-    facts_pending = len(repo.list_brand_facts(web.conn, brand_id, status="pending"))
-    rules = repo.list_rules_for_brand(web.conn, brand_id)
-    claims = repo.list_claims_for_brand(web.conn, brand_id)
-    products = list_products(brand_id)
-    assets = repo.list_official_assets(web.conn, brand_id)
-    channels = repo.list_channels(web.conn, brand_id)
-    voices = repo.list_customer_voices(web.conn, brand_id, status="active")
-    # 卡片描述句已拿掉（修憲落地 V5，說明句改成資料）：標題＋筆數已經講得清楚，
-    # 不需要「這裡放…」這類重述標題的句子（console-ui skill text-to-data）。
-    cards = [
-        {"key": "facts", "title": "品牌事實",
-         "count": facts_confirmed + facts_pending, "pending": facts_pending},
-        {"key": "rules", "title": "規則與宣稱",
-         "sub_links": [("限制規則", len(rules), "rules"), ("宣稱", len(claims), "claims")],
-         "pending": 0},
-        {"key": "products", "title": "產品",
-         "count": len(products), "pending": pending_product_layer_count(brand_id)},
-        {"key": "assets", "title": "素材與渠道",
-         "sub_links": [("官方素材", len(assets), "assets"), ("自有渠道", len(channels), "channels")],
-         "pending": 0},
-        {"key": "customer-voice", "title": "顧客原話",
-         "count": len(voices), "pending": 0},
-    ]
-    return templates.TemplateResponse(request, "hub_home.html", ctx(
-        request, brand=brand, cards=cards, nav_current='hub',
-    ))
 
 
 @router.get("/brands/{brand_id}/hub/facts")
@@ -469,27 +298,6 @@ async def hub_claims(request: Request, brand_id: str):
     ))
 
 
-@router.get("/brands/{brand_id}/hub/products")
-async def hub_products(request: Request, brand_id: str):
-    brand = require_brand(brand_id)
-    products = list_products(brand_id)
-    product_rows = []
-    for p in products:
-        pc = repo.list_product_facts(web.conn, brand_id, p["id"], status="confirmed")
-        pp = repo.list_product_facts(web.conn, brand_id, p["id"], status="pending")
-        product_rows.append({
-            "product": p,
-            "fact_count": len(pc) + len(pp),
-            "pending_count": len(pp),
-            "economics": repo.get_product_economics(web.conn, brand_id, p["id"]),
-        })
-    return templates.TemplateResponse(request, "hub_products.html", ctx(
-        request, brand=brand, product_rows=product_rows,
-        breadcrumb_items=_hub_crumb(brand, ("產品", None)), nav_current='hub',
-        **banner_ctx(request),
-    ))
-
-
 @router.get("/brands/{brand_id}/hub/assets")
 async def hub_assets(request: Request, brand_id: str):
     brand = require_brand(brand_id)
@@ -513,7 +321,9 @@ async def hub_channels(request: Request, brand_id: str):
 
 
 # ---------------------------------------------------------------------------
-# 顧客原話語料庫（GitHub issue #14，決策 0023 第 18a 條／0024 第 2 條）
+# 顧客原話語料庫（GitHub issue #14，決策 0023 第 18a 條／0024 第 2 條）：新增已改走
+# /api/library/brands/{id}/customer-voice（routes_library.py），這裡只留封存／刪除
+# 兩支舊表單端點＋它們 redirect 落地用的 GET 頁（同上，見檔頭 T4 說明）。
 # ---------------------------------------------------------------------------
 
 @router.get("/brands/{brand_id}/hub/customer-voice")
@@ -526,66 +336,6 @@ async def hub_customer_voice(request: Request, brand_id: str):
         breadcrumb_items=_hub_crumb(brand, ("顧客原話", None)), nav_current='hub',
         **banner_ctx(request),
     ))
-
-
-@router.get("/brands/{brand_id}/customer-voice/guide")
-async def customer_voice_guide(request: Request, brand_id: str):
-    brand = require_brand(brand_id)
-    return templates.TemplateResponse(request, "customer_voice_guide.html", ctx(
-        request, brand=brand, nav_current='hub',
-        breadcrumb_items=_hub_crumb(brand, ("顧客原話", f"/brands/{brand_id}/hub/customer-voice"),
-                                     ("去哪找顧客原話", None)),
-    ))
-
-
-@router.get("/brands/{brand_id}/customer-voice/new")
-async def customer_voice_new_get(request: Request, brand_id: str):
-    brand = require_brand(brand_id)
-    values = {"source_channel": "", "source_detail": "", "raw_text": ""}
-    return templates.TemplateResponse(request, "customer_voice_new.html", ctx(
-        request, brand=brand, values=values, errors={}, nav_current='hub',
-        breadcrumb_items=_hub_crumb(brand, ("顧客原話", f"/brands/{brand_id}/hub/customer-voice"),
-                                     ("貼入顧客原話", None)),
-    ))
-
-
-@router.post("/brands/{brand_id}/customer-voice/new")
-async def customer_voice_new_post(request: Request, brand_id: str,
-                                   source_channel: str = Form(""), source_detail: str = Form(""),
-                                   raw_text: str = Form("")):
-    actor = require_actor(request)
-    brand = require_brand(brand_id)
-    values = {"source_channel": source_channel, "source_detail": source_detail, "raw_text": raw_text}
-    errors = {}
-    if not clean(source_channel):
-        errors["source_channel"] = "請選擇這段原話是從哪裡來的。"
-    raw_text_c = clean(raw_text)
-    if not raw_text_c:
-        errors["raw_text"] = "請貼上顧客的原文內容。"
-    if errors:
-        return templates.TemplateResponse(request, "customer_voice_new.html", ctx(
-            request, brand=brand, values=values, errors=errors, nav_current='hub',
-            breadcrumb_items=_hub_crumb(brand, ("顧客原話", f"/brands/{brand_id}/hub/customer-voice"),
-                                         ("貼入顧客原話", None)),
-        ), status_code=400)
-
-    from app.brand_web import routes_library
-    ok, result = routes_library.extract(
-        web.conn, brand_id, actor=actor, raw_text=raw_text_c,
-        source_channel=source_channel, source_detail=clean(source_detail) or None,
-    )
-    if not ok:
-        errors["raw_text"] = result
-        return templates.TemplateResponse(request, "customer_voice_new.html", ctx(
-            request, brand=brand, values=values, errors=errors, nav_current='hub',
-            breadcrumb_items=_hub_crumb(brand, ("顧客原話", f"/brands/{brand_id}/hub/customer-voice"),
-                                         ("貼入顧客原話", None)),
-        ), status_code=400)
-
-    n = len(result["extraction"])
-    msg = f"已存入這段顧客原話，AI 抽出了 {n} 條重點。" if n else "已存入這段顧客原話，AI 沒有在裡面找到值得引用的重點。"
-    return redirect_with_message(f"/brands/{brand_id}/hub/customer-voice", msg,
-                                  again=f"/brands/{brand_id}/customer-voice/new")
 
 
 @router.post("/brands/{brand_id}/customer-voice/{cv_id}/archive")
@@ -613,85 +363,8 @@ async def customer_voice_delete_post(request: Request, brand_id: str, cv_id: str
 
 
 # ---------------------------------------------------------------------------
-# 顧問分析報告（決策 0017、GitHub issue #4）
-# ---------------------------------------------------------------------------
-
-@router.get("/brands/{brand_id}/report")
-async def brand_report_get(request: Request, brand_id: str):
-    brand = require_brand(brand_id)
-    report = repo.get_latest_brand_report(web.conn, brand_id)
-    if report is None:
-        return templates.TemplateResponse(request, "report.html", ctx(
-            request, brand=brand, report=None, nav_current='hub', **banner_ctx(request),
-        ))
-    cost_row = None
-    if report["llm_task_id"]:
-        cost_row = web.conn.execute(
-            "SELECT cost FROM llm_task WHERE id = ?", (report["llm_task_id"],)
-        ).fetchone()
-    return templates.TemplateResponse(request, "report.html", ctx(
-        request, brand=brand, report=report, sections=_report_sections(report),
-        staleness=report_staleness(report),
-        thin_data=report["source_fact_count"] < brand_report_mod.THIN_DATA_ITEMS,
-        cost=cost_row["cost"] if cost_row else None, nav_current='hub',
-        **banner_ctx(request),
-    ))
-
-
-@router.get("/brands/{brand_id}/report/progress")
-def brand_report_progress(request: Request, brand_id: str, run: Optional[str] = None):
-    """比照建檔精靈的進度頁模式（intake/routes.py intake_progress）：一次生成五章要
-    30–90 秒，裸 POST 會讓瀏覽器空白等待，這裡沿用同一套 meta-refresh 機制。"""
-    brand = require_brand(brand_id)
-    actor = require_actor(request)
-    result_url = f"/brands/{brand_id}/report"
-
-    if _report_recent(brand_id):
-        return RedirectResponse(result_url, status_code=303)
-
-    if run != "1":
-        return templates.TemplateResponse(request, "report_progress.html", ctx(
-            request, brand=brand, run_url=f"{request.url.path}?run=1",
-            refresh=intake_state.REFRESH_SECONDS, nav_current='hub',
-        ))
-
-    ok, err = generate(web.conn, brand_id, actor)
-    if not ok:
-        return redirect_with_message(result_url, err, kind="warn")
-    return redirect_with_message(result_url, "報告已生成。")
-
-
-@router.get("/brands/{brand_id}/report/export")
-async def brand_report_export(request: Request, brand_id: str):
-    brand = require_brand(brand_id)
-    report = repo.get_latest_brand_report(web.conn, brand_id)
-    if report is None:
-        return RedirectResponse(f"/brands/{brand_id}/report", status_code=303)
-    return templates.TemplateResponse(request, "report_export.html", ctx(
-        request, brand=brand, report=report, sections=_report_sections(report),
-        staleness=report_staleness(report),
-        thin_data=report["source_fact_count"] < brand_report_mod.THIN_DATA_ITEMS,
-        today=datetime.now(timezone.utc).date().isoformat(),
-    ))
-
-
-# ---------------------------------------------------------------------------
 # 品牌事實
 # ---------------------------------------------------------------------------
-
-@router.get("/brands/{brand_id}/facts/new")
-async def brand_fact_new_get(request: Request, brand_id: str):
-    brand = require_brand(brand_id)
-    values = {"fact_type": "", "label": "", "value": "", "status": "pending", "source_reference": ""}
-    return templates.TemplateResponse(request, "fact_new.html", ctx(
-        request, brand=brand, values=values, errors={}, nav_current='hub',
-        scope="brand", fact_types=md.BRAND_FACT_TYPES,
-        form_action=f"/brands/{brand_id}/facts/new",
-        back_url=f"/brands/{brand_id}/hub/facts", back_label="品牌事實",
-        breadcrumb_items=_hub_crumb(brand, ("品牌事實", f"/brands/{brand_id}/hub/facts"),
-                                     ("新增品牌事實", None)),
-    ))
-
 
 @router.post("/brands/{brand_id}/facts/new")
 async def brand_fact_new_post(request: Request, brand_id: str, fact_type: str = Form(""),
@@ -731,24 +404,6 @@ async def brand_fact_new_post(request: Request, brand_id: str, fact_type: str = 
         f"/brands/{brand_id}/hub/facts", f"已新增品牌事實「{clean(label)}」，狀態為{status_label}。",
         again=f"/brands/{brand_id}/facts/new",
     )
-
-
-@router.get("/brands/{brand_id}/facts/{fact_id}/confirm")
-async def brand_fact_confirm_get(request: Request, brand_id: str, fact_id: str):
-    brand = require_brand(brand_id)
-    fact = repo.get_brand_fact(web.conn, brand_id, fact_id)
-    if not fact:
-        raise NotFoundKind("品牌事實")
-    return templates.TemplateResponse(request, "fact_confirm.html", ctx(
-        request, brand=brand, fact=fact, nav_current='hub',
-        type_label=md.brand_fact_type_label(fact["fact_type"]),
-        values={"confirmed_by": ""}, errors={},
-        form_action=f"/brands/{brand_id}/facts/{fact_id}/confirm",
-        back_url=f"/brands/{brand_id}/hub/facts", back_label="品牌事實",
-        edit_url=f"/brands/{brand_id}/facts/new",
-        breadcrumb_items=_hub_crumb(brand, ("品牌事實", f"/brands/{brand_id}/hub/facts"),
-                                     ("確認這條品牌事實", None)),
-    ))
 
 
 @router.post("/brands/{brand_id}/facts/{fact_id}/confirm")
@@ -796,19 +451,6 @@ def _fact_edit_ctx(request, brand, values, errors, *, form_action, crumb_label,
                breadcrumb_items=breadcrumb_items)
 
 
-@router.get("/brands/{brand_id}/facts/{fact_id}/edit")
-async def brand_fact_edit_get(request: Request, brand_id: str, fact_id: str):
-    brand = require_brand(brand_id)
-    fact = repo.get_brand_fact(web.conn, brand_id, fact_id)
-    if not fact:
-        raise NotFoundKind("品牌事實")
-    values = {"fact_type": fact["fact_type"], "label": fact["label"], "value": fact["value"],
-              "status": fact["status"], "source_reference": ""}
-    return templates.TemplateResponse(request, "fact_new.html", _fact_edit_ctx(
-        request, brand, values, {}, form_action=f"/brands/{brand_id}/facts/{fact_id}/edit",
-        crumb_label="修改品牌事實", fact_types=md.BRAND_FACT_TYPES, scope="brand"))
-
-
 @router.post("/brands/{brand_id}/facts/{fact_id}/edit")
 async def brand_fact_edit_post(request: Request, brand_id: str, fact_id: str,
                                 fact_type: str = Form(""), label: str = Form(""),
@@ -851,82 +493,6 @@ async def brand_fact_delete_post(request: Request, brand_id: str, fact_id: str):
     return redirect_with_message(f"/brands/{brand_id}/hub/facts", f"已刪除「{fact['label']}」。")
 
 
-@router.get("/brands/{brand_id}/products/{product_id}/facts/{fact_id}/edit")
-async def product_fact_edit_get(request: Request, brand_id: str, product_id: str, fact_id: str):
-    brand = require_brand(brand_id)
-    product = require_product(brand, product_id)
-    fact = repo.get_product_fact(web.conn, brand_id, product_id, fact_id)
-    if not fact:
-        raise NotFoundKind("產品事實")
-    values = {"fact_type": fact["fact_type"], "label": fact["label"], "value": fact["value"],
-              "status": fact["status"], "source_reference": ""}
-    return templates.TemplateResponse(request, "fact_new.html", _fact_edit_ctx(
-        request, brand, values, {},
-        form_action=f"/brands/{brand_id}/products/{product_id}/facts/{fact_id}/edit",
-        crumb_label="修改產品事實", fact_types=md.PRODUCT_FACT_TYPES, scope="product", product=product))
-
-
-@router.post("/brands/{brand_id}/products/{product_id}/facts/{fact_id}/edit")
-async def product_fact_edit_post(request: Request, brand_id: str, product_id: str, fact_id: str,
-                                  fact_type: str = Form(""), label: str = Form(""),
-                                  value: str = Form(""), source_reference: str = Form("")):
-    actor = require_actor(request)
-    brand = require_brand(brand_id)
-    product = require_product(brand, product_id)
-    fact = repo.get_product_fact(web.conn, brand_id, product_id, fact_id)
-    if not fact:
-        raise NotFoundKind("產品事實")
-    values = {"fact_type": fact_type, "label": label, "value": value,
-              "status": fact["status"], "source_reference": source_reference}
-    errors = {}
-    if not clean(fact_type):
-        errors["fact_type"] = "請選擇這是哪一類事實。"
-    if not clean(label):
-        errors["label"] = "請填寫這條事實的名稱。"
-    if not clean(value):
-        errors["value"] = "請填寫事實內容。"
-    if errors:
-        return templates.TemplateResponse(request, "fact_new.html", _fact_edit_ctx(
-            request, brand, values, errors,
-            form_action=f"/brands/{brand_id}/products/{product_id}/facts/{fact_id}/edit",
-            crumb_label="修改產品事實", fact_types=md.PRODUCT_FACT_TYPES, scope="product", product=product),
-            status_code=400)
-    src_id = (_create_source_ref(brand_id, actor, source_reference)
-              or fact["source_reference_id"])
-    repo.update_product_fact(web.conn, brand_id, product_id, fact_id, actor=actor,
-                              fact_type=fact_type, label=clean(label), value=clean(value),
-                              source_reference_id=src_id)
-    return redirect_with_message(f"/brands/{brand_id}/products/{product_id}/facts",
-                                  f"已更新「{clean(label)}」。")
-
-
-@router.post("/brands/{brand_id}/products/{product_id}/facts/{fact_id}/delete")
-async def product_fact_delete_post(request: Request, brand_id: str, product_id: str, fact_id: str):
-    actor = require_actor(request)
-    require_brand(brand_id)
-    fact = repo.get_product_fact(web.conn, brand_id, product_id, fact_id)
-    if not fact:
-        raise NotFoundKind("產品事實")
-    repo.delete_product_fact(web.conn, brand_id, fact_id, actor=actor)
-    return redirect_with_message(f"/brands/{brand_id}/products/{product_id}/facts",
-                                  f"已刪除「{fact['label']}」。")
-
-
-@router.get("/brands/{brand_id}/rules/{rule_id}/edit")
-async def rule_edit_get(request: Request, brand_id: str, rule_id: str):
-    brand = require_brand(brand_id)
-    rule = repo.get_rule(web.conn, brand_id, rule_id)
-    if not rule:
-        raise NotFoundKind("限制規則")
-    products = list_products(brand_id)
-    values = {"rule_type": rule["rule_type"], "content": rule["content"], "severity": rule["severity"],
-              "product_id": rule["product_id"] or "", "source_reference": ""}
-    return templates.TemplateResponse(request, "rule_edit.html", ctx(
-        request, brand=brand, values=values, errors={}, products=products, nav_current='hub',
-        form_action=f"/brands/{brand_id}/rules/{rule_id}/edit",
-    ))
-
-
 @router.post("/brands/{brand_id}/rules/{rule_id}/edit")
 async def rule_edit_post(request: Request, brand_id: str, rule_id: str, rule_type: str = Form(""),
                           content: str = Form(""), severity: str = Form("soft"),
@@ -967,19 +533,37 @@ async def rule_delete_post(request: Request, brand_id: str, rule_id: str):
     return redirect_with_message(f"/brands/{brand_id}/hub/rules", "已刪除這條限制規則。")
 
 
-@router.get("/brands/{brand_id}/claims/{claim_id}/edit")
-async def claim_edit_get(request: Request, brand_id: str, claim_id: str):
+@router.post("/brands/{brand_id}/rules/new")
+async def rule_new_post(request: Request, brand_id: str, rule_type: str = Form(""),
+                         content: str = Form(""), severity: str = Form("soft"),
+                         product_id: str = Form(""), source_reference: str = Form("")):
+    actor = require_actor(request)
     brand = require_brand(brand_id)
-    claim = repo.get_claim(web.conn, brand_id, claim_id)
-    if not claim:
-        raise NotFoundKind("宣稱")
     products = list_products(brand_id)
-    values = {"claim_text": claim["claim_text"], "claim_type": claim["claim_type"],
-              "product_id": claim["product_id"] or "", "evidence_source_reference": ""}
-    return templates.TemplateResponse(request, "claim_edit.html", ctx(
-        request, brand=brand, values=values, errors={}, products=products, nav_current='hub',
-        form_action=f"/brands/{brand_id}/claims/{claim_id}/edit",
-    ))
+    values = {"rule_type": rule_type, "content": content, "severity": severity,
+              "product_id": product_id, "source_reference": source_reference}
+    errors = {}
+    if not clean(rule_type):
+        errors["rule_type"] = "請選擇規則類型。"
+    if not clean(content):
+        errors["content"] = "請填寫規則內容。"
+    if severity not in ("hard", "soft"):
+        errors["severity"] = "請選擇必須遵守或建議遵守。"
+    if product_id and not repo.get_product(web.conn, brand_id, product_id):
+        errors["product_id"] = "請選擇適用範圍。"
+    if errors:
+        return templates.TemplateResponse(request, "rule_new.html", ctx(
+            request, brand=brand, values=values, errors=errors, products=products, nav_current='hub',
+        ), status_code=400)
+    src_id = _create_source_ref(brand_id, actor, source_reference)
+    repo.create_rule(web.conn, brand_id, actor=actor, rule_type=rule_type, content=clean(content),
+                      severity=severity, product_id=product_id or None, source_reference_id=src_id)
+    scope_txt = scope_label(brand_id, product_id or None)
+    return redirect_with_message(
+        f"/brands/{brand_id}/hub/rules",
+        f"已新增限制規則「{md.rule_type_label(rule_type)}」，適用範圍：{scope_txt}。",
+        again=f"/brands/{brand_id}/rules/new",
+    )
 
 
 @router.post("/brands/{brand_id}/claims/{claim_id}/edit")
@@ -1022,498 +606,6 @@ async def claim_delete_post(request: Request, brand_id: str, claim_id: str):
     return redirect_with_message(f"/brands/{brand_id}/hub/claims", "已刪除這條宣稱。")
 
 
-# ---------------------------------------------------------------------------
-# 產品
-# ---------------------------------------------------------------------------
-
-@router.get("/brands/{brand_id}/products/new")
-async def product_new_get(request: Request, brand_id: str):
-    brand = require_brand(brand_id)
-    return templates.TemplateResponse(request, "product_new.html", ctx(
-        request, brand=brand, values={"name": "", "url": ""}, errors={},
-        research_cost=product_ai.COST_PRODUCT_SCAN, nav_current='hub',
-    ))
-
-
-@router.post("/brands/{brand_id}/products/new")
-async def product_new_post(request: Request, brand_id: str, name: str = Form("")):
-    actor = require_actor(request)
-    brand = require_brand(brand_id)
-    name_c = clean(name)
-    if not name_c:
-        return templates.TemplateResponse(request, "product_new.html", ctx(
-            request, brand=brand, values={"name": name, "url": ""}, errors={"name": "請填寫產品名稱。"},
-            research_cost=product_ai.COST_PRODUCT_SCAN, nav_current='hub',
-        ), status_code=400)
-    product = repo.create_product(web.conn, brand_id, name=name_c, actor=actor)
-    return redirect_with_message(f"/brands/{brand_id}/products/{product['id']}", f"已新增產品「{name_c}」。")
-
-
-@router.post("/brands/{brand_id}/products/new/research")
-async def product_new_research_post(request: Request, brand_id: str,
-                                     name: str = Form(""), url: str = Form("")):
-    """「AI 幫我調研」：讀產品頁網址＋已確認品牌事實，請 AI 整理產品事實，
-    建立產品並把整理出的事實全部存成 pending（issue #6）。不填網址走原本純手動建立，
-    這條路由完全不動那個行為。"""
-    actor = require_actor(request)
-    brand = require_brand(brand_id)
-    name_c = clean(name)
-    url_c = clean(url)
-    values = {"name": name, "url": url}
-    errors = {}
-    if not name_c:
-        errors["name"] = "請填寫產品名稱。"
-    if not url_c:
-        errors["url"] = "請填寫產品頁網址，才能請 AI 幫忙調研；不填網址請改用「新增這個產品」。"
-    elif not (url_c.startswith("http://") or url_c.startswith("https://")):
-        errors["url"] = "這個網址看起來不完整，記得從 https:// 開始，例如「https://example.com/products/xxx」。"
-    if errors:
-        return templates.TemplateResponse(request, "product_new.html", ctx(
-            request, brand=brand, values=values, errors=errors,
-            research_cost=product_ai.COST_PRODUCT_SCAN, nav_current='hub',
-        ), status_code=400)
-
-    budget_err = _scan_budget_error(brand_id)
-    if budget_err:
-        errors["url"] = budget_err
-        return templates.TemplateResponse(request, "product_new.html", ctx(
-            request, brand=brand, values=values, errors=errors,
-            research_cost=product_ai.COST_PRODUCT_SCAN, nav_current='hub',
-        ), status_code=400)
-
-    brand_facts = repo.list_brand_facts(web.conn, brand_id, status="confirmed")
-    ok, result = product_ai_calls.run_product_scan(web.conn, brand_id, name_c, url_c, brand_facts)
-    if not ok:
-        errors["url"] = result
-        return templates.TemplateResponse(request, "product_new.html", ctx(
-            request, brand=brand, values=values, errors=errors,
-            research_cost=product_ai.COST_PRODUCT_SCAN, nav_current='hub',
-        ), status_code=400)
-
-    product = repo.create_product(web.conn, brand_id, name=name_c, actor=actor)
-    src_id = _create_source_ref(brand_id, actor, url_c)
-    added, _skipped, price_created = _apply_product_scan_result(brand_id, product["id"], actor, src_id, result)
-    msg = f"已建立產品「{name_c}」，AI 整理了 {added} 條待確認的產品事實"
-    if price_created:
-        msg += "，也抓到售價存成待確認的經濟數字"
-    msg += "，記得去確認。"
-    return redirect_with_message(f"/brands/{brand_id}/products/{product['id']}", msg)
-
-
-# ---------------------------------------------------------------------------
-# 產品智庫（issue #9 決策 0021）：產品功能選單頁的地基資料收在這裡，四張入口卡
-# 各自對到一個獨立子頁，內容與操作沿用原本產品檔案頁四大區，只是換頁面容器。
-# ---------------------------------------------------------------------------
-
-@router.get("/brands/{brand_id}/products/{product_id}")
-async def product_hub(request: Request, brand_id: str, product_id: str):
-    brand = require_brand(brand_id)
-    product = require_product(brand, product_id)
-    facts_confirmed = len(repo.list_product_facts(web.conn, brand_id, product_id, status="confirmed"))
-    facts_pending = len(repo.list_product_facts(web.conn, brand_id, product_id, status="pending"))
-    economics = repo.get_product_economics(web.conn, brand_id, product_id)
-    rules = repo.list_rules_for_product(web.conn, brand_id, product_id)
-    claims = repo.list_claims_for_product(web.conn, brand_id, product_id)
-    rescan_url = repo.get_latest_product_source_url(web.conn, brand_id, product_id) or ""
-    # 卡片描述句已拿掉（修憲落地 V5，說明句改成資料）：標題＋筆數已經講得清楚。
-    cards = [
-        {"key": "facts", "title": "產品事實",
-         "count": facts_confirmed + facts_pending, "pending": facts_pending},
-        {"key": "economics-view", "title": "產品經濟數字",
-         "count": 1 if economics else 0,
-         "pending": 1 if economics and economics["status"] == "pending" else 0},
-        {"key": "rules", "title": "適用規則",
-         "count": len(rules), "pending": 0},
-        {"key": "claims", "title": "適用宣稱",
-         "count": len(claims), "pending": 0},
-    ]
-    return templates.TemplateResponse(request, "product_hub.html", ctx(
-        request, brand=brand, product=product, cards=cards, economics=economics,
-        rescan_url=rescan_url, research_cost=product_ai.COST_PRODUCT_SCAN, nav_current='hub',
-        **banner_ctx(request),
-    ))
-
-
-@router.get("/brands/{brand_id}/products/{product_id}/facts")
-async def product_hub_facts(request: Request, brand_id: str, product_id: str):
-    brand = require_brand(brand_id)
-    product = require_product(brand, product_id)
-    confirmed_facts = [_augment_fact(brand_id, f)
-                        for f in repo.list_product_facts(web.conn, brand_id, product_id, status="confirmed")]
-    pending_facts = [_augment_fact(brand_id, f)
-                      for f in repo.list_product_facts(web.conn, brand_id, product_id, status="pending")]
-    return templates.TemplateResponse(request, "product_hub_facts.html", ctx(
-        request, brand=brand, product=product,
-        confirmed_facts=confirmed_facts, pending_facts=pending_facts,
-        breadcrumb_items=_product_hub_crumb(brand, product, ("產品事實", None)), nav_current='hub',
-        **banner_ctx(request),
-    ))
-
-
-@router.get("/brands/{brand_id}/products/{product_id}/economics-view")
-async def product_hub_economics(request: Request, brand_id: str, product_id: str):
-    brand = require_brand(brand_id)
-    product = require_product(brand, product_id)
-    economics = repo.get_product_economics(web.conn, brand_id, product_id)
-    return templates.TemplateResponse(request, "product_hub_economics.html", ctx(
-        request, brand=brand, product=product, economics=economics,
-        breadcrumb_items=_product_hub_crumb(brand, product, ("產品經濟數字", None)), nav_current='hub',
-        **banner_ctx(request),
-    ))
-
-
-@router.get("/brands/{brand_id}/products/{product_id}/rules")
-async def product_hub_rules(request: Request, brand_id: str, product_id: str):
-    brand = require_brand(brand_id)
-    product = require_product(brand, product_id)
-    rules = repo.list_rules_for_product(web.conn, brand_id, product_id)
-    return templates.TemplateResponse(request, "product_hub_rules.html", ctx(
-        request, brand=brand, product=product, rules=rules,
-        breadcrumb_items=_product_hub_crumb(brand, product, ("適用規則", None)), nav_current='hub',
-    ))
-
-
-@router.get("/brands/{brand_id}/products/{product_id}/claims")
-async def product_hub_claims(request: Request, brand_id: str, product_id: str):
-    brand = require_brand(brand_id)
-    product = require_product(brand, product_id)
-    claims = [_augment_claim(brand_id, c) for c in repo.list_claims_for_product(web.conn, brand_id, product_id)]
-    return templates.TemplateResponse(request, "product_hub_claims.html", ctx(
-        request, brand=brand, product=product, claims=claims,
-        breadcrumb_items=_product_hub_crumb(brand, product, ("適用宣稱", None)), nav_current='hub',
-    ))
-
-
-@router.post("/brands/{brand_id}/products/{product_id}/rescan")
-async def product_rescan_post(request: Request, brand_id: str, product_id: str, url: str = Form("")):
-    """「AI 再次調研」：對已建立的產品重跑一次快掃（issue：產品快掃可再次調研）。
-    網址由畫面預填最近一次帶網址的來源引用，使用者可改。同 label 的結果自動略過，
-    不會跟既有事實／經濟數字重複堆積。"""
-    actor = require_actor(request)
-    brand = require_brand(brand_id)
-    product = require_product(brand, product_id)
-    url_c = clean(url)
-    if not url_c:
-        return redirect_with_message(f"/brands/{brand_id}/products/{product_id}",
-                                      "請填寫網址，才能請 AI 再次調研。", kind="danger")
-    if not (url_c.startswith("http://") or url_c.startswith("https://")):
-        return redirect_with_message(
-            f"/brands/{brand_id}/products/{product_id}",
-            "這個網址看起來不完整，記得從 https:// 開始，例如「https://example.com/products/xxx」。",
-            kind="danger",
-        )
-    budget_err = _scan_budget_error(brand_id)
-    if budget_err:
-        return redirect_with_message(f"/brands/{brand_id}/products/{product_id}", budget_err,
-                                      kind="danger")
-
-    brand_facts = repo.list_brand_facts(web.conn, brand_id, status="confirmed")
-    ok, result = product_ai_calls.run_product_scan(
-        web.conn, brand_id, product["name"], url_c, brand_facts)
-    if not ok:
-        return redirect_with_message(f"/brands/{brand_id}/products/{product_id}", result,
-                                      kind="danger")
-
-    src_id = _create_source_ref(brand_id, actor, url_c)
-    added, skipped, price_created = _apply_product_scan_result(brand_id, product_id, actor, src_id, result)
-    msg = f"AI 再次調研完成，新增了 {added} 條待確認的產品事實"
-    if skipped:
-        msg += f"（{skipped} 條跟既有內容重複，已略過）"
-    if price_created:
-        msg += "，也抓到售價存成待確認的經濟數字"
-    msg += "。"
-    return redirect_with_message(f"/brands/{brand_id}/products/{product_id}", msg)
-
-
-# ---------------------------------------------------------------------------
-# 產品調研交接包（GitHub issue #7）：產品快掃只讀一頁網頁，這裡讓使用者把交接包文字
-# 帶去外部 AI（Claude／ChatGPT 網頁版）跑更深的調研，再把回覆貼回來解析入庫。
-# ---------------------------------------------------------------------------
-
-def _product_handoff_prompt(brand: dict, product: dict) -> str:
-    brand_facts = repo.list_brand_facts(web.conn, brand["id"], status="confirmed")
-    product_facts = repo.list_product_facts(web.conn, brand["id"], product["id"])
-    return product_ai.build_product_handoff_prompt(brand["name"], product["name"], brand_facts, product_facts)
-
-
-def _product_handoff_ctx(request: Request, brand: dict, product: dict, values: dict, errors: dict) -> dict:
-    return ctx(
-        request, brand=brand, product=product, prompt_text=_product_handoff_prompt(brand, product),
-        values=values, errors=errors, fix_cost=product_ai.COST_PRODUCT_HANDOFF_FIX,
-        breadcrumb_items=_product_hub_crumb(brand, product, ("調研交接包", None)), nav_current='hub',
-    )
-
-
-@router.get("/brands/{brand_id}/products/{product_id}/handoff")
-async def product_handoff_get(request: Request, brand_id: str, product_id: str):
-    brand = require_brand(brand_id)
-    product = require_product(brand, product_id)
-    return templates.TemplateResponse(request, "product_handoff.html", _product_handoff_ctx(
-        request, brand, product, values={"raw_text": ""}, errors={},
-    ))
-
-
-@router.post("/brands/{brand_id}/products/{product_id}/handoff")
-async def product_handoff_post(request: Request, brand_id: str, product_id: str,
-                                raw_text: str = Form("")):
-    """貼回解析：先試直接解析 JSON（不花錢），失敗才呼叫 AI 修復格式（受花費上限保護）。
-    成功後重用票 A 的 _apply_product_scan_result 入庫，同 label 去重、price 依規則建 pending。"""
-    actor = require_actor(request)
-    brand = require_brand(brand_id)
-    product = require_product(brand, product_id)
-    values = {"raw_text": raw_text}
-
-    if not clean(raw_text):
-        return templates.TemplateResponse(request, "product_handoff.html", _product_handoff_ctx(
-            request, brand, product, values=values, errors={"raw_text": "請先把外部 AI 的回覆貼進來。"},
-        ), status_code=400)
-
-    result = product_ai_calls.parse_product_handoff_reply(raw_text)
-    if result is None:
-        budget_err = _scan_budget_error(
-            brand_id, cost=product_ai.COST_PRODUCT_HANDOFF_FIX, action="請 AI 幫忙整理格式",
-            fallback_hint="或先自己把貼上的內容改成正確格式，那樣不用花錢。")
-        if budget_err:
-            return templates.TemplateResponse(request, "product_handoff.html", _product_handoff_ctx(
-                request, brand, product, values=values, errors={"raw_text": budget_err},
-            ), status_code=400)
-        ok, fixed = product_ai_calls.run_product_handoff_fix(web.conn, brand_id, raw_text)
-        if not ok:
-            return templates.TemplateResponse(request, "product_handoff.html", _product_handoff_ctx(
-                request, brand, product, values=values, errors={"raw_text": fixed},
-            ), status_code=400)
-        result = fixed
-
-    src_label = f"外部深研交接包・{datetime.now(timezone.utc).date().isoformat()}"
-    src_id = _create_source_ref(brand_id, actor, src_label)
-    added, skipped, price_created = _apply_product_scan_result(brand_id, product_id, actor, src_id, result)
-    msg = f"深研交接包貼回完成，新增了 {added} 條待確認的產品事實"
-    if skipped:
-        msg += f"（{skipped} 條跟既有內容重複，已略過）"
-    if price_created:
-        msg += "，也抓到售價存成待確認的經濟數字"
-    msg += "。"
-    return redirect_with_message(f"/brands/{brand_id}/products/{product_id}", msg)
-
-
-@router.post("/brands/{brand_id}/products/{product_id}/archive")
-async def product_archive_post(request: Request, brand_id: str, product_id: str):
-    actor = require_actor(request)
-    brand = require_brand(brand_id)
-    product = require_product(brand, product_id)
-    new_status = "archived" if product["status"] == "active" else "active"
-    repo.update_product(web.conn, brand_id, product_id, name=product["name"], status=new_status, actor=actor)
-    msg = (f"已封存產品「{product['name']}」。" if new_status == "archived"
-           else f"已恢復產品「{product['name']}」為使用中。")
-    return redirect_with_message(f"/brands/{brand_id}/products/{product_id}", msg)
-
-
-def _product_delete_counts(brand_id: str, product_id: str) -> list:
-    """刪除確認頁要列的「會一起消失的資料」，只留有東西的項目（改由清理登記處
-    彙整所有登記模組的清點結果，不再只問品牌智庫自己——第 6 刀）。"""
-    rows = cleanup.count_all_product(web.conn, brand_id, product_id)
-    return [(label, n) for label, n in rows if n > 0]
-
-
-@router.get("/brands/{brand_id}/products/{product_id}/delete")
-async def product_delete_get(request: Request, brand_id: str, product_id: str):
-    brand = require_brand(brand_id)
-    product = require_product(brand, product_id)
-    if product["status"] != "archived":
-        return redirect_with_message(f"/brands/{brand_id}/products/{product_id}",
-                                      "要先把產品封存，才能永久刪除。", kind="warn")
-    return templates.TemplateResponse(request, "product_delete.html", ctx(
-        request, brand=brand, product=product,
-        counts=_product_delete_counts(brand_id, product_id), error=None, nav_current='hub',
-    ))
-
-
-@router.post("/brands/{brand_id}/products/{product_id}/delete")
-async def product_delete_post(request: Request, brand_id: str, product_id: str,
-                               confirm_name: str = Form("")):
-    actor = require_actor(request)
-    brand = require_brand(brand_id)
-    product = require_product(brand, product_id)
-    if product["status"] != "archived":
-        return redirect_with_message(f"/brands/{brand_id}/products/{product_id}",
-                                      "要先把產品封存，才能永久刪除。", kind="warn")
-    if clean(confirm_name) != product["name"]:
-        return templates.TemplateResponse(request, "product_delete.html", ctx(
-            request, brand=brand, product=product,
-            counts=_product_delete_counts(brand_id, product_id),
-            error="輸入的名稱跟產品名稱不一樣，請照著上面顯示的名稱再打一次。",
-            nav_current='hub',
-        ), status_code=400)
-    corebackup.snapshot(f"before-delete-{product_id}")
-    repo.delete_product(web.conn, brand_id, product_id, actor=actor)
-    return redirect_with_message(
-        f"/brands/{brand_id}/hub/products",
-        f"已永久刪除產品「{product['name']}」。刪除前的備份已存進 backups 資料夾。")
-
-
-@router.get("/brands/{brand_id}/products/{product_id}/facts/new")
-async def product_fact_new_get(request: Request, brand_id: str, product_id: str):
-    brand = require_brand(brand_id)
-    product = require_product(brand, product_id)
-    values = {"fact_type": "", "label": "", "value": "", "status": "pending", "source_reference": ""}
-    facts_url = f"/brands/{brand_id}/products/{product_id}/facts"
-    return templates.TemplateResponse(request, "fact_new.html", ctx(
-        request, brand=brand, values=values, errors={}, nav_current='hub',
-        scope="product", fact_types=md.PRODUCT_FACT_TYPES, product=product,
-        form_action=f"/brands/{brand_id}/products/{product_id}/facts/new",
-        back_url=facts_url, back_label="產品事實",
-        breadcrumb_items=_product_hub_crumb(brand, product, ("產品事實", facts_url), ("新增產品事實", None)),
-    ))
-
-
-@router.post("/brands/{brand_id}/products/{product_id}/facts/new")
-async def product_fact_new_post(request: Request, brand_id: str, product_id: str,
-                                 fact_type: str = Form(""), label: str = Form(""), value: str = Form(""),
-                                 status: str = Form("pending"), source_reference: str = Form("")):
-    actor = require_actor(request)
-    brand = require_brand(brand_id)
-    product = require_product(brand, product_id)
-    values = {"fact_type": fact_type, "label": label, "value": value,
-              "status": status, "source_reference": source_reference}
-    errors = {}
-    if not clean(fact_type):
-        errors["fact_type"] = "請選擇這是哪一類產品事實。"
-    if not clean(label):
-        errors["label"] = "請填寫這條事實的名稱。"
-    if not clean(value):
-        errors["value"] = "請填寫事實內容。"
-    if status not in ("confirmed", "pending"):
-        errors["status"] = "請選擇是否已經確認過。"
-    facts_url = f"/brands/{brand_id}/products/{product_id}/facts"
-    if errors:
-        return templates.TemplateResponse(request, "fact_new.html", ctx(
-            request, brand=brand, values=values, errors=errors, nav_current='hub',
-            scope="product", fact_types=md.PRODUCT_FACT_TYPES, product=product,
-            form_action=f"/brands/{brand_id}/products/{product_id}/facts/new",
-            back_url=facts_url, back_label="產品事實",
-            breadcrumb_items=_product_hub_crumb(brand, product, ("產品事實", facts_url), ("新增產品事實", None)),
-        ), status_code=400)
-    src_id = _create_source_ref(brand_id, actor, source_reference)
-    confirmed_by = actor if status == "confirmed" else None
-    repo.create_product_fact(
-        web.conn, brand_id, product_id, actor=actor, fact_type=fact_type, label=clean(label), value=clean(value),
-        status=status, source_reference_id=src_id, confirmed_by=confirmed_by,
-    )
-    status_label = "已確認" if status == "confirmed" else "待確認"
-    return redirect_with_message(
-        facts_url, f"已新增產品事實「{clean(label)}」，狀態為{status_label}。",
-        again=f"/brands/{brand_id}/products/{product_id}/facts/new",
-    )
-
-
-@router.get("/brands/{brand_id}/products/{product_id}/facts/{fact_id}/confirm")
-async def product_fact_confirm_get(request: Request, brand_id: str, product_id: str, fact_id: str):
-    brand = require_brand(brand_id)
-    product = require_product(brand, product_id)
-    fact = repo.get_product_fact(web.conn, brand_id, product_id, fact_id)
-    if not fact:
-        raise NotFoundKind("產品事實")
-    facts_url = f"/brands/{brand_id}/products/{product_id}/facts"
-    return templates.TemplateResponse(request, "fact_confirm.html", ctx(
-        request, brand=brand, product=product, fact=fact, nav_current='hub',
-        type_label=md.product_fact_type_label(fact["fact_type"]),
-        values={"confirmed_by": ""}, errors={},
-        form_action=f"/brands/{brand_id}/products/{product_id}/facts/{fact_id}/confirm",
-        back_url=facts_url, back_label="產品事實",
-        edit_url=f"/brands/{brand_id}/products/{product_id}/facts/new",
-        breadcrumb_items=_product_hub_crumb(brand, product, ("產品事實", facts_url), ("確認這條產品事實", None)),
-    ))
-
-
-@router.post("/brands/{brand_id}/products/{product_id}/facts/{fact_id}/confirm")
-async def product_fact_confirm_post(request: Request, brand_id: str, product_id: str, fact_id: str,
-                                     confirmed_by: str = Form("")):
-    actor = require_actor(request)
-    brand = require_brand(brand_id)
-    product = require_product(brand, product_id)
-    fact = repo.get_product_fact(web.conn, brand_id, product_id, fact_id)
-    if not fact:
-        raise NotFoundKind("產品事實")
-    confirmed_by_c = clean(confirmed_by)
-    facts_url = f"/brands/{brand_id}/products/{product_id}/facts"
-    if not confirmed_by_c:
-        return templates.TemplateResponse(request, "fact_confirm.html", ctx(
-            request, brand=brand, product=product, fact=fact, nav_current='hub',
-            type_label=md.product_fact_type_label(fact["fact_type"]),
-            values={"confirmed_by": confirmed_by}, errors={"confirmed_by": "請填寫確認人是誰。"},
-            form_action=f"/brands/{brand_id}/products/{product_id}/facts/{fact_id}/confirm",
-            back_url=facts_url, back_label="產品事實",
-            edit_url=f"/brands/{brand_id}/products/{product_id}/facts/new",
-            breadcrumb_items=_product_hub_crumb(brand, product, ("產品事實", facts_url), ("確認這條產品事實", None)),
-        ), status_code=400)
-    repo.confirm_product_fact(web.conn, brand_id, product_id, fact_id, confirmed_by=confirmed_by_c,
-                               actor=actor)
-    return redirect_with_message(
-        facts_url, f"已確認「{fact['label']}」，確認人：{confirmed_by_c}。",
-    )
-
-
-# ---------------------------------------------------------------------------
-# 限制規則
-# ---------------------------------------------------------------------------
-
-@router.get("/brands/{brand_id}/rules/new")
-async def rule_new_get(request: Request, brand_id: str):
-    brand = require_brand(brand_id)
-    products = list_products(brand_id)
-    values = {"rule_type": "", "content": "", "severity": "soft", "product_id": "", "source_reference": ""}
-    return templates.TemplateResponse(request, "rule_new.html", ctx(
-        request, brand=brand, values=values, errors={}, products=products, nav_current='hub',
-    ))
-
-
-@router.post("/brands/{brand_id}/rules/new")
-async def rule_new_post(request: Request, brand_id: str, rule_type: str = Form(""),
-                         content: str = Form(""), severity: str = Form("soft"),
-                         product_id: str = Form(""), source_reference: str = Form("")):
-    actor = require_actor(request)
-    brand = require_brand(brand_id)
-    products = list_products(brand_id)
-    values = {"rule_type": rule_type, "content": content, "severity": severity,
-              "product_id": product_id, "source_reference": source_reference}
-    errors = {}
-    if not clean(rule_type):
-        errors["rule_type"] = "請選擇規則類型。"
-    if not clean(content):
-        errors["content"] = "請填寫規則內容。"
-    if severity not in ("hard", "soft"):
-        errors["severity"] = "請選擇必須遵守或建議遵守。"
-    if product_id and not repo.get_product(web.conn, brand_id, product_id):
-        errors["product_id"] = "請選擇適用範圍。"
-    if errors:
-        return templates.TemplateResponse(request, "rule_new.html", ctx(
-            request, brand=brand, values=values, errors=errors, products=products, nav_current='hub',
-        ), status_code=400)
-    src_id = _create_source_ref(brand_id, actor, source_reference)
-    repo.create_rule(web.conn, brand_id, actor=actor, rule_type=rule_type, content=clean(content),
-                      severity=severity, product_id=product_id or None, source_reference_id=src_id)
-    scope_txt = scope_label(brand_id, product_id or None)
-    return redirect_with_message(
-        f"/brands/{brand_id}/hub/rules",
-        f"已新增限制規則「{md.rule_type_label(rule_type)}」，適用範圍：{scope_txt}。",
-        again=f"/brands/{brand_id}/rules/new",
-    )
-
-
-# ---------------------------------------------------------------------------
-# 宣稱
-# ---------------------------------------------------------------------------
-
-@router.get("/brands/{brand_id}/claims/new")
-async def claim_new_get(request: Request, brand_id: str):
-    brand = require_brand(brand_id)
-    products = list_products(brand_id)
-    values = {"claim_text": "", "claim_type": "high_risk", "product_id": "", "evidence_source_reference": ""}
-    return templates.TemplateResponse(request, "claim_new.html", ctx(
-        request, brand=brand, values=values, errors={}, products=products, nav_current='hub',
-    ))
-
-
 @router.post("/brands/{brand_id}/claims/new")
 async def claim_new_post(request: Request, brand_id: str, claim_text: str = Form(""),
                           claim_type: str = Form("high_risk"), product_id: str = Form(""),
@@ -1547,15 +639,6 @@ async def claim_new_post(request: Request, brand_id: str, claim_text: str = Form
 # 自有渠道
 # ---------------------------------------------------------------------------
 
-@router.get("/brands/{brand_id}/channels/new")
-async def channel_new_get(request: Request, brand_id: str):
-    brand = require_brand(brand_id)
-    values = {"channel_type": "", "name": "", "identifier": "", "status": "active"}
-    return templates.TemplateResponse(request, "channel_new.html", ctx(
-        request, brand=brand, values=values, errors={}, nav_current='hub',
-    ))
-
-
 @router.post("/brands/{brand_id}/channels/new")
 async def channel_new_post(request: Request, brand_id: str, channel_type: str = Form(""),
                             name: str = Form(""), identifier: str = Form(""),
@@ -1585,151 +668,12 @@ async def channel_new_post(request: Request, brand_id: str, channel_type: str = 
 
 
 # ---------------------------------------------------------------------------
-# 產品經濟數字
-# ---------------------------------------------------------------------------
-
-@router.get("/brands/{brand_id}/products/{product_id}/economics")
-async def economics_get(request: Request, brand_id: str, product_id: str):
-    brand = require_brand(brand_id)
-    product = require_product(brand, product_id)
-    existing = repo.get_product_economics(web.conn, brand_id, product_id)
-    if existing:
-        values = {
-            "selling_price": _num_str(existing["selling_price"]),
-            # 不確定／AI 只抓到售價時，成本欄位建議先填 0，之後隨時可以再改（鐵則 14 每格有路）。
-            "fixed_cost": _num_str(existing["fixed_cost"]) or "0",
-            "unit_variable_cost": _num_str(existing["unit_variable_cost"]) or "0",
-            "shipping_cost": _num_str(existing["shipping_cost"]) or "0",
-            "currency": existing["currency"],
-            "cpa_roas_basis": existing["cpa_roas_basis"] or "",
-            "effective_from": existing["effective_from"] or "",
-            "confirmed_by": existing["confirmed_by"] or "",
-        }
-    else:
-        values = {"selling_price": "", "fixed_cost": "0", "unit_variable_cost": "0", "shipping_cost": "0",
-                   "currency": "TWD", "cpa_roas_basis": "", "effective_from": "",
-                   "confirmed_by": ""}
-    return templates.TemplateResponse(request, "economics_form.html", ctx(
-        request, brand=brand, product=product, values=values, errors={}, is_update=existing is not None,
-        nav_current='hub',
-    ))
-
-
-@router.post("/brands/{brand_id}/products/{product_id}/economics")
-async def economics_post(request: Request, brand_id: str, product_id: str,
-                          selling_price: str = Form(""), fixed_cost: str = Form(""),
-                          unit_variable_cost: str = Form(""), shipping_cost: str = Form(""),
-                          currency: str = Form("TWD"), cpa_roas_basis: str = Form(""),
-                          effective_from: str = Form(""), confirmed_by: str = Form("")):
-    actor = require_actor(request)
-    brand = require_brand(brand_id)
-    product = require_product(brand, product_id)
-    values = {"selling_price": selling_price, "fixed_cost": fixed_cost,
-              "unit_variable_cost": unit_variable_cost, "shipping_cost": shipping_cost,
-              "currency": currency, "cpa_roas_basis": cpa_roas_basis,
-              "effective_from": effective_from, "confirmed_by": confirmed_by}
-    errors = {}
-    price_val, price_ok = parse_number(selling_price)
-    if clean(selling_price) == "":
-        errors["selling_price"] = "請填寫售價。"
-    elif not price_ok:
-        errors["selling_price"] = "售價請填數字，例如 1280。"
-    fixed_val, fixed_ok = parse_number(fixed_cost)
-    if not fixed_ok:
-        errors["fixed_cost"] = "固定成本請填數字，例如 0。"
-    unit_val, unit_ok = parse_number(unit_variable_cost)
-    if not unit_ok:
-        errors["unit_variable_cost"] = "單位變動成本請填數字，例如 430。"
-    ship_val, ship_ok = parse_number(shipping_cost)
-    if not ship_ok:
-        errors["shipping_cost"] = "運費請填數字，例如 60。"
-    if not clean(currency):
-        errors["currency"] = "請選擇幣別。"
-    if not clean(confirmed_by):
-        errors["confirmed_by"] = "請填寫確認人是誰。"
-    if errors:
-        return templates.TemplateResponse(request, "economics_form.html", ctx(
-            request, brand=brand, product=product, values=values, errors=errors,
-            is_update=repo.get_product_economics(web.conn, brand_id, product_id) is not None,
-            nav_current='hub',
-        ), status_code=400)
-    repo.save_product_economics(
-        web.conn, brand_id, product_id, actor=actor,
-        selling_price=price_val, currency=currency, confirmed_by=clean(confirmed_by),
-        fixed_cost=fixed_val, unit_variable_cost=unit_val, shipping_cost=ship_val,
-        cpa_roas_basis=clean(cpa_roas_basis) or None, effective_from=clean(effective_from) or None,
-    )
-    return redirect_with_message(
-        f"/brands/{brand_id}/products/{product_id}/economics-view",
-        f"已儲存「{product['name']}」的產品經濟數字。",
-    )
-
-
-@router.post("/brands/{brand_id}/products/{product_id}/economics/confirm")
-async def economics_confirm_post(request: Request, brand_id: str, product_id: str):
-    """待確認經濟數字的一鍵確認（比照產品事實的確認模式，最小版：不用另外填確認人，
-    直接用目前的操作人）。欄位還沒補齊也能先確認存在、之後仍可用「更新數字」補上。"""
-    actor = require_actor(request)
-    brand = require_brand(brand_id)
-    product = require_product(brand, product_id)
-    existing = repo.get_product_economics(web.conn, brand_id, product_id)
-    if not existing:
-        raise NotFoundKind("產品經濟數字")
-    repo.confirm_product_economics(web.conn, brand_id, product_id, confirmed_by=actor, actor=actor)
-    return redirect_with_message(
-        f"/brands/{brand_id}/products/{product_id}",
-        f"已確認「{product['name']}」的產品經濟數字，確認人：{actor}。",
-    )
-
-
-# ---------------------------------------------------------------------------
-# 官方素材（issue #3）：Logo／產品照／包裝／其他，上傳、列表縮圖、刪除
+# 官方素材（issue #3）：上傳已改走 POST /api/brands/{id}/assets（routes_library.py），
+# 這裡只留刪除（前端仍直接呼叫這支舊端點）＋檔案服務（FileResponse，必留）。
 # ---------------------------------------------------------------------------
 
 _ASSET_CONTENT_TYPES = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png",
                          "webp": "image/webp", "gif": "image/gif"}
-
-
-@router.get("/brands/{brand_id}/assets/new")
-async def asset_new_get(request: Request, brand_id: str):
-    brand = require_brand(brand_id)
-    values = {"asset_kind": "", "product_id": "", "title": ""}
-    return templates.TemplateResponse(request, "asset_new.html", ctx(
-        request, brand=brand, values=values, errors={}, products=list_products(brand_id),
-        nav_current='hub',
-    ))
-
-
-@router.post("/brands/{brand_id}/assets/new")
-async def asset_new_post(request: Request, brand_id: str, asset_kind: str = Form(""),
-                          product_id: str = Form(""), title: str = Form(""),
-                          file: UploadFile = File(...)):
-    actor = require_actor(request)
-    brand = require_brand(brand_id)
-    products = list_products(brand_id)
-    values = {"asset_kind": asset_kind, "product_id": product_id, "title": title}
-    errors = {}
-    if asset_kind not in dict(md.ASSET_KINDS):
-        errors["asset_kind"] = "請選擇這是哪一種素材。"
-    product_id_c = clean(product_id)
-    if product_id_c and not repo.get_product(web.conn, brand_id, product_id_c):
-        errors["product_id"] = "找不到這個產品，請重新選擇。"
-    if errors:
-        return templates.TemplateResponse(request, "asset_new.html", ctx(
-            request, brand=brand, values=values, errors=errors, products=products,
-            nav_current='hub',
-        ), status_code=400)
-    ok, detail = save_official_asset(
-        brand_id, actor=actor, asset_kind=asset_kind, product_id=product_id_c, title=title,
-        filename=file.filename or "", content=await file.read(),
-    )
-    if not ok:
-        return templates.TemplateResponse(request, "asset_new.html", ctx(
-            request, brand=brand, values=values, errors={"file": detail}, products=products,
-            nav_current='hub',
-        ), status_code=400)
-    return redirect_with_message(
-        f"/brands/{brand_id}/hub/assets", f"已上傳「{md.asset_kind_label(asset_kind)}」素材。")
 
 
 @router.post("/brands/{brand_id}/assets/{asset_id}/delete")
@@ -1758,11 +702,3 @@ async def asset_file(request: Request, brand_id: str, asset_id: str, filename: s
     ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
     return FileResponse(asset["file_path"], media_type=_ASSET_CONTENT_TYPES.get(ext, "application/octet-stream"),
                          filename=filename)
-
-
-# 規則卡（issue #12）改分品牌後搬到 app/brand_intelligence/routes_settings.py（設定中心票
-# 01，/brands/{brand_id}/settings/ads），這裡不再放平台層級的 /rule-cards 路由——
-# app.core.rule_cards 的 CARDS 機制現在每個函式都要求 brand_id，沒有品牌上下文的全域頁面
-# 已經無法運作。
-
-

@@ -109,7 +109,8 @@ class OverviewNextStepWiringTest(unittest.TestCase):
         card = self._card(brand["id"])
         self.assertIsNotNone(card["next_step"])
         self.assertIn("計畫", card["next_step"]["title"])
-        self.assertEqual(card["next_step"]["action_url"], f"/brands/{brand['id']}/ads/{cycle_id}")
+        self.assertEqual(card["next_step"]["action_url"],
+                         f"/app/brands/{brand['id']}/campaigns/{cycle_id}")
 
     def test_reading_unread_beats_pending_facts_in_priority(self):
         """判讀出爐未讀（reading_unread）比待確認事實（pending_facts）先登記，

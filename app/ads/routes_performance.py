@@ -1,23 +1,24 @@
 # -*- coding: utf-8 -*-
-"""app/ads/routes_performance.py — 成效頁、判讀、對帳、期中檢查點、CSV／手動匯入
-（第 8 刀從 app/ads/routes.py 拆出）。純搬移，網址與行為不變。
+"""app/ads/routes_performance.py — 成效頁、CSV／手動匯入、判讀進度頁（第 8 刀從
+app/ads/routes.py 拆出；T4 廣告模組 Jinja 大清倉刪掉本檔其餘 Jinja 舊頁與表單）。
 
-本檔負責的頁：
-- `/brands/{b}/ads/{cycle}/performance`                    成效頁
-- `/brands/{b}/ads/{cycle}/performance/hypotheses`         判讀假設結案
-- `/brands/{b}/ads/{cycle}/performance/reconcile`          對帳自答
-- `/brands/{b}/ads/{cycle}/revenue-reconcile`               舊網址轉址
-- `/brands/{b}/ads/{cycle}/performance/data`                資料操作子頁
-- `/brands/{b}/ads/{cycle}/revenue-reconcile/calibrate`     營收校準
-- `/brands/{b}/ads/{cycle}/performance/shopee-code`         蝦皮期別碼
-- `/brands/{b}/ads/{cycle}/reading/progress`                判讀進度頁
-- `/brands/{b}/ads/{cycle}/performance/simulate`            模擬成效
-- `/brands/{b}/ads/{cycle}/performance/csv`、`/manual`      成效匯入
-- `/brands/{b}/ads/{cycle}/checkpoint/{kind}`                期中檢查點
-- `/brands/{b}/ads/checkpoints/{id}/{action}`                檢查點紀錄管理
+本檔現在負責的路由：
+- `/brands/{b}/ads/{cycle}/performance`         成效頁（test_ads_performance.py 直打，
+  `page.text` 斷言頁面內容含「擱在一旁」「資料不足」等措辭，不能只留 CSV／manual）
+- `/brands/{b}/ads/{cycle}/performance/csv`、`/manual`  成效匯入（同上，測試直打舊路徑）
+- `/brands/{b}/ads/{cycle}/reading/progress`    判讀進度頁（test_ads_weekly_proposal.py
+  直打，背景執行＋冪等閘＋逾時同 ads_plan_progress）
 
-`orders_channel`、背景進度引擎：一律 `ads_routes.` 開頭即時查值，理由見
-routes_sync.py／routes_connections.py 檔頭說明。
+T4 一併刪除：判讀假設結案（`/performance/hypotheses`）、對帳自答（`/performance/
+reconcile`）、舊網址轉址（`/revenue-reconcile`）、資料操作子頁（`/performance/data`）、
+營收校準（`/revenue-reconcile/calibrate`）、蝦皮期別碼（`/performance/shopee-code`）、
+模擬成效（`/performance/simulate`，已有 `/api/campaigns/.../performance/simulate` 等價
+端點）、期中檢查點（`/checkpoint/{kind}`，已有 `/api/campaigns/.../checkpoint/{kind}`
+等價端點）、檢查點紀錄管理（`/checkpoints/{id}/{action}`）——測試與 React 都已不再打
+這批舊路徑。
+
+`orders_channel`、背景進度引擎（app/ads/routes_progress.py）：一律 `ads_routes.`
+開頭即時查值，理由見 routes_progress.py 檔頭說明。
 """
 
 import time
@@ -25,16 +26,13 @@ from datetime import date
 from typing import Optional
 
 from fastapi import APIRouter, File, Form, Request, UploadFile
-from fastapi.responses import RedirectResponse
 
 import app.shared.web as main_mod
 from app.ads import checklist as ads_checklist
-from app.ads import checkpoint as ads_checkpoint
 from app.ads import guardrails
-from app.ads import inflation as ads_inflation
 from app.ads import nextcycle
-from app.ads import pacing as ads_pacing
 from app.ads import performance as ads_performance
+from app.ads import pacing as ads_pacing
 from app.ads import reading as ads_reading
 from app.ads import reconcile as ads_reconcile_mod
 from app.ads import repository as ads_repo
@@ -80,134 +78,6 @@ async def ads_performance_page(request: Request, brand_id: str, cycle_id: str):
                                                      f"/brands/{brand_id}/ads/{cycle_id}")),
                      errors={}, **main_mod.banner_ctx(request)),
     )
-
-
-@router.post("/brands/{brand_id}/ads/{cycle_id}/performance/hypotheses")
-async def ads_hypotheses_resolve(request: Request, brand_id: str, cycle_id: str):
-    """判讀頁假設結案（GitHub issue #53）：表單欄位是 verdict_<假設id>，AI 已預填三選一，
-    使用者零操作也能過——直接送出就照 AI 的預選結案。"""
-    main_mod.require_brand(brand_id)
-    actor = main_mod.require_actor(request)
-    _require_cycle(brand_id, cycle_id)
-    form = await request.form()
-    back = f"/brands/{brand_id}/ads/{cycle_id}/performance"
-    verdicts = {key[len("verdict_"):]: value for key, value in form.items()
-               if key.startswith("verdict_")}
-    if not verdicts:
-        return main_mod.redirect_with_message(back, "沒有可結案的假設。", kind="warn")
-    try:
-        updated = ads_reading.resolve_hypotheses(main_mod.conn, brand_id, cycle_id, verdicts,
-                                                 actor=actor)
-    except ValueError as exc:
-        return main_mod.redirect_with_message(back, str(exc), kind="warn")
-    if not updated:
-        return main_mod.redirect_with_message(back, "這些假設已經結案過了。", kind="warn")
-    return main_mod.redirect_with_message(back, f"已結案 {updated} 條假設。")
-
-
-@router.post("/brands/{brand_id}/ads/{cycle_id}/performance/reconcile")
-async def ads_reconcile(request: Request, brand_id: str, cycle_id: str,
-                        budget_same: str = Form(""), schedule_same: str = Form(""),
-                        other_campaign_running: str = Form("")):
-    """對帳：自動比對總花費，加上使用者自答的三題（API 掛掉時的退路）。
-
-    三題都沒答也可以按——自答是補充資訊，不是新的必經關卡。
-    """
-    main_mod.require_brand(brand_id)
-    main_mod.require_actor(request)
-    _require_cycle(brand_id, cycle_id)
-
-    def _tri(raw):
-        return {"yes": True, "no": False}.get(raw)
-
-    answers = {"budget_same": _tri(budget_same), "schedule_same": _tri(schedule_same),
-               "other_campaign_running": _tri(other_campaign_running)}
-    result = ads_reconcile_mod.run(main_mod.conn, brand_id, cycle_id, self_answers=answers)
-
-    back = f"/brands/{brand_id}/ads/{cycle_id}/performance/data"
-    if not result["findings"]:
-        return main_mod.redirect_with_message(back, "對過了，數字跟計畫對得上。")
-    return main_mod.redirect_with_message(
-        back, f"對過了，發現 {len(result['findings'])} 處跟計畫不一樣，"
-              f"本期判讀標為「{result['label']}」。", kind="warn")
-
-
-@router.get("/brands/{brand_id}/ads/{cycle_id}/revenue-reconcile")
-async def ads_revenue_reconcile_page(request: Request, brand_id: str, cycle_id: str):
-    """舊網址（票 #36）已併入資料操作子頁（GitHub issue #47：成效頁拆層），302 轉址，
-    不再是旁支暗頁。"""
-    main_mod.require_brand(brand_id)
-    _require_cycle(brand_id, cycle_id)
-    return RedirectResponse(
-        f"/brands/{brand_id}/ads/{cycle_id}/performance/data#revenue-reconcile",
-        status_code=302)
-
-
-@router.get("/brands/{brand_id}/ads/{cycle_id}/performance/data")
-async def ads_performance_data_page(request: Request, brand_id: str, cycle_id: str):
-    """資料操作子頁（GitHub issue #47）：匯入 CSV、手動填、蝦皮碼、對帳自答、營收校準
-    全部收在這裡；成效頁本身只留判讀結論（拆層，決策 0029 第 10 點）。"""
-    brand = main_mod.require_brand(brand_id)
-    conn = main_mod.conn
-    cycle = _require_cycle(brand_id, cycle_id)
-    reading = ads_reading.load(conn, brand_id, cycle_id)
-    return main_mod.templates.TemplateResponse(
-        request, "ads_performance_data.html",
-        main_mod.ctx(request, brand=brand, nav_current='ads', cycle=_cycle_view(conn, brand_id, cycle),
-                     summary=ads_performance.totals(conn, brand_id, cycle_id),
-                     snapshots=ads_performance.list_snapshots(conn, brand_id, cycle_id),
-                     is_simulation=simulation.is_simulation(cycle),
-                     channel=(reading["cycle"]["result"].get("channel_comparison")
-                              if reading["cycle"] else None),
-                     shopee_code=ads_routes.orders_channel.get_shopee_code(conn, brand_id, cycle_id),
-                     self_answer_questions=guardrails.SELF_ANSWER_QUESTIONS,
-                     reconcile=ads_inflation.reconcile_cycle(conn, brand_id, cycle_id),
-                     coefficient=ads_inflation.effective_coefficient(conn, brand_id),
-                     cadence=ads_inflation.cadence_state(conn, brand_id),
-                     breadcrumb_items=_crumb(brand, (f"{cycle['start_date']} 檔期",
-                                                     f"/brands/{brand_id}/ads/{cycle_id}"),
-                                             ("成效", f"/brands/{brand_id}/ads/{cycle_id}/performance"),
-                                             ("資料操作", None)),
-                     **main_mod.banner_ctx(request)),
-    )
-
-
-@router.post("/brands/{brand_id}/ads/{cycle_id}/revenue-reconcile/calibrate")
-async def ads_revenue_reconcile_calibrate(request: Request, brand_id: str, cycle_id: str):
-    main_mod.require_brand(brand_id)
-    actor = main_mod.require_actor(request)
-    _require_cycle(brand_id, cycle_id)
-    back = f"/brands/{brand_id}/ads/{cycle_id}/performance/data"
-    try:
-        result = ads_inflation.calibrate(main_mod.conn, brand_id, cycle_id, actor=actor)
-    except ValueError as exc:
-        return main_mod.redirect_with_message(back, str(exc), kind="warn")
-    return main_mod.redirect_with_message(
-        back, f"係數校準到第 {result['version']} 版：{result['coefficient']:.2f} 倍。")
-
-
-@router.post("/brands/{brand_id}/ads/{cycle_id}/performance/shopee-code")
-async def ads_shopee_code(request: Request, brand_id: str, cycle_id: str,
-                          code: str = Form(""), redemption_count: str = Form("")):
-    """蝦皮期別專屬碼＋回收數（GitHub issue #40）：全部選填，外溢下限鐵證。重新判讀後
-    才會反映到通路對照卡的燈號（比照 repurchase_line／baseline_comparison 只在判讀時算）。"""
-    main_mod.require_brand(brand_id)
-    actor = main_mod.require_actor(request)
-    _require_cycle(brand_id, cycle_id)
-    back = f"/brands/{brand_id}/ads/{cycle_id}/performance/data"
-
-    count_value = None
-    if redemption_count.strip():
-        count_value, ok = main_mod.parse_number(redemption_count)
-        if not ok:
-            return main_mod.redirect_with_message(back, "回收數請填數字，或留空。", kind="warn")
-        count_value = int(count_value)
-    try:
-        ads_routes.orders_channel.set_shopee_code(main_mod.conn, brand_id, cycle_id, code=code or None,
-                                       redemption_count=count_value, actor=actor)
-    except ValueError as exc:
-        return main_mod.redirect_with_message(back, str(exc), kind="warn")
-    return main_mod.redirect_with_message(back, "已記下蝦皮期別碼資料，重新判讀後會反映在通路對照卡。")
 
 
 @router.get("/brands/{brand_id}/ads/{cycle_id}/reading/progress")
@@ -262,19 +132,6 @@ def ads_reading_progress(request: Request, brand_id: str, cycle_id: str,
         return main_mod.redirect_with_message(result_url, err, kind="warn")
     ok_message = "最終結算完成，這期正式結案。" if is_final else "判讀好了。"
     return main_mod.redirect_with_message(result_url, ok_message)
-
-
-@router.post("/brands/{brand_id}/ads/{cycle_id}/performance/simulate")
-async def ads_simulate(request: Request, brand_id: str, cycle_id: str):
-    """替模擬檔期產生假成效。數字由程式算，不讓 LLM 編。"""
-    main_mod.require_brand(brand_id)
-    actor = main_mod.require_actor(request)
-    _require_cycle(brand_id, cycle_id)
-    back = f"/brands/{brand_id}/ads/{cycle_id}/performance"
-    ok, note = simulation.generate(main_mod.conn, brand_id, cycle_id, actor)
-    if not ok:
-        return main_mod.redirect_with_message(back, note, kind="warn")
-    return main_mod.redirect_with_message(back, f"模擬成效出來了（{note}）。")
 
 
 async def _decode_csv_upload(csv_file: Optional[UploadFile], csv_text: str) -> tuple:
@@ -346,77 +203,4 @@ async def ads_performance_manual(request: Request, brand_id: str, cycle_id: str,
     ads_performance.save_derived_metrics(main_mod.conn, brand_id, cycle_id)
     ads_pacing.check_cycle(main_mod.conn, brand_id, cycle_id)  # 票 08：新數據落地後判一次步調
     return main_mod.redirect_with_message(back, "記下來了。")
-
-
-@router.get("/brands/{brand_id}/ads/{cycle_id}/checkpoint/{kind}")
-async def ads_checkpoint_page(request: Request, brand_id: str, cycle_id: str, kind: str):
-    """期中檢查點頁（票 9）：第 3／7 天提醒卡點進來就是這裡。健康檢查模式，明文不判勝負。"""
-    brand = main_mod.require_brand(brand_id)
-    conn = main_mod.conn
-    cycle = _require_cycle(brand_id, cycle_id)
-    if kind not in ads_checkpoint.KIND_LABELS:
-        raise main_mod.NotFoundKind("檢查點")
-
-    history = ads_checkpoint.list_checkpoints(conn, brand_id, cycle_id)
-    return main_mod.templates.TemplateResponse(
-        request, "ads_checkpoint.html",
-        main_mod.ctx(request, brand=brand, nav_current='ads', cycle=_cycle_view(conn, brand_id, cycle),
-                     kind=kind, kind_label=ads_checkpoint.KIND_LABELS[kind],
-                     latest=next((c for c in history if c["kind"] == kind), None),
-                     history=[c for c in history if c["status"] == "active"],
-                     breadcrumb_items=_crumb(brand, (f"{cycle['start_date']} 檔期",
-                                                     f"/brands/{brand_id}/ads/{cycle_id}"),
-                                             (ads_checkpoint.KIND_LABELS[kind], None)),
-                     **main_mod.banner_ctx(request)),
-    )
-
-
-@router.post("/brands/{brand_id}/ads/{cycle_id}/checkpoint/{kind}")
-async def ads_checkpoint_run(request: Request, brand_id: str, cycle_id: str, kind: str,
-                             csv_file: UploadFile = File(None), csv_text: str = Form("")):
-    main_mod.require_brand(brand_id)
-    actor = main_mod.require_actor(request)
-    _require_cycle(brand_id, cycle_id)
-    back = f"/brands/{brand_id}/ads/{cycle_id}/checkpoint/{kind}"
-    if kind not in ads_checkpoint.KIND_LABELS:
-        raise main_mod.NotFoundKind("檢查點")
-
-    text, decode_error = await _decode_csv_upload(csv_file, csv_text)
-    if decode_error:
-        return main_mod.redirect_with_message(back, decode_error, kind="warn")
-
-    result = ads_checkpoint.run(main_mod.conn, brand_id, cycle_id, kind, actor=actor,
-                                csv_text=text or None)
-    if result.get("merged_into_final"):
-        return main_mod.redirect_with_message(
-            f"/brands/{brand_id}/ads/{cycle_id}/performance",
-            "這期已經進入期末判讀，期中檢查不用再補做，直接看期末結論。")
-    if result["import_errors"]:
-        return main_mod.redirect_with_message(back, result["import_errors"][0], kind="warn")
-    msg = "健康檢查跑完了。" if result["data_sufficient"] else "還沒有成效資料，先匯入 CSV 再檢查。"
-    return main_mod.redirect_with_message(back, msg)
-
-
-@router.post("/brands/{brand_id}/ads/checkpoints/{checkpoint_id}/{action}")
-async def ads_checkpoint_manage(request: Request, brand_id: str, checkpoint_id: str, action: str):
-    """檢查點紀錄的封存／恢復／刪除（決策 0023 第 8 條：新資料實體必附封存＋刪除）。"""
-    main_mod.require_brand(brand_id)
-    actor = main_mod.require_actor(request)
-    back = (request.headers.get("referer") or f"/brands/{brand_id}/ads").split("?")[0]
-    try:
-        if action == "archive":
-            ads_checkpoint.set_status(main_mod.conn, brand_id, checkpoint_id,
-                                      status="archived", actor=actor)
-            return main_mod.redirect_with_message(back, "已封存這筆檢查點紀錄。")
-        if action == "restore":
-            ads_checkpoint.set_status(main_mod.conn, brand_id, checkpoint_id,
-                                      status="active", actor=actor)
-            return main_mod.redirect_with_message(back, "已恢復這筆檢查點紀錄。")
-        if action == "delete":
-            ads_checkpoint.delete(main_mod.conn, brand_id, checkpoint_id, actor=actor)
-            return main_mod.redirect_with_message(back, "已刪除這筆檢查點紀錄。")
-    except ValueError as exc:
-        return main_mod.redirect_with_message(back, str(exc), kind="warn")
-    raise main_mod.NotFoundKind("動作")
-
 

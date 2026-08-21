@@ -408,7 +408,6 @@ class LayerDirectionTest(unittest.TestCase):
 # 真的需要單向棘輪時再升級。
 FILE_LINE_CAP = 800
 KNOWN_OVERSIZED_FILES = {
-    "app/brand_web/routes.py": 1854,
     "app/brand_intelligence/repository.py": 1667,
     "app/tests/test_ads_reading.py": 1157,
     "app/ads/reading.py": 1039,

@@ -75,7 +75,7 @@ class CampaignCalendarCockpitWiringTest(unittest.TestCase):
         titles = " ".join(c["title"] for c in data["guide_cards"])
         self.assertIn("雙11購物節", titles)
         card = next(c for c in data["guide_cards"] if "雙11購物節" in c["title"])
-        self.assertEqual(card["action_url"], f"/brands/{self.brand['id']}/ads/new")
+        self.assertEqual(card["action_url"], f"/app/brands/{self.brand['id']}/campaigns/new")
 
     def test_no_guide_card_when_no_event_in_window(self):
         data = self._cockpit([{"id": "far", "name": "遠檔期", "date": "2028-01-01",

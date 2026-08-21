@@ -17,10 +17,12 @@
    （模組層 dict＋`threading.Thread`），差別是這裡的 key＝`product_id`、且新建與再次調研
    共用同一套（冪等：同一個 key 已經在跑就不重新啟動），仿 `app/ads/routes.py` 的
    `_progress_state` 形狀但不 import `app.ads`（ADR 0017 模組邊界）。
-6. 產品事實／經濟數字／規則／宣稱／交接包／永久刪除，一律重用 `app/brand_intelligence/routes.py`
-   既有的私有工具函式（`_scan_budget_error`／`_apply_product_scan_result`／`_create_source_ref`／
-   `_product_handoff_prompt`）與 `repository.py` 既有的 CRUD 函式——不重寫第二份業務邏輯，
-   這裡只負責重新包一層 JSON 殼。
+6. 產品事實／經濟數字／規則／宣稱／交接包／永久刪除，一律重用既有的私有工具函式與
+   `repository.py` 既有的 CRUD 函式——不重寫第二份業務邏輯，這裡只負責重新包一層 JSON 殼。
+   `_create_source_ref` 仍在 `app/brand_web/routes.py`（那裡的品牌事實／規則／宣稱舊表單
+   handler 也在用）；`_scan_budget_error`／`_apply_product_scan_result`／
+   `_product_handoff_prompt` 三支只剩本檔在用，T4 刪品牌／產品管理舊頁時搬進
+   `app/brand_web/routes_product_helpers.py`。
 
 對外進入點：本檔的 `router`（`app/main.py` 直接 `include_router`）。誰依賴它：只有
 `app/main.py`。
@@ -35,6 +37,7 @@ from fastapi.responses import JSONResponse, Response
 from app import mock_data as md
 from app.brand_web import product_ai_calls
 from app.brand_web import routes as legacy_routes
+from app.brand_web import routes_product_helpers as product_helpers
 from app.brand_intelligence import background_job
 from app.brand_intelligence import product_ai
 from app.brand_intelligence import repository as repo
@@ -229,7 +232,7 @@ def _research_run(product_id: str, brand_id: str, actor: str, product_name: str,
     的設計本來就是把整次調研（含超預算）當成一種背景結果，兩個入口（新建／再次調研）共用
     同一段，不分岔成兩條路徑（workflow.md 第五節）。"""
     try:
-        budget_err = legacy_routes._scan_budget_error(brand_id)
+        budget_err = product_helpers._scan_budget_error(brand_id)
         if budget_err:
             _research_fail(product_id, brand_id, product_name, budget_err)
             return
@@ -240,7 +243,7 @@ def _research_run(product_id: str, brand_id: str, actor: str, product_name: str,
             _research_fail(product_id, brand_id, product_name, result)
             return
         src_id = legacy_routes._create_source_ref(brand_id, actor, url)
-        added, _skipped, price_created = legacy_routes._apply_product_scan_result(
+        added, _skipped, price_created = product_helpers._apply_product_scan_result(
             brand_id, product_id, actor, src_id, result)
         started_at = _research_jobs.get(product_id, {}).get("started_at",
                                                               datetime.now(timezone.utc).isoformat())
@@ -486,7 +489,7 @@ async def economics_confirm(request: Request, brand_id: str, product_id: str):
 async def handoff_prompt(brand_id: str, product_id: str):
     brand = require_brand(brand_id)
     product = require_product(brand, product_id)
-    return _envelope({"prompt_text": legacy_routes._product_handoff_prompt(brand, product)})
+    return _envelope({"prompt_text": product_helpers._product_handoff_prompt(brand, product)})
 
 
 @router.post("/api/products/brands/{brand_id}/products/{product_id}/handoff")
@@ -501,7 +504,7 @@ async def handoff_submit(request: Request, brand_id: str, product_id: str):
 
     result = product_ai_calls.parse_product_handoff_reply(reply_text)
     if result is None:
-        budget_err = legacy_routes._scan_budget_error(
+        budget_err = product_helpers._scan_budget_error(
             brand_id, cost=product_ai.COST_PRODUCT_HANDOFF_FIX, action="請 AI 幫忙整理格式",
             fallback_hint="或先自己把貼上的內容改成正確格式，那樣不用花錢。")
         if budget_err:
@@ -513,7 +516,7 @@ async def handoff_submit(request: Request, brand_id: str, product_id: str):
 
     src_label = f"外部深研交接包・{datetime.now(timezone.utc).date().isoformat()}"
     src_id = legacy_routes._create_source_ref(brand_id, actor, src_label)
-    added, _skipped, _price_created = legacy_routes._apply_product_scan_result(
+    added, _skipped, _price_created = product_helpers._apply_product_scan_result(
         brand_id, product_id, actor, src_id, result)
     return {"added_count": added}
 

@@ -93,7 +93,7 @@ def _rule_pacing_alert(facts: dict) -> Optional[dict]:
     title = ("檔期預算燒太快，去看步調" if alert["kind"] == "overspend"
              else "檔期預算花不完，去看步調")
     return {"title": title, "action_url": alert.get("action_url")
-            or f"/brands/{facts['brand_id']}/ads"}
+            or f"/app/brands/{facts['brand_id']}/campaigns"}
 
 
 def _rule_reading_unread(facts: dict) -> Optional[dict]:
@@ -130,7 +130,7 @@ def _rule_cycle_stage(facts: dict) -> Optional[dict]:
         return None
     return {
         "title": f"檔期卡在「{stage_label}」，去推進",
-        "action_url": f"/brands/{facts['brand_id']}/ads/{cycle['id']}",
+        "action_url": f"/app/brands/{facts['brand_id']}/campaigns/{cycle['id']}",
     }
 
 
@@ -161,7 +161,7 @@ def _rule_campaign_calendar(facts: dict) -> Optional[dict]:
     if reminder.get("last_year_skipped"):
         reason = reminder.get("last_year_skip_reason")
         title += f"（去年跳過：{reason}）" if reason else "（去年跳過）"
-    return {"title": title, "action_url": f"/brands/{facts['brand_id']}/ads/new"}
+    return {"title": title, "action_url": f"/app/brands/{facts['brand_id']}/campaigns/new"}
 
 
 # 登記表：dict 順序＝優先序（越早登記代表行動價值越高，比照 interrupts.py CATEGORIES）。

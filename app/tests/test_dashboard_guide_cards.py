@@ -63,7 +63,7 @@ class PacingAlertRuleTest(unittest.TestCase):
         facts = _facts(pacing_alert={"kind": "underspend", "action_url": None})
         card = guide_cards.RULES["pacing_alert"](facts)
         self.assertIn("花不完", card["title"])
-        self.assertEqual(card["action_url"], f"/brands/{BRAND_ID}/ads")
+        self.assertEqual(card["action_url"], f"/app/brands/{BRAND_ID}/campaigns")
 
     def test_does_not_trigger_without_alert(self):
         self.assertIsNone(guide_cards.RULES["pacing_alert"](_facts()))
@@ -123,7 +123,7 @@ class CycleStageRuleTest(unittest.TestCase):
         card = guide_cards.RULES["cycle_stage"](facts)
         self.assertIsNotNone(card)
         self.assertIn("素材", card["title"])
-        self.assertEqual(card["action_url"], f"/brands/{BRAND_ID}/ads/ccy_1")
+        self.assertEqual(card["action_url"], f"/app/brands/{BRAND_ID}/campaigns/ccy_1")
 
     def test_does_not_trigger_when_stage_label_absent(self):
         """stage_label 為 None＝已經在成效格（第 5 格），不算「卡住」，不用提醒去推進。"""
@@ -160,7 +160,7 @@ class CampaignCalendarRuleTest(unittest.TestCase):
         self.assertIsNotNone(card)
         self.assertIn("農曆新年", card["title"])
         self.assertIn("4", card["title"])
-        self.assertEqual(card["action_url"], f"/brands/{BRAND_ID}/ads/new")
+        self.assertEqual(card["action_url"], f"/app/brands/{BRAND_ID}/campaigns/new")
 
     def test_triggers_creative_reminder_with_days_until_in_title(self):
         facts = _facts(campaign_reminder={
