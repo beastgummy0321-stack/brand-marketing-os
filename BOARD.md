@@ -3,11 +3,6 @@
 排序＝執行順序。分票唯一依據＝`docs/ui-migration-contract.md` v2（含隨批裁決）＋ ADR 0019。
 標「需批准」的票動工前先提計畫等批准；動到畫面先過畫面契約（草圖 → 後端 → 前端）。
 
-- [>] T4-05 Jinja 整批刪除：**測試已完全脫鉤、前端已全面走 /api，剩最後的刪除動作**
-  TemplateResponse 103 → 29 處（brand_web 17、main.py 9、ads 3）；
-  64 個 HTML ＋ 20 個 component ＋ app/static/ 尚未刪。
-  接手看 `.scratch/t4/HANDOFF.md`（含四步驟順序、地雷、已學到的教訓）。
-  本輪清除的兩個阻塞：libraryApi.ts 17 支寫入改走 /api、三個舊頁獨有功能補進新殼。
 - [ ] M1 Meta 官方 MCP 接入：自動建廣告（PAUSED）＋使用者按發布；保守檔同意執行／放手檔執行器；動安全底線（需批准；與 T0–T3 並行）
 - [ ] P1 成效回流接通：帶單切角下期加權＋反回音室自動避開（兌現 nextcycle 既有承諾）
 - [ ] U1 新手五鐵則落地：全站術語大掃除＋禁用詞機器閘門＋步驟指示常駐（契約鐵則 11–12 驗收）；含鐵則 9 清理——weekly 通知雙出口（dashboard/repository.py:207，票 06 起既有）
