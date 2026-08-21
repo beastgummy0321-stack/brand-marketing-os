@@ -7,11 +7,12 @@
 新增編輯刪除、顧客原話封存刪除、品牌資料編輯）另開一個檔案，不把 `routes_library.py`
 推過門檻——比照 `repository_channels.py` 從 `repository.py` 拆出來的同一個理由。
 
-這些端點是 `app/brand_web/routes.py` 舊版 Jinja 表單 POST 端點（303 redirect 回
+這些端點原本是 `app/brand_web/routes.py` 舊版 Jinja 表單 POST 端點（303 redirect 回
 `/hub/*` 或 `/brands/{id}`）的 JSON 對應版本：驗證規則與錯誤訊息照抄舊版 handler，
 業務邏輯全部沿用既有的 repository 函式，這裡只是換一層 JSON 進出的殼，不 redirect。
-`frontend/src/lib/libraryApi.ts` 目前仍呼叫舊版端點；等前端切換過來後，舊版
-handler 與它們 redirect 落地用的 GET hub 頁才能整批刪除（本票不動舊端點）。
+`frontend/src/lib/libraryApi.ts` 已經全部改打這裡的 `/api` 端點，T4 步驟 1 把舊版
+handler 與它們 redirect 落地用的 GET hub 頁整批刪除了（只留 `_create_source_ref`／
+`_persona_conversion_goal_default` 兩支小工具與素材檔案服務）。
 
 小工具沿用而非複製：`_create_source_ref`／`_persona_conversion_goal_default`
 （`app/brand_web/routes.py` 私有函式）與 `_fact_shape`／`_rule_shape`／`_claim_shape`／

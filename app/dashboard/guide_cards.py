@@ -65,7 +65,9 @@ def _rule_conversion_goal_missing(facts: dict) -> Optional[dict]:
         return None
     return {
         "title": "還沒設定廣告目標——AI 現在會用電商預設值寫文案，可能不適合你",
-        "action_url": f"/brands/{facts['brand_id']}/edit",
+        # T4 步驟 1 刪掉舊版 Jinja `/brands/{id}/edit`，品牌資料編輯面板現在只能從
+        # 品牌智庫頁點「編輯品牌資料」開，沒有能直接開啟面板的網址，導去該頁即可。
+        "action_url": f"/app/brands/{facts['brand_id']}/library",
     }
 
 
@@ -141,7 +143,8 @@ def _rule_pending_facts(facts: dict) -> Optional[dict]:
         return None
     return {
         "title": f"有 {n} 條事實待確認",
-        "action_url": f"/brands/{facts['brand_id']}/hub/facts",
+        # T4 步驟 1 刪掉舊版 Jinja `/hub/facts` 頁，改導去新殼品牌智庫頁的事實分頁。
+        "action_url": f"/app/brands/{facts['brand_id']}/library?tab=facts",
     }
 
 
@@ -205,7 +208,7 @@ def demo() -> None:
                                 "active_cycle": {"id": "c1", "stage_label": "素材"},
                                 "reading_ready": False, "next_cycle_draft_ready": False})
     assert len(cards_missing_goal) == 3
-    assert cards_missing_goal[0]["action_url"] == "/brands/b/edit"
+    assert cards_missing_goal[0]["action_url"] == "/app/brands/b/library"
     # 票 B3-intake：有進行中建檔草稿時出卡，登記在 conversion_goal_missing 之後、
     # pacing_alert 之前；沒有草稿（None）不出卡。
     cards_with_draft = build({"brand_id": "b", "conversion_goal": "purchase",

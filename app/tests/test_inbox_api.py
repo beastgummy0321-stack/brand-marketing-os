@@ -101,14 +101,15 @@ class InboxApiTest(unittest.TestCase):
         body = self.client.get("/api/inbox").json()
         self.assertEqual(body["data"], {"open": [], "done": []})
 
-    def test_resolve_still_uses_existing_html_endpoint(self):
-        """S2.8：「知道了」沿用既有 `POST /interrupts/{id}/resolve`，本票不重造第二份。"""
+    def test_resolve_via_api_endpoint_moves_item_to_done(self):
+        """S2.8：「知道了」呼叫 `POST /api/interrupts/{id}/resolve`
+        （T4 步驟 1 刪除舊版 `POST /interrupts/{id}/resolve` HTML 端點，前端已改打這支）。"""
         interrupt_id = core_interrupts.enqueue(
             main.conn, category="cycle_reminder", dedupe_key="k4", message="測試", brand_id=self.bid,
         )
         main.conn.commit()
-        resp = self.client.post(f"/interrupts/{interrupt_id}/resolve", follow_redirects=False)
-        self.assertEqual(resp.status_code, 303)
+        resp = self.client.post(f"/api/interrupts/{interrupt_id}/resolve")
+        self.assertEqual(resp.status_code, 200)
         body = self.client.get("/api/inbox").json()
         self.assertEqual(len(body["data"]["done"]), 1)
         self.assertEqual(len(body["data"]["open"]), 0)

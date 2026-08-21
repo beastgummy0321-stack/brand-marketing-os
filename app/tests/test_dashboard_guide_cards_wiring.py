@@ -96,7 +96,7 @@ class OverviewNextStepWiringTest(unittest.TestCase):
         card = self._card(brand["id"])
         self.assertIsNotNone(card["next_step"])
         self.assertIn("1", card["next_step"]["title"])
-        self.assertEqual(card["next_step"]["action_url"], f"/brands/{brand['id']}/hub/facts")
+        self.assertEqual(card["next_step"]["action_url"], f"/app/brands/{brand['id']}/library?tab=facts")
 
     def test_cycle_stuck_before_launch_surfaces_stage_as_next_step(self):
         brand = bi_repo.create_brand(
@@ -175,7 +175,7 @@ class CockpitGuideCardsWiringTest(unittest.TestCase):
         cards = self._guide_cards(brand["id"])
         self.assertEqual(len(cards), 1)
         self.assertIn("廣告目標", cards[0]["title"])
-        self.assertEqual(cards[0]["action_url"], f"/brands/{brand['id']}/edit")
+        self.assertEqual(cards[0]["action_url"], f"/app/brands/{brand['id']}/library")
 
     def test_stuck_cycle_and_pending_facts_both_surface_up_to_three(self):
         brand = bi_repo.create_brand(

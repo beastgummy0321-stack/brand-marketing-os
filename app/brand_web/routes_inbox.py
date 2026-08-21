@@ -2,9 +2,9 @@
 """app/brand_intelligence/routes_inbox.py — 收件匣 JSON API（票 B1-inbox，契約
 `.scratch/grill/GRILL-B1-inbox.md` S2）。
 
-只讀、統一回應信封（`data`／`generated_at`，沿用 `app/dashboard/routes.py` 既有慣例）；
-不寫入任何資料表——「知道了」動作沿用既有 `POST /interrupts/{id}/resolve`
-（`app/brand_intelligence/routes.py:184`），不在這裡重造第二份。
+統一回應信封（`data`／`generated_at`，沿用 `app/dashboard/routes.py` 既有慣例）。
+`GET /api/inbox` 只讀；「知道了」動作走本檔 `POST /api/interrupts/{id}/resolve`
+（T4 步驟 1 已刪除舊版 `app/brand_web/routes.py` 的 HTML 版本，前端改打這支）。
 
 對外進入點：本檔的 `router`（`app/main.py` 直接 `include_router`，不掛進
 `app.brand_intelligence.routes`——那個檔已經頂著超標行數上限，不得再加新功能，

@@ -38,7 +38,7 @@ class ConversionGoalMissingRuleTest(unittest.TestCase):
         card = guide_cards.RULES["conversion_goal_missing"](facts)
         self.assertIsNotNone(card)
         self.assertIn("廣告目標", card["title"])
-        self.assertEqual(card["action_url"], f"/brands/{BRAND_ID}/edit")
+        self.assertEqual(card["action_url"], f"/app/brands/{BRAND_ID}/library")
 
     def test_does_not_trigger_when_conversion_goal_set(self):
         self.assertIsNone(guide_cards.RULES["conversion_goal_missing"](_facts()))
@@ -141,7 +141,7 @@ class PendingFactsRuleTest(unittest.TestCase):
         card = guide_cards.RULES["pending_facts"](facts)
         self.assertIsNotNone(card)
         self.assertIn("3", card["title"])
-        self.assertEqual(card["action_url"], f"/brands/{BRAND_ID}/hub/facts")
+        self.assertEqual(card["action_url"], f"/app/brands/{BRAND_ID}/library?tab=facts")
 
     def test_does_not_trigger_when_count_zero(self):
         facts = _facts(pending_facts_count=0)
@@ -228,7 +228,7 @@ class BuildPriorityAndCapTest(unittest.TestCase):
         facts = _facts(pending_facts_count=1)
         cards = guide_cards.build(facts)
         self.assertEqual(len(cards), 1)
-        self.assertEqual(cards[0]["action_url"], f"/brands/{BRAND_ID}/hub/facts")
+        self.assertEqual(cards[0]["action_url"], f"/app/brands/{BRAND_ID}/library?tab=facts")
 
 
 if __name__ == "__main__":
