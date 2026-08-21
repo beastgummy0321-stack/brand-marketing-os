@@ -67,26 +67,11 @@ class SimulationEntryTest(_BaseSimTest):
         cycle_id = self._open(mode="simulation")
         self.assertEqual(ads_repo.get_cycle(main.conn, self.bid, cycle_id)["phase"], "normal")
 
-    def test_first_time_defaults_to_simulation(self):
-        page = self.client.get(f"/brands/{self.bid}/ads/new")
-        self.assertIn("先跑一次模擬", page.text)
-        index = page.text.index('value="simulation"')
-        self.assertIn("checked", page.text[index:index + 60])
-
     def test_entry_disappears_after_the_first_cycle(self):
         """跑過一期就別擋熟手的路。"""
         self._open(mode="real")
         ctx = self.client.get(f"/api/campaigns/{self.bid}/new-context").json()["data"]
         self.assertFalse(ctx["offer_simulation"])
-
-    def test_simulation_cycle_is_marked(self):
-        cycle_id = self._open()
-        self.assertEqual(ads_repo.get_cycle(main.conn, self.bid, cycle_id)["phase"],
-                         "simulation")
-        page = self.client.get(f"/brands/{self.bid}/ads/{cycle_id}")
-        self.assertIn("這是一期模擬檔期", page.text)
-        self.assertIn("不會實際投放", page.text)
-
 
 
 class SimulatedNumbersTest(_BaseSimTest):
@@ -156,15 +141,6 @@ class SimulationPagesTest(_BaseSimTest):
 
     def tearDown(self):
         reading.PROVIDER = self._orig
-
-    def test_performance_page_offers_simulation_not_csv(self):
-        page = self.client.get(f"/brands/{self.bid}/ads/{self.cycle_id}/performance")
-        self.assertIn("產生模擬成效", page.text)
-        self.assertNotIn("匯入 Meta 匯出的報表", page.text)
-
-    def test_page_says_the_numbers_are_not_real(self):
-        page = self.client.get(f"/brands/{self.bid}/ads/{self.cycle_id}/performance")
-        self.assertIn("不是真實投放結果", page.text)
 
     def test_simulated_cycle_can_be_read_like_a_real_one(self):
         """模擬期照樣走判讀——那正是要讓新手先看到的東西。"""

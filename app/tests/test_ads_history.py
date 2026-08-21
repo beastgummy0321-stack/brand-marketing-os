@@ -1,11 +1,6 @@
 # -*- coding: utf-8 -*-
 """app/tests/test_ads_history.py — D線票3（GitHub issue #45）：廣告 hub 五卡＋歷期戰績頁。
 
-容量腳本（票 1）對這頁的用法跟 #44 不同：hub 五卡有 3 張是 `_components/card.html` 的
-macro 呼叫，capacity_check 靜態讀原始模板檔看不到巨集展開後的 <a class="card menu-card">
-（macro 定義在別的檔案），對這種頁面要吃 check_file() 會直接漏算成 1 張卡。這裡改用
-capacity_check.check_html() 餵「實際渲染後」的回應文字，才是這頁真正的卡片／導覽連結數。
-
 品牌與產品名一律虛構，絕不使用真實客戶品牌。
 """
 
@@ -21,16 +16,13 @@ _tmpdir = tempfile.mkdtemp(prefix="brand_os_ads_history_")
 from fastapi.testclient import TestClient  # noqa: E402
 
 import app.main as main  # noqa: E402
-from app.ads import meta_api  # noqa: E402
 from app.ads import performance as ads_perf  # noqa: E402
 from app.ads import reading as ads_reading  # noqa: E402
 from app.ads import repository as ads_repo  # noqa: E402
 from app.ads import routes_common  # noqa: E402
 from app.ads import sync as ads_sync  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
-from app.core import settings as coresettings  # noqa: E402
 from app.llm.providers import FakeProvider, ProviderResponse, Usage  # noqa: E402
-from app.tools import capacity_check as cc  # noqa: E402
 
 
 
@@ -121,35 +113,7 @@ class _BaseHubTest(unittest.TestCase):
         return routes_common._history_trend_rows(main.conn, self.bid, closed)
 
 
-class HubCapacityTest(_BaseHubTest):
-    """驗收條件：廣告首頁容量腳本通過（決策 0029／0033）。修憲落地 V3 把 hub 遷成 B｜工作台式
-    單欄清單後，原本的五張固定卡片牆拿掉：「進行中檔期」「最近結案的檔期」兩塊摘要改用
-    `kind=content`（順序閱讀的內容卡，決策 0033 §20.1 規則 1 不計入主欄 ≤5 上限），所以卡片數
-    不再固定是 5，而是 0（沒有任何 kind=entry 功能入口卡）。"""
-
-    def test_hub_has_zero_entry_cards_within_capacity(self):
-        resp = self.client.get(f"/brands/{self.bid}/ads")
-        counts = cc.check_html(resp.text)
-        self.assertEqual(counts["card_count"], 0)
-        self.assertLessEqual(counts["nav_link_count"], cc.NAV_LINK_LIMIT)
-        self.assertEqual(counts["illegal_detail_count"], 0)
-        self.assertEqual(cc.violations("ads_home", counts), [])
-
-    def test_hub_stays_within_capacity_with_an_active_cycle(self):
-        """有進行中檔期時多一張「進行中檔期」內容卡（kind=content），仍不計入主欄 ≤5 上限。"""
-        self._open_cycle()
-        resp = self.client.get(f"/brands/{self.bid}/ads")
-        counts = cc.check_html(resp.text)
-        self.assertEqual(counts["card_count"], 0)
-        self.assertEqual(cc.violations("ads_home", counts), [])
-
-
 class HubInProgressCardTest(_BaseHubTest):
-    def test_empty_state_offers_new_cycle_as_primary_action(self):
-        resp = self.client.get(f"/brands/{self.bid}/ads")
-        self.assertIn("還沒有跑過任何一期廣告", resp.text)
-        self.assertIn(f'href="/brands/{self.bid}/ads/new"', resp.text)
-
     def test_single_active_cycle_shows_stage_and_days_left(self):
         cycle_id = self._open_cycle()
         in_progress = [c for c in self._api_cycles() if c["bucket"] == "in_progress"]
@@ -178,42 +142,7 @@ class HubInProgressCardTest(_BaseHubTest):
         self.assertEqual(self._bucket_of(cycle_id), "closed")
 
 
-class HubSyncAndClaimsMovedTest(_BaseHubTest):
-    """Meta 同步按鈕與待認領提醒遷入 /ads/connections（#44），hub 不留操作列。"""
-
-    def test_meta_sync_button_not_on_hub(self):
-        coresettings.set_setting(main.conn, ads_sync.ACCOUNT_SETTING, "act_1234567890")
-        coresettings.set_setting(main.conn, ads_sync.TOKEN_SETTING, "fake-token")
-        resp = self.client.get(f"/brands/{self.bid}/ads")
-        self.assertNotIn(f'action="/brands/{self.bid}/ads/sync"', resp.text)
-
-    def test_pending_claims_banner_not_on_hub_but_present_on_connections(self):
-        coresettings.set_setting(main.conn, ads_sync.ACCOUNT_SETTING, "act_1234567890")
-        coresettings.set_setting(main.conn, ads_sync.TOKEN_SETTING, "fake-token")
-        client = meta_api.FakeMetaClient(campaigns=[
-            meta_api.Campaign(campaign_id="999", name="某個沒歸屬的活動",
-                              objective="OUTCOME_SALES", effective_status="ACTIVE")])
-        ads_sync.sync_account(main.conn, ACTOR, client=client, today="2026-07-31")
-
-        hub = self.client.get(f"/brands/{self.bid}/ads")
-        self.assertNotIn("還沒確認是不是這個品牌的", hub.text)
-
-        connections = self.client.get(f"/brands/{self.bid}/ads/connections")
-        self.assertIn("還沒確認是不是這個品牌的", connections.text)
-
-
 class HistoryPageTest(_BaseHubTest):
-    def test_empty_state_when_no_cycles_at_all(self):
-        resp = self.client.get(f"/brands/{self.bid}/ads/history")
-        self.assertEqual(resp.status_code, 200)
-        self.assertIn("還沒有跑過任何一期廣告", resp.text)
-        self.assertIn(f'href="/brands/{self.bid}/ads/new"', resp.text)
-
-    def test_breadcrumb_reaches_history_from_hub(self):
-        resp = self.client.get(f"/brands/{self.bid}/ads/history")
-        self.assertIn("歷期戰績", resp.text)
-        self.assertIn(f'href="/brands/{self.bid}/ads"', resp.text)
-
     def test_three_segments_bucket_cycles_correctly(self):
         in_progress_id = self._open_cycle(start_date="2026-06-01")
         closed_id = self._open_cycle(start_date="2026-05-01")
@@ -244,11 +173,6 @@ class HistoryPageTest(_BaseHubTest):
                                 json={"confirm_name": label})
         self.assertEqual(resp.status_code, 204)
         self.assertIsNone(ads_repo.get_cycle(main.conn, self.bid, cycle_id))
-
-    def test_capacity_script_passes_on_history_page(self):
-        resp = self.client.get(f"/brands/{self.bid}/ads/history")
-        counts = cc.check_html(resp.text)
-        self.assertEqual(cc.violations("ads_history", counts), [])
 
 
 class HistoryTrendTableTest(_BaseHubTest):
@@ -297,13 +221,6 @@ class HistoryTrendTableTest(_BaseHubTest):
         self.assertEqual(_row(newest), "▼")
         self.assertEqual(_row(middle), "▲")
         self.assertNotIn(_row(oldest), ("▲", "▼"))
-
-    def test_capacity_script_passes_with_judged_history(self):
-        cycle_id = self._open_cycle()
-        self._judge_closed(cycle_id, revenue=20000)
-        resp = self.client.get(f"/brands/{self.bid}/ads/history")
-        counts = cc.check_html(resp.text)
-        self.assertEqual(cc.violations("ads_history", counts), [])
 
 
 if __name__ == "__main__":

@@ -76,17 +76,6 @@ class _BaseAdsTest(unittest.TestCase):
 
 
 class AdsHomeTest(_BaseAdsTest):
-    def test_empty_state_invites_first_cycle(self):
-        resp = self.client.get(f"/brands/{self.bid}/ads")
-        self.assertEqual(resp.status_code, 200)
-        self.assertIn("還沒有跑過任何一期廣告", resp.text)
-
-    def test_brand_menu_links_to_ads_as_real_feature(self):
-        """廣告已從「即將推出」灰卡變成正式功能卡。"""
-        resp = self.client.get(f"/brands/{self.bid}")
-        self.assertIn(f'href="/brands/{self.bid}/ads"', resp.text)
-        self.assertNotIn("廣告即將推出", resp.text.replace(" ", ""))
-
     def test_cycle_appears_in_list(self):
         """D線票3（#45）：廣告 hub 改五卡後，全部檔期清單搬到 /ads/history——
         產品名與目標這類per-檔期細節不再出現在 hub（hub 卡片有 30 全形字容量上限，
@@ -100,80 +89,21 @@ class AdsHomeTest(_BaseAdsTest):
 
 
 class AdsNewPageTest(_BaseAdsTest):
-    def test_slider_options_are_precomputed_server_side(self):
-        """換算規則只有 Python 一份：每檔的結果由後端算好塞進頁面，前端不重算。"""
-        resp = self.client.get(f"/brands/{self.bid}/ads/new")
-        self.assertEqual(resp.status_code, 200)
-        self.assertIn("slider-data", resp.text)
-        self.assertIn("duration_days", resp.text)
-
-    def test_products_default_to_all_selected(self):
-        """反對制：預設全勾，使用者只需要把不推的拿掉。"""
-        resp = self.client.get(f"/brands/{self.bid}/ads/new")
-        checked = resp.text.count("checkbox")
-        self.assertEqual(checked, 2)
-        self.assertEqual(resp.text.count('name="product_ids"'), 2)
-        for product_id in (self.product_a, self.product_b):
-            marker = f'value="{product_id}"'
-            index = resp.text.index(marker)
-            self.assertIn("checked", resp.text[index:index + 120])
-
     def test_recommends_sales_when_margin_known(self):
         self._add_economics(self.product_a, 600, 200)
-        resp = self.client.get(f"/brands/{self.bid}/ads/new")
-        index = resp.text.index('value="sales"')
-        self.assertIn("checked", resp.text[index:index + 80])
-        self.assertIn("AI 推薦", resp.text)
+        data = self.client.get(f"/api/campaigns/{self.bid}/new-context").json()["data"]
+        self.assertEqual(data["recommended_objective"], "sales")
 
     def test_recommends_awareness_when_no_margin(self):
-        resp = self.client.get(f"/brands/{self.bid}/ads/new")
-        index = resp.text.index('value="awareness"')
-        self.assertIn("checked", resp.text[index:index + 80])
-
-    def test_five_objectives_aligned_to_meta_with_hints(self):
-        """票 3：成效目標改 5 選項，對齊 Meta 官方分類，各附白話說明。
-        Meta 官方第六種目標「應用程式推廣」不開放選（本系統不涉 App），頁面用一句說明文字
-        交代原因（2026-08-08 業界體檢），但不會把它列成可選項目。"""
-        resp = self.client.get(f"/brands/{self.bid}/ads/new")
-        for value in ("awareness", "traffic", "engagement", "leads", "sales"):
-            self.assertIn(f'value="{value}"', resp.text)
-        for label in ("知名度", "流量", "互動", "潛在顧客", "銷售"):
-            self.assertIn(label, resp.text)
-        self.assertNotIn('value="app_promotion"', resp.text)
-        self.assertIn("應用程式推廣", resp.text)
-
-    def test_duration_suggestion_shown_with_rationale(self):
-        """票 3：檔期長度顯示建議值（預設 14 天）與白話理由，可自訂 7–30 天。"""
-        resp = self.client.get(f"/brands/{self.bid}/ads/new")
-        self.assertIn('name="duration_days"', resp.text)
-        self.assertIn('min="7"', resp.text)
-        self.assertIn('max="30"', resp.text)
-        self.assertIn('value="14"', resp.text)
-        self.assertIn("兩週是常見的檔期長度", resp.text)
-
-    def test_slider_and_duration_scripts_wait_for_dom_ready(self):
-        """票 25 回歸守門：連動腳本在 <head> 執行，若沒等 DOM 就緒，
-        document.getElementById('slider') 等會在元素解析出來之前抓空，
-        guard clause 直接 return，事件永遠綁不上（根因）。
-        這裡守住兩點：腳本包在 DOMContentLoaded 裡、且被綁定的元素 id 確實存在於畫面上。"""
-        resp = self.client.get(f"/brands/{self.bid}/ads/new")
-        html = resp.text
-        self.assertIn("document.addEventListener('DOMContentLoaded'", html)
-        for hook_id in ("slider", "readout-amount", "readout-days", "readout-daily",
-                        "readout-note", "duration_days", "duration-daily",
-                        "duration-tier-note", "custom_amount"):
-            self.assertIn(f'id="{hook_id}"', html)
-
-    def test_background_field_is_present_and_optional(self):
-        resp = self.client.get(f"/brands/{self.bid}/ads/new")
-        self.assertIn('name="background"', resp.text)
-        self.assertIn("這期有什麼背景？（選填）", resp.text)
+        data = self.client.get(f"/api/campaigns/{self.bid}/new-context").json()["data"]
+        self.assertEqual(data["recommended_objective"], "awareness")
 
     def test_readiness_notes_warn_but_do_not_block(self):
         """缺資料只提示、附一鍵去補，開期照樣走得下去（決策 0013）。"""
-        resp = self.client.get(f"/brands/{self.bid}/ads/new")
-        self.assertIn("還沒有可用的成本售價", resp.text)
-        self.assertIn(f"/app/brands/{self.bid}/products", resp.text)
+        data = self.client.get(f"/api/campaigns/{self.bid}/new-context").json()["data"]
+        notes = json.dumps(data["readiness_notes"], ensure_ascii=False)
+        self.assertIn("還沒有可用的成本售價", notes)
+        self.assertIn(f"/app/brands/{self.bid}/products", notes)
         self.assertEqual(self._open_cycle().status_code, 200)
 
 
@@ -213,8 +143,6 @@ class CreateCycleTest(_BaseAdsTest):
                 ads_repo.list_cycle_products(main.conn, self.bid, cycle_id)}
         self.assertEqual(rows[self.product_b]["economics_missing"], 1)
         self.assertGreater(rows[self.product_b]["allocated_budget"], 0)
-        page = self.client.get(f"/brands/{self.bid}/ads/{cycle_id}")
-        self.assertIn("精準度打折", page.text)
 
     def test_allocation_sums_to_total(self):
         resp = self._open_cycle(custom_amount="9999.99")
@@ -231,8 +159,6 @@ class CreateCycleTest(_BaseAdsTest):
         cycle_id = resp.json()["cycle_id"]
         cycle = ads_repo.get_cycle(main.conn, self.bid, cycle_id)
         self.assertEqual(json.loads(cycle["product_scope_json"]), [])
-        # D線票3（#45）：產品範圍這類per-檔期細節搬到歷期戰績頁，hub 卡片不再列出
-        self.assertIn("整個品牌", self.client.get(f"/brands/{self.bid}/ads/history").text)
 
     def test_custom_duration_recomputes_daily_budget(self):
         """票 3：自訂天數要連動日預算（單純除法，不套自動縮短天數的演算法）。"""
@@ -344,13 +270,6 @@ class PacingCurveTest(_BaseAdsTest):
         self.assertEqual(plan["pacing_strategy"], "continuous")
         self.assertIn("太短", plan["pacing_reason"])
 
-    def test_cycle_page_renders_pacing_card_and_chart_data(self):
-        cycle_id = self._create(custom_amount="10000", duration_days="14")
-        page = self.client.get(f"/brands/{self.bid}/ads/{cycle_id}")
-        self.assertIn("這次要怎麼投", page.text)
-        self.assertIn("還有其他排法", page.text)
-        self.assertIn("pacing-chart-plan", page.text)
-
     def test_manual_switch_to_pulse_recomputes_curve(self):
         cycle_id = self._create(custom_amount="21000", duration_days="21")
         resp = self.client.post(
@@ -373,12 +292,6 @@ class PacingCurveTest(_BaseAdsTest):
         self.assertIn("天數不足", resp.json()["error"])
         plan = ads_repo.derived_plan(ads_repo.get_cycle(main.conn, self.bid, cycle_id))
         self.assertEqual(plan["pacing_strategy"], "continuous")  # 沒被改動
-
-    def test_handoff_page_shows_same_curve(self):
-        cycle_id = self._create(custom_amount="10000", duration_days="14")
-        page = self.client.get(f"/brands/{self.bid}/ads/{cycle_id}/handoff")
-        self.assertIn("這幾天該花多少", page.text)
-        self.assertIn("pacing-chart-handoff", page.text)
 
 
 class AdsBrandIsolationTest(_BaseAdsTest):

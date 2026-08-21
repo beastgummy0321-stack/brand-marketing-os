@@ -12,7 +12,6 @@
 import atexit
 import json
 import os
-import re
 import shutil
 import tempfile
 import time
@@ -201,35 +200,6 @@ class _BasePlanTest(unittest.TestCase):
 
 
 class PlanGenerationTest(_BasePlanTest):
-    def test_progress_page_before_running(self):
-        resp = self.client.get(f"/brands/{self.bid}/ads/{self.cycle_id}/plan/progress")
-        self.assertEqual(resp.status_code, 200)
-        self.assertIn("正在規劃這期的打法", resp.text)
-        self.assertIn("run=1", resp.text)
-
-    def test_progress_page_stage_list_is_honest_before_running(self):
-        """票 29：真的什麼都還沒做的時候，不能有任何一階段標「完成」；也不能有百分比或
-        假進度條——這是這張票要修的原本假狀態問題（比照 intake/routes.py 舊寫法的反例）。"""
-        text = self.client.get(f"/brands/{self.bid}/ads/{self.cycle_id}/plan/progress").text
-        for label in ("整理這期的資料與方法論", "請 AI 生成方案", "把方案存起來"):
-            self.assertIn(label, text)
-        self.assertIn("進行中", text)
-        self.assertIn("還沒開始", text)
-        self.assertNotIn("完成", text)
-        self.assertNotIn("%", text)
-        self.assertIn("已等", text)
-        self.assertIn("通常範圍", text)
-
-    def test_progress_elapsed_time_does_not_reset_on_reload(self):
-        """已等秒數以後端記錄的流程開始時間計算，重刷（等同再打一次同一個等待頁）
-        天然不會歸零。"""
-        first = self.client.get(f"/brands/{self.bid}/ads/{self.cycle_id}/plan/progress").text
-        first_secs = int(re.search(r"(\d+) 秒／通常範圍", first).group(1))
-        time.sleep(1.1)
-        second = self.client.get(f"/brands/{self.bid}/ads/{self.cycle_id}/plan/progress").text
-        second_secs = int(re.search(r"(\d+) 秒／通常範圍", second).group(1))
-        self.assertGreaterEqual(second_secs, first_secs + 1)
-
     def test_generate_options_reports_real_stages_in_order(self):
         """後端在長流程各階段更新目前階段狀態：呼叫 AI 前後各回報一次，且順序正確
         （不是憑空寫死的假狀態）。"""
@@ -428,7 +398,7 @@ class PlanGenerationTest(_BasePlanTest):
         self.assertEqual(sum(1 for o in options if o["is_recommended"]), 1)
 
     def test_missing_methodology_file_does_not_block_and_is_shown_honestly(self):
-        """票 11：方法論檔缺失時，流程照走、頁面誠實標注、audit 有紀錄。"""
+        """票 11：方法論檔缺失時，流程照走、缺檔記進方案與計畫、audit 有紀錄。"""
         tmp_dir = Path(tempfile.mkdtemp(prefix="brand_os_methodology_"))
         # 故意不複製 ads-core.md，模擬缺檔；其餘全複製，這樣拆檔／加檔都不必回來改這裡
         for src in methodology.METHODOLOGY_DIR.glob("*.md"):
@@ -449,19 +419,9 @@ class PlanGenerationTest(_BasePlanTest):
         self.assertTrue(options)
         self.assertEqual(options[0]["methodology_missing"], ["ads-core.md"])
 
-        # 方案選擇頁誠實標注
-        select_page = self.client.get(f"/brands/{self.bid}/ads/{self.cycle_id}/plan/select")
-        self.assertIn("ads-core.md", select_page.text)
-        self.assertIn("方法論參考資料缺席", select_page.text)
-
         self._select()
         stored = ads_plan.get_latest_plan(main.conn, self.bid, self.cycle_id)
         self.assertEqual(stored["plan"]["methodology_missing"], ["ads-core.md"])
-
-        # 選定後的檔期頁也誠實標注
-        page = self.client.get(f"/brands/{self.bid}/ads/{self.cycle_id}")
-        self.assertIn("ads-core.md", page.text)
-        self.assertIn("方法論參考資料缺席", page.text)
 
         # audit 有紀錄
         rows = [dict(r) for r in main.conn.execute(
@@ -544,46 +504,6 @@ class AudienceAvailabilityTest(unittest.TestCase):
         _seed_snapshot(self.bid, clicks=50, conversions=3)
         availability = ads_plan.audience_availability(main.conn, self.bid)
         self.assertTrue(availability["hot"]["available"])
-
-
-class PlanPageTest(_BasePlanTest):
-    def test_select_page_shows_recommended_badge_and_difference(self):
-        self._generate()
-        resp = self.client.get(f"/brands/{self.bid}/ads/{self.cycle_id}/plan/select")
-        self.assertIn("AI 推薦", resp.text)
-        self.assertIn("主打通勤族的省錢與快速訴求", resp.text)
-        self.assertIn("不打通勤族，改打願意為風味付費的鑑賞型客群", resp.text)
-
-    def test_page_shows_plan_split_by_grounding(self):
-        self._generate_and_select()
-        resp = self.client.get(f"/brands/{self.bid}/ads/{self.cycle_id}")
-        self.assertIn("早上第一杯", resp.text)
-        self.assertIn("依據已確認的品牌資料", resp.text)
-        self.assertIn("AI 自己的推論", resp.text)
-        self.assertIn("未經證實", resp.text)
-        self.assertIn("要靠這期投放才知道的事", resp.text)
-
-    def test_page_shows_structured_audience_tiers(self):
-        self._generate_and_select()
-        resp = self.client.get(f"/brands/{self.bid}/ads/{self.cycle_id}")
-        self.assertIn("冷受眾（陌生開發）", resp.text)
-        self.assertIn("暖受眾（再行銷）", resp.text)
-        self.assertIn("這期用不到", resp.text)
-        self.assertIn("還沒有廣告帶來過網站流量", resp.text)
-
-    def test_gate_appears_only_in_review(self):
-        before = self.client.get(f"/brands/{self.bid}/ads/{self.cycle_id}")
-        self.assertIn("產出這期的方案", before.text)
-        self.assertNotIn("就照這個做", before.text)
-
-        self._generate()
-        waiting = self.client.get(f"/brands/{self.bid}/ads/{self.cycle_id}")
-        self.assertIn("去選方案", waiting.text)
-        self.assertNotIn("就照這個做", waiting.text)
-
-        self._select()
-        after = self.client.get(f"/brands/{self.bid}/ads/{self.cycle_id}")
-        self.assertIn("就照這個做", after.text)
 
 
 class PlanApprovalTest(_BasePlanTest):
@@ -696,21 +616,6 @@ class DissentTest(_BasePlanTest):
         self.assertEqual(decided_row["decided_by"], ACTOR)
         pending_rows = [d for d in after if d["status"] == "pending"]
         self.assertEqual(len(pending_rows), 1)
-
-    def test_select_page_shows_baseline_and_dissents(self):
-        self._generate(reply=_with_dissents(*_DISSENT_ITEMS))
-        resp = self.client.get(f"/brands/{self.bid}/ads/{self.cycle_id}/plan/select")
-        self.assertIn("這期的帳戶結構與預算配置底案", resp.text)
-        self.assertIn("CBO，兩組（驗證＋測試）", resp.text)
-        self.assertIn("AI 對底案的異議", resp.text)
-        self.assertIn(_DISSENT_ITEMS[0]["suggestion"], resp.text)
-        self.assertIn(_DISSENT_ITEMS[0]["reason"], resp.text)
-        self.assertIn("這期的 Offer", resp.text)  # target_type=offer 的人話標籤
-
-    def test_select_page_hides_dissent_block_when_none(self):
-        self._generate()  # 沒有異議
-        resp = self.client.get(f"/brands/{self.bid}/ads/{self.cycle_id}/plan/select")
-        self.assertNotIn("AI 對底案的異議", resp.text)
 
     def test_decide_dissent_records_status_and_actor(self):
         self._generate(reply=_with_dissents(*_DISSENT_ITEMS))

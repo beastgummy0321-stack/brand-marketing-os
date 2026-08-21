@@ -50,9 +50,6 @@ class _BaseReconcileTest(unittest.TestCase):
     def _spend(self, amount):
         perf.import_manual(main.conn, self.bid, self.cycle_id, {"spend": amount}, actor=ACTOR)
 
-    def _url(self):
-        return f"/brands/{self.bid}/ads/{self.cycle_id}/performance/reconcile"
-
     # 舊頁表單的三題自答：yes/no/空 → True/False/None（見 routes_performance.ads_reconcile）
     _UNANSWERED = {"budget_same": None, "schedule_same": None,
                    "other_campaign_running": None}
@@ -109,14 +106,6 @@ class ReconcileWiringTest(_BaseReconcileTest):
 
 
 class ReconcilePageTest(_BaseReconcileTest):
-    def test_page_shows_confidence_and_does_not_block(self):
-        self._spend(14000)
-        resp = self.client.post(self._url(), data={}, follow_redirects=False)
-        self.assertEqual(resp.status_code, 303)
-        page = self.client.get(f"/brands/{self.bid}/ads/{self.cycle_id}/performance")
-        self.assertIn("本期判讀可信度", page.text)
-        self.assertIn("可信度打折", page.text)
-
     def test_answering_nothing_is_allowed(self):
         """自答是補充資訊，不是新的必經關卡——三題都不答也能按。"""
         self._spend(10000)

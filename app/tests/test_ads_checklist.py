@@ -242,20 +242,6 @@ class RoutesDoNotBlockTest(_Base):
         self.assertEqual(resp.status_code, 200)
 
 
-class PixelGuidePageTest(_Base):
-    def test_page_links_to_official_docs(self):
-        page = self.client.get(f"/brands/{self.bid}/ads/pixel-guide")
-        self.assertEqual(page.status_code, 200)
-        self.assertIn("help.shopify.com", page.text)
-        self.assertIn("easystore.co", page.text)
-        self.assertIn("cyberbiz.io", page.text)
-
-    def test_checklist_page_links_to_guide(self):
-        cycle_id = self._live_cycle()
-        page = self.client.get(f"/brands/{self.bid}/ads/{cycle_id}/checklist")
-        self.assertIn(f"/brands/{self.bid}/ads/pixel-guide", page.text)
-
-
 class _BaseHandoffTest(_Base):
     """比照 test_ads_handoff.py 的走法，走到有交接包可看的狀態。"""
 
@@ -302,15 +288,6 @@ class HandoffExtrasTest(_BaseHandoffTest):
         self.assertIn("7 天", extras["attribution_window_setting"])
         self.assertIn("使用現有貼文", extras["post_coop_note"])
         self.assertEqual(extras["checklist"]["total"], 4)
-
-    def test_handoff_page_shows_extras(self):
-        page = self.client.get(f"/brands/{self.bid}/ads/{self.cycle_id}/handoff")
-        self.assertEqual(page.status_code, 200)
-        self.assertIn("帳戶結構怎麼開", page.text)
-        self.assertIn("轉換事件", page.text)
-        self.assertIn("歸因視窗", page.text)
-        self.assertIn("使用現有貼文", page.text)
-        self.assertIn("投放前檢查清單完成度", page.text)
 
     def test_completeness_reflects_checked_items(self):
         checklist.set_one_time(main.conn, self.bid, "pixel_confirmed", True, ACTOR)
@@ -359,17 +336,6 @@ class QaLaunchReminderTest(_Base):
 
 
 class QaLaunchHandoffPageTest(_BaseHandoffTest):
-    def test_page_shows_unconfirmed_banner_with_count(self):
-        page = self.client.get(f"/brands/{self.bid}/ads/{self.cycle_id}/handoff")
-        self.assertEqual(page.status_code, 200)
-        self.assertIn("還有 5 項尚未確認", page.text)
-        self.assertIn("Pixel 已正確安裝", page.text)
-        self.assertIn("受眾排除名單已設定", page.text)
-        self.assertIn("CAPI／EMQ 事件品質已確認", page.text)
-        self.assertIn("預算已逐筆覆核", page.text)
-        self.assertIn("到達頁已實點測試", page.text)
-        self.assertIn("facebook.com/business/help", page.text)
-
     def test_confirm_one_item_via_route_updates_count(self):
         resp = self.client.post(
             f"/api/campaigns/{self.bid}/{self.cycle_id}/handoff/qa-launch/qa_pixel_installed")
@@ -398,19 +364,6 @@ class QaLaunchHandoffPageTest(_BaseHandoffTest):
 class QaLaunchSettingsHubTest(_BaseHandoffTest):
     """票 02-qa-reminder-reset（決策 0016 第三節）：設定中心「廣告層面」分類的「上線前
     提醒」小節——確認過的項目在這裡可以重新打開，清掉確認紀錄，上線授權頁恢復顯示警示。"""
-
-    def test_settings_page_shows_five_items_default_unconfirmed(self):
-        page = self.client.get(f"/brands/{self.bid}/settings/ads")
-        self.assertEqual(page.status_code, 200)
-        self.assertIn("上線前提醒", page.text)
-        for meta in checklist.QA_LAUNCH_ITEMS.values():
-            self.assertIn(meta["label"], page.text)
-        self.assertIn("尚未確認", page.text)
-
-    def test_confirmed_item_shows_as_confirmed_in_settings(self):
-        checklist.set_qa_launch_item(main.conn, self.bid, "qa_pixel_installed", True, ACTOR)
-        page = self.client.get(f"/brands/{self.bid}/settings/ads")
-        self.assertIn("已確認", page.text)
 
     def test_reopen_in_settings_clears_confirmation_and_handoff_shows_warning_again(self):
         """票上的驗收：確認過的項目在設定中心重新打開後，上線授權頁恢復顯示警示。"""

@@ -366,23 +366,6 @@ class NewPageHttpTest(_BaseTest):
         super().setUp()
         self.client = TestClient(main.app)
 
-    def test_default_objective_with_no_history_shows_no_basis_message(self):
-        """沒有任何產品資料時 AI 推薦「知名度」（非轉換型），沒有上期資料就誠實說無依據。"""
-        page = self.client.get(f"/brands/{self.bid}/ads/new")
-        self.assertEqual(page.status_code, 200)
-        self.assertIn("此目標無公式依據", page.text)
-
-    def test_sales_objective_with_history_shows_resolved_cpa_and_learning_note(self):
-        _closed_cycle_with_history(self.bid, objective="sales", spend=5000, net_orders=10)
-        product = bi_repo.create_product(main.conn, self.bid, name="虛構茶葉禮盒", actor=ACTOR)
-        bi_repo.save_product_economics(
-            main.conn, self.bid, product["id"], actor=ACTOR, selling_price=1000, currency="TWD",
-            confirmed_by=ACTOR, unit_variable_cost=400)
-        page = self.client.get(f"/brands/{self.bid}/ads/new")
-        self.assertIn("這期的目標 CPA", page.text)
-        self.assertIn("實際成效", page.text)
-        self.assertIn("新檔期會重跑 Meta 學習期", page.text)
-
     def test_guided_form_saves_and_redirects_back_to_the_same_page(self):
         resp = self.client.post(
             f"/api/campaigns/{self.bid}/target-cpa-guided",

@@ -286,55 +286,6 @@ class ComplianceScanTest(unittest.TestCase):
                             reason_code="overclaim", actor=ACTOR)
         self.assertEqual(compliance.scan_cycle(main.conn, self.bid, self.cycle_id), [])
 
-    def test_page_flags_but_does_not_block(self):
-        """決策 0013：命中只標黃，關卡照樣可以按下去。
-
-        用品牌自訂宣稱（非內建法規詞庫字詞）測，避免跟修憲落地 L2 的法規類自動預設挑掉混在一起——
-        那個行為由 test_law_hit_defaults_to_rejected 等測試另外驗證。
-        """
-        bi_repo.create_claim(main.conn, self.bid, claim_text="全台銷量第一",
-                             claim_type="forbidden", actor=ACTOR)
-        self._make_creative("我們是全台銷量第一的品牌")
-        page = self.client.get(f"/brands/{self.bid}/ads/{self.cycle_id}/creatives")
-        self.assertIn("命中", page.text)
-        self.assertIn("這不會擋住你", page.text)
-        self.assertIn("這些都好，繼續", page.text)
-
-        resp = self.client.post(f"/brands/{self.bid}/ads/{self.cycle_id}/creatives/approve",
-                                follow_redirects=False)
-        self.assertEqual(resp.status_code, 303)
-        self.assertNotIn("kind=warn", resp.headers["location"])
-
-    def test_page_is_honest_about_scan_limits(self):
-        """不能讓使用者以為沒被標記就等於法務過關（鐵則 16）。"""
-        self._make_creative("每天早晨的一杯好茶")
-        page = self.client.get(f"/brands/{self.bid}/ads/{self.cycle_id}/creatives")
-        self.assertIn("抓不到語氣或語意層面的問題", page.text)
-
-    def test_page_states_the_responsibility_boundary(self):
-        """修憲落地 L5（決策 0034 第 11 點）：頁面要老實講清楚這三句，並校正罰則認知。"""
-        self._make_creative("每天早晨的一杯好茶")
-        page = self.client.get(f"/brands/{self.bid}/ads/{self.cycle_id}/creatives")
-        self.assertIn("系統會比對你登錄的字詞", page.text)
-        self.assertIn("系統不會判斷你的宣稱合不合法", page.text)
-        self.assertIn("食品廣告的法律責任在刊登者，也就是你", page.text)
-        self.assertIn("60 萬元", page.text)
-        self.assertIn("刑事責任", page.text)
-
-    def test_page_discloses_scan_coverage_gap(self):
-        """修憲落地 L5（決策 0034 第 12 點）：規則抽不出可比對字詞時，畫面要誠實列出來，
-        不能靜靜跳過讓使用者以為沒事。"""
-        bi_repo.create_claim(main.conn, self.bid, claim_text="藥",
-                             claim_type="forbidden", actor=ACTOR)
-        self._make_creative("每天早晨的一杯好茶")
-        page = self.client.get(f"/brands/{self.bid}/ads/{self.cycle_id}/creatives")
-        self.assertIn("這幾條規則抽不出可比對字詞，沒有被本次掃描涵蓋", page.text)
-
-    def test_page_has_no_coverage_gap_banner_when_everything_is_covered(self):
-        self._make_creative("每天早晨的一杯好茶")
-        page = self.client.get(f"/brands/{self.bid}/ads/{self.cycle_id}/creatives")
-        self.assertNotIn("沒有被本次掃描涵蓋", page.text)
-
     def test_rescan_replaces_old_findings(self):
         bi_repo.create_claim(main.conn, self.bid, claim_text="能治療失眠",
                              claim_type="forbidden", actor=ACTOR)
@@ -410,12 +361,10 @@ class DefaultHoldTest(ComplianceScanTest):
 
     def test_law_hit_defaults_to_rejected(self):
         self._make_creative("每天喝一杯，改善你的生活品質")
-        page = self.client.get(f"/brands/{self.bid}/ads/{self.cycle_id}/creatives")
+        self._scan_like_page()
         variant = self._first_variant()
         self.assertTrue(variant["rejected"])
         self.assertTrue(variant["auto_held"])
-        self.assertIn("命中法規禁用字詞", page.text)
-        self.assertIn("勾回，我要用這則", page.text)
 
     def test_brand_only_hit_does_not_default_reject(self):
         """只命中品牌自訂宣稱（非內建法規詞庫），不受這票影響，維持原本「預設採用」。"""
@@ -460,14 +409,10 @@ class DefaultHoldTest(ComplianceScanTest):
 
     def test_restore_flips_back_to_adopted_and_logs_audit(self):
         self._make_creative("每天喝一杯，改善你的生活品質")
-        self.client.get(f"/brands/{self.bid}/ads/{self.cycle_id}/creatives")
+        self._scan_like_page()
         variant_id = self._first_variant()["id"]
 
-        resp = self.client.post(
-            f"/brands/{self.bid}/ads/{self.cycle_id}/creatives/{variant_id}/restore",
-            follow_redirects=False)
-        self.assertEqual(resp.status_code, 303)
-        self.assertNotIn("kind=warn", resp.headers["location"])
+        ads_creative.restore(main.conn, self.bid, variant_id, actor=OPERATOR)
 
         variant = self._first_variant()
         self.assertFalse(variant["rejected"])
@@ -488,31 +433,6 @@ class DefaultHoldTest(ComplianceScanTest):
         self._scan_like_page()
         self.assertFalse(self._first_variant()["rejected"])
 
-    def test_reload_keeps_the_compliance_explanation_visible(self):
-        """自動預設挑掉的素材不是「被改寫掉的舊版本」，重新整理後說明文字要還在
-        （不能只剩一個看不出理由的黃標）。"""
-        self._make_creative("每天喝一杯，改善你的生活品質")
-        self.client.get(f"/brands/{self.bid}/ads/{self.cycle_id}/creatives")
-        page = self.client.get(f"/brands/{self.bid}/ads/{self.cycle_id}/creatives")
-        self.assertIn("改善", page.text)
-        self.assertIn("食品安全衛生管理法", page.text)
-
-    def test_creatives_page_renders_without_operator_cookie(self):
-        """修憲落地 L2 修正：法規自動預設挑掉是系統判定，GET 這個檢視頁不該因為操作人 cookie
-        還沒設定就整頁進不去（不能 303 轉址去 /settings/operator）——使用者自己按下
-        『勾回』的 POST 才需要他自己的操作人身份。"""
-        self._make_creative("每天喝一杯，改善你的生活品質")
-        anon_client = TestClient(main.app)  # 全新 client，沒帶 operator_name cookie
-        page = anon_client.get(f"/brands/{self.bid}/ads/{self.cycle_id}/creatives",
-                               follow_redirects=False)
-        self.assertEqual(page.status_code, 200)
-        self.assertIn("命中法規禁用字詞", page.text)
-
-    def test_batch_restore_button_hidden_below_threshold(self):
-        self._make_creative("每天喝一杯，改善你的生活品質")
-        page = self.client.get(f"/brands/{self.bid}/ads/{self.cycle_id}/creatives")
-        self.assertNotIn("一次全部勾回", page.text)
-
     def test_batch_restore_button_shown_and_works_at_threshold(self):
         self.assertEqual(ads_creative.BATCH_RESTORE_THRESHOLD, 3)
         self._make_creatives([
@@ -520,22 +440,17 @@ class DefaultHoldTest(ComplianceScanTest):
             "長期使用，預防身體出狀況",
             "見效快，根治你的困擾",
         ])
-        page = self.client.get(f"/brands/{self.bid}/ads/{self.cycle_id}/creatives")
-        self.assertIn("一次全部勾回", page.text)
-        self.assertIn("3", page.text)
+        self._scan_like_page()
         variants = ads_creative.list_variants(main.conn, self.bid, self.cycle_id)
         self.assertEqual(sum(1 for v in variants if v["auto_held"]), 3)
 
-        resp = self.client.post(
-            f"/brands/{self.bid}/ads/{self.cycle_id}/creatives/restore-batch",
-            follow_redirects=False)
-        self.assertEqual(resp.status_code, 303)
-        self.assertNotIn("kind=warn", resp.headers["location"])
+        restored = ads_creative.restore_all_auto_held(main.conn, self.bid, self.cycle_id,
+                                                      actor=OPERATOR)
+        self.assertEqual(restored, 3)
 
         variants = ads_creative.list_variants(main.conn, self.bid, self.cycle_id)
         self.assertEqual(sum(1 for v in variants if v["rejected"]), 0)
-        page = self.client.get(f"/brands/{self.bid}/ads/{self.cycle_id}/creatives")
-        self.assertNotIn("一次全部勾回", page.text)
+        self.assertEqual(sum(1 for v in variants if v["auto_held"]), 0)
 
 
 if __name__ == "__main__":

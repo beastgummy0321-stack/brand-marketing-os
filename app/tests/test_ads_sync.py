@@ -342,11 +342,6 @@ class SanityAndErrorTest(_BaseSyncTest):
         self.assertEqual(result.error, meta_api.NO_TOKEN_MESSAGE)  # 人話提示，不當機
         self.assertFalse(ads_sync.is_configured(main.conn))
 
-    def test_settings_page_offers_readonly_meta_connection(self):
-        page = self.client.get("/settings")
-        self.assertIn("Meta 廣告帳號", page.text)
-        self.assertIn("讀得到你的廣告數字，但改不了", page.text)
-
 
 class BrandLevelBaselineTest(_BaseSyncTest):
     """票 F2（決策 0039 第 7 條）：認領觸發品牌層（無檔期）成效重算基準。"""
@@ -672,9 +667,6 @@ class HistoricalCampaignFromInsightsTest(_BaseSyncTest):
         pending = ads_sync.list_pending_claims(main.conn, self.bid)
         self.assertEqual(len(pending), 1)
         self.assertIn("歷史", pending[0]["effective_status"])
-
-        page = self.client.get(f"/brands/{self.bid}/ads/claims")
-        self.assertIn("歷史", page.text)
 
     def test_guess_brand_still_runs_off_the_insight_campaign_name(self):
         """④猜品牌邏輯對這類活動照常運作：insight 帶的 campaign_name 跟品牌命名一樣時能猜到。"""

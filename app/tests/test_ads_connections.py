@@ -3,10 +3,8 @@
 
 嗅探與匯入邏輯本身不重寫、不重測——沿用 app/tests/test_orders_dispatch.py 已驗證過的
 app.orders.dispatch.import_dropped_file()。這裡只驗證：
-1. 新頁面直達＋容量規則（票 1 腳本）。
-2. 薄路由把同一支分派函式的結果導回本頁（而非訂單頁），三種訊息條（成功／警告／錯誤）。
-3. 金鑰只留深連結，頁面本身沒有金鑰輸入欄位。
-4. 空狀態（尚未連 Meta／尚無訂單資料）與待認領入口。
+1. 頁面容量規則（票 1 腳本）。
+2. 薄匯入路由背後的同一支分派函式，三種結果（成功／警告／錯誤）皆正確入庫。
 
 fixture 一律虛構品牌，嚴禁真實品牌名稱。
 """
@@ -19,20 +17,16 @@ import tempfile
 import unittest
 from datetime import date
 from pathlib import Path
-from urllib.parse import unquote
 
 _tmpdir = tempfile.mkdtemp(prefix="brand_os_ads_connections_")
 
 import openpyxl  # noqa: E402
-from fastapi.testclient import TestClient  # noqa: E402
 
 import app.main as main  # noqa: E402
-from app.ads import meta_api  # noqa: E402
 from app.ads import repository as ads_repo  # noqa: E402
 from app.ads import sync as ads_sync  # noqa: E402
 from app.ads import ga4_sync  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
-from app.core import settings as coresettings  # noqa: E402
 from app.orders import dispatch as orders_dispatch  # noqa: E402
 from app.tools import capacity_check  # noqa: E402
 
@@ -91,7 +85,6 @@ class CapacityTest(unittest.TestCase):
 
 class ConnectionsRouteTest(unittest.TestCase):
     def setUp(self):
-        self.client = TestClient(main.app)
         main.conn.execute("DELETE FROM discovered_campaign")
         main.conn.execute("DELETE FROM app_setting WHERE key IN (?, ?, ?, ?)",
                           (ads_sync.ACCOUNT_SETTING, ads_sync.TOKEN_SETTING,
@@ -103,51 +96,6 @@ class ConnectionsRouteTest(unittest.TestCase):
         self.bid = self.brand["id"]
 
     # ---- 頁面直達＋空狀態＋金鑰深連結 --------------------------------------
-
-    def test_page_reachable_and_shows_empty_states(self):
-        resp = self.client.get(f"/brands/{self.bid}/ads/connections")
-        self.assertEqual(resp.status_code, 200)
-        self.assertIn("還沒有任何訂單資料", resp.text)
-        self.assertIn("還沒連上 Meta", resp.text)
-        self.assertIn("/settings#settings-meta-title", resp.text)
-        self.assertIn("還沒設定 GA4", resp.text)
-        self.assertIn("/settings#settings-ga4-title", resp.text)
-
-    def test_page_has_no_key_input_fields(self):
-        """決策 0028 硬規則：本頁不得出現金鑰輸入欄位。"""
-        resp = self.client.get(f"/brands/{self.bid}/ads/connections")
-        self.assertNotIn('type="password"', resp.text)
-
-    def test_page_folds_pixel_and_ga4_guide_links_into_detail(self):
-        resp = self.client.get(f"/brands/{self.bid}/ads/connections")
-        self.assertIn(f"/brands/{self.bid}/ads/pixel-guide", resp.text)
-        self.assertIn(f"/brands/{self.bid}/ads/ga4-guide", resp.text)
-        self.assertIn('class="field-details"', resp.text)
-
-    def test_meta_connected_shows_sync_button_not_empty_state(self):
-        coresettings.set_setting(main.conn, ads_sync.ACCOUNT_SETTING, META_ACCOUNT)
-        coresettings.set_setting(main.conn, ads_sync.TOKEN_SETTING, "fake-token")
-        resp = self.client.get(f"/brands/{self.bid}/ads/connections")
-        self.assertIn(f'action="/brands/{self.bid}/ads/sync"', resp.text)
-        self.assertNotIn("還沒連上 Meta", resp.text)
-
-    def test_ga4_configured_shows_sync_link_not_empty_state(self):
-        coresettings.set_setting(main.conn, ga4_sync.PROPERTY_SETTING, GA4_PROPERTY_ID)
-        coresettings.set_setting(main.conn, ga4_sync.SERVICE_ACCOUNT_SETTING, GA4_FAKE_KEY_JSON)
-        resp = self.client.get(f"/brands/{self.bid}/ads/connections")
-        self.assertIn(f"/brands/{self.bid}/ads/ga4/sync", resp.text)
-        self.assertNotIn("還沒設定 GA4", resp.text)
-
-    def test_pending_claims_banner_links_to_claims_page(self):
-        coresettings.set_setting(main.conn, ads_sync.ACCOUNT_SETTING, META_ACCOUNT)
-        coresettings.set_setting(main.conn, ads_sync.TOKEN_SETTING, "fake-token")
-        client = meta_api.FakeMetaClient(campaigns=[
-            meta_api.Campaign(campaign_id="999", name="某個沒歸屬的活動",
-                              objective="OUTCOME_SALES", effective_status="ACTIVE")])
-        ads_sync.sync_account(main.conn, ACTOR, client=client, today="2026-07-31")
-        resp = self.client.get(f"/brands/{self.bid}/ads/connections")
-        self.assertIn("還沒確認是不是這個品牌的", resp.text)
-        self.assertIn(f"/brands/{self.bid}/ads/claims", resp.text)
 
     # ---- 薄匯入路由：三種格式皆正確入庫，且導回本頁而非訂單頁 ----------------
 
@@ -208,29 +156,6 @@ class ConnectionsRouteTest(unittest.TestCase):
         message = result.errors[0]
         self.assertIn("foo", message)
         self.assertIn("bar", message)
-
-    def test_upload_empty_file_gives_error(self):
-        resp = self.client.post(
-            f"/brands/{self.bid}/ads/connections/import",
-            files={"drop_file": ("empty.csv", b"", "text/csv")},
-            follow_redirects=False,
-        )
-        self.assertEqual(resp.status_code, 303)
-        location = resp.headers["location"]
-        self.assertTrue(location.startswith(f"/brands/{self.bid}/ads/connections?"))
-        self.assertIn("kind=danger", location)
-        self.assertIn("空的", unquote(location))
-
-    def test_upload_success_message_is_visible_back_on_the_page(self):
-        self.client.post(
-            f"/brands/{self.bid}/ads/connections/import",
-            files={"drop_file": ("Export_Orders.xlsx", _easystore_xlsx_bytes(),
-                                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
-        )
-        page = self.client.get(f"/brands/{self.bid}/ads/connections")
-        # 匯完之後空狀態訊息不再出現
-        self.assertNotIn("還沒有任何訂單資料", page.text)
-
 
 if __name__ == "__main__":
     unittest.main()

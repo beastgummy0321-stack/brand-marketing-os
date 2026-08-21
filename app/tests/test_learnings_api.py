@@ -72,7 +72,6 @@ class LearningsApiTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"ok": True, "message": "已下架這條學習，之後生成內容不會再引用它。"})
         self.assertNotIn(self.learning["id"], [entry["id"] for entry in self._get_sections()["learnings"]])
-        self.assertEqual(self.client.get(f"/brands/{self.brand_id}/ads/learnings").status_code, 200)
 
     def test_deactivate_active_ban_removes_it(self):
         response = self.client.post(

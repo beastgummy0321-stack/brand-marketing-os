@@ -199,13 +199,6 @@ class FlowTest(_Base):
                                 csv_text="not,a,valid,performance,file\n1,2,3,4,5\n")
         self.assertIn("花費", result["import_errors"][0])
 
-    def test_reminder_links_into_checkpoint_page(self):
-        cycle_id = self._live_cycle(start_offset_days=-4)
-        page = self.client.get(f"/brands/{self.bid}/ads/{cycle_id}")
-        self.assertIn(f"/app/brands/{self.bid}/campaigns/{cycle_id}", page.text)
-
-
-
 class EventBasedCheckpointTest(_Base):
     """票 #38，決策 0025 審查補遺第 4 點：期中檢查點是事件不是死線——
     使用者過時才來，直接併入期末判讀，不用補做。"""
@@ -243,20 +236,6 @@ class EventBasedCheckpointTest(_Base):
                                 (day3_id,)).fetchone()
         self.assertEqual(row["status"], "resolved")
 
-    def test_page_hides_the_import_form_once_merged_into_final(self):
-        cycle_id = self._live_cycle(start_offset_days=-8)
-        self._run_final_reading(cycle_id)
-        page = self.client.get(f"/brands/{self.bid}/ads/{cycle_id}/checkpoint/day3")
-        self.assertIn("併入期末結論", page.text)
-
-    def test_direct_post_after_merge_shows_a_friendly_message(self):
-        cycle_id = self._live_cycle(start_offset_days=-8)
-        self._run_final_reading(cycle_id)
-        resp = self.client.post(f"/brands/{self.bid}/ads/{cycle_id}/checkpoint/day7",
-                                data={"csv_text": GOOD_CSV}, follow_redirects=True)
-        self.assertIn("不用再補做", resp.text)
-
-
 class ArchiveDeleteTest(_Base):
     """驗收：檢查點紀錄落庫、附封存刪除（決策 0023 第 8 條）。"""
 
@@ -278,23 +257,6 @@ class ArchiveDeleteTest(_Base):
                                 csv_text=GOOD_CSV)
         checkpoint.delete(main.conn, self.bid, result["id"], actor=ACTOR)
         self.assertEqual(checkpoint.list_checkpoints(main.conn, self.bid, cycle_id), [])
-
-    def test_archive_and_delete_routes(self):
-        cycle_id = self._live_cycle(start_offset_days=-4)
-        result = checkpoint.run(main.conn, self.bid, cycle_id, "day3", actor=ACTOR,
-                                csv_text=GOOD_CSV)
-
-        resp = self.client.post(f"/brands/{self.bid}/ads/checkpoints/{result['id']}/archive",
-                                follow_redirects=False)
-        self.assertEqual(resp.status_code, 303)
-        self.assertEqual(
-            checkpoint.list_checkpoints(main.conn, self.bid, cycle_id)[0]["status"], "archived")
-
-        resp = self.client.post(f"/brands/{self.bid}/ads/checkpoints/{result['id']}/delete",
-                                follow_redirects=False)
-        self.assertEqual(resp.status_code, 303)
-        self.assertEqual(checkpoint.list_checkpoints(main.conn, self.bid, cycle_id), [])
-
 
 if __name__ == "__main__":
     unittest.main()

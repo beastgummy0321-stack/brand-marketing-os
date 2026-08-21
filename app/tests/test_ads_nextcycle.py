@@ -219,13 +219,6 @@ class BudgetProposalTest(_BaseNextCycleTest):
                         revenue=40000)
         self.assertIsNotNone(nextcycle.load(main.conn, self.bid, self.cycle_id))
 
-    def test_page_shows_why_the_increase_is_capped(self):
-        self._run_cycle(spend=10000, impressions=20000, clicks=400, conversions=10,
-                        revenue=40000)
-        page = self.client.get(f"/brands/{self.bid}/ads/{self.cycle_id}/performance")
-        self.assertIn("下一期就這樣開", page.text)
-        self.assertIn("加碼幅度上限", page.text)
-
 
 class SampleTrustFlagsTest(unittest.TestCase):
     """票 03-sample-trust-threshold（ADR 0011 第一至三節）：純函式 cell_trust_flags()，

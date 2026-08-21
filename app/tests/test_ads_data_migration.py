@@ -26,7 +26,6 @@ from app.ads import data_onboarding  # noqa: E402
 from app.ads import performance as ads_performance  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
 from app.core.db import new_id, now_iso  # noqa: E402
-from app.tools import capacity_check  # noqa: E402
 
 
 ACTOR = "測試員"
@@ -79,23 +78,11 @@ class _BaseTest(unittest.TestCase):
                                           client_name=None, actor=ACTOR)
         self.bid = self.brand["id"]
 
-    def _get(self):
-        return self.client.get(f"/brands/{self.bid}/ads/data-migration")
-
     def _onboarding(self):
         """同一份四格清單／完成度／成熟門檻，改從 React 新殼用的 JSON 端點取。"""
         resp = self.client.get(f"/api/campaigns/brands/{self.bid}/data-onboarding")
         self.assertEqual(resp.status_code, 200)
         return resp.json()["data"]
-
-
-class RouteRegistrationTest(_BaseTest):
-    def test_route_reachable_and_not_swallowed_by_cycle_wildcard(self):
-        """註冊順序要在 /ads/{cycle_id} 之前——同 pixel-guide／interview 的先例。"""
-        resp = self._get()
-        self.assertEqual(resp.status_code, 200)
-        self.assertIn("把舊資料搬進來", resp.text)
-        self.assertNotIn("找不到", resp.text)
 
 
 class EmptyStateTest(_BaseTest):
@@ -204,49 +191,7 @@ class MaturityReportTest(_BaseTest):
         self.assertFalse(maturity["all_met"])
 
 
-class ConnectionsPageEntryCardTest(_BaseTest):
-    def test_fourth_card_links_to_migration_page(self):
-        resp = self.client.get(f"/brands/{self.bid}/ads/connections")
-        self.assertEqual(resp.status_code, 200)
-        self.assertIn(f"/brands/{self.bid}/ads/data-migration", resp.text)
-        self.assertIn("把舊資料搬進來", resp.text)
-
-    def test_connections_page_card_count_within_limit(self):
-        resp = self.client.get(f"/brands/{self.bid}/ads/connections")
-        counts = capacity_check.check_html(resp.text)
-        self.assertLessEqual(counts["card_count"], capacity_check.CARD_LIMIT)
-        self.assertEqual(counts["illegal_detail_count"], 0)
-
-
-class CapacityTest(_BaseTest):
-    def test_checklist_tiles_are_content_kind_not_counted_toward_entry_limit(self):
-        """四格是狀態摘要卡（kind='content'），不是選單入口，不計入 §20.1 規則 1 的
-        主欄 entry ≤5 上限——本頁沒有任何 entry 卡。"""
-        resp = self._get()
-        counts = capacity_check.check_html(resp.text)
-        self.assertEqual(counts["card_count"], 0)
-        self.assertEqual(counts["illegal_detail_count"], 0)
-
-
 class InterviewNextParamTest(_BaseTest):
-    def test_get_carries_next_into_hidden_field(self):
-        next_url = f"/brands/{self.bid}/ads/data-migration"
-        resp = self.client.get(f"/brands/{self.bid}/ads/interview", params={"next": next_url})
-        self.assertIn(f'value="{next_url}"', resp.text)
-
-    def test_post_redirects_to_next_when_provided(self):
-        next_url = f"/brands/{self.bid}/ads/data-migration"
-        resp = self.client.post(f"/brands/{self.bid}/ads/interview",
-                                data={"note": "南部客群對免運特別有反應", "next": next_url},
-                                follow_redirects=False)
-        self.assertEqual(resp.status_code, 303)
-        self.assertTrue(resp.headers["location"].startswith(next_url))
-
-    def test_post_without_next_falls_back_to_ads_home(self):
-        resp = self.client.post(f"/brands/{self.bid}/ads/interview", data={},
-                                follow_redirects=False)
-        self.assertTrue(resp.headers["location"].startswith(f"/brands/{self.bid}/ads?"))
-
     def test_unsafe_next_is_ignored(self):
         """next 白名單只接受同品牌路徑，避免被拿去開放轉址。"""
         resp = self.client.post(f"/brands/{self.bid}/ads/interview",

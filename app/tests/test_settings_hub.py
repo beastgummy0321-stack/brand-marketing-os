@@ -67,13 +67,6 @@ class SettingsHubEntryPageTest(unittest.TestCase):
                                           actor=ACTOR)
         self.bid = self.brand["id"]
 
-    def test_entry_page_shows_both_category_cards(self):
-        resp = self.client.get(f"/brands/{self.bid}/settings")
-        self.assertEqual(resp.status_code, 200)
-        text = resp.text
-        self.assertIn("廣告層面", text)
-        self.assertIn("系統設定", text)
-
     def test_empty_state_shows_system_default_and_no_modified_time(self):
         """G14.8 空態：品牌從沒自訂過，入口頁摘要顯示系統預設值，不假裝有修改時間。"""
         field = _field(_cards(self.client, self.bid), "budget_structure", "min_daily_per_group")
@@ -117,13 +110,6 @@ class SettingsAdsPageTest(unittest.TestCase):
         直接看每個欄位的 customized 旗標（那個標籤就是照它掛的），連巧合的可能都沒有。"""
         cards = _cards(self.client, self.bid)
         self.assertFalse(any(f["customized"] for card in cards.values() for f in card["fields"]))
-
-    def test_page_subtitle_mentions_customized_label_but_no_field_has_it(self):
-        """反向證明前一個測試的斷言真的在測東西：頁面確實含「已自訂」這個詞
-        （出現在說明句），但沒有任何欄位標籤帶著它。"""
-        resp = self.client.get(f"/brands/{self.bid}/settings/ads")
-        self.assertIn("已自訂", resp.text)  # 說明句本身提到這個詞
-        self.assertNotIn("・ 已自訂", resp.text)  # 但沒有欄位真的掛這個標籤
 
     def test_edit_saves_and_marks_customized(self):
         resp = self.client.post(
@@ -236,13 +222,6 @@ class SettingsCalendarDismissTest(unittest.TestCase):
     def test_toggle_off_marks_category_closed_and_persists(self):
         calendar_dismiss.dismiss(main.conn, self.bid, "cny")
         self.assertEqual(calendar_dismiss.list_dismissed(main.conn, self.bid), {"cny"})
-
-    def test_toggle_off_does_not_affect_other_categories(self):
-        self.client.post(f"/brands/{self.bid}/settings/ads/calendar/cny", data={"enabled": "0"})
-        page = self.client.get(f"/brands/{self.bid}/settings/ads")
-        # 情人節那一列仍是「提醒中」——用 claim-block-approved 這個只有開啟才會掛的 class
-        # 當斷言依據，不是裸字串「提醒中」（頁面上每一列的說明句都可能提到這個詞）。
-        self.assertIn("claim-block claim-block-approved", page.text)
 
     def test_toggle_on_after_off_restores_reminding(self):
         calendar_dismiss.dismiss(main.conn, self.bid, "cny")

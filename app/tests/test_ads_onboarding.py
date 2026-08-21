@@ -5,7 +5,6 @@ ADHD 設計輸入方向三的驗收：第一期先講明預期、投放後不沉
 """
 
 import atexit
-import json
 import os
 import shutil
 import tempfile
@@ -94,13 +93,6 @@ class CalibrationTest(_BaseOnboardingTest):
         self._open()
         second = self._open()
         self.assertIsNone(onboarding.calibration_forecast(main.conn, self.bid, second))
-
-    def test_page_says_the_first_cycle_is_for_calibration(self):
-        cycle_id = self._open()
-        page = self.client.get(f"/brands/{self.bid}/ads/{cycle_id}")
-        self.assertIn("先講清楚這期大概會是什麼樣", page.text)
-        self.assertIn("校準", page.text)
-        self.assertIn("粗估範圍（未經校準）", page.text)
 
     def test_in_forecast_tells_whether_reality_matched_the_promise(self):
         forecast = {"conversions_low": 5, "conversions_high": 20,
@@ -229,13 +221,6 @@ class DiffViewTest(_BaseOnboardingTest):
         real = self._open(amount="10000")
         self.assertIsNone(onboarding.diff_with_previous(main.conn, self.bid, real))
 
-    def test_page_folds_the_unchanged_items(self):
-        self._open(amount="10000", objective="sales")
-        second = self._open(amount="12000", objective="sales")
-        page = self.client.get(f"/brands/{self.bid}/ads/{second}")
-        self.assertIn("跟上期比，這期改了什麼", page.text)
-        self.assertIn("項與上期相同", page.text)
-
 
 if __name__ == "__main__":
     unittest.main()
@@ -305,36 +290,6 @@ class ForecastSnapshotTest(_BaseOnboardingTest):
         cycle = ads_repo.get_cycle(main.conn, self.bid, second)
         self.assertIsNone(onboarding.forecast_snapshot(cycle))
 
-    def test_page_reads_the_snapshot_not_a_live_recalculation(self):
-        """顯示值＝快照值：竄改快照成跟即時重算不同的值，頁面要顯示竄改後的快照，
-        證明沒有事後重算（rubric②）。"""
-        cycle_id = self._open(amount="20000")
-        live = onboarding.calibration_forecast(main.conn, self.bid, cycle_id)
-        cycle = ads_repo.get_cycle(main.conn, self.bid, cycle_id)
-        plan = ads_repo.derived_plan(cycle)
-        plan["forecast"] = {**live, "clicks_low": live["clicks_low"] + 999,
-                            "clicks_high": live["clicks_high"] + 1999}
-        main.conn.execute("UPDATE campaign_cycle SET derived_plan_json = ? WHERE id = ?",
-                          (json.dumps(plan, ensure_ascii=False), cycle_id))
-        main.conn.commit()
-
-        page = self.client.get(f"/brands/{self.bid}/ads/{cycle_id}")
-        self.assertIn("{:,}".format(live["clicks_low"] + 999), page.text)
-
-    def test_legacy_cycle_without_a_snapshot_honestly_admits_it(self):
-        """本票上線前開的校準期沒存過快照：老實顯示「本期未存預告」，不補算（rubric③）。"""
-        cycle_id = self._open(amount="20000")
-        cycle = ads_repo.get_cycle(main.conn, self.bid, cycle_id)
-        plan = ads_repo.derived_plan(cycle)
-        plan.pop("forecast", None)
-        main.conn.execute("UPDATE campaign_cycle SET derived_plan_json = ? WHERE id = ?",
-                          (json.dumps(plan, ensure_ascii=False), cycle_id))
-        main.conn.commit()
-
-        page = self.client.get(f"/brands/{self.bid}/ads/{cycle_id}")
-        self.assertIn("先講清楚這期大概會是什麼樣", page.text)  # 校準期卡片仍出現
-        self.assertIn("本期未存預告", page.text)
-
 
 class ForecastGapTest(unittest.TestCase):
     """票 F5（決策 0039 第 16 條）：區間外時機械式拆解是哪一環拖累，程式算不猜（rubric④）。"""
@@ -384,35 +339,20 @@ class PredictionSettlementTest(_BaseOnboardingTest):
         mid_conversions = (forecast["conversions_low"] + forecast["conversions_high"]) // 2
         self._judge(first, clicks=mid_clicks, conversions=mid_conversions)
 
-        reading_page = self.client.get(f"/brands/{self.bid}/ads/{first}/performance")
-        self.assertIn("兌現預言", reading_page.text)
-        self.assertIn("落在預告範圍內", reading_page.text)
+        # 出口(a) 判讀頁：對「正在看的這期」自己的快照兌現（routes_performance.py:67）
+        first_cycle = ads_repo.get_cycle(main.conn, self.bid, first)
+        settlement = ads_reading.prediction_settlement(main.conn, self.bid, first_cycle)
+        self.assertIsNotNone(settlement)
+        self.assertEqual(settlement["gap"], {"direction": "within", "segment": None})
 
+        # 出口(b) 第二期檔期內頁：對「上一期」的快照兌現（routes_plan.py:310），
+        # 口徑跟出口(a) 是同一份，不是另算一次
         second = self._open(amount="20000")
-        cycle_page = self.client.get(f"/brands/{self.bid}/ads/{second}")
-        self.assertIn("上期預告兌現了嗎", cycle_page.text)
-        self.assertIn("兌現了：落在預告範圍內", cycle_page.text)
-
-    def test_above_range_is_labeled_conservative_forecast(self):
-        first = self._open(amount="20000")
-        forecast = onboarding.calibration_forecast(main.conn, self.bid, first)
-        self._judge(first, clicks=forecast["clicks_high"] * 3,
-                   conversions=forecast["conversions_high"] + 50)
-        second = self._open(amount="20000")
-        page = self.client.get(f"/brands/{self.bid}/ads/{second}")
-        self.assertIn("超標達成：預測偏保守", page.text)
-
-    def test_below_range_shows_the_three_part_narrative(self):
-        """承認→拆解→下期已用自身數據（決策 0039 第 16 條②）。"""
-        first = self._open(amount="20000")
-        self._judge(first, clicks=1, conversions=0)
-        second = self._open(amount="20000")
-        page = self.client.get(f"/brands/{self.bid}/ads/{second}")
-        self.assertIn("沒兌現：實際低於預告下限", page.text)
-        detail_body = page.text[page.text.index("上期預告兌現了嗎"):]
-        self.assertIn("實際成交比預告的下限還少", detail_body)
-        self.assertIn("每次點擊的成本比預期高", detail_body)  # 這組資料點擊量也不足，歸咎 CPC
-        self.assertIn("下一期的預估基準已經改用這個品牌自己的實際數據", detail_body)
+        second_cycle = ads_repo.get_cycle(main.conn, self.bid, second)
+        previous = onboarding.previous_cycle(main.conn, self.bid, second_cycle)
+        self.assertEqual(previous["id"], first)
+        self.assertEqual(ads_reading.prediction_settlement(main.conn, self.bid, previous),
+                         settlement)
 
     def test_third_cycle_has_no_settlement_card(self):
         """上期無快照就不出卡，不補算（rubric②）：第三期的上一期是第二期（normal，
@@ -421,11 +361,14 @@ class PredictionSettlementTest(_BaseOnboardingTest):
         self._judge(first, clicks=1500, conversions=30)
         self._open(amount="20000")
         third = self._open(amount="20000")
-        page = self.client.get(f"/brands/{self.bid}/ads/{third}")
-        self.assertNotIn("上期預告兌現了嗎", page.text)
+        third_cycle = ads_repo.get_cycle(main.conn, self.bid, third)
+        previous = onboarding.previous_cycle(main.conn, self.bid, third_cycle)
+        self.assertNotEqual(previous["id"], first)  # 只認緊鄰的上一期＝第二期
+        self.assertIsNone(ads_reading.prediction_settlement(main.conn, self.bid, previous))
 
     def test_unjudged_calibration_cycle_has_no_settlement_on_reading_page(self):
         """有快照但還沒判讀過（一筆成效資料都沒有）：出口(a)不出卡，不拿零筆資料充數。"""
         cycle_id = self._open(amount="20000")
-        page = self.client.get(f"/brands/{self.bid}/ads/{cycle_id}/performance")
-        self.assertNotIn("兌現預言", page.text)
+        cycle = ads_repo.get_cycle(main.conn, self.bid, cycle_id)
+        self.assertIsNotNone(onboarding.forecast_snapshot(cycle))  # 快照有，成效一筆都沒有
+        self.assertIsNone(ads_reading.prediction_settlement(main.conn, self.bid, cycle))

@@ -277,22 +277,6 @@ class ReadingFlowTest(unittest.TestCase):
         loaded = reading.load(main.conn, self.bid, self.cycle_id)
         self.assertIn("打折", loaded["cycle"]["confidence_level"])
 
-    def test_page_shows_the_verdict_and_says_who_decided(self):
-        self._spend(spend=10000, impressions=20000, clicks=400, conversions=10, revenue=40000)
-        reading.run(main.conn, self.bid, self.cycle_id, ACTOR)
-        page = self.client.get(f"/brands/{self.bid}/ads/{self.cycle_id}/performance")
-        self.assertIn("這期該怎麼看", page.text)
-        self.assertIn("AI 只負責把結論講成白話", page.text)
-
-    def test_page_shows_directional_statistical_level_for_small_sample(self):
-        """票 8：小預算帳戶（clicks 只有 400）收不到統計等級的樣本，頁面要誠實標
-        「方向性判讀」，不能假裝是嚴謹的科學結論。"""
-        self._spend(spend=10000, impressions=20000, clicks=400, conversions=10, revenue=40000)
-        reading.run(main.conn, self.bid, self.cycle_id, ACTOR)
-        page = self.client.get(f"/brands/{self.bid}/ads/{self.cycle_id}/performance")
-        self.assertIn("方向性判讀", page.text)
-        self.assertIn("這期的樣本數還沒到統計等級的門檻", page.text)
-
     def test_rerun_replaces_previous_reading(self):
         """重判讀要能跑第二次——下期草案掛在判讀上，清理順序錯了會被外鍵擋死。"""
         self._spend(spend=10000, impressions=20000, clicks=400, conversions=10, revenue=40000)
@@ -306,20 +290,6 @@ class ReadingFlowTest(unittest.TestCase):
             "SELECT COUNT(*) c FROM recommendation WHERE campaign_cycle_id = ?",
             (self.cycle_id,)).fetchone()["c"]
         self.assertEqual(drafts, 1)
-
-    def test_lazy_mode_still_gives_a_grade_and_the_page_renders(self):
-        """懶人模式走查（GitHub issue #41，決策 0025 懶人優先第 6 點）：只有 Meta 資料、
-        沒有訂單／GA4／通路資料時，仍要給結論並標成色，頁面不報錯不空白。"""
-        self._spend(spend=10000, impressions=20000, clicks=400, conversions=10, revenue=40000)
-        ok, err = reading.run(main.conn, self.bid, self.cycle_id, ACTOR)
-        self.assertTrue(ok, err)
-        result = reading.load(main.conn, self.bid, self.cycle_id)["cycle"]["result"]
-        self.assertEqual(result["data_grade"], {"kind": "meta_only", "label": "Meta 視角判讀"})
-        self.assertFalse(result["ga4_leak"]["available"])
-
-        page = self.client.get(f"/brands/{self.bid}/ads/{self.cycle_id}/performance")
-        self.assertEqual(page.status_code, 200)
-        self.assertIn("Meta 視角判讀", page.text)
 
 
 class AssetBreakdownTest(unittest.TestCase):
@@ -382,15 +352,6 @@ class AssetBreakdownTest(unittest.TestCase):
         self.assertTrue(ok, err)
         result = reading.load(main.conn, self.bid, self.cycle_id)["cycle"]["result"]
         self.assertEqual(result["asset_breakdown"], [])
-
-    def test_page_shows_asset_breakdown_when_available(self):
-        self._package("拿證據說話_01_ad")
-        csv_text = ("行銷活動名稱,廣告名稱,曝光次數,連結點擊次數,花費金額,購買次數,購買轉換價值\n"
-                   "測試活動,拿證據說話_01_ad,12500,340,5000,12,18600\n")
-        perf.import_csv(main.conn, self.bid, self.cycle_id, csv_text, actor=ACTOR)
-        reading.run(main.conn, self.bid, self.cycle_id, ACTOR)
-        page = self.client.get(f"/brands/{self.bid}/ads/{self.cycle_id}/performance")
-        self.assertIn("拿證據說話_01_ad", page.text)
 
 
 class VerdictShiftTest(unittest.TestCase):
@@ -588,16 +549,6 @@ class LateDataRerunTest(_ReadingIntegrationBase):
         self.assertEqual(len(open_items), 1)
         self.assertEqual(open_items[0]["campaign_cycle_id"], self.cycle_id)
 
-    def test_page_shows_version_badge_and_diff_summary(self):
-        """版次徽章與逐版差異可見；不靜默覆蓋（票 #38 驗收條件）。"""
-        self._judge_once()
-        self._spend(spend=50000, impressions=0, clicks=0, conversions=0, revenue=0)
-        reading.rerun_for_late_data(main.conn, self.bid, self.cycle_id, actor=ACTOR)
-
-        page = self.client.get(f"/brands/{self.bid}/ads/{self.cycle_id}/performance")
-        self.assertIn("第 2 版", page.text)
-        self.assertIn("測試判讀說明", page.text)
-
     def test_rerun_again_without_new_diffs_does_not_duplicate_the_warning(self):
         self._judge_once()
         self._spend(spend=50000, impressions=0, clicks=0, conversions=0, revenue=0)
@@ -703,15 +654,6 @@ class RepurchaseLineTest(_ReadingIntegrationBase):
         self.assertFalse(result["repurchase_line"]["conflict"])
         self.assertEqual(len(ads_repo.list_dissents(main.conn, self.bid, self.cycle_id,
                                                      status="pending")), 0)
-
-    def test_page_shows_repurchase_line_and_conflict_badge(self):
-        orders_repo.save_orders(main.conn, self.bid, _repeat_customer_rows(30, prefix="pg"),
-                                source="easystore_xlsx", actor=ACTOR)
-        self._spend(spend=10000, impressions=20000, clicks=400, conversions=10, revenue=10000)
-        reading.run(main.conn, self.bid, self.cycle_id, ACTOR)
-        page = self.client.get(f"/brands/{self.bid}/ads/{self.cycle_id}/performance")
-        self.assertIn("含 90 天回購的實質判讀", page.text)
-        self.assertIn("兩線結論相反", page.text)
 
 
 class DualBaselineTest(_ReadingIntegrationBase):
@@ -1087,15 +1029,6 @@ class HypothesisReviewTest(_HypothesisReviewBase):
             main.conn, self.bid, self.cycle_id, {hyp["id"]: "supported"}, actor=OPERATOR)
         reviews = reading.load(main.conn, self.bid, self.cycle_id)["cycle"]["hypothesis_reviews"]
         self.assertEqual(reviews, [])
-
-    def test_page_renders_hypothesis_review_section(self):
-        hyp = self._link_hypothesis("通勤族比在家工作者更會下單")
-        self._spend(spend=10000, impressions=20000, clicks=400, conversions=10, revenue=40000)
-        reading.run(main.conn, self.bid, self.cycle_id, ACTOR)
-        page = self.client.get(f"/brands/{self.bid}/ads/{self.cycle_id}/performance")
-        self.assertIn("這期驗證了什麼", page.text)
-        self.assertIn("通勤族比在家工作者更會下單", page.text)
-        self.assertIn(f"verdict_{hyp['id']}", page.text)
 
     def test_unresolved_hypothesis_flagged_at_finalize(self):
         self._link_hypothesis("通勤族比在家工作者更會下單")

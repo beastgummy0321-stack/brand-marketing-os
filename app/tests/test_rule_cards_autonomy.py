@@ -92,22 +92,6 @@ class AutonomyRuleCardApiTest(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertIn("保守檔（1）與放手檔（2）", response.text)
 
-    def test_old_html_route_rejects_mode_outside_two_allowed_codes(self):
-        response = self.client.post(
-            f"/brands/{self.brand_id}/settings/ads/autonomy/edit",
-            data={"mode": "1.5"},
-            follow_redirects=False,
-        )
-        self.assertEqual(response.status_code, 400)
-        self.assertIn("保守檔（1）與放手檔（2）", response.text)
-        self.assertEqual(
-            rule_cards.get_value(main.conn, self.brand_id, "autonomy", "mode"), 1.0)
-
-    def test_old_html_settings_excludes_autonomy_card(self):
-        response = self.client.get(f"/brands/{self.brand_id}/settings/ads")
-        self.assertEqual(response.status_code, 200)
-        self.assertNotIn("投放自動度", response.text)
-
 
 if __name__ == "__main__":
     unittest.main()

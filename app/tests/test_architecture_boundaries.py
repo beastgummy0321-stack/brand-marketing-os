@@ -412,7 +412,6 @@ KNOWN_OVERSIZED_FILES = {
     "app/brand_intelligence/repository.py": 1667,
     "app/tests/test_ads_reading.py": 1157,
     "app/ads/reading.py": 1039,
-    "app/tests/test_ads_creative.py": 870,
     "app/ads/repository.py": 858,
 }
 

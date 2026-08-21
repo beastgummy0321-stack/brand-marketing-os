@@ -57,7 +57,6 @@ class ClaimsApiTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"ok": True, "message": "「夏季全站9折_轉換」記成這個品牌的了，它的成效數字會算進來。"})
         self.assertNotIn(self.suggested_id, {item["id"] for item in self._items()})
-        self.assertEqual(self.client.get(f"/brands/{self.brand_id}/ads/claims").status_code, 200)
 
     def test_ignore_removes_item(self):
         response = self.client.post(f"/api/campaigns/brands/{self.brand_id}/claims/{self.unclaimed_id}/ignore")

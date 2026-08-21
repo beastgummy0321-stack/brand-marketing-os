@@ -1,25 +1,17 @@
 # -*- coding: utf-8 -*-
 """app/tests/test_ads_performance_split.py — D線票5（GitHub issue #47）：成效頁拆層＋資料操作子頁。
 
-驗收重點：
-1. 成效頁上層剛好五塊（判讀結論／算出來的數字／分開看每個產品／下一期就這樣開／本期判讀可信度），
-   容量腳本通過（卡片數、非法展開元件數、單卡文字數）。
-2. 通路對照與判讀可信度的詳情內只有唯讀摘要／燈號；蝦皮碼與對帳自答的輸入表單只存在於
-   資料操作子頁，不得兩處都放。
-3. 資料操作子頁含 CSV／手動填／蝦皮碼／對帳／營收校準，麵包屑可點回成效頁。
-4. 舊網址 `/revenue-reconcile` 302 轉址到資料操作子頁。
-5. 拆層前後：同一組 fixture 的判讀結論／成色標籤／可信度數值必須完全相同（本票不改判讀邏輯，
+驗收重點（舊頁版面斷言隨 Jinja 舊頁一起刪除，這裡只剩不綁畫面的業務行為）：
+1. 拆層前後：同一組 fixture 的判讀結論／成色標籤／可信度數值必須完全相同（本票不改判讀邏輯，
    只驗證版面搬動沒有連帶改到這些數字）。
-6. 模擬檔期的「產生模擬成效」按鈕維持原位；資料操作子頁不重複提供匯入表單。
-7. 對帳、蝦皮碼、CSV 匯入、手動填數字四個表單送出後留在資料操作子頁，不被踢回成效頁
-   （獨立驗證抓到的缺陷修正）。
+2. 資料不足時仍給結論並標成色：分母為 0 的 KPI 回 None，不硬給 0。
+3. 已記錄的蝦皮碼重判讀後會反映進通路對照結果。
 
 品牌與產品名一律虛構，全程 FakeProvider，不發任何真實網路請求。
 """
 
 import atexit
 import os
-import re
 import shutil
 import tempfile
 import unittest
@@ -37,7 +29,6 @@ from app.ads import reading  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
 from app.llm.providers import FakeProvider, ProviderResponse, Usage  # noqa: E402
 from app.orders import channel as orders_channel  # noqa: E402
-from app.tools import capacity_check as cc  # noqa: E402
 
 
 
@@ -101,172 +92,6 @@ class _JudgedCycleTest(unittest.TestCase):
     def tearDown(self):
         reading.PROVIDER = self._orig
 
-    def _perf(self):
-        return self.client.get(f"/brands/{self.bid}/ads/{self.cycle_id}/performance")
-
-    def _data(self):
-        return self.client.get(f"/brands/{self.bid}/ads/{self.cycle_id}/performance/data")
-
-
-class CapacityTest(_JudgedCycleTest):
-    """驗收條件：成效頁上層剛好五塊，容量腳本通過。"""
-
-    def test_performance_page_has_exactly_five_cards_and_passes_capacity(self):
-        page = self._perf()
-        self.assertEqual(page.status_code, 200)
-        counts = cc.check_html(page.text)
-        self.assertEqual(counts["card_count"], 5)
-        self.assertEqual(counts["illegal_detail_count"], 0)
-        self.assertEqual(cc.violations("ads_performance", counts), [])
-
-    def test_data_subpage_stays_within_card_limit_and_uses_legal_details(self):
-        page = self._data()
-        self.assertEqual(page.status_code, 200)
-        counts = cc.check_html(page.text)
-        self.assertLessEqual(counts["card_count"], cc.CARD_LIMIT)
-        self.assertEqual(counts["illegal_detail_count"], 0)
-
-
-class FormsOnlyOnDataSubpageTest(_JudgedCycleTest):
-    """驗收條件：蝦皮碼與對帳的輸入表單只存在於資料操作子頁；通路對照與判讀可信度的
-    詳情內只有唯讀摘要／燈號。兩邊各有斷言。"""
-
-    def test_shopee_code_form_absent_from_performance_page(self):
-        page = self._perf().text
-        self.assertNotIn('name="code"', page)
-        self.assertNotIn('id="shopee_code_input"', page)
-
-    def test_shopee_code_form_present_on_data_subpage(self):
-        page = self._data().text
-        self.assertIn('id="shopee_code_input"', page)
-        self.assertIn(f'/brands/{self.bid}/ads/{self.cycle_id}/performance/shopee-code', page)
-
-    def test_reconcile_self_answer_form_absent_from_performance_page(self):
-        page = self._perf().text
-        self.assertNotIn('name="budget_same"', page)
-        self.assertNotIn('name="other_campaign_running"', page)
-
-    def test_reconcile_self_answer_form_present_on_data_subpage(self):
-        page = self._data().text
-        self.assertIn('name="budget_same"', page)
-        self.assertIn(f'/brands/{self.bid}/ads/{self.cycle_id}/performance/reconcile', page)
-
-    def test_csv_and_manual_forms_absent_from_performance_page(self):
-        page = self._perf().text
-        self.assertNotIn("匯入 Meta 匯出的報表", page)
-        self.assertNotIn('id="csv_file"', page)
-        self.assertNotIn('id="spend"', page)
-
-    def test_csv_and_manual_forms_present_on_data_subpage(self):
-        page = self._data().text
-        self.assertIn('id="csv_file"', page)
-        self.assertIn('id="spend"', page)
-
-    def test_channel_detail_on_performance_page_is_readonly(self):
-        """通路對照詳情：只留唯讀摘要／燈號，沒有表單。"""
-        page = self._perf().text
-        self.assertIn("通路對照（蝦皮／藥局）", page)
-        self.assertNotIn("<form", page[page.index("通路對照（蝦皮／藥局）"):
-                                        page.index("通路對照（蝦皮／藥局）") + 2000])
-
-    def test_confidence_detail_on_performance_page_is_readonly(self):
-        """判讀可信度詳情：只留唯讀摘要，沒有自答表單。"""
-        page = self._perf().text
-        self.assertIn("本期判讀可信度", page)
-        tail = page[page.index("本期判讀可信度"):]
-        self.assertNotIn("<form", tail)
-
-
-class RevenueReconcileRedirectTest(_JudgedCycleTest):
-    def test_old_url_redirects_302_to_data_subpage(self):
-        resp = self.client.get(
-            f"/brands/{self.bid}/ads/{self.cycle_id}/revenue-reconcile",
-            follow_redirects=False)
-        self.assertEqual(resp.status_code, 302)
-        self.assertTrue(resp.headers["location"].startswith(
-            f"/brands/{self.bid}/ads/{self.cycle_id}/performance/data"))
-
-    def test_calibrate_action_still_works_and_data_subpage_shows_it(self):
-        resp = self.client.post(
-            f"/brands/{self.bid}/ads/{self.cycle_id}/revenue-reconcile/calibrate",
-            follow_redirects=False)
-        self.assertEqual(resp.status_code, 303)
-        self.assertTrue(resp.headers["location"].startswith(
-            f"/brands/{self.bid}/ads/{self.cycle_id}/performance/data"))
-
-
-class DataOpsFormRedirectTest(unittest.TestCase):
-    """獨立驗證抓到的缺陷（#47 缺陷 2）：對帳、蝦皮碼、CSV 匯入、手動填數字四個表單送出後
-    要留在資料操作子頁（/performance/data），不能被 back 參數踢回成效頁。"""
-
-    def setUp(self):
-        self.client = TestClient(main.app)
-        self.brand = bi_repo.create_brand(main.conn, name="虛構晨露烘焙",
-                                          client_name=None, actor=ACTOR)
-        self.bid = self.brand["id"]
-        resp = self.client.post(f"/api/campaigns/{self.bid}",
-                                json={"product_ids": [], "budget": 10000, "objective": "sales"})
-        self.cycle_id = resp.json()["cycle_id"]
-
-    def _data_path(self):
-        return f"/brands/{self.bid}/ads/{self.cycle_id}/performance/data"
-
-    def _assert_redirects_to_data_subpage(self, resp):
-        self.assertTrue(300 <= resp.status_code < 400, resp.status_code)
-        self.assertTrue(resp.headers["location"].startswith(self._data_path()),
-                        resp.headers["location"])
-
-    def test_reconcile_redirects_to_data_subpage(self):
-        resp = self.client.post(
-            f"/brands/{self.bid}/ads/{self.cycle_id}/performance/reconcile",
-            data={}, follow_redirects=False)
-        self._assert_redirects_to_data_subpage(resp)
-
-    def test_shopee_code_redirects_to_data_subpage(self):
-        resp = self.client.post(
-            f"/brands/{self.bid}/ads/{self.cycle_id}/performance/shopee-code",
-            data={"code": "SHOP0802"}, follow_redirects=False)
-        self._assert_redirects_to_data_subpage(resp)
-
-    def test_csv_import_redirects_to_data_subpage(self):
-        resp = self.client.post(
-            f"/brands/{self.bid}/ads/{self.cycle_id}/performance/csv",
-            data={"csv_text": ""}, follow_redirects=False)
-        self._assert_redirects_to_data_subpage(resp)
-
-    def test_manual_entry_redirects_to_data_subpage(self):
-        resp = self.client.post(
-            f"/brands/{self.bid}/ads/{self.cycle_id}/performance/manual",
-            data={"spend": "5000"}, follow_redirects=False)
-        self._assert_redirects_to_data_subpage(resp)
-
-
-class DataSubpageBreadcrumbTest(_JudgedCycleTest):
-    def test_breadcrumb_links_back_to_performance_page(self):
-        page = self._data().text
-        self.assertIn(f'href="/brands/{self.bid}/ads/{self.cycle_id}/performance"', page)
-
-    def test_calibration_badge_is_a_short_label_not_a_sentence(self):
-        """瀏覽器驗收實測：badge 是 nowrap 標籤，塞整句話會在 375 視口撐爆版面（+26px）。
-
-        badge 只放短標籤，長說明另起一行（人話說明本身仍要出現在頁面上，不能為了版面把資訊吃掉）。
-        """
-        page = self._data().text
-        badge_texts = re.findall(r'<span class="badge badge-\w+">([^<]*)</span>', page)
-        self.assertTrue(badge_texts, "頁面上應該有成色 badge")
-        for text in badge_texts:
-            self.assertLessEqual(len(text.strip()), 8, f"badge 文字過長會撐爆 375 視口：{text}")
-        self.assertIn("暫用保守預設", page)  # 說明句仍在，只是不在 badge 裡
-
-    def test_data_subpage_covers_all_five_operations(self):
-        """驗收條件：資料操作子頁含匯入 CSV、手動填數字、對帳、蝦皮碼、營收校準。"""
-        page = self._data().text
-        self.assertIn('id="csv_file"', page)          # 匯入 CSV
-        self.assertIn('id="spend"', page)              # 手動填數字
-        self.assertIn('name="budget_same"', page)      # 對帳
-        self.assertIn('id="shopee_code_input"', page)  # 蝦皮碼
-        self.assertIn("營收校準", page)                  # 營收校準（併入，見決策 0029 第 10 點）
-
 
 class FixtureParityTest(_JudgedCycleTest):
     """本票只搬版面：同一組 fixture 的判讀結論、成色標籤、可信度數值要跟拆層前完全一致。"""
@@ -289,34 +114,6 @@ class FixtureParityTest(_JudgedCycleTest):
         self.assertEqual(budget["proposed_budget"], 12000)  # 建議下期預算（scale_candidate 上限 20%）
 
 
-class SimulationUnaffectedTest(unittest.TestCase):
-    """驗收條件：模擬檔期的「產生模擬成效」按鈕維持現狀不動，資料操作子頁不重複提供匯入表單。"""
-
-    def setUp(self):
-        self.client = TestClient(main.app)
-        self.brand = bi_repo.create_brand(main.conn, name="虛構晨露咖啡",
-                                          client_name=None, actor=ACTOR)
-        self.bid = self.brand["id"]
-        resp = self.client.post(f"/api/campaigns/{self.bid}",
-                                json={"product_ids": [], "budget": 10000, "objective": "sales",
-                                      "simulate": True})
-        self.cycle_id = resp.json()["cycle_id"]
-
-    def test_simulate_button_stays_on_performance_page(self):
-        page = self.client.get(
-            f"/brands/{self.bid}/ads/{self.cycle_id}/performance").text
-        self.assertIn("產生模擬成效", page)
-        self.assertIn(f'/brands/{self.bid}/ads/{self.cycle_id}/performance/simulate', page)
-
-    def test_data_subpage_does_not_duplicate_the_simulate_button(self):
-        """子頁可以用一句話提示按鈕在成效頁，但不得重複放出那個表單／按鈕本體。"""
-        page = self.client.get(
-            f"/brands/{self.bid}/ads/{self.cycle_id}/performance/data").text
-        self.assertNotIn(f'action="/brands/{self.bid}/ads/{self.cycle_id}/performance/simulate"',
-                         page)
-        self.assertNotIn("匯入 Meta 匯出的報表", page)
-
-
 class InsufficientDataStillGradesTest(unittest.TestCase):
     """驗收條件：資料不足時仍給結論並標成色，不擋路、不顯示假數字。"""
 
@@ -336,11 +133,6 @@ class InsufficientDataStillGradesTest(unittest.TestCase):
         self.assertIsNone(kpis["ctr"])
         self.assertIsNone(kpis["cpc"])
         self.assertIsNone(kpis["roas"])
-
-    def test_data_subpage_shows_accumulated_raw_number(self):
-        page = self.client.get(
-            f"/brands/{self.bid}/ads/{self.cycle_id}/performance/data").text
-        self.assertIn("目前累積的原始數字", page)
 
 
 class ShopeeCodeReadonlyGlanceTest(_JudgedCycleTest):

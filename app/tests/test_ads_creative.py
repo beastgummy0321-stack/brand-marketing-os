@@ -234,17 +234,6 @@ class FingerprintTableTest(unittest.TestCase):
             self.assertNotIn(taste_reason, fp.RULE_UPGRADABLE_REASONS)
 
 
-class RejectReasonMenuTest(_BaseCreativeTest):
-    """#52 驗收條件：理由選單要在頁面上實際渲染出全部 9 條，不是只改常數。"""
-
-    def test_page_renders_all_nine_reject_reasons(self):
-        self._generate()
-        page = self.client.get(f"/brands/{self.bid}/ads/{self.cycle_id}/creatives")
-        self.assertEqual(page.text.count('name="reason_code"'), 9 * len(self._variants()))
-        for _, label in fp.REJECT_REASONS:
-            self.assertIn(label, page.text)
-
-
 class CreativeBudgetCapTest(_BaseCreativeTest):
     """票 M2：素材生成呼叫前先擋花費上限（原本 app/ads/creative.py 完全沒有這道檢查）。
 
@@ -325,10 +314,6 @@ class GenerationTest(_BaseCreativeTest):
         variants = self._variants()
         self.assertTrue(variants)
         self.assertEqual(variants[0]["methodology_missing"], ["ad-creative.md"])
-
-        page = self.client.get(f"/brands/{self.bid}/ads/{self.cycle_id}/creatives")
-        self.assertIn("ad-creative.md", page.text)
-        self.assertIn("方法論參考資料缺席", page.text)
 
         rows = [dict(r) for r in main.conn.execute(
             "SELECT * FROM audit_log WHERE entity_type = 'methodology_file'"
@@ -522,18 +507,6 @@ class MultiProductScopedComplianceTest(unittest.TestCase):
 class ProgressHonestyTest(_BaseCreativeTest):
     """票 29：等待頁誠實化——階段清單反映真實狀態＋伺服器端計時，不引入前端計時器。"""
 
-    def test_progress_page_stage_list_is_honest_before_running(self):
-        text = self.client.get(
-            f"/brands/{self.bid}/ads/{self.cycle_id}/creatives/progress").text
-        for label in ("整理這期的資料與素材規則", "請 AI 生成素材", "檢查與存檔"):
-            self.assertIn(label, text)
-        self.assertIn("進行中", text)
-        self.assertIn("還沒開始", text)
-        self.assertNotIn("完成", text)
-        self.assertNotIn("%", text)
-        self.assertIn("已等", text)
-        self.assertIn("通常範圍", text)
-
     def test_progress_elapsed_time_does_not_reset_on_reload(self):
         first = self.client.get(
             f"/brands/{self.bid}/ads/{self.cycle_id}/creatives/progress").text
@@ -611,20 +584,6 @@ class CreativeMatrixTest(_BaseCreativeTest):
         self.assertFalse(ok)
         self.assertEqual(self._variants(), [])
 
-    def test_on_camera_true_shows_dna_badge_on_page(self):
-        variants = [
-            {"cell_id": cid, "variant_type": "image_prompt", "content": f"人像情境 {cid}",
-             "creative_angle_number": 12, "on_camera": True, "cut_type": None,
-             "quote_source": None,
-             "fingerprint": {"angle": "identity", "tone": "warm", "format": "single_image",
-                             "selling_point": "uniqueness"}}
-            for cid in self.cell_ids
-        ]
-        self._generate(reply=json.dumps({"variants": variants}, ensure_ascii=False))
-        page = self.client.get(f"/brands/{self.bid}/ads/{self.cycle_id}/creatives")
-        self.assertIn("人物出鏡（套用真人實拍 DNA）", page.text)
-        self.assertIn("創意角度 #12", page.text)
-
     def test_customer_voice_quotes_are_injected_and_cited(self):
         bi_repo.create_customer_voice(
             main.conn, self.bid, actor=ACTOR, raw_text="每次喝完都覺得肚子暖暖的，不會脹氣。",
@@ -651,10 +610,6 @@ class CreativeMatrixTest(_BaseCreativeTest):
         self.assertEqual(cited["quote_source"], "蝦皮評論，2026-05-02")
         self.assertTrue(cited["customer_voice_available"])
 
-        page = self.client.get(f"/brands/{self.bid}/ads/{self.cycle_id}/creatives")
-        self.assertIn("引用顧客原話，出處：蝦皮評論，2026-05-02", page.text)
-        self.assertNotIn("無顧客原話支撐", page.text)
-
     def test_empty_customer_voice_corpus_is_honestly_labeled(self):
         """語料庫空時照樣生成，頁面標注「無顧客原話支撐」（決策 0023 第 18a 點）。"""
         provider = FakeProvider(response=_fake(_variants_reply(self.cell_ids)))
@@ -667,17 +622,8 @@ class CreativeMatrixTest(_BaseCreativeTest):
         self.assertTrue(variants)
         self.assertFalse(variants[0]["customer_voice_available"])
 
-        page = self.client.get(f"/brands/{self.bid}/ads/{self.cycle_id}/creatives")
-        self.assertIn("無顧客原話支撐", page.text)
-
 
 class OppositionSelectionTest(_BaseCreativeTest):
-    def test_page_says_default_is_adopt_all(self):
-        self._generate()
-        resp = self.client.get(f"/brands/{self.bid}/ads/{self.cycle_id}/creatives")
-        self.assertIn("預設全部採用", resp.text)
-        self.assertIn("不調整也可以直接繼續", resp.text)
-
     def test_zero_clicks_adopts_everything(self):
         """反對制的核心：什麼都不點也能過關，採用的是「他沒有反對的」。"""
         self._generate()
@@ -707,20 +653,6 @@ class OppositionSelectionTest(_BaseCreativeTest):
         adopted = ads_creative.approve_selection(main.conn, self.bid, self.cycle_id, OPERATOR)
         # 舊頁就是靠「採用 0 則」這個回傳值決定轉成 kind=warn 的人話提醒
         self.assertEqual(adopted, 0)
-
-    def test_approval_works_without_operator_cookie(self):
-        """ADR 0004：關卡二（素材採用）不再要求先設定操作人。"""
-        self._generate()
-        self.client.cookies.clear()
-        resp = self.client.post(f"/brands/{self.bid}/ads/{self.cycle_id}/creatives/approve",
-                                follow_redirects=False)
-        self.assertEqual(resp.status_code, 303)
-        self.assertNotIn("/settings/operator", resp.headers["location"])
-        row = main.conn.execute(
-            "SELECT decided_by FROM adoption_decision WHERE campaign_cycle_id = ? LIMIT 1",
-            (self.cycle_id,)).fetchone()
-        self.assertIsNotNone(row)
-        self.assertEqual(row["decided_by"], OPERATOR)
 
 
 class RejectionMemoryTest(_BaseCreativeTest):
@@ -826,9 +758,6 @@ class MissingTypeBackfillTest(_BaseCreativeTest):
         self.assertEqual(len(copy_variants), len(self.cell_ids))
         self.assertTrue(all(v["missing_creative_types"] == [] for v in variants))
 
-        page = self.client.get(f"/brands/{self.bid}/ads/{self.cycle_id}/creatives")
-        self.assertNotIn("已自動補打一次仍未產出", page.text)
-
     def test_still_missing_after_backfill_is_labeled_on_page(self):
         """第一次、補打都缺 copy：不再打第三次，頁面誠實標注缺了廣告文案。"""
         provider = _SequencedProvider(
@@ -842,10 +771,6 @@ class MissingTypeBackfillTest(_BaseCreativeTest):
         self.assertFalse(any(v["variant_type"] == "copy" for v in variants))
         self.assertTrue(all(v["missing_creative_types"] == ["copy"] for v in variants))
 
-        page = self.client.get(f"/brands/{self.bid}/ads/{self.cycle_id}/creatives")
-        self.assertIn("已自動補打一次仍未產出", page.text)
-        self.assertIn("廣告文案", page.text)
-
     def test_no_missing_type_does_not_trigger_backfill(self):
         """三個型別都齊全時不該多打一次補打——驗形沒偵測到缺型別。"""
         full_reply = json.dumps({"variants": json.loads(_variants_reply(self.cell_ids))["variants"]
@@ -856,8 +781,6 @@ class MissingTypeBackfillTest(_BaseCreativeTest):
 
         variants = self._variants()
         self.assertTrue(all(v["missing_creative_types"] == [] for v in variants))
-        page = self.client.get(f"/brands/{self.bid}/ads/{self.cycle_id}/creatives")
-        self.assertNotIn("已自動補打一次仍未產出", page.text)
 
 
 if __name__ == "__main__":

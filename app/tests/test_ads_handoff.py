@@ -178,16 +178,15 @@ class PackageBuildTest(_BaseHandoffTest):
         expected = cycle["budget"] / ads_repo.derived_plan(cycle)["duration_days"]
         self.assertAlmostEqual(package["daily_budget"], round(expected, 2), places=1)
 
-    def test_page_uses_meta_field_labels(self):
-        self._build()
-        page = self.client.get(f"/brands/{self.bid}/ads/{self.cycle_id}/handoff")
-        for label in ("行銷活動名稱", "廣告組合名稱", "每日預算", "主要文字"):
-            self.assertIn(label, page.text)
-
     def test_missing_website_says_so_instead_of_silently_blank(self):
+        """沒登記官網 → full_url 落空，API 誠實回 null，不是拼一段沒有網域的網址。"""
         self._build()
-        page = self.client.get(f"/brands/{self.bid}/ads/{self.cycle_id}/handoff")
-        self.assertIn("還沒有登記官網網址", page.text)
+        resp = self.client.get(f"/api/campaigns/{self.bid}/{self.cycle_id}/handoff")
+        self.assertEqual(resp.status_code, 200)
+        packages = resp.json()["data"]["packages"]
+        self.assertTrue(packages)
+        for package in packages:
+            self.assertIsNone(package["full_url"])
 
     def test_website_channel_becomes_destination_url(self):
         bi_repo.create_channel(main.conn, self.bid, channel_type="website",
@@ -294,13 +293,6 @@ class ActivationGateTest(_BaseHandoffTest):
         self._build()
         ids = [p["id"] for p in self._packages()]
         self.assertIn(package_id, ids)
-
-    def test_page_shows_who_confirmed(self):
-        self._build()
-        self._activate(self._packages()[0]["id"])
-        page = self.client.get(f"/brands/{self.bid}/ads/{self.cycle_id}/handoff")
-        self.assertIn("已回報開始投放", page.text)
-        self.assertIn(OPERATOR, page.text)
 
 
 class DailyBudgetInvariantTest(unittest.TestCase):

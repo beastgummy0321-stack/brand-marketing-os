@@ -117,18 +117,6 @@ class CycleFolderTest(_Base):
         (target / "圖.png").unlink()
         self.assertEqual(creative_assets.size_mb(target), 0.0)
 
-    def test_cycle_page_shows_the_folder_size_in_mb(self):
-        cycle_id = self._open_cycle()
-        ads_repo.update_cycle_status(main.conn, self.bid, cycle_id,
-                                     status="PRODUCTION", actor=ACTOR)
-        self._put_file(ROOT / self.bid / cycle_id, mb=2)
-
-        page = self.client.get(f"/brands/{self.bid}/ads/{cycle_id}").text
-        self.assertIn("2.0 MB", page)
-        self.assertIn(str(ROOT / self.bid / cycle_id), page)
-
-
-
 class MatrixFolderApiTest(_Base):
     """矩陣頁頂部素材資料夾列（票 W1）：新殼要的裸 JSON 端點，
     app/ads/routes_creative_theme.py cycle_folder()／open_cycle_folder()。

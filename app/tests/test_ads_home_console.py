@@ -2,14 +2,10 @@
 """app/tests/test_ads_home_console.py — 修憲落地 V3：廣告首頁遷 B｜工作台式
 （DESIGN.md §21，決策 0033／0038）。
 
-驗收重點：
-1. 頁面確實 extends console.html（側欄結構存在，取代 base.html 頂欄）。
-2. 說明句改成資料（console-ui skill 硬規則1）：進行中檔期顯示「第 N 步／共 5 步」；
-   已判讀的最近結案檔期顯示 ROAS＋賺賠狀態膠囊；沒判讀過的已結案檔期整塊不出現
-   （principles.md 鐵則16：拿不到就不要放，不放假資料或 0 佔位）。
-3. 收件匣待辦數：inbox_count 反映該品牌的打斷佇列筆數，顯示在側欄徽章。
-4. 每頁最多一個主要按鈕（DESIGN.md §10.1）：空狀態與有資料狀態都只有一顆 .btn-primary。
-5. 動作列（歷期戰績／累積智慧／資料與連線）不管有沒有檔期都在，不是「開了檔期才看得到」。
+驗收重點：說明句改成資料（console-ui skill 硬規則1）——進行中檔期顯示「第 N 步／共 5 步」；
+已判讀的最近結案檔期顯示 ROAS＋賺賠狀態膠囊；沒判讀過的已結案檔期整塊不出現
+（principles.md 鐵則16：拿不到就不要放，不放假資料或 0 佔位）。
+純版面的驗收（側欄結構／主要按鈕數／動作列連結／側欄徽章）隨舊頁一併刪除。
 
 品牌與產品名一律虛構，絕不使用真實客戶品牌。
 """
@@ -71,9 +67,6 @@ class _BaseTest(unittest.TestCase):
         self.assertEqual(resp.status_code, 200)
         return resp.json()["cycle_id"]
 
-    def _hub(self):
-        return self.client.get(f"/brands/{self.bid}/ads")
-
     def _campaign_items(self):
         """檔期清單 JSON API：hub 兩塊摘要（進行中第幾步／最近結案的判讀）的同一份資料
         ——`routes_campaigns_list_api._list_item()` 直接重用 hub 用的 `_hub_stage_info()`
@@ -82,40 +75,6 @@ class _BaseTest(unittest.TestCase):
         self.assertEqual(resp.status_code, 200)
         return {item["id"]: item for item in resp.json()["data"]}
 
-
-
-class ConsoleLayoutTest(_BaseTest):
-    pass
-
-    def test_extends_console_sidebar_not_old_header(self):
-        resp = self._hub()
-        self.assertIn('class="console-sidebar"', resp.text)
-        self.assertIn('class="console-content"', resp.text)
-        self.assertNotIn('class="site-header"', resp.text)
-
-
-class SinglePrimaryButtonTest(_BaseTest):
-    """DESIGN.md §10.1：每個頁面最多一個主要按鈕。"""
-
-    def test_empty_state_has_exactly_one_primary_button(self):
-        resp = self._hub()
-        self.assertEqual(resp.text.count("btn-primary"), 1)
-        self.assertIn(f'href="/brands/{self.bid}/ads/new"', resp.text)
-
-    def test_active_cycle_still_has_exactly_one_primary_button(self):
-        self._open_cycle()
-        resp = self._hub()
-        self.assertEqual(resp.text.count("btn-primary"), 1)
-
-
-class ActionRowAlwaysPresentTest(_BaseTest):
-    """歷期戰績／累積智慧／資料與連線不是「開了檔期才看得到」的東西，空狀態也要能到得了。"""
-
-    def test_history_learnings_connections_reachable_even_when_empty(self):
-        resp = self._hub()
-        self.assertIn(f'href="/brands/{self.bid}/ads/history"', resp.text)
-        self.assertIn(f'href="/brands/{self.bid}/ads/learnings"', resp.text)
-        self.assertIn(f'href="/brands/{self.bid}/ads/connections"', resp.text)
 
 
 class StageWordingTest(_BaseTest):
@@ -169,17 +128,3 @@ class ClosedCycleSummaryTest(_BaseTest):
         self.assertIsNone(item["verdict_kind"])
         self.assertIsNone(item["status_label_reading"])
 
-
-class InboxBadgeTest(_BaseTest):
-    def test_inbox_count_reflects_open_interrupts_for_this_brand(self):
-        main.core_interrupts.enqueue(
-            main.conn, category="cycle_reminder", dedupe_key=f"test-{self.bid}",
-            message="測試提醒", brand_id=self.bid)
-        main.conn.commit()
-        resp = self._hub()
-        self.assertIn("badge badge-warn", resp.text)
-        self.assertIn(">1<", resp.text)
-
-    def test_no_badge_when_inbox_empty(self):
-        resp = self._hub()
-        self.assertNotIn("badge badge-warn", resp.text)

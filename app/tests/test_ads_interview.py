@@ -213,11 +213,6 @@ class InterviewRouteTest(unittest.TestCase):
                                           client_name=None, actor=ACTOR)
         self.bid = self.brand["id"]
 
-    def test_get_page_renders(self):
-        resp = self.client.get(f"/brands/{self.bid}/ads/interview")
-        self.assertEqual(resp.status_code, 200)
-        self.assertIn("前朝教訓訪談", resp.text)
-
     def test_post_with_nothing_selected_does_not_block(self):
         resp = self.client.post(f"/api/campaigns/brands/{self.bid}/interview", json={})
         self.assertEqual(resp.status_code, 200)
@@ -237,12 +232,6 @@ class InterviewRouteTest(unittest.TestCase):
         hyps = bi_repo.list_strategy_hypotheses(main.conn, self.bid)
         self.assertEqual(len(cards), 1)
         self.assertEqual(len(hyps), 1)
-
-    def test_interview_route_registered_before_cycle_wildcard(self):
-        """route 名字不能被 /ads/{cycle_id} 萬用路由吃掉。"""
-        resp = self.client.get(f"/brands/{self.bid}/ads/interview")
-        self.assertEqual(resp.status_code, 200)
-        self.assertNotIn("找不到", resp.text[:2000])
 
 
 class InterviewConflictTest(unittest.TestCase):

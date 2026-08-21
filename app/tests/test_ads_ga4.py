@@ -158,17 +158,6 @@ class RouteTest(_BaseGA4Test):
         self.assertEqual(rows[0]["medium"], "cpc")
         self.assertEqual(rows[0]["sessions"], 321)
 
-    def test_purchase_not_received_is_shown_honestly_with_link_to_guide(self):
-        self._sync(rows=[_row()], purchase_seen=False)
-        page = self.client.get(f"/brands/{self.bid}/ads/ga4")
-        self.assertIn("purchase 事件沒收到", page.text)
-        self.assertIn(f"/brands/{self.bid}/ads/ga4-guide", page.text)
-
-    def test_guide_page_notes_the_google_cloud_familiarity_premise(self):
-        page = self.client.get(f"/brands/{self.bid}/ads/ga4-guide")
-        self.assertEqual(page.status_code, 200)
-        self.assertIn("熟悉 Google Cloud", page.text)
-
     def test_sync_progress_page_renders_without_configuration_warning(self):
         main.conn.execute("DELETE FROM app_setting WHERE key IN (?, ?)",
                           (ga4_sync.PROPERTY_SETTING, ga4_sync.SERVICE_ACCOUNT_SETTING))
@@ -177,17 +166,6 @@ class RouteTest(_BaseGA4Test):
         # /api 同一道 is_configured 檢查用 400 表達同一件事。
         resp = self.client.post(f"/api/campaigns/brands/{self.bid}/sync/ga4")
         self.assertEqual(resp.status_code, 400)
-
-    def test_sync_progress_page_renders_wait_screen_when_configured(self):
-        """只驗證等待頁本身能正常渲染（不帶 run=1，不會建立任何真實用戶端）。"""
-        resp = self.client.get(f"/brands/{self.bid}/ads/ga4/sync")
-        self.assertEqual(resp.status_code, 200)
-        self.assertIn("本頁會自動更新", resp.text)
-
-    def test_settings_page_offers_ga4_connection(self):
-        page = self.client.get("/settings")
-        self.assertIn("GA4（網站數據，唯讀）", page.text)
-        self.assertIn("GA4 資源編號", page.text)
 
 
 if __name__ == "__main__":
