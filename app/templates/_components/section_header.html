@@ -1,7 +1,0 @@
-{% macro section_header(id, title, description=None, action_text=None, action_url=None, action_kind='secondary') %}
-<div class="section-header">
-  <h2 id="{{ id }}">{{ title }}</h2>
-  {% if action_text and action_url %}<a class="btn btn-{{ action_kind }}" href="{{ action_url }}">{{ action_text }}</a>{% endif %}
-</div>
-{% if description %}<p class="section-desc">{{ description }}</p>{% endif %}
-{% endmacro %}

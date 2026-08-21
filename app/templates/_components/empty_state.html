@@ -1,7 +1,0 @@
-{% macro empty_state(title, description, action_text=None, action_url=None) %}
-<div class="empty-state">
-  <h3>{{ title }}</h3>
-  <p>{{ description }}</p>
-  {% if action_text and action_url %}<a class="btn btn-primary" href="{{ action_url }}">{{ action_text }}</a>{% endif %}
-</div>
-{% endmacro %}

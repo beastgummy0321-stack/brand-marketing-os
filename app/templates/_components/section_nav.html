@@ -1,5 +1,0 @@
-{% macro section_nav(sections) %}
-<nav class="section-nav" aria-label="分區">
-  {% for label, anchor, count in sections %}<a href="#{{ anchor }}">{{ label }}{% if count is not none %} <span class="count">{{ count }}</span>{% endif %}</a>{% endfor %}
-</nav>
-{% endmacro %}

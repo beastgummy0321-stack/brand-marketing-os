@@ -16,7 +16,6 @@ import shutil
 import tempfile
 import unittest
 from datetime import date
-from pathlib import Path
 
 _tmpdir = tempfile.mkdtemp(prefix="brand_os_ads_connections_")
 
@@ -28,10 +27,6 @@ from app.ads import sync as ads_sync  # noqa: E402
 from app.ads import ga4_sync  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
 from app.orders import dispatch as orders_dispatch  # noqa: E402
-from app.tools import capacity_check  # noqa: E402
-
-
-_TEMPLATE_PATH = Path(__file__).resolve().parents[2] / "app" / "templates" / "ads_connections.html"
 
 
 def _cleanup():
@@ -70,17 +65,6 @@ def _easystore_xlsx_bytes():
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
-
-
-class CapacityTest(unittest.TestCase):
-    """驗收條件：新頁面主欄區塊數符合容量規則（票 1 腳本通過）。"""
-
-    def test_connections_page_passes_capacity_script(self):
-        counts, problems = capacity_check.check_file(_TEMPLATE_PATH)
-        self.assertEqual(problems, [])
-        self.assertLessEqual(counts["card_count"], capacity_check.CARD_LIMIT)
-        self.assertLessEqual(counts["nav_link_count"], capacity_check.NAV_LINK_LIMIT)
-        self.assertEqual(counts["illegal_detail_count"], 0)
 
 
 class ConnectionsRouteTest(unittest.TestCase):

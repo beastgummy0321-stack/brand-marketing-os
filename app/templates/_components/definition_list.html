@@ -1,8 +1,0 @@
-{% macro definition_list(pairs, subtle=False) %}
-<dl class="dl-box dl-grid{% if subtle %} subtle{% endif %}">
-  {% for label, value, is_amount in pairs %}
-  <dt>{{ label }}</dt>
-  <dd{% if is_amount %} class="amount"{% endif %}>{{ value }}</dd>
-  {% endfor %}
-</dl>
-{% endmacro %}

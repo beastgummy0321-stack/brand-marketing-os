@@ -457,14 +457,15 @@ class ClipboardHonestyScanTest(unittest.TestCase):
     真的需要更嚴謹時再升級成 AST 解析。
     """
 
-    TEMPLATE_DIR = APP_DIR / "templates"
+    # T4: Jinja pages are gone; copy buttons now live in the React shell (frontend/src).
+    SRC_DIR = APP_DIR.parent / "frontend" / "src"
 
     def _writetext_lines(self) -> list:
         found = []
-        for path in sorted(self.TEMPLATE_DIR.rglob("*.html")):
+        for path in sorted(self.SRC_DIR.rglob("*.ts*")):
             for lineno, line in enumerate(
                     path.read_text(encoding="utf-8").splitlines(), start=1):
-                if "clipboard.writeText" in line and "onclick" in line:
+                if "clipboard.writeText(" in line:
                     found.append((_rel(path), lineno, line.strip()))
         return found
 
@@ -479,7 +480,7 @@ class ClipboardHonestyScanTest(unittest.TestCase):
         problems = [
             f"  {rel}:{lineno} 同步回報成功，沒等 writeText：{line}"
             for rel, lineno, line in self._writetext_lines()
-            if ".then(" not in line
+            if ".then(" not in line and "await " not in line
         ]
         self.assertEqual(
             problems, [],

@@ -1,9 +1,0 @@
-{% macro banner(kind, message, dismiss_url=None, extra_link_text=None, extra_link_url=None) %}
-<div class="banner banner-{{ kind }}" role="status">
-  <div class="banner-body">{{ message }}</div>
-  <div class="banner-actions">
-    {% if extra_link_text and extra_link_url %}<a class="btn-text" href="{{ extra_link_url }}">{{ extra_link_text }}</a>{% endif %}
-    {% if dismiss_url %}<a class="btn-text" href="{{ dismiss_url }}">知道了</a>{% endif %}
-  </div>
-</div>
-{% endmacro %}

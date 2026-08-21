@@ -1,8 +1,0 @@
-{% macro field(field_id, label, required=True, hint=None, error=None) %}
-<div class="field{% if error %} has-error{% endif %}">
-  <label for="{{ field_id }}">{{ label }}{% if required %}（必填）{% else %}（選填）{% endif %}</label>
-  {{ caller() }}
-  {% if hint %}<div class="field-hint" id="{{ field_id }}-hint">{{ hint }}</div>{% endif %}
-  {% if error %}<div class="field-error" id="{{ field_id }}-error">{{ error }}</div>{% endif %}
-</div>
-{% endmacro %}

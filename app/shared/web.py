@@ -32,7 +32,6 @@ from urllib.parse import urlencode
 
 from fastapi import Request
 from fastapi.responses import RedirectResponse
-from fastapi.templating import Jinja2Templates
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app import mock_data as md
@@ -174,46 +173,6 @@ MODEL_CHOICES = [
     ("claude-haiku-4-5", "Claude Haiku 4.5（最便宜、最快）"),
     ("claude-fable-5", "Claude Fable 5（最強、最貴，價格約 Opus 5 的兩倍，適合最難的規劃與長任務）"),
 ]
-
-
-# ---------------------------------------------------------------------------
-# Jinja2 樣板
-# ---------------------------------------------------------------------------
-
-templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
-templates.env.globals.update(
-    pending_brand_fact_count=pending_brand_fact_count,
-    brand_fact_type_label=md.brand_fact_type_label,
-    product_fact_type_label=md.product_fact_type_label,
-    rule_type_label=md.rule_type_label,
-    claim_type_label=md.claim_type_label,
-    channel_type_label=md.channel_type_label,
-    asset_kind_label=md.asset_kind_label,
-    currency_label=md.currency_label,
-    currency_symbol=md.currency_symbol,
-    customer_voice_channel_label=md.customer_voice_channel_label,
-    customer_voice_task_layer_label=md.customer_voice_task_layer_label,
-    customer_voice_signal_label=md.customer_voice_signal_label,
-    relative_time=relative_time,
-    scope_label=scope_label,
-    fact_staleness=fact_staleness,
-    report_staleness=report_staleness,
-    BRAND_FACT_TYPES=md.BRAND_FACT_TYPES,
-    PRODUCT_FACT_TYPES=md.PRODUCT_FACT_TYPES,
-    RULE_TYPES=md.RULE_TYPES,
-    CLAIM_TYPES=md.CLAIM_TYPES,
-    CHANNEL_TYPES=md.CHANNEL_TYPES,
-    ASSET_KINDS=md.ASSET_KINDS,
-    CURRENCIES=md.CURRENCIES,
-    CUSTOMER_VOICE_CHANNELS=md.CUSTOMER_VOICE_CHANNELS,
-)
-templates.env.filters["thousands"] = lambda v: "—" if v is None else f"{v:,.0f}"
-# AI 生成花費金額格式：US$ 7.20（美元，2026-07-28 使用者裁示一律顯示美元；兩位小數，是全站
-# 「金額整數」規則在這裡的明文例外）。票 M2：原本印裸 $，跟全站其餘金額一律 NT$ 混在一起會
-# 讓人誤讀成台幣（規格內建檔精靈章節的 Mock 示意數字誤用了 NT$，混淆的源頭正在此——見
-# app/intake/script.py DEFAULT_BUDGET 註解）；money2 全站只用於 AI 生成花費（intake／
-# 品牌智庫調研／廣告分支／report），不印裸 $，明確標出 US$，不做匯率換算。
-templates.env.globals["money2"] = lambda v: f"US$ {v:,.2f}"
 
 
 # ---------------------------------------------------------------------------

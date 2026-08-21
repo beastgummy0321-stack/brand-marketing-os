@@ -74,8 +74,8 @@ export function HandoffPanel({
           <button
             type="button"
             disabled={!promptText}
-            onClick={() => {
-              void navigator.clipboard.writeText(promptText ?? "");
+            onClick={async () => {
+              await navigator.clipboard.writeText(promptText ?? "");
               setCopied(true);
             }}
             className="rounded-md border border-border px-3 py-1.5 text-xs font-medium text-foreground hover:border-primary hover:text-primary disabled:cursor-not-allowed disabled:opacity-50"

@@ -165,7 +165,7 @@ async def cycle_folder(brand_id: str, cycle_id: str):
     （決策 0008，跟舊檔期頁 app/ads/routes_plan.py:321 同一個 size_mb()）。資料夾還沒
     建立時回 exists=false 而不是 0 MB——「還沒開過資料夾」跟「開了但還沒倒圖進去」對
     使用者是兩件事，不能長一樣；也不在這裡爆 404／500，沒建立是正常狀態不是錯誤。
-    MB 位數沿用既有顯示慣例（app/templates/ads_cycle.html:352 的 {:.1f} MB）。
+    MB 位數沿用既有顯示慣例（舊 Jinja 檔期頁的 {:.1f} MB，該頁已刪除）。
     """
     main_mod.require_brand(brand_id)
     _require_cycle(brand_id, cycle_id)
