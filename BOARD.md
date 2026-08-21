@@ -2,7 +2,6 @@
 
 排序＝執行順序。分票唯一依據＝`docs/ui-migration-contract.md` v2（含隨批裁決）＋ ADR 0019。
 標「需批准」的票動工前先提計畫等批准；動到畫面先過畫面契約（草圖 → 後端 → 前端）。
-2026-08-19 重盤：import 環已清零；brand_web/routes.py 1850 超標為現存最大檔。
 
 - [>] T4-05 Jinja 整批刪除：**測試已完全脫鉤、前端已全面走 /api，剩最後的刪除動作**
   TemplateResponse 103 → 29 處（brand_web 17、main.py 9、ads 3）；
