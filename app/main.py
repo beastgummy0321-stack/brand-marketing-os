@@ -32,9 +32,9 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, Form, Request
+from fastapi import FastAPI, Request
 from fastapi.exception_handlers import http_exception_handler
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
@@ -56,15 +56,11 @@ from app.shared.web import (
     MODEL_CHOICES,
     _num_str,
     _with_brand_names,
-    banner_ctx,
-    ctx,
     list_active_brands,
     list_archived_brands,
     list_products,
     pending_brand_fact_count,
     parse_number,
-    redirect_with_message,
-    templates,
     clean,
 )
 
@@ -162,7 +158,6 @@ def reopen_connection():
 # ---------------------------------------------------------------------------
 
 app = FastAPI(title="行銷作業系統（Phase 0 Mock UI）")
-app.mount("/static", StaticFiles(directory=web.BASE_DIR / "static"), name="static")
 
 # 新殼（票 01-react-shell，ADR 0003）：production 掛 frontend/dist 於 /app，
 # 舊 145 條 HTML 路由原封不動。frontend/dist 是建置產物、不進版控，開發期走
@@ -256,40 +251,9 @@ def _masked_key(key: Optional[str]) -> Optional[str]:
     return f"{prefix}…{key[-4:]}"
 
 
-def settings_ctx(request: Request, values=None, errors=None):
-    return ctx(
-        request, brand=None,
-        masked_key=_masked_key(coresettings.get_api_key(web.conn)),
-        api_key_source=coresettings.api_key_source(web.conn),
-        db_key_present=bool(coresettings.get_setting(web.conn, coresettings.API_KEY_SETTING)),
-        model_choices=_model_choices(),
-        current_model=coresettings.get_llm_model(web.conn),
-        # 任務 →（模型、思考等級）對照表：可視可核對（票 #27 驗收 1）。
-        task_model_thinking_table=llm_providers.task_default_table(),
-        masked_meta_token=_masked_key(ads_sync.get_token(web.conn)),
-        meta_account_id=ads_sync.get_account_id(web.conn) or "",
-        masked_ga4_key=_masked_key(ga4_sync.get_service_account_json(web.conn)),
-        ga4_property_id=ga4_sync.get_property_id(web.conn) or "",
-        # 各欄位的預設值先鋪好，再讓某一格的錯誤回顯蓋上去——values 整包取代的話，
-        # 存花費上限失敗時素材資料夾那格會變空白（兩格在同一頁、互不相干）。
-        values={"intake_budget": _num_str(coresettings.get_intake_budget_limit(web.conn)),
-                "creative_root": str(corecreative.get_root(web.conn)),
-                "prompt_header": coresettings.get_setting(
-                    web.conn, coresettings.IMAGE_PROMPT_HEADER_SETTING, ""),
-                **(values or {})},
-        errors=errors or {},
-        **banner_ctx(request),
-    )
-
-
-@app.get("/settings")
-async def settings_get(request: Request):
-    return templates.TemplateResponse(request, "settings.html", settings_ctx(request))
-
-
 # ---------------------------------------------------------------------------
-# 設定頁寫入邏輯（純函式，回傳錯誤人話訊息／None＝成功）：HTML 表單路由與下方 JSON API
-# 路由共用同一份，不為了 JSON 契約重寫第二份寫入邏輯（票 B1-settings）。
+# 設定頁寫入邏輯（純函式，回傳錯誤人話訊息／None＝成功）：下方 JSON API 唯一呼叫者
+# （HTML 表單路由已刪除，見票 T4 A4；不為了 JSON 契約重寫第二份寫入邏輯，票 B1-settings）。
 # ---------------------------------------------------------------------------
 
 def _write_api_key(api_key: str) -> Optional[str]:
@@ -403,120 +367,11 @@ def _run_ga4_test_connection() -> tuple:
     return "連線正常：可以讀到 GA4 網站數據。", "ok"
 
 
-@app.post("/settings/api-key")
-async def settings_api_key_post(request: Request, api_key: str = Form("")):
-    error = _write_api_key(api_key)
-    if error:
-        return templates.TemplateResponse(request, "settings.html", settings_ctx(
-            request, errors={"api_key": error},
-        ), status_code=400)
-    return redirect_with_message("/settings", "已儲存 AI 金鑰。之後的 AI 功能會用這把金鑰。")
-
-
-@app.post("/settings/api-key/clear-db")
-async def settings_api_key_clear_db_post(request: Request):
-    """把資料庫裡的金鑰刪掉，不可逆——只在使用者按下按鈕（畫面上有二次確認）時執行，
-    不會被任何流程自動觸發（修憲落地 M4）。"""
-    coresettings.clear_api_key_from_db(web.conn)
-    if coresettings.api_key_source(web.conn) == "env":
-        msg = "已清除資料庫裡的金鑰。目前改用環境變數裡的金鑰，AI 功能不受影響。"
-    else:
-        msg = "已清除資料庫裡的金鑰。目前沒有可用的金鑰，AI 功能會提示尚未設定，請重新貼上或改設環境變數。"
-    return redirect_with_message("/settings", msg)
-
-
-@app.post("/settings/meta")
-async def settings_meta_post(request: Request, meta_token: str = Form(""),
-                             meta_account_id: str = Form("")):
-    """Meta 廣告帳號的唯讀連線設定（票 9）。金鑰只存在本機資料庫，畫面只顯示遮罩後的樣子。"""
-    error = _write_meta_settings(meta_account_id, meta_token)
-    if error:
-        return templates.TemplateResponse(request, "settings.html", settings_ctx(
-            request, errors={"meta_account_id": error},
-        ), status_code=400)
-    return redirect_with_message("/settings", "已儲存 Meta 廣告帳號的連線設定。")
-
-
-@app.post("/settings/ga4")
-async def settings_ga4_post(request: Request, ga4_property_id: str = Form(""),
-                            ga4_service_account_json: str = Form("")):
-    """GA4 服務帳戶連線設定（票 34）。金鑰只存在本機資料庫，畫面只顯示遮罩後的樣子。"""
-    error = _write_ga4_settings(ga4_property_id, ga4_service_account_json)
-    if error:
-        return templates.TemplateResponse(request, "settings.html", settings_ctx(
-            request, errors={"ga4_property_id": error},
-        ), status_code=400)
-    return redirect_with_message("/settings", "已儲存 GA4 服務帳戶的連線設定。")
-
-
-@app.post("/settings/model")
-async def settings_model_post(request: Request, llm_model: str = Form("")):
-    error = _write_model(llm_model)
-    if error:
-        return templates.TemplateResponse(request, "settings.html", settings_ctx(
-            request, errors={"llm_model": error},
-        ), status_code=400)
-    labels = {m_id: name for m_id, name in MODEL_CHOICES}
-    return redirect_with_message("/settings", f"已將使用的模型設定為「{labels[llm_model]}」。")
-
-
-@app.post("/settings/budget")
-async def settings_budget_post(request: Request, intake_budget: str = Form("")):
-    error = _write_budget(intake_budget)
-    if error:
-        return templates.TemplateResponse(request, "settings.html", settings_ctx(
-            request, values={"intake_budget": intake_budget}, errors={"intake_budget": error},
-        ), status_code=400)
-    return redirect_with_message(
-        "/settings",
-        f"已將單次建檔的花費上限設為 $ {_num_str(coresettings.get_intake_budget_limit(web.conn))}。"
-    )
-
-
-@app.post("/settings/creative-root")
-async def settings_creative_root_post(request: Request, creative_root: str = Form("")):
-    error = _write_creative_root(creative_root)
-    if error:
-        return templates.TemplateResponse(request, "settings.html", settings_ctx(
-            request, values={"creative_root": creative_root}, errors={"creative_root": error},
-        ), status_code=400)
-    return redirect_with_message(
-        "/settings", f"素材圖檔資料夾已設為 {corecreative.get_root(web.conn)}。")
-
-
-@app.post("/settings/prompt-header")
-async def settings_prompt_header_post(request: Request, prompt_header: str = Form("")):
-    """整組複製提示詞的自訂開頭（票 11-copy-flows；ADR 0008 三）：全站一份、不分品牌，
-    存進 app_setting。選填——留白代表整組複製時不加開頭那一行，不是輸入錯誤。"""
-    _write_prompt_header(prompt_header)
-    return redirect_with_message("/settings", "已儲存整組複製提示詞的自訂開頭。")
-
-
-@app.post("/settings/test-connection")
-async def settings_test_connection_post(request: Request):
-    """發一次極小的真實請求驗證金鑰。沒有金鑰時不發請求，直接給人話提示。"""
-    message, kind = _run_ai_test_connection()
-    return redirect_with_message("/settings", message, kind=kind)
-
-
-@app.post("/settings/meta/test-connection")
-async def settings_meta_test_connection_post(request: Request):
-    """驗證 Meta 唯讀連線。沒有設定帳號＋金鑰時不發請求，直接給人話提示（票 48）。"""
-    message, kind = _run_meta_test_connection()
-    return redirect_with_message("/settings", message, kind=kind)
-
-
-@app.post("/settings/ga4/test-connection")
-async def settings_ga4_test_connection_post(request: Request):
-    """驗證 GA4 唯讀連線。沒有設定資源編號＋服務帳戶金鑰時不發請求，直接給人話提示（票 48）。"""
-    message, kind = _run_ga4_test_connection()
-    return redirect_with_message("/settings", message, kind=kind)
-
-
 # ---------------------------------------------------------------------------
 # 設定頁 JSON API（票 B1-settings，契約 `.scratch/grill/GRILL-B1-settings.md` S15）。
-# 讀值與寫入邏輯全部重用上面／settings_ctx() 既有函式，這裡只做「解析請求 → 呼叫 →
-# 組 JSON」的薄層。規則卡（S15.29–S15.33）另掛在 app/ads/routes_settings.py 同模組。
+# 讀值與寫入邏輯全部重用上面既有函式，這裡只做「解析請求 → 呼叫 → 組 JSON」的薄層
+# （HTML 表單路由已刪除，見票 T4 A4；React /settings 頁只打這批 /api/settings/*）。
+# 規則卡（S15.29–S15.33）另掛在 app/ads/routes_settings.py 同模組。
 # ---------------------------------------------------------------------------
 
 async def _parse_json_body(request: Request):
@@ -762,6 +617,18 @@ if _missing_cleanup:
 # 錯誤處理
 # ---------------------------------------------------------------------------
 
+def _error_page(message: str) -> str:
+    """404／500 錯誤頁：新殼（React /app）接管畫面後，這兩頁只有真正走漏網之魚的
+    後端路徑或非 /api 的裸連結才會看到，不值得一整套 Jinja2Templates（票 T4 A4）。
+    純內嵌字串比一個只有兩個呼叫點的 template 檔好找、好維護。"""
+    return (
+        "<!doctype html><html><head><meta charset=\"utf-8\"><title>行銷作業系統</title></head>"
+        "<body style=\"font-family:sans-serif;text-align:center;padding:4rem 1rem;\">"
+        f"<p>{message}</p><p><a href=\"/app/\">回首頁</a></p>"
+        "</body></html>"
+    )
+
+
 @app.exception_handler(StarletteHTTPException)
 async def handle_http_exception(request: Request, exc: StarletteHTTPException):
     if exc.status_code == 404:
@@ -770,17 +637,13 @@ async def handle_http_exception(request: Request, exc: StarletteHTTPException):
         # 而不是人話。修在這個共用出口，不必逐支端點包 try/except。
         if request.url.path.startswith("/api/"):
             return JSONResponse({"detail": f"找不到{kind}"}, status_code=404)
-        return templates.TemplateResponse(request, "error_404.html", ctx(
-            request, brand=None, kind=kind, hide_sidebar=True,
-        ), status_code=404)
+        return HTMLResponse(_error_page("找不到這一頁。"), status_code=404)
     return await http_exception_handler(request, exc)
 
 
 @app.exception_handler(Exception)
 async def handle_unexpected_exception(request: Request, exc: Exception):
-    return templates.TemplateResponse(request, "error_500.html", ctx(
-        request, brand=None, hide_sidebar=True,
-    ), status_code=500)
+    return HTMLResponse(_error_page("系統出了點狀況，再試一次。"), status_code=500)
 
 
 # ---------------------------------------------------------------------------

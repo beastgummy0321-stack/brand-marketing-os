@@ -3,7 +3,9 @@
 `.scratch/grill/GRILL-B1-settings.md` S15，不含規則卡——規則卡見 test_rule_cards_api.py）。
 
 全程用暫存 DB，不發任何真實網路請求（測試連線改用既有 FakeProvider／FakeMetaClient／
-FakeGA4Client，見 app/tests/test_settings_page.py 同款慣例）。
+FakeGA4Client）。ProviderHumanErrorTest 是從已刪除的 test_settings_page.py 搬過來的
+AnthropicProvider／pricing 直接單元測試（不經 HTTP 路由，票 T4 A4 刪 Jinja 頁面時
+這幾條測試本來就不碰模板，只是恰好住在同一個檔案）。
 """
 
 import atexit
@@ -22,7 +24,7 @@ import app.main as main  # noqa: E402
 from app.ads import ga4_api, ga4_sync, meta_api  # noqa: E402
 from app.ads import sync as ads_sync  # noqa: E402
 from app.core import settings as coresettings  # noqa: E402
-from app.llm import providers  # noqa: E402
+from app.llm import pricing, providers  # noqa: E402
 
 
 
@@ -227,18 +229,128 @@ class SettingsApiTest(unittest.TestCase):
         self.assertEqual(body["kind"], "ok")
         self.assertEqual(len(fake.calls), 1)
 
-    # -- 沒有頁面壞掉：HTML 表單路由行為不變（純搬家迴歸驗證） ---------------------------
+    # -- 票 T4 A4：HTML 表單路由與 GET /settings 頁面已刪除（React /settings 頁只打
+    # /api/settings/*），下面補回從 test_settings_page.py 搬過來、原本只在舊頁面測過的
+    # 業務行為缺口。金鑰優先序／清除不動環境變數本身已由 test_settings.py 的
+    # SettingsTest.test_api_key_priority／test_clear_api_key_from_db 覆蓋（app.core.settings
+    # 底層），這裡只補 _masked_key／API 回應層還沒測過的部分。
 
-    def test_html_form_route_still_works_after_extraction(self):
-        resp = self.client.post("/settings/api-key", data={"api_key": TEST_KEY}, follow_redirects=False)
-        self.assertEqual(resp.status_code, 303)
-        self.assertEqual(coresettings.get_api_key(main.conn), TEST_KEY)
+    def test_get_settings_reports_env_source_and_masks_env_key(self):
+        """環境變數優先於 DB 且來源誠實回報；env 金鑰本身也要遮罩，不能原樣外流
+        （原 test_settings_page.py::test_env_key_takes_priority_and_page_says_so）。"""
+        coresettings.set_setting(main.conn, coresettings.API_KEY_SETTING, TEST_KEY)
+        os.environ["ANTHROPIC_API_KEY"] = "env-only-value-not-shown"
+        try:
+            body = self.client.get("/api/settings").json()["data"]
+        finally:
+            os.environ.pop("ANTHROPIC_API_KEY", None)
+        self.assertEqual(body["api_key_source"], "env")
+        self.assertTrue(body["db_key_present"])  # DB 仍有舊金鑰，清除路徑仍該可用
+        self.assertEqual(body["masked_key"], "…hown")  # 遮罩後只露末四碼
+        self.assertNotIn("env-only-value-not-shown", str(body))
+
+    def test_ai_test_connection_failure_returns_danger_kind(self):
+        """金鑰錯誤：danger kind + 人話訊息原樣透出（原 test_test_connection_key_error_shows_human_message）。"""
+        coresettings.set_setting(main.conn, coresettings.API_KEY_SETTING, TEST_KEY)
+        fake = providers.FakeProvider(exception=providers.ProviderError("金鑰錯誤：測試訊息。"))
+        with mock.patch.object(providers, "AnthropicProvider", return_value=fake):
+            resp = self.client.post("/api/settings/test-connection")
+        body = resp.json()
+        self.assertEqual(body["kind"], "danger")
+        self.assertIn("金鑰錯誤", body["message"])
+
+    def test_meta_test_connection_failure_returns_danger_kind(self):
+        """原 test_meta_test_connection_failure_shows_human_error。"""
+        coresettings.set_setting(main.conn, ads_sync.ACCOUNT_SETTING, "act_123")
+        coresettings.set_setting(main.conn, ads_sync.TOKEN_SETTING, "fake-token")
+        fake = meta_api.FakeMetaClient(error=meta_api.MetaApiError("Meta 拒絕了這次連線。"))
+        with mock.patch.object(ads_sync, "make_client", return_value=fake):
+            resp = self.client.post("/api/settings/meta/test-connection")
+        body = resp.json()
+        self.assertEqual(body["kind"], "danger")
+        self.assertIn("Meta 拒絕了這次連線", body["message"])
+
+    def test_ga4_test_connection_failure_returns_danger_kind(self):
+        """原 test_ga4_test_connection_failure_shows_human_error。"""
+        coresettings.set_setting(main.conn, ga4_sync.PROPERTY_SETTING, "123456789")
+        coresettings.set_setting(main.conn, ga4_sync.SERVICE_ACCOUNT_SETTING,
+                                 '{"type": "service_account"}')
+        fake = ga4_api.FakeGA4Client(error=ga4_api.GA4ApiError("連不上 GA4。"))
+        with mock.patch.object(ga4_sync, "make_client", return_value=fake):
+            resp = self.client.post("/api/settings/ga4/test-connection")
+        body = resp.json()
+        self.assertEqual(body["kind"], "danger")
+        self.assertIn("連不上 GA4", body["message"])
+
+    def test_save_prompt_header_can_be_saved_empty(self):
+        """留白代表整組複製時不加開頭那一行，不是輸入錯誤（原
+        test_prompt_header_can_be_saved_empty）。"""
+        coresettings.set_setting(main.conn, coresettings.IMAGE_PROMPT_HEADER_SETTING, "舊的開頭")
+        resp = self.client.post("/api/settings/prompt-header", json={"prompt_header": "  "})
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(
+            coresettings.get_setting(main.conn, coresettings.IMAGE_PROMPT_HEADER_SETTING), "")
+
+    def test_save_budget_non_numeric_and_negative_rejected(self):
+        """0 之外的無效輸入（非數字／負數）也要擋（原 test_budget_validation_and_save）。"""
+        for bad in ("abc", -5):
+            resp = self.client.post("/api/settings/budget", json={"intake_budget": bad})
+            self.assertEqual(resp.status_code, 400, bad)
+            self.assertIn("花費上限請填大於 0 的數字", resp.json()["error"])
 
     def test_json_body_not_a_dict_gives_human_error(self):
         resp = self.client.post("/api/settings/model", content=b"[1,2,3]",
                                 headers={"Content-Type": "application/json"})
         self.assertEqual(resp.status_code, 400)
         self.assertIn("不是合法的 JSON", resp.json()["error"])
+
+    # -- AnthropicProvider／pricing 直接單元測試，不經 HTTP 路由（原本住在
+    # test_settings_page.py，跟 Jinja 設定頁沒有關係，票 T4 A4 刪頁面時原樣搬過來；
+    # 留在本 class 裡才吃得到 setUp 對 ANTHROPIC_API_KEY 的環境變數隔離）。
+
+    def test_provider_without_key_raises_human_error(self):
+        """AnthropicProvider 在缺金鑰時於發出請求前就拋人話錯誤，不碰網路。"""
+        with self.assertRaises(providers.ProviderError) as cm:
+            providers.AnthropicProvider().complete(
+                model="claude-opus-5", system=None,
+                messages=[{"role": "user", "content": "hi"}], max_tokens=1,
+            )
+        message = str(cm.exception)
+        self.assertIn("尚未設定 AI 金鑰", message)
+        self.assertNotIn("ANTHROPIC_API_KEY", message)  # 不出現環境變數名（07 §3 規則 3）
+
+    def test_provider_401_becomes_human_message(self):
+        """金鑰錯誤（401）要轉成人話，不得把供應商原始 JSON／request id 帶出來（§12）。"""
+        import anthropic
+        import httpx
+
+        request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+        response = httpx.Response(
+            401, request=request,
+            json={"type": "error",
+                  "error": {"type": "authentication_error", "message": "invalid x-api-key"},
+                  "request_id": "req_test_123"},
+        )
+        exc_401 = anthropic.APIStatusError("Error code: 401", response=response,
+                                           body=response.json())
+        fake_client = mock.Mock()
+        fake_client.with_options.return_value = fake_client
+        fake_client.messages.create.side_effect = exc_401
+        with mock.patch.object(coresettings, "get_api_key", return_value="sk-fake"), \
+             mock.patch.object(anthropic, "Anthropic", return_value=fake_client):
+            with self.assertRaises(providers.ProviderError) as cm:
+                providers.AnthropicProvider().complete(
+                    model="claude-opus-5", system=None,
+                    messages=[{"role": "user", "content": "hi"}], max_tokens=1,
+                )
+        message = str(cm.exception)
+        self.assertIn("金鑰錯誤", message)
+        for jargon in ("request_id", "invalid x-api-key", "401", "{"):
+            self.assertNotIn(jargon, message)
+
+    def test_pricing_covers_all_menu_models(self):
+        for model_id, _name in main.MODEL_CHOICES:
+            self.assertGreater(pricing.calculate_cost(model_id, 1000, 1000), 0)
 
 
 if __name__ == "__main__":
