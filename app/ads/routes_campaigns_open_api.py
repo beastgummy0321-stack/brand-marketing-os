@@ -410,7 +410,7 @@ async def rule_cards_learned(brand_id: str, cycle_id: str):
     main_mod.require_brand(brand_id)
     _require_cycle(brand_id, cycle_id)
     rows = list_pending_rule_cards(main_mod.conn, brand_id)
-    return _envelope([{"text": r["proposed_rule_text"]} for r in rows])
+    return _envelope([{"id": r["id"], "text": r["proposed_rule_text"]} for r in rows])
 
 
 # ---- 企劃排期到期提醒（S8R.9-11） ----

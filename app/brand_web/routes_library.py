@@ -31,7 +31,9 @@ from app import mock_data as md
 from app.brand_intelligence import background_job
 from app.brand_intelligence import customer_voice as cv_mod
 from app.brand_intelligence import repository as repo
+from app.core import backup as corebackup
 from app.core import cleanup
+from app.core import creative_assets
 from app.core import settings as core_settings
 from app.core.db import REPO_ROOT, new_id
 from app.llm import gateway, providers
@@ -230,6 +232,35 @@ async def library_bundle(brand_id: str):
                              for v in repo.list_customer_voices(web.conn, brand_id)],
     }
     return {"data": data, "generated_at": datetime.now(timezone.utc).isoformat()}
+
+
+@router.post("/api/library/brands/{brand_id}/delete")
+async def brand_delete_api(request: Request, brand_id: str):
+    """永久刪除品牌（S5.49 危險區二次確認）：取代舊版 Jinja 表單端點
+    `/brands/{brand_id}/delete`，供 `BrandProfilePanel.tsx` 的 `ConfirmDeleteView`
+    呼叫（`frontend/src/lib/libraryApi.ts` `deleteBrand()`）。流程跟舊頁一致——只收已
+    封存品牌、打字確認名稱、備份 → 刪品牌 → 一併刪素材圖檔資料夾（決策 0008）——回傳
+    訊息含備份位置與 `delete_folder()` 的 warn，畫面刪除前先讓使用者看一眼再導頁。"""
+    brand = require_brand(brand_id)
+    actor = require_actor(request)
+    if brand["status"] != "archived":
+        return JSONResponse({"error": "要先把品牌封存，才能永久刪除。"}, status_code=400)
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    confirm_name = clean(str(body.get("confirm_name") or "")) if isinstance(body, dict) else ""
+    if confirm_name != brand["name"]:
+        return JSONResponse(
+            {"error": "輸入的名稱跟品牌名稱不一樣，請照著上面顯示的名稱再打一次。"},
+            status_code=400,
+        )
+    backup_path = corebackup.snapshot(f"before-delete-{brand_id}")
+    repo.delete_brand(web.conn, brand_id, actor=actor)
+    warn = creative_assets.delete_folder(web.conn, brand_id)
+    backup_note = f"刪除前的備份存進了 backups/{backup_path.name}。" if backup_path else ""
+    message = f"已永久刪除品牌「{brand['name']}」。{backup_note}{warn}".strip()
+    return {"message": message}
 
 
 @router.post("/api/brands/{brand_id}/assets")

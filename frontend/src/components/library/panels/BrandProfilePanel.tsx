@@ -281,7 +281,8 @@ function ConfirmDeleteView({
 }) {
   const [confirmName, setConfirmName] = useState("");
   const form = useFormSubmit(async () => {
-    await deleteBrand(brandId, confirmName);
+    const message = await deleteBrand(brandId, confirmName);
+    window.alert(message);
     onDeleted();
   });
 

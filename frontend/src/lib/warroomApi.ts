@@ -97,6 +97,7 @@ export interface Dissent {
 }
 
 export interface RuleCardLearned {
+  id: string;
   text: string;
 }
 

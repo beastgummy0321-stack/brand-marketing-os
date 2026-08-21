@@ -19,6 +19,7 @@ import {
   type RuleCardLearned,
   type ScheduleReminder,
 } from "@/lib/warroomApi";
+import { decideRuleCard } from "@/lib/learningsApi";
 import { Badge } from "../shared/Badge";
 
 type LoadState =
@@ -50,6 +51,8 @@ export function PlanStep({ brandId, cycle, onApproved, onRefresh }: { brandId: s
   const [pacingReason, setPacingReason] = useState(cycle.pacing_reason);
   const [ruleCards, setRuleCards] = useState<RuleCardLearned[]>([]);
   const [ruleCardsDecided, setRuleCardsDecided] = useState(false);
+  const [decidingRuleCards, setDecidingRuleCards] = useState(false);
+  const [ruleCardsError, setRuleCardsError] = useState<string | null>(null);
   const [approving, setApproving] = useState(false);
   const [approveError, setApproveError] = useState<string | null>(null);
   const [reminder, setReminder] = useState<ScheduleReminder | null>(null);
@@ -122,6 +125,19 @@ export function PlanStep({ brandId, cycle, onApproved, onRefresh }: { brandId: s
 
   async function savePacing() {
     await updatePacing(brandId, cycle.id, pacing, pacingReason);
+  }
+
+  async function decideRuleCards(accepted: boolean) {
+    setDecidingRuleCards(true);
+    setRuleCardsError(null);
+    try {
+      await Promise.all(ruleCards.map((card) => decideRuleCard(brandId, card.id, accepted)));
+      setRuleCardsDecided(true);
+    } catch (err) {
+      setRuleCardsError(err instanceof Error ? err.message : "存不進去，稍後再試一次。");
+    } finally {
+      setDecidingRuleCards(false);
+    }
   }
 
   async function approve() {
@@ -246,10 +262,11 @@ export function PlanStep({ brandId, cycle, onApproved, onRefresh }: { brandId: s
           </ul>
           {!approved && !ruleCardsDecided && (
             <div className="mt-2 flex gap-2">
-              <button type="button" onClick={() => setRuleCardsDecided(true)} className="rounded-md border border-primary px-2 py-1 text-xs font-medium text-primary hover:bg-primary/10">同意</button>
-              <button type="button" onClick={() => setRuleCardsDecided(true)} className="rounded-md border border-border px-2 py-1 text-xs font-medium text-muted-foreground">不用</button>
+              <button type="button" disabled={decidingRuleCards} onClick={() => void decideRuleCards(true)} className="rounded-md border border-primary px-2 py-1 text-xs font-medium text-primary hover:bg-primary/10 disabled:cursor-not-allowed disabled:opacity-50">同意</button>
+              <button type="button" disabled={decidingRuleCards} onClick={() => void decideRuleCards(false)} className="rounded-md border border-border px-2 py-1 text-xs font-medium text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50">不用</button>
             </div>
           )}
+          {ruleCardsError && <p className="mt-2 text-xs text-danger">{ruleCardsError}</p>}
         </div>
       )}
 

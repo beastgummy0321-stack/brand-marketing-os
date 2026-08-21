@@ -80,8 +80,11 @@ export async function fetchLearnings(brandId: string): Promise<LearningSections>
   return ((await res.json()) as Envelope<LearningSections>).data;
 }
 
-async function act(brandId: string, path: string): Promise<LearningActionResult> {
-  const res = await fetch(`${base(brandId)}${path}`, { method: "POST" });
+async function act(brandId: string, path: string, body?: unknown): Promise<LearningActionResult> {
+  const res = await fetch(`${base(brandId)}${path}`, {
+    method: "POST",
+    ...(body !== undefined ? { headers: { "content-type": "application/json" }, body: JSON.stringify(body) } : {}),
+  });
   if (!res.ok) await responseError(res, `處理失敗（狀態碼 ${res.status}）`);
   return (await res.json()) as LearningActionResult;
 }
@@ -96,4 +99,10 @@ export function deactivateRule(brandId: string, ruleId: string): Promise<Learnin
 
 export function reconfirmRule(brandId: string, ruleId: string): Promise<LearningActionResult> {
   return act(brandId, `/rules/${encodeURIComponent(ruleId)}/reconfirm`);
+}
+
+/** 規則卡的決定（票 T5-04）：接受才升級為品牌智庫的長期規則，戰情室企劃步驟「同意／不用」
+ * 兩顆按鈕走這支，跟累積智慧頁的候選卡是同一批資料、同一支後端函式。 */
+export function decideRuleCard(brandId: string, cardId: string, accepted: boolean): Promise<LearningActionResult> {
+  return act(brandId, `/rule-cards/${encodeURIComponent(cardId)}/decide`, { accepted });
 }

@@ -654,5 +654,33 @@ class DissentTest(_BasePlanTest):
         self.assertEqual(resp.status_code, 400)  # 舊頁的 303＋kind=warn
 
 
+class RuleCardsLearnedTest(_BasePlanTest):
+    """票 T5-04：企劃步驟「我從你上次的挑選裡學到這些」清單要帶 id，PlanStep.tsx 才有東西
+    可以拿去呼叫規則卡採納 API（同一批候選卡，同一支 `nextcycle.list_pending_rule_cards`）。"""
+
+    def test_list_includes_card_id_for_decide_button_to_use(self):
+        main.conn.execute(
+            "INSERT INTO creative_rule_card (id, brand_id, fingerprint_axis, fingerprint_value,"
+            " proposed_rule_text, evidence_json, reject_count, status, created_at, updated_at)"
+            " VALUES ('rcd_planstep1', ?, 'tone', 'urgent', '不要再出現太急迫催促的語氣', '{}', 2,"
+            " 'pending', '2026-01-01T00:00:00', '2026-01-01T00:00:00')",
+            (self.bid,),
+        )
+        main.conn.commit()
+        resp = self.client.get(f"/api/campaigns/{self.bid}/{self.cycle_id}/rule-cards-learned")
+        self.assertEqual(resp.status_code, 200)
+        cards = resp.json()["data"]
+        self.assertEqual(cards, [{"id": "rcd_planstep1", "text": "不要再出現太急迫催促的語氣"}])
+
+        decide = self.client.post(
+            f"/api/campaigns/brands/{self.bid}/learnings/rule-cards/rcd_planstep1/decide",
+            json={"accepted": True})
+        self.assertEqual(decide.status_code, 200)
+        self.assertEqual(
+            self.client.get(f"/api/campaigns/{self.bid}/{self.cycle_id}/rule-cards-learned")
+            .json()["data"],
+            [])  # 決定完就不再是待處理的候選
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -238,6 +238,28 @@ async function postEmpty(path: string): Promise<void> {
   }
 }
 
+/** 刪品牌是本檔唯一走真正 `/api` JSON 端點的寫入動作（`routes_library.py`
+ * `brand_delete_api()`），錯誤訊息從回應體的 `error` 欄位取，跟 `campaignsApi.ts`
+ * `postJson()` 同一套慣例。 */
+async function postJson<T>(path: string, body: unknown): Promise<T> {
+  const res = await fetch(path, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    let message = `處理失敗（狀態碼 ${res.status}）`;
+    try {
+      const data = (await res.json()) as { error?: string };
+      if (data.error) message = data.error;
+    } catch {
+      // 回應不是 JSON，用預設訊息。
+    }
+    throw new Error(message);
+  }
+  return (await res.json()) as T;
+}
+
 // ---- 品牌事實 ----
 
 export function createFact(
@@ -417,6 +439,10 @@ export function saveBrandProfile(
   return postForm(`/brands/${encodeURIComponent(brandId)}/edit`, fields);
 }
 
-export function deleteBrand(brandId: string, confirmName: string): Promise<void> {
-  return postForm(`/brands/${encodeURIComponent(brandId)}/delete`, { confirm_name: confirmName });
+/** 回傳訊息含備份位置與素材資料夾刪除的 warn，呼叫端刪完導頁前先讓使用者看一眼。 */
+export function deleteBrand(brandId: string, confirmName: string): Promise<string> {
+  return postJson<{ message: string }>(
+    `/api/library/brands/${encodeURIComponent(brandId)}/delete`,
+    { confirm_name: confirmName },
+  ).then((body) => body.message);
 }

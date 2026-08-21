@@ -245,5 +245,54 @@ class SettingsCalendarDismissTest(unittest.TestCase):
         self.assertEqual(calendar_dismiss.list_dismissed(main.conn, other["id"]), set())
 
 
+# 新殼 JSON API：/api/settings/calendar/brands/{brand_id}/**（節日提醒永久關閉開關搬進新殼，
+# 舊頁邏輯照舊沿用 `_calendar_categories_ctx()`／`calendar_dismiss`，這裡只驗 HTTP 層行為）。
+class SettingsCalendarApiTest(unittest.TestCase):
+    def setUp(self):
+        self.client = TestClient(main.app)
+        self.brand = bi_repo.create_brand(main.conn, name="虛構節日提醒新殼茶行", client_name=None,
+                                          actor=ACTOR)
+        self.bid = self.brand["id"]
+
+    def _categories(self):
+        resp = self.client.get(f"/api/settings/calendar/brands/{self.bid}")
+        self.assertEqual(resp.status_code, 200, resp.text)
+        return {c["category"]: c for c in resp.json()["data"]["categories"]}
+
+    def test_list_defaults_to_all_enabled(self):
+        categories = self._categories()
+        self.assertIn("cny", categories)
+        self.assertTrue(all(c["enabled"] for c in categories.values()))
+
+    def test_toggle_off_disables_and_is_reflected_in_list(self):
+        resp = self.client.post(f"/api/settings/calendar/brands/{self.bid}/cny", json={"enabled": False})
+        self.assertEqual(resp.status_code, 200, resp.text)
+        self.assertFalse(resp.json()["data"]["enabled"])
+        self.assertFalse(self._categories()["cny"]["enabled"])
+
+    def test_toggle_on_after_off_restores(self):
+        self.client.post(f"/api/settings/calendar/brands/{self.bid}/cny", json={"enabled": False})
+        resp = self.client.post(f"/api/settings/calendar/brands/{self.bid}/cny", json={"enabled": True})
+        self.assertEqual(resp.status_code, 200, resp.text)
+        self.assertTrue(resp.json()["data"]["enabled"])
+        self.assertTrue(self._categories()["cny"]["enabled"])
+
+    def test_unknown_category_404s(self):
+        resp = self.client.post(f"/api/settings/calendar/brands/{self.bid}/沒這個類別", json={"enabled": False})
+        self.assertEqual(resp.status_code, 404)
+
+    def test_unknown_brand_404s(self):
+        resp = self.client.get("/api/settings/calendar/brands/沒這個品牌")
+        self.assertEqual(resp.status_code, 404)
+
+    def test_toggle_off_one_category_does_not_affect_others(self):
+        self.client.post(f"/api/settings/calendar/brands/{self.bid}/cny", json={"enabled": False})
+        categories = self._categories()
+        self.assertFalse(categories["cny"]["enabled"])
+        others = [c for key, c in categories.items() if key != "cny"]
+        self.assertTrue(others)
+        self.assertTrue(all(c["enabled"] for c in others))
+
+
 if __name__ == "__main__":
     unittest.main()

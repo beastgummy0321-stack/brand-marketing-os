@@ -25,7 +25,9 @@ from app.ads import nextcycle  # noqa: E402
 from app.ads import repository as ads_repo  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
 from app.core import rule_cards  # noqa: E402
+from app.core.db import new_id  # noqa: E402
 from app.llm import context_compiler  # noqa: E402
+from app.shared.web import OPERATOR  # noqa: E402
 
 def _cleanup():
     try:
@@ -284,3 +286,94 @@ class LearningsPageRouteTest(unittest.TestCase):
         self.assertEqual(len(data["pending_reconfirm_rules"]), 1)
         self.assertEqual(data["active_bans"], [])  # 「生效中的禁令」段回到空狀態
         self.assertEqual(nextcycle.list_active_bans(main.conn, self.bid), [])
+
+
+class RuleCardDecisionApiTest(unittest.TestCase):
+    """規則卡採納／不採納（票 T5-04）：戰情室企劃步驟的「同意」「不用」兩顆按鈕接的就是
+    這支 API——跟累積智慧頁的候選卡同一批資料、同一支底層函式 `nextcycle.decide_rule_card`。"""
+
+    def setUp(self):
+        self.client = TestClient(main.app)
+        self.brand = bi_repo.create_brand(main.conn, name="虛構晨光咖啡四號", client_name=None, actor=ACTOR)
+        self.bid = self.brand["id"]
+
+    def _insert_card(self, card_id=None, axis="tone", value="urgent",
+                     text="不要再出現太急迫催促的語氣"):
+        card_id = card_id or new_id("rcd")
+        main.conn.execute(
+            "INSERT INTO creative_rule_card (id, brand_id, fingerprint_axis, fingerprint_value,"
+            " proposed_rule_text, evidence_json, reject_count, status, created_at, updated_at)"
+            " VALUES (?, ?, ?, ?, ?, '{}', 2, 'pending', '2026-01-01T00:00:00', '2026-01-01T00:00:00')",
+            (card_id, self.bid, axis, value, text),
+        )
+        main.conn.commit()
+        return card_id
+
+    def _decide(self, card_id, accepted):
+        return self.client.post(
+            f"/api/campaigns/brands/{self.bid}/learnings/rule-cards/{card_id}/decide",
+            json={"accepted": accepted},
+        )
+
+    def test_accepting_promotes_it_to_a_brand_rule(self):
+        card_id = self._insert_card()
+        resp = self._decide(card_id, True)
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["message"], "記住了，以後產素材會避開這個方向。")
+
+        row = dict(main.conn.execute(
+            "SELECT * FROM creative_rule_card WHERE id = ?", (card_id,)).fetchone())
+        self.assertEqual(row["status"], "accepted")
+        self.assertIsNotNone(row["promoted_rule_id"])
+        self.assertEqual(row["decided_by"], OPERATOR)
+        rules = bi_repo.list_rules_for_brand(main.conn, self.bid)
+        self.assertTrue(any(r["id"] == row["promoted_rule_id"] for r in rules))
+
+    def test_declining_creates_no_rule(self):
+        card_id = self._insert_card()
+        resp = self._decide(card_id, False)
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["message"], "好，這條不記成長期規則。")
+
+        row = dict(main.conn.execute(
+            "SELECT * FROM creative_rule_card WHERE id = ?", (card_id,)).fetchone())
+        self.assertEqual(row["status"], "declined")
+        self.assertIsNone(row["promoted_rule_id"])
+        self.assertEqual(nextcycle.list_pending_rule_cards(main.conn, self.bid), [])
+
+    def test_overclaim_card_uses_claim_wording_not_rule_wording(self):
+        """overclaim 候選卡（票 T1／決策 0034 第 8 點）接受後走 claim 分支，訊息文案不同——
+        沿用舊頁 `routes_interview.py` 兩組文案。"""
+        card_id = self._insert_card(card_id="rcd_decide_overclaim",
+                                     axis=nextcycle.OVERCLAIM_CLAIM_AXIS, value="v1",
+                                     text="保證三天見效")
+        resp = self._decide(card_id, True)
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["message"], "已經登記為禁用宣稱，之後掃描與生成都會避開這句話。")
+        row = dict(main.conn.execute(
+            "SELECT * FROM creative_rule_card WHERE id = ?", (card_id,)).fetchone())
+        self.assertIsNone(row["promoted_rule_id"])  # 這條走 claim，不是 rule（見 nextcycle 註記）
+
+    def test_audit_log_records_the_decision(self):
+        card_id = self._insert_card()
+        self._decide(card_id, True)
+        rows = main.conn.execute(
+            "SELECT * FROM audit_log WHERE brand_id = ? AND entity_type = 'creative_rule_card'"
+            " AND entity_id = ? AND action = 'accept_rule_card'", (self.bid, card_id),
+        ).fetchall()
+        self.assertEqual(len(rows), 1)
+
+    def test_decide_unknown_card_shows_error_not_500(self):
+        resp = self._decide("rcd_not_real", True)
+        self.assertEqual(resp.status_code, 400)
+
+    def test_decide_works_without_operator_cookie(self):
+        """ADR 0004：規則卡採納不再要求先設定操作人。"""
+        card_id = self._insert_card()
+        self.client.cookies.clear()
+        resp = self._decide(card_id, True)
+        self.assertEqual(resp.status_code, 200)
+        row = main.conn.execute(
+            "SELECT decided_by FROM creative_rule_card WHERE id = ?", (card_id,)).fetchone()
+        self.assertEqual(row["decided_by"], OPERATOR)
+

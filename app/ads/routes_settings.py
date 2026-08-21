@@ -267,3 +267,39 @@ async def api_rule_cards_reset(request: Request, brand_id: str, card_key: str):
     rule_cards.reset_card(main_mod.conn, brand_id, card_key, actor)
     card = rule_cards.get_card(main_mod.conn, brand_id, card_key)
     return {"data": _rule_card_json(card), "generated_at": datetime.now(timezone.utc).isoformat()}
+
+
+# ---------------------------------------------------------------------------
+# 節日提醒開關 JSON API（新殼設定頁，功能對照舊頁 `settings_calendar_toggle_post`
+# 上面）。清單與現況判斷沿用 `_calendar_categories_ctx()`，不重寫一份；驗證邏輯
+# （未知類別 404）沿用同一函式上面的既有比對。
+# ---------------------------------------------------------------------------
+
+@router.get("/api/settings/calendar/brands/{brand_id}")
+async def api_calendar_categories_get(brand_id: str):
+    main_mod.require_brand(brand_id)
+    categories = _calendar_categories_ctx(main_mod.conn, brand_id)
+    return {
+        "data": {"brand_id": brand_id, "categories": categories},
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+@router.post("/api/settings/calendar/brands/{brand_id}/{category}")
+async def api_calendar_category_toggle(request: Request, brand_id: str, category: str):
+    main_mod.require_brand(brand_id)
+    valid_categories = {cat["category"] for cat in core_calendar_dismiss.list_categories()}
+    if category not in valid_categories:
+        raise main_mod.NotFoundKind("節日類別")
+    try:
+        body = await request.json()
+    except ValueError:
+        body = {}
+    if not isinstance(body, dict) or not isinstance(body.get("enabled"), bool):
+        return JSONResponse({"error": "enabled 必須是 true 或 false"}, status_code=400)
+    if body["enabled"]:
+        core_calendar_dismiss.undismiss(main_mod.conn, brand_id, category)
+    else:
+        core_calendar_dismiss.dismiss(main_mod.conn, brand_id, category)
+    item = next(c for c in _calendar_categories_ctx(main_mod.conn, brand_id) if c["category"] == category)
+    return {"data": item, "generated_at": datetime.now(timezone.utc).isoformat()}

@@ -10,6 +10,7 @@ import { Ga4Section } from "./Ga4Section";
 import { MetaSection } from "./MetaSection";
 import { ModelSection } from "./ModelSection";
 import { AutonomySection } from "./AutonomySection";
+import { CalendarSection } from "./CalendarSection";
 import { RuleCardsSection } from "./RuleCardsSection";
 import { TrackingHealthEntrySection } from "./TrackingHealthEntrySection";
 import { StylePreferenceSection } from "./StylePreferenceSection";
@@ -47,9 +48,10 @@ export function SettingsPage() {
         {Array.from({ length: 6 }, (_, i) => (
           <Skeleton key={i} className="h-32" />
         ))}
-        {/* 規則卡骨架不等 /api/settings：RuleCardsSection 自己讀 /api/dashboard/overview，
-            掛載當下就會自己顯示骨架（見該檔），跟整頁 loading 態同框即可，不用另外複製一份。 */}
+        {/* 規則卡／節日提醒骨架不等 /api/settings：兩者都自己讀 /api/dashboard/overview，
+            掛載當下就會自己顯示骨架（見各檔），跟整頁 loading 態同框即可，不用另外複製一份。 */}
         <RuleCardsSection />
+        <CalendarSection />
       </div>
     );
   } else if (state.status === "error") {
@@ -74,6 +76,7 @@ export function SettingsPage() {
         <TrackingHealthEntrySection />
         <StylePreferenceSection />
         <RuleCardsSection />
+        <CalendarSection />
       </div>
     );
   }

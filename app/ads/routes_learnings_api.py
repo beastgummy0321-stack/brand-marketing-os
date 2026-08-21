@@ -97,6 +97,23 @@ def reconfirm_rule(conn, brand_id: str, rule_id: str, actor: str) -> dict:
     return {"ok": True, "message": "已延續這條規則，重新進入生成內容的判斷依據。"}
 
 
+def decide_rule_card(conn, brand_id: str, card_id: str, *, accept: bool, actor: str) -> dict:
+    """規則卡的決定（票 T5-04，接線 `nextcycle.decide_rule_card`）。接受才升級為品牌智庫的
+    長期規則——學習不會自己變成規則（鐵則 3）。訊息沿用舊頁 `routes_interview.py` 原話，
+    依 `fingerprint_axis` 是不是 overclaim 候選卡分兩組文案。"""
+    try:
+        card = nextcycle.decide_rule_card(conn, brand_id, card_id, accept=accept, actor=actor)
+    except ValueError as exc:
+        return {"ok": False, "message": str(exc)}
+    if card["fingerprint_axis"] == nextcycle.OVERCLAIM_CLAIM_AXIS:
+        message = ("已經登記為禁用宣稱，之後掃描與生成都會避開這句話。" if card["status"] == "accepted"
+                   else "好，這句先不登記。")
+    else:
+        message = ("記住了，以後產素材會避開這個方向。" if card["status"] == "accepted"
+                   else "好，這條不記成長期規則。")
+    return {"ok": True, "message": message}
+
+
 def _envelope(data: dict) -> dict:
     return {"data": data, "generated_at": datetime.now(timezone.utc).isoformat()}
 
@@ -129,3 +146,15 @@ async def deactivate_active_ban(request: Request, brand_id: str, rule_id: str):
 async def reconfirm_pending_rule(request: Request, brand_id: str, rule_id: str):
     main_mod.require_brand(brand_id)
     return _action_response(reconfirm_rule(main_mod.conn, brand_id, rule_id, main_mod.require_actor(request)))
+
+
+@router.post("/api/campaigns/brands/{brand_id}/learnings/rule-cards/{card_id}/decide")
+async def decide_pending_rule_card(request: Request, brand_id: str, card_id: str):
+    main_mod.require_brand(brand_id)
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    accept = bool(body.get("accepted")) if isinstance(body, dict) else False
+    actor = main_mod.require_actor(request)
+    return _action_response(decide_rule_card(main_mod.conn, brand_id, card_id, accept=accept, actor=actor))
