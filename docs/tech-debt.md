@@ -18,11 +18,13 @@
 
 | 檔案 | 行數 | 倍數 | 先拆什麼 |
 |---|---|---|---|
-| `app/brand_web/routes.py` | 1854 | 2.3× | brand fact 與 product 兩組 CRUD 路由各自獨立成檔 |
 | `app/brand_intelligence/repository.py` | 1667 | 2.08× | 依表分檔（brand／product／rule／claim） |
 | `app/tests/test_ads_reading.py` | 1157 | 1.4× | 測試檔，優先度最低 |
 | `app/ads/reading.py` | 1039 | 1.3× | 判讀規則與資料取數分離 |
 | `app/ads/repository.py` | 856 | 1.07× | 剛超標，先觀察 |
+
+2026-08-21：T4 刪除品牌／產品管理舊頁 handler，`app/brand_web/routes.py` 從 1854 行降到
+704 行，退出超標清單（`KNOWN_OVERSIZED_FILES` 同步移除）。
 
 **已知違例**：2026-08-07 票 C 在 `brand_intelligence/routes.py` 加了約 70 行沒先拆（主控放行）；
 2026-08-09～10 的三張票在 `app/ads/repository.py` 共加了約 42 行（cascade 表登記、排期策略落地），
