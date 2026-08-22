@@ -29,6 +29,7 @@ from app.ads import budget as budget_calc
 from app.ads import inflation as ads_inflation
 from app.ads import performance as ads_performance
 from app.ads import reading_assets
+from app.ads import reading_settlement
 from app.ads import reconcile as ads_reconcile
 from app.ads import repository as ads_repo
 from app.ads import settlement as ads_settlement
@@ -458,6 +459,10 @@ def run(conn, brand_id: str, cycle_id: str, actor: str,
     if cycle is None:
         raise ValueError("找不到廣告檔期")
 
+    refusal = reading_settlement.refusal_reason(cycle["status"], trigger_reason)  # D3，票 06
+    if refusal:
+        return False, refusal
+    settled_run = reading_settlement.is_settlement_run(cycle["status"], trigger_reason)  # D4
     cycle_totals = ads_performance.totals(conn, brand_id, cycle_id)
     if not cycle_totals["rows"]:
         return False, "這期還沒有成效資料，先把數字補上來再判讀。"
@@ -489,12 +494,13 @@ def run(conn, brand_id: str, cycle_id: str, actor: str,
     # 入帳時可能記下了這一版 performance_reading 的 id，重判必須先斷開，否則 PRAGMA
     # foreign_keys=ON 會擋下面這個 DELETE（append-only 的學習列本身不受影響，只是來源指標
     # 指到新的一版）。learning_ledger 現屬品牌永久層（修憲落地 A3），走 bi 的公開函式。
+    delete_scope = "" if settled_run else " AND COALESCE(json_extract(rule_result_json, '$.is_tentative'), 1) != 0"  # D4
     reading_ids = [r["id"] for r in conn.execute(
-        "SELECT id FROM performance_reading WHERE campaign_cycle_id = ?", (cycle_id,)
+        "SELECT id FROM performance_reading WHERE campaign_cycle_id = ?" + delete_scope, (cycle_id,)
     ).fetchall()]
     bi.unlink_learning_ledger_reading(conn, reading_ids)
     conn.execute(
-        "DELETE FROM performance_reading WHERE brand_id = ? AND campaign_cycle_id = ?",
+        "DELETE FROM performance_reading WHERE brand_id = ? AND campaign_cycle_id = ?" + delete_scope,
         (brand_id, cycle_id),
     )
 
@@ -507,8 +513,8 @@ def run(conn, brand_id: str, cycle_id: str, actor: str,
         economics = bi.get_product_economics(conn, brand_id, allocation["product_id"])
         verdict = judge(totals, plan_budget=allocation["allocated_budget"] or 0, brand_id=brand_id,
                         breakeven=breakeven_roas(economics), baseline=baseline, conn=conn)
-        verdict["product_id"] = allocation["product_id"]
-        verdict["product_name"] = allocation["product_name"]
+        verdict.update(product_id=allocation["product_id"], product_name=allocation["product_name"],
+                       is_tentative=not settled_run)  # D4：產品層也要標，範圍刪除才分得出結算版
         readings.append(verdict)
 
     # 檔期層：一句總結。產品層判不出來時，這是唯一的結論。
@@ -536,7 +542,7 @@ def run(conn, brand_id: str, cycle_id: str, actor: str,
     # is_tentative＝這一版還不是最終結算（final_settlement 才是最終版）。
     cycle_verdict["unsettled_ratio"] = unsettled_ratio
     cycle_verdict["unsettled_note"] = _unsettled_note(unsettled_ratio)
-    cycle_verdict["is_tentative"] = trigger_reason != "final_settlement"
+    cycle_verdict["is_tentative"] = not settled_run
 
     # 回購雙打平線（票 #39，決策 0025 第 7 點）：檔期層才算——首單打平線是這期唯一的正式
     # 判讀（cycle_verdict 本身，保守），這裡另外並列一條含 90 天回購的實質判讀給旁觀參考。
@@ -617,7 +623,8 @@ def run(conn, brand_id: str, cycle_id: str, actor: str,
              explanation["task_id"], ts),
         )
 
-    ads_repo.update_cycle_status(conn, brand_id, cycle_id, status="EVALUATING", actor=actor)
+    if cycle["status"] != "CLOSED":  # D2：不可降級；結算版跟判讀列同一次 commit 寫 CLOSED（票 06）
+        ads_repo.update_cycle_status(conn, brand_id, cycle_id, actor=actor, status="CLOSED" if settled_run else "EVALUATING")
 
     # 期中檢查點是事件不是死線（決策 0025 審查補遺第 4 點）：期末判讀一跑，還沒被處理的
     # day3／day7 提醒併入這裡的結論，不用使用者事後補做。這裡才 import 避開
@@ -640,7 +647,8 @@ def finalize(conn, brand_id: str, cycle_id: str, actor: str) -> tuple:
     ok, err = run(conn, brand_id, cycle_id, actor, trigger_reason="final_settlement")
     if not ok:
         return ok, err
-    ads_repo.update_cycle_status(conn, brand_id, cycle_id, status="CLOSED", actor=actor)
+    if ads_repo.get_cycle(conn, brand_id, cycle_id)["status"] != "CLOSED":  # run() 已寫過 CLOSED，票 06
+        ads_repo.update_cycle_status(conn, brand_id, cycle_id, status="CLOSED", actor=actor)
     _flag_unresolved_hypotheses(conn, brand_id, cycle_id)
     # 原型階段結束判定（修憲落地 A6，決策 0037 第一節）：結算完成且這期實際花費 > 0
     # 才算數；已經翻過旗標的話 check_and_flag 內部直接短路，不重複提醒。
@@ -982,12 +990,12 @@ def _flag_unresolved_hypotheses(conn, brand_id: str, cycle_id: str) -> None:
 
 
 def load(conn, brand_id: str, cycle_id: str) -> dict:
-    """讀回判讀結果：{cycle: 檔期層, products: [產品層...]}。"""
+    """讀回判讀結果：{cycle: 檔期層, products: [產品層...]}。D4：結算版跟暫定版可能同時存在，規則「結算版贏」——ORDER BY 讓暫定列排前、結算列排後，字典覆寫去重，最後寫入的贏。"""
     rows = [dict(r) for r in conn.execute(
-        "SELECT * FROM performance_reading WHERE brand_id = ? AND campaign_cycle_id = ?"
-        " ORDER BY product_id IS NULL, created_at", (brand_id, cycle_id),
+        "SELECT * FROM performance_reading WHERE brand_id = ? AND campaign_cycle_id = ? ORDER BY"
+        " product_id IS NULL, COALESCE(json_extract(rule_result_json, '$.is_tentative'), 1) DESC, created_at", (brand_id, cycle_id),
     )]
-    products, cycle_row = [], None
+    products_by_id, cycle_row = {}, None
     for row in rows:
         row["result"] = json.loads(row["rule_result_json"] or "{}")
         row["status_label"] = STATUS_LABELS.get(row["status"], row["status"])
@@ -996,11 +1004,11 @@ def load(conn, brand_id: str, cycle_id: str) -> dict:
         else:
             product = bi.get_product(conn, brand_id, row["product_id"])
             row["product_name"] = product["name"] if product else "（產品已刪除）"
-            products.append(row)
+            products_by_id[row["product_id"]] = row
     if cycle_row is not None:
         cycle_row["hypothesis_reviews"] = _pending_hypothesis_reviews(
             conn, brand_id, cycle_id, cycle_row)
-    return {"cycle": cycle_row, "products": products}
+    return {"cycle": cycle_row, "products": list(products_by_id.values())}
 
 
 def prediction_settlement(conn, brand_id: str, cycle: Optional[dict]) -> Optional[dict]:

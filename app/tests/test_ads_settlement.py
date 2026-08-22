@@ -232,7 +232,10 @@ class SettlementFreezeTest(unittest.TestCase):
                           (self.cycle_id,))
         main.conn.commit()
         self._spend(spend=0, impressions=0, clicks=0, conversions=0, revenue=0)
-        reading.run(main.conn, self.bid, self.cycle_id, ACTOR)
+        # 票 06（D3）之後，已結案的檔期只有 final_settlement／late_data 兩種觸發還進得來，
+        # 沒帶 trigger_reason 的一般重判會被擋下；這裡改用 late_data 才能真的走到 freeze()，
+        # 驗的仍是同一件事：凍結當下檔期已 CLOSED 就該標 is_post_close=1。
+        reading.run(main.conn, self.bid, self.cycle_id, ACTOR, trigger_reason="late_data")
         v2 = main.conn.execute(
             "SELECT is_post_close FROM settlement_version WHERE campaign_cycle_id = ? AND version = 2",
             (self.cycle_id,)).fetchone()

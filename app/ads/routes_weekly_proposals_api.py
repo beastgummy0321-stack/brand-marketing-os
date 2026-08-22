@@ -9,6 +9,8 @@ from fastapi.responses import JSONResponse
 
 import app.shared.web as main_mod
 from app.ads import reading as ads_reading
+from app.ads import reading_settlement
+from app.ads import repository as ads_repo
 from app.ads import routes as ads_routes
 from app.ads import weekly_reports
 from app.ads import weekly_proposals
@@ -184,7 +186,12 @@ async def weekly_rejudge_start(request: Request, brand_id: str):
     actor = main_mod.require_actor(request)
     cycle = _current_cycle(brand_id)
     if cycle is None:
-        return _error(400, "目前沒有可判讀的檔期")
+        # current_cycle() 只挑 LIVE／EVALUATING，已結案的期根本不在選取範圍內，所以落到這裡
+        # 時該說的是「結算還在」而不是技術味的「沒有可判讀的檔期」（票 06 D3：理由是給不懂
+        # 技術的人看的）。句子跟 reading.run() 的拒絕理由同一個出處，不另外抄一份。
+        latest = next(iter(ads_repo.list_cycles(main_mod.conn, brand_id)), None)
+        settled = reading_settlement.refusal_reason(latest["status"], None) if latest else None
+        return _error(400, settled or "目前沒有可判讀的檔期")
     cycle_id = cycle["id"]
     key = ads_routes._progress_key("weekly_rejudge", brand_id, "_")
 
