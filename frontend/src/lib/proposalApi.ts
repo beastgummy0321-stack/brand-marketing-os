@@ -23,7 +23,13 @@ export interface ChannelAsk {
 }
 
 export type OpeningSuggestionResponse =
-  | { available: true; summary: string; suggestion: OpeningSuggestion; channel_ask: null }
+  | {
+      available: true;
+      summary: string;
+      suggestion: OpeningSuggestion;
+      channel_ask: null;
+      budget_basis: "closing_review" | "pain_amount";
+    }
   | { available: false; reason: string; channel_ask?: ChannelAsk };
 
 export interface ProposalBlocks {
