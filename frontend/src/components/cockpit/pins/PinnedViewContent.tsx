@@ -2,7 +2,7 @@ import { useState } from "react";
 import type { EChartsOption } from "echarts";
 import { Link } from "react-router-dom";
 import { StatusLight } from "@/components/layout/StatusLight";
-import { formatCount, formatCurrency, formatRelativeHours, formatRoas } from "@/lib/format";
+import { formatCount, formatCurrency, formatPercent, formatRelativeHours, formatRoas } from "@/lib/format";
 import { triggerImmediateSync } from "@/lib/api";
 import type { DashboardPerformanceView } from "@/lib/pinnedViewsApi";
 import { useEchart } from "@/lib/useEchart";
@@ -97,7 +97,7 @@ function AdOverviewContent({ brandId, view, onRefresh }: { brandId: string; view
         <Stat label="營收" value={formatCurrency(summary.revenue)} />
       </div>
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <Stat label="CTR" value={summary.kpis.ctr !== null ? `${summary.kpis.ctr}%` : "資料不足"} />
+        <Stat label="CTR" value={summary.kpis.ctr !== null ? formatPercent(summary.kpis.ctr) : "資料不足"} />
         <Stat label="CPC" value={summary.kpis.cpc !== null ? formatCurrency(summary.kpis.cpc) : "資料不足"} />
         <Stat label="CPA" value={summary.kpis.cpa !== null ? formatCurrency(summary.kpis.cpa) : "資料不足"} />
         <Stat label="ROAS" value={summary.kpis.roas !== null ? formatRoas(summary.kpis.roas) : "資料不足"} />

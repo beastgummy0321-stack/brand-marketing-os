@@ -23,6 +23,14 @@ export function formatRoas(value: number | null): string {
   return `${value.toFixed(2)}x`;
 }
 
+/** 比率 → 百分比字串。後端存的是比值（app/ads/performance.py:467 `clicks / impressions`），
+ * 不是百分數，所以顯示前必須乘 100——三個 CTR 呼叫端各自手寫 `${ctr}%` 少了這一步，
+ * 1.03% 被印成 0.0103%，看起來像廣告爛掉 100 倍。格式化集中在這裡，呼叫端不再自己拼。 */
+export function formatPercent(value: number | null): string {
+  if (value === null) return "累積中";
+  return `${(value * 100).toFixed(2)}%`;
+}
+
 export function formatMomPct(value: number | null): string {
   if (value === null) return "";
   const sign = value > 0 ? "+" : "";

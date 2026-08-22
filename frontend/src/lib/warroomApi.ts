@@ -393,7 +393,19 @@ interface Envelope<T> {
 
 async function getJson<T>(path: string): Promise<T> {
   const res = await fetch(path);
-  if (!res.ok) throw new Error(res.status === 404 ? "找不到這筆資料。" : `讀取失敗（狀態碼 ${res.status}）`);
+  if (!res.ok) {
+    // 後端的 4xx 幾乎都附一句寫給使用者看的白話理由（例如覆盤：「這期還沒有結案…」）。
+    // 原本只印狀態碼，等於把那句話丟掉，非工程使用者只看到「讀取失敗（狀態碼 400）」，
+    // 會以為畫面壞了而不是「還沒到時候」。比照 postJson 先讀 `error` 欄。
+    let message = res.status === 404 ? "找不到這筆資料。" : `讀取失敗（狀態碼 ${res.status}）`;
+    try {
+      const data = (await res.json()) as { error?: string };
+      if (data.error) message = data.error;
+    } catch {
+      // 回應不是 JSON，用預設訊息。
+    }
+    throw new Error(message);
+  }
   const body: Envelope<T> = await res.json();
   return body.data;
 }

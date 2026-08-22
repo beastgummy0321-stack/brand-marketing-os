@@ -4,7 +4,7 @@ import { Link } from "react-router-dom";
 import { FluidCard } from "@/components/layout/FluidCard";
 import { StatBig } from "@/components/layout/StatBig";
 import { CHART_COLOR_REVENUE, CHART_COLOR_SPEND } from "@/lib/chartColors";
-import { formatCurrency, formatRoas } from "@/lib/format";
+import { formatCurrency, formatPercent, formatRoas } from "@/lib/format";
 import { useEchart } from "@/lib/useEchart";
 import { fetchClosingReview, type ClosingReview, type Cycle } from "@/lib/warroomApi";
 
@@ -68,7 +68,7 @@ function GoalComparisonCard({ review }: { review: ClosingReview }) {
           : `實際比目標${gapPct !== null && gapPct >= 0 ? "高" : "低"} ${Math.abs(gapPct ?? 0)}%${g.lower_is_better ? "（這個指標越低越好）" : ""}`}
       </p>
       <p className="mt-1 text-xs text-muted-foreground">
-        CTR {review.goal_comparison.actual_kpis.ctr ?? "資料不足"}、CPA {formatCurrency(review.goal_comparison.actual_kpis.cpa)}、ROAS {formatRoas(review.goal_comparison.actual_kpis.roas)}
+        CTR {review.goal_comparison.actual_kpis.ctr !== null ? formatPercent(review.goal_comparison.actual_kpis.ctr) : "資料不足"}、CPA {formatCurrency(review.goal_comparison.actual_kpis.cpa)}、ROAS {formatRoas(review.goal_comparison.actual_kpis.roas)}
       </p>
     </FluidCard>
   );

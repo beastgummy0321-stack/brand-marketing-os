@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { formatCurrency, formatRelativeHours, formatRoas } from "@/lib/format";
+import { formatCurrency, formatPercent, formatRelativeHours, formatRoas } from "@/lib/format";
 import { triggerImmediateSync } from "@/lib/api";
 import { useFormSubmit } from "@/lib/useFormSubmit";
 import {
@@ -82,7 +82,7 @@ export function PerformanceStep({ brandId, cycle }: { brandId: string; cycle: Cy
       ) : (
         <>
           <div className="grid grid-cols-4 gap-3">
-            <Kpi label="CTR" value={summary.kpis.ctr !== null ? `${summary.kpis.ctr}%` : null} />
+            <Kpi label="CTR" value={summary.kpis.ctr !== null ? formatPercent(summary.kpis.ctr) : null} />
             <Kpi label="CPC" value={summary.kpis.cpc !== null ? formatCurrency(summary.kpis.cpc) : null} />
             <Kpi label="CPA" value={summary.kpis.cpa !== null ? formatCurrency(summary.kpis.cpa) : null} />
             <Kpi label="ROAS" value={summary.kpis.roas !== null ? formatRoas(summary.kpis.roas) : null} />
