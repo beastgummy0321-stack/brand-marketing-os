@@ -9,9 +9,10 @@ from app.ads import onboarding
 from app.ads import repository as ads_repo
 
 
-# P1 配額規則（固定常數，不做學習率）：基準 2；可信且有轉換 +1；零轉換且花費達
-# cell_trust_flags() 既有 50% 門檻 -1；樣本不足不加不減。多期資料只先累加再判一次，
-# 不按期數重複加權；因此每格永遠落在 1～3 則。
+# P1 配額規則（固定常數，不做學習率）：基準 2；可信且有轉換 +1；表現差（零轉換且花費達
+# cell_trust_flags() 既有 50% 門檻，或轉換數不為 0 但沒打平——票 03-performance-reaches-
+# the-user-and-the-next-cycle）-1；樣本不足不加不減。多期資料只先累加再判一次，不按期數
+# 重複加權；因此每格永遠落在 1～3 則。
 BASE_THEME_QUOTA = 2
 CONVERTING_THEME_BONUS = 1
 UNDERPERFORMING_THEME_PENALTY = 1
@@ -30,7 +31,16 @@ def theme_quota(cell: dict, historical_cells: list) -> int:
     conversions = sum(float(row.get("conversions") or 0) for row in matches)
     spend = sum(float(row.get("spend") or 0) for row in matches)
     allocated_budget = sum(float(row.get("allocated_budget") or 0) for row in matches)
-    flags = nextcycle.cell_trust_flags(conversions, spend, allocated_budget)
+    revenue = sum(float(row.get("revenue") or 0) for row in matches)
+    # 打平線比照 reading.py 檔期層的既有作法：多列各自的打平線取平均。但**每一列都要有**
+    # 打平線才算——只要有一列沒有經濟資料，這個角度就不做經濟判斷，退回今天只看零轉換的
+    # 行為。上面的 revenue／spend 是全部列加總，若拿只由「有打平線那幾列」算出來的線去比
+    # 這個總和，等於用 A 列的標準審 B 列的數字，會判出對誰都不成立的結論（獨立審查發現）。
+    breakevens = [row["breakeven_roas"] for row in matches if row.get("breakeven_roas")]
+    breakeven_roas = (round(sum(breakevens) / len(breakevens), 2)
+                      if len(breakevens) == len(matches) else None)
+    flags = nextcycle.cell_trust_flags(conversions, spend, allocated_budget,
+                                       revenue=revenue, breakeven_roas=breakeven_roas)
 
     # underperforming 雖會與 evidence_sufficient=False 同時出現，但既有定義明說「花過半仍
     # 零轉換」已是足夠的負面證據，因此先處理；其餘證據不足一律誠實中立。

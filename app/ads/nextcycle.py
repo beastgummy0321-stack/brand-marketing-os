@@ -104,7 +104,9 @@ def propose_budget(conn, brand_id: str, cycle_id: str) -> dict:
 # 不另立一個一樣是 50 的新數字——內部既有常數與查證過的 madgicx 業界基準剛好一致。
 
 
-def cell_trust_flags(conversions: float, spend: float, allocated_budget: float) -> dict:
+def cell_trust_flags(conversions: float, spend: float, allocated_budget: float, *,
+                     revenue: Optional[float] = None,
+                     breakeven_roas: Optional[float] = None) -> dict:
     """切角歷史成效資料的兩道誠實旗標，只回傳「有值得提醒」的那幾個鍵——條件不成立時
     對應的鍵不出現（不是回傳 False），呼叫端用 `"evidence_sufficient" in flags` 判斷。
 
@@ -112,16 +114,28 @@ def cell_trust_flags(conversions: float, spend: float, allocated_budget: float) 
       標「還不知道」，不排除（ADR 0009 誠實狀態優先）。
     - `underperforming: True`：花費已達分配預算一半（沿用 `budget.PAUSE_THRESHOLD_RATIO`
       這個既有比例概念，不是直接呼叫 budget.py 同一段程式碼——那支是檔期層級「該考慮暫停」，
-      這裡是切角層級「這次沒打中」，場景不同、比例概念相同）卻仍零轉換：已經有足夠證據，
-      不是「還不知道」。
+      這裡是切角層級「這次沒打中」，場景不同、比例概念相同）之後，兩種證據途徑之一成立：
+      1. 零轉換——已經有足夠證據，不是「還不知道」。
+      2. `revenue`、`breakeven_roas` 兩個可選參數都有值時才啟用的第二途徑（票
+         03-performance-reaches-the-user-and-the-next-cycle）：轉換數不為 0，但實際投報率
+         （revenue / spend）低到 `reading.PAUSE_MARGIN` 這條停損線以下——花錢有轉換卻虧到
+         該收手，跟零轉換一樣是「已經知道沒打中」，不是「還不知道」。
+         門檻用「打平線 × PAUSE_MARGIN」而不是裸的打平線，因為檔期層 `reading.judge()` 本來
+         就是這樣分的：低於打平線但還在 PAUSE_MARGIN 以上叫 learning「在打平線附近，再跑一陣
+         子看看」，低於才叫 pause_candidate。沿用同一條線＝沿用既有那套「差」的定義，不另立
+         第二套（D3）；缺任一個參數就維持今天只看零轉換的行為，呼叫端不必全部改寫。
 
     兩者互相獨立，可能同時出現、也可能都不出現。
     """
     flags = {}
     if conversions < target_cpa.WEEKLY_CONVERSIONS_PER_GROUP:
         flags["evidence_sufficient"] = False
-    if (conversions == 0 and allocated_budget > 0
-            and spend >= allocated_budget * ads_budget.PAUSE_THRESHOLD_RATIO):
+    spend_reached_half = (allocated_budget > 0
+                          and spend >= allocated_budget * ads_budget.PAUSE_THRESHOLD_RATIO)
+    if conversions == 0 and spend_reached_half:
+        flags["underperforming"] = True
+    elif (spend_reached_half and revenue is not None and breakeven_roas is not None
+          and spend > 0 and (revenue / spend) < breakeven_roas * ads_reading.PAUSE_MARGIN):
         flags["underperforming"] = True
     return flags
 
@@ -136,6 +150,13 @@ def historical_cell_performance(conn, brand_id: str, exclude_cycle_id: Optional[
 
     成效資料走既有的 performance_snapshot → external_ad_mapping → publishing_package 鏈
     （比照 `reading._asset_totals()` 的既有 JOIN 寫法，只是改成依 `experiment_cell_id` 分組）。
+
+    每列另外附上 `revenue`、`breakeven_roas`（票 03-performance-reaches-the-user-and-
+    the-next-cycle，契約 B）：`breakeven_roas` 依切角所屬產品經濟資料算出；切角自己沒有
+    product_id（真實資料常見，見票內 THE BUG）時退用該切角所屬檔期的打平線（該檔期各
+    產品打平線的平均，同 `reading.py` 檔期層算法），兩邊都查不到就是 None，不猜。連同
+    revenue 一起餵給 `cell_trust_flags()`，讓「轉換數不為 0 但沒打平」也能標成
+    underperforming，不再只看零轉換。
     """
     cycles = ads_repo.list_cycles(conn, brand_id, include_archived=True)
     budget_by_cycle = {c["id"]: (c["budget"] or 0) for c in cycles}
@@ -155,22 +176,46 @@ def historical_cell_performance(conn, brand_id: str, exclude_cycle_id: Optional[
 
     perf_rows = conn.execute(
         "SELECT pkg.experiment_cell_id cell_id, COALESCE(SUM(ps.spend),0) spend,"
-        " COALESCE(SUM(ps.conversions),0) conversions"
+        " COALESCE(SUM(ps.conversions),0) conversions, COALESCE(SUM(ps.revenue),0) revenue"
         " FROM performance_snapshot ps"
         " JOIN external_ad_mapping xam ON xam.id = ps.external_ad_mapping_id"
         " JOIN publishing_package pkg ON pkg.id = xam.publishing_package_id"
         " WHERE ps.brand_id = ? AND ps.quarantined = 0 AND pkg.experiment_cell_id IS NOT NULL"
         " GROUP BY pkg.experiment_cell_id", (brand_id,),
     ).fetchall()
-    perf_by_cell = {r["cell_id"]: {"spend": r["spend"], "conversions": r["conversions"]}
+    perf_by_cell = {r["cell_id"]: {"spend": r["spend"], "conversions": r["conversions"],
+                                   "revenue": r["revenue"]}
                     for r in perf_rows}
+
+    # 每個切角的產品打平線只查一次、快取起來（票 03-performance-reaches-the-user-and-
+    # the-next-cycle）：切角數可能遠大於相異產品數，不必每格各查一次 product_economics。
+    # product_id 是 NULL 的切角另外按 campaign_cycle_id 快取檔期層打平線（同一份定義見
+    # reading.py 算檔期層打平線那段：該檔期各產品打平線的平均，四捨五入到小數點兩位）。
+    from app.brand_intelligence import repository as bi
+    breakeven_by_product: dict = {}
+    breakeven_by_cycle: dict = {}
+    for row in cell_rows:
+        pid = row["product_id"]
+        if pid is not None:
+            if pid not in breakeven_by_product:
+                breakeven_by_product[pid] = ads_reading.breakeven_roas(
+                    bi.get_product_economics(conn, brand_id, pid))
+        elif row["campaign_cycle_id"] not in breakeven_by_cycle:
+            knowns = [b for b in (
+                ads_reading.breakeven_roas(bi.get_product_economics(conn, brand_id, p["product_id"]))
+                for p in ads_repo.list_cycle_products(conn, brand_id, row["campaign_cycle_id"])) if b]
+            breakeven_by_cycle[row["campaign_cycle_id"]] = (
+                round(sum(knowns) / len(knowns), 2) if knowns else None)
 
     results = []
     for row in cell_rows:
-        perf = perf_by_cell.get(row["id"], {"spend": 0.0, "conversions": 0.0})
+        perf = perf_by_cell.get(row["id"], {"spend": 0.0, "conversions": 0.0, "revenue": 0.0})
         cycle_budget = budget_by_cycle.get(row["campaign_cycle_id"], 0)
         cell_count = cells_per_cycle.get(row["campaign_cycle_id"], 1)
         allocated_budget = round(cycle_budget / cell_count, 2) if cell_count else 0.0
+        pid = row["product_id"]
+        breakeven = (breakeven_by_product.get(pid) if pid is not None
+                    else breakeven_by_cycle.get(row["campaign_cycle_id"]))
         results.append({
             "experiment_cell_id": row["id"],
             "campaign_cycle_id": row["campaign_cycle_id"],
@@ -178,8 +223,11 @@ def historical_cell_performance(conn, brand_id: str, exclude_cycle_id: Optional[
             "creative_angle": row["creative_angle"],
             "spend": perf["spend"],
             "conversions": perf["conversions"],
+            "revenue": perf["revenue"],
             "allocated_budget": allocated_budget,
-            **cell_trust_flags(perf["conversions"], perf["spend"], allocated_budget),
+            "breakeven_roas": breakeven,
+            **cell_trust_flags(perf["conversions"], perf["spend"], allocated_budget,
+                               revenue=perf["revenue"], breakeven_roas=breakeven),
         })
     return results
 

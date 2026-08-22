@@ -28,6 +28,7 @@ from typing import Optional
 from app.ads import budget as budget_calc
 from app.ads import inflation as ads_inflation
 from app.ads import performance as ads_performance
+from app.ads import reading_assets
 from app.ads import reconcile as ads_reconcile
 from app.ads import repository as ads_repo
 from app.ads import settlement as ads_settlement
@@ -390,37 +391,6 @@ def _product_totals(conn, brand_id: str, cycle_id: str) -> dict:
     return result
 
 
-def _asset_totals(conn, brand_id: str, cycle_id: str) -> list:
-    """依素材（廣告名稱對回的交接包）分開的成效加總（修憲落地 G2，決策 0035 第二節第 4 點）。
-
-    只有 CSV 匯入時廣告名稱對得回已授權素材的資料列才會出現在這裡（見
-    app/ads/performance.py match_asset_mapping）；對不上的資料只算進檔期層，
-    這裡不猜、不硬湊一列（鐵則 16）。純顯示用途，不影響 judge() 的門檻判定。
-
-    ponytail：只用既有的 publishing_package_id／external_ad_mapping_id 兩個欄位做 JOIN，
-    不新增 schema。Meta API 同步（app/ads/sync.py）目前用 meta_campaign_id 而非 meta_ad_id
-    找 mapping，同一活動底下多支廣告時可能對到同一筆 mapping——這是既有的、與本票無關的
-    另一個缺口，這裡的清單因此只保證 CSV 這條匯入路徑的歸屬是準的。
-    """
-    rows = conn.execute(
-        "SELECT pkg.id pkg_id, pkg.ad_name asset_name,"
-        " COALESCE(SUM(ps.impressions),0) impressions, COALESCE(SUM(ps.clicks),0) clicks,"
-        " COALESCE(SUM(ps.spend),0) spend, COALESCE(SUM(ps.conversions),0) conversions,"
-        " COALESCE(SUM(ps.revenue),0) revenue"
-        " FROM performance_snapshot ps"
-        " JOIN external_ad_mapping xam ON xam.id = ps.external_ad_mapping_id"
-        " JOIN publishing_package pkg ON pkg.id = xam.publishing_package_id"
-        " WHERE ps.brand_id = ? AND ps.campaign_cycle_id = ? AND ps.quarantined = 0"
-        " GROUP BY pkg.id ORDER BY revenue DESC", (brand_id, cycle_id),
-    ).fetchall()
-    result = []
-    for row in rows:
-        data = dict(row)
-        data["kpis"] = ads_performance.compute_kpis(data)
-        result.append(data)
-    return result
-
-
 def _repurchase_line(conn, brand_id: str, cycle_totals: dict, first_order_breakeven: Optional[float],
                      *, plan_budget: float, baseline: dict, first_status: str) -> dict:
     """回購實質打平線（票 #39）：算出來但不取代首單線——首單線（cycle_verdict 本身）永遠是
@@ -552,8 +522,15 @@ def run(conn, brand_id: str, cycle_id: str, actor: str,
                           breakeven=cycle_breakeven, baseline=baseline, conn=conn)
     cycle_verdict["product_id"] = None
     cycle_verdict["product_name"] = None
+
+    # 素材層成效歸因（修憲落地 G2，決策 0035 第二節第 4 點）：純顯示用途，不影響上面的判定。
+    # 提前到這裡算，好讓下面「產品層拆不出來」的白話理由能改口點名拖累最兇的那支廣告
+    # （D4 觸點 2，票 03-performance-reaches-the-user），不再是唯一結論時才裝沒看見。
+    asset_breakdown = reading_assets.asset_totals(conn, brand_id, cycle_id)
+    cycle_verdict["asset_breakdown"] = asset_breakdown
     if allocations and not per_product:
-        cycle_verdict["reasons"].append(
+        worst_asset_line = reading_assets.worst_asset_reason(asset_breakdown)
+        cycle_verdict["reasons"].append(worst_asset_line if worst_asset_line else
             "這期的成效數字沒有分到各個產品，所以只能給整體判讀，看不出是哪個產品拉的")
     # 期末暫定判讀：只有檔期層有「未結案佔比」這件事（決策 0025 判讀節奏第 5 點）；
     # is_tentative＝這一版還不是最終結算（final_settlement 才是最終版）。
@@ -585,9 +562,6 @@ def run(conn, brand_id: str, cycle_id: str, actor: str,
     # 純顯示用途，不影響上面的判定；資料不足也照樣給結論，只是標成「Meta 視角判讀」。
     cycle_verdict["data_grade"] = ads_inflation.data_grade(conn, brand_id)
     cycle_verdict["ga4_leak"] = ads_inflation.ga4_leak_estimate(conn, brand_id, cycle)
-
-    # 素材層成效歸因（修憲落地 G2，決策 0035 第二節第 4 點）：純顯示用途，不影響上面的判定。
-    cycle_verdict["asset_breakdown"] = _asset_totals(conn, brand_id, cycle_id)
 
     # 假設結案（票 #53）：還沒結案的策略假設，AI 依這期各產品／整體的判讀結論預選一個答案。
     # 沒有待結案假設就不必呼叫 LLM（懶人優先，決策 0025 第五節）。
@@ -788,17 +762,35 @@ def _explain(conn, brand_id: str, cycle: dict, readings: list, confidence: dict,
         lines.append(f"- {who}：{STATUS_LABELS[verdict['status']]}"
                      f"（依據：{'；'.join(verdict['reasons'])}）")
 
-    user_text = "\n\n".join([
+    # 素材層成效（D4 觸點 1，票 03-performance-reaches-the-user）：只有檔期層那筆
+    # （product_id None）帶 asset_breakdown，每支廣告一行 ROAS／CPA，不丟原始 JSON 給模型。
+    cycle_verdict = next((v for v in readings if v.get("product_id") is None), None)
+    asset_lines = []
+    for row in (cycle_verdict or {}).get("asset_breakdown") or []:
+        roas, cpa = row["kpis"].get("roas"), row["kpis"].get("cpa")
+        if roas is None:
+            asset_lines.append(f"- {row['asset_name']}：投報率算不出來（沒收到營收資料）")
+        else:
+            cpa_part = f"，每筆成交成本 {cpa:,.0f} 元" if cpa is not None else ""
+            asset_lines.append(f"- {row['asset_name']}：投報率 {roas:.2f} 倍{cpa_part}")
+
+    sections = [
         f"檔期：{cycle['start_date']} 到 {cycle['end_date']}，"
         f"計畫預算 {cycle['budget']:,.0f}",
         "系統算出來的判讀結果（這些結論已經定了，你不要改也不要重算）：\n" + "\n".join(lines),
+    ]
+    if asset_lines:
+        sections.append("這期各支廣告的投報率（系統已經算好，只是給你參考，不要重算）：\n"
+                        + "\n".join(asset_lines))
+    sections += [
         f"本期資料可信度：{confidence['label']}——{confidence['note']}",
         ("這個品牌過去的水準：" + "、".join(f"{k} {v}" for k, v in baseline.items())
          if baseline else "這個品牌還沒有過去的數字可以比較。"),
         "請寫一段 3 到 5 句的白話說明：這期發生了什麼、為什麼是這個結論、接下來該注意什麼。"
         "不要加上系統沒算出來的結論，不要編造數字。資料不足時就直說看不出來。",
         '輸出格式：只回傳 {"text": "..."}',
-    ])
+    ]
+    user_text = "\n\n".join(sections)
 
     task = gateway.run_task(
         conn, PROVIDER, brand_id=brand_id, task_type="performance_reading",

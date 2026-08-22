@@ -22,12 +22,12 @@ from app.ads import fingerprint as fp  # noqa: E402
 from app.ads import nextcycle  # noqa: E402
 from app.ads import performance as perf  # noqa: E402
 from app.ads import reading  # noqa: E402
+from app.ads import theme_feedback  # noqa: E402
 from app.ads import theme_repository as theme_repo  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
 from app.core.db import new_id, now_iso  # noqa: E402
 from app.llm.providers import FakeProvider, ProviderResponse, Usage  # noqa: E402
 from app.shared.web import OPERATOR  # noqa: E402
-
 
 
 def _cleanup():
@@ -218,9 +218,8 @@ class BudgetProposalTest(_BaseNextCycleTest):
 
 
 class SampleTrustFlagsTest(unittest.TestCase):
-    """票 03-sample-trust-threshold（ADR 0011 第一至三節）：純函式 cell_trust_flags()，
-    三種驗收情境＋旗標互相獨立的證明。條件不成立的旗標鍵不出現（不是回傳 False）。
-    """
+    """票 03-sample-trust-threshold（ADR 0011 第一至三節）：純函式 cell_trust_flags()，三種
+    驗收情境＋旗標互相獨立的證明。條件不成立的旗標鍵不出現（不是回傳 False）。"""
 
     def test_low_conversions_flag_insufficient_evidence(self):
         """轉換數 20 次（< 50 可信門檻）：應標證據不足，該切角本身不受影響（純函式只回旗標）。"""
@@ -238,8 +237,7 @@ class SampleTrustFlagsTest(unittest.TestCase):
         self.assertEqual(flags, {})
 
     def test_flags_are_independent_and_can_coexist(self):
-        """兩個旗標互相獨立：0 轉換同時符合「未達可信門檻」與「花費過半零轉換」，
-        兩個旗標該同時出現。"""
+        """兩個旗標互相獨立：0 轉換同時符合「未達可信門檻」與「花費過半零轉換」，該同時出現。"""
         flags = nextcycle.cell_trust_flags(conversions=0, spend=600, allocated_budget=1000)
         self.assertEqual(flags, {"evidence_sufficient": False, "underperforming": True})
 
@@ -249,22 +247,42 @@ class SampleTrustFlagsTest(unittest.TestCase):
         self.assertNotIn("underperforming", flags)
         self.assertFalse(flags["evidence_sufficient"])
 
+    def test_economic_underperformance_signal(self):
+        """票 03 驗收 1、2：虧到停損線以下（在地手工品質_03，0.34／打平 1.75）算
+        underperforming；只略低於打平線的（快速到貨便利_04，1.68）不算——那是 judge() 既有的 learning
+        「在打平線附近」那格，不是失敗（D3）。新參數純附加：零轉換不被蓋掉、只傳三個位置參數行為不變。"""
+        ctf = nextcycle.cell_trust_flags
+        self.assertTrue(ctf(2, 2500, 5000, revenue=840, breakeven_roas=1.75)["underperforming"])
+        self.assertNotIn("underperforming", ctf(10, 2500, 5000, revenue=4200, breakeven_roas=1.75))
+        self.assertEqual(ctf(0, 600, 1000), ctf(0, 600, 1000, revenue=2000, breakeven_roas=1.75))
+        self.assertEqual(ctf(20, 100, 1000), {"evidence_sufficient": False})
+
+    def test_theme_quota_reflects_economic_flag_and_degrades_safely(self):
+        """theme_feedback.theme_quota()：沒打平的角度扣配額；沒有 revenue 資料的舊列不受影響；
+        只要有一列缺打平線就整組不做經濟判斷（不拿 A 列的線審 B 列的數字）。"""
+        cell, tq = {"creative_angle": "pain"}, theme_feedback.theme_quota
+        failing = [{"creative_angle": "pain", "conversions": 2, "spend": 2500, "allocated_budget": 5000, "revenue": 840, "breakeven_roas": 1.75}]
+        legacy = [{"creative_angle": "pain", "conversions": 80, "spend": 800, "allocated_budget": 1000}]
+        mixed = [{"creative_angle": "pain", "conversions": 5, "spend": 1000, "allocated_budget": 2000, "revenue": 4000, "breakeven_roas": 3.0},
+                 {"creative_angle": "pain", "conversions": 1, "spend": 1000, "allocated_budget": 2000, "revenue": 100}]
+        self.assertEqual(tq(cell, failing), theme_feedback.BASE_THEME_QUOTA - theme_feedback.UNDERPERFORMING_THEME_PENALTY)
+        self.assertEqual(tq(cell, legacy), theme_feedback.BASE_THEME_QUOTA + theme_feedback.CONVERTING_THEME_BONUS)
+        self.assertEqual(tq(cell, mixed), theme_feedback.BASE_THEME_QUOTA)  # 中立，不是扣分
+
 
 class HistoricalCellPerformanceTest(_BaseNextCycleTest):
     """historical_cell_performance() 走 performance_snapshot → external_ad_mapping →
-    publishing_package → experiment_cell 既有鏈（比照 test_ads_reading.py
-    AssetBreakdownTest 的既有寫法），證明真實 DB JOIN／均分預算也能算出旗標，
-    不只是純函式 cell_trust_flags() 本身。
-    """
+    publishing_package → experiment_cell 既有鏈（比照 test_ads_reading.py AssetBreakdownTest
+    的既有寫法），證明真實 DB JOIN／均分預算也能算出旗標，不只是純函式本身。"""
 
-    def _cell_with_ad(self, ad_name, creative_angle="pain"):
+    def _cell_with_ad(self, ad_name, creative_angle="pain", product_id=None):
         cell_id = new_id("exc")
         pkg_id = new_id("pkg")
         ts = now_iso()
         main.conn.execute(
             "INSERT INTO experiment_cell (id, campaign_cycle_id, brand_id, creative_angle,"
-            " created_at) VALUES (?, ?, ?, ?, ?)",
-            (cell_id, self.cycle_id, self.bid, creative_angle, ts))
+            " product_id, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (cell_id, self.cycle_id, self.bid, creative_angle, product_id, ts))
         main.conn.execute(
             "INSERT INTO publishing_package (id, brand_id, campaign_cycle_id, experiment_cell_id,"
             " campaign_name, adset_name, ad_name, destination_url, utm_json, status, created_at)"
@@ -281,26 +299,29 @@ class HistoricalCellPerformanceTest(_BaseNextCycleTest):
         return cell_id
 
     def test_even_split_budget_and_join_chain_flags_underperforming(self):
-        """本期預算 10000、兩個切角均分＝每格 5000，50% 門檻＝2500。角 A 花 3000 零轉換
-        該被標 underperforming；角 B 完全沒有成效資料，均分預算算得出來但不該誤標表現差
-        （花費 0 未達門檻）。"""
-        cell_a = self._cell_with_ad("角度A_ad")
+        """每格均分預算 5000。角 A 有 product_id（打平線 1.67），角 B 的 product_id 是 NULL
+        （票內 THE BUG 的真實形狀）退用檔期層打平線（本檔期只有角 A 這個產品，退回值同角 A）。
+        兩者同樣的輸家數字都該標 underperforming（契約 B）。"""
+        cell_a = self._cell_with_ad("角度A_ad", product_id=self.product)
         cell_b = self._cell_with_ad("角度B_ad")
-        csv_text = ("行銷活動名稱,廣告名稱,花費金額,購買次數\n"
-                   "測試活動,角度A_ad,3000,0\n")
+        csv_text = ("行銷活動名稱,廣告名稱,花費金額,購買次數,購買轉換價值\n"
+                   "測試活動,角度A_ad,3000,1,300\n"
+                   "測試活動,角度B_ad,3000,1,300\n")
         result = perf.import_csv(main.conn, self.bid, self.cycle_id, csv_text, actor=ACTOR)
-        self.assertEqual(result.matched_assets, 1)
+        self.assertEqual(result.matched_assets, 2)
 
         cells = {c["experiment_cell_id"]: c
                 for c in nextcycle.historical_cell_performance(main.conn, self.bid)}
         self.assertEqual(cells[cell_a]["allocated_budget"], 5000.0)
         self.assertEqual(cells[cell_a]["spend"], 3000)
+        self.assertEqual(cells[cell_a]["revenue"], 300)
+        self.assertEqual(cells[cell_a]["breakeven_roas"], 1.67)
         self.assertTrue(cells[cell_a]["underperforming"])
         self.assertFalse(cells[cell_a]["evidence_sufficient"])
 
-        self.assertEqual(cells[cell_b]["allocated_budget"], 5000.0)
-        self.assertEqual(cells[cell_b]["spend"], 0)
-        self.assertNotIn("underperforming", cells[cell_b])
+        self.assertIsNone(cells[cell_b]["product_id"])
+        self.assertEqual(cells[cell_b]["breakeven_roas"], 1.67)
+        self.assertTrue(cells[cell_b]["underperforming"])
         self.assertFalse(cells[cell_b]["evidence_sufficient"])
 
     def test_exclude_cycle_id_omits_that_cycles_cells(self):

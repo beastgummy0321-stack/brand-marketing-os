@@ -4,7 +4,7 @@ import { triggerImmediateSync } from "@/lib/api";
 import { useFormSubmit } from "@/lib/useFormSubmit";
 import {
   fetchHealthLights, fetchPerformance, importPerformanceCsv, simulatePerformance, submitManualPerformance,
-  type Cycle, type CsvImportResult, type HealthLights, type PerformanceSummary, type ReadingResult,
+  type AssetBreakdownRow, type Cycle, type CsvImportResult, type HealthLights, type PerformanceSummary, type ReadingResult,
 } from "@/lib/warroomApi";
 import { HealthLightsRow } from "../shared/HealthLightsRow";
 import { Badge } from "../shared/Badge";
@@ -105,6 +105,7 @@ export function PerformanceStep({ brandId, cycle }: { brandId: string; cycle: Cy
                   {reading.reasons.map((r, i) => <li key={i}>{r}</li>)}
                 </ul>
               </details>
+              <AssetBreakdownTable rows={reading.asset_breakdown} />
             </div>
           )}
         </>
@@ -120,6 +121,50 @@ export function PerformanceStep({ brandId, cycle }: { brandId: string; cycle: Cy
         </button>
         {notice && <p className="mt-1 text-xs text-muted-foreground">{notice}</p>}
       </div>
+    </div>
+  );
+}
+
+/** 素材層成效表（契約 C／D4 第 3 點）：一支廣告一列，ROAS 最低的那支標成「拖累檔期」——
+ * 使用者不必自己比數字就知道是哪支在賠錢。陣列空的（沒有對得回素材的成效列）就整段不畫，
+ * 不畫空表格、不湊一列假資料（鐵則 16）。 */
+function AssetBreakdownTable({ rows }: { rows: AssetBreakdownRow[] | undefined }) {
+  if (!rows || rows.length === 0) return null;
+  const roasValues = rows.map((r) => r.kpis.roas).filter((v): v is number => v !== null);
+  const worstRoas = roasValues.length > 0 ? Math.min(...roasValues) : null;
+
+  return (
+    <div className="mt-3 overflow-x-auto border-t border-border pt-3">
+      <table className="w-full min-w-[480px] text-xs">
+        <thead>
+          <tr className="text-left text-muted-foreground">
+            <th className="py-1 pr-2 font-medium">廣告</th>
+            <th className="py-1 pr-2 font-medium">ROAS</th>
+            <th className="py-1 pr-2 font-medium">CTR</th>
+            <th className="py-1 pr-2 font-medium">CPA</th>
+            <th className="py-1 pr-2 font-medium">花費</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => {
+            const isWorst = worstRoas !== null && row.kpis.roas === worstRoas;
+            return (
+              <tr key={row.pkg_id} className="border-t border-border/60">
+                <td className="py-1.5 pr-2 text-foreground">
+                  <span className="flex flex-wrap items-center gap-1.5">
+                    {row.asset_name}
+                    {isWorst && <Badge tone="danger">拖累檔期</Badge>}
+                  </span>
+                </td>
+                <td className="py-1.5 pr-2 text-foreground">{row.kpis.roas !== null ? formatRoas(row.kpis.roas) : "資料不足"}</td>
+                <td className="py-1.5 pr-2 text-foreground">{row.kpis.ctr !== null ? formatPercent(row.kpis.ctr) : "資料不足"}</td>
+                <td className="py-1.5 pr-2 text-foreground">{row.kpis.cpa !== null ? formatCurrency(row.kpis.cpa) : "資料不足"}</td>
+                <td className="py-1.5 pr-2 text-foreground">{formatCurrency(row.spend)}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
     </div>
   );
 }

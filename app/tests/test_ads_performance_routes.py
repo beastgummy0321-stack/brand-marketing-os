@@ -20,11 +20,21 @@ app/tests/conftest.py's `isolate_module_database` fixture (keys off `import app.
 main` below), so this file does not need its own tempdir/atexit cleanup boilerplate.
 """
 
+import json
 import unittest
 
 import app.main as main
 from app.ads import performance as perf
-from app.tests.test_ads_performance import _BaseImportTest
+from app.ads import reading
+from app.core.db import new_id, now_iso
+from app.llm.providers import FakeProvider, ProviderResponse, Usage
+from app.tests.test_ads_performance import ACTOR, _BaseImportTest
+
+
+def _fake(text):
+    return ProviderResponse(output_text=text, structured=None,
+                            usage=Usage(input_tokens=300, output_tokens=150),
+                            stop_reason="end_turn")
 
 
 class PerformanceRouteTest(_BaseImportTest):
@@ -82,6 +92,66 @@ class PerformanceRouteTest(_BaseImportTest):
             "SELECT metric, value FROM derived_metric WHERE campaign_cycle_id = ?",
             (self.cycle_id,)).fetchall()
         self.assertTrue(rows)  # save_derived_metrics 真的寫進 derived_metric 了
+
+
+class PerformanceGetAssetBreakdownTest(_BaseImportTest):
+    """契約 C（票 03-performance-reaches-the-user）：GET /performance 的 reading 物件要帶
+    asset_breakdown，沒有素材層拆分時給空陣列，不能是 null。"""
+
+    def setUp(self):
+        super().setUp()
+        self._orig_provider = reading.PROVIDER
+        reading.PROVIDER = FakeProvider(response=_fake(
+            json.dumps({"text": "說明文字"}, ensure_ascii=False)))
+
+    def tearDown(self):
+        reading.PROVIDER = self._orig_provider
+
+    def _package(self, ad_name: str) -> str:
+        pkg_id = new_id("pkg")
+        ts = now_iso()
+        main.conn.execute(
+            "INSERT INTO publishing_package (id, brand_id, campaign_cycle_id, campaign_name,"
+            " adset_name, ad_name, destination_url, utm_json, status, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, '{}', 'ready', ?)",
+            (pkg_id, self.bid, self.cycle_id, "測試活動", "測試組合", ad_name,
+             "https://example.test", ts))
+        mapping_id = new_id("xam")
+        main.conn.execute(
+            "INSERT INTO external_ad_mapping (id, brand_id, publishing_package_id,"
+            " campaign_cycle_id, platform, claim_status, confirmed_by, confirmed_at,"
+            " created_at) VALUES (?, ?, ?, ?, 'meta', 'confirmed', ?, ?, ?)",
+            (mapping_id, self.bid, pkg_id, self.cycle_id, ACTOR, ts, ts))
+        main.conn.commit()
+        return pkg_id
+
+    def test_reading_carries_asset_breakdown_with_documented_shape(self):
+        self._package("在地手工品質_03")
+        csv_text = ("行銷活動名稱,廣告名稱,曝光次數,連結點擊次數,花費金額,購買次數,購買轉換價值\n"
+                   "測試活動,在地手工品質_03,10000,48,2500,2,840\n")
+        perf.import_csv(main.conn, self.bid, self.cycle_id, csv_text, actor=ACTOR)
+        ok, err = reading.run(main.conn, self.bid, self.cycle_id, ACTOR)
+        self.assertTrue(ok, err)
+
+        resp = self.client.get(f"/api/campaigns/{self.bid}/{self.cycle_id}/performance")
+        self.assertEqual(resp.status_code, 200)
+        breakdown = resp.json()["data"]["reading"]["asset_breakdown"]
+        self.assertEqual(len(breakdown), 1)
+        row = breakdown[0]
+        self.assertEqual(row["asset_name"], "在地手工品質_03")
+        self.assertEqual(row["impressions"], 10000)
+        self.assertEqual(row["revenue"], 840)
+        self.assertEqual(row["kpis"]["roas"], round(840 / 2500, 2))
+
+    def test_reading_asset_breakdown_is_empty_list_not_null_without_a_split(self):
+        perf.import_manual(main.conn, self.bid, self.cycle_id,
+                           {"spend": 10000, "impressions": 20000, "clicks": 400,
+                            "conversions": 10, "revenue": 40000}, actor=ACTOR)
+        ok, err = reading.run(main.conn, self.bid, self.cycle_id, ACTOR)
+        self.assertTrue(ok, err)
+
+        resp = self.client.get(f"/api/campaigns/{self.bid}/{self.cycle_id}/performance")
+        self.assertEqual(resp.json()["data"]["reading"]["asset_breakdown"], [])
 
 
 if __name__ == "__main__":

@@ -75,6 +75,7 @@ async def performance_get(brand_id: str, cycle_id: str):
             "statistical_level_label": result.get("statistical_level_label"),
             "llm_explanation": cycle_reading.get("llm_explanation") or "",
             "reasons": result.get("reasons") or [],
+            "asset_breakdown": result.get("asset_breakdown") or [],
         }
         confidence_label = f"{result.get('statistical_level_label', '')}尚未完成對帳三題自答，可信度中等".strip()
 

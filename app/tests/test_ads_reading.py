@@ -20,6 +20,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 import app.main as main  # noqa: E402
 from app.ads import performance as perf  # noqa: E402
 from app.ads import reading  # noqa: E402
+from app.ads import reading_assets  # noqa: E402
 from app.ads import repository as ads_repo  # noqa: E402
 from app.ads import settlement as ads_settlement  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
@@ -352,6 +353,63 @@ class AssetBreakdownTest(unittest.TestCase):
         self.assertTrue(ok, err)
         result = reading.load(main.conn, self.bid, self.cycle_id)["cycle"]["result"]
         self.assertEqual(result["asset_breakdown"], [])
+
+    def test_worst_ad_named_when_only_asset_split_exists(self):
+        """產品層拆不出來（成效資料沒帶產品）、但素材層拆得出來時，白話理由要點名拖累最兇
+        的那支廣告，不能再說「看不出是哪個」（D4 觸點 2，票 03-performance-reaches-the-user）。
+        """
+        product = bi_repo.create_product(main.conn, self.bid, name="虛構濾掛組", actor=ACTOR)["id"]
+        resp = self.client.post(f"/api/campaigns/{self.bid}",
+                                json={"product_ids": [product], "budget": 10000,
+                                      "objective": "sales"})
+        self.cycle_id = resp.json()["cycle_id"]
+        self._package("在地手工品質_03")
+        csv_text = ("行銷活動名稱,廣告名稱,曝光次數,連結點擊次數,花費金額,購買次數,購買轉換價值\n"
+                   "測試活動,在地手工品質_03,10000,48,2500,2,840\n")
+        perf.import_csv(main.conn, self.bid, self.cycle_id, csv_text, actor=ACTOR)
+        ok, err = reading.run(main.conn, self.bid, self.cycle_id, ACTOR)
+        self.assertTrue(ok, err)
+        result = reading.load(main.conn, self.bid, self.cycle_id)["cycle"]["result"]
+        self.assertFalse(any("沒有分到各個產品" in r for r in result["reasons"]))
+        self.assertTrue(any("在地手工品質_03" in r for r in result["reasons"]))
+
+    def test_looks_out_of_reach_line_survives_when_neither_split_exists(self):
+        """產品層有配置、素材層也對不上時，「看不出是哪個」這句還是要在——不能被新加的
+        判斷誤蓋掉（D4 觸點 2 只在「素材層拆得出來」時才改口）。"""
+        product = bi_repo.create_product(main.conn, self.bid, name="虛構濾掛組", actor=ACTOR)["id"]
+        resp = self.client.post(f"/api/campaigns/{self.bid}",
+                                json={"product_ids": [product], "budget": 10000,
+                                      "objective": "sales"})
+        self.cycle_id = resp.json()["cycle_id"]
+        perf.import_manual(main.conn, self.bid, self.cycle_id,
+                           {"spend": 10000, "impressions": 20000, "clicks": 400,
+                            "conversions": 10, "revenue": 40000}, actor=ACTOR)
+        ok, err = reading.run(main.conn, self.bid, self.cycle_id, ACTOR)
+        self.assertTrue(ok, err)
+        result = reading.load(main.conn, self.bid, self.cycle_id)["cycle"]["result"]
+        self.assertTrue(any("沒有分到各個產品" in r for r in result["reasons"]))
+
+
+class WorstAssetReasonTest(unittest.TestCase):
+    """票 03-performance-reaches-the-user：`reading_assets.worst_asset_reason()` 是純函式，
+    不碰資料庫，直接餵 asset_breakdown 形狀的 dict 測。"""
+
+    def test_names_the_lowest_roas_ad(self):
+        breakdown = [
+            {"asset_name": "快速到貨便利_04", "kpis": {"roas": 1.68, "cpa": 250}},
+            {"asset_name": "在地手工品質_03", "kpis": {"roas": 0.34, "cpa": 1250}},
+        ]
+        reason = reading_assets.worst_asset_reason(breakdown)
+        self.assertIn("在地手工品質_03", reason)
+        self.assertIn("0.34", reason)
+
+    def test_returns_none_when_no_asset_has_a_computable_roas(self):
+        """算不出投報率（沒收到營收資料）就老實回 None，不硬猜是哪一支（鐵則 16）。"""
+        breakdown = [{"asset_name": "沒收到營收的廣告", "kpis": {"roas": None, "cpa": None}}]
+        self.assertIsNone(reading_assets.worst_asset_reason(breakdown))
+
+    def test_returns_none_for_empty_breakdown(self):
+        self.assertIsNone(reading_assets.worst_asset_reason([]))
 
 
 class VerdictShiftTest(unittest.TestCase):

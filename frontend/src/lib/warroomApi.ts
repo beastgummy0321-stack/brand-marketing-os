@@ -216,6 +216,19 @@ export interface CsvImportResult {
   warnings: string[];
 }
 
+// app/ads/reading_assets.py asset_totals()（_asset_totals()，reading.py:393-417）——
+// 只有 CSV 匯入時廣告名稱對回已授權素材的資料列才會出現在這裡，對不上的不硬湊一列（鐵則 16）。
+export interface AssetBreakdownRow {
+  pkg_id: string;
+  asset_name: string;
+  impressions: number;
+  clicks: number;
+  spend: number;
+  conversions: number;
+  revenue: number;
+  kpis: { ctr: number | null; cpc: number | null; cpa: number | null; roas: number | null };
+}
+
 export interface ReadingResult {
   status: keyof typeof READING_STATUS_LABELS;
   status_label: string;
@@ -223,6 +236,8 @@ export interface ReadingResult {
   statistical_level_label: string;
   llm_explanation: string;
   reasons: string[];
+  // 契約 C：可能不存在（舊資料／後端尚未接線）或空陣列（沒有對得回素材的成效列）。
+  asset_breakdown?: AssetBreakdownRow[];
 }
 
 export interface NextCycleAdvice {
