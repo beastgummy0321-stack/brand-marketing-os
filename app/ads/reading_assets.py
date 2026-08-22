@@ -43,10 +43,16 @@ def asset_totals(conn, brand_id: str, cycle_id: str) -> list:
     return result
 
 
-def worst_asset_reason(asset_breakdown: list) -> Optional[str]:
+def worst_asset_reason(asset_breakdown: list, breakeven=None) -> Optional[str]:
     """素材層成效裡投報率最差的那支，用一句白話點名（D4 觸點 2，票
-    03-performance-reaches-the-user）。算不出投報率（沒花費或沒收到營收資料）的素材
-    不列入比較；一支能比的都沒有就老實回 None，不硬猜是哪一支拖累（鐵則 16）。
+    03-performance-reaches-the-user；拖累用詞的損益兩平前提見票
+    09-worst-ad-wording-must-respect-breakeven）。算不出投報率（沒花費或沒收到營收資料）
+    的素材不列入比較；一支能比的都沒有就老實回 None，不硬猜是哪一支拖累（鐵則 16）。
+
+    `breakeven` 是損益兩平投報率，由呼叫端（reading.py）算好傳進來，這裡不重算一次
+    （票 09 D1：兩個地方各算一次，數字會兜不起來）。依它分三種說法（票 09 D2）：
+    最差那支真的低於損益兩平才說拖累；沒有 breakeven 可比就只講「相對最低」的事實，
+    不做賺賠的斷言；全部都不低於損益兩平，代表最弱的那支其實也賺錢，只是相對弱。
     """
     candidates = [row for row in asset_breakdown if (row.get("kpis") or {}).get("roas") is not None]
     if not candidates:
@@ -54,7 +60,13 @@ def worst_asset_reason(asset_breakdown: list) -> Optional[str]:
     worst = min(candidates, key=lambda row: row["kpis"]["roas"])
     roas = worst["kpis"]["roas"]
     cpa = worst["kpis"].get("cpa")
-    sentence = f"這期拖累最兇的是「{worst['asset_name']}」這支廣告，投報率只有 {roas:.2f} 倍"
+    if breakeven is not None and roas >= breakeven:
+        sentence = (f"這期{len(candidates)}支都有賺，相對最弱的是「{worst['asset_name']}」，"
+                    f"投報率 {roas:.2f} 倍")
+    elif breakeven is None:
+        sentence = f"這期投報率相對最低的是「{worst['asset_name']}」這支廣告，投報率 {roas:.2f} 倍"
+    else:
+        sentence = f"這期拖累最兇的是「{worst['asset_name']}」這支廣告，投報率只有 {roas:.2f} 倍"
     if cpa is not None:
         sentence += f"，平均花 {cpa:,.0f} 元才換到一筆成交"
     return sentence

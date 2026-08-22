@@ -411,6 +411,24 @@ class WorstAssetReasonTest(unittest.TestCase):
     def test_returns_none_for_empty_breakdown(self):
         self.assertIsNone(reading_assets.worst_asset_reason([]))
 
+    def test_reason_respects_breakeven_across_three_wordings(self):
+        """票 09 checks 1-3：全部有賺不講拖累、低於損益兩平仍講拖累、None 只講相對事實。"""
+        all_profitable = [{"asset_name": n, "kpis": {"roas": r, "cpa": c}} for n, r, c in (
+            ("廣告A", 3.11, 100), ("廣告B", 2.56, 150), ("廣告C", 2.33, 200),
+            ("節慶限定感現在不買等到沒有_04_ad", 2.00, 346))]
+        profitable = reading_assets.worst_asset_reason(all_profitable, breakeven=1.75)
+        self.assertIn("節慶限定感現在不買等到沒有_04_ad", profitable)
+        self.assertNotIn("拖累", profitable)
+        self.assertIn("有賺", profitable)
+        losing = [{"asset_name": "快速到貨便利_04", "kpis": {"roas": 1.68, "cpa": 250}},
+                  {"asset_name": "在地手工品質_03", "kpis": {"roas": 0.34, "cpa": 1250}}]
+        drag = reading_assets.worst_asset_reason(losing, breakeven=1.75)
+        self.assertIn("拖累", drag)
+        self.assertIn("在地手工品質_03", drag)
+        unknown = reading_assets.worst_asset_reason(losing)
+        self.assertIn("在地手工品質_03", unknown)
+        self.assertNotIn("拖累", unknown)
+        self.assertNotIn("有賺", unknown)
 
 class VerdictShiftTest(unittest.TestCase):
     """翻盤分級規則寫死在程式（票 #38，決策 0025：「翻盤警示分級——微調不吵、判定翻盤才進佇列」）。"""

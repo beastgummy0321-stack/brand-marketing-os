@@ -535,7 +535,7 @@ def run(conn, brand_id: str, cycle_id: str, actor: str,
     asset_breakdown = reading_assets.asset_totals(conn, brand_id, cycle_id)
     cycle_verdict["asset_breakdown"] = asset_breakdown
     if allocations and not per_product:
-        worst_asset_line = reading_assets.worst_asset_reason(asset_breakdown)
+        worst_asset_line = reading_assets.worst_asset_reason(asset_breakdown, breakeven=cycle_breakeven)
         cycle_verdict["reasons"].append(worst_asset_line if worst_asset_line else
             "這期的成效數字沒有分到各個產品，所以只能給整體判讀，看不出是哪個產品拉的")
     # 期末暫定判讀：只有檔期層有「未結案佔比」這件事（決策 0025 判讀節奏第 5 點）；
