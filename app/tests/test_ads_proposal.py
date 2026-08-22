@@ -112,7 +112,11 @@ class ProposalTest(unittest.TestCase):
         self.assertEqual(body["blocks"]["tracking"], expected_tracking)
         self.assertIn("NT$", body["blocks"]["brakes"][0])
         self.assertIn("前 3 到 7 天", body["blocks"]["schedule"])
-        self.assertEqual(body["approval"], {"approved": False, "warning": None})
+        # 票 13：核可前多帶一個預估花費欄位，跟矩陣頁同一個 cost_ceiling 天花板，見
+        # test_proposal_approve_progress.py::EstimatedCostMatchesMatrixTest 逐項驗證來源。
+        self.assertEqual(body["approval"]["approved"], False)
+        self.assertEqual(body["approval"]["warning"], None)
+        self.assertIn("estimated_generation_cost", body["approval"])
 
     def test_missing_plan_is_assembling(self):
         cycle = self._cycle()

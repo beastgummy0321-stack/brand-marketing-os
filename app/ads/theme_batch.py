@@ -63,6 +63,37 @@ def _budget_blocked(conn: sqlite3.Connection, brand_id: str) -> bool:
     ) is not None
 
 
+def generation_count(conn: sqlite3.Connection, brand_id: str, cycle_id: str) -> int:
+    """這次核准實際會跑幾次生成——`preselected_cells()` 逐格用
+    `theme_feedback.theme_quota()` 算配額後加總，跟 `generate_preselected_batch()` 內層
+    迴圈數的是同一個數字。`estimated_batch_cost()`（花費預估，D3）與票 13
+    `proposal_approve_status` 的進度逾時天花板（見 routes_campaigns_open_api.py）共用
+    這同一個計數，不重寫第二套。
+
+    純讀取：不呼叫 AI、不檢查費用上限、不寫入任何東西。
+    """
+    historical_cells = nextcycle.historical_cell_performance(
+        conn, brand_id, exclude_cycle_id=cycle_id)
+    return sum(
+        theme_feedback.theme_quota(cell, historical_cells)
+        for cell in preselected_cells(conn, brand_id, cycle_id)
+    )
+
+
+def estimated_batch_cost(conn: sqlite3.Connection, brand_id: str, cycle_id: str) -> float:
+    """核可提案書前，先讓使用者看到這次核准會花多少錢（票 13-approve-must-not-block-or-
+    surprise，D3）。跟矩陣頁「生成一個主題」灰卡標的預估費用同一個天花板——
+    `pricing.cost_ceiling(model, theme_engine.THEME_MAX_TOKENS)`（見
+    routes_creative_theme.py:104，跟本檔 `_budget_blocked` 用的是同一行算式）——只是
+    乘上這次核准實際會跑的生成次數（`generation_count()`），不重寫第二套估算。
+
+    純讀取：不呼叫 AI、不檢查費用上限、不寫入任何東西。
+    """
+    model = providers.resolve_model(task_type="creative_theme", conn=conn)
+    per_generation_ceiling = pricing.cost_ceiling(model, theme_engine.THEME_MAX_TOKENS)
+    return per_generation_ceiling * generation_count(conn, brand_id, cycle_id)
+
+
 def generate_preselected_batch(conn: sqlite3.Connection, brand_id: str, cycle_id: str, *,
                                 actor: str) -> dict:
     """計畫核准觸發（票 09 驗收 1）：每個切角格以 THEME_COUNT_PRESELECT 為基準，依可信

@@ -244,20 +244,153 @@ async def ai_cost_meter(brand_id: str):
 async def proposal_get(brand_id: str, cycle_id: str):
     main_mod.require_brand(brand_id)
     _require_cycle(brand_id, cycle_id)
-    return proposal.proposal(main_mod.conn, brand_id, cycle_id)
+    conn = main_mod.conn
+    result = proposal.proposal(conn, brand_id, cycle_id)
+    # 票 13 驗收 4：核可前把預估花費一起帶出去，跟矩陣頁同一個 cost_ceiling 天花板
+    # （theme_batch.estimated_batch_cost，見該函式檔頭），不是另外編一個數字。同時帶出
+    # 背景生成的逾時天花板（見下面 _proposal_generate_ceiling_seconds），讓前端輪詢的
+    # 放棄時間點不會比伺服器自己判定逾時還早（付費手測抓到的第二層缺陷：前端原本寫死
+    # 180 秒，8 次生成時伺服器天花板是 720 秒，前端會先喊「花比較久」，其實生成明明
+    # 快成功了）。只有 ready 狀態才有 approval 這個鍵可以附加（assembling／failed 是
+    # 空 dict）。
+    #
+    # 獨立審查抓到的最後一個 blocker：畫面上「AI 正在生成素材」的等待文案原本寫死抄
+    # 單次生成慣例的「40 到 90 秒」，但這條路線一次跑 N 次序列生成（生成次數＝這裡
+    # 附帶的 generation_count），套在整批上會偏離實際等待時間好幾倍。前端要能講出跟
+    # 這批實際規模相稱的等待時間，就得知道這個數字——直接沿用同一個計數
+    # （theme_batch.generation_count，跟上面花費預估／逾時天花板同一份），不是另外編
+    # 第三個計數器，也不是讓前端自己猜。
+    if result["status"] == "ready":
+        result["approval"]["estimated_generation_cost"] = theme_batch.estimated_batch_cost(
+            conn, brand_id, cycle_id)
+        result["approval"]["estimated_generation_timeout_seconds"] = \
+            _proposal_generate_ceiling_seconds(conn, brand_id, cycle_id)
+        result["approval"]["generation_count"] = theme_batch.generation_count(
+            conn, brand_id, cycle_id)
+    return result
+
+
+# 核可提案書後、背景生成預選素材用的階段清單（票 13）——只有一個實際階段，跟
+# `_PLAN_STAGES` 同樣的「(key, 人話標籤)」形狀，供 `_progress_definition_rows` 共用。
+_PROPOSAL_GENERATE_STAGES = [("generate", "AI 正在生成核可後的預選素材")]
+
+
+def _proposal_generate_ceiling_seconds(conn, brand_id: str, cycle_id: str) -> int:
+    """票 13 付費手測缺陷 1 的算式：`_PROGRESS_TIMEOUT_SECONDS`（90 秒）是給「一次生成」
+    用的常數；`llm_task` 實測 task_type="creative_theme" 每次生成 23～31 秒，這次核准
+    若跑 8 次、序列執行，全批約 215 秒，套用單次生成的 90 秒常數一定提早逾時。天花板要
+    跟著這次核准實際會跑幾次生成走：`theme_batch.generation_count()`（跟 D3 花費預估
+    同一個計數）乘上「每次生成的允許時間」——直接沿用 `_PROGRESS_TIMEOUT_SECONDS`
+    當這個每次生成的允許值，比實測最慢 31 秒還有近 3 倍餘裕。`max(1, ...)` 保底：確保
+    這裡算出來的天花板不會比原本單次生成用的 90 秒常數還短。
+
+    `proposal_approve_status`（逾時判斷）與 `proposal_get`（告知前端該等多久，見上面）
+    共用這同一個算式，不各寫一份。
+    """
+    count = theme_batch.generation_count(conn, brand_id, cycle_id)
+    return max(1, count) * ads_routes._PROGRESS_TIMEOUT_SECONDS
 
 
 @router.post("/api/campaigns/brands/{brand_id}/cycles/{cycle_id}/proposal/approve")
 async def proposal_approve(request: Request, brand_id: str, cycle_id: str):
+    """核可（`proposal.approve()`）維持同步、語意不變（D2）；核可後的預選素材生成改走
+    跟 `plan_generate`／`plan_status`（本檔下方）同一套 `app.ads.routes_progress` 背景
+    引擎（D1）——這支請求核可一落地就回應，不再同步等
+    `theme_batch.generate_preselected_batch` 跑完八次生成（票 13 驗收 1）。生成本身若
+    失敗，由下面 `proposal_approve_status` 回報，不回頭撤銷已經生效的核可（D2，驗收 3）。
+    """
     main_mod.require_brand(brand_id)
     actor = main_mod.require_actor(request)
+    conn = main_mod.conn
     _require_cycle(brand_id, cycle_id)
     try:
-        proposal.approve(main_mod.conn, brand_id, cycle_id, actor)
+        proposal.approve(conn, brand_id, cycle_id, actor)
     except ValueError as exc:
         return _error(400, str(exc))
-    theme_batch.generate_preselected_batch(main_mod.conn, brand_id, cycle_id, actor=actor)
+    key = ads_routes._progress_key("proposal_generate", brand_id, cycle_id)
+
+    def work(on_stage):
+        return theme_batch.generate_preselected_batch(conn, brand_id, cycle_id, actor=actor)
+
+    ads_routes._progress_start(key, _PROPOSAL_GENERATE_STAGES, work)
     return JSONResponse(None, status_code=204)
+
+
+@router.get("/api/campaigns/brands/{brand_id}/cycles/{cycle_id}/proposal/approve-status")
+async def proposal_approve_status(brand_id: str, cycle_id: str):
+    """輪詢端點（票 13）：核可提案書後背景生成預選素材的進度。跟 `plan_status`
+    （本檔下方）同一套 `_progress_state` 底層，只是 key 換成 "proposal_generate"這個
+    kind——不會跟企劃出方案那份進度互相踩到。entry 不存在一律視為 done，沿用
+    `plan_status` 既有慣例：這裡本來就是「已經有結果可以看」的意思，不是失敗。
+
+    生成失敗只回報 failed，不影響核可本身：核可（`proposal.approve()`）已經在
+    `proposal_approve()` 同步完成並回應過，這支只回報「之後」的生成進度（D2）。
+
+    票 13 第三審查 blocker：`generate_preselected_batch()` 的回傳 dict
+    （`{"themes"/"budget_stopped"/"errors"}`）之前被整批丟掉——work() 沒丟例外就回
+    「done」，即使實際上一份都沒生出來（`_budget_blocked()` 在每次生成前都會查一次，
+    AI 花費一開始就頂到上限時可以整批 0 產出）。使用者核可前才被告知「這一步會用 AI
+    產素材，預估花費 US$X」，核可後卻無聲收場——正是這張票要殺的「花錢不告知」，只是
+    晚一步發生。跟 `plan_status`（上面）拆自己 payload（`ok, err = payload`）同一個道理，
+    這裡也要拆 `generate_preselected_batch()` 的 payload，分岔成三種語意，不是「沒丟
+    例外＝done」一種：
+      - 全部照計畫生成完成 → 沿用既有 "done"，不嚇使用者；
+      - `budget_stopped`＝AI 花費撞到設定頁上限、整批提早收手 → "partial"，講清楚是
+        撞到上限、做出了幾份、可以去設定頁調高上限（沿用
+        `coresettings.budget_exceeded_message` 的用詞習慣，不是另編一套說法）；
+      - `errors` 非空＝個別生成本身出狀況（AI 沒回、格式讀不成），跟花費無關 →
+        "partial"，講成功幾份、失敗幾份，不把底層例外原文丟給非技術使用者看。
+    這三種都不影響已經生效的核可（D2）——approve() 早在 `proposal_approve()` 就同步
+    完成了，這裡只是把「後續生成做了多少」講清楚。
+    """
+    main_mod.require_brand(brand_id)
+    conn = main_mod.conn
+    _require_cycle(brand_id, cycle_id)
+    key = ads_routes._progress_key("proposal_generate", brand_id, cycle_id)
+    entry = ads_routes._progress_state.get(key)
+    if entry is None:
+        return _envelope({"status": "done"})
+    if entry["status"] != "done":
+        # 票 13 付費手測抓到的缺陷：固定 90 秒的單次生成常數套在整批八次生成上，正常
+        # 成功的批次一定還沒跑完就先被判定逾時——不只回錯「failed」，逾時分支的
+        # `_progress_clear()` 還會把剛做好的 partial／budget_stopped 資訊一起清掉，下一
+        # 次輪詢反而看到「done」（使用者已經先被騙說失敗了）。天花板改成跟這次核准實際
+        # 會跑幾次生成走，算式見 `_proposal_generate_ceiling_seconds`（跟 `proposal_get`
+        # 告知前端的是同一個數字）。
+        ceiling_seconds = _proposal_generate_ceiling_seconds(conn, brand_id, cycle_id)
+        if time.time() - entry["started_at"] > ceiling_seconds:
+            ads_routes._progress_clear(key)
+            return _envelope({"status": "failed",
+                               "message": "AI 這次沒有在時間內回應。核可已經生效、資料都還在，"
+                                          "沒有掉。可以先去素材工作檯看看做出來的部分，"
+                                          "或稍後再試一次。"})
+        return _envelope({"status": "running"})
+    outcome_kind, payload = entry["result"]
+    ads_routes._progress_clear(key)
+    if outcome_kind == "error":
+        return _envelope({"status": "failed", "message": payload})
+    # outcome_kind == "ok"：work() 正常返回（沒有丟例外）。payload 是
+    # generate_preselected_batch() 的回傳 dict，見上方 docstring 的三種分岔。
+    themes_made = len(payload["themes"])
+    if payload["budget_stopped"]:
+        limit = core_settings.get_intake_budget_limit(conn)
+        made_clause = f"先做出 {themes_made} 份就停下，其餘還沒生成" if themes_made \
+            else "一份都還沒開始生成就先停下了"
+        return _envelope({
+            "status": "partial",
+            "message": (f"AI 花費已經到設定頁目前的 US$ {limit:.2f} 上限，這次核可的素材生成"
+                        f"{made_clause}。可以到「設定」頁調高上限，"
+                        f"剩下的之後在素材工作檯手動補生成。"),
+        })
+    if payload["errors"]:
+        failed_count = len(payload["errors"])
+        return _envelope({
+            "status": "partial",
+            "message": (f"這次核可的素材生成，{themes_made} 份做出來了，{failed_count} 份"
+                        f"沒有成功（AI 生成過程本身的問題，不是花費超支）。可以到素材工作檯"
+                        f"查看，沒成功的部分再手動生成一次。"),
+        })
+    return _envelope({"status": "done"})
 
 
 @router.post("/api/campaigns/brands/{brand_id}/cycles/{cycle_id}/proposal/return")
