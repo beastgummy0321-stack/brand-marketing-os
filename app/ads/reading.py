@@ -21,11 +21,8 @@ Meta 有學習期，前幾天的數字本來就不準；樣本太少時任何結
 """
 
 import json
-from datetime import date, timedelta
-from statistics import median
 from typing import Optional
 
-from app.ads import budget as budget_calc
 from app.ads import inflation as ads_inflation
 from app.ads import performance as ads_performance
 from app.ads import reading_assets
@@ -39,6 +36,28 @@ from app.core import prototype_phase
 from app.core import rule_cards
 from app.core.db import new_id, now_iso
 from app.llm import gateway, providers
+
+# 拆檔（票 10-split-reading-py，D2：這裡的名字全部維持可從 reading.py 匯入）——
+# reading_baselines：品牌基線；reading_hypotheses：假設結案週邊讀寫。
+from app.ads.reading_baselines import (  # noqa: F401  (re-export, D2)
+    SEASON_LABELS, SEASON_RATIO_LOW, SEASON_RATIO_PEAK, _SEASON_METRIC_PRIORITY,
+    _median_derived_metrics, _same_period_last_year_baseline, _season_label,
+    brand_baseline,
+)
+from app.ads.reading_hypotheses import (  # noqa: F401  (re-export, D2)
+    LEDGER_REVALIDATION_WINDOW_CYCLES, PENDING_HYPOTHESIS_STATUSES,
+    _conversions_for_hypothesis, _flag_unresolved_hypotheses,
+    _pending_hypothesis_reviews, _product_totals,
+    mark_stale_learnings_for_revalidation,
+)
+# reading_verdict：判讀結論周邊沒有共同主題的小函式（見該檔開頭說明為什麼 LLM 文案那個
+# 縫沒有動——PROVIDER 猴子補丁只認 reading 模組本身，搬了會讓十幾個檔案外測試悄悄失真）。
+from app.ads.reading_verdict import (  # noqa: F401  (re-export, D2)
+    _HYPOTHESIS_DIRECTIONAL_PRESELECT, _NEGATIVE_STATUSES, _POSITIVE_STATUSES,
+    _preselect_hypothesis_status, _unsettled_note, _verdict_group,
+    breakeven_roas, classify_verdict_shift, prediction_settlement,
+    repurchase_breakeven_roas,
+)
 
 # 第 7 刀（A1 三層地界新規則：app/ads 不得 import app.orders，見
 # test_architecture_boundaries.py）：orders_channel／orders_repo 不在這裡 import，
@@ -87,34 +106,20 @@ STATISTICAL_LEVEL_NOTES = {
                    "不用等到跟大品牌一樣的樣本數才敢動作。",
 }
 
-# 基線旺淡季標注（票 #39，決策 0025 第 4 點）：拿「去年同期」跟「全年平均」比值判斷，
-# 不是拍腦袋猜哪個月熱賣——比值落在中間段一律算「一般」，避免雜訊被誤標成季節效應。
-SEASON_RATIO_PEAK = 1.2
-SEASON_RATIO_LOW = 0.8
-SEASON_LABELS = {"peak": "旺季", "low": "淡季", "typical": "一般"}
-
-# 翻盤分級規則（票 #38，決策 0025 判讀節奏第 5 點：「翻盤警示分級——微調不吵、判定翻盤才
-# 進佇列」）：規則寫死在程式，不用 LLM 判斷、不用可調參數。判讀結論只分三群——正向可以
-# 加碼、負向該停損、中間還看不準——補件後只有「正向→負向」或「負向→正向」跨群才算真正
-# 翻盤；停在同一群內的變化（含還是看不準）都算微調，不驚動使用者。
-_POSITIVE_STATUSES = {"scale_candidate", "maintain"}
-_NEGATIVE_STATUSES = {"pause_candidate"}
-
 # 假設結案（票 #53，決策 0030 第三節第 8 點）：判讀頁列出這期的策略假設，三選一結案。
 # AI 的預選值由程式依判讀結論算（決策 0016 硬性原則 4：結論由程式定，LLM 只翻人話）。
 #
-# 修憲落地 G4（決策 0035 第三節第 6 點）：預選**不再**沿用上面 `_verdict_group()` 那套
-# 正負向分群——那組分群是給翻盤警示（票 #38）與回購雙線衝突（票 #39）用的，`maintain`
+# 修憲落地 G4（決策 0035 第三節第 6 點）：預選**不再**沿用 `reading_verdict._verdict_group()`
+# 那套正負向分群——那組分群是給翻盤警示（票 #38）與回購雙線衝突（票 #39）用的，`maintain`
 # （只是打平）在那裡算正面訊號是對的（見 test_ads_reading.py 的 VerdictShiftTest），
 # 但拿來預選假設「成立」就是橡皮圖章：使用者十之八九照 AI 預選送出（0030 否決程式自動判
 # 的理由「假設是自由文字、沒有可量測判準」對人類更成立），maintain 這種「沒虧沒賺」的
-# 結論不該被貼上「已驗證」標籤。改用專屬判準：只有 `scale_candidate`／`pause_candidate`
+# 結論不該被貼上「已驗證」標籤。改用專屬判準（見 reading_verdict._preselect_hypothesis_status
+# 與其專屬的 `_HYPOTHESIS_DIRECTIONAL_PRESELECT`）：只有 `scale_candidate`／`pause_candidate`
 # 這兩個真正算得出方向的結論才預選成立／不成立，其餘（含 maintain、learning、
 # insufficient_data、unclear_economics）一律預選「看不出來」，沒有明確規則訊號就不硬給答案
 # ——使用者仍可手動改選任何一個，系統不擋（決策 0013）。
 HYPOTHESIS_STATUS_LABELS = {"supported": "成立", "rejected": "不成立", "inconclusive": "看不出來"}
-_HYPOTHESIS_DIRECTIONAL_PRESELECT = {"scale_candidate": "supported", "pause_candidate": "rejected"}
-PENDING_HYPOTHESIS_STATUSES = ("proposed", "testing")
 HYPOTHESIS_TYPE_LABELS = {"audience": "受眾假設", "message": "訊息假設"}
 
 # ledger 自己的可信度分級（修憲落地 G4，決策 0035 第三節第 8 點）：樣本數＋是否被獨立
@@ -126,151 +131,6 @@ LEDGER_CONFIDENCE_LABELS = {
     "moderate": "穩定（樣本數已達門檻，這是第一次看到這個結論）",
     "reinforced": "已加強（不同期別各自驗證過同一個結論）",
 }
-
-
-def _verdict_group(status: Optional[str]) -> str:
-    """翻盤警示（`classify_verdict_shift`）與回購雙線衝突（`_repurchase_line`）專用的
-    正負向分群——`maintain` 算正面在這兩個用途下是對的。**假設結案預選不用這個**，
-    見下面 `_preselect_hypothesis_status` 與其專屬的 `_HYPOTHESIS_DIRECTIONAL_PRESELECT`
-    （修憲落地 G4）。"""
-    if status in _POSITIVE_STATUSES:
-        return "positive"
-    if status in _NEGATIVE_STATUSES:
-        return "negative"
-    return "uncertain"
-
-
-def _preselect_hypothesis_status(status: Optional[str]) -> str:
-    return _HYPOTHESIS_DIRECTIONAL_PRESELECT.get(status, "inconclusive")
-
-
-def classify_verdict_shift(before_status: Optional[str], after_status: Optional[str]) -> str:
-    """'unchanged'（結論沒變）／'adjustment'（微調，不吵）／'reversal'（翻盤，要進佇列）。"""
-    if before_status == after_status:
-        return "unchanged"
-    if {_verdict_group(before_status), _verdict_group(after_status)} == {"positive", "negative"}:
-        return "reversal"
-    return "adjustment"
-
-
-def _unsettled_note(ratio: Optional[float]) -> str:
-    """期末暫定判讀標注「未結案訂單佔 X%」（決策 0025 判讀節奏第 5 點）：貨到付款＋超商取貨
-    型態下，這些訂單期末後才會定案，暫定結論可能因此翻盤。"""
-    if ratio is None:
-        return "沒有比對得到訂單資料，看不出未結案訂單的比例。"
-    return f"這期還有 {ratio:.0%} 的訂單尚未結案（出貨或取貨還沒完成），這是暫定結論。"
-
-
-def breakeven_roas(economics: Optional[dict]) -> Optional[float]:
-    """打平所需的投報率＝售價 ÷ 單位毛利。算不出來回 None（不猜）。"""
-    if not economics:
-        return None
-    margin = budget_calc.gross_margin(economics)
-    price = economics.get("selling_price")
-    if not margin or not price:
-        return None
-    return round(float(price) / margin, 2)
-
-
-def repurchase_breakeven_roas(first_order_breakeven: Optional[float],
-                              multiplier: Optional[float]) -> Optional[float]:
-    """含 90 天回購的實質打平線（票 #39，決策 0025 第 7 點）：回購讓客戶在 90 天內帶來
-    `multiplier` 倍首單的淨營收，所以首單廣告投報率不用到打平線就已經回本——
-    實質打平線＝首單打平線 ÷ 回購倍數。任一邊算不出來就回 None，不猜。"""
-    if not first_order_breakeven or not multiplier:
-        return None
-    return round(first_order_breakeven / multiplier, 2)
-
-
-def _median_derived_metrics(conn, brand_id: str, *, extra_where: str = "",
-                            extra_params: Optional[list] = None) -> dict:
-    """derived_metric 依 metric 取中位數的共用聚合點——brand_baseline／
-    _same_period_last_year_baseline（進而 dual_baseline／校準區間 basis，見
-    app/ads/simulation.py _basis）都經這裡出，一次排除 `phase='simulation'` 的檔期
-    （票 #71：模擬檔期的假成效不能污染任何真基線判讀）。模擬頁自己的顯示走
-    `performance_snapshot`／`ads_performance.totals()`，不經這裡，不受影響。
-    品牌層（`campaign_cycle_id IS NULL`，見 save_brand_level_derived_metrics）沒有對應檔期，
-    一律保留。
-    """
-    sql = ("SELECT dm.metric, dm.value FROM derived_metric dm"
-           " LEFT JOIN campaign_cycle cc ON cc.id = dm.campaign_cycle_id"
-           " WHERE dm.brand_id = ? AND (cc.id IS NULL OR cc.phase != 'simulation')")
-    params = [brand_id]
-    if extra_where:
-        sql += " " + extra_where
-        params.extend(extra_params or [])
-    rows = conn.execute(sql, params).fetchall()
-    grouped: dict = {}
-    for row in rows:
-        grouped.setdefault(row["metric"], []).append(row["value"])
-    return {metric: round(median(values), 4) for metric, values in grouped.items() if values}
-
-
-def brand_baseline(conn, brand_id: str, exclude_cycle_id: Optional[str] = None) -> dict:
-    """這個品牌自己的基準：**過去**檔期各指標的中位數。沒有歷史就回空 dict。
-
-    決策 0022 第 21 點：有歷史就用歷史，沒有才退回產業基準——而且要標明用的是哪一種，
-    不能讓使用者以為通例值是他自己的數字。
-
-    `exclude_cycle_id` 一定要傳當期：拿這期的數字當「過去的水準」再回頭評價這期，
-    是循環論證——永遠會得到「跟過去差不多」，而且第一期的預告會謊稱有歷史可依據。
-    """
-    extra_where, extra_params = "", []
-    if exclude_cycle_id:
-        extra_where = "AND (dm.campaign_cycle_id IS NULL OR dm.campaign_cycle_id != ?)"
-        extra_params = [exclude_cycle_id]
-    return _median_derived_metrics(conn, brand_id, extra_where=extra_where,
-                                   extra_params=extra_params)
-
-
-# 基線比較優先看的指標順序：ROAS 最能反映廣告效率，其餘依序退而求其次
-# （不是每個品牌／每期都收得到完整 KPI，見 compute_kpis 分母為 0 回 None 的規則）。
-_SEASON_METRIC_PRIORITY = ("roas", "ctr", "cpa", "cpc")
-
-
-def _same_period_last_year_baseline(conn, brand_id: str, cycle: dict,
-                                    exclude_cycle_id: Optional[str] = None) -> dict:
-    """「去年同期」基線：這個品牌去年同一段日子（±15 天）跑過的檔期，KPI 中位數。
-    找不到對應檔期就回空 dict（不硬湊）。"""
-    start = date.fromisoformat(cycle["start_date"])
-    try:
-        target = start.replace(year=start.year - 1)
-    except ValueError:
-        target = start - timedelta(days=365)  # 2/29 沒有對應日期時退而求其次
-    window_start = (target - timedelta(days=15)).isoformat()
-    window_end = (target + timedelta(days=15)).isoformat()
-
-    sql = ("SELECT id FROM campaign_cycle WHERE brand_id = ? AND start_date >= ?"
-          " AND start_date <= ?")
-    params = [brand_id, window_start, window_end]
-    if exclude_cycle_id:
-        sql += " AND id != ?"
-        params.append(exclude_cycle_id)
-    cycle_ids = [row["id"] for row in conn.execute(sql, params).fetchall()]
-    if not cycle_ids:
-        return {}
-
-    placeholders = ",".join("?" for _ in cycle_ids)
-    return _median_derived_metrics(
-        conn, brand_id, extra_where=f"AND dm.campaign_cycle_id IN ({placeholders})",
-        extra_params=cycle_ids)
-
-
-def _season_label(same_period: dict, annual: dict) -> dict:
-    """比較「去年同期」與「全年平均」，標注旺淡季——旺季自然增長不該被誤判成廣告有效
-    （決策 0025 第 4 點）。任一邊缺資料就誠實說看不出來，不硬猜。"""
-    metric = next((m for m in _SEASON_METRIC_PRIORITY if same_period.get(m) and annual.get(m)),
-                  None)
-    if metric is None:
-        return {"level": None, "label": "資料不足，看不出旺淡季", "ratio": None, "metric": None}
-    ratio = round(same_period[metric] / annual[metric], 2)
-    if ratio >= SEASON_RATIO_PEAK:
-        level = "peak"
-    elif ratio <= SEASON_RATIO_LOW:
-        level = "low"
-    else:
-        level = "typical"
-    return {"level": level, "label": SEASON_LABELS[level], "ratio": ratio, "metric": metric}
 
 
 def dual_baseline(conn, brand_id: str, cycle: dict,
@@ -371,25 +231,6 @@ def judge(totals: dict, *, plan_budget: float, breakeven: Optional[float], brand
         status = "learning"
 
     return verdict(status)
-
-
-def _product_totals(conn, brand_id: str, cycle_id: str) -> dict:
-    """各產品的成效加總。成效資料沒帶產品時回空 dict——不假裝分得出來。"""
-    rows = conn.execute(
-        "SELECT product_id, COALESCE(SUM(impressions),0) impressions,"
-        " COALESCE(SUM(clicks),0) clicks, COALESCE(SUM(spend),0) spend,"
-        " COALESCE(SUM(conversions),0) conversions, COALESCE(SUM(revenue),0) revenue,"
-        " COUNT(*) rows FROM performance_snapshot"
-        " WHERE brand_id = ? AND campaign_cycle_id = ? AND quarantined = 0"
-        " AND product_id IS NOT NULL GROUP BY product_id",
-        (brand_id, cycle_id),
-    ).fetchall()
-    result = {}
-    for row in rows:
-        data = dict(row)
-        data["kpis"] = ads_performance.compute_kpis(data)
-        result[data["product_id"]] = data
-    return result
 
 
 def _repurchase_line(conn, brand_id: str, cycle_totals: dict, first_order_breakeven: Optional[float],
@@ -857,26 +698,6 @@ def _explain_hypotheses(conn, brand_id: str, cycle: dict, items: list) -> dict:
     return {k: v for k, v in reasons.items() if isinstance(v, str) and v.strip()}
 
 
-def _pending_hypothesis_reviews(conn, brand_id: str, cycle_id: str, cycle_row: dict) -> list:
-    """判讀頁顯示用：只留目前仍待結案的假設——使用者確認後 status 更新，下次讀取就自動
-    從清單消失，不必重跑一次判讀（票 #53）。"""
-    stored = (cycle_row.get("result") or {}).get("hypothesis_reviews") or []
-    if not stored:
-        return []
-    current_status = {h["id"]: h["status"]
-                      for h in ads_repo.list_cycle_hypotheses(conn, brand_id, cycle_id)}
-    return [r for r in stored if current_status.get(r["id"]) in PENDING_HYPOTHESIS_STATUSES]
-
-
-def _conversions_for_hypothesis(conn, brand_id: str, cycle_id: str,
-                                product_id: Optional[str]) -> int:
-    """樣本數＝判讀當下該產品（或整期）的轉換數，程式帶入不猜（決策 0030 第 11 點）。"""
-    if product_id:
-        totals = _product_totals(conn, brand_id, cycle_id).get(product_id)
-        return int(totals["conversions"]) if totals else 0
-    return int(ads_performance.totals(conn, brand_id, cycle_id).get("conversions") or 0)
-
-
 def resolve_hypotheses(conn, brand_id: str, cycle_id: str, verdicts: dict, *, actor: str) -> int:
     """判讀頁假設結案（票 #53）：verdicts＝{hypothesis_id: 'supported'/'rejected'/'inconclusive'}。
     只處理目前仍待結案（proposed／testing）的假設，其餘忽略（防重複送出、防偽造 id）。
@@ -935,60 +756,6 @@ def _ledger_confidence(conn, brand_id: str, product_id: Optional[str], learning_
     return "preliminary"
 
 
-# ---------------------------------------------------------------------------
-# needs_revalidation 到期重測（修憲落地 G4，決策 0035 第三節第 10 點）
-# ---------------------------------------------------------------------------
-
-# 學習條目掛滿幾期都沒被重新驗證，就該提醒複查——只提醒、不擋路、不自動下架（決策 0013）。
-LEDGER_REVALIDATION_WINDOW_CYCLES = 3
-
-
-def mark_stale_learnings_for_revalidation(conn, brand_id: str) -> int:
-    """「第 N 期再驗一次」：這個品牌又開過幾期（依 `campaign_cycle.created_at` 排序），
-    超過 `LEDGER_REVALIDATION_WINDOW_CYCLES` 期還沒被下架，就把 `needs_revalidation` 標成 1。
-    掛在 `app/ads/nextcycle.py` 的 `build()`，每次判讀完成都會順手檢查一次。回傳這次新標記
-    的筆數。找不到來源期別（`source_cycle_id` 為空，例如前朝教訓訪談自述）的條目跳過，
-    不硬猜「第幾期」。
-    """
-    cycle_ids = [r["id"] for r in conn.execute(
-        "SELECT id FROM campaign_cycle WHERE brand_id = ? ORDER BY created_at", (brand_id,)
-    ).fetchall()]
-    if len(cycle_ids) < LEDGER_REVALIDATION_WINDOW_CYCLES:
-        return 0
-    index = {cid: i for i, cid in enumerate(cycle_ids)}
-    latest_index = len(cycle_ids) - 1
-
-    updated = 0
-    for entry in ads_repo.list_learning_ledger(conn, brand_id):
-        if entry["needs_revalidation"] or not entry["source_cycle_id"]:
-            continue
-        origin = index.get(entry["source_cycle_id"])
-        if origin is None:
-            continue
-        if latest_index - origin >= LEDGER_REVALIDATION_WINDOW_CYCLES:
-            bi.mark_learning_ledger_needs_revalidation(conn, brand_id, entry["id"])
-            updated += 1
-    if updated:
-        conn.commit()
-    return updated
-
-
-def _flag_unresolved_hypotheses(conn, brand_id: str, cycle_id: str) -> None:
-    """期末結算（finalize，全系統唯一把檔期轉 CLOSED 之處）時，這期還留著沒結案的假設
-    丟一張卡進打斷佇列補網（決策 0030 第三節第 9 點：判讀頁是主入口，這裡只是補漏）。"""
-    pending = [h for h in ads_repo.list_cycle_hypotheses(conn, brand_id, cycle_id)
-              if h["status"] in PENDING_HYPOTHESIS_STATUSES]
-    if not pending:
-        return
-    core_interrupts.enqueue(
-        conn, category="hypothesis_unresolved",
-        dedupe_key=f"hypothesis_unresolved:{cycle_id}",
-        message="這期還有策略假設沒結案，去看看", brand_id=brand_id, campaign_cycle_id=cycle_id,
-        action_url=f"/app/brands/{brand_id}/campaigns/{cycle_id}",
-    )
-    conn.commit()
-
-
 def load(conn, brand_id: str, cycle_id: str) -> dict:
     """讀回判讀結果：{cycle: 檔期層, products: [產品層...]}。D4：結算版跟暫定版可能同時存在，規則「結算版贏」——ORDER BY 讓暫定列排前、結算列排後，字典覆寫去重，最後寫入的贏。"""
     rows = [dict(r) for r in conn.execute(
@@ -1009,31 +776,3 @@ def load(conn, brand_id: str, cycle_id: str) -> dict:
         cycle_row["hypothesis_reviews"] = _pending_hypothesis_reviews(
             conn, brand_id, cycle_id, cycle_row)
     return {"cycle": cycle_row, "products": list(products_by_id.values())}
-
-
-def prediction_settlement(conn, brand_id: str, cycle: Optional[dict]) -> Optional[dict]:
-    """兌現預言卡的資料組裝（決策 0039 第 13–16 條，票 F5）。cycle 傳哪一期就對哪一期的
-    區間快照兌現——判讀頁出口傳「正在看的這期」自己，第二期檔期內頁出口傳「上一期」
-    （見 app/ads/routes.py 兩個呼叫端；上一期由 onboarding.previous_cycle() 取得，本函式
-    接受 None 直接短路，呼叫端不必自己先判斷有沒有上一期）。快照讀取一律走
-    forecast_snapshot()（票 F1單點 helper），沒存過快照的期不出卡，不補算（鐵則 16）；
-    一筆成效資料都還沒有時同樣不出卡——「兌現」需要真的有結果可以對，不能拿零筆資料充數。
-    """
-    from app.ads import onboarding as ads_onboarding
-
-    if cycle is None:
-        return None
-    forecast = ads_onboarding.forecast_snapshot(cycle)
-    if not forecast:
-        return None
-    totals = ads_performance.totals(conn, brand_id, cycle["id"])
-    if not totals["rows"]:
-        return None
-    return {
-        "forecast": forecast,
-        "clicks": totals["clicks"],
-        "conversions": totals["conversions"],
-        "spend": totals["spend"],
-        "budget": cycle["budget"],
-        "gap": ads_onboarding.forecast_gap(forecast, totals),
-    }

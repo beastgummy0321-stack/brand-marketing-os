@@ -19,12 +19,20 @@
 | 檔案 | 行數 | 倍數 | 先拆什麼 |
 |---|---|---|---|
 | `app/brand_intelligence/repository.py` | 1667 | 2.08× | 依表分檔（brand／product／rule／claim） |
-| `app/tests/test_ads_reading.py` | 1157 | 1.4× | 測試檔，優先度最低 |
-| `app/ads/reading.py` | 1039 | 1.3× | 判讀規則與資料取數分離 |
 | `app/ads/repository.py` | 856 | 1.07× | 剛超標，先觀察 |
 
 2026-08-21：T4 刪除品牌／產品管理舊頁 handler，`app/brand_web/routes.py` 從 1854 行降到
 704 行，退出超標清單（`KNOWN_OVERSIZED_FILES` 同步移除）。
+
+2026-08-22：票 10 拆 `app/ads/reading.py`（1039→779）／`app/tests/test_ads_reading.py`
+（1157→767），兩檔退出超標清單。拆出 `reading_baselines.py`（品牌基線）、
+`reading_hypotheses.py`（假設結案週邊讀寫）、`reading_verdict.py`（判讀結論周邊小函式，
+含原本 D3 沒點名、但為了避開 `PROVIDER`／`orders_repo` 猴子補丁循環依賴而額外抽出的
+幾個純函式）＋對應三個測試檔；`_explain`／`_explain_diff`／`_explain_hypotheses`
+（LLM 文案，D3 原訂的第二個縫）沒有拆——它們要用到的 `PROVIDER` 被十幾個票 10 清單
+外的測試檔直接改 `reading.PROVIDER = FakeProvider(...)`，搬去別檔會讓猴子補丁失效
+（改的是 reading 模組的名字，不是實際執行 LLM 呼叫那個模組的全域變數），詳細原因見
+`reading_verdict.py` 開頭說明。
 
 **已知違例**：2026-08-07 票 C 在 `brand_intelligence/routes.py` 加了約 70 行沒先拆（主控放行）；
 2026-08-09～10 的三張票在 `app/ads/repository.py` 共加了約 42 行（cascade 表登記、排期策略落地），
