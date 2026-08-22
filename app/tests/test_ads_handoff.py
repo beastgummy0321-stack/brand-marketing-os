@@ -18,10 +18,10 @@ _tmpdir = tempfile.mkdtemp(prefix="brand_os_ads_handoff_")
 from fastapi.testclient import TestClient  # noqa: E402
 
 import app.main as main  # noqa: E402
-from app.ads import creative as ads_creative  # noqa: E402
 from app.ads import handoff as ads_handoff  # noqa: E402
 from app.ads import plan as ads_plan  # noqa: E402
 from app.ads import repository as ads_repo  # noqa: E402
+from app.ads import theme_repository as theme_repo  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
 from app.core.db import new_id, now_iso  # noqa: E402
 from app.llm.providers import FakeProvider, ProviderResponse, Usage  # noqa: E402
@@ -79,7 +79,7 @@ class _BaseHandoffTest(unittest.TestCase):
                                 json={"product_ids": [], "budget": 10000, "objective": "sales"})
         self.cycle_id = resp.json()["cycle_id"]
 
-        self._orig_plan, self._orig_creative = ads_plan.PROVIDER, ads_creative.PROVIDER
+        self._orig_plan = ads_plan.PROVIDER
         ads_plan.PROVIDER = FakeProvider(
             response=_fake(json.dumps(_PLAN_OPTIONS, ensure_ascii=False)))
         ok, err = ads_plan.generate_options(main.conn, self.bid, self.cycle_id, ACTOR)
@@ -89,33 +89,30 @@ class _BaseHandoffTest(unittest.TestCase):
         cell_id = self.cell_id = main.conn.execute(
             "SELECT id FROM experiment_cell WHERE campaign_cycle_id = ?",
             (self.cycle_id,)).fetchone()["id"]
-        reply = json.dumps({"variants": [
-            {"cell_id": cell_id, "variant_type": "hook", "content": "每天第一杯，別再將就",
-             "rationale": "", "creative_angle_number": 16, "on_camera": False,
-             "cut_type": "pain_visualized", "quote_source": None,
-             "fingerprint": {"angle": "pain", "tone": "blunt",
-                                              "format": "text_focus", "selling_point": "quality"}},
-            {"cell_id": cell_id, "variant_type": "copy", "content": "三分鐘沖一杯好咖啡。",
-             "rationale": "", "creative_angle_number": 9, "on_camera": False,
-             "cut_type": "value_reframe", "quote_source": None,
-             "fingerprint": {"angle": "benefit", "tone": "warm",
-                                              "format": "text_focus",
-                                              "selling_point": "convenience"}},
-            {"cell_id": cell_id, "variant_type": "image_prompt",
-             "content": "A warm morning desk with a pour-over set",
-             "rationale": "", "creative_angle_number": 9, "on_camera": False,
-             "cut_type": None, "quote_source": None,
-             "fingerprint": {"angle": "scene", "tone": "warm",
-                                              "format": "single_image",
-                                              "selling_point": "quality"}},
-        ]}, ensure_ascii=False)
-        ads_creative.PROVIDER = FakeProvider(response=_fake(reply))
-        ok, err = ads_creative.generate(main.conn, self.bid, self.cycle_id, ACTOR)
-        self.assertTrue(ok, err)
-        ads_creative.approve_selection(main.conn, self.bid, self.cycle_id, ACTOR)
+
+        # 票 02-repoint-creative-readers：素材資料源改主題表，不再經 LLM 生成管線
+        # （generate() 仍寫 creative_variant，但已沒有任何讀取路徑會看它），直接建一顆
+        # 已採用主題，內容比照原本假回覆的三則。
+        theme = theme_repo.create_theme(
+            main.conn, self.bid, campaign_cycle_id=self.cycle_id, experiment_cell_id=cell_id,
+            format_key="single_image", name="早上第一杯主題", folder_code="H1N0", actor=ACTOR,
+            components=[
+                {"component_type": "title", "content": "每天第一杯，別再將就",
+                 "fingerprint_json": {"angle": "pain", "tone": "blunt",
+                                      "format": "text_focus", "selling_point": "quality"}},
+                {"component_type": "body", "content": "三分鐘沖一杯好咖啡。",
+                 "fingerprint_json": {"angle": "benefit", "tone": "warm",
+                                      "format": "text_focus", "selling_point": "convenience"}},
+                {"component_type": "image_prompt",
+                 "content": "A warm morning desk with a pour-over set",
+                 "fingerprint_json": {"angle": "scene", "tone": "warm",
+                                      "format": "single_image", "selling_point": "quality"}},
+            ],
+        )
+        theme_repo.adopt_theme(main.conn, self.bid, theme["id"], actor=ACTOR)
 
     def tearDown(self):
-        ads_plan.PROVIDER, ads_creative.PROVIDER = self._orig_plan, self._orig_creative
+        ads_plan.PROVIDER = self._orig_plan
 
     def _build(self):
         return self.client.post(
@@ -313,25 +310,24 @@ class DailyBudgetInvariantTest(unittest.TestCase):
         return bi_repo.create_product(main.conn, self.bid, name=name, actor=ACTOR)["id"]
 
     def _cell(self, cycle_id: str, product_id, angle: str) -> str:
-        """直接建一個切角＋一組已採用的 hook／copy 素材，不經 LLM 生成管線。"""
+        """直接建一個切角＋一顆已採用主題（標題／文案），不經 LLM 生成管線
+        （票 02-repoint-creative-readers：資料源改主題表）。"""
         cell_id = new_id("exc")
         main.conn.execute(
             "INSERT INTO experiment_cell (id, campaign_cycle_id, brand_id, product_id,"
             " audience, creative_angle, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
             (cell_id, cycle_id, self.bid, product_id, "測試受眾", angle, now_iso()),
         )
-        brief_id = ads_creative._brief_for_cell(
-            main.conn, self.bid, cycle_id, {"id": cell_id, "creative_angle": angle}, now_iso())
-        for variant_type, content in (("hook", f"{angle}主打句"), ("copy", f"{angle}內文")):
-            main.conn.execute(
-                "INSERT INTO creative_variant (id, variant_type, creative_brief_id,"
-                " campaign_cycle_id, experiment_cell_id, brand_id, product_id, attributes_json,"
-                " fingerprint_json, rationale, recommendation_rank, status, created_at)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, '{}', '', 1, 'DRAFT', ?)",
-                (new_id("cvr"), variant_type, brief_id, cycle_id, cell_id, self.bid, product_id,
-                 json.dumps({"content": content}, ensure_ascii=False), now_iso()),
-            )
         main.conn.commit()
+        theme = theme_repo.create_theme(
+            main.conn, self.bid, campaign_cycle_id=cycle_id, experiment_cell_id=cell_id,
+            format_key="single_image", name=f"{angle}主題", folder_code="D1V0", actor=ACTOR,
+            components=[
+                {"component_type": "title", "content": f"{angle}主打句"},
+                {"component_type": "body", "content": f"{angle}內文"},
+            ],
+        )
+        theme_repo.adopt_theme(main.conn, self.bid, theme["id"], actor=ACTOR)
         return cell_id
 
     def _built_packages(self, cycle_id: str) -> list:
@@ -414,26 +410,24 @@ class NamingCheckTest(unittest.TestCase):
             main.conn, name="虛構晨露茶行", client_name="測試客戶", actor=ACTOR)["id"]
 
     def _cell(self, cycle_id: str, angle: str) -> str:
-        """直接建一個切角＋一組已採用的 hook／copy 素材，不經 LLM 生成管線（比照
-        DailyBudgetInvariantTest._cell()，這裡不綁產品）。"""
+        """直接建一個切角＋一顆已採用主題（標題／文案），不經 LLM 生成管線（比照
+        DailyBudgetInvariantTest._cell()，這裡不綁產品；票 02-repoint-creative-readers）。"""
         cell_id = new_id("exc")
         main.conn.execute(
             "INSERT INTO experiment_cell (id, campaign_cycle_id, brand_id, product_id,"
             " audience, creative_angle, created_at) VALUES (?, ?, ?, NULL, ?, ?, ?)",
             (cell_id, cycle_id, self.bid, "測試受眾", angle, now_iso()),
         )
-        brief_id = ads_creative._brief_for_cell(
-            main.conn, self.bid, cycle_id, {"id": cell_id, "creative_angle": angle}, now_iso())
-        for variant_type, content in (("hook", f"{angle}主打句"), ("copy", f"{angle}內文")):
-            main.conn.execute(
-                "INSERT INTO creative_variant (id, variant_type, creative_brief_id,"
-                " campaign_cycle_id, experiment_cell_id, brand_id, product_id, attributes_json,"
-                " fingerprint_json, rationale, recommendation_rank, status, created_at)"
-                " VALUES (?, ?, ?, ?, ?, ?, NULL, ?, '{}', '', 1, 'DRAFT', ?)",
-                (new_id("cvr"), variant_type, brief_id, cycle_id, cell_id, self.bid,
-                 json.dumps({"content": content}, ensure_ascii=False), now_iso()),
-            )
         main.conn.commit()
+        theme = theme_repo.create_theme(
+            main.conn, self.bid, campaign_cycle_id=cycle_id, experiment_cell_id=cell_id,
+            format_key="single_image", name=f"{angle}主題", folder_code="D1V0", actor=ACTOR,
+            components=[
+                {"component_type": "title", "content": f"{angle}主打句"},
+                {"component_type": "body", "content": f"{angle}內文"},
+            ],
+        )
+        theme_repo.adopt_theme(main.conn, self.bid, theme["id"], actor=ACTOR)
         return cell_id
 
     def _cycle(self, start_date: str) -> dict:

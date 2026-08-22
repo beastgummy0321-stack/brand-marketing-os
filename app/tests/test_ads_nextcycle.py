@@ -22,6 +22,7 @@ from app.ads import fingerprint as fp  # noqa: E402
 from app.ads import nextcycle  # noqa: E402
 from app.ads import performance as perf  # noqa: E402
 from app.ads import reading  # noqa: E402
+from app.ads import theme_repository as theme_repo  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
 from app.core.db import new_id, now_iso  # noqa: E402
 from app.llm.providers import FakeProvider, ProviderResponse, Usage  # noqa: E402
@@ -131,28 +132,25 @@ class _BaseNextCycleTest(unittest.TestCase):
         reading.run(main.conn, self.bid, self.cycle_id, ACTOR)
 
     def _insert_variant(self, variant_id, cycle_id, fingerprint):
-        """真的插一列 creative_variant——規則卡相對判準（修憲落地 G3）的分母來自這張表，
-        不是只看 adoption_decision（反對制下預設全採用，未被拒的變體本來就沒有 decision 列）。
-        """
+        """開一顆已採用主題，底下一個標題元件（票 03-close-repoint-gaps：規則卡分母
+        改讀 `creative.list_variants()`，資料源是主題表——舊碼插 creative_variant 那張
+        沒有存活寫入路徑的表，讀取層看不到，分母恆為 0）。做法比照
+        test_ads_compliance.py::_make_creative：create_theme() 再 adopt_theme()。
+        回傳新元件 id，供 `_reject()` 拿去對到正確的 adoption_decision.target_id。"""
         cell_id = new_id("exc")
-        brief_id = new_id("cbf")
         ts = now_iso()
         main.conn.execute(
             "INSERT INTO experiment_cell (id, campaign_cycle_id, brand_id, created_at)"
             " VALUES (?, ?, ?, ?)", (cell_id, cycle_id, self.bid, ts))
-        main.conn.execute(
-            "INSERT INTO creative_brief (id, campaign_cycle_id, experiment_cell_id, brand_id,"
-            " brief_type, purpose, status, created_at, updated_at)"
-            " VALUES (?, ?, ?, ?, 'copy', '測試', 'dispatched', ?, ?)",
-            (brief_id, cycle_id, cell_id, self.bid, ts, ts))
-        main.conn.execute(
-            "INSERT INTO creative_variant (id, variant_type, creative_brief_id,"
-            " campaign_cycle_id, experiment_cell_id, brand_id, attributes_json,"
-            " fingerprint_json, status, created_at)"
-            " VALUES (?, 'hook', ?, ?, ?, ?, ?, ?, 'DRAFT', ?)",
-            (variant_id, brief_id, cycle_id, cell_id, self.bid,
-             json.dumps({"content": "測試"}, ensure_ascii=False),
-             json.dumps(fingerprint, ensure_ascii=False), ts))
+        theme = theme_repo.create_theme(
+            main.conn, self.bid, campaign_cycle_id=cycle_id, experiment_cell_id=cell_id,
+            format_key="single_image", name=f"規則卡測試{variant_id}",
+            folder_code=variant_id[-4:], actor=ACTOR,
+            components=[{"component_type": "title", "content": "測試",
+                        "fingerprint_json": fingerprint}],
+        )
+        theme_repo.adopt_theme(main.conn, self.bid, theme["id"], actor=ACTOR)
+        return theme["components"][0]["id"]
 
     def _generate(self, fingerprint, cycle_id=None):
         """純出現、沒被拒——用來補分母，證明相對判準看得到「這個值本來就常出現」。"""
@@ -162,13 +160,12 @@ class _BaseNextCycleTest(unittest.TestCase):
 
     def _reject(self, fingerprint, reason_code="off_brand", cycle_id=None):
         cycle_id = cycle_id or self.cycle_id
-        variant_id = new_id("cvr")
-        self._insert_variant(variant_id, cycle_id, fingerprint)
+        component_id = self._insert_variant(new_id("cvr"), cycle_id, fingerprint)
         main.conn.execute(
             "INSERT INTO adoption_decision (id, brand_id, campaign_cycle_id, target_type,"
             " target_id, decision, reason_code, fingerprint_json, decided_by, decided_at)"
             " VALUES (?, ?, ?, 'variant', ?, 'rejected', ?, ?, ?, ?)",
-            (new_id("adp"), self.bid, cycle_id, variant_id, reason_code,
+            (new_id("adp"), self.bid, cycle_id, component_id, reason_code,
              json.dumps(fingerprint, ensure_ascii=False), ACTOR, now_iso()),
         )
         main.conn.commit()
@@ -551,28 +548,23 @@ class OverclaimClaimCardTest(_BaseNextCycleTest):
     """
 
     def _make_variant(self, content, product_id=None):
+        """票 02-repoint-creative-readers：素材資料源改主題表，直接建一顆主題元件
+        （不必採用——`creative.reject()`／`get_variant()` 不受 D4「主題已採用」門檻限制，
+        草稿主題底下的元件一樣查得到，見 app/ads/creative.py get_variant() 的說明）。"""
         cell_id = new_id("exc")
-        brief_id = new_id("cbf")
-        variant_id = new_id("cvr")
         ts = now_iso()
         main.conn.execute(
-            "INSERT INTO experiment_cell (id, campaign_cycle_id, brand_id, created_at)"
-            " VALUES (?, ?, ?, ?)", (cell_id, self.cycle_id, self.bid, ts))
-        main.conn.execute(
-            "INSERT INTO creative_brief (id, campaign_cycle_id, experiment_cell_id, brand_id,"
-            " brief_type, purpose, status, created_at, updated_at)"
-            " VALUES (?, ?, ?, ?, 'copy', '測試', 'dispatched', ?, ?)",
-            (brief_id, self.cycle_id, cell_id, self.bid, ts, ts))
-        main.conn.execute(
-            "INSERT INTO creative_variant (id, variant_type, creative_brief_id,"
-            " campaign_cycle_id, experiment_cell_id, brand_id, product_id, attributes_json,"
-            " fingerprint_json, status, created_at)"
-            " VALUES (?, 'hook', ?, ?, ?, ?, ?, ?, ?, 'DRAFT', ?)",
-            (variant_id, brief_id, self.cycle_id, cell_id, self.bid, product_id,
-             json.dumps({"content": content}, ensure_ascii=False),
-             json.dumps(_print(), ensure_ascii=False), ts))
+            "INSERT INTO experiment_cell (id, campaign_cycle_id, brand_id, product_id,"
+            " created_at) VALUES (?, ?, ?, ?, ?)",
+            (cell_id, self.cycle_id, self.bid, product_id, ts))
         main.conn.commit()
-        return variant_id
+        theme = theme_repo.create_theme(
+            main.conn, self.bid, campaign_cycle_id=self.cycle_id, experiment_cell_id=cell_id,
+            format_key="single_image", name="測試主題", folder_code="OVC0", actor=ACTOR,
+            components=[{"component_type": "title", "content": content,
+                        "fingerprint_json": _print()}],
+        )
+        return theme["components"][0]["id"]
 
     def _reject_overclaim(self, content, product_id=None):
         variant_id = self._make_variant(content, product_id=product_id)
@@ -680,26 +672,22 @@ class EchoChamberTest(_BaseNextCycleTest):
         main.conn.commit()
 
     def _make_variant(self, fingerprint):
+        """票 02-repoint-creative-readers：素材資料源改主題表——`check_echo_chamber()`
+        經 `creative.list_variants()` 讀，D4 要求主題本身狀態是 adopted 才算「活的」出現在
+        候選清單，直接用 status='adopted' 建，不必另外呼叫 adopt_theme()。"""
         cell_id = new_id("exc")
-        brief_id = new_id("cbf")
         ts = now_iso()
         main.conn.execute(
             "INSERT INTO experiment_cell (id, campaign_cycle_id, brand_id, created_at)"
             " VALUES (?, ?, ?, ?)", (cell_id, self.cycle_id, self.bid, ts))
-        main.conn.execute(
-            "INSERT INTO creative_brief (id, campaign_cycle_id, experiment_cell_id, brand_id,"
-            " brief_type, purpose, status, created_at, updated_at)"
-            " VALUES (?, ?, ?, ?, 'copy', '測試', 'dispatched', ?, ?)",
-            (brief_id, self.cycle_id, cell_id, self.bid, ts, ts))
-        main.conn.execute(
-            "INSERT INTO creative_variant (id, variant_type, creative_brief_id,"
-            " campaign_cycle_id, experiment_cell_id, brand_id, attributes_json,"
-            " fingerprint_json, status, created_at)"
-            " VALUES (?, 'hook', ?, ?, ?, ?, ?, ?, 'DRAFT', ?)",
-            (new_id("cvr"), brief_id, self.cycle_id, cell_id, self.bid,
-             json.dumps({"content": "測試"}, ensure_ascii=False),
-             json.dumps(fingerprint, ensure_ascii=False), ts))
         main.conn.commit()
+        theme_repo.create_theme(
+            main.conn, self.bid, campaign_cycle_id=self.cycle_id, experiment_cell_id=cell_id,
+            format_key="single_image", name="測試主題", folder_code="ECH0", actor=ACTOR,
+            status="adopted",
+            components=[{"component_type": "title", "content": "測試",
+                        "fingerprint_json": fingerprint}],
+        )
 
     def test_no_history_means_no_complaint(self):
         self._make_variant(_print())

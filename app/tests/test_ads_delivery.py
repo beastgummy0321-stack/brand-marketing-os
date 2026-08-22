@@ -13,6 +13,7 @@ import app.main as main
 import app.shared.web as web
 from app.ads import creative, delivery, handoff, repository as ads_repo
 from app.ads import repository_channel_plan as channel_repo
+from app.ads import theme_repository as theme_repo
 from app.brand_intelligence import repository as bi
 from app.core import db
 from app.core.db import new_id, now_iso
@@ -41,26 +42,33 @@ class DeliveryTest(unittest.TestCase):
         self.tmpdir.cleanup()
 
     def _add_complete_item(self, angle="晨間第一杯"):
+        """一個切角格、一顆已採用主題，底下標題／文案／圖片提示詞三元件齊全
+        （票 02-repoint-creative-readers：資料源改主題表，比照 create_theme+adopt_theme）。"""
         cell_id = new_id("exc")
         self.conn.execute(
             "INSERT INTO experiment_cell (id, campaign_cycle_id, brand_id, product_id, creative_angle, created_at) "
             "VALUES (?, ?, ?, ?, ?, ?)",
             (cell_id, self.cycle["id"], self.brand["id"], self.product_id, angle, now_iso()),
         )
-        brief_id = creative._brief_for_cell(
-            self.conn, self.brand["id"], self.cycle["id"],
-            {"id": cell_id, "creative_angle": angle}, now_iso())
-        for kind, content in (("hook", f"{angle}主打句"), ("copy", f"{angle}文案"),
-                              ("image_prompt", f"{angle}圖片描述")):
-            self.conn.execute(
-                "INSERT INTO creative_variant (id, variant_type, creative_brief_id, campaign_cycle_id, "
-                "experiment_cell_id, brand_id, attributes_json, fingerprint_json, rationale, "
-                "recommendation_rank, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, '{}', '', 1, 'DRAFT', ?)",
-                (new_id("cvr"), kind, brief_id, self.cycle["id"], cell_id, self.brand["id"],
-                 json.dumps({"content": content}, ensure_ascii=False), now_iso()),
-            )
         self.conn.commit()
+        self._adopt_theme_for_cell(cell_id, angle)
         return cell_id
+
+    def _adopt_theme_for_cell(self, cell_id, angle, suffix=""):
+        """在同一個切角格底下再開一顆已採用主題（模擬補件：同一格追加一份新內容，
+        不是改舊主題——主題模型沒有「往既有主題加元件」的介面，見 theme_repository.py）。"""
+        theme = theme_repo.create_theme(
+            self.conn, self.brand["id"], campaign_cycle_id=self.cycle["id"],
+            experiment_cell_id=cell_id, format_key="single_image",
+            name=f"{angle}主題{suffix}", folder_code="D1V0", actor="tester",
+            components=[
+                {"component_type": "title", "content": f"{angle}主打句{suffix}"},
+                {"component_type": "body", "content": f"{angle}文案{suffix}"},
+                {"component_type": "image_prompt", "content": f"{angle}圖片描述{suffix}"},
+            ],
+        )
+        theme_repo.adopt_theme(self.conn, self.brand["id"], theme["id"], actor="tester")
+        return theme
 
     def test_assembling_hides_two_confirmation_steps(self):
         result = delivery.view(self.conn, self.brand["id"], self.cycle["id"])
@@ -96,19 +104,9 @@ class DeliveryTest(unittest.TestCase):
         self.assertIn("補件中", after_reject["reason"])
         self.assertEqual([item["id"] for item in after_reject["items"]], [second])
 
-        # 把補件直接落回原切角，模擬工作檯補齊該素材。
-        group = next(g for g in creative.group_by_cell(self.conn, self.brand["id"], self.cycle["id"])
-                     if g["cell"]["id"] == first)
-        brief_id = group["variants"][0]["creative_brief_id"]
-        for kind, content in (("copy", "第一則補件文案"), ("image_prompt", "第一則補件圖片")):
-            self.conn.execute(
-                "INSERT INTO creative_variant (id, variant_type, creative_brief_id, campaign_cycle_id, "
-                "experiment_cell_id, brand_id, attributes_json, fingerprint_json, rationale, "
-                "recommendation_rank, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, '{}', '', 1, 'DRAFT', ?)",
-                (new_id("cvr"), kind, brief_id, self.cycle["id"], first, self.brand["id"],
-                 json.dumps({"content": content}, ensure_ascii=False), now_iso()),
-            )
-        self.conn.commit()
+        # 把補件直接落回原切角，模擬工作檯補齊該素材（開一顆新主題並採用——主題模型沒有
+        # 「往既有主題加元件」的介面，見 _adopt_theme_for_cell()）。
+        self._adopt_theme_for_cell(first, "第一則", suffix="（補件）")
         result = delivery.confirm(self.conn, self.brand["id"], self.cycle["id"],
                                   facts=[first, second], budget=False, actor="tester")
         self.assertEqual([card["experiment_cell_id"] for card in result["action_cards"]], [first])
@@ -134,18 +132,7 @@ class DeliveryTest(unittest.TestCase):
             meta_ids={"meta_campaign_id": "12345"}, actor="tester")
         delivery.reject_item(self.conn, self.brand["id"], self.cycle["id"], first, actor="tester")
 
-        group = next(g for g in creative.group_by_cell(self.conn, self.brand["id"], self.cycle["id"])
-                     if g["cell"]["id"] == first)
-        brief_id = group["variants"][0]["creative_brief_id"]
-        for kind, content in (("copy", "第一則補件文案"), ("image_prompt", "第一則補件圖片")):
-            self.conn.execute(
-                "INSERT INTO creative_variant (id, variant_type, creative_brief_id, campaign_cycle_id, "
-                "experiment_cell_id, brand_id, attributes_json, fingerprint_json, rationale, "
-                "recommendation_rank, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, '{}', '', 1, 'DRAFT', ?)",
-                (new_id("cvr"), kind, brief_id, self.cycle["id"], first, self.brand["id"],
-                 json.dumps({"content": content}, ensure_ascii=False), now_iso()),
-            )
-        self.conn.commit()
+        self._adopt_theme_for_cell(first, "第一則", suffix="（補件）")
         replacement = delivery.confirm(self.conn, self.brand["id"], self.cycle["id"],
                                        facts=[first, second], budget=False, actor="tester")
 

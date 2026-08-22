@@ -251,10 +251,15 @@ def _axis_value_stats(conn, brand_id: str, cycle_ids: list,
     """視窗內每個 (軸, 值) 出現過幾次、被拒幾次（含拆分出的政策拒絕次數）——相對判準的
     分子分母來源。
 
-    出現次數（分母）以 `creative_variant` 的指紋為準，不論這則變體最後有沒有被拒；
-    這是修憲落地 G1 抓到的原始缺陷（「只數分子不數分母」）的直接對症：分子單獨看
-    起來再高，只要分母也高、比例不特別突出，就不該鑄成禁令。若一筆拒絕紀錄找不到
-    對應的變體列（例如舊資料），至少把這次拒絕本身算成一次出現，分母不能比分子還小。
+    出現次數（分母）以 `creative.list_variants()` 回傳的元件指紋為準（票
+    03-close-repoint-gaps：資料源已改為主題表，`creative_variant` 沒有存活寫入路徑，
+    直接查它分母恆為 0）。分母口徑因此收斂成「已採用主題底下的元件」，不是每一則
+    生成過的草稿——這才是對的母體：分子（`adoption_decision` 的拒絕紀錄）只可能來自
+    使用者在已採用主題裡真的看過的元件，把從未採用的草稿也算進分母只會虛增分母、
+    讓規則卡更難冒出來，沒有意義。這是修憲落地 G1 抓到的原始缺陷（「只數分子不數
+    分母」）的直接對症：分子單獨看起來再高，只要分母也高、比例不特別突出，就不該
+    鑄成禁令。若一筆拒絕紀錄找不到對應的元件（例如舊資料），至少把這次拒絕本身算成
+    一次出現，分母不能比分子還小。
 
     `rejections` 是總拒絕次數（含猜消費者反應的品味理由），`policy_rejections` 只算
     `reason_code` 落在 `fp.RULE_UPGRADABLE_REASONS` 白名單內的次數（票 T1）——升級成
@@ -273,20 +278,16 @@ def _axis_value_stats(conn, brand_id: str, cycle_ids: list,
     placeholders = ",".join("?" for _ in cycle_ids)
     stats: dict = {}
 
-    for row in conn.execute(
-        f"SELECT campaign_cycle_id, fingerprint_json FROM creative_variant"
-        f" WHERE brand_id = ? AND campaign_cycle_id IN ({placeholders})",
-        (brand_id, *cycle_ids),
-    ):
-        try:
-            raw = json.loads(row["fingerprint_json"]) if row["fingerprint_json"] else {}
-        except ValueError:
-            continue
-        weight = weight_by_cycle.get(row["campaign_cycle_id"], 1.0)
-        for axis, value in fp.normalize(raw).items():
-            entry = stats.setdefault((axis, value), _empty_stat_entry())
-            entry["appearances"] += 1
-            entry["weighted_appearances"] += weight
+    from app.ads import creative as ads_creative  # 延遲 import，比照 check_echo_chamber()
+
+    for cycle_id in cycle_ids:
+        weight = weight_by_cycle.get(cycle_id, 1.0)
+        for variant in ads_creative.list_variants(conn, brand_id, cycle_id):
+            raw = variant["fingerprint"] or {}
+            for axis, value in fp.normalize(raw).items():
+                entry = stats.setdefault((axis, value), _empty_stat_entry())
+                entry["appearances"] += 1
+                entry["weighted_appearances"] += weight
 
     for row in conn.execute(
         f"SELECT id, campaign_cycle_id, reason_code, fingerprint_json FROM adoption_decision"

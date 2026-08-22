@@ -23,6 +23,7 @@ from app.ads import compliance_wordlist  # noqa: E402
 from app.ads import creative as ads_creative  # noqa: E402
 from app.ads import plan as ads_plan  # noqa: E402
 from app.ads import repository as ads_repo  # noqa: E402
+from app.ads import theme_repository as theme_repo  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
 from app.llm.providers import FakeProvider, ProviderResponse, Usage  # noqa: E402
 from app.shared.web import OPERATOR  # noqa: E402
@@ -180,7 +181,7 @@ class ComplianceScanTest(unittest.TestCase):
                                 json={"product_ids": [], "budget": 10000, "objective": "sales"})
         self.cycle_id = resp.json()["cycle_id"]
 
-        self._orig_plan, self._orig_creative = ads_plan.PROVIDER, ads_creative.PROVIDER
+        self._orig_plan = ads_plan.PROVIDER
         ads_plan.PROVIDER = FakeProvider(
             response=_fake(json.dumps(_PLAN_OPTIONS, ensure_ascii=False)))
         ads_plan.generate_options(main.conn, self.bid, self.cycle_id, ACTOR)
@@ -189,37 +190,32 @@ class ComplianceScanTest(unittest.TestCase):
         self.cell_id = main.conn.execute(
             "SELECT id FROM experiment_cell WHERE campaign_cycle_id = ?",
             (self.cycle_id,)).fetchone()["id"]
+        self._theme_seq = 0
 
     def tearDown(self):
-        ads_plan.PROVIDER, ads_creative.PROVIDER = self._orig_plan, self._orig_creative
+        ads_plan.PROVIDER = self._orig_plan
 
     def _make_creative(self, content, selling_point="quality"):
-        reply = json.dumps({"variants": [
-            {"cell_id": self.cell_id, "variant_type": "hook", "content": content,
-             "rationale": "", "creative_angle_number": 16, "on_camera": False,
-             "cut_type": "pain_visualized", "quote_source": None,
-             "fingerprint": {"angle": "benefit", "tone": "warm",
-                                              "format": "text_focus",
-                                              "selling_point": selling_point}},
-        ]}, ensure_ascii=False)
-        ads_creative.PROVIDER = FakeProvider(response=_fake(reply))
-        ads_creative.generate(main.conn, self.bid, self.cycle_id, ACTOR)
+        """開一顆已採用主題，底下一個標題元件（票 02-repoint-creative-readers：資料源改
+        主題表，不再經 LLM 生成管線——舊碼用假回覆餵 generate()，這裡直接建主題）。"""
+        self._theme_seq += 1
+        theme = theme_repo.create_theme(
+            main.conn, self.bid, campaign_cycle_id=self.cycle_id,
+            experiment_cell_id=self.cell_id, format_key="single_image",
+            name=f"掃描測試主題{self._theme_seq}", folder_code=f"C{self._theme_seq:03d}",
+            actor=ACTOR,
+            components=[{"component_type": "title", "content": content,
+                        "fingerprint_json": {"angle": "benefit", "tone": "warm",
+                                             "format": "text_focus",
+                                             "selling_point": selling_point}}],
+        )
+        theme_repo.adopt_theme(main.conn, self.bid, theme["id"], actor=ACTOR)
 
     def _make_creatives(self, contents):
-        """一批多則 hook，各給不同 cut_type 以通過多樣性驗形（見 creative_matrix.py）。"""
-        cut_types = ["pain_visualized", "counterintuitive", "identity_callout",
-                    "precise_dissuasion", "contrast_pairing"]
-        variants = [
-            {"cell_id": self.cell_id, "variant_type": "hook", "content": content,
-             "rationale": "", "creative_angle_number": 16 + i, "on_camera": False,
-             "cut_type": cut_types[i % len(cut_types)], "quote_source": None,
-             "fingerprint": {"angle": "benefit", "tone": "warm",
-                            "format": "text_focus", "selling_point": "quality"}}
-            for i, content in enumerate(contents)
-        ]
-        reply = json.dumps({"variants": variants}, ensure_ascii=False)
-        ads_creative.PROVIDER = FakeProvider(response=_fake(reply))
-        ads_creative.generate(main.conn, self.bid, self.cycle_id, ACTOR)
+        """一批多顆已採用主題，各一個標題元件（主題模型沒有 cut_type 多樣性驗形，
+        那是舊生成管線 creative_matrix.py 的規則，跟讀取層無關）。"""
+        for content in contents:
+            self._make_creative(content)
 
     def _scan_like_page(self):
         """舊素材頁 GET 的法務副作用，逐行對應 app/ads/routes_creative.py:ads_creatives()：
@@ -411,6 +407,10 @@ class DefaultHoldTest(ComplianceScanTest):
         self._make_creative("每天喝一杯，改善你的生活品質")
         self._scan_like_page()
         variant_id = self._first_variant()["id"]
+        # 前提：真的先被系統自動挑掉，勾回才有意義可驗（不然 restore() 後面的斷言
+        # 不論挑沒挑掉都會成立，等於沒測到東西）。
+        self.assertTrue(self._first_variant()["rejected"])
+        self.assertTrue(self._first_variant()["auto_held"])
 
         ads_creative.restore(main.conn, self.bid, variant_id, actor=OPERATOR)
 

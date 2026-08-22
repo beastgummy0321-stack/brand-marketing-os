@@ -25,12 +25,12 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 import app.main as main  # noqa: E402
 from app.ads import checklist  # noqa: E402
-from app.ads import creative as ads_creative  # noqa: E402
 from app.ads import handoff as ads_handoff  # noqa: E402
 from app.ads import performance as ads_performance  # noqa: E402
 from app.ads import plan as ads_plan  # noqa: E402
 from app.ads import reading  # noqa: E402
 from app.ads import repository as ads_repo  # noqa: E402
+from app.ads import theme_repository as theme_repo  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
 from app.llm.providers import FakeProvider, ProviderResponse, Usage  # noqa: E402
 
@@ -254,7 +254,7 @@ class _BaseHandoffTest(_Base):
                                       "objective": "sales"})
         self.cycle_id = resp.json()["cycle_id"]
 
-        self._orig_plan, self._orig_creative = ads_plan.PROVIDER, ads_creative.PROVIDER
+        self._orig_plan = ads_plan.PROVIDER
         ads_plan.PROVIDER = FakeProvider(
             response=_fake(json.dumps(_PLAN_OPTIONS, ensure_ascii=False)))
         ads_plan.generate_options(main.conn, self.bid, self.cycle_id, ACTOR)
@@ -263,20 +263,24 @@ class _BaseHandoffTest(_Base):
         cell_id = main.conn.execute(
             "SELECT id FROM experiment_cell WHERE campaign_cycle_id = ?",
             (self.cycle_id,)).fetchone()["id"]
-        reply = json.dumps({"variants": [
-            {"cell_id": cell_id, "variant_type": "hook", "content": "每天第一杯，別再將就",
-             "rationale": "", "creative_angle_number": 16, "on_camera": False,
-             "cut_type": "pain_visualized", "quote_source": None,
-             "fingerprint": {"angle": "pain", "tone": "blunt", "format": "text_focus",
-                             "selling_point": "quality"}},
-        ]}, ensure_ascii=False)
-        ads_creative.PROVIDER = FakeProvider(response=_fake(reply))
-        ads_creative.generate(main.conn, self.bid, self.cycle_id, ACTOR)
-        ads_creative.approve_selection(main.conn, self.bid, self.cycle_id, ACTOR)
+
+        # 票 02-repoint-creative-readers：素材資料源改主題表，不再經 LLM 生成管線
+        # （generate() 仍寫 creative_variant，但已沒有任何讀取路徑會看它），直接建一顆
+        # 已採用主題，內容比照原本假回覆的那則 hook。
+        theme = theme_repo.create_theme(
+            main.conn, self.bid, campaign_cycle_id=self.cycle_id, experiment_cell_id=cell_id,
+            format_key="text_focus", name="早上第一杯主題", folder_code="H1N0", actor=ACTOR,
+            components=[
+                {"component_type": "title", "content": "每天第一杯，別再將就",
+                 "fingerprint_json": {"angle": "pain", "tone": "blunt",
+                                      "format": "text_focus", "selling_point": "quality"}},
+            ],
+        )
+        theme_repo.adopt_theme(main.conn, self.bid, theme["id"], actor=ACTOR)
         self.client.post(f"/api/campaigns/{self.bid}/{self.cycle_id}/handoff/build")
 
     def tearDown(self):
-        ads_plan.PROVIDER, ads_creative.PROVIDER = self._orig_plan, self._orig_creative
+        ads_plan.PROVIDER = self._orig_plan
 
 
 class HandoffExtrasTest(_BaseHandoffTest):

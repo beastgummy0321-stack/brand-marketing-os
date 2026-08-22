@@ -21,6 +21,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 import app.main as main  # noqa: E402
 from app.ads import performance as ads_performance  # noqa: E402
+from app.ads import theme_repository as theme_repo  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
 from app.core import interrupts as core_interrupts  # noqa: E402
 from app.core import settings as core_settings  # noqa: E402
@@ -302,7 +303,10 @@ class AlertsFuelPipelineTest(unittest.TestCase):
     # -- 內容產線小計：待審／已發數 ---------------------------------------------------
 
     def _insert_variant(self, *, status: str) -> None:
-        """檔期／素材簡報過重，直接塞最小列（比照 test_ads_handoff.py 的作法）。"""
+        """一顆主題、底下一個元件（票 03-close-repoint-gaps：內容產線小計改讀主題表——
+        creative_variant 沒有存活寫入路徑，插那張表讀取層看不到，恆是 0/0）。
+        status='APPROVED' 對到主題已採用（published）、'DRAFT' 對到還沒採用（pending），
+        比照 theme_repository.count_components_by_adoption() 的口徑。"""
         cycle_id = new_id("ccy")
         ts = f"{TODAY}T00:00:00"
         main.conn.execute(
@@ -312,19 +316,18 @@ class AlertsFuelPipelineTest(unittest.TestCase):
             " '[\"meta\"]', 'PLANNING', 0, 0, 'normal', ?, ?)",
             (cycle_id, self.brand["id"], TODAY, TODAY, ts, ts),
         )
-        brief_id = new_id("cbf")
+        cell_id = new_id("exc")
         main.conn.execute(
-            "INSERT INTO creative_brief (id, campaign_cycle_id, brand_id, brief_type, purpose,"
-            " status, created_at, updated_at) VALUES (?, ?, ?, 'copy', '測試', 'draft', ?, ?)",
-            (brief_id, cycle_id, self.brand["id"], ts, ts),
+            "INSERT INTO experiment_cell (id, campaign_cycle_id, brand_id, created_at)"
+            " VALUES (?, ?, ?, ?)", (cell_id, cycle_id, self.brand["id"], ts))
+        theme = theme_repo.create_theme(
+            main.conn, self.brand["id"], campaign_cycle_id=cycle_id, experiment_cell_id=cell_id,
+            format_key="single_image", name=f"產線測試{cell_id}", folder_code=cell_id[-4:],
+            actor=ACTOR,
+            components=[{"component_type": "title", "content": "測試"}],
         )
-        main.conn.execute(
-            "INSERT INTO creative_variant (id, variant_type, creative_brief_id,"
-            " campaign_cycle_id, brand_id, attributes_json, status, created_at)"
-            " VALUES (?, 'copy', ?, ?, ?, '{}', ?, ?)",
-            (new_id("cvr"), brief_id, cycle_id, self.brand["id"], status, ts),
-        )
-        main.conn.commit()
+        if status == "APPROVED":
+            theme_repo.adopt_theme(main.conn, self.brand["id"], theme["id"], actor=ACTOR)
 
     def test_content_pipeline_zero_when_no_variants(self):
         self.assertEqual(self._get()["content_pipeline"], {"pending": 0, "published": 0})

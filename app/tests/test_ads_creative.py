@@ -23,12 +23,13 @@ from app.ads import creative_matrix as cmx  # noqa: E402
 from app.ads import fingerprint as fp  # noqa: E402
 from app.ads import plan as ads_plan  # noqa: E402
 from app.ads import routes as ads_routes  # noqa: E402
+from app.ads import theme_repository as theme_repo  # noqa: E402
 from app.ads.routes_creative import _CREATIVE_STAGES  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
 from app.core import settings as coresettings  # noqa: E402
 from app.core.db import new_id, now_iso  # noqa: E402
 from app.llm import methodology  # noqa: E402
-from app.llm.providers import FakeProvider, ProviderError, ProviderResponse, Usage  # noqa: E402
+from app.llm.providers import FakeProvider, ProviderResponse, Usage  # noqa: E402
 from app.shared.web import OPERATOR  # noqa: E402
 
 
@@ -87,20 +88,51 @@ def _run_plan_gate(client, brand_id: str, cycle_id: str) -> None:
     client.post(f"/api/campaigns/{brand_id}/{cycle_id}/plan/approve")
 
 
-def _reject_variant(brand_id: str, variant_id: str, reason_code: str) -> tuple:
-    """舊頁 POST `/creatives/{變體 id}/reject` 的業務等價，照 app/ads/routes_creative.py
-    ads_creative_reject() 的順序：先記下結構化理由與指紋快照，再當場改寫一版放回原位。
-
-    回 (改寫成功嗎, 要給使用者看的那句「我學到了…」)。舊頁把 learned 塞進轉址網址，
-    改寫失敗時補一句並帶 kind=warn——所以「kind=warn」＝這裡的 ok=False。理由碼不合法時
-    ads_creative.reject() 直接拋 ValueError，舊頁就是接住它轉成 kind=warn。
-    actor 用 OPERATOR，跟舊頁沒設定操作人時 require_actor() 拿到的值相同。"""
+def _reject_variant(brand_id: str, variant_id: str, reason_code: str) -> str:
+    """記下結構化理由與指紋快照，回「我學到了…」那句話。不再接著呼叫 rewrite()——它仍寫
+    creative_variant（D6 不動舊路徑），套主題元件 id 會 KeyError，留著不刪但不在這裡用。"""
     variant = ads_creative.reject(main.conn, brand_id, variant_id,
                                   reason_code=reason_code, actor=OPERATOR)
-    learned = ads_creative.learned_message(reason_code, variant["fingerprint"])
-    ok, _ = ads_creative.rewrite(main.conn, brand_id, variant_id,
-                                 reason_code=reason_code, actor=OPERATOR)
-    return ok, learned
+    return ads_creative.learned_message(reason_code, variant["fingerprint"])
+
+
+def _adopted_theme_component(brand_id: str, cycle_id: str, cell_id: str, *,
+                             content: str = "測試素材內容", fingerprint: dict = None,
+                             component_type: str = "body", folder_code: str = "RJ01") -> dict:
+    """開一顆已採用主題、一個元件，回傳轉譯後的舊素材形狀（reject／restore／
+    approve_selection 現在讀主題表，不能拿 creative_variant id 餵給它們）。"""
+    theme = theme_repo.create_theme(
+        main.conn, brand_id, campaign_cycle_id=cycle_id, experiment_cell_id=cell_id,
+        format_key="single_image", name="退件測試主題", folder_code=folder_code, actor=OPERATOR,
+        components=[{"component_type": component_type, "content": content,
+                     "fingerprint_json": fingerprint or {"angle": "benefit", "tone": "warm",
+                                                         "format": "text_focus", "selling_point": "quality"}}],
+    )
+    theme_repo.adopt_theme(main.conn, brand_id, theme["id"], actor=OPERATOR)
+    return ads_creative.get_variant(main.conn, brand_id, theme["components"][0]["id"])
+
+
+def _read_creative_variant_rows(conn, brand_id: str, cycle_id: str) -> list:
+    """直接讀 creative_variant，不經 list_variants()（票 02-repoint-creative-readers 之後
+    改讀主題表，看不到 generate() 寫的內容）——複製舊版 list_variants() 的讀法。"""
+    rows = [dict(r) for r in conn.execute(
+        "SELECT * FROM creative_variant WHERE brand_id = ? AND campaign_cycle_id = ?"
+        " ORDER BY experiment_cell_id, recommendation_rank, id",
+        (brand_id, cycle_id),
+    )]
+    for row in rows:
+        attributes = json.loads(row["attributes_json"] or "{}")
+        row["content"] = attributes.get("content", "")
+        row["methodology_missing"] = attributes.get("methodology_missing") or []
+        row["missing_creative_types"] = attributes.get("missing_creative_types") or []
+        row["creative_angle_number"] = attributes.get("creative_angle_number")
+        row["on_camera"] = bool(attributes.get("on_camera"))
+        row["cut_type"] = attributes.get("cut_type")
+        row["cut_type_label"] = cmx.CUT_TYPES.get(row["cut_type"]) if row["cut_type"] else None
+        row["quote_source"] = attributes.get("quote_source")
+        row["customer_voice_available"] = attributes.get("customer_voice_available", True)
+        row["fingerprint"] = json.loads(row["fingerprint_json"] or "{}")
+    return rows
 
 
 # 票 7：切法要跨多種（>= HOOK_CUT_TYPE_MIN_DISTINCT），依序輪流指派避免測試資料自己違規。
@@ -198,7 +230,8 @@ class _BaseCreativeTest(unittest.TestCase):
         return ads_creative.generate(main.conn, self.bid, self.cycle_id, ACTOR)
 
     def _variants(self):
-        return ads_creative.list_variants(main.conn, self.bid, self.cycle_id)
+        """讀 generate() 落庫的內容，不是 ads_creative.list_variants()（見 _read_creative_variant_rows）。"""
+        return _read_creative_variant_rows(main.conn, self.bid, self.cycle_id)
 
 
 class FingerprintTableTest(unittest.TestCase):
@@ -623,30 +656,40 @@ class CreativeMatrixTest(_BaseCreativeTest):
 
 
 class OppositionSelectionTest(_BaseCreativeTest):
+    """票 02-repoint-creative-readers：採用發生在 theme_repository.adopt_theme()，
+    approve_selection() 改成只清點沒被手動退掉的活躍元件則數，不再重複寫決策（見 creative.py）。"""
+
+    def _adopt_two_themes(self):
+        themes = []
+        for cell_id, label, code in ((self.cell_ids[0], "A", "OS01"), (self.cell_ids[1], "B", "OS02")):
+            theme = theme_repo.create_theme(
+                main.conn, self.bid, campaign_cycle_id=self.cycle_id, experiment_cell_id=cell_id,
+                format_key="single_image", name=f"主題{label}", folder_code=code, actor=OPERATOR,
+                components=[{"component_type": "title", "content": f"主題{label}標題"},
+                           {"component_type": "body", "content": f"主題{label}文案"}])
+            theme_repo.adopt_theme(main.conn, self.bid, theme["id"], actor=OPERATOR)
+            themes.append(theme)
+        return themes
+
     def test_zero_clicks_adopts_everything(self):
-        """反對制的核心：什麼都不點也能過關，採用的是「他沒有反對的」。"""
-        self._generate()
+        """反對制的核心：什麼都不點也能過關，算進去的是「他沒有反對的」。"""
+        self._adopt_two_themes()
         adopted = ads_creative.approve_selection(main.conn, self.bid, self.cycle_id, OPERATOR)
-        self.assertTrue(adopted)  # 舊頁 adopted == 0 才轉成 kind=warn，這裡是正常那條路
+        self.assertEqual(adopted, 4)  # 2 顆主題 × 2 元件，沒有人手動退掉任何一個
         rows = main.conn.execute(
             "SELECT decision, COUNT(*) c FROM adoption_decision WHERE campaign_cycle_id = ?"
             " GROUP BY decision", (self.cycle_id,)).fetchall()
-        self.assertEqual({r["decision"]: r["c"] for r in rows}, {"adopted": 4})
+        # 只有主題採用當下寫的那兩筆——approve_selection() 不再重複寫一筆一樣的決策。
+        self.assertEqual({r["decision"]: r["c"] for r in rows}, {"adopted": 2})
 
     def test_rejected_variant_is_not_adopted(self):
-        self._generate()
-        target = self._variants()[0]
-        ads_creative.PROVIDER = FakeProvider(response=_fake(json.dumps(
-            {"content": "改寫後的版本", "rationale": "避開太生硬",
-             "fingerprint": {"angle": "benefit", "tone": "warm",
-                             "format": "text_focus", "selling_point": "quality"}},
-            ensure_ascii=False)))
+        theme_a, _ = self._adopt_two_themes()
+        target = ads_creative.get_variant(main.conn, self.bid, theme_a["components"][0]["id"])
         _reject_variant(self.bid, target["id"], "too_stiff")
-        ads_creative.approve_selection(main.conn, self.bid, self.cycle_id, OPERATOR)
-        adopted_ids = {r["target_id"] for r in main.conn.execute(
-            "SELECT target_id FROM adoption_decision WHERE decision = 'adopted'"
-            " AND campaign_cycle_id = ?", (self.cycle_id,))}
-        self.assertNotIn(target["id"], adopted_ids)
+        adopted = ads_creative.approve_selection(main.conn, self.bid, self.cycle_id, OPERATOR)
+        self.assertEqual(adopted, 3)  # 4 顆元件退掉 1 顆
+        variants = ads_creative.list_variants(main.conn, self.bid, self.cycle_id)
+        self.assertNotIn(target["id"], {v["id"] for v in variants if not v["rejected"]})
 
     def test_approving_nothing_is_blocked_with_plain_message(self):
         adopted = ads_creative.approve_selection(main.conn, self.bid, self.cycle_id, OPERATOR)
@@ -655,20 +698,17 @@ class OppositionSelectionTest(_BaseCreativeTest):
 
 
 class RejectionMemoryTest(_BaseCreativeTest):
-    def _reject(self, variant, reason_code, rewrite_ok=True):
-        if rewrite_ok:
-            ads_creative.PROVIDER = FakeProvider(response=_fake(json.dumps(
-                {"content": "改寫後的版本", "rationale": "避開原本的問題",
-                 "fingerprint": {"angle": "benefit", "tone": "friendly",
-                                 "format": "text_focus", "selling_point": "quality"}},
-                ensure_ascii=False)))
-        else:
-            ads_creative.PROVIDER = FakeProvider(exception=ProviderError("模型暫時無法回應"))
+    """票 02-repoint-creative-readers：_rejection_constraints() 不看 target_type，拒絕目標
+    改用主題元件 fixture 一樣能驗「退掉下一批會避開」；rewrite() 不在這裡測，見 _reject_variant()。"""
+
+    def _reject(self, variant, reason_code):
         return _reject_variant(self.bid, variant["id"], reason_code)
 
+    def _target(self, **kwargs):
+        return _adopted_theme_component(self.bid, self.cycle_id, self.cell_ids[0], **kwargs)
+
     def test_rejection_stores_structured_reason_and_fingerprint_snapshot(self):
-        self._generate()
-        target = self._variants()[0]
+        target = self._target()
         self._reject(target, "too_stiff")
         row = main.conn.execute(
             "SELECT * FROM adoption_decision WHERE target_id = ?", (target["id"],)).fetchone()
@@ -676,37 +716,14 @@ class RejectionMemoryTest(_BaseCreativeTest):
         self.assertEqual(row["reason_code"], "too_stiff")
         self.assertEqual(json.loads(row["fingerprint_json"]), target["fingerprint"])
 
-    def test_rewrite_puts_a_replacement_back_in_place(self):
-        self._generate()
-        target = self._variants()[0]
-        before = len(self._variants())
-        self._reject(target, "too_stiff")
-        after = self._variants()
-        self.assertEqual(len(after), before + 1)
-        replacement = [v for v in after if v["content"] == "改寫後的版本"][0]
-        self.assertEqual(replacement["experiment_cell_id"], target["experiment_cell_id"])
-        self.assertEqual(replacement["variant_type"], target["variant_type"])
-
     def test_user_is_told_what_the_system_learned(self):
-        self._generate()
-        _, learned = self._reject(self._variants()[0], "too_stiff")
+        learned = self._reject(self._target(), "too_stiff")
         # 舊頁把這句 URL 編碼後塞進轉址網址（%E6%88%91%E5%AD%B8%E5%88%B0%E4%BA%86＝「我學到了」）
         self.assertIn("我學到了", learned)
 
-    def test_rewrite_failure_keeps_rejection_and_says_so(self):
-        """改寫失敗不能吞掉——拒絕仍要記住，訊息要誠實說沒改成。"""
-        self._generate()
-        target = self._variants()[0]
-        ok, _ = self._reject(target, "too_stiff", rewrite_ok=False)
-        self.assertFalse(ok)
-        row = main.conn.execute(
-            "SELECT * FROM adoption_decision WHERE target_id = ?", (target["id"],)).fetchone()
-        self.assertEqual(row["decision"], "rejected")
-
     def test_past_rejections_become_negative_constraints_in_next_prompt(self):
         """拒絕記憶的閉環：這期退掉的，下一批生成時會出現在「不要再出現」清單裡。"""
-        self._generate()
-        self._reject(self._variants()[0], "too_stiff")
+        self._reject(self._target(), "too_stiff")
 
         provider = FakeProvider(response=_fake(_variants_reply(self.cell_ids)))
         ads_creative.PROVIDER = provider
@@ -717,14 +734,12 @@ class RejectionMemoryTest(_BaseCreativeTest):
 
     def test_data_error_rejection_does_not_become_a_constraint(self):
         """「產品資訊不對」不該變成風格禁令，否則約束越積越多但射偏。"""
-        self._generate()
-        self._reject(self._variants()[0], "wrong_product")
+        self._reject(self._target(), "wrong_product")
         constraints = ads_creative._rejection_constraints(main.conn, self.bid)
         self.assertEqual(constraints, [])
 
     def test_invalid_reason_is_rejected(self):
-        self._generate()
-        target = self._variants()[0]
+        target = self._target()
         with self.assertRaises(ValueError):
             ads_creative.reject(main.conn, self.bid, target["id"],
                                 reason_code="亂填的", actor=OPERATOR)
@@ -732,12 +747,11 @@ class RejectionMemoryTest(_BaseCreativeTest):
 
 class CreativeIsolationTest(_BaseCreativeTest):
     def test_other_brand_sees_no_variants(self):
-        self._generate()
-        other = bi_repo.create_brand(main.conn, name="虛構隔壁烘焙", client_name=None,
-                                     actor=ACTOR)["id"]
+        """票 02-repoint-creative-readers：brand_id 隔離改驗主題化後的讀取層。"""
+        target = _adopted_theme_component(self.bid, self.cycle_id, self.cell_ids[0])
+        other = bi_repo.create_brand(main.conn, name="虛構隔壁烘焙", client_name=None, actor=ACTOR)["id"]
         self.assertEqual(ads_creative.list_variants(main.conn, other, self.cycle_id), [])
-        self.assertIsNone(
-            ads_creative.get_variant(main.conn, other, self._variants()[0]["id"]))
+        self.assertIsNone(ads_creative.get_variant(main.conn, other, target["id"]))
 
 
 class MissingTypeBackfillTest(_BaseCreativeTest):

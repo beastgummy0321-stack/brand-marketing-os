@@ -6,14 +6,13 @@
 不再往裡面加。
 """
 
+from app.ads import theme_repository as theme_repo
+
 
 def pipeline_counts(conn, brand_id: str) -> dict:
-    """這個品牌全部素材依審核狀態計數，跨全部檔期不分期。DRAFT＝待審（還沒過關卡二
-    素材採用，見 creative.approve_selection()）；APPROVED＝已發（關卡二採用後）。
+    """這個品牌全部素材依審核狀態計數，跨全部檔期不分期（票 03-close-repoint-gaps：
+    資料源改為主題表——creative_variant 沒有存活寫入路徑，查它兩個數字恆為 0）。
+    pending＝主題還沒採用（對應舊 DRAFT／待審）；published＝主題已採用（對應舊
+    APPROVED／已發，見 theme_repository.count_components_by_adoption() docstring）。
     沒有任何素材時兩者皆回 0（空狀態）。"""
-    rows = conn.execute(
-        "SELECT status, COUNT(*) AS c FROM creative_variant WHERE brand_id = ? GROUP BY status",
-        (brand_id,),
-    ).fetchall()
-    counts = {row["status"]: row["c"] for row in rows}
-    return {"pending": counts.get("DRAFT", 0), "published": counts.get("APPROVED", 0)}
+    return theme_repo.count_components_by_adoption(conn, brand_id)

@@ -224,24 +224,17 @@ class _Base(unittest.TestCase):
         main.conn.commit()
 
     def _insert_variant_fingerprint(self, cycle_id: str, fingerprint: dict) -> None:
+        """票 02-repoint-creative-readers：素材讀取源已改主題表，`check_echo_chamber()`
+        經 `creative.list_variants()` 讀，只認已採用主題（D4）——這裡改直接建一顆已採用
+        主題（含一個文案元件），不再插 creative_variant，那張表已經沒有任何讀取路徑會看。"""
         cell_id = self._insert_cell(cycle_id, angle="虛構切角：前一期")
-        brief_id = db.new_id("cbf")
-        ts = db.now_iso()
-        main.conn.execute(
-            "INSERT INTO creative_brief (id, campaign_cycle_id, experiment_cell_id, brand_id,"
-            " brief_type, purpose, status, created_at, updated_at)"
-            " VALUES (?, ?, ?, ?, 'copy', '虛構回音室測試', 'dispatched', ?, ?)",
-            (brief_id, cycle_id, cell_id, self.bid, ts, ts),
+        theme_repo.create_theme(
+            main.conn, self.bid, campaign_cycle_id=cycle_id, experiment_cell_id=cell_id,
+            format_key=fingerprint.get("format", "single_image"), name="虛構回音室測試主題",
+            folder_code="ECH0", actor=ACTOR, status="adopted",
+            components=[{"component_type": "body", "content": "虛構回音室測試",
+                        "fingerprint_json": fingerprint}],
         )
-        main.conn.execute(
-            "INSERT INTO creative_variant (id, variant_type, creative_brief_id,"
-            " campaign_cycle_id, experiment_cell_id, brand_id, attributes_json,"
-            " fingerprint_json, status, created_at)"
-            " VALUES (?, 'hook', ?, ?, ?, ?, '{}', ?, 'DRAFT', ?)",
-            (db.new_id("cvr"), brief_id, cycle_id, cell_id, self.bid,
-             json.dumps(fingerprint, ensure_ascii=False), ts),
-        )
-        main.conn.commit()
 
 
 class ApproveTriggersBatchTest(_Base):

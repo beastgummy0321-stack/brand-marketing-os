@@ -20,6 +20,7 @@ from app.ads import creative_matrix as cmx
 from app.ads import fingerprint as fp
 from app.ads import plan as ads_plan
 from app.ads import repository as ads_repo
+from app.ads import theme_repository as theme_repo
 from app.brand_intelligence import repository as bi
 from app.core import settings as coresettings
 from app.core.audit import write_audit
@@ -42,6 +43,15 @@ VARIANT_LABELS = {
     "hook": "開場白",
     "copy": "廣告文案",
     "script": "影片腳本",
+}
+
+# 票 02-repoint-creative-readers D3：新舊素材型別詞彙唯一對照表，只在這裡放一份。
+# description 故意不列入（DEC-B，使用者尚未決定要不要收進交接包）——不對照就等於不存在，
+# 讀取層（_component_to_variant）看到不在這張表裡的 component_type 一律跳過，不會外洩。
+COMPONENT_TYPE_TO_VARIANT_TYPE = {
+    "title": "hook",
+    "body": "copy",
+    "image_prompt": "image_prompt",
 }
 
 PARSE_FAIL_MESSAGE = "AI 有回覆，但格式讀不成預期的樣子。可以再試一次。"
@@ -483,44 +493,81 @@ def _persist(conn, brand_id: str, cycle_id: str, cells: list, variants: list,
 
 
 # ---------------------------------------------------------------------------
-# 讀取與採用／拒絕
+# 讀取與採用／拒絕（票 02-repoint-creative-readers：資料源改為 creative_theme／
+# creative_theme_component，經 app/ads/theme_repository.py 讀取——D2 單向依賴，本檔
+# 不直接查那兩張表。creative_variant 沒有任何存活寫入路徑，讀它只會看到空殼，
+# 詳見票面 Problem 段落與 D6）。
 # ---------------------------------------------------------------------------
 
-def list_variants(conn, brand_id: str, cycle_id: str) -> list:
-    """本期素材，依切角分組。每一則附最新一次的採用／拒絕決定。"""
-    rows = [dict(r) for r in conn.execute(
-        "SELECT * FROM creative_variant WHERE brand_id = ? AND campaign_cycle_id = ?"
-        " ORDER BY experiment_cell_id, recommendation_rank, id",
+def _cell_product_ids(conn, brand_id: str, cycle_id: str) -> dict:
+    """{experiment_cell_id: product_id}——experiment_cell 不是主題表，直接查（D2 只限主題
+    資料要經 theme_repository，切角格本來就是 generate() 也在用的既有查法）。"""
+    return {row["id"]: row["product_id"] for row in conn.execute(
+        "SELECT id, product_id FROM experiment_cell WHERE brand_id = ? AND campaign_cycle_id = ?",
         (brand_id, cycle_id),
-    )]
-    for row in rows:
-        attributes = json.loads(row["attributes_json"] or "{}")
-        row["content"] = attributes.get("content", "")
-        row["methodology_missing"] = attributes.get("methodology_missing") or []
-        row["missing_creative_types"] = attributes.get("missing_creative_types") or []
-        row["creative_angle_number"] = attributes.get("creative_angle_number")
-        row["on_camera"] = bool(attributes.get("on_camera"))
-        row["cut_type"] = attributes.get("cut_type")
-        row["cut_type_label"] = cmx.CUT_TYPES.get(row["cut_type"]) if row["cut_type"] else None
-        row["quote_source"] = attributes.get("quote_source")
-        row["customer_voice_available"] = attributes.get("customer_voice_available", True)
-        row["fingerprint"] = json.loads(row["fingerprint_json"] or "{}")
-        row["fingerprint_text"] = fp.describe(row["fingerprint"])
-        row["type_label"] = VARIANT_LABELS.get(row["variant_type"], row["variant_type"])
-        decision = conn.execute(
-            "SELECT * FROM adoption_decision WHERE brand_id = ? AND target_type = 'variant'"
-            " AND target_id = ? ORDER BY decided_at DESC LIMIT 1",
-            (brand_id, row["id"]),
-        ).fetchone()
-        row["decision"] = dict(decision) if decision else None
-        row["rejected"] = bool(decision and decision["decision"] == "rejected")
-        # 修憲落地 L2：法規自動預設挑掉的，跟使用者手動挑掉的是兩種不同狀態——
-        # 前者可以一鍵勾回、標籤與理由文字都不一樣，模板要分得出來。
-        row["auto_held"] = bool(row["rejected"] and decision["reason_code"] == fp.AUTO_HOLD_REASON_CODE)
-        row["reject_reason_label"] = (
-            fp.AUTO_HOLD_REASON_LABEL if row["auto_held"] else
-            fp.REJECT_REASON_LABELS.get(decision["reason_code"]) if row["rejected"] else None
-        )
+    )}
+
+
+def _component_to_variant(component: dict, theme: dict, product_id: Optional[str]) -> Optional[dict]:
+    """主題元件 → 舊素材形狀（D1 回傳形狀不變）。component_type 對不到 D3 對照表的
+    （目前只有 description，DEC-B）一律回 None，呼叫端跳過——不對照就等於不外洩。
+
+    theme_component 沒有 creative_angle_number／on_camera／cut_type／quote_source／
+    customer_voice_available／methodology_missing／missing_creative_types 這些舊欄位
+    （本來就屬於 creative_variant.attributes_json 的內容，主題模型沒有對應概念）；
+    保留 key、給安全預設值，模板／前端只讀得到「有沒有這個 key」不會 KeyError，
+    不臆測補一份假資料。
+    """
+    variant_type = COMPONENT_TYPE_TO_VARIANT_TYPE.get(component["component_type"])
+    if variant_type is None:
+        return None
+    fingerprint = component.get("fingerprint_json") or {}
+    return {
+        "id": component["id"],
+        "brand_id": component["brand_id"],
+        "campaign_cycle_id": component["campaign_cycle_id"],
+        "experiment_cell_id": theme["experiment_cell_id"],
+        "product_id": product_id,
+        "variant_type": variant_type,
+        "type_label": VARIANT_LABELS.get(variant_type, variant_type),
+        "content": component["content"],
+        "fingerprint": fingerprint,
+        "fingerprint_text": fp.describe(fingerprint),
+        "rejected": component["rejected"],
+        "reject_reason_label": component["reject_reason_label"],
+        "auto_held": component["auto_held"],
+        # routes_common.py 用 decision["decision"] == "adopted" 驅動 5 步進度軌；主題化之後
+        # 採用是主題級的（theme_repository.adopt_theme），這裡回傳的元件本來就只來自已採用
+        # 主題（見 list_variants 的過濾），所以一律是已採用形狀——decision 仍可能是 None
+        # （get_variant 對非已採用主題的元件單獨查時），但 key 一定在。
+        "decision": {"decision": "adopted"} if theme.get("status") == "adopted" else None,
+        "creative_angle_number": None,
+        "on_camera": None,
+        "cut_type": None,
+        "cut_type_label": None,
+        "quote_source": None,
+        "customer_voice_available": None,
+        "methodology_missing": [],
+        "missing_creative_types": [],
+        "rationale": "",
+    }
+
+
+def list_variants(conn, brand_id: str, cycle_id: str) -> list:
+    """本期已採用主題的元件，轉譯成舊素材形狀（D1）。D4：只有主題本身已採用，底下的
+    元件才算「活的」出現在這份清單——草稿主題的元件不出現，不論退件與否；已出現的
+    元件仍各自帶 rejected／reject_reason_label，呼叫端（delivery／handoff／compliance）
+    照舊自行過濾，不在這裡先濾掉退件項（否則 compliance 掃不到已退件仍要重掃的
+    auto_held 那類、delivery 也對不出「這格全退光」）。"""
+    themes = theme_repo.list_themes_for_cycle(conn, brand_id, cycle_id, status="adopted")
+    product_ids = _cell_product_ids(conn, brand_id, cycle_id)
+    rows = []
+    for theme in themes:
+        product_id = product_ids.get(theme["experiment_cell_id"])
+        for component in theme["components"]:
+            row = _component_to_variant(component, theme, product_id)
+            if row is not None:
+                rows.append(row)
     return rows
 
 
@@ -540,43 +587,37 @@ def group_by_cell(conn, brand_id: str, cycle_id: str) -> list:
 
 
 def get_variant(conn, brand_id: str, variant_id: str) -> Optional[dict]:
-    row = conn.execute(
-        "SELECT * FROM creative_variant WHERE brand_id = ? AND id = ?", (brand_id, variant_id)
-    ).fetchone()
-    if row is None:
+    """單則查詢，不受 D4「主題已採用」門檻限制——呼叫端（例如 handoff 回填交接包已存的
+    id、nextcycle 的 overclaim 候選卡）本來就可能查一個已經不再是最新採用狀態的元件，
+    id 存在就該查得到，是否「活的」由呼叫端自己的情境判斷。"""
+    component = theme_repo.get_component(conn, brand_id, variant_id)
+    if component is None:
         return None
-    variant = dict(row)
-    attributes = json.loads(variant["attributes_json"] or "{}")
-    variant["content"] = attributes.get("content", "")
-    variant["creative_angle_number"] = attributes.get("creative_angle_number")
-    variant["on_camera"] = bool(attributes.get("on_camera"))
-    variant["cut_type"] = attributes.get("cut_type")
-    variant["quote_source"] = attributes.get("quote_source")
-    variant["customer_voice_available"] = attributes.get("customer_voice_available", True)
-    variant["fingerprint"] = json.loads(variant["fingerprint_json"] or "{}")
-    return variant
+    theme = theme_repo.get_theme(conn, brand_id, component["creative_theme_id"])
+    if theme is None:
+        return None
+    product_id = None
+    if theme.get("experiment_cell_id"):
+        cell = conn.execute(
+            "SELECT product_id FROM experiment_cell WHERE brand_id = ? AND id = ?",
+            (brand_id, theme["experiment_cell_id"]),
+        ).fetchone()
+        product_id = cell["product_id"] if cell else None
+    return _component_to_variant(component, theme, product_id)
 
 
 def reject(conn, brand_id: str, variant_id: str, *, reason_code: str, actor: str,
            reason_text: Optional[str] = None) -> dict:
-    """記下一次拒絕，含當下的指紋快照（變體之後若被改寫，記憶仍指向被退的那一版）。"""
+    """記下一次拒絕，含當下的指紋快照（變體之後若被改寫，記憶仍指向被退的那一版）。
+
+    票 02-repoint-creative-readers：轉呼叫 theme_repository.reject_component()，複用它
+    對 D4 退件的判定與寫入（target_type='theme_component'），不在這裡重寫一份判定邏輯。
+    """
     variant = get_variant(conn, brand_id, variant_id)
     if variant is None:
         raise ValueError("找不到這則素材")
-    if reason_code not in fp.REJECT_REASON_LABELS:
-        raise ValueError("請選一個理由")
-
-    row_id = new_id("adp")
-    ts = now_iso()
-    conn.execute(
-        "INSERT INTO adoption_decision (id, brand_id, campaign_cycle_id, target_type, target_id,"
-        " decision, reason_code, reason_text, fingerprint_json, decided_by, decided_at)"
-        " VALUES (?, ?, ?, 'variant', ?, 'rejected', ?, ?, ?, ?, ?)",
-        (row_id, brand_id, variant["campaign_cycle_id"], variant_id, reason_code,
-         (reason_text or "").strip() or None,
-         json.dumps(variant["fingerprint"], ensure_ascii=False), actor, ts),
-    )
-    conn.commit()
+    theme_repo.reject_component(conn, brand_id, variant_id, reason_code=reason_code,
+                                actor=actor, reason_text=reason_text)
     return variant
 
 
@@ -591,6 +632,11 @@ def restore(conn, brand_id: str, variant_id: str, *, actor: str) -> dict:
 
     只用來勾回**系統自動**挑掉的那些——使用者自己手動挑掉的那則已經被 `rewrite` 改寫掉、
     原內容不再是「這一則」了，沒有勾回的意義，UI 也不會給這個按鈕。
+
+    票 02-repoint-creative-readers：決策紀錄改寫 target_type='theme_component'，才跟
+    theme_repository 的退件查詢（_attach_component_decision）對得上。主題模型目前沒有
+    「單元件恢復採用」的既有函式可呼叫（theme_repository 只有退件 reject_component()），
+    維持舊碼原本直接寫 adoption_decision 的風格，只換 target_type。
     """
     variant = get_variant(conn, brand_id, variant_id)
     if variant is None:
@@ -598,11 +644,11 @@ def restore(conn, brand_id: str, variant_id: str, *, actor: str) -> dict:
     conn.execute(
         "INSERT INTO adoption_decision (id, brand_id, campaign_cycle_id, target_type, target_id,"
         " decision, fingerprint_json, decided_by, decided_at)"
-        " VALUES (?, ?, ?, 'variant', ?, 'adopted', ?, ?, ?)",
+        " VALUES (?, ?, ?, 'theme_component', ?, 'adopted', ?, ?, ?)",
         (new_id("adp"), brand_id, variant["campaign_cycle_id"], variant_id,
          json.dumps(variant["fingerprint"], ensure_ascii=False), actor, now_iso()),
     )
-    write_audit(conn, brand_id=brand_id, entity_type="creative_variant", entity_id=variant_id,
+    write_audit(conn, brand_id=brand_id, entity_type="creative_theme_component", entity_id=variant_id,
                 action="compliance_restore", actor=actor,
                 before={"decision": "rejected"}, after={"decision": "adopted"})
     conn.commit()
@@ -620,7 +666,7 @@ def restore_all_auto_held(conn, brand_id: str, cycle_id: str, *, actor: str) -> 
         conn.execute(
             "INSERT INTO adoption_decision (id, brand_id, campaign_cycle_id, target_type,"
             " target_id, decision, fingerprint_json, decided_by, decided_at)"
-            " VALUES (?, ?, ?, 'variant', ?, 'adopted', ?, ?, ?)",
+            " VALUES (?, ?, ?, 'theme_component', ?, 'adopted', ?, ?, ?)",
             (new_id("adp"), brand_id, cycle_id, variant["id"],
              json.dumps(variant["fingerprint"], ensure_ascii=False), actor, ts),
         )
@@ -724,23 +770,17 @@ def approve_selection(conn, brand_id: str, cycle_id: str, actor: str, *, commit:
     """關卡二：把還沒被退掉的素材一次記為採用（反對制）。回傳採用則數。
 
     反對制的意思就在這裡——使用者什麼都不點也能過關，系統採用的是「他沒有反對的」。
+
+    票 02-repoint-creative-readers：主題化之後，「採用」這個動作已經在專屬的採用主題
+    畫面完成（theme_repository.adopt_theme()，見 app/ads/routes_creative_theme.py 的
+    /adopt 路由）——`list_variants()` 本來就只回傳已採用主題底下的元件（D4），能走到這裡
+    代表對應的主題早就採用過了。主題模型也沒有「單一元件標記已採用」這個顆粒度（AC3：
+    不提供逐欄位勾選採用），所以這裡不再重複寫一筆一模一樣的決策紀錄（否則『交付確認』
+    因補件被呼叫兩次，就會多出兩筆內容相同的採用紀錄）。反對制在這一關真正剩下的事，
+    是把「使用者沒有手動退掉的則數」算出來、留一筆稽核紀錄，供呼叫端（delivery.confirm）
+    判斷「有沒有東西可以交付」——沒有東西時回 0，跟舊行為一致。
     """
-    variants = list_variants(conn, brand_id, cycle_id)
-    adopted = 0
-    ts = now_iso()
-    for variant in variants:
-        if variant["rejected"]:
-            continue
-        conn.execute(
-            "INSERT INTO adoption_decision (id, brand_id, campaign_cycle_id, target_type,"
-            " target_id, decision, fingerprint_json, decided_by, decided_at)"
-            " VALUES (?, ?, ?, 'variant', ?, 'adopted', ?, ?, ?)",
-            (new_id("adp"), brand_id, cycle_id, variant["id"],
-             json.dumps(variant["fingerprint"], ensure_ascii=False), actor, ts),
-        )
-        conn.execute("UPDATE creative_variant SET status = 'APPROVED' WHERE id = ?",
-                     (variant["id"],))
-        adopted += 1
+    adopted = len([v for v in list_variants(conn, brand_id, cycle_id) if not v["rejected"]])
 
     write_audit(conn, brand_id=brand_id, entity_type="campaign_cycle", entity_id=cycle_id,
                 action="approve_creatives", actor=actor, before=None,

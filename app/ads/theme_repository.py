@@ -108,15 +108,24 @@ def list_theme_components(conn: sqlite3.Connection, brand_id: str, theme_id: str
 
 def _attach_component_decision(conn: sqlite3.Connection, brand_id: str, row: dict) -> None:
     """元件退件狀態（票 10）：比照 app/ads/creative.py list_variants() 的既有查法——每則
-    元件查一次最新決策，不整批 join（元件數量小，維持既有寫法一致優先於效能）。"""
+    元件查一次最新決策，不整批 join（元件數量小，維持既有寫法一致優先於效能）。
+
+    target_type 同時認 'theme_component' 與 'variant'（票 03-close-repoint-gaps）：
+    compliance.apply_default_holds()（app/ads/compliance.py:296-320）寫決策時仍用舊代號
+    'variant'，target_id 是元件 id（cthc_*，沒有跟舊 variant id 的 cvr_* 撞號的問題）。
+    ORDER BY decided_at DESC LIMIT 1 維持「最新決策為準」，restore() 補寫的 theme_component／
+    adopted 較晚，會蓋過較早的 variant／rejected，翻案照樣成立。"""
     decision = conn.execute(
-        "SELECT * FROM adoption_decision WHERE brand_id = ? AND target_type = 'theme_component'"
-        " AND target_id = ? ORDER BY decided_at DESC LIMIT 1",
+        "SELECT * FROM adoption_decision WHERE brand_id = ?"
+        " AND target_type IN ('theme_component', 'variant') AND target_id = ?"
+        " ORDER BY decided_at DESC LIMIT 1",
         (brand_id, row["id"]),
     ).fetchone()
     row["rejected"] = bool(decision and decision["decision"] == "rejected")
     row["reject_reason_label"] = (
         fp.REJECT_REASON_LABELS.get(decision["reason_code"]) if row["rejected"] else None)
+    row["auto_held"] = bool(
+        row["rejected"] and decision["reason_code"] == fp.AUTO_HOLD_REASON_CODE)
 
 
 def get_component(conn: sqlite3.Connection, brand_id: str, component_id: str) -> Optional[dict]:
@@ -142,6 +151,41 @@ def list_themes_for_cell(conn: sqlite3.Connection, brand_id: str,
     for theme in themes:
         theme["components"] = list_theme_components(conn, brand_id, theme["id"])
     return themes
+
+
+def list_themes_for_cycle(conn: sqlite3.Connection, brand_id: str, campaign_cycle_id: str, *,
+                          status: Optional[str] = None) -> list:
+    """依期查詢：整個檔期底下的全部主題（含各自元件），可選狀態篩選（票
+    02-repoint-creative-readers D2：app/ads/creative.py 的讀取三函式改源後只能透過本檔
+    取資料，不得直接查 creative_theme／creative_theme_component，這支補上「依期」的
+    查詢入口，比照 list_themes_for_cell()「依格」的既有寫法）。"""
+    sql = "SELECT * FROM creative_theme WHERE brand_id = ? AND campaign_cycle_id = ?"
+    params = [brand_id, campaign_cycle_id]
+    if status:
+        sql += " AND status = ?"
+        params.append(status)
+    sql += " ORDER BY experiment_cell_id, created_at"
+    themes = _rows(conn.execute(sql, params))
+    for theme in themes:
+        theme["components"] = list_theme_components(conn, brand_id, theme["id"])
+    return themes
+
+
+def count_components_by_adoption(conn: sqlite3.Connection, brand_id: str) -> dict:
+    """品牌全部元件依「所屬主題是否已採用」計數，跨全部檔期不分期（票
+    03-close-repoint-gaps：app/ads/creative_pipeline.py 的駕駛艙內容產線小計改讀本表——
+    creative_variant 沒有存活寫入路徑，直接查它兩個數字恆為 0）。`creative.list_variants()`
+    是逐期、只回已採用的，表達不了 pending，所以另開這支跨期計數，不透過 creative.py。
+    pending＝主題狀態非 adopted 的元件，published＝主題狀態是 adopted 的元件，保留舊表
+    逐則計數的細度。沒有任何元件時兩者皆回 0。"""
+    row = conn.execute(
+        "SELECT"
+        " SUM(CASE WHEN t.status = 'adopted' THEN 1 ELSE 0 END) AS published,"
+        " SUM(CASE WHEN t.status != 'adopted' THEN 1 ELSE 0 END) AS pending"
+        " FROM creative_theme_component c JOIN creative_theme t ON t.id = c.creative_theme_id"
+        " WHERE c.brand_id = ?", (brand_id,),
+    ).fetchone()
+    return {"pending": row["pending"] or 0, "published": row["published"] or 0}
 
 
 def update_theme_status(conn: sqlite3.Connection, brand_id: str, theme_id: str, *,
