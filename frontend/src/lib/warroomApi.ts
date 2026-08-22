@@ -553,7 +553,8 @@ export const fetchPerformance = (
   getJson(`${cycleBase(brandId, cycleId)}/performance`);
 export const simulatePerformance = (brandId: string, cycleId: string): Promise<void> =>
   postJson(`${cycleBase(brandId, cycleId)}/performance/simulate`);
-export const submitManualPerformance = (brandId: string, cycleId: string, fields: Record<string, string>): Promise<void> =>
+// 票 11 D2：跟 CSV 匯入同一個回應形狀（imported/skipped/…），面板才能秀出跳過幾筆。
+export const submitManualPerformance = (brandId: string, cycleId: string, fields: Record<string, string>): Promise<CsvImportResult> =>
   postJson(`${cycleBase(brandId, cycleId)}/performance/manual`, fields);
 export function importPerformanceCsv(brandId: string, cycleId: string, file: File): Promise<CsvImportResult> {
   const form = new FormData();

@@ -23,6 +23,7 @@ from app.ads import reading  # noqa: E402
 from app.ads import repository as ads_repo  # noqa: E402
 from app.ads import simulation  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
+from app.core.db import new_id, now_iso  # noqa: E402
 from app.llm.providers import FakeProvider, ProviderResponse, Usage  # noqa: E402
 
 
@@ -127,6 +128,33 @@ class SimulatedNumbersTest(_BaseSimTest):
     def test_basis_says_where_the_numbers_came_from(self):
         _, note = simulation._basis(main.conn, self.bid)
         self.assertIn("產業通例值", note)
+
+
+class SimulatedProductAttributionTest(_BaseSimTest):
+    """票 11 D3：模擬成效沒有廣告可對（沒有 publishing_package），`resolve_product_id`
+    的 a／b 兩條路都用不上，一律留 NULL——「檔期只賣一個產品就算那個的」那條路
+    （原設計選項 c）複審後拿掉了，即使檔期真的只賣一個產品也不再猜（鐵則 16）。"""
+
+    def test_product_id_stays_null_even_when_cycle_sells_exactly_one_product(self):
+        cycle_id = self._open(amount="10000")
+        product = bi_repo.create_product(main.conn, self.bid, name="虛構商品", actor=ACTOR)
+        ts = now_iso()
+        main.conn.execute(
+            "INSERT INTO campaign_cycle_product (id, campaign_cycle_id, brand_id, product_id,"
+            " allocated_budget, allocation_ratio, allocation_basis, economics_missing,"
+            " created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 'equal_split', 0, ?, ?)",
+            (new_id("ccp"), cycle_id, self.bid, product["id"], 10000.0, 1.0, ts, ts),
+        )
+        main.conn.commit()
+        simulation.generate(main.conn, self.bid, cycle_id, ACTOR)
+        row = perf.list_snapshots(main.conn, self.bid, cycle_id)[0]
+        self.assertIsNone(row["product_id"])
+
+    def test_product_id_null_when_cycle_sells_no_product(self):
+        cycle_id = self._open(amount="10000")
+        simulation.generate(main.conn, self.bid, cycle_id, ACTOR)
+        row = perf.list_snapshots(main.conn, self.bid, cycle_id)[0]
+        self.assertIsNone(row["product_id"])
 
 
 class SimulationPagesTest(_BaseSimTest):

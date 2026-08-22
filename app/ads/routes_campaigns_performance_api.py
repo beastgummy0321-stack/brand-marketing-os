@@ -121,7 +121,16 @@ async def performance_manual(request: Request, brand_id: str, cycle_id: str):
 
     ads_performance.save_derived_metrics(main_mod.conn, brand_id, cycle_id)
     ads_pacing.check_cycle(main_mod.conn, brand_id, cycle_id)  # 新數據落地後判一次步調
-    return JSONResponse(None, status_code=204)
+    # 票 11 D2：跟 CSV 路由同一個回應形狀，讓面板秀出「跳過幾筆」——不然使用者以為
+    # 手動填一定會生效，實則被去重悄悄吃掉還不知道。
+    return JSONResponse({
+        "imported": result.imported,
+        "quarantined": result.quarantined,
+        "skipped": result.skipped,
+        "matched_assets": result.matched_assets,
+        "unmatched_columns": result.unmatched_columns,
+        "warnings": [],
+    })
 
 
 @router.post("/api/campaigns/{brand_id}/{cycle_id}/performance/csv")

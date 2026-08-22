@@ -16,6 +16,7 @@ CSV 解析的原則：**認概念欄，不認檔案格式**。Meta 匯出的欄�
 
 import csv
 import io
+import json
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -211,42 +212,104 @@ def _revenue_source(row: dict, derived: bool) -> Optional[str]:
 
 
 def match_asset_mapping(conn, brand_id: str, cycle_id: Optional[str],
-                        ad_name: Optional[str]) -> Optional[str]:
+                        ad_name: Optional[str]) -> tuple:
     """CSV「廣告名稱」欄 → 素材層歸屬（修憲落地 G2，決策 0035 第二節第 4 點）。
-
     廣告名稱是我們自己在 app/ads/handoff.py build_names() 產生的固定格式，同一檔期內唯一，
-    交接包也是指示使用者原封不動貼進 Meta 的欄位（見 ads_handoff.html 的複製按鈕）——
-    所以拿 CSV 匯出的原始字串做「完全相等」比對就夠，不需要也不做模糊猜測
-    （決策 0022 第 7 點：猜錯比猜不到更糟）。
-
-    只有這則廣告已經走過關卡三具名授權（`external_ad_mapping` 已存在）才回傳，
-    因為那才是「哪一則素材」的可信歸屬——沒授權過的名稱恰巧撞上，也不代表這筆錢是它花的。
-    對不上（使用者在 Meta 上改過名字）或還沒授權，一律回 None，呼叫端誠實降級成檔期層。
+    所以拿 CSV 匯出的原始字串做「完全相等」比對就夠，不做模糊猜測（決策 0022 第 7 點）。
+    回傳 (external_ad_mapping_id, publishing_package_id)：後者是票 11 D3 產品歸因要用的
+    （見 resolve_product_id）——package 只要名稱對得上就回傳，不需要等關卡三具名授權；
+    mapping_id 才需要 external_ad_mapping 已存在。對不上兩者皆回 None，呼叫端誠實降級。
     """
     ad_name = (ad_name or "").strip()
     if not cycle_id or not ad_name:
-        return None
+        return None, None
     packages = conn.execute(
         "SELECT id FROM publishing_package WHERE brand_id = ? AND campaign_cycle_id = ?"
         " AND ad_name = ?", (brand_id, cycle_id, ad_name),
     ).fetchall()
     if len(packages) != 1:
-        return None  # 對不上，或者（不該發生的）撞名，一律不猜
+        return None, None  # 對不上，或者（不該發生的）撞名，一律不猜
+    package_id = packages[0]["id"]
     mapping = conn.execute(
         "SELECT id FROM external_ad_mapping WHERE publishing_package_id = ?"
-        " ORDER BY created_at DESC LIMIT 1", (packages[0]["id"],),
+        " ORDER BY created_at DESC LIMIT 1", (package_id,),
     ).fetchone()
-    return mapping["id"] if mapping else None
+    return (mapping["id"] if mapping else None), package_id
 
 
-def _brand_level_signature(row: dict, date_start: str, date_stop: str, source: str,
-                           currency: str) -> tuple:
-    """品牌層（無檔期）快照的重複判斷依據：日期範圍＋全部量測欄＋來源＋幣別完全相同，
-    視為同一列重複匯入（issue #68）。只給 cycle_id 為 None 的路徑用——檔期層快照
-    本來就允許同時段重複入庫（見 test_snapshots_accumulate_never_overwrite），不動它。"""
+def resolve_product_id(conn, brand_id: str, cycle_id: Optional[str],
+                       publishing_package_id: Optional[str] = None) -> Optional[str]:
+    """票 11 D3：這筆成效歸屬哪個產品，只在能確定時才填，模稜兩可一律 None（鐵則 16）。
+    CSV／Meta 同步／模擬三個寫入口共用這份解析順序，不各寫一套。命中就停：
+      a. 對到的 publishing_package 自己標的 product_id
+      b. 否則看那個 package 掛的 experiment_cell 的 product_id
+      c. 都不行，回 None
+    （原本還有「檔期剛好只賣一個產品就算那個的」一條，複審拿掉了：規格要解決的是
+    「一期賣兩個產品時分不出誰拖累」，這條路只在單一產品檔期觸發，對此毫無幫助，
+    卻會讓 reading.py 的 per_product 分支多長出一條跟檔期層重複的結論。）
+    品牌層（cycle_id 為 None）沒有檔期可查，直接回 None。
+    """
+    if not cycle_id or not publishing_package_id:
+        return None
+    package = conn.execute(
+        "SELECT product_id, experiment_cell_id FROM publishing_package WHERE id = ?",
+        (publishing_package_id,),
+    ).fetchone()
+    if not package:
+        return None
+    if package["product_id"]:
+        return package["product_id"]
+    if package["experiment_cell_id"]:
+        cell = conn.execute(
+            "SELECT product_id FROM experiment_cell WHERE id = ?",
+            (package["experiment_cell_id"],),
+        ).fetchone()
+        if cell and cell["product_id"]:
+            return cell["product_id"]
+    return None
+
+
+def _row_identity(row: dict) -> str:
+    """廣告名稱＋活動名稱＋廣告組合名稱，解析器有給哪個算哪個（票 11 blocker 1）。
+    剛匯入的列跟從 raw_json 讀回來的舊列都呼叫這支，兩邊才算得出一致的簽章——
+    舊版拿 LEFT JOIN 反查名稱，沒對上素材的列全部塌成空字串，兩支還沒出量、
+    數字剛好都是 0 的不同廣告會被誤判成同一列，第二支靜默丟掉。"""
+    return "|".join((row.get(field) or "").strip()
+                    for field in ("ad_name", "campaign_name", "adset_name"))
+
+
+def _duplicate_signature(row: dict, date_start: str, date_stop: str, source: str,
+                         currency: str, ad_identity: str = "") -> tuple:
+    """匯入去重判斷依據的共用建構子（票 11）：日期範圍＋全部量測欄＋來源＋幣別完全
+    相同，視為同一列重複匯入（issue #68 訂的品牌層判斷依據）。ad_identity 品牌層
+    （cycle_id 為 None）留空——一列就是整個品牌的加總；檔期層填 `_row_identity`
+    算出來的廣告身分（澄清 1）。"""
     return (date_start, date_stop, row.get("impressions"), row.get("clicks"),
             row.get("spend"), row.get("conversions"), row.get("revenue"),
-            row.get("frequency"), row.get("reach"), source, currency)
+            row.get("frequency"), row.get("reach"), source, currency, ad_identity)
+
+
+def _existing_signatures(conn, brand_id: str, cycle_id: Optional[str]) -> set:
+    """讀回這個範圍已入庫的快照，重建成跟 `_duplicate_signature` 同一組判斷依據。
+    檔期層 ad_identity 從 raw_json 讀回原始列餵給 `_row_identity`（票 11 blocker 1：
+    不再靠 external_ad_mapping LEFT JOIN 反查，那條路沒對上素材的列全塌成空字串）。
+    raw_json 是 NULL 的舊列（D4 不回填）身分項留空——不知道就是不知道，不能猜。"""
+    cols = ("date_range_start, date_range_end, impressions, clicks, spend, conversions,"
+           " revenue, frequency, reach, source, currency")
+    if cycle_id is None:
+        query = f"SELECT {cols} FROM performance_snapshot WHERE brand_id = ? AND campaign_cycle_id IS NULL"
+        params = (brand_id,)
+    else:
+        query = f"SELECT {cols}, raw_json FROM performance_snapshot WHERE brand_id = ? AND campaign_cycle_id = ?"
+        params = (brand_id, cycle_id)
+    signatures = set()
+    for r in conn.execute(query, params):
+        ad_identity = ("" if cycle_id is None else
+                      _row_identity(json.loads(r["raw_json"]) if r["raw_json"] else {}))
+        signatures.add((r["date_range_start"], r["date_range_end"], r["impressions"],
+                        r["clicks"], r["spend"], r["conversions"], r["revenue"],
+                        r["frequency"], r["reach"], r["source"], r["currency"], ad_identity))
+    return signatures
 
 
 def import_rows(conn, brand_id: str, cycle_id: Optional[str], rows: list, *,
@@ -257,27 +320,18 @@ def import_rows(conn, brand_id: str, cycle_id: Optional[str], rows: list, *,
     每一列先過合理性海關；命中的照樣入庫但標記隔離，判讀不會讀到它——
     壞資料要看得到（才知道匯錯檔），但不能污染結論。
 
-    品牌層（cycle_id 為 None）額外做內容去重（issue #68：F8 破壞者 Persona 發現同一份
-    Meta 品牌層歷史 CSV 匯入兩次會被 save_brand_level_derived_metrics() 靜默重複累計，
-    月度中位數失真）。檔期層快照不受影響——那條路徑本來就允許同時段重複記錄（追蹤同一天
-    多次拉數），不能動既有行為。
+    內容去重（票 11 擴大到檔期層，原本只有品牌層——issue #68）：判斷依據共用
+    `_duplicate_signature`，身分項用 `_row_identity`。manual 走同一套判斷，不豁免——
+    manual 沒有廣告名稱等身分欄位可填，ad_identity 留空，誠實的剩餘缺口是：同一天
+    手動填兩筆數字剛好相同的「不同」資料（例如兩個廣告帳號各自手動填、剛好同一天
+    同樣數字）會被誤判成重複而跳過。緩解不是猜身分，是讓畫面把 skipped 秀出來
+    （票 11 D2）——使用者一看到「跳過了幾筆」就知道要改日期或數字，不會被靜默吃掉。
     """
     result = result or ImportResult()
     ts = now_iso()
     batch_id = f"import_{ts}"
 
-    seen_signatures = None
-    if cycle_id is None:
-        seen_signatures = {
-            (r["date_range_start"], r["date_range_end"], r["impressions"], r["clicks"],
-             r["spend"], r["conversions"], r["revenue"], r["frequency"], r["reach"],
-             r["source"], r["currency"])
-            for r in conn.execute(
-                "SELECT date_range_start, date_range_end, impressions, clicks, spend,"
-                " conversions, revenue, frequency, reach, source, currency"
-                " FROM performance_snapshot WHERE brand_id = ? AND campaign_cycle_id IS NULL",
-                (brand_id,))
-        }
+    seen_signatures = _existing_signatures(conn, brand_id, cycle_id)
 
     for row in rows:
         derived = _derive_revenue_from_roas(row)
@@ -286,38 +340,43 @@ def import_rows(conn, brand_id: str, cycle_id: Optional[str], rows: list, *,
         date_start = row.get("date_start") or row.get("date_stop") or (today or "")
         date_stop = row.get("date_stop") or date_start
 
-        if seen_signatures is not None:
-            signature = _brand_level_signature(row, date_start, date_stop, source, currency)
-            if signature in seen_signatures:
-                result.skipped += 1
-                continue
-            seen_signatures.add(signature)
+        ad_identity = _row_identity(row) if cycle_id else ""
+        signature = _duplicate_signature(row, date_start, date_stop, source, currency,
+                                         ad_identity)
+        if signature in seen_signatures:
+            result.skipped += 1
+            continue
+        seen_signatures.add(signature)
 
         sanity = guardrails.check_data_sanity(row, today=today)
         quarantined = bool(sanity)
         if quarantined:
             result.quarantined += 1
 
-        # 修憲落地 G2：廣告名稱欄對得回已授權的素材才寫 external_ad_mapping_id，
-        # 對不上就留空——判讀頁會誠實只顯示到檔期層，不去猜
-        mapping_id = match_asset_mapping(conn, brand_id, cycle_id, row.get("ad_name"))
+        # 修憲落地 G2：廣告名稱欄對得回已授權的素材才寫 external_ad_mapping_id，對不上就留空
+        mapping_id, package_id = match_asset_mapping(conn, brand_id, cycle_id, row.get("ad_name"))
         if mapping_id:
             result.matched_assets += 1
+        product_id = resolve_product_id(conn, brand_id, cycle_id, package_id)
+        # 票 11：raw_json 存這一列解析後的原始內容——去重判斷回頭讀它算 ad_identity
+        # （見 _existing_signatures），line_no 只是解析時的行號，不是資料本身，不存。
+        raw_json = json.dumps({k: v for k, v in row.items() if k != "line_no"},
+                              ensure_ascii=False)
 
         conn.execute(
-            "INSERT INTO performance_snapshot (id, brand_id, campaign_cycle_id,"
+            "INSERT INTO performance_snapshot (id, brand_id, campaign_cycle_id, product_id,"
             " external_ad_mapping_id, platform, meta_campaign_id, meta_adset_id, meta_ad_id,"
             " date_range_start, date_range_end, as_of_date, snapshot_taken_at, currency,"
             " impressions, clicks, spend, conversions, revenue, revenue_source, frequency,"
             " reach, raw_json, reconciled, source, import_batch_id, quarantined,"
             " quarantine_reason, created_at)"
-            " VALUES (?, ?, ?, ?, 'meta', NULL, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,"
-            " ?, NULL, 1, ?, ?, ?, ?, ?)",
-            (new_id("psn"), brand_id, cycle_id, mapping_id, date_start, date_stop, date_stop, ts,
-             currency, row.get("impressions"), row.get("clicks"), row.get("spend"),
-             row.get("conversions"), row.get("revenue"), revenue_source, row.get("frequency"),
-             row.get("reach"), source, batch_id, 1 if quarantined else 0,
-             "；".join(f.message for f in sanity) or None, ts),
+            " VALUES (?, ?, ?, ?, ?, 'meta', NULL, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,"
+            " ?, ?, ?, 1, ?, ?, ?, ?, ?)",
+            (new_id("psn"), brand_id, cycle_id, product_id, mapping_id, date_start, date_stop,
+             date_stop, ts, currency, row.get("impressions"), row.get("clicks"),
+             row.get("spend"), row.get("conversions"), row.get("revenue"), revenue_source,
+             row.get("frequency"), row.get("reach"), raw_json, source, batch_id,
+             1 if quarantined else 0, "；".join(f.message for f in sanity) or None, ts),
         )
         result.imported += 1
 

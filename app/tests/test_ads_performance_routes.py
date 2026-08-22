@@ -40,12 +40,15 @@ def _fake(text):
 class PerformanceRouteTest(_BaseImportTest):
     """票 01：T4 清倉連 JSON 路由也一併清掉；復原 `/performance/manual`／`/csv` 兩條路由。"""
 
-    def test_manual_route_imports_and_returns_204(self):
+    def test_manual_route_imports_and_returns_result_json(self):
+        """票 11 D2：手動路由改跟 CSV 路由同一個回應形狀，秀出跳過幾筆——不是 204 空回應。"""
         resp = self.client.post(f"/api/campaigns/{self.bid}/{self.cycle_id}/performance/manual",
                                 json={"spend": "12000", "impressions": "80000", "clicks": "1600",
                                       "conversions": "24", "revenue": "18000", "reach": "52000",
                                       "date_start": "2026-08-01", "date_stop": "2026-08-07"})
-        self.assertEqual(resp.status_code, 204)
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["imported"], 1)
+        self.assertEqual(resp.json()["skipped"], 0)
         rows = perf.list_snapshots(main.conn, self.bid, self.cycle_id)
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["source"], "manual")

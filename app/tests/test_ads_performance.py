@@ -6,6 +6,7 @@
 """
 
 import atexit
+import json
 import os
 import shutil
 import tempfile
@@ -227,7 +228,9 @@ class CsvImportTest(_BaseImportTest):
         self.assertEqual(row["source"], "csv")
         self.assertEqual(row["spend"], 5000.5)
         self.assertEqual(row["clicks"], 340)
-        self.assertIsNone(row["raw_json"])  # 判讀只讀正規化欄位，不碰原始資料
+        # 票 11：raw_json 現在存原始解析列（去重判斷要用），判讀仍然只讀正規化欄位，
+        # 不受影響（module docstring 那句話說的是判讀，不是匯入不寫）。
+        self.assertEqual(json.loads(row["raw_json"])["campaign_name"], "虛構檔期")
 
     def test_reach_column_lands_separately_from_impressions(self):
         csv_text = ("行銷活動名稱,曝光次數,觸及人數,花費金額\n"
@@ -268,9 +271,13 @@ class CsvImportTest(_BaseImportTest):
         self.assertEqual(perf.list_snapshots(main.conn, self.bid, self.cycle_id), [])
 
     def test_snapshots_accumulate_never_overwrite(self):
-        perf.import_csv(main.conn, self.bid, self.cycle_id, _CSV_ZH, actor=ACTOR)
-        perf.import_csv(main.conn, self.bid, self.cycle_id, _CSV_ZH, actor=ACTOR)
-        self.assertEqual(len(perf.list_snapshots(main.conn, self.bid, self.cycle_id)), 2)
+        """票 11 改了契約：檔期層現在也做內容去重（理由見 CycleLevelDuplicateImportTest）。
+        這份 CSV 沒有廣告名稱欄，兩次匯入內容完全相同，第二次視為重複整批略過。"""
+        first = perf.import_csv(main.conn, self.bid, self.cycle_id, _CSV_ZH, actor=ACTOR)
+        self.assertEqual(first.imported, 1)
+        second = perf.import_csv(main.conn, self.bid, self.cycle_id, _CSV_ZH, actor=ACTOR)
+        self.assertEqual((second.imported, second.skipped), (0, 1))
+        self.assertEqual(len(perf.list_snapshots(main.conn, self.bid, self.cycle_id)), 1)
 
     def test_csv_upload_without_date_columns_uses_today_not_blank(self):
         """匯入時 CSV 沒有日期欄，退回今天的日期，而不是空字串（issue #23 bug 4）。
@@ -733,13 +740,16 @@ class BrandLevelDuplicateImportTest(_BaseImportTest):
         self.assertEqual(result.skipped, 0)
 
     def test_cycle_scoped_import_still_accumulates_not_affected_by_dedupe(self):
-        """去重只管品牌層（cycle_id 為 None）；檔期層照舊每次都累積
-        （test_snapshots_accumulate_never_overwrite 既有行為不變）。"""
-        perf.import_csv(main.conn, self.bid, self.cycle_id, _CSV_ZH, actor=ACTOR)
-        second = perf.import_csv(main.conn, self.bid, self.cycle_id, _CSV_ZH, actor=ACTOR)
-        self.assertEqual(second.imported, 1)
-        self.assertEqual(second.skipped, 0)
-        self.assertEqual(len(perf.list_snapshots(main.conn, self.bid, self.cycle_id)), 2)
+        """票 11 改了契約：「檔期層去重不介入」已不成立，改驗證真正的邊界——品牌層與
+        檔期層去重範圍各自獨立，同一份內容在品牌層匯過不會讓檔期層誤判成也匯過。"""
+        perf.import_csv(main.conn, self.bid, None, _CSV_ZH, actor=ACTOR)  # 品牌層先匯一次
+        cycle_result = perf.import_csv(main.conn, self.bid, self.cycle_id, _CSV_ZH, actor=ACTOR)
+        self.assertEqual((cycle_result.imported, cycle_result.skipped), (1, 0))
+        self.assertEqual(len(perf.list_snapshots(main.conn, self.bid, self.cycle_id)), 1)
+
+
+# 票 11 CycleLevelDuplicateImportTest／ProductAttributionTest 兩個類別搬到
+# test_ads_performance_dedupe_attribution.py（本檔頂到 FILE_LINE_CAP，見該檔開頭說明）。
 
 
 if __name__ == "__main__":

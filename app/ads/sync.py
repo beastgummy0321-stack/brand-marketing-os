@@ -15,7 +15,8 @@ build_names），所以反解得回來。使用者在 Meta 上手改名字，猜
 """
 
 import calendar
-from dataclasses import dataclass
+import json
+from dataclasses import asdict, dataclass
 from datetime import date, timedelta
 from typing import Optional
 
@@ -115,27 +116,41 @@ class SyncResult:
     error: Optional[str] = None
 
 
-def _brand_level_signature(account_external: str, insight) -> tuple:
-    """品牌層（無檔期）成效的重複判斷依據（issue #69，比照 F9／issue #68 的思路）：
-    帳號＋活動／組合／廣告 ID＋日期範圍＋全部量測欄完全相同，視為同一列重複回填。
-    只給 cycle_id 為 None 的路徑用——檔期層快照本來就允許同時段重複入庫
-    （見 test_snapshots_accumulate_never_overwrite），不動它。"""
+def _duplicate_signature(account_external: str, insight) -> tuple:
+    """成效的重複判斷依據（issue #69，比照 F9／issue #68 的思路）：帳號＋活動／組合／
+    廣告 ID＋日期範圍＋全部量測欄完全相同，視為同一列重複回填。
+
+    票 11：這組簽章原本只給品牌層（cycle_id 為 None）用，現在檔期層回填也共用同一套
+    ——不必另外加「廣告身分」欄位，因為 insight.ad_id 從一開始就已經是簽章的一部分
+    （一支 Meta 廣告的洞察報告天生帶著自己的廣告 ID），不會有 CSV 匯入那種「同一列
+    分不出是哪支廣告」的問題。差別只在查詢既有簽章時的範圍（品牌層／某個檔期），
+    見 `_existing_signatures`。"""
     return (account_external, insight.campaign_id, insight.adset_id, insight.ad_id,
             insight.date_start, insight.date_stop, insight.impressions, insight.clicks,
             insight.spend, insight.conversions, insight.revenue, insight.frequency,
             insight.reach)
 
 
-def _existing_brand_level_signatures(conn, brand_id: str) -> set:
-    return {
-        (r["account_id"], r["meta_campaign_id"], r["meta_adset_id"], r["meta_ad_id"],
-         r["date_range_start"], r["date_range_end"], r["impressions"], r["clicks"],
-         r["spend"], r["conversions"], r["revenue"], r["frequency"], r["reach"])
-        for r in conn.execute(
+def _existing_signatures(conn, brand_id: str, cycle_id: Optional[str]) -> set:
+    """讀回這個範圍（品牌層或某個檔期）目前已入庫的快照，重建成跟 `_duplicate_signature`
+    同一組判斷依據，供這次回填比對——品牌層與檔期層各自獨立比對，互不影響。"""
+    if cycle_id is None:
+        rows = conn.execute(
             "SELECT account_id, meta_campaign_id, meta_adset_id, meta_ad_id,"
             " date_range_start, date_range_end, impressions, clicks, spend, conversions,"
             " revenue, frequency, reach FROM performance_snapshot"
             " WHERE brand_id = ? AND campaign_cycle_id IS NULL", (brand_id,))
+    else:
+        rows = conn.execute(
+            "SELECT account_id, meta_campaign_id, meta_adset_id, meta_ad_id,"
+            " date_range_start, date_range_end, impressions, clicks, spend, conversions,"
+            " revenue, frequency, reach FROM performance_snapshot"
+            " WHERE brand_id = ? AND campaign_cycle_id = ?", (brand_id, cycle_id))
+    return {
+        (r["account_id"], r["meta_campaign_id"], r["meta_adset_id"], r["meta_ad_id"],
+         r["date_range_start"], r["date_range_end"], r["impressions"], r["clicks"],
+         r["spend"], r["conversions"], r["revenue"], r["frequency"], r["reach"])
+        for r in rows
     }
 
 
@@ -247,23 +262,26 @@ def _claimed_brand_for(conn, ad_account_id: str, meta_campaign_id: str,
 
 def _cycle_for(conn, brand_id: str, meta_campaign_id: str,
                meta_ad_id: Optional[str] = None) -> tuple:
-    """哪個檔期／哪筆 mapping。優先用 meta_ad_id：同一活動底下可能有多支廣告分屬不同檔期，
-    只用 meta_campaign_id 查詢會全部對到最後建立的那一筆（I1）。meta_ad_id 缺值（人工回填
-    時沒填廣告 ID）才退回 meta_campaign_id，維持既有行為。"""
+    """哪個檔期／哪筆 mapping／哪個 publishing_package。優先用 meta_ad_id：同一活動底下
+    可能有多支廣告分屬不同檔期，只用 meta_campaign_id 查詢會全部對到最後建立的那一筆
+    （I1）。meta_ad_id 缺值（人工回填時沒填廣告 ID）才退回 meta_campaign_id，維持既有
+    行為。publishing_package_id 是票 11 加的：D3 產品歸因要用它反查 product_id／
+    experiment_cell，不再另外寫一次查詢。"""
     if meta_ad_id:
         row = conn.execute(
-            "SELECT campaign_cycle_id, id FROM external_ad_mapping WHERE brand_id = ?"
-            " AND meta_ad_id = ? ORDER BY created_at DESC LIMIT 1",
+            "SELECT campaign_cycle_id, id, publishing_package_id FROM external_ad_mapping"
+            " WHERE brand_id = ? AND meta_ad_id = ? ORDER BY created_at DESC LIMIT 1",
             (brand_id, meta_ad_id),
         ).fetchone()
         if row:
-            return row["campaign_cycle_id"], row["id"]
+            return row["campaign_cycle_id"], row["id"], row["publishing_package_id"]
     row = conn.execute(
-        "SELECT campaign_cycle_id, id FROM external_ad_mapping WHERE brand_id = ?"
-        " AND meta_campaign_id = ? ORDER BY created_at DESC LIMIT 1",
+        "SELECT campaign_cycle_id, id, publishing_package_id FROM external_ad_mapping"
+        " WHERE brand_id = ? AND meta_campaign_id = ? ORDER BY created_at DESC LIMIT 1",
         (brand_id, meta_campaign_id),
     ).fetchone()
-    return (row["campaign_cycle_id"], row["id"]) if row else (None, None)
+    return ((row["campaign_cycle_id"], row["id"], row["publishing_package_id"]) if row
+            else (None, None, None))
 
 
 def sync_account(conn, actor: str, *, client=None, account_id: Optional[str] = None,
@@ -287,9 +305,10 @@ def sync_account(conn, actor: str, *, client=None, account_id: Optional[str] = N
     # 它的成效落在品牌層（campaign_cycle_id NULL）。這裡記下哪些品牌這次收到了品牌層成效，
     # 迴圈跑完後各自重算一次品牌層基準——不必等使用者手動觸發。
     brand_ids_with_brand_level_rows = set()
-    # issue #69：品牌層去重簽章快取，一個品牌只查一次既有資料庫內容，同一輪回填內
-    # 新寫入的列也要立刻併入，避免同一輪裡本身就重複的插入互相漏擋。
-    brand_level_seen_signatures = {}
+    # issue #69／票 11：去重簽章快取，依 (brand_id, cycle_id) 分開查一次既有資料庫內容
+    # （品牌層與每個檔期各自獨立比對），同一輪回填內新寫入的列也要立刻併入，避免同一輪裡
+    # 本身就重複的插入互相漏擋。
+    seen_signatures = {}
 
     try:
         campaigns = client.list_campaigns(account_external)
@@ -328,20 +347,22 @@ def sync_account(conn, actor: str, *, client=None, account_id: Optional[str] = N
         if brand_id_filter and brand_id != brand_id_filter:
             continue
 
-        cycle_id, mapping_id = _cycle_for(conn, brand_id, insight.campaign_id, insight.ad_id)
+        cycle_id, mapping_id, package_id = _cycle_for(
+            conn, brand_id, insight.campaign_id, insight.ad_id)
         if cycle_id is None:
             tracking.alert_unmapped_spend(
                 conn, ad_account_id, insight.campaign_id, insight.spend, insight.date_stop)
 
-        if cycle_id is None:
-            if brand_id not in brand_level_seen_signatures:
-                brand_level_seen_signatures[brand_id] = _existing_brand_level_signatures(
-                    conn, brand_id)
-            signature = _brand_level_signature(account_external, insight)
-            if signature in brand_level_seen_signatures[brand_id]:
-                result.skipped_duplicate += 1
-                continue
-            brand_level_seen_signatures[brand_id].add(signature)
+        # issue #69／票 11：品牌層與檔期層各自獨立去重，範圍鍵是 (brand_id, cycle_id)——
+        # cycle_id 為 None 時就是品牌層那組既有簽章，不會互相污染。
+        seen_key = (brand_id, cycle_id)
+        if seen_key not in seen_signatures:
+            seen_signatures[seen_key] = _existing_signatures(conn, brand_id, cycle_id)
+        signature = _duplicate_signature(account_external, insight)
+        if signature in seen_signatures[seen_key]:
+            result.skipped_duplicate += 1
+            continue
+        seen_signatures[seen_key].add(signature)
 
         row = {"impressions": insight.impressions, "clicks": insight.clicks,
                "spend": insight.spend, "conversions": insight.conversions,
@@ -350,21 +371,25 @@ def sync_account(conn, actor: str, *, client=None, account_id: Optional[str] = N
         quarantined = bool(sanity)
         if quarantined:
             result.quarantined += 1
+        product_id = ads_performance.resolve_product_id(conn, brand_id, cycle_id, package_id)
+        # 票 11：raw_json 存這一列 Meta 回傳的原始洞察報告（不影響去重——sync.py 的
+        # 簽章從一開始就直接用 meta_ad_id 等真實欄位，見 `_duplicate_signature`）。
+        raw_json = json.dumps(asdict(insight), ensure_ascii=False)
 
         conn.execute(
-            "INSERT INTO performance_snapshot (id, brand_id, campaign_cycle_id,"
+            "INSERT INTO performance_snapshot (id, brand_id, campaign_cycle_id, product_id,"
             " external_ad_mapping_id, platform, account_id, meta_campaign_id, meta_adset_id,"
             " meta_ad_id, date_range_start, date_range_end, as_of_date, snapshot_taken_at,"
             " currency, impressions, clicks, spend, conversions, revenue, frequency, reach,"
             " raw_json, reconciled, source, import_batch_id, quarantined, quarantine_reason,"
             " created_at)"
-            " VALUES (?, ?, ?, ?, 'meta', ?, ?, ?, ?, ?, ?, ?, ?, 'TWD', ?, ?, ?, ?, ?, ?, ?,"
-            " NULL, 1, 'meta_api', ?, ?, ?, ?)",
-            (new_id("psn"), brand_id, cycle_id, mapping_id, account_external,
+            " VALUES (?, ?, ?, ?, ?, 'meta', ?, ?, ?, ?, ?, ?, ?, ?, 'TWD', ?, ?, ?, ?, ?, ?, ?,"
+            " ?, 1, 'meta_api', ?, ?, ?, ?)",
+            (new_id("psn"), brand_id, cycle_id, product_id, mapping_id, account_external,
              insight.campaign_id, insight.adset_id, insight.ad_id,
              insight.date_start, insight.date_stop, insight.date_stop, ts,
              insight.impressions, insight.clicks, insight.spend, insight.conversions,
-             insight.revenue, insight.frequency, insight.reach, f"sync_{ts}",
+             insight.revenue, insight.frequency, insight.reach, raw_json, f"sync_{ts}",
              1 if quarantined else 0,
              "；".join(f.message for f in sanity) or None, ts),
         )
@@ -387,7 +412,7 @@ def sync_account(conn, actor: str, *, client=None, account_id: Optional[str] = N
         brand_id = _claimed_brand_for(conn, ad_account_id, None, row.ad_id)
         if not brand_id:
             continue
-        cycle_id, _mapping_id = _cycle_for(conn, brand_id, None, row.ad_id)
+        cycle_id, _mapping_id, _package_id = _cycle_for(conn, brand_id, None, row.ad_id)
         theme_attribution.record_component_breakdown(conn, brand_id, cycle_id, row, actor=actor)
 
     conn.commit()

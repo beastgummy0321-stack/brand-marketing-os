@@ -163,10 +163,15 @@ class SettlementFreezeTest(unittest.TestCase):
         self.assertEqual(snap["summary"]["cycle"]["spend"], 10000)
 
     def test_snapshots_across_versions_are_comparable_field_by_field(self):
-        """跨版差異必須對得上：花費從 10000 改成 20000，diff 要精準抓到 cycle.spend 這一鍵。"""
-        self._spend(spend=10000, impressions=20000, clicks=400, conversions=10, revenue=40000)
+        """跨版差異必須對得上：花費從 10000 改成 20000，diff 要精準抓到 cycle.spend 這一鍵。
+        兩筆手動輸入日期要不同——票 11 之後手動填寫也走檔期層去重，同一天填兩筆一模一樣
+        的數字會被判成重複列直接跳過（誠實的剩餘缺口，見 import_rows 說明），這裡要驗的是
+        「兩期真實資料疊加」，不是去重機制，所以給第二筆一個獨立的日期範圍。"""
+        self._spend(spend=10000, impressions=20000, clicks=400, conversions=10, revenue=40000,
+                    date_start="2026-01-01", date_stop="2026-01-07")
         reading.run(main.conn, self.bid, self.cycle_id, ACTOR)
-        self._spend(spend=10000, impressions=20000, clicks=400, conversions=10, revenue=40000)
+        self._spend(spend=10000, impressions=20000, clicks=400, conversions=10, revenue=40000,
+                    date_start="2026-01-08", date_stop="2026-01-14")
         reading.run(main.conn, self.bid, self.cycle_id, ACTOR)  # 累加後 spend=20000
 
         diffs = ads_settlement.diff_versions(main.conn, self.bid, self.cycle_id, 1, 2)

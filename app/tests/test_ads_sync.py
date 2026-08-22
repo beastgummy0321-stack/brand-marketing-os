@@ -437,9 +437,10 @@ class BrandLevelDuplicateBackfillTest(_BaseSyncTest):
         self.assertEqual(result.snapshots, 2)
         self.assertEqual(result.skipped_duplicate, 0)
 
-    def test_cycle_scoped_snapshots_still_accumulate_every_sync(self):
-        """③檔期層 snapshot 照舊累加行為不變（test_snapshots_accumulate_never_overwrite
-        既有行為不動）——認領到有檔期對應的活動，去重不介入。"""
+    def test_cycle_scoped_resync_of_the_same_data_is_now_deduped(self):
+        """票 11 改了契約：檔期層過去不做去重，一鍵回填重跑兩次會把同一支廣告算兩遍。
+        現在跟品牌層共用同一套簽章判斷，差別只在查詢範圍改成這個檔期——原本這裡驗證
+        的「檔期層去重不介入」已不成立，同一批 insight 重跑要 0 新增、回報略過幾筆。"""
         self._sync(campaigns=[_campaign("952", f"{self.brand_name}_20260803_sales")])
         discovered_id = main.conn.execute(
             "SELECT id FROM discovered_campaign WHERE meta_campaign_id = '952'"
@@ -463,12 +464,45 @@ class BrandLevelDuplicateBackfillTest(_BaseSyncTest):
         second = self._sync(campaigns=[_campaign("952", f"{self.brand_name}_20260803_sales")],
                             insights=insights)
         self.assertEqual(first.snapshots, 1)
-        self.assertEqual(second.snapshots, 1)  # 檔期層每次同步都照樣累加，不受品牌層去重影響
-        self.assertEqual(second.skipped_duplicate, 0)
+        self.assertEqual(second.snapshots, 0)  # 重跑同一批不再累加
+        self.assertEqual(second.skipped_duplicate, 1)  # 誠實列出略過幾筆
         rows = main.conn.execute(
             "SELECT COUNT(*) c FROM performance_snapshot WHERE brand_id = ?"
             " AND campaign_cycle_id = ?", (self.bid, cycle_id)).fetchone()
-        self.assertEqual(rows["c"], 2)
+        self.assertEqual(rows["c"], 1)
+
+    def test_cycle_scoped_dedupe_does_not_leak_into_brand_level(self):
+        """檔期層與品牌層的去重紀錄各自獨立：同一支廣告先落在品牌層寫過一次簽章，
+        之後認領到檔期、同一批 insight 改寫進檔期層，不會被品牌層的舊簽章誤擋。"""
+        self._sync(campaigns=[_campaign("953", f"{self.brand_name}_20260803_sales")])
+        discovered_id = main.conn.execute(
+            "SELECT id FROM discovered_campaign WHERE meta_campaign_id = '953'"
+        ).fetchone()["id"]
+        ads_sync.claim(main.conn, self.bid, discovered_id, ACTOR)
+
+        insights = [_insight("953")]
+        brand_level = self._sync(
+            campaigns=[_campaign("953", f"{self.brand_name}_20260803_sales")],
+            insights=insights)
+        self.assertEqual(brand_level.snapshots, 1)  # 還沒有檔期對應，先落品牌層
+
+        resp = self.client.post(f"/api/campaigns/{self.bid}",
+                                json={"budget": 10000, "objective": "sales"})
+        cycle_id = resp.json()["cycle_id"]
+        # 不填 meta_ad_id：`_cycle_for` 認到有值時不分活動全表比對（既有缺口，不在票
+        # 11 範圍），填跟預設 insight ad_id 相同的 "ad1" 會撞到別的測試留下的紀錄。
+        main.conn.execute(
+            "INSERT INTO external_ad_mapping (id, brand_id, campaign_cycle_id,"
+            " platform, meta_campaign_id, claim_status, confirmed_by,"
+            " confirmed_at, created_at) VALUES (?, ?, ?, 'meta', '953',"
+            " 'confirmed', ?, ?, ?)",
+            (new_id("eam"), self.bid, cycle_id, ACTOR, now_iso(), now_iso()),
+        )
+        main.conn.commit()
+
+        result = self._sync(campaigns=[_campaign("953", f"{self.brand_name}_20260803_sales")],
+                            insights=insights)
+        self.assertEqual((result.snapshots, result.skipped_duplicate), (1, 0))
 
     def test_two_ads_under_one_campaign_map_to_their_own_cycle(self):
         """I1（GRILL 第三部分）：同一活動底下兩支廣告分屬不同檔期，各自的成效要對到

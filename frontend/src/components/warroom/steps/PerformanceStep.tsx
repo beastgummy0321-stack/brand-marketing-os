@@ -195,8 +195,9 @@ const MANUAL_FIELDS: { key: string; label: string; required?: boolean }[] = [
  * 不另刻一份狀態機。 */
 function ManualCsvPanel({ brandId, cycleId, onImported }: { brandId: string; cycleId: string; onImported: () => void }) {
   const [fields, setFields] = useState<Record<string, string>>({});
+  const [manualResult, setManualResult] = useState<CsvImportResult | null>(null);
   const manualForm = useFormSubmit(async () => {
-    await submitManualPerformance(brandId, cycleId, fields);
+    setManualResult(await submitManualPerformance(brandId, cycleId, fields));
     setFields({});
     onImported();
   });
@@ -236,6 +237,12 @@ function ManualCsvPanel({ brandId, cycleId, onImported }: { brandId: string; cyc
             {manualForm.saving ? "送出中…" : "記下這筆"}
           </button>
           {manualForm.error && <p className="rounded-md border border-danger/30 bg-danger/10 px-3 py-2 text-xs text-danger">{manualForm.error}</p>}
+          {manualResult && (
+            <p className="text-xs text-success">
+              {manualResult.imported > 0 ? `記下 ${manualResult.imported} 筆成效資料。` : "這筆沒有記下新資料。"}
+              {manualResult.skipped > 0 && `${manualResult.skipped} 筆重複略過。`}
+            </p>
+          )}
         </form>
 
         <div className="flex flex-col gap-2 border-t border-border pt-3">
