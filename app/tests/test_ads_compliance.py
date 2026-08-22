@@ -453,5 +453,283 @@ class DefaultHoldTest(ComplianceScanTest):
         self.assertEqual(sum(1 for v in variants if v["auto_held"]), 0)
 
 
+class UnbackedClaimScanTest(ComplianceScanTest):
+    """票 12：generated copy 編造規格或交易條件——查無佐證的產品規格／交易條件宣稱
+    （見 .scratch/adloop/issues/08-generated-copy-fabricates-facts.md、
+    .scratch/adloop/tickets/12-hold-spec-and-transaction-claims.md）。
+    setUp／_make_creative(s) 沿用 ComplianceScanTest（品牌、檔期、計畫、切角都已備好，
+    這個品牌沒有登記任何 claim／product_fact，所以任何命中都查無佐證）。"""
+
+    def _unbacked_hits(self, findings):
+        return [f for f in findings if f.evidence.get("source_category") == "unbacked_claim"]
+
+    def test_shelf_life_claim_without_backing_is_flagged(self):
+        """done-check 1：「可保存3年」查無佐證，該被標成 unbacked_claim。"""
+        self._make_creative("本產品可保存3年，安心食用")
+        findings = compliance.scan_cycle(main.conn, self.bid, self.cycle_id)
+        hits = self._unbacked_hits(findings)
+        self.assertEqual(len(hits), 1)
+        self.assertEqual(hits[0].severity, "warn")
+        self.assertIn("3年", hits[0].message)
+
+    def test_stock_count_and_deadline_claims_without_backing_are_flagged(self):
+        """done-check 2：「倒數 58 天後就無貨」「現貨最後 200 盒」都查無佐證。"""
+        self._make_creatives([
+            "現貨最後 200 盒，手刀搶購",
+            "倒數 58 天後就無貨，要買要快",
+        ])
+        findings = compliance.scan_cycle(main.conn, self.bid, self.cycle_id)
+        hits = self._unbacked_hits(findings)
+        self.assertEqual(len(hits), 2)
+
+    def test_brand_story_and_social_proof_pass_untouched(self):
+        """done-check 3：品牌故事與社會認同——含使用者指定的兩例，
+        以及三個另外挑的、同樣帶數字的真實文案寫法（陷阱：數字不等於規格／交易條件）。"""
+        self._make_creatives([
+            "60年老字號，3,000 個送禮人已選陳家莊",
+            "傳承三代，堅持60年工法",
+            "已服務超過10,000位顧客，五星好評不斷",
+            "全台市占率第一，穩坐20年龍頭地位",
+        ])
+        findings = compliance.scan_cycle(main.conn, self.bid, self.cycle_id)
+        self.assertEqual(self._unbacked_hits(findings), [])
+
+
+class UnbackedClaimDefaultHoldTest(ComplianceScanTest):
+    """票 12 done-check 1/2/3/5：新分類命中要跟法規命中走同一套「預設先擋、可一鍵勾回」
+    （`compliance.apply_default_holds` → `creative.restore`／`restore_all_auto_held`），
+    不是另開一條路（D1）。"""
+
+    def _first_variant(self):
+        return ads_creative.list_variants(main.conn, self.bid, self.cycle_id)[0]
+
+    def test_shelf_life_claim_without_backing_is_default_held(self):
+        self._make_creative("本產品可保存3年，安心食用")
+        self._scan_like_page()
+        variant = self._first_variant()
+        self.assertTrue(variant["rejected"])
+        self.assertTrue(variant["auto_held"])
+
+    def test_stock_and_deadline_claims_without_backing_are_default_held(self):
+        self._make_creatives([
+            "現貨最後 200 盒，手刀搶購",
+            "倒數 58 天後就無貨，要買要快",
+        ])
+        self._scan_like_page()
+        variants = ads_creative.list_variants(main.conn, self.bid, self.cycle_id)
+        self.assertEqual(len(variants), 2)
+        self.assertTrue(all(v["rejected"] and v["auto_held"] for v in variants))
+
+    def test_brand_story_and_social_proof_are_not_held(self):
+        self._make_creatives([
+            "60年老字號，3,000 個送禮人已選陳家莊",
+            "傳承三代，堅持60年工法",
+            "已服務超過10,000位顧客，五星好評不斷",
+            "全台市占率第一，穩坐20年龍頭地位",
+        ])
+        self._scan_like_page()
+        variants = ads_creative.list_variants(main.conn, self.bid, self.cycle_id)
+        self.assertEqual(len(variants), 4)
+        self.assertTrue(all(not v["rejected"] and not v["auto_held"] for v in variants))
+
+    def test_unbacked_claim_hold_can_be_restored_the_same_way_as_law_hold(self):
+        """done-check 5：用跟 DefaultHoldTest.test_restore_flips_back_to_adopted_and_logs_audit
+        一模一樣的手法驗證——同一條 creative.restore() 路徑，不是憑空斷言。"""
+        self._make_creative("本產品可保存3年，安心食用")
+        self._scan_like_page()
+        variant_id = self._first_variant()["id"]
+        self.assertTrue(self._first_variant()["rejected"])
+        self.assertTrue(self._first_variant()["auto_held"])
+
+        ads_creative.restore(main.conn, self.bid, variant_id, actor=OPERATOR)
+
+        variant = self._first_variant()
+        self.assertFalse(variant["rejected"])
+        self.assertFalse(variant["auto_held"])
+        audit_row = main.conn.execute(
+            "SELECT * FROM audit_log WHERE entity_id = ? AND action = 'compliance_restore'",
+            (variant_id,)).fetchone()
+        self.assertIsNotNone(audit_row)
+
+    def test_unbacked_claim_holds_included_in_batch_restore(self):
+        """done-check 5：`restore_all_auto_held` 也吃得到新分類的預設挑掉，
+        跟法規類共用同一個批次入口，不是分開兩套。"""
+        self._make_creatives([
+            "本產品可保存3年，安心食用",
+            "現貨最後 200 盒，手刀搶購",
+            "倒數 58 天後就無貨，要買要快",
+        ])
+        self._scan_like_page()
+        variants = ads_creative.list_variants(main.conn, self.bid, self.cycle_id)
+        self.assertEqual(sum(1 for v in variants if v["auto_held"]), 3)
+
+        restored = ads_creative.restore_all_auto_held(main.conn, self.bid, self.cycle_id,
+                                                      actor=OPERATOR)
+        self.assertEqual(restored, 3)
+
+        variants = ads_creative.list_variants(main.conn, self.bid, self.cycle_id)
+        self.assertEqual(sum(1 for v in variants if v["auto_held"]), 0)
+
+
+class DiscountDepthScanTest(ComplianceScanTest):
+    """票 12 補：交易條件裡的「折扣深度」（限時 X 折／下殺 X 折／全館 X 折／第 N 件 X 折／
+    兩位數折扣簡寫「66折」＝6.6折／百分比折扣「限時下殺30%」），查無佐證要跟保存期限、
+    庫存數字一樣被標成 unbacked_claim。裸價（「590元」）與裸百分比／排名（轉換率、市占率）
+    刻意不抓——見 compliance.py 中 `_DISCOUNT_DEPTH_PATTERN` 旁的說明。"""
+
+    def _unbacked_hits(self, findings):
+        return [f for f in findings if f.evidence.get("source_category") == "unbacked_claim"]
+
+    def test_discount_depth_phrasings_without_backing_are_flagged(self):
+        self._make_creatives([
+            "限時7折，加碼再送好禮",
+            "outlet下殺5折，數量有限",
+            "3折起，全面特賣中",
+            "全館8折慶祝開幕",
+            "第2件5折，加購更划算",
+            "限時66折驚爆優惠",
+            "特價5折，錯過不再",
+            "限時下殺30%，手刀搶購",
+        ])
+        findings = compliance.scan_cycle(main.conn, self.bid, self.cycle_id)
+        hits = self._unbacked_hits(findings)
+        self.assertEqual(len(hits), 8)
+
+    def test_bare_price_and_bare_percentage_pass_untouched(self):
+        """OVER-BLOCKING GUARDS：裸價、裸百分比／排名、品牌故事與社會認同、
+        沒有數字深度的促銷（買一送一／加價購）都不該被算成折扣深度。"""
+        self._make_creatives([
+            "只要590元就能入手",
+            "原價1200元，划算入手",
+            "一組1200元，經濟實惠",
+            "轉換率提升30%，效果顯著",
+            "回購率破5成，口碑不錯",
+            "全台市占率第一，穩坐龍頭",
+            "60年老字號，值得信賴",
+            "傳承三代，堅持工法",
+            "3,000 個送禮人已選陳家莊",
+            "買一送一，划算加倍",
+            "加價購超值組合",
+        ])
+        findings = compliance.scan_cycle(main.conn, self.bid, self.cycle_id)
+        self.assertEqual(self._unbacked_hits(findings), [])
+
+    def test_discount_backed_by_approved_claim_passes_untouched(self):
+        """D3：已核准的宣稱裡有同一個折扣數字，就不該被當成無中生有。"""
+        bi_repo.create_claim(main.conn, self.bid, claim_text="本檔期全館商品一律8折",
+                             claim_type="approved", actor=ACTOR)
+        self._make_creative("全館8折，慶祝開幕")
+        findings = compliance.scan_cycle(main.conn, self.bid, self.cycle_id)
+        self.assertEqual(self._unbacked_hits(findings), [])
+
+
+class DiscountDepthDefaultHoldTest(ComplianceScanTest):
+    """票 12 done-check 1/2/5 的折扣深度版本：命中要跟法規命中走同一套
+    「預設先擋、可一鍵勾回」，不是另開一條路（D1）。"""
+
+    def test_discount_depth_without_backing_is_default_held(self):
+        self._make_creative("全館8折慶祝開幕")
+        self._scan_like_page()
+        variant = ads_creative.list_variants(main.conn, self.bid, self.cycle_id)[0]
+        self.assertTrue(variant["rejected"])
+        self.assertTrue(variant["auto_held"])
+
+    def test_discount_depth_backed_claim_is_not_held(self):
+        bi_repo.create_claim(main.conn, self.bid, claim_text="本檔期全館商品一律8折",
+                             claim_type="approved", actor=ACTOR)
+        self._make_creative("全館8折，慶祝開幕")
+        self._scan_like_page()
+        variant = ads_creative.list_variants(main.conn, self.bid, self.cycle_id)[0]
+        self.assertFalse(variant["rejected"])
+        self.assertFalse(variant["auto_held"])
+
+
+class UnbackedClaimBackedByProductFactTest(unittest.TestCase):
+    """票 12 done-check 4：D3 一個佐證路徑的專屬驗證——`product_fact` 撐得住這句話就不該
+    被擋。獨立一組品牌／產品／檔期（不沿用 ComplianceScanTest.setUp），因為需要素材真的
+    掛在一個有 product_id 的實驗格上，`product_fact` 的品牌／產品範圍才對得上。"""
+
+    def setUp(self):
+        self.client = TestClient(main.app)
+        self.brand = bi_repo.create_brand(main.conn, name="虛構手工果乾坊",
+                                          client_name="測試客戶", actor=ACTOR)
+        self.bid = self.brand["id"]
+        self.product = bi_repo.create_product(main.conn, self.bid, name="測試蜜漬果乾",
+                                              actor=ACTOR)
+        self.pid = self.product["id"]
+
+        resp = self.client.post(f"/api/campaigns/{self.bid}",
+                                json={"product_ids": [self.pid], "budget": 10000,
+                                      "objective": "sales"})
+        self.cycle_id = resp.json()["cycle_id"]
+
+        plan_options = {
+            "options": [
+                {
+                    "is_recommended": True,
+                    "summary": "測試打法", "audience": _AUDIENCE,
+                    "angles": [{"title": "切角一", "message": "訊息一", "why": "",
+                                "product_id": self.pid}],
+                    "hypotheses": [], "grounding": {"facts": [], "inferences": [], "to_verify": []},
+                },
+                {
+                    "is_recommended": False,
+                    "summary": "備用方案", "audience": _AUDIENCE,
+                    "angles": [{"title": "備用切角", "message": "備用訊息", "why": "",
+                                "product_id": self.pid}],
+                    "hypotheses": [], "grounding": {"facts": [], "inferences": [], "to_verify": []},
+                },
+            ]
+        }
+        self._orig_plan = ads_plan.PROVIDER
+        ads_plan.PROVIDER = FakeProvider(
+            response=_fake(json.dumps(plan_options, ensure_ascii=False)))
+        ads_plan.generate_options(main.conn, self.bid, self.cycle_id, ACTOR)
+        self.client.post(f"/api/campaigns/{self.bid}/{self.cycle_id}/plan/select", json={})
+        self.client.post(f"/api/campaigns/{self.bid}/{self.cycle_id}/plan/approve")
+        self.cell_id = main.conn.execute(
+            "SELECT id FROM experiment_cell WHERE campaign_cycle_id = ?",
+            (self.cycle_id,)).fetchone()["id"]
+
+    def tearDown(self):
+        ads_plan.PROVIDER = self._orig_plan
+
+    def _make_creative(self, content):
+        theme = theme_repo.create_theme(
+            main.conn, self.bid, campaign_cycle_id=self.cycle_id,
+            experiment_cell_id=self.cell_id, format_key="single_image",
+            name="有佐證測試主題", folder_code="C900", actor=ACTOR,
+            components=[{"component_type": "title", "content": content,
+                        "fingerprint_json": {"angle": "benefit", "tone": "warm",
+                                             "format": "text_focus",
+                                             "selling_point": "quality"}}],
+        )
+        theme_repo.adopt_theme(main.conn, self.bid, theme["id"], actor=ACTOR)
+
+    def test_shelf_life_backed_by_product_fact_passes_untouched(self):
+        bi_repo.create_product_fact(
+            main.conn, self.bid, self.pid, actor=ACTOR, fact_type="shelf_life",
+            label="保存期限", value="3年", status="confirmed", confirmed_by=ACTOR)
+        self._make_creative("本產品可保存3年，安心食用")
+
+        findings = compliance.scan_cycle(main.conn, self.bid, self.cycle_id)
+        hits = [f for f in findings if f.evidence.get("source_category") == "unbacked_claim"]
+        self.assertEqual(hits, [])
+
+        variant = ads_creative.list_variants(main.conn, self.bid, self.cycle_id)[0]
+        self.assertEqual(variant["product_id"], self.pid)  # 前提：真的掛在這個產品上
+
+    def test_shelf_life_without_matching_product_fact_is_still_flagged(self):
+        """對照組：product_fact 存在但數字對不上，不該被誤判為有佐證。"""
+        bi_repo.create_product_fact(
+            main.conn, self.bid, self.pid, actor=ACTOR, fact_type="shelf_life",
+            label="保存期限", value="1年", status="confirmed", confirmed_by=ACTOR)
+        self._make_creative("本產品可保存3年，安心食用")
+
+        findings = compliance.scan_cycle(main.conn, self.bid, self.cycle_id)
+        hits = [f for f in findings if f.evidence.get("source_category") == "unbacked_claim"]
+        self.assertEqual(len(hits), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

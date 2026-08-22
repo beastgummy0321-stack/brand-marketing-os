@@ -26,6 +26,9 @@
   不依賴使用者登錄任何東西，新品牌也掃得到。與上面三種品牌自訂來源並列，但
   `source_category` 標成 `"law"`（品牌自訂的三種一律標 `"brand"`）——命中法規來源
   代表可能違法（罰鍰／刑責），命中品牌自訂只代表這個品牌自己的偏好，兩者後果不同。
+- **產品規格／交易條件掃描**（票 12）：跟上面四種不同形狀——不是字詞比對，是數字＋
+  單位的樣式比對（保存期限、庫存數字、倒數斷貨），`source_category` 標成
+  `"unbacked_claim"`。細節見本檔 `_UNBACKED_CLAIM_SOURCES` 附近的說明。
 """
 
 import json
@@ -162,10 +165,133 @@ def scan_text(text: str, sources: list) -> list:
     return hits
 
 
+# --- 產品規格／交易條件掃描（票 12：generated copy 編造規格或交易條件）---------------
+#
+# 範圍是使用者拍板收窄過的（見 .scratch/adloop/tickets/12-hold-spec-and-transaction-claims.md）：
+# 只抓兩類——產品規格（保存期限這類）與交易條件（庫存數字、倒數斷貨、折扣深度）。品牌故事與
+# 社會認同（「60年老字號」「3,000 個送禮人已選」）刻意不抓：使用者自己人工複審，
+# 抓太寬只會把文案改得死板沒人想看，這個代價使用者已經衡量過，不要「順手」擴大範圍。
+#
+# ponytail：這是逐字比對數字＋單位的樣式掃描，不是語意理解。抓不到換句話說的講法
+# （「本產品耐放，可以放到明年」）、抓不到把數字寫成國字（「三年」）、抓不到單位
+# 拆兩句寫。上限就是「字面上長得像規格／交易條件的數字」，抓不到的留給人工複審——
+# 假陰性可接受（使用者本來就要自己看一遍），假陽性不可接受（那才是把文案逼成無聊的
+# 元凶），所以每個樣式都刻意配了關鍵字前綴，不是看到數字就抓。真的要做到語意層級的
+# 判斷，上限在這裡——升級路徑另開票評估（比照 D2 生成 prompt 接地，不在本票範圍內）。
+#
+# 折扣深度（_DISCOUNT_DEPTH_PATTERN）是這條上限唯一的例外：「N折」的「折」字本身在中文
+# 廣告文案裡幾乎不做別的用途（不像「年」「個」這種單位到處都會出現），所以「折」分支
+# 不強制要求前面有促銷關鍵字，光「3折起」四個字就足以判斷是折扣深度，不算「看到數字就抓」
+# ——單位本身已經夠專屬。但百分比（30%）沒有這個專屬性，市占率、轉換率、回購率都用
+# 百分比，所以百分比分支維持原本的規矩：前面一定要有促銷關鍵字（限時／下殺／殺到／
+# 優惠／特價／全館／第N件）才算數，裸百分比一律放行。
+_SHELF_LIFE_PATTERN = re.compile(
+    r"(?:保存(?:期限)?|保固(?:期)?|效期|賞味期限|有效期限?)\D{0,4}"
+    r"(?P<qty>\d+\s*(?:年|個月|月|天|日))"
+)
+
+_STOCK_COUNT_PATTERN = re.compile(
+    r"(?:現貨|庫存|僅剩|限量|最後)\D{0,6}"
+    r"(?P<qty>\d+\s*(?:盒|件|份|組|箱|瓶|支|個|人份))"
+)
+
+_DEADLINE_PATTERN = re.compile(
+    r"倒數\D{0,8}(?P<qty>\d+\s*(?:天|小時|日))\D{0,6}"
+    r"(?:無貨|缺貨|下架|截止|售完|結束)"
+)
+
+# 交易條件的第四種樣式：折扣深度（票 12 使用者拍板只加這一種，裸價不加——見下方註解）。
+# 「N折」不需要促銷關鍵字前綴（見上方 ponytail 註解），數字後面接「折」本身就夠專屬；
+# 「N%」需要，因為裸百分比在文案裡太常見（轉換率、回購率、市占率都用百分比），沒有
+# 促銷關鍵字就不知道是不是折扣。用一個 `(?(1)...)` 條件式把兩種規則放進同一個
+# re.compile：group(1) 是促銷關鍵字（可省略），「折」分支永遠可以比對，「%」分支只在
+# group(1) 真的抓到東西時才開放，抓不到就用 `(?!)` 讓這個分支永遠失敗。
+# 兩位數「折」是台灣慣用簡寫（「66折」＝6.6折），照抄字面比對，不做小數換算。
+#
+# 刻意不加裸價格樣式（「只要590元」「原價1200元」）：那是使用者拍板刻意不加的部分——
+# 折扣深度是 spec 點名的「人為製造急迫感」案例，賣家講了折扣就等於對顧客承諾這個折數；
+# 裸價格幾乎每則廣告都會出現，若也要求佐證，文案會被逼得無聊到沒人想看，這正是 spec
+# 講的「不惜一切代價都要避免」的成本，不能為了「順手」多抓一種而讓文案變死板。
+_DISCOUNT_DEPTH_PATTERN = re.compile(
+    r"(限時|下殺|殺到|優惠|特價|全館|第\d+件)?\D{0,4}"
+    r"(?P<qty>\d{1,3}(?:折(?:起)?|(?(1)[%％]|(?!))))"
+)
+
+# 新的來源分類——刻意不是 "law"：`apply_default_holds()` 一看到 `"law"` 就會自動翻成
+# 已挑掉，那個分類專屬 L1 內建法定詞庫的字詞命中，誤標會讓一個提醒被授權成自動關卡
+# （見 compliance.py 檔頭與 selling_point_law_finding() docstring 的同一個警告）。
+UNBACKED_CLAIM_CATEGORY = "unbacked_claim"
+
+# (規則名稱, 人話分類, 樣式, 講給使用者聽的一句話)。分類名稱只用來組訊息，不落庫比對。
+_UNBACKED_CLAIM_SOURCES = [
+    ("shelf_life", "產品規格", _SHELF_LIFE_PATTERN,
+     "標錯保存期限不只是文案問題，食品標示不實本身就違法，也可能讓顧客誤判食品有沒有過期。"),
+    ("stock_count", "交易條件", _STOCK_COUNT_PATTERN,
+     "如果現場其實沒有這個數字，等於對顧客做了不實的庫存宣稱，屬於引人錯誤。"),
+    ("deadline", "交易條件", _DEADLINE_PATTERN,
+     "編造的缺貨倒數會催促顧客搶購，但賣家不一定真的能兌現這個期限。"),
+    ("discount_depth", "交易條件", _DISCOUNT_DEPTH_PATTERN,
+     "寫出具體折數就是對顧客承諾這個折扣，如果品牌資料庫裡沒登記這個檔期真的有打這個折，"
+     "等於用假的折扣催促顧客下單，屬於引人錯誤。"),
+]
+
+
+def _backing_texts(conn, brand_id: str, product_id: Optional[str] = None) -> list:
+    """D3：能佐證一句宣稱的文字——已核准的宣稱（`claim.claim_type == "approved"`）
+    ＋已確認的品牌／產品事實（`brand_fact`／`product_fact` 的 `status == "confirmed"`）。
+    有品牌做過功課、登記了佐證，這句話就不該被當成無中生有。
+
+    claim 的品牌／產品範圍查法比照 `_sources()`：product_id 給了就用
+    `list_claims_for_product`（品牌整體＋這個產品專屬），沒給就用 `list_claims_for_brand`
+    （否則會把「品牌整體」以外、其他產品專屬的宣稱也算進來，佐證範圍算錯）。
+    """
+    claims = (bi.list_claims_for_product(conn, brand_id, product_id) if product_id
+              else bi.list_claims_for_brand(conn, brand_id))
+    texts = [c["claim_text"] for c in claims if c.get("claim_type") == "approved"]
+    texts += [f["value"] for f in bi.list_brand_facts(conn, brand_id, status="confirmed")]
+    if product_id:
+        texts += [f["value"] for f in
+                  bi.list_product_facts(conn, brand_id, product_id, status="confirmed")]
+    return texts
+
+
+def _is_backed(qty: str, backing_texts: list) -> bool:
+    """數字＋單位（例如「3年」）只要原封不動出現在任何一則佐證文字裡就算有靠——
+    跟 `scan_text()` 一樣是字面比對，不判斷語意，佐證文字寫法要跟文案對得上。"""
+    needle = re.sub(r"\s+", "", qty)
+    return any(needle in re.sub(r"\s+", "", text or "") for text in backing_texts)
+
+
+def unbacked_claim_findings(variant: dict, backing_texts: list) -> list:
+    """一則素材對三種產品規格／交易條件樣式逐一比對，命中且查無佐證才算一則 Finding。"""
+    findings = []
+    content = variant.get("content") or ""
+    for name, category_label, pattern, note in _UNBACKED_CLAIM_SOURCES:
+        match = pattern.search(content)
+        if not match or _is_backed(match.group("qty"), backing_texts):
+            continue
+        findings.append(guardrails.Finding(
+            finding_type="compliance",
+            code="unbacked_claim_hit",
+            severity="warn",
+            message=(f"這則{variant['type_label']}寫了具體的{category_label}「{match.group(0)}」，"
+                     f"但品牌資料庫裡沒有登記任何宣稱或事實可以佐證這個數字。{note}"
+                     "系統先幫你保留起來，請自己確認清楚之後再決定要不要用這則文案。"),
+            source="rule_scan",
+            confidence_penalty=0.0,  # 這是內容問題，不影響成效判讀的可信度
+            evidence={"variant_id": variant["id"], "term": match.group(0),
+                      "source_type": "unbacked_claim", "source_id": f"unbacked_claim:{name}",
+                      "source_category": UNBACKED_CLAIM_CATEGORY},
+        ))
+    return findings
+
+
 def scan_cycle(conn, brand_id: str, cycle_id: str) -> list:
     """掃描本期所有素材，回傳 Finding 清單（與護欄同一種結構，共用 finding 資料表）。"""
     brand_sources = _sources(conn, brand_id)
     product_sources: dict = {}
+    brand_backing = _backing_texts(conn, brand_id)
+    product_backing: dict = {}
     findings = []
 
     for variant in ads_creative.list_variants(conn, brand_id, cycle_id):
@@ -173,11 +299,15 @@ def scan_cycle(conn, brand_id: str, cycle_id: str) -> list:
             continue  # 使用者手動挑掉、已經被改寫掉的不必再嫌；系統自動預設挑掉的（修憲落地
             # L2）內容還是原本那則，繼續掃才能讓「為什麼」的說明在下次進頁時還在
         sources = list(brand_sources)
+        backing = brand_backing
         product_id = variant.get("product_id")
         if product_id:
             if product_id not in product_sources:
                 product_sources[product_id] = _sources(conn, brand_id, product_id)
             sources = product_sources[product_id]
+            if product_id not in product_backing:
+                product_backing[product_id] = _backing_texts(conn, brand_id, product_id)
+            backing = product_backing[product_id]
 
         for source, term in scan_text(variant["content"], sources):
             findings.append(guardrails.Finding(
@@ -193,6 +323,7 @@ def scan_cycle(conn, brand_id: str, cycle_id: str) -> list:
                           "source_id": source["source_id"],
                           "source_category": source["source_category"]},
             ))
+        findings.extend(unbacked_claim_findings(variant, backing))
         law_note = selling_point_law_finding(variant)
         if law_note:
             findings.append(law_note)
@@ -269,9 +400,15 @@ AUTO_HOLD_ACTOR = "compliance_auto"
 
 
 def apply_default_holds(conn, brand_id: str, cycle_id: str, flags: dict, actor: str) -> int:
-    """命中內建法定詞庫的素材，預設值從「已採用」翻成「已挑掉」（修憲落地 L2，決策 0034
-    第 25 條）。只翻**法規類**（`source_category == "law"`，即 L1 建立的那份內建詞庫）；
-    品牌自訂的 claim／rule 命中（含 `high_risk`）維持原樣，只標黃不動預設值。
+    """命中內建法定詞庫、或編造了查無佐證的產品規格／交易條件的素材，預設值從「已採用」
+    翻成「已挑掉」（修憲落地 L2，決策 0034 第 25 條；票 12 併入 `"unbacked_claim"`）。
+    只翻這兩類（`source_category in ("law", "unbacked_claim")`）；品牌自訂的 claim／rule
+    命中（含 `high_risk`）維持原樣，只標黃不動預設值。
+
+    `"unbacked_claim"` 併進來的理由跟法規類一樣：兩者都不是「品牌自己的偏好」，而是
+    賣家對顧客的具體承諾——沒有佐證的保存期限／庫存數字／倒數斷貨一旦上線就要賣家
+    自己兌現，兌現不了就是引人錯誤，性質上跟法規紅線一樣重，該用同一套「預設先擋、
+    使用者確認後再勾回」的機制，不是新開一條路（見票 12 spec D1）。
 
     `actor` 應傳系統固定值（見 `AUTO_HOLD_ACTOR`），不是操作人 cookie——這是系統判定，
     不是使用者的決定。
@@ -283,23 +420,24 @@ def apply_default_holds(conn, brand_id: str, cycle_id: str, flags: dict, actor: 
     每次進頁都會重掃，若不分青紅皂白每次都寫，會把使用者剛按過的「勾回」又蓋回去。
     回傳這次新寫入的則數（供頁面判斷是否要重讀 groups）。
     """
-    law_variant_ids = []
+    holdable_categories = ("law", UNBACKED_CLAIM_CATEGORY)
+    hold_variant_ids = []
     seen = set()
     for variant_id, findings in flags.items():
         for finding in findings:
             evidence = json.loads(finding.get("evidence_json") or "{}")
-            if evidence.get("source_category") == "law" and variant_id not in seen:
+            if evidence.get("source_category") in holdable_categories and variant_id not in seen:
                 seen.add(variant_id)
-                law_variant_ids.append(variant_id)
+                hold_variant_ids.append(variant_id)
                 break
-    if not law_variant_ids:
+    if not hold_variant_ids:
         return 0
 
     decided_ids = {row["target_id"] for row in conn.execute(
         "SELECT DISTINCT target_id FROM adoption_decision WHERE brand_id = ?"
         " AND campaign_cycle_id = ? AND target_type = 'variant'", (brand_id, cycle_id),
     ).fetchall()}
-    to_hold = [vid for vid in law_variant_ids if vid not in decided_ids]
+    to_hold = [vid for vid in hold_variant_ids if vid not in decided_ids]
     if not to_hold:
         return 0
 
