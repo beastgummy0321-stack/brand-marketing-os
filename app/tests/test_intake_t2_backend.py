@@ -646,6 +646,30 @@ def test_truth_card_batch_rejects_missing_yellow_answers_before_writing_anything
     assert pending_ids == {items[0]["id"], items[1]["id"], items[2]["id"]}
 
 
+def test_draft_get_serves_completion_screen_right_after_confirm(monkeypatch):
+    """收尾那一下：真相卡送出把草稿標成 completed，前端立刻 refresh 整包草稿。
+    這支若退回 404，完成畫面就變成「找不到建檔進度」（e2e-adflow finding 1）。"""
+    brand, _draft, items = _new_truth_card_fixture("完成畫面")
+    monkeypatch.setattr(persona_generation, "PROVIDER",
+                        QueueProvider([_response(structured={"personas": _persona_rows("收尾")})]))
+    persona_generation.JOBS.clear()
+    client = TestClient(main.app)
+
+    confirm = client.post(
+        f"/api/intake/brands/{brand['id']}/truth-card/confirm",
+        json={"answers": {
+            items[1]["id"]: {"value": "NT$ 480"},
+            items[2]["id"]: {"decision": "cannot_say"},
+        }},
+    )
+    assert confirm.status_code == 204, confirm.text
+
+    response = client.get(f"/api/intake/brands/{brand['id']}/draft")
+
+    assert response.status_code == 200, response.text
+    assert response.json()["data"]["completed"] is True
+
+
 def test_truth_card_confirmation_generates_personas_notifies_and_can_regenerate(monkeypatch):
     brand, draft, items = _new_truth_card_fixture("人物誌")
     provider = QueueProvider([

@@ -132,7 +132,8 @@ def _draft_shape(brand_id: str, draft: dict) -> dict:
     created_product_names = sorted(p["name"] for p in repo.list_products(web.conn, brand_id))
     return {
         "id": draft["id"], "brand_id": draft["brand_id"], "brand_name": draft["brand_name"],
-        "step": draft["step"], "completed": False, "is_restart": _is_restart(brand_id, draft),
+        "step": draft["step"], "completed": draft.get("status") == "completed",
+        "is_restart": _is_restart(brand_id, draft),
         "description": draft["description"], "urls": draft["urls"], "photos": photos,
         "scan_done": draft["scan_done"], "scan_impressions": draft["scan_impressions"],
         "scan_products": draft["scan_products"], "created_product_names": created_product_names,
@@ -152,8 +153,11 @@ def _draft_shape(brand_id: str, draft: dict) -> dict:
 
 @router.get("/api/intake/brands/{brand_id}/draft")
 async def draft_get(brand_id: str):
+    """建檔精靈整包讀。收尾那一下（真相卡送出）會在同一個請求裡把草稿標成 completed，
+    前端緊接著 refresh 這支——所以跟 review／truth-card 一樣退回去找剛完成的那份，
+    不然完成畫面會變成 404「找不到建檔進度」（e2e-adflow finding 1）。"""
     require_brand(brand_id)
-    draft = state.require_draft(brand_id)
+    draft = state.require_draft_or_just_completed(brand_id)
     return _envelope(_draft_shape(brand_id, draft))
 
 

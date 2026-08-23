@@ -114,6 +114,7 @@ def _row_to_draft(conn, row: dict) -> dict:
         "id": row["id"],
         "brand_id": row["brand_id"],
         "brand_name": brand_row["name"] if brand_row else "",
+        "status": row["status"],
         "description": row["description"],
         "urls": _loads(row["research_urls_json"], []),
         "photos": photos,
