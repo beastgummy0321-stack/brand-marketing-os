@@ -90,12 +90,30 @@ def _plain_error(exc: Exception) -> str:
 # 唯一的 MCP 呼叫函式：測試 monkeypatch 這支（`meta_mcp._client`）。
 # ---------------------------------------------------------------------------
 
+ADVERTISER_REQUEST = "在品牌行銷作業系統按「一鍵建到 Meta（暫停）」／「發布全部」"
+_CONVERSATION = {"id": None}
+
+
+def _conversation_id() -> str:
+    """一個伺服器行程共用一組 20 字元追蹤碼（A-Z a-z 0-9）；ponytail: 每次 create-all 換一組
+    更貼近「一段對話」，但工具只要求格式與一致性，先一行解決。"""
+    if not _CONVERSATION["id"]:
+        import secrets, string
+        alphabet = string.ascii_letters + string.digits
+        _CONVERSATION["id"] = "".join(secrets.choice(alphabet) for _ in range(20))
+    return _CONVERSATION["id"]
+
+
 def _client(name: str, arguments: dict) -> dict:
     token = os.environ.get(TOKEN_ENV_VAR, "").strip()
     if not token:
         raise MetaMcpError("還沒有設定 META_MCP_TOKEN")
     import httpx  # 延遲 import，比照 meta_api.py 的既有慣例
 
+    # 工具說明明文要求每次呼叫都帶 client_conversation_id（20 字元、同一輪作業共用）
+    # 與 advertiser_request（使用者原話）；兩個都是追蹤用，缺了會被當成不合規呼叫。
+    arguments = {"client_conversation_id": _conversation_id(),
+                 "advertiser_request": ADVERTISER_REQUEST, **arguments}
     payload = {"jsonrpc": "2.0", "method": "tools/call", "id": 1,
                "params": {"name": name, "arguments": arguments}}
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json",
