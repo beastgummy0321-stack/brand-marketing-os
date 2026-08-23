@@ -567,6 +567,33 @@ export const verifyCodes = (brandId: string, cycleId: string): Promise<{ mismatc
 export const activatePackage = (brandId: string, cycleId: string, packageId: string, metaCampaignId: string): Promise<void> =>
   postJson(`${cycleBase(brandId, cycleId)}/handoff/${encodeURIComponent(packageId)}/activate`, { meta_campaign_id: metaCampaignId });
 
+// ---- Meta 官方 Ads MCP：一鍵建（暫停）＋發布（票 M1-01，ADR 0023，後端 app/ads/meta_mcp.py）----
+export interface MetaMcpStatus {
+  ok: boolean;
+  account_id?: string;
+  tools?: string[];
+  reason?: string;
+}
+
+export interface MetaCreateAllResult {
+  ok: boolean;
+  created: number;
+  failed: { package_id: string; package_name: string; reason: string }[];
+}
+
+export interface MetaPublishAllResult {
+  ok: boolean;
+  activated: number;
+  failed: { package_id: string; reason: string }[];
+}
+
+export const fetchMetaStatus = (brandId: string, cycleId: string): Promise<MetaMcpStatus> =>
+  getJson(`${cycleBase(brandId, cycleId)}/handoff/meta-status`);
+export const createAllMetaPackages = (brandId: string, cycleId: string): Promise<MetaCreateAllResult> =>
+  postJson(`${cycleBase(brandId, cycleId)}/handoff/create-all`);
+export const publishAllMetaPackages = (brandId: string, cycleId: string): Promise<MetaPublishAllResult> =>
+  postJson(`${cycleBase(brandId, cycleId)}/handoff/publish-all`);
+
 // ---- 企劃排期到期提醒（S8R.9-11）----
 export const fetchScheduleReminder = (brandId: string, cycleId: string): Promise<ScheduleReminder | null> =>
   getJson(`${cycleBase(brandId, cycleId)}/schedule-reminder`);

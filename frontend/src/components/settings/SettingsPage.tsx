@@ -8,6 +8,7 @@ import { ApiKeySection } from "./ApiKeySection";
 import { AssetsSection } from "./AssetsSection";
 import { Ga4Section } from "./Ga4Section";
 import { MetaSection } from "./MetaSection";
+import { MetaMcpSection } from "./MetaMcpSection";
 import { ModelSection } from "./ModelSection";
 import { AutonomySection } from "./AutonomySection";
 import { CalendarSection } from "./CalendarSection";
@@ -68,6 +69,7 @@ export function SettingsPage() {
     content = (
       <div className="flex flex-col gap-5">
         <MetaSection data={data} onSaved={load} />
+        <MetaMcpSection />
         <Ga4Section data={data} onSaved={load} />
         <ApiKeySection data={data} onSaved={load} />
         <ModelSection data={data} onSaved={load} />

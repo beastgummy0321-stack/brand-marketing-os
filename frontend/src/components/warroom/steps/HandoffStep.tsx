@@ -28,7 +28,7 @@ export function HandoffStep({ brandId, cycle }: { brandId: string; cycle: Cycle 
         <TrackingChainCard brandId={brandId} cycleId={cycle.id} chain={trackingChain} onUpdated={loadTrackingChain} />
       )}
       <ChecklistSection brandId={brandId} cycleId={cycle.id} />
-      <PackagesSection brandId={brandId} cycleId={cycle.id} />
+      <PackagesSection brandId={brandId} cycleId={cycle.id} endDate={cycle.end_date} />
       {(cycle.status === "LIVE" || cycle.status === "EVALUATING") && <CheckpointSection brandId={brandId} cycleId={cycle.id} />}
     </div>
   );

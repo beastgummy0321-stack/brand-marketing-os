@@ -63,6 +63,22 @@ export interface BrandOption {
   brand_name: string;
 }
 
+/** 「連接 Meta 廣告帳戶」卡（票 M1-01，`app/ads/routes_settings.py` `/api/settings/meta-mcp`）：
+ * 跟上面既有唯讀 `MetaSection`（成效回讀用金鑰）是完全不同的一組憑證與端點，形狀不共用。 */
+export interface MetaMcpPage {
+  page_id: string;
+  page_name: string;
+}
+
+export interface MetaMcpSettingsData {
+  ok: boolean;
+  account_id?: string;
+  reason?: string;
+  pages?: MetaMcpPage[];
+  pages_error?: string | null;
+  selected_page_id?: string | null;
+}
+
 interface Envelope<T> {
   data: T;
   generated_at: string;
@@ -121,6 +137,33 @@ export function savePromptHeader(promptHeader: string): Promise<void> {
 
 export function saveBudget(intakeBudget: number): Promise<void> {
   return postSettings("budget", { intake_budget: intakeBudget });
+}
+
+export async function fetchMetaMcpStatus(): Promise<MetaMcpSettingsData> {
+  const res = await fetch("/api/settings/meta-mcp");
+  if (!res.ok) {
+    throw new Error(`讀取失敗（狀態碼 ${res.status}）`);
+  }
+  const body: Envelope<MetaMcpSettingsData> = await res.json();
+  return body.data;
+}
+
+export async function saveMetaMcpPage(pageId: string): Promise<void> {
+  const res = await fetch("/api/settings/meta-mcp/page", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ page_id: pageId }),
+  });
+  if (!res.ok) {
+    let message = `儲存失敗（狀態碼 ${res.status}）`;
+    try {
+      const body = (await res.json()) as { error?: string };
+      if (body.error) message = body.error;
+    } catch {
+      // 回應不是 JSON，用預設訊息。
+    }
+    throw new Error(message);
+  }
 }
 
 export async function fetchStylePreference(brandId: string): Promise<{ text: string }> {
