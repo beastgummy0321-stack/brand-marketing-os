@@ -55,6 +55,7 @@ ENV_PATH = REPO_ROOT / ".env"
 _TOOLS_USED = (
     "ads_get_ad_accounts", "ads_get_ad_account_pages", "ads_create_campaign",
     "ads_create_ad_set", "ads_create_creative", "ads_create_ad", "ads_activate_entity",
+    "ads_get_datasets",
 )
 
 NOT_CONNECTED_REASON = "還沒連接 Meta 廣告帳戶"
@@ -63,13 +64,14 @@ DISABLED_FALLBACK_REASON = "Meta 目前沒開放這個帳戶使用自動建廣�
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
 
 # 目標／出價／受眾預設（票面「實連結果」）：package 沒有的欄位，程式給固定值，不問 LLM、
-# 不進畫面。ponytail: 沒有偵測帳戶是否掛 Pixel 就固定用轉換目標——沒有 Pixel 時 Meta 會在
-# ads_create_ad_set 直接回錯誤，原樣顯示給使用者；真的要自動退 LINK_CLICKS，之後再串接
-# 帳戶層級 Pixel 偵測（後續票再進設定中心）。
+# 不進畫面。像素（Pixel）用 ads_get_datasets 現查：有就帶 promoted_object 走轉換目標，
+# 沒有退成 LINK_CLICKS（真人實測：Meta 對 OFFSITE_CONVERSIONS 一定要 promoted_object）。
+# ponytail: 多個像素時取最近有開火的那個；要讓使用者自己選，之後再進設定中心。
 DEFAULT_OBJECTIVE = "OUTCOME_SALES"
 DEFAULT_BUYING_TYPE = "AUCTION"
 DEFAULT_BILLING_EVENT = "IMPRESSIONS"
 DEFAULT_OPTIMIZATION_GOAL = "OFFSITE_CONVERSIONS"
+FALLBACK_OPTIMIZATION_GOAL = "LINK_CLICKS"  # 帳戶沒有像素時
 DEFAULT_TARGETING = {"geo_locations": {"countries": ["TW"]}, "age_min": 18}
 
 
@@ -78,7 +80,7 @@ class MetaMcpError(Exception):
 
 
 def _plain_error(exc: Exception) -> str:
-    text = str(exc).strip()
+    text = _meta_message(str(exc).strip())
     if "190" in text or "OAuthException" in text:
         return "Meta 金鑰過期了，到設定中心重新貼一張"
     return text or "連不上 Meta，稍後再試一次。"
@@ -374,16 +376,35 @@ def _create_creative(conn, brand_id: str, account_id: str, page_id: str,
     return creative_id
 
 
+def _pick_pixel(account_id: str) -> Optional[str]:
+    """帳戶的像素：取啟用中、最近有開火的那個；沒有回 None（呼叫端退 LINK_CLICKS）。"""
+    result = _client("ads_get_datasets", {"ad_account_id": account_id})
+    seen, active = set(), []
+    for d in result.get("datasets") or []:
+        if d.get("dataset_id") and d.get("is_active") and d["dataset_id"] not in seen:
+            seen.add(d["dataset_id"])
+            active.append(d)
+    if not active:
+        return None
+    active.sort(key=lambda d: str(d.get("last_fired_time") or ""), reverse=True)
+    return str(active[0]["dataset_id"])
+
+
 def _create_adset(conn, brand_id: str, cycle_id: str, account_id: str,
                   campaign_id: str, package: dict) -> str:
     cycle = ads_repo.get_cycle(conn, brand_id, cycle_id)
     args = {
         "ad_account_id": account_id, "campaign_id": campaign_id,
         "ad_set_name": package["adset_name"], "billing_event": DEFAULT_BILLING_EVENT,
-        "optimization_goal": DEFAULT_OPTIMIZATION_GOAL,
         "targeting": json.dumps(DEFAULT_TARGETING, ensure_ascii=False),
         "daily_budget": int(round((package["daily_budget"] or 0) * 100)),
     }
+    pixel_id = _pick_pixel(account_id)
+    if pixel_id:
+        args["optimization_goal"] = DEFAULT_OPTIMIZATION_GOAL
+        args["promoted_object"] = json.dumps({"pixel_id": pixel_id, "custom_event_type": "PURCHASE"})
+    else:
+        args["optimization_goal"] = FALLBACK_OPTIMIZATION_GOAL
     if cycle and cycle.get("start_date"):
         args["start_time"] = cycle["start_date"]
     if cycle and cycle.get("end_date"):

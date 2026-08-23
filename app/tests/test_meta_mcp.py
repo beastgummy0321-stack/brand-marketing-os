@@ -110,6 +110,11 @@ class _FakeClient:
             return _ACCOUNTS_OK
         if name == "ads_get_ad_account_pages":
             return _PAGES_OK
+        if name == "ads_get_datasets":
+            return {"datasets": [
+                {"dataset_id": "px_old", "is_active": True, "last_fired_time": "2025-01-01"},
+                {"dataset_id": "px_new", "is_active": True, "last_fired_time": "2026-08-22"},
+                {"dataset_id": "px_off", "is_active": False, "last_fired_time": "2026-08-23"}]}
         if name == "ads_create_campaign":
             self._seq["campaign"] += 1
             return {"campaign_id": f"cmp_{self._seq['campaign']}", "status": "PAUSED"}
@@ -478,3 +483,20 @@ class SuggestedMappingIsNotAMetaBuildTest(_BaseMetaMcpTest):
         from app.ads import meta_mcp
         self.assertEqual(meta_mcp._meta_message('{"error_category":"VALIDATION","error_message":"\u7f3a\u5716"}'), "缺圖")
         self.assertEqual(meta_mcp._meta_message("plain"), "plain")
+
+
+class PixelTest(_BaseMetaMcpTest):
+    def test_adset_uses_most_recent_active_pixel(self):
+        cycle_id, _ = self._build_one_package()
+        self.client.post(f"/api/campaigns/{self.bid}/{cycle_id}/handoff/create-all")
+        adset = [c for c in self.fake_client.calls if c[0] == "ads_create_ad_set"][0][1]
+        self.assertEqual(adset["optimization_goal"], "OFFSITE_CONVERSIONS")
+        self.assertEqual(json.loads(adset["promoted_object"])["pixel_id"], "px_new")
+
+    def test_adset_falls_back_to_link_clicks_without_pixel(self):
+        cycle_id, _ = self._build_one_package()
+        self.fake_client.overrides["ads_get_datasets"] = {"datasets": []}
+        self.client.post(f"/api/campaigns/{self.bid}/{cycle_id}/handoff/create-all")
+        adset = [c for c in self.fake_client.calls if c[0] == "ads_create_ad_set"][0][1]
+        self.assertEqual(adset["optimization_goal"], "LINK_CLICKS")
+        self.assertNotIn("promoted_object", adset)
