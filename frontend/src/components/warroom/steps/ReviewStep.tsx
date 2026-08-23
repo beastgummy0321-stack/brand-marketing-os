@@ -7,9 +7,22 @@ import { CHART_COLOR_REVENUE, CHART_COLOR_SPEND } from "@/lib/chartColors";
 import { formatCurrency, formatPercent, formatRoas, formatUsd } from "@/lib/format";
 import { useEchart } from "@/lib/useEchart";
 import { useFormSubmit } from "@/lib/useFormSubmit";
-import { fetchClosingReview, fetchSettleNow, settleNow, type ClosingReview, type Cycle, type SettleNowInfo } from "@/lib/warroomApi";
+import {
+  fetchClosingReview,
+  fetchSettleNow,
+  resolveHypotheses,
+  settleNow,
+  type ClosingReview,
+  type Cycle,
+  type SettleNowInfo,
+} from "@/lib/warroomApi";
 
 const VERDICT_LABELS = { supported: "成立", rejected: "不成立", inconclusive: "看不出來" } as const;
+const VERDICT_OPTIONS: { value: keyof typeof VERDICT_LABELS; label: string }[] = [
+  { value: "supported", label: "成立" },
+  { value: "rejected", label: "不成立" },
+  { value: "inconclusive", label: "看不出來" },
+];
 
 /** 覆盤（S8R.23-26 重設計，吸收舊 `S8.59-66`，僅 `cycle.status === 'CLOSED'` 後出現）：固定
  * 四段式，圖像化每一段（雙條圖／環形圖／學習兩張卡／前後對照長條），資料源完全沿用舊條文，
@@ -35,7 +48,7 @@ export function ReviewStep({ brandId, cycle }: { brandId: string; cycle: Cycle }
       <h2 className="font-display text-lg text-foreground">這期覆盤</h2>
       <GoalComparisonCard review={review} />
       <AttributionCard review={review} />
-      <LearningCard review={review} />
+      <LearningCard brandId={brandId} cycleId={cycle.id} review={review} onResolved={load} />
       <NextCycleCard brandId={brandId} review={review} cycle={cycle} />
       <p className="text-xs text-muted-foreground">本週報告掛載點（B5 範圍，本票只留入口，內部長相延至 B5）。</p>
     </div>
@@ -181,20 +194,82 @@ function AttributionCard({ review }: { review: ClosingReview }) {
 }
 
 /** S8R.25：③學習兩層——本期層（策略假設結案）／跨期層（累積智慧）兩張卡。 */
-function LearningCard({ review }: { review: ClosingReview }) {
+/** 票 L1-01：pending 的假設逐條三選一結案（人確認後才入帳，決策 0035 第三節第 6 點——
+ * AI 預選＋一路下一步＝確認偏誤幫浦，這裡只是預設選取，使用者可以改）。 */
+function LearningCard({
+  brandId,
+  cycleId,
+  review,
+  onResolved,
+}: {
+  brandId: string;
+  cycleId: string;
+  review: ClosingReview;
+  onResolved: () => void;
+}) {
   const { learning } = review;
+  const [overrides, setOverrides] = useState<Record<string, keyof typeof VERDICT_LABELS>>({});
+  const pending = learning.hypotheses.filter((h) => h.pending);
+
+  function verdictFor(h: ClosingReview["learning"]["hypotheses"][number]) {
+    return overrides[h.id] ?? h.preselected ?? "inconclusive";
+  }
+
+  const resolveForm = useFormSubmit(async () => {
+    const verdicts: Record<string, keyof typeof VERDICT_LABELS> = {};
+    for (const h of pending) verdicts[h.id] = verdictFor(h);
+    await resolveHypotheses(brandId, cycleId, verdicts);
+    setOverrides({});
+    onResolved();
+  });
+
   return (
     <FluidCard title="③學到的事">
       <div className="grid gap-3 sm:grid-cols-2">
         <div className="rounded-md border border-border p-3">
           <p className="text-xs font-medium text-muted-foreground">這期驗證了什麼</p>
-          <ul className="mt-1 list-disc pl-4 text-sm text-foreground">
-            {learning.hypotheses.map((h, i) => (
-              <li key={i}>
-                {h.statement}：{VERDICT_LABELS[h.verdict]}
+          <ul className="mt-1 space-y-2 text-sm text-foreground">
+            {learning.hypotheses.map((h) => (
+              <li key={h.id}>
+                {h.pending ? (
+                  <div>
+                    <p>{h.statement}</p>
+                    <div className="mt-1 flex flex-wrap gap-3 text-xs text-muted-foreground">
+                      {VERDICT_OPTIONS.map((opt) => (
+                        <label key={opt.value} className="flex items-center gap-1">
+                          <input
+                            type="radio"
+                            name={`hyp-verdict-${h.id}`}
+                            checked={verdictFor(h) === opt.value}
+                            onChange={() => setOverrides((prev) => ({ ...prev, [h.id]: opt.value }))}
+                          />
+                          {opt.label}
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                  <p>
+                    {h.statement}：{VERDICT_LABELS[h.verdict]}
+                  </p>
+                )}
               </li>
             ))}
           </ul>
+          {pending.length > 0 && (
+            <div className="mt-3 border-t border-border pt-2">
+              <p className="text-xs text-muted-foreground">確認後不能改，成立的會寫進累積智慧。</p>
+              <button
+                type="button"
+                onClick={() => void resolveForm.submit()}
+                disabled={resolveForm.saving}
+                className="mt-1 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {resolveForm.saving ? "送出中…" : "確認結案"}
+              </button>
+              {resolveForm.error && <p className="mt-1 text-xs text-danger">{resolveForm.error}</p>}
+            </div>
+          )}
         </div>
         <div className="rounded-md border border-border p-3">
           <p className="text-xs font-medium text-muted-foreground">累積下來學到什麼</p>

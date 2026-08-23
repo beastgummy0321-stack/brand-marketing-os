@@ -295,10 +295,16 @@ def compile_closing_review(conn, brand_id: str, cycle_id: str) -> dict:
     cycle_reading = loaded["cycle"]
     result = (cycle_reading["result"] if cycle_reading else None) or {}
     kpis = result.get("kpis") or ads_performance.compute_kpis(ads_performance.totals(conn, brand_id, cycle_id))
+    preselect_by_id = {r["id"]: r["preselect"] for r in ((cycle_reading or {}).get("hypothesis_reviews") or [])}
 
     hypotheses = [
-        {"statement": h["statement"],
-         "verdict": h["status"] if h["status"] in ("supported", "rejected", "inconclusive") else "inconclusive"}
+        {"id": h["id"], "statement": h["statement"],
+         "verdict": h["status"] if h["status"] in ("supported", "rejected", "inconclusive") else "inconclusive",
+         "pending": h["status"] in ads_reading.PENDING_HYPOTHESIS_STATUSES,
+         # 預選裁決是判讀當下算好存起來的（`reading.load()["cycle"]["hypothesis_reviews"]`），
+         # 這裡只取用、不重算（決策 0035：預選一律看不出來，只有程式算得出方向才預選成立）。
+         "preselected": (preselect_by_id.get(h["id"], "inconclusive")
+                        if h["status"] in ads_reading.PENDING_HYPOTHESIS_STATUSES else None)}
         for h in ads_repo.list_cycle_hypotheses(conn, brand_id, cycle_id)
     ]
     ledger_entries = [
@@ -329,3 +335,28 @@ async def closing_review_get(brand_id: str, cycle_id: str):
     if cycle["status"] != "CLOSED":
         return _error(400, "這期還沒有結案，覆盤要等成效判讀跑完期末結算才會出現。")
     return _envelope(compile_closing_review(conn, brand_id, cycle_id))
+
+
+# ---- 假設結案（L1-01，決策 0030 第一節第 1 點、決策 0035 第三節第 6 點） ----
+
+@router.post("/api/campaigns/{brand_id}/{cycle_id}/hypotheses/resolve")
+async def hypotheses_resolve_post(request: Request, brand_id: str, cycle_id: str):
+    main_mod.require_brand(brand_id)
+    actor = main_mod.require_actor(request)
+    conn = main_mod.conn
+    _require_cycle(brand_id, cycle_id)
+    # 信任邊界的輸入檢查：壞掉的 body 要回 400 說清楚，不能讓它一路炸成 500。
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001 — 任何解析失敗都是同一種使用者錯誤
+        return JSONResponse({"detail": "送出的內容不是有效的資料格式。"}, status_code=400)
+    verdicts = body.get("verdicts") if isinstance(body, dict) else None
+    if not isinstance(verdicts, dict):
+        return JSONResponse({"detail": "沒有收到要結案的假設。"}, status_code=400)
+    try:
+        # 業務邏輯全在 resolve_hypotheses 裡（非 pending／偽造 id 忽略、只有成立才入帳、
+        # 樣本數與可信度程式帶入）——路由層不 UPDATE、不寫 ledger（票 L1-01）。
+        updated = ads_reading.resolve_hypotheses(conn, brand_id, cycle_id, verdicts, actor=actor)
+    except ValueError as exc:
+        return JSONResponse({"detail": str(exc)}, status_code=400)
+    return JSONResponse({"ok": True, "updated": updated, "message": "結案完成，成立的已寫進累積智慧。"})

@@ -304,7 +304,15 @@ export interface ClosingReview {
   };
   gap_attribution: { reasons: string[]; channel_note: string | null; ga4_leak_note: string | null; attribution: AttributionSummary };
   learning: {
-    hypotheses: { statement: string; verdict: "supported" | "rejected" | "inconclusive" }[];
+    hypotheses: {
+      id: string;
+      statement: string;
+      verdict: "supported" | "rejected" | "inconclusive";
+      /** 還在待結案（proposed／testing）才 true，人還沒按過。 */
+      pending: boolean;
+      /** 程式預選的裁決，已結案（`pending: false`）時為 null（票 L1-01）。 */
+      preselected: "supported" | "rejected" | "inconclusive" | null;
+    }[];
     ledger_entries: { text: string; created_at: string }[];
   };
   recommendation: NextCycleAdvice;
@@ -694,6 +702,13 @@ export const deletePerformanceBatch = (
 // ---- 覆盤（S8.59-66）----
 export const fetchClosingReview = (brandId: string, cycleId: string): Promise<ClosingReview> =>
   getJson(`${cycleBase(brandId, cycleId)}/closing-review`);
+// 假設結案（票 L1-01，決策 0035 第三節第 6 點：入帳前必須經人確認，不自動結算）。
+export const resolveHypotheses = (
+  brandId: string,
+  cycleId: string,
+  verdicts: Record<string, "supported" | "rejected" | "inconclusive">,
+): Promise<{ ok: boolean; updated: number; message: string }> =>
+  postJson(`${cycleBase(brandId, cycleId)}/hypotheses/resolve`, { verdicts });
 
 // ---- 右欄 AI 花費儀表（跟 B3 同一份品牌層數字，見契約「任務流版型」節）----
 export const fetchAiCostMeter = (brandId: string): Promise<AiCostMeter> => getJson(`${base(brandId)}/ai-cost-meter`);
