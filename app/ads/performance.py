@@ -767,30 +767,8 @@ def latest_derived_metric(conn, brand_id: str, metric: str, since: str, until: s
     return row["value"] if row else None
 
 
-def delete_snapshots(conn, brand_id: str, cycle_id: str, *, source: Optional[str] = None) -> int:
-    """刪除某期的成效資料，連同掛在上面的 derived_metric 一起（先子後父）。
-
-    唯一的刪除入口：derived_metric 有外鍵指向 performance_snapshot，呼叫端各自寫
-    DELETE 一定會有人忘了先刪子表，然後在使用者按第二次時才爆。集中在這裡處理一次。
-    （append-only 原則管的是「不覆寫已收到的數字」；重新產生模擬資料屬於重算，不是竄改。）
-    """
-    params = [brand_id, cycle_id]
-    where = "brand_id = ? AND campaign_cycle_id = ?"
-    if source:
-        where += " AND source = ?"
-        params.append(source)
-
-    conn.execute(
-        f"DELETE FROM derived_metric WHERE performance_snapshot_id IN"
-        f" (SELECT id FROM performance_snapshot WHERE {where})", params,
-    )
-    cursor = conn.execute(f"DELETE FROM performance_snapshot WHERE {where}", params)
-    conn.commit()
-    return cursor.rowcount
-
-
-def list_snapshots(conn, brand_id: str, cycle_id: str) -> list:
-    return [dict(r) for r in conn.execute(
-        "SELECT * FROM performance_snapshot WHERE brand_id = ? AND campaign_cycle_id = ?"
-        " ORDER BY as_of_date DESC, created_at DESC", (brand_id, cycle_id),
-    )]
+# delete_snapshots／list_snapshots 純搬去 performance_batches.py（票 S1-01：加 batch_id
+# kwarg 會讓這檔破 800 行上限）。這裡留 re-export——既有呼叫端／測試全部認
+# `perf.list_snapshots`／`ads_performance.delete_snapshots`，逐一改 import 的診斷成本
+# 比一行 re-export 高，邏輯本身零改動（純搬，見 performance_batches.py 開頭說明）。
+from app.ads.performance_batches import delete_snapshots, list_snapshots  # noqa: F401,E402

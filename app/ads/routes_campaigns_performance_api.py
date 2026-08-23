@@ -20,6 +20,7 @@ from app.ads import health_lights as ads_health_lights
 from app.ads import nextcycle
 from app.ads import pacing as ads_pacing
 from app.ads import performance as ads_performance
+from app.ads import performance_batches
 from app.ads import reading as ads_reading
 from app.ads import repository as ads_repo
 from app.ads import simulation
@@ -175,6 +176,68 @@ async def performance_csv(request: Request, brand_id: str, cycle_id: str,
         "unmatched_columns": result.unmatched_columns,
         "warnings": [],
     })
+
+
+# ---- 現在結算＋匯入整批撤銷（票 S1-01） ----
+
+@router.get("/api/campaigns/{brand_id}/{cycle_id}/settle-now")
+async def settle_now_get(brand_id: str, cycle_id: str):
+    main_mod.require_brand(brand_id)
+    conn = main_mod.conn
+    cycle = _require_cycle(brand_id, cycle_id)
+    can_settle, reason, already_closed = performance_batches.can_settle(conn, brand_id, cycle_id, cycle)
+    return _envelope({
+        "can_settle": can_settle, "reason": reason,
+        "estimated_cost": ads_reading.estimated_run_cost(conn), "already_closed": already_closed,
+    })
+
+
+@router.post("/api/campaigns/{brand_id}/{cycle_id}/settle-now")
+async def settle_now_post(request: Request, brand_id: str, cycle_id: str):
+    main_mod.require_brand(brand_id)
+    actor = main_mod.require_actor(request)
+    conn = main_mod.conn
+    cycle = _require_cycle(brand_id, cycle_id)
+    can_settle, reason, _already_closed = performance_batches.can_settle(conn, brand_id, cycle_id, cycle)
+    if not can_settle:
+        return JSONResponse({"detail": reason}, status_code=400)
+    ok, err = ads_reading.finalize(conn, brand_id, cycle_id, actor)
+    if not ok:
+        return JSONResponse({"detail": err}, status_code=400)
+    return JSONResponse({"ok": True, "message": "收帳完成，覆盤可以看了。"})
+
+
+@router.get("/api/campaigns/{brand_id}/{cycle_id}/performance/batches")
+async def performance_batches_get(brand_id: str, cycle_id: str):
+    main_mod.require_brand(brand_id)
+    conn = main_mod.conn
+    _require_cycle(brand_id, cycle_id)
+    items = performance_batches.list_batches(conn, brand_id, cycle_id)
+    return _envelope({"items": items, "estimated_rerun_cost": ads_reading.estimated_run_cost(conn)})
+
+
+@router.delete("/api/campaigns/{brand_id}/{cycle_id}/performance/batches/{batch_id}")
+async def performance_batch_delete(request: Request, brand_id: str, cycle_id: str, batch_id: str):
+    main_mod.require_brand(brand_id)
+    actor = main_mod.require_actor(request)
+    conn = main_mod.conn
+    cycle = _require_cycle(brand_id, cycle_id)
+
+    deleted = ads_performance.delete_snapshots(conn, brand_id, cycle_id, batch_id=batch_id)
+    if deleted == 0:
+        return JSONResponse({"detail": "找不到這批匯入"}, status_code=404)
+
+    if cycle["status"] == "CLOSED":
+        result = ads_reading.rerun_for_late_data(conn, brand_id, cycle_id, actor=actor)
+        rerun = "late_data" if result else "skipped"
+        message = (f"撤銷了 {deleted} 筆，結論已重新算過。" if result
+                   else f"撤銷了 {deleted} 筆，這批數字不影響結論，沒有重新算過。")
+    else:
+        ok, err = ads_reading.run(conn, brand_id, cycle_id, actor)
+        rerun = "done" if ok else "skipped"
+        message = (f"撤銷了 {deleted} 筆，結論已重新算過。" if ok
+                   else f"撤銷了 {deleted} 筆，但重新判讀失敗：{err}")
+    return JSONResponse({"ok": True, "deleted": deleted, "rerun": rerun, "message": message})
 
 
 # ---- 檔期健康燈號（S8R.20-21） ----

@@ -35,7 +35,7 @@ from app.core import interrupts as core_interrupts
 from app.core import prototype_phase
 from app.core import rule_cards
 from app.core.db import new_id, now_iso
-from app.llm import gateway, providers
+from app.llm import gateway, pricing, providers
 
 # 拆檔（票 10-split-reading-py，D2：這裡的名字全部維持可從 reading.py 匯入）——
 # reading_baselines：品牌基線；reading_hypotheses：假設結案週邊讀寫。
@@ -497,6 +497,25 @@ def finalize(conn, brand_id: str, cycle_id: str, actor: str) -> tuple:
     prototype_phase.check_and_flag(
         conn, actual_spend=cycle_totals.get("spend") or 0, actor=actor, cycle_id=cycle_id)
     return True, None
+
+
+# run() 內三個 gateway.run_task 呼叫各自的 task_type／max_tokens——與 reading.py:539,651,690
+# 保持同一份數字，改那三行時記得回來對一次。
+_RUN_LLM_CALLS = (
+    ("settlement_diff_explanation", 800),
+    ("performance_reading", 2000),
+    ("hypothesis_review", 1200),
+)
+
+
+def estimated_run_cost(conn) -> float:
+    """票 S1-01：settle-now 按下前，把 run() 內三次 LLM 呼叫的天花板成本相加給使用者看。
+    是天花板不是預估（理由同 pricing.cost_ceiling()），取法照 theme_batch.estimated_batch_cost。
+    """
+    return sum(
+        pricing.cost_ceiling(providers.resolve_model(task_type=t, conn=conn), max_tokens)
+        for t, max_tokens in _RUN_LLM_CALLS
+    )
 
 
 # ---------------------------------------------------------------------------

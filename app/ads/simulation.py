@@ -29,6 +29,7 @@ from typing import Optional
 
 from app.ads import budget as budget_calc
 from app.ads import performance as ads_performance
+from app.ads import performance_batches
 from app.ads import reading as ads_reading
 from app.ads import repository as ads_repo
 from app.brand_intelligence import repository as bi
@@ -108,7 +109,7 @@ def generate(conn, brand_id: str, cycle_id: str, actor: str) -> tuple:
 
     ts = now_iso()
     # 走共用刪除入口，它會先清掉掛在上面的 derived_metric（先子後父）
-    ads_performance.delete_snapshots(conn, brand_id, cycle_id, source="simulated")
+    performance_batches.delete_snapshots(conn, brand_id, cycle_id, source="simulated")
     # 票 11 D3：模擬成效沒有廣告可對——沒有 publishing_package，`resolve_product_id`
     # 的 a／b 兩條路都用不上；原本設計的選項 c（檔期只賣一個產品就算那個的）已經拿掉
     # （見 performance.resolve_product_id 的說明），所以這裡呼叫它一定回 None，
