@@ -572,6 +572,7 @@ class TaiwanIdentityTest(_BaseMetaMcpTest):
         self.assertEqual(identities["taiwan_universal_beneficiary"], TAIWAN_IDENTITY_ID)
         self.assertEqual(identities["taiwan_universal_payer"], TAIWAN_IDENTITY_ID)
         self.assertEqual(data["destination_type"], "WEBSITE")
+        self.assertEqual(data["bid_strategy"], "LOWEST_COST_WITHOUT_CAP")
 
         cycle = ads_repo.get_cycle(main.conn, self.bid, cycle_id)
         self.assertEqual(data["start_time"], f"{cycle['start_date']}T00:00:00+0800")
