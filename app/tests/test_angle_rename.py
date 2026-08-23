@@ -155,3 +155,15 @@ class AngleRenameTest(unittest.TestCase):
     def test_cell_not_found(self):
         resp = self._rename("隨便", cell_id="exc_not_a_real_one")
         self.assertEqual(resp.status_code, 404)
+
+    def test_list_cell_angles_keeps_insertion_order_not_id_order(self):
+        """同一毫秒產的 ULID 尾碼隨機，不能拿 id 排序；提案頁是用「第幾個」對齊 plan.angles。"""
+        ts = now_iso()
+        for cell_id, angle in (("exc_zzz", "第二格"), ("exc_aaa", "第三格")):
+            main.conn.execute(
+                "INSERT INTO experiment_cell (id, brand_id, campaign_cycle_id, creative_angle,"
+                " created_at) VALUES (?, ?, ?, ?, ?)", (cell_id, self.bid, self.cycle_id, angle, ts))
+        main.conn.commit()
+        names = [c["creative_angle"] for c in ads_plan.list_cell_angles(main.conn, self.bid, self.cycle_id)]
+        self.assertEqual(names[-2:], ["第二格", "第三格"])
+

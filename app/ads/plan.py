@@ -679,7 +679,7 @@ def list_cell_angles(conn, brand_id: str, cycle_id: str) -> list:
     改名後快照裡的角度標題就跟 cell 對不上了（票 04-angle-rename 一.3）。"""
     return [dict(r) for r in conn.execute(
         "SELECT id, creative_angle FROM experiment_cell WHERE brand_id = ? AND campaign_cycle_id = ?"
-        " ORDER BY id", (brand_id, cycle_id))]
+        " ORDER BY rowid", (brand_id, cycle_id))]  # 寫入順序＝plan.angles 順序；id 同一毫秒內隨機，不能當排序
 
 
 def rename_angle(conn, brand_id: str, cycle_id: str, cell: dict, creative_angle: str,
