@@ -96,7 +96,13 @@ export function ThemePanel({
             status: "ready",
             theme: {
               ...prev.theme,
-              components: prev.theme.components.map((c) => (c.id === updated.id ? updated : c)),
+              // rejectComponent() 的回應沒有 compliance_hits（那支路由不掃描，見
+              // app/ads/routes_creative_theme.py reject_theme_component()）。整則換掉會讓
+              // 已經標出來的紅字在退件後憑空消失——掃描結果並沒有變，只是這則回應不帶。
+              // 沿用原本那則的 compliance_hits，不讓標記因為一次退件就不見。
+              components: prev.theme.components.map((c) =>
+                c.id === updated.id ? { compliance_hits: c.compliance_hits, ...updated } : c,
+              ),
             },
           },
     );
@@ -169,6 +175,10 @@ export function ThemePanel({
             description={`格式「${theme.format_key}」的逐則內容側板還在建置中，先用上面的「採用整個主題」，或回矩陣頁看其他格式。`}
           />
         )}
+
+        {/* 票 S1-01：scan_note 只有讀取端點（fetchThemeDetail）會補，採用後重讀的主題
+            （adoptTheme() 回應沒有這個欄位）就不重複顯示舊的一句，維持沒有比亂顯示好。 */}
+        {theme.scan_note && <p className="text-xs text-muted-foreground">{theme.scan_note}</p>}
       </>
     );
   }

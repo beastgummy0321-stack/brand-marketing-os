@@ -39,6 +39,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
 import app.shared.web as main_mod
+from app.ads import compliance
 from app.ads import fingerprint as fp
 from app.ads import theme_engine
 from app.ads.brief_assembler import CreativeBrief
@@ -215,4 +216,11 @@ async def quick_generate(request: Request, brand_id: str):
         conn, brand, scope=scope, topic=topic.strip(), product_id=product_id, actor=actor)
     if err:
         return JSONResponse({"error": err}, status_code=422)
-    return {"result": result}
+
+    # 票 S1-01：快速生成的元件不落地、沒有 DB 主鍵，用清單索引把命中結果貼回每則元件
+    # （compliance.scan_components() 對沒有 id 的元件本來就用索引當 key，見該函式 docstring）。
+    hits_by_key = compliance.scan_components(
+        conn, brand["id"], result["components"], product_id=product_id)
+    for index, component in enumerate(result["components"]):
+        component["compliance_hits"] = hits_by_key.get(index, [])
+    return {"result": result, "scan_note": compliance.SCAN_LIMITS_NOTE}

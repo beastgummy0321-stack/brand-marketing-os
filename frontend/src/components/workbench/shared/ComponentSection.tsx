@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import { rejectComponent, type ThemeComponentData } from "@/lib/workbenchApi";
+import { ComplianceBadges, hasDangerHit } from "./ComplianceBadges";
 import { CopyIconButton } from "./CopyIconButton";
 import { FoldedText } from "./FoldedText";
 import { RejectReasonPicker } from "./RejectReasonPicker";
@@ -72,12 +73,14 @@ export function ComponentRow({
   // sqlite INTEGER 0/1，不是 JS boolean（workbenchApi.ts ThemeComponentData 註解）。
   const similar = !!component.similarity_flag;
   const overBudget = !!component.over_budget;
+  const dangerHit = hasDangerHit(component.compliance_hits);
 
   return (
     <div
       className={cn(
         "flex items-start gap-2 rounded-md border border-border px-3 py-2",
         similar && "border-warning/30 bg-warning/10",
+        dangerHit && "border-danger/30 bg-danger/10",
       )}
     >
       <div className="min-w-0 flex-1">
@@ -94,6 +97,7 @@ export function ComponentRow({
             相似度偏高
           </span>
         )}
+        <ComplianceBadges hits={component.compliance_hits} />
       </div>
       <div className="flex shrink-0 items-center gap-1">
         <CopyIconButton ariaLabel="複製這則" getText={() => component.content} />

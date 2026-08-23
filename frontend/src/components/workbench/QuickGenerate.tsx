@@ -26,6 +26,7 @@ import {
   type QuickGenerateResult,
   type QuickGenerateScope,
 } from "@/lib/workbenchApi";
+import { ComplianceBadges } from "./shared/ComplianceBadges";
 import { CopyIconButton } from "./shared/CopyIconButton";
 import { FoldedText } from "./shared/FoldedText";
 
@@ -421,13 +422,15 @@ function ResultView({
         <SectionShell Icon={Zap} title="Hook" count={hooks.length}>
           <div className="flex flex-wrap gap-2">
             {hooks.map((component, index) => (
-              <CopyIconButton
-                key={index}
-                label={component.content}
-                ariaLabel={`複製 Hook：${component.content}`}
-                getText={() => component.content}
-                className="max-w-[18rem] rounded-full [&>span]:min-w-0 [&>span]:truncate"
-              />
+              <div key={index} className="flex flex-col items-start">
+                <CopyIconButton
+                  label={component.content}
+                  ariaLabel={`複製 Hook：${component.content}`}
+                  getText={() => component.content}
+                  className="max-w-[18rem] rounded-full [&>span]:min-w-0 [&>span]:truncate"
+                />
+                <ComplianceBadges hits={component.compliance_hits} />
+              </div>
             ))}
           </div>
         </SectionShell>
@@ -449,6 +452,7 @@ function ResultView({
             {bodies.map((component, index) => (
               <div key={index} className="rounded-md border border-border px-3 py-2">
                 <FoldedText content={component.content} charBudget={bodyBudget} />
+                <ComplianceBadges hits={component.compliance_hits} />
                 <div className="mt-1 flex justify-end">
                   <CopyIconButton ariaLabel="複製這則文案" getText={() => component.content} />
                 </div>
@@ -463,6 +467,9 @@ function ResultView({
         <Info className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
         不落地保存，請自行複製
       </p>
+
+      {/* 票 S1-01：這道法務掃描的能力邊界揭露，一頁只顯示一次，不逐區塊重複。 */}
+      <p className="text-xs text-muted-foreground">{result.scan_note}</p>
 
       <div className="flex justify-end">
         <button
@@ -541,6 +548,7 @@ function ScriptCard({ index, component }: { index: number; component: QuickGener
     return (
       <div className="rounded-md border border-border px-3 py-2 text-sm text-foreground">
         {component.content}
+        <ComplianceBadges hits={component.compliance_hits} />
       </div>
     );
   }
@@ -561,6 +569,7 @@ function ScriptCard({ index, component }: { index: number; component: QuickGener
         />
       </summary>
       <div className="border-t border-border px-3 py-2">
+        <ComplianceBadges hits={component.compliance_hits} />
         {parsed.segments.map((seg, segIndex) => (
           <div key={segIndex} className="flex gap-3 border-t border-border py-1.5 first:border-t-0">
             <span className="w-16 shrink-0 text-xs font-semibold text-muted-foreground">

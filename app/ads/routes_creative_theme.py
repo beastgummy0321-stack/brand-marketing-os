@@ -15,6 +15,7 @@ from fastapi.responses import JSONResponse
 
 import app.shared.web as main_mod
 from app.ads import brief_assembler
+from app.ads import compliance
 from app.ads import handoff as ads_handoff
 from app.ads import theme_attribution
 from app.ads import theme_engine
@@ -41,6 +42,30 @@ IMAGE_PROMPT_BATCH_SIZE = 10
 # 在這裡合併而不是讓 theme_engine.py 匯入 theme_engine_video 回頭註冊，是為了不讓兩檔互相
 # import（theme_engine_video 已經單向 import theme_engine，反過來會形成循環 import）。
 GENERATORS = {**theme_engine.GENERATORS, "video": theme_engine_video.generate_video_theme}
+
+
+def _theme_product_id(conn, brand_id: str, theme: dict):
+    """一個主題掛在哪個產品上——跟 app/ads/creative.py get_variant() 同一個查法（切角格
+    的 product_id），不重寫第二次。"""
+    if not theme.get("experiment_cell_id"):
+        return None
+    cell = conn.execute(
+        "SELECT product_id FROM experiment_cell WHERE brand_id = ? AND id = ?",
+        (brand_id, theme["experiment_cell_id"]),
+    ).fetchone()
+    return cell["product_id"] if cell else None
+
+
+def _theme_response_with_scan(conn, brand_id: str, theme: dict) -> dict:
+    """票 S1-01：生成／讀取主題內容時就地標記法務命中——就地改寫 `theme["components"]`
+    每則元件的 `compliance_hits`，並在回應上附一句誠實揭露（`compliance.SCAN_LIMITS_NOTE`
+    原字串，不重寫）。只標示，不寫任何決策或 finding 列（票面決策 2）。"""
+    product_id = _theme_product_id(conn, brand_id, theme)
+    hits_by_key = compliance.scan_components(
+        conn, brand_id, theme["components"], product_id=product_id)
+    for component in theme["components"]:
+        component["compliance_hits"] = hits_by_key.get(component["id"], [])
+    return {"theme": theme, "scan_note": compliance.SCAN_LIMITS_NOTE}
 
 
 @router.post("/brands/{brand_id}/ads/{cycle_id}/cells/{cell_id}/formats/{format_key}/themes")
@@ -78,7 +103,7 @@ async def generate_theme(request: Request, brand_id: str, cycle_id: str, cell_id
     except ValueError as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)
 
-    return {"theme": theme}
+    return _theme_response_with_scan(conn, brand_id, theme)
 
 
 @router.get("/brands/{brand_id}/ads/{cycle_id}/matrix")
@@ -142,7 +167,7 @@ async def get_theme_detail(request: Request, brand_id: str, cycle_id: str, theme
     theme = theme_repo.get_theme(conn, brand_id, theme_id)
     if theme is None or theme["campaign_cycle_id"] != cycle_id:
         raise main_mod.NotFoundKind("主題")
-    return {"theme": theme}
+    return _theme_response_with_scan(conn, brand_id, theme)
 
 
 @router.post("/brands/{brand_id}/ads/{cycle_id}/themes/{theme_id}/folder")

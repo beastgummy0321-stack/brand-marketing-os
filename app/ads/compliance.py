@@ -467,3 +467,67 @@ def apply_default_holds(conn, brand_id: str, cycle_id: str, flags: dict, actor: 
     if held:
         conn.commit()
     return held
+
+
+# --- 生成當下即掃（票 S1-01：scan-on-generate）-----------------------------------------
+#
+# 上面 scan_cycle() 掃的是「已採用」主題底下的元件（ads_creative.list_variants() 只回
+# adopted 主題的元件）；這支掃的是「剛生成、還沒決定採不採用」的主題元件——矩陣頁生成一個
+# 主題、側板讀主題內容、工作檯快速生成，三個進入點都要在使用者看到內容的當下就看到標記，
+# 不必等採用之後才知道命中了什麼（.scratch/scan-on-generate/tickets/S1-01-scan-on-generate.md）。
+#
+# 只標示、不動決策：呼叫端不得拿這支的結果去寫 adoption_decision 或落 finding 表
+# （那是 apply_default_holds()／replace_findings() 的事，本票刻意不碰，見票面決策 2）。
+
+COMPONENT_TYPE_LABELS = {
+    "body": "主要文案", "title": "標題", "description": "說明",
+    "card_title": "卡片標題", "card_description": "卡片說明",
+    "script": "影片腳本", "hook_pool": "開場白",
+}
+
+
+def scan_components(conn, brand_id: str, components: list, *,
+                    product_id: Optional[str] = None) -> dict:
+    """一批生成中的主題／快速生成元件逐則掃描，回傳 `{key: [hit, ...]}`——`key` 是元件的
+    `id`（有的話），沒有 `id`（快速生成不落地，元件沒有 DB 主鍵）就用它在輸入清單裡的索引
+    （int）。只有命中至少一則的元件才會出現在回傳的 dict 裡。
+
+    `_sources()`／`_backing_texts()` 只在整批開頭各查一次，不是逐元件查——同一批元件通常
+    屬於同一個品牌／產品，逐元件重查是浪費。
+
+    ponytail：`image_prompt`／`card_image_prompt` 兩種元件型別刻意跳過——那是給圖片生成
+    工具看的指令，不是顧客會看到的文案，而且經常整句是英文，字詞比對套上去只會製造噪音。
+    上限是「這支只認 COMPONENT_TYPE_LABELS 裡列的型別」，真要涵蓋圖片提示詞另開票評估。
+    """
+    sources = _sources(conn, brand_id, product_id)
+    backing = _backing_texts(conn, brand_id, product_id)
+    result: dict = {}
+    for index, component in enumerate(components):
+        label = COMPONENT_TYPE_LABELS.get(component.get("component_type"))
+        if label is None:
+            continue  # image_prompt / card_image_prompt：見上方 ponytail 說明
+        content = component.get("content") or ""
+        key = component["id"] if component.get("id") is not None else index
+
+        hits = []
+        for source, term in scan_text(content, sources):
+            hits.append({
+                "category": source["source_category"],
+                "severity": source["severity"],
+                "term": term,
+                "message": f"這則{label}出現了「{term}」，命中{source['kind']}：{source['detail']}",
+            })
+        # 借用 unbacked_claim_findings() 既有的規格／交易條件比對邏輯，不重寫第二份——
+        # 外面塞一顆假 variant dict 讓它吃得下（它的介面認 variant，不是裸內容＋標籤）。
+        fake_variant = {"id": key, "type_label": label, "content": content}
+        for finding in unbacked_claim_findings(fake_variant, backing):
+            hits.append({
+                "category": finding.evidence["source_category"],
+                "severity": finding.severity,
+                "term": finding.evidence["term"],
+                "message": finding.message,
+            })
+
+        if hits:
+            result[key] = hits
+    return result

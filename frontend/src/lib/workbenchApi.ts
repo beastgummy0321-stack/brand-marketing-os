@@ -139,10 +139,24 @@ async function extractErrorMessage(res: Response, fallbackAction: string): Promi
 // 側板（畫面3，票 17-panel-single-image）：單一主題完整內容、採用、退件、複製、開資料夾。
 // ---------------------------------------------------------------------------
 
+/** 生成當下即掃的法務／品牌命中（票 S1-01：scan-on-generate），對應
+ * `app/ads/compliance.py scan_components()` 的 hit 形狀。`category` 三選一——
+ * `"law"`＝內建法定紅線詞、`"unbacked_claim"`＝查無佐證的規格／交易條件都算紅色；
+ * `"brand"`＝這個品牌自己的宣稱／規則命中，算黃色（跟既有 `similarity_flag` 徽章同一組
+ * warning token）。`message` 是完整人話句子，`term` 是徽章上顯示的短字。 */
+export interface ComplianceHit {
+  category: "law" | "brand" | "unbacked_claim";
+  severity: "warn" | "info";
+  term: string;
+  message: string;
+}
+
 /** 主題元件（app/ads/theme_repository.py list_theme_components() 回應形狀）。`over_budget`／
  * `similarity_flag` 在 sqlite 裡是 INTEGER（0／1），FastAPI 原樣序列化，不是 JS boolean——
  * 呼叫端要用 `!!` 轉，不能直接當 boolean 用（見 app/tests/test_ads_theme_detail.py 斷言）。
- * `rejected` 是路由層另外算好的真 Python bool，序列化後才是 JSON true／false。 */
+ * `rejected` 是路由層另外算好的真 Python bool，序列化後才是 JSON true／false。
+ * `compliance_hits`（票 S1-01）：`adopt_theme()`／`reject_theme_component()` 兩支路由沒有
+ * 重新掃描，回傳的元件不帶這個欄位——呼叫端不能假設它一定存在，見 ComplianceBadges.tsx。 */
 export interface ThemeComponentData {
   id: string;
   component_type: string;
@@ -152,14 +166,18 @@ export interface ThemeComponentData {
   similarity_flag: number;
   rejected: boolean;
   reject_reason_label: string | null;
+  compliance_hits?: ComplianceHit[];
 }
 
+/** `scan_note`（票 S1-01）：跟 `compliance_hits` 同一個限制——只有 `fetchThemeDetail()` 真的
+ * 從後端 `scan_note` 欄位補上，`adoptTheme()` 的回應沒有這個欄位，補不出來，維持 undefined。 */
 export interface ThemeDetail {
   id: string;
   name: string;
   status: string;
   format_key: string;
   components: ThemeComponentData[];
+  scan_note?: string;
 }
 
 /** 側板開啟時抓完整內容：對應 app/ads/routes_creative_theme.py get_theme_detail()（票 17
@@ -176,8 +194,10 @@ export async function fetchThemeDetail(
   if (!res.ok) {
     throw new Error(await extractErrorMessage(res, "主題內容讀取失敗"));
   }
-  const body: { theme: ThemeDetail } = await res.json();
-  return body.theme;
+  // scan_note 是回應的頂層欄位，跟 theme 平行（不是 theme 底下的鍵），這裡補回
+  // ThemeDetail 物件上（票 S1-01）。
+  const body: { theme: ThemeDetail; scan_note: string } = await res.json();
+  return { ...body.theme, scan_note: body.scan_note };
 }
 
 /** 「採用整個主題」主 CTA：對應 app/ads/routes_creative_theme.py adopt_theme()。 */
@@ -405,12 +425,17 @@ export type QuickGenerateScope = "post" | "video" | "image" | "script";
 export interface QuickGenerateComponent {
   component_type: string;
   content: string;
+  /** 票 S1-01：跟側板不同，快速生成只有這一條路徑會回應，後端保證每則元件都帶（乾淨的是
+   * 空陣列，不是缺席鍵），不必比照 `ThemeComponentData.compliance_hits` 標成可選。 */
+  compliance_hits: ComplianceHit[];
 }
 
 export interface QuickGenerateResult {
   scope: QuickGenerateScope;
   name: string;
   components: QuickGenerateComponent[];
+  /** 票 S1-01：`quick_generate()` 一律附上，跟 `ThemeDetail.scan_note` 不同，不必標可選。 */
+  scan_note: string;
 }
 
 export interface QuickGenerateProduct {
@@ -449,8 +474,10 @@ export async function quickGenerate(
   if (!res.ok) {
     throw new Error(await extractErrorMessage(res, "生成失敗"));
   }
-  const body: { result: QuickGenerateResult } = await res.json();
-  return body.result;
+  // scan_note 是回應的頂層欄位，跟 result 平行，這裡補回 QuickGenerateResult 物件上
+  // （票 S1-01，同 fetchThemeDetail() 的作法）。
+  const body: { result: QuickGenerateResult; scan_note: string } = await res.json();
+  return { ...body.result, scan_note: body.scan_note };
 }
 
 /** 腳本×Hook 組合成完整文字：對應 app/ads/routes_creative_theme.py
