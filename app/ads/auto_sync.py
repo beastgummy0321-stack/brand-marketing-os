@@ -13,17 +13,21 @@ GA4 每品牌同步（app/ads/ga4_sync.py `sync_brand`，比照手動同步鈕 `
 from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 
+from app.ads import diagnosis as ads_diagnosis  # noqa: F401 — 匯入觸發調度台模組登記（票 O1-01）
 from app.ads import ga4_sync
 from app.ads import onboarding
 from app.ads import pacing_curve
 from app.ads import reading
 from app.ads import repository as ads_repo
 from app.ads import sync as ads_sync
+from app.ads import theme_batch  # noqa: F401 — 同上：規則 2（創意.補主題）登記在這支，
+# 少了這行就只靠別處的 import 鏈碰巧先跑到，鏈一改規則會安靜地不再觸發（審查備註）
 from app.ads import tracking
 from app.ads import weekly_proposals
 from app.ads import weekly_reports
 from app.brand_intelligence import repository as bi_repo
 from app.core import interrupts as core_interrupts
+from app.core import orchestrator as core_orchestrator
 
 ACTOR = "auto_sync"
 WEEKLY_ACTOR = "weekly_engine"
@@ -167,6 +171,10 @@ def run(conn, *, today: Optional[str] = None, meta_client=None, ga4_client=None,
         cycle = weekly_proposals.current_cycle(conn, brand["id"])
         if cycle is not None:
             weekly_reports.enqueue_if_ready(conn, brand["id"], cycle["id"], today=today)
+        try:
+            core_orchestrator.run(conn, brand["id"], actor=ACTOR)
+        except Exception:  # noqa: BLE001 — 一個品牌的調度台失敗不擋住其他品牌（票 O1-01）
+            conn.rollback()
 
     conn.commit()
     return outcome

@@ -7,6 +7,7 @@ from app.ads import nextcycle
 from app.ads import reading as ads_reading
 from app.ads import repository as ads_repo
 from app.core import interrupts as core_interrupts
+from app.core import orchestrator as core_orchestrator
 from app.core.audit import write_audit
 from app.core.db import new_id, now_iso
 
@@ -339,3 +340,30 @@ def complete(conn, brand_id: str, cycle_id: str, recommendation_id: str, *, acto
     conn.commit()
     updated = conn.execute("SELECT * FROM recommendation WHERE id = ?", (recommendation_id,)).fetchone()
     return _card_from_row(updated)
+
+
+# ---------------------------------------------------------------------------
+# 調度台『優化』模組門面（票 O1-01，ADR 0024）
+# ---------------------------------------------------------------------------
+
+def status(conn, brand_id: str) -> dict:
+    """調度台 facts：`optimize.cards_open`（還有幾張未核可的週提案卡）、
+    `optimize.cycle_id`（給其他規則知道要對哪個檔期動作，例如創意.add_theme，
+    不必各自重找一次 current_cycle()）。"""
+    cycle = current_cycle(conn, brand_id)
+    if cycle is None:
+        return {"optimize.cards_open": 0, "optimize.cycle_id": None}
+    cards_open = sum(
+        1 for card in list_cards(conn, brand_id, cycle["id"]) if card["status"] == "GENERATED")
+    return {"optimize.cards_open": cards_open, "optimize.cycle_id": cycle["id"]}
+
+
+def handle(conn, action: dict) -> dict:
+    """優化模組目前沒有任何規則指派 op 給它——票 03-orchestrator-core.md 原本猜
+    `add_theme` 該登記在這裡，經查實際生成入口是 `generate_preselected_batch()`
+    （PLAN.md 模組表 #5「創意」的既有進入點），改登記在 `app/ads/theme_batch.py`
+    （票 O1-01 回報說明）。收到不認得的 op 一律丟 ValueError（ADR 0024 決議 6）。"""
+    raise ValueError(f"優化模組不認得這個 op：{action['op']}")
+
+
+core_orchestrator.register_module("optimize", status=status, handle=handle)

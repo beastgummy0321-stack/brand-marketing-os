@@ -33,11 +33,13 @@ theme_engine.py 既有機制，不新寫一套）。
 """
 
 import sqlite3
+from typing import Optional
 
 from app.ads import brief_assembler
 from app.ads import nextcycle
 from app.ads import theme_feedback
 from app.ads import theme_engine
+from app.core import orchestrator as core_orchestrator
 from app.core import settings as coresettings
 from app.llm import pricing, providers
 
@@ -149,3 +151,50 @@ def generate_preselected_batch(conn: sqlite3.Connection, brand_id: str, cycle_id
             break
 
     return {"themes": themes, "budget_stopped": budget_stopped, "errors": errors}
+
+
+# ---------------------------------------------------------------------------
+# 調度台『創意』模組門面（票 O1-01，ADR 0024）
+# ---------------------------------------------------------------------------
+# 票 03-orchestrator-core.md 原文把 add_theme 猜在 app/ads/weekly_proposals.py（優化）
+# 底下，那是猜錯的：weekly_proposals.py 只管「三張卡：停掉／加碼／換素材」，沒有補主題。
+# 真正的進入點是本檔的 `generate_preselected_batch()`——計畫核准後自動先生走的同一條路
+# （呼叫端 app/ads/routes_campaigns_open_api.py:314、:563），所以登記在這裡。
+# 註：PLAN.md 模組表把創意模組的進入點寫成 app/ads/creative_pipeline.py，那支其實只有
+# 駕駛艙用的統計函式，不是補主題的路——別照那份草稿去找（2026-08-23 審查查證）。
+
+_HANDLE_ACTOR = "orchestrator"
+
+
+def status(conn: sqlite3.Connection, brand_id: str) -> dict:
+    """目前沒有任何規則要讀創意層 facts，回空字典（O1-01 這條垂直線只需要 handle()）。"""
+    return {}
+
+
+def handle(conn: sqlite3.Connection, action: dict) -> dict:
+    """調度台唯一支援的 op：add_theme（叫創意補主題）。不認得的 op 一律丟 ValueError
+    （ADR 0024 決議 6）。"""
+    if action["op"] != "add_theme":
+        raise ValueError(f"創意模組不認得這個 op：{action['op']}")
+    return generate_preselected_batch(
+        conn, action["brand_id"], action["params"]["cycle_id"], actor=_HANDLE_ACTOR)
+
+
+def _rule_add_theme_on_ctr_bottleneck(facts: dict) -> "Optional[dict]":
+    """規則 2（票 03-orchestrator-core.md）：瓶頸 primary == "ctr" → 創意.add_theme，
+    risk asset（保守檔出卡等同意；放手檔自動做）。"""
+    if facts.get("diagnosis.bottleneck_primary") != "ctr":
+        return None
+    cycle_id = facts.get("optimize.cycle_id")
+    if not cycle_id:
+        return None
+    return {
+        "module": "creative", "op": "add_theme", "brand_id": facts.get("brand_id"),
+        "params": {"cycle_id": cycle_id}, "risk": "asset",
+        "dedupe_key": f"add_theme:{cycle_id}",
+    }
+
+
+core_orchestrator.register_module("creative", status=status, handle=handle)
+core_orchestrator.register_rule(
+    "add_theme_on_ctr_bottleneck", _rule_add_theme_on_ctr_bottleneck)

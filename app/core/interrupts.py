@@ -62,6 +62,9 @@ CATEGORIES = {
     # 排期到期提醒：選了間歇／脈動策略時，到了要中途調整日預算的那天提醒一次（票
     # B4R-warroom-redesign，S8R.9-11）。
     "pacing_schedule_due": {"severity": "rule_warning", "label": "排期到期提醒"},
+    # 調度台（app/core/orchestrator.py，票 O1-01）：保守檔出卡等同意、或同一 dedupe_key
+    # 連續失敗滿 3 次升級，兩種情境共用這一類，訊息固定短句不塞動態內容。
+    "orchestrator_pending": {"severity": "rule_warning", "label": "調度台待處理"},
 }
 _CATEGORY_RANK = {name: i for i, name in enumerate(CATEGORIES)}
 
