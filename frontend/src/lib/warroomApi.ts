@@ -9,6 +9,7 @@ import type { CampaignStatus } from "./campaignsApi";
 export type CampaignStage = "intake" | "plan" | "creative" | "handoff" | "prelaunch" | "performance" | "review";
 export type FunnelStage = "exposure" | "consideration" | "conversion";
 export type PacingStrategy = "continuous" | "intermittent" | "pulse";
+export type OfferType = "discount" | "bundle" | "gift";
 
 /** GRILL-B4R-performance.md R1-2：階段條從 7 格收成 5 個自適應單頁區塊（開檔／企劃／交接／
  * 成效／覆盤）。`STAGE_ORDER` 保留原本 7 段後端階段細節（`deriveStage()` 仍回這 7 種之一），
@@ -37,6 +38,12 @@ export const AUDIENCE_TIER_LABELS: Record<string, string> = {
   cold: "冷受眾（陌生開發）",
   warm: "暖受眾（再行銷）",
   hot: "熱受眾（已成交／高互動）",
+};
+// app/ads/offer.py:TYPES（票 V1-01）
+export const OFFER_TYPE_LABELS: Record<OfferType, string> = {
+  discount: "折扣",
+  bundle: "組合",
+  gift: "贈品",
 };
 // app/ads/pacing_curve.py:27-31
 export const PACING_STRATEGY_LABELS: Record<PacingStrategy, { title: string; tag: string; desc: string }> = {
@@ -109,6 +116,17 @@ export interface RuleCardLearned {
   text: string;
 }
 
+// app/ads/offer.py（票 V1-01）：PUT `.../offer` 200 回應跟 Cycle.offer 是同一個形狀。
+export interface Offer {
+  id: string;
+  name: string;
+  offer_type: OfferType;
+  offer_type_label: string;
+  terms: string;
+  valid_from: string;
+  valid_to: string;
+}
+
 export interface Cycle {
   id: string;
   brand_id: string;
@@ -127,6 +145,7 @@ export interface Cycle {
   archived: boolean;
   daily_below_floor: boolean;
   plan_version: number;
+  offer: Offer | null;
 }
 
 export interface CycleDetail {
@@ -564,10 +583,19 @@ const base = (brandId: string) => `/api/campaigns/${encodeURIComponent(brandId)}
 const cycleBase = (brandId: string, cycleId: string) => `${base(brandId)}/${encodeURIComponent(cycleId)}`;
 
 // ---- 開檔（S8.1-11）----
+export interface CreateCycleBody {
+  simulate?: boolean;
+  product_ids: string[];
+  budget: number;
+  duration_days: number;
+  background: string | null;
+  objective: string;
+  offer?: { name: string; offer_type: OfferType; terms: string }; // 票 V1-01：省略＝今天的行為不變
+}
 export const fetchNewContext = (brandId: string): Promise<NewContext> => getJson(`${base(brandId)}/new-context`);
 export const fetchNewCycleDirection = (brandId: string): Promise<NewCycleDirection> =>
   getJson(`${base(brandId)}/new-context/direction`);
-export const createCycle = (brandId: string, payload: Record<string, unknown>): Promise<{ cycle_id: string; message: string }> =>
+export const createCycle = (brandId: string, payload: CreateCycleBody): Promise<{ cycle_id: string; message: string }> =>
   postJson(base(brandId), payload);
 export const saveGuidedTargetCpa = (
   brandId: string,
@@ -577,6 +605,37 @@ export const saveGuidedTargetCpa = (
 // ---- 檔期完整狀態 ----
 export const fetchCycleDetail = (brandId: string, cycleId: string): Promise<CycleDetail> => getJson(cycleBase(brandId, cycleId));
 export const archiveCycle = (brandId: string, cycleId: string): Promise<void> => postJson(`${cycleBase(brandId, cycleId)}/archive`);
+// 票 V1-01：PUT／DELETE 優惠都回 `_envelope()` 形狀（data／generated_at），跟本檔其餘
+// postJson／deleteJson 慣吃「204 或裸 JSON」不同，各自解一次 data——不改 postJson／
+// deleteJson 既有行為（`deleteJson` 唯一既有呼叫端 performance/batches 那支吃的是裸
+// JSON，共用同一顆解法會撞型別）。
+async function envelopeJson<T>(path: string, method: "PUT" | "DELETE", body?: unknown): Promise<T> {
+  const res = await fetch(path, {
+    method,
+    headers: body === undefined ? undefined : { "content-type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  if (!res.ok) {
+    let message = `處理失敗（狀態碼 ${res.status}）`;
+    try {
+      const data = (await res.json()) as { error?: string; detail?: string };
+      if (data.error) message = data.error;
+      else if (data.detail) message = data.detail;
+    } catch {
+      // 回應不是 JSON，用預設訊息。
+    }
+    throw new Error(message);
+  }
+  const envelope: Envelope<T> = await res.json();
+  return envelope.data;
+}
+export const saveCycleOffer = (
+  brandId: string,
+  cycleId: string,
+  fields: { name: string; offer_type: OfferType; terms: string },
+): Promise<Offer> => envelopeJson(`${cycleBase(brandId, cycleId)}/offer`, "PUT", fields);
+export const clearCycleOffer = (brandId: string, cycleId: string): Promise<{ cleared: boolean }> =>
+  envelopeJson(`${cycleBase(brandId, cycleId)}/offer`, "DELETE");
 
 // ---- 企劃（S8.12-22）----
 export const startPlanGeneration = (brandId: string, cycleId: string): Promise<void> => postJson(`${cycleBase(brandId, cycleId)}/plan/generate`);

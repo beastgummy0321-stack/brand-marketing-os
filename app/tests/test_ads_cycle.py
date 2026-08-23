@@ -245,7 +245,8 @@ class PacingCurveTest(_BaseAdsTest):
         return resp.json()["cycle_id"]
 
     def test_long_duration_defaults_to_continuous_with_daily_budgets(self):
-        """開期表單目前還沒有優惠選擇欄位，has_offer 固定 False，天數夠長時仍是連續。"""
+        """這裡沒帶 offer，has_offer=False，天數夠長時仍是連續（帶 offer 的分支見
+        OfferCycleTest.test_offer_at_open_time_flips_pacing_to_pulse）。"""
         cycle_id = self._create(custom_amount="10000", duration_days="14")
         cycle = ads_repo.get_cycle(main.conn, self.bid, cycle_id)
         plan = ads_repo.derived_plan(cycle)
@@ -281,6 +282,101 @@ class PacingCurveTest(_BaseAdsTest):
         self.assertIn("天數不足", resp.json()["error"])
         plan = ads_repo.derived_plan(ads_repo.get_cycle(main.conn, self.bid, cycle_id))
         self.assertEqual(plan["pacing_strategy"], "continuous")  # 沒被改動
+
+
+class OfferCycleTest(_BaseAdsTest):
+    """票 V1-01：開期帶優惠、後補／編輯優惠、清除優惠。"""
+
+    def _open_with_offer(self, **overrides):
+        offer = overrides.pop("offer", {"name": "全館 8 折", "offer_type": "discount",
+                                        "terms": "滿 2000 折 300，不含特價品"})
+        body = {"product_ids": [self.product_a], "budget": 30000, "objective": "sales",
+                "duration_days": 30, "offer": offer}
+        body.update(overrides)
+        return self.client.post(f"/api/campaigns/{self.bid}", json=body)
+
+    def test_offer_at_open_time_flips_pacing_to_pulse(self):
+        """驗收 1：開期當下帶優惠，30 天檔期的排期策略從連續變脈動。"""
+        resp = self._open_with_offer()
+        self.assertEqual(resp.status_code, 200)
+        cycle = ads_repo.get_cycle(main.conn, self.bid, resp.json()["cycle_id"])
+        self.assertIsNotNone(cycle["offer_id"])
+        self.assertEqual(ads_repo.derived_plan(cycle)["pacing_strategy"], "pulse")
+        offer_row = main.conn.execute("SELECT * FROM offer WHERE id = ?", (cycle["offer_id"],)).fetchone()
+        self.assertEqual(offer_row["name"], "全館 8 折")
+        self.assertEqual(offer_row["valid_from"], cycle["start_date"])
+        self.assertEqual(offer_row["valid_to"], cycle["end_date"])
+        self.assertEqual(offer_row["product_scope_json"], cycle["product_scope_json"])
+
+    def test_cycle_detail_serves_offer(self):
+        cycle_id = self._open_with_offer().json()["cycle_id"]
+        data = self.client.get(f"/api/campaigns/{self.bid}/{cycle_id}").json()["data"]
+        self.assertEqual(data["cycle"]["offer"]["name"], "全館 8 折")
+        self.assertEqual(data["cycle"]["offer"]["offer_type_label"], "折扣")
+
+    def test_cycle_detail_offer_is_null_without_one(self):
+        cycle_id = self._open_cycle().json()["cycle_id"]
+        data = self.client.get(f"/api/campaigns/{self.bid}/{cycle_id}").json()["data"]
+        self.assertIsNone(data["cycle"]["offer"])
+
+    def test_put_edit_leaves_daily_budgets_byte_identical(self):
+        """驗收 3：已開檔期後補／改優惠，daily_budgets 一個數字都不動。"""
+        cycle_id = self._open_with_offer(duration_days=21).json()["cycle_id"]
+        before = ads_repo.derived_plan(ads_repo.get_cycle(main.conn, self.bid, cycle_id))["daily_budgets"]
+        resp = self.client.put(f"/api/campaigns/{self.bid}/{cycle_id}/offer",
+                               json={"name": "改個名字", "offer_type": "gift", "terms": "改過的條件"})
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["data"]["name"], "改個名字")
+        self.assertEqual(resp.json()["data"]["offer_type_label"], "贈品")
+        after = ads_repo.derived_plan(ads_repo.get_cycle(main.conn, self.bid, cycle_id))["daily_budgets"]
+        self.assertEqual(json.dumps(before, ensure_ascii=False), json.dumps(after, ensure_ascii=False))
+
+    def test_put_fills_offer_on_cycle_without_one_and_does_not_recompute(self):
+        cycle_id = self._open_cycle(duration_days="21").json()["cycle_id"]
+        before_cycle = ads_repo.get_cycle(main.conn, self.bid, cycle_id)
+        self.assertIsNone(before_cycle["offer_id"])
+        before_plan = ads_repo.derived_plan(before_cycle)
+        resp = self.client.put(f"/api/campaigns/{self.bid}/{cycle_id}/offer",
+                               json={"name": "全館 8 折", "offer_type": "discount", "terms": "滿 2000 折 300"})
+        self.assertEqual(resp.status_code, 200)
+        after_cycle = ads_repo.get_cycle(main.conn, self.bid, cycle_id)
+        self.assertIsNotNone(after_cycle["offer_id"])
+        after_plan = ads_repo.derived_plan(after_cycle)
+        self.assertEqual(after_plan["pacing_strategy"], "continuous")  # PUT 不觸發脈動
+        self.assertEqual(after_plan["daily_budgets"], before_plan["daily_budgets"])
+
+    def test_blank_name_is_rejected_with_no_row_written(self):
+        """驗收 5：名稱空白，白話 400，開期本身也不落地。"""
+        before_offers = main.conn.execute("SELECT COUNT(*) c FROM offer").fetchone()["c"]
+        resp = self._open_with_offer(offer={"name": "", "offer_type": "discount", "terms": "滿 2000 折 300"})
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("取個名字", resp.json()["error"])
+        self.assertEqual(main.conn.execute("SELECT COUNT(*) c FROM offer").fetchone()["c"], before_offers)
+        self.assertEqual(ads_repo.list_cycles(main.conn, self.bid), [])
+
+    def test_blank_terms_is_rejected_with_no_row_written(self):
+        before_offers = main.conn.execute("SELECT COUNT(*) c FROM offer").fetchone()["c"]
+        resp = self._open_with_offer(offer={"name": "全館 8 折", "offer_type": "discount", "terms": ""})
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(main.conn.execute("SELECT COUNT(*) c FROM offer").fetchone()["c"], before_offers)
+        self.assertEqual(ads_repo.list_cycles(main.conn, self.bid), [])
+
+    def test_put_blank_name_is_rejected(self):
+        cycle_id = self._open_with_offer().json()["cycle_id"]
+        resp = self.client.put(f"/api/campaigns/{self.bid}/{cycle_id}/offer",
+                               json={"name": "", "offer_type": "discount", "terms": "還是那句話"})
+        self.assertEqual(resp.status_code, 400)
+
+    def test_delete_clears_offer_id_and_row(self):
+        """驗收 4：清除後 campaign_cycle.offer_id 是 NULL，offer row 消失。"""
+        cycle_id = self._open_with_offer().json()["cycle_id"]
+        offer_id = ads_repo.get_cycle(main.conn, self.bid, cycle_id)["offer_id"]
+        self.assertIsNotNone(offer_id)
+        resp = self.client.delete(f"/api/campaigns/{self.bid}/{cycle_id}/offer")
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(resp.json()["data"]["cleared"])
+        self.assertIsNone(ads_repo.get_cycle(main.conn, self.bid, cycle_id)["offer_id"])
+        self.assertIsNone(main.conn.execute("SELECT * FROM offer WHERE id = ?", (offer_id,)).fetchone())
 
 
 class AdsBrandIsolationTest(_BaseAdsTest):

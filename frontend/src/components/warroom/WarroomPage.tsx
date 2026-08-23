@@ -88,7 +88,7 @@ export function WarroomPage({ brandId, cycleId }: { brandId: string; cycleId: st
   }
 
   const blockContent: Record<number, ReactNode> = {
-    1: <IntakeSummary cycle={cycle} />,
+    1: <IntakeSummary brandId={brandId} cycle={cycle} onOfferChanged={() => refresh(1)} />,
     2: (
       <div className="flex flex-col gap-4">
         {cycle.status === "PLANNING" || cycle.status === "PLAN_SELECT" || proposalFallback ? (

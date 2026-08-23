@@ -12,8 +12,9 @@
 對外進入點：本檔的 `router`。誰依賴它：只有 `app/ads/routes.py`。
 """
 
+import json
 import time
-from datetime import date
+from datetime import date, timedelta
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
@@ -23,6 +24,7 @@ from app.ads import budget as budget_calc
 from app.ads import account_structure
 from app.ads import auto_sync as ads_auto_sync
 from app.ads import handoff as ads_handoff
+from app.ads import offer as offer_mod
 from app.ads import plan as ads_plan
 from app.ads import nextcycle
 from app.ads import opening_suggestion
@@ -69,13 +71,30 @@ async def _json_body(request: Request) -> dict:
     return body if isinstance(body, dict) else {}
 
 
-def _cycle_json(view: dict) -> dict:
+_OFFER_TYPE_LABELS = dict(offer_mod.TYPES)
+
+
+def _offer_json(offer) -> "dict | None":
+    """`Offer`（`warroomApi.ts`）逐欄挑出——PUT `.../offer` 的 200 回應跟 `_cycle_json()`
+    的 `offer` 鍵是同一個形狀（票 V1-01，容器契約第 4 條：mock 形狀＝進入點回傳形狀）。"""
+    if offer is None:
+        return None
+    return {
+        "id": offer["id"], "name": offer["name"], "offer_type": offer["offer_type"],
+        "offer_type_label": _OFFER_TYPE_LABELS.get(offer["offer_type"], offer["offer_type"]),
+        "terms": offer["terms"], "valid_from": offer["valid_from"], "valid_to": offer["valid_to"],
+    }
+
+
+def _cycle_json(view: dict, offer=None) -> dict:
     """`Cycle`（`warroomApi.ts`）逐欄挑出，型別轉換（SQLite 0/1 → bool）。
 
     `pacing_strategy`／`pacing_reason` 在 TS 型別是必填（非 nullable）——`_cycle_view()`
     對舊資料（票 pacing-curve 上線前開的檔期，`derived_plan_json` 沒有這三個鍵）用 `.get()`
     給 `None`，這裡補一個安全預設（`continuous`，跟 `recommend_pacing_strategy()` 天數不足
     時的既有預設值一致），不把 `None` 傳給前端撞型別假設。
+
+    `offer`：呼叫端已經查好（沒掛就是 None），這裡只負責塞進去、不回頭查 DB（票 V1-01）。
     """
     return {
         "id": view["id"], "brand_id": view["brand_id"], "start_date": view["start_date"],
@@ -86,7 +105,7 @@ def _cycle_json(view: dict) -> dict:
         "pacing_strategy": view.get("pacing_strategy") or "continuous",
         "pacing_reason": view.get("pacing_reason") or "沒有特別理由，先求穩定",
         "archived": bool(view["archived"]), "daily_below_floor": bool(view.get("daily_below_floor")),
-        "plan_version": int(view["plan_version"] or 0),
+        "plan_version": int(view["plan_version"] or 0), "offer": _offer_json(offer),
     }
 
 
@@ -181,6 +200,7 @@ async def create_cycle(request: Request, brand_id: str):
     objective = str(body.get("objective") or "")
     duration_days = body.get("duration_days")
     background = body.get("background")
+    offer_body = body.get("offer")
 
     if not isinstance(budget, (int, float)) or budget <= 0:
         return _error(400, "請填一個大於 0 的金額。")
@@ -199,10 +219,33 @@ async def create_cycle(request: Request, brand_id: str):
             return _error(400, f"檔期長度請填 {budget_calc.MIN_DURATION_DAYS}"
                                 f"–{budget_calc.MAX_DURATION_DAYS} 天之間。")
 
+    # 開期表單順帶帶優惠（票 V1-01）：先驗證、驗證失敗不建檔期——所以放在 create_cycle()
+    # 之前，跟金額／目標／天數同一批「還沒寫任何東西」的檢查。
+    offer_fields = None
+    if offer_body is not None:
+        offer_fields, err = offer_mod.validate(offer_body)
+        if err:
+            return _error(400, err)
+
     phase = "simulation" if (body.get("simulate") and simulation.offer_simulation(conn, brand_id)) else "normal"
+    # 「今天」只讀一次，接著同時餵給優惠與檔期。兩邊各喊一次 date.today() 的話，請求正好
+    # 跨過午夜就會差一天，優惠的有效期跟檔期起訖對不上（審查提點，票 V1-01）。
+    start = date.today()
+    offer_id = None
+    if offer_fields is not None:
+        # offer 表沒有反向掛 campaign_cycle 的 FK，所以能先建這筆、再把 id 傳給
+        # create_cycle()（呼叫順序見票面決策）。天數用同一顆 plan_from_pain 重算——檔期
+        # 那時還不存在，沒有現成的 row 可以讀。
+        plan_duration = duration_value or budget_calc.plan_from_pain(budget).duration_days
+        end = start + timedelta(days=plan_duration - 1)
+        offer_id = offer_mod.create(
+            conn, brand_id, product_scope_json=json.dumps(list(product_ids), ensure_ascii=False),
+            valid_from=start.isoformat(), valid_to=end.isoformat(), fields=offer_fields)
     cycle = ads_repo.create_cycle(conn, brand_id, product_ids=list(product_ids), pain_value=budget,
                                   objective=objective, actor=actor, phase=phase,
-                                  duration_days=duration_value, background=background)
+                                  start_date=start.isoformat(),
+                                  duration_days=duration_value, background=background,
+                                  offer_id=offer_id)
     proposal.seed_channel_plans(conn, brand_id, cycle["id"])
     message = ("模擬檔期開好了。接下來的每一步都跟真的一樣，只有最後的成效數字是模擬的。"
               if phase == "simulation" else "檔期已建立，接下來確認這期的計畫。")
@@ -411,7 +454,8 @@ async def cycle_detail(brand_id: str, cycle_id: str):
     stage = "review" if cycle["status"] == "CLOSED" else _STAGE_INDEX_TO_NAME[derive_cycle_stage(conn, brand_id, cycle)]
     allocations = ads_repo.list_cycle_products(conn, brand_id, cycle_id)
     readiness_notes = ads_repo.check_readiness(conn, brand_id, [a["product_id"] for a in allocations])
-    return _envelope({"cycle": _cycle_json(view), "stage": stage, "readiness_notes": readiness_notes})
+    offer = offer_mod.get(conn, brand_id, view["offer_id"]) if view.get("offer_id") else None
+    return _envelope({"cycle": _cycle_json(view, offer), "stage": stage, "readiness_notes": readiness_notes})
 
 
 @router.post("/api/campaigns/{brand_id}/{cycle_id}/archive")
@@ -577,6 +621,31 @@ async def pacing_update(request: Request, brand_id: str, cycle_id: str):
     except ValueError as exc:
         return _error(400, str(exc))
     return JSONResponse(None, status_code=204)
+
+
+@router.put("/api/campaigns/{brand_id}/{cycle_id}/offer")
+async def offer_save(request: Request, brand_id: str, cycle_id: str):
+    """開期後補填、或編輯這期的優惠（票 V1-01）。create-or-update：檔期已經掛了 offer
+    就地改，沒有就新開一筆——`offer.save_for_cycle()` 判斷，這裡只管驗證跟轉形狀。
+    不重算 `derived_plan_json`（票面決策：後補優惠不動使用者已經看過的日預算數字）。"""
+    main_mod.require_brand(brand_id)
+    cycle = _require_cycle(brand_id, cycle_id)
+    body = await _json_body(request)
+    fields, err = offer_mod.validate(body)
+    if err:
+        return _error(400, err)
+    offer = offer_mod.save_for_cycle(main_mod.conn, brand_id, cycle, fields)
+    return _envelope(_offer_json(offer))
+
+
+@router.delete("/api/campaigns/{brand_id}/{cycle_id}/offer")
+async def offer_clear(brand_id: str, cycle_id: str):
+    """清掉這期的優惠：NULL 掉 `campaign_cycle.offer_id`、刪掉 offer row（票 V1-01）。
+    同樣不重算 `derived_plan_json`。"""
+    main_mod.require_brand(brand_id)
+    cycle = _require_cycle(brand_id, cycle_id)
+    offer_mod.clear_for_cycle(main_mod.conn, brand_id, cycle)
+    return _envelope({"cleared": True})
 
 
 @router.get("/api/campaigns/{brand_id}/{cycle_id}/rule-cards-learned")

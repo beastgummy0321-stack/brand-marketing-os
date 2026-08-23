@@ -105,7 +105,7 @@ def create_cycle(conn: sqlite3.Connection, brand_id: str, *, product_ids: list,
                  pain_value: float, objective: str, actor: str,
                  phase: str = "normal", start_date: Optional[str] = None,
                  duration_days: Optional[int] = None, background: Optional[str] = None,
-                 currency: str = "TWD") -> dict:
+                 currency: str = "TWD", offer_id: Optional[str] = None) -> dict:
     """開一期廣告檔期，同時寫好各產品的預算分配。
 
     預算、期長、停損全部由 app/ads/budget.py 的純函數算（決策 0016 硬性原則 4：
@@ -136,10 +136,7 @@ def create_cycle(conn: sqlite3.Connection, brand_id: str, *, product_ids: list,
 
     cycle_id = new_id("ccy")
     ts = now_iso()
-    # offer_id 開期表單目前還沒有選擇欄位，固定 None／has_offer=False（票 pacing-curve
-    # 範圍內；優惠一旦串接進表單，這裡改讀真正的值即可，不用動 pacing_curve 那一層）。
-    pacing_strategy, pacing_reason = pacing_curve.recommend_pacing_strategy(
-        plan.duration_days, has_offer=False)
+    pacing_strategy, pacing_reason = pacing_curve.recommend_pacing_strategy(plan.duration_days, has_offer=bool(offer_id))
     daily_budgets = pacing_curve.compute_curve(pacing_strategy, plan.duration_days, plan.total_budget)
     row = {
         "id": cycle_id,
@@ -156,7 +153,7 @@ def create_cycle(conn: sqlite3.Connection, brand_id: str, *, product_ids: list,
         "target_market": None,
         "channels_json": json.dumps(["meta"], ensure_ascii=False),
         "placements_json": None,
-        "offer_id": None,
+        "offer_id": offer_id,
         "landing_page": None,
         "background": background.strip() if background and background.strip() else None,
         "status": "PLANNING",

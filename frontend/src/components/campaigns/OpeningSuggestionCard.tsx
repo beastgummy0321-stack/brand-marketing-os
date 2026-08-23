@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { createCycle, fetchNewContext, type NewContext } from "@/lib/warroomApi";
+import { createCycle, fetchNewContext, OFFER_TYPE_LABELS, type NewContext, type OfferType } from "@/lib/warroomApi";
 import {
   answerOpeningChannel,
   fetchOpeningSuggestion,
@@ -22,6 +22,10 @@ const CHANNEL_OPTIONS = [
   { channel: "website_landing", label: "官網購買頁" },
 ];
 
+// 票 V1-01：跟 IntakeStep.tsx 同一份選項，字面重複而非抽共用（容器契約第 5 條：
+// 兩個呼叫端各自留一份，第三個真的出現才抽）。
+const OFFER_TYPE_OPTIONS = Object.entries(OFFER_TYPE_LABELS) as [OfferType, string][];
+
 /**
  * 開檔建議卡（F1 畫面 1）。只有這個元件讀取／回答 opening-suggestion；建立檔期仍走既有
  * `createCycle`，所以建立後的狀態只由後端保存；有關掉的管道會在建立後立即寫回 channel-plan。
@@ -39,6 +43,12 @@ export function OpeningSuggestionCard({ brandId, initialBackground, onCreated }:
     () => Object.fromEntries(CHANNEL_OPTIONS.map(({ channel }) => [channel, true])),
   );
   const [pendingCycleId, setPendingCycleId] = useState<string | null>(null);
+  // 票 V1-01：只有「我要調整」面板才問優惠——「就這樣做」一路預設 hasOffer=false，
+  // offer 鍵整個省略，維持原本一鍵到底的行為（票面決策 3）。
+  const [hasOffer, setHasOffer] = useState(false);
+  const [offerName, setOfferName] = useState("");
+  const [offerType, setOfferType] = useState<OfferType>("discount");
+  const [offerTerms, setOfferTerms] = useState("");
 
   function load() {
     setState({ status: "loading" });
@@ -83,6 +93,7 @@ export function OpeningSuggestionCard({ brandId, initialBackground, onCreated }:
           duration_days: durationDays,
           background: initialBackground || null,
           objective: state.context.recommended_objective,
+          offer: hasOffer ? { name: offerName, offer_type: offerType, terms: offerTerms } : undefined,
         })).cycle_id;
         setPendingCycleId(cycleId);
       }
@@ -215,6 +226,44 @@ export function OpeningSuggestionCard({ brandId, initialBackground, onCreated }:
                 {label}（{enabledChannels[channel] ? "用" : "不用"}）
               </label>
             ))}
+          </fieldset>
+          <fieldset className="flex flex-col gap-2">
+            <legend className="font-medium text-foreground">這期有優惠嗎（選填）</legend>
+            <label className="flex items-center gap-2 text-foreground">
+              <input type="checkbox" checked={hasOffer} onChange={(event) => setHasOffer(event.target.checked)} /> 這期有折扣、組合或贈品
+            </label>
+            {hasOffer && (
+              <div className="flex flex-col gap-2 rounded-md border border-border p-3">
+                <label className="flex flex-col gap-1 text-sm">
+                  <span className="text-xs text-muted-foreground">優惠名稱</span>
+                  <input
+                    value={offerName}
+                    onChange={(event) => setOfferName(event.target.value)}
+                    maxLength={60}
+                    placeholder="例如「全館 8 折」"
+                    className="rounded-md border border-border bg-card px-3 py-1.5 text-sm text-foreground"
+                  />
+                </label>
+                <fieldset className="flex gap-4">
+                  {OFFER_TYPE_OPTIONS.map(([value, label]) => (
+                    <label key={value} className="flex items-center gap-1 text-xs text-foreground">
+                      <input type="radio" checked={offerType === value} onChange={() => setOfferType(value)} /> {label}
+                    </label>
+                  ))}
+                </fieldset>
+                <label className="flex flex-col gap-1 text-sm">
+                  <span className="text-xs text-muted-foreground">使用條件</span>
+                  <textarea
+                    value={offerTerms}
+                    onChange={(event) => setOfferTerms(event.target.value)}
+                    maxLength={500}
+                    rows={2}
+                    placeholder="例如「滿 2000 折 300，不含特價品」"
+                    className="rounded-md border border-border bg-card px-3 py-2 text-sm text-foreground"
+                  />
+                </label>
+              </div>
+            )}
           </fieldset>
         </div>
       )}

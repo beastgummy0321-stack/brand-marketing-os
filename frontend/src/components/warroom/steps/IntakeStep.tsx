@@ -1,10 +1,21 @@
 import { useEffect, useState } from "react";
-import { fetchNewContext, saveGuidedTargetCpa, type Cycle, type NewContext } from "@/lib/warroomApi";
+import {
+  clearCycleOffer,
+  fetchNewContext,
+  OFFER_TYPE_LABELS,
+  saveCycleOffer,
+  saveGuidedTargetCpa,
+  type Cycle,
+  type NewContext,
+  type OfferType,
+} from "@/lib/warroomApi";
 import { createCycle } from "@/lib/warroomApi";
 import { formatCurrency } from "@/lib/format";
 import { useFormSubmit } from "@/lib/useFormSubmit";
 import { AiBadge } from "../shared/AiBadge";
 import { Badge } from "../shared/Badge";
+
+const OFFER_TYPE_OPTIONS = Object.entries(OFFER_TYPE_LABELS) as [OfferType, string][];
 
 const OBJECTIVE_TO_FUNNEL: Record<string, "exposure" | "consideration" | "conversion"> = {
   awareness: "exposure",
@@ -37,6 +48,12 @@ export function IntakeStep({
   const [guidedEvents, setGuidedEvents] = useState("");
   const [guidedMargin, setGuidedMargin] = useState("");
   const [guidedResult, setGuidedResult] = useState<number | null>(null);
+  // 票 V1-01：這期有沒有優惠，開檔當下就能順便填（3 格：名稱／類型／條件），不勾就是
+  // 「這期沒有優惠」，跟今天的行為一樣。
+  const [hasOffer, setHasOffer] = useState(false);
+  const [offerName, setOfferName] = useState("");
+  const [offerType, setOfferType] = useState<OfferType>("discount");
+  const [offerTerms, setOfferTerms] = useState("");
 
   useEffect(() => {
     fetchNewContext(brandId)
@@ -58,6 +75,7 @@ export function IntakeStep({
       duration_days: durationDays,
       background: background || null,
       objective,
+      offer: hasOffer ? { name: offerName, offer_type: offerType, terms: offerTerms } : undefined,
     });
     onCreated(res.cycle_id);
   });
@@ -194,6 +212,45 @@ export function IntakeStep({
       </label>
 
       <fieldset className="flex flex-col gap-2">
+        <legend className="text-sm font-medium text-foreground">這期有優惠嗎（選填）</legend>
+        <label className="flex items-center gap-2 text-sm text-foreground">
+          <input type="checkbox" checked={hasOffer} onChange={(e) => setHasOffer(e.target.checked)} /> 這期有折扣、組合或贈品
+        </label>
+        {hasOffer && (
+          <div className="flex flex-col gap-2 rounded-md border border-border p-3">
+            <label className="flex flex-col gap-1 text-sm">
+              <span className="text-xs text-muted-foreground">優惠名稱</span>
+              <input
+                value={offerName}
+                onChange={(e) => setOfferName(e.target.value)}
+                maxLength={60}
+                placeholder="例如「全館 8 折」"
+                className="rounded-md border border-border px-3 py-1.5 text-sm text-foreground"
+              />
+            </label>
+            <fieldset className="flex gap-4">
+              {OFFER_TYPE_OPTIONS.map(([value, label]) => (
+                <label key={value} className="flex items-center gap-1 text-xs text-foreground">
+                  <input type="radio" checked={offerType === value} onChange={() => setOfferType(value)} /> {label}
+                </label>
+              ))}
+            </fieldset>
+            <label className="flex flex-col gap-1 text-sm">
+              <span className="text-xs text-muted-foreground">使用條件</span>
+              <textarea
+                value={offerTerms}
+                onChange={(e) => setOfferTerms(e.target.value)}
+                maxLength={500}
+                rows={2}
+                placeholder="例如「滿 2000 折 300，不含特價品」"
+                className="rounded-md border border-border px-3 py-2 text-sm text-foreground"
+              />
+            </label>
+          </div>
+        )}
+      </fieldset>
+
+      <fieldset className="flex flex-col gap-2">
         <legend className="text-sm font-medium text-foreground">本期目標</legend>
         {ctx.objectives.map((o) => (
           <label key={o.value} className="flex items-start gap-2 text-sm text-foreground">
@@ -252,8 +309,11 @@ export function IntakeStep({
 }
 
 /** 開檔區塊收合後再點開的唯讀回顧（R1-2 五區自適應單頁：這期已經開檔，不重新跑一次表單，
- * 顯示送出當下的欄位快照，資料全部沿用 `Cycle` 既有欄位，不另外呼叫 API）。 */
-export function IntakeSummary({ cycle }: { cycle: Cycle }) {
+ * 顯示送出當下的欄位快照，資料全部沿用 `Cycle` 既有欄位，不另外呼叫 API）。優惠區塊是
+ * 例外（票 V1-01）：填／改／清都是這期開檔之後才會做的事，走 PUT／DELETE，`onOfferChanged`
+ * 讓外層 `WarroomPage.refresh()` 重新讀一次 `Cycle`（跟 `PlanStep` 等其他區塊同一套
+ * 「改完呼叫外層 refresh」慣例，不在這裡自己維護第二份 cycle 狀態）。 */
+export function IntakeSummary({ brandId, cycle, onOfferChanged }: { brandId: string; cycle: Cycle; onOfferChanged: () => void }) {
   return (
     <div className="flex flex-col gap-3 rounded-lg border border-border bg-card p-6 shadow-[var(--shadow-card)]">
       <div>
@@ -279,6 +339,125 @@ export function IntakeSummary({ cycle }: { cycle: Cycle }) {
         </div>
       </dl>
       {cycle.background && <p className="text-sm text-muted-foreground">背景：{cycle.background}</p>}
+      <div>
+        <p className="text-xs text-muted-foreground">優惠</p>
+        <OfferBlock brandId={brandId} cycle={cycle} onChanged={onOfferChanged} />
+      </div>
     </div>
+  );
+}
+
+/** 這期的優惠（票 V1-01）：沒有 → 空狀態＋「加上這期的優惠」；有 → 顯示內容＋編輯／清除。
+ * 編輯共用同一個表單（有優惠時預填現有內容）。後補或編輯不會動已經算好的日預算——這裡
+ * 直接把這句話印在表單上，不讓使用者猜（票面決策：PUT／DELETE 都不重算 derived_plan_json）。 */
+function OfferBlock({ brandId, cycle, onChanged }: { brandId: string; cycle: Cycle; onChanged: () => void }) {
+  const [editing, setEditing] = useState(false);
+  const [name, setName] = useState(cycle.offer?.name ?? "");
+  const [offerType, setOfferType] = useState<OfferType>(cycle.offer?.offer_type ?? "discount");
+  const [terms, setTerms] = useState(cycle.offer?.terms ?? "");
+
+  const saveForm = useFormSubmit(async () => {
+    await saveCycleOffer(brandId, cycle.id, { name, offer_type: offerType, terms });
+    setEditing(false);
+    onChanged();
+  });
+  const clearForm = useFormSubmit(async () => {
+    await clearCycleOffer(brandId, cycle.id);
+    onChanged();
+  });
+
+  function startEdit() {
+    setName(cycle.offer?.name ?? "");
+    setOfferType(cycle.offer?.offer_type ?? "discount");
+    setTerms(cycle.offer?.terms ?? "");
+    setEditing(true);
+  }
+
+  if (!editing) {
+    if (!cycle.offer) {
+      return (
+        <div className="mt-1 rounded-md border border-dashed border-border p-3 text-sm">
+          <p className="text-muted-foreground">這期還沒有設定優惠。</p>
+          <button type="button" onClick={startEdit} className="mt-1 text-xs font-medium text-primary hover:underline">
+            加上這期的優惠
+          </button>
+        </div>
+      );
+    }
+    return (
+      <div className="mt-1 rounded-md border border-border p-3 text-sm">
+        <p className="font-medium text-foreground">
+          {cycle.offer.name} <Badge>{cycle.offer.offer_type_label}</Badge>
+        </p>
+        <p className="mt-1 text-muted-foreground">{cycle.offer.terms}</p>
+        <div className="mt-2 flex gap-3">
+          <button type="button" onClick={startEdit} className="text-xs font-medium text-primary hover:underline">
+            編輯
+          </button>
+          <button
+            type="button"
+            disabled={clearForm.saving}
+            onClick={() => void clearForm.submit()}
+            className="text-xs font-medium text-danger hover:underline disabled:opacity-50"
+          >
+            {clearForm.saving ? "清除中…" : "清除"}
+          </button>
+        </div>
+        {clearForm.error && <p className="mt-1 text-xs text-danger">{clearForm.error}</p>}
+      </div>
+    );
+  }
+
+  return (
+    <form
+      className="mt-1 flex flex-col gap-2 rounded-md border border-border p-3 text-sm"
+      onSubmit={(e) => {
+        e.preventDefault();
+        void saveForm.submit();
+      }}
+    >
+      <label className="flex flex-col gap-1">
+        <span className="text-xs text-muted-foreground">優惠名稱</span>
+        <input
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          maxLength={60}
+          placeholder="例如「全館 8 折」"
+          className="rounded-md border border-border px-2 py-1 text-sm text-foreground"
+        />
+      </label>
+      <fieldset className="flex gap-4">
+        {OFFER_TYPE_OPTIONS.map(([value, label]) => (
+          <label key={value} className="flex items-center gap-1 text-xs text-foreground">
+            <input type="radio" checked={offerType === value} onChange={() => setOfferType(value)} /> {label}
+          </label>
+        ))}
+      </fieldset>
+      <label className="flex flex-col gap-1">
+        <span className="text-xs text-muted-foreground">使用條件</span>
+        <textarea
+          value={terms}
+          onChange={(e) => setTerms(e.target.value)}
+          maxLength={500}
+          rows={2}
+          placeholder="例如「滿 2000 折 300，不含特價品」"
+          className="rounded-md border border-border px-2 py-1 text-sm text-foreground"
+        />
+      </label>
+      <p className="text-xs text-muted-foreground">後補或改這裡，不會動已經算好的每日預算。</p>
+      {saveForm.error && <p className="text-xs text-danger">{saveForm.error}</p>}
+      <div className="flex gap-2">
+        <button
+          type="submit"
+          disabled={saveForm.saving}
+          className="self-start rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {saveForm.saving ? "儲存中…" : "儲存優惠"}
+        </button>
+        <button type="button" onClick={() => setEditing(false)} className="self-start text-xs font-medium text-muted-foreground hover:underline">
+          取消
+        </button>
+      </div>
+    </form>
   );
 }
