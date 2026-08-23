@@ -87,15 +87,20 @@ class _FakeClient:
     每次呼叫都記錄下來，供測試驗證有沒有打到、打了幾次。"""
 
     def __init__(self, *, fail_on: str = None, exc: Exception = None,
-                overrides: dict = None):
+                overrides: dict = None, fail_once_on: str = None):
         self.calls = []
         self.fail_on = fail_on
+        self.fail_once_on = fail_once_on  # 只讓這個工具「第一次」被呼叫時失敗，之後正常
+        self._fail_once_triggered = False
         self.exc = exc or RuntimeError("mock Meta 連線失敗")
         self.overrides = overrides or {}
         self._seq = {"campaign": 0, "adset": 0, "creative": 0, "ad": 0}
 
     def __call__(self, name: str, arguments: dict) -> dict:
         self.calls.append((name, dict(arguments)))
+        if self.fail_once_on and name == self.fail_once_on and not self._fail_once_triggered:
+            self._fail_once_triggered = True
+            raise self.exc
         if self.fail_on and name == self.fail_on:
             raise self.exc
         if name in self.overrides:
@@ -145,6 +150,11 @@ class _BaseMetaMcpTest(unittest.TestCase):
         self.brand = bi_repo.create_brand(main.conn, name="虛構晨光咖啡（MCP 票）",
                                           client_name="測試客戶", actor=ACTOR)
         self.bid = self.brand["id"]
+        # 交接包的到達網址來自品牌自有渠道的官網（handoff._default_destination）；
+        # 沒登記官網時 destination_url 是空字串——真人實測發現的情境（票二：preflight
+        # 擋這個），CreatePreflightTest 專門測那個情境，其餘測試都先登記好官網。
+        bi_repo.create_channel(main.conn, self.bid, channel_type="website", name="官網",
+                               identifier="https://example.test", actor=ACTOR)
 
         self._orig_plan = ads_plan.PROVIDER
         ads_plan.PROVIDER = FakeProvider(
@@ -220,6 +230,54 @@ class _BaseMetaMcpTest(unittest.TestCase):
         return row["n"]
 
 
+class CreatePreflightTest(_BaseMetaMcpTest):
+    def _remove_website_channel(self) -> None:
+        for channel in bi_repo.list_channels(main.conn, self.bid):
+            if channel["channel_type"] == "website":
+                bi_repo.delete_channel(main.conn, self.bid, channel["id"], actor=ACTOR)
+
+    def test_empty_destination_url_returns_reason_without_calling_client(self):
+        """真人實測（brd_01M0NN73K30QW2QK2CR8F0DBG7／ccy_01M0NQZ006A9BFXFCKQGCHCXRB）：
+        沒登記官網的品牌，status='ready' 的包 destination_url 是空字串，Meta 對圖片廣告
+        缺 link_url 直接拒絕。preflight 要在打 Meta 之前擋下，不是等 Meta 拒絕才知道。
+        （品牌真的沒有官網——欄位本身空、品牌自有渠道也補不到，兩邊都空才算擋下。）"""
+        self._remove_website_channel()
+        cycle_id, package = self._build_one_package()
+        main.conn.execute("UPDATE publishing_package SET destination_url = '' WHERE id = ?",
+                          (package["id"],))
+        main.conn.commit()
+
+        result = meta_mcp.create_package(main.conn, self.bid, cycle_id, package["id"],
+                                         actor=ACTOR)
+        self.assertFalse(result["ok"])
+        self.assertIn("到達網址", result["reason"])
+        self.assertEqual(self.fake_client.calls, [])
+        self.assertIsNone(self._mapping_for(package["id"]))
+
+    def test_stale_empty_destination_falls_back_to_website_channel_and_persists(self):
+        """票追加：使用者先產交接包、後來才補登記官網——build_packages() 不會回頭幫已經
+        產出的包補這一欄，欄位仍是舊的空字串，但品牌自有渠道已經有官網了。create_package()
+        現場補算、成功時把解出來的網址寫回 publishing_package，交接頁才跟著顯示。"""
+        cycle_id, package = self._build_one_package()
+        main.conn.execute("UPDATE publishing_package SET destination_url = '' WHERE id = ?",
+                          (package["id"],))
+        main.conn.commit()
+
+        result = meta_mcp.create_package(main.conn, self.bid, cycle_id, package["id"],
+                                         actor=ACTOR)
+        self.assertTrue(result["ok"], result)
+
+        creative_calls = [c for c in self.fake_client.calls if c[0] == "ads_create_creative"]
+        self.assertEqual(len(creative_calls), 1)
+        expected_link = ("https://example.test?"
+                         + ads_handoff.utm_query(json.loads(package["utm_json"] or "{}")))
+        self.assertEqual(creative_calls[0][1]["link_url"], expected_link)
+
+        row = main.conn.execute("SELECT destination_url FROM publishing_package WHERE id = ?",
+                                (package["id"],)).fetchone()
+        self.assertEqual(row["destination_url"], "https://example.test")
+
+
 class CreatePackageTest(_BaseMetaMcpTest):
     def test_a_writes_mapping_with_four_ids_confirmed(self):
         cycle_id, package = self._build_one_package()
@@ -292,6 +350,40 @@ class CreatePackageTest(_BaseMetaMcpTest):
 
 
 class CreateAllRouteTest(_BaseMetaMcpTest):
+    def test_b_second_package_reuses_campaign_after_first_fails_at_creative(self):
+        """真人實測發現的第二個問題：第一包 campaign 建成功、素材建失敗（缺到達網址那類
+        錯誤）——這個結果從沒寫進 DB（authorize_and_map 沒被呼叫），第二包的
+        `_ensure_campaign()` DB 查詢因此查不到，會另建一個 campaign。create-all 路由
+        要把第一包（不論成功或失敗）帶出來的 campaign_id 接力傳給下一包。"""
+        cycle_id = self._open_cycle()
+        cell_1 = self._cell_id(cycle_id)
+        self._adopt_theme(cycle_id, cell_1, angle="切角一", with_image=True)
+        cell_2_id = new_id("exc")
+        main.conn.execute(
+            "INSERT INTO experiment_cell (id, campaign_cycle_id, brand_id, product_id,"
+            " audience, creative_angle, created_at) VALUES (?, ?, ?, NULL, ?, ?, ?)",
+            (cell_2_id, cycle_id, self.bid, "測試受眾", "切角二", now_iso()))
+        main.conn.commit()
+        self._adopt_theme(cycle_id, cell_2_id, angle="切角二", with_image=True)
+        self.client.post(f"/api/campaigns/{self.bid}/{cycle_id}/handoff/build")
+        packages = ads_handoff.list_packages(main.conn, self.bid, cycle_id)
+        self.assertEqual(len(packages), 2)
+
+        self.fake_client.fail_once_on = "ads_create_creative"
+        resp = self.client.post(f"/api/campaigns/{self.bid}/{cycle_id}/handoff/create-all")
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertEqual(body["created"], 1)
+        self.assertEqual(len(body["failed"]), 1)
+
+        campaign_calls = [c for c in self.fake_client.calls if c[0] == "ads_create_campaign"]
+        self.assertEqual(len(campaign_calls), 1)
+
+        succeeded = ads_handoff.list_packages(main.conn, self.bid, cycle_id)
+        mapped = [p for p in succeeded if p.get("mapping")]
+        self.assertEqual(len(mapped), 1)
+        self.assertEqual(mapped[0]["mapping"]["meta_campaign_id"], "cmp_1")
+
     def test_e_create_all_skips_packages_that_already_have_mapping(self):
         cycle_id, ready_package = self._build_one_package()
         cell_2_id = new_id("exc")

@@ -343,13 +343,12 @@ def _ensure_campaign(conn, brand_id: str, cycle_id: str, account_id: str, packag
 def _create_creative(conn, brand_id: str, account_id: str, page_id: str,
                      image_hash: str, package: dict) -> str:
     utm = json.loads(package["utm_json"] or "{}")
+    # 呼叫端（create_package）preflight 已經擋掉空到達網址的包，這裡一律帶 link_url——
+    # 真人實測發現 Meta 對圖片廣告缺這個欄位是直接拒絕，不是可選。
     destination = package["destination_url"] or ""
-    link_url = (f"{destination}{'&' if '?' in destination else '?'}{ads_handoff.utm_query(utm)}"
-               if destination else None)
+    link_url = f"{destination}{'&' if '?' in destination else '?'}{ads_handoff.utm_query(utm)}"
     args = {"ad_account_id": account_id, "page_id": page_id, "image_hash": image_hash,
-            "name": package["ad_name"]}
-    if link_url:
-        args["link_url"] = link_url
+            "name": package["ad_name"], "link_url": link_url}
     headline = _variant_text(conn, brand_id, package["hook_id"])
     if headline:
         args["headline"] = headline
@@ -400,7 +399,13 @@ def _create_ad(account_id: str, adset_id: str, creative_id: str, package: dict) 
     return ad_id
 
 
-def create_package(conn, brand_id: str, cycle_id: str, package_id: str, *, actor: str) -> dict:
+def create_package(conn, brand_id: str, cycle_id: str, package_id: str, *, actor: str,
+                   campaign_id: Optional[str] = None) -> dict:
+    """`campaign_id`：呼叫端（create-all 路由）已經知道這期用的是哪個 Meta campaign 時
+    直接傳進來，跳過 `_ensure_campaign()`——真人實測發現的問題：campaign 建成功、
+    素材建失敗（例如缺到達網址）的包從來沒走到 authorize_and_map()，DB 裡沒留下
+    campaign_id，同一期後續包的 `_ensure_campaign()` DB 查詢因此每包都查不到、每包都
+    另建一個 campaign。不給就照舊先查 DB、沒有才建（見 `_ensure_campaign()`）。"""
     row = conn.execute(
         "SELECT * FROM publishing_package WHERE brand_id = ? AND campaign_cycle_id = ? AND id = ?",
         (brand_id, cycle_id, package_id),
@@ -409,11 +414,27 @@ def create_package(conn, brand_id: str, cycle_id: str, package_id: str, *, actor
         return {"ok": False, "reason": "找不到這份交接包"}
     package = dict(row)
 
-    # 先查有沒有圖、不必連 Meta 就能判斷——沒圖的包不該打一次 API 才發現要擋下
-    # （票二 1(b)：沒圖的包回 reason 不呼叫 client）。
+    # 打 Meta 之前先查完能查的、不必連線就能判斷的兩件事——沒圖／沒到達網址的包不該打一次
+    # API 才發現要擋下（票二 1(b)；真人實測發現：ready 的包也可能沒有到達網址，Meta 建
+    # 素材會直接拒絕 image ads 缺 link_url）。
     image_path = _first_image_path(conn, brand_id, package["experiment_cell_id"])
     if image_path is None:
         return {"ok": False, "reason": "這個主題還沒放圖"}
+
+    # 到達網址現場算，不信任建交接包當下存的舊值：品牌常常是先產交接包、後來才補登記
+    # 官網，build_packages() 不會回頭幫已經產出的包補這一欄（真人實測發現的情境）。
+    # 補到了就寫回去，讓交接頁跟著顯示這個網址，不必重產交接包。
+    destination = (package["destination_url"] or "").strip() \
+        or ads_handoff._default_destination(conn, brand_id)
+    if not destination:
+        return {"ok": False,
+                "reason": "這包還沒有到達網址（商品頁連結）。到品牌資料的自有渠道加官網，"
+                         "再重新產出交接包。"}
+    if destination != package["destination_url"]:
+        conn.execute("UPDATE publishing_package SET destination_url = ? WHERE id = ?",
+                     (destination, package_id))
+        conn.commit()
+        package["destination_url"] = destination
 
     status = connect(conn)
     if not status["ok"]:
@@ -425,17 +446,28 @@ def create_package(conn, brand_id: str, cycle_id: str, package_id: str, *, actor
 
     account_id = _raw_account_id()
     try:
-        campaign_id = _ensure_campaign(conn, brand_id, cycle_id, account_id, package)
-        image_hash = _upload_image(account_id, image_path)
-        creative_id = _create_creative(conn, brand_id, account_id, page_id, image_hash, package)
-        adset_id = _create_adset(conn, brand_id, cycle_id, account_id, campaign_id, package)
-        ad_id = _create_ad(account_id, adset_id, creative_id, package)
+        resolved_campaign_id = campaign_id or _ensure_campaign(
+            conn, brand_id, cycle_id, account_id, package)
     except MetaMcpError as exc:
         return {"ok": False, "reason": _plain_error(exc)}
     except Exception as exc:  # noqa: BLE001 — 對外呼叫一律不穿牆
         return {"ok": False, "reason": f"建立廣告時發生非預期錯誤：{exc}"}
 
-    meta_ids = {"meta_account_id": account_id, "meta_campaign_id": campaign_id,
+    try:
+        image_hash = _upload_image(account_id, image_path)
+        creative_id = _create_creative(conn, brand_id, account_id, page_id, image_hash, package)
+        adset_id = _create_adset(conn, brand_id, cycle_id, account_id, resolved_campaign_id,
+                                 package)
+        ad_id = _create_ad(account_id, adset_id, creative_id, package)
+    except MetaMcpError as exc:
+        # campaign 已經建成功——回傳它的 ID，呼叫端（create-all 路由）才接得住、傳給
+        # 下一包沿用，不必每包各自另建一個。
+        return {"ok": False, "reason": _plain_error(exc), "meta_campaign_id": resolved_campaign_id}
+    except Exception as exc:  # noqa: BLE001 — 對外呼叫一律不穿牆
+        return {"ok": False, "reason": f"建立廣告時發生非預期錯誤：{exc}",
+                "meta_campaign_id": resolved_campaign_id}
+
+    meta_ids = {"meta_account_id": account_id, "meta_campaign_id": resolved_campaign_id,
                 "meta_adset_id": adset_id, "meta_ad_id": ad_id, "meta_creative_id": creative_id}
     try:
         # go_live=False：這裡建的物件全暫停，還沒開始花錢（ADR 0019 第 7 條）——只回填
@@ -444,7 +476,7 @@ def create_package(conn, brand_id: str, cycle_id: str, package_id: str, *, actor
         ads_handoff.authorize_and_map(conn, brand_id, cycle_id, package_id,
                                       meta_ids=meta_ids, actor=actor, go_live=False)
     except ValueError as exc:
-        return {"ok": False, "reason": str(exc)}
+        return {"ok": False, "reason": str(exc), "meta_campaign_id": resolved_campaign_id}
     return {"ok": True, "meta_ids": meta_ids}
 
 

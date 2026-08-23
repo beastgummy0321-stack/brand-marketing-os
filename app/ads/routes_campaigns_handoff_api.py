@@ -288,13 +288,21 @@ async def handoff_create_all(request: Request, brand_id: str, cycle_id: str):
     targets = [p for p in ads_handoff.list_packages(conn, brand_id, cycle_id)
               if p["status"] == "ready" and not p.get("mapping")]
     created, failed = 0, []
+    # 同期第一包成功或失敗（只要 Meta campaign 建成功）都可能帶出這期的 campaign_id；
+    # 往後每一包都傳進去，跳過各自重找，不會因為第一包卡在素材那關就各建一個 campaign
+    # （meta_mcp.create_package() 的 DB 查詢只在 authorize_and_map 成功後才寫得進去，
+    # 素材失敗那包永遠查不到，這裡用回應本身把 campaign_id 接力傳下去）。
+    campaign_id = None
     for pkg in targets:
-        result = meta_mcp.create_package(conn, brand_id, cycle_id, pkg["id"], actor=actor)
+        result = meta_mcp.create_package(conn, brand_id, cycle_id, pkg["id"], actor=actor,
+                                         campaign_id=campaign_id)
         if result["ok"]:
             created += 1
+            campaign_id = campaign_id or result["meta_ids"]["meta_campaign_id"]
         else:
             failed.append({"package_id": pkg["id"], "package_name": pkg["adset_name"],
                            "reason": result["reason"]})
+            campaign_id = campaign_id or result.get("meta_campaign_id")
     return {"ok": True, "created": created, "failed": failed}
 
 
