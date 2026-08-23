@@ -32,22 +32,32 @@ export function QaAutoCheckSection({ brandId, cycleId }: { brandId: string; cycl
     <div id="qa-launch-block" className="rounded-lg border border-border bg-card p-4 shadow-[var(--shadow-card)]">
       <p className="font-medium text-foreground">上線前提醒</p>
       <ul className="mt-2 flex flex-col gap-2 text-sm">
-        {checks.map((c) => (
-          <li key={c.key} className="flex flex-col gap-1 rounded-md border border-border p-2">
-            <div className="flex items-center justify-between gap-2">
-              <label className="flex items-center gap-2 text-foreground">
-                <input type="checkbox" checked={confirmed.has(c.key)} onChange={() => void toggleConfirm(c.key)} />
-                {c.label}
-              </label>
-              {c.available ? (
-                <Badge tone={c.passed ? "success" : "danger"}>系統覆核：{c.passed ? "通過" : "未過"}</Badge>
-              ) : (
-                <Badge>系統無法覆核</Badge>
-              )}
-            </div>
-            <p className="text-xs text-muted-foreground">{c.note}</p>
-          </li>
-        ))}
+        {checks.map((c) => {
+          // 決策 1（票 Q1-01）：系統驗過就不畫勾選框，只有「驗不了」或「驗了沒過」才需要人來勾。
+          const verified = c.available && c.passed;
+          return (
+            <li key={c.key} className="flex flex-col gap-1 rounded-md border border-border p-2">
+              <div className="flex items-center justify-between gap-2">
+                {verified ? (
+                  <span className="text-foreground">{c.label}</span>
+                ) : (
+                  <label className="flex items-center gap-2 text-foreground">
+                    <input type="checkbox" checked={confirmed.has(c.key)} onChange={() => void toggleConfirm(c.key)} />
+                    {c.label}
+                  </label>
+                )}
+                {verified ? (
+                  <Badge tone="success">系統已驗過</Badge>
+                ) : c.available ? (
+                  <Badge tone="danger">系統覆核：未過</Badge>
+                ) : (
+                  <Badge>系統無法覆核</Badge>
+                )}
+              </div>
+              <p className="text-xs text-muted-foreground">{c.note}</p>
+            </li>
+          );
+        })}
       </ul>
       <p className="mt-2 text-xs text-muted-foreground">不擋流程：覆核不通過或還沒自行確認，照樣可以往下一步。</p>
     </div>

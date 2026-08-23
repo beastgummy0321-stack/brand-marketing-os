@@ -295,6 +295,14 @@ def _raw_account_id() -> str:
     return raw[4:] if raw.startswith("act_") else raw
 
 
+# 公開別名（票 Q1-01）：qa_autocheck.py 要打同一支 transport／讀同一個帳號 ID／
+# 轉同一套白話錯誤訊息，跨模組呼叫一律走公開函式，不直接碰底線開頭的私有名稱
+# （比照 app/ads/checklist.py:144 的 `pixel_anomaly = _pixel_anomaly` 先例）。
+call_tool = _client
+raw_account_id = _raw_account_id
+plain_error = _plain_error
+
+
 def get_page_id() -> Optional[str]:
     return os.environ.get(PAGE_ID_ENV_VAR, "").strip() or None
 

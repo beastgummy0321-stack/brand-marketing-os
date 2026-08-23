@@ -18,6 +18,7 @@ from app.ads import checkpoint as ads_checkpoint
 from app.ads import codes as ads_codes
 from app.ads import handoff as ads_handoff
 from app.ads import meta_mcp
+from app.ads import qa_autocheck
 from app.ads import repository as ads_repo
 from app.ads.routes_common import _require_cycle
 
@@ -93,64 +94,14 @@ async def qa_launch_toggle(request: Request, brand_id: str, cycle_id: str, item_
     return JSONResponse(None, status_code=204)
 
 
-# ---- QA 系統覆核（S8.32-35） ----
-
-def _probe_url(url: str) -> bool:
-    """輕量到達頁探測（S8.34）：HEAD/GET 只看回應碼是否 2xx，抓不到「內容對不對」。"""
-    if not url:
-        return False
-    import urllib.request
-    try:
-        req = urllib.request.Request(url, method="HEAD")
-        with urllib.request.urlopen(req, timeout=5) as resp:
-            return 200 <= resp.status < 300
-    except Exception:  # noqa: BLE001 — 探測失敗一律算沒過，不讓例外傳上去
-        return False
-
+# ---- QA 系統覆核（S8.32-35，票 Q1-01：五項全部改真的打 Meta 查）----
 
 @router.get("/api/campaigns/{brand_id}/{cycle_id}/handoff/qa-auto-check")
 async def qa_auto_check(brand_id: str, cycle_id: str):
     main_mod.require_brand(brand_id)
     conn = main_mod.conn
     _require_cycle(brand_id, cycle_id)
-    qa_items = {i["key"]: i for i in ads_checklist.qa_launch_status(conn, brand_id)}
-    packages = ads_handoff.list_packages(conn, brand_id, cycle_id)
-
-    anomaly = ads_checklist.pixel_anomaly(conn, brand_id)
-    pixel_item = qa_items.get("qa_pixel_installed", {"checked": False})
-    results = [{
-        "key": "qa_pixel_installed", "label": "Pixel 已正確安裝", "available": True,
-        "passed": anomaly is None, "checked": pixel_item["checked"],
-        "note": anomaly or "沒有偵測到「花錢卻零轉換」這種異常訊號。",
-    }]
-
-    budget_item = qa_items.get("qa_budget_line_review", {"checked": False})
-    results.append({
-        "key": "qa_budget_line_review", "label": "預算已逐筆覆核", "available": False, "passed": None,
-        "checked": budget_item["checked"],
-        "note": "系統目前還沒有串接 Meta 廣告組日預算讀取，這項先自行確認。",
-    })
-
-    if packages:
-        all_ok = all(_probe_url(p.get("full_url") or "") for p in packages)
-        note = "全部到達網址都能正常打開。" if all_ok else "至少一組到達網址打不開或逾時，系統只確認網址打得開，內容正不正確還是要自己看一眼。"
-    else:
-        all_ok, note = None, "這期還沒有交接包，先產出交接包才能探測到達網址。"
-    landing_item = qa_items.get("qa_landing_page_click_test", {"checked": False})
-    results.append({
-        "key": "qa_landing_page_click_test", "label": "到達頁已實點測試", "available": packages != [],
-        "passed": all_ok, "checked": landing_item["checked"], "note": note,
-    })
-
-    for key, label in (("qa_audience_exclusion", "受眾排除名單已設定"),
-                       ("qa_capi_emq_quality", "CAPI／EMQ 事件品質已確認")):
-        item = qa_items.get(key, {"checked": False})
-        results.append({
-            "key": key, "label": label, "available": False, "passed": None,
-            "checked": item["checked"],
-            "note": "Meta Marketing API 目前沒有公開讀取這項數據的整合範圍，這項先自行確認。",
-        })
-    return _envelope(results)
+    return _envelope(qa_autocheck.results(conn, brand_id, cycle_id))
 
 
 @router.get("/api/campaigns/{brand_id}/{cycle_id}/handoff/naming-check")
@@ -322,8 +273,23 @@ async def handoff_publish_all(request: Request, brand_id: str, cycle_id: str):
 @router.get("/api/campaigns/{brand_id}/{cycle_id}/readiness")
 async def readiness(brand_id: str, cycle_id: str):
     main_mod.require_brand(brand_id)
+    conn = main_mod.conn
     _require_cycle(brand_id, cycle_id)
-    return _envelope(ads_handoff.readiness_ring(main_mod.conn, brand_id, cycle_id))
+    ring = ads_handoff.readiness_ring(conn, brand_id, cycle_id)
+    # 票 Q1-01：merge 留在路由層，不是 handoff.py——readiness_ring() 的契約是「純聚合既有
+    # 狀態，不重算判定邏輯」（見該函式 docstring），系統覆核會打 Meta，不算「既有狀態」。
+    # 這裡跟 qa_auto_check() 一樣呼叫 qa_autocheck.results()（60 秒快取，同一個
+    # brand_id/cycle_id 兩邊幾乎同時打不會重複連線），依賴方向只有 qa_autocheck → handoff
+    # 一條，不繞回去。
+    auto_checks = {c["key"]: c for c in qa_autocheck.results(conn, brand_id, cycle_id)}
+    for item in ring["items"]:
+        if item["section"] != "qa_launch":
+            continue
+        auto = auto_checks.get(item["key"])
+        item["passed"] = item["passed"] or bool(auto and auto["available"] and auto["passed"])
+    ring["items"].sort(key=lambda i: i["passed"])  # 未過項排最前（False < True），同 readiness_ring() 原本的排序規則
+    ring["passed"] = sum(1 for i in ring["items"] if i["passed"])
+    return _envelope(ring)
 
 
 # ---- 期中檢查點（S8.47-50） ----
