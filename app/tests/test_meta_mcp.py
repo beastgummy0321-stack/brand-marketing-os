@@ -183,6 +183,7 @@ class _BaseMetaMcpTest(unittest.TestCase):
         # 顧到這個新關卡；TaiwanIdentityTest 專門測真正的解析邏輯，會自己換回原函式。
         meta_mcp._taiwan_identity = lambda account_id: TAIWAN_IDENTITY_ID
         meta_mcp._TW_IDENTITY_CACHE.clear()
+        meta_mcp._CURRENCY_CACHE.clear()
 
         self.brand = bi_repo.create_brand(main.conn, name="虛構晨光咖啡（MCP 票）",
                                           client_name="測試客戶", actor=ACTOR)
@@ -203,6 +204,7 @@ class _BaseMetaMcpTest(unittest.TestCase):
         meta_mcp.graph_post = self._orig_graph_post
         meta_mcp._taiwan_identity = self._orig_taiwan_identity
         meta_mcp._TW_IDENTITY_CACHE.clear()
+        meta_mcp._CURRENCY_CACHE.clear()
         ads_plan.PROVIDER = self._orig_plan
         coresettings.set_setting(main.conn, "intake_budget_limit", "30")
         for key, value in self._orig_env.items():
@@ -549,11 +551,13 @@ class TaiwanIdentityTest(_BaseMetaMcpTest):
         super().setUp()
         meta_mcp._taiwan_identity = self._orig_taiwan_identity
         meta_mcp._TW_IDENTITY_CACHE.clear()
+        meta_mcp._CURRENCY_CACHE.clear()
         self._orig_lookup = meta_mcp._lookup_taiwan_identity
 
     def tearDown(self):
         meta_mcp._lookup_taiwan_identity = self._orig_lookup
         meta_mcp._TW_IDENTITY_CACHE.clear()
+        meta_mcp._CURRENCY_CACHE.clear()
         super().tearDown()
 
     def test_a_regional_fields_destination_type_iso_times_and_shop_now(self):
@@ -612,3 +616,49 @@ class TaiwanIdentityTest(_BaseMetaMcpTest):
         adset_calls = [c for c in self.fake_graph_post.calls if c[0].endswith("/adsets")]
         identities = json.loads(adset_calls[0][1]["regional_regulation_identities"])
         self.assertEqual(identities["taiwan_universal_beneficiary"], "env_identity_999")
+
+
+class BudgetConversionTest(unittest.TestCase):
+    """台幣的金額單位是「元」不是「分」。三個獨立證據（2026-08-23 對真帳戶查證）：
+    後台把原始值 214286 顯示成 NT$214,286；帳戶裡真人建的活動原始值是 2000／500／1900
+    （當成分就是 NT$20／5／19，連最低日預算都不到）；`ads_get_ad_accounts` 回的
+    `min_daily_budget_cents` 是 33（NT$33 合理，NT$0.33 不合理）。
+    """
+
+    def test_twd_is_not_multiplied_by_a_hundred(self):
+        self.assertEqual(meta_mcp.budget_in_minor_units(500, "TWD"), 500)
+
+    def test_twd_rounds_to_whole_dollars(self):
+        """NT$2,142.86 這種除不盡的日預算要進位成整數元，不能變成 214286。"""
+        self.assertEqual(meta_mcp.budget_in_minor_units(2142.86, "TWD"), 2143)
+
+    def test_currency_case_is_ignored(self):
+        self.assertEqual(meta_mcp.budget_in_minor_units(500, "twd"), 500)
+
+    def test_unverified_currency_is_refused_not_guessed(self):
+        """沒實測查證過單位的幣別一律擋下——猜錯一位數就是 100 倍的錢。"""
+        with self.assertRaises(meta_mcp.MetaMcpError):
+            meta_mcp.budget_in_minor_units(500, "USD")
+        with self.assertRaises(meta_mcp.MetaMcpError):
+            meta_mcp.budget_in_minor_units(500, None)
+
+
+class BudgetSentToMetaTest(_BaseMetaMcpTest):
+    """實際送出去的那一筆——單元測試綠但呼叫端沒用到就白搭（這次的 bug 正是如此）。"""
+
+    def test_adset_daily_budget_is_dollars(self):
+        cycle_id, package = self._build_one_package()
+        self.client.post(f"/api/campaigns/{self.bid}/{cycle_id}/handoff/create-all")
+        adset = [c for c in self.fake_graph_post.calls if c[0].endswith("/adsets")][0][1]
+        self.assertEqual(adset["daily_budget"], int(round(package["daily_budget"])))
+        self.assertNotEqual(adset["daily_budget"], int(round(package["daily_budget"] * 100)),
+                            "乘了 100 就是把 NT$2,142.86 送成 NT$214,286")
+
+    def test_unverified_currency_sends_nothing(self):
+        cycle_id, _ = self._build_one_package()
+        accounts = json.loads(json.dumps(_ACCOUNTS_OK))
+        accounts["ad_accounts"][0]["currency"] = "USD"
+        self.fake_client.overrides["ads_get_ad_accounts"] = accounts
+        self.client.post(f"/api/campaigns/{self.bid}/{cycle_id}/handoff/create-all")
+        adset_calls = [c for c in self.fake_graph_post.calls if c[0].endswith("/adsets")]
+        self.assertEqual(adset_calls, [], "幣別沒查證過就不該送出任何預算")

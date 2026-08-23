@@ -61,6 +61,18 @@ _TOOLS_USED = (
 # 不再列進 _TOOLS_USED，connect() 回報的工具清單才誠實。
 
 NOT_CONNECTED_REASON = "還沒連接 Meta 廣告帳戶"
+
+# 金額單位：Meta 的預算欄位以「該幣別的最小單位」計價，多數幣別是分（要乘 100），
+# 台幣不是——原始值就是元。2026-08-23 真帳戶查證三個獨立證據：後台把原始值 214286
+# 顯示成 NT$214,286；帳戶裡真人建的活動原始值是 2000／500／1900（當成分就是
+# NT$20／5／19，低於最低日預算）；`ads_get_ad_accounts` 回的 min_daily_budget_cents
+# 是 33（NT$33 合理，NT$0.33 不合理）。
+# 這張表只收「實測查證過」的幣別。猜錯一位數就是 100 倍的錢，所以沒查證過的一律擋下，
+# 不給預設值——寧可建不出來，也不要默默送出 100 倍的預算。
+CURRENCY_MINOR_UNIT_FACTOR = {"TWD": 1}
+UNVERIFIED_CURRENCY_REASON = (
+    "這個廣告帳戶的幣別（{currency}）還沒有查證過金額單位，為了避免送錯 100 倍的預算，"
+    "系統不會替你建立廣告。")
 DISABLED_FALLBACK_REASON = "Meta 目前沒開放這個帳戶使用自動建廣告"
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
@@ -243,6 +255,32 @@ def graph_post(path: str, data: dict) -> dict:
     if response.status_code >= 400:
         raise MetaMcpError(f"Meta 回了 {response.status_code}。")
     return payload
+
+
+def budget_in_minor_units(amount: Optional[float], currency: Optional[str]) -> int:
+    """把「元」換算成 Meta 預算欄位要的單位。查證過的幣別才換算，其餘一律拋
+    `MetaMcpError`——見 `CURRENCY_MINOR_UNIT_FACTOR` 的註解。"""
+    factor = CURRENCY_MINOR_UNIT_FACTOR.get((currency or "").strip().upper())
+    if factor is None:
+        raise MetaMcpError(UNVERIFIED_CURRENCY_REASON.format(currency=currency or "未知"))
+    return int(round((amount or 0) * factor))
+
+
+_CURRENCY_CACHE: dict = {}
+
+
+def _account_currency(account_id: str) -> Optional[str]:
+    """這個廣告帳戶的幣別。`ads_get_ad_accounts` 本來就會回 currency，不另外打 Graph。"""
+    if account_id in _CURRENCY_CACHE:
+        return _CURRENCY_CACHE[account_id]
+    result = _client("ads_get_ad_accounts", {})
+    currency = None
+    for account in result.get("ad_accounts") or []:
+        if account.get("ad_account_id") == account_id:
+            currency = account.get("currency")
+            break
+    _CURRENCY_CACHE[account_id] = currency
+    return currency
 
 
 # ---------------------------------------------------------------------------
@@ -493,7 +531,8 @@ def _create_adset(conn, brand_id: str, cycle_id: str, account_id: str,
         "name": package["adset_name"], "campaign_id": campaign_id, "status": "PAUSED",
         "billing_event": DEFAULT_BILLING_EVENT,
         "targeting": json.dumps(DEFAULT_TARGETING, ensure_ascii=False),
-        "daily_budget": int(round((package["daily_budget"] or 0) * 100)),
+        "daily_budget": budget_in_minor_units(package["daily_budget"],
+                                              _account_currency(account_id)),
         "destination_type": "WEBSITE",
         "bid_strategy": "LOWEST_COST_WITHOUT_CAP",  # validate_only 實測：沒明示會被拒「必須提供出價金額或限制」
         "regional_regulated_categories": json.dumps(TAIWAN_REGULATED_CATEGORIES),
