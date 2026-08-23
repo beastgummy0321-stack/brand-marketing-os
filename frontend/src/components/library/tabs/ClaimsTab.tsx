@@ -115,6 +115,15 @@ function ClaimGroupSection({
                   尚未附上佐證來源
                 </span>
               )}
+              {claim.wordlist_hits.length > 0 && (
+                <span
+                  className="inline-flex items-center gap-1 text-xs font-medium text-danger"
+                  title={claim.wordlist_hits.map((hit) => hit.detail).join("\n")}
+                >
+                  <TriangleAlert className="h-3.5 w-3.5" aria-hidden="true" />
+                  含法規禁用詞{claim.wordlist_hits.map((hit) => `「${hit.term}」`).join("、")}
+                </span>
+              )}
             </p>
             <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
               {type === "approved" && (

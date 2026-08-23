@@ -40,6 +40,12 @@ export interface LibraryRule {
 
 export type ClaimType = "approved" | "high_risk" | "forbidden";
 
+export interface ClaimWordlistHit {
+  term: string;
+  detail: string;
+  source_id: string;
+}
+
 export interface LibraryClaim {
   id: string;
   claim_text: string;
@@ -47,6 +53,9 @@ export interface LibraryClaim {
   product_id: string | null;
   scope_label: string;
   evidence_source_reference: string | null;
+  /** 票 03-claim-wordlist-todo（決議 2026-08-23）：任何類別命中內建法定詞庫都在這裡，
+   * 不擋存檔，只標紅字警告。空陣列＝沒命中。 */
+  wordlist_hits: ClaimWordlistHit[];
 }
 
 export interface LibraryAsset {
@@ -310,19 +319,21 @@ export async function deleteRule(brandId: string, ruleId: string): Promise<void>
 export async function createClaim(
   brandId: string,
   fields: { claim_text: string; claim_type: string; product_id: string; evidence_source_reference: string },
-): Promise<void> {
-  await postJson(`/api/library/brands/${encodeURIComponent(brandId)}/claims`, fields);
+): Promise<LibraryClaim> {
+  const body = await postJson<Envelope<LibraryClaim>>(`/api/library/brands/${encodeURIComponent(brandId)}/claims`, fields);
+  return body.data;
 }
 
 export async function updateClaim(
   brandId: string,
   claimId: string,
   fields: { claim_text: string; claim_type: string; product_id: string; evidence_source_reference: string },
-): Promise<void> {
-  await postJson(
+): Promise<LibraryClaim> {
+  const body = await postJson<Envelope<LibraryClaim>>(
     `/api/library/brands/${encodeURIComponent(brandId)}/claims/${encodeURIComponent(claimId)}/edit`,
     fields,
   );
+  return body.data;
 }
 
 export async function deleteClaim(brandId: string, claimId: string): Promise<void> {

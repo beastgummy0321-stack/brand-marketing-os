@@ -19,11 +19,11 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 import app.main as main  # noqa: E402
 from app.ads import compliance  # noqa: E402
-from app.ads import compliance_wordlist  # noqa: E402
 from app.ads import creative as ads_creative  # noqa: E402
 from app.ads import plan as ads_plan  # noqa: E402
 from app.ads import repository as ads_repo  # noqa: E402
 from app.ads import theme_repository as theme_repo  # noqa: E402
+from app.brand_intelligence import compliance_wordlist  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
 from app.llm.providers import FakeProvider, ProviderResponse, Usage  # noqa: E402
 from app.shared.web import OPERATOR  # noqa: E402
@@ -266,12 +266,32 @@ class ComplianceScanTest(unittest.TestCase):
         self._make_creative("每天早晨的一杯好茶")
         self.assertEqual(compliance.scan_cycle(main.conn, self.bid, self.cycle_id), [])
 
-    def test_approved_claims_are_not_flagged(self):
-        """已核准的宣稱本來就能講，不該被自己的掃描擋。"""
+    def test_approved_claims_are_scanned_but_not_blocked(self):
+        """票 03-claim-wordlist-todo（決議 2026-08-23）：approved 不再被跳過——文案重複
+        講出一句已核准的宣稱，一樣會被標成 brand 分類的 warn 命中，只是只警告不擋
+        （見下面 DefaultHoldTest.test_brand_only_hit_does_not_default_reject，brand
+        分類命中一律不會被自動預設值翻掉）。"""
         bi_repo.create_claim(main.conn, self.bid, claim_text="使用天然原料",
                              claim_type="approved", actor=ACTOR)
         self._make_creative("使用天然原料，喝得安心")
-        self.assertEqual(compliance.scan_cycle(main.conn, self.bid, self.cycle_id), [])
+        findings = compliance.scan_cycle(main.conn, self.bid, self.cycle_id)
+        brand_findings = [f for f in findings if f.evidence.get("source_category") == "brand"]
+        self.assertEqual(len(brand_findings), 1)
+        self.assertEqual(brand_findings[0].severity, "warn")
+        self.assertEqual(brand_findings[0].evidence.get("source_type"), "claim")
+
+    def test_approved_claim_with_statutory_term_is_flagged(self):
+        """F3 的原始破口：「可用」宣稱含「根治」這種法規紅字，過去完全不被掃到
+        （`.scratch/e2e-adflow/issues/012-claims-no-content-audit.md` 的 repro）。
+        只挑 brand 分類出來驗證，避免跟同一句話也命中的內建法定詞庫（law 分類）混在一起
+        （比照 test_forbidden_claim_hit_is_flagged 的作法）。"""
+        bi_repo.create_claim(main.conn, self.bid, claim_text="根治關節炎，七天見效不復發",
+                             claim_type="approved", actor=ACTOR)
+        self._make_creative("根治關節炎，七天見效不復發")
+        findings = compliance.scan_cycle(main.conn, self.bid, self.cycle_id)
+        brand_findings = [f for f in findings if f.evidence.get("source_category") == "brand"]
+        self.assertEqual(len(brand_findings), 1)
+        self.assertEqual(brand_findings[0].severity, "warn")
 
     def test_rejected_variants_are_not_scanned(self):
         bi_repo.create_claim(main.conn, self.bid, claim_text="能治療失眠",

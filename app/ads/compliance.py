@@ -35,7 +35,7 @@ import json
 import re
 from typing import Optional
 
-from app.ads import compliance_wordlist
+from app.brand_intelligence import compliance_wordlist
 from app.ads import creative as ads_creative
 from app.ads import fingerprint as fp
 from app.ads import guardrails
@@ -47,6 +47,13 @@ from app.core.db import new_id, now_iso
 _QUOTE_PATTERN = re.compile(r"[「『\"'“”]([^「」『』\"'“”]{1,20})[」』\"'“”]")
 
 MIN_TERM_LENGTH = 2  # 一個字的詞誤判率太高（例如「藥」會打到「藥妝」），不列入
+
+# 素材文案命中某條登錄宣稱的人話標籤（`_sources()` 組 claim 來源用）。
+CLAIM_KIND_BY_TYPE = {
+    "forbidden": "不能講的話",
+    "high_risk": "要小心的話",
+    "approved": "已標可用但仍命中規則的話",
+}
 
 SCAN_LIMITS_NOTE = (
     "這道檢查只抓得到明確的字詞命中，抓不到語氣或語意層面的問題。"
@@ -92,19 +99,22 @@ def _sources(conn, brand_id: str, product_id: Optional[str] = None,
     claims = (bi.list_claims_for_product(conn, brand_id, product_id) if product_id
               else bi.list_claims_for_brand(conn, brand_id))
     for claim in claims:
-        if claim.get("claim_type") not in ("forbidden", "high_risk"):
-            continue
+        # approved（可用）不再跳過（票 03-claim-wordlist-todo，決議 2026-08-23）：
+        # F3 踩到的洞是「可用」宣稱完全沒被掃過，掛著「可以講」的標籤卻可能整句就是
+        # 違規字詞。三類都掃、都只警告（見 CLAIM_KIND_BY_TYPE 的 severity）——不擋、
+        # 不自動改類別（`apply_default_holds()` 只認 source_category=="law"，
+        # 不看這裡的 severity，brand 分類命中一律不會被自動預設值翻掉）。
         terms = extract_terms(claim["claim_text"])
         if not terms:
             if gaps is not None:
                 gaps.append({"kind": "宣稱", "detail": claim["claim_text"],
                              "source_id": claim["id"], "source_type": "claim"})
             continue
-        forbidden = claim["claim_type"] == "forbidden"
+        kind = CLAIM_KIND_BY_TYPE[claim["claim_type"]]
         sources.append({
             "terms": terms,
-            "severity": "warn" if forbidden else "info",
-            "kind": "不能講的話" if forbidden else "要小心的話",
+            "severity": "info" if claim["claim_type"] == "high_risk" else "warn",
+            "kind": kind,
             "detail": claim["claim_text"],
             "source_id": claim["id"],
             "source_type": "claim",
@@ -153,16 +163,11 @@ def coverage_gaps(conn, brand_id: str) -> list:
     return deduped
 
 
-def scan_text(text: str, sources: list) -> list:
-    """一段文字對一組來源做比對，回傳命中的 (source, term) 清單。"""
-    hits = []
-    lowered = (text or "").lower()
-    for source in sources:
-        for term in source["terms"]:
-            if term.lower() in lowered:
-                hits.append((source, term))
-                break  # 同一條規則命中一次就夠，不重複報同一條
-    return hits
+# 純比對邏輯搬去 compliance_wordlist.py 了（票 03-claim-wordlist-todo，見該檔檔頭
+# 「為什麼搬來 app.brand_intelligence」）——app.brand_web 存宣稱／宣稱列表也要重用
+# 同一顆函式，但 A1 三層地界不准它 import app.ads。這裡保留原名字當作這個模組的公開
+# 介面，呼叫的地方（下面 scan_cycle()）完全不用改，不重複定義第二套比對。
+scan_text = compliance_wordlist.scan_text
 
 
 # --- 產品規格／交易條件掃描（票 12：generated copy 編造規格或交易條件）---------------
