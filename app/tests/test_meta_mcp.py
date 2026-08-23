@@ -345,6 +345,18 @@ class PublishAllRouteTest(_BaseMetaMcpTest):
         self.assertEqual(self._cycle_status(cycle_id), "LIVE")
         self.assertEqual(self._authorization_count(package["id"]), 1)
 
+    def test_publish_all_twice_does_not_duplicate_authorization(self):
+        """連按兩次「發布全部」：第二次不再呼叫 Meta、不重複寫授權列。"""
+        cycle_id, package = self._build_one_package()
+        self.client.post(f"/api/campaigns/{self.bid}/{cycle_id}/handoff/create-all")
+        self.client.post(f"/api/campaigns/{self.bid}/{cycle_id}/handoff/publish-all")
+        n_calls = len(self.fake_client.calls)
+        body = self.client.post(f"/api/campaigns/{self.bid}/{cycle_id}/handoff/publish-all").json()
+        self.assertTrue(body["ok"])
+        self.assertEqual(body["activated"], 0)
+        self.assertEqual(len(self.fake_client.calls), n_calls)
+        self.assertEqual(self._authorization_count(package["id"]), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

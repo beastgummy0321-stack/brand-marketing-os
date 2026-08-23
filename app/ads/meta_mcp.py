@@ -481,10 +481,22 @@ def activate_cycle(conn, brand_id: str, cycle_id: str, *, actor: str) -> dict:
             "SELECT * FROM external_ad_mapping WHERE brand_id = ? AND publishing_package_id = ?"
             " ORDER BY created_at DESC LIMIT 1", (brand_id, pkg["id"]),
         ).fetchone()
-        if mapping_row and mapping_row["meta_ad_id"]:
-            mapped.append((pkg, dict(mapping_row)))
+        if not (mapping_row and mapping_row["meta_ad_id"]):
+            continue
+        already_live = conn.execute(
+            "SELECT 1 FROM activation_authorization WHERE brand_id = ?"
+            " AND scope_type = 'campaign_activation' AND scope_ref = ?", (brand_id, pkg["id"]),
+        ).fetchone()
+        if already_live:  # 連按兩次「發布全部」不重複寫授權列與提醒卡
+            continue
+        mapped.append((pkg, dict(mapping_row)))
 
     if not mapped:
+        if packages and any(
+            conn.execute("SELECT 1 FROM activation_authorization WHERE brand_id = ?"
+                         " AND scope_type = 'campaign_activation' AND scope_ref = ?",
+                         (brand_id, p["id"])).fetchone() for p in packages):
+            return {"ok": True, "activated": 0, "failed": []}  # 全部早就發布過
         return {"ok": False, "reason": "這期還沒有已建到 Meta 的包，先按「一鍵建到 Meta」。"}
 
     account_id = _raw_account_id()
