@@ -4,9 +4,10 @@ import { Link } from "react-router-dom";
 import { FluidCard } from "@/components/layout/FluidCard";
 import { StatBig } from "@/components/layout/StatBig";
 import { CHART_COLOR_REVENUE, CHART_COLOR_SPEND } from "@/lib/chartColors";
-import { formatCurrency, formatPercent, formatRoas } from "@/lib/format";
+import { formatCurrency, formatPercent, formatRoas, formatUsd } from "@/lib/format";
 import { useEchart } from "@/lib/useEchart";
-import { fetchClosingReview, type ClosingReview, type Cycle } from "@/lib/warroomApi";
+import { useFormSubmit } from "@/lib/useFormSubmit";
+import { fetchClosingReview, fetchSettleNow, settleNow, type ClosingReview, type Cycle, type SettleNowInfo } from "@/lib/warroomApi";
 
 const VERDICT_LABELS = { supported: "成立", rejected: "不成立", inconclusive: "看不出來" } as const;
 
@@ -14,17 +15,18 @@ const VERDICT_LABELS = { supported: "成立", rejected: "不成立", inconclusiv
  * 四段式，圖像化每一段（雙條圖／環形圖／學習兩張卡／前後對照長條），資料源完全沿用舊條文，
  * 只新增每段的視覺形式，不重新計算任何判讀邏輯。 */
 export function ReviewStep({ brandId, cycle }: { brandId: string; cycle: Cycle }) {
-  const [state, setState] = useState<{ status: "loading" } | { status: "locked"; message: string } | { status: "ready"; review: ClosingReview }>({ status: "loading" });
+  const [state, setState] = useState<{ status: "loading" } | { status: "locked" } | { status: "ready"; review: ClosingReview }>({ status: "loading" });
 
-  useEffect(() => {
+  function load() {
     fetchClosingReview(brandId, cycle.id)
       .then((review) => setState({ status: "ready", review }))
-      .catch((err: unknown) => setState({ status: "locked", message: err instanceof Error ? err.message : "這期還沒結案，覆盤要等成效判讀跑完期末結算才會出現。" }));
-  }, [brandId, cycle.id]);
+      .catch(() => setState({ status: "locked" }));
+  }
+  useEffect(load, [brandId, cycle.id]);
 
   if (state.status === "loading") return <div className="rounded-lg border border-border bg-card p-4 text-sm text-muted-foreground">讀取中…</div>;
   if (state.status === "locked") {
-    return <div className="rounded-lg border border-dashed border-border p-6 text-center text-sm text-muted-foreground">{state.message}</div>;
+    return <SettleNowPanel brandId={brandId} cycle={cycle} onSettled={load} />;
   }
 
   const { review } = state;
@@ -36,6 +38,53 @@ export function ReviewStep({ brandId, cycle }: { brandId: string; cycle: Cycle }
       <LearningCard review={review} />
       <NextCycleCard brandId={brandId} review={review} cycle={cycle} />
       <p className="text-xs text-muted-foreground">本週報告掛載點（B5 範圍，本票只留入口，內部長相延至 B5）。</p>
+    </div>
+  );
+}
+
+/** 票 S1-01：這期還沒收帳時的覆盤畫面——原本只印一句死板的「還沒結案」，現在直接給
+ * 「現在結算」按鈕（不必等結束後 14 天的背景工）。can_settle 為假時按鈕 disabled＋顯示
+ * 原因（例如這期一筆成效數字都還沒有）。按下先跳 `window.confirm`（沿用
+ * `ProposalBook.tsx:172` 同一種一鍵確認框寫法），成功後呼叫 `onSettled()` 就地重抓覆盤，
+ * 不整頁重整。 */
+function SettleNowPanel({ brandId, cycle, onSettled }: { brandId: string; cycle: Cycle; onSettled: () => void }) {
+  const [info, setInfo] = useState<SettleNowInfo | null>(null);
+
+  useEffect(() => {
+    fetchSettleNow(brandId, cycle.id).then(setInfo).catch(() => setInfo(null));
+  }, [brandId, cycle.id]);
+
+  const settleForm = useFormSubmit(async () => {
+    await settleNow(brandId, cycle.id);
+    onSettled();
+  });
+
+  function onClick() {
+    if (!info) return;
+    const confirmed = window.confirm(
+      `收帳後這期就不能改回投放中；之後補進來的數字還是會算，系統會重新算結論並告訴你哪裡變了。這一步會用 AI 整理結論，最多花費 ${formatUsd(info.estimated_cost)}。確定要現在收帳嗎？`,
+    );
+    if (!confirmed) return;
+    void settleForm.submit();
+  }
+
+  return (
+    <div className="rounded-lg border border-dashed border-border p-6 text-center text-sm text-muted-foreground">
+      <p>這期還沒收帳。正常會在結束後 14 天自動收帳，也可以現在就收。</p>
+      {info && !info.already_closed && (
+        <div className="mt-4 flex flex-col items-center gap-2">
+          <button
+            type="button"
+            onClick={onClick}
+            disabled={!info.can_settle || settleForm.saving}
+            className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {settleForm.saving ? "結算中…" : "現在結算"}
+          </button>
+          {!info.can_settle && info.reason && <p className="text-xs text-warning">{info.reason}</p>}
+          {settleForm.error && <p className="text-xs text-danger">{settleForm.error}</p>}
+        </div>
+      )}
     </div>
   );
 }

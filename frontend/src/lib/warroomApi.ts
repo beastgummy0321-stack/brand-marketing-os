@@ -261,6 +261,26 @@ export interface AttributionSummary {
   natural: AttributionCategory;
 }
 
+/** 票 S1-01：現在結算判定＋天花板價（`app/ads/performance_batches.py can_settle()`＋
+ * `app/ads/reading.py estimated_run_cost()`，逐欄照後端 envelope）。 */
+export interface SettleNowInfo {
+  can_settle: boolean;
+  reason: string | null;
+  estimated_cost: number;
+  already_closed: boolean;
+}
+
+/** 票 S1-01：最近匯入一批（`app/ads/performance_batches.py list_batches()`）。
+ * `spend` 為該批花費合計，`quarantined` 為擱在一旁（不合理數字）的列數。 */
+export interface PerformanceBatch {
+  batch_id: string;
+  imported_at: string;
+  source: string;
+  rows: number;
+  quarantined: number;
+  spend: number;
+}
+
 export interface ClosingReview {
   cycle_id: string;
   goal_comparison: {
@@ -411,11 +431,15 @@ async function getJson<T>(path: string): Promise<T> {
   if (!res.ok) {
     // 後端的 4xx 幾乎都附一句寫給使用者看的白話理由（例如覆盤：「這期還沒有結案…」）。
     // 原本只印狀態碼，等於把那句話丟掉，非工程使用者只看到「讀取失敗（狀態碼 400）」，
-    // 會以為畫面壞了而不是「還沒到時候」。比照 postJson 先讀 `error` 欄。
+    // 會以為畫面壞了而不是「還沒到時候」。比照 postJson 先讀 `error`／`detail` 欄
+    // （兩種錯誤 envelope 本檔案 API 都會遇到——`_error()` 用 error，FastAPI 內建
+    // HTTPException 跟票 S1-01 新路由手動 JSONResponse 都用 detail，見 libraryApi.ts:244
+    // 同一種雙欄兼容寫法）。
     let message = res.status === 404 ? "找不到這筆資料。" : `讀取失敗（狀態碼 ${res.status}）`;
     try {
-      const data = (await res.json()) as { error?: string };
+      const data = (await res.json()) as { error?: string; detail?: string };
       if (data.error) message = data.error;
+      else if (data.detail) message = data.detail;
     } catch {
       // 回應不是 JSON，用預設訊息。
     }
@@ -430,8 +454,28 @@ async function postJson<T = void>(path: string, body?: unknown): Promise<T> {
   if (!res.ok) {
     let message = `處理失敗（狀態碼 ${res.status}）`;
     try {
-      const data = (await res.json()) as { error?: string };
+      const data = (await res.json()) as { error?: string; detail?: string };
       if (data.error) message = data.error;
+      else if (data.detail) message = data.detail;
+    } catch {
+      // 回應不是 JSON，用預設訊息。
+    }
+    throw new Error(message);
+  }
+  if (res.status === 204) return undefined as T;
+  return (await res.json()) as T;
+}
+
+// 票 S1-01：整批撤銷用，本檔第一個 DELETE 呼叫端，錯誤處理沿用 postJson 同一套雙欄
+// 兼容（error／detail）。
+async function deleteJson<T = void>(path: string): Promise<T> {
+  const res = await fetch(path, { method: "DELETE" });
+  if (!res.ok) {
+    let message = `撤銷失敗（狀態碼 ${res.status}）`;
+    try {
+      const data = (await res.json()) as { error?: string; detail?: string };
+      if (data.error) message = data.error;
+      else if (data.detail) message = data.detail;
     } catch {
       // 回應不是 JSON，用預設訊息。
     }
@@ -561,6 +605,23 @@ export function importPerformanceCsv(brandId: string, cycleId: string, file: Fil
   form.append("perf_file", file);
   return postForm(`${cycleBase(brandId, cycleId)}/performance/csv`, form);
 }
+
+// ---- 現在結算＋匯入整批撤銷（票 S1-01）----
+export const fetchSettleNow = (brandId: string, cycleId: string): Promise<SettleNowInfo> =>
+  getJson(`${cycleBase(brandId, cycleId)}/settle-now`);
+export const settleNow = (brandId: string, cycleId: string): Promise<{ ok: boolean; message: string }> =>
+  postJson(`${cycleBase(brandId, cycleId)}/settle-now`);
+export const fetchPerformanceBatches = (
+  brandId: string,
+  cycleId: string,
+): Promise<{ items: PerformanceBatch[]; estimated_rerun_cost: number }> =>
+  getJson(`${cycleBase(brandId, cycleId)}/performance/batches`);
+export const deletePerformanceBatch = (
+  brandId: string,
+  cycleId: string,
+  batchId: string,
+): Promise<{ ok: boolean; deleted: number; rerun: "done" | "late_data" | "skipped"; message: string }> =>
+  deleteJson(`${cycleBase(brandId, cycleId)}/performance/batches/${encodeURIComponent(batchId)}`);
 
 // ---- 覆盤（S8.59-66）----
 export const fetchClosingReview = (brandId: string, cycleId: string): Promise<ClosingReview> =>

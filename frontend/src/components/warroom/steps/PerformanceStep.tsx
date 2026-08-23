@@ -1,13 +1,19 @@
 import { useEffect, useState } from "react";
-import { formatCurrency, formatPercent, formatRelativeHours, formatRoas } from "@/lib/format";
+import { formatCurrency, formatPercent, formatRelativeHours, formatRoas, formatSyncTime, formatUsd } from "@/lib/format";
 import { triggerImmediateSync } from "@/lib/api";
 import { useFormSubmit } from "@/lib/useFormSubmit";
 import {
-  fetchHealthLights, fetchPerformance, importPerformanceCsv, simulatePerformance, submitManualPerformance,
-  type AssetBreakdownRow, type Cycle, type CsvImportResult, type HealthLights, type PerformanceSummary, type ReadingResult,
+  deletePerformanceBatch, fetchHealthLights, fetchPerformance, fetchPerformanceBatches, importPerformanceCsv,
+  simulatePerformance, submitManualPerformance,
+  type AssetBreakdownRow, type Cycle, type CsvImportResult, type HealthLights, type PerformanceBatch, type PerformanceSummary,
+  type ReadingResult,
 } from "@/lib/warroomApi";
 import { HealthLightsRow } from "../shared/HealthLightsRow";
 import { Badge } from "../shared/Badge";
+
+// app/ads/performance.py import_rows()：source 只有這兩種真人來源（'simulated' 已被
+// performance_batches.list_batches() 排除，不會出現在這份清單）。
+const IMPORT_SOURCE_LABELS: Record<string, string> = { csv: "CSV", manual: "手填" };
 
 /** 成效（S8R.20-22 重設計，吸收舊 `S8.51-58`）：最上方一排健康燈號（S8R.20，全綠收合成一行，
  * 異常才展開），底下 KPI 表格／判讀結論卡完整細節不變（漸進揭露，S8R.22）。期中檢查點
@@ -23,6 +29,8 @@ export function PerformanceStep({ brandId, cycle }: { brandId: string; cycle: Cy
   const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
   const [syncing, setSyncing] = useState(false);
   const [syncError, setSyncError] = useState<string | null>(null);
+  const [batches, setBatches] = useState<PerformanceBatch[] | null>(null);
+  const [estimatedRerunCost, setEstimatedRerunCost] = useState(0);
 
   function load() {
     fetchPerformance(brandId, cycle.id).then((res) => {
@@ -32,10 +40,24 @@ export function PerformanceStep({ brandId, cycle }: { brandId: string; cycle: Cy
       setLastSyncedAt(res.last_synced_at ?? null);
     });
   }
+  function loadBatches() {
+    fetchPerformanceBatches(brandId, cycle.id).then((res) => {
+      setBatches(res.items);
+      setEstimatedRerunCost(res.estimated_rerun_cost);
+    });
+  }
   useEffect(load, [brandId, cycle.id]);
+  useEffect(loadBatches, [brandId, cycle.id]);
   useEffect(() => {
     fetchHealthLights(brandId, cycle.id).then(setLights);
   }, [brandId, cycle.id]);
+
+  // 匯入（CSV／手填）成功後總計跟「最近匯入」清單都要跟著動；撤銷一批後總計跟清單也是
+  // 同一套要重抓的東西，兩邊共用同一顆函式，不寫兩份幾乎一樣的 reload 邏輯。
+  function refreshAfterPerformanceChange() {
+    load();
+    loadBatches();
+  }
 
   async function updateNow() {
     setSyncing(true);
@@ -111,7 +133,20 @@ export function PerformanceStep({ brandId, cycle }: { brandId: string; cycle: Cy
         </>
       )}
 
-      <ManualCsvPanel brandId={brandId} cycleId={cycle.id} onImported={load} />
+      {cycle.status === "CLOSED" && (
+        <p className="rounded-md border border-border bg-card px-3 py-2 text-xs text-muted-foreground">
+          這期已經收帳了。現在補進去的數字，系統會重新算一次結論，並告訴你哪裡變了。
+        </p>
+      )}
+      <ManualCsvPanel brandId={brandId} cycleId={cycle.id} onImported={refreshAfterPerformanceChange} />
+
+      <RecentImportsPanel
+        brandId={brandId}
+        cycleId={cycle.id}
+        batches={batches}
+        estimatedRerunCost={estimatedRerunCost}
+        onChanged={refreshAfterPerformanceChange}
+      />
 
       <div className="rounded-lg border border-border bg-card p-4 text-sm shadow-[var(--shadow-card)]">
         <p className="font-medium text-foreground">本期判讀可信度</p>
@@ -122,6 +157,80 @@ export function PerformanceStep({ brandId, cycle }: { brandId: string; cycle: Cy
         {notice && <p className="mt-1 text-xs text-muted-foreground">{notice}</p>}
       </div>
     </div>
+  );
+}
+
+/** 票 S1-01：最近匯入＋整批撤銷（最近 5 批，新到舊；已排除模擬資料，後端
+ * `performance_batches.list_batches()` 保證）。撤銷一批走 `window.confirm`（沿用
+ * `ProposalBook.tsx:172` 同一種一鍵確認框寫法）。 */
+function RecentImportsPanel({
+  brandId, cycleId, batches, estimatedRerunCost, onChanged,
+}: {
+  brandId: string;
+  cycleId: string;
+  batches: PerformanceBatch[] | null;
+  estimatedRerunCost: number;
+  onChanged: () => void;
+}) {
+  return (
+    <div className="rounded-lg border border-border bg-card p-4 text-sm shadow-[var(--shadow-card)]">
+      <p className="font-medium text-foreground">最近匯入</p>
+      {batches === null ? (
+        <p className="mt-1 text-xs text-muted-foreground">讀取中…</p>
+      ) : batches.length === 0 ? (
+        <p className="mt-1 text-xs text-muted-foreground">還沒有匯入過成效。</p>
+      ) : (
+        <ul className="mt-2 flex flex-col gap-2">
+          {batches.map((b) => (
+            <BatchRow key={b.batch_id} brandId={brandId} cycleId={cycleId} batch={b} estimatedRerunCost={estimatedRerunCost} onChanged={onChanged} />
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function BatchRow({
+  brandId, cycleId, batch, estimatedRerunCost, onChanged,
+}: {
+  brandId: string;
+  cycleId: string;
+  batch: PerformanceBatch;
+  estimatedRerunCost: number;
+  onChanged: () => void;
+}) {
+  const [message, setMessage] = useState<string | null>(null);
+  const undoForm = useFormSubmit(async () => {
+    const result = await deletePerformanceBatch(brandId, cycleId, batch.batch_id);
+    setMessage(result.message);
+    onChanged();
+  });
+
+  function onClick() {
+    const confirmed = window.confirm(
+      `撤銷後這批數字會消失，要重新上傳才能找回。結論會自動重算，最多花費 ${formatUsd(estimatedRerunCost)}。確定撤銷？`,
+    );
+    if (!confirmed) return;
+    void undoForm.submit();
+  }
+
+  return (
+    <li className="flex flex-wrap items-center justify-between gap-2 border-t border-border/60 pt-2 text-xs">
+      <span className="text-foreground">
+        {formatSyncTime(batch.imported_at)}　{IMPORT_SOURCE_LABELS[batch.source] ?? batch.source}　寫入 {batch.rows} 筆
+        {batch.quarantined > 0 && `（${batch.quarantined} 筆擱在一旁）`}　花費 {formatCurrency(batch.spend)}
+      </span>
+      <button
+        type="button"
+        onClick={onClick}
+        disabled={undoForm.saving}
+        className="rounded-md border border-danger/40 px-2 py-1 text-xs font-medium text-danger hover:bg-danger/10 disabled:cursor-not-allowed disabled:opacity-50"
+      >
+        {undoForm.saving ? "撤銷中…" : "撤銷這批"}
+      </button>
+      {undoForm.error && <p className="w-full text-danger">{undoForm.error}</p>}
+      {message && <p className="w-full text-success">{message}</p>}
+    </li>
   );
 }
 
