@@ -495,6 +495,7 @@ def _create_adset(conn, brand_id: str, cycle_id: str, account_id: str,
         "targeting": json.dumps(DEFAULT_TARGETING, ensure_ascii=False),
         "daily_budget": int(round((package["daily_budget"] or 0) * 100)),
         "destination_type": "WEBSITE",
+        "bid_strategy": "LOWEST_COST_WITHOUT_CAP",  # validate_only 實測：沒明示會被拒「必須提供出價金額或限制」
         "regional_regulated_categories": json.dumps(TAIWAN_REGULATED_CATEGORIES),
         "regional_regulation_identities": json.dumps({
             "taiwan_universal_beneficiary": identity_id, "taiwan_universal_payer": identity_id,
