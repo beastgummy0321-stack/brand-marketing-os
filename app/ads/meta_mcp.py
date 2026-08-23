@@ -54,9 +54,11 @@ ENV_PATH = REPO_ROOT / ".env"
 
 _TOOLS_USED = (
     "ads_get_ad_accounts", "ads_get_ad_account_pages", "ads_create_campaign",
-    "ads_create_ad_set", "ads_create_creative", "ads_create_ad", "ads_activate_entity",
-    "ads_get_datasets",
+    "ads_create_creative", "ads_create_ad", "ads_activate_entity", "ads_get_datasets",
 )
+# 廣告組合已改走 Graph API 直打（見 graph_post()／_create_adset()）——Ads MCP 的
+# ads_create_ad_set 沒有 regional_* 參數（tools.json 查證），Meta 會拒絕鎖定台灣的組合。
+# 不再列進 _TOOLS_USED，connect() 回報的工具清單才誠實。
 
 NOT_CONNECTED_REASON = "還沒連接 Meta 廣告帳戶"
 DISABLED_FALLBACK_REASON = "Meta 目前沒開放這個帳戶使用自動建廣告"
@@ -73,6 +75,21 @@ DEFAULT_BILLING_EVENT = "IMPRESSIONS"
 DEFAULT_OPTIMIZATION_GOAL = "OFFSITE_CONVERSIONS"
 FALLBACK_OPTIMIZATION_GOAL = "LINK_CLICKS"  # 帳戶沒有像素時
 DEFAULT_TARGETING = {"geo_locations": {"countries": ["TW"]}, "age_min": 18}
+DEFAULT_CALL_TO_ACTION = "SHOP_NOW"
+
+# 台灣廣告主身分驗證（真人實測發現，2026-08-23）：GET /act_{id}/adsets 查證，帳戶底下
+# 每個既有廣告組合都帶 regional_regulated_categories=["TAIWAN_UNIVERSAL"] 與
+# regional_regulation_identities（受益人／付款人 ID）——Meta 對鎖定台灣的廣告組合強制
+# 要求這兩個欄位，Ads MCP 的 ads_create_ad_set 完全沒有對應參數（tools.json 查證），
+# 新建組合一律會被拒絕。官方文件（廣告組合欄位參考）：
+# https://developers.facebook.com/docs/marketing-api/reference/ad-campaign/
+TAIWAN_IDENTITY_ENV_VAR = "META_TW_IDENTITY_ID"
+TAIWAN_REGULATED_CATEGORIES = ["TAIWAN_UNIVERSAL"]
+TAIWAN_IDENTITY_MISSING_REASON = (
+    "這個帳戶還沒有台灣廣告主身分驗證（受益人／付款人），先在 Meta 廣告管理員手動建一個"
+    "鎖定台灣的廣告組合完成驗證，系統之後會沿用。"
+)
+_TW_IDENTITY_CACHE: dict = {}  # account_id -> identity_id or None，行程層快取
 
 
 class MetaMcpError(Exception):
@@ -196,6 +213,39 @@ def _meta_message(text: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# 唯一的 Graph API 寫入呼叫（測試 monkeypatch 這支，跟 `_client` 同等地位）：
+# Ads MCP 沒有涵蓋的欄位（廣告組合的台灣法規欄位、圖片直傳）改直打 Graph API，同一把
+# `META_MCP_TOKEN`（跟既有 `meta_api.py` 唯讀客戶端同一套 access_token 概念）。
+# ---------------------------------------------------------------------------
+
+def graph_post(path: str, data: dict) -> dict:
+    """`path` 是相對路徑（例如 `act_123/adsets`），不含網域／版本。"""
+    token = os.environ.get(TOKEN_ENV_VAR, "").strip()
+    if not token:
+        raise MetaMcpError("還沒有設定 META_MCP_TOKEN")
+    import httpx  # 延遲 import，比照 meta_api.py 的既有慣例
+
+    try:
+        response = httpx.post(
+            f"https://graph.facebook.com/{meta_api.API_VERSION}/{path}",
+            data={**data, "access_token": token}, timeout=60.0,
+        )
+    except Exception:
+        raise MetaMcpError("連不上 Meta，可能是網路問題。")
+    try:
+        payload = response.json()
+    except ValueError:
+        raise MetaMcpError("Meta 的回覆讀不出來。")
+    if isinstance(payload, dict) and payload.get("error"):
+        error = payload["error"] or {}
+        raise MetaMcpError(str(error.get("error_user_msg") or error.get("message")
+                               or f"Meta 回了 {response.status_code}"))
+    if response.status_code >= 400:
+        raise MetaMcpError(f"Meta 回了 {response.status_code}。")
+    return payload
+
+
+# ---------------------------------------------------------------------------
 # 憑證存取：token／帳號 ID 只認環境變數；粉絲專頁另外可由設定中心寫回 .env。
 # ---------------------------------------------------------------------------
 
@@ -312,25 +362,11 @@ def _upload_image(account_id: str, image_path: Path) -> str:
     token 打 Marketing API（官方文件，2026-08-23 WebFetch 確認）：
     https://developers.facebook.com/docs/marketing-api/reference/ad-account/adimages/
     文件記載的參數是 `bytes`（Base64 字串），不是 multipart 檔案欄位；回應形狀
-    `images.{key}.hash`，這裡不假設 key 名稱，直接取第一筆有 hash 的值。
+    `images.{key}.hash`，這裡不假設 key 名稱，直接取第一筆有 hash 的值。走
+    `graph_post()`——跟廣告組合共用同一個 Graph API 寫入邊界，錯誤訊息一致。
     """
-    token = os.environ.get(TOKEN_ENV_VAR, "").strip()
     encoded = base64.b64encode(image_path.read_bytes()).decode("ascii")
-    import httpx  # 延遲 import，比照 meta_api.py 的既有慣例
-
-    try:
-        response = httpx.post(
-            f"https://graph.facebook.com/{meta_api.API_VERSION}/act_{account_id}/adimages",
-            data={"access_token": token, "bytes": encoded}, timeout=60.0,
-        )
-    except Exception:
-        raise MetaMcpError("圖片上傳失敗：連不上 Meta。")
-    if response.status_code >= 400:
-        raise MetaMcpError(f"圖片上傳失敗：Meta 回了 {response.status_code}。")
-    try:
-        payload = response.json()
-    except ValueError:
-        raise MetaMcpError("圖片上傳失敗：Meta 的回覆讀不出來。")
+    payload = graph_post(f"act_{account_id}/adimages", {"bytes": encoded})
     for entry in (payload.get("images") or {}).values():
         if isinstance(entry, dict) and entry.get("hash"):
             return entry["hash"]
@@ -378,7 +414,8 @@ def _create_creative(conn, brand_id: str, account_id: str, page_id: str,
     destination = package["destination_url"] or ""
     link_url = f"{destination}{'&' if '?' in destination else '?'}{ads_handoff.utm_query(utm)}"
     args = {"ad_account_id": account_id, "page_id": page_id, "image_hash": image_hash,
-            "name": package["ad_name"], "link_url": link_url}
+            "name": package["ad_name"], "link_url": link_url,
+            "call_to_action_type": DEFAULT_CALL_TO_ACTION}
     headline = _variant_text(conn, brand_id, package["hook_id"])
     if headline:
         args["headline"] = headline
@@ -408,29 +445,74 @@ def _pick_pixel(account_id: str) -> Optional[str]:
     return str(active[0]["dataset_id"])
 
 
+def _lookup_taiwan_identity(account_id: str) -> Optional[str]:
+    """GET 帳戶既有廣告組合，抓第一個台灣通用受益人身分 ID——新建組合一律沿用同一個
+    （已經驗證過的）身分，不猜、不自己造一個。查不到／連不上都回 None，呼叫端擋下。"""
+    token = os.environ.get(TOKEN_ENV_VAR, "").strip()
+    if not token:
+        return None
+    import httpx  # 延遲 import，比照既有慣例
+
+    try:
+        response = httpx.get(
+            f"https://graph.facebook.com/{meta_api.API_VERSION}/act_{account_id}/adsets",
+            params={"fields": "regional_regulation_identities", "limit": 25,
+                    "access_token": token}, timeout=30.0,
+        )
+        payload = response.json()
+    except Exception:
+        return None
+    for row in (payload.get("data") or []):
+        identities = row.get("regional_regulation_identities") or {}
+        beneficiary = identities.get("taiwan_universal_beneficiary")
+        if beneficiary:
+            return str(beneficiary)
+    return None
+
+
+def _taiwan_identity(account_id: str) -> Optional[str]:
+    """`META_TW_IDENTITY_ID` 環境變數優先（每次都現讀，不快取，設定變更立刻生效）；
+    沒設就查帳戶既有廣告組合，查過的結果快取在行程記憶體（`_TW_IDENTITY_CACHE`）——
+    同一次 create-all 建好幾包，不必每包都打一次 Graph API。"""
+    env_id = os.environ.get(TAIWAN_IDENTITY_ENV_VAR, "").strip()
+    if env_id:
+        return env_id
+    if account_id in _TW_IDENTITY_CACHE:
+        return _TW_IDENTITY_CACHE[account_id]
+    identity_id = _lookup_taiwan_identity(account_id)
+    _TW_IDENTITY_CACHE[account_id] = identity_id
+    return identity_id
+
+
 def _create_adset(conn, brand_id: str, cycle_id: str, account_id: str,
-                  campaign_id: str, package: dict) -> str:
+                  campaign_id: str, package: dict, *, identity_id: str) -> str:
+    """走 Graph API 直打（`graph_post()`），不是 Ads MCP——`ads_create_ad_set` 沒有
+    `regional_*` 參數（tools.json 查證），鎖定台灣一定會被拒絕（見模組頭常數註解）。"""
     cycle = ads_repo.get_cycle(conn, brand_id, cycle_id)
-    args = {
-        "ad_account_id": account_id, "campaign_id": campaign_id,
-        "ad_set_name": package["adset_name"], "billing_event": DEFAULT_BILLING_EVENT,
+    data = {
+        "name": package["adset_name"], "campaign_id": campaign_id, "status": "PAUSED",
+        "billing_event": DEFAULT_BILLING_EVENT,
         "targeting": json.dumps(DEFAULT_TARGETING, ensure_ascii=False),
         "daily_budget": int(round((package["daily_budget"] or 0) * 100)),
+        "destination_type": "WEBSITE",
+        "regional_regulated_categories": json.dumps(TAIWAN_REGULATED_CATEGORIES),
+        "regional_regulation_identities": json.dumps({
+            "taiwan_universal_beneficiary": identity_id, "taiwan_universal_payer": identity_id,
+        }),
     }
     pixel_id = _pick_pixel(account_id)
     if pixel_id:
-        args["optimization_goal"] = DEFAULT_OPTIMIZATION_GOAL
-        args["promoted_object"] = json.dumps({"pixel_id": pixel_id, "custom_event_type": "PURCHASE"})
+        data["optimization_goal"] = DEFAULT_OPTIMIZATION_GOAL
+        data["promoted_object"] = json.dumps({"pixel_id": pixel_id, "custom_event_type": "PURCHASE"})
     else:
-        args["optimization_goal"] = FALLBACK_OPTIMIZATION_GOAL
+        data["optimization_goal"] = FALLBACK_OPTIMIZATION_GOAL
     if cycle and cycle.get("start_date"):
-        args["start_time"] = cycle["start_date"]
+        data["start_time"] = f"{cycle['start_date']}T00:00:00+0800"
     if cycle and cycle.get("end_date"):
-        args["end_time"] = cycle["end_date"]
+        data["end_time"] = f"{cycle['end_date']}T23:59:59+0800"
 
-    result = _client("ads_create_ad_set", args)
-    _raise_if_tool_error(result)
-    adset_id = result.get("ad_set_id")
+    payload = graph_post(f"act_{account_id}/adsets", data)
+    adset_id = payload.get("id")
     if not adset_id:
         raise MetaMcpError("Meta 沒有回傳廣告組 ID")
     return adset_id
@@ -494,6 +576,14 @@ def create_package(conn, brand_id: str, cycle_id: str, package_id: str, *, actor
         return {"ok": False, "reason": "還沒選粉絲專頁"}
 
     account_id = _raw_account_id()
+
+    # 台灣廣告主身分驗證（真人實測發現）：鎖定台灣的廣告組合一定要帶受益人／付款人
+    # ID，Ads MCP 沒有對應參數可填，只能沿用帳戶既有廣告組合驗證過的身分——查不到就
+    # 擋在建 campaign 之前，不要建了一半才發現廣告組合會被拒絕。
+    identity_id = _taiwan_identity(account_id)
+    if not identity_id:
+        return {"ok": False, "reason": TAIWAN_IDENTITY_MISSING_REASON}
+
     try:
         resolved_campaign_id = campaign_id or _ensure_campaign(
             conn, brand_id, cycle_id, account_id, package)
@@ -506,7 +596,7 @@ def create_package(conn, brand_id: str, cycle_id: str, package_id: str, *, actor
         image_hash = _upload_image(account_id, image_path)
         creative_id = _create_creative(conn, brand_id, account_id, page_id, image_hash, package)
         adset_id = _create_adset(conn, brand_id, cycle_id, account_id, resolved_campaign_id,
-                                 package)
+                                 package, identity_id=identity_id)
         ad_id = _create_ad(account_id, adset_id, creative_id, package)
     except MetaMcpError as exc:
         # campaign 已經建成功——回傳它的 ID，呼叫端（create-all 路由）才接得住、傳給

@@ -75,6 +75,10 @@ _ACCOUNTS_OK = {"ad_accounts": [{
 
 _PAGES_OK = {"pages": [{"page_id": PAGE_ID, "page_name": "測試粉專", "leadgen_tos_accepted": True}]}
 
+# 真人實測驗證過的台灣廣告主身分（受益人＝付款人，GET /act_368741390835357/adsets 查到）——
+# 直接借用這個真實值當測試假資料，票追加：台灣法規欄位。
+TAIWAN_IDENTITY_ID = "1094943499502619"
+
 
 def _fake(text: str) -> ProviderResponse:
     return ProviderResponse(output_text=text, structured=None,
@@ -94,7 +98,7 @@ class _FakeClient:
         self._fail_once_triggered = False
         self.exc = exc or RuntimeError("mock Meta 連線失敗")
         self.overrides = overrides or {}
-        self._seq = {"campaign": 0, "adset": 0, "creative": 0, "ad": 0}
+        self._seq = {"campaign": 0, "creative": 0, "ad": 0}
 
     def __call__(self, name: str, arguments: dict) -> dict:
         self.calls.append((name, dict(arguments)))
@@ -118,9 +122,6 @@ class _FakeClient:
         if name == "ads_create_campaign":
             self._seq["campaign"] += 1
             return {"campaign_id": f"cmp_{self._seq['campaign']}", "status": "PAUSED"}
-        if name == "ads_create_ad_set":
-            self._seq["adset"] += 1
-            return {"ad_set_id": f"adset_{self._seq['adset']}", "status": "PAUSED"}
         if name == "ads_create_creative":
             self._seq["creative"] += 1
             return {"creative_id": f"cre_{self._seq['creative']}", "account_id": ACCOUNT_ID}
@@ -131,6 +132,29 @@ class _FakeClient:
             return {"result": json.dumps({"ad_account_id": ACCOUNT_ID, "entity_id": "x",
                                           "entity_type": "ad", "status": "ACTIVE",
                                           "success": True})}
+        return {}
+
+
+class _FakeGraphPost:
+    """假 `graph_post`：依路徑回固定成功結果，可指定路徑後綴讓它拋例外。
+    廣告組合已改走 Graph API 直打（票追加：台灣法規欄位），跟 MCP 的 `_FakeClient`
+    同等地位——每次呼叫都記錄下來，供測試驗證有沒有打到、打了幾次、帶了什麼欄位。"""
+
+    def __init__(self, *, fail_on_suffix: str = None, exc: Exception = None):
+        self.calls = []
+        self.fail_on_suffix = fail_on_suffix
+        self.exc = exc or RuntimeError("mock Meta Graph API 失敗")
+        self._adset_seq = 0
+
+    def __call__(self, path: str, data: dict) -> dict:
+        self.calls.append((path, dict(data)))
+        if self.fail_on_suffix and path.endswith(self.fail_on_suffix):
+            raise self.exc
+        if path.endswith("/adsets"):
+            self._adset_seq += 1
+            return {"id": f"gadset_{self._adset_seq}"}
+        if path.endswith("/adimages"):
+            return {"images": {"shot.png": {"hash": "hash_fake"}}}
         return {}
 
 
@@ -148,9 +172,17 @@ class _BaseMetaMcpTest(unittest.TestCase):
 
         self._orig_client = meta_mcp._client
         self._orig_upload = meta_mcp._upload_image
+        self._orig_graph_post = meta_mcp.graph_post
+        self._orig_taiwan_identity = meta_mcp._taiwan_identity
         self.fake_client = _FakeClient()
+        self.fake_graph_post = _FakeGraphPost()
         meta_mcp._client = self.fake_client
         meta_mcp._upload_image = lambda account_id, image_path: "hash_" + image_path.name
+        meta_mcp.graph_post = self.fake_graph_post
+        # 台灣廣告主身分驗證（票追加）：一律回一個已驗證過的固定值，讓其餘測試不必逐一
+        # 顧到這個新關卡；TaiwanIdentityTest 專門測真正的解析邏輯，會自己換回原函式。
+        meta_mcp._taiwan_identity = lambda account_id: TAIWAN_IDENTITY_ID
+        meta_mcp._TW_IDENTITY_CACHE.clear()
 
         self.brand = bi_repo.create_brand(main.conn, name="虛構晨光咖啡（MCP 票）",
                                           client_name="測試客戶", actor=ACTOR)
@@ -168,6 +200,9 @@ class _BaseMetaMcpTest(unittest.TestCase):
     def tearDown(self):
         meta_mcp._client = self._orig_client
         meta_mcp._upload_image = self._orig_upload
+        meta_mcp.graph_post = self._orig_graph_post
+        meta_mcp._taiwan_identity = self._orig_taiwan_identity
+        meta_mcp._TW_IDENTITY_CACHE.clear()
         ads_plan.PROVIDER = self._orig_plan
         coresettings.set_setting(main.conn, "intake_budget_limit", "30")
         for key, value in self._orig_env.items():
@@ -291,7 +326,7 @@ class CreatePackageTest(_BaseMetaMcpTest):
         self.assertTrue(result["ok"], result)
         meta_ids = result["meta_ids"]
         self.assertEqual(meta_ids["meta_campaign_id"], "cmp_1")
-        self.assertEqual(meta_ids["meta_adset_id"], "adset_1")
+        self.assertEqual(meta_ids["meta_adset_id"], "gadset_1")
         self.assertEqual(meta_ids["meta_ad_id"], "ad_1")
         self.assertEqual(meta_ids["meta_creative_id"], "cre_1")
 
@@ -299,7 +334,7 @@ class CreatePackageTest(_BaseMetaMcpTest):
         self.assertIsNotNone(mapping)
         self.assertEqual(mapping["claim_status"], "confirmed")
         self.assertEqual(mapping["meta_campaign_id"], "cmp_1")
-        self.assertEqual(mapping["meta_adset_id"], "adset_1")
+        self.assertEqual(mapping["meta_adset_id"], "gadset_1")
         self.assertEqual(mapping["meta_ad_id"], "ad_1")
 
         # ADR 0019 第 7 條：money moment 是發布，不是建立——Meta 端還暫停著，本系統
@@ -346,7 +381,7 @@ class CreatePackageTest(_BaseMetaMcpTest):
 
     def test_d_client_exception_returns_not_ok_without_new_mapping_row(self):
         cycle_id, package = self._build_one_package()
-        self.fake_client.fail_on = "ads_create_ad_set"
+        self.fake_graph_post.fail_on_suffix = "/adsets"  # 廣告組合已改走 graph_post
         result = meta_mcp.create_package(main.conn, self.bid, cycle_id, package["id"],
                                          actor=ACTOR)
         self.assertFalse(result["ok"])
@@ -476,7 +511,7 @@ class SuggestedMappingIsNotAMetaBuildTest(_BaseMetaMcpTest):
         self.assertEqual(body["created"], 1)
         campaign_calls = [c for c in self.fake_client.calls if c[0] == "ads_create_campaign"]
         self.assertEqual(len(campaign_calls), 1)
-        adset_calls = [c for c in self.fake_client.calls if c[0] == "ads_create_ad_set"]
+        adset_calls = [c for c in self.fake_graph_post.calls if c[0].endswith("/adsets")]
         self.assertNotEqual(adset_calls[0][1]["campaign_id"], "orphan_campaign")
 
     def test_meta_error_json_is_unwrapped(self):
@@ -489,7 +524,7 @@ class PixelTest(_BaseMetaMcpTest):
     def test_adset_uses_most_recent_active_pixel(self):
         cycle_id, _ = self._build_one_package()
         self.client.post(f"/api/campaigns/{self.bid}/{cycle_id}/handoff/create-all")
-        adset = [c for c in self.fake_client.calls if c[0] == "ads_create_ad_set"][0][1]
+        adset = [c for c in self.fake_graph_post.calls if c[0].endswith("/adsets")][0][1]
         self.assertEqual(adset["optimization_goal"], "OFFSITE_CONVERSIONS")
         self.assertEqual(json.loads(adset["promoted_object"])["pixel_id"], "px_new")
 
@@ -497,6 +532,82 @@ class PixelTest(_BaseMetaMcpTest):
         cycle_id, _ = self._build_one_package()
         self.fake_client.overrides["ads_get_datasets"] = {"datasets": []}
         self.client.post(f"/api/campaigns/{self.bid}/{cycle_id}/handoff/create-all")
-        adset = [c for c in self.fake_client.calls if c[0] == "ads_create_ad_set"][0][1]
+        adset = [c for c in self.fake_graph_post.calls if c[0].endswith("/adsets")][0][1]
         self.assertEqual(adset["optimization_goal"], "LINK_CLICKS")
         self.assertNotIn("promoted_object", adset)
+
+
+class TaiwanIdentityTest(_BaseMetaMcpTest):
+    """票追加（真人實測，2026-08-23）：GET /act_368741390835357/adsets 查證，帳戶底下
+    每個既有廣告組合都帶台灣法規欄位，Ads MCP 的 ads_create_ad_set 完全沒有對應參數，
+    新建組合一律被拒絕——改走 Graph API 直打，沿用帳戶既有廣告組合驗證過的身分。
+
+    這裡要測真正的 `_taiwan_identity()` 解析邏輯，不要 base setUp 那個「一律回固定 ID」
+    的替身——只換掉最底層的網路呼叫（`_lookup_taiwan_identity`）。"""
+
+    def setUp(self):
+        super().setUp()
+        meta_mcp._taiwan_identity = self._orig_taiwan_identity
+        meta_mcp._TW_IDENTITY_CACHE.clear()
+        self._orig_lookup = meta_mcp._lookup_taiwan_identity
+
+    def tearDown(self):
+        meta_mcp._lookup_taiwan_identity = self._orig_lookup
+        meta_mcp._TW_IDENTITY_CACHE.clear()
+        super().tearDown()
+
+    def test_a_regional_fields_destination_type_iso_times_and_shop_now(self):
+        cycle_id, package = self._build_one_package()
+        meta_mcp._lookup_taiwan_identity = lambda account_id: TAIWAN_IDENTITY_ID
+
+        result = meta_mcp.create_package(main.conn, self.bid, cycle_id, package["id"],
+                                         actor=ACTOR)
+        self.assertTrue(result["ok"], result)
+
+        adset_calls = [c for c in self.fake_graph_post.calls if c[0].endswith("/adsets")]
+        self.assertEqual(len(adset_calls), 1)
+        data = adset_calls[0][1]
+        self.assertEqual(json.loads(data["regional_regulated_categories"]), ["TAIWAN_UNIVERSAL"])
+        identities = json.loads(data["regional_regulation_identities"])
+        self.assertEqual(identities["taiwan_universal_beneficiary"], TAIWAN_IDENTITY_ID)
+        self.assertEqual(identities["taiwan_universal_payer"], TAIWAN_IDENTITY_ID)
+        self.assertEqual(data["destination_type"], "WEBSITE")
+
+        cycle = ads_repo.get_cycle(main.conn, self.bid, cycle_id)
+        self.assertEqual(data["start_time"], f"{cycle['start_date']}T00:00:00+0800")
+        self.assertEqual(data["end_time"], f"{cycle['end_date']}T23:59:59+0800")
+
+        creative_calls = [c for c in self.fake_client.calls if c[0] == "ads_create_creative"]
+        self.assertEqual(creative_calls[0][1]["call_to_action_type"], "SHOP_NOW")
+
+    def test_b_no_identity_anywhere_returns_preflight_reason_zero_create_calls(self):
+        cycle_id, package = self._build_one_package()
+        meta_mcp._lookup_taiwan_identity = lambda account_id: None
+
+        result = meta_mcp.create_package(main.conn, self.bid, cycle_id, package["id"],
+                                         actor=ACTOR)
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["reason"], meta_mcp.TAIWAN_IDENTITY_MISSING_REASON)
+        create_calls = [c for c in self.fake_client.calls if c[0].startswith("ads_create")]
+        self.assertEqual(create_calls, [])
+        self.assertEqual(self.fake_graph_post.calls, [])
+        self.assertIsNone(self._mapping_for(package["id"]))
+
+    def test_c_env_override_wins_without_lookup(self):
+        cycle_id, package = self._build_one_package()
+        os.environ[meta_mcp.TAIWAN_IDENTITY_ENV_VAR] = "env_identity_999"
+        lookup_calls = []
+        meta_mcp._lookup_taiwan_identity = (
+            lambda account_id: lookup_calls.append(account_id) or TAIWAN_IDENTITY_ID)
+        try:
+            result = meta_mcp.create_package(main.conn, self.bid, cycle_id, package["id"],
+                                             actor=ACTOR)
+        finally:
+            os.environ.pop(meta_mcp.TAIWAN_IDENTITY_ENV_VAR, None)
+
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(lookup_calls, [])  # 查詢函式完全沒被呼叫，env 贏
+
+        adset_calls = [c for c in self.fake_graph_post.calls if c[0].endswith("/adsets")]
+        identities = json.loads(adset_calls[0][1]["regional_regulation_identities"])
+        self.assertEqual(identities["taiwan_universal_beneficiary"], "env_identity_999")
