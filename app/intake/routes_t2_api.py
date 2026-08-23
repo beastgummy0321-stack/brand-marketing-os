@@ -118,6 +118,13 @@ async def truth_card_confirm(request: Request, brand_id: str):
             missing.append(item["title"])
     if missing:
         return _error(400, "還有這些內容等你回答：" + "、".join(missing) + "。")
+    # 交接包在品牌沒產品時會叫外部 AI 只填「整個品牌」；產品事實掛在整個品牌落檔會炸
+    # ValueError（repository._ensure_product），所以在任何一列寫入前先擋成 400。
+    unscoped = [item["title"] for item in pending
+                if item["kind"] == "產品事實" and item["scope"] == "整個品牌"]
+    if unscoped:
+        return _error(400, "這些產品事實要掛在一個真正的產品上，不能是「整個品牌」，請按「改」"
+                      "把適用範圍填成產品名稱：" + "、".join(unscoped) + "。")
 
     for item in pending:
         kind = truth_card.answer_kind(item)
