@@ -15,6 +15,7 @@ from fastapi.responses import JSONResponse
 
 import app.shared.web as main_mod
 from app.ads import brief_assembler
+from app.ads import handoff as ads_handoff
 from app.ads import theme_attribution
 from app.ads import theme_engine
 from app.ads import theme_engine_video
@@ -123,7 +124,10 @@ async def theme_matrix(request: Request, brand_id: str, cycle_id: str):
         rows.append({"experiment_cell_id": cell["id"], "creative_angle": cell["creative_angle"],
                     "formats": formats})
 
-    return {"cells": rows}
+    # angle_locked（票 04-angle-rename 決議）：交接包一旦產出，切角改名會讓 Meta 上已經
+    # 建好的名稱對不上，矩陣頁列首的鉛筆要跟著隱藏——判準跟改名路由本身同一顆
+    # `has_publishing_package()`，不是這裡另外猜一次。
+    return {"cells": rows, "angle_locked": ads_handoff.has_publishing_package(conn, brand_id, cycle_id)}
 
 
 @router.get("/brands/{brand_id}/ads/{cycle_id}/themes/{theme_id}")

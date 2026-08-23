@@ -22,6 +22,7 @@ import app.shared.web as main_mod
 from app.ads import budget as budget_calc
 from app.ads import account_structure
 from app.ads import auto_sync as ads_auto_sync
+from app.ads import handoff as ads_handoff
 from app.ads import plan as ads_plan
 from app.ads import nextcycle
 from app.ads import opening_suggestion
@@ -479,8 +480,13 @@ async def plan_options(brand_id: str, cycle_id: str):
     options = ads_plan.get_pending_options(conn, brand_id, cycle_id)
     structure = account_structure.recommend(conn, brand_id, ads_repo.derived_plan(cycle)["daily_budget"])
     dissents = ads_repo.list_dissents(conn, brand_id, cycle_id, status="pending")
+    # cells／angle_locked（票 04-angle-rename 一.3）：`options` 選定後就是 plan_json 的舊快照
+    # （campaign_plan_option 選定當下已清空，見 select_option()），角度名稱改過就跟不上；
+    # 這裡另外附一份切角格現名，提案書畫面顯示切角要以這份為準，不改 options 本身形狀。
     return _envelope({
         "options": options,
+        "cells": ads_plan.list_cell_angles(conn, brand_id, cycle_id),
+        "angle_locked": ads_handoff.has_publishing_package(conn, brand_id, cycle_id),
         "account_structure": {
             "tier": structure.tier, "tier_label": structure.tier_label,
             "structure_label": structure.structure_label,
@@ -505,6 +511,29 @@ async def plan_select(request: Request, brand_id: str, cycle_id: str):
     except ValueError as exc:
         return _error(400, str(exc))
     return JSONResponse(None, status_code=204)
+
+
+@router.patch("/api/campaigns/{brand_id}/{cycle_id}/cells/{cell_id}/angle")
+async def rename_cell_angle(request: Request, brand_id: str, cycle_id: str, cell_id: str):
+    """切角改名（票 04-angle-rename 決議）：只改名，不動 schema、不重生已生成的素材。回應
+    形狀是這張票給的固定契約（`{"ok", "creative_angle"}` 成功；`{"detail": "..."}` 400/404）
+    ——不套本檔其餘路由用的 `_envelope()`／`_error()`，兩種錯誤 envelope 前端本就雙欄兼容
+    （見 warroomApi.ts getJson 註解）。"""
+    main_mod.require_brand(brand_id)
+    actor = main_mod.require_actor(request)
+    _require_cycle(brand_id, cycle_id)
+    conn = main_mod.conn
+    cell = ads_plan.get_cell(conn, brand_id, cycle_id, cell_id)
+    if cell is None:
+        raise main_mod.NotFoundKind("切角格")
+
+    body = await _json_body(request)
+    try:
+        creative_angle = ads_plan.rename_angle(
+            conn, brand_id, cycle_id, cell, body.get("creative_angle", ""), actor)
+    except ValueError as exc:
+        return JSONResponse({"detail": str(exc)}, status_code=400)
+    return {"ok": True, "creative_angle": creative_angle}
 
 
 @router.post("/api/campaigns/{brand_id}/{cycle_id}/dissents/{dissent_id}/decide")

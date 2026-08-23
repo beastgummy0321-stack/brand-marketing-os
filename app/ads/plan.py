@@ -27,9 +27,11 @@ import json
 from typing import Callable, Optional
 
 from app.ads import account_structure
+from app.ads import handoff as ads_handoff
 from app.ads import repository as ads_repo
 from app.brand_intelligence import repository as bi
 from app.core import settings as coresettings
+from app.core.audit import write_audit
 from app.core.db import new_id, now_iso
 from app.llm import context_compiler, gateway, methodology, pricing, providers
 
@@ -656,6 +658,52 @@ def get_latest_plan(conn, brand_id: str, cycle_id: str) -> Optional[dict]:
     plan = dict(row)
     plan["plan"] = json.loads(plan["plan_json"])
     return plan
+
+
+MAX_ANGLE_LENGTH = 30  # 票 04-angle-rename 決議：畫面輸入框上限
+
+
+def get_cell(conn, brand_id: str, cycle_id: str, cell_id: str) -> Optional[dict]:
+    """單一切角格（票 04-angle-rename：改名路由用來查 404、取改名前的值）。放在這裡而不是
+    `app/ads/repository.py`：那檔已經超標凍在 `KNOWN_OVERSIZED_FILES`（見 docs/tech-debt.md），
+    只准變小不准再加。"""
+    row = conn.execute(
+        "SELECT * FROM experiment_cell WHERE brand_id = ? AND campaign_cycle_id = ? AND id = ?",
+        (brand_id, cycle_id, cell_id),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def list_cell_angles(conn, brand_id: str, cycle_id: str) -> list:
+    """這期切角格目前的名字（id＋現名）。提案書畫面要以這份為準，不是 plan_json 快照——
+    改名後快照裡的角度標題就跟 cell 對不上了（票 04-angle-rename 一.3）。"""
+    return [dict(r) for r in conn.execute(
+        "SELECT id, creative_angle FROM experiment_cell WHERE brand_id = ? AND campaign_cycle_id = ?"
+        " ORDER BY id", (brand_id, cycle_id))]
+
+
+def rename_angle(conn, brand_id: str, cycle_id: str, cell: dict, creative_angle: str,
+                 actor: str) -> str:
+    """就地改名 experiment_cell.creative_angle（票 04-angle-rename 決議：不動 schema）。
+    呼叫端已經查過 cell 存在（404 由路由層處理，這裡收已查到的那一列）——這裡只管「能不能
+    改」與留稽核。已生成的素材主題不動、不重生（決議原文）：主題生成時才會現查 cell，
+    改名自然只影響之後才生的，這裡不用額外處理。"""
+    creative_angle = (creative_angle or "").strip()
+    if not creative_angle:
+        raise ValueError("切角名稱不能空白")
+    if len(creative_angle) > MAX_ANGLE_LENGTH:
+        raise ValueError(f"切角名稱最多 {MAX_ANGLE_LENGTH} 字")
+    if ads_handoff.has_publishing_package(conn, brand_id, cycle_id):
+        raise ValueError("交接包已產出，改名會讓 Meta 上的名稱對不上。")
+
+    conn.execute("UPDATE experiment_cell SET creative_angle = ? WHERE id = ?",
+                (creative_angle, cell["id"]))
+    write_audit(conn, brand_id=brand_id, entity_type="experiment_cell", entity_id=cell["id"],
+               action="rename_angle", actor=actor,
+               before={"creative_angle": cell["creative_angle"]},
+               after={"creative_angle": creative_angle})
+    conn.commit()
+    return creative_angle
 
 
 def approve(conn, brand_id: str, cycle_id: str, actor: str) -> None:

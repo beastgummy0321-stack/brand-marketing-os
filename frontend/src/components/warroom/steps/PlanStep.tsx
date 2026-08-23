@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { Pencil } from "lucide-react";
 import {
   approvePlan,
   decideDissent,
@@ -6,15 +7,18 @@ import {
   fetchPlanStatus,
   fetchRuleCardsLearned,
   fetchScheduleReminder,
+  renameAngle,
   selectPlanOption,
   startPlanGeneration,
   updatePacing,
   AUDIENCE_TIER_LABELS,
+  MAX_ANGLE_LENGTH,
   PACING_STRATEGY_LABELS,
   type AccountStructure,
   type Cycle,
   type Dissent,
   type PacingStrategy,
+  type PlanCellAngle,
   type PlanOption,
   type RuleCardLearned,
   type ScheduleReminder,
@@ -26,7 +30,14 @@ type LoadState =
   | { status: "idle" }
   | { status: "generating" }
   | { status: "generate-failed"; message: string }
-  | { status: "ready"; options: PlanOption[]; structure: AccountStructure; dissents: Dissent[] };
+  | {
+      status: "ready";
+      options: PlanOption[];
+      structure: AccountStructure;
+      dissents: Dissent[];
+      cells: PlanCellAngle[];
+      angleLocked: boolean;
+    };
 
 const POLL_INTERVAL_MS = 3000;
 const POLL_TIMEOUT_MS = 180_000;
@@ -65,7 +76,9 @@ export function PlanStep({ brandId, cycle, onApproved, onRefresh }: { brandId: s
 
   useEffect(() => {
     if (!alreadyGenerated) return;
-    fetchPlanOptions(brandId, cycle.id).then(({ options, account_structure, dissents }) => setState({ status: "ready", options, structure: account_structure, dissents }));
+    fetchPlanOptions(brandId, cycle.id).then(({ options, cells, angle_locked, account_structure, dissents }) =>
+      setState({ status: "ready", options, structure: account_structure, dissents, cells, angleLocked: angle_locked }),
+    );
     fetchRuleCardsLearned(brandId, cycle.id).then(setRuleCards);
     // 依賴含 cycle.status：cyc.id 不變、status 從 PLANNING 轉 PLAN_SELECT 也要重新抓一次
     // （出方案完成後父層 `refresh()` 帶回新狀態，同一個元件實例不會重新掛載）。
@@ -151,6 +164,20 @@ export function PlanStep({ brandId, cycle, onApproved, onRefresh }: { brandId: s
   async function pickOption(optionId: string) {
     await selectPlanOption(brandId, cycle.id, optionId);
     onApproved(); // 選定後狀態轉 REVIEW，讓上層重新整理 cycle
+  }
+
+  /** 改名成功後就地改這一格的顯示名字（票 04-angle-rename 二.2）：不重打 fetchPlanOptions
+   * ——選定後 `campaign_plan_option` 已被清空（見 plan.py select_option()），重抓只會拿到
+   * 空的 `options[]`，畫面反而空白，直接覆蓋本地 `cells[]` 才是正確、也是最省的做法。 */
+  function handleAngleRenamed(cellId: string, creativeAngle: string) {
+    setState((prev) =>
+      prev.status !== "ready"
+        ? prev
+        : {
+            ...prev,
+            cells: prev.cells.map((c) => (c.id === cellId ? { ...c, creative_angle: creativeAngle } : c)),
+          },
+    );
   }
 
   async function decide(dissentId: string, accepted: boolean) {
@@ -240,7 +267,16 @@ export function PlanStep({ brandId, cycle, onApproved, onRefresh }: { brandId: s
             ))}
           </div>
         )}
-        <PlanOptionShowcase options={state.options} readOnly={false} onSelect={pickOption} />
+        <PlanOptionShowcase
+          options={state.options}
+          readOnly={false}
+          onSelect={pickOption}
+          cells={state.cells}
+          angleLocked={state.angleLocked}
+          brandId={brandId}
+          cycleId={cycle.id}
+          onAngleRenamed={handleAngleRenamed}
+        />
       </div>
     );
   }
@@ -248,7 +284,16 @@ export function PlanStep({ brandId, cycle, onApproved, onRefresh }: { brandId: s
   const approved = cycle.status !== "REVIEW";
   return (
     <div className="flex flex-col gap-4">
-      <PlanOptionShowcase options={state.options} readOnly={approved} onSelect={pickOption} />
+      <PlanOptionShowcase
+        options={state.options}
+        readOnly={approved}
+        onSelect={pickOption}
+        cells={state.cells}
+        angleLocked={state.angleLocked}
+        brandId={brandId}
+        cycleId={cycle.id}
+        onAngleRenamed={handleAngleRenamed}
+      />
       <AccountStructureCard structure={state.structure} />
       <div className="rounded-lg border border-border bg-card p-4 shadow-[var(--shadow-card)]">
         <p className="font-medium text-foreground">排期策略</p>
@@ -325,10 +370,20 @@ function PlanOptionShowcase({
   options,
   readOnly,
   onSelect,
+  cells,
+  angleLocked,
+  brandId,
+  cycleId,
+  onAngleRenamed,
 }: {
   options: PlanOption[];
   readOnly: boolean;
   onSelect: (optionId: string) => Promise<void>;
+  cells: PlanCellAngle[];
+  angleLocked: boolean;
+  brandId: string;
+  cycleId: string;
+  onAngleRenamed: (cellId: string, creativeAngle: string) => void;
 }) {
   const primary = options.find((option) => option.is_recommended) ?? options[0];
   const [activeId, setActiveId] = useState(primary?.id ?? "");
@@ -370,7 +425,19 @@ function PlanOptionShowcase({
           </div>
           <div>
             <p className="text-xs font-medium text-muted-foreground">投放切角</p>
-            <ul className="mt-1 flex flex-col gap-1 text-sm text-foreground">{active.angles.map((angle, index) => <li key={index}>{angle.title}：{angle.message}</li>)}</ul>
+            <ul className="mt-1 flex flex-col gap-1 text-sm text-foreground">
+              {active.angles.map((angle, index) => (
+                <AngleListItem
+                  key={index}
+                  angle={angle}
+                  cell={cells[index]}
+                  locked={angleLocked}
+                  brandId={brandId}
+                  cycleId={cycleId}
+                  onRenamed={onAngleRenamed}
+                />
+              ))}
+            </ul>
           </div>
         </div>
         {active.hypotheses && <details className="mt-3 text-sm text-muted-foreground"><summary className="cursor-pointer text-primary">想驗證的事</summary><ul className="mt-1 list-disc pl-4">{active.hypotheses.map((hypothesis, index) => <li key={index}>{hypothesis.statement}</li>)}</ul></details>}
@@ -402,6 +469,114 @@ function PlanOptionShowcase({
     </div>
   );
 }
+/** 投放切角一列＋改名鉛筆（票 04-angle-rename 一.2、一.3）：`cell` 沒有值代表這格還沒落地
+ * 成 `experiment_cell`（PLAN_SELECT 階段，還沒選定方案），直接顯示快照標題、不給鉛筆——
+ * 落地之後才有可以改的東西。名稱顯示以 `cell.creative_angle` 為準，不是 `angle.title` 快照。 */
+function AngleListItem({
+  angle,
+  cell,
+  locked,
+  brandId,
+  cycleId,
+  onRenamed,
+}: {
+  angle: { title: string; message: string; why?: string };
+  cell: PlanCellAngle | undefined;
+  locked: boolean;
+  brandId: string;
+  cycleId: string;
+  onRenamed: (cellId: string, creativeAngle: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const displayTitle = cell?.creative_angle ?? angle.title;
+  const [value, setValue] = useState(displayTitle);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  function startEdit() {
+    setValue(displayTitle);
+    setError(null);
+    setEditing(true);
+  }
+
+  async function save() {
+    if (!cell) return;
+    const trimmed = value.trim();
+    if (!trimmed) {
+      setError("切角名稱不能空白");
+      return;
+    }
+    if (trimmed.length > MAX_ANGLE_LENGTH) {
+      setError(`切角名稱最多 ${MAX_ANGLE_LENGTH} 字`);
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    try {
+      const saved = await renameAngle(brandId, cycleId, cell.id, trimmed);
+      onRenamed(cell.id, saved);
+      setEditing(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "改名失敗，請稍後再試。");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (editing) {
+    return (
+      <li className="flex flex-col gap-1">
+        <div className="flex items-center gap-1">
+          <input
+            autoFocus
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            maxLength={MAX_ANGLE_LENGTH}
+            className="rounded-md border border-border px-1.5 py-0.5 text-sm text-foreground"
+          />
+          <span>：{angle.message}</span>
+          <button
+            type="button"
+            disabled={saving}
+            onClick={() => void save()}
+            className="text-xs font-medium text-primary hover:opacity-80 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {saving ? "存中…" : "儲存"}
+          </button>
+          <button
+            type="button"
+            disabled={saving}
+            onClick={() => setEditing(false)}
+            className="text-xs text-muted-foreground hover:opacity-80"
+          >
+            取消
+          </button>
+        </div>
+        {error && <p className="text-xs text-danger">{error}</p>}
+      </li>
+    );
+  }
+
+  return (
+    <li
+      className="flex items-center gap-1"
+      title={cell && locked ? "交接包已產出，改名會讓 Meta 上的名稱對不上，這裡先鎖住。" : undefined}
+    >
+      <span>{displayTitle}：{angle.message}</span>
+      {cell && !locked && (
+        <button
+          type="button"
+          onClick={startEdit}
+          aria-label="改切角名稱"
+          className="text-muted-foreground hover:text-primary"
+        >
+          <Pencil className="h-3 w-3" aria-hidden="true" />
+        </button>
+      )}
+    </li>
+  );
+}
+
 export function AccountStructureCard({ structure }: { structure: AccountStructure }) {
   return (
     <div className="rounded-lg border border-border bg-card p-4 shadow-[var(--shadow-card)]">

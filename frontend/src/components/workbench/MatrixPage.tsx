@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useState, type ReactNode } from "react";
-import { FolderOpen } from "lucide-react";
+import { FolderOpen, Pencil } from "lucide-react";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { EmptyState } from "@/components/layout/EmptyState";
 import { cn } from "@/lib/utils";
@@ -8,6 +8,8 @@ import {
   fetchMatrix,
   generateTheme,
   openCycleFolder,
+  renameAngle,
+  MAX_ANGLE_LENGTH,
   type CycleFolder,
   type MatrixCellRow,
   type MatrixFormatCell,
@@ -29,7 +31,7 @@ const FORMAT_COLUMNS: { key: string; label: string }[] = [
 type LoadState =
   | { status: "loading" }
   | { status: "error"; message: string }
-  | { status: "ready"; cells: MatrixCellRow[] };
+  | { status: "ready"; cells: MatrixCellRow[]; angleLocked: boolean };
 
 function cellKey(cellId: string, formatKey: string): string {
   return `${cellId}::${formatKey}`;
@@ -54,8 +56,8 @@ export function MatrixPage({ brandId, cycleId }: { brandId: string; cycleId: str
     let cancelled = false;
     setState({ status: "loading" });
     fetchMatrix(brandId, cycleId)
-      .then((cells) => {
-        if (!cancelled) setState({ status: "ready", cells });
+      .then(({ cells, angleLocked }) => {
+        if (!cancelled) setState({ status: "ready", cells, angleLocked });
       })
       .catch((err: unknown) => {
         if (!cancelled) {
@@ -95,6 +97,7 @@ export function MatrixPage({ brandId, cycleId }: { brandId: string; cycleId: str
             ? prev
             : {
                 status: "ready",
+                angleLocked: prev.angleLocked,
                 cells: prev.cells.map((row) =>
                   row.experiment_cell_id === cellId
                     ? {
@@ -129,6 +132,7 @@ export function MatrixPage({ brandId, cycleId }: { brandId: string; cycleId: str
       if (prev.status !== "ready") return prev;
       return {
         status: "ready",
+        angleLocked: prev.angleLocked,
         cells: prev.cells.map((row) => {
           const formats: Record<string, MatrixFormatCell> = {};
           for (const [formatKey, cell] of Object.entries(row.formats)) {
@@ -146,6 +150,22 @@ export function MatrixPage({ brandId, cycleId }: { brandId: string; cycleId: str
         }),
       };
     });
+  }
+
+  /** 改名成功後就地改這一格的顯示文字（票 04-angle-rename 二.2「成功後重抓該頁資料」：
+   * 這裡不整批重打 fetchMatrix，改用 PATCH 回應直接覆蓋——跟上面 handleThemeAdopted() 同一種
+   * 「找到同 id 那列，就地改，其餘不動」寫法，矩陣格數量一多，重抓整批反而是浪費）。 */
+  function handleAngleRenamed(cellId: string, creativeAngle: string) {
+    setState((prev) =>
+      prev.status !== "ready"
+        ? prev
+        : {
+            ...prev,
+            cells: prev.cells.map((row) =>
+              row.experiment_cell_id === cellId ? { ...row, creative_angle: creativeAngle } : row,
+            ),
+          },
+    );
   }
 
   let content: ReactNode;
@@ -185,9 +205,14 @@ export function MatrixPage({ brandId, cycleId }: { brandId: string; cycleId: str
           ))}
           {state.cells.map((row) => (
             <Fragment key={row.experiment_cell_id}>
-              <span className="flex items-center text-sm text-muted-foreground">
-                {row.creative_angle}
-              </span>
+              <AngleLabel
+                brandId={brandId}
+                cycleId={cycleId}
+                cellId={row.experiment_cell_id}
+                creativeAngle={row.creative_angle}
+                locked={state.angleLocked}
+                onRenamed={(value) => handleAngleRenamed(row.experiment_cell_id, value)}
+              />
               {FORMAT_COLUMNS.map((col) => {
                 const cell = row.formats[col.key];
                 if (!cell) return <span key={col.key} aria-hidden="true" />;
@@ -244,6 +269,111 @@ export function MatrixPage({ brandId, cycleId }: { brandId: string; cycleId: str
         />
       )}
     </div>
+  );
+}
+
+/** 矩陣頁列首切角名稱＋改名鉛筆（票 04-angle-rename 決議）：鎖住（`locked`，交接包已產出）
+ * 時不顯示鉛筆，整段標籤補 hover 提示原因；改名成功呼叫 `onRenamed` 就地更新，不整批重抓
+ * 矩陣資料。 */
+function AngleLabel({
+  brandId,
+  cycleId,
+  cellId,
+  creativeAngle,
+  locked,
+  onRenamed,
+}: {
+  brandId: string;
+  cycleId: string;
+  cellId: string;
+  creativeAngle: string;
+  locked: boolean;
+  onRenamed: (creativeAngle: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(creativeAngle);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  function startEdit() {
+    setValue(creativeAngle);
+    setError(null);
+    setEditing(true);
+  }
+
+  async function save() {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      setError("切角名稱不能空白");
+      return;
+    }
+    if (trimmed.length > MAX_ANGLE_LENGTH) {
+      setError(`切角名稱最多 ${MAX_ANGLE_LENGTH} 字`);
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    try {
+      const saved = await renameAngle(brandId, cycleId, cellId, trimmed);
+      onRenamed(saved);
+      setEditing(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "改名失敗，請稍後再試。");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (editing) {
+    return (
+      <div className="flex flex-col gap-1">
+        <div className="flex items-center gap-1">
+          <input
+            autoFocus
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            maxLength={MAX_ANGLE_LENGTH}
+            className="w-full rounded-md border border-border px-1.5 py-0.5 text-sm text-foreground"
+          />
+          <button
+            type="button"
+            disabled={saving}
+            onClick={() => void save()}
+            className="text-xs font-medium text-primary hover:opacity-80 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {saving ? "存中…" : "儲存"}
+          </button>
+          <button
+            type="button"
+            disabled={saving}
+            onClick={() => setEditing(false)}
+            className="text-xs text-muted-foreground hover:opacity-80"
+          >
+            取消
+          </button>
+        </div>
+        {error && <p className="text-xs text-danger">{error}</p>}
+      </div>
+    );
+  }
+
+  return (
+    <span
+      className="flex items-center gap-1 text-sm text-muted-foreground"
+      title={locked ? "交接包已產出，改名會讓 Meta 上的名稱對不上，這裡先鎖住。" : undefined}
+    >
+      {creativeAngle}
+      {!locked && (
+        <button
+          type="button"
+          onClick={startEdit}
+          aria-label="改切角名稱"
+          className="text-muted-foreground hover:text-primary"
+        >
+          <Pencil className="h-3 w-3" aria-hidden="true" />
+        </button>
+      )}
+    </span>
   );
 }
 

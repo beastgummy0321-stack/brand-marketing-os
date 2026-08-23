@@ -230,6 +230,16 @@ def build_extras(conn, brand_id: str, cycle_id: str) -> dict:
     }
 
 
+def has_publishing_package(conn, brand_id: str, cycle_id: str) -> bool:
+    """這期是否已經產出過交接包（票 04-angle-rename 決議：產包後切角改名鎖住，這是唯一
+    判準——不看 cycle 狀態，因為建包不轉 cycle.status，見 build_handoff_packages()）。"""
+    row = conn.execute(
+        "SELECT 1 FROM publishing_package WHERE brand_id = ? AND campaign_cycle_id = ? LIMIT 1",
+        (brand_id, cycle_id),
+    ).fetchone()
+    return row is not None
+
+
 def list_packages(conn, brand_id: str, cycle_id: str) -> list:
     """交接包＋每份要貼的欄位（已組成畫面直接用的樣子）。"""
     rows = [dict(r) for r in conn.execute(

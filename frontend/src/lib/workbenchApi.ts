@@ -55,15 +55,49 @@ export interface MatrixCellRow {
   formats: Record<string, MatrixFormatCell>;
 }
 
-export async function fetchMatrix(brandId: string, cycleId: string): Promise<MatrixCellRow[]> {
+/** `angleLocked`（票 04-angle-rename 決議）：這期交接包已產出時 true，矩陣頁列首的改名
+ * 鉛筆要隱藏——判準是 `app/ads/handoff.py has_publishing_package()`，跟改名路由本身同一顆。 */
+export async function fetchMatrix(
+  brandId: string,
+  cycleId: string,
+): Promise<{ cells: MatrixCellRow[]; angleLocked: boolean }> {
   const res = await fetch(
     `/api/ads/brands/${encodeURIComponent(brandId)}/ads/${encodeURIComponent(cycleId)}/matrix`,
   );
   if (!res.ok) {
     throw new Error(await extractErrorMessage(res, "矩陣資料讀取失敗"));
   }
-  const body: { cells: MatrixCellRow[] } = await res.json();
-  return body.cells;
+  const body: { cells: MatrixCellRow[]; angle_locked: boolean } = await res.json();
+  return { cells: body.cells, angleLocked: body.angle_locked };
+}
+
+/** 切角名稱輸入框上限，對照 `app/ads/plan.py MAX_ANGLE_LENGTH`。 */
+export const MAX_ANGLE_LENGTH = 30;
+
+/** 切角改名（票 04-angle-rename 決議）：對應 `app/ads/routes_campaigns_open_api.py
+ * rename_cell_angle()`，網址是 `/api/campaigns/...` 不是本檔其餘路由的 `/api/ads/...`——
+ * cell 掛在檔期底下，改名路由跟企劃提案書（`warroomApi.ts`）共用同一支，不是矩陣頁專屬。
+ * 空白／超長／已產交接包三種都是 400，錯誤訊息走 `extractErrorMessage`。 */
+export async function renameAngle(
+  brandId: string,
+  cycleId: string,
+  cellId: string,
+  creativeAngle: string,
+): Promise<string> {
+  const res = await fetch(
+    `/api/campaigns/${encodeURIComponent(brandId)}/${encodeURIComponent(cycleId)}` +
+      `/cells/${encodeURIComponent(cellId)}/angle`,
+    {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ creative_angle: creativeAngle }),
+    },
+  );
+  if (!res.ok) {
+    throw new Error(await extractErrorMessage(res, "改名失敗"));
+  }
+  const body: { ok: boolean; creative_angle: string } = await res.json();
+  return body.creative_angle;
 }
 
 /** 灰卡「生成一個主題」：打 app/ads/routes_creative_theme.py generate_theme()。成功回整包
@@ -87,11 +121,14 @@ export async function generateTheme(
 }
 
 /** 非 2xx 回應優先讀 `{"error": "..."}`；讀不到（例如品牌不存在時走全站 404 錯誤頁，
- * body 是 HTML 不是 JSON）就退回帶狀態碼的通用訊息。 */
+ * body 是 HTML 不是 JSON）就退回帶狀態碼的通用訊息。`detail` 是 FastAPI 內建
+ * `HTTPException`／`NotFoundKind` 的欄位名（票 04-angle-rename 改名路由用這個，跟本檔
+ * 其餘手動 `JSONResponse({"error": ...})` 路由不同源），兩種都讀。 */
 async function extractErrorMessage(res: Response, fallbackAction: string): Promise<string> {
   try {
-    const body: { error?: string } = await res.json();
+    const body: { error?: string; detail?: string } = await res.json();
     if (body.error) return body.error;
+    if (body.detail) return body.detail;
   } catch {
     // 不是 JSON，用預設訊息。
   }

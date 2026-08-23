@@ -89,6 +89,14 @@ export interface PlanOption {
   hypotheses: { statement: string; verify?: string }[] | null;
 }
 
+/** 切角格現名（票 04-angle-rename 一.3）：`PlanOption.angles[]` 是選定當下的快照，改名後
+ * 不會跟著變——提案書畫面顯示切角標題要以這份為準（對應 `app/ads/plan.py
+ * list_cell_angles()`），順序跟 `angles[]` 依 index 對齊（同一批 `_persist()` 依序寫入）。 */
+export interface PlanCellAngle {
+  id: string;
+  creative_angle: string;
+}
+
 export interface Dissent {
   id: string;
   target_type: "account_structure" | "budget_allocation" | "offer";
@@ -466,6 +474,25 @@ async function postJson<T = void>(path: string, body?: unknown): Promise<T> {
   return (await res.json()) as T;
 }
 
+// 票 04-angle-rename：整檔第一個 PATCH 呼叫端，錯誤處理沿用 postJson 同一套雙欄兼容
+// （error／detail）——後端這支改名路由用 FastAPI 的 detail 欄，不是本檔多數路由的 error。
+async function patchJson<T = void>(path: string, body?: unknown): Promise<T> {
+  const res = await fetch(path, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(body ?? {}) });
+  if (!res.ok) {
+    let message = `處理失敗（狀態碼 ${res.status}）`;
+    try {
+      const data = (await res.json()) as { error?: string; detail?: string };
+      if (data.error) message = data.error;
+      else if (data.detail) message = data.detail;
+    } catch {
+      // 回應不是 JSON，用預設訊息。
+    }
+    throw new Error(message);
+  }
+  if (res.status === 204) return undefined as T;
+  return (await res.json()) as T;
+}
+
 // 票 S1-01：整批撤銷用，本檔第一個 DELETE 呼叫端，錯誤處理沿用 postJson 同一套雙欄
 // 兼容（error／detail）。
 async function deleteJson<T = void>(path: string): Promise<T> {
@@ -532,8 +559,22 @@ export const fetchPlanStatus = (
 export const fetchPlanOptions = (
   brandId: string,
   cycleId: string,
-): Promise<{ options: PlanOption[]; account_structure: AccountStructure; dissents: Dissent[] }> =>
-  getJson(`${cycleBase(brandId, cycleId)}/plan/options`);
+): Promise<{
+  options: PlanOption[];
+  cells: PlanCellAngle[];
+  angle_locked: boolean;
+  account_structure: AccountStructure;
+  dissents: Dissent[];
+}> => getJson(`${cycleBase(brandId, cycleId)}/plan/options`);
+/** 切角改名（票 04-angle-rename 決議）：跟矩陣頁（`workbenchApi.ts renameAngle()`）打同一支
+ * 後端路由，各自檔案各留一份呼叫——本檔的 `不碰 workbenchApi.ts 的內部實作` 邊界見
+ * proposalApi.ts 檔頭同款說明，不跨檔案抽共用。 */
+export const MAX_ANGLE_LENGTH = 30;
+export const renameAngle = (brandId: string, cycleId: string, cellId: string, creativeAngle: string): Promise<string> =>
+  patchJson<{ ok: boolean; creative_angle: string }>(
+    `${cycleBase(brandId, cycleId)}/cells/${encodeURIComponent(cellId)}/angle`,
+    { creative_angle: creativeAngle },
+  ).then((body) => body.creative_angle);
 export const selectPlanOption = (brandId: string, cycleId: string, optionId: string): Promise<void> =>
   postJson(`${cycleBase(brandId, cycleId)}/plan/select`, { option_id: optionId });
 export const decideDissent = (brandId: string, cycleId: string, dissentId: string, accepted: boolean): Promise<void> =>
