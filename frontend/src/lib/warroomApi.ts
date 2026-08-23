@@ -211,7 +211,7 @@ export interface PerformanceSummary {
   clicks: number;
   conversions: number;
   revenue: number;
-  kpis: { ctr: number | null; cpc: number | null; cpa: number | null; roas: number | null };
+  kpis: { ctr: number | null; cpc: number | null; cpa: number | null; roas: number | null; cpm: number | null; cvr: number | null };
   discarded_rows: number;
 }
 
@@ -234,7 +234,7 @@ export interface AssetBreakdownRow {
   spend: number;
   conversions: number;
   revenue: number;
-  kpis: { ctr: number | null; cpc: number | null; cpa: number | null; roas: number | null };
+  kpis: { ctr: number | null; cpc: number | null; cpa: number | null; roas: number | null; cpm: number | null; cvr: number | null };
 }
 
 export interface ReadingResult {
@@ -246,6 +246,27 @@ export interface ReadingResult {
   reasons: string[];
   // 契約 C：可能不存在（舊資料／後端尚未接線）或空陣列（沒有對得回素材的成效列）。
   asset_breakdown?: AssetBreakdownRow[];
+}
+
+/** 票 C2-01：錢卡在哪一關（`app/ads/bottleneck.py diagnose()`，逐欄照後端 envelope）。
+ * `reliable: false` 時只有 `reason_unreliable` 有意義，其餘欄位不列入判讀。 */
+export interface BottleneckFactor {
+  key: "cpm" | "ctr" | "cvr";
+  label: string;
+  ratio: number | null;
+  share: number | null;
+  detail: string;
+  sub: "audience_too_narrow" | null;
+}
+
+export interface BottleneckResult {
+  reliable: boolean;
+  reason_unreliable: string | null;
+  underspend: boolean;
+  cpa_ratio: number | null;
+  primary: "cpm" | "ctr" | "cvr" | null;
+  factors: BottleneckFactor[];
+  reference: { ctr: number; label: string } | null;
 }
 
 export interface NextCycleAdvice {
@@ -669,7 +690,10 @@ export const fetchCheckpoint = (brandId: string, cycleId: string, kind: "day3" |
 export const fetchPerformance = (
   brandId: string,
   cycleId: string,
-): Promise<{ summary: PerformanceSummary | null; reading: ReadingResult | null; confidence_label: string; last_synced_at?: string | null }> =>
+): Promise<{
+  summary: PerformanceSummary | null; reading: ReadingResult | null; bottleneck: BottleneckResult | null;
+  confidence_label: string; last_synced_at?: string | null;
+}> =>
   getJson(`${cycleBase(brandId, cycleId)}/performance`);
 export const simulatePerformance = (brandId: string, cycleId: string): Promise<void> =>
   postJson(`${cycleBase(brandId, cycleId)}/performance/simulate`);

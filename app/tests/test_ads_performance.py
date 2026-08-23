@@ -208,6 +208,20 @@ class KpiTest(unittest.TestCase):
         kpis = perf.compute_kpis({"spend": 1000, "clicks": 10})
         self.assertIsNone(kpis["roas"])
 
+    def test_cpm_and_cvr_are_computed(self):
+        """票 C2-01：瓶頸判斷樹要拆 CPA 恆等式，缺這兩個 KPI 就拿不到基線。"""
+        kpis = perf.compute_kpis({"impressions": 10000, "clicks": 200, "spend": 4000,
+                                  "conversions": 10, "revenue": 12000})
+        self.assertEqual(kpis["cpm"], 400.0)
+        self.assertEqual(kpis["cvr"], 0.05)
+
+    def test_cpm_and_cvr_zero_denominator_gives_none_not_zero(self):
+        """分母為 0 一律回 None，跟既有四個同一條規則（鐵則 16）。"""
+        kpis = perf.compute_kpis({"impressions": 0, "clicks": 0, "spend": 1000,
+                                  "conversions": 0, "revenue": 0})
+        self.assertIsNone(kpis["cpm"])
+        self.assertIsNone(kpis["cvr"])
+
 
 class _BaseImportTest(unittest.TestCase):
     def setUp(self):

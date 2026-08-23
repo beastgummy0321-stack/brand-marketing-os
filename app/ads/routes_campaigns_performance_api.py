@@ -15,6 +15,7 @@ from fastapi import APIRouter, File, Request, UploadFile
 from fastapi.responses import JSONResponse
 
 import app.shared.web as main_mod
+from app.ads import bottleneck as ads_bottleneck
 from app.ads import codes as ads_codes
 from app.ads import health_lights as ads_health_lights
 from app.ads import nextcycle
@@ -26,6 +27,7 @@ from app.ads import repository as ads_repo
 from app.ads import simulation
 from app.ads import target_cpa
 from app.ads.routes_common import OBJECTIVE_LABELS, _require_cycle
+from app.core import rule_cards
 
 router = APIRouter()
 
@@ -50,7 +52,7 @@ def _dict_note(d) -> "str | None":
 async def performance_get(brand_id: str, cycle_id: str):
     main_mod.require_brand(brand_id)
     conn = main_mod.conn
-    _require_cycle(brand_id, cycle_id)
+    cycle = _require_cycle(brand_id, cycle_id)
 
     totals = ads_performance.totals(conn, brand_id, cycle_id)
     snapshots = ads_performance.list_snapshots(conn, brand_id, cycle_id)
@@ -80,7 +82,20 @@ async def performance_get(brand_id: str, cycle_id: str):
         }
         confidence_label = f"{result.get('statistical_level_label', '')}尚未完成對帳三題自答，可信度中等".strip()
 
-    return _envelope({"summary": summary, "reading": reading,
+    # 錢卡在哪一關（票 C2-01）：跟判讀狀態並列，還沒有判讀時不算——沒有判讀就沒有「這期
+    # 賺不賺」的結論，瓶頸判讀依附在這個結論底下才有意義。
+    bottleneck = None
+    if cycle_reading:
+        threshold_pct = rule_cards.get_value(conn, brand_id, "pacing", "deviation_threshold_ratio")
+        pacing_result = ads_pacing.classify(
+            budget=cycle["budget"], spend=totals["spend"], start_date=cycle["start_date"],
+            end_date=cycle["end_date"], today=date.today().isoformat(), threshold_pct=threshold_pct)
+        baseline = ads_reading.brand_baseline(conn, brand_id, exclude_cycle_id=cycle_id)
+        totals["max_frequency"] = ads_performance.max_frequency(conn, brand_id, cycle_id)
+        bottleneck = ads_bottleneck.diagnose(totals, baseline=baseline, brand_id=brand_id,
+                                             pacing_status=pacing_result["status"], conn=conn)
+
+    return _envelope({"summary": summary, "reading": reading, "bottleneck": bottleneck,
                       "confidence_label": confidence_label, "last_synced_at": last_synced_at})
 
 

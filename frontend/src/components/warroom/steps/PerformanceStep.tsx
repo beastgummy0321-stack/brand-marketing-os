@@ -5,8 +5,8 @@ import { useFormSubmit } from "@/lib/useFormSubmit";
 import {
   deletePerformanceBatch, fetchHealthLights, fetchPerformance, fetchPerformanceBatches, importPerformanceCsv,
   simulatePerformance, submitManualPerformance,
-  type AssetBreakdownRow, type Cycle, type CsvImportResult, type HealthLights, type PerformanceBatch, type PerformanceSummary,
-  type ReadingResult,
+  type AssetBreakdownRow, type BottleneckResult, type Cycle, type CsvImportResult, type HealthLights,
+  type PerformanceBatch, type PerformanceSummary, type ReadingResult,
 } from "@/lib/warroomApi";
 import { HealthLightsRow } from "../shared/HealthLightsRow";
 import { Badge } from "../shared/Badge";
@@ -23,6 +23,7 @@ const IMPORT_SOURCE_LABELS: Record<string, string> = { csv: "CSV", manual: "手�
 export function PerformanceStep({ brandId, cycle }: { brandId: string; cycle: Cycle }) {
   const [summary, setSummary] = useState<PerformanceSummary | null | undefined>(undefined);
   const [reading, setReading] = useState<ReadingResult | null>(null);
+  const [bottleneck, setBottleneck] = useState<BottleneckResult | null>(null);
   const [confidence, setConfidence] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
   const [lights, setLights] = useState<HealthLights | null>(null);
@@ -36,6 +37,7 @@ export function PerformanceStep({ brandId, cycle }: { brandId: string; cycle: Cy
     fetchPerformance(brandId, cycle.id).then((res) => {
       setSummary(res.summary);
       setReading(res.reading);
+      setBottleneck(res.bottleneck);
       setConfidence(res.confidence_label);
       setLastSyncedAt(res.last_synced_at ?? null);
     });
@@ -128,6 +130,12 @@ export function PerformanceStep({ brandId, cycle }: { brandId: string; cycle: Cy
                 </ul>
               </details>
               <AssetBreakdownTable rows={reading.asset_breakdown} />
+            </div>
+          )}
+          {bottleneck && (
+            <div className="rounded-lg border border-border bg-card p-4 shadow-[var(--shadow-card)]">
+              <p className="text-sm font-medium text-foreground">錢卡在哪一關</p>
+              <BottleneckBody bottleneck={bottleneck} />
             </div>
           )}
         </>
@@ -274,6 +282,46 @@ function AssetBreakdownTable({ rows }: { rows: AssetBreakdownRow[] | undefined }
           })}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+/** 票 C2-01：CPA 恆等式拆解結果——一行主結論＋每個因子的貢獻度，跟判讀狀態並列
+ * （不是取代它）。`reliable: false` 時只講一句話，不列任何因子（樣本太少，不硬猜）。 */
+function BottleneckBody({ bottleneck }: { bottleneck: BottleneckResult }) {
+  if (!bottleneck.reliable) {
+    return <p className="mt-2 text-sm text-muted-foreground">{bottleneck.reason_unreliable}</p>;
+  }
+  const primaryFactor = bottleneck.factors.find((f) => f.key === bottleneck.primary);
+  const pctWorse = bottleneck.cpa_ratio !== null ? Math.round((bottleneck.cpa_ratio - 1) * 100) : null;
+  return (
+    <div className="mt-2 space-y-2 text-sm">
+      {bottleneck.underspend && <p className="text-warning">這期預算沒花完，量本身就不夠。</p>}
+      <p className="text-foreground">
+        {primaryFactor
+          ? `主要卡在：${primaryFactor.label}${pctWorse !== null ? `（下面三項合起來，讓每筆成交成本比你自己的過去多 ${pctWorse}%）` : ""}`
+          : bottleneck.cpa_ratio !== null && bottleneck.factors.every((f) => f.share === null)
+            ? "有幾項變化不小，但一好一壞互相抵銷，整體每筆成交成本跟你自己的過去差不多。"
+            : "沒有特別突出的瓶頸，這期的表現都在你自己的正常範圍內。"}
+      </p>
+      <ul className="list-disc space-y-1 pl-4 text-xs text-muted-foreground">
+        {bottleneck.factors.map((f) => (
+          <li key={f.key}>
+            <span className="font-medium text-foreground">{f.label}：</span>
+            {f.detail}
+            {f.share !== null &&
+              (f.share >= 0
+                ? `（貢獻約 ${Math.round(f.share * 100)}%）`
+                : `（這項其實比過去好，反而抵銷了約 ${Math.round(Math.abs(f.share) * 100)}%）`)}
+            {f.sub === "audience_too_narrow" && "——很可能是受眾圈得太窄，同一批人被打太多次。"}
+          </li>
+        ))}
+      </ul>
+      {bottleneck.reference && (
+        <p className="text-xs text-muted-foreground">
+          旁邊參考：{bottleneck.reference.label}的點擊率約 {formatPercent(bottleneck.reference.ctr)}（不是你的同業數字，只供參考，不影響判定）。
+        </p>
+      )}
     </div>
   );
 }

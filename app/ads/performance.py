@@ -527,6 +527,9 @@ def compute_kpis(totals_row: dict) -> dict:
         "cpc": round(spend / clicks, 2) if clicks else None,
         "cpa": round(spend / conversions, 2) if conversions else None,
         "roas": roas,
+        # 票 C2-01：瓶頸判斷樹拆 CPA 恆等式（CPA = CPM/1000 ÷ (CTR × CVR)）要用到這兩個。
+        "cpm": round(spend / impressions * 1000, 2) if impressions else None,
+        "cvr": round(conversions / clicks, 4) if clicks else None,
     }
 
 
