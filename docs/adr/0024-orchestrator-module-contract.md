@@ -18,12 +18,20 @@
    - `status(conn, brand_id) -> dict`——唯讀，key 一律英文小寫加模組前綴（`ads.pacing_over`）
    - `handle(conn, action) -> result`——唯一寫入口
 
-3. **決策留痕開新表 `decision`（append-only，比照 `learning_ledger`）。**
+3. **決策留痕開新表 `decision`。**
    不塞 `recommendation`：該表 `campaign_cycle_id NOT NULL REFERENCES campaign_cycle(id)`
    （`app/ads/migrations/0001_tables.sql:487`）綁死廣告檔期，非廣告模組塞不進去。
    欄位：`id / module / brand_id / rule_id / action_json / risk_level / autonomy_mode /
    outcome(auto_done|carded|failed) / attempt_count / error_text / created_at`。
    一表三用：稽核軌跡、失敗計數器、Action 去重依據。
+
+   **更正（2026-08-23，實作前發現）**：本條原文寫「append-only，比照 `learning_ledger`」，
+   與同條列出的 `outcome`／`attempt_count` 自相矛盾——那兩欄本來就要改（出卡→同意→已執行；
+   失敗一次加一）。正確的規則是「事實欄不可改、狀態欄可改」：
+   `module／brand_id／rule_id／action_json／risk_level／autonomy_mode／created_at` 寫入後禁止
+   UPDATE；只有 `outcome／attempt_count／error_text` 可以更新。
+   排除的替代方案：每次重試寫一列新的（真 append-only）——「這件事做了沒」得每次查最新一列，
+   為單人系統把去重查詢複雜化，不划算。
 
 4. **同步/非同步照 ADR 0018 不變**，不開新執行緒、不加新節奏。觸發點三個：
    4 小時同步後、每週判讀後、使用者按鍵時。
