@@ -3,8 +3,11 @@
 
 依票 1 的調研結論（docs/design/15-meta-api-access-findings.md）：
 走 Graph API REST ＋ Business Manager 的 System User token，只要 `ads_read`／`read_insights`
-兩個唯讀權限，讀自己的廣告帳號不需要 App Review。**刻意不用官方 Ads MCP**——它是讀寫的，
-牴觸鐵則 4（扣板機的是人）。
+兩個唯讀權限，讀自己的廣告帳號不需要 App Review。
+
+「刻意不用官方 Ads MCP」條文已作廢——見 ADR 0023：Meta 寫入（建廣告／發布）改走官方 Ads
+MCP，落在 `app/ads/meta_mcp.py`（票 M1-01），手填 ID 路徑保留為 MCP 連不上時的備案。
+本檔（`MetaClient`）維持唯讀，不因此新增任何 POST／DELETE 方法。
 
 這一層只做三件事：帶 token 打 GET、把回應轉成我們的統一格式、把錯誤翻成人話。
 不寫資料庫、不判斷歸屬（那是 app/ads/sync.py 的事）。

@@ -1,0 +1,331 @@
+# -*- coding: utf-8 -*-
+"""app/tests/test_meta_mcp.py — 票 M1-01：Meta 官方 Ads MCP 一鍵建（暫停）＋發布。
+
+一律用假 MCP client（monkeypatch `meta_mcp._client`／`meta_mcp._upload_image`），不發任何
+真實網路請求——真連線驗收由使用者手做（票面「怎麼算過」第 3 點）。品牌名一律虛構。
+"""
+
+import atexit
+import json
+import os
+import shutil
+import tempfile
+import unittest
+from pathlib import Path
+
+_tmpdir = tempfile.mkdtemp(prefix="brand_os_meta_mcp_")
+
+from fastapi.testclient import TestClient  # noqa: E402
+
+import app.main as main  # noqa: E402
+from app.ads import handoff as ads_handoff  # noqa: E402
+from app.ads import meta_mcp  # noqa: E402
+from app.ads import plan as ads_plan  # noqa: E402
+from app.ads import repository as ads_repo  # noqa: E402
+from app.ads import theme_engine  # noqa: E402
+from app.ads import theme_repository as theme_repo  # noqa: E402
+from app.brand_intelligence import repository as bi_repo  # noqa: E402
+from app.core import creative_assets  # noqa: E402
+from app.core import settings as coresettings  # noqa: E402
+from app.core.db import new_id, now_iso  # noqa: E402
+from app.llm.providers import FakeProvider, ProviderResponse, Usage  # noqa: E402
+from app.shared.web import OPERATOR  # noqa: E402
+
+ROOT = Path(_tmpdir) / "creative"
+
+
+def _cleanup():
+    try:
+        main.conn.close()
+    except Exception:
+        pass
+    shutil.rmtree(_tmpdir, ignore_errors=True)
+
+
+atexit.register(_cleanup)
+
+ACTOR = "測試員"
+
+_AUDIENCE = {"cold": {"description": "測試受眾"}, "warm": {"description": ""},
+            "hot": {"description": ""}, "exclusions": []}
+_PLAN_OPTIONS = {
+    "options": [
+        {
+            "is_recommended": True, "summary": "測試打法", "audience": _AUDIENCE,
+            "angles": [{"title": "早上第一杯", "message": "訊息", "why": "", "product_id": None}],
+            "hypotheses": [], "grounding": {"facts": [], "inferences": [], "to_verify": []},
+        },
+        {
+            "is_recommended": False, "summary": "備用方案", "audience": _AUDIENCE,
+            "angles": [{"title": "備用切角", "message": "備用訊息", "why": "", "product_id": None}],
+            "hypotheses": [], "grounding": {"facts": [], "inferences": [], "to_verify": []},
+        },
+    ]
+}
+
+ACCOUNT_ID = "368741390000000"
+PAGE_ID = "page_test_123"
+
+_ACCOUNTS_OK = {"ad_accounts": [{
+    "ad_account_id": ACCOUNT_ID, "ad_account_name": "測試廣告帳號", "business_id": "",
+    "business_name": "", "is_ads_mcp_enabled": True, "is_ads_mcp_disabled_reason": None,
+    "account_status": "1", "is_queryable": True, "not_queryable_reason": None,
+    "has_payment_method": True, "currency": "TWD", "min_daily_budget_cents": 100,
+}], "next_cursor": None}
+
+_PAGES_OK = {"pages": [{"page_id": PAGE_ID, "page_name": "測試粉專", "leadgen_tos_accepted": True}]}
+
+
+def _fake(text: str) -> ProviderResponse:
+    return ProviderResponse(output_text=text, structured=None,
+                            usage=Usage(input_tokens=300, output_tokens=150),
+                            stop_reason="end_turn")
+
+
+class _FakeClient:
+    """假 MCP client：依工具名回固定成功結果，可覆寫或指定某個工具拋例外。
+    每次呼叫都記錄下來，供測試驗證有沒有打到、打了幾次。"""
+
+    def __init__(self, *, fail_on: str = None, exc: Exception = None,
+                overrides: dict = None):
+        self.calls = []
+        self.fail_on = fail_on
+        self.exc = exc or RuntimeError("mock Meta 連線失敗")
+        self.overrides = overrides or {}
+        self._seq = {"campaign": 0, "adset": 0, "creative": 0, "ad": 0}
+
+    def __call__(self, name: str, arguments: dict) -> dict:
+        self.calls.append((name, dict(arguments)))
+        if self.fail_on and name == self.fail_on:
+            raise self.exc
+        if name in self.overrides:
+            value = self.overrides[name]
+            return value(arguments) if callable(value) else value
+        if name == "ads_get_ad_accounts":
+            return _ACCOUNTS_OK
+        if name == "ads_get_ad_account_pages":
+            return _PAGES_OK
+        if name == "ads_create_campaign":
+            self._seq["campaign"] += 1
+            return {"campaign_id": f"cmp_{self._seq['campaign']}", "status": "PAUSED"}
+        if name == "ads_create_ad_set":
+            self._seq["adset"] += 1
+            return {"ad_set_id": f"adset_{self._seq['adset']}", "status": "PAUSED"}
+        if name == "ads_create_creative":
+            self._seq["creative"] += 1
+            return {"creative_id": f"cre_{self._seq['creative']}", "account_id": ACCOUNT_ID}
+        if name == "ads_create_ad":
+            self._seq["ad"] += 1
+            return {"ad_id": f"ad_{self._seq['ad']}", "status": "PAUSED"}
+        if name == "ads_activate_entity":
+            return {"result": json.dumps({"ad_account_id": ACCOUNT_ID, "entity_id": "x",
+                                          "entity_type": "ad", "status": "ACTIVE",
+                                          "success": True})}
+        return {}
+
+
+class _BaseMetaMcpTest(unittest.TestCase):
+    def setUp(self):
+        self.client = TestClient(main.app)
+        coresettings.set_setting(main.conn, creative_assets.SETTING_KEY, str(ROOT))
+        coresettings.set_setting(main.conn, "intake_budget_limit", "1000")
+
+        self._orig_env = {k: os.environ.get(k) for k in
+                          ("META_MCP_TOKEN", "META_AD_ACCOUNT_ID", "META_PAGE_ID")}
+        os.environ["META_MCP_TOKEN"] = "test-token"
+        os.environ["META_AD_ACCOUNT_ID"] = ACCOUNT_ID
+        os.environ["META_PAGE_ID"] = PAGE_ID
+
+        self._orig_client = meta_mcp._client
+        self._orig_upload = meta_mcp._upload_image
+        self.fake_client = _FakeClient()
+        meta_mcp._client = self.fake_client
+        meta_mcp._upload_image = lambda account_id, image_path: "hash_" + image_path.name
+
+        self.brand = bi_repo.create_brand(main.conn, name="虛構晨光咖啡（MCP 票）",
+                                          client_name="測試客戶", actor=ACTOR)
+        self.bid = self.brand["id"]
+
+        self._orig_plan = ads_plan.PROVIDER
+        ads_plan.PROVIDER = FakeProvider(
+            response=_fake(json.dumps(_PLAN_OPTIONS, ensure_ascii=False)))
+
+    def tearDown(self):
+        meta_mcp._client = self._orig_client
+        meta_mcp._upload_image = self._orig_upload
+        ads_plan.PROVIDER = self._orig_plan
+        coresettings.set_setting(main.conn, "intake_budget_limit", "30")
+        for key, value in self._orig_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+    def _open_cycle(self) -> str:
+        resp = self.client.post(f"/api/campaigns/{self.bid}",
+                                json={"product_ids": [], "budget": 10000, "objective": "sales"})
+        cycle_id = resp.json()["cycle_id"]
+        ok, err = ads_plan.generate_options(main.conn, self.bid, cycle_id, ACTOR)
+        self.assertTrue(ok, err)
+        self.client.post(f"/api/campaigns/{self.bid}/{cycle_id}/plan/select", json={})
+        self.client.post(f"/api/campaigns/{self.bid}/{cycle_id}/plan/approve")
+        return cycle_id
+
+    def _cell_id(self, cycle_id: str) -> str:
+        return main.conn.execute(
+            "SELECT id FROM experiment_cell WHERE campaign_cycle_id = ?",
+            (cycle_id,)).fetchone()["id"]
+
+    def _adopt_theme(self, cycle_id: str, cell_id: str, *, angle: str, with_image: bool) -> dict:
+        theme = theme_repo.create_theme(
+            main.conn, self.bid, campaign_cycle_id=cycle_id, experiment_cell_id=cell_id,
+            format_key="single_image", name=f"{angle}主題",
+            folder_code=new_id("code")[-4:], actor=ACTOR,
+            components=[
+                {"component_type": "title", "content": f"{angle}主打句"},
+                {"component_type": "body", "content": f"{angle}內文"},
+                {"component_type": "image_prompt", "content": f"{angle}的畫面"},
+            ],
+        )
+        theme_repo.adopt_theme(main.conn, self.bid, theme["id"], actor=ACTOR)
+        if with_image:
+            folder = creative_assets.theme_dir(
+                main.conn, self.bid, cycle_id, theme_engine.theme_folder_name(theme))
+            folder.mkdir(parents=True, exist_ok=True)
+            (folder / "shot.png").write_bytes(b"\x89PNG\r\n\x1a\n" + b"0" * 32)
+        return theme
+
+    def _build_one_package(self, *, with_image: bool = True) -> tuple:
+        """回傳 (cycle_id, package)：整條路徑準備好一份 ready 且尚無 mapping 的交接包。"""
+        cycle_id = self._open_cycle()
+        cell_id = self._cell_id(cycle_id)
+        self._adopt_theme(cycle_id, cell_id, angle="早上第一杯", with_image=with_image)
+        self.client.post(f"/api/campaigns/{self.bid}/{cycle_id}/handoff/build")
+        package = ads_handoff.list_packages(main.conn, self.bid, cycle_id)[0]
+        return cycle_id, package
+
+    def _mapping_for(self, package_id: str):
+        return main.conn.execute(
+            "SELECT * FROM external_ad_mapping WHERE publishing_package_id = ?",
+            (package_id,)).fetchone()
+
+
+class CreatePackageTest(_BaseMetaMcpTest):
+    def test_a_writes_mapping_with_four_ids_confirmed(self):
+        cycle_id, package = self._build_one_package()
+        result = meta_mcp.create_package(main.conn, self.bid, cycle_id, package["id"],
+                                         actor=ACTOR)
+        self.assertTrue(result["ok"], result)
+        meta_ids = result["meta_ids"]
+        self.assertEqual(meta_ids["meta_campaign_id"], "cmp_1")
+        self.assertEqual(meta_ids["meta_adset_id"], "adset_1")
+        self.assertEqual(meta_ids["meta_ad_id"], "ad_1")
+        self.assertEqual(meta_ids["meta_creative_id"], "cre_1")
+
+        mapping = self._mapping_for(package["id"])
+        self.assertIsNotNone(mapping)
+        self.assertEqual(mapping["claim_status"], "confirmed")
+        self.assertEqual(mapping["meta_campaign_id"], "cmp_1")
+        self.assertEqual(mapping["meta_adset_id"], "adset_1")
+        self.assertEqual(mapping["meta_ad_id"], "ad_1")
+        self.assertEqual(mapping["meta_creative_id"], "cre_1")
+
+    def test_b_missing_image_returns_reason_without_calling_client(self):
+        cycle_id, package = self._build_one_package(with_image=False)
+        result = meta_mcp.create_package(main.conn, self.bid, cycle_id, package["id"],
+                                         actor=ACTOR)
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["reason"], "這個主題還沒放圖")
+        self.assertEqual(self.fake_client.calls, [])
+        self.assertIsNone(self._mapping_for(package["id"]))
+
+    def test_c_second_package_in_same_cycle_reuses_first_campaign(self):
+        cycle_id = self._open_cycle()
+        cell_1 = self._cell_id(cycle_id)
+        self._adopt_theme(cycle_id, cell_1, angle="切角一", with_image=True)
+        cell_2_id = new_id("exc")
+        main.conn.execute(
+            "INSERT INTO experiment_cell (id, campaign_cycle_id, brand_id, product_id,"
+            " audience, creative_angle, created_at) VALUES (?, ?, ?, NULL, ?, ?, ?)",
+            (cell_2_id, cycle_id, self.bid, "測試受眾", "切角二", now_iso()))
+        main.conn.commit()
+        self._adopt_theme(cycle_id, cell_2_id, angle="切角二", with_image=True)
+
+        self.client.post(f"/api/campaigns/{self.bid}/{cycle_id}/handoff/build")
+        packages = ads_handoff.list_packages(main.conn, self.bid, cycle_id)
+        self.assertEqual(len(packages), 2)
+
+        first = meta_mcp.create_package(main.conn, self.bid, cycle_id, packages[0]["id"],
+                                        actor=ACTOR)
+        second = meta_mcp.create_package(main.conn, self.bid, cycle_id, packages[1]["id"],
+                                         actor=ACTOR)
+        self.assertTrue(first["ok"], first)
+        self.assertTrue(second["ok"], second)
+        self.assertEqual(first["meta_ids"]["meta_campaign_id"],
+                         second["meta_ids"]["meta_campaign_id"])
+        campaign_calls = [c for c in self.fake_client.calls if c[0] == "ads_create_campaign"]
+        self.assertEqual(len(campaign_calls), 1)
+
+    def test_d_client_exception_returns_not_ok_without_new_mapping_row(self):
+        cycle_id, package = self._build_one_package()
+        self.fake_client.fail_on = "ads_create_ad_set"
+        result = meta_mcp.create_package(main.conn, self.bid, cycle_id, package["id"],
+                                         actor=ACTOR)
+        self.assertFalse(result["ok"])
+        self.assertIn("reason", result)
+        self.assertIsNone(self._mapping_for(package["id"]))
+
+
+class CreateAllRouteTest(_BaseMetaMcpTest):
+    def test_e_create_all_skips_packages_that_already_have_mapping(self):
+        cycle_id, ready_package = self._build_one_package()
+        cell_2_id = new_id("exc")
+        main.conn.execute(
+            "INSERT INTO experiment_cell (id, campaign_cycle_id, brand_id, product_id,"
+            " audience, creative_angle, created_at) VALUES (?, ?, ?, NULL, ?, ?, ?)",
+            (cell_2_id, cycle_id, self.bid, "測試受眾", "已手填包", now_iso()))
+        main.conn.commit()
+        self._adopt_theme(cycle_id, cell_2_id, angle="已手填包", with_image=True)
+        self.client.post(f"/api/campaigns/{self.bid}/{cycle_id}/handoff/build")
+
+        packages = ads_handoff.list_packages(main.conn, self.bid, cycle_id)
+        self.assertEqual(len(packages), 2)
+        manually_filled = next(p for p in packages if p["id"] != ready_package["id"])
+        self.client.post(
+            f"/api/campaigns/{self.bid}/{cycle_id}/handoff/{manually_filled['id']}/activate",
+            json={"meta_campaign_id": "手填_23851234567890123"})
+
+        resp = self.client.post(f"/api/campaigns/{self.bid}/{cycle_id}/handoff/create-all")
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertEqual(body["created"], 1)
+        self.assertEqual(body["failed"], [])
+
+        # 手填過的那包沒有被重新處理：adset/ad/creative 仍是手填當時的空值。
+        manual_mapping = self._mapping_for(manually_filled["id"])
+        self.assertEqual(manual_mapping["meta_campaign_id"], "手填_23851234567890123")
+        self.assertIsNone(manual_mapping["meta_adset_id"])
+
+
+class PublishAllRouteTest(_BaseMetaMcpTest):
+    def test_f_publish_all_before_create_all_is_400(self):
+        cycle_id, _package = self._build_one_package()
+        resp = self.client.post(f"/api/campaigns/{self.bid}/{cycle_id}/handoff/publish-all")
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("error", resp.json())
+
+    def test_publish_all_activates_after_create_all(self):
+        cycle_id, package = self._build_one_package()
+        self.client.post(f"/api/campaigns/{self.bid}/{cycle_id}/handoff/create-all")
+        resp = self.client.post(f"/api/campaigns/{self.bid}/{cycle_id}/handoff/publish-all")
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertTrue(body["ok"])
+        self.assertEqual(body["activated"], 1)
+        self.assertEqual(body["failed"], [])
+        activate_calls = [c for c in self.fake_client.calls if c[0] == "ads_activate_entity"]
+        self.assertEqual(len(activate_calls), 3)  # campaign + ad_set + ad
+
+
+if __name__ == "__main__":
+    unittest.main()

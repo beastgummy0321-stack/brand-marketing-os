@@ -17,11 +17,43 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
 import app.shared.web as main_mod
+from app.ads import meta_mcp
 from app.ads import style_preference
 from app.core import calendar_dismiss as core_calendar_dismiss
 from app.core import rule_cards
 
 router = APIRouter()
+
+
+# ---------------------------------------------------------------------------
+# 「連接 Meta 廣告帳戶」卡（票 M1-01）：連線狀態＋帳號底下的粉絲專頁清單＋選一個存
+# .env（ADR 0023）。OAuth 流程本票不做——單機單人，token 手貼進 .env，見
+# app/ads/meta_mcp.py 檔頭；讀寫邏輯全部重用 meta_mcp 既有函式，這裡只是薄層。
+# ---------------------------------------------------------------------------
+
+@router.get("/api/settings/meta-mcp")
+async def api_meta_mcp_get():
+    status = meta_mcp.connect(main_mod.conn)
+    data = dict(status)
+    if status["ok"]:
+        pages_result = meta_mcp.list_pages(main_mod.conn)
+        data["pages"] = pages_result.get("pages", []) if pages_result["ok"] else []
+        data["pages_error"] = None if pages_result["ok"] else pages_result["reason"]
+        data["selected_page_id"] = meta_mcp.get_page_id()
+    return {"data": data, "generated_at": datetime.now(timezone.utc).isoformat()}
+
+
+@router.post("/api/settings/meta-mcp/page")
+async def api_meta_mcp_page_post(request: Request):
+    try:
+        body = await request.json()
+    except ValueError:
+        body = {}
+    page_id = (body.get("page_id") or "").strip() if isinstance(body, dict) else ""
+    if not page_id:
+        return JSONResponse({"error": "請選一個粉絲專頁。"}, status_code=400)
+    meta_mcp.save_page_id(page_id)
+    return {}
 
 
 # ponytail: 品牌風格偏好使用 app_setting 的 brand-id namespaced key，沿用既有設定機制而非新表。

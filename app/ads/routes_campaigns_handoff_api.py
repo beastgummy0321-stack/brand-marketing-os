@@ -17,6 +17,7 @@ from app.ads import checklist as ads_checklist
 from app.ads import checkpoint as ads_checkpoint
 from app.ads import codes as ads_codes
 from app.ads import handoff as ads_handoff
+from app.ads import meta_mcp
 from app.ads import repository as ads_repo
 from app.ads.routes_common import _require_cycle
 
@@ -266,6 +267,46 @@ async def handoff_activate(request: Request, brand_id: str, cycle_id: str, packa
     except ValueError as exc:
         return _error(400, str(exc))
     return JSONResponse(None, status_code=204)
+
+
+# ---- Meta 官方 Ads MCP：一鍵建（暫停）＋發布（票 M1-01，ADR 0023） ----
+
+@router.get("/api/campaigns/{brand_id}/{cycle_id}/handoff/meta-status")
+async def handoff_meta_status(brand_id: str, cycle_id: str):
+    main_mod.require_brand(brand_id)
+    _require_cycle(brand_id, cycle_id)
+    return _envelope(meta_mcp.connect(main_mod.conn))
+
+
+@router.post("/api/campaigns/{brand_id}/{cycle_id}/handoff/create-all")
+async def handoff_create_all(request: Request, brand_id: str, cycle_id: str):
+    """只處理 status='ready' 且尚無 mapping 的包；已有 mapping 的跳過（手填過的也算）。"""
+    main_mod.require_brand(brand_id)
+    actor = main_mod.require_actor(request)
+    _require_cycle(brand_id, cycle_id)
+    conn = main_mod.conn
+    targets = [p for p in ads_handoff.list_packages(conn, brand_id, cycle_id)
+              if p["status"] == "ready" and not p.get("mapping")]
+    created, failed = 0, []
+    for pkg in targets:
+        result = meta_mcp.create_package(conn, brand_id, cycle_id, pkg["id"], actor=actor)
+        if result["ok"]:
+            created += 1
+        else:
+            failed.append({"package_id": pkg["id"], "package_name": pkg["adset_name"],
+                           "reason": result["reason"]})
+    return {"ok": True, "created": created, "failed": failed}
+
+
+@router.post("/api/campaigns/{brand_id}/{cycle_id}/handoff/publish-all")
+async def handoff_publish_all(request: Request, brand_id: str, cycle_id: str):
+    main_mod.require_brand(brand_id)
+    actor = main_mod.require_actor(request)
+    _require_cycle(brand_id, cycle_id)
+    result = meta_mcp.activate_cycle(main_mod.conn, brand_id, cycle_id, actor=actor)
+    if not result["ok"]:
+        return _error(400, result["reason"])
+    return result
 
 
 # ---- 交接總分環（S8R.13-17） ----
