@@ -13,20 +13,31 @@ tearDown 各自存還 `orchestrator.MODULES`／`RULES`，真正模組在 import 
 
 `ModuleHandleUnknownOpTest` 驗證三個模組的 handle() 對不認得的 op 一律丟 ValueError
 （ADR 0024 決議 6）。
+
+票 O1-02 新增：`NewModuleStatusShapeTest`（開戶／同步／提案／上架／監測五個模組的
+status() 在全新空品牌上照樣回傳全部 key）、`NoOpModuleHandleTest`（開戶／同步／提案／
+上架四個模組沒有任何 op，收到任何 op 一律 ValueError）、`MonitorCheckPacingHandleTest`
+（監測模組唯一的 op：check_pacing 會呼叫到既有 pacing.check_cycle）。
 """
 
 import inspect
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
+from app.ads import auto_sync
 from app.ads import diagnosis as ads_diagnosis
+from app.ads import health_lights
+from app.ads import meta_mcp
+from app.ads import proposal as ads_proposal
 from app.ads import theme_batch
 from app.ads import weekly_proposals
 from app.core import db
 from app.core import interrupts as core_interrupts
 from app.core import orchestrator
 from app.core import rule_cards
+from app.intake import dispatch as intake_dispatch
 
 ACTOR = "測試員"
 
@@ -342,6 +353,108 @@ class ModuleHandleUnknownOpTest(unittest.TestCase):
     def test_optimize_handle_rejects_any_op(self):
         with self.assertRaises(ValueError):
             weekly_proposals.handle(None, {"op": "add_theme", "brand_id": "x", "params": {}})
+
+
+class NewModuleStatusShapeTest(unittest.TestCase):
+    """票 O1-02：五個新模組的 status(conn, brand_id) 在『全新空品牌』上要照樣回傳全部
+    key（值可為 None／0／False），不得少 key、不得丟例外。"""
+
+    def setUp(self):
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self.conn = db.connect_and_migrate(Path(self._tmpdir.name) / "test.db")
+        self.brand_id = "brn_o1_02_empty"  # 全新空品牌：資料庫裡沒有任何一列屬於它
+
+    def tearDown(self):
+        self.conn.close()
+        self._tmpdir.cleanup()
+
+    def test_intake_status_returns_all_keys(self):
+        self.assertEqual(
+            intake_dispatch.status(self.conn, self.brand_id),
+            {"intake.draft_open": False, "intake.completed": False,
+             "intake.pending_items": 0, "intake.products_count": 0},
+        )
+
+    def test_sync_status_returns_all_keys(self):
+        self.assertEqual(
+            auto_sync.status(self.conn, self.brand_id),
+            {"sync.meta_configured": False, "sync.ga4_configured": False},
+        )
+
+    def test_proposal_status_returns_all_keys(self):
+        self.assertEqual(
+            ads_proposal.status(self.conn, self.brand_id),
+            {"proposal.cycle_id": None, "proposal.plan_ready": False,
+             "proposal.approved": False},
+        )
+
+    def test_publish_status_returns_all_keys(self):
+        self.assertEqual(
+            meta_mcp.status(self.conn, self.brand_id),
+            {"publish.cycle_id": None, "publish.packages_total": 0,
+             "publish.packages_mapped": 0, "publish.live": False},
+        )
+
+    def test_monitor_status_returns_all_keys(self):
+        self.assertEqual(
+            health_lights.status(self.conn, self.brand_id),
+            {"monitor.cycle_id": None, "monitor.spend_rate_light": None,
+             "monitor.red_lights": 0},
+        )
+
+
+class NoOpModuleHandleTest(unittest.TestCase):
+    """intake／sync／proposal／publish 四個模組的 handle() 沒有任何 op，收到任何 op
+    一律丟 ValueError（ADR 0024 決議 6，票 O1-02 使用者裁決）。"""
+
+    def test_intake_handle_rejects_any_op(self):
+        with self.assertRaises(ValueError):
+            intake_dispatch.handle(None, {"op": "沒這個op", "brand_id": "x", "params": {}})
+
+    def test_sync_handle_rejects_any_op(self):
+        with self.assertRaises(ValueError):
+            auto_sync.handle(None, {"op": "沒這個op", "brand_id": "x", "params": {}})
+
+    def test_proposal_handle_rejects_any_op(self):
+        with self.assertRaises(ValueError):
+            ads_proposal.handle(None, {"op": "沒這個op", "brand_id": "x", "params": {}})
+
+    def test_publish_handle_rejects_any_op(self):
+        with self.assertRaises(ValueError):
+            meta_mcp.handle(None, {"op": "沒這個op", "brand_id": "x", "params": {}})
+
+    def test_monitor_handle_rejects_unknown_op(self):
+        with self.assertRaises(ValueError):
+            health_lights.handle(None, {"op": "沒這個op", "brand_id": "x", "params": {}})
+
+
+class MonitorCheckPacingHandleTest(unittest.TestCase):
+    """monitor.handle() 收 check_pacing 會呼叫到既有 pacing.check_cycle（不重寫第二套
+    步調判定）；沒有檔期時回 {"interrupt_id": None} 不炸。"""
+
+    def setUp(self):
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self.conn = db.connect_and_migrate(Path(self._tmpdir.name) / "test.db")
+        self.brand_id = "brn_o1_02_pacing"
+
+    def tearDown(self):
+        self.conn.close()
+        self._tmpdir.cleanup()
+
+    def test_check_pacing_calls_pacing_check_cycle(self):
+        with mock.patch.object(health_lights.ads_pacing, "check_cycle",
+                               return_value="int_fake") as fake_check:
+            result = health_lights.handle(
+                self.conn, {"op": "check_pacing", "brand_id": self.brand_id,
+                           "params": {"cycle_id": "ccy_x"}})
+        fake_check.assert_called_once_with(self.conn, self.brand_id, "ccy_x")
+        self.assertEqual(result, {"interrupt_id": "int_fake"})
+
+    def test_check_pacing_no_cycle_returns_none_without_raising(self):
+        result = health_lights.handle(
+            self.conn, {"op": "check_pacing", "brand_id": self.brand_id,
+                       "params": {"cycle_id": "ccy_missing"}})
+        self.assertEqual(result, {"interrupt_id": None})
 
 
 if __name__ == "__main__":

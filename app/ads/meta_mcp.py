@@ -41,6 +41,7 @@ from app.ads import repository as ads_repo
 from app.ads import theme_engine
 from app.ads import theme_repository as theme_repo
 from app.core import creative_assets
+from app.core import orchestrator as core_orchestrator
 from app.core.db import REPO_ROOT
 
 MCP_URL = "https://mcp.facebook.com/ads"
@@ -736,3 +737,53 @@ def activate_cycle(conn, brand_id: str, cycle_id: str, *, actor: str) -> dict:
         activated += 1
 
     return {"ok": True, "activated": activated, "failed": failed}
+
+
+# ---------------------------------------------------------------------------
+# 調度台『上架』模組門面（票 O1-02，ADR 0024）
+# ---------------------------------------------------------------------------
+# 使用者 2026-08-23 裁決：create_package()／activate_cycle() 一律不開放成 op，建廣告
+# 與開啟廣告永遠只由使用者在畫面上按（Meta 寫入被 error 31 擋住，看板 M1-01）。
+
+def _current_cycle(conn, brand_id: str) -> "Optional[dict]":
+    """比照 app/ads/diagnosis.py:29 _current_cycle()：取最新一個投放中或等判讀的檔期。"""
+    for cycle in ads_repo.list_cycles(conn, brand_id):
+        if cycle["status"] in ("LIVE", "EVALUATING"):
+            return cycle
+    return None
+
+
+def status(conn, brand_id: str) -> dict:
+    """調度台 facts：`publish.cycle_id`、`publish.packages_total`、
+    `publish.packages_mapped`（已經建到 Meta 且拿到 meta_ad_id 的包數）、`publish.live`。
+    只數不撈（比照 activate_cycle() 既有查法，不呼叫 handoff.list_packages()／
+    readiness_ring()——那兩支每包都重查一次檔期與素材，太重）。"""
+    cycle = _current_cycle(conn, brand_id)
+    if cycle is None:
+        return {"publish.cycle_id": None, "publish.packages_total": 0,
+                "publish.packages_mapped": 0, "publish.live": False}
+    packages_total = conn.execute(
+        "SELECT COUNT(*) AS c FROM publishing_package WHERE brand_id = ?"
+        " AND campaign_cycle_id = ?", (brand_id, cycle["id"]),
+    ).fetchone()["c"]
+    packages_mapped = conn.execute(
+        "SELECT COUNT(*) AS c FROM publishing_package AS pp WHERE pp.brand_id = ?"
+        " AND pp.campaign_cycle_id = ? AND EXISTS (SELECT 1 FROM external_ad_mapping AS eam"
+        " WHERE eam.brand_id = pp.brand_id AND eam.publishing_package_id = pp.id"
+        " AND eam.meta_ad_id IS NOT NULL)", (brand_id, cycle["id"]),
+    ).fetchone()["c"]
+    return {
+        "publish.cycle_id": cycle["id"],
+        "publish.packages_total": packages_total,
+        "publish.packages_mapped": packages_mapped,
+        "publish.live": cycle["status"] == "LIVE",
+    }
+
+
+def handle(conn, action: dict) -> dict:
+    """上架模組沒有任何 op：建廣告與開啟廣告永遠只由使用者在畫面上按（票 O1-02 裁決）。
+    收到任何 op 一律丟 ValueError（ADR 0024 決議 6）。"""
+    raise ValueError(f"上架模組不認得這個 op：{action['op']}")
+
+
+core_orchestrator.register_module("publish", status=status, handle=handle)

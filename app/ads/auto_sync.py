@@ -15,8 +15,11 @@ from typing import Optional
 
 from app.ads import diagnosis as ads_diagnosis  # noqa: F401 — 匯入觸發調度台模組登記（票 O1-01）
 from app.ads import ga4_sync
+from app.ads import health_lights  # noqa: F401 — 同上：monitor 模組登記在這支（票 O1-02）
+from app.ads import meta_mcp  # noqa: F401 — 同上：publish 模組登記在這支（票 O1-02）
 from app.ads import onboarding
 from app.ads import pacing_curve
+from app.ads import proposal  # noqa: F401 — 同上：proposal 模組登記在這支（票 O1-02）
 from app.ads import reading
 from app.ads import repository as ads_repo
 from app.ads import sync as ads_sync
@@ -28,6 +31,7 @@ from app.ads import weekly_reports
 from app.brand_intelligence import repository as bi_repo
 from app.core import interrupts as core_interrupts
 from app.core import orchestrator as core_orchestrator
+from app.intake import dispatch as intake_dispatch  # noqa: F401 — 同上：intake 模組登記在這支（票 O1-02）
 
 ACTOR = "auto_sync"
 WEEKLY_ACTOR = "weekly_engine"
@@ -178,3 +182,25 @@ def run(conn, *, today: Optional[str] = None, meta_client=None, ga4_client=None,
 
     conn.commit()
     return outcome
+
+
+# ---------------------------------------------------------------------------
+# 調度台『同步』模組門面（票 O1-02，ADR 0024）
+# ---------------------------------------------------------------------------
+
+def status(conn, brand_id: str) -> dict:
+    """調度台 facts：`sync.meta_configured`／`sync.ga4_configured`（Meta／GA4 連線設定
+    好了沒，全站一組設定，不分品牌）。"""
+    return {
+        "sync.meta_configured": ads_sync.is_configured(conn),
+        "sync.ga4_configured": ga4_sync.is_configured(conn),
+    }
+
+
+def handle(conn, action: dict) -> dict:
+    """同步模組沒有任何 op：同步要打 Meta／GA4 外部 API，handle() 不得阻塞
+    （ADR 0024 決議 4）。收到任何 op 一律丟 ValueError（ADR 0024 決議 6）。"""
+    raise ValueError(f"同步模組不認得這個 op：{action['op']}")
+
+
+core_orchestrator.register_module("sync", status=status, handle=handle)

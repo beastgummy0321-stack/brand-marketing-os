@@ -21,6 +21,7 @@ from app.ads import reading as ads_reading
 from app.ads import repository as ads_repo
 from app.ads import target_cpa as ads_target_cpa
 from app.brand_intelligence import repository as bi
+from app.core import orchestrator as core_orchestrator
 from app.core import rule_cards
 
 
@@ -107,3 +108,42 @@ def compute(conn, brand_id: str, cycle_id: str) -> dict:
         "roas": _roas_light(conn, brand_id, cycle),
         "fatigue": _fatigue_light(conn, brand_id, cycle),
     }
+
+
+# ---------------------------------------------------------------------------
+# 調度台『監測』模組門面（票 O1-02，ADR 0024）
+# ---------------------------------------------------------------------------
+
+def _current_cycle(conn, brand_id: str) -> Optional[dict]:
+    """比照 app/ads/diagnosis.py:29 _current_cycle()：取最新一個投放中或等判讀的檔期。"""
+    for cycle in ads_repo.list_cycles(conn, brand_id):
+        if cycle["status"] in ("LIVE", "EVALUATING"):
+            return cycle
+    return None
+
+
+def status(conn, brand_id: str) -> dict:
+    """調度台 facts：`monitor.cycle_id`、`monitor.spend_rate_light`（燒錢速度燈號 status，
+    見 compute()）、`monitor.red_lights`（四盞裡幾盞是紅燈）。"""
+    cycle = _current_cycle(conn, brand_id)
+    if cycle is None:
+        return {"monitor.cycle_id": None, "monitor.spend_rate_light": None,
+                "monitor.red_lights": 0}
+    lights = compute(conn, brand_id, cycle["id"])
+    return {
+        "monitor.cycle_id": cycle["id"],
+        "monitor.spend_rate_light": lights["spend_rate"]["status"],
+        "monitor.red_lights": sum(1 for light in lights.values() if light["status"] == "red"),
+    }
+
+
+def handle(conn, action: dict) -> dict:
+    """調度台唯一支援的 op：check_pacing（叫既有 pacing.check_cycle() 判定一次，不重寫
+    第二套步調判定）。不認得的 op 一律丟 ValueError（ADR 0024 決議 6）。"""
+    if action["op"] != "check_pacing":
+        raise ValueError(f"監測模組不認得這個 op：{action['op']}")
+    interrupt_id = ads_pacing.check_cycle(conn, action["brand_id"], action["params"]["cycle_id"])
+    return {"interrupt_id": interrupt_id}
+
+
+core_orchestrator.register_module("monitor", status=status, handle=handle)

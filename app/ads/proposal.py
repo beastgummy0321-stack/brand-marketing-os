@@ -9,6 +9,7 @@
 
 import json
 import sqlite3
+from typing import Optional
 
 from app.ads import onboarding
 from app.ads import pacing_curve
@@ -17,6 +18,7 @@ from app.ads import repository as ads_repo
 from app.ads import repository_channel_plan as channel_repo
 from app.ads import theme_repository
 from app.ads import tracking
+from app.core import orchestrator as core_orchestrator
 from app.core import rule_cards
 from app.core.db import new_id, now_iso
 
@@ -187,3 +189,41 @@ def approve(conn: sqlite3.Connection, brand_id: str, cycle_id: str, actor: str) 
 def return_to_opening(conn: sqlite3.Connection, brand_id: str, cycle_id: str, actor: str) -> None:
     """退回開檔調整，不動既有計畫與開檔原值。"""
     ads_repo.update_cycle_status(conn, brand_id, cycle_id, status="PLANNING", actor=actor)
+
+
+# ---------------------------------------------------------------------------
+# 調度台『提案』模組門面（票 O1-02，ADR 0024）
+# ---------------------------------------------------------------------------
+
+def _current_cycle(conn, brand_id: str) -> "Optional[dict]":
+    """比照 app/ads/diagnosis.py:29 _current_cycle()：取最新一個投放中或等判讀的檔期。
+    不 import weekly_proposals.current_cycle()（會拉進 nextcycle／reading 一整串）。"""
+    for cycle in ads_repo.list_cycles(conn, brand_id):
+        if cycle["status"] in ("LIVE", "EVALUATING"):
+            return cycle
+    return None
+
+
+def status(conn, brand_id: str) -> dict:
+    """調度台 facts：`proposal.cycle_id`、`proposal.plan_ready`（這期有沒有計畫可核可）、
+    `proposal.approved`（最新一版計畫核可了沒）。不呼叫 proposal()——那支要組六區塊，
+    每輪跑代價過高（票 O1-02 明文）。"""
+    cycle = _current_cycle(conn, brand_id)
+    if cycle is None:
+        return {"proposal.cycle_id": None, "proposal.plan_ready": False,
+                "proposal.approved": False}
+    plan = ads_plan.get_latest_plan(conn, brand_id, cycle["id"])
+    return {
+        "proposal.cycle_id": cycle["id"],
+        "proposal.plan_ready": plan is not None,
+        "proposal.approved": plan is not None and plan["status"] == "approved",
+    }
+
+
+def handle(conn, action: dict) -> dict:
+    """提案模組沒有任何 op：核可是使用者關卡②（ADR 0018），不得自動化；其餘進入點都是
+    唯讀或人按。收到任何 op 一律丟 ValueError（ADR 0024 決議 6）。"""
+    raise ValueError(f"提案模組不認得這個 op：{action['op']}")
+
+
+core_orchestrator.register_module("proposal", status=status, handle=handle)
