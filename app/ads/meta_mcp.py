@@ -163,7 +163,16 @@ def _raise_if_tool_error(result: dict) -> None:
     error_message／error_category 欄位裡（見 tools.json outputSchema），不是協定層錯誤。"""
     message = result.get("error_message")
     if message:
-        raise MetaMcpError(str(message))
+        raise MetaMcpError(_meta_message(str(message)))
+
+
+def _meta_message(text: str) -> str:
+    """工具有時把整包 {"error_category":..,"error_message":..} 當字串回來；只留人看得懂的那句。"""
+    try:
+        data = json.loads(text)
+    except ValueError:
+        return text
+    return str(data.get("error_message") or text) if isinstance(data, dict) else text
 
 
 # ---------------------------------------------------------------------------
@@ -325,6 +334,7 @@ def _ensure_campaign(conn, brand_id: str, cycle_id: str, account_id: str, packag
     row = conn.execute(
         "SELECT meta_campaign_id FROM external_ad_mapping WHERE brand_id = ?"
         " AND campaign_cycle_id = ? AND meta_campaign_id IS NOT NULL AND meta_campaign_id != ''"
+        " AND claim_status = 'confirmed' AND meta_adset_id IS NOT NULL"  # 同步「猜的」列不算（真人實測：tracking.py 把發現的活動掛到第一包）
         " ORDER BY created_at LIMIT 1", (brand_id, cycle_id),
     ).fetchone()
     if row:

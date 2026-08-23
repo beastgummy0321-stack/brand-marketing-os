@@ -452,3 +452,29 @@ class PublishAllRouteTest(_BaseMetaMcpTest):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SuggestedMappingIsNotAMetaBuildTest(_BaseMetaMcpTest):
+    """同步把 Meta 上發現的活動「猜」掛到第一包（tracking.py，claim_status='suggested'）：
+    那不算已建到 Meta——不能讓 create-all 跳過那包，也不能拿它的 campaign 來沿用。"""
+
+    def test_suggested_row_is_ignored(self):
+        cycle_id, package = self._build_one_package()
+        from app import main as main_mod
+        main_mod.conn.execute(
+            "INSERT INTO external_ad_mapping (id, brand_id, publishing_package_id,"
+            " campaign_cycle_id, platform, meta_campaign_id, claim_status, created_at)"
+            " VALUES ('xam_sugg', ?, ?, ?, 'meta', 'orphan_campaign', 'suggested', '2026-01-01')",
+            (self.bid, package["id"], cycle_id))
+        main_mod.conn.commit()
+        body = self.client.post(f"/api/campaigns/{self.bid}/{cycle_id}/handoff/create-all").json()
+        self.assertEqual(body["created"], 1)
+        campaign_calls = [c for c in self.fake_client.calls if c[0] == "ads_create_campaign"]
+        self.assertEqual(len(campaign_calls), 1)
+        adset_calls = [c for c in self.fake_client.calls if c[0] == "ads_create_ad_set"]
+        self.assertNotEqual(adset_calls[0][1]["campaign_id"], "orphan_campaign")
+
+    def test_meta_error_json_is_unwrapped(self):
+        from app.ads import meta_mcp
+        self.assertEqual(meta_mcp._meta_message('{"error_category":"VALIDATION","error_message":"\u7f3a\u5716"}'), "缺圖")
+        self.assertEqual(meta_mcp._meta_message("plain"), "plain")

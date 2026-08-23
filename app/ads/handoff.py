@@ -265,6 +265,7 @@ def list_packages(conn, brand_id: str, cycle_id: str) -> list:
 def _mapping_for(conn, brand_id: str, package_id: str) -> Optional[dict]:
     row = conn.execute(
         "SELECT * FROM external_ad_mapping WHERE brand_id = ? AND publishing_package_id = ?"
+        " AND claim_status = 'confirmed'"  # 同步猜的（suggested）列不算「已授權／已建到 Meta」
         " ORDER BY created_at DESC LIMIT 1", (brand_id, package_id),
     ).fetchone()
     return dict(row) if row else None
