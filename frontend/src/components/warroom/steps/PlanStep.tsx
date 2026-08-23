@@ -72,11 +72,47 @@ export function PlanStep({ brandId, cycle, onApproved, onRefresh }: { brandId: s
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [brandId, cycle.id, alreadyGenerated]);
 
+  // 05b：畫面還沒生成過方案時，可能是「真的沒點過」，也可能是「點過但中途離開又回來」——
+  // 背景生成執行緒不受畫面掛載／卸載影響，繼續跑在 `_progress_state`。掛載時先問一次
+  // plan/status 把畫面接回真實狀態，而不是無條件顯示未點過的按鈕（票 05b 根因）。
+  useEffect(() => {
+    if (alreadyGenerated) return;
+    let cancelled = false;
+    fetchPlanStatus(brandId, cycle.id)
+      .then((res) => {
+        if (cancelled) return;
+        if (res.status === "running") {
+          setState({ status: "generating" });
+          beginPolling();
+        } else if (res.status === "failed") {
+          setState({ status: "generate-failed", message: res.message ?? "產生方案失敗，請稍後再試。" });
+        } else {
+          // "done"：entry 不存在（從沒生成過）或剛好被這次讀取消化掉（生成其實已完成）
+          // 兩種情況都無法從回應本身分辨，一律刷新一次交給 cycle.status／plan_version 判斷即可，
+          // 從沒生成過時這只是一次無害的重讀。
+          onRefresh();
+        }
+      })
+      .catch(() => {
+        // 問不到就當作沒事，維持原本未生成的按鈕畫面，讓使用者自己點。
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [brandId, cycle.id, alreadyGenerated]);
+
   function stopPolling() {
     if (pollTimerRef.current) {
       clearInterval(pollTimerRef.current);
       pollTimerRef.current = null;
     }
+  }
+
+  function beginPolling() {
+    pollDeadlineRef.current = Date.now() + POLL_TIMEOUT_MS;
+    stopPolling();
+    pollTimerRef.current = setInterval(() => void pollOnce(), POLL_INTERVAL_MS);
   }
 
   async function pollOnce() {
@@ -109,9 +145,7 @@ export function PlanStep({ brandId, cycle, onApproved, onRefresh }: { brandId: s
       setState({ status: "generate-failed", message: err instanceof Error ? err.message : "產生方案失敗，請稍後再試。" });
       return;
     }
-    pollDeadlineRef.current = Date.now() + POLL_TIMEOUT_MS;
-    stopPolling();
-    pollTimerRef.current = setInterval(() => void pollOnce(), POLL_INTERVAL_MS);
+    beginPolling();
   }
 
   async function pickOption(optionId: string) {
