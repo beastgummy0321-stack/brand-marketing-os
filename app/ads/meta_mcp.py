@@ -7,8 +7,11 @@
 - `get_page_id()` / `save_page_id(page_id)`：選定的粉絲專頁，存在 `.env`（不進 DB）。
 - `create_package(conn, brand_id, cycle_id, package_id, *, actor)`：把一份交接包建成
   Meta 活動／廣告組合／素材／廣告，全部暫停；成功後呼叫既有 `handoff.authorize_and_map()`
-  寫 `external_ad_mapping`，不另寫 INSERT。
-- `activate_cycle(conn, brand_id, cycle_id, *, actor)`：把這期已建好的包從暫停切成開啟。
+  （`go_live=False`）寫 `external_ad_mapping`，不另寫 INSERT——這時候還沒開始花錢
+  （ADR 0019 第 7 條），不建投放授權、不切檔期 LIVE、不建提醒卡。
+- `activate_cycle(conn, brand_id, cycle_id, *, actor)`：把這期已建好的包從暫停切成開啟；
+  每一包 Meta 端真的切成開啟成功後，才呼叫既有 `handoff.go_live()` 建投放授權＋切 LIVE＋
+  建提醒卡——花錢那一刻是這裡，不是 `create_package()`。
 - `ads_manager_url(meta_account_id)`：Meta 廣告管理員連結（前端「到後台看」用）。
 
 憑證只認 `.env` 三把鑰匙（`META_MCP_TOKEN`／`META_AD_ACCOUNT_ID`／`META_PAGE_ID`），跟
@@ -435,8 +438,11 @@ def create_package(conn, brand_id: str, cycle_id: str, package_id: str, *, actor
     meta_ids = {"meta_account_id": account_id, "meta_campaign_id": campaign_id,
                 "meta_adset_id": adset_id, "meta_ad_id": ad_id, "meta_creative_id": creative_id}
     try:
+        # go_live=False：這裡建的物件全暫停，還沒開始花錢（ADR 0019 第 7 條）——只回填
+        # mapping，不授權、不切 LIVE、不建提醒卡；那些留給 activate_cycle() 真的把 Meta
+        # 實體切成開啟後才做。
         ads_handoff.authorize_and_map(conn, brand_id, cycle_id, package_id,
-                                      meta_ids=meta_ids, actor=actor)
+                                      meta_ids=meta_ids, actor=actor, go_live=False)
     except ValueError as exc:
         return {"ok": False, "reason": str(exc)}
     return {"ok": True, "meta_ids": meta_ids}
@@ -481,17 +487,6 @@ def activate_cycle(conn, brand_id: str, cycle_id: str, *, actor: str) -> dict:
     if not mapped:
         return {"ok": False, "reason": "這期還沒有已建到 Meta 的包，先按「一鍵建到 Meta」。"}
 
-    # 前置：上線授權關卡已過（既有 activation_authorization——create_package／手填授權
-    # 都經 handoff.authorize_and_map() 寫這張表，這裡再檢一次，defense in depth）。
-    for pkg, _mapping in mapped:
-        authorized = conn.execute(
-            "SELECT 1 FROM activation_authorization WHERE brand_id = ?"
-            " AND scope_type = 'campaign_activation' AND scope_ref = ?",
-            (brand_id, pkg["id"]),
-        ).fetchone()
-        if not authorized:
-            return {"ok": False, "reason": f"「{pkg['ad_name']}」還沒過上線授權，不能發布。"}
-
     account_id = _raw_account_id()
     activated_campaigns, activated_adsets = set(), set()
     activated, failed = 0, []
@@ -506,6 +501,9 @@ def activate_cycle(conn, brand_id: str, cycle_id: str, *, actor: str) -> dict:
                 _activate(account_id, adset_id, "ad_set")
                 activated_adsets.add(adset_id)
             _activate(account_id, mapping["meta_ad_id"], "ad")
+            # 只有這裡（Meta 端真的切成開啟）才算「花錢那一刻」（ADR 0019 第 7 條）：
+            # 建授權、切 LIVE、建提醒卡；失敗的包不會走到這裡，不會有授權列。
+            ads_handoff.go_live(conn, brand_id, cycle_id, pkg["id"], mapping["id"], actor=actor)
         except MetaMcpError as exc:
             failed.append({"package_id": pkg["id"], "reason": _plain_error(exc)})
             continue

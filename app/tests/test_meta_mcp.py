@@ -209,6 +209,16 @@ class _BaseMetaMcpTest(unittest.TestCase):
             "SELECT * FROM external_ad_mapping WHERE publishing_package_id = ?",
             (package_id,)).fetchone()
 
+    def _cycle_status(self, cycle_id: str) -> str:
+        return ads_repo.get_cycle(main.conn, self.bid, cycle_id)["status"]
+
+    def _authorization_count(self, package_id: str) -> int:
+        row = main.conn.execute(
+            "SELECT COUNT(*) AS n FROM activation_authorization"
+            " WHERE brand_id = ? AND scope_type = 'campaign_activation' AND scope_ref = ?",
+            (self.bid, package_id)).fetchone()
+        return row["n"]
+
 
 class CreatePackageTest(_BaseMetaMcpTest):
     def test_a_writes_mapping_with_four_ids_confirmed(self):
@@ -228,6 +238,11 @@ class CreatePackageTest(_BaseMetaMcpTest):
         self.assertEqual(mapping["meta_campaign_id"], "cmp_1")
         self.assertEqual(mapping["meta_adset_id"], "adset_1")
         self.assertEqual(mapping["meta_ad_id"], "ad_1")
+
+        # ADR 0019 第 7 條：money moment 是發布，不是建立——Meta 端還暫停著，本系統
+        # 也不該切 LIVE、不該建投放授權（那些留給 activate_cycle() 真的開啟成功後才做）。
+        self.assertNotEqual(self._cycle_status(cycle_id), "LIVE")
+        self.assertEqual(self._authorization_count(package["id"]), 0)
         self.assertEqual(mapping["meta_creative_id"], "cre_1")
 
     def test_b_missing_image_returns_reason_without_calling_client(self):
@@ -325,6 +340,10 @@ class PublishAllRouteTest(_BaseMetaMcpTest):
         self.assertEqual(body["failed"], [])
         activate_calls = [c for c in self.fake_client.calls if c[0] == "ads_activate_entity"]
         self.assertEqual(len(activate_calls), 3)  # campaign + ad_set + ad
+
+        # 現在才是花錢那一刻（ADR 0019 第 7 條）：切 LIVE、每個真的開啟成功的包各一筆授權。
+        self.assertEqual(self._cycle_status(cycle_id), "LIVE")
+        self.assertEqual(self._authorization_count(package["id"]), 1)
 
 
 if __name__ == "__main__":

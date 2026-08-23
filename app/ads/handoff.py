@@ -278,14 +278,71 @@ def report_missing_field(conn, brand_id: str, cycle_id: str, field_key: str, act
     conn.commit()
 
 
-def authorize_and_map(conn, brand_id: str, cycle_id: str, package_id: str, *,
-                      meta_ids: dict, actor: str) -> dict:
-    """關卡三：具名投放授權＋回填 Meta ID。
-
-    這一步同時做三件事，缺一不可：
+def go_live(conn, brand_id: str, cycle_id: str, package_id: str, mapping_id: str, *,
+           actor: str) -> dict:
+    """花錢那一刻才做的三件事（ADR 0019 第 7 條：money moment 是發布，不是建立）：
     1. 建一筆具名的 activation_authorization（誰、何時、授權什麼）。
-    2. 建 external_ad_mapping（人工回填的直接算 confirmed 歸屬）。
-    3. 建 campaign_activation，必須引用上面那筆授權。
+    2. 建 campaign_activation，引用上面那筆授權。
+    3. 整期切 LIVE＋建提醒卡（第 3 天「可以看但別動」、第 7 天與到期日「回填成效」，票 15）。
+
+    兩個呼叫端：`authorize_and_map(..., go_live=True)`（既有手填路徑，手填 ID 本身就代表
+    使用者已經在 Meta 手動按過發布）立刻呼叫這支；`app/ads/meta_mcp.py` 的
+    `activate_cycle()` 則是每個包真的把 Meta 實體從暫停切成開啟成功後才呼叫，
+    失敗的包不會走到這裡、不會有授權列（票 M1-01）。
+    """
+    package = conn.execute(
+        "SELECT * FROM publishing_package WHERE brand_id = ? AND id = ? AND campaign_cycle_id = ?",
+        (brand_id, package_id, cycle_id),
+    ).fetchone()
+    if package is None:
+        raise ValueError("找不到這份交接包")
+    if not actor:
+        raise ValueError("需要具名操作人才能授權投放")
+
+    ts = now_iso()
+    auth_id = new_id("ath")
+    conn.execute(
+        "INSERT INTO activation_authorization (id, brand_id, scope_type, scope_ref,"
+        " authorized_by, authorized_at, note, created_at)"
+        " VALUES (?, ?, 'campaign_activation', ?, ?, ?, ?, ?)",
+        (auth_id, brand_id, package_id, actor, ts,
+         f"確認已在 Meta 開始投放：{package['campaign_name']}", ts),
+    )
+    conn.execute(
+        "INSERT INTO campaign_activation (id, brand_id, campaign_cycle_id,"
+        " external_ad_mapping_id, authorization_id, activated_by, activated_at, created_at)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (new_id("act"), brand_id, cycle_id, mapping_id, auth_id, actor, ts, ts),
+    )
+    write_audit(conn, brand_id=brand_id, entity_type="campaign_activation", entity_id=mapping_id,
+                action="authorize_activation", actor=actor, before=None,
+                after={"package_id": package_id, "mapping_id": mapping_id})
+    conn.commit()
+
+    if ads_repo.get_cycle(conn, brand_id, cycle_id)["status"] != "LIVE":
+        ads_repo.update_cycle_status(conn, brand_id, cycle_id, status="LIVE", actor=actor)
+
+    from app.ads import onboarding
+    onboarding.create_reminders(conn, brand_id, cycle_id)
+    return {"authorization_id": auth_id}
+
+
+# authorize_and_map() 的 go_live 參數會蓋掉同名的模組層函式——留一個內部別名，讓函式
+# 本體照樣叫得到 go_live()（Python 參數在函式作用域內一律蓋過同名的模組層名稱）。
+_go_live = go_live
+
+
+def authorize_and_map(conn, brand_id: str, cycle_id: str, package_id: str, *,
+                      meta_ids: dict, actor: str, go_live: bool = True) -> dict:
+    """回填 Meta ID（＋預設立刻具名授權發布，見上面的 go_live()）。
+
+    go_live=True（既有手填路徑，行為不變）：回填 external_ad_mapping 後立刻視為
+    「已經在 Meta 開始投放」，呼叫 go_live() 建授權＋切 LIVE＋建提醒卡——手填 ID
+    這件事本身就代表使用者已經在 Meta 手動按過發布了。
+
+    go_live=False（票 M1-01：`app/ads/meta_mcp.py` 的 create_package() 用）：Meta 端
+    建的是暫停物件，這時候還沒開始花錢（ADR 0019 第 7 條），只回填 mapping，不建授權、
+    不切 LIVE、不建提醒卡——那些留給 activate_cycle() 真的把 Meta 實體切成開啟後才做。
 
     ADR 0004 起 require_actor 一律回傳固定值，不會再是空字串；這裡的 `if not actor` 是給
     繞過路由層、直接呼叫本函式的呼叫端（例如測試）留的第二道保險，不是操作人攔截。
@@ -305,15 +362,6 @@ def authorize_and_map(conn, brand_id: str, cycle_id: str, package_id: str, *,
     # 警示由畫面顯示（見 app/ads/codes.verification_warning），這裡不再讀校驗結果。
 
     ts = now_iso()
-    auth_id = new_id("ath")
-    conn.execute(
-        "INSERT INTO activation_authorization (id, brand_id, scope_type, scope_ref,"
-        " authorized_by, authorized_at, note, created_at)"
-        " VALUES (?, ?, 'campaign_activation', ?, ?, ?, ?, ?)",
-        (auth_id, brand_id, package_id, actor, ts,
-         f"確認已在 Meta 開始投放：{package['campaign_name']}", ts),
-    )
-
     account_id = (meta_ids.get("meta_account_id") or "").strip() or None
     ad_account_id = _ensure_ad_account(conn, account_id, ts) if account_id else None
 
@@ -332,29 +380,16 @@ def authorize_and_map(conn, brand_id: str, cycle_id: str, package_id: str, *,
          actor, ts, ts),
     )
 
-    conn.execute(
-        "INSERT INTO campaign_activation (id, brand_id, campaign_cycle_id,"
-        " external_ad_mapping_id, authorization_id, activated_by, activated_at, created_at)"
-        " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        (new_id("act"), brand_id, cycle_id, mapping_id, auth_id, actor, ts, ts),
-    )
-
     if ad_account_id:
         conn.execute("UPDATE campaign_cycle SET ad_account_id = ? WHERE brand_id = ? AND id = ?",
                      (ad_account_id, brand_id, cycle_id))
-
-    write_audit(conn, brand_id=brand_id, entity_type="campaign_activation", entity_id=mapping_id,
-                action="authorize_activation", actor=actor, before=None,
-                after={"package_id": package_id, "meta_ids": meta_ids})
     conn.commit()
 
-    if ads_repo.get_cycle(conn, brand_id, cycle_id)["status"] != "LIVE":
-        ads_repo.update_cycle_status(conn, brand_id, cycle_id, status="LIVE", actor=actor)
+    if not go_live:
+        return {"authorization_id": None, "mapping_id": mapping_id}
 
-    # 開始投放才建提醒卡：第 3 天「可以看但別動」、第 7 天與到期日「回填成效」（票 15）
-    from app.ads import onboarding
-    onboarding.create_reminders(conn, brand_id, cycle_id)
-    return {"authorization_id": auth_id, "mapping_id": mapping_id}
+    result = _go_live(conn, brand_id, cycle_id, package_id, mapping_id, actor=actor)
+    return {"authorization_id": result["authorization_id"], "mapping_id": mapping_id}
 
 
 # ---------------------------------------------------------------------------
