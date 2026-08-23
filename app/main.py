@@ -26,6 +26,8 @@
 啟動：python -m uvicorn app.main:app --port 8710
 """
 
+import os
+import sys
 import threading
 import time
 from datetime import datetime, timedelta, timezone
@@ -37,6 +39,54 @@ from fastapi.exception_handlers import http_exception_handler
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
+
+
+# ---- .env → 環境變數（必須跑在任何 app.* 被 import 之前，所以擠在 import 中間）----
+
+def _parse_env_file(text: str) -> dict:
+    """把 .env 內容解析成 {鍵: 值}。忽略空行、`#` 開頭的註解、以及沒有等號的行；
+    值裡面還有等號時只切第一個（base64 金鑰會有）。鍵值兩邊空白去掉，值頭尾成對的
+    引號也去掉——貼上來的金鑰常常自帶引號，帶著引號送出去一定認證失敗。"""
+    parsed = {}
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key, value = key.strip(), value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+            value = value[1:-1]
+        if key:
+            parsed[key] = value
+    return parsed
+
+
+def _load_dotenv() -> int:
+    """把專案根的 `.env` 灌進環境變數，**已經有值的不覆蓋**（真的環境變數優先）。
+    回傳這次實際設進去的筆數。
+
+    為什麼要有這支：原本只有「啟動行銷系統.bat」做這件事，換個方式啟動就悄悄少了金鑰。
+    Meta 連線會顯示「還沒連接 Meta 廣告帳戶」，而 AI 金鑰有資料庫備援（見
+    `app/core/settings.py` 的優先序）所以照常運作，把問題整個蓋住——2026-08-23 實測
+    花了近一小時才定位。設定該由程式自己讀，不該綁在某一種啟動方式上。
+
+    測試中一律跳過：測試程序不該拿到真金鑰，誤打出去要花錢
+    （同 `app/tools/real_db_probe.py` 把金鑰換成假值的理由）。
+    """
+    if "pytest" in sys.modules:
+        return 0
+    env_path = Path(__file__).resolve().parent.parent / ".env"
+    if not env_path.exists():
+        return 0
+    loaded = 0
+    for key, value in _parse_env_file(env_path.read_text(encoding="utf-8-sig")).items():
+        if not os.environ.get(key):
+            os.environ[key] = value
+            loaded += 1
+    return loaded
+
+
+_load_dotenv()
 
 from app.ads import auto_sync as ads_auto_sync  # noqa: E402
 from app.ads import ga4_api  # noqa: E402  # 只用於設定頁測試連線，見「例外」說明
