@@ -17,6 +17,7 @@ import json
 import os
 import shutil
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -66,18 +67,28 @@ def _fake(text: str) -> ProviderResponse:
 
 class _SlowProvider:
     """假 Provider：等 delay 秒才回覆，用來讓「背景執行不擋住 HTTP 回應」這件事量得出來
-    ——FakeProvider 幾乎瞬間完成，量不出「有沒有真的等」的差異。不發任何真實網路請求。"""
+    ——FakeProvider 幾乎瞬間完成，量不出「有沒有真的等」的差異。不發任何真實網路請求。
+
+    `release` 給了就改用 `threading.Event` 擋住，不 sleep：需要精準卡住背景執行緒、
+    再用逾時判斷本身（改 `entry["started_at"]`）觸發失敗的測試不能靠真實時間長短賭邊界，
+    -n auto 平行測試下賭輸就是又一條 T1 隨機紅（BOARD 已知問題），改用事件閘門就沒有
+    時間賽跑（比照 `test_proposal_approve_progress.py` 既有的 `threading.Event` 寫法）。"""
 
     name = "fake-slow"
 
-    def __init__(self, response: ProviderResponse, delay: float = 0.3):
+    def __init__(self, response: ProviderResponse, delay: float = 0.3,
+                release: "threading.Event | None" = None):
         self.response = response
         self.delay = delay
+        self.release = release
         self.calls: list = []
 
     def complete(self, *, model, system, messages, max_tokens, timeout_s=120.0, effort=None):
         self.calls.append({"model": model})
-        time.sleep(self.delay)
+        if self.release is not None:
+            self.release.wait(timeout=5)
+        else:
+            time.sleep(self.delay)
         return self.response
 
 
@@ -191,38 +202,42 @@ class TimeoutTest(_BaseProgressTest):
         這裡驗證新行為：逾時後（1）狀態不是曇花一現的 failed，重問幾次都還是同一句 failed；
         （2）背景那條執行緒真正跑完後，狀態會確實變成 done、並帶著它真正做出來的結果，不會
         被忘掉；（3）逾時後按「重試」（再 POST 一次 plan/generate）不會讓 provider 被多打
-        一次——因為舊執行緒還活著，重試只是安靜接回去等它，不是重開一條新的。"""
-        # 時間安排：重試會把逾時時鐘重設成「重試當下 ＋ T」，最壞狀況（一逾時就立刻重試，
-        # R=T）需要 T >= D-T，也就是 T 至少要有 D 的一半，新窗口才蓋得住剩餘工作時間；
-        # 這裡抓 T=0.6D 留邊界。用輪詢（不是固定 sleep）等第一次真的變成 failed 才重試，
-        # 讓 R 盡量貼近 T，不受重度平行測試（-n auto）的排程延遲影響而假紅或假綠。
-        delay = 1.0
-        timeout = 0.6
-        provider = _SlowProvider(_fake(json.dumps(_GOOD_OPTIONS, ensure_ascii=False)), delay=delay)
+        一次——因為舊執行緒還活著，重試只是安靜接回去等它，不是重開一條新的。
+
+        全程不 sleep 模擬時間：背景執行緒卡在 `release`（`threading.Event`）上，逾時直接靠
+        竄改 `entry["started_at"]` 觸發，跟真實時間長短無關——比照
+        `test_proposal_approve_progress.py` 對三個手足呼叫端既有的驗證寫法，避免在
+        `-n auto` 平行測試下賭時間邊界，變成 BOARD 已知的 T1 那種隨機紅上再添一條。"""
+        release = threading.Event()
+        provider = _SlowProvider(_fake(json.dumps(_GOOD_OPTIONS, ensure_ascii=False)), release=release)
         ads_plan.PROVIDER = provider
+        key = ads_routes._progress_key("plan", self.bid, self.cycle_id)
 
-        original_timeout = ads_routes._PROGRESS_TIMEOUT_SECONDS
-        ads_routes._PROGRESS_TIMEOUT_SECONDS = timeout
         try:
-            self.client.post(self.generate_url, json={})  # 觸發背景執行緒開始跑
+            self.client.post(self.generate_url, json={})  # 觸發背景執行緒開始跑，卡在 release.wait()
 
-            deadline = time.time() + delay  # T < D，逾時一定會在這之前發生，這裡只是防呆上限
-            first = None
-            while time.time() < deadline:
-                first = self.client.get(
-                    f"/api/campaigns/{self.bid}/{self.cycle_id}/plan/status").json()["data"]
-                if first["status"] == "failed":
-                    break
-                time.sleep(0.02)
+            # 竄改 started_at 直接模擬「已經超過逾時門檻」，不必真的等 90 秒。
+            entry = ads_routes._progress_state[key]
+            entry["started_at"] = time.time() - (ads_routes._PROGRESS_TIMEOUT_SECONDS + 1)
+
+            first = self.client.get(
+                f"/api/campaigns/{self.bid}/{self.cycle_id}/plan/status").json()["data"]
             self.assertEqual(first["status"], "failed", first)
 
-            # 使用者看到失敗，重按一次「重試」；此時舊執行緒還活著（還沒到 D 秒）。
+            # 使用者看到失敗，重按一次「重試」；此時舊執行緒還卡在 release.wait()，還活著。
             retry = self.client.post(self.generate_url, json={})
             self.assertEqual(retry.status_code, 204)
 
-            status = _poll_plan_status(self.client, self.bid, self.cycle_id, timeout=delay + 2.0)
+            # 接回去而不是重開一條：狀態立刻變回 running（started_at 也被重設），不是
+            # 因為 started_at 還是舊的竄改值而立刻又判一次逾時失敗。
+            reattached = self.client.get(
+                f"/api/campaigns/{self.bid}/{self.cycle_id}/plan/status").json()["data"]
+            self.assertEqual(reattached["status"], "running", reattached)
+
+            release.set()  # 放行卡住的那條執行緒，讓它真的跑完
+            status = _poll_plan_status(self.client, self.bid, self.cycle_id, timeout=5.0)
         finally:
-            ads_routes._PROGRESS_TIMEOUT_SECONDS = original_timeout
+            release.set()  # 保險：斷言中途失敗離開也不留卡住的背景執行緒
 
         self.assertEqual(status["status"], "done", status)
         self.assertEqual(len(provider.calls), 1,
