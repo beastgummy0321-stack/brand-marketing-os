@@ -55,7 +55,7 @@ from app.ads.reading_hypotheses import (  # noqa: F401  (re-export, D2)
 from app.ads.reading_verdict import (  # noqa: F401  (re-export, D2)
     _HYPOTHESIS_DIRECTIONAL_PRESELECT, _NEGATIVE_STATUSES, _POSITIVE_STATUSES,
     _preselect_hypothesis_status, _unsettled_note, _verdict_group,
-    breakeven_roas, classify_verdict_shift, prediction_settlement,
+    breakeven_roas, classify_verdict_shift, money_line, prediction_settlement,
     repurchase_breakeven_roas,
 )
 
@@ -212,6 +212,10 @@ def judge(totals: dict, *, plan_budget: float, breakeven: Optional[float], brand
         reasons.append(f"只有 {conversions:.0f} 筆成交，這個投報率還不夠穩定")
         return verdict("learning")
 
+    # 沒收到營收資料：算不出投報率就不講賺賠（鐵則 16），也避免 None 拿去格式化直接炸掉
+    if roas is None:
+        reasons.append("這期沒收到營收資料，算不出投報率，看不出賺不賺")
+        return verdict("insufficient_data")
     reasons.append(f"這些產品要投報 {breakeven:.2f} 倍才回本，這期是 {roas:.2f} 倍")
     if roas >= breakeven * SCALE_MARGIN:
         status = "scale_candidate"
@@ -436,7 +440,7 @@ def run(conn, brand_id: str, cycle_id: str, actor: str,
 
     readings.append(cycle_verdict)
 
-    explanation = _explain(conn, brand_id, cycle, readings, confidence, baseline)
+    explanation = _explain(conn, brand_id, cycle, readings, confidence, baseline, cycle_totals)
 
     for verdict in readings:
         conn.execute(
@@ -622,7 +626,7 @@ _SYSTEM = (
 
 
 def _explain(conn, brand_id: str, cycle: dict, readings: list, confidence: dict,
-             baseline: dict) -> dict:
+             baseline: dict, cycle_totals: dict) -> dict:
     """把程式判好的結論交給 LLM 翻成人話。失敗就沒有這段話，判讀本身不受影響。"""
     lines = []
     for verdict in readings:
@@ -643,8 +647,7 @@ def _explain(conn, brand_id: str, cycle: dict, readings: list, confidence: dict,
             asset_lines.append(f"- {row['asset_name']}：投報率 {roas:.2f} 倍{cpa_part}")
 
     sections = [
-        f"檔期：{cycle['start_date']} 到 {cycle['end_date']}，"
-        f"計畫預算 {cycle['budget']:,.0f}",
+        money_line(cycle, cycle_totals, (cycle_verdict or {}).get("kpis") or {}),
         "系統算出來的判讀結果（這些結論已經定了，你不要改也不要重算）：\n" + "\n".join(lines),
     ]
     if asset_lines:

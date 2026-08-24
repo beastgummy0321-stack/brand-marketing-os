@@ -91,6 +91,14 @@ class JudgeRulesTest(unittest.TestCase):
         self.assertEqual(verdict["status"], "learning")
         self.assertIn("不夠穩定", verdict["reasons"][0])
 
+    def test_no_revenue_data_says_data_is_missing_instead_of_crashing(self):
+        """有成交、有成本售價，但完全沒收到營收資料：投報率是「不知道」不是「賺 0」
+        （鐵則 16）。少了這道守門，判讀會拿 None 去格式化投報率當場報錯。"""
+        verdict = reading.judge(self._totals(revenue=None), plan_budget=10000,
+                                breakeven=2.5, brand_id="demo_brand")
+        self.assertEqual(verdict["status"], "insufficient_data")
+        self.assertIn("沒收到營收資料", verdict["reasons"][0])
+
     def test_no_economics_does_not_pretend_to_know_profit(self):
         verdict = reading.judge(self._totals(), plan_budget=10000, breakeven=None, brand_id="demo_brand")
         self.assertEqual(verdict["status"], "unclear_economics")
@@ -225,6 +233,28 @@ class ReadingFlowTest(unittest.TestCase):
         reading.run(main.conn, self.bid, self.cycle_id, ACTOR)
         loaded = reading.load(main.conn, self.bid, self.cycle_id)
         self.assertIn("打折", loaded["cycle"]["confidence_level"])
+
+    def test_prompt_feeds_actual_spend_and_revenue_not_the_budget(self):
+        """ACCEPTANCE-A 第 4 節 6b：prompt 只餵「計畫預算」時，模型把預算當成花掉的錢，
+        再乘投報率反推出一個沒發生過的營收。實際花費／營收要進 prompt，預算要標成上限。"""
+        self._spend(spend=4000, impressions=20000, clicks=400, conversions=10, revenue=24000)
+        reading.run(main.conn, self.bid, self.cycle_id, ACTOR)
+        prompts = [c["messages"][0]["content"] for c in reading.PROVIDER.calls]
+        prompt = next(p for p in prompts if "檔期：" in p)
+        self.assertIn("實際花了 4,000 元", prompt)
+        self.assertIn("實際帶回營收 24,000 元", prompt)
+        self.assertIn("預算上限", prompt)
+        # 預算 10,000 只能以「上限」的身分出現，不能再被講成這期的花費
+        self.assertNotIn("計畫預算 10,000 元，", prompt)
+
+    def test_prompt_says_revenue_is_missing_instead_of_calling_it_zero(self):
+        """沒收到營收資料時不能餵「營收 0」——那是「不知道」不是「賺 0」（鐵則 16）。"""
+        self._spend(spend=4000, impressions=20000, clicks=400, conversions=2)
+        reading.run(main.conn, self.bid, self.cycle_id, ACTOR)
+        prompt = next(c["messages"][0]["content"] for c in reading.PROVIDER.calls
+                      if "檔期：" in c["messages"][0]["content"])
+        self.assertIn("沒收到營收資料", prompt)
+        self.assertNotIn("實際帶回營收", prompt)
 
     def test_rerun_replaces_previous_reading(self):
         """重判讀要能跑第二次——下期草案掛在判讀上，清理順序錯了會被外鍵擋死。"""

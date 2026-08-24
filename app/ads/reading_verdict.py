@@ -115,3 +115,19 @@ def prediction_settlement(conn, brand_id: str, cycle: Optional[dict]) -> Optiona
         "budget": cycle["budget"],
         "gap": ads_onboarding.forecast_gap(forecast, totals),
     }
+
+
+def money_line(cycle: dict, totals: dict, kpis: dict) -> str:
+    """判讀白話 prompt 的第一段：實際花費／營收擺前面，計畫預算明講只是上限。
+
+    只餵「計畫預算」時，模型會把預算當成花掉的錢，再乘投報率反推出一個從沒發生過的營收
+    （ACCEPTANCE-A 第 4 節第 6b 題：實際花 12,000、營收 72,000，模型講成花 30,000、賺回
+    180,000）。roas 是 None＝這期沒收到營收資料，要講「不知道」，不能講「營收 0」（鐵則 16）。
+    """
+    roas = (kpis or {}).get("roas")
+    earned = (f"，實際帶回營收 {totals.get('revenue') or 0:,.0f} 元，投報率 {roas:.2f} 倍"
+              if roas is not None else "；這期沒收到營收資料，帶回多少錢算不出來")
+    return (f"檔期：{cycle['start_date']} 到 {cycle['end_date']}\n"
+            f"這期實際花了 {totals.get('spend') or 0:,.0f} 元{earned}\n"
+            f"計畫預算 {cycle['budget']:,.0f} 元（這是預算上限，不是花掉的錢；"
+            f"不可以拿它當花費，也不可以拿它乘投報率去推算營收）")
