@@ -186,16 +186,20 @@ class LearningTextNormalizationTest(unittest.TestCase):
     def test_b5_never_normalizes_a_non_empty_input_to_the_empty_string_property(self):
         """done-check b5（property check）：不手選三個樣本，改成用括號家族 × 引號家族 ×
         區段數量 × 排列方式組出一整批形狀（巢狀夾註、三段以上、家族交錯、括號裡只有標點、
-        整句都是標點），任何一個非空輸入正規化後都不准變成空字串。"""
+        整句都是標點），任何一個非空輸入正規化後都不准變成空字串（票 F3 R6：巢狀形狀原本
+        只驗非空，這裡加「內容仍分得開」，對著同一批形狀一起驗）。"""
         aside_families = ["（", "）"], ["(", ")"], ["〔", "〕"]
         quote_families = ["「", "」"], ["『", "』"], ["【", "】"]
         core_texts = ["情感訴求角度轉換率比功能訴求高", "，、", "。！？", ""]
         shapes = []
+        nested_pairs = []
         # 巢狀：括號裡包引號，引號裡包括號
         for (ao, ac) in aside_families:
             for (qo, qc) in quote_families:
                 shapes.append(f"{ao}{qo}實證成分{qc}{ac}")
                 shapes.append(f"{qo}{ao}實證成分{ac}{qc}")
+                # 「括號裡包引號」換「高」／「低」——票 F3 R6 缺陷方向。反方向不擴大範圍。
+                nested_pairs.append((f"{ao}{qo}高{qc}{ac}", f"{ao}{qo}低{qc}{ac}"))
         # 三段以上、家族交錯排列
         for core in core_texts:
             for (ao, ac) in aside_families:
@@ -212,6 +216,20 @@ class LearningTextNormalizationTest(unittest.TestCase):
         for text in shapes:
             with self.subTest(text=text):
                 self.assertNotEqual(bi_repo._normalize_learning_text(text), "")
+        for high, low in nested_pairs:
+            with self.subTest(pair=(high, low)):
+                self.assertNotEqual(bi_repo._normalize_learning_text(high),
+                                     bi_repo._normalize_learning_text(low))
+
+    def test_b6_quote_nested_inside_aside_no_longer_collides_across_delimiter_families(self):
+        """票 F3 R6（最後一輪，orchestrator reject 案例）：`（「高」）`——舊 content class
+        吃穿引號跨到右括號整段刪空，「高」「低」崩成同一句。寧可漏抓重複也不誤刪新學習
+        （accepted regression）。三種括號家族都要驗，因為兩個 alternation 分支都改了。"""
+        for ao, ac in (("（", "）"), ("(", ")"), ("〔", "〕")):
+            with self.subTest(aside=ao + ac):
+                high = bi_repo._normalize_learning_text(f"本次學習，{ao}「高」{ac}樣本充足")
+                low = bi_repo._normalize_learning_text(f"本次學習，{ao}「低」{ac}樣本充足")
+                self.assertNotEqual(high, low)
 
 
 class LearningLedgerDedupeWidenedNormalizationTest(unittest.TestCase):
@@ -249,6 +267,16 @@ class LearningLedgerDedupeWidenedNormalizationTest(unittest.TestCase):
         genuinely_new = "「情感訴求角度轉換率比功能訴求低」『情感訴求角度轉換率比功能訴求高』"
         self.assertFalse(bi_repo.learning_ledger_entry_exists(
             main.conn, self.bid, product_id=None, learning_text=genuinely_new))
+
+    def test_b6_quote_nested_inside_aside_is_recorded_separately_via_real_ledger_path(self):
+        """票 F3 R6：走真的 `learning_ledger_entry_exists()` 查表路徑，不只測正規化函式。"""
+        high = "本次學習，（「情感訴求角度轉換率比功能訴求高」）樣本充足"
+        low = "本次學習，（「情感訴求角度轉換率比功能訴求低」）樣本充足"
+        bi_repo.create_learning_ledger_entry(
+            main.conn, self.bid, learning_text=high,
+            applicability_scope="brand", created_by=ACTOR, actor=ACTOR, source_track="ads")
+        self.assertFalse(bi_repo.learning_ledger_entry_exists(
+            main.conn, self.bid, product_id=None, learning_text=low))
 
 
 class _HypothesisReviewBase(unittest.TestCase):
