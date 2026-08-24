@@ -191,6 +191,48 @@ class WeeklyProposalPersistenceTest(unittest.TestCase):
                 main.conn, self.brand_id, cycle_id, card["id"], actor=ACTOR)
         return cycle_id, card["id"]
 
+    def _imported_ad(self, cycle_id, ad_name, frequency):
+        """把一支對得回交接包的廣告連同頻率匯進這期（比照 test_ads_reading.py 的既有寫法）。"""
+        pkg_id, mapping_id, ts = new_id("pkg"), new_id("xam"), now_iso()
+        main.conn.execute(
+            "INSERT INTO publishing_package (id, brand_id, campaign_cycle_id, campaign_name,"
+            " adset_name, ad_name, destination_url, utm_json, status, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, '{}', 'ready', ?)",
+            (pkg_id, self.brand_id, cycle_id, "疲勞測試活動", "疲勞測試組合", ad_name,
+             "https://example.test", ts))
+        main.conn.execute(
+            "INSERT INTO external_ad_mapping (id, brand_id, publishing_package_id,"
+            " campaign_cycle_id, platform, claim_status, confirmed_by, confirmed_at,"
+            " created_at) VALUES (?, ?, ?, ?, 'meta', 'confirmed', ?, ?, ?)",
+            (mapping_id, self.brand_id, pkg_id, cycle_id, ACTOR, ts, ts))
+        main.conn.commit()
+        csv_text = ("行銷活動名稱,廣告名稱,曝光次數,連結點擊次數,花費金額,購買次數,購買轉換價值,頻率\n"
+                    f"疲勞測試活動,{ad_name},12500,340,5000,12,18600,{frequency}\n")
+        result = performance.import_csv(
+            main.conn, self.brand_id, cycle_id, csv_text, actor=ACTOR)
+        self.assertEqual(result.errors, [])
+
+    def test_red_fatigue_light_gets_a_replace_asset_card_naming_that_ad(self):
+        """驗收 A 第 4 節 1b：頻率 4.2 過冷受眾危險門檻（3.5），週卡不能只出加碼。"""
+        cycle_id = self._cycle_with_readings(["scale_candidate"])
+        self._imported_ad(cycle_id, "疲勞測試_01_ad", 4.2)
+
+        cards = weekly_proposals.generate(main.conn, self.brand_id, cycle_id)
+
+        asset_cards = [card for card in cards if card["action"] == "換素材"]
+        self.assertEqual(len(asset_cards), 1)
+        self.assertEqual(asset_cards[0]["target"], "疲勞測試_01_ad")
+        self.assertIn("頻率 4.2", asset_cards[0]["reason"])
+        self.assertIn("4 次以上", asset_cards[0]["reason"])
+
+    def test_safe_frequency_gets_no_replace_asset_card(self):
+        cycle_id = self._cycle_with_readings(["scale_candidate"])
+        self._imported_ad(cycle_id, "正常頻率_01_ad", 1.8)
+
+        cards = weekly_proposals.generate(main.conn, self.brand_id, cycle_id)
+
+        self.assertEqual([card for card in cards if card["action"] == "換素材"], [])
+
     def test_generate_persists_cards_and_queues_one_ready_interrupt(self):
         cycle_id = self._cycle_with_readings(["pause_candidate", "scale_candidate"])
 

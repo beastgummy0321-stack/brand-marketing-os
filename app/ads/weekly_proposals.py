@@ -5,9 +5,11 @@ import json
 
 from app.ads import nextcycle
 from app.ads import reading as ads_reading
+from app.ads import reading_assets as ads_reading_assets
 from app.ads import repository as ads_repo
 from app.core import interrupts as core_interrupts
 from app.core import orchestrator as core_orchestrator
+from app.core import rule_cards
 from app.core.audit import write_audit
 from app.core.db import new_id, now_iso
 
@@ -101,7 +103,29 @@ def _tired_reason(cell: dict) -> str:
             f"低於停損線 {breakeven * ads_reading.PAUSE_MARGIN:.2f}")
 
 
-def select_cards(product_readings: list, budget: dict, historical_cells: list) -> list:
+FATIGUE_AUDIENCE_TYPE = "cold"
+
+
+def _fatigue_reason(frequency: float) -> str:
+    return f"頻率 {frequency:.1f}，同一群人平均看了 {int(frequency)} 次以上，素材疲勞"
+
+
+def fatigue_asset(conn, brand_id: str, cycle_id: str) -> dict | None:
+    """疲勞燈紅的時候，點名本期頻率最高的那支廣告（沒紅、或點不到名就回 None）。
+
+    紅不紅走 `rule_cards.classify_ad_frequency()` 的既有冷受眾危險門檻，跟健康燈
+    （app/ads/health_lights.py:96）同一張規則卡、同一個判定，不在這裡另立第二套數字；
+    差別只在燈看整期最大頻率、這裡逐支取 max 才知道要換哪一支。"""
+    worst = ads_reading_assets.max_frequency_by_asset(conn, brand_id, cycle_id)
+    if worst is None:
+        return None
+    status = rule_cards.classify_ad_frequency(
+        conn, brand_id, FATIGUE_AUDIENCE_TYPE, worst["frequency"])
+    return worst if status == "danger" else None
+
+
+def select_cards(product_readings: list, budget: dict, historical_cells: list,
+                 fatigue: dict | None = None) -> list:
     """只挑已有規則訊號的停掉、加碼、換素材；沒有訊號就不硬湊。"""
     cards = []
     for status, action in (
@@ -129,6 +153,18 @@ def select_cards(product_readings: list, budget: dict, historical_cells: list) -
             "target": tired_cell.get("creative_angle") or "未命名切角",
             "reason": _tired_reason(tired_cell),
             "impact": "先換一批素材再測，不直接放大目前的低效花費",
+            "product_id": None,
+            "performance_reading_id": None,
+        })
+
+    # 疲勞燈紅（頻率過冷受眾危險門檻）也要有卡跟進；跟上面歷史切角那張同一個目標就只留一張。
+    if fatigue is not None and not any(
+            card["action"] == "換素材" and card["target"] == fatigue["target"] for card in cards):
+        cards.append({
+            "action": "換素材",
+            "target": fatigue["target"],
+            "reason": _fatigue_reason(fatigue["frequency"]),
+            "impact": "同一批人已經看到膩，換一批素材才拉得回成效",
             "product_id": None,
             "performance_reading_id": None,
         })
@@ -161,7 +197,8 @@ def generate(conn, brand_id: str, cycle_id: str, *, enqueue_ready: bool = True) 
     budget = nextcycle.propose_budget(conn, brand_id, cycle_id)
     historical_cells = nextcycle.historical_cell_performance(
         conn, brand_id, exclude_cycle_id=cycle_id)
-    cards = select_cards(loaded["products"], budget, historical_cells)
+    cards = select_cards(loaded["products"], budget, historical_cells,
+                         fatigue_asset(conn, brand_id, cycle_id))
     handled = {
         (card.get("action"), card.get("target"))
         for card in existing if card["status"] in ("ACCEPTED", "APPLIED", "REJECTED")

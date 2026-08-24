@@ -70,3 +70,30 @@ def worst_asset_reason(asset_breakdown: list, breakeven=None) -> Optional[str]:
     if cpa is not None:
         sentence += f"，平均花 {cpa:,.0f} 元才換到一筆成交"
     return sentence
+
+
+def max_frequency_by_asset(conn, brand_id: str, cycle_id: str) -> Optional[dict]:
+    """本期頻率最高的那支廣告：`{"target", "frequency"}`，一筆頻率都沒有就回 None。
+
+    JOIN 與 `asset_totals()` 同一條（只走「廣告名稱對得回交接包」的資料列）。健康燈的
+    疲勞盞用整期最大頻率（app/ads/performance.py max_frequency），那個數字答得出「有多糟」
+    卻答不出「是哪一支」——這裡逐支取 MAX 才點得到名。
+
+    target 優先用切角名稱、對不到切角才退回廣告名稱：歷史切角來的換素材卡也用切角當目標，
+    同一個目標才比得出來、才不會同時出兩張（`weekly_proposals.select_cards()`）。
+
+    ponytail：對不回交接包的資料列（例如純手動匯入的檔期層數字）不在這個清單裡，
+    燈紅但這裡回 None 是可能的——那種情況不硬猜是哪一支（鐵則 16）。
+    """
+    row = conn.execute(
+        "SELECT COALESCE(cell.creative_angle, pkg.ad_name) target,"
+        " MAX(ps.frequency) frequency"
+        " FROM performance_snapshot ps"
+        " JOIN external_ad_mapping xam ON xam.id = ps.external_ad_mapping_id"
+        " JOIN publishing_package pkg ON pkg.id = xam.publishing_package_id"
+        " LEFT JOIN experiment_cell cell ON cell.id = pkg.experiment_cell_id"
+        " WHERE ps.brand_id = ? AND ps.campaign_cycle_id = ? AND ps.quarantined = 0"
+        " AND ps.frequency IS NOT NULL"
+        " GROUP BY pkg.id ORDER BY frequency DESC LIMIT 1", (brand_id, cycle_id),
+    ).fetchone()
+    return {"target": row["target"], "frequency": row["frequency"]} if row else None
