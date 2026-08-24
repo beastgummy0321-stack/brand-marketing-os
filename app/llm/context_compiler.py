@@ -36,6 +36,85 @@ from app.core import rule_cards
 
 _UNVALIDATED_STATUSES = ("proposed", "testing")
 
+# 未驗證猜想進 prompt 的期數上限（票 F2，B0-29／B0-36 重現：一條從沒被判讀結案的
+# proposed 假設會逐字重複出現在每一期的計畫／素材 prompt 裡）。手法鏡子
+# `app/ads/reading_hypotheses.py` 的 `LEDGER_REVALIDATION_WINDOW_CYCLES`——依
+# `source_cycle_id` 出現順序算「已經過幾期還沒結案」，超過視窗就不進 prompt。
+# 不能直接 import 該常數：`app.ads.plan` 已經 import 本檔（context_compiler），
+# 這裡若回頭 import `app.ads.*` 就會成環（集裝箱憲章第四節：依賴單向）。憲章第八節
+# 允許跨模組手法重複、只是不准抽共用，所以在本檔重新宣告，不共用。
+_HYPOTHESIS_POOL_WINDOW_CYCLES = 3
+
+
+def _hypothesis_cycle_order(all_hypotheses: list) -> tuple:
+    """只用 `strategy_hypothesis` 自己的欄位（`source_cycle_id`）重建期別出現順序，
+    不查 `app.ads` 的 `campaign_cycle` 表——那是別的模組，跨模組查表只能走公開函式，
+    這裡改用本模組看得到的資料自己算，不回頭 import（同上，憲章第四節）。
+    回傳 (source_cycle_id -> 出現順位 的 dict, 最新順位)；沒有任何期別資料時最新順位為 -1。
+    """
+    order = []
+    seen = set()
+    for h in sorted(all_hypotheses, key=lambda h: h["created_at"]):
+        cid = h["source_cycle_id"]
+        if cid and cid not in seen:
+            seen.add(cid)
+            order.append(cid)
+    return {cid: i for i, cid in enumerate(order)}, len(order) - 1
+
+
+def _bound_hypotheses(all_hypotheses: list, unvalidated: list) -> tuple:
+    """未驗證猜想上限（見上方常數說明）：`source_cycle_id` 是 None 的（訪談來源、還沒掛過
+    任何期別）視為最舊、一律受視窗約束。回傳 (included, excluded)——excluded 不悄悄丟棄，
+    帶理由供 `list_excluded_hypotheses()` 顯示（比照 `list_overflow_rules()` 的規則超額手法）。
+    """
+    cycle_index, latest_index = _hypothesis_cycle_order(all_hypotheses)
+    included, excluded = [], []
+    for h in unvalidated:
+        cid = h["source_cycle_id"]
+        origin_index = cycle_index.get(cid, -1) if cid else -1
+        cycles_behind = latest_index - origin_index
+        if cycles_behind >= _HYPOTHESIS_POOL_WINDOW_CYCLES:
+            reason = (f"提出後已過 {cycles_behind} 期未結案" if cid
+                     else "從未掛進任何檔期的判讀佇列")
+            excluded.append({"id": h["id"], "statement": h["statement"], "reason": reason})
+        else:
+            included.append(h)
+    return included, excluded
+
+
+def _hypotheses_for_scope(conn: sqlite3.Connection, brand_id: str,
+                          product_id: Optional[str]) -> tuple:
+    """依 compile() 既有的品牌層／產品層範圍規則篩出未驗證猜想池，回傳
+    (全部猜想, 範圍內未驗證猜想)——全部猜想用來算 `_hypothesis_cycle_order()` 的期別順序，
+    範圍內未驗證猜想才是真正要進 prompt 候選的池子。compile() 與
+    `list_excluded_hypotheses()` 共用這個函式，範圍規則只寫一份（同一顆 `compile()` 閘門，
+    不是兩份平行邏輯——票 F2 契約：素材路徑 `app/ads/creative.py` 也是呼叫 compile()，
+    這裡改了兩邊自動一起生效）。
+    """
+    all_hypotheses = repo.list_strategy_hypotheses(conn, brand_id)
+    if product_id is not None:
+        unvalidated = [
+            h for h in all_hypotheses
+            if h["status"] in _UNVALIDATED_STATUSES
+            and (h["product_id"] is None or h["product_id"] == product_id)
+        ]
+    else:
+        unvalidated = [
+            h for h in all_hypotheses
+            if h["status"] in _UNVALIDATED_STATUSES and h["product_id"] is None
+        ]
+    return all_hypotheses, unvalidated
+
+
+def list_excluded_hypotheses(conn: sqlite3.Connection, brand_id: str,
+                             product_id: Optional[str] = None) -> list:
+    """因超過未驗證猜想上限而不進 prompt 的清單（比照 `list_overflow_rules()`，決策 0012
+    第三節：超額不悄悄丟棄）。"""
+    all_hypotheses, unvalidated = _hypotheses_for_scope(conn, brand_id, product_id)
+    _included, excluded = _bound_hypotheses(all_hypotheses, unvalidated)
+    return excluded
+
+
 # A4 目前唯一存在的分支代號（第 2 條分支上線前，所有呼叫端實質上都是廣告分支）。
 DEFAULT_TRACK = "ads"
 PERSONA_PROMPT_CAP = 4
@@ -172,17 +251,8 @@ def compile(conn: sqlite3.Connection, brand_id: str, product_id: Optional[str] =
 
     learnings = repo.list_learnings_for_prompt(
         conn, brand_id, track=track, product_id=product_id, include_cross_track=include_cross_track)
-    if product_id is not None:
-        hypotheses = [
-            h for h in repo.list_strategy_hypotheses(conn, brand_id)
-            if h["status"] in _UNVALIDATED_STATUSES
-            and (h["product_id"] is None or h["product_id"] == product_id)
-        ]
-    else:
-        hypotheses = [
-            h for h in repo.list_strategy_hypotheses(conn, brand_id)
-            if h["status"] in _UNVALIDATED_STATUSES and h["product_id"] is None
-        ]
+    all_hypotheses, unvalidated_hypotheses = _hypotheses_for_scope(conn, brand_id, product_id)
+    hypotheses, _excluded_hypotheses = _bound_hypotheses(all_hypotheses, unvalidated_hypotheses)
 
     knowledge_item_ids = (
         [r["id"] for r in rules]

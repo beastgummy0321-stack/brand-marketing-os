@@ -64,6 +64,29 @@ _GOOD_OPTIONS = {
 }
 
 
+def _options_citing(winner_angle: str) -> dict:
+    """跟 `_GOOD_OPTIONS` 一樣的最小合法形狀，但第一個切角的 message 具名提到
+    `winner_angle`——票 F2 契約 (b)：有具名贏家時至少一個切角要引用它，這裡是「有引用」
+    的合格回覆，給本來就該通過驗證的測試情境用（不是驗證本身要測的東西）。"""
+    return {
+        "options": [
+            {
+                "is_recommended": True,
+                "summary": "延續上期贏家切角，主力放大。",
+                "audience": {"cold": {"description": "對這個品類已經有興趣的陌生受眾。"}},
+                "angles": [{"title": "延續切角", "message": f"延續上期打贏的「{winner_angle}」方向",
+                           "why": "已驗證"}],
+            },
+            {
+                "is_recommended": False,
+                "summary": "備案方案，測另一個角度。",
+                "audience": {"cold": {"description": "同一批陌生受眾，換個訊息角度。"}},
+                "angles": [{"title": "備案切角", "message": "另一種說法", "why": "分散風險"}],
+            },
+        ]
+    }
+
+
 def _fake(text: str) -> ProviderResponse:
     return ProviderResponse(output_text=text, structured=None,
                             usage=Usage(input_tokens=200, output_tokens=100),
@@ -238,7 +261,8 @@ class PromptIncludesCarryForwardDataTest(_BaseCarryForwardTest):
         bi_repo.update_hypothesis_status(main.conn, self.bid, rejected["id"],
                                          status="rejected", actor=ACTOR)
 
-        ok, err = self._generate(self.carry_forward_cycle_id)
+        ok, err = self._generate(self.carry_forward_cycle_id,
+                                 reply=json.dumps(_options_citing("實證成分"), ensure_ascii=False))
         self.assertTrue(ok, err)
         sent = ads_plan.PROVIDER.calls[0]["messages"][0]["content"]
         self.assertIn("實證成分", sent)
@@ -292,7 +316,8 @@ class UnvalidatedHypothesisNeverBecomesPlanGroundingTest(_BaseCarryForwardTest):
         self.assertEqual(resolved["status"], "inconclusive")  # guard 擋下，不是「成立」
         self.assertEqual(ads_repo.list_learning_ledger(main.conn, self.bid), [])  # 沒入帳
 
-        ok, err = self._generate(self.carry_forward_cycle_id)
+        ok, err = self._generate(self.carry_forward_cycle_id,
+                                 reply=json.dumps(_options_citing("情感痛點開場"), ensure_ascii=False))
         self.assertTrue(ok, err)
         sent = ads_plan.PROVIDER.calls[0]["messages"][0]["content"]
         self.assertNotIn("情感痛點開場優於功能宣稱開場", sent)
@@ -316,7 +341,8 @@ class CarryForwardModeGateTest(_BaseCarryForwardTest):
                                          status="rejected", actor=ACTOR)
 
     def test_carry_forward_gets_the_block_fresh_direction_does_not(self):
-        ok, err = self._generate(self.carry_forward_cycle_id)
+        ok, err = self._generate(self.carry_forward_cycle_id,
+                                 reply=json.dumps(_options_citing("實證成分"), ensure_ascii=False))
         self.assertTrue(ok, err)
         carry_forward_prompt = ads_plan.PROVIDER.calls[0]["messages"][0]["content"]
 
@@ -367,10 +393,55 @@ class CarryForwardTextareaEditKeepsThePrefixTest(_BaseCarryForwardTest):
         edited_background = pinned + "\n使用者自己多補的一句話"  # IntakeStep.tsx 修法後的送出形狀
         cycle_id = self._open_cycle(background=edited_background)
 
-        ok, err = self._generate(cycle_id)
+        ok, err = self._generate(cycle_id,
+                                 reply=json.dumps(_options_citing("實證成分"), ensure_ascii=False))
         self.assertTrue(ok, err)
         sent = ads_plan.PROVIDER.calls[0]["messages"][0]["content"]
         self.assertIn("實證成分：ROAS 4.31", sent)
+
+
+class WinnerCitationGuardTest(_BaseCarryForwardTest):
+    """票 F2 契約 (b)：具名贏家沒被任何切角引用、或已避開的方向原封不動又冒出來，都要讓
+    生成可見地失敗（回 False + 錯誤訊息），不能形狀合法就悄悄存進 campaign_plan_option。"""
+
+    def setUp(self):
+        super().setUp()
+        self._seed_cell(self.prior_cycle_id, creative_angle="實證成分對比", product_id=self.product,
+                        spend=21000, conversions=60, revenue=21000 * 4.31)
+        rejected = bi_repo.create_strategy_hypothesis(
+            main.conn, self.bid, actor=ACTOR, hypothesis_type="message",
+            statement="純促銷折扣", created_by=ACTOR,
+            product_id=self.product, source_cycle_id=self.prior_cycle_id)
+        bi_repo.update_hypothesis_status(main.conn, self.bid, rejected["id"],
+                                         status="rejected", actor=ACTOR)
+
+    def test_options_ignoring_named_winner_are_rejected_not_stored(self):
+        """預設 `_GOOD_OPTIONS` 的切角完全沒提到「實證成分對比」——模型當贏家不存在。"""
+        ok, err = self._generate(self.carry_forward_cycle_id)
+        self.assertFalse(ok)
+        self.assertIn("實證成分對比", err)
+        self.assertEqual(
+            ads_plan.get_pending_options(main.conn, self.bid, self.carry_forward_cycle_id), [])
+
+    def test_avoid_direction_reused_verbatim_is_rejected(self):
+        """有引用贏家，但另一個切角把已避開的方向原封不動端回來。"""
+        reply = _options_citing("實證成分對比")
+        reply["options"][1]["angles"][0]["title"] = "純促銷折扣"
+        reply["options"][1]["angles"][0]["message"] = "純促銷折扣"
+        ok, err = self._generate(self.carry_forward_cycle_id,
+                                 reply=json.dumps(reply, ensure_ascii=False))
+        self.assertFalse(ok)
+        self.assertIn("純促銷折扣", err)
+        self.assertEqual(
+            ads_plan.get_pending_options(main.conn, self.bid, self.carry_forward_cycle_id), [])
+
+    def test_options_citing_winner_and_avoiding_avoided_direction_are_accepted(self):
+        """正面對照：真的沿用贏家、沒有重提避開方向，一樣照常通過並存進去。"""
+        ok, err = self._generate(self.carry_forward_cycle_id,
+                                 reply=json.dumps(_options_citing("實證成分對比"), ensure_ascii=False))
+        self.assertTrue(ok, err)
+        self.assertEqual(
+            len(ads_plan.get_pending_options(main.conn, self.bid, self.carry_forward_cycle_id)), 2)
 
 
 if __name__ == "__main__":

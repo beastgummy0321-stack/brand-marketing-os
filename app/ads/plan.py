@@ -34,6 +34,7 @@ from app.ads import account_structure
 from app.ads import carry_forward
 from app.ads import handoff as ads_handoff
 from app.ads import opening_suggestion
+from app.ads import plan_citation
 from app.ads import repository as ads_repo
 from app.brand_intelligence import repository as bi
 from app.core import settings as coresettings
@@ -551,6 +552,9 @@ def generate_options(conn, brand_id: str, cycle_id: str, actor: str, *,
     options = _normalize_options(parsed, angle_count, availability)
     if options is None:
         return False, PARSE_FAIL_MESSAGE
+    violations = plan_citation.citation_violations(options, prior_winners, avoid_directions)
+    if violations:
+        return False, plan_citation.citation_error_message(violations)
     dissents = _normalize_dissents((parsed or {}).get("dissents"))
 
     _persist_options(conn, brand_id, cycle_id, options, task["id"],

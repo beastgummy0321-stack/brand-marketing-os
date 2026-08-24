@@ -717,6 +717,68 @@ class ContextCompilerLearningLoopTest(unittest.TestCase):
         self.assertNotIn("產品專屬猜想不該出現在品牌層", text)
 
 
+class ContextCompilerHypothesisPoolBoundTest(unittest.TestCase):
+    """票 F2（B0-29／B0-36 重現）：一條從沒被判讀結案的 proposed 假設不得逐字重複出現在
+    每一期的 prompt 裡。手法比照 `ContextCompilerPromptCapTest`：上限 + `list_excluded_*()`
+    未生效清單，不悄悄丟棄。"""
+
+    def setUp(self):
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self.conn = db.connect_and_migrate(Path(self._tmpdir.name) / "test.db")
+        self.brand = repo.create_brand(self.conn, name="品牌G（假設上限測試）", client_name=None, actor="小陳")
+        self.product = repo.create_product(self.conn, self.brand["id"], name="產品G-1", actor="小陳")
+
+    def tearDown(self):
+        self.conn.close()
+        self._tmpdir.cleanup()
+
+    def _seed_pool(self, product_id=None):
+        """4 個假設分屬 4 個不同期別（ccy_c0～ccy_c3，依 created_at 遞增出現），
+        第一個（ccy_c0）就是視窗上限外那個，其餘 3 個都在視窗內。"""
+        base = datetime.now(timezone.utc) - timedelta(minutes=1)
+        statements = ["不是咖啡不需停下來", "猜想1", "猜想2", "最新的猜想"]
+        hyps = []
+        for i, (cid, statement) in enumerate(zip(["ccy_c0", "ccy_c1", "ccy_c2", "ccy_c3"], statements)):
+            h = repo.create_strategy_hypothesis(
+                self.conn, self.brand["id"], actor="小陳", hypothesis_type="message",
+                statement=statement, created_by="小陳", product_id=product_id, source_cycle_id=cid,
+            )
+            created_at = (base + timedelta(seconds=i * 10)).isoformat()
+            self.conn.execute("UPDATE strategy_hypothesis SET created_at = ? WHERE id = ?",
+                              (created_at, h["id"]))
+            self.conn.commit()
+            hyps.append(h)
+        return hyps
+
+    def test_stale_hypothesis_dropped_at_brand_scope(self):
+        stale, *rest = self._seed_pool(product_id=None)
+
+        text, knowledge_item_ids, _bv, _pv = context_compiler.compile(self.conn, self.brand["id"])
+        excluded = context_compiler.list_excluded_hypotheses(self.conn, self.brand["id"])
+
+        self.assertNotIn("不是咖啡不需停下來", text)
+        self.assertNotIn(stale["id"], knowledge_item_ids)
+        for h in rest:
+            self.assertIn(h["statement"], text)
+        self.assertEqual([e["id"] for e in excluded], [stale["id"]])
+        self.assertIn("期", excluded[0]["reason"])
+
+    def test_stale_hypothesis_dropped_at_product_scope_too(self):
+        """契約明講：兩個分支都要套上限，不是只改品牌層那一支。"""
+        stale, *rest = self._seed_pool(product_id=self.product["id"])
+
+        text, knowledge_item_ids, _bv, _pv = context_compiler.compile(
+            self.conn, self.brand["id"], self.product["id"])
+        excluded = context_compiler.list_excluded_hypotheses(
+            self.conn, self.brand["id"], self.product["id"])
+
+        self.assertNotIn("不是咖啡不需停下來", text)
+        self.assertNotIn(stale["id"], knowledge_item_ids)
+        for h in rest:
+            self.assertIn(h["statement"], text)
+        self.assertEqual([e["id"] for e in excluded], [stale["id"]])
+
+
 class CostCeilingTest(unittest.TestCase):
     """票 M2：呼叫前保守天花板——沒有真實用量校準資料的呼叫端（廣告分支）用這個攔花費上限。"""
 
