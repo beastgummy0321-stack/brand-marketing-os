@@ -1586,22 +1586,24 @@ def list_learnings_for_prompt(conn: sqlite3.Connection, brand_id: str, *,
     return _rows(conn.execute(sql, params))
 
 
-# 夾註括號家族拓寬（票 F3-signoff-residue）：LLM 偶爾換用〔〕「」『』【】取代小括號寫
-# 舉例性夾註，原本只清一種家族會誤判成新結論；小括號沿用舊的全／半形混搭行為。
+# 夾註括號家族拓寬（票 F3-signoff-residue）：LLM 偶爾換用〔〕「」『』【】取代小括號寫舉例性夾註。
 _LEARNING_ASIDE_RE = re.compile(
     r"[（(][^）)]*[）)]|「[^」]*」|『[^』]*』|【[^】]*】|〔[^〕]*〕")
 # 拿掉夾註後常留下孤兒標點（黏在一起或句尾懸空）：連續 2 個以上收斂成 1 個、頭尾整段砍掉。
 _STRAY_PUNCT_RE = re.compile(r"[，,、；;：:。.]{2,}")
 _EDGE_PUNCT_RE = re.compile(r"^[，,、；;：:。.]+|[，,、；;：:。.]+$")
+_EDGE_PUNCT_WS_RE = re.compile(r"^[\s，,、；;：:。.]+|[\s，,、；;：:。.]+$")  # 判斷括號是否吃掉整句用
 
 
 def _normalize_learning_text(text: str) -> str:
     """去重比對前拿掉補充夾註（家族見 `_LEARNING_ASIDE_RE`）、收斂內部空白、清孤兒標點
     ——LLM 措辭常只差在舉例性夾註或排版空白，逐字全等會誤判成新學習（R2-learning-honesty
-    契約第 5 點：B0-23）。中文不靠空白斷詞，整句清空白不傷語意。ponytail：只清括號／
-    空白／孤兒標點，括號外字詞差異（可能是結論方向不同，如「…高」vs「…低」）仍當不同。
-    """
-    stripped = _LEARNING_ASIDE_RE.sub("", text)
+    契約第 5 點：B0-23）。中文不靠空白斷詞，整句清空白不傷語意；括號吃掉整句時只拆括號留內容
+    不清空，避免「…高」「…低」被一起清成空字串誤判重複，字詞差異仍當不同。"""
+    def _strip_or_unwrap(m: "re.Match[str]") -> str:
+        rest = _EDGE_PUNCT_WS_RE.sub("", text[:m.start()]) + _EDGE_PUNCT_WS_RE.sub("", text[m.end():])
+        return m.group(0)[1:-1] if not rest else ""
+    stripped = _LEARNING_ASIDE_RE.sub(_strip_or_unwrap, text)
     stripped = re.sub(r"\s+", "", stripped)
     stripped = _STRAY_PUNCT_RE.sub("，", stripped)
     return _EDGE_PUNCT_RE.sub("", stripped).strip()
@@ -1609,10 +1611,9 @@ def _normalize_learning_text(text: str) -> str:
 
 def learning_ledger_entry_exists(conn: sqlite3.Connection, brand_id: str,
                                   *, product_id: Optional[str], learning_text: str) -> bool:
-    """這個品牌、這個範圍（品牌整體或同一產品）下，同一句學習文字（拿掉括號夾註後比對，
-    見 `_normalize_learning_text`）是否已經進過帳（修憲落地 G4，決策 0035 第三節第 8 點：
-    `_ledger_confidence` 的「是否被獨立重測過」判斷用）。已知限制（票 F3，記錄不修）：
-    `product_id IS ?` 是精確比對，同一句話掛在不同 product_id 下不會互相偵測成重複。"""
+    """這個品牌、這個範圍（品牌整體或同一產品）下，同一句學習文字（拿掉括號夾註後比對，見
+    `_normalize_learning_text`）是否已經進過帳（修憲落地 G4，決策 0035 第三節第 8 點：
+    `_ledger_confidence` 判斷用）。已知限制（票 F3，記錄不修）：`product_id IS ?` 精確比對，同一句話掛在不同 product_id 下不會互相偵測成重複。"""
     normalized = _normalize_learning_text(learning_text)
     rows = conn.execute(
         "SELECT learning_text FROM learning_ledger WHERE brand_id = ? AND product_id IS ?",

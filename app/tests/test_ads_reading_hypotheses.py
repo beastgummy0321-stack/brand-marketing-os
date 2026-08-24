@@ -77,6 +77,20 @@ class LearningTextNormalizationTest(unittest.TestCase):
         lower = bi_repo._normalize_learning_text("情感訴求角度轉換率比功能訴求低（第二輪驗證）")
         self.assertNotEqual(higher, lower)
 
+    def test_bracket_wrapping_the_whole_sentence_is_unwrapped_not_stripped(self):
+        """R3（reject 覆核）：夾註家族拓寬到「」『』後，若整句結論剛好整段被同一組括號包住
+        （中文常見的整句加引號強調寫法，不是舉例性夾註），不能被當成夾註整段清空——否則
+        『…高』『…低』兩句都會被清成空字串，變成假重複。整段包住時只拆括號、留內容。"""
+        for opener, closer in (("「", "」"), ("『", "』"), ("(", ")"), ("（", "）")):
+            with self.subTest(bracket=opener + closer):
+                higher = bi_repo._normalize_learning_text(
+                    f"{opener}情感訴求角度轉換率比功能訴求高{closer}")
+                lower = bi_repo._normalize_learning_text(
+                    f"{opener}情感訴求角度轉換率比功能訴求低{closer}")
+                self.assertNotEqual(higher, lower)
+                self.assertEqual(higher, "情感訴求角度轉換率比功能訴求高")
+                self.assertEqual(lower, "情感訴求角度轉換率比功能訴求低")
+
 
 class LearningLedgerDedupeWidenedNormalizationTest(unittest.TestCase):
     """票 F3-signoff-residue：`learning_ledger_entry_exists()` 走真的查表路徑，正／反兩個
