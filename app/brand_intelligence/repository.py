@@ -21,6 +21,7 @@
 """
 
 import json
+import re
 import sqlite3
 from typing import Optional
 
@@ -1585,15 +1586,30 @@ def list_learnings_for_prompt(conn: sqlite3.Connection, brand_id: str, *,
     return _rows(conn.execute(sql, params))
 
 
+def _normalize_learning_text(text: str) -> str:
+    """去重比對前先拿掉全形／半形括號裡的補充夾註（例如「（實證成分／成分對比）」）再比
+    對——LLM 每期生成假設措辭有微幅出入，同一個結論常常只差在舉例性的夾註，逐字全等會
+    把「同義重複」誤判成兩條不同的學習（R2-learning-honesty 契約第 5 點：B0-23——
+    「拿證據說話的切角（實證成分／成分對比）比純促銷更能拉高轉換率」跟「拿證據說話的
+    切角比純促銷更能拉高轉換率」拿掉括號後逐字相同）。
+
+    ponytail：只清括號雜訊，其餘措辭差異（例如同義詞替換）仍當成不同結論，
+    要更準的比對再升級成語意相似度。
+    """
+    return re.sub(r"[（(][^）)]*[）)]", "", text).strip()
+
+
 def learning_ledger_entry_exists(conn: sqlite3.Connection, brand_id: str,
                                   *, product_id: Optional[str], learning_text: str) -> bool:
-    """這個品牌、這個範圍（品牌整體或同一產品）下，同一句學習文字是否已經進過帳
-    （修憲落地 G4，決策 0035 第三節第 8 點：`_ledger_confidence` 的「是否被獨立重測過」判斷用）。"""
-    return conn.execute(
-        "SELECT 1 FROM learning_ledger WHERE brand_id = ? AND product_id IS ?"
-        " AND learning_text = ? LIMIT 1",
-        (brand_id, product_id, learning_text),
-    ).fetchone() is not None
+    """這個品牌、這個範圍（品牌整體或同一產品）下，同一句學習文字（拿掉括號夾註後比對，
+    見 `_normalize_learning_text`）是否已經進過帳（修憲落地 G4，決策 0035 第三節第 8 點：
+    `_ledger_confidence` 的「是否被獨立重測過」判斷用）。"""
+    normalized = _normalize_learning_text(learning_text)
+    rows = conn.execute(
+        "SELECT learning_text FROM learning_ledger WHERE brand_id = ? AND product_id IS ?",
+        (brand_id, product_id),
+    ).fetchall()
+    return any(_normalize_learning_text(row["learning_text"]) == normalized for row in rows)
 
 
 def unlink_learning_ledger_reading(conn: sqlite3.Connection, reading_ids: list) -> None:

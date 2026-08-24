@@ -353,16 +353,23 @@ def compile_closing_review(conn, brand_id: str, cycle_id: str) -> dict:
     cycle_reading = loaded["cycle"]
     result = (cycle_reading["result"] if cycle_reading else None) or {}
     kpis = result.get("kpis") or ads_performance.compute_kpis(ads_performance.totals(conn, brand_id, cycle_id))
-    preselect_by_id = {r["id"]: r["preselect"] for r in ((cycle_reading or {}).get("hypothesis_reviews") or [])}
+    hyp_reviews_by_id = {r["id"]: r for r in ((cycle_reading or {}).get("hypothesis_reviews") or [])}
 
     hypotheses = [
         {"id": h["id"], "statement": h["statement"],
          "verdict": h["status"] if h["status"] in ("supported", "rejected", "inconclusive") else "inconclusive",
          "pending": h["status"] in ads_reading.PENDING_HYPOTHESIS_STATUSES,
          # 預選裁決是判讀當下算好存起來的（`reading.load()["cycle"]["hypothesis_reviews"]`），
-         # 這裡只取用、不重算（決策 0035：預選一律看不出來，只有程式算得出方向才預選成立）。
-         "preselected": (preselect_by_id.get(h["id"], "inconclusive")
-                        if h["status"] in ads_reading.PENDING_HYPOTHESIS_STATUSES else None)}
+         # 這裡只取用、不重算（決策 0035：預選一律看不出來，只有程式算得出方向才預選成立；
+         # R2-learning-honesty 契約第 1 點：沒對照資料時預選是 None，不補「看不出來」進去
+         # ——None 才是誠實的「空」，前端自己決定怎麼顯示空值）。
+         "preselected": (hyp_reviews_by_id[h["id"]]["preselect"]
+                        if h["status"] in ads_reading.PENDING_HYPOTHESIS_STATUSES
+                        and h["id"] in hyp_reviews_by_id else None),
+         # R2-learning-honesty 契約第 2 點：這期真的對照過的切角（切角名／樣本數／CPA／
+         # ROAS／花費），簽核畫面拿來並排出示證據，不是只有程式的結論。
+         "comparison_cells": (hyp_reviews_by_id[h["id"]]["comparison_cells"]
+                             if h["id"] in hyp_reviews_by_id else [])}
         for h in ads_repo.list_cycle_hypotheses(conn, brand_id, cycle_id)
     ]
     ledger_entries = [

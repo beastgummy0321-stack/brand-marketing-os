@@ -8,7 +8,7 @@
 `MIN_CONVERSIONS_FOR_DIRECTIONAL_CALL`——D3 決定「門檻常數留在 reading.py，跟 judge()
 放一起」，搬 `_ledger_confidence` 出來會逼著這個門檻常數也跟著搬，或是逼這裡回頭
 import reading.py（集裝箱憲章：拆出來的檔不准 import 回 reading.py）。兩條路都不
-乾淨，所以兩個函式留在 reading.py，靠 import 呼叫這裡的 `_conversions_for_hypothesis`。
+乾淨，所以兩個函式留在 reading.py，靠 import 呼叫這裡的 `comparison_cells()`。
 """
 
 from typing import Optional
@@ -20,6 +20,11 @@ from app.core import interrupts as core_interrupts
 
 # 假設結案（票 #53，決策 0030 第三節第 8 點）：判讀頁列出這期的策略假設，三選一結案。
 PENDING_HYPOTHESIS_STATUSES = ("proposed", "testing")
+
+# R2-learning-honesty：一條「A比B好」的假設要算「做過對照」，這期至少要有兩個切角
+# （experiment_cell）真的投放過、有成效資料回得來——只投 1 個切角就沒有 B 邊可比，
+# 不管整體判讀方向多明確都不算數（契約第 3 點）。
+MIN_COMPARISON_CELLS = 2
 
 # 學習條目掛滿幾期都沒被重新驗證，就該提醒複查——只提醒、不擋路、不自動下架（決策 0013）。
 LEDGER_REVALIDATION_WINDOW_CYCLES = 3
@@ -55,13 +60,93 @@ def _pending_hypothesis_reviews(conn, brand_id: str, cycle_id: str, cycle_row: d
     return [r for r in stored if current_status.get(r["id"]) in PENDING_HYPOTHESIS_STATUSES]
 
 
-def _conversions_for_hypothesis(conn, brand_id: str, cycle_id: str,
-                                product_id: Optional[str]) -> int:
-    """樣本數＝判讀當下該產品（或整期）的轉換數，程式帶入不猜（決策 0030 第 11 點）。"""
+def comparison_cells(conn, brand_id: str, cycle_id: str,
+                     product_id: Optional[str]) -> list:
+    """這期真的投放過、有成效資料回得來的切角（experiment_cell），供假設結案畫面並排
+    出示 A／B 兩邊的實際數字（切角名／樣本數／CPA／ROAS／花費——契約第 2 點），也用它的
+    筆數判斷這條假設這期是不是「真的做過對照」（契約第 3 點：少於
+    `MIN_COMPARISON_CELLS` 就不算，不管整體判讀方向多明確）。
+
+    只算走完 performance_snapshot → external_ad_mapping → publishing_package →
+    experiment_cell 這條鏈、真的對回成效資料的切角（比照 `reading_assets.asset_totals()`
+    的既有 JOIN 寫法，改成依 `experiment_cell_id` 分組）——矩陣頁上還沒生成主題、
+    沒真的投放過的「＋生成主題」空格不算數，不然又會把沒發生過的對照算成已驗證
+    （鐵則 16）。product_id 給 None 時比照 `_conversions_for_hypothesis` 舊有的整期
+    後備行為，不篩產品，算整個檔期的切角。
+    """
+    sql = ("SELECT pkg.experiment_cell_id cell_id, cell.creative_angle,"
+          " COALESCE(SUM(ps.spend),0) spend, COALESCE(SUM(ps.conversions),0) conversions,"
+          " COALESCE(SUM(ps.revenue),0) revenue"
+          " FROM performance_snapshot ps"
+          " JOIN external_ad_mapping xam ON xam.id = ps.external_ad_mapping_id"
+          " JOIN publishing_package pkg ON pkg.id = xam.publishing_package_id"
+          " JOIN experiment_cell cell ON cell.id = pkg.experiment_cell_id"
+          " WHERE ps.brand_id = ? AND ps.campaign_cycle_id = ? AND ps.quarantined = 0")
+    params = [brand_id, cycle_id]
     if product_id:
-        totals = _product_totals(conn, brand_id, cycle_id).get(product_id)
-        return int(totals["conversions"]) if totals else 0
-    return int(ads_performance.totals(conn, brand_id, cycle_id).get("conversions") or 0)
+        sql += " AND ps.product_id = ?"
+        params.append(product_id)
+    sql += " GROUP BY pkg.experiment_cell_id ORDER BY cell.creative_angle"
+    rows = conn.execute(sql, params).fetchall()
+    result = []
+    for row in rows:
+        data = dict(row)
+        data["kpis"] = ads_performance.compute_kpis(data)
+        result.append(data)
+    return result
+
+
+def has_real_comparison(conn, brand_id: str, cycle_id: str, product_id: Optional[str]) -> bool:
+    return len(comparison_cells(conn, brand_id, cycle_id, product_id)) >= MIN_COMPARISON_CELLS
+
+
+def guard_supported_verdict(conn, brand_id: str, cycle_id: str,
+                            product_id: Optional[str], verdict: str) -> tuple:
+    """回傳 `(實際要入帳的 verdict, sample_size)`（R2-learning-honesty 契約第 3／4 點）。
+
+    無對照資料的「成立」在這裡被程式端擋下、降級成「看不出來」——這是
+    `resolve_hypotheses()` 寫入 `learning_ledger` 前的唯一路口，不信任呼叫端（前端本來
+    就不會預選這個選項，但 API 才是真正的信任邊界，擋一次才算數）。sample_size 只算
+    這次真的拿來對照的那幾個切角自己的轉換數加總，不是這個產品／這期的全部轉換數
+    ——後者會把沒參與這次對照的流量也算進「樣本」，用統計語氣包裝一個沒對照過的數字。
+    """
+    cells = comparison_cells(conn, brand_id, cycle_id, product_id)
+    if verdict == "supported" and len(cells) < MIN_COMPARISON_CELLS:
+        verdict = "inconclusive"
+    return verdict, int(sum(c["conversions"] for c in cells))
+
+
+def build_hypothesis_items(conn, brand_id: str, cycle_id: str, pending_hypotheses: list,
+                           product_status: dict, product_reasons: dict, cycle_status: str,
+                           cycle_reasons: list, status_labels: dict, preselect_fn) -> list:
+    """判讀頁假設結案清單（票 #53）：每條待結案假設配一組預選裁決＋這期真的對照過的切角
+    （契約第 2 點的並排證據）。`status_labels`／`preselect_fn` 由呼叫端（reading.py）注入
+    ——`STATUS_LABELS`／`_preselect_hypothesis_status` 定義在別的檔案，這裡不 import 回去
+    （集裝箱憲章：拆出來的檔不准 import 回 reading.py）。
+
+    R2-learning-honesty 契約第 1／3 點：沒真的做過對照（這期切不到 ≥2 個有成效資料的
+    切角）就不准預選「成立」或「不成立」——不管整體判讀方向多明確，程式也算不出這條
+    「A比B好」的假設今天有沒有對照組可以驗證，預選只能是空（None）。
+    """
+    items = []
+    for h in pending_hypotheses:
+        cells = comparison_cells(conn, brand_id, cycle_id, h["product_id"])
+        if len(cells) >= MIN_COMPARISON_CELLS:
+            status = product_status.get(h["product_id"], cycle_status)
+            reasons = product_reasons.get(h["product_id"], cycle_reasons)
+            preselect = preselect_fn(status)
+            fallback_reason = f"這期判讀結論是「{status_labels[status]}」，依據：" + "；".join(reasons)
+        else:
+            preselect = None
+            fallback_reason = (f"這期只投了 {len(cells)} 個切角，沒有對照組，看不出這條假設"
+                               "成不成立" if cells else
+                               "這期沒有對得回切角的成效資料，看不出這條假設成不成立")
+        items.append({
+            "id": h["id"], "statement": h["statement"], "hypothesis_type": h["hypothesis_type"],
+            "preselect": preselect, "fallback_reason": fallback_reason,
+            "comparison_cells": cells,
+        })
+    return items
 
 
 def mark_stale_learnings_for_revalidation(conn, brand_id: str) -> int:

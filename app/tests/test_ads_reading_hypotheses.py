@@ -22,6 +22,7 @@ from app.ads import reading  # noqa: E402
 from app.ads import repository as ads_repo  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
 from app.core import interrupts as core_interrupts  # noqa: E402
+from app.core.db import new_id, now_iso  # noqa: E402
 from app.llm import context_compiler  # noqa: E402
 from app.llm.providers import FakeProvider, ProviderError, ProviderResponse, Usage  # noqa: E402
 from app.shared.web import OPERATOR  # noqa: E402
@@ -85,6 +86,55 @@ class _HypothesisReviewBase(unittest.TestCase):
     def _spend(self, **values):
         perf.import_manual(main.conn, self.bid, self.cycle_id, values, actor=ACTOR)
 
+    def _cell_with_ad(self, ad_name, *, cycle_id=None, creative_angle="pain"):
+        """R2-learning-honesty：一個真的投放過的切角（experiment_cell → publishing_package →
+        external_ad_mapping），比照 `test_ads_nextcycle.py::HistoricalCellPerformanceTest`
+        既有寫法——CSV 匯入靠廣告名稱對回這裡建好的交接包，才算「真的做過對照」。"""
+        cycle_id = cycle_id or self.cycle_id
+        cell_id, pkg_id, ts = new_id("exc"), new_id("pkg"), now_iso()
+        main.conn.execute(
+            "INSERT INTO experiment_cell (id, campaign_cycle_id, brand_id, creative_angle,"
+            " created_at) VALUES (?, ?, ?, ?, ?)", (cell_id, cycle_id, self.bid, creative_angle, ts))
+        main.conn.execute(
+            "INSERT INTO publishing_package (id, brand_id, campaign_cycle_id, experiment_cell_id,"
+            " campaign_name, adset_name, ad_name, destination_url, utm_json, status, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, '{}', 'ready', ?)",
+            (pkg_id, self.bid, cycle_id, cell_id, "測試活動", "測試組合", ad_name,
+             "https://example.test", ts))
+        main.conn.execute(
+            "INSERT INTO external_ad_mapping (id, brand_id, publishing_package_id,"
+            " campaign_cycle_id, platform, claim_status, confirmed_by, confirmed_at,"
+            " created_at) VALUES (?, ?, ?, ?, 'meta', 'confirmed', ?, ?, ?)",
+            (new_id("xam"), self.bid, pkg_id, cycle_id, ACTOR, ts, ts))
+        main.conn.commit()
+        return cell_id
+
+    def _ab_spend(self, *, spend, conversions, revenue, impressions=20000, clicks=400,
+                  cycle_id=None, ad_names=("角度A_ad", "角度B_ad")):
+        """兩個真的投放過的切角、成效加總等於給定的整期數字（切一半，餘數給第一支）——
+        `judge()` 只看聚合總數，兩支怎麼分不影響整體判讀方向，但滿足了「這期真的做過
+        對照」的門檻（`MIN_COMPARISON_CELLS = 2`）。曝光／點擊預設值跟既有 `_spend()`
+        呼叫端一致（20000／400），避免曝光量不足被判成 `insufficient_data`。回傳這兩個
+        切角的 `experiment_cell.id`。"""
+        cycle_id = cycle_id or self.cycle_id
+        angles = ("情感痛點開場", "功能宣稱開場")
+        cells = [self._cell_with_ad(name, cycle_id=cycle_id, creative_angle=angle)
+                for name, angle in zip(ad_names, angles)]
+        def _half(total):
+            h = total // 2
+            return total - h, h
+        (spend_a, spend_b), (conv_a, conv_b) = _half(spend), _half(conversions)
+        (rev_a, rev_b), (imp_a, imp_b) = _half(revenue), _half(impressions)
+        (click_a, click_b) = _half(clicks)
+        csv_text = (
+            "行銷活動名稱,廣告名稱,曝光次數,連結點擊次數,花費金額,購買次數,購買轉換價值\n"
+            f"測試活動,{ad_names[0]},{imp_a},{click_a},{spend_a},{conv_a},{rev_a}\n"
+            f"測試活動,{ad_names[1]},{imp_b},{click_b},{spend_b},{conv_b},{rev_b}\n"
+        )
+        result = perf.import_csv(main.conn, self.bid, cycle_id, csv_text, actor=ACTOR)
+        assert result.matched_assets == 2, result.errors
+        return cells
+
 
 class HypothesisReviewTest(_HypothesisReviewBase):
     """票 #53：判讀頁假設結案（三選一，AI 預選）＋入帳 learning_ledger＋打斷佇列補網。"""
@@ -92,7 +142,7 @@ class HypothesisReviewTest(_HypothesisReviewBase):
     def test_ai_preselects_supported_when_scale_candidate(self):
         """判讀結論偏正向 → 三選一預選「成立」，AI 只負責寫理由，不決定選哪個（決策 0016）。"""
         hyp = self._link_hypothesis("通勤族比在家工作者更會下單")
-        self._spend(spend=10000, impressions=20000, clicks=400, conversions=10, revenue=40000)
+        self._ab_spend(spend=10000, conversions=10, revenue=40000)
         ok, err = reading.run(main.conn, self.bid, self.cycle_id, ACTOR)
         self.assertTrue(ok, err)
         reviews = reading.load(main.conn, self.bid, self.cycle_id)["cycle"]["hypothesis_reviews"]
@@ -100,10 +150,11 @@ class HypothesisReviewTest(_HypothesisReviewBase):
         self.assertEqual(reviews[0]["id"], hyp["id"])
         self.assertEqual(reviews[0]["preselect"], "supported")
         self.assertTrue(reviews[0]["ai_reason"])
+        self.assertEqual(len(reviews[0]["comparison_cells"]), 2, "契約第2點：要出示兩邊的並排證據")
 
     def test_ai_preselects_rejected_when_pause_candidate(self):
         self._link_hypothesis("這群受眾在意價格")
-        self._spend(spend=10000, impressions=20000, clicks=400, conversions=0, revenue=0)
+        self._ab_spend(spend=10000, conversions=0, revenue=0)
         reading.run(main.conn, self.bid, self.cycle_id, ACTOR)
         reviews = reading.load(main.conn, self.bid, self.cycle_id)["cycle"]["hypothesis_reviews"]
         self.assertEqual(reviews[0]["preselect"], "rejected")
@@ -114,7 +165,7 @@ class HypothesisReviewTest(_HypothesisReviewBase):
         self._link_hypothesis("通勤族比在家工作者更會下單")
         # 這個品牌的產品毛利率固定（售價1000／變動成本400 → 打平線約1.667），
         # ROAS=1.8 落在 [打平線, 打平線*1.3) → maintain。
-        self._spend(spend=10000, impressions=20000, clicks=400, conversions=10, revenue=18000)
+        self._ab_spend(spend=10000, conversions=10, revenue=18000)
         reading.run(main.conn, self.bid, self.cycle_id, ACTOR)
         reviews = reading.load(main.conn, self.bid, self.cycle_id)["cycle"]["hypothesis_reviews"]
         self.assertEqual(reviews[0]["preselect"], "inconclusive")
@@ -123,7 +174,7 @@ class HypothesisReviewTest(_HypothesisReviewBase):
         """AI 講不出話不擋清單顯示——理由退回程式產生的版本，選項本身不受影響。"""
         self._link_hypothesis("通勤族比在家工作者更會下單")
         reading.PROVIDER = FakeProvider(exception=ProviderError("暫時無法回應"))
-        self._spend(spend=10000, impressions=20000, clicks=400, conversions=10, revenue=40000)
+        self._ab_spend(spend=10000, conversions=10, revenue=40000)
         reading.run(main.conn, self.bid, self.cycle_id, ACTOR)
         review = reading.load(main.conn, self.bid, self.cycle_id)["cycle"]["hypothesis_reviews"][0]
         self.assertIn("這期判讀結論是", review["ai_reason"])
@@ -131,7 +182,7 @@ class HypothesisReviewTest(_HypothesisReviewBase):
     def test_zero_operation_submit_uses_ai_preselect(self):
         """使用者零操作也能過：直接照 AI 預選送出，status 隨之更新。"""
         hyp = self._link_hypothesis("通勤族比在家工作者更會下單")
-        self._spend(spend=10000, impressions=20000, clicks=400, conversions=10, revenue=40000)
+        self._ab_spend(spend=10000, conversions=10, revenue=40000)
         reading.run(main.conn, self.bid, self.cycle_id, ACTOR)
         preselect = reading.load(main.conn, self.bid,
                                  self.cycle_id)["cycle"]["hypothesis_reviews"][0]["preselect"]
@@ -143,7 +194,7 @@ class HypothesisReviewTest(_HypothesisReviewBase):
 
     def test_supported_confirmation_writes_learning_ledger(self):
         hyp = self._link_hypothesis("通勤族比在家工作者更會下單")
-        self._spend(spend=10000, impressions=20000, clicks=400, conversions=10, revenue=40000)
+        self._ab_spend(spend=10000, conversions=10, revenue=40000)
         reading.run(main.conn, self.bid, self.cycle_id, ACTOR)
         reading.resolve_hypotheses(
             main.conn, self.bid, self.cycle_id, {hyp["id"]: "supported"}, actor=OPERATOR)
@@ -164,7 +215,7 @@ class HypothesisReviewTest(_HypothesisReviewBase):
         學習可不可信）——這裡的品牌沒有接 GA4／Meta 對帳，成色標籤會是「Meta 視角判讀」，
         跟 confidence 欄位的值必須不同。"""
         hyp = self._link_hypothesis("通勤族比在家工作者更會下單")
-        self._spend(spend=10000, impressions=20000, clicks=400, conversions=10, revenue=40000)
+        self._ab_spend(spend=10000, conversions=10, revenue=40000)
         reading.run(main.conn, self.bid, self.cycle_id, ACTOR)
         reading.resolve_hypotheses(
             main.conn, self.bid, self.cycle_id, {hyp["id"]: "supported"}, actor=OPERATOR)
@@ -177,7 +228,7 @@ class HypothesisReviewTest(_HypothesisReviewBase):
         """使用者手動把還在學習期的假設硬結案「成立」，系統不擋（決策 0013）；
         樣本只有 5 筆、不是重測，confidence 該誠實標「初步」。"""
         hyp = self._link_hypothesis("通勤族比在家工作者更會下單")
-        self._spend(spend=10000, impressions=20000, clicks=400, conversions=5, revenue=9000)
+        self._ab_spend(spend=10000, conversions=5, revenue=9000)
         reading.run(main.conn, self.bid, self.cycle_id, ACTOR)
         reading.resolve_hypotheses(
             main.conn, self.bid, self.cycle_id, {hyp["id"]: "supported"}, actor=OPERATOR)
@@ -190,7 +241,7 @@ class HypothesisReviewTest(_HypothesisReviewBase):
         判讀的巧合，是獨立重測，第二次入帳的 confidence 要標「已加強」。"""
         statement = "通勤族比在家工作者更會下單"
         hyp1 = self._link_hypothesis(statement)
-        self._spend(spend=10000, impressions=20000, clicks=400, conversions=10, revenue=40000)
+        self._ab_spend(spend=10000, conversions=10, revenue=40000)
         reading.run(main.conn, self.bid, self.cycle_id, ACTOR)
         reading.resolve_hypotheses(
             main.conn, self.bid, self.cycle_id, {hyp1["id"]: "supported"}, actor=OPERATOR)
@@ -206,9 +257,8 @@ class HypothesisReviewTest(_HypothesisReviewBase):
             " strategy_hypothesis_id, brand_id, role) VALUES (?, ?, ?, 'audience')",
             (cycle2_id, hyp2["id"], self.bid))
         main.conn.commit()
-        perf.import_manual(main.conn, self.bid, cycle2_id,
-                           {"spend": 10000, "impressions": 20000, "clicks": 400,
-                            "conversions": 10, "revenue": 40000}, actor=ACTOR)
+        self._ab_spend(spend=10000, conversions=10, revenue=40000, cycle_id=cycle2_id,
+                       ad_names=("cycle2_角度A_ad", "cycle2_角度B_ad"))
         reading.run(main.conn, self.bid, cycle2_id, ACTOR)
         reading.resolve_hypotheses(
             main.conn, self.bid, cycle2_id, {hyp2["id"]: "supported"}, actor=OPERATOR)
@@ -218,6 +268,40 @@ class HypothesisReviewTest(_HypothesisReviewBase):
         self.assertEqual(len(rows), 2)
         self.assertEqual(rows[0]["confidence"], "moderate")
         self.assertEqual(rows[1]["confidence"], "reinforced")
+
+    def test_near_duplicate_learning_text_with_bracket_aside_still_gets_reinforced(self):
+        """R2-learning-honesty 契約第 5 點（重現 B0-23）：LLM 每期生成的假設措辭有微幅
+        出入，第二句多了一段舉例性括號夾註，逐字比對會誤判成「不同結論」、錯標「這是
+        第一次看到這個結論」——拿掉括號後其實是同一句話，第二次入帳該標「已加強」。"""
+        hyp1 = self._link_hypothesis("拿證據說話的切角（實證成分／成分對比）比純促銷更能拉高轉換率")
+        self._ab_spend(spend=10000, conversions=10, revenue=40000)
+        reading.run(main.conn, self.bid, self.cycle_id, ACTOR)
+        reading.resolve_hypotheses(
+            main.conn, self.bid, self.cycle_id, {hyp1["id"]: "supported"}, actor=OPERATOR)
+
+        cycle2_id = ads_repo.create_cycle(
+            main.conn, self.bid, product_ids=[self.product], pain_value=10000,
+            objective="sales", actor=ACTOR)["id"]
+        hyp2 = bi_repo.create_strategy_hypothesis(
+            main.conn, self.bid, hypothesis_type="audience",
+            statement="拿證據說話的切角比純促銷更能拉高轉換率",
+            created_by=ACTOR, actor=ACTOR, product_id=None, source_cycle_id=cycle2_id)
+        main.conn.execute(
+            "INSERT OR IGNORE INTO campaign_cycle_hypothesis (campaign_cycle_id,"
+            " strategy_hypothesis_id, brand_id, role) VALUES (?, ?, ?, 'audience')",
+            (cycle2_id, hyp2["id"], self.bid))
+        main.conn.commit()
+        self._ab_spend(spend=10000, conversions=10, revenue=40000, cycle_id=cycle2_id,
+                       ad_names=("cycle2_角度A_ad", "cycle2_角度B_ad"))
+        reading.run(main.conn, self.bid, cycle2_id, ACTOR)
+        reading.resolve_hypotheses(
+            main.conn, self.bid, cycle2_id, {hyp2["id"]: "supported"}, actor=OPERATOR)
+
+        rows = [dict(r) for r in main.conn.execute(
+            "SELECT * FROM learning_ledger WHERE brand_id = ? ORDER BY created_at", (self.bid,))]
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows[1]["confidence"], "reinforced",
+                         "拿掉括號夾註後跟第一條逐字相同，不該被當成「第一次看到」")
 
     def _later_cycle(self):
         """比照 DualBaselineTest 直接用 repository 開一期，只用來造「後面又開過幾期」的
@@ -232,7 +316,7 @@ class HypothesisReviewTest(_HypothesisReviewBase):
         沒有任何一行寫入過。「第 N 期再驗一次」＝這個品牌又開過幾期（依建立順序），
         超過門檻期數還沒被下架，就標記需要複查——只提醒，不擋路、不自動下架。"""
         hyp = self._link_hypothesis("通勤族比在家工作者更會下單")
-        self._spend(spend=10000, impressions=20000, clicks=400, conversions=10, revenue=40000)
+        self._ab_spend(spend=10000, conversions=10, revenue=40000)
         reading.run(main.conn, self.bid, self.cycle_id, ACTOR)
         reading.resolve_hypotheses(
             main.conn, self.bid, self.cycle_id, {hyp["id"]: "supported"}, actor=OPERATOR)
@@ -255,7 +339,7 @@ class HypothesisReviewTest(_HypothesisReviewBase):
     def test_revalidation_check_is_wired_into_next_cycle_build(self):
         """驗證真的掛進判讀後的下期準備流程（nextcycle.build()），不是孤兒函式沒人呼叫。"""
         hyp = self._link_hypothesis("通勤族比在家工作者更會下單")
-        self._spend(spend=10000, impressions=20000, clicks=400, conversions=10, revenue=40000)
+        self._ab_spend(spend=10000, conversions=10, revenue=40000)
         reading.run(main.conn, self.bid, self.cycle_id, ACTOR)
         reading.resolve_hypotheses(
             main.conn, self.bid, self.cycle_id, {hyp["id"]: "supported"}, actor=OPERATOR)
@@ -273,7 +357,7 @@ class HypothesisReviewTest(_HypothesisReviewBase):
         """端到端實測（GitHub issue #54 驗收條件）：建虛構品牌 → 開期產假設 → 判讀 → 結案入帳
         → 下一期生成的 prompt（context_compiler.compile）內確實出現該學習。"""
         hyp = self._link_hypothesis("通勤族比在家工作者更會下單")
-        self._spend(spend=10000, impressions=20000, clicks=400, conversions=10, revenue=40000)
+        self._ab_spend(spend=10000, conversions=10, revenue=40000)
         reading.run(main.conn, self.bid, self.cycle_id, ACTOR)
         reading.resolve_hypotheses(
             main.conn, self.bid, self.cycle_id, {hyp["id"]: "supported"}, actor=OPERATOR)
@@ -338,6 +422,86 @@ class HypothesisReviewTest(_HypothesisReviewBase):
         self.assertEqual(updated, 0)
 
 
+class HypothesisComparisonHonestyTest(_HypothesisReviewBase):
+    """R2-learning-honesty：契約第 1／2／3／4 點——沒真的做過 A/B 對照時，預選不能是
+    「成立」，簽核畫面要出示對照的切角證據，入帳前程式端要再擋一次、樣本數只算真的
+    對照過的切角。對照票面的 C3 契約例：整期只投 1 個切角，覆盤③不列預設「成立」。"""
+
+    def test_single_angle_cycle_preselects_none_even_when_scale_candidate(self):
+        """契約例：C3 型檔期（整期只投 1 個切角）結算，覆盤③不再列「成立」預選——即使
+        整體判讀結論是加碼方向（scale_candidate）。`_spend()` 是純手動彙總輸入，
+        不對回任何切角，等同「0 個切角」，比契約例的「1 個切角」更嚴格，一樣不能預選。"""
+        self._link_hypothesis("情感痛點開場優於功能宣稱開場")
+        self._spend(spend=10000, impressions=20000, clicks=400, conversions=10, revenue=40000)
+        reading.run(main.conn, self.bid, self.cycle_id, ACTOR)
+        reviews = reading.load(main.conn, self.bid, self.cycle_id)["cycle"]["hypothesis_reviews"]
+        self.assertIsNone(reviews[0]["preselect"])
+        self.assertEqual(reviews[0]["comparison_cells"], [])
+        self.assertIn("沒有對得回切角的成效資料", reviews[0]["ai_reason"])
+
+    def test_single_real_cell_still_not_enough_to_preselect(self):
+        """1 個切角有真的成效資料（比 0 個更像真實情境）——仍然不到 `MIN_COMPARISON_CELLS`
+        （2），一樣不能預選，證明門檻是「筆數」而不是「有沒有任何資料」。"""
+        self._link_hypothesis("情感痛點開場優於功能宣稱開場")
+        self._cell_with_ad("角度A_ad")
+        perf.import_csv(
+            main.conn, self.bid, self.cycle_id,
+            "行銷活動名稱,廣告名稱,花費金額,購買次數,購買轉換價值\n測試活動,角度A_ad,10000,10,40000\n",
+            actor=ACTOR)
+        reading.run(main.conn, self.bid, self.cycle_id, ACTOR)
+        reviews = reading.load(main.conn, self.bid, self.cycle_id)["cycle"]["hypothesis_reviews"]
+        self.assertIsNone(reviews[0]["preselect"])
+        self.assertEqual(len(reviews[0]["comparison_cells"]), 1)
+        self.assertIn("只投了 1 個切角", reviews[0]["ai_reason"])
+
+    def test_two_angle_cycle_shows_side_by_side_evidence(self):
+        """契約第 2 點：真的做過對照時，簽核畫面拿得到兩邊各自的切角名／樣本數／花費／
+        CPA／ROAS，不是只有程式的結論一句話。"""
+        self._link_hypothesis("情感痛點開場優於功能宣稱開場")
+        self._ab_spend(spend=10000, conversions=10, revenue=40000)
+        reading.run(main.conn, self.bid, self.cycle_id, ACTOR)
+        cells = reading.load(
+            main.conn, self.bid, self.cycle_id)["cycle"]["hypothesis_reviews"][0]["comparison_cells"]
+        self.assertEqual({c["creative_angle"] for c in cells}, {"情感痛點開場", "功能宣稱開場"})
+        self.assertEqual(sum(c["conversions"] for c in cells), 10)
+        self.assertEqual(sum(c["spend"] for c in cells), 10000)
+        for c in cells:
+            self.assertIn("cpa", c["kpis"])
+            self.assertIn("roas", c["kpis"])
+
+    def test_supported_verdict_without_real_comparison_is_downgraded_and_not_booked(self):
+        """Done-check 5（紅→綠）：無對照資料的「成立」不准入帳。這裡直接餵
+        `resolve_hypotheses(..., "supported")`——模擬繞過前端（前端本來就不會預選這個
+        選項）直接打 API 的情況，程式端在寫入口必須自己再擋一次，不能只靠前端不給選。"""
+        hyp = self._link_hypothesis("情感痛點開場優於功能宣稱開場")
+        self._spend(spend=10000, impressions=20000, clicks=400, conversions=10, revenue=40000)
+        reading.run(main.conn, self.bid, self.cycle_id, ACTOR)
+        updated = reading.resolve_hypotheses(
+            main.conn, self.bid, self.cycle_id, {hyp["id"]: "supported"}, actor=OPERATOR)
+        self.assertEqual(updated, 1)
+        rows = main.conn.execute(
+            "SELECT COUNT(*) c FROM learning_ledger WHERE brand_id = ?", (self.bid,)).fetchone()
+        self.assertEqual(rows["c"], 0, "沒對照資料的「成立」不准寫進 learning_ledger")
+        updated_hyp = bi_repo.get_strategy_hypothesis(main.conn, self.bid, hyp["id"])
+        self.assertEqual(updated_hyp["status"], "inconclusive", "程式端要把它降級，不是照單全收")
+
+    def test_two_angle_cycle_sample_size_is_the_compared_cells_total_not_the_whole_product(self):
+        """契約第 4 點：入帳的樣本數＝這次真的拿來對照的切角自己的轉換數加總，不是
+        「花費÷CPA」反推、也不是這個產品整期的全部轉換數——這裡額外灌一筆對不回任何
+        切角的手動彙總資料，讓「整期總轉換數」跟「對照切角轉換數加總」出現落差，
+        證明程式真的只算了後者。"""
+        hyp = self._link_hypothesis("情感痛點開場優於功能宣稱開場")
+        self._ab_spend(spend=10000, conversions=10, revenue=40000)
+        # 額外一筆對不回任何切角的手動彙總（例如線下核銷），不該被算進這條假設的樣本數。
+        self._spend(spend=5000, impressions=1000, clicks=50, conversions=90, revenue=9000)
+        reading.run(main.conn, self.bid, self.cycle_id, ACTOR)
+        reading.resolve_hypotheses(
+            main.conn, self.bid, self.cycle_id, {hyp["id"]: "supported"}, actor=OPERATOR)
+        row = main.conn.execute(
+            "SELECT sample_size FROM learning_ledger WHERE brand_id = ?", (self.bid,)).fetchone()
+        self.assertEqual(row["sample_size"], "10", "樣本數只能是兩個切角自己的 10 筆，不含額外灌的 90 筆")
+
+
 class HypothesisLedgerHaltTest(_HypothesisReviewBase):
     """修憲落地 G4（決策 0035 第三節第 6 點）：假設結案入帳原本是確認偏誤幫浦——AI 預選加
     一路下一步等於橡皮圖章，只有「成立」單向累積、產物貼「已驗證的學習」標籤永久寫進
@@ -346,7 +510,7 @@ class HypothesisLedgerHaltTest(_HypothesisReviewBase):
 
     def test_supported_confirmation_writes_ledger_even_though_the_flag_is_on(self):
         hyp = self._link_hypothesis("通勤族比在家工作者更會下單")
-        self._spend(spend=10000, impressions=20000, clicks=400, conversions=10, revenue=40000)
+        self._ab_spend(spend=10000, conversions=10, revenue=40000)
         reading.run(main.conn, self.bid, self.cycle_id, ACTOR)
         reading.resolve_hypotheses(
             main.conn, self.bid, self.cycle_id, {hyp["id"]: "supported"}, actor=OPERATOR)

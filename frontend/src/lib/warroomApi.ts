@@ -356,8 +356,19 @@ export interface ClosingReview {
       verdict: "supported" | "rejected" | "inconclusive";
       /** 還在待結案（proposed／testing）才 true，人還沒按過。 */
       pending: boolean;
-      /** 程式預選的裁決，已結案（`pending: false`）時為 null（票 L1-01）。 */
+      /** 程式預選的裁決；已結案（`pending: false`）或這期沒真的做過對照（R2-learning-
+       * honesty 契約第 1／3 點）時為 null——空值才誠實，不能補「看不出來」進去假裝有選過。 */
       preselected: "supported" | "rejected" | "inconclusive" | null;
+      /** 這期真的對照過的切角（R2-learning-honesty 契約第 2 點）：少於 2 筆代表這條假設
+       * 這期沒有 A／B 對照組可以驗證，簽核畫面不能只給結論不給數字。 */
+      comparison_cells: {
+        cell_id: string;
+        creative_angle: string | null;
+        spend: number;
+        conversions: number;
+        revenue: number;
+        kpis: { cpa: number | null; roas: number | null };
+      }[];
     }[];
     ledger_entries: { text: string; created_at: string }[];
   };

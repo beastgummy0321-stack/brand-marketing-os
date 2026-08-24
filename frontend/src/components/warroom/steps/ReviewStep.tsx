@@ -23,6 +23,9 @@ const VERDICT_OPTIONS: { value: keyof typeof VERDICT_LABELS; label: string }[] =
   { value: "rejected", label: "不成立" },
   { value: "inconclusive", label: "看不出來" },
 ];
+/** R2-learning-honesty 契約第 3 點：少於這個切角數＝這期沒有真的做過 A／B 對照，
+ * 跟後端 `app/ads/reading_hypotheses.py::MIN_COMPARISON_CELLS` 對齊。 */
+const MIN_COMPARISON_CELLS = 2;
 
 /** 覆盤（S8R.23-26 重設計，吸收舊 `S8.59-66`，僅 `cycle.status === 'CLOSED'` 後出現）：固定
  * 四段式，圖像化每一段（雙條圖／環形圖／學習兩張卡／前後對照長條），資料源完全沿用舊條文，
@@ -234,18 +237,53 @@ function LearningCard({
                 {h.pending ? (
                   <div>
                     <p>{h.statement}</p>
+                    {h.comparison_cells.length > 0 ? (
+                      <div className="mt-1 overflow-x-auto rounded border border-border/60">
+                        <table className="w-full text-xs">
+                          <thead>
+                            <tr className="text-muted-foreground">
+                              <th className="px-2 py-1 text-left font-normal">切角</th>
+                              <th className="px-2 py-1 text-right font-normal">樣本數</th>
+                              <th className="px-2 py-1 text-right font-normal">花費</th>
+                              <th className="px-2 py-1 text-right font-normal">CPA</th>
+                              <th className="px-2 py-1 text-right font-normal">ROAS</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {h.comparison_cells.map((c) => (
+                              <tr key={c.cell_id} className="border-t border-border/40 text-foreground">
+                                <td className="px-2 py-1">{c.creative_angle ?? "（未命名切角）"}</td>
+                                <td className="px-2 py-1 text-right">{c.conversions}</td>
+                                <td className="px-2 py-1 text-right">{formatCurrency(c.spend)}</td>
+                                <td className="px-2 py-1 text-right">{formatCurrency(c.kpis.cpa)}</td>
+                                <td className="px-2 py-1 text-right">{formatRoas(c.kpis.roas)}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    ) : null}
+                    {h.comparison_cells.length < MIN_COMPARISON_CELLS && (
+                      <p className="mt-1 text-xs text-warning">
+                        這期只投了 {h.comparison_cells.length} 個切角，沒有對照組，看不出這條假設成不成立，「成立」先不能選。
+                      </p>
+                    )}
                     <div className="mt-1 flex flex-wrap gap-3 text-xs text-muted-foreground">
-                      {VERDICT_OPTIONS.map((opt) => (
-                        <label key={opt.value} className="flex items-center gap-1">
-                          <input
-                            type="radio"
-                            name={`hyp-verdict-${h.id}`}
-                            checked={verdictFor(h) === opt.value}
-                            onChange={() => setOverrides((prev) => ({ ...prev, [h.id]: opt.value }))}
-                          />
-                          {opt.label}
-                        </label>
-                      ))}
+                      {VERDICT_OPTIONS.map((opt) => {
+                        const disabled = opt.value === "supported" && h.comparison_cells.length < MIN_COMPARISON_CELLS;
+                        return (
+                          <label key={opt.value} className={`flex items-center gap-1 ${disabled ? "opacity-40" : ""}`}>
+                            <input
+                              type="radio"
+                              name={`hyp-verdict-${h.id}`}
+                              checked={verdictFor(h) === opt.value}
+                              disabled={disabled}
+                              onChange={() => setOverrides((prev) => ({ ...prev, [h.id]: opt.value }))}
+                            />
+                            {opt.label}
+                          </label>
+                        );
+                      })}
                     </div>
                   </div>
                 ) : (

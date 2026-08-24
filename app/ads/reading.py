@@ -46,9 +46,8 @@ from app.ads.reading_baselines import (  # noqa: F401  (re-export, D2)
 )
 from app.ads.reading_hypotheses import (  # noqa: F401  (re-export, D2)
     LEDGER_REVALIDATION_WINDOW_CYCLES, PENDING_HYPOTHESIS_STATUSES,
-    _conversions_for_hypothesis, _flag_unresolved_hypotheses,
-    _pending_hypothesis_reviews, _product_totals,
-    mark_stale_learnings_for_revalidation,
+    _flag_unresolved_hypotheses, _pending_hypothesis_reviews, _product_totals,
+    build_hypothesis_items, guard_supported_verdict, mark_stale_learnings_for_revalidation,
 )
 # reading_verdict：判讀結論周邊沒有共同主題的小函式（見該檔開頭說明為什麼 LLM 文案那個
 # 縫沒有動——PROVIDER 猴子補丁只認 reading 模組本身，搬了會讓十幾個檔案外測試悄悄失真）。
@@ -418,21 +417,18 @@ def run(conn, brand_id: str, cycle_id: str, actor: str,
     product_reasons = {r["product_id"]: r["reasons"] for r in readings}
     pending_hypotheses = [h for h in ads_repo.list_cycle_hypotheses(conn, brand_id, cycle_id)
                           if h["status"] in PENDING_HYPOTHESIS_STATUSES]
-    hyp_items = []
-    for h in pending_hypotheses:
-        status = product_status.get(h["product_id"], cycle_verdict["status"])
-        reasons = product_reasons.get(h["product_id"], cycle_verdict["reasons"])
-        preselect = _preselect_hypothesis_status(status)
-        fallback_reason = f"這期判讀結論是「{STATUS_LABELS[status]}」，依據：" + "；".join(reasons)
-        hyp_items.append({
-            "id": h["id"], "statement": h["statement"],
-            "type_label": HYPOTHESIS_TYPE_LABELS.get(h["hypothesis_type"], h["hypothesis_type"]),
-            "preselect": preselect, "fallback_reason": fallback_reason,
-        })
-    llm_reasons = _explain_hypotheses(conn, brand_id, cycle, hyp_items)
+    hyp_items = build_hypothesis_items(
+        conn, brand_id, cycle_id, pending_hypotheses, product_status, product_reasons,
+        cycle_verdict["status"], cycle_verdict["reasons"], STATUS_LABELS,
+        _preselect_hypothesis_status)
+    # 沒對照資料的項目理由已經是固定白話句，不必燒 AI 額度重講一次（懶人優先）。
+    llm_reasons = _explain_hypotheses(
+        conn, brand_id, cycle, [it for it in hyp_items if it["preselect"] is not None])
     cycle_verdict["hypothesis_reviews"] = [
-        {"id": it["id"], "statement": it["statement"], "type_label": it["type_label"],
-         "preselect": it["preselect"], "ai_reason": llm_reasons.get(it["id"]) or it["fallback_reason"]}
+        {"id": it["id"], "statement": it["statement"],
+         "type_label": HYPOTHESIS_TYPE_LABELS.get(it["hypothesis_type"], it["hypothesis_type"]),
+         "preselect": it["preselect"], "ai_reason": llm_reasons.get(it["id"]) or it["fallback_reason"],
+         "comparison_cells": it["comparison_cells"]}
         for it in hyp_items
     ]
 
@@ -738,6 +734,9 @@ def resolve_hypotheses(conn, brand_id: str, cycle_id: str, verdicts: dict, *, ac
         hyp = pending.get(hyp_id)
         if hyp is None or verdict not in HYPOTHESIS_STATUS_LABELS:
             continue
+        # R2-learning-honesty 契約第 3／4 點：見 guard_supported_verdict 開頭說明。
+        verdict, sample_size = guard_supported_verdict(
+            conn, brand_id, cycle_id, hyp["product_id"], verdict)
         bi.update_hypothesis_status(conn, brand_id, hyp_id, status=verdict, actor=actor)
         updated += 1
         if verdict != "supported":
@@ -746,7 +745,6 @@ def resolve_hypotheses(conn, brand_id: str, cycle_id: str, verdicts: dict, *, ac
         # 加一路下一步等於橡皮圖章。統計缺陷修好後重新開回來：預選一律改看不出來、只有
         # 程式算得出方向才預選成立、maintain 移出正面訊號、3–10 筆轉換不准喊加碼停損
         # （見 judge()），入帳的產物因此不再是橡皮圖章。
-        sample_size = _conversions_for_hypothesis(conn, brand_id, cycle_id, hyp["product_id"])
         ads_repo.create_learning_ledger_entry(
             conn, brand_id, learning_text=hyp["statement"],
             applicability_scope="product" if hyp["product_id"] else "brand",
