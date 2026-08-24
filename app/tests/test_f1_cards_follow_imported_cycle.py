@@ -111,6 +111,9 @@ class F1CardsFollowImportedCycleTest(unittest.TestCase):
         resp = self.client.post(f"/api/campaigns/{self.bid}/{older_id}/performance/csv",
                                 files={"perf_file": ("perf.csv", csv_text, "text/csv")})
         self.assertEqual(resp.status_code, 200, resp.text)
+        # R2 審查抓到：action_url 以前指到 WarroomPage（S8 檔期建置畫面），那裡沒有
+        # 任何週提案卡 UI——真正顯示卡片的是品牌層駕駛艙，網址不帶檔期。
+        self.assertEqual(resp.json()["weekly_cards"]["action_url"], f"/app/brands/{self.bid}")
 
         # 前端唯一真的會呼叫的品牌層端點（票裡明白點名，六個顯示呼叫端之一）。
         proposals_resp = self.client.get(f"/api/campaigns/brands/{self.bid}/weekly/proposals")
@@ -202,6 +205,73 @@ class F1CardsFollowImportedCycleTest(unittest.TestCase):
         self.assertEqual(cards, [])  # 真的沒有卡
         self.assertNotIn("建議卡", body["rerun_message"])  # 訊息不能承諾不存在的卡
         self.assertEqual(body["weekly_cards"]["generated"], 0)
+
+    # ---- done-check 1 R2：兩期都候著卡時，tie-break 不能退回「起始日最新」 ----
+    # 審查意見指出：舊 fix 在「有 GENERATED 卡的那期」裡還是照 list_cycles() 的
+    # start_date DESC 挑第一個——同品牌兩期都候著卡時，等於又退回「起始日最新」，
+    # 複製了票要修的症狀。改法：候選期之間比「候著的卡最後建出的時間」，新匯入的
+    # 那期卡片剛建出、時間戳最新，才會贏過先前就候著、沒人動過的那期。
+
+    def test_older_import_hidden_when_newer_cycle_already_has_a_pending_card(self):
+        newer_id, newer_campaign, newer_win, newer_losing_ad, _e = \
+            self._live_cycle_with_bleeding_ad("2026-07-01", "先新")
+        # 先讓「新」那期候著一張沒人理的舊卡。
+        csv_stale = self._bleeding_csv(newer_campaign, newer_win, newer_losing_ad)
+        resp_stale = self.client.post(
+            f"/api/campaigns/{self.bid}/{newer_id}/performance/csv",
+            files={"perf_file": ("perf.csv", csv_stale, "text/csv")})
+        self.assertEqual(resp_stale.status_code, 200, resp_stale.text)
+        stale_cards = weekly_proposals.list_cards(main.conn, self.bid, newer_id)
+        self.assertTrue(any(c["status"] == "GENERATED" for c in stale_cards))
+
+        older_id, older_campaign, older_win, older_losing_ad, _e2 = \
+            self._live_cycle_with_bleeding_ad("2026-06-01", "後舊")
+        self.assertNotEqual(older_id, newer_id)
+
+        # 再匯入舊期——這是票的原始症狀：使用者剛匯進去的資料要能看見。
+        csv_fresh = self._bleeding_csv(older_campaign, older_win, older_losing_ad)
+        resp = self.client.post(f"/api/campaigns/{self.bid}/{older_id}/performance/csv",
+                                files={"perf_file": ("perf.csv", csv_fresh, "text/csv")})
+        self.assertEqual(resp.status_code, 200, resp.text)
+
+        proposals_resp = self.client.get(f"/api/campaigns/brands/{self.bid}/weekly/proposals")
+        data = proposals_resp.json()["data"]
+        self.assertEqual(data["cycle_id"], older_id)  # 剛匯入的那期，不是先候著卡的那期
+        targets = [p["target"] for p in data["proposals"]]
+        self.assertIn(older_losing_ad, targets)
+
+    # ---- done-check 2 R2：approve 不能靠 current_cycle() 這個會變動的推斷重找卡 ----
+    # 審查意見指出：GET 顯示卡片時解析出的檔期，跟按核可當下 approve 端點自己重新
+    # 呼叫 current_cycle() 解析出的檔期，中間如果有別的匯入插進來，兩次解析可能對不
+    # 上——使用者對著畫面上明明看得到的卡按核可卻收到 400。改法：approve／skip
+    # 直接用 recommendation_id 查出它真正所在的檔期，不透過 current_cycle() 猜。
+
+    def test_approve_targets_different_cycle_than_the_get_that_displayed_it(self):
+        older_id, older_campaign, older_win, older_losing_ad, _e = \
+            self._live_cycle_with_bleeding_ad("2026-06-01", "核舊")
+        csv_older = self._bleeding_csv(older_campaign, older_win, older_losing_ad)
+        resp = self.client.post(f"/api/campaigns/{self.bid}/{older_id}/performance/csv",
+                                files={"perf_file": ("perf.csv", csv_older, "text/csv")})
+        self.assertEqual(resp.status_code, 200, resp.text)
+
+        proposals_resp = self.client.get(f"/api/campaigns/brands/{self.bid}/weekly/proposals")
+        data = proposals_resp.json()["data"]
+        self.assertEqual(data["cycle_id"], older_id)
+        card = next(p for p in data["proposals"] if p["target"] == older_losing_ad)
+        recommendation_id = card["id"]
+
+        # GET 之後、使用者按核可之前，另一期插進來搶了 current_cycle() 的解析結果。
+        newer_id, newer_campaign, newer_win, newer_losing_ad, _e2 = \
+            self._live_cycle_with_bleeding_ad("2026-08-01", "核新")
+        csv_newer = self._bleeding_csv(newer_campaign, newer_win, newer_losing_ad)
+        resp2 = self.client.post(f"/api/campaigns/{self.bid}/{newer_id}/performance/csv",
+                                 files={"perf_file": ("perf.csv", csv_newer, "text/csv")})
+        self.assertEqual(resp2.status_code, 200, resp2.text)
+
+        approve_resp = self.client.post(
+            f"/api/campaigns/brands/{self.bid}/weekly/proposals/{recommendation_id}/approve",
+            json={})
+        self.assertEqual(approve_resp.status_code, 200, approve_resp.text)
 
 
 if __name__ == "__main__":

@@ -111,23 +111,27 @@ async def weekly_action_proposals_get(brand_id: str):
 async def weekly_action_proposal_approve(
         request: Request, brand_id: str, recommendation_id: str):
     main_mod.require_brand(brand_id)
-    cycle = _current_cycle(brand_id)
-    if cycle is None:
-        return _error(400, "目前沒有可判讀的檔期")
+    # 票 F1 R2：不透過 current_cycle() 猜檔期——那是給「畫面現在該顯示哪期」用的
+    # 推斷，會隨別期匯入資料而改變。使用者按的是畫面上看得到的這張卡，直接用卡
+    # 本身的 campaign_cycle_id，GET 顯示的跟 POST 核可的絕對是同一期。
+    cycle_id = weekly_proposals.cycle_id_for_recommendation(
+        main_mod.conn, brand_id, recommendation_id)
+    if cycle_id is None:
+        return _error(400, "找不到這張週提案卡")
     actor = main_mod.require_actor(request)
     body = await _json_body(request)
     try:
         approved = weekly_proposals.approve_card(
             main_mod.conn,
             brand_id,
-            cycle["id"],
+            cycle_id,
             recommendation_id,
             actor=actor,
             confirmed_amount=body.get("confirmed_amount"),
         )
     except ValueError as exc:
         return _error(400, str(exc))
-    result = _brand_view(brand_id, cycle["id"])
+    result = _brand_view(brand_id, cycle_id)
     result["approved"] = approved
     return _envelope(result)
 
@@ -136,17 +140,18 @@ async def weekly_action_proposal_approve(
 async def weekly_action_proposal_skip(
         request: Request, brand_id: str, recommendation_id: str):
     main_mod.require_brand(brand_id)
-    cycle = _current_cycle(brand_id)
-    if cycle is None:
-        return _error(400, "目前沒有可判讀的檔期")
+    cycle_id = weekly_proposals.cycle_id_for_recommendation(
+        main_mod.conn, brand_id, recommendation_id)
+    if cycle_id is None:
+        return _error(400, "找不到這張週提案卡")
     actor = main_mod.require_actor(request)
     try:
         weekly_proposals.skip(
-            main_mod.conn, brand_id, cycle["id"], recommendation_id, actor=actor,
+            main_mod.conn, brand_id, cycle_id, recommendation_id, actor=actor,
         )
     except ValueError as exc:
         return _error(400, str(exc))
-    result = _brand_view(brand_id, cycle["id"])
+    result = _brand_view(brand_id, cycle_id)
     result["skipped_id"] = recommendation_id
     return _envelope(result)
 

@@ -74,26 +74,36 @@ def present(card: dict, brand_id: str) -> dict:
     }
 
 
-def _has_pending_cards(conn, brand_id: str, cycle_id: str) -> bool:
-    return conn.execute(
-        "SELECT 1 FROM recommendation WHERE brand_id = ? AND campaign_cycle_id = ?"
-        " AND recommendation_type = ? AND status = 'GENERATED' LIMIT 1",
+def _newest_pending_card_ts(conn, brand_id: str, cycle_id: str) -> "str | None":
+    row = conn.execute(
+        "SELECT MAX(created_at) AS ts FROM recommendation WHERE brand_id = ?"
+        " AND campaign_cycle_id = ? AND recommendation_type = ? AND status = 'GENERATED'",
         (brand_id, cycle_id, RECOMMENDATION_TYPE),
-    ).fetchone() is not None
+    ).fetchone()
+    return row["ts"] if row else None
 
 
 def current_cycle(conn, brand_id: str) -> dict | None:
     """駕駛艙週作戰用哪一期：優先挑還有 GENERATED（未核可）週提案卡候著使用者的那個
     投放中／等判讀檔期；同時有兩期在投放中時，光看「起始日最新」會讓使用者匯入資料的
-    那期被更新但空手的另一期蓋掉，卡片永遠看不到（票 F1）。都沒有候核可的卡才退回舊規則
-    （起始日最新那個）。這是唯一進入點——六個顯示呼叫端都經由這裡，不逐一加特例。"""
+    那期被更新但空手的另一期蓋掉，卡片永遠看不到（票 F1）。
+
+    R2 審查抓到：兩期「都」候著卡時，原本的寫法還是照 start_date DESC 挑第一個候選，
+    等於在這個子集合裡又退回「起始日最新」，複製了同一個症狀。改成比「候著的卡最後
+    建出的時間」（`recommendation.created_at`）——剛匯入資料建出的卡，時間戳一定比
+    先前就候著、沒人動過的舊卡新，這樣才真的認「剛匯入的那期」而不是「起始日」。
+    都沒有候核可的卡才退回舊規則（起始日最新那個）。這是唯一進入點——六個顯示
+    呼叫端都經由這裡，不逐一加特例。"""
     live_cycles = [c for c in ads_repo.list_cycles(conn, brand_id)
                   if c["status"] in ("LIVE", "EVALUATING")]
     if not live_cycles:
         return None
-    for cycle in live_cycles:
-        if _has_pending_cards(conn, brand_id, cycle["id"]):
-            return cycle
+    pending = [(cycle, _newest_pending_card_ts(conn, brand_id, cycle["id"]))
+              for cycle in live_cycles]
+    pending = [(cycle, ts) for cycle, ts in pending if ts is not None]
+    if pending:
+        pending.sort(key=lambda pair: pair[1], reverse=True)
+        return pending[0][0]
     return live_cycles[0]
 
 
@@ -339,7 +349,15 @@ def generate(conn, brand_id: str, cycle_id: str, *, enqueue_ready: bool = True) 
 def _rerun_result(conn, brand_id: str, cycle_id: str, rerun: str, base_message: str,
                   *, shift: "str | None" = None) -> dict:
     """票 F1 root cause 3：訊息不能先斬後奏——只有真的有 GENERATED 卡候著使用者核可，
-    才能說「有新的建議卡」，不然畫面上一張卡都沒有卻說有，使用者會覺得系統在說謊。"""
+    才能說「有新的建議卡」，不然畫面上一張卡都沒有卻說有，使用者會覺得系統在說謊。
+
+    R2 審查抓到：`action_url` 以前指到 `/app/brands/{bid}/campaigns/{cid}`
+    （WarroomRoute → WarroomPage，S8 檔期建置／管理畫面），那裡完全沒有週提案卡的
+    UI。真正顯示週提案卡的是品牌層駕駛艙 `/app/brands/{bid}`（CockpitPage →
+    WeeklyBattleSection，經 `current_cycle()` 自己解析要顯示哪一期，不需要 URL
+    帶檔期）——跟這支檔案裡 `weekly_proposal_ready` interrupt（見下方 `enqueue`
+    呼叫）、`routes_weekly_proposals_api.py` 的 `_queue_rejudge_notice` 用的是
+    同一個已經在用、也是唯一有卡片 UI 的網址，不另立一條。"""
     cards = generate(conn, brand_id, cycle_id)
     pending = sum(1 for card in cards if card["status"] == "GENERATED")
     message = f"{base_message}「本週作戰」有 {pending} 張新的建議卡。" if pending else base_message
@@ -348,7 +366,7 @@ def _rerun_result(conn, brand_id: str, cycle_id: str, rerun: str, base_message: 
         "rerun_message": message,
         "shift": shift,
         "weekly_cards": {"cycle_id": cycle_id, "generated": pending,
-                         "action_url": f"/app/brands/{brand_id}/campaigns/{cycle_id}"},
+                         "action_url": f"/app/brands/{brand_id}"},
     }
 
 
@@ -414,6 +432,18 @@ def _resolve_ready_interrupt_if_finished(conn, brand_id: str, cycle_id: str, act
             conn, brand_id=brand_id, category="weekly_proposal_ready", archive_stale=False):
         if interrupt["campaign_cycle_id"] == cycle_id:
             core_interrupts.resolve(conn, interrupt["id"], actor=actor)
+
+
+def cycle_id_for_recommendation(conn, brand_id: str, recommendation_id: str) -> "str | None":
+    """票 F1 R2：品牌層單卡核可／略過端點不能靠 `current_cycle()` 猜檔期——那是給
+    「畫面現在該顯示哪期」用的推斷，會隨別期匯入資料而改變。使用者按的是畫面上
+    看得到的這張卡，卡本身的 `campaign_cycle_id` 才是唯一該問的對象，直接查。"""
+    row = conn.execute(
+        "SELECT campaign_cycle_id FROM recommendation WHERE id = ? AND brand_id = ?"
+        " AND recommendation_type = ?",
+        (recommendation_id, brand_id, RECOMMENDATION_TYPE),
+    ).fetchone()
+    return row["campaign_cycle_id"] if row else None
 
 
 def approve_card(conn, brand_id: str, cycle_id: str, recommendation_id: str, *,
