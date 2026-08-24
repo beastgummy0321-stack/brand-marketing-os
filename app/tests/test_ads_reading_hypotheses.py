@@ -51,12 +51,27 @@ class LearningTextNormalizationTest(unittest.TestCase):
     """票 F3-signoff-residue：`_normalize_learning_text()` 拓寬括號家族／收斂內部空白／
     清孤兒標點——近似重複要能對上，但真的不同的結論不能被拓寬順手洗成同一句話。"""
 
-    def test_widened_bracket_families_normalize_the_same_as_the_bare_sentence(self):
+    def test_parenthetical_family_asides_strip_to_the_bare_sentence(self):
+        """票 F3 R5 orchestrator ruling：夾註刪空只適用括號家族（全形／半形小括號、龜殼括號）
+        ——這是原始 B0-23 案例，內容是舉例性補充，刪掉不影響結論。"""
         base = "情感訴求角度轉換率比功能訴求高"
-        for aside in ("（第二輪驗證）", "(second pass)", "〔第二輪驗證〕",
-                     "「第二輪驗證」", "『第二輪驗證』", "【第二輪驗證】"):
+        for aside in ("（第二輪驗證）", "(second pass)", "〔第二輪驗證〕"):
             with self.subTest(aside=aside):
                 self.assertEqual(bi_repo._normalize_learning_text(base + aside), base)
+
+    def test_quote_family_delimiters_canonicalize_but_never_empty_the_content(self):
+        """票 F3 R5（b2）：「」『』【】是中文的引號／標籤，框住的是結論本身不是補充夾註，
+        絕對不能被刪空——只統一分隔符寫法讓「換了引號但內容一樣」的兩句話對得上，同時
+        內容不同的兩句話仍然要能分得開（round 3/4 把三種引號都當夾註刪空、只驗證了對得上
+        那一半，這裡把「內容仍會參與比較」也一起驗證，才不會證明了錯的機制）。"""
+        base = "情感訴求角度轉換率比功能訴求高"
+        canonical = bi_repo._normalize_learning_text(f"{base}「第二輪驗證」")
+        self.assertIn("第二輪驗證", canonical)
+        for aside in ("『第二輪驗證』", "【第二輪驗證】"):
+            with self.subTest(aside=aside):
+                self.assertEqual(bi_repo._normalize_learning_text(base + aside), canonical)
+        different_note = bi_repo._normalize_learning_text(f"{base}『第三輪再測』")
+        self.assertNotEqual(different_note, canonical)
 
     def test_internal_whitespace_is_collapsed(self):
         base = "情感訴求角度轉換率比功能訴求高"
@@ -77,11 +92,11 @@ class LearningTextNormalizationTest(unittest.TestCase):
         lower = bi_repo._normalize_learning_text("情感訴求角度轉換率比功能訴求低（第二輪驗證）")
         self.assertNotEqual(higher, lower)
 
-    def test_bracket_wrapping_the_whole_sentence_is_unwrapped_not_stripped(self):
-        """R3（reject 覆核）：夾註家族拓寬到「」『』後，若整句結論剛好整段被同一組括號包住
-        （中文常見的整句加引號強調寫法，不是舉例性夾註），不能被當成夾註整段清空——否則
-        『…高』『…低』兩句都會被清成空字串，變成假重複。整段包住時只拆括號、留內容。"""
-        for opener, closer in (("「", "」"), ("『", "』"), ("(", ")"), ("（", "）")):
+    def test_parenthetical_wrapping_the_whole_sentence_is_unwrapped_not_stripped(self):
+        """R3（reject 覆核）：若整句結論剛好整段被同一組括號包住（中文常見的整句加括號
+        強調寫法，不是舉例性夾註），括號家族的「整段刪夾註」規則刪完會是空字串，退回
+        fallback：只拆括號、留內容（rule 4：非空輸入不准正規化成空字串）。"""
+        for opener, closer in (("(", ")"), ("（", "）"), ("〔", "〕")):
             with self.subTest(bracket=opener + closer):
                 higher = bi_repo._normalize_learning_text(
                     f"{opener}情感訴求角度轉換率比功能訴求高{closer}")
@@ -90,6 +105,20 @@ class LearningTextNormalizationTest(unittest.TestCase):
                 self.assertNotEqual(higher, lower)
                 self.assertEqual(higher, "情感訴求角度轉換率比功能訴求高")
                 self.assertEqual(lower, "情感訴求角度轉換率比功能訴求低")
+
+    def test_quote_wrapping_the_whole_sentence_keeps_canonical_delimiters(self):
+        """票 F3 R5 orchestrator ruling：「」『』是引號不是夾註，整句被引號包住時不套用
+        括號家族的「拆掉留內容」fallback——引號本來就不會被刪空，分隔符統一之後內容原封
+        不動留在結果裡（不會退化成跟括號家族一樣的裸句）。"""
+        for opener, closer in (("「", "」"), ("『", "』")):
+            with self.subTest(bracket=opener + closer):
+                higher = bi_repo._normalize_learning_text(
+                    f"{opener}情感訴求角度轉換率比功能訴求高{closer}")
+                lower = bi_repo._normalize_learning_text(
+                    f"{opener}情感訴求角度轉換率比功能訴求低{closer}")
+                self.assertNotEqual(higher, lower)
+                self.assertEqual(higher, "「情感訴求角度轉換率比功能訴求高」")
+                self.assertEqual(lower, "「情感訴求角度轉換率比功能訴求低」")
 
     def test_never_normalizes_a_non_empty_input_to_the_empty_string(self):
         """票 F3 R4（sign-off residue 覆核）：R3 的「整段包住才拆括號」判斷是拿『這個括號以
@@ -125,6 +154,64 @@ class LearningTextNormalizationTest(unittest.TestCase):
             for kb in keys[i + 1:]:
                 with self.subTest(pair=(ka, kb)):
                     self.assertNotEqual(normalized[ka], normalized[kb])
+
+    def test_b1_quote_wrapped_claim_followed_by_aside_does_not_collide(self):
+        """票 F3 R5 orchestrator ruling done-check b1（原字面案例）：引號框住的是結論本身，
+        句尾另外掛一個括號夾註，「高」「低」兩句正規化後不准變成同一個字串。"""
+        high = bi_repo._normalize_learning_text(
+            "本次學習：「情感訴求角度轉換率比功能訴求高」，樣本充足（第二輪驗證）")
+        low = bi_repo._normalize_learning_text(
+            "本次學習：「情感訴求角度轉換率比功能訴求低」，樣本充足（第二輪驗證）")
+        self.assertNotEqual(high, low)
+
+    def test_b2_corner_and_white_corner_quote_dedupe_on_delimiter_only(self):
+        """done-check b2（原字面案例）：同一句結論只是換了引號寫法（「」↔『』），要對得上。"""
+        corner = bi_repo._normalize_learning_text("拿證據說話的切角「實證成分」比純促銷高")
+        white = bi_repo._normalize_learning_text("拿證據說話的切角『實證成分』比純促銷高")
+        self.assertEqual(corner, white)
+
+    def test_b3_b0_23_aside_with_slash_still_strips(self):
+        """done-check b3：B0-23 原案不變——括號夾註（含頓號／斜線）刪掉後跟無夾註版本相同。"""
+        with_aside = bi_repo._normalize_learning_text(
+            "這個切角（實證成分／成分對比）比純促銷更能拉高轉換率")
+        bare = bi_repo._normalize_learning_text("這個切角比純促銷更能拉高轉換率")
+        self.assertEqual(with_aside, bare)
+
+    def test_b4_parenthetical_and_tortoise_shell_aside_family_swap_dedupes(self):
+        """done-check b4：小括號和龜殼括號同屬括號家族，只是換了寫法，要對得上。"""
+        paren = bi_repo._normalize_learning_text("這個切角（實證成分）比純促銷更能拉高轉換率")
+        tortoise = bi_repo._normalize_learning_text("這個切角〔實證成分〕比純促銷更能拉高轉換率")
+        self.assertEqual(paren, tortoise)
+
+    def test_b5_never_normalizes_a_non_empty_input_to_the_empty_string_property(self):
+        """done-check b5（property check）：不手選三個樣本，改成用括號家族 × 引號家族 ×
+        區段數量 × 排列方式組出一整批形狀（巢狀夾註、三段以上、家族交錯、括號裡只有標點、
+        整句都是標點），任何一個非空輸入正規化後都不准變成空字串。"""
+        aside_families = ["（", "）"], ["(", ")"], ["〔", "〕"]
+        quote_families = ["「", "」"], ["『", "』"], ["【", "】"]
+        core_texts = ["情感訴求角度轉換率比功能訴求高", "，、", "。！？", ""]
+        shapes = []
+        # 巢狀：括號裡包引號，引號裡包括號
+        for (ao, ac) in aside_families:
+            for (qo, qc) in quote_families:
+                shapes.append(f"{ao}{qo}實證成分{qc}{ac}")
+                shapes.append(f"{qo}{ao}實證成分{ac}{qc}")
+        # 三段以上、家族交錯排列
+        for core in core_texts:
+            for (ao, ac) in aside_families:
+                for (qo, qc) in quote_families:
+                    shapes.append(f"{core}{ao}第一段{ac}{qo}第二段{qc}{ao}第三段{ac}")
+                    shapes.append(f"{qo}第一段{qc}{ao}第二段{ac}{qo}第三段{qc}")
+        # 括號／引號裡只有標點、整句都是標點
+        for (ao, ac) in aside_families:
+            shapes.append(f"{ao}，。！{ac}")
+        for (qo, qc) in quote_families:
+            shapes.append(f"{qo}，。！{qc}")
+        shapes.append("，、；：。.")
+        shapes.append("（）〔〕「」『』【】")
+        for text in shapes:
+            with self.subTest(text=text):
+                self.assertNotEqual(bi_repo._normalize_learning_text(text), "")
 
 
 class LearningLedgerDedupeWidenedNormalizationTest(unittest.TestCase):
