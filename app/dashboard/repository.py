@@ -380,6 +380,15 @@ def cockpit(conn, brand_id: str, *, today: Optional[str] = None,
     last_sync_at = _last_sync_at(conn, brand_id)
     brand = bi_repo.get_brand(conn, brand_id)
     return {
+        "month": today[:7],
+        # 票 F5：月報卡片要老實講數字的期間跟口徑——營收／訂單數來自訂單紀錄（EasyStore
+        # 匯入的實收數字），花費是 Meta 成效快照回報的數字，ROAS 是兩者現算相除
+        # （不是同一個口徑，不能統一寫成「Meta 自報」，那對營收／訂單是假的）。
+        "basis_note": (
+            f"期間：{today[:4]} 年 {int(today[5:7])} 月（當月至今）｜"
+            "口徑：營收與訂單數為訂單紀錄實收，廣告花費為 Meta 成效快照回報數字，"
+            "ROAS 為兩者現算相除"
+        ),
         "kpis": {
             "revenue": {"value": revenue, "mom_pct": revenue_mom, "trend": trend["revenue"]},
             "spend": {"value": spend, "mom_pct": spend_mom, "trend": trend["spend"]},

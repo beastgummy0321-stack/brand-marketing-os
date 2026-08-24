@@ -86,6 +86,11 @@ export interface CampaignStage {
 export interface CockpitData {
   brand_id: string;
   brand_name: string;
+  /** 'YYYY-MM'：月報卡數字所屬的月份（票 F5）。 */
+  month: string;
+  /** 月報卡的期間／口徑說明，後端組好的成句（票 F5，例：「期間：2026 年 8 月
+   * （當月至今）｜口徑：…」）——前端原樣顯示，不自己組字避免口徑跟後端算法兜不攏。 */
+  basis_note: string;
   kpis: {
     revenue: CockpitKpi;
     spend: CockpitKpi;

@@ -132,6 +132,7 @@ export function CockpitPage({ brandId }: { brandId: string }) {
 
         <section className="flex flex-col gap-4" aria-labelledby="monthly-report-heading">
           <h2 id="monthly-report-heading" className="font-display text-lg text-foreground">月報</h2>
+          <p className="text-xs text-muted-foreground">{data.basis_note}</p>
           <div data-tour="kpis" className="grid grid-cols-4 gap-4">
             <KpiCard label="本月營收" kpi={data.kpis.revenue} format={formatCurrency} />
             <KpiCard label="廣告花費" kpi={data.kpis.spend} format={formatCurrency} />

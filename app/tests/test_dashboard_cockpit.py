@@ -215,6 +215,21 @@ class DashboardCockpitApiTest(unittest.TestCase):
         for kpi in data["kpis"].values():
             self.assertEqual(len(kpi["trend"]), len(data["chart"]["months"]))
 
+    # -- 票 F5：月報卡的期間／口徑 ---------------------------------------------
+
+    def test_month_matches_frozen_today(self):
+        data = self._get(self.brand_full["id"]).json()["data"]
+        self.assertEqual(data["month"], "2026-08")
+
+    def test_basis_note_states_period_and_true_data_source(self):
+        """basis_note 不能照抄「Meta 自報數字」蓋過營收／訂單——那兩項來自訂單紀錄，
+        只有花費是 Meta 成效快照回報（F5 票的核心：口徑一定要如實）。"""
+        note = self._get(self.brand_full["id"]).json()["data"]["basis_note"]
+        self.assertIn("2026", note)
+        self.assertIn("8", note)
+        self.assertIn("訂單", note)
+        self.assertIn("Meta", note)
+
     # -- 只讀 -----------------------------------------------------------------
 
     def test_cockpit_endpoint_does_not_write_any_row(self):
