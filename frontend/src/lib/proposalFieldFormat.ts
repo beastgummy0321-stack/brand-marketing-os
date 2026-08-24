@@ -13,6 +13,7 @@
 // `node proposalFieldFormat.selfcheck.mts` 直接執行（見同層檔案），Node 原生 ESM loader
 // 不像 Vite/tsc 的 bundler 解析模式會自動補副檔名。
 import { formatCurrency, formatPercent, formatSyncTime } from "./format.ts";
+import { TRACKING_CHANNEL_LABELS } from "./trackingChannelLabels.ts";
 
 /** 純內部識別碼：對使用者顯示「ccp_01…」「brd_01…」這種字串不會有任何意義，一律不顯示
  * （跟 B0-11「不把內部代號當人話說」同一個鐵則）。 */
@@ -47,6 +48,14 @@ const FIELD_LABELS: Record<string, string> = {
   url: "網址",
   needs_setup: "還要設定",
   note: "備註",
+  // 預算配置區塊（app/ads/proposal.py:77-83）。
+  budget: "總預算",
+  allocations: "各產品分配",
+  forecast: "成效預估",
+  // 追蹤健檢區塊（app/ads/tracking.py:587）。
+  channels: "通路清單",
+  ready: "已就緒",
+  total: "追蹤路數",
 };
 
 export function fieldLabel(key: string): string {
@@ -66,6 +75,9 @@ const VALUE_LABELS: Record<string, string> = {
   install: "去裝追蹤碼",
   fill: "去補資料",
   none: "不用處理",
+  // 追蹤健檢五路通路的 key 值（app/ads/tracking.py:539-546、552-…）；跟
+  // TrackingHealthPage.tsx 的 CHANNEL_CONFIG 共用同一份標籤，不重複打一次。
+  ...TRACKING_CHANNEL_LABELS,
 };
 
 const ISO_DATETIME_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/;

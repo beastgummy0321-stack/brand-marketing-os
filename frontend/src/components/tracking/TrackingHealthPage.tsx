@@ -5,6 +5,7 @@ import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { EmptyState } from "@/components/layout/EmptyState";
 import { Skeleton } from "@/components/layout/Skeleton";
 import { formatSyncTime } from "@/lib/format";
+import { TRACKING_CHANNEL_LABELS } from "@/lib/trackingChannelLabels";
 import { PRESS_FEEDBACK, cn } from "@/lib/utils";
 import {
   fetchTrackingHealth,
@@ -20,11 +21,11 @@ import {
  * `.scratch/grill/t0-health-prototype.html`，視覺沿用駕駛艙既有語彙（契約 1.9）。 */
 
 export const CHANNEL_CONFIG: Record<TrackingChannelKey, { icon: typeof Globe; label: string }> = {
-  website: { icon: Globe, label: "官方網站" },
-  fb_page: { icon: MessageCircle, label: "Facebook 粉專" },
-  ig_account: { icon: Camera, label: "Instagram" },
-  shopee: { icon: ShoppingCart, label: "蝦皮" },
-  pharmacy: { icon: Pill, label: "藥局現場" },
+  website: { icon: Globe, label: TRACKING_CHANNEL_LABELS.website },
+  fb_page: { icon: MessageCircle, label: TRACKING_CHANNEL_LABELS.fb_page },
+  ig_account: { icon: Camera, label: TRACKING_CHANNEL_LABELS.ig_account },
+  shopee: { icon: ShoppingCart, label: TRACKING_CHANNEL_LABELS.shopee },
+  pharmacy: { icon: Pill, label: TRACKING_CHANNEL_LABELS.pharmacy },
 };
 
 /** 短標籤只從狀態燈號通用推導（API 沒有另外給每路的短文案）；細節一律看 `channel.message`

@@ -39,4 +39,21 @@ assert.equal(formatScalarField("Beast Gummy", "product_name"), "Beast Gummy");
 // 原封不動印出來（確切時分依執行機器時區換算，這裡只驗證形狀，不假設特定時區）。
 assert.match(formatScalarField("2026-08-14T16:00:07.980258+00:00"), /^\d{2}\/\d{2} \d{2}:\d{2}$/);
 
+// F4：預算配置區塊（app/ads/proposal.py:77-83）與追蹤健檢區塊（app/ads/tracking.py:587）
+// 組出的鍵名，原本沒登記，會被 fieldLabel() 退回底線換空格漏出裸英文鍵名。
+assert.equal(fieldLabel("budget"), "總預算");
+assert.equal(fieldLabel("allocations"), "各產品分配");
+assert.equal(fieldLabel("forecast"), "成效預估");
+assert.equal(fieldLabel("channels"), "通路清單");
+assert.equal(fieldLabel("ready"), "已就緒");
+assert.equal(fieldLabel("total"), "追蹤路數");
+
+// F4：追蹤健檢五路通路的 key 值（app/ads/tracking.py:539-546、552-…）原樣漏出英文代號；
+// 正確中文標籤跟 TrackingHealthPage.tsx 的 CHANNEL_CONFIG 共用同一份 TRACKING_CHANNEL_LABELS。
+assert.equal(formatScalarField("website", "key"), "官方網站");
+assert.equal(formatScalarField("fb_page", "key"), "Facebook 粉專");
+assert.equal(formatScalarField("ig_account", "key"), "Instagram");
+assert.equal(formatScalarField("shopee", "key"), "蝦皮");
+assert.equal(formatScalarField("pharmacy", "key"), "藥局現場");
+
 console.log("proposalFieldFormat.selfcheck.mts: all assertions passed");
