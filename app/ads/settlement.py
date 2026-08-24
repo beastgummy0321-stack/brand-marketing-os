@@ -195,11 +195,72 @@ def diff_versions(conn, brand_id: str, cycle_id: str, version_a: int, version_b:
            for scope, key in keys if before.get((scope, key)) != after.get((scope, key))]
 
 
+# 票 R4-late-data-downstream：翻盤警示訊息組裝集中放這裡（不是 reading.py）——`reading.py`
+# 跟 `nextcycle.py` 都已經頂在 800 行上限邊緣（見 docs/tech-debt.md 第一節），這兩顆函式
+# 都只是讀 `diff_versions()`／`settlement_version` 現有資料，跟這個檔案本來的主題（版次
+# 差異）同一國，不必為了塞位置硬去拆已經滿版的檔案。
+REVERSAL_MESSAGE = "補件後判讀翻盤，這期結論整個變了，去看新結論。"
+
+# B0-35 加查核提醒版：收件匣卡片「一卡一句 ≤30 全形字」（DESIGN.md §20 規則 4，
+# `app/core/interrupts.py:71` MAX_MESSAGE_LEN）——晚到營收占比與百分比放不進同一句，
+# 完整說明改放在匯入訊息（`late_revenue_share_warning()` 回傳值，接進 `explanation`，
+# 沒有這個字數上限），這裡的卡片訊息只換一句同樣≤30字、但點名要查核的版本。
+REVERSAL_MESSAGE_WITH_LATE_REVENUE = "補件翻盤但晚到營收占比高，去看新結論並查核。"
+
+# B0-35：單筆晚到訂單佔了這期營收快一半，系統卻直接把它當真翻案。45% 是驗收 B0 演練踩到
+# 的真實案例；30% 取一個明顯低於那個案例、但高於零星幾筆訂單的正常補件波動（實務上一成
+# 上下）的量級——單一批次占比一旦過三分之一，才值得先停下來查是不是誤植或灌水，不是每次
+# 補件都要吵。
+LATE_REVENUE_SHARE_WARNING_THRESHOLD = 0.30
+
+
+def late_revenue_share_warning(diffs: list) -> Optional[str]:
+    """`diffs`＝`diff_versions()` 的回傳值。只看檔期層營收這一鍵，算這次補件新增的營收
+    占補件後總營收的比例；沒有營收變動、算不出來、或沒超過門檻都回 None（分級不吵，
+    決策 0025）。"""
+    revenue_diff = next(((b, a) for scope, key, b, a in diffs if scope == "cycle" and key == "revenue"), None)
+    if revenue_diff is None:
+        return None
+    try:
+        before, after = float(revenue_diff[0] or 0), float(revenue_diff[1] or 0)
+    except (TypeError, ValueError):
+        return None
+    if after <= 0 or after <= before:
+        return None
+    share = (after - before) / after
+    if share <= LATE_REVENUE_SHARE_WARNING_THRESHOLD:
+        return None
+    return f"這筆晚到營收占本期營收 {share:.0%}，建議先查核是真的晚到訂單還是誤植，再決定要不要翻案"
+
+
+def latest_version_delta(conn, brand_id: str, cycle_id: str) -> Optional[dict]:
+    """這期最近兩個判讀版次之間，營收／ROAS 差了多少（B0-25：下期預算建議悄悄改了金額卻
+    不說原因，要靠這個現算出「為什麼」）。只有一個版次或找不到快照就回 None——不硬編。"""
+    versions = [r["version"] for r in conn.execute(
+        "SELECT version FROM settlement_version WHERE brand_id = ? AND campaign_cycle_id = ?"
+        " ORDER BY version DESC LIMIT 2", (brand_id, cycle_id)).fetchall()]
+    if len(versions) < 2:
+        return None
+    after, before = load_snapshot(conn, brand_id, cycle_id, version=versions[0]), \
+                    load_snapshot(conn, brand_id, cycle_id, version=versions[1])
+    if not after or not before:
+        return None
+    prev_cycle, cur_cycle = (before["summary"].get("cycle") or {}), (after["summary"].get("cycle") or {})
+    return {
+        "prev_revenue": prev_cycle.get("revenue"), "cur_revenue": cur_cycle.get("revenue"),
+        "prev_roas": (prev_cycle.get("kpis") or {}).get("roas"),
+        "cur_roas": (cur_cycle.get("kpis") or {}).get("roas"),
+    }
+
+
 def demo() -> None:
-    """python -m app.ads.settlement — 純函數自檢：攤平邏輯。"""
+    """python -m app.ads.settlement — 純函數自檢：攤平邏輯＋晚到營收占比警語。"""
     flat = _flatten("cycle", {"spend": 100, "kpis": {"roas": 2.5}})
     assert ("cycle", "spend", 100) in flat
     assert ("cycle", "kpis.roas", 2.5) in flat
+    assert late_revenue_share_warning([("cycle", "revenue", 55, 100)]) is not None
+    assert late_revenue_share_warning([("cycle", "revenue", 90, 100)]) is None  # 10% 不吵
+    assert late_revenue_share_warning([("cycle", "spend", 1, 2)]) is None  # 沒有營收這一鍵
     print("settlement 自檢通過")
 
 

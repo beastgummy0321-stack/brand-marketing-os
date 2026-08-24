@@ -521,5 +521,44 @@ class HypothesisLedgerHaltTest(_HypothesisReviewBase):
         self.assertEqual(updated["status"], "supported")
 
 
+class HypothesisStaleNoteTest(_HypothesisReviewBase):
+    """票 R4-late-data-downstream（B0-34）：已簽核假設補件後判讀翻盤要提示「結論依據已變，
+    建議重看」，但簽核的 verdict 本身不能被自動改動。"""
+
+    def test_no_note_before_any_rerun_after_signing(self):
+        hyp = self._link_hypothesis("節慶檔期禮盒切角投報率比平常好")
+        self._spend(spend=10000, impressions=20000, clicks=400, conversions=10, revenue=8000)
+        reading.run(main.conn, self.bid, self.cycle_id, ACTOR)
+        reading.resolve_hypotheses(
+            main.conn, self.bid, self.cycle_id, {hyp["id"]: "rejected"}, actor=ACTOR)
+        resolved = bi_repo.get_strategy_hypothesis(main.conn, self.bid, hyp["id"])
+        self.assertIsNone(reading.stale_note(main.conn, self.bid, self.cycle_id, resolved))
+
+    def test_note_appears_after_late_data_rerun_actually_changes_numbers(self):
+        hyp = self._link_hypothesis("節慶檔期禮盒切角投報率比平常好")
+        self._spend(spend=10000, impressions=20000, clicks=400, conversions=10, revenue=8000)
+        reading.run(main.conn, self.bid, self.cycle_id, ACTOR)
+        reading.resolve_hypotheses(
+            main.conn, self.bid, self.cycle_id, {hyp["id"]: "rejected"}, actor=ACTOR)
+
+        # 補一筆晚到營收，逼判讀真的重跑且數字真的變（不是空氣重判）。
+        self._spend(spend=0, impressions=0, clicks=0, conversions=0, revenue=12000)
+        ok, err = reading.run(main.conn, self.bid, self.cycle_id, ACTOR)
+        self.assertTrue(ok, err)
+
+        resolved = bi_repo.get_strategy_hypothesis(main.conn, self.bid, hyp["id"])
+        self.assertEqual(resolved["status"], "rejected")  # 已簽核結論本身沒被自動改動
+        self.assertEqual(reading.stale_note(main.conn, self.bid, self.cycle_id, resolved),
+                         reading.STALE_HYPOTHESIS_NOTE)
+
+    def test_pending_hypothesis_never_gets_a_stale_note(self):
+        hyp = self._link_hypothesis("節慶檔期禮盒切角投報率比平常好")
+        self._spend(spend=10000, impressions=20000, clicks=400, conversions=10, revenue=8000)
+        reading.run(main.conn, self.bid, self.cycle_id, ACTOR)
+        still_pending = bi_repo.get_strategy_hypothesis(main.conn, self.bid, hyp["id"])
+        self.assertEqual(still_pending["status"], "proposed")
+        self.assertIsNone(reading.stale_note(main.conn, self.bid, self.cycle_id, still_pending))
+
+
 if __name__ == "__main__":
     unittest.main()

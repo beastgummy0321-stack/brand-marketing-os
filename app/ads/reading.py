@@ -45,9 +45,10 @@ from app.ads.reading_baselines import (  # noqa: F401  (re-export, D2)
     brand_baseline,
 )
 from app.ads.reading_hypotheses import (  # noqa: F401  (re-export, D2)
-    LEDGER_REVALIDATION_WINDOW_CYCLES, PENDING_HYPOTHESIS_STATUSES,
+    LEDGER_REVALIDATION_WINDOW_CYCLES, PENDING_HYPOTHESIS_STATUSES, STALE_HYPOTHESIS_NOTE,
     _flag_unresolved_hypotheses, _pending_hypothesis_reviews, _product_totals,
     build_hypothesis_items, guard_supported_verdict, mark_stale_learnings_for_revalidation,
+    stale_note,
 )
 # reading_verdict：判讀結論周邊沒有共同主題的小函式（見該檔開頭說明為什麼 LLM 文案那個
 # 縫沒有動——PROVIDER 猴子補丁只認 reading 模組本身，搬了會讓十幾個檔案外測試悄悄失真）。
@@ -563,9 +564,6 @@ def _explain_diff(conn, brand_id: str, cycle: dict, diffs: list, before_status: 
     return text if isinstance(text, str) and text.strip() else None
 
 
-REVERSAL_MESSAGE = "補件後判讀翻盤，這期結論整個變了，去看新結論。"
-
-
 def rerun_for_late_data(conn, brand_id: str, cycle_id: str, *, actor: str) -> Optional[dict]:
     """晚到的檔案（Meta CSV／訂單匯出）丟進拖檔口後，對受影響期別呼叫這個函式：
     若這期已經判讀過（有版次）且不在投放中，自動重判＋算差異摘要＋分級翻盤警示；
@@ -599,13 +597,18 @@ def rerun_for_late_data(conn, brand_id: str, cycle_id: str, *, actor: str) -> Op
             conn, brand_id, cycle_id, after_snapshot["settlement_version_id"], explanation)
 
     if shift == "reversal":
+        warning = ads_settlement.late_revenue_share_warning(diffs)  # B0-35：占比過高才提醒查核
         core_interrupts.enqueue(
             conn, category="reading_reversal",
             dedupe_key=f"reading_reversal:{after_snapshot['settlement_version_id']}",
-            message=REVERSAL_MESSAGE, brand_id=brand_id, campaign_cycle_id=cycle_id,
+            message=(ads_settlement.REVERSAL_MESSAGE_WITH_LATE_REVENUE
+                    if warning else ads_settlement.REVERSAL_MESSAGE),
+            brand_id=brand_id, campaign_cycle_id=cycle_id,
             action_url=f"/app/brands/{brand_id}/campaigns/{cycle_id}",
         )
         conn.commit()
+        if warning:
+            explanation = f"{explanation} {warning}" if explanation else warning
 
     return {
         "version": after_snapshot["settlement_version"], "diffs": diffs,

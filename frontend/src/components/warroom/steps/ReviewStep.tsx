@@ -287,9 +287,12 @@ function LearningCard({
                     </div>
                   </div>
                 ) : (
-                  <p>
-                    {h.statement}：{VERDICT_LABELS[h.verdict]}
-                  </p>
+                  <div>
+                    <p>
+                      {h.statement}：{VERDICT_LABELS[h.verdict]}
+                    </p>
+                    {h.stale_note && <p className="mt-1 text-xs text-warning">⚠ {h.stale_note}</p>}
+                  </div>
                 )}
               </li>
             ))}
@@ -353,6 +356,7 @@ function NextCycleCard({ brandId, review, cycle }: { brandId: string; review: Cl
       <div ref={ref} className="h-24 w-full" />
       <StatBig value={formatCurrency(r.proposed_budget)} label="下期建議預算" className="mt-2" />
       <p className="mt-1 text-sm text-foreground">{r.budget_advice}</p>
+      {r.delta_reason && <p className="mt-1 text-xs text-muted-foreground">{r.delta_reason}</p>}
       <p className="mt-1 text-xs text-muted-foreground">
         新增規則卡 {r.rule_cards_created} 張
         {r.echo_chamber && "・已提示避免回音室"}

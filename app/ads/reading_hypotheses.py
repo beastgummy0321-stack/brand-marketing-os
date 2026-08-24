@@ -15,11 +15,16 @@ from typing import Optional
 
 from app.ads import performance as ads_performance
 from app.ads import repository as ads_repo
+from app.ads import settlement as ads_settlement
 from app.brand_intelligence import repository as bi
 from app.core import interrupts as core_interrupts
 
 # 假設結案（票 #53，決策 0030 第三節第 8 點）：判讀頁列出這期的策略假設，三選一結案。
 PENDING_HYPOTHESIS_STATUSES = ("proposed", "testing")
+
+# R4-late-data-downstream 契約第 4 點（B0-34）：已簽核假設不能因為補件重判自動翻案，
+# 但要告訴使用者依據換了。
+STALE_HYPOTHESIS_NOTE = "結論依據已變，建議重看"
 
 # R2-learning-honesty：一條「A比B好」的假設要算「做過對照」，這期至少要有兩個切角
 # （experiment_cell）真的投放過、有成效資料回得來——只投 1 個切角就沒有 B 邊可比，
@@ -98,6 +103,33 @@ def comparison_cells(conn, brand_id: str, cycle_id: str,
 
 def has_real_comparison(conn, brand_id: str, cycle_id: str, product_id: Optional[str]) -> bool:
     return len(comparison_cells(conn, brand_id, cycle_id, product_id)) >= MIN_COMPARISON_CELLS
+
+
+def stale_note(conn, brand_id: str, cycle_id: str, hypothesis: dict) -> Optional[str]:
+    """已結案（非 pending）的假設，簽核之後這期是不是又真的重判過、數字真的變了——回傳
+    提示文字或 None（B0-34）。在讀取時算，不寫回 `strategy_hypothesis`：已簽核的
+    verdict／`learning_ledger` 不因為這個提示自動改動，這裡連寫都不寫（比照
+    `guard_supported_verdict` 只擋「入帳」那一步的精神，這裡連擋都不用擋，純粹是唯讀的
+    旁註）。拿 `updated_at`（簽核當下寫入的唯一時間戳）找簽核當下是第幾版判讀快照，
+    跟現在的版次比對數字內容——每次 `settlement.freeze()` 都會多一版，不比對內容的話
+    「重跑但沒改變」也會被錯誤標成「依據已變」。
+    """
+    if hypothesis["status"] in PENDING_HYPOTHESIS_STATUSES:
+        return None
+    current = ads_settlement.load_snapshot(conn, brand_id, cycle_id)
+    if current is None:
+        return None
+    asof_row = conn.execute(
+        "SELECT MAX(version) v FROM settlement_version WHERE brand_id = ? AND"
+        " campaign_cycle_id = ? AND created_at <= ?",
+        (brand_id, cycle_id, hypothesis["updated_at"]),
+    ).fetchone()
+    asof_version = asof_row["v"] if asof_row else None
+    if asof_version is None or asof_version >= current["settlement_version"]:
+        return None
+    diffs = ads_settlement.diff_versions(conn, brand_id, cycle_id, asof_version,
+                                         current["settlement_version"])
+    return STALE_HYPOTHESIS_NOTE if diffs else None
 
 
 def guard_supported_verdict(conn, brand_id: str, cycle_id: str,

@@ -206,6 +206,52 @@ class HypothesisResolveApiTest(unittest.TestCase):
         after = {h["id"]: h for h in review2["learning"]["hypotheses"]}[hyp["id"]]
         self.assertEqual(after["verdict"], "inconclusive")
 
+    def test_closing_review_hypothesis_gets_stale_note_after_late_data_flips_verdict_basis(self):
+        """票 R4-late-data-downstream（B0-34）端到端：GET closing-review 透出
+        `stale_note`——簽核後補件真的重判、數字真的變了才有值，簽核的 verdict 不因此改變。"""
+        hyp = self._link_hypothesis("通勤族比在家工作者更會下單")
+        self._spend(spend=10000, impressions=20000, clicks=400, conversions=10, revenue=40000)
+        ok, err = reading.finalize(main.conn, self.bid, self.cycle_id, ACTOR)
+        self.assertTrue(ok, err)
+        self.client.post(self._resolve_url(), json={"verdicts": {hyp["id"]: "rejected"}})
+
+        before = {h["id"]: h for h in self.client.get(
+            f"/api/campaigns/{self.bid}/{self.cycle_id}/closing-review"
+        ).json()["data"]["learning"]["hypotheses"]}[hyp["id"]]
+        self.assertIsNone(before["stale_note"])
+
+        self._spend(spend=0, impressions=0, clicks=0, conversions=0, revenue=12000)
+        outcome = reading.rerun_for_late_data(main.conn, self.bid, self.cycle_id, actor=ACTOR)
+        self.assertIsNotNone(outcome)
+
+        after = {h["id"]: h for h in self.client.get(
+            f"/api/campaigns/{self.bid}/{self.cycle_id}/closing-review"
+        ).json()["data"]["learning"]["hypotheses"]}[hyp["id"]]
+        self.assertEqual(after["stale_note"], "結論依據已變，建議重看")
+        self.assertEqual(after["verdict"], "rejected")  # 已簽核結論本身沒被自動改動
+
+    def test_closing_review_recommendation_gets_delta_reason_after_late_data_rerun(self):
+        """票 R4-late-data-downstream（B0-25）端到端：下期建議金額因補件而變時，
+        `recommendation.delta_reason` 要說哪裡變了；還沒補件過（只有一版）時是 None。"""
+        self._spend(spend=10000, impressions=20000, clicks=400, conversions=10, revenue=8000)
+        ok, err = reading.finalize(main.conn, self.bid, self.cycle_id, ACTOR)
+        self.assertTrue(ok, err)
+
+        review = self.client.get(
+            f"/api/campaigns/{self.bid}/{self.cycle_id}/closing-review").json()["data"]
+        self.assertIsNone(review["recommendation"]["delta_reason"])
+
+        self._spend(spend=0, impressions=0, clicks=0, conversions=0, revenue=12000)
+        outcome = reading.rerun_for_late_data(main.conn, self.bid, self.cycle_id, actor=ACTOR)
+        self.assertIsNotNone(outcome)
+
+        review2 = self.client.get(
+            f"/api/campaigns/{self.bid}/{self.cycle_id}/closing-review").json()["data"]
+        reason = review2["recommendation"]["delta_reason"]
+        self.assertIsNotNone(reason)
+        self.assertIn("+150%", reason)  # 營收 8000→20000，成長率 (20000-8000)/8000
+        self.assertIn("0.80→2.00", reason)  # ROAS 前後對照（spend 全期都是 10000 沒變）
+
     def test_malformed_body_is_400_not_500(self):
         """信任邊界：body 不是物件、verdicts 不是字典、完全沒有 JSON——三種都回 400 白話，
         不能一路炸成 500（審查發現 1）。"""

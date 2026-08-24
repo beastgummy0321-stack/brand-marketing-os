@@ -20,6 +20,7 @@ from app.ads import performance as perf  # noqa: E402
 from app.ads import reading  # noqa: E402
 from app.ads import repository as ads_repo  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
+from app.core import interrupts as core_interrupts  # noqa: E402
 from app.llm.providers import FakeProvider, ProviderResponse, Usage  # noqa: E402
 
 
@@ -199,3 +200,34 @@ class RejudgeButtonMessageTest(_SettlementBase):
         message = resp.json()["data"]["error"]
         self.assertIn("結算", message)
         self.assertNotEqual(message, "目前沒有可判讀的檔期")
+
+
+class LateRevenueShareReversalWarningTest(_SettlementBase):
+    """票 R4-late-data-downstream（B0-35）：翻盤時晚到營收占比過高（門檻見 ads_settlement.
+    LATE_REVENUE_SHARE_WARNING_THRESHOLD），匯入訊息（explanation）跟收件匣通知都要多
+    一句查核提醒，不能讓人以為這是查證過的翻案。"""
+
+    def test_reversal_with_high_late_revenue_share_adds_check_prompt(self):
+        self._spend(spend=10000, impressions=20000, clicks=400, conversions=10, revenue=8000)
+        ok, err = reading.run(main.conn, self.bid, self.cycle_id, ACTOR)
+        self.assertTrue(ok, err)
+        self.assertEqual(reading.load(main.conn, self.bid, self.cycle_id)["cycle"]["status"],
+                         "pause_candidate")  # roas 0.8 倍，打平線 1.67 倍
+
+        # 晚到訂單只補營收，不補花費／轉換——單筆晚到營收占補件後總營收 60%（12000/20000）。
+        self._spend(spend=0, impressions=0, clicks=0, conversions=0, revenue=12000)
+        outcome = reading.rerun_for_late_data(main.conn, self.bid, self.cycle_id, actor=ACTOR)
+
+        self.assertIsNotNone(outcome)
+        self.assertEqual(outcome["shift"], "reversal")
+        self.assertEqual(outcome["after_status"], "maintain")  # roas 2.0 倍，落在維持區間
+        self.assertIn("60%", outcome["explanation"])
+        self.assertIn("查核", outcome["explanation"])
+
+        open_items = core_interrupts.list_open(main.conn, brand_id=self.bid,
+                                                category="reading_reversal")
+        self.assertEqual(len(open_items), 1)
+        # 收件匣卡片受「一卡一句 ≤30 全形字」限制（DESIGN.md §20 規則 4），放不下百分比，
+        # 只換一句同樣點名查核的短版；完整占比說明在上面的 explanation（匯入訊息）裡。
+        self.assertLessEqual(len(open_items[0]["message"]), 30)
+        self.assertIn("查核", open_items[0]["message"])

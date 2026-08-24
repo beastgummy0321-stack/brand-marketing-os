@@ -59,6 +59,10 @@ export function PerformanceStep({ brandId, cycle }: { brandId: string; cycle: Cy
   function refreshAfterPerformanceChange() {
     load();
     loadBatches();
+    // B0-33：補件／撤銷一批都會讓後端重判，但這顆只重抓成效總計跟匯入清單，四燈號板
+    // （另一個端點）本來沒有跟著重抓，畫面才會出現「逐支表已經翻盤、燈號板還是舊異常」
+    // 的矛盾——四燈號本身是無快取現算，缺的只是這裡少打一次。
+    fetchHealthLights(brandId, cycle.id).then(setLights);
   }
 
   async function updateNow() {

@@ -333,17 +333,35 @@ def _closing_goal_comparison(conn, brand_id: str, cycle: dict, kpis: dict) -> di
             "actual_value": spend, "metric_label": "花費", "lower_is_better": False, "actual_kpis": kpis}
 
 
+def _budget_delta_reason(conn, brand_id: str, cycle_id: str, proposed_budget) -> "str | None":
+    """B0-25：下期建議金額補件後悄悄跳號，一個字沒提哪裡變了。在讀取時比對最近兩個判讀
+    版次的營收／ROAS（`nextcycle.build()` 每次重判都會無條件覆寫這筆建議，不在寫入時比對
+    ——這裡讀時現算比較簡單，也不用碰已經頂在 800 行上限的 `nextcycle.py`）。只有一個版次、
+    或營收根本沒變就不附這個欄位，不喊假理由。"""
+    delta = ads_settlement.latest_version_delta(conn, brand_id, cycle_id)
+    if not delta or not delta["prev_revenue"] or delta["prev_revenue"] == delta["cur_revenue"]:
+        return None
+    pct = round((delta["cur_revenue"] - delta["prev_revenue"]) / delta["prev_revenue"] * 100)
+    sign = "+" if pct >= 0 else ""
+    roas_part = (f"（ROAS {delta['prev_roas']:.2f}→{delta['cur_roas']:.2f}）"
+                if delta["prev_roas"] is not None and delta["cur_roas"] is not None else "")
+    return f"補件後營收{sign}{pct}%{roas_part}，下期建議金額因此調整為 {proposed_budget:,.0f}。"
+
+
 def _closing_recommendation(conn, brand_id: str, cycle_id: str) -> dict:
     stored = nextcycle.load(conn, brand_id, cycle_id)
     if stored:
         content = stored["content"]
-        return {"budget_advice": content["budget"]["advice"],
-                "proposed_budget": content["budget"]["proposed_budget"],
-                "rule_cards_created": content.get("rule_cards_created", 0),
-                "echo_chamber": bool(content.get("echo_chamber"))}
-    budget = nextcycle.propose_budget(conn, brand_id, cycle_id)
-    return {"budget_advice": budget["advice"], "proposed_budget": budget["proposed_budget"],
-            "rule_cards_created": 0, "echo_chamber": False}
+        budget = {"budget_advice": content["budget"]["advice"],
+                  "proposed_budget": content["budget"]["proposed_budget"],
+                  "rule_cards_created": content.get("rule_cards_created", 0),
+                  "echo_chamber": bool(content.get("echo_chamber"))}
+    else:
+        proposed = nextcycle.propose_budget(conn, brand_id, cycle_id)
+        budget = {"budget_advice": proposed["advice"], "proposed_budget": proposed["proposed_budget"],
+                  "rule_cards_created": 0, "echo_chamber": False}
+    budget["delta_reason"] = _budget_delta_reason(conn, brand_id, cycle_id, budget["proposed_budget"])
+    return budget
 
 
 def compile_closing_review(conn, brand_id: str, cycle_id: str) -> dict:
@@ -369,7 +387,10 @@ def compile_closing_review(conn, brand_id: str, cycle_id: str) -> dict:
          # R2-learning-honesty 契約第 2 點：這期真的對照過的切角（切角名／樣本數／CPA／
          # ROAS／花費），簽核畫面拿來並排出示證據，不是只有程式的結論。
          "comparison_cells": (hyp_reviews_by_id[h["id"]]["comparison_cells"]
-                             if h["id"] in hyp_reviews_by_id else [])}
+                             if h["id"] in hyp_reviews_by_id else []),
+         # B0-34：已簽核假設判讀翻盤要提示「結論依據已變」，但不能自動改動已簽核的
+         # verdict——純讀取端旁註（`ads_reading.stale_note`），非 pending 才可能非 None。
+         "stale_note": ads_reading.stale_note(conn, brand_id, cycle_id, h)}
         for h in ads_repo.list_cycle_hypotheses(conn, brand_id, cycle_id)
     ]
     ledger_entries = [

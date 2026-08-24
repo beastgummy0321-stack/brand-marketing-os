@@ -299,6 +299,9 @@ export interface NextCycleAdvice {
   proposed_budget: number;
   rule_cards_created: number;
   echo_chamber: boolean;
+  // 票 R4-late-data-downstream（B0-25）：金額補件後跟著變才會有值，說明哪裡變了；
+  // 只有一版判讀、或營收沒變時為 null（不喊假理由）。
+  delta_reason: string | null;
 }
 
 /** S8R.24：訂單歸因四分類（`app/ads/codes.py:217-246 attribution_summary()`，查證日
@@ -369,6 +372,9 @@ export interface ClosingReview {
         revenue: number;
         kpis: { cpa: number | null; roas: number | null };
       }[];
+      // 票 R4-late-data-downstream（B0-34）：已簽核（`pending: false`）後這期又真的補件
+      // 重判、數字真的變了才有值——純提示，不代表 verdict 被自動改動過。
+      stale_note: string | null;
     }[];
     ledger_entries: { text: string; created_at: string }[];
   };
