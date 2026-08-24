@@ -10,6 +10,10 @@
   （budget.py／audience_availability()），這裡只是把結果**告訴**模型，模型只能在可用的層
   裡寫描述，不能自己判定某層能不能打。
 
+R3-carry-forward-winners（B0-29／B0-36）：上期真正打贏的切角（`carry_forward.prior_winners()`）
+與已驗證賠錢的方向（`carry_forward.rejected_directions()`）都是程式從歷史成效資料算好、
+具名帶進 prompt，不是丟一句抽象的 learning_ledger 文字讓模型自己猜「有效方向」是什麼。
+
 ## 兩步流程（票 4 之前是一步）
 
 1. `generate_options()`：一次生成 2–4 個完整方案（其中一個標 AI 推薦），存進暫存表
@@ -27,6 +31,7 @@ import json
 from typing import Callable, Optional
 
 from app.ads import account_structure
+from app.ads import carry_forward
 from app.ads import handoff as ads_handoff
 from app.ads import repository as ads_repo
 from app.brand_intelligence import repository as bi
@@ -318,7 +323,8 @@ def _build_options_user_text(brand: dict, cycle: dict, allocations: list, contex
                              methodology_text: str, angle_count: int, fact_count: int,
                              availability: dict, option_count: int,
                              custom_direction: Optional[str],
-                             structure: account_structure.StructureRecommendation) -> str:
+                             structure: account_structure.StructureRecommendation,
+                             prior_winners: list, avoid_directions: list) -> str:
     plan = ads_repo.derived_plan(cycle)
     parts = [
         f"品牌名稱：{brand['name']}",
@@ -361,6 +367,24 @@ def _build_options_user_text(brand: dict, cycle: dict, allocations: list, contex
         "帳戶結構與預算配置底案（程式依規則卡算好，你不能改動這些數字，只能講意見）：\n"
         + _structure_baseline_text(structure)
     )
+
+    if prior_winners:
+        lines = "\n".join(
+            f"- {w['angle']}：ROAS {w['roas']}，花費 NT${w['spend']:,.0f}，"
+            f"轉換 {w['conversions']:.0f} 次（來源期別 {w['source_cycle_id']}）"
+            for w in prior_winners
+        )
+        parts.append(
+            "上期以來真正打出成績的切角（這才是「沿用有效方向」該沿用的東西——"
+            "請以它們為主力放大延續，不要整批換成沒出現過的新切角）：\n" + lines
+        )
+
+    if avoid_directions:
+        lines = "\n".join(
+            f"- {a['statement']}（上期此方向賠錢，已避開；來源期別 {a['source_cycle_id']}）"
+            for a in avoid_directions
+        )
+        parts.append("已驗證賠錢、這期不要再選的方向：\n" + lines)
 
     if custom_direction and custom_direction.strip():
         parts.append(f"老闆對這批方案的額外指示（務必照這個方向調整，不要忽略）：{custom_direction.strip()}")
@@ -463,6 +487,10 @@ def generate_options(conn, brand_id: str, cycle_id: str, actor: str, *,
 
     allocations = ads_repo.list_cycle_products(conn, brand_id, cycle_id)
     context_text, knowledge_item_ids, brand_version, _ = context_compiler.compile(conn, brand_id)
+    product_ids = {a["product_id"] for a in allocations}
+    prior_winners = carry_forward.prior_winners(conn, brand_id, product_ids=product_ids,
+                                                exclude_cycle_id=cycle_id)
+    avoid_directions = carry_forward.rejected_directions(conn, brand_id, product_ids=product_ids)
     methodology_result = (
         methodology.compile(conn, METHODOLOGY_TASK_LABELS, brand_id=brand_id, actor=actor)
         if include_methodology
@@ -475,7 +503,8 @@ def generate_options(conn, brand_id: str, cycle_id: str, actor: str, *,
 
     user_text = _build_options_user_text(
         brand, cycle, allocations, context_text, methodology_result.text, angle_count,
-        len(knowledge_item_ids), availability, option_count, custom_direction, structure)
+        len(knowledge_item_ids), availability, option_count, custom_direction, structure,
+        prior_winners, avoid_directions)
 
     if on_stage:
         on_stage("ask_ai")
