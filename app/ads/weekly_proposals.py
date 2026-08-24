@@ -220,8 +220,9 @@ def select_cards(product_readings: list, budget: dict, historical_cells: list,
     # 疲勞燈紅（頻率過冷受眾危險門檻）也要有卡跟進，但同一支廣告已經有停掉卡就不出：先做
     # 新素材再去停一支正在虧的廣告，順序是反的（決定 8）。認同一支要比 pkg_id 不能比 target
     # ——疲勞卡的目標可能是切角名，停掉卡一定是廣告名，兩個命名空間對不起來。
+    fatigue_pkg = fatigue.get("pkg_id") if fatigue else None
     if fatigue is not None and not any(
-            card.get("pkg_id") == fatigue.get("pkg_id") for card in cards):
+            fatigue_pkg is not None and card.get("pkg_id") == fatigue_pkg for card in cards):
         cards.append({
             "action": "換素材",
             "target": fatigue["target"],

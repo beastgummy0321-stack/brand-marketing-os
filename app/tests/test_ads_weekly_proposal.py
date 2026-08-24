@@ -173,6 +173,11 @@ class WeeklyProposalSelectionTest(unittest.TestCase):
 
         self.assertEqual([card["action"] for card in cards], ["停掉"])
 
+        # 沒有 pkg_id 的疲勞卡（對不回交接包）不得被「兩邊都是 None」誤判成同一支而吃掉。
+        anonymous = {"target": "使用情境切角", "frequency": 4.2}
+        product_only = weekly_proposals.select_cards([], budget, [], anonymous, None)
+        self.assertEqual([card["action"] for card in product_only], ["換素材"])
+
 
 
 class WeeklyProposalPersistenceTest(unittest.TestCase):

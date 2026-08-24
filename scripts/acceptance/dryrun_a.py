@@ -267,6 +267,24 @@ def _build_cycle2(conn, ads_repo):
 # shared: build all three cycles against a given connection
 # ---------------------------------------------------------------------------
 
+def _purge_acceptance_cycles(conn):
+    """Drop leftover [ACCEPTANCE-A] cycles so selfcheck always starts from a clean floor.
+
+    Only ever called from selfcheck, which runs against a throwaway copy of data/app.db
+    (BRAND_OS_DB already points at the temp file by the time this runs) — the live database
+    is never touched. Without this, a previous `build` run makes every later selfcheck
+    refuse at the first step.
+    """
+    from app.ads import repository as ads_repo
+
+    for cycle in ads_repo.list_cycles(conn, BRAND_ID, include_archived=True):
+        if not (cycle.get("background") or "").startswith(MARK):
+            continue
+        if not cycle["archived"]:
+            ads_repo.set_cycle_archived(conn, BRAND_ID, cycle["id"], archived=True, actor=ACTOR)
+        ads_repo.delete_cycle(conn, BRAND_ID, cycle["id"], actor=ACTOR)
+
+
 def _run_build(conn):
     from app.ads import repository as ads_repo
     from app.ads import handoff
@@ -378,6 +396,7 @@ def cmd_selfcheck():
 
     ok_all = True
     try:
+        _purge_acceptance_cycles(main.conn)
         built = _run_build(main.conn)
         if built is None:
             _pass("build (selfcheck fixture)", False, "拒絕建立——資料庫裡已有 ACCEPTANCE-A 檔期")
