@@ -22,6 +22,7 @@ _tmpdir = tempfile.mkdtemp(prefix="brand_os_ads_carry_forward_")
 
 import app.main as main  # noqa: E402
 from app.ads import carry_forward  # noqa: E402
+from app.ads import opening_suggestion  # noqa: E402
 from app.ads import plan as ads_plan  # noqa: E402
 from app.ads import reading as ads_reading  # noqa: E402
 from app.ads import repository as ads_repo  # noqa: E402
@@ -113,13 +114,21 @@ class _BaseCarryForwardTest(unittest.TestCase):
         self.prior_cycle_id = ads_repo.create_cycle(
             main.conn, self.bid, product_ids=[self.product], pain_value=10000,
             objective="sales", actor=ACTOR)["id"]
-        self.new_cycle_id = ads_repo.create_cycle(
-            main.conn, self.bid, product_ids=[self.product], pain_value=10000,
-            objective="sales", actor=ACTOR)["id"]
+        # 預設「推新品／換方向」形狀：background 空（比照前端 chosen == "" → None）。
+        self.new_cycle_id = self._open_cycle()
+        # 使用者真的按了「沿用有效方向」：background 是
+        # f"{CARRY_FORWARD_DIRECTION}：{direction}"（比照 NewCycleDirectionChoice.tsx）。
+        self.carry_forward_cycle_id = self._open_cycle(
+            background=f"{opening_suggestion.CARRY_FORWARD_DIRECTION}：實證成分")
         self._orig_provider = ads_plan.PROVIDER
 
     def tearDown(self):
         ads_plan.PROVIDER = self._orig_provider
+
+    def _open_cycle(self, background=None) -> str:
+        return ads_repo.create_cycle(
+            main.conn, self.bid, product_ids=[self.product], pain_value=10000,
+            objective="sales", actor=ACTOR, background=background)["id"]
 
     def _seed_cell(self, cycle_id: str, **kwargs) -> str:
         return _seed_cell(main.conn, self.bid, cycle_id, **kwargs)
@@ -229,7 +238,7 @@ class PromptIncludesCarryForwardDataTest(_BaseCarryForwardTest):
         bi_repo.update_hypothesis_status(main.conn, self.bid, rejected["id"],
                                          status="rejected", actor=ACTOR)
 
-        ok, err = self._generate(self.new_cycle_id)
+        ok, err = self._generate(self.carry_forward_cycle_id)
         self.assertTrue(ok, err)
         sent = ads_plan.PROVIDER.calls[0]["messages"][0]["content"]
         self.assertIn("實證成分", sent)
@@ -241,14 +250,15 @@ class PromptIncludesCarryForwardDataTest(_BaseCarryForwardTest):
         """反向檢查：樣本不足的切角就算 ROAS 好看，也不准當「贏家」引用進 prompt。"""
         self._seed_cell(self.prior_cycle_id, creative_angle="太少樣本的假贏家",
                         product_id=self.product, spend=1000, conversions=3, revenue=10000)
-        ok, err = self._generate(self.new_cycle_id)
+        ok, err = self._generate(self.carry_forward_cycle_id)  # 就算走沿用模式也不准冒充
         self.assertTrue(ok, err)
         sent = ads_plan.PROVIDER.calls[0]["messages"][0]["content"]
         self.assertNotIn("太少樣本的假贏家", sent)
 
     def test_no_history_means_no_new_sections(self):
-        """沒有任何歷史贏家／賠錢方向時（例如首次開檔），不新增空段落——照舊行為（回歸鐵條）。"""
-        ok, err = self._generate(self.new_cycle_id)
+        """就算走沿用模式，沒有任何歷史贏家／賠錢方向時（例如真的第一次開檔），
+        不新增空段落——照舊行為（回歸鐵條）。"""
+        ok, err = self._generate(self.carry_forward_cycle_id)
         self.assertTrue(ok, err)
         sent = ads_plan.PROVIDER.calls[0]["messages"][0]["content"]
         self.assertNotIn("上期以來真正打出成績的切角", sent)
@@ -282,10 +292,55 @@ class UnvalidatedHypothesisNeverBecomesPlanGroundingTest(_BaseCarryForwardTest):
         self.assertEqual(resolved["status"], "inconclusive")  # guard 擋下，不是「成立」
         self.assertEqual(ads_repo.list_learning_ledger(main.conn, self.bid), [])  # 沒入帳
 
-        ok, err = self._generate(self.new_cycle_id)
+        ok, err = self._generate(self.carry_forward_cycle_id)
         self.assertTrue(ok, err)
         sent = ads_plan.PROVIDER.calls[0]["messages"][0]["content"]
         self.assertNotIn("情感痛點開場優於功能宣稱開場", sent)
+
+
+class CarryForwardModeGateTest(_BaseCarryForwardTest):
+    """鎖兩條分支（reviewer 抓到的原始缺陷）：`plan.py` 曾經不管使用者按哪一顆按鈕，
+    一律把上期贏家／避開清單塞進 prompt——「沿用有效方向」與「推新品／換方向」兩個
+    cycle 的 prompt 逐字元相同，還帶著一句「不要整批換成沒出現過的新切角」，直接跟
+    選了換方向的使用者的意思對著幹。這裡用同一份歷史資料，鎖住兩條分支長得不一樣。"""
+
+    def setUp(self):
+        super().setUp()
+        self._seed_cell(self.prior_cycle_id, creative_angle="實證成分", product_id=self.product,
+                        spend=21000, conversions=60, revenue=21000 * 4.31)
+        rejected = bi_repo.create_strategy_hypothesis(
+            main.conn, self.bid, actor=ACTOR, hypothesis_type="message",
+            statement="節慶檔期用禮盒／組合切角能拉高客單價，投報率會比平常好",
+            created_by=ACTOR, product_id=self.product, source_cycle_id=self.prior_cycle_id)
+        bi_repo.update_hypothesis_status(main.conn, self.bid, rejected["id"],
+                                         status="rejected", actor=ACTOR)
+
+    def test_carry_forward_gets_the_block_fresh_direction_does_not(self):
+        ok, err = self._generate(self.carry_forward_cycle_id)
+        self.assertTrue(ok, err)
+        carry_forward_prompt = ads_plan.PROVIDER.calls[0]["messages"][0]["content"]
+
+        ok, err = self._generate(self.new_cycle_id)  # background="" → None，「推新品／換方向」
+        self.assertTrue(ok, err)
+        fresh_direction_prompt = ads_plan.PROVIDER.calls[0]["messages"][0]["content"]
+
+        self.assertIn("實證成分：ROAS 4.31", carry_forward_prompt)
+        self.assertIn("上期此方向賠錢，已避開", carry_forward_prompt)
+
+        self.assertNotIn("實證成分：ROAS", fresh_direction_prompt)
+        self.assertNotIn("上期此方向賠錢，已避開", fresh_direction_prompt)
+        self.assertNotIn("不要整批換成沒出現過的新切角", fresh_direction_prompt)
+        self.assertNotEqual(carry_forward_prompt, fresh_direction_prompt)
+
+    def test_custom_free_text_direction_also_does_not_get_the_block(self):
+        """使用者自己打字選方向（`NewCycleDirectionChoice.tsx` 第三個選項）也不是沿用——
+        跟「推新品／換方向」一樣不該塞上期歷史，使用者已經自己講了要打什麼。"""
+        custom_cycle = self._open_cycle(background="這期主打中秋禮盒，別的都先不用管")
+        ok, err = self._generate(custom_cycle)
+        self.assertTrue(ok, err)
+        sent = ads_plan.PROVIDER.calls[0]["messages"][0]["content"]
+        self.assertNotIn("實證成分：ROAS", sent)
+        self.assertNotIn("上期此方向賠錢，已避開", sent)
 
 
 if __name__ == "__main__":

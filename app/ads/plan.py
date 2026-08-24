@@ -33,6 +33,7 @@ from typing import Callable, Optional
 from app.ads import account_structure
 from app.ads import carry_forward
 from app.ads import handoff as ads_handoff
+from app.ads import opening_suggestion
 from app.ads import repository as ads_repo
 from app.brand_intelligence import repository as bi
 from app.core import settings as coresettings
@@ -319,6 +320,22 @@ def _structure_baseline_text(structure: account_structure.StructureRecommendatio
 # Prompt 組裝
 # ---------------------------------------------------------------------------
 
+def _is_carry_forward_cycle(cycle: dict) -> bool:
+    """這期是不是真的走「沿用有效方向」（R3-carry-forward-winners，B0-29／B0-36 修法）。
+
+    使用者的二選一（`NewCycleDirectionChoice.tsx`）不是存在某個獨立的 mode 欄位——按下
+    「沿用有效方向」時，前端把 `f"{CARRY_FORWARD_DIRECTION}：{direction}"` 逐字塞進
+    `background` 欄位送給 `createCycle`（`OpeningSuggestionCard.tsx`），這是全系統唯一
+    留下來、可回頭讀到的「使用者選了沿用」信號；按「推新品／換方向」時 `background` 是
+    空字串（存進 DB 變 `None`，見 `repository.py:create_cycle()`），使用者自己輸入的
+    自訂方向則是任意文字，兩者都不該觸發「延續上期切角」的 prompt 段落——一個是使用者
+    明講要換方向，一個是使用者自己已經講了要打什麼，都不該讓程式硬塞一段「不要換切角」
+    的指示跟使用者的意思對著幹。
+    """
+    background = cycle.get("background") or ""
+    return background.startswith(f"{opening_suggestion.CARRY_FORWARD_DIRECTION}：")
+
+
 def _build_options_user_text(brand: dict, cycle: dict, allocations: list, context_text: str,
                              methodology_text: str, angle_count: int, fact_count: int,
                              availability: dict, option_count: int,
@@ -488,9 +505,12 @@ def generate_options(conn, brand_id: str, cycle_id: str, actor: str, *,
     allocations = ads_repo.list_cycle_products(conn, brand_id, cycle_id)
     context_text, knowledge_item_ids, brand_version, _ = context_compiler.compile(conn, brand_id)
     product_ids = {a["product_id"] for a in allocations}
-    prior_winners = carry_forward.prior_winners(conn, brand_id, product_ids=product_ids,
-                                                exclude_cycle_id=cycle_id)
-    avoid_directions = carry_forward.rejected_directions(conn, brand_id, product_ids=product_ids)
+    is_carry_forward = _is_carry_forward_cycle(cycle)
+    prior_winners = (carry_forward.prior_winners(conn, brand_id, product_ids=product_ids,
+                                                 exclude_cycle_id=cycle_id)
+                     if is_carry_forward else [])
+    avoid_directions = (carry_forward.rejected_directions(conn, brand_id, product_ids=product_ids)
+                       if is_carry_forward else [])
     methodology_result = (
         methodology.compile(conn, METHODOLOGY_TASK_LABELS, brand_id=brand_id, actor=actor)
         if include_methodology

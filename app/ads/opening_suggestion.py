@@ -3,7 +3,8 @@
 
 對外進入點：opening_suggestion() 與 save_channel_answer()。
 輸入輸出：收 SQLite 連線、brand_id（後者另收 actor/answer），回傳凍結的 JSON dict 形狀。
-誰依賴它：routes_campaigns_open_api.py。
+誰依賴它：routes_campaigns_open_api.py；`CARRY_FORWARD_DIRECTION` 常數另外給
+app/ads/plan.py 讀，判斷這期是不是走「沿用有效方向」（R3-carry-forward-winners）。
 不碰什麼：不呼叫 LLM，不 import app.orders、app.dashboard，也不對品牌永久層下原生 SQL。
 """
 
@@ -15,6 +16,11 @@ from app.ads import repository as ads_repo
 from app.ads import target_cpa
 from app.brand_intelligence import repository as bi
 
+
+CARRY_FORWARD_DIRECTION = "沿用有效方向"  # 跟 frontend/.../NewCycleDirectionChoice.tsx
+# 的按鈕文案逐字同步——使用者按這顆鈕時，前端把 `f"{CARRY_FORWARD_DIRECTION}：{direction}"`
+# 存進 campaign_cycle.background（見 OpeningSuggestionCard.tsx `background: initialBackground`），
+# 是全系統唯一告訴後端「這期真的選了沿用」的信號（R3-rootcause.md 更新版）。
 
 CHANNEL_ASK = {
     "question": "客人主要去哪買？",
@@ -73,7 +79,8 @@ def _choose_product(conn, brand_id: str) -> tuple[dict | None, str]:
     history = _historical_products(conn, brand_id)
     candidates = [product for product in products if product["id"] in history]
     if candidates:
-        return max(candidates, key=lambda product: (history[product["id"]], product["name"])), "沿用有效方向"
+        return (max(candidates, key=lambda product: (history[product["id"]], product["name"])),
+                CARRY_FORWARD_DIRECTION)
     # 「首次」看跑過任何一期沒有，不是看湊不湊得出 history（history 湊不出東西不等於沒開過檔期）。
     label = "首次" if not ads_repo.has_any_cycle(conn, brand_id) else "推新品"
     if len(products) == 1:
