@@ -125,6 +125,10 @@ def cell_trust_flags(conversions: float, spend: float, allocated_budget: float, 
          子看看」，低於才叫 pause_candidate。沿用同一條線＝沿用既有那套「差」的定義，不另立
          第二套（D3）；缺任一個參數就維持今天只看零轉換的行為，呼叫端不必全部改寫。
 
+    - `underperforming_reason`：只在 `underperforming` 出現時一起出現，標是上面哪一條途徑
+      觸發——`"zero_conversion"`（零轉換）或 `"roas_below_stop_loss"`（有轉換但低於停損線）。
+      兩條途徑的意思差很多，呼叫端寫給人看的理由不能共用同一句（驗收 A 第 4 節 6c）。
+
     兩者互相獨立，可能同時出現、也可能都不出現。
     """
     flags = {}
@@ -134,9 +138,11 @@ def cell_trust_flags(conversions: float, spend: float, allocated_budget: float, 
                           and spend >= allocated_budget * ads_budget.PAUSE_THRESHOLD_RATIO)
     if conversions == 0 and spend_reached_half:
         flags["underperforming"] = True
+        flags["underperforming_reason"] = "zero_conversion"
     elif (spend_reached_half and revenue is not None and breakeven_roas is not None
           and spend > 0 and (revenue / spend) < breakeven_roas * ads_reading.PAUSE_MARGIN):
         flags["underperforming"] = True
+        flags["underperforming_reason"] = "roas_below_stop_loss"
     return flags
 
 

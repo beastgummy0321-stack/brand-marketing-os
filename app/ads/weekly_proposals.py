@@ -87,6 +87,20 @@ def _budget_impact(action: str, budget: dict) -> str:
     }[action]
 
 
+def _tired_reason(cell: dict) -> str:
+    """換素材卡的理由照 `cell_trust_flags()` 標的路徑寫。零成交跟「有成交但沒回本」是兩件
+    不同的事，共用同一句就會對著 12 筆成交的切角說「沒有帶來成交」（驗收 A 第 4 節 6c）。
+    路徑②寫出實際投報率與停損線（＝打平線 × `reading.PAUSE_MARGIN`，沿用既有那條線）。"""
+    if cell.get("underperforming_reason") != "roas_below_stop_loss":
+        return "花了一半預算還是零成交"
+    spend = cell.get("spend") or 0
+    breakeven = cell.get("breakeven_roas")
+    if not spend or not breakeven:
+        return "有成交，但投報率低於停損線"
+    return (f"有成交但每花 1 元只回 {(cell.get('revenue') or 0) / spend:.2f} 元，"
+            f"低於停損線 {breakeven * ads_reading.PAUSE_MARGIN:.2f}")
+
+
 def select_cards(product_readings: list, budget: dict, historical_cells: list) -> list:
     """只挑已有規則訊號的停掉、加碼、換素材；沒有訊號就不硬湊。"""
     cards = []
@@ -113,7 +127,7 @@ def select_cards(product_readings: list, budget: dict, historical_cells: list) -
         cards.append({
             "action": "換素材",
             "target": tired_cell.get("creative_angle") or "未命名切角",
-            "reason": "這個切角花費已達一半預算，仍沒有帶來成交",
+            "reason": _tired_reason(tired_cell),
             "impact": "先換一批素材再測，不直接放大目前的低效花費",
             "product_id": None,
             "performance_reading_id": None,

@@ -78,6 +78,29 @@ class WeeklyProposalSelectionTest(unittest.TestCase):
             self.assertTrue({"action", "target", "reason", "impact"} <= set(card))
             self.assertTrue(all(card[key] for key in ("action", "target", "reason", "impact")))
 
+    def test_replace_asset_reason_follows_the_triggering_path(self):
+        """驗收 A 第 4 節 6c：有成交但投報率低於停損線的切角，理由要寫實際投報率，
+        不能沿用零成交那句。零成交的切角則維持零成交的說法。"""
+        budget = {"current_budget": 10000, "proposed_budget": 12000}
+        low_roas = [{
+            "experiment_cell_id": "exc_bad_cvr",
+            "creative_angle": "虛構切角：有成交但沒回本",
+            "spend": 3000, "conversions": 12, "revenue": 2580,
+            "breakeven_roas": 1.4,
+            "underperforming": True,
+            "underperforming_reason": "roas_below_stop_loss",
+        }]
+        reason = weekly_proposals.select_cards([], budget, low_roas)[0]["reason"]
+        self.assertIn("0.86", reason)          # 實際投報率 2580 / 3000
+        self.assertIn("0.98", reason)          # 停損線 1.4 × PAUSE_MARGIN
+        self.assertNotIn("沒有帶來成交", reason)
+        self.assertNotIn("零成交", reason)
+
+        zero = [{**low_roas[0], "conversions": 0, "revenue": 0,
+                 "underperforming_reason": "zero_conversion"}]
+        self.assertIn("零成交", weekly_proposals.select_cards([], budget, zero)[0]["reason"])
+
+
 
 class WeeklyProposalPersistenceTest(unittest.TestCase):
     def setUp(self):
