@@ -7,6 +7,7 @@ from app.ads import nextcycle
 from app.ads import reading as ads_reading
 from app.ads import reading_assets as ads_reading_assets
 from app.ads import repository as ads_repo
+from app.ads import settlement as ads_settlement
 from app.core import interrupts as core_interrupts
 from app.core import orchestrator as core_orchestrator
 from app.core import rule_cards
@@ -73,12 +74,27 @@ def present(card: dict, brand_id: str) -> dict:
     }
 
 
+def _has_pending_cards(conn, brand_id: str, cycle_id: str) -> bool:
+    return conn.execute(
+        "SELECT 1 FROM recommendation WHERE brand_id = ? AND campaign_cycle_id = ?"
+        " AND recommendation_type = ? AND status = 'GENERATED' LIMIT 1",
+        (brand_id, cycle_id, RECOMMENDATION_TYPE),
+    ).fetchone() is not None
+
+
 def current_cycle(conn, brand_id: str) -> dict | None:
-    """駕駛艙週作戰使用最新一個投放中或等判讀的未封存檔期。"""
-    for cycle in ads_repo.list_cycles(conn, brand_id):
-        if cycle["status"] in ("LIVE", "EVALUATING"):
+    """駕駛艙週作戰用哪一期：優先挑還有 GENERATED（未核可）週提案卡候著使用者的那個
+    投放中／等判讀檔期；同時有兩期在投放中時，光看「起始日最新」會讓使用者匯入資料的
+    那期被更新但空手的另一期蓋掉，卡片永遠看不到（票 F1）。都沒有候核可的卡才退回舊規則
+    （起始日最新那個）。這是唯一進入點——六個顯示呼叫端都經由這裡，不逐一加特例。"""
+    live_cycles = [c for c in ads_repo.list_cycles(conn, brand_id)
+                  if c["status"] in ("LIVE", "EVALUATING")]
+    if not live_cycles:
+        return None
+    for cycle in live_cycles:
+        if _has_pending_cards(conn, brand_id, cycle["id"]):
             return cycle
-    return None
+    return live_cycles[0]
 
 
 def _budget_impact(action: str, budget: dict) -> str:
@@ -318,6 +334,59 @@ def generate(conn, brand_id: str, cycle_id: str, *, enqueue_ready: bool = True) 
         )
     conn.commit()
     return list_cards(conn, brand_id, cycle_id)
+
+
+def _rerun_result(conn, brand_id: str, cycle_id: str, rerun: str, base_message: str,
+                  *, shift: "str | None" = None) -> dict:
+    """票 F1 root cause 3：訊息不能先斬後奏——只有真的有 GENERATED 卡候著使用者核可，
+    才能說「有新的建議卡」，不然畫面上一張卡都沒有卻說有，使用者會覺得系統在說謊。"""
+    cards = generate(conn, brand_id, cycle_id)
+    pending = sum(1 for card in cards if card["status"] == "GENERATED")
+    message = f"{base_message}「本週作戰」有 {pending} 張新的建議卡。" if pending else base_message
+    return {
+        "rerun": rerun,
+        "rerun_message": message,
+        "shift": shift,
+        "weekly_cards": {"cycle_id": cycle_id, "generated": pending,
+                         "action_url": f"/app/brands/{brand_id}/campaigns/{cycle_id}"},
+    }
+
+
+def rerun_after_late_data(conn, brand_id: str, cycle_id: str, actor: str) -> dict:
+    """ADR 0022 第 2／4 點：已經判讀過的檔期又動到數字（補匯或撤銷），自動重判一次並說哪裡變了。
+
+    算不算「晚到」由 `ads_reading.rerun_for_late_data` 自己判（還在 LIVE、或根本沒判讀過都回
+    None），跟拖檔口 `app/orders/dispatch.py` 走同一條路，不在這裡另立一套規則。
+
+    它「重判了但數字沒變」跟「根本沒重判」都回 None，訊息因此會說謊（驗收 A 第 4 節第 7 題：
+    明明算過了卻寫「沒有重新算過」）——這裡用結算版次有沒有進位自己分辨這兩件事。
+
+    LIVE 檔期的第一次判讀，`rerun_for_late_data` 故意當作「不是補件」原樣略過（見它的
+    docstring）——但這正是使用者投放中匯入成效後看不到逐支表／AI 白話／週提案卡的根因：
+    沒有任何排程／按鈕會在匯入的當下幫 LIVE 檔期跑第一次判讀，只能乾等 day7 提醒、每週一
+    背景排程，或使用者自己去駕駛艙按「現在就重新判讀」。這裡直接補上這一次。
+
+    票 F1：這是所有「匯入／撤銷觸發重判」入口共用的唯一出處——CSV／手動填成效、批次刪除、
+    拖檔口晚到資料都走這裡，不在各自呼叫端各自補一次 `generate()`；漏掉 `generate()` 的
+    入口，卡片就被 `reading.run()` 清掉後沒人補（見 `reading.py` 的 `preserved_weekly`
+    刪除範圍）。
+    """
+    cycle = ads_repo.get_cycle(conn, brand_id, cycle_id)
+    if cycle is not None and cycle["status"] == "LIVE":
+        ok, _err = ads_reading.run(conn, brand_id, cycle_id, actor)
+        if not ok:
+            return {"rerun": "skipped", "rerun_message": None}
+        return _rerun_result(conn, brand_id, cycle_id, "live_reading", "已經判讀這期最新資料。")
+
+    before = ads_settlement.load_snapshot(conn, brand_id, cycle_id)
+    result = ads_reading.rerun_for_late_data(conn, brand_id, cycle_id, actor=actor)
+    if result:
+        base = result["explanation"] or "結論已經重新算過，數字有變動。"
+        return _rerun_result(conn, brand_id, cycle_id, "late_data", base, shift=result["shift"])
+    after = ads_settlement.load_snapshot(conn, brand_id, cycle_id)
+    if before and after and after["settlement_version"] > before["settlement_version"]:
+        return _rerun_result(conn, brand_id, cycle_id, "unchanged", "結論重新算過了，跟上次一樣。")
+    return {"rerun": "skipped", "rerun_message": None}
 
 
 def view(conn, brand_id: str, cycle_id: str) -> dict:

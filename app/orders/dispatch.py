@@ -23,8 +23,8 @@ from typing import Optional
 
 from app.ads import codes as ads_codes
 from app.ads import performance as ads_performance
-from app.ads import reading as ads_reading
 from app.ads import repository as ads_repo
+from app.ads import weekly_proposals
 from app.orders import channel as orders_channel
 from app.orders import importer as orders_importer
 from app.orders import repository as orders_repo
@@ -45,12 +45,14 @@ class DispatchResult:
 
 def _rerun_affected_cycles(conn, brand_id: str, actor: str, cycle_ids) -> list:
     """晚到檔案丟進拖檔口時，自動觸發受影響期別的重判（決策 0025 懶人優先第 3 點：
-    「補件驅動回溯重判，不設死線」）。ads_reading.rerun_for_late_data 自己判斷這期算不算
-    「晚到」（還在 LIVE、或還沒判讀過都不算），這裡只負責逐期呼叫、收集有動靜的結果。"""
+    「補件驅動回溯重判，不設死線」）。走 `weekly_proposals.rerun_after_late_data`——跟
+    CSV／手動填成效走同一個共用出處（票 F1），不是只呼叫 `ads_reading.rerun_for_late_data`：
+    以前這裡沒有 LIVE 檔期首判的 bootstrap 分支，也從不補建週提案卡，補件重判後
+    `reading.run()` 清掉的舊卡沒人接著補（見 `reading.py` 的 `preserved_weekly` 刪除範圍）。"""
     results = []
     for cycle_id in cycle_ids:
-        outcome = ads_reading.rerun_for_late_data(conn, brand_id, cycle_id, actor=actor)
-        if outcome:
+        outcome = weekly_proposals.rerun_after_late_data(conn, brand_id, cycle_id, actor=actor)
+        if outcome["rerun"] != "skipped":
             outcome["cycle_id"] = cycle_id
             results.append(outcome)
     return results
