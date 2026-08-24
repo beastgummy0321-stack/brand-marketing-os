@@ -241,6 +241,11 @@ export interface CsvImportResult {
   matched_assets: number;
   unmatched_columns: string[];
   warnings: string[];
+  // 已判讀過的檔期補匯數字會自動重判（ADR 0022 第 2 點，
+  // app/ads/routes_campaigns_performance_api.py _late_data_rerun）：
+  // late_data＝重算且有變、unchanged＝重算但結論一樣、skipped＝這期還沒判讀過，不必算。
+  rerun: "late_data" | "unchanged" | "skipped";
+  rerun_message: string | null;
 }
 
 // app/ads/reading_assets.py asset_totals()（_asset_totals()，reading.py:393-417）——

@@ -398,6 +398,7 @@ function ManualCsvPanel({ brandId, cycleId, onImported }: { brandId: string; cyc
             <p className="text-xs text-success">
               {manualResult.imported > 0 ? `記下 ${manualResult.imported} 筆成效資料。` : "這筆沒有記下新資料。"}
               {manualResult.skipped > 0 && `${manualResult.skipped} 筆重複略過。`}
+              {manualResult.rerun_message && ` ${manualResult.rerun_message}`}
             </p>
           )}
         </form>
@@ -421,6 +422,7 @@ function ManualCsvPanel({ brandId, cycleId, onImported }: { brandId: string; cyc
               匯入 {csvResult.imported} 筆成效資料，對回 {csvResult.matched_assets} 則素材。
               {csvResult.quarantined > 0 && `${csvResult.quarantined} 筆數字不合理已擱在一旁。`}
               {csvResult.skipped > 0 && `${csvResult.skipped} 筆重複略過。`}
+              {csvResult.rerun_message && ` ${csvResult.rerun_message}`}
             </p>
           )}
         </div>

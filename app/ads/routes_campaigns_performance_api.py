@@ -24,6 +24,7 @@ from app.ads import performance as ads_performance
 from app.ads import performance_batches
 from app.ads import reading as ads_reading
 from app.ads import repository as ads_repo
+from app.ads import settlement as ads_settlement
 from app.ads import simulation
 from app.ads import target_cpa
 from app.ads.routes_common import OBJECTIVE_LABELS, _require_cycle
@@ -44,6 +45,26 @@ def _dict_note(d) -> "str | None":
     if not isinstance(d, dict):
         return None
     return d.get("note") or d.get("reason")
+
+
+def _late_data_rerun(conn, brand_id: str, cycle_id: str, actor: str) -> dict:
+    """ADR 0022 第 2／4 點：已經判讀過的檔期又動到數字（補匯或撤銷），自動重判一次並說哪裡變了。
+
+    算不算「晚到」由 `ads_reading.rerun_for_late_data` 自己判（還在 LIVE、或根本沒判讀過都回
+    None），跟拖檔口 `app/orders/dispatch.py:52` 走同一條路，不在這裡另立一套規則。
+
+    它「重判了但數字沒變」跟「根本沒重判」都回 None，訊息因此會說謊（驗收 A 第 4 節第 7 題：
+    明明算過了卻寫「沒有重新算過」）——這裡用結算版次有沒有進位自己分辨這兩件事。
+    """
+    before = ads_settlement.load_snapshot(conn, brand_id, cycle_id)
+    result = ads_reading.rerun_for_late_data(conn, brand_id, cycle_id, actor=actor)
+    if result:
+        return {"rerun": "late_data",
+                "rerun_message": result["explanation"] or "結論已經重新算過，數字有變動。"}
+    after = ads_settlement.load_snapshot(conn, brand_id, cycle_id)
+    if before and after and after["settlement_version"] > before["settlement_version"]:
+        return {"rerun": "unchanged", "rerun_message": "結論重新算過了，跟上次一樣。"}
+    return {"rerun": "skipped", "rerun_message": None}
 
 
 # ---- 成效（S8.51-58） ----
@@ -146,6 +167,7 @@ async def performance_manual(request: Request, brand_id: str, cycle_id: str):
         "matched_assets": result.matched_assets,
         "unmatched_columns": result.unmatched_columns,
         "warnings": [],
+        **_late_data_rerun(main_mod.conn, brand_id, cycle_id, actor),
     })
 
 
@@ -190,6 +212,7 @@ async def performance_csv(request: Request, brand_id: str, cycle_id: str,
         "matched_assets": result.matched_assets,
         "unmatched_columns": result.unmatched_columns,
         "warnings": [],
+        **_late_data_rerun(main_mod.conn, brand_id, cycle_id, actor),
     })
 
 
@@ -243,10 +266,9 @@ async def performance_batch_delete(request: Request, brand_id: str, cycle_id: st
         return JSONResponse({"detail": "找不到這批匯入"}, status_code=404)
 
     if cycle["status"] == "CLOSED":
-        result = ads_reading.rerun_for_late_data(conn, brand_id, cycle_id, actor=actor)
-        rerun = "late_data" if result else "skipped"
-        message = (f"撤銷了 {deleted} 筆，結論已重新算過。" if result
-                   else f"撤銷了 {deleted} 筆，這批數字不影響結論，沒有重新算過。")
+        outcome = _late_data_rerun(conn, brand_id, cycle_id, actor)
+        rerun = outcome["rerun"]
+        message = f"撤銷了 {deleted} 筆，" + (outcome["rerun_message"] or "沒有重新算過。")
     else:
         ok, err = ads_reading.run(conn, brand_id, cycle_id, actor)
         rerun = "done" if ok else "skipped"

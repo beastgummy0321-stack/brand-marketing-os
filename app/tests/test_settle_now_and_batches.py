@@ -19,6 +19,11 @@ from app.llm.providers import FakeProvider, ProviderResponse, Usage
 from app.tests.test_ads_performance import ACTOR, _CSV_ZH, _BaseImportTest
 
 
+_CSV_LATE = """行銷活動名稱,報告開始,報告結束,花費金額 (TWD),購買次數,購買轉換價值
+晚到訂單,2026-07-01,2026-07-14,0,3,"2,790"
+"""
+
+
 def _fake(text):
     return ProviderResponse(output_text=text, structured=None,
                             usage=Usage(input_tokens=300, output_tokens=150),
@@ -147,6 +152,37 @@ class SettleNowAndBatchesTest(_BaseImportTest):
         cycle = main.conn.execute(
             "SELECT status FROM campaign_cycle WHERE id = ?", (self.cycle_id,)).fetchone()
         self.assertEqual(cycle["status"], "CLOSED")  # D2：不可降級
+
+    # h. 結案後補匯 CSV 自動重判（ADR 0022 第 2 點；驗收 A 第 4 節第 7 題）
+    def test_h_csv_import_after_closed_reruns_late_data(self):
+        self._post_csv(_CSV_ZH)
+        self.client.post(self._settle_url())  # cycle 進 CLOSED
+
+        before = main.conn.execute(
+            "SELECT MAX(version) v FROM settlement_version WHERE campaign_cycle_id = ?",
+            (self.cycle_id,)).fetchone()["v"]
+
+        resp = self._post_csv(_CSV_LATE)
+        self.assertEqual(resp.status_code, 200, resp.text)
+        self.assertEqual(resp.json()["rerun"], "late_data")
+        self.assertTrue(resp.json()["rerun_message"])
+
+        after = main.conn.execute(
+            "SELECT version, trigger_reason FROM settlement_version"
+            " WHERE campaign_cycle_id = ? ORDER BY version DESC LIMIT 1",
+            (self.cycle_id,)).fetchone()
+        self.assertEqual(after["version"], before + 1)
+        self.assertEqual(after["trigger_reason"], "late_data")
+
+    # i. 補匯後數字沒變時不准說「沒有重新算過」——算過了就要說算過了
+    def test_i_reimporting_the_same_rows_says_recomputed_but_unchanged(self):
+        self._post_csv(_CSV_ZH)
+        self.client.post(self._settle_url())
+
+        resp = self._post_csv(_CSV_ZH)  # 整批重複，去重後數字一模一樣
+        self.assertEqual(resp.status_code, 200, resp.text)
+        self.assertEqual(resp.json()["rerun"], "unchanged")
+        self.assertNotIn("沒有重新算過", resp.json()["rerun_message"])
 
 
 if __name__ == "__main__":
