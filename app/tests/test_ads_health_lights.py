@@ -113,6 +113,20 @@ class HealthLightsTest(unittest.TestCase):
         changed_light = health_lights.compute(main.conn, self.bid, cycle["id"])["roas"]
         self.assertEqual(changed_light["status"], "red")  # 2.5*0.9=2.25，2.0 沒到
 
+    def test_fatigue_light_note_is_a_full_sentence_not_just_the_two_char_label(self):
+        """票 R1-live-reading-output done-check 4：疲勞燈以前 note 直接回
+        `FATIGUE_STATUS_LABELS[status]`，只有「警示」／「危險」兩個字，跟其他三盞燈
+        （都是帶實際數字的整句白話）不同款。"""
+        cycle = self._cycle(start_offset_days=20)
+        csv_text = "花費金額,廣告名稱,頻率\n1000,虛構廣告,5.0\n"
+        ads_performance.import_csv(main.conn, self.bid, cycle["id"], csv_text, actor=ACTOR)
+
+        light = health_lights.compute(main.conn, self.bid, cycle["id"])["fatigue"]
+
+        self.assertEqual(light["status"], "red")  # cold_danger 預設 3.5，5.0 超過
+        self.assertNotEqual(light["note"], "危險")  # 不能只剩兩個字
+        self.assertIn("5.00", light["note"])  # 整句要帶實際頻率數字，不是空泛形容詞
+
 
 if __name__ == "__main__":
     unittest.main()

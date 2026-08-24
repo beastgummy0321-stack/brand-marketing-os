@@ -27,6 +27,7 @@ from app.ads import repository as ads_repo
 from app.ads import settlement as ads_settlement
 from app.ads import simulation
 from app.ads import target_cpa
+from app.ads import weekly_proposals
 from app.ads.routes_common import OBJECTIVE_LABELS, _require_cycle
 from app.core import rule_cards
 
@@ -55,14 +56,34 @@ def _late_data_rerun(conn, brand_id: str, cycle_id: str, actor: str) -> dict:
 
     它「重判了但數字沒變」跟「根本沒重判」都回 None，訊息因此會說謊（驗收 A 第 4 節第 7 題：
     明明算過了卻寫「沒有重新算過」）——這裡用結算版次有沒有進位自己分辨這兩件事。
+
+    票 R1-live-reading-output：LIVE 檔期的第一次判讀，`rerun_for_late_data` 故意當作「不是
+    補件」原樣略過（見它的 docstring）——但這正是使用者投放中匯入成效後看不到逐支表／AI
+    白話／週提案卡的根因：沒有任何排程／按鈕會在匯入的當下幫 LIVE 檔期跑第一次判讀，只能
+    乾等 day7 提醒、每週一背景排程，或使用者自己去駕駛艙按「現在就重新判讀」。這裡直接補上
+    這一次。另外，不管是這裡的 LIVE 首判、還是下面既有的補件重判，只要判讀真的重跑了，都要
+    順手重出一次週提案卡（`weekly_proposals.generate()`）——原本兩條路都只重判、不建卡，
+    同一個根因的另一半：`reading.run()` 每次重跑都會清掉未處理的舊週提案卡（見
+    `reading.py` 的 `preserved_weekly` 刪除範圍），沒人接著呼叫 `generate()` 就沒有新卡遞補。
     """
+    cycle = ads_repo.get_cycle(conn, brand_id, cycle_id)
+    if cycle is not None and cycle["status"] == "LIVE":
+        ok, _err = ads_reading.run(conn, brand_id, cycle_id, actor)
+        if not ok:
+            return {"rerun": "skipped", "rerun_message": None}
+        weekly_proposals.generate(conn, brand_id, cycle_id)
+        return {"rerun": "live_reading",
+                "rerun_message": "已經判讀這期最新資料，「本週作戰」有新的建議卡了。"}
+
     before = ads_settlement.load_snapshot(conn, brand_id, cycle_id)
     result = ads_reading.rerun_for_late_data(conn, brand_id, cycle_id, actor=actor)
     if result:
+        weekly_proposals.generate(conn, brand_id, cycle_id)
         return {"rerun": "late_data",
                 "rerun_message": result["explanation"] or "結論已經重新算過，數字有變動。"}
     after = ads_settlement.load_snapshot(conn, brand_id, cycle_id)
     if before and after and after["settlement_version"] > before["settlement_version"]:
+        weekly_proposals.generate(conn, brand_id, cycle_id)
         return {"rerun": "unchanged", "rerun_message": "結論重新算過了，跟上次一樣。"}
     return {"rerun": "skipped", "rerun_message": None}
 

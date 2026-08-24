@@ -243,8 +243,9 @@ export interface CsvImportResult {
   warnings: string[];
   // 已判讀過的檔期補匯數字會自動重判（ADR 0022 第 2 點，
   // app/ads/routes_campaigns_performance_api.py _late_data_rerun）：
-  // late_data＝重算且有變、unchanged＝重算但結論一樣、skipped＝這期還沒判讀過，不必算。
-  rerun: "late_data" | "unchanged" | "skipped";
+  // live_reading＝LIVE 檔期第一次判讀、late_data＝重算且有變、
+  // unchanged＝重算但結論一樣、skipped＝沒有資料可判讀。
+  rerun: "live_reading" | "late_data" | "unchanged" | "skipped";
   rerun_message: string | null;
 }
 

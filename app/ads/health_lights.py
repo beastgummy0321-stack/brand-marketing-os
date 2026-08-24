@@ -94,7 +94,16 @@ def _fatigue_light(conn, brand_id: str, cycle: dict) -> dict:
     if frequency is None:
         return _light("insufficient", None, "疲勞", "還沒有成效資料，算不出頻率。")
     status = rule_cards.classify_ad_frequency(conn, brand_id, "cold", frequency)
-    return _light(_FATIGUE_STATUS_LIGHT[status], frequency, "疲勞", rule_cards.FATIGUE_STATUS_LABELS[status])
+    # 票 R1-live-reading-output：其餘三盞燈的 note 都是帶數字的整句白話，這盞燈原本只回
+    # `FATIGUE_STATUS_LABELS[status]`（兩個字「警示」／「危險」／「安全」），使用者看不出
+    # 頻率算出多少、門檻在哪——補成同款整句。
+    danger = rule_cards.get_value(conn, brand_id, "ad_creative_fatigue", "cold_danger")
+    note = {
+        "safe": f"目前最高頻率 {frequency:.2f}，還在安全範圍內。",
+        "warning": f"目前最高頻率 {frequency:.2f}，已經進入警示區間，留意受眾疲乏。",
+        "danger": f"目前最高頻率 {frequency:.2f}，超過危險門檻 {danger:.2f}，受眾已經看膩了。",
+    }[status]
+    return _light(_FATIGUE_STATUS_LIGHT[status], frequency, "疲勞", note)
 
 
 def compute(conn, brand_id: str, cycle_id: str) -> dict:

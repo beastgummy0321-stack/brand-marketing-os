@@ -26,6 +26,9 @@ import unittest
 import app.main as main
 from app.ads import performance as perf
 from app.ads import reading
+from app.ads import repository as ads_repo
+from app.ads import weekly_proposals
+from app.brand_intelligence import repository as bi_repo
 from app.core.db import new_id, now_iso
 from app.llm.providers import FakeProvider, ProviderResponse, Usage
 from app.tests.test_ads_performance import ACTOR, _BaseImportTest
@@ -155,6 +158,68 @@ class PerformanceGetAssetBreakdownTest(_BaseImportTest):
 
         resp = self.client.get(f"/api/campaigns/{self.bid}/{self.cycle_id}/performance")
         self.assertEqual(resp.json()["data"]["reading"]["asset_breakdown"], [])
+
+
+class LiveCycleImportTriggersReadingTest(_BaseImportTest):
+    """票 R1-live-reading-output（`.scratch/rehearsal-b0-fix/issues/R1-live-reading-output.md`）：
+    投放中（LIVE）檔期匯入成效，成效路由自己要補一次判讀＋建卡，不能乾等 day7 提醒、
+    每週一背景排程，或使用者自己去駕駛艙按「現在就重新判讀」。根因：`_late_data_rerun()`
+    原本只認「已經判讀過又補件」，LIVE 檔期的第一次判讀完全沒人觸發（見 R1-rootcause.md）。"""
+
+    def setUp(self):
+        super().setUp()
+        self._orig_provider = reading.PROVIDER
+        reading.PROVIDER = FakeProvider(response=_fake(
+            json.dumps({"text": "說明文字"}, ensure_ascii=False)))
+
+    def tearDown(self):
+        reading.PROVIDER = self._orig_provider
+
+    def _live_cycle_with_losing_ad(self):
+        product_id = bi_repo.create_product(
+            main.conn, self.bid, name="虛構R1商品", actor=ACTOR)["id"]
+        bi_repo.save_product_economics(
+            main.conn, self.bid, product_id, selling_price=1000,
+            unit_variable_cost=400, currency="TWD", confirmed_by=ACTOR, actor=ACTOR)
+        cycle = ads_repo.create_cycle(
+            main.conn, self.bid, product_ids=[product_id], pain_value=10000,
+            objective="sales", actor=ACTOR, start_date="2026-07-01", duration_days=14)
+        ads_repo.update_cycle_status(main.conn, self.bid, cycle["id"], status="LIVE", actor=ACTOR)
+        ts = now_iso()
+        pkg_id, mapping_id = new_id("pkg"), new_id("xam")
+        main.conn.execute(
+            "INSERT INTO publishing_package (id, brand_id, campaign_cycle_id, product_id,"
+            " campaign_name, adset_name, ad_name, destination_url, utm_json, status, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, '{}', 'ready', ?)",
+            (pkg_id, self.bid, cycle["id"], product_id, "R1測試活動", "R1測試組合",
+             "虧損_01_ad", "https://example.test", ts))
+        main.conn.execute(
+            "INSERT INTO external_ad_mapping (id, brand_id, publishing_package_id,"
+            " campaign_cycle_id, platform, claim_status, confirmed_by, confirmed_at,"
+            " created_at) VALUES (?, ?, ?, ?, 'meta', 'confirmed', ?, ?, ?)",
+            (mapping_id, self.bid, pkg_id, cycle["id"], ACTOR, ts, ts))
+        main.conn.commit()
+        return cycle["id"]
+
+    def test_csv_import_on_live_cycle_runs_reading_and_generates_a_stop_card(self):
+        cycle_id = self._live_cycle_with_losing_ad()
+        self.assertIsNone(reading.load(main.conn, self.bid, cycle_id)["cycle"])
+
+        csv_text = ("行銷活動名稱,廣告名稱,曝光次數,連結點擊次數,花費金額,購買次數,購買轉換價值\n"
+                   "R1測試活動,虧損_01_ad,20000,400,10000,0,0\n")
+        resp = self.client.post(f"/api/campaigns/{self.bid}/{cycle_id}/performance/csv",
+                                files={"perf_file": ("perf.csv", csv_text, "text/csv")})
+
+        self.assertEqual(resp.status_code, 200, resp.text)
+        self.assertEqual(resp.json()["rerun"], "live_reading")
+        self.assertTrue(resp.json()["rerun_message"])
+
+        loaded = reading.load(main.conn, self.bid, cycle_id)
+        self.assertIsNotNone(loaded["cycle"])  # reading.run() 真的跑了，不用再等結算
+        self.assertTrue(any(p["status"] == "pause_candidate" for p in loaded["products"]))
+
+        cards = weekly_proposals.list_cards(main.conn, self.bid, cycle_id)
+        self.assertTrue(any(card["action"] == "停掉" for card in cards))  # generate() 真的建卡了
 
 
 if __name__ == "__main__":
