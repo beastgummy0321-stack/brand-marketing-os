@@ -53,7 +53,7 @@ from app.ads.reading_hypotheses import (  # noqa: F401  (re-export, D2)
 # reading_verdict：判讀結論周邊沒有共同主題的小函式（見該檔開頭說明為什麼 LLM 文案那個
 # 縫沒有動——PROVIDER 猴子補丁只認 reading 模組本身，搬了會讓十幾個檔案外測試悄悄失真）。
 from app.ads.reading_verdict import (  # noqa: F401  (re-export, D2)
-    _HYPOTHESIS_DIRECTIONAL_PRESELECT, _NEGATIVE_STATUSES, _POSITIVE_STATUSES,
+    _NEGATIVE_STATUSES, _POSITIVE_STATUSES,
     _preselect_hypothesis_status, _unsettled_note, _verdict_group,
     breakeven_roas, classify_verdict_shift, cycle_breakeven_roas, money_line, prediction_settlement,
     repurchase_breakeven_roas,
@@ -107,18 +107,17 @@ STATISTICAL_LEVEL_NOTES = {
 }
 
 # 假設結案（票 #53，決策 0030 第三節第 8 點）：判讀頁列出這期的策略假設，三選一結案。
-# AI 的預選值由程式依判讀結論算（決策 0016 硬性原則 4：結論由程式定，LLM 只翻人話）。
 #
-# 修憲落地 G4（決策 0035 第三節第 6 點）：預選**不再**沿用 `reading_verdict._verdict_group()`
-# 那套正負向分群——那組分群是給翻盤警示（票 #38）與回購雙線衝突（票 #39）用的，`maintain`
-# （只是打平）在那裡算正面訊號是對的（見 test_ads_reading.py 的 VerdictShiftTest），
-# 但拿來預選假設「成立」就是橡皮圖章：使用者十之八九照 AI 預選送出（0030 否決程式自動判
-# 的理由「假設是自由文字、沒有可量測判準」對人類更成立），maintain 這種「沒虧沒賺」的
-# 結論不該被貼上「已驗證」標籤。改用專屬判準（見 reading_verdict._preselect_hypothesis_status
-# 與其專屬的 `_HYPOTHESIS_DIRECTIONAL_PRESELECT`）：只有 `scale_candidate`／`pause_candidate`
-# 這兩個真正算得出方向的結論才預選成立／不成立，其餘（含 maintain、learning、
-# insufficient_data、unclear_economics）一律預選「看不出來」，沒有明確規則訊號就不硬給答案
-# ——使用者仍可手動改選任何一個，系統不擋（決策 0013）。
+# 票 F3-signoff-residue：畫面預選一律「看不出來」（`reading_verdict._preselect_hypothesis_status`
+# 現在忽略 status，恆回 inconclusive），不再依整體判讀結論（`scale_candidate`／
+# `pause_candidate`）猜方向——那是修憲落地 G4（決策 0035 第三節第 6 點）原本的作法，理由
+# 是`_verdict_group()`那套正負向分群把 maintain 算正面會誤導假設結案，所以改用更窄的
+# 專屬判準；但即使窄成只挑 scale_candidate／pause_candidate，預選值仍然是「產品／檔期
+# 層級的聚合結論」，不是「這條假設自己那幾個切角的對照數字」，使用者一樣十之八九照預選
+# 送出，等於用聚合方向幫這條特定假設背書——跟票 #53 當初想避免的橡皮圖章是同一種問題，
+# 只是換了個更隱蔽的來源。詳細理由見 reading_verdict.py 那個函式上方的完整說明。
+# 使用者仍可手動改選任何一個，系統不擋（決策 0013）；寫入端把關
+# （`reading_hypotheses.guard_supported_verdict`）不受影響，維持原樣。
 HYPOTHESIS_STATUS_LABELS = {"supported": "成立", "rejected": "不成立", "inconclusive": "看不出來"}
 HYPOTHESIS_TYPE_LABELS = {"audience": "受眾假設", "message": "訊息假設"}
 

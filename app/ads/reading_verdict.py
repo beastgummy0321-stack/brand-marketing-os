@@ -28,18 +28,24 @@ from app.ads import performance as ads_performance
 _POSITIVE_STATUSES = {"scale_candidate", "maintain"}
 _NEGATIVE_STATUSES = {"pause_candidate"}
 
-# 假設結案預選（票 #53，修憲落地 G4，決策 0035 第三節第 6 點）：跟上面的正負向分群是
-# 兩條不同的線——分群給翻盤警示／回購雙線衝突用，這裡只有 scale_candidate／
-# pause_candidate 這兩個真正算得出方向的結論才預選成立／不成立，其餘一律「看不出來」，
-# 詳細理由見 app/ads/reading.py 頂端「假設結案」那段常數的完整說明。
-_HYPOTHESIS_DIRECTIONAL_PRESELECT = {"scale_candidate": "supported", "pause_candidate": "rejected"}
+# 假設結案預選（票 F3-signoff-residue，取代票 #53／修憲落地 G4／決策 0035 第三節第 6
+# 點原本的作法）：那個舊版本只要 scale_candidate／pause_candidate 這兩個「真正算得出
+# 方向」的整體結論出現、且這期真的做過對照（comparison_cells 足夠），就預選成立／不
+# 成立——但「整體判讀結論偏正向」不等於「這條假設自己的 A／B 對照數字真的支持它」，
+# 預選值來自產品／檔期層級的聚合結論，不是這條假設自己那幾個切角的比較結果，使用者
+# 十之八九照預選送出，等於用聚合方向幫這條假設背書，跟票 #53 當初想避免的橡皮圖章是
+# 同一種問題，只是換了個更隱蔽的來源。UX 誠實面改成：不管整體結論多明確、對照做得多
+# 完整，畫面一律預選「看不出來」，使用者要主動選「成立」才算數（同精神：B0-21）。
+#
+# 寫入端的把關（`guard_supported_verdict`，reading_hypotheses.py）維持不變——沒有真對照
+# 的「成立」照樣在入帳前被程式擋下、降級成「看不出來」；這裡改的純粹是畫面預選這一層，
+# 兩層各管各的，互不取代。
 
 
 def _verdict_group(status: Optional[str]) -> str:
     """翻盤警示（`classify_verdict_shift`）與回購雙線衝突（`_repurchase_line`）專用的
     正負向分群——`maintain` 算正面在這兩個用途下是對的。**假設結案預選不用這個**，
-    見下面 `_preselect_hypothesis_status` 與其專屬的 `_HYPOTHESIS_DIRECTIONAL_PRESELECT`
-    （修憲落地 G4）。"""
+    見下面 `_preselect_hypothesis_status`。"""
     if status in _POSITIVE_STATUSES:
         return "positive"
     if status in _NEGATIVE_STATUSES:
@@ -47,8 +53,13 @@ def _verdict_group(status: Optional[str]) -> str:
     return "uncertain"
 
 
-def _preselect_hypothesis_status(status: Optional[str]) -> str:
-    return _HYPOTHESIS_DIRECTIONAL_PRESELECT.get(status, "inconclusive")
+def _preselect_hypothesis_status(status: Optional[str]) -> str:  # noqa: ARG001 — 見上方票 F3 說明
+    """畫面預選一律「看不出來」，不再依整體判讀結論猜方向（票 F3-signoff-residue）。
+
+    `status` 參數保留只是不改呼叫端（`reading_hypotheses.build_hypothesis_items` 的
+    `preselect_fn` 注入介面）簽章——集裝箱憲章第 6 節：改進入點簽章是契約變更，這裡
+    沒有非改不可的理由，維持既有介面比較乾淨。"""
+    return "inconclusive"
 
 
 def classify_verdict_shift(before_status: Optional[str], after_status: Optional[str]) -> str:

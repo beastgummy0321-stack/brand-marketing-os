@@ -47,6 +47,61 @@ def _fake(text):
                             stop_reason="end_turn")
 
 
+class LearningTextNormalizationTest(unittest.TestCase):
+    """票 F3-signoff-residue：`_normalize_learning_text()` 拓寬括號家族／收斂內部空白／
+    清孤兒標點——近似重複要能對上，但真的不同的結論不能被拓寬順手洗成同一句話。"""
+
+    def test_widened_bracket_families_normalize_the_same_as_the_bare_sentence(self):
+        base = "情感訴求角度轉換率比功能訴求高"
+        for aside in ("（第二輪驗證）", "(second pass)", "〔第二輪驗證〕",
+                     "「第二輪驗證」", "『第二輪驗證』", "【第二輪驗證】"):
+            with self.subTest(aside=aside):
+                self.assertEqual(bi_repo._normalize_learning_text(base + aside), base)
+
+    def test_internal_whitespace_is_collapsed(self):
+        base = "情感訴求角度轉換率比功能訴求高"
+        spaced = "情感 訴求角度轉換率\t比功能訴求　高"
+        self.assertEqual(bi_repo._normalize_learning_text(spaced), base)
+
+    def test_stray_punctuation_left_by_a_stripped_aside_is_cleaned_up(self):
+        """夾註前後各自帶一個逗號，拿掉夾註後兩個逗號黏在一起、句尾也多一個懸空逗號——
+        清乾淨後應該跟完全沒有夾註的版本比對相同。"""
+        base = "情感訴求角度轉換率比功能訴求高"
+        text = f"{base}，（第二輪驗證），"
+        self.assertEqual(bi_repo._normalize_learning_text(text), base)
+
+    def test_genuinely_different_conclusions_do_not_normalize_the_same(self):
+        """核心結論字詞不同（高 vs 低）就是真的不同，括號／空白拓寬不能把它們洗成一樣——
+        這是本票要求的反向證明。"""
+        higher = bi_repo._normalize_learning_text("情感訴求角度轉換率比功能訴求高（第二輪驗證）")
+        lower = bi_repo._normalize_learning_text("情感訴求角度轉換率比功能訴求低（第二輪驗證）")
+        self.assertNotEqual(higher, lower)
+
+
+class LearningLedgerDedupeWidenedNormalizationTest(unittest.TestCase):
+    """票 F3-signoff-residue：`learning_ledger_entry_exists()` 走真的查表路徑，正／反兩個
+    方向都要證明——近似重複要擋下（標「已加強」而不是「第一次看到」），真的不同的結論
+    不能被誤擋。"""
+
+    def setUp(self):
+        self.brand = bi_repo.create_brand(main.conn, name="虛構晨露茶行去重測試",
+                                          client_name=None, actor=ACTOR)
+        self.bid = self.brand["id"]
+        bi_repo.create_learning_ledger_entry(
+            main.conn, self.bid, learning_text="情感訴求角度轉換率比功能訴求高（第二輪驗證）",
+            applicability_scope="brand", created_by=ACTOR, actor=ACTOR, source_track="ads")
+
+    def test_near_duplicate_across_bracket_family_and_whitespace_dedupes(self):
+        near_dup = "情感訴求角度轉換率 比功能訴求高〔第三輪再測〕"
+        self.assertTrue(bi_repo.learning_ledger_entry_exists(
+            main.conn, self.bid, product_id=None, learning_text=near_dup))
+
+    def test_genuinely_different_conclusion_does_not_dedupe(self):
+        different = "情感訴求角度轉換率比功能訴求低（第二輪驗證）"
+        self.assertFalse(bi_repo.learning_ledger_entry_exists(
+            main.conn, self.bid, product_id=None, learning_text=different))
+
+
 class _HypothesisReviewBase(unittest.TestCase):
     """票 #53 判讀頁假設結案共用的建置。"""
 
@@ -139,8 +194,10 @@ class _HypothesisReviewBase(unittest.TestCase):
 class HypothesisReviewTest(_HypothesisReviewBase):
     """票 #53：判讀頁假設結案（三選一，AI 預選）＋入帳 learning_ledger＋打斷佇列補網。"""
 
-    def test_ai_preselects_supported_when_scale_candidate(self):
-        """判讀結論偏正向 → 三選一預選「成立」，AI 只負責寫理由，不決定選哪個（決策 0016）。"""
+    def test_scale_candidate_with_real_comparison_still_preselects_inconclusive(self):
+        """票 F3-signoff-residue：判讀結論偏正向、且這期真的做過對照，畫面預選也不再猜
+        「成立」——聚合判讀方向不等於這條假設自己的對照數字撐得住這個結論，使用者要主動
+        選才算數（同精神：B0-21）。AI 理由照樣附上、對照證據照樣並排出示，只是不預選。"""
         hyp = self._link_hypothesis("通勤族比在家工作者更會下單")
         self._ab_spend(spend=10000, conversions=10, revenue=40000)
         ok, err = reading.run(main.conn, self.bid, self.cycle_id, ACTOR)
@@ -148,16 +205,18 @@ class HypothesisReviewTest(_HypothesisReviewBase):
         reviews = reading.load(main.conn, self.bid, self.cycle_id)["cycle"]["hypothesis_reviews"]
         self.assertEqual(len(reviews), 1)
         self.assertEqual(reviews[0]["id"], hyp["id"])
-        self.assertEqual(reviews[0]["preselect"], "supported")
+        self.assertEqual(reviews[0]["preselect"], "inconclusive")
         self.assertTrue(reviews[0]["ai_reason"])
         self.assertEqual(len(reviews[0]["comparison_cells"]), 2, "契約第2點：要出示兩邊的並排證據")
 
-    def test_ai_preselects_rejected_when_pause_candidate(self):
+    def test_pause_candidate_with_real_comparison_still_preselects_inconclusive(self):
+        """票 F3-signoff-residue：同一條理由套在停損方向——聚合結論偏負向也不代表這條假設
+        自己被否證了，一樣不預選「不成立」。"""
         self._link_hypothesis("這群受眾在意價格")
         self._ab_spend(spend=10000, conversions=0, revenue=0)
         reading.run(main.conn, self.bid, self.cycle_id, ACTOR)
         reviews = reading.load(main.conn, self.bid, self.cycle_id)["cycle"]["hypothesis_reviews"]
-        self.assertEqual(reviews[0]["preselect"], "rejected")
+        self.assertEqual(reviews[0]["preselect"], "inconclusive")
 
     def test_ai_preselects_inconclusive_when_maintain(self):
         """修憲落地 G4（決策 0035 第三節第 6 點）：`maintain`（只是打平）不算「程式算出
