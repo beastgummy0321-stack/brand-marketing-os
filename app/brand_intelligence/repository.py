@@ -21,7 +21,6 @@
 """
 
 import json
-import re
 import sqlite3
 from typing import Optional
 
@@ -35,6 +34,13 @@ from app.brand_intelligence.repository_channels import (  # noqa: F401
     get_channel,
     list_channels,
     update_channel,
+)
+# 拆進 repository_learning_text.py（票 F3-signoff-residue R4：本檔行數頂到凍結上限，
+# 修多括號區段全部刪空互撞的缺陷加不進去，precedent 同上面 repository_channels 的拆法）；
+# 這裡 re-export，讓既有 `learning_ledger_entry_exists()` 呼叫與測試裡的
+# `bi_repo._normalize_learning_text(...)` 寫法不必改。
+from app.brand_intelligence.repository_learning_text import (  # noqa: F401
+    _normalize_learning_text,
 )
 from app.core import cleanup
 from app.core.audit import write_audit
@@ -1584,29 +1590,6 @@ def list_learnings_for_prompt(conn: sqlite3.Connection, brand_id: str, *,
         params.append(track)
     sql += " ORDER BY learned_at"
     return _rows(conn.execute(sql, params))
-
-
-# 夾註括號家族拓寬（票 F3-signoff-residue）：LLM 偶爾換用〔〕「」『』【】取代小括號寫舉例性夾註。
-_LEARNING_ASIDE_RE = re.compile(
-    r"[（(][^）)]*[）)]|「[^」]*」|『[^』]*』|【[^】]*】|〔[^〕]*〕")
-# 拿掉夾註後常留下孤兒標點（黏在一起或句尾懸空）：連續 2 個以上收斂成 1 個、頭尾整段砍掉。
-_STRAY_PUNCT_RE = re.compile(r"[，,、；;：:。.]{2,}")
-_EDGE_PUNCT_RE = re.compile(r"^[，,、；;：:。.]+|[，,、；;：:。.]+$")
-_EDGE_PUNCT_WS_RE = re.compile(r"^[\s，,、；;：:。.]+|[\s，,、；;：:。.]+$")  # 判斷括號是否吃掉整句用
-
-
-def _normalize_learning_text(text: str) -> str:
-    """去重比對前拿掉補充夾註（家族見 `_LEARNING_ASIDE_RE`）、收斂內部空白、清孤兒標點
-    ——LLM 措辭常只差在舉例性夾註或排版空白，逐字全等會誤判成新學習（R2-learning-honesty
-    契約第 5 點：B0-23）。中文不靠空白斷詞，整句清空白不傷語意；括號吃掉整句時只拆括號留內容
-    不清空，避免「…高」「…低」被一起清成空字串誤判重複，字詞差異仍當不同。"""
-    def _strip_or_unwrap(m: "re.Match[str]") -> str:
-        rest = _EDGE_PUNCT_WS_RE.sub("", text[:m.start()]) + _EDGE_PUNCT_WS_RE.sub("", text[m.end():])
-        return m.group(0)[1:-1] if not rest else ""
-    stripped = _LEARNING_ASIDE_RE.sub(_strip_or_unwrap, text)
-    stripped = re.sub(r"\s+", "", stripped)
-    stripped = _STRAY_PUNCT_RE.sub("，", stripped)
-    return _EDGE_PUNCT_RE.sub("", stripped).strip()
 
 
 def learning_ledger_entry_exists(conn: sqlite3.Connection, brand_id: str,

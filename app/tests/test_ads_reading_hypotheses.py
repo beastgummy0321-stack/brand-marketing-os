@@ -91,6 +91,41 @@ class LearningTextNormalizationTest(unittest.TestCase):
                 self.assertEqual(higher, "情感訴求角度轉換率比功能訴求高")
                 self.assertEqual(lower, "情感訴求角度轉換率比功能訴求低")
 
+    def test_never_normalizes_a_non_empty_input_to_the_empty_string(self):
+        """票 F3 R4（sign-off residue 覆核）：R3 的「整段包住才拆括號」判斷是拿『這個括號以
+        外還剩什麼』來看，兩個以上括號區段時每一段都看到「別段還在」，於是每段都判自己該刪
+        ——全部段落都刪光，結論相反的兩句話一起洗成空字串，變成假重複。任何非空輸入正規化
+        後都不准是空字串，不然凡是這種形狀的學習就永遠被當成第一句以外全部視為重複，真正
+        新學習被靜靜吞掉。"""
+        whole_quote_plus_aside_high = "「情感訴求角度轉換率比功能訴求高」（第二輪驗證）"
+        whole_quote_plus_aside_low = "「情感訴求角度轉換率比功能訴求低」（第二輪驗證）"
+        two_spans_high_then_low = "「情感訴求角度轉換率比功能訴求高」『情感訴求角度轉換率比功能訴求低』"
+        two_spans_low_then_high = "「情感訴求角度轉換率比功能訴求低」『情感訴求角度轉換率比功能訴求高』"
+        for text in (whole_quote_plus_aside_high, whole_quote_plus_aside_low,
+                     two_spans_high_then_low, two_spans_low_then_high):
+            with self.subTest(text=text):
+                self.assertNotEqual(bi_repo._normalize_learning_text(text), "")
+
+    def test_multi_span_opposite_conclusions_do_not_collide(self):
+        """票 F3 R4：上一個測試證明「不是空字串」還不夠——四句話裡有兩句講「高」、兩句講
+        「低」，正規化後絕不能把講「高」的和講「低」的洗成同一個字串（否則兩句結論相反的
+        學習照樣會互相判定成重複）。"""
+        whole_quote_plus_aside_high = "「情感訴求角度轉換率比功能訴求高」（第二輪驗證）"
+        whole_quote_plus_aside_low = "「情感訴求角度轉換率比功能訴求低」（第二輪驗證）"
+        two_spans_high_then_low = "「情感訴求角度轉換率比功能訴求高」『情感訴求角度轉換率比功能訴求低』"
+        two_spans_low_then_high = "「情感訴求角度轉換率比功能訴求低」『情感訴求角度轉換率比功能訴求高』"
+        normalized = {
+            "A1": bi_repo._normalize_learning_text(whole_quote_plus_aside_high),
+            "A2": bi_repo._normalize_learning_text(whole_quote_plus_aside_low),
+            "B1": bi_repo._normalize_learning_text(two_spans_high_then_low),
+            "B2": bi_repo._normalize_learning_text(two_spans_low_then_high),
+        }
+        keys = list(normalized)
+        for i, ka in enumerate(keys):
+            for kb in keys[i + 1:]:
+                with self.subTest(pair=(ka, kb)):
+                    self.assertNotEqual(normalized[ka], normalized[kb])
+
 
 class LearningLedgerDedupeWidenedNormalizationTest(unittest.TestCase):
     """票 F3-signoff-residue：`learning_ledger_entry_exists()` 走真的查表路徑，正／反兩個
@@ -114,6 +149,19 @@ class LearningLedgerDedupeWidenedNormalizationTest(unittest.TestCase):
         different = "情感訴求角度轉換率比功能訴求低（第二輪驗證）"
         self.assertFalse(bi_repo.learning_ledger_entry_exists(
             main.conn, self.bid, product_id=None, learning_text=different))
+
+    def test_multi_span_learning_is_not_silently_treated_as_duplicate(self):
+        """票 F3 R4：帳上先有一句多括號區段的學習（round 3 缺陷下會被正規化成空字串）。
+        另一句結論相反、一樣是多括號區段的新學習拿來比對——round 3 的缺陷會讓兩句話都被
+        正規化成空字串，空字串跟空字串相等，於是新學習被誤判成「已經記過了」而不會真的
+        入帳。這裡直接查真的查表路徑，不能只看正規化函式本身。"""
+        already_recorded = "「情感訴求角度轉換率比功能訴求高」『情感訴求角度轉換率比功能訴求低』"
+        bi_repo.create_learning_ledger_entry(
+            main.conn, self.bid, learning_text=already_recorded,
+            applicability_scope="brand", created_by=ACTOR, actor=ACTOR, source_track="ads")
+        genuinely_new = "「情感訴求角度轉換率比功能訴求低」『情感訴求角度轉換率比功能訴求高』"
+        self.assertFalse(bi_repo.learning_ledger_entry_exists(
+            main.conn, self.bid, product_id=None, learning_text=genuinely_new))
 
 
 class _HypothesisReviewBase(unittest.TestCase):
