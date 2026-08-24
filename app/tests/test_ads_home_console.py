@@ -85,6 +85,48 @@ class StageWordingTest(_BaseTest):
         self.assertEqual(len(stages.STAGE_LABELS), 5)    # ／共 5 步（hub 的 stage_total）
 
 
+class EndedUnsettledCycleDisplayTest(_BaseTest):
+    """B0-05（`.scratch/rehearsal-b0-fix/issues/R5-cockpit-and-state-machine.md`）：真機重現
+    end_date 已經過了 35 天的 LIVE 檔期，清單仍顯示「投放中・第 5 步／共 5 步・剩 0 天」
+    ——收帳排程只在系統開著時才會被排到（`app/main.py _auto_sync_if_due()`），單機單人
+    的使用型態不保證準時觸發。本票不做排程器（BOARD R5-S，另案批准），只在讀取時把
+    「已經結束但還沒收帳」的狀態老實講出來。"""
+
+    def _cycle(self, *, start_date: str, duration_days: int, status: str) -> str:
+        cycle = ads_repo.create_cycle(
+            main.conn, self.bid, product_ids=[], pain_value=10000, objective="sales",
+            actor=ACTOR, start_date=start_date, duration_days=duration_days)
+        ads_repo.update_cycle_status(main.conn, self.bid, cycle["id"], status=status, actor=ACTOR)
+        return cycle["id"]
+
+    def test_overdue_live_cycle_shows_ended_unsettled_not_live_zero_days_left(self):
+        from datetime import date, timedelta
+        start = (date.today() - timedelta(days=20)).isoformat()
+        cycle_id = self._cycle(start_date=start, duration_days=7, status="LIVE")
+
+        item = self._campaign_items()[cycle_id]
+        self.assertEqual(item["status_label"], "已結束・待收帳")
+        self.assertNotEqual(item["status_label"], "投放中")
+        self.assertIsNone(item["days_left"])
+
+    def test_overdue_evaluating_cycle_also_shows_ended_unsettled(self):
+        from datetime import date, timedelta
+        start = (date.today() - timedelta(days=20)).isoformat()
+        cycle_id = self._cycle(start_date=start, duration_days=7, status="EVALUATING")
+
+        item = self._campaign_items()[cycle_id]
+        self.assertEqual(item["status_label"], "已結束・待收帳")
+
+    def test_live_cycle_still_within_end_date_is_unaffected(self):
+        """對照組：還沒過 end_date 的 LIVE 檔期維持原樣，不能被這次修復誤傷。"""
+        from datetime import date
+        cycle_id = self._cycle(start_date=date.today().isoformat(), duration_days=14, status="LIVE")
+
+        item = self._campaign_items()[cycle_id]
+        self.assertEqual(item["status_label"], "投放中")
+        self.assertIsNotNone(item["days_left"])
+
+
 class ClosedCycleSummaryTest(_BaseTest):
     """最近結案的檔期：ROAS／賺賠狀態膠囊直接讀已存的判讀快照，沒判讀過就誠實不顯示。"""
 

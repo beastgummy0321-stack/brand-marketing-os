@@ -45,8 +45,10 @@ facts 欄位契約（由 app/dashboard/repository.py 組裝）：
   去年同一節日有跳過紀錄才有 last_year_skipped(True)／last_year_skip_reason(str|None)
   （票 03-cycle-skip-record，純顯示脈絡，不影響本規則觸不觸發）；沒有觸發中的檔期
   就是 None）
-- pacing_alert: {"kind": "overspend"|"underspend", "action_url": str|None} | None
-  （brand 目前未結的 pacing 打斷事件，list_open 排序後第一筆；沒有就是 None）
+- pacing_alert: {"kind": "overspend"|"underspend", "action_url": str|None,
+  "cycle_label": str|None} | None（brand 目前未結的 pacing 打斷事件，list_open 排序後
+  第一筆；沒有就是 None。cycle_label 是該檔期的日期區間，B0-15：品牌同時有好幾期進行中
+  時，卡片標題要講清楚是哪一期，跟駕駛艙其他連結指到不同檔期不會沒頭沒尾）
 - intake_draft: {"step": int, "resume_path": str} | None（票 B3-intake：這個品牌有沒有
   進行中的建檔精靈草稿；有就是 `app/intake/state.get_draft()` 回傳草稿的 step／
   resume_path，沒有就是 None）
@@ -92,8 +94,10 @@ def _rule_pacing_alert(facts: dict) -> Optional[dict]:
     alert = facts.get("pacing_alert")
     if not alert:
         return None
-    title = ("檔期預算燒太快，去看步調" if alert["kind"] == "overspend"
-             else "檔期預算花不完，去看步調")
+    base_title = ("檔期預算燒太快，去看步調" if alert["kind"] == "overspend"
+                 else "檔期預算花不完，去看步調")
+    # B0-15：附上檔期日期區間——駕駛艙上不只一期進行中時，卡片要講清楚是哪一期。
+    title = f"{base_title}（{alert['cycle_label']}）" if alert.get("cycle_label") else base_title
     return {"title": title, "action_url": alert.get("action_url")
             or f"/app/brands/{facts['brand_id']}/campaigns"}
 

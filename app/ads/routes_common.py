@@ -139,6 +139,19 @@ def _recommended_objective(conn, brand_id: str, product_ids: list) -> str:
     return "awareness"
 
 
+def _cycle_ended_unsettled(cycle: dict, today: str) -> bool:
+    """B0-05：LIVE／EVALUATING 檔期的 end_date 已經過了，但還沒被收帳（自動排程或使用者
+    手動「現在結算」）轉成 CLOSED。這裡只管「讀取時要不要照實講已經結束」，不改
+    `campaign_cycle.status`、不跑任何排程——過期自動收帳排程器是 BOARD R5-S，另案批准。"""
+    return cycle["status"] in ("LIVE", "EVALUATING") and cycle["end_date"] < today
+
+
+def _display_status_label(cycle: dict, today: str) -> str:
+    if _cycle_ended_unsettled(cycle, today):
+        return "已結束・待收帳"
+    return CYCLE_STATUS_LABELS.get(cycle["status"], cycle["status"])
+
+
 def _cycle_view(conn, brand_id: str, cycle: dict) -> dict:
     """把一列 campaign_cycle 加工成頁面要用的樣子（人話狀態、期長、產品名）。"""
     plan = ads_repo.derived_plan(cycle)
@@ -150,7 +163,7 @@ def _cycle_view(conn, brand_id: str, cycle: dict) -> dict:
             names.append(product["name"])
     return {
         **cycle,
-        "status_label": CYCLE_STATUS_LABELS.get(cycle["status"], cycle["status"]),
+        "status_label": _display_status_label(cycle, date.today().isoformat()),
         "phase_label": PHASE_LABELS.get(cycle["phase"]),
         "objective_label": OBJECTIVE_LABELS.get(cycle["objective"], cycle["objective"]),
         "funnel_stage_label": ads_plan.FUNNEL_STAGE_LABELS.get(cycle["funnel_stage"]),
@@ -187,9 +200,15 @@ def derive_cycle_stage(conn, brand_id: str, cycle: dict) -> int:
 
 def _hub_stage_info(conn, brand_id: str, cycle: dict) -> dict:
     """hub「進行中檔期」卡用：這期落在五格的哪一格、剩幾天（GitHub issue #45；修憲落地 V3
-    補上 stage_index，畫面要顯示「第 N 步／共 5 步」，不再只有格名一個詞）。"""
+    補上 stage_index，畫面要顯示「第 N 步／共 5 步」，不再只有格名一個詞）。
+
+    B0-05：end_date 已過但還沒收帳（`_cycle_ended_unsettled`）時，「剩幾天」這個倒數概念
+    已經不成立——回 None，別跟著 status_label 的「已結束・待收帳」一起印出誤導的「剩 0 天」。
+    """
     stage_index = derive_cycle_stage(conn, brand_id, cycle)
-    days_left = max(0, (date.fromisoformat(cycle["end_date"]) - date.today()).days)
+    today = date.today().isoformat()
+    days_left = (None if _cycle_ended_unsettled(cycle, today)
+                else max(0, (date.fromisoformat(cycle["end_date"]) - date.today()).days))
     return {"stage_index": stage_index, "stage_label": stages.STAGE_LABELS[stage_index - 1],
             "days_left": days_left}
 

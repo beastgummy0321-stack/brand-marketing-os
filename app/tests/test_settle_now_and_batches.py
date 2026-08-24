@@ -184,6 +184,19 @@ class SettleNowAndBatchesTest(_BaseImportTest):
         self.assertEqual(resp.json()["rerun"], "unchanged")
         self.assertNotIn("沒有重新算過", resp.json()["rerun_message"])
 
+    # j. B0-04：覆盤①②並排的是兩套帳，各自要標來源＋講清楚為什麼對不起來
+    def test_j_goal_comparison_and_gap_attribution_each_label_their_source(self):
+        self._post_csv(_CSV_ZH)
+        self.client.post(self._settle_url())
+
+        review = self.client.get(f"/api/campaigns/{self.bid}/{self.cycle_id}/closing-review")
+        data = review.json()["data"]
+        self.assertEqual(data["goal_comparison"]["source"], "Meta 自報")
+        self.assertEqual(data["gap_attribution"]["source"], "訂單系統")
+        # 這個檔期沒有設定過廣告用碼（_BaseImportTest 沒建立 cycle_voucher_code），
+        # 說明句要點名這個具體原因，不是隨便一句空話。
+        self.assertIn("沒有設定廣告用碼", data["gap_attribution"]["two_ledger_note"])
+
 
 if __name__ == "__main__":
     unittest.main()

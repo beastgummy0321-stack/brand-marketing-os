@@ -62,7 +62,12 @@ export function ReviewStep({ brandId, cycle }: { brandId: string; cycle: Cycle }
  * 「現在結算」按鈕（不必等結束後 14 天的背景工）。can_settle 為假時按鈕 disabled＋顯示
  * 原因（例如這期一筆成效數字都還沒有）。按下先跳 `window.confirm`（沿用
  * `ProposalBook.tsx:172` 同一種一鍵確認框寫法），成功後呼叫 `onSettled()` 就地重抓覆盤，
- * 不整頁重整。 */
+ * 不整頁重整。
+ *
+ * B0-05：文案不再承諾「結束後 14 天自動收帳」——背景收帳只在系統開著的時候才會被排到
+ * （`app/main.py _auto_sync_if_due()`），單機單人使用型態下沒辦法保證在第 14 天那一刻
+ * 剛好在跑，真機重現時已經過了 35 天還沒收帳。要做到真正準時的排程器是另一張票
+ * （BOARD R5-S，等使用者批准），這裡只把文案改成系統現在真的能兌現的說法。 */
 function SettleNowPanel({ brandId, cycle, onSettled }: { brandId: string; cycle: Cycle; onSettled: () => void }) {
   const [info, setInfo] = useState<SettleNowInfo | null>(null);
 
@@ -86,7 +91,7 @@ function SettleNowPanel({ brandId, cycle, onSettled }: { brandId: string; cycle:
 
   return (
     <div className="rounded-lg border border-dashed border-border p-6 text-center text-sm text-muted-foreground">
-      <p>這期還沒收帳。正常會在結束後 14 天自動收帳，也可以現在就收。</p>
+      <p>這期還沒收帳。系統沒辦法保證幾天內自動幫你收帳，建議直接按下面「現在結算」，不用乾等。</p>
       {info && !info.already_closed && (
         <div className="mt-4 flex flex-col items-center gap-2">
           <button
@@ -125,7 +130,7 @@ function GoalComparisonCard({ review }: { review: ClosingReview }) {
   const ref = useEchart(option);
 
   return (
-    <FluidCard title="①目標對照" subtitle={`${g.objective_label}・${g.target}`}>
+    <FluidCard title="①目標對照" subtitle={`${g.objective_label}・${g.target}・來源：${g.source}`}>
       <div ref={ref} className="h-32 w-full" />
       <p className="mt-1 text-sm text-foreground">
         {g.actual_value === null
@@ -141,7 +146,7 @@ function GoalComparisonCard({ review }: { review: ClosingReview }) {
 
 /** S8R.24：②落差歸因——環形圖（訂單歸因四分類佔比）＋下方判讀結論既有理由清單原樣引用。 */
 function AttributionCard({ review }: { review: ClosingReview }) {
-  const { attribution: a, reasons, channel_note, ga4_leak_note } = review.gap_attribution;
+  const { attribution: a, reasons, channel_note, ga4_leak_note, source, two_ledger_note } = review.gap_attribution;
   const total = a.gross.count + a.net.count + a.excluded.count + a.natural.count;
   const option: EChartsOption = {
     tooltip: { trigger: "item" },
@@ -164,7 +169,8 @@ function AttributionCard({ review }: { review: ClosingReview }) {
   const ref = useEchart(option);
 
   return (
-    <FluidCard title="②落差歸因">
+    <FluidCard title="②落差歸因" subtitle={`來源：${source}`}>
+      <p className="text-xs text-muted-foreground">{two_ledger_note}</p>
       {total === 0 ? (
         <p className="text-sm text-muted-foreground">這期還沒有收到訂單歸因資料。</p>
       ) : (

@@ -756,20 +756,6 @@ def last_snapshot_at(conn, brand_id: str) -> Optional[str]:
     return row["ts"] if row and row["ts"] else None
 
 
-def latest_derived_metric(conn, brand_id: str, metric: str, since: str, until: str) -> Optional[float]:
-    """指定區間內最新一筆 derived_metric 數值（規格 KPI 口徑：ROAS 取自 derived_metric，
-    不是拿 revenue／spend 重算）。區間比對 computed_at 的日期部分；同一區間多筆時取
-    computed_at 最新那筆。區間內沒有任何一筆時回 None（鐵則 16：沒得算不假裝成 0）。
-    """
-    row = conn.execute(
-        "SELECT value FROM derived_metric WHERE brand_id = ? AND metric = ?"
-        " AND substr(computed_at, 1, 10) >= ? AND substr(computed_at, 1, 10) <= ?"
-        " ORDER BY computed_at DESC LIMIT 1",
-        (brand_id, metric, since, until),
-    ).fetchone()
-    return row["value"] if row else None
-
-
 # delete_snapshots／list_snapshots 純搬去 performance_batches.py（票 S1-01：加 batch_id
 # kwarg 會讓這檔破 800 行上限）。這裡留 re-export——既有呼叫端／測試全部認
 # `perf.list_snapshots`／`ads_performance.delete_snapshots`，逐一改 import 的診斷成本

@@ -115,7 +115,11 @@ export function WarroomPage({ brandId, cycleId }: { brandId: string; cycleId: st
     `${cycleLabel(cycle)}`,
     planApproved ? "計畫已核准，素材準備中" : "待確認方案",
     PACING_STRATEGY_LABELS[cycle.pacing_strategy].title,
-    cycle.status === "LIVE" || cycle.status === "EVALUATING" ? "投放中" : "尚未開始投放",
+    // B0-26：結算後 status 會變成 CLOSED，「不是 LIVE／EVALUATING」不能一律當成「還沒開始」
+    // ——CLOSED 是投放已經跑完，不是投放還沒開始，兩者剛好相反。
+    cycle.status === "LIVE" || cycle.status === "EVALUATING" ? "投放中"
+      : cycle.status === "CLOSED" ? "投放已結束，可以看成效了"
+      : "尚未開始投放",
     cycle.status === "CLOSED" ? "已結案，可查看覆盤" : "尚未結案",
   ];
 

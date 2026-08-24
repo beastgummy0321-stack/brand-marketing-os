@@ -50,6 +50,8 @@ def _seed_spend(conn, brand_id: str, *, date_str: str, spend: float) -> str:
 
 
 def _seed_roas(conn, brand_id: str, *, snapshot_id: str, value: float, computed_at: str) -> None:
+    """B0-01：這裡塞的值刻意跟真正的營收／花費算出來的 ROAS 對不上——用來證明月報的 ROAS
+    是自己拿營收÷花費算，不會撿到這筆「最近一次判讀」的舊值。"""
     conn.execute(
         "INSERT INTO derived_metric (id, brand_id, performance_snapshot_id,"
         " campaign_cycle_id, metric, value, calc_basis, computed_at, created_at)"
@@ -81,6 +83,8 @@ class DashboardMonthlyReportTest(unittest.TestCase):
                                     date_str="2026-08-03", spend=300)
         jul_snapshot = _seed_spend(main.conn, self.brand["id"],
                                     date_str="2026-07-03", spend=200)
+        # B0-01：這兩筆 derived_metric 誘餌值（2.0／4.0）跟真實營收/花費算出來的 ROAS
+        # 對不上——monthly_report() 的 roas 不能撿到它們。
         _seed_roas(main.conn, self.brand["id"], snapshot_id=jul_snapshot,
                    value=2.0, computed_at="2026-07-03T10:00:00")
         _seed_roas(main.conn, self.brand["id"], snapshot_id=aug_snapshot,
@@ -91,7 +95,7 @@ class DashboardMonthlyReportTest(unittest.TestCase):
         self.assertEqual(report["spend"], 300)
         self.assertEqual(report["orders"], 1)
         self.assertEqual(report["revenue"], 700)
-        self.assertEqual(report["roas"], 4.0)
+        self.assertEqual(report["roas"], round(700 / 300, 2))  # 現算，不是誘餌值 4.0
         self.assertEqual(report["cac"], 300.0)
         self.assertEqual(report["trend"]["months"][-1], "2026-08")
 

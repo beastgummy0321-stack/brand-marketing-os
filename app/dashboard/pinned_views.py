@@ -68,8 +68,11 @@ def _ad_overview(conn, brand_id: str, cycle: dict) -> dict:
                               if s["quarantined"]),
     }
     reading = ads_reading.load(conn, brand_id, cycle["id"])["cycle"]
+    # B0-15：駕駛艙同時有好幾個進行中檔期時，「看這期完整作戰室」跟「下一步指南」的連結
+    # 可能各指向不同檔期，畫面卻沒寫是哪一期——附上日期區間，使用者才知道點下去是哪一期。
     return {"kind": "ad_overview", "cycle_id": cycle["id"], "summary": summary,
-            "reading_status": reading["status"] if reading else None}
+            "reading_status": reading["status"] if reading else None,
+            "cycle_label": f"{cycle['start_date']} ～ {cycle['end_date']}"}
 
 
 def _weekly_burn(conn, brand_id: str, cycle: dict) -> dict:
@@ -78,7 +81,10 @@ def _weekly_burn(conn, brand_id: str, cycle: dict) -> dict:
     result = ads_pacing.classify(budget=cycle["budget"], spend=spend, start_date=cycle["start_date"],
                                  end_date=cycle["end_date"], today=date.today().isoformat(),
                                  threshold_pct=threshold)
-    days_left = _hub_stage_info(conn, brand_id, cycle)["days_left"]
+    # B0-05：end_date 已過但還沒收帳時 `_hub_stage_info` 的 days_left 回 None（倒數已經不
+    # 成立），但這顆釘選卡的契約是 number（非 nullable）——這裡不是本票要修的畫面，維持
+    # 既有的「夾到 0」行為，別把 None 傳給沒準備好接 null 的前端型別。
+    days_left = _hub_stage_info(conn, brand_id, cycle)["days_left"] or 0
     return {"kind": "weekly_burn", "cycle_id": cycle["id"], "status": result["status"],
             "time_progress": result["time_progress"], "budget_progress": result["budget_progress"],
             "days_left": days_left}

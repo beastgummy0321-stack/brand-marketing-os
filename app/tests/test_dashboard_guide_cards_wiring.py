@@ -19,6 +19,8 @@ os.environ["BRAND_OS_TODAY"] = "2026-08-05"  # 凍結時鐘：與其他儀表板
 from fastapi.testclient import TestClient  # noqa: E402
 
 import app.main as main  # noqa: E402
+from app.ads import pacing as ads_pacing  # noqa: E402
+from app.ads import repository as ads_repo  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
 from app.core.db import new_id, now_iso  # noqa: E402
 
@@ -209,6 +211,27 @@ class CockpitGuideCardsWiringTest(unittest.TestCase):
         self.assertIn("建檔進行中（第 2 步，共 5 步）", cards[0]["title"])
         self.assertIn("繼續建檔", cards[0]["title"])
         self.assertEqual(cards[0]["action_url"], f"/app/brands/{brand_id}/intake")
+
+    def test_pacing_alert_card_names_which_cycle(self):
+        """B0-15：品牌同時有好幾期進行中時，「下一步指南」的 pacing 警示卡要寫出是哪一期
+        （跟「看這期完整作戰室」指到不同檔期時，兩處都得標日期區間）。"""
+        brand = bi_repo.create_brand(
+            main.conn, name=f"虛構步調警示茶行{abs(hash(self.id())) % 100000}",
+            client_name=None, actor=ACTOR)
+        bi_repo.set_brand_switches(main.conn, brand["id"], market_region=None,
+                                   conversion_goal="purchase", actor=ACTOR)
+        cycle = ads_repo.create_cycle(
+            main.conn, brand["id"], product_ids=[], pain_value=10000, objective="sales",
+            actor=ACTOR, start_date="2026-07-14", duration_days=7)
+        ads_repo.update_cycle_status(main.conn, brand["id"], cycle["id"], status="LIVE", actor=ACTOR)
+        # 花費遠遠落後時間進度 → underspend，真的走 check_cycle() 排進打斷佇列
+        # （不直接塞 interrupt 列，這樣才驗到 campaign_cycle_id 真的被帶上去）。
+        ads_pacing.check_cycle(main.conn, brand["id"], cycle["id"], today="2026-07-20")
+
+        cards = self._guide_cards(brand["id"])
+        self.assertEqual(len(cards), 1)
+        self.assertIn("2026-07-14", cards[0]["title"])
+        self.assertIn("2026-07-20", cards[0]["title"])
 
     def test_cockpit_endpoint_does_not_write_any_row(self):
         """接口鐵則：只讀。指南卡的資料源多讀了 campaign_cycle／performance_reading／

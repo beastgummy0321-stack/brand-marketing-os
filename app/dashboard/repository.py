@@ -103,7 +103,12 @@ def _pacing_alert(conn, brand_id: str, today: str) -> Optional[dict]:
     for row in rows:
         kind = _PACING_CATEGORIES.get(row["category"])
         if kind:
-            return {"kind": kind, "action_url": row["action_url"]}
+            # B0-15：這張卡連到哪一期，畫面要寫出來——品牌同時有好幾期進行中時，
+            # 「下一步指南」跟「看這期完整作戰室」可能指向不同檔期。
+            cycle = (ads_repo.get_cycle(conn, brand_id, row["campaign_cycle_id"])
+                    if row["campaign_cycle_id"] else None)
+            return {"kind": kind, "action_url": row["action_url"],
+                    "cycle_label": f"{cycle['start_date']} ～ {cycle['end_date']}" if cycle else None}
     return None
 
 
@@ -194,8 +199,14 @@ def overview(conn, *, today: Optional[str] = None, calendar_events: Optional[lis
 
 # ---------------------------------------------------------------------------
 # 單品牌駕駛艙（票 03-cockpit-kpi-chart）：四張 KPI 卡＋營收 vs 花費疊線主圖。
-# KPI 口徑（規格 0001）：本月營收＝訂單實收；花費＝成效快照 spend 加總；
-# ROAS 取自 derived_metric；環比＝與上月同期比較。
+# KPI 口徑（規格 0001，B0-01 改判）：本月營收＝訂單實收；花費＝成效快照 spend 加總；
+# ROAS＝同一期間的營收÷花費現算；環比＝與上月同期比較。
+#
+# ROAS 原本讀 `derived_metric` 的「這個時間窗內最新一筆判讀」——但 computed_at 是判讀
+# 「發生的時間」，不是判讀「涵蓋的資料期間」：任何檔期只要今天被重判一次，它的 ROAS 就會
+# 被撿進今天所在月份的窗口，跟月報同時顯示的營收／花費（按資料本身的日期歸屬）完全對不上
+# （真機重現：B0-01，`.scratch/orchestrator/rehearsal-B0/FINDINGS.md`）。改成用同一份
+# 營收／花費現算，三個數字才會自洽（顯示的 ROAS＝顯示的營收÷顯示的花費）。
 # ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
@@ -230,9 +241,22 @@ def _spend_and_mom(conn, brand_id: str, today: str) -> tuple:
     return _and_mom(today, lambda s, u: ads_performance.brand_period_spend(conn, brand_id, s, u))
 
 
+def _roas(revenue: Optional[float], spend: Optional[float]) -> Optional[float]:
+    """B0-01：ROAS＝同一期間的營收÷花費，不讀 derived_metric 的「最近一次判讀」（那個
+    時間戳記的是判讀發生的時刻，不是資料涵蓋的期間，會撿到不相干檔期）。花費「沒得算」
+    或是 0 都不能除（鐵則 16）。"""
+    return round(revenue / spend, 2) if revenue is not None and spend else None
+
+
 def _roas_and_mom(conn, brand_id: str, today: str) -> tuple:
-    return _and_mom(today, lambda s, u: ads_performance.latest_derived_metric(
-        conn, brand_id, "roas", s, u))
+    since, until = _month_to_date_range(today)
+    prev_since = ads_sync.months_before(since, 1)
+    prev_until = ads_sync.months_before(until, 1)
+    current = _roas(orders_repo.stats(conn, brand_id, since=since, until=until)["net_revenue"],
+                    ads_performance.brand_period_spend(conn, brand_id, since, until))
+    previous = _roas(orders_repo.stats(conn, brand_id, since=prev_since, until=prev_until)["net_revenue"],
+                     ads_performance.brand_period_spend(conn, brand_id, prev_since, prev_until))
+    return current, _mom_pct(current, previous)
 
 
 def _orders_and_mom(conn, brand_id: str, today: str) -> tuple:
@@ -264,10 +288,12 @@ def _monthly_trend(conn, brand_id: str, months: list) -> dict:
     for month in months:
         since, until = _month_bounds(month)
         month_stats = orders_repo.stats(conn, brand_id, since=since, until=until)
-        revenue.append(month_stats["net_revenue"])
+        month_revenue = month_stats["net_revenue"]
+        month_spend = ads_performance.brand_period_spend(conn, brand_id, since, until)
+        revenue.append(month_revenue)
         orders.append(month_stats["order_count"])
-        spend.append(ads_performance.brand_period_spend(conn, brand_id, since, until))
-        roas.append(ads_performance.latest_derived_metric(conn, brand_id, "roas", since, until))
+        spend.append(month_spend)
+        roas.append(_roas(month_revenue, month_spend))
     return {"revenue": revenue, "spend": spend, "roas": roas, "orders": orders}
 
 

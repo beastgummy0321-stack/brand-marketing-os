@@ -321,7 +321,7 @@ def _closing_goal_comparison(conn, brand_id: str, cycle: dict, kpis: dict) -> di
         target_text = f"目標 CPA NT$ {target_value:,.0f}" if target_value else "尚無目標 CPA 依據"
         return {"objective_label": objective_label, "target": target_text, "target_value": target_value,
                 "actual_value": kpis.get("cpa"), "metric_label": "CPA", "lower_is_better": True,
-                "actual_kpis": kpis}
+                "actual_kpis": kpis, "source": "Meta 自報"}
     rng = target_cpa.non_conversion_range(conn, brand_id, cycle["objective"])
     if rng:
         mid = round((rng["low"] + rng["high"]) / 2, 2)
@@ -330,7 +330,20 @@ def _closing_goal_comparison(conn, brand_id: str, cycle: dict, kpis: dict) -> di
         mid, target_text = None, "尚無建議花費區間依據"
     spend = ads_performance.totals(conn, brand_id, cycle["id"])["spend"]
     return {"objective_label": objective_label, "target": target_text, "target_value": mid,
-            "actual_value": spend, "metric_label": "花費", "lower_is_better": False, "actual_kpis": kpis}
+            "actual_value": spend, "metric_label": "花費", "lower_is_better": False, "actual_kpis": kpis,
+            "source": "Meta 自報"}
+
+
+def _two_ledger_note(conn, brand_id: str, cycle_id: str) -> str:
+    """B0-04：①目標對照的 ROAS／CPA 是 Meta 自己回報的廣告成效；②落差歸因的毛單／淨單
+    是訂單系統依「廣告用碼」配對出來的——兩套帳各自統計，數字天生對不起來，畫面要講清楚
+    為什麼，不能讓使用者以為資料傳錯了（真機重現：B0-04，FINDINGS.md）。"""
+    has_ad_code = any(c["source_type"] == "ad" for c in ads_codes.list_codes(conn, brand_id, cycle_id))
+    if not has_ad_code:
+        return ("①的 ROAS／成交數是 Meta 自己回報的廣告成效；②的毛單／淨單只算對到「廣告用碼」的"
+                "訂單——這期還沒有設定廣告用碼，所以全部訂單都落在「自然單」，兩邊數字不會對得起來。")
+    return ("①的 ROAS／成交數是 Meta 自己回報的廣告成效；②的毛單／淨單是訂單系統依「廣告用碼」"
+            "配對出來的——兩套系統各自統計，數字不會完全一樣，不代表資料傳錯了。")
 
 
 def _budget_delta_reason(conn, brand_id: str, cycle_id: str, proposed_budget) -> "str | None":
@@ -407,6 +420,8 @@ def compile_closing_review(conn, brand_id: str, cycle_id: str) -> dict:
             "channel_note": _dict_note(result.get("channel_comparison")),
             "ga4_leak_note": _dict_note(result.get("ga4_leak")),
             "attribution": ads_codes.attribution_summary(conn, brand_id, cycle_id),
+            "source": "訂單系統",
+            "two_ledger_note": _two_ledger_note(conn, brand_id, cycle_id),
         },
         "learning": {"hypotheses": hypotheses, "ledger_entries": ledger_entries},
         "recommendation": _closing_recommendation(conn, brand_id, cycle_id),

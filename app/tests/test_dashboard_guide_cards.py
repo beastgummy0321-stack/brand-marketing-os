@@ -75,6 +75,20 @@ class PacingAlertRuleTest(unittest.TestCase):
         cards = guide_cards.build(facts)
         self.assertIn("燒太快", cards[0]["title"])
 
+    def test_title_includes_cycle_date_range_when_given(self):
+        """B0-15：品牌同時有好幾期進行中時，這張卡連到哪一期要寫出來，不能只有
+        「檔期預算花不完」一句沒頭沒尾的話。"""
+        facts = _facts(pacing_alert={"kind": "underspend", "action_url": None,
+                                     "cycle_label": "2026-07-14 ～ 2026-07-20"})
+        card = guide_cards.RULES["pacing_alert"](facts)
+        self.assertIn("2026-07-14 ～ 2026-07-20", card["title"])
+
+    def test_title_has_no_date_range_when_cycle_label_missing(self):
+        """沒有 cycle_label（找不到檔期）時退回原本的句子，不留空括號。"""
+        facts = _facts(pacing_alert={"kind": "underspend", "action_url": None})
+        card = guide_cards.RULES["pacing_alert"](facts)
+        self.assertNotIn("（", card["title"])
+
 
 class ReadingUnreadRuleTest(unittest.TestCase):
     def test_triggers_when_reading_ready_and_no_draft_yet(self):

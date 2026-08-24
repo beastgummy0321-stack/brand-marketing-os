@@ -221,6 +221,23 @@ class LiveCycleImportTriggersReadingTest(_BaseImportTest):
         cards = weekly_proposals.list_cards(main.conn, self.bid, cycle_id)
         self.assertTrue(any(card["action"] == "停掉" for card in cards))  # generate() 真的建卡了
 
+    def test_confidence_label_agrees_with_reading_right_after_import(self):
+        """B0-02／B0-06（`.scratch/rehearsal-b0-fix/issues/R5-cockpit-and-state-machine.md`）：
+        匯入完成、不按任何按鈕，GET /performance 的 `confidence_label` 不能還停在「這期還
+        沒有成效判讀」，卻同時附上一份已經判讀完的 `reading`——這支測試鎖住 R1（判讀在匯入
+        當下同步跑完）讓這兩個欄位不可能互相矛盾。"""
+        cycle_id = self._live_cycle_with_losing_ad()
+        csv_text = ("行銷活動名稱,廣告名稱,曝光次數,連結點擊次數,花費金額,購買次數,購買轉換價值\n"
+                   "R1測試活動,虧損_01_ad,20000,400,10000,0,0\n")
+        import_resp = self.client.post(f"/api/campaigns/{self.bid}/{cycle_id}/performance/csv",
+                                       files={"perf_file": ("perf.csv", csv_text, "text/csv")})
+        self.assertEqual(import_resp.status_code, 200, import_resp.text)
+
+        resp = self.client.get(f"/api/campaigns/{self.bid}/{cycle_id}/performance")
+        data = resp.json()["data"]
+        self.assertIsNotNone(data["reading"])
+        self.assertNotEqual(data["confidence_label"], "這期還沒有成效判讀，可信度未知。")
+
 
 if __name__ == "__main__":
     unittest.main()

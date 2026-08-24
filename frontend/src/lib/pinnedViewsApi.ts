@@ -27,6 +27,8 @@ export interface AdOverviewView {
   summary: PerformanceSummary;
   reading_status: ReadingResult["status"] | null;
   last_synced_at?: string | null;
+  /** B0-15：這個檔期的日期區間，「看這期完整作戰室」連結旁要標出來是哪一期。 */
+  cycle_label: string;
 }
 
 export interface PostPlaceholderView {

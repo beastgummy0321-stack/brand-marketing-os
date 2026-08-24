@@ -355,8 +355,19 @@ export interface ClosingReview {
     metric_label: string;
     lower_is_better: boolean;
     actual_kpis: PerformanceSummary["kpis"];
+    /** B0-04：這組數字的來源，跟②落差歸因不是同一套帳，並排顯示要各自標明。 */
+    source: string;
   };
-  gap_attribution: { reasons: string[]; channel_note: string | null; ga4_leak_note: string | null; attribution: AttributionSummary };
+  gap_attribution: {
+    reasons: string[];
+    channel_note: string | null;
+    ga4_leak_note: string | null;
+    attribution: AttributionSummary;
+    /** B0-04：這組數字的來源。 */
+    source: string;
+    /** B0-04：跟①目標對照併排時，為什麼兩邊數字不會一致的一句白話說明。 */
+    two_ledger_note: string;
+  };
   learning: {
     hypotheses: {
       id: string;

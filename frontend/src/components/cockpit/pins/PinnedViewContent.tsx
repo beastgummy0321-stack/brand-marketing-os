@@ -111,7 +111,7 @@ function AdOverviewContent({ brandId, view, onRefresh }: { brandId: string; view
       )}
       <div className="flex flex-wrap gap-3 border-t border-border pt-3 text-sm">
         <Link to={`/brands/${brandId}/campaigns/${view.cycle_id}`} className="font-medium text-primary hover:underline">
-          看這期完整作戰室
+          看這期完整作戰室（{view.cycle_label}）
         </Link>
         <Link to={`/brands/${brandId}/campaigns`} className="text-muted-foreground hover:underline">
           查歷史檔期

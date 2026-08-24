@@ -4,8 +4,10 @@
 隔離測試資料庫（BRAND_OS_DB 指向 tmp 檔），TestClient 模式（比照
 app/tests/test_dashboard_overview.py）。測試品牌一律虛構。
 
-KPI 口徑（規格 0001）：本月營收＝訂單實收；花費＝成效快照 spend 加總；
-ROAS 取自 derived_metric；環比＝與上月同期比較。
+KPI 口徑（規格 0001，B0-01 改判）：本月營收＝訂單實收；花費＝成效快照 spend 加總；
+ROAS＝同一期間的營收÷花費現算（不讀 derived_metric「最近一次判讀」，那個時間戳記的是
+判讀發生的時刻、不是資料涵蓋的期間，會撿到不相干檔期——真機重現見 FINDINGS B0-01）；
+環比＝與上月同期比較。
 """
 
 import atexit
@@ -61,7 +63,10 @@ def _seed_spend(conn, brand_id: str, *, date_str: str, spend: float) -> str:
 
 
 def _seed_roas(conn, brand_id: str, *, snapshot_id: str, value: float, computed_at: str) -> None:
-    """derived_metric 沒有跨層公開寫入函式給「品牌層＋任意月份」這種測試情境用
+    """B0-01：這裡塞的值刻意跟真正的營收／花費算出來的 ROAS 對不上——用來證明 cockpit
+    的 ROAS 現在是自己拿營收÷花費算，不會撿到這筆「最近一次判讀」的舊值。
+
+    derived_metric 沒有跨層公開寫入函式給「品牌層＋任意月份」這種測試情境用
     （`save_derived_metrics` 只認真的檔期並整批先刪後寫）；測試檔豁免跨層 SQL 掃描
     （見 test_architecture_boundaries.py 的 app/tests/ 排除清單），直接塞一列。"""
     conn.execute(
@@ -101,8 +106,8 @@ class DashboardCockpitApiTest(unittest.TestCase):
         _seed_spend(main.conn, self.brand_full["id"], date_str="2026-08-03", spend=300)
         _seed_spend(main.conn, self.brand_full["id"], date_str="2026-07-03", spend=200)
 
-        # ROAS：本月 4.0（derived_metric 直接落地值，不是拿 revenue/spend 現算）、
-        # 上月 2.0 → 環比 +100%
+        # B0-01：塞兩筆跟真實營收/花費對不上的 derived_metric「舊判讀」誘餌
+        # （4.0／2.0），證明 cockpit 的 ROAS 不會撿到它們——現算才是對的。
         snap_this = _seed_spend(main.conn, self.brand_full["id"], date_str="2026-08-04", spend=1)
         _seed_roas(main.conn, self.brand_full["id"], snapshot_id=snap_this, value=4.0,
                   computed_at="2026-08-04T10:00:00")
@@ -169,13 +174,28 @@ class DashboardCockpitApiTest(unittest.TestCase):
         self.assertEqual(kpis["spend"]["value"], 301)
         self.assertEqual(kpis["spend"]["mom_pct"], round((301 - 201) / 201 * 100, 1))
 
-    def test_roas_value_comes_from_derived_metric_not_recomputed(self):
-        """規格明講「ROAS 取自 derived_metric」——落地值是 4.0，若程式改成拿
-        revenue/spend 現算，這裡（revenue 完全沒收集、spend=301）會算出 None 或錯誤值，
-        測試就會抓到。"""
+    def test_importing_a_past_months_data_does_not_change_this_months_spend(self):
+        """B0-01 done-check 2：補匯不屬於本月的舊資料（例如 3 月的歷史 CSV），「本月」
+        （2026-08）花費不能被污染——歸屬看資料本身的 date_range_end，不是匯入發生的時間。"""
+        before = self._get(self.brand_full["id"]).json()["data"]["kpis"]["spend"]["value"]
+        _seed_spend(main.conn, self.brand_full["id"], date_str="2026-03-20", spend=999)
+        after = self._get(self.brand_full["id"]).json()["data"]["kpis"]["spend"]["value"]
+        self.assertEqual(after, before)
+
+    def test_roas_is_recomputed_from_revenue_and_spend_not_derived_metric(self):
+        """B0-01：setUp 塞了兩筆 derived_metric「舊判讀」誘餌（4.0／2.0，跟真實營收/花費
+        對不上）——如果程式還在讀 derived_metric 的最近一筆，這裡會抓到 4.0／100.0，
+        測試就會失敗。ROAS 現在必須自己拿同一期間的營收÷花費算，才會跟同時顯示的
+        營收／花費三數自洽。"""
         kpis = self._get(self.brand_full["id"]).json()["data"]["kpis"]
-        self.assertEqual(kpis["roas"]["value"], 4.0)
-        self.assertEqual(kpis["roas"]["mom_pct"], 100.0)
+        expected_current = round(kpis["revenue"]["value"] / kpis["spend"]["value"], 2)
+        expected_previous_revenue = 1000  # setUp：上月訂單 1000
+        expected_previous_spend = 201  # setUp：上月花費 200 + 1（ROAS 誘餌那筆）
+        expected_previous = round(expected_previous_revenue / expected_previous_spend, 2)
+        expected_mom = round((expected_current - expected_previous) / expected_previous * 100, 1)
+        self.assertEqual(kpis["roas"]["value"], expected_current)
+        self.assertNotEqual(kpis["roas"]["value"], 4.0)  # 不是誘餌值
+        self.assertEqual(kpis["roas"]["mom_pct"], expected_mom)
 
     def test_chart_months_are_last_six_calendar_months_ascending(self):
         chart = self._get(self.brand_full["id"]).json()["data"]["chart"]
