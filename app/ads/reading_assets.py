@@ -20,15 +20,23 @@ def asset_totals(conn, brand_id: str, cycle_id: str) -> list:
     這裡不猜、不硬湊一列（鐵則 16）。純顯示用途，不影響 judge() 的門檻判定。
 
     ponytail：只用既有的 publishing_package_id／external_ad_mapping_id 兩個欄位做 JOIN，
-    不新增 schema。Meta API 同步（app/ads/sync.py）目前用 meta_campaign_id 而非 meta_ad_id
-    找 mapping，同一活動底下多支廣告時可能對到同一筆 mapping——這是既有的、與本票無關的
-    另一個缺口，這裡的清單因此只保證 CSV 這條匯入路徑的歸屬是準的。
+    不新增 schema。
+
+    每列附一個 `attributable`（ADR 0025 決定 9）：這一支的數字是不是真的只屬於這一支。
+    Meta API 同步（app/ads/sync.py:249,270）已經優先用 meta_ad_id 找 mapping，對得上時
+    逐支是準的；對不上而退回 meta_campaign_id 時，同一活動底下的多支廣告會全部擠進同一筆
+    mapping、同一個交接包，那種列的逐支數字是假的。CSV 匯入靠廣告名稱完全相等對回唯一的
+    交接包（performance.py match_asset_mapping），不經過這個缺口，一律算準。
+    純顯示的呼叫端可以不理這個旗標；要據此叫使用者停掉某一支的（週提案卡）必須先看它。
     """
     rows = conn.execute(
         "SELECT pkg.id pkg_id, pkg.ad_name asset_name,"
         " COALESCE(SUM(ps.impressions),0) impressions, COALESCE(SUM(ps.clicks),0) clicks,"
         " COALESCE(SUM(ps.spend),0) spend, COALESCE(SUM(ps.conversions),0) conversions,"
-        " COALESCE(SUM(ps.revenue),0) revenue"
+        " COALESCE(SUM(ps.revenue),0) revenue,"
+        " MIN(CASE WHEN ps.source != 'meta_api'"
+        "          OR (xam.meta_ad_id IS NOT NULL AND xam.meta_ad_id = ps.meta_ad_id)"
+        "          THEN 1 ELSE 0 END) attributable"
         " FROM performance_snapshot ps"
         " JOIN external_ad_mapping xam ON xam.id = ps.external_ad_mapping_id"
         " JOIN publishing_package pkg ON pkg.id = xam.publishing_package_id"
@@ -81,12 +89,14 @@ def max_frequency_by_asset(conn, brand_id: str, cycle_id: str) -> Optional[dict]
 
     target 優先用切角名稱、對不到切角才退回廣告名稱：歷史切角來的換素材卡也用切角當目標，
     同一個目標才比得出來、才不會同時出兩張（`weekly_proposals.select_cards()`）。
+    另外回一個 `pkg_id`：跟廣告層「停掉」卡比對是不是同一支廣告時，兩張卡的 target 命名空間
+    不同（這裡可能是切角名，那邊一定是廣告名），只有 pkg_id 認得出來（ADR 0025 決定 8）。
 
     ponytail：對不回交接包的資料列（例如純手動匯入的檔期層數字）不在這個清單裡，
     燈紅但這裡回 None 是可能的——那種情況不硬猜是哪一支（鐵則 16）。
     """
     row = conn.execute(
-        "SELECT COALESCE(cell.creative_angle, pkg.ad_name) target,"
+        "SELECT pkg.id pkg_id, COALESCE(cell.creative_angle, pkg.ad_name) target,"
         " MAX(ps.frequency) frequency"
         " FROM performance_snapshot ps"
         " JOIN external_ad_mapping xam ON xam.id = ps.external_ad_mapping_id"
@@ -96,4 +106,5 @@ def max_frequency_by_asset(conn, brand_id: str, cycle_id: str) -> Optional[dict]
         " AND ps.frequency IS NOT NULL"
         " GROUP BY pkg.id ORDER BY frequency DESC LIMIT 1", (brand_id, cycle_id),
     ).fetchone()
-    return {"target": row["target"], "frequency": row["frequency"]} if row else None
+    return ({"pkg_id": row["pkg_id"], "target": row["target"], "frequency": row["frequency"]}
+            if row else None)

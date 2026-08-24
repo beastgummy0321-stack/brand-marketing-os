@@ -124,10 +124,81 @@ def fatigue_asset(conn, brand_id: str, cycle_id: str) -> dict | None:
     return worst if status == "danger" else None
 
 
+def _bleeding_reason(asset: dict, breakeven) -> str:
+    """廣告層停掉卡的理由句（ADR 0025 決定 12）。
+
+    `judge()` 的 pause_candidate 理由寫的是「這些產品要投報 X 倍才回本」，主詞是產品，
+    套到單支廣告上是錯的；改那句會波及檔期層與產品層兩個既有呼叫端，所以這裡另寫一句。
+    形狀比照 `_tired_reason()` 路徑②——使用者要能自己驗算為什麼這支該停、其他支不用。
+    分兩條，對應 `judge()` 的兩條停損路徑：零成交、有成交但低於停損線。
+    """
+    spend = asset.get("spend") or 0
+    if not asset.get("conversions"):
+        return f"花了 {spend:,.0f} 元還是一筆都沒成交"
+    roas = (asset.get("kpis") or {}).get("roas")
+    if roas is None or not breakeven:
+        return "有成交，但投報率低於停損線"
+    return (f"有成交但每花 1 元只回 {roas:.2f} 元，"
+            f"低於停損線 {breakeven * ads_reading.PAUSE_MARGIN:.2f}")
+
+
+def bleeding_asset(conn, brand_id: str, cycle_id: str, loaded: dict, budget: dict) -> dict | None:
+    """本期逐支廣告裡「該停」的那一支，點名到廣告（＝ADR 0008 的主題層），沒有就回 None。
+
+    ADR 0025：
+    - 決定 3（資料窗）：讀本期，不讀歷史。數字直接取 `reading.load()` 已經算好的
+      `asset_breakdown` 與 `breakeven`，不新開查詢、不重算打平線。
+    - 決定 5（門檻）：走 `reading.judge()` 同一套判定，`plan_budget` 用「檔期預算 ÷ 本期
+      廣告支數」均分（先例：`nextcycle.historical_cell_performance()` 對切角也是均分）。
+      不用 `nextcycle.cell_trust_flags()`——那條路沒有 `MIN_CONVERSIONS_FOR_DIRECTIONAL_CALL`
+      這道護欄，換素材可以繞過它（便宜、可逆），叫人關掉一支廣告不行。
+    - 決定 6：只點名最差的一支（投報率最低）。算不出投報率的是零成交那條路踩到的，
+      比任何算得出來的都糟，排最前面。
+    - 決定 9：歸屬對不準的廣告（`attributable` 為 0）不參加，也不代它說話。
+    """
+    result = (loaded.get("cycle") or {}).get("result") or {}
+    breakdown = [row for row in (result.get("asset_breakdown") or []) if row.get("attributable")]
+    if not breakdown:
+        return None
+    breakeven = result.get("breakeven")
+    plan_budget = (budget.get("current_budget") or 0) / len(breakdown)
+    losing = [row for row in breakdown
+              if ads_reading.judge(row, plan_budget=plan_budget, breakeven=breakeven,
+                                   brand_id=brand_id, conn=conn)["status"] == "pause_candidate"]
+    if not losing:
+        return None
+    worst = min(losing, key=lambda row: ((row.get("kpis") or {}).get("roas") is not None,
+                                         (row.get("kpis") or {}).get("roas") or 0))
+    return {
+        "action": "停掉",
+        "target": worst["asset_name"],
+        "reason": _bleeding_reason(worst, breakeven),
+        # 決定 13：停一支廣告跟下期總預算增減沒有因果，不走 `_budget_impact()`——照套會說出
+        # 「停掉這支 → 下期總預算增加」（整檔還在賺的時候下期預算是加的）這種自相矛盾的話。
+        "impact": "先止住這支的花費，另外幾支照跑",
+        # 決定 11：廣告層沒有 product_id（交接包掛在切角上，切角的 product_id 常是 NULL），
+        # 填 None 不編造歸屬；判讀列指向檔期層那筆——這張卡的數字來源 asset_breakdown 就存在
+        # 它的 rule_result_json 裡，日後回答「當時憑什麼叫我停」查得回當時的逐支數字。
+        "product_id": None,
+        "performance_reading_id": (loaded.get("cycle") or {}).get("id"),
+        "pkg_id": worst.get("pkg_id"),
+    }
+
+
 def select_cards(product_readings: list, budget: dict, historical_cells: list,
-                 fatigue: dict | None = None) -> list:
-    """只挑已有規則訊號的停掉、加碼、換素材；沒有訊號就不硬湊。"""
+                 fatigue: dict | None = None, bleeding: dict | None = None) -> list:
+    """只挑已有規則訊號的停掉、加碼、換素材；沒有訊號就不硬湊。
+
+    append 順序即優先序，因為最後 `cards[:3]` 是照順序砍尾巴。ADR 0025 決定 7 定的順序是
+    「止血 → 花錢 → 備料」：廣告層停掉 → 產品層停掉 → 加碼 → 疲勞換素材 → 歷史切角換素材。
+    """
     cards = []
+    product_pause = next(
+        (row for row in product_readings if row.get("status") == "pause_candidate"), None)
+    # 決定 4：產品層已經要停時，廣告層那張不出——上位動作已經涵蓋下位，兩張並存會叫使用者
+    # 把同一件事做兩次。反過來（產品沒事、底下有一支在漏血）才是這張卡要補的洞。
+    if bleeding is not None and product_pause is None:
+        cards.append(bleeding)
     for status, action in (
         ("pause_candidate", "停掉"),
         ("scale_candidate", "加碼"),
@@ -146,20 +217,11 @@ def select_cards(product_readings: list, budget: dict, historical_cells: list,
             "suggested_amount": budget.get("proposed_budget") if action == "加碼" else None,
         })
 
-    tired_cell = next((cell for cell in historical_cells if cell.get("underperforming")), None)
-    if tired_cell is not None:
-        cards.append({
-            "action": "換素材",
-            "target": tired_cell.get("creative_angle") or "未命名切角",
-            "reason": _tired_reason(tired_cell),
-            "impact": "先換一批素材再測，不直接放大目前的低效花費",
-            "product_id": None,
-            "performance_reading_id": None,
-        })
-
-    # 疲勞燈紅（頻率過冷受眾危險門檻）也要有卡跟進；跟上面歷史切角那張同一個目標就只留一張。
+    # 疲勞燈紅（頻率過冷受眾危險門檻）也要有卡跟進，但同一支廣告已經有停掉卡就不出：先做
+    # 新素材再去停一支正在虧的廣告，順序是反的（決定 8）。認同一支要比 pkg_id 不能比 target
+    # ——疲勞卡的目標可能是切角名，停掉卡一定是廣告名，兩個命名空間對不起來。
     if fatigue is not None and not any(
-            card["action"] == "換素材" and card["target"] == fatigue["target"] for card in cards):
+            card.get("pkg_id") == fatigue.get("pkg_id") for card in cards):
         cards.append({
             "action": "換素材",
             "target": fatigue["target"],
@@ -167,7 +229,22 @@ def select_cards(product_readings: list, budget: dict, historical_cells: list,
             "impact": "同一批人已經看到膩，換一批素材才拉得回成效",
             "product_id": None,
             "performance_reading_id": None,
+            "pkg_id": fatigue.get("pkg_id"),
         })
+
+    tired_cell = next((cell for cell in historical_cells if cell.get("underperforming")), None)
+    if tired_cell is not None:
+        angle = tired_cell.get("creative_angle") or "未命名切角"
+        # 歷史切角這張仍走切角命名空間，只跟同樣是換素材的卡比目標字串（既有行為不動）。
+        if not any(card["action"] == "換素材" and card["target"] == angle for card in cards):
+            cards.append({
+                "action": "換素材",
+                "target": angle,
+                "reason": _tired_reason(tired_cell),
+                "impact": "先換一批素材再測，不直接放大目前的低效花費",
+                "product_id": None,
+                "performance_reading_id": None,
+            })
     return cards[:3]
 
 
@@ -198,7 +275,8 @@ def generate(conn, brand_id: str, cycle_id: str, *, enqueue_ready: bool = True) 
     historical_cells = nextcycle.historical_cell_performance(
         conn, brand_id, exclude_cycle_id=cycle_id)
     cards = select_cards(loaded["products"], budget, historical_cells,
-                         fatigue_asset(conn, brand_id, cycle_id))
+                         fatigue_asset(conn, brand_id, cycle_id),
+                         bleeding_asset(conn, brand_id, cycle_id, loaded, budget))
     handled = {
         (card.get("action"), card.get("target"))
         for card in existing if card["status"] in ("ACCEPTED", "APPLIED", "REJECTED")

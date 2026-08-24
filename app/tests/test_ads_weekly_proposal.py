@@ -100,6 +100,79 @@ class WeeklyProposalSelectionTest(unittest.TestCase):
                  "underperforming_reason": "zero_conversion"}]
         self.assertIn("零成交", weekly_proposals.select_cards([], budget, zero)[0]["reason"])
 
+    # --- ADR 0025：停掉卡下沉到廣告層 -----------------------------------------
+    @staticmethod
+    def _asset(name, *, spend, conversions, revenue, attributable=1):
+        row = {"pkg_id": f"pkg_{name}", "asset_name": name, "impressions": 50000,
+               "clicks": 1000, "spend": spend, "conversions": conversions,
+               "revenue": revenue, "attributable": attributable}
+        row["kpis"] = performance.compute_kpis(row)
+        return row
+
+    def _loaded(self, assets, breakeven=1.67):
+        return {"cycle": {"id": "prd_cycle",
+                          "result": {"breakeven": breakeven, "asset_breakdown": assets}}}
+
+    def test_losing_ad_gets_a_stop_card_naming_that_ad(self):
+        """ADR 0025 決定 1／3／6：整檔還在賺，但有一支低於停損線 → 點名那一支。"""
+        assets = [self._asset("虧損_01_ad", spend=12000, conversions=12, revenue=10320)]
+        assets += [self._asset(f"賺錢_{i}_ad", spend=4500, conversions=30, revenue=25830)
+                   for i in range(1, 5)]
+
+        card = weekly_proposals.bleeding_asset(
+            None, "brd_x", "ccy_x", self._loaded(assets), {"current_budget": 30000})
+
+        self.assertEqual(card["target"], "虧損_01_ad")
+        self.assertIn("0.86", card["reason"])       # 實際投報率 10320 / 12000
+        self.assertIn("1.17", card["reason"])       # 停損線 1.67 × PAUSE_MARGIN
+        self.assertIsNone(card["product_id"])
+        self.assertEqual(card["performance_reading_id"], "prd_cycle")
+
+    def test_stop_card_stays_silent_below_the_directional_call_guard(self):
+        """ADR 0025 決定 5：3–10 筆成交不准斷言停損，這道護欄不得被繞過。"""
+        assets = [self._asset("虧損_01_ad", spend=12000, conversions=8, revenue=6880)]
+        assets += [self._asset(f"賺錢_{i}_ad", spend=4500, conversions=30, revenue=25830)
+                   for i in range(1, 5)]
+
+        self.assertIsNone(weekly_proposals.bleeding_asset(
+            None, "brd_x", "ccy_x", self._loaded(assets), {"current_budget": 30000}))
+
+    def test_stop_card_stays_silent_when_attribution_is_not_per_ad(self):
+        """ADR 0025 決定 9：歸屬對不準的廣告不參加，也不代它說話。"""
+        assets = [self._asset("虧損_01_ad", spend=12000, conversions=12, revenue=10320,
+                              attributable=0)]
+
+        self.assertIsNone(weekly_proposals.bleeding_asset(
+            None, "brd_x", "ccy_x", self._loaded(assets), {"current_budget": 30000}))
+
+    def test_product_level_pause_suppresses_the_ad_level_one(self):
+        """ADR 0025 決定 4：上位動作已涵蓋下位，不叫使用者把同一件事做兩次。"""
+        bleeding = {"action": "停掉", "target": "虧損_01_ad", "reason": "理由",
+                    "impact": "先止住這支的花費，另外幾支照跑", "product_id": None,
+                    "performance_reading_id": "prd_cycle", "pkg_id": "pkg_bad"}
+        budget = {"current_budget": 10000, "proposed_budget": 12000}
+        product_pause = [{"id": "prd_pause", "product_id": "prd_slow",
+                          "product_name": "虛構慢銷品", "status": "pause_candidate",
+                          "result": {"reasons": ["花掉一半預算仍沒有成交"]}}]
+
+        with_product = weekly_proposals.select_cards(product_pause, budget, [], None, bleeding)
+        self.assertEqual([card["target"] for card in with_product], ["虛構慢銷品"])
+
+        without_product = weekly_proposals.select_cards([], budget, [], None, bleeding)
+        self.assertEqual([card["target"] for card in without_product], ["虧損_01_ad"])
+
+    def test_fatigue_card_yields_to_the_stop_card_on_the_same_ad(self):
+        """ADR 0025 決定 8：同一支廣告該停又疲勞時只留停掉，認同一支要比 pkg_id。"""
+        bleeding = {"action": "停掉", "target": "虧損_01_ad", "reason": "理由",
+                    "impact": "先止住這支的花費，另外幾支照跑", "product_id": None,
+                    "performance_reading_id": "prd_cycle", "pkg_id": "pkg_bad"}
+        fatigue = {"pkg_id": "pkg_bad", "target": "使用情境切角", "frequency": 4.2}
+        budget = {"current_budget": 10000, "proposed_budget": 12000}
+
+        cards = weekly_proposals.select_cards([], budget, [], fatigue, bleeding)
+
+        self.assertEqual([card["action"] for card in cards], ["停掉"])
+
 
 
 class WeeklyProposalPersistenceTest(unittest.TestCase):
@@ -211,6 +284,64 @@ class WeeklyProposalPersistenceTest(unittest.TestCase):
         result = performance.import_csv(
             main.conn, self.brand_id, cycle_id, csv_text, actor=ACTOR)
         self.assertEqual(result.errors, [])
+
+    def _cycle_with_five_ads(self):
+        """驗收 A 第 4 節第 2 題的實況：五支廣告，一支 ROAS 0.86、四支 5.74、整檔 3.79。"""
+        product_id = bi_repo.create_product(
+            main.conn, self.brand_id, name="虛構五支廣告產品", actor=ACTOR)["id"]
+        bi_repo.save_product_economics(
+            main.conn, self.brand_id, product_id, selling_price=1000,
+            unit_variable_cost=400, currency="TWD", confirmed_by=ACTOR, actor=ACTOR)
+        start, end = TODAY - timedelta(days=8), TODAY + timedelta(days=5)
+        cycle = ads_repo.create_cycle(
+            main.conn, self.brand_id, product_ids=[product_id], pain_value=30000,
+            objective="sales", actor=ACTOR, start_date=start.isoformat(),
+            duration_days=(end - start).days + 1)
+        cycle_id = cycle["id"]
+        main.conn.execute("UPDATE campaign_cycle SET budget = 30000 WHERE id = ?", (cycle_id,))
+        ads_repo.update_cycle_status(
+            main.conn, self.brand_id, cycle_id, status="LIVE", actor=ACTOR)
+
+        rows = [("虧損_01_ad", 50000, 1000, 12000, 12, 10320)]
+        rows += [(f"賺錢_{i}_ad", 30000, 800, 4500, 30, 25830) for i in range(1, 5)]
+        ts = now_iso()
+        for ad_name, *_ in rows:
+            pkg_id, mapping_id = new_id("pkg"), new_id("xam")
+            main.conn.execute(
+                "INSERT INTO publishing_package (id, brand_id, campaign_cycle_id, campaign_name,"
+                " adset_name, ad_name, destination_url, utm_json, status, created_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, '{}', 'ready', ?)",
+                (pkg_id, self.brand_id, cycle_id, "五支廣告活動", "五支廣告組合", ad_name,
+                 "https://example.test", ts))
+            main.conn.execute(
+                "INSERT INTO external_ad_mapping (id, brand_id, publishing_package_id,"
+                " campaign_cycle_id, platform, claim_status, confirmed_by, confirmed_at,"
+                " created_at) VALUES (?, ?, ?, ?, 'meta', 'confirmed', ?, ?, ?)",
+                (mapping_id, self.brand_id, pkg_id, cycle_id, ACTOR, ts, ts))
+        main.conn.commit()
+        csv_text = ("行銷活動名稱,廣告名稱,曝光次數,連結點擊次數,花費金額,購買次數,購買轉換價值,頻率\n"
+                    + "".join(f"五支廣告活動,{n},{imp},{clk},{spend},{cv},{rev},1.8\n"
+                              for n, imp, clk, spend, cv, rev in rows))
+        result = performance.import_csv(
+            main.conn, self.brand_id, cycle_id, csv_text, actor=ACTOR)
+        self.assertEqual(result.errors, [])
+        return cycle_id
+
+    def test_one_losing_ad_in_a_profitable_cycle_gets_a_stop_card(self):
+        """驗收 A 第 4 節 (a)：整檔 ROAS 3.79 還在賺，週卡仍要點名該停的那一支廣告。
+
+        這一題以前只出現在 AI 白話裡——規則層看得到 asset_breakdown 卻一句話都沒說
+        （ADR 0025 起因）。"""
+        cycle_id = self._cycle_with_five_ads()
+        ok, err = reading.run(main.conn, self.brand_id, cycle_id, ACTOR)
+        self.assertEqual((ok, err), (True, None))
+
+        cards = weekly_proposals.generate(main.conn, self.brand_id, cycle_id)
+
+        stop_cards = [card for card in cards if card["action"] == "停掉"]
+        self.assertEqual(len(stop_cards), 1)
+        self.assertEqual(stop_cards[0]["target"], "虧損_01_ad")
+        self.assertIn("0.86", stop_cards[0]["reason"])
 
     def test_red_fatigue_light_gets_a_replace_asset_card_naming_that_ad(self):
         """驗收 A 第 4 節 1b：頻率 4.2 過冷受眾危險門檻（3.5），週卡不能只出加碼。"""

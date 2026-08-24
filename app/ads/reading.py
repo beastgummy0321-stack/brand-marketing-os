@@ -55,7 +55,7 @@ from app.ads.reading_hypotheses import (  # noqa: F401  (re-export, D2)
 from app.ads.reading_verdict import (  # noqa: F401  (re-export, D2)
     _HYPOTHESIS_DIRECTIONAL_PRESELECT, _NEGATIVE_STATUSES, _POSITIVE_STATUSES,
     _preselect_hypothesis_status, _unsettled_note, _verdict_group,
-    breakeven_roas, classify_verdict_shift, money_line, prediction_settlement,
+    breakeven_roas, classify_verdict_shift, cycle_breakeven_roas, money_line, prediction_settlement,
     repurchase_breakeven_roas,
 )
 
@@ -363,12 +363,7 @@ def run(conn, brand_id: str, cycle_id: str, actor: str,
         readings.append(verdict)
 
     # 檔期層：一句總結。產品層判不出來時，這是唯一的結論。
-    cycle_breakeven = None
-    breakevens = [breakeven_roas(bi.get_product_economics(conn, brand_id, a["product_id"]))
-                  for a in allocations]
-    known = [b for b in breakevens if b]
-    if known:
-        cycle_breakeven = round(sum(known) / len(known), 2)
+    cycle_breakeven = cycle_breakeven_roas(conn, brand_id, allocations)
     cycle_verdict = judge(cycle_totals, plan_budget=cycle["budget"] or 0, brand_id=brand_id,
                           breakeven=cycle_breakeven, baseline=baseline, conn=conn)
     cycle_verdict["product_id"] = None
@@ -379,6 +374,9 @@ def run(conn, brand_id: str, cycle_id: str, actor: str,
     # （D4 觸點 2，票 03-performance-reaches-the-user），不再是唯一結論時才裝沒看見。
     asset_breakdown = reading_assets.asset_totals(conn, brand_id, cycle_id)
     cycle_verdict["asset_breakdown"] = asset_breakdown
+    # 這期的打平線也一起存下來（ADR 0025 決定 3）：週提案卡要用同一條線去判逐支廣告該不該停，
+    # 在那邊重算一次會變成兩個地方各算各的、數字兜不起來（票 09 D1 就是為了這個）。
+    cycle_verdict["breakeven"] = cycle_breakeven
     if allocations and not per_product:
         worst_asset_line = reading_assets.worst_asset_reason(asset_breakdown, breakeven=cycle_breakeven)
         cycle_verdict["reasons"].append(worst_asset_line if worst_asset_line else
@@ -461,6 +459,7 @@ def run(conn, brand_id: str, cycle_id: str, actor: str,
                         "data_grade": verdict.get("data_grade"),
                         "ga4_leak": verdict.get("ga4_leak"),
                         "asset_breakdown": verdict.get("asset_breakdown"),
+                        "breakeven": verdict.get("breakeven"),
                         "hypothesis_reviews": verdict.get("hypothesis_reviews")},
                         ensure_ascii=False),
              confidence["label"],

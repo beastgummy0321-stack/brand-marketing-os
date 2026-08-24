@@ -79,6 +79,18 @@ def breakeven_roas(economics: Optional[dict]) -> Optional[float]:
     return round(float(price) / margin, 2)
 
 
+def cycle_breakeven_roas(conn, brand_id: str, allocations: list) -> Optional[float]:
+    """檔期層打平線＝這期各產品打平線的平均，四捨五入到小數點兩位；一個都算不出來回 None。
+
+    原本內嵌在 `reading.load()` 裡，ADR 0025 把它抽成函式：週提案卡的廣告層停掉卡也要用
+    同一條線，`reading.py` 已經到單檔行數上限，而兩個地方各算一次數字會兜不起來（票 09 D1）。
+    """
+    from app.brand_intelligence import repository as bi
+    known = [b for b in (breakeven_roas(bi.get_product_economics(conn, brand_id, a["product_id"]))
+                         for a in allocations) if b]
+    return round(sum(known) / len(known), 2) if known else None
+
+
 def repurchase_breakeven_roas(first_order_breakeven: Optional[float],
                               multiplier: Optional[float]) -> Optional[float]:
     """含 90 天回購的實質打平線（票 #39，決策 0025 第 7 點）：回購讓客戶在 90 天內帶來
