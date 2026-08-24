@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
 import { Check, ChevronDown, Images, RefreshCw, ShieldCheck, WalletCards } from "lucide-react";
-import { Link } from "react-router-dom";
 import {
   approveAllWeeklyProposals,
   approveWeeklyProposal,
@@ -288,8 +287,14 @@ export function WeeklyBattleSection({
             {actionCards.map((card) => (
               <li key={card.id} className="flex flex-wrap items-center justify-between gap-3 rounded-lg bg-muted px-4 py-3 text-sm text-foreground">
                 <span>{card.action_card}</span>
+                {/* B0-16：card.action_url 是後端算好、已經帶 `/app/` 前綴的完整路徑
+                 * （app/ads/weekly_proposals.py），設計上是給一般 <a href> 用的——react-router
+                 * 的 <Link to> 會把它當成「相對 basename 的路徑」再疊加一次 `/app` basename，
+                 * 變成 `/app/app/...` 雙前綴死連結。改回一般 <a>（整頁導航，跟其他吃同一種
+                 * action_url 的元件同一套：AlertsPanel.tsx／InboxItemCard.tsx／
+                 * GuideCards.tsx 都是 <a href>，不是 <Link>）。 */}
                 {card.action_url && (
-                  <Link to={card.action_url} className="shrink-0 font-medium text-primary hover:underline">去素材工作檯</Link>
+                  <a href={card.action_url} className="shrink-0 font-medium text-primary hover:underline">去素材工作檯</a>
                 )}
               </li>
             ))}

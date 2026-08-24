@@ -29,6 +29,9 @@ def _instruction(action: str, target: str) -> str:
 
 
 def _copy(card: dict) -> str:
+    if card.get("is_historical_angle"):
+        return (f"{card['reason']}——建議別再用「{card['target']}」這個投放方向"
+                f"（之前檔期用過的舊方向，不是這期的廣告）。")
     return f"{card['reason']}——建議{card['action']}「{card['target']}」。"
 
 
@@ -37,6 +40,8 @@ def _action_card(card: dict) -> str | None:
         return None
     grade = GRADE_BY_ACTION[card["action"]]
     if grade == "asset":
+        if card.get("is_historical_angle"):
+            return f"前往素材工作檯，準備取代「{card['target']}」這個舊方向的新素材。"
         return f"前往素材工作檯，為「{card['target']}」準備新素材。"
     instruction = card.get("instruction") or _instruction(card["action"], card["target"])
     if grade == "spend":
@@ -245,6 +250,10 @@ def select_cards(product_readings: list, budget: dict, historical_cells: list,
                 "impact": "先換一批素材再測，不直接放大目前的低效花費",
                 "product_id": None,
                 "performance_reading_id": None,
+                # B0-11：這張卡點名的是切角（可能橫跨好幾支廣告、也可能是別期留下來的舊方向），
+                # 不是這期的一支廣告——`_copy()`／`_action_card()` 靠這個旗標換一句誠實的講法，
+                # 不把切角名冒充成廣告名（ADR 0025 決定 8：這裡本來就走切角命名空間，既有行為不動）。
+                "is_historical_angle": True,
             })
     return cards[:3]
 
@@ -288,6 +297,8 @@ def generate(conn, brand_id: str, cycle_id: str, *, enqueue_ready: bool = True) 
         content = {key: card[key] for key in ("action", "target", "reason", "impact")}
         if card.get("suggested_amount") is not None:
             content["suggested_amount"] = card["suggested_amount"]
+        if card.get("is_historical_angle"):
+            content["is_historical_angle"] = True
         content["instruction"] = _instruction(card["action"], card["target"])
         conn.execute(
             "INSERT INTO recommendation (id, brand_id, campaign_cycle_id, product_id,"

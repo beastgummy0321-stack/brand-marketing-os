@@ -45,7 +45,7 @@ from fastapi import APIRouter
 from app.ads.routes_progress import (  # noqa: F401 — 原樣接回去給 `ads_routes.` 這套慣例用
     _progress_state, _progress_lock, _USUAL_RANGE, _PROGRESS_TIMEOUT_SECONDS,
     _progress_key, _progress_touch, _progress_start, _progress_run,
-    _progress_set_stage, _progress_clear, _progress_definition_rows,
+    _progress_set_stage, _progress_clear, _progress_fail, _progress_definition_rows,
 )
 
 # 第 7 刀（A1 三層地界新規則：app/ads 不得 import app.orders，見

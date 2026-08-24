@@ -87,8 +87,9 @@ async def tracking_health_recheck_status(brand_id: str):
         return _envelope({"status": "done"})
     if entry["status"] != "done":
         if time.time() - entry["started_at"] > ads_routes._PROGRESS_TIMEOUT_SECONDS:
-            ads_routes._progress_clear(key)
-            return _envelope({"status": "failed", "message": "檢查逾時了，可以再試一次。"})
+            message = "檢查逾時了，可以再試一次。"
+            ads_routes._progress_fail(key, message)
+            return _envelope({"status": "failed", "message": message})
         return _envelope({"status": "running"})
     outcome_kind, payload = entry["result"]
     ads_routes._progress_clear(key)

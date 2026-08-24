@@ -53,7 +53,6 @@ export function ReviewStep({ brandId, cycle }: { brandId: string; cycle: Cycle }
       <AttributionCard review={review} />
       <LearningCard brandId={brandId} cycleId={cycle.id} review={review} onResolved={load} />
       <NextCycleCard brandId={brandId} review={review} cycle={cycle} />
-      <p className="text-xs text-muted-foreground">本週報告掛載點（B5 範圍，本票只留入口，內部長相延至 B5）。</p>
     </div>
   );
 }

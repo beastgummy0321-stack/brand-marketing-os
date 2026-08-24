@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { formatCurrency, formatPercent, formatRelativeHours, formatRoas, formatSyncTime, formatUsd } from "@/lib/format";
 import { triggerImmediateSync } from "@/lib/api";
 import { useFormSubmit } from "@/lib/useFormSubmit";
@@ -18,14 +19,14 @@ const IMPORT_SOURCE_LABELS: Record<string, string> = { csv: "CSV", manual: "手�
 /** 成效（S8R.20-22 重設計，吸收舊 `S8.51-58`）：最上方一排健康燈號（S8R.20，全綠收合成一行，
  * 異常才展開），底下 KPI 表格／判讀結論卡完整細節不變（漸進揭露，S8R.22）。期中檢查點
  * （原本掛在本步驟開頭）已依 S8R.19 併回「交接」區塊，本步驟不再重複顯示。資料操作子頁
- * （CSV／手動填寫／蝦皮期別碼／對帳三題／營收校準）契約明講「入口只寫『點下去去這個子頁』，
- * 內部長相不屬本頁」，這裡只留入口訊息，不做死連結（跟 S7「開新檔期」同一慣例）。 */
+ * （CSV／手動填寫／蝦皮期別碼／對帳三題／營收校準）還沒建置；B0-09 前一版做成一顆點下去
+ * 才丟三個看不懂術語的假按鈕，改成直接印一句白話說明會多什麼工具，不用點就看得懂、也不會
+ * 誤以為系統壞了。 */
 export function PerformanceStep({ brandId, cycle }: { brandId: string; cycle: Cycle }) {
   const [summary, setSummary] = useState<PerformanceSummary | null | undefined>(undefined);
   const [reading, setReading] = useState<ReadingResult | null>(null);
   const [bottleneck, setBottleneck] = useState<BottleneckResult | null>(null);
   const [confidence, setConfidence] = useState("");
-  const [notice, setNotice] = useState<string | null>(null);
   const [lights, setLights] = useState<HealthLights | null>(null);
   const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
   const [syncing, setSyncing] = useState(false);
@@ -163,10 +164,12 @@ export function PerformanceStep({ brandId, cycle }: { brandId: string; cycle: Cy
       <div className="rounded-lg border border-border bg-card p-4 text-sm shadow-[var(--shadow-card)]">
         <p className="font-medium text-foreground">本期判讀可信度</p>
         <p className="mt-1 text-muted-foreground">{confidence}</p>
-        <button type="button" onClick={() => setNotice("這一段還沒有建置：對帳三題、蝦皮期別碼、營收校準這些資料操作子頁。")} className="mt-1 text-xs text-primary hover:underline">
-          去資料操作子頁
-        </button>
-        {notice && <p className="mt-1 text-xs text-muted-foreground">{notice}</p>}
+        {/* B0-09：未建置的功能不給看起來能按、按下去卻只丟三個看不懂術語的假按鈕
+         * （規格使用者故事 23 同一個道理：灰掉／說明，不做假連結），直接用白話說明
+         * 之後會多什麼工具，現在還不用等。 */}
+        <p className="mt-1 text-xs text-muted-foreground">
+          之後這裡會多幾個核對資料的工具（例如跟訂單系統對帳、蝦皮期別、營收校正），目前還在準備中，不影響現在使用。
+        </p>
       </div>
     </div>
   );
@@ -382,7 +385,10 @@ function ManualCsvPanel({ brandId, cycleId, onImported }: { brandId: string; cyc
           }}
           className="flex flex-col gap-2"
         >
-          <p className="text-xs text-muted-foreground">API 拉不到、CSV 也匯不進來時的最後退路，花費金額必填。</p>
+          {/* B0-14：原句「…的最後退路」讀起來像在講下面緊接著的 CSV 匯入，其實這句只
+           * 是在講「自己填成效」這個手動輸入表單本身（API／CSV 都不行才用它）——CSV
+           * 匯入是正常管道，不是退路，兩句話拆清楚，不要共用一句容易誤讀成同一件事。 */}
+          <p className="text-xs text-muted-foreground">手動輸入：API 拉不到、CSV 也匯不進來時才用這個，花費金額必填。</p>
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
             {MANUAL_FIELDS.map((f) => (
               <label key={f.key} className="flex flex-col gap-1 text-xs text-muted-foreground">
@@ -411,7 +417,18 @@ function ManualCsvPanel({ brandId, cycleId, onImported }: { brandId: string; cyc
 
         <div className="flex flex-col gap-2 border-t border-border pt-3">
           <p className="text-xs text-muted-foreground">從 Meta 廣告管理員匯出的 CSV，直接上傳。</p>
+          {/* B0-14：原生 <input type="file"> 的按鈕文字（Choose File）是瀏覽器介面語言決定
+           * 的，網站的 HTML／CSS 改不了那顆按鈕上的字。用「隱藏原生 input＋label 觸發」
+           * 這個標準寫法換一顆中文按鈕；label 對到 disabled 的 input 時瀏覽器本來就不會
+           * 觸發檔案選擇窗，不用另外接 onClick 判斷。 */}
+          <label
+            htmlFor={`csv-upload-${cycleId}`}
+            className={`w-fit rounded-md border border-primary px-3 py-1.5 text-xs font-medium text-primary hover:bg-primary/10 ${csvForm.saving ? "cursor-not-allowed opacity-50" : "cursor-pointer"}`}
+          >
+            {csvForm.saving ? "匯入中…" : "選擇檔案"}
+          </label>
           <input
+            id={`csv-upload-${cycleId}`}
             type="file"
             accept=".csv"
             disabled={csvForm.saving}
@@ -420,16 +437,30 @@ function ManualCsvPanel({ brandId, cycleId, onImported }: { brandId: string; cyc
               e.target.value = "";
               if (file) void csvForm.submit(file);
             }}
-            className="text-xs text-foreground"
+            className="sr-only"
           />
           {csvForm.error && <p className="rounded-md border border-danger/30 bg-danger/10 px-3 py-2 text-xs text-danger">{csvForm.error}</p>}
           {csvResult && (
-            <p className="text-xs text-success">
-              匯入 {csvResult.imported} 筆成效資料，對回 {csvResult.matched_assets} 則素材。
-              {csvResult.quarantined > 0 && `${csvResult.quarantined} 筆數字不合理已擱在一旁。`}
-              {csvResult.skipped > 0 && `${csvResult.skipped} 筆重複略過。`}
-              {csvResult.rerun_message && ` ${csvResult.rerun_message}`}
-            </p>
+            <>
+              <p className="text-xs text-success">
+                匯入 {csvResult.imported} 筆成效資料，對回 {csvResult.matched_assets} 則素材。
+                {csvResult.quarantined > 0 && `${csvResult.quarantined} 筆數字不合理已擱在一旁。`}
+                {csvResult.skipped > 0 && `${csvResult.skipped} 筆重複略過。`}
+                {csvResult.rerun_message && ` ${csvResult.rerun_message}`}
+              </p>
+              {/* B0-12：「對回 0 則素材」原本只是一個數字，品牌主看不出是好是壞、要不要處理。
+               * 這裡把後果講白（之後點不到名，只能看檔期加總），並給一個真的存在、跟廣告
+               * 身分對不對得起來最相關的頁面（不是承諾一定修得好，那是 ADR 0025／看板 K1
+               * 的已知上限，這張票不動它）。 */}
+              {csvResult.imported > 0 && csvResult.matched_assets === 0 && (
+                <p className="rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning">
+                  這批沒有一筆對到廣告，之後系統沒辦法點名「該換哪一支廣告」或「該幫哪一支加碼」，只能看整個檔期的加總數字。
+                  如果這個檔期的廣告活動是用「認領」方式加進來的，去
+                  <Link to={`/brands/${brandId}/ads-claims`} className="font-medium underline">廣告活動認領</Link>
+                  頁確認一次。
+                </p>
+              )}
+            </>
           )}
         </div>
       </div>

@@ -181,6 +181,56 @@ class TimeoutTest(_BaseProgressTest):
         self.assertEqual(status["status"], "failed")
         self.assertIn("沒有在時間內回應", status["message"])
 
+    def test_late_success_after_timeout_is_not_discarded_and_retry_does_not_double_charge(self):
+        """B0-28 根因驗收：逾時判失敗那一刻，背景執行緒（真實情境是還在等 LLM 回應）其實
+        還活著。舊行為是 `_progress_clear()` 把 entry 整個拔掉——這條執行緒事後真的做完、
+        AI 額度也真的扣了，結果卻寫不回任何地方，下一次問狀態變成「entry 不存在＝done」，
+        使用者看到的是「done 但沒有任何方案內容」，零錯誤訊息；這時如果使用者按「重試」，
+        會讓一支全新的執行緒再打一次付費 API，等於為同一份結果付兩次錢。
+
+        這裡驗證新行為：逾時後（1）狀態不是曇花一現的 failed，重問幾次都還是同一句 failed；
+        （2）背景那條執行緒真正跑完後，狀態會確實變成 done、並帶著它真正做出來的結果，不會
+        被忘掉；（3）逾時後按「重試」（再 POST 一次 plan/generate）不會讓 provider 被多打
+        一次——因為舊執行緒還活著，重試只是安靜接回去等它，不是重開一條新的。"""
+        # 時間安排：重試會把逾時時鐘重設成「重試當下 ＋ T」，最壞狀況（一逾時就立刻重試，
+        # R=T）需要 T >= D-T，也就是 T 至少要有 D 的一半，新窗口才蓋得住剩餘工作時間；
+        # 這裡抓 T=0.6D 留邊界。用輪詢（不是固定 sleep）等第一次真的變成 failed 才重試，
+        # 讓 R 盡量貼近 T，不受重度平行測試（-n auto）的排程延遲影響而假紅或假綠。
+        delay = 1.0
+        timeout = 0.6
+        provider = _SlowProvider(_fake(json.dumps(_GOOD_OPTIONS, ensure_ascii=False)), delay=delay)
+        ads_plan.PROVIDER = provider
+
+        original_timeout = ads_routes._PROGRESS_TIMEOUT_SECONDS
+        ads_routes._PROGRESS_TIMEOUT_SECONDS = timeout
+        try:
+            self.client.post(self.generate_url, json={})  # 觸發背景執行緒開始跑
+
+            deadline = time.time() + delay  # T < D，逾時一定會在這之前發生，這裡只是防呆上限
+            first = None
+            while time.time() < deadline:
+                first = self.client.get(
+                    f"/api/campaigns/{self.bid}/{self.cycle_id}/plan/status").json()["data"]
+                if first["status"] == "failed":
+                    break
+                time.sleep(0.02)
+            self.assertEqual(first["status"], "failed", first)
+
+            # 使用者看到失敗，重按一次「重試」；此時舊執行緒還活著（還沒到 D 秒）。
+            retry = self.client.post(self.generate_url, json={})
+            self.assertEqual(retry.status_code, 204)
+
+            status = _poll_plan_status(self.client, self.bid, self.cycle_id, timeout=delay + 2.0)
+        finally:
+            ads_routes._PROGRESS_TIMEOUT_SECONDS = original_timeout
+
+        self.assertEqual(status["status"], "done", status)
+        self.assertEqual(len(provider.calls), 1,
+                         "逾時後重試不得多打一次付費 API：本來就還在跑的那次算數就好")
+        cycle = ads_repo.get_cycle(main.conn, self.bid, self.cycle_id)
+        self.assertEqual(cycle["status"], "PLAN_SELECT",
+                         "背景執行緒晚到的成功結果必須真的被存下來，不能悄悄消失")
+
 
 class ProgressRunResultShapeTest(unittest.TestCase):
     """單元層級：_progress_run／_progress_start 不假設 work() 回傳值的形狀（plan/creative

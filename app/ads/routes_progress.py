@@ -61,21 +61,41 @@ def _progress_start(key: str, stages: list, work) -> dict:
 
     work 是一個 zero-arg callable：`work(on_stage) -> (ok, err)`，實際呼叫哪個 generate
     函式由呼叫端決定（薄殼：這裡不認識任何一種生成流程的細節）。
+
+    B0-28 根因修復：`status == "failed"`（逾時被 `_progress_fail()` 判定失敗）不代表背景
+    執行緒真的停了——Python 執行緒殺不掉，它可能還在等 LLM 回應。這裡先看
+    `entry["thread"].is_alive()`：還活著就安靜接回同一條執行緒（不重打一次付費 API，
+    只是把狀態改回 running 繼續等它自然跑完，讓真正的結果事後寫得回來，不是打第二次
+    造成雙重扣款）；真的已經停了（例如意外死掉、從沒寫回結果）才視同 `waiting`、放心
+    重開一條新的。
     """
     with _progress_lock:
         entry = _progress_state.get(key)
         if entry is None:
             entry = {"stage": stages[0][0], "started_at": time.time(),
-                     "status": "running", "result": None}
+                     "status": "running", "result": None, "thread": None}
             _progress_state[key] = entry
             should_start = True
         elif entry["status"] == "waiting":
             entry["status"] = "running"
             should_start = True
+        elif entry["status"] == "failed" and entry.get("thread") is not None and entry["thread"].is_alive():
+            # 只接回執行緒，不重打 API——但逾時判定是看 started_at 到現在過了多久，不重設
+            # 這個時間戳，下一次輪詢會發現「還是超過門檻」，立刻又判一次失敗，使用者永遠等
+            # 不到這條還活著的執行緒真正跑完（本行不重設就會反紅：見對應測試）。
+            entry["status"] = "running"
+            entry["started_at"] = time.time()
+            should_start = False
+        elif entry["status"] == "failed":
+            entry.update({"stage": stages[0][0], "started_at": time.time(),
+                          "status": "running", "result": None})
+            should_start = True
         else:
             should_start = False  # running 或 done：已經有一份在跑／跑完了，冪等略過
     if should_start:
-        threading.Thread(target=_progress_run, args=(key, work), daemon=True).start()
+        thread = threading.Thread(target=_progress_run, args=(key, work), daemon=True)
+        entry["thread"] = thread
+        thread.start()
     return entry
 
 
@@ -91,7 +111,10 @@ def _progress_run(key: str, work) -> None:
     except Exception as exc:  # noqa: BLE001 — 背景執行緒的最後一道防線，不能讓例外憑空消失
         outcome = ("error", f"背景執行發生未預期錯誤：{exc}")
     entry = _progress_state.get(key)
-    if entry is not None:  # entry 可能已被逾時處理清除；使用者已經離開，安靜結束即可
+    # entry 可能已經被一支全新的 _progress_start() 換掉（使用者逾時後重試，且這支舊執行緒
+    # 那時已經死了）——那種情況這支「屬於舊執行緒」的結果不該蓋掉新的一份，安靜結束即可
+    # （B0-28：能安全分辨新舊靠的是 _progress_start 只在舊執行緒真的死透才會蓋 entry）。
+    if entry is not None and entry.get("thread") in (None, threading.current_thread()):
         entry["status"] = "done"
         entry["result"] = outcome
 
@@ -104,6 +127,24 @@ def _progress_set_stage(key: str, stage: str) -> None:
 
 def _progress_clear(key: str) -> None:
     _progress_state.pop(key, None)
+
+
+def _progress_fail(key: str, message: str) -> None:
+    """逾時判定失敗（B0-28 根因修復）：把 entry 標成終局的 `failed`，不是 `_progress_clear()`
+    整個拔掉。背景執行緒殺不掉，逾時當下它可能還在等 LLM 回應——原本清掉 entry 會讓
+    `_progress_run()` 事後真正跑完時找不到地方寫結果，安靜把已經花錢做出來的成果丟掉
+    （下一次讀狀態又變回「entry 不存在＝done」的假象，使用者看到的是「done 但沒內容」，
+    零錯誤訊息；重按一次又真的多打一次付費 API＝雙重扣款，這正是 B0-28 的兩個症狀）。
+
+    留著 entry 讓 `_progress_run()` 之後還找得到地方寫真正的結果（見該函式），也讓使用者
+    不管重整幾次都看到同一句失敗訊息，而不是下一次問就悄悄變成看似正常的『done』。
+    `_progress_start()` 看到 `status == "failed"` 時，靠 `entry["thread"].is_alive()`
+    判斷要不要真的重打一次生成，還是安靜接回這條還在跑的舊執行緒（同檔案該函式docstring）。
+    """
+    entry = _progress_state.get(key)
+    if entry is not None:
+        entry["status"] = "failed"
+        entry["result"] = ("error", message)
 
 
 def _progress_definition_rows(stages: list, kind: str, entry: dict) -> list:

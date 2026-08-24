@@ -396,18 +396,20 @@ async def proposal_approve_status(brand_id: str, cycle_id: str):
         return _envelope({"status": "done"})
     if entry["status"] != "done":
         # 票 13 付費手測抓到的缺陷：固定 90 秒的單次生成常數套在整批八次生成上，正常
-        # 成功的批次一定還沒跑完就先被判定逾時——不只回錯「failed」，逾時分支的
-        # `_progress_clear()` 還會把剛做好的 partial／budget_stopped 資訊一起清掉，下一
-        # 次輪詢反而看到「done」（使用者已經先被騙說失敗了）。天花板改成跟這次核准實際
-        # 會跑幾次生成走，算式見 `_proposal_generate_ceiling_seconds`（跟 `proposal_get`
-        # 告知前端的是同一個數字）。
+        # 成功的批次一定還沒跑完就先被判定逾時。天花板改成跟這次核准實際會跑幾次生成走，
+        # 算式見 `_proposal_generate_ceiling_seconds`（跟 `proposal_get` 告知前端的是同一個
+        # 數字），大幅降低誤判逾時的機率；B0-28 再補一層：即使真的撞到天花板，逾時分支也
+        # 不再用 `_progress_clear()` 把 entry 整個拔掉（那樣會讓還在跑的背景執行緒事後把
+        # 剛做好的 partial／budget_stopped 資訊憑空丟掉，下一次輪詢反而看到「done」——使用
+        # 者被騙說失敗了，還可能因此重按一次而多花一次 AI 額度）。改用 `_progress_fail()`
+        # 把 entry 標成終局的 failed 但留著，`_progress_start()` 之後靠這個狀態安全接回
+        # 還在跑的舊執行緒，不重打一次（見兩支函式各自的 docstring）。
         ceiling_seconds = _proposal_generate_ceiling_seconds(conn, brand_id, cycle_id)
         if time.time() - entry["started_at"] > ceiling_seconds:
-            ads_routes._progress_clear(key)
-            return _envelope({"status": "failed",
-                               "message": "AI 這次沒有在時間內回應。核可已經生效、資料都還在，"
-                                          "沒有掉。可以先去素材工作檯看看做出來的部分，"
-                                          "或稍後再試一次。"})
+            message = ("AI 這次沒有在時間內回應。核可已經生效、資料都還在，"
+                       "沒有掉。可以先去素材工作檯看看做出來的部分，或稍後再試一次。")
+            ads_routes._progress_fail(key, message)
+            return _envelope({"status": "failed", "message": message})
         return _envelope({"status": "running"})
     outcome_kind, payload = entry["result"]
     ads_routes._progress_clear(key)
@@ -491,8 +493,19 @@ async def plan_generate(request: Request, brand_id: str, cycle_id: str):
 async def plan_status(brand_id: str, cycle_id: str):
     """輪詢端點：沿用舊 Jinja `ads_plan_progress`（routes_plan.py）同一套背景執行緒／逾時
     判斷，只是把「轉址＋帶訊息」換成「JSON 狀態＋人話訊息」——同一個 `_progress_state`
-    底層，不是第二套生成邏輯。entry 不存在（從沒生成過或已被消化）一律視為 done，
-    這裡本來就是「已經有結果可以看」的意思，不是失敗。"""
+    底層，不是第二套生成邏輯。entry 不存在（從沒生成過、或成功結果已被上一次讀取消化）
+    一律視為 done，這裡本來就是「已經有結果可以看」的意思，不是失敗。
+
+    B0-28 根因：逾時分支以前呼叫 `_progress_clear()`，把 entry 整個拔掉——但背景執行緒
+    （`ads_plan.generate_options()`）殺不掉，逾時當下它常常還在等 LLM 回應（`_USUAL_RANGE`
+    寫的 30-60 秒是常態，撞到 `llm/gateway.py` 120 秒逾時＋一次重試時遠不只 90 秒）。entry
+    一被拔掉，這支執行緒事後真的跑完、想寫回結果時找不到地方寫，成果安靜消失；下一次
+    問狀態又落回「entry 不存在＝done」這條，變成「done 但沒有任何方案內容」——使用者看不到
+    半句錯誤，AI 額度卻已經真的扣了。改叫 `_progress_fail()`：entry 留著、標成終局的
+    failed，讓晚到的真結果事後寫得回來，也讓使用者不管問幾次都看到同一句失敗訊息，不會
+    後面一問就悄悄變成看似正常的「done」。使用者按「重試」時，`_progress_start()` 會看
+    entry 裡記的那條舊執行緒是否還活著：活著就安靜接回去等它，不重打一次 AI（不重複扣費）；
+    真的已經死了才安心開一條新的。"""
     main_mod.require_brand(brand_id)
     _require_cycle(brand_id, cycle_id)
     key = ads_routes._progress_key("plan", brand_id, cycle_id)
@@ -501,10 +514,10 @@ async def plan_status(brand_id: str, cycle_id: str):
         return _envelope({"status": "done"})
     if entry["status"] != "done":
         if time.time() - entry["started_at"] > ads_routes._PROGRESS_TIMEOUT_SECONDS:
-            ads_routes._progress_clear(key)
-            return _envelope({"status": "failed",
-                               "message": "AI 這次沒有在時間內回應。你的資料都還在，沒有掉。"
-                                          "可以再試一次，或先跳過這一步。"})
+            message = ("AI 這次沒有在時間內回應。你的資料都還在，沒有掉。"
+                       "可以再試一次，或先跳過這一步。")
+            ads_routes._progress_fail(key, message)
+            return _envelope({"status": "failed", "message": message})
         return _envelope({"status": "running"})
     outcome_kind, payload = entry["result"]
     ads_routes._progress_clear(key)

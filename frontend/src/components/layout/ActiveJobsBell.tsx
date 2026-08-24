@@ -1,6 +1,5 @@
 import { Bell } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { Link } from "react-router-dom";
 import { ACTIVE_JOB_KIND_LABELS, fetchActiveJobs, type ActiveJob } from "@/lib/jobsApi";
 import { cn } from "@/lib/utils";
 
@@ -71,8 +70,12 @@ export function ActiveJobsBell() {
             <ul className="flex flex-col gap-0.5">
               {jobs.map((job, i) => (
                 <li key={i}>
-                  <Link
-                    to={job.action_url}
+                  {/* B0-16 同一種病：job.action_url 是後端算好、帶 `/app/` 前綴的完整路徑
+                   * （app/brand_web／app/intake／app/ads 各自的 JobRegistry 呼叫端），設計上
+                   * 給一般 <a href> 用——react-router 的 <Link to> 會再疊一次 `/app` basename，
+                   * 變成 `/app/app/...`。改回一般 <a>。 */}
+                  <a
+                    href={job.action_url}
                     onClick={() => setOpen(false)}
                     className="flex flex-col gap-0.5 rounded-md px-2 py-1.5 text-sm hover:bg-muted"
                   >
@@ -92,7 +95,7 @@ export function ActiveJobsBell() {
                     <span className="text-xs text-muted-foreground">
                       {ACTIVE_JOB_KIND_LABELS[job.kind]}・{job.stage}
                     </span>
-                  </Link>
+                  </a>
                 </li>
               ))}
             </ul>

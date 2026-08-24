@@ -78,6 +78,32 @@ class WeeklyProposalSelectionTest(unittest.TestCase):
             self.assertTrue({"action", "target", "reason", "impact"} <= set(card))
             self.assertTrue(all(card[key] for key in ("action", "target", "reason", "impact")))
 
+    def test_historical_angle_card_does_not_pass_off_an_angle_as_an_ad_name(self):
+        """B0-11：這張卡的 target 是切角名（可能橫跨好幾支廣告、也可能是別期留下來的舊
+        方向），不是某一支廣告的名字——文案不能寫成「建議換素材『bad_cvr』」讓人誤以為
+        bad_cvr 是這期匯入的廣告，要老實說這是舊方向、不是本期廣告（ADR 0025 決定 8：
+        target 命名空間本來就是切角，不動這個既有行為，只改使用者看到的措辭）。"""
+        historical_cells = [{
+            "experiment_cell_id": "exc_tired",
+            "creative_angle": "bad_cvr",
+            "spend": 3000,
+            "conversions": 0,
+            "underperforming": True,
+        }]
+        cards = weekly_proposals.select_cards([], {}, historical_cells)
+        self.assertEqual(len(cards), 1)
+        card = cards[0]
+        self.assertTrue(card.get("is_historical_angle"))
+
+        presented = weekly_proposals.present({**card, "id": "rec_x", "status": "GENERATED"}, "brd_x")
+        self.assertNotIn("建議換素材「bad_cvr」", presented["copy"])
+        self.assertIn("投放方向", presented["copy"])
+        self.assertIn("不是這期的廣告", presented["copy"])
+
+        accepted = weekly_proposals.present({**card, "id": "rec_x", "status": "ACCEPTED"}, "brd_x")
+        self.assertIn("舊方向", accepted["action_card"])
+        self.assertNotIn("為「bad_cvr」準備新素材", accepted["action_card"])
+
     def test_replace_asset_reason_follows_the_triggering_path(self):
         """驗收 A 第 4 節 6c：有成交但投報率低於停損線的切角，理由要寫實際投報率，
         不能沿用零成交那句。零成交的切角則維持零成交的說法。"""

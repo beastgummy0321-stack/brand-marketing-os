@@ -3,6 +3,7 @@ import { EmptyState } from "@/components/layout/EmptyState";
 import { Pager } from "@/components/layout/Pager";
 import { Skeleton } from "@/components/layout/Skeleton";
 import { formatUsd } from "@/lib/format";
+import { fieldLabel, formatScalarField, shouldHideField } from "@/lib/proposalFieldFormat";
 import {
   approveProposal,
   fetchApproveGenerateStatus,
@@ -345,11 +346,17 @@ function trackingBadCount(tracking: unknown): string {
   return String(tracking.channels.filter((channel) => channel && typeof channel === "object" && "status" in channel && channel.status === "bad").length);
 }
 
+/** 任何提案書區塊的值都走這裡（B0-30／B0-37）：物件不再用 `Object.values()` 丟掉鍵名、
+ * 把所有欄位值黏成一串裸資料庫欄位——改成逐欄「標籤：值」，內部識別碼與時間戳一律不顯示
+ * （`shouldHideField()`／`fieldLabel()`／`formatScalarField()`，見 `@/lib/proposalFieldFormat`
+ * 檔頭說明）。這是渲染層本身的修法，不是給「預算配置」「追蹤健檢」各寫一份特例——下一種
+ * 新區塊類型長出新的資料形狀，套用同一支就好。 */
 function ProposalValue({ value }: { value: unknown }): ReactNode {
   const items = Array.isArray(value) ? value : [];
   const { page, pageCount, totalCount, pageItems, goToPage, topRef } = usePagination(items);
-  if (typeof value === "string" || typeof value === "number") return value;
-  if (typeof value === "boolean") return value ? "是" : "否";
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    return formatScalarField(value);
+  }
   if (Array.isArray(value)) {
     return (
       <div ref={topRef} className="space-y-3">
@@ -359,7 +366,24 @@ function ProposalValue({ value }: { value: unknown }): ReactNode {
     );
   }
   if (value && typeof value === "object") {
-    return <div className="space-y-2">{Object.values(value).map((item, index) => <ProposalValue key={index} value={item} />)}</div>;
+    const entries = Object.entries(value as Record<string, unknown>).filter(([key]) => !shouldHideField(key));
+    if (entries.length === 0) return "—";
+    return (
+      <div className="space-y-1.5">
+        {entries.map(([key, entryValue]) => (
+          <div key={key} className="flex flex-wrap items-baseline gap-x-2">
+            <span className="shrink-0 text-xs text-muted-foreground">{fieldLabel(key)}</span>
+            <span className="text-foreground">
+              {entryValue === null || entryValue === undefined
+                ? "—"
+                : typeof entryValue === "object"
+                  ? <ProposalValue value={entryValue} />
+                  : formatScalarField(entryValue as string | number | boolean, key)}
+            </span>
+          </div>
+        ))}
+      </div>
+    );
   }
   return "—";
 }
