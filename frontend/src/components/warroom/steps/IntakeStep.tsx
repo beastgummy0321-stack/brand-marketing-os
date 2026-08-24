@@ -25,6 +25,15 @@ const OBJECTIVE_TO_FUNNEL: Record<string, "exposure" | "consideration" | "conver
   sales: "conversion",
 };
 
+// R3-carry-forward-winners：使用者在 NewCycleDirectionChoice.tsx 按「沿用有效方向」時，
+// `initialBackground` 會是這個前綴開頭（跟 app/ads/opening_suggestion.py 的
+// CARRY_FORWARD_DIRECTION 逐字同步）——後端只認這個前綴決定要不要把上期贏家／避開清單
+// 塞進企劃 prompt。掉進這支表單（建議卡讀取失敗／沒有可主打商品）代表這個前綴會被塞進
+// 一個可編輯的 <textarea>，使用者一改就可能連前綴一起洗掉，沿用信號悄悄消失、退回 R3 前
+// 的行為（安全失敗，不會反過來汙染「換方向」那支，但也不該讓它默默發生）——把這段固定
+// 顯示成不可編輯的一行，textarea 只收額外補充文字，送出時原樣接在後面。
+const CARRY_FORWARD_PREFIX = "沿用有效方向：";
+
 /** 開檔（S8.1-11，吸收 `ads_new.html`）：新檔期唯一入口，沒有 `cycle_id` 時顯示。 */
 export function IntakeStep({
   brandId,
@@ -43,7 +52,8 @@ export function IntakeStep({
   const [tierKey, setTierKey] = useState<"conservative" | "recommended" | "aggressive">("recommended");
   const [tierExpanded, setTierExpanded] = useState(false);
   const [durationDays, setDurationDays] = useState(14);
-  const [background, setBackground] = useState(initialBackground);
+  const carryForwardPinned = initialBackground.startsWith(CARRY_FORWARD_PREFIX) ? initialBackground : "";
+  const [background, setBackground] = useState(carryForwardPinned ? "" : initialBackground);
   const [objective, setObjective] = useState("");
   const [guidedEvents, setGuidedEvents] = useState("");
   const [guidedMargin, setGuidedMargin] = useState("");
@@ -73,7 +83,9 @@ export function IntakeStep({
       product_ids: [...productIds],
       budget: selectedTier?.amount ?? 0,
       duration_days: durationDays,
-      background: background || null,
+      background: (carryForwardPinned
+        ? carryForwardPinned + (background.trim() ? "\n" + background.trim() : "")
+        : background) || null,
       objective,
       offer: hasOffer ? { name: offerName, offer_type: offerType, terms: offerTerms } : undefined,
     });
@@ -208,7 +220,16 @@ export function IntakeStep({
 
       <label className="flex flex-col gap-1 text-sm">
         <span className="font-medium text-foreground">這期背景（選填）</span>
-        <textarea value={background} onChange={(e) => setBackground(e.target.value)} rows={3} className="rounded-md border border-border px-3 py-2 text-sm text-foreground" />
+        {carryForwardPinned && (
+          <p className="rounded-md border border-primary/40 bg-primary/5 px-3 py-2 text-sm text-foreground">{carryForwardPinned}</p>
+        )}
+        <textarea
+          value={background}
+          onChange={(e) => setBackground(e.target.value)}
+          rows={3}
+          placeholder={carryForwardPinned ? "要再補充的話寫在這裡（不會動到上面沿用的方向）" : undefined}
+          className="rounded-md border border-border px-3 py-2 text-sm text-foreground"
+        />
       </label>
 
       <fieldset className="flex flex-col gap-2">

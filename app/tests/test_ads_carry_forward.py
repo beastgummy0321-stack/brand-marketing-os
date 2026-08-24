@@ -343,5 +343,35 @@ class CarryForwardModeGateTest(_BaseCarryForwardTest):
         self.assertNotIn("上期此方向賠錢，已避開", sent)
 
 
+class CarryForwardTextareaEditKeepsThePrefixTest(_BaseCarryForwardTest):
+    """使用者按「沿用有效方向」，但落到 `OpeningSuggestionCard.tsx` 的後備表單（建議卡
+    讀取失敗／沒有可主打商品，122-131／133-142 行）——`IntakeStep.tsx` 把 `initialBackground`
+    塞進一個可編輯 `<textarea>`。修法前這欄直接綁 `initialBackground`，使用者一改，整段
+    （含「沿用有效方向：」前綴）就被換成使用者自己打的字，沿用信號悄悄消失、退回 R3 前的
+    行為（安全失敗：不會反過來汙染「換方向」分支，但也不該悄悄發生）。
+
+    修法（`IntakeStep.tsx`）：前綴釘死成不可編輯的一行，`<textarea>` 只收補充文字，送出時
+    用 `pinned + "\\n" + 補充文字` 原樣接在後面（`carryForwardPinned` 那段邏輯）。這裡驗證
+    那個「使用者編輯過」的 background 字串送進後端，plan prompt 仍然帶上贏家清單——不是
+    測 TSX 本身（repo 沒有前端測試工具鏈），是鎖住 `IntakeStep.tsx` 送出的字串形狀跟後端
+    `_is_carry_forward_cycle()` 之間的契約：只要前綴保留在開頭，訊號就不會丟。
+    """
+
+    def setUp(self):
+        super().setUp()
+        self._seed_cell(self.prior_cycle_id, creative_angle="實證成分", product_id=self.product,
+                        spend=21000, conversions=60, revenue=21000 * 4.31)
+
+    def test_edited_textarea_with_pinned_prefix_still_gets_the_block(self):
+        pinned = f"{opening_suggestion.CARRY_FORWARD_DIRECTION}：實證成分"
+        edited_background = pinned + "\n使用者自己多補的一句話"  # IntakeStep.tsx 修法後的送出形狀
+        cycle_id = self._open_cycle(background=edited_background)
+
+        ok, err = self._generate(cycle_id)
+        self.assertTrue(ok, err)
+        sent = ads_plan.PROVIDER.calls[0]["messages"][0]["content"]
+        self.assertIn("實證成分：ROAS 4.31", sent)
+
+
 if __name__ == "__main__":
     unittest.main()
