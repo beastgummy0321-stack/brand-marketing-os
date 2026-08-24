@@ -260,6 +260,11 @@ export interface AssetBreakdownRow {
   conversions: number;
   revenue: number;
   kpis: { ctr: number | null; cpc: number | null; cpa: number | null; roas: number | null; cpm: number | null; cvr: number | null };
+  // B0-33 修復（票 R4-late-data-downstream）：`app/ads/reading_assets.py asset_totals()`
+  // 已經比過損益兩平算好——只有真的低於打平線的最低那（幾）支才是 true，不是前端自己
+  // 找 rows 裡最小值就標紅（原本的 bug：三支比例相近的廣告翻盤轉盈後，因為還是「並列最
+  // 低」而繼續全部掛紅標）。
+  dragging_down_cycle: boolean;
 }
 
 export interface ReadingResult {

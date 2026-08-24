@@ -21,6 +21,7 @@ from app.ads import reading  # noqa: E402
 from app.ads import repository as ads_repo  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
 from app.core import interrupts as core_interrupts  # noqa: E402
+from app.core.db import new_id, now_iso  # noqa: E402
 from app.llm.providers import FakeProvider, ProviderResponse, Usage  # noqa: E402
 
 
@@ -231,3 +232,58 @@ class LateRevenueShareReversalWarningTest(_SettlementBase):
         # 只換一句同樣點名查核的短版；完整占比說明在上面的 explanation（匯入訊息）裡。
         self.assertLessEqual(len(open_items[0]["message"]), 30)
         self.assertIn("查核", open_items[0]["message"])
+
+class AssetBreakdownDraggingDownFlagTest(_SettlementBase):
+    """票 R4-late-data-downstream（B0-33 覆審駁回後修復）：逐支表「拖累檔期」旗標要跟這期
+    損益兩平比，不是逐支之間互相比大小——原本前端只找 rows 裡的最小值就標紅，三支比例
+    相近、並列最低的廣告翻盤轉盈後仍然全部繼續掛紅標（獨立審查用真實 C4 補件形狀重現）。
+    改在 `reading_assets.asset_totals()` 算好、跟著 `asset_breakdown` 存進
+    `rule_result_json`，前端只管畫布林值。"""
+
+    def _package(self, ad_name: str) -> str:
+        pkg_id, ts = new_id("pkg"), now_iso()
+        main.conn.execute(
+            "INSERT INTO publishing_package (id, brand_id, campaign_cycle_id, campaign_name,"
+            " adset_name, ad_name, destination_url, utm_json, status, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, '{}', 'ready', ?)",
+            (pkg_id, self.bid, self.cycle_id, "測試活動", "測試組合", ad_name,
+             "https://example.test", ts))
+        main.conn.execute(
+            "INSERT INTO external_ad_mapping (id, brand_id, publishing_package_id,"
+            " campaign_cycle_id, platform, claim_status, confirmed_by, confirmed_at,"
+            " created_at) VALUES (?, ?, ?, ?, 'meta', 'confirmed', ?, ?, ?)",
+            (new_id("xam"), self.bid, pkg_id, self.cycle_id, ACTOR, ts, ts))
+        main.conn.commit()
+        return pkg_id
+
+    def _flags(self):
+        breakdown = reading.load(main.conn, self.bid, self.cycle_id)["cycle"]["result"]["asset_breakdown"]
+        return {row["asset_name"]: row["dragging_down_cycle"] for row in breakdown}
+
+    def test_three_tied_ads_flip_from_dragging_down_to_clear_after_late_revenue(self):
+        ad_names = ("廣告A", "廣告B", "廣告C")
+        for name in ad_names:
+            self._package(name)
+
+        nl = chr(10)
+        header = "行銷活動名稱,廣告名稱,曝光次數,連結點擊次數,花費金額,購買次數,購買轉換價值"
+        # 三支比例相近，roas 全部 0.50 倍（打平線 1.67 倍）——並列最低，全部真的在虧錢。
+        rows = [f"測試活動,{name},5000,100,2000,4,1000" for name in ad_names]
+        csv_text = nl.join([header] + rows)
+        result = perf.import_csv(main.conn, self.bid, self.cycle_id, csv_text, actor=ACTOR)
+        self.assertEqual(result.matched_assets, 3, result.errors)
+        ok, err = reading.finalize(main.conn, self.bid, self.cycle_id, ACTOR)
+        self.assertTrue(ok, err)
+
+        self.assertEqual(self._flags(), {name: True for name in ad_names})
+
+        # 晚到訂單只補營收（同 B0-35 那批 late CSV 的形狀），三支一樣多——翻盤後 roas 全部
+        # 2.25 倍，並列最低但已經不虧了，一支都不該再掛紅標。
+        late_rows = [f"測試活動,{name},0,0,0,0,3500" for name in ad_names]
+        late_csv = nl.join([header] + late_rows)
+        result2 = perf.import_csv(main.conn, self.bid, self.cycle_id, late_csv, actor=ACTOR)
+        self.assertEqual(result2.matched_assets, 3, result2.errors)
+        outcome = reading.rerun_for_late_data(main.conn, self.bid, self.cycle_id, actor=ACTOR)
+        self.assertIsNotNone(outcome)
+
+        self.assertEqual(self._flags(), {name: False for name in ad_names})

@@ -372,7 +372,7 @@ def run(conn, brand_id: str, cycle_id: str, actor: str,
     # 素材層成效歸因（修憲落地 G2，決策 0035 第二節第 4 點）：純顯示用途，不影響上面的判定。
     # 提前到這裡算，好讓下面「產品層拆不出來」的白話理由能改口點名拖累最兇的那支廣告
     # （D4 觸點 2，票 03-performance-reaches-the-user），不再是唯一結論時才裝沒看見。
-    asset_breakdown = reading_assets.asset_totals(conn, brand_id, cycle_id)
+    asset_breakdown = reading_assets.asset_totals(conn, brand_id, cycle_id, breakeven=cycle_breakeven)
     cycle_verdict["asset_breakdown"] = asset_breakdown
     # 這期的打平線也一起存下來（ADR 0025 決定 3）：週提案卡要用同一條線去判逐支廣告該不該停，
     # 在那邊重算一次會變成兩個地方各算各的、數字兜不起來（票 09 D1 就是為了這個）。

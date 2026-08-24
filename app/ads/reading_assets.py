@@ -12,7 +12,7 @@ from typing import Optional
 from app.ads import performance as ads_performance
 
 
-def asset_totals(conn, brand_id: str, cycle_id: str) -> list:
+def asset_totals(conn, brand_id: str, cycle_id: str, breakeven: Optional[float] = None) -> list:
     """依素材（廣告名稱對回的交接包）分開的成效加總（修憲落地 G2，決策 0035 第二節第 4 點）。
 
     只有 CSV 匯入時廣告名稱對得回已授權素材的資料列才會出現在這裡（見
@@ -28,6 +28,15 @@ def asset_totals(conn, brand_id: str, cycle_id: str) -> list:
     mapping、同一個交接包，那種列的逐支數字是假的。CSV 匯入靠廣告名稱完全相等對回唯一的
     交接包（performance.py match_asset_mapping），不經過這個缺口，一律算準。
     純顯示的呼叫端可以不理這個旗標；要據此叫使用者停掉某一支的（週提案卡）必須先看它。
+
+    `breakeven`（可選）：這期損益兩平投報率。給了就順便算好每列的 `dragging_down_cycle`
+    （B0-33／票 R4-late-data-downstream 修復）：只有投報率最低、且真的低於這條線的那（幾）
+    支才算「拖累檔期」——跟 `worst_asset_reason()` 同一套「先比出最低、再比損益兩平」判準
+    （票 09），不是逐支之間互相比大小就算數。原本這個判斷是前端自己重新發明一次
+    （`Math.min` 找最低就標紅，完全沒比損益兩平），三支比例相近的廣告在補件後全部由虧轉盈
+    （0.86→1.58 倍），卻因為還是「並列最低」而全部繼續掛紅標，此其根因；改在這裡算好、
+    直接跟著 `asset_breakdown` 存進 `rule_result_json`，前端只管畫布林值，不再自己判定。
+    不給 `breakeven`、或算不出投報率時一律 False（鐵則 16：看不出來就不誣賴）。
     """
     rows = conn.execute(
         "SELECT pkg.id pkg_id, pkg.ad_name asset_name,"
@@ -48,6 +57,11 @@ def asset_totals(conn, brand_id: str, cycle_id: str) -> list:
         data = dict(row)
         data["kpis"] = ads_performance.compute_kpis(data)
         result.append(data)
+    roas_values = [r["kpis"]["roas"] for r in result if r["kpis"]["roas"] is not None]
+    worst_roas = min(roas_values) if roas_values else None
+    underwater = worst_roas is not None and breakeven is not None and worst_roas < breakeven
+    for data in result:
+        data["dragging_down_cycle"] = bool(underwater and data["kpis"]["roas"] == worst_roas)
     return result
 
 

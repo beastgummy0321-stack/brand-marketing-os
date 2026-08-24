@@ -246,13 +246,16 @@ function BatchRow({
   );
 }
 
-/** 素材層成效表（契約 C／D4 第 3 點）：一支廣告一列，ROAS 最低的那支標成「拖累檔期」——
- * 使用者不必自己比數字就知道是哪支在賠錢。陣列空的（沒有對得回素材的成效列）就整段不畫，
- * 不畫空表格、不湊一列假資料（鐵則 16）。 */
+/** 素材層成效表（契約 C／D4 第 3 點）：一支廣告一列，真的拖累損益兩平的那（幾）支標成
+ * 「拖累檔期」——使用者不必自己比數字就知道是哪支在賠錢。陣列空的（沒有對得回素材的成效
+ * 列）就整段不畫，不畫空表格、不湊一列假資料（鐵則 16）。
+ *
+ * B0-33 修復：紅標判準（是否低於這期損益兩平投報率）已經在後端
+ * `app/ads/reading_assets.py asset_totals()` 算好、跟著 `row.dragging_down_cycle` 送過來
+ * ——這裡不再自己找 rows 裡的最小值，避免「全部都賺錢、剛好並列最低」也被標紅
+ * （原本 `Math.min` 只跟同一批 rows 互相比大小，沒跟打平線比）。 */
 function AssetBreakdownTable({ rows }: { rows: AssetBreakdownRow[] | undefined }) {
   if (!rows || rows.length === 0) return null;
-  const roasValues = rows.map((r) => r.kpis.roas).filter((v): v is number => v !== null);
-  const worstRoas = roasValues.length > 0 ? Math.min(...roasValues) : null;
 
   return (
     <div className="mt-3 overflow-x-auto border-t border-border pt-3">
@@ -268,13 +271,12 @@ function AssetBreakdownTable({ rows }: { rows: AssetBreakdownRow[] | undefined }
         </thead>
         <tbody>
           {rows.map((row) => {
-            const isWorst = worstRoas !== null && row.kpis.roas === worstRoas;
             return (
               <tr key={row.pkg_id} className="border-t border-border/60">
                 <td className="py-1.5 pr-2 text-foreground">
                   <span className="flex flex-wrap items-center gap-1.5">
                     {row.asset_name}
-                    {isWorst && <Badge tone="danger">拖累檔期</Badge>}
+                    {row.dragging_down_cycle && <Badge tone="danger">拖累檔期</Badge>}
                   </span>
                 </td>
                 <td className="py-1.5 pr-2 text-foreground">{row.kpis.roas !== null ? formatRoas(row.kpis.roas) : "資料不足"}</td>
