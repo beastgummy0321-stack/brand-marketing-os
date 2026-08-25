@@ -19,7 +19,13 @@ prompt，供 `plan.generate_options()` 呼叫。
 from typing import Optional
 
 from app.ads import nextcycle
+from app.ads import reading_hypotheses
 from app.brand_intelligence import repository as bi
+
+# 票 F7：`learning_ledger.confidence` 只有這三種值（見 `app/ads/reading.py`
+# LEDGER_CONFIDENCE_LABELS），且只在假設被判「成立」時才寫入（`resolve_hypotheses()`
+# 唯一入帳點）——這裡不 import 整支 reading.py 只為了一個常數，本地留一份就好。
+_SIGNED_OFF_CONFIDENCE = ("preliminary", "moderate", "reinforced")
 
 
 def prior_winners(conn, brand_id: str, product_ids: Optional[set] = None,
@@ -27,10 +33,16 @@ def prior_winners(conn, brand_id: str, product_ids: Optional[set] = None,
     """歷來真正打贏的切角，依 ROAS 高到低取前 `limit` 名：切角名、ROAS、花費、轉換數、
     來源期別，供企劃 prompt 具名引用（契約第 2 點）。
 
-    誠實門檻跟 R2 的 `guard_supported_verdict()`／`reading_hypotheses.comparison_cells()`
-    同一種原則（樣本不足就不准冒充結論，鐵則 16）：`historical_cell_performance()` 標
-    `evidence_sufficient: False`（轉換數不到可信門檻）或 `underperforming: True` 的切角，
-    以及算不出 ROAS（沒花費或沒營收資料）的切角一律不算贏家，不管單看數字多漂亮。
+    兩個來源合併去重（票 F7，2026-08-25 使用者裁決 option 1）：
+    1. `historical_cell_performance()`——誠實門檻跟 R2 的 `guard_supported_verdict()`／
+       `reading_hypotheses.comparison_cells()` 同一種原則（樣本不足就不准冒充結論，鐵則
+       16）：標 `evidence_sufficient: False`（轉換數不到可信門檻）或 `underperforming: True`
+       的切角，以及算不出 ROAS（沒花費或沒營收資料）的切角一律不算贏家。大品牌走這條，
+       這條的統計門檻（`target_cpa.WEEKLY_CONVERSIONS_PER_GROUP`）維持不變。
+    2. `_signed_off_winners()`——人已經在判讀頁親自簽核「成立」的學習，不受統計門檻限制：
+       低門檻給人簽的、高門檻給機器自動加碼／停損卡用，兩件事分開。
+
+    同一個切角、同一個來源期別若兩條來源都算出來，算同一個贏家（取 ROAS 較高的那筆）。
 
     product_ids 給定且非空時，只算落在這些產品底下、或沒有 product_id（品牌層歷史舊資料
     常見，見 `historical_cell_performance()` docstring）的切角；給 None／空集合時不篩產品，
@@ -50,8 +62,55 @@ def prior_winners(conn, brand_id: str, product_ids: Optional[set] = None,
             "angle": cell["creative_angle"], "roas": round(revenue / spend, 2), "spend": spend,
             "conversions": cell["conversions"], "source_cycle_id": cell["campaign_cycle_id"],
         })
-    winners.sort(key=lambda w: w["roas"], reverse=True)
-    return winners[:limit]
+    winners.extend(_signed_off_winners(conn, brand_id, product_ids, exclude_cycle_id))
+
+    deduped = {}
+    for w in winners:
+        key = (w["angle"], w["source_cycle_id"])
+        if key not in deduped or w["roas"] > deduped[key]["roas"]:
+            deduped[key] = w
+    result = sorted(deduped.values(), key=lambda w: w["roas"], reverse=True)
+    return result[:limit]
+
+
+def _signed_off_winners(conn, brand_id: str, product_ids: Optional[set],
+                        exclude_cycle_id: Optional[str]) -> list:
+    """第二個贏家來源（票 F7）：使用者親自簽核「成立」的假設，不管統計證據夠不夠——人
+    已經看過並排的 A／B 數字才按下確認，門檻比機器自動判定低是刻意的（契約：低門檻給人
+    簽的，高門檻給機器自己做的；`target_cpa.WEEKLY_CONVERSIONS_PER_GROUP` 不受影響）。
+
+    `strategy_hypothesis` 跟 `experiment_cell` 之間沒有外鍵，唯一乾淨的橋是假設的
+    `source_cycle_id` → 那期真的投放過、有成效資料回得來的切角
+    （`reading_hypotheses.comparison_cells()`，已經只挑真的對回成效資料的切角），從那些
+    切角自己的數字挑 ROAS 最高的當這條假設驗證出來的「贏的方向」——不剖析假設
+    `statement` 文字裡的切角名稱（那是人話一句話，不是結構化資料，猜錯了比沒有更糟）。
+    """
+    winners = []
+    for entry in bi.list_learning_ledger(conn, brand_id):
+        if not entry["source_hypothesis_id"] or entry["confidence"] not in _SIGNED_OFF_CONFIDENCE:
+            continue
+        hyp = bi.get_strategy_hypothesis(conn, brand_id, entry["source_hypothesis_id"])
+        if hyp is None or hyp["status"] != "supported" or not hyp["source_cycle_id"]:
+            continue
+        cycle_id = hyp["source_cycle_id"]
+        if exclude_cycle_id and cycle_id == exclude_cycle_id:
+            continue
+        if product_ids and hyp["product_id"] is not None and hyp["product_id"] not in product_ids:
+            continue
+        best = None
+        for cell in reading_hypotheses.comparison_cells(conn, brand_id, cycle_id, hyp["product_id"]):
+            roas = cell["kpis"]["roas"]
+            if roas is None:
+                continue
+            if best is None or roas > best["kpis"]["roas"]:
+                best = cell
+        if best is None:
+            continue
+        winners.append({
+            "angle": best["creative_angle"], "roas": best["kpis"]["roas"], "spend": best["spend"],
+            "conversions": best["conversions"], "source_cycle_id": cycle_id,
+        })
+    return winners
 
 
 def rejected_directions(conn, brand_id: str, product_ids: Optional[set] = None,

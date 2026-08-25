@@ -162,6 +162,31 @@ class _BaseCarryForwardTest(unittest.TestCase):
                            else json.dumps(_GOOD_OPTIONS, ensure_ascii=False)))
         return ads_plan.generate_options(main.conn, self.bid, cycle_id, ACTOR)
 
+    def _sign_off_learning(self, cycle_id: str, *, product_id, cells: list,
+                           statement: str = "簽核學習測試假設") -> dict:
+        """票 F7：比照 `UnvalidatedHypothesisNeverBecomesPlanGroundingTest` 既有寫法，走真的
+        簽核鏈——建假設、掛進檔期、餵夠 `MIN_COMPARISON_CELLS` 個切角讓
+        `guard_supported_verdict()` 真的放行「成立」，再走 `resolve_hypotheses()` 入帳
+        `learning_ledger`。`cells` 是 (creative_angle, conversions, spend, revenue) 的列表。
+        """
+        hyp = bi_repo.create_strategy_hypothesis(
+            main.conn, self.bid, actor=ACTOR, hypothesis_type="message", statement=statement,
+            created_by=ACTOR, product_id=product_id, source_cycle_id=cycle_id)
+        main.conn.execute(
+            "INSERT INTO campaign_cycle_hypothesis (campaign_cycle_id, strategy_hypothesis_id,"
+            " brand_id, role) VALUES (?, ?, ?, 'message')",
+            (cycle_id, hyp["id"], self.bid))
+        main.conn.commit()
+        for angle, conversions, spend, revenue in cells:
+            self._seed_cell(cycle_id, creative_angle=angle, product_id=product_id,
+                            spend=spend, conversions=conversions, revenue=revenue)
+        updated = ads_reading.resolve_hypotheses(
+            main.conn, self.bid, cycle_id, {hyp["id"]: "supported"}, actor=ACTOR)
+        self.assertEqual(updated, 1)
+        resolved = bi_repo.get_strategy_hypothesis(main.conn, self.bid, hyp["id"])
+        self.assertEqual(resolved["status"], "supported")
+        return hyp
+
 
 class PriorWinnersRetrievalTest(_BaseCarryForwardTest):
     """直接測 `carry_forward.prior_winners()`：不經過 LLM，純粹是「贏家」定義與誠實門檻。"""
@@ -244,6 +269,42 @@ class RejectedDirectionsRetrievalTest(_BaseCarryForwardTest):
         directions = carry_forward.rejected_directions(main.conn, self.bid,
                                                     product_ids={self.product})
         self.assertEqual([d["statement"] for d in directions], ["品牌層賠錢方向"])
+
+
+class SignedOffLearningWinnerTest(_BaseCarryForwardTest):
+    """票 F7（2026-08-25 使用者裁決 option 1）：人親自簽核「成立」的學習，就算樣本數沒到
+    `WEEKLY_CONVERSIONS_PER_GROUP` 統計門檻也算贏家——低門檻給人簽的、高門檻給機器自動
+    加碼／停損卡用，兩件事分開（B2 F2 ❌ 重現的正是同一個問題兩套不同的門檻）。"""
+
+    def test_signed_off_learning_below_statistical_threshold_is_still_a_winner(self):
+        self._sign_off_learning(
+            self.prior_cycle_id, product_id=self.product,
+            cells=[("實證成分", 22, 12000, 12000 * 4.30), ("使用者見證", 20, 11000, 11000 * 3.0)])
+        winners = carry_forward.prior_winners(main.conn, self.bid)
+        self.assertEqual(len(winners), 1)
+        self.assertEqual(winners[0]["angle"], "實證成分")
+        self.assertEqual(winners[0]["roas"], 4.30)
+        self.assertEqual(winners[0]["source_cycle_id"], self.prior_cycle_id)
+        self.assertLess(winners[0]["conversions"], 50)  # 統計門檻在這條來源不適用，但轉換數仍如實回報
+
+    def test_no_signed_learning_and_insufficient_statistical_evidence_still_returns_no_winners(self):
+        """契約 done-check 3：兩邊來源都沒東西，`prior_winners()` 仍回空——加了新來源不能
+        變得比原本寬鬆。"""
+        self._seed_cell(self.prior_cycle_id, creative_angle="太少樣本的假贏家",
+                        product_id=self.product, spend=1000, conversions=3, revenue=10000)
+        self.assertEqual(carry_forward.prior_winners(main.conn, self.bid), [])
+
+    def test_plan_ignoring_signed_off_winner_is_rejected_not_stored(self):
+        """契約 done-check 2：`FakeProvider` 回的方案沒引用這條簽核贏家，
+        `citation_violations()` 要擋下、錯誤訊息具名點出切角，不能悄悄存進去。"""
+        self._sign_off_learning(
+            self.prior_cycle_id, product_id=self.product,
+            cells=[("實證成分", 22, 12000, 12000 * 4.30), ("使用者見證", 20, 11000, 11000 * 3.0)])
+        ok, err = self._generate(self.carry_forward_cycle_id)  # 預設 _GOOD_OPTIONS 沒提到「實證成分」
+        self.assertFalse(ok)
+        self.assertIn("實證成分", err)
+        self.assertEqual(
+            ads_plan.get_pending_options(main.conn, self.bid, self.carry_forward_cycle_id), [])
 
 
 class PromptIncludesCarryForwardDataTest(_BaseCarryForwardTest):
