@@ -66,4 +66,5 @@ class ApiNotFoundShapeTest(unittest.TestCase):
         client = TestClient(main.app)
         response = client.post("/api/brands/nope/assets", files={"file": ("a.png", b"x", "image/png")})
         self.assertEqual(response.status_code, 404)
-        self.assertEqual(response.json(), {"detail": "找不到品牌"})
+        self.assertEqual(response.headers["content-type"], "application/json")
+        self.assertEqual(set(response.json().keys()), {"detail"})

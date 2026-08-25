@@ -6,35 +6,18 @@
 不 mock，直接打路由驗證行為；只測外部行為（頁面渲染出的文字/數字），不測資料表內部欄位順序。
 """
 
-import atexit
-import os
-import shutil
-import tempfile
 import unittest
-from pathlib import Path
 
-_tmpdir = tempfile.mkdtemp(prefix="brand_os_settings_hub_")
+from fastapi.testclient import TestClient
 
-from fastapi.testclient import TestClient  # noqa: E402
-
-import app.main as main  # noqa: E402
-from app.brand_intelligence import repository as bi_repo  # noqa: E402
-from app.core import calendar_dismiss  # noqa: E402
-from app.core import rule_cards  # noqa: E402
-from app.shared import web as shared_web  # noqa: E402
-from app.shared.web import OPERATOR  # noqa: E402
-
-
-
-def _cleanup():
-    try:
-        main.conn.close()
-    except Exception:
-        pass
-    shutil.rmtree(_tmpdir, ignore_errors=True)
-
-
-atexit.register(_cleanup)
+import app.main as main
+import app.shared.web as web
+from app.brand_intelligence import repository as bi_repo
+from app.core import calendar_dismiss
+from app.core import db as coredb
+from app.core import rule_cards
+from app.shared import web as shared_web
+from app.shared.web import OPERATOR
 
 ACTOR = "測試員"
 
@@ -55,15 +38,15 @@ def _field(cards: dict, card_key: str, field_key: str) -> dict:
 def _last_rule_card_audit(brand_id: str):
     """入口頁「上次修改」的資料來源（brand_web/routes_settings.py `_ads_last_modified`
     的同一句查詢）：從沒改過就沒有這一列。"""
-    return main.conn.execute(
+    return web.conn.execute(
         "SELECT created_at, actor FROM audit_log WHERE entity_type = 'rule_card_value'"
-        " AND brand_id = ? ORDER BY created_at DESC LIMIT 1", (brand_id,)).fetchone()
+        " AND brand_id = %s ORDER BY created_at DESC LIMIT 1", (brand_id,)).fetchone()
 
 
 class SettingsHubEntryPageTest(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(main.app)
-        self.brand = bi_repo.create_brand(main.conn, name="虛構設定茶行", client_name=None,
+        self.brand = bi_repo.create_brand(web.conn, name="虛構設定茶行", client_name=None,
                                           actor=ACTOR)
         self.bid = self.brand["id"]
 
@@ -75,7 +58,7 @@ class SettingsHubEntryPageTest(unittest.TestCase):
         self.assertIsNone(_last_rule_card_audit(self.bid))  # 沒有修改時間可拿
 
     def test_after_override_entry_page_shows_new_value_and_modified_time(self):
-        rule_cards.set_value(main.conn, self.bid, "budget_structure", "min_daily_per_group",
+        rule_cards.set_value(web.conn, self.bid, "budget_structure", "min_daily_per_group",
                              450.0, actor=ACTOR)
         field = _field(_cards(self.client, self.bid), "budget_structure", "min_daily_per_group")
         self.assertEqual(field["value"], 450)
@@ -92,7 +75,7 @@ class SettingsHubEntryPageTest(unittest.TestCase):
 class SettingsAdsPageTest(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(main.app)
-        self.brand = bi_repo.create_brand(main.conn, name="虛構設定茶行二號", client_name=None,
+        self.brand = bi_repo.create_brand(web.conn, name="虛構設定茶行二號", client_name=None,
                                           actor=ACTOR)
         self.bid = self.brand["id"]
 
@@ -119,7 +102,7 @@ class SettingsAdsPageTest(unittest.TestCase):
         )
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(
-            rule_cards.get_value(main.conn, self.bid, "ad_creative_fatigue", "cold_warning"), 3.0)
+            rule_cards.get_value(web.conn, self.bid, "ad_creative_fatigue", "cold_warning"), 3.0)
         cards = _cards(self.client, self.bid)
         self.assertTrue(_field(cards, "ad_creative_fatigue", "cold_warning")["customized"])
 
@@ -135,14 +118,16 @@ class SettingsAdsPageTest(unittest.TestCase):
         self.assertEqual(row["actor"], OPERATOR)
 
     def test_edit_persists_after_restart(self):
+        """ADR 0027：不再有「重開連線」這回事了（連線池按 request 借連線）——改成從一條
+        全新借來的連線讀回，證明真的落庫，不是只留在寫入那個 request 的連線快取裡。"""
         self.client.post(f"/api/settings/rule-cards/brands/{self.bid}/pacing",
                          json={"deviation_threshold_ratio": "0.25"})
-        main.reopen_connection()
-        self.assertEqual(
-            rule_cards.get_value(main.conn, self.bid, "pacing", "deviation_threshold_ratio"), 0.25)
+        with coredb.connection() as fresh:
+            self.assertEqual(
+                rule_cards.get_value(fresh, self.bid, "pacing", "deviation_threshold_ratio"), 0.25)
 
     def test_edit_invalid_number_shows_error_and_keeps_other_fields_unchanged(self):
-        before = rule_cards.get_value(main.conn, self.bid, "ad_creative_fatigue", "cold_danger")
+        before = rule_cards.get_value(web.conn, self.bid, "ad_creative_fatigue", "cold_danger")
         resp = self.client.post(
             f"/api/settings/rule-cards/brands/{self.bid}/ad_creative_fatigue",
             json={"cold_warning": "不是數字", "cold_danger": "5", "retargeting_warning": "4",
@@ -151,16 +136,16 @@ class SettingsAdsPageTest(unittest.TestCase):
         self.assertEqual(resp.status_code, 400)
         self.assertIn("請填一個大於 0 的數字", resp.json()["field_errors"]["cold_warning"])
         self.assertEqual(
-            rule_cards.get_value(main.conn, self.bid, "ad_creative_fatigue", "cold_danger"), before)
+            rule_cards.get_value(web.conn, self.bid, "ad_creative_fatigue", "cold_danger"), before)
 
     def test_reset_restores_default_after_edit(self):
-        rule_cards.set_value(main.conn, self.bid, "ad_creative_fatigue", "cold_warning", 9.9,
+        rule_cards.set_value(web.conn, self.bid, "ad_creative_fatigue", "cold_warning", 9.9,
                              actor=ACTOR)
         resp = self.client.post(
             f"/api/settings/rule-cards/brands/{self.bid}/ad_creative_fatigue/reset")
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(
-            rule_cards.get_value(main.conn, self.bid, "ad_creative_fatigue", "cold_warning"), 2.5)
+            rule_cards.get_value(web.conn, self.bid, "ad_creative_fatigue", "cold_warning"), 2.5)
         # 舊頁靠 flash 句「已將『素材疲勞頻率門檻』重設為系統預設值」證明重設的是這張卡、
         # 且回到系統預設；API 回的是同一件事的資料版：這張卡的欄位全部不再是「已自訂」。
         card = resp.json()["data"]
@@ -181,9 +166,9 @@ class SettingsHubBrandIsolationTest(unittest.TestCase):
 
     def setUp(self):
         self.client = TestClient(main.app)
-        self.brand_a = bi_repo.create_brand(main.conn, name="虛構隔離茶行 A", client_name=None,
+        self.brand_a = bi_repo.create_brand(web.conn, name="虛構隔離茶行 A", client_name=None,
                                             actor=ACTOR)
-        self.brand_b = bi_repo.create_brand(main.conn, name="虛構隔離茶行 B", client_name=None,
+        self.brand_b = bi_repo.create_brand(web.conn, name="虛構隔離茶行 B", client_name=None,
                                             actor=ACTOR)
 
     def test_brand_a_edit_does_not_leak_into_brand_b_page(self):
@@ -205,7 +190,7 @@ class SettingsCalendarDismissTest(unittest.TestCase):
 
     def setUp(self):
         self.client = TestClient(main.app)
-        self.brand = bi_repo.create_brand(main.conn, name="虛構節日提醒茶行", client_name=None,
+        self.brand = bi_repo.create_brand(web.conn, name="虛構節日提醒茶行", client_name=None,
                                           actor=ACTOR)
         self.bid = self.brand["id"]
 
@@ -217,27 +202,28 @@ class SettingsCalendarDismissTest(unittest.TestCase):
         categories = calendar_dismiss.list_categories()
         self.assertIn("農曆新年", {cat["label"] for cat in categories})
         # 一個都沒關掉＝每一列都是「提醒中」，沒有任何一列是「已關閉」
-        self.assertEqual(calendar_dismiss.list_dismissed(main.conn, self.bid), set())
+        self.assertEqual(calendar_dismiss.list_dismissed(web.conn, self.bid), set())
 
     def test_toggle_off_marks_category_closed_and_persists(self):
-        calendar_dismiss.dismiss(main.conn, self.bid, "cny")
-        self.assertEqual(calendar_dismiss.list_dismissed(main.conn, self.bid), {"cny"})
+        calendar_dismiss.dismiss(web.conn, self.bid, "cny")
+        self.assertEqual(calendar_dismiss.list_dismissed(web.conn, self.bid), {"cny"})
 
     def test_toggle_on_after_off_restores_reminding(self):
-        calendar_dismiss.dismiss(main.conn, self.bid, "cny")
-        calendar_dismiss.undismiss(main.conn, self.bid, "cny")
-        self.assertEqual(calendar_dismiss.list_dismissed(main.conn, self.bid), set())
+        calendar_dismiss.dismiss(web.conn, self.bid, "cny")
+        calendar_dismiss.undismiss(web.conn, self.bid, "cny")
+        self.assertEqual(calendar_dismiss.list_dismissed(web.conn, self.bid), set())
 
     def test_persists_after_restart(self):
-        calendar_dismiss.dismiss(main.conn, self.bid, "cny")
-        main.reopen_connection()
-        self.assertEqual(calendar_dismiss.list_dismissed(main.conn, self.bid), {"cny"})
+        """ADR 0027：不再有「重開連線」這回事了——改成從一條全新借來的連線讀回。"""
+        calendar_dismiss.dismiss(web.conn, self.bid, "cny")
+        with coredb.connection() as fresh:
+            self.assertEqual(calendar_dismiss.list_dismissed(fresh, self.bid), {"cny"})
 
     def test_toggle_does_not_leak_across_brands(self):
-        other = bi_repo.create_brand(main.conn, name="虛構節日提醒茶行二號", client_name=None,
+        other = bi_repo.create_brand(web.conn, name="虛構節日提醒茶行二號", client_name=None,
                                      actor=ACTOR)
-        calendar_dismiss.dismiss(main.conn, self.bid, "cny")
-        self.assertEqual(calendar_dismiss.list_dismissed(main.conn, other["id"]), set())
+        calendar_dismiss.dismiss(web.conn, self.bid, "cny")
+        self.assertEqual(calendar_dismiss.list_dismissed(web.conn, other["id"]), set())
 
 
 # 新殼 JSON API：/api/settings/calendar/brands/{brand_id}/**（節日提醒永久關閉開關搬進新殼，
@@ -245,7 +231,7 @@ class SettingsCalendarDismissTest(unittest.TestCase):
 class SettingsCalendarApiTest(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(main.app)
-        self.brand = bi_repo.create_brand(main.conn, name="虛構節日提醒新殼茶行", client_name=None,
+        self.brand = bi_repo.create_brand(web.conn, name="虛構節日提醒新殼茶行", client_name=None,
                                           actor=ACTOR)
         self.bid = self.brand["id"]
 

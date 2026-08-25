@@ -5,9 +5,7 @@
 改規則卡數值後底案立即跟著變。
 """
 
-import tempfile
 import unittest
-from pathlib import Path
 
 from app.ads import account_structure
 from app.core import db, rule_cards
@@ -15,12 +13,7 @@ from app.core import db, rule_cards
 
 class AccountStructureTest(unittest.TestCase):
     def setUp(self):
-        self._tmpdir = tempfile.TemporaryDirectory()
-        self.conn = db.connect_and_migrate(Path(self._tmpdir.name) / "test.db")
-
-    def tearDown(self):
-        self.conn.close()
-        self._tmpdir.cleanup()
+        self.conn = db.current()
 
     BID = "brand_demo"
 
@@ -68,19 +61,26 @@ class AccountStructureTest(unittest.TestCase):
             account_structure.recommend(self.conn, self.BID, -100)
 
     def test_rule_card_change_takes_effect_immediately(self):
-        """改規則卡數值落庫後，底案立即用新值——不用重開程式（比照票 12 的驗收標準）。"""
-        rule_cards.set_value(self.conn, self.BID, "budget_structure", "medium_validation_ratio",
+        """改規則卡數值落庫後，底案立即用新值——不用重開程式（比照票 12 的驗收標準）。
+
+        用專屬 brand_id（不是共用的 self.BID）：這個模組的 schema 是整個檔案共用一份
+        （conftest.py 逐模組 schema，不是逐測試），改到 self.BID 的規則卡會被其他測試
+        方法看到，跟本測試無關的斷言會被污染。
+        """
+        bid = "brand_demo_rule_card_override"
+        rule_cards.set_value(self.conn, bid, "budget_structure", "medium_validation_ratio",
                              0.5, actor="測試員")
-        rec = account_structure.recommend(self.conn, self.BID, 1000)
+        rec = account_structure.recommend(self.conn, bid, 1000)
         self.assertEqual(rec.groups[0].daily_budget, 500.0)
         self.assertEqual(rec.groups[1].daily_budget, 500.0)
 
     def test_brand_override_does_not_leak_into_other_brands(self):
         """A 品牌改規則卡值不影響 B 品牌（設定中心票 01 分品牌驗收）。"""
-        rule_cards.set_value(self.conn, self.BID, "budget_structure", "medium_validation_ratio",
+        brand_a = "brand_demo_isolation_a"
+        rule_cards.set_value(self.conn, brand_a, "budget_structure", "medium_validation_ratio",
                              0.5, actor="測試員")
-        other = account_structure.recommend(self.conn, "brand_other", 1000)
-        self.assertEqual(other.groups[0].daily_budget, 700.0)  # 系統預設 0.7，沒被 BID 的覆寫值污染
+        other = account_structure.recommend(self.conn, "brand_demo_isolation_b", 1000)
+        self.assertEqual(other.groups[0].daily_budget, 700.0)  # 系統預設 0.7，沒被 A 品牌的覆寫值污染
 
     def test_falls_back_to_default_without_db(self):
         """conn=None 時優雅回程式常數預設值，不噴錯（principles 16，比照 rule_cards 慣例）。"""

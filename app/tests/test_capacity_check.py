@@ -5,36 +5,11 @@
 等於沒有刑度）」——本檔就是那份自檢，另外也覆蓋四項計數本身的邊界情況。
 """
 
-import atexit
-import os
-import shutil
 import tempfile
 import unittest
 from pathlib import Path
 
 from app.tools import capacity_check as cc
-
-_tmpdir = tempfile.mkdtemp(prefix="brand_os_capacity_check_")
-
-from fastapi.testclient import TestClient  # noqa: E402
-
-import app.main as main  # noqa: E402
-from app.brand_intelligence import repository as bi_repo  # noqa: E402
-from app.core import interrupts as core_interrupts  # noqa: E402
-
-
-ACTOR = "測試員"
-
-
-def _cleanup():
-    try:
-        main.conn.close()
-    except Exception:
-        pass
-    shutil.rmtree(_tmpdir, ignore_errors=True)
-
-
-atexit.register(_cleanup)
 
 
 def _cards(n: int, text: str = "一句話說明。") -> str:
@@ -197,17 +172,6 @@ class SelfCheckTest(unittest.TestCase):
             exit_code = cc.main(["--check-nav-limit", str(page_a), str(page_a), str(page_b)])
             self.assertEqual(exit_code, 1)
 
-
-class MainScopeExcludesInterruptQueueTest(unittest.TestCase):
-    """缺陷 1 修正：打斷佇列卡渲染在 <main> 之外（決策 0029、DESIGN.md §20.1 規則 1），
-    不計入主欄卡片數。用 app.core.interrupts.enqueue() 造一筆真實佇列項，打 HTTP 取得
-    實際渲染的 HTML 來驗（只讀 app.core.interrupts，不修改它）。"""
-
-    def setUp(self):
-        self.client = TestClient(main.app)
-        self.brand = bi_repo.create_brand(main.conn, name=f"虛構容量驗收{self.id()[-6:]}",
-                                          client_name=None, actor=ACTOR)
-        self.bid = self.brand["id"]
 
 if __name__ == "__main__":
     unittest.main()

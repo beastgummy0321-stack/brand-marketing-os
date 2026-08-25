@@ -4,10 +4,7 @@
 見 docs/design/03-data-model.md §3.1、§8.5。
 """
 
-import json
-import tempfile
 import unittest
-from pathlib import Path
 
 from app.brand_intelligence import repository as repo
 from app.core import audit as audit_mod
@@ -16,12 +13,7 @@ from app.core import db
 
 class AuditLogTest(unittest.TestCase):
     def setUp(self):
-        self._tmpdir = tempfile.TemporaryDirectory()
-        self.conn = db.connect_and_migrate(Path(self._tmpdir.name) / "test.db")
-
-    def tearDown(self):
-        self.conn.close()
-        self._tmpdir.cleanup()
+        self.conn = db.current()
 
     def _audit_rows(self):
         return [dict(r) for r in
@@ -46,7 +38,7 @@ class AuditLogTest(unittest.TestCase):
         self.assertEqual(first["entity_id"], brand["id"])
         self.assertEqual(first["actor"], "小陳")
         self.assertIsNone(first["before_json"])
-        self.assertEqual(json.loads(first["after_json"])["name"], "品牌A（稽核測試）")
+        self.assertEqual(first["after_json"]["name"], "品牌A（稽核測試）")
 
         repo.update_brand(self.conn, brand["id"], name="品牌A（改名）", client_name=None,
                            status="active", actor="小陳")
@@ -54,12 +46,12 @@ class AuditLogTest(unittest.TestCase):
         self.assertEqual(len(rows), 2)
         second = rows[1]
         self.assertEqual(second["action"], "update")
-        self.assertEqual(json.loads(second["before_json"])["name"], "品牌A（稽核測試）")
-        self.assertEqual(json.loads(second["after_json"])["name"], "品牌A（改名）")
+        self.assertEqual(second["before_json"]["name"], "品牌A（稽核測試）")
+        self.assertEqual(second["after_json"]["name"], "品牌A（改名）")
 
         # 先前寫入的那筆稽核紀錄本身不會被後續操作動到（append-only）
         self.assertEqual(rows[0]["id"], first["id"])
-        self.assertEqual(json.loads(rows[0]["after_json"])["name"], "品牌A（稽核測試）")
+        self.assertEqual(rows[0]["after_json"]["name"], "品牌A（稽核測試）")
 
         product = repo.create_product(self.conn, brand["id"], name="產品A-1", actor="小陳")
         fact = repo.create_brand_fact(
@@ -74,7 +66,7 @@ class AuditLogTest(unittest.TestCase):
         self.assertEqual(rows[3]["entity_type"], "brand_fact")
         self.assertEqual(rows[4]["entity_type"], "brand_fact")
         self.assertEqual(rows[4]["actor"], "小陳")
-        self.assertEqual(json.loads(rows[4]["after_json"])["confirmed_by"], "小陳")
+        self.assertEqual(rows[4]["after_json"]["confirmed_by"], "小陳")
 
     def test_actor_required_to_write_audit(self):
         with self.assertRaises(ValueError):

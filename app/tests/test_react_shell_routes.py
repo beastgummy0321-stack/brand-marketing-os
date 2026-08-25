@@ -8,33 +8,15 @@ react-router 接手的子路徑，退回 index.html（見 app/main.py `_SpaStati
 「沒有就跳過」的慣例）。
 """
 
-import atexit
-import os
-import shutil
-import tempfile
 import unittest
-from pathlib import Path
 
-_tmpdir = tempfile.mkdtemp(prefix="brand_os_react_shell_")
+from fastapi.testclient import TestClient
 
-from fastapi.testclient import TestClient  # noqa: E402
-
-import app.main as main  # noqa: E402
-from app.shared import web  # noqa: E402
+import app.main as main
+from app.shared import web
 
 
 _FRONTEND_DIST = web.BASE_DIR.parent / "frontend" / "dist"
-
-
-def _cleanup():
-    try:
-        main.conn.close()
-    except Exception:
-        pass
-    shutil.rmtree(_tmpdir, ignore_errors=True)
-
-
-atexit.register(_cleanup)
 
 
 @unittest.skipUnless(_FRONTEND_DIST.is_dir(), "frontend/dist 不存在，先 npm run build")

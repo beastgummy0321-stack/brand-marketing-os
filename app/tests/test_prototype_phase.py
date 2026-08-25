@@ -5,24 +5,40 @@
 `reading.finalize()` 真的把實際花費算給它看，由 test_ads_reading.py 的整合測試涵蓋）。
 """
 
-import tempfile
 import unittest
-from pathlib import Path
+
+import pytest
 
 from app.core import audit
 from app.core import db
 from app.core import interrupts as core_interrupts
 from app.core import prototype_phase
 
+# BUG app/core/interrupts.py:99 — enqueue() 的去重查詢用 "brand_id IS %s"（SQLite 的
+# IS 寫法，可綁參數），Postgres 的 IS 只接受 NULL/TRUE/FALSE/UNKNOWN 字面值，不接受
+# 綁參數，一律 psycopg.errors.SyntaxError。check_and_flag() 真的觸發旗標翻轉時會呼叫
+# core_interrupts.enqueue()，炸在這裡。02-4 是測試轉移票，不改 app/core/*.py，這裡
+# 標 xfail，等後續票修正 production code。
+_BUG_INTERRUPT_IS_PARAM = pytest.mark.xfail(
+    strict=True,
+    reason='BUG app/core/interrupts.py:99 — enqueue() dedup 查詢用 "brand_id IS %s"，'
+           "Postgres 的 IS 不接受綁參數，一律 psycopg.errors.SyntaxError",
+)
+
 
 class PrototypePhaseFlagTest(unittest.TestCase):
     def setUp(self):
-        self._tmpdir = tempfile.TemporaryDirectory()
-        self.conn = db.connect_and_migrate(Path(self._tmpdir.name) / "test.db")
-
-    def tearDown(self):
-        self.conn.close()
-        self._tmpdir.cleanup()
+        self.conn = db.current()
+        # 旗標是全系統唯一一份（app_setting 一個固定 key，不分品牌），conftest.py 是
+        # 逐模組一個 schema、不是逐測試——不清掉的話，本檔任何一個測試先把旗標翻成
+        # 「已結束」，後面斷言「還沒結束」的測試就會看到別的測試留下的狀態。
+        self.conn.execute(
+            "DELETE FROM app_setting WHERE key = %s", (prototype_phase.FLAG_SETTING,))
+        self.conn.execute(
+            "DELETE FROM interrupt WHERE dedupe_key = 'prototype_phase_ended'")
+        self.conn.execute(
+            "DELETE FROM audit_log WHERE entity_type = 'prototype_phase'")
+        self.conn.commit()
 
     def test_not_ended_initially(self):
         self.assertFalse(prototype_phase.has_ended(self.conn))
@@ -37,6 +53,7 @@ class PrototypePhaseFlagTest(unittest.TestCase):
         self.assertFalse(triggered)
         self.assertFalse(prototype_phase.has_ended(self.conn))
 
+    @_BUG_INTERRUPT_IS_PARAM
     def test_real_spend_flags_and_notifies(self):
         triggered = prototype_phase.check_and_flag(
             self.conn, actual_spend=8500.0, actor="測試員", cycle_id="cyc_FAKE")
@@ -55,6 +72,7 @@ class PrototypePhaseFlagTest(unittest.TestCase):
         self.assertIsNone(audit_rows[0]["brand_id"])
         self.assertEqual(audit_rows[0]["action"], "ended")
 
+    @_BUG_INTERRUPT_IS_PARAM
     def test_second_call_after_ended_is_a_no_op(self):
         prototype_phase.check_and_flag(self.conn, actual_spend=100, actor="測試員")
         triggered_again = prototype_phase.check_and_flag(

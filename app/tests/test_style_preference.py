@@ -1,15 +1,12 @@
 # -*- coding: utf-8 -*-
 """品牌風格偏好採 app_setting namespaced key，且明確空值不回退。"""
 
-import tempfile
 import unittest
-from pathlib import Path
 from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
 import app.main as main
-import app.shared.web as web
 from app.ads import repository as ads_repo
 from app.ads import style_preference, theme_repository
 from app.brand_intelligence import repository as bi
@@ -19,19 +16,11 @@ from app.creative import theme_engine as creative_theme_engine
 
 class StylePreferenceTest(unittest.TestCase):
     def setUp(self):
-        self.tmpdir = tempfile.TemporaryDirectory()
-        self.conn = db.connect_and_migrate(Path(self.tmpdir.name) / "test.db")
-        self.previous_web_conn = web.conn
-        web.conn = self.conn
+        self.conn = db.current()
         self.client = TestClient(main.app)
         self.one = bi.create_brand(self.conn, name="甲", client_name=None, actor="tester")
         self.two = bi.create_brand(self.conn, name="乙", client_name=None, actor="tester")
         settings.set_setting(self.conn, settings.IMAGE_PROMPT_HEADER_SETTING, "舊全域開頭")
-
-    def tearDown(self):
-        web.conn = self.previous_web_conn
-        self.conn.close()
-        self.tmpdir.cleanup()
 
     def test_default_and_brand_isolation(self):
         self.assertEqual(style_preference.get_text(self.conn, self.one["id"]), "舊全域開頭")
@@ -54,8 +43,9 @@ class StylePreferenceTest(unittest.TestCase):
         cycle = ads_repo.create_cycle(self.conn, self.one["id"], product_ids=[product["id"]],
                                       pain_value=5, objective="sales", actor="tester")
         self.conn.execute(
-            "INSERT INTO experiment_cell (id, campaign_cycle_id, brand_id, created_at) VALUES ('exc_style', ?, ?, ?)",
-            (cycle["id"], self.one["id"], db.now_iso()),
+            "INSERT INTO experiment_cell (id, org_id, campaign_cycle_id, brand_id, created_at)"
+            " VALUES ('exc_style', %s, %s, %s, %s)",
+            (db.DEV_ORG_ID, cycle["id"], self.one["id"], db.now_utc()),
         )
         self.conn.commit()
         theme = theme_repository.create_theme(

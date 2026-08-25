@@ -75,7 +75,7 @@ KNOWN_SQL_VIOLATIONS = {
 # 上層的三個套件。把這三條邊拆掉，五組環會一起消失——解法與代價見 docs/tech-debt.md 第二節。
 KNOWN_IMPORT_CYCLES = set()
 
-# 只有 app/<套件>/ 底下的檔案算「層」；app/*.py（main.py 組裝根、mock_data.py 共用選項清單）
+# 只有 app/<套件>/ 底下的檔案算「層」；app/*.py（main.py 組裝根等頂層檔案）
 # 不是層，兩邊都不計入。app/tests 不計入（測試本來就要 import 各層）。
 _NON_LAYER_DIRS = {"tests", "templates", "static", "methodology", "__pycache__"}
 
@@ -86,7 +86,7 @@ def _layer_of(dotted_or_rel: str) -> "str | None":
     if len(parts) < 2 or parts[0] != "app" or parts[1] in _NON_LAYER_DIRS:
         return None
     # 是不是層，看檔案系統上它是不是目錄——不能用名稱長度判斷：
-    # `app.llm`（層）與 `app.mock_data`（頂層模組）都只有兩段。
+    # `app.llm`（層）與 `app.main`（頂層模組）都只有兩段。
     if not (APP_DIR / parts[1]).is_dir():
         return None
     return f"app.{parts[1]}"

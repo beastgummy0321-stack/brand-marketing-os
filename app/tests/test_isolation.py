@@ -4,9 +4,7 @@
 見 docs/design/03-data-model.md §7.6、build.md §14.7／§25.2。
 """
 
-import tempfile
 import unittest
-from pathlib import Path
 
 from app.brand_intelligence import repository as repo
 from app.core import db
@@ -14,12 +12,7 @@ from app.core import db
 
 class BrandIsolationTest(unittest.TestCase):
     def setUp(self):
-        self._tmpdir = tempfile.TemporaryDirectory()
-        self.conn = db.connect_and_migrate(Path(self._tmpdir.name) / "test.db")
-
-    def tearDown(self):
-        self.conn.close()
-        self._tmpdir.cleanup()
+        self.conn = db.current()
 
     def _seed_brand(self, name):
         brand = repo.create_brand(self.conn, name=name, client_name="測試客戶", actor="測試員")

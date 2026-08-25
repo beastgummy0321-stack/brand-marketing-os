@@ -4,9 +4,7 @@
 見 docs/design/03-data-model.md §2、DESIGN.md §17 決策 3。
 """
 
-import tempfile
 import unittest
-from pathlib import Path
 
 from app.brand_intelligence import repository as repo
 from app.core import db
@@ -14,14 +12,9 @@ from app.core import db
 
 class VersioningTest(unittest.TestCase):
     def setUp(self):
-        self._tmpdir = tempfile.TemporaryDirectory()
-        self.conn = db.connect_and_migrate(Path(self._tmpdir.name) / "test.db")
+        self.conn = db.current()
         self.brand = repo.create_brand(self.conn, name="品牌A（版本測試）", client_name=None, actor="小陳")
         self.product = repo.create_product(self.conn, self.brand["id"], name="產品A-1", actor="小陳")
-
-    def tearDown(self):
-        self.conn.close()
-        self._tmpdir.cleanup()
 
     def _brand_version(self):
         return repo.get_brand(self.conn, self.brand["id"])["knowledge_version"]

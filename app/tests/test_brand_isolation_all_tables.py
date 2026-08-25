@@ -8,33 +8,40 @@
 一份手寫 38 表白名單——只涵蓋廣告模組，其他 33 張表完全沒被這份白名單看過一眼。
 
 本檔把它升格為全站測試：
-- 表清單改由 `sqlite_master` 反推，不是手寫列舉——新增資料表自動被本測試看到。
+- 表清單改由 `information_schema` 反推（02-4：原本是 SQLite `sqlite_master`），不是手寫
+  列舉——新增資料表自動被本測試看到。查的是這個測試模組自己的 schema
+  （conftest.py 逐模組建的 Postgres schema，`current_schema()` 就是它）。
 - 白名單改成「刻意不綁品牌」的**例外清單**：新表預設有罪，直到被明文列進
   BRAND_AGNOSTIC_EXCEPTIONS 並寫清楚理由，否則就必須有 NOT NULL 的 brand_id。
+
+ADR 0027（多租戶 SaaS）：`org_id` 是更上層的租戶邊界，每張表都有——那條由 02-5 的
+機器閘門守（見 ticket 02-5-gates.md）。本檔守的是既有、更細的 brand_id 邊界，
+兩者不是同一件事，02-4 只做「換一套 introspection 手法」的搬遷，不重新設計檢查範圍。
 """
 
-import tempfile
 import unittest
-from pathlib import Path
 
 from app.core import db
 
-# 系統表／非資料表，不在「品牌資料表」的討論範圍內。
-_NON_DATA_TABLES = {"schema_migrations"}
+# 系統表／非資料表，不在「品牌資料表」的討論範圍內。Supabase CLI 自己的 migration
+# 履歷表活在別的 schema（不是這個測試模組的 schema），這裡不會看到，留空集合即可。
+_NON_DATA_TABLES = set()
 
 # 刻意不綁單一品牌的表——新表要進這份清單前，先確認是不是真的該有 brand_id 卻漏寫。
 # 理由逐項寫清楚，供下一個人稽核；不是「懶得填 brand_id」的藉口清單。
 BRAND_AGNOSTIC_EXCEPTIONS = {
     "brand": "品牌表本身，主鍵 id 就是 brand_id，不適用「有沒有 brand_id 欄位」這個檢查",
+    "organisation": "組織表本身（ADR 0027 新增的租戶根），brand 掛在 organisation 底下，"
+        "不是 organisation 掛在 brand 底下，不適用這個檢查",
     "app_setting": "整台機器的全站設定（AI 金鑰、模型選擇等），不是品牌資料"
-        "（migration 0002_app_setting.sql 註解）",
+        "（core_baseline migration 註解）",
     "ad_account": "一個廣告帳號可服務多個品牌，歸屬不由帳號推導（決策 0022 第 6 點）",
     "discovered_campaign": "未認領的東西不屬於任何品牌，認領後才寫 external_ad_mapping"
         "（決策 0022 第 7 點）",
     "audit_log": "跨全部分支的稽核紀錄，brand_id 可為 NULL 表示系統級動作"
-        "（migration 0001_core.sql 註解，brand_id 欄位存在但刻意不設 NOT NULL）",
+        "（core_baseline migration 註解，brand_id 欄位存在但刻意不設 NOT NULL）",
     "interrupt": "全站打斷佇列，brand_id 可為 NULL 表示跨品牌系統級提醒"
-        "（migration 0006_interrupts.sql 註解：「NULL＝跨品牌系統級」）",
+        "（core_baseline migration 註解：NULL＝跨品牌系統級）",
 }
 
 
@@ -42,25 +49,25 @@ class SiteWideBrandIsolationSchemaTest(unittest.TestCase):
     """新表預設有罪：除非明文列在 BRAND_AGNOSTIC_EXCEPTIONS，否則必須有 NOT NULL brand_id。"""
 
     def setUp(self):
-        self._tmpdir = tempfile.TemporaryDirectory()
-        self.conn = db.connect_and_migrate(Path(self._tmpdir.name) / "test.db")
-
-    def tearDown(self):
-        self.conn.close()
-        self._tmpdir.cleanup()
+        self.conn = db.current()
 
     def _all_tables(self):
         rows = self.conn.execute(
-            "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
+            "SELECT table_name FROM information_schema.tables"
+            " WHERE table_schema = current_schema() AND table_type = 'BASE TABLE'"
         )
-        return sorted(r["name"] for r in rows if r["name"] not in _NON_DATA_TABLES)
+        return sorted(r["table_name"] for r in rows if r["table_name"] not in _NON_DATA_TABLES)
 
     def _columns(self, table):
-        return {row["name"]: row for row in self.conn.execute(f"PRAGMA table_info({table})")}
+        rows = self.conn.execute(
+            "SELECT column_name, is_nullable FROM information_schema.columns"
+            " WHERE table_schema = current_schema() AND table_name = %s", (table,)
+        )
+        return {row["column_name"]: row for row in rows}
 
     def test_every_table_is_brand_scoped_or_an_explicit_exception(self):
         tables = self._all_tables()
-        self.assertGreater(len(tables), 0, "sqlite_master 反推不到任何表，migration 可能沒跑")
+        self.assertGreater(len(tables), 0, "information_schema 反推不到任何表，migration 可能沒跑")
 
         offenders = []
         for table in tables:
@@ -70,9 +77,8 @@ class SiteWideBrandIsolationSchemaTest(unittest.TestCase):
             if "brand_id" not in cols:
                 offenders.append(
                     f"{table}：沒有 brand_id 欄位，也不在例外清單裡——"
-                    "若刻意不綁品牌，請加進 BRAND_AGNOSTIC_EXCEPTIONS 並寫明理由"
-                )
-            elif cols["brand_id"]["notnull"] != 1:
+                    "若刻意不綁品牌，請加進 BRAND_AGNOSTIC_EXCEPTIONS 並寫明理由")
+            elif cols["brand_id"]["is_nullable"] != "NO":
                 offenders.append(f"{table}：有 brand_id 但可為 NULL，且不在例外清單裡，品牌隔離會有破口")
 
         self.assertEqual(
@@ -92,7 +98,7 @@ class SiteWideBrandIsolationSchemaTest(unittest.TestCase):
             cols = self._columns(table)
             if "brand_id" in cols:
                 self.assertNotEqual(
-                    cols["brand_id"]["notnull"], 1,
+                    cols["brand_id"]["is_nullable"], "NO",
                     f"{table} 的 brand_id 已經是 NOT NULL 了，該把它從 BRAND_AGNOSTIC_EXCEPTIONS 移除"
                     "（表示它其實已經補上品牌隔離，不再需要例外）",
                 )

@@ -8,16 +8,13 @@
    只下 DELETE、不 commit，commit 與 rollback 都是呼叫端的事——這裡直接驗這件事。
 3. register() 缺參數、或同名重複註冊，都要當場報錯。
 
-不依賴 app.main（不 import app.main，也不設 BRAND_OS_DB 之類的環境變數，
-直接用 db.connect_and_migrate 開一個乾淨的暫存 DB）。cleanup._REGISTRY 是模組層
-全域狀態，import app.brand_intelligence.repository／app.intake.repository 時就會
-自我登記「品牌智庫」「建檔精靈」——這裡用到的假模組一律另外取名，並在
-tearDown 主動移除，不污染同一個 pytest 行程裡的其他測試。
+不依賴 app.main（不 import app.main，直接用 conftest.py 逐模組建的 Postgres schema）。
+cleanup._REGISTRY 是模組層全域狀態，import app.brand_intelligence.repository／
+app.intake.repository 時就會自我登記「品牌智庫」「建檔精靈」——這裡用到的假模組
+一律另外取名，並在 tearDown 主動移除，不污染同一個 pytest 行程裡的其他測試。
 """
 
-import tempfile
 import unittest
-from pathlib import Path
 
 from app.brand_intelligence import repository as bi_repo
 from app.core import cleanup
@@ -42,7 +39,9 @@ def _fake_delete_fixed(label, n, call_log):
 
 def _fake_count(table, label):
     def count(conn, brand_id):
-        n = conn.execute(f"SELECT COUNT(*) FROM {table} WHERE brand_id = ?", (brand_id,)).fetchone()[0]
+        n = conn.execute(
+            f"SELECT COUNT(*) FROM {table} WHERE brand_id = %s", (brand_id,)
+        ).fetchone()["count"]
         return [(label, n)]
     return count
 
@@ -50,8 +49,10 @@ def _fake_count(table, label):
 def _fake_delete_ok(table, label):
     """正常清除：真的下 DELETE，但不 commit（比照介面規定）。"""
     def delete(conn, brand_id):
-        n = conn.execute(f"SELECT COUNT(*) FROM {table} WHERE brand_id = ?", (brand_id,)).fetchone()[0]
-        conn.execute(f"DELETE FROM {table} WHERE brand_id = ?", (brand_id,))
+        n = conn.execute(
+            f"SELECT COUNT(*) FROM {table} WHERE brand_id = %s", (brand_id,)
+        ).fetchone()["count"]
+        conn.execute(f"DELETE FROM {table} WHERE brand_id = %s", (brand_id,))
         return {label: n}
     return delete
 
@@ -66,7 +67,7 @@ def _delete_brand_like(conn, brand_id):
     （Q4 單一交易、全有全無）。"""
     try:
         counts = cleanup.delete_all(conn, brand_id)
-        conn.execute("DELETE FROM brand WHERE id = ?", (brand_id,))
+        conn.execute("DELETE FROM brand WHERE id = %s", (brand_id,))
         conn.commit()
         return counts
     except Exception:
@@ -76,21 +77,18 @@ def _delete_brand_like(conn, brand_id):
 
 class CleanupRegistryTest(unittest.TestCase):
     def setUp(self):
-        self._tmpdir = tempfile.TemporaryDirectory()
-        self.conn = db.connect_and_migrate(Path(self._tmpdir.name) / "test.db")
+        self.conn = db.current()
         self._registered_names = []
 
     def tearDown(self):
         # 假模組用完就從登記表移除，不污染其他測試（登記表是模組層全域狀態）。
         for name in self._registered_names:
             cleanup._REGISTRY.pop(name, None)
-        self.conn.close()
-        self._tmpdir.cleanup()
 
     def _register(self, name, *, count_brand, delete_brand, brand_tables=frozenset(),
                   count_product=None, delete_product=None, product_tables=frozenset()):
         # 假模組沒有真的資料表，brand_tables／product_tables 預設空集合——涵蓋率警報器
-        # （test_cleanup_coverage.py）比對的是真實 schema，空集合不會影響它。product 三件套
+        # （機器閘門見 ticket 02-5）比對的是真實 schema，空集合不會影響它。product 三件套
         # 預設「沒有產品層資料」（count_product=None、delete_product=None、空集合），
         # 個別測試需要驗產品層行為時再覆寫。
         cleanup.register(name, count_brand=count_brand, delete_brand=delete_brand,
@@ -144,7 +142,7 @@ class CleanupRegistryTest(unittest.TestCase):
         self.assertIsNotNone(bi_repo.get_brand(self.conn, bid))
         self.assertEqual(
             self.conn.execute(
-                "SELECT COUNT(*) FROM owned_channel WHERE brand_id = ?", (bid,)).fetchone()[0], 1)
+                "SELECT COUNT(*) FROM owned_channel WHERE brand_id = %s", (bid,)).fetchone()["count"], 1)
 
     # (c) register() 缺參數、或重複註冊同名，都要拋錯 --------------------------
 
@@ -285,12 +283,12 @@ class CleanupRegistryTest(unittest.TestCase):
         # 不是「有些模組清掉了、有些沒清掉」的半殘狀態
         self.assertEqual(
             self.conn.execute(
-                "SELECT COUNT(*) FROM owned_channel WHERE brand_id = ?", (bid,)).fetchone()[0], 1)
+                "SELECT COUNT(*) FROM owned_channel WHERE brand_id = %s", (bid,)).fetchone()["count"], 1)
         # 沒有留下任何刪除紀錄——不能一邊資料還在、一邊卻假裝寫了稽核
         self.assertEqual(
             self.conn.execute(
-                "SELECT COUNT(*) FROM audit_log WHERE brand_id = ? AND action = 'delete'",
-                (bid,)).fetchone()[0], 0)
+                "SELECT COUNT(*) FROM audit_log WHERE brand_id = %s AND action = 'delete'",
+                (bid,)).fetchone()["count"], 0)
 
 
 if __name__ == "__main__":

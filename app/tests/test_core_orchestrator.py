@@ -21,10 +21,21 @@ status() 在全新空品牌上照樣回傳全部 key）、`NoOpModuleHandleTest`
 """
 
 import inspect
-import tempfile
 import unittest
-from pathlib import Path
 from unittest import mock
+
+import pytest
+
+# BUG app/core/interrupts.py:99 — enqueue() 的去重查詢用 "brand_id IS %s"，這是 SQLite
+# `IS` 運算子的寫法（可綁參數）；Postgres 的 IS 只接受 NULL/TRUE/FALSE/UNKNOWN 字面值，
+# 不接受綁參數，一律 psycopg.errors.SyntaxError。凡是會走到出卡（core_interrupts.enqueue）
+# 的路徑都會炸在這裡。02-4 是測試轉移票，不改 app/core/*.py，這裡標 xfail，等後續票修正
+# production code（正確寫法應是 "brand_id IS NOT DISTINCT FROM %s"）。
+_BUG_INTERRUPT_IS_PARAM = pytest.mark.xfail(
+    strict=True,
+    reason='BUG app/core/interrupts.py:99 — enqueue() dedup 查詢用 "brand_id IS %s"，'
+           "Postgres 的 IS 不接受綁參數，一律 psycopg.errors.SyntaxError",
+)
 
 from app.ads import auto_sync
 from app.ads import diagnosis as ads_diagnosis
@@ -44,21 +55,22 @@ ACTOR = "測試員"
 
 class OrchestratorMechanicsTest(unittest.TestCase):
     def setUp(self):
-        self._tmpdir = tempfile.TemporaryDirectory()
-        self.conn = db.connect_and_migrate(Path(self._tmpdir.name) / "test.db")
+        self.conn = db.current()
         # 真正的診斷／創意／優化模組在 import 期已經登記過，這裡存一份快照，測試裡
         # 臨時登記的假模組／假規則在 tearDown 還原時一起清掉，不留給下一個測試。
         self._modules_snapshot = dict(orchestrator.MODULES)
         self._rules_snapshot = dict(orchestrator.RULES)
-        self.brand_id = "brn_orch_mechanics"
+        # 專屬品牌 id（不是共用字面值）：conftest.py 的 schema 是整個模組共用一份，
+        # 不是逐測試重建，共用字面值會讓不同測試方法在 decision／interrupt 表裡
+        # 互相看到對方留下的列（例如某測試出了一張卡沒解掉，下一個測試斷言
+        # list_open() 是空的就會被那張卡污染）。
+        self.brand_id = f"brn_orch_mechanics_{db.new_id('t')}"
 
     def tearDown(self):
         orchestrator.MODULES.clear()
         orchestrator.MODULES.update(self._modules_snapshot)
         orchestrator.RULES.clear()
         orchestrator.RULES.update(self._rules_snapshot)
-        self.conn.close()
-        self._tmpdir.cleanup()
 
     def _register_fake_module(self, name, *, status, handle):
         orchestrator.register_module(name, status=status, handle=handle)
@@ -88,6 +100,7 @@ class OrchestratorMechanicsTest(unittest.TestCase):
 
     # ---- 驗收 3／4：自動度閘門 ----
 
+    @_BUG_INTERRUPT_IS_PARAM
     def test_conservative_gate_cards_instead_of_calling_handle(self):
         handle_calls = []
         self._register_fake_module(
@@ -105,7 +118,7 @@ class OrchestratorMechanicsTest(unittest.TestCase):
         outcome = next(o for o in result["outcomes"] if o["dedupe_key"] == "fake:conservative")
         self.assertEqual(outcome["outcome"], "carded")
         row = self.conn.execute(
-            "SELECT outcome FROM decision WHERE brand_id = ? AND dedupe_key = ?",
+            "SELECT outcome FROM decision WHERE brand_id = %s AND dedupe_key = %s",
             (self.brand_id, "fake:conservative")).fetchone()
         self.assertEqual(row["outcome"], "carded")
         open_cards = core_interrupts.list_open(self.conn, brand_id=self.brand_id)
@@ -163,7 +176,7 @@ class OrchestratorMechanicsTest(unittest.TestCase):
 
         self.assertEqual(len(handle_calls), 1)
         row = self.conn.execute(
-            "SELECT COUNT(*) c FROM decision WHERE brand_id = ? AND dedupe_key = ?",
+            "SELECT COUNT(*) c FROM decision WHERE brand_id = %s AND dedupe_key = %s",
             (self.brand_id, "fake:dedupe")).fetchone()
         self.assertEqual(row["c"], 1)
 
@@ -193,7 +206,7 @@ class OrchestratorMechanicsTest(unittest.TestCase):
         bad_outcome = next(o for o in result["outcomes"] if o["dedupe_key"] == "fake:bad")
         self.assertEqual(bad_outcome["outcome"], "failed")
         row = self.conn.execute(
-            "SELECT error_text FROM decision WHERE brand_id = ? AND dedupe_key = ?",
+            "SELECT error_text FROM decision WHERE brand_id = %s AND dedupe_key = %s",
             (self.brand_id, "fake:bad")).fetchone()
         self.assertIn("炸掉了", row["error_text"])
         good_outcome = next(o for o in result["outcomes"] if o["dedupe_key"] == "fake:good")
@@ -201,6 +214,7 @@ class OrchestratorMechanicsTest(unittest.TestCase):
 
     # ---- 驗收 7：連三次失敗升級出卡 ----
 
+    @_BUG_INTERRUPT_IS_PARAM
     def test_third_consecutive_failure_escalates_to_inbox(self):
         def _always_fails(conn, action):
             raise RuntimeError("still broken")
@@ -215,7 +229,7 @@ class OrchestratorMechanicsTest(unittest.TestCase):
             orchestrator.run(self.conn, self.brand_id, actor=ACTOR)
 
         row = self.conn.execute(
-            "SELECT attempt_count, outcome FROM decision WHERE brand_id = ? AND dedupe_key = ?",
+            "SELECT attempt_count, outcome FROM decision WHERE brand_id = %s AND dedupe_key = %s",
             (self.brand_id, "fake:escalate")).fetchone()
         self.assertEqual(row["attempt_count"], 3)
         self.assertEqual(row["outcome"], "failed")
@@ -360,13 +374,8 @@ class NewModuleStatusShapeTest(unittest.TestCase):
     key（值可為 None／0／False），不得少 key、不得丟例外。"""
 
     def setUp(self):
-        self._tmpdir = tempfile.TemporaryDirectory()
-        self.conn = db.connect_and_migrate(Path(self._tmpdir.name) / "test.db")
+        self.conn = db.current()
         self.brand_id = "brn_o1_02_empty"  # 全新空品牌：資料庫裡沒有任何一列屬於它
-
-    def tearDown(self):
-        self.conn.close()
-        self._tmpdir.cleanup()
 
     def test_intake_status_returns_all_keys(self):
         self.assertEqual(
@@ -433,13 +442,8 @@ class MonitorCheckPacingHandleTest(unittest.TestCase):
     步調判定）；沒有檔期時回 {"interrupt_id": None} 不炸。"""
 
     def setUp(self):
-        self._tmpdir = tempfile.TemporaryDirectory()
-        self.conn = db.connect_and_migrate(Path(self._tmpdir.name) / "test.db")
+        self.conn = db.current()
         self.brand_id = "brn_o1_02_pacing"
-
-    def tearDown(self):
-        self.conn.close()
-        self._tmpdir.cleanup()
 
     def test_check_pacing_calls_pacing_check_cycle(self):
         with mock.patch.object(health_lights.ads_pacing, "check_cycle",

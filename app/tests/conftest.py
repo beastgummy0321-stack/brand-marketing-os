@@ -60,6 +60,26 @@ def _admin_conn() -> psycopg.Connection:
     return psycopg.connect(_BASE_DSN, autocommit=True)
 
 
+# `pytest -n auto` 在這台機器展開 20 個 worker，`--dist loadfile` 讓它們幾乎同時各自
+# 對自己的 schema 做 CREATE SCHEMA＋78 張表＋DROP SCHEMA CASCADE。實測撞過
+# `psycopg.errors.OutOfMemory: out of shared memory / HINT: 可能要調高
+# max_locks_per_transaction`——這是 Postgres 全域共用鎖表的容量問題（DDL 越大張、
+# 同時做的 session 越多，耗掉的鎖越多），伺服器設定不在本票範圍內，這裡改用
+# session 級 advisory lock 把「建表／砍表」這段 DDL 全站序列化（測試本體——借連線、
+# 跑查詢——不受影響，仍然平行），把鎖的尖峰壓回單一 session，用一點總時間換掉這個
+# 錯誤（ponytail: 全站單一 advisory lock 序列化 DDL，非分片鎖；78 張表的 DDL 本身
+# 很快，序列化的總時間成本可接受，鎖粒度需要調更細再升級）。
+_SCHEMA_DDL_LOCK_KEY = 913042027
+
+
+def _ddl(admin: psycopg.Connection, sql: str) -> None:
+    admin.execute("SELECT pg_advisory_lock(%s)", (_SCHEMA_DDL_LOCK_KEY,))
+    try:
+        admin.execute(sql)
+    finally:
+        admin.execute("SELECT pg_advisory_unlock(%s)", (_SCHEMA_DDL_LOCK_KEY,))
+
+
 def _search_path_dsn(schema: str) -> str:
     from urllib.parse import quote
 
@@ -80,10 +100,11 @@ def _module_schema(request):
     schema = _schema_name(request.module.__name__)
 
     with _admin_conn() as admin:
-        admin.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
-        admin.execute(f'CREATE SCHEMA "{schema}"')
-        admin.execute(f'SET search_path TO "{schema}"')
-        admin.execute(_baseline_sql())
+        _ddl(admin, (
+            f'DROP SCHEMA IF EXISTS "{schema}" CASCADE;'
+            f' CREATE SCHEMA "{schema}";'
+            f' SET search_path TO "{schema}";'
+        ) + _baseline_sql())
 
     _reset_pool()
     os.environ["DATABASE_URL"] = _search_path_dsn(schema)
@@ -93,7 +114,7 @@ def _module_schema(request):
     _reset_pool()
     os.environ["DATABASE_URL"] = _BASE_DSN
     with _admin_conn() as admin:
-        admin.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        _ddl(admin, f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
 
 
 @pytest.fixture(autouse=True)

@@ -8,35 +8,19 @@ AnthropicProvider／pricing 直接單元測試（不經 HTTP 路由，票 T4 A4 
 這幾條測試本來就不碰模板，只是恰好住在同一個檔案）。
 """
 
-import atexit
 import os
-import shutil
-import tempfile
 import unittest
-from pathlib import Path
 from unittest import mock
 
-_tmpdir = tempfile.mkdtemp(prefix="brand_os_settings_api_")
+from fastapi.testclient import TestClient
 
-from fastapi.testclient import TestClient  # noqa: E402
-
-import app.main as main  # noqa: E402
-from app.ads import ga4_api, ga4_sync, meta_api  # noqa: E402
-from app.ads import sync as ads_sync  # noqa: E402
-from app.core import settings as coresettings  # noqa: E402
-from app.llm import pricing, providers  # noqa: E402
-
-
-
-def _cleanup():
-    try:
-        main.conn.close()
-    except Exception:
-        pass
-    shutil.rmtree(_tmpdir, ignore_errors=True)
-
-
-atexit.register(_cleanup)
+import app.main as main
+import app.shared.web as web
+from app.ads import ga4_api, ga4_sync, meta_api
+from app.ads import sync as ads_sync
+from app.core import db as coredb
+from app.core import settings as coresettings
+from app.llm import pricing, providers
 
 TEST_KEY = "sk-ant-test-0000-1234abcd"
 
@@ -49,8 +33,8 @@ SETTINGS_DATA_KEYS = {
 
 class SettingsApiTest(unittest.TestCase):
     def setUp(self):
-        main.conn.execute("DELETE FROM app_setting")
-        main.conn.commit()
+        web.conn.execute("DELETE FROM app_setting")
+        web.conn.commit()
         self.client = TestClient(main.app)
         self._env = mock.patch.dict(os.environ)
         self._env.start()
@@ -83,7 +67,7 @@ class SettingsApiTest(unittest.TestCase):
         self.assertIsInstance(body["data"]["intake_budget"], (int, float))
 
     def test_get_settings_reflects_saved_values(self):
-        coresettings.set_setting(main.conn, coresettings.API_KEY_SETTING, TEST_KEY)
+        coresettings.set_setting(web.conn, coresettings.API_KEY_SETTING, TEST_KEY)
         body = self.client.get("/api/settings").json()["data"]
         self.assertEqual(body["api_key_source"], "db")
         self.assertTrue(body["db_key_present"])
@@ -92,11 +76,14 @@ class SettingsApiTest(unittest.TestCase):
     # -- POST /api/settings/api-key：實際生效驗證 --------------------------------
 
     def test_save_api_key_writes_db_and_persists_after_restart(self):
+        """ADR 0027：不再有「重開連線」這回事了（連線池按 request 借連線，不是
+        全程共用一條）——改成從一條全新借來的連線讀回，證明真的落庫了，不是只留在
+        寫入那個 request 的連線快取裡（同樣的持久性主張，換了機制去驗）。"""
         resp = self.client.post("/api/settings/api-key", json={"api_key": TEST_KEY})
         self.assertEqual(resp.status_code, 200)
-        self.assertEqual(coresettings.get_api_key(main.conn), TEST_KEY)
-        main.reopen_connection()
-        self.assertEqual(coresettings.get_api_key(main.conn), TEST_KEY)
+        self.assertEqual(coresettings.get_api_key(web.conn), TEST_KEY)
+        with coredb.connection() as fresh:
+            self.assertEqual(coresettings.get_api_key(fresh), TEST_KEY)
 
     def test_save_api_key_empty_gives_human_error(self):
         resp = self.client.post("/api/settings/api-key", json={"api_key": "  "})
@@ -104,10 +91,10 @@ class SettingsApiTest(unittest.TestCase):
         self.assertIn("請貼上 AI 金鑰", resp.json()["error"])
 
     def test_clear_api_key_from_db(self):
-        coresettings.set_setting(main.conn, coresettings.API_KEY_SETTING, TEST_KEY)
+        coresettings.set_setting(web.conn, coresettings.API_KEY_SETTING, TEST_KEY)
         resp = self.client.post("/api/settings/api-key/clear-db")
         self.assertEqual(resp.status_code, 200)
-        self.assertIsNone(coresettings.get_setting(main.conn, coresettings.API_KEY_SETTING))
+        self.assertIsNone(coresettings.get_setting(web.conn, coresettings.API_KEY_SETTING))
 
     # -- POST /api/settings/meta ------------------------------------------------
 
@@ -115,8 +102,8 @@ class SettingsApiTest(unittest.TestCase):
         resp = self.client.post(
             "/api/settings/meta", json={"meta_account_id": "act_999", "meta_token": "tok"})
         self.assertEqual(resp.status_code, 200)
-        self.assertEqual(ads_sync.get_account_id(main.conn), "act_999")
-        self.assertEqual(ads_sync.get_token(main.conn), "tok")
+        self.assertEqual(ads_sync.get_account_id(web.conn), "act_999")
+        self.assertEqual(ads_sync.get_token(web.conn), "tok")
 
     def test_save_meta_settings_missing_account_gives_human_error(self):
         resp = self.client.post("/api/settings/meta", json={"meta_account_id": "", "meta_token": "x"})
@@ -130,14 +117,14 @@ class SettingsApiTest(unittest.TestCase):
             "ga4_property_id": "123456789", "ga4_service_account_json": '{"type":"service_account"}',
         })
         self.assertEqual(resp.status_code, 200)
-        self.assertEqual(ga4_sync.get_property_id(main.conn), "123456789")
+        self.assertEqual(ga4_sync.get_property_id(web.conn), "123456789")
 
     # -- POST /api/settings/model -------------------------------------------------
 
     def test_save_model_valid(self):
         resp = self.client.post("/api/settings/model", json={"llm_model": "claude-sonnet-5"})
         self.assertEqual(resp.status_code, 200)
-        self.assertEqual(coresettings.get_llm_model(main.conn), "claude-sonnet-5")
+        self.assertEqual(coresettings.get_llm_model(web.conn), "claude-sonnet-5")
 
     def test_save_model_invalid_choice_gives_human_error(self):
         resp = self.client.post("/api/settings/model", json={"llm_model": "不存在的模型"})
@@ -149,7 +136,7 @@ class SettingsApiTest(unittest.TestCase):
     def test_save_budget_valid(self):
         resp = self.client.post("/api/settings/budget", json={"intake_budget": 45})
         self.assertEqual(resp.status_code, 200)
-        self.assertEqual(coresettings.get_intake_budget_limit(main.conn), 45.0)
+        self.assertEqual(coresettings.get_intake_budget_limit(web.conn), 45.0)
 
     def test_save_budget_zero_is_rejected(self):
         """0 是下限邊界：契約假資料拿它當展示值，但送出寫入仍要擋（沿用既有『大於 0』規則，
@@ -177,7 +164,7 @@ class SettingsApiTest(unittest.TestCase):
             "/api/settings/prompt-header", json={"prompt_header": "一律平面實填"})
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(
-            coresettings.get_setting(main.conn, coresettings.IMAGE_PROMPT_HEADER_SETTING),
+            coresettings.get_setting(web.conn, coresettings.IMAGE_PROMPT_HEADER_SETTING),
             "一律平面實填")
 
     # -- 測試連線：假供應商，不打真網路 ------------------------------------------------
@@ -190,7 +177,7 @@ class SettingsApiTest(unittest.TestCase):
         self.assertIn("尚未設定金鑰", body["message"])
 
     def test_ai_test_connection_success_uses_fake_provider(self):
-        coresettings.set_setting(main.conn, coresettings.API_KEY_SETTING, TEST_KEY)
+        coresettings.set_setting(web.conn, coresettings.API_KEY_SETTING, TEST_KEY)
         fake = providers.FakeProvider()
         with mock.patch.object(providers, "AnthropicProvider", return_value=fake):
             resp = self.client.post("/api/settings/test-connection")
@@ -207,8 +194,8 @@ class SettingsApiTest(unittest.TestCase):
         self.assertEqual(body["kind"], "warn")
 
     def test_meta_test_connection_success_uses_fake_client(self):
-        coresettings.set_setting(main.conn, ads_sync.ACCOUNT_SETTING, "act_123")
-        coresettings.set_setting(main.conn, ads_sync.TOKEN_SETTING, "fake-token")
+        coresettings.set_setting(web.conn, ads_sync.ACCOUNT_SETTING, "act_123")
+        coresettings.set_setting(web.conn, ads_sync.TOKEN_SETTING, "fake-token")
         fake = meta_api.FakeMetaClient(campaigns=[])
         with mock.patch.object(ads_sync, "make_client", return_value=fake):
             resp = self.client.post("/api/settings/meta/test-connection")
@@ -218,8 +205,8 @@ class SettingsApiTest(unittest.TestCase):
         self.assertEqual(fake.calls, [("campaigns", "act_123")])
 
     def test_ga4_test_connection_success_uses_fake_client(self):
-        coresettings.set_setting(main.conn, ga4_sync.PROPERTY_SETTING, "123456789")
-        coresettings.set_setting(main.conn, ga4_sync.SERVICE_ACCOUNT_SETTING,
+        coresettings.set_setting(web.conn, ga4_sync.PROPERTY_SETTING, "123456789")
+        coresettings.set_setting(web.conn, ga4_sync.SERVICE_ACCOUNT_SETTING,
                                  '{"type": "service_account"}')
         fake = ga4_api.FakeGA4Client(rows=[])
         with mock.patch.object(ga4_sync, "make_client", return_value=fake):
@@ -238,7 +225,7 @@ class SettingsApiTest(unittest.TestCase):
     def test_get_settings_reports_env_source_and_masks_env_key(self):
         """環境變數優先於 DB 且來源誠實回報；env 金鑰本身也要遮罩，不能原樣外流
         （原 test_settings_page.py::test_env_key_takes_priority_and_page_says_so）。"""
-        coresettings.set_setting(main.conn, coresettings.API_KEY_SETTING, TEST_KEY)
+        coresettings.set_setting(web.conn, coresettings.API_KEY_SETTING, TEST_KEY)
         os.environ["ANTHROPIC_API_KEY"] = "env-only-value-not-shown"
         try:
             body = self.client.get("/api/settings").json()["data"]
@@ -251,7 +238,7 @@ class SettingsApiTest(unittest.TestCase):
 
     def test_ai_test_connection_failure_returns_danger_kind(self):
         """金鑰錯誤：danger kind + 人話訊息原樣透出（原 test_test_connection_key_error_shows_human_message）。"""
-        coresettings.set_setting(main.conn, coresettings.API_KEY_SETTING, TEST_KEY)
+        coresettings.set_setting(web.conn, coresettings.API_KEY_SETTING, TEST_KEY)
         fake = providers.FakeProvider(exception=providers.ProviderError("金鑰錯誤：測試訊息。"))
         with mock.patch.object(providers, "AnthropicProvider", return_value=fake):
             resp = self.client.post("/api/settings/test-connection")
@@ -261,8 +248,8 @@ class SettingsApiTest(unittest.TestCase):
 
     def test_meta_test_connection_failure_returns_danger_kind(self):
         """原 test_meta_test_connection_failure_shows_human_error。"""
-        coresettings.set_setting(main.conn, ads_sync.ACCOUNT_SETTING, "act_123")
-        coresettings.set_setting(main.conn, ads_sync.TOKEN_SETTING, "fake-token")
+        coresettings.set_setting(web.conn, ads_sync.ACCOUNT_SETTING, "act_123")
+        coresettings.set_setting(web.conn, ads_sync.TOKEN_SETTING, "fake-token")
         fake = meta_api.FakeMetaClient(error=meta_api.MetaApiError("Meta 拒絕了這次連線。"))
         with mock.patch.object(ads_sync, "make_client", return_value=fake):
             resp = self.client.post("/api/settings/meta/test-connection")
@@ -272,8 +259,8 @@ class SettingsApiTest(unittest.TestCase):
 
     def test_ga4_test_connection_failure_returns_danger_kind(self):
         """原 test_ga4_test_connection_failure_shows_human_error。"""
-        coresettings.set_setting(main.conn, ga4_sync.PROPERTY_SETTING, "123456789")
-        coresettings.set_setting(main.conn, ga4_sync.SERVICE_ACCOUNT_SETTING,
+        coresettings.set_setting(web.conn, ga4_sync.PROPERTY_SETTING, "123456789")
+        coresettings.set_setting(web.conn, ga4_sync.SERVICE_ACCOUNT_SETTING,
                                  '{"type": "service_account"}')
         fake = ga4_api.FakeGA4Client(error=ga4_api.GA4ApiError("連不上 GA4。"))
         with mock.patch.object(ga4_sync, "make_client", return_value=fake):
@@ -285,11 +272,11 @@ class SettingsApiTest(unittest.TestCase):
     def test_save_prompt_header_can_be_saved_empty(self):
         """留白代表整組複製時不加開頭那一行，不是輸入錯誤（原
         test_prompt_header_can_be_saved_empty）。"""
-        coresettings.set_setting(main.conn, coresettings.IMAGE_PROMPT_HEADER_SETTING, "舊的開頭")
+        coresettings.set_setting(web.conn, coresettings.IMAGE_PROMPT_HEADER_SETTING, "舊的開頭")
         resp = self.client.post("/api/settings/prompt-header", json={"prompt_header": "  "})
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(
-            coresettings.get_setting(main.conn, coresettings.IMAGE_PROMPT_HEADER_SETTING), "")
+            coresettings.get_setting(web.conn, coresettings.IMAGE_PROMPT_HEADER_SETTING), "")
 
     def test_save_budget_non_numeric_and_negative_rejected(self):
         """0 之外的無效輸入（非數字／負數）也要擋（原 test_budget_validation_and_save）。"""
