@@ -394,7 +394,9 @@ def _build_options_user_text(brand: dict, cycle: dict, allocations: list, contex
         )
         parts.append(
             "上期以來真正打出成績的切角（這才是「沿用有效方向」該沿用的東西——"
-            "請以它們為主力放大延續，不要整批換成沒出現過的新切角）：\n" + lines
+            "不要整批換成沒出現過的新切角）：\n" + lines + "\n"
+            "你推薦的那個方案（is_recommended: true）裡，上面每一個贏家都要逐一點名、"
+            "並且原樣寫出它的 ROAS 數字；真的不打算沿用某一個，也要在方案裡講清楚原因。"
         )
 
     if avoid_directions:

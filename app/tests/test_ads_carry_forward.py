@@ -24,6 +24,7 @@ import app.main as main  # noqa: E402
 from app.ads import carry_forward  # noqa: E402
 from app.ads import opening_suggestion  # noqa: E402
 from app.ads import plan as ads_plan  # noqa: E402
+from app.ads import plan_citation  # noqa: E402
 from app.ads import reading as ads_reading  # noqa: E402
 from app.ads import repository as ads_repo  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
@@ -64,17 +65,20 @@ _GOOD_OPTIONS = {
 }
 
 
-def _options_citing(winner_angle: str) -> dict:
-    """跟 `_GOOD_OPTIONS` 一樣的最小合法形狀，但第一個切角的 message 具名提到
-    `winner_angle`——票 F2 契約 (b)：有具名贏家時至少一個切角要引用它，這裡是「有引用」
-    的合格回覆，給本來就該通過驗證的測試情境用（不是驗證本身要測的東西）。"""
+def _options_citing(winner_angle: str, roas: float = 4.31) -> dict:
+    """跟 `_GOOD_OPTIONS` 一樣的最小合法形狀，但第一個（推薦）選項的 message 具名提到
+    `winner_angle` 並帶出它的 ROAS 數字——票 F12 契約：推薦方案要點名贏家、還要原樣寫出
+    它的成績，這裡是「有引用」的合格回覆，給本來就該通過驗證的測試情境用（不是驗證本身
+    要測的東西）。`roas` 預設 4.31，對齊本檔既有 `_seed_cell(spend=21000,
+    revenue=21000 * 4.31)` 這個常見寫法，呼叫端只要贏家的實際 ROAS 不是 4.31 才需要覆寫。"""
     return {
         "options": [
             {
                 "is_recommended": True,
                 "summary": "延續上期贏家切角，主力放大。",
                 "audience": {"cold": {"description": "對這個品類已經有興趣的陌生受眾。"}},
-                "angles": [{"title": "延續切角", "message": f"延續上期打贏的「{winner_angle}」方向",
+                "angles": [{"title": "延續切角",
+                           "message": f"延續上期打贏的「{winner_angle}」方向，ROAS {roas:.2f}",
                            "why": "已驗證"}],
             },
             {
@@ -311,6 +315,24 @@ class SignedOffLearningWinnerTest(_BaseCarryForwardTest):
         self.assertEqual(
             ads_plan.get_pending_options(main.conn, self.bid, self.carry_forward_cycle_id), [])
 
+    def test_plan_citing_only_one_of_two_signed_off_winners_is_rejected_naming_the_missing_one(self):
+        """票 F12 done-check 6：兩個具名贏家，推薦方案只交代其中一個（連數字都寫對）——
+        另一個完全沒被沿用，錯誤訊息要點名那個沒被交代的贏家，方案整批不落地。RED first：
+        F2 舊的 `any()` 只要有任何一個贏家在任何選項出現過就放行，這裡「實證成分」有被
+        引用，舊碼會誤判整批通過。"""
+        self._sign_off_learning(
+            self.prior_cycle_id, product_id=self.product,
+            statement="拿證據說話的切角（實證成分／成分對比）比純促銷更能拉高轉換率",
+            cells=[("實證成分", 22, 12000, 12000 * 4.30), ("成分對比", 18, 9000, 9000 * 3.50),
+                   ("使用者見證", 20, 11000, 11000 * 5.0)])
+        reply = _options_citing("實證成分", roas=4.30)  # 只交代兩個贏家的其中一個
+        ok, err = self._generate(self.carry_forward_cycle_id,
+                                 reply=json.dumps(reply, ensure_ascii=False))
+        self.assertFalse(ok)
+        self.assertIn("成分對比", err)
+        self.assertEqual(
+            ads_plan.get_pending_options(main.conn, self.bid, self.carry_forward_cycle_id), [])
+
     def test_learning_naming_no_cell_of_its_cycle_contributes_no_winner(self):
         """票 F11 done-check 2：學習句子沒點名這期任何一個切角（都是代號形狀）——不准
         落回「那期 ROAS 最高的」當贏家，這條 entry 就是沒有贏家。RED first：F7 原本的
@@ -361,6 +383,19 @@ class PromptIncludesCarryForwardDataTest(_BaseCarryForwardTest):
         self.assertIn("節慶檔期用禮盒／組合切角能拉高客單價，投報率會比平常好", sent)
         self.assertIn("上期此方向賠錢，已避開", sent)
 
+    def test_prompt_tells_the_model_recommended_option_must_name_each_winner_with_roas(self):
+        """票 F12 done-check 7：prompt 要明講「推薦方案」必須逐一點名每個贏家、原樣寫出
+        ROAS 數字——不是只帶贏家清單讓模型自己猜。斷言新指示文字本身，不是贏家名字
+        （那段 :346-360 已經驗過）。"""
+        self._seed_cell(self.prior_cycle_id, creative_angle="實證成分", product_id=self.product,
+                        spend=21000, conversions=60, revenue=21000 * 4.31)
+        ok, err = self._generate(self.carry_forward_cycle_id,
+                                 reply=json.dumps(_options_citing("實證成分"), ensure_ascii=False))
+        self.assertTrue(ok, err)
+        sent = ads_plan.PROVIDER.calls[0]["messages"][0]["content"]
+        self.assertIn("逐一點名", sent)
+        self.assertIn("ROAS 數字", sent)
+
     def test_low_evidence_winner_does_not_leak_into_the_prompt(self):
         """反向檢查：樣本不足的切角就算 ROAS 好看，也不准當「贏家」引用進 prompt。"""
         self._seed_cell(self.prior_cycle_id, creative_angle="太少樣本的假贏家",
@@ -407,8 +442,11 @@ class UnvalidatedHypothesisNeverBecomesPlanGroundingTest(_BaseCarryForwardTest):
         self.assertEqual(resolved["status"], "inconclusive")  # guard 擋下，不是「成立」
         self.assertEqual(ads_repo.list_learning_ledger(main.conn, self.bid), [])  # 沒入帳
 
-        ok, err = self._generate(self.carry_forward_cycle_id,
-                                 reply=json.dumps(_options_citing("情感痛點開場"), ensure_ascii=False))
+        ok, err = self._generate(
+            self.carry_forward_cycle_id,
+            # 這顆切角是真的統計贏家（revenue 25000 / spend 5000 = ROAS 5.00），跟被
+            # guard 擋下的假設無關——票 F12 新增數字驗證後，要對齊它真正的 ROAS。
+            reply=json.dumps(_options_citing("情感痛點開場", roas=5.00), ensure_ascii=False))
         self.assertTrue(ok, err)
         sent = ads_plan.PROVIDER.calls[0]["messages"][0]["content"]
         self.assertNotIn("情感痛點開場優於功能宣稱開場", sent)
@@ -533,6 +571,107 @@ class WinnerCitationGuardTest(_BaseCarryForwardTest):
         self.assertTrue(ok, err)
         self.assertEqual(
             len(ads_plan.get_pending_options(main.conn, self.bid, self.carry_forward_cycle_id)), 2)
+
+
+def _option(is_recommended: bool, *, summary: str = "", difference: str = "",
+           angles: list = None) -> dict:
+    """票 F12 單元測試用的最小合法方案形狀，跳過 `_normalize_option()`——直接手動對齊它
+    的輸出契約（`summary`／`difference`／`angles`／`is_recommended`）就好。"""
+    return {
+        "is_recommended": is_recommended,
+        "summary": summary,
+        "difference": difference,
+        "angles": angles or [{"title": "", "message": ""}],
+    }
+
+
+class CitationViolationsUnitTest(unittest.TestCase):
+    """票 F12 契約：`citation_violations()` 只看推薦方案，贏家不只要被點名，還要被原樣
+    寫出 ROAS 數字。純函式測試，不碰 DB——`prior_winners` 手動對齊
+    `carry_forward.prior_winners()` 的輸出形狀即可。"""
+
+    _WINNER_A = {"angle": "成分對比", "roas": 4.30, "spend": 9000, "conversions": 18,
+                "source_cycle_id": "cyc_a"}
+    _WINNER_B = {"angle": "實證成分", "roas": 4.30, "spend": 12000, "conversions": 22,
+                "source_cycle_id": "cyc_b"}
+
+    def test_recommended_cites_only_one_of_two_winners_names_the_missing_one(self):
+        """done-check 1：推薦方案交代了一個贏家（含數字），另一個完全沒提——訊息要點名
+        缺的那個，不是點名已經交代好的那個。"""
+        recommended = _option(True, angles=[{"title": "延續切角",
+                                              "message": "延續「成分對比」方向，ROAS 4.30"}])
+        alt = _option(False, angles=[{"title": "備案", "message": "另一種說法"}])
+        violations = plan_citation.citation_violations(
+            [recommended, alt], [self._WINNER_A, self._WINNER_B], [])
+        self.assertEqual(len(violations), 1)
+        self.assertEqual(violations[0]["winner_angle"], "實證成分")
+        message = plan_citation.citation_error_message(violations)
+        self.assertIn("實證成分", message)
+        self.assertIn("ROAS 4.30", message)
+        self.assertNotIn("成分對比", message)  # 已經交代好的那個不該被點名
+
+    def test_recommended_names_both_winners_but_no_roas_number_names_both_as_missing_number(self):
+        """done-check 2：兩個贏家的名字都寫了，但完全沒有數字——兩個都要被點名缺數字，
+        不是缺點名。"""
+        recommended = _option(True, angles=[{"title": "延續切角",
+                                              "message": "延續「成分對比」與「實證成分」方向"}])
+        violations = plan_citation.citation_violations(
+            [recommended], [self._WINNER_A, self._WINNER_B], [])
+        self.assertEqual(len(violations), 2)
+        self.assertEqual({v["winner_angle"] for v in violations}, {"成分對比", "實證成分"})
+        self.assertTrue(all(not v["angle_missing"] for v in violations))
+        message = plan_citation.citation_error_message(violations)
+        self.assertIn("成分對比", message)
+        self.assertIn("實證成分", message)
+        self.assertIn("但沒寫出它的成績", message)
+
+    def test_both_winners_named_with_numbers_in_recommended_passes_even_if_alt_says_nothing(self):
+        """done-check 3 正面：推薦方案兩個贏家都交代好（含數字），備案方案完全沒提——
+        照樣通過，備案不影響判定。"""
+        recommended = _option(True, angles=[{
+            "title": "延續切角",
+            "message": "延續「成分對比」（ROAS 4.30）與「實證成分」（ROAS 4.30）方向"}])
+        alt = _option(False, angles=[{"title": "備案", "message": "另一種說法"}])
+        violations = plan_citation.citation_violations(
+            [recommended, alt], [self._WINNER_A, self._WINNER_B], [])
+        self.assertEqual(violations, [])
+
+    def test_winners_cited_only_in_an_alternative_option_is_still_a_violation(self):
+        """done-check 3 鏡像（原始 bug 本身）：客戶讀到的是推薦方案，贏家只出現在備案裡
+        不算數——這正是舊碼 `any()` 誤判放行的情境。"""
+        recommended = _option(True, angles=[{"title": "延續切角", "message": "全新方向"}])
+        alt = _option(False, angles=[{
+            "title": "備案", "message": "「成分對比」（ROAS 4.30）「實證成分」（ROAS 4.30）"}])
+        violations = plan_citation.citation_violations(
+            [recommended, alt], [self._WINNER_A, self._WINNER_B], [])
+        self.assertEqual(len(violations), 2)
+
+    def test_no_prior_winners_means_no_winner_violation_regardless_of_option_text(self):
+        """done-check 4：既有行為（沒有贏家就無從比對），可能一開始就是綠的——如實說明，
+        不是新行為。"""
+        recommended = _option(True, angles=[{"title": "隨便", "message": "隨便寫，不提任何贏家"}])
+        self.assertEqual(plan_citation.citation_violations([recommended], [], []), [])
+
+    def test_roas_number_formats_stripped_and_full_both_accepted_wrong_number_is_not(self):
+        """done-check 5：`4.3`／`4.30` 對 4.30 的贏家都算數；`4.31` 不算——尤其要擋住
+        「4.31 開頭三碼長得像 4.3」這種子字串矇混。"""
+        base_message = "延續「成分對比」方向"
+
+        stripped = _option(True, angles=[{"title": "延續切角",
+                                          "message": base_message + "，ROAS 4.3"}])
+        self.assertEqual(
+            plan_citation.citation_violations([stripped], [self._WINNER_A], []), [])
+
+        full = _option(True, angles=[{"title": "延續切角",
+                                      "message": base_message + "，ROAS 4.30"}])
+        self.assertEqual(
+            plan_citation.citation_violations([full], [self._WINNER_A], []), [])
+
+        wrong = _option(True, angles=[{"title": "延續切角",
+                                       "message": base_message + "，ROAS 4.31"}])
+        violations = plan_citation.citation_violations([wrong], [self._WINNER_A], [])
+        self.assertEqual(len(violations), 1)
+        self.assertFalse(violations[0]["angle_missing"])  # 角度有交代，缺的是正確數字
 
 
 if __name__ == "__main__":
