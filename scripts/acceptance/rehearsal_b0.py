@@ -303,8 +303,9 @@ def _print(cycle):
 
 def cmd_build(db):
     conn = _open(db)
-    if _rehearsal_cycles(conn):
-        print(f"refuse: 已有 {MARK} 檔期，先 purge")
+    # C4 may already exist: B2 builds C4 before C1/C2 to reproduce F1 (old cycle shadowed by newer).
+    if any(("C1" in (c.get("background") or "")) or ("C2" in (c.get("background") or "")) for c in _rehearsal_cycles(conn)):
+        print(f"refuse: 已有 {MARK} C1/C2 檔期，先 purge")
         return 1
     _backup(db, conn)
     c1, csv1 = _build_c1(conn)
