@@ -15,14 +15,13 @@ re-export（`from app.brand_intelligence.repository_channels import ...`），�
 `update_channel`／`delete_channel`）。誰依賴它：`repository.py`（re-export）、
 `app/brand_intelligence/routes.py`（`channels/new`）、
 `app/brand_intelligence/routes_library.py`（渠道編輯／刪除、整包讀取）、
-`app/ads/handoff.py`（`list_channels` 找預設到達網址）、`app/seed_demo.py`。
+`app/ads/handoff.py`（`list_channels` 找預設到達網址）。
 """
 
-import sqlite3
 from typing import Optional
 
 from app.core.audit import write_audit
-from app.core.db import new_id, now_iso
+from app.core.db import new_id, now_iso, Conn, DEV_ORG_ID
 
 
 def _require(value, message: str) -> None:
@@ -41,7 +40,7 @@ def _rows(cursor) -> list:
 _CHANNEL_PLATFORM_DEFAULT = {"website": "web", "fb_page": "meta", "ig_account": "meta"}
 
 
-def create_channel(conn: sqlite3.Connection, brand_id: str, *, actor: str, channel_type: str,
+def create_channel(conn: Conn, brand_id: str, *, actor: str, channel_type: str,
                     name: str, identifier: Optional[str] = None, status: str = "active",
                     platform: Optional[str] = None) -> dict:
     _require(channel_type, "owned_channel.channel_type 為必填")
@@ -58,9 +57,9 @@ def create_channel(conn: sqlite3.Connection, brand_id: str, *, actor: str, chann
         "created_at": ts, "updated_at": ts,
     }
     conn.execute(
-        "INSERT INTO owned_channel (id, brand_id, channel_type, platform, name, identifier, status, "
-        "created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (row["id"], row["brand_id"], row["channel_type"], row["platform"], row["name"],
+        "INSERT INTO owned_channel (id, org_id, brand_id, channel_type, platform, name, identifier, status, "
+        "created_at, updated_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+        (row["id"], DEV_ORG_ID, row["brand_id"], row["channel_type"], row["platform"], row["name"],
          row["identifier"], row["status"], row["created_at"], row["updated_at"]),
     )
     write_audit(conn, brand_id=brand_id, entity_type="owned_channel", entity_id=channel_id,
@@ -69,19 +68,19 @@ def create_channel(conn: sqlite3.Connection, brand_id: str, *, actor: str, chann
     return row
 
 
-def list_channels(conn: sqlite3.Connection, brand_id: str) -> list:
+def list_channels(conn: Conn, brand_id: str) -> list:
     return _rows(conn.execute(
-        "SELECT * FROM owned_channel WHERE brand_id = ? ORDER BY created_at", (brand_id,)
+        "SELECT * FROM owned_channel WHERE brand_id = %s ORDER BY created_at", (brand_id,)
     ))
 
 
-def get_channel(conn: sqlite3.Connection, brand_id: str, channel_id: str) -> Optional[dict]:
+def get_channel(conn: Conn, brand_id: str, channel_id: str) -> Optional[dict]:
     return _row(conn.execute(
-        "SELECT * FROM owned_channel WHERE id = ? AND brand_id = ?", (channel_id, brand_id)
+        "SELECT * FROM owned_channel WHERE id = %s AND brand_id = %s", (channel_id, brand_id)
     ).fetchone())
 
 
-def update_channel(conn: sqlite3.Connection, brand_id: str, channel_id: str, *, actor: str,
+def update_channel(conn: Conn, brand_id: str, channel_id: str, *, actor: str,
                     channel_type: str, name: str, identifier: Optional[str] = None,
                     status: str = "active") -> dict:
     """編輯自有渠道（票 B2-library S5.31）：人工編輯直接生效，比照 update_rule。渠道不是
@@ -98,8 +97,8 @@ def update_channel(conn: sqlite3.Connection, brand_id: str, channel_id: str, *, 
     platform = _CHANNEL_PLATFORM_DEFAULT.get(channel_type, "web")
     ts = now_iso()
     conn.execute(
-        "UPDATE owned_channel SET channel_type = ?, platform = ?, name = ?, identifier = ?, "
-        "status = ?, updated_at = ? WHERE id = ? AND brand_id = ?",
+        "UPDATE owned_channel SET channel_type = %s, platform = %s, name = %s, identifier = %s, "
+        "status = %s, updated_at = %s WHERE id = %s AND brand_id = %s",
         (channel_type, platform, name, identifier, status, ts, channel_id, brand_id),
     )
     after = get_channel(conn, brand_id, channel_id)
@@ -109,13 +108,13 @@ def update_channel(conn: sqlite3.Connection, brand_id: str, channel_id: str, *, 
     return after
 
 
-def delete_channel(conn: sqlite3.Connection, brand_id: str, channel_id: str, *, actor: str) -> None:
+def delete_channel(conn: Conn, brand_id: str, channel_id: str, *, actor: str) -> None:
     """硬刪除，比照 repository.py `_delete_entity` 模式（決策 0013：把關人可直接清資料）。"""
     _require(actor, "actor 為必填")
     before = get_channel(conn, brand_id, channel_id)
     if before is None:
         raise ValueError(f"找不到自有渠道：{channel_id}")
-    conn.execute("DELETE FROM owned_channel WHERE id = ? AND brand_id = ?", (channel_id, brand_id))
+    conn.execute("DELETE FROM owned_channel WHERE id = %s AND brand_id = %s", (channel_id, brand_id))
     write_audit(conn, brand_id=brand_id, entity_type="owned_channel", entity_id=channel_id,
                 action="delete", actor=actor, before=before, after=None,
                 reason="把關人刪除（決策 0013）")

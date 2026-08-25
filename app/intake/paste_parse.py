@@ -6,7 +6,7 @@
 
 import re
 
-from app import mock_data as md
+from app.core import vocab as md
 
 KIND_CATEGORY_SOURCE = {
     "品牌事實": md.BRAND_FACT_TYPES,

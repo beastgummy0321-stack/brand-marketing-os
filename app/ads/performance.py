@@ -22,7 +22,7 @@ from typing import Optional
 
 from app.ads import guardrails
 from app.core.audit import write_audit
-from app.core.db import new_id, now_iso
+from app.core.db import new_id, now_iso, DEV_ORG_ID
 
 # 概念欄 → 可能的欄位名（全部小寫比對，去空白）。要加新別名就加在這裡，別動解析邏輯。
 COLUMN_ALIASES = {
@@ -224,14 +224,14 @@ def match_asset_mapping(conn, brand_id: str, cycle_id: Optional[str],
     if not cycle_id or not ad_name:
         return None, None
     packages = conn.execute(
-        "SELECT id FROM publishing_package WHERE brand_id = ? AND campaign_cycle_id = ?"
-        " AND ad_name = ?", (brand_id, cycle_id, ad_name),
+        "SELECT id FROM publishing_package WHERE brand_id = %s AND campaign_cycle_id = %s"
+        " AND ad_name = %s", (brand_id, cycle_id, ad_name),
     ).fetchall()
     if len(packages) != 1:
         return None, None  # 對不上，或者（不該發生的）撞名，一律不猜
     package_id = packages[0]["id"]
     mapping = conn.execute(
-        "SELECT id FROM external_ad_mapping WHERE publishing_package_id = ?"
+        "SELECT id FROM external_ad_mapping WHERE publishing_package_id = %s"
         " ORDER BY created_at DESC LIMIT 1", (package_id,),
     ).fetchone()
     return (mapping["id"] if mapping else None), package_id
@@ -252,7 +252,7 @@ def resolve_product_id(conn, brand_id: str, cycle_id: Optional[str],
     if not cycle_id or not publishing_package_id:
         return None
     package = conn.execute(
-        "SELECT product_id, experiment_cell_id FROM publishing_package WHERE id = ?",
+        "SELECT product_id, experiment_cell_id FROM publishing_package WHERE id = %s",
         (publishing_package_id,),
     ).fetchone()
     if not package:
@@ -261,7 +261,7 @@ def resolve_product_id(conn, brand_id: str, cycle_id: Optional[str],
         return package["product_id"]
     if package["experiment_cell_id"]:
         cell = conn.execute(
-            "SELECT product_id FROM experiment_cell WHERE id = ?",
+            "SELECT product_id FROM experiment_cell WHERE id = %s",
             (package["experiment_cell_id"],),
         ).fetchone()
         if cell and cell["product_id"]:
@@ -297,10 +297,10 @@ def _existing_signatures(conn, brand_id: str, cycle_id: Optional[str]) -> set:
     cols = ("date_range_start, date_range_end, impressions, clicks, spend, conversions,"
            " revenue, frequency, reach, source, currency")
     if cycle_id is None:
-        query = f"SELECT {cols} FROM performance_snapshot WHERE brand_id = ? AND campaign_cycle_id IS NULL"
+        query = f"SELECT {cols} FROM performance_snapshot WHERE brand_id = %s AND campaign_cycle_id IS NULL"
         params = (brand_id,)
     else:
-        query = f"SELECT {cols}, raw_json FROM performance_snapshot WHERE brand_id = ? AND campaign_cycle_id = ?"
+        query = f"SELECT {cols}, raw_json FROM performance_snapshot WHERE brand_id = %s AND campaign_cycle_id = %s"
         params = (brand_id, cycle_id)
     signatures = set()
     for r in conn.execute(query, params):
@@ -364,15 +364,15 @@ def import_rows(conn, brand_id: str, cycle_id: Optional[str], rows: list, *,
                               ensure_ascii=False)
 
         conn.execute(
-            "INSERT INTO performance_snapshot (id, brand_id, campaign_cycle_id, product_id,"
+            "INSERT INTO performance_snapshot (id, org_id, brand_id, campaign_cycle_id, product_id,"
             " external_ad_mapping_id, platform, meta_campaign_id, meta_adset_id, meta_ad_id,"
             " date_range_start, date_range_end, as_of_date, snapshot_taken_at, currency,"
             " impressions, clicks, spend, conversions, revenue, revenue_source, frequency,"
             " reach, raw_json, reconciled, source, import_batch_id, quarantined,"
             " quarantine_reason, created_at)"
-            " VALUES (?, ?, ?, ?, ?, 'meta', NULL, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,"
-            " ?, ?, ?, 1, ?, ?, ?, ?, ?)",
-            (new_id("psn"), brand_id, cycle_id, product_id, mapping_id, date_start, date_stop,
+            " VALUES (%s, %s, %s, %s, %s, %s, 'meta', NULL, NULL, NULL, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,"
+            " %s, %s, %s, 1, %s, %s, %s, %s, %s)",
+            (new_id("psn"), DEV_ORG_ID, brand_id, cycle_id, product_id, mapping_id, date_start, date_stop,
              date_stop, ts, currency, row.get("impressions"), row.get("clicks"),
              row.get("spend"), row.get("conversions"), row.get("revenue"), revenue_source,
              row.get("frequency"), row.get("reach"), raw_json, source, batch_id,
@@ -419,8 +419,8 @@ def import_manual(conn, brand_id: str, cycle_id: str, values: dict, *, actor: st
 def _cycle_rows_for_totals(conn, brand_id: str, cycle_id: str,
                            include_quarantined: bool) -> list:
     """日粒度上線後，較細的 Meta 日列取代同一廣告、同期間的舊聚合列。"""
-    sql = ("SELECT * FROM performance_snapshot WHERE brand_id = ?"
-           " AND campaign_cycle_id = ?")
+    sql = ("SELECT * FROM performance_snapshot WHERE brand_id = %s"
+           " AND campaign_cycle_id = %s")
     if not include_quarantined:
         sql += " AND quarantined = 0"
     rows = [dict(row) for row in conn.execute(sql, (brand_id, cycle_id))]
@@ -474,7 +474,7 @@ def revenue_by_source(conn, brand_id: str, cycle_id: str) -> dict:
     當初沒存 raw_json，事後無法分辨原始欄位還是反推值。"""
     rows = conn.execute(
         "SELECT COALESCE(revenue_source, 'unknown') src, COALESCE(SUM(revenue), 0) amount"
-        " FROM performance_snapshot WHERE brand_id = ? AND campaign_cycle_id = ? AND"
+        " FROM performance_snapshot WHERE brand_id = %s AND campaign_cycle_id = %s AND"
         " quarantined = 0 AND revenue IS NOT NULL GROUP BY src",
         (brand_id, cycle_id),
     ).fetchall()
@@ -492,7 +492,7 @@ def max_frequency(conn, brand_id: str, cycle_id: str) -> Optional[float]:
     不假裝算得出來（鐵則 16）。"""
     row = conn.execute(
         "SELECT MAX(frequency) freq FROM performance_snapshot"
-        " WHERE brand_id = ? AND campaign_cycle_id = ? AND quarantined = 0",
+        " WHERE brand_id = %s AND campaign_cycle_id = %s AND quarantined = 0",
         (brand_id, cycle_id),
     ).fetchone()
     return row["freq"] if row and row["freq"] is not None else None
@@ -503,7 +503,7 @@ def total_reach(conn, brand_id: str, cycle_id: str) -> Optional[int]:
     帶觸及資料時回 None，不假裝算得出來（鐵則 16；比照 max_frequency 的既有寫法）。"""
     row = conn.execute(
         "SELECT SUM(reach) reach FROM performance_snapshot"
-        " WHERE brand_id = ? AND campaign_cycle_id = ? AND quarantined = 0",
+        " WHERE brand_id = %s AND campaign_cycle_id = %s AND quarantined = 0",
         (brand_id, cycle_id),
     ).fetchone()
     return row["reach"] if row and row["reach"] is not None else None
@@ -537,7 +537,7 @@ def save_derived_metrics(conn, brand_id: str, cycle_id: str) -> int:
     """把算出來的 KPI 落地成 derived_metric（判讀要回溯「當時算出來的數字」）。"""
     summary = totals(conn, brand_id, cycle_id)
     snapshot = conn.execute(
-        "SELECT id FROM performance_snapshot WHERE brand_id = ? AND campaign_cycle_id = ?"
+        "SELECT id FROM performance_snapshot WHERE brand_id = %s AND campaign_cycle_id = %s"
         " AND quarantined = 0 ORDER BY created_at DESC LIMIT 1", (brand_id, cycle_id),
     ).fetchone()
     if snapshot is None:
@@ -545,7 +545,7 @@ def save_derived_metrics(conn, brand_id: str, cycle_id: str) -> int:
 
     ts = now_iso()
     conn.execute(
-        "DELETE FROM derived_metric WHERE brand_id = ? AND campaign_cycle_id = ?",
+        "DELETE FROM derived_metric WHERE brand_id = %s AND campaign_cycle_id = %s",
         (brand_id, cycle_id),
     )
     written = 0
@@ -553,10 +553,10 @@ def save_derived_metrics(conn, brand_id: str, cycle_id: str) -> int:
         if value is None:
             continue
         conn.execute(
-            "INSERT INTO derived_metric (id, brand_id, performance_snapshot_id,"
+            "INSERT INTO derived_metric (id, org_id, brand_id, performance_snapshot_id,"
             " campaign_cycle_id, metric, value, calc_basis, computed_at, created_at)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (new_id("dmt"), brand_id, snapshot["id"], cycle_id, metric, value,
+            " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            (new_id("dmt"), DEV_ORG_ID, brand_id, snapshot["id"], cycle_id, metric, value,
              "本期未隔離資料加總", ts, ts),
         )
         written += 1
@@ -608,7 +608,7 @@ def _brand_level_rows(conn, brand_id: str) -> list:
     rows = [dict(r) for r in conn.execute(
         "SELECT id, date_range_start, date_range_end, impressions, clicks, spend, conversions,"
         " revenue, account_id, meta_campaign_id, meta_adset_id, meta_ad_id"
-        " FROM performance_snapshot WHERE brand_id = ? AND campaign_cycle_id IS NULL"
+        " FROM performance_snapshot WHERE brand_id = %s AND campaign_cycle_id IS NULL"
         " AND quarantined = 0 ORDER BY created_at", (brand_id,),
     ).fetchall()]
     for row in rows:
@@ -656,7 +656,7 @@ def save_brand_level_derived_metrics(conn, brand_id: str) -> int:
     全量重算（先刪後寫）：呼叫端（認領後、CSV 匯入後、每次同步後）可以放心重複呼叫。
     """
     conn.execute(
-        "DELETE FROM derived_metric WHERE brand_id = ? AND campaign_cycle_id IS NULL",
+        "DELETE FROM derived_metric WHERE brand_id = %s AND campaign_cycle_id IS NULL",
         (brand_id,),
     )
     groups = _brand_level_monthly_groups(conn, brand_id)
@@ -687,10 +687,10 @@ def save_brand_level_derived_metrics(conn, brand_id: str) -> int:
             if value is None:
                 continue
             conn.execute(
-                "INSERT INTO derived_metric (id, brand_id, performance_snapshot_id,"
+                "INSERT INTO derived_metric (id, org_id, brand_id, performance_snapshot_id,"
                 " campaign_cycle_id, metric, value, calc_basis, computed_at, created_at)"
-                " VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?)",
-                (new_id("dmt"), brand_id, anchor_id, metric, value, basis, ts, ts),
+                " VALUES (%s, %s, %s, %s, NULL, %s, %s, %s, %s, %s)",
+                (new_id("dmt"), DEV_ORG_ID, brand_id, anchor_id, metric, value, basis, ts, ts),
             )
             written += 1
     conn.commit()
@@ -738,8 +738,8 @@ def brand_period_spend(conn, brand_id: str, since: str, until: str) -> Optional[
     """
     row = conn.execute(
         "SELECT SUM(spend) spend, COUNT(*) rows FROM performance_snapshot"
-        " WHERE brand_id = ? AND quarantined = 0"
-        " AND date_range_end >= ? AND date_range_end <= ?",
+        " WHERE brand_id = %s AND quarantined = 0"
+        " AND date_range_end >= %s AND date_range_end <= %s",
         (brand_id, since, until),
     ).fetchone()
     return row["spend"] if row["rows"] else None
@@ -750,7 +750,7 @@ def last_snapshot_at(conn, brand_id: str) -> Optional[str]:
     時間」用（票 07-auto-sync）。從沒同步過時回 None——「還沒同步過」跟「同步時間是
     某個值」是兩件事（鐵則 16）。"""
     row = conn.execute(
-        "SELECT MAX(snapshot_taken_at) AS ts FROM performance_snapshot WHERE brand_id = ?",
+        "SELECT MAX(snapshot_taken_at) AS ts FROM performance_snapshot WHERE brand_id = %s",
         (brand_id,),
     ).fetchone()
     return row["ts"] if row and row["ts"] else None

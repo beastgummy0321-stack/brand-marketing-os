@@ -30,7 +30,7 @@ from app.ads import tracking
 from app.brand_intelligence import repository as bi
 from app.core import settings as coresettings
 from app.core.audit import write_audit
-from app.core.db import new_id, now_iso
+from app.core.db import new_id, now_iso, DEV_ORG_ID
 
 TOKEN_SETTING = "meta_access_token"
 ACCOUNT_SETTING = "meta_ad_account_id"
@@ -139,13 +139,13 @@ def _existing_signatures(conn, brand_id: str, cycle_id: Optional[str]) -> set:
             "SELECT account_id, meta_campaign_id, meta_adset_id, meta_ad_id,"
             " date_range_start, date_range_end, impressions, clicks, spend, conversions,"
             " revenue, frequency, reach FROM performance_snapshot"
-            " WHERE brand_id = ? AND campaign_cycle_id IS NULL", (brand_id,))
+            " WHERE brand_id = %s AND campaign_cycle_id IS NULL", (brand_id,))
     else:
         rows = conn.execute(
             "SELECT account_id, meta_campaign_id, meta_adset_id, meta_ad_id,"
             " date_range_start, date_range_end, impressions, clicks, spend, conversions,"
             " revenue, frequency, reach FROM performance_snapshot"
-            " WHERE brand_id = ? AND campaign_cycle_id = ?", (brand_id, cycle_id))
+            " WHERE brand_id = %s AND campaign_cycle_id = %s", (brand_id, cycle_id))
     return {
         (r["account_id"], r["meta_campaign_id"], r["meta_adset_id"], r["meta_ad_id"],
          r["date_range_start"], r["date_range_end"], r["impressions"], r["clicks"],
@@ -174,13 +174,13 @@ def _guess_brand(conn, campaign_name: str) -> tuple:
 def _upsert_discovered(conn, ad_account_id: str, campaign, ts: str) -> bool:
     """回傳 True 代表這是第一次看到這個活動。"""
     existing = conn.execute(
-        "SELECT * FROM discovered_campaign WHERE ad_account_id = ? AND meta_campaign_id = ?",
+        "SELECT * FROM discovered_campaign WHERE ad_account_id = %s AND meta_campaign_id = %s",
         (ad_account_id, campaign.campaign_id),
     ).fetchone()
     if existing:
         conn.execute(
-            "UPDATE discovered_campaign SET campaign_name = ?, objective = ?,"
-            " effective_status = ?, last_seen_at = ?, updated_at = ? WHERE id = ?",
+            "UPDATE discovered_campaign SET campaign_name = %s, objective = %s,"
+            " effective_status = %s, last_seen_at = %s, updated_at = %s WHERE id = %s",
             (campaign.name, campaign.objective, campaign.effective_status, ts, ts,
              existing["id"]),
         )
@@ -188,11 +188,11 @@ def _upsert_discovered(conn, ad_account_id: str, campaign, ts: str) -> bool:
 
     suggested_brand_id, reason = _guess_brand(conn, campaign.name)
     conn.execute(
-        "INSERT INTO discovered_campaign (id, ad_account_id, platform, meta_campaign_id,"
+        "INSERT INTO discovered_campaign (id, org_id, ad_account_id, platform, meta_campaign_id,"
         " campaign_name, objective, effective_status, first_seen_at, last_seen_at,"
         " suggested_brand_id, suggested_reason, claim_status, created_at, updated_at)"
-        " VALUES (?, ?, 'meta', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (new_id("dsc"), ad_account_id, campaign.campaign_id, campaign.name,
+        " VALUES (%s, %s, %s, 'meta', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+        (new_id("dsc"), DEV_ORG_ID, ad_account_id, campaign.campaign_id, campaign.name,
          campaign.objective, campaign.effective_status, ts, ts,
          suggested_brand_id, reason,
          "suggested" if suggested_brand_id else "unclaimed", ts, ts),
@@ -213,7 +213,7 @@ def _upsert_discovered_from_insight(conn, ad_account_id: str, insight, ts: str) 
     活動清單剛寫進去的，還是先前同步留下的）一律不動，活動清單的資料比較新、不能被
     insights 的殘缺資訊蓋掉。"""
     existing = conn.execute(
-        "SELECT id FROM discovered_campaign WHERE ad_account_id = ? AND meta_campaign_id = ?",
+        "SELECT id FROM discovered_campaign WHERE ad_account_id = %s AND meta_campaign_id = %s",
         (ad_account_id, insight.campaign_id),
     ).fetchone()
     if existing:
@@ -222,11 +222,11 @@ def _upsert_discovered_from_insight(conn, ad_account_id: str, insight, ts: str) 
     campaign_name = insight.campaign_name
     suggested_brand_id, reason = _guess_brand(conn, campaign_name)
     conn.execute(
-        "INSERT INTO discovered_campaign (id, ad_account_id, platform, meta_campaign_id,"
+        "INSERT INTO discovered_campaign (id, org_id, ad_account_id, platform, meta_campaign_id,"
         " campaign_name, objective, effective_status, first_seen_at, last_seen_at,"
         " suggested_brand_id, suggested_reason, claim_status, created_at, updated_at)"
-        " VALUES (?, ?, 'meta', ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (new_id("dsc"), ad_account_id, insight.campaign_id, campaign_name,
+        " VALUES (%s, %s, %s, 'meta', %s, %s, NULL, %s, %s, %s, %s, %s, %s, %s, %s)",
+        (new_id("dsc"), DEV_ORG_ID, ad_account_id, insight.campaign_id, campaign_name,
          HISTORICAL_STATUS, ts, ts, suggested_brand_id, reason,
          "suggested" if suggested_brand_id else "unclaimed", ts, ts),
     )
@@ -237,8 +237,8 @@ def _claimed_brand_for(conn, ad_account_id: str, meta_campaign_id: str,
                        meta_ad_id: Optional[str] = None) -> Optional[str]:
     """這個活動的歸屬品牌。只有 claimed 才算數——suggested 是預選，不生效。"""
     row = conn.execute(
-        "SELECT claimed_brand_id FROM discovered_campaign WHERE ad_account_id = ?"
-        " AND meta_campaign_id = ? AND claim_status = 'claimed'",
+        "SELECT claimed_brand_id FROM discovered_campaign WHERE ad_account_id = %s"
+        " AND meta_campaign_id = %s AND claim_status = 'claimed'",
         (ad_account_id, meta_campaign_id),
     ).fetchone()
     if row and row["claimed_brand_id"]:
@@ -248,13 +248,13 @@ def _claimed_brand_for(conn, ad_account_id: str, meta_campaign_id: str,
     # 標的既有缺口）。人工回填沒填廣告 ID 時 meta_ad_id 是 None，退回 meta_campaign_id。
     if meta_ad_id:
         mapping = conn.execute(
-            "SELECT brand_id FROM external_ad_mapping WHERE meta_ad_id = ?"
+            "SELECT brand_id FROM external_ad_mapping WHERE meta_ad_id = %s"
             " AND claim_status = 'confirmed' LIMIT 1", (meta_ad_id,),
         ).fetchone()
         if mapping:
             return mapping["brand_id"]
     mapping = conn.execute(
-        "SELECT brand_id FROM external_ad_mapping WHERE meta_campaign_id = ?"
+        "SELECT brand_id FROM external_ad_mapping WHERE meta_campaign_id = %s"
         " AND claim_status = 'confirmed' LIMIT 1", (meta_campaign_id,),
     ).fetchone()
     return mapping["brand_id"] if mapping else None
@@ -270,14 +270,14 @@ def _cycle_for(conn, brand_id: str, meta_campaign_id: str,
     if meta_ad_id:
         row = conn.execute(
             "SELECT campaign_cycle_id, id, publishing_package_id FROM external_ad_mapping"
-            " WHERE brand_id = ? AND meta_ad_id = ? ORDER BY created_at DESC LIMIT 1",
+            " WHERE brand_id = %s AND meta_ad_id = %s ORDER BY created_at DESC LIMIT 1",
             (brand_id, meta_ad_id),
         ).fetchone()
         if row:
             return row["campaign_cycle_id"], row["id"], row["publishing_package_id"]
     row = conn.execute(
         "SELECT campaign_cycle_id, id, publishing_package_id FROM external_ad_mapping"
-        " WHERE brand_id = ? AND meta_campaign_id = ? ORDER BY created_at DESC LIMIT 1",
+        " WHERE brand_id = %s AND meta_campaign_id = %s ORDER BY created_at DESC LIMIT 1",
         (brand_id, meta_campaign_id),
     ).fetchone()
     return ((row["campaign_cycle_id"], row["id"], row["publishing_package_id"]) if row
@@ -320,8 +320,8 @@ def sync_account(conn, actor: str, *, client=None, account_id: Optional[str] = N
 
     for campaign in campaigns:
         previous = conn.execute(
-            "SELECT campaign_name FROM discovered_campaign WHERE ad_account_id = ?"
-            " AND meta_campaign_id = ?", (ad_account_id, campaign.campaign_id),
+            "SELECT campaign_name FROM discovered_campaign WHERE ad_account_id = %s"
+            " AND meta_campaign_id = %s", (ad_account_id, campaign.campaign_id),
         ).fetchone()
         if _upsert_discovered(conn, ad_account_id, campaign, ts):
             result.discovered += 1
@@ -377,15 +377,15 @@ def sync_account(conn, actor: str, *, client=None, account_id: Optional[str] = N
         raw_json = json.dumps(asdict(insight), ensure_ascii=False)
 
         conn.execute(
-            "INSERT INTO performance_snapshot (id, brand_id, campaign_cycle_id, product_id,"
+            "INSERT INTO performance_snapshot (id, org_id, brand_id, campaign_cycle_id, product_id,"
             " external_ad_mapping_id, platform, account_id, meta_campaign_id, meta_adset_id,"
             " meta_ad_id, date_range_start, date_range_end, as_of_date, snapshot_taken_at,"
             " currency, impressions, clicks, spend, conversions, revenue, frequency, reach,"
             " raw_json, reconciled, source, import_batch_id, quarantined, quarantine_reason,"
             " created_at)"
-            " VALUES (?, ?, ?, ?, ?, 'meta', ?, ?, ?, ?, ?, ?, ?, ?, 'TWD', ?, ?, ?, ?, ?, ?, ?,"
-            " ?, 1, 'meta_api', ?, ?, ?, ?)",
-            (new_id("psn"), brand_id, cycle_id, product_id, mapping_id, account_external,
+            " VALUES (%s, %s, %s, %s, %s, %s, 'meta', %s, %s, %s, %s, %s, %s, %s, %s, 'TWD', %s, %s, %s, %s, %s, %s, %s,"
+            " %s, 1, 'meta_api', %s, %s, %s, %s)",
+            (new_id("psn"), DEV_ORG_ID, brand_id, cycle_id, product_id, mapping_id, account_external,
              insight.campaign_id, insight.adset_id, insight.ad_id,
              insight.date_start, insight.date_stop, insight.date_stop, ts,
              insight.impressions, insight.clicks, insight.spend, insight.conversions,
@@ -433,7 +433,7 @@ def list_pending_claims(conn, brand_id: str) -> list:
     """
     rows = [dict(r) for r in conn.execute(
         "SELECT * FROM discovered_campaign WHERE claim_status IN ('unclaimed', 'suggested')"
-        " AND (suggested_brand_id IS NULL OR suggested_brand_id = ?)"
+        " AND (suggested_brand_id IS NULL OR suggested_brand_id = %s)"
         " ORDER BY first_seen_at DESC", (brand_id,),
     )]
     for row in rows:
@@ -444,7 +444,7 @@ def list_pending_claims(conn, brand_id: str) -> list:
 def claim(conn, brand_id: str, discovered_id: str, actor: str) -> dict:
     """使用者確認：這個活動是這個品牌的。認領後它的成效才進得了這個品牌。"""
     row = conn.execute(
-        "SELECT * FROM discovered_campaign WHERE id = ?", (discovered_id,)
+        "SELECT * FROM discovered_campaign WHERE id = %s", (discovered_id,)
     ).fetchone()
     if row is None:
         raise ValueError("找不到這個廣告活動")
@@ -453,8 +453,8 @@ def claim(conn, brand_id: str, discovered_id: str, actor: str) -> dict:
 
     ts = now_iso()
     conn.execute(
-        "UPDATE discovered_campaign SET claim_status = 'claimed', claimed_brand_id = ?,"
-        " claimed_by = ?, claimed_at = ?, updated_at = ? WHERE id = ?",
+        "UPDATE discovered_campaign SET claim_status = 'claimed', claimed_brand_id = %s,"
+        " claimed_by = %s, claimed_at = %s, updated_at = %s WHERE id = %s",
         (brand_id, actor, ts, ts, discovered_id),
     )
     write_audit(conn, brand_id=brand_id, entity_type="discovered_campaign",
@@ -465,20 +465,20 @@ def claim(conn, brand_id: str, discovered_id: str, actor: str) -> dict:
     # 匯入的對不到檔期列），立刻重算一次基準，不必等下一次同步才看得到。全量重算、
     # 可重複呼叫（app/ads/performance.py 的品牌層寫入函式）。
     ads_performance.save_brand_level_derived_metrics(conn, brand_id)
-    return dict(conn.execute("SELECT * FROM discovered_campaign WHERE id = ?",
+    return dict(conn.execute("SELECT * FROM discovered_campaign WHERE id = %s",
                              (discovered_id,)).fetchone())
 
 
 def ignore(conn, brand_id: str, discovered_id: str, actor: str) -> None:
     """「這不是這個品牌的」：從這個品牌的待認領清單移走，不歸屬給任何人。"""
-    row = conn.execute("SELECT * FROM discovered_campaign WHERE id = ?",
+    row = conn.execute("SELECT * FROM discovered_campaign WHERE id = %s",
                        (discovered_id,)).fetchone()
     if row is None:
         raise ValueError("找不到這個廣告活動")
     ts = now_iso()
     conn.execute(
         "UPDATE discovered_campaign SET claim_status = 'ignored', suggested_brand_id = NULL,"
-        " updated_at = ? WHERE id = ?", (ts, discovered_id),
+        " updated_at = %s WHERE id = %s", (ts, discovered_id),
     )
     write_audit(conn, brand_id=brand_id, entity_type="discovered_campaign",
                 entity_id=discovered_id, action="ignore_claim", actor=actor,

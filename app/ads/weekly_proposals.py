@@ -13,7 +13,7 @@ from app.core import interrupts as core_interrupts
 from app.core import orchestrator as core_orchestrator
 from app.core import rule_cards
 from app.core.audit import write_audit
-from app.core.db import new_id, now_iso
+from app.core.db import new_id, now_iso, DEV_ORG_ID
 
 
 RECOMMENDATION_TYPE = "weekly_proposal"
@@ -91,8 +91,8 @@ def present(card: dict, brand_id: str) -> dict:
 
 def _newest_pending_card_ts(conn, brand_id: str, cycle_id: str) -> "str | None":
     row = conn.execute(
-        "SELECT MAX(created_at) AS ts FROM recommendation WHERE brand_id = ?"
-        " AND campaign_cycle_id = ? AND recommendation_type = ? AND status = 'GENERATED'",
+        "SELECT MAX(created_at) AS ts FROM recommendation WHERE brand_id = %s"
+        " AND campaign_cycle_id = %s AND recommendation_type = %s AND status = 'GENERATED'",
         (brand_id, cycle_id, RECOMMENDATION_TYPE),
     ).fetchone()
     return row["ts"] if row else None
@@ -340,8 +340,8 @@ def _card_from_row(row) -> dict:
 
 def list_cards(conn, brand_id: str, cycle_id: str) -> list:
     rows = conn.execute(
-        "SELECT * FROM recommendation WHERE brand_id = ? AND campaign_cycle_id = ?"
-        " AND recommendation_type = ? ORDER BY created_at, id",
+        "SELECT * FROM recommendation WHERE brand_id = %s AND campaign_cycle_id = %s"
+        " AND recommendation_type = %s ORDER BY created_at, id",
         (brand_id, cycle_id, RECOMMENDATION_TYPE),
     ).fetchall()
     return [_card_from_row(row) for row in rows]
@@ -349,8 +349,8 @@ def list_cards(conn, brand_id: str, cycle_id: str) -> list:
 
 def _cards_summary(conn, brand_id: str, cycle_id: str, status: str) -> dict:
     rows = conn.execute(
-        "SELECT content_json FROM recommendation WHERE brand_id = ? AND campaign_cycle_id = ?"
-        " AND recommendation_type = ? AND status = ? ORDER BY created_at, id",
+        "SELECT content_json FROM recommendation WHERE brand_id = %s AND campaign_cycle_id = %s"
+        " AND recommendation_type = %s AND status = %s ORDER BY created_at, id",
         (brand_id, cycle_id, RECOMMENDATION_TYPE, status),
     ).fetchall()
     names = [json.loads(row["content_json"] or "{}").get("target", "") for row in rows]
@@ -382,8 +382,8 @@ def archive_on_close(conn, brand_id: str, cycle_id: str, actor: str) -> dict:
     if cards["count"] == 0:
         return cards
     conn.execute(
-        "UPDATE recommendation SET status = ?, updated_at = ? WHERE brand_id = ?"
-        " AND campaign_cycle_id = ? AND recommendation_type = ? AND status = 'GENERATED'",
+        "UPDATE recommendation SET status = %s, updated_at = %s WHERE brand_id = %s"
+        " AND campaign_cycle_id = %s AND recommendation_type = %s AND status = 'GENERATED'",
         (ARCHIVED_ON_CLOSE, now_iso(), brand_id, cycle_id, RECOMMENDATION_TYPE),
     )
     interrupt_id = core_interrupts.enqueue(
@@ -437,10 +437,10 @@ def generate(conn, brand_id: str, cycle_id: str, *, enqueue_ready: bool = True) 
         content["instruction"] = _instruction(
             card["action"], card["target"], card.get("bleeding_asset_names"))
         conn.execute(
-            "INSERT INTO recommendation (id, brand_id, campaign_cycle_id, product_id,"
+            "INSERT INTO recommendation (id, org_id, brand_id, campaign_cycle_id, product_id,"
             " performance_reading_id, recommendation_type, content_json, status, created_at,"
-            " updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'GENERATED', ?, ?)",
-            (new_id("rec"), brand_id, cycle_id, card["product_id"],
+            " updated_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'GENERATED', %s, %s)",
+            (new_id("rec"), DEV_ORG_ID, brand_id, cycle_id, card["product_id"],
              card["performance_reading_id"], RECOMMENDATION_TYPE,
              json.dumps(content, ensure_ascii=False), ts, ts),
         )
@@ -532,8 +532,8 @@ def view(conn, brand_id: str, cycle_id: str) -> dict:
 
 def _resolve_ready_interrupt_if_finished(conn, brand_id: str, cycle_id: str, actor: str) -> None:
     pending = conn.execute(
-        "SELECT 1 FROM recommendation WHERE brand_id = ? AND campaign_cycle_id = ?"
-        " AND recommendation_type = ? AND status = 'GENERATED' LIMIT 1",
+        "SELECT 1 FROM recommendation WHERE brand_id = %s AND campaign_cycle_id = %s"
+        " AND recommendation_type = %s AND status = 'GENERATED' LIMIT 1",
         (brand_id, cycle_id, RECOMMENDATION_TYPE),
     ).fetchone()
     if pending:
@@ -549,8 +549,8 @@ def cycle_id_for_recommendation(conn, brand_id: str, recommendation_id: str) -> 
     「畫面現在該顯示哪期」用的推斷，會隨別期匯入資料而改變。使用者按的是畫面上
     看得到的這張卡，卡本身的 `campaign_cycle_id` 才是唯一該問的對象，直接查。"""
     row = conn.execute(
-        "SELECT campaign_cycle_id FROM recommendation WHERE id = ? AND brand_id = ?"
-        " AND recommendation_type = ?",
+        "SELECT campaign_cycle_id FROM recommendation WHERE id = %s AND brand_id = %s"
+        " AND recommendation_type = %s",
         (recommendation_id, brand_id, RECOMMENDATION_TYPE),
     ).fetchone()
     return row["campaign_cycle_id"] if row else None
@@ -560,8 +560,8 @@ def approve_card(conn, brand_id: str, cycle_id: str, recommendation_id: str, *,
                  actor: str, confirmed_amount=None) -> dict:
     """核可單張卡；花錢卡沒有正數確認金額就拒絕。"""
     row = conn.execute(
-        "SELECT * FROM recommendation WHERE id = ? AND brand_id = ? AND campaign_cycle_id = ?"
-        " AND recommendation_type = ?",
+        "SELECT * FROM recommendation WHERE id = %s AND brand_id = %s AND campaign_cycle_id = %s"
+        " AND recommendation_type = %s",
         (recommendation_id, brand_id, cycle_id, RECOMMENDATION_TYPE),
     ).fetchone()
     if row is None:
@@ -583,8 +583,8 @@ def approve_card(conn, brand_id: str, cycle_id: str, recommendation_id: str, *,
     ts = now_iso()
     content = {key: value for key, value in card.items() if key not in ("id", "status")}
     conn.execute(
-        "UPDATE recommendation SET content_json = ?, status = 'ACCEPTED', updated_at = ?"
-        " WHERE id = ?",
+        "UPDATE recommendation SET content_json = %s, status = 'ACCEPTED', updated_at = %s"
+        " WHERE id = %s",
         (json.dumps(content, ensure_ascii=False), ts, recommendation_id),
     )
     write_audit(
@@ -601,8 +601,8 @@ def approve_card(conn, brand_id: str, cycle_id: str, recommendation_id: str, *,
 def skip(conn, brand_id: str, cycle_id: str, recommendation_id: str, *, actor: str) -> dict:
     """略過單張卡；重送同一張維持略過。"""
     row = conn.execute(
-        "SELECT * FROM recommendation WHERE id = ? AND brand_id = ? AND campaign_cycle_id = ?"
-        " AND recommendation_type = ?",
+        "SELECT * FROM recommendation WHERE id = %s AND brand_id = %s AND campaign_cycle_id = %s"
+        " AND recommendation_type = %s",
         (recommendation_id, brand_id, cycle_id, RECOMMENDATION_TYPE),
     ).fetchone()
     if row is None:
@@ -612,7 +612,7 @@ def skip(conn, brand_id: str, cycle_id: str, recommendation_id: str, *, actor: s
     if row["status"] != "GENERATED":
         raise ValueError("這張週提案卡已經核可")
     conn.execute(
-        "UPDATE recommendation SET status = 'REJECTED', updated_at = ? WHERE id = ?",
+        "UPDATE recommendation SET status = 'REJECTED', updated_at = %s WHERE id = %s",
         (now_iso(), recommendation_id),
     )
     write_audit(
@@ -632,8 +632,8 @@ def approve(conn, brand_id: str, cycle_id: str, *, actor: str) -> dict:
     if ads_repo.get_cycle(conn, brand_id, cycle_id) is None:
         raise ValueError("找不到廣告檔期")
     rows = conn.execute(
-        "SELECT * FROM recommendation WHERE brand_id = ? AND campaign_cycle_id = ?"
-        " AND recommendation_type = ? AND status = 'GENERATED' ORDER BY created_at, id",
+        "SELECT * FROM recommendation WHERE brand_id = %s AND campaign_cycle_id = %s"
+        " AND recommendation_type = %s AND status = 'GENERATED' ORDER BY created_at, id",
         (brand_id, cycle_id, RECOMMENDATION_TYPE),
     ).fetchall()
     ts = now_iso()
@@ -645,7 +645,7 @@ def approve(conn, brand_id: str, cycle_id: str, *, actor: str) -> dict:
             pending_confirmation.append(present(card, brand_id))
             continue
         conn.execute(
-            "UPDATE recommendation SET status = 'ACCEPTED', updated_at = ? WHERE id = ?",
+            "UPDATE recommendation SET status = 'ACCEPTED', updated_at = %s WHERE id = %s",
             (ts, row["id"]),
         )
         write_audit(
@@ -666,8 +666,8 @@ def approve(conn, brand_id: str, cycle_id: str, *, actor: str) -> dict:
 def complete(conn, brand_id: str, cycle_id: str, recommendation_id: str, *, actor: str) -> dict:
     """把一張已核可卡標成完成；重送已完成的卡不重寫、不重複稽核。"""
     row = conn.execute(
-        "SELECT * FROM recommendation WHERE id = ? AND brand_id = ? AND campaign_cycle_id = ?"
-        " AND recommendation_type = ?",
+        "SELECT * FROM recommendation WHERE id = %s AND brand_id = %s AND campaign_cycle_id = %s"
+        " AND recommendation_type = %s",
         (recommendation_id, brand_id, cycle_id, RECOMMENDATION_TYPE),
     ).fetchone()
     if row is None:
@@ -679,7 +679,7 @@ def complete(conn, brand_id: str, cycle_id: str, recommendation_id: str, *, acto
 
     ts = now_iso()
     conn.execute(
-        "UPDATE recommendation SET status = 'APPLIED', updated_at = ? WHERE id = ?",
+        "UPDATE recommendation SET status = 'APPLIED', updated_at = %s WHERE id = %s",
         (ts, recommendation_id),
     )
     write_audit(
@@ -688,7 +688,7 @@ def complete(conn, brand_id: str, cycle_id: str, recommendation_id: str, *, acto
         before={"status": "ACCEPTED"}, after={"status": "APPLIED"},
     )
     conn.commit()
-    updated = conn.execute("SELECT * FROM recommendation WHERE id = ?", (recommendation_id,)).fetchone()
+    updated = conn.execute("SELECT * FROM recommendation WHERE id = %s", (recommendation_id,)).fetchone()
     return _card_from_row(updated)
 
 

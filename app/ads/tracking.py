@@ -15,7 +15,7 @@ from app.brand_intelligence import repository as bi_repo
 from app.core import interrupts as core_interrupts
 from app.core import net
 from app.core import settings as coresettings
-from app.core.db import new_id, now_iso
+from app.core.db import new_id, now_iso, DEV_ORG_ID
 
 # 第 7 刀（A1 三層地界新規則：app/ads 不得 import app.orders，見
 # test_architecture_boundaries.py）：orders_channel 不在這裡 import，改由組裝根
@@ -41,7 +41,7 @@ def probe_url(url: str) -> bool:
 
 def _discovered(conn, ad_account_id: str, meta_campaign_id: str) -> Optional[dict]:
     row = conn.execute(
-        "SELECT * FROM discovered_campaign WHERE ad_account_id = ? AND meta_campaign_id = ?",
+        "SELECT * FROM discovered_campaign WHERE ad_account_id = %s AND meta_campaign_id = %s",
         (ad_account_id, meta_campaign_id),
     ).fetchone()
     return dict(row) if row else None
@@ -50,7 +50,7 @@ def _discovered(conn, ad_account_id: str, meta_campaign_id: str) -> Optional[dic
 def _campaign_owner(conn, ad_account_id: str, meta_campaign_id: str) -> tuple:
     row = conn.execute(
         "SELECT brand_id, campaign_cycle_id FROM external_ad_mapping"
-        " WHERE meta_campaign_id = ? ORDER BY (claim_status = 'confirmed') DESC, created_at DESC"
+        " WHERE meta_campaign_id = %s ORDER BY (claim_status = 'confirmed') DESC, created_at DESC"
         " LIMIT 1", (meta_campaign_id,),
     ).fetchone()
     if row:
@@ -84,7 +84,7 @@ def _short_code(campaign_name: str) -> Optional[str]:
 
 def _remove_suggestion(conn, meta_campaign_id: str) -> None:
     conn.execute(
-        "DELETE FROM external_ad_mapping WHERE meta_campaign_id = ? AND claim_status = 'suggested'",
+        "DELETE FROM external_ad_mapping WHERE meta_campaign_id = %s AND claim_status = 'suggested'",
         (meta_campaign_id,),
     )
 
@@ -102,7 +102,7 @@ def suggest_cycle_mapping(conn, ad_account_id: str, meta_account_id: str,
         return None
 
     matches = [dict(row) for row in conn.execute(
-        "SELECT * FROM campaign_cycle WHERE brand_id = ? AND substr(id, -4) = ?",
+        "SELECT * FROM campaign_cycle WHERE brand_id = %s AND substr(id, -4) = %s",
         (brand_id, code),
     )]
     if len(matches) != 1:
@@ -118,8 +118,8 @@ def suggest_cycle_mapping(conn, ad_account_id: str, meta_account_id: str,
 
     cycle_id = matches[0]["id"]
     other_cycle = conn.execute(
-        "SELECT campaign_cycle_id FROM external_ad_mapping WHERE meta_campaign_id = ?"
-        " AND claim_status = 'confirmed' AND campaign_cycle_id <> ? LIMIT 1",
+        "SELECT campaign_cycle_id FROM external_ad_mapping WHERE meta_campaign_id = %s"
+        " AND claim_status = 'confirmed' AND campaign_cycle_id <> %s LIMIT 1",
         (meta_campaign_id, cycle_id),
     ).fetchone()
     if other_cycle:
@@ -132,8 +132,8 @@ def suggest_cycle_mapping(conn, ad_account_id: str, meta_account_id: str,
         )
         return "conflict"
     confirmed = conn.execute(
-        "SELECT 1 FROM external_ad_mapping WHERE brand_id = ? AND campaign_cycle_id = ?"
-        " AND meta_campaign_id = ? AND claim_status = 'confirmed' LIMIT 1",
+        "SELECT 1 FROM external_ad_mapping WHERE brand_id = %s AND campaign_cycle_id = %s"
+        " AND meta_campaign_id = %s AND claim_status = 'confirmed' LIMIT 1",
         (brand_id, cycle_id, meta_campaign_id),
     ).fetchone()
     if confirmed:
@@ -141,26 +141,26 @@ def suggest_cycle_mapping(conn, ad_account_id: str, meta_account_id: str,
         return "confirmed"
 
     package = conn.execute(
-        "SELECT id FROM publishing_package WHERE brand_id = ? AND campaign_cycle_id = ?"
+        "SELECT id FROM publishing_package WHERE brand_id = %s AND campaign_cycle_id = %s"
         " ORDER BY created_at, id LIMIT 1", (brand_id, cycle_id),
     ).fetchone()
     existing = conn.execute(
-        "SELECT id FROM external_ad_mapping WHERE meta_campaign_id = ?"
+        "SELECT id FROM external_ad_mapping WHERE meta_campaign_id = %s"
         " AND claim_status = 'suggested' LIMIT 1", (meta_campaign_id,),
     ).fetchone()
     if existing:
         conn.execute(
-            "UPDATE external_ad_mapping SET brand_id = ?, publishing_package_id = ?,"
-            " campaign_cycle_id = ?, ad_account_id = ?, meta_account_id = ? WHERE id = ?",
+            "UPDATE external_ad_mapping SET brand_id = %s, publishing_package_id = %s,"
+            " campaign_cycle_id = %s, ad_account_id = %s, meta_account_id = %s WHERE id = %s",
             (brand_id, package["id"] if package else None, cycle_id, ad_account_id,
              meta_account_id, existing["id"]),
         )
     else:
         conn.execute(
-            "INSERT INTO external_ad_mapping (id, brand_id, publishing_package_id,"
+            "INSERT INTO external_ad_mapping (id, org_id, brand_id, publishing_package_id,"
             " campaign_cycle_id, ad_account_id, platform, meta_account_id, meta_campaign_id,"
-            " claim_status, created_at) VALUES (?, ?, ?, ?, ?, 'meta', ?, ?, 'suggested', ?)",
-            (new_id("xam"), brand_id, package["id"] if package else None, cycle_id,
+            " claim_status, created_at) VALUES (%s, %s, %s, %s, %s, %s, 'meta', %s, %s, 'suggested', %s)",
+            (new_id("xam"), DEV_ORG_ID, brand_id, package["id"] if package else None, cycle_id,
              ad_account_id, meta_account_id, meta_campaign_id, now_iso()),
         )
     return "suggested"
@@ -182,7 +182,7 @@ def alert_unmapped_spend(conn, ad_account_id: str, meta_campaign_id: str,
 
 def _mapping_rows(conn, brand_id: str, cycle_id: str) -> tuple:
     rows = [dict(row) for row in conn.execute(
-        "SELECT * FROM external_ad_mapping WHERE brand_id = ? AND campaign_cycle_id = ?"
+        "SELECT * FROM external_ad_mapping WHERE brand_id = %s AND campaign_cycle_id = %s"
         " ORDER BY created_at DESC", (brand_id, cycle_id),
     )]
     return ([r for r in rows if r["claim_status"] == "confirmed"],
@@ -193,7 +193,7 @@ def _actual_campaigns(conn, mappings: list) -> list:
     ids = {m["meta_campaign_id"] for m in mappings if m.get("meta_campaign_id")}
     if not ids:
         return []
-    placeholders = ",".join("?" for _ in ids)
+    placeholders = ",".join("%s" for _ in ids)
     return [dict(row) for row in conn.execute(
         f"SELECT * FROM discovered_campaign WHERE meta_campaign_id IN ({placeholders})", tuple(ids),
     )]
@@ -277,7 +277,7 @@ def tracking_chain(conn, brand_id: str, cycle_id: str, *, today: Optional[str] =
 
 def confirm_suggested_mapping(conn, brand_id: str, cycle_id: str, actor: str) -> dict:
     suggestion = conn.execute(
-        "SELECT * FROM external_ad_mapping WHERE brand_id = ? AND campaign_cycle_id = ?"
+        "SELECT * FROM external_ad_mapping WHERE brand_id = %s AND campaign_cycle_id = %s"
         " AND claim_status = 'suggested' ORDER BY created_at DESC LIMIT 1",
         (brand_id, cycle_id),
     ).fetchone()
@@ -411,7 +411,7 @@ def _pixel_api_confirmed(conn, *, client=None) -> Optional[bool]:
 
 def _tracking_check_row(conn, brand_id: str, channel_key: str) -> Optional[dict]:
     row = conn.execute(
-        "SELECT * FROM channel_tracking_check WHERE brand_id = ? AND channel_key = ?",
+        "SELECT * FROM channel_tracking_check WHERE brand_id = %s AND channel_key = %s",
         (brand_id, channel_key),
     ).fetchone()
     return dict(row) if row else None
@@ -427,9 +427,9 @@ def set_channel_hidden(conn, brand_id: str, channel_key: str, hidden: bool) -> N
     if channel_key not in TRACKING_CHANNEL_KEYS:
         raise ValueError(f"不認得的通路：{channel_key}")
     conn.execute(
-        "INSERT INTO channel_tracking_check (brand_id, channel_key, hidden) VALUES (?, ?, ?)"
+        "INSERT INTO channel_tracking_check (org_id, brand_id, channel_key, hidden) VALUES (%s, %s, %s, %s)"
         " ON CONFLICT(brand_id, channel_key) DO UPDATE SET hidden = excluded.hidden",
-        (brand_id, channel_key, int(bool(hidden))),
+        (DEV_ORG_ID, brand_id, channel_key, int(bool(hidden))),
     )
     conn.commit()
 
@@ -439,12 +439,12 @@ def _save_website_check(conn, brand_id: str, *, ga4_found: bool, pixel_found: bo
     「這次檢查有沒有被任一訊號確認」（掃描、或 GA4 數據、或 Pixel API），不再只是「原始碼
     掃描有沒有掃到」——欄位名不動，語意在呼叫端（check_website_now）先併好才存進來。"""
     conn.execute(
-        "INSERT INTO channel_tracking_check (brand_id, channel_key, ga4_found, pixel_found, checked_at)"
-        " VALUES (?, 'website', ?, ?, ?)"
+        "INSERT INTO channel_tracking_check (org_id, brand_id, channel_key, ga4_found, pixel_found, checked_at)"
+        " VALUES (%s, %s, 'website', %s, %s, %s)"
         " ON CONFLICT(brand_id, channel_key) DO UPDATE SET"
         " ga4_found = excluded.ga4_found, pixel_found = excluded.pixel_found,"
         " checked_at = excluded.checked_at",
-        (brand_id, int(ga4_found), int(pixel_found), checked_at),
+        (DEV_ORG_ID, brand_id, int(ga4_found), int(pixel_found), checked_at),
     )
     conn.commit()
 
@@ -455,11 +455,11 @@ def _save_website_fetch_failure(conn, brand_id: str, *, checked_at: str) -> None
     但三訊號都沒確認到」（黃燈）——不新增資料庫欄位，沿用既有可為 NULL 的兩欄
     （migration 0018_channel_tracking_check.sql 本來就沒有 NOT NULL）。"""
     conn.execute(
-        "INSERT INTO channel_tracking_check (brand_id, channel_key, ga4_found, pixel_found, checked_at)"
-        " VALUES (?, 'website', NULL, NULL, ?)"
+        "INSERT INTO channel_tracking_check (org_id, brand_id, channel_key, ga4_found, pixel_found, checked_at)"
+        " VALUES (%s, %s, 'website', NULL, NULL, %s)"
         " ON CONFLICT(brand_id, channel_key) DO UPDATE SET"
         " ga4_found = NULL, pixel_found = NULL, checked_at = excluded.checked_at",
-        (brand_id, checked_at),
+        (DEV_ORG_ID, brand_id, checked_at),
     )
     conn.commit()
 

@@ -37,7 +37,7 @@ _parse_json_reply = gateway.parse_json_reply  # 搬到 gateway.py 公開，這�
 def _run(conn, draft: dict, *, task_type: str, purpose: str, system: str, user_text: str,
          options: gateway.TaskOptions = None, content_blocks: list = None) -> dict:
     brand_id = draft["brand_id"]
-    row = conn.execute("SELECT knowledge_version FROM brand WHERE id = ?", (brand_id,)).fetchone()
+    row = conn.execute("SELECT knowledge_version FROM brand WHERE id = %s", (brand_id,)).fetchone()
     context = gateway.TaskContext(
         context_scope={"brand_id": brand_id, "intake_draft_id": draft["id"]},
         knowledge_item_ids=[],  # 建檔階段：品牌還沒有已確認的知識可組

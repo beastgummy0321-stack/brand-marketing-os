@@ -61,9 +61,9 @@ def _record_one(conn, brand_id: str, cycle_id: str, row, *, component_type: str,
     if component_id is None:
         return  # 對不回任何元件（bootstrap 找不到或不唯一）：這一筆這次同步沒地方落地
     conn.execute(
-        "UPDATE creative_theme_component SET meta_asset_id = ?, performance_impressions = ?,"
-        " performance_clicks = ?, performance_conversions = ?, performance_synced_at = ?"
-        " WHERE brand_id = ? AND id = ?",
+        "UPDATE creative_theme_component SET meta_asset_id = %s, performance_impressions = %s,"
+        " performance_clicks = %s, performance_conversions = %s, performance_synced_at = %s"
+        " WHERE brand_id = %s AND id = %s",
         (asset_id, row.impressions, row.clicks, row.conversions, now_iso(), brand_id,
          component_id),
     )
@@ -72,8 +72,8 @@ def _record_one(conn, brand_id: str, cycle_id: str, row, *, component_type: str,
 def _resolve_component(conn, brand_id: str, cycle_id: str, asset_id: str, component_type: str,
                        text: str, *, actor: str) -> Optional[str]:
     prior = conn.execute(
-        "SELECT id FROM creative_theme_component WHERE brand_id = ? AND meta_asset_id = ?"
-        " AND component_type = ?",
+        "SELECT id FROM creative_theme_component WHERE brand_id = %s AND meta_asset_id = %s"
+        " AND component_type = %s",
         (brand_id, asset_id, component_type),
     ).fetchone()
     if prior:
@@ -84,8 +84,8 @@ def _resolve_component(conn, brand_id: str, cycle_id: str, asset_id: str, compon
     # 第一次看到這個 Meta 素材 id：靠文字完全吻合，在這個檔期＋型別範圍內找唯一對應的
     # 元件。使用者剛把系統產出的文字貼進 Meta 後台時，文字理應一字不差。
     matches = conn.execute(
-        "SELECT id FROM creative_theme_component WHERE brand_id = ? AND campaign_cycle_id = ?"
-        " AND component_type = ? AND content = ?",
+        "SELECT id FROM creative_theme_component WHERE brand_id = %s AND campaign_cycle_id = %s"
+        " AND component_type = %s AND content = %s",
         (brand_id, cycle_id, component_type, text),
     ).fetchall()
     return matches[0]["id"] if len(matches) == 1 else None
@@ -94,7 +94,7 @@ def _resolve_component(conn, brand_id: str, cycle_id: str, asset_id: str, compon
 def _reconcile_if_changed(conn, brand_id: str, component_id: str, text: str, *,
                           actor: str) -> None:
     row = conn.execute(
-        "SELECT content FROM creative_theme_component WHERE brand_id = ? AND id = ?",
+        "SELECT content FROM creative_theme_component WHERE brand_id = %s AND id = %s",
         (brand_id, component_id),
     ).fetchone()
     if row is None or row["content"] == text:
@@ -103,8 +103,8 @@ def _reconcile_if_changed(conn, brand_id: str, component_id: str, text: str, *,
     new_fingerprint = theme_engine.refresh_component_fingerprint(conn, brand_id, text)
     before = {"content": row["content"]}
     conn.execute(
-        "UPDATE creative_theme_component SET content = ?, fingerprint_json = ?"
-        " WHERE brand_id = ? AND id = ?",
+        "UPDATE creative_theme_component SET content = %s, fingerprint_json = %s"
+        " WHERE brand_id = %s AND id = %s",
         (text, json.dumps(new_fingerprint, ensure_ascii=False) if new_fingerprint else None,
          brand_id, component_id),
     )
@@ -130,7 +130,7 @@ def rank_theme_components(conn, brand_id: str, theme_id: str) -> list:
         " performance_impressions AS impressions, performance_clicks AS clicks,"
         " performance_conversions AS conversions"
         " FROM creative_theme_component"
-        " WHERE brand_id = ? AND creative_theme_id = ? AND performance_synced_at IS NOT NULL",
+        " WHERE brand_id = %s AND creative_theme_id = %s AND performance_synced_at IS NOT NULL",
         (brand_id, theme_id),
     )]
 

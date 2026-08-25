@@ -27,9 +27,9 @@
    顯示「有 N 條規則因超過上限未生效」清單。
 """
 
-import sqlite3
 from typing import Optional
 
+from app.core.db import Conn
 from app.brand_intelligence import personas
 from app.brand_intelligence import repository as repo
 from app.brand_intelligence.repository_learning_text import collapse_learnings
@@ -83,7 +83,7 @@ def _bound_hypotheses(all_hypotheses: list, unvalidated: list) -> tuple:
     return included, excluded
 
 
-def _hypotheses_for_scope(conn: sqlite3.Connection, brand_id: str,
+def _hypotheses_for_scope(conn: Conn, brand_id: str,
                           product_id: Optional[str]) -> tuple:
     """依 compile() 既有的品牌層／產品層範圍規則篩出未驗證猜想池，回傳
     (全部猜想, 範圍內未驗證猜想)——全部猜想用來算 `_hypothesis_cycle_order()` 的期別順序，
@@ -107,7 +107,7 @@ def _hypotheses_for_scope(conn: sqlite3.Connection, brand_id: str,
     return all_hypotheses, unvalidated
 
 
-def list_excluded_hypotheses(conn: sqlite3.Connection, brand_id: str,
+def list_excluded_hypotheses(conn: Conn, brand_id: str,
                              product_id: Optional[str] = None) -> list:
     """因超過未驗證猜想上限而不進 prompt 的清單（比照 `list_overflow_rules()`，決策 0012
     第三節：超額不悄悄丟棄）。"""
@@ -127,7 +127,7 @@ def _persona_text(value) -> str:
     return text[:PERSONA_FIELD_CHAR_CAP]
 
 
-def _select_rules_for_prompt(conn: sqlite3.Connection, brand_id: str, rules: list) -> tuple:
+def _select_rules_for_prompt(conn: Conn, brand_id: str, rules: list) -> tuple:
     """規則進 prompt 的上限與排序（決策 0012 第二節）：hard 規則全部保留；soft 規則依
     `confirmed_at`（越新越優先）排序，兩者合計超過上限（rule_cards「rule_prompt_cap.
     max_active_rules」，該品牌覆寫值或系統預設 20）時，排比較後面的 soft 規則不進 prompt。
@@ -146,7 +146,7 @@ def _select_rules_for_prompt(conn: sqlite3.Connection, brand_id: str, rules: lis
     return hard + soft_sorted[:remaining], soft_sorted[remaining:]
 
 
-def list_overflow_rules(conn: sqlite3.Connection, brand_id: str) -> list:
+def list_overflow_rules(conn: Conn, brand_id: str) -> list:
     """因超過生成提示詞上限而未生效的規則清單（累積智慧頁用，決策 0012 第三節：超額不悄悄
     丟棄）。跟 compile() 用同一顆 `_select_rules_for_prompt` 排序＋套上限，且涵蓋 compile()
     實際會組出的每一種組合：品牌層任務（只有品牌整體規則）＋每個生效中產品的產品層任務
@@ -226,7 +226,7 @@ def _learning_source_note(entry: dict, *, current_track: str, learnings_by_id: d
     return f"（{'，'.join(parts)}）" if parts else ""
 
 
-def compile(conn: sqlite3.Connection, brand_id: str, product_id: Optional[str] = None, *,
+def compile(conn: Conn, brand_id: str, product_id: Optional[str] = None, *,
             track: str = DEFAULT_TRACK, include_cross_track: bool = False,
             include_personas: bool = True):
     """組出最小必要上下文。

@@ -30,7 +30,7 @@ from app.ads import performance as ads_performance
 from app.ads import repository as ads_repo
 from app.core import interrupts as core_interrupts
 from app.core.audit import write_audit
-from app.core.db import new_id, now_iso
+from app.core.db import new_id, now_iso, DEV_ORG_ID
 
 # 第 7 刀（A1 三層地界新規則：app/ads 不得 import app.orders，見
 # test_architecture_boundaries.py）：orders_repo 不在這裡 import，改由組裝根
@@ -64,7 +64,7 @@ def _code_text(cycle: dict, source_type: str) -> str:
 
 def list_codes(conn, brand_id: str, cycle_id: str) -> list:
     return [dict(r) for r in conn.execute(
-        "SELECT * FROM cycle_voucher_code WHERE brand_id = ? AND campaign_cycle_id = ?"
+        "SELECT * FROM cycle_voucher_code WHERE brand_id = %s AND campaign_cycle_id = %s"
         " ORDER BY source_type", (brand_id, cycle_id),
     )]
 
@@ -97,10 +97,10 @@ def generate_codes(conn, brand_id: str, cycle_id: str, *, discount_type: str,
         if source_type in existing_sources:
             continue
         conn.execute(
-            "INSERT INTO cycle_voucher_code (id, brand_id, campaign_cycle_id, source_type, code,"
+            "INSERT INTO cycle_voucher_code (id, org_id, brand_id, campaign_cycle_id, source_type, code,"
             " discount_type, discount_value, usage_limit, valid_from, valid_to, created_at,"
-            " updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (new_id("vch"), brand_id, cycle_id, source_type, _code_text(cycle, source_type),
+            " updated_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            (new_id("vch"), DEV_ORG_ID, brand_id, cycle_id, source_type, _code_text(cycle, source_type),
              discount_type, discount_value, usage_limit, valid_from, valid_to, ts, ts),
         )
         created.append(source_type)
@@ -168,9 +168,9 @@ def verify(conn, brand_id: str, cycle_id: str, *, actual: dict, actor: str) -> d
     ts = now_iso()
     verification_id = new_id("vcv")
     conn.execute(
-        "INSERT INTO cycle_code_verification (id, brand_id, campaign_cycle_id, passed,"
-        " mismatches_json, checked_by, checked_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        (verification_id, brand_id, cycle_id, 1 if passed else 0,
+        "INSERT INTO cycle_code_verification (id, org_id, brand_id, campaign_cycle_id, passed,"
+        " mismatches_json, checked_by, checked_at, created_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
+        (verification_id, DEV_ORG_ID, brand_id, cycle_id, 1 if passed else 0,
          json.dumps(mismatches, ensure_ascii=False) if mismatches else None, actor, ts, ts),
     )
     write_audit(conn, brand_id=brand_id, entity_type="campaign_cycle", entity_id=cycle_id,
@@ -182,7 +182,7 @@ def verify(conn, brand_id: str, cycle_id: str, *, actual: dict, actor: str) -> d
 
 def latest_verification(conn, brand_id: str, cycle_id: str) -> Optional[dict]:
     row = conn.execute(
-        "SELECT * FROM cycle_code_verification WHERE brand_id = ? AND campaign_cycle_id = ?"
+        "SELECT * FROM cycle_code_verification WHERE brand_id = %s AND campaign_cycle_id = %s"
         " ORDER BY checked_at DESC LIMIT 1", (brand_id, cycle_id),
     ).fetchone()
     if row is None:

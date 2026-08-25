@@ -26,12 +26,12 @@ def delete_snapshots(conn, brand_id: str, cycle_id: str, *, source: Optional[str
     batch_id：票 S1-01 整批撤銷用，撤一批匯入而不動同期其他批。
     """
     params = [brand_id, cycle_id]
-    where = "brand_id = ? AND campaign_cycle_id = ?"
+    where = "brand_id = %s AND campaign_cycle_id = %s"
     if source:
-        where += " AND source = ?"
+        where += " AND source = %s"
         params.append(source)
     if batch_id:
-        where += " AND import_batch_id = ?"
+        where += " AND import_batch_id = %s"
         params.append(batch_id)
 
     conn.execute(
@@ -45,7 +45,7 @@ def delete_snapshots(conn, brand_id: str, cycle_id: str, *, source: Optional[str
 
 def list_snapshots(conn, brand_id: str, cycle_id: str) -> list:
     return [dict(r) for r in conn.execute(
-        "SELECT * FROM performance_snapshot WHERE brand_id = ? AND campaign_cycle_id = ?"
+        "SELECT * FROM performance_snapshot WHERE brand_id = %s AND campaign_cycle_id = %s"
         " ORDER BY as_of_date DESC, created_at DESC", (brand_id, cycle_id),
     )]
 
@@ -58,7 +58,7 @@ def can_settle(conn, brand_id: str, cycle_id: str, cycle: dict) -> tuple:
     if cycle["status"] == "CLOSED":
         return False, "這期已經收帳了。", True
     row = conn.execute(
-        "SELECT 1 FROM performance_snapshot WHERE brand_id = ? AND campaign_cycle_id = ?"
+        "SELECT 1 FROM performance_snapshot WHERE brand_id = %s AND campaign_cycle_id = %s"
         " AND quarantined = 0 AND source != 'simulated' LIMIT 1", (brand_id, cycle_id),
     ).fetchone()
     if row is None:
@@ -75,9 +75,9 @@ def list_batches(conn, brand_id: str, cycle_id: str) -> list:
     rows = conn.execute(
         "SELECT import_batch_id AS batch_id, source, MAX(created_at) AS imported_at,"
         " COUNT(*) AS rows, SUM(quarantined) AS quarantined, SUM(spend) AS spend"
-        " FROM performance_snapshot WHERE brand_id = ? AND campaign_cycle_id = ?"
+        " FROM performance_snapshot WHERE brand_id = %s AND campaign_cycle_id = %s"
         " AND source != 'simulated' AND import_batch_id IS NOT NULL"
-        " GROUP BY import_batch_id, source ORDER BY imported_at DESC LIMIT ?",
+        " GROUP BY import_batch_id, source ORDER BY imported_at DESC LIMIT %s",
         (brand_id, cycle_id, BATCH_LIST_LIMIT),
     ).fetchall()
     return [dict(r) for r in rows]

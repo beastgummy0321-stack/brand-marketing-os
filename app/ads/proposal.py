@@ -8,7 +8,6 @@
 """
 
 import json
-import sqlite3
 from typing import Optional
 
 from app.ads import onboarding
@@ -20,7 +19,7 @@ from app.ads import theme_repository
 from app.ads import tracking
 from app.core import orchestrator as core_orchestrator
 from app.core import rule_cards
-from app.core.db import new_id, now_iso
+from app.core.db import new_id, now_iso, Conn, DEV_ORG_ID
 
 
 # 開檔後的五類預設分工。現階段只有 Meta 真正投放，其他項目誠實保留為待辦或健檢。
@@ -48,7 +47,7 @@ _CHANNEL_DEFAULTS = {
 }
 
 
-def seed_channel_plans(conn: sqlite3.Connection, brand_id: str, cycle_id: str) -> list:
+def seed_channel_plans(conn: Conn, brand_id: str, cycle_id: str) -> list:
     """在既有開檔路徑補齊五類管道，沿用上一期的用／不用選擇。"""
     if channel_repo.list_channel_plans(conn, brand_id, cycle_id):
         return channel_repo.list_channel_plans(conn, brand_id, cycle_id)
@@ -63,7 +62,7 @@ def seed_channel_plans(conn: sqlite3.Connection, brand_id: str, cycle_id: str) -
     return channel_repo.list_channel_plans(conn, brand_id, cycle_id)
 
 
-def proposal(conn: sqlite3.Connection, brand_id: str, cycle_id: str) -> dict:
+def proposal(conn: Conn, brand_id: str, cycle_id: str) -> dict:
     """同步組裝六區塊；任何既有資料來源失敗都收斂成人話 failed 狀態。"""
     try:
         plan = ads_plan.get_latest_plan(conn, brand_id, cycle_id)
@@ -83,7 +82,7 @@ def proposal(conn: sqlite3.Connection, brand_id: str, cycle_id: str) -> dict:
             )
         creatives = []
         cells = conn.execute(
-            "SELECT id FROM experiment_cell WHERE brand_id = ? AND campaign_cycle_id = ? ORDER BY id",
+            "SELECT id FROM experiment_cell WHERE brand_id = %s AND campaign_cycle_id = %s ORDER BY id",
             (brand_id, cycle_id),
         ).fetchall()
         for cell in cells:
@@ -126,7 +125,7 @@ def proposal(conn: sqlite3.Connection, brand_id: str, cycle_id: str) -> dict:
         }
 
 
-def approve(conn: sqlite3.Connection, brand_id: str, cycle_id: str, actor: str) -> list:
+def approve(conn: Conn, brand_id: str, cycle_id: str, actor: str) -> list:
     """核可既有計畫，並把核可當下的提案快照、天花板與任務卡落成同一交易。"""
     plan = ads_plan.get_latest_plan(conn, brand_id, cycle_id)
     if plan is None:
@@ -150,30 +149,31 @@ def approve(conn: sqlite3.Connection, brand_id: str, cycle_id: str, actor: str) 
     conn.execute("BEGIN")
     try:
         conn.execute(
-            "UPDATE campaign_plan SET plan_json = ? WHERE id = ?",
+            "UPDATE campaign_plan SET plan_json = %s WHERE id = %s",
             (json.dumps(payload, ensure_ascii=False), plan["id"]),
         )
         # budget 是開檔已確認的既有天花板欄位；核可時和任務卡一起再落一次。
         conn.execute(
-            "UPDATE campaign_cycle SET budget = ?, updated_at = ? WHERE brand_id = ? AND id = ?",
+            "UPDATE campaign_cycle SET budget = %s, updated_at = %s WHERE brand_id = %s AND id = %s",
             (cycle["budget"], ts, brand_id, cycle_id),
         )
         conn.execute(
-            "DELETE FROM task_card WHERE brand_id = ? AND cycle_id = ? AND channel != 'social'",
+            "DELETE FROM task_card WHERE brand_id = %s AND cycle_id = %s AND channel != 'social'",
             (brand_id, cycle_id),
         )
         for channel in plans:
             if not channel["enabled"] or channel["channel"] == "social":
                 continue
             card = {
-                "id": new_id("tsk"), "brand_id": brand_id, "cycle_id": cycle_id,
+                "id": new_id("tsk"), "org_id": DEV_ORG_ID, "brand_id": brand_id, "cycle_id": cycle_id,
                 # ponytail: draft_hint 保留給 quick-generate 接手；此處只建卡，不預先填寫草稿。
                 "channel": channel["channel"], "title": channel["job"], "draft_hint": None,
                 "done": 0, "created_at": ts, "done_at": None,
             }
             conn.execute(
-                "INSERT INTO task_card (id, brand_id, cycle_id, channel, title, draft_hint, done, created_at, done_at)"
-                " VALUES (:id, :brand_id, :cycle_id, :channel, :title, :draft_hint, :done, :created_at, :done_at)",
+                "INSERT INTO task_card (id, org_id, brand_id, cycle_id, channel, title, draft_hint, done, created_at, done_at)"
+                " VALUES (%(id)s, %(org_id)s, %(brand_id)s, %(cycle_id)s, %(channel)s, %(title)s, %(draft_hint)s,"
+                " %(done)s, %(created_at)s, %(done_at)s)",
                 card,
             )
             cards.append(card)
@@ -186,7 +186,7 @@ def approve(conn: sqlite3.Connection, brand_id: str, cycle_id: str, actor: str) 
     return cards
 
 
-def return_to_opening(conn: sqlite3.Connection, brand_id: str, cycle_id: str, actor: str) -> None:
+def return_to_opening(conn: Conn, brand_id: str, cycle_id: str, actor: str) -> None:
     """退回開檔調整，不動既有計畫與開檔原值。"""
     ads_repo.update_cycle_status(conn, brand_id, cycle_id, status="PLANNING", actor=actor)
 

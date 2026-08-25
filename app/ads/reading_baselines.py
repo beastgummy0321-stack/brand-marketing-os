@@ -33,7 +33,7 @@ def _median_derived_metrics(conn, brand_id: str, *, extra_where: str = "",
     """
     sql = ("SELECT dm.metric, dm.value FROM derived_metric dm"
            " LEFT JOIN campaign_cycle cc ON cc.id = dm.campaign_cycle_id"
-           " WHERE dm.brand_id = ? AND (cc.id IS NULL OR cc.phase != 'simulation')")
+           " WHERE dm.brand_id = %s AND (cc.id IS NULL OR cc.phase != 'simulation')")
     params = [brand_id]
     if extra_where:
         sql += " " + extra_where
@@ -56,7 +56,7 @@ def brand_baseline(conn, brand_id: str, exclude_cycle_id: Optional[str] = None) 
     """
     extra_where, extra_params = "", []
     if exclude_cycle_id:
-        extra_where = "AND (dm.campaign_cycle_id IS NULL OR dm.campaign_cycle_id != ?)"
+        extra_where = "AND (dm.campaign_cycle_id IS NULL OR dm.campaign_cycle_id != %s)"
         extra_params = [exclude_cycle_id]
     return _median_derived_metrics(conn, brand_id, extra_where=extra_where,
                                    extra_params=extra_params)
@@ -79,17 +79,17 @@ def _same_period_last_year_baseline(conn, brand_id: str, cycle: dict,
     window_start = (target - timedelta(days=15)).isoformat()
     window_end = (target + timedelta(days=15)).isoformat()
 
-    sql = ("SELECT id FROM campaign_cycle WHERE brand_id = ? AND start_date >= ?"
-          " AND start_date <= ?")
+    sql = ("SELECT id FROM campaign_cycle WHERE brand_id = %s AND start_date >= %s"
+          " AND start_date <= %s")
     params = [brand_id, window_start, window_end]
     if exclude_cycle_id:
-        sql += " AND id != ?"
+        sql += " AND id != %s"
         params.append(exclude_cycle_id)
     cycle_ids = [row["id"] for row in conn.execute(sql, params).fetchall()]
     if not cycle_ids:
         return {}
 
-    placeholders = ",".join("?" for _ in cycle_ids)
+    placeholders = ",".join("%s" for _ in cycle_ids)
     return _median_derived_metrics(
         conn, brand_id, extra_where=f"AND dm.campaign_cycle_id IN ({placeholders})",
         extra_params=cycle_ids)

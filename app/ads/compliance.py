@@ -41,7 +41,7 @@ from app.ads import fingerprint as fp
 from app.ads import guardrails
 from app.brand_intelligence import repository as bi
 from app.core.audit import write_audit
-from app.core.db import new_id, now_iso
+from app.core.db import new_id, now_iso, DEV_ORG_ID
 
 # 中文與英文常見的引號形式，抽「規則裡被特別標出來的字詞」用。
 _QUOTE_PATTERN = re.compile(r"[「『\"'“”]([^「」『』\"'“”]{1,20})[」』\"'“”]")
@@ -385,7 +385,7 @@ def variant_findings_map(findings: list) -> dict:
 def load_findings(conn, brand_id: str, cycle_id: str) -> dict:
     """從資料庫讀回本期的法務掃描結果，整理成 {variant_id: [...]}。"""
     rows = conn.execute(
-        "SELECT * FROM finding WHERE brand_id = ? AND campaign_cycle_id = ?"
+        "SELECT * FROM finding WHERE brand_id = %s AND campaign_cycle_id = %s"
         " AND finding_type = 'compliance' AND resolved = 0 ORDER BY created_at",
         (brand_id, cycle_id),
     ).fetchall()
@@ -439,8 +439,8 @@ def apply_default_holds(conn, brand_id: str, cycle_id: str, flags: dict, actor: 
         return 0
 
     decided_ids = {row["target_id"] for row in conn.execute(
-        "SELECT DISTINCT target_id FROM adoption_decision WHERE brand_id = ?"
-        " AND campaign_cycle_id = ? AND target_type = 'variant'", (brand_id, cycle_id),
+        "SELECT DISTINCT target_id FROM adoption_decision WHERE brand_id = %s"
+        " AND campaign_cycle_id = %s AND target_type = 'variant'", (brand_id, cycle_id),
     ).fetchall()}
     to_hold = [vid for vid in hold_variant_ids if vid not in decided_ids]
     if not to_hold:
@@ -454,10 +454,10 @@ def apply_default_holds(conn, brand_id: str, cycle_id: str, flags: dict, actor: 
         if variant is None:
             continue
         conn.execute(
-            "INSERT INTO adoption_decision (id, brand_id, campaign_cycle_id, target_type,"
+            "INSERT INTO adoption_decision (id, org_id, brand_id, campaign_cycle_id, target_type,"
             " target_id, decision, reason_code, fingerprint_json, decided_by, decided_at)"
-            " VALUES (?, ?, ?, 'variant', ?, 'rejected', ?, ?, ?, ?)",
-            (new_id("adp"), brand_id, cycle_id, variant_id, fp.AUTO_HOLD_REASON_CODE,
+            " VALUES (%s, %s, %s, %s, 'variant', %s, 'rejected', %s, %s, %s, %s)",
+            (new_id("adp"), DEV_ORG_ID, brand_id, cycle_id, variant_id, fp.AUTO_HOLD_REASON_CODE,
              json.dumps(variant["fingerprint"], ensure_ascii=False), actor, ts),
         )
         write_audit(conn, brand_id=brand_id, entity_type="creative_variant", entity_id=variant_id,

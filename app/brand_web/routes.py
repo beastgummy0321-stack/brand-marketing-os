@@ -30,7 +30,7 @@ from typing import Optional
 from fastapi import APIRouter, Request
 from fastapi.responses import FileResponse
 
-from app import mock_data as md
+from app.core import vocab as md
 from app.brand_intelligence import report as brand_report_mod
 from app.brand_intelligence import repository as repo
 from app.shared import web

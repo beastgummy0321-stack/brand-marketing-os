@@ -15,7 +15,6 @@
 """
 
 import json
-import sqlite3
 from datetime import date, timedelta
 from typing import Optional
 
@@ -25,7 +24,7 @@ from app.ads import pacing_curve
 from app.brand_intelligence import repository as bi
 from app.core import cleanup
 from app.core.audit import write_audit
-from app.core.db import new_id, now_iso
+from app.core.db import new_id, now_iso, Conn, DEV_ORG_ID
 
 
 def _rows(cursor) -> list:
@@ -40,7 +39,7 @@ def _row(cursor_row) -> Optional[dict]:
 # 開期前的體檢（Fact Audit）：只提示、不擋路（決策 0013、roadmap 硬性原則 5）
 # ---------------------------------------------------------------------------
 
-def check_readiness(conn: sqlite3.Connection, brand_id: str, product_ids: list) -> list:
+def check_readiness(conn: Conn, brand_id: str, product_ids: list) -> list:
     """回傳「資料缺這些，精準度會打折」的人話提示，每則附一鍵去補的連結。
 
     刻意不回傳「可否開期」的布林值——沒有任何一項缺漏能擋住開期。
@@ -94,14 +93,14 @@ def check_readiness(conn: sqlite3.Connection, brand_id: str, product_ids: list) 
 # 廣告檔期
 # ---------------------------------------------------------------------------
 
-def _economics_for(conn: sqlite3.Connection, brand_id: str, product_ids: list) -> list:
+def _economics_for(conn: Conn, brand_id: str, product_ids: list) -> list:
     """組 split_budget 要的輸入，經品牌智庫的公開介面取單位經濟。"""
     return [{"product_id": pid,
              "economics": bi.get_product_economics(conn, brand_id, pid)}
             for pid in product_ids]
 
 
-def create_cycle(conn: sqlite3.Connection, brand_id: str, *, product_ids: list,
+def create_cycle(conn: Conn, brand_id: str, *, product_ids: list,
                  pain_value: float, objective: str, actor: str,
                  phase: str = "normal", start_date: Optional[str] = None,
                  duration_days: Optional[int] = None, background: Optional[str] = None,
@@ -140,6 +139,7 @@ def create_cycle(conn: sqlite3.Connection, brand_id: str, *, product_ids: list,
     daily_budgets = pacing_curve.compute_curve(pacing_strategy, plan.duration_days, plan.total_budget)
     row = {
         "id": cycle_id,
+        "org_id": DEV_ORG_ID,
         "brand_id": brand_id,
         "ad_account_id": None,
         "product_scope_json": json.dumps(product_ids, ensure_ascii=False),
@@ -179,16 +179,16 @@ def create_cycle(conn: sqlite3.Connection, brand_id: str, *, product_ids: list,
         "updated_at": ts,
     }
     conn.execute(
-        "INSERT INTO campaign_cycle (id, brand_id, ad_account_id, product_scope_json, objective,"
+        "INSERT INTO campaign_cycle (id, org_id, brand_id, ad_account_id, product_scope_json, objective,"
         " funnel_stage, occasion, budget, currency, start_date, end_date, target_market,"
         " channels_json, placements_json, offer_id, landing_page, background, status,"
         " close_reason, blocked, needs_information, archived, plan_version, phase,"
         " pain_slider_value, derived_plan_json, diff_snapshot_json, created_at, updated_at)"
-        " VALUES (:id, :brand_id, :ad_account_id, :product_scope_json, :objective, :funnel_stage,"
-        " :occasion, :budget, :currency, :start_date, :end_date, :target_market, :channels_json,"
-        " :placements_json, :offer_id, :landing_page, :background, :status, :close_reason, :blocked,"
-        " :needs_information, :archived, :plan_version, :phase, :pain_slider_value,"
-        " :derived_plan_json, :diff_snapshot_json, :created_at, :updated_at)",
+        " VALUES (%(id)s, %(org_id)s, %(brand_id)s, %(ad_account_id)s, %(product_scope_json)s, %(objective)s, %(funnel_stage)s,"
+        " %(occasion)s, %(budget)s, %(currency)s, %(start_date)s, %(end_date)s, %(target_market)s, %(channels_json)s,"
+        " %(placements_json)s, %(offer_id)s, %(landing_page)s, %(background)s, %(status)s, %(close_reason)s, %(blocked)s,"
+        " %(needs_information)s, %(archived)s, %(plan_version)s, %(phase)s, %(pain_slider_value)s,"
+        " %(derived_plan_json)s, %(diff_snapshot_json)s, %(created_at)s, %(updated_at)s)",
         row,
     )
 
@@ -196,10 +196,10 @@ def create_cycle(conn: sqlite3.Connection, brand_id: str, *, product_ids: list,
         plan.total_budget, _economics_for(conn, brand_id, product_ids)
     ):
         conn.execute(
-            "INSERT INTO campaign_cycle_product (id, campaign_cycle_id, brand_id, product_id,"
+            "INSERT INTO campaign_cycle_product (id, org_id, campaign_cycle_id, brand_id, product_id,"
             " allocated_budget, allocation_ratio, allocation_basis, economics_missing,"
-            " created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (new_id("ccp"), cycle_id, brand_id, allocation.product_id,
+            " created_at, updated_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            (new_id("ccp"), DEV_ORG_ID, cycle_id, brand_id, allocation.product_id,
              allocation.allocated_budget, allocation.allocation_ratio,
              allocation.allocation_basis, 1 if allocation.economics_missing else 0, ts, ts),
         )
@@ -226,38 +226,38 @@ def create_cycle(conn: sqlite3.Connection, brand_id: str, *, product_ids: list,
                 plan["forecast"] = forecast
                 row["derived_plan_json"] = json.dumps(plan, ensure_ascii=False)
                 conn.execute(
-                    "UPDATE campaign_cycle SET derived_plan_json = ? WHERE id = ?",
+                    "UPDATE campaign_cycle SET derived_plan_json = %s WHERE id = %s",
                     (row["derived_plan_json"], cycle_id),
                 )
                 conn.commit()
     return row
 
 
-def get_cycle(conn: sqlite3.Connection, brand_id: str, cycle_id: str) -> Optional[dict]:
+def get_cycle(conn: Conn, brand_id: str, cycle_id: str) -> Optional[dict]:
     return _row(conn.execute(
-        "SELECT * FROM campaign_cycle WHERE brand_id = ? AND id = ?", (brand_id, cycle_id)
+        "SELECT * FROM campaign_cycle WHERE brand_id = %s AND id = %s", (brand_id, cycle_id)
     ).fetchone())
 
 
-def list_cycles(conn: sqlite3.Connection, brand_id: str, include_archived: bool = False) -> list:
-    sql = "SELECT * FROM campaign_cycle WHERE brand_id = ?"
+def list_cycles(conn: Conn, brand_id: str, include_archived: bool = False) -> list:
+    sql = "SELECT * FROM campaign_cycle WHERE brand_id = %s"
     if not include_archived:
         sql += " AND archived = 0"
     sql += " ORDER BY start_date DESC, id DESC"
     return _rows(conn.execute(sql, (brand_id,)))
 
 
-def has_any_cycle(conn: sqlite3.Connection, brand_id: str) -> bool:
+def has_any_cycle(conn: Conn, brand_id: str) -> bool:
     """這個品牌跑過任何一期沒有？決定要不要提供紙上模擬入口（決策 0022 第 14 點）。"""
     return conn.execute(
-        "SELECT 1 FROM campaign_cycle WHERE brand_id = ? LIMIT 1", (brand_id,)
+        "SELECT 1 FROM campaign_cycle WHERE brand_id = %s LIMIT 1", (brand_id,)
     ).fetchone() is not None
 
 
-def list_cycle_products(conn: sqlite3.Connection, brand_id: str, cycle_id: str) -> list:
+def list_cycle_products(conn: Conn, brand_id: str, cycle_id: str) -> list:
     """本期各產品的預算分配，附上產品名稱（名稱經品牌智庫介面取得，不 join 它的表）。"""
     rows = _rows(conn.execute(
-        "SELECT * FROM campaign_cycle_product WHERE brand_id = ? AND campaign_cycle_id = ?"
+        "SELECT * FROM campaign_cycle_product WHERE brand_id = %s AND campaign_cycle_id = %s"
         " ORDER BY allocated_budget DESC, id",
         (brand_id, cycle_id),
     ))
@@ -267,13 +267,13 @@ def list_cycle_products(conn: sqlite3.Connection, brand_id: str, cycle_id: str) 
     return rows
 
 
-def update_cycle_status(conn: sqlite3.Connection, brand_id: str, cycle_id: str, *,
+def update_cycle_status(conn: Conn, brand_id: str, cycle_id: str, *,
                         status: str, actor: str) -> dict:
     before = get_cycle(conn, brand_id, cycle_id)
     if before is None:
         raise ValueError(f"找不到廣告檔期：{cycle_id}")
     conn.execute(
-        "UPDATE campaign_cycle SET status = ?, updated_at = ? WHERE brand_id = ? AND id = ?",
+        "UPDATE campaign_cycle SET status = %s, updated_at = %s WHERE brand_id = %s AND id = %s",
         (status, now_iso(), brand_id, cycle_id),
     )
     after = get_cycle(conn, brand_id, cycle_id)
@@ -289,7 +289,7 @@ def derived_plan(cycle: dict) -> dict:
     return json.loads(raw) if raw else {}
 
 
-def set_cycle_pacing(conn: sqlite3.Connection, brand_id: str, cycle_id: str, *,
+def set_cycle_pacing(conn: Conn, brand_id: str, cycle_id: str, *,
                      strategy: str, reason: str, actor: str) -> dict:
     """使用者手動改排期策略（票 pacing-curve，G9.9「用這個排法，下一步」）：重算
     compute_curve，覆蓋 derived_plan_json 的 pacing_strategy／pacing_reason／daily_budgets
@@ -306,7 +306,7 @@ def set_cycle_pacing(conn: sqlite3.Connection, brand_id: str, cycle_id: str, *,
     plan["pacing_reason"] = reason.strip() or pacing_curve.PACING_REASON_PRESETS[strategy][0]
     plan["daily_budgets"] = pacing_curve.compute_curve(strategy, plan["duration_days"], before["budget"])
     conn.execute(
-        "UPDATE campaign_cycle SET derived_plan_json = ?, updated_at = ? WHERE brand_id = ? AND id = ?",
+        "UPDATE campaign_cycle SET derived_plan_json = %s, updated_at = %s WHERE brand_id = %s AND id = %s",
         (json.dumps(plan, ensure_ascii=False), now_iso(), brand_id, cycle_id),
     )
     after = get_cycle(conn, brand_id, cycle_id)
@@ -316,15 +316,15 @@ def set_cycle_pacing(conn: sqlite3.Connection, brand_id: str, cycle_id: str, *,
     return plan
 
 
-def list_archived_cycles(conn: sqlite3.Connection, brand_id: str) -> list:
+def list_archived_cycles(conn: Conn, brand_id: str) -> list:
     """已封存的檔期清單（廣告首頁「顯示已封存」收合區塊用）。"""
     return _rows(conn.execute(
-        "SELECT * FROM campaign_cycle WHERE brand_id = ? AND archived = 1"
+        "SELECT * FROM campaign_cycle WHERE brand_id = %s AND archived = 1"
         " ORDER BY start_date DESC, id DESC", (brand_id,)
     ))
 
 
-def set_cycle_archived(conn: sqlite3.Connection, brand_id: str, cycle_id: str, *,
+def set_cycle_archived(conn: Conn, brand_id: str, cycle_id: str, *,
                        archived: bool, actor: str) -> dict:
     """封存／恢復檔期（GitHub issue #28：任何狀態——PLANNING、LIVE、CLOSED……——都能封存，
     封存與工作流狀態互不影響）。"""
@@ -335,7 +335,7 @@ def set_cycle_archived(conn: sqlite3.Connection, brand_id: str, cycle_id: str, *
         raise ValueError(f"找不到廣告檔期：{cycle_id}")
     ts = now_iso()
     conn.execute(
-        "UPDATE campaign_cycle SET archived = ?, updated_at = ? WHERE brand_id = ? AND id = ?",
+        "UPDATE campaign_cycle SET archived = %s, updated_at = %s WHERE brand_id = %s AND id = %s",
         (1 if archived else 0, ts, brand_id, cycle_id),
     )
     after = get_cycle(conn, brand_id, cycle_id)
@@ -350,8 +350,8 @@ def set_cycle_archived(conn: sqlite3.Connection, brand_id: str, cycle_id: str, *
 # 刪除前自動備份）。
 # ---------------------------------------------------------------------------
 
-# 刪檔期時要一併清掉的本模組子表，順序＝先子後父（PRAGMA foreign_keys = ON，順序錯就會被擋，
-# 見 app/core/db.py connect()）。這份順序是依 app/ads/migrations/*.sql 的 REFERENCES 欄位
+# 刪檔期時要一併清掉的本模組子表，順序＝先子後父（Postgres 預設立即檢查外鍵，順序錯
+# 就會被擋，見 app/core/db.py）。這份順序是依 app/ads/migrations/*.sql 的 REFERENCES 欄位
 # 手動拓樸排序：例如 external_ad_mapping 被 campaign_activation/performance_snapshot/
 # performance_reading/derived_metric 引用，得先清那幾張才能清它自己；它又引用
 # publishing_package／final_asset，所以它得排在那兩張之前。
@@ -391,17 +391,17 @@ CYCLE_CASCADE_TABLES = (
 )
 
 
-def count_cycle_data(conn: sqlite3.Connection, brand_id: str, cycle_id: str) -> list:
+def count_cycle_data(conn: Conn, brand_id: str, cycle_id: str) -> list:
     """回傳 [(中文名稱, 筆數)]，給刪除確認頁列出「按下去會消失什麼」（比照 count_product_data）。"""
     return [
         (label, conn.execute(
-            f"SELECT COUNT(*) FROM {table} WHERE campaign_cycle_id = ?", (cycle_id,)
-        ).fetchone()[0])
+            f"SELECT COUNT(*) AS n FROM {table} WHERE campaign_cycle_id = %s", (cycle_id,)
+        ).fetchone()["n"])
         for table, label in CYCLE_CASCADE_TABLES
     ]
 
 
-def delete_cycle(conn: sqlite3.Connection, brand_id: str, cycle_id: str, *, actor: str) -> dict:
+def delete_cycle(conn: Conn, brand_id: str, cycle_id: str, *, actor: str) -> dict:
     """硬刪除一個已封存檔期與它掛的全部連帶資料，不可逆（比照決策 0020 產品先例）。
 
     只收已封存的檔期：使用中或已結束的檔期都得先封存，隔一道手續才刪得掉。
@@ -417,30 +417,30 @@ def delete_cycle(conn: sqlite3.Connection, brand_id: str, cycle_id: str, *, acto
     counts = dict(count_cycle_data(conn, brand_id, cycle_id))
 
     # learning_ledger 解除關聯（不刪列）：先斷開指向這期判讀的列，再斷開指向這期本身的列，
-    # 避免 PRAGMA foreign_keys=ON 擋下後面對 performance_reading／campaign_cycle 的 DELETE。
+    # 避免 Postgres 的外鍵約束擋下後面對 performance_reading／campaign_cycle 的 DELETE。
     # learning_ledger 現屬品牌永久層（修憲落地 A3），本模組只算出要解除哪些
     # performance_reading id，實際的 UPDATE 走 bi.unlink_learning_ledger_reading／
     # unlink_learning_ledger_cycle 兩個公開函式（A1：跨層一律走公開函式，不對別層的表下 SQL）。
     reading_ids = [r["id"] for r in conn.execute(
-        "SELECT id FROM performance_reading WHERE campaign_cycle_id = ?", (cycle_id,)
+        "SELECT id FROM performance_reading WHERE campaign_cycle_id = %s", (cycle_id,)
     ).fetchall()]
     bi.unlink_learning_ledger_reading(conn, reading_ids)
     bi.unlink_learning_ledger_cycle(conn, cycle_id)
     # 灌水係數與事後誤差紀錄比照 learning_ledger 脫鉤（票 #36）：跨期累積校準，
     # 不因來源檔期被刪就消失，只解除關聯。
     conn.execute(
-        "UPDATE ad_revenue_coefficient SET source_cycle_id = NULL WHERE source_cycle_id = ?",
+        "UPDATE ad_revenue_coefficient SET source_cycle_id = NULL WHERE source_cycle_id = %s",
         (cycle_id,),
     )
     conn.execute(
         "UPDATE ad_revenue_coefficient_error_log SET campaign_cycle_id = NULL"
-        " WHERE campaign_cycle_id = ?",
+        " WHERE campaign_cycle_id = %s",
         (cycle_id,),
     )
 
     for table, _label in CYCLE_CASCADE_TABLES:
-        conn.execute(f"DELETE FROM {table} WHERE campaign_cycle_id = ?", (cycle_id,))
-    conn.execute("DELETE FROM campaign_cycle WHERE id = ? AND brand_id = ?", (cycle_id, brand_id))
+        conn.execute(f"DELETE FROM {table} WHERE campaign_cycle_id = %s", (cycle_id,))
+    conn.execute("DELETE FROM campaign_cycle WHERE id = %s AND brand_id = %s", (cycle_id, brand_id))
 
     write_audit(conn, brand_id=brand_id, entity_type="campaign_cycle", entity_id=cycle_id,
                 action="delete", actor=actor, before={**before, "deleted_counts": counts},
@@ -453,7 +453,7 @@ def delete_cycle(conn: sqlite3.Connection, brand_id: str, cycle_id: str, *, acto
 # Finding（法務掃描、對帳、增幅上限、資料合理性共用同一張表）
 # ---------------------------------------------------------------------------
 
-def replace_findings(conn: sqlite3.Connection, brand_id: str, cycle_id: str,
+def replace_findings(conn: Conn, brand_id: str, cycle_id: str,
                      finding_type: str, findings: list) -> int:
     """把某一類 Finding 整批換掉（重掃就是重算，不累積歷史殘留）。回傳寫入筆數。
 
@@ -461,16 +461,16 @@ def replace_findings(conn: sqlite3.Connection, brand_id: str, cycle_id: str,
     產出的是同一種結構，所以共用這一個落庫入口。
     """
     conn.execute(
-        "DELETE FROM finding WHERE brand_id = ? AND campaign_cycle_id = ? AND finding_type = ?",
+        "DELETE FROM finding WHERE brand_id = %s AND campaign_cycle_id = %s AND finding_type = %s",
         (brand_id, cycle_id, finding_type),
     )
     ts = now_iso()
     for finding in findings:
         conn.execute(
-            "INSERT INTO finding (id, brand_id, campaign_cycle_id, finding_type, target_type,"
+            "INSERT INTO finding (id, org_id, brand_id, campaign_cycle_id, finding_type, target_type,"
             " target_id, severity, code, message, evidence_json, confidence_penalty, source,"
-            " resolved, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)",
-            (new_id("fnd"), brand_id, cycle_id, finding.finding_type,
+            " resolved, created_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 0, %s)",
+            (new_id("fnd"), DEV_ORG_ID, brand_id, cycle_id, finding.finding_type,
              "variant" if finding.evidence.get("variant_id") else "cycle",
              finding.evidence.get("variant_id") or cycle_id,
              finding.severity, finding.code, finding.message,
@@ -481,12 +481,12 @@ def replace_findings(conn: sqlite3.Connection, brand_id: str, cycle_id: str,
     return len(findings)
 
 
-def list_findings(conn: sqlite3.Connection, brand_id: str, cycle_id: str,
+def list_findings(conn: Conn, brand_id: str, cycle_id: str,
                   finding_type: Optional[str] = None) -> list:
-    sql = ("SELECT * FROM finding WHERE brand_id = ? AND campaign_cycle_id = ? AND resolved = 0")
+    sql = ("SELECT * FROM finding WHERE brand_id = %s AND campaign_cycle_id = %s AND resolved = 0")
     params = [brand_id, cycle_id]
     if finding_type:
-        sql += " AND finding_type = ?"
+        sql += " AND finding_type = %s"
         params.append(finding_type)
     return _rows(conn.execute(sql + " ORDER BY severity DESC, created_at", params))
 
@@ -496,7 +496,7 @@ def list_findings(conn: sqlite3.Connection, brand_id: str, cycle_id: str,
 # 老闆的採納結果留紀錄供事後驗證 AI 異議的準確度（決策 0023 第 25 點）。
 # ---------------------------------------------------------------------------
 
-def replace_pending_dissents(conn: sqlite3.Connection, brand_id: str, cycle_id: str,
+def replace_pending_dissents(conn: Conn, brand_id: str, cycle_id: str,
                              dissents: list, llm_task_id: Optional[str], *,
                              target_types: Optional[tuple] = None) -> int:
     """整批換掉這一輪還沒被老闆處理過（pending）的舊異議；已經決定過的（adopted/rejected）
@@ -506,42 +506,42 @@ def replace_pending_dissents(conn: sqlite3.Connection, brand_id: str, cycle_id: 
     account_structure/budget_allocation/offer 三種，一起換）。傳了就只清同一批次的類型
     （app/ads/reading.py 的回購校正異議獨立一批，不能清掉還沒被決定的方案異議——issue #39）。
     """
-    sql = "DELETE FROM rule_dissent WHERE brand_id = ? AND campaign_cycle_id = ? AND status = 'pending'"
+    sql = "DELETE FROM rule_dissent WHERE brand_id = %s AND campaign_cycle_id = %s AND status = 'pending'"
     params: list = [brand_id, cycle_id]
     if target_types:
-        placeholders = ",".join("?" for _ in target_types)
+        placeholders = ",".join("%s" for _ in target_types)
         sql += f" AND target_type IN ({placeholders})"
         params.extend(target_types)
     conn.execute(sql, params)
     ts = now_iso()
     for d in dissents:
         conn.execute(
-            "INSERT INTO rule_dissent (id, brand_id, campaign_cycle_id, target_type, suggestion,"
-            " reason, llm_task_id, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)",
-            (new_id("dsn"), brand_id, cycle_id, d["target_type"], d["suggestion"], d["reason"],
+            "INSERT INTO rule_dissent (id, org_id, brand_id, campaign_cycle_id, target_type, suggestion,"
+            " reason, llm_task_id, status, created_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'pending', %s)",
+            (new_id("dsn"), DEV_ORG_ID, brand_id, cycle_id, d["target_type"], d["suggestion"], d["reason"],
              llm_task_id, ts),
         )
     conn.commit()
     return len(dissents)
 
 
-def list_dissents(conn: sqlite3.Connection, brand_id: str, cycle_id: str,
+def list_dissents(conn: Conn, brand_id: str, cycle_id: str,
                   status: Optional[str] = None) -> list:
-    sql = "SELECT * FROM rule_dissent WHERE brand_id = ? AND campaign_cycle_id = ?"
+    sql = "SELECT * FROM rule_dissent WHERE brand_id = %s AND campaign_cycle_id = %s"
     params = [brand_id, cycle_id]
     if status:
-        sql += " AND status = ?"
+        sql += " AND status = %s"
         params.append(status)
     return _rows(conn.execute(sql + " ORDER BY created_at", params))
 
 
-def decide_dissent(conn: sqlite3.Connection, brand_id: str, cycle_id: str, dissent_id: str,
+def decide_dissent(conn: Conn, brand_id: str, cycle_id: str, dissent_id: str,
                    decision: str, actor: str) -> dict:
     """老闆對一筆異議拍板：採納或不採納。留 before/after 稽核，供日後驗證 AI 異議準確度。"""
     if decision not in ("adopted", "rejected"):
         raise ValueError("採納結果只能是「採納」或「不採納」")
     row = conn.execute(
-        "SELECT * FROM rule_dissent WHERE id = ? AND brand_id = ? AND campaign_cycle_id = ?",
+        "SELECT * FROM rule_dissent WHERE id = %s AND brand_id = %s AND campaign_cycle_id = %s",
         (dissent_id, brand_id, cycle_id),
     ).fetchone()
     if row is None:
@@ -549,7 +549,7 @@ def decide_dissent(conn: sqlite3.Connection, brand_id: str, cycle_id: str, disse
     before = dict(row)
     ts = now_iso()
     conn.execute(
-        "UPDATE rule_dissent SET status = ?, decided_by = ?, decided_at = ? WHERE id = ?",
+        "UPDATE rule_dissent SET status = %s, decided_by = %s, decided_at = %s WHERE id = %s",
         (decision, actor, ts, dissent_id),
     )
     after = {**before, "status": decision, "decided_by": actor, "decided_at": ts}
@@ -563,12 +563,12 @@ def decide_dissent(conn: sqlite3.Connection, brand_id: str, cycle_id: str, disse
 # 學習迴路（GitHub issue #53，決策 0030）：假設結案讀取＋學習入帳
 # ---------------------------------------------------------------------------
 
-def list_cycle_hypotheses(conn: sqlite3.Connection, brand_id: str, cycle_id: str) -> list:
+def list_cycle_hypotheses(conn: Conn, brand_id: str, cycle_id: str) -> list:
     """這期開期時掛進來的策略假設。策略假設住品牌智庫（跨模組），這裡只查本模組的連結表
     拿到 id，實際內容一律經 `brand_intelligence.repository` 的公開函式讀取（規則 3）。"""
     links = _rows(conn.execute(
         "SELECT strategy_hypothesis_id, role FROM campaign_cycle_hypothesis"
-        " WHERE brand_id = ? AND campaign_cycle_id = ?", (brand_id, cycle_id),
+        " WHERE brand_id = %s AND campaign_cycle_id = %s", (brand_id, cycle_id),
     ))
     result = []
     for link in links:
@@ -578,7 +578,7 @@ def list_cycle_hypotheses(conn: sqlite3.Connection, brand_id: str, cycle_id: str
     return result
 
 
-def create_learning_ledger_entry(conn: sqlite3.Connection, brand_id: str, *, learning_text: str,
+def create_learning_ledger_entry(conn: Conn, brand_id: str, *, learning_text: str,
                                   applicability_scope: str, created_by: str, actor: str,
                                   product_id: Optional[str] = None, platform: Optional[str] = None,
                                   source_cycle_id: Optional[str] = None,
@@ -601,13 +601,13 @@ def create_learning_ledger_entry(conn: sqlite3.Connection, brand_id: str, *, lea
     )
 
 
-def list_learning_ledger(conn: sqlite3.Connection, brand_id: str, *,
+def list_learning_ledger(conn: Conn, brand_id: str, *,
                           include_expired: bool = False) -> list:
     """累積智慧頁（GitHub issue #56）讀取用：已驗證的正面學習清單。薄封裝，見檔頭說明。"""
     return bi.list_learning_ledger(conn, brand_id, include_expired=include_expired)
 
 
-def deactivate_learning_ledger_entry(conn: sqlite3.Connection, brand_id: str, entry_id: str, *,
+def deactivate_learning_ledger_entry(conn: Conn, brand_id: str, entry_id: str, *,
                                       actor: str) -> dict:
     """下架一條已確認學習（GitHub issue #56）：把 `expired` 標成 1，不刪列、不改內容。
     薄封裝，見檔頭說明。"""
@@ -659,27 +659,27 @@ BRAND_CASCADE_TABLES = tuple(
 ) + _BRAND_ONLY_CASCADE_TABLES
 
 
-def count_brand_data(conn: sqlite3.Connection, brand_id: str) -> list:
+def count_brand_data(conn: Conn, brand_id: str) -> list:
     """刪品牌前的清點（比照 brand_intelligence.count_brand_data 的回傳格式），給刪除
     確認頁列出「按下去會消失什麼」。跟 delete_brand_data 讀同一份 BRAND_CASCADE_TABLES。"""
     counts = []
     for table, label in BRAND_CASCADE_TABLES:
         n = conn.execute(
-            f"SELECT COUNT(*) AS c FROM {table} WHERE brand_id = ?", (brand_id,)
+            f"SELECT COUNT(*) AS c FROM {table} WHERE brand_id = %s", (brand_id,)
         ).fetchone()["c"]
         if n:
             counts.append((label, n))
     return counts
 
 
-def delete_brand_data(conn: sqlite3.Connection, brand_id: str) -> dict:
+def delete_brand_data(conn: Conn, brand_id: str) -> dict:
     """清掉本模組掛在該品牌下的資料（BRAND_CASCADE_TABLES 這 37 張子表），登記進
     app.core.cleanup 給 delete_brand() 呼叫用。只下 DELETE、不 commit、不 rollback
     （Q4 單一交易、全有全無，commit 與 rollback 統一在 brand_intelligence.delete_brand()）。
     """
     counts = dict(count_brand_data(conn, brand_id))
     for table, _label in BRAND_CASCADE_TABLES:
-        conn.execute(f"DELETE FROM {table} WHERE brand_id = ?", (brand_id,))
+        conn.execute(f"DELETE FROM {table} WHERE brand_id = %s", (brand_id,))
     return counts
 
 
@@ -691,9 +691,9 @@ def delete_brand_data(conn: sqlite3.Connection, brand_id: str) -> dict:
 # 的註解），只挑 product_id 對得上這顆產品的列，同一張表裡 product_id 為 NULL（品牌層
 # 總結）或屬於別的產品的列不會被這個條件選到，不會誤刪品牌層或別的產品的資料。
 #
-# 排序照依賴關係排（子表在前、父表在後——即使 delete_product() 會開
-# PRAGMA defer_foreign_keys=ON、順序本身不影響正確性，這裡仍照拓樸順序排，跟
-# BRAND_CASCADE_TABLES／CYCLE_CASCADE_TABLES 維持同樣的可讀性風格）：
+# 排序照依賴關係排（子表在前、父表在後——票 02-3a 起跨模組外鍵已在 02-2 維持在 0，
+# 順序本身不影響正確性，這裡仍照拓樸順序排，跟 BRAND_CASCADE_TABLES／
+# CYCLE_CASCADE_TABLES 維持同樣的可讀性風格）：
 #   - recommendation 引用 performance_reading，排在它前面
 #   - derived_metric 引用 performance_snapshot，排在它前面
 #   - publishing_package 引用 creative_variant／experiment_cell，排在它們前面
@@ -759,7 +759,7 @@ def _product_cascade_scope(conn, brand_id: str, product_id: str) -> dict:
     scope: dict = {}
     for table, _label in PRODUCT_CASCADE_TABLES:
         rows = {r[0] for r in conn.execute(
-            f"SELECT rowid FROM {table} WHERE brand_id = ? AND product_id = ?",
+            f"SELECT rowid FROM {table} WHERE brand_id = %s AND product_id = %s",
             (brand_id, product_id))}
         if rows:
             scope[table] = rows
@@ -772,13 +772,13 @@ def _product_cascade_scope(conn, brand_id: str, product_id: str) -> dict:
                 parent_rowids = list(scope[parent])
                 if not parent_rowids:
                     continue
-                marks = ",".join("?" for _ in parent_rowids)
+                marks = ",".join("%s" for _ in parent_rowids)
                 keys = [r[0] for r in conn.execute(
                     f"SELECT {parent_col} FROM {parent} WHERE rowid IN ({marks})", parent_rowids)
                     if r[0] is not None]
                 if not keys:
                     continue
-                kmarks = ",".join("?" for _ in keys)
+                kmarks = ",".join("%s" for _ in keys)
                 found = {r[0] for r in conn.execute(
                     f"SELECT rowid FROM {child} WHERE {fk_col} IN ({kmarks})", keys)}
                 new = found - scope.get(child, set())
@@ -788,14 +788,14 @@ def _product_cascade_scope(conn, brand_id: str, product_id: str) -> dict:
     return scope
 
 
-def count_product_data(conn: sqlite3.Connection, brand_id: str, product_id: str) -> list:
+def count_product_data(conn: Conn, brand_id: str, product_id: str) -> list:
     """刪產品前的清點（比照 count_brand_data 的回傳格式），給刪除確認頁列出「按下去會
     消失什麼」。跟 delete_product_data 共讀同一份 PRODUCT_CASCADE_TABLES，不各寫一份，
     避免清點與清除不同步（第 4 刀吃過的虧）。"""
     counts = []
     for table, label in PRODUCT_CASCADE_TABLES:
         n = conn.execute(
-            f"SELECT COUNT(*) AS c FROM {table} WHERE brand_id = ? AND product_id = ?",
+            f"SELECT COUNT(*) AS c FROM {table} WHERE brand_id = %s AND product_id = %s",
             (brand_id, product_id),
         ).fetchone()["c"]
         if n:
@@ -810,7 +810,7 @@ def count_product_data(conn: sqlite3.Connection, brand_id: str, product_id: str)
     return counts
 
 
-def delete_product_data(conn: sqlite3.Connection, brand_id: str, product_id: str) -> dict:
+def delete_product_data(conn: Conn, brand_id: str, product_id: str) -> dict:
     """清掉本模組掛在該產品下的資料（PRODUCT_CASCADE_TABLES 這 10 張表），登記進
     app.core.cleanup 給 brand_intelligence.delete_product() 呼叫用。只下 DELETE、不
     commit、不 rollback（Q4 單一交易、全有全無，commit 與 rollback 統一在
@@ -825,10 +825,10 @@ def delete_product_data(conn: sqlite3.Connection, brand_id: str, product_id: str
         if table in direct:
             continue
         ids = list(scope[table])
-        marks = ",".join("?" for _ in ids)
+        marks = ",".join("%s" for _ in ids)
         conn.execute(f"DELETE FROM {table} WHERE rowid IN ({marks})", ids)
     for table, _label in PRODUCT_CASCADE_TABLES:
-        conn.execute(f"DELETE FROM {table} WHERE brand_id = ? AND product_id = ?",
+        conn.execute(f"DELETE FROM {table} WHERE brand_id = %s AND product_id = %s",
                      (brand_id, product_id))
     return counts
 
@@ -839,14 +839,15 @@ def delete_product_data(conn: sqlite3.Connection, brand_id: str, product_id: str
 #
 # 舊版這裡曾寫死「品牌智庫必須比本模組先登記」，理由是舊資料庫的 learning_ledger
 # 可能帶 REFERENCES campaign_cycle(id) 外鍵，登記順序錯了 DELETE 會被 FK 擋下。
-# 第 5 刀把這個問題連根拔掉：app/brand_intelligence/repository.py 的 delete_brand()
-# 交易一開始就下 `PRAGMA defer_foreign_keys = ON`，外鍵檢查延到 COMMIT 才做一次，
-# 跨模組登記順序從此完全不重要——包含 learning_ledger／campaign_cycle 這條、
-# 也包含 cycle_shopee_code（訂單模組）／campaign_cycle（本模組）那條。
+# 第 5 刀（SQLite 時代）把這個問題連根拔掉，靠 PRAGMA defer_foreign_keys 延後檢查；
+# 票 02-3a／02-2 進一步把問題從根本消除：跨模組外鍵在集裝箱憲章下維持在 0（見
+# .scratch/saas/tickets/02-2-type-decisions.md 第 6 點），learning_ledger／
+# campaign_cycle、cycle_shopee_code（訂單模組）／campaign_cycle（本模組）這兩條
+# 都不是真的 DB 外鍵，跨模組登記順序從此完全不重要，不必再靠任何延後檢查機制。
 #
 # app/tests/test_ads_brand_cleanup.py 那條「品牌智庫要比廣告先登記」的順序釘子測試
-# 留著沒刪：現在它驗證的不是「必要條件」而是「回歸保險」——就算哪天真的不小心把
-# PRAGMA 那行刪掉，至少這條舊約束的順序還在，不會立刻整批爆掉。
+# 留著沒刪：現在它驗證的不是「必要條件」而是「回歸保險」——就算哪天真的不小心
+# 又長出跨模組外鍵，至少這條舊約束的順序還在，不會立刻整批爆掉。
 # ---------------------------------------------------------------------------
 
 cleanup.register("廣告", count_brand=count_brand_data, delete_brand=delete_brand_data,

@@ -66,7 +66,7 @@ def order_history(conn, brand_id: str, today: Optional[str] = None) -> dict:
     """這個品牌最早一筆訂單到今天隔了幾天，外加已匯入筆數。完全沒有訂單時
     `days`／`earliest` 回 None（鐵則 16：算不出就是算不出，不補算）。"""
     row = conn.execute(
-        "SELECT MIN(order_date) earliest, COUNT(*) c FROM order_record WHERE brand_id = ?",
+        "SELECT MIN(order_date) earliest, COUNT(*) c FROM order_record WHERE brand_id = %s",
         (brand_id,),
     ).fetchone()
     if row is None or not row["earliest"]:
@@ -83,7 +83,7 @@ def ga4_coverage(conn, brand_id: str) -> dict:
     從沒同步過時 `months` 回 None。"""
     row = conn.execute(
         "SELECT MIN(date_range_start) earliest, MAX(date_range_end) latest"
-        " FROM ga4_summary WHERE brand_id = ?", (brand_id,),
+        " FROM ga4_summary WHERE brand_id = %s", (brand_id,),
     ).fetchone()
     if row is None or not row["earliest"]:
         return {"months": None, "start": None, "end": None}
@@ -109,7 +109,7 @@ def interview_done(conn, brand_id: str) -> bool:
     或補充文字時才寫 audit_log，全部留白送出等同沒記——不建第二張狀態表，直接查
     audit_log 本身。"""
     row = conn.execute(
-        "SELECT 1 FROM audit_log WHERE brand_id = ? AND entity_type = 'lesson_interview'"
+        "SELECT 1 FROM audit_log WHERE brand_id = %s AND entity_type = 'lesson_interview'"
         " LIMIT 1", (brand_id,),
     ).fetchone()
     return row is not None

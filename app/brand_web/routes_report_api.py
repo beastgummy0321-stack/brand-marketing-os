@@ -56,7 +56,7 @@ def _report_shape(report: dict, brand: dict) -> dict:
     cost_row = None
     if report["llm_task_id"]:
         cost_row = web.conn.execute(
-            "SELECT cost FROM llm_task WHERE id = ?", (report["llm_task_id"],)
+            "SELECT cost FROM llm_task WHERE id = %s", (report["llm_task_id"],)
         ).fetchone()
     return {
         "generated_at": report["generated_at"],

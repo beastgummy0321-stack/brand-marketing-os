@@ -18,9 +18,9 @@ product_id，直接傳給 `context_compiler.compile()` 就是完整範圍）。
 不靠 LLM 回憶」模式）。
 """
 
-import sqlite3
 from typing import NamedTuple, Optional
 
+from app.core.db import Conn
 from app.ads import fingerprint as fp
 from app.ads import plan as ads_plan
 from app.ads import repository as ads_repo
@@ -59,7 +59,7 @@ def _row(cursor_row) -> Optional[dict]:
     return dict(cursor_row) if cursor_row is not None else None
 
 
-def assemble_brief(conn: sqlite3.Connection, brand_id: str, cycle_id: str,
+def assemble_brief(conn: Conn, brand_id: str, cycle_id: str,
                    experiment_cell_id: str, format_key: str, *,
                    theme_count: int, actor: str) -> tuple:
     """組一份創意簡報。成功回 (CreativeBrief, None)；計畫還沒核准回 (None, 人話錯誤)。
@@ -80,7 +80,7 @@ def assemble_brief(conn: sqlite3.Connection, brand_id: str, cycle_id: str,
         raise ValueError("找不到品牌或廣告檔期")
 
     cell = _row(conn.execute(
-        "SELECT * FROM experiment_cell WHERE brand_id = ? AND campaign_cycle_id = ? AND id = ?",
+        "SELECT * FROM experiment_cell WHERE brand_id = %s AND campaign_cycle_id = %s AND id = %s",
         (brand_id, cycle_id, experiment_cell_id),
     ).fetchone())
     if cell is None:
@@ -93,7 +93,7 @@ def assemble_brief(conn: sqlite3.Connection, brand_id: str, cycle_id: str,
     offer = None
     if cycle["offer_id"]:
         offer = _row(conn.execute(
-            "SELECT * FROM offer WHERE brand_id = ? AND id = ?",
+            "SELECT * FROM offer WHERE brand_id = %s AND id = %s",
             (brand_id, cycle["offer_id"]),
         ).fetchone())
 

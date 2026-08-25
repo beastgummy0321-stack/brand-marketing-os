@@ -19,7 +19,7 @@ from typing import Optional
 
 from app.core import cleanup
 from app.core.audit import write_audit
-from app.core.db import new_id, now_iso
+from app.core.db import new_id, now_iso, DEV_ORG_ID
 
 # 嚴重度分級（決策 0025／0026 定案，DESIGN.md §20 規則 4 的資料層對應）。
 SEVERITY_ORDER = ["money_loss", "irreversible", "rule_warning", "informational"]
@@ -96,7 +96,7 @@ def enqueue(conn, *, category: str, dedupe_key: str, message: str,
     # 去重比對要連 brand_id 一起看（票 M6）：SQLite 的 IS 運算子對 NULL 也能正確比對，
     # brand_id 為 None 時會比對「brand_id IS NULL」而不是誤判成跟別的品牌撞鍵。
     existing = conn.execute(
-        "SELECT id FROM interrupt WHERE dedupe_key = ? AND brand_id IS ?",
+        "SELECT id FROM interrupt WHERE dedupe_key = %s AND brand_id IS %s",
         (dedupe_key, brand_id),
     ).fetchone()
     if existing:
@@ -104,10 +104,10 @@ def enqueue(conn, *, category: str, dedupe_key: str, message: str,
 
     interrupt_id = new_id("itr")
     conn.execute(
-        "INSERT INTO interrupt (id, brand_id, campaign_cycle_id, dedupe_key, category, kind,"
+        "INSERT INTO interrupt (id, org_id, brand_id, campaign_cycle_id, dedupe_key, category, kind,"
         " severity, message, action_url, visible_from, status, created_at)"
-        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?)",
-        (interrupt_id, brand_id, campaign_cycle_id, dedupe_key, category, kind,
+        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'open', %s)",
+        (interrupt_id, DEV_ORG_ID, brand_id, campaign_cycle_id, dedupe_key, category, kind,
          spec["severity"], message, action_url, visible_from, now_iso()),
     )
     return interrupt_id
@@ -132,11 +132,11 @@ def _archive_stale_informational(conn, today: Optional[str] = None) -> int:
     """
     today = today or date.today().isoformat()
     cutoff = (date.fromisoformat(today) - timedelta(days=STALE_AFTER_DAYS)).isoformat()
-    placeholders = ",".join("?" for _ in _NEVER_STALE_KINDS)
+    placeholders = ",".join("%s" for _ in _NEVER_STALE_KINDS)
     cursor = conn.execute(
-        "UPDATE interrupt SET status = 'archived', resolved_at = ?"
+        "UPDATE interrupt SET status = 'archived', resolved_at = %s"
         " WHERE status = 'open' AND severity = 'informational'"
-        " AND COALESCE(visible_from, created_at) < ?"
+        " AND COALESCE(visible_from, created_at) < %s"
         f" AND (kind IS NULL OR kind NOT IN ({placeholders}))",
         (now_iso(), cutoff, *_NEVER_STALE_KINDS),
     )
@@ -166,13 +166,13 @@ def list_open(conn, brand_id: Optional[str] = None, category: Optional[str] = No
     if archive_stale:
         _archive_stale_informational(conn, today)
     today = today or date.today().isoformat()
-    sql = "SELECT * FROM interrupt WHERE status = 'open' AND (visible_from IS NULL OR visible_from <= ?)"
+    sql = "SELECT * FROM interrupt WHERE status = 'open' AND (visible_from IS NULL OR visible_from <= %s)"
     params: list = [today]
     if brand_id:
-        sql += " AND brand_id = ?"
+        sql += " AND brand_id = %s"
         params.append(brand_id)
     if category:
-        sql += " AND category = ?"
+        sql += " AND category = %s"
         params.append(category)
     rows = [dict(r) for r in conn.execute(sql, params)]
     rows.sort(key=_sort_key)
@@ -184,7 +184,7 @@ def list_done(conn, brand_id: Optional[str] = None) -> list:
     sql = "SELECT * FROM interrupt WHERE status IN ('resolved', 'archived')"
     params: list = []
     if brand_id:
-        sql += " AND brand_id = ?"
+        sql += " AND brand_id = %s"
         params.append(brand_id)
     sql += " ORDER BY resolved_at DESC"
     return [dict(r) for r in conn.execute(sql, params)]
@@ -198,11 +198,11 @@ def current_card(conn, brand_id: Optional[str] = None) -> Optional[dict]:
 
 def resolve(conn, interrupt_id: str, *, actor: str) -> None:
     """人工處理完畢，轉 resolved；寫一筆 audit_log（write_audit 會擋空 actor）。會 commit。"""
-    row = conn.execute("SELECT * FROM interrupt WHERE id = ?", (interrupt_id,)).fetchone()
+    row = conn.execute("SELECT * FROM interrupt WHERE id = %s", (interrupt_id,)).fetchone()
     if row is None:
         raise ValueError(f"找不到打斷佇列項目：{interrupt_id}")
     conn.execute(
-        "UPDATE interrupt SET status = 'resolved', resolved_at = ? WHERE id = ?",
+        "UPDATE interrupt SET status = 'resolved', resolved_at = %s WHERE id = %s",
         (now_iso(), interrupt_id),
     )
     write_audit(conn, brand_id=row["brand_id"], entity_type="interrupt", entity_id=interrupt_id,
@@ -227,7 +227,7 @@ def count_brand_data(conn, brand_id: str) -> list:
     counts = []
     for table, label in BRAND_CASCADE_TABLES:
         n = conn.execute(
-            f"SELECT COUNT(*) AS c FROM {table} WHERE brand_id = ?", (brand_id,)
+            f"SELECT COUNT(*) AS c FROM {table} WHERE brand_id = %s", (brand_id,)
         ).fetchone()["c"]
         if n:
             counts.append((label, n))
@@ -240,7 +240,7 @@ def delete_brand_data(conn, brand_id: str) -> dict:
     brand_intelligence.delete_brand()）。"""
     counts = dict(count_brand_data(conn, brand_id))
     for table, _label in BRAND_CASCADE_TABLES:
-        conn.execute(f"DELETE FROM {table} WHERE brand_id = ?", (brand_id,))
+        conn.execute(f"DELETE FROM {table} WHERE brand_id = %s", (brand_id,))
     return counts
 
 

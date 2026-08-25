@@ -14,11 +14,10 @@ usage_json／cost／input_context_hash／provider／model／status／時間戳�
 不是規格既定值——之後真的有跨檔期覆核需求，抬高這個常數即可，不必改資料結構。
 """
 
-import sqlite3
 from datetime import datetime, timedelta
 from typing import Optional
 
-from app.core.db import now_iso
+from app.core.db import now_iso, Conn
 
 RETENTION_DAYS = 90
 
@@ -26,7 +25,7 @@ RETENTION_DAYS = 90
 _PURGE_COLUMNS = ("structured_output_json", "rendered_output", "validation_result_json")
 
 
-def purge_expired_llm_task_content(conn: sqlite3.Connection, *, now: Optional[str] = None) -> int:
+def purge_expired_llm_task_content(conn: Conn, *, now: Optional[str] = None) -> int:
     """把超過保留期的已完成任務之大欄位清空，回傳實際清空的列數。
 
     只動 finished_at 早於 cutoff 的列（還在跑的任務不動，反正沒有大內容可清）；
@@ -37,7 +36,7 @@ def purge_expired_llm_task_content(conn: sqlite3.Connection, *, now: Optional[st
     where_not_already_empty = " OR ".join(f"{col} IS NOT NULL" for col in _PURGE_COLUMNS)
     cur = conn.execute(
         f"""UPDATE llm_task SET {columns_clause}
-            WHERE finished_at IS NOT NULL AND finished_at < ?
+            WHERE finished_at IS NOT NULL AND finished_at < %s
               AND ({where_not_already_empty})""",
         (cutoff,),
     )

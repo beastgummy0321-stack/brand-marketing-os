@@ -435,8 +435,8 @@ def _ensure_campaign(conn, brand_id: str, cycle_id: str, account_id: str, packag
     """同一期的包共用同一個 Meta campaign：第一包建、其餘沿用（以 campaign_name 為準，
     build_names() 本來就一檔期一活動名）。"""
     row = conn.execute(
-        "SELECT meta_campaign_id FROM external_ad_mapping WHERE brand_id = ?"
-        " AND campaign_cycle_id = ? AND meta_campaign_id IS NOT NULL AND meta_campaign_id != ''"
+        "SELECT meta_campaign_id FROM external_ad_mapping WHERE brand_id = %s"
+        " AND campaign_cycle_id = %s AND meta_campaign_id IS NOT NULL AND meta_campaign_id != ''"
         " AND claim_status = 'confirmed' AND meta_adset_id IS NOT NULL"  # 同步「猜的」列不算（真人實測：tracking.py 把發現的活動掛到第一包）
         " ORDER BY created_at LIMIT 1", (brand_id, cycle_id),
     ).fetchone()
@@ -587,7 +587,7 @@ def create_package(conn, brand_id: str, cycle_id: str, package_id: str, *, actor
     campaign_id，同一期後續包的 `_ensure_campaign()` DB 查詢因此每包都查不到、每包都
     另建一個 campaign。不給就照舊先查 DB、沒有才建（見 `_ensure_campaign()`）。"""
     row = conn.execute(
-        "SELECT * FROM publishing_package WHERE brand_id = ? AND campaign_cycle_id = ? AND id = ?",
+        "SELECT * FROM publishing_package WHERE brand_id = %s AND campaign_cycle_id = %s AND id = %s",
         (brand_id, cycle_id, package_id),
     ).fetchone()
     if row is None:
@@ -611,7 +611,7 @@ def create_package(conn, brand_id: str, cycle_id: str, package_id: str, *, actor
                 "reason": "這包還沒有到達網址（商品頁連結）。到品牌資料的自有渠道加官網，"
                          "再重新產出交接包。"}
     if destination != package["destination_url"]:
-        conn.execute("UPDATE publishing_package SET destination_url = ? WHERE id = ?",
+        conn.execute("UPDATE publishing_package SET destination_url = %s WHERE id = %s",
                      (destination, package_id))
         conn.commit()
         package["destination_url"] = destination
@@ -692,20 +692,20 @@ def activate_cycle(conn, brand_id: str, cycle_id: str, *, actor: str) -> dict:
         return {"ok": False, "reason": "找不到這個廣告檔期"}
 
     packages = [dict(r) for r in conn.execute(
-        "SELECT * FROM publishing_package WHERE brand_id = ? AND campaign_cycle_id = ?",
+        "SELECT * FROM publishing_package WHERE brand_id = %s AND campaign_cycle_id = %s",
         (brand_id, cycle_id),
     )]
     mapped = []
     for pkg in packages:
         mapping_row = conn.execute(
-            "SELECT * FROM external_ad_mapping WHERE brand_id = ? AND publishing_package_id = ?"
+            "SELECT * FROM external_ad_mapping WHERE brand_id = %s AND publishing_package_id = %s"
             " ORDER BY created_at DESC LIMIT 1", (brand_id, pkg["id"]),
         ).fetchone()
         if not (mapping_row and mapping_row["meta_ad_id"]):
             continue
         already_live = conn.execute(
-            "SELECT 1 FROM activation_authorization WHERE brand_id = ?"
-            " AND scope_type = 'campaign_activation' AND scope_ref = ?", (brand_id, pkg["id"]),
+            "SELECT 1 FROM activation_authorization WHERE brand_id = %s"
+            " AND scope_type = 'campaign_activation' AND scope_ref = %s", (brand_id, pkg["id"]),
         ).fetchone()
         if already_live:  # 連按兩次「發布全部」不重複寫授權列與提醒卡
             continue
@@ -713,8 +713,8 @@ def activate_cycle(conn, brand_id: str, cycle_id: str, *, actor: str) -> dict:
 
     if not mapped:
         if packages and any(
-            conn.execute("SELECT 1 FROM activation_authorization WHERE brand_id = ?"
-                         " AND scope_type = 'campaign_activation' AND scope_ref = ?",
+            conn.execute("SELECT 1 FROM activation_authorization WHERE brand_id = %s"
+                         " AND scope_type = 'campaign_activation' AND scope_ref = %s",
                          (brand_id, p["id"])).fetchone() for p in packages):
             return {"ok": True, "activated": 0, "failed": []}  # 全部早就發布過
         return {"ok": False, "reason": "這期還沒有已建到 Meta 的包，先按「一鍵建到 Meta」。"}
@@ -771,12 +771,12 @@ def status(conn, brand_id: str) -> dict:
         return {"publish.cycle_id": None, "publish.packages_total": 0,
                 "publish.packages_mapped": 0, "publish.live": False}
     packages_total = conn.execute(
-        "SELECT COUNT(*) AS c FROM publishing_package WHERE brand_id = ?"
-        " AND campaign_cycle_id = ?", (brand_id, cycle["id"]),
+        "SELECT COUNT(*) AS c FROM publishing_package WHERE brand_id = %s"
+        " AND campaign_cycle_id = %s", (brand_id, cycle["id"]),
     ).fetchone()["c"]
     packages_mapped = conn.execute(
-        "SELECT COUNT(*) AS c FROM publishing_package AS pp WHERE pp.brand_id = ?"
-        " AND pp.campaign_cycle_id = ? AND EXISTS (SELECT 1 FROM external_ad_mapping AS eam"
+        "SELECT COUNT(*) AS c FROM publishing_package AS pp WHERE pp.brand_id = %s"
+        " AND pp.campaign_cycle_id = %s AND EXISTS (SELECT 1 FROM external_ad_mapping AS eam"
         " WHERE eam.brand_id = pp.brand_id AND eam.publishing_package_id = pp.id"
         " AND eam.meta_ad_id IS NOT NULL)", (brand_id, cycle["id"]),
     ).fetchone()["c"]

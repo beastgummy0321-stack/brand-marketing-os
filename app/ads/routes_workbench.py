@@ -34,22 +34,22 @@ def _generated_cell_count(conn, brand_id: str, cycle_id: str) -> int:
     目前支援的清單內（跟矩陣頁全展開的欄位一致，格式停用後不倒扣進分母）。"""
     rows = conn.execute(
         "SELECT DISTINCT experiment_cell_id, format_key FROM creative_theme"
-        " WHERE brand_id = ? AND campaign_cycle_id = ?", (brand_id, cycle_id)).fetchall()
+        " WHERE brand_id = %s AND campaign_cycle_id = %s", (brand_id, cycle_id)).fetchall()
     return sum(1 for row in rows if row["format_key"] in GENERATORS)
 
 
 def _adopted_count(conn, brand_id: str, cycle_id: str) -> int:
     row = conn.execute(
-        "SELECT COUNT(*) AS n FROM adoption_decision WHERE brand_id = ?"
-        " AND campaign_cycle_id = ? AND target_type = 'theme' AND decision = 'adopted'",
+        "SELECT COUNT(*) AS n FROM adoption_decision WHERE brand_id = %s"
+        " AND campaign_cycle_id = %s AND target_type = 'theme' AND decision = 'adopted'",
         (brand_id, cycle_id)).fetchone()
     return row["n"]
 
 
 def _cell_count(conn, brand_id: str, cycle_id: str) -> int:
     row = conn.execute(
-        "SELECT COUNT(*) AS n FROM experiment_cell WHERE brand_id = ?"
-        " AND campaign_cycle_id = ?", (brand_id, cycle_id)).fetchone()
+        "SELECT COUNT(*) AS n FROM experiment_cell WHERE brand_id = %s"
+        " AND campaign_cycle_id = %s", (brand_id, cycle_id)).fetchone()
     return row["n"]
 
 

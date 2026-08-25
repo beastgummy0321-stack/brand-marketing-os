@@ -25,7 +25,7 @@ from app.ads import performance as ads_performance
 from app.ads import repository as ads_repo
 from app.core import interrupts as core_interrupts
 from app.core.audit import write_audit
-from app.core.db import new_id, now_iso
+from app.core.db import new_id, now_iso, DEV_ORG_ID
 
 # 第 7 刀（A1 三層地界新規則：app/ads 不得 import app.orders，見
 # test_architecture_boundaries.py）：orders_repo 不在這裡 import，改由組裝根
@@ -94,7 +94,7 @@ def reconcile_cycle(conn, brand_id: str, cycle_id: str) -> dict:
 
 def latest_coefficient(conn, brand_id: str) -> Optional[dict]:
     row = conn.execute(
-        "SELECT * FROM ad_revenue_coefficient WHERE brand_id = ? AND valid_to IS NULL"
+        "SELECT * FROM ad_revenue_coefficient WHERE brand_id = %s AND valid_to IS NULL"
         " ORDER BY version DESC LIMIT 1", (brand_id,),
     ).fetchone()
     return dict(row) if row else None
@@ -140,13 +140,13 @@ def calibrate(conn, brand_id: str, cycle_id: str, *, actor: str,
     if prev is not None:
         predicted = prev["coefficient"] * result["meta_revenue"]
         conn.execute(
-            "INSERT INTO ad_revenue_coefficient_error_log (id, brand_id, coefficient_id,"
+            "INSERT INTO ad_revenue_coefficient_error_log (id, org_id, brand_id, coefficient_id,"
             " campaign_cycle_id, predicted_order_revenue, actual_order_revenue, error_pct,"
-            " recorded_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (new_id("rce"), brand_id, prev["id"], cycle_id, predicted, result["order_revenue"],
+            " recorded_at, created_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            (new_id("rce"), DEV_ORG_ID, brand_id, prev["id"], cycle_id, predicted, result["order_revenue"],
              _error_pct(predicted, result["order_revenue"]), ts, ts),
         )
-        conn.execute("UPDATE ad_revenue_coefficient SET valid_to = ? WHERE id = ?",
+        conn.execute("UPDATE ad_revenue_coefficient SET valid_to = %s WHERE id = %s",
                      (today, prev["id"]))
 
     version = (prev["version"] if prev else 0) + 1
@@ -154,10 +154,10 @@ def calibrate(conn, brand_id: str, cycle_id: str, *, actor: str,
     reliable = sample_size >= SAMPLE_THRESHOLD
     coefficient_id = new_id("arc")
     conn.execute(
-        "INSERT INTO ad_revenue_coefficient (id, brand_id, version, coefficient, meta_revenue,"
+        "INSERT INTO ad_revenue_coefficient (id, org_id, brand_id, version, coefficient, meta_revenue,"
         " order_revenue, sample_size, reliable, source_cycle_id, valid_from, valid_to,"
-        " created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)",
-        (coefficient_id, brand_id, version, result["coefficient_now"], result["meta_revenue"],
+        " created_by, created_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NULL, %s, %s)",
+        (coefficient_id, DEV_ORG_ID, brand_id, version, result["coefficient_now"], result["meta_revenue"],
          result["order_revenue"], sample_size, 1 if reliable else 0, cycle_id, today, actor, ts),
     )
 
@@ -178,8 +178,8 @@ def calibrate(conn, brand_id: str, cycle_id: str, *, actor: str,
 
 def _recent_error_pcts(conn, brand_id: str, limit: int) -> list:
     rows = conn.execute(
-        "SELECT error_pct FROM ad_revenue_coefficient_error_log WHERE brand_id = ?"
-        " AND error_pct IS NOT NULL ORDER BY recorded_at DESC LIMIT ?",
+        "SELECT error_pct FROM ad_revenue_coefficient_error_log WHERE brand_id = %s"
+        " AND error_pct IS NOT NULL ORDER BY recorded_at DESC LIMIT %s",
         (brand_id, limit),
     ).fetchall()
     return [r["error_pct"] for r in rows]

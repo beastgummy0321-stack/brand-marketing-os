@@ -24,7 +24,7 @@ from app.ads import reading as ads_reading
 from app.ads import repository as ads_repo
 from app.ads import target_cpa
 from app.core.audit import write_audit
-from app.core.db import new_id, now_iso
+from app.core.db import new_id, now_iso, DEV_ORG_ID
 
 # `overclaim` 候選卡（見下方 build_overclaim_claim_cards）沿用的絕對次數門檻——那裡每一則
 # 拒絕對應的是「這句話」本身（獨一無二的文字），不是可能重複出現很多次的指紋軸值，沒有
@@ -74,7 +74,7 @@ def propose_budget(conn, brand_id: str, cycle_id: str) -> dict:
     conversions = 0.0
     row = conn.execute(
         "SELECT COALESCE(SUM(conversions), 0) c FROM performance_snapshot"
-        " WHERE brand_id = ? AND campaign_cycle_id = ? AND quarantined = 0",
+        " WHERE brand_id = %s AND campaign_cycle_id = %s AND quarantined = 0",
         (brand_id, cycle_id),
     ).fetchone()
     if row:
@@ -167,10 +167,10 @@ def historical_cell_performance(conn, brand_id: str, exclude_cycle_id: Optional[
     cycles = ads_repo.list_cycles(conn, brand_id, include_archived=True)
     budget_by_cycle = {c["id"]: (c["budget"] or 0) for c in cycles}
 
-    sql = "SELECT id, campaign_cycle_id, product_id, creative_angle FROM experiment_cell WHERE brand_id = ?"
+    sql = "SELECT id, campaign_cycle_id, product_id, creative_angle FROM experiment_cell WHERE brand_id = %s"
     params = [brand_id]
     if exclude_cycle_id:
-        sql += " AND campaign_cycle_id != ?"
+        sql += " AND campaign_cycle_id != %s"
         params.append(exclude_cycle_id)
     cell_rows = conn.execute(sql, params).fetchall()
     if not cell_rows:
@@ -186,7 +186,7 @@ def historical_cell_performance(conn, brand_id: str, exclude_cycle_id: Optional[
         " FROM performance_snapshot ps"
         " JOIN external_ad_mapping xam ON xam.id = ps.external_ad_mapping_id"
         " JOIN publishing_package pkg ON pkg.id = xam.publishing_package_id"
-        " WHERE ps.brand_id = ? AND ps.quarantined = 0 AND pkg.experiment_cell_id IS NOT NULL"
+        " WHERE ps.brand_id = %s AND ps.quarantined = 0 AND pkg.experiment_cell_id IS NOT NULL"
         " GROUP BY pkg.experiment_cell_id", (brand_id,),
     ).fetchall()
     perf_by_cell = {r["cell_id"]: {"spend": r["spend"], "conversions": r["conversions"],
@@ -260,7 +260,7 @@ def _occasions_for_cycles(conn, cycle_ids: list) -> dict:
     ids = sorted({cid for cid in cycle_ids if cid})
     if not ids:
         return {}
-    placeholders = ",".join("?" for _ in ids)
+    placeholders = ",".join("%s" for _ in ids)
     return {r["id"]: r["occasion"] for r in conn.execute(
         f"SELECT id, occasion FROM campaign_cycle WHERE id IN ({placeholders})", ids,
     )}
@@ -288,7 +288,7 @@ def _occasion_weight_map(conn, cycle_ids: list, current_occasion: Optional[str])
 def _recent_cycle_ids(conn, brand_id: str, window: int) -> list:
     """最近幾期的 cycle id（依建立時間新到舊）——規則卡相對判準的時間窗。"""
     rows = conn.execute(
-        "SELECT id FROM campaign_cycle WHERE brand_id = ? ORDER BY created_at DESC LIMIT ?",
+        "SELECT id FROM campaign_cycle WHERE brand_id = %s ORDER BY created_at DESC LIMIT %s",
         (brand_id, window),
     ).fetchall()
     return [r["id"] for r in rows]
@@ -329,7 +329,7 @@ def _axis_value_stats(conn, brand_id: str, cycle_ids: list,
     if not cycle_ids:
         return {}
     weight_by_cycle = _occasion_weight_map(conn, cycle_ids, current_occasion)
-    placeholders = ",".join("?" for _ in cycle_ids)
+    placeholders = ",".join("%s" for _ in cycle_ids)
     stats: dict = {}
 
     from app.ads import creative as ads_creative  # 延遲 import，比照 check_echo_chamber()
@@ -345,7 +345,7 @@ def _axis_value_stats(conn, brand_id: str, cycle_ids: list,
 
     for row in conn.execute(
         f"SELECT id, campaign_cycle_id, reason_code, fingerprint_json FROM adoption_decision"
-        f" WHERE brand_id = ? AND decision = 'rejected' AND campaign_cycle_id IN ({placeholders})",
+        f" WHERE brand_id = %s AND decision = 'rejected' AND campaign_cycle_id IN ({placeholders})",
         (brand_id, *cycle_ids),
     ):
         axis = fp.REASON_TO_AXIS.get(row["reason_code"])
@@ -444,15 +444,15 @@ def build_rule_cards(conn, brand_id: str, actor: str, cycle_id: Optional[str] = 
         if _rule_card_verdict(stats, axis, value) != "pending":
             continue
         existing = conn.execute(
-            "SELECT id, status FROM creative_rule_card WHERE brand_id = ? AND fingerprint_axis = ?"
-            " AND fingerprint_value = ?", (brand_id, axis, value),
+            "SELECT id, status FROM creative_rule_card WHERE brand_id = %s AND fingerprint_axis = %s"
+            " AND fingerprint_value = %s", (brand_id, axis, value),
         ).fetchone()
         if existing:
             # 已經決定過的不再打擾；還沒決定的更新次數
             if existing["status"] == "pending":
                 conn.execute(
-                    "UPDATE creative_rule_card SET reject_count = ?, evidence_json = ?,"
-                    " updated_at = ? WHERE id = ?",
+                    "UPDATE creative_rule_card SET reject_count = %s, evidence_json = %s,"
+                    " updated_at = %s WHERE id = %s",
                     (entry["rejections"],
                      json.dumps({"decision_ids": entry["ids"],
                                  "reasons": sorted(entry["reasons"])}, ensure_ascii=False),
@@ -462,10 +462,10 @@ def build_rule_cards(conn, brand_id: str, actor: str, cycle_id: Optional[str] = 
 
         label = fp.axis_value_label(axis, value)
         conn.execute(
-            "INSERT INTO creative_rule_card (id, brand_id, fingerprint_axis, fingerprint_value,"
+            "INSERT INTO creative_rule_card (id, org_id, brand_id, fingerprint_axis, fingerprint_value,"
             " proposed_rule_text, evidence_json, reject_count, status, created_at, updated_at)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)",
-            (new_id("rcd"), brand_id, axis, value,
+            " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'pending', %s, %s)",
+            (new_id("rcd"), DEV_ORG_ID, brand_id, axis, value,
              f"以後不要再出「{fp.AXES[axis]['label']}是{label}」的素材",
              json.dumps({"decision_ids": entry["ids"],
                          "reasons": sorted(entry["reasons"])}, ensure_ascii=False),
@@ -513,7 +513,7 @@ def build_overclaim_claim_cards(conn, brand_id: str, actor: str) -> int:
     使用者決定要不要正式登記。回傳新增張數。
     """
     rows = conn.execute(
-        "SELECT id, target_id FROM adoption_decision WHERE brand_id = ? AND decision = 'rejected'"
+        "SELECT id, target_id FROM adoption_decision WHERE brand_id = %s AND decision = 'rejected'"
         " AND reason_code = 'overclaim'", (brand_id,),
     ).fetchall()
     if len(rows) < RULE_CARD_THRESHOLD:
@@ -526,8 +526,8 @@ def build_overclaim_claim_cards(conn, brand_id: str, actor: str) -> int:
     for row in rows:
         variant_id = row["target_id"]
         existing = conn.execute(
-            "SELECT id FROM creative_rule_card WHERE brand_id = ? AND fingerprint_axis = ?"
-            " AND fingerprint_value = ?", (brand_id, OVERCLAIM_CLAIM_AXIS, variant_id),
+            "SELECT id FROM creative_rule_card WHERE brand_id = %s AND fingerprint_axis = %s"
+            " AND fingerprint_value = %s", (brand_id, OVERCLAIM_CLAIM_AXIS, variant_id),
         ).fetchone()
         if existing:
             continue  # 已經產過候選卡（或使用者已經決定過），不重複打擾
@@ -535,10 +535,10 @@ def build_overclaim_claim_cards(conn, brand_id: str, actor: str) -> int:
         if not variant or not variant.get("content"):
             continue  # 素材被刪或內容是空的，沒有東西可以登記
         conn.execute(
-            "INSERT INTO creative_rule_card (id, brand_id, product_id, fingerprint_axis,"
+            "INSERT INTO creative_rule_card (id, org_id, brand_id, product_id, fingerprint_axis,"
             " fingerprint_value, proposed_rule_text, evidence_json, reject_count, status,"
-            " created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, 1, 'pending', ?, ?)",
-            (new_id("rcd"), brand_id, variant.get("product_id"), OVERCLAIM_CLAIM_AXIS, variant_id,
+            " created_at, updated_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 1, 'pending', %s, %s)",
+            (new_id("rcd"), DEV_ORG_ID, brand_id, variant.get("product_id"), OVERCLAIM_CLAIM_AXIS, variant_id,
              variant["content"],
              json.dumps({"decision_id": row["id"], "variant_id": variant_id}, ensure_ascii=False),
              ts, ts),
@@ -568,7 +568,7 @@ def _is_self_reported(row: dict) -> bool:
 
 def list_pending_rule_cards(conn, brand_id: str) -> list:
     rows = [dict(r) for r in conn.execute(
-        "SELECT * FROM creative_rule_card WHERE brand_id = ? AND status = 'pending'"
+        "SELECT * FROM creative_rule_card WHERE brand_id = %s AND status = 'pending'"
         " ORDER BY reject_count DESC, created_at", (brand_id,),
     )]
     for row in rows:
@@ -591,7 +591,7 @@ def list_active_bans(conn, brand_id: str) -> list:
     from app.brand_intelligence import repository as bi
 
     rows = [dict(r) for r in conn.execute(
-        "SELECT * FROM creative_rule_card WHERE brand_id = ? AND status = 'accepted'"
+        "SELECT * FROM creative_rule_card WHERE brand_id = %s AND status = 'accepted'"
         " ORDER BY decided_at DESC", (brand_id,),
     )]
     bans = []
@@ -615,7 +615,7 @@ def decide_rule_card(conn, brand_id: str, card_id: str, *, accept: bool, actor: 
     - **overclaim 候選卡**：接受直接寫進 claim（禁用宣稱），不是升級成 rule。
     """
     row = conn.execute(
-        "SELECT * FROM creative_rule_card WHERE brand_id = ? AND id = ?", (brand_id, card_id),
+        "SELECT * FROM creative_rule_card WHERE brand_id = %s AND id = %s", (brand_id, card_id),
     ).fetchone()
     if row is None:
         raise ValueError("找不到這張規則卡")
@@ -639,14 +639,14 @@ def decide_rule_card(conn, brand_id: str, card_id: str, *, accept: bool, actor: 
             evidence = json.loads(row["evidence_json"] or "{}")
             evidence["claim_id"] = claim_id
             conn.execute(
-                "UPDATE creative_rule_card SET status = 'accepted', evidence_json = ?,"
-                " decided_by = ?, decided_at = ?, updated_at = ? WHERE id = ?",
+                "UPDATE creative_rule_card SET status = 'accepted', evidence_json = %s,"
+                " decided_by = %s, decided_at = %s, updated_at = %s WHERE id = %s",
                 (json.dumps(evidence, ensure_ascii=False), actor, ts, ts, card_id),
             )
         else:
             conn.execute(
-                "UPDATE creative_rule_card SET status = 'declined', decided_by = ?,"
-                " decided_at = ?, updated_at = ? WHERE id = ?",
+                "UPDATE creative_rule_card SET status = 'declined', decided_by = %s,"
+                " decided_at = %s, updated_at = %s WHERE id = %s",
                 (actor, ts, ts, card_id),
             )
         after = {"claim_id": claim_id}
@@ -657,8 +657,8 @@ def decide_rule_card(conn, brand_id: str, card_id: str, *, accept: bool, actor: 
                                   content=row["proposed_rule_text"], severity="soft", actor=actor)
             rule_id = rule["id"]
         conn.execute(
-            "UPDATE creative_rule_card SET status = ?, promoted_rule_id = ?, decided_by = ?,"
-            " decided_at = ?, updated_at = ? WHERE id = ?",
+            "UPDATE creative_rule_card SET status = %s, promoted_rule_id = %s, decided_by = %s,"
+            " decided_at = %s, updated_at = %s WHERE id = %s",
             ("accepted" if accept else "declined", rule_id, actor, ts, ts, card_id),
         )
         after = {"promoted_rule_id": rule_id}
@@ -667,7 +667,7 @@ def decide_rule_card(conn, brand_id: str, card_id: str, *, accept: bool, actor: 
                 action="accept_rule_card" if accept else "decline_rule_card", actor=actor,
                 before=dict(row), after=after)
     conn.commit()
-    return dict(conn.execute("SELECT * FROM creative_rule_card WHERE id = ?",
+    return dict(conn.execute("SELECT * FROM creative_rule_card WHERE id = %s",
                              (card_id,)).fetchone())
 
 
@@ -680,11 +680,11 @@ def adopted_fingerprints(conn, brand_id: str, exclude_cycle_id: Optional[str] = 
     （票 02-occasion-weighted-recommendations，ADR 0011 第五節）要知道每筆歷史素材是
     哪一期採用的，才能跟這次檔期比對場合。回傳 `(fingerprint, campaign_cycle_id)` tuple 列表。
     """
-    sql = ("SELECT campaign_cycle_id, fingerprint_json FROM adoption_decision WHERE brand_id = ?"
+    sql = ("SELECT campaign_cycle_id, fingerprint_json FROM adoption_decision WHERE brand_id = %s"
            " AND decision = 'adopted'")
     params = [brand_id]
     if exclude_cycle_id:
-        sql += " AND (campaign_cycle_id IS NULL OR campaign_cycle_id != ?)"
+        sql += " AND (campaign_cycle_id IS NULL OR campaign_cycle_id != %s)"
         params.append(exclude_cycle_id)
     prints = []
     for row in conn.execute(sql, params):
@@ -770,14 +770,14 @@ def build(conn, brand_id: str, cycle_id: str, actor: str) -> dict:
 
     ts = now_iso()
     conn.execute(
-        "DELETE FROM recommendation WHERE brand_id = ? AND campaign_cycle_id = ?"
+        "DELETE FROM recommendation WHERE brand_id = %s AND campaign_cycle_id = %s"
         " AND recommendation_type = 'next_cycle'", (brand_id, cycle_id),
     )
     conn.execute(
-        "INSERT INTO recommendation (id, brand_id, campaign_cycle_id,"
+        "INSERT INTO recommendation (id, org_id, brand_id, campaign_cycle_id,"
         " performance_reading_id, recommendation_type, content_json, status,"
-        " created_at, updated_at) VALUES (?, ?, ?, ?, 'next_cycle', ?, 'GENERATED', ?, ?)",
-        (new_id("rec"), brand_id, cycle_id,
+        " created_at, updated_at) VALUES (%s, %s, %s, %s, %s, 'next_cycle', %s, 'GENERATED', %s, %s)",
+        (new_id("rec"), DEV_ORG_ID, brand_id, cycle_id,
          (verdict["cycle"] or {}).get("id"),
          json.dumps(content, ensure_ascii=False), ts, ts),
     )
@@ -787,7 +787,7 @@ def build(conn, brand_id: str, cycle_id: str, actor: str) -> dict:
 
 def load(conn, brand_id: str, cycle_id: str) -> Optional[dict]:
     row = conn.execute(
-        "SELECT * FROM recommendation WHERE brand_id = ? AND campaign_cycle_id = ?"
+        "SELECT * FROM recommendation WHERE brand_id = %s AND campaign_cycle_id = %s"
         " AND recommendation_type = 'next_cycle' ORDER BY created_at DESC LIMIT 1",
         (brand_id, cycle_id),
     ).fetchone()

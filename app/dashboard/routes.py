@@ -20,7 +20,7 @@ router = APIRouter(prefix="/api/dashboard")
 
 
 def _today_override():
-    """測試接縫：BRAND_OS_TODAY 凍結「今天」（比照 BRAND_OS_DB 慣例），未設用真實日期。"""
+    """測試接縫：BRAND_OS_TODAY 凍結「今天」，未設用真實日期。"""
     return os.environ.get("BRAND_OS_TODAY") or None
 
 

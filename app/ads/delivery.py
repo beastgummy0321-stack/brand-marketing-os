@@ -23,7 +23,7 @@ def _save_state(conn, cycle: dict, state: dict, *, commit: bool = True) -> None:
     plan = ads_repo.derived_plan(cycle)
     plan[_STATE_KEY] = state
     conn.execute(
-        "UPDATE campaign_cycle SET derived_plan_json = ?, updated_at = ? WHERE id = ? AND brand_id = ?",
+        "UPDATE campaign_cycle SET derived_plan_json = %s, updated_at = %s WHERE id = %s AND brand_id = %s",
         (json.dumps(plan, ensure_ascii=False), now_iso(), cycle["id"], cycle["brand_id"]),
     )
     if commit:
@@ -138,8 +138,8 @@ def reject_item(conn, brand_id: str, cycle_id: str, item_id: str, *, actor: str)
     state["reason"] = None
     # 退件後舊交接卡不再可見；補件完成時由既有 handoff 組裝器重出該則的追加卡。
     conn.execute(
-        "DELETE FROM publishing_package WHERE brand_id = ? AND campaign_cycle_id = ? "
-        "AND experiment_cell_id = ? AND id NOT IN "
+        "DELETE FROM publishing_package WHERE brand_id = %s AND campaign_cycle_id = %s "
+        "AND experiment_cell_id = %s AND id NOT IN "
         "(SELECT publishing_package_id FROM external_ad_mapping WHERE publishing_package_id IS NOT NULL)",
         (brand_id, cycle_id, item_id),
     )

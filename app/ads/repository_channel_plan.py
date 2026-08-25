@@ -7,10 +7,9 @@
 不碰什麼：不 import app.orders、app.dashboard，也不修改既有 ads repository。
 """
 
-import sqlite3
 from typing import Optional
 
-from app.core.db import new_id, now_iso
+from app.core.db import new_id, now_iso, Conn, DEV_ORG_ID
 
 
 CHANNELS = ("social", "google_search", "line_email", "kol_media", "website_landing")
@@ -45,48 +44,49 @@ def _validate_plan(channel: str, pct: int, depth: str) -> None:
         raise ValueError("depth 只能是 full、task_card 或 healthcheck")
 
 
-def create_channel_plan(conn: sqlite3.Connection, brand_id: str, cycle_id: str, *, channel: str,
+def create_channel_plan(conn: Conn, brand_id: str, cycle_id: str, *, channel: str,
                         job: str, pct: int, expected: str, enabled: bool = True,
                         depth: str = "full") -> dict:
     _require_text(brand_id, "brand_id")
     _require_text(cycle_id, "cycle_id")
     _validate_plan(channel, pct, depth)
     row = {
-        "id": new_id("chp"), "brand_id": brand_id, "cycle_id": cycle_id, "channel": channel,
+        "id": new_id("chp"), "org_id": DEV_ORG_ID, "brand_id": brand_id, "cycle_id": cycle_id,
+        "channel": channel,
         "job": _require_text(job, "job"), "pct": pct, "expected": _require_text(expected, "expected"),
         "enabled": int(bool(enabled)), "depth": depth, "created_at": now_iso(),
     }
     conn.execute(
-        "INSERT INTO channel_plan (id, brand_id, cycle_id, channel, job, pct, expected, enabled, depth, "
-        "created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO channel_plan (id, org_id, brand_id, cycle_id, channel, job, pct, expected, enabled, depth, "
+        "created_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
         tuple(row.values()),
     )
     conn.commit()
     return row
 
 
-def get_channel_plan(conn: sqlite3.Connection, brand_id: str, plan_id: str) -> Optional[dict]:
+def get_channel_plan(conn: Conn, brand_id: str, plan_id: str) -> Optional[dict]:
     return _row(conn.execute(
-        "SELECT * FROM channel_plan WHERE id = ? AND brand_id = ?", (plan_id, brand_id)
+        "SELECT * FROM channel_plan WHERE id = %s AND brand_id = %s", (plan_id, brand_id)
     ).fetchone())
 
 
-def list_channel_plans(conn: sqlite3.Connection, brand_id: str, cycle_id: str) -> list:
+def list_channel_plans(conn: Conn, brand_id: str, cycle_id: str) -> list:
     return _rows(conn.execute(
-        "SELECT * FROM channel_plan WHERE brand_id = ? AND cycle_id = ? ORDER BY created_at, channel",
+        "SELECT * FROM channel_plan WHERE brand_id = %s AND cycle_id = %s ORDER BY created_at, channel",
         (brand_id, cycle_id),
     ))
 
 
-def update_channel_plan(conn: sqlite3.Connection, brand_id: str, plan_id: str, *, job: str, pct: int,
+def update_channel_plan(conn: Conn, brand_id: str, plan_id: str, *, job: str, pct: int,
                         expected: str, enabled: bool, depth: str) -> dict:
     before = get_channel_plan(conn, brand_id, plan_id)
     if before is None:
         raise ValueError(f"找不到管道計畫：{plan_id}")
     _validate_plan(before["channel"], pct, depth)
     conn.execute(
-        "UPDATE channel_plan SET job = ?, pct = ?, expected = ?, enabled = ?, depth = ? "
-        "WHERE id = ? AND brand_id = ?",
+        "UPDATE channel_plan SET job = %s, pct = %s, expected = %s, enabled = %s, depth = %s "
+        "WHERE id = %s AND brand_id = %s",
         (_require_text(job, "job"), pct, _require_text(expected, "expected"), int(bool(enabled)), depth,
          plan_id, brand_id),
     )
@@ -94,19 +94,19 @@ def update_channel_plan(conn: sqlite3.Connection, brand_id: str, plan_id: str, *
     return get_channel_plan(conn, brand_id, plan_id)
 
 
-def delete_channel_plan(conn: sqlite3.Connection, brand_id: str, plan_id: str) -> None:
+def delete_channel_plan(conn: Conn, brand_id: str, plan_id: str) -> None:
     if get_channel_plan(conn, brand_id, plan_id) is None:
         raise ValueError(f"找不到管道計畫：{plan_id}")
-    conn.execute("DELETE FROM channel_plan WHERE id = ? AND brand_id = ?", (plan_id, brand_id))
+    conn.execute("DELETE FROM channel_plan WHERE id = %s AND brand_id = %s", (plan_id, brand_id))
     conn.commit()
 
 
-def previous_enabled_defaults(conn: sqlite3.Connection, brand_id: str, cycle_id: Optional[str] = None) -> dict:
+def previous_enabled_defaults(conn: Conn, brand_id: str, cycle_id: Optional[str] = None) -> dict:
     """讀同品牌最近一個已有管道計畫的檔期，供下期預填「用／不用」。"""
-    filters = "WHERE cp.brand_id = ?"
+    filters = "WHERE cp.brand_id = %s"
     params = [brand_id]
     if cycle_id:
-        filters += " AND cp.cycle_id != ?"
+        filters += " AND cp.cycle_id != %s"
         params.append(cycle_id)
     previous = conn.execute(
         "SELECT cp.cycle_id FROM channel_plan cp JOIN campaign_cycle cc ON cc.id = cp.cycle_id "
@@ -118,51 +118,51 @@ def previous_enabled_defaults(conn: sqlite3.Connection, brand_id: str, cycle_id:
     return {row["channel"]: bool(row["enabled"]) for row in rows}
 
 
-def create_task_card(conn: sqlite3.Connection, brand_id: str, cycle_id: str, *, channel: str, title: str,
+def create_task_card(conn: Conn, brand_id: str, cycle_id: str, *, channel: str, title: str,
                      draft_hint: Optional[str] = None) -> dict:
     _require_text(brand_id, "brand_id")
     _require_text(cycle_id, "cycle_id")
     row = {
-        "id": new_id("tsk"), "brand_id": brand_id, "cycle_id": cycle_id,
+        "id": new_id("tsk"), "org_id": DEV_ORG_ID, "brand_id": brand_id, "cycle_id": cycle_id,
         "channel": _require_text(channel, "channel"), "title": _require_text(title, "title"),
         "draft_hint": draft_hint or None, "done": 0, "created_at": now_iso(), "done_at": None,
     }
     conn.execute(
-        "INSERT INTO task_card (id, brand_id, cycle_id, channel, title, draft_hint, done, created_at, done_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", tuple(row.values()),
+        "INSERT INTO task_card (id, org_id, brand_id, cycle_id, channel, title, draft_hint, done, created_at, done_at) "
+        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)", tuple(row.values()),
     )
     conn.commit()
     return row
 
 
-def get_task_card(conn: sqlite3.Connection, brand_id: str, card_id: str) -> Optional[dict]:
+def get_task_card(conn: Conn, brand_id: str, card_id: str) -> Optional[dict]:
     return _row(conn.execute(
-        "SELECT * FROM task_card WHERE id = ? AND brand_id = ?", (card_id, brand_id)
+        "SELECT * FROM task_card WHERE id = %s AND brand_id = %s", (card_id, brand_id)
     ).fetchone())
 
 
-def list_task_cards(conn: sqlite3.Connection, brand_id: str, cycle_id: str) -> list:
+def list_task_cards(conn: Conn, brand_id: str, cycle_id: str) -> list:
     return _rows(conn.execute(
-        "SELECT * FROM task_card WHERE brand_id = ? AND cycle_id = ? ORDER BY created_at", (brand_id, cycle_id)
+        "SELECT * FROM task_card WHERE brand_id = %s AND cycle_id = %s ORDER BY created_at", (brand_id, cycle_id)
     ))
 
 
-def update_task_card(conn: sqlite3.Connection, brand_id: str, card_id: str, *, title: str,
+def update_task_card(conn: Conn, brand_id: str, card_id: str, *, title: str,
                      draft_hint: Optional[str], done: bool) -> dict:
     if get_task_card(conn, brand_id, card_id) is None:
         raise ValueError(f"找不到任務卡：{card_id}")
     done_at = now_iso() if done else None
     conn.execute(
-        "UPDATE task_card SET title = ?, draft_hint = ?, done = ?, done_at = ? "
-        "WHERE id = ? AND brand_id = ?",
+        "UPDATE task_card SET title = %s, draft_hint = %s, done = %s, done_at = %s "
+        "WHERE id = %s AND brand_id = %s",
         (_require_text(title, "title"), draft_hint or None, int(bool(done)), done_at, card_id, brand_id),
     )
     conn.commit()
     return get_task_card(conn, brand_id, card_id)
 
 
-def delete_task_card(conn: sqlite3.Connection, brand_id: str, card_id: str) -> None:
+def delete_task_card(conn: Conn, brand_id: str, card_id: str) -> None:
     if get_task_card(conn, brand_id, card_id) is None:
         raise ValueError(f"找不到任務卡：{card_id}")
-    conn.execute("DELETE FROM task_card WHERE id = ? AND brand_id = ?", (card_id, brand_id))
+    conn.execute("DELETE FROM task_card WHERE id = %s AND brand_id = %s", (card_id, brand_id))
     conn.commit()

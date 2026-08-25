@@ -50,7 +50,7 @@ def _theme_product_id(conn, brand_id: str, theme: dict):
     if not theme.get("experiment_cell_id"):
         return None
     cell = conn.execute(
-        "SELECT product_id FROM experiment_cell WHERE brand_id = ? AND id = ?",
+        "SELECT product_id FROM experiment_cell WHERE brand_id = %s AND id = %s",
         (brand_id, theme["experiment_cell_id"]),
     ).fetchone()
     return cell["product_id"] if cell else None
@@ -124,7 +124,7 @@ async def theme_matrix(request: Request, brand_id: str, cycle_id: str):
     conn = main_mod.conn
 
     cells = [dict(r) for r in conn.execute(
-        "SELECT * FROM experiment_cell WHERE brand_id = ? AND campaign_cycle_id = ?"
+        "SELECT * FROM experiment_cell WHERE brand_id = %s AND campaign_cycle_id = %s"
         " ORDER BY id", (brand_id, cycle_id))]
     model = providers.resolve_model(task_type="creative_theme", conn=conn)
     estimated_cost = pricing.cost_ceiling(model, theme_engine.THEME_MAX_TOKENS)

@@ -3,6 +3,15 @@
 排序＝執行順序。分票唯一依據＝`docs/ui-migration-contract.md` v2（含隨批裁決）＋ ADR 0019。
 標「需批准」的票動工前先提計畫等批准；動到畫面先過畫面契約（草圖 → 後端 → 前端）。
 
+
+## 第 ② 片：資料層一次翻（ADR 0027；saas 分支；依序執行，票在 .scratch/saas/tickets/）
+
+- [ ] 02-3b 型別適配：timestamptz（D1a，`now_utc()`）、boolean、jsonb、numeric，JSON 序列化收在一處
+- [ ] 02-4 測試轉 Postgres：每測試模組一個 schema、保留 `--dist loadfile`、刪純文案斷言測試
+- [ ] 02-5 三條機器閘門：每表必有 org_id／migration 只 CREATE 自己前綴／零 sqlite 殘留（各紅過一次）；並對全部表 `ENABLE ROW LEVEL SECURITY`（後端以 postgres 角色連線不受影響，目的是封死 anon/authenticated 直連 PostgREST；02-2 的 Supabase advisory）
+
+## 舊票（排在七片之後，暫不動）
+
 - [ ] V1-02 脈動有沒有照做，機器要抓得到：現在自動對帳只比總花費不比每日預算（`reconcile.py` 檔頭：各幣別單位換算不一，比錯就狼來了），使用者不照排程調日預算抓不出來，只有對帳三題自答（`guardrails.py:157`）答「不一樣」才會降可信度。要機器自動抓，得讓 `build_actuals` 撈回 Meta 的每日預算——**被 M1-01 擋**。
 - [ ] M1-01 Meta MCP 整期一鍵建（**暫緩，2026-08-23**）：連線與參數都已驗證可用，但 Meta 以錯誤 31／子碼 3858385 擋住「用 API 建立或修改廣告」——已知的 Meta 端問題（開發者社群 thread 845129991936233），後台看不到待辦事項、無入口可完成驗證，後台手動操作不受影響。系統使用者 token 未被 Ads MCP 文件列為支援，未驗證。改走 ADR 0023 保留的手填 ID 路徑；Meta 端解除後本票即可續跑。
 - [ ] M1-02 收件匣同意即執行（停用／降額；加碼再一道金額確認）＋安全底線（需批准；被 M1-01 擋）

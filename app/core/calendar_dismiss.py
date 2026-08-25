@@ -31,7 +31,7 @@ from pathlib import Path
 from typing import Optional
 
 from app.core import cleanup
-from app.core.db import new_id, now_iso
+from app.core.db import new_id, now_iso, DEV_ORG_ID
 
 _CALENDAR_DATA_PATH = (
     Path(__file__).resolve().parent.parent / "dashboard" / "campaign_calendar_data.json"
@@ -52,12 +52,13 @@ def list_categories() -> list:
 
 
 def dismiss(conn, brand_id: str, category: str) -> None:
-    """永久關閉某品牌某節日類別的提醒。重複關閉不報錯、不疊加（INSERT OR IGNORE）。
+    """永久關閉某品牌某節日類別的提醒。重複關閉不報錯、不疊加（ON CONFLICT DO NOTHING）。
     會 commit。"""
     conn.execute(
-        "INSERT OR IGNORE INTO brand_dismissed_calendar_category"
-        " (id, brand_id, category, created_at) VALUES (?, ?, ?, ?)",
-        (new_id("bdc"), brand_id, category, now_iso()),
+        "INSERT INTO brand_dismissed_calendar_category"
+        " (id, org_id, brand_id, category, created_at) VALUES (%s, %s, %s, %s, %s)"
+        " ON CONFLICT (brand_id, category) DO NOTHING",
+        (new_id("bdc"), DEV_ORG_ID, brand_id, category, now_iso()),
     )
     conn.commit()
 
@@ -65,7 +66,7 @@ def dismiss(conn, brand_id: str, category: str) -> None:
 def undismiss(conn, brand_id: str, category: str) -> None:
     """重新開啟提醒：刪除那筆覆寫紀錄。原本就沒關閉時是無操作，不報錯。會 commit。"""
     conn.execute(
-        "DELETE FROM brand_dismissed_calendar_category WHERE brand_id = ? AND category = ?",
+        "DELETE FROM brand_dismissed_calendar_category WHERE brand_id = %s AND category = %s",
         (brand_id, category),
     )
     conn.commit()
@@ -75,7 +76,7 @@ def list_dismissed(conn, brand_id: str) -> set:
     """某品牌永久關閉的節日類別集合。供 campaign_calendar.py 的
     next_calendar_reminder()／current_campaign_stage() 濾掉已關閉類別。"""
     rows = conn.execute(
-        "SELECT category FROM brand_dismissed_calendar_category WHERE brand_id = ?",
+        "SELECT category FROM brand_dismissed_calendar_category WHERE brand_id = %s",
         (brand_id,),
     ).fetchall()
     return {row["category"] for row in rows}
@@ -95,7 +96,7 @@ def count_brand_data(conn, brand_id: str) -> list:
     counts = []
     for table, label in BRAND_CASCADE_TABLES:
         n = conn.execute(
-            f"SELECT COUNT(*) AS c FROM {table} WHERE brand_id = ?", (brand_id,)
+            f"SELECT COUNT(*) AS c FROM {table} WHERE brand_id = %s", (brand_id,)
         ).fetchone()["c"]
         if n:
             counts.append((label, n))
@@ -105,7 +106,7 @@ def count_brand_data(conn, brand_id: str) -> list:
 def delete_brand_data(conn, brand_id: str) -> dict:
     counts = dict(count_brand_data(conn, brand_id))
     for table, _label in BRAND_CASCADE_TABLES:
-        conn.execute(f"DELETE FROM {table} WHERE brand_id = ?", (brand_id,))
+        conn.execute(f"DELETE FROM {table} WHERE brand_id = %s", (brand_id,))
     return counts
 
 
@@ -129,7 +130,7 @@ def demo() -> None:
         dismiss(conn, "brd_x", "cny")
         rows = conn.execute(
             "SELECT COUNT(*) AS c FROM brand_dismissed_calendar_category"
-            " WHERE brand_id = ? AND category = ?", ("brd_x", "cny")).fetchone()
+            " WHERE brand_id = %s AND category = %s", ("brd_x", "cny")).fetchone()
         assert rows["c"] == 1
         # 重新開啟＝刪除該筆
         undismiss(conn, "brd_x", "cny")

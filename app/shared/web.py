@@ -34,7 +34,7 @@ from fastapi import Request
 from fastapi.responses import RedirectResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from app import mock_data as md
+from app.core import vocab as md
 from app.brand_intelligence import repository as repo
 from app.core import db as coredb
 from app.core import interrupts as core_interrupts

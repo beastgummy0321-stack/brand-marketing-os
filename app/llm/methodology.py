@@ -10,13 +10,12 @@
 """
 
 import re
-import sqlite3
 from pathlib import Path
 from typing import NamedTuple, Optional
 
 from app.brand_intelligence import repository as repo
 from app.core.audit import write_audit
-from app.core.db import APP_DIR
+from app.core.db import APP_DIR, Conn
 
 METHODOLOGY_DIR = APP_DIR / "methodology"
 README_PATH = METHODOLOGY_DIR / "README.md"
@@ -84,7 +83,7 @@ def load_table(readme_path: Path = README_PATH) -> dict:
 
 
 def compile(
-    conn: sqlite3.Connection,
+    conn: Conn,
     task_labels,
     *,
     brand_id: Optional[str] = None,

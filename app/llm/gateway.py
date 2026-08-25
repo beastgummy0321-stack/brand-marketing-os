@@ -20,7 +20,6 @@ import hashlib
 import inspect
 import json
 import re
-import sqlite3
 from dataclasses import dataclass
 from typing import Optional
 
@@ -76,13 +75,13 @@ class TaskOptions:
     tools: Optional[list] = None
 
 
-def get_task(conn: sqlite3.Connection, task_id: str) -> Optional[dict]:
-    row = conn.execute("SELECT * FROM llm_task WHERE id = ?", (task_id,)).fetchone()
+def get_task(conn: db.Conn, task_id: str) -> Optional[dict]:
+    row = conn.execute("SELECT * FROM llm_task WHERE id = %s", (task_id,)).fetchone()
     return dict(row) if row is not None else None
 
 
 def _insert_running_row(
-    conn: sqlite3.Connection, *, brand_id: str, task_type: str, context: TaskContext,
+    conn: db.Conn, *, brand_id: str, task_type: str, context: TaskContext,
     prompt_template_id: str, prompt_template_version: str, provider_name: str, model: str,
     attempt_no: int,
 ) -> dict:
@@ -95,15 +94,15 @@ def _insert_running_row(
     ).hexdigest()
     conn.execute(
         """INSERT INTO llm_task (
-            id, brand_id, task_type, context_scope_json, input_context_ids_json, input_context_hash,
+            id, org_id, brand_id, task_type, context_scope_json, input_context_ids_json, input_context_hash,
             knowledge_item_ids_json, brand_version, product_version, campaign_plan_version,
             prompt_template_id, prompt_template_version, provider, model, status, attempt_no,
             structured_output_json, rendered_output, validation_result_json, usage_json, cost,
             started_at, finished_at, error
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, 'running', ?,
-                   NULL, NULL, NULL, NULL, NULL, ?, NULL, NULL)""",
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NULL, %s, %s, %s, %s, 'running', %s,
+                   NULL, NULL, NULL, NULL, NULL, %s, NULL, NULL)""",
         (
-            row_id, brand_id, task_type,
+            row_id, db.DEV_ORG_ID, brand_id, task_type,
             json.dumps(context.context_scope, ensure_ascii=False),
             knowledge_item_ids_json, input_context_hash, knowledge_item_ids_json,
             context.brand_version, context.product_version,
@@ -114,12 +113,12 @@ def _insert_running_row(
     return get_task(conn, row_id)
 
 
-def _mark_succeeded(conn: sqlite3.Connection, row_id: str, *,
+def _mark_succeeded(conn: db.Conn, row_id: str, *,
                      structured_output: Optional[dict], rendered_output: str,
                      usage: dict, cost: float) -> None:
     conn.execute(
-        "UPDATE llm_task SET status = 'succeeded', structured_output_json = ?, rendered_output = ?, "
-        "usage_json = ?, cost = ?, finished_at = ? WHERE id = ?",
+        "UPDATE llm_task SET status = 'succeeded', structured_output_json = %s, rendered_output = %s, "
+        "usage_json = %s, cost = %s, finished_at = %s WHERE id = %s",
         (
             json.dumps(structured_output, ensure_ascii=False) if structured_output is not None else None,
             rendered_output,
@@ -132,16 +131,16 @@ def _mark_succeeded(conn: sqlite3.Connection, row_id: str, *,
     conn.commit()
 
 
-def _mark_failed(conn: sqlite3.Connection, row_id: str, *, status: str, error: str) -> None:
+def _mark_failed(conn: db.Conn, row_id: str, *, status: str, error: str) -> None:
     conn.execute(
-        "UPDATE llm_task SET status = ?, error = ?, finished_at = ? WHERE id = ?",
+        "UPDATE llm_task SET status = %s, error = %s, finished_at = %s WHERE id = %s",
         (status, error, db.now_iso(), row_id),
     )
     conn.commit()
 
 
 def run_task(
-    conn: sqlite3.Connection,
+    conn: db.Conn,
     provider: Provider,
     *,
     brand_id: str,

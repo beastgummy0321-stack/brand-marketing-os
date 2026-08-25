@@ -39,7 +39,7 @@ from app.ads import repository as ads_repo
 from app.brand_intelligence import repository as bi
 from app.core import settings as coresettings
 from app.core.audit import write_audit
-from app.core.db import new_id, now_iso
+from app.core.db import new_id, now_iso, DEV_ORG_ID
 from app.llm import context_compiler, gateway, methodology, pricing, providers
 
 PROVIDER = providers.AnthropicProvider()  # 測試整包換掉
@@ -123,7 +123,7 @@ def audience_availability(conn, brand_id: str) -> dict:
     """
     row = conn.execute(
         "SELECT COALESCE(SUM(clicks), 0) c, COALESCE(SUM(conversions), 0) v"
-        " FROM performance_snapshot WHERE brand_id = ? AND quarantined = 0",
+        " FROM performance_snapshot WHERE brand_id = %s AND quarantined = 0",
         (brand_id,),
     ).fetchone()
     has_traffic = (row["c"] or 0) > 0
@@ -578,7 +578,7 @@ def _persist_options(conn, brand_id: str, cycle_id: str, options: list, llm_task
                      methodology_missing: list, actor: str) -> None:
     ts = now_iso()
     conn.execute(
-        "DELETE FROM campaign_plan_option WHERE brand_id = ? AND campaign_cycle_id = ?",
+        "DELETE FROM campaign_plan_option WHERE brand_id = %s AND campaign_cycle_id = %s",
         (brand_id, cycle_id),
     )
     for index, option in enumerate(options):
@@ -586,9 +586,9 @@ def _persist_options(conn, brand_id: str, cycle_id: str, options: list, llm_task
         payload["llm_task_id"] = llm_task_id
         payload["methodology_missing"] = methodology_missing
         conn.execute(
-            "INSERT INTO campaign_plan_option (id, campaign_cycle_id, brand_id, option_index,"
-            " is_recommended, option_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (new_id("cpo"), cycle_id, brand_id, index, int(option["is_recommended"]),
+            "INSERT INTO campaign_plan_option (id, org_id, campaign_cycle_id, brand_id, option_index,"
+            " is_recommended, option_json, created_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+            (new_id("cpo"), DEV_ORG_ID, cycle_id, brand_id, index, int(option["is_recommended"]),
              json.dumps(payload, ensure_ascii=False), ts),
         )
     ads_repo.update_cycle_status(conn, brand_id, cycle_id, status="PLAN_SELECT", actor=actor)
@@ -597,7 +597,7 @@ def _persist_options(conn, brand_id: str, cycle_id: str, options: list, llm_task
 def get_pending_options(conn, brand_id: str, cycle_id: str) -> list:
     """這一批還沒被選定的方案，依 AI 出的順序排列。"""
     rows = conn.execute(
-        "SELECT * FROM campaign_plan_option WHERE brand_id = ? AND campaign_cycle_id = ?"
+        "SELECT * FROM campaign_plan_option WHERE brand_id = %s AND campaign_cycle_id = %s"
         " ORDER BY option_index",
         (brand_id, cycle_id),
     ).fetchall()
@@ -647,7 +647,7 @@ def select_option(conn, brand_id: str, cycle_id: str, actor: str,
     }
     _persist(conn, brand_id, cycle, plan, actor)
     conn.execute(
-        "DELETE FROM campaign_plan_option WHERE brand_id = ? AND campaign_cycle_id = ?",
+        "DELETE FROM campaign_plan_option WHERE brand_id = %s AND campaign_cycle_id = %s",
         (brand_id, cycle_id),
     )
     conn.commit()
@@ -660,9 +660,9 @@ def _persist(conn, brand_id: str, cycle: dict, plan: dict, actor: str) -> None:
     ts = now_iso()
 
     conn.execute(
-        "INSERT INTO campaign_plan (id, campaign_cycle_id, brand_id, plan_version, plan_json,"
-        " status, approved_by, approved_at, created_at) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?)",
-        (new_id("cpl"), cycle_id, brand_id, version,
+        "INSERT INTO campaign_plan (id, org_id, campaign_cycle_id, brand_id, plan_version, plan_json,"
+        " status, approved_by, approved_at, created_at) VALUES (%s, %s, %s, %s, %s, %s, %s, NULL, NULL, %s)",
+        (new_id("cpl"), DEV_ORG_ID, cycle_id, brand_id, version,
          json.dumps(plan, ensure_ascii=False), "draft", ts),
     )
 
@@ -670,7 +670,7 @@ def _persist(conn, brand_id: str, cycle: dict, plan: dict, actor: str) -> None:
     # 重生成計畫時先清掉舊格——舊格底下若已有素材，外鍵會擋下刪除，此時保留舊格不動。
     try:
         conn.execute(
-            "DELETE FROM experiment_cell WHERE brand_id = ? AND campaign_cycle_id = ?",
+            "DELETE FROM experiment_cell WHERE brand_id = %s AND campaign_cycle_id = %s",
             (brand_id, cycle_id),
         )
     except Exception:
@@ -683,9 +683,9 @@ def _persist(conn, brand_id: str, cycle: dict, plan: dict, actor: str) -> None:
     for angle in plan["angles"]:
         product_id = angle["product_id"] if angle["product_id"] in valid_product_ids else None
         conn.execute(
-            "INSERT INTO experiment_cell (id, campaign_cycle_id, brand_id, product_id, audience,"
-            " creative_angle, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (new_id("exc"), cycle_id, brand_id, product_id, audience_text,
+            "INSERT INTO experiment_cell (id, org_id, campaign_cycle_id, brand_id, product_id, audience,"
+            " creative_angle, created_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+            (new_id("exc"), DEV_ORG_ID, cycle_id, brand_id, product_id, audience_text,
              angle["title"], ts),
         )
 
@@ -697,14 +697,15 @@ def _persist(conn, brand_id: str, cycle: dict, plan: dict, actor: str) -> None:
             source_cycle_id=cycle_id,
         )
         conn.execute(
-            "INSERT OR IGNORE INTO campaign_cycle_hypothesis (campaign_cycle_id,"
-            " strategy_hypothesis_id, brand_id, role) VALUES (?, ?, ?, ?)",
-            (cycle_id, created["id"], brand_id, hypothesis["type"]),
+            "INSERT INTO campaign_cycle_hypothesis (org_id, campaign_cycle_id,"
+            " strategy_hypothesis_id, brand_id, role) VALUES (%s, %s, %s, %s, %s)"
+            " ON CONFLICT (campaign_cycle_id, strategy_hypothesis_id) DO NOTHING",
+            (DEV_ORG_ID, cycle_id, created["id"], brand_id, hypothesis["type"]),
         )
 
     conn.execute(
-        "UPDATE campaign_cycle SET plan_version = ?, status = 'REVIEW', updated_at = ?"
-        " WHERE brand_id = ? AND id = ?",
+        "UPDATE campaign_cycle SET plan_version = %s, status = 'REVIEW', updated_at = %s"
+        " WHERE brand_id = %s AND id = %s",
         (version, ts, brand_id, cycle_id),
     )
     conn.commit()
@@ -713,7 +714,7 @@ def _persist(conn, brand_id: str, cycle: dict, plan: dict, actor: str) -> None:
 def get_latest_plan(conn, brand_id: str, cycle_id: str) -> Optional[dict]:
     """最新一版計畫（含解析好的 plan dict）。沒有就回 None。"""
     row = conn.execute(
-        "SELECT * FROM campaign_plan WHERE brand_id = ? AND campaign_cycle_id = ?"
+        "SELECT * FROM campaign_plan WHERE brand_id = %s AND campaign_cycle_id = %s"
         " ORDER BY plan_version DESC LIMIT 1",
         (brand_id, cycle_id),
     ).fetchone()
@@ -732,7 +733,7 @@ def get_cell(conn, brand_id: str, cycle_id: str, cell_id: str) -> Optional[dict]
     `app/ads/repository.py`：那檔已經超標凍在 `KNOWN_OVERSIZED_FILES`（見 docs/tech-debt.md），
     只准變小不准再加。"""
     row = conn.execute(
-        "SELECT * FROM experiment_cell WHERE brand_id = ? AND campaign_cycle_id = ? AND id = ?",
+        "SELECT * FROM experiment_cell WHERE brand_id = %s AND campaign_cycle_id = %s AND id = %s",
         (brand_id, cycle_id, cell_id),
     ).fetchone()
     return dict(row) if row else None
@@ -742,8 +743,10 @@ def list_cell_angles(conn, brand_id: str, cycle_id: str) -> list:
     """這期切角格目前的名字（id＋現名）。提案書畫面要以這份為準，不是 plan_json 快照——
     改名後快照裡的角度標題就跟 cell 對不上了（票 04-angle-rename 一.3）。"""
     return [dict(r) for r in conn.execute(
-        "SELECT id, creative_angle FROM experiment_cell WHERE brand_id = ? AND campaign_cycle_id = ?"
-        " ORDER BY rowid", (brand_id, cycle_id))]  # 寫入順序＝plan.angles 順序；id 同一毫秒內隨機，不能當排序
+        "SELECT id, creative_angle FROM experiment_cell WHERE brand_id = %s AND campaign_cycle_id = %s"
+        " ORDER BY created_at, id", (brand_id, cycle_id))]  # 票 02-3a：Postgres 無 rowid，改用
+    # created_at, id 排序；同一毫秒內多列寫入時 tie-break 不再保證等於寫入順序（id 帶隨機），
+    # 屬於 sqlite rowid 移除的已知代價，票內原始寫法即接受這個取捨
 
 
 def rename_angle(conn, brand_id: str, cycle_id: str, cell: dict, creative_angle: str,
@@ -760,7 +763,7 @@ def rename_angle(conn, brand_id: str, cycle_id: str, cell: dict, creative_angle:
     if ads_handoff.has_publishing_package(conn, brand_id, cycle_id):
         raise ValueError("交接包已產出，改名會讓 Meta 上的名稱對不上。")
 
-    conn.execute("UPDATE experiment_cell SET creative_angle = ? WHERE id = ?",
+    conn.execute("UPDATE experiment_cell SET creative_angle = %s WHERE id = %s",
                 (creative_angle, cell["id"]))
     write_audit(conn, brand_id=brand_id, entity_type="experiment_cell", entity_id=cell["id"],
                action="rename_angle", actor=actor,
@@ -777,8 +780,8 @@ def approve(conn, brand_id: str, cycle_id: str, actor: str) -> None:
         raise ValueError("這期還沒有計畫可以確認")
     ts = now_iso()
     conn.execute(
-        "UPDATE campaign_plan SET status = 'approved', approved_by = ?, approved_at = ?"
-        " WHERE id = ?",
+        "UPDATE campaign_plan SET status = 'approved', approved_by = %s, approved_at = %s"
+        " WHERE id = %s",
         (actor, ts, plan["id"]),
     )
     ads_repo.update_cycle_status(conn, brand_id, cycle_id, status="PRODUCTION", actor=actor)

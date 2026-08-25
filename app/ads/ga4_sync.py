@@ -13,7 +13,7 @@ from typing import Optional
 
 from app.ads import ga4_api
 from app.core import settings as coresettings
-from app.core.db import new_id, now_iso
+from app.core.db import new_id, now_iso, DEV_ORG_ID
 
 PROPERTY_SETTING = "ga4_property_id"
 SERVICE_ACCOUNT_SETTING = "ga4_service_account_json"
@@ -79,25 +79,25 @@ def sync_brand(conn, brand_id: str, actor: str, *, client=None,
     # 每次同步先清掉同一品牌、同一期間的舊列再整批寫入——GA4 彙總是「這段期間的最終數字」，
     # 不是逐日累加的時序資料，重覆同步同一期間要覆蓋而不是疊加。
     conn.execute(
-        "DELETE FROM ga4_summary WHERE brand_id = ? AND date_range_start = ? AND date_range_end = ?",
+        "DELETE FROM ga4_summary WHERE brand_id = %s AND date_range_start = %s AND date_range_end = %s",
         (brand_id, since, until),
     )
     for row in rows:
         conn.execute(
-            "INSERT INTO ga4_summary (id, brand_id, date_range_start, date_range_end, source,"
+            "INSERT INTO ga4_summary (id, org_id, brand_id, date_range_start, date_range_end, source,"
             " medium, sessions, conversions, revenue, synced_at, created_at)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (new_id("ga4"), brand_id, since, until, row.source, row.medium,
+            " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            (new_id("ga4"), DEV_ORG_ID, brand_id, since, until, row.source, row.medium,
              row.sessions, row.conversions, row.revenue, ts, ts),
         )
     conn.execute(
-        "INSERT INTO ga4_sync_status (brand_id, date_range_start, date_range_end, row_count,"
-        " purchase_event_seen, synced_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
+        "INSERT INTO ga4_sync_status (org_id, brand_id, date_range_start, date_range_end, row_count,"
+        " purchase_event_seen, synced_at, updated_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)"
         " ON CONFLICT(brand_id) DO UPDATE SET date_range_start = excluded.date_range_start,"
         " date_range_end = excluded.date_range_end, row_count = excluded.row_count,"
         " purchase_event_seen = excluded.purchase_event_seen, synced_at = excluded.synced_at,"
         " updated_at = excluded.updated_at",
-        (brand_id, since, until, len(rows), 1 if purchase_seen else 0, ts, ts),
+        (DEV_ORG_ID, brand_id, since, until, len(rows), 1 if purchase_seen else 0, ts, ts),
     )
     conn.commit()
     return GA4SyncResult(rows=len(rows), purchase_event_seen=purchase_seen)
@@ -109,14 +109,14 @@ def latest_summary(conn, brand_id: str) -> list:
     if status is None:
         return []
     return [dict(r) for r in conn.execute(
-        "SELECT * FROM ga4_summary WHERE brand_id = ? AND date_range_start = ?"
-        " AND date_range_end = ? ORDER BY sessions DESC",
+        "SELECT * FROM ga4_summary WHERE brand_id = %s AND date_range_start = %s"
+        " AND date_range_end = %s ORDER BY sessions DESC",
         (brand_id, status["date_range_start"], status["date_range_end"]),
     )]
 
 
 def get_sync_status(conn, brand_id: str) -> Optional[dict]:
     row = conn.execute(
-        "SELECT * FROM ga4_sync_status WHERE brand_id = ?", (brand_id,)
+        "SELECT * FROM ga4_sync_status WHERE brand_id = %s", (brand_id,)
     ).fetchone()
     return dict(row) if row else None

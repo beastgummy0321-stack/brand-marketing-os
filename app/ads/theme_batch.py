@@ -32,9 +32,9 @@ theme_engine.py 既有機制，不新寫一套）。
 批次迴圈能在呼叫引擎前就知道「該收手了」，不必解析引擎回傳的錯誤字串來分辨是不是費用問題。
 """
 
-import sqlite3
 from typing import Optional
 
+from app.core.db import Conn
 from app.ads import brief_assembler
 from app.ads import nextcycle
 from app.ads import theme_feedback
@@ -47,25 +47,25 @@ PRESELECT_FORMAT = "single_image"
 THEME_COUNT_PRESELECT = theme_feedback.BASE_THEME_QUOTA
 
 
-def preselected_cells(conn: sqlite3.Connection, brand_id: str, cycle_id: str) -> list:
+def preselected_cells(conn: Conn, brand_id: str, cycle_id: str) -> list:
     """這期核准計畫底下的每個切角格都是預選格（見檔頭：目前沒有格式建議演算法，所以是
     「每格」而不是「挑 3–5 格」）。查詢沿用 app/ads/creative.py:296-299 既有的
-    `SELECT * FROM experiment_cell WHERE brand_id = ? AND campaign_cycle_id = ? ORDER BY id`
+    `SELECT * FROM experiment_cell WHERE brand_id = %s AND campaign_cycle_id = %s ORDER BY id`
     慣例。"""
     return [dict(r) for r in conn.execute(
-        "SELECT * FROM experiment_cell WHERE brand_id = ? AND campaign_cycle_id = ? ORDER BY id",
+        "SELECT * FROM experiment_cell WHERE brand_id = %s AND campaign_cycle_id = %s ORDER BY id",
         (brand_id, cycle_id),
     )]
 
 
-def _budget_blocked(conn: sqlite3.Connection, brand_id: str) -> bool:
+def _budget_blocked(conn: Conn, brand_id: str) -> bool:
     model = providers.resolve_model(task_type="creative_theme", conn=conn)
     return coresettings.budget_exceeded_message(
         conn, brand_id, pricing.cost_ceiling(model, theme_engine.THEME_MAX_TOKENS),
     ) is not None
 
 
-def generation_count(conn: sqlite3.Connection, brand_id: str, cycle_id: str) -> int:
+def generation_count(conn: Conn, brand_id: str, cycle_id: str) -> int:
     """這次核准實際會跑幾次生成——`preselected_cells()` 逐格用
     `theme_feedback.theme_quota()` 算配額後加總，跟 `generate_preselected_batch()` 內層
     迴圈數的是同一個數字。`estimated_batch_cost()`（花費預估，D3）與票 13
@@ -82,7 +82,7 @@ def generation_count(conn: sqlite3.Connection, brand_id: str, cycle_id: str) -> 
     )
 
 
-def estimated_batch_cost(conn: sqlite3.Connection, brand_id: str, cycle_id: str) -> float:
+def estimated_batch_cost(conn: Conn, brand_id: str, cycle_id: str) -> float:
     """核可提案書前，先讓使用者看到這次核准會花多少錢（票 13-approve-must-not-block-or-
     surprise，D3）。跟矩陣頁「生成一個主題」灰卡標的預估費用同一個天花板——
     `pricing.cost_ceiling(model, theme_engine.THEME_MAX_TOKENS)`（見
@@ -96,7 +96,7 @@ def estimated_batch_cost(conn: sqlite3.Connection, brand_id: str, cycle_id: str)
     return per_generation_ceiling * generation_count(conn, brand_id, cycle_id)
 
 
-def generate_preselected_batch(conn: sqlite3.Connection, brand_id: str, cycle_id: str, *,
+def generate_preselected_batch(conn: Conn, brand_id: str, cycle_id: str, *,
                                 actor: str) -> dict:
     """計畫核准觸發（票 09 驗收 1）：每個切角格以 THEME_COUNT_PRESELECT 為基準，依可信
     歷史成效加減 1 個 single_image 主題；non-預選格式（carousel／video）零生成。
@@ -166,12 +166,12 @@ def generate_preselected_batch(conn: sqlite3.Connection, brand_id: str, cycle_id
 _HANDLE_ACTOR = "orchestrator"
 
 
-def status(conn: sqlite3.Connection, brand_id: str) -> dict:
+def status(conn: Conn, brand_id: str) -> dict:
     """目前沒有任何規則要讀創意層 facts，回空字典（O1-01 這條垂直線只需要 handle()）。"""
     return {}
 
 
-def handle(conn: sqlite3.Connection, action: dict) -> dict:
+def handle(conn: Conn, action: dict) -> dict:
     """調度台唯一支援的 op：add_theme（叫創意補主題）。不認得的 op 一律丟 ValueError
     （ADR 0024 決議 6）。"""
     if action["op"] != "add_theme":

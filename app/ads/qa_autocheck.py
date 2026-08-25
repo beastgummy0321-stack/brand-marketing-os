@@ -120,8 +120,8 @@ def _match_adsets(conn, brand_id: str, cycle_id: str, packages: list,
     if err is not None:
         return [], err
     campaign_ids = {r["meta_campaign_id"] for r in conn.execute(
-        "SELECT DISTINCT meta_campaign_id FROM external_ad_mapping WHERE brand_id = ?"
-        " AND campaign_cycle_id = ? AND meta_campaign_id IS NOT NULL AND meta_campaign_id != ''",
+        "SELECT DISTINCT meta_campaign_id FROM external_ad_mapping WHERE brand_id = %s"
+        " AND campaign_cycle_id = %s AND meta_campaign_id IS NOT NULL AND meta_campaign_id != ''",
         (brand_id, cycle_id)).fetchall()}
     if campaign_ids:
         # ponytail: mapping 裡的 campaign_id 若已失效（活動被刪、或當初填錯帳號），這裡會

@@ -118,7 +118,7 @@ def due_reminders(conn, brand_id: Optional[str] = None, today: Optional[str] = N
 
 def dismiss(conn, brand_id: str, reminder_id: str, *, actor: str) -> None:
     row = conn.execute(
-        "SELECT brand_id FROM interrupt WHERE id = ?", (reminder_id,)
+        "SELECT brand_id FROM interrupt WHERE id = %s", (reminder_id,)
     ).fetchone()
     if row is None or row["brand_id"] != brand_id:
         raise ValueError("找不到這則提醒")
@@ -135,13 +135,13 @@ def mark_calibration_if_first(conn, brand_id: str, cycle_id: str) -> bool:
     if cycle is None or cycle["phase"] != "normal":
         return False
     earlier = conn.execute(
-        "SELECT COUNT(*) c FROM campaign_cycle WHERE brand_id = ? AND phase != 'simulation'"
-        " AND id != ? AND created_at < ?",
+        "SELECT COUNT(*) c FROM campaign_cycle WHERE brand_id = %s AND phase != 'simulation'"
+        " AND id != %s AND created_at < %s",
         (brand_id, cycle_id, cycle["created_at"]),
     ).fetchone()["c"]
     if earlier:
         return False
-    conn.execute("UPDATE campaign_cycle SET phase = 'calibration' WHERE id = ?", (cycle_id,))
+    conn.execute("UPDATE campaign_cycle SET phase = 'calibration' WHERE id = %s", (cycle_id,))
     conn.commit()
     return True
 
@@ -236,8 +236,8 @@ def previous_cycle(conn, brand_id: str, cycle: dict) -> Optional[dict]:
     （diff_with_previous）與兌現預言卡第二個出口（票 F5，決策 0039 第 15 條：第二期檔期
     內頁頂部常駐卡）共用同一份查詢，不重複寫第二份 SQL。"""
     row = conn.execute(
-        "SELECT * FROM campaign_cycle WHERE brand_id = ? AND id != ? AND phase != 'simulation'"
-        " AND created_at < ? ORDER BY created_at DESC LIMIT 1",
+        "SELECT * FROM campaign_cycle WHERE brand_id = %s AND id != %s AND phase != 'simulation'"
+        " AND created_at < %s ORDER BY created_at DESC LIMIT 1",
         (brand_id, cycle["id"], cycle["created_at"]),
     ).fetchone()
     return dict(row) if row is not None else None

@@ -33,7 +33,7 @@ from app.ads import performance_batches
 from app.ads import reading as ads_reading
 from app.ads import repository as ads_repo
 from app.brand_intelligence import repository as bi
-from app.core.db import new_id, now_iso
+from app.core.db import new_id, now_iso, DEV_ORG_ID
 
 # 產業通例值。只在這個品牌完全沒有歷史時使用，畫面必須標明來源。
 INDUSTRY_CTR = 0.012          # 點擊率 1.2%
@@ -115,12 +115,12 @@ def generate(conn, brand_id: str, cycle_id: str, actor: str) -> tuple:
     # （見 performance.resolve_product_id 的說明），所以這裡呼叫它一定回 None，
     # 不必真的呼叫，直接留 NULL 比較誠實（鐵則 16：模稜兩可不猜）。
     conn.execute(
-        "INSERT INTO performance_snapshot (id, brand_id, campaign_cycle_id, product_id,"
+        "INSERT INTO performance_snapshot (id, org_id, brand_id, campaign_cycle_id, product_id,"
         " platform, date_range_start, date_range_end, as_of_date, snapshot_taken_at,"
         " currency, impressions, clicks, spend, conversions, revenue, reconciled, source,"
         " import_batch_id, quarantined, created_at)"
-        " VALUES (?, ?, ?, NULL, 'meta', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 'simulated', ?, 0, ?)",
-        (new_id("psn"), brand_id, cycle_id, cycle["start_date"], cycle["end_date"],
+        " VALUES (%s, %s, %s, %s, NULL, 'meta', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 1, 'simulated', %s, 0, %s)",
+        (new_id("psn"), DEV_ORG_ID, brand_id, cycle_id, cycle["start_date"], cycle["end_date"],
          cycle["end_date"], ts, cycle["currency"], totals["impressions"], totals["clicks"],
          totals["spend"], totals["conversions"], totals["revenue"], f"sim_{ts}", ts),
     )

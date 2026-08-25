@@ -12,12 +12,11 @@ CYCLE_CASCADE_TABLES／_PRODUCT_CASCADE_LABELS（該檔已頂到 800 行檔案�
 """
 
 import json
-import sqlite3
 from typing import Optional
 
 from app.ads import fingerprint as fp
 from app.core.audit import write_audit
-from app.core.db import new_id, now_iso
+from app.core.db import new_id, now_iso, Conn, DEV_ORG_ID
 
 
 def _rows(cursor) -> list:
@@ -28,7 +27,7 @@ def _row(cursor_row) -> Optional[dict]:
     return dict(cursor_row) if cursor_row is not None else None
 
 
-def _insert_component(conn: sqlite3.Connection, brand_id: str, campaign_cycle_id: str,
+def _insert_component(conn: Conn, brand_id: str, campaign_cycle_id: str,
                       theme_id: str, component: dict, ts: str) -> None:
     component_type = component.get("component_type")
     content = component.get("content")
@@ -38,11 +37,11 @@ def _insert_component(conn: sqlite3.Connection, brand_id: str, campaign_cycle_id
         raise ValueError("元件內容（content）為必填")
     fingerprint = component.get("fingerprint_json")
     conn.execute(
-        "INSERT INTO creative_theme_component (id, brand_id, campaign_cycle_id,"
+        "INSERT INTO creative_theme_component (id, org_id, brand_id, campaign_cycle_id,"
         " creative_theme_id, component_type, sequence, content, fingerprint_json,"
         " over_budget, similarity_flag, created_at)"
-        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (new_id("cthc"), brand_id, campaign_cycle_id, theme_id, str(component_type).strip(),
+        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+        (new_id("cthc"), DEV_ORG_ID, brand_id, campaign_cycle_id, theme_id, str(component_type).strip(),
          component.get("sequence"), str(content), json.dumps(fingerprint, ensure_ascii=False)
              if fingerprint is not None else None,
          1 if component.get("over_budget") else 0,
@@ -50,7 +49,7 @@ def _insert_component(conn: sqlite3.Connection, brand_id: str, campaign_cycle_id
     )
 
 
-def create_theme(conn: sqlite3.Connection, brand_id: str, *, campaign_cycle_id: str,
+def create_theme(conn: Conn, brand_id: str, *, campaign_cycle_id: str,
                  experiment_cell_id: str, format_key: str, name: str, folder_code: str,
                  actor: str, status: str = "draft", components: Optional[list] = None) -> dict:
     """建一個主題，可一併帶入元件清單（components：每項 dict 至少含
@@ -68,10 +67,10 @@ def create_theme(conn: sqlite3.Connection, brand_id: str, *, campaign_cycle_id: 
     theme_id = new_id("cth")
     ts = now_iso()
     conn.execute(
-        "INSERT INTO creative_theme (id, brand_id, campaign_cycle_id, experiment_cell_id,"
+        "INSERT INTO creative_theme (id, org_id, brand_id, campaign_cycle_id, experiment_cell_id,"
         " format_key, name, folder_code, status, created_at, updated_at)"
-        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (theme_id, brand_id, campaign_cycle_id, experiment_cell_id, format_key.strip(),
+        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+        (theme_id, DEV_ORG_ID, brand_id, campaign_cycle_id, experiment_cell_id, format_key.strip(),
          name.strip(), folder_code.strip(), status, ts, ts),
     )
     for component in (components or []):
@@ -84,9 +83,9 @@ def create_theme(conn: sqlite3.Connection, brand_id: str, *, campaign_cycle_id: 
     return after
 
 
-def get_theme(conn: sqlite3.Connection, brand_id: str, theme_id: str) -> Optional[dict]:
+def get_theme(conn: Conn, brand_id: str, theme_id: str) -> Optional[dict]:
     theme = _row(conn.execute(
-        "SELECT * FROM creative_theme WHERE brand_id = ? AND id = ?", (brand_id, theme_id)
+        "SELECT * FROM creative_theme WHERE brand_id = %s AND id = %s", (brand_id, theme_id)
     ).fetchone())
     if theme is None:
         return None
@@ -94,9 +93,9 @@ def get_theme(conn: sqlite3.Connection, brand_id: str, theme_id: str) -> Optiona
     return theme
 
 
-def list_theme_components(conn: sqlite3.Connection, brand_id: str, theme_id: str) -> list:
+def list_theme_components(conn: Conn, brand_id: str, theme_id: str) -> list:
     rows = _rows(conn.execute(
-        "SELECT * FROM creative_theme_component WHERE brand_id = ? AND creative_theme_id = ?"
+        "SELECT * FROM creative_theme_component WHERE brand_id = %s AND creative_theme_id = %s"
         " ORDER BY sequence, created_at", (brand_id, theme_id),
     ))
     for row in rows:
@@ -106,7 +105,7 @@ def list_theme_components(conn: sqlite3.Connection, brand_id: str, theme_id: str
     return rows
 
 
-def _attach_component_decision(conn: sqlite3.Connection, brand_id: str, row: dict) -> None:
+def _attach_component_decision(conn: Conn, brand_id: str, row: dict) -> None:
     """元件退件狀態（票 10）：比照 app/ads/creative.py list_variants() 的既有查法——每則
     元件查一次最新決策，不整批 join（元件數量小，維持既有寫法一致優先於效能）。
 
@@ -116,8 +115,8 @@ def _attach_component_decision(conn: sqlite3.Connection, brand_id: str, row: dic
     ORDER BY decided_at DESC LIMIT 1 維持「最新決策為準」，restore() 補寫的 theme_component／
     adopted 較晚，會蓋過較早的 variant／rejected，翻案照樣成立。"""
     decision = conn.execute(
-        "SELECT * FROM adoption_decision WHERE brand_id = ?"
-        " AND target_type IN ('theme_component', 'variant') AND target_id = ?"
+        "SELECT * FROM adoption_decision WHERE brand_id = %s"
+        " AND target_type IN ('theme_component', 'variant') AND target_id = %s"
         " ORDER BY decided_at DESC LIMIT 1",
         (brand_id, row["id"]),
     ).fetchone()
@@ -128,9 +127,9 @@ def _attach_component_decision(conn: sqlite3.Connection, brand_id: str, row: dic
         row["rejected"] and decision["reason_code"] == fp.AUTO_HOLD_REASON_CODE)
 
 
-def get_component(conn: sqlite3.Connection, brand_id: str, component_id: str) -> Optional[dict]:
+def get_component(conn: Conn, brand_id: str, component_id: str) -> Optional[dict]:
     row = _row(conn.execute(
-        "SELECT * FROM creative_theme_component WHERE brand_id = ? AND id = ?",
+        "SELECT * FROM creative_theme_component WHERE brand_id = %s AND id = %s",
         (brand_id, component_id),
     ).fetchone())
     if row is None:
@@ -141,11 +140,11 @@ def get_component(conn: sqlite3.Connection, brand_id: str, component_id: str) ->
     return row
 
 
-def list_themes_for_cell(conn: sqlite3.Connection, brand_id: str,
+def list_themes_for_cell(conn: Conn, brand_id: str,
                          experiment_cell_id: str) -> list:
     """依格查詢：同一個切角格底下的全部主題（含各自元件）。"""
     themes = _rows(conn.execute(
-        "SELECT * FROM creative_theme WHERE brand_id = ? AND experiment_cell_id = ?"
+        "SELECT * FROM creative_theme WHERE brand_id = %s AND experiment_cell_id = %s"
         " ORDER BY created_at", (brand_id, experiment_cell_id),
     ))
     for theme in themes:
@@ -153,16 +152,16 @@ def list_themes_for_cell(conn: sqlite3.Connection, brand_id: str,
     return themes
 
 
-def list_themes_for_cycle(conn: sqlite3.Connection, brand_id: str, campaign_cycle_id: str, *,
+def list_themes_for_cycle(conn: Conn, brand_id: str, campaign_cycle_id: str, *,
                           status: Optional[str] = None) -> list:
     """依期查詢：整個檔期底下的全部主題（含各自元件），可選狀態篩選（票
     02-repoint-creative-readers D2：app/ads/creative.py 的讀取三函式改源後只能透過本檔
     取資料，不得直接查 creative_theme／creative_theme_component，這支補上「依期」的
     查詢入口，比照 list_themes_for_cell()「依格」的既有寫法）。"""
-    sql = "SELECT * FROM creative_theme WHERE brand_id = ? AND campaign_cycle_id = ?"
+    sql = "SELECT * FROM creative_theme WHERE brand_id = %s AND campaign_cycle_id = %s"
     params = [brand_id, campaign_cycle_id]
     if status:
-        sql += " AND status = ?"
+        sql += " AND status = %s"
         params.append(status)
     sql += " ORDER BY experiment_cell_id, created_at"
     themes = _rows(conn.execute(sql, params))
@@ -171,7 +170,7 @@ def list_themes_for_cycle(conn: sqlite3.Connection, brand_id: str, campaign_cycl
     return themes
 
 
-def count_components_by_adoption(conn: sqlite3.Connection, brand_id: str) -> dict:
+def count_components_by_adoption(conn: Conn, brand_id: str) -> dict:
     """品牌全部元件依「所屬主題是否已採用」計數，跨全部檔期不分期（票
     03-close-repoint-gaps：app/ads/creative_pipeline.py 的駕駛艙內容產線小計改讀本表——
     creative_variant 沒有存活寫入路徑，直接查它兩個數字恆為 0）。`creative.list_variants()`
@@ -183,12 +182,12 @@ def count_components_by_adoption(conn: sqlite3.Connection, brand_id: str) -> dic
         " SUM(CASE WHEN t.status = 'adopted' THEN 1 ELSE 0 END) AS published,"
         " SUM(CASE WHEN t.status != 'adopted' THEN 1 ELSE 0 END) AS pending"
         " FROM creative_theme_component c JOIN creative_theme t ON t.id = c.creative_theme_id"
-        " WHERE c.brand_id = ?", (brand_id,),
+        " WHERE c.brand_id = %s", (brand_id,),
     ).fetchone()
     return {"pending": row["pending"] or 0, "published": row["published"] or 0}
 
 
-def update_theme_status(conn: sqlite3.Connection, brand_id: str, theme_id: str, *,
+def update_theme_status(conn: Conn, brand_id: str, theme_id: str, *,
                         status: str, actor: str) -> dict:
     before = get_theme(conn, brand_id, theme_id)
     if before is None:
@@ -199,7 +198,7 @@ def update_theme_status(conn: sqlite3.Connection, brand_id: str, theme_id: str, 
         raise ValueError("actor 為必填")
 
     conn.execute(
-        "UPDATE creative_theme SET status = ?, updated_at = ? WHERE brand_id = ? AND id = ?",
+        "UPDATE creative_theme SET status = %s, updated_at = %s WHERE brand_id = %s AND id = %s",
         (status.strip(), now_iso(), brand_id, theme_id),
     )
     after = get_theme(conn, brand_id, theme_id)
@@ -214,7 +213,7 @@ def update_theme_status(conn: sqlite3.Connection, brand_id: str, theme_id: str, 
 # 沿用既有 adoption_decision 表與 fingerprint.REJECT_REASON_LABELS 理由碼清單，不新造。
 # ---------------------------------------------------------------------------
 
-def adopt_theme(conn: sqlite3.Connection, brand_id: str, theme_id: str, *, actor: str) -> dict:
+def adopt_theme(conn: Conn, brand_id: str, theme_id: str, *, actor: str) -> dict:
     """一鍵採用：主題狀態改採用，一次動作寫一筆主題級決策紀錄（AC1）。全部元件隨主題狀態
     一併算採用——不逐元件建決策列（AC3：不提供逐欄位勾選採用），元件層沒有獨立的
     「已採用」狀態可查，是否算數看主題本身的 status。
@@ -227,13 +226,13 @@ def adopt_theme(conn: sqlite3.Connection, brand_id: str, theme_id: str, *, actor
 
     ts = now_iso()
     conn.execute(
-        "UPDATE creative_theme SET status = 'adopted', updated_at = ? WHERE brand_id = ? AND id = ?",
+        "UPDATE creative_theme SET status = 'adopted', updated_at = %s WHERE brand_id = %s AND id = %s",
         (ts, brand_id, theme_id),
     )
     conn.execute(
-        "INSERT INTO adoption_decision (id, brand_id, campaign_cycle_id, target_type, target_id,"
-        " decision, decided_by, decided_at) VALUES (?, ?, ?, 'theme', ?, 'adopted', ?, ?)",
-        (new_id("adp"), brand_id, before["campaign_cycle_id"], theme_id, actor, ts),
+        "INSERT INTO adoption_decision (id, org_id, brand_id, campaign_cycle_id, target_type, target_id,"
+        " decision, decided_by, decided_at) VALUES (%s, %s, %s, %s, 'theme', %s, 'adopted', %s, %s)",
+        (new_id("adp"), DEV_ORG_ID, brand_id, before["campaign_cycle_id"], theme_id, actor, ts),
     )
     after = get_theme(conn, brand_id, theme_id)
     write_audit(conn, brand_id=brand_id, entity_type="creative_theme", entity_id=theme_id,
@@ -242,7 +241,7 @@ def adopt_theme(conn: sqlite3.Connection, brand_id: str, theme_id: str, *, actor
     return after
 
 
-def reject_component(conn: sqlite3.Connection, brand_id: str, component_id: str, *,
+def reject_component(conn: Conn, brand_id: str, component_id: str, *,
                      reason_code: str, actor: str, reason_text: Optional[str] = None) -> dict:
     """單一元件退件＋理由（AC2）：元件除名——不從資料表刪掉（append-only 稽核慣例），
     `list_theme_components()`／`get_component()` 之後回傳時標 `rejected=True`。理由碼與
@@ -262,10 +261,10 @@ def reject_component(conn: sqlite3.Connection, brand_id: str, component_id: str,
     before = {"rejected": component["rejected"]}
     ts = now_iso()
     conn.execute(
-        "INSERT INTO adoption_decision (id, brand_id, campaign_cycle_id, target_type, target_id,"
+        "INSERT INTO adoption_decision (id, org_id, brand_id, campaign_cycle_id, target_type, target_id,"
         " decision, reason_code, reason_text, fingerprint_json, decided_by, decided_at)"
-        " VALUES (?, ?, ?, 'theme_component', ?, 'rejected', ?, ?, ?, ?, ?)",
-        (new_id("adp"), brand_id, component["campaign_cycle_id"], component_id, reason_code,
+        " VALUES (%s, %s, %s, %s, 'theme_component', %s, 'rejected', %s, %s, %s, %s, %s)",
+        (new_id("adp"), DEV_ORG_ID, brand_id, component["campaign_cycle_id"], component_id, reason_code,
          (reason_text or "").strip() or None,
          json.dumps(component["fingerprint_json"] or {}, ensure_ascii=False), actor, ts),
     )

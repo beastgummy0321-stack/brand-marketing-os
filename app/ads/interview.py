@@ -24,7 +24,7 @@ from typing import Optional
 from app.ads import fingerprint as fp
 from app.brand_intelligence import repository as bi
 from app.core.audit import write_audit
-from app.core.db import new_id, now_iso
+from app.core.db import new_id, now_iso, DEV_ORG_ID
 
 
 def _clean_selection(raw: Optional[dict]) -> dict:
@@ -64,8 +64,8 @@ def _drop_conflicts(bad: dict, good: dict) -> list:
 def _create_self_report_card(conn, brand_id: str, axis: str, value: str, *, actor: str) -> Optional[dict]:
     """自述負面 → 候選規則卡。同一軸值已經有候選卡（不論待決或已決）就不重複造。"""
     existing = conn.execute(
-        "SELECT id FROM creative_rule_card WHERE brand_id = ? AND fingerprint_axis = ?"
-        " AND fingerprint_value = ?", (brand_id, axis, value),
+        "SELECT id FROM creative_rule_card WHERE brand_id = %s AND fingerprint_axis = %s"
+        " AND fingerprint_value = %s", (brand_id, axis, value),
     ).fetchone()
     if existing is not None:
         return None
@@ -76,12 +76,12 @@ def _create_self_report_card(conn, brand_id: str, axis: str, value: str, *, acto
     proposed_text = f"以後不要再出「{fp.AXES[axis]['label']}是{label}」的素材"
     evidence = json.dumps({"source": "self_report"}, ensure_ascii=False)
     conn.execute(
-        "INSERT INTO creative_rule_card (id, brand_id, fingerprint_axis, fingerprint_value,"
+        "INSERT INTO creative_rule_card (id, org_id, brand_id, fingerprint_axis, fingerprint_value,"
         " proposed_rule_text, evidence_json, reject_count, status, created_at, updated_at)"
-        " VALUES (?, ?, ?, ?, ?, ?, 0, 'pending', ?, ?)",
-        (row_id, brand_id, axis, value, proposed_text, evidence, ts, ts),
+        " VALUES (%s, %s, %s, %s, %s, %s, %s, 0, 'pending', %s, %s)",
+        (row_id, DEV_ORG_ID, brand_id, axis, value, proposed_text, evidence, ts, ts),
     )
-    row = dict(conn.execute("SELECT * FROM creative_rule_card WHERE id = ?", (row_id,)).fetchone())
+    row = dict(conn.execute("SELECT * FROM creative_rule_card WHERE id = %s", (row_id,)).fetchone())
     write_audit(conn, brand_id=brand_id, entity_type="creative_rule_card", entity_id=row_id,
                 action="self_report", actor=actor, before=None, after=row)
     return row
@@ -131,15 +131,16 @@ def attach_pending_hypotheses(conn, brand_id: str, cycle_id: str) -> int:
     """
     rows = conn.execute(
         "SELECT id, hypothesis_type FROM strategy_hypothesis"
-        " WHERE brand_id = ? AND status = 'proposed' AND source_cycle_id IS NULL"
+        " WHERE brand_id = %s AND status = 'proposed' AND source_cycle_id IS NULL"
         " AND id NOT IN (SELECT strategy_hypothesis_id FROM campaign_cycle_hypothesis"
-        " WHERE brand_id = ?)", (brand_id, brand_id),
+        " WHERE brand_id = %s)", (brand_id, brand_id),
     ).fetchall()
     for row in rows:
         conn.execute(
-            "INSERT OR IGNORE INTO campaign_cycle_hypothesis (campaign_cycle_id,"
-            " strategy_hypothesis_id, brand_id, role) VALUES (?, ?, ?, ?)",
-            (cycle_id, row["id"], brand_id, row["hypothesis_type"]),
+            "INSERT INTO campaign_cycle_hypothesis (org_id, campaign_cycle_id,"
+            " strategy_hypothesis_id, brand_id, role) VALUES (%s, %s, %s, %s, %s)"
+            " ON CONFLICT (campaign_cycle_id, strategy_hypothesis_id) DO NOTHING",
+            (DEV_ORG_ID, cycle_id, row["id"], brand_id, row["hypothesis_type"]),
         )
     if rows:
         conn.commit()

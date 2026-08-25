@@ -24,7 +24,7 @@ from app.ads import theme_repository as theme_repo
 from app.brand_intelligence import repository as bi
 from app.core import settings as coresettings
 from app.core.audit import write_audit
-from app.core.db import new_id, now_iso
+from app.core.db import new_id, now_iso, DEV_ORG_ID
 from app.llm import context_compiler, gateway, methodology, pricing, providers
 
 PROVIDER = providers.AnthropicProvider()  # 測試整包換掉
@@ -259,7 +259,7 @@ def _rejection_constraints(conn, brand_id: str, limit: int = 12) -> list:
     """
     rows = conn.execute(
         "SELECT reason_code, fingerprint_json FROM adoption_decision"
-        " WHERE brand_id = ? AND decision = 'rejected' ORDER BY decided_at DESC LIMIT ?",
+        " WHERE brand_id = %s AND decision = 'rejected' ORDER BY decided_at DESC LIMIT %s",
         (brand_id, limit * 3),
     ).fetchall()
 
@@ -304,7 +304,7 @@ def generate(conn, brand_id: str, cycle_id: str, actor: str, *,
         return False, "這期的計畫還沒確認，先確認計畫再做素材。"
 
     cells = [dict(r) for r in conn.execute(
-        "SELECT * FROM experiment_cell WHERE brand_id = ? AND campaign_cycle_id = ? ORDER BY id",
+        "SELECT * FROM experiment_cell WHERE brand_id = %s AND campaign_cycle_id = %s ORDER BY id",
         (brand_id, cycle_id),
     )]
     if not cells:
@@ -436,17 +436,17 @@ def _backfill_missing_types(conn, brand: dict, cycle: dict, plan: dict, cells: l
 def _brief_for_cell(conn, brand_id: str, cycle_id: str, cell: dict, ts: str) -> str:
     """每個切角一份 Execution Brief，變體掛在它下面（03 §4.2 的鏈條）。"""
     existing = conn.execute(
-        "SELECT id FROM creative_brief WHERE brand_id = ? AND experiment_cell_id = ?",
+        "SELECT id FROM creative_brief WHERE brand_id = %s AND experiment_cell_id = %s",
         (brand_id, cell["id"]),
     ).fetchone()
     if existing:
         return existing["id"]
     brief_id = new_id("cbf")
     conn.execute(
-        "INSERT INTO creative_brief (id, campaign_cycle_id, experiment_cell_id, brand_id,"
+        "INSERT INTO creative_brief (id, org_id, campaign_cycle_id, experiment_cell_id, brand_id,"
         " brief_type, purpose, status, created_at, updated_at)"
-        " VALUES (?, ?, ?, ?, 'copy', ?, 'dispatched', ?, ?)",
-        (brief_id, cycle_id, cell["id"], brand_id, cell["creative_angle"] or "本期切角", ts, ts),
+        " VALUES (%s, %s, %s, %s, %s, 'copy', %s, 'dispatched', %s, %s)",
+        (brief_id, DEV_ORG_ID, cycle_id, cell["id"], brand_id, cell["creative_angle"] or "本期切角", ts, ts),
     )
     return brief_id
 
@@ -467,11 +467,11 @@ def _persist(conn, brand_id: str, cycle_id: str, cells: list, variants: list,
     for rank, variant in enumerate(variants, start=1):
         cell_id = variant["cell_id"]
         conn.execute(
-            "INSERT INTO creative_variant (id, variant_type, creative_brief_id,"
+            "INSERT INTO creative_variant (id, org_id, variant_type, creative_brief_id,"
             " campaign_cycle_id, experiment_cell_id, brand_id, product_id, attributes_json,"
             " fingerprint_json, rationale, recommendation_rank, status, created_at)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'DRAFT', ?)",
-            (new_id("cvr"), variant["variant_type"], briefs[cell_id], cycle_id, cell_id,
+            " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'DRAFT', %s)",
+            (new_id("cvr"), DEV_ORG_ID, variant["variant_type"], briefs[cell_id], cycle_id, cell_id,
              brand_id, cell_products.get(cell_id),
              json.dumps({"content": variant["content"],
                         "methodology_missing": methodology_missing,
@@ -503,7 +503,7 @@ def _cell_product_ids(conn, brand_id: str, cycle_id: str) -> dict:
     """{experiment_cell_id: product_id}——experiment_cell 不是主題表，直接查（D2 只限主題
     資料要經 theme_repository，切角格本來就是 generate() 也在用的既有查法）。"""
     return {row["id"]: row["product_id"] for row in conn.execute(
-        "SELECT id, product_id FROM experiment_cell WHERE brand_id = ? AND campaign_cycle_id = ?",
+        "SELECT id, product_id FROM experiment_cell WHERE brand_id = %s AND campaign_cycle_id = %s",
         (brand_id, cycle_id),
     )}
 
@@ -574,7 +574,7 @@ def list_variants(conn, brand_id: str, cycle_id: str) -> list:
 def group_by_cell(conn, brand_id: str, cycle_id: str) -> list:
     """素材依切角分組，供頁面一組一組顯示。"""
     cells = [dict(r) for r in conn.execute(
-        "SELECT * FROM experiment_cell WHERE brand_id = ? AND campaign_cycle_id = ? ORDER BY id",
+        "SELECT * FROM experiment_cell WHERE brand_id = %s AND campaign_cycle_id = %s ORDER BY id",
         (brand_id, cycle_id),
     )]
     variants = list_variants(conn, brand_id, cycle_id)
@@ -599,7 +599,7 @@ def get_variant(conn, brand_id: str, variant_id: str) -> Optional[dict]:
     product_id = None
     if theme.get("experiment_cell_id"):
         cell = conn.execute(
-            "SELECT product_id FROM experiment_cell WHERE brand_id = ? AND id = ?",
+            "SELECT product_id FROM experiment_cell WHERE brand_id = %s AND id = %s",
             (brand_id, theme["experiment_cell_id"]),
         ).fetchone()
         product_id = cell["product_id"] if cell else None
@@ -642,10 +642,10 @@ def restore(conn, brand_id: str, variant_id: str, *, actor: str) -> dict:
     if variant is None:
         raise ValueError("找不到這則素材")
     conn.execute(
-        "INSERT INTO adoption_decision (id, brand_id, campaign_cycle_id, target_type, target_id,"
+        "INSERT INTO adoption_decision (id, org_id, brand_id, campaign_cycle_id, target_type, target_id,"
         " decision, fingerprint_json, decided_by, decided_at)"
-        " VALUES (?, ?, ?, 'theme_component', ?, 'adopted', ?, ?, ?)",
-        (new_id("adp"), brand_id, variant["campaign_cycle_id"], variant_id,
+        " VALUES (%s, %s, %s, %s, 'theme_component', %s, 'adopted', %s, %s, %s)",
+        (new_id("adp"), DEV_ORG_ID, brand_id, variant["campaign_cycle_id"], variant_id,
          json.dumps(variant["fingerprint"], ensure_ascii=False), actor, now_iso()),
     )
     write_audit(conn, brand_id=brand_id, entity_type="creative_theme_component", entity_id=variant_id,
@@ -664,10 +664,10 @@ def restore_all_auto_held(conn, brand_id: str, cycle_id: str, *, actor: str) -> 
         if not variant["auto_held"]:
             continue
         conn.execute(
-            "INSERT INTO adoption_decision (id, brand_id, campaign_cycle_id, target_type,"
+            "INSERT INTO adoption_decision (id, org_id, brand_id, campaign_cycle_id, target_type,"
             " target_id, decision, fingerprint_json, decided_by, decided_at)"
-            " VALUES (?, ?, ?, 'theme_component', ?, 'adopted', ?, ?, ?)",
-            (new_id("adp"), brand_id, cycle_id, variant["id"],
+            " VALUES (%s, %s, %s, %s, 'theme_component', %s, 'adopted', %s, %s, %s)",
+            (new_id("adp"), DEV_ORG_ID, brand_id, cycle_id, variant["id"],
              json.dumps(variant["fingerprint"], ensure_ascii=False), actor, ts),
         )
         restored += 1
@@ -741,11 +741,11 @@ def rewrite(conn, brand_id: str, variant_id: str, *, reason_code: str, actor: st
 
     new_variant_id = new_id("cvr")
     conn.execute(
-        "INSERT INTO creative_variant (id, variant_type, creative_brief_id, campaign_cycle_id,"
+        "INSERT INTO creative_variant (id, org_id, variant_type, creative_brief_id, campaign_cycle_id,"
         " experiment_cell_id, brand_id, product_id, attributes_json, fingerprint_json,"
         " rationale, recommendation_rank, status, created_at)"
-        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'DRAFT', ?)",
-        (new_variant_id, variant["variant_type"], variant["creative_brief_id"],
+        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'DRAFT', %s)",
+        (new_variant_id, DEV_ORG_ID, variant["variant_type"], variant["creative_brief_id"],
          variant["campaign_cycle_id"], variant["experiment_cell_id"], brand_id,
          variant["product_id"],
          json.dumps({"content": data["content"].strip(),

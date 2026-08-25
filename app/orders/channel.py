@@ -26,7 +26,7 @@ from typing import Optional
 
 from app.ads import performance as ads_performance
 from app.core.audit import write_audit
-from app.core.db import new_id, now_iso
+from app.core.db import new_id, now_iso, DEV_ORG_ID
 
 # 蝦皮賣家中心「訂單」匯出常見欄名（未經真實檔驗證，見檔頭誠實標注）。order_sn 是
 # 唯一識別欄，跟 EasyStore 的 order_number 別名表刻意不重疊，分派層才分得清兩種檔案。
@@ -123,23 +123,23 @@ def save_shopee_rows(conn, brand_id: str, rows: list, *, source: str, actor: str
     for row in rows:
         order_sn = row.get("order_sn")
         existing = conn.execute(
-            "SELECT id FROM shopee_report_row WHERE brand_id = ? AND order_sn = ?",
+            "SELECT id FROM shopee_report_row WHERE brand_id = %s AND order_sn = %s",
             (brand_id, order_sn),
         ).fetchone()
         if existing:
             conn.execute(
-                "UPDATE shopee_report_row SET order_date = ?, revenue = ?, voucher_code = ?,"
-                " source = ?, import_batch_id = ?, updated_at = ? WHERE id = ?",
+                "UPDATE shopee_report_row SET order_date = %s, revenue = %s, voucher_code = %s,"
+                " source = %s, import_batch_id = %s, updated_at = %s WHERE id = %s",
                 (row.get("order_date"), row.get("revenue"), row.get("voucher_code"), source,
                  batch_id, ts, existing["id"]),
             )
             result.updated += 1
         else:
             conn.execute(
-                "INSERT INTO shopee_report_row (id, brand_id, order_sn, order_date, revenue,"
+                "INSERT INTO shopee_report_row (id, org_id, brand_id, order_sn, order_date, revenue,"
                 " voucher_code, source, import_batch_id, created_at, updated_at)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (new_id("shp"), brand_id, order_sn, row.get("order_date"), row.get("revenue"),
+                " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                (new_id("shp"), DEV_ORG_ID, brand_id, order_sn, row.get("order_date"), row.get("revenue"),
                  row.get("voucher_code"), source, batch_id, ts, ts),
             )
             result.imported += 1
@@ -155,7 +155,7 @@ def shopee_latest_import(conn, brand_id: str) -> Optional[str]:
     """最近一次蝦皮報表匯入時間（依落地列的 created_at 取最新一筆）；從沒匯入過回 None。
     給追蹤健檢用（票 T0 契約 1.5：曾匯入過＝就緒＋最近匯入日期）。"""
     row = conn.execute(
-        "SELECT created_at FROM shopee_report_row WHERE brand_id = ? ORDER BY created_at DESC LIMIT 1",
+        "SELECT created_at FROM shopee_report_row WHERE brand_id = %s ORDER BY created_at DESC LIMIT 1",
         (brand_id,),
     ).fetchone()
     return row["created_at"] if row else None
@@ -164,7 +164,7 @@ def shopee_latest_import(conn, brand_id: str) -> Optional[str]:
 def pharmacy_latest_batch(conn, brand_id: str) -> Optional[str]:
     """最近一筆藥局出貨批次日期；從沒記錄過回 None（同上，票 T0 契約 1.5 用）。"""
     row = conn.execute(
-        "SELECT batch_date FROM pharmacy_batch WHERE brand_id = ?"
+        "SELECT batch_date FROM pharmacy_batch WHERE brand_id = %s"
         " ORDER BY batch_date DESC, created_at DESC LIMIT 1",
         (brand_id,),
     ).fetchone()
@@ -175,7 +175,7 @@ def shopee_revenue(conn, brand_id: str, since: str, until: str) -> Optional[floa
     """這段日期範圍蝦皮營收加總。沒有任何一列落在範圍內回 None——不知道跟 0 是兩件事。"""
     row = conn.execute(
         "SELECT SUM(revenue) total, COUNT(*) rows FROM shopee_report_row"
-        " WHERE brand_id = ? AND order_date >= ? AND order_date <= ?",
+        " WHERE brand_id = %s AND order_date >= %s AND order_date <= %s",
         (brand_id, since, until),
     ).fetchone()
     if not row["rows"]:
@@ -196,9 +196,9 @@ def record_pharmacy_batch(conn, brand_id: str, *, batch_date: str, quantity: Opt
     ts = now_iso()
     batch_id = new_id("phb")
     conn.execute(
-        "INSERT INTO pharmacy_batch (id, brand_id, batch_date, quantity, note, created_by,"
-        " created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (batch_id, brand_id, batch_date.strip(), quantity,
+        "INSERT INTO pharmacy_batch (id, org_id, brand_id, batch_date, quantity, note, created_by,"
+        " created_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+        (batch_id, DEV_ORG_ID, brand_id, batch_date.strip(), quantity,
          note.strip() if note and note.strip() else None, actor, ts),
     )
     write_audit(conn, brand_id=brand_id, entity_type="pharmacy_batch", entity_id=batch_id,
@@ -209,10 +209,10 @@ def record_pharmacy_batch(conn, brand_id: str, *, batch_date: str, quantity: Opt
 
 
 def list_pharmacy_batches(conn, brand_id: str, *, until: Optional[str] = None) -> list:
-    sql = "SELECT * FROM pharmacy_batch WHERE brand_id = ?"
+    sql = "SELECT * FROM pharmacy_batch WHERE brand_id = %s"
     params: list = [brand_id]
     if until:
-        sql += " AND batch_date <= ?"
+        sql += " AND batch_date <= %s"
         params.append(until)
     sql += " ORDER BY batch_date"
     return [dict(r) for r in conn.execute(sql, params)]
@@ -252,24 +252,24 @@ def set_shopee_code(conn, brand_id: str, cycle_id: str, *, code: Optional[str] =
         raise ValueError("actor 為必填")
     ts = now_iso()
     existing = conn.execute(
-        "SELECT * FROM cycle_shopee_code WHERE brand_id = ? AND campaign_cycle_id = ?",
+        "SELECT * FROM cycle_shopee_code WHERE brand_id = %s AND campaign_cycle_id = %s",
         (brand_id, cycle_id),
     ).fetchone()
     code = code.strip() if code and code.strip() else None
     if existing:
         conn.execute(
-            "UPDATE cycle_shopee_code SET code = ?, redemption_count = ?, updated_by = ?,"
-            " updated_at = ? WHERE id = ?",
+            "UPDATE cycle_shopee_code SET code = %s, redemption_count = %s, updated_by = %s,"
+            " updated_at = %s WHERE id = %s",
             (code, redemption_count, actor, ts, existing["id"]),
         )
         row_id = existing["id"]
     else:
         row_id = new_id("shc")
         conn.execute(
-            "INSERT INTO cycle_shopee_code (id, brand_id, campaign_cycle_id, code,"
+            "INSERT INTO cycle_shopee_code (id, org_id, brand_id, campaign_cycle_id, code,"
             " redemption_count, updated_by, created_at, updated_at)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (row_id, brand_id, cycle_id, code, redemption_count, actor, ts, ts),
+            " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            (row_id, DEV_ORG_ID, brand_id, cycle_id, code, redemption_count, actor, ts, ts),
         )
     write_audit(conn, brand_id=brand_id, entity_type="cycle_shopee_code", entity_id=row_id,
                 action="set", actor=actor, before=None,
@@ -280,7 +280,7 @@ def set_shopee_code(conn, brand_id: str, cycle_id: str, *, code: Optional[str] =
 
 def get_shopee_code(conn, brand_id: str, cycle_id: str) -> Optional[dict]:
     row = conn.execute(
-        "SELECT * FROM cycle_shopee_code WHERE brand_id = ? AND campaign_cycle_id = ?",
+        "SELECT * FROM cycle_shopee_code WHERE brand_id = %s AND campaign_cycle_id = %s",
         (brand_id, cycle_id),
     ).fetchone()
     return dict(row) if row else None

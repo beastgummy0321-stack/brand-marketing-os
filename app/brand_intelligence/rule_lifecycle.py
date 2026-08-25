@@ -26,10 +26,9 @@ list_pending_reconfirm_rules），冪等（WHERE status = 'active' 已經翻過�
 
 from __future__ import annotations
 
-import sqlite3
 from datetime import datetime, timedelta, timezone
 
-from app.core.db import now_iso
+from app.core.db import now_iso, Conn, DEV_ORG_ID
 from app.core.rule_cards import get_value
 
 CARD_KEY = "rule_expiry"
@@ -39,19 +38,19 @@ FIELD_KEY = "reconfirm_cycles"
 CYCLE_DAYS_APPROX = 14
 
 
-def _cutoff_iso(conn: sqlite3.Connection, brand_id: str) -> str:
+def _cutoff_iso(conn: Conn, brand_id: str) -> str:
     """幾天前算逾期：現在往前推「門檻期數 × 一期天數」。"""
     cycles = get_value(conn, brand_id, CARD_KEY, FIELD_KEY)
     cutoff = datetime.now(timezone.utc) - timedelta(days=cycles * CYCLE_DAYS_APPROX)
     return cutoff.isoformat()
 
 
-def sweep_expired_rules(conn: sqlite3.Connection, brand_id: str) -> int:
+def sweep_expired_rules(conn: Conn, brand_id: str) -> int:
     """超過門檻期數未重新確認的生效中規則，狀態退回 pending_reconfirm。回傳受影響筆數。"""
     cutoff = _cutoff_iso(conn, brand_id)
     cursor = conn.execute(
-        "UPDATE rule SET status = 'pending_reconfirm', updated_at = ? "
-        "WHERE brand_id = ? AND status = 'active' AND confirmed_at IS NOT NULL AND confirmed_at < ?",
+        "UPDATE rule SET status = 'pending_reconfirm', updated_at = %s "
+        "WHERE brand_id = %s AND status = 'active' AND confirmed_at IS NOT NULL AND confirmed_at < %s",
         (now_iso(), brand_id, cutoff),
     )
     conn.commit()
@@ -69,18 +68,19 @@ def demo() -> None:
         conn = core_db.connect_and_migrate(Path(tmp) / "demo.db")
         brand_id = "brd_demo"
         conn.execute(
-            "INSERT INTO brand (id, name, status, knowledge_version, created_at, updated_at) "
-            "VALUES (?, '示範品牌', 'active', 1, ?, ?)", (brand_id, now_iso(), now_iso()),
+            "INSERT INTO brand (id, org_id, name, status, knowledge_version, created_at, updated_at) "
+            "VALUES (%s, %s, '示範品牌', 'active', 1, %s, %s)",
+            (brand_id, DEV_ORG_ID, now_iso(), now_iso()),
         )
         fresh_iso = now_iso()
         stale_iso = (datetime.now(timezone.utc) - timedelta(days=200)).isoformat()
         conn.execute(
-            "INSERT INTO rule (id, brand_id, rule_type, content, severity, status, "
+            "INSERT INTO rule (id, org_id, brand_id, rule_type, content, severity, status, "
             "created_at, updated_at, confirmed_at) VALUES "
-            "('rul_fresh', ?, 'tone', '剛確認', 'soft', 'active', ?, ?, ?), "
-            "('rul_stale', ?, 'tone', '早就沒人確認', 'soft', 'active', ?, ?, ?)",
-            (brand_id, fresh_iso, fresh_iso, fresh_iso,
-             brand_id, stale_iso, stale_iso, stale_iso),
+            "('rul_fresh', %s, %s, 'tone', '剛確認', 'soft', 'active', %s, %s, %s), "
+            "('rul_stale', %s, %s, 'tone', '早就沒人確認', 'soft', 'active', %s, %s, %s)",
+            (DEV_ORG_ID, brand_id, fresh_iso, fresh_iso, fresh_iso,
+             DEV_ORG_ID, brand_id, stale_iso, stale_iso, stale_iso),
         )
         conn.commit()
 

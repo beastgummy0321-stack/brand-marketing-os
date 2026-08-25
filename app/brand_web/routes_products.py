@@ -34,7 +34,7 @@ from typing import Optional
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, Response
 
-from app import mock_data as md
+from app.core import vocab as md
 from app.brand_web import product_ai_calls
 from app.brand_web import routes as legacy_routes
 from app.brand_web import routes_product_helpers as product_helpers

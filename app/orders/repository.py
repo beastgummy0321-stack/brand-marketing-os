@@ -10,13 +10,12 @@
 跟 performance_snapshot 的 append-only 是不同性質的資料，不能照搬同一套規則。
 """
 
-import sqlite3
 from datetime import date, timedelta
 from typing import Optional
 
 from app.core import cleanup
 from app.core.audit import write_audit
-from app.core.db import new_id, now_iso
+from app.core.db import new_id, now_iso, Conn, DEV_ORG_ID
 from app.orders import identity as identity_mod
 
 VOIDED_ORDER_STATUSES = {"cancelled", "canceled", "voided", "void"}
@@ -48,25 +47,25 @@ def _is_voided(order_status) -> bool:
 # 顧客
 # ---------------------------------------------------------------------------
 
-def _upsert_customer(conn: sqlite3.Connection, brand_id: str, identity_hash: str,
+def _upsert_customer(conn: Conn, brand_id: str, identity_hash: str,
                      identity_type: str, order_date: Optional[str], ts: str) -> str:
     existing = conn.execute(
-        "SELECT * FROM customer WHERE brand_id = ? AND identity_hash = ?",
+        "SELECT * FROM customer WHERE brand_id = %s AND identity_hash = %s",
         (brand_id, identity_hash),
     ).fetchone()
     if existing:
         first = existing["first_order_at"]
         if order_date and (not first or order_date < first):
             conn.execute(
-                "UPDATE customer SET first_order_at = ?, updated_at = ? WHERE id = ?",
+                "UPDATE customer SET first_order_at = %s, updated_at = %s WHERE id = %s",
                 (order_date, ts, existing["id"]),
             )
         return existing["id"]
     customer_id = new_id("cus")
     conn.execute(
-        "INSERT INTO customer (id, brand_id, identity_hash, identity_type, first_order_at,"
-        " created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (customer_id, brand_id, identity_hash, identity_type, order_date, ts, ts),
+        "INSERT INTO customer (id, org_id, brand_id, identity_hash, identity_type, first_order_at,"
+        " created_at, updated_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+        (customer_id, DEV_ORG_ID, brand_id, identity_hash, identity_type, order_date, ts, ts),
     )
     return customer_id
 
@@ -75,7 +74,7 @@ def _upsert_customer(conn: sqlite3.Connection, brand_id: str, identity_hash: str
 # 匯入落庫（app/orders/importer.py 解析出來的訂單列在這裡寫進 DB）
 # ---------------------------------------------------------------------------
 
-def save_orders(conn: sqlite3.Connection, brand_id: str, rows: list, *,
+def save_orders(conn: Conn, brand_id: str, rows: list, *,
                 source: str, actor: str, result=None, import_batch_id: Optional[str] = None):
     """把 importer 解析好的訂單列（含 items）落地。回傳 app.orders.importer.OrderImportResult。
 
@@ -107,31 +106,31 @@ def save_orders(conn: sqlite3.Connection, brand_id: str, rows: list, *,
                                            order_date, ts)
 
         existing = conn.execute(
-            "SELECT id FROM order_record WHERE brand_id = ? AND order_number = ?",
+            "SELECT id FROM order_record WHERE brand_id = %s AND order_number = %s",
             (brand_id, order_number),
         ).fetchone()
         if existing:
             order_id = existing["id"]
             conn.execute(
-                "UPDATE order_record SET customer_id = ?, order_date = ?, total_amount = ?,"
-                " refunded_amount = ?, financial_status = ?, fulfillment_status = ?,"
-                " order_status = ?, voucher_code = ?, source = ?, import_batch_id = ?,"
-                " updated_at = ? WHERE id = ?",
+                "UPDATE order_record SET customer_id = %s, order_date = %s, total_amount = %s,"
+                " refunded_amount = %s, financial_status = %s, fulfillment_status = %s,"
+                " order_status = %s, voucher_code = %s, source = %s, import_batch_id = %s,"
+                " updated_at = %s WHERE id = %s",
                 (customer_id, order_date, row.get("total_amount"), row.get("refunded_amount"),
                  row.get("financial_status"), row.get("fulfillment_status"),
                  row.get("order_status"), row.get("voucher_code"), source, batch_id, ts,
                  order_id),
             )
-            conn.execute("DELETE FROM order_item WHERE order_id = ?", (order_id,))
+            conn.execute("DELETE FROM order_item WHERE order_id = %s", (order_id,))
             result.orders_updated += 1
         else:
             order_id = new_id("ord")
             conn.execute(
-                "INSERT INTO order_record (id, brand_id, customer_id, order_number, order_date,"
+                "INSERT INTO order_record (id, org_id, brand_id, customer_id, order_number, order_date,"
                 " total_amount, refunded_amount, financial_status, fulfillment_status,"
                 " order_status, voucher_code, currency, source, import_batch_id, created_at,"
-                " updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (order_id, brand_id, customer_id, order_number, order_date,
+                " updated_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                (order_id, DEV_ORG_ID, brand_id, customer_id, order_number, order_date,
                  row.get("total_amount"), row.get("refunded_amount"),
                  row.get("financial_status"), row.get("fulfillment_status"),
                  row.get("order_status"), row.get("voucher_code"), "TWD", source, batch_id,
@@ -143,9 +142,9 @@ def save_orders(conn: sqlite3.Connection, brand_id: str, rows: list, *,
             if item.get("sku") is None and item.get("item_price") is None and item.get("quantity") is None:
                 continue
             conn.execute(
-                "INSERT INTO order_item (id, brand_id, order_id, sku, item_price, quantity,"
-                " created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (new_id("oit"), brand_id, order_id, item.get("sku"), item.get("item_price"),
+                "INSERT INTO order_item (id, org_id, brand_id, order_id, sku, item_price, quantity,"
+                " created_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+                (new_id("oit"), DEV_ORG_ID, brand_id, order_id, item.get("sku"), item.get("item_price"),
                  item.get("quantity"), ts),
             )
             result.items_imported += 1
@@ -163,13 +162,13 @@ def save_orders(conn: sqlite3.Connection, brand_id: str, rows: list, *,
 # 逐 SKU 成本登記（選填；沒登記就誠實顯示「不知道成本」，不假裝算得出毛利）
 # ---------------------------------------------------------------------------
 
-def list_sku_costs(conn: sqlite3.Connection, brand_id: str) -> list:
+def list_sku_costs(conn: Conn, brand_id: str) -> list:
     return _rows(conn.execute(
-        "SELECT * FROM sku_cost WHERE brand_id = ? ORDER BY sku", (brand_id,)
+        "SELECT * FROM sku_cost WHERE brand_id = %s ORDER BY sku", (brand_id,)
     ))
 
 
-def set_sku_cost(conn: sqlite3.Connection, brand_id: str, sku: str, unit_cost: float, *,
+def set_sku_cost(conn: Conn, brand_id: str, sku: str, unit_cost: float, *,
                  actor: str, today: Optional[str] = None) -> dict:
     if not sku or not sku.strip():
         raise ValueError("SKU 為必填")
@@ -180,17 +179,17 @@ def set_sku_cost(conn: sqlite3.Connection, brand_id: str, sku: str, unit_cost: f
     sku = sku.strip()
     ts = now_iso()
     existing = conn.execute(
-        "SELECT id FROM sku_cost WHERE brand_id = ? AND sku = ?", (brand_id, sku)
+        "SELECT id FROM sku_cost WHERE brand_id = %s AND sku = %s", (brand_id, sku)
     ).fetchone()
     if existing:
         cost_id = existing["id"]
-        conn.execute("UPDATE sku_cost SET unit_cost = ?, updated_at = ? WHERE id = ?",
+        conn.execute("UPDATE sku_cost SET unit_cost = %s, updated_at = %s WHERE id = %s",
                      (unit_cost, ts, cost_id))
     else:
         cost_id = new_id("skc")
         conn.execute(
-            "INSERT INTO sku_cost (id, brand_id, sku, unit_cost, updated_at)"
-            " VALUES (?, ?, ?, ?, ?)", (cost_id, brand_id, sku, unit_cost, ts),
+            "INSERT INTO sku_cost (id, org_id, brand_id, sku, unit_cost, updated_at)"
+            " VALUES (%s, %s, %s, %s, %s, %s)", (cost_id, DEV_ORG_ID, brand_id, sku, unit_cost, ts),
         )
     write_audit(conn, brand_id=brand_id, entity_type="sku_cost", entity_id=cost_id,
                 action="set", actor=actor, before=None, after={"sku": sku, "unit_cost": unit_cost})
@@ -205,11 +204,11 @@ def set_sku_cost(conn: sqlite3.Connection, brand_id: str, sku: str, unit_cost: f
 # 不會偷改到歷史判讀引用的數字（決策 0025 審查補遺 C）。
 # ---------------------------------------------------------------------------
 
-def _bump_sku_cost_version(conn: sqlite3.Connection, brand_id: str, sku: str, unit_cost: float,
+def _bump_sku_cost_version(conn: Conn, brand_id: str, sku: str, unit_cost: float,
                             *, actor: str, today: Optional[str] = None) -> dict:
     today = today or date.today().isoformat()
     prev = conn.execute(
-        "SELECT * FROM sku_cost_version WHERE brand_id = ? AND sku = ? AND valid_to IS NULL",
+        "SELECT * FROM sku_cost_version WHERE brand_id = %s AND sku = %s AND valid_to IS NULL",
         (brand_id, sku),
     ).fetchone()
     if prev is not None and prev["unit_cost"] == unit_cost:
@@ -217,22 +216,22 @@ def _bump_sku_cost_version(conn: sqlite3.Connection, brand_id: str, sku: str, un
     ts = now_iso()
     version = (prev["version"] if prev else 0) + 1
     if prev is not None:
-        conn.execute("UPDATE sku_cost_version SET valid_to = ? WHERE id = ?", (today, prev["id"]))
+        conn.execute("UPDATE sku_cost_version SET valid_to = %s WHERE id = %s", (today, prev["id"]))
     version_id = new_id("skv")
     conn.execute(
-        "INSERT INTO sku_cost_version (id, brand_id, sku, version, unit_cost, valid_from,"
-        " valid_to, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?)",
-        (version_id, brand_id, sku, version, unit_cost, today, actor, ts),
+        "INSERT INTO sku_cost_version (id, org_id, brand_id, sku, version, unit_cost, valid_from,"
+        " valid_to, created_by, created_at) VALUES (%s, %s, %s, %s, %s, %s, %s, NULL, %s, %s)",
+        (version_id, DEV_ORG_ID, brand_id, sku, version, unit_cost, today, actor, ts),
     )
     return {"id": version_id, "brand_id": brand_id, "sku": sku, "version": version,
             "unit_cost": unit_cost, "valid_from": today, "valid_to": None}
 
 
-def list_effective_sku_costs(conn: sqlite3.Connection, brand_id: str) -> list:
+def list_effective_sku_costs(conn: Conn, brand_id: str) -> list:
     """每個 SKU 目前生效中的成本版本（valid_to IS NULL）。判讀快照凍結當下引用這份清單，
     不直接讀 sku_cost 現行值——現行值之後若被覆寫，快照引用的版本 id 仍指向這裡的舊列。"""
     return _rows(conn.execute(
-        "SELECT * FROM sku_cost_version WHERE brand_id = ? AND valid_to IS NULL ORDER BY sku",
+        "SELECT * FROM sku_cost_version WHERE brand_id = %s AND valid_to IS NULL ORDER BY sku",
         (brand_id,),
     ))
 
@@ -241,28 +240,28 @@ def list_effective_sku_costs(conn: sqlite3.Connection, brand_id: str) -> list:
 # 統計卡（5 項，issue #33）：確定性計算，不經 LLM（決策 0016 硬性原則 4）
 # ---------------------------------------------------------------------------
 
-def sku_margins(conn: sqlite3.Connection, brand_id: str, *, since: Optional[str] = None,
+def sku_margins(conn: Conn, brand_id: str, *, since: Optional[str] = None,
                 until: Optional[str] = None) -> list:
     """逐 SKU 營收／毛利。沒登記單位成本的 SKU，margin 回 None（誠實顯示不知道成本）。"""
-    voided_placeholders = ",".join("?" for _ in VOIDED_ORDER_STATUSES)
+    voided_placeholders = ",".join("%s" for _ in VOIDED_ORDER_STATUSES)
     sql = (
         "SELECT oi.sku, SUM(oi.item_price * oi.quantity) revenue, SUM(oi.quantity) quantity"
         " FROM order_item oi JOIN order_record o ON o.id = oi.order_id"
-        f" WHERE oi.brand_id = ? AND oi.sku IS NOT NULL AND oi.sku != ''"
+        f" WHERE oi.brand_id = %s AND oi.sku IS NOT NULL AND oi.sku != ''"
         f" AND (o.order_status IS NULL OR LOWER(o.order_status) NOT IN ({voided_placeholders}))"
     )
     params: list = [brand_id, *VOIDED_ORDER_STATUSES]
     if since:
-        sql += " AND o.order_date >= ?"
+        sql += " AND o.order_date >= %s"
         params.append(since)
     if until:
-        sql += " AND o.order_date <= ?"
+        sql += " AND o.order_date <= %s"
         params.append(until)
     sql += " GROUP BY oi.sku ORDER BY revenue DESC"
     rows = _rows(conn.execute(sql, params))
 
     costs = {r["sku"]: r["unit_cost"] for r in conn.execute(
-        "SELECT sku, unit_cost FROM sku_cost WHERE brand_id = ?", (brand_id,))}
+        "SELECT sku, unit_cost FROM sku_cost WHERE brand_id = %s", (brand_id,))}
     for row in rows:
         unit_cost = costs.get(row["sku"])
         row["unit_cost"] = unit_cost
@@ -271,7 +270,7 @@ def sku_margins(conn: sqlite3.Connection, brand_id: str, *, since: Optional[str]
     return rows
 
 
-def stats(conn: sqlite3.Connection, brand_id: str, *, since: Optional[str] = None,
+def stats(conn: Conn, brand_id: str, *, since: Optional[str] = None,
          until: Optional[str] = None, today: Optional[str] = None) -> dict:
     """五項統計卡：實收營收（扣退款棄單）、新舊客、客單價、回購率、逐 SKU 毛利。
 
@@ -284,7 +283,7 @@ def stats(conn: sqlite3.Connection, brand_id: str, *, since: Optional[str] = Non
     since = since or (date.fromisoformat(until) - timedelta(days=DEFAULT_STATS_WINDOW_DAYS)).isoformat()
 
     orders = _rows(conn.execute(
-        "SELECT * FROM order_record WHERE brand_id = ? AND order_date >= ? AND order_date <= ?",
+        "SELECT * FROM order_record WHERE brand_id = %s AND order_date >= %s AND order_date <= %s",
         (brand_id, since, until),
     ))
     valid_orders = [o for o in orders if not _is_voided(o["order_status"])]
@@ -299,7 +298,7 @@ def stats(conn: sqlite3.Connection, brand_id: str, *, since: Optional[str] = Non
     new_customers = existing_customers = 0
     for cid in customer_ids:
         customer = conn.execute(
-            "SELECT first_order_at FROM customer WHERE id = ?", (cid,)
+            "SELECT first_order_at FROM customer WHERE id = %s", (cid,)
         ).fetchone()
         if customer and customer["first_order_at"] and customer["first_order_at"] >= since:
             new_customers += 1
@@ -311,14 +310,14 @@ def stats(conn: sqlite3.Connection, brand_id: str, *, since: Optional[str] = Non
         repeaters = sum(
             1 for cid in customer_ids
             if conn.execute(
-                "SELECT COUNT(*) c FROM order_record WHERE brand_id = ? AND customer_id = ?",
+                "SELECT COUNT(*) c FROM order_record WHERE brand_id = %s AND customer_id = %s",
                 (brand_id, cid),
             ).fetchone()["c"] >= 2
         )
         repurchase_rate = round(repeaters / len(customer_ids), 4)
 
     has_history = conn.execute(
-        "SELECT 1 FROM order_record WHERE brand_id = ? LIMIT 1", (brand_id,)
+        "SELECT 1 FROM order_record WHERE brand_id = %s LIMIT 1", (brand_id,)
     ).fetchone() is not None
 
     return {
@@ -341,7 +340,7 @@ def stats(conn: sqlite3.Connection, brand_id: str, *, since: Optional[str] = Non
 # 供 app/ads/reading.py 把打平線放寬——回購越強，越不需要靠首單就打平。
 # ---------------------------------------------------------------------------
 
-def repurchase_multiplier(conn: sqlite3.Connection, brand_id: str, *,
+def repurchase_multiplier(conn: Conn, brand_id: str, *,
                           today: Optional[str] = None) -> dict:
     """回購倍數＝滿 90 天觀察期顧客「90 天內淨營收加總」除以「首單淨營收加總」。
 
@@ -352,8 +351,8 @@ def repurchase_multiplier(conn: sqlite3.Connection, brand_id: str, *,
     today = today or date.today().isoformat()
     cutoff = (date.fromisoformat(today) - timedelta(days=REPURCHASE_OBSERVATION_DAYS)).isoformat()
     customers = _rows(conn.execute(
-        "SELECT id, first_order_at FROM customer WHERE brand_id = ? AND first_order_at IS NOT NULL"
-        " AND first_order_at <= ?", (brand_id, cutoff),
+        "SELECT id, first_order_at FROM customer WHERE brand_id = %s AND first_order_at IS NOT NULL"
+        " AND first_order_at <= %s", (brand_id, cutoff),
     ))
 
     first_total = 0.0
@@ -364,7 +363,7 @@ def repurchase_multiplier(conn: sqlite3.Connection, brand_id: str, *,
                       + timedelta(days=REPURCHASE_OBSERVATION_DAYS)).isoformat()
         orders = _rows(conn.execute(
             "SELECT total_amount, refunded_amount, order_status FROM order_record"
-            " WHERE brand_id = ? AND customer_id = ? AND order_date >= ? AND order_date <= ?"
+            " WHERE brand_id = %s AND customer_id = %s AND order_date >= %s AND order_date <= %s"
             " ORDER BY order_date", (brand_id, cust["id"], cust["first_order_at"], window_end),
         ))
         valid = [o for o in orders if not _is_voided(o["order_status"])]
@@ -389,7 +388,7 @@ def repurchase_multiplier(conn: sqlite3.Connection, brand_id: str, *,
 # 這裡只負責記變更日與描述，「哪次比較該標不同尺」的判斷留給 app/ads/reading.py。
 # ---------------------------------------------------------------------------
 
-def record_policy_change(conn: sqlite3.Connection, brand_id: str, *, policy_type: str,
+def record_policy_change(conn: Conn, brand_id: str, *, policy_type: str,
                          changed_at: str, description: str, actor: str) -> dict:
     if policy_type not in POLICY_TYPE_LABELS:
         raise ValueError(f"不認得的口徑類型：{policy_type}")
@@ -402,9 +401,9 @@ def record_policy_change(conn: sqlite3.Connection, brand_id: str, *, policy_type
     ts = now_iso()
     row_id = new_id("pcl")
     conn.execute(
-        "INSERT INTO policy_change_log (id, brand_id, policy_type, changed_at, description,"
-        " created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (row_id, brand_id, policy_type, changed_at.strip(), description.strip(), actor, ts),
+        "INSERT INTO policy_change_log (id, org_id, brand_id, policy_type, changed_at, description,"
+        " created_by, created_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+        (row_id, DEV_ORG_ID, brand_id, policy_type, changed_at.strip(), description.strip(), actor, ts),
     )
     write_audit(conn, brand_id=brand_id, entity_type="policy_change_log", entity_id=row_id,
                 action="create", actor=actor,
@@ -415,30 +414,30 @@ def record_policy_change(conn: sqlite3.Connection, brand_id: str, *, policy_type
             "description": description}
 
 
-def list_policy_changes(conn: sqlite3.Connection, brand_id: str, *,
+def list_policy_changes(conn: Conn, brand_id: str, *,
                         until: Optional[str] = None) -> list:
-    sql = "SELECT * FROM policy_change_log WHERE brand_id = ?"
+    sql = "SELECT * FROM policy_change_log WHERE brand_id = %s"
     params: list = [brand_id]
     if until:
-        sql += " AND changed_at <= ?"
+        sql += " AND changed_at <= %s"
         params.append(until)
     sql += " ORDER BY changed_at DESC"
     return _rows(conn.execute(sql, params))
 
 
-def list_orders(conn: sqlite3.Connection, brand_id: str, limit: int = 50,
+def list_orders(conn: Conn, brand_id: str, limit: int = 50,
                 offset: int = 0) -> list:
     return _rows(conn.execute(
-        "SELECT * FROM order_record WHERE brand_id = ? ORDER BY order_date DESC, created_at DESC"
-        " LIMIT ? OFFSET ?", (brand_id, limit, offset),
+        "SELECT * FROM order_record WHERE brand_id = %s ORDER BY order_date DESC, created_at DESC"
+        " LIMIT %s OFFSET %s", (brand_id, limit, offset),
     ))
 
 
-def count_orders(conn: sqlite3.Connection, brand_id: str) -> int:
+def count_orders(conn: Conn, brand_id: str) -> int:
     """品牌全部訂單筆數，供唯讀清單 API 計算分頁總數。"""
     return conn.execute(
-        "SELECT COUNT(*) FROM order_record WHERE brand_id = ?", (brand_id,)
-    ).fetchone()[0]
+        "SELECT COUNT(*) AS n FROM order_record WHERE brand_id = %s", (brand_id,)
+    ).fetchone()["n"]
 
 
 # ---------------------------------------------------------------------------
@@ -447,11 +446,11 @@ def count_orders(conn: sqlite3.Connection, brand_id: str) -> int:
 # （鐵則 7：模組間走明確介面，不跨模組直接 join 對方的表）。
 # ---------------------------------------------------------------------------
 
-def list_orders_in_range(conn: sqlite3.Connection, brand_id: str, since: str,
+def list_orders_in_range(conn: Conn, brand_id: str, since: str,
                          until: str) -> list:
     """本期日期範圍內、非作廢的訂單（含 voucher_code／attribution_override），供歸因分類用。"""
     rows = _rows(conn.execute(
-        "SELECT * FROM order_record WHERE brand_id = ? AND order_date >= ? AND order_date <= ?"
+        "SELECT * FROM order_record WHERE brand_id = %s AND order_date >= %s AND order_date <= %s"
         " ORDER BY order_date", (brand_id, since, until),
     ))
     return [o for o in rows if not _is_voided(o["order_status"])]
@@ -465,7 +464,7 @@ def list_orders_in_range(conn: sqlite3.Connection, brand_id: str, since: str,
 SETTLED_FULFILLMENT_STATUSES = {"fulfilled"}
 
 
-def unsettled_order_ratio(conn: sqlite3.Connection, brand_id: str, since: str,
+def unsettled_order_ratio(conn: Conn, brand_id: str, since: str,
                           until: str) -> Optional[float]:
     """這段期間的訂單裡，還沒結案（出貨／取貨完成）的佔比。期末暫定判讀用這個標注
     「未結案訂單佔 X%，此為暫定結論」（決策 0025 判讀節奏第 5 點）。
@@ -482,20 +481,20 @@ def unsettled_order_ratio(conn: sqlite3.Connection, brand_id: str, since: str,
     return round(unsettled / len(orders), 4)
 
 
-def set_attribution_override(conn: sqlite3.Connection, brand_id: str, order_id: str,
+def set_attribution_override(conn: Conn, brand_id: str, order_id: str,
                              excluded: bool, *, actor: str) -> dict:
     """訂單手動標記「非廣告來源」／取消標記。淨歸因看這個欄位排除，毛歸因不受影響。"""
     if not actor or not actor.strip():
         raise ValueError("actor 為必填")
     before = conn.execute(
-        "SELECT * FROM order_record WHERE brand_id = ? AND id = ?", (brand_id, order_id)
+        "SELECT * FROM order_record WHERE brand_id = %s AND id = %s", (brand_id, order_id)
     ).fetchone()
     if before is None:
         raise ValueError("找不到這筆訂單")
     value = "excluded" if excluded else None
     ts = now_iso()
     conn.execute(
-        "UPDATE order_record SET attribution_override = ?, updated_at = ? WHERE id = ?",
+        "UPDATE order_record SET attribution_override = %s, updated_at = %s WHERE id = %s",
         (value, ts, order_id),
     )
     write_audit(conn, brand_id=brand_id, entity_type="order_record", entity_id=order_id,
@@ -511,11 +510,10 @@ def set_attribution_override(conn: sqlite3.Connection, brand_id: str, order_id: 
 #
 # 這 9 張表都掛 brand_id，彼此之間、跟本模組其他表之間都沒有真的外鍵約束
 # （order_item.order_id、order_record.customer_id 都只是欄位，schema 沒下 REFERENCES）。
-# 唯一的真外鍵是 cycle_shopee_code.campaign_cycle_id -> campaign_cycle(id)
-# （campaign_cycle 是 app/ads 模組的表，由該模組清）。這條外鍵不需要靠「誰先誰後登記」
-# 解決：app/brand_intelligence/repository.py 的 delete_brand() 在交易一開始就下
-# `PRAGMA defer_foreign_keys = ON`，把檢查延到 COMMIT，跨模組清理順序從此不重要
-# （見該檔 delete_brand() 的說明）。
+# 票 02-3a：cycle_shopee_code.campaign_cycle_id -> campaign_cycle(id) 這條唯一的跨模組
+# 外鍵已在 02-2 拿掉（集裝箱憲章禁止跨模組外鍵，見
+# .scratch/saas/tickets/02-2-type-decisions.md 第 6 點），改成不帶 REFERENCES 的純
+# TEXT 欄位，跨模組清理順序從此不重要，不必再靠 PRAGMA defer_foreign_keys 之類的機制。
 BRAND_CASCADE_TABLES = (
     ("customer", "顧客"),
     ("order_record", "訂單"),
@@ -529,28 +527,28 @@ BRAND_CASCADE_TABLES = (
 )
 
 
-def count_brand_data(conn: sqlite3.Connection, brand_id: str) -> list:
+def count_brand_data(conn: Conn, brand_id: str) -> list:
     """刪品牌前的清點（比照 app/ads/repository.py 的 count_brand_data），給刪除確認頁
     列出「按下去會消失什麼」。跟 delete_brand_data 讀同一份 BRAND_CASCADE_TABLES——
     「清點清一份、清除清另一份，兩邊不同步」正是這整串 bug 的根因。"""
     counts = []
     for table, label in BRAND_CASCADE_TABLES:
         n = conn.execute(
-            f"SELECT COUNT(*) AS c FROM {table} WHERE brand_id = ?", (brand_id,)
+            f"SELECT COUNT(*) AS c FROM {table} WHERE brand_id = %s", (brand_id,)
         ).fetchone()["c"]
         if n:
             counts.append((label, n))
     return counts
 
 
-def delete_brand_data(conn: sqlite3.Connection, brand_id: str) -> dict:
+def delete_brand_data(conn: Conn, brand_id: str) -> dict:
     """清掉本模組掛在該品牌下的資料（BRAND_CASCADE_TABLES 這 9 張表），登記進
     app.core.cleanup 給 delete_brand() 呼叫用。只下 DELETE、不 commit、不 rollback
     （Q4 單一交易、全有全無，commit 與 rollback 統一在 brand_intelligence.delete_brand()）。
     """
     counts = dict(count_brand_data(conn, brand_id))
     for table, _label in BRAND_CASCADE_TABLES:
-        conn.execute(f"DELETE FROM {table} WHERE brand_id = ?", (brand_id,))
+        conn.execute(f"DELETE FROM {table} WHERE brand_id = %s", (brand_id,))
     return counts
 
 

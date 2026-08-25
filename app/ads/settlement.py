@@ -26,7 +26,7 @@ import json
 from typing import Optional
 
 from app.ads import inflation as ads_inflation
-from app.core.db import new_id, now_iso
+from app.core.db import new_id, now_iso, DEV_ORG_ID
 
 # 第 7 刀（A1 三層地界新規則：app/ads 不得 import app.orders，見
 # test_architecture_boundaries.py）：orders_repo 不在這裡 import，改由組裝根
@@ -36,7 +36,7 @@ orders_repo = None
 
 def _next_version(conn, cycle_id: str) -> int:
     row = conn.execute(
-        "SELECT COALESCE(MAX(version), 0) v FROM settlement_version WHERE campaign_cycle_id = ?",
+        "SELECT COALESCE(MAX(version), 0) v FROM settlement_version WHERE campaign_cycle_id = %s",
         (cycle_id,),
     ).fetchone()
     return row["v"] + 1
@@ -46,14 +46,14 @@ def _data_arrival(conn, brand_id: str, cycle: dict) -> tuple:
     """各源最後到達這期資料的時間；沒資料的源同時列進缺席清單（決策 0025 補遺 C）。"""
     meta_row = conn.execute(
         "SELECT MAX(snapshot_taken_at) t FROM performance_snapshot"
-        " WHERE brand_id = ? AND campaign_cycle_id = ? AND quarantined = 0",
+        " WHERE brand_id = %s AND campaign_cycle_id = %s AND quarantined = 0",
         (brand_id, cycle["id"]),
     ).fetchone()
     orders_rows = orders_repo.list_orders_in_range(
         conn, brand_id, cycle["start_date"], cycle["end_date"])
     orders_arrival = max((o["updated_at"] for o in orders_rows), default=None)
     ga4_row = conn.execute(
-        "SELECT MAX(synced_at) t FROM ga4_sync_status WHERE brand_id = ?", (brand_id,)
+        "SELECT MAX(synced_at) t FROM ga4_sync_status WHERE brand_id = %s", (brand_id,)
     ).fetchone()
 
     arrival = {"meta": meta_row["t"] if meta_row else None, "orders": orders_arrival,
@@ -91,9 +91,9 @@ def freeze(conn, brand_id: str, cycle: dict, *, actor: str, cycle_totals: dict,
 
     settlement_id = new_id("setv")
     conn.execute(
-        "INSERT INTO settlement_version (id, brand_id, campaign_cycle_id, version,"
-        " trigger_reason, is_post_close, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        (settlement_id, brand_id, cycle_id, version, reason,
+        "INSERT INTO settlement_version (id, org_id, brand_id, campaign_cycle_id, version,"
+        " trigger_reason, is_post_close, created_by, created_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
+        (settlement_id, DEV_ORG_ID, brand_id, cycle_id, version, reason,
          1 if cycle.get("status") == "CLOSED" else 0, actor, ts),
     )
 
@@ -104,10 +104,10 @@ def freeze(conn, brand_id: str, cycle: dict, *, actor: str, cycle_totals: dict,
     summary = {"cycle": cycle_totals, "products": per_product}
     snapshot_id = new_id("rsnap")
     conn.execute(
-        "INSERT INTO reading_snapshot (id, brand_id, campaign_cycle_id, settlement_version_id,"
+        "INSERT INTO reading_snapshot (id, org_id, brand_id, campaign_cycle_id, settlement_version_id,"
         " coefficient_version_id, data_arrival_json, missing_sources_json, summary_json,"
-        " created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (snapshot_id, brand_id, cycle_id, settlement_id,
+        " created_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+        (snapshot_id, DEV_ORG_ID, brand_id, cycle_id, settlement_id,
          coefficient["id"] if coefficient else None,
          json.dumps(arrival, ensure_ascii=False), json.dumps(missing, ensure_ascii=False),
          json.dumps(summary, ensure_ascii=False, default=str), ts),
@@ -122,10 +122,10 @@ def freeze(conn, brand_id: str, cycle: dict, *, actor: str, cycle_totals: dict,
         inputs.append((scope, "version_id", cost["id"]))
     for scope, key, value in inputs:
         conn.execute(
-            "INSERT INTO reading_snapshot_input (id, brand_id, campaign_cycle_id,"
+            "INSERT INTO reading_snapshot_input (id, org_id, brand_id, campaign_cycle_id,"
             " reading_snapshot_id, scope, key, value, created_at) VALUES"
-            " (?, ?, ?, ?, ?, ?, ?, ?)",
-            (new_id("rsin"), brand_id, cycle_id, snapshot_id, scope, key,
+            " (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            (new_id("rsin"), DEV_ORG_ID, brand_id, cycle_id, snapshot_id, scope, key,
              None if value is None else str(value), ts),
         )
 
@@ -143,7 +143,7 @@ def load_snapshot(conn, brand_id: str, cycle_id: str, version: Optional[int] = N
             "SELECT rs.*, sv.version AS settlement_version,"
             " sv.trigger_reason, sv.is_post_close, sv.diff_summary FROM reading_snapshot rs"
             " JOIN settlement_version sv ON sv.id = rs.settlement_version_id"
-            " WHERE rs.brand_id = ? AND rs.campaign_cycle_id = ?"
+            " WHERE rs.brand_id = %s AND rs.campaign_cycle_id = %s"
             " ORDER BY sv.version DESC LIMIT 1", (brand_id, cycle_id),
         ).fetchone()
     else:
@@ -151,7 +151,7 @@ def load_snapshot(conn, brand_id: str, cycle_id: str, version: Optional[int] = N
             "SELECT rs.*, sv.version AS settlement_version,"
             " sv.trigger_reason, sv.is_post_close, sv.diff_summary FROM reading_snapshot rs"
             " JOIN settlement_version sv ON sv.id = rs.settlement_version_id"
-            " WHERE rs.brand_id = ? AND rs.campaign_cycle_id = ? AND sv.version = ?",
+            " WHERE rs.brand_id = %s AND rs.campaign_cycle_id = %s AND sv.version = %s",
             (brand_id, cycle_id, version),
         ).fetchone()
     if row is None:
@@ -168,8 +168,8 @@ def record_diff_summary(conn, brand_id: str, cycle_id: str, settlement_version_i
     """補件觸發的重判把差異摘要人話說明記回那一版 settlement_version（issue #38：
     不靜默覆蓋——UI 看這欄有沒有值就知道這版是不是補件自動觸發的）。"""
     conn.execute(
-        "UPDATE settlement_version SET diff_summary = ? WHERE id = ? AND brand_id = ?"
-        " AND campaign_cycle_id = ?",
+        "UPDATE settlement_version SET diff_summary = %s WHERE id = %s AND brand_id = %s"
+        " AND campaign_cycle_id = %s",
         (summary_text, settlement_version_id, brand_id, cycle_id),
     )
     conn.commit()
@@ -185,7 +185,7 @@ def diff_versions(conn, brand_id: str, cycle_id: str, version_a: int, version_b:
                 "SELECT rsin.scope, rsin.key, rsin.value FROM reading_snapshot_input rsin"
                 " JOIN reading_snapshot rs ON rs.id = rsin.reading_snapshot_id"
                 " JOIN settlement_version sv ON sv.id = rs.settlement_version_id"
-                " WHERE rs.brand_id = ? AND rs.campaign_cycle_id = ? AND sv.version = ?",
+                " WHERE rs.brand_id = %s AND rs.campaign_cycle_id = %s AND sv.version = %s",
                 (brand_id, cycle_id, version),
             )
         }
@@ -237,7 +237,7 @@ def latest_version_delta(conn, brand_id: str, cycle_id: str) -> Optional[dict]:
     """這期最近兩個判讀版次之間，營收／ROAS 差了多少（B0-25：下期預算建議悄悄改了金額卻
     不說原因，要靠這個現算出「為什麼」）。只有一個版次或找不到快照就回 None——不硬編。"""
     versions = [r["version"] for r in conn.execute(
-        "SELECT version FROM settlement_version WHERE brand_id = ? AND campaign_cycle_id = ?"
+        "SELECT version FROM settlement_version WHERE brand_id = %s AND campaign_cycle_id = %s"
         " ORDER BY version DESC LIMIT 2", (brand_id, cycle_id)).fetchall()]
     if len(versions) < 2:
         return None

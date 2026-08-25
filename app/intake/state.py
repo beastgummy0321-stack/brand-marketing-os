@@ -19,7 +19,7 @@ import re
 from pathlib import Path
 from typing import Optional
 
-from app.core.db import REPO_ROOT, new_id
+from app.core.db import REPO_ROOT, new_id, DEV_ORG_ID
 from app.intake import repository as ir
 from app.intake import script
 
@@ -85,7 +85,7 @@ def _scan_product_data(raw) -> tuple[list, list]:
 
 
 def _row_to_draft(conn, row: dict) -> dict:
-    brand_row = conn.execute("SELECT name FROM brand WHERE id = ?", (row["brand_id"],)).fetchone()
+    brand_row = conn.execute("SELECT name FROM brand WHERE id = %s", (row["brand_id"],)).fetchone()
     photos = [
         {"name": p.get("display_name"), "path": p.get("file_path"),
          "size_mb": round((p.get("size_bytes") or 0) / (1024 * 1024), 1),
@@ -147,9 +147,9 @@ def _row_to_draft(conn, row: dict) -> dict:
     draft["cost_items"] = ir.list_llm_cost_items(conn, row)
     draft["cost_spent"] = sum(it["amount"] for it in draft["cost_items"] if not it["failed"])
     pending = conn.execute(
-        "SELECT COUNT(*) FROM intake_item WHERE intake_draft_id = ? AND outcome = 'pending'",
+        "SELECT COUNT(*) AS n FROM intake_item WHERE intake_draft_id = %s AND outcome = 'pending'",
         (row["id"],),
-    ).fetchone()[0]
+    ).fetchone()["n"]
     draft["pending_item_count"] = pending
     draft["resume_path"] = _resume_path(draft)
     return draft
@@ -229,7 +229,7 @@ def is_restart_draft(brand_id: str, draft_id: str, conn=None) -> bool:
     當判準，不另開欄位（票 B3-intake，前端契約 `IntakeDraft.is_restart`）。"""
     conn = _conn(conn)
     row = conn.execute(
-        "SELECT COUNT(*) AS c FROM intake_draft WHERE brand_id = ? AND id != ? AND status = 'completed'",
+        "SELECT COUNT(*) AS c FROM intake_draft WHERE brand_id = %s AND id != %s AND status = 'completed'",
         (brand_id, draft_id),
     ).fetchone()
     return (row["c"] if row else 0) > 0
@@ -287,7 +287,7 @@ def apply_paste(draft: dict, paste_input, conn=None) -> Optional[int]:
     if rows is None:
         # 重貼失敗就清掉上一次還沒處理的待辦列（已處理的留著追溯）
         conn.execute(
-            "DELETE FROM intake_item WHERE intake_draft_id = ? AND brand_id = ? AND outcome = 'pending'",
+            "DELETE FROM intake_item WHERE intake_draft_id = %s AND brand_id = %s AND outcome = 'pending'",
             (draft["id"], draft["brand_id"]),
         )
         conn.commit()
@@ -558,13 +558,13 @@ def seed_in_progress_draft(brand_id: str, brand_name: str, conn=None) -> dict:
     for purpose, task_type, cost in demo_tasks:
         task_id = coredb.new_id("llm")
         conn.execute(
-            """INSERT INTO llm_task (id, brand_id, task_type, context_scope_json,
+            """INSERT INTO llm_task (id, org_id, brand_id, task_type, context_scope_json,
                 input_context_ids_json, input_context_hash, knowledge_item_ids_json,
                 brand_version, prompt_template_id, prompt_template_version, provider, model,
                 status, attempt_no, cost, started_at, finished_at)
-               VALUES (?, ?, ?, ?, '[]', '', '[]', 1, ?, 'v1', 'seed', 'seed-demo',
-                       'succeeded', 1, ?, ?, ?)""",
-            (task_id, brand_id, task_type,
+               VALUES (%s, %s, %s, %s, %s, '[]', '', '[]', 1, %s, 'v1', 'seed', 'seed-demo',
+                       'succeeded', 1, %s, %s, %s)""",
+            (task_id, coredb.DEV_ORG_ID, brand_id, task_type,
              json.dumps({"brand_id": brand_id}, ensure_ascii=False),
              task_type, cost, coredb.now_iso(), coredb.now_iso()),
         )

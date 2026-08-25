@@ -28,7 +28,7 @@ from typing import Callable, Optional
 from app.core import cleanup
 from app.core import interrupts as core_interrupts
 from app.core import rule_cards
-from app.core.db import new_id, now_iso
+from app.core.db import new_id, now_iso, DEV_ORG_ID
 
 # 登記表：模組在自己的檔案尾巴呼叫 register_module()／register_rule() 掛進來，
 # 本檔本身永遠是空字典起家（比照 app/core/cleanup.py 的 _REGISTRY）。
@@ -81,7 +81,7 @@ def decide(facts: dict) -> list:
 
 def _get_decision(conn, brand_id: str, dedupe_key: str) -> "Optional[dict]":
     row = conn.execute(
-        "SELECT * FROM decision WHERE brand_id = ? AND dedupe_key = ?",
+        "SELECT * FROM decision WHERE brand_id = %s AND dedupe_key = %s",
         (brand_id, dedupe_key),
     ).fetchone()
     return dict(row) if row is not None else None
@@ -93,10 +93,10 @@ def _insert_decision(conn, *, brand_id: str, module: str, rule_id: str, action_j
     decision_id = new_id("dcs")
     ts = now_iso()
     conn.execute(
-        "INSERT INTO decision (id, module, brand_id, rule_id, action_json, risk_level,"
+        "INSERT INTO decision (id, org_id, module, brand_id, rule_id, action_json, risk_level,"
         " autonomy_mode, dedupe_key, outcome, attempt_count, error_text, created_at,"
-        " updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (decision_id, module, brand_id, rule_id, action_json, risk_level, autonomy_mode,
+        " updated_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+        (decision_id, DEV_ORG_ID, module, brand_id, rule_id, action_json, risk_level, autonomy_mode,
          dedupe_key, outcome, attempt_count, error_text, ts, ts),
     )
     return decision_id
@@ -108,8 +108,8 @@ def _update_decision(conn, decision_id: str, *, outcome: str, attempt_count: int
     created_at）寫入後不動；只更新狀態欄（outcome／attempt_count／error_text，2026-08-23
     更正版，見 ADR 0024）。"""
     conn.execute(
-        "UPDATE decision SET outcome = ?, attempt_count = ?, error_text = ?, updated_at = ?"
-        " WHERE id = ?",
+        "UPDATE decision SET outcome = %s, attempt_count = %s, error_text = %s, updated_at = %s"
+        " WHERE id = %s",
         (outcome, attempt_count, error_text, now_iso(), decision_id),
     )
 
@@ -199,7 +199,7 @@ def count_brand_data(conn, brand_id: str) -> list:
     counts = []
     for table, label in BRAND_CASCADE_TABLES:
         n = conn.execute(
-            f"SELECT COUNT(*) AS c FROM {table} WHERE brand_id = ?", (brand_id,)
+            f"SELECT COUNT(*) AS c FROM {table} WHERE brand_id = %s", (brand_id,)
         ).fetchone()["c"]
         if n:
             counts.append((label, n))
@@ -209,7 +209,7 @@ def count_brand_data(conn, brand_id: str) -> list:
 def delete_brand_data(conn, brand_id: str) -> dict:
     counts = dict(count_brand_data(conn, brand_id))
     for table, _label in BRAND_CASCADE_TABLES:
-        conn.execute(f"DELETE FROM {table} WHERE brand_id = ?", (brand_id,))
+        conn.execute(f"DELETE FROM {table} WHERE brand_id = %s", (brand_id,))
     return counts
 
 

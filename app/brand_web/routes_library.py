@@ -27,7 +27,7 @@ from typing import Optional
 from fastapi import APIRouter, File, Form, Request, UploadFile
 from fastapi.responses import JSONResponse, Response
 
-from app import mock_data as md
+from app.core import vocab as md
 from app.brand_intelligence import background_job
 from app.brand_intelligence import compliance_wordlist
 from app.brand_intelligence import customer_voice as cv_mod

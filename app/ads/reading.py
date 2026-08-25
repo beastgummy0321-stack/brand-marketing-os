@@ -34,7 +34,7 @@ from app.brand_intelligence import repository as bi
 from app.core import interrupts as core_interrupts
 from app.core import prototype_phase
 from app.core import rule_cards
-from app.core.db import new_id, now_iso
+from app.core.db import new_id, now_iso, DEV_ORG_ID
 from app.llm import gateway, pricing, providers
 
 # 拆檔（票 10-split-reading-py，D2：這裡的名字全部維持可從 reading.py 匯入）——
@@ -331,21 +331,21 @@ def run(conn, brand_id: str, cycle_id: str, actor: str,
     from app.ads import weekly_proposals as ads_weekly_proposals  # 循環相依，延後到函式內才 import（同下方 nextcycle 寫法）
     if settled_run: ads_weekly_proposals.archive_on_close(conn, brand_id, cycle_id, actor)  # 票 F9：結算版先歸檔還候著的 GENERATED 卡，免得被下面這段 DELETE 悄悄清空
     preserved_weekly = "recommendation_type = 'weekly_proposal' AND status IN ('ACCEPTED', 'APPLIED', 'ARCHIVED_ON_CLOSE')"  # 保留花錢煞車紀錄／剛歸檔卡的關聯，先解除它們對即將刪除的舊判讀列之外鍵
-    conn.execute("UPDATE recommendation SET performance_reading_id = NULL WHERE brand_id = ? AND campaign_cycle_id = ? AND " + preserved_weekly,
+    conn.execute("UPDATE recommendation SET performance_reading_id = NULL WHERE brand_id = %s AND campaign_cycle_id = %s AND " + preserved_weekly,
                  (brand_id, cycle_id))
-    conn.execute("DELETE FROM recommendation WHERE brand_id = ? AND campaign_cycle_id = ? AND NOT (" + preserved_weekly + ")",
+    conn.execute("DELETE FROM recommendation WHERE brand_id = %s AND campaign_cycle_id = %s AND NOT (" + preserved_weekly + ")",
                  (brand_id, cycle_id))
     # learning_ledger 解除關聯（不刪列，比照 repository.delete_cycle() 既有先例）：假設結案
-    # 入帳時可能記下了這一版 performance_reading 的 id，重判必須先斷開，否則 PRAGMA
-    # foreign_keys=ON 會擋下面這個 DELETE（append-only 的學習列本身不受影響，只是來源指標
+    # 入帳時可能記下了這一版 performance_reading 的 id，重判必須先斷開，否則 Postgres 的
+    # 外鍵約束會擋下面這個 DELETE（append-only 的學習列本身不受影響，只是來源指標
     # 指到新的一版）。learning_ledger 現屬品牌永久層（修憲落地 A3），走 bi 的公開函式。
-    delete_scope = "" if settled_run else " AND COALESCE(json_extract(rule_result_json, '$.is_tentative'), 1) != 0"  # D4
+    delete_scope = "" if settled_run else " AND COALESCE(rule_result_json->>'is_tentative', 1) != 0"  # D4
     reading_ids = [r["id"] for r in conn.execute(
-        "SELECT id FROM performance_reading WHERE campaign_cycle_id = ?" + delete_scope, (cycle_id,)
+        "SELECT id FROM performance_reading WHERE campaign_cycle_id = %s" + delete_scope, (cycle_id,)
     ).fetchall()]
     bi.unlink_learning_ledger_reading(conn, reading_ids)
     conn.execute(
-        "DELETE FROM performance_reading WHERE brand_id = ? AND campaign_cycle_id = ?" + delete_scope,
+        "DELETE FROM performance_reading WHERE brand_id = %s AND campaign_cycle_id = %s" + delete_scope,
         (brand_id, cycle_id),
     )
 
@@ -439,10 +439,10 @@ def run(conn, brand_id: str, cycle_id: str, actor: str,
 
     for verdict in readings:
         conn.execute(
-            "INSERT INTO performance_reading (id, brand_id, campaign_cycle_id, product_id,"
+            "INSERT INTO performance_reading (id, org_id, brand_id, campaign_cycle_id, product_id,"
             " status, rule_result_json, confidence_level, llm_explanation, llm_task_id,"
-            " created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (new_id("prd"), brand_id, cycle_id, verdict["product_id"], verdict["status"],
+            " created_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            (new_id("prd"), DEV_ORG_ID, brand_id, cycle_id, verdict["product_id"], verdict["status"],
              json.dumps({"reasons": verdict["reasons"], "kpis": verdict["kpis"],
                         "statistical_level": verdict["statistical_level"],
                         "statistical_level_label": verdict["statistical_level_label"],
@@ -781,8 +781,8 @@ def _ledger_confidence(conn, brand_id: str, product_id: Optional[str], learning_
 def load(conn, brand_id: str, cycle_id: str) -> dict:
     """讀回判讀結果：{cycle: 檔期層, products: [產品層...]}。D4：結算版跟暫定版可能同時存在，規則「結算版贏」——ORDER BY 讓暫定列排前、結算列排後，字典覆寫去重，最後寫入的贏。"""
     rows = [dict(r) for r in conn.execute(
-        "SELECT * FROM performance_reading WHERE brand_id = ? AND campaign_cycle_id = ? ORDER BY"
-        " product_id IS NULL, COALESCE(json_extract(rule_result_json, '$.is_tentative'), 1) DESC, created_at", (brand_id, cycle_id),
+        "SELECT * FROM performance_reading WHERE brand_id = %s AND campaign_cycle_id = %s ORDER BY"
+        " product_id IS NULL, COALESCE(rule_result_json->>'is_tentative', 1) DESC, created_at", (brand_id, cycle_id),
     )]
     products_by_id, cycle_row = {}, None
     for row in rows:

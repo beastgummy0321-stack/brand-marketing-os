@@ -11,7 +11,6 @@ Intelligence 既有四張表）、寫 audit_log（entity_type='intake_item'）�
 """
 
 import json
-import sqlite3
 from typing import Optional
 
 from app.brand_intelligence import customer_voice
@@ -45,17 +44,17 @@ def _row_to_dict(row) -> Optional[dict]:
     return dict(row) if row is not None else None
 
 
-def count_brand_data(conn: sqlite3.Connection, brand_id: str) -> list:
+def count_brand_data(conn: db.Conn, brand_id: str) -> list:
     """回傳 [(中文名稱, 筆數)]，給品牌刪除確認頁列出本模組會被清掉的資料。"""
     return [
         ("建檔精靈草稿", conn.execute(
-            "SELECT COUNT(*) FROM intake_draft WHERE brand_id = ?", (brand_id,)).fetchone()[0]),
+            "SELECT COUNT(*) AS n FROM intake_draft WHERE brand_id = %s", (brand_id,)).fetchone()["n"]),
         ("建檔精靈逐條紀錄", conn.execute(
-            "SELECT COUNT(*) FROM intake_item WHERE brand_id = ?", (brand_id,)).fetchone()[0]),
+            "SELECT COUNT(*) AS n FROM intake_item WHERE brand_id = %s", (brand_id,)).fetchone()["n"]),
     ]
 
 
-def delete_brand_data(conn: sqlite3.Connection, brand_id: str) -> dict:
+def delete_brand_data(conn: db.Conn, brand_id: str) -> dict:
     """品牌被刪除時，清掉本模組掛在該品牌下的草稿與逐條紀錄（決策 0015）。
 
     稽核由呼叫端（品牌刪除那筆 audit_log）一起記，這裡不另外寫。
@@ -63,12 +62,12 @@ def delete_brand_data(conn: sqlite3.Connection, brand_id: str) -> dict:
     brand_intelligence.delete_brand()（Q4 全有全無）。
     """
     counts = dict(count_brand_data(conn, brand_id))
-    conn.execute("DELETE FROM intake_item WHERE brand_id = ?", (brand_id,))
-    conn.execute("DELETE FROM intake_draft WHERE brand_id = ?", (brand_id,))
+    conn.execute("DELETE FROM intake_item WHERE brand_id = %s", (brand_id,))
+    conn.execute("DELETE FROM intake_draft WHERE brand_id = %s", (brand_id,))
     return counts
 
 
-def create_draft(conn: sqlite3.Connection, brand_id: str, description: str,
+def create_draft(conn: db.Conn, brand_id: str, description: str,
                  photos: list, research_urls: list, actor: str,
                  cost_limit: Optional[float] = None) -> dict:
     """建立一份進行中草稿。photos 為 §3A.2 形狀 [{file_path, display_name, size_bytes}]。
@@ -81,34 +80,34 @@ def create_draft(conn: sqlite3.Connection, brand_id: str, description: str,
     ts = db.now_iso()
     conn.execute(
         """INSERT INTO intake_draft (
-            id, brand_id, status, current_step, current_question_no, description,
+            id, org_id, brand_id, status, current_step, current_question_no, description,
             photos_json, research_urls_json, cost_limit, llm_task_refs_json,
             created_at, updated_at
-        ) VALUES (?, ?, 'draft', 2, 0, ?, ?, ?, ?, '[]', ?, ?)""",
-        (draft_id, brand_id, description, json.dumps(photos, ensure_ascii=False),
+        ) VALUES (%s, %s, %s, 'draft', 2, 0, %s, %s, %s, %s, '[]', %s, %s)""",
+        (draft_id, db.DEV_ORG_ID, brand_id, description, json.dumps(photos, ensure_ascii=False),
          json.dumps(research_urls, ensure_ascii=False), cost_limit, ts, ts),
     )
     conn.commit()
     return get_draft(conn, brand_id, draft_id)
 
 
-def get_active_draft(conn: sqlite3.Connection, brand_id: str) -> Optional[dict]:
+def get_active_draft(conn: db.Conn, brand_id: str) -> Optional[dict]:
     row = conn.execute(
-        "SELECT * FROM intake_draft WHERE brand_id = ? AND status = 'draft'", (brand_id,)
+        "SELECT * FROM intake_draft WHERE brand_id = %s AND status = 'draft'", (brand_id,)
     ).fetchone()
     return _row_to_dict(row)
 
 
-def get_latest_completed_draft(conn: sqlite3.Connection, brand_id: str) -> Optional[dict]:
+def get_latest_completed_draft(conn: db.Conn, brand_id: str) -> Optional[dict]:
     """重新調研的預帶來源：最近一輪已完成的草稿（issue #1）。"""
     row = conn.execute(
-        "SELECT * FROM intake_draft WHERE brand_id = ? AND status = 'completed' "
+        "SELECT * FROM intake_draft WHERE brand_id = %s AND status = 'completed' "
         "ORDER BY completed_at DESC LIMIT 1", (brand_id,)
     ).fetchone()
     return _row_to_dict(row)
 
 
-def list_research_reports(conn: sqlite3.Connection, brand_id: str) -> list:
+def list_research_reports(conn: db.Conn, brand_id: str) -> list:
     """有貼回原文的歷次調研，連同每份已確認入檔數。"""
     rows = conn.execute(
         """SELECT draft.id, draft.created_at, COUNT(item.id) AS confirmed_count
@@ -117,7 +116,7 @@ def list_research_reports(conn: sqlite3.Connection, brand_id: str) -> list:
              ON item.intake_draft_id = draft.id
             AND item.brand_id = draft.brand_id
             AND item.outcome = 'confirmed'
-           WHERE draft.brand_id = ? AND TRIM(COALESCE(draft.paste_raw, '')) <> ''
+           WHERE draft.brand_id = %s AND TRIM(COALESCE(draft.paste_raw, '')) <> ''
            GROUP BY draft.id
            ORDER BY draft.created_at DESC, draft.id DESC""",
         (brand_id,),
@@ -125,7 +124,7 @@ def list_research_reports(conn: sqlite3.Connection, brand_id: str) -> list:
     return [dict(row) for row in rows]
 
 
-def get_research_report(conn: sqlite3.Connection, brand_id: str, draft_id: str) -> Optional[dict]:
+def get_research_report(conn: db.Conn, brand_id: str, draft_id: str) -> Optional[dict]:
     """單份已貼回原文的調研；草稿不屬於此品牌或未貼原文都不回傳。"""
     row = conn.execute(
         """SELECT draft.id, draft.created_at, draft.paste_raw, COUNT(item.id) AS confirmed_count
@@ -134,7 +133,7 @@ def get_research_report(conn: sqlite3.Connection, brand_id: str, draft_id: str) 
              ON item.intake_draft_id = draft.id
             AND item.brand_id = draft.brand_id
             AND item.outcome = 'confirmed'
-           WHERE draft.brand_id = ? AND draft.id = ?
+           WHERE draft.brand_id = %s AND draft.id = %s
              AND TRIM(COALESCE(draft.paste_raw, '')) <> ''
            GROUP BY draft.id""",
         (brand_id, draft_id),
@@ -142,32 +141,32 @@ def get_research_report(conn: sqlite3.Connection, brand_id: str, draft_id: str) 
     return _row_to_dict(row)
 
 
-def get_draft(conn: sqlite3.Connection, brand_id: str, draft_id: str) -> Optional[dict]:
+def get_draft(conn: db.Conn, brand_id: str, draft_id: str) -> Optional[dict]:
     row = conn.execute(
-        "SELECT * FROM intake_draft WHERE brand_id = ? AND id = ?", (brand_id, draft_id)
+        "SELECT * FROM intake_draft WHERE brand_id = %s AND id = %s", (brand_id, draft_id)
     ).fetchone()
     return _row_to_dict(row)
 
 
-def update_draft(conn: sqlite3.Connection, brand_id: str, draft_id: str, **fields) -> dict:
+def update_draft(conn: db.Conn, brand_id: str, draft_id: str, **fields) -> dict:
     unknown = set(fields) - _DRAFT_FIELDS
     if unknown:
         raise ValueError(f"intake_draft 不允許更新欄位：{sorted(unknown)}")
     if fields:
-        sets = ", ".join(f"{k} = ?" for k in fields)
+        sets = ", ".join(f"{k} = %s" for k in fields)
         conn.execute(
-            f"UPDATE intake_draft SET {sets}, updated_at = ? WHERE brand_id = ? AND id = ?",
+            f"UPDATE intake_draft SET {sets}, updated_at = %s WHERE brand_id = %s AND id = %s",
             (*fields.values(), db.now_iso(), brand_id, draft_id),
         )
         conn.commit()
     return get_draft(conn, brand_id, draft_id)
 
 
-def complete_draft(conn: sqlite3.Connection, brand_id: str, draft_id: str) -> dict:
+def complete_draft(conn: db.Conn, brand_id: str, draft_id: str) -> dict:
     return update_draft(conn, brand_id, draft_id, status="completed", completed_at=db.now_iso())
 
 
-def add_llm_task_ref(conn: sqlite3.Connection, brand_id: str, draft_id: str,
+def add_llm_task_ref(conn: db.Conn, brand_id: str, draft_id: str,
                      llm_task_id: str, purpose: str) -> None:
     """只存 id 與人話用途，不存金額副本（03 §3A.5 第 5 點）。"""
     draft = get_draft(conn, brand_id, draft_id)
@@ -176,12 +175,12 @@ def add_llm_task_ref(conn: sqlite3.Connection, brand_id: str, draft_id: str,
     update_draft(conn, brand_id, draft_id, llm_task_refs_json=json.dumps(refs, ensure_ascii=False))
 
 
-def list_llm_cost_items(conn: sqlite3.Connection, draft: dict) -> list:
+def list_llm_cost_items(conn: db.Conn, draft: dict) -> list:
     """花費明細：依 refs 逐筆讀 llm_task 的 cost / status，即時算、不存副本。"""
     items = []
     for ref in json.loads(draft["llm_task_refs_json"] or "[]"):
         row = conn.execute(
-            "SELECT cost, status FROM llm_task WHERE id = ?", (ref["llm_task_id"],)
+            "SELECT cost, status FROM llm_task WHERE id = %s", (ref["llm_task_id"],)
         ).fetchone()
         if row is None:
             continue
@@ -190,20 +189,20 @@ def list_llm_cost_items(conn: sqlite3.Connection, draft: dict) -> list:
     return items
 
 
-def get_draft_spend(conn: sqlite3.Connection, draft_id: str) -> float:
+def get_draft_spend(conn: db.Conn, draft_id: str) -> float:
     row = conn.execute(
-        "SELECT llm_task_refs_json FROM intake_draft WHERE id = ?", (draft_id,)
+        "SELECT llm_task_refs_json FROM intake_draft WHERE id = %s", (draft_id,)
     ).fetchone()
     if row is None:
         return 0.0
     ids = [r["llm_task_id"] for r in json.loads(row["llm_task_refs_json"] or "[]")]
     if not ids:
         return 0.0
-    placeholders = ",".join("?" for _ in ids)
+    placeholders = ",".join("%s" for _ in ids)
     total = conn.execute(
-        f"SELECT SUM(cost) FROM llm_task WHERE id IN ({placeholders}) AND status = 'succeeded'",
+        f"SELECT SUM(cost) AS n FROM llm_task WHERE id IN ({placeholders}) AND status = 'succeeded'",
         ids,
-    ).fetchone()[0]
+    ).fetchone()["n"]
     return float(total or 0.0)
 
 
@@ -212,9 +211,9 @@ def get_draft_spend(conn: sqlite3.Connection, draft_id: str) -> float:
 # HTML 表單與 JSON API 兩套路由共用同一支，不再各自一份，CLAUDE.md 第五節）。
 # ---------------------------------------------------------------------------
 
-def existing_confirmed_data(conn: sqlite3.Connection, brand_id: str) -> dict:
+def existing_confirmed_data(conn: db.Conn, brand_id: str) -> dict:
     """已確認的品牌資料摘要（交接包「不用重查」區塊＋貼回重複提示共用，issue #1）。"""
-    from app import mock_data as md
+    from app.core import vocab as md
     brand_facts = [(f["label"], f["value"])
                    for f in bi_repo.list_brand_facts(conn, brand_id, status="confirmed")]
     product_facts = []
@@ -232,7 +231,7 @@ def _normalize_title(text: str) -> str:
     return "".join(ch for ch in (text or "") if ch.isalnum()).lower()
 
 
-def duplicate_hints(conn: sqlite3.Connection, brand_id: str, items: list) -> dict:
+def duplicate_hints(conn: db.Conn, brand_id: str, items: list) -> dict:
     """待辦列 → 可能重複的既有資料提示 {item_id: 既有內容一句話}。
 
     正規化後「完全相同」或「一方包含另一方（≥6 字）」就標記；只提醒、不阻擋（決策 0013）。"""
@@ -266,18 +265,18 @@ def duplicate_hints(conn: sqlite3.Connection, brand_id: str, items: list) -> dic
 # intake_item
 # ---------------------------------------------------------------------------
 
-def create_items(conn: sqlite3.Connection, brand_id: str, draft_id: str, rows: list) -> list:
+def create_items(conn: db.Conn, brand_id: str, draft_id: str, rows: list) -> list:
     """整批一次寫；任何一筆失敗整批回滾（§19.2(e) 規則 4：部分成功不落地）。
 
     rows：paste_parse 的輸出（中文 kind／category），這裡轉成內部代碼存。
     重貼會先清掉這份草稿還沒處理的（outcome='pending'）舊列；已處理的列保留當追溯。
     """
-    from app.intake import paste_parse  # 延遲 import 避免循環（paste_parse → mock_data）
+    from app.intake import paste_parse  # 延遲 import 避免循環（paste_parse → vocab）
 
     ts = db.now_iso()
     try:
         conn.execute(
-            "DELETE FROM intake_item WHERE intake_draft_id = ? AND brand_id = ? AND outcome = 'pending'",
+            "DELETE FROM intake_item WHERE intake_draft_id = %s AND brand_id = %s AND outcome = 'pending'",
             (draft_id, brand_id),
         )
         for i, r in enumerate(rows, start=1):
@@ -285,10 +284,10 @@ def create_items(conn: sqlite3.Connection, brand_id: str, draft_id: str, rows: l
             category = _category_to_internal(r["kind"], r["category"])
             conn.execute(
                 """INSERT INTO intake_item (
-                    id, intake_draft_id, brand_id, row_no, raw_row, kind, category, title,
+                    id, org_id, intake_draft_id, brand_id, row_no, raw_row, kind, category, title,
                     content, scope_raw, evidence_source, outcome, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)""",
-                (db.new_id("iit"), draft_id, brand_id, i,
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'pending', %s)""",
+                (db.new_id("iit"), db.DEV_ORG_ID, draft_id, brand_id, i,
                  r.get("raw_row") or " | ".join([r["kind"], r["category"], r["title"],
                                                   r["content"], r["scope"], r["evidence"]]),
                  kind, category, r["title"], r["content"], r["scope"], r["evidence"], ts),
@@ -320,25 +319,25 @@ def _item_to_display(row) -> dict:
     }
 
 
-def list_pending_items(conn: sqlite3.Connection, brand_id: str, draft_id: str) -> list:
+def list_pending_items(conn: db.Conn, brand_id: str, draft_id: str) -> list:
     rows = conn.execute(
-        "SELECT * FROM intake_item WHERE brand_id = ? AND intake_draft_id = ? "
+        "SELECT * FROM intake_item WHERE brand_id = %s AND intake_draft_id = %s "
         "AND outcome = 'pending' ORDER BY row_no", (brand_id, draft_id),
     ).fetchall()
     return [_item_to_display(r) for r in rows]
 
 
-def list_items(conn: sqlite3.Connection, brand_id: str, draft_id: str) -> list:
+def list_items(conn: db.Conn, brand_id: str, draft_id: str) -> list:
     rows = conn.execute(
-        "SELECT * FROM intake_item WHERE brand_id = ? AND intake_draft_id = ? ORDER BY row_no",
+        "SELECT * FROM intake_item WHERE brand_id = %s AND intake_draft_id = %s ORDER BY row_no",
         (brand_id, draft_id),
     ).fetchall()
     return [_item_to_display(r) for r in rows]
 
 
-def list_truth_card_items(conn: sqlite3.Connection, brand_id: str, draft_id: str) -> list:
+def list_truth_card_items(conn: db.Conn, brand_id: str, draft_id: str) -> list:
     rows = conn.execute(
-        "SELECT * FROM intake_item WHERE brand_id = ? AND intake_draft_id = ? ORDER BY row_no",
+        "SELECT * FROM intake_item WHERE brand_id = %s AND intake_draft_id = %s ORDER BY row_no",
         (brand_id, draft_id),
     ).fetchall()
     return [
@@ -350,9 +349,9 @@ def list_truth_card_items(conn: sqlite3.Connection, brand_id: str, draft_id: str
     ]
 
 
-def count_items_by_outcome(conn: sqlite3.Connection, brand_id: str, draft_id: str) -> dict:
+def count_items_by_outcome(conn: db.Conn, brand_id: str, draft_id: str) -> dict:
     rows = conn.execute(
-        "SELECT outcome, COUNT(*) AS n FROM intake_item WHERE brand_id = ? AND intake_draft_id = ? "
+        "SELECT outcome, COUNT(*) AS n FROM intake_item WHERE brand_id = %s AND intake_draft_id = %s "
         "GROUP BY outcome", (brand_id, draft_id),
     ).fetchall()
     return {r["outcome"]: r["n"] for r in rows}
@@ -391,7 +390,7 @@ def _make_source(conn, brand_id: str, actor: str, text: Optional[str],
     return row["id"]
 
 
-def resolve_item(conn: sqlite3.Connection, brand_id: str, item_id: str, outcome: str,
+def resolve_item(conn: db.Conn, brand_id: str, item_id: str, outcome: str,
                  processed_by: str, client_evidence: Optional[str] = None,
                  target_table: Optional[str] = None, target_id: Optional[str] = None,
                  edits: Optional[dict] = None, rule_severity: Optional[str] = None) -> dict:
@@ -404,7 +403,7 @@ def resolve_item(conn: sqlite3.Connection, brand_id: str, item_id: str, outcome:
     if outcome not in ("confirmed", "pending_saved", "discarded"):
         raise ValueError(f"不支援的出口：{outcome}")
     row = conn.execute(
-        "SELECT * FROM intake_item WHERE brand_id = ? AND id = ?", (brand_id, item_id)
+        "SELECT * FROM intake_item WHERE brand_id = %s AND id = %s", (brand_id, item_id)
     ).fetchone()
     if row is None:
         raise ValueError("找不到這筆待處理內容")
@@ -420,8 +419,8 @@ def resolve_item(conn: sqlite3.Connection, brand_id: str, item_id: str, outcome:
                    if k in ("title", "content", "category", "scope_raw") and v is not None}
         changed = {k: v for k, v in allowed.items() if item.get(k) != v}
         if changed:
-            sets = ", ".join(f"{k} = ?" for k in changed)
-            conn.execute(f"UPDATE intake_item SET {sets} WHERE id = ? AND brand_id = ?",
+            sets = ", ".join(f"{k} = %s" for k in changed)
+            conn.execute(f"UPDATE intake_item SET {sets} WHERE id = %s AND brand_id = %s",
                          (*changed.values(), item_id, brand_id))
             item.update(changed)
 
@@ -491,8 +490,8 @@ def resolve_item(conn: sqlite3.Connection, brand_id: str, item_id: str, outcome:
         # rule / claim / customer_voice 沒有待確認狀態：留在本表等人再處理，不寫目標表。
 
     conn.execute(
-        """UPDATE intake_item SET outcome = ?, client_evidence = ?, target_table = ?,
-           target_id = ?, processed_by = ?, processed_at = ? WHERE brand_id = ? AND id = ?""",
+        """UPDATE intake_item SET outcome = %s, client_evidence = %s, target_table = %s,
+           target_id = %s, processed_by = %s, processed_at = %s WHERE brand_id = %s AND id = %s""",
         (outcome, client_evidence, target_table, target_id, processed_by, db.now_iso(),
          brand_id, item_id),
     )
@@ -504,16 +503,16 @@ def resolve_item(conn: sqlite3.Connection, brand_id: str, item_id: str, outcome:
     )
     conn.commit()
     row = conn.execute(
-        "SELECT * FROM intake_item WHERE brand_id = ? AND id = ?", (brand_id, item_id)
+        "SELECT * FROM intake_item WHERE brand_id = %s AND id = %s", (brand_id, item_id)
     ).fetchone()
     return _item_to_display(row)
 
 
-def update_resolved_item(conn: sqlite3.Connection, brand_id: str, item_id: str, *,
+def update_resolved_item(conn: db.Conn, brand_id: str, item_id: str, *,
                          processed_by: str, edits: dict) -> dict:
     """更新已落檔的真相卡列；目標資料只走 Brand Intelligence 公開更新入口。"""
     row = conn.execute(
-        "SELECT * FROM intake_item WHERE brand_id = ? AND id = ?", (brand_id, item_id),
+        "SELECT * FROM intake_item WHERE brand_id = %s AND id = %s", (brand_id, item_id),
     ).fetchone()
     if row is None:
         raise ValueError("找不到這筆內容")
@@ -572,14 +571,14 @@ def update_resolved_item(conn: sqlite3.Connection, brand_id: str, item_id: str, 
     before = _item_to_display(row)
     changed = {key: value for key, value in allowed.items() if item.get(key) != value}
     if changed:
-        sets = ", ".join(f"{key} = ?" for key in changed)
+        sets = ", ".join(f"{key} = %s" for key in changed)
         conn.execute(
-            f"UPDATE intake_item SET {sets}, processed_by = ?, processed_at = ? "
-            "WHERE brand_id = ? AND id = ?",
+            f"UPDATE intake_item SET {sets}, processed_by = %s, processed_at = %s "
+            "WHERE brand_id = %s AND id = %s",
             (*changed.values(), processed_by, db.now_iso(), brand_id, item_id),
         )
     after_row = conn.execute(
-        "SELECT * FROM intake_item WHERE brand_id = ? AND id = ?", (brand_id, item_id),
+        "SELECT * FROM intake_item WHERE brand_id = %s AND id = %s", (brand_id, item_id),
     ).fetchone()
     after = _item_to_display(after_row)
     if changed:
@@ -592,7 +591,7 @@ def update_resolved_item(conn: sqlite3.Connection, brand_id: str, item_id: str, 
     return after
 
 
-def _delete_landed_item_target(conn: sqlite3.Connection, brand_id: str, item: dict,
+def _delete_landed_item_target(conn: db.Conn, brand_id: str, item: dict,
                                actor: str) -> None:
     target_id = item.get("target_id")
     if not target_id:
@@ -609,17 +608,17 @@ def _delete_landed_item_target(conn: sqlite3.Connection, brand_id: str, item: di
     deleter(conn, brand_id, target_id, actor=actor)
 
 
-def _save_truth_card_move(conn: sqlite3.Connection, brand_id: str, item: dict, *,
+def _save_truth_card_move(conn: db.Conn, brand_id: str, item: dict, *,
                           processed_by: str, target: str, changes: dict) -> dict:
     before = _item_to_display(item)
-    sets = ", ".join(f"{key} = ?" for key in changes)
+    sets = ", ".join(f"{key} = %s" for key in changes)
     conn.execute(
-        f"UPDATE intake_item SET {sets}, processed_by = ?, processed_at = ? "
-        "WHERE brand_id = ? AND id = ?",
+        f"UPDATE intake_item SET {sets}, processed_by = %s, processed_at = %s "
+        "WHERE brand_id = %s AND id = %s",
         (*changes.values(), processed_by, db.now_iso(), brand_id, item["id"]),
     )
     row = conn.execute(
-        "SELECT * FROM intake_item WHERE brand_id = ? AND id = ?", (brand_id, item["id"]),
+        "SELECT * FROM intake_item WHERE brand_id = %s AND id = %s", (brand_id, item["id"]),
     ).fetchone()
     after = _item_to_display(row)
     write_audit(
@@ -631,13 +630,13 @@ def _save_truth_card_move(conn: sqlite3.Connection, brand_id: str, item: dict, *
     return after
 
 
-def move_truth_card_item(conn: sqlite3.Connection, brand_id: str, item_id: str, *,
+def move_truth_card_item(conn: db.Conn, brand_id: str, item_id: str, *,
                          processed_by: str, target: str) -> dict:
     """搬動單條真相卡；正式資料只經 Brand Intelligence 公開入口異動。"""
     if target not in ("accepted", "needs_confirmation", "forbidden"):
         raise ValueError("搬格目標不正確。")
     row = conn.execute(
-        "SELECT * FROM intake_item WHERE brand_id = ? AND id = ?", (brand_id, item_id),
+        "SELECT * FROM intake_item WHERE brand_id = %s AND id = %s", (brand_id, item_id),
     ).fetchone()
     if row is None:
         raise ValueError("找不到這筆內容")

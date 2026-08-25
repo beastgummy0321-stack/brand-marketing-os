@@ -23,7 +23,7 @@ from typing import Optional
 from app.ads import performance as ads_performance
 from app.ads import repository as ads_repo
 from app.core.audit import write_audit
-from app.core.db import new_id, now_iso
+from app.core.db import new_id, now_iso, DEV_ORG_ID
 
 ONE_TIME_ITEMS = {
     "pixel_confirmed": {
@@ -117,7 +117,7 @@ def _brand_item_status(conn, brand_id: str, items: dict) -> list:
     """`brand_checklist_item` 通用讀法：任何一份品牌層一次性項目字典都能套用同一張表，
     不用各自另開一張表（one_time_status／qa_launch_status 共用這個函式）。"""
     rows = {r["item_key"]: r for r in _rows(conn.execute(
-        "SELECT * FROM brand_checklist_item WHERE brand_id = ?", (brand_id,)))}
+        "SELECT * FROM brand_checklist_item WHERE brand_id = %s", (brand_id,)))}
     result = []
     for key, meta in items.items():
         row = rows.get(key)
@@ -165,7 +165,7 @@ def qa_launch_summary(conn, brand_id: str) -> dict:
 
 def _cycle_hints(conn, brand_id: str, cycle_id: str) -> dict:
     count = conn.execute(
-        "SELECT COUNT(*) c FROM finding WHERE brand_id = ? AND campaign_cycle_id = ?"
+        "SELECT COUNT(*) c FROM finding WHERE brand_id = %s AND campaign_cycle_id = %s"
         " AND finding_type = 'compliance' AND resolved = 0", (brand_id, cycle_id),
     ).fetchone()["c"]
     return {
@@ -178,7 +178,7 @@ def _cycle_hints(conn, brand_id: str, cycle_id: str) -> dict:
 
 def cycle_status(conn, brand_id: str, cycle_id: str) -> list:
     rows = {r["item_key"]: r for r in _rows(conn.execute(
-        "SELECT * FROM cycle_checklist_item WHERE brand_id = ? AND campaign_cycle_id = ?",
+        "SELECT * FROM cycle_checklist_item WHERE brand_id = %s AND campaign_cycle_id = %s",
         (brand_id, cycle_id)))}
     hints = _cycle_hints(conn, brand_id, cycle_id)
     result = []
@@ -209,12 +209,12 @@ def completeness(conn, brand_id: str, cycle_id: str) -> dict:
 def _set_brand_item(conn, brand_id: str, item_key: str, checked: bool, actor: str) -> None:
     ts = now_iso()
     conn.execute(
-        "INSERT INTO brand_checklist_item (id, brand_id, item_key, checked, checked_by,"
-        " checked_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
+        "INSERT INTO brand_checklist_item (id, org_id, brand_id, item_key, checked, checked_by,"
+        " checked_at, updated_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)"
         " ON CONFLICT(brand_id, item_key) DO UPDATE SET checked = excluded.checked,"
         " checked_by = excluded.checked_by, checked_at = excluded.checked_at,"
         " updated_at = excluded.updated_at",
-        (new_id("bcl"), brand_id, item_key, int(checked),
+        (new_id("bcl"), DEV_ORG_ID, brand_id, item_key, int(checked),
          actor if checked else None, ts if checked else None, ts),
     )
     write_audit(conn, brand_id=brand_id, entity_type="brand_checklist_item", entity_id=item_key,
@@ -243,12 +243,12 @@ def set_cycle_item(conn, brand_id: str, cycle_id: str, item_key: str, checked: b
         raise ValueError(f"沒有這個檢查項目：{item_key}")
     ts = now_iso()
     conn.execute(
-        "INSERT INTO cycle_checklist_item (id, brand_id, campaign_cycle_id, item_key, checked,"
-        " checked_by, checked_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+        "INSERT INTO cycle_checklist_item (id, org_id, brand_id, campaign_cycle_id, item_key, checked,"
+        " checked_by, checked_at, updated_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)"
         " ON CONFLICT(campaign_cycle_id, item_key) DO UPDATE SET checked = excluded.checked,"
         " checked_by = excluded.checked_by, checked_at = excluded.checked_at,"
         " updated_at = excluded.updated_at",
-        (new_id("ccl"), brand_id, cycle_id, item_key, int(checked),
+        (new_id("ccl"), DEV_ORG_ID, brand_id, cycle_id, item_key, int(checked),
          actor if checked else None, ts if checked else None, ts),
     )
     write_audit(conn, brand_id=brand_id, entity_type="cycle_checklist_item",

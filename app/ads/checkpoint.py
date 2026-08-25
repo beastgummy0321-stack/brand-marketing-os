@@ -26,7 +26,7 @@ from app.ads import repository as ads_repo
 from app.ads.guardrails import check_data_sanity
 from app.core import rule_cards
 from app.core.audit import write_audit
-from app.core.db import new_id, now_iso
+from app.core.db import new_id, now_iso, DEV_ORG_ID
 
 KIND_LABELS = {"day3": "第 3 天健康檢查", "day7": "第 7 天健康檢查"}
 
@@ -155,9 +155,9 @@ def _store(conn, brand_id: str, cycle_id: str, kind: str, result: dict, actor: s
     ts = now_iso()
     checkpoint_id = new_id("chk")
     conn.execute(
-        "INSERT INTO cycle_checkpoint (id, brand_id, campaign_cycle_id, kind, result_json,"
-        " status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'active', ?, ?)",
-        (checkpoint_id, brand_id, cycle_id, kind,
+        "INSERT INTO cycle_checkpoint (id, org_id, brand_id, campaign_cycle_id, kind, result_json,"
+        " status, created_at, updated_at) VALUES (%s, %s, %s, %s, %s, %s, 'active', %s, %s)",
+        (checkpoint_id, DEV_ORG_ID, brand_id, cycle_id, kind,
          json.dumps(result, ensure_ascii=False), ts, ts),
     )
     write_audit(conn, brand_id=brand_id, entity_type="cycle_checkpoint", entity_id=checkpoint_id,
@@ -170,7 +170,7 @@ def _store(conn, brand_id: str, cycle_id: str, kind: str, result: dict, actor: s
 
 def _row(conn, brand_id: str, checkpoint_id: str) -> Optional[dict]:
     row = conn.execute(
-        "SELECT * FROM cycle_checkpoint WHERE id = ? AND brand_id = ?",
+        "SELECT * FROM cycle_checkpoint WHERE id = %s AND brand_id = %s",
         (checkpoint_id, brand_id),
     ).fetchone()
     return dict(row) if row else None
@@ -179,7 +179,7 @@ def _row(conn, brand_id: str, checkpoint_id: str) -> Optional[dict]:
 def list_checkpoints(conn, brand_id: str, cycle_id: str) -> list:
     """這期做過的所有檢查點，最新的在前面。"""
     rows = [dict(r) for r in conn.execute(
-        "SELECT * FROM cycle_checkpoint WHERE brand_id = ? AND campaign_cycle_id = ?"
+        "SELECT * FROM cycle_checkpoint WHERE brand_id = %s AND campaign_cycle_id = %s"
         " ORDER BY created_at DESC", (brand_id, cycle_id),
     )]
     for row in rows:
@@ -196,7 +196,7 @@ def set_status(conn, brand_id: str, checkpoint_id: str, *, status: str, actor: s
     if before is None:
         raise ValueError(f"找不到檢查點紀錄：{checkpoint_id}")
     ts = now_iso()
-    conn.execute("UPDATE cycle_checkpoint SET status = ?, updated_at = ? WHERE id = ?",
+    conn.execute("UPDATE cycle_checkpoint SET status = %s, updated_at = %s WHERE id = %s",
                 (status, ts, checkpoint_id))
     after = _row(conn, brand_id, checkpoint_id)
     write_audit(conn, brand_id=brand_id, entity_type="cycle_checkpoint", entity_id=checkpoint_id,
@@ -211,7 +211,7 @@ def delete(conn, brand_id: str, checkpoint_id: str, *, actor: str) -> None:
     before = _row(conn, brand_id, checkpoint_id)
     if before is None:
         raise ValueError(f"找不到檢查點紀錄：{checkpoint_id}")
-    conn.execute("DELETE FROM cycle_checkpoint WHERE id = ? AND brand_id = ?",
+    conn.execute("DELETE FROM cycle_checkpoint WHERE id = %s AND brand_id = %s",
                 (checkpoint_id, brand_id))
     write_audit(conn, brand_id=brand_id, entity_type="cycle_checkpoint", entity_id=checkpoint_id,
                 action="delete", actor=actor, before=before, after=None)

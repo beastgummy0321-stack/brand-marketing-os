@@ -29,7 +29,7 @@ from pathlib import Path
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
-from app import mock_data as md
+from app.core import vocab as md
 from app.brand_intelligence import repository as repo
 from app.brand_web import routes as brand_routes
 from app.brand_web.routes_library import (

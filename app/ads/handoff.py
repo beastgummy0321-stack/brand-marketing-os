@@ -24,7 +24,7 @@ from app.ads import creative as ads_creative
 from app.ads import repository as ads_repo
 from app.brand_intelligence import repository as bi
 from app.core.audit import write_audit
-from app.core.db import new_id, now_iso
+from app.core.db import new_id, now_iso, DEV_ORG_ID
 
 OBJECTIVE_META_LABEL = {
     "awareness": "品牌知名度",
@@ -163,7 +163,7 @@ def build_packages(conn, brand_id: str, cycle_id: str, actor: str, *, commit: bo
     )
 
     conn.execute(
-        "DELETE FROM publishing_package WHERE brand_id = ? AND campaign_cycle_id = ?"
+        "DELETE FROM publishing_package WHERE brand_id = %s AND campaign_cycle_id = %s"
         " AND id NOT IN (SELECT publishing_package_id FROM external_ad_mapping"
         "                WHERE publishing_package_id IS NOT NULL)",
         (brand_id, cycle_id),
@@ -193,11 +193,11 @@ def build_packages(conn, brand_id: str, cycle_id: str, actor: str, *, commit: bo
             daily = (cycle["budget"] or 0) / days / max(len(groups), 1)
 
         conn.execute(
-            "INSERT INTO publishing_package (id, brand_id, campaign_cycle_id,"
+            "INSERT INTO publishing_package (id, org_id, brand_id, campaign_cycle_id,"
             " experiment_cell_id, product_id, hook_id, copy_variant_id, campaign_name,"
             " adset_name, ad_name, destination_url, utm_json, objective, daily_budget,"
-            " status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ready', ?)",
-            (new_id("pkg"), brand_id, cycle_id, cell["id"], product_id,
+            " status, created_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'ready', %s)",
+            (new_id("pkg"), DEV_ORG_ID, brand_id, cycle_id, cell["id"], product_id,
              hook["id"] if hook else None, copy["id"] if copy else None,
              names["campaign_name"], names["adset_name"], names["ad_name"],
              destination or "", json.dumps(utm, ensure_ascii=False),
@@ -234,7 +234,7 @@ def has_publishing_package(conn, brand_id: str, cycle_id: str) -> bool:
     """這期是否已經產出過交接包（票 04-angle-rename 決議：產包後切角改名鎖住，這是唯一
     判準——不看 cycle 狀態，因為建包不轉 cycle.status，見 build_handoff_packages()）。"""
     row = conn.execute(
-        "SELECT 1 FROM publishing_package WHERE brand_id = ? AND campaign_cycle_id = ? LIMIT 1",
+        "SELECT 1 FROM publishing_package WHERE brand_id = %s AND campaign_cycle_id = %s LIMIT 1",
         (brand_id, cycle_id),
     ).fetchone()
     return row is not None
@@ -243,7 +243,7 @@ def has_publishing_package(conn, brand_id: str, cycle_id: str) -> bool:
 def list_packages(conn, brand_id: str, cycle_id: str) -> list:
     """交接包＋每份要貼的欄位（已組成畫面直接用的樣子）。"""
     rows = [dict(r) for r in conn.execute(
-        "SELECT * FROM publishing_package WHERE brand_id = ? AND campaign_cycle_id = ?"
+        "SELECT * FROM publishing_package WHERE brand_id = %s AND campaign_cycle_id = %s"
         " ORDER BY created_at, id", (brand_id, cycle_id),
     )]
     for row in rows:
@@ -274,7 +274,7 @@ def list_packages(conn, brand_id: str, cycle_id: str) -> list:
 
 def _mapping_for(conn, brand_id: str, package_id: str) -> Optional[dict]:
     row = conn.execute(
-        "SELECT * FROM external_ad_mapping WHERE brand_id = ? AND publishing_package_id = ?"
+        "SELECT * FROM external_ad_mapping WHERE brand_id = %s AND publishing_package_id = %s"
         " AND claim_status = 'confirmed'"  # 同步猜的（suggested）列不算「已授權／已建到 Meta」
         " ORDER BY created_at DESC LIMIT 1", (brand_id, package_id),
     ).fetchone()
@@ -302,7 +302,7 @@ def go_live(conn, brand_id: str, cycle_id: str, package_id: str, mapping_id: str
     失敗的包不會走到這裡、不會有授權列（票 M1-01）。
     """
     package = conn.execute(
-        "SELECT * FROM publishing_package WHERE brand_id = ? AND id = ? AND campaign_cycle_id = ?",
+        "SELECT * FROM publishing_package WHERE brand_id = %s AND id = %s AND campaign_cycle_id = %s",
         (brand_id, package_id, cycle_id),
     ).fetchone()
     if package is None:
@@ -313,17 +313,17 @@ def go_live(conn, brand_id: str, cycle_id: str, package_id: str, mapping_id: str
     ts = now_iso()
     auth_id = new_id("ath")
     conn.execute(
-        "INSERT INTO activation_authorization (id, brand_id, scope_type, scope_ref,"
+        "INSERT INTO activation_authorization (id, org_id, brand_id, scope_type, scope_ref,"
         " authorized_by, authorized_at, note, created_at)"
-        " VALUES (?, ?, 'campaign_activation', ?, ?, ?, ?, ?)",
-        (auth_id, brand_id, package_id, actor, ts,
+        " VALUES (%s, %s, %s, 'campaign_activation', %s, %s, %s, %s, %s)",
+        (auth_id, DEV_ORG_ID, brand_id, package_id, actor, ts,
          f"確認已在 Meta 開始投放：{package['campaign_name']}", ts),
     )
     conn.execute(
-        "INSERT INTO campaign_activation (id, brand_id, campaign_cycle_id,"
+        "INSERT INTO campaign_activation (id, org_id, brand_id, campaign_cycle_id,"
         " external_ad_mapping_id, authorization_id, activated_by, activated_at, created_at)"
-        " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        (new_id("act"), brand_id, cycle_id, mapping_id, auth_id, actor, ts, ts),
+        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
+        (new_id("act"), DEV_ORG_ID, brand_id, cycle_id, mapping_id, auth_id, actor, ts, ts),
     )
     write_audit(conn, brand_id=brand_id, entity_type="campaign_activation", entity_id=mapping_id,
                 action="authorize_activation", actor=actor, before=None,
@@ -359,7 +359,7 @@ def authorize_and_map(conn, brand_id: str, cycle_id: str, package_id: str, *,
     繞過路由層、直接呼叫本函式的呼叫端（例如測試）留的第二道保險，不是操作人攔截。
     """
     package = conn.execute(
-        "SELECT * FROM publishing_package WHERE brand_id = ? AND id = ? AND campaign_cycle_id = ?",
+        "SELECT * FROM publishing_package WHERE brand_id = %s AND id = %s AND campaign_cycle_id = %s",
         (brand_id, package_id, cycle_id),
     ).fetchone()
     if package is None:
@@ -378,12 +378,12 @@ def authorize_and_map(conn, brand_id: str, cycle_id: str, package_id: str, *,
 
     mapping_id = new_id("xam")
     conn.execute(
-        "INSERT INTO external_ad_mapping (id, brand_id, publishing_package_id,"
+        "INSERT INTO external_ad_mapping (id, org_id, brand_id, publishing_package_id,"
         " campaign_cycle_id, ad_account_id, platform, meta_account_id, meta_campaign_id,"
         " meta_adset_id, meta_ad_id, meta_creative_id, claim_status, confirmed_by,"
         " confirmed_at, created_at)"
-        " VALUES (?, ?, ?, ?, ?, 'meta', ?, ?, ?, ?, ?, 'confirmed', ?, ?, ?)",
-        (mapping_id, brand_id, package_id, cycle_id, ad_account_id, account_id,
+        " VALUES (%s, %s, %s, %s, %s, %s, 'meta', %s, %s, %s, %s, %s, 'confirmed', %s, %s, %s)",
+        (mapping_id, DEV_ORG_ID, brand_id, package_id, cycle_id, ad_account_id, account_id,
          (meta_ids.get("meta_campaign_id") or "").strip(),
          (meta_ids.get("meta_adset_id") or "").strip() or None,
          (meta_ids.get("meta_ad_id") or "").strip() or None,
@@ -392,7 +392,7 @@ def authorize_and_map(conn, brand_id: str, cycle_id: str, package_id: str, *,
     )
 
     if ad_account_id:
-        conn.execute("UPDATE campaign_cycle SET ad_account_id = ? WHERE brand_id = ? AND id = ?",
+        conn.execute("UPDATE campaign_cycle SET ad_account_id = %s WHERE brand_id = %s AND id = %s",
                      (ad_account_id, brand_id, cycle_id))
     conn.commit()
 
@@ -434,10 +434,10 @@ def naming_check(conn, brand_id: str, cycle_id: str, packages: list) -> dict:
 
     names = {pkg.get("campaign_name") for pkg in packages if pkg.get("campaign_name")}
     if names:
-        placeholders = ",".join("?" * len(names))
+        placeholders = ",".join(["%s"] * len(names))
         rows = conn.execute(
-            "SELECT id, campaign_name FROM publishing_package WHERE brand_id = ?"
-            f" AND campaign_cycle_id != ? AND campaign_name IN ({placeholders})",
+            "SELECT id, campaign_name FROM publishing_package WHERE brand_id = %s"
+            f" AND campaign_cycle_id != %s AND campaign_name IN ({placeholders})",
             (brand_id, cycle_id, *names),
         ).fetchall()
         other_ids_by_name: dict = {}
@@ -516,15 +516,15 @@ def readiness_ring(conn, brand_id: str, cycle_id: str) -> dict:
 def _ensure_ad_account(conn, external_account_id: str, ts: str) -> str:
     """廣告帳號不綁品牌（一個帳號可服務多品牌，決策 0022 第 6 點），有就取、沒有就建。"""
     row = conn.execute(
-        "SELECT id FROM ad_account WHERE platform = 'meta' AND external_account_id = ?",
+        "SELECT id FROM ad_account WHERE platform = 'meta' AND external_account_id = %s",
         (external_account_id,),
     ).fetchone()
     if row:
         return row["id"]
     account_id = new_id("adc")
     conn.execute(
-        "INSERT INTO ad_account (id, platform, external_account_id, status, created_at,"
-        " updated_at) VALUES (?, 'meta', ?, 'active', ?, ?)",
-        (account_id, external_account_id, ts, ts),
+        "INSERT INTO ad_account (id, org_id, platform, external_account_id, status, created_at,"
+        " updated_at) VALUES (%s, %s, 'meta', %s, 'active', %s, %s)",
+        (account_id, DEV_ORG_ID, external_account_id, ts, ts),
     )
     return account_id

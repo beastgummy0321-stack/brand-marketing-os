@@ -23,7 +23,7 @@ guide_cards facts 時查「去年有沒有跳過」）。目前沒有 HTTP 路�
 from typing import Optional
 
 from app.core import cleanup
-from app.core.db import new_id, now_iso
+from app.core.db import new_id, now_iso, DEV_ORG_ID
 
 
 def record_skip(conn, brand_id: str, holiday_id: str, year: int,
@@ -31,11 +31,11 @@ def record_skip(conn, brand_id: str, holiday_id: str, year: int,
     """標記某品牌某年不投某個節日檔期。同品牌＋節日＋年份重複標記會覆蓋舊理由
     （使用者改變心意時只留最新一筆）。會 commit。"""
     conn.execute(
-        "INSERT INTO campaign_skip (id, brand_id, holiday_id, year, reason, created_at)"
-        " VALUES (?, ?, ?, ?, ?, ?)"
+        "INSERT INTO campaign_skip (id, org_id, brand_id, holiday_id, year, reason, created_at)"
+        " VALUES (%s, %s, %s, %s, %s, %s, %s)"
         " ON CONFLICT(brand_id, holiday_id, year) DO UPDATE SET"
         " reason = excluded.reason, created_at = excluded.created_at",
-        (new_id("csk"), brand_id, holiday_id, year, reason, now_iso()),
+        (new_id("csk"), DEV_ORG_ID, brand_id, holiday_id, year, reason, now_iso()),
     )
     conn.commit()
 
@@ -43,7 +43,7 @@ def record_skip(conn, brand_id: str, holiday_id: str, year: int,
 def get_skip(conn, brand_id: str, holiday_id: str, year: int) -> Optional[dict]:
     """查某品牌某節日某年份的跳過紀錄，沒有就回 None。"""
     row = conn.execute(
-        "SELECT reason FROM campaign_skip WHERE brand_id = ? AND holiday_id = ? AND year = ?",
+        "SELECT reason FROM campaign_skip WHERE brand_id = %s AND holiday_id = %s AND year = %s",
         (brand_id, holiday_id, year),
     ).fetchone()
     return {"reason": row["reason"]} if row else None
@@ -63,7 +63,7 @@ def count_brand_data(conn, brand_id: str) -> list:
     counts = []
     for table, label in BRAND_CASCADE_TABLES:
         n = conn.execute(
-            f"SELECT COUNT(*) AS c FROM {table} WHERE brand_id = ?", (brand_id,)
+            f"SELECT COUNT(*) AS c FROM {table} WHERE brand_id = %s", (brand_id,)
         ).fetchone()["c"]
         if n:
             counts.append((label, n))
@@ -73,7 +73,7 @@ def count_brand_data(conn, brand_id: str) -> list:
 def delete_brand_data(conn, brand_id: str) -> dict:
     counts = dict(count_brand_data(conn, brand_id))
     for table, _label in BRAND_CASCADE_TABLES:
-        conn.execute(f"DELETE FROM {table} WHERE brand_id = ?", (brand_id,))
+        conn.execute(f"DELETE FROM {table} WHERE brand_id = %s", (brand_id,))
     return counts
 
 

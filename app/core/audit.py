@@ -7,14 +7,13 @@
 """
 
 import json
-import sqlite3
 from typing import Optional
 
-from app.core.db import new_id, now_iso
+from app.core.db import new_id, now_iso, Conn, DEV_ORG_ID
 
 
 def write_audit(
-    conn: sqlite3.Connection,
+    conn: Conn,
     *,
     brand_id: Optional[str],
     entity_type: str,
@@ -34,10 +33,11 @@ def write_audit(
     audit_id = new_id("aud")
     conn.execute(
         """INSERT INTO audit_log
-           (id, brand_id, entity_type, entity_id, action, actor, before_json, after_json, reason, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+           (id, org_id, brand_id, entity_type, entity_id, action, actor, before_json, after_json, reason, created_at)
+           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
         (
             audit_id,
+            DEV_ORG_ID,
             brand_id,
             entity_type,
             entity_id,

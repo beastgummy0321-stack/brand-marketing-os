@@ -21,7 +21,6 @@
 """
 
 import json
-import sqlite3
 from typing import Optional
 
 from app.brand_intelligence import rule_lifecycle
@@ -44,7 +43,7 @@ from app.brand_intelligence.repository_learning_text import (  # noqa: F401
 )
 from app.core import cleanup
 from app.core.audit import write_audit
-from app.core.db import new_id, now_iso
+from app.core.db import new_id, now_iso, Conn, DEV_ORG_ID
 
 
 def _require(value, message: str) -> None:
@@ -60,17 +59,17 @@ def _rows(cursor) -> list:
     return [dict(r) for r in cursor.fetchall()]
 
 
-def _bump_brand_version(conn: sqlite3.Connection, brand_id: str) -> None:
+def _bump_brand_version(conn: Conn, brand_id: str) -> None:
     conn.execute(
-        "UPDATE brand SET knowledge_version = knowledge_version + 1, updated_at = ? WHERE id = ?",
+        "UPDATE brand SET knowledge_version = knowledge_version + 1, updated_at = %s WHERE id = %s",
         (now_iso(), brand_id),
     )
 
 
-def _bump_product_version(conn: sqlite3.Connection, brand_id: str, product_id: str) -> None:
+def _bump_product_version(conn: Conn, brand_id: str, product_id: str) -> None:
     conn.execute(
-        "UPDATE product SET knowledge_version = knowledge_version + 1, updated_at = ? "
-        "WHERE brand_id = ? AND id = ?",
+        "UPDATE product SET knowledge_version = knowledge_version + 1, updated_at = %s "
+        "WHERE brand_id = %s AND id = %s",
         (now_iso(), brand_id, product_id),
     )
 
@@ -79,7 +78,7 @@ def _bump_product_version(conn: sqlite3.Connection, brand_id: str, product_id: s
 # Brand
 # ---------------------------------------------------------------------------
 
-def create_brand(conn: sqlite3.Connection, *, name: str, client_name: Optional[str], actor: str) -> dict:
+def create_brand(conn: Conn, *, name: str, client_name: Optional[str], actor: str) -> dict:
     _require(name, "brand.name 為必填")
     _require(actor, "actor 為必填")
     brand_id = new_id("brd")
@@ -89,9 +88,9 @@ def create_brand(conn: sqlite3.Connection, *, name: str, client_name: Optional[s
         "status": "active", "knowledge_version": 1, "created_at": ts, "updated_at": ts,
     }
     conn.execute(
-        "INSERT INTO brand (id, name, client_name, status, knowledge_version, created_at, updated_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (row["id"], row["name"], row["client_name"], row["status"], row["knowledge_version"],
+        "INSERT INTO brand (id, org_id, name, client_name, status, knowledge_version, created_at, updated_at) "
+        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+        (row["id"], DEV_ORG_ID, row["name"], row["client_name"], row["status"], row["knowledge_version"],
          row["created_at"], row["updated_at"]),
     )
     write_audit(conn, brand_id=brand_id, entity_type="brand", entity_id=brand_id,
@@ -100,18 +99,18 @@ def create_brand(conn: sqlite3.Connection, *, name: str, client_name: Optional[s
     return row
 
 
-def get_brand(conn: sqlite3.Connection, brand_id: str) -> Optional[dict]:
-    return _row(conn.execute("SELECT * FROM brand WHERE id = ?", (brand_id,)).fetchone())
+def get_brand(conn: Conn, brand_id: str) -> Optional[dict]:
+    return _row(conn.execute("SELECT * FROM brand WHERE id = %s", (brand_id,)).fetchone())
 
 
-def list_brands(conn: sqlite3.Connection, status: Optional[str] = None) -> list:
+def list_brands(conn: Conn, status: Optional[str] = None) -> list:
     """品牌切換器用的清單，橫跨所有品牌（brand 是隔離根鍵本身，不受品牌過濾規則限制）。"""
     if status:
-        return _rows(conn.execute("SELECT * FROM brand WHERE status = ? ORDER BY name", (status,)))
+        return _rows(conn.execute("SELECT * FROM brand WHERE status = %s ORDER BY name", (status,)))
     return _rows(conn.execute("SELECT * FROM brand ORDER BY name"))
 
 
-def update_brand(conn: sqlite3.Connection, brand_id: str, *, name: str,
+def update_brand(conn: Conn, brand_id: str, *, name: str,
                   client_name: Optional[str], status: str, actor: str) -> dict:
     _require(name, "brand.name 為必填")
     _require(actor, "actor 為必填")
@@ -122,7 +121,7 @@ def update_brand(conn: sqlite3.Connection, brand_id: str, *, name: str,
         raise ValueError(f"找不到品牌：{brand_id}")
     ts = now_iso()
     conn.execute(
-        "UPDATE brand SET name = ?, client_name = ?, status = ?, updated_at = ? WHERE id = ?",
+        "UPDATE brand SET name = %s, client_name = %s, status = %s, updated_at = %s WHERE id = %s",
         (name, client_name or None, status, ts, brand_id),
     )
     after = get_brand(conn, brand_id)
@@ -137,7 +136,7 @@ def update_brand(conn: sqlite3.Connection, brand_id: str, *, name: str,
 CONVERSION_GOALS = ("purchase", "lead", "booking", "awareness")
 
 
-def set_brand_switches(conn: sqlite3.Connection, brand_id: str, *,
+def set_brand_switches(conn: Conn, brand_id: str, *,
                         market_region: Optional[str], conversion_goal: Optional[str],
                         actor: str) -> dict:
     """寫入 brand.market_region／brand.conversion_goal（票 A，方法論開關讀這兩欄）。"""
@@ -149,7 +148,7 @@ def set_brand_switches(conn: sqlite3.Connection, brand_id: str, *,
         raise ValueError(f"找不到品牌：{brand_id}")
     ts = now_iso()
     conn.execute(
-        "UPDATE brand SET market_region = ?, conversion_goal = ?, updated_at = ? WHERE id = ?",
+        "UPDATE brand SET market_region = %s, conversion_goal = %s, updated_at = %s WHERE id = %s",
         (market_region, conversion_goal, ts, brand_id),
     )
     after = get_brand(conn, brand_id)
@@ -167,7 +166,7 @@ INDUSTRIES = ("food_beverage", "beauty_personal_care", "fashion_apparel",
               "home_lifestyle", "service")
 
 
-def set_brand_industry(conn: sqlite3.Connection, brand_id: str, *,
+def set_brand_industry(conn: Conn, brand_id: str, *,
                         industry: Optional[str], actor: str) -> dict:
     """寫入 brand.industry（ADR 0014，節日日曆比對用）。獨立於 set_brand_switches——
     那支管的是方法論開關（票 A），業種是不同功能領域，不合併進同一支函式。"""
@@ -179,7 +178,7 @@ def set_brand_industry(conn: sqlite3.Connection, brand_id: str, *,
         raise ValueError(f"找不到品牌：{brand_id}")
     ts = now_iso()
     conn.execute(
-        "UPDATE brand SET industry = ?, updated_at = ? WHERE id = ?",
+        "UPDATE brand SET industry = %s, updated_at = %s WHERE id = %s",
         (industry, ts, brand_id),
     )
     after = get_brand(conn, brand_id)
@@ -190,25 +189,25 @@ def set_brand_industry(conn: sqlite3.Connection, brand_id: str, *,
 
 
 # 方法論開關名（中文，供 app/methodology/README.md 對照表的（需要：X）條件比對，
-# 見 app/llm/methodology.py）。只有 'website' 屬於網站型——值域見 app/mock_data.py
+# 見 app/llm/methodology.py）。只有 'website' 屬於網站型——值域見 app/core/vocab.py
 # CHANNEL_TYPES，不自己發明值。
 _WEBSITE_CHANNEL_TYPE = "website"
 
 
-def compute_methodology_switches(conn: sqlite3.Connection, brand_id: str) -> dict:
+def compute_methodology_switches(conn: Conn, brand_id: str) -> dict:
     """算出方法論開關的四個布林值，供 app/llm/methodology.py 過濾 README 對照表的
     條件檔（票 A）。只讀既有資料／brand 的新兩欄，不另外新增狀態欄位。"""
     has_product = conn.execute(
-        "SELECT 1 FROM product WHERE brand_id = ? LIMIT 1", (brand_id,)
+        "SELECT 1 FROM product WHERE brand_id = %s LIMIT 1", (brand_id,)
     ).fetchone() is not None
     brand = get_brand(conn, brand_id)
     has_transaction = bool(brand) and brand["conversion_goal"] == "purchase"
     has_website = conn.execute(
-        "SELECT 1 FROM owned_channel WHERE brand_id = ? AND channel_type = ? LIMIT 1",
+        "SELECT 1 FROM owned_channel WHERE brand_id = %s AND channel_type = %s LIMIT 1",
         (brand_id, _WEBSITE_CHANNEL_TYPE),
     ).fetchone() is not None
     has_regulatory = conn.execute(
-        "SELECT 1 FROM brand_fact WHERE brand_id = ? AND status = 'confirmed' "
+        "SELECT 1 FROM brand_fact WHERE brand_id = %s AND status = 'confirmed' "
         "AND fact_type = 'regulatory' LIMIT 1", (brand_id,)
     ).fetchone() is not None
     return {
@@ -219,7 +218,7 @@ def compute_methodology_switches(conn: sqlite3.Connection, brand_id: str) -> dic
     }
 
 
-# 刪品牌時要清掉的本模組表，順序＝先子後父（PRAGMA foreign_keys = ON，順序錯就會被擋）。
+# 刪品牌時要清掉的本模組表，順序＝先子後父（Postgres 預設立即檢查外鍵，順序錯就會被擋）。
 BRAND_CHILD_TABLES = (
     ("product_fact", "產品事實"),
     ("product_economics", "產品經濟數據"),
@@ -241,39 +240,39 @@ BRAND_CHILD_TABLES = (
 )
 
 
-def count_brand_data(conn: sqlite3.Connection, brand_id: str) -> list:
+def count_brand_data(conn: Conn, brand_id: str) -> list:
     """回傳 [(中文名稱, 筆數)]，給刪除確認頁列出「按下去會消失什麼」。"""
     return [
         (label, conn.execute(
-            f"SELECT COUNT(*) FROM {table} WHERE brand_id = ?", (brand_id,)).fetchone()[0])
+            f"SELECT COUNT(*) AS n FROM {table} WHERE brand_id = %s", (brand_id,)).fetchone()["n"])
         for table, label in BRAND_CHILD_TABLES
     ]
 
 
-def count_pending_product_layer(conn: sqlite3.Connection, brand_id: str) -> int:
+def count_pending_product_layer(conn: Conn, brand_id: str) -> int:
     """品牌底下所有產品的「待確認」筆數合計：產品事實 + 產品經濟數字（唯讀統計，
     issue #8 功能選單頁提醒卡＋品牌智庫首頁「產品」卡用）。"""
     fact_n = conn.execute(
-        "SELECT COUNT(*) FROM product_fact WHERE brand_id = ? AND status = 'pending'", (brand_id,),
-    ).fetchone()[0]
+        "SELECT COUNT(*) AS n FROM product_fact WHERE brand_id = %s AND status = 'pending'", (brand_id,),
+    ).fetchone()["n"]
     econ_n = conn.execute(
-        "SELECT COUNT(*) FROM product_economics WHERE brand_id = ? AND status = 'pending'", (brand_id,),
-    ).fetchone()[0]
+        "SELECT COUNT(*) AS n FROM product_economics WHERE brand_id = %s AND status = 'pending'", (brand_id,),
+    ).fetchone()["n"]
     return fact_n + econ_n
 
 
-def delete_brand_data(conn: sqlite3.Connection, brand_id: str) -> dict:
+def delete_brand_data(conn: Conn, brand_id: str) -> dict:
     """清掉本模組掛在該品牌下的子表資料（只清 BRAND_CHILD_TABLES 這 13 張子表，
     不碰 brand 那一列、不寫稽核），登記進 app.core.cleanup 給 delete_brand() 呼叫用。
     只下 DELETE、不 commit（Q4 單一交易、全有全無，commit 由 delete_brand() 統一做）。
     """
     counts = dict(count_brand_data(conn, brand_id))
     for table, _label in BRAND_CHILD_TABLES:
-        conn.execute(f"DELETE FROM {table} WHERE brand_id = ?", (brand_id,))
+        conn.execute(f"DELETE FROM {table} WHERE brand_id = %s", (brand_id,))
     return counts
 
 
-def delete_brand(conn: sqlite3.Connection, brand_id: str, *, actor: str) -> dict:
+def delete_brand(conn: Conn, brand_id: str, *, actor: str) -> dict:
     """硬刪除一個已封存品牌與所有登記模組掛在它底下的資料，不可逆（決策 0015）。
 
     只收已封存的品牌：使用中的品牌得先封存，隔一道手續才刪得掉。
@@ -281,10 +280,11 @@ def delete_brand(conn: sqlite3.Connection, brand_id: str, *, actor: str) -> dict
     自己也是登記模組之一，會被 delete_all 一併叫到，這裡不重複清），
     再刪 brand 本身那一列、寫稽核，整段只有這裡最後這一次 commit（Q4 全有全無）。
 
-    app 全程共用同一條 DB 連線（見 app/core/db.py connect()）：不 commit 不等於自動
-    回捲，中途出錯若不明確 conn.rollback()，懸著的 DELETE 會等到下一個不相干的請求
-    在同一條連線上 commit() 時被一起沖進 DB，而且沒有 audit_log 紀錄。所以這裡明確
-    包 try/except，出錯就 rollback 再往外拋。
+    票 02-1 起連線改成一條連線一個 request／一個背景工作（見 app/core/db.py
+    connection()），不再是全 app 共用同一條連線：不 commit 不等於自動回捲，中途出錯
+    若不明確 conn.rollback()，懸著的 DELETE 會留到這條連線被歸還連線池、下次借出時
+    才被沖掉，而且沒有 audit_log 紀錄。所以這裡明確包 try/except，出錯就 rollback
+    再往外拋。
     """
     _require(actor, "actor 為必填")
     before = get_brand(conn, brand_id)
@@ -293,40 +293,16 @@ def delete_brand(conn: sqlite3.Connection, brand_id: str, *, actor: str) -> dict
     if before["status"] != "archived":
         raise ValueError("只有已封存的品牌可以刪除，請先把品牌封存。")
 
-    # 這條連線是全 app 共用的（app/core/db.py connect()），背景執行緒也在用
-    # （app/ads/routes.py 的 _progress_run，例如 Meta 回填、AI 生成等待頁）。
-    # 如果撞上「別人已經寫了東西但還沒 commit」的空檔：
-    #   - 下面的 BEGIN 會拋 OperationalError（不能在交易裡再開交易），
-    #   - 接著 except 的 rollback() 會把對方那筆還沒 commit、跟刪品牌毫無關係的資料
-    #     一起沖銷掉，而對方之後 commit() 不會報錯，等於資料靜默消失。
-    # 所以這裡先擋下來、給人話錯誤請他重試，而不是硬闖。刪品牌是罕見的手動操作，
-    # 請使用者等一下遠比靜默弄丟別人的資料好。
-
-    if conn.in_transaction:
-        raise RuntimeError("系統正在處理其他工作，現在不能刪除品牌。請等幾秒後再試一次。")
-
+    # 票 02-1／02-3a：連線模型改成一條連線一個 request／一個背景工作（app/core/db.py
+    # connection()），不再是全 app 共用同一條連線，「別人已經寫了東西但還沒 commit」
+    # 這個空檔不會再發生於同一條連線上，原本的 in_transaction 搶佔檢查與顯式 BEGIN
+    # 因此拿掉。外鍵順序也不必再靠 PRAGMA defer_foreign_keys 延後檢查：02-2 的集裝箱
+    # 憲章把跨模組外鍵維持在 0（見 .scratch/saas/tickets/02-2-type-decisions.md 第 6
+    # 點），各登記模組只剩模組內的外鍵，而各模組的 CHILD_TABLES／CASCADE_TABLES 早已
+    # 手動排成子表先於父表的拓樸順序，順序本身就是正確的。
     try:
-        # 延後外鍵檢查到 COMMIT 那一刻（第 5 刀）：各登記模組刪各自的表時，例如
-        # cycle_shopee_code（訂單模組）REFERENCES campaign_cycle(id)（廣告模組），
-        # 若哪個先刪錯了順序（父表先於子表），SQLite 預設會當場擋下。開這個 PRAGMA 後，
-        # 外鍵檢查延到整個交易 COMMIT 時才做一次——只要 COMMIT 那一刻資料是乾淨的
-        # （刪品牌就是把相關資料全部清光，最後一定乾淨），中途誰先誰後完全不重要，
-        # 模組之間也不必再協調登記順序。SQLite 會在每次 COMMIT／ROLLBACK 時自動把它
-        # 轉回 OFF，不會外溢到下一個不相干的操作。
-        #
-        # 這裡先明確 BEGIN、才下 PRAGMA，順序不是隨意的，親自測過才知道：Python 的
-        # sqlite3 模組只在遇到第一個 DML（INSERT/UPDATE/DELETE）時才隱式開交易，
-        # PRAGMA 本身、SELECT 都不會開交易。而下面 cleanup.delete_all() 呼叫的每個
-        # 模組的 delete_brand 函式，內部第一步都是 count_brand_data()（一串 SELECT）
-        # 才接 DELETE——若 PRAGMA 下在交易外面，SQLite 會把「沒有顯式交易時的每一句
-        # 陳述式」各自當成一個獨立的隱式交易，那串 SELECT 執行完就會讓 defer_foreign_
-        # keys 悄悄被重置回 OFF，等真正的 DELETE 跑到時保護已經失效（親測過會炸，
-        # 見 app/tests/test_orders_core_brand_cleanup.py 的 PRAGMA 生效證明測試）。
-        # 先 BEGIN 讓交易先開好，PRAGMA 才會跟後面所有 SELECT／DELETE 綁在同一個交易裡。
-        conn.execute("BEGIN")
-        conn.execute("PRAGMA defer_foreign_keys = ON")
         counts = cleanup.delete_all(conn, brand_id)
-        conn.execute("DELETE FROM brand WHERE id = ?", (brand_id,))
+        conn.execute("DELETE FROM brand WHERE id = %s", (brand_id,))
         write_audit(conn, brand_id=brand_id, entity_type="brand", entity_id=brand_id,
                     action="delete", actor=actor, before={**before, "deleted_counts": counts},
                     after=None, reason="把關人刪除已封存品牌（決策 0015）")
@@ -341,7 +317,7 @@ def delete_brand(conn: sqlite3.Connection, brand_id: str, *, actor: str) -> dict
 # Product
 # ---------------------------------------------------------------------------
 
-def create_product(conn: sqlite3.Connection, brand_id: str, *, name: str, actor: str) -> dict:
+def create_product(conn: Conn, brand_id: str, *, name: str, actor: str) -> dict:
     _require(name, "product.name 為必填")
     _require(actor, "actor 為必填")
     if get_brand(conn, brand_id) is None:
@@ -353,9 +329,9 @@ def create_product(conn: sqlite3.Connection, brand_id: str, *, name: str, actor:
         "knowledge_version": 1, "created_at": ts, "updated_at": ts,
     }
     conn.execute(
-        "INSERT INTO product (id, brand_id, name, status, knowledge_version, created_at, updated_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (row["id"], row["brand_id"], row["name"], row["status"], row["knowledge_version"],
+        "INSERT INTO product (id, org_id, brand_id, name, status, knowledge_version, created_at, updated_at) "
+        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+        (row["id"], DEV_ORG_ID, row["brand_id"], row["name"], row["status"], row["knowledge_version"],
          row["created_at"], row["updated_at"]),
     )
     write_audit(conn, brand_id=brand_id, entity_type="product", entity_id=product_id,
@@ -364,18 +340,18 @@ def create_product(conn: sqlite3.Connection, brand_id: str, *, name: str, actor:
     return row
 
 
-def get_product(conn: sqlite3.Connection, brand_id: str, product_id: str) -> Optional[dict]:
+def get_product(conn: Conn, brand_id: str, product_id: str) -> Optional[dict]:
     """跨品牌存取一律回 None（呼叫端轉成「找不到」），不得洩漏資料屬於其他品牌。"""
     return _row(conn.execute(
-        "SELECT * FROM product WHERE id = ? AND brand_id = ?", (product_id, brand_id)
+        "SELECT * FROM product WHERE id = %s AND brand_id = %s", (product_id, brand_id)
     ).fetchone())
 
 
-def list_products(conn: sqlite3.Connection, brand_id: str) -> list:
-    return _rows(conn.execute("SELECT * FROM product WHERE brand_id = ? ORDER BY name", (brand_id,)))
+def list_products(conn: Conn, brand_id: str) -> list:
+    return _rows(conn.execute("SELECT * FROM product WHERE brand_id = %s ORDER BY name", (brand_id,)))
 
 
-def update_product(conn: sqlite3.Connection, brand_id: str, product_id: str, *,
+def update_product(conn: Conn, brand_id: str, product_id: str, *,
                     name: str, status: str, actor: str) -> dict:
     _require(name, "product.name 為必填")
     _require(actor, "actor 為必填")
@@ -386,7 +362,7 @@ def update_product(conn: sqlite3.Connection, brand_id: str, product_id: str, *,
         raise ValueError(f"找不到產品：{product_id}")
     ts = now_iso()
     conn.execute(
-        "UPDATE product SET name = ?, status = ?, updated_at = ? WHERE id = ? AND brand_id = ?",
+        "UPDATE product SET name = %s, status = %s, updated_at = %s WHERE id = %s AND brand_id = %s",
         (name, status, ts, product_id, brand_id),
     )
     after = get_product(conn, brand_id, product_id)
@@ -410,43 +386,43 @@ PRODUCT_CHILD_TABLES = (
 )
 
 
-def count_product_data(conn: sqlite3.Connection, brand_id: str, product_id: str) -> list:
+def count_product_data(conn: Conn, brand_id: str, product_id: str) -> list:
     """回傳 [(中文名稱, 筆數)]，給刪除確認頁列出「按下去會消失什麼」。"""
     return [
         (label, conn.execute(
-            f"SELECT COUNT(*) FROM {table} WHERE brand_id = ? AND product_id = ?",
-            (brand_id, product_id)).fetchone()[0])
+            f"SELECT COUNT(*) AS n FROM {table} WHERE brand_id = %s AND product_id = %s",
+            (brand_id, product_id)).fetchone()["n"])
         for table, label in PRODUCT_CHILD_TABLES
     ]
 
 
-def delete_product_data(conn: sqlite3.Connection, brand_id: str, product_id: str) -> dict:
+def delete_product_data(conn: Conn, brand_id: str, product_id: str) -> dict:
     """清掉本模組掛在該產品下的子表資料（只清 PRODUCT_CHILD_TABLES 這 8 張子表，
     不碰 product 那一列、不寫稽核），登記進 app.core.cleanup 給 delete_product() 呼叫用。
     只下 DELETE、不 commit（Q4 單一交易、全有全無，commit 由 delete_product() 統一做）。
     """
     counts = dict(count_product_data(conn, brand_id, product_id))
     for table, _label in PRODUCT_CHILD_TABLES:
-        conn.execute(f"DELETE FROM {table} WHERE brand_id = ? AND product_id = ?",
+        conn.execute(f"DELETE FROM {table} WHERE brand_id = %s AND product_id = %s",
                       (brand_id, product_id))
     return counts
 
 
-def delete_product(conn: sqlite3.Connection, brand_id: str, product_id: str, *, actor: str) -> dict:
+def delete_product(conn: Conn, brand_id: str, product_id: str, *, actor: str) -> dict:
     """硬刪除一個已封存產品與所有登記模組掛在它底下的資料，不可逆（決策 0020，比照品牌 0015）。
 
     只收已封存的產品：使用中的產品得先封存，隔一道手續才刪得掉。
 
-    交易處理比照 delete_brand()（第 6 刀補齊，之前只有 try/except 沒有 BEGIN 也沒有
-    PRAGMA，跨模組會踩到第 5 刀踩過的兩個坑）：透過 app.core.cleanup.delete_all_product()
+    交易處理比照 delete_brand()：透過 app.core.cleanup.delete_all_product()
     清掉所有登記模組掛在這顆產品底下的資料（本模組「品牌智庫」自己也是登記模組之一，
     會被 delete_all_product 一併叫到，這裡不重複清），再刪 product 本身那一列、寫稽核，
     整段只有這裡最後這一次 commit（Q4 全有全無）。
 
-    app 全程共用同一條 DB 連線（見 app/core/db.py connect()）：不 commit 不等於自動
-    回捲，中途出錯若不明確 conn.rollback()，懸著的 DELETE 會等到下一個不相干的請求
-    在同一條連線上 commit() 時被一起沖進 DB，而且沒有 audit_log 紀錄。所以這裡明確
-    包 try/except，出錯就 rollback 再往外拋。
+    票 02-1 起連線改成一條連線一個 request／一個背景工作（見 app/core/db.py
+    connection()），不再是全 app 共用同一條連線：不 commit 不等於自動回捲，中途出錯
+    若不明確 conn.rollback()，懸著的 DELETE 會留到這條連線被歸還連線池、下次借出時
+    才被沖掉，而且沒有 audit_log 紀錄。所以這裡明確包 try/except，出錯就 rollback
+    再往外拋。
     """
     _require(actor, "actor 為必填")
     before = get_product(conn, brand_id, product_id)
@@ -455,23 +431,13 @@ def delete_product(conn: sqlite3.Connection, brand_id: str, product_id: str, *, 
     if before["status"] != "archived":
         raise ValueError("只有已封存的產品可以刪除，請先把產品封存。")
 
-    # 這條連線是全 app 共用的（app/core/db.py connect()），背景執行緒也在用
-    # （app/ads/routes.py 的 _progress_run，例如 Meta 回填、AI 生成等待頁）。理由同
-    # delete_brand()：撞上「別人已經寫了東西但還沒 commit」的空檔，硬闖會讓 rollback()
-    # 沖銷對方不相干的資料且對方毫無感覺。所以先擋下來、給人話錯誤請他重試。
-    if conn.in_transaction:
-        raise RuntimeError("系統正在處理其他工作，現在不能刪除產品。請等幾秒後再試一次。")
-
+    # 票 02-1／02-3a：理由同 delete_brand()——連線改成一條連線一個 request／一個背景
+    # 工作，不再全 app 共用一條，原本的 in_transaction 搶佔檢查、顯式 BEGIN、PRAGMA
+    # defer_foreign_keys 都拿掉（跨模組外鍵已在 02-2 維持在 0，各模組表本就照子表先於
+    # 父表排序）。
     try:
-        # 延後外鍵檢查到 COMMIT 那一刻（同 delete_brand() 的理由）：各登記模組刪各自的表
-        # 時，跨模組登記順序不必協調。BEGIN 必須先於 PRAGMA，理由同 delete_brand()——
-        # Python 的 sqlite3 只在遇到 DML 才隱式開交易，PRAGMA／SELECT 都不會開交易，
-        # 若 PRAGMA 下在交易外面，後面每個模組 delete_product 內部第一步的 SELECT
-        # （count_product_data）就會讓它悄悄被重置回 OFF。
-        conn.execute("BEGIN")
-        conn.execute("PRAGMA defer_foreign_keys = ON")
         counts = cleanup.delete_all_product(conn, brand_id, product_id)
-        conn.execute("DELETE FROM product WHERE id = ? AND brand_id = ?", (product_id, brand_id))
+        conn.execute("DELETE FROM product WHERE id = %s AND brand_id = %s", (product_id, brand_id))
         write_audit(conn, brand_id=brand_id, entity_type="product", entity_id=product_id,
                     action="delete", actor=actor, before={**before, "deleted_counts": counts},
                     after=None, reason="把關人刪除已封存產品（決策 0020）")
@@ -486,7 +452,7 @@ def delete_product(conn: sqlite3.Connection, brand_id: str, product_id: str, *, 
 # Brand Fact
 # ---------------------------------------------------------------------------
 
-def create_brand_fact(conn: sqlite3.Connection, brand_id: str, *, actor: str, fact_type: str,
+def create_brand_fact(conn: Conn, brand_id: str, *, actor: str, fact_type: str,
                        label: str, value: str, status: str,
                        source_reference_id: Optional[str] = None,
                        confidence: Optional[str] = None,
@@ -509,10 +475,10 @@ def create_brand_fact(conn: sqlite3.Connection, brand_id: str, *, actor: str, fa
         "created_at": ts, "updated_at": ts,
     }
     conn.execute(
-        "INSERT INTO brand_fact (id, brand_id, fact_type, label, value, status, source_reference_id, "
+        "INSERT INTO brand_fact (id, org_id, brand_id, fact_type, label, value, status, source_reference_id, "
         "confidence, confirmed_by, confirmed_at, created_at, updated_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (row["id"], row["brand_id"], row["fact_type"], row["label"], row["value"], row["status"],
+        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+        (row["id"], DEV_ORG_ID, row["brand_id"], row["fact_type"], row["label"], row["value"], row["status"],
          row["source_reference_id"], row["confidence"], row["confirmed_by"], row["confirmed_at"],
          row["created_at"], row["updated_at"]),
     )
@@ -523,24 +489,24 @@ def create_brand_fact(conn: sqlite3.Connection, brand_id: str, *, actor: str, fa
     return row
 
 
-def get_brand_fact(conn: sqlite3.Connection, brand_id: str, fact_id: str) -> Optional[dict]:
+def get_brand_fact(conn: Conn, brand_id: str, fact_id: str) -> Optional[dict]:
     return _row(conn.execute(
-        "SELECT * FROM brand_fact WHERE id = ? AND brand_id = ?", (fact_id, brand_id)
+        "SELECT * FROM brand_fact WHERE id = %s AND brand_id = %s", (fact_id, brand_id)
     ).fetchone())
 
 
-def list_brand_facts(conn: sqlite3.Connection, brand_id: str, status: Optional[str] = None) -> list:
+def list_brand_facts(conn: Conn, brand_id: str, status: Optional[str] = None) -> list:
     if status:
         return _rows(conn.execute(
-            "SELECT * FROM brand_fact WHERE brand_id = ? AND status = ? ORDER BY created_at",
+            "SELECT * FROM brand_fact WHERE brand_id = %s AND status = %s ORDER BY created_at",
             (brand_id, status),
         ))
     return _rows(conn.execute(
-        "SELECT * FROM brand_fact WHERE brand_id = ? ORDER BY created_at", (brand_id,)
+        "SELECT * FROM brand_fact WHERE brand_id = %s ORDER BY created_at", (brand_id,)
     ))
 
 
-def update_brand_fact(conn: sqlite3.Connection, brand_id: str, fact_id: str, *, actor: str,
+def update_brand_fact(conn: Conn, brand_id: str, fact_id: str, *, actor: str,
                        fact_type: str, label: str, value: str,
                        source_reference_id: Optional[str] = None,
                        confidence: Optional[str] = None) -> dict:
@@ -558,9 +524,9 @@ def update_brand_fact(conn: sqlite3.Connection, brand_id: str, fact_id: str, *, 
     confirmed_by = actor if was_confirmed else before["confirmed_by"]
     confirmed_at = ts if was_confirmed else before["confirmed_at"]
     conn.execute(
-        "UPDATE brand_fact SET fact_type = ?, label = ?, value = ?, "
-        "source_reference_id = ?, confidence = ?, confirmed_by = ?, confirmed_at = ?, updated_at = ? "
-        "WHERE id = ? AND brand_id = ?",
+        "UPDATE brand_fact SET fact_type = %s, label = %s, value = %s, "
+        "source_reference_id = %s, confidence = %s, confirmed_by = %s, confirmed_at = %s, updated_at = %s "
+        "WHERE id = %s AND brand_id = %s",
         (fact_type, label, value, source_reference_id, confidence,
          confirmed_by, confirmed_at, ts, fact_id, brand_id),
     )
@@ -573,15 +539,15 @@ def update_brand_fact(conn: sqlite3.Connection, brand_id: str, fact_id: str, *, 
     return after
 
 
-def _delete_entity(conn: sqlite3.Connection, brand_id: str, table: str, entity_id: str, *,
+def _delete_entity(conn: Conn, brand_id: str, table: str, entity_id: str, *,
                     actor: str, kind_label: str) -> None:
     """硬刪除一筆品牌資料，before 全文記進 audit_log 可追溯（決策 0013：把關人可直接清資料）。"""
     _require(actor, "actor 為必填")
     before = _row(conn.execute(
-        f"SELECT * FROM {table} WHERE id = ? AND brand_id = ?", (entity_id, brand_id)).fetchone())
+        f"SELECT * FROM {table} WHERE id = %s AND brand_id = %s", (entity_id, brand_id)).fetchone())
     if before is None:
         raise ValueError(f"找不到{kind_label}：{entity_id}")
-    conn.execute(f"DELETE FROM {table} WHERE id = ? AND brand_id = ?", (entity_id, brand_id))
+    conn.execute(f"DELETE FROM {table} WHERE id = %s AND brand_id = %s", (entity_id, brand_id))
     _bump_brand_version(conn, brand_id)
     write_audit(conn, brand_id=brand_id, entity_type=table, entity_id=entity_id,
                 action="delete", actor=actor, before=before, after=None,
@@ -605,7 +571,7 @@ def delete_claim(conn, brand_id: str, claim_id: str, *, actor: str) -> None:
     _delete_entity(conn, brand_id, "claim", claim_id, actor=actor, kind_label="宣稱")
 
 
-def confirm_brand_fact(conn: sqlite3.Connection, brand_id: str, fact_id: str, *,
+def confirm_brand_fact(conn: Conn, brand_id: str, fact_id: str, *,
                         confirmed_by: str, actor: str) -> dict:
     _require(confirmed_by, "confirmed_by 為必填")
     _require(actor, "actor 為必填")
@@ -614,8 +580,8 @@ def confirm_brand_fact(conn: sqlite3.Connection, brand_id: str, fact_id: str, *,
         raise ValueError(f"找不到品牌事實：{fact_id}")
     ts = now_iso()
     conn.execute(
-        "UPDATE brand_fact SET status = 'confirmed', confirmed_by = ?, confirmed_at = ?, updated_at = ? "
-        "WHERE id = ? AND brand_id = ?",
+        "UPDATE brand_fact SET status = 'confirmed', confirmed_by = %s, confirmed_at = %s, updated_at = %s "
+        "WHERE id = %s AND brand_id = %s",
         (confirmed_by, ts, ts, fact_id, brand_id),
     )
     after = get_brand_fact(conn, brand_id, fact_id)
@@ -630,7 +596,7 @@ def confirm_brand_fact(conn: sqlite3.Connection, brand_id: str, fact_id: str, *,
 # Product Fact
 # ---------------------------------------------------------------------------
 
-def create_product_fact(conn: sqlite3.Connection, brand_id: str, product_id: str, *, actor: str,
+def create_product_fact(conn: Conn, brand_id: str, product_id: str, *, actor: str,
                          fact_type: str, label: str, value: str, status: str,
                          source_reference_id: Optional[str] = None,
                          confidence: Optional[str] = None,
@@ -654,10 +620,10 @@ def create_product_fact(conn: sqlite3.Connection, brand_id: str, product_id: str
         "created_at": ts, "updated_at": ts,
     }
     conn.execute(
-        "INSERT INTO product_fact (id, product_id, brand_id, fact_type, label, value, status, "
+        "INSERT INTO product_fact (id, org_id, product_id, brand_id, fact_type, label, value, status, "
         "source_reference_id, confidence, confirmed_by, confirmed_at, created_at, updated_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (row["id"], row["product_id"], row["brand_id"], row["fact_type"], row["label"], row["value"],
+        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+        (row["id"], DEV_ORG_ID, row["product_id"], row["brand_id"], row["fact_type"], row["label"], row["value"],
          row["status"], row["source_reference_id"], row["confidence"], row["confirmed_by"],
          row["confirmed_at"], row["created_at"], row["updated_at"]),
     )
@@ -668,29 +634,29 @@ def create_product_fact(conn: sqlite3.Connection, brand_id: str, product_id: str
     return row
 
 
-def get_product_fact(conn: sqlite3.Connection, brand_id: str, product_id: str,
+def get_product_fact(conn: Conn, brand_id: str, product_id: str,
                       fact_id: str) -> Optional[dict]:
     return _row(conn.execute(
-        "SELECT * FROM product_fact WHERE id = ? AND brand_id = ? AND product_id = ?",
+        "SELECT * FROM product_fact WHERE id = %s AND brand_id = %s AND product_id = %s",
         (fact_id, brand_id, product_id),
     ).fetchone())
 
 
-def list_product_facts(conn: sqlite3.Connection, brand_id: str, product_id: str,
+def list_product_facts(conn: Conn, brand_id: str, product_id: str,
                         status: Optional[str] = None) -> list:
     if status:
         return _rows(conn.execute(
-            "SELECT * FROM product_fact WHERE brand_id = ? AND product_id = ? AND status = ? "
+            "SELECT * FROM product_fact WHERE brand_id = %s AND product_id = %s AND status = %s "
             "ORDER BY created_at",
             (brand_id, product_id, status),
         ))
     return _rows(conn.execute(
-        "SELECT * FROM product_fact WHERE brand_id = ? AND product_id = ? ORDER BY created_at",
+        "SELECT * FROM product_fact WHERE brand_id = %s AND product_id = %s ORDER BY created_at",
         (brand_id, product_id),
     ))
 
 
-def update_product_fact(conn: sqlite3.Connection, brand_id: str, product_id: str, fact_id: str, *,
+def update_product_fact(conn: Conn, brand_id: str, product_id: str, fact_id: str, *,
                          actor: str, fact_type: str, label: str, value: str,
                          source_reference_id: Optional[str] = None,
                          confidence: Optional[str] = None) -> dict:
@@ -707,9 +673,9 @@ def update_product_fact(conn: sqlite3.Connection, brand_id: str, product_id: str
     confirmed_by = actor if was_confirmed else before["confirmed_by"]
     confirmed_at = ts if was_confirmed else before["confirmed_at"]
     conn.execute(
-        "UPDATE product_fact SET fact_type = ?, label = ?, value = ?, "
-        "source_reference_id = ?, confidence = ?, confirmed_by = ?, confirmed_at = ?, updated_at = ? "
-        "WHERE id = ? AND brand_id = ? AND product_id = ?",
+        "UPDATE product_fact SET fact_type = %s, label = %s, value = %s, "
+        "source_reference_id = %s, confidence = %s, confirmed_by = %s, confirmed_at = %s, updated_at = %s "
+        "WHERE id = %s AND brand_id = %s AND product_id = %s",
         (fact_type, label, value, source_reference_id, confidence,
          confirmed_by, confirmed_at, ts, fact_id, brand_id, product_id),
     )
@@ -722,7 +688,7 @@ def update_product_fact(conn: sqlite3.Connection, brand_id: str, product_id: str
     return after
 
 
-def confirm_product_fact(conn: sqlite3.Connection, brand_id: str, product_id: str, fact_id: str, *,
+def confirm_product_fact(conn: Conn, brand_id: str, product_id: str, fact_id: str, *,
                           confirmed_by: str, actor: str) -> dict:
     _require(confirmed_by, "confirmed_by 為必填")
     _require(actor, "actor 為必填")
@@ -731,8 +697,8 @@ def confirm_product_fact(conn: sqlite3.Connection, brand_id: str, product_id: st
         raise ValueError(f"找不到產品事實：{fact_id}")
     ts = now_iso()
     conn.execute(
-        "UPDATE product_fact SET status = 'confirmed', confirmed_by = ?, confirmed_at = ?, updated_at = ? "
-        "WHERE id = ? AND brand_id = ? AND product_id = ?",
+        "UPDATE product_fact SET status = 'confirmed', confirmed_by = %s, confirmed_at = %s, updated_at = %s "
+        "WHERE id = %s AND brand_id = %s AND product_id = %s",
         (confirmed_by, ts, ts, fact_id, brand_id, product_id),
     )
     after = get_product_fact(conn, brand_id, product_id, fact_id)
@@ -747,15 +713,15 @@ def confirm_product_fact(conn: sqlite3.Connection, brand_id: str, product_id: st
 # Product Economics（依 product_id 只保留一筆現行資料；新值進來即更新既有列）
 # ---------------------------------------------------------------------------
 
-def get_product_economics(conn: sqlite3.Connection, brand_id: str, product_id: str) -> Optional[dict]:
+def get_product_economics(conn: Conn, brand_id: str, product_id: str) -> Optional[dict]:
     return _row(conn.execute(
-        "SELECT * FROM product_economics WHERE brand_id = ? AND product_id = ? "
+        "SELECT * FROM product_economics WHERE brand_id = %s AND product_id = %s "
         "ORDER BY updated_at DESC LIMIT 1",
         (brand_id, product_id),
     ).fetchone())
 
 
-def save_product_economics(conn: sqlite3.Connection, brand_id: str, product_id: str, *, actor: str,
+def save_product_economics(conn: Conn, brand_id: str, product_id: str, *, actor: str,
                             selling_price: float, currency: str, confirmed_by: str,
                             fixed_cost: Optional[float] = None,
                             unit_variable_cost: Optional[float] = None,
@@ -782,9 +748,9 @@ def save_product_economics(conn: sqlite3.Connection, brand_id: str, product_id: 
     }
     if before:
         conn.execute(
-            "UPDATE product_economics SET selling_price = ?, fixed_cost = ?, unit_variable_cost = ?, "
-            "shipping_cost = ?, currency = ?, cpa_roas_basis = ?, effective_from = ?, effective_to = ?, "
-            "status = ?, confirmed_by = ?, confirmed_at = ?, updated_at = ? WHERE id = ?",
+            "UPDATE product_economics SET selling_price = %s, fixed_cost = %s, unit_variable_cost = %s, "
+            "shipping_cost = %s, currency = %s, cpa_roas_basis = %s, effective_from = %s, effective_to = %s, "
+            "status = %s, confirmed_by = %s, confirmed_at = %s, updated_at = %s WHERE id = %s",
             (row["selling_price"], row["fixed_cost"], row["unit_variable_cost"], row["shipping_cost"],
              row["currency"], row["cpa_roas_basis"], row["effective_from"], row["effective_to"],
              row["status"], row["confirmed_by"], row["confirmed_at"], row["updated_at"], row["id"]),
@@ -792,11 +758,11 @@ def save_product_economics(conn: sqlite3.Connection, brand_id: str, product_id: 
         action = "update"
     else:
         conn.execute(
-            "INSERT INTO product_economics (id, product_id, brand_id, selling_price, fixed_cost, "
+            "INSERT INTO product_economics (id, org_id, product_id, brand_id, selling_price, fixed_cost, "
             "unit_variable_cost, shipping_cost, currency, cpa_roas_basis, effective_from, effective_to, "
             "status, source_reference_id, confirmed_by, confirmed_at, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (row["id"], row["product_id"], row["brand_id"], row["selling_price"], row["fixed_cost"],
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            (row["id"], DEV_ORG_ID, row["product_id"], row["brand_id"], row["selling_price"], row["fixed_cost"],
              row["unit_variable_cost"], row["shipping_cost"], row["currency"], row["cpa_roas_basis"],
              row["effective_from"], row["effective_to"], row["status"], row["source_reference_id"],
              row["confirmed_by"], row["confirmed_at"], row["created_at"], row["updated_at"]),
@@ -808,24 +774,24 @@ def save_product_economics(conn: sqlite3.Connection, brand_id: str, product_id: 
     return row
 
 
-def get_latest_product_source_url(conn: sqlite3.Connection, brand_id: str,
+def get_latest_product_source_url(conn: Conn, brand_id: str,
                                    product_id: str) -> Optional[str]:
     """這個產品最近一次帶網址的來源引用文字（產品事實或經濟數字都算），給「AI 再次調研」
     表單預填網址用；沒有就回 None（架構限制：使用者填的網址存在 source_reference.title，
     見 app/main.py 的 _create_source_ref）。"""
     row = conn.execute(
         "SELECT sr.title AS url, t.created_at FROM ("
-        "  SELECT source_reference_id, created_at FROM product_fact WHERE brand_id = ? AND product_id = ?"
+        "  SELECT source_reference_id, created_at FROM product_fact WHERE brand_id = %s AND product_id = %s"
         "  UNION ALL"
-        "  SELECT source_reference_id, created_at FROM product_economics WHERE brand_id = ? AND product_id = ?"
+        "  SELECT source_reference_id, created_at FROM product_economics WHERE brand_id = %s AND product_id = %s"
         ") t JOIN source_reference sr ON sr.id = t.source_reference_id"
-        " WHERE sr.title LIKE 'http%' ORDER BY t.created_at DESC LIMIT 1",
+        " WHERE sr.title LIKE 'http%%' ORDER BY t.created_at DESC LIMIT 1",
         (brand_id, product_id, brand_id, product_id),
     ).fetchone()
     return row["url"] if row else None
 
 
-def create_pending_product_economics(conn: sqlite3.Connection, brand_id: str, product_id: str, *,
+def create_pending_product_economics(conn: Conn, brand_id: str, product_id: str, *,
                                       actor: str, selling_price: float, currency: str,
                                       source_reference_id: Optional[str]) -> dict:
     """AI 快掃抓到售價、這個產品目前完全沒有經濟數字列時才呼叫——建一筆 pending，
@@ -842,11 +808,11 @@ def create_pending_product_economics(conn: sqlite3.Connection, brand_id: str, pr
         "created_at": ts, "updated_at": ts,
     }
     conn.execute(
-        "INSERT INTO product_economics (id, product_id, brand_id, selling_price, fixed_cost, "
+        "INSERT INTO product_economics (id, org_id, product_id, brand_id, selling_price, fixed_cost, "
         "unit_variable_cost, shipping_cost, currency, cpa_roas_basis, effective_from, effective_to, "
         "status, source_reference_id, confirmed_by, confirmed_at, created_at, updated_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (row["id"], row["product_id"], row["brand_id"], row["selling_price"], row["fixed_cost"],
+        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+        (row["id"], DEV_ORG_ID, row["product_id"], row["brand_id"], row["selling_price"], row["fixed_cost"],
          row["unit_variable_cost"], row["shipping_cost"], row["currency"], row["cpa_roas_basis"],
          row["effective_from"], row["effective_to"], row["status"], row["source_reference_id"],
          row["confirmed_by"], row["confirmed_at"], row["created_at"], row["updated_at"]),
@@ -857,7 +823,7 @@ def create_pending_product_economics(conn: sqlite3.Connection, brand_id: str, pr
     return row
 
 
-def confirm_product_economics(conn: sqlite3.Connection, brand_id: str, product_id: str, *,
+def confirm_product_economics(conn: Conn, brand_id: str, product_id: str, *,
                                 confirmed_by: str, actor: str) -> dict:
     """待確認經濟數字的一鍵確認（比照 confirm_product_fact 的最小版）：只翻狀態，
     不動欄位內容——欄位若還沒補齊，使用者仍可之後用「更新數字」補上。"""
@@ -868,8 +834,8 @@ def confirm_product_economics(conn: sqlite3.Connection, brand_id: str, product_i
         raise ValueError(f"找不到產品經濟數字：{product_id}")
     ts = now_iso()
     conn.execute(
-        "UPDATE product_economics SET status = 'confirmed', confirmed_by = ?, confirmed_at = ?, "
-        "updated_at = ? WHERE id = ?",
+        "UPDATE product_economics SET status = 'confirmed', confirmed_by = %s, confirmed_at = %s, "
+        "updated_at = %s WHERE id = %s",
         (confirmed_by, ts, ts, before["id"]),
     )
     after = get_product_economics(conn, brand_id, product_id)
@@ -883,7 +849,7 @@ def confirm_product_economics(conn: sqlite3.Connection, brand_id: str, product_i
 # Rule
 # ---------------------------------------------------------------------------
 
-def create_rule(conn: sqlite3.Connection, brand_id: str, *, actor: str, rule_type: str, content: str,
+def create_rule(conn: Conn, brand_id: str, *, actor: str, rule_type: str, content: str,
                  severity: str, product_id: Optional[str] = None,
                  source_reference_id: Optional[str] = None) -> dict:
     _require(rule_type, "rule.rule_type 為必填")
@@ -901,10 +867,10 @@ def create_rule(conn: sqlite3.Connection, brand_id: str, *, actor: str, rule_typ
         # 重新確認的顯式操作留給 rule-lifecycle 01。
     }
     conn.execute(
-        "INSERT INTO rule (id, brand_id, product_id, rule_type, content, severity, status, "
+        "INSERT INTO rule (id, org_id, brand_id, product_id, rule_type, content, severity, status, "
         "source_reference_id, created_at, updated_at, confirmed_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (row["id"], row["brand_id"], row["product_id"], row["rule_type"], row["content"],
+        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+        (row["id"], DEV_ORG_ID, row["brand_id"], row["product_id"], row["rule_type"], row["content"],
          row["severity"], row["status"], row["source_reference_id"], row["created_at"],
          row["updated_at"], row["confirmed_at"]),
     )
@@ -918,12 +884,12 @@ def create_rule(conn: sqlite3.Connection, brand_id: str, *, actor: str, rule_typ
     return row
 
 
-def get_rule(conn: sqlite3.Connection, brand_id: str, rule_id: str) -> Optional[dict]:
+def get_rule(conn: Conn, brand_id: str, rule_id: str) -> Optional[dict]:
     return _row(conn.execute(
-        "SELECT * FROM rule WHERE id = ? AND brand_id = ?", (rule_id, brand_id)).fetchone())
+        "SELECT * FROM rule WHERE id = %s AND brand_id = %s", (rule_id, brand_id)).fetchone())
 
 
-def update_rule(conn: sqlite3.Connection, brand_id: str, rule_id: str, *, actor: str,
+def update_rule(conn: Conn, brand_id: str, rule_id: str, *, actor: str,
                  rule_type: str, content: str, severity: str, product_id: Optional[str] = None,
                  source_reference_id: Optional[str] = None) -> dict:
     """編輯規則內容，比照 update_brand_fact：人工編輯直接生效（決策 0013）。"""
@@ -937,8 +903,8 @@ def update_rule(conn: sqlite3.Connection, brand_id: str, rule_id: str, *, actor:
         raise ValueError(f"找不到規則：{rule_id}")
     ts = now_iso()
     conn.execute(
-        "UPDATE rule SET rule_type = ?, content = ?, severity = ?, product_id = ?, "
-        "source_reference_id = ?, updated_at = ? WHERE id = ? AND brand_id = ?",
+        "UPDATE rule SET rule_type = %s, content = %s, severity = %s, product_id = %s, "
+        "source_reference_id = %s, updated_at = %s WHERE id = %s AND brand_id = %s",
         (rule_type, content, severity, product_id, source_reference_id, ts, rule_id, brand_id),
     )
     after = get_rule(conn, brand_id, rule_id)
@@ -955,7 +921,7 @@ def update_rule(conn: sqlite3.Connection, brand_id: str, rule_id: str, *, actor:
     return after
 
 
-def deactivate_rule(conn: sqlite3.Connection, brand_id: str, rule_id: str, *, actor: str) -> dict:
+def deactivate_rule(conn: Conn, brand_id: str, rule_id: str, *, actor: str) -> dict:
     """停用規則（GitHub issue #56，決策 0030）：把 `rule.status` 改為非 active 但保留該列，
     不同於 `delete_rule`（硬刪）與 `update_rule`（不碰 status）——兩者都接不住「下架但留紀錄」。
     停用後 `list_rules_for_brand`／`list_rules_for_product` 的 `WHERE status = 'active'`
@@ -967,7 +933,7 @@ def deactivate_rule(conn: sqlite3.Connection, brand_id: str, rule_id: str, *, ac
         raise ValueError(f"找不到規則：{rule_id}")
     ts = now_iso()
     conn.execute(
-        "UPDATE rule SET status = 'inactive', updated_at = ? WHERE id = ? AND brand_id = ?",
+        "UPDATE rule SET status = 'inactive', updated_at = %s WHERE id = %s AND brand_id = %s",
         (ts, rule_id, brand_id),
     )
     after = get_rule(conn, brand_id, rule_id)
@@ -982,7 +948,7 @@ def deactivate_rule(conn: sqlite3.Connection, brand_id: str, rule_id: str, *, ac
     return after
 
 
-def reconfirm_rule(conn: sqlite3.Connection, brand_id: str, rule_id: str, *, actor: str) -> dict:
+def reconfirm_rule(conn: Conn, brand_id: str, rule_id: str, *, actor: str) -> dict:
     """待確認規則的「延續」（rule-lifecycle/01，ADR 0012 第一節）：恢復 active、更新
     確認時間，不必重新輸入規則內容。不限定 before 一定是 pending_reconfirm——直接呼叫
     也等同「主動延長效期」，語意上無害（比照 deactivate_rule 不檢查現有狀態的寫法）。"""
@@ -992,8 +958,8 @@ def reconfirm_rule(conn: sqlite3.Connection, brand_id: str, rule_id: str, *, act
         raise ValueError(f"找不到規則：{rule_id}")
     ts = now_iso()
     conn.execute(
-        "UPDATE rule SET status = 'active', confirmed_at = ?, updated_at = ? "
-        "WHERE id = ? AND brand_id = ?",
+        "UPDATE rule SET status = 'active', confirmed_at = %s, updated_at = %s "
+        "WHERE id = %s AND brand_id = %s",
         (ts, ts, rule_id, brand_id),
     )
     after = get_rule(conn, brand_id, rule_id)
@@ -1008,34 +974,34 @@ def reconfirm_rule(conn: sqlite3.Connection, brand_id: str, rule_id: str, *, act
     return after
 
 
-def list_rules_for_brand(conn: sqlite3.Connection, brand_id: str) -> list:
+def list_rules_for_brand(conn: Conn, brand_id: str) -> list:
     """品牌底下所有生效中的規則（含品牌整體與各產品專屬——品牌檔案頁要看到全部）。
     讀取前先掃一次逾期未確認的規則（rule-lifecycle/01），比照
     app/core/interrupts.py 的 list_open() 呼叫 _archive_stale_informational 的寫法。"""
     rule_lifecycle.sweep_expired_rules(conn, brand_id)
     return _rows(conn.execute(
-        "SELECT * FROM rule WHERE brand_id = ? AND status = 'active' ORDER BY created_at",
+        "SELECT * FROM rule WHERE brand_id = %s AND status = 'active' ORDER BY created_at",
         (brand_id,),
     ))
 
 
-def list_rules_for_product(conn: sqlite3.Connection, brand_id: str, product_id: str) -> list:
+def list_rules_for_product(conn: Conn, brand_id: str, product_id: str) -> list:
     """整個品牌的規則 + 本產品專屬規則（不含其他產品的專屬規則）。讀取前先掃一次逾期未確認
     的規則（rule-lifecycle/01），理由同 list_rules_for_brand。"""
     rule_lifecycle.sweep_expired_rules(conn, brand_id)
     return _rows(conn.execute(
-        "SELECT * FROM rule WHERE brand_id = ? AND status = 'active' "
-        "AND (product_id IS NULL OR product_id = ?) ORDER BY created_at",
+        "SELECT * FROM rule WHERE brand_id = %s AND status = 'active' "
+        "AND (product_id IS NULL OR product_id = %s) ORDER BY created_at",
         (brand_id, product_id),
     ))
 
 
-def list_pending_reconfirm_rules(conn: sqlite3.Connection, brand_id: str) -> list:
+def list_pending_reconfirm_rules(conn: Conn, brand_id: str) -> list:
     """待確認清單（累積智慧頁用，rule-lifecycle/01）：先掃一次逾期未確認的規則，確保
     這裡看到的是最新狀態，再撈目前退回待確認的規則。"""
     rule_lifecycle.sweep_expired_rules(conn, brand_id)
     return _rows(conn.execute(
-        "SELECT * FROM rule WHERE brand_id = ? AND status = 'pending_reconfirm' "
+        "SELECT * FROM rule WHERE brand_id = %s AND status = 'pending_reconfirm' "
         "ORDER BY updated_at DESC",
         (brand_id,),
     ))
@@ -1045,7 +1011,7 @@ def list_pending_reconfirm_rules(conn: sqlite3.Connection, brand_id: str) -> lis
 # Claim
 # ---------------------------------------------------------------------------
 
-def create_claim(conn: sqlite3.Connection, brand_id: str, *, actor: str, claim_text: str,
+def create_claim(conn: Conn, brand_id: str, *, actor: str, claim_text: str,
                   claim_type: str, product_id: Optional[str] = None,
                   evidence_source_reference_id: Optional[str] = None) -> dict:
     _require(claim_text, "claim.claim_text 為必填")
@@ -1060,9 +1026,9 @@ def create_claim(conn: sqlite3.Connection, brand_id: str, *, actor: str, claim_t
         "status": "active", "created_at": ts, "updated_at": ts,
     }
     conn.execute(
-        "INSERT INTO claim (id, brand_id, product_id, claim_text, claim_type, "
-        "evidence_source_reference_id, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (row["id"], row["brand_id"], row["product_id"], row["claim_text"], row["claim_type"],
+        "INSERT INTO claim (id, org_id, brand_id, product_id, claim_text, claim_type, "
+        "evidence_source_reference_id, status, created_at, updated_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+        (row["id"], DEV_ORG_ID, row["brand_id"], row["product_id"], row["claim_text"], row["claim_type"],
          row["evidence_source_reference_id"], row["status"], row["created_at"], row["updated_at"]),
     )
     if product_id:
@@ -1075,12 +1041,12 @@ def create_claim(conn: sqlite3.Connection, brand_id: str, *, actor: str, claim_t
     return row
 
 
-def get_claim(conn: sqlite3.Connection, brand_id: str, claim_id: str) -> Optional[dict]:
+def get_claim(conn: Conn, brand_id: str, claim_id: str) -> Optional[dict]:
     return _row(conn.execute(
-        "SELECT * FROM claim WHERE id = ? AND brand_id = ?", (claim_id, brand_id)).fetchone())
+        "SELECT * FROM claim WHERE id = %s AND brand_id = %s", (claim_id, brand_id)).fetchone())
 
 
-def update_claim(conn: sqlite3.Connection, brand_id: str, claim_id: str, *, actor: str,
+def update_claim(conn: Conn, brand_id: str, claim_id: str, *, actor: str,
                   claim_text: str, claim_type: str, product_id: Optional[str] = None,
                   evidence_source_reference_id: Optional[str] = None) -> dict:
     """編輯宣稱內容，比照 update_brand_fact：人工編輯直接生效（決策 0013）。"""
@@ -1093,8 +1059,8 @@ def update_claim(conn: sqlite3.Connection, brand_id: str, claim_id: str, *, acto
         raise ValueError(f"找不到宣稱：{claim_id}")
     ts = now_iso()
     conn.execute(
-        "UPDATE claim SET claim_text = ?, claim_type = ?, product_id = ?, "
-        "evidence_source_reference_id = ?, updated_at = ? WHERE id = ? AND brand_id = ?",
+        "UPDATE claim SET claim_text = %s, claim_type = %s, product_id = %s, "
+        "evidence_source_reference_id = %s, updated_at = %s WHERE id = %s AND brand_id = %s",
         (claim_text, claim_type, product_id, evidence_source_reference_id, ts, claim_id, brand_id),
     )
     after = get_claim(conn, brand_id, claim_id)
@@ -1111,19 +1077,19 @@ def update_claim(conn: sqlite3.Connection, brand_id: str, claim_id: str, *, acto
     return after
 
 
-def list_claims_for_brand(conn: sqlite3.Connection, brand_id: str) -> list:
+def list_claims_for_brand(conn: Conn, brand_id: str) -> list:
     """品牌底下所有生效中的宣稱（含品牌整體與各產品專屬——品牌檔案頁要看到全部）。"""
     return _rows(conn.execute(
-        "SELECT * FROM claim WHERE brand_id = ? AND status = 'active' ORDER BY created_at",
+        "SELECT * FROM claim WHERE brand_id = %s AND status = 'active' ORDER BY created_at",
         (brand_id,),
     ))
 
 
-def list_claims_for_product(conn: sqlite3.Connection, brand_id: str, product_id: str) -> list:
+def list_claims_for_product(conn: Conn, brand_id: str, product_id: str) -> list:
     """整個品牌的宣稱 + 本產品專屬宣稱（不含其他產品的專屬宣稱）。"""
     return _rows(conn.execute(
-        "SELECT * FROM claim WHERE brand_id = ? AND status = 'active' "
-        "AND (product_id IS NULL OR product_id = ?) ORDER BY created_at",
+        "SELECT * FROM claim WHERE brand_id = %s AND status = 'active' "
+        "AND (product_id IS NULL OR product_id = %s) ORDER BY created_at",
         (brand_id, product_id),
     ))
 
@@ -1137,7 +1103,7 @@ def list_claims_for_product(conn: sqlite3.Connection, brand_id: str, product_id:
 # Source Reference（基本建立與查詢，無 UI 亦需可程式存取）
 # ---------------------------------------------------------------------------
 
-def create_source_reference(conn: sqlite3.Connection, brand_id: str, *, actor: str, title: str,
+def create_source_reference(conn: Conn, brand_id: str, *, actor: str, title: str,
                              source_type: str, captured_date: str, url: Optional[str] = None,
                              published_date: Optional[str] = None, locale: Optional[str] = None,
                              note: Optional[str] = None) -> dict:
@@ -1153,9 +1119,9 @@ def create_source_reference(conn: sqlite3.Connection, brand_id: str, *, actor: s
         "note": note, "created_at": ts,
     }
     conn.execute(
-        "INSERT INTO source_reference (id, brand_id, title, url, source_type, published_date, "
-        "captured_date, locale, note, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (row["id"], row["brand_id"], row["title"], row["url"], row["source_type"],
+        "INSERT INTO source_reference (id, org_id, brand_id, title, url, source_type, published_date, "
+        "captured_date, locale, note, created_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+        (row["id"], DEV_ORG_ID, row["brand_id"], row["title"], row["url"], row["source_type"],
          row["published_date"], row["captured_date"], row["locale"], row["note"], row["created_at"]),
     )
     write_audit(conn, brand_id=brand_id, entity_type="source_reference", entity_id=src_id,
@@ -1164,17 +1130,17 @@ def create_source_reference(conn: sqlite3.Connection, brand_id: str, *, actor: s
     return row
 
 
-def get_source_reference(conn: sqlite3.Connection, brand_id: str,
+def get_source_reference(conn: Conn, brand_id: str,
                           source_reference_id: str) -> Optional[dict]:
     return _row(conn.execute(
-        "SELECT * FROM source_reference WHERE id = ? AND brand_id = ?",
+        "SELECT * FROM source_reference WHERE id = %s AND brand_id = %s",
         (source_reference_id, brand_id),
     ).fetchone())
 
 
-def list_source_references(conn: sqlite3.Connection, brand_id: str) -> list:
+def list_source_references(conn: Conn, brand_id: str) -> list:
     return _rows(conn.execute(
-        "SELECT * FROM source_reference WHERE brand_id = ? ORDER BY created_at DESC", (brand_id,)
+        "SELECT * FROM source_reference WHERE brand_id = %s ORDER BY created_at DESC", (brand_id,)
     ))
 
 
@@ -1182,7 +1148,7 @@ def list_source_references(conn: sqlite3.Connection, brand_id: str) -> list:
 # Official Asset（基本建立與查詢，無 UI 亦需可程式存取）
 # ---------------------------------------------------------------------------
 
-def create_official_asset(conn: sqlite3.Connection, brand_id: str, *, actor: str, asset_kind: str,
+def create_official_asset(conn: Conn, brand_id: str, *, actor: str, asset_kind: str,
                            file_path: str, product_id: Optional[str] = None,
                            title: Optional[str] = None, usage_note: Optional[str] = None) -> dict:
     _require(asset_kind, "official_asset.asset_kind 為必填")
@@ -1196,9 +1162,9 @@ def create_official_asset(conn: sqlite3.Connection, brand_id: str, *, actor: str
         "created_at": ts, "updated_at": ts,
     }
     conn.execute(
-        "INSERT INTO official_asset (id, brand_id, product_id, asset_kind, file_path, title, "
-        "usage_note, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (row["id"], row["brand_id"], row["product_id"], row["asset_kind"], row["file_path"],
+        "INSERT INTO official_asset (id, org_id, brand_id, product_id, asset_kind, file_path, title, "
+        "usage_note, status, created_at, updated_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+        (row["id"], DEV_ORG_ID, row["brand_id"], row["product_id"], row["asset_kind"], row["file_path"],
          row["title"], row["usage_note"], row["status"], row["created_at"], row["updated_at"]),
     )
     write_audit(conn, brand_id=brand_id, entity_type="official_asset", entity_id=asset_id,
@@ -1207,19 +1173,19 @@ def create_official_asset(conn: sqlite3.Connection, brand_id: str, *, actor: str
     return row
 
 
-def list_official_assets(conn: sqlite3.Connection, brand_id: str) -> list:
+def list_official_assets(conn: Conn, brand_id: str) -> list:
     return _rows(conn.execute(
-        "SELECT * FROM official_asset WHERE brand_id = ? ORDER BY created_at DESC", (brand_id,)
+        "SELECT * FROM official_asset WHERE brand_id = %s ORDER BY created_at DESC", (brand_id,)
     ))
 
 
-def get_official_asset(conn: sqlite3.Connection, brand_id: str, asset_id: str) -> Optional[dict]:
+def get_official_asset(conn: Conn, brand_id: str, asset_id: str) -> Optional[dict]:
     return _row(conn.execute(
-        "SELECT * FROM official_asset WHERE id = ? AND brand_id = ?", (asset_id, brand_id)
+        "SELECT * FROM official_asset WHERE id = %s AND brand_id = %s", (asset_id, brand_id)
     ).fetchone())
 
 
-def delete_official_asset(conn: sqlite3.Connection, brand_id: str, asset_id: str, *, actor: str) -> None:
+def delete_official_asset(conn: Conn, brand_id: str, asset_id: str, *, actor: str) -> None:
     _delete_entity(conn, brand_id, "official_asset", asset_id, actor=actor, kind_label="官方素材")
 
 
@@ -1227,7 +1193,7 @@ def delete_official_asset(conn: sqlite3.Connection, brand_id: str, asset_id: str
 # Strategy Hypothesis（基本建立與查詢，無 UI 亦需可程式存取）
 # ---------------------------------------------------------------------------
 
-def create_strategy_hypothesis(conn: sqlite3.Connection, brand_id: str, *, actor: str,
+def create_strategy_hypothesis(conn: Conn, brand_id: str, *, actor: str,
                                 hypothesis_type: str, statement: str, created_by: str,
                                 product_id: Optional[str] = None,
                                 source_cycle_id: Optional[str] = None) -> dict:
@@ -1244,10 +1210,10 @@ def create_strategy_hypothesis(conn: sqlite3.Connection, brand_id: str, *, actor
         "created_at": ts, "updated_at": ts,
     }
     conn.execute(
-        "INSERT INTO strategy_hypothesis (id, brand_id, product_id, hypothesis_type, statement, "
+        "INSERT INTO strategy_hypothesis (id, org_id, brand_id, product_id, hypothesis_type, statement, "
         "status, source_cycle_id, created_by, expired_at, created_at, updated_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (row["id"], row["brand_id"], row["product_id"], row["hypothesis_type"], row["statement"],
+        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+        (row["id"], DEV_ORG_ID, row["brand_id"], row["product_id"], row["hypothesis_type"], row["statement"],
          row["status"], row["source_cycle_id"], row["created_by"], row["expired_at"],
          row["created_at"], row["updated_at"]),
     )
@@ -1257,15 +1223,15 @@ def create_strategy_hypothesis(conn: sqlite3.Connection, brand_id: str, *, actor
     return row
 
 
-def list_strategy_hypotheses(conn: sqlite3.Connection, brand_id: str) -> list:
+def list_strategy_hypotheses(conn: Conn, brand_id: str) -> list:
     return _rows(conn.execute(
-        "SELECT * FROM strategy_hypothesis WHERE brand_id = ? ORDER BY created_at DESC", (brand_id,)
+        "SELECT * FROM strategy_hypothesis WHERE brand_id = %s ORDER BY created_at DESC", (brand_id,)
     ))
 
 
-def get_strategy_hypothesis(conn: sqlite3.Connection, brand_id: str, hypothesis_id: str) -> Optional[dict]:
+def get_strategy_hypothesis(conn: Conn, brand_id: str, hypothesis_id: str) -> Optional[dict]:
     return _row(conn.execute(
-        "SELECT * FROM strategy_hypothesis WHERE id = ? AND brand_id = ?", (hypothesis_id, brand_id)
+        "SELECT * FROM strategy_hypothesis WHERE id = %s AND brand_id = %s", (hypothesis_id, brand_id)
     ).fetchone())
 
 
@@ -1273,7 +1239,7 @@ def get_strategy_hypothesis(conn: sqlite3.Connection, brand_id: str, hypothesis_
 HYPOTHESIS_STATUSES = ("proposed", "testing", "supported", "rejected", "inconclusive", "expired")
 
 
-def update_hypothesis_status(conn: sqlite3.Connection, brand_id: str, hypothesis_id: str, *,
+def update_hypothesis_status(conn: Conn, brand_id: str, hypothesis_id: str, *,
                               status: str, actor: str) -> dict:
     """假設結案（GitHub issue #53）：只改 status，不碰其他欄位——`status` 為無 CHECK 的 TEXT，
     這是新增程式碼、不是改 schema。"""
@@ -1285,7 +1251,7 @@ def update_hypothesis_status(conn: sqlite3.Connection, brand_id: str, hypothesis
     if before is None:
         raise ValueError("找不到這條策略假設")
     conn.execute(
-        "UPDATE strategy_hypothesis SET status = ?, updated_at = ? WHERE id = ? AND brand_id = ?",
+        "UPDATE strategy_hypothesis SET status = %s, updated_at = %s WHERE id = %s AND brand_id = %s",
         (status, now_iso(), hypothesis_id, brand_id),
     )
     after = get_strategy_hypothesis(conn, brand_id, hypothesis_id)
@@ -1299,7 +1265,7 @@ def update_hypothesis_status(conn: sqlite3.Connection, brand_id: str, hypothesis
 # Brand Performance Baseline（基本建立與查詢，無 UI 亦需可程式存取）
 # ---------------------------------------------------------------------------
 
-def create_brand_performance_baseline(conn: sqlite3.Connection, brand_id: str, *, actor: str,
+def create_brand_performance_baseline(conn: Conn, brand_id: str, *, actor: str,
                                        metric: str, value: float, as_of_date: str, created_by: str,
                                        product_id: Optional[str] = None, unit: Optional[str] = None,
                                        basis_note: Optional[str] = None,
@@ -1320,10 +1286,10 @@ def create_brand_performance_baseline(conn: sqlite3.Connection, brand_id: str, *
         "created_at": ts, "updated_at": ts,
     }
     conn.execute(
-        "INSERT INTO brand_performance_baseline (id, brand_id, product_id, metric, value, unit, "
+        "INSERT INTO brand_performance_baseline (id, org_id, brand_id, product_id, metric, value, unit, "
         "basis_note, source_cycle_id, sample_note, as_of_date, created_by, created_at, updated_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (row["id"], row["brand_id"], row["product_id"], row["metric"], row["value"], row["unit"],
+        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+        (row["id"], DEV_ORG_ID, row["brand_id"], row["product_id"], row["metric"], row["value"], row["unit"],
          row["basis_note"], row["source_cycle_id"], row["sample_note"], row["as_of_date"],
          row["created_by"], row["created_at"], row["updated_at"]),
     )
@@ -1333,9 +1299,9 @@ def create_brand_performance_baseline(conn: sqlite3.Connection, brand_id: str, *
     return row
 
 
-def list_brand_performance_baselines(conn: sqlite3.Connection, brand_id: str) -> list:
+def list_brand_performance_baselines(conn: Conn, brand_id: str) -> list:
     return _rows(conn.execute(
-        "SELECT * FROM brand_performance_baseline WHERE brand_id = ? ORDER BY as_of_date DESC",
+        "SELECT * FROM brand_performance_baseline WHERE brand_id = %s ORDER BY as_of_date DESC",
         (brand_id,),
     ))
 
@@ -1344,7 +1310,7 @@ def list_brand_performance_baselines(conn: sqlite3.Connection, brand_id: str) ->
 # Brand Report（顧問分析報告，決策 0017：只 INSERT、永不 UPDATE，歷史留著不做清單頁）
 # ---------------------------------------------------------------------------
 
-def create_brand_report(conn: sqlite3.Connection, brand_id: str, *, actor: str, model: str,
+def create_brand_report(conn: Conn, brand_id: str, *, actor: str, model: str,
                          llm_task_id: Optional[str], brand_version: int,
                          source_fact_count: int, sections: dict) -> dict:
     _require(actor, "actor 為必填")
@@ -1358,9 +1324,9 @@ def create_brand_report(conn: sqlite3.Connection, brand_id: str, *, actor: str, 
         "sections_json": json.dumps(sections, ensure_ascii=False),
     }
     conn.execute(
-        "INSERT INTO brand_report (id, brand_id, generated_at, generated_by, model, llm_task_id, "
-        "brand_version, source_fact_count, sections_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (row["id"], row["brand_id"], row["generated_at"], row["generated_by"], row["model"],
+        "INSERT INTO brand_report (id, org_id, brand_id, generated_at, generated_by, model, llm_task_id, "
+        "brand_version, source_fact_count, sections_json) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+        (row["id"], DEV_ORG_ID, row["brand_id"], row["generated_at"], row["generated_by"], row["model"],
          row["llm_task_id"], row["brand_version"], row["source_fact_count"], row["sections_json"]),
     )
     write_audit(conn, brand_id=brand_id, entity_type="brand_report", entity_id=report_id,
@@ -1372,9 +1338,9 @@ def create_brand_report(conn: sqlite3.Connection, brand_id: str, *, actor: str, 
     return row
 
 
-def get_latest_brand_report(conn: sqlite3.Connection, brand_id: str) -> Optional[dict]:
+def get_latest_brand_report(conn: Conn, brand_id: str) -> Optional[dict]:
     row = _row(conn.execute(
-        "SELECT * FROM brand_report WHERE brand_id = ? ORDER BY generated_at DESC, id DESC LIMIT 1",
+        "SELECT * FROM brand_report WHERE brand_id = %s ORDER BY generated_at DESC, id DESC LIMIT 1",
         (brand_id,),
     ).fetchone())
     if row is not None:
@@ -1392,7 +1358,7 @@ def _with_extraction(row: Optional[dict]) -> Optional[dict]:
     return row
 
 
-def create_customer_voice(conn: sqlite3.Connection, brand_id: str, *, actor: str, raw_text: str,
+def create_customer_voice(conn: Conn, brand_id: str, *, actor: str, raw_text: str,
                            source_channel: str, source_type: str, extraction: list,
                            source_detail: Optional[str] = None,
                            llm_task_id: Optional[str] = None) -> dict:
@@ -1410,10 +1376,10 @@ def create_customer_voice(conn: sqlite3.Connection, brand_id: str, *, actor: str
         "created_by": actor, "created_at": ts, "updated_at": ts,
     }
     conn.execute(
-        "INSERT INTO customer_voice (id, brand_id, raw_text, source_channel, source_detail, "
+        "INSERT INTO customer_voice (id, org_id, brand_id, raw_text, source_channel, source_detail, "
         "source_type, status, extraction_json, llm_task_id, created_by, created_at, updated_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (row["id"], row["brand_id"], row["raw_text"], row["source_channel"], row["source_detail"],
+        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+        (row["id"], DEV_ORG_ID, row["brand_id"], row["raw_text"], row["source_channel"], row["source_detail"],
          row["source_type"], row["status"], row["extraction_json"], row["llm_task_id"],
          row["created_by"], row["created_at"], row["updated_at"]),
     )
@@ -1425,27 +1391,27 @@ def create_customer_voice(conn: sqlite3.Connection, brand_id: str, *, actor: str
     return _with_extraction(row)
 
 
-def get_customer_voice(conn: sqlite3.Connection, brand_id: str, cv_id: str) -> Optional[dict]:
+def get_customer_voice(conn: Conn, brand_id: str, cv_id: str) -> Optional[dict]:
     return _with_extraction(_row(conn.execute(
-        "SELECT * FROM customer_voice WHERE id = ? AND brand_id = ?", (cv_id, brand_id)
+        "SELECT * FROM customer_voice WHERE id = %s AND brand_id = %s", (cv_id, brand_id)
     ).fetchone()))
 
 
-def list_customer_voices(conn: sqlite3.Connection, brand_id: str,
+def list_customer_voices(conn: Conn, brand_id: str,
                           status: Optional[str] = None) -> list:
     if status:
         rows = _rows(conn.execute(
-            "SELECT * FROM customer_voice WHERE brand_id = ? AND status = ? ORDER BY created_at DESC",
+            "SELECT * FROM customer_voice WHERE brand_id = %s AND status = %s ORDER BY created_at DESC",
             (brand_id, status),
         ))
     else:
         rows = _rows(conn.execute(
-            "SELECT * FROM customer_voice WHERE brand_id = ? ORDER BY created_at DESC", (brand_id,)
+            "SELECT * FROM customer_voice WHERE brand_id = %s ORDER BY created_at DESC", (brand_id,)
         ))
     return [_with_extraction(r) for r in rows]
 
 
-def set_customer_voice_status(conn: sqlite3.Connection, brand_id: str, cv_id: str, *,
+def set_customer_voice_status(conn: Conn, brand_id: str, cv_id: str, *,
                                status: str, actor: str) -> dict:
     """封存／恢復（決策 0023 第 8 條：新資料實體必附封存＋刪除；封存與刪除各自獨立，
     封存不是刪除的前置條件——這裡沿用 brand／product 的封存欄位模式，但刪除比照
@@ -1458,7 +1424,7 @@ def set_customer_voice_status(conn: sqlite3.Connection, brand_id: str, cv_id: st
         raise ValueError(f"找不到顧客原話：{cv_id}")
     ts = now_iso()
     conn.execute(
-        "UPDATE customer_voice SET status = ?, updated_at = ? WHERE id = ? AND brand_id = ?",
+        "UPDATE customer_voice SET status = %s, updated_at = %s WHERE id = %s AND brand_id = %s",
         (status, ts, cv_id, brand_id),
     )
     after = get_customer_voice(conn, brand_id, cv_id)
@@ -1484,7 +1450,7 @@ def delete_customer_voice(conn, brand_id: str, cv_id: str, *, actor: str) -> Non
 # （A1：跨層一律走公開函式）；app/ads/repository.py 是目前唯一的例子。
 # ---------------------------------------------------------------------------
 
-def create_learning_ledger_entry(conn: sqlite3.Connection, brand_id: str, *, learning_text: str,
+def create_learning_ledger_entry(conn: Conn, brand_id: str, *, learning_text: str,
                                   applicability_scope: str, created_by: str, actor: str,
                                   source_track: str, product_id: Optional[str] = None,
                                   platform: Optional[str] = None,
@@ -1516,11 +1482,11 @@ def create_learning_ledger_entry(conn: sqlite3.Connection, brand_id: str, *, lea
         "learned_at": ts, "created_by": created_by, "created_at": ts, "source_track": source_track,
     }
     conn.execute(
-        "INSERT INTO learning_ledger (id, brand_id, product_id, platform, learning_text,"
+        "INSERT INTO learning_ledger (id, org_id, brand_id, product_id, platform, learning_text,"
         " applicability_scope, source_cycle_id, source_reading_id, source_hypothesis_id,"
         " sample_size, confidence, needs_revalidation, expired, learned_at, created_by,"
-        " created_at, source_track) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (row["id"], row["brand_id"], row["product_id"], row["platform"], row["learning_text"],
+        " created_at, source_track) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+        (row["id"], DEV_ORG_ID, row["brand_id"], row["product_id"], row["platform"], row["learning_text"],
          row["applicability_scope"], row["source_cycle_id"], row["source_reading_id"],
          row["source_hypothesis_id"], row["sample_size"], row["confidence"],
          row["needs_revalidation"], row["expired"], row["learned_at"], row["created_by"],
@@ -1532,19 +1498,19 @@ def create_learning_ledger_entry(conn: sqlite3.Connection, brand_id: str, *, lea
     return row
 
 
-def list_learning_ledger(conn: sqlite3.Connection, brand_id: str, *,
+def list_learning_ledger(conn: Conn, brand_id: str, *,
                           include_expired: bool = False) -> list:
     """累積智慧頁讀取用：已驗證的正面學習清單（不分分支——頁面是給人看「這個品牌學到
     什麼」，不是給 prompt 組裝用；分支過濾只在 `list_learnings_for_prompt` 做，見下）。
     預設只列 `expired = 0`，跟 `list_learnings_for_prompt` 讀取端的過濾條件一致。"""
-    sql = "SELECT * FROM learning_ledger WHERE brand_id = ?"
+    sql = "SELECT * FROM learning_ledger WHERE brand_id = %s"
     if not include_expired:
         sql += " AND expired = 0"
     sql += " ORDER BY learned_at DESC"
     return _rows(conn.execute(sql, (brand_id,)))
 
 
-def deactivate_learning_ledger_entry(conn: sqlite3.Connection, brand_id: str, entry_id: str, *,
+def deactivate_learning_ledger_entry(conn: Conn, brand_id: str, entry_id: str, *,
                                       actor: str) -> dict:
     """下架一條已確認學習：把 `expired` 標成 1，不刪列、不改 `learning_text` 等內容欄位
     ——append-only 表不提供 UPDATE 指的是改寫學習內容本身；`expired` 是本表建表時就留給
@@ -1552,16 +1518,16 @@ def deactivate_learning_ledger_entry(conn: sqlite3.Connection, brand_id: str, en
     if not actor:
         raise ValueError("actor 為必填")
     before = _row(conn.execute(
-        "SELECT * FROM learning_ledger WHERE id = ? AND brand_id = ?", (entry_id, brand_id),
+        "SELECT * FROM learning_ledger WHERE id = %s AND brand_id = %s", (entry_id, brand_id),
     ).fetchone())
     if before is None:
         raise ValueError(f"找不到這條學習紀錄：{entry_id}")
     conn.execute(
-        "UPDATE learning_ledger SET expired = 1 WHERE id = ? AND brand_id = ?",
+        "UPDATE learning_ledger SET expired = 1 WHERE id = %s AND brand_id = %s",
         (entry_id, brand_id),
     )
     after = _row(conn.execute(
-        "SELECT * FROM learning_ledger WHERE id = ? AND brand_id = ?", (entry_id, brand_id),
+        "SELECT * FROM learning_ledger WHERE id = %s AND brand_id = %s", (entry_id, brand_id),
     ).fetchone())
     write_audit(conn, brand_id=brand_id, entity_type="learning_ledger", entity_id=entry_id,
                 action="deactivate", actor=actor, before=before, after=after,
@@ -1570,7 +1536,7 @@ def deactivate_learning_ledger_entry(conn: sqlite3.Connection, brand_id: str, en
     return after
 
 
-def list_learnings_for_prompt(conn: sqlite3.Connection, brand_id: str, *,
+def list_learnings_for_prompt(conn: Conn, brand_id: str, *,
                                track: str, product_id: Optional[str] = None,
                                include_cross_track: bool = False) -> list:
     """`app/llm/context_compiler.py` 組 prompt 專用（A1：跨層一律走公開函式，不得對本表
@@ -1579,40 +1545,40 @@ def list_learnings_for_prompt(conn: sqlite3.Connection, brand_id: str, *,
     （見 context_compiler._learning_source_note）。"""
     _require(track, "list_learnings_for_prompt 的 track 為必填")
     if product_id is not None:
-        sql = ("SELECT * FROM learning_ledger WHERE brand_id = ? AND expired = 0"
-               " AND (product_id IS NULL OR product_id = ?)")
+        sql = ("SELECT * FROM learning_ledger WHERE brand_id = %s AND expired = 0"
+               " AND (product_id IS NULL OR product_id = %s)")
         params = [brand_id, product_id]
     else:
-        sql = "SELECT * FROM learning_ledger WHERE brand_id = ? AND expired = 0 AND product_id IS NULL"
+        sql = "SELECT * FROM learning_ledger WHERE brand_id = %s AND expired = 0 AND product_id IS NULL"
         params = [brand_id]
     if not include_cross_track:
-        sql += " AND source_track = ?"
+        sql += " AND source_track = %s"
         params.append(track)
     sql += " ORDER BY learned_at"
     return _rows(conn.execute(sql, params))
 
 
-def learning_ledger_entry_exists(conn: sqlite3.Connection, brand_id: str,
+def learning_ledger_entry_exists(conn: Conn, brand_id: str,
                                   *, product_id: Optional[str], learning_text: str) -> bool:
     """這個品牌、這個範圍（品牌整體或同一產品）下，同一句學習文字（拿掉括號夾註後比對，見
     `_normalize_learning_text`）是否已經進過帳（修憲落地 G4，決策 0035 第三節第 8 點：
     `_ledger_confidence` 判斷用）。已知限制（票 F3，記錄不修）：`product_id IS ?` 精確比對，同一句話掛在不同 product_id 下不會互相偵測成重複。"""
     normalized = _normalize_learning_text(learning_text)
     rows = conn.execute(
-        "SELECT learning_text FROM learning_ledger WHERE brand_id = ? AND product_id IS ?",
+        "SELECT learning_text FROM learning_ledger WHERE brand_id = %s AND product_id IS %s",
         (brand_id, product_id),
     ).fetchall()
     return any(_normalize_learning_text(row["learning_text"]) == normalized for row in rows)
 
 
-def unlink_learning_ledger_reading(conn: sqlite3.Connection, reading_ids: list) -> None:
+def unlink_learning_ledger_reading(conn: Conn, reading_ids: list) -> None:
     """把 learning_ledger 指向這些判讀版次的 `source_reading_id` 解除關聯（設為 NULL），
     不刪列——append-only 表本身不受影響，只是來源指標失效。呼叫端（`app/ads`）負責算出
     要解除哪些 `performance_reading.id`：本函式刻意不自己下子查詢去查那張表，
     避免品牌永久層反向依賴分支專屬層的資料表（A1 單向地界）。"""
     if not reading_ids:
         return
-    placeholders = ",".join("?" for _ in reading_ids)
+    placeholders = ",".join("%s" for _ in reading_ids)
     conn.execute(
         f"UPDATE learning_ledger SET source_reading_id = NULL"
         f" WHERE source_reading_id IN ({placeholders})",
@@ -1620,21 +1586,21 @@ def unlink_learning_ledger_reading(conn: sqlite3.Connection, reading_ids: list) 
     )
 
 
-def unlink_learning_ledger_cycle(conn: sqlite3.Connection, cycle_id: str) -> None:
+def unlink_learning_ledger_cycle(conn: Conn, cycle_id: str) -> None:
     """把 learning_ledger 指向這個檔期的 `source_cycle_id` 解除關聯（設為 NULL），不刪列
     ——學習是跨期累積的資產，來源檔期被刪不代表學習作廢。"""
     conn.execute(
-        "UPDATE learning_ledger SET source_cycle_id = NULL WHERE source_cycle_id = ?",
+        "UPDATE learning_ledger SET source_cycle_id = NULL WHERE source_cycle_id = %s",
         (cycle_id,),
     )
 
 
-def mark_learning_ledger_needs_revalidation(conn: sqlite3.Connection, brand_id: str,
+def mark_learning_ledger_needs_revalidation(conn: Conn, brand_id: str,
                                              entry_id: str) -> None:
     """單條標記「建議找機會重新驗證」（修憲落地 G4，決策 0035 第三節第 10 點）：只提醒、
     不擋路、不自動下架（決策 0013）。"""
     conn.execute(
-        "UPDATE learning_ledger SET needs_revalidation = 1 WHERE id = ? AND brand_id = ?",
+        "UPDATE learning_ledger SET needs_revalidation = 1 WHERE id = %s AND brand_id = %s",
         (entry_id, brand_id),
     )
 
