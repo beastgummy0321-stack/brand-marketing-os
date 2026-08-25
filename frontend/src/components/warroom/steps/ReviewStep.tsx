@@ -65,8 +65,13 @@ export function ReviewStep({ brandId, cycle }: { brandId: string; cycle: Cycle }
  *
  * B0-05：文案不再承諾「結束後 14 天自動收帳」——背景收帳只在系統開著的時候才會被排到
  * （`app/main.py _auto_sync_if_due()`），單機單人使用型態下沒辦法保證在第 14 天那一刻
- * 剛好在跑，真機重現時已經過了 35 天還沒收帳。要做到真正準時的排程器是另一張票
- * （BOARD R5-S，等使用者批准），這裡只把文案改成系統現在真的能兌現的說法。 */
+ * 剛好在跑，真機重現時已經過了 35 天還沒收帳。
+ *
+ * F6：現在系統能兌現的說法變了——排程改用者 Windows 工作排程器 `onlogon` 觸發（使用者
+ * 2026-08-25 核准的機制，見 .scratch/rehearsal-b0-fix2/issues/F6-auto-settlement-on-boot.md），
+ * process 一起來就會先補跑一次，不必等滿一小時。文案只敢講「登入時」，不敢講「幾天內」——
+ * 排程只在使用者登入 Windows 那一刻觸發，機器沒開、沒登入就是沒有這回事，這是誠實的邊界，
+ * 不是又一次過度承諾。 */
 function SettleNowPanel({ brandId, cycle, onSettled }: { brandId: string; cycle: Cycle; onSettled: () => void }) {
   const [info, setInfo] = useState<SettleNowInfo | null>(null);
 
@@ -90,7 +95,7 @@ function SettleNowPanel({ brandId, cycle, onSettled }: { brandId: string; cycle:
 
   return (
     <div className="rounded-lg border border-dashed border-border p-6 text-center text-sm text-muted-foreground">
-      <p>這期還沒收帳。系統沒辦法保證幾天內自動幫你收帳，建議直接按下面「現在結算」，不用乾等。</p>
+      <p>這期還沒收帳。系統設定成你下次登入電腦時會自動幫你收帳；不想等下次登入，也可以直接按下面「現在結算」。</p>
       {info && !info.already_closed && (
         <div className="mt-4 flex flex-col items-center gap-2">
           <button

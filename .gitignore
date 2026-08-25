@@ -31,3 +31,6 @@ archive/
 
 # pytest --basetemp 暫存區
 .tmp/
+
+# 開機無視窗啟動器的 log（票 F6），不進版控
+logs/

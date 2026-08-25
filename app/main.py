@@ -238,8 +238,16 @@ if _FRONTEND_DIST.is_dir():
 @app.on_event("startup")
 def _register_auto_sync_schedule() -> None:
     """票 07-auto-sync：應用程式啟動時註冊程式內排程。啟動當下先跑一次（不等第一個
-    小時），之後交給背景執行緒每小時檢查四小時／每日門檻。"""
-    _auto_sync_if_due()
+    小時），之後交給背景執行緒每小時檢查四小時／每日門檻。
+
+    票 F6：這次補跑常常是「機器關了一陣子、開機馬上要追上進度」那一下，外部 API／
+    資料庫都比平常更容易撞到暫時性錯誤。補跑本身丟例外不能讓這支 FastAPI startup
+    handler 跟著炸——那等於開機直接失敗，比「晚一點才結算」嚴重得多（集裝箱憲章
+    第 5 節：錯誤不穿牆）。背景執行緒仍要照常掛上去，下一個整點會再檢查一次。"""
+    try:
+        _auto_sync_if_due()
+    except Exception:  # noqa: BLE001 — 開機補跑失敗不能把整個 app 帶垮，見上方說明
+        web.conn.rollback()
     _weekly_engine_if_due()
     threading.Thread(target=_auto_sync_loop, daemon=True).start()
 
