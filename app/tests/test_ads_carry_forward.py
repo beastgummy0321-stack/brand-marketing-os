@@ -277,13 +277,17 @@ class SignedOffLearningWinnerTest(_BaseCarryForwardTest):
     加碼／停損卡用，兩件事分開（B2 F2 ❌ 重現的正是同一個問題兩套不同的門檻）。"""
 
     def test_signed_off_learning_below_statistical_threshold_is_still_a_winner(self):
+        """票 F11：贏家是學習句子點名的切角，不是那期 ROAS 最高的切角——這裡刻意讓
+        「使用者見證」的 ROAS 比句子點名的「實證成分」還高，若橋接還是舊的 argmax
+        （F7 原本的寫法），這裡會錯拿「使用者見證」。"""
         self._sign_off_learning(
             self.prior_cycle_id, product_id=self.product,
-            cells=[("實證成分", 22, 12000, 12000 * 4.30), ("使用者見證", 20, 11000, 11000 * 3.0)])
+            statement="拿證據說話的實證成分比純促銷更能拉高轉換率",
+            cells=[("實證成分", 22, 12000, 12000 * 3.0), ("使用者見證", 20, 11000, 11000 * 4.30)])
         winners = carry_forward.prior_winners(main.conn, self.bid)
         self.assertEqual(len(winners), 1)
         self.assertEqual(winners[0]["angle"], "實證成分")
-        self.assertEqual(winners[0]["roas"], 4.30)
+        self.assertEqual(winners[0]["roas"], 3.0)
         self.assertEqual(winners[0]["source_cycle_id"], self.prior_cycle_id)
         self.assertLess(winners[0]["conversions"], 50)  # 統計門檻在這條來源不適用，但轉換數仍如實回報
 
@@ -299,12 +303,38 @@ class SignedOffLearningWinnerTest(_BaseCarryForwardTest):
         `citation_violations()` 要擋下、錯誤訊息具名點出切角，不能悄悄存進去。"""
         self._sign_off_learning(
             self.prior_cycle_id, product_id=self.product,
+            statement="拿證據說話的實證成分比純促銷更能拉高轉換率",
             cells=[("實證成分", 22, 12000, 12000 * 4.30), ("使用者見證", 20, 11000, 11000 * 3.0)])
         ok, err = self._generate(self.carry_forward_cycle_id)  # 預設 _GOOD_OPTIONS 沒提到「實證成分」
         self.assertFalse(ok)
         self.assertIn("實證成分", err)
         self.assertEqual(
             ads_plan.get_pending_options(main.conn, self.bid, self.carry_forward_cycle_id), [])
+
+    def test_learning_naming_no_cell_of_its_cycle_contributes_no_winner(self):
+        """票 F11 done-check 2：學習句子沒點名這期任何一個切角（都是代號形狀）——不准
+        落回「那期 ROAS 最高的」當贏家，這條 entry 就是沒有贏家。RED first：F7 原本的
+        argmax 橋接會在這裡選出 `fatigue`（真實資料重現的正是這個案例）。"""
+        self._sign_off_learning(
+            self.prior_cycle_id, product_id=self.product,
+            statement="拿證據說話的切角比純促銷更能拉高轉換率",
+            cells=[("normal_1", 30, 4500, 4500 * 6.60), ("fatigue", 30, 4500, 4500 * 6.60),
+                   ("bad_cvr", 30, 4500, 4500 * 0.99)])
+        self.assertEqual(carry_forward.prior_winners(main.conn, self.bid), [])
+
+    def test_learning_naming_two_cells_returns_both_with_their_own_roas(self):
+        """票 F11 done-check 3：一句學習點名兩個切角，兩個都要回來，各自帶自己的 ROAS
+        ——沒被點名的第三個切角（使用者見證，ROAS 更高）不算數。"""
+        self._sign_off_learning(
+            self.prior_cycle_id, product_id=self.product,
+            statement="拿證據說話的切角（實證成分／成分對比）比純促銷更能拉高轉換率",
+            cells=[("實證成分", 22, 12000, 12000 * 4.30), ("成分對比", 18, 9000, 9000 * 3.50),
+                   ("使用者見證", 20, 11000, 11000 * 5.0)])
+        winners = carry_forward.prior_winners(main.conn, self.bid)
+        self.assertEqual({w["angle"] for w in winners}, {"實證成分", "成分對比"})
+        by_angle = {w["angle"]: w for w in winners}
+        self.assertEqual(by_angle["實證成分"]["roas"], 4.30)
+        self.assertEqual(by_angle["成分對比"]["roas"], 3.50)
 
 
 class PromptIncludesCarryForwardDataTest(_BaseCarryForwardTest):

@@ -75,15 +75,21 @@ def prior_winners(conn, brand_id: str, product_ids: Optional[set] = None,
 
 def _signed_off_winners(conn, brand_id: str, product_ids: Optional[set],
                         exclude_cycle_id: Optional[str]) -> list:
-    """第二個贏家來源（票 F7）：使用者親自簽核「成立」的假設，不管統計證據夠不夠——人
-    已經看過並排的 A／B 數字才按下確認，門檻比機器自動判定低是刻意的（契約：低門檻給人
-    簽的，高門檻給機器自己做的；`target_cpa.WEEKLY_CONVERSIONS_PER_GROUP` 不受影響）。
+    """第二個贏家來源（票 F7，橋接修正票 F11）：使用者親自簽核「成立」的假設，不管統計
+    證據夠不夠——人已經看過並排的 A／B 數字才按下確認，門檻比機器自動判定低是刻意的
+    （契約：低門檻給人簽的，高門檻給機器自己做的；`target_cpa.WEEKLY_CONVERSIONS_PER_GROUP`
+    不受影響）。
 
-    `strategy_hypothesis` 跟 `experiment_cell` 之間沒有外鍵，唯一乾淨的橋是假設的
-    `source_cycle_id` → 那期真的投放過、有成效資料回得來的切角
-    （`reading_hypotheses.comparison_cells()`，已經只挑真的對回成效資料的切角），從那些
-    切角自己的數字挑 ROAS 最高的當這條假設驗證出來的「贏的方向」——不剖析假設
-    `statement` 文字裡的切角名稱（那是人話一句話，不是結構化資料，猜錯了比沒有更糟）。
+    `strategy_hypothesis` 跟 `experiment_cell` 之間沒有外鍵，F7 原本的橋是「那期 ROAS 最高的
+    切角」——但「那期打最好的」不等於「這條假設在講的」，F11 重現的正是這個誤配（票內
+    `fatigue` 案例）。改用學習句子本身當橋：只認「這條假設的來源期別（
+    `reading_hypotheses.comparison_cells()`，已經只挑真的對回成效資料的切角）裡，切角名稱
+    真的被寫進 `learning_text` 這句人話」的切角，全部算數（不是只取一個），各自帶自己的
+    ROAS。句子沒提到任何一個切角時，這條 ledger entry 不貢獻贏家——沒把握就不猜（鐵則 16）。
+
+    ponytail: 判斷「有沒有被提到」用子字串比對，天花板是切角名稱剛好是句子裡某個不相關
+    詞的子字串時會誤判命中；upgrade path 是等 schema 真的補上假設↔切角的外鍵關聯再換掉
+    這座橋，不是在這裡加更多字串heuristic。
     """
     winners = []
     for entry in bi.list_learning_ledger(conn, brand_id):
@@ -97,19 +103,16 @@ def _signed_off_winners(conn, brand_id: str, product_ids: Optional[set],
             continue
         if product_ids and hyp["product_id"] is not None and hyp["product_id"] not in product_ids:
             continue
-        best = None
         for cell in reading_hypotheses.comparison_cells(conn, brand_id, cycle_id, hyp["product_id"]):
+            if cell["creative_angle"] not in entry["learning_text"]:
+                continue
             roas = cell["kpis"]["roas"]
             if roas is None:
                 continue
-            if best is None or roas > best["kpis"]["roas"]:
-                best = cell
-        if best is None:
-            continue
-        winners.append({
-            "angle": best["creative_angle"], "roas": best["kpis"]["roas"], "spend": best["spend"],
-            "conversions": best["conversions"], "source_cycle_id": cycle_id,
-        })
+            winners.append({
+                "angle": cell["creative_angle"], "roas": roas, "spend": cell["spend"],
+                "conversions": cell["conversions"], "source_cycle_id": cycle_id,
+            })
     return winners
 
 

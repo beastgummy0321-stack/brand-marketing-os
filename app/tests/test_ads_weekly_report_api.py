@@ -14,11 +14,13 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 import app.main as main  # noqa: E402
 from app.ads import auto_sync  # noqa: E402
+from app.ads import reading as ads_reading  # noqa: E402
 from app.ads import repository as ads_repo  # noqa: E402
 from app.ads import routes_campaigns_open_api  # noqa: E402
 from app.ads import weekly_reports  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
 from app.core import interrupts as core_interrupts  # noqa: E402
+from app.core.db import new_id, now_iso  # noqa: E402
 
 
 def _cleanup():
@@ -33,6 +35,38 @@ atexit.register(_cleanup)
 
 ACTOR = "測試員"
 TODAY = "2026-08-17"
+
+
+def _seed_cell(conn, brand_id: str, cycle_id: str, *, creative_angle: str,
+               spend: float, conversions: float, revenue: float) -> str:
+    """建一條完整的 performance_snapshot → external_ad_mapping → publishing_package →
+    experiment_cell 鏈（比照 test_ads_carry_forward.py 既有寫法，票 F11 done-check 4 要走
+    真的 API 端到端，不能只靠 mock 掉 `carry_forward.prior_winners()`）。回傳 cell id。"""
+    cell_id, pkg_id, mapping_id, ts = new_id("exc"), new_id("pkg"), new_id("xam"), now_iso()
+    conn.execute(
+        "INSERT INTO experiment_cell (id, campaign_cycle_id, brand_id, creative_angle,"
+        " product_id, created_at) VALUES (?, ?, ?, ?, NULL, ?)",
+        (cell_id, cycle_id, brand_id, creative_angle, ts))
+    conn.execute(
+        "INSERT INTO publishing_package (id, brand_id, campaign_cycle_id, experiment_cell_id,"
+        " campaign_name, adset_name, ad_name, destination_url, utm_json, status, created_at)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, '{}', 'ready', ?)",
+        (pkg_id, brand_id, cycle_id, cell_id, "測試活動", "測試組合", f"{creative_angle}_ad",
+         "https://example.test", ts))
+    conn.execute(
+        "INSERT INTO external_ad_mapping (id, brand_id, publishing_package_id,"
+        " campaign_cycle_id, platform, claim_status, confirmed_by, confirmed_at, created_at)"
+        " VALUES (?, ?, ?, ?, 'meta', 'confirmed', ?, ?, ?)",
+        (mapping_id, brand_id, pkg_id, cycle_id, ACTOR, ts, ts))
+    conn.execute(
+        "INSERT INTO performance_snapshot (id, brand_id, campaign_cycle_id, product_id,"
+        " external_ad_mapping_id, platform, date_range_start, date_range_end, as_of_date,"
+        " snapshot_taken_at, currency, spend, conversions, revenue, source, created_at)"
+        " VALUES (?, ?, ?, NULL, ?, 'meta', '2026-01-01', '2026-01-07', '2026-01-07', ?, 'TWD',"
+        " ?, ?, ?, 'manual', ?)",
+        (new_id("psn"), brand_id, cycle_id, mapping_id, ts, spend, conversions, revenue, ts))
+    conn.commit()
+    return cell_id
 
 
 class WeeklyReportTest(unittest.TestCase):
@@ -247,6 +281,42 @@ class NewCycleDirectionApiTest(unittest.TestCase):
             "status": "ready", "direction": "實證成分", "roas": 4.3,
             "label": "沿用上期贏家：實證成分（ROAS 4.30）",
         })
+
+    def test_signed_learning_naming_no_cell_shows_generic_wording_not_a_code(self):
+        """票 F11 done-check 4：真實情境重現（不 mock `nextcycle`／`carry_forward`）——
+        品牌歷史只有代號形狀的切角（`normal_1`／`fatigue`／`bad_cvr`），簽核學習的句子
+        沒點名任何一個，畫面只能看到「沿用上期設定」，不能看到任何代號或掰出來的數字。
+        這取代 F10 原本 done-check 1（只查「找不到 normal_ 」），因為 F7 的舊橋接曾經讓
+        `fatigue` 這個代號直接冒出來，而那條檢查測不到。RED first。"""
+        cycle_id = ads_repo.create_cycle(
+            main.conn, self.brand["id"], product_ids=[], pain_value=10000,
+            objective="sales", actor=ACTOR)["id"]
+        for angle, conversions, spend, revenue in (
+            ("normal_1", 30, 4500, 4500 * 6.60),
+            ("fatigue", 30, 4500, 4500 * 6.60),
+            ("bad_cvr", 30, 4500, 4500 * 0.99),
+        ):
+            _seed_cell(main.conn, self.brand["id"], cycle_id, creative_angle=angle,
+                      spend=spend, conversions=conversions, revenue=revenue)
+        hyp = bi_repo.create_strategy_hypothesis(
+            main.conn, self.brand["id"], actor=ACTOR, hypothesis_type="message",
+            statement="拿證據說話的切角比純促銷更能拉高轉換率", created_by=ACTOR,
+            product_id=None, source_cycle_id=cycle_id)
+        main.conn.execute(
+            "INSERT INTO campaign_cycle_hypothesis (campaign_cycle_id, strategy_hypothesis_id,"
+            " brand_id, role) VALUES (?, ?, ?, 'message')",
+            (cycle_id, hyp["id"], self.brand["id"]))
+        main.conn.commit()
+        updated = ads_reading.resolve_hypotheses(
+            main.conn, self.brand["id"], cycle_id, {hyp["id"]: "supported"}, actor=ACTOR)
+        self.assertEqual(updated, 1)
+
+        resp = self.client.get(self.url)
+
+        self.assertEqual(resp.json()["data"], {"status": "ready", "label": "沿用上期設定"})
+        self.assertNotIn("normal_", resp.text)
+        self.assertNotIn("fatigue", resp.text)
+        self.assertNotIn("bad_cvr", resp.text)
 
 
 if __name__ == "__main__":
