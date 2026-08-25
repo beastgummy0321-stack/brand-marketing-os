@@ -89,7 +89,7 @@ def _signed_off_winners(conn, brand_id: str, product_ids: Optional[set],
 
     ponytail: 判斷「有沒有被提到」用子字串比對，天花板是切角名稱剛好是句子裡某個不相關
     詞的子字串時會誤判命中；upgrade path 是等 schema 真的補上假設↔切角的外鍵關聯再換掉
-    這座橋，不是在這裡加更多字串heuristic。
+    這座橋，不是在這裡加更多字串啟發式規則。
     """
     winners = []
     for entry in bi.list_learning_ledger(conn, brand_id):
