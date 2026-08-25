@@ -70,6 +70,24 @@ class CockpitExtrasTest(unittest.TestCase):
         self.assertEqual(result["todo3"], {"product_completeness": 100,
                                            "good_customer_defined": True, "reply_speed": None})
 
+    def test_wisdom_counts_learnings_not_rows(self):
+        """票 L2（ADR 0026 決定 1、4、5）：wisdom 要數「幾條學習」，不是「幾列」——同一條
+        學習被三期各自驗證過會有三列，數列數會膨風。RED first：今天會是 3。"""
+        bi.create_learning_ledger_entry(
+            self.conn, self.brand["id"], learning_text="早晨素材有效", applicability_scope="品牌",
+            created_by="tester", actor="tester", source_track="ads", sample_size="10")
+        bi.create_learning_ledger_entry(
+            self.conn, self.brand["id"], learning_text="早晨素材有效（實測素材）",
+            applicability_scope="品牌", created_by="tester", actor="tester",
+            source_track="ads", sample_size="20")
+        bi.create_learning_ledger_entry(
+            self.conn, self.brand["id"], learning_text="早晨素材有效", applicability_scope="品牌",
+            created_by="tester", actor="tester", source_track="ads", sample_size="30")
+
+        result = cockpit_extras.get(self.conn, self.brand["id"], self.cycle["id"])
+        values = {card["key"]: card["value"] for card in result["legacy"]}
+        self.assertEqual(values["wisdom"], 1)
+
     def test_http_endpoint_and_done_route_keep_task_in_current_cycle(self):
         extras = self.client.get(f"/api/campaigns/brands/{self.brand['id']}/cockpit-extras")
         self.assertEqual(extras.status_code, 200)

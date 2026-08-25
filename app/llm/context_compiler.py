@@ -32,6 +32,7 @@ from typing import Optional
 
 from app.brand_intelligence import personas
 from app.brand_intelligence import repository as repo
+from app.brand_intelligence.repository_learning_text import collapse_learnings
 from app.core import rule_cards
 
 _UNVALIDATED_STATUSES = ("proposed", "testing")
@@ -195,14 +196,31 @@ def format_claims(claims: list) -> list:
     return blocks
 
 
-def _learning_source_note(entry: dict, *, current_track: str) -> str:
-    """附來源期別、樣本數（決策 0030 第 11 點）與跨分支來源（A4）；缺值時省略該項而非
-    顯示空白。來源分支只在「跟目前分支不同」時才附註——本分支自己的學習不必多此一舉。"""
+def _learning_source_note(entry: dict, *, current_track: str, learnings_by_id: dict) -> str:
+    """附來源期別、對照樣本（決策 0030 第 11 點）與跨分支來源（A4）；缺值時省略該項而非
+    顯示空白。來源分支只在「跟目前分支不同」時才附註——本分支自己的學習不必多此一舉。
+
+    `entry` 是 `collapse_learnings()` 收斂過的代表列（ADR 0026 決定 1、4、5）：
+    `member_ids` 超過一筆時，來源期別改列這組全部原始列各自的 `source_cycle_id`
+    （去重、去 NULL，`learnings_by_id` 負責把 member id 換回原始列）；
+    `verified_cycles` 超過 1 時多附一段「已加強：N 期各自驗證過」。
+    """
     parts = []
-    if entry.get("source_cycle_id"):
+    member_ids = entry["member_ids"]
+    if len(member_ids) > 1:
+        cycle_ids = []
+        for member_id in member_ids:
+            source_cycle_id = learnings_by_id[member_id].get("source_cycle_id")
+            if source_cycle_id and source_cycle_id not in cycle_ids:
+                cycle_ids.append(source_cycle_id)
+        if cycle_ids:
+            parts.append(f"來源期別 {'／'.join(cycle_ids)}")
+    elif entry.get("source_cycle_id"):
         parts.append(f"來源期別 {entry['source_cycle_id']}")
-    if entry.get("sample_size"):
-        parts.append(f"樣本數 {entry['sample_size']}")
+    if entry["sample_sizes"]:
+        parts.append(f"對照樣本 {'／'.join(entry['sample_sizes'])}")
+    if entry["verified_cycles"] > 1:
+        parts.append(f"已加強：{entry['verified_cycles']} 期各自驗證過")
     if entry.get("source_track") and entry["source_track"] != current_track:
         parts.append(f"來源分支：{entry['source_track']}")
     return f"（{'，'.join(parts)}）" if parts else ""
@@ -249,8 +267,13 @@ def compile(conn: sqlite3.Connection, brand_id: str, product_id: Optional[str] =
         claims = [c for c in repo.list_claims_for_brand(conn, brand_id) if c["product_id"] is None]
     rules, _overflow_rules = _select_rules_for_prompt(conn, brand_id, rules_all)
 
-    learnings = repo.list_learnings_for_prompt(
+    learnings_raw = repo.list_learnings_for_prompt(
         conn, brand_id, track=track, product_id=product_id, include_cross_track=include_cross_track)
+    # 同一條學習被不同期別各自驗證過會有多列，讀回後先收斂成一條再進 prompt
+    # （ADR 0026 決定 1、4、5）；`learnings_by_id` 留著給 `_learning_source_note()`
+    # 查每個 member 的 `source_cycle_id`。
+    learnings = collapse_learnings(learnings_raw)
+    learnings_by_id = {l["id"]: l for l in learnings_raw}
     all_hypotheses, unvalidated_hypotheses = _hypotheses_for_scope(conn, brand_id, product_id)
     hypotheses, _excluded_hypotheses = _bound_hypotheses(all_hypotheses, unvalidated_hypotheses)
 
@@ -289,7 +312,8 @@ def compile(conn: sqlite3.Connection, brand_id: str, product_id: Optional[str] =
         sections.append(
             "【已驗證的學習】（來源：learning_ledger，經判讀驗證且經人確認）\n"
             + "\n".join(
-                f"- {l['learning_text']}{_learning_source_note(l, current_track=track)}"
+                f"- {l['learning_text']}"
+                f"{_learning_source_note(l, current_track=track, learnings_by_id=learnings_by_id)}"
                 for l in learnings
             )
         )
