@@ -1,46 +1,28 @@
 # -*- coding: utf-8 -*-
 """票 21：品牌層投放自動度規則卡與 JSON API。"""
 
-import atexit
-import os
-import shutil
-import tempfile
 import unittest
-from pathlib import Path
 
-_tmpdir = tempfile.mkdtemp(prefix="brand_os_autonomy_api_")
+from fastapi.testclient import TestClient
 
-from fastapi.testclient import TestClient  # noqa: E402
-
-import app.main as main  # noqa: E402
-from app.brand_intelligence import repository as bi_repo  # noqa: E402
-from app.core import db, rule_cards  # noqa: E402
-
-
-
-def _cleanup():
-    try:
-        main.conn.close()
-    except Exception:
-        pass
-    shutil.rmtree(_tmpdir, ignore_errors=True)
-
-
-atexit.register(_cleanup)
+import app.main as main
+import app.shared.web as web
+from app.brand_intelligence import repository as bi_repo
+from app.core import db, rule_cards
 
 
 class AutonomyRuleCardTest(unittest.TestCase):
     def setUp(self):
-        self._db_dir = tempfile.TemporaryDirectory()
-        self.conn = db.connect_and_migrate(Path(self._db_dir.name) / "test.db")
-
-    def tearDown(self):
-        self.conn.close()
-        self._db_dir.cleanup()
+        self.conn = db.current()
 
     def _audit_rows(self):
+        # entity_id 篩死 autonomy.mode，不只篩 entity_type='rule_card_value'：ADR 0027
+        # 起這個模組（檔案）的兩個 TestCase 共用同一個 schema，
+        # AutonomyRuleCardApiTest 也會寫 rule_card_value 的稽核（不同 brand_id、不同
+        # card_key），只篩 entity_type 會把它們也算進來。
         return [dict(row) for row in self.conn.execute(
-            "SELECT * FROM audit_log WHERE entity_type = 'rule_card_value' ORDER BY id"
+            "SELECT * FROM audit_log WHERE entity_type = 'rule_card_value'"
+            " AND entity_id = 'autonomy.mode' ORDER BY id"
         ).fetchall()]
 
     def test_default_is_conservative_and_card_has_single_mode_field(self):
@@ -58,13 +40,14 @@ class AutonomyRuleCardTest(unittest.TestCase):
         rows = self._audit_rows()
         self.assertEqual(len(rows), 2)
         self.assertEqual(rows[-1]["entity_id"], "autonomy.mode")
-        self.assertEqual(rows[-1]["after_json"], '{"value": 1.0}')
+        # jsonb 欄位，psycopg 已自動解碼成 dict，不是 JSON 字串
+        self.assertEqual(rows[-1]["after_json"], {"value": 1.0})
 
 
 class AutonomyRuleCardApiTest(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(main.app)
-        brand = bi_repo.create_brand(main.conn, name="自動度驗收品牌", client_name=None, actor="測試員")
+        brand = bi_repo.create_brand(web.conn, name="自動度驗收品牌", client_name=None, actor="測試員")
         self.brand_id = brand["id"]
 
     def test_post_accepts_both_positive_mode_codes(self):

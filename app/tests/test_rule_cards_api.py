@@ -7,33 +7,15 @@ app/tests/test_settings_hub.py 的暫存 DB／TestClient 慣例，另外比對 J
 型別（含 `customized` 旗標）。
 """
 
-import atexit
-import os
-import shutil
-import tempfile
 import unittest
-from pathlib import Path
 
-_tmpdir = tempfile.mkdtemp(prefix="brand_os_rule_cards_api_")
+from fastapi.testclient import TestClient
 
-from fastapi.testclient import TestClient  # noqa: E402
-
-import app.main as main  # noqa: E402
-from app.ads import routes_settings as ads_routes_settings  # noqa: E402
-from app.brand_intelligence import repository as bi_repo  # noqa: E402
-from app.core import rule_cards  # noqa: E402
-
-
-
-def _cleanup():
-    try:
-        main.conn.close()
-    except Exception:
-        pass
-    shutil.rmtree(_tmpdir, ignore_errors=True)
-
-
-atexit.register(_cleanup)
+import app.main as main
+import app.shared.web as web
+from app.ads import routes_settings as ads_routes_settings
+from app.brand_intelligence import repository as bi_repo
+from app.core import rule_cards
 
 ACTOR = "測試員"
 
@@ -41,7 +23,7 @@ ACTOR = "測試員"
 class RuleCardsApiTest(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(main.app)
-        self.brand = bi_repo.create_brand(main.conn, name="虛構北風羊毛", client_name=None, actor=ACTOR)
+        self.brand = bi_repo.create_brand(web.conn, name="虛構北風羊毛", client_name=None, actor=ACTOR)
         self.bid = self.brand["id"]
 
     def test_get_shape_matches_contract_type(self):
@@ -71,14 +53,14 @@ class RuleCardsApiTest(unittest.TestCase):
         )
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(
-            rule_cards.get_value(main.conn, self.bid, "ad_creative_fatigue", "cold_warning"), 3.0)
+            rule_cards.get_value(web.conn, self.bid, "ad_creative_fatigue", "cold_warning"), 3.0)
         card = resp.json()["data"]
         field = next(f for f in card["fields"] if f["key"] == "cold_warning")
         self.assertTrue(field["customized"])
         self.assertEqual(field["value"], 3.0)
 
     def test_save_missing_field_gives_human_error_and_keeps_others_unchanged(self):
-        before = rule_cards.get_value(main.conn, self.bid, "ad_creative_fatigue", "cold_danger")
+        before = rule_cards.get_value(web.conn, self.bid, "ad_creative_fatigue", "cold_danger")
         resp = self.client.post(
             f"/api/settings/rule-cards/brands/{self.bid}/ad_creative_fatigue",
             json={"cold_warning": 3},  # 缺其餘 5 個欄位：整卡一起送出，缺一個就整卡擋下
@@ -86,7 +68,7 @@ class RuleCardsApiTest(unittest.TestCase):
         self.assertEqual(resp.status_code, 400)
         self.assertIn("field_errors", resp.json())
         self.assertEqual(
-            rule_cards.get_value(main.conn, self.bid, "ad_creative_fatigue", "cold_danger"), before)
+            rule_cards.get_value(web.conn, self.bid, "ad_creative_fatigue", "cold_danger"), before)
 
     def test_save_non_positive_number_rejected(self):
         resp = self.client.post(
@@ -101,18 +83,18 @@ class RuleCardsApiTest(unittest.TestCase):
         self.assertEqual(resp.status_code, 404)
 
     def test_reset_restores_default(self):
-        rule_cards.set_value(main.conn, self.bid, "pacing", "deviation_threshold_ratio", 0.5, actor=ACTOR)
+        rule_cards.set_value(web.conn, self.bid, "pacing", "deviation_threshold_ratio", 0.5, actor=ACTOR)
         resp = self.client.post(f"/api/settings/rule-cards/brands/{self.bid}/pacing/reset")
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(
-            rule_cards.get_value(main.conn, self.bid, "pacing", "deviation_threshold_ratio"), 0.15)
+            rule_cards.get_value(web.conn, self.bid, "pacing", "deviation_threshold_ratio"), 0.15)
         field = resp.json()["data"]["fields"][0]
         self.assertFalse(field["customized"])
         self.assertEqual(field["value"], 0.15)
 
     def test_brand_isolation(self):
         """A 品牌改的值不影響 B 品牌透過 API 讀到的現值（沿用 rule_cards 既有分品牌行為）。"""
-        brand_b = bi_repo.create_brand(main.conn, name="虛構深夜廚房", client_name=None, actor=ACTOR)
+        brand_b = bi_repo.create_brand(web.conn, name="虛構深夜廚房", client_name=None, actor=ACTOR)
         self.client.post(
             f"/api/settings/rule-cards/brands/{self.bid}/pacing",
             json={"deviation_threshold_ratio": 0.9},
@@ -128,9 +110,9 @@ class RuleCardsApiTest(unittest.TestCase):
             "pacing", {"deviation_threshold_ratio": "0.3"})
         self.assertEqual(field_errors, {})
         for field_key, value in parsed.items():
-            rule_cards.set_value(main.conn, self.bid, "pacing", field_key, value, ACTOR)
+            rule_cards.set_value(web.conn, self.bid, "pacing", field_key, value, ACTOR)
         self.assertEqual(
-            rule_cards.get_value(main.conn, self.bid, "pacing", "deviation_threshold_ratio"), 0.3)
+            rule_cards.get_value(web.conn, self.bid, "pacing", "deviation_threshold_ratio"), 0.3)
 
 
 if __name__ == "__main__":

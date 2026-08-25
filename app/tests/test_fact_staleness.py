@@ -5,16 +5,10 @@
 門檻內、以及 pending 事實一律不提示。
 """
 
-import os
-import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 
-# 先備好暫存 DB 的環境變數，才能 import app.main（它在 import 當下就會連線＋跑 migrations）。
-_tmpdir = tempfile.mkdtemp(prefix="brand_os_fact_staleness_")
-
-import app.main as main  # noqa: E402
+import app.shared.web as web
 
 
 class FactStalenessTest(unittest.TestCase):
@@ -24,15 +18,15 @@ class FactStalenessTest(unittest.TestCase):
 
     def test_over_threshold_shows_hint(self):
         fact = self._confirmed_fact(400)
-        self.assertEqual(main.fact_staleness(fact), "上次確認 13 個月前")
+        self.assertEqual(web.fact_staleness(fact), "上次確認 13 個月前")
 
     def test_within_threshold_no_hint(self):
         fact = self._confirmed_fact(90)
-        self.assertIsNone(main.fact_staleness(fact))
+        self.assertIsNone(web.fact_staleness(fact))
 
     def test_pending_fact_no_hint(self):
         fact = {"status": "pending", "confirmed_at": None}
-        self.assertIsNone(main.fact_staleness(fact))
+        self.assertIsNone(web.fact_staleness(fact))
 
 
 if __name__ == "__main__":

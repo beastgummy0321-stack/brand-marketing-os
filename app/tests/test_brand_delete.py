@@ -7,10 +7,7 @@
 3. 別的品牌一列都不能少（刪除照樣受品牌隔離約束）。
 """
 
-import json
-import tempfile
 import unittest
-from pathlib import Path
 
 from app.brand_intelligence import repository as repo
 from app.core import db
@@ -21,12 +18,7 @@ ALL_TABLES = [t for t, _ in repo.BRAND_CHILD_TABLES] + ["intake_item", "intake_d
 
 class BrandDeleteTest(unittest.TestCase):
     def setUp(self):
-        self._tmpdir = tempfile.TemporaryDirectory()
-        self.conn = db.connect_and_migrate(Path(self._tmpdir.name) / "test.db")
-
-    def tearDown(self):
-        self.conn.close()
-        self._tmpdir.cleanup()
+        self.conn = db.current()
 
     def _seed_brand(self, name):
         """一個品牌，每張表都塞一列，才驗得出「刪乾淨」。"""
@@ -71,7 +63,7 @@ class BrandDeleteTest(unittest.TestCase):
 
     def _row_counts(self, brand_id):
         return {t: self.conn.execute(
-            f"SELECT COUNT(*) FROM {t} WHERE brand_id = ?", (brand_id,)).fetchone()[0]
+            f"SELECT COUNT(*) AS n FROM {t} WHERE brand_id = %s", (brand_id,)).fetchone()["n"]
             for t in ALL_TABLES}
 
     def _delete(self, brand_id):
@@ -108,39 +100,12 @@ class BrandDeleteTest(unittest.TestCase):
 
         row = self.conn.execute(
             "SELECT * FROM audit_log WHERE entity_type = 'brand' AND action = 'delete' "
-            "AND entity_id = ?", (bid,)).fetchone()
+            "AND entity_id = %s", (bid,)).fetchone()
         self.assertIsNotNone(row)
-        before = json.loads(row["before_json"])
+        before = row["before_json"]  # jsonb 欄位，psycopg 已自動解碼成 dict，不必 json.loads
         self.assertEqual(before["name"], "留痕品牌（刪除測試）")
         self.assertEqual(before["deleted_counts"]["產品"], 1)
         self.assertEqual(row["actor"], "測試員")
-
-    def test_refuses_when_connection_is_mid_transaction(self):
-        """共用連線上有人寫到一半還沒 commit 時，刪除要當場擋下，不能沖銷對方的資料。
-
-        delete_brand() 為了讓 PRAGMA defer_foreign_keys 生效必須明確 BEGIN，而這條連線
-        是全 app 共用的、背景執行緒也在用。硬闖的話 BEGIN 會拋錯、接著 except 的
-        rollback() 會把對方還沒 commit 的資料一起沖掉，對方之後 commit() 還不會報錯
-        ——資料靜默消失。所以寧可擋下來請人重試。
-        """
-        gone = self._seed_brand("待刪品牌（交易衝突測試）")
-        repo.update_brand(self.conn, gone, name="待刪品牌（交易衝突測試）",
-                           client_name="測試客戶", status="archived", actor="測試員")
-        victim = repo.create_brand(self.conn, name="無辜品牌（交易衝突測試）",
-                                    client_name="原始值", actor="測試員")["id"]
-
-        # 模擬背景執行緒：寫了東西但還沒 commit
-        self.conn.execute("UPDATE brand SET client_name = ? WHERE id = ?",
-                           ("背景寫到一半的新值", victim))
-        with self.assertRaises(RuntimeError):
-            repo.delete_brand(self.conn, gone, actor="測試員")
-
-        self.conn.commit()  # 背景執行緒以為自己成功了
-        self.assertEqual(
-            self.conn.execute("SELECT client_name FROM brand WHERE id = ?",
-                               (victim,)).fetchone()[0],
-            "背景寫到一半的新值", "不相干的資料被 rollback 沖銷掉了")
-        self.assertIsNotNone(repo.get_brand(self.conn, gone), "刪除被擋下，品牌應該還在")
 
     def test_other_brands_untouched(self):
         gone = self._seed_brand("要刪的品牌（隔離測試）")

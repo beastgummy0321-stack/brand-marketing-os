@@ -8,10 +8,7 @@
 4. 封存 → 恢復使用來回不留副作用。
 """
 
-import json
-import tempfile
 import unittest
-from pathlib import Path
 
 from app.brand_intelligence import repository as repo
 from app.core import db
@@ -19,12 +16,7 @@ from app.core import db
 
 class ProductDeleteTest(unittest.TestCase):
     def setUp(self):
-        self._tmpdir = tempfile.TemporaryDirectory()
-        self.conn = db.connect_and_migrate(Path(self._tmpdir.name) / "test.db")
-
-    def tearDown(self):
-        self.conn.close()
-        self._tmpdir.cleanup()
+        self.conn = db.current()
 
     def _seed_product(self, brand_id, name):
         """一個產品，每張子表都塞一列，才驗得出「刪乾淨」。"""
@@ -52,7 +44,7 @@ class ProductDeleteTest(unittest.TestCase):
 
     def _row_counts(self, product_id):
         return {t: self.conn.execute(
-            f"SELECT COUNT(*) FROM {t} WHERE product_id = ?", (product_id,)).fetchone()[0]
+            f"SELECT COUNT(*) AS n FROM {t} WHERE product_id = %s", (product_id,)).fetchone()["n"]
             for t, _label in repo.PRODUCT_CHILD_TABLES}
 
     def test_active_product_cannot_be_deleted(self):
@@ -79,9 +71,10 @@ class ProductDeleteTest(unittest.TestCase):
     def test_failure_midway_rolls_back_everything(self):
         """刪除中途出錯要整批回捲：產品與所有子資料原封不動，也不留刪除稽核。
 
-        app 全程共用同一條 DB 連線，不 commit 不等於自動回捲——沒有明確 rollback 的話，
-        懸著的 DELETE 會在下一個不相干的請求 commit 時被一起沖進 DB，而且沒有紀錄。
-        這條測試守的就是那個明確的 rollback。
+        ADR 0027：一條連線一個 request，不 commit 不等於自動回捲——沒有明確 rollback
+        的話，懸著的 DELETE 會在這條連線被歸還連線池、下次借出時才被沖掉，而且沒有
+        紀錄。這條測試守的就是那個明確的 rollback（見 repository.py delete_product()
+        的 try/except）。
         """
         bid = repo.create_brand(self.conn, name="測試皂坊（產品回捲）", client_name="測試客戶",
                                  actor="測試員")["id"]
@@ -103,37 +96,7 @@ class ProductDeleteTest(unittest.TestCase):
         self.assertEqual(self._row_counts(pid), before, "子資料應該一列都沒少")
         self.assertIsNone(self.conn.execute(
             "SELECT 1 FROM audit_log WHERE entity_type = 'product' AND action = 'delete' "
-            "AND entity_id = ?", (pid,)).fetchone(), "不該留下刪除稽核")
-
-    def test_refuses_when_connection_is_mid_transaction(self):
-        """共用連線上有人寫到一半還沒 commit 時，刪除要當場擋下，不能沖銷對方的資料
-        （比照 test_brand_delete.py 的 test_refuses_when_connection_is_mid_transaction）。
-
-        delete_product() 為了讓 PRAGMA defer_foreign_keys 生效必須明確 BEGIN，而這條連線
-        是全 app 共用的、背景執行緒也在用。硬闖的話 BEGIN 會拋錯、接著 except 的
-        rollback() 會把對方還沒 commit 的資料一起沖掉，對方之後 commit() 還不會報錯
-        ——資料靜默消失。所以寧可擋下來請人重試。
-        """
-        bid = repo.create_brand(self.conn, name="測試皂坊（產品交易衝突測試）",
-                                 client_name="測試客戶", actor="測試員")["id"]
-        gone = self._seed_product(bid, "待刪產品（交易衝突測試）")
-        repo.update_product(self.conn, bid, gone, name="待刪產品（交易衝突測試）",
-                             status="archived", actor="測試員")
-        victim = repo.create_brand(self.conn, name="無辜品牌（產品交易衝突測試）",
-                                    client_name="原始值", actor="測試員")["id"]
-
-        # 模擬背景執行緒：寫了東西但還沒 commit
-        self.conn.execute("UPDATE brand SET client_name = ? WHERE id = ?",
-                           ("背景寫到一半的新值", victim))
-        with self.assertRaises(RuntimeError):
-            repo.delete_product(self.conn, bid, gone, actor="測試員")
-
-        self.conn.commit()  # 背景執行緒以為自己成功了
-        self.assertEqual(
-            self.conn.execute("SELECT client_name FROM brand WHERE id = ?",
-                               (victim,)).fetchone()[0],
-            "背景寫到一半的新值", "不相干的資料被 rollback 沖銷掉了")
-        self.assertIsNotNone(repo.get_product(self.conn, bid, gone), "刪除被擋下，產品應該還在")
+            "AND entity_id = %s", (pid,)).fetchone(), "不該留下刪除稽核")
 
     def test_delete_leaves_audit_trail(self):
         bid = repo.create_brand(self.conn, name="測試皂坊（產品刪除3）", client_name="測試客戶",
@@ -145,9 +108,9 @@ class ProductDeleteTest(unittest.TestCase):
 
         row = self.conn.execute(
             "SELECT * FROM audit_log WHERE entity_type = 'product' AND action = 'delete' "
-            "AND entity_id = ?", (pid,)).fetchone()
+            "AND entity_id = %s", (pid,)).fetchone()
         self.assertIsNotNone(row)
-        before = json.loads(row["before_json"])
+        before = row["before_json"]  # jsonb 欄位，psycopg 已自動解碼成 dict，不必 json.loads
         self.assertEqual(before["name"], "留痕產品（刪除測試）")
         self.assertEqual(before["deleted_counts"]["產品事實"], 1)
         self.assertEqual(row["actor"], "測試員")
@@ -162,8 +125,8 @@ class ProductDeleteTest(unittest.TestCase):
                           severity="soft", actor="測試員")
         before_kept = self._row_counts(kept)
         before_brand_rules = self.conn.execute(
-            "SELECT COUNT(*) FROM rule WHERE brand_id = ? AND product_id IS NULL", (bid,)
-        ).fetchone()[0]
+            "SELECT COUNT(*) AS n FROM rule WHERE brand_id = %s AND product_id IS NULL", (bid,)
+        ).fetchone()["n"]
 
         repo.update_product(self.conn, bid, gone, name="要刪的產品（隔離測試）",
                              status="archived", actor="測試員")
@@ -172,8 +135,8 @@ class ProductDeleteTest(unittest.TestCase):
         self.assertEqual(self._row_counts(kept), before_kept)
         self.assertIsNotNone(repo.get_product(self.conn, bid, kept))
         after_brand_rules = self.conn.execute(
-            "SELECT COUNT(*) FROM rule WHERE brand_id = ? AND product_id IS NULL", (bid,)
-        ).fetchone()[0]
+            "SELECT COUNT(*) AS n FROM rule WHERE brand_id = %s AND product_id IS NULL", (bid,)
+        ).fetchone()["n"]
         self.assertEqual(after_brand_rules, before_brand_rules)
 
     def test_archive_and_restore_round_trip(self):

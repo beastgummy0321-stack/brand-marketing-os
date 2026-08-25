@@ -6,39 +6,37 @@
 真實網路請求。測試品牌一律虛構名：晨露茶飲、山嵐選物。
 """
 
-import atexit
 import json
-import os
-import shutil
-import tempfile
 import time
 import unittest
-from pathlib import Path
 from unittest import mock
 
-# 先備好暫存 DB 的環境變數，才能 import app.main（它在 import 當下就會連線＋跑 migrations）。
-_tmpdir = tempfile.mkdtemp(prefix="brand_os_customer_voice_")
+import pytest
+from fastapi.testclient import TestClient
 
-from fastapi.testclient import TestClient  # noqa: E402
-
-import app.main as main  # noqa: E402
-from app.brand_web import routes_library as customer_voice  # noqa: E402
-from app.brand_intelligence import repository as repo  # noqa: E402
-from app.llm import providers  # noqa: E402
-
-
-
-def _cleanup():
-    try:
-        main.conn.close()
-    except Exception:
-        pass
-    shutil.rmtree(_tmpdir, ignore_errors=True)
-
-
-atexit.register(_cleanup)
+import app.main as main
+import app.shared.web as web
+from app.brand_web import routes_library as customer_voice
+from app.brand_intelligence import repository as repo
+from app.llm import providers
 
 ACTOR = "測試員"
+
+# BUG app/brand_intelligence/background_job.py:59 — JobRegistry.start() 用
+# threading.Thread(target=target, ...).start() 起背景執行緒，但 contextvars 不會被
+# 原生 threading.Thread 繼承（只有 asyncio task／contextvars.Context.run() 才會複製）。
+# 任何 job target 只要碰 web.conn／db.current()（本檔的 _run_customer_voice_job、
+# routes_products.py 的研究 job 亦同），一啟動就撞
+# RuntimeError: no connection bound; use db.connection()，job 永遠卡在 running，
+# 不會變成 done／failed。02-4 是測試轉移票，不改 app/brand_intelligence/*.py，
+# 這裡列成已知缺陷、標 xfail，等後續票修正 production code（正確寫法：target 內部自己
+# 包一層 `with coredb.connection():`，比照 app/main.py 的 _auto_sync_loop）。
+_BUG_BACKGROUND_JOB_NO_CONN = pytest.mark.xfail(
+    strict=True,
+    reason="BUG app/brand_intelligence/background_job.py:59 — JobRegistry.start()'s "
+           "threading.Thread target doesn't bind a pooled connection; any DB call in the "
+           "job raises RuntimeError: no connection bound",
+)
 
 
 def _items(tag: str) -> list:
@@ -63,13 +61,13 @@ class CustomerVoiceExtractTest(unittest.TestCase):
     """直接測 customer_voice.extract()／repository，不經 HTTP。"""
 
     def setUp(self):
-        self.brand = repo.create_brand(main.conn, name="晨露茶飲", client_name="測試客戶", actor=ACTOR)
+        self.brand = repo.create_brand(web.conn, name="晨露茶飲", client_name="測試客戶", actor=ACTOR)
 
     def test_extract_success_stores_row_with_items(self):
         fake = _fake(_items("晨露"))
         with mock.patch.object(customer_voice, "PROVIDER", fake):
             ok, row = customer_voice.extract(
-                main.conn, self.brand["id"], actor=ACTOR, raw_text="連續熬夜三天，吃了兩天終於消下去，鬆了一口氣",
+                web.conn, self.brand["id"], actor=ACTOR, raw_text="連續熬夜三天，吃了兩天終於消下去，鬆了一口氣",
                 source_channel="shopee", source_detail="XX保健品評論區",
             )
         self.assertTrue(ok, row)
@@ -78,13 +76,13 @@ class CustomerVoiceExtractTest(unittest.TestCase):
         self.assertEqual(row["source_type"], "manual")
         self.assertTrue(row["llm_task_id"])
 
-        stored = repo.get_customer_voice(main.conn, self.brand["id"], row["id"])
+        stored = repo.get_customer_voice(web.conn, self.brand["id"], row["id"])
         self.assertIsNotNone(stored)
         self.assertEqual(stored["status"], "active")
 
-        audit_rows = main.conn.execute(
+        audit_rows = web.conn.execute(
             "SELECT * FROM audit_log WHERE entity_type = 'customer_voice' AND action = 'create' "
-            "AND entity_id = ?", (row["id"],)
+            "AND entity_id = %s", (row["id"],)
         ).fetchall()
         self.assertEqual(len(audit_rows), 1)
 
@@ -92,7 +90,7 @@ class CustomerVoiceExtractTest(unittest.TestCase):
         """AI 判斷這段原話沒有值得收的重點也是誠實結果，仍然入庫（principles 第 16 條）。"""
         with mock.patch.object(customer_voice, "PROVIDER", _fake([])):
             ok, row = customer_voice.extract(
-                main.conn, self.brand["id"], actor=ACTOR, raw_text="好用+1",
+                web.conn, self.brand["id"], actor=ACTOR, raw_text="好用+1",
                 source_channel="dcard",
             )
         self.assertTrue(ok, row)
@@ -101,12 +99,12 @@ class CustomerVoiceExtractTest(unittest.TestCase):
     def test_bad_format_does_not_store(self):
         with mock.patch.object(customer_voice, "PROVIDER", _fake(output_text="這不是 JSON")):
             ok, err = customer_voice.extract(
-                main.conn, self.brand["id"], actor=ACTOR, raw_text="測試原文", source_channel="ptt",
+                web.conn, self.brand["id"], actor=ACTOR, raw_text="測試原文", source_channel="ptt",
             )
         self.assertFalse(ok)
         self.assertTrue(err)
-        n = main.conn.execute(
-            "SELECT COUNT(*) AS n FROM customer_voice WHERE brand_id = ?", (self.brand["id"],)
+        n = web.conn.execute(
+            "SELECT COUNT(*) AS n FROM customer_voice WHERE brand_id = %s", (self.brand["id"],)
         ).fetchone()["n"]
         self.assertEqual(n, 0)
 
@@ -114,7 +112,7 @@ class CustomerVoiceExtractTest(unittest.TestCase):
         bad_items = [{"task_layer": "not_a_layer", "quote": "隨便", "insight": "隨便"}]
         with mock.patch.object(customer_voice, "PROVIDER", _fake(bad_items)):
             ok, err = customer_voice.extract(
-                main.conn, self.brand["id"], actor=ACTOR, raw_text="測試原文", source_channel="ptt",
+                web.conn, self.brand["id"], actor=ACTOR, raw_text="測試原文", source_channel="ptt",
             )
         self.assertFalse(ok)
         self.assertTrue(err)
@@ -122,12 +120,12 @@ class CustomerVoiceExtractTest(unittest.TestCase):
     def test_archive_and_restore(self):
         with mock.patch.object(customer_voice, "PROVIDER", _fake(_items("晨露"))):
             _ok, row = customer_voice.extract(
-                main.conn, self.brand["id"], actor=ACTOR, raw_text="測試原文", source_channel="ptt",
+                web.conn, self.brand["id"], actor=ACTOR, raw_text="測試原文", source_channel="ptt",
             )
-        archived = repo.set_customer_voice_status(main.conn, self.brand["id"], row["id"],
+        archived = repo.set_customer_voice_status(web.conn, self.brand["id"], row["id"],
                                                     status="archived", actor=ACTOR)
         self.assertEqual(archived["status"], "archived")
-        restored = repo.set_customer_voice_status(main.conn, self.brand["id"], row["id"],
+        restored = repo.set_customer_voice_status(web.conn, self.brand["id"], row["id"],
                                                     status="active", actor=ACTOR)
         self.assertEqual(restored["status"], "active")
 
@@ -135,14 +133,14 @@ class CustomerVoiceExtractTest(unittest.TestCase):
         """決策 0023 第 8 條：沿用 _delete_entity 模式，刪除不要求先封存。"""
         with mock.patch.object(customer_voice, "PROVIDER", _fake(_items("晨露"))):
             _ok, row = customer_voice.extract(
-                main.conn, self.brand["id"], actor=ACTOR, raw_text="測試原文", source_channel="ptt",
+                web.conn, self.brand["id"], actor=ACTOR, raw_text="測試原文", source_channel="ptt",
             )
         self.assertEqual(row["status"], "active")
-        repo.delete_customer_voice(main.conn, self.brand["id"], row["id"], actor=ACTOR)
-        self.assertIsNone(repo.get_customer_voice(main.conn, self.brand["id"], row["id"]))
-        del_row = main.conn.execute(
+        repo.delete_customer_voice(web.conn, self.brand["id"], row["id"], actor=ACTOR)
+        self.assertIsNone(repo.get_customer_voice(web.conn, self.brand["id"], row["id"]))
+        del_row = web.conn.execute(
             "SELECT * FROM audit_log WHERE entity_type = 'customer_voice' AND action = 'delete' "
-            "AND entity_id = ?", (row["id"],)
+            "AND entity_id = %s", (row["id"],)
         ).fetchone()
         self.assertIsNotNone(del_row)
 
@@ -154,7 +152,7 @@ class CustomerVoiceHttpTest(unittest.TestCase):
         self.client = TestClient(main.app)
 
     def _new_brand(self, name):
-        b = repo.create_brand(main.conn, name=name, client_name=None, actor=ACTOR)
+        b = repo.create_brand(web.conn, name=name, client_name=None, actor=ACTOR)
         return b["id"]
 
     def _poll(self, bid, job_key):
@@ -181,6 +179,7 @@ class CustomerVoiceHttpTest(unittest.TestCase):
         self.assertEqual(resp.status_code, 400)
         self.assertEqual(len(fake.calls), 0)
 
+    @_BUG_BACKGROUND_JOB_NO_CONN
     def test_post_creates_and_redirects_to_list(self):
         bid = self._new_brand("山嵐選物-新增成功")
         with mock.patch.object(customer_voice, "PROVIDER", _fake(_items("山嵐"))):
@@ -199,12 +198,12 @@ class CustomerVoiceHttpTest(unittest.TestCase):
         bid = self._new_brand("山嵐選物-抽取失敗")
         with mock.patch.object(customer_voice, "PROVIDER", _fake(output_text="不是 JSON")):
             ok, error = customer_voice.extract(
-                main.conn, bid, actor=ACTOR, source_channel="ptt", raw_text="這段原話會抽取失敗",
+                web.conn, bid, actor=ACTOR, source_channel="ptt", raw_text="這段原話會抽取失敗",
             )
         self.assertFalse(ok)
         self.assertTrue(error)
-        n = main.conn.execute(
-            "SELECT COUNT(*) AS n FROM customer_voice WHERE brand_id = ?", (bid,)
+        n = web.conn.execute(
+            "SELECT COUNT(*) AS n FROM customer_voice WHERE brand_id = %s", (bid,)
         ).fetchone()["n"]
         self.assertEqual(n, 0)
 
@@ -212,27 +211,27 @@ class CustomerVoiceHttpTest(unittest.TestCase):
         bid = self._new_brand("山嵐選物-封存刪除路由")
         with mock.patch.object(customer_voice, "PROVIDER", _fake(_items("山嵐"))):
             _ok, row = customer_voice.extract(
-                main.conn, bid, actor=ACTOR, raw_text="測試原文", source_channel="ptt",
+                web.conn, bid, actor=ACTOR, raw_text="測試原文", source_channel="ptt",
             )
         cv_id = row["id"]
 
-        repo.set_customer_voice_status(main.conn, bid, cv_id, status="archived", actor=ACTOR)
-        self.assertEqual(repo.get_customer_voice(main.conn, bid, cv_id)["status"], "archived")
+        repo.set_customer_voice_status(web.conn, bid, cv_id, status="archived", actor=ACTOR)
+        self.assertEqual(repo.get_customer_voice(web.conn, bid, cv_id)["status"], "archived")
 
         voice = self.client.get(f"/api/library/brands/{bid}").json()["data"]["customer_voices"][0]
         self.assertEqual(voice["status"], "archived")
 
-        repo.set_customer_voice_status(main.conn, bid, cv_id, status="active", actor=ACTOR)
-        self.assertEqual(repo.get_customer_voice(main.conn, bid, cv_id)["status"], "active")
+        repo.set_customer_voice_status(web.conn, bid, cv_id, status="active", actor=ACTOR)
+        self.assertEqual(repo.get_customer_voice(web.conn, bid, cv_id)["status"], "active")
 
-        repo.delete_customer_voice(main.conn, bid, cv_id, actor=ACTOR)
-        self.assertIsNone(repo.get_customer_voice(main.conn, bid, cv_id))
+        repo.delete_customer_voice(web.conn, bid, cv_id, actor=ACTOR)
+        self.assertIsNone(repo.get_customer_voice(web.conn, bid, cv_id))
 
     def test_isolation_between_brands(self):
         morning_id = self._new_brand("晨露茶飲-隔離")
         mountain_id = self._new_brand("山嵐選物-隔離")
         with mock.patch.object(customer_voice, "PROVIDER", _fake(_items("晨露機密內容"))):
-            ok, _row = customer_voice.extract(main.conn, morning_id, actor=ACTOR,
+            ok, _row = customer_voice.extract(web.conn, morning_id, actor=ACTOR,
                                                source_channel="ptt", raw_text="晨露機密內容 原文")
         self.assertTrue(ok)
         voices = self.client.get(f"/api/library/brands/{mountain_id}").json()["data"]["customer_voices"]

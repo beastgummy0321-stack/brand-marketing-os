@@ -6,39 +6,21 @@ build_product_handoff_prompt／parse_product_handoff_reply／run_product_handoff
 全程用 FakeProvider，不發任何真實網路請求。品牌／產品名一律虛構，絕不可用 Beast Gummy。
 """
 
-import atexit
 import json
 import os
-import shutil
-import tempfile
 import unittest
-from pathlib import Path
 from unittest import mock
 
-# 先備好暫存 DB 的環境變數，才能 import app.main（它在 import 當下就會連線＋跑 migrations）。
-_tmpdir = tempfile.mkdtemp(prefix="brand_os_product_handoff_")
+from fastapi.testclient import TestClient
 
-from fastapi.testclient import TestClient  # noqa: E402
-
-import app.main as main  # noqa: E402
-from app.brand_intelligence import repository as bi_repo  # noqa: E402
-from app.core import settings as coresettings  # noqa: E402
-from app.brand_web import product_ai_calls as product_ai  # noqa: E402
-from app.llm.providers import (  # noqa: E402
+import app.main as main
+import app.shared.web as web
+from app.brand_intelligence import repository as bi_repo
+from app.core import settings as coresettings
+from app.brand_web import product_ai_calls as product_ai
+from app.llm.providers import (
     MISSING_KEY_MESSAGE, AnthropicProvider, FakeProvider, ProviderResponse, Usage,
 )
-
-
-
-def _cleanup():
-    try:
-        main.conn.close()
-    except Exception:
-        pass
-    shutil.rmtree(_tmpdir, ignore_errors=True)
-
-
-atexit.register(_cleanup)
 
 ACTOR = "測試員"
 
@@ -67,16 +49,16 @@ _GARBLED = "這次調研有點趕，先口頭跟你講重點：單一品項、�
 class _BaseHandoffTest(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(main.app)
-        main.conn.execute("DELETE FROM app_setting")
-        main.conn.commit()
+        web.conn.execute("DELETE FROM app_setting")
+        web.conn.commit()
         self._envpatch = mock.patch.dict(os.environ, {}, clear=False)
         self._envpatch.start()
         os.environ.pop("ANTHROPIC_API_KEY", None)
         os.environ.pop("BRAND_OS_LLM_MODEL", None)
         self._orig_provider = product_ai.PROVIDER
-        self.brand = bi_repo.create_brand(main.conn, name="虛構茶研所", client_name="測試客戶", actor=ACTOR)
+        self.brand = bi_repo.create_brand(web.conn, name="虛構茶研所", client_name="測試客戶", actor=ACTOR)
         self.product_id = bi_repo.create_product(
-            main.conn, self.brand["id"], name="虛構回甘烏龍", actor=ACTOR
+            web.conn, self.brand["id"], name="虛構回甘烏龍", actor=ACTOR
         )["id"]
 
     def tearDown(self):
@@ -92,10 +74,10 @@ class _BaseHandoffTest(unittest.TestCase):
 
 class HandoffPageTest(_BaseHandoffTest):
     def test_handoff_api_returns_brand_and_product_facts_and_format_spec(self):
-        bi_repo.create_brand_fact(main.conn, self.brand["id"], actor=ACTOR, fact_type="positioning",
+        bi_repo.create_brand_fact(web.conn, self.brand["id"], actor=ACTOR, fact_type="positioning",
                                   label="單一產區直送定位", value="主打單一產區的烏龍與紅茶。",
                                   status="confirmed", confirmed_by=ACTOR)
-        bi_repo.create_product_fact(main.conn, self.brand["id"], self.product_id, actor=ACTOR,
+        bi_repo.create_product_fact(web.conn, self.brand["id"], self.product_id, actor=ACTOR,
                                     fact_type="產品線", label="既有規格", value="一包 150 公克。",
                                     status="pending")
         resp = self.client.get(self._handoff_url())
@@ -117,27 +99,27 @@ class HandoffPasteDirectParseTest(_BaseHandoffTest):
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(product_ai.PROVIDER.calls, [])  # 直接解析成功，完全不花錢
 
-        facts = bi_repo.list_product_facts(main.conn, self.brand["id"], self.product_id)
+        facts = bi_repo.list_product_facts(web.conn, self.brand["id"], self.product_id)
         self.assertEqual(len(facts), 2)
         for f in facts:
             self.assertEqual(f["status"], "pending")
-            src = bi_repo.get_source_reference(main.conn, self.brand["id"], f["source_reference_id"])
+            src = bi_repo.get_source_reference(web.conn, self.brand["id"], f["source_reference_id"])
             self.assertIn("外部深研交接包", src["title"])
 
-        economics = bi_repo.get_product_economics(main.conn, self.brand["id"], self.product_id)
+        economics = bi_repo.get_product_economics(web.conn, self.brand["id"], self.product_id)
         self.assertIsNotNone(economics)
         self.assertEqual(economics["status"], "pending")
         self.assertEqual(economics["selling_price"], 690.0)
         self.assertEqual(economics["currency"], "TWD")
 
     def test_same_label_deduped_against_existing_fact(self):
-        bi_repo.create_product_fact(main.conn, self.brand["id"], self.product_id, actor=ACTOR,
+        bi_repo.create_product_fact(web.conn, self.brand["id"], self.product_id, actor=ACTOR,
                                     fact_type="產品線", label="單一品項", value="舊資料。",
                                     status="confirmed", confirmed_by=ACTOR)
         product_ai.PROVIDER = FakeProvider(response=_fake_response("不該被呼叫"))
         resp = self._post(_GOOD_JSON)
         self.assertEqual(resp.status_code, 200)
-        facts = bi_repo.list_product_facts(main.conn, self.brand["id"], self.product_id)
+        facts = bi_repo.list_product_facts(web.conn, self.brand["id"], self.product_id)
         # 原本 1 條（已確認）+ 貼回新增 1 條（「上班族」），「單一品項」同標籤已存在被跳過。
         self.assertEqual(len(facts), 2)
         labels = [f["label"] for f in facts]
@@ -148,7 +130,7 @@ class HandoffPasteDirectParseTest(_BaseHandoffTest):
         resp = self._post("   ")
         self.assertEqual(resp.status_code, 400)
         self.assertIn("請先把外部 AI 的回覆貼進來", resp.json()["error"])
-        self.assertEqual(bi_repo.list_product_facts(main.conn, self.brand["id"], self.product_id), [])
+        self.assertEqual(bi_repo.list_product_facts(web.conn, self.brand["id"], self.product_id), [])
 
 
 class HandoffPasteFixTest(_BaseHandoffTest):
@@ -157,7 +139,7 @@ class HandoffPasteFixTest(_BaseHandoffTest):
         resp = self._post(_GARBLED)
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(len(product_ai.PROVIDER.calls), 1)  # 直接解析失敗才呼叫一次修復
-        facts = bi_repo.list_product_facts(main.conn, self.brand["id"], self.product_id)
+        facts = bi_repo.list_product_facts(web.conn, self.brand["id"], self.product_id)
         self.assertEqual(len(facts), 2)
         for f in facts:
             self.assertEqual(f["status"], "pending")
@@ -167,15 +149,15 @@ class HandoffPasteFixTest(_BaseHandoffTest):
         resp = self._post(_GARBLED)
         self.assertEqual(resp.status_code, 400)
         self.assertIn(product_ai.PARSE_FAIL_MESSAGE, resp.json()["error"])
-        self.assertEqual(bi_repo.list_product_facts(main.conn, self.brand["id"], self.product_id), [])
+        self.assertEqual(bi_repo.list_product_facts(web.conn, self.brand["id"], self.product_id), [])
 
     def test_over_budget_blocks_repair_before_any_llm_call(self):
-        coresettings.set_setting(main.conn, coresettings.INTAKE_BUDGET_SETTING, "0.1")
+        coresettings.set_setting(web.conn, coresettings.INTAKE_BUDGET_SETTING, "0.1")
         product_ai.PROVIDER = FakeProvider(response=_fake_response("不該被呼叫"))
         resp = self._post(_GARBLED)
         self.assertEqual(resp.status_code, 400)
         self.assertIn("花費上限", resp.json()["error"])
-        self.assertEqual(bi_repo.list_product_facts(main.conn, self.brand["id"], self.product_id), [])
+        self.assertEqual(bi_repo.list_product_facts(web.conn, self.brand["id"], self.product_id), [])
         self.assertEqual(product_ai.PROVIDER.calls, [])
 
     def test_missing_key_shows_human_error_creates_nothing(self):
@@ -183,7 +165,7 @@ class HandoffPasteFixTest(_BaseHandoffTest):
         resp = self._post(_GARBLED)
         self.assertEqual(resp.status_code, 400)
         self.assertIn(MISSING_KEY_MESSAGE, resp.json()["error"])
-        self.assertEqual(bi_repo.list_product_facts(main.conn, self.brand["id"], self.product_id), [])
+        self.assertEqual(bi_repo.list_product_facts(web.conn, self.brand["id"], self.product_id), [])
 
 
 if __name__ == "__main__":

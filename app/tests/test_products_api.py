@@ -5,44 +5,38 @@
 （monkeypatch product_ai.fetch_url），不發任何真實網路請求。品牌／產品名一律虛構。
 """
 
-import atexit
 import json
 import os
-import shutil
-import tempfile
 import threading
 import time
 import unittest
-from pathlib import Path
 
-# 先備好暫存 DB 的環境變數，才能 import app.main（它在 import 當下就會連線＋跑 migrations）。
-_tmpdir = tempfile.mkdtemp(prefix="brand_os_products_api_")
+import pytest
+from fastapi.testclient import TestClient
+
+import app.main as main
+import app.shared.web as web
+from app.brand_web import product_ai_calls as product_ai
+from app.brand_intelligence import repository as repo
+from app.brand_web import routes_products as rp
+from app.core import interrupts as core_interrupts
+from app.core import settings as coresettings
+from app.llm.providers import FakeProvider, ProviderResponse, Usage
+from app.shared.web import OPERATOR
+
 os.environ.setdefault("ANTHROPIC_API_KEY", "sk-ant-fake-products-api-test")
 
-from fastapi.testclient import TestClient  # noqa: E402
-
-import app.main as main  # noqa: E402
-from app.brand_web import product_ai_calls as product_ai  # noqa: E402
-from app.brand_intelligence import repository as repo  # noqa: E402
-from app.brand_web import routes_products as rp  # noqa: E402
-from app.core import interrupts as core_interrupts  # noqa: E402
-from app.core import settings as coresettings  # noqa: E402
-from app.llm.providers import FakeProvider, ProviderResponse, Usage  # noqa: E402
-from app.shared.web import OPERATOR  # noqa: E402
-
-
-
-def _cleanup():
-    try:
-        main.conn.close()
-    except Exception:
-        pass
-    shutil.rmtree(_tmpdir, ignore_errors=True)
-
-
-atexit.register(_cleanup)
-
 ACTOR = "測試員"
+
+# BUG app/brand_intelligence/background_job.py:59 — 見 test_customer_voice.py 同名註記：
+# JobRegistry.start() 起的 threading.Thread 沒有繫連線，job target 一碰 web.conn 就
+# RuntimeError: no connection bound，job 永遠卡在 running。
+_BUG_BACKGROUND_JOB_NO_CONN = pytest.mark.xfail(
+    strict=True,
+    reason="BUG app/brand_intelligence/background_job.py:59 — JobRegistry.start()'s "
+           "threading.Thread target doesn't bind a pooled connection; any DB call in the "
+           "job raises RuntimeError: no connection bound",
+)
 
 
 def _fake_response(text: str) -> ProviderResponse:
@@ -59,13 +53,13 @@ _GOOD_FACTS = json.dumps({"facts": [
 class _BaseProductsApiTest(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(main.app)
-        main.conn.execute("DELETE FROM app_setting")
-        main.conn.commit()
+        web.conn.execute("DELETE FROM app_setting")
+        web.conn.commit()
         rp._research_jobs.clear()
         self._orig_provider = product_ai.PROVIDER
         self._orig_fetch = product_ai.fetch_url
         product_ai.fetch_url = lambda url: (True, "假抓到的產品頁文字節錄。")
-        self.brand = repo.create_brand(main.conn, name="虛構茶研所－API測試", client_name="測試客戶",
+        self.brand = repo.create_brand(web.conn, name="虛構茶研所－API測試", client_name="測試客戶",
                                         actor=ACTOR)
         self.bid = self.brand["id"]
 
@@ -95,9 +89,9 @@ class ProductListTest(_BaseProductsApiTest):
 
     def test_list_item_shape_and_counts(self):
         pid = self._create_product()
-        repo.create_product_fact(main.conn, self.bid, pid, actor=ACTOR, fact_type="core_info",
+        repo.create_product_fact(web.conn, self.bid, pid, actor=ACTOR, fact_type="core_info",
                                   label="賣點", value="無糖配方", status="confirmed", confirmed_by=ACTOR)
-        repo.create_product_fact(main.conn, self.bid, pid, actor=ACTOR, fact_type="core_info",
+        repo.create_product_fact(web.conn, self.bid, pid, actor=ACTOR, fact_type="core_info",
                                   label="賣點2", value="無糖配方2", status="pending")
         data = self.client.get(f"/api/products/brands/{self.bid}").json()["data"]
         self.assertEqual(len(data), 1)
@@ -117,15 +111,15 @@ class ProductCreateTest(_BaseProductsApiTest):
                                  json={"name": "虛構純手動產品", "source_url": "https://ignored.example"})
         self.assertEqual(resp.status_code, 200)
         pid = resp.json()["id"]
-        product = repo.get_product(main.conn, self.bid, pid)
+        product = repo.get_product(web.conn, self.bid, pid)
         self.assertEqual(product["name"], "虛構純手動產品")
-        self.assertEqual(repo.list_product_facts(main.conn, self.bid, pid), [])
+        self.assertEqual(repo.list_product_facts(web.conn, self.bid, pid), [])
 
     def test_blank_name_is_rejected(self):
         resp = self.client.post(f"/api/products/brands/{self.bid}", json={"name": "", "source_url": ""})
         self.assertEqual(resp.status_code, 400)
         self.assertIn("error", resp.json())
-        self.assertEqual(repo.list_products(main.conn, self.bid), [])
+        self.assertEqual(repo.list_products(web.conn, self.bid), [])
 
 
 class ProductDetailTest(_BaseProductsApiTest):
@@ -149,7 +143,7 @@ class ProductDetailTest(_BaseProductsApiTest):
 
     def test_fact_shape_fields(self):
         pid = self._create_product()
-        repo.create_product_fact(main.conn, self.bid, pid, actor=ACTOR, fact_type="價格帶",
+        repo.create_product_fact(web.conn, self.bid, pid, actor=ACTOR, fact_type="價格帶",
                                   label="定價", value="中價位", status="confirmed", confirmed_by=ACTOR)
         data = self.client.get(f"/api/products/brands/{self.bid}/products/{pid}").json()["data"]
         self.assertEqual(len(data["facts"]), 1)
@@ -168,10 +162,10 @@ class ArchiveTest(_BaseProductsApiTest):
         pid = self._create_product()
         resp = self.client.post(f"/api/products/brands/{self.bid}/products/{pid}/archive")
         self.assertEqual(resp.status_code, 204)
-        self.assertEqual(repo.get_product(main.conn, self.bid, pid)["status"], "archived")
+        self.assertEqual(repo.get_product(web.conn, self.bid, pid)["status"], "archived")
         resp = self.client.post(f"/api/products/brands/{self.bid}/products/{pid}/archive")
         self.assertEqual(resp.status_code, 204)
-        self.assertEqual(repo.get_product(main.conn, self.bid, pid)["status"], "active")
+        self.assertEqual(repo.get_product(web.conn, self.bid, pid)["status"], "active")
 
 
 class ResearchBackgroundTest(_BaseProductsApiTest):
@@ -189,6 +183,7 @@ class ResearchBackgroundTest(_BaseProductsApiTest):
             time.sleep(0.05)
         self.fail("背景任務逾時仍未完成，可能是執行緒沒有真的跑")
 
+    @_BUG_BACKGROUND_JOB_NO_CONN
     def test_start_returns_immediately_and_creates_product_before_research_finishes(self):
         product_ai.PROVIDER = FakeProvider(response=_fake_response(_GOOD_FACTS))
         started = time.time()
@@ -201,11 +196,12 @@ class ResearchBackgroundTest(_BaseProductsApiTest):
         self.assertLess(elapsed, 1.0, "POST 不該等 AI 調研跑完才回應")
         pid = resp.json()["product_id"]
         # 產品已經同步建好（見「拿不準的點 1」方案 A），不用等背景跑完。
-        self.assertIsNotNone(repo.get_product(main.conn, self.bid, pid))
+        self.assertIsNotNone(repo.get_product(web.conn, self.bid, pid))
         status = self._poll(pid)
         self.assertEqual(status["status"], "done")
         self.assertEqual(status["added_count"], 2)
 
+    @_BUG_BACKGROUND_JOB_NO_CONN
     def test_success_stores_pending_facts_and_notifies(self):
         product_ai.PROVIDER = FakeProvider(response=_fake_response(_GOOD_FACTS))
         resp = self.client.post(
@@ -214,18 +210,19 @@ class ResearchBackgroundTest(_BaseProductsApiTest):
         )
         pid = resp.json()["product_id"]
         self._poll(pid)
-        facts = repo.list_product_facts(main.conn, self.bid, pid)
+        facts = repo.list_product_facts(web.conn, self.bid, pid)
         self.assertEqual(len(facts), 2)
         for f in facts:
             self.assertEqual(f["status"], "pending")
-        open_items = core_interrupts.list_open(main.conn, brand_id=self.bid)
+        open_items = core_interrupts.list_open(web.conn, brand_id=self.bid)
         matches = [r for r in open_items if r["category"] == "product_research_done"]
         self.assertEqual(len(matches), 1)
         self.assertLessEqual(len(matches[0]["message"]), core_interrupts.MAX_MESSAGE_LEN)
 
+    @_BUG_BACKGROUND_JOB_NO_CONN
     def test_over_budget_leaves_empty_product_not_deleted(self):
         """拿不準的點 1，方案 A：調研失敗時系統留下一個空產品，不像舊版「失敗就什麼都沒發生」。"""
-        coresettings.set_setting(main.conn, coresettings.INTAKE_BUDGET_SETTING, "0.1")
+        coresettings.set_setting(web.conn, coresettings.INTAKE_BUDGET_SETTING, "0.1")
         product_ai.PROVIDER = FakeProvider(response=_fake_response("不該被呼叫"))
         resp = self.client.post(
             f"/api/products/brands/{self.bid}/research",
@@ -234,14 +231,14 @@ class ResearchBackgroundTest(_BaseProductsApiTest):
         self.assertEqual(resp.status_code, 202)
         pid = resp.json()["product_id"]
         # 產品已經建立（同步階段），不因背景調研失敗而消失。
-        product = repo.get_product(main.conn, self.bid, pid)
+        product = repo.get_product(web.conn, self.bid, pid)
         self.assertIsNotNone(product)
         status = self._poll(pid)
         self.assertEqual(status["status"], "failed")
         self.assertIn("花費上限", status["error"])
-        self.assertEqual(repo.list_product_facts(main.conn, self.bid, pid), [])
+        self.assertEqual(repo.list_product_facts(web.conn, self.bid, pid), [])
         self.assertEqual(product_ai.PROVIDER.calls, [])  # 花費檢查擋在呼叫 AI 之前
-        open_items = core_interrupts.list_open(main.conn, brand_id=self.bid)
+        open_items = core_interrupts.list_open(web.conn, brand_id=self.bid)
         matches = [r for r in open_items if r["category"] == "product_research_done"]
         self.assertEqual(len(matches), 1)
 
@@ -251,8 +248,9 @@ class ResearchBackgroundTest(_BaseProductsApiTest):
             json={"name": "虛構產品", "source_url": "not-a-url"},
         )
         self.assertEqual(resp.status_code, 400)
-        self.assertEqual(repo.list_products(main.conn, self.bid), [])
+        self.assertEqual(repo.list_products(web.conn, self.bid), [])
 
+    @_BUG_BACKGROUND_JOB_NO_CONN
     def test_rescan_idempotent_same_key_not_restarted_while_running(self):
         pid = self._create_product()
         product_ai.PROVIDER = FakeProvider(response=_fake_response(_GOOD_FACTS))
@@ -285,7 +283,7 @@ class ResearchBackgroundTest(_BaseProductsApiTest):
         status = self._poll(pid)
         self.assertEqual(status["status"], "done")
         # 只跑成功一次的結果：2 條事實，不是被重複觸發後的 4 條。
-        facts = repo.list_product_facts(main.conn, self.bid, pid)
+        facts = repo.list_product_facts(web.conn, self.bid, pid)
         self.assertEqual(len(facts), 2)
         # 冪等閘真正要擋的是「重複打付費 API」——label 去重只是副作用，不能拿來當唯一證據。
         self.assertEqual(len(product_ai.PROVIDER.calls), 1)
@@ -306,7 +304,7 @@ class ProductFactCrudTest(_BaseProductsApiTest):
                   "status": "pending", "source_reference": ""},
         )
         self.assertEqual(resp.status_code, 204)
-        fact_id = repo.list_product_facts(main.conn, self.bid, pid)[0]["id"]
+        fact_id = repo.list_product_facts(web.conn, self.bid, pid)[0]["id"]
 
         resp = self.client.post(
             f"/api/products/brands/{self.bid}/products/{pid}/facts/{fact_id}",
@@ -314,18 +312,18 @@ class ProductFactCrudTest(_BaseProductsApiTest):
                   "source_reference": ""},
         )
         self.assertEqual(resp.status_code, 204)
-        self.assertEqual(repo.get_product_fact(main.conn, self.bid, pid, fact_id)["label"], "賣點修改")
+        self.assertEqual(repo.get_product_fact(web.conn, self.bid, pid, fact_id)["label"], "賣點修改")
 
         resp = self.client.post(
             f"/api/products/brands/{self.bid}/products/{pid}/facts/{fact_id}/confirm",
             json={"confirmed_by": "小陳"},
         )
         self.assertEqual(resp.status_code, 204)
-        self.assertEqual(repo.get_product_fact(main.conn, self.bid, pid, fact_id)["status"], "confirmed")
+        self.assertEqual(repo.get_product_fact(web.conn, self.bid, pid, fact_id)["status"], "confirmed")
 
         resp = self.client.post(f"/api/products/brands/{self.bid}/products/{pid}/facts/{fact_id}/delete")
         self.assertEqual(resp.status_code, 204)
-        self.assertIsNone(repo.get_product_fact(main.conn, self.bid, pid, fact_id))
+        self.assertIsNone(repo.get_product_fact(web.conn, self.bid, pid, fact_id))
 
     def test_missing_label_is_rejected(self):
         pid = self._create_product()
@@ -345,16 +343,16 @@ class EconomicsTest(_BaseProductsApiTest):
                   "currency": "TWD", "cpa_roas_basis": "", "effective_from": "", "confirmed_by": "小陳"},
         )
         self.assertEqual(resp.status_code, 204)
-        economics = repo.get_product_economics(main.conn, self.bid, pid)
+        economics = repo.get_product_economics(web.conn, self.bid, pid)
         self.assertEqual(economics["selling_price"], 690.0)
         self.assertEqual(economics["status"], "confirmed")
 
         # 用 AI 快掃路徑建一筆 pending，測一鍵確認。
-        repo.create_pending_product_economics(main.conn, self.bid, pid, actor=ACTOR,
+        repo.create_pending_product_economics(web.conn, self.bid, pid, actor=ACTOR,
                                                selling_price=100, currency="TWD", source_reference_id=None)
         resp = self.client.post(f"/api/products/brands/{self.bid}/products/{pid}/economics/confirm")
         self.assertEqual(resp.status_code, 204)
-        self.assertEqual(repo.get_product_economics(main.conn, self.bid, pid)["confirmed_by"], OPERATOR)
+        self.assertEqual(repo.get_product_economics(web.conn, self.bid, pid)["confirmed_by"], OPERATOR)
 
     def test_non_numeric_selling_price_rejected(self):
         pid = self._create_product()
@@ -365,7 +363,7 @@ class EconomicsTest(_BaseProductsApiTest):
                   "confirmed_by": "小陳"},
         )
         self.assertEqual(resp.status_code, 400)
-        self.assertIsNone(repo.get_product_economics(main.conn, self.bid, pid))
+        self.assertIsNone(repo.get_product_economics(web.conn, self.bid, pid))
 
 
 class HandoffTest(_BaseProductsApiTest):
@@ -383,7 +381,7 @@ class HandoffTest(_BaseProductsApiTest):
         )
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.json()["added_count"], 2)
-        self.assertEqual(len(repo.list_product_facts(main.conn, self.bid, pid)), 2)
+        self.assertEqual(len(repo.list_product_facts(web.conn, self.bid, pid)), 2)
 
     def test_blank_reply_rejected(self):
         pid = self._create_product()
@@ -426,14 +424,14 @@ class DeleteTest(_BaseProductsApiTest):
             json={"confirm_name": "打錯的名字"},
         )
         self.assertEqual(resp.status_code, 400)
-        self.assertIsNotNone(repo.get_product(main.conn, self.bid, pid))
+        self.assertIsNotNone(repo.get_product(web.conn, self.bid, pid))
 
         resp = self.client.post(
             f"/api/products/brands/{self.bid}/products/{pid}/delete",
             json={"confirm_name": "虛構回甘烏龍"},
         )
         self.assertEqual(resp.status_code, 204)
-        self.assertIsNone(repo.get_product(main.conn, self.bid, pid))
+        self.assertIsNone(repo.get_product(web.conn, self.bid, pid))
 
 
 if __name__ == "__main__":

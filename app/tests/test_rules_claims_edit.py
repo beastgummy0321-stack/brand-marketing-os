@@ -4,10 +4,7 @@
 見 app/main.py 的 rule_edit_*／claim_edit_* 路由，比照品牌事實編輯（決策 0013）。
 """
 
-import json
-import tempfile
 import unittest
-from pathlib import Path
 
 from app.brand_intelligence import repository as repo
 from app.core import db
@@ -15,12 +12,7 @@ from app.core import db
 
 class RuleClaimEditTest(unittest.TestCase):
     def setUp(self):
-        self._tmpdir = tempfile.TemporaryDirectory()
-        self.conn = db.connect_and_migrate(Path(self._tmpdir.name) / "test.db")
-
-    def tearDown(self):
-        self.conn.close()
-        self._tmpdir.cleanup()
+        self.conn = db.current()
 
     def _audit_rows(self):
         return [dict(r) for r in
@@ -89,12 +81,13 @@ class RuleClaimEditTest(unittest.TestCase):
         self.assertEqual(len(rule_update), 1)
         self.assertEqual(len(claim_update), 1)
 
-        self.assertEqual(json.loads(rule_update[0]["before_json"])["content"], "舊規則內容")
-        self.assertEqual(json.loads(rule_update[0]["after_json"])["content"], "新規則內容")
+        # jsonb 欄位，psycopg 已自動解碼成 dict，不必 json.loads
+        self.assertEqual(rule_update[0]["before_json"]["content"], "舊規則內容")
+        self.assertEqual(rule_update[0]["after_json"]["content"], "新規則內容")
         self.assertEqual(rule_update[0]["actor"], "小陳")
 
-        self.assertEqual(json.loads(claim_update[0]["before_json"])["claim_text"], "舊宣稱內容")
-        self.assertEqual(json.loads(claim_update[0]["after_json"])["claim_text"], "新宣稱內容")
+        self.assertEqual(claim_update[0]["before_json"]["claim_text"], "舊宣稱內容")
+        self.assertEqual(claim_update[0]["after_json"]["claim_text"], "新宣稱內容")
         self.assertEqual(claim_update[0]["actor"], "小陳")
 
 

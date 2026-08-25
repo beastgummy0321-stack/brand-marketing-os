@@ -12,10 +12,8 @@ ADR 0012 第一節）。
 沿用 app/tests/test_rule_cards.py 的暫存 DB 慣例：真實 SQLite，不 mock。
 """
 
-import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 
 from app.brand_intelligence import repository as bi_repo
 from app.brand_intelligence import rule_lifecycle
@@ -31,21 +29,16 @@ def _ago(days: int) -> str:
 
 class RuleLifecycleTest(unittest.TestCase):
     def setUp(self):
-        self._tmpdir = tempfile.TemporaryDirectory()
-        self.conn = db.connect_and_migrate(Path(self._tmpdir.name) / "test.db")
+        self.conn = db.current()
         self.brand = bi_repo.create_brand(self.conn, name="虛構晨光咖啡規則有效期",
                                           client_name=None, actor=ACTOR)
         self.bid = self.brand["id"]
-
-    def tearDown(self):
-        self.conn.close()
-        self._tmpdir.cleanup()
 
     def _age_rule(self, rule_id: str, days: int) -> None:
         """把 confirmed_at 直接改到過去，模擬「太久沒人重新確認」——不經任何公開函式，
         因為現有公開函式（create_rule／reconfirm_rule）本來就只會寫「現在」。"""
         self.conn.execute(
-            "UPDATE rule SET confirmed_at = ? WHERE id = ?", (_ago(days), rule_id))
+            "UPDATE rule SET confirmed_at = %s WHERE id = %s", (_ago(days), rule_id))
         self.conn.commit()
 
     # -- 驗收條件 1：剛接受時仍生效 -------------------------------------------
@@ -68,7 +61,7 @@ class RuleLifecycleTest(unittest.TestCase):
         rules = bi_repo.list_rules_for_brand(self.conn, self.bid)
         self.assertNotIn(rule["id"], [r["id"] for r in rules])  # 不再進生效清單
 
-        row = self.conn.execute("SELECT * FROM rule WHERE id = ?", (rule["id"],)).fetchone()
+        row = self.conn.execute("SELECT * FROM rule WHERE id = %s", (rule["id"],)).fetchone()
         self.assertEqual(row["status"], "pending_reconfirm")  # 狀態變化
         self.assertIsNotNone(row)  # 沒有被刪除，該列還在
 
@@ -107,7 +100,7 @@ class RuleLifecycleTest(unittest.TestCase):
         bi_repo.deactivate_rule(self.conn, self.bid, rule["id"], actor=ACTOR)
         self._age_rule(rule["id"], days=200)
         rule_lifecycle.sweep_expired_rules(self.conn, self.bid)
-        row = self.conn.execute("SELECT status FROM rule WHERE id = ?", (rule["id"],)).fetchone()
+        row = self.conn.execute("SELECT status FROM rule WHERE id = %s", (rule["id"],)).fetchone()
         self.assertEqual(row["status"], "inactive")  # 沒有被誤翻成 pending_reconfirm
 
     # -- 驗收條件 3：按延續後恢復生效 -------------------------------------------
@@ -117,7 +110,7 @@ class RuleLifecycleTest(unittest.TestCase):
                                    content="待確認後延續的規則", severity="soft")
         self._age_rule(rule["id"], days=200)
         bi_repo.list_rules_for_brand(self.conn, self.bid)  # 觸發掃描，變成 pending_reconfirm
-        before = self.conn.execute("SELECT * FROM rule WHERE id = ?", (rule["id"],)).fetchone()
+        before = self.conn.execute("SELECT * FROM rule WHERE id = %s", (rule["id"],)).fetchone()
         self.assertEqual(before["status"], "pending_reconfirm")
 
         after = bi_repo.reconfirm_rule(self.conn, self.bid, rule["id"], actor=ACTOR)
@@ -137,7 +130,7 @@ class RuleLifecycleTest(unittest.TestCase):
                                    content="待確認後延續的規則二", severity="soft")
         bi_repo.reconfirm_rule(self.conn, self.bid, rule["id"], actor=ACTOR)
         rows = self.conn.execute(
-            "SELECT * FROM audit_log WHERE brand_id = ? AND entity_type = 'rule'"
+            "SELECT * FROM audit_log WHERE brand_id = %s AND entity_type = 'rule'"
             " AND action = 'reconfirm'", (self.bid,),
         ).fetchall()
         self.assertEqual(len(rows), 1)
@@ -173,7 +166,7 @@ class RuleLifecycleTest(unittest.TestCase):
         other_rule = bi_repo.create_rule(self.conn, other_bid, actor=ACTOR, rule_type="tone",
                                          content="B 品牌沒改過門檻的規則", severity="soft")
         self.conn.execute(
-            "UPDATE rule SET confirmed_at = ? WHERE id = ?", (_ago(200), other_rule["id"]))
+            "UPDATE rule SET confirmed_at = %s WHERE id = %s", (_ago(200), other_rule["id"]))
         self.conn.commit()
         other_rules = bi_repo.list_rules_for_brand(self.conn, other_bid)
         self.assertNotIn(other_rule["id"], [r["id"] for r in other_rules])

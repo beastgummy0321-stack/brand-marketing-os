@@ -6,9 +6,11 @@
 分品牌覆寫互不干擾（A 品牌改值不影響 B 品牌、沒覆寫時繼續拿系統預設值）。
 """
 
-import tempfile
+import os
 import unittest
-from pathlib import Path
+
+import psycopg
+from psycopg.rows import dict_row
 
 from app.core import db, rule_cards
 
@@ -18,12 +20,18 @@ BID_B = "brand_b"
 
 class RuleCardValueTest(unittest.TestCase):
     def setUp(self):
-        self._tmpdir = tempfile.TemporaryDirectory()
-        self.conn = db.connect_and_migrate(Path(self._tmpdir.name) / "test.db")
-
-    def tearDown(self):
-        self.conn.close()
-        self._tmpdir.cleanup()
+        self.conn = db.current()
+        # ADR 0027：conftest.py 逐「模組」一個 schema，不是逐「測試」——這個檔案的三個
+        # TestCase 類別全部共用同一個 schema，BID_A／BID_B 又是整檔共用的固定字面值，
+        # 任何一個測試對它們的 set_value() 不清乾淨，就會滲漏進同一檔案其他測試方法
+        # （甚至別的 class）。每個測試開始前把這兩個品牌的規則卡覆寫值全部清空，回到
+        # 「沒有任何覆寫，全部拿系統預設值」的乾淨起點。
+        self.conn.execute("DELETE FROM rule_card_value WHERE brand_id IN (%s, %s)", (BID_A, BID_B))
+        self.conn.execute(
+            "DELETE FROM audit_log WHERE entity_type = 'rule_card_value' AND brand_id IN (%s, %s)",
+            (BID_A, BID_B),
+        )
+        self.conn.commit()
 
     def _audit_rows(self):
         return [dict(r) for r in
@@ -48,11 +56,24 @@ class RuleCardValueTest(unittest.TestCase):
         self.assertEqual(rule_cards.get_value(self.conn, BID_A, "ad_creative_fatigue", "niche_danger"), 8.0)
 
     def test_get_value_falls_back_to_default_without_db(self):
-        """conn=None 或表還沒建起來時，優雅回程式常數預設值，不噴錯（principles 16）。"""
+        """conn=None 或表還沒建起來時（例如全新 schema 還沒跑 migrations），優雅回程式
+        常數預設值，不噴錯（principles 16）。「表還沒建起來」在 Postgres 世界模擬成一個
+        全新、沒跑過任何 migration 的 schema（跟 conftest.py 逐模組建的正常 schema不同）。"""
         self.assertEqual(rule_cards.get_value(None, BID_A, "ad_creative_fatigue", "cold_warning"), 2.5)
-        bare = db.connect(Path(self._tmpdir.name) / "bare.db")
-        self.assertEqual(rule_cards.get_value(bare, BID_A, "ad_creative_fatigue", "cold_warning"), 2.5)
-        bare.close()
+
+        bare_schema = f"t_bare_rule_cards_{os.getpid()}"
+        base_dsn = db.dsn().split("?", 1)[0]
+        admin = psycopg.connect(base_dsn, autocommit=True, row_factory=dict_row)
+        admin.execute(f'DROP SCHEMA IF EXISTS "{bare_schema}" CASCADE')
+        admin.execute(f'CREATE SCHEMA "{bare_schema}"')
+        admin.execute(f'SET search_path TO "{bare_schema}"')
+        bare = db.Conn(admin)
+        try:
+            self.assertEqual(
+                rule_cards.get_value(bare, BID_A, "ad_creative_fatigue", "cold_warning"), 2.5)
+        finally:
+            admin.execute(f'DROP SCHEMA IF EXISTS "{bare_schema}" CASCADE')
+            admin.close()
 
     def test_unknown_card_or_field_raises(self):
         with self.assertRaises(ValueError):
@@ -135,9 +156,9 @@ class RuleCardValueTest(unittest.TestCase):
         rule_cards.set_value(self.conn, BID_A, "ad_creative_fatigue", "cold_warning", 3.0, actor="A")
         rule_cards.set_value(self.conn, BID_A, "ad_creative_fatigue", "cold_warning", 3.3, actor="B")
         count = self.conn.execute(
-            "SELECT COUNT(*) FROM rule_card_value WHERE brand_id = ? AND card_key = 'ad_creative_fatigue'"
+            "SELECT COUNT(*) AS n FROM rule_card_value WHERE brand_id = %s AND card_key = 'ad_creative_fatigue'"
             " AND field_key = 'cold_warning'", (BID_A,)
-        ).fetchone()[0]
+        ).fetchone()["n"]
         self.assertEqual(count, 1)
         self.assertEqual(rule_cards.get_value(self.conn, BID_A, "ad_creative_fatigue", "cold_warning"), 3.3)
 
@@ -186,12 +207,18 @@ class ClassifyAdFrequencyTest(unittest.TestCase):
     """三種受眾類型的安全／警示／危險邊界，對照 app/methodology/ads-core.md 第 5 節的表。"""
 
     def setUp(self):
-        self._tmpdir = tempfile.TemporaryDirectory()
-        self.conn = db.connect_and_migrate(Path(self._tmpdir.name) / "test.db")
-
-    def tearDown(self):
-        self.conn.close()
-        self._tmpdir.cleanup()
+        self.conn = db.current()
+        # ADR 0027：conftest.py 逐「模組」一個 schema，不是逐「測試」——這個檔案的三個
+        # TestCase 類別全部共用同一個 schema，BID_A／BID_B 又是整檔共用的固定字面值，
+        # 任何一個測試對它們的 set_value() 不清乾淨，就會滲漏進同一檔案其他測試方法
+        # （甚至別的 class）。每個測試開始前把這兩個品牌的規則卡覆寫值全部清空，回到
+        # 「沒有任何覆寫，全部拿系統預設值」的乾淨起點。
+        self.conn.execute("DELETE FROM rule_card_value WHERE brand_id IN (%s, %s)", (BID_A, BID_B))
+        self.conn.execute(
+            "DELETE FROM audit_log WHERE entity_type = 'rule_card_value' AND brand_id IN (%s, %s)",
+            (BID_A, BID_B),
+        )
+        self.conn.commit()
 
     def test_cold_audience_boundaries(self):
         # danger 門檻現行 CARDS default 是 3.5（2026-08-08 業界體檢調降，見 rule_cards.py
@@ -222,12 +249,18 @@ class SampleSizeTierTest(unittest.TestCase):
     """票 8：樣本數統計等級——邊界案例對照 ab-testing.md 速查表的門檻值。"""
 
     def setUp(self):
-        self._tmpdir = tempfile.TemporaryDirectory()
-        self.conn = db.connect_and_migrate(Path(self._tmpdir.name) / "test.db")
-
-    def tearDown(self):
-        self.conn.close()
-        self._tmpdir.cleanup()
+        self.conn = db.current()
+        # ADR 0027：conftest.py 逐「模組」一個 schema，不是逐「測試」——這個檔案的三個
+        # TestCase 類別全部共用同一個 schema，BID_A／BID_B 又是整檔共用的固定字面值，
+        # 任何一個測試對它們的 set_value() 不清乾淨，就會滲漏進同一檔案其他測試方法
+        # （甚至別的 class）。每個測試開始前把這兩個品牌的規則卡覆寫值全部清空，回到
+        # 「沒有任何覆寫，全部拿系統預設值」的乾淨起點。
+        self.conn.execute("DELETE FROM rule_card_value WHERE brand_id IN (%s, %s)", (BID_A, BID_B))
+        self.conn.execute(
+            "DELETE FROM audit_log WHERE entity_type = 'rule_card_value' AND brand_id IN (%s, %s)",
+            (BID_A, BID_B),
+        )
+        self.conn.commit()
 
     def test_no_observed_rate_is_directional_not_a_guess(self):
         """沒有轉換率可比對（例如還沒有點擊）——查不了表，一律方向性判讀，不假裝。"""
