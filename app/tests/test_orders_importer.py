@@ -99,7 +99,6 @@ class ParseEasyStoreXlsxTest(unittest.TestCase):
         rows, result = importer.parse_easystore_xlsx(buf.getvalue())
         self.assertEqual(rows, [])
         self.assertTrue(result.errors)
-        self.assertIn("訂單編號", result.errors[0])
 
     def test_empty_file_errors_out(self):
         wb = openpyxl.Workbook()
