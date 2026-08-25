@@ -108,7 +108,9 @@ export function WarroomPage({ brandId, cycleId, fromCycle }: { brandId: string; 
     ),
     3: <HandoffStep brandId={brandId} cycle={cycle} />,
     4: <PerformanceStep brandId={brandId} cycle={cycle} />,
-    5: <ReviewStep brandId={brandId} cycle={cycle} />,
+    // F14：ReviewStep 結算成功後只重抓自己的覆盤，parent 這裡的 cycle 不會跟著動——
+    // onSettled 用既有的 refresh() 重抓 cycle，forceBlock=5 留在覆盤區塊，不跳段。
+    5: <ReviewStep brandId={brandId} cycle={cycle} onSettled={() => refresh(5)} />,
   };
 
   const stepSummaries = [

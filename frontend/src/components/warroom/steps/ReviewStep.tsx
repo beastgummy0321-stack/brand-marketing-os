@@ -30,7 +30,7 @@ const MIN_COMPARISON_CELLS = 2;
 /** 覆盤（S8R.23-26 重設計，吸收舊 `S8.59-66`，僅 `cycle.status === 'CLOSED'` 後出現）：固定
  * 四段式，圖像化每一段（雙條圖／環形圖／學習兩張卡／前後對照長條），資料源完全沿用舊條文，
  * 只新增每段的視覺形式，不重新計算任何判讀邏輯。 */
-export function ReviewStep({ brandId, cycle }: { brandId: string; cycle: Cycle }) {
+export function ReviewStep({ brandId, cycle, onSettled }: { brandId: string; cycle: Cycle; onSettled: () => void }) {
   const [state, setState] = useState<{ status: "loading" } | { status: "locked" } | { status: "ready"; review: ClosingReview }>({ status: "loading" });
 
   function load() {
@@ -42,7 +42,9 @@ export function ReviewStep({ brandId, cycle }: { brandId: string; cycle: Cycle }
 
   if (state.status === "loading") return <div className="rounded-lg border border-border bg-card p-4 text-sm text-muted-foreground">讀取中…</div>;
   if (state.status === "locked") {
-    return <SettleNowPanel brandId={brandId} cycle={cycle} onSettled={load} />;
+    // F14：結算成功後除了就地重抓覆盤（load），還要通知 WarroomPage 重抓 cycle——
+    // 「成效」階段條的文案是從父層 cycle.status 算出來的，只重抓覆盤不會動到它。
+    return <SettleNowPanel brandId={brandId} cycle={cycle} onSettled={() => { load(); onSettled(); }} />;
   }
 
   const { review } = state;

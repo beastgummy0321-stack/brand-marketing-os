@@ -486,5 +486,72 @@ class ClipboardHonestyScanTest(unittest.TestCase):
         )
 
 
+class ReviewStepSettleRefetchWiringTest(unittest.TestCase):
+    """F14：`ReviewStep` 結算成功只重抓自己的覆盤資料，`WarroomPage` 手上的 `cycle`
+    不會跟著動——「成效」階段條的文案是 `WarroomPage` 從 `cycle.status` 算出來的
+    （見 `WarroomPage.tsx` 的 `stepSummaries`），結算後這段文案會停在結算前那句，
+    直到使用者手動重新整理頁面。`ReviewStep` 對外唯一呼叫點是 `WarroomPage.tsx`
+    （已核實），contract 見
+    `.scratch/rehearsal-b0-fix4/issues/F14-performance-step-label-after-settlement.md`。
+
+    ponytail: 逐行字面掃描，不是 JSX／TS parser——把這幾行拆成很怪的多行寫法可以繞過去，
+    真的需要更嚴謹時再升級成 AST 解析（跟上面 `ClipboardHonestyScanTest` 同一份 note）。
+    """
+
+    WARROOM_PAGE = ClipboardHonestyScanTest.SRC_DIR / "components" / "warroom" / "WarroomPage.tsx"
+    REVIEW_STEP = ClipboardHonestyScanTest.SRC_DIR / "components" / "warroom" / "steps" / "ReviewStep.tsx"
+
+    @staticmethod
+    def _line_with(path: Path, needle: str):
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if needle in line:
+                return line
+        return None
+
+    def test_scan_actually_finds_the_wiring_lines(self):
+        """掃描腳本自身的體檢：抓不到東西時下面幾條會空過，得先確認它們真的掃得到。"""
+        self.assertIsNotNone(
+            self._line_with(self.WARROOM_PAGE, "<ReviewStep "),
+            "掃不到 WarroomPage.tsx 掛載 ReviewStep 的那行——先修掃描腳本，不要當作沒有違規",
+        )
+        self.assertIsNotNone(
+            self._line_with(self.REVIEW_STEP, "export function ReviewStep("),
+            "掃不到 ReviewStep 的函式簽名——先修掃描腳本，不要當作沒有違規",
+        )
+        self.assertIsNotNone(
+            self._line_with(self.REVIEW_STEP, "<SettleNowPanel "),
+            "掃不到 ReviewStep 掛載 SettleNowPanel 的那行——先修掃描腳本，不要當作沒有違規",
+        )
+
+    def test_warroom_page_passes_onSettled_to_review_step(self):
+        line = self._line_with(self.WARROOM_PAGE, "<ReviewStep ")
+        self.assertIn(
+            "onSettled=", line,
+            "WarroomPage.tsx 沒有把 onSettled 傳給 ReviewStep——結算後 cycle.status 不會重抓，"
+            "「成效」階段條的文案會停在結算前那句：" + repr(line),
+        )
+
+    def test_review_step_requires_onSettled_prop(self):
+        line = self._line_with(self.REVIEW_STEP, "export function ReviewStep(")
+        self.assertRegex(
+            line, r"onSettled:\s*\(\)\s*=>\s*void",
+            "ReviewStep 沒有必填的 onSettled prop（寫成選填 onSettled?: 一樣會被擋——"
+            "選填的話 tsc 不會擋掉忘記傳的呼叫端）：" + repr(line),
+        )
+
+    def test_review_step_calls_onSettled_on_settle_success(self):
+        line = self._line_with(self.REVIEW_STEP, "<SettleNowPanel ")
+        self.assertIn(
+            "load()", line,
+            "ReviewStep 傳給 SettleNowPanel 的 onSettled 不再呼叫自己的 load()——"
+            "覆盤本身不會重抓：" + repr(line),
+        )
+        self.assertIn(
+            "onSettled()", line,
+            "ReviewStep 傳給 SettleNowPanel 的 onSettled 沒有呼叫外層傳進來的 onSettled prop——"
+            "結算成功後只有覆盤自己更新，WarroomPage 的 cycle 還是舊的：" + repr(line),
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
