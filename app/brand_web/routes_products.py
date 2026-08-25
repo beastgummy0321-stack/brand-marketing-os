@@ -41,7 +41,6 @@ from app.brand_web import routes_product_helpers as product_helpers
 from app.brand_intelligence import background_job
 from app.brand_intelligence import product_ai
 from app.brand_intelligence import repository as repo
-from app.core import backup as corebackup
 from app.core import cleanup
 from app.core.db import new_id
 from app.shared import web
@@ -543,6 +542,5 @@ async def delete_confirm(request: Request, brand_id: str, product_id: str):
     body = await _json_body(request)
     if clean(_str_field(body, "confirm_name")) != product["name"]:
         return _error(400, "輸入的名稱跟產品名稱不一樣，請照著上面顯示的名稱再打一次。")
-    corebackup.snapshot(f"before-delete-{product_id}")
     repo.delete_product(web.conn, brand_id, product_id, actor=actor)
     return Response(status_code=204)

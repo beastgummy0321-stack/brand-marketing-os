@@ -8,3 +8,4 @@ httpx
 pytest
 pytest-xdist
 google-analytics-data
+psycopg[binary,pool]>=3.3,<4

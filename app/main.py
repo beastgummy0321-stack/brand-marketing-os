@@ -5,7 +5,7 @@
 還被 app/ads、app/orders、app/intake 反向 import（main → ads.routes → main 的循環）。
 拆成三塊（決策 0037 第 15 條）：
 
-1. 本檔：只留 app factory、每日備份／保留策略的啟動節奏、router 註冊、錯誤處理。
+1. 本檔：只留 app factory、保留策略的啟動節奏、router 註冊、錯誤處理。
 2. `app/shared/web.py`：conn／templates／ctx／require_brand 等全站共用 web 工具。
 3. `app/brand_web/routes.py`：品牌智庫的業務路由本體。
 
@@ -18,10 +18,11 @@
 掃描測試（test_architecture_boundaries.py）目前只允許 `app/main.py` 這個路徑 import
 分支專屬層，本票不得為了搬移方便去修改那份既有測試。詳見票 A4 回報「Remaining risks」。
 
-啟動流程：app.shared.web 一 import 就會套用 migrations、開一條全程共用的連線
-（見該檔 `conn = coredb.connect_and_migrate()`）；這裡另外補每日備份／llm_task
-保留策略清理的節奏（不能放進 app.shared.web，因為測試會直接改本檔的
-`_last_backup_check` 模擬「今天還沒備份過」，見 test_backup.py）。
+ADR 0027 起：連線不再全程共用一條，改成每個 request／背景工作跟連線池借一條
+（`app.core.db.connection()`，見本檔最外層那道 HTTP middleware）；`app.shared.web.conn`
+是 `coredb.ConnProxy()`，即時轉發到當下綁定的那條。每日備份（sqlite 檔案複製）
+在 Postgres 世界沒有意義（Supabase 自己做備份），ADR 0027 決策 5 整個模組退場
+（原 `app/core/backup.py`）；這裡只留 llm_task 保留策略清理的啟動節奏。
 
 啟動：python -m uvicorn app.main:app --port 8710
 """
@@ -93,7 +94,6 @@ from app.ads import ga4_api  # noqa: E402  # 只用於設定頁測試連線，�
 from app.ads import ga4_sync  # noqa: E402
 from app.ads import meta_api  # noqa: E402
 from app.ads import sync as ads_sync  # noqa: E402
-from app.core import backup as corebackup
 from app.core import creative_assets as corecreative
 from app.core import db as coredb
 from app.core import retention as core_retention
@@ -115,27 +115,15 @@ from app.shared.web import (
 )
 
 # ---------------------------------------------------------------------------
-# 啟動流程：每日備份檢查 ／ llm_task 保留策略清理（修憲落地 A5）
+# 啟動流程：llm_task 保留策略清理（修憲落地 A5）
 # ---------------------------------------------------------------------------
 
-_last_backup_check: Optional[str] = None  # 記上次檢查過的日期（ISO 字串），避免同一天重複掃 backups 目錄
-_last_retention_check: Optional[str] = None  # 同上，llm_task 保留策略清理版（修憲落地 A5）
-
-
-def _backup_if_new_day() -> None:
-    """跨日才真的備份；修憲落地 M5：舊版只在 process 啟動時跑一次，uvicorn 開一週
-    就一週沒有新備份。這裡改成每個請求前比一次日期字串（成本極低），只有真的跨日
-    才呼叫 run_daily_backup()（複製 DB＋清舊檔，見 app/core/backup.py）。"""
-    global _last_backup_check
-    today = datetime.now(timezone.utc).date().isoformat()
-    if today != _last_backup_check:
-        corebackup.run_daily_backup()
-        _last_backup_check = today
+_last_retention_check: Optional[str] = None  # 記上次檢查過的日期（ISO 字串），llm_task 保留策略清理用（修憲落地 A5）
 
 
 def _purge_expired_llm_task_content_if_new_day() -> None:
     """跨日才清一次 llm_task 的過期大欄位（修憲落地 A5，見 app/core/retention.py）；
-    做法比照 `_backup_if_new_day`。"""
+    每個 request 前比一次日期字串（成本極低），只有真的跨日才動手清。"""
     global _last_retention_check
     today = datetime.now(timezone.utc).date().isoformat()
     if today != _last_retention_check:
@@ -176,31 +164,20 @@ def _weekly_engine_if_due(now: Optional[datetime] = None) -> None:
 
 
 def _auto_sync_loop() -> None:
-    """背景執行緒，每小時檢查同步門檻——用背景執行緒而不是像備份那樣掛在
-    `_daily_backup_middleware`（每個 HTTP 請求都會跑一次），是因為自動同步會打外部
-    API：絕不能讓它被測試的 TestClient 請求意外觸發。這個迴圈只掛在 FastAPI
-    `startup` 事件底下才會啟動，而 `TestClient(app)`（不用 `with` context manager，
-    這個 repo 目前所有測試都是這樣用）不會觸發 startup 事件——測試因此永遠碰不到
-    這條路徑，見 app/tests/test_ads_auto_sync.py 檔頭驗證過的行為。"""
+    """背景執行緒，每小時檢查同步門檻——用背景執行緒而不是像 llm_task 保留策略那樣掛在
+    每個 HTTP 請求的 middleware，是因為自動同步會打外部 API：絕不能讓它被測試的
+    TestClient 請求意外觸發。這個迴圈只掛在 FastAPI `startup` 事件底下才會啟動，而
+    `TestClient(app)`（不用 `with` context manager，這個 repo 目前所有測試都是這樣用）
+    不會觸發 startup 事件——測試因此永遠碰不到這條路徑，見
+    app/tests/test_ads_auto_sync.py 檔頭驗證過的行為。
+
+    ADR 0027：背景執行緒不在任何 request 裡，沒有 middleware 幫忙借連線，body 自己
+    包一層 `with coredb.connection():`（procrastinate 在切片 ⑤ 取代這整個執行緒）。"""
     while True:
         time.sleep(_AUTO_SYNC_POLL_SECONDS)
-        _auto_sync_if_due()
-        _weekly_engine_if_due()
-
-
-_backup_if_new_day()  # process 啟動時先跑一次（app.shared.web import 時已開好連線）
-
-
-def reopen_connection():
-    """模擬「重啟 app」：關掉現有連線、重新走一次啟動流程，回傳新連線。
-
-    只給測試用，用來證明資料真的落地在 DB 檔案，不是活在記憶體物件裡
-    （新連線是重新讀磁碟上的檔案，不會沿用舊連線的任何快取）。
-    """
-    web.conn.close()
-    web.conn = coredb.connect_and_migrate()
-    _backup_if_new_day()
-    return web.conn
+        with coredb.connection():
+            _auto_sync_if_due()
+            _weekly_engine_if_due()
 
 
 # ---------------------------------------------------------------------------
@@ -243,23 +220,32 @@ def _register_auto_sync_schedule() -> None:
     票 F6：這次補跑常常是「機器關了一陣子、開機馬上要追上進度」那一下，外部 API／
     資料庫都比平常更容易撞到暫時性錯誤。補跑本身丟例外不能讓這支 FastAPI startup
     handler 跟著炸——那等於開機直接失敗，比「晚一點才結算」嚴重得多（集裝箱憲章
-    第 5 節：錯誤不穿牆）。背景執行緒仍要照常掛上去，下一個整點會再檢查一次。"""
-    try:
-        _auto_sync_if_due()
-    except Exception:  # noqa: BLE001 — 開機補跑失敗不能把整個 app 帶垮，見上方說明
-        web.conn.rollback()
-    _weekly_engine_if_due()
+    第 5 節：錯誤不穿牆）。背景執行緒仍要照常掛上去，下一個整點會再檢查一次。
+
+    ADR 0027：這支 startup handler 跑在任何 HTTP request 之外，沒有 middleware
+    幫忙借連線，自己包一層 `with coredb.connection():`。"""
+    with coredb.connection():
+        try:
+            _auto_sync_if_due()
+        except Exception:  # noqa: BLE001 — 開機補跑失敗不能把整個 app 帶垮，見上方說明
+            web.conn.rollback()
+        _weekly_engine_if_due()
     threading.Thread(target=_auto_sync_loop, daemon=True).start()
 
 
 @app.middleware("http")
-async def _daily_backup_middleware(request: Request, call_next):
-    """每個請求前補一次「今天備份了嗎」檢查（見 `_backup_if_new_day`），
-    讓長時間不重啟的 process 也有每日備份，不必等下次重開才觸發。
-    順帶補一次「今天清過 llm_task 過期大欄位了嗎」（修憲落地 A5）。"""
-    _backup_if_new_day()
-    _purge_expired_llm_task_content_if_new_day()
-    return await call_next(request)
+async def _db_connection_middleware(request: Request, call_next):
+    """ADR 0027：每個 request 從連線池借一條連線，掛在這個 request 的 contextvar 上
+    （`app.core.db.connection()`——乾淨結束 commit、例外 rollback、結束一律歸還連線池）。
+    整條 middleware 鏈只有這一個，天然是最外層，request 進來第一件事就是借好連線，
+    路由與其他邏輯全程透過 `web.conn`（`ConnProxy`）拿到同一條。
+
+    順帶補一次「今天清過 llm_task 過期大欄位了嗎」（修憲落地 A5；原本掛在已退場的
+    每日備份 middleware——備份是複製 sqlite 檔案，Postgres 世界沒有意義，ADR 0027
+    決策 5 整個模組退場，見 docs/adr/0027）。"""
+    with coredb.connection():
+        _purge_expired_llm_task_content_if_new_day()
+        return await call_next(request)
 
 
 # ---------------------------------------------------------------------------
@@ -706,8 +692,8 @@ async def handle_unexpected_exception(request: Request, exc: Exception):
 
 # ---------------------------------------------------------------------------
 # 回溯相容：讓 `app.main.conn`／`.templates`／`.MODEL_CHOICES` 等既有測試直接讀的屬性
-# 繼續解析——這些名字現在真正定義在 app.shared.web（conn 會被 reopen_connection()
-# 換掉，必須即時代理查值，不能在這裡靜態 import 一次就固定住）。
+# 繼續解析——這些名字現在真正定義在 app.shared.web（conn 是 ConnProxy，必須即時
+# 代理查值，不能在這裡靜態 import 一次就固定住）。
 # ---------------------------------------------------------------------------
 
 def __getattr__(name):

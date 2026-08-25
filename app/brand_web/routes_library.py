@@ -32,7 +32,6 @@ from app.brand_intelligence import background_job
 from app.brand_intelligence import compliance_wordlist
 from app.brand_intelligence import customer_voice as cv_mod
 from app.brand_intelligence import repository as repo
-from app.core import backup as corebackup
 from app.core import cleanup
 from app.core import creative_assets
 from app.core import settings as core_settings
@@ -260,11 +259,9 @@ async def brand_delete_api(request: Request, brand_id: str):
             {"error": "輸入的名稱跟品牌名稱不一樣，請照著上面顯示的名稱再打一次。"},
             status_code=400,
         )
-    backup_path = corebackup.snapshot(f"before-delete-{brand_id}")
     repo.delete_brand(web.conn, brand_id, actor=actor)
     warn = creative_assets.delete_folder(web.conn, brand_id)
-    backup_note = f"刪除前的備份存進了 backups/{backup_path.name}。" if backup_path else ""
-    message = f"已永久刪除品牌「{brand['name']}」。{backup_note}{warn}".strip()
+    message = f"已永久刪除品牌「{brand['name']}」。{warn}".strip()
     return {"message": message}
 
 

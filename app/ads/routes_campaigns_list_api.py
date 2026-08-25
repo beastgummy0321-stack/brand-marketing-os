@@ -18,7 +18,6 @@ import app.shared.web as main_mod
 from app.ads import interview as ads_interview
 from app.ads import repository as ads_repo
 from app.ads.routes_common import _closed_cycle_reading, _cycle_view, _history_trend_rows, _hub_stage_info
-from app.core import backup as corebackup
 from app.core.creative_assets import delete_folder as _delete_creative_folder
 
 router = APIRouter()
@@ -124,7 +123,6 @@ async def campaign_delete(request: Request, brand_id: str, cycle_id: str):
     if confirm_name != _cycle_label(cycle):
         return _error(400, "輸入的檔期名稱跟上面顯示的不一樣，請照著再打一次。")
 
-    corebackup.snapshot(f"before-delete-{cycle_id}")
     ads_repo.delete_cycle(conn, brand_id, cycle_id, actor=actor)
     _delete_creative_folder(conn, brand_id, cycle_id)
     return JSONResponse(None, status_code=204)

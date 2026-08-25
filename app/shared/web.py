@@ -6,9 +6,10 @@
 既違反 A1 三層地界的精神，也讓 app/main.py 永久豁免地界檢查這件事越滾越大——
 第 3 條分支加入時，這個檔會膨脹到約 4000 行、150 條路由。
 
-本檔放「每一條路由都會用到」的地基：DB 連線（conn，全程共用同一條、可被
-reopen_connection() 換掉）、Jinja2 樣板、request context 組裝（ctx／banner_ctx）、
-品牌存取守門（require_brand／require_product）、稽核用的固定操作人（OPERATOR／require_actor）、
+本檔放「每一條路由都會用到」的地基：DB 連線（conn，ADR 0027 起是 `coredb.ConnProxy()`，
+每次呼叫即時轉發到這個 request／工作綁定的連線，見 app/core/db.py connection()）、
+Jinja2 樣板、request context 組裝（ctx／banner_ctx）、品牌存取守門
+（require_brand／require_product）、稽核用的固定操作人（OPERATOR／require_actor）、
 還有幾個純顯示用的小工具（clean／parse_number／redirect_with_message／鮮度標示等）。
 
 品牌永久層（app.brand_intelligence）在本檔的依賴方向是允許的——「品牌」是每條路由
@@ -20,9 +21,8 @@ import 任何分支專屬層（app.ads／app.orders／app.intake），那些模�
 ADR 0004（取消具名授權）：系統單機單人，`require_actor()` 不再讀 cookie、不再有
 中斷路徑，一律回傳固定常數 OPERATOR。呼叫端寫法不變（仍是 `actor = require_actor(request)`）。
 
-`conn` 是本檔唯一會被外部重新賦值的名字（reopen_connection 用來模擬「重啟 app」，
-只給測試用，證明資料真的落地在 DB 檔案）；讀取一律用 `模組.conn` 這種即時查值的寫法
-（無論是本檔內部或外部呼叫端都一樣），才不會拿到重啟前的舊連線快取。
+`conn` 是 `ConnProxy()`，代理本身固定不換；它每次呼叫都即時查 `db.current()`（這個
+request／工作綁定的那條連線），所以不需要、也沒有「重開一條換掉」這回事了。
 """
 
 from datetime import datetime, timezone
@@ -36,14 +36,12 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app import mock_data as md
 from app.brand_intelligence import repository as repo
-from app.core import backup as corebackup  # noqa: F401  # 本檔不用，但要讓 ads/routes.py 等
-# 能透過 `main_mod.corebackup.snapshot(...)` 取用（原本就是這樣呼叫 app.main 的 corebackup）
 from app.core import db as coredb
 from app.core import interrupts as core_interrupts
 
 BASE_DIR = Path(__file__).resolve().parent.parent  # .../app
 
-conn = coredb.connect_and_migrate()
+conn = coredb.ConnProxy()
 
 
 # ---------------------------------------------------------------------------
