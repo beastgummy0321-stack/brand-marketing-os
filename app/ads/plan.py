@@ -389,14 +389,13 @@ def _build_options_user_text(brand: dict, cycle: dict, allocations: list, contex
     if prior_winners:
         lines = "\n".join(
             f"- {w['angle']}：ROAS {w['roas']}，花費 NT${w['spend']:,.0f}，"
-            f"轉換 {w['conversions']:.0f} 次（來源期別 {w['source_cycle_id']}）"
+            f"轉換 {w['conversions']:.0f} 次（來源期別 {w['source_cycle_id']}，"
+            "這一個也要在推薦案裡出現，並寫出這個數字）"
             for w in prior_winners
         )
         parts.append(
             "上期以來真正打出成績的切角（這才是「沿用有效方向」該沿用的東西——"
-            "不要整批換成沒出現過的新切角）：\n" + lines + "\n"
-            "你推薦的那個方案（is_recommended: true）裡，上面每一個贏家都要逐一點名、"
-            "並且原樣寫出它的 ROAS 數字；真的不打算沿用某一個，也要在方案裡講清楚原因。"
+            "不要整批換成沒出現過的新切角）：\n" + lines
         )
 
     if avoid_directions:
@@ -410,19 +409,29 @@ def _build_options_user_text(brand: dict, cycle: dict, allocations: list, contex
         parts.append(f"老闆對這批方案的額外指示（務必照這個方向調整，不要忽略）：{custom_direction.strip()}")
 
     product_hint = ("每個產品至少要有一個切角。" if len(allocations) > 1 else "")
+    hard_rules = [
+        "預算、天數、分配金額都已經算好了（上面那些數字），你不要重算也不要改，"
+        "需要提到時直接引用，每個方案共用同一組數字。",
+        "不得放寬或新增可用宣稱——只能用上面已登錄的宣稱，硬性限制規則一律遵守。",
+        "依據來自已確認事實的內容放進 grounding.facts；你自己的推論放 inferences；"
+        "需要靠這期投放才能驗證的放 to_verify。三者不要混在一起。",
+        "不要編造市佔率、營收、檢驗數據或競品名稱。",
+        "受眾只能在標「可用」的層裡寫描述；不可用的層留空字串，不要硬掰。",
+        "每個方案都要用 difference 講清楚它跟其他方案的差別在哪，不要寫得看起來都一樣。",
+    ]
+    if prior_winners:
+        # 票 F15：這條指示搬到硬規則清單裡（原本只在贏家段落下面的一句話，模型讀不到）。
+        hard_rules.append(
+            "你推薦的那個方案（is_recommended: true）裡，上面每一個贏家都要逐一點名、"
+            "並且原樣寫出它的 ROAS 數字；真的不打算沿用某一個，也要在方案裡講清楚原因。"
+        )
+    rule_count_cn = {6: "六", 7: "七"}[len(hard_rules)]
+    rules_text = "\n".join(f"{i}. {rule}" for i, rule in enumerate(hard_rules, start=1))
     parts.append(
         f"請規劃本期打法，一次產出 {option_count} 個策略方向真的不一樣的方案（不要只是換句話說），"
         "其中剛好一個要標成 AI 推薦（is_recommended: true，其餘為 false）。"
         f"每個方案都要各自完整，各自有 {angle_count} 個創意切角。{product_hint}\n"
-        "六條硬規則：\n"
-        "1. 預算、天數、分配金額都已經算好了（上面那些數字），你不要重算也不要改，"
-        "需要提到時直接引用，每個方案共用同一組數字。\n"
-        "2. 不得放寬或新增可用宣稱——只能用上面已登錄的宣稱，硬性限制規則一律遵守。\n"
-        "3. 依據來自已確認事實的內容放進 grounding.facts；你自己的推論放 inferences；"
-        "需要靠這期投放才能驗證的放 to_verify。三者不要混在一起。\n"
-        "4. 不要編造市佔率、營收、檢驗數據或競品名稱。\n"
-        "5. 受眾只能在標「可用」的層裡寫描述；不可用的層留空字串，不要硬掰。\n"
-        "6. 每個方案都要用 difference 講清楚它跟其他方案的差別在哪，不要寫得看起來都一樣。"
+        f"{rule_count_cn}條硬規則：\n" + rules_text
     )
 
     if fact_count < 5:

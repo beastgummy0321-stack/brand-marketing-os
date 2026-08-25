@@ -46,13 +46,15 @@ def citation_violations(options: list, prior_winners: list, avoid_directions: li
         recommended = (next((o for o in options if o["is_recommended"]), options[0])
                       if options else None)
         rec_angles = recommended["angles"] if recommended else []
-        rec_angle_texts = [f"{a['title']} {a['message']}" for a in rec_angles]
+        # 票 F15：贏家只要在推薦方案的任何地方交代過（summary／difference／任一切角）就算
+        # 點名——只掃切角文字曾經誤判「只寫在 summary、difference 裡」為沒交代。一份全文，
+        # 點名跟數字兩個檢查都用它。
         rec_full_text = (
             (recommended.get("summary", "") + recommended.get("difference", "") if recommended else "")
             + "".join(f"{a['title']}{a['message']}" for a in rec_angles)
         )
         for w in prior_winners:
-            angle_missing = not any(w["angle"] in text for text in rec_angle_texts)
+            angle_missing = w["angle"] not in rec_full_text
             number_missing = not _cites_roas(rec_full_text, w["roas"])
             if angle_missing or number_missing:
                 violations.append({

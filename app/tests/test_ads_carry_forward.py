@@ -396,6 +396,25 @@ class PromptIncludesCarryForwardDataTest(_BaseCarryForwardTest):
         self.assertIn("逐一點名", sent)
         self.assertIn("ROAS 數字", sent)
 
+    def test_per_winner_demand_moves_into_numbered_hard_rules_and_winner_lines_get_a_reminder(self):
+        """票 F15 done-check 6：逐一點名／原樣寫出 ROAS 數字的規定要搬進編號硬規則清單，
+        規則數要跟著改；贏家清單裡每一行也要各自帶一句簡短提醒。RED first：今天這句指示
+        還在贏家段落下面的段落文字裡，不在「N條硬規則」清單編號裡，規則數還是「六」。"""
+        self._seed_cell(self.prior_cycle_id, creative_angle="實證成分", product_id=self.product,
+                        spend=21000, conversions=60, revenue=21000 * 4.31)
+        ok, err = self._generate(self.carry_forward_cycle_id,
+                                 reply=json.dumps(_options_citing("實證成分"), ensure_ascii=False))
+        self.assertTrue(ok, err)
+        sent = ads_plan.PROVIDER.calls[0]["messages"][0]["content"]
+        self.assertIn("七條硬規則：", sent)
+        before, rules_block = sent.split("七條硬規則：", 1)
+        self.assertIn("7. ", rules_block)
+        self.assertIn("逐一點名", rules_block)
+        self.assertIn("ROAS 數字", rules_block)
+        self.assertNotIn("逐一點名", before)  # 不再留在贏家段落文字裡
+        winner_line = next(line for line in sent.splitlines() if line.startswith("- 實證成分"))
+        self.assertIn("也要在推薦案裡出現，並寫出這個數字", winner_line)
+
     def test_low_evidence_winner_does_not_leak_into_the_prompt(self):
         """反向檢查：樣本不足的切角就算 ROAS 好看，也不准當「贏家」引用進 prompt。"""
         self._seed_cell(self.prior_cycle_id, creative_angle="太少樣本的假贏家",
@@ -413,6 +432,9 @@ class PromptIncludesCarryForwardDataTest(_BaseCarryForwardTest):
         sent = ads_plan.PROVIDER.calls[0]["messages"][0]["content"]
         self.assertNotIn("上期以來真正打出成績的切角", sent)
         self.assertNotIn("已驗證賠錢、這期不要再選的方向", sent)
+        # 票 F15：沒有贏家可點名時，硬規則清單不該多出第 7 條，規則數詞要照樣是「六」。
+        self.assertIn("六條硬規則：", sent)
+        self.assertNotIn("七條硬規則", sent)
 
 
 class UnvalidatedHypothesisNeverBecomesPlanGroundingTest(_BaseCarryForwardTest):
@@ -672,6 +694,74 @@ class CitationViolationsUnitTest(unittest.TestCase):
         violations = plan_citation.citation_violations([wrong], [self._WINNER_A], [])
         self.assertEqual(len(violations), 1)
         self.assertFalse(violations[0]["angle_missing"])  # 角度有交代，缺的是正確數字
+
+    def test_real_b4_recommended_option_only_flags_the_winner_truly_absent(self):
+        """票 F15 done-check 1：B4 真機跑出來的推薦方案原文（`llm_task`
+        `llm_01M0W5RVQ8BV8FHG4A00SXWZ5E`）——「實證成分」只出現在 summary／difference，
+        ROAS 藏在 angle 0 的引用句裡；「成分對比」整個方案（含全部切角）都沒提到。
+        RED first：今天的舊碼只掃切角文字（`rec_angle_texts`），「實證成分」不在任何一個
+        切角的 title/message 裡，會被誤判成「沒有交代」——兩個贏家都跳違規（假陽性），
+        今天這裡會回傳 2 個 violation，不是 1 個。"""
+        winner_evidenced = {"angle": "實證成分", "roas": 4.3, "spend": 12000, "conversions": 22,
+                            "source_cycle_id": "cyc_prior"}
+        winner_missing = {"angle": "成分對比", "roas": 4.3, "spend": 9000, "conversions": 18,
+                          "source_cycle_id": "cyc_prior"}
+        recommended = _option(
+            True,
+            summary="以『實證成分』與『身分關鍵字』雙軸擴量，驗證靜態圖素材在前 7 天的派發優勢…",
+            difference="強化前一期驗證過的『實證成分』方向…放大期集中投『實證成分』贏家，"
+                       "測試期用異議破解與身分鏡像測新假設。",
+            angles=[
+                {"title": "下午卡關上班族的實證時刻",
+                 "message": "…用『實證咖啡因』（引用上期 ROAS 4.3 驗證成績）快速恢復專注…"},
+                {"title": "健身訓練後的補給儀式", "message": "訓練後快速補給，不提歷史成績。"},
+                {"title": "長夜備考的清醒夥伴", "message": "熬夜備考也要清醒，不提歷史成績。"},
+                {"title": "長途駕駛的安全提神", "message": "長途駕駛保持專注，不提歷史成績。"},
+            ],
+        )
+        violations = plan_citation.citation_violations(
+            [recommended], [winner_evidenced, winner_missing], [])
+        self.assertEqual(len(violations), 1)
+        self.assertEqual(violations[0]["winner_angle"], "成分對比")
+        self.assertTrue(violations[0]["angle_missing"])
+        message = plan_citation.citation_error_message(violations)
+        self.assertIn("方案沒有交代上期贏家「成分對比」", message)
+        self.assertNotIn("實證成分", message)
+
+    def test_winner_absent_from_entire_recommended_option_is_still_a_violation(self):
+        """票 F15 done-check 2（迴歸守門）：贏家不在推薦方案的 summary、difference，也不在
+        任何切角——F15 沒有動這一半，維持原本「沒有交代」的判定。"""
+        recommended = _option(True, summary="完全沒提到任何贏家。", difference="也沒有提到。",
+                              angles=[{"title": "全新切角", "message": "全新方向，沒有引用歷史。"}])
+        violations = plan_citation.citation_violations([recommended], [self._WINNER_A], [])
+        self.assertEqual(len(violations), 1)
+        self.assertTrue(violations[0]["angle_missing"])
+        message = plan_citation.citation_error_message(violations)
+        self.assertIn("方案沒有交代上期贏家「成分對比」", message)
+
+    def test_winner_named_only_in_alternative_option_summary_is_still_a_violation(self):
+        """票 F15 done-check 3（迴歸守門）：F12 的鏡像檢查不能因為 F15 把「推薦方案全文」
+        的範圍擴大就跟著鬆綁——贏家只出現在備案方案的 summary，不是推薦方案，一樣算
+        沒交代。"""
+        recommended = _option(True, angles=[{"title": "延續切角", "message": "全新方向"}])
+        alt = _option(False, summary="這裡有提到「成分對比」（ROAS 4.30）。",
+                     angles=[{"title": "備案", "message": "另一種說法"}])
+        violations = plan_citation.citation_violations([recommended, alt], [self._WINNER_A], [])
+        self.assertEqual(len(violations), 1)
+        self.assertTrue(violations[0]["angle_missing"])
+
+    def test_winner_named_in_summary_but_roas_nowhere_is_missing_number_not_missing_name(self):
+        """票 F15 done-check 4：贏家名字只出現在推薦方案的 summary（不是切角），但整個方案
+        沒有任何地方寫出 ROAS 數字。RED first：今天的舊碼只掃切角文字判斷點名與否，
+        summary 裡的名字看不到，今天這裡 `angle_missing` 會是 True（「沒有交代」），
+        訊息會是「沒有交代」而不是「提到…但沒寫出成績」。"""
+        recommended = _option(True, summary="延續「成分對比」方向，主力放大。",
+                              angles=[{"title": "延續切角", "message": "沒有寫任何數字"}])
+        violations = plan_citation.citation_violations([recommended], [self._WINNER_A], [])
+        self.assertEqual(len(violations), 1)
+        self.assertFalse(violations[0]["angle_missing"])
+        message = plan_citation.citation_error_message(violations)
+        self.assertIn("方案提到上期贏家「成分對比」但沒寫出它的成績", message)
 
 
 if __name__ == "__main__":
