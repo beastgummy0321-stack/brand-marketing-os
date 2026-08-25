@@ -26,6 +26,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 import app.main as main  # noqa: E402
 from app.ads import routes as ads_routes  # noqa: E402
+from app.ads import routes_campaigns_open_api  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
 from app.core.db import new_id, now_iso  # noqa: E402
 
@@ -89,8 +90,13 @@ class PlanStatusApiTest(unittest.TestCase):
         body = resp.json()["data"]
         self.assertEqual(body["status"], "failed")
         self.assertIn("測試用錯誤", body["message"])
-        # 消化過一次就該清掉，不留給下一次輪詢誤讀。
-        self.assertIsNone(ads_routes._progress_state.get(self.key))
+        # B0-45 修復 B：失敗是使用者唯一拿得到的紀錄，沒有別的地方存這份訊息——entry
+        # 留著，第二次 GET 還是讀到同一句 failed，不會被第一次讀取消化掉、變成看似
+        # 正常的「entry 不存在＝done」。
+        resp2 = self.client.get(self.status_url)
+        body2 = resp2.json()["data"]
+        self.assertEqual(body2["status"], "failed")
+        self.assertIn("測試用錯誤", body2["message"])
 
     def test_business_failure_tuple_reports_failed_with_human_message(self):
         """work() 沒爆例外，但回傳 (False, 人話錯誤)——同樣要被視為失敗，不是「done」。"""
@@ -111,15 +117,17 @@ class PlanStatusApiTest(unittest.TestCase):
 
     def test_stalled_entry_past_timeout_reports_failed(self):
         """背景執行緒真的還在跑但已經超過逾時門檻：不能讓前端永遠停在 running 輪詢到天荒
-        地老（票的根因就是這個症狀）。"""
-        original_timeout = ads_routes._PROGRESS_TIMEOUT_SECONDS
-        ads_routes._PROGRESS_TIMEOUT_SECONDS = 0.05
+        地老（票的根因就是這個症狀）。plan_status 逾時判定讀的是
+        `_plan_generate_ceiling_seconds()`（自己算出來的天花板），不是 tracking／weekly
+        共用的 `_PROGRESS_TIMEOUT_SECONDS`（B45-1），要壓低的是前者。"""
+        original_ceiling = routes_campaigns_open_api._plan_generate_ceiling_seconds
+        routes_campaigns_open_api._plan_generate_ceiling_seconds = lambda: 0.05
         try:
             ads_routes._progress_state[self.key] = {
                 "stage": "only", "started_at": time.time() - 1, "status": "running", "result": None}
             resp = self.client.get(self.status_url)
         finally:
-            ads_routes._PROGRESS_TIMEOUT_SECONDS = original_timeout
+            routes_campaigns_open_api._plan_generate_ceiling_seconds = original_ceiling
         body = resp.json()["data"]
         self.assertEqual(body["status"], "failed")
         self.assertIn("沒有在時間內回應", body["message"])

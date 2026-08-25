@@ -30,6 +30,7 @@ import app.main as main  # noqa: E402
 from app.ads import plan as ads_plan  # noqa: E402
 from app.ads import repository as ads_repo  # noqa: E402
 from app.ads import routes as ads_routes  # noqa: E402
+from app.ads import routes_campaigns_open_api  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
 from app.llm.providers import ProviderResponse, Usage  # noqa: E402
 
@@ -172,21 +173,22 @@ class IdempotencyTest(_BaseProgressTest):
 
 class TimeoutTest(_BaseProgressTest):
     def test_gives_up_after_patched_timeout_without_waiting_full_backend_duration(self):
-        """驗收核心：逾時不無限等，且不必真的等 90 秒——用可覆寫的模組常數把門檻壓低
-        （生產值仍是 90 秒，與 DESIGN.md §19.4 規則 6 對齊），確認邏輯而非真的等一分半。"""
+        """驗收核心：逾時不無限等，且不必真的等到後端真正的天花板——用可覆寫的門檻函式把
+        逾時壓低（plan/status 讀的是 `_plan_generate_ceiling_seconds()` 自己算出來的天花板
+        （B45-1），不是 tracking／weekly 共用的 90 秒常數），確認邏輯而非真的等待。"""
         delay = 0.3
         provider = _SlowProvider(_fake(json.dumps(_GOOD_OPTIONS, ensure_ascii=False)), delay=delay)
         ads_plan.PROVIDER = provider
 
-        original_timeout = ads_routes._PROGRESS_TIMEOUT_SECONDS
-        ads_routes._PROGRESS_TIMEOUT_SECONDS = 0.05
+        original_ceiling = routes_campaigns_open_api._plan_generate_ceiling_seconds
+        routes_campaigns_open_api._plan_generate_ceiling_seconds = lambda: 0.05
         try:
             self.client.post(self.generate_url, json={})  # 觸發背景執行緒開始跑
             time.sleep(0.1)  # 超過壓低後的逾時門檻，但還沒到 provider 的 0.3 秒
             status = self.client.get(
                 f"/api/campaigns/{self.bid}/{self.cycle_id}/plan/status").json()["data"]
         finally:
-            ads_routes._PROGRESS_TIMEOUT_SECONDS = original_timeout
+            routes_campaigns_open_api._plan_generate_ceiling_seconds = original_ceiling
             time.sleep(delay)  # 讓背景那條「已經被放棄」的執行緒把 sleep 跑完，不留尾巴給下一個測試
 
         self.assertEqual(status["status"], "failed")
@@ -216,9 +218,12 @@ class TimeoutTest(_BaseProgressTest):
         try:
             self.client.post(self.generate_url, json={})  # 觸發背景執行緒開始跑，卡在 release.wait()
 
-            # 竄改 started_at 直接模擬「已經超過逾時門檻」，不必真的等 90 秒。
+            # 竄改 started_at 直接模擬「已經超過逾時門檻」，不必真的等。門檻讀
+            # plan_status 實際在用的 `_plan_generate_ceiling_seconds()`（B45-1），不是
+            # tracking／weekly 共用的 `_PROGRESS_TIMEOUT_SECONDS`。
+            ceiling = routes_campaigns_open_api._plan_generate_ceiling_seconds()
             entry = ads_routes._progress_state[key]
-            entry["started_at"] = time.time() - (ads_routes._PROGRESS_TIMEOUT_SECONDS + 1)
+            entry["started_at"] = time.time() - (ceiling + 1)
 
             first = self.client.get(
                 f"/api/campaigns/{self.bid}/{self.cycle_id}/plan/status").json()["data"]

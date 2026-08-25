@@ -37,6 +37,7 @@ from app.ads import stages
 from app.ads import target_cpa
 from app.ads import theme_batch
 from app.ads.nextcycle import list_pending_rule_cards
+from app.llm import gateway
 from app.ads.routes_common import (
     DURATION_TIER_CONFIG, OBJECTIVES, _crumb, _cycle_view, _duration_suggestion,
     _recommended_objective, _require_cycle, _slider_options, derive_cycle_stage,
@@ -53,6 +54,22 @@ _PLAN_STAGES = [
     ("ask_ai", "請 AI 生成方案"),
     ("save", "把方案存起來"),
 ]
+
+
+def _plan_generate_ceiling_seconds() -> int:
+    """B0-45 缺陷 A：`_PROGRESS_TIMEOUT_SECONDS`（90 秒）是給等待頁「通常等多久」用的
+    首版初值，比 `ads_plan.generate_options()` 實際呼叫 `gateway.run_task()` 時後端自己
+    願意等的時間還短——`gateway.run_task()` 用 `TaskOptions` 預設值（`timeout_s=120`、
+    `max_retries=1`），也就是 `max_attempts = 1 + max_retries` 次嘗試、每次最多等
+    `timeout_s` 秒，全部落空前後端自己都還在正常等，天花板是 240 秒，不是 90 秒。
+
+    跟 `_proposal_generate_ceiling_seconds()`（本檔上方）同樣的算法：這裡直接讀
+    `gateway.TaskOptions()` 的預設值算出這一次合法等待的秒數，不是把
+    `_PROGRESS_TIMEOUT_SECONDS` 這顆 tracking／weekly 共用的常數整顆調大——那兩邊
+    （routes_tracking_api.py、routes_weekly_proposals_api.py）不在這張票的範圍內。
+    """
+    opts = gateway.TaskOptions()
+    return int(opts.timeout_s * (1 + max(opts.max_retries, 0)))
 
 
 def _envelope(data) -> dict:
@@ -519,27 +536,47 @@ async def plan_status(brand_id: str, cycle_id: str):
     failed，讓晚到的真結果事後寫得回來，也讓使用者不管問幾次都看到同一句失敗訊息，不會
     後面一問就悄悄變成看似正常的「done」。使用者按「重試」時，`_progress_start()` 會看
     entry 裡記的那條舊執行緒是否還活著：活著就安靜接回去等它，不重打一次 AI（不重複扣費）；
-    真的已經死了才安心開一條新的。"""
+    真的已經死了才安心開一條新的。
+
+    B0-45 根因修復：
+    A. 逾時天花板不再用 `_PROGRESS_TIMEOUT_SECONDS`（tracking／weekly 共用的 90 秒），
+       改用 `_plan_generate_ceiling_seconds()`（見本檔上方）算出這次出方案自己允許等的
+       秒數——跟 `_proposal_generate_ceiling_seconds()` 同樣的道理：共用常數是給「通常
+       等多久」的等待頁文案用的，逾時判定要對齊後端真正願意等的時間，不然會在自己還
+       在合法等待範圍內的工作上宣告逾時。
+    B. entry 一旦被判成終局的 `failed`（不管是這裡的逾時、還是下面業務失敗／背景例外），
+       就直接把留在 entry 裡的訊息原樣回傳，不再往下走逾時重判那段——否則第二次讀取
+       時 `entry["started_at"]` 還是那個舊時間戳，早就超過天花板，會被誤判成「又逾時了」
+       而蓋掉真正的失敗訊息。業務失敗／背景例外原本讀一次就 `_progress_clear()`，第二次
+       再問就落回「entry 不存在＝done」；改成跟逾時分支一樣呼叫 `_progress_fail()` 留著
+       entry，讓攔下訊息撐過重整／元件重掛載。"""
     main_mod.require_brand(brand_id)
     _require_cycle(brand_id, cycle_id)
     key = ads_routes._progress_key("plan", brand_id, cycle_id)
     entry = ads_routes._progress_state.get(key)
     if entry is None:
         return _envelope({"status": "done"})
+    if entry["status"] == "failed":
+        # 終局失敗：訊息已經留在 entry["result"] 裡（逾時或下面的業務失敗／例外都經過
+        # _progress_fail 寫成統一的 ("error", 訊息) 形狀），原樣回傳，不重新判逾時。
+        _, message = entry["result"]
+        return _envelope({"status": "failed", "message": message})
     if entry["status"] != "done":
-        if time.time() - entry["started_at"] > ads_routes._PROGRESS_TIMEOUT_SECONDS:
+        if time.time() - entry["started_at"] > _plan_generate_ceiling_seconds():
             message = ("AI 這次沒有在時間內回應。你的資料都還在，沒有掉。"
                        "可以再試一次，或先跳過這一步。")
             ads_routes._progress_fail(key, message)
             return _envelope({"status": "failed", "message": message})
         return _envelope({"status": "running"})
     outcome_kind, payload = entry["result"]
-    ads_routes._progress_clear(key)
     if outcome_kind == "error":
+        ads_routes._progress_fail(key, payload)
         return _envelope({"status": "failed", "message": payload})
     ok, err = payload
     if not ok:
+        ads_routes._progress_fail(key, err)
         return _envelope({"status": "failed", "message": err})
+    ads_routes._progress_clear(key)
     return _envelope({"status": "done"})
 
 
