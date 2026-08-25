@@ -53,13 +53,16 @@ export function AssetUploadPanel({
       >
         <label className="flex flex-col gap-1 text-sm">
           <span className="font-medium text-foreground">圖檔</span>
+          {/* B0-14 擴大修：中文「選擇檔案」按鈕；input 留在 DOM（sr-only）讓 required 驗證照常作用 */}
+          <span className="w-fit cursor-pointer rounded-md border border-border bg-card px-4 py-2 font-medium text-foreground hover:bg-muted">選擇檔案</span>
           <input
             type="file"
             accept={ACCEPT}
             required
             onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-            className="text-sm text-foreground"
+            className="sr-only"
           />
+          <span className={file ? "text-foreground" : "text-muted-foreground"}>{file ? `已選擇：${file.name}` : "未選擇任何檔案"}</span>
           <span className="text-xs text-muted-foreground">支援 png、jpg、jpeg、webp、gif。</span>
         </label>
 

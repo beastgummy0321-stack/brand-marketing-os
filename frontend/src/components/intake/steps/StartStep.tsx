@@ -155,14 +155,18 @@ export function StartStep({
 
         <div className="flex flex-col gap-2 text-sm">
           <span className="font-medium text-foreground">產品照（選填）</span>
-          <input
-            type="file"
-            accept={PHOTO_ACCEPT}
-            multiple
-            disabled={uploading}
-            onChange={(e) => void handlePhotoFiles(e.target.files)}
-            className="text-sm text-muted-foreground"
-          />
+          {/* B0-14 擴大修：原生 file input 的按鈕字樣跟著瀏覽器語言走，改用隱藏 input＋label 換中文按鈕 */}
+          <label className={`w-fit rounded-md border border-border bg-card px-4 py-2 text-sm font-medium text-foreground ${uploading ? "cursor-not-allowed opacity-50" : "cursor-pointer hover:bg-muted"}`}>
+            {uploading ? "上傳中…" : "選擇檔案"}
+            <input
+              type="file"
+              accept={PHOTO_ACCEPT}
+              multiple
+              disabled={uploading}
+              onChange={(e) => void handlePhotoFiles(e.target.files)}
+              className="hidden"
+            />
+          </label>
           {photoError && <p className="text-danger">{photoError}</p>}
           {(prevPhotos.length > 0 || photos.length > 0) && (
             <ul className="flex flex-col gap-1 text-xs text-muted-foreground">
