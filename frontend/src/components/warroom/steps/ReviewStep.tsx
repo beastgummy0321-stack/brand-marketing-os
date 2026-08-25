@@ -67,7 +67,7 @@ export function ReviewStep({ brandId, cycle }: { brandId: string; cycle: Cycle }
  * （`app/main.py _auto_sync_if_due()`），單機單人使用型態下沒辦法保證在第 14 天那一刻
  * 剛好在跑，真機重現時已經過了 35 天還沒收帳。
  *
- * F6：現在系統能兌現的說法變了——排程改用者 Windows 工作排程器 `onlogon` 觸發（使用者
+ * F6：現在系統能兌現的說法變了——排程改用 Windows 工作排程器 `onlogon` 觸發（使用者
  * 2026-08-25 核准的機制，見 .scratch/rehearsal-b0-fix2/issues/F6-auto-settlement-on-boot.md），
  * process 一起來就會先補跑一次，不必等滿一小時。文案只敢講「登入時」，不敢講「幾天內」——
  * 排程只在使用者登入 Windows 那一刻觸發，機器沒開、沒登入就是沒有這回事，這是誠實的邊界，
