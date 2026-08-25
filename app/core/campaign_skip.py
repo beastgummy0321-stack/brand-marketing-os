@@ -23,7 +23,7 @@ guide_cards facts 時查「去年有沒有跳過」）。目前沒有 HTTP 路�
 from typing import Optional
 
 from app.core import cleanup
-from app.core.db import new_id, now_iso, DEV_ORG_ID
+from app.core.db import new_id, now_utc, DEV_ORG_ID
 
 
 def record_skip(conn, brand_id: str, holiday_id: str, year: int,
@@ -35,7 +35,7 @@ def record_skip(conn, brand_id: str, holiday_id: str, year: int,
         " VALUES (%s, %s, %s, %s, %s, %s, %s)"
         " ON CONFLICT(brand_id, holiday_id, year) DO UPDATE SET"
         " reason = excluded.reason, created_at = excluded.created_at",
-        (new_id("csk"), DEV_ORG_ID, brand_id, holiday_id, year, reason, now_iso()),
+        (new_id("csk"), DEV_ORG_ID, brand_id, holiday_id, year, reason, now_utc()),
     )
     conn.commit()
 
@@ -83,26 +83,24 @@ cleanup.register("檔期跳過紀錄", count_brand=count_brand_data, delete_bran
 
 
 def demo() -> None:
-    """python -m app.core.campaign_skip —— 最小自檢：隔離 tmp DB，不碰 data/app.db。"""
-    import tempfile
-    from pathlib import Path
+    """python -m app.core.campaign_skip —— 最小自檢，對本機 Supabase stack 跑（02-3b 票 9）。
+    record_skip() 本身會 commit，重跑不能靠 rollback 復原——brand_id 每次跑都重新產生，
+    避免撞到上一次留下的列（比照本機 dev 資料可丟可重建，CLAUDE.md「資料狀態」節）。"""
+    from app.core import db as coredb
 
-    from app.core import db
-
-    with tempfile.TemporaryDirectory() as tmp:
-        conn = db.connect_and_migrate(Path(tmp) / "test.db")
-        assert get_skip(conn, "brd_x", "cny", 2026) is None
-        record_skip(conn, "brd_x", "cny", 2026, reason="收假太晚，沒空間做素材")
-        assert get_skip(conn, "brd_x", "cny", 2026) == {"reason": "收假太晚，沒空間做素材"}
+    with coredb.connection() as conn:
+        brand_id = new_id("brd")
+        assert get_skip(conn, brand_id, "cny", 2026) is None
+        record_skip(conn, brand_id, "cny", 2026, reason="收假太晚，沒空間做素材")
+        assert get_skip(conn, brand_id, "cny", 2026) == {"reason": "收假太晚，沒空間做素材"}
         # 重複標記覆蓋舊理由，不是疊加
-        record_skip(conn, "brd_x", "cny", 2026, reason="新理由")
-        assert get_skip(conn, "brd_x", "cny", 2026) == {"reason": "新理由"}
+        record_skip(conn, brand_id, "cny", 2026, reason="新理由")
+        assert get_skip(conn, brand_id, "cny", 2026) == {"reason": "新理由"}
         # 理由選填：不填也能記下「有跳過」這件事
-        record_skip(conn, "brd_x", "valentine", 2026)
-        assert get_skip(conn, "brd_x", "valentine", 2026) == {"reason": None}
+        record_skip(conn, brand_id, "valentine", 2026)
+        assert get_skip(conn, brand_id, "valentine", 2026) == {"reason": None}
         # 不同年份互不影響
-        assert get_skip(conn, "brd_x", "cny", 2027) is None
-        conn.close()
+        assert get_skip(conn, brand_id, "cny", 2027) is None
     print("core.campaign_skip 自檢通過")
 
 

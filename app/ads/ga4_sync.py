@@ -13,7 +13,7 @@ from typing import Optional
 
 from app.ads import ga4_api
 from app.core import settings as coresettings
-from app.core.db import new_id, now_iso, DEV_ORG_ID
+from app.core.db import new_id, now_utc, DEV_ORG_ID
 
 PROPERTY_SETTING = "ga4_property_id"
 SERVICE_ACCOUNT_SETTING = "ga4_service_account_json"
@@ -75,7 +75,7 @@ def sync_brand(conn, brand_id: str, actor: str, *, client=None,
 
     if on_stage:
         on_stage("save")
-    ts = now_iso()
+    ts = now_utc()
     # 每次同步先清掉同一品牌、同一期間的舊列再整批寫入——GA4 彙總是「這段期間的最終數字」，
     # 不是逐日累加的時序資料，重覆同步同一期間要覆蓋而不是疊加。
     conn.execute(
@@ -97,7 +97,7 @@ def sync_brand(conn, brand_id: str, actor: str, *, client=None,
         " date_range_end = excluded.date_range_end, row_count = excluded.row_count,"
         " purchase_event_seen = excluded.purchase_event_seen, synced_at = excluded.synced_at,"
         " updated_at = excluded.updated_at",
-        (DEV_ORG_ID, brand_id, since, until, len(rows), 1 if purchase_seen else 0, ts, ts),
+        (DEV_ORG_ID, brand_id, since, until, len(rows), bool(purchase_seen), ts, ts),
     )
     conn.commit()
     return GA4SyncResult(rows=len(rows), purchase_event_seen=purchase_seen)

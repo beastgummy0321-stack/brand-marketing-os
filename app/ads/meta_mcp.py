@@ -455,7 +455,7 @@ def _ensure_campaign(conn, brand_id: str, cycle_id: str, account_id: str, packag
 
 def _create_creative(conn, brand_id: str, account_id: str, page_id: str,
                      image_hash: str, package: dict) -> str:
-    utm = json.loads(package["utm_json"] or "{}")
+    utm = package["utm_json"] or {}
     # 呼叫端（create_package）preflight 已經擋掉空到達網址的包，這裡一律帶 link_url——
     # 真人實測發現 Meta 對圖片廣告缺這個欄位是直接拒絕，不是可選。
     destination = package["destination_url"] or ""

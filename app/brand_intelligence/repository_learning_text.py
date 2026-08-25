@@ -23,6 +23,9 @@ R5（orchestrator ruling，票 F3-signoff-residue）：R3/R4 把「」『』【�
 """
 
 import re
+from datetime import datetime, timezone
+
+_MIN_TS = datetime.min.replace(tzinfo=timezone.utc)  # learned_at 排序用的最小值墊底（02-3b：型別改 datetime 後 "" 不再能跟它比大小）
 
 # 括號家族：全形／半形小括號、龜殼括號——內容是舉例性補充夾註，去重時整段丟棄（B0-23 原案）。
 # content class 額外排除引號分隔符「」（票 F3 R6 orchestrator ruling）：原本只排除自家的
@@ -102,9 +105,9 @@ def collapse_learnings(rows: list) -> list:
     collapsed = []
     for group in groups.values():
         rep_idx, representative = max(
-            group, key=lambda pair: (len(pair[1]["learning_text"]), pair[1].get("learned_at") or "")
+            group, key=lambda pair: (len(pair[1]["learning_text"]), pair[1].get("learned_at") or _MIN_TS)
         )
-        members = sorted(group, key=lambda pair: pair[1].get("learned_at") or "")
+        members = sorted(group, key=lambda pair: pair[1].get("learned_at") or _MIN_TS)
         merged = dict(representative)
         merged["verified_cycles"] = len(group)
         merged["sample_sizes"] = [m[1]["sample_size"] for m in members if m[1].get("sample_size")]

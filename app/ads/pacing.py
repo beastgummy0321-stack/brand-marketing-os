@@ -34,7 +34,7 @@ _MESSAGES = {
 _CATEGORY_BY_STATUS = {"overspend": "pacing_overspend", "underspend": "pacing_underspend"}
 
 
-def classify(*, budget: Optional[float], spend: float, start_date: str, end_date: str,
+def classify(*, budget: Optional[float], spend: float, start_date, end_date,
             today: str, threshold_pct: float) -> dict:
     """比較預算消耗進度與檔期時間進度，回傳 {"status", "time_progress", "budget_progress",
     "deviation"}。status 四選一：
@@ -49,8 +49,8 @@ def classify(*, budget: Optional[float], spend: float, start_date: str, end_date
         return {"status": "insufficient_sample", "time_progress": None,
                 "budget_progress": None, "deviation": None}
 
-    start = date.fromisoformat(start_date)
-    end = date.fromisoformat(end_date)
+    start = start_date if isinstance(start_date, date) else date.fromisoformat(start_date)
+    end = end_date if isinstance(end_date, date) else date.fromisoformat(end_date)
     total_days = max((end - start).days + 1, 1)
     elapsed_days = (date.fromisoformat(today) - start).days + 1
     elapsed_days = max(0, min(elapsed_days, total_days))

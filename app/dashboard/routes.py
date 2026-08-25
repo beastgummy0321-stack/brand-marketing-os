@@ -10,7 +10,7 @@ from datetime import date, datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import JSONResponse
+from app.shared.web import JSONResponse
 
 import app.shared.web as main_mod
 from app.ads import auto_sync as ads_auto_sync

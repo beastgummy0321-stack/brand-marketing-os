@@ -12,12 +12,11 @@
 對外進入點：本檔的 `router`。誰依賴它：只有 `app/ads/routes.py`。
 """
 
-import json
 import time
 from datetime import date, timedelta
 
 from fastapi import APIRouter, Request
-from fastapi.responses import JSONResponse
+from app.shared.web import JSONResponse
 
 import app.shared.web as main_mod
 from app.ads import budget as budget_calc
@@ -270,8 +269,8 @@ async def create_cycle(request: Request, brand_id: str):
         plan_duration = duration_value or budget_calc.plan_from_pain(budget).duration_days
         end = start + timedelta(days=plan_duration - 1)
         offer_id = offer_mod.create(
-            conn, brand_id, product_scope_json=json.dumps(list(product_ids), ensure_ascii=False),
-            valid_from=start.isoformat(), valid_to=end.isoformat(), fields=offer_fields)
+            conn, brand_id, product_scope_json=list(product_ids),
+            valid_from=start, valid_to=end, fields=offer_fields)
     cycle = ads_repo.create_cycle(conn, brand_id, product_ids=list(product_ids), pain_value=budget,
                                   objective=objective, actor=actor, phase=phase,
                                   start_date=start.isoformat(),

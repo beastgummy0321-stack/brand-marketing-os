@@ -7,7 +7,6 @@
 不碰什麼：不 import orders、dashboard，不修改 ads repository 或 reading，也不呼叫 LLM。
 """
 
-import json
 from typing import Optional
 
 from app.ads import onboarding
@@ -19,7 +18,7 @@ from app.ads import theme_repository
 from app.ads import tracking
 from app.core import orchestrator as core_orchestrator
 from app.core import rule_cards
-from app.core.db import new_id, now_iso, Conn, DEV_ORG_ID
+from app.core.db import new_id, now_utc, jsonb, Conn, DEV_ORG_ID
 
 
 # 開檔後的五類預設分工。現階段只有 Meta 真正投放，其他項目誠實保留為待辦或健檢。
@@ -144,13 +143,13 @@ def approve(conn: Conn, brand_id: str, cycle_id: str, actor: str) -> list:
         "brakes": assembled["blocks"]["brakes"],
         "schedule": assembled["blocks"]["schedule"],
     })
-    ts = now_iso()
+    ts = now_utc()
     cards = []
     conn.execute("BEGIN")
     try:
         conn.execute(
             "UPDATE campaign_plan SET plan_json = %s WHERE id = %s",
-            (json.dumps(payload, ensure_ascii=False), plan["id"]),
+            (jsonb(payload), plan["id"]),
         )
         # budget 是開檔已確認的既有天花板欄位；核可時和任務卡一起再落一次。
         conn.execute(

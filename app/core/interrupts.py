@@ -14,12 +14,12 @@
 資訊性項目逾期自動降級封存：見 _archive_stale_informational（每次 list_open 前跑一次）。
 """
 
-from datetime import date, timedelta
-from typing import Optional
+from datetime import date, datetime, timedelta
+from typing import Optional, Union
 
 from app.core import cleanup
 from app.core.audit import write_audit
-from app.core.db import new_id, now_iso, DEV_ORG_ID
+from app.core.db import new_id, now_utc, DEV_ORG_ID
 
 # 嚴重度分級（決策 0025／0026 定案，DESIGN.md §20 規則 4 的資料層對應）。
 SEVERITY_ORDER = ["money_loss", "irreversible", "rule_warning", "informational"]
@@ -78,7 +78,7 @@ STALE_AFTER_DAYS = 14  # 資訊性項目逾期自動降級封存的門檻（比�
 def enqueue(conn, *, category: str, dedupe_key: str, message: str,
             brand_id: Optional[str] = None, campaign_cycle_id: Optional[str] = None,
             action_url: Optional[str] = None, kind: Optional[str] = None,
-            visible_from: Optional[str] = None) -> Optional[str]:
+            visible_from: Optional[Union[date, datetime]] = None) -> Optional[str]:
     """送進打斷佇列；同去重鍵已存在就不重複塞（回傳 None）。不自動 commit（比照 write_audit，
     交由呼叫端決定交易邊界，方便一次排多筆用同一個交易）。"""
     spec = CATEGORIES.get(category)
@@ -108,7 +108,7 @@ def enqueue(conn, *, category: str, dedupe_key: str, message: str,
         " severity, message, action_url, visible_from, status, created_at)"
         " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'open', %s)",
         (interrupt_id, DEV_ORG_ID, brand_id, campaign_cycle_id, dedupe_key, category, kind,
-         spec["severity"], message, action_url, visible_from, now_iso()),
+         spec["severity"], message, action_url, visible_from, now_utc()),
     )
     return interrupt_id
 
@@ -130,15 +130,15 @@ def _archive_stale_informational(conn, today: Optional[str] = None) -> int:
     這類提醒還沒被使用者看過就已經因為「早就存在資料庫裡」而被判定逾期、悄悄消失，
     等於從沒機會被看到（曾是真實的潛在 bug，不是本函式故意的行為）。
     """
-    today = today or date.today().isoformat()
-    cutoff = (date.fromisoformat(today) - timedelta(days=STALE_AFTER_DAYS)).isoformat()
+    today_date = date.fromisoformat(today) if today else date.today()
+    cutoff = today_date - timedelta(days=STALE_AFTER_DAYS)
     placeholders = ",".join("%s" for _ in _NEVER_STALE_KINDS)
     cursor = conn.execute(
         "UPDATE interrupt SET status = 'archived', resolved_at = %s"
         " WHERE status = 'open' AND severity = 'informational'"
         " AND COALESCE(visible_from, created_at) < %s"
         f" AND (kind IS NULL OR kind NOT IN ({placeholders}))",
-        (now_iso(), cutoff, *_NEVER_STALE_KINDS),
+        (now_utc(), cutoff, *_NEVER_STALE_KINDS),
     )
     conn.commit()
     return cursor.rowcount
@@ -203,7 +203,7 @@ def resolve(conn, interrupt_id: str, *, actor: str) -> None:
         raise ValueError(f"找不到打斷佇列項目：{interrupt_id}")
     conn.execute(
         "UPDATE interrupt SET status = 'resolved', resolved_at = %s WHERE id = %s",
-        (now_iso(), interrupt_id),
+        (now_utc(), interrupt_id),
     )
     write_audit(conn, brand_id=row["brand_id"], entity_type="interrupt", entity_id=interrupt_id,
                 action="resolve", actor=actor)

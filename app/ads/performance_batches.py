@@ -59,7 +59,7 @@ def can_settle(conn, brand_id: str, cycle_id: str, cycle: dict) -> tuple:
         return False, "這期已經收帳了。", True
     row = conn.execute(
         "SELECT 1 FROM performance_snapshot WHERE brand_id = %s AND campaign_cycle_id = %s"
-        " AND quarantined = 0 AND source != 'simulated' LIMIT 1", (brand_id, cycle_id),
+        " AND quarantined = false AND source != 'simulated' LIMIT 1", (brand_id, cycle_id),
     ).fetchone()
     if row is None:
         return False, "這期還沒有任何成效數字，先匯入或手填一筆再結算。", False

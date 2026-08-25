@@ -19,12 +19,11 @@ performance_synced_at）。規格書與使用者故事只要求同一主題內�
   算新指紋，文字與指紋一起寫回 creative_theme_component，並留一筆稽核（票 12 驗收 2）。
 """
 
-import json
 from typing import Optional
 
 from app.ads import theme_engine
 from app.core.audit import write_audit
-from app.core.db import now_iso
+from app.core.db import now_utc, jsonb
 
 # Meta breakdown 鍵 → creative_theme_component.component_type（本系統的欄位名沒有
 # _asset 尾碼，見 app/creative/theme_engine.py normalize_single_image()）。
@@ -64,7 +63,7 @@ def _record_one(conn, brand_id: str, cycle_id: str, row, *, component_type: str,
         "UPDATE creative_theme_component SET meta_asset_id = %s, performance_impressions = %s,"
         " performance_clicks = %s, performance_conversions = %s, performance_synced_at = %s"
         " WHERE brand_id = %s AND id = %s",
-        (asset_id, row.impressions, row.clicks, row.conversions, now_iso(), brand_id,
+        (asset_id, row.impressions, row.clicks, row.conversions, now_utc(), brand_id,
          component_id),
     )
 
@@ -105,7 +104,7 @@ def _reconcile_if_changed(conn, brand_id: str, component_id: str, text: str, *,
     conn.execute(
         "UPDATE creative_theme_component SET content = %s, fingerprint_json = %s"
         " WHERE brand_id = %s AND id = %s",
-        (text, json.dumps(new_fingerprint, ensure_ascii=False) if new_fingerprint else None,
+        (text, jsonb(new_fingerprint) if new_fingerprint else None,
          brand_id, component_id),
     )
     write_audit(conn, brand_id=brand_id, entity_type="creative_theme_component",

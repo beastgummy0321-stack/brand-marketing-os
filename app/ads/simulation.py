@@ -33,7 +33,7 @@ from app.ads import performance_batches
 from app.ads import reading as ads_reading
 from app.ads import repository as ads_repo
 from app.brand_intelligence import repository as bi
-from app.core.db import new_id, now_iso, DEV_ORG_ID
+from app.core.db import new_id, now_utc, DEV_ORG_ID
 
 # 產業通例值。只在這個品牌完全沒有歷史時使用，畫面必須標明來源。
 INDUSTRY_CTR = 0.012          # 點擊率 1.2%
@@ -107,7 +107,7 @@ def generate(conn, brand_id: str, cycle_id: str, actor: str) -> tuple:
     totals = simulate_totals(cycle, basis,
                              average_price=_average_price(conn, brand_id, cycle_id))
 
-    ts = now_iso()
+    ts = now_utc()
     # 走共用刪除入口，它會先清掉掛在上面的 derived_metric（先子後父）
     performance_batches.delete_snapshots(conn, brand_id, cycle_id, source="simulated")
     # 票 11 D3：模擬成效沒有廣告可對——沒有 publishing_package，`resolve_product_id`

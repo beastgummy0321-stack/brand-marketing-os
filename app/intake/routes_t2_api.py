@@ -4,14 +4,14 @@
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Request
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import Response
 
 from app.brand_intelligence import personas
 from app.intake import ai, persona_generation
 from app.intake import repository as ir
 from app.intake import state, truth_card
 from app.shared import web
-from app.shared.web import require_brand
+from app.shared.web import JSONResponse, require_brand
 
 
 router = APIRouter()

@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 """把既有判讀與下期建議收斂成最多三張週提案卡。"""
 
-import json
 
 from app.ads import nextcycle
 from app.ads import plan as ads_plan
@@ -13,7 +12,7 @@ from app.core import interrupts as core_interrupts
 from app.core import orchestrator as core_orchestrator
 from app.core import rule_cards
 from app.core.audit import write_audit
-from app.core.db import new_id, now_iso, DEV_ORG_ID
+from app.core.db import new_id, now_utc, jsonb, DEV_ORG_ID
 
 
 RECOMMENDATION_TYPE = "weekly_proposal"
@@ -334,7 +333,7 @@ def select_cards(product_readings: list, budget: dict, historical_cells: list,
 
 
 def _card_from_row(row) -> dict:
-    content = json.loads(row["content_json"] or "{}")
+    content = row["content_json"] or {}
     return {"id": row["id"], **content, "status": row["status"]}
 
 
@@ -353,7 +352,7 @@ def _cards_summary(conn, brand_id: str, cycle_id: str, status: str) -> dict:
         " AND recommendation_type = %s AND status = %s ORDER BY created_at, id",
         (brand_id, cycle_id, RECOMMENDATION_TYPE, status),
     ).fetchall()
-    names = [json.loads(row["content_json"] or "{}").get("target", "") for row in rows]
+    names = [(row["content_json"] or {}).get("target", "") for row in rows]
     return {"count": len(names), "names": names}
 
 
@@ -384,7 +383,7 @@ def archive_on_close(conn, brand_id: str, cycle_id: str, actor: str) -> dict:
     conn.execute(
         "UPDATE recommendation SET status = %s, updated_at = %s WHERE brand_id = %s"
         " AND campaign_cycle_id = %s AND recommendation_type = %s AND status = 'GENERATED'",
-        (ARCHIVED_ON_CLOSE, now_iso(), brand_id, cycle_id, RECOMMENDATION_TYPE),
+        (ARCHIVED_ON_CLOSE, now_utc(), brand_id, cycle_id, RECOMMENDATION_TYPE),
     )
     interrupt_id = core_interrupts.enqueue(
         conn, category="weekly_proposal_archived_on_close",
@@ -425,7 +424,7 @@ def generate(conn, brand_id: str, cycle_id: str, *, enqueue_ready: bool = True) 
         for card in existing if card["status"] in ("ACCEPTED", "APPLIED", "REJECTED")
     }
     cards = [card for card in cards if (card["action"], card["target"]) not in handled]
-    ts = now_iso()
+    ts = now_utc()
     for card in cards:
         content = {key: card[key] for key in ("action", "target", "reason", "impact")}
         if card.get("suggested_amount") is not None:
@@ -442,7 +441,7 @@ def generate(conn, brand_id: str, cycle_id: str, *, enqueue_ready: bool = True) 
             " updated_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'GENERATED', %s, %s)",
             (new_id("rec"), DEV_ORG_ID, brand_id, cycle_id, card["product_id"],
              card["performance_reading_id"], RECOMMENDATION_TYPE,
-             json.dumps(content, ensure_ascii=False), ts, ts),
+             jsonb(content), ts, ts),
         )
     if cards and enqueue_ready:
         core_interrupts.enqueue(
@@ -580,12 +579,12 @@ def approve_card(conn, brand_id: str, cycle_id: str, recommendation_id: str, *,
             raise ValueError("花錢提案要先確認金額")
         card["confirmed_amount"] = float(confirmed_amount)
 
-    ts = now_iso()
+    ts = now_utc()
     content = {key: value for key, value in card.items() if key not in ("id", "status")}
     conn.execute(
         "UPDATE recommendation SET content_json = %s, status = 'ACCEPTED', updated_at = %s"
         " WHERE id = %s",
-        (json.dumps(content, ensure_ascii=False), ts, recommendation_id),
+        (jsonb(content), ts, recommendation_id),
     )
     write_audit(
         conn, brand_id=brand_id, entity_type="recommendation", entity_id=recommendation_id,
@@ -613,7 +612,7 @@ def skip(conn, brand_id: str, cycle_id: str, recommendation_id: str, *, actor: s
         raise ValueError("這張週提案卡已經核可")
     conn.execute(
         "UPDATE recommendation SET status = 'REJECTED', updated_at = %s WHERE id = %s",
-        (now_iso(), recommendation_id),
+        (now_utc(), recommendation_id),
     )
     write_audit(
         conn, brand_id=brand_id, entity_type="recommendation", entity_id=recommendation_id,
@@ -636,7 +635,7 @@ def approve(conn, brand_id: str, cycle_id: str, *, actor: str) -> dict:
         " AND recommendation_type = %s AND status = 'GENERATED' ORDER BY created_at, id",
         (brand_id, cycle_id, RECOMMENDATION_TYPE),
     ).fetchall()
-    ts = now_iso()
+    ts = now_utc()
     approved = []
     pending_confirmation = []
     for row in rows:
@@ -677,7 +676,7 @@ def complete(conn, brand_id: str, cycle_id: str, recommendation_id: str, *, acto
     if row["status"] != "ACCEPTED":
         raise ValueError("這張週提案卡還沒核可")
 
-    ts = now_iso()
+    ts = now_utc()
     conn.execute(
         "UPDATE recommendation SET status = 'APPLIED', updated_at = %s WHERE id = %s",
         (ts, recommendation_id),

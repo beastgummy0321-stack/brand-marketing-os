@@ -12,7 +12,6 @@
 系統把該理由轉成負面約束、只重寫這一則，放回同一個位置。不加新關卡、不離開這一頁。
 """
 
-import json
 from collections import Counter
 from typing import Callable, NamedTuple, Optional
 
@@ -24,7 +23,7 @@ from app.ads import theme_repository as theme_repo
 from app.brand_intelligence import repository as bi
 from app.core import settings as coresettings
 from app.core.audit import write_audit
-from app.core.db import new_id, now_iso, DEV_ORG_ID
+from app.core.db import new_id, now_utc, jsonb, DEV_ORG_ID
 from app.llm import context_compiler, gateway, methodology, pricing, providers
 
 PROVIDER = providers.AnthropicProvider()  # 測試整包換掉
@@ -268,10 +267,7 @@ def _rejection_constraints(conn, brand_id: str, limit: int = 12) -> list:
         axis = fp.REASON_TO_AXIS.get(row["reason_code"])
         if axis is None:
             continue
-        try:
-            value = (json.loads(row["fingerprint_json"] or "{}") or {}).get(axis)
-        except ValueError:
-            continue
+        value = (row["fingerprint_json"] or {}).get(axis)
         if not value or (axis, value) in seen:
             continue
         seen.add((axis, value))
@@ -455,7 +451,7 @@ def _persist(conn, brand_id: str, cycle_id: str, cells: list, variants: list,
              actor: str, methodology_missing: Optional[list] = None,
              customer_voice_available: bool = True,
              missing_creative_types: Optional[list] = None) -> None:
-    ts = now_iso()
+    ts = now_utc()
     briefs = {cell["id"]: _brief_for_cell(conn, brand_id, cycle_id, cell, ts) for cell in cells}
     cell_products = {cell["id"]: cell["product_id"] for cell in cells}
     # 方法論缺席清單、顧客原話語料是否可用、補打一次後仍缺的型別，存進每則的 attributes_json
@@ -473,16 +469,15 @@ def _persist(conn, brand_id: str, cycle_id: str, cells: list, variants: list,
             " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'DRAFT', %s)",
             (new_id("cvr"), DEV_ORG_ID, variant["variant_type"], briefs[cell_id], cycle_id, cell_id,
              brand_id, cell_products.get(cell_id),
-             json.dumps({"content": variant["content"],
-                        "methodology_missing": methodology_missing,
-                        "creative_angle_number": variant["creative_angle_number"],
-                        "on_camera": variant["on_camera"],
-                        "cut_type": variant["cut_type"],
-                        "quote_source": variant["quote_source"],
-                        "customer_voice_available": customer_voice_available,
-                        "missing_creative_types": missing_creative_types},
-                       ensure_ascii=False),
-             json.dumps(variant["fingerprint"], ensure_ascii=False),
+             jsonb({"content": variant["content"],
+                    "methodology_missing": methodology_missing,
+                    "creative_angle_number": variant["creative_angle_number"],
+                    "on_camera": variant["on_camera"],
+                    "cut_type": variant["cut_type"],
+                    "quote_source": variant["quote_source"],
+                    "customer_voice_available": customer_voice_available,
+                    "missing_creative_types": missing_creative_types}),
+             jsonb(variant["fingerprint"]),
              variant["rationale"], rank, ts),
         )
 
@@ -646,7 +641,7 @@ def restore(conn, brand_id: str, variant_id: str, *, actor: str) -> dict:
         " decision, fingerprint_json, decided_by, decided_at)"
         " VALUES (%s, %s, %s, %s, 'theme_component', %s, 'adopted', %s, %s, %s)",
         (new_id("adp"), DEV_ORG_ID, brand_id, variant["campaign_cycle_id"], variant_id,
-         json.dumps(variant["fingerprint"], ensure_ascii=False), actor, now_iso()),
+         jsonb(variant["fingerprint"]), actor, now_utc()),
     )
     write_audit(conn, brand_id=brand_id, entity_type="creative_theme_component", entity_id=variant_id,
                 action="compliance_restore", actor=actor,
@@ -658,7 +653,7 @@ def restore(conn, brand_id: str, variant_id: str, *, actor: str) -> dict:
 def restore_all_auto_held(conn, brand_id: str, cycle_id: str, *, actor: str) -> int:
     """批次一鍵：把這期所有還處在「系統自動預設挑掉」狀態的素材一次勾回（修憲落地 L2，
     決策 0034 第 25 條第 3 點）。回傳勾回則數。"""
-    ts = now_iso()
+    ts = now_utc()
     restored = 0
     for variant in list_variants(conn, brand_id, cycle_id):
         if not variant["auto_held"]:
@@ -668,7 +663,7 @@ def restore_all_auto_held(conn, brand_id: str, cycle_id: str, *, actor: str) -> 
             " target_id, decision, fingerprint_json, decided_by, decided_at)"
             " VALUES (%s, %s, %s, %s, 'theme_component', %s, 'adopted', %s, %s, %s)",
             (new_id("adp"), DEV_ORG_ID, brand_id, cycle_id, variant["id"],
-             json.dumps(variant["fingerprint"], ensure_ascii=False), actor, ts),
+             jsonb(variant["fingerprint"]), actor, ts),
         )
         restored += 1
     if restored:
@@ -748,19 +743,18 @@ def rewrite(conn, brand_id: str, variant_id: str, *, reason_code: str, actor: st
         (new_variant_id, DEV_ORG_ID, variant["variant_type"], variant["creative_brief_id"],
          variant["campaign_cycle_id"], variant["experiment_cell_id"], brand_id,
          variant["product_id"],
-         json.dumps({"content": data["content"].strip(),
-                     "rewritten_from": variant_id,
-                     # 改寫沿用原本那則的角度／出鏡／切法／原話出處——這是同一個創意位置的
-                     # 換稿，不是重新選角度（票 7：矩陣選角只在整批生成時做一次）。
-                     "creative_angle_number": variant["creative_angle_number"],
-                     "on_camera": variant["on_camera"],
-                     "cut_type": variant["cut_type"],
-                     "quote_source": variant["quote_source"],
-                     "customer_voice_available": variant["customer_voice_available"]},
-                    ensure_ascii=False),
-         json.dumps(fp.normalize(data.get("fingerprint")), ensure_ascii=False),
+         jsonb({"content": data["content"].strip(),
+                "rewritten_from": variant_id,
+                # 改寫沿用原本那則的角度／出鏡／切法／原話出處——這是同一個創意位置的
+                # 換稿，不是重新選角度（票 7：矩陣選角只在整批生成時做一次）。
+                "creative_angle_number": variant["creative_angle_number"],
+                "on_camera": variant["on_camera"],
+                "cut_type": variant["cut_type"],
+                "quote_source": variant["quote_source"],
+                "customer_voice_available": variant["customer_voice_available"]}),
+         jsonb(fp.normalize(data.get("fingerprint"))),
          (data.get("rationale") or "").strip() if isinstance(data.get("rationale"), str) else "",
-         variant["recommendation_rank"], now_iso()),
+         variant["recommendation_rank"], now_utc()),
     )
     conn.commit()
     return True, new_variant_id

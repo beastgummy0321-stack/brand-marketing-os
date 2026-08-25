@@ -86,9 +86,9 @@ def _insert_running_row(
     attempt_no: int,
 ) -> dict:
     row_id = db.new_id("llm")
-    ts = db.now_iso()
-    knowledge_item_ids_json = json.dumps(context.knowledge_item_ids, ensure_ascii=False)
-    # 輸入內容雜湊：對已排序的 knowledge_item_ids 取 sha256，供重現比對（03 §3.1）。
+    ts = db.now_utc()
+    # 輸入內容雜湊：對已排序的 knowledge_item_ids 取 sha256，供重現比對（03 §3.1）；
+    # 純雜湊輸入不是欄位值，維持 json.dumps。
     input_context_hash = hashlib.sha256(
         json.dumps(sorted(context.knowledge_item_ids), ensure_ascii=False).encode("utf-8")
     ).hexdigest()
@@ -103,8 +103,9 @@ def _insert_running_row(
                    NULL, NULL, NULL, NULL, NULL, %s, NULL, NULL)""",
         (
             row_id, db.DEV_ORG_ID, brand_id, task_type,
-            json.dumps(context.context_scope, ensure_ascii=False),
-            knowledge_item_ids_json, input_context_hash, knowledge_item_ids_json,
+            db.jsonb(context.context_scope),
+            db.jsonb(context.knowledge_item_ids), input_context_hash,
+            db.jsonb(context.knowledge_item_ids),
             context.brand_version, context.product_version,
             prompt_template_id, prompt_template_version, provider_name, model, attempt_no, ts,
         ),
@@ -120,11 +121,11 @@ def _mark_succeeded(conn: db.Conn, row_id: str, *,
         "UPDATE llm_task SET status = 'succeeded', structured_output_json = %s, rendered_output = %s, "
         "usage_json = %s, cost = %s, finished_at = %s WHERE id = %s",
         (
-            json.dumps(structured_output, ensure_ascii=False) if structured_output is not None else None,
+            db.jsonb(structured_output) if structured_output is not None else None,
             rendered_output,
-            json.dumps(usage, ensure_ascii=False),
+            db.jsonb(usage),
             cost,
-            db.now_iso(),
+            db.now_utc(),
             row_id,
         ),
     )
@@ -134,7 +135,7 @@ def _mark_succeeded(conn: db.Conn, row_id: str, *,
 def _mark_failed(conn: db.Conn, row_id: str, *, status: str, error: str) -> None:
     conn.execute(
         "UPDATE llm_task SET status = %s, error = %s, finished_at = %s WHERE id = %s",
-        (status, error, db.now_iso(), row_id),
+        (status, error, db.now_utc(), row_id),
     )
     conn.commit()
 

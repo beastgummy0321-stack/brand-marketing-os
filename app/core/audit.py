@@ -6,10 +6,9 @@
 一起 commit（本函式本身不 commit，交由呼叫端決定交易邊界）。
 """
 
-import json
 from typing import Optional
 
-from app.core.db import new_id, now_iso, Conn, DEV_ORG_ID
+from app.core.db import new_id, now_utc, jsonb, Conn, DEV_ORG_ID
 
 
 def write_audit(
@@ -43,10 +42,10 @@ def write_audit(
             entity_id,
             action,
             actor.strip(),
-            json.dumps(before, ensure_ascii=False) if before is not None else None,
-            json.dumps(after, ensure_ascii=False) if after is not None else None,
+            jsonb(before) if before is not None else None,
+            jsonb(after) if after is not None else None,
             reason,
-            now_iso(),
+            now_utc(),
         ),
     )
     return audit_id

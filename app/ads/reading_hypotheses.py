@@ -42,7 +42,7 @@ def _product_totals(conn, brand_id: str, cycle_id: str) -> dict:
         " COALESCE(SUM(clicks),0) clicks, COALESCE(SUM(spend),0) spend,"
         " COALESCE(SUM(conversions),0) conversions, COALESCE(SUM(revenue),0) revenue,"
         " COUNT(*) rows FROM performance_snapshot"
-        " WHERE brand_id = %s AND campaign_cycle_id = %s AND quarantined = 0"
+        " WHERE brand_id = %s AND campaign_cycle_id = %s AND quarantined = false"
         " AND product_id IS NOT NULL GROUP BY product_id",
         (brand_id, cycle_id),
     ).fetchall()
@@ -86,7 +86,7 @@ def comparison_cells(conn, brand_id: str, cycle_id: str,
           " JOIN external_ad_mapping xam ON xam.id = ps.external_ad_mapping_id"
           " JOIN publishing_package pkg ON pkg.id = xam.publishing_package_id"
           " JOIN experiment_cell cell ON cell.id = pkg.experiment_cell_id"
-          " WHERE ps.brand_id = %s AND ps.campaign_cycle_id = %s AND ps.quarantined = 0")
+          " WHERE ps.brand_id = %s AND ps.campaign_cycle_id = %s AND ps.quarantined = false")
     params = [brand_id, cycle_id]
     if product_id:
         sql += " AND ps.product_id = %s"

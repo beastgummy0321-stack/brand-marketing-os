@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, File, Form, Request, UploadFile
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import Response
 
 from app.core import vocab as md
 from app.brand_intelligence import background_job
@@ -38,7 +38,7 @@ from app.core import settings as core_settings
 from app.core.db import REPO_ROOT, new_id
 from app.llm import gateway, providers
 from app.shared import web
-from app.shared.web import NotFoundKind, clean, require_actor, require_brand
+from app.shared.web import JSONResponse, NotFoundKind, clean, require_actor, require_brand
 
 router = APIRouter()
 

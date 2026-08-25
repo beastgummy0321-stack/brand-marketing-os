@@ -32,7 +32,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Request
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import Response
 
 from app.core import vocab as md
 from app.brand_web import product_ai_calls
@@ -44,7 +44,7 @@ from app.brand_intelligence import repository as repo
 from app.core import cleanup
 from app.core.db import new_id
 from app.shared import web
-from app.shared.web import NotFoundKind, clean, require_actor, require_brand, require_product
+from app.shared.web import JSONResponse, NotFoundKind, clean, require_actor, require_brand, require_product
 
 router = APIRouter()
 

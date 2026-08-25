@@ -13,7 +13,6 @@ answer_key, answer_text, skipped, llm_task_id}（03 §3A.2）。answer_key 為�
 {"done": true} 哨兵標記——03 §3A 沒有專欄可放這個旗標，先以此代替（見回報）。
 """
 
-import json
 import os
 import re
 from pathlib import Path
@@ -49,12 +48,9 @@ def _conn(conn=None):
 # ---------------------------------------------------------------------------
 
 def _loads(raw, default):
-    if not raw:
-        return default
-    try:
-        return json.loads(raw)
-    except ValueError:
-        return default
+    """`raw` 是 jsonb 欄位讀出來的值：psycopg 已經解析成 dict/list，直接回傳即可
+    （02-3b：不再是字串，不再需要 json.loads）。"""
+    return raw if raw is not None else default
 
 
 def _qa_entries(qa: list) -> list:
@@ -118,7 +114,7 @@ def _row_to_draft(conn, row: dict) -> dict:
         "description": row["description"],
         "urls": _loads(row["research_urls_json"], []),
         "photos": photos,
-        "budget_limit": row["cost_limit"],
+        "budget_limit": float(row["cost_limit"]),
         "scan_done": row["scan_impressions_json"] is not None,
         "scan_impressions": impressions,
         "scan_products": scan_products,
@@ -186,21 +182,18 @@ def save(draft: dict, conn=None) -> None:
         current_step=draft["step"],
         current_question_no=len(entries),
         description=draft["description"],
-        photos_json=json.dumps(photos, ensure_ascii=False),
-        research_urls_json=json.dumps(draft["urls"], ensure_ascii=False),
-        scan_sources_json=(json.dumps(draft["url_results"], ensure_ascii=False)
-                           if draft["scan_done"] else None),
-        scan_impressions_json=(json.dumps(impressions, ensure_ascii=False)
-                                if impressions is not None else None),
-        scan_products_json=json.dumps({
+        photos_json=photos,
+        research_urls_json=draft["urls"],
+        scan_sources_json=(draft["url_results"] if draft["scan_done"] else None),
+        scan_impressions_json=impressions,
+        scan_products_json={
             "names": draft.get("scan_products") or [],
             "product_card_drafts": draft.get("product_card_drafts") or [],
-        }, ensure_ascii=False),
-        qa_json=json.dumps(draft["qa"], ensure_ascii=False) if draft["qa"] else None,
+        },
+        qa_json=draft["qa"] if draft["qa"] else None,
         handoff_depth=draft["handoff_depth"],
         paste_raw=draft["paste_raw"] or None,
-        paste_validation_json=(json.dumps(validation, ensure_ascii=False)
-                               if validation is not None else None),
+        paste_validation_json=validation,
         cost_limit=draft["budget_limit"],
     )
 
@@ -242,14 +235,13 @@ def invalid_url(urls: list) -> Optional[str]:
 
 def prev_photos(last_draft_row: Optional[dict]) -> list:
     """上一輪草稿的照片（photos_json 形狀 → 畫面／new_draft 慣用形狀）；W1b 重新調研沿用。"""
-    import json as _json
     if not last_draft_row:
         return []
     return [
         {"name": p.get("display_name"), "path": p.get("file_path"),
          "size_mb": round((p.get("size_bytes") or 0) / (1024 * 1024), 1),
          "token": p.get("token") or ""}
-        for p in _json.loads(last_draft_row["photos_json"] or "[]")
+        for p in (last_draft_row["photos_json"] or [])
     ]
 
 
@@ -525,57 +517,3 @@ def question_options(q: dict) -> list:
             + [("other", "以上都不是，我自己說")])
 
 
-# ---------------------------------------------------------------------------
-# 示範資料專用：直接生出「已完成初掃、答了前兩題」的草稿（DESIGN.md §14.3 品牌 C）
-# ---------------------------------------------------------------------------
-
-def seed_in_progress_draft(brand_id: str, brand_name: str, conn=None) -> dict:
-    """只給 app/seed_demo.py 呼叫。不跑一次精靈，直接構造出對應 §14.3 描述的草稿狀態
-    （含三筆示範 llm_task，讓花費明細有東西可看），用來驗收「建檔進行中・繼續建檔」
-    與草稿續接（§19.3）。"""
-    conn = _conn(conn)
-    draft = new_draft(
-        brand_id, brand_name,
-        description="做台灣中南部小農的烏龍與紅茶，主打單一產區、冷泡也不苦。",
-        urls=["https://example.com/about", "https://example.com/products",
-              "https://example.com/blog/2024", "https://example.com/press"],
-        photos=[{"name": "小滿製茶_烏龍茶包_正面.jpg", "size_mb": 1.8, "path": None},
-                {"name": "小滿製茶_包裝背標.png", "size_mb": 0.9, "path": None}],
-        conn=conn,
-    )
-    draft["scan_done"] = True
-    draft["scan_impressions"] = list(script.SCAN_IMPRESSIONS)
-    draft["url_results"] = [
-        {"url": draft["urls"][0], "ok": True}, {"url": draft["urls"][1], "ok": True},
-        {"url": draft["urls"][2], "ok": True}, {"url": draft["urls"][3], "ok": False},
-    ]
-    demo_tasks = [
-        ("讀取網址與整理初步印象", "intake_scan", 4.20),
-        ("第 1 題", "intake_question", 1.50),
-        ("第 2 題", "intake_question", 1.50),
-    ]
-    from app.core import db as coredb
-    for purpose, task_type, cost in demo_tasks:
-        task_id = coredb.new_id("llm")
-        conn.execute(
-            """INSERT INTO llm_task (id, org_id, brand_id, task_type, context_scope_json,
-                input_context_ids_json, input_context_hash, knowledge_item_ids_json,
-                brand_version, prompt_template_id, prompt_template_version, provider, model,
-                status, attempt_no, cost, started_at, finished_at)
-               VALUES (%s, %s, %s, %s, %s, '[]', '', '[]', 1, %s, 'v1', 'seed', 'seed-demo',
-                       'succeeded', 1, %s, %s, %s)""",
-            (task_id, coredb.DEV_ORG_ID, brand_id, task_type,
-             json.dumps({"brand_id": brand_id}, ensure_ascii=False),
-             task_type, cost, coredb.now_iso(), coredb.now_iso()),
-        )
-        conn.commit()
-        ir.add_llm_task_ref(conn, brand_id, draft["id"], task_id, purpose)
-    for i in range(2):
-        q = script.QUESTIONS[i]
-        append_question(draft, q["question"], q["suggested"], q["branches"], None)
-        draft["qa"][-1]["answer_key"] = "suggested"
-    q3 = script.QUESTIONS[2]
-    append_question(draft, q3["question"], q3["suggested"], q3["branches"], None)
-    draft["step"] = 3
-    save(draft, conn)
-    return get_draft(brand_id, conn)

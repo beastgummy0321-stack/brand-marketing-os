@@ -21,7 +21,7 @@ re-export（`from app.brand_intelligence.repository_channels import ...`），�
 from typing import Optional
 
 from app.core.audit import write_audit
-from app.core.db import new_id, now_iso, Conn, DEV_ORG_ID
+from app.core.db import new_id, now_utc, Conn, DEV_ORG_ID
 
 
 def _require(value, message: str) -> None:
@@ -50,7 +50,7 @@ def create_channel(conn: Conn, brand_id: str, *, actor: str, channel_type: str,
         raise ValueError("owned_channel.status 只能是 active 或 inactive")
     resolved_platform = platform or _CHANNEL_PLATFORM_DEFAULT.get(channel_type, "web")
     channel_id = new_id("och")
-    ts = now_iso()
+    ts = now_utc()
     row = {
         "id": channel_id, "brand_id": brand_id, "channel_type": channel_type,
         "platform": resolved_platform, "name": name, "identifier": identifier, "status": status,
@@ -95,7 +95,7 @@ def update_channel(conn: Conn, brand_id: str, channel_id: str, *, actor: str,
     if before is None:
         raise ValueError(f"找不到自有渠道：{channel_id}")
     platform = _CHANNEL_PLATFORM_DEFAULT.get(channel_type, "web")
-    ts = now_iso()
+    ts = now_utc()
     conn.execute(
         "UPDATE owned_channel SET channel_type = %s, platform = %s, name = %s, identifier = %s, "
         "status = %s, updated_at = %s WHERE id = %s AND brand_id = %s",

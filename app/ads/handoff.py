@@ -12,7 +12,6 @@ LLM 不參與）——命名規則要能被機器再解析回來，交給模型�
 兩者都不由「交接包產好了」或「素材確認了」自動推導——扣板機的是人。
 """
 
-import json
 from collections import Counter
 from datetime import date
 from typing import Optional
@@ -24,7 +23,7 @@ from app.ads import creative as ads_creative
 from app.ads import repository as ads_repo
 from app.brand_intelligence import repository as bi
 from app.core.audit import write_audit
-from app.core.db import new_id, now_iso, DEV_ORG_ID
+from app.core.db import new_id, now_utc, jsonb, DEV_ORG_ID
 
 OBJECTIVE_META_LABEL = {
     "awareness": "品牌知名度",
@@ -97,7 +96,7 @@ def build_names(brand: dict, cycle: dict, cell: dict, index: int) -> dict:
     {{campaign.name}} 之後，系統不再把 cycle id 寫死進網址參數，投手得照這裡建議的
     活動名稱去 Meta 建立，Meta 送廣告時才會把這個名字（含短碼）代回網址，系統才認得回來。
     """
-    day = (cycle["start_date"] or date.today().isoformat()).replace("-", "")
+    day = (cycle["start_date"] or date.today()).strftime("%Y%m%d")
     return {
         "campaign_name": f"{_slug(brand['name'])}_{day}_{cycle['objective']}_{cycle_short_code(cycle)}",
         "adset_name": f"{_slug(cell.get('creative_angle') or '')}_{index:02d}",
@@ -169,7 +168,7 @@ def build_packages(conn, brand_id: str, cycle_id: str, actor: str, *, commit: bo
         (brand_id, cycle_id),
     )
 
-    ts = now_iso()
+    ts = now_utc()
     count = 0
     for index, group in enumerate(groups, start=1):
         cell = group["cell"]
@@ -200,7 +199,7 @@ def build_packages(conn, brand_id: str, cycle_id: str, actor: str, *, commit: bo
             (new_id("pkg"), DEV_ORG_ID, brand_id, cycle_id, cell["id"], product_id,
              hook["id"] if hook else None, copy["id"] if copy else None,
              names["campaign_name"], names["adset_name"], names["ad_name"],
-             destination or "", json.dumps(utm, ensure_ascii=False),
+             destination or "", jsonb(utm),
              cycle["objective"], round(daily, 2), ts),
         )
         count += 1
@@ -248,7 +247,7 @@ def list_packages(conn, brand_id: str, cycle_id: str) -> list:
     )]
     for row in rows:
         cycle = ads_repo.get_cycle(conn, brand_id, cycle_id)
-        utm = json.loads(row["utm_json"] or "{}")
+        utm = row["utm_json"] or {}
         url = row["destination_url"] or ""
         row["full_url"] = f"{url}{'&' if '?' in url else '?'}{utm_query(utm)}" if url else ""
         row["utm_text"] = utm_query(utm)
@@ -310,7 +309,7 @@ def go_live(conn, brand_id: str, cycle_id: str, package_id: str, mapping_id: str
     if not actor:
         raise ValueError("需要具名操作人才能授權投放")
 
-    ts = now_iso()
+    ts = now_utc()
     auth_id = new_id("ath")
     conn.execute(
         "INSERT INTO activation_authorization (id, org_id, brand_id, scope_type, scope_ref,"
@@ -372,7 +371,7 @@ def authorize_and_map(conn, brand_id: str, cycle_id: str, package_id: str, *,
     # 上線前校驗不符只提醒不擋（ADR 0006，取代已作廢的 0025 補遺第 7 點鎖住規則）——
     # 警示由畫面顯示（見 app/ads/codes.verification_warning），這裡不再讀校驗結果。
 
-    ts = now_iso()
+    ts = now_utc()
     account_id = (meta_ids.get("meta_account_id") or "").strip() or None
     ad_account_id = _ensure_ad_account(conn, account_id, ts) if account_id else None
 

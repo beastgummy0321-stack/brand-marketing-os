@@ -14,7 +14,7 @@ settings/ads` 與同款表單 POST，新殼走下面這幾組 JSON API，行為�
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Request
-from fastapi.responses import JSONResponse
+from app.shared.web import JSONResponse
 
 import app.shared.web as main_mod
 from app.ads import meta_mcp

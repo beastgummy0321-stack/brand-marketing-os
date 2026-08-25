@@ -59,7 +59,7 @@ def _create_source_ref(brand_id: str, actor: str, text: str) -> Optional[str]:
         return None
     row = repo.create_source_reference(
         web.conn, brand_id, actor=actor, title=text, source_type="other",
-        captured_date=datetime.now(timezone.utc).date().isoformat(),
+        captured_date=datetime.now(timezone.utc).date(),
     )
     return row["id"]
 

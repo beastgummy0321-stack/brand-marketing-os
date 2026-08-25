@@ -31,7 +31,6 @@
   `"unbacked_claim"`。細節見本檔 `_UNBACKED_CLAIM_SOURCES` 附近的說明。
 """
 
-import json
 import re
 from typing import Optional
 
@@ -41,7 +40,7 @@ from app.ads import fingerprint as fp
 from app.ads import guardrails
 from app.brand_intelligence import repository as bi
 from app.core.audit import write_audit
-from app.core.db import new_id, now_iso, DEV_ORG_ID
+from app.core.db import new_id, now_utc, jsonb, DEV_ORG_ID
 
 # 中文與英文常見的引號形式，抽「規則裡被特別標出來的字詞」用。
 _QUOTE_PATTERN = re.compile(r"[「『\"'“”]([^「」『』\"'“”]{1,20})[」』\"'“”]")
@@ -386,12 +385,12 @@ def load_findings(conn, brand_id: str, cycle_id: str) -> dict:
     """從資料庫讀回本期的法務掃描結果，整理成 {variant_id: [...]}。"""
     rows = conn.execute(
         "SELECT * FROM finding WHERE brand_id = %s AND campaign_cycle_id = %s"
-        " AND finding_type = 'compliance' AND resolved = 0 ORDER BY created_at",
+        " AND finding_type = 'compliance' AND resolved = false ORDER BY created_at",
         (brand_id, cycle_id),
     ).fetchall()
     grouped: dict = {}
     for row in rows:
-        evidence = json.loads(row["evidence_json"] or "{}")
+        evidence = row["evidence_json"] or {}
         variant_id = evidence.get("variant_id")
         if variant_id:
             grouped.setdefault(variant_id, []).append(dict(row))
@@ -430,7 +429,7 @@ def apply_default_holds(conn, brand_id: str, cycle_id: str, flags: dict, actor: 
     seen = set()
     for variant_id, findings in flags.items():
         for finding in findings:
-            evidence = json.loads(finding.get("evidence_json") or "{}")
+            evidence = finding.get("evidence_json") or {}
             if evidence.get("source_category") in holdable_categories and variant_id not in seen:
                 seen.add(variant_id)
                 hold_variant_ids.append(variant_id)
@@ -447,7 +446,7 @@ def apply_default_holds(conn, brand_id: str, cycle_id: str, flags: dict, actor: 
         return 0
 
     variants_by_id = {v["id"]: v for v in ads_creative.list_variants(conn, brand_id, cycle_id)}
-    ts = now_iso()
+    ts = now_utc()
     held = 0
     for variant_id in to_hold:
         variant = variants_by_id.get(variant_id)
@@ -458,7 +457,7 @@ def apply_default_holds(conn, brand_id: str, cycle_id: str, flags: dict, actor: 
             " target_id, decision, reason_code, fingerprint_json, decided_by, decided_at)"
             " VALUES (%s, %s, %s, %s, 'variant', %s, 'rejected', %s, %s, %s, %s)",
             (new_id("adp"), DEV_ORG_ID, brand_id, cycle_id, variant_id, fp.AUTO_HOLD_REASON_CODE,
-             json.dumps(variant["fingerprint"], ensure_ascii=False), actor, ts),
+             jsonb(variant["fingerprint"]), actor, ts),
         )
         write_audit(conn, brand_id=brand_id, entity_type="creative_variant", entity_id=variant_id,
                     action="compliance_auto_hold", actor=actor, before=None,

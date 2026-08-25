@@ -20,7 +20,6 @@ Meta 有學習期，前幾天的數字本來就不準；樣本太少時任何結
 所以先過「資料夠不夠」這一關，不夠就回 insufficient_data，不硬給方向。
 """
 
-import json
 from typing import Optional
 
 from app.ads import inflation as ads_inflation
@@ -34,7 +33,7 @@ from app.brand_intelligence import repository as bi
 from app.core import interrupts as core_interrupts
 from app.core import prototype_phase
 from app.core import rule_cards
-from app.core.db import new_id, now_iso, DEV_ORG_ID
+from app.core.db import new_id, now_utc, jsonb, DEV_ORG_ID
 from app.llm import gateway, pricing, providers
 
 # 拆檔（票 10-split-reading-py，D2：這裡的名字全部維持可從 reading.py 匯入）——
@@ -327,7 +326,7 @@ def run(conn, brand_id: str, cycle_id: str, actor: str,
                                           cycle_totals=cycle_totals, per_product=per_product,
                                           trigger_reason=trigger_reason)
 
-    ts = now_iso()
+    ts = now_utc()
     from app.ads import weekly_proposals as ads_weekly_proposals  # 循環相依，延後到函式內才 import（同下方 nextcycle 寫法）
     if settled_run: ads_weekly_proposals.archive_on_close(conn, brand_id, cycle_id, actor)  # 票 F9：結算版先歸檔還候著的 GENERATED 卡，免得被下面這段 DELETE 悄悄清空
     preserved_weekly = "recommendation_type = 'weekly_proposal' AND status IN ('ACCEPTED', 'APPLIED', 'ARCHIVED_ON_CLOSE')"  # 保留花錢煞車紀錄／剛歸檔卡的關聯，先解除它們對即將刪除的舊判讀列之外鍵
@@ -339,7 +338,8 @@ def run(conn, brand_id: str, cycle_id: str, actor: str,
     # 入帳時可能記下了這一版 performance_reading 的 id，重判必須先斷開，否則 Postgres 的
     # 外鍵約束會擋下面這個 DELETE（append-only 的學習列本身不受影響，只是來源指標
     # 指到新的一版）。learning_ledger 現屬品牌永久層（修憲落地 A3），走 bi 的公開函式。
-    delete_scope = "" if settled_run else " AND COALESCE(rule_result_json->>'is_tentative', 1) != 0"  # D4
+    # 02-3b 票 10：jsonb ->>'is_tentative' 是文字，要 ::boolean 才能跟預設值比對。
+    delete_scope = "" if settled_run else " AND COALESCE((rule_result_json->>'is_tentative')::boolean, true)"  # D4
     reading_ids = [r["id"] for r in conn.execute(
         "SELECT id FROM performance_reading WHERE campaign_cycle_id = %s" + delete_scope, (cycle_id,)
     ).fetchall()]
@@ -443,22 +443,21 @@ def run(conn, brand_id: str, cycle_id: str, actor: str,
             " status, rule_result_json, confidence_level, llm_explanation, llm_task_id,"
             " created_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
             (new_id("prd"), DEV_ORG_ID, brand_id, cycle_id, verdict["product_id"], verdict["status"],
-             json.dumps({"reasons": verdict["reasons"], "kpis": verdict["kpis"],
-                        "statistical_level": verdict["statistical_level"],
-                        "statistical_level_label": verdict["statistical_level_label"],
-                        "statistical_note": verdict["statistical_note"],
-                        "unsettled_ratio": verdict.get("unsettled_ratio"),
-                        "unsettled_note": verdict.get("unsettled_note"),
-                        "is_tentative": verdict.get("is_tentative"),
-                        "repurchase_line": verdict.get("repurchase_line"),
-                        "baseline_comparison": verdict.get("baseline_comparison"),
-                        "channel_comparison": verdict.get("channel_comparison"),
-                        "data_grade": verdict.get("data_grade"),
-                        "ga4_leak": verdict.get("ga4_leak"),
-                        "asset_breakdown": verdict.get("asset_breakdown"),
-                        "breakeven": verdict.get("breakeven"),
-                        "hypothesis_reviews": verdict.get("hypothesis_reviews")},
-                        ensure_ascii=False),
+             jsonb({"reasons": verdict["reasons"], "kpis": verdict["kpis"],
+                    "statistical_level": verdict["statistical_level"],
+                    "statistical_level_label": verdict["statistical_level_label"],
+                    "statistical_note": verdict["statistical_note"],
+                    "unsettled_ratio": verdict.get("unsettled_ratio"),
+                    "unsettled_note": verdict.get("unsettled_note"),
+                    "is_tentative": verdict.get("is_tentative"),
+                    "repurchase_line": verdict.get("repurchase_line"),
+                    "baseline_comparison": verdict.get("baseline_comparison"),
+                    "channel_comparison": verdict.get("channel_comparison"),
+                    "data_grade": verdict.get("data_grade"),
+                    "ga4_leak": verdict.get("ga4_leak"),
+                    "asset_breakdown": verdict.get("asset_breakdown"),
+                    "breakeven": verdict.get("breakeven"),
+                    "hypothesis_reviews": verdict.get("hypothesis_reviews")}),
              confidence["label"],
              explanation["text"] if verdict["product_id"] is None else None,
              explanation["task_id"], ts),
@@ -782,11 +781,12 @@ def load(conn, brand_id: str, cycle_id: str) -> dict:
     """讀回判讀結果：{cycle: 檔期層, products: [產品層...]}。D4：結算版跟暫定版可能同時存在，規則「結算版贏」——ORDER BY 讓暫定列排前、結算列排後，字典覆寫去重，最後寫入的贏。"""
     rows = [dict(r) for r in conn.execute(
         "SELECT * FROM performance_reading WHERE brand_id = %s AND campaign_cycle_id = %s ORDER BY"
-        " product_id IS NULL, COALESCE(rule_result_json->>'is_tentative', 1) DESC, created_at", (brand_id, cycle_id),
+        " product_id IS NULL, COALESCE((rule_result_json->>'is_tentative')::boolean, true) DESC, created_at",
+        (brand_id, cycle_id),
     )]
     products_by_id, cycle_row = {}, None
     for row in rows:
-        row["result"] = json.loads(row["rule_result_json"] or "{}")
+        row["result"] = row["rule_result_json"] or {}
         row["status_label"] = STATUS_LABELS.get(row["status"], row["status"])
         if row["product_id"] is None:
             cycle_row = row

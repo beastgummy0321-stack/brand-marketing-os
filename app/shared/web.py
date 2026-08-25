@@ -25,12 +25,15 @@ ADR 0004（取消具名授權）：系統單機單人，`require_actor()` 不再
 request／工作綁定的那條連線），所以不需要、也沒有「重開一條換掉」這回事了。
 """
 
-from datetime import datetime, timezone
+import json
+from datetime import date, datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 from typing import Optional
 from urllib.parse import urlencode
 
 from fastapi import Request
+from fastapi.responses import JSONResponse as _FastAPIJSONResponse
 from fastapi.responses import RedirectResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
@@ -42,6 +45,35 @@ from app.core import interrupts as core_interrupts
 BASE_DIR = Path(__file__).resolve().parent.parent  # .../app
 
 conn = coredb.ConnProxy()
+
+
+def to_json_value(value):
+    """JSON 序列化邊界（02-3b）：DB 讀出的 datetime/date → ISO 字串，numeric(Decimal) → float。
+
+    傳給 `json.dumps(..., default=to_json_value)`，只在遇到 json 原生不認得的型別時呼叫。
+    """
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if isinstance(value, Decimal):
+        return float(value)
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
+
+
+class JSONResponse(_FastAPIJSONResponse):
+    """比照 `fastapi.responses.JSONResponse`，多套一層 `to_json_value`（02-3b）。
+
+    全站唯一的 JSON 序列化出口：直接回傳 dict 的路由已經靠 FastAPI 的
+    `jsonable_encoder` 認得 datetime/Decimal，但顯式 `JSONResponse(...)` 繞過那層、
+    直接 `json.dumps`——這裡補上同樣的轉換，讓呼叫端不用逐一路由手動轉字串。
+    """
+
+    def render(self, content) -> bytes:
+        return json.dumps(
+            content,
+            ensure_ascii=False,
+            allow_nan=False,
+            default=to_json_value,
+        ).encode("utf-8")
 
 
 # ---------------------------------------------------------------------------

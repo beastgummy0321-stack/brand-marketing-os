@@ -11,12 +11,11 @@ CYCLE_CASCADE_TABLES／_PRODUCT_CASCADE_LABELS（該檔已頂到 800 行檔案�
 不把 CRUD 也塞進去），本檔只管建立／讀取／依格查詢／狀態更新。
 """
 
-import json
 from typing import Optional
 
 from app.ads import fingerprint as fp
 from app.core.audit import write_audit
-from app.core.db import new_id, now_iso, Conn, DEV_ORG_ID
+from app.core.db import new_id, now_utc, jsonb, Conn, DEV_ORG_ID
 
 
 def _rows(cursor) -> list:
@@ -42,10 +41,10 @@ def _insert_component(conn: Conn, brand_id: str, campaign_cycle_id: str,
         " over_budget, similarity_flag, created_at)"
         " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
         (new_id("cthc"), DEV_ORG_ID, brand_id, campaign_cycle_id, theme_id, str(component_type).strip(),
-         component.get("sequence"), str(content), json.dumps(fingerprint, ensure_ascii=False)
+         component.get("sequence"), str(content), jsonb(fingerprint)
              if fingerprint is not None else None,
-         1 if component.get("over_budget") else 0,
-         1 if component.get("similarity_flag") else 0, ts),
+         bool(component.get("over_budget")),
+         bool(component.get("similarity_flag")), ts),
     )
 
 
@@ -65,7 +64,7 @@ def create_theme(conn: Conn, brand_id: str, *, campaign_cycle_id: str,
         raise ValueError("actor 為必填")
 
     theme_id = new_id("cth")
-    ts = now_iso()
+    ts = now_utc()
     conn.execute(
         "INSERT INTO creative_theme (id, org_id, brand_id, campaign_cycle_id, experiment_cell_id,"
         " format_key, name, folder_code, status, created_at, updated_at)"
@@ -99,8 +98,6 @@ def list_theme_components(conn: Conn, brand_id: str, theme_id: str) -> list:
         " ORDER BY sequence, created_at", (brand_id, theme_id),
     ))
     for row in rows:
-        if row["fingerprint_json"]:
-            row["fingerprint_json"] = json.loads(row["fingerprint_json"])
         _attach_component_decision(conn, brand_id, row)
     return rows
 
@@ -134,8 +131,6 @@ def get_component(conn: Conn, brand_id: str, component_id: str) -> Optional[dict
     ).fetchone())
     if row is None:
         return None
-    if row["fingerprint_json"]:
-        row["fingerprint_json"] = json.loads(row["fingerprint_json"])
     _attach_component_decision(conn, brand_id, row)
     return row
 
@@ -199,7 +194,7 @@ def update_theme_status(conn: Conn, brand_id: str, theme_id: str, *,
 
     conn.execute(
         "UPDATE creative_theme SET status = %s, updated_at = %s WHERE brand_id = %s AND id = %s",
-        (status.strip(), now_iso(), brand_id, theme_id),
+        (status.strip(), now_utc(), brand_id, theme_id),
     )
     after = get_theme(conn, brand_id, theme_id)
     write_audit(conn, brand_id=brand_id, entity_type="creative_theme", entity_id=theme_id,
@@ -224,7 +219,7 @@ def adopt_theme(conn: Conn, brand_id: str, theme_id: str, *, actor: str) -> dict
     if not actor or not actor.strip():
         raise ValueError("actor 為必填")
 
-    ts = now_iso()
+    ts = now_utc()
     conn.execute(
         "UPDATE creative_theme SET status = 'adopted', updated_at = %s WHERE brand_id = %s AND id = %s",
         (ts, brand_id, theme_id),
@@ -259,14 +254,14 @@ def reject_component(conn: Conn, brand_id: str, component_id: str, *,
         raise ValueError("actor 為必填")
 
     before = {"rejected": component["rejected"]}
-    ts = now_iso()
+    ts = now_utc()
     conn.execute(
         "INSERT INTO adoption_decision (id, org_id, brand_id, campaign_cycle_id, target_type, target_id,"
         " decision, reason_code, reason_text, fingerprint_json, decided_by, decided_at)"
         " VALUES (%s, %s, %s, %s, 'theme_component', %s, 'rejected', %s, %s, %s, %s, %s)",
         (new_id("adp"), DEV_ORG_ID, brand_id, component["campaign_cycle_id"], component_id, reason_code,
          (reason_text or "").strip() or None,
-         json.dumps(component["fingerprint_json"] or {}, ensure_ascii=False), actor, ts),
+         jsonb(component["fingerprint_json"] or {}), actor, ts),
     )
     after = get_component(conn, brand_id, component_id)
     write_audit(conn, brand_id=brand_id, entity_type="creative_theme_component",

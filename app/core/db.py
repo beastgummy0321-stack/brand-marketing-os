@@ -4,7 +4,7 @@
 集裝箱憲章 §1 邊界定案：
 1. 對外進入點：本檔（`app/core/db.py`）。
 2. 進出形狀：見下方 public 函式群——`dsn()`/`pool()`/`connection()`/`current()`/
-   `ConnProxy`/`now_iso()`/`new_id()`/`DEV_ORG_ID`。其餘一律私有。
+   `ConnProxy`/`now_utc()`/`now_iso()`/`jsonb()`/`new_id()`/`DEV_ORG_ID`。其餘一律私有。
 3. 呼叫端：全站經 `app.shared.web.conn`（`ConnProxy`，350 處呼叫點不動）與直接
    `from app.core import db` 的模組。
 4. 不碰什麼：`app/*/migrations/*.sql`、任何 `repository.py`、任何 SQL 字面、
@@ -16,17 +16,20 @@ Migration 交給 Supabase CLI 管（`supabase/migrations/`，02-2 落地內容�
 擁有 migration runner。
 """
 
+import json
 import logging
 import os
 import time
 from contextlib import contextmanager
 from contextvars import ContextVar
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 from typing import Iterator, Optional, Sequence
 
 import psycopg
 from psycopg.rows import dict_row
+from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool
 
 logger = logging.getLogger(__name__)
@@ -43,9 +46,33 @@ _CROCKFORD32 = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 DEV_ORG_ID = "org_dev"  # ADR 0027 D2a: placeholder until slice 3 (identity) binds org from JWT
 
 
+def now_utc() -> datetime:
+    """tz-aware UTC 現在時刻（D1a：寫入 `*_at`/`*_date` 欄位一律傳 datetime/date，不傳字串）。"""
+    return datetime.now(timezone.utc)
+
+
 def now_iso() -> str:
-    """ISO-8601 UTC 字串（03 §1：時間一律存這個格式）。"""
-    return datetime.now(timezone.utc).isoformat()
+    """ISO-8601 UTC 字串——只給 API JSON 輸出用（02-3b：不再寫入 `*_at` 欄位，改用 now_utc()）。"""
+    return now_utc().isoformat()
+
+
+def _json_default(value):
+    """`jsonb()` 的序列化安全網：站內幾乎每個 `row` dict 都同時拿去組 SQL 參數（datetime／
+    Decimal 原生值）跟丟進 `write_audit(before=row, after=row)`（整包再包一次 jsonb）——
+    這裡補上 datetime/date → ISO 字串、Decimal → float，跟 `app/shared/web.py
+    to_json_value()` 是同一組轉換規則，只是這裡管的是「寫進 DB 的 jsonb」而不是「回應給
+    瀏覽器的 JSON」。02-3b 跑 demo() 自檢時 target_cpa.py 的 write_audit(after=row) 實測
+    炸過一次（row 裡的 created_at 是 datetime），才補的這道網。"""
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if isinstance(value, Decimal):
+        return float(value)
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
+
+
+def jsonb(value):
+    """包一層 `psycopg.types.json.Jsonb`，寫 jsonb 欄位用，取代 json.dumps（02-3b）。"""
+    return Jsonb(value, dumps=lambda v: json.dumps(v, ensure_ascii=False, default=_json_default))
 
 
 def new_id(prefix: str) -> str:

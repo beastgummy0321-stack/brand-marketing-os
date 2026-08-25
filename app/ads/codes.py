@@ -22,7 +22,6 @@
 統計外洩偵測的進階版（分群、趨勢模型）是陷阱／下一批，樣本小不值得建複雜模型。
 """
 
-import json
 from datetime import date
 from typing import Optional
 
@@ -30,7 +29,7 @@ from app.ads import performance as ads_performance
 from app.ads import repository as ads_repo
 from app.core import interrupts as core_interrupts
 from app.core.audit import write_audit
-from app.core.db import new_id, now_iso, DEV_ORG_ID
+from app.core.db import new_id, now_utc, jsonb, DEV_ORG_ID
 
 # 第 7 刀（A1 三層地界新規則：app/ads 不得 import app.orders，見
 # test_architecture_boundaries.py）：orders_repo 不在這裡 import，改由組裝根
@@ -57,7 +56,7 @@ def _code_text(cycle: dict, source_type: str) -> str:
     """碼字自動生成：tag ＋ 檔期起始日 ＋ 檔期 id 尾碼。檔期 id 全域唯一，
     碼字因此天生「期期換碼不重用」，不需要額外查重或亂數重試。"""
     tag = {"ad": "AD", "word_of_mouth": "WOM"}[source_type]
-    day = (cycle["start_date"] or date.today().isoformat()).replace("-", "")
+    day = (cycle["start_date"] or date.today()).strftime("%Y%m%d")
     suffix = cycle["id"].split("_")[-1][-6:].upper()
     return f"{tag}{day}{suffix}"
 
@@ -91,7 +90,7 @@ def generate_codes(conn, brand_id: str, cycle_id: str, *, discount_type: str,
     valid_to = valid_to or cycle["end_date"]
 
     existing_sources = {c["source_type"] for c in list_codes(conn, brand_id, cycle_id)}
-    ts = now_iso()
+    ts = now_utc()
     created = []
     for source_type in SOURCE_TYPES:
         if source_type in existing_sources:
@@ -140,8 +139,9 @@ def _mismatch_messages(planned: dict, actual: dict, label: str) -> list:
 
     actual_from = (actual.get("valid_from") or "").strip()
     actual_to = (actual.get("valid_to") or "").strip()
-    if actual_from != planned["valid_from"] or actual_to != planned["valid_to"]:
-        out.append(f"{label}效期不符：規劃 {planned['valid_from']}～{planned['valid_to']}，"
+    planned_from, planned_to = planned["valid_from"].isoformat(), planned["valid_to"].isoformat()
+    if actual_from != planned_from or actual_to != planned_to:
+        out.append(f"{label}效期不符：規劃 {planned_from}～{planned_to}，"
                    f"後台填的是 {actual_from or '？'}～{actual_to or '？'}。")
     return out
 
@@ -165,13 +165,13 @@ def verify(conn, brand_id: str, cycle_id: str, *, actual: dict, actor: str) -> d
         mismatches.extend(_mismatch_messages(planned, entered, SOURCE_LABELS[source_type]))
 
     passed = not mismatches
-    ts = now_iso()
+    ts = now_utc()
     verification_id = new_id("vcv")
     conn.execute(
         "INSERT INTO cycle_code_verification (id, org_id, brand_id, campaign_cycle_id, passed,"
         " mismatches_json, checked_by, checked_at, created_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
-        (verification_id, DEV_ORG_ID, brand_id, cycle_id, 1 if passed else 0,
-         json.dumps(mismatches, ensure_ascii=False) if mismatches else None, actor, ts, ts),
+        (verification_id, DEV_ORG_ID, brand_id, cycle_id, passed,
+         jsonb(mismatches) if mismatches else None, actor, ts, ts),
     )
     write_audit(conn, brand_id=brand_id, entity_type="campaign_cycle", entity_id=cycle_id,
                 action="verify_voucher_codes", actor=actor, before=None,
@@ -188,7 +188,7 @@ def latest_verification(conn, brand_id: str, cycle_id: str) -> Optional[dict]:
     if row is None:
         return None
     result = dict(row)
-    result["mismatches"] = json.loads(result["mismatches_json"]) if result["mismatches_json"] else []
+    result["mismatches"] = result["mismatches_json"] or []
     return result
 
 

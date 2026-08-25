@@ -15,7 +15,6 @@ build_names），所以反解得回來。使用者在 Meta 上手改名字，猜
 """
 
 import calendar
-import json
 from dataclasses import asdict, dataclass
 from datetime import date, timedelta
 from typing import Optional
@@ -30,7 +29,7 @@ from app.ads import tracking
 from app.brand_intelligence import repository as bi
 from app.core import settings as coresettings
 from app.core.audit import write_audit
-from app.core.db import new_id, now_iso, DEV_ORG_ID
+from app.core.db import new_id, now_utc, jsonb, DEV_ORG_ID
 
 TOKEN_SETTING = "meta_access_token"
 ACCOUNT_SETTING = "meta_ad_account_id"
@@ -298,7 +297,7 @@ def sync_account(conn, actor: str, *, client=None, account_id: Optional[str] = N
     until = until or today
     since = since or (date.fromisoformat(until) - timedelta(days=DEFAULT_LOOKBACK_DAYS)).isoformat()
 
-    ts = now_iso()
+    ts = now_utc()
     ad_account_id = ads_handoff._ensure_ad_account(conn, account_external, ts)
     result = SyncResult()
     # 決策 0039 第 7 條：認領過但查無檔期對應（沒有 external_ad_mapping）的活動＝舊廣告，
@@ -374,7 +373,7 @@ def sync_account(conn, actor: str, *, client=None, account_id: Optional[str] = N
         product_id = ads_performance.resolve_product_id(conn, brand_id, cycle_id, package_id)
         # 票 11：raw_json 存這一列 Meta 回傳的原始洞察報告（不影響去重——sync.py 的
         # 簽章從一開始就直接用 meta_ad_id 等真實欄位，見 `_duplicate_signature`）。
-        raw_json = json.dumps(asdict(insight), ensure_ascii=False)
+        raw_json = asdict(insight)
 
         conn.execute(
             "INSERT INTO performance_snapshot (id, org_id, brand_id, campaign_cycle_id, product_id,"
@@ -384,13 +383,13 @@ def sync_account(conn, actor: str, *, client=None, account_id: Optional[str] = N
             " raw_json, reconciled, source, import_batch_id, quarantined, quarantine_reason,"
             " created_at)"
             " VALUES (%s, %s, %s, %s, %s, %s, 'meta', %s, %s, %s, %s, %s, %s, %s, %s, 'TWD', %s, %s, %s, %s, %s, %s, %s,"
-            " %s, 1, 'meta_api', %s, %s, %s, %s)",
+            " %s, true, 'meta_api', %s, %s, %s, %s)",
             (new_id("psn"), DEV_ORG_ID, brand_id, cycle_id, product_id, mapping_id, account_external,
              insight.campaign_id, insight.adset_id, insight.ad_id,
              insight.date_start, insight.date_stop, insight.date_stop, ts,
              insight.impressions, insight.clicks, insight.spend, insight.conversions,
-             insight.revenue, insight.frequency, insight.reach, raw_json, f"sync_{ts}",
-             1 if quarantined else 0,
+             insight.revenue, insight.frequency, insight.reach, jsonb(raw_json), f"sync_{ts}",
+             quarantined,
              "；".join(f.message for f in sanity) or None, ts),
         )
         result.snapshots += 1
@@ -451,7 +450,7 @@ def claim(conn, brand_id: str, discovered_id: str, actor: str) -> dict:
     if row["claim_status"] == "claimed" and row["claimed_brand_id"] != brand_id:
         raise ValueError("這個活動已經認領給別的品牌了")
 
-    ts = now_iso()
+    ts = now_utc()
     conn.execute(
         "UPDATE discovered_campaign SET claim_status = 'claimed', claimed_brand_id = %s,"
         " claimed_by = %s, claimed_at = %s, updated_at = %s WHERE id = %s",
@@ -475,7 +474,7 @@ def ignore(conn, brand_id: str, discovered_id: str, actor: str) -> None:
                        (discovered_id,)).fetchone()
     if row is None:
         raise ValueError("找不到這個廣告活動")
-    ts = now_iso()
+    ts = now_utc()
     conn.execute(
         "UPDATE discovered_campaign SET claim_status = 'ignored', suggested_brand_id = NULL,"
         " updated_at = %s WHERE id = %s", (ts, discovered_id),

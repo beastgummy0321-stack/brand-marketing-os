@@ -15,7 +15,7 @@ import time
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Request
-from fastapi.responses import JSONResponse
+from app.shared.web import JSONResponse
 
 import app.shared.web as main_mod
 from app.ads import routes as ads_routes

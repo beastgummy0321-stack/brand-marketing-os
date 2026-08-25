@@ -27,7 +27,7 @@ handler 與它們 redirect 落地用的 GET hub 頁整批刪除了（只留 `_cr
 from pathlib import Path
 
 from fastapi import APIRouter, Request
-from fastapi.responses import JSONResponse
+from app.shared.web import JSONResponse
 
 from app.core import vocab as md
 from app.brand_intelligence import repository as repo

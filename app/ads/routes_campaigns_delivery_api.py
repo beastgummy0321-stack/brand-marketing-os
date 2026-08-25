@@ -4,7 +4,7 @@
 from typing import Optional
 
 from fastapi import APIRouter, Request
-from fastapi.responses import JSONResponse
+from app.shared.web import JSONResponse
 
 import app.shared.web as main_mod
 from app.ads import cockpit_extras, delivery

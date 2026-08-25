@@ -10,7 +10,6 @@ Intelligence 既有四張表）、寫 audit_log（entity_type='intake_item'）�
 呼叫端不各自實作。R10 強制客戶證實來源已由決策 0013 廢止（用戶優先，不擋確認）。
 """
 
-import json
 from typing import Optional
 
 from app.brand_intelligence import customer_voice
@@ -77,15 +76,15 @@ def create_draft(conn: db.Conn, brand_id: str, description: str,
     if cost_limit is None:
         cost_limit = coresettings.get_intake_budget_limit(conn)
     draft_id = db.new_id("idr")
-    ts = db.now_iso()
+    ts = db.now_utc()
     conn.execute(
         """INSERT INTO intake_draft (
             id, org_id, brand_id, status, current_step, current_question_no, description,
             photos_json, research_urls_json, cost_limit, llm_task_refs_json,
             created_at, updated_at
         ) VALUES (%s, %s, %s, 'draft', 2, 0, %s, %s, %s, %s, '[]', %s, %s)""",
-        (draft_id, db.DEV_ORG_ID, brand_id, description, json.dumps(photos, ensure_ascii=False),
-         json.dumps(research_urls, ensure_ascii=False), cost_limit, ts, ts),
+        (draft_id, db.DEV_ORG_ID, brand_id, description, db.jsonb(photos),
+         db.jsonb(research_urls), cost_limit, ts, ts),
     )
     conn.commit()
     return get_draft(conn, brand_id, draft_id)
@@ -149,43 +148,47 @@ def get_draft(conn: db.Conn, brand_id: str, draft_id: str) -> Optional[dict]:
 
 
 def update_draft(conn: db.Conn, brand_id: str, draft_id: str, **fields) -> dict:
+    """`*_json` 欄位傳原生 dict/list 即可，這裡統一包一層 `db.jsonb()`——呼叫端（state.py）
+    不必自己 json.dumps（02-3b：單一收口，不逐一呼叫端轉換）。"""
     unknown = set(fields) - _DRAFT_FIELDS
     if unknown:
         raise ValueError(f"intake_draft 不允許更新欄位：{sorted(unknown)}")
     if fields:
+        fields = {k: (db.jsonb(v) if k.endswith("_json") and v is not None else v)
+                  for k, v in fields.items()}
         sets = ", ".join(f"{k} = %s" for k in fields)
         conn.execute(
             f"UPDATE intake_draft SET {sets}, updated_at = %s WHERE brand_id = %s AND id = %s",
-            (*fields.values(), db.now_iso(), brand_id, draft_id),
+            (*fields.values(), db.now_utc(), brand_id, draft_id),
         )
         conn.commit()
     return get_draft(conn, brand_id, draft_id)
 
 
 def complete_draft(conn: db.Conn, brand_id: str, draft_id: str) -> dict:
-    return update_draft(conn, brand_id, draft_id, status="completed", completed_at=db.now_iso())
+    return update_draft(conn, brand_id, draft_id, status="completed", completed_at=db.now_utc())
 
 
 def add_llm_task_ref(conn: db.Conn, brand_id: str, draft_id: str,
                      llm_task_id: str, purpose: str) -> None:
     """只存 id 與人話用途，不存金額副本（03 §3A.5 第 5 點）。"""
     draft = get_draft(conn, brand_id, draft_id)
-    refs = json.loads(draft["llm_task_refs_json"] or "[]")
+    refs = draft["llm_task_refs_json"] or []
     refs.append({"llm_task_id": llm_task_id, "purpose": purpose})
-    update_draft(conn, brand_id, draft_id, llm_task_refs_json=json.dumps(refs, ensure_ascii=False))
+    update_draft(conn, brand_id, draft_id, llm_task_refs_json=refs)
 
 
 def list_llm_cost_items(conn: db.Conn, draft: dict) -> list:
     """花費明細：依 refs 逐筆讀 llm_task 的 cost / status，即時算、不存副本。"""
     items = []
-    for ref in json.loads(draft["llm_task_refs_json"] or "[]"):
+    for ref in draft["llm_task_refs_json"] or []:
         row = conn.execute(
             "SELECT cost, status FROM llm_task WHERE id = %s", (ref["llm_task_id"],)
         ).fetchone()
         if row is None:
             continue
         failed = row["status"] != "succeeded"
-        items.append({"label": ref["purpose"], "amount": row["cost"] or 0.0, "failed": failed})
+        items.append({"label": ref["purpose"], "amount": float(row["cost"] or 0), "failed": failed})
     return items
 
 
@@ -195,7 +198,7 @@ def get_draft_spend(conn: db.Conn, draft_id: str) -> float:
     ).fetchone()
     if row is None:
         return 0.0
-    ids = [r["llm_task_id"] for r in json.loads(row["llm_task_refs_json"] or "[]")]
+    ids = [r["llm_task_id"] for r in (row["llm_task_refs_json"] or [])]
     if not ids:
         return 0.0
     placeholders = ",".join("%s" for _ in ids)
@@ -273,7 +276,7 @@ def create_items(conn: db.Conn, brand_id: str, draft_id: str, rows: list) -> lis
     """
     from app.intake import paste_parse  # 延遲 import 避免循環（paste_parse → vocab）
 
-    ts = db.now_iso()
+    ts = db.now_utc()
     try:
         conn.execute(
             "DELETE FROM intake_item WHERE intake_draft_id = %s AND brand_id = %s AND outcome = 'pending'",
@@ -385,7 +388,7 @@ def _make_source(conn, brand_id: str, actor: str, text: Optional[str],
         return None
     row = bi_repo.create_source_reference(
         conn, brand_id, actor=actor, title=text, source_type="other",
-        captured_date=datetime.now(timezone.utc).date().isoformat(), note=(note or None),
+        captured_date=datetime.now(timezone.utc).date(), note=(note or None),
     )
     return row["id"]
 
@@ -492,7 +495,7 @@ def resolve_item(conn: db.Conn, brand_id: str, item_id: str, outcome: str,
     conn.execute(
         """UPDATE intake_item SET outcome = %s, client_evidence = %s, target_table = %s,
            target_id = %s, processed_by = %s, processed_at = %s WHERE brand_id = %s AND id = %s""",
-        (outcome, client_evidence, target_table, target_id, processed_by, db.now_iso(),
+        (outcome, client_evidence, target_table, target_id, processed_by, db.now_utc(),
          brand_id, item_id),
     )
     write_audit(
@@ -575,7 +578,7 @@ def update_resolved_item(conn: db.Conn, brand_id: str, item_id: str, *,
         conn.execute(
             f"UPDATE intake_item SET {sets}, processed_by = %s, processed_at = %s "
             "WHERE brand_id = %s AND id = %s",
-            (*changed.values(), processed_by, db.now_iso(), brand_id, item_id),
+            (*changed.values(), processed_by, db.now_utc(), brand_id, item_id),
         )
     after_row = conn.execute(
         "SELECT * FROM intake_item WHERE brand_id = %s AND id = %s", (brand_id, item_id),
@@ -615,7 +618,7 @@ def _save_truth_card_move(conn: db.Conn, brand_id: str, item: dict, *,
     conn.execute(
         f"UPDATE intake_item SET {sets}, processed_by = %s, processed_at = %s "
         "WHERE brand_id = %s AND id = %s",
-        (*changes.values(), processed_by, db.now_iso(), brand_id, item["id"]),
+        (*changes.values(), processed_by, db.now_utc(), brand_id, item["id"]),
     )
     row = conn.execute(
         "SELECT * FROM intake_item WHERE brand_id = %s AND id = %s", (brand_id, item["id"]),

@@ -72,7 +72,7 @@ def order_history(conn, brand_id: str, today: Optional[str] = None) -> dict:
     if row is None or not row["earliest"]:
         return {"days": None, "earliest": None, "order_count": 0}
     today = today or date.today().isoformat()
-    days = (date.fromisoformat(today) - date.fromisoformat(row["earliest"])).days
+    days = (date.fromisoformat(today) - row["earliest"]).days
     return {"days": days, "earliest": row["earliest"], "order_count": row["c"]}
 
 
@@ -87,8 +87,8 @@ def ga4_coverage(conn, brand_id: str) -> dict:
     ).fetchone()
     if row is None or not row["earliest"]:
         return {"months": None, "start": None, "end": None}
-    start = date.fromisoformat(row["earliest"])
-    end = date.fromisoformat(row["latest"])
+    start = row["earliest"]
+    end = row["latest"]
     return {"months": max((end - start).days // 30, 0),
             "start": row["earliest"], "end": row["latest"]}
 

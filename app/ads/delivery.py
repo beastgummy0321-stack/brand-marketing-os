@@ -1,12 +1,10 @@
 # -*- coding: utf-8 -*-
 """交付前素材確認，狀態保存於既有 campaign_cycle.derived_plan_json 的新增鍵。"""
 
-import json
-
 from app.ads import creative
 from app.ads import handoff
 from app.ads import repository as ads_repo
-from app.core.db import now_iso
+from app.core.db import now_utc, jsonb
 
 
 _STATE_KEY = "delivery_confirmation"
@@ -24,7 +22,7 @@ def _save_state(conn, cycle: dict, state: dict, *, commit: bool = True) -> None:
     plan[_STATE_KEY] = state
     conn.execute(
         "UPDATE campaign_cycle SET derived_plan_json = %s, updated_at = %s WHERE id = %s AND brand_id = %s",
-        (json.dumps(plan, ensure_ascii=False), now_iso(), cycle["id"], cycle["brand_id"]),
+        (jsonb(plan), now_utc(), cycle["id"], cycle["brand_id"]),
     )
     if commit:
         conn.commit()

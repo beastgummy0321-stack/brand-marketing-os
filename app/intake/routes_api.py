@@ -24,14 +24,14 @@ from datetime import datetime, timezone
 import re
 
 from fastapi import APIRouter, File, Request, UploadFile
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import Response
 
 from app.brand_intelligence import background_job
 from app.brand_intelligence import repository as repo
-from app.core.db import new_id, now_iso
+from app.core.db import new_id, now_iso, now_utc
 from app.intake import ai, paste_parse, repository as ir, script, state
 from app.shared import web
-from app.shared.web import NotFoundKind, clean, require_actor, require_brand
+from app.shared.web import JSONResponse, NotFoundKind, clean, require_actor, require_brand
 
 router = APIRouter()
 
@@ -540,7 +540,7 @@ async def handoff_generate(request: Request, brand_id: str):
     prompt_text = script.build_prompt(draft, depth, known_products=known,
                                       existing=ir.existing_confirmed_data(web.conn, brand_id))
     ir.update_draft(web.conn, brand_id, draft["id"], handoff_depth=depth,
-                    handoff_prompt=prompt_text, handoff_generated_at=now_iso())
+                    handoff_prompt=prompt_text, handoff_generated_at=now_utc())
     if draft["step"] < 4:
         state.touch(draft, f"/brands/{brand_id}/intake/handoff", 4)
     return {"prompt_text": prompt_text}

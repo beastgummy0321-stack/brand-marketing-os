@@ -54,7 +54,7 @@ def asset_totals(conn, brand_id: str, cycle_id: str, breakeven: Optional[float] 
         " FROM performance_snapshot ps"
         " JOIN external_ad_mapping xam ON xam.id = ps.external_ad_mapping_id"
         " JOIN publishing_package pkg ON pkg.id = xam.publishing_package_id"
-        " WHERE ps.brand_id = %s AND ps.campaign_cycle_id = %s AND ps.quarantined = 0"
+        " WHERE ps.brand_id = %s AND ps.campaign_cycle_id = %s AND ps.quarantined = false"
         " GROUP BY pkg.id ORDER BY revenue DESC", (brand_id, cycle_id),
     ).fetchall()
     result = []
@@ -121,7 +121,7 @@ def max_frequency_by_asset(conn, brand_id: str, cycle_id: str) -> Optional[dict]
         " JOIN external_ad_mapping xam ON xam.id = ps.external_ad_mapping_id"
         " JOIN publishing_package pkg ON pkg.id = xam.publishing_package_id"
         " LEFT JOIN experiment_cell cell ON cell.id = pkg.experiment_cell_id"
-        " WHERE ps.brand_id = %s AND ps.campaign_cycle_id = %s AND ps.quarantined = 0"
+        " WHERE ps.brand_id = %s AND ps.campaign_cycle_id = %s AND ps.quarantined = false"
         " AND ps.frequency IS NOT NULL"
         " GROUP BY pkg.id ORDER BY frequency DESC LIMIT 1", (brand_id, cycle_id),
     ).fetchone()

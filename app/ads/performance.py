@@ -16,13 +16,12 @@ CSV 解析的原則：**認概念欄，不認檔案格式**。Meta 匯出的欄�
 
 import csv
 import io
-import json
 from dataclasses import dataclass, field
 from typing import Optional
 
 from app.ads import guardrails
 from app.core.audit import write_audit
-from app.core.db import new_id, now_iso, DEV_ORG_ID
+from app.core.db import new_id, now_utc, jsonb, DEV_ORG_ID
 
 # 概念欄 → 可能的欄位名（全部小寫比對，去空白）。要加新別名就加在這裡，別動解析邏輯。
 COLUMN_ALIASES = {
@@ -305,7 +304,7 @@ def _existing_signatures(conn, brand_id: str, cycle_id: Optional[str]) -> set:
     signatures = set()
     for r in conn.execute(query, params):
         ad_identity = ("" if cycle_id is None else
-                      _row_identity(json.loads(r["raw_json"]) if r["raw_json"] else {}))
+                      _row_identity(r["raw_json"] or {}))
         signatures.add((r["date_range_start"], r["date_range_end"], r["impressions"],
                         r["clicks"], r["spend"], r["conversions"], r["revenue"],
                         r["frequency"], r["reach"], r["source"], r["currency"], ad_identity))
@@ -328,7 +327,7 @@ def import_rows(conn, brand_id: str, cycle_id: Optional[str], rows: list, *,
     （票 11 D2）——使用者一看到「跳過了幾筆」就知道要改日期或數字，不會被靜默吃掉。
     """
     result = result or ImportResult()
-    ts = now_iso()
+    ts = now_utc()
     batch_id = f"import_{ts}"
 
     seen_signatures = _existing_signatures(conn, brand_id, cycle_id)
@@ -360,8 +359,7 @@ def import_rows(conn, brand_id: str, cycle_id: Optional[str], rows: list, *,
         product_id = resolve_product_id(conn, brand_id, cycle_id, package_id)
         # 票 11：raw_json 存這一列解析後的原始內容——去重判斷回頭讀它算 ad_identity
         # （見 _existing_signatures），line_no 只是解析時的行號，不是資料本身，不存。
-        raw_json = json.dumps({k: v for k, v in row.items() if k != "line_no"},
-                              ensure_ascii=False)
+        raw_json = {k: v for k, v in row.items() if k != "line_no"}
 
         conn.execute(
             "INSERT INTO performance_snapshot (id, org_id, brand_id, campaign_cycle_id, product_id,"
@@ -371,12 +369,12 @@ def import_rows(conn, brand_id: str, cycle_id: Optional[str], rows: list, *,
             " reach, raw_json, reconciled, source, import_batch_id, quarantined,"
             " quarantine_reason, created_at)"
             " VALUES (%s, %s, %s, %s, %s, %s, 'meta', NULL, NULL, NULL, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,"
-            " %s, %s, %s, 1, %s, %s, %s, %s, %s)",
+            " %s, %s, %s, true, %s, %s, %s, %s, %s)",
             (new_id("psn"), DEV_ORG_ID, brand_id, cycle_id, product_id, mapping_id, date_start, date_stop,
              date_stop, ts, currency, row.get("impressions"), row.get("clicks"),
              row.get("spend"), row.get("conversions"), row.get("revenue"), revenue_source,
-             row.get("frequency"), row.get("reach"), raw_json, source, batch_id,
-             1 if quarantined else 0, "；".join(f.message for f in sanity) or None, ts),
+             row.get("frequency"), row.get("reach"), jsonb(raw_json), source, batch_id,
+             quarantined, "；".join(f.message for f in sanity) or None, ts),
         )
         result.imported += 1
 
@@ -422,7 +420,7 @@ def _cycle_rows_for_totals(conn, brand_id: str, cycle_id: str,
     sql = ("SELECT * FROM performance_snapshot WHERE brand_id = %s"
            " AND campaign_cycle_id = %s")
     if not include_quarantined:
-        sql += " AND quarantined = 0"
+        sql += " AND quarantined = false"
     rows = [dict(row) for row in conn.execute(sql, (brand_id, cycle_id))]
     daily_dates: dict = {}
     for row in rows:
@@ -475,7 +473,7 @@ def revenue_by_source(conn, brand_id: str, cycle_id: str) -> dict:
     rows = conn.execute(
         "SELECT COALESCE(revenue_source, 'unknown') src, COALESCE(SUM(revenue), 0) amount"
         " FROM performance_snapshot WHERE brand_id = %s AND campaign_cycle_id = %s AND"
-        " quarantined = 0 AND revenue IS NOT NULL GROUP BY src",
+        " quarantined = false AND revenue IS NOT NULL GROUP BY src",
         (brand_id, cycle_id),
     ).fetchall()
     out = {"reported": 0.0, "roas_derived": 0.0, "unknown": 0.0}
@@ -492,7 +490,7 @@ def max_frequency(conn, brand_id: str, cycle_id: str) -> Optional[float]:
     不假裝算得出來（鐵則 16）。"""
     row = conn.execute(
         "SELECT MAX(frequency) freq FROM performance_snapshot"
-        " WHERE brand_id = %s AND campaign_cycle_id = %s AND quarantined = 0",
+        " WHERE brand_id = %s AND campaign_cycle_id = %s AND quarantined = false",
         (brand_id, cycle_id),
     ).fetchone()
     return row["freq"] if row and row["freq"] is not None else None
@@ -503,7 +501,7 @@ def total_reach(conn, brand_id: str, cycle_id: str) -> Optional[int]:
     帶觸及資料時回 None，不假裝算得出來（鐵則 16；比照 max_frequency 的既有寫法）。"""
     row = conn.execute(
         "SELECT SUM(reach) reach FROM performance_snapshot"
-        " WHERE brand_id = %s AND campaign_cycle_id = %s AND quarantined = 0",
+        " WHERE brand_id = %s AND campaign_cycle_id = %s AND quarantined = false",
         (brand_id, cycle_id),
     ).fetchone()
     return row["reach"] if row and row["reach"] is not None else None
@@ -538,12 +536,12 @@ def save_derived_metrics(conn, brand_id: str, cycle_id: str) -> int:
     summary = totals(conn, brand_id, cycle_id)
     snapshot = conn.execute(
         "SELECT id FROM performance_snapshot WHERE brand_id = %s AND campaign_cycle_id = %s"
-        " AND quarantined = 0 ORDER BY created_at DESC LIMIT 1", (brand_id, cycle_id),
+        " AND quarantined = false ORDER BY created_at DESC LIMIT 1", (brand_id, cycle_id),
     ).fetchone()
     if snapshot is None:
         return 0
 
-    ts = now_iso()
+    ts = now_utc()
     conn.execute(
         "DELETE FROM derived_metric WHERE brand_id = %s AND campaign_cycle_id = %s",
         (brand_id, cycle_id),
@@ -609,7 +607,7 @@ def _brand_level_rows(conn, brand_id: str) -> list:
         "SELECT id, date_range_start, date_range_end, impressions, clicks, spend, conversions,"
         " revenue, account_id, meta_campaign_id, meta_adset_id, meta_ad_id"
         " FROM performance_snapshot WHERE brand_id = %s AND campaign_cycle_id IS NULL"
-        " AND quarantined = 0 ORDER BY created_at", (brand_id,),
+        " AND quarantined = false ORDER BY created_at", (brand_id,),
     ).fetchall()]
     for row in rows:
         start_month = (row["date_range_start"] or "")[:7]  # YYYY-MM
@@ -660,7 +658,7 @@ def save_brand_level_derived_metrics(conn, brand_id: str) -> int:
         (brand_id,),
     )
     groups = _brand_level_monthly_groups(conn, brand_id)
-    ts = now_iso()
+    ts = now_utc()
     written = 0
     for month, month_rows in groups.items():
         impressions = sum(r["impressions"] or 0 for r in month_rows)
@@ -738,7 +736,7 @@ def brand_period_spend(conn, brand_id: str, since: str, until: str) -> Optional[
     """
     row = conn.execute(
         "SELECT SUM(spend) spend, COUNT(*) rows FROM performance_snapshot"
-        " WHERE brand_id = %s AND quarantined = 0"
+        " WHERE brand_id = %s AND quarantined = false"
         " AND date_range_end >= %s AND date_range_end <= %s",
         (brand_id, since, until),
     ).fetchone()

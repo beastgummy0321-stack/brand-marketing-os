@@ -22,11 +22,10 @@ settlement_version 只負責版次號碼、觸發原因、是否結案後才動�
 （鐵則 4：數字走程式）。
 """
 
-import json
 from typing import Optional
 
 from app.ads import inflation as ads_inflation
-from app.core.db import new_id, now_iso, DEV_ORG_ID
+from app.core.db import new_id, now_utc, jsonb, DEV_ORG_ID
 
 # 第 7 刀（A1 三層地界新規則：app/ads 不得 import app.orders，見
 # test_architecture_boundaries.py）：orders_repo 不在這裡 import，改由組裝根
@@ -46,7 +45,7 @@ def _data_arrival(conn, brand_id: str, cycle: dict) -> tuple:
     """各源最後到達這期資料的時間；沒資料的源同時列進缺席清單（決策 0025 補遺 C）。"""
     meta_row = conn.execute(
         "SELECT MAX(snapshot_taken_at) t FROM performance_snapshot"
-        " WHERE brand_id = %s AND campaign_cycle_id = %s AND quarantined = 0",
+        " WHERE brand_id = %s AND campaign_cycle_id = %s AND quarantined = false",
         (brand_id, cycle["id"]),
     ).fetchone()
     orders_rows = orders_repo.list_orders_in_range(
@@ -56,8 +55,13 @@ def _data_arrival(conn, brand_id: str, cycle: dict) -> tuple:
         "SELECT MAX(synced_at) t FROM ga4_sync_status WHERE brand_id = %s", (brand_id,)
     ).fetchone()
 
-    arrival = {"meta": meta_row["t"] if meta_row else None, "orders": orders_arrival,
-               "ga4": ga4_row["t"] if ga4_row else None}
+    # 三個來源的到達時間都是 timestamptz，isoformat() 轉字串再落 jsonb——data_arrival_json
+    # 存的是給人看／給前端顯示的快照，不是要保留 datetime 物件（02-3b）。
+    arrival = {
+        "meta": meta_row["t"].isoformat() if meta_row and meta_row["t"] else None,
+        "orders": orders_arrival.isoformat() if orders_arrival else None,
+        "ga4": ga4_row["t"].isoformat() if ga4_row and ga4_row["t"] else None,
+    }
     missing = [source for source, value in arrival.items() if not value]
     return arrival, missing
 
@@ -85,7 +89,7 @@ def freeze(conn, brand_id: str, cycle: dict, *, actor: str, cycle_totals: dict,
     if not actor or not actor.strip():
         raise ValueError("actor 為必填")
     cycle_id = cycle["id"]
-    ts = now_iso()
+    ts = now_utc()
     version = _next_version(conn, cycle_id)
     reason = trigger_reason or ("initial" if version == 1 else "manual_rerun")
 
@@ -94,7 +98,7 @@ def freeze(conn, brand_id: str, cycle: dict, *, actor: str, cycle_totals: dict,
         "INSERT INTO settlement_version (id, org_id, brand_id, campaign_cycle_id, version,"
         " trigger_reason, is_post_close, created_by, created_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
         (settlement_id, DEV_ORG_ID, brand_id, cycle_id, version, reason,
-         1 if cycle.get("status") == "CLOSED" else 0, actor, ts),
+         cycle.get("status") == "CLOSED", actor, ts),
     )
 
     arrival, missing = _data_arrival(conn, brand_id, cycle)
@@ -109,8 +113,10 @@ def freeze(conn, brand_id: str, cycle: dict, *, actor: str, cycle_totals: dict,
         " created_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
         (snapshot_id, DEV_ORG_ID, brand_id, cycle_id, settlement_id,
          coefficient["id"] if coefficient else None,
-         json.dumps(arrival, ensure_ascii=False), json.dumps(missing, ensure_ascii=False),
-         json.dumps(summary, ensure_ascii=False, default=str), ts),
+         jsonb(arrival), jsonb(missing),
+         # summary 混雜多來源算出來的數字（可能含 Decimal／datetime）；db.jsonb() 內建
+         # 的 _json_default 已經接住這兩種型別，不用再自己包一層 dumps（02-3b）。
+         jsonb(summary), ts),
     )
 
     inputs = _flatten("cycle", cycle_totals)
@@ -157,9 +163,9 @@ def load_snapshot(conn, brand_id: str, cycle_id: str, version: Optional[int] = N
     if row is None:
         return None
     data = dict(row)
-    data["data_arrival"] = json.loads(data.pop("data_arrival_json"))
-    data["missing_sources"] = json.loads(data.pop("missing_sources_json"))
-    data["summary"] = json.loads(data.pop("summary_json"))
+    data["data_arrival"] = data.pop("data_arrival_json")
+    data["missing_sources"] = data.pop("missing_sources_json")
+    data["summary"] = data.pop("summary_json")
     return data
 
 

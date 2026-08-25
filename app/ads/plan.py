@@ -27,7 +27,6 @@ R3-carry-forward-winners（B0-29／B0-36）：上期真正打贏的切角（`car
 生成失敗一律回 (False, 人話錯誤)，不入庫半份方案。
 """
 
-import json
 from typing import Callable, Optional
 
 from app.ads import account_structure
@@ -39,7 +38,7 @@ from app.ads import repository as ads_repo
 from app.brand_intelligence import repository as bi
 from app.core import settings as coresettings
 from app.core.audit import write_audit
-from app.core.db import new_id, now_iso, DEV_ORG_ID
+from app.core.db import new_id, now_utc, jsonb, DEV_ORG_ID
 from app.llm import context_compiler, gateway, methodology, pricing, providers
 
 PROVIDER = providers.AnthropicProvider()  # 測試整包換掉
@@ -123,7 +122,7 @@ def audience_availability(conn, brand_id: str) -> dict:
     """
     row = conn.execute(
         "SELECT COALESCE(SUM(clicks), 0) c, COALESCE(SUM(conversions), 0) v"
-        " FROM performance_snapshot WHERE brand_id = %s AND quarantined = 0",
+        " FROM performance_snapshot WHERE brand_id = %s AND quarantined = false",
         (brand_id,),
     ).fetchone()
     has_traffic = (row["c"] or 0) > 0
@@ -576,7 +575,7 @@ def generate_options(conn, brand_id: str, cycle_id: str, actor: str, *,
 
 def _persist_options(conn, brand_id: str, cycle_id: str, options: list, llm_task_id: str,
                      methodology_missing: list, actor: str) -> None:
-    ts = now_iso()
+    ts = now_utc()
     conn.execute(
         "DELETE FROM campaign_plan_option WHERE brand_id = %s AND campaign_cycle_id = %s",
         (brand_id, cycle_id),
@@ -588,8 +587,8 @@ def _persist_options(conn, brand_id: str, cycle_id: str, options: list, llm_task
         conn.execute(
             "INSERT INTO campaign_plan_option (id, org_id, campaign_cycle_id, brand_id, option_index,"
             " is_recommended, option_json, created_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
-            (new_id("cpo"), DEV_ORG_ID, cycle_id, brand_id, index, int(option["is_recommended"]),
-             json.dumps(payload, ensure_ascii=False), ts),
+            (new_id("cpo"), DEV_ORG_ID, cycle_id, brand_id, index, bool(option["is_recommended"]),
+             jsonb(payload), ts),
         )
     ads_repo.update_cycle_status(conn, brand_id, cycle_id, status="PLAN_SELECT", actor=actor)
 
@@ -603,7 +602,7 @@ def get_pending_options(conn, brand_id: str, cycle_id: str) -> list:
     ).fetchall()
     options = []
     for row in rows:
-        option = json.loads(row["option_json"])
+        option = row["option_json"]
         option["id"] = row["id"]
         option["is_recommended"] = bool(row["is_recommended"])
         options.append(option)
@@ -657,13 +656,13 @@ def _persist(conn, brand_id: str, cycle: dict, plan: dict, actor: str) -> None:
     """把選定的方案寫成正式計畫新版本，並建立對應的測試格與策略假設。"""
     cycle_id = cycle["id"]
     version = (cycle["plan_version"] or 0) + 1
-    ts = now_iso()
+    ts = now_utc()
 
     conn.execute(
         "INSERT INTO campaign_plan (id, org_id, campaign_cycle_id, brand_id, plan_version, plan_json,"
         " status, approved_by, approved_at, created_at) VALUES (%s, %s, %s, %s, %s, %s, %s, NULL, NULL, %s)",
         (new_id("cpl"), DEV_ORG_ID, cycle_id, brand_id, version,
-         json.dumps(plan, ensure_ascii=False), "draft", ts),
+         jsonb(plan), "draft", ts),
     )
 
     # 每個切角一格測試格：票 6 的素材掛上去，成效才回溯得到是哪個切角有效。
@@ -721,7 +720,7 @@ def get_latest_plan(conn, brand_id: str, cycle_id: str) -> Optional[dict]:
     if row is None:
         return None
     plan = dict(row)
-    plan["plan"] = json.loads(plan["plan_json"])
+    plan["plan"] = plan["plan_json"]
     return plan
 
 
@@ -778,7 +777,7 @@ def approve(conn, brand_id: str, cycle_id: str, actor: str) -> None:
     plan = get_latest_plan(conn, brand_id, cycle_id)
     if plan is None:
         raise ValueError("這期還沒有計畫可以確認")
-    ts = now_iso()
+    ts = now_utc()
     conn.execute(
         "UPDATE campaign_plan SET status = 'approved', approved_by = %s, approved_at = %s"
         " WHERE id = %s",

@@ -22,13 +22,12 @@ try/except，一個炸掉不擋其他；`spend` 級失敗立刻出卡，`save`�
 去重：同一 `dedupe_key` 已有一列 `outcome` 為 `auto_done` 或 `carded` → 跳過不重做。
 """
 
-import json
 from typing import Callable, Optional
 
 from app.core import cleanup
 from app.core import interrupts as core_interrupts
 from app.core import rule_cards
-from app.core.db import new_id, now_iso, DEV_ORG_ID
+from app.core.db import new_id, now_utc, jsonb, DEV_ORG_ID
 
 # 登記表：模組在自己的檔案尾巴呼叫 register_module()／register_rule() 掛進來，
 # 本檔本身永遠是空字典起家（比照 app/core/cleanup.py 的 _REGISTRY）。
@@ -87,11 +86,11 @@ def _get_decision(conn, brand_id: str, dedupe_key: str) -> "Optional[dict]":
     return dict(row) if row is not None else None
 
 
-def _insert_decision(conn, *, brand_id: str, module: str, rule_id: str, action_json: str,
+def _insert_decision(conn, *, brand_id: str, module: str, rule_id: str, action_json,
                      risk_level: str, autonomy_mode: float, dedupe_key: str, outcome: str,
                      attempt_count: int, error_text: "Optional[str]") -> str:
     decision_id = new_id("dcs")
-    ts = now_iso()
+    ts = now_utc()
     conn.execute(
         "INSERT INTO decision (id, org_id, module, brand_id, rule_id, action_json, risk_level,"
         " autonomy_mode, dedupe_key, outcome, attempt_count, error_text, created_at,"
@@ -110,7 +109,7 @@ def _update_decision(conn, decision_id: str, *, outcome: str, attempt_count: int
     conn.execute(
         "UPDATE decision SET outcome = %s, attempt_count = %s, error_text = %s, updated_at = %s"
         " WHERE id = %s",
-        (outcome, attempt_count, error_text, now_iso(), decision_id),
+        (outcome, attempt_count, error_text, now_utc(), decision_id),
     )
 
 
@@ -127,7 +126,7 @@ def _process_action(conn, brand_id: str, action: dict) -> dict:
         return {"dedupe_key": dedupe_key, "outcome": existing["outcome"], "skipped": True}
 
     autonomy_mode = rule_cards.get_value(conn, brand_id, "autonomy", "mode")
-    action_json = json.dumps(action, ensure_ascii=False)
+    action_json = jsonb(action)
 
     def _write(outcome: str, attempt_count: int, error_text: "Optional[str]") -> str:
         if existing is None:

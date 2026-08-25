@@ -25,7 +25,7 @@ from app.ads import performance as ads_performance
 from app.ads import repository as ads_repo
 from app.core import interrupts as core_interrupts
 from app.core.audit import write_audit
-from app.core.db import new_id, now_iso, DEV_ORG_ID
+from app.core.db import new_id, now_utc, DEV_ORG_ID
 
 # 第 7 刀（A1 三層地界新規則：app/ads 不得 import app.orders，見
 # test_architecture_boundaries.py）：orders_repo 不在這裡 import，改由組裝根
@@ -133,7 +133,7 @@ def calibrate(conn, brand_id: str, cycle_id: str, *, actor: str,
     if not result["meta_revenue"]:
         raise ValueError("這期 Meta 沒有回報營收，沒辦法算係數。")
 
-    ts = now_iso()
+    ts = now_utc()
     today = today or date.today().isoformat()
     prev = latest_coefficient(conn, brand_id)
 
@@ -158,7 +158,7 @@ def calibrate(conn, brand_id: str, cycle_id: str, *, actor: str,
         " order_revenue, sample_size, reliable, source_cycle_id, valid_from, valid_to,"
         " created_by, created_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NULL, %s, %s)",
         (coefficient_id, DEV_ORG_ID, brand_id, version, result["coefficient_now"], result["meta_revenue"],
-         result["order_revenue"], sample_size, 1 if reliable else 0, cycle_id, today, actor, ts),
+         result["order_revenue"], sample_size, reliable, cycle_id, today, actor, ts),
     )
 
     write_audit(conn, brand_id=brand_id, entity_type="ad_revenue_coefficient",
@@ -206,7 +206,7 @@ def cadence_state(conn, brand_id: str, *, today: Optional[str] = None) -> dict:
         return {"cadence": "per_cycle", "days_since_last": None, "due": True,
                 "last_calibrated_at": None, "confidence_label": "尚未校準"}
 
-    days_since = (date.fromisoformat(today) - date.fromisoformat(latest["valid_from"])).days
+    days_since = (date.fromisoformat(today) - latest["valid_from"]).days
     recent_errors = _recent_error_pcts(conn, brand_id, STABILITY_WINDOW)
     stable = (len(recent_errors) >= STABILITY_WINDOW
               and all(abs(e) <= STABILITY_TOLERANCE for e in recent_errors))
@@ -224,10 +224,10 @@ def _maybe_enqueue_next_due(conn, brand_id: str, *, today: str) -> Optional[str]
     state = cadence_state(conn, brand_id, today=today)
     if state["cadence"] != "quarterly":
         return None
-    due_date = (date.fromisoformat(today) + timedelta(days=QUARTERLY_INTERVAL_DAYS)).isoformat()
+    due_date = date.fromisoformat(today) + timedelta(days=QUARTERLY_INTERVAL_DAYS)
     interrupt_id = core_interrupts.enqueue(
         conn, category="revenue_reconcile_due",
-        dedupe_key=f"revenue_reconcile_due:{brand_id}:{due_date}",
+        dedupe_key=f"revenue_reconcile_due:{brand_id}:{due_date.isoformat()}",
         message="灌水係數已逾校準週期，建議重新對帳。",
         brand_id=brand_id, visible_from=due_date,
         action_url=f"/app/brands/{brand_id}/campaigns",

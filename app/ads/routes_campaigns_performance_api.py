@@ -12,7 +12,7 @@
 from datetime import date, datetime, timezone
 
 from fastapi import APIRouter, File, Request, UploadFile
-from fastapi.responses import JSONResponse
+from app.shared.web import JSONResponse
 
 import app.shared.web as main_mod
 from app.ads import bottleneck as ads_bottleneck

@@ -140,8 +140,8 @@ def due_schedule_change(cycle: dict, daily_budgets: list, today: str):
     from datetime import date as _date
     if not daily_budgets:
         return None
-    start = _date.fromisoformat(cycle["start_date"])
-    end = _date.fromisoformat(cycle["end_date"])
+    start = cycle["start_date"]
+    end = cycle["end_date"]
     today_date = _date.fromisoformat(today)
     if today_date < start or today_date > end:
         return None

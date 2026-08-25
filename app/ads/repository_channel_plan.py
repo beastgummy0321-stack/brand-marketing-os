@@ -9,7 +9,7 @@
 
 from typing import Optional
 
-from app.core.db import new_id, now_iso, Conn, DEV_ORG_ID
+from app.core.db import new_id, now_utc, Conn, DEV_ORG_ID
 
 
 CHANNELS = ("social", "google_search", "line_email", "kol_media", "website_landing")
@@ -54,7 +54,7 @@ def create_channel_plan(conn: Conn, brand_id: str, cycle_id: str, *, channel: st
         "id": new_id("chp"), "org_id": DEV_ORG_ID, "brand_id": brand_id, "cycle_id": cycle_id,
         "channel": channel,
         "job": _require_text(job, "job"), "pct": pct, "expected": _require_text(expected, "expected"),
-        "enabled": int(bool(enabled)), "depth": depth, "created_at": now_iso(),
+        "enabled": bool(enabled), "depth": depth, "created_at": now_utc(),
     }
     conn.execute(
         "INSERT INTO channel_plan (id, org_id, brand_id, cycle_id, channel, job, pct, expected, enabled, depth, "
@@ -87,7 +87,7 @@ def update_channel_plan(conn: Conn, brand_id: str, plan_id: str, *, job: str, pc
     conn.execute(
         "UPDATE channel_plan SET job = %s, pct = %s, expected = %s, enabled = %s, depth = %s "
         "WHERE id = %s AND brand_id = %s",
-        (_require_text(job, "job"), pct, _require_text(expected, "expected"), int(bool(enabled)), depth,
+        (_require_text(job, "job"), pct, _require_text(expected, "expected"), bool(enabled), depth,
          plan_id, brand_id),
     )
     conn.commit()
@@ -125,7 +125,7 @@ def create_task_card(conn: Conn, brand_id: str, cycle_id: str, *, channel: str, 
     row = {
         "id": new_id("tsk"), "org_id": DEV_ORG_ID, "brand_id": brand_id, "cycle_id": cycle_id,
         "channel": _require_text(channel, "channel"), "title": _require_text(title, "title"),
-        "draft_hint": draft_hint or None, "done": 0, "created_at": now_iso(), "done_at": None,
+        "draft_hint": draft_hint or None, "done": False, "created_at": now_utc(), "done_at": None,
     }
     conn.execute(
         "INSERT INTO task_card (id, org_id, brand_id, cycle_id, channel, title, draft_hint, done, created_at, done_at) "
@@ -151,11 +151,11 @@ def update_task_card(conn: Conn, brand_id: str, card_id: str, *, title: str,
                      draft_hint: Optional[str], done: bool) -> dict:
     if get_task_card(conn, brand_id, card_id) is None:
         raise ValueError(f"找不到任務卡：{card_id}")
-    done_at = now_iso() if done else None
+    done_at = now_utc() if done else None
     conn.execute(
         "UPDATE task_card SET title = %s, draft_hint = %s, done = %s, done_at = %s "
         "WHERE id = %s AND brand_id = %s",
-        (_require_text(title, "title"), draft_hint or None, int(bool(done)), done_at, card_id, brand_id),
+        (_require_text(title, "title"), draft_hint or None, bool(done), done_at, card_id, brand_id),
     )
     conn.commit()
     return get_task_card(conn, brand_id, card_id)

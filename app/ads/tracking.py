@@ -15,7 +15,7 @@ from app.brand_intelligence import repository as bi_repo
 from app.core import interrupts as core_interrupts
 from app.core import net
 from app.core import settings as coresettings
-from app.core.db import new_id, now_iso, DEV_ORG_ID
+from app.core.db import new_id, now_utc, DEV_ORG_ID
 
 # 第 7 刀（A1 三層地界新規則：app/ads 不得 import app.orders，見
 # test_architecture_boundaries.py）：orders_channel 不在這裡 import，改由組裝根
@@ -161,7 +161,7 @@ def suggest_cycle_mapping(conn, ad_account_id: str, meta_account_id: str,
             " campaign_cycle_id, ad_account_id, platform, meta_account_id, meta_campaign_id,"
             " claim_status, created_at) VALUES (%s, %s, %s, %s, %s, %s, 'meta', %s, %s, 'suggested', %s)",
             (new_id("xam"), DEV_ORG_ID, brand_id, package["id"] if package else None, cycle_id,
-             ad_account_id, meta_account_id, meta_campaign_id, now_iso()),
+             ad_account_id, meta_account_id, meta_campaign_id, now_utc()),
         )
     return "suggested"
 
@@ -224,7 +224,7 @@ def _paid_ga4_rows(conn, brand_id: str) -> list:
 def _post_launch_node(conn, brand_id: str, cycle: dict, static_ok: bool, today: str) -> dict:
     if not static_ok:
         return _node("red", "到達頁、UTM 或活動目標有一項沒對上。", "查看檢查清單")
-    if (date.fromisoformat(today) - date.fromisoformat(cycle["start_date"])).days < POST_LAUNCH_CHECK_DAYS:
+    if (date.fromisoformat(today) - cycle["start_date"]).days < POST_LAUNCH_CHECK_DAYS:
         return _node("green", "上線前檢查通過，滿 72 小時再交叉驗證。", "查看檢查清單")
 
     totals = ads_performance.totals(conn, brand_id, cycle["id"])
@@ -373,13 +373,9 @@ def _ga4_data_confirmed(conn, brand_id: str) -> bool:
     """訊號②：不打真 GA4 API，只讀本地表 ga4_sync_status／ga4_summary
     （app/ads/ga4_sync.py，migration 0008_ga4.sql）。"""
     status = ga4_sync.get_sync_status(conn, brand_id)
-    if not status or not status["row_count"]:
+    if not status or not status["row_count"] or not status["synced_at"]:
         return False
-    synced_date = (status["synced_at"] or "")[:10]
-    try:
-        return (date.today() - date.fromisoformat(synced_date)).days <= _GA4_FRESH_DAYS
-    except ValueError:
-        return False
+    return (date.today() - status["synced_at"].date()).days <= _GA4_FRESH_DAYS
 
 
 def _pixel_api_confirmed(conn, *, client=None) -> Optional[bool]:
@@ -429,7 +425,7 @@ def set_channel_hidden(conn, brand_id: str, channel_key: str, hidden: bool) -> N
     conn.execute(
         "INSERT INTO channel_tracking_check (org_id, brand_id, channel_key, hidden) VALUES (%s, %s, %s, %s)"
         " ON CONFLICT(brand_id, channel_key) DO UPDATE SET hidden = excluded.hidden",
-        (DEV_ORG_ID, brand_id, channel_key, int(bool(hidden))),
+        (DEV_ORG_ID, brand_id, channel_key, bool(hidden)),
     )
     conn.commit()
 
@@ -444,7 +440,7 @@ def _save_website_check(conn, brand_id: str, *, ga4_found: bool, pixel_found: bo
         " ON CONFLICT(brand_id, channel_key) DO UPDATE SET"
         " ga4_found = excluded.ga4_found, pixel_found = excluded.pixel_found,"
         " checked_at = excluded.checked_at",
-        (DEV_ORG_ID, brand_id, int(ga4_found), int(pixel_found), checked_at),
+        (DEV_ORG_ID, brand_id, bool(ga4_found), bool(pixel_found), checked_at),
     )
     conn.commit()
 
@@ -527,9 +523,9 @@ def check_website_now(conn, brand_id: str, *, fetch=None, meta_client=None) -> d
             ga4_confirmed = _detect_ga4(raw_html) or _ga4_data_confirmed(conn, brand_id)
             pixel_confirmed = _detect_pixel(raw_html) or bool(_pixel_api_confirmed(conn, client=meta_client))
             _save_website_check(conn, brand_id, ga4_found=ga4_confirmed, pixel_found=pixel_confirmed,
-                                checked_at=now_iso())
+                                checked_at=now_utc())
         else:
-            _save_website_fetch_failure(conn, brand_id, checked_at=now_iso())
+            _save_website_fetch_failure(conn, brand_id, checked_at=now_utc())
     return _website_node(conn, brand_id, url)
 
 

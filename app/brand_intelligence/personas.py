@@ -4,7 +4,7 @@
 
 from app.core import cleanup
 from app.core.audit import write_audit
-from app.core.db import new_id, now_iso, Conn, DEV_ORG_ID
+from app.core.db import new_id, now_utc, Conn, DEV_ORG_ID
 
 
 PERSONA_FIELDS = ("title", "when_needed", "care_about", "hesitation", "where_to_find")
@@ -46,7 +46,7 @@ def replace_personas(conn: Conn, brand_id: str, rows: list) -> list:
                 "INSERT INTO persona (id, org_id, brand_id, title, when_needed, care_about, hesitation, "
                 "where_to_find, created_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
                 (new_id("psn"), DEV_ORG_ID, brand_id, row["title"], row["when_needed"], row["care_about"],
-                 row["hesitation"], row["where_to_find"], now_iso()),
+                 row["hesitation"], row["where_to_find"], now_utc()),
             )
         conn.commit()
     except Exception:

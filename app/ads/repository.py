@@ -14,7 +14,6 @@
 （本模組是目前唯一的分支代號）。呼叫端介面刻意保持不變，不強迫既有呼叫者改寫。
 """
 
-import json
 from datetime import date, timedelta
 from typing import Optional
 
@@ -24,7 +23,7 @@ from app.ads import pacing_curve
 from app.brand_intelligence import repository as bi
 from app.core import cleanup
 from app.core.audit import write_audit
-from app.core.db import new_id, now_iso, Conn, DEV_ORG_ID
+from app.core.db import new_id, now_utc, jsonb, Conn, DEV_ORG_ID
 
 
 def _rows(cursor) -> list:
@@ -134,49 +133,29 @@ def create_cycle(conn: Conn, brand_id: str, *, product_ids: list,
     end = start + timedelta(days=plan.duration_days - 1)
 
     cycle_id = new_id("ccy")
-    ts = now_iso()
+    ts = now_utc()
     pacing_strategy, pacing_reason = pacing_curve.recommend_pacing_strategy(plan.duration_days, has_offer=bool(offer_id))
     daily_budgets = pacing_curve.compute_curve(pacing_strategy, plan.duration_days, plan.total_budget)
+    derived_plan_dict = {
+        "duration_days": plan.duration_days, "daily_budget": plan.daily_budget,
+        "daily_stop_loss": plan.daily_stop_loss, "pause_threshold_spend": plan.pause_threshold_spend,
+        "daily_below_floor": plan.daily_below_floor, "pacing_strategy": pacing_strategy,
+        "pacing_reason": pacing_reason, "daily_budgets": daily_budgets,
+    }
+    # row：品牌永久層自用的 Python 原生值（write_audit／後面 calibration 重讀
+    # derived_plan_json 用）——jsonb 欄位維持原生 dict/list，只在下面 INSERT 的參數
+    # tuple 裡才包 jsonb()，避免 row 裡混進 psycopg 的 adapter 物件（02-3b）。
     row = {
-        "id": cycle_id,
-        "org_id": DEV_ORG_ID,
-        "brand_id": brand_id,
-        "ad_account_id": None,
-        "product_scope_json": json.dumps(product_ids, ensure_ascii=False),
-        "objective": objective.strip(),
-        "funnel_stage": funnel_stage,
-        "occasion": ads_occasion.for_cycle(start, end),
-        "budget": plan.total_budget,
-        "currency": currency,
-        "start_date": start.isoformat(),
-        "end_date": end.isoformat(),
-        "target_market": None,
-        "channels_json": json.dumps(["meta"], ensure_ascii=False),
-        "placements_json": None,
-        "offer_id": offer_id,
-        "landing_page": None,
+        "id": cycle_id, "org_id": DEV_ORG_ID, "brand_id": brand_id, "ad_account_id": None,
+        "product_scope_json": product_ids, "objective": objective.strip(), "funnel_stage": funnel_stage,
+        "occasion": ads_occasion.for_cycle(start, end), "budget": plan.total_budget, "currency": currency,
+        "start_date": start, "end_date": end, "target_market": None, "channels_json": ["meta"],
+        "placements_json": None, "offer_id": offer_id, "landing_page": None,
         "background": background.strip() if background and background.strip() else None,
-        "status": "PLANNING",
-        "close_reason": None,
-        "blocked": None,
-        "needs_information": None,
-        "archived": 0,
-        "plan_version": 0,
-        "phase": phase,
-        "pain_slider_value": pain_value,
-        "derived_plan_json": json.dumps({
-            "duration_days": plan.duration_days,
-            "daily_budget": plan.daily_budget,
-            "daily_stop_loss": plan.daily_stop_loss,
-            "pause_threshold_spend": plan.pause_threshold_spend,
-            "daily_below_floor": plan.daily_below_floor,
-            "pacing_strategy": pacing_strategy,
-            "pacing_reason": pacing_reason,
-            "daily_budgets": daily_budgets,
-        }, ensure_ascii=False),
-        "diff_snapshot_json": None,
-        "created_at": ts,
-        "updated_at": ts,
+        "status": "PLANNING", "close_reason": None, "blocked": None, "needs_information": None,
+        "archived": False, "plan_version": 0, "phase": phase, "pain_slider_value": pain_value,
+        "derived_plan_json": derived_plan_dict, "diff_snapshot_json": None,
+        "created_at": ts, "updated_at": ts,
     }
     conn.execute(
         "INSERT INTO campaign_cycle (id, org_id, brand_id, ad_account_id, product_scope_json, objective,"
@@ -184,12 +163,12 @@ def create_cycle(conn: Conn, brand_id: str, *, product_ids: list,
         " channels_json, placements_json, offer_id, landing_page, background, status,"
         " close_reason, blocked, needs_information, archived, plan_version, phase,"
         " pain_slider_value, derived_plan_json, diff_snapshot_json, created_at, updated_at)"
-        " VALUES (%(id)s, %(org_id)s, %(brand_id)s, %(ad_account_id)s, %(product_scope_json)s, %(objective)s, %(funnel_stage)s,"
-        " %(occasion)s, %(budget)s, %(currency)s, %(start_date)s, %(end_date)s, %(target_market)s, %(channels_json)s,"
-        " %(placements_json)s, %(offer_id)s, %(landing_page)s, %(background)s, %(status)s, %(close_reason)s, %(blocked)s,"
-        " %(needs_information)s, %(archived)s, %(plan_version)s, %(phase)s, %(pain_slider_value)s,"
-        " %(derived_plan_json)s, %(diff_snapshot_json)s, %(created_at)s, %(updated_at)s)",
-        row,
+        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,"
+        " %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+        (cycle_id, DEV_ORG_ID, brand_id, None, jsonb(product_ids), row["objective"], funnel_stage,
+         row["occasion"], plan.total_budget, currency, start, end, None, jsonb(["meta"]), None,
+         offer_id, None, row["background"], "PLANNING", None, None, None, False, 0, phase,
+         pain_value, jsonb(derived_plan_dict), None, ts, ts),
     )
 
     for allocation in budget_calc.split_budget(
@@ -201,7 +180,7 @@ def create_cycle(conn: Conn, brand_id: str, *, product_ids: list,
             " created_at, updated_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
             (new_id("ccp"), DEV_ORG_ID, cycle_id, brand_id, allocation.product_id,
              allocation.allocated_budget, allocation.allocation_ratio,
-             allocation.allocation_basis, 1 if allocation.economics_missing else 0, ts, ts),
+             allocation.allocation_basis, bool(allocation.economics_missing), ts, ts),
         )
 
     write_audit(conn, brand_id=brand_id, entity_type="campaign_cycle", entity_id=cycle_id,
@@ -222,29 +201,35 @@ def create_cycle(conn: Conn, brand_id: str, *, product_ids: list,
             # 對帳一律讀這份快照，不得日後拿當時已經換過的基線重算出不同數字。
             forecast = onboarding.calibration_forecast(conn, brand_id, cycle_id)
             if forecast:
-                plan = json.loads(row["derived_plan_json"])
+                plan = row["derived_plan_json"]
                 plan["forecast"] = forecast
-                row["derived_plan_json"] = json.dumps(plan, ensure_ascii=False)
                 conn.execute(
                     "UPDATE campaign_cycle SET derived_plan_json = %s WHERE id = %s",
-                    (row["derived_plan_json"], cycle_id),
+                    (jsonb(plan), cycle_id),
                 )
                 conn.commit()
     return row
 
 
+def _with_float_budget(row: Optional[dict]) -> Optional[dict]:
+    """budget 是 numeric（Decimal），站內到處拿它跟 float 算術；讀取端單一收口轉型（02-3b）。"""
+    if row is not None and row.get("budget") is not None:
+        row["budget"] = float(row["budget"])
+    return row
+
+
 def get_cycle(conn: Conn, brand_id: str, cycle_id: str) -> Optional[dict]:
-    return _row(conn.execute(
+    return _with_float_budget(_row(conn.execute(
         "SELECT * FROM campaign_cycle WHERE brand_id = %s AND id = %s", (brand_id, cycle_id)
-    ).fetchone())
+    ).fetchone()))
 
 
 def list_cycles(conn: Conn, brand_id: str, include_archived: bool = False) -> list:
     sql = "SELECT * FROM campaign_cycle WHERE brand_id = %s"
     if not include_archived:
-        sql += " AND archived = 0"
+        sql += " AND archived = false"
     sql += " ORDER BY start_date DESC, id DESC"
-    return _rows(conn.execute(sql, (brand_id,)))
+    return [_with_float_budget(row) for row in _rows(conn.execute(sql, (brand_id,)))]
 
 
 def has_any_cycle(conn: Conn, brand_id: str) -> bool:
@@ -274,7 +259,7 @@ def update_cycle_status(conn: Conn, brand_id: str, cycle_id: str, *,
         raise ValueError(f"找不到廣告檔期：{cycle_id}")
     conn.execute(
         "UPDATE campaign_cycle SET status = %s, updated_at = %s WHERE brand_id = %s AND id = %s",
-        (status, now_iso(), brand_id, cycle_id),
+        (status, now_utc(), brand_id, cycle_id),
     )
     after = get_cycle(conn, brand_id, cycle_id)
     write_audit(conn, brand_id=brand_id, entity_type="campaign_cycle", entity_id=cycle_id,
@@ -284,9 +269,8 @@ def update_cycle_status(conn: Conn, brand_id: str, cycle_id: str, *,
 
 
 def derived_plan(cycle: dict) -> dict:
-    """把 derived_plan_json 解回 dict（介面每頁都要用，集中在這裡解一次）。"""
-    raw = cycle.get("derived_plan_json")
-    return json.loads(raw) if raw else {}
+    """derived_plan_json（psycopg 已解成 dict；介面每頁都要用，集中在這裡回傳一次）。"""
+    return cycle.get("derived_plan_json") or {}
 
 
 def set_cycle_pacing(conn: Conn, brand_id: str, cycle_id: str, *,
@@ -307,7 +291,7 @@ def set_cycle_pacing(conn: Conn, brand_id: str, cycle_id: str, *,
     plan["daily_budgets"] = pacing_curve.compute_curve(strategy, plan["duration_days"], before["budget"])
     conn.execute(
         "UPDATE campaign_cycle SET derived_plan_json = %s, updated_at = %s WHERE brand_id = %s AND id = %s",
-        (json.dumps(plan, ensure_ascii=False), now_iso(), brand_id, cycle_id),
+        (jsonb(plan), now_utc(), brand_id, cycle_id),
     )
     after = get_cycle(conn, brand_id, cycle_id)
     write_audit(conn, brand_id=brand_id, entity_type="campaign_cycle", entity_id=cycle_id,
@@ -318,10 +302,10 @@ def set_cycle_pacing(conn: Conn, brand_id: str, cycle_id: str, *,
 
 def list_archived_cycles(conn: Conn, brand_id: str) -> list:
     """已封存的檔期清單（廣告首頁「顯示已封存」收合區塊用）。"""
-    return _rows(conn.execute(
-        "SELECT * FROM campaign_cycle WHERE brand_id = %s AND archived = 1"
+    return [_with_float_budget(row) for row in _rows(conn.execute(
+        "SELECT * FROM campaign_cycle WHERE brand_id = %s AND archived = true"
         " ORDER BY start_date DESC, id DESC", (brand_id,)
-    ))
+    ))]
 
 
 def set_cycle_archived(conn: Conn, brand_id: str, cycle_id: str, *,
@@ -333,10 +317,10 @@ def set_cycle_archived(conn: Conn, brand_id: str, cycle_id: str, *,
     before = get_cycle(conn, brand_id, cycle_id)
     if before is None:
         raise ValueError(f"找不到廣告檔期：{cycle_id}")
-    ts = now_iso()
+    ts = now_utc()
     conn.execute(
         "UPDATE campaign_cycle SET archived = %s, updated_at = %s WHERE brand_id = %s AND id = %s",
-        (1 if archived else 0, ts, brand_id, cycle_id),
+        (bool(archived), ts, brand_id, cycle_id),
     )
     after = get_cycle(conn, brand_id, cycle_id)
     write_audit(conn, brand_id=brand_id, entity_type="campaign_cycle", entity_id=cycle_id,
@@ -464,17 +448,17 @@ def replace_findings(conn: Conn, brand_id: str, cycle_id: str,
         "DELETE FROM finding WHERE brand_id = %s AND campaign_cycle_id = %s AND finding_type = %s",
         (brand_id, cycle_id, finding_type),
     )
-    ts = now_iso()
+    ts = now_utc()
     for finding in findings:
         conn.execute(
             "INSERT INTO finding (id, org_id, brand_id, campaign_cycle_id, finding_type, target_type,"
             " target_id, severity, code, message, evidence_json, confidence_penalty, source,"
-            " resolved, created_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 0, %s)",
+            " resolved, created_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, false, %s)",
             (new_id("fnd"), DEV_ORG_ID, brand_id, cycle_id, finding.finding_type,
              "variant" if finding.evidence.get("variant_id") else "cycle",
              finding.evidence.get("variant_id") or cycle_id,
              finding.severity, finding.code, finding.message,
-             json.dumps(finding.evidence, ensure_ascii=False),
+             jsonb(finding.evidence),
              finding.confidence_penalty, finding.source, ts),
         )
     conn.commit()
@@ -483,7 +467,7 @@ def replace_findings(conn: Conn, brand_id: str, cycle_id: str,
 
 def list_findings(conn: Conn, brand_id: str, cycle_id: str,
                   finding_type: Optional[str] = None) -> list:
-    sql = ("SELECT * FROM finding WHERE brand_id = %s AND campaign_cycle_id = %s AND resolved = 0")
+    sql = ("SELECT * FROM finding WHERE brand_id = %s AND campaign_cycle_id = %s AND resolved = false")
     params = [brand_id, cycle_id]
     if finding_type:
         sql += " AND finding_type = %s"
@@ -513,7 +497,7 @@ def replace_pending_dissents(conn: Conn, brand_id: str, cycle_id: str,
         sql += f" AND target_type IN ({placeholders})"
         params.extend(target_types)
     conn.execute(sql, params)
-    ts = now_iso()
+    ts = now_utc()
     for d in dissents:
         conn.execute(
             "INSERT INTO rule_dissent (id, org_id, brand_id, campaign_cycle_id, target_type, suggestion,"
@@ -547,7 +531,7 @@ def decide_dissent(conn: Conn, brand_id: str, cycle_id: str, dissent_id: str,
     if row is None:
         raise ValueError("找不到這筆異議紀錄，可能已經重新生成過方案了。")
     before = dict(row)
-    ts = now_iso()
+    ts = now_utc()
     conn.execute(
         "UPDATE rule_dissent SET status = %s, decided_by = %s, decided_at = %s WHERE id = %s",
         (decision, actor, ts, dissent_id),
@@ -736,30 +720,48 @@ _PRODUCT_CASCADE_LABELS = {
 
 
 def _inbound_fks(conn) -> dict:
-    """{被指向的表: [(子表, 子表的外鍵欄位, 父表被指向的欄位), ...]}，從真實 schema 讀。
-
-    不假設父表的主鍵一定叫 id——外鍵可以指向任何欄位，PRAGMA 第 5 欄就是答案
-    （為 None 代表指向父表的主鍵）。
-    """
-    out = {}
-    for (table,) in conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"):
-        for fk in conn.execute(f"PRAGMA foreign_key_list({table})"):
-            out.setdefault(fk[2], []).append((table, fk[3], fk[4] or "id"))
+    """{被指向的表: [(子表, 子表的外鍵欄位, 父表被指向的欄位), ...]}，讀 information_schema
+    （02-3b 票 7：取代 SQLite 的 PRAGMA foreign_key_list），scope 到 current_schema()。"""
+    out: dict = {}
+    rows = conn.execute(
+        """SELECT ccu.table_name AS parent_table, tc.table_name AS child_table,
+                  kcu.column_name AS child_column, ccu.column_name AS parent_column
+           FROM information_schema.table_constraints tc
+           JOIN information_schema.key_column_usage kcu
+             ON tc.constraint_name = kcu.constraint_name AND tc.table_schema = kcu.table_schema
+           JOIN information_schema.constraint_column_usage ccu
+             ON tc.constraint_name = ccu.constraint_name AND tc.table_schema = ccu.table_schema
+           WHERE tc.constraint_type = 'FOREIGN KEY' AND tc.table_schema = current_schema()"""
+    ).fetchall()
+    for row in rows:
+        out.setdefault(row["parent_table"], []).append(
+            (row["child_table"], row["child_column"], row["parent_column"]))
     return out
+
+
+def _require_id_column(conn, table: str) -> None:
+    """走到的表沒有 `id text PRIMARY KEY` 就報錯指名，不瞎猜替代欄位（02-3b 票 7：
+    複合主鍵表——見 02-2-type-decisions.md 第 7 點——沒有 Postgres rowid 那種萬用列識別碼）。"""
+    row = conn.execute(
+        "SELECT 1 FROM information_schema.columns"
+        " WHERE table_schema = current_schema() AND table_name = %s AND column_name = 'id'",
+        (table,),
+    ).fetchone()
+    if row is None:
+        raise RuntimeError(f"{table} 沒有 id 欄位，無法沿外鍵走這張表的連帶刪除範圍")
 
 
 def _product_cascade_scope(conn, brand_id: str, product_id: str) -> dict:
     """從 PRODUCT_CASCADE_TABLES 那 10 張屬於這顆產品的列出發，沿外鍵反覆找出所有
-    「指著它們」的列，回傳 {表名: set(rowid)}，找到不再有新東西為止（傳遞閉包）。
+    「指著它們」的列，回傳 {表名: set(id)}，找到不再有新東西為止（傳遞閉包）。
 
-    用 rowid 而不是 id：連結表（例如 campaign_cycle_goal）是複合主鍵、根本沒有 id 欄位，
-    而 rowid 是 SQLite 每張一般表都有的內建列識別碼。
-    """
+    用 `id` 當 row handle（02-3b 票 7：Postgres 無 rowid／ctid）；下面 `parent_col != "id"`
+    是防呆，不是預期路徑——每張表都是 `id text PRIMARY KEY`，外鍵也都指著 id。"""
     scope: dict = {}
     for table, _label in PRODUCT_CASCADE_TABLES:
-        rows = {r[0] for r in conn.execute(
-            f"SELECT rowid FROM {table} WHERE brand_id = %s AND product_id = %s",
+        _require_id_column(conn, table)
+        rows = {r["id"] for r in conn.execute(
+            f"SELECT id FROM {table} WHERE brand_id = %s AND product_id = %s",
             (brand_id, product_id))}
         if rows:
             scope[table] = rows
@@ -769,18 +771,18 @@ def _product_cascade_scope(conn, brand_id: str, product_id: str) -> dict:
         changed = False
         for parent in list(scope):
             for child, fk_col, parent_col in inbound.get(parent, []):
-                parent_rowids = list(scope[parent])
-                if not parent_rowids:
+                parent_ids = list(scope[parent])
+                if not parent_ids:
                     continue
-                marks = ",".join("%s" for _ in parent_rowids)
-                keys = [r[0] for r in conn.execute(
-                    f"SELECT {parent_col} FROM {parent} WHERE rowid IN ({marks})", parent_rowids)
-                    if r[0] is not None]
-                if not keys:
-                    continue
-                kmarks = ",".join("%s" for _ in keys)
-                found = {r[0] for r in conn.execute(
-                    f"SELECT rowid FROM {child} WHERE {fk_col} IN ({kmarks})", keys)}
+                if parent_col != "id":
+                    raise RuntimeError(
+                        f"{parent} 被 {child}.{fk_col} 參照的是 {parent_col} 不是 id，"
+                        "無法用 id 當 row handle 走連帶刪除範圍"
+                    )
+                _require_id_column(conn, child)
+                marks = ",".join("%s" for _ in parent_ids)
+                found = {r["id"] for r in conn.execute(
+                    f"SELECT id FROM {child} WHERE {fk_col} IN ({marks})", parent_ids)}
                 new = found - scope.get(child, set())
                 if new:
                     scope.setdefault(child, set()).update(new)
@@ -826,7 +828,7 @@ def delete_product_data(conn: Conn, brand_id: str, product_id: str) -> dict:
             continue
         ids = list(scope[table])
         marks = ",".join("%s" for _ in ids)
-        conn.execute(f"DELETE FROM {table} WHERE rowid IN ({marks})", ids)
+        conn.execute(f"DELETE FROM {table} WHERE id IN ({marks})", ids)
     for table, _label in PRODUCT_CASCADE_TABLES:
         conn.execute(f"DELETE FROM {table} WHERE brand_id = %s AND product_id = %s",
                      (brand_id, product_id))

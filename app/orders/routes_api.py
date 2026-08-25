@@ -4,7 +4,7 @@
 from datetime import date
 
 from fastapi import APIRouter, File, Query, Request, UploadFile
-from fastapi.responses import JSONResponse
+from app.shared.web import JSONResponse
 
 import app.shared.web as main_mod
 from app.orders import channel as orders_channel

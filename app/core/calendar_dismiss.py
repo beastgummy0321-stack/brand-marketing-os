@@ -31,7 +31,7 @@ from pathlib import Path
 from typing import Optional
 
 from app.core import cleanup
-from app.core.db import new_id, now_iso, DEV_ORG_ID
+from app.core.db import new_id, now_utc, DEV_ORG_ID
 
 _CALENDAR_DATA_PATH = (
     Path(__file__).resolve().parent.parent / "dashboard" / "campaign_calendar_data.json"
@@ -58,7 +58,7 @@ def dismiss(conn, brand_id: str, category: str) -> None:
         "INSERT INTO brand_dismissed_calendar_category"
         " (id, org_id, brand_id, category, created_at) VALUES (%s, %s, %s, %s, %s)"
         " ON CONFLICT (brand_id, category) DO NOTHING",
-        (new_id("bdc"), DEV_ORG_ID, brand_id, category, now_iso()),
+        (new_id("bdc"), DEV_ORG_ID, brand_id, category, now_utc()),
     )
     conn.commit()
 
@@ -116,14 +116,10 @@ cleanup.register("節日類別永久覆寫", count_brand=count_brand_data, delet
 
 
 def demo() -> None:
-    """python -m app.core.calendar_dismiss —— 最小自檢：隔離 tmp DB，不碰 data/app.db。"""
-    import tempfile
+    """python -m app.core.calendar_dismiss —— 最小自檢，對本機 Supabase stack 跑（02-3b 票 9）。"""
+    from app.core import db as coredb
 
-    from app.core import db
-
-    with tempfile.TemporaryDirectory() as tmp:
-        conn = db.connect_and_migrate(Path(tmp) / "test.db")
-        assert list_dismissed(conn, "brd_x") == set()
+    with coredb.connection() as conn:
         dismiss(conn, "brd_x", "cny")
         assert list_dismissed(conn, "brd_x") == {"cny"}
         # 重複關閉不疊加
@@ -140,12 +136,12 @@ def demo() -> None:
         # 不同品牌互不影響
         dismiss(conn, "brd_a", "cny")
         assert list_dismissed(conn, "brd_b") == set()
+        conn.rollback()
         # 節日類別清單：真實資料檔去重後每類別只出現一次
         categories = list_categories()
         assert len(categories) > 0
         assert len({c["category"] for c in categories}) == len(categories)
         assert {"category": "cny", "label": "農曆新年"} in categories
-        conn.close()
     print("core.calendar_dismiss 自檢通過")
 
 

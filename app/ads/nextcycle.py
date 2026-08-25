@@ -14,7 +14,6 @@
    並讓下一批生成時刻意留一組「故意不一樣」的實驗組。
 """
 
-import json
 from typing import Optional
 
 from app.ads import budget as ads_budget
@@ -24,7 +23,7 @@ from app.ads import reading as ads_reading
 from app.ads import repository as ads_repo
 from app.ads import target_cpa
 from app.core.audit import write_audit
-from app.core.db import new_id, now_iso, DEV_ORG_ID
+from app.core.db import new_id, now_utc, jsonb, DEV_ORG_ID
 
 # `overclaim` 候選卡（見下方 build_overclaim_claim_cards）沿用的絕對次數門檻——那裡每一則
 # 拒絕對應的是「這句話」本身（獨一無二的文字），不是可能重複出現很多次的指紋軸值，沒有
@@ -74,7 +73,7 @@ def propose_budget(conn, brand_id: str, cycle_id: str) -> dict:
     conversions = 0.0
     row = conn.execute(
         "SELECT COALESCE(SUM(conversions), 0) c FROM performance_snapshot"
-        " WHERE brand_id = %s AND campaign_cycle_id = %s AND quarantined = 0",
+        " WHERE brand_id = %s AND campaign_cycle_id = %s AND quarantined = false",
         (brand_id, cycle_id),
     ).fetchone()
     if row:
@@ -186,7 +185,7 @@ def historical_cell_performance(conn, brand_id: str, exclude_cycle_id: Optional[
         " FROM performance_snapshot ps"
         " JOIN external_ad_mapping xam ON xam.id = ps.external_ad_mapping_id"
         " JOIN publishing_package pkg ON pkg.id = xam.publishing_package_id"
-        " WHERE ps.brand_id = %s AND ps.quarantined = 0 AND pkg.experiment_cell_id IS NOT NULL"
+        " WHERE ps.brand_id = %s AND ps.quarantined = false AND pkg.experiment_cell_id IS NOT NULL"
         " GROUP BY pkg.experiment_cell_id", (brand_id,),
     ).fetchall()
     perf_by_cell = {r["cell_id"]: {"spend": r["spend"], "conversions": r["conversions"],
@@ -351,10 +350,7 @@ def _axis_value_stats(conn, brand_id: str, cycle_ids: list,
         axis = fp.REASON_TO_AXIS.get(row["reason_code"])
         if axis is None:
             continue  # 資料錯誤類的理由不升級成風格規則
-        try:
-            value = (json.loads(row["fingerprint_json"] or "{}") or {}).get(axis)
-        except ValueError:
-            continue
+        value = (row["fingerprint_json"] or {}).get(axis)
         if not value:
             continue
         weight = weight_by_cycle.get(row["campaign_cycle_id"], 1.0)
@@ -439,7 +435,7 @@ def build_rule_cards(conn, brand_id: str, actor: str, cycle_id: Optional[str] = 
     stats = _axis_value_stats(conn, brand_id, cycle_ids, current_occasion)
 
     created = 0
-    ts = now_iso()
+    ts = now_utc()
     for (axis, value), entry in stats.items():
         if _rule_card_verdict(stats, axis, value) != "pending":
             continue
@@ -454,8 +450,8 @@ def build_rule_cards(conn, brand_id: str, actor: str, cycle_id: Optional[str] = 
                     "UPDATE creative_rule_card SET reject_count = %s, evidence_json = %s,"
                     " updated_at = %s WHERE id = %s",
                     (entry["rejections"],
-                     json.dumps({"decision_ids": entry["ids"],
-                                 "reasons": sorted(entry["reasons"])}, ensure_ascii=False),
+                     jsonb({"decision_ids": entry["ids"],
+                            "reasons": sorted(entry["reasons"])}),
                      ts, existing["id"]),
                 )
             continue
@@ -467,8 +463,8 @@ def build_rule_cards(conn, brand_id: str, actor: str, cycle_id: Optional[str] = 
             " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'pending', %s, %s)",
             (new_id("rcd"), DEV_ORG_ID, brand_id, axis, value,
              f"以後不要再出「{fp.AXES[axis]['label']}是{label}」的素材",
-             json.dumps({"decision_ids": entry["ids"],
-                         "reasons": sorted(entry["reasons"])}, ensure_ascii=False),
+             jsonb({"decision_ids": entry["ids"],
+                    "reasons": sorted(entry["reasons"])}),
              entry["rejections"], ts, ts),
         )
         created += 1
@@ -522,7 +518,7 @@ def build_overclaim_claim_cards(conn, brand_id: str, actor: str) -> int:
     from app.ads import creative as ads_creative
 
     created = 0
-    ts = now_iso()
+    ts = now_utc()
     for row in rows:
         variant_id = row["target_id"]
         existing = conn.execute(
@@ -540,7 +536,7 @@ def build_overclaim_claim_cards(conn, brand_id: str, actor: str) -> int:
             " created_at, updated_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 1, 'pending', %s, %s)",
             (new_id("rcd"), DEV_ORG_ID, brand_id, variant.get("product_id"), OVERCLAIM_CLAIM_AXIS, variant_id,
              variant["content"],
-             json.dumps({"decision_id": row["id"], "variant_id": variant_id}, ensure_ascii=False),
+             jsonb({"decision_id": row["id"], "variant_id": variant_id}),
              ts, ts),
         )
         created += 1
@@ -560,10 +556,7 @@ def _is_self_reported(row: dict) -> bool:
     會變成「你退過 0 次」這種自打嘴巴的句子，所以要分得出來。判斷靠 `evidence_json`
     的來源標記，不靠 `reject_count == 0` 猜——那是巧合成立，不是保證。
     """
-    try:
-        return (json.loads(row.get("evidence_json") or "{}") or {}).get("source") == "self_report"
-    except ValueError:
-        return False
+    return (row.get("evidence_json") or {}).get("source") == "self_report"
 
 
 def list_pending_rule_cards(conn, brand_id: str) -> list:
@@ -621,7 +614,7 @@ def decide_rule_card(conn, brand_id: str, card_id: str, *, accept: bool, actor: 
         raise ValueError("找不到這張規則卡")
 
     from app.brand_intelligence import repository as bi
-    ts = now_iso()
+    ts = now_utc()
     is_overclaim_claim = row["fingerprint_axis"] == OVERCLAIM_CLAIM_AXIS
 
     if is_overclaim_claim:
@@ -636,12 +629,14 @@ def decide_rule_card(conn, brand_id: str, card_id: str, *, accept: bool, actor: 
                                     claim_text=row["proposed_rule_text"], claim_type="forbidden",
                                     product_id=row["product_id"])
             claim_id = claim["id"]
-            evidence = json.loads(row["evidence_json"] or "{}")
+            # dict()：row["evidence_json"] 是 psycopg 直接解出的物件，不拷貝就地改會連帶
+            # 動到下面 write_audit(before=dict(row)) 要用的「改之前」快照（02-3b）。
+            evidence = dict(row["evidence_json"] or {})
             evidence["claim_id"] = claim_id
             conn.execute(
                 "UPDATE creative_rule_card SET status = 'accepted', evidence_json = %s,"
                 " decided_by = %s, decided_at = %s, updated_at = %s WHERE id = %s",
-                (json.dumps(evidence, ensure_ascii=False), actor, ts, ts, card_id),
+                (jsonb(evidence), actor, ts, ts, card_id),
             )
         else:
             conn.execute(
@@ -688,10 +683,7 @@ def adopted_fingerprints(conn, brand_id: str, exclude_cycle_id: Optional[str] = 
         params.append(exclude_cycle_id)
     prints = []
     for row in conn.execute(sql, params):
-        try:
-            data = json.loads(row["fingerprint_json"] or "{}")
-        except ValueError:
-            continue
+        data = row["fingerprint_json"]
         if data:
             prints.append((data, row["campaign_cycle_id"]))
     return prints
@@ -768,7 +760,7 @@ def build(conn, brand_id: str, cycle_id: str, actor: str) -> dict:
         "historical_cells": historical_cell_performance(conn, brand_id, exclude_cycle_id=cycle_id),
     }
 
-    ts = now_iso()
+    ts = now_utc()
     conn.execute(
         "DELETE FROM recommendation WHERE brand_id = %s AND campaign_cycle_id = %s"
         " AND recommendation_type = 'next_cycle'", (brand_id, cycle_id),
@@ -779,7 +771,7 @@ def build(conn, brand_id: str, cycle_id: str, actor: str) -> dict:
         " created_at, updated_at) VALUES (%s, %s, %s, %s, %s, 'next_cycle', %s, 'GENERATED', %s, %s)",
         (new_id("rec"), DEV_ORG_ID, brand_id, cycle_id,
          (verdict["cycle"] or {}).get("id"),
-         json.dumps(content, ensure_ascii=False), ts, ts),
+         jsonb(content), ts, ts),
     )
     conn.commit()
     return content
@@ -794,5 +786,5 @@ def load(conn, brand_id: str, cycle_id: str) -> Optional[dict]:
     if row is None:
         return None
     data = dict(row)
-    data["content"] = json.loads(data["content_json"] or "{}")
+    data["content"] = data["content_json"] or {}
     return data

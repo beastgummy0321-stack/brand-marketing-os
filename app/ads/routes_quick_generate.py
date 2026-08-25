@@ -36,7 +36,7 @@ ponytail：多花一點 AI 產出（title／description 生完即丟）換取「
 """
 
 from fastapi import APIRouter, Request
-from fastapi.responses import JSONResponse
+from app.shared.web import JSONResponse
 
 import app.shared.web as main_mod
 from app.ads import compliance

@@ -16,7 +16,7 @@ optional 的 offer row、再把 id 傳給 `create_cycle()`（呼叫順序見
 
 from typing import Optional
 
-from app.core.db import new_id, now_iso, Conn, DEV_ORG_ID
+from app.core.db import new_id, now_utc, jsonb, Conn, DEV_ORG_ID
 
 TYPES = (("discount", "折扣"), ("bundle", "組合"), ("gift", "贈品"))
 _VALID_TYPES = {code for code, _ in TYPES}
@@ -60,12 +60,12 @@ def create(conn: Conn, brand_id: str, *, product_scope_json: str,
     """插進一筆 offer row，回傳新 id。呼叫端已經跑過 `validate()`；`price_value`／
     `currency` 固定 NULL（3 格表單不問），`status` 固定 `active`（沒有草稿態）。"""
     offer_id = new_id("ofr")
-    ts = now_iso()
+    ts = now_utc()
     conn.execute(
         "INSERT INTO offer (id, org_id, brand_id, product_scope_json, name, offer_type, terms,"
         " price_value, currency, valid_from, valid_to, status, created_at, updated_at)"
         " VALUES (%s, %s, %s, %s, %s, %s, %s, NULL, NULL, %s, %s, 'active', %s, %s)",
-        (offer_id, DEV_ORG_ID, brand_id, product_scope_json, fields["name"], fields["offer_type"],
+        (offer_id, DEV_ORG_ID, brand_id, jsonb(product_scope_json), fields["name"], fields["offer_type"],
          fields["terms"], valid_from, valid_to, ts, ts),
     )
     conn.commit()
@@ -85,7 +85,7 @@ def save_for_cycle(conn: Conn, brand_id: str, cycle: dict, fields: dict) -> dict
         conn.execute(
             "UPDATE offer SET name = %s, offer_type = %s, terms = %s, updated_at = %s"
             " WHERE brand_id = %s AND id = %s",
-            (fields["name"], fields["offer_type"], fields["terms"], now_iso(),
+            (fields["name"], fields["offer_type"], fields["terms"], now_utc(),
              brand_id, existing_id),
         )
         conn.commit()

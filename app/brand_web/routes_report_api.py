@@ -11,7 +11,7 @@ active_jobs() 回六欄背景工作列。
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import JSONResponse
+from app.shared.web import JSONResponse
 
 from app.brand_intelligence import background_job
 from app.brand_intelligence import repository as repo

@@ -25,7 +25,7 @@ import psycopg
 
 from app.core import cleanup
 from app.core.audit import write_audit
-from app.core.db import now_iso, Conn, DEV_ORG_ID
+from app.core.db import now_utc, Conn, DEV_ORG_ID
 
 # ---------------------------------------------------------------------------
 # 卡片定義（單一權威：標題、人話說明、欄位標籤與預設值都在這裡）
@@ -305,7 +305,7 @@ def set_value(conn: Conn, brand_id: str, card_key: str, field_key: str,
            VALUES (%s, %s, %s, %s, %s, %s)
            ON CONFLICT(org_id, brand_id, card_key, field_key)
            DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at""",
-        (DEV_ORG_ID, brand_id, card_key, field_key, value, now_iso()),
+        (DEV_ORG_ID, brand_id, card_key, field_key, value, now_utc()),
     )
     write_audit(
         conn, brand_id=brand_id, entity_type="rule_card_value", entity_id=f"{card_key}.{field_key}",

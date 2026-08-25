@@ -20,7 +20,6 @@
    建檔精靈（intake）的資料由該模組自行清，本檔不跨模組刪表。
 """
 
-import json
 from typing import Optional
 
 from app.brand_intelligence import rule_lifecycle
@@ -43,7 +42,7 @@ from app.brand_intelligence.repository_learning_text import (  # noqa: F401
 )
 from app.core import cleanup
 from app.core.audit import write_audit
-from app.core.db import new_id, now_iso, Conn, DEV_ORG_ID
+from app.core.db import new_id, now_utc, jsonb, Conn, DEV_ORG_ID
 
 
 def _require(value, message: str) -> None:
@@ -62,7 +61,7 @@ def _rows(cursor) -> list:
 def _bump_brand_version(conn: Conn, brand_id: str) -> None:
     conn.execute(
         "UPDATE brand SET knowledge_version = knowledge_version + 1, updated_at = %s WHERE id = %s",
-        (now_iso(), brand_id),
+        (now_utc(), brand_id),
     )
 
 
@@ -70,7 +69,7 @@ def _bump_product_version(conn: Conn, brand_id: str, product_id: str) -> None:
     conn.execute(
         "UPDATE product SET knowledge_version = knowledge_version + 1, updated_at = %s "
         "WHERE brand_id = %s AND id = %s",
-        (now_iso(), brand_id, product_id),
+        (now_utc(), brand_id, product_id),
     )
 
 
@@ -82,7 +81,7 @@ def create_brand(conn: Conn, *, name: str, client_name: Optional[str], actor: st
     _require(name, "brand.name 為必填")
     _require(actor, "actor 為必填")
     brand_id = new_id("brd")
-    ts = now_iso()
+    ts = now_utc()
     row = {
         "id": brand_id, "name": name, "client_name": client_name or None,
         "status": "active", "knowledge_version": 1, "created_at": ts, "updated_at": ts,
@@ -119,7 +118,7 @@ def update_brand(conn: Conn, brand_id: str, *, name: str,
     before = get_brand(conn, brand_id)
     if before is None:
         raise ValueError(f"找不到品牌：{brand_id}")
-    ts = now_iso()
+    ts = now_utc()
     conn.execute(
         "UPDATE brand SET name = %s, client_name = %s, status = %s, updated_at = %s WHERE id = %s",
         (name, client_name or None, status, ts, brand_id),
@@ -146,7 +145,7 @@ def set_brand_switches(conn: Conn, brand_id: str, *,
     before = get_brand(conn, brand_id)
     if before is None:
         raise ValueError(f"找不到品牌：{brand_id}")
-    ts = now_iso()
+    ts = now_utc()
     conn.execute(
         "UPDATE brand SET market_region = %s, conversion_goal = %s, updated_at = %s WHERE id = %s",
         (market_region, conversion_goal, ts, brand_id),
@@ -176,7 +175,7 @@ def set_brand_industry(conn: Conn, brand_id: str, *,
     before = get_brand(conn, brand_id)
     if before is None:
         raise ValueError(f"找不到品牌：{brand_id}")
-    ts = now_iso()
+    ts = now_utc()
     conn.execute(
         "UPDATE brand SET industry = %s, updated_at = %s WHERE id = %s",
         (industry, ts, brand_id),
@@ -323,7 +322,7 @@ def create_product(conn: Conn, brand_id: str, *, name: str, actor: str) -> dict:
     if get_brand(conn, brand_id) is None:
         raise ValueError(f"找不到品牌：{brand_id}")
     product_id = new_id("prd")
-    ts = now_iso()
+    ts = now_utc()
     row = {
         "id": product_id, "brand_id": brand_id, "name": name, "status": "active",
         "knowledge_version": 1, "created_at": ts, "updated_at": ts,
@@ -360,7 +359,7 @@ def update_product(conn: Conn, brand_id: str, product_id: str, *,
     before = get_product(conn, brand_id, product_id)
     if before is None:
         raise ValueError(f"找不到產品：{product_id}")
-    ts = now_iso()
+    ts = now_utc()
     conn.execute(
         "UPDATE product SET name = %s, status = %s, updated_at = %s WHERE id = %s AND brand_id = %s",
         (name, status, ts, product_id, brand_id),
@@ -466,7 +465,7 @@ def create_brand_fact(conn: Conn, brand_id: str, *, actor: str, fact_type: str,
     if status == "confirmed":
         _require(confirmed_by, "狀態為已確認時，confirmed_by 為必填")
     fact_id = new_id("bft")
-    ts = now_iso()
+    ts = now_utc()
     row = {
         "id": fact_id, "brand_id": brand_id, "fact_type": fact_type, "label": label, "value": value,
         "status": status, "source_reference_id": source_reference_id, "confidence": confidence,
@@ -520,7 +519,7 @@ def update_brand_fact(conn: Conn, brand_id: str, fact_id: str, *, actor: str,
     if before is None:
         raise ValueError(f"找不到品牌事實：{fact_id}")
     was_confirmed = before["status"] == "confirmed"
-    ts = now_iso()
+    ts = now_utc()
     confirmed_by = actor if was_confirmed else before["confirmed_by"]
     confirmed_at = ts if was_confirmed else before["confirmed_at"]
     conn.execute(
@@ -578,7 +577,7 @@ def confirm_brand_fact(conn: Conn, brand_id: str, fact_id: str, *,
     before = get_brand_fact(conn, brand_id, fact_id)
     if before is None:
         raise ValueError(f"找不到品牌事實：{fact_id}")
-    ts = now_iso()
+    ts = now_utc()
     conn.execute(
         "UPDATE brand_fact SET status = 'confirmed', confirmed_by = %s, confirmed_at = %s, updated_at = %s "
         "WHERE id = %s AND brand_id = %s",
@@ -610,7 +609,7 @@ def create_product_fact(conn: Conn, brand_id: str, product_id: str, *, actor: st
     if status == "confirmed":
         _require(confirmed_by, "狀態為已確認時，confirmed_by 為必填")
     fact_id = new_id("pft")
-    ts = now_iso()
+    ts = now_utc()
     row = {
         "id": fact_id, "product_id": product_id, "brand_id": brand_id, "fact_type": fact_type,
         "label": label, "value": value, "status": status, "source_reference_id": source_reference_id,
@@ -669,7 +668,7 @@ def update_product_fact(conn: Conn, brand_id: str, product_id: str, fact_id: str
     if before is None:
         raise ValueError(f"找不到產品事實：{fact_id}")
     was_confirmed = before["status"] == "confirmed"
-    ts = now_iso()
+    ts = now_utc()
     confirmed_by = actor if was_confirmed else before["confirmed_by"]
     confirmed_at = ts if was_confirmed else before["confirmed_at"]
     conn.execute(
@@ -695,7 +694,7 @@ def confirm_product_fact(conn: Conn, brand_id: str, product_id: str, fact_id: st
     before = get_product_fact(conn, brand_id, product_id, fact_id)
     if before is None:
         raise ValueError(f"找不到產品事實：{fact_id}")
-    ts = now_iso()
+    ts = now_utc()
     conn.execute(
         "UPDATE product_fact SET status = 'confirmed', confirmed_by = %s, confirmed_at = %s, updated_at = %s "
         "WHERE id = %s AND brand_id = %s AND product_id = %s",
@@ -735,7 +734,7 @@ def save_product_economics(conn: Conn, brand_id: str, product_id: str, *, actor:
     if selling_price is None:
         raise ValueError("product_economics.selling_price 為必填")
     before = get_product_economics(conn, brand_id, product_id)
-    ts = now_iso()
+    ts = now_utc()
     row = {
         "id": before["id"] if before else new_id("pec"),
         "product_id": product_id, "brand_id": brand_id, "selling_price": selling_price,
@@ -798,7 +797,7 @@ def create_pending_product_economics(conn: Conn, brand_id: str, product_id: str,
     固定成本／單位變動成本／運費留白，等使用者到「更新數字」補齊或直接一鍵確認。"""
     _require(currency, "product_economics.currency 為必填")
     _require(actor, "actor 為必填")
-    ts = now_iso()
+    ts = now_utc()
     row = {
         "id": new_id("pec"), "product_id": product_id, "brand_id": brand_id,
         "selling_price": selling_price, "fixed_cost": None, "unit_variable_cost": None,
@@ -832,7 +831,7 @@ def confirm_product_economics(conn: Conn, brand_id: str, product_id: str, *,
     before = get_product_economics(conn, brand_id, product_id)
     if before is None:
         raise ValueError(f"找不到產品經濟數字：{product_id}")
-    ts = now_iso()
+    ts = now_utc()
     conn.execute(
         "UPDATE product_economics SET status = 'confirmed', confirmed_by = %s, confirmed_at = %s, "
         "updated_at = %s WHERE id = %s",
@@ -858,7 +857,7 @@ def create_rule(conn: Conn, brand_id: str, *, actor: str, rule_type: str, conten
     if severity not in ("hard", "soft"):
         raise ValueError("rule.severity 只能是 hard 或 soft")
     rule_id = new_id("rul")
-    ts = now_iso()
+    ts = now_utc()
     row = {
         "id": rule_id, "brand_id": brand_id, "product_id": product_id, "rule_type": rule_type,
         "content": content, "severity": severity, "status": "active",
@@ -901,7 +900,7 @@ def update_rule(conn: Conn, brand_id: str, rule_id: str, *, actor: str,
     before = get_rule(conn, brand_id, rule_id)
     if before is None:
         raise ValueError(f"找不到規則：{rule_id}")
-    ts = now_iso()
+    ts = now_utc()
     conn.execute(
         "UPDATE rule SET rule_type = %s, content = %s, severity = %s, product_id = %s, "
         "source_reference_id = %s, updated_at = %s WHERE id = %s AND brand_id = %s",
@@ -931,7 +930,7 @@ def deactivate_rule(conn: Conn, brand_id: str, rule_id: str, *, actor: str) -> d
     before = get_rule(conn, brand_id, rule_id)
     if before is None:
         raise ValueError(f"找不到規則：{rule_id}")
-    ts = now_iso()
+    ts = now_utc()
     conn.execute(
         "UPDATE rule SET status = 'inactive', updated_at = %s WHERE id = %s AND brand_id = %s",
         (ts, rule_id, brand_id),
@@ -956,7 +955,7 @@ def reconfirm_rule(conn: Conn, brand_id: str, rule_id: str, *, actor: str) -> di
     before = get_rule(conn, brand_id, rule_id)
     if before is None:
         raise ValueError(f"找不到規則：{rule_id}")
-    ts = now_iso()
+    ts = now_utc()
     conn.execute(
         "UPDATE rule SET status = 'active', confirmed_at = %s, updated_at = %s "
         "WHERE id = %s AND brand_id = %s",
@@ -1019,7 +1018,7 @@ def create_claim(conn: Conn, brand_id: str, *, actor: str, claim_text: str,
     if claim_type not in ("approved", "high_risk", "forbidden"):
         raise ValueError("claim.claim_type 只能是 approved / high_risk / forbidden")
     claim_id = new_id("clm")
-    ts = now_iso()
+    ts = now_utc()
     row = {
         "id": claim_id, "brand_id": brand_id, "product_id": product_id, "claim_text": claim_text,
         "claim_type": claim_type, "evidence_source_reference_id": evidence_source_reference_id,
@@ -1057,7 +1056,7 @@ def update_claim(conn: Conn, brand_id: str, claim_id: str, *, actor: str,
     before = get_claim(conn, brand_id, claim_id)
     if before is None:
         raise ValueError(f"找不到宣稱：{claim_id}")
-    ts = now_iso()
+    ts = now_utc()
     conn.execute(
         "UPDATE claim SET claim_text = %s, claim_type = %s, product_id = %s, "
         "evidence_source_reference_id = %s, updated_at = %s WHERE id = %s AND brand_id = %s",
@@ -1104,15 +1103,17 @@ def list_claims_for_product(conn: Conn, brand_id: str, product_id: str) -> list:
 # ---------------------------------------------------------------------------
 
 def create_source_reference(conn: Conn, brand_id: str, *, actor: str, title: str,
-                             source_type: str, captured_date: str, url: Optional[str] = None,
-                             published_date: Optional[str] = None, locale: Optional[str] = None,
+                             source_type: str, captured_date, url: Optional[str] = None,
+                             published_date=None, locale: Optional[str] = None,
                              note: Optional[str] = None) -> dict:
+    """captured_date／published_date：`date` 物件（source_reference 兩欄是 Postgres date，
+    02-3b：呼叫端不再傳 ISO 字串）。"""
     _require(title, "source_reference.title 為必填")
     _require(source_type, "source_reference.source_type 為必填")
     _require(captured_date, "source_reference.captured_date 為必填")
     _require(actor, "actor 為必填")
     src_id = new_id("src")
-    ts = now_iso()
+    ts = now_utc()
     row = {
         "id": src_id, "brand_id": brand_id, "title": title, "url": url, "source_type": source_type,
         "published_date": published_date, "captured_date": captured_date, "locale": locale,
@@ -1155,7 +1156,7 @@ def create_official_asset(conn: Conn, brand_id: str, *, actor: str, asset_kind: 
     _require(file_path, "official_asset.file_path 為必填")
     _require(actor, "actor 為必填")
     asset_id = new_id("oas")
-    ts = now_iso()
+    ts = now_utc()
     row = {
         "id": asset_id, "brand_id": brand_id, "product_id": product_id, "asset_kind": asset_kind,
         "file_path": file_path, "title": title, "usage_note": usage_note, "status": "active",
@@ -1202,7 +1203,7 @@ def create_strategy_hypothesis(conn: Conn, brand_id: str, *, actor: str,
     _require(created_by, "strategy_hypothesis.created_by 為必填")
     _require(actor, "actor 為必填")
     hyp_id = new_id("hyp")
-    ts = now_iso()
+    ts = now_utc()
     row = {
         "id": hyp_id, "brand_id": brand_id, "product_id": product_id,
         "hypothesis_type": hypothesis_type, "statement": statement, "status": "proposed",
@@ -1252,7 +1253,7 @@ def update_hypothesis_status(conn: Conn, brand_id: str, hypothesis_id: str, *,
         raise ValueError("找不到這條策略假設")
     conn.execute(
         "UPDATE strategy_hypothesis SET status = %s, updated_at = %s WHERE id = %s AND brand_id = %s",
-        (status, now_iso(), hypothesis_id, brand_id),
+        (status, now_utc(), hypothesis_id, brand_id),
     )
     after = get_strategy_hypothesis(conn, brand_id, hypothesis_id)
     write_audit(conn, brand_id=brand_id, entity_type="strategy_hypothesis", entity_id=hypothesis_id,
@@ -1278,7 +1279,7 @@ def create_brand_performance_baseline(conn: Conn, brand_id: str, *, actor: str,
     if value is None:
         raise ValueError("brand_performance_baseline.value 為必填")
     baseline_id = new_id("bpb")
-    ts = now_iso()
+    ts = now_utc()
     row = {
         "id": baseline_id, "brand_id": brand_id, "product_id": product_id, "metric": metric,
         "value": value, "unit": unit, "basis_note": basis_note, "source_cycle_id": source_cycle_id,
@@ -1316,18 +1317,18 @@ def create_brand_report(conn: Conn, brand_id: str, *, actor: str, model: str,
     _require(actor, "actor 為必填")
     _require(model, "brand_report.model 為必填")
     report_id = new_id("rpt")
-    ts = now_iso()
+    ts = now_utc()
     row = {
         "id": report_id, "brand_id": brand_id, "generated_at": ts, "generated_by": actor,
         "model": model, "llm_task_id": llm_task_id, "brand_version": brand_version,
         "source_fact_count": source_fact_count,
-        "sections_json": json.dumps(sections, ensure_ascii=False),
+        "sections_json": sections,
     }
     conn.execute(
         "INSERT INTO brand_report (id, org_id, brand_id, generated_at, generated_by, model, llm_task_id, "
         "brand_version, source_fact_count, sections_json) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
         (row["id"], DEV_ORG_ID, row["brand_id"], row["generated_at"], row["generated_by"], row["model"],
-         row["llm_task_id"], row["brand_version"], row["source_fact_count"], row["sections_json"]),
+         row["llm_task_id"], row["brand_version"], row["source_fact_count"], jsonb(row["sections_json"])),
     )
     write_audit(conn, brand_id=brand_id, entity_type="brand_report", entity_id=report_id,
                 action="create", actor=actor,
@@ -1344,7 +1345,7 @@ def get_latest_brand_report(conn: Conn, brand_id: str) -> Optional[dict]:
         (brand_id,),
     ).fetchone())
     if row is not None:
-        row["sections"] = json.loads(row["sections_json"])
+        row["sections"] = row["sections_json"]
     return row
 
 
@@ -1354,7 +1355,7 @@ def get_latest_brand_report(conn: Conn, brand_id: str) -> Optional[dict]:
 
 def _with_extraction(row: Optional[dict]) -> Optional[dict]:
     if row is not None:
-        row["extraction"] = json.loads(row["extraction_json"])
+        row["extraction"] = row["extraction_json"]
     return row
 
 
@@ -1368,11 +1369,11 @@ def create_customer_voice(conn: Conn, brand_id: str, *, actor: str, raw_text: st
     if source_type not in ("manual", "crawler"):
         raise ValueError("customer_voice.source_type 只能是 manual 或 crawler")
     cv_id = new_id("cvc")
-    ts = now_iso()
+    ts = now_utc()
     row = {
         "id": cv_id, "brand_id": brand_id, "raw_text": raw_text, "source_channel": source_channel,
         "source_detail": source_detail or None, "source_type": source_type, "status": "active",
-        "extraction_json": json.dumps(extraction, ensure_ascii=False), "llm_task_id": llm_task_id,
+        "extraction_json": extraction, "llm_task_id": llm_task_id,
         "created_by": actor, "created_at": ts, "updated_at": ts,
     }
     conn.execute(
@@ -1380,7 +1381,7 @@ def create_customer_voice(conn: Conn, brand_id: str, *, actor: str, raw_text: st
         "source_type, status, extraction_json, llm_task_id, created_by, created_at, updated_at) "
         "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
         (row["id"], DEV_ORG_ID, row["brand_id"], row["raw_text"], row["source_channel"], row["source_detail"],
-         row["source_type"], row["status"], row["extraction_json"], row["llm_task_id"],
+         row["source_type"], row["status"], jsonb(row["extraction_json"]), row["llm_task_id"],
          row["created_by"], row["created_at"], row["updated_at"]),
     )
     _bump_brand_version(conn, brand_id)
@@ -1422,7 +1423,7 @@ def set_customer_voice_status(conn: Conn, brand_id: str, cv_id: str, *,
     before = get_customer_voice(conn, brand_id, cv_id)
     if before is None:
         raise ValueError(f"找不到顧客原話：{cv_id}")
-    ts = now_iso()
+    ts = now_utc()
     conn.execute(
         "UPDATE customer_voice SET status = %s, updated_at = %s WHERE id = %s AND brand_id = %s",
         (status, ts, cv_id, brand_id),
@@ -1472,13 +1473,13 @@ def create_learning_ledger_entry(conn: Conn, brand_id: str, *, learning_text: st
     _require(source_track, "learning_ledger.source_track 為必填")
     _require(actor, "actor 為必填")
     entry_id = new_id("lrn")
-    ts = now_iso()
+    ts = now_utc()
     row = {
         "id": entry_id, "brand_id": brand_id, "product_id": product_id, "platform": platform,
         "learning_text": learning_text, "applicability_scope": applicability_scope,
         "source_cycle_id": source_cycle_id, "source_reading_id": source_reading_id,
         "source_hypothesis_id": source_hypothesis_id, "sample_size": sample_size,
-        "confidence": confidence, "needs_revalidation": 0, "expired": 0,
+        "confidence": confidence, "needs_revalidation": False, "expired": False,
         "learned_at": ts, "created_by": created_by, "created_at": ts, "source_track": source_track,
     }
     conn.execute(
@@ -1502,10 +1503,10 @@ def list_learning_ledger(conn: Conn, brand_id: str, *,
                           include_expired: bool = False) -> list:
     """累積智慧頁讀取用：已驗證的正面學習清單（不分分支——頁面是給人看「這個品牌學到
     什麼」，不是給 prompt 組裝用；分支過濾只在 `list_learnings_for_prompt` 做，見下）。
-    預設只列 `expired = 0`，跟 `list_learnings_for_prompt` 讀取端的過濾條件一致。"""
+    預設只列 `expired = false`，跟 `list_learnings_for_prompt` 讀取端的過濾條件一致。"""
     sql = "SELECT * FROM learning_ledger WHERE brand_id = %s"
     if not include_expired:
-        sql += " AND expired = 0"
+        sql += " AND expired = false"
     sql += " ORDER BY learned_at DESC"
     return _rows(conn.execute(sql, (brand_id,)))
 
@@ -1514,7 +1515,7 @@ def deactivate_learning_ledger_entry(conn: Conn, brand_id: str, entry_id: str, *
                                       actor: str) -> dict:
     """下架一條已確認學習：把 `expired` 標成 1，不刪列、不改 `learning_text` 等內容欄位
     ——append-only 表不提供 UPDATE 指的是改寫學習內容本身；`expired` 是本表建表時就留給
-    下架用的狀態欄，`list_learnings_for_prompt` 讀取端已過濾 `expired = 0`。"""
+    下架用的狀態欄，`list_learnings_for_prompt` 讀取端已過濾 `expired = false`。"""
     if not actor:
         raise ValueError("actor 為必填")
     before = _row(conn.execute(
@@ -1523,7 +1524,7 @@ def deactivate_learning_ledger_entry(conn: Conn, brand_id: str, entry_id: str, *
     if before is None:
         raise ValueError(f"找不到這條學習紀錄：{entry_id}")
     conn.execute(
-        "UPDATE learning_ledger SET expired = 1 WHERE id = %s AND brand_id = %s",
+        "UPDATE learning_ledger SET expired = true WHERE id = %s AND brand_id = %s",
         (entry_id, brand_id),
     )
     after = _row(conn.execute(
@@ -1545,11 +1546,11 @@ def list_learnings_for_prompt(conn: Conn, brand_id: str, *,
     （見 context_compiler._learning_source_note）。"""
     _require(track, "list_learnings_for_prompt 的 track 為必填")
     if product_id is not None:
-        sql = ("SELECT * FROM learning_ledger WHERE brand_id = %s AND expired = 0"
+        sql = ("SELECT * FROM learning_ledger WHERE brand_id = %s AND expired = false"
                " AND (product_id IS NULL OR product_id = %s)")
         params = [brand_id, product_id]
     else:
-        sql = "SELECT * FROM learning_ledger WHERE brand_id = %s AND expired = 0 AND product_id IS NULL"
+        sql = "SELECT * FROM learning_ledger WHERE brand_id = %s AND expired = false AND product_id IS NULL"
         params = [brand_id]
     if not include_cross_track:
         sql += " AND source_track = %s"
@@ -1600,7 +1601,7 @@ def mark_learning_ledger_needs_revalidation(conn: Conn, brand_id: str,
     """單條標記「建議找機會重新驗證」（修憲落地 G4，決策 0035 第三節第 10 點）：只提醒、
     不擋路、不自動下架（決策 0013）。"""
     conn.execute(
-        "UPDATE learning_ledger SET needs_revalidation = 1 WHERE id = %s AND brand_id = %s",
+        "UPDATE learning_ledger SET needs_revalidation = true WHERE id = %s AND brand_id = %s",
         (entry_id, brand_id),
     )
 

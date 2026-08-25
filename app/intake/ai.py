@@ -135,7 +135,7 @@ def _read_photo_product(conn, draft: dict, photo: dict, purpose: str) -> dict:
         )
         if task["status"] != "succeeded":
             return _photo_card(photo, status="failed", message=task["error"])
-        data = json.loads(task["structured_output_json"] or "null")
+        data = task["structured_output_json"]
         if not isinstance(data, dict) or not data.get("readable") or not str(data.get("name") or "").strip():
             return _photo_card(
                 photo, status="unreadable", data=data if isinstance(data, dict) else None,
@@ -365,7 +365,7 @@ def run_paste_fix(conn, draft: dict) -> tuple:
     # 額度只在成功時用掉：repair_llm_task_id 非空＝用過（03 §3A.2）
     ir.update_draft(conn, draft["brand_id"], draft["id"], repair_llm_task_id=task["id"])
     draft["paste_fix_used"] = True
-    structured = json.loads(task["structured_output_json"]) if task["structured_output_json"] else None
+    structured = task["structured_output_json"] or None
     if isinstance(structured, dict) and isinstance(structured.get("rows"), list):
         return True, structured["rows"]
     return True, task["rendered_output"]

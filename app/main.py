@@ -142,7 +142,7 @@ def _auto_sync_if_due(now: Optional[datetime] = None) -> None:
     global _last_auto_sync_check
     now = now or datetime.now(timezone.utc)
     has_live = bool(web.conn.execute(
-        "SELECT 1 FROM campaign_cycle WHERE status = 'LIVE' AND archived = 0 LIMIT 1"
+        "SELECT 1 FROM campaign_cycle WHERE status = 'LIVE' AND archived = false LIMIT 1"
     ).fetchone())
     due = (_last_auto_sync_check is None
            or (has_live and now - _last_auto_sync_check >= timedelta(hours=4))

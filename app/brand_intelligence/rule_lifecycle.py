@@ -28,7 +28,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from app.core.db import now_iso, Conn, DEV_ORG_ID
+from app.core.db import new_id, now_utc, Conn, DEV_ORG_ID
 from app.core.rule_cards import get_value
 
 CARD_KEY = "rule_expiry"
@@ -38,63 +38,62 @@ FIELD_KEY = "reconfirm_cycles"
 CYCLE_DAYS_APPROX = 14
 
 
-def _cutoff_iso(conn: Conn, brand_id: str) -> str:
+def _cutoff(conn: Conn, brand_id: str) -> datetime:
     """幾天前算逾期：現在往前推「門檻期數 × 一期天數」。"""
     cycles = get_value(conn, brand_id, CARD_KEY, FIELD_KEY)
-    cutoff = datetime.now(timezone.utc) - timedelta(days=cycles * CYCLE_DAYS_APPROX)
-    return cutoff.isoformat()
+    return now_utc() - timedelta(days=cycles * CYCLE_DAYS_APPROX)
 
 
 def sweep_expired_rules(conn: Conn, brand_id: str) -> int:
     """超過門檻期數未重新確認的生效中規則，狀態退回 pending_reconfirm。回傳受影響筆數。"""
-    cutoff = _cutoff_iso(conn, brand_id)
+    cutoff = _cutoff(conn, brand_id)
     cursor = conn.execute(
         "UPDATE rule SET status = 'pending_reconfirm', updated_at = %s "
         "WHERE brand_id = %s AND status = 'active' AND confirmed_at IS NOT NULL AND confirmed_at < %s",
-        (now_iso(), brand_id, cutoff),
+        (now_utc(), brand_id, cutoff),
     )
     conn.commit()
     return cursor.rowcount
 
 
 def demo() -> None:
-    """最小自測：剛確認的規則不受影響，逾期的規則被掃到；冪等（掃兩次結果一樣）。"""
-    import tempfile
-    from pathlib import Path
+    """最小自測：剛確認的規則不受影響，逾期的規則被掃到；冪等（掃兩次結果一樣）。對本機
+    Supabase stack 跑（02-3b 票 9）。sweep_expired_rules() 本身會 commit，重跑不能靠
+    rollback 復原——brand_id／rule id 每次跑都重新產生，避免撞到上一次留下的列（比照
+    本機 dev 資料可丟可重建，CLAUDE.md「資料狀態」節）。"""
+    from app.core import db as coredb
 
-    from app.core import db as core_db
-
-    with tempfile.TemporaryDirectory() as tmp:
-        conn = core_db.connect_and_migrate(Path(tmp) / "demo.db")
-        brand_id = "brd_demo"
+    with coredb.connection() as conn:
+        brand_id = new_id("brd")
+        fresh_id, stale_id = new_id("rul"), new_id("rul")
+        ts = now_utc()
         conn.execute(
             "INSERT INTO brand (id, org_id, name, status, knowledge_version, created_at, updated_at) "
             "VALUES (%s, %s, '示範品牌', 'active', 1, %s, %s)",
-            (brand_id, DEV_ORG_ID, now_iso(), now_iso()),
+            (brand_id, DEV_ORG_ID, ts, ts),
         )
-        fresh_iso = now_iso()
-        stale_iso = (datetime.now(timezone.utc) - timedelta(days=200)).isoformat()
+        fresh_ts = now_utc()
+        stale_ts = now_utc() - timedelta(days=200)
         conn.execute(
             "INSERT INTO rule (id, org_id, brand_id, rule_type, content, severity, status, "
             "created_at, updated_at, confirmed_at) VALUES "
-            "('rul_fresh', %s, %s, 'tone', '剛確認', 'soft', 'active', %s, %s, %s), "
-            "('rul_stale', %s, %s, 'tone', '早就沒人確認', 'soft', 'active', %s, %s, %s)",
-            (DEV_ORG_ID, brand_id, fresh_iso, fresh_iso, fresh_iso,
-             DEV_ORG_ID, brand_id, stale_iso, stale_iso, stale_iso),
+            "(%s, %s, %s, 'tone', '剛確認', 'soft', 'active', %s, %s, %s), "
+            "(%s, %s, %s, 'tone', '早就沒人確認', 'soft', 'active', %s, %s, %s)",
+            (fresh_id, DEV_ORG_ID, brand_id, fresh_ts, fresh_ts, fresh_ts,
+             stale_id, DEV_ORG_ID, brand_id, stale_ts, stale_ts, stale_ts),
         )
         conn.commit()
 
         affected = sweep_expired_rules(conn, brand_id)
         assert affected == 1, f"應該只有一條逾期，實際 {affected}"
 
-        rows = {r["id"]: r["status"] for r in conn.execute("SELECT id, status FROM rule")}
-        assert rows["rul_fresh"] == "active", rows
-        assert rows["rul_stale"] == "pending_reconfirm", rows
+        rows = {r["id"]: r["status"] for r in conn.execute(
+            "SELECT id, status FROM rule WHERE brand_id = %s", (brand_id,))}
+        assert rows[fresh_id] == "active", rows
+        assert rows[stale_id] == "pending_reconfirm", rows
 
         # 冪等：再掃一次，已經翻過的列不會重複計入受影響筆數
         assert sweep_expired_rules(conn, brand_id) == 0
-
-        conn.close()
     print("rule_lifecycle demo OK")
 
 

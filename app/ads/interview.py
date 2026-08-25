@@ -18,13 +18,12 @@ ledger 只收經判讀驗證且經人確認的結論，訪談自述屬未驗證�
 全程選填：`bad`／`good` 任何軸都可以不勾，補充文字可留空——跳過不擋任何流程（決策 0025）。
 """
 
-import json
 from typing import Optional
 
 from app.ads import fingerprint as fp
 from app.brand_intelligence import repository as bi
 from app.core.audit import write_audit
-from app.core.db import new_id, now_iso, DEV_ORG_ID
+from app.core.db import new_id, now_utc, jsonb, DEV_ORG_ID
 
 
 def _clean_selection(raw: Optional[dict]) -> dict:
@@ -72,9 +71,9 @@ def _create_self_report_card(conn, brand_id: str, axis: str, value: str, *, acto
 
     label = fp.axis_value_label(axis, value)
     row_id = new_id("rcd")
-    ts = now_iso()
+    ts = now_utc()
     proposed_text = f"以後不要再出「{fp.AXES[axis]['label']}是{label}」的素材"
-    evidence = json.dumps({"source": "self_report"}, ensure_ascii=False)
+    evidence = jsonb({"source": "self_report"})
     conn.execute(
         "INSERT INTO creative_rule_card (id, org_id, brand_id, fingerprint_axis, fingerprint_value,"
         " proposed_rule_text, evidence_json, reject_count, status, created_at, updated_at)"

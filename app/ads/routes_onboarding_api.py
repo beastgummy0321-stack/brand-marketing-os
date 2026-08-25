@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from typing import Callable
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import JSONResponse
+from app.shared.web import JSONResponse
 
 from app.ads import data_onboarding, ga4_sync
 from app.ads import sync as ads_sync

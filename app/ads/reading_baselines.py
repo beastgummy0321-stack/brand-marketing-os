@@ -71,7 +71,7 @@ def _same_period_last_year_baseline(conn, brand_id: str, cycle: dict,
                                     exclude_cycle_id: Optional[str] = None) -> dict:
     """「去年同期」基線：這個品牌去年同一段日子（±15 天）跑過的檔期，KPI 中位數。
     找不到對應檔期就回空 dict（不硬湊）。"""
-    start = date.fromisoformat(cycle["start_date"])
+    start = cycle["start_date"]
     try:
         target = start.replace(year=start.year - 1)
     except ValueError:

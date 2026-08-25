@@ -59,7 +59,7 @@ def set_setting(conn: db.Conn, key: str, value: str) -> None:
     conn.execute(
         """INSERT INTO app_setting (org_id, key, value, updated_at) VALUES (%s, %s, %s, %s)
            ON CONFLICT(org_id, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at""",
-        (db.DEV_ORG_ID, key, str(value), db.now_iso()),
+        (db.DEV_ORG_ID, key, str(value), db.now_utc()),
     )
     conn.commit()
 

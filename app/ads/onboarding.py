@@ -18,7 +18,6 @@ ADHD 設計輸入方向三：第一期數字通常很難看，新手歸咎「我
 廣告模組的專屬知識，實際儲存／去重／嚴重度都交給佇列那層統一處理。
 """
 
-import json
 from datetime import date, timedelta
 from typing import Optional
 
@@ -62,16 +61,16 @@ def create_reminders(conn, brand_id: str, cycle_id: str) -> int:
     cycle = ads_repo.get_cycle(conn, brand_id, cycle_id)
     if cycle is None:
         return 0
-    start = date.fromisoformat(cycle["start_date"])
-    end = date.fromisoformat(cycle["end_date"])
+    start = cycle["start_date"]
+    end = cycle["end_date"]
     created = 0
     for reminder in REMINDERS:
         if reminder["offset_from_end_days"] is not None:
-            due = (end + timedelta(days=reminder["offset_from_end_days"])).isoformat()
+            due = end + timedelta(days=reminder["offset_from_end_days"])
         elif reminder["offset_days"] is None:
             due = cycle["end_date"]
         else:
-            due = (start + timedelta(days=reminder["offset_days"])).isoformat()
+            due = start + timedelta(days=reminder["offset_days"])
         interrupt_id = core_interrupts.enqueue(
             conn, category="cycle_reminder", kind=reminder["kind"],
             dedupe_key=f"cycle_reminder:{cycle_id}:{reminder['kind']}",
@@ -219,7 +218,7 @@ def _comparable(conn, brand_id: str, cycle: dict) -> dict:
 
     derived = ads_repo.derived_plan(cycle)
     names = []
-    for product_id in json.loads(cycle["product_scope_json"] or "[]"):
+    for product_id in cycle["product_scope_json"] or []:
         product = bi.get_product(conn, brand_id, product_id)
         if product:
             names.append(product["name"])
@@ -240,7 +239,14 @@ def previous_cycle(conn, brand_id: str, cycle: dict) -> Optional[dict]:
         " AND created_at < %s ORDER BY created_at DESC LIMIT 1",
         (brand_id, cycle["id"], cycle["created_at"]),
     ).fetchone()
-    return dict(row) if row is not None else None
+    if row is None:
+        return None
+    result = dict(row)
+    # budget 跟 ads_repo.get_cycle() 一樣轉 float——diff_with_previous() 下面拿它跟
+    # get_cycle() 讀回的 cycle["budget"] 比較，兩邊型別要一致（02-3b）。
+    if result.get("budget") is not None:
+        result["budget"] = float(result["budget"])
+    return result
 
 
 def diff_with_previous(conn, brand_id: str, cycle_id: str) -> Optional[dict]:

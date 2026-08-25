@@ -78,7 +78,7 @@ def recent(brand_id: str) -> bool:
     latest = repo.get_latest_brand_report(web.conn, brand_id)
     if latest is None:
         return False
-    generated_at = datetime.fromisoformat(latest["generated_at"])
+    generated_at = latest["generated_at"]
     if generated_at.tzinfo is None:
         generated_at = generated_at.replace(tzinfo=timezone.utc)
     age = (datetime.now(timezone.utc) - generated_at).total_seconds()

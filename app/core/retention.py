@@ -17,7 +17,7 @@ usage_json／cost／input_context_hash／provider／model／status／時間戳�
 from datetime import datetime, timedelta
 from typing import Optional
 
-from app.core.db import now_iso, Conn
+from app.core.db import now_utc, Conn
 
 RETENTION_DAYS = 90
 
@@ -25,13 +25,13 @@ RETENTION_DAYS = 90
 _PURGE_COLUMNS = ("structured_output_json", "rendered_output", "validation_result_json")
 
 
-def purge_expired_llm_task_content(conn: Conn, *, now: Optional[str] = None) -> int:
+def purge_expired_llm_task_content(conn: Conn, *, now: Optional[datetime] = None) -> int:
     """把超過保留期的已完成任務之大欄位清空，回傳實際清空的列數。
 
     只動 finished_at 早於 cutoff 的列（還在跑的任務不動，反正沒有大內容可清）；
     已經清過的列（大欄位已是 NULL）不會重複計入，可放心重跑（idempotent）。
     """
-    cutoff = _cutoff_iso(now)
+    cutoff = _cutoff(now)
     columns_clause = ", ".join(f"{col} = NULL" for col in _PURGE_COLUMNS)
     where_not_already_empty = " OR ".join(f"{col} IS NOT NULL" for col in _PURGE_COLUMNS)
     cur = conn.execute(
@@ -44,7 +44,7 @@ def purge_expired_llm_task_content(conn: Conn, *, now: Optional[str] = None) -> 
     return cur.rowcount
 
 
-def _cutoff_iso(now: Optional[str] = None) -> str:
-    """回傳「今天往前推 RETENTION_DAYS 天」的 ISO 字串，靠字串比較即可（now_iso() 格式可排序）。"""
-    reference = datetime.fromisoformat(now) if now else datetime.fromisoformat(now_iso())
-    return (reference - timedelta(days=RETENTION_DAYS)).isoformat()
+def _cutoff(now: Optional[datetime] = None) -> datetime:
+    """回傳「現在往前推 RETENTION_DAYS 天」的 tz-aware datetime。"""
+    reference = now or now_utc()
+    return reference - timedelta(days=RETENTION_DAYS)

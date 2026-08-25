@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 """真相卡確認後的人物誌生成；資料存取留在 brand_intelligence.personas。"""
 
-import json
 from datetime import datetime, timezone
 
 from app.brand_intelligence import background_job, personas
@@ -107,10 +106,7 @@ def generate(conn, brand_id: str) -> tuple:
     )
     if task["status"] != "succeeded":
         return False, task["error"] or "人物誌沒有產生，可以再試一次。"
-    try:
-        data = json.loads(task["structured_output_json"] or "null")
-    except json.JSONDecodeError:
-        data = None
+    data = task["structured_output_json"]
     normalized = _normalize(data)
     if normalized is None:
         return False, _PARSE_FAIL

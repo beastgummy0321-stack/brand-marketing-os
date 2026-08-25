@@ -26,7 +26,7 @@ from typing import Optional
 
 from app.ads import performance as ads_performance
 from app.core.audit import write_audit
-from app.core.db import new_id, now_iso, DEV_ORG_ID
+from app.core.db import new_id, now_utc, DEV_ORG_ID
 
 # 蝦皮賣家中心「訂單」匯出常見欄名（未經真實檔驗證，見檔頭誠實標注）。order_sn 是
 # 唯一識別欄，跟 EasyStore 的 order_number 別名表刻意不重疊，分派層才分得清兩種檔案。
@@ -117,7 +117,7 @@ def save_shopee_rows(conn, brand_id: str, rows: list, *, source: str, actor: str
     if not actor or not actor.strip():
         raise ValueError("actor 為必填")
     result = result or ShopeeImportResult()
-    ts = now_iso()
+    ts = now_utc()
     batch_id = import_batch_id or f"shopee_{ts}"
 
     for row in rows:
@@ -193,7 +193,7 @@ def record_pharmacy_batch(conn, brand_id: str, *, batch_date: str, quantity: Opt
         raise ValueError("批次日期為必填")
     if not actor or not actor.strip():
         raise ValueError("actor 為必填")
-    ts = now_iso()
+    ts = now_utc()
     batch_id = new_id("phb")
     conn.execute(
         "INSERT INTO pharmacy_batch (id, org_id, brand_id, batch_date, quantity, note, created_by,"
@@ -233,7 +233,7 @@ def restock_interval_signal(conn, brand_id: str, until: str) -> dict:
         return {"shortened": None, "latest_interval_days": None, "baseline_interval_days": None,
                "sample_size": len(batches)}
 
-    dates = [date.fromisoformat(b["batch_date"]) for b in batches]
+    dates = [b["batch_date"] for b in batches]
     gaps = [(dates[i + 1] - dates[i]).days for i in range(len(dates) - 1)]
     latest = gaps[-1]
     baseline = sum(gaps[:-1]) / len(gaps[:-1])
@@ -250,7 +250,7 @@ def set_shopee_code(conn, brand_id: str, cycle_id: str, *, code: Optional[str] =
                     redemption_count: Optional[int] = None, actor: str) -> dict:
     if not actor or not actor.strip():
         raise ValueError("actor 為必填")
-    ts = now_iso()
+    ts = now_utc()
     existing = conn.execute(
         "SELECT * FROM cycle_shopee_code WHERE brand_id = %s AND campaign_cycle_id = %s",
         (brand_id, cycle_id),
@@ -304,9 +304,11 @@ REPURCHASE_CAUTION_NOTE = "官網老客若久未回購，也可能已轉往蝦�
 
 def _shopee_growth(conn, brand_id: str, since: str, until: str) -> dict:
     """本期蝦皮營收 vs 前一段等長期間的蝦皮營收，算出成長／下滑比例。任一邊沒資料回 ratio=None。"""
-    window_days = (date.fromisoformat(until) - date.fromisoformat(since)).days + 1
-    baseline_until = (date.fromisoformat(since) - timedelta(days=1)).isoformat()
-    baseline_since = (date.fromisoformat(since) - timedelta(days=window_days)).isoformat()
+    since_d = since if isinstance(since, date) else date.fromisoformat(since)
+    until_d = until if isinstance(until, date) else date.fromisoformat(until)
+    window_days = (until_d - since_d).days + 1
+    baseline_until = (since_d - timedelta(days=1)).isoformat()
+    baseline_since = (since_d - timedelta(days=window_days)).isoformat()
     current = shopee_revenue(conn, brand_id, since, until)
     baseline = shopee_revenue(conn, brand_id, baseline_since, baseline_until)
     ratio = None

@@ -6,7 +6,6 @@
 五格進度軌等。純粹是被搬出來的既有程式，邏輯一行沒改。
 """
 
-import json
 from datetime import date
 from typing import Optional
 
@@ -139,14 +138,14 @@ def _recommended_objective(conn, brand_id: str, product_ids: list) -> str:
     return "awareness"
 
 
-def _cycle_ended_unsettled(cycle: dict, today: str) -> bool:
+def _cycle_ended_unsettled(cycle: dict, today: date) -> bool:
     """B0-05：LIVE／EVALUATING 檔期的 end_date 已經過了，但還沒被收帳（自動排程或使用者
     手動「現在結算」）轉成 CLOSED。這裡只管「讀取時要不要照實講已經結束」，不改
     `campaign_cycle.status`、不跑任何排程——過期自動收帳排程器是 BOARD R5-S，另案批准。"""
     return cycle["status"] in ("LIVE", "EVALUATING") and cycle["end_date"] < today
 
 
-def _display_status_label(cycle: dict, today: str) -> str:
+def _display_status_label(cycle: dict, today: date) -> str:
     if _cycle_ended_unsettled(cycle, today):
         return "已結束・待收帳"
     return CYCLE_STATUS_LABELS.get(cycle["status"], cycle["status"])
@@ -155,7 +154,7 @@ def _display_status_label(cycle: dict, today: str) -> str:
 def _cycle_view(conn, brand_id: str, cycle: dict) -> dict:
     """把一列 campaign_cycle 加工成頁面要用的樣子（人話狀態、期長、產品名）。"""
     plan = ads_repo.derived_plan(cycle)
-    product_ids = json.loads(cycle["product_scope_json"] or "[]")
+    product_ids = cycle["product_scope_json"] or []
     names = []
     for pid in product_ids:
         product = bi.get_product(conn, brand_id, pid)
@@ -163,7 +162,7 @@ def _cycle_view(conn, brand_id: str, cycle: dict) -> dict:
             names.append(product["name"])
     return {
         **cycle,
-        "status_label": _display_status_label(cycle, date.today().isoformat()),
+        "status_label": _display_status_label(cycle, date.today()),
         "phase_label": PHASE_LABELS.get(cycle["phase"]),
         "objective_label": OBJECTIVE_LABELS.get(cycle["objective"], cycle["objective"]),
         "funnel_stage_label": ads_plan.FUNNEL_STAGE_LABELS.get(cycle["funnel_stage"]),
@@ -206,9 +205,9 @@ def _hub_stage_info(conn, brand_id: str, cycle: dict) -> dict:
     已經不成立——回 None，別跟著 status_label 的「已結束・待收帳」一起印出誤導的「剩 0 天」。
     """
     stage_index = derive_cycle_stage(conn, brand_id, cycle)
-    today = date.today().isoformat()
+    today = date.today()
     days_left = (None if _cycle_ended_unsettled(cycle, today)
-                else max(0, (date.fromisoformat(cycle["end_date"]) - date.today()).days))
+                else max(0, (cycle["end_date"] - today).days))
     return {"stage_index": stage_index, "stage_label": stages.STAGE_LABELS[stage_index - 1],
             "days_left": days_left}
 
