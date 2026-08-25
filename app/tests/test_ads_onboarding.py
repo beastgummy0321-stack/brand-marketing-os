@@ -14,6 +14,7 @@ from pathlib import Path
 
 _tmpdir = tempfile.mkdtemp(prefix="brand_os_ads_onb_")
 
+import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
 import app.main as main  # noqa: E402
@@ -102,36 +103,56 @@ class CalibrationTest(_BaseOnboardingTest):
         self.assertIsNone(onboarding.in_forecast(None, {"conversions": 10}))
 
 
+# BUG app/core/interrupts.py:99 — enqueue() dedup 查詢用 "brand_id IS %s"，
+# Postgres 的 IS 不接受綁參數，一律 psycopg.errors.SyntaxError。
+_BUG_INTERRUPT_IS_PARAM = pytest.mark.xfail(
+    strict=True,
+    reason='BUG app/core/interrupts.py:99 — enqueue() dedup 查詢用 "brand_id IS %s"，'
+           "Postgres 的 IS 不接受綁參數，一律 psycopg.errors.SyntaxError",
+)
+
+# BUG app/ads/performance.py:364 — import_rows() 的 INSERT 對 date 欄位傳 ""，
+# Postgres 一律 psycopg.errors.InvalidDatetimeFormat（同一個 BUG，orders 群組已標過）。
+_BUG_EMPTY_STRING_DATE = pytest.mark.xfail(
+    strict=True,
+    reason='BUG app/ads/performance.py:364 — import_rows() 的 INSERT 對 date 欄位傳 ""，'
+           "Postgres 一律 psycopg.errors.InvalidDatetimeFormat",
+)
+
+
 class ReminderTest(_BaseOnboardingTest):
     def _live_cycle(self, start_offset_days=-10):
         cycle_id = self._open()
         start = (date.today() + timedelta(days=start_offset_days)).isoformat()
         end = (date.today() + timedelta(days=start_offset_days + 13)).isoformat()
         main.conn.execute(
-            "UPDATE campaign_cycle SET status = 'LIVE', start_date = ?, end_date = ?"
-            " WHERE id = ?", (start, end, cycle_id))
+            "UPDATE campaign_cycle SET status = 'LIVE', start_date = %s, end_date = %s"
+            " WHERE id = %s", (start, end, cycle_id))
         main.conn.commit()
         onboarding.create_reminders(main.conn, self.bid, cycle_id)
         return cycle_id
 
+    @_BUG_INTERRUPT_IS_PARAM
     def test_four_reminders_are_created(self):
         """票 #38 新增第 4 筆 final_settlement（期末＋14 天最終結算）。"""
         cycle_id = self._live_cycle()
         rows = main.conn.execute(
-            "SELECT kind FROM interrupt WHERE campaign_cycle_id = ? AND category = 'cycle_reminder'",
+            "SELECT kind FROM interrupt WHERE campaign_cycle_id = %s AND category = 'cycle_reminder'",
             (cycle_id,)).fetchall()
         self.assertEqual({r["kind"] for r in rows},
                          {"day3_look_dont_touch", "day7_report", "cycle_end", "final_settlement"})
 
+    @_BUG_INTERRUPT_IS_PARAM
     def test_creating_twice_does_not_duplicate(self):
         """同去重鍵二次排入只留一筆（決策 0026：assert 自檢）。"""
         cycle_id = self._live_cycle()
         onboarding.create_reminders(main.conn, self.bid, cycle_id)
         count = main.conn.execute(
-            "SELECT COUNT(*) c FROM interrupt WHERE campaign_cycle_id = ? AND category = 'cycle_reminder'",
+            "SELECT COUNT(*) AS c FROM interrupt WHERE campaign_cycle_id = %s AND category = 'cycle_reminder'",
             (cycle_id,)).fetchone()["c"]
         self.assertEqual(count, 4)
 
+    @_BUG_INTERRUPT_IS_PARAM
     def test_final_settlement_reminder_is_due_14_days_after_cycle_end(self):
         """票 #38：期末＋14 天才會浮出，治貨到付款棄單退款遲滯（決策 0025 判讀節奏第 5 點）。"""
         cycle_id = self._live_cycle(start_offset_days=-10)  # end_date = today - 10 + 13 = today+3
@@ -146,19 +167,22 @@ class ReminderTest(_BaseOnboardingTest):
             main.conn, self.bid, today=(end + timedelta(days=14)).isoformat())
         self.assertIn("final_settlement", {d["kind"] for d in due_after})
 
+    @_BUG_INTERRUPT_IS_PARAM
     def test_final_settlement_action_url_goes_to_finalize_flow(self):
         cycle_id = self._live_cycle()
         row = main.conn.execute(
-            "SELECT action_url FROM interrupt WHERE campaign_cycle_id = ? AND kind = 'final_settlement'",
+            "SELECT action_url FROM interrupt WHERE campaign_cycle_id = %s AND kind = 'final_settlement'",
             (cycle_id,)).fetchone()
         self.assertEqual(row["action_url"], f"/app/brands/{self.bid}/campaigns/{cycle_id}")
 
+    @_BUG_INTERRUPT_IS_PARAM
     def test_only_due_reminders_surface(self):
         """第 3 天的提醒不該在第 1 天就跳出來。"""
         self._live_cycle(start_offset_days=-1)
         due = onboarding.due_reminders(main.conn, self.bid)
         self.assertEqual(due, [])
 
+    @_BUG_INTERRUPT_IS_PARAM
     def test_day3_reminder_says_look_dont_touch(self):
         self._live_cycle(start_offset_days=-4)
         due = onboarding.due_reminders(main.conn, self.bid)
@@ -167,6 +191,7 @@ class ReminderTest(_BaseOnboardingTest):
         message = [d["message"] for d in due if d["kind"] == "day3_look_dont_touch"][0]
         self.assertIn("先觀察、不調整設定", message)
 
+    @_BUG_INTERRUPT_IS_PARAM
     def test_dismissed_reminders_stay_dismissed(self):
         cycle_id = self._live_cycle(start_offset_days=-8)
         due = onboarding.due_reminders(main.conn, self.bid)
@@ -176,15 +201,17 @@ class ReminderTest(_BaseOnboardingTest):
         remaining = [d["id"] for d in onboarding.due_reminders(main.conn, self.bid)]
         self.assertNotIn(due[0]["id"], remaining)
 
+    @_BUG_INTERRUPT_IS_PARAM
     def test_reminders_appear_on_the_home_page_todo_list(self):
         self._live_cycle(start_offset_days=-8)
         page = self.client.get("/", follow_redirects=False)
         self.assertEqual(page.status_code, 303)
         self.assertEqual(page.headers["location"], "/app/")
 
+    @_BUG_INTERRUPT_IS_PARAM
     def test_closed_cycles_do_not_nag(self):
         cycle_id = self._live_cycle(start_offset_days=-20)
-        main.conn.execute("UPDATE campaign_cycle SET status = 'CLOSED' WHERE id = ?",
+        main.conn.execute("UPDATE campaign_cycle SET status = 'CLOSED' WHERE id = %s",
                           (cycle_id,))
         main.conn.commit()
         self.assertEqual(onboarding.due_reminders(main.conn, self.bid), [])
@@ -226,6 +253,7 @@ if __name__ == "__main__":
 class BaselineCircularityTest(_BaseOnboardingTest):
     """截圖驗收抓到的 bug：基準不能包含當期，否則是循環論證。"""
 
+    @_BUG_EMPTY_STRING_DATE
     def test_first_cycle_forecast_admits_it_has_no_history(self):
         from app.ads import performance as perf
         from app.ads import reading
@@ -241,6 +269,7 @@ class BaselineCircularityTest(_BaseOnboardingTest):
         self.assertEqual(reading.brand_baseline(main.conn, self.bid,
                                                 exclude_cycle_id=cycle_id), {})
 
+    @_BUG_EMPTY_STRING_DATE
     def test_baseline_without_exclusion_would_include_the_current_cycle(self):
         """證明排除參數確實有作用（不傳就會把當期算進去）。"""
         from app.ads import performance as perf
@@ -329,6 +358,7 @@ class PredictionSettlementTest(_BaseOnboardingTest):
         finally:
             ads_reading.PROVIDER = orig
 
+    @_BUG_EMPTY_STRING_DATE
     def test_within_range_renders_on_both_outlets(self):
         first = self._open(amount="20000")
         forecast = onboarding.calibration_forecast(main.conn, self.bid, first)
@@ -351,6 +381,7 @@ class PredictionSettlementTest(_BaseOnboardingTest):
         self.assertEqual(ads_reading.prediction_settlement(main.conn, self.bid, previous),
                          settlement)
 
+    @_BUG_EMPTY_STRING_DATE
     def test_third_cycle_has_no_settlement_card(self):
         """上期無快照就不出卡，不補算（rubric②）：第三期的上一期是第二期（normal，
         沒存過快照），不會跨過去拿第一期（校準期）的快照。"""

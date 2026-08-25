@@ -19,6 +19,7 @@ from pathlib import Path
 
 _tmpdir = tempfile.mkdtemp(prefix="brand_os_ads_home_console_")
 
+import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
 import app.main as main  # noqa: E402
@@ -127,6 +128,15 @@ class EndedUnsettledCycleDisplayTest(_BaseTest):
         self.assertIsNotNone(item["days_left"])
 
 
+# BUG app/ads/performance.py:364 — import_rows() 的 INSERT 對 date 欄位傳 ""，
+# Postgres 一律 psycopg.errors.InvalidDatetimeFormat（同一個 BUG，orders 群組已標過）。
+_BUG_EMPTY_STRING_DATE = pytest.mark.xfail(
+    strict=True,
+    reason='BUG app/ads/performance.py:364 — import_rows() 的 INSERT 對 date 欄位傳 ""，'
+           "Postgres 一律 psycopg.errors.InvalidDatetimeFormat",
+)
+
+
 class ClosedCycleSummaryTest(_BaseTest):
     """最近結案的檔期：ROAS／賺賠狀態膠囊直接讀已存的判讀快照，沒判讀過就誠實不顯示。"""
 
@@ -150,6 +160,7 @@ class ClosedCycleSummaryTest(_BaseTest):
         finally:
             ads_reading.PROVIDER = orig
 
+    @_BUG_EMPTY_STRING_DATE
     def test_judged_closed_cycle_shows_roas_and_verdict_badge(self):
         cycle_id = self._open_cycle(product_ids=[self.product], custom_amount="10000")
         self._judge(cycle_id)

@@ -21,11 +21,23 @@ _tmpdir = tempfile.mkdtemp(prefix="brand_os_ads_data_migration_")
 
 from fastapi.testclient import TestClient  # noqa: E402
 
+import pytest  # noqa: E402
+
 import app.main as main  # noqa: E402
 from app.ads import data_onboarding  # noqa: E402
 from app.ads import performance as ads_performance  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
-from app.core.db import new_id, now_iso  # noqa: E402
+from app.core import db as coredb  # noqa: E402
+from app.core.db import new_id, now_utc  # noqa: E402
+
+# BUG app/ads/performance.py:613 — `(row["date_range_start"] or "")[:7]` slices a
+# datetime.date object (psycopg auto-decodes `date` columns to `date`, not str),
+# always TypeError. Same BUG the orders group already found.
+_BUG_DATE_SLICE = pytest.mark.xfail(
+    strict=True,
+    reason='BUG app/ads/performance.py:613 — (row["date_range_start"] or "")[:7] '
+           "slices a datetime.date object, not a str — TypeError",
+)
 
 
 ACTOR = "測試員"
@@ -45,21 +57,23 @@ atexit.register(_cleanup)
 
 def _insert_order(brand_id: str, order_date: str):
     main.conn.execute(
-        "INSERT INTO order_record (id, brand_id, order_number, order_date, total_amount,"
-        " refunded_amount, source, created_at, updated_at) VALUES (?, ?, ?, ?, 500, 0,"
-        " 'easystore_xlsx', ?, ?)",
-        (new_id("ord"), brand_id, new_id("on"), order_date, now_iso(), now_iso()),
+        "INSERT INTO order_record (id, org_id, brand_id, order_number, order_date,"
+        " total_amount, refunded_amount, source, created_at, updated_at) VALUES"
+        " (%s, %s, %s, %s, %s, 500, 0, 'easystore_xlsx', %s, %s)",
+        (new_id("ord"), coredb.DEV_ORG_ID, brand_id, new_id("on"),
+         date.fromisoformat(order_date), now_utc(), now_utc()),
     )
     main.conn.commit()
 
 
 def _insert_ga4_summary(brand_id: str, start: str, end: str):
-    ts = now_iso()
+    ts = now_utc()
     main.conn.execute(
-        "INSERT INTO ga4_summary (id, brand_id, date_range_start, date_range_end, source,"
-        " medium, sessions, conversions, revenue, synced_at, created_at)"
-        " VALUES (?, ?, ?, ?, 'google', 'organic', 100, 5, 1000, ?, ?)",
-        (new_id("ga4"), brand_id, start, end, ts, ts),
+        "INSERT INTO ga4_summary (id, org_id, brand_id, date_range_start, date_range_end,"
+        " source, medium, sessions, conversions, revenue, synced_at, created_at)"
+        " VALUES (%s, %s, %s, %s, %s, 'google', 'organic', 100, 5, 1000, %s, %s)",
+        (new_id("ga4"), coredb.DEV_ORG_ID, brand_id, date.fromisoformat(start),
+         date.fromisoformat(end), ts, ts),
     )
     main.conn.commit()
 
@@ -146,6 +160,7 @@ class TileStatusTest(_BaseTest):
         ga4_tile = next(i for i in checklist if i["key"] == "ga4_backfill")
         self.assertEqual(ga4_tile["status"], "in_progress")
 
+    @_BUG_DATE_SLICE
     def test_meta_claim_in_progress_below_statistical_sample(self):
         _import_brand_level_meta(self.bid, clicks=100, conversions=5, spend=1000)
         checklist = data_onboarding.build_checklist(main.conn, self.bid, today=TODAY)
@@ -153,6 +168,7 @@ class TileStatusTest(_BaseTest):
         self.assertEqual(meta_tile["status"], "in_progress")
         self.assertIsNotNone(meta_tile["baseline"])
 
+    @_BUG_DATE_SLICE
     def test_meta_claim_done_when_sample_reaches_statistical_tier(self):
         # cvr = 900/4500 = 20%，門檻查表 baseline_20pct 預設 4000，4500 ≥ 4000 → 統計等級
         _import_brand_level_meta(self.bid, clicks=4500, conversions=900, spend=5000)

@@ -46,7 +46,7 @@ ACTOR = "測試員"
 
 def _ledger_count(brand_id):
     return main.conn.execute(
-        "SELECT COUNT(*) c FROM learning_ledger WHERE brand_id = ?", (brand_id,)
+        "SELECT COUNT(*) c FROM learning_ledger WHERE brand_id = %s", (brand_id,)
     ).fetchone()["c"]
 
 
@@ -65,11 +65,11 @@ class InterviewSubmitTest(unittest.TestCase):
         self.assertEqual(card["status"], "pending")
         self.assertEqual(card["fingerprint_axis"], "tone")
         self.assertEqual(card["fingerprint_value"], "urgent")
-        evidence = json.loads(card["evidence_json"])
+        evidence = card["evidence_json"]  # jsonb 欄位，psycopg 讀回已經是 dict
         self.assertEqual(evidence["source"], "self_report")
 
         row = main.conn.execute(
-            "SELECT * FROM creative_rule_card WHERE id = ?", (card["id"],)
+            "SELECT * FROM creative_rule_card WHERE id = %s", (card["id"],)
         ).fetchone()
         self.assertEqual(row["status"], "pending")
         self.assertEqual(row["reject_count"], 0)
@@ -93,16 +93,16 @@ class InterviewSubmitTest(unittest.TestCase):
         interview.submit(main.conn, self.bid, bad={}, good={}, note=note_text, actor=ACTOR)
 
         audit_rows = main.conn.execute(
-            "SELECT * FROM audit_log WHERE brand_id = ? AND entity_type = 'lesson_interview'",
+            "SELECT * FROM audit_log WHERE brand_id = %s AND entity_type = 'lesson_interview'",
             (self.bid,),
         ).fetchall()
         self.assertEqual(len(audit_rows), 1)
-        after = json.loads(audit_rows[0]["after_json"])
+        after = audit_rows[0]["after_json"]  # jsonb 欄位，psycopg 讀回已經是 dict
         self.assertEqual(after["note"], note_text)
 
         # 不升級成規則卡或假設
         self.assertEqual(
-            main.conn.execute("SELECT COUNT(*) c FROM creative_rule_card WHERE brand_id = ?",
+            main.conn.execute("SELECT COUNT(*) c FROM creative_rule_card WHERE brand_id = %s",
                               (self.bid,)).fetchone()["c"], 0)
         self.assertEqual(len(bi_repo.list_strategy_hypotheses(main.conn, self.bid)), 0)
 
@@ -124,7 +124,7 @@ class InterviewSubmitTest(unittest.TestCase):
         self.assertEqual(result["rule_cards"], [])
         self.assertEqual(result["hypotheses"], [])
         self.assertEqual(
-            main.conn.execute("SELECT COUNT(*) c FROM audit_log WHERE brand_id = ?"
+            main.conn.execute("SELECT COUNT(*) c FROM audit_log WHERE brand_id = %s"
                               " AND entity_type = 'lesson_interview'",
                               (self.bid,)).fetchone()["c"], 0)
 
@@ -143,8 +143,8 @@ class InterviewSubmitTest(unittest.TestCase):
                                   note=None, actor=ACTOR)
         self.assertEqual(result["rule_cards"], [])
         count = main.conn.execute(
-            "SELECT COUNT(*) c FROM creative_rule_card WHERE brand_id = ? AND fingerprint_axis = ?"
-            " AND fingerprint_value = ?", (self.bid, "tone", "urgent"),
+            "SELECT COUNT(*) c FROM creative_rule_card WHERE brand_id = %s AND fingerprint_axis = %s"
+            " AND fingerprint_value = %s", (self.bid, "tone", "urgent"),
         ).fetchone()["c"]
         self.assertEqual(count, 1)
 
@@ -174,7 +174,7 @@ class AttachPendingHypothesesTest(unittest.TestCase):
         cycle = ads_repo.create_cycle(main.conn, self.bid, product_ids=[self.product],
                                       pain_value=10000, objective="sales", actor=ACTOR)
         links = main.conn.execute(
-            "SELECT * FROM campaign_cycle_hypothesis WHERE campaign_cycle_id = ?",
+            "SELECT * FROM campaign_cycle_hypothesis WHERE campaign_cycle_id = %s",
             (cycle["id"],),
         ).fetchall()
         self.assertEqual(len(links), 1)
@@ -189,10 +189,10 @@ class AttachPendingHypothesesTest(unittest.TestCase):
         second = ads_repo.create_cycle(main.conn, self.bid, product_ids=[self.product],
                                        pain_value=10000, objective="sales", actor=ACTOR)
         first_links = main.conn.execute(
-            "SELECT * FROM campaign_cycle_hypothesis WHERE campaign_cycle_id = ?",
+            "SELECT * FROM campaign_cycle_hypothesis WHERE campaign_cycle_id = %s",
             (first["id"],)).fetchall()
         second_links = main.conn.execute(
-            "SELECT * FROM campaign_cycle_hypothesis WHERE campaign_cycle_id = ?",
+            "SELECT * FROM campaign_cycle_hypothesis WHERE campaign_cycle_id = %s",
             (second["id"],)).fetchall()
         self.assertEqual(len(first_links), 1)
         self.assertEqual(len(second_links), 0)
@@ -201,7 +201,7 @@ class AttachPendingHypothesesTest(unittest.TestCase):
         cycle = ads_repo.create_cycle(main.conn, self.bid, product_ids=[self.product],
                                       pain_value=10000, objective="sales", actor=ACTOR)
         links = main.conn.execute(
-            "SELECT * FROM campaign_cycle_hypothesis WHERE campaign_cycle_id = ?",
+            "SELECT * FROM campaign_cycle_hypothesis WHERE campaign_cycle_id = %s",
             (cycle["id"],)).fetchall()
         self.assertEqual(len(links), 0)
 
@@ -227,7 +227,7 @@ class InterviewRouteTest(unittest.TestCase):
         )
         self.assertEqual(resp.status_code, 200)
         cards = main.conn.execute(
-            "SELECT * FROM creative_rule_card WHERE brand_id = ?", (self.bid,)
+            "SELECT * FROM creative_rule_card WHERE brand_id = %s", (self.bid,)
         ).fetchall()
         hyps = bi_repo.list_strategy_hypotheses(main.conn, self.bid)
         self.assertEqual(len(cards), 1)
@@ -250,7 +250,7 @@ class InterviewConflictTest(unittest.TestCase):
         )
         # blunt 兩邊都勾 → 不產卡也不產假設；urgent 只勾一邊 → 照常產卡
         cards = main.conn.execute(
-            "SELECT fingerprint_value FROM creative_rule_card WHERE brand_id = ?", (self.bid,)
+            "SELECT fingerprint_value FROM creative_rule_card WHERE brand_id = %s", (self.bid,)
         ).fetchall()
         self.assertEqual([r["fingerprint_value"] for r in cards], ["urgent"])
         self.assertEqual(bi_repo.list_strategy_hypotheses(main.conn, self.bid), [])

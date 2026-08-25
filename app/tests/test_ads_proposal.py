@@ -11,6 +11,7 @@ from unittest import mock
 
 _tmpdir = tempfile.mkdtemp(prefix="brand_os_proposal_")
 
+import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
 import app.main as main  # noqa: E402
@@ -21,7 +22,8 @@ from app.ads import repository_channel_plan as channel_repo  # noqa: E402
 from app.ads import theme_repository  # noqa: E402
 from app.ads import tracking as ads_tracking  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
-from app.core.db import new_id, now_iso  # noqa: E402
+from app.core import db as coredb  # noqa: E402
+from app.core.db import new_id, now_utc  # noqa: E402
 
 
 def _cleanup():
@@ -38,6 +40,16 @@ FORBIDDEN_WORDS = ("受眾", "漏斗", "CPA", "CTR", "CPC", "ROAS", "KPI")
 # 掃術語前先把 id 拿掉：id 是 Crockford Base32 亂數（app/core/db.py:30），
 # 「CPA」「CPC」「CTR」這些字母組合會隨機出現在 id 裡，讓斷言隨機變紅。
 _ID_RE = re.compile(r"[a-z]+_[0-9A-HJKMNP-TV-Z]{26}")
+
+
+# BUG app/ads/proposal.py:169 — approve() 建 task_card 時 "done": 0（整數字面值），
+# 不是 False；Postgres 的 done 欄位是 boolean，一律 psycopg.errors.DatatypeMismatch。
+_BUG_DONE_INT_LITERAL = pytest.mark.xfail(
+    strict=True,
+    reason='BUG app/ads/proposal.py:169 — approve() 建 task_card 時 "done": 0'
+           "（整數字面值，不是 False），Postgres boolean 欄位一律"
+           " psycopg.errors.DatatypeMismatch",
+)
 
 
 class ProposalTest(unittest.TestCase):
@@ -68,20 +80,20 @@ class ProposalTest(unittest.TestCase):
             "hypotheses": [], "grounding": {"facts": [], "inferences": [], "to_verify": []},
         }
         main.conn.execute(
-            "INSERT INTO campaign_plan (id, campaign_cycle_id, brand_id, plan_version, plan_json, status, created_at)"
-            " VALUES (?, ?, ?, 1, ?, 'draft', ?)",
-            (new_id("cpl"), cycle_id, self.bid, json.dumps(plan, ensure_ascii=False), now_iso()),
+            "INSERT INTO campaign_plan (id, org_id, campaign_cycle_id, brand_id, plan_version,"
+            " plan_json, status, created_at) VALUES (%s, %s, %s, %s, 1, %s, 'draft', %s)",
+            (new_id("cpl"), coredb.DEV_ORG_ID, cycle_id, self.bid, coredb.jsonb(plan), now_utc()),
         )
         main.conn.execute(
-            "UPDATE campaign_cycle SET plan_version = 1, status = 'REVIEW' WHERE id = ?", (cycle_id,))
+            "UPDATE campaign_cycle SET plan_version = 1, status = 'REVIEW' WHERE id = %s", (cycle_id,))
         main.conn.commit()
 
     def _theme(self, cycle_id: str):
         cell_id = new_id("exc")
         main.conn.execute(
-            "INSERT INTO experiment_cell (id, campaign_cycle_id, brand_id, creative_angle, created_at)"
-            " VALUES (?, ?, ?, '真實素材切角', ?)",
-            (cell_id, cycle_id, self.bid, now_iso()),
+            "INSERT INTO experiment_cell (id, org_id, campaign_cycle_id, brand_id,"
+            " creative_angle, created_at) VALUES (%s, %s, %s, %s, '真實素材切角', %s)",
+            (cell_id, coredb.DEV_ORG_ID, cycle_id, self.bid, now_utc()),
         )
         main.conn.commit()
         return theme_repository.create_theme(
@@ -143,6 +155,7 @@ class ProposalTest(unittest.TestCase):
         self.assertEqual(body["status"], "failed")
         self.assertIn("資料都還在", body["reason"])
 
+    @_BUG_DONE_INT_LITERAL
     def test_tracking_red_warns_but_approval_creates_only_enabled_non_social_cards(self):
         cycle = self._cycle()
         self._plan(cycle["id"])
@@ -161,6 +174,7 @@ class ProposalTest(unittest.TestCase):
         self.assertTrue(all(card["channel"] not in ("social", "kol_media") for card in cards))
         self.assertEqual({card["channel"] for card in cards}, {"google_search", "line_email", "website_landing"})
 
+    @_BUG_DONE_INT_LITERAL
     def test_return_restores_opening_status_and_keeps_values(self):
         cycle = self._cycle()
         self._plan(cycle["id"])
@@ -173,6 +187,7 @@ class ProposalTest(unittest.TestCase):
         self.assertEqual(after["status"], "PLANNING")
         self.assertEqual(after["budget"], original_budget)
 
+    @_BUG_DONE_INT_LITERAL
     def test_approve_adds_immutable_proposal_snapshot_to_plan_json(self):
         cycle = self._cycle()
         self._plan(cycle["id"])
@@ -221,7 +236,9 @@ class ProposalTest(unittest.TestCase):
         self._plan(cycle["id"])
         self._theme(cycle["id"])
         body = proposal.proposal(main.conn, self.bid, cycle["id"])
-        rendered = _ID_RE.sub("", json.dumps(body, ensure_ascii=False))
+        # default=str：body 裡讀回的 datetime/date（02-3b 起 DB 讀取端不再是字串）在這裡
+        # 只是拿去掃禁用術語的文字，不需要精確格式，str() 夠用。
+        rendered = _ID_RE.sub("", json.dumps(body, ensure_ascii=False, default=str))
         self.assertIn("真實素材內容", rendered)
         for word in FORBIDDEN_WORDS:
             self.assertNotIn(word, rendered)

@@ -28,7 +28,8 @@ import app.main as main  # noqa: E402
 from app.ads import routes as ads_routes  # noqa: E402
 from app.ads import routes_campaigns_open_api  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
-from app.core.db import new_id, now_iso  # noqa: E402
+from app.core import db as coredb  # noqa: E402
+from app.core.db import new_id, now_utc  # noqa: E402
 
 
 
@@ -52,13 +53,13 @@ class PlanStatusApiTest(unittest.TestCase):
             client_name=None, actor=ACTOR)
         self.bid = self.brand["id"]
         self.cycle_id = new_id("ccy")
-        ts = now_iso()
+        ts = now_utc()
         main.conn.execute(
-            "INSERT INTO campaign_cycle (id, brand_id, product_scope_json, objective, currency,"
-            " start_date, end_date, channels_json, status, archived, plan_version, phase,"
-            " created_at, updated_at) VALUES (?, ?, '[]', 'sales', 'TWD', '2026-08-01',"
-            " '2026-08-31', '[]', 'PLANNING', 0, 0, 'normal', ?, ?)",
-            (self.cycle_id, self.bid, ts, ts),
+            "INSERT INTO campaign_cycle (id, org_id, brand_id, product_scope_json, objective,"
+            " currency, start_date, end_date, channels_json, status, archived, plan_version,"
+            " phase, created_at, updated_at) VALUES (%s, %s, %s, '[]', 'sales', 'TWD',"
+            " '2026-08-01', '2026-08-31', '[]', 'PLANNING', false, 0, 'normal', %s, %s)",
+            (self.cycle_id, coredb.DEV_ORG_ID, self.bid, ts, ts),
         )
         main.conn.commit()
         self.status_url = f"/api/campaigns/{self.bid}/{self.cycle_id}/plan/status"

@@ -24,6 +24,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 import app.main as main  # noqa: E402
 from app.ads import repository as ads_repo  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
+from app.core import db as coredb  # noqa: E402
 from app.core.db import new_id  # noqa: E402
 
 
@@ -87,197 +88,203 @@ class _BaseCycleDeleteTest(unittest.TestCase):
         shc = new_id("shc")
         setv, rsnap, rsin = (new_id(p) for p in ("setv", "rsnap", "rsin"))
 
+        org_id = coredb.DEV_ORG_ID
         conn.execute(
-            "INSERT INTO finding (id, brand_id, campaign_cycle_id, finding_type, severity, code,"
-            " message, confidence_penalty, source, created_at) VALUES"
-            " (?, ?, ?, 'compliance', 'warn', 'x', '測試', 0, 'rule_scan', ?)",
-            (fnd, self.bid, cycle_id, ts),
+            "INSERT INTO finding (id, org_id, brand_id, campaign_cycle_id, finding_type,"
+            " severity, code, message, confidence_penalty, source, created_at) VALUES"
+            " (%s, %s, %s, %s, 'compliance', 'warn', 'x', '測試', 0, 'rule_scan', %s)",
+            (fnd, org_id, self.bid, cycle_id, ts),
         )
         conn.execute(
-            "INSERT INTO interrupt (id, brand_id, campaign_cycle_id, dedupe_key, category,"
-            " severity, message, status, created_at) VALUES"
-            " (?, ?, ?, ?, 'cycle_reminder', 'informational', '測試提醒訊息', 'open', ?)",
-            (rmd, self.bid, cycle_id, f"cycle_reminder:{cycle_id}:test", ts),
+            "INSERT INTO interrupt (id, org_id, brand_id, campaign_cycle_id, dedupe_key,"
+            " category, severity, message, status, created_at) VALUES"
+            " (%s, %s, %s, %s, %s, 'cycle_reminder', 'informational', '測試提醒訊息', 'open', %s)",
+            (rmd, org_id, self.bid, cycle_id, f"cycle_reminder:{cycle_id}:test", ts),
         )
         conn.execute(
-            "INSERT INTO campaign_plan_option (id, campaign_cycle_id, brand_id, option_index,"
-            " option_json, created_at) VALUES (?, ?, ?, 0, '{}', ?)",
-            (cpo, cycle_id, self.bid, ts),
+            "INSERT INTO campaign_plan_option (id, org_id, campaign_cycle_id, brand_id,"
+            " option_index, option_json, created_at) VALUES (%s, %s, %s, %s, 0, '{}', %s)",
+            (cpo, org_id, cycle_id, self.bid, ts),
         )
         cpl = new_id("cpl")
         conn.execute(
-            "INSERT INTO campaign_plan (id, campaign_cycle_id, brand_id, plan_version, plan_json,"
-            " status, created_at) VALUES (?, ?, ?, 1, '{}', 'approved', ?)",
-            (cpl, cycle_id, self.bid, ts),
+            "INSERT INTO campaign_plan (id, org_id, campaign_cycle_id, brand_id, plan_version,"
+            " plan_json, status, created_at) VALUES (%s, %s, %s, %s, 1, '{}', 'approved', %s)",
+            (cpl, org_id, cycle_id, self.bid, ts),
         )
         gol = new_id("gol")
         conn.execute(
-            "INSERT INTO marketing_goal (id, brand_id, objective_summary, status, created_at,"
-            " updated_at) VALUES (?, ?, '測試目標', 'active', ?, ?)",
-            (gol, self.bid, ts, ts),
+            "INSERT INTO marketing_goal (id, org_id, brand_id, objective_summary, status,"
+            " created_at, updated_at) VALUES (%s, %s, %s, '測試目標', 'active', %s, %s)",
+            (gol, org_id, self.bid, ts, ts),
         )
         conn.execute(
-            "INSERT INTO campaign_cycle_goal (campaign_cycle_id, goal_id, brand_id, rank)"
-            " VALUES (?, ?, ?, 1)",
-            (cycle_id, gol, self.bid),
+            "INSERT INTO campaign_cycle_goal (org_id, campaign_cycle_id, goal_id, brand_id, rank)"
+            " VALUES (%s, %s, %s, %s, 1)",
+            (org_id, cycle_id, gol, self.bid),
         )
         conn.execute(
-            "INSERT INTO campaign_cycle_hypothesis (campaign_cycle_id, strategy_hypothesis_id,"
-            " brand_id, role) VALUES (?, 'hyp_fake_test', ?, 'audience')",
-            (cycle_id, self.bid),
+            "INSERT INTO campaign_cycle_hypothesis (org_id, campaign_cycle_id,"
+            " strategy_hypothesis_id, brand_id, role) VALUES (%s, %s, 'hyp_fake_test', %s, 'audience')",
+            (org_id, cycle_id, self.bid),
         )
         conn.execute(
-            "INSERT INTO rule_dissent (id, brand_id, campaign_cycle_id, target_type, suggestion,"
-            " reason, status, created_at) VALUES"
-            " (?, ?, ?, 'offer', '測試建議', '測試理由', 'pending', ?)",
-            (dsn, self.bid, cycle_id, ts),
+            "INSERT INTO rule_dissent (id, org_id, brand_id, campaign_cycle_id, target_type,"
+            " suggestion, reason, status, created_at) VALUES"
+            " (%s, %s, %s, %s, 'offer', '測試建議', '測試理由', 'pending', %s)",
+            (dsn, org_id, self.bid, cycle_id, ts),
         )
         conn.execute(
-            "INSERT INTO cycle_checkpoint (id, brand_id, campaign_cycle_id, kind, result_json,"
-            " status, created_at, updated_at) VALUES (?, ?, ?, 'day3', '{}', 'active', ?, ?)",
-            (chk, self.bid, cycle_id, ts, ts),
+            "INSERT INTO cycle_checkpoint (id, org_id, brand_id, campaign_cycle_id, kind,"
+            " result_json, status, created_at, updated_at) VALUES"
+            " (%s, %s, %s, %s, 'day3', '{}', 'active', %s, %s)",
+            (chk, org_id, self.bid, cycle_id, ts, ts),
         )
         conn.execute(
-            "INSERT INTO cycle_checklist_item (id, brand_id, campaign_cycle_id, item_key, checked,"
-            " updated_at) VALUES (?, ?, ?, 'test_item', 1, ?)",
-            (ccl, self.bid, cycle_id, ts),
+            "INSERT INTO cycle_checklist_item (id, org_id, brand_id, campaign_cycle_id,"
+            " item_key, checked, updated_at) VALUES (%s, %s, %s, %s, 'test_item', true, %s)",
+            (ccl, org_id, self.bid, cycle_id, ts),
         )
         conn.execute(
-            "INSERT INTO experiment_cell (id, campaign_cycle_id, brand_id, created_at)"
-            " VALUES (?, ?, ?, ?)",
-            (exc, cycle_id, self.bid, ts),
+            "INSERT INTO experiment_cell (id, org_id, campaign_cycle_id, brand_id, created_at)"
+            " VALUES (%s, %s, %s, %s, %s)",
+            (exc, org_id, cycle_id, self.bid, ts),
         )
         conn.execute(
-            "INSERT INTO creative_brief (id, campaign_cycle_id, experiment_cell_id, brand_id,"
-            " brief_type, purpose, status, created_at, updated_at) VALUES"
-            " (?, ?, ?, ?, 'copy', '測試', 'draft', ?, ?)",
-            (cbf, cycle_id, exc, self.bid, ts, ts),
+            "INSERT INTO creative_brief (id, org_id, campaign_cycle_id, experiment_cell_id,"
+            " brand_id, brief_type, purpose, status, created_at, updated_at) VALUES"
+            " (%s, %s, %s, %s, %s, 'copy', '測試', 'draft', %s, %s)",
+            (cbf, org_id, cycle_id, exc, self.bid, ts, ts),
         )
         conn.execute(
-            "INSERT INTO creative_variant (id, variant_type, creative_brief_id, campaign_cycle_id,"
-            " experiment_cell_id, brand_id, attributes_json, status, created_at) VALUES"
-            " (?, 'copy', ?, ?, ?, ?, '{}', 'DRAFT', ?)",
-            (cvr, cbf, cycle_id, exc, self.bid, ts),
+            "INSERT INTO creative_variant (id, org_id, variant_type, creative_brief_id,"
+            " campaign_cycle_id, experiment_cell_id, brand_id, attributes_json, status,"
+            " created_at) VALUES (%s, %s, 'copy', %s, %s, %s, %s, '{}', 'DRAFT', %s)",
+            (cvr, org_id, cbf, cycle_id, exc, self.bid, ts),
         )
         cth = new_id("cth")
         conn.execute(
-            "INSERT INTO creative_theme (id, brand_id, campaign_cycle_id, experiment_cell_id,"
-            " format_key, name, folder_code, status, created_at, updated_at) VALUES"
-            " (?, ?, ?, ?, 'single_image', '測試主題', 'ABCD', 'draft', ?, ?)",
-            (cth, self.bid, cycle_id, exc, ts, ts),
+            "INSERT INTO creative_theme (id, org_id, brand_id, campaign_cycle_id,"
+            " experiment_cell_id, format_key, name, folder_code, status, created_at,"
+            " updated_at) VALUES"
+            " (%s, %s, %s, %s, %s, 'single_image', '測試主題', 'ABCD', 'draft', %s, %s)",
+            (cth, org_id, self.bid, cycle_id, exc, ts, ts),
         )
         conn.execute(
-            "INSERT INTO creative_theme_component (id, brand_id, campaign_cycle_id,"
+            "INSERT INTO creative_theme_component (id, org_id, brand_id, campaign_cycle_id,"
             " creative_theme_id, component_type, content, created_at) VALUES"
-            " (?, ?, ?, ?, 'body', '測試文案', ?)",
-            (new_id("cthc"), self.bid, cycle_id, cth, ts),
+            " (%s, %s, %s, %s, %s, 'body', '測試文案', %s)",
+            (new_id("cthc"), org_id, self.bid, cycle_id, cth, ts),
         )
         conn.execute(
-            "INSERT INTO adoption_decision (id, brand_id, campaign_cycle_id, target_type, target_id,"
-            " decision, decided_by, decided_at) VALUES"
-            " (?, ?, ?, 'variant', ?, 'adopted', ?, ?)",
-            (adp, self.bid, cycle_id, cvr, ACTOR, ts),
+            "INSERT INTO adoption_decision (id, org_id, brand_id, campaign_cycle_id,"
+            " target_type, target_id, decision, decided_by, decided_at) VALUES"
+            " (%s, %s, %s, %s, 'variant', %s, 'adopted', %s, %s)",
+            (adp, org_id, self.bid, cycle_id, cvr, ACTOR, ts),
         )
         conn.execute(
-            "INSERT INTO final_asset (id, brand_id, campaign_cycle_id, source_variant_id,"
-            " asset_type, file_path, status, created_at, updated_at) VALUES"
-            " (?, ?, ?, ?, 'image', 'C:/tmp/x.png', 'DRAFT', ?, ?)",
-            (fas, self.bid, cycle_id, cvr, ts, ts),
+            "INSERT INTO final_asset (id, org_id, brand_id, campaign_cycle_id,"
+            " source_variant_id, asset_type, file_path, status, created_at, updated_at) VALUES"
+            " (%s, %s, %s, %s, %s, 'image', 'C:/tmp/x.png', 'DRAFT', %s, %s)",
+            (fas, org_id, self.bid, cycle_id, cvr, ts, ts),
         )
         conn.execute(
-            "INSERT INTO publishing_package (id, brand_id, campaign_cycle_id, experiment_cell_id,"
-            " final_asset_id, hook_id, campaign_name, adset_name, ad_name, destination_url,"
-            " utm_json, status, created_at) VALUES"
-            " (?, ?, ?, ?, ?, ?, '測試檔期', '測試組', '測試廣告',"
-            " 'https://example.com', '{}', 'draft', ?)",
-            (pkg, self.bid, cycle_id, exc, fas, cvr, ts),
+            "INSERT INTO publishing_package (id, org_id, brand_id, campaign_cycle_id,"
+            " experiment_cell_id, final_asset_id, hook_id, campaign_name, adset_name, ad_name,"
+            " destination_url, utm_json, status, created_at) VALUES"
+            " (%s, %s, %s, %s, %s, %s, %s, '測試檔期', '測試組', '測試廣告',"
+            " 'https://example.com', '{}', 'draft', %s)",
+            (pkg, org_id, self.bid, cycle_id, exc, fas, cvr, ts),
         )
         conn.execute(
-            "INSERT INTO external_ad_mapping (id, brand_id, publishing_package_id,"
+            "INSERT INTO external_ad_mapping (id, org_id, brand_id, publishing_package_id,"
             " campaign_cycle_id, platform, internal_asset_id, claim_status, created_at) VALUES"
-            " (?, ?, ?, ?, 'meta', ?, 'confirmed', ?)",
-            (xam, self.bid, pkg, cycle_id, fas, ts),
+            " (%s, %s, %s, %s, %s, 'meta', %s, 'confirmed', %s)",
+            (xam, org_id, self.bid, pkg, cycle_id, fas, ts),
         )
         conn.execute(
-            "INSERT INTO activation_authorization (id, brand_id, scope_type, scope_ref,"
+            "INSERT INTO activation_authorization (id, org_id, brand_id, scope_type, scope_ref,"
             " authorized_by, authorized_at, created_at) VALUES"
-            " (?, ?, 'campaign_activation', ?, ?, ?, ?)",
-            (ath, self.bid, cycle_id, ACTOR, ts, ts),
+            " (%s, %s, %s, 'campaign_activation', %s, %s, %s, %s)",
+            (ath, org_id, self.bid, cycle_id, ACTOR, ts, ts),
         )
         conn.execute(
-            "INSERT INTO campaign_activation (id, brand_id, campaign_cycle_id,"
+            "INSERT INTO campaign_activation (id, org_id, brand_id, campaign_cycle_id,"
             " external_ad_mapping_id, authorization_id, activated_by, activated_at, created_at)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (act, self.bid, cycle_id, xam, ath, ACTOR, ts, ts),
+            " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            (act, org_id, self.bid, cycle_id, xam, ath, ACTOR, ts, ts),
         )
         conn.execute(
-            "INSERT INTO performance_snapshot (id, brand_id, campaign_cycle_id,"
+            "INSERT INTO performance_snapshot (id, org_id, brand_id, campaign_cycle_id,"
             " external_ad_mapping_id, platform, date_range_start, date_range_end, as_of_date,"
             " snapshot_taken_at, currency, source, created_at) VALUES"
-            " (?, ?, ?, ?, 'meta', '2026-01-01', '2026-01-01', '2026-01-01', ?,"
-            " 'TWD', 'manual', ?)",
-            (psn, self.bid, cycle_id, xam, ts, ts),
+            " (%s, %s, %s, %s, %s, 'meta', '2026-01-01', '2026-01-01', '2026-01-01', %s,"
+            " 'TWD', 'manual', %s)",
+            (psn, org_id, self.bid, cycle_id, xam, ts, ts),
         )
         conn.execute(
-            "INSERT INTO derived_metric (id, brand_id, performance_snapshot_id,"
+            "INSERT INTO derived_metric (id, org_id, brand_id, performance_snapshot_id,"
             " campaign_cycle_id, external_ad_mapping_id, metric, value, computed_at, created_at)"
-            " VALUES (?, ?, ?, ?, ?, 'ctr', 1.0, ?, ?)",
-            (dmt, self.bid, psn, cycle_id, xam, ts, ts),
+            " VALUES (%s, %s, %s, %s, %s, %s, 'ctr', 1.0, %s, %s)",
+            (dmt, org_id, self.bid, psn, cycle_id, xam, ts, ts),
         )
         conn.execute(
-            "INSERT INTO performance_reading (id, brand_id, campaign_cycle_id,"
+            "INSERT INTO performance_reading (id, org_id, brand_id, campaign_cycle_id,"
             " experiment_cell_id, external_ad_mapping_id, status, rule_result_json, created_at)"
-            " VALUES (?, ?, ?, ?, ?, 'learning', '{}', ?)",
-            (prd, self.bid, cycle_id, exc, xam, ts),
+            " VALUES (%s, %s, %s, %s, %s, %s, 'learning', '{}', %s)",
+            (prd, org_id, self.bid, cycle_id, exc, xam, ts),
         )
         conn.execute(
-            "INSERT INTO recommendation (id, brand_id, campaign_cycle_id,"
+            "INSERT INTO recommendation (id, org_id, brand_id, campaign_cycle_id,"
             " performance_reading_id, recommendation_type, content_json, status, created_at,"
-            " updated_at) VALUES (?, ?, ?, ?, 'maintain', '{}', 'DRAFT', ?, ?)",
-            (rec, self.bid, cycle_id, prd, ts, ts),
+            " updated_at) VALUES (%s, %s, %s, %s, %s, 'maintain', '{}', 'DRAFT', %s, %s)",
+            (rec, org_id, self.bid, cycle_id, prd, ts, ts),
         )
         conn.execute(
-            "INSERT INTO cycle_voucher_code (id, brand_id, campaign_cycle_id, source_type, code,"
-            " discount_type, discount_value, usage_limit, valid_from, valid_to, created_at,"
-            " updated_at) VALUES (?, ?, ?, 'ad', 'TESTCODE', 'percent', 10, 50, '2026-01-01',"
-            " '2026-01-14', ?, ?)",
-            (vch, self.bid, cycle_id, ts, ts),
+            "INSERT INTO cycle_voucher_code (id, org_id, brand_id, campaign_cycle_id,"
+            " source_type, code, discount_type, discount_value, usage_limit, valid_from,"
+            " valid_to, created_at, updated_at) VALUES"
+            " (%s, %s, %s, %s, 'ad', 'TESTCODE', 'percent', 10, 50, '2026-01-01',"
+            " '2026-01-14', %s, %s)",
+            (vch, org_id, self.bid, cycle_id, ts, ts),
         )
         conn.execute(
-            "INSERT INTO cycle_code_verification (id, brand_id, campaign_cycle_id, passed,"
-            " checked_by, checked_at, created_at) VALUES (?, ?, ?, 1, ?, ?, ?)",
-            (vcv, self.bid, cycle_id, ACTOR, ts, ts),
+            "INSERT INTO cycle_code_verification (id, org_id, brand_id, campaign_cycle_id,"
+            " passed, checked_by, checked_at, created_at) VALUES"
+            " (%s, %s, %s, %s, true, %s, %s, %s)",
+            (vcv, org_id, self.bid, cycle_id, ACTOR, ts, ts),
         )
         conn.execute(
-            "INSERT INTO cycle_shopee_code (id, brand_id, campaign_cycle_id, code,"
+            "INSERT INTO cycle_shopee_code (id, org_id, brand_id, campaign_cycle_id, code,"
             " redemption_count, updated_by, created_at, updated_at) VALUES"
-            " (?, ?, ?, 'SHOPTEST', 1, ?, ?, ?)",
-            (shc, self.bid, cycle_id, ACTOR, ts, ts),
+            " (%s, %s, %s, %s, 'SHOPTEST', 1, %s, %s, %s)",
+            (shc, org_id, self.bid, cycle_id, ACTOR, ts, ts),
         )
         conn.execute(
-            "INSERT INTO settlement_version (id, brand_id, campaign_cycle_id, version,"
+            "INSERT INTO settlement_version (id, org_id, brand_id, campaign_cycle_id, version,"
             " trigger_reason, is_post_close, created_by, created_at) VALUES"
-            " (?, ?, ?, 1, 'initial', 0, ?, ?)",
-            (setv, self.bid, cycle_id, ACTOR, ts),
+            " (%s, %s, %s, %s, 1, 'initial', false, %s, %s)",
+            (setv, org_id, self.bid, cycle_id, ACTOR, ts),
         )
         conn.execute(
-            "INSERT INTO reading_snapshot (id, brand_id, campaign_cycle_id,"
+            "INSERT INTO reading_snapshot (id, org_id, brand_id, campaign_cycle_id,"
             " settlement_version_id, coefficient_version_id, data_arrival_json,"
             " missing_sources_json, summary_json, created_at) VALUES"
-            " (?, ?, ?, ?, NULL, '{}', '[]', '{}', ?)",
-            (rsnap, self.bid, cycle_id, setv, ts),
+            " (%s, %s, %s, %s, %s, NULL, '{}', '[]', '{}', %s)",
+            (rsnap, org_id, self.bid, cycle_id, setv, ts),
         )
         conn.execute(
-            "INSERT INTO reading_snapshot_input (id, brand_id, campaign_cycle_id,"
+            "INSERT INTO reading_snapshot_input (id, org_id, brand_id, campaign_cycle_id,"
             " reading_snapshot_id, scope, key, value, created_at) VALUES"
-            " (?, ?, ?, ?, 'cycle', 'spend', '100', ?)",
-            (rsin, self.bid, cycle_id, rsnap, ts),
+            " (%s, %s, %s, %s, %s, 'cycle', 'spend', '100', %s)",
+            (rsin, org_id, self.bid, cycle_id, rsnap, ts),
         )
         conn.execute(
-            "INSERT INTO learning_ledger (id, brand_id, learning_text, applicability_scope,"
-            " source_cycle_id, source_reading_id, learned_at, created_by, created_at) VALUES"
-            " (?, ?, '測試學習：這招有用', 'brand', ?, ?, ?, ?, ?)",
-            (lrn, self.bid, cycle_id, prd, ts, ACTOR, ts),
+            "INSERT INTO learning_ledger (id, org_id, brand_id, learning_text,"
+            " applicability_scope, source_cycle_id, source_reading_id, learned_at, created_by,"
+            " created_at) VALUES"
+            " (%s, %s, %s, '測試學習：這招有用', 'brand', %s, %s, %s, %s, %s)",
+            (lrn, org_id, self.bid, cycle_id, prd, ts, ACTOR, ts),
         )
         conn.commit()
         return {"learning_ledger_id": lrn}
@@ -286,8 +293,8 @@ class _BaseCycleDeleteTest(unittest.TestCase):
 
     def _cascade_row_counts(self, cycle_id):
         return {t: main.conn.execute(
-            f"SELECT COUNT(*) FROM {t} WHERE campaign_cycle_id = ?", (cycle_id,)
-        ).fetchone()[0] for t in self._CASCADE_TABLES}
+            f"SELECT COUNT(*) AS c FROM {t} WHERE campaign_cycle_id = %s", (cycle_id,)
+        ).fetchone()["c"] for t in self._CASCADE_TABLES}
 
 
 class RepositoryCascadeDeleteTest(_BaseCycleDeleteTest):
@@ -318,7 +325,7 @@ class RepositoryCascadeDeleteTest(_BaseCycleDeleteTest):
         ads_repo.delete_cycle(main.conn, self.bid, cycle_id, actor=ACTOR)
 
         row = main.conn.execute(
-            "SELECT * FROM learning_ledger WHERE id = ?",
+            "SELECT * FROM learning_ledger WHERE id = %s",
             (seeded["learning_ledger_id"],)).fetchone()
         self.assertIsNotNone(row)
         self.assertEqual(row["learning_text"], "測試學習：這招有用")
@@ -335,9 +342,9 @@ class RepositoryCascadeDeleteTest(_BaseCycleDeleteTest):
 
         row = main.conn.execute(
             "SELECT * FROM audit_log WHERE entity_type = 'campaign_cycle' AND action = 'delete' "
-            "AND entity_id = ?", (cycle_id,)).fetchone()
+            "AND entity_id = %s", (cycle_id,)).fetchone()
         self.assertIsNotNone(row)
-        before = json.loads(row["before_json"])
+        before = row["before_json"]  # jsonb 欄位，psycopg 讀回已經是 dict，不必再 json.loads
         self.assertEqual(before["start_date"] + " ～ " + before["end_date"], label)
         self.assertGreater(before["deleted_counts"]["成效判讀"], 0)
         self.assertEqual(row["actor"], ACTOR)
@@ -410,16 +417,16 @@ class CycleDeleteRouteTest(_BaseCycleDeleteTest):
         self.assertIn("跟上面顯示的不一樣", resp.text)
         self.assertIsNotNone(ads_repo.get_cycle(main.conn, self.bid, cycle_id))
 
-    def test_correct_name_deletes_and_snapshots_backup_no_orphans(self):
+    def test_correct_name_deletes_no_orphans(self):
+        # 原檔名帶「快照備份」——ADR 0027 決策 5：每日備份（複製 sqlite 檔案）整個模組
+        # 退場，Postgres 世界沒有意義（Supabase 自己做備份，見 app/core/retention.py
+        # 檔頭），刪除路由本來就不再寫任何 before-delete-*.db 快照檔，這裡拿掉那段斷言
+        # （不是待修的 BUG，是設計上刻意retired 的行為），保留其餘仍然成立的斷言：
+        # 204、cycle 真的不見了、連帶表清乾淨、audit_log 有留紀錄。
         cycle_id = self._open_cycle()
         self._seed_cascade_rows(cycle_id)
         label = self._cycle_label(cycle_id)
         self.client.post(f"/api/campaigns/brands/{self.bid}/{cycle_id}/archive", follow_redirects=False)
-
-        backup_dir = Path(os.environ["BRAND_OS_BACKUP_DIR"])
-        before_snapshots = list(backup_dir.glob(f"before-delete-{cycle_id}-*.db")) \
-            if backup_dir.exists() else []
-        self.assertEqual(before_snapshots, [])
 
         resp = self.client.post(f"/api/campaigns/brands/{self.bid}/{cycle_id}/delete",
                                 json={"confirm_name": label}, follow_redirects=False)
@@ -427,12 +434,9 @@ class CycleDeleteRouteTest(_BaseCycleDeleteTest):
         self.assertIsNone(ads_repo.get_cycle(main.conn, self.bid, cycle_id))
         self.assertEqual(set(self._cascade_row_counts(cycle_id).values()), {0})
 
-        after_snapshots = list(backup_dir.glob(f"before-delete-{cycle_id}-*.db"))
-        self.assertEqual(len(after_snapshots), 1)
-
         row = main.conn.execute(
             "SELECT * FROM audit_log WHERE entity_type = 'campaign_cycle' AND action = 'delete' "
-            "AND entity_id = ?", (cycle_id,)).fetchone()
+            "AND entity_id = %s", (cycle_id,)).fetchone()
         self.assertIsNotNone(row)
 
     def test_delete_page_lists_connected_data(self):
