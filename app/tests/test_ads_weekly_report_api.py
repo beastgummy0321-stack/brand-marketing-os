@@ -174,14 +174,26 @@ class NewCycleDirectionApiTest(unittest.TestCase):
         )
 
     def test_history_states_are_ready_empty_or_unavailable_without_blocking_opening(self):
-        with mock.patch.object(
-            routes_campaigns_open_api.nextcycle,
-            "historical_cell_performance",
-            return_value=[{"creative_angle": "虛構回購方向", "conversions": 8, "spend": 1600}],
+        # 票 F10：「ready」現在讀 carry_forward.prior_winners()（F7 的誠實贏家），不是
+        # 直接對歷史切角取轉換數最大值——historical_cell_performance 只用來判斷「有沒有
+        # 歷史資料可看」，內容不再直接決定畫面文字。
+        with (
+            mock.patch.object(
+                routes_campaigns_open_api.nextcycle, "historical_cell_performance",
+                return_value=[{"creative_angle": "虛構回購方向", "conversions": 8, "spend": 1600}],
+            ),
+            mock.patch.object(
+                routes_campaigns_open_api.carry_forward, "prior_winners",
+                return_value=[{"angle": "虛構回購方向", "roas": 3.5, "spend": 1600,
+                              "conversions": 8, "source_cycle_id": "ccy_x"}],
+            ),
         ):
             ready = self.client.get(self.url)
         self.assertEqual(ready.status_code, 200)
-        self.assertEqual(ready.json()["data"], {"status": "ready", "direction": "虛構回購方向"})
+        self.assertEqual(ready.json()["data"], {
+            "status": "ready", "direction": "虛構回購方向", "roas": 3.5,
+            "label": "沿用上期贏家：虛構回購方向（ROAS 3.50）",
+        })
 
         with mock.patch.object(
             routes_campaigns_open_api.nextcycle, "historical_cell_performance", return_value=[],
@@ -196,6 +208,45 @@ class NewCycleDirectionApiTest(unittest.TestCase):
         ):
             unavailable = self.client.get(self.url)
         self.assertEqual(unavailable.json()["data"], {"status": "unavailable"})
+
+    def test_no_qualified_winner_shows_generic_wording_not_a_code(self):
+        """票 F10 驗收 2：歷史切角都是代號形狀（如驗收資料的 normal_1）／沒有誠實贏家
+        （F7 的 evidence_sufficient 門檻沒過），畫面只能看到「沿用上期設定」，不能看到代號。"""
+        with (
+            mock.patch.object(
+                routes_campaigns_open_api.nextcycle, "historical_cell_performance",
+                return_value=[{"creative_angle": "normal_1", "conversions": 30, "spend": 4500,
+                              "revenue": 29704.5, "product_id": None,
+                              "campaign_cycle_id": "ccy_x", "evidence_sufficient": False}],
+            ),
+            mock.patch.object(
+                routes_campaigns_open_api.carry_forward, "prior_winners", return_value=[],
+            ),
+        ):
+            resp = self.client.get(self.url)
+        self.assertEqual(resp.json()["data"], {"status": "ready", "label": "沿用上期設定"})
+        self.assertNotIn("normal_", resp.text)
+
+    def test_qualified_winner_shows_angle_name_and_roas(self):
+        """票 F10 驗收 3：有 F7 贏家時，label 帶角名與 ROAS。"""
+        with (
+            mock.patch.object(
+                routes_campaigns_open_api.nextcycle, "historical_cell_performance",
+                return_value=[{"creative_angle": "實證成分", "conversions": 30, "spend": 4500,
+                              "revenue": 19350.0, "product_id": None,
+                              "campaign_cycle_id": "ccy_x", "evidence_sufficient": True}],
+            ),
+            mock.patch.object(
+                routes_campaigns_open_api.carry_forward, "prior_winners",
+                return_value=[{"angle": "實證成分", "roas": 4.3, "spend": 4500,
+                              "conversions": 30, "source_cycle_id": "ccy_x"}],
+            ),
+        ):
+            resp = self.client.get(self.url)
+        self.assertEqual(resp.json()["data"], {
+            "status": "ready", "direction": "實證成分", "roas": 4.3,
+            "label": "沿用上期贏家：實證成分（ROAS 4.30）",
+        })
 
 
 if __name__ == "__main__":

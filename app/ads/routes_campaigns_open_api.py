@@ -23,6 +23,7 @@ import app.shared.web as main_mod
 from app.ads import budget as budget_calc
 from app.ads import account_structure
 from app.ads import auto_sync as ads_auto_sync
+from app.ads import carry_forward
 from app.ads import handoff as ads_handoff
 from app.ads import offer as offer_mod
 from app.ads import plan as ads_plan
@@ -171,22 +172,34 @@ async def new_context(brand_id: str):
     })
 
 
+_NO_QUALIFIED_WINNER_LABEL = "沿用上期設定"  # 票 F10：歷史切角存在但沒有誠實贏家
+# （樣本不足／算不出 ROAS）時的畫面文字——不掛角名、不掛假數字，見票內契約。
+
+
 @router.get("/api/campaigns/{brand_id}/new-context/direction")
 async def new_cycle_direction(brand_id: str):
-    """歷來切角讀不到時不擋開檔，前端直接走一般推薦值。"""
+    """歷來切角讀不到時不擋開檔，前端直接走一般推薦值。
+
+    票 F10：改用 `carry_forward.prior_winners()`（F7 的誠實門檻——樣本不足、虧本、算不出
+    ROAS 的切角一律不算贏家）挑方向，不再直接對歷史切角取轉換數最大值；後者會把
+    `experiment_cell.creative_angle` 的原始內部代號（例如驗收資料的 `normal_1`）原封不動
+    顯示給品牌主看，鐵則 12 不許畫面出現內部代號。
+    """
     main_mod.require_brand(brand_id)
     try:
         cells = nextcycle.historical_cell_performance(main_mod.conn, brand_id)
     except Exception:  # noqa: BLE001 — 失敗收斂成不擋人的既有推薦路徑
         return _envelope({"status": "unavailable"})
-    effective = [
-        cell for cell in cells
-        if cell.get("creative_angle") and (cell.get("conversions") or 0) > 0
-    ]
-    if not effective:
+    if not cells:
         return _envelope({"status": "empty"})
-    best = max(effective, key=lambda cell: (cell["conversions"], cell.get("spend") or 0))
-    return _envelope({"status": "ready", "direction": best["creative_angle"]})
+    winners = carry_forward.prior_winners(main_mod.conn, brand_id)
+    if not winners:
+        return _envelope({"status": "ready", "label": _NO_QUALIFIED_WINNER_LABEL})
+    best = winners[0]
+    label = f"沿用上期贏家：{best['angle']}（ROAS {best['roas']:.2f}）"
+    return _envelope({
+        "status": "ready", "direction": best["angle"], "roas": best["roas"], "label": label,
+    })
 
 
 @router.post("/api/campaigns/{brand_id}")

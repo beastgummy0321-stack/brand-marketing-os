@@ -465,7 +465,7 @@ export interface ReadinessNote {
 }
 
 export type NewCycleDirection =
-  | { status: "ready"; direction: string }
+  | { status: "ready"; label: string; direction?: string; roas?: number }
   | { status: "empty" | "unavailable" };
 
 /** S8R.9-11：排期到期提醒（GRILL-B4R-performance.md 459-464 行既有型別，逐字沿用）。

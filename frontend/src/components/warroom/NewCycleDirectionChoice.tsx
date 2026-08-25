@@ -29,16 +29,18 @@ export function NewCycleDirectionChoice({
   }
   if (state.data.status !== "ready") return <>{children("")}</>;
 
-  const direction = state.data.direction;
+  // 票 F10：畫面一律顯示後端已經套過誠實門檻、組好的 label（不再自己拼 direction 字串），
+  // 沒有誠實贏家時 label 是「沿用上期設定」，不會帶內部代號。
+  const { direction, label } = state.data;
   return (
     <section className="flex flex-col gap-4 rounded-lg border border-border bg-card p-6 shadow-[var(--shadow-card)]">
       <div>
         <h2 className="font-display text-lg text-foreground">這次檔期想怎麼打？</h2>
-        <p className="mt-1 text-sm text-muted-foreground">上輪「{direction}」持續帶來訂單。</p>
+        <p className="mt-1 text-sm text-muted-foreground">{label}</p>
       </div>
-      <button type="button" onClick={() => setChosen(`沿用有效方向：${direction}`)} className="rounded-md border border-primary p-4 text-left hover:bg-primary/5">
+      <button type="button" onClick={() => setChosen(`沿用有效方向：${direction ?? ""}`)} className="rounded-md border border-primary p-4 text-left hover:bg-primary/5">
         <p className="font-medium text-foreground">沿用有效方向</p>
-        <p className="mt-1 text-sm text-muted-foreground">AI 會先照「{direction}」準備這期計畫。</p>
+        <p className="mt-1 text-sm text-muted-foreground">{label}</p>
       </button>
       <button type="button" onClick={() => setChosen("")} className="rounded-md border border-border p-4 text-left hover:border-primary">
         <p className="font-medium text-foreground">推新品／換方向</p>
