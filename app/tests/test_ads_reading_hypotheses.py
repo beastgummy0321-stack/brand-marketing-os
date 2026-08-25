@@ -6,39 +6,42 @@
 但這裡的測試照樣經 `reading.resolve_hypotheses(...)` 呼叫，搬檔不影響呼叫端）。
 """
 
-import atexit
 import json
-import shutil
-import tempfile
 import unittest
 
-_tmpdir = tempfile.mkdtemp(prefix="brand_os_ads_reading_hypotheses_")
+import pytest
+from fastapi.testclient import TestClient
 
-from fastapi.testclient import TestClient  # noqa: E402
-
-import app.main as main  # noqa: E402
-from app.ads import performance as perf  # noqa: E402
-from app.ads import reading  # noqa: E402
-from app.ads import repository as ads_repo  # noqa: E402
-from app.brand_intelligence import repository as bi_repo  # noqa: E402
-from app.core import interrupts as core_interrupts  # noqa: E402
-from app.core.db import new_id, now_iso  # noqa: E402
-from app.llm import context_compiler  # noqa: E402
-from app.llm.providers import FakeProvider, ProviderError, ProviderResponse, Usage  # noqa: E402
-from app.shared.web import OPERATOR  # noqa: E402
-
-
-def _cleanup():
-    try:
-        main.conn.close()
-    except Exception:
-        pass
-    shutil.rmtree(_tmpdir, ignore_errors=True)
-
-
-atexit.register(_cleanup)
+import app.main as main
+from app.ads import performance as perf
+from app.ads import reading
+from app.ads import repository as ads_repo
+from app.brand_intelligence import repository as bi_repo
+from app.core import db
+from app.core import interrupts as core_interrupts
+from app.llm import context_compiler
+from app.llm.providers import FakeProvider, ProviderError, ProviderResponse, Usage
+from app.shared.web import OPERATOR
 
 ACTOR = "測試員"
+
+
+# BUG app/ads/performance.py:364 — import_rows() 的 INSERT 對 date 欄位傳 ""，
+# Postgres 一律 psycopg.errors.InvalidDatetimeFormat（同一個 BUG，orders/ads 群組已標過）。
+_BUG_EMPTY_STRING_DATE = pytest.mark.xfail(
+    strict=True,
+    reason='BUG app/ads/performance.py:364 — import_rows() 的 INSERT 對 date 欄位傳 ""，'
+           "Postgres 一律 psycopg.errors.InvalidDatetimeFormat",
+)
+
+# BUG app/brand_intelligence/repository.py:1569 — 跟 app/core/interrupts.py:99 同一類
+# SQLite 遺留寫法："product_id IS %s"，Postgres 的 IS 不接受綁參數，
+# 一律 psycopg.errors.SyntaxError（這是另一個檔案的另一個出現點，新發現）。
+_BUG_LEDGER_IS_PARAM = pytest.mark.xfail(
+    strict=True,
+    reason='BUG app/brand_intelligence/repository.py:1569 — 學習帳本重複偵測查詢用'
+           ' "product_id IS %s"，Postgres 的 IS 不接受綁參數，一律 psycopg.errors.SyntaxError',
+)
 
 
 def _fake(text):
@@ -245,16 +248,19 @@ class LearningLedgerDedupeWidenedNormalizationTest(unittest.TestCase):
             main.conn, self.bid, learning_text="情感訴求角度轉換率比功能訴求高（第二輪驗證）",
             applicability_scope="brand", created_by=ACTOR, actor=ACTOR, source_track="ads")
 
+    @_BUG_LEDGER_IS_PARAM
     def test_near_duplicate_across_bracket_family_and_whitespace_dedupes(self):
         near_dup = "情感訴求角度轉換率 比功能訴求高〔第三輪再測〕"
         self.assertTrue(bi_repo.learning_ledger_entry_exists(
             main.conn, self.bid, product_id=None, learning_text=near_dup))
 
+    @_BUG_LEDGER_IS_PARAM
     def test_genuinely_different_conclusion_does_not_dedupe(self):
         different = "情感訴求角度轉換率比功能訴求低（第二輪驗證）"
         self.assertFalse(bi_repo.learning_ledger_entry_exists(
             main.conn, self.bid, product_id=None, learning_text=different))
 
+    @_BUG_LEDGER_IS_PARAM
     def test_multi_span_learning_is_not_silently_treated_as_duplicate(self):
         """票 F3 R4：帳上先有一句多括號區段的學習（round 3 缺陷下會被正規化成空字串）。
         另一句結論相反、一樣是多括號區段的新學習拿來比對——round 3 的缺陷會讓兩句話都被
@@ -268,6 +274,7 @@ class LearningLedgerDedupeWidenedNormalizationTest(unittest.TestCase):
         self.assertFalse(bi_repo.learning_ledger_entry_exists(
             main.conn, self.bid, product_id=None, learning_text=genuinely_new))
 
+    @_BUG_LEDGER_IS_PARAM
     def test_b6_quote_nested_inside_aside_is_recorded_separately_via_real_ledger_path(self):
         """票 F3 R6：走真的 `learning_ledger_entry_exists()` 查表路徑，不只測正規化函式。"""
         high = "本次學習，（「情感訴求角度轉換率比功能訴求高」）樣本充足"
@@ -308,9 +315,10 @@ class _HypothesisReviewBase(unittest.TestCase):
             main.conn, self.bid, hypothesis_type=hypothesis_type, statement=statement,
             created_by=ACTOR, actor=ACTOR, product_id=product_id, source_cycle_id=self.cycle_id)
         main.conn.execute(
-            "INSERT OR IGNORE INTO campaign_cycle_hypothesis (campaign_cycle_id,"
-            " strategy_hypothesis_id, brand_id, role) VALUES (?, ?, ?, ?)",
-            (self.cycle_id, hyp["id"], self.bid, hypothesis_type),
+            "INSERT INTO campaign_cycle_hypothesis (org_id, campaign_cycle_id,"
+            " strategy_hypothesis_id, brand_id, role) VALUES (%s, %s, %s, %s, %s)"
+            " ON CONFLICT (campaign_cycle_id, strategy_hypothesis_id) DO NOTHING",
+            (db.DEV_ORG_ID, self.cycle_id, hyp["id"], self.bid, hypothesis_type),
         )
         main.conn.commit()
         return hyp
@@ -323,21 +331,22 @@ class _HypothesisReviewBase(unittest.TestCase):
         external_ad_mapping），比照 `test_ads_nextcycle.py::HistoricalCellPerformanceTest`
         既有寫法——CSV 匯入靠廣告名稱對回這裡建好的交接包，才算「真的做過對照」。"""
         cycle_id = cycle_id or self.cycle_id
-        cell_id, pkg_id, ts = new_id("exc"), new_id("pkg"), now_iso()
+        cell_id, pkg_id, ts = db.new_id("exc"), db.new_id("pkg"), db.now_utc()
         main.conn.execute(
-            "INSERT INTO experiment_cell (id, campaign_cycle_id, brand_id, creative_angle,"
-            " created_at) VALUES (?, ?, ?, ?, ?)", (cell_id, cycle_id, self.bid, creative_angle, ts))
+            "INSERT INTO experiment_cell (id, org_id, campaign_cycle_id, brand_id, creative_angle,"
+            " created_at) VALUES (%s, %s, %s, %s, %s, %s)",
+            (cell_id, db.DEV_ORG_ID, cycle_id, self.bid, creative_angle, ts))
         main.conn.execute(
-            "INSERT INTO publishing_package (id, brand_id, campaign_cycle_id, experiment_cell_id,"
-            " campaign_name, adset_name, ad_name, destination_url, utm_json, status, created_at)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, '{}', 'ready', ?)",
-            (pkg_id, self.bid, cycle_id, cell_id, "測試活動", "測試組合", ad_name,
+            "INSERT INTO publishing_package (id, org_id, brand_id, campaign_cycle_id,"
+            " experiment_cell_id, campaign_name, adset_name, ad_name, destination_url, utm_json,"
+            " status, created_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, '{}', 'ready', %s)",
+            (pkg_id, db.DEV_ORG_ID, self.bid, cycle_id, cell_id, "測試活動", "測試組合", ad_name,
              "https://example.test", ts))
         main.conn.execute(
-            "INSERT INTO external_ad_mapping (id, brand_id, publishing_package_id,"
+            "INSERT INTO external_ad_mapping (id, org_id, brand_id, publishing_package_id,"
             " campaign_cycle_id, platform, claim_status, confirmed_by, confirmed_at,"
-            " created_at) VALUES (?, ?, ?, ?, 'meta', 'confirmed', ?, ?, ?)",
-            (new_id("xam"), self.bid, pkg_id, cycle_id, ACTOR, ts, ts))
+            " created_at) VALUES (%s, %s, %s, %s, %s, 'meta', 'confirmed', %s, %s, %s)",
+            (db.new_id("xam"), db.DEV_ORG_ID, self.bid, pkg_id, cycle_id, ACTOR, ts, ts))
         main.conn.commit()
         return cell_id
 
@@ -371,6 +380,7 @@ class _HypothesisReviewBase(unittest.TestCase):
 class HypothesisReviewTest(_HypothesisReviewBase):
     """票 #53：判讀頁假設結案（三選一，AI 預選）＋入帳 learning_ledger＋打斷佇列補網。"""
 
+    @_BUG_EMPTY_STRING_DATE
     def test_scale_candidate_with_real_comparison_still_preselects_inconclusive(self):
         """票 F3-signoff-residue：判讀結論偏正向、且這期真的做過對照，畫面預選也不再猜
         「成立」——聚合判讀方向不等於這條假設自己的對照數字撐得住這個結論，使用者要主動
@@ -386,6 +396,7 @@ class HypothesisReviewTest(_HypothesisReviewBase):
         self.assertTrue(reviews[0]["ai_reason"])
         self.assertEqual(len(reviews[0]["comparison_cells"]), 2, "契約第2點：要出示兩邊的並排證據")
 
+    @_BUG_EMPTY_STRING_DATE
     def test_pause_candidate_with_real_comparison_still_preselects_inconclusive(self):
         """票 F3-signoff-residue：同一條理由套在停損方向——聚合結論偏負向也不代表這條假設
         自己被否證了，一樣不預選「不成立」。"""
@@ -395,6 +406,7 @@ class HypothesisReviewTest(_HypothesisReviewBase):
         reviews = reading.load(main.conn, self.bid, self.cycle_id)["cycle"]["hypothesis_reviews"]
         self.assertEqual(reviews[0]["preselect"], "inconclusive")
 
+    @_BUG_EMPTY_STRING_DATE
     def test_ai_preselects_inconclusive_when_maintain(self):
         """修憲落地 G4（決策 0035 第三節第 6 點）：`maintain`（只是打平）不算「程式算出
         方向」，預選改看不出來，不是成立——橡皮圖章的產物不該被貼上「已驗證」標籤。"""
@@ -406,6 +418,7 @@ class HypothesisReviewTest(_HypothesisReviewBase):
         reviews = reading.load(main.conn, self.bid, self.cycle_id)["cycle"]["hypothesis_reviews"]
         self.assertEqual(reviews[0]["preselect"], "inconclusive")
 
+    @_BUG_EMPTY_STRING_DATE
     def test_llm_failure_falls_back_to_program_generated_reason(self):
         """AI 講不出話不擋清單顯示——理由退回程式產生的版本，選項本身不受影響。"""
         self._link_hypothesis("通勤族比在家工作者更會下單")
@@ -415,6 +428,7 @@ class HypothesisReviewTest(_HypothesisReviewBase):
         review = reading.load(main.conn, self.bid, self.cycle_id)["cycle"]["hypothesis_reviews"][0]
         self.assertIn("這期判讀結論是", review["ai_reason"])
 
+    @_BUG_EMPTY_STRING_DATE
     def test_zero_operation_submit_uses_ai_preselect(self):
         """使用者零操作也能過：直接照 AI 預選送出，status 隨之更新。"""
         hyp = self._link_hypothesis("通勤族比在家工作者更會下單")
@@ -428,6 +442,7 @@ class HypothesisReviewTest(_HypothesisReviewBase):
         updated = bi_repo.get_strategy_hypothesis(main.conn, self.bid, hyp["id"])
         self.assertEqual(updated["status"], preselect)
 
+    @_BUG_EMPTY_STRING_DATE
     def test_supported_confirmation_writes_learning_ledger(self):
         hyp = self._link_hypothesis("通勤族比在家工作者更會下單")
         self._ab_spend(spend=10000, conversions=10, revenue=40000)
@@ -435,7 +450,7 @@ class HypothesisReviewTest(_HypothesisReviewBase):
         reading.resolve_hypotheses(
             main.conn, self.bid, self.cycle_id, {hyp["id"]: "supported"}, actor=OPERATOR)
         rows = [dict(r) for r in main.conn.execute(
-            "SELECT * FROM learning_ledger WHERE brand_id = ?", (self.bid,))]
+            "SELECT * FROM learning_ledger WHERE brand_id = %s", (self.bid,))]
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["learning_text"], "通勤族比在家工作者更會下單")
         self.assertEqual(rows[0]["source_cycle_id"], self.cycle_id)
@@ -445,6 +460,7 @@ class HypothesisReviewTest(_HypothesisReviewBase):
         self.assertIsNotNone(rows[0]["confidence"])
         self.assertIsNotNone(rows[0]["source_reading_id"])
 
+    @_BUG_EMPTY_STRING_DATE
     def test_ledger_confidence_is_its_own_scale_not_the_data_grade_label(self):
         """修憲落地 G4（決策 0035 第三節第 8 點）：ledger 的 confidence 是「樣本數＋是否
         重測過」自己一套，不是資料成色標籤（那個標籤講的是資料有沒有對過帳，不是這條
@@ -456,10 +472,11 @@ class HypothesisReviewTest(_HypothesisReviewBase):
         reading.resolve_hypotheses(
             main.conn, self.bid, self.cycle_id, {hyp["id"]: "supported"}, actor=OPERATOR)
         row = main.conn.execute(
-            "SELECT confidence FROM learning_ledger WHERE brand_id = ?", (self.bid,)).fetchone()
+            "SELECT confidence FROM learning_ledger WHERE brand_id = %s", (self.bid,)).fetchone()
         self.assertNotEqual(row["confidence"], "Meta 視角判讀")
         self.assertEqual(row["confidence"], "preliminary")  # ADR 0026 決定 7b：句子沒點名切角
 
+    @_BUG_EMPTY_STRING_DATE
     def test_small_sample_manual_override_gets_preliminary_confidence(self):
         """使用者手動把還在學習期的假設硬結案「成立」，系統不擋（決策 0013）；
         樣本只有 5 筆、不是重測，confidence 該誠實標「初步」。"""
@@ -469,9 +486,10 @@ class HypothesisReviewTest(_HypothesisReviewBase):
         reading.resolve_hypotheses(
             main.conn, self.bid, self.cycle_id, {hyp["id"]: "supported"}, actor=OPERATOR)
         row = main.conn.execute(
-            "SELECT confidence FROM learning_ledger WHERE brand_id = ?", (self.bid,)).fetchone()
+            "SELECT confidence FROM learning_ledger WHERE brand_id = %s", (self.bid,)).fetchone()
         self.assertEqual(row["confidence"], "preliminary")
 
+    @_BUG_EMPTY_STRING_DATE
     def test_repeated_learning_text_gets_reinforced_confidence(self):
         """同一個品牌、同一個範圍、同一句學習文字，不同期別各自被判定「成立」——不是同一次
         判讀的巧合，是獨立重測，第二次入帳的 confidence 要標「已加強」。"""
@@ -489,9 +507,10 @@ class HypothesisReviewTest(_HypothesisReviewBase):
             main.conn, self.bid, hypothesis_type="audience", statement=statement,
             created_by=ACTOR, actor=ACTOR, product_id=None, source_cycle_id=cycle2_id)
         main.conn.execute(
-            "INSERT OR IGNORE INTO campaign_cycle_hypothesis (campaign_cycle_id,"
-            " strategy_hypothesis_id, brand_id, role) VALUES (?, ?, ?, 'audience')",
-            (cycle2_id, hyp2["id"], self.bid))
+            "INSERT INTO campaign_cycle_hypothesis (org_id, campaign_cycle_id,"
+            " strategy_hypothesis_id, brand_id, role) VALUES (%s, %s, %s, %s, 'audience')"
+            " ON CONFLICT (campaign_cycle_id, strategy_hypothesis_id) DO NOTHING",
+            (db.DEV_ORG_ID, cycle2_id, hyp2["id"], self.bid))
         main.conn.commit()
         self._ab_spend(spend=10000, conversions=10, revenue=40000, cycle_id=cycle2_id,
                        ad_names=("cycle2_角度A_ad", "cycle2_角度B_ad"))
@@ -500,11 +519,12 @@ class HypothesisReviewTest(_HypothesisReviewBase):
             main.conn, self.bid, cycle2_id, {hyp2["id"]: "supported"}, actor=OPERATOR)
 
         rows = [dict(r) for r in main.conn.execute(
-            "SELECT * FROM learning_ledger WHERE brand_id = ? ORDER BY created_at", (self.bid,))]
+            "SELECT * FROM learning_ledger WHERE brand_id = %s ORDER BY created_at", (self.bid,))]
         self.assertEqual(len(rows), 2)
         self.assertEqual(rows[0]["confidence"], "preliminary")  # ADR 0026 決定 7b：句子沒點名切角
         self.assertEqual(rows[1]["confidence"], "reinforced")
 
+    @_BUG_EMPTY_STRING_DATE
     def test_near_duplicate_learning_text_with_bracket_aside_still_gets_reinforced(self):
         """R2-learning-honesty 契約第 5 點（重現 B0-23）：LLM 每期生成的假設措辭有微幅
         出入，第二句多了一段舉例性括號夾註，逐字比對會誤判成「不同結論」、錯標「這是
@@ -523,9 +543,10 @@ class HypothesisReviewTest(_HypothesisReviewBase):
             statement="拿證據說話的切角比純促銷更能拉高轉換率",
             created_by=ACTOR, actor=ACTOR, product_id=None, source_cycle_id=cycle2_id)
         main.conn.execute(
-            "INSERT OR IGNORE INTO campaign_cycle_hypothesis (campaign_cycle_id,"
-            " strategy_hypothesis_id, brand_id, role) VALUES (?, ?, ?, 'audience')",
-            (cycle2_id, hyp2["id"], self.bid))
+            "INSERT INTO campaign_cycle_hypothesis (org_id, campaign_cycle_id,"
+            " strategy_hypothesis_id, brand_id, role) VALUES (%s, %s, %s, %s, 'audience')"
+            " ON CONFLICT (campaign_cycle_id, strategy_hypothesis_id) DO NOTHING",
+            (db.DEV_ORG_ID, cycle2_id, hyp2["id"], self.bid))
         main.conn.commit()
         self._ab_spend(spend=10000, conversions=10, revenue=40000, cycle_id=cycle2_id,
                        ad_names=("cycle2_角度A_ad", "cycle2_角度B_ad"))
@@ -534,7 +555,7 @@ class HypothesisReviewTest(_HypothesisReviewBase):
             main.conn, self.bid, cycle2_id, {hyp2["id"]: "supported"}, actor=OPERATOR)
 
         rows = [dict(r) for r in main.conn.execute(
-            "SELECT * FROM learning_ledger WHERE brand_id = ? ORDER BY created_at", (self.bid,))]
+            "SELECT * FROM learning_ledger WHERE brand_id = %s ORDER BY created_at", (self.bid,))]
         self.assertEqual(len(rows), 2)
         self.assertEqual(rows[1]["confidence"], "reinforced",
                          "拿掉括號夾註後跟第一條逐字相同，不該被當成「第一次看到」")
@@ -547,6 +568,7 @@ class HypothesisReviewTest(_HypothesisReviewBase):
             main.conn, self.bid, product_ids=[self.product], pain_value=10000,
             objective="sales", actor=ACTOR)["id"]
 
+    @_BUG_EMPTY_STRING_DATE
     def test_ledger_entry_flagged_for_revalidation_after_window_of_later_cycles(self):
         """修憲落地 G4（決策 0035 第三節第 5 點）：`needs_revalidation` 欄位在表上但全庫
         沒有任何一行寫入過。「第 N 期再驗一次」＝這個品牌又開過幾期（依建立順序），
@@ -557,21 +579,22 @@ class HypothesisReviewTest(_HypothesisReviewBase):
         reading.resolve_hypotheses(
             main.conn, self.bid, self.cycle_id, {hyp["id"]: "supported"}, actor=OPERATOR)
         entry_id = main.conn.execute(
-            "SELECT id FROM learning_ledger WHERE brand_id = ?", (self.bid,)).fetchone()["id"]
+            "SELECT id FROM learning_ledger WHERE brand_id = %s", (self.bid,)).fetchone()["id"]
 
         for _ in range(reading.LEDGER_REVALIDATION_WINDOW_CYCLES - 1):
             self._later_cycle()
         reading.mark_stale_learnings_for_revalidation(main.conn, self.bid)
         row = main.conn.execute(
-            "SELECT needs_revalidation FROM learning_ledger WHERE id = ?", (entry_id,)).fetchone()
+            "SELECT needs_revalidation FROM learning_ledger WHERE id = %s", (entry_id,)).fetchone()
         self.assertEqual(row["needs_revalidation"], 0, "還沒滿門檻期數，不該標記")
 
         self._later_cycle()
         reading.mark_stale_learnings_for_revalidation(main.conn, self.bid)
         row = main.conn.execute(
-            "SELECT needs_revalidation FROM learning_ledger WHERE id = ?", (entry_id,)).fetchone()
+            "SELECT needs_revalidation FROM learning_ledger WHERE id = %s", (entry_id,)).fetchone()
         self.assertEqual(row["needs_revalidation"], 1)
 
+    @_BUG_EMPTY_STRING_DATE
     def test_revalidation_check_is_wired_into_next_cycle_build(self):
         """驗證真的掛進判讀後的下期準備流程（nextcycle.build()），不是孤兒函式沒人呼叫。"""
         hyp = self._link_hypothesis("通勤族比在家工作者更會下單")
@@ -585,10 +608,11 @@ class HypothesisReviewTest(_HypothesisReviewBase):
 
         reading.run(main.conn, self.bid, self.cycle_id, ACTOR)  # 重判同一期，順手觸發 nextcycle.build()
         row = main.conn.execute(
-            "SELECT needs_revalidation FROM learning_ledger WHERE brand_id = ?",
+            "SELECT needs_revalidation FROM learning_ledger WHERE brand_id = %s",
             (self.bid,)).fetchone()
         self.assertEqual(row["needs_revalidation"], 1)
 
+    @_BUG_EMPTY_STRING_DATE
     def test_learning_flows_into_next_cycle_prompt_via_context_compiler(self):
         """端到端實測（GitHub issue #54 驗收條件）：建虛構品牌 → 開期產假設 → 判讀 → 結案入帳
         → 下一期生成的 prompt（context_compiler.compile）內確實出現該學習。"""
@@ -606,9 +630,10 @@ class HypothesisReviewTest(_HypothesisReviewBase):
         self.assertIn("通勤族比在家工作者更會下單", text)
         self.assertIn(f"來源期別 {self.cycle_id}", text)
         learning_row = main.conn.execute(
-            "SELECT id FROM learning_ledger WHERE brand_id = ?", (self.bid,)).fetchone()
+            "SELECT id FROM learning_ledger WHERE brand_id = %s", (self.bid,)).fetchone()
         self.assertIn(learning_row["id"], knowledge_item_ids)
 
+    @_BUG_EMPTY_STRING_DATE
     def test_rejected_confirmation_does_not_write_ledger(self):
         hyp = self._link_hypothesis("通勤族比在家工作者更會下單")
         self._spend(spend=10000, impressions=20000, clicks=400, conversions=0, revenue=0)
@@ -616,11 +641,12 @@ class HypothesisReviewTest(_HypothesisReviewBase):
         reading.resolve_hypotheses(
             main.conn, self.bid, self.cycle_id, {hyp["id"]: "rejected"}, actor=OPERATOR)
         rows = main.conn.execute(
-            "SELECT COUNT(*) c FROM learning_ledger WHERE brand_id = ?", (self.bid,)).fetchone()
+            "SELECT COUNT(*) c FROM learning_ledger WHERE brand_id = %s", (self.bid,)).fetchone()
         self.assertEqual(rows["c"], 0)
         updated = bi_repo.get_strategy_hypothesis(main.conn, self.bid, hyp["id"])
         self.assertEqual(updated["status"], "rejected")
 
+    @_BUG_EMPTY_STRING_DATE
     def test_resolved_hypothesis_disappears_from_page_after_confirm(self):
         hyp = self._link_hypothesis("通勤族比在家工作者更會下單")
         self._spend(spend=10000, impressions=20000, clicks=400, conversions=10, revenue=40000)
@@ -630,6 +656,7 @@ class HypothesisReviewTest(_HypothesisReviewBase):
         reviews = reading.load(main.conn, self.bid, self.cycle_id)["cycle"]["hypothesis_reviews"]
         self.assertEqual(reviews, [])
 
+    @_BUG_EMPTY_STRING_DATE
     def test_unresolved_hypothesis_flagged_at_finalize(self):
         self._link_hypothesis("通勤族比在家工作者更會下單")
         self._spend(spend=10000, impressions=20000, clicks=400, conversions=10, revenue=40000)
@@ -637,6 +664,7 @@ class HypothesisReviewTest(_HypothesisReviewBase):
         open_items = core_interrupts.list_open(main.conn, brand_id=self.bid)
         self.assertTrue(any(i["category"] == "hypothesis_unresolved" for i in open_items))
 
+    @_BUG_EMPTY_STRING_DATE
     def test_resolved_before_finalize_does_not_flag(self):
         hyp = self._link_hypothesis("通勤族比在家工作者更會下單")
         self._spend(spend=10000, impressions=20000, clicks=400, conversions=10, revenue=40000)
@@ -647,6 +675,7 @@ class HypothesisReviewTest(_HypothesisReviewBase):
         open_items = core_interrupts.list_open(main.conn, brand_id=self.bid)
         self.assertFalse(any(i["category"] == "hypothesis_unresolved" for i in open_items))
 
+    @_BUG_EMPTY_STRING_DATE
     def test_ignores_unknown_hypothesis_id_and_invalid_verdict_value(self):
         """防偽造 id、防非法 verdict 值：忽略不處理，不拋例外。"""
         hyp = self._link_hypothesis("通勤族比在家工作者更會下單")
@@ -663,6 +692,7 @@ class HypothesisComparisonHonestyTest(_HypothesisReviewBase):
     「成立」，簽核畫面要出示對照的切角證據，入帳前程式端要再擋一次、樣本數只算真的
     對照過的切角。對照票面的 C3 契約例：整期只投 1 個切角，覆盤③不列預設「成立」。"""
 
+    @_BUG_EMPTY_STRING_DATE
     def test_single_angle_cycle_preselects_none_even_when_scale_candidate(self):
         """契約例：C3 型檔期（整期只投 1 個切角）結算，覆盤③不再列「成立」預選——即使
         整體判讀結論是加碼方向（scale_candidate）。`_spend()` 是純手動彙總輸入，
@@ -675,6 +705,7 @@ class HypothesisComparisonHonestyTest(_HypothesisReviewBase):
         self.assertEqual(reviews[0]["comparison_cells"], [])
         self.assertIn("沒有對得回切角的成效資料", reviews[0]["ai_reason"])
 
+    @_BUG_EMPTY_STRING_DATE
     def test_single_real_cell_still_not_enough_to_preselect(self):
         """1 個切角有真的成效資料（比 0 個更像真實情境）——仍然不到 `MIN_COMPARISON_CELLS`
         （2），一樣不能預選，證明門檻是「筆數」而不是「有沒有任何資料」。"""
@@ -690,6 +721,7 @@ class HypothesisComparisonHonestyTest(_HypothesisReviewBase):
         self.assertEqual(len(reviews[0]["comparison_cells"]), 1)
         self.assertIn("只投了 1 個切角", reviews[0]["ai_reason"])
 
+    @_BUG_EMPTY_STRING_DATE
     def test_two_angle_cycle_shows_side_by_side_evidence(self):
         """契約第 2 點：真的做過對照時，簽核畫面拿得到兩邊各自的切角名／樣本數／花費／
         CPA／ROAS，不是只有程式的結論一句話。"""
@@ -705,6 +737,7 @@ class HypothesisComparisonHonestyTest(_HypothesisReviewBase):
             self.assertIn("cpa", c["kpis"])
             self.assertIn("roas", c["kpis"])
 
+    @_BUG_EMPTY_STRING_DATE
     def test_supported_verdict_without_real_comparison_is_downgraded_and_not_booked(self):
         """Done-check 5（紅→綠）：無對照資料的「成立」不准入帳。這裡直接餵
         `resolve_hypotheses(..., "supported")`——模擬繞過前端（前端本來就不會預選這個
@@ -716,11 +749,12 @@ class HypothesisComparisonHonestyTest(_HypothesisReviewBase):
             main.conn, self.bid, self.cycle_id, {hyp["id"]: "supported"}, actor=OPERATOR)
         self.assertEqual(updated, 1)
         rows = main.conn.execute(
-            "SELECT COUNT(*) c FROM learning_ledger WHERE brand_id = ?", (self.bid,)).fetchone()
+            "SELECT COUNT(*) c FROM learning_ledger WHERE brand_id = %s", (self.bid,)).fetchone()
         self.assertEqual(rows["c"], 0, "沒對照資料的「成立」不准寫進 learning_ledger")
         updated_hyp = bi_repo.get_strategy_hypothesis(main.conn, self.bid, hyp["id"])
         self.assertEqual(updated_hyp["status"], "inconclusive", "程式端要把它降級，不是照單全收")
 
+    @_BUG_EMPTY_STRING_DATE
     def test_two_angle_cycle_sample_size_is_the_compared_cells_total_not_the_whole_product(self):
         """契約第 4 點：入帳的樣本數＝這次真的拿來對照的切角自己的轉換數加總，不是
         「花費÷CPA」反推、也不是這個產品整期的全部轉換數——這裡額外灌一筆對不回任何
@@ -734,7 +768,7 @@ class HypothesisComparisonHonestyTest(_HypothesisReviewBase):
         reading.resolve_hypotheses(
             main.conn, self.bid, self.cycle_id, {hyp["id"]: "supported"}, actor=OPERATOR)
         row = main.conn.execute(
-            "SELECT sample_size FROM learning_ledger WHERE brand_id = ?", (self.bid,)).fetchone()
+            "SELECT sample_size FROM learning_ledger WHERE brand_id = %s", (self.bid,)).fetchone()
         self.assertEqual(row["sample_size"], "10", "樣本數只能是兩個切角自己的 10 筆，不含額外灌的 90 筆")
 
 
@@ -744,6 +778,7 @@ class HypothesisLedgerHaltTest(_HypothesisReviewBase):
     prompt。統計缺陷（橡皮圖章式的預選、`maintain` 誤算正面、小樣本喊加碼停損）修好後，
     選「成立」照樣入帳，這裡驗證使用者實際會遇到的預設狀態。"""
 
+    @_BUG_EMPTY_STRING_DATE
     def test_supported_confirmation_writes_ledger_even_though_the_flag_is_on(self):
         hyp = self._link_hypothesis("通勤族比在家工作者更會下單")
         self._ab_spend(spend=10000, conversions=10, revenue=40000)
@@ -751,7 +786,7 @@ class HypothesisLedgerHaltTest(_HypothesisReviewBase):
         reading.resolve_hypotheses(
             main.conn, self.bid, self.cycle_id, {hyp["id"]: "supported"}, actor=OPERATOR)
         rows = main.conn.execute(
-            "SELECT COUNT(*) c FROM learning_ledger WHERE brand_id = ?", (self.bid,)).fetchone()
+            "SELECT COUNT(*) c FROM learning_ledger WHERE brand_id = %s", (self.bid,)).fetchone()
         self.assertEqual(rows["c"], 1)
         updated = bi_repo.get_strategy_hypothesis(main.conn, self.bid, hyp["id"])
         self.assertEqual(updated["status"], "supported")
@@ -761,6 +796,7 @@ class HypothesisStaleNoteTest(_HypothesisReviewBase):
     """票 R4-late-data-downstream（B0-34）：已簽核假設補件後判讀翻盤要提示「結論依據已變，
     建議重看」，但簽核的 verdict 本身不能被自動改動。"""
 
+    @_BUG_EMPTY_STRING_DATE
     def test_no_note_before_any_rerun_after_signing(self):
         hyp = self._link_hypothesis("節慶檔期禮盒切角投報率比平常好")
         self._spend(spend=10000, impressions=20000, clicks=400, conversions=10, revenue=8000)
@@ -770,6 +806,7 @@ class HypothesisStaleNoteTest(_HypothesisReviewBase):
         resolved = bi_repo.get_strategy_hypothesis(main.conn, self.bid, hyp["id"])
         self.assertIsNone(reading.stale_note(main.conn, self.bid, self.cycle_id, resolved))
 
+    @_BUG_EMPTY_STRING_DATE
     def test_note_appears_after_late_data_rerun_actually_changes_numbers(self):
         hyp = self._link_hypothesis("節慶檔期禮盒切角投報率比平常好")
         self._spend(spend=10000, impressions=20000, clicks=400, conversions=10, revenue=8000)
@@ -787,6 +824,7 @@ class HypothesisStaleNoteTest(_HypothesisReviewBase):
         self.assertEqual(reading.stale_note(main.conn, self.bid, self.cycle_id, resolved),
                          reading.STALE_HYPOTHESIS_NOTE)
 
+    @_BUG_EMPTY_STRING_DATE
     def test_pending_hypothesis_never_gets_a_stale_note(self):
         hyp = self._link_hypothesis("節慶檔期禮盒切角投報率比平常好")
         self._spend(spend=10000, impressions=20000, clicks=400, conversions=10, revenue=8000)

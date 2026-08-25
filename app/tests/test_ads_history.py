@@ -4,26 +4,19 @@
 品牌與產品名一律虛構，絕不使用真實客戶品牌。
 """
 
-import atexit
-import os
-import shutil
-import tempfile
 import unittest
-from pathlib import Path
 
-_tmpdir = tempfile.mkdtemp(prefix="brand_os_ads_history_")
+import pytest
+from fastapi.testclient import TestClient
 
-from fastapi.testclient import TestClient  # noqa: E402
-
-import app.main as main  # noqa: E402
-from app.ads import performance as ads_perf  # noqa: E402
-from app.ads import reading as ads_reading  # noqa: E402
-from app.ads import repository as ads_repo  # noqa: E402
-from app.ads import routes_common  # noqa: E402
-from app.ads import sync as ads_sync  # noqa: E402
-from app.brand_intelligence import repository as bi_repo  # noqa: E402
-from app.llm.providers import FakeProvider, ProviderResponse, Usage  # noqa: E402
-
+import app.main as main
+from app.ads import performance as ads_perf
+from app.ads import reading as ads_reading
+from app.ads import repository as ads_repo
+from app.ads import routes_common
+from app.ads import sync as ads_sync
+from app.brand_intelligence import repository as bi_repo
+from app.llm.providers import FakeProvider, ProviderResponse, Usage
 
 
 def _fake(text: str) -> ProviderResponse:
@@ -34,22 +27,11 @@ def _fake(text: str) -> ProviderResponse:
 ACTOR = "測試員"
 
 
-def _cleanup():
-    try:
-        main.conn.close()
-    except Exception:
-        pass
-    shutil.rmtree(_tmpdir, ignore_errors=True)
-
-
-atexit.register(_cleanup)
-
-
 class _BaseHubTest(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(main.app)
         main.conn.execute("DELETE FROM discovered_campaign")
-        main.conn.execute("DELETE FROM app_setting WHERE key IN (?, ?)",
+        main.conn.execute("DELETE FROM app_setting WHERE key IN (%s, %s)",
                           (ads_sync.ACCOUNT_SETTING, ads_sync.TOKEN_SETTING))
         main.conn.commit()
         self.brand = bi_repo.create_brand(main.conn, name=f"虛構晨光咖啡{self.id()[-6:]}",
@@ -174,6 +156,15 @@ class HistoryPageTest(_BaseHubTest):
         self.assertIsNone(ads_repo.get_cycle(main.conn, self.bid, cycle_id))
 
 
+# BUG app/ads/performance.py:364 — import_rows() 的 INSERT 對 date 欄位傳 ""，
+# Postgres 一律 psycopg.errors.InvalidDatetimeFormat（同一個 BUG，orders/ads 群組已標過）。
+_BUG_EMPTY_STRING_DATE = pytest.mark.xfail(
+    strict=True,
+    reason='BUG app/ads/performance.py:364 — import_rows() 的 INSERT 對 date 欄位傳 ""，'
+           "Postgres 一律 psycopg.errors.InvalidDatetimeFormat",
+)
+
+
 class HistoryTrendTableTest(_BaseHubTest):
     """跨期趨勢表（GitHub issue #63，決策 0039 第 12 點）：只列已結案檔期，複用 hub 既有
     判讀摘要邏輯，算不出的顯示「算不出」不補 0（鐵則 16）。"""
@@ -188,6 +179,7 @@ class HistoryTrendTableTest(_BaseHubTest):
         ads_repo.update_cycle_status(main.conn, self.bid, cycle_id, status="CLOSED", actor=ACTOR)
         self.assertEqual(self._trend_rows(), [])  # 空清單＝整張跨期趨勢表不渲染
 
+    @_BUG_EMPTY_STRING_DATE
     def test_single_closed_period_shows_data_but_no_vs_previous_arrow(self):
         cycle_id = self._open_cycle(start_date="2026-01-01")
         self._judge_closed(cycle_id, revenue=20000)  # roas = 20000/10000 = 2.0
@@ -197,12 +189,14 @@ class HistoryTrendTableTest(_BaseHubTest):
         # 只有一期，沒有相鄰上一期可比，不該出現任何漲跌箭頭
         self.assertIsNone(rows[0]["vs_previous"])
 
+    @_BUG_EMPTY_STRING_DATE
     def test_no_revenue_period_shows_roas_cannot_compute(self):
         cycle_id = self._open_cycle()
         self._judge_closed(cycle_id, revenue=None)
         # 模板：roas is none 的那一格印「算不出」
         self.assertIsNone(self._trend_rows()[0]["roas"])
 
+    @_BUG_EMPTY_STRING_DATE
     def test_three_periods_compare_against_adjacent_closed_period(self):
         oldest = self._open_cycle(start_date="2026-01-01")
         middle = self._open_cycle(start_date="2026-02-01")

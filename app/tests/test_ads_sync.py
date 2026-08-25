@@ -5,43 +5,51 @@
 重點在「一個帳號多品牌」的隔離保證：沒認領歸屬的活動，成效一律不進任何品牌。
 """
 
-import atexit
 import calendar
-import os
-import shutil
-import tempfile
 import unittest
 import uuid
-from pathlib import Path
 
-_tmpdir = tempfile.mkdtemp(prefix="brand_os_ads_sync_")
+import pytest
+from fastapi.testclient import TestClient
 
-from fastapi.testclient import TestClient  # noqa: E402
-
-import app.main as main  # noqa: E402
-from app.ads import meta_api  # noqa: E402
-from app.ads import performance as ads_performance  # noqa: E402
-from app.ads import reading  # noqa: E402
-from app.ads import sync as ads_sync  # noqa: E402
-from app.brand_intelligence import repository as bi_repo  # noqa: E402
-from app.core import settings as coresettings  # noqa: E402
-from app.core.db import new_id, now_iso  # noqa: E402
-from app.shared.web import OPERATOR  # noqa: E402
-
-
-
-def _cleanup():
-    try:
-        main.conn.close()
-    except Exception:
-        pass
-    shutil.rmtree(_tmpdir, ignore_errors=True)
-
-
-atexit.register(_cleanup)
+import app.main as main
+from app.ads import meta_api
+from app.ads import performance as ads_performance
+from app.ads import reading
+from app.ads import sync as ads_sync
+from app.brand_intelligence import repository as bi_repo
+from app.core import db
+from app.core import settings as coresettings
+from app.shared.web import OPERATOR
 
 ACTOR = "測試員"
 ACCOUNT = "act_1234567890"
+
+# BUG app/core/interrupts.py:99 — enqueue() dedup 查詢用 "brand_id IS %s"，
+# Postgres 的 IS 不接受綁參數，一律 psycopg.errors.SyntaxError（同一個 BUG，多群組已標過）。
+_BUG_INTERRUPT_IS_PARAM = pytest.mark.xfail(
+    strict=True,
+    reason='BUG app/core/interrupts.py:99 — enqueue() dedup 查詢用 "brand_id IS %s"，'
+           "Postgres 的 IS 不接受綁參數，一律 psycopg.errors.SyntaxError",
+)
+
+# BUG app/ads/performance.py:614,635 — _brand_level_rows()／_brand_level_monthly_groups()
+# 用 `(row["date_range_end"] or "")[:7]` 切出年月，Postgres 讀回 date 物件不能切片
+# （同一個 BUG，本群組已標過，見 test_ads_performance.py）。
+_BUG_DATE_OBJECT_SLICE = pytest.mark.xfail(
+    strict=True,
+    reason="BUG app/ads/performance.py:614,635 — (date_range_end or \"\")[:7] 對"
+           "psycopg 讀回的 date 物件切片，TypeError: 'datetime.date' object is not"
+           " subscriptable",
+)
+
+# BUG app/ads/performance.py:291 — _existing_signatures() 讀回的 date 物件跟本次匯入
+# 建構簽章用的日期字串型別不同，重複匯入判斷永遠比不出相等（同一個 BUG，本群組已標過）。
+_BUG_SIGNATURE_DATE_TYPE_MISMATCH = pytest.mark.xfail(
+    strict=True,
+    reason="BUG app/ads/performance.py:291 — _existing_signatures() 讀回的 date 物件"
+           "跟本次匯入建構簽章用的日期字串型別不同，重複匯入判斷永遠比不出相等",
+)
 
 
 def _campaign(cid, name, status="ACTIVE"):
@@ -174,7 +182,7 @@ class _BaseSyncTest(unittest.TestCase):
         # 每個測試用不同的品牌名：同名品牌會讓命名猜測猜到先建的那一個
         # （這正是「猜測只能是預選、必須人確認」的原因，見 test_suggested_is_still_not_enough）
         # 用 uuid4 不用 hash(self.id())：hash() 受 PYTHONHASHSEED 隨機化，跨進程／跟
-        # test_ads_ga4.py 同前綴同 mod 可能撞名（B4R 收尾包踢出的 flaky 根因）。不用 new_id()：
+        # test_ads_ga4.py 同前綴同 mod 可能撞名（B4R 收尾包踢出的 flaky 根因）。不用 db.new_id()：
         # 它回傳的字串含底線，會被 _guess_brand() 的 campaign_name.split("_")[0] 切壞。
         # 只取 8 碼十六進位（32 位元亂數，測試規模下撞名機率可忽略）：品牌名要留在
         # ads_handoff._slug() 的 20 字元截斷門檻內，這裡本來就靠猜品牌測試比對整段名稱。
@@ -223,6 +231,7 @@ class DiscoveryTest(_BaseSyncTest):
 
 
 class ClaimGateTest(_BaseSyncTest):
+    @_BUG_INTERRUPT_IS_PARAM
     def test_unclaimed_insights_are_not_collected(self):
         """最重要的一條：沒認領的活動，成效一筆都不進資料庫。"""
         result = self._sync(campaigns=[_campaign("111", "某人的活動")],
@@ -232,6 +241,7 @@ class ClaimGateTest(_BaseSyncTest):
         self.assertEqual(main.conn.execute(
             "SELECT COUNT(*) c FROM performance_snapshot").fetchone()["c"], 0)
 
+    @_BUG_INTERRUPT_IS_PARAM
     def test_suggested_is_still_not_enough(self):
         """系統猜到了也不算數——預選不是確認。"""
         result = self._sync(campaigns=[_campaign("222", f"{self.brand_name}_20260801_sales")],
@@ -239,6 +249,7 @@ class ClaimGateTest(_BaseSyncTest):
         self.assertEqual(result.snapshots, 0)
         self.assertEqual(result.skipped_unclaimed, 1)
 
+    @_BUG_INTERRUPT_IS_PARAM
     def test_after_claiming_the_numbers_come_in(self):
         self._sync(campaigns=[_campaign("222", f"{self.brand_name}_20260801_sales")])
         discovered_id = main.conn.execute("SELECT id FROM discovered_campaign").fetchone()["id"]
@@ -253,6 +264,7 @@ class ClaimGateTest(_BaseSyncTest):
         self.assertEqual(row["clicks"], 250)
         self.assertEqual(row["spend"], 5000.0)
 
+    @_BUG_INTERRUPT_IS_PARAM
     def test_reach_and_frequency_land_in_the_normalised_columns(self):
         """自動同步會拉回觸及與頻率，不再只有手動匯 CSV 才有（票 03-add-reach-metric）。"""
         self._sync(campaigns=[_campaign("223", f"{self.brand_name}_20260801_sales")])
@@ -305,7 +317,7 @@ class ClaimGateTest(_BaseSyncTest):
             f"/api/campaigns/brands/{self.bid}/claims/{discovered_id}/claim")
         self.assertEqual(resp.status_code, 200)  # 沒被擋去設定操作人，直接認領成功
         row = main.conn.execute(
-            "SELECT claimed_by FROM discovered_campaign WHERE id = ?", (discovered_id,)).fetchone()
+            "SELECT claimed_by FROM discovered_campaign WHERE id = %s", (discovered_id,)).fetchone()
         self.assertEqual(row["claimed_by"], OPERATOR)
 
 
@@ -313,10 +325,11 @@ class SanityAndErrorTest(_BaseSyncTest):
     def _claim_campaign(self, cid, name):
         self._sync(campaigns=[_campaign(cid, name)])
         discovered_id = main.conn.execute(
-            "SELECT id FROM discovered_campaign WHERE meta_campaign_id = ?", (cid,)
+            "SELECT id FROM discovered_campaign WHERE meta_campaign_id = %s", (cid,)
         ).fetchone()["id"]
         ads_sync.claim(main.conn, self.bid, discovered_id, ACTOR)
 
+    @_BUG_INTERRUPT_IS_PARAM
     def test_impossible_numbers_are_quarantined_not_dropped(self):
         """壞資料要留下來看得到，但不能進判讀。"""
         self._claim_campaign("777", f"{self.brand_name}_20260801_sales")
@@ -335,7 +348,7 @@ class SanityAndErrorTest(_BaseSyncTest):
             "SELECT COUNT(*) c FROM discovered_campaign").fetchone()["c"], 0)
 
     def test_sync_without_configuration_is_refused_politely(self):
-        main.conn.execute("DELETE FROM app_setting WHERE key IN (?, ?)",
+        main.conn.execute("DELETE FROM app_setting WHERE key IN (%s, %s)",
                           (ads_sync.TOKEN_SETTING, ads_sync.ACCOUNT_SETTING))
         main.conn.commit()
         result = ads_sync.sync_account(main.conn, ACTOR)
@@ -348,19 +361,21 @@ class BrandLevelBaselineTest(_BaseSyncTest):
 
     def _insert_brand_level_snapshot(self, as_of_date, *, clicks, impressions, spend,
                                      conversions):
-        sid = new_id("psn")
-        ts = now_iso()
+        sid = db.new_id("psn")
+        ts = db.now_utc()
         main.conn.execute(
-            "INSERT INTO performance_snapshot (id, brand_id, campaign_cycle_id, platform,"
-            " date_range_start, date_range_end, as_of_date, snapshot_taken_at, currency,"
-            " impressions, clicks, spend, conversions, reconciled, source, quarantined,"
-            " created_at)"
-            " VALUES (?, ?, NULL, 'meta', ?, ?, ?, ?, 'TWD', ?, ?, ?, ?, 1, 'meta_api', 0, ?)",
-            (sid, self.bid, as_of_date, as_of_date, as_of_date, ts,
+            "INSERT INTO performance_snapshot (id, org_id, brand_id, campaign_cycle_id,"
+            " platform, date_range_start, date_range_end, as_of_date, snapshot_taken_at,"
+            " currency, impressions, clicks, spend, conversions, reconciled, source,"
+            " quarantined, created_at)"
+            " VALUES (%s, %s, %s, NULL, 'meta', %s, %s, %s, %s, 'TWD', %s, %s, %s, %s, true,"
+            " 'meta_api', false, %s)",
+            (sid, db.DEV_ORG_ID, self.bid, as_of_date, as_of_date, as_of_date, ts,
              impressions, clicks, spend, conversions, ts),
         )
         main.conn.commit()
 
+    @_BUG_DATE_OBJECT_SLICE
     def test_claiming_recomputes_baseline_from_twelve_months_of_history(self):
         """①認領後 brand_baseline() 回傳含舊資料的 cpc/ctr/cvr 中位數（測試造 12 個月假資料）。"""
         for i in range(1, 13):
@@ -380,6 +395,7 @@ class BrandLevelBaselineTest(_BaseSyncTest):
         self.assertIn("ctr", baseline)
         self.assertIn("cvr", baseline)
 
+    @_BUG_INTERRUPT_IS_PARAM
     def test_a_normal_sync_after_claiming_keeps_the_baseline_fresh(self):
         """認領後，後續一般同步若對不到檔期也自動併入品牌層基準，不必每次都重新認領。"""
         self._sync(campaigns=[_campaign("901", f"{self.brand_name}_20260801_sales")])
@@ -404,10 +420,11 @@ class BrandLevelDuplicateBackfillTest(_BaseSyncTest):
     def _claim(self, cid, name):
         self._sync(campaigns=[_campaign(cid, name)])
         discovered_id = main.conn.execute(
-            "SELECT id FROM discovered_campaign WHERE meta_campaign_id = ?", (cid,)
+            "SELECT id FROM discovered_campaign WHERE meta_campaign_id = %s", (cid,)
         ).fetchone()["id"]
         ads_sync.claim(main.conn, self.bid, discovered_id, ACTOR)
 
+    @_BUG_INTERRUPT_IS_PARAM
     def test_rerunning_the_same_backfill_adds_nothing_the_second_time(self):
         """①同一回填連跑兩次→第二次 0 新增＋訊息含略過數。"""
         self._claim("950", f"{self.brand_name}_20260801_sales")
@@ -423,10 +440,11 @@ class BrandLevelDuplicateBackfillTest(_BaseSyncTest):
         self.assertEqual(second.snapshots, 0)
         self.assertEqual(second.skipped_duplicate, 1)  # 誠實列出略過幾列，不是靜默吞掉
         rows = main.conn.execute(
-            "SELECT COUNT(*) c FROM performance_snapshot WHERE brand_id = ?"
+            "SELECT COUNT(*) c FROM performance_snapshot WHERE brand_id = %s"
             " AND campaign_cycle_id IS NULL", (self.bid,)).fetchone()
         self.assertEqual(rows["c"], 1)  # 資料庫裡只有一筆，不是兩筆
 
+    @_BUG_INTERRUPT_IS_PARAM
     def test_different_ads_with_identical_numbers_are_not_mistaken_for_duplicates(self):
         """②內容不同的列不誤擋——這裡故意讓兩個不同廣告的量測數字長得一模一樣，
         真正的區別在 meta_ad_id，不能被誤判成重複。"""
@@ -437,6 +455,7 @@ class BrandLevelDuplicateBackfillTest(_BaseSyncTest):
         self.assertEqual(result.snapshots, 2)
         self.assertEqual(result.skipped_duplicate, 0)
 
+    @_BUG_SIGNATURE_DATE_TYPE_MISMATCH
     def test_cycle_scoped_resync_of_the_same_data_is_now_deduped(self):
         """票 11 改了契約：檔期層過去不做去重，一鍵回填重跑兩次會把同一支廣告算兩遍。
         現在跟品牌層共用同一套簽章判斷，差別只在查詢範圍改成這個檔期——原本這裡驗證
@@ -451,10 +470,10 @@ class BrandLevelDuplicateBackfillTest(_BaseSyncTest):
                                 json={"budget": 10000, "objective": "sales"})
         cycle_id = resp.json()["cycle_id"]
         main.conn.execute(
-            "INSERT INTO external_ad_mapping (id, brand_id, campaign_cycle_id,"
+            "INSERT INTO external_ad_mapping (id, org_id, brand_id, campaign_cycle_id,"
             " platform, meta_campaign_id, claim_status, confirmed_by, confirmed_at,"
-            " created_at) VALUES (?, ?, ?, 'meta', '952', 'confirmed', ?, ?, ?)",
-            (new_id("eam"), self.bid, cycle_id, ACTOR, now_iso(), now_iso()),
+            " created_at) VALUES (%s, %s, %s, %s, 'meta', '952', 'confirmed', %s, %s, %s)",
+            (db.new_id("eam"), db.DEV_ORG_ID, self.bid, cycle_id, ACTOR, db.now_utc(), db.now_utc()),
         )
         main.conn.commit()
 
@@ -467,10 +486,11 @@ class BrandLevelDuplicateBackfillTest(_BaseSyncTest):
         self.assertEqual(second.snapshots, 0)  # 重跑同一批不再累加
         self.assertEqual(second.skipped_duplicate, 1)  # 誠實列出略過幾筆
         rows = main.conn.execute(
-            "SELECT COUNT(*) c FROM performance_snapshot WHERE brand_id = ?"
-            " AND campaign_cycle_id = ?", (self.bid, cycle_id)).fetchone()
+            "SELECT COUNT(*) c FROM performance_snapshot WHERE brand_id = %s"
+            " AND campaign_cycle_id = %s", (self.bid, cycle_id)).fetchone()
         self.assertEqual(rows["c"], 1)
 
+    @_BUG_INTERRUPT_IS_PARAM
     def test_cycle_scoped_dedupe_does_not_leak_into_brand_level(self):
         """檔期層與品牌層的去重紀錄各自獨立：同一支廣告先落在品牌層寫過一次簽章，
         之後認領到檔期、同一批 insight 改寫進檔期層，不會被品牌層的舊簽章誤擋。"""
@@ -492,11 +512,11 @@ class BrandLevelDuplicateBackfillTest(_BaseSyncTest):
         # 不填 meta_ad_id：`_cycle_for` 認到有值時不分活動全表比對（既有缺口，不在票
         # 11 範圍），填跟預設 insight ad_id 相同的 "ad1" 會撞到別的測試留下的紀錄。
         main.conn.execute(
-            "INSERT INTO external_ad_mapping (id, brand_id, campaign_cycle_id,"
+            "INSERT INTO external_ad_mapping (id, org_id, brand_id, campaign_cycle_id,"
             " platform, meta_campaign_id, claim_status, confirmed_by,"
-            " confirmed_at, created_at) VALUES (?, ?, ?, 'meta', '953',"
-            " 'confirmed', ?, ?, ?)",
-            (new_id("eam"), self.bid, cycle_id, ACTOR, now_iso(), now_iso()),
+            " confirmed_at, created_at) VALUES (%s, %s, %s, %s, 'meta', '953',"
+            " 'confirmed', %s, %s, %s)",
+            (db.new_id("eam"), db.DEV_ORG_ID, self.bid, cycle_id, ACTOR, db.now_utc(), db.now_utc()),
         )
         main.conn.commit()
 
@@ -520,13 +540,14 @@ class BrandLevelDuplicateBackfillTest(_BaseSyncTest):
             return resp.json()["cycle_id"]
 
         cycle_a, cycle_b = _new_cycle(), _new_cycle()
-        ts = now_iso()
+        ts = db.now_utc()
         for cycle_id, ad_id in ((cycle_a, "adA"), (cycle_b, "adB")):
             main.conn.execute(
-                "INSERT INTO external_ad_mapping (id, brand_id, campaign_cycle_id, platform,"
-                " meta_campaign_id, meta_ad_id, claim_status, confirmed_by, confirmed_at,"
-                " created_at) VALUES (?, ?, ?, 'meta', '960', ?, 'confirmed', ?, ?, ?)",
-                (new_id("eam"), self.bid, cycle_id, ad_id, ACTOR, ts, ts),
+                "INSERT INTO external_ad_mapping (id, org_id, brand_id, campaign_cycle_id,"
+                " platform, meta_campaign_id, meta_ad_id, claim_status, confirmed_by,"
+                " confirmed_at, created_at) VALUES (%s, %s, %s, %s, 'meta', '960', %s,"
+                " 'confirmed', %s, %s, %s)",
+                (db.new_id("eam"), db.DEV_ORG_ID, self.bid, cycle_id, ad_id, ACTOR, ts, ts),
             )
         main.conn.commit()
 
@@ -569,11 +590,12 @@ class BrandLevelMultiMonthBackfillTest(_BaseSyncTest):
             """票 12：sync_account 每次同步都會呼叫這支，本測試不驗元件層歸因，回空即可。"""
             return []
 
+    @_BUG_INTERRUPT_IS_PARAM
     def test_multi_month_backfill_produces_one_group_per_data_month(self):
         cid, name = "970", f"{self.brand_name}_20250801_sales"
         self._sync(campaigns=[_campaign(cid, name)])
         discovered_id = main.conn.execute(
-            "SELECT id FROM discovered_campaign WHERE meta_campaign_id = ?", (cid,)
+            "SELECT id FROM discovered_campaign WHERE meta_campaign_id = %s", (cid,)
         ).fetchone()["id"]
         ads_sync.claim(main.conn, self.bid, discovered_id, ACTOR)
 
@@ -602,13 +624,14 @@ class BrandLevelMultiMonthBackfillTest(_BaseSyncTest):
         self.assertEqual(len(client.calls), 12)  # 逐月各打一次，不是整段一次問完
 
         rows = main.conn.execute(
-            "SELECT calc_basis FROM derived_metric WHERE brand_id = ?"
+            "SELECT calc_basis FROM derived_metric WHERE brand_id = %s"
             " AND campaign_cycle_id IS NULL", (self.bid,)).fetchall()
         months_seen = {r["calc_basis"][6:13] for r in rows}
         expected = {f"{y:04d}-{m:02d}" for y, m in months}
         self.assertEqual(months_seen, expected)  # 12 個資料月各自成組
         self.assertNotIn("2026-08", months_seen)  # 不再全部倒進「匯入當下」那個月
 
+    @_BUG_DATE_OBJECT_SLICE
     def test_pre_existing_full_year_mixed_row_is_superseded_by_monthly_backfill(self):
         """票 F13（GitHub #72）：#70 之前整段一次回填留下的跨全年混合列還在資料庫裡
         （append-only 不刪舊資料），使用者用 #70 修好的逐月回填重跑同一支廣告——新月列
@@ -616,22 +639,22 @@ class BrandLevelMultiMonthBackfillTest(_BaseSyncTest):
         cid, name = "971", f"{self.brand_name}_20250801_sales"
         self._sync(campaigns=[_campaign(cid, name)])
         discovered_id = main.conn.execute(
-            "SELECT id FROM discovered_campaign WHERE meta_campaign_id = ?", (cid,)
+            "SELECT id FROM discovered_campaign WHERE meta_campaign_id = %s", (cid,)
         ).fetchone()["id"]
         ads_sync.claim(main.conn, self.bid, discovered_id, ACTOR)
 
         # 模擬 #70 之前的舊回填：整段 12 個月只回一列聚合資料
-        sid = new_id("psn")
-        ts = now_iso()
+        sid = db.new_id("psn")
+        ts = db.now_utc()
         main.conn.execute(
-            "INSERT INTO performance_snapshot (id, brand_id, campaign_cycle_id, platform,"
+            "INSERT INTO performance_snapshot (id, org_id, brand_id, campaign_cycle_id, platform,"
             " account_id, meta_campaign_id, meta_adset_id, meta_ad_id, date_range_start,"
             " date_range_end, as_of_date, snapshot_taken_at, currency, impressions, clicks,"
             " spend, conversions, revenue, reconciled, source, quarantined, created_at)"
-            " VALUES (?, ?, NULL, 'meta', ?, ?, 'adset1', 'ad1', ?, ?, ?, ?, 'TWD', ?, ?, ?, ?,"
-            " ?, 1, 'meta_api', 0, ?)",
-            (sid, self.bid, ACCOUNT, cid, "2025-08-01", "2026-07-31", "2026-07-31", ts,
-             60000, 600, 6000.0, 24.0, 12000.0, ts),
+            " VALUES (%s, %s, %s, NULL, 'meta', %s, %s, 'adset1', 'ad1', %s, %s, %s, %s, 'TWD',"
+            " %s, %s, %s, %s, %s, true, 'meta_api', false, %s)",
+            (sid, db.DEV_ORG_ID, self.bid, ACCOUNT, cid, "2025-08-01", "2026-07-31", "2026-07-31",
+             ts, 60000, 600, 6000.0, 24.0, 12000.0, ts),
         )
         main.conn.commit()
         ads_performance.save_brand_level_derived_metrics(main.conn, self.bid)  # 舊資料先重算過一次
@@ -658,7 +681,7 @@ class BrandLevelMultiMonthBackfillTest(_BaseSyncTest):
         self.assertEqual(result.snapshots, 12)  # 新月列跟舊混合列日期範圍不同，簽章不會擋
 
         rows = main.conn.execute(
-            "SELECT calc_basis, metric, value FROM derived_metric WHERE brand_id = ?"
+            "SELECT calc_basis, metric, value FROM derived_metric WHERE brand_id = %s"
             " AND campaign_cycle_id IS NULL", (self.bid,)).fetchall()
         months_seen = {r["calc_basis"][6:13] for r in rows}
         expected = {f"{y:04d}-{m:02d}" for y, m in months}
@@ -685,6 +708,7 @@ class HistoricalCampaignFromInsightsTest(_BaseSyncTest):
     但 insights 歷史成效裡還有它的 campaign_id——同步時要照樣補進待認領清單，
     不然它的成效永遠卡在「查無歸屬」進不了任何品牌。"""
 
+    @_BUG_INTERRUPT_IS_PARAM
     def test_insight_only_campaign_lands_in_pending_claims_marked_historical(self):
         """①清單沒有、insights 有的活動，出現在待認領清單且標示歷史來源。"""
         result = self._sync(
@@ -702,6 +726,7 @@ class HistoricalCampaignFromInsightsTest(_BaseSyncTest):
         self.assertEqual(len(pending), 1)
         self.assertIn("歷史", pending[0]["effective_status"])
 
+    @_BUG_INTERRUPT_IS_PARAM
     def test_guess_brand_still_runs_off_the_insight_campaign_name(self):
         """④猜品牌邏輯對這類活動照常運作：insight 帶的 campaign_name 跟品牌命名一樣時能猜到。"""
         self._sync(campaigns=[],
@@ -712,6 +737,7 @@ class HistoricalCampaignFromInsightsTest(_BaseSyncTest):
         self.assertEqual(row["claim_status"], "suggested")
         self.assertIn("命名", row["suggested_reason"])
 
+    @_BUG_INTERRUPT_IS_PARAM
     def test_guess_brand_leaves_it_blank_when_it_cannot_tell(self):
         """④猜不到就留空，不亂猜。"""
         self._sync(campaigns=[], insights=[_insight("997", campaign_name="隨便取的名字")])
@@ -721,6 +747,7 @@ class HistoricalCampaignFromInsightsTest(_BaseSyncTest):
         self.assertEqual(row["claim_status"], "unclaimed")
         self.assertIsNone(row["suggested_reason"])
 
+    @_BUG_INTERRUPT_IS_PARAM
     def test_unclaimed_historical_insight_is_still_skipped(self):
         """②未認領時其成效仍被略過——原則不變。"""
         result = self._sync(campaigns=[], insights=[_insight("996")])
@@ -729,6 +756,7 @@ class HistoricalCampaignFromInsightsTest(_BaseSyncTest):
         self.assertEqual(main.conn.execute(
             "SELECT COUNT(*) c FROM performance_snapshot").fetchone()["c"], 0)
 
+    @_BUG_INTERRUPT_IS_PARAM
     def test_claiming_then_resyncing_brings_its_numbers_into_the_brand(self):
         """③認領後再次回填→其成效入品牌層、月彙總正確。"""
         self._sync(campaigns=[], insights=[_insight("995")])
@@ -747,6 +775,7 @@ class HistoricalCampaignFromInsightsTest(_BaseSyncTest):
         totals = ads_performance.brand_level_totals(main.conn, self.bid)
         self.assertEqual(totals["spend"], 5000.0)
 
+    @_BUG_INTERRUPT_IS_PARAM
     def test_resync_does_not_duplicate_the_historical_discovery_row(self):
         self._sync(campaigns=[], insights=[_insight("994")])
         second = self._sync(campaigns=[], insights=[_insight("994")])
@@ -756,6 +785,7 @@ class HistoricalCampaignFromInsightsTest(_BaseSyncTest):
         ).fetchone()
         self.assertEqual(rows["c"], 1)
 
+    @_BUG_INTERRUPT_IS_PARAM
     def test_still_active_campaign_is_not_downgraded_to_historical(self):
         """活動清單裡還在的活動，狀態要用清單回來的真實狀態，不能被 insights 的補登蓋掉。"""
         result = self._sync(campaigns=[_campaign("993", "某人的活動", status="ACTIVE")],

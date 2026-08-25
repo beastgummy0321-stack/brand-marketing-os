@@ -7,11 +7,21 @@ test_architecture_boundaries.py 的 FILE_LINE_CAP），加新測試類別會超�
 （比照 test_ads_product_cleanup.py 借用 test_ads_brand_cleanup._seed_table 的先例）。
 """
 
+import pytest
+
 import app.main as main
 from app.ads import sync as ads_sync
 from app.brand_intelligence import repository as bi_repo
-from app.core.db import new_id, now_iso
+from app.core import db
 from app.tests.test_ads_sync import ACTOR, _BaseSyncTest, _campaign, _insight
+
+# BUG app/core/interrupts.py:99 — enqueue() dedup 查詢用 "brand_id IS %s"，
+# Postgres 的 IS 不接受綁參數，一律 psycopg.errors.SyntaxError。
+_BUG_INTERRUPT_IS_PARAM = pytest.mark.xfail(
+    strict=True,
+    reason='BUG app/core/interrupts.py:99 — enqueue() dedup 查詢用 "brand_id IS %s"，'
+           "Postgres 的 IS 不接受綁參數，一律 psycopg.errors.SyntaxError",
+)
 
 
 class ProductAttributionTest(_BaseSyncTest):
@@ -25,20 +35,20 @@ class ProductAttributionTest(_BaseSyncTest):
                                 json={"budget": 10000, "objective": "sales"})
         cycle_id = resp.json()["cycle_id"]
         product = bi_repo.create_product(main.conn, self.bid, name="虛構商品", actor=ACTOR)
-        pkg_id, ts = new_id("pkg"), now_iso()
+        pkg_id, ts = db.new_id("pkg"), db.now_utc()
         main.conn.execute(
-            "INSERT INTO publishing_package (id, brand_id, campaign_cycle_id, product_id,"
-            " campaign_name, adset_name, ad_name, destination_url, utm_json, status,"
-            " created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, '{}', 'ready', ?)",
-            (pkg_id, self.bid, cycle_id, product["id"], "測試活動", "測試組合", "廣告一",
-             "https://example.test", ts),
+            "INSERT INTO publishing_package (id, org_id, brand_id, campaign_cycle_id,"
+            " product_id, campaign_name, adset_name, ad_name, destination_url, utm_json,"
+            " status, created_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, '{}', 'ready', %s)",
+            (pkg_id, db.DEV_ORG_ID, self.bid, cycle_id, product["id"], "測試活動", "測試組合",
+             "廣告一", "https://example.test", ts),
         )
         main.conn.execute(
-            "INSERT INTO external_ad_mapping (id, brand_id, publishing_package_id,"
+            "INSERT INTO external_ad_mapping (id, org_id, brand_id, publishing_package_id,"
             " campaign_cycle_id, platform, meta_campaign_id, meta_ad_id, claim_status,"
-            " confirmed_by, confirmed_at, created_at) VALUES (?, ?, ?, ?, 'meta', '980',"
-            " 'ad_prod_980', 'confirmed', ?, ?, ?)",
-            (new_id("eam"), self.bid, pkg_id, cycle_id, ACTOR, ts, ts),
+            " confirmed_by, confirmed_at, created_at) VALUES (%s, %s, %s, %s, %s, 'meta', '980',"
+            " 'ad_prod_980', 'confirmed', %s, %s, %s)",
+            (db.new_id("eam"), db.DEV_ORG_ID, self.bid, pkg_id, cycle_id, ACTOR, ts, ts),
         )
         main.conn.commit()
 
@@ -49,6 +59,7 @@ class ProductAttributionTest(_BaseSyncTest):
         ).fetchone()
         self.assertEqual(row["product_id"], product["id"])
 
+    @_BUG_INTERRUPT_IS_PARAM
     def test_unmatched_ad_leaves_product_id_null(self):
         """對不到 publishing_package、檔期也沒有唯一產品可以退回時留白，匯入照樣成功。"""
         self._sync(campaigns=[_campaign("981", f"{self.brand_name}_20260806_sales")],

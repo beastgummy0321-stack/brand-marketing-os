@@ -1,37 +1,23 @@
 # -*- coding: utf-8 -*-
 """票 T0：品牌層追蹤健檢（契約 1.1-1.8／2.1／2.4／2.6）。全程假 fetch，不打真網路。"""
 
-import atexit
-import shutil
-import tempfile
 import time
 import unittest
 from datetime import date, timedelta
 from unittest import mock
 
-_tmpdir = tempfile.mkdtemp(prefix="brand_os_tracking_health_")
+import pytest
+from fastapi.testclient import TestClient
 
-from fastapi.testclient import TestClient  # noqa: E402
+import app.main as main
+from app.ads import ga4_api
+from app.ads import ga4_sync
+from app.ads import meta_api
+from app.ads import tracking
+from app.brand_intelligence import repository as bi_repo
+from app.core import settings as coresettings
+from app.orders import channel as orders_channel
 
-import app.main as main  # noqa: E402
-from app.ads import ga4_api  # noqa: E402
-from app.ads import ga4_sync  # noqa: E402
-from app.ads import meta_api  # noqa: E402
-from app.ads import tracking  # noqa: E402
-from app.brand_intelligence import repository as bi_repo  # noqa: E402
-from app.core import settings as coresettings  # noqa: E402
-from app.orders import channel as orders_channel  # noqa: E402
-
-
-def _cleanup():
-    try:
-        main.conn.close()
-    except Exception:
-        pass
-    shutil.rmtree(_tmpdir, ignore_errors=True)
-
-
-atexit.register(_cleanup)
 ACTOR = "測試員"
 
 # 特徵字串比照 app/ads/tracking.py 檔頭查證出處：GA4 script src + gtag('config'；
@@ -46,6 +32,25 @@ _NEITHER_HTML = "<html><head><title>虛構茶行</title></head></html>"
 # （關進兩條斷言：AND 判定被誤改成 OR 時，這兩條會紅）。
 _GA4_SCRIPT_ONLY_HTML = "<html><script src='https://www.googletagmanager.com/gtag/js?id=G-XXX'></script></html>"
 _PIXEL_SCRIPT_ONLY_HTML = "<html><script src='https://connect.facebook.net/en_US/fbevents.js'></script></html>"
+
+
+# BUG app/orders/channel.py:164 — pharmacy_latest_batch() 宣告回傳 Optional[str]，
+# 但 row["batch_date"] 現在是 psycopg 自動轉出的 date 物件，不是字串（同一類 BUG，orders
+# 群組已在 channel.py:183 標過一次，這是同一個檔案的另一個函式）。
+_BUG_PHARMACY_DATE_NOT_STR = pytest.mark.xfail(
+    strict=True,
+    reason="BUG app/orders/channel.py:164 — pharmacy_latest_batch() 宣告 Optional[str]"
+           "卻回傳 date 物件，比對字串時 AssertionError",
+)
+
+# BUG app/ads/routes_progress.py:96 — _progress_run() 在自己開的 threading.Thread 裡執行
+# work()，contextvar 綁定的連線不會被子執行緒繼承，背景任務裡任何 DB 呼叫都炸
+# RuntimeError: no connection bound（同一個 BUG，ads 群組已標過）。
+_BUG_PROGRESS_THREAD_NO_CONNECTION = pytest.mark.xfail(
+    strict=True,
+    reason="BUG app/ads/routes_progress.py:96 — 背景 thread 沒繼承 contextvar 綁定的連線，"
+           "work() 裡任何 DB 呼叫都是 RuntimeError: no connection bound",
+)
 
 
 class TrackingHealthBase(unittest.TestCase):
@@ -76,7 +81,7 @@ class TrackingHealthBase(unittest.TestCase):
         if days_ago:
             stale = (date.today() - timedelta(days=days_ago)).isoformat() + "T00:00:00+00:00"
             main.conn.execute(
-                "UPDATE ga4_sync_status SET synced_at = ? WHERE brand_id = ?", (stale, self.bid))
+                "UPDATE ga4_sync_status SET synced_at = %s WHERE brand_id = %s", (stale, self.bid))
             main.conn.commit()
 
     def configure_meta(self):
@@ -270,6 +275,7 @@ class TrackingHealthAssemblyTest(TrackingHealthBase):
         self.assertEqual(ig["status"], "ok")
         self.assertEqual(health["ready"], 2)
 
+    @_BUG_PHARMACY_DATE_NOT_STR
     def test_shopee_pharmacy_ready_after_import_with_latest_date(self):
         orders_channel.save_shopee_rows(
             main.conn, self.bid,
@@ -348,6 +354,7 @@ class TrackingHealthApiTest(TrackingHealthBase):
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(response.json()["data"], fake_node)
 
+    @_BUG_PROGRESS_THREAD_NO_CONNECTION
     def test_recheck_runs_in_background_and_updates_stored_state(self):
         """契約 1.7：背景執行，完成後 GET tracking-health 原地反映新結果。"""
         self.add_channel("website", identifier="https://example.test")

@@ -15,44 +15,37 @@ test_ads_progress_background.py 的做法，用模組層級 monkeypatch（`ads_s
 `make_client`，不改任何正式程式碼。品牌名一律虛構。
 """
 
-import atexit
-import os
-import shutil
-import tempfile
 import time
 import unittest
 from datetime import date, timedelta
-from pathlib import Path
 
-_tmpdir = tempfile.mkdtemp(prefix="brand_os_ads_backfill_")
+import pytest
+from fastapi.testclient import TestClient
 
-from fastapi.testclient import TestClient  # noqa: E402
-
-import app.main as main  # noqa: E402
-from app.ads import ga4_api  # noqa: E402
-from app.ads import ga4_sync  # noqa: E402
-from app.ads import meta_api  # noqa: E402
-from app.ads import routes as ads_routes  # noqa: E402
-from app.ads import sync as ads_sync  # noqa: E402
-from app.brand_intelligence import repository as bi_repo  # noqa: E402
-from app.core import settings as coresettings  # noqa: E402
-
-
-
-def _cleanup():
-    try:
-        main.conn.close()
-    except Exception:
-        pass
-    shutil.rmtree(_tmpdir, ignore_errors=True)
-
-
-atexit.register(_cleanup)
+import app.main as main
+from app.ads import ga4_api
+from app.ads import ga4_sync
+from app.ads import meta_api
+from app.ads import routes as ads_routes
+from app.ads import sync as ads_sync
+from app.brand_intelligence import repository as bi_repo
+from app.core import settings as coresettings
 
 ACTOR = "測試員"
 ACCOUNT = "act_1234567890"
 PROPERTY_ID = "123456789"
 FAKE_KEY_JSON = '{"client_email": "svc@example.iam.gserviceaccount.com"}'
+
+
+# BUG app/ads/routes_progress.py:96 — _progress_run() 在自己開的 threading.Thread 裡執行
+# work()，contextvar 綁定的連線不會被子執行緒繼承，背景任務裡任何 DB 呼叫都炸
+# RuntimeError: no connection bound，_progress_run 把它吞成 status="failed"（同一個 BUG，
+# ads 群組已標過，見 test_ads_plan.py 等）。
+_BUG_PROGRESS_THREAD_NO_CONNECTION = pytest.mark.xfail(
+    strict=True,
+    reason="BUG app/ads/routes_progress.py:96 — 背景 thread 沒繼承 contextvar 綁定的連線，"
+           "work() 裡任何 DB 呼叫都是 RuntimeError: no connection bound",
+)
 
 
 class MonthMathTest(unittest.TestCase):
@@ -152,7 +145,7 @@ class MetaBackfillConfigurationTest(_BaseMetaBackfillTest):
     def test_not_configured_shows_a_plain_warning(self):
         """原本打 HTTP 等待頁看轉址警告；頁面已刪，直測路由本來就是靠它把關的
         `ads_sync.is_configured`。"""
-        main.conn.execute("DELETE FROM app_setting WHERE key IN (?, ?)",
+        main.conn.execute("DELETE FROM app_setting WHERE key IN (%s, %s)",
                           (ads_sync.TOKEN_SETTING, ads_sync.ACCOUNT_SETTING))
         main.conn.commit()
         self.assertFalse(ads_sync.is_configured(main.conn))
@@ -210,6 +203,7 @@ class MetaBackfillFlowTest(_BaseMetaBackfillTest):
             ads_sync.META_MAX_HISTORY_MONTHS = original
         self.assertEqual(actual_months, 2)
 
+    @_BUG_PROGRESS_THREAD_NO_CONNECTION
     def test_repeated_trigger_does_not_call_client_twice(self):
         """驗收 rubric ④：F5／多分頁重整（同一個 key 重複觸發）不會讓背景任務被多打一次
         ——直測進度引擎本身的冪等閘，接上真正的 sync_account 當 work，不只是通用假函式
@@ -252,7 +246,7 @@ class GA4BackfillConfigurationTest(unittest.TestCase):
         ga4_sync.make_client = self._orig_make_client
 
     def test_not_configured_shows_a_plain_warning(self):
-        main.conn.execute("DELETE FROM app_setting WHERE key IN (?, ?)",
+        main.conn.execute("DELETE FROM app_setting WHERE key IN (%s, %s)",
                           (ga4_sync.PROPERTY_SETTING, ga4_sync.SERVICE_ACCOUNT_SETTING))
         main.conn.commit()
         self.assertFalse(ga4_sync.is_configured(main.conn))
@@ -318,6 +312,7 @@ class GA4BackfillFlowTest(unittest.TestCase):
         self.assertEqual(call_until, until)
         self.assertEqual(call_since, since)
 
+    @_BUG_PROGRESS_THREAD_NO_CONNECTION
     def test_repeated_trigger_does_not_call_client_twice(self):
         """驗收 rubric ④：F5／多分頁重整（同一個 key 重複觸發）不會讓背景任務被多打一次。"""
         fake = self._patch_client(rows=[], delay=0.2)

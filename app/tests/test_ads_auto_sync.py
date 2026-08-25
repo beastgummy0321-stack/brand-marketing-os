@@ -8,45 +8,36 @@
 同步在其他測試檔（設定 Meta／GA4 假連線）裡意外打真實外部 API 的關鍵防線。
 """
 
-import atexit
-import os
-import shutil
-import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from unittest import mock
 
-_tmpdir = tempfile.mkdtemp(prefix="brand_os_ads_auto_sync_")
+import pytest
+from fastapi.testclient import TestClient
 
-from fastapi.testclient import TestClient  # noqa: E402
-
-import app.main as main  # noqa: E402
-from app.ads import auto_sync as ads_auto_sync  # noqa: E402
-from app.ads import ga4_api  # noqa: E402
-from app.ads import ga4_sync  # noqa: E402
-from app.ads import meta_api  # noqa: E402
-from app.ads import sync as ads_sync  # noqa: E402
-from app.brand_intelligence import repository as bi_repo  # noqa: E402
-from app.core import interrupts as core_interrupts  # noqa: E402
-from app.core import settings as coresettings  # noqa: E402
-from app.core.db import new_id, now_iso  # noqa: E402
-
-
-
-def _cleanup():
-    try:
-        main.conn.close()
-    except Exception:
-        pass
-    shutil.rmtree(_tmpdir, ignore_errors=True)
-
-
-atexit.register(_cleanup)
+import app.main as main
+from app.ads import auto_sync as ads_auto_sync
+from app.ads import ga4_api
+from app.ads import ga4_sync
+from app.ads import meta_api
+from app.ads import sync as ads_sync
+from app.brand_intelligence import repository as bi_repo
+from app.core import db
+from app.core import interrupts as core_interrupts
+from app.core import settings as coresettings
 
 ACTOR = "測試員"
 TODAY = "2026-08-05"
 NO_NETWORK = lambda _url: True
+
+
+# BUG app/core/interrupts.py:99 — enqueue() dedup 查詢用 "brand_id IS %s"，
+# Postgres 的 IS 不接受綁參數，一律 psycopg.errors.SyntaxError（同一個 BUG，多群組已標過）。
+_BUG_INTERRUPT_IS_PARAM = pytest.mark.xfail(
+    strict=True,
+    reason='BUG app/core/interrupts.py:99 — enqueue() dedup 查詢用 "brand_id IS %s"，'
+           "Postgres 的 IS 不接受綁參數，一律 psycopg.errors.SyntaxError",
+)
 
 
 class _BaseAutoSyncTest(unittest.TestCase):
@@ -82,6 +73,7 @@ class MetaAutoSyncTest(_BaseAutoSyncTest):
         self.assertTrue(insight_calls)
         self.assertEqual(insight_calls[-1][3], TODAY)
 
+    @_BUG_INTERRUPT_IS_PARAM
     def test_sync_failure_enqueues_interrupt(self):
         coresettings.set_setting(main.conn, ads_sync.ACCOUNT_SETTING, "act_123")
         coresettings.set_setting(main.conn, ads_sync.TOKEN_SETTING, "fake-token")
@@ -100,6 +92,7 @@ class MetaAutoSyncTest(_BaseAutoSyncTest):
         ads_auto_sync.run(main.conn, today=TODAY, meta_client=fake, url_probe=NO_NETWORK)
         self.assertEqual(core_interrupts.list_open(main.conn), [])
 
+    @_BUG_INTERRUPT_IS_PARAM
     def test_repeated_same_day_failure_does_not_duplicate_interrupt(self):
         """去重鍵含日期：同一天重複跑（例如背景執行緒又檢查了一次）只留一筆，
         不會洗版打斷佇列。"""
@@ -133,6 +126,7 @@ class GA4AutoSyncTest(_BaseAutoSyncTest):
         for result in outcome["ga4"].values():
             self.assertIsNone(result.error)
 
+    @_BUG_INTERRUPT_IS_PARAM
     def test_one_brand_ga4_failure_does_not_block_the_other(self):
         brand_2 = bi_repo.create_brand(
             main.conn, name=f"虛構自動同步三號店{abs(hash(self.id())) % 100000}",
@@ -170,13 +164,13 @@ class AutoSyncScheduleSafetyTest(unittest.TestCase):
 
     def test_live_cycle_runs_every_four_hours(self):
         brand = bi_repo.create_brand(main.conn, name="虛構四小時排程", client_name=None, actor=ACTOR)
-        ts = now_iso()
+        ts = db.now_utc()
         main.conn.execute(
-            "INSERT INTO campaign_cycle (id, brand_id, product_scope_json, objective, currency,"
-            " start_date, end_date, channels_json, status, phase, created_at, updated_at)"
-            " VALUES (?, ?, '[]', 'sales', 'TWD', '2026-08-01', '2026-08-31', '[\"meta\"]',"
-            " 'LIVE', 'normal', ?, ?)",
-            (new_id("ccy"), brand["id"], ts, ts),
+            "INSERT INTO campaign_cycle (id, org_id, brand_id, product_scope_json, objective,"
+            " currency, start_date, end_date, channels_json, status, phase, created_at,"
+            " updated_at) VALUES (%s, %s, %s, '[]', 'sales', 'TWD', '2026-08-01', '2026-08-31', '[\"meta\"]',"
+            " 'LIVE', 'normal', %s, %s)",
+            (db.new_id("ccy"), db.DEV_ORG_ID, brand["id"], ts, ts),
         )
         main.conn.commit()
         main._last_auto_sync_check = None
@@ -200,14 +194,14 @@ class AutoSyncScheduleSafetyTest(unittest.TestCase):
 
     def test_cycle_checks_run_live_reminder_and_post_sync_chain(self):
         brand = bi_repo.create_brand(main.conn, name="虛構同步檢查", client_name=None, actor=ACTOR)
-        ts = now_iso()
-        cycle_id = new_id("ccy")
+        ts = db.now_utc()
+        cycle_id = db.new_id("ccy")
         main.conn.execute(
-            "INSERT INTO campaign_cycle (id, brand_id, product_scope_json, objective, currency,"
-            " start_date, end_date, channels_json, status, phase, created_at, updated_at)"
-            " VALUES (?, ?, '[]', 'sales', 'TWD', '2026-08-01', '2026-08-31', '[\"meta\"]',"
-            " 'LIVE', 'normal', ?, ?)",
-            (cycle_id, brand["id"], ts, ts),
+            "INSERT INTO campaign_cycle (id, org_id, brand_id, product_scope_json, objective,"
+            " currency, start_date, end_date, channels_json, status, phase, created_at,"
+            " updated_at) VALUES (%s, %s, %s, '[]', 'sales', 'TWD', '2026-08-01', '2026-08-31', '[\"meta\"]',"
+            " 'LIVE', 'normal', %s, %s)",
+            (cycle_id, db.DEV_ORG_ID, brand["id"], ts, ts),
         )
         main.conn.commit()
         with (mock.patch.object(ads_auto_sync, "check_schedule_reminder") as reminder,

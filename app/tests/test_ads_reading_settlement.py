@@ -5,35 +5,19 @@ setUp／fixture 比照 app/tests/test_ads_reading.py 的 _ReadingIntegrationBase
 建檔＋灌成效資料的樣板），不另開新的測試骨架。一個完成檢查對一支測試。
 """
 
-import atexit
-import json
-import shutil
-import tempfile
 import unittest
 
-_tmpdir = tempfile.mkdtemp(prefix="brand_os_ads_reading_settlement_")
+import pytest
+from fastapi.testclient import TestClient
 
-from fastapi.testclient import TestClient  # noqa: E402
-
-import app.main as main  # noqa: E402
-from app.ads import performance as perf  # noqa: E402
-from app.ads import reading  # noqa: E402
-from app.ads import repository as ads_repo  # noqa: E402
-from app.brand_intelligence import repository as bi_repo  # noqa: E402
-from app.core import interrupts as core_interrupts  # noqa: E402
-from app.core.db import new_id, now_iso  # noqa: E402
-from app.llm.providers import FakeProvider, ProviderResponse, Usage  # noqa: E402
-
-
-def _cleanup():
-    try:
-        main.conn.close()
-    except Exception:
-        pass
-    shutil.rmtree(_tmpdir, ignore_errors=True)
-
-
-atexit.register(_cleanup)
+import app.main as main
+from app.ads import performance as perf
+from app.ads import reading
+from app.ads import repository as ads_repo
+from app.brand_intelligence import repository as bi_repo
+from app.core import db
+from app.core import interrupts as core_interrupts
+from app.llm.providers import FakeProvider, ProviderResponse, Usage
 
 ACTOR = "測試員"
 
@@ -42,6 +26,15 @@ def _fake(text):
     return ProviderResponse(output_text=text, structured=None,
                             usage=Usage(input_tokens=300, output_tokens=150),
                             stop_reason="end_turn")
+
+
+# BUG app/ads/performance.py:364 — import_rows() 的 INSERT 對 date 欄位傳 ""，
+# Postgres 一律 psycopg.errors.InvalidDatetimeFormat（同一個 BUG，orders/ads 群組已標過）。
+_BUG_EMPTY_STRING_DATE = pytest.mark.xfail(
+    strict=True,
+    reason='BUG app/ads/performance.py:364 — import_rows() 的 INSERT 對 date 欄位傳 ""，'
+           "Postgres 一律 psycopg.errors.InvalidDatetimeFormat",
+)
 
 
 class _SettlementBase(unittest.TestCase):
@@ -74,6 +67,7 @@ class _SettlementBase(unittest.TestCase):
 class WeeklyRejudgeRefusedTest(_SettlementBase):
     """完成檢查 1：已結算的檔期，一般重判（沒帶 trigger_reason）要被拒絕，結算原封不動。"""
 
+    @_BUG_EMPTY_STRING_DATE
     def test_run_without_trigger_reason_refused_after_settlement(self):
         self._spend(spend=10000, impressions=20000, clicks=400, conversions=10, revenue=40000)
         ok, err = reading.finalize(main.conn, self.bid, self.cycle_id, ACTOR)
@@ -99,6 +93,7 @@ class WeeklyRejudgeRefusedTest(_SettlementBase):
 class LateDataOnSettledCycleTest(_SettlementBase):
     """完成檢查 2：補件重判（trigger_reason='late_data'）仍能碰已結案的檔期，且留在 CLOSED。"""
 
+    @_BUG_EMPTY_STRING_DATE
     def test_rerun_for_late_data_after_settlement_not_refused(self):
         self._spend(spend=10000, impressions=20000, clicks=400, conversions=10, revenue=40000)
         ok, err = reading.finalize(main.conn, self.bid, self.cycle_id, ACTOR)
@@ -117,6 +112,7 @@ class LateDataOnSettledCycleTest(_SettlementBase):
 class NormalRejudgeUnaffectedTest(_SettlementBase):
     """完成檢查 3：檔期還在 LIVE/EVALUATING 時，一般重判照舊——不受這次改動影響。"""
 
+    @_BUG_EMPTY_STRING_DATE
     def test_run_without_trigger_reason_on_live_cycle_succeeds(self):
         self._spend(spend=10000, impressions=20000, clicks=400, conversions=10, revenue=40000)
 
@@ -133,6 +129,7 @@ class FinalizeAtomicCloseTest(_SettlementBase):
     run(trigger_reason='final_settlement') 自己一次就把狀態寫成 CLOSED，不必等 finalize()
     事後補寫。"""
 
+    @_BUG_EMPTY_STRING_DATE
     def test_final_settlement_run_alone_leaves_cycle_closed(self):
         self._spend(spend=10000, impressions=20000, clicks=400, conversions=10, revenue=40000)
 
@@ -149,6 +146,7 @@ class FinalizeAtomicCloseTest(_SettlementBase):
 class ScopedDeleteProtectsSettlementTest(_SettlementBase):
     """完成檢查 5：非結算重判不能刪到結算版本那幾列。"""
 
+    @_BUG_EMPTY_STRING_DATE
     def test_non_settlement_run_keeps_settlement_reading(self):
         self._spend(spend=10000, impressions=20000, clicks=400, conversions=10, revenue=40000)
         ok, err = reading.finalize(main.conn, self.bid, self.cycle_id, ACTOR)
@@ -157,7 +155,7 @@ class ScopedDeleteProtectsSettlementTest(_SettlementBase):
 
         # 建構「有結算列但檔期不是 CLOSED」的狀態：直接改 SQL 繞過 D2 的守門，
         # 專門測 D4 的範圍刪除本身夠不夠格擋住結算列，不依賴上層守門有沒有生效。
-        main.conn.execute("UPDATE campaign_cycle SET status = 'EVALUATING' WHERE id = ?",
+        main.conn.execute("UPDATE campaign_cycle SET status = 'EVALUATING' WHERE id = %s",
                           (self.cycle_id,))
         main.conn.commit()
         self._spend(spend=1000, impressions=100, clicks=10, conversions=1, revenue=2000)
@@ -167,12 +165,12 @@ class ScopedDeleteProtectsSettlementTest(_SettlementBase):
         self.assertTrue(ok2, err2)
         rows = main.conn.execute(
             "SELECT id, product_id, rule_result_json FROM performance_reading"
-            " WHERE campaign_cycle_id = ?", (self.cycle_id,)).fetchall()
+            " WHERE campaign_cycle_id = %s", (self.cycle_id,)).fetchall()
         ids = [r["id"] for r in rows]
         self.assertIn(settlement_id, ids)  # 結算列還在，沒被非結算重判刪掉
 
         settlement_row = next(r for r in rows if r["id"] == settlement_id)
-        self.assertFalse(json.loads(settlement_row["rule_result_json"])["is_tentative"])
+        self.assertFalse(settlement_row["rule_result_json"]["is_tentative"])  # psycopg 已自動解 jsonb
 
         new_tentative = [r for r in rows
                          if r["product_id"] is None and r["id"] != settlement_id]
@@ -190,6 +188,7 @@ class RejudgeButtonMessageTest(_SettlementBase):
     的話得由端點自己補（routes_weekly_proposals_api.py），句子跟 run() 的拒絕理由同一個出處。
     """
 
+    @_BUG_EMPTY_STRING_DATE
     def test_rejudge_endpoint_explains_settlement_instead_of_generic_empty(self):
         self._spend(spend=10000, impressions=20000, clicks=400, conversions=10, revenue=40000)
         ok, err = reading.finalize(main.conn, self.bid, self.cycle_id, ACTOR)
@@ -208,6 +207,7 @@ class LateRevenueShareReversalWarningTest(_SettlementBase):
     LATE_REVENUE_SHARE_WARNING_THRESHOLD），匯入訊息（explanation）跟收件匣通知都要多
     一句查核提醒，不能讓人以為這是查證過的翻案。"""
 
+    @_BUG_EMPTY_STRING_DATE
     def test_reversal_with_high_late_revenue_share_adds_check_prompt(self):
         self._spend(spend=10000, impressions=20000, clicks=400, conversions=10, revenue=8000)
         ok, err = reading.run(main.conn, self.bid, self.cycle_id, ACTOR)
@@ -241,18 +241,18 @@ class AssetBreakdownDraggingDownFlagTest(_SettlementBase):
     `rule_result_json`，前端只管畫布林值。"""
 
     def _package(self, ad_name: str) -> str:
-        pkg_id, ts = new_id("pkg"), now_iso()
+        pkg_id, ts = db.new_id("pkg"), db.now_utc()
         main.conn.execute(
-            "INSERT INTO publishing_package (id, brand_id, campaign_cycle_id, campaign_name,"
-            " adset_name, ad_name, destination_url, utm_json, status, created_at)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, '{}', 'ready', ?)",
-            (pkg_id, self.bid, self.cycle_id, "測試活動", "測試組合", ad_name,
+            "INSERT INTO publishing_package (id, org_id, brand_id, campaign_cycle_id,"
+            " campaign_name, adset_name, ad_name, destination_url, utm_json, status,"
+            " created_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, '{}', 'ready', %s)",
+            (pkg_id, db.DEV_ORG_ID, self.bid, self.cycle_id, "測試活動", "測試組合", ad_name,
              "https://example.test", ts))
         main.conn.execute(
-            "INSERT INTO external_ad_mapping (id, brand_id, publishing_package_id,"
+            "INSERT INTO external_ad_mapping (id, org_id, brand_id, publishing_package_id,"
             " campaign_cycle_id, platform, claim_status, confirmed_by, confirmed_at,"
-            " created_at) VALUES (?, ?, ?, ?, 'meta', 'confirmed', ?, ?, ?)",
-            (new_id("xam"), self.bid, pkg_id, self.cycle_id, ACTOR, ts, ts))
+            " created_at) VALUES (%s, %s, %s, %s, %s, 'meta', 'confirmed', %s, %s, %s)",
+            (db.new_id("xam"), db.DEV_ORG_ID, self.bid, pkg_id, self.cycle_id, ACTOR, ts, ts))
         main.conn.commit()
         return pkg_id
 
@@ -260,6 +260,7 @@ class AssetBreakdownDraggingDownFlagTest(_SettlementBase):
         breakdown = reading.load(main.conn, self.bid, self.cycle_id)["cycle"]["result"]["asset_breakdown"]
         return {row["asset_name"]: row["dragging_down_cycle"] for row in breakdown}
 
+    @_BUG_EMPTY_STRING_DATE
     def test_three_tied_ads_flip_from_dragging_down_to_clear_after_late_revenue(self):
         ad_names = ("廣告A", "廣告B", "廣告C")
         for name in ad_names:
