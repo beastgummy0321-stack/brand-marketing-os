@@ -29,6 +29,7 @@ from app.ads import simulation
 from app.ads import target_cpa
 from app.ads import weekly_proposals
 from app.ads.routes_common import OBJECTIVE_LABELS, _require_cycle
+from app.brand_intelligence.repository_learning_text import collapse_learnings
 from app.core import rule_cards
 
 router = APIRouter()
@@ -376,10 +377,16 @@ def compile_closing_review(conn, brand_id: str, cycle_id: str) -> dict:
          "stale_note": ads_reading.stale_note(conn, brand_id, cycle_id, h)}
         for h in ads_repo.list_cycle_hypotheses(conn, brand_id, cycle_id)
     ]
+    # 收斂後代表列的 source_cycle_id 可能不是本期（ADR 0026 決定 5：代表列＝原文最長那列，
+    # 不一定是本期新入帳那列）——篩選要看 member_ids 對應的原始列裡有沒有本期，不能只看
+    # 代表列，否則本期新入帳、跟舊期同義的學習會在自己的覆盤頁消失。
+    all_learnings = ads_repo.list_learning_ledger(conn, brand_id)
+    learnings_by_id = {e["id"]: e for e in all_learnings}
     ledger_entries = [
         {"text": e["learning_text"], "created_at": e["created_at"]}
-        for e in ads_repo.list_learning_ledger(conn, brand_id)
-        if e.get("source_cycle_id") == cycle_id
+        for e in collapse_learnings(all_learnings)
+        if any(learnings_by_id[member_id].get("source_cycle_id") == cycle_id
+               for member_id in e["member_ids"])
     ]
 
     return {

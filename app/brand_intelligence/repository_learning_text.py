@@ -16,7 +16,10 @@ R5（orchestrator ruling，票 F3-signoff-residue）：R3/R4 把「」『』【�
 
 對外進入點：`_normalize_learning_text()`（誰依賴它：`repository.py` 的
 `learning_ledger_entry_exists()` re-export；`app/tests/test_ads_reading_hypotheses.py`
-直接測正規化函式本身）。
+直接測正規化函式本身）、`collapse_learnings()`（誰依賴它：`app/ads/routes_learnings_api.py`
+累積智慧頁、`app/ads/cockpit_extras.py` 駕駛艙計數、
+`app/ads/routes_campaigns_performance_api.py` 覆盤頁、`app/llm/context_compiler.py`
+企劃 prompt——四個讀取面全部收斂同一組規則，見 ADR 0026）。
 """
 
 import re
@@ -73,3 +76,40 @@ def _normalize_learning_text(text: str) -> str:
         if cleaned:
             return cleaned
     return text
+
+
+def collapse_learnings(rows: list) -> list:
+    """同一條學習只留一列（ADR 0026 決定 1、4、5）。
+
+    分組鍵＝(正規化後的 learning_text, product_id)——決定 1 的兩項判準，一項不多一項不少
+    （同句話掛不同 product_id 不合併，各自是自己範圍內的結論）。每組代表列＝原始
+    learning_text 最長的那一列（決定 5：切角名字住在括號夾註裡，最長那列保留最多名字），
+    長度相同時取 learned_at 最新的——`max()` 對相同鍵值取第一個遇到的最大值，只要輸入順序
+    固定，結果就是決定性的，不需要額外的第二層 tie-break。
+
+    代表列補三個新 key、其餘欄位原封不動沿用代表列：
+    - verified_cycles：這組有幾列（＝被幾期各自驗證過）
+    - sample_sizes：這組各列的 sample_size，learned_at 由舊到新，None 跳過不填佔位
+    - member_ids：這組所有列的 id（learned_at 由舊到新，可追溯「這條是哪幾筆合起來的」）
+
+    輸出順序＝輸入順序（以每組代表列在輸入中的位置為準）。純函式，不吃 conn。
+    """
+    groups: "dict[tuple, list[tuple[int, dict]]]" = {}
+    for idx, row in enumerate(rows):
+        key = (_normalize_learning_text(row["learning_text"]), row["product_id"])
+        groups.setdefault(key, []).append((idx, row))
+
+    collapsed = []
+    for group in groups.values():
+        rep_idx, representative = max(
+            group, key=lambda pair: (len(pair[1]["learning_text"]), pair[1].get("learned_at") or "")
+        )
+        members = sorted(group, key=lambda pair: pair[1].get("learned_at") or "")
+        merged = dict(representative)
+        merged["verified_cycles"] = len(group)
+        merged["sample_sizes"] = [m[1]["sample_size"] for m in members if m[1].get("sample_size")]
+        merged["member_ids"] = [m[1]["id"] for m in members]
+        collapsed.append((rep_idx, merged))
+
+    collapsed.sort(key=lambda pair: pair[0])
+    return [merged for _, merged in collapsed]

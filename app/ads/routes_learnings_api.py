@@ -18,6 +18,7 @@ from app.ads import nextcycle
 from app.ads import reading as ads_reading
 from app.ads import repository as ads_repo
 from app.brand_intelligence import repository as bi
+from app.brand_intelligence.repository_learning_text import collapse_learnings
 from app.llm import context_compiler
 
 router = APIRouter()
@@ -26,7 +27,12 @@ _PENDING_HYPOTHESIS_LABELS = {"proposed": "待驗證", "testing": "驗證中"}
 
 
 def learning_meta_line(conn, brand_id: str, entry: dict) -> str:
-    """組已確認學習的來源說明；這是既有舊頁的顯示規則，沒有補算任何資料。"""
+    """組已確認學習的來源說明；這是既有舊頁的顯示規則，沒有補算任何資料。
+
+    `entry` 是 `collapse_learnings()` 收斂過的代表列，帶 `sample_sizes`／`verified_cycles`
+    兩個新 key（ADR 0026 決定 1、4、5）：對照樣本改列這組全部樣本數（多個時用「／」串接、
+    一個都沒有就整段省略），可信度被同一句話驗證超過一期時在後面加註幾期驗證過。
+    """
     parts = []
     if entry["product_id"]:
         product = bi.get_product(conn, brand_id, entry["product_id"])
@@ -37,10 +43,13 @@ def learning_meta_line(conn, brand_id: str, entry: dict) -> str:
         cycle = ads_repo.get_cycle(conn, brand_id, entry["source_cycle_id"])
         if cycle:
             parts.append(f"來源：{cycle['start_date']} 期")
-    if entry["sample_size"]:
-        parts.append(f"樣本 {entry['sample_size']}")
+    if entry["sample_sizes"]:
+        parts.append(f"對照樣本 {'／'.join(entry['sample_sizes'])}")
     if entry["confidence"]:
-        parts.append(ads_reading.LEDGER_CONFIDENCE_LABELS.get(entry["confidence"], entry["confidence"]))
+        label = ads_reading.LEDGER_CONFIDENCE_LABELS.get(entry["confidence"], entry["confidence"])
+        if entry["verified_cycles"] > 1:
+            label = f"{label}（{entry['verified_cycles']} 期各自驗證過）"
+        parts.append(label)
     if entry["needs_revalidation"]:
         parts.append("建議找機會重新驗證")
     return " ・ ".join(parts)
@@ -48,7 +57,7 @@ def learning_meta_line(conn, brand_id: str, entry: dict) -> str:
 
 def learning_sections(conn, brand_id: str) -> dict:
     """依舊頁既有順序讀取七段資料；待確認規則必須先觸發逾期掃描。"""
-    learnings = ads_repo.list_learning_ledger(conn, brand_id)
+    learnings = collapse_learnings(ads_repo.list_learning_ledger(conn, brand_id))
     for entry in learnings:
         entry["meta_line"] = learning_meta_line(conn, brand_id, entry)
 

@@ -3,11 +3,14 @@
 
 from app.ads import repository_channel_plan as plans
 from app.brand_intelligence import repository as intelligence
+from app.brand_intelligence.repository_learning_text import collapse_learnings
 
 
 def _legacy(conn, brand_id: str) -> list:
     rules = intelligence.list_rules_for_brand(conn, brand_id)
-    learnings = intelligence.list_learning_ledger(conn, brand_id)
+    # wisdom 要數「幾條學習」，不是「幾列」——同一條學習被驗證多期會有多列
+    # （ADR 0026 決定 1、4、5），先收斂才能數對。
+    learnings = collapse_learnings(intelligence.list_learning_ledger(conn, brand_id))
     hypotheses = intelligence.list_strategy_hypotheses(conn, brand_id)
     voices = intelligence.list_customer_voices(conn, brand_id)
     products = intelligence.list_products(conn, brand_id)

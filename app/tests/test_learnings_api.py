@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 import app.main as main
 from app.brand_intelligence import repository as bi_repo
 from app.ads import repository as ads_repo
+from app.ads.routes_campaigns_performance_api import compile_closing_review
 
 ACTOR = "測試員"
 
@@ -89,6 +90,44 @@ class LearningsApiTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"ok": True, "message": "已延續這條規則，重新進入生成內容的判斷依據。"})
         self.assertNotIn(self.stale_rule["id"], [rule["id"] for rule in self._get_sections()["pending_reconfirm_rules"]])
+
+
+class ClosingReviewLedgerCollapseTest(unittest.TestCase):
+    """票 L2（ADR 0026 決定 1、4、5）：覆盤「這期驗證了什麼」不能因為代表列落在別期
+    就讓本期新入帳的學習消失——篩選要看 member_ids 對應的原始列，不能只看代表列。"""
+
+    def setUp(self):
+        self.client = TestClient(main.app)
+        self.brand_id = bi_repo.create_brand(
+            main.conn, name=f"覆盤收斂測試{uuid.uuid4().hex[:8]}", client_name=None, actor=ACTOR,
+        )["id"]
+        product = bi_repo.create_product(main.conn, self.brand_id, name="測試產品", actor=ACTOR)
+        self.old_cycle = ads_repo.create_cycle(
+            main.conn, self.brand_id, product_ids=[product["id"]], pain_value=5,
+            objective="sales", actor=ACTOR)
+        self.new_cycle = ads_repo.create_cycle(
+            main.conn, self.brand_id, product_ids=[product["id"]], pain_value=5,
+            objective="sales", actor=ACTOR)
+
+    def test_this_cycle_learning_still_shows_when_representative_row_is_from_older_cycle(self):
+        # 舊期那列文字帶括號夾註，比較長，collapse_learnings() 會選它當代表列。
+        ads_repo.create_learning_ledger_entry(
+            main.conn, self.brand_id,
+            learning_text="拿證據說話的切角（實證成分／成分對比）比純促銷更能拉高轉換率",
+            applicability_scope="brand", created_by=ACTOR, actor=ACTOR,
+            source_cycle_id=self.old_cycle["id"],
+        )
+        # 本期新入帳的同義結論，文字較短、沒有夾註——這是天真實作會弄丟的那一列。
+        ads_repo.create_learning_ledger_entry(
+            main.conn, self.brand_id, learning_text="拿證據說話的切角比純促銷更能拉高轉換率",
+            applicability_scope="brand", created_by=ACTOR, actor=ACTOR,
+            source_cycle_id=self.new_cycle["id"],
+        )
+
+        result = compile_closing_review(main.conn, self.brand_id, self.new_cycle["id"])
+
+        self.assertEqual(len(result["learning"]["ledger_entries"]), 1)
+        self.assertIn("實證成分", result["learning"]["ledger_entries"][0]["text"])
 
 
 if __name__ == "__main__":

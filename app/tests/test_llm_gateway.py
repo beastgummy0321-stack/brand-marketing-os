@@ -619,7 +619,7 @@ class ContextCompilerLearningLoopTest(unittest.TestCase):
 
         self.assertIn("【已驗證的學習】", text)
         self.assertIn("早鳥優惠切角轉換率最高", text)
-        self.assertIn("樣本數 42", text)
+        self.assertIn("對照樣本 42", text)  # 票 L2：收斂後文案「樣本數」改「對照樣本」，單列時結果等價
         self.assertIn(entry["id"], knowledge_item_ids)
 
     def test_hypothesis_proposed_and_testing_included_supported_excluded(self):
