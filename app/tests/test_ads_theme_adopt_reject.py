@@ -59,9 +59,9 @@ class _Base(unittest.TestCase):
         )["id"]
         self.cell_id = db.new_id("exc")
         main.conn.execute(
-            "INSERT INTO experiment_cell (id, campaign_cycle_id, brand_id, created_at)"
-            " VALUES (?, ?, ?, ?)",
-            (self.cell_id, self.cycle_id, self.bid, db.now_iso()),
+            "INSERT INTO experiment_cell (id, org_id, campaign_cycle_id, brand_id, created_at)"
+            " VALUES (%s, %s, %s, %s, %s)",
+            (self.cell_id, db.DEV_ORG_ID, self.cycle_id, self.bid, db.now_iso()),
         )
         main.conn.commit()
 
@@ -82,11 +82,11 @@ class _Base(unittest.TestCase):
 
     def _insert_approved_plan(self):
         main.conn.execute(
-            "INSERT INTO campaign_plan (id, campaign_cycle_id, brand_id, plan_version,"
+            "INSERT INTO campaign_plan (id, org_id, campaign_cycle_id, brand_id, plan_version,"
             " plan_json, status, approved_by, approved_at, created_at)"
-            " VALUES (?, ?, ?, ?, ?, 'approved', ?, ?, ?)",
-            (db.new_id("cpl"), self.cycle_id, self.bid, 1,
-             json.dumps({"summary": "測試打法"}, ensure_ascii=False),
+            " VALUES (%s, %s, %s, %s, %s, %s, 'approved', %s, %s, %s)",
+            (db.new_id("cpl"), db.DEV_ORG_ID, self.cycle_id, self.bid, 1,
+             db.jsonb({"summary": "測試打法"}),
              ACTOR, db.now_iso(), db.now_iso()),
         )
         main.conn.commit()

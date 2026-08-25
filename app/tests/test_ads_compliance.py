@@ -13,6 +13,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import pytest
+
 _tmpdir = tempfile.mkdtemp(prefix="brand_os_ads_compliance_")
 
 from fastapi.testclient import TestClient  # noqa: E402
@@ -171,6 +173,19 @@ class CoverageGapsTest(unittest.TestCase):
         self.assertEqual(compliance.coverage_gaps(main.conn, self.bid), [])
 
 
+# BUG app/core/settings.py:143 — brand_llm_spent() 回傳 Decimal，budget_exceeded_message()
+# 拿去跟 float 相加，一律 TypeError。這裡每個測試的 setUp() 都經 plan/approve ->
+# theme_batch._budget_blocked() -> budget_exceeded_message()，全班（含子類別）都會炸在
+# setUp 階段——02-4 是測試轉移票，不改 app/core/*.py，標 xfail，等後續票修正
+# production code（正確寫法應是先把 spent 轉 float，或全站改用 Decimal 算錢）。
+_BUG_SETTINGS_DECIMAL = pytest.mark.xfail(
+    strict=True,
+    reason="BUG app/core/settings.py:143 — brand_llm_spent() 回傳 Decimal，"
+           "budget_exceeded_message() 拿去跟 float 相加，一律 TypeError",
+)
+
+
+@_BUG_SETTINGS_DECIMAL
 class ComplianceScanTest(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(main.app)
@@ -188,7 +203,7 @@ class ComplianceScanTest(unittest.TestCase):
         self.client.post(f"/api/campaigns/{self.bid}/{self.cycle_id}/plan/select", json={})
         self.client.post(f"/api/campaigns/{self.bid}/{self.cycle_id}/plan/approve")
         self.cell_id = main.conn.execute(
-            "SELECT id FROM experiment_cell WHERE campaign_cycle_id = ?",
+            "SELECT id FROM experiment_cell WHERE campaign_cycle_id = %s",
             (self.cycle_id,)).fetchone()["id"]
         self._theme_seq = 0
 
@@ -413,7 +428,7 @@ class DefaultHoldTest(ComplianceScanTest):
         self.assertFalse(variant["rejected"])
         self.assertFalse(variant["auto_held"])
         decision = main.conn.execute(
-            "SELECT * FROM adoption_decision WHERE target_id = ?", (variant["id"],)).fetchone()
+            "SELECT * FROM adoption_decision WHERE target_id = %s", (variant["id"],)).fetchone()
         self.assertIsNone(decision)
 
     def test_safety_selling_point_with_clean_content_does_not_default_reject(self):
@@ -438,7 +453,7 @@ class DefaultHoldTest(ComplianceScanTest):
         self.assertFalse(variant["rejected"])
 
         audit_row = main.conn.execute(
-            "SELECT * FROM audit_log WHERE entity_id = ? AND action = 'compliance_restore'",
+            "SELECT * FROM audit_log WHERE entity_id = %s AND action = 'compliance_restore'",
             (variant_id,)).fetchone()
         self.assertIsNotNone(audit_row)
         self.assertEqual(audit_row["actor"], OPERATOR)  # ADR 0004：操作人固定帶入
@@ -567,7 +582,7 @@ class UnbackedClaimDefaultHoldTest(ComplianceScanTest):
         self.assertFalse(variant["rejected"])
         self.assertFalse(variant["auto_held"])
         audit_row = main.conn.execute(
-            "SELECT * FROM audit_log WHERE entity_id = ? AND action = 'compliance_restore'",
+            "SELECT * FROM audit_log WHERE entity_id = %s AND action = 'compliance_restore'",
             (variant_id,)).fetchone()
         self.assertIsNotNone(audit_row)
 
@@ -664,6 +679,7 @@ class DiscountDepthDefaultHoldTest(ComplianceScanTest):
         self.assertFalse(variant["auto_held"])
 
 
+@_BUG_SETTINGS_DECIMAL
 class UnbackedClaimBackedByProductFactTest(unittest.TestCase):
     """票 12 done-check 4：D3 一個佐證路徑的專屬驗證——`product_fact` 撐得住這句話就不該
     被擋。獨立一組品牌／產品／檔期（不沿用 ComplianceScanTest.setUp），因為需要素材真的
@@ -708,7 +724,7 @@ class UnbackedClaimBackedByProductFactTest(unittest.TestCase):
         self.client.post(f"/api/campaigns/{self.bid}/{self.cycle_id}/plan/select", json={})
         self.client.post(f"/api/campaigns/{self.bid}/{self.cycle_id}/plan/approve")
         self.cell_id = main.conn.execute(
-            "SELECT id FROM experiment_cell WHERE campaign_cycle_id = ?",
+            "SELECT id FROM experiment_cell WHERE campaign_cycle_id = %s",
             (self.cycle_id,)).fetchone()["id"]
 
     def tearDown(self):

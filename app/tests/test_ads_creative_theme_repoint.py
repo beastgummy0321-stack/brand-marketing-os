@@ -9,9 +9,7 @@
 app/tests/test_ads_creative_theme.py 的既有作法；不新建一套 harness。
 """
 
-import tempfile
 import unittest
-from pathlib import Path
 
 from app.ads import compliance, creative, delivery, handoff, nextcycle
 from app.ads import repository as ads_repo
@@ -27,8 +25,7 @@ _FINGERPRINT = {"angle": "benefit", "tone": "warm", "format": "single_image",
 
 class _Base(unittest.TestCase):
     def setUp(self):
-        self._tmpdir = tempfile.TemporaryDirectory()
-        self.conn = db.connect_and_migrate(Path(self._tmpdir.name) / "test.db")
+        self.conn = db.current()
         self.brand = bi_repo.create_brand(self.conn, name="虛構晨光咖啡（重接票）",
                                           client_name="測試客戶", actor=ACTOR)
         self.bid = self.brand["id"]
@@ -38,11 +35,11 @@ class _Base(unittest.TestCase):
             self.conn, self.bid, product_ids=[self.product_id],
             pain_value=5, objective="sales", actor=ACTOR,
         )["id"]
-        self.cell_id = "exc_repoint_cell"
+        self.cell_id = db.new_id("exc")
         self.conn.execute(
-            "INSERT INTO experiment_cell (id, campaign_cycle_id, brand_id, product_id,"
-            " creative_angle, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-            (self.cell_id, self.cycle_id, self.bid, self.product_id, "晨間第一杯", db.now_iso()),
+            "INSERT INTO experiment_cell (id, org_id, campaign_cycle_id, brand_id, product_id,"
+            " creative_angle, created_at) VALUES (%s, %s, %s, %s, %s, %s, %s)",
+            (self.cell_id, db.DEV_ORG_ID, self.cycle_id, self.bid, self.product_id, "晨間第一杯", db.now_iso()),
         )
         self.conn.commit()
 
@@ -61,10 +58,6 @@ class _Base(unittest.TestCase):
             ],
         )
         theme_repo.adopt_theme(self.conn, self.bid, self.theme["id"], actor=ACTOR)
-
-    def tearDown(self):
-        self.conn.close()
-        self._tmpdir.cleanup()
 
 
 class DeliveryViewSeesAdoptedThemeTest(_Base):
@@ -88,7 +81,7 @@ class HandoffBuildPackagesWritesRowsTest(_Base):
         self.assertGreater(count, 0)
 
         rows = [dict(r) for r in self.conn.execute(
-            "SELECT * FROM publishing_package WHERE brand_id = ? AND campaign_cycle_id = ?",
+            "SELECT * FROM publishing_package WHERE brand_id = %s AND campaign_cycle_id = %s",
             (self.bid, self.cycle_id),
         )]
         self.assertEqual(len(rows), count)

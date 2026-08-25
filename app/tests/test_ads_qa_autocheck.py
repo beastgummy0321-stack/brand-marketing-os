@@ -108,7 +108,7 @@ class _BaseQaAutoCheckTest(unittest.TestCase):
         self.client.post(f"/api/campaigns/{self.bid}/{self.cycle_id}/plan/select", json={})
         self.client.post(f"/api/campaigns/{self.bid}/{self.cycle_id}/plan/approve")
         cell_id = main.conn.execute(
-            "SELECT id FROM experiment_cell WHERE campaign_cycle_id = ?",
+            "SELECT id FROM experiment_cell WHERE campaign_cycle_id = %s",
             (self.cycle_id,)).fetchone()["id"]
         theme = theme_repo.create_theme(
             main.conn, self.bid, campaign_cycle_id=self.cycle_id, experiment_cell_id=cell_id,

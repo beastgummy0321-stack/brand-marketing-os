@@ -55,9 +55,9 @@ class _Base(unittest.TestCase):
         )["id"]
         self.cell_id = main.coredb.new_id("exc")
         main.conn.execute(
-            "INSERT INTO experiment_cell (id, campaign_cycle_id, brand_id, created_at)"
-            " VALUES (?, ?, ?, ?)",
-            (self.cell_id, self.cycle_id, self.bid, main.coredb.now_iso()),
+            "INSERT INTO experiment_cell (id, org_id, campaign_cycle_id, brand_id, created_at)"
+            " VALUES (%s, %s, %s, %s, %s)",
+            (self.cell_id, main.coredb.DEV_ORG_ID, self.cycle_id, self.bid, main.coredb.now_iso()),
         )
         main.conn.commit()
 

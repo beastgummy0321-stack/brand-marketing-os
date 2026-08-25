@@ -6,9 +6,7 @@
 """
 
 import json
-import tempfile
 import unittest
-from pathlib import Path
 
 from app.ads import fingerprint as fp
 from app.ads import repository as ads_repo
@@ -21,8 +19,7 @@ ACTOR = "測試員"
 
 class _Base(unittest.TestCase):
     def setUp(self):
-        self._tmpdir = tempfile.TemporaryDirectory()
-        self.conn = db.connect_and_migrate(Path(self._tmpdir.name) / "test.db")
+        self.conn = db.current()
         self.brand = bi_repo.create_brand(self.conn, name="虛構晨光咖啡（主題票）",
                                           client_name="測試客戶", actor=ACTOR)
         self.bid = self.brand["id"]
@@ -32,17 +29,13 @@ class _Base(unittest.TestCase):
             self.conn, self.bid, product_ids=[self.product_id],
             pain_value=5, objective="sales", actor=ACTOR,
         )["id"]
-        self.cell_id = "exc_test_cell"
+        self.cell_id = db.new_id("exc")
         self.conn.execute(
-            "INSERT INTO experiment_cell (id, campaign_cycle_id, brand_id, created_at)"
-            " VALUES (?, ?, ?, ?)",
-            (self.cell_id, self.cycle_id, self.bid, db.now_iso()),
+            "INSERT INTO experiment_cell (id, org_id, campaign_cycle_id, brand_id, created_at)"
+            " VALUES (%s, %s, %s, %s, %s)",
+            (self.cell_id, db.DEV_ORG_ID, self.cycle_id, self.bid, db.now_iso()),
         )
         self.conn.commit()
-
-    def tearDown(self):
-        self.conn.close()
-        self._tmpdir.cleanup()
 
     def _create(self, **overrides):
         kwargs = dict(
@@ -89,7 +82,7 @@ class CreateAndReadRoundTripTest(_Base):
         created = self._create()
         row = self.conn.execute(
             "SELECT * FROM audit_log WHERE entity_type = 'creative_theme'"
-            " AND action = 'create' AND entity_id = ?", (created["id"],)
+            " AND action = 'create' AND entity_id = %s", (created["id"],)
         ).fetchone()
         self.assertIsNotNone(row)
         self.assertEqual(row["actor"], ACTOR)
@@ -143,10 +136,10 @@ class ComponentFieldsTest(_Base):
 class ListByCellTest(_Base):
     def test_list_themes_for_cell_returns_only_that_cells_themes(self):
         theme_a = self._create(name="虛構主題 A")
-        other_cell_id = "exc_other_cell"
+        other_cell_id = db.new_id("exc")
         self.conn.execute(
-            "INSERT INTO experiment_cell (id, campaign_cycle_id, brand_id, created_at)"
-            " VALUES (?, ?, ?, ?)", (other_cell_id, self.cycle_id, self.bid, db.now_iso()),
+            "INSERT INTO experiment_cell (id, org_id, campaign_cycle_id, brand_id, created_at)"
+            " VALUES (%s, %s, %s, %s, %s)", (other_cell_id, db.DEV_ORG_ID, self.cycle_id, self.bid, db.now_iso()),
         )
         self.conn.commit()
         self._create(name="虛構主題 B（別格）", experiment_cell_id=other_cell_id)
@@ -176,11 +169,11 @@ class UpdateStatusTest(_Base):
             self.conn, self.bid, created["id"], status="rejected", actor=ACTOR)
         row = self.conn.execute(
             "SELECT * FROM audit_log WHERE entity_type = 'creative_theme'"
-            " AND action = 'update_status' AND entity_id = ?", (created["id"],)
+            " AND action = 'update_status' AND entity_id = %s", (created["id"],)
         ).fetchone()
         self.assertIsNotNone(row)
-        before = json.loads(row["before_json"])
-        after = json.loads(row["after_json"])
+        before = row["before_json"]
+        after = row["after_json"]
         self.assertEqual(before["status"], "draft")
         self.assertEqual(after["status"], "rejected")
 
@@ -212,8 +205,8 @@ class AdoptThemeTest(_Base):
         created = self._create()
         theme_repo.adopt_theme(self.conn, self.bid, created["id"], actor=ACTOR)
         rows = self.conn.execute(
-            "SELECT * FROM adoption_decision WHERE brand_id = ? AND target_type = 'theme'"
-            " AND target_id = ?", (self.bid, created["id"]),
+            "SELECT * FROM adoption_decision WHERE brand_id = %s AND target_type = 'theme'"
+            " AND target_id = %s", (self.bid, created["id"]),
         ).fetchall()
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["decision"], "adopted")
@@ -225,11 +218,11 @@ class AdoptThemeTest(_Base):
         theme_repo.adopt_theme(self.conn, self.bid, created["id"], actor=ACTOR)
         row = self.conn.execute(
             "SELECT * FROM audit_log WHERE entity_type = 'creative_theme'"
-            " AND action = 'adopt' AND entity_id = ?", (created["id"],)
+            " AND action = 'adopt' AND entity_id = %s", (created["id"],)
         ).fetchone()
         self.assertIsNotNone(row)
-        before = json.loads(row["before_json"])
-        after = json.loads(row["after_json"])
+        before = row["before_json"]
+        after = row["after_json"]
         self.assertEqual(before["status"], "draft")
         self.assertEqual(after["status"], "adopted")
 
@@ -282,13 +275,13 @@ class RejectComponentTest(_Base):
         theme_repo.reject_component(
             self.conn, self.bid, target["id"], reason_code="off_brand", actor=ACTOR)
         row = self.conn.execute(
-            "SELECT * FROM adoption_decision WHERE brand_id = ? AND target_type = 'theme_component'"
-            " AND target_id = ?", (self.bid, target["id"]),
+            "SELECT * FROM adoption_decision WHERE brand_id = %s AND target_type = 'theme_component'"
+            " AND target_id = %s", (self.bid, target["id"]),
         ).fetchone()
         self.assertIsNotNone(row)
         self.assertEqual(row["decision"], "rejected")
         self.assertEqual(row["reason_code"], "off_brand")
-        self.assertEqual(json.loads(row["fingerprint_json"]), target["fingerprint_json"])
+        self.assertEqual(row["fingerprint_json"], target["fingerprint_json"])
         self.assertEqual(row["campaign_cycle_id"], self.cycle_id)
 
     def test_reject_writes_audit_log_with_before_after(self):
@@ -298,11 +291,11 @@ class RejectComponentTest(_Base):
             self.conn, self.bid, target["id"], reason_code="hook_weak", actor=ACTOR)
         row = self.conn.execute(
             "SELECT * FROM audit_log WHERE entity_type = 'creative_theme_component'"
-            " AND action = 'reject' AND entity_id = ?", (target["id"],)
+            " AND action = 'reject' AND entity_id = %s", (target["id"],)
         ).fetchone()
         self.assertIsNotNone(row)
-        before = json.loads(row["before_json"])
-        after = json.loads(row["after_json"])
+        before = row["before_json"]
+        after = row["after_json"]
         self.assertFalse(before["rejected"])
         self.assertTrue(after["rejected"])
         self.assertEqual(after["reason_code"], "hook_weak")
