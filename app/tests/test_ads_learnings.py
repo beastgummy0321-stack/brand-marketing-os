@@ -22,10 +22,13 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 import app.main as main  # noqa: E402
 from app.ads import nextcycle  # noqa: E402
+from app.ads import performance as perf  # noqa: E402
+from app.ads import reading  # noqa: E402
+from app.ads import reading_hypotheses  # noqa: E402
 from app.ads import repository as ads_repo  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
 from app.core import rule_cards  # noqa: E402
-from app.core.db import new_id  # noqa: E402
+from app.core.db import new_id, now_iso  # noqa: E402
 from app.llm import context_compiler  # noqa: E402
 from app.shared.web import OPERATOR  # noqa: E402
 
@@ -376,4 +379,113 @@ class RuleCardDecisionApiTest(unittest.TestCase):
         row = main.conn.execute(
             "SELECT decided_by FROM creative_rule_card WHERE id = ?", (card_id,)).fetchone()
         self.assertEqual(row["decided_by"], OPERATOR)
+
+
+class ContrastSampleIsNamedCellsTest(unittest.TestCase):
+    """票 L1（ADR 0026 決定 6／7／7b）：learning_ledger.sample_size 只算這句結論真的點名到
+    的切角自己的轉換數，不是這期對得回成效的全部切角——句子一個切角都沒點名（常見於受眾
+    類假設）就留白（None），不是 0。"""
+
+    def setUp(self):
+        self.brand = bi_repo.create_brand(main.conn, name="虛構日光眼鏡", client_name=None,
+                                          actor=ACTOR)
+        self.bid = self.brand["id"]
+        self.cycle_id = ads_repo.create_cycle(
+            main.conn, self.bid, product_ids=[], pain_value=10000, objective="sales",
+            actor=ACTOR)["id"]
+
+    def _cell_with_ad(self, ad_name, creative_angle):
+        cell_id, pkg_id, ts = new_id("exc"), new_id("pkg"), now_iso()
+        main.conn.execute(
+            "INSERT INTO experiment_cell (id, campaign_cycle_id, brand_id, creative_angle,"
+            " created_at) VALUES (?, ?, ?, ?, ?)",
+            (cell_id, self.cycle_id, self.bid, creative_angle, ts))
+        main.conn.execute(
+            "INSERT INTO publishing_package (id, brand_id, campaign_cycle_id, experiment_cell_id,"
+            " campaign_name, adset_name, ad_name, destination_url, utm_json, status, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, '{}', 'ready', ?)",
+            (pkg_id, self.bid, self.cycle_id, cell_id, "測試活動", "測試組合", ad_name,
+             "https://example.test", ts))
+        main.conn.execute(
+            "INSERT INTO external_ad_mapping (id, brand_id, publishing_package_id,"
+            " campaign_cycle_id, platform, claim_status, confirmed_by, confirmed_at,"
+            " created_at) VALUES (?, ?, ?, ?, 'meta', 'confirmed', ?, ?, ?)",
+            (new_id("xam"), self.bid, pkg_id, self.cycle_id, ACTOR, ts, ts))
+        main.conn.commit()
+
+    def _spend(self, rows):
+        """rows: [(ad_name, conversions), ...]——花費／曝光／點擊隨意給固定值，只有轉換數
+        要對得上斷言。"""
+        lines = ["行銷活動名稱,廣告名稱,曝光次數,連結點擊次數,花費金額,購買次數,購買轉換價值\n"]
+        for ad_name, conversions in rows:
+            lines.append(f"測試活動,{ad_name},5000,100,1000,{conversions},{conversions * 1000}\n")
+        result = perf.import_csv(main.conn, self.bid, self.cycle_id, "".join(lines), actor=ACTOR)
+        assert result.matched_assets == len(rows), result.errors
+
+    def _link_hypothesis(self, statement):
+        hyp = bi_repo.create_strategy_hypothesis(
+            main.conn, self.bid, hypothesis_type="creative", statement=statement,
+            created_by=ACTOR, actor=ACTOR, product_id=None, source_cycle_id=self.cycle_id)
+        main.conn.execute(
+            "INSERT OR IGNORE INTO campaign_cycle_hypothesis (campaign_cycle_id,"
+            " strategy_hypothesis_id, brand_id, role) VALUES (?, ?, ?, 'creative')",
+            (self.cycle_id, hyp["id"], self.bid))
+        main.conn.commit()
+        return hyp
+
+    def test_sample_size_is_only_the_named_cells_total_not_the_whole_cycle(self):
+        """一條假設點名兩個切角，那期另有第三個沒被點名的切角——sample_size 只等於前兩個
+        的轉換數加總。RED first：改動前是三個切角全加（100）。"""
+        self._cell_with_ad("A_ad", "情感痛點開場")
+        self._cell_with_ad("B_ad", "功能宣稱開場")
+        self._cell_with_ad("C_ad", "價格促銷開場")
+        self._spend([("A_ad", 4), ("B_ad", 6), ("C_ad", 90)])
+        hyp = self._link_hypothesis("情感痛點開場優於功能宣稱開場")
+        reading.resolve_hypotheses(
+            main.conn, self.bid, self.cycle_id, {hyp["id"]: "supported"}, actor=OPERATOR)
+        row = main.conn.execute(
+            "SELECT sample_size FROM learning_ledger WHERE brand_id = ?", (self.bid,)).fetchone()
+        self.assertEqual(row["sample_size"], "10")
+
+    def test_sentence_naming_no_cell_leaves_sample_size_null_and_confidence_preliminary(self):
+        """受眾類假設的句子講的是人群，不是切角——一個切角都點不到時 sample_size 存 NULL，
+        confidence 因此落到 preliminary。RED first：改動前存整期加總（20）、confidence 是
+        moderate。"""
+        self._cell_with_ad("A_ad", "情感痛點開場")
+        self._cell_with_ad("B_ad", "功能宣稱開場")
+        self._spend([("A_ad", 10), ("B_ad", 10)])
+        hyp = self._link_hypothesis("通勤族比在家工作者更會下單")
+        reading.resolve_hypotheses(
+            main.conn, self.bid, self.cycle_id, {hyp["id"]: "supported"}, actor=OPERATOR)
+        row = main.conn.execute(
+            "SELECT sample_size, confidence FROM learning_ledger WHERE brand_id = ?",
+            (self.bid,)).fetchone()
+        self.assertIsNone(row["sample_size"])
+        self.assertEqual(row["confidence"], "preliminary")
+
+    def test_no_none_string_leaks_into_sample_size_column(self):
+        """`str(None)` = `"None"` 絕對不能寫進 DB——留白要是真的 NULL。"""
+        self._cell_with_ad("A_ad", "情感痛點開場")
+        self._cell_with_ad("B_ad", "功能宣稱開場")
+        self._spend([("A_ad", 10), ("B_ad", 10)])
+        hyp = self._link_hypothesis("通勤族比在家工作者更會下單")
+        reading.resolve_hypotheses(
+            main.conn, self.bid, self.cycle_id, {hyp["id"]: "supported"}, actor=OPERATOR)
+        count = main.conn.execute(
+            "SELECT COUNT(*) c FROM learning_ledger WHERE sample_size = 'None'").fetchone()["c"]
+        self.assertEqual(count, 0)
+
+
+class NamedCellsUnitTest(unittest.TestCase):
+    """`reading_hypotheses.named_cells()`（票 L1 從 carry_forward.py:107 抽出來的共用零件，
+    行為原樣不變）：切角名是句子的子字串才算命中；空句子回空清單。"""
+
+    def test_only_the_cell_named_in_the_sentence_is_kept(self):
+        cells = [{"creative_angle": "情感痛點開場"}, {"creative_angle": "價格促銷開場"}]
+        self.assertEqual(
+            reading_hypotheses.named_cells(cells, "情感痛點開場比較好"), [cells[0]])
+
+    def test_empty_sentence_names_nothing(self):
+        cells = [{"creative_angle": "情感痛點開場"}]
+        self.assertEqual(reading_hypotheses.named_cells(cells, ""), [])
 

@@ -132,20 +132,40 @@ def stale_note(conn, brand_id: str, cycle_id: str, hypothesis: dict) -> Optional
     return STALE_HYPOTHESIS_NOTE if diffs else None
 
 
-def guard_supported_verdict(conn, brand_id: str, cycle_id: str,
-                            product_id: Optional[str], verdict: str) -> tuple:
-    """回傳 `(實際要入帳的 verdict, sample_size)`（R2-learning-honesty 契約第 3／4 點）。
+def named_cells(cells: list, text: str) -> list:
+    """這句話真的寫出名字的切角（票 F11 的橋，L1 抽成共用）。
+
+    ponytail: 判斷「有沒有被提到」用子字串比對，天花板是切角名稱剛好是句子裡某個不相關
+    詞的子字串時會誤判命中；upgrade path 是等 schema 真的補上假設↔切角的外鍵關聯再換掉
+    這座橋，不是在這裡加更多字串啟發式規則。
+    """
+    return [c for c in cells if c["creative_angle"] in text]
+
+
+def guard_supported_verdict(conn, brand_id: str, cycle_id: str, product_id: Optional[str],
+                            verdict: str, statement: str) -> tuple:
+    """回傳 `(實際要入帳的 verdict, sample_size)`（R2-learning-honesty 契約第 3／4 點，
+    ADR 0026 決定 6／7／7b）。
 
     無對照資料的「成立」在這裡被程式端擋下、降級成「看不出來」——這是
     `resolve_hypotheses()` 寫入 `learning_ledger` 前的唯一路口，不信任呼叫端（前端本來
-    就不會預選這個選項，但 API 才是真正的信任邊界，擋一次才算數）。sample_size 只算
-    這次真的拿來對照的那幾個切角自己的轉換數加總，不是這個產品／這期的全部轉換數
-    ——後者會把沒參與這次對照的流量也算進「樣本」，用統計語氣包裝一個沒對照過的數字。
+    就不會預選這個選項，但 API 才是真正的信任邊界，擋一次才算數）。這條守門只看
+    「這期有沒有做過對照」（全部 cells 的筆數），跟樣本口徑分開判斷。
+
+    sample_size 只算這句結論真的點名到的切角（`named_cells()`）自己的轉換數加總，不是
+    這期全部對得回成效的切角、更不是這個產品／這期的全部轉換數——後者會把沒被這句話
+    講到的流量也算進「樣本」，用統計語氣包裝一個沒對照過的數字。句子一個切角都沒點名
+    （常見於受眾類假設，例如「通勤族比在家工作者更會下單」——講的是人群，不是切角）時，
+    回 `None`（不是 `0`、不是 `"0"`）：沒把握就不猜，讓下游 `_ledger_confidence()` 自然
+    落到 `preliminary`（ADR 0026 決定 7b，已知上限，不在本票修）。回傳的 sample_size
+    已經是要存進 DB 的字串或 None，呼叫端不用再包一層 `str()`。
     """
     cells = comparison_cells(conn, brand_id, cycle_id, product_id)
     if verdict == "supported" and len(cells) < MIN_COMPARISON_CELLS:
         verdict = "inconclusive"
-    return verdict, int(sum(c["conversions"] for c in cells))
+    contrasted = named_cells(cells, statement)
+    sample_size = str(int(sum(c["conversions"] for c in contrasted))) if contrasted else None
+    return verdict, sample_size
 
 
 def build_hypothesis_items(conn, brand_id: str, cycle_id: str, pending_hypotheses: list,

@@ -739,7 +739,7 @@ def resolve_hypotheses(conn, brand_id: str, cycle_id: str, verdicts: dict, *, ac
             continue
         # R2-learning-honesty 契約第 3／4 點：見 guard_supported_verdict 開頭說明。
         verdict, sample_size = guard_supported_verdict(
-            conn, brand_id, cycle_id, hyp["product_id"], verdict)
+            conn, brand_id, cycle_id, hyp["product_id"], verdict, hyp["statement"])
         bi.update_hypothesis_status(conn, brand_id, hyp_id, status=verdict, actor=actor)
         updated += 1
         if verdict != "supported":
@@ -754,7 +754,7 @@ def resolve_hypotheses(conn, brand_id: str, cycle_id: str, verdicts: dict, *, ac
             created_by=actor, actor=actor, product_id=hyp["product_id"],
             source_cycle_id=cycle_id,
             source_reading_id=reading_id_by_product.get(hyp["product_id"], cycle_reading_id),
-            source_hypothesis_id=hyp_id, sample_size=str(sample_size),
+            source_hypothesis_id=hyp_id, sample_size=sample_size,
             confidence=_ledger_confidence(conn, brand_id, hyp["product_id"], hyp["statement"],
                                           sample_size),
         )
@@ -763,17 +763,17 @@ def resolve_hypotheses(conn, brand_id: str, cycle_id: str, verdicts: dict, *, ac
 
 
 def _ledger_confidence(conn, brand_id: str, product_id: Optional[str], learning_text: str,
-                       sample_size: int) -> str:
+                       sample_size: Optional[str]) -> str:
     """ledger 自己的可信度（修憲落地 G4，決策 0035 第三節第 8 點）：樣本數＋是否被獨立
     重測過，回傳 `LEDGER_CONFIDENCE_LABELS` 的鍵，不是 `ads_inflation.data_grade()` 的
     成色標籤。"重測過"＝這個品牌、這個範圍（品牌整體或同一產品）下，同一句學習文字之前
-    已經進過帳——不同期別各自算出同一個結論，不是同一次判讀的巧合。
+    已經進過帳。sample_size 是要存進 DB 的字串或 None，這裡轉回 int 才能跟門檻比大小。
     """
     retested = bi.learning_ledger_entry_exists(
         conn, brand_id, product_id=product_id, learning_text=learning_text)
     if retested:
         return "reinforced"
-    if sample_size and sample_size >= MIN_CONVERSIONS_FOR_DIRECTIONAL_CALL:
+    if sample_size and int(sample_size) >= MIN_CONVERSIONS_FOR_DIRECTIONAL_CALL:
         return "moderate"
     return "preliminary"
 

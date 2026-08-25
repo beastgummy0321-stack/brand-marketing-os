@@ -84,12 +84,9 @@ def _signed_off_winners(conn, brand_id: str, product_ids: Optional[set],
     切角」——但「那期打最好的」不等於「這條假設在講的」，F11 重現的正是這個誤配（票內
     `fatigue` 案例）。改用學習句子本身當橋：只認「這條假設的來源期別（
     `reading_hypotheses.comparison_cells()`，已經只挑真的對回成效資料的切角）裡，切角名稱
-    真的被寫進 `learning_text` 這句人話」的切角，全部算數（不是只取一個），各自帶自己的
-    ROAS。句子沒提到任何一個切角時，這條 ledger entry 不貢獻贏家——沒把握就不猜（鐵則 16）。
-
-    ponytail: 判斷「有沒有被提到」用子字串比對，天花板是切角名稱剛好是句子裡某個不相關
-    詞的子字串時會誤判命中；upgrade path 是等 schema 真的補上假設↔切角的外鍵關聯再換掉
-    這座橋，不是在這裡加更多字串啟發式規則。
+    真的被寫進 `learning_text` 這句人話」的切角（`reading_hypotheses.named_cells()`，票 L1
+    抽成共用），全部算數（不是只取一個），各自帶自己的 ROAS。句子沒提到任何一個切角時，
+    這條 ledger entry 不貢獻贏家——沒把握就不猜（鐵則 16）。
     """
     winners = []
     for entry in bi.list_learning_ledger(conn, brand_id):
@@ -103,9 +100,8 @@ def _signed_off_winners(conn, brand_id: str, product_ids: Optional[set],
             continue
         if product_ids and hyp["product_id"] is not None and hyp["product_id"] not in product_ids:
             continue
-        for cell in reading_hypotheses.comparison_cells(conn, brand_id, cycle_id, hyp["product_id"]):
-            if cell["creative_angle"] not in entry["learning_text"]:
-                continue
+        cells = reading_hypotheses.comparison_cells(conn, brand_id, cycle_id, hyp["product_id"])
+        for cell in reading_hypotheses.named_cells(cells, entry["learning_text"]):
             roas = cell["kpis"]["roas"]
             if roas is None:
                 continue

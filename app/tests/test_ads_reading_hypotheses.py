@@ -441,7 +441,7 @@ class HypothesisReviewTest(_HypothesisReviewBase):
         self.assertEqual(rows[0]["source_cycle_id"], self.cycle_id)
         self.assertEqual(rows[0]["source_hypothesis_id"], hyp["id"])
         self.assertEqual(rows[0]["created_by"], OPERATOR)
-        self.assertEqual(rows[0]["sample_size"], "10")
+        self.assertIsNone(rows[0]["sample_size"])  # ADR 0026 決定 7b：句子沒點名切角，樣本留白
         self.assertIsNotNone(rows[0]["confidence"])
         self.assertIsNotNone(rows[0]["source_reading_id"])
 
@@ -458,7 +458,7 @@ class HypothesisReviewTest(_HypothesisReviewBase):
         row = main.conn.execute(
             "SELECT confidence FROM learning_ledger WHERE brand_id = ?", (self.bid,)).fetchone()
         self.assertNotEqual(row["confidence"], "Meta 視角判讀")
-        self.assertEqual(row["confidence"], "moderate")
+        self.assertEqual(row["confidence"], "preliminary")  # ADR 0026 決定 7b：句子沒點名切角
 
     def test_small_sample_manual_override_gets_preliminary_confidence(self):
         """使用者手動把還在學習期的假設硬結案「成立」，系統不擋（決策 0013）；
@@ -502,7 +502,7 @@ class HypothesisReviewTest(_HypothesisReviewBase):
         rows = [dict(r) for r in main.conn.execute(
             "SELECT * FROM learning_ledger WHERE brand_id = ? ORDER BY created_at", (self.bid,))]
         self.assertEqual(len(rows), 2)
-        self.assertEqual(rows[0]["confidence"], "moderate")
+        self.assertEqual(rows[0]["confidence"], "preliminary")  # ADR 0026 決定 7b：句子沒點名切角
         self.assertEqual(rows[1]["confidence"], "reinforced")
 
     def test_near_duplicate_learning_text_with_bracket_aside_still_gets_reinforced(self):
