@@ -37,9 +37,14 @@ def asset_totals(conn, brand_id: str, cycle_id: str, breakeven: Optional[float] 
     （0.86→1.58 倍），卻因為還是「並列最低」而全部繼續掛紅標，此其根因；改在這裡算好、
     直接跟著 `asset_breakdown` 存進 `rule_result_json`，前端只管畫布林值，不再自己判定。
     不給 `breakeven`、或算不出投報率時一律 False（鐵則 16：看不出來就不誣賴）。
+
+    `product_id`（票 F13）：`publishing_package.product_id` 原樣帶出，讓
+    `weekly_proposals.select_cards()` 能把產品層停掉卡點名到底下真的屬於這個產品的廣告——
+    這欄常是 NULL（交接包掛在切角上，切角的 product_id 常沒填），NULL 的廣告不算進任何
+    產品（鐵則 16：不編造歸屬）。附加欄位，不影響既有呼叫端。
     """
     rows = conn.execute(
-        "SELECT pkg.id pkg_id, pkg.ad_name asset_name,"
+        "SELECT pkg.id pkg_id, pkg.ad_name asset_name, pkg.product_id product_id,"
         " COALESCE(SUM(ps.impressions),0) impressions, COALESCE(SUM(ps.clicks),0) clicks,"
         " COALESCE(SUM(ps.spend),0) spend, COALESCE(SUM(ps.conversions),0) conversions,"
         " COALESCE(SUM(ps.revenue),0) revenue,"

@@ -4,6 +4,7 @@
 import json
 
 from app.ads import nextcycle
+from app.ads import plan as ads_plan
 from app.ads import reading as ads_reading
 from app.ads import reading_assets as ads_reading_assets
 from app.ads import repository as ads_repo
@@ -28,8 +29,13 @@ GRADE_BY_ACTION = {
 }
 
 
-def _instruction(action: str, target: str) -> str:
+def _instruction(action: str, target: str, names: list | None = None) -> str:
+    """票 F13：`names` 給了（產品層停掉卡點得出底下哪幾支廣告）就直接叫使用者去找那幾支，
+    不再送使用者去 Meta 後台找一個不存在的「產品」物件（B0-43）。沒給就沿用今天的措辭。"""
     verb = {"停掉": "暫停投放", "加碼": "提高預算", "換素材": "替換素材"}[action]
+    if names:
+        quoted = "".join(f"「{name}」" for name in names)
+        return f"前往 Meta 廣告後台，找到{quoted}並{verb}。"
     return f"前往 Meta 廣告後台，找到「{target}」並{verb}。"
 
 
@@ -37,6 +43,10 @@ def _copy(card: dict) -> str:
     if card.get("is_historical_angle"):
         return (f"{card['reason']}——建議別再用「{card['target']}」這個投放方向"
                 f"（之前檔期用過的舊方向，不是這期的廣告）。")
+    names = card.get("bleeding_asset_names")
+    if names:
+        return (f"{card['reason']}——建議{card['action']}「{card['target']}」"
+                f"底下 {len(names)} 支：{'、'.join(names)}。")
     return f"{card['reason']}——建議{card['action']}「{card['target']}」。"
 
 
@@ -48,7 +58,8 @@ def _action_card(card: dict) -> str | None:
         if card.get("is_historical_angle"):
             return f"前往素材工作檯，準備取代「{card['target']}」這個舊方向的新素材。"
         return f"前往素材工作檯，為「{card['target']}」準備新素材。"
-    instruction = card.get("instruction") or _instruction(card["action"], card["target"])
+    instruction = card.get("instruction") or _instruction(
+        card["action"], card["target"], card.get("bleeding_asset_names"))
     if grade == "spend":
         amount = card.get("confirmed_amount")
         if amount is None:
@@ -177,6 +188,24 @@ def _bleeding_reason(asset: dict, breakeven) -> str:
             f"低於停損線 {breakeven * ads_reading.PAUSE_MARGIN:.2f}")
 
 
+def _losing_assets(conn, brand_id: str, loaded: dict, budget: dict) -> list:
+    """本期 attributable 廣告裡，套 `reading.judge()` 同一套停損門檻篩出來的『該停』清單
+    （ADR 0025 決定 5／9），照 `asset_breakdown` 原順序（revenue DESC）回傳全部，不只
+    最差那支。從 `bleeding_asset()` 原地拆出來（票 F13）：`bleeding_asset()` 再從裡面挑
+    最差的一支點名到廣告層；產品層停掉卡（`select_cards()`）點名底下每一支也吃這份同一
+    份清單——同一套 `asset_breakdown`、同一個 `judge()` 呼叫、同一條 `plan_budget` 均分，
+    不重算門檻、不另開查詢（決定 3／5）。"""
+    result = (loaded.get("cycle") or {}).get("result") or {}
+    breakdown = [row for row in (result.get("asset_breakdown") or []) if row.get("attributable")]
+    if not breakdown:
+        return []
+    breakeven = result.get("breakeven")
+    plan_budget = (budget.get("current_budget") or 0) / len(breakdown)
+    return [row for row in breakdown
+            if ads_reading.judge(row, plan_budget=plan_budget, breakeven=breakeven,
+                                 brand_id=brand_id, conn=conn)["status"] == "pause_candidate"]
+
+
 def bleeding_asset(conn, brand_id: str, cycle_id: str, loaded: dict, budget: dict) -> dict | None:
     """本期逐支廣告裡「該停」的那一支，點名到廣告（＝ADR 0008 的主題層），沒有就回 None。
 
@@ -191,17 +220,10 @@ def bleeding_asset(conn, brand_id: str, cycle_id: str, loaded: dict, budget: dic
       比任何算得出來的都糟，排最前面。
     - 決定 9：歸屬對不準的廣告（`attributable` 為 0）不參加，也不代它說話。
     """
-    result = (loaded.get("cycle") or {}).get("result") or {}
-    breakdown = [row for row in (result.get("asset_breakdown") or []) if row.get("attributable")]
-    if not breakdown:
-        return None
-    breakeven = result.get("breakeven")
-    plan_budget = (budget.get("current_budget") or 0) / len(breakdown)
-    losing = [row for row in breakdown
-              if ads_reading.judge(row, plan_budget=plan_budget, breakeven=breakeven,
-                                   brand_id=brand_id, conn=conn)["status"] == "pause_candidate"]
+    losing = _losing_assets(conn, brand_id, loaded, budget)
     if not losing:
         return None
+    breakeven = ((loaded.get("cycle") or {}).get("result") or {}).get("breakeven")
     worst = min(losing, key=lambda row: ((row.get("kpis") or {}).get("roas") is not None,
                                          (row.get("kpis") or {}).get("roas") or 0))
     return {
@@ -221,11 +243,22 @@ def bleeding_asset(conn, brand_id: str, cycle_id: str, loaded: dict, budget: dic
 
 
 def select_cards(product_readings: list, budget: dict, historical_cells: list,
-                 fatigue: dict | None = None, bleeding: dict | None = None) -> list:
+                 fatigue: dict | None = None, bleeding: dict | None = None, *,
+                 losing_assets: list | None = None,
+                 current_cycle_angles=None) -> list:
     """只挑已有規則訊號的停掉、加碼、換素材；沒有訊號就不硬湊。
 
     append 順序即優先序，因為最後 `cards[:3]` 是照順序砍尾巴。ADR 0025 決定 7 定的順序是
     「止血 → 花錢 → 備料」：廣告層停掉 → 產品層停掉 → 加碼 → 疲勞換素材 → 歷史切角換素材。
+
+    `losing_assets`（票 F13，keyword-with-default，舊呼叫端不用管）：跟 `bleeding_asset()`
+    同一份『這期該停的廣告』清單（`_losing_assets()`），拿來把產品層停掉卡點名到底下真的
+    屬於這個產品（`product_id` 相等）的廣告；不給、或沒有任何一支屬於這個產品，卡就照今天
+    的措辭只點名產品（B0-43）。
+    `current_cycle_angles`（票 F13，同樣 keyword-with-default）：這期
+    `experiment_cell.creative_angle` 的集合。歷史切角卡只在這個角度還活在這期時才出——
+    不給（None）沿用今天行為，不擋任何卡（B0-42）。判準只看角度是否存在於這個集合，
+    不對字串本身做任何「看起來像不像內部代號」的猜測。
     """
     cards = []
     product_pause = next(
@@ -242,15 +275,22 @@ def select_cards(product_readings: list, budget: dict, historical_cells: list,
         if reading is None:
             continue
         reasons = (reading.get("result") or {}).get("reasons") or []
-        cards.append({
+        product_id = reading.get("product_id")
+        card = {
             "action": action,
             "target": reading.get("product_name") or "未命名產品",
             "reason": reasons[0] if reasons else "既有成效判讀已達行動門檻",
             "impact": _budget_impact(action, budget),
-            "product_id": reading.get("product_id"),
+            "product_id": product_id,
             "performance_reading_id": reading.get("id"),
             "suggested_amount": budget.get("proposed_budget") if action == "加碼" else None,
-        })
+        }
+        if status == "pause_candidate" and product_id is not None and losing_assets:
+            names = [row["asset_name"] for row in losing_assets
+                    if row.get("product_id") == product_id]
+            if names:
+                card["bleeding_asset_names"] = names
+        cards.append(card)
 
     # 疲勞燈紅（頻率過冷受眾危險門檻）也要有卡跟進，但同一支廣告已經有停掉卡就不出：先做
     # 新素材再去停一支正在虧的廣告，順序是反的（決定 8）。認同一支要比 pkg_id 不能比 target
@@ -269,6 +309,11 @@ def select_cards(product_readings: list, budget: dict, historical_cells: list,
         })
 
     tired_cell = next((cell for cell in historical_cells if cell.get("underperforming")), None)
+    # 票 F13（B0-42）：這張卡點名的角度要「這期還在跑」才有意義——是不是跟這期
+    # experiment_cell.creative_angle 有交集，不是看字串長得像不像內部代號（鐵則 16）。
+    if (tired_cell is not None and current_cycle_angles is not None
+            and (tired_cell.get("creative_angle") or "未命名切角") not in current_cycle_angles):
+        tired_cell = None
     if tired_cell is not None:
         angle = tired_cell.get("creative_angle") or "未命名切角"
         # 歷史切角這張仍走切角命名空間，只跟同樣是換素材的卡比目標字串（既有行為不動）。
@@ -364,9 +409,17 @@ def generate(conn, brand_id: str, cycle_id: str, *, enqueue_ready: bool = True) 
     budget = nextcycle.propose_budget(conn, brand_id, cycle_id)
     historical_cells = nextcycle.historical_cell_performance(
         conn, brand_id, exclude_cycle_id=cycle_id)
+    # 票 F13：這期真的還在跑的切角——歷史切角卡（B0-42）跟產品層停掉卡的廣告點名（B0-43）
+    # 都要靠這份「這期」的事實核對，不是猜字串。
+    current_cycle_angles = {
+        row["creative_angle"] for row in ads_plan.list_cell_angles(conn, brand_id, cycle_id)
+        if row.get("creative_angle")
+    }
     cards = select_cards(loaded["products"], budget, historical_cells,
                          fatigue_asset(conn, brand_id, cycle_id),
-                         bleeding_asset(conn, brand_id, cycle_id, loaded, budget))
+                         bleeding_asset(conn, brand_id, cycle_id, loaded, budget),
+                         losing_assets=_losing_assets(conn, brand_id, loaded, budget),
+                         current_cycle_angles=current_cycle_angles)
     handled = {
         (card.get("action"), card.get("target"))
         for card in existing if card["status"] in ("ACCEPTED", "APPLIED", "REJECTED")
@@ -379,7 +432,10 @@ def generate(conn, brand_id: str, cycle_id: str, *, enqueue_ready: bool = True) 
             content["suggested_amount"] = card["suggested_amount"]
         if card.get("is_historical_angle"):
             content["is_historical_angle"] = True
-        content["instruction"] = _instruction(card["action"], card["target"])
+        if card.get("bleeding_asset_names"):
+            content["bleeding_asset_names"] = card["bleeding_asset_names"]
+        content["instruction"] = _instruction(
+            card["action"], card["target"], card.get("bleeding_asset_names"))
         conn.execute(
             "INSERT INTO recommendation (id, brand_id, campaign_cycle_id, product_id,"
             " performance_reading_id, recommendation_type, content_json, status, created_at,"
