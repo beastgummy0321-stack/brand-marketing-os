@@ -39,7 +39,11 @@ export function WarroomPage({ brandId, cycleId, fromCycle }: { brandId: string; 
 
   function refresh(forceBlock?: number) {
     if (!cycleId) return;
-    setState({ status: "loading" });
+    // B45-2：只有「畫面上還沒東西可看」時才蓋成讀取中——已經 ready 的話保持原地不動，
+    // 不要把整棵樹換掉。換掉會讓 PlanStep／AiCostMeter 卸載重掛載，PlanStep 那三態
+    // （generating／generate-failed／ready）純 local state 跟著蒸發，掛載效果又重問一次
+    // plan/status，問到 done 又呼叫 onRefresh() 回到這裡，變成無限迴圈（B0-45 根因）。
+    setState((prev) => (prev.status === "ready" ? prev : { status: "loading" }));
     fetchCycleDetail(brandId, cycleId)
       .then(({ cycle, stage }) => {
         setState({ status: "ready", cycle, stage });
