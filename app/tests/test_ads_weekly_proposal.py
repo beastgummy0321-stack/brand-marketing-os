@@ -576,5 +576,113 @@ class WeeklyProposalPersistenceTest(unittest.TestCase):
         self.assertEqual(cards[0]["action"], "加碼")
 
 
+class SettleArchivesUnhandledCardsTest(unittest.TestCase):
+    """票 F9：結案時還沒被使用者處理的 GENERATED 週提案卡不能悄悄消失（原本
+    `reading.run()` 的重判清空邏輯會把它們整批 DELETE 掉）。
+
+    不繼承 WeeklyProposalPersistenceTest——繼承整個 TestCase 只為了借兩個 helper，
+    會連它既有的 12 個測試方法一起重跑一遍。setUp／`_cycle_ready_for_reading` 照抄
+    一份（跟本檔其他測試類別彼此不互相繼承是同一個既有慣例）。"""
+
+    def setUp(self):
+        self.client = TestClient(main.app)
+        brand = bi_repo.create_brand(
+            main.conn, name=f"虛構結案歸檔品牌{abs(hash(self.id())) % 100000}",
+            client_name=None, actor=ACTOR)
+        self.brand_id = brand["id"]
+        self._original_provider = reading.PROVIDER
+        reading.PROVIDER = FakeProvider(response=ProviderResponse(
+            output_text='{"text": "結案測試說明"}', structured=None,
+            usage=Usage(input_tokens=100, output_tokens=50), stop_reason="end_turn"))
+
+    def tearDown(self):
+        reading.PROVIDER = self._original_provider
+
+    def _cycle_ready_for_reading(self, product_name):
+        product_id = bi_repo.create_product(
+            main.conn, self.brand_id, name=product_name, actor=ACTOR)["id"]
+        bi_repo.save_product_economics(
+            main.conn, self.brand_id, product_id, selling_price=1000,
+            unit_variable_cost=400, currency="TWD", confirmed_by=ACTOR, actor=ACTOR)
+        start, end = TODAY - timedelta(days=8), TODAY + timedelta(days=5)
+        cycle = ads_repo.create_cycle(
+            main.conn, self.brand_id, product_ids=[product_id], pain_value=10000,
+            objective="sales", actor=ACTOR, start_date=start.isoformat(),
+            duration_days=(end - start).days + 1)
+        ads_repo.update_cycle_status(
+            main.conn, self.brand_id, cycle["id"], status="LIVE", actor=ACTOR)
+        result = performance.import_manual(
+            main.conn, self.brand_id, cycle["id"],
+            {"date_start": start.isoformat(), "date_stop": end.isoformat(),
+             "spend": 10000, "impressions": 20000, "clicks": 400,
+             "conversions": 10, "revenue": 40000},
+            actor=ACTOR, today=TODAY.isoformat())
+        self.assertEqual(result.errors, [])
+        main.conn.execute(
+            "UPDATE performance_snapshot SET product_id = ? WHERE brand_id = ?"
+            " AND campaign_cycle_id = ?", (product_id, self.brand_id, cycle["id"]))
+        main.conn.commit()
+        return cycle["id"]
+
+    def _settle_url(self, cycle_id):
+        return f"/api/campaigns/{self.brand_id}/{cycle_id}/settle-now"
+
+    def _generated_card(self, product_name):
+        cycle_id = self._cycle_ready_for_reading(product_name)
+        ok, err = reading.run(main.conn, self.brand_id, cycle_id, ACTOR)
+        self.assertEqual((ok, err), (True, None))
+        card = weekly_proposals.generate(main.conn, self.brand_id, cycle_id)[0]
+        return cycle_id, card
+
+    def test_finalize_archives_unhandled_generated_cards_instead_of_deleting(self):
+        cycle_id, card = self._generated_card("虛構結案未處理品")
+
+        ok, err = reading.finalize(main.conn, self.brand_id, cycle_id, ACTOR)
+
+        self.assertEqual((ok, err), (True, None))
+        row = main.conn.execute(
+            "SELECT status FROM recommendation WHERE id = ?", (card["id"],)).fetchone()
+        self.assertIsNotNone(row)  # 沒被下面那段 DELETE 悄悄清掉
+        self.assertNotEqual(row["status"], "GENERATED")
+        self.assertEqual(row["status"], "ARCHIVED_ON_CLOSE")
+        done = core_interrupts.list_done(main.conn, brand_id=self.brand_id)
+        self.assertEqual([d["category"] for d in done], ["weekly_proposal_archived_on_close"])
+        self.assertIn("歸檔", done[0]["message"])
+
+    def test_settle_now_get_reports_unhandled_cards_before_settling(self):
+        cycle_id, card = self._generated_card("虛構結案回報品")
+
+        resp = self.client.get(self._settle_url(cycle_id))
+
+        data = resp.json()["data"]
+        self.assertEqual(data["unhandled_cards"], {"count": 1, "names": [card["target"]]})
+
+    def test_settle_now_post_reports_archived_cards(self):
+        cycle_id, card = self._generated_card("虛構結案歸檔品")
+
+        resp = self.client.post(self._settle_url(cycle_id))
+
+        self.assertEqual(resp.status_code, 200, resp.text)
+        body = resp.json()
+        self.assertEqual(body["message"], "收帳完成，覆盤可以看了。")
+        self.assertEqual(body["archived_cards"], {"count": 1, "names": [card["target"]]})
+
+    def test_settle_now_with_no_unhandled_cards_makes_no_archive_claim(self):
+        cycle_id = self._cycle_ready_for_reading("虛構結案無卡品")  # 沒呼叫 generate()
+
+        get_resp = self.client.get(self._settle_url(cycle_id))
+        self.assertEqual(get_resp.json()["data"]["unhandled_cards"], {"count": 0, "names": []})
+
+        post_resp = self.client.post(self._settle_url(cycle_id))
+        body = post_resp.json()
+        self.assertEqual(body["archived_cards"], {"count": 0, "names": []})
+        self.assertNotIn("歸檔", body["message"])
+        touched = main.conn.execute(
+            "SELECT COUNT(*) c FROM recommendation WHERE brand_id = ? AND campaign_cycle_id = ?"
+            " AND recommendation_type = 'weekly_proposal'", (self.brand_id, cycle_id),
+        ).fetchone()["c"]
+        self.assertEqual(touched, 0)
+
+
 if __name__ == "__main__":
     unittest.main()

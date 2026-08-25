@@ -328,8 +328,9 @@ def run(conn, brand_id: str, cycle_id: str, actor: str,
                                           trigger_reason=trigger_reason)
 
     ts = now_iso()
-    # 保留花錢煞車紀錄，先解除它對即將刪除的舊判讀列之外鍵；其餘草案重判後重出。
-    preserved_weekly = "recommendation_type = 'weekly_proposal' AND status IN ('ACCEPTED', 'APPLIED')"
+    from app.ads import weekly_proposals as ads_weekly_proposals  # 循環相依，延後到函式內才 import（同下方 nextcycle 寫法）
+    if settled_run: ads_weekly_proposals.archive_on_close(conn, brand_id, cycle_id, actor)  # 票 F9：結算版先歸檔還候著的 GENERATED 卡，免得被下面這段 DELETE 悄悄清空
+    preserved_weekly = "recommendation_type = 'weekly_proposal' AND status IN ('ACCEPTED', 'APPLIED', 'ARCHIVED_ON_CLOSE')"  # 保留花錢煞車紀錄／剛歸檔卡的關聯，先解除它們對即將刪除的舊判讀列之外鍵
     conn.execute("UPDATE recommendation SET performance_reading_id = NULL WHERE brand_id = ? AND campaign_cycle_id = ? AND " + preserved_weekly,
                  (brand_id, cycle_id))
     conn.execute("DELETE FROM recommendation WHERE brand_id = ? AND campaign_cycle_id = ? AND NOT (" + preserved_weekly + ")",

@@ -43,6 +43,9 @@ CATEGORIES = {
     "prototype_phase_ended": {"severity": "rule_warning", "label": "原型階段結束提醒"},  # 修憲落地 A6
     "auto_sync_failed": {"severity": "rule_warning", "label": "自動同步失敗"},  # 票 07-auto-sync
     "weekly_proposal_ready": {"severity": "informational", "label": "週提案待核可"},  # 票 06
+    # 結案時還沒處理的週提案卡自動歸檔，enqueue 後立刻 resolve，只為了在收件匣「已結」
+    # 留一筆痕跡（票 F9），不是真的要使用者去處理待辦。
+    "weekly_proposal_archived_on_close": {"severity": "informational", "label": "週提案卡結案歸檔"},
     "weekly_rejudge_done": {"severity": "informational", "label": "本週判讀完成"},
     "weekly_report_ready": {"severity": "informational", "label": "本週報告"},
     "burn_no_cycle": {"severity": "rule_warning", "label": "廣告花費未對應檔期"},

@@ -86,8 +86,13 @@ function SettleNowPanel({ brandId, cycle, onSettled }: { brandId: string; cycle:
 
   function onClick() {
     if (!info) return;
+    // 票 F9：還有沒處理的建議卡時多問一句——結案後這些卡會直接歸檔，不再是候著使用者
+    // 核可的狀態，讓使用者在按下去之前知道會發生這件事。
+    const unhandled = info.unhandled_cards;
+    const unhandledNote =
+      unhandled.count > 0 ? `這期還有 ${unhandled.count} 張建議卡沒處理（${unhandled.names.join("、")}），結案後會歸檔。` : "";
     const confirmed = window.confirm(
-      `收帳後這期就不能改回投放中；之後補進來的數字還是會算，系統會重新算結論並告訴你哪裡變了。這一步會用 AI 整理結論，最多花費 ${formatUsd(info.estimated_cost)}。確定要現在收帳嗎？`,
+      `${unhandledNote}收帳後這期就不能改回投放中；之後補進來的數字還是會算，系統會重新算結論並告訴你哪裡變了。這一步會用 AI 整理結論，最多花費 ${formatUsd(info.estimated_cost)}。確定要現在收帳嗎？`,
     );
     if (!confirmed) return;
     void settleForm.submit();

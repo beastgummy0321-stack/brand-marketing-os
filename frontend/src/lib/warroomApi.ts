@@ -330,6 +330,16 @@ export interface SettleNowInfo {
   reason: string | null;
   estimated_cost: number;
   already_closed: boolean;
+  /** 票 F9：這期還候著使用者處理的 GENERATED 週提案卡——結案後會歸檔，畫面按下結算前拿
+   * 這個問使用者要不要確認。 */
+  unhandled_cards: UnhandledCards;
+}
+
+/** 票 F9：settle-now GET 的 unhandled_cards／POST 的 archived_cards 共用同一個形狀
+ * （`app/ads/weekly_proposals.py::_cards_summary()`）。 */
+export interface UnhandledCards {
+  count: number;
+  names: string[];
 }
 
 /** 票 S1-01：最近匯入一批（`app/ads/performance_batches.py list_batches()`）。
@@ -807,7 +817,10 @@ export function importPerformanceCsv(brandId: string, cycleId: string, file: Fil
 // ---- 現在結算＋匯入整批撤銷（票 S1-01）----
 export const fetchSettleNow = (brandId: string, cycleId: string): Promise<SettleNowInfo> =>
   getJson(`${cycleBase(brandId, cycleId)}/settle-now`);
-export const settleNow = (brandId: string, cycleId: string): Promise<{ ok: boolean; message: string }> =>
+export const settleNow = (
+  brandId: string,
+  cycleId: string,
+): Promise<{ ok: boolean; message: string; archived_cards: UnhandledCards }> =>
   postJson(`${cycleBase(brandId, cycleId)}/settle-now`);
 export const fetchPerformanceBatches = (
   brandId: string,

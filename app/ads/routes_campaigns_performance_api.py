@@ -213,6 +213,8 @@ async def settle_now_get(brand_id: str, cycle_id: str):
     return _envelope({
         "can_settle": can_settle, "reason": reason,
         "estimated_cost": ads_reading.estimated_run_cost(conn), "already_closed": already_closed,
+        # 票 F9：按下結算前先問「還有幾張建議卡沒處理」，畫面拿這個問使用者要不要確認結案。
+        "unhandled_cards": weekly_proposals.unhandled_cards(conn, brand_id, cycle_id),
     })
 
 
@@ -228,7 +230,12 @@ async def settle_now_post(request: Request, brand_id: str, cycle_id: str):
     ok, err = ads_reading.finalize(conn, brand_id, cycle_id, actor)
     if not ok:
         return JSONResponse({"detail": err}, status_code=400)
-    return JSONResponse({"ok": True, "message": "收帳完成，覆盤可以看了。"})
+    # 票 F9：finalize() 內部已經把還沒處理的 GENERATED 卡轉成 ARCHIVED_ON_CLOSE 了，
+    # can_settle() 剛擋掉重複結算同一期，所以這裡讀到的一定是這次結案剛歸檔的那批。
+    archived_cards = weekly_proposals.archived_on_close_cards(conn, brand_id, cycle_id)
+    return JSONResponse({
+        "ok": True, "message": "收帳完成，覆盤可以看了。", "archived_cards": archived_cards,
+    })
 
 
 @router.get("/api/campaigns/{brand_id}/{cycle_id}/performance/batches")

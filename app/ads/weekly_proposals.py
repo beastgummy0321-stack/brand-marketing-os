@@ -16,6 +16,10 @@ from app.core.db import new_id, now_iso
 
 
 RECOMMENDATION_TYPE = "weekly_proposal"
+# 票 F9：結案時還沒被使用者處理的 GENERATED 卡的終態——`recommendation.status` 沒有
+# CHECK constraint（純文字欄，見 migrations/0001_tables.sql 該欄註解），新增這個值只是
+# 新增程式碼認得的字串，不是改 schema（比照 app/brand_intelligence/repository.py:1278）。
+ARCHIVED_ON_CLOSE = "ARCHIVED_ON_CLOSE"
 
 GRADE_BY_ACTION = {
     "停掉": "save",
@@ -296,6 +300,56 @@ def list_cards(conn, brand_id: str, cycle_id: str) -> list:
         (brand_id, cycle_id, RECOMMENDATION_TYPE),
     ).fetchall()
     return [_card_from_row(row) for row in rows]
+
+
+def _cards_summary(conn, brand_id: str, cycle_id: str, status: str) -> dict:
+    rows = conn.execute(
+        "SELECT content_json FROM recommendation WHERE brand_id = ? AND campaign_cycle_id = ?"
+        " AND recommendation_type = ? AND status = ? ORDER BY created_at, id",
+        (brand_id, cycle_id, RECOMMENDATION_TYPE, status),
+    ).fetchall()
+    names = [json.loads(row["content_json"] or "{}").get("target", "") for row in rows]
+    return {"count": len(names), "names": names}
+
+
+def unhandled_cards(conn, brand_id: str, cycle_id: str) -> dict:
+    """票 F9：settle-now 按下前，這期還候著使用者處理的 GENERATED 卡——純讀取，settle-now
+    GET 拿這個問「結案後會怎樣」，POST 前也拿它預告等一下 archive_on_close() 會歸檔幾張。"""
+    return _cards_summary(conn, brand_id, cycle_id, "GENERATED")
+
+
+def archived_on_close_cards(conn, brand_id: str, cycle_id: str) -> dict:
+    """票 F9：settle-now POST 回應用——結案當下歸檔了哪些卡。can_settle() 擋掉了對已
+    CLOSED 檔期重複呼叫這支路由，所以這裡讀到的一定是這次結案剛歸檔的那批，不會混到
+    別次結案的舊資料。"""
+    return _cards_summary(conn, brand_id, cycle_id, ARCHIVED_ON_CLOSE)
+
+
+def archive_on_close(conn, brand_id: str, cycle_id: str, actor: str) -> dict:
+    """票 F9 root cause：結案時把還候著使用者處理的 GENERATED 週提案卡收斂成明確終態，
+    不再讓它們在 `reading.run()` 的重判清空邏輯裡被 DELETE 悄悄消失（本函式的呼叫端見
+    `reading.py::run()`，settled_run 分支已經把 ARCHIVED_ON_CLOSE 併入 preserved_weekly，
+    這裡才不會轉態完馬上被同一次呼叫的 DELETE 清掉）。
+
+    順手在收件匣留一筆已結的痕跡——不然使用者只在結案當下的回應看過一次這個數字，
+    事後想確認「這期結案時歸檔了幾張」就無處可查（契約第 4 點）。"""
+    cards = unhandled_cards(conn, brand_id, cycle_id)
+    if cards["count"] == 0:
+        return cards
+    conn.execute(
+        "UPDATE recommendation SET status = ?, updated_at = ? WHERE brand_id = ?"
+        " AND campaign_cycle_id = ? AND recommendation_type = ? AND status = 'GENERATED'",
+        (ARCHIVED_ON_CLOSE, now_iso(), brand_id, cycle_id, RECOMMENDATION_TYPE),
+    )
+    interrupt_id = core_interrupts.enqueue(
+        conn, category="weekly_proposal_archived_on_close",
+        dedupe_key=f"weekly_proposal_archived_on_close:{cycle_id}",
+        message=f"{cards['count']} 張建議卡因檔期結案歸檔",
+        brand_id=brand_id, campaign_cycle_id=cycle_id,
+    )
+    if interrupt_id:  # None＝去重命中，理論上結案只會轉態一次，這裡只是不假設呼叫端不重複呼叫
+        core_interrupts.resolve(conn, interrupt_id, actor=actor)
+    return cards
 
 
 def generate(conn, brand_id: str, cycle_id: str, *, enqueue_ready: bool = True) -> list:
