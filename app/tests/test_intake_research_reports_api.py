@@ -1,67 +1,56 @@
 # -*- coding: utf-8 -*-
 """調研報告回顯 API。全程使用隔離資料庫與虛構品牌，不發真實網路請求。"""
 
-import atexit
 import os
-import shutil
-import tempfile
 import unittest
+from datetime import datetime
 
-_tmpdir = tempfile.mkdtemp(prefix="brand_os_research_reports_api_")
 os.environ.setdefault("ANTHROPIC_API_KEY", "sk-ant-fake-research-reports-api-test")
 
 from fastapi.testclient import TestClient  # noqa: E402
 
 import app.main as main  # noqa: E402
+import app.shared.web as web  # noqa: E402
 from app.brand_intelligence import repository as brand_repo  # noqa: E402
-from app.core.db import new_id, now_iso  # noqa: E402
+from app.core import db as coredb  # noqa: E402
+from app.core.db import new_id, now_utc  # noqa: E402
 from app.intake import repository as intake_repo  # noqa: E402
 from app.intake import routes_api as api  # noqa: E402
-
-
-def _cleanup():
-    try:
-        main.conn.close()
-    except Exception:
-        pass
-    shutil.rmtree(_tmpdir, ignore_errors=True)
-
-
-atexit.register(_cleanup)
 
 
 class ResearchReportApiTest(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(main.app)
         brand = brand_repo.create_brand(
-            main.conn, name=f"虛構調研回顯品牌{new_id('test')}", client_name=None, actor="測試員",
+            web.conn, name=f"虛構調研回顯品牌{new_id('test')}", client_name=None, actor="測試員",
         )
         self.brand_id = brand["id"]
 
     def _report(self, raw_text: str, created_at: str) -> str:
         draft = intake_repo.create_draft(
-            main.conn, self.brand_id, "測試用描述", [], [], actor="測試員",
+            web.conn, self.brand_id, "測試用描述", [], [], actor="測試員",
         )
         intake_repo.update_draft(
-            main.conn, self.brand_id, draft["id"], handoff_depth="deep", paste_raw=raw_text,
+            web.conn, self.brand_id, draft["id"], handoff_depth="deep", paste_raw=raw_text,
         )
-        intake_repo.complete_draft(main.conn, self.brand_id, draft["id"])
-        main.conn.execute(
-            "UPDATE intake_draft SET created_at = ? WHERE id = ?", (created_at, draft["id"]),
+        intake_repo.complete_draft(web.conn, self.brand_id, draft["id"])
+        web.conn.execute(
+            "UPDATE intake_draft SET created_at = %s WHERE id = %s",
+            (datetime.fromisoformat(created_at), draft["id"]),
         )
-        main.conn.commit()
+        web.conn.commit()
         return draft["id"]
 
     def _confirmed_item(self, draft_id: str) -> None:
-        main.conn.execute(
+        web.conn.execute(
             """INSERT INTO intake_item (
-                id, intake_draft_id, brand_id, row_no, raw_row, kind, category, title,
+                id, org_id, intake_draft_id, brand_id, row_no, raw_row, kind, category, title,
                 content, scope_raw, outcome, created_at
-            ) VALUES (?, ?, ?, 1, '測試原文', 'brand_fact', 'positioning', '測試標題',
-                      '測試內容', '整個品牌', 'confirmed', ?)""",
-            (new_id("iit"), draft_id, self.brand_id, now_iso()),
+            ) VALUES (%s, %s, %s, %s, 1, '測試原文', 'brand_fact', 'positioning', '測試標題',
+                      '測試內容', '整個品牌', 'confirmed', %s)""",
+            (new_id("iit"), coredb.DEV_ORG_ID, draft_id, self.brand_id, now_utc()),
         )
-        main.conn.commit()
+        web.conn.commit()
 
     def test_list_returns_newest_first_with_confirmed_counts(self):
         older = self._report("1. 市場與品類\n較早內容", "2026-07-01T10:00:00+00:00")
