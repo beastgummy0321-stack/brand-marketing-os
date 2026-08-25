@@ -53,15 +53,16 @@ class _BaseOpeningSuggestionTest(unittest.TestCase):
             identifier="https://example.test",
         )
 
-    def add_cycle(self, *, status: str = "PLANNING", start_date: str = "2026-08-01") -> str:
+    def add_cycle(self, *, status: str = "PLANNING", start_date: str = "2026-08-01",
+                  end_date: str = "2026-08-14") -> str:
         cycle_id = new_id("ccy")
         ts = now_iso()
         main.conn.execute(
             "INSERT INTO campaign_cycle (id, brand_id, product_scope_json, objective, currency, start_date, "
             "end_date, channels_json, status, archived, plan_version, phase, created_at, updated_at) "
-            "VALUES (?, ?, '[]', 'sales', 'TWD', ?, '2026-08-14', '[]', ?, 0, 0, "
+            "VALUES (?, ?, '[]', 'sales', 'TWD', ?, ?, '[]', ?, 0, 0, "
             "'normal', ?, ?)",
-            (cycle_id, self.bid, start_date, status, ts, ts),
+            (cycle_id, self.bid, start_date, end_date, status, ts, ts),
         )
         main.conn.commit()
         return cycle_id
@@ -216,6 +217,130 @@ class OpeningSuggestionApiTest(_BaseOpeningSuggestionTest):
         self.assertEqual(body["suggestion"]["budget"], 10000)
         self.assertEqual(body["budget_basis"], "closing_review")
         self.assertIn("依上一期覆盤建議", body["summary"])
+
+    def test_from_cycle_uses_that_cycles_budget_not_the_newest_closed_one(self):
+        """F8 驗收 1：兩期都 CLOSED，`from_cycle` 指定較舊那期 → 用那期的預算，不是排序
+        下最新開始日那期（今天的規則會誤取後者，B0-39 的根因）。"""
+        self.add_channel()
+        self.add_product("F8 覆盤茶葉")
+        older_cycle = self.add_cycle(status="CLOSED", start_date="2026-08-11", end_date="2026-08-24")
+        self.store_next_cycle_recommendation(older_cycle, proposed_budget=45000)
+        newer_cycle = self.add_cycle(status="CLOSED", start_date="2026-08-25", end_date="2026-09-07")
+        self.store_next_cycle_recommendation(newer_cycle, proposed_budget=75000)
+
+        body = self.client.get(
+            f"/api/campaigns/brands/{self.bid}/opening-suggestion?from_cycle={older_cycle}"
+        ).json()
+
+        self.assertTrue(body["available"])
+        self.assertEqual(body["suggestion"]["budget"], 45000)
+        self.assertEqual(body["budget_basis"], "closing_review")
+
+    def test_from_cycle_summary_names_source_cycles_date_range(self):
+        """F8 驗收 2：summary 講來源檔期的日期範圍，不是內部 id、也不是泛泛的「上一期」。"""
+        self.add_channel()
+        self.add_product("F8 覆盤茶葉二號")
+        older_cycle = self.add_cycle(status="CLOSED", start_date="2026-08-11", end_date="2026-08-24")
+        self.store_next_cycle_recommendation(older_cycle, proposed_budget=45000)
+        self.add_cycle(status="CLOSED", start_date="2026-08-25", end_date="2026-09-07")
+
+        body = self.client.get(
+            f"/api/campaigns/brands/{self.bid}/opening-suggestion?from_cycle={older_cycle}"
+        ).json()
+
+        self.assertIn("2026-08-11", body["summary"])
+        self.assertIn("2026-08-24", body["summary"])
+        self.assertNotIn(older_cycle, body["summary"])
+
+    def test_no_from_cycle_matches_todays_rule_unchanged(self):
+        """F8 驗收 3（迴歸守門）：不帶 `from_cycle` 時結果跟沒有這個參數以前逐位元組一樣
+        —— 可能一開始就是綠的，這是預期，不是造假。"""
+        self.add_channel()
+        self.add_product("F8 無來源茶葉")
+        older_cycle = self.add_cycle(status="CLOSED", start_date="2026-08-11", end_date="2026-08-24")
+        self.store_next_cycle_recommendation(older_cycle, proposed_budget=45000)
+        self.add_cycle(status="CLOSED", start_date="2026-08-25", end_date="2026-09-07")
+        newer_cycle_2 = self.add_cycle(status="CLOSED", start_date="2026-09-08", end_date="2026-09-21")
+        self.store_next_cycle_recommendation(newer_cycle_2, proposed_budget=75000)
+
+        body = self.client.get(f"/api/campaigns/brands/{self.bid}/opening-suggestion").json()
+
+        self.assertEqual(body["suggestion"]["budget"], 75000)
+        self.assertEqual(body["budget_basis"], "closing_review")
+        self.assertIn("依上一期覆盤建議", body["summary"])
+
+    def test_unknown_from_cycle_falls_back_without_crashing(self):
+        """F8 驗收 4a：查無此期的 `from_cycle` 不能炸掉，退回今天的規則。"""
+        self.add_channel()
+        self.add_product("F8 查無來源茶葉")
+        newest = self.add_cycle(status="CLOSED", start_date="2026-08-25", end_date="2026-09-07")
+        self.store_next_cycle_recommendation(newest, proposed_budget=75000)
+
+        response = self.client.get(
+            f"/api/campaigns/brands/{self.bid}/opening-suggestion?from_cycle=ccy_不存在的期"
+        )
+        body = response.json()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(body["available"])
+        self.assertEqual(body["suggestion"]["budget"], 75000)
+        self.assertIn("依上一期覆盤建議", body["summary"])
+
+    def test_other_brand_from_cycle_falls_back(self):
+        """F8 驗收 4b：別的品牌的期號不能被讀到——即使那期真的是 CLOSED。"""
+        self.add_channel()
+        self.add_product("F8 跨品牌來源茶葉")
+        newest = self.add_cycle(status="CLOSED", start_date="2026-08-25", end_date="2026-09-07")
+        self.store_next_cycle_recommendation(newest, proposed_budget=75000)
+
+        other_brand = bi_repo.create_brand(
+            main.conn, name=f"別家茶行{abs(hash(self.id())) % 100000}", client_name=None, actor=ACTOR)
+        other_cid = new_id("ccy")
+        ts = now_iso()
+        main.conn.execute(
+            "INSERT INTO campaign_cycle (id, brand_id, product_scope_json, objective, currency, start_date, "
+            "end_date, channels_json, status, archived, plan_version, phase, created_at, updated_at) "
+            "VALUES (?, ?, '[]', 'sales', 'TWD', '2026-08-11', '2026-08-24', '[]', 'CLOSED', 0, 0, "
+            "'normal', ?, ?)",
+            (other_cid, other_brand["id"], ts, ts),
+        )
+        main.conn.commit()
+        self.store_next_cycle_recommendation(other_cid, proposed_budget=45000)
+
+        body = self.client.get(
+            f"/api/campaigns/brands/{self.bid}/opening-suggestion?from_cycle={other_cid}"
+        ).json()
+
+        self.assertEqual(body["suggestion"]["budget"], 75000)
+
+    def test_non_closed_from_cycle_falls_back(self):
+        """F8 驗收 4c：`from_cycle` 指到還沒關閉的檔期一樣不能用，退回今天的規則。"""
+        self.add_channel()
+        self.add_product("F8 未關閉來源茶葉")
+        newest = self.add_cycle(status="CLOSED", start_date="2026-08-25", end_date="2026-09-07")
+        self.store_next_cycle_recommendation(newest, proposed_budget=75000)
+        still_open = self.add_cycle(status="PLANNING", start_date="2026-08-11", end_date="2026-08-24")
+
+        body = self.client.get(
+            f"/api/campaigns/brands/{self.bid}/opening-suggestion?from_cycle={still_open}"
+        ).json()
+
+        self.assertEqual(body["suggestion"]["budget"], 75000)
+
+    def test_channel_answer_carries_from_cycle_through(self):
+        """POST channel-answer 也要帶著 `from_cycle` 重問一次，不然答完通路後預算跳回
+        今天最新一期（票面「或有文件說明為什麼不用」——這裡選了要串）。"""
+        self.add_product("F8 通路後仍記得來源")
+        older_cycle = self.add_cycle(status="CLOSED", start_date="2026-08-11", end_date="2026-08-24")
+        self.store_next_cycle_recommendation(older_cycle, proposed_budget=45000)
+        newer_cycle = self.add_cycle(status="CLOSED", start_date="2026-08-25", end_date="2026-09-07")
+        self.store_next_cycle_recommendation(newer_cycle, proposed_budget=75000)
+        url = f"/api/campaigns/brands/{self.bid}/opening-suggestion/channel-answer"
+
+        answer = self.client.post(url, json={"answer": "LINE", "from_cycle": older_cycle})
+
+        self.assertTrue(answer.json()["available"])
+        self.assertEqual(answer.json()["suggestion"]["budget"], 45000)
 
     def test_no_closed_cycle_falls_back_to_pain_amount(self):
         """驗收 2：沒有 CLOSED 檔期 → 用今天的痛點金額，並且白話說明基準。"""

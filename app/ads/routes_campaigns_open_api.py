@@ -133,9 +133,9 @@ def _budget_tiers(pain_suggestion: dict) -> list:
 # ---- 開檔（S8.1-11／S8R.1-7） ----
 
 @router.get("/api/campaigns/brands/{brand_id}/opening-suggestion")
-async def get_opening_suggestion(brand_id: str):
+async def get_opening_suggestion(brand_id: str, from_cycle: str | None = None):
     main_mod.require_brand(brand_id)
-    return opening_suggestion.opening_suggestion(main_mod.conn, brand_id)
+    return opening_suggestion.opening_suggestion(main_mod.conn, brand_id, from_cycle=from_cycle)
 
 
 @router.post("/api/campaigns/brands/{brand_id}/opening-suggestion/channel-answer")
@@ -143,7 +143,8 @@ async def post_opening_suggestion_channel_answer(request: Request, brand_id: str
     main_mod.require_brand(brand_id)
     body = await _json_body(request)
     return opening_suggestion.save_channel_answer(
-        main_mod.conn, brand_id, actor=main_mod.require_actor(request), answer=body.get("answer")
+        main_mod.conn, brand_id, actor=main_mod.require_actor(request), answer=body.get("answer"),
+        from_cycle=body.get("from_cycle"),
     )
 
 @router.get("/api/campaigns/{brand_id}/new-context")

@@ -371,7 +371,7 @@ function NextCycleCard({ brandId, review, cycle }: { brandId: string; review: Cl
         新增規則卡 {r.rule_cards_created} 張
         {r.echo_chamber && "・已提示避免回音室"}
       </p>
-      <Link to={`/brands/${brandId}/campaigns/new`} className="mt-3 inline-block self-start rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90">
+      <Link to={`/brands/${brandId}/campaigns/new?from_cycle=${encodeURIComponent(cycle.id)}`} className="mt-3 inline-block self-start rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90">
         開下一期就這樣開
       </Link>
     </FluidCard>

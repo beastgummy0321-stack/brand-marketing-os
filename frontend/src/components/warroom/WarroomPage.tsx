@@ -29,7 +29,7 @@ const PLAN_NOT_APPROVED = new Set(["PLANNING", "PLAN_SELECT", "REVIEW"]);
  * 摘要卡，點階段條任一格可自由跳過去展開（不擋，跳段不算違規操作——`TaskFlowShell` 新增
  * `freeNavigation`／`expandedStep` 兩個選用 prop，建檔精靈零像素改變）。右欄跟 B3 同一份
  * 品牌層 AI 花費儀表，不是「廣告花費」。 */
-export function WarroomPage({ brandId, cycleId }: { brandId: string; cycleId: string | null }) {
+export function WarroomPage({ brandId, cycleId, fromCycle }: { brandId: string; cycleId: string | null; fromCycle?: string | null }) {
   const navigate = useNavigate();
   const [state, setState] = useState<LoadState>({ status: "loading" });
   const [viewBlock, setViewBlock] = useState(1);
@@ -63,7 +63,7 @@ export function WarroomPage({ brandId, cycleId }: { brandId: string; cycleId: st
         <Breadcrumb items={[{ label: "跨品牌總覽", href: "/" }, { label: "歷史檔期", href: `/brands/${brandId}/campaigns` }, { label: "開新檔期" }]} />
         <TaskFlowShell steps={STAGE_BAR_LABELS} current={1} onSelect={() => {}} rightRail={<AiCostMeter brandId={brandId} />}>
           <NewCycleDirectionChoice brandId={brandId}>
-            {(initialBackground) => <OpeningSuggestionCard brandId={brandId} initialBackground={initialBackground} onCreated={(newId) => navigate(`/brands/${brandId}/campaigns/${newId}`)} />}
+            {(initialBackground) => <OpeningSuggestionCard brandId={brandId} initialBackground={initialBackground} fromCycle={fromCycle} onCreated={(newId) => navigate(`/brands/${brandId}/campaigns/${newId}`)} />}
           </NewCycleDirectionChoice>
         </TaskFlowShell>
       </div>

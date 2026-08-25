@@ -109,15 +109,16 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 const brandBase = (brandId: string) => `/api/campaigns/brands/${encodeURIComponent(brandId)}`;
 const proposalBase = (brandId: string, cycleId: string) => `${brandBase(brandId)}/cycles/${encodeURIComponent(cycleId)}/proposal`;
 
-export function fetchOpeningSuggestion(brandId: string): Promise<OpeningSuggestionResponse> {
-  return request(`${brandBase(brandId)}/opening-suggestion`);
+export function fetchOpeningSuggestion(brandId: string, fromCycle?: string | null): Promise<OpeningSuggestionResponse> {
+  const query = fromCycle ? `?from_cycle=${encodeURIComponent(fromCycle)}` : "";
+  return request(`${brandBase(brandId)}/opening-suggestion${query}`);
 }
 
-export function answerOpeningChannel(brandId: string, answer: string): Promise<void> {
+export function answerOpeningChannel(brandId: string, answer: string, fromCycle?: string | null): Promise<void> {
   return request(`${brandBase(brandId)}/opening-suggestion/channel-answer`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ answer }),
+    body: JSON.stringify({ answer, from_cycle: fromCycle ?? null }),
   });
 }
 

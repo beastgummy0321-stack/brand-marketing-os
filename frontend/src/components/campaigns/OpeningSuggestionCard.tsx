@@ -30,7 +30,7 @@ const OFFER_TYPE_OPTIONS = Object.entries(OFFER_TYPE_LABELS) as [OfferType, stri
  * 開檔建議卡（F1 畫面 1）。只有這個元件讀取／回答 opening-suggestion；建立檔期仍走既有
  * `createCycle`，所以建立後的狀態只由後端保存；有關掉的管道會在建立後立即寫回 channel-plan。
  */
-export function OpeningSuggestionCard({ brandId, initialBackground, onCreated }: { brandId: string; initialBackground: string; onCreated: (cycleId: string) => void }) {
+export function OpeningSuggestionCard({ brandId, initialBackground, onCreated, fromCycle }: { brandId: string; initialBackground: string; onCreated: (cycleId: string) => void; fromCycle?: string | null }) {
   const [state, setState] = useState<LoadState>({ status: "loading" });
   const [adjusting, setAdjusting] = useState(false);
   const [answering, setAnswering] = useState(false);
@@ -52,7 +52,7 @@ export function OpeningSuggestionCard({ brandId, initialBackground, onCreated }:
 
   function load() {
     setState({ status: "loading" });
-    Promise.all([fetchOpeningSuggestion(brandId), fetchNewContext(brandId)])
+    Promise.all([fetchOpeningSuggestion(brandId, fromCycle), fetchNewContext(brandId)])
       .then(([opening, context]) => {
         setState({ status: "ready", opening, context });
         if (opening.available) {
@@ -64,13 +64,13 @@ export function OpeningSuggestionCard({ brandId, initialBackground, onCreated }:
       .catch(() => setState({ status: "error" }));
   }
 
-  useEffect(load, [brandId]);
+  useEffect(load, [brandId, fromCycle]);
 
   async function answerChannel(answer: string) {
     setAnswering(true);
     setActionError(null);
     try {
-      await answerOpeningChannel(brandId, answer);
+      await answerOpeningChannel(brandId, answer, fromCycle);
       load();
     } catch (error) {
       setActionError(error instanceof Error ? error.message : "送出失敗，請稍後再試。");

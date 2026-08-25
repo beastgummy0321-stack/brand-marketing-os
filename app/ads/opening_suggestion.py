@@ -112,8 +112,28 @@ def _last_closed_budget(conn, brand_id: str):
     return None
 
 
-def opening_suggestion(conn, brand_id: str) -> dict:
-    """依既有商品、歷史、預算引擎組出開檔預填；任何缺口回人話失敗形狀。"""
+def _closed_cycle_budget(conn, brand_id: str, cycle_id: str):
+    """讀「使用者實際點過來的那期」（F8 `from_cycle`）存好的覆盤建議預算與日期範圍。
+    不是本品牌、查無此期、或非 CLOSED 一律回 None——呼叫端據此退回
+    `_last_closed_budget()` 今天的規則，不假裝用了這期。"""
+    cycle = ads_repo.get_cycle(conn, brand_id, cycle_id)
+    if not cycle or cycle["status"] != "CLOSED":
+        return None
+    stored = nextcycle.load(conn, brand_id, cycle_id)
+    if not stored:
+        return None
+    amount = (stored["content"].get("budget") or {}).get("proposed_budget")
+    if not amount or amount <= 0:
+        return None
+    return {"amount": amount, "start_date": cycle["start_date"], "end_date": cycle["end_date"]}
+
+
+def opening_suggestion(conn, brand_id: str, from_cycle: str | None = None) -> dict:
+    """依既有商品、歷史、預算引擎組出開檔預填；任何缺口回人話失敗形狀。
+    `from_cycle`：使用者從覆盤頁④「開下一期就這樣開」點過來時帶的來源檔期 id（F8）；
+    給了且該期是本品牌的 CLOSED 檔期 → 用那期存好的覆盤建議、summary 講那期的日期範圍。
+    沒給、或給的期查無效／非本品牌／非 CLOSED → 退回今天的規則（`_last_closed_budget`），
+    行為與沒有這個參數時逐位元組相同。"""
     try:
         if not any(channel["status"] == "active" for channel in bi.list_channels(conn, brand_id)):
             return _unavailable("還不知道客人主要去哪買，先選一個讓我幫你安排。")
@@ -121,9 +141,14 @@ def opening_suggestion(conn, brand_id: str) -> dict:
         if product is None:
             return _unavailable("還沒有可主打的商品，先補一項商品資料。", ask_for_channel=False)
         pain = target_cpa.suggest_pain_value(conn, brand_id, "sales", [product["id"]])
-        last_closed = _last_closed_budget(conn, brand_id)
+        source = _closed_cycle_budget(conn, brand_id, from_cycle) if from_cycle else None
+        if source:
+            last_closed = source["amount"]
+            basis_text = f"依 {source['start_date']}～{source['end_date']} 檔期的覆盤建議"
+        else:
+            last_closed = _last_closed_budget(conn, brand_id)
+            basis_text = "依上一期覆盤建議" if last_closed else "依你設定的痛點金額"
         basis = "closing_review" if last_closed else "pain_amount"
-        basis_text = "依上一期覆盤建議" if basis == "closing_review" else "依你設定的痛點金額"
         plan = budget.plan_from_pain(last_closed or pain["amount"])
         suggestion = {
             "platform": "meta", "product_id": product["id"], "product_name": product["name"],
@@ -139,8 +164,9 @@ def opening_suggestion(conn, brand_id: str) -> dict:
         return {"available": False, "reason": "建議暫時整理不出來，你可以直接手動開檔。"}
 
 
-def save_channel_answer(conn, brand_id: str, *, actor: str, answer: str) -> dict:
-    """把四選一答案寫入既有 owned_channel，再立即回傳同一份建議。"""
+def save_channel_answer(conn, brand_id: str, *, actor: str, answer: str, from_cycle: str | None = None) -> dict:
+    """把四選一答案寫入既有 owned_channel，再立即回傳同一份建議；帶著同一個 `from_cycle`
+    重問一次（F8），不然回答完通路問題後預算會跳回今天最新一期。"""
     channel = _ANSWER_CHANNEL.get(answer)
     if channel is None:
         return _unavailable("請從四個選項中選一個常用的購買方式。")
@@ -148,4 +174,4 @@ def save_channel_answer(conn, brand_id: str, *, actor: str, answer: str) -> dict
     current = bi.list_channels(conn, brand_id)
     if not any(row["channel_type"] == channel_type and row["status"] == "active" for row in current):
         bi.create_channel(conn, brand_id, actor=actor, channel_type=channel_type, name=name, platform=platform)
-    return opening_suggestion(conn, brand_id)
+    return opening_suggestion(conn, brand_id, from_cycle=from_cycle)

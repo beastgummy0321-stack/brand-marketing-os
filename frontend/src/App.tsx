@@ -208,9 +208,10 @@ function LearningsRoute() {
 /** S8 檔期作戰室：開新檔期（票 B4-warroom）。 */
 function WarroomNewRoute() {
   const { brandId } = useParams<{ brandId: string }>();
+  const [params] = useSearchParams();
   return (
     <AppShell brandId={brandId ?? null}>
-      <WarroomPage brandId={brandId ?? ""} cycleId={null} />
+      <WarroomPage brandId={brandId ?? ""} cycleId={null} fromCycle={params.get("from_cycle")} />
     </AppShell>
   );
 }
