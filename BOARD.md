@@ -6,7 +6,7 @@
 
 ## 第 ② 片：資料層一次翻（ADR 0027；saas 分支；依序執行，票在 .scratch/saas/tickets/）
 
-- [ ] 02-4 測試轉 Postgres：每測試模組一個 schema、保留 `--dist loadfile`、刪純文案斷言測試
+- [>] 02-4 測試轉 Postgres：每測試模組一個 schema、保留 `--dist loadfile`、刪純文案斷言測試
 - [ ] 02-5 三條機器閘門：每表必有 org_id／migration 只 CREATE 自己前綴／零 sqlite 殘留（各紅過一次）；並對全部表 `ENABLE ROW LEVEL SECURITY`（後端以 postgres 角色連線不受影響，目的是封死 anon/authenticated 直連 PostgREST；02-2 的 Supabase advisory）
 
 ## 舊票（排在七片之後，暫不動）

@@ -1,48 +1,106 @@
 # -*- coding: utf-8 -*-
-"""Pytest 啟動與逐模組資料庫隔離。"""
+"""Pytest 啟動與逐模組 Postgres schema 隔離（票 02-4，ADR 0027：Supabase）。
 
-import atexit
+取代 02-1 的 SQLite per-module 暫存目錄版本：每個測試模組拿一個獨立 Postgres
+schema（`t_<module>_<pid>`），module setup 時建立並灌入 5 個 baseline migration
+＋ seed.sql，module teardown 時整個砍掉（`DROP SCHEMA … CASCADE`）——`pytest -n auto
+--dist loadfile` 的每個 worker 進程互不相干（各自的 pid、各自的 `app.core.db._pool`），
+同一 worker 裡前後兩個模組也不會撞名（pid 相同但模組名不同）。
+
+連線走法：`app/core/db.py` 的連線池是模組層單例（`coredb._pool`），只在第一次呼叫
+`coredb.pool()` 時惰性建立、之後固定用建立當下的 DSN。這裡在每個模組 setup 時把
+`DATABASE_URL` 指到「這個模組的 schema」（DSN `options=-c search_path=…`）、順手把
+`coredb._pool` 砍掉重建，讓下一次 `coredb.pool()` 用新 DSN 開新池——等於「這個模組
+期間，池子吐出來的每一條連線 search_path 都固定指這個 schema」，比 psycopg_pool 的
+`configure=` hook 更直接：`configure` 只在物理連線「建立那一刻」跑一次（見
+psycopg_pool.pool.ConnectionPool._connect 原始碼），同一個池子若跨模組沿用，
+舊連線的 search_path 不會跟著換，所以這裡選擇「換模組＝換 DSN＋砍池重開」而不是
+共用一個池子掛 configure。
+
+`TestClient(app)` 送出的請求走 `app/main.py` 的 `_db_connection_middleware`，跟
+下面的 autouse 連線 fixture 一樣都是問 `coredb.pool()` 借連線——兩邊借到的是同一個
+（此刻唯一存在的）池子，因此落在同一個 schema。
+"""
+
 import os
-import shutil
-import tempfile
+import re
 from pathlib import Path
 
+import psycopg
 import pytest
 
+from app.core import db as coredb
 
-_collection_tmpdir = tempfile.mkdtemp(prefix="brand_os_pytest_collection_")
+_REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+_MIGRATIONS_DIR = _REPO_ROOT / "supabase" / "migrations"
+_SEED_FILE = _REPO_ROOT / "supabase" / "seed.sql"
+# 固定捕捉「未被任何模組改過」的原始 DSN，管理連線（建/砍 schema）永遠用這條，
+# 不受下面逐模組覆寫 os.environ["DATABASE_URL"] 影響。
+_BASE_DSN = os.environ.get("DATABASE_URL", coredb.dsn())
+
+_baseline_sql_cache: list = []  # 惰性讀一次 baseline SQL 檔案內容（不是資料庫狀態）
 
 
-def _database_environment(root: Path) -> dict[str, str]:
-    return {
-        "BRAND_OS_DB": str(root / "test.db"),
-        "BRAND_OS_BACKUP_DIR": str(root / "backups"),
-        "BRAND_OS_UPLOADS": str(root / "uploads"),
-    }
+def _baseline_sql() -> str:
+    if not _baseline_sql_cache:
+        parts = [p.read_text(encoding="utf-8") for p in sorted(_MIGRATIONS_DIR.glob("*.sql"))]
+        parts.append(_SEED_FILE.read_text(encoding="utf-8"))
+        _baseline_sql_cache.append("\n".join(parts))
+    return _baseline_sql_cache[0]
 
 
-def pytest_configure() -> None:
-    """測試模組 import app.main 前，先擋住正式資料庫。"""
-    os.environ.update(_database_environment(Path(_collection_tmpdir)))
+def _schema_name(module_name: str) -> str:
+    short = re.sub(r"[^a-zA-Z0-9_]", "_", module_name.rsplit(".", 1)[-1])
+    return f"t_{short}_{os.getpid()}"
+
+
+def _admin_conn() -> psycopg.Connection:
+    """管理連線：固定用 `_BASE_DSN`（不受逐模組 search_path 覆寫影響），autocommit，
+    只用來建/砍 test schema。"""
+    return psycopg.connect(_BASE_DSN, autocommit=True)
+
+
+def _search_path_dsn(schema: str) -> str:
+    from urllib.parse import quote
+
+    sep = "&" if "?" in _BASE_DSN else "?"
+    return f"{_BASE_DSN}{sep}options={quote(f'-c search_path={schema},public')}"
+
+
+def _reset_pool() -> None:
+    if coredb._pool is not None:
+        coredb._pool.close()
+        coredb._pool = None
 
 
 @pytest.fixture(scope="module", autouse=True)
-def isolate_module_database(request, tmp_path_factory):
-    """每個使用 app.main 的測試模組執行前切回自己的資料庫。"""
-    module_tmpdir = getattr(request.module, "_tmpdir", None)
-    module_main = getattr(request.module, "main", None)
-    if module_tmpdir is None and getattr(module_main, "__name__", None) == "app.main":
-        module_tmpdir = tmp_path_factory.mktemp(request.module.__name__.rsplit(".", 1)[-1])
-    if module_tmpdir is None:
-        yield
-        return
+def _module_schema(request):
+    """每個測試模組一個 Postgres schema：建立→灌 baseline→把連線池指過去；
+    模組結束後池子關掉、schema 整個砍掉。"""
+    schema = _schema_name(request.module.__name__)
 
-    os.environ.update(_database_environment(Path(module_tmpdir)))
+    with _admin_conn() as admin:
+        admin.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        admin.execute(f'CREATE SCHEMA "{schema}"')
+        admin.execute(f'SET search_path TO "{schema}"')
+        admin.execute(_baseline_sql())
 
-    import app.main as main
+    _reset_pool()
+    os.environ["DATABASE_URL"] = _search_path_dsn(schema)
 
-    main.reopen_connection()
-    yield
+    yield schema
+
+    _reset_pool()
+    os.environ["DATABASE_URL"] = _BASE_DSN
+    with _admin_conn() as admin:
+        admin.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
 
 
-atexit.register(shutil.rmtree, _collection_tmpdir, ignore_errors=True)
+@pytest.fixture(autouse=True)
+def _bound_connection():
+    """repository 層測試直接呼叫 `web.conn`／`coredb.current()`（不經過
+    `TestClient` 的 middleware）時，這裡幫忙先借好一條綁在這個測試函式上的連線；
+    `TestClient` 請求自己另外經 middleware 借一條——两條連線落在同一個（此刻唯一
+    存在的）池子，因此同一個 schema，READ COMMITTED 底下彼此提交的資料看得到。"""
+    with coredb.connection() as conn:
+        yield conn
