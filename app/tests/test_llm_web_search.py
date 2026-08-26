@@ -13,9 +13,7 @@
 https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-search-tool.md
 """
 
-import tempfile
 import unittest
-from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
@@ -149,14 +147,9 @@ class _LegacyProvider:
 
 class GatewayWebSearchCostTest(unittest.TestCase):
     def setUp(self):
-        self._tmpdir = tempfile.TemporaryDirectory()
-        self.conn = db.connect_and_migrate(Path(self._tmpdir.name) / "test.db")
+        self.conn = db.current()
         self.brand = repo.create_brand(self.conn, name="虛構晨星燕麥",
                                        client_name=None, actor="測試員")
-
-    def tearDown(self):
-        self.conn.close()
-        self._tmpdir.cleanup()
 
     def _run(self, provider, tools=None):
         return gateway.run_task(
@@ -188,16 +181,15 @@ class GatewayWebSearchCostTest(unittest.TestCase):
 
     def test_cost_includes_web_search_requests(self):
         """搜尋按次另計（US$10／1000 次），要加進 llm_task.cost，花費上限才擋得準。"""
-        token_only = self._run(self._provider(web_search_requests=0))["cost"]
-        with_search = self._run(self._provider(web_search_requests=3))["cost"]
+        token_only = float(self._run(self._provider(web_search_requests=0))["cost"])
+        with_search = float(self._run(self._provider(web_search_requests=3))["cost"])
         self.assertAlmostEqual(with_search - token_only,
                                3 * pricing.WEB_SEARCH_USD_PER_SEARCH, places=9)
         self.assertAlmostEqual(pricing.WEB_SEARCH_USD_PER_SEARCH, 0.01, places=9)
 
     def test_usage_json_records_web_search_requests(self):
-        import json
         row = self._run(self._provider(web_search_requests=2), tools=[providers.WEB_SEARCH_TOOL])
-        self.assertEqual(json.loads(row["usage_json"])["web_search_requests"], 2)
+        self.assertEqual(row["usage_json"]["web_search_requests"], 2)
 
     def test_legacy_provider_without_tools_parameter_still_works(self):
         provider = _LegacyProvider()

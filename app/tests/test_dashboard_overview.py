@@ -5,35 +5,18 @@
 app/tests/test_orders_routes.py）。測試品牌一律虛構。
 """
 
-import atexit
 import os
-import shutil
-import tempfile
 import unittest
-from datetime import date
 
-_tmpdir = tempfile.mkdtemp(prefix="brand_os_dashboard_")
 os.environ["BRAND_OS_TODAY"] = "2026-08-05"  # 凍結時鐘：本檔所有日期斷言都以這天為「今天」
 
 from fastapi.testclient import TestClient  # noqa: E402
 
 import app.main as main  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
-from app.core import interrupts as core_interrupts  # noqa: E402
+from app.core import db as coredb  # noqa: E402
 from app.core.db import new_id, now_iso  # noqa: E402
 from app.orders import repository as orders_repo  # noqa: E402
-
-
-
-def _cleanup():
-    try:
-        main.conn.close()
-    except Exception:
-        pass
-    shutil.rmtree(_tmpdir, ignore_errors=True)
-
-
-atexit.register(_cleanup)
 
 ACTOR = "測試員"
 TODAY = "2026-08-05"
@@ -46,11 +29,11 @@ def _insert_cycle(conn, brand_id: str, *, status: str, start_date: str) -> str:
     cycle_id = new_id("ccy")
     ts = now_iso()
     conn.execute(
-        "INSERT INTO campaign_cycle (id, brand_id, product_scope_json, objective, budget,"
-        " currency, start_date, end_date, channels_json, status, archived, plan_version,"
-        " phase, created_at, updated_at) VALUES (?, ?, '[]', 'sales', 5000, 'TWD', ?, ?,"
-        " '[\"meta\"]', ?, 0, 0, 'normal', ?, ?)",
-        (cycle_id, brand_id, start_date, start_date, status, ts, ts),
+        "INSERT INTO campaign_cycle (id, org_id, brand_id, product_scope_json, objective,"
+        " budget, currency, start_date, end_date, channels_json, status, archived,"
+        " plan_version, phase, created_at, updated_at) VALUES (%s, %s, %s, '[]', 'sales',"
+        " 5000, 'TWD', %s, %s, '[\"meta\"]', %s, false, 0, 'normal', %s, %s)",
+        (cycle_id, coredb.DEV_ORG_ID, brand_id, start_date, start_date, status, ts, ts),
     )
     conn.commit()
     return cycle_id
@@ -74,10 +57,10 @@ class DashboardOverviewApiTest(unittest.TestCase):
         # CATEGORIES 登記表反查，目前尚無任何類別登記 money_loss（08-pacing-alert 之類
         # 未來票才會登記）；測試直接塞一列，繞過 enqueue（測試檔豁免跨層寫入掃描）。
         main.conn.execute(
-            "INSERT INTO interrupt (id, brand_id, dedupe_key, category, severity, message,"
-            " status, created_at) VALUES (?, ?, 'dup-1', 'code_surge_alert', 'money_loss',"
-            " '測試用金額損失警報', 'open', ?)",
-            (new_id("itr"), self.brand_red["id"], now_iso()),
+            "INSERT INTO interrupt (id, org_id, brand_id, dedupe_key, category, severity,"
+            " message, status, created_at) VALUES (%s, %s, %s, 'dup-1', 'code_surge_alert',"
+            " 'money_loss', '測試用金額損失警報', 'open', %s)",
+            (new_id("itr"), coredb.DEV_ORG_ID, self.brand_red["id"], now_iso()),
         )
         main.conn.commit()
 
@@ -168,16 +151,16 @@ class DashboardOverviewApiTest(unittest.TestCase):
         這支只讀 API 不該觸發這個副作用。"""
         stale_id = new_id("itr")
         main.conn.execute(
-            "INSERT INTO interrupt (id, brand_id, dedupe_key, category, severity, message,"
-            " status, visible_from, created_at) VALUES (?, ?, 'dup-stale', 'cycle_reminder',"
-            " 'informational', '測試用逾期提醒', 'open', '2026-07-16', ?)",
-            (stale_id, self.brand_green["id"], now_iso()),
+            "INSERT INTO interrupt (id, org_id, brand_id, dedupe_key, category, severity,"
+            " message, status, visible_from, created_at) VALUES (%s, %s, %s, 'dup-stale',"
+            " 'cycle_reminder', 'informational', '測試用逾期提醒', 'open', '2026-07-16', %s)",
+            (stale_id, coredb.DEV_ORG_ID, self.brand_green["id"], now_iso()),
         )
         main.conn.commit()
 
         self.client.get("/api/dashboard/overview")
 
-        row = main.conn.execute("SELECT status FROM interrupt WHERE id = ?",
+        row = main.conn.execute("SELECT status FROM interrupt WHERE id = %s",
                                 (stale_id,)).fetchone()
         self.assertEqual(row["status"], "open")
 

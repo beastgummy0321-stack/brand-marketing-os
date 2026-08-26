@@ -11,9 +11,9 @@ import unittest
 from datetime import date
 from pathlib import Path
 
-from app import mock_data
 from app.brand_intelligence import repository as repo
 from app.core import db
+from app.core import vocab as mock_data
 from app.llm import methodology
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -44,13 +44,16 @@ class MethodologyTableParseTest(unittest.TestCase):
 
 class MethodologyCompileTest(unittest.TestCase):
     def setUp(self):
+        self.conn = db.current()
+        # conftest.py 現在是逐模組一個 schema（不是逐測試）：_audit_rows() 查全表，
+        # 上一個測試方法（test_missing_file_gracefully_skipped_and_audited）留下的
+        # audit_log 列會被這裡的「應該零筆」斷言誤讀成失敗，先清乾淨。
+        self.conn.execute("DELETE FROM audit_log")
         self._tmpdir = tempfile.TemporaryDirectory()
-        self.conn = db.connect_and_migrate(Path(self._tmpdir.name) / "test.db")
         self.meth_dir = Path(self._tmpdir.name) / "methodology"
         self.meth_dir.mkdir()
 
     def tearDown(self):
-        self.conn.close()
         self._tmpdir.cleanup()
 
     def _write_readme(self, table_rows: str) -> Path:
@@ -145,13 +148,12 @@ class MethodologyConditionalFileTest(unittest.TestCase):
     """票 A：檔名後可選加（需要：X）條件，只有品牌對應開關成立才載入。"""
 
     def setUp(self):
+        self.conn = db.current()
         self._tmpdir = tempfile.TemporaryDirectory()
-        self.conn = db.connect_and_migrate(Path(self._tmpdir.name) / "test.db")
         self.meth_dir = Path(self._tmpdir.name) / "methodology"
         self.meth_dir.mkdir()
 
     def tearDown(self):
-        self.conn.close()
         self._tmpdir.cleanup()
 
     def _write_readme(self, table_rows: str) -> Path:
@@ -229,12 +231,7 @@ class MethodologySwitchComputationTest(unittest.TestCase):
     """app.brand_intelligence.repository.compute_methodology_switches 四個開關各自的判定條件。"""
 
     def setUp(self):
-        self._tmpdir = tempfile.TemporaryDirectory()
-        self.conn = db.connect_and_migrate(Path(self._tmpdir.name) / "test.db")
-
-    def tearDown(self):
-        self.conn.close()
-        self._tmpdir.cleanup()
+        self.conn = db.current()
 
     def test_all_switches_off_by_default(self):
         bid = repo.create_brand(self.conn, name="虛構品牌空白", client_name=None, actor="測試員")["id"]
@@ -289,12 +286,7 @@ class BrandSwitchesWriteTest(unittest.TestCase):
     """app.brand_intelligence.repository.set_brand_switches：寫入 market_region／conversion_goal。"""
 
     def setUp(self):
-        self._tmpdir = tempfile.TemporaryDirectory()
-        self.conn = db.connect_and_migrate(Path(self._tmpdir.name) / "test.db")
-
-    def tearDown(self):
-        self.conn.close()
-        self._tmpdir.cleanup()
+        self.conn = db.current()
 
     def test_set_brand_switches_writes_both_fields(self):
         bid = repo.create_brand(self.conn, name="虛構品牌設定", client_name=None, actor="測試員")["id"]

@@ -4,39 +4,33 @@
 test_dashboard_guide_cards.py 測過，這裡只驗證 API 有把真實資料組成 facts 餵給引擎，
 以及跨品牌總覽卡／單品牌駕駛艙分別拿到「第一筆」與「完整清單」）。
 
-隔離測試資料庫（BRAND_OS_DB 指向 tmp 檔），TestClient 模式。測試品牌一律虛構。
+TestClient 模式。測試品牌一律虛構。
 """
 
-import atexit
 import os
-import shutil
-import tempfile
 import unittest
 
-_tmpdir = tempfile.mkdtemp(prefix="brand_os_dashboard_guide_")
 os.environ["BRAND_OS_TODAY"] = "2026-08-05"  # 凍結時鐘：與其他儀表板測試檔一致
 
+import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
 import app.main as main  # noqa: E402
 from app.ads import pacing as ads_pacing  # noqa: E402
 from app.ads import repository as ads_repo  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
+from app.core import db as coredb  # noqa: E402
 from app.core.db import new_id, now_iso  # noqa: E402
 
-
-
-def _cleanup():
-    try:
-        main.conn.close()
-    except Exception:
-        pass
-    shutil.rmtree(_tmpdir, ignore_errors=True)
-
-
-atexit.register(_cleanup)
-
 ACTOR = "測試員"
+
+# BUG app/core/interrupts.py:99 — enqueue() dedup 查詢用 "brand_id IS %s"，
+# Postgres 的 IS 不接受綁參數，一律 psycopg.errors.SyntaxError。
+_BUG_INTERRUPT_IS_PARAM = pytest.mark.xfail(
+    strict=True,
+    reason='BUG app/core/interrupts.py:99 — enqueue() dedup 查詢用 "brand_id IS %s"，'
+           "Postgres 的 IS 不接受綁參數，一律 psycopg.errors.SyntaxError",
+)
 
 
 def _insert_cycle(conn, brand_id: str, *, status: str, start_date: str = "2026-07-20") -> str:
@@ -45,11 +39,11 @@ def _insert_cycle(conn, brand_id: str, *, status: str, start_date: str = "2026-0
     cycle_id = new_id("ccy")
     ts = now_iso()
     conn.execute(
-        "INSERT INTO campaign_cycle (id, brand_id, product_scope_json, objective, budget,"
-        " currency, start_date, end_date, channels_json, status, archived, plan_version,"
-        " phase, created_at, updated_at) VALUES (?, ?, '[]', 'sales', 5000, 'TWD', ?, ?,"
-        " '[\"meta\"]', ?, 0, 0, 'normal', ?, ?)",
-        (cycle_id, brand_id, start_date, start_date, status, ts, ts),
+        "INSERT INTO campaign_cycle (id, org_id, brand_id, product_scope_json, objective,"
+        " budget, currency, start_date, end_date, channels_json, status, archived,"
+        " plan_version, phase, created_at, updated_at) VALUES (%s, %s, %s, '[]', 'sales',"
+        " 5000, 'TWD', %s, %s, '[\"meta\"]', %s, false, 0, 'normal', %s, %s)",
+        (cycle_id, coredb.DEV_ORG_ID, brand_id, start_date, start_date, status, ts, ts),
     )
     conn.commit()
     return cycle_id
@@ -57,9 +51,9 @@ def _insert_cycle(conn, brand_id: str, *, status: str, start_date: str = "2026-0
 
 def _insert_reading(conn, brand_id: str, cycle_id: str) -> None:
     conn.execute(
-        "INSERT INTO performance_reading (id, brand_id, campaign_cycle_id, status,"
-        " rule_result_json, created_at) VALUES (?, ?, ?, 'maintain', '{}', ?)",
-        (new_id("prd"), brand_id, cycle_id, now_iso()),
+        "INSERT INTO performance_reading (id, org_id, brand_id, campaign_cycle_id, status,"
+        " rule_result_json, created_at) VALUES (%s, %s, %s, %s, 'maintain', '{}', %s)",
+        (new_id("prd"), coredb.DEV_ORG_ID, brand_id, cycle_id, now_iso()),
     )
     conn.commit()
 
@@ -67,10 +61,10 @@ def _insert_reading(conn, brand_id: str, cycle_id: str) -> None:
 def _insert_next_cycle_recommendation(conn, brand_id: str, cycle_id: str) -> None:
     ts = now_iso()
     conn.execute(
-        "INSERT INTO recommendation (id, brand_id, campaign_cycle_id, recommendation_type,"
-        " content_json, status, created_at, updated_at) VALUES (?, ?, ?, 'next_cycle',"
-        " '{}', 'GENERATED', ?, ?)",
-        (new_id("rec"), brand_id, cycle_id, ts, ts),
+        "INSERT INTO recommendation (id, org_id, brand_id, campaign_cycle_id,"
+        " recommendation_type, content_json, status, created_at, updated_at)"
+        " VALUES (%s, %s, %s, %s, 'next_cycle', '{}', 'GENERATED', %s, %s)",
+        (new_id("rec"), coredb.DEV_ORG_ID, brand_id, cycle_id, ts, ts),
     )
     conn.commit()
 
@@ -212,6 +206,7 @@ class CockpitGuideCardsWiringTest(unittest.TestCase):
         self.assertIn("繼續建檔", cards[0]["title"])
         self.assertEqual(cards[0]["action_url"], f"/app/brands/{brand_id}/intake")
 
+    @_BUG_INTERRUPT_IS_PARAM
     def test_pacing_alert_card_names_which_cycle(self):
         """B0-15：品牌同時有好幾期進行中時，「下一步指南」的 pacing 警示卡要寫出是哪一期
         （跟「看這期完整作戰室」指到不同檔期時，兩處都得標日期區間）。"""

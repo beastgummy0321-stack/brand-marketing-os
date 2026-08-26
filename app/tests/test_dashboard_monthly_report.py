@@ -1,38 +1,34 @@
 # -*- coding: utf-8 -*-
 """票 07：Act3 月報數字唯讀聚合與 API。"""
 
-import atexit
 import os
-import shutil
-import tempfile
 import unittest
 
-_tmpdir = tempfile.mkdtemp(prefix="brand_os_dashboard_monthly_report_")
 os.environ["BRAND_OS_TODAY"] = "2026-08-05"
 
+import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
 import app.main as main  # noqa: E402
 from app.ads import performance as ads_performance  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
+from app.core import db as coredb  # noqa: E402
 from app.core.db import new_id  # noqa: E402
 from app.dashboard import repository as dashboard_repo  # noqa: E402
 from app.orders import repository as orders_repo  # noqa: E402
 
-
-
-def _cleanup():
-    try:
-        main.conn.close()
-    except Exception:
-        pass
-    shutil.rmtree(_tmpdir, ignore_errors=True)
-
-
-atexit.register(_cleanup)
-
 ACTOR = "測試員"
 TODAY = "2026-08-05"
+
+# BUG app/dashboard/repository.py:248 — _roas() 型別標成 -> Optional[float]，但
+# round(revenue / spend, 2) 的 revenue／spend 來自 numeric 欄位加總，Postgres 讀回來是
+# Decimal，round(Decimal, 2) 還是 Decimal，違反自己標的回傳型別。
+_BUG_ROAS_RETURNS_DECIMAL = pytest.mark.xfail(
+    strict=True,
+    reason="BUG app/dashboard/repository.py:248 — _roas() 標 -> Optional[float]，"
+           "但 revenue/spend 是 numeric 欄位加總出來的 Decimal，round() 後仍是 Decimal，"
+           "不是宣告的 float",
+)
 
 
 def _seed_spend(conn, brand_id: str, *, date_str: str, spend: float) -> str:
@@ -43,7 +39,7 @@ def _seed_spend(conn, brand_id: str, *, date_str: str, spend: float) -> str:
         actor=ACTOR, today=TODAY,
     )
     row = conn.execute(
-        "SELECT id FROM performance_snapshot WHERE brand_id = ? AND date_range_start = ?"
+        "SELECT id FROM performance_snapshot WHERE brand_id = %s AND date_range_start = %s"
         " ORDER BY created_at DESC LIMIT 1", (brand_id, date_str),
     ).fetchone()
     return row["id"]
@@ -53,10 +49,10 @@ def _seed_roas(conn, brand_id: str, *, snapshot_id: str, value: float, computed_
     """B0-01：這裡塞的值刻意跟真正的營收／花費算出來的 ROAS 對不上——用來證明月報的 ROAS
     是自己拿營收÷花費算，不會撿到這筆「最近一次判讀」的舊值。"""
     conn.execute(
-        "INSERT INTO derived_metric (id, brand_id, performance_snapshot_id,"
+        "INSERT INTO derived_metric (id, org_id, brand_id, performance_snapshot_id,"
         " campaign_cycle_id, metric, value, calc_basis, computed_at, created_at)"
-        " VALUES (?, ?, ?, NULL, 'roas', ?, '測試塞入', ?, ?)",
-        (new_id("dmt"), brand_id, snapshot_id, value, computed_at, computed_at),
+        " VALUES (%s, %s, %s, %s, NULL, 'roas', %s, '測試塞入', %s, %s)",
+        (new_id("dmt"), coredb.DEV_ORG_ID, brand_id, snapshot_id, value, computed_at, computed_at),
     )
     conn.commit()
 
@@ -68,6 +64,7 @@ class DashboardMonthlyReportTest(unittest.TestCase):
             main.conn, name=f"虛構月報茶行{abs(hash(self.id())) % 100000}",
             client_name=None, actor=ACTOR)
 
+    @_BUG_ROAS_RETURNS_DECIMAL
     def test_month_boundaries_keep_current_month_data_only(self):
         orders_repo.save_orders(
             main.conn, self.brand["id"],

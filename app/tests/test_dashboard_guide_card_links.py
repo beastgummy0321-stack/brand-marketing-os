@@ -12,37 +12,22 @@
 CASES 必須涵蓋 guide_cards.RULES 的每一條（test_every_rule_has_a_link_case 把關）
 ——以後新增規則卻忘了顧網址，這裡會當場叫。
 
-隔離測試資料庫（BRAND_OS_DB 指向 tmp 檔），TestClient 模式。測試品牌一律虛構。
+TestClient 模式。測試品牌一律虛構。
 """
 
-import atexit
 import os
-import shutil
-import tempfile
 import unittest
 
-_tmpdir = tempfile.mkdtemp(prefix="brand_os_guide_links_")
 os.environ["BRAND_OS_TODAY"] = "2026-08-05"  # 凍結時鐘：與其他儀表板測試檔一致
 
 from fastapi.testclient import TestClient  # noqa: E402
 
 import app.main as main  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
-from app.core.db import new_id, now_iso  # noqa: E402
+from app.core import db as coredb  # noqa: E402
+from app.core.db import new_id, now_utc  # noqa: E402
 from app.dashboard import guide_cards  # noqa: E402
 from app.intake import state as intake_state  # noqa: E402
-
-
-
-def _cleanup():
-    try:
-        main.conn.close()
-    except Exception:
-        pass
-    shutil.rmtree(_tmpdir, ignore_errors=True)
-
-
-atexit.register(_cleanup)
 
 ACTOR = "測試員"
 
@@ -56,15 +41,16 @@ def _insert_cycle(conn, brand_id: str) -> str:
     扛住不可能出現的殘缺資料」，不是這支要測的連結完整性。
     """
     cycle_id = new_id("ccy")
-    ts = now_iso()
-    derived_plan = ('{"duration_days": 14, "daily_budget": 357.14, "daily_stop_loss": 714.28,'
-                    ' "pause_threshold_spend": 2500, "daily_below_floor": false}')
+    ts = now_utc()
     conn.execute(
-        "INSERT INTO campaign_cycle (id, brand_id, product_scope_json, objective, budget,"
-        " currency, start_date, end_date, channels_json, status, archived, plan_version,"
-        " phase, derived_plan_json, created_at, updated_at) VALUES (?, ?, '[]', 'sales', 5000,"
-        " 'TWD', '2026-07-20', '2026-08-20', '[\"meta\"]', 'LIVE', 0, 0, 'normal', ?, ?, ?)",
-        (cycle_id, brand_id, derived_plan, ts, ts),
+        "INSERT INTO campaign_cycle (id, org_id, brand_id, product_scope_json, objective,"
+        " budget, currency, start_date, end_date, channels_json, status, archived,"
+        " plan_version, phase, derived_plan_json, created_at, updated_at) VALUES"
+        " (%s, %s, %s, '[]', 'sales', 5000, 'TWD', '2026-07-20', '2026-08-20',"
+        " '[\"meta\"]', 'LIVE', false, 0, 'normal', %s, %s, %s)",
+        (cycle_id, coredb.DEV_ORG_ID, brand_id, coredb.jsonb(
+            {"duration_days": 14, "daily_budget": 357.14, "daily_stop_loss": 714.28,
+             "pause_threshold_spend": 2500, "daily_below_floor": False}), ts, ts),
     )
     conn.commit()
     return cycle_id
@@ -75,17 +61,22 @@ class GuideCardLinksResolveTest(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        brand = bi_repo.create_brand(
-            main.conn, name="虛構連結檢查花坊", client_name=None, actor=ACTOR)
-        cls.brand_id = brand["id"]
-        cls.cycle_id = _insert_cycle(main.conn, cls.brand_id)
+        # setUpClass 跑在 conftest.py 逐測試的 _bound_connection fixture 之外，
+        # 這裡自己借一條連線把班級層級的固定資料建好（跟 conftest.py 同一個池子、
+        # 同一個 schema，之後每個測試方法透過 TestClient 或自己的 fixture 借到的
+        # 另一條連線都看得到這裡 commit 過的資料）。
+        with coredb.connection():
+            brand = bi_repo.create_brand(
+                main.conn, name="虛構連結檢查花坊", client_name=None, actor=ACTOR)
+            cls.brand_id = brand["id"]
+            cls.cycle_id = _insert_cycle(main.conn, cls.brand_id)
+            # 票 B3-intake：intake_in_progress 的網址要真的能接到一份進行中草稿，不能只是
+            # 拼字串——真的開一份草稿，用它算出來的 resume_path 當這條規則的測試網址。
+            draft = intake_state.new_draft(
+                cls.brand_id, brand["name"], description="測試用品牌描述文字。",
+                urls=[], photos=[], actor=ACTOR, conn=main.conn)
+            cls.intake_resume_path = draft["resume_path"]
         cls.client = TestClient(main.app)
-        # 票 B3-intake：intake_in_progress 的網址要真的能接到一份進行中草稿，不能只是
-        # 拼字串——真的開一份草稿，用它算出來的 resume_path 當這條規則的測試網址。
-        draft = intake_state.new_draft(
-            cls.brand_id, brand["name"], description="測試用品牌描述文字。",
-            urls=[], photos=[], actor=ACTOR, conn=main.conn)
-        cls.intake_resume_path = draft["resume_path"]
 
     def _facts(self, **overrides) -> dict:
         base = {

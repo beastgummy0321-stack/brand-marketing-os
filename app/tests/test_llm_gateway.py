@@ -5,11 +5,8 @@
 §3.1 llm_task。全程只用 FakeProvider，不發出任何真實網路請求。
 """
 
-import json
-import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
@@ -24,13 +21,8 @@ from app.llm.providers import FakeProvider, ProviderError, ProviderResponse, Pro
 
 class LLMGatewayTest(unittest.TestCase):
     def setUp(self):
-        self._tmpdir = tempfile.TemporaryDirectory()
-        self.conn = db.connect_and_migrate(Path(self._tmpdir.name) / "test.db")
+        self.conn = db.current()
         self.brand = repo.create_brand(self.conn, name="品牌A（Gateway測試）", client_name=None, actor="小陳")
-
-    def tearDown(self):
-        self.conn.close()
-        self._tmpdir.cleanup()
 
     def _context(self):
         return gateway.TaskContext(
@@ -43,7 +35,7 @@ class LLMGatewayTest(unittest.TestCase):
     def _rows_for_brand(self):
         return [
             dict(r) for r in self.conn.execute(
-                "SELECT * FROM llm_task WHERE brand_id = ? ORDER BY attempt_no", (self.brand["id"],)
+                "SELECT * FROM llm_task WHERE brand_id = %s ORDER BY attempt_no", (self.brand["id"],)
             ).fetchall()
         ]
 
@@ -79,17 +71,17 @@ class LLMGatewayTest(unittest.TestCase):
 
         # 輸出逐字保留，不改寫（principles 第 2 條）
         self.assertEqual(row["rendered_output"], "這是模型的完整輸出內容")
-        self.assertEqual(json.loads(row["structured_output_json"]), {"summary": "重點摘要", "score": 87})
+        self.assertEqual(row["structured_output_json"], {"summary": "重點摘要", "score": 87})
 
-        usage = json.loads(row["usage_json"])
+        usage = row["usage_json"]
         self.assertEqual(usage["input_tokens"], 1000)
         self.assertEqual(usage["output_tokens"], 2000)
         self.assertEqual(usage["cache_read_input_tokens"], 100)
         self.assertEqual(usage["cache_creation_input_tokens"], 50)
 
         # 上下文稽核欄位
-        self.assertEqual(json.loads(row["context_scope_json"]), {"brand_id": self.brand["id"]})
-        self.assertEqual(json.loads(row["knowledge_item_ids_json"]), ["bft_dummy1", "bft_dummy2"])
+        self.assertEqual(row["context_scope_json"], {"brand_id": self.brand["id"]})
+        self.assertEqual(row["knowledge_item_ids_json"], ["bft_dummy1", "bft_dummy2"])
         self.assertEqual(row["brand_version"], self.brand["knowledge_version"])
         self.assertIsNone(row["product_version"])
 
@@ -237,13 +229,8 @@ class TaskModelThinkingDefaultsTest(unittest.TestCase):
     """
 
     def setUp(self):
-        self._tmpdir = tempfile.TemporaryDirectory()
-        self.conn = db.connect_and_migrate(Path(self._tmpdir.name) / "test.db")
+        self.conn = db.current()
         self.brand = repo.create_brand(self.conn, name="品牌E（模型思考測試）", client_name=None, actor="小陳")
-
-    def tearDown(self):
-        self.conn.close()
-        self._tmpdir.cleanup()
 
     def _context(self):
         return gateway.TaskContext(
@@ -329,12 +316,7 @@ class TaskModelThinkingDefaultsTest(unittest.TestCase):
 
 class ContextCompilerTest(unittest.TestCase):
     def setUp(self):
-        self._tmpdir = tempfile.TemporaryDirectory()
-        self.conn = db.connect_and_migrate(Path(self._tmpdir.name) / "test.db")
-
-    def tearDown(self):
-        self.conn.close()
-        self._tmpdir.cleanup()
+        self.conn = db.current()
 
     def test_only_confirmed_facts_included_and_isolated_by_brand(self):
         brand_a = repo.create_brand(self.conn, name="品牌A（Compiler測試）", client_name=None, actor="小陳")
@@ -462,13 +444,8 @@ class ContextCompilerPromptCapTest(unittest.TestCase):
     """票 02-prompt-cap-and-overflow-list（決策 0012 第二、三節）：進 prompt 上限與未生效清單。"""
 
     def setUp(self):
-        self._tmpdir = tempfile.TemporaryDirectory()
-        self.conn = db.connect_and_migrate(Path(self._tmpdir.name) / "test.db")
+        self.conn = db.current()
         self.brand = repo.create_brand(self.conn, name="品牌F（規則上限測試）", client_name=None, actor="小陳")
-
-    def tearDown(self):
-        self.conn.close()
-        self._tmpdir.cleanup()
 
     def _make_rules(self, brand_id, hard_count, soft_count):
         """建 hard_count 條 hard ＋ soft_count 條 soft 規則。soft 規則的 confirmed_at 直接
@@ -491,7 +468,7 @@ class ContextCompilerPromptCapTest(unittest.TestCase):
             rule = repo.create_rule(self.conn, brand_id, rule_type="tone", content=f"soft規則{i:02d}",
                                     severity="soft", actor="小陳")
             confirmed_at = (base + timedelta(seconds=i)).isoformat()
-            self.conn.execute("UPDATE rule SET confirmed_at = ? WHERE id = ?",
+            self.conn.execute("UPDATE rule SET confirmed_at = %s WHERE id = %s",
                               (confirmed_at, rule["id"]))
             self.conn.commit()
             soft_rules.append(rule)
@@ -567,7 +544,7 @@ class ContextCompilerPromptCapTest(unittest.TestCase):
                                     content=f"僅限產品限定規則{i:02d}", severity="soft",
                                     product_id=product["id"], actor="小陳")
             confirmed_at = (base + timedelta(seconds=10 + i)).isoformat()
-            self.conn.execute("UPDATE rule SET confirmed_at = ? WHERE id = ?",
+            self.conn.execute("UPDATE rule SET confirmed_at = %s WHERE id = %s",
                               (confirmed_at, rule["id"]))
             self.conn.commit()
             product_rules.append(rule)
@@ -587,14 +564,9 @@ class ContextCompilerLearningLoopTest(unittest.TestCase):
     """GitHub issue #54（決策 0030）：learning_ledger／strategy_hypothesis 讀取通電。"""
 
     def setUp(self):
-        self._tmpdir = tempfile.TemporaryDirectory()
-        self.conn = db.connect_and_migrate(Path(self._tmpdir.name) / "test.db")
+        self.conn = db.current()
         self.brand = repo.create_brand(self.conn, name="品牌E（學習迴路測試）", client_name=None, actor="小陳")
         self.product = repo.create_product(self.conn, self.brand["id"], name="產品E-1", actor="小陳")
-
-    def tearDown(self):
-        self.conn.close()
-        self._tmpdir.cleanup()
 
     def test_zero_learning_records_output_unchanged_regression(self):
         """回歸鐵條：零學習紀錄時，輸出必須與改動前逐字相同（不多出任何段落）。"""
@@ -654,7 +626,7 @@ class ContextCompilerLearningLoopTest(unittest.TestCase):
             self.conn, self.brand["id"], learning_text="這條學習已下架",
             applicability_scope="brand", created_by="小陳", actor="小陳",
         )
-        self.conn.execute("UPDATE learning_ledger SET expired = 1 WHERE id = ?", (entry["id"],))
+        self.conn.execute("UPDATE learning_ledger SET expired = true WHERE id = %s", (entry["id"],))
         self.conn.commit()
 
         text, knowledge_item_ids, _bv, _pv = context_compiler.compile(self.conn, self.brand["id"])
@@ -723,14 +695,9 @@ class ContextCompilerHypothesisPoolBoundTest(unittest.TestCase):
     未生效清單，不悄悄丟棄。"""
 
     def setUp(self):
-        self._tmpdir = tempfile.TemporaryDirectory()
-        self.conn = db.connect_and_migrate(Path(self._tmpdir.name) / "test.db")
+        self.conn = db.current()
         self.brand = repo.create_brand(self.conn, name="品牌G（假設上限測試）", client_name=None, actor="小陳")
         self.product = repo.create_product(self.conn, self.brand["id"], name="產品G-1", actor="小陳")
-
-    def tearDown(self):
-        self.conn.close()
-        self._tmpdir.cleanup()
 
     def _seed_pool(self, product_id=None):
         """4 個假設分屬 4 個不同期別（ccy_c0～ccy_c3，依 created_at 遞增出現），
@@ -744,7 +711,7 @@ class ContextCompilerHypothesisPoolBoundTest(unittest.TestCase):
                 statement=statement, created_by="小陳", product_id=product_id, source_cycle_id=cid,
             )
             created_at = (base + timedelta(seconds=i * 10)).isoformat()
-            self.conn.execute("UPDATE strategy_hypothesis SET created_at = ? WHERE id = ?",
+            self.conn.execute("UPDATE strategy_hypothesis SET created_at = %s WHERE id = %s",
                               (created_at, h["id"]))
             self.conn.commit()
             hyps.append(h)
