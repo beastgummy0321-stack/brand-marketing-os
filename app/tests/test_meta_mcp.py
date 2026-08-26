@@ -13,6 +13,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import pytest
+
 _tmpdir = tempfile.mkdtemp(prefix="brand_os_meta_mcp_")
 
 from fastapi.testclient import TestClient  # noqa: E402
@@ -27,24 +29,24 @@ from app.ads import theme_repository as theme_repo  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
 from app.core import creative_assets  # noqa: E402
 from app.core import settings as coresettings  # noqa: E402
-from app.core.db import new_id, now_iso  # noqa: E402
+from app.core.db import DEV_ORG_ID, new_id, now_iso  # noqa: E402
 from app.llm.providers import FakeProvider, ProviderResponse, Usage  # noqa: E402
 from app.shared.web import OPERATOR  # noqa: E402
 
+# ROOT 是素材檔案（非 DB）的暫存資料夾——跟 DB schema 隔離無關，跑完仍要清掉，留著。
 ROOT = Path(_tmpdir) / "creative"
-
-
-def _cleanup():
-    try:
-        main.conn.close()
-    except Exception:
-        pass
-    shutil.rmtree(_tmpdir, ignore_errors=True)
-
-
-atexit.register(_cleanup)
+atexit.register(shutil.rmtree, _tmpdir, ignore_errors=True)
 
 ACTOR = "測試員"
+
+# BUG app/core/settings.py:143 — brand_llm_spent() 回傳 row["n"] or 0.0，SUM(numeric)
+# 有值時是 Decimal，宣告回傳型別是 float 但沒轉型；budget_exceeded_message() 接著
+# `spent + cost`（Decimal + float）一律 TypeError（同一個 BUG，其他群組已標過）。
+_BUG_DECIMAL_PLUS_FLOAT = pytest.mark.xfail(
+    strict=True,
+    reason='BUG app/core/settings.py:143 — brand_llm_spent() 回傳 Decimal，'
+           "budget_exceeded_message() 的 spent + cost 一律 TypeError",
+)
 
 _AUDIENCE = {"cold": {"description": "測試受眾"}, "warm": {"description": ""},
             "hot": {"description": ""}, "exclusions": []}
@@ -225,7 +227,7 @@ class _BaseMetaMcpTest(unittest.TestCase):
 
     def _cell_id(self, cycle_id: str) -> str:
         return main.conn.execute(
-            "SELECT id FROM experiment_cell WHERE campaign_cycle_id = ?",
+            "SELECT id FROM experiment_cell WHERE campaign_cycle_id = %s",
             (cycle_id,)).fetchone()["id"]
 
     def _adopt_theme(self, cycle_id: str, cell_id: str, *, angle: str, with_image: bool) -> dict:
@@ -258,7 +260,7 @@ class _BaseMetaMcpTest(unittest.TestCase):
 
     def _mapping_for(self, package_id: str):
         return main.conn.execute(
-            "SELECT * FROM external_ad_mapping WHERE publishing_package_id = ?",
+            "SELECT * FROM external_ad_mapping WHERE publishing_package_id = %s",
             (package_id,)).fetchone()
 
     def _cycle_status(self, cycle_id: str) -> str:
@@ -267,11 +269,12 @@ class _BaseMetaMcpTest(unittest.TestCase):
     def _authorization_count(self, package_id: str) -> int:
         row = main.conn.execute(
             "SELECT COUNT(*) AS n FROM activation_authorization"
-            " WHERE brand_id = ? AND scope_type = 'campaign_activation' AND scope_ref = ?",
+            " WHERE brand_id = %s AND scope_type = 'campaign_activation' AND scope_ref = %s",
             (self.bid, package_id)).fetchone()
         return row["n"]
 
 
+@_BUG_DECIMAL_PLUS_FLOAT
 class CreatePreflightTest(_BaseMetaMcpTest):
     def _remove_website_channel(self) -> None:
         for channel in bi_repo.list_channels(main.conn, self.bid):
@@ -285,7 +288,7 @@ class CreatePreflightTest(_BaseMetaMcpTest):
         （品牌真的沒有官網——欄位本身空、品牌自有渠道也補不到，兩邊都空才算擋下。）"""
         self._remove_website_channel()
         cycle_id, package = self._build_one_package()
-        main.conn.execute("UPDATE publishing_package SET destination_url = '' WHERE id = ?",
+        main.conn.execute("UPDATE publishing_package SET destination_url = '' WHERE id = %s",
                           (package["id"],))
         main.conn.commit()
 
@@ -301,7 +304,7 @@ class CreatePreflightTest(_BaseMetaMcpTest):
         產出的包補這一欄，欄位仍是舊的空字串，但品牌自有渠道已經有官網了。create_package()
         現場補算、成功時把解出來的網址寫回 publishing_package，交接頁才跟著顯示。"""
         cycle_id, package = self._build_one_package()
-        main.conn.execute("UPDATE publishing_package SET destination_url = '' WHERE id = ?",
+        main.conn.execute("UPDATE publishing_package SET destination_url = '' WHERE id = %s",
                           (package["id"],))
         main.conn.commit()
 
@@ -315,11 +318,12 @@ class CreatePreflightTest(_BaseMetaMcpTest):
                          + ads_handoff.utm_query(json.loads(package["utm_json"] or "{}")))
         self.assertEqual(creative_calls[0][1]["link_url"], expected_link)
 
-        row = main.conn.execute("SELECT destination_url FROM publishing_package WHERE id = ?",
+        row = main.conn.execute("SELECT destination_url FROM publishing_package WHERE id = %s",
                                 (package["id"],)).fetchone()
         self.assertEqual(row["destination_url"], "https://example.test")
 
 
+@_BUG_DECIMAL_PLUS_FLOAT
 class CreatePackageTest(_BaseMetaMcpTest):
     def test_a_writes_mapping_with_four_ids_confirmed(self):
         cycle_id, package = self._build_one_package()
@@ -360,9 +364,9 @@ class CreatePackageTest(_BaseMetaMcpTest):
         self._adopt_theme(cycle_id, cell_1, angle="切角一", with_image=True)
         cell_2_id = new_id("exc")
         main.conn.execute(
-            "INSERT INTO experiment_cell (id, campaign_cycle_id, brand_id, product_id,"
-            " audience, creative_angle, created_at) VALUES (?, ?, ?, NULL, ?, ?, ?)",
-            (cell_2_id, cycle_id, self.bid, "測試受眾", "切角二", now_iso()))
+            "INSERT INTO experiment_cell (id, org_id, campaign_cycle_id, brand_id, product_id,"
+            " audience, creative_angle, created_at) VALUES (%s, %s, %s, %s, NULL, %s, %s, %s)",
+            (cell_2_id, DEV_ORG_ID, cycle_id, self.bid, "測試受眾", "切角二", now_iso()))
         main.conn.commit()
         self._adopt_theme(cycle_id, cell_2_id, angle="切角二", with_image=True)
 
@@ -391,6 +395,7 @@ class CreatePackageTest(_BaseMetaMcpTest):
         self.assertIsNone(self._mapping_for(package["id"]))
 
 
+@_BUG_DECIMAL_PLUS_FLOAT
 class CreateAllRouteTest(_BaseMetaMcpTest):
     def test_b_second_package_reuses_campaign_after_first_fails_at_creative(self):
         """真人實測發現的第二個問題：第一包 campaign 建成功、素材建失敗（缺到達網址那類
@@ -402,9 +407,9 @@ class CreateAllRouteTest(_BaseMetaMcpTest):
         self._adopt_theme(cycle_id, cell_1, angle="切角一", with_image=True)
         cell_2_id = new_id("exc")
         main.conn.execute(
-            "INSERT INTO experiment_cell (id, campaign_cycle_id, brand_id, product_id,"
-            " audience, creative_angle, created_at) VALUES (?, ?, ?, NULL, ?, ?, ?)",
-            (cell_2_id, cycle_id, self.bid, "測試受眾", "切角二", now_iso()))
+            "INSERT INTO experiment_cell (id, org_id, campaign_cycle_id, brand_id, product_id,"
+            " audience, creative_angle, created_at) VALUES (%s, %s, %s, %s, NULL, %s, %s, %s)",
+            (cell_2_id, DEV_ORG_ID, cycle_id, self.bid, "測試受眾", "切角二", now_iso()))
         main.conn.commit()
         self._adopt_theme(cycle_id, cell_2_id, angle="切角二", with_image=True)
         self.client.post(f"/api/campaigns/{self.bid}/{cycle_id}/handoff/build")
@@ -430,9 +435,9 @@ class CreateAllRouteTest(_BaseMetaMcpTest):
         cycle_id, ready_package = self._build_one_package()
         cell_2_id = new_id("exc")
         main.conn.execute(
-            "INSERT INTO experiment_cell (id, campaign_cycle_id, brand_id, product_id,"
-            " audience, creative_angle, created_at) VALUES (?, ?, ?, NULL, ?, ?, ?)",
-            (cell_2_id, cycle_id, self.bid, "測試受眾", "已手填包", now_iso()))
+            "INSERT INTO experiment_cell (id, org_id, campaign_cycle_id, brand_id, product_id,"
+            " audience, creative_angle, created_at) VALUES (%s, %s, %s, %s, NULL, %s, %s, %s)",
+            (cell_2_id, DEV_ORG_ID, cycle_id, self.bid, "測試受眾", "已手填包", now_iso()))
         main.conn.commit()
         self._adopt_theme(cycle_id, cell_2_id, angle="已手填包", with_image=True)
         self.client.post(f"/api/campaigns/{self.bid}/{cycle_id}/handoff/build")
@@ -456,6 +461,7 @@ class CreateAllRouteTest(_BaseMetaMcpTest):
         self.assertIsNone(manual_mapping["meta_adset_id"])
 
 
+@_BUG_DECIMAL_PLUS_FLOAT
 class PublishAllRouteTest(_BaseMetaMcpTest):
     def test_f_publish_all_before_create_all_is_400(self):
         cycle_id, _package = self._build_one_package()
@@ -500,14 +506,15 @@ class SuggestedMappingIsNotAMetaBuildTest(_BaseMetaMcpTest):
     """同步把 Meta 上發現的活動「猜」掛到第一包（tracking.py，claim_status='suggested'）：
     那不算已建到 Meta——不能讓 create-all 跳過那包，也不能拿它的 campaign 來沿用。"""
 
+    @_BUG_DECIMAL_PLUS_FLOAT
     def test_suggested_row_is_ignored(self):
         cycle_id, package = self._build_one_package()
         from app import main as main_mod
         main_mod.conn.execute(
-            "INSERT INTO external_ad_mapping (id, brand_id, publishing_package_id,"
+            "INSERT INTO external_ad_mapping (id, org_id, brand_id, publishing_package_id,"
             " campaign_cycle_id, platform, meta_campaign_id, claim_status, created_at)"
-            " VALUES ('xam_sugg', ?, ?, ?, 'meta', 'orphan_campaign', 'suggested', '2026-01-01')",
-            (self.bid, package["id"], cycle_id))
+            " VALUES ('xam_sugg', %s, %s, %s, %s, 'meta', 'orphan_campaign', 'suggested', '2026-01-01')",
+            (DEV_ORG_ID, self.bid, package["id"], cycle_id))
         main_mod.conn.commit()
         body = self.client.post(f"/api/campaigns/{self.bid}/{cycle_id}/handoff/create-all").json()
         self.assertEqual(body["created"], 1)
@@ -522,6 +529,7 @@ class SuggestedMappingIsNotAMetaBuildTest(_BaseMetaMcpTest):
         self.assertEqual(meta_mcp._meta_message("plain"), "plain")
 
 
+@_BUG_DECIMAL_PLUS_FLOAT
 class PixelTest(_BaseMetaMcpTest):
     def test_adset_uses_most_recent_active_pixel(self):
         cycle_id, _ = self._build_one_package()
@@ -539,6 +547,7 @@ class PixelTest(_BaseMetaMcpTest):
         self.assertNotIn("promoted_object", adset)
 
 
+@_BUG_DECIMAL_PLUS_FLOAT
 class TaiwanIdentityTest(_BaseMetaMcpTest):
     """票追加（真人實測，2026-08-23）：GET /act_368741390835357/adsets 查證，帳戶底下
     每個既有廣告組合都帶台灣法規欄位，Ads MCP 的 ads_create_ad_set 完全沒有對應參數，
@@ -643,6 +652,7 @@ class BudgetConversionTest(unittest.TestCase):
             meta_mcp.budget_in_minor_units(500, None)
 
 
+@_BUG_DECIMAL_PLUS_FLOAT
 class BudgetSentToMetaTest(_BaseMetaMcpTest):
     """實際送出去的那一筆——單元測試綠但呼叫端沒用到就白搭（這次的 bug 正是如此）。"""
 

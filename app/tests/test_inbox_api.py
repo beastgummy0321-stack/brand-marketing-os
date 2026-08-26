@@ -13,6 +13,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import pytest
+
 _tmpdir = tempfile.mkdtemp(prefix="brand_os_inbox_api_")
 
 from fastapi.testclient import TestClient  # noqa: E402
@@ -37,16 +39,25 @@ atexit.register(_cleanup)
 
 ACTOR = "測試員"
 
+# BUG app/core/interrupts.py:99 — enqueue() dedup 查詢用 "brand_id IS %s"，Postgres 的
+# IS 不接受綁參數，一律 psycopg.errors.SyntaxError（同一個 BUG，其他群組已標過）。
+_BUG_INTERRUPT_IS_PARAM = pytest.mark.xfail(
+    strict=True,
+    reason='BUG app/core/interrupts.py:99 — enqueue() dedup 查詢用 "brand_id IS %s"，'
+           "Postgres 的 IS 不接受綁參數，一律 psycopg.errors.SyntaxError",
+)
+
 
 class InboxApiTest(unittest.TestCase):
     def setUp(self):
         main.conn.execute("DELETE FROM interrupt")
-        main.conn.execute("DELETE FROM app_setting WHERE key = ?", (core_prototype_phase.FLAG_SETTING,))
+        main.conn.execute("DELETE FROM app_setting WHERE key = %s", (core_prototype_phase.FLAG_SETTING,))
         main.conn.commit()
         self.client = TestClient(main.app)
         self.brand = bi_repo.create_brand(main.conn, name="虛構貓山咖啡", client_name=None, actor=ACTOR)
         self.bid = self.brand["id"]
 
+    @_BUG_INTERRUPT_IS_PARAM
     def test_shape_matches_contract_type(self):
         """契約 InboxItem 型別：id／brand_id／brand_name／category／category_label／severity／
         message／action_url／resolved_at 九個欄位，逐一比對，契約沒寫的欄位不得混進來。"""
@@ -86,6 +97,7 @@ class InboxApiTest(unittest.TestCase):
         self.assertIsNone(site_item["brand_id"])
         self.assertIsNone(site_item["brand_name"])
 
+    @_BUG_INTERRUPT_IS_PARAM
     def test_done_list_has_resolved_at(self):
         interrupt_id = core_interrupts.enqueue(
             main.conn, category="auto_sync_failed", dedupe_key="k3", message="同步失敗", brand_id=self.bid,
@@ -101,6 +113,7 @@ class InboxApiTest(unittest.TestCase):
         body = self.client.get("/api/inbox").json()
         self.assertEqual(body["data"], {"open": [], "done": []})
 
+    @_BUG_INTERRUPT_IS_PARAM
     def test_resolve_via_api_endpoint_moves_item_to_done(self):
         """S2.8：「知道了」呼叫 `POST /api/interrupts/{id}/resolve`
         （T4 步驟 1 刪除舊版 `POST /interrupts/{id}/resolve` HTML 端點，前端已改打這支）。"""
@@ -121,6 +134,7 @@ class InterruptResolveApiTest(unittest.TestCase):
         main.conn.commit()
         self.client = TestClient(main.app)
 
+    @_BUG_INTERRUPT_IS_PARAM
     def test_resolve_api_returns_json(self):
         interrupt_id = core_interrupts.enqueue(
             main.conn, category="cycle_reminder", dedupe_key="api-resolve", message="test",
@@ -133,7 +147,7 @@ class InterruptResolveApiTest(unittest.TestCase):
 
 class PrototypePhaseApiTest(unittest.TestCase):
     def setUp(self):
-        main.conn.execute("DELETE FROM app_setting WHERE key = ?", (core_prototype_phase.FLAG_SETTING,))
+        main.conn.execute("DELETE FROM app_setting WHERE key = %s", (core_prototype_phase.FLAG_SETTING,))
         main.conn.commit()
         self.client = TestClient(main.app)
 

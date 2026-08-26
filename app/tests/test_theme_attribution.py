@@ -13,15 +13,8 @@
 4. 元件成效端點回相對排名所需資料，不提供絕對值對帳介面。
 """
 
-import atexit
 import json
-import os
-import shutil
-import tempfile
 import unittest
-from pathlib import Path
-
-_tmpdir = tempfile.mkdtemp(prefix="brand_os_theme_attribution_")
 
 from fastapi.testclient import TestClient  # noqa: E402
 
@@ -34,20 +27,10 @@ from app.ads import theme_engine  # noqa: E402
 from app.ads import theme_repository as theme_repo  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
 from app.core import settings as coresettings  # noqa: E402
-from app.core.db import new_id, now_iso  # noqa: E402
+from app.core.db import DEV_ORG_ID, new_id, now_iso  # noqa: E402
 from app.llm.providers import FakeProvider, ProviderResponse, Usage  # noqa: E402
 
 
-
-def _cleanup():
-    try:
-        main.conn.close()
-    except Exception:
-        pass
-    shutil.rmtree(_tmpdir, ignore_errors=True)
-
-
-atexit.register(_cleanup)
 
 ACTOR = "測試員"
 ACCOUNT = "act_9988776655"
@@ -94,9 +77,9 @@ class _Base(unittest.TestCase):
         cycle_id = cycle["id"]
         cell_id = new_id("exc")
         main.conn.execute(
-            "INSERT INTO experiment_cell (id, campaign_cycle_id, brand_id, product_id,"
-            " creative_angle, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-            (cell_id, cycle_id, self.bid, self.product_id, "測試切角", now_iso()),
+            "INSERT INTO experiment_cell (id, org_id, campaign_cycle_id, brand_id, product_id,"
+            " creative_angle, created_at) VALUES (%s, %s, %s, %s, %s, %s, %s)",
+            (cell_id, DEV_ORG_ID, cycle_id, self.bid, self.product_id, "測試切角", now_iso()),
         )
         main.conn.commit()
         theme = theme_repo.create_theme(
@@ -114,10 +97,10 @@ class _Base(unittest.TestCase):
         ad_id = new_id("ad")
         ts = now_iso()
         main.conn.execute(
-            "INSERT INTO external_ad_mapping (id, brand_id, campaign_cycle_id, platform,"
+            "INSERT INTO external_ad_mapping (id, org_id, brand_id, campaign_cycle_id, platform,"
             " meta_ad_id, claim_status, confirmed_by, confirmed_at, created_at) VALUES"
-            " (?, ?, ?, 'meta', ?, 'confirmed', ?, ?, ?)",
-            (new_id("eam"), self.bid, cycle_id, ad_id, ACTOR, ts, ts),
+            " (%s, %s, %s, %s, 'meta', %s, 'confirmed', %s, %s, %s)",
+            (new_id("eam"), DEV_ORG_ID, self.bid, cycle_id, ad_id, ACTOR, ts, ts),
         )
         main.conn.commit()
         return ad_id
@@ -183,7 +166,7 @@ class RecordAndMatchBackTest(_Base):
         self.assertIsNone(result.error)
 
         row = main.conn.execute(
-            "SELECT * FROM creative_theme_component WHERE id = ?", (body_id,)
+            "SELECT * FROM creative_theme_component WHERE id = %s", (body_id,)
         ).fetchone()
         self.assertIsNotNone(row)
         self.assertEqual(row["meta_asset_id"], "asset_1")
@@ -195,7 +178,7 @@ class RecordAndMatchBackTest(_Base):
         # 沒對回的 title 元件維持沒同步過的狀態
         title_id = next(c["id"] for c in theme["components"] if c["component_type"] == "title")
         title_row = main.conn.execute(
-            "SELECT performance_synced_at FROM creative_theme_component WHERE id = ?",
+            "SELECT performance_synced_at FROM creative_theme_component WHERE id = %s",
             (title_id,)).fetchone()
         self.assertIsNone(title_row["performance_synced_at"])
 
@@ -216,7 +199,7 @@ class RecordAndMatchBackTest(_Base):
 
         row = main.conn.execute(
             "SELECT performance_impressions, performance_clicks, performance_conversions"
-            " FROM creative_theme_component WHERE id = ?", (body_id,)).fetchone()
+            " FROM creative_theme_component WHERE id = %s", (body_id,)).fetchone()
         self.assertEqual(row["performance_impressions"], 3000)
         self.assertEqual(row["performance_clicks"], 90)
         self.assertEqual(row["performance_conversions"], 7)
@@ -232,7 +215,7 @@ class RecordAndMatchBackTest(_Base):
             "ad_unmapped", body={"id": "asset_x", "text": "不會被存的文案"})])
         self.assertIsNone(result.error)
         row = main.conn.execute(
-            "SELECT performance_synced_at FROM creative_theme_component WHERE id = ?",
+            "SELECT performance_synced_at FROM creative_theme_component WHERE id = %s",
             (body_id,)).fetchone()
         self.assertIsNone(row["performance_synced_at"])
 
@@ -243,7 +226,7 @@ class RecordAndMatchBackTest(_Base):
             main.conn, self.bid, None, _breakdown("ad1", body={"id": "a1", "text": "x"}),
             actor=ACTOR)
         row = main.conn.execute(
-            "SELECT performance_synced_at FROM creative_theme_component WHERE id = ?",
+            "SELECT performance_synced_at FROM creative_theme_component WHERE id = %s",
             (theme["components"][0]["id"],)).fetchone()
         self.assertIsNone(row["performance_synced_at"])
 
@@ -278,7 +261,7 @@ class RecordAndMatchBackTest(_Base):
         self.assertIsNone(result.error)
         self.assertEqual(result.snapshots, 1)  # 廣告層照樣進來
         row = main.conn.execute(
-            "SELECT performance_synced_at FROM creative_theme_component WHERE id = ?",
+            "SELECT performance_synced_at FROM creative_theme_component WHERE id = %s",
             (body_id,)).fetchone()
         self.assertIsNone(row["performance_synced_at"])
 
@@ -299,14 +282,14 @@ class MismatchReconciliationTest(_Base):
     def test_consistent_text_is_zero_action(self):
         theme, body_id, ad_id = self._setup_matched()
         before_audit = main.conn.execute(
-            "SELECT COUNT(*) c FROM audit_log WHERE entity_id = ? AND action = 'sync_from_meta'",
+            "SELECT COUNT(*) c FROM audit_log WHERE entity_id = %s AND action = 'sync_from_meta'",
             (body_id,)).fetchone()["c"]
 
         self._sync(component_breakdowns=[_breakdown(
             ad_id, body={"id": "asset_1", "text": "虛構文案：原始版本"})])
 
         after_audit = main.conn.execute(
-            "SELECT COUNT(*) c FROM audit_log WHERE entity_id = ? AND action = 'sync_from_meta'",
+            "SELECT COUNT(*) c FROM audit_log WHERE entity_id = %s AND action = 'sync_from_meta'",
             (body_id,)).fetchone()["c"]
         self.assertEqual(before_audit, 0)
         self.assertEqual(after_audit, 0)
@@ -328,7 +311,7 @@ class MismatchReconciliationTest(_Base):
                           "selling_point": "quality"})
 
         audit_row = main.conn.execute(
-            "SELECT * FROM audit_log WHERE entity_id = ? AND action = 'sync_from_meta'",
+            "SELECT * FROM audit_log WHERE entity_id = %s AND action = 'sync_from_meta'",
             (body_id,)).fetchone()
         self.assertIsNotNone(audit_row)
         self.assertEqual(audit_row["actor"], ACTOR)
@@ -354,9 +337,9 @@ class ComponentRankingTest(_Base):
 
     def _seed_performance(self, component_id, *, conversions, impressions=100, clicks=10):
         main.conn.execute(
-            "UPDATE creative_theme_component SET meta_asset_id = ?, performance_impressions = ?,"
-            " performance_clicks = ?, performance_conversions = ?, performance_synced_at = ?"
-            " WHERE id = ?",
+            "UPDATE creative_theme_component SET meta_asset_id = %s, performance_impressions = %s,"
+            " performance_clicks = %s, performance_conversions = %s, performance_synced_at = %s"
+            " WHERE id = %s",
             (new_id("asset"), impressions, clicks, conversions, now_iso(), component_id),
         )
         main.conn.commit()

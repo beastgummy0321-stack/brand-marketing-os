@@ -1,14 +1,11 @@
 # -*- coding: utf-8 -*-
 """T3 駕駛艙補充資料保留任務卡完成紀錄。"""
 
-import tempfile
 import unittest
-from pathlib import Path
 
 from fastapi.testclient import TestClient
 
 import app.main as main
-import app.shared.web as web
 from app.ads import cockpit_extras, repository as ads_repo
 from app.ads import repository_channel_plan as plans
 from app.brand_intelligence import repository as bi
@@ -17,10 +14,7 @@ from app.core import db
 
 class CockpitExtrasTest(unittest.TestCase):
     def setUp(self):
-        self.tmpdir = tempfile.TemporaryDirectory()
-        self.conn = db.connect_and_migrate(Path(self.tmpdir.name) / "test.db")
-        self.previous_web_conn = web.conn
-        web.conn = self.conn
+        self.conn = db.current()
         self.client = TestClient(main.app)
         self.brand = bi.create_brand(self.conn, name="駕駛艙", client_name=None, actor="tester")
         product = bi.create_product(self.conn, self.brand["id"], name="商品", actor="tester")
@@ -29,17 +23,12 @@ class CockpitExtrasTest(unittest.TestCase):
         self.card = plans.create_task_card(self.conn, self.brand["id"], self.cycle["id"],
                                            channel="social", title="完成素材")
 
-    def tearDown(self):
-        web.conn = self.previous_web_conn
-        self.conn.close()
-        self.tmpdir.cleanup()
-
     def test_shape_and_done_retention(self):
         result = cockpit_extras.get(self.conn, self.brand["id"], self.cycle["id"])
         self.assertEqual(len(result["legacy"]), 5)
         self.assertIsNone(result["todo3"]["reply_speed"])
         cockpit_extras.mark_done(self.conn, self.brand["id"], self.card["id"])
-        self.assertEqual(cockpit_extras.get(self.conn, self.brand["id"], self.cycle["id"])["task_cards"][0]["done"], 1)
+        self.assertIs(cockpit_extras.get(self.conn, self.brand["id"], self.cycle["id"])["task_cards"][0]["done"], True)
 
     def test_five_cards_and_todo_values_use_their_existing_sources(self):
         product = bi.list_products(self.conn, self.brand["id"])[0]

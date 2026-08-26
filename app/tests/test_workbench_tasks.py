@@ -12,36 +12,18 @@
 setUp 寫法照抄既有先例——本專案測試檔一律自帶獨立 tmp DB，不共用 import。
 """
 
-import atexit
-import os
-import shutil
-import tempfile
 import unittest
-from pathlib import Path
 
-_tmpdir = tempfile.mkdtemp(prefix="brand_os_workbench_tasks_")
+from fastapi.testclient import TestClient
 
-from fastapi.testclient import TestClient  # noqa: E402
-
-import app.main as main  # noqa: E402
-from app.ads import repository as ads_repo  # noqa: E402
-from app.ads import theme_repository as theme_repo  # noqa: E402
-from app.brand_intelligence import repository as bi_repo  # noqa: E402
-from app.core import db  # noqa: E402
+import app.main as main
+from app.ads import repository as ads_repo
+from app.ads import theme_repository as theme_repo
+from app.brand_intelligence import repository as bi_repo
+from app.core import db
 
 
 ACTOR = "測試員"
-
-
-def _cleanup():
-    try:
-        main.conn.close()
-    except Exception:
-        pass
-    shutil.rmtree(_tmpdir, ignore_errors=True)
-
-
-atexit.register(_cleanup)
 
 
 class _Base(unittest.TestCase):
@@ -62,20 +44,20 @@ class _Base(unittest.TestCase):
     def _insert_cell(self, cycle_id: str, *, angle: str = "價格敏感：第一杯 39 元") -> str:
         cell_id = db.new_id("exc")
         main.conn.execute(
-            "INSERT INTO experiment_cell (id, campaign_cycle_id, brand_id, creative_angle,"
-            " created_at) VALUES (?, ?, ?, ?, ?)",
-            (cell_id, cycle_id, self.bid, angle, db.now_iso()),
+            "INSERT INTO experiment_cell (id, org_id, campaign_cycle_id, brand_id, creative_angle,"
+            " created_at) VALUES (%s, %s, %s, %s, %s, %s)",
+            (cell_id, db.DEV_ORG_ID, cycle_id, self.bid, angle, db.now_iso()),
         )
         main.conn.commit()
         return cell_id
 
     def _insert_plan(self, cycle_id: str, *, status: str) -> None:
-        import json
         main.conn.execute(
-            "INSERT INTO campaign_plan (id, campaign_cycle_id, brand_id, plan_version,"
-            " plan_json, status, approved_by, approved_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (db.new_id("cpl"), cycle_id, self.bid, 1,
-             json.dumps({"summary": "測試打法"}, ensure_ascii=False), status,
+            "INSERT INTO campaign_plan (id, org_id, campaign_cycle_id, brand_id, plan_version,"
+            " plan_json, status, approved_by, approved_at, created_at)"
+            " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            (db.new_id("cpl"), db.DEV_ORG_ID, cycle_id, self.bid, 1,
+             db.jsonb({"summary": "測試打法"}), status,
              ACTOR if status == "approved" else None,
              db.now_iso() if status == "approved" else None, db.now_iso()),
         )

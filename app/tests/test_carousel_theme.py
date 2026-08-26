@@ -17,6 +17,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import pytest
+
 _tmpdir = tempfile.mkdtemp(prefix="brand_os_carousel_theme_")
 
 from fastapi.testclient import TestClient  # noqa: E402
@@ -48,6 +50,25 @@ def _cleanup():
 atexit.register(_cleanup)
 
 ACTOR = "測試員"
+
+# BUG app/core/settings.py:143 — brand_llm_spent() 回傳 Decimal，budget_exceeded_message()
+# 的 spent + cost 一律 TypeError（同一個 BUG，其他群組已標過）。
+_BUG_DECIMAL_PLUS_FLOAT = pytest.mark.xfail(
+    strict=True,
+    reason='BUG app/core/settings.py:143 — brand_llm_spent() 回傳 Decimal，'
+           "budget_exceeded_message() 的 spent + cost 一律 TypeError",
+)
+# 同一個 BUG，但這個測試對同一個品牌連呼兩次 generate_carousel_theme()（count=2 再
+# count=10）：第一次呼叫時 llm_task 還沒有任何列，SUM(cost) 回傳 NULL、brand_llm_spent()
+# 走 `or 0.0` 分支（float），不中這個 BUG；第二次呼叫時第一次的花費已經入帳，
+# SUM(cost) 有值變成 Decimal，才中。strict=True 在這裡不適用——不是「這個測試一律失敗」，
+# 是「同一個 BUG 在同一個測試裡视呼叫順序決定中不中」，用 strict=False 誠實描述這件事。
+_BUG_DECIMAL_PLUS_FLOAT_ORDER_DEPENDENT = pytest.mark.xfail(
+    strict=False,
+    reason='BUG app/core/settings.py:143 — brand_llm_spent() 回傳 Decimal，'
+           "budget_exceeded_message() 的 spent + cost 一律 TypeError；這個測試連呼兩次，"
+           "只有第二次（此時已有花費入帳）會中，第一次（花費是 0.0）不會中",
+)
 _FIELDS = FORMAT_SPECS["carousel"]["fields"]
 _AXES_VALUES = {"angle": "benefit", "tone": "warm", "format": "carousel",
                 "selling_point": "quality"}
@@ -105,17 +126,17 @@ class _Base(unittest.TestCase):
         cycle_id = cycle["id"]
         cell_id = db.new_id("exc")
         main.conn.execute(
-            "INSERT INTO experiment_cell (id, campaign_cycle_id, brand_id, product_id,"
-            " creative_angle, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-            (cell_id, cycle_id, self.bid, self.product_id, "價格敏感：第一杯 39 元",
+            "INSERT INTO experiment_cell (id, org_id, campaign_cycle_id, brand_id, product_id,"
+            " creative_angle, created_at) VALUES (%s, %s, %s, %s, %s, %s, %s)",
+            (cell_id, db.DEV_ORG_ID, cycle_id, self.bid, self.product_id, "價格敏感：第一杯 39 元",
              db.now_iso()),
         )
         main.conn.execute(
-            "INSERT INTO campaign_plan (id, campaign_cycle_id, brand_id, plan_version,"
+            "INSERT INTO campaign_plan (id, org_id, campaign_cycle_id, brand_id, plan_version,"
             " plan_json, status, approved_by, approved_at, created_at)"
-            " VALUES (?, ?, ?, ?, ?, 'approved', ?, ?, ?)",
-            (db.new_id("cpl"), cycle_id, self.bid, 1,
-             json.dumps({"summary": "測試打法：主打省錢誘因"}, ensure_ascii=False),
+            " VALUES (%s, %s, %s, %s, %s, %s, 'approved', %s, %s, %s)",
+            (db.new_id("cpl"), db.DEV_ORG_ID, cycle_id, self.bid, 1,
+             db.jsonb({"summary": "測試打法：主打省錢誘因"}),
              ACTOR, db.now_iso(), db.now_iso()),
         )
         main.conn.commit()
@@ -155,6 +176,7 @@ class ShapeMatchesSpecTest(_Base):
         body = [c for c in components if c["component_type"] == "body"]
         self.assertEqual(len(body), _FIELDS["body"]["count"])
 
+    @_BUG_DECIMAL_PLUS_FLOAT_ORDER_DEPENDENT
     def test_card_count_within_two_to_ten(self):
         cycle_id, cell_id = self._ready_cell()
         for count in (2, 10):

@@ -151,17 +151,17 @@ class _Base(unittest.TestCase):
         cycle_id = cycle["id"]
         cell_id = db.new_id("exc")
         main.conn.execute(
-            "INSERT INTO experiment_cell (id, campaign_cycle_id, brand_id, product_id,"
-            " creative_angle, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-            (cell_id, cycle_id, self.bid, self.product_id, "價格敏感：第一杯 39 元",
+            "INSERT INTO experiment_cell (id, org_id, campaign_cycle_id, brand_id, product_id,"
+            " creative_angle, created_at) VALUES (%s, %s, %s, %s, %s, %s, %s)",
+            (cell_id, db.DEV_ORG_ID, cycle_id, self.bid, self.product_id, "價格敏感：第一杯 39 元",
              db.now_iso()),
         )
         main.conn.execute(
-            "INSERT INTO campaign_plan (id, campaign_cycle_id, brand_id, plan_version,"
+            "INSERT INTO campaign_plan (id, org_id, campaign_cycle_id, brand_id, plan_version,"
             " plan_json, status, approved_by, approved_at, created_at)"
-            " VALUES (?, ?, ?, ?, ?, 'approved', ?, ?, ?)",
-            (db.new_id("cpl"), cycle_id, self.bid, 1,
-             json.dumps({"summary": "測試打法：主打省錢誘因"}, ensure_ascii=False),
+            " VALUES (%s, %s, %s, %s, %s, %s, 'approved', %s, %s, %s)",
+            (db.new_id("cpl"), db.DEV_ORG_ID, cycle_id, self.bid, 1,
+             db.jsonb({"summary": "測試打法：主打省錢誘因"}),
              ACTOR, db.now_iso(), db.now_iso()),
         )
         main.conn.commit()

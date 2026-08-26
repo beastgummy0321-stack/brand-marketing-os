@@ -6,9 +6,7 @@
 """
 
 import json
-import tempfile
 import unittest
-from pathlib import Path
 
 from app.ads import brief_assembler as ba
 from app.ads import repository as ads_repo
@@ -28,8 +26,7 @@ _PLAN = {
 
 class _Base(unittest.TestCase):
     def setUp(self):
-        self._tmpdir = tempfile.TemporaryDirectory()
-        self.conn = db.connect_and_migrate(Path(self._tmpdir.name) / "test.db")
+        self.conn = db.current()
         self.brand = bi_repo.create_brand(self.conn, name="虛構晨光咖啡（簡報票）",
                                           client_name="測試客戶", actor=ACTOR)
         self.bid = self.brand["id"]
@@ -39,26 +36,22 @@ class _Base(unittest.TestCase):
             self.conn, self.bid, product_ids=[self.product_id],
             pain_value=5, objective="sales", actor=ACTOR,
         )["id"]
-        self.cell_id = "exc_test_cell"
+        self.cell_id = db.new_id("exc")
         self.conn.execute(
-            "INSERT INTO experiment_cell (id, campaign_cycle_id, brand_id, product_id,"
-            " creative_angle, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-            (self.cell_id, self.cycle_id, self.bid, self.product_id,
+            "INSERT INTO experiment_cell (id, org_id, campaign_cycle_id, brand_id, product_id,"
+            " creative_angle, created_at) VALUES (%s, %s, %s, %s, %s, %s, %s)",
+            (self.cell_id, db.DEV_ORG_ID, self.cycle_id, self.bid, self.product_id,
              "價格敏感：第一杯 39 元", db.now_iso()),
         )
         self.conn.commit()
 
-    def tearDown(self):
-        self.conn.close()
-        self._tmpdir.cleanup()
-
     def _insert_plan(self, *, status: str = "approved", plan: dict = None):
         self.conn.execute(
-            "INSERT INTO campaign_plan (id, campaign_cycle_id, brand_id, plan_version,"
+            "INSERT INTO campaign_plan (id, org_id, campaign_cycle_id, brand_id, plan_version,"
             " plan_json, status, approved_by, approved_at, created_at)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (db.new_id("cpl"), self.cycle_id, self.bid, 1,
-             json.dumps(plan or _PLAN, ensure_ascii=False), status,
+            " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            (db.new_id("cpl"), db.DEV_ORG_ID, self.cycle_id, self.bid, 1,
+             db.jsonb(plan or _PLAN), status,
              ACTOR if status == "approved" else None,
              db.now_iso() if status == "approved" else None, db.now_iso()),
         )
@@ -122,14 +115,14 @@ class OfferInclusionTest(_Base):
         self._insert_plan()
         self.offer_id = db.new_id("ofr")
         self.conn.execute(
-            "INSERT INTO offer (id, brand_id, product_scope_json, name, offer_type, terms,"
+            "INSERT INTO offer (id, org_id, brand_id, product_scope_json, name, offer_type, terms,"
             " valid_from, valid_to, status, created_at, updated_at)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (self.offer_id, self.bid, json.dumps(["brand"]), "測試優惠：第二件半價",
+            " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            (self.offer_id, db.DEV_ORG_ID, self.bid, db.jsonb(["brand"]), "測試優惠：第二件半價",
              "discount", "限量 100 份", "2026-08-01", "2026-08-31", "active",
              db.now_iso(), db.now_iso()),
         )
-        self.conn.execute("UPDATE campaign_cycle SET offer_id = ? WHERE id = ?",
+        self.conn.execute("UPDATE campaign_cycle SET offer_id = %s WHERE id = %s",
                           (self.offer_id, self.cycle_id))
         self.conn.commit()
 
@@ -142,7 +135,7 @@ class OfferInclusionTest(_Base):
         self.assertEqual(brief.offer["terms"], "限量 100 份")
 
     def test_offer_is_none_when_cycle_has_no_offer(self):
-        self.conn.execute("UPDATE campaign_cycle SET offer_id = NULL WHERE id = ?",
+        self.conn.execute("UPDATE campaign_cycle SET offer_id = NULL WHERE id = %s",
                           (self.cycle_id,))
         self.conn.commit()
         brief, err = self._assemble()
@@ -176,10 +169,11 @@ class ExistingThemeSummaryTest(_Base):
         self.assertEqual(summary["fingerprints"], [{"angle": "benefit", "tone": "warm"}])
 
     def test_theme_in_a_different_cell_does_not_leak_in(self):
-        other_cell_id = "exc_other_cell"
+        other_cell_id = db.new_id("exc")
         self.conn.execute(
-            "INSERT INTO experiment_cell (id, campaign_cycle_id, brand_id, created_at)"
-            " VALUES (?, ?, ?, ?)", (other_cell_id, self.cycle_id, self.bid, db.now_iso()),
+            "INSERT INTO experiment_cell (id, org_id, campaign_cycle_id, brand_id, created_at)"
+            " VALUES (%s, %s, %s, %s, %s)",
+            (other_cell_id, db.DEV_ORG_ID, self.cycle_id, self.bid, db.now_iso()),
         )
         self.conn.commit()
         theme_repo.create_theme(

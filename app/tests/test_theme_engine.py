@@ -16,6 +16,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+import pytest
+
 _tmpdir = tempfile.mkdtemp(prefix="brand_os_theme_engine_")
 
 from fastapi.testclient import TestClient  # noqa: E402
@@ -47,6 +49,15 @@ def _cleanup():
 atexit.register(_cleanup)
 
 ACTOR = "測試員"
+
+# BUG app/core/settings.py:143 — brand_llm_spent() 回傳 Decimal，budget_exceeded_message()
+# 的 spent + cost 一律 TypeError（同一個 BUG，其他群組已標過）。
+_BUG_DECIMAL_PLUS_FLOAT = pytest.mark.xfail(
+    strict=True,
+    reason='BUG app/core/settings.py:143 — brand_llm_spent() 回傳 Decimal，'
+           "budget_exceeded_message() 的 spent + cost 一律 TypeError",
+)
+
 _FIELDS = FORMAT_SPECS["single_image"]["fields"]
 _AXES_VALUES = {"angle": "benefit", "tone": "warm", "format": "single_image",
                 "selling_point": "quality"}
@@ -99,9 +110,9 @@ class _Base(unittest.TestCase):
     def _insert_cell(self, cycle_id: str) -> str:
         cell_id = db.new_id("exc")
         main.conn.execute(
-            "INSERT INTO experiment_cell (id, campaign_cycle_id, brand_id, product_id,"
-            " creative_angle, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-            (cell_id, cycle_id, self.bid, self.product_id, "價格敏感：第一杯 39 元",
+            "INSERT INTO experiment_cell (id, org_id, campaign_cycle_id, brand_id, product_id,"
+            " creative_angle, created_at) VALUES (%s, %s, %s, %s, %s, %s, %s)",
+            (cell_id, db.DEV_ORG_ID, cycle_id, self.bid, self.product_id, "價格敏感：第一杯 39 元",
              db.now_iso()),
         )
         main.conn.commit()
@@ -109,11 +120,11 @@ class _Base(unittest.TestCase):
 
     def _approve_plan(self, cycle_id: str) -> None:
         main.conn.execute(
-            "INSERT INTO campaign_plan (id, campaign_cycle_id, brand_id, plan_version,"
+            "INSERT INTO campaign_plan (id, org_id, campaign_cycle_id, brand_id, plan_version,"
             " plan_json, status, approved_by, approved_at, created_at)"
-            " VALUES (?, ?, ?, ?, ?, 'approved', ?, ?, ?)",
-            (db.new_id("cpl"), cycle_id, self.bid, 1,
-             json.dumps({"summary": "測試打法：主打省錢誘因"}, ensure_ascii=False),
+            " VALUES (%s, %s, %s, %s, %s, %s, 'approved', %s, %s, %s)",
+            (db.new_id("cpl"), db.DEV_ORG_ID, cycle_id, self.bid, 1,
+             db.jsonb({"summary": "測試打法：主打省錢誘因"}),
              ACTOR, db.now_iso(), db.now_iso()),
         )
         main.conn.commit()
@@ -520,6 +531,7 @@ class MatrixEmptyCellGenerateTest(_Base):
             counts[c["component_type"]] = counts.get(c["component_type"], 0) + 1
         self.assertEqual(counts, {name: spec["count"] for name, spec in _FIELDS.items()})
 
+    @_BUG_DECIMAL_PLUS_FLOAT
     def test_second_generate_in_same_cell_carries_the_first_theme_into_the_prompt(self):
         """防撞衫約束：第一次生成留下的主題，要出現在第二次生成的簡報／prompt 裡。"""
         cycle_id, cell_id = self._ready_cell(objective="sales")

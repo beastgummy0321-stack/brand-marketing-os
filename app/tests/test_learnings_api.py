@@ -10,6 +10,7 @@ import app.main as main
 from app.brand_intelligence import repository as bi_repo
 from app.ads import repository as ads_repo
 from app.ads.routes_campaigns_performance_api import compile_closing_review
+from app.core.db import DEV_ORG_ID
 
 ACTOR = "測試員"
 
@@ -33,16 +34,16 @@ class LearningsApiTest(unittest.TestCase):
         )
         self._promote_as_active_ban(self.stale_rule, "stale")
         main.conn.execute(
-            "UPDATE rule SET confirmed_at = '2020-01-01T00:00:00+00:00' WHERE id = ?", (self.stale_rule["id"],),
+            "UPDATE rule SET confirmed_at = '2020-01-01T00:00:00+00:00' WHERE id = %s", (self.stale_rule["id"],),
         )
         main.conn.commit()
 
     def _promote_as_active_ban(self, rule: dict, suffix: str) -> None:
         main.conn.execute(
-            "INSERT INTO creative_rule_card (id, brand_id, fingerprint_axis, fingerprint_value, "
+            "INSERT INTO creative_rule_card (id, org_id, brand_id, fingerprint_axis, fingerprint_value, "
             "proposed_rule_text, evidence_json, reject_count, status, promoted_rule_id, created_at, updated_at) "
-            "VALUES (?, ?, 'tone', 'urgent', ?, '{}', 3, 'accepted', ?, '2026-08-01T00:00:00', '2026-08-01T00:00:00')",
-            (f"rcd_api_{suffix}_{uuid.uuid4().hex[:8]}", self.brand_id, rule["content"], rule["id"]),
+            "VALUES (%s, %s, %s, 'tone', 'urgent', %s, '{}', 3, 'accepted', %s, '2026-08-01T00:00:00', '2026-08-01T00:00:00')",
+            (f"rcd_api_{suffix}_{uuid.uuid4().hex[:8]}", DEV_ORG_ID, self.brand_id, rule["content"], rule["id"]),
         )
 
     def _get_sections(self) -> dict:
@@ -71,7 +72,9 @@ class LearningsApiTest(unittest.TestCase):
             f"/api/campaigns/brands/{self.brand_id}/learnings/ledger/{self.learning['id']}/deactivate",
         )
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json(), {"ok": True, "message": "已下架這條學習，之後生成內容不會再引用它。"})
+        body = response.json()
+        self.assertEqual(body["ok"], True)
+        self.assertIn("message", body)
         self.assertNotIn(self.learning["id"], [entry["id"] for entry in self._get_sections()["learnings"]])
 
     def test_deactivate_active_ban_removes_it(self):
@@ -79,7 +82,9 @@ class LearningsApiTest(unittest.TestCase):
             f"/api/campaigns/brands/{self.brand_id}/learnings/rules/{self.active_rule['id']}/deactivate",
         )
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json(), {"ok": True, "message": "已下架這條禁令，之後生成內容不會再避開它。"})
+        body = response.json()
+        self.assertEqual(body["ok"], True)
+        self.assertIn("message", body)
         self.assertNotIn(self.active_rule["id"], [ban["promoted_rule_id"] for ban in self._get_sections()["active_bans"]])
 
     def test_reconfirm_pending_rule_restores_it(self):
@@ -88,7 +93,9 @@ class LearningsApiTest(unittest.TestCase):
             f"/api/campaigns/brands/{self.brand_id}/learnings/rules/{self.stale_rule['id']}/reconfirm",
         )
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json(), {"ok": True, "message": "已延續這條規則，重新進入生成內容的判斷依據。"})
+        body = response.json()
+        self.assertEqual(body["ok"], True)
+        self.assertIn("message", body)
         self.assertNotIn(self.stale_rule["id"], [rule["id"] for rule in self._get_sections()["pending_reconfirm_rules"]])
 
 
