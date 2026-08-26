@@ -4,47 +4,29 @@
 全程 FakeProvider，不發任何真實網路請求；品牌與產品名一律虛構。
 """
 
-import atexit
 import json
-import os
-import shutil
 import tempfile
 import time
 import unittest
 from pathlib import Path
 
 import pytest
+from fastapi.testclient import TestClient
 
-_tmpdir = tempfile.mkdtemp(prefix="brand_os_ads_creative_")
-
-from fastapi.testclient import TestClient  # noqa: E402
-
-import app.main as main  # noqa: E402
-from app.ads import creative as ads_creative  # noqa: E402
-from app.ads import creative_matrix as cmx  # noqa: E402
-from app.ads import fingerprint as fp  # noqa: E402
-from app.ads import plan as ads_plan  # noqa: E402
-from app.ads import routes as ads_routes  # noqa: E402
-from app.ads import theme_repository as theme_repo  # noqa: E402
-from app.ads.routes_creative import _CREATIVE_STAGES  # noqa: E402
-from app.brand_intelligence import repository as bi_repo  # noqa: E402
-from app.core import settings as coresettings  # noqa: E402
-from app.core.db import new_id, now_iso  # noqa: E402
-from app.llm import methodology  # noqa: E402
-from app.llm.providers import FakeProvider, ProviderResponse, Usage  # noqa: E402
-from app.shared.web import OPERATOR  # noqa: E402
-
-
-
-def _cleanup():
-    try:
-        main.conn.close()
-    except Exception:
-        pass
-    shutil.rmtree(_tmpdir, ignore_errors=True)
-
-
-atexit.register(_cleanup)
+import app.main as main
+from app.ads import creative as ads_creative
+from app.ads import creative_matrix as cmx
+from app.ads import fingerprint as fp
+from app.ads import plan as ads_plan
+from app.ads import routes as ads_routes
+from app.ads import theme_repository as theme_repo
+from app.ads.routes_creative import _CREATIVE_STAGES
+from app.brand_intelligence import repository as bi_repo
+from app.core import settings as coresettings
+from app.core.db import new_id, now_iso
+from app.llm import methodology
+from app.llm.providers import FakeProvider, ProviderResponse, Usage
+from app.shared.web import OPERATOR
 
 ACTOR = "測試員"
 
@@ -195,11 +177,6 @@ class _SequencedProvider:
         return self._responses[index]
 
 
-# BUG app/core/settings.py:143 — brand_llm_spent() 回傳 Decimal，budget_exceeded_message()
-# 拿去跟 float 相加，一律 TypeError。這裡每個測試的 setUp() 都經 _run_plan_gate() ->
-# plan/approve -> theme_batch._budget_blocked() -> budget_exceeded_message()，全班（含子
-# 類別）都會炸在 setUp 階段——02-4 是測試轉移票，不改 app/core/*.py，標 xfail，等後續票
-# 修正 production code（正確寫法應是先把 spent 轉 float，或全站改用 Decimal 算錢）。
 _BUG_SETTINGS_DECIMAL = pytest.mark.xfail(
     strict=True,
     reason="BUG app/core/settings.py:143 — brand_llm_spent() 回傳 Decimal，"

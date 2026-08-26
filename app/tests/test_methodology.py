@@ -13,7 +13,7 @@ from pathlib import Path
 
 from app.brand_intelligence import repository as repo
 from app.core import db
-from app.core import vocab as mock_data
+from app.core import vocab
 from app.llm import methodology
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -303,16 +303,16 @@ class BrandSwitchesWriteTest(unittest.TestCase):
 
 
 class PersonaSwitchDefaultsTest(unittest.TestCase):
-    """app.mock_data.persona_switch_defaults：人設展開成開關預設值的填表捷徑，不進 DB。"""
+    """app.core.vocab.persona_switch_defaults：人設展開成開關預設值的填表捷徑，不進 DB。"""
 
     def test_every_persona_expands_to_all_four_switches(self):
-        for code, _label in mock_data.PERSONA_TYPES:
-            defaults = mock_data.persona_switch_defaults(code)
+        for code, _label in vocab.PERSONA_TYPES:
+            defaults = vocab.persona_switch_defaults(code)
             self.assertEqual(set(defaults.keys()), {"有商品", "站內交易", "有自有網站", "健康類法規"})
 
     def test_unknown_persona_raises(self):
         with self.assertRaises(ValueError):
-            mock_data.persona_switch_defaults("不存在的人設")
+            vocab.persona_switch_defaults("不存在的人設")
 
 
 class MethodologyLastVerifiedDateTest(unittest.TestCase):

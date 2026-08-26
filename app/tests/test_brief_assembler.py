@@ -248,8 +248,8 @@ class PureAssemblyNoBackDoorTest(_Base):
         self.assertFalse(hasattr(ba, "PROVIDER"))
 
     def test_brief_fields_are_plain_data_not_db_handles_or_callbacks(self):
-        """簡報是純資料快照：欄位裡不准藏 DB 連線（本專案的連線是 `_LockingConnection`
-        包裝過的物件，不是裸 `sqlite3.Connection`，所以用「是不是同一個 conn」與
+        """簡報是純資料快照：欄位裡不准藏 DB 連線（本專案的連線是 `app.core.db.Conn`
+        包裝過的物件，不是裸 driver 連線，所以用「是不是同一個 conn」與
         「有沒有 .execute 這種查 DB 的能力」雙重鴨子定型檢查，而不是 isinstance）
         或任何可呼叫的回頭查 DB 參數。"""
         brief, err = self._assemble()

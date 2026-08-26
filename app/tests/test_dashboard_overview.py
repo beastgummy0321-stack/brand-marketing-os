@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """app/tests/test_dashboard_overview.py — 票 02-overview-cards：儀表板跨品牌總覽 API。
 
-隔離測試資料庫（BRAND_OS_DB 指向 tmp 檔），TestClient 模式（比照
-app/tests/test_orders_routes.py）。測試品牌一律虛構。
+每個測試模組一個 Postgres schema（conftest.py 的 `_module_schema` fixture），
+TestClient 模式。測試品牌一律虛構。
 """
 
 import os

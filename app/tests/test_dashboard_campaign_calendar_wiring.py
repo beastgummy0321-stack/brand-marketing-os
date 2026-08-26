@@ -7,7 +7,8 @@
 「今天」調整，所以用 calendar_events 這個測試縫注入合成檔期，維持跟其他隔離測試
 一樣的可控性（見 app/dashboard/repository.py 檔頭說明）。
 
-隔離測試資料庫（BRAND_OS_DB 指向 tmp 檔）。測試品牌一律虛構。
+每個測試模組一個 Postgres schema（conftest.py 的 `_module_schema` fixture）。
+測試品牌一律虛構。
 """
 
 import atexit

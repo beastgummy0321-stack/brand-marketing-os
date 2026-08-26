@@ -262,7 +262,7 @@ class PartialErrorsReportSuccessAndFailureCountsTest(_Base):
         def _mixed_result(conn, brand_id, cycle_id, *, actor):
             return {"themes": [{"id": "thm_ok"}], "budget_stopped": False,
                     "errors": [{"experiment_cell_id": "ec1", "format_key": "single_image",
-                                "error": "sqlite3.OperationalError: no such table 底層例外XYZ"}]}
+                                "error": "psycopg.errors.UndefinedTable: no such table 底層例外XYZ"}]}
 
         theme_batch.generate_preselected_batch = _mixed_result
         resp = self.client.post(self.approve_url)

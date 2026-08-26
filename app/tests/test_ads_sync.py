@@ -25,17 +25,12 @@ from app.shared.web import OPERATOR
 ACTOR = "測試員"
 ACCOUNT = "act_1234567890"
 
-# BUG app/core/interrupts.py:99 — enqueue() dedup 查詢用 "brand_id IS %s"，
-# Postgres 的 IS 不接受綁參數，一律 psycopg.errors.SyntaxError（同一個 BUG，多群組已標過）。
 _BUG_INTERRUPT_IS_PARAM = pytest.mark.xfail(
     strict=True,
     reason='BUG app/core/interrupts.py:99 — enqueue() dedup 查詢用 "brand_id IS %s"，'
            "Postgres 的 IS 不接受綁參數，一律 psycopg.errors.SyntaxError",
 )
 
-# BUG app/ads/performance.py:614,635 — _brand_level_rows()／_brand_level_monthly_groups()
-# 用 `(row["date_range_end"] or "")[:7]` 切出年月，Postgres 讀回 date 物件不能切片
-# （同一個 BUG，本群組已標過，見 test_ads_performance.py）。
 _BUG_DATE_OBJECT_SLICE = pytest.mark.xfail(
     strict=True,
     reason="BUG app/ads/performance.py:614,635 — (date_range_end or \"\")[:7] 對"
@@ -43,8 +38,6 @@ _BUG_DATE_OBJECT_SLICE = pytest.mark.xfail(
            " subscriptable",
 )
 
-# BUG app/ads/performance.py:291 — _existing_signatures() 讀回的 date 物件跟本次匯入
-# 建構簽章用的日期字串型別不同，重複匯入判斷永遠比不出相等（同一個 BUG，本群組已標過）。
 _BUG_SIGNATURE_DATE_TYPE_MISMATCH = pytest.mark.xfail(
     strict=True,
     reason="BUG app/ads/performance.py:291 — _existing_signatures() 讀回的 date 物件"

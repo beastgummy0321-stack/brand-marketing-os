@@ -30,37 +30,24 @@ _CSV_EN = """Reporting starts,Reporting ends,Campaign name,Amount spent (TWD),Im
 """
 
 
-# BUG app/ads/performance.py:364 — import_rows() 的 INSERT 對 date 欄位傳 ""，
-# Postgres 一律 psycopg.errors.InvalidDatetimeFormat（同一個 BUG，orders/ads 群組已標過）。
 _BUG_EMPTY_STRING_DATE = pytest.mark.xfail(
     strict=True,
     reason='BUG app/ads/performance.py:364 — import_rows() 的 INSERT 對 date 欄位傳 ""，'
            "Postgres 一律 psycopg.errors.InvalidDatetimeFormat",
 )
 
-# BUG app/ads/performance.py:291 — _existing_signatures() 讀回的 date 物件跟本次匯入
-# 建構簽章用的日期字串型別不同，重複匯入判斷永遠比不出相等（同一個 BUG，本群組已標過，
-# 見 test_ads_performance_dedupe_attribution.py）。
 _BUG_SIGNATURE_DATE_TYPE_MISMATCH = pytest.mark.xfail(
     strict=True,
     reason="BUG app/ads/performance.py:291 — _existing_signatures() 讀回的 date 物件"
            "跟本次匯入建構簽章用的日期字串型別不同，重複匯入判斷永遠比不出相等",
 )
 
-# BUG app/ads/performance.py:526 — compute_kpis() 的 "cpa": spend / conversions，
-# spend 是 numeric（讀回 Decimal），conversions 是 double precision（讀回 float），
-# Postgres 下 TypeError（同一個 BUG，本群組已標過，見 test_ads_settlement.py）。
 _BUG_KPI_DECIMAL_DIV_FLOAT = pytest.mark.xfail(
     strict=True,
     reason="BUG app/ads/performance.py:526 — compute_kpis() 的 spend / conversions"
            "（numeric 對 double precision）型別不一致，psycopg.errors 之外的 TypeError",
 )
 
-# BUG app/ads/performance.py:614,635 — _brand_level_rows()／_brand_level_monthly_groups()
-# 用 `(row["date_range_end"] or "")[:7]` 切出年月，SQLite 底下 date 欄位讀回是字串，
-# Postgres 讀回 datetime.date 物件，物件不能用 [:7] 切片，一律
-# TypeError: 'datetime.date' object is not subscriptable（同一類 BUG，orders 群組已在
-# performance.py:613 標過一次，這是同一段程式碼的兩個實例）。
 _BUG_DATE_OBJECT_SLICE = pytest.mark.xfail(
     strict=True,
     reason="BUG app/ads/performance.py:614,635 — (date_range_end or \"\")[:7] 對"

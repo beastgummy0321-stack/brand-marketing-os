@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """app/tests/test_dashboard_cockpit.py — 票 03-cockpit-kpi-chart：單品牌駕駛艙 API。
 
-隔離測試資料庫（BRAND_OS_DB 指向 tmp 檔），TestClient 模式（比照
-app/tests/test_dashboard_overview.py）。測試品牌一律虛構。
+每個測試模組一個 Postgres schema（conftest.py 的 `_module_schema` fixture），
+TestClient 模式（比照 app/tests/test_dashboard_overview.py）。測試品牌一律虛構。
 
 KPI 口徑（規格 0001，B0-01 改判）：本月營收＝訂單實收；花費＝成效快照 spend 加總；
 ROAS＝同一期間的營收÷花費現算（不讀 derived_metric「最近一次判讀」，那個時間戳記的是

@@ -26,17 +26,12 @@ from app.shared.web import OPERATOR
 ACTOR = "測試員"
 
 
-# BUG app/ads/performance.py:364 — import_rows() 的 INSERT 對 date 欄位傳 ""，
-# Postgres 一律 psycopg.errors.InvalidDatetimeFormat（同一個 BUG，orders/ads 群組已標過）。
 _BUG_EMPTY_STRING_DATE = pytest.mark.xfail(
     strict=True,
     reason='BUG app/ads/performance.py:364 — import_rows() 的 INSERT 對 date 欄位傳 ""，'
            "Postgres 一律 psycopg.errors.InvalidDatetimeFormat",
 )
 
-# BUG app/brand_intelligence/repository.py:1569 — 跟 app/core/interrupts.py:99 同一類
-# SQLite 遺留寫法："product_id IS %s"，Postgres 的 IS 不接受綁參數，
-# 一律 psycopg.errors.SyntaxError（這是另一個檔案的另一個出現點，新發現）。
 _BUG_LEDGER_IS_PARAM = pytest.mark.xfail(
     strict=True,
     reason='BUG app/brand_intelligence/repository.py:1569 — 學習帳本重複偵測查詢用'

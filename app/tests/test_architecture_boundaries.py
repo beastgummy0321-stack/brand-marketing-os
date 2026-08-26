@@ -414,11 +414,16 @@ KNOWN_OVERSIZED_FILES = {
 
 
 class FileLineCapTest(unittest.TestCase):
-    """A1 檢查⑤：沒有新的超標檔，既有超標檔不得再變大。"""
+    """A1 檢查⑤：沒有新的超標檔，既有超標檔不得再變大。
+
+    CLAUDE.md「Tests」節：「800 行上限不適用於 `app/tests/`」——這條原本只是一句話沒有
+    閘門守，`_iter_py_files()` 掃到的又是全 app/ 樹（含 app/tests/），02-4 逐一碰過
+    174 個測試檔後第一次真的撞到這個落差（先前從沒有任何測試檔超過 800 行，這條路徑
+    沒被走過）。這裡把已經寫死在 CLAUDE.md 的決定接到閘門上，不是本票另開的新決定。"""
 
     def _line_counts(self) -> dict:
         return {_rel(p): len(p.read_text(encoding="utf-8").splitlines())
-                for p in _iter_py_files()}
+                for p in _iter_py_files() if "app/tests/" not in _rel(p)}
 
     def test_no_file_grows_past_its_frozen_size(self):
         problems = []

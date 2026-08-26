@@ -34,8 +34,6 @@ def _fake(text):
                             stop_reason="end_turn")
 
 
-# BUG app/ads/performance.py:364 — import_rows() 的 INSERT 對 date 欄位傳 ""，
-# Postgres 一律 psycopg.errors.InvalidDatetimeFormat（同一個 BUG，orders/ads 群組已標過）。
 _BUG_EMPTY_STRING_DATE = pytest.mark.xfail(
     strict=True,
     reason='BUG app/ads/performance.py:364 — import_rows() 的 INSERT 對 date 欄位傳 ""，'
