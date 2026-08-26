@@ -1,33 +1,18 @@
 # -*- coding: utf-8 -*-
 """T3 開檔建議、管道計畫與任務卡的可判定驗收。"""
 
-import atexit
-import shutil
-import tempfile
 import unittest
-from pathlib import Path
 from unittest import mock
 
-_tmpdir = tempfile.mkdtemp(prefix="brand_os_opening_suggestion_")
+from fastapi.testclient import TestClient
 
-from fastapi.testclient import TestClient  # noqa: E402
+import app.main as main
+from app.ads import opening_suggestion
+from app.ads import repository_channel_plan as plan_repo
+from app.brand_intelligence import repository as bi_repo
+from app.core import db
+from app.core.db import new_id, now_iso
 
-import app.main as main  # noqa: E402
-from app.ads import opening_suggestion  # noqa: E402
-from app.ads import repository_channel_plan as plan_repo  # noqa: E402
-from app.brand_intelligence import repository as bi_repo  # noqa: E402
-from app.core.db import new_id, now_iso  # noqa: E402
-
-
-def _cleanup():
-    try:
-        main.conn.close()
-    except Exception:
-        pass
-    shutil.rmtree(_tmpdir, ignore_errors=True)
-
-
-atexit.register(_cleanup)
 ACTOR = "測試員"
 FORBIDDEN_SUMMARY_WORDS = ("受眾", "漏斗", "CPA", "CTR", "CPC", "ROAS", "KPI")
 
@@ -58,11 +43,11 @@ class _BaseOpeningSuggestionTest(unittest.TestCase):
         cycle_id = new_id("ccy")
         ts = now_iso()
         main.conn.execute(
-            "INSERT INTO campaign_cycle (id, brand_id, product_scope_json, objective, currency, start_date, "
+            "INSERT INTO campaign_cycle (id, org_id, brand_id, product_scope_json, objective, currency, start_date, "
             "end_date, channels_json, status, archived, plan_version, phase, created_at, updated_at) "
-            "VALUES (?, ?, '[]', 'sales', 'TWD', ?, ?, '[]', ?, 0, 0, "
-            "'normal', ?, ?)",
-            (cycle_id, self.bid, start_date, end_date, status, ts, ts),
+            "VALUES (%s, %s, %s, '[]', 'sales', 'TWD', %s, %s, '[]', %s, false, 0, "
+            "'normal', %s, %s)",
+            (cycle_id, db.DEV_ORG_ID, self.bid, start_date, end_date, status, ts, ts),
         )
         main.conn.commit()
         return cycle_id
@@ -72,10 +57,10 @@ class _BaseOpeningSuggestionTest(unittest.TestCase):
         import json
 
         main.conn.execute(
-            "INSERT INTO recommendation (id, brand_id, campaign_cycle_id, recommendation_type,"
+            "INSERT INTO recommendation (id, org_id, brand_id, campaign_cycle_id, recommendation_type,"
             " content_json, status, created_at, updated_at)"
-            " VALUES (?, ?, ?, 'next_cycle', ?, 'GENERATED', ?, ?)",
-            (new_id("rec"), self.bid, cycle_id,
+            " VALUES (%s, %s, %s, %s, 'next_cycle', %s, 'GENERATED', %s, %s)",
+            (new_id("rec"), db.DEV_ORG_ID, self.bid, cycle_id,
              json.dumps({"budget": {"proposed_budget": proposed_budget}}, ensure_ascii=False),
              now_iso(), now_iso()),
         )
@@ -87,31 +72,31 @@ class _BaseOpeningSuggestionTest(unittest.TestCase):
         ts = now_iso()
         cell_id, package_id, mapping_id = (new_id(prefix) for prefix in ("exc", "pkg", "xam"))
         main.conn.execute(
-            "INSERT INTO experiment_cell (id, campaign_cycle_id, brand_id, product_id, creative_angle, created_at) "
-            "VALUES (?, ?, ?, NULL, '虛構切角', ?)", (cell_id, cycle_id, self.bid, ts))
+            "INSERT INTO experiment_cell (id, org_id, campaign_cycle_id, brand_id, product_id, creative_angle, created_at) "
+            "VALUES (%s, %s, %s, %s, NULL, '虛構切角', %s)", (cell_id, db.DEV_ORG_ID, cycle_id, self.bid, ts))
         main.conn.execute(
-            "INSERT INTO publishing_package (id, brand_id, campaign_cycle_id, experiment_cell_id, product_id, "
+            "INSERT INTO publishing_package (id, org_id, brand_id, campaign_cycle_id, experiment_cell_id, product_id, "
             "campaign_name, adset_name, ad_name, destination_url, utm_json, status, created_at) "
-            "VALUES (?, ?, ?, ?, NULL, '虛構活動', '虛構組', '虛構廣告', 'https://example.test', '{}', 'ready', ?)",
-            (package_id, self.bid, cycle_id, cell_id, ts))
+            "VALUES (%s, %s, %s, %s, %s, NULL, '虛構活動', '虛構組', '虛構廣告', 'https://example.test', '{}', 'ready', %s)",
+            (package_id, db.DEV_ORG_ID, self.bid, cycle_id, cell_id, ts))
         main.conn.execute(
-            "INSERT INTO external_ad_mapping (id, brand_id, publishing_package_id, campaign_cycle_id, platform, "
-            "created_at) VALUES (?, ?, ?, ?, 'meta', ?)",
-            (mapping_id, self.bid, package_id, cycle_id, ts))
+            "INSERT INTO external_ad_mapping (id, org_id, brand_id, publishing_package_id, campaign_cycle_id, platform, "
+            "created_at) VALUES (%s, %s, %s, %s, %s, 'meta', %s)",
+            (mapping_id, db.DEV_ORG_ID, self.bid, package_id, cycle_id, ts))
         main.conn.execute(
-            "INSERT INTO performance_snapshot (id, brand_id, campaign_cycle_id, external_ad_mapping_id, platform, "
+            "INSERT INTO performance_snapshot (id, org_id, brand_id, campaign_cycle_id, external_ad_mapping_id, platform, "
             "date_range_start, date_range_end, as_of_date, snapshot_taken_at, currency, conversions, source, "
-            "created_at) VALUES (?, ?, ?, ?, 'meta', '2026-08-01', '2026-08-01', '2026-08-01', ?, 'TWD', ?, "
-            "'manual', ?)",
-            (new_id("psn"), self.bid, cycle_id, mapping_id, ts, conversions, ts))
+            "created_at) VALUES (%s, %s, %s, %s, %s, 'meta', '2026-08-01', '2026-08-01', '2026-08-01', %s, 'TWD', %s, "
+            "'manual', %s)",
+            (new_id("psn"), db.DEV_ORG_ID, self.bid, cycle_id, mapping_id, ts, conversions, ts))
         main.conn.commit()
 
     def add_cycle_product(self, cycle_id: str, product_id: str) -> None:
         main.conn.execute(
-            "INSERT INTO campaign_cycle_product (id, campaign_cycle_id, brand_id, product_id, allocated_budget,"
+            "INSERT INTO campaign_cycle_product (id, org_id, campaign_cycle_id, brand_id, product_id, allocated_budget,"
             " allocation_ratio, allocation_basis, economics_missing, created_at, updated_at)"
-            " VALUES (?, ?, ?, ?, 0, 0, 'even', 0, ?, ?)",
-            (new_id("ccp"), cycle_id, self.bid, product_id, now_iso(), now_iso()),
+            " VALUES (%s, %s, %s, %s, %s, 0, 0, 'even', false, %s, %s)",
+            (new_id("ccp"), db.DEV_ORG_ID, cycle_id, self.bid, product_id, now_iso(), now_iso()),
         )
         main.conn.commit()
 
@@ -119,23 +104,23 @@ class _BaseOpeningSuggestionTest(unittest.TestCase):
         ts = now_iso()
         cell_id, package_id, mapping_id = (new_id(prefix) for prefix in ("exc", "pkg", "xam"))
         main.conn.execute(
-            "INSERT INTO experiment_cell (id, campaign_cycle_id, brand_id, product_id, creative_angle, created_at) "
-            "VALUES (?, ?, ?, ?, '虛構切角', ?)", (cell_id, cycle_id, self.bid, product_id, ts))
+            "INSERT INTO experiment_cell (id, org_id, campaign_cycle_id, brand_id, product_id, creative_angle, created_at) "
+            "VALUES (%s, %s, %s, %s, %s, '虛構切角', %s)", (cell_id, db.DEV_ORG_ID, cycle_id, self.bid, product_id, ts))
         main.conn.execute(
-            "INSERT INTO publishing_package (id, brand_id, campaign_cycle_id, experiment_cell_id, product_id, "
+            "INSERT INTO publishing_package (id, org_id, brand_id, campaign_cycle_id, experiment_cell_id, product_id, "
             "campaign_name, adset_name, ad_name, destination_url, utm_json, status, created_at) "
-            "VALUES (?, ?, ?, ?, ?, '虛構活動', '虛構組', '虛構廣告', 'https://example.test', '{}', 'ready', ?)",
-            (package_id, self.bid, cycle_id, cell_id, product_id, ts))
+            "VALUES (%s, %s, %s, %s, %s, %s, '虛構活動', '虛構組', '虛構廣告', 'https://example.test', '{}', 'ready', %s)",
+            (package_id, db.DEV_ORG_ID, self.bid, cycle_id, cell_id, product_id, ts))
         main.conn.execute(
-            "INSERT INTO external_ad_mapping (id, brand_id, publishing_package_id, campaign_cycle_id, platform, "
-            "created_at) VALUES (?, ?, ?, ?, 'meta', ?)",
-            (mapping_id, self.bid, package_id, cycle_id, ts))
+            "INSERT INTO external_ad_mapping (id, org_id, brand_id, publishing_package_id, campaign_cycle_id, platform, "
+            "created_at) VALUES (%s, %s, %s, %s, %s, 'meta', %s)",
+            (mapping_id, db.DEV_ORG_ID, self.bid, package_id, cycle_id, ts))
         main.conn.execute(
-            "INSERT INTO performance_snapshot (id, brand_id, campaign_cycle_id, external_ad_mapping_id, platform, "
+            "INSERT INTO performance_snapshot (id, org_id, brand_id, campaign_cycle_id, external_ad_mapping_id, platform, "
             "date_range_start, date_range_end, as_of_date, snapshot_taken_at, currency, conversions, source, "
-            "created_at) VALUES (?, ?, ?, ?, 'meta', '2026-08-01', '2026-08-01', '2026-08-01', ?, 'TWD', ?, "
-            "'manual', ?)",
-            (new_id("psn"), self.bid, cycle_id, mapping_id, ts, conversions, ts))
+            "created_at) VALUES (%s, %s, %s, %s, %s, 'meta', '2026-08-01', '2026-08-01', '2026-08-01', %s, 'TWD', %s, "
+            "'manual', %s)",
+            (new_id("psn"), db.DEV_ORG_ID, self.bid, cycle_id, mapping_id, ts, conversions, ts))
         main.conn.commit()
 
 
@@ -298,11 +283,11 @@ class OpeningSuggestionApiTest(_BaseOpeningSuggestionTest):
         other_cid = new_id("ccy")
         ts = now_iso()
         main.conn.execute(
-            "INSERT INTO campaign_cycle (id, brand_id, product_scope_json, objective, currency, start_date, "
+            "INSERT INTO campaign_cycle (id, org_id, brand_id, product_scope_json, objective, currency, start_date, "
             "end_date, channels_json, status, archived, plan_version, phase, created_at, updated_at) "
-            "VALUES (?, ?, '[]', 'sales', 'TWD', '2026-08-11', '2026-08-24', '[]', 'CLOSED', 0, 0, "
-            "'normal', ?, ?)",
-            (other_cid, other_brand["id"], ts, ts),
+            "VALUES (%s, %s, %s, '[]', 'sales', 'TWD', '2026-08-11', '2026-08-24', '[]', 'CLOSED', false, 0, "
+            "'normal', %s, %s)",
+            (other_cid, db.DEV_ORG_ID, other_brand["id"], ts, ts),
         )
         main.conn.commit()
         self.store_next_cycle_recommendation(other_cid, proposed_budget=45000)

@@ -10,10 +10,8 @@
    兩種情況都要驗（帶入節日名稱／常態檔期為 None）。
 """
 
-import tempfile
 import unittest
 from datetime import date
-from pathlib import Path
 
 from app.ads import occasion as ads_occasion
 from app.ads import repository as ads_repo
@@ -63,15 +61,10 @@ class CreateCycleWritesOccasionTest(unittest.TestCase):
     """開新檔期時，occasion 欄位要真的有值或維持 None——這是本票要接上的行為。"""
 
     def setUp(self):
-        self._tmpdir = tempfile.TemporaryDirectory()
-        self.conn = db.connect_and_migrate(Path(self._tmpdir.name) / "test.db")
+        self.conn = db.current()
         self.brand = bi_repo.create_brand(self.conn, name="虛構晨光咖啡",
                                           client_name="測試客戶", actor=ACTOR)
         self.bid = self.brand["id"]
-
-    def tearDown(self):
-        self.conn.close()
-        self._tmpdir.cleanup()
 
     def test_cycle_in_holiday_window_gets_occasion_from_real_calendar(self):
         """真實節日日曆（母親節 2026-05-10，大檔，投放窗口 90 天）：檔期落在窗口內。"""

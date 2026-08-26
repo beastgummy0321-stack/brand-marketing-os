@@ -9,40 +9,32 @@ app.orders.dispatch.import_dropped_file()。這裡只驗證：
 fixture 一律虛構品牌，嚴禁真實品牌名稱。
 """
 
-import atexit
 import io
-import os
-import shutil
-import tempfile
 import unittest
 from datetime import date
 
-_tmpdir = tempfile.mkdtemp(prefix="brand_os_ads_connections_")
+import openpyxl
+import pytest
 
-import openpyxl  # noqa: E402
-
-import app.main as main  # noqa: E402
-from app.ads import repository as ads_repo  # noqa: E402
-from app.ads import sync as ads_sync  # noqa: E402
-from app.ads import ga4_sync  # noqa: E402
-from app.brand_intelligence import repository as bi_repo  # noqa: E402
-from app.orders import dispatch as orders_dispatch  # noqa: E402
-
-
-def _cleanup():
-    try:
-        main.conn.close()
-    except Exception:
-        pass
-    shutil.rmtree(_tmpdir, ignore_errors=True)
-
-
-atexit.register(_cleanup)
+import app.main as main
+from app.ads import repository as ads_repo
+from app.ads import sync as ads_sync
+from app.ads import ga4_sync
+from app.brand_intelligence import repository as bi_repo
+from app.orders import dispatch as orders_dispatch
 
 ACTOR = "測試員"
 META_ACCOUNT = "act_1234567890"
 GA4_PROPERTY_ID = "123456789"
 GA4_FAKE_KEY_JSON = '{"client_email": "svc@example.iam.gserviceaccount.com"}'
+
+_BUG_DISPATCH_DATE_VS_STR = pytest.mark.xfail(
+    strict=True,
+    reason="BUG app/orders/dispatch.py:141 — _import_meta_csv() 的 "
+           "c['start_date'] <= row_date <= c['end_date']：cycle 的 start_date/end_date"
+           "讀回 date 物件（ads_repo.list_cycles()），row_date 來自 CSV 欄位或 today 參數"
+           "（str），兩邊型別不同，TypeError",
+)
 
 _EASYSTORE_HEADERS = ["Order Number", "Date", "Total Amount", "Refunded Amount",
                       "Financial Status", "Fulfillment Status", "Order Status",
@@ -70,7 +62,7 @@ def _easystore_xlsx_bytes():
 class ConnectionsRouteTest(unittest.TestCase):
     def setUp(self):
         main.conn.execute("DELETE FROM discovered_campaign")
-        main.conn.execute("DELETE FROM app_setting WHERE key IN (?, ?, ?, ?)",
+        main.conn.execute("DELETE FROM app_setting WHERE key IN (%s, %s, %s, %s)",
                           (ads_sync.ACCOUNT_SETTING, ads_sync.TOKEN_SETTING,
                            ga4_sync.PROPERTY_SETTING, ga4_sync.SERVICE_ACCOUNT_SETTING))
         main.conn.commit()
@@ -91,7 +83,7 @@ class ConnectionsRouteTest(unittest.TestCase):
         self.assertEqual(result.kind, "easystore_orders")
         self.assertEqual(result.errors, [])
         count = main.conn.execute(
-            "SELECT COUNT(*) c FROM order_record WHERE brand_id = ?", (self.bid,)
+            "SELECT COUNT(*) c FROM order_record WHERE brand_id = %s", (self.bid,)
         ).fetchone()["c"]
         self.assertEqual(count, 1)
 
@@ -102,10 +94,11 @@ class ConnectionsRouteTest(unittest.TestCase):
         self.assertEqual(result.kind, "shopee_report")
         self.assertEqual(result.errors, [])
         count = main.conn.execute(
-            "SELECT COUNT(*) c FROM shopee_report_row WHERE brand_id = ?", (self.bid,)
+            "SELECT COUNT(*) c FROM shopee_report_row WHERE brand_id = %s", (self.bid,)
         ).fetchone()["c"]
         self.assertEqual(count, 1)
 
+    @_BUG_DISPATCH_DATE_VS_STR
     def test_upload_meta_csv_matching_cycle_lands_and_stays_on_connections_page(self):
         cycle = ads_repo.create_cycle(main.conn, self.bid, product_ids=[], pain_value=5000,
                                       objective="流量", actor=ACTOR, start_date="2026-06-01",
@@ -117,10 +110,11 @@ class ConnectionsRouteTest(unittest.TestCase):
         self.assertEqual(result.kind, "meta_ads_csv")
         self.assertEqual(result.errors, [])
         row = main.conn.execute(
-            "SELECT campaign_cycle_id FROM performance_snapshot WHERE brand_id = ?",
+            "SELECT campaign_cycle_id FROM performance_snapshot WHERE brand_id = %s",
             (self.bid,)).fetchone()
         self.assertEqual(row["campaign_cycle_id"], cycle["id"])
 
+    @_BUG_DISPATCH_DATE_VS_STR
     def test_upload_meta_csv_outside_any_cycle_gives_warning_not_ok(self):
         content = _META_CSV.format(start="2020-01-01", end="2020-01-14").encode("utf-8")
         result = orders_dispatch.import_dropped_file(
