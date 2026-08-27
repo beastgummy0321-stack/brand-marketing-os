@@ -78,9 +78,10 @@ class IntakeWizardTest(unittest.TestCase):
         assert resp.status_code == 200
         return resp.json()["brand_id"]
 
-    def _run_scan(self, brand_id: str):
+    def _run_scan(self, brand_id: str, in_tok: int = 100, out_tok: int = 50):
         intake_ai.PROVIDER = FakeProvider(response=_fake_response(
-            json.dumps({"impressions": script.SCAN_IMPRESSIONS}, ensure_ascii=False)))
+            json.dumps({"impressions": script.SCAN_IMPRESSIONS}, ensure_ascii=False),
+            in_tok=in_tok, out_tok=out_tok))
         resp = self.client.post(f"/api/intake/brands/{brand_id}/scan/start")
         assert resp.status_code == 200
         for _ in range(100):
@@ -118,7 +119,10 @@ class IntakeWizardTest(unittest.TestCase):
 
     def test_scan_success_stores_impressions_and_real_cost(self):
         brand_id = self._new_wizard_brand()
-        resp = self._run_scan(brand_id)
+        # in_tok/out_tok 選會湊出整數分的數字（llm_task.cost 是 numeric(14,2)，02-2
+        # 決策：金額欄一律存到分——100/50 token 算出來的 $0.0035 連一分錢都不到，存進去
+        # 四捨五入變 $0，不是這條測試想驗的東西，02-3c 前就一直是這個舊 SQLite 殘留數字）。
+        resp = self._run_scan(brand_id, in_tok=1_000_000, out_tok=1_000_000)
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.json()["data"]["status"], "done")
 
@@ -127,8 +131,8 @@ class IntakeWizardTest(unittest.TestCase):
         self.assertEqual(len(draft["scan_impressions"]), len(script.SCAN_IMPRESSIONS))
         # 花費＝真實 token 成本（usage × pricing），即時 SUM llm_task.cost
         # T2：同一批背景流程會再讀一張上傳照片，因此網址掃描＋照片各記一筆成本。
-        expected = pricing.calculate_cost("claude-opus-5", 100, 50) * 2
-        self.assertAlmostEqual(draft["cost_spent"], expected, places=9)
+        expected = pricing.calculate_cost("claude-opus-5", 1_000_000, 1_000_000) * 2
+        self.assertAlmostEqual(draft["cost_spent"], expected, places=2)
         # COPY trim：兩筆成本項目各自的中文文案不測，測「確實各記一筆」這件事
         self.assertEqual(len(draft["cost_items"]), 2)
         # scan_llm_task_id 回填

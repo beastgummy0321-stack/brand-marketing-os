@@ -472,7 +472,12 @@ class BudgetTest(_Base):
 
     def test_set_below_spent_rejected(self):
         bid = self._create_full()
-        intake_ai.PROVIDER = FakeProvider(response=_fake_response(_SCAN_OK))
+        # 預設 _fake_response 只給 10/10 token（$0.0003），llm_task.cost 是
+        # numeric(14,2)（02-2 決策：金額欄存到分），四捨五入會變 $0——這裡才測得出
+        # 「花費不是 0」，token 數字改大一點湊出看得到的分錢（02-3c）。
+        intake_ai.PROVIDER = FakeProvider(response=ProviderResponse(
+            output_text=_SCAN_OK, structured=None,
+            usage=Usage(input_tokens=1_000_000, output_tokens=1_000_000), stop_reason="end_turn"))
         self.client.post(f"/api/intake/brands/{bid}/scan/start")
         self._poll(bid, "scan")
         spent = state.get_draft(bid)["cost_spent"]
