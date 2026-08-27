@@ -18,8 +18,6 @@ information_schema 自動推導必填欄位；原本 SQLite 版靠 `test_ads_bra
 
 import unittest
 
-import pytest
-
 from app.ads import repository as ads_repo
 from app.brand_intelligence import repository as bi_repo
 from app.core import db
@@ -27,20 +25,11 @@ from app.core.db import new_id
 
 _TEST_PRODUCT_ID = "prd_測試用固定產品id"
 
-# BUG app/ads/repository.py:750 — _product_cascade_scope() 沿外鍵走連帶刪除範圍時，
-# 只要這顆產品有 marketing_goal 列（PRODUCT_CASCADE_TABLES 的一員，正常情況都有），
-# 就會經 information_schema 反查的外鍵表（不看資料、只看 schema）走到
-# campaign_cycle_goal（marketing_goal 的子表，複合主鍵 (campaign_cycle_id, goal_id)，
-# 沒有單一 id 欄位）。_require_id_column() 對沒有 id 欄位的表一律 RuntimeError——但
-# `_PRODUCT_CASCADE_LABELS` 明明已經幫 campaign_cycle_goal 準備了顯示標籤（"本期目標
-# 關聯"），代表原本設計是預期會走到它，只是這道複合主鍵防呆把它擋死了：count/delete
-# product data 只要牽涉到有目標關聯的產品就必炸，不是測試資料的問題。
-_BUG_CASCADE_SCOPE_COMPOSITE_PK = pytest.mark.xfail(
-    strict=True,
-    reason="BUG app/ads/repository.py:750 — _product_cascade_scope() 沿外鍵走到"
-           "campaign_cycle_goal（複合主鍵，沒有 id 欄位）就一律 RuntimeError，任何"
-           "有 marketing_goal 的產品都無法 count/delete product data",
-)
+# 修過：app/ads/repository.py 的 _product_cascade_scope()／_pk_columns()／_pk_where()
+# 原本用 _require_id_column() 假設每張表都有單一 id 欄位，走到 campaign_cycle_goal
+# （marketing_goal 的子表，複合主鍵 (campaign_cycle_id, goal_id)，沒有單一 id 欄位）
+# 就一律 RuntimeError。改成 _pk_columns() 讀該表真正的主鍵（單欄位或複合皆可）當
+# row handle，count/delete product data 就不再受目標關聯表拖累（route=C 02-3c）。
 
 
 def _seed_table(conn, table: str, brand_id: str, fk_ids: dict, product_id: str = _TEST_PRODUCT_ID):
@@ -145,7 +134,6 @@ class AdsProductCleanupTest(unittest.TestCase):
 
     # (a) 10 張表刪產品後都歸零 -----------------------------------------------
 
-    @_BUG_CASCADE_SCOPE_COMPOSITE_PK
     def test_delete_product_clears_every_ads_table(self):
         bid, pid = self._make_archived_product("虛構茶飲品牌（第6刀刪產品測試）", "虛構茶包")
         self._seed_ads_product_tables(bid, pid)
@@ -164,7 +152,6 @@ class AdsProductCleanupTest(unittest.TestCase):
                 f"SELECT COUNT(*) AS c FROM {table} WHERE product_id = %s", (pid,)).fetchone()["c"]
             self.assertEqual(n, 0, f"{table}（{label}）刪產品後還留著資料，沒被清乾淨")
 
-    @_BUG_CASCADE_SCOPE_COMPOSITE_PK
     def test_delete_product_also_clears_second_order_children(self):
         """自己沒有 product_id、卻指著產品層列的表，也要跟著清掉。
 
@@ -209,7 +196,6 @@ class AdsProductCleanupTest(unittest.TestCase):
 
     # (b) 產品隔離：刪一個產品不動到同品牌另一個產品 ------------------------------
 
-    @_BUG_CASCADE_SCOPE_COMPOSITE_PK
     def test_delete_product_does_not_touch_other_product(self):
         bid, victim = self._make_archived_product("虛構文具品牌（第6刀隔離測試）",
                                                     "被刪的虛構產品")

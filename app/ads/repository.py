@@ -249,10 +249,8 @@ def list_cycle_products(conn: Conn, brand_id: str, cycle_id: str) -> list:
     for row in rows:
         product = bi.get_product(conn, brand_id, row["product_id"])
         row["product_name"] = product["name"] if product else "（產品已刪除）"
-        # BUG 修復（route=C 02-3c，NEW，牽連 app/ads/reading.py:187 judge() 的
-        # plan_budget * MIN_SPEND_RATIO）：allocated_budget 是 numeric 欄位讀回來的
-        # Decimal，跟 float 算術會炸 TypeError；讀取端單一收口轉型，同 _with_float_
-        # budget() 既有模式。
+        # numeric 讀回來是 Decimal，跟 float 算術會炸；讀取端單一收口轉型（同 _with_
+        # float_budget() 既有模式），牽連 app/ads/reading.py:187 judge()。
         if row["allocated_budget"] is not None:
             row["allocated_budget"] = float(row["allocated_budget"])
     return rows
@@ -677,17 +675,9 @@ def delete_brand_data(conn: Conn, brand_id: str) -> dict:
 # 刪產品（第 6 刀「廣告模組接上刪產品清理登記處」）：品牌智庫的 delete_product() 硬刪
 # 一顆已封存產品時，本模組掛在該產品底下的資料要一併清掉，不然就是孤兒列。
 #
-# 這 10 張表都直接帶 product_id 欄位（不是外鍵、是跨模組引用，見各表 CREATE TABLE 旁
-# 的註解），只挑 product_id 對得上這顆產品的列，同一張表裡 product_id 為 NULL（品牌層
-# 總結）或屬於別的產品的列不會被這個條件選到，不會誤刪品牌層或別的產品的資料。
-#
-# 排序照依賴關係排（子表在前、父表在後——票 02-3a 起跨模組外鍵已在 02-2 維持在 0，
-# 順序本身不影響正確性，這裡仍照拓樸順序排，跟 BRAND_CASCADE_TABLES／
-# CYCLE_CASCADE_TABLES 維持同樣的可讀性風格）：
-#   - recommendation 引用 performance_reading，排在它前面
-#   - derived_metric 引用 performance_snapshot，排在它前面
-#   - publishing_package 引用 creative_variant／experiment_cell，排在它們前面
-#   - performance_reading／creative_variant 都引用 experiment_cell，排在它前面
+# 這 10 張表都直接帶 product_id 欄位（不是外鍵、是跨模組引用），只挑 product_id 對得上
+# 這顆產品的列；product_id 為 NULL（品牌層總結）或屬於別的產品的列不受影響。順序跟
+# BRAND_CASCADE_TABLES／CYCLE_CASCADE_TABLES 一樣照拓樸排，只為可讀性。
 PRODUCT_CASCADE_TABLES = (
     ("recommendation", "下一步建議"),
     ("derived_metric", "衍生成效指標"),
@@ -701,18 +691,13 @@ PRODUCT_CASCADE_TABLES = (
     ("campaign_cycle_product", "產品預算分配"),
 )
 
-# 上面那 10 張是「自己就掛著 product_id」的表，照 product_id 篩就刪得掉。
-# 但還有一類表：它們自己沒有 product_id，卻用外鍵指著上面那些會被刪掉的列——
-# 父列被刪、子列留著就是懸空外鍵，整個刪除會在 COMMIT 被擋下（實測過：拿真實資料庫
-# 複本刪一個虛構產品，就是被 creative_brief -> experiment_cell 與
-# external_ad_mapping -> publishing_package 擋下來的）。
-# 而且它有傳遞性：把 external_ad_mapping 納入清理之後，指向它的 campaign_activation
-# 又變成新的懸空來源。手工維護一份清單一定會漏掉第二層、第三層，所以這裡改成沿著
-# 外鍵自動走一遍——只往「誰指著我」的方向走（要刪的列被誰參照），不往「我指著誰」
-# 的方向走（那些是別人的資料，不該跟著刪）。
+# 上面那 10 張自己掛著 product_id，照 product_id 篩就刪得掉。但還有一類表沒有
+# product_id，卻用外鍵指著上面會被刪掉的列——父列被刪、子列留著就是懸空外鍵，且有
+# 傳遞性（子表又被別的表指著）。手工清單一定會漏第二、三層，所以沿外鍵自動走一遍
+# （_product_cascade_scope，只往「誰指著我」的方向走，不往「我指著誰」）；刪除時再
+# 用 inbound_fks 排出子先父後的順序（delete_product_data），不是靠這裡的發現順序。
 #
-# 這份標籤表只負責把走到的表翻成人話給刪除確認頁看；走不走得到由 schema 決定，
-# 不由這份表決定。走到了卻沒登記標籤，就用表名當標籤，不會靜靜漏掉。
+# 這份標籤表只負責把走到的表翻成人話給刪除確認頁看，走到了卻沒登記標籤就用表名頂替。
 _PRODUCT_CASCADE_LABELS = {
     "creative_brief": "素材需求簡報",
     "final_asset": "定稿素材檔",
@@ -745,29 +730,41 @@ def _inbound_fks(conn) -> dict:
     return out
 
 
-def _require_id_column(conn, table: str) -> None:
-    """走到的表沒有 `id text PRIMARY KEY` 就報錯指名，不瞎猜替代欄位（02-3b 票 7：
-    複合主鍵表——見 02-2-type-decisions.md 第 7 點——沒有 Postgres rowid 那種萬用列識別碼）。"""
-    row = conn.execute(
-        "SELECT 1 FROM information_schema.columns"
-        " WHERE table_schema = current_schema() AND table_name = %s AND column_name = 'id'",
+def _pk_columns(conn, table: str) -> list:
+    """該表主鍵欄位，依序回傳；支援複合主鍵（如 campaign_cycle_goal，02-3c）。"""
+    rows = conn.execute(
+        """SELECT kcu.column_name FROM information_schema.table_constraints tc
+           JOIN information_schema.key_column_usage kcu
+             ON kcu.constraint_name = tc.constraint_name AND kcu.table_schema = tc.table_schema
+           WHERE tc.constraint_type = 'PRIMARY KEY' AND tc.table_schema = current_schema()
+             AND tc.table_name = %s ORDER BY kcu.ordinal_position""",
         (table,),
-    ).fetchone()
-    if row is None:
-        raise RuntimeError(f"{table} 沒有 id 欄位，無法沿外鍵走這張表的連帶刪除範圍")
+    ).fetchall()
+    cols = [r["column_name"] for r in rows]
+    if not cols:
+        raise RuntimeError(f"{table} 沒有主鍵，無法沿外鍵走這張表的連帶刪除範圍")
+    return cols
+
+
+def _pk_where(pk_cols: list, rows) -> tuple:
+    """組出 `(col1,col2) IN ((v1,v2),...)` 的 WHERE 片段與攤平參數（單欄位主鍵一樣走這條路）。"""
+    rows = list(rows)
+    row_marks = "(" + ",".join("%s" for _ in pk_cols) + ")"
+    marks = ",".join(row_marks for _ in rows)
+    return f"({','.join(pk_cols)}) IN ({marks})", [v for row in rows for v in row]
 
 
 def _product_cascade_scope(conn, brand_id: str, product_id: str) -> dict:
-    """從 PRODUCT_CASCADE_TABLES 那 10 張屬於這顆產品的列出發，沿外鍵反覆找出所有
-    「指著它們」的列，回傳 {表名: set(id)}，找到不再有新東西為止（傳遞閉包）。
-
-    用 `id` 當 row handle（02-3b 票 7：Postgres 無 rowid／ctid）；下面 `parent_col != "id"`
-    是防呆，不是預期路徑——每張表都是 `id text PRIMARY KEY`，外鍵也都指著 id。"""
+    """從 PRODUCT_CASCADE_TABLES 出發沿外鍵反覆找出所有「指著它們」的列，回傳
+    {表名: set(主鍵值 tuple)}（支援複合主鍵，02-3c）。`parent_col != "id"` 是防呆：
+    這條鏈裡的 parent 全是單欄位 id 主鍵，複合主鍵表在這個 schema 只會是葉節點。"""
     scope: dict = {}
+    pk_cols_of: dict = {}
     for table, _label in PRODUCT_CASCADE_TABLES:
-        _require_id_column(conn, table)
-        rows = {r["id"] for r in conn.execute(
-            f"SELECT id FROM {table} WHERE brand_id = %s AND product_id = %s",
+        pk_cols = pk_cols_of.setdefault(table, _pk_columns(conn, table))
+        cols_sql = ",".join(pk_cols)
+        rows = {tuple(r[c] for c in pk_cols) for r in conn.execute(
+            f"SELECT {cols_sql} FROM {table} WHERE brand_id = %s AND product_id = %s",
             (brand_id, product_id))}
         if rows:
             scope[table] = rows
@@ -777,18 +774,18 @@ def _product_cascade_scope(conn, brand_id: str, product_id: str) -> dict:
         changed = False
         for parent in list(scope):
             for child, fk_col, parent_col in inbound.get(parent, []):
-                parent_ids = list(scope[parent])
+                parent_pk_cols = pk_cols_of.setdefault(parent, _pk_columns(conn, parent))
+                if parent_col != "id" or parent_pk_cols != ["id"]:
+                    raise RuntimeError(
+                        f"{parent} 被 {child}.{fk_col} 參照的是 {parent_col}，不是單欄位 id 主鍵")
+                parent_ids = [pk[0] for pk in scope[parent]]
                 if not parent_ids:
                     continue
-                if parent_col != "id":
-                    raise RuntimeError(
-                        f"{parent} 被 {child}.{fk_col} 參照的是 {parent_col} 不是 id，"
-                        "無法用 id 當 row handle 走連帶刪除範圍"
-                    )
-                _require_id_column(conn, child)
+                child_pk_cols = pk_cols_of.setdefault(child, _pk_columns(conn, child))
+                cols_sql = ",".join(child_pk_cols)
                 marks = ",".join("%s" for _ in parent_ids)
-                found = {r["id"] for r in conn.execute(
-                    f"SELECT id FROM {child} WHERE {fk_col} IN ({marks})", parent_ids)}
+                found = {tuple(r[c] for c in child_pk_cols) for r in conn.execute(
+                    f"SELECT {cols_sql} FROM {child} WHERE {fk_col} IN ({marks})", parent_ids)}
                 new = found - scope.get(child, set())
                 if new:
                     scope.setdefault(child, set()).update(new)
@@ -819,22 +816,26 @@ def count_product_data(conn: Conn, brand_id: str, product_id: str) -> list:
 
 
 def delete_product_data(conn: Conn, brand_id: str, product_id: str) -> dict:
-    """清掉本模組掛在該產品下的資料（PRODUCT_CASCADE_TABLES 這 10 張表），登記進
-    app.core.cleanup 給 brand_intelligence.delete_product() 呼叫用。只下 DELETE、不
-    commit、不 rollback（Q4 單一交易、全有全無，commit 與 rollback 統一在
-    brand_intelligence.delete_product()）。
+    """清掉本模組掛在該產品下的資料，登記進 app.core.cleanup 給
+    brand_intelligence.delete_product() 呼叫用。只下 DELETE、不 commit、不 rollback。
     """
     counts = dict(count_product_data(conn, brand_id, product_id))
-    # 先把整個連帶範圍算出來（含沿外鍵走到的第二層、第三層），再依 id 刪。
-    # 一定要先算完再刪：父列一旦刪掉，子查詢就撈不到它的子列了。
     scope = _product_cascade_scope(conn, brand_id, product_id)
     direct = {t for t, _ in PRODUCT_CASCADE_TABLES}
-    for table in scope:
-        if table in direct:
-            continue
-        ids = list(scope[table])
-        marks = ",".join("%s" for _ in ids)
-        conn.execute(f"DELETE FROM {table} WHERE id IN ({marks})", ids)
+    # 沿外鍵走到的表要子先刪、父後刪（scope 的插入順序是「父先發現」，直接拿來刪會
+    # 反過來，子表帶著 FK 指著剛被刪的父列，COMMIT 被擋下）：排出「誰都不指我了」的
+    # 表先刪，逐層剝掉。
+    inbound = _inbound_fks(conn)
+    remaining = {t: rows for t, rows in scope.items() if t not in direct}
+    while remaining:
+        leaves = [t for t in remaining
+                  if all(child not in remaining for child, _fk, _pc in inbound.get(t, []))]
+        if not leaves:
+            raise RuntimeError("product cascade 連帶刪除範圍出現循環依賴，無法排出刪除順序")
+        for table in leaves:
+            where_sql, params = _pk_where(_pk_columns(conn, table), remaining[table])
+            conn.execute(f"DELETE FROM {table} WHERE {where_sql}", params)
+            del remaining[table]
     for table, _label in PRODUCT_CASCADE_TABLES:
         conn.execute(f"DELETE FROM {table} WHERE brand_id = %s AND product_id = %s",
                      (brand_id, product_id))
@@ -845,17 +846,10 @@ def delete_product_data(conn: Conn, brand_id: str, product_id: str) -> dict:
 # 清理登記處（第 2 刀）：向 app.core.cleanup 登記本模組的清點／清除函式，刪品牌時
 # 由登記處統一呼叫，本模組不必再被別人手寫死「記得通知它」。
 #
-# 舊版這裡曾寫死「品牌智庫必須比本模組先登記」，理由是舊資料庫的 learning_ledger
-# 可能帶 REFERENCES campaign_cycle(id) 外鍵，登記順序錯了 DELETE 會被 FK 擋下。
-# 第 5 刀（SQLite 時代）把這個問題連根拔掉，靠 PRAGMA defer_foreign_keys 延後檢查；
-# 票 02-3a／02-2 進一步把問題從根本消除：跨模組外鍵在集裝箱憲章下維持在 0（見
-# .scratch/saas/tickets/02-2-type-decisions.md 第 6 點），learning_ledger／
-# campaign_cycle、cycle_shopee_code（訂單模組）／campaign_cycle（本模組）這兩條
-# 都不是真的 DB 外鍵，跨模組登記順序從此完全不重要，不必再靠任何延後檢查機制。
-#
-# app/tests/test_ads_brand_cleanup.py 那條「品牌智庫要比廣告先登記」的順序釘子測試
-# 留著沒刪：現在它驗證的不是「必要條件」而是「回歸保險」——就算哪天真的不小心
-# 又長出跨模組外鍵，至少這條舊約束的順序還在，不會立刻整批爆掉。
+# 舊版寫死「品牌智庫要比本模組先登記」（怕 learning_ledger 的假想外鍵 DELETE 被擋）；
+# 跨模組外鍵在集裝箱憲章下已維持在 0（.scratch/saas/tickets/02-2-type-decisions.md
+# 第 6 點），登記順序不再重要。test_ads_brand_cleanup.py 那條順序釘子測試留著當回歸
+# 保險，不是必要條件。
 # ---------------------------------------------------------------------------
 
 cleanup.register("廣告", count_brand=count_brand_data, delete_brand=delete_brand_data,
