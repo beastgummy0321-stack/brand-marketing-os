@@ -412,9 +412,10 @@ class ContrastSampleIsNamedCellsTest(unittest.TestCase):
             main.conn, self.bid, hypothesis_type="creative", statement=statement,
             created_by=ACTOR, actor=ACTOR, product_id=None, source_cycle_id=self.cycle_id)
         main.conn.execute(
-            "INSERT OR IGNORE INTO campaign_cycle_hypothesis (campaign_cycle_id,"
-            " strategy_hypothesis_id, brand_id, role) VALUES (%s, %s, %s, 'creative')",
-            (self.cycle_id, hyp["id"], self.bid))
+            "INSERT INTO campaign_cycle_hypothesis (org_id, campaign_cycle_id,"
+            " strategy_hypothesis_id, brand_id, role) VALUES (%s, %s, %s, %s, 'creative')"
+            " ON CONFLICT DO NOTHING",
+            (db.DEV_ORG_ID, self.cycle_id, hyp["id"], self.bid))
         main.conn.commit()
         return hyp
 
