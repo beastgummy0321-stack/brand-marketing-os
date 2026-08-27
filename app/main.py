@@ -148,7 +148,13 @@ def _auto_sync_if_due(now: Optional[datetime] = None) -> None:
            or (has_live and now - _last_auto_sync_check >= timedelta(hours=4))
            or (not has_live and now.date() != _last_auto_sync_check.date()))
     if due:
-        ads_auto_sync.run(web.conn, today=now.date().isoformat())
+        # 02-3c：餵給業務邏輯的「今天」要轉本機時區再取日期——app/ads、app/orders
+        # 全站幾十處預設值都是 date.today()（本機時區）；這裡原本直接用 now.date()
+        # （UTC 曆日），本機時區早於 UTC 時（例如台灣 UTC+8 的凌晨）會跟
+        # onboarding.create_reminders() 訂出來的 visible_from 差一天，到期提醒
+        # （如 final_settlement）晚一天才追上。astimezone() 而不是改叫 date.today()，
+        # 是為了保留 now 參數本來就有的可測試性（測試傳固定 now 仍決定得了「今天」）。
+        ads_auto_sync.run(web.conn, today=now.astimezone().date().isoformat())
         _last_auto_sync_check = now
 
 
@@ -159,7 +165,8 @@ def _weekly_engine_if_due(now: Optional[datetime] = None) -> None:
     current_week = now.isocalendar()[:2]
     last_week = _last_weekly_engine_check.isocalendar()[:2] if _last_weekly_engine_check else None
     if last_week != current_week:
-        ads_auto_sync.run_weekly_engine(web.conn, today=now.date().isoformat())
+        # 02-3c：同 _auto_sync_if_due()，本機時區才是全站「今天」的基準。
+        ads_auto_sync.run_weekly_engine(web.conn, today=now.astimezone().date().isoformat())
         _last_weekly_engine_check = now
 
 

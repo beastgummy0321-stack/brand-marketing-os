@@ -124,7 +124,9 @@ def sync_brand_now(conn, brand_id: str, actor: str, *, meta_client=None, ga4_cli
     cached = _immediate_sync_cache.get(brand_id)
     if cached and now - cached[0] < _IMMEDIATE_SYNC_DEBOUNCE:
         return cached[1]
-    today = now.date().isoformat()
+    # 02-3c：本機時區才是全站「今天」的基準（同 app/main.py _auto_sync_if_due()），
+    # 不能直接拿 now（UTC）的曆日，本機時區早於 UTC 時會晚一天才追到到期提醒。
+    today = now.astimezone().date().isoformat()
     if ads_sync.is_configured(conn):
         meta_result = ads_sync.sync_account(
             conn, actor, client=meta_client, today=today, brand_id_filter=brand_id)
