@@ -9,7 +9,7 @@
 
 ## 第 ② 片：資料層一次翻（ADR 0027；saas 分支；票在 .scratch/saas/tickets/）
 
-- [>] 02-3c 修 02-4 標出的產品程式 BUG：WIP 檢查點 `b1cd66a`（xfail 680→3、全套 20 敗）；收尾中，目標 0 敗 0 xfail
+- [ ] 02-3c（審查中）修 02-4 標出的產品程式 BUG：WIP 檢查點 `b1cd66a`（xfail 680→3、全套 20 敗）；收尾中，目標 0 敗 0 xfail
 - [ ] 02-5 三條機器閘門：每表必有 org_id／migration 只 CREATE 自己前綴／零 sqlite 殘留（各紅過一次）；全部表 `ENABLE ROW LEVEL SECURITY` 不寫 policy；pytest 以 `anon` 角色連線斷言被拒（取代 pgTAP）
 - [ ] 02-7 工具鏈一次裝（ADR 0027 附錄 A，停一天）：uv＋pyproject＋uv.lock、Ruff、Pyright basic＋凍結清單、GitHub Actions CI（lint／typecheck／受影響測試／build／架構閘門；主線全套）、Dependabot／CodeQL／Secret scanning／branch protection
 
@@ -20,7 +20,7 @@
 
 ## 第 ④ 片：設定與憑證（需批准：schema）
 
-- [ ] 04-1 `app_setting` 改組織層；pydantic-settings 收環境變數；組織層模型選擇；AI 用量／成本上限按組織；`llm_task` 記方法論檔集雜湊（prompt 版本）
+- [ ] 04-1 `app_setting` 改組織層；pydantic-settings 收環境變數；組織層模型選擇；AI 用量／成本上限按組織；`llm_task` 記方法論檔集雜湊（prompt 版本）；**組織時區**設定——02-3c 把排程「今天」改成伺服器本地時間（`app/main.py`、`ads/auto_sync.py`），SaaS 上要改成組織時區
 - [ ] 04-2 已連接帳號（組織）→ 綁定（品牌）；Meta／GA4 憑證進 Vault；順手補 K1（`tracking.py` INSERT 寫 `meta_ad_id`）
 
 ## 第 ⑤ 片：背景工作

@@ -96,5 +96,46 @@ class RealDbSchemaDriftTest(unittest.TestCase):
             + "\n".join(f"  - {d}" for d in sorted(gone)))
 
 
+class RowLevelSecurityGateTest(unittest.TestCase):
+    """Gate D (ticket 02-5, ADR 0027 decision 9): RLS enabled on every table, no policies.
+
+    Backend connects as `postgres` (bypasses RLS). RLS exists to close anon/authenticated
+    access through PostgREST. Two checks: (1) every base table in this module's schema has
+    `relrowsecurity = true`; (2) on the real `public` schema, `SET ROLE anon` sees zero rows
+    of `organisation` while postgres sees the seeded `org_dev` — a live proof, not a flag check.
+    """
+
+    def setUp(self):
+        self.conn = db.current()
+
+    def test_every_table_has_rls_enabled(self):
+        rows = self.conn.execute(
+            "SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace"
+            " WHERE n.nspname = current_schema() AND c.relkind = 'r' AND NOT c.relrowsecurity"
+            " ORDER BY 1"
+        )
+        missing = [r["relname"] for r in rows]
+        self.assertEqual(missing, [], f"tables without RLS: {missing}")
+
+    def test_anon_sees_nothing_in_public(self):
+        has_public = self.conn.execute(
+            "SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='organisation'"
+        ).fetchone()
+        if not has_public:
+            self.skipTest("本機 public schema 是空的（沒跑過 supabase db reset），跳過")
+        as_postgres = self.conn.execute("SELECT count(*) AS n FROM public.organisation").fetchone()["n"]
+        self.assertGreaterEqual(as_postgres, 1, "seed.sql should have inserted org_dev into public")
+        self.conn.execute("SET ROLE anon")
+        try:
+            try:
+                as_anon = self.conn.execute("SELECT count(*) AS n FROM public.organisation").fetchone()["n"]
+            except Exception:  # permission denied is also a pass: anon cannot read
+                as_anon = 0
+                self.conn.rollback()
+        finally:
+            self.conn.execute("RESET ROLE")
+        self.assertEqual(as_anon, 0, "anon must not see tenant rows (RLS on, no policies)")
+
+
 if __name__ == "__main__":
     unittest.main()
