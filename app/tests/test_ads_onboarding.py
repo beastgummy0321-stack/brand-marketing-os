@@ -140,7 +140,7 @@ class ReminderTest(_BaseOnboardingTest):
         """票 #38：期末＋14 天才會浮出，治貨到付款棄單退款遲滯（決策 0025 判讀節奏第 5 點）。"""
         cycle_id = self._live_cycle(start_offset_days=-10)  # end_date = today - 10 + 13 = today+3
         cycle = ads_repo.get_cycle(main.conn, self.bid, cycle_id)
-        end = date.fromisoformat(cycle["end_date"])
+        end = cycle["end_date"]  # 已是 date 物件（Postgres date 欄位），不必再 fromisoformat
 
         due_before = onboarding.due_reminders(
             main.conn, self.bid, today=(end + timedelta(days=13)).isoformat())

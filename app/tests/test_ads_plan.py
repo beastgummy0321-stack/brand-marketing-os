@@ -324,9 +324,11 @@ class PlanGenerationTest(_BasePlanTest):
         self.assertIn("Meta 現行打法", sent)
 
         # ADR 0009：載入了哪幾個方法論檔要落進 llm_task 稽核，事後才回推得出來
-        scope = json.loads(main.conn.execute(
+        # （jsonb 欄位 psycopg 已自動解好，不必再 json.loads 一次——02-3c：這裡原本
+        # 是 SQLite TEXT 欄位存字串的殘留寫法）。
+        scope = main.conn.execute(
             "SELECT context_scope_json FROM llm_task ORDER BY started_at DESC, id DESC LIMIT 1"
-        ).fetchone()["context_scope_json"])
+        ).fetchone()["context_scope_json"]
         self.assertIn("ads-core.md", scope["methodology_files"])
         self.assertIn("ab-testing.md", scope["methodology_files"])
 

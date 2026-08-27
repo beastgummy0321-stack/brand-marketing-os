@@ -305,8 +305,9 @@ class CreatePreflightTest(_BaseMetaMcpTest):
 
         creative_calls = [c for c in self.fake_client.calls if c[0] == "ads_create_creative"]
         self.assertEqual(len(creative_calls), 1)
+        # jsonb 欄位 psycopg 已自動解好，不必再 json.loads 一次（02-3c）。
         expected_link = ("https://example.test?"
-                         + ads_handoff.utm_query(json.loads(package["utm_json"] or "{}")))
+                         + ads_handoff.utm_query(package["utm_json"] or {}))
         self.assertEqual(creative_calls[0][1]["link_url"], expected_link)
 
         row = main.conn.execute("SELECT destination_url FROM publishing_package WHERE id = %s",
