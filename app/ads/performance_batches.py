@@ -43,8 +43,17 @@ def delete_snapshots(conn, brand_id: str, cycle_id: str, *, source: Optional[str
     return cursor.rowcount
 
 
+def _with_float_money(row: dict) -> dict:
+    """spend／revenue 是 numeric（Decimal），站內到處拿它們跟 float 算術（compute_kpis
+    等）；讀取端單一收口轉型，同 app/ads/repository.py 的 _with_float_budget 既有模式。"""
+    for col in ("spend", "revenue"):
+        if row.get(col) is not None:
+            row[col] = float(row[col])
+    return row
+
+
 def list_snapshots(conn, brand_id: str, cycle_id: str) -> list:
-    return [dict(r) for r in conn.execute(
+    return [_with_float_money(dict(r)) for r in conn.execute(
         "SELECT * FROM performance_snapshot WHERE brand_id = %s AND campaign_cycle_id = %s"
         " ORDER BY as_of_date DESC, created_at DESC", (brand_id, cycle_id),
     )]
@@ -74,7 +83,8 @@ def list_batches(conn, brand_id: str, cycle_id: str) -> list:
     """
     rows = conn.execute(
         "SELECT import_batch_id AS batch_id, source, MAX(created_at) AS imported_at,"
-        " COUNT(*) AS rows, SUM(quarantined) AS quarantined, SUM(spend) AS spend"
+        " COUNT(*) AS rows, COUNT(*) FILTER (WHERE quarantined) AS quarantined,"
+        " SUM(spend) AS spend"
         " FROM performance_snapshot WHERE brand_id = %s AND campaign_cycle_id = %s"
         " AND source != 'simulated' AND import_batch_id IS NOT NULL"
         " GROUP BY import_batch_id, source ORDER BY imported_at DESC LIMIT %s",
