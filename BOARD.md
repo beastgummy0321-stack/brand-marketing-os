@@ -6,9 +6,10 @@
 
 ## 第 ② 片：資料層一次翻（ADR 0027；saas 分支；依序執行，票在 .scratch/saas/tickets/）
 
-- [>] 02-4 測試轉 Postgres：每測試模組一個 schema、保留 `--dist loadfile`、刪純文案斷言測試
-- [ ] 02-3c 修 02-4 標出的產品程式 BUG 清單（`.scratch/saas/tickets/02-4-deleted.md` 與 commit 訊息；含 `substr(id,-4)`、date 切片、Decimal/float、`IS %s`），xfail 全部拿掉、改回正常斷言
+- [>] 02-3c 修 02-4 標出的產品程式 BUG 清單（`.scratch/saas/tickets/02-4-deleted.md` 與 commit 訊息；含 `substr(id,-4)`、date 切片、Decimal/float、`IS %s`），xfail 全部拿掉、改回正常斷言
 - [ ] 02-5 三條機器閘門：每表必有 org_id／migration 只 CREATE 自己前綴／零 sqlite 殘留（各紅過一次）；並對全部表 `ENABLE ROW LEVEL SECURITY`（後端以 postgres 角色連線不受影響，目的是封死 anon/authenticated 直連 PostgREST；02-2 的 Supabase advisory）
+- [ ] 02-7 工具鏈一次裝（ADR 0027 附錄 A）：uv＋pyproject＋uv.lock、Ruff、Pyright basic＋凍結清單、GitHub Actions CI（lint／typecheck／受影響測試／build／架構閘門，主線全套）、Dependabot／CodeQL／Secret scanning／branch protection
+- [ ] 02-6 測試套件瘦身（另開票，非本片閘門）：現況測試 42,164 行／程式 37,882 行＝1.11×，目標 0.7×；02-4 查實純文案斷言僅約 175 條，瘦身要靠合併重複情境而非刪文案
 
 ## 舊票（排在七片之後，暫不動）
 

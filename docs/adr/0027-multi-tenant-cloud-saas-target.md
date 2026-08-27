@@ -37,7 +37,7 @@
 7. **素材檔上傳進系統**（Storage，每組織一 bucket），掛在主題下；成效判讀仍只到主題（ADR 0008 不變）。
 8. **手動路徑永遠一級公民**：自動化不得讓手動路徑退化。自動度存品牌層（ADR 0018 第 4 條），
    「下次不再提醒」存使用者層。M1–M3 降為 Meta 解封後的加法。
-9. **不做**：付費／方案、i18n、Convex、RLS（前端不直連 DB 故不需要）、起手範本（借 JWT middleware 寫法即可）。
+9. **不做**：付費／方案、i18n、Convex、起手範本（借 JWT middleware 寫法即可）。RLS **開但不寫 policy**（02-5）：後端以 postgres 角色連線不受影響，用途是封死 anon／authenticated 直連 PostgREST；租戶隔離仍靠後端 `org_id` 過濾。
 10. `app/mock_data.py` 改名 `app/core/vocab.py`（它是詞彙常數表）；`DEMO_BRANDS`、`seed_demo.py` 刪除。
 
 ## 取代／修正的既有決策
