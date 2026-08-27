@@ -68,12 +68,6 @@ def _fake(text: str) -> ProviderResponse:
                             stop_reason="end_turn")
 
 
-_BUG_ROUTES_PROGRESS_THREAD = pytest.mark.xfail(
-    strict=True,
-    reason="BUG app/ads/routes_progress.py:96 — _progress_run() 把 work() 丟進手動開的"
-           " threading.Thread，contextvar 綁的連線不會被子執行緒繼承，第一次 DB 呼叫就"
-           " RuntimeError: no connection bound，被 except 吞成 status=failed",
-)
 
 
 class _SlowProvider:
@@ -132,7 +126,6 @@ class _BaseProgressTest(unittest.TestCase):
 
 
 class BackgroundExecutionTest(_BaseProgressTest):
-    @_BUG_ROUTES_PROGRESS_THREAD
     def test_generate_call_returns_before_generation_finishes(self):
         """驗收核心：觸發生成的請求不再同步等完整個生成跑完，遠低於 provider 的等待時間
         就回應（等待頁 GET 已隨 T4 大清倉刪除，改打取代它的 /api plan/generate＋
@@ -156,7 +149,6 @@ class BackgroundExecutionTest(_BaseProgressTest):
 
 
 class IdempotencyTest(_BaseProgressTest):
-    @_BUG_ROUTES_PROGRESS_THREAD
     def test_pressing_generate_twice_while_running_does_not_call_provider_twice(self):
         """驗收核心：同一個 key 已經在跑，重複觸發（模擬 F5／多分頁）不會讓付費 API 被
         多打一次。"""
@@ -184,7 +176,6 @@ class IdempotencyTest(_BaseProgressTest):
 
 
 class TimeoutTest(_BaseProgressTest):
-    @_BUG_ROUTES_PROGRESS_THREAD
     def test_gives_up_after_patched_timeout_without_waiting_full_backend_duration(self):
         """驗收核心：逾時不無限等，且不必真的等到後端真正的天花板——用可覆寫的門檻函式把
         逾時壓低（plan/status 讀的是 `_plan_generate_ceiling_seconds()` 自己算出來的天花板
@@ -207,7 +198,6 @@ class TimeoutTest(_BaseProgressTest):
         self.assertEqual(status["status"], "failed")
         self.assertIn("沒有在時間內回應", status["message"])
 
-    @_BUG_ROUTES_PROGRESS_THREAD
     def test_late_success_after_timeout_is_not_discarded_and_retry_does_not_double_charge(self):
         """B0-28 根因驗收：逾時判失敗那一刻，背景執行緒（真實情境是還在等 LLM 回應）其實
         還活著。舊行為是 `_progress_clear()` 把 entry 整個拔掉——這條執行緒事後真的做完、

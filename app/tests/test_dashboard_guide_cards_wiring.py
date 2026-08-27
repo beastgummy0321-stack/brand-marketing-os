@@ -24,13 +24,6 @@ from app.core.db import new_id, now_iso  # noqa: E402
 
 ACTOR = "測試員"
 
-# BUG app/core/interrupts.py:99 — enqueue() dedup 查詢用 "brand_id IS %s"，
-# Postgres 的 IS 不接受綁參數，一律 psycopg.errors.SyntaxError。
-_BUG_INTERRUPT_IS_PARAM = pytest.mark.xfail(
-    strict=True,
-    reason='BUG app/core/interrupts.py:99 — enqueue() dedup 查詢用 "brand_id IS %s"，'
-           "Postgres 的 IS 不接受綁參數，一律 psycopg.errors.SyntaxError",
-)
 
 
 def _insert_cycle(conn, brand_id: str, *, status: str, start_date: str = "2026-07-20") -> str:
@@ -206,7 +199,6 @@ class CockpitGuideCardsWiringTest(unittest.TestCase):
         self.assertIn("繼續建檔", cards[0]["title"])
         self.assertEqual(cards[0]["action_url"], f"/app/brands/{brand_id}/intake")
 
-    @_BUG_INTERRUPT_IS_PARAM
     def test_pacing_alert_card_names_which_cycle(self):
         """B0-15：品牌同時有好幾期進行中時，「下一步指南」的 pacing 警示卡要寫出是哪一期
         （跟「看這期完整作戰室」指到不同檔期時，兩處都得標日期區間）。"""

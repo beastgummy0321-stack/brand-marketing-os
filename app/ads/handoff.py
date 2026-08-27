@@ -125,10 +125,22 @@ def build_utm(cycle: dict, cell: dict) -> dict:
     }
 
 
+_UTM_KEY_ORDER = ("utm_source", "utm_medium", "utm_campaign", "utm_content", "utm_term")
+
+
 def utm_query(utm: dict) -> str:
     # safe 多加 {}：utm_campaign 的 Meta 動態變數要以字面 {{...}} 留在網址裡讓 Meta 解析，
     # quote() 預設會把 { } 編碼成 %7B %7D，Meta 就認不出這是動態變數了。
-    return "&".join(f"{k}={quote(str(v), safe='/{}')}" for k, v in utm.items())
+    #
+    # BUG 修復（route=C 02-3c，NEW）：utm 這個 dict 常是從 publishing_package.utm_json
+    # （jsonb 欄位）讀回來的——Postgres 的 jsonb 儲存格式不保留物件鍵的原始順序（實測
+    # SELECT '{"utm_source":"a","utm_medium":"b"}'::jsonb 讀回來變成
+    # {"utm_medium": "b", "utm_source": "a"}，依鍵長排序，不是 insertion order），
+    # 直接 dict.items() 疊代組出來的網址參數順序不穩定。用固定的正典順序組參數，
+    # 不知道的鍵（理論上不該有）照舊排在後面，順序穩定不受讀取來源影響。
+    ordered = [(k, utm[k]) for k in _UTM_KEY_ORDER if k in utm]
+    ordered += [(k, v) for k, v in utm.items() if k not in _UTM_KEY_ORDER]
+    return "&".join(f"{k}={quote(str(v), safe='/{}')}" for k, v in ordered)
 
 
 def _default_destination(conn, brand_id: str) -> Optional[str]:
@@ -246,6 +258,11 @@ def list_packages(conn, brand_id: str, cycle_id: str) -> list:
         " ORDER BY created_at, id", (brand_id, cycle_id),
     )]
     for row in rows:
+        # BUG 修復（route=C 02-3c，NEW）：daily_budget 是 numeric 欄位，讀回來是
+        # Decimal；呼叫端（畫面／測試）一律當 float 用（加總、跟 float 相減比較），
+        # 讀取端單一收口轉型，同 _with_float_budget 既有模式。
+        if row["daily_budget"] is not None:
+            row["daily_budget"] = float(row["daily_budget"])
         cycle = ads_repo.get_cycle(conn, brand_id, cycle_id)
         utm = row["utm_json"] or {}
         url = row["destination_url"] or ""

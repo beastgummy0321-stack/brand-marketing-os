@@ -25,23 +25,7 @@ from app.orders import dispatch as orders_dispatch
 
 ACTOR = "測試員"
 
-# BUG app/orders/channel.py:183 — shopee_revenue() 回傳 round(row["total"] or 0, 2)；
-# row["total"] 是 Postgres numeric SUM() 讀回的 Decimal，round(Decimal, 2) 還是
-# Decimal（不像 round(float, 2) 會強制轉型），跟函式簽章宣告的 Optional[float] 不符。
-_BUG_SHOPEE_REVENUE_DECIMAL = pytest.mark.xfail(
-    strict=True,
-    reason="BUG app/orders/channel.py:183 — shopee_revenue() 簽章寫 Optional[float]，"
-           "實際 round(Decimal, 2) 回傳 Decimal，下游跟 float 做算術/比較會不一致",
-)
 
-# BUG app/ads/performance.py:364 — import_rows() 的 INSERT INTO performance_snapshot
-# 對某個 date 型別欄位傳了空字串 ""，SQLite 的 TEXT 親和性容忍空字串當日期，Postgres
-# 的 date 欄位直接拒絕（psycopg.errors.InvalidDatetimeFormat）。
-_BUG_PERFORMANCE_EMPTY_STRING_DATE = pytest.mark.xfail(
-    strict=True,
-    reason="BUG app/ads/performance.py:364 — import_rows() INSERT 對 date 欄位傳空字串，"
-           "psycopg.errors.InvalidDatetimeFormat: invalid input syntax for type date: ''",
-)
 
 _SHOPEE_CSV_HEADER = "Order SN,Order creation date,Order amount,Voucher code\n"
 
@@ -179,7 +163,6 @@ class SignalRuleTest(_BaseChannelTest):
         self.assertEqual(result["badge_kind"], "accent")
         self.assertIn("12", result["message"])
 
-    @_BUG_SHOPEE_REVENUE_DECIMAL
     def test_shopee_revenue_growth_triggers_spillover(self):
         # 前一段等長期間（14 天）：2026-05-18 ~ 2026-05-31，營收 1000
         rows, _ = orders_channel.parse_shopee_csv(_shopee_csv([("B1", "2026-05-20", "1000", None)]))
@@ -283,7 +266,6 @@ class ReadingIntegrationTest(_BaseChannelTest):
     def tearDown(self):
         reading.PROVIDER = self._orig
 
-    @_BUG_PERFORMANCE_EMPTY_STRING_DATE
     def test_run_attaches_channel_comparison_to_cycle_verdict(self):
         from app.ads import performance as ads_performance
         ads_performance.import_manual(

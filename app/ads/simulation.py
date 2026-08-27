@@ -114,12 +114,15 @@ def generate(conn, brand_id: str, cycle_id: str, actor: str) -> tuple:
     # 的 a／b 兩條路都用不上；原本設計的選項 c（檔期只賣一個產品就算那個的）已經拿掉
     # （見 performance.resolve_product_id 的說明），所以這裡呼叫它一定回 None，
     # 不必真的呼叫，直接留 NULL 比較誠實（鐵則 16：模稜兩可不猜）。
+    # BUG 修復（route=C 02-3c，app/ads/simulation.py:117）：reconciled/quarantined 是
+    # boolean 欄位，SQL 字面用整數 1/0；SQLite 對 boolean 沒有真正型別所以能收，
+    # Postgres 的 boolean 不接受整數字面，一律 psycopg.errors.DatatypeMismatch。
     conn.execute(
         "INSERT INTO performance_snapshot (id, org_id, brand_id, campaign_cycle_id, product_id,"
         " platform, date_range_start, date_range_end, as_of_date, snapshot_taken_at,"
         " currency, impressions, clicks, spend, conversions, revenue, reconciled, source,"
         " import_batch_id, quarantined, created_at)"
-        " VALUES (%s, %s, %s, %s, NULL, 'meta', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 1, 'simulated', %s, 0, %s)",
+        " VALUES (%s, %s, %s, %s, NULL, 'meta', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, true, 'simulated', %s, false, %s)",
         (new_id("psn"), DEV_ORG_ID, brand_id, cycle_id, cycle["start_date"], cycle["end_date"],
          cycle["end_date"], ts, cycle["currency"], totals["impressions"], totals["clicks"],
          totals["spend"], totals["conversions"], totals["revenue"], f"sim_{ts}", ts),

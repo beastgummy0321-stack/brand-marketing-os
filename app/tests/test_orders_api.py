@@ -17,15 +17,6 @@ from app.orders import repository as orders_repo
 
 import openpyxl
 
-# BUG app/orders/repository.py:311 — stats() 比較 customer["first_order_at"]（Postgres
-# timestamptz，psycopg 讀回 datetime）跟 since（ISO 日期字串），SQLite 兩邊都是字串比對
-# 沒事，Postgres 直接 TypeError。GET /api/brands/{id}/orders 靠 stats() 出資料，凡是
-# 測試裡打過這支 API 的都會炸在這裡。
-_BUG_STATS_DATETIME_VS_STR = pytest.mark.xfail(
-    strict=True,
-    reason="BUG app/orders/repository.py:311 — stats() 拿 datetime 跟字串比較"
-           "（customer['first_order_at'] >= since），psycopg.errors 前是 TypeError",
-)
 
 
 _EASYSTORE_HEADERS = [
@@ -66,7 +57,6 @@ class OrdersApiTest(unittest.TestCase):
         orders_repo.save_orders(web.conn, self.brand_id, rows, source="test", actor="測試員")
         orders_repo.set_sku_cost(web.conn, self.brand_id, "GM-500", 620, actor="測試員")
 
-    @_BUG_STATS_DATETIME_VS_STR
     def test_get_orders_returns_summary_and_second_page(self):
         response = self.client.get(f"/api/brands/{self.brand_id}/orders?page=2")
         self.assertEqual(response.status_code, 200)
@@ -93,7 +83,6 @@ class OrdersApiTest(unittest.TestCase):
         self.assertEqual(response.status_code, 404)
         self.assertEqual(set(response.json()), {"detail"})
 
-    @_BUG_STATS_DATETIME_VS_STR
     def test_import_orders_returns_message_and_increases_total(self):
         before = self.client.get(f"/api/brands/{self.brand_id}/orders").json()["orders"]["total"]
         response = self.client.post(
@@ -136,7 +125,6 @@ class OrdersApiTest(unittest.TestCase):
         self.assertEqual(invalid.status_code, 400)
         self.assertEqual(set(invalid.json()), {"detail"})
 
-    @_BUG_STATS_DATETIME_VS_STR
     def test_policy_change_returns_exact_messages_and_gets_label(self):
         response = self.client.post(
             f"/api/brands/{self.brand_id}/orders/policy-change",
@@ -157,7 +145,6 @@ class OrdersApiTest(unittest.TestCase):
         self.assertEqual(invalid.status_code, 400)
         self.assertIn("unknown", invalid.json()["detail"])
 
-    @_BUG_STATS_DATETIME_VS_STR
     def test_pharmacy_batch_returns_exact_messages_and_gets_list(self):
         response = self.client.post(
             f"/api/brands/{self.brand_id}/orders/pharmacy-batch",
@@ -185,7 +172,6 @@ class OrdersApiTest(unittest.TestCase):
         self.assertEqual(invalid.status_code, 400)
         self.assertEqual(set(invalid.json()), {"detail"})
 
-    @_BUG_STATS_DATETIME_VS_STR
     def test_attribution_returns_exact_success_and_failure_messages(self):
         order_id = self.client.get(f"/api/brands/{self.brand_id}/orders").json()["orders"]["items"][0]["id"]
         response = self.client.post(

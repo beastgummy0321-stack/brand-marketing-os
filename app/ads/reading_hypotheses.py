@@ -49,6 +49,15 @@ def _product_totals(conn, brand_id: str, cycle_id: str) -> dict:
     result = {}
     for row in rows:
         data = dict(row)
+        # BUG 修復（route=C 02-3c，同 reading_assets.py asset_totals() 那個發現）：
+        # impressions/clicks 底層是 bigint，但 Postgres 的 SUM(bigint) 回傳型別是
+        # numeric（防溢位），COALESCE(SUM(...),0) 讀回來是 Decimal 不是 int；spend/
+        # revenue 同理；conversions 是 double precision（float）。就近轉型避免
+        # compute_kpis() 內部相除型別不一致炸 TypeError。
+        data["impressions"] = int(data["impressions"])
+        data["clicks"] = int(data["clicks"])
+        data["spend"] = float(data["spend"])
+        data["revenue"] = float(data["revenue"])
         data["kpis"] = ads_performance.compute_kpis(data)
         result[data["product_id"]] = data
     return result
@@ -91,11 +100,20 @@ def comparison_cells(conn, brand_id: str, cycle_id: str,
     if product_id:
         sql += " AND ps.product_id = %s"
         params.append(product_id)
-    sql += " GROUP BY pkg.experiment_cell_id ORDER BY cell.creative_angle"
+    # BUG 修復（route=C 02-3c，app/ads/reading_hypotheses.py:82）：同 reading_assets.py:118
+    # 那個 GROUP BY 缺欄位的問題——cell.creative_angle 沒進 GROUP BY，Postgres 拒絕
+    # （psycopg.errors.GroupingError）。加進去，同一個 experiment_cell_id 分組結果不變。
+    sql += " GROUP BY pkg.experiment_cell_id, cell.creative_angle ORDER BY cell.creative_angle"
     rows = conn.execute(sql, params).fetchall()
     result = []
     for row in rows:
         data = dict(row)
+        # BUG 修復（route=C 02-3c）：spend/revenue 是 COALESCE(SUM(numeric),0) 讀回來的
+        # Decimal，conversions 是 double precision 欄位（float）；讀取端就近轉型，
+        # compute_kpis() 的 spend/conversions 才不會 Decimal 跟 float 混算炸 TypeError
+        # （同 app/ads/performance.py totals() 的既有收口模式）。
+        data["spend"] = float(data["spend"])
+        data["revenue"] = float(data["revenue"])
         data["kpis"] = ads_performance.compute_kpis(data)
         result.append(data)
     return result

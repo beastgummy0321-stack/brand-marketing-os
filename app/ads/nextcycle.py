@@ -188,8 +188,11 @@ def historical_cell_performance(conn, brand_id: str, exclude_cycle_id: Optional[
         " WHERE ps.brand_id = %s AND ps.quarantined = false AND pkg.experiment_cell_id IS NOT NULL"
         " GROUP BY pkg.experiment_cell_id", (brand_id,),
     ).fetchall()
-    perf_by_cell = {r["cell_id"]: {"spend": r["spend"], "conversions": r["conversions"],
-                                   "revenue": r["revenue"]}
+    # BUG 修復（route=C 02-3c，app/ads/carry_forward.py:62 的根因其實在這裡）：spend/
+    # revenue 是 COALESCE(SUM(numeric),0) 讀回來的 Decimal；讀取端單一收口轉 float，
+    # 呼叫端（carry_forward.prior_winners() 的 revenue/spend）才不會被迫自己 float()。
+    perf_by_cell = {r["cell_id"]: {"spend": float(r["spend"]), "conversions": r["conversions"],
+                                   "revenue": float(r["revenue"])}
                     for r in perf_rows}
 
     # 每個切角的產品打平線只查一次、快取起來（票 03-performance-reaches-the-user-and-

@@ -28,11 +28,6 @@ from app.shared.web import OPERATOR
 
 ACTOR = "測試員"
 
-_BUG_EMPTY_DATE_STRING = pytest.mark.xfail(
-    strict=True,
-    reason="BUG app/ads/performance.py:364 — import_rows() 沒帶日期時送空字串 \"\" 給"
-           "date 欄位，SQLite 對空字串寬容，Postgres 一律 psycopg.errors.InvalidDatetimeFormat",
-)
 
 
 class LearningLedgerRepositoryTest(unittest.TestCase):
@@ -423,7 +418,6 @@ class ContrastSampleIsNamedCellsTest(unittest.TestCase):
         main.conn.commit()
         return hyp
 
-    @_BUG_EMPTY_DATE_STRING
     def test_sample_size_is_only_the_named_cells_total_not_the_whole_cycle(self):
         """一條假設點名兩個切角，那期另有第三個沒被點名的切角——sample_size 只等於前兩個
         的轉換數加總。RED first：改動前是三個切角全加（100）。"""
@@ -438,7 +432,6 @@ class ContrastSampleIsNamedCellsTest(unittest.TestCase):
             "SELECT sample_size FROM learning_ledger WHERE brand_id = %s", (self.bid,)).fetchone()
         self.assertEqual(row["sample_size"], "10")
 
-    @_BUG_EMPTY_DATE_STRING
     def test_sentence_naming_no_cell_leaves_sample_size_null_and_confidence_preliminary(self):
         """受眾類假設的句子講的是人群，不是切角——一個切角都點不到時 sample_size 存 NULL，
         confidence 因此落到 preliminary。RED first：改動前存整期加總（20）、confidence 是
@@ -455,7 +448,6 @@ class ContrastSampleIsNamedCellsTest(unittest.TestCase):
         self.assertIsNone(row["sample_size"])
         self.assertEqual(row["confidence"], "preliminary")
 
-    @_BUG_EMPTY_DATE_STRING
     def test_no_none_string_leaks_into_sample_size_column(self):
         """`str(None)` = `"None"` 絕對不能寫進 DB——留白要是真的 NULL。"""
         self._cell_with_ad("A_ad", "情感痛點開場")

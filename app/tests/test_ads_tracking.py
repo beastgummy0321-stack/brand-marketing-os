@@ -17,23 +17,7 @@ from app.core import interrupts as core_interrupts
 ACTOR = "測試員"
 
 
-# BUG app/core/interrupts.py:99 — enqueue() dedup 查詢用 "brand_id IS %s"，
-# Postgres 的 IS 不接受綁參數，一律 psycopg.errors.SyntaxError（同一個 BUG，多群組已標過）。
-_BUG_INTERRUPT_IS_PARAM = pytest.mark.xfail(
-    strict=True,
-    reason='BUG app/core/interrupts.py:99 — enqueue() dedup 查詢用 "brand_id IS %s"，'
-           "Postgres 的 IS 不接受綁參數，一律 psycopg.errors.SyntaxError",
-)
 
-# BUG app/ads/tracking.py:105 — suggest_cycle_mapping() 用 substr(id, -4) 取檔期 id
-# 最後四碼，SQLite 的 substr() 負數起點＝倒數幾碼；Postgres 的 substr() 負數起點語意
-# 不同（實測 substr('abcdefgh', -4) 在 Postgres 回傳整串 'abcdefgh'，不是 'efgh'），
-# 短碼永遠比對不到，自動建議配對整套失效。
-_BUG_SUBSTR_NEGATIVE_START = pytest.mark.xfail(
-    strict=True,
-    reason="BUG app/ads/tracking.py:105 — substr(id, -4) 在 Postgres 不是「倒數 4 碼」"
-           "語意（SQLite 是），短碼比對永遠失敗",
-)
 
 
 class TrackingBase(unittest.TestCase):
@@ -83,7 +67,6 @@ class TrackingBase(unittest.TestCase):
 
 
 class ShortCodeAndAlertTest(TrackingBase):
-    @_BUG_SUBSTR_NEGATIVE_START
     def test_short_code_creates_suggested_cycle_mapping(self):
         cycle_id = self.cycle()
         _pkg, name = self.package(cycle_id)
@@ -93,7 +76,6 @@ class ShortCodeAndAlertTest(TrackingBase):
             " AND claim_status = 'suggested'", (self.bid, "cmp_match")).fetchone()
         self.assertEqual(row["campaign_cycle_id"], cycle_id)
 
-    @_BUG_SUBSTR_NEGATIVE_START
     def test_same_short_code_on_two_cycles_warns_without_suggestion(self):
         unique = str(abs(hash(self.id())))
         self.cycle(cycle_id=f"ccy_first_{unique}ABCD")
@@ -108,7 +90,6 @@ class ShortCodeAndAlertTest(TrackingBase):
         broken = next(a for a in alerts if a["category"] == "tracking_broken")
         self.assertEqual(broken["severity"], "informational")
 
-    @_BUG_INTERRUPT_IS_PARAM
     def test_confirmed_campaign_cannot_be_suggested_into_a_second_cycle(self):
         first = self.cycle()
         first_package, first_name = self.package(first)
@@ -129,7 +110,6 @@ class ShortCodeAndAlertTest(TrackingBase):
         self.assertIsNone(suggested)
         self.assertTrue(any(a["dedupe_key"].startswith("tracking_conflict:") for a in alerts))
 
-    @_BUG_INTERRUPT_IS_PARAM
     def test_spend_without_cycle_and_rename_enqueue_registered_categories(self):
         insight = meta_api.Insight(
             campaign_id="cmp_burn", campaign_name=None, adset_id="set", ad_id="ad",
@@ -148,7 +128,6 @@ class ShortCodeAndAlertTest(TrackingBase):
         self.assertEqual(burn["severity"], "rule_warning")
         self.assertEqual(renamed["severity"], "informational")
 
-    @_BUG_INTERRUPT_IS_PARAM
     def test_spend_with_no_recognizable_brand_still_warns_globally(self):
         insight = meta_api.Insight(
             campaign_id="cmp_orphan", campaign_name=None, adset_id="set", ad_id="ad",
@@ -169,7 +148,6 @@ class TrackingChainApiTest(TrackingBase):
         self.meta_campaign_id = f"cmp_chain_{abs(hash(self.id()))}"
         self.sync(self.meta_campaign_id, self.campaign_name)
 
-    @_BUG_SUBSTR_NEGATIVE_START
     def test_get_contract_has_exact_four_nodes_and_fields(self):
         with mock.patch.object(tracking, "probe_url", return_value=True):
             response = self.client.get(
@@ -182,7 +160,6 @@ class TrackingChainApiTest(TrackingBase):
             self.assertIn(node["status"], {"green", "yellow", "red"})
         self.assertEqual(data["mapping"]["status"], "yellow")
 
-    @_BUG_SUBSTR_NEGATIVE_START
     def test_confirm_endpoint_uses_authorize_and_map_and_turns_mapping_green(self):
         with mock.patch.object(
                 tracking.ads_handoff, "authorize_and_map",
@@ -196,7 +173,6 @@ class TrackingChainApiTest(TrackingBase):
                 f"/api/campaigns/{self.bid}/{self.cycle_id}/tracking-chain").json()["data"]
         self.assertEqual(data["mapping"]["status"], "green")
 
-    @_BUG_SUBSTR_NEGATIVE_START
     def test_objective_mismatch_is_red(self):
         main.conn.execute(
             "UPDATE discovered_campaign SET objective = 'traffic' WHERE meta_campaign_id = %s",
@@ -248,7 +224,6 @@ class PostLaunchChainTest(TrackingBase):
         )
         main.conn.commit()
 
-    @_BUG_INTERRUPT_IS_PARAM
     def test_post_72h_red_and_green_results(self):
         self.snapshot()
         self.ga4_paid(0)

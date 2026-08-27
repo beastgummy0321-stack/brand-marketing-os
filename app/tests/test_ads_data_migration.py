@@ -30,14 +30,6 @@ from app.brand_intelligence import repository as bi_repo  # noqa: E402
 from app.core import db as coredb  # noqa: E402
 from app.core.db import new_id, now_utc  # noqa: E402
 
-# BUG app/ads/performance.py:613 — `(row["date_range_start"] or "")[:7]` slices a
-# datetime.date object (psycopg auto-decodes `date` columns to `date`, not str),
-# always TypeError. Same BUG the orders group already found.
-_BUG_DATE_SLICE = pytest.mark.xfail(
-    strict=True,
-    reason='BUG app/ads/performance.py:613 — (row["date_range_start"] or "")[:7] '
-           "slices a datetime.date object, not a str — TypeError",
-)
 
 
 ACTOR = "測試員"
@@ -160,7 +152,6 @@ class TileStatusTest(_BaseTest):
         ga4_tile = next(i for i in checklist if i["key"] == "ga4_backfill")
         self.assertEqual(ga4_tile["status"], "in_progress")
 
-    @_BUG_DATE_SLICE
     def test_meta_claim_in_progress_below_statistical_sample(self):
         _import_brand_level_meta(self.bid, clicks=100, conversions=5, spend=1000)
         checklist = data_onboarding.build_checklist(main.conn, self.bid, today=TODAY)
@@ -168,7 +159,6 @@ class TileStatusTest(_BaseTest):
         self.assertEqual(meta_tile["status"], "in_progress")
         self.assertIsNotNone(meta_tile["baseline"])
 
-    @_BUG_DATE_SLICE
     def test_meta_claim_done_when_sample_reaches_statistical_tier(self):
         # cvr = 900/4500 = 20%，門檻查表 baseline_20pct 預設 4000，4500 ≥ 4000 → 統計等級
         _import_brand_level_meta(self.bid, clicks=4500, conversions=900, spend=5000)

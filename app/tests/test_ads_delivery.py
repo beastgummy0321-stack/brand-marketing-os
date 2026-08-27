@@ -16,11 +16,6 @@ from app.brand_intelligence import repository as bi
 from app.core import db
 from app.core.db import new_id, now_iso
 
-_BUG_INTERRUPT_IS_PARAM = pytest.mark.xfail(
-    strict=True,
-    reason='BUG app/core/interrupts.py:99 — enqueue() dedup 查詢用 "brand_id IS %s"，'
-           "Postgres 的 IS 不接受綁參數，一律 psycopg.errors.SyntaxError",
-)
 
 # 掃術語前先把 id 拿掉：id 是 Crockford Base32 亂數（app/core/db.py:30），
 # 「CPA」「CPC」「CTR」這些字母組合會隨機出現在 id 裡，讓這個斷言隨機變紅。
@@ -117,7 +112,6 @@ class DeliveryTest(unittest.TestCase):
         self.assertEqual([item["id"] for item in result["items"]], [second])
         self.assertEqual(result["checks"]["facts_confirmed"], [True])
 
-    @_BUG_INTERRUPT_IS_PARAM
     def test_replacement_response_hides_mapped_old_package_but_keeps_evidence(self):
         first = self._add_complete_item("第一則")
         second = self._add_complete_item("第二則")

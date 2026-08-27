@@ -29,6 +29,8 @@ ponytail: _progress_state 的讀寫多數是單一鍵賦值（CPython 原子）�
 import threading
 import time
 
+from app.core import db as core_db
+
 _progress_state: dict = {}
 _progress_lock = threading.Lock()
 
@@ -104,9 +106,15 @@ def _progress_run(key: str, work) -> None:
     二元組，ga4_sync 回一個 SyncResult 物件，各自語意由呼叫端自己拆），一律包成
     `("ok", 原始回傳值)`；連 work() 本身都爆例外這種非預期狀況才是 `("error", 人話錯誤)`
     ——不吞成靜默失敗（鐵則 6：一切可追溯，至少要讓下一個請求看到「背景執行發生未預期錯誤」）。
+
+    BUG 修復（route=C 02-3c）：這支函式本身就是 threading.Thread 的 target，contextvar
+    不會被原生執行緒繼承——work() 裡任何一次 DB 呼叫都會炸 RuntimeError: no connection
+    bound。這裡是唯一的背景執行緒進入點，在這裡包一層 with core_db.connection()（同
+    app/main.py 02-1 的 _auto_sync_loop 寫法），呼叫端的 work() closure 不必自己管連線。
     """
     try:
-        result = work(lambda s: _progress_set_stage(key, s))
+        with core_db.connection():
+            result = work(lambda s: _progress_set_stage(key, s))
         outcome = ("ok", result)
     except Exception as exc:  # noqa: BLE001 — 背景執行緒的最後一道防線，不能讓例外憑空消失
         outcome = ("error", f"背景執行發生未預期錯誤：{exc}")

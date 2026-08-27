@@ -348,9 +348,15 @@ def monthly_report(conn, brand_id: str, month: str) -> dict:
 # ---------------------------------------------------------------------------
 
 def _last_sync_at(conn, brand_id: str) -> Optional[str]:
+    # BUG 修復（route=C 02-3c，牽連 app/dashboard/repository.py:364）：
+    # last_snapshot_at() 現在誠實回傳 ISO 字串（見該函式的修復），但
+    # get_sync_status()["synced_at"] 是 ga4_sync_status.synced_at（timestamptz）直接
+    # 讀回來的 datetime，兩邊型別不一致，max() 沒辦法比較字串跟 datetime；這裡單一收口
+    # 都轉成 ISO 字串再比大小（字串形式的 ISO-8601 時間戳按字典序排序等同按時間排序）。
+    synced_at = (ads_ga4_sync.get_sync_status(conn, brand_id) or {}).get("synced_at")
     candidates = [ts for ts in (
         ads_performance.last_snapshot_at(conn, brand_id),
-        (ads_ga4_sync.get_sync_status(conn, brand_id) or {}).get("synced_at"),
+        synced_at.isoformat() if synced_at else None,
     ) if ts]
     return max(candidates) if candidates else None
 

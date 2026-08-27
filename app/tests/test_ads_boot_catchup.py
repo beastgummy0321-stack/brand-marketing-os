@@ -58,13 +58,6 @@ def _fake(text: str) -> ProviderResponse:
                             stop_reason="end_turn")
 
 
-# BUG app/core/interrupts.py:99 — enqueue() dedup 查詢用 "brand_id IS %s"，
-# Postgres 的 IS 不接受綁參數，一律 psycopg.errors.SyntaxError。
-_BUG_INTERRUPT_IS_PARAM = pytest.mark.xfail(
-    strict=True,
-    reason='BUG app/core/interrupts.py:99 — enqueue() dedup 查詢用 "brand_id IS %s"，'
-           "Postgres 的 IS 不接受綁參數，一律 psycopg.errors.SyntaxError",
-)
 
 
 class OverdueSettlementCatchupTest(unittest.TestCase):
@@ -110,7 +103,6 @@ class OverdueSettlementCatchupTest(unittest.TestCase):
             "SELECT status FROM interrupt WHERE campaign_cycle_id = %s AND kind = 'final_settlement'",
             (self.cycle_id,)).fetchone()
 
-    @_BUG_INTERRUPT_IS_PARAM
     def test_invoking_trigger_function_settles_overdue_cycle(self):
         reminder_before = self._open_final_settlement()
         self.assertEqual(reminder_before["status"], "open")

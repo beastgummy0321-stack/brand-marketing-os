@@ -15,30 +15,13 @@ from app.brand_intelligence import repository as bi_repo  # noqa: E402
 from app.core import db  # noqa: E402
 from app.tests.test_ads_performance import ACTOR, _CSV_ZH, _BaseImportTest  # noqa: E402
 
-# BUG app/ads/performance.py:364 — import_rows() 的 INSERT 對 date 欄位傳 ""，
-# Postgres 一律 psycopg.errors.InvalidDatetimeFormat（同一個 BUG，orders/ads 群組已標過）。
-_BUG_EMPTY_STRING_DATE = pytest.mark.xfail(
-    strict=True,
-    reason='BUG app/ads/performance.py:364 — import_rows() 的 INSERT 對 date 欄位傳 ""，'
-           "Postgres 一律 psycopg.errors.InvalidDatetimeFormat",
-)
 
-# BUG app/ads/performance.py:291 — _existing_signatures() 從 DB 讀回 date_range_start/end
-# 是 date 物件，但同一次呼叫裡「這一列」的簽章（_duplicate_signature 的 date_start/
-# date_stop 參數）用的是解析器給的字串，兩邊型別不同、set 比對永遠不相等，Postgres 下
-# 重複匯入偵測失效（SQLite 欄位親和性讓兩邊都是字串，這個型別落差測不出來）。
-_BUG_SIGNATURE_DATE_TYPE_MISMATCH = pytest.mark.xfail(
-    strict=True,
-    reason="BUG app/ads/performance.py:291 — _existing_signatures() 讀回的 date 物件"
-           "跟本次匯入建構簽章用的日期字串型別不同，重複匯入判斷永遠比不出相等",
-)
 
 
 class CycleLevelDuplicateImportTest(_BaseImportTest):
     """票 11：檔期層快照過去不做重複匯入判斷。去重識別碼比照品牌層 issue #68，多帶
     「廣告名稱」——否則兩支還沒出量、數字都是 0 的不同廣告會被誤判成同一列而漏收一支。"""
 
-    @_BUG_SIGNATURE_DATE_TYPE_MISMATCH
     def test_duplicate_predicate_uses_ad_identity(self):
         first = perf.import_csv(main.conn, self.bid, self.cycle_id, _CSV_ZH, actor=ACTOR)
         self.assertEqual(first.imported, 1)
@@ -54,7 +37,6 @@ class CycleLevelDuplicateImportTest(_BaseImportTest):
         self.assertEqual(result.imported, 2)
         self.assertEqual(result.skipped, 0)
 
-    @_BUG_EMPTY_STRING_DATE
     def test_reimport_of_matched_ad_is_skipped(self):
         """對得回已授權素材的廣告（external_ad_mapping_id 不是 NULL）重複匯入也要擋——
         跟下一則「對不到素材」對照，證明兩種情況都不再靠 LEFT JOIN 反查名稱。"""
@@ -82,7 +64,6 @@ class CycleLevelDuplicateImportTest(_BaseImportTest):
         self.assertEqual((second.imported, second.skipped), (0, 1))
         self.assertEqual(len(perf.list_snapshots(main.conn, self.bid, self.cycle_id)), 1)
 
-    @_BUG_EMPTY_STRING_DATE
     def test_reimport_of_unmatched_ad_is_skipped(self):
         """票 11 blocker 1 就是修這個：對不到素材的廣告（external_ad_mapping_id 是
         NULL）過去靠 LEFT JOIN 反查名稱，這種列全部塌成空字串，兩次匯入永遠判不重複，
@@ -103,7 +84,6 @@ class ManualEntryDuplicateImportTest(_BaseImportTest):
     剛好相同的「不同」資料會被判成重複而略過；緩解是畫面把 skipped 秀出來
     （見 ManualRouteSkippedCountTest），不是假裝能分辨身分。"""
 
-    @_BUG_EMPTY_STRING_DATE
     def test_same_day_same_numbers_second_entry_is_skipped(self):
         first = perf.import_manual(main.conn, self.bid, self.cycle_id,
                                    {"spend": 5000, "impressions": 10000, "clicks": 200,
@@ -138,20 +118,11 @@ class ManualEntryDuplicateImportTest(_BaseImportTest):
         self.assertEqual(rows["c"], 2)
 
 
-# BUG app/ads/pacing.py:59 — classify() 算 budget_progress = spend / budget，budget
-# 若來自 numeric 欄位讀回是 Decimal、spend 是 float，Postgres 下 TypeError
-# （SQLite 兩者都是 float，不會炸）。
-_BUG_PACING_DECIMAL_DIV_FLOAT = pytest.mark.xfail(
-    strict=True,
-    reason="BUG app/ads/pacing.py:59 — classify() 的 spend / budget 兩邊型別不一致"
-           "（Decimal / float），psycopg.errors 之外的 TypeError",
-)
 
 
 class ManualRouteSkippedCountTest(_BaseImportTest):
     """票 11 D2：手動路由回應要跟 CSV 路由同一個形狀，讓面板能秀出跳過幾筆。"""
 
-    @_BUG_PACING_DECIMAL_DIV_FLOAT
     def test_manual_route_reports_skipped_count_in_json_body(self):
         body = {"spend": "5000", "date_start": "2026-01-01", "date_stop": "2026-01-07"}
         first = self.client.post(
@@ -200,7 +171,6 @@ class ProductAttributionTest(_BaseImportTest):
     def _csv_for(ad_name: str, spend: int = 1000) -> str:
         return f"行銷活動名稱,廣告名稱,花費金額\n測試活動,{ad_name},{spend}\n"
 
-    @_BUG_EMPTY_STRING_DATE
     def test_option_a_packages_own_product_id_wins(self):
         product = bi_repo.create_product(main.conn, self.bid, name="虛構商品", actor=ACTOR)
         self._insert_package("廣告A", product_id=product["id"])
@@ -208,7 +178,6 @@ class ProductAttributionTest(_BaseImportTest):
         row = perf.list_snapshots(main.conn, self.bid, self.cycle_id)[0]
         self.assertEqual(row["product_id"], product["id"])
 
-    @_BUG_EMPTY_STRING_DATE
     def test_option_b_falls_back_to_experiment_cell_product_id(self):
         """package 自己沒標 product_id，退回它掛的 experiment_cell 的 product_id。"""
         product = bi_repo.create_product(main.conn, self.bid, name="虛構商品二", actor=ACTOR)
@@ -218,7 +187,6 @@ class ProductAttributionTest(_BaseImportTest):
         row = perf.list_snapshots(main.conn, self.bid, self.cycle_id)[0]
         self.assertEqual(row["product_id"], product["id"])
 
-    @_BUG_EMPTY_STRING_DATE
     def test_unmatched_ad_name_lands_null_and_import_still_succeeds(self):
         result = perf.import_csv(main.conn, self.bid, self.cycle_id,
                                  self._csv_for("廣告不存在"), actor=ACTOR)

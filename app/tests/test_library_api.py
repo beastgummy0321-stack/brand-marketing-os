@@ -29,26 +29,7 @@ os.environ.setdefault("ANTHROPIC_API_KEY", "sk-ant-fake-library-api-test")
 
 ACTOR = "測試員"
 
-# BUG app/brand_intelligence/background_job.py:59 — 見 test_customer_voice.py 同名註記：
-# JobRegistry.start() 起的 threading.Thread 沒有繫連線，job target 一碰 web.conn 就
-# RuntimeError: no connection bound，job 永遠卡在 running。
-_BUG_BACKGROUND_JOB_NO_CONN = pytest.mark.xfail(
-    strict=True,
-    reason="BUG app/brand_intelligence/background_job.py:59 — JobRegistry.start()'s "
-           "threading.Thread target doesn't bind a pooled connection; any DB call in the "
-           "job raises RuntimeError: no connection bound",
-)
 
-# BUG app/core/settings.py:143 — brand_llm_spent() 回傳 SUM(cost)（numeric 欄位）沒轉
-# float，有花費紀錄時回傳 psycopg 給的 Decimal；budget_exceeded_message()（同檔 160 行）
-# 拿它跟呼叫端傳進來的 float cost 相加，Decimal + float 直接 TypeError。
-_BUG_DECIMAL_PLUS_FLOAT = pytest.mark.xfail(
-    strict=True,
-    reason="BUG app/core/settings.py:143 — brand_llm_spent() returns a Decimal (unconverted "
-           "SUM(cost) over a numeric column) instead of float when there's spend; "
-           "budget_exceeded_message()'s `spent + cost` (settings.py:160) raises "
-           "TypeError: unsupported operand type(s) for +: 'decimal.Decimal' and 'float'",
-)
 
 
 def _fake(items=None, output_text=None) -> providers.FakeProvider:
@@ -222,7 +203,6 @@ class CustomerVoiceBackgroundTest(unittest.TestCase):
             time.sleep(0.05)
         self.fail("背景任務逾時仍未完成，可能是執行緒沒有真的跑")
 
-    @_BUG_BACKGROUND_JOB_NO_CONN
     def test_submit_returns_immediately_with_job_key(self):
         """不能同步擋住 request：POST 本身要在很短時間內回應（不等 AI 跑完）。
 
@@ -243,7 +223,6 @@ class CustomerVoiceBackgroundTest(unittest.TestCase):
             self.assertLess(elapsed, 1.0, "POST 不該等 AI 抽取跑完才回應")
             self._poll(resp.json()["job_key"])  # 背景任務真的跑完才放行 mock 還原
 
-    @_BUG_BACKGROUND_JOB_NO_CONN
     def test_job_completes_stores_row_and_enqueues_notification(self):
         fake = _fake([{"task_layer": "functional", "quote": "喝了三天真的有感",
                         "insight": "見效時間是重點", "signal": "unprompted"}])
@@ -268,7 +247,6 @@ class CustomerVoiceBackgroundTest(unittest.TestCase):
         self.assertEqual(len(matches), 1)
         self.assertLessEqual(len(matches[0]["message"]), core_interrupts.MAX_MESSAGE_LEN)
 
-    @_BUG_BACKGROUND_JOB_NO_CONN
     def test_job_failure_does_not_store_and_still_notifies(self):
         fake_bad = _fake(output_text="這不是 JSON")
         with mock.patch.object(customer_voice, "PROVIDER", fake_bad):
@@ -295,7 +273,6 @@ class CustomerVoiceBackgroundTest(unittest.TestCase):
         self.assertEqual(resp.status_code, 400)
         self.assertEqual(len(fake.calls), 0)
 
-    @_BUG_DECIMAL_PLUS_FLOAT
     def test_over_budget_blocks_before_any_llm_call(self):
         """票要求：extract() 前補預算檢查，比照 product_ai._scan_budget_error 模式。"""
         core_settings.set_setting(web.conn, "intake_budget_limit", "1")

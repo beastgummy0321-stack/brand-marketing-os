@@ -39,14 +39,6 @@ atexit.register(shutil.rmtree, _tmpdir, ignore_errors=True)
 
 ACTOR = "測試員"
 
-# BUG app/core/settings.py:143 — brand_llm_spent() 回傳 row["n"] or 0.0，SUM(numeric)
-# 有值時是 Decimal，宣告回傳型別是 float 但沒轉型；budget_exceeded_message() 接著
-# `spent + cost`（Decimal + float）一律 TypeError（同一個 BUG，其他群組已標過）。
-_BUG_DECIMAL_PLUS_FLOAT = pytest.mark.xfail(
-    strict=True,
-    reason='BUG app/core/settings.py:143 — brand_llm_spent() 回傳 Decimal，'
-           "budget_exceeded_message() 的 spent + cost 一律 TypeError",
-)
 
 _AUDIENCE = {"cold": {"description": "測試受眾"}, "warm": {"description": ""},
             "hot": {"description": ""}, "exclusions": []}
@@ -274,7 +266,6 @@ class _BaseMetaMcpTest(unittest.TestCase):
         return row["n"]
 
 
-@_BUG_DECIMAL_PLUS_FLOAT
 class CreatePreflightTest(_BaseMetaMcpTest):
     def _remove_website_channel(self) -> None:
         for channel in bi_repo.list_channels(main.conn, self.bid):
@@ -323,7 +314,6 @@ class CreatePreflightTest(_BaseMetaMcpTest):
         self.assertEqual(row["destination_url"], "https://example.test")
 
 
-@_BUG_DECIMAL_PLUS_FLOAT
 class CreatePackageTest(_BaseMetaMcpTest):
     def test_a_writes_mapping_with_four_ids_confirmed(self):
         cycle_id, package = self._build_one_package()
@@ -395,7 +385,6 @@ class CreatePackageTest(_BaseMetaMcpTest):
         self.assertIsNone(self._mapping_for(package["id"]))
 
 
-@_BUG_DECIMAL_PLUS_FLOAT
 class CreateAllRouteTest(_BaseMetaMcpTest):
     def test_b_second_package_reuses_campaign_after_first_fails_at_creative(self):
         """真人實測發現的第二個問題：第一包 campaign 建成功、素材建失敗（缺到達網址那類
@@ -461,7 +450,6 @@ class CreateAllRouteTest(_BaseMetaMcpTest):
         self.assertIsNone(manual_mapping["meta_adset_id"])
 
 
-@_BUG_DECIMAL_PLUS_FLOAT
 class PublishAllRouteTest(_BaseMetaMcpTest):
     def test_f_publish_all_before_create_all_is_400(self):
         cycle_id, _package = self._build_one_package()
@@ -506,7 +494,6 @@ class SuggestedMappingIsNotAMetaBuildTest(_BaseMetaMcpTest):
     """同步把 Meta 上發現的活動「猜」掛到第一包（tracking.py，claim_status='suggested'）：
     那不算已建到 Meta——不能讓 create-all 跳過那包，也不能拿它的 campaign 來沿用。"""
 
-    @_BUG_DECIMAL_PLUS_FLOAT
     def test_suggested_row_is_ignored(self):
         cycle_id, package = self._build_one_package()
         from app import main as main_mod
@@ -529,7 +516,6 @@ class SuggestedMappingIsNotAMetaBuildTest(_BaseMetaMcpTest):
         self.assertEqual(meta_mcp._meta_message("plain"), "plain")
 
 
-@_BUG_DECIMAL_PLUS_FLOAT
 class PixelTest(_BaseMetaMcpTest):
     def test_adset_uses_most_recent_active_pixel(self):
         cycle_id, _ = self._build_one_package()
@@ -547,7 +533,6 @@ class PixelTest(_BaseMetaMcpTest):
         self.assertNotIn("promoted_object", adset)
 
 
-@_BUG_DECIMAL_PLUS_FLOAT
 class TaiwanIdentityTest(_BaseMetaMcpTest):
     """票追加（真人實測，2026-08-23）：GET /act_368741390835357/adsets 查證，帳戶底下
     每個既有廣告組合都帶台灣法規欄位，Ads MCP 的 ads_create_ad_set 完全沒有對應參數，
@@ -652,7 +637,6 @@ class BudgetConversionTest(unittest.TestCase):
             meta_mcp.budget_in_minor_units(500, None)
 
 
-@_BUG_DECIMAL_PLUS_FLOAT
 class BudgetSentToMetaTest(_BaseMetaMcpTest):
     """實際送出去的那一筆——單元測試綠但呼叫端沒用到就白搭（這次的 bug 正是如此）。"""
 

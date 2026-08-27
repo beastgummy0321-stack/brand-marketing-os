@@ -156,13 +156,6 @@ class HistoryPageTest(_BaseHubTest):
         self.assertIsNone(ads_repo.get_cycle(main.conn, self.bid, cycle_id))
 
 
-# BUG app/ads/performance.py:364 — import_rows() 的 INSERT 對 date 欄位傳 ""，
-# Postgres 一律 psycopg.errors.InvalidDatetimeFormat（同一個 BUG，orders/ads 群組已標過）。
-_BUG_EMPTY_STRING_DATE = pytest.mark.xfail(
-    strict=True,
-    reason='BUG app/ads/performance.py:364 — import_rows() 的 INSERT 對 date 欄位傳 ""，'
-           "Postgres 一律 psycopg.errors.InvalidDatetimeFormat",
-)
 
 
 class HistoryTrendTableTest(_BaseHubTest):
@@ -179,7 +172,6 @@ class HistoryTrendTableTest(_BaseHubTest):
         ads_repo.update_cycle_status(main.conn, self.bid, cycle_id, status="CLOSED", actor=ACTOR)
         self.assertEqual(self._trend_rows(), [])  # 空清單＝整張跨期趨勢表不渲染
 
-    @_BUG_EMPTY_STRING_DATE
     def test_single_closed_period_shows_data_but_no_vs_previous_arrow(self):
         cycle_id = self._open_cycle(start_date="2026-01-01")
         self._judge_closed(cycle_id, revenue=20000)  # roas = 20000/10000 = 2.0
@@ -189,14 +181,12 @@ class HistoryTrendTableTest(_BaseHubTest):
         # 只有一期，沒有相鄰上一期可比，不該出現任何漲跌箭頭
         self.assertIsNone(rows[0]["vs_previous"])
 
-    @_BUG_EMPTY_STRING_DATE
     def test_no_revenue_period_shows_roas_cannot_compute(self):
         cycle_id = self._open_cycle()
         self._judge_closed(cycle_id, revenue=None)
         # 模板：roas is none 的那一格印「算不出」
         self.assertIsNone(self._trend_rows()[0]["roas"])
 
-    @_BUG_EMPTY_STRING_DATE
     def test_three_periods_compare_against_adjacent_closed_period(self):
         oldest = self._open_cycle(start_date="2026-01-01")
         middle = self._open_cycle(start_date="2026-02-01")

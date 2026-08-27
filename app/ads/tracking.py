@@ -101,8 +101,11 @@ def suggest_cycle_mapping(conn, ad_account_id: str, meta_account_id: str,
         _remove_suggestion(conn, meta_campaign_id)
         return None
 
+    # BUG 修復（route=C 02-3c，app/ads/tracking.py:105）：SQLite 的 substr(x, -N) 是「取
+    # 尾 N 碼」；Postgres 的 substr(string, start) 對負的 start 不是同一件事（實測
+    # SELECT substr('abcdefgh', -4) 回全字串，不是尾 4 碼），改用 right(id, 4)。
     matches = [dict(row) for row in conn.execute(
-        "SELECT * FROM campaign_cycle WHERE brand_id = %s AND substr(id, -4) = %s",
+        "SELECT * FROM campaign_cycle WHERE brand_id = %s AND right(id, 4) = %s",
         (brand_id, code),
     )]
     if len(matches) != 1:

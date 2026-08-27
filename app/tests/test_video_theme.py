@@ -53,13 +53,6 @@ atexit.register(_cleanup)
 
 ACTOR = "測試員"
 
-# BUG app/core/settings.py:143 — brand_llm_spent() 回傳 Decimal，budget_exceeded_message()
-# 的 spent + cost 一律 TypeError（同一個 BUG，其他群組已標過）。
-_BUG_DECIMAL_PLUS_FLOAT = pytest.mark.xfail(
-    strict=True,
-    reason='BUG app/core/settings.py:143 — brand_llm_spent() 回傳 Decimal，'
-           "budget_exceeded_message() 的 spent + cost 一律 TypeError",
-)
 _FIELDS = FORMAT_SPECS["video"]["fields"]
 _AXES_VALUES = {"angle": "benefit", "tone": "warm", "format": "video",
                 "selling_point": "quality"}
@@ -180,7 +173,6 @@ class ThreeScriptsSharedHookPoolTest(_Base):
     """票 08 驗收 1、2、4：假簡報進 → 3 腳本（框架標記互異至少 2 種）＋切角層共用 10 個
     Hook（第二支不重生）＋5/5/5 文字；腳本＝主題，一支一列。"""
 
-    @_BUG_DECIMAL_PLUS_FLOAT
     def test_three_calls_produce_three_theme_rows_two_frameworks_and_one_shared_pool(self):
         cycle_id, cell_id = self._ready_cell()
 

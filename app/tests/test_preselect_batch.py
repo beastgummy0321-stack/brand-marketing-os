@@ -54,13 +54,6 @@ atexit.register(_cleanup)
 
 ACTOR = "測試員"
 
-# BUG app/core/settings.py:143 — brand_llm_spent() 回傳 Decimal，budget_exceeded_message()
-# 的 spent + cost 一律 TypeError（同一個 BUG，其他群組已標過）。
-_BUG_DECIMAL_PLUS_FLOAT = pytest.mark.xfail(
-    strict=True,
-    reason='BUG app/core/settings.py:143 — brand_llm_spent() 回傳 Decimal，'
-           "budget_exceeded_message() 的 spent + cost 一律 TypeError",
-)
 _BASE_FP = {"angle": "benefit", "tone": "warm", "format": "single_image", "selling_point": "quality"}
 _FAR_FP = {"angle": "pain", "tone": "urgent", "format": "carousel", "selling_point": "price"}
 
@@ -247,7 +240,6 @@ class _Base(unittest.TestCase):
         )
 
 
-@_BUG_DECIMAL_PLUS_FLOAT
 class ApproveTriggersBatchTest(_Base):
     """票 09 驗收 1：核准計畫觸發預選格批次生成，每格恰 2 主題；非預選格零生成。"""
 
@@ -287,7 +279,6 @@ class ApproveTriggersBatchTest(_Base):
         self.assertEqual(len(theme_repo.list_themes_for_cell(main.conn, self.bid, cell_b)), 2)
 
 
-@_BUG_DECIMAL_PLUS_FLOAT
 class HistoricalQuotaFeedbackTest(_Base):
     """P1：真正帶單／明確沒帶單／還不知道三型切角，直接改變同一個批次迴圈的生成數。"""
 
@@ -320,7 +311,6 @@ class HistoricalQuotaFeedbackTest(_Base):
         self.assertEqual(len(theme_repo.list_themes_for_cell(main.conn, self.bid, unknown)), 2)
 
 
-@_BUG_DECIMAL_PLUS_FLOAT
 class EchoChamberReservationTest(_Base):
     """P1：只有最近一期真的亮回音室燈，批次才保留一組遠距指紋方向。"""
 
@@ -370,7 +360,6 @@ class EchoChamberReservationTest(_Base):
         self.assertNotIn("直說好處・親切溫暖・單張圖・品質好", prompts[0])
 
 
-@_BUG_DECIMAL_PLUS_FLOAT
 class AntiDuplicateChainTest(_Base):
     """票 09 驗收 2：同格第二主題與第一主題指紋距離夠遠——驗整條鏈路（批次重新組簡報 →
     第二個主題的 prompt 真的帶上第一個的摘要 → 存檔前的相似度查核真的用得到這份摘要）。"""
@@ -425,7 +414,6 @@ class AntiDuplicateChainTest(_Base):
 class MatrixEndpointTest(_Base):
     """票 09 驗收 3：矩陣端點回 JSON，每格狀態足以渲染畫面契約的三態格。"""
 
-    @_BUG_DECIMAL_PLUS_FLOAT
     def test_full_grid_expansion_with_themed_and_empty_states(self):
         cycle_id = self._open_cycle(objective="sales")
         cell_id = self._insert_cell(cycle_id)
@@ -484,7 +472,6 @@ class BudgetCeilingBatchTest(_Base):
         self.assertEqual(provider.calls, [])  # 真的沒花到錢
         self.assertEqual(theme_repo.list_themes_for_cell(main.conn, self.bid, cell_id), [])
 
-    @_BUG_DECIMAL_PLUS_FLOAT
     def test_budget_that_covers_exactly_one_theme_keeps_the_first_and_stops_honestly(self):
         cycle_id = self._open_cycle(objective="sales")
         cell_id = self._insert_cell(cycle_id)

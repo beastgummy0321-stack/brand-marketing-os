@@ -173,19 +173,8 @@ class CoverageGapsTest(unittest.TestCase):
         self.assertEqual(compliance.coverage_gaps(main.conn, self.bid), [])
 
 
-# BUG app/core/settings.py:143 — brand_llm_spent() 回傳 Decimal，budget_exceeded_message()
-# 拿去跟 float 相加，一律 TypeError。這裡每個測試的 setUp() 都經 plan/approve ->
-# theme_batch._budget_blocked() -> budget_exceeded_message()，全班（含子類別）都會炸在
-# setUp 階段——02-4 是測試轉移票，不改 app/core/*.py，標 xfail，等後續票修正
-# production code（正確寫法應是先把 spent 轉 float，或全站改用 Decimal 算錢）。
-_BUG_SETTINGS_DECIMAL = pytest.mark.xfail(
-    strict=True,
-    reason="BUG app/core/settings.py:143 — brand_llm_spent() 回傳 Decimal，"
-           "budget_exceeded_message() 拿去跟 float 相加，一律 TypeError",
-)
 
 
-@_BUG_SETTINGS_DECIMAL
 class ComplianceScanTest(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(main.app)
@@ -365,7 +354,7 @@ class ComplianceScanTest(unittest.TestCase):
         row = ads_repo.list_findings(main.conn, self.bid, self.cycle_id, "compliance")[0]
         self.assertEqual(row["source"], "rule_scan")
         self.assertEqual(row["target_type"], "variant")
-        self.assertIn("variant_id", json.loads(row["evidence_json"]))
+        self.assertIn("variant_id", row["evidence_json"])
 
     def test_efficacy_selling_point_gets_a_reminder_even_with_clean_content(self):
         """修憲落地 L4（決策 0034 第 9 點）：即使一個字都沒命中詞庫，主打 efficacy／safety
@@ -679,7 +668,6 @@ class DiscountDepthDefaultHoldTest(ComplianceScanTest):
         self.assertFalse(variant["auto_held"])
 
 
-@_BUG_SETTINGS_DECIMAL
 class UnbackedClaimBackedByProductFactTest(unittest.TestCase):
     """票 12 done-check 4：D3 一個佐證路徑的專屬驗證——`product_fact` 撐得住這句話就不該
     被擋。獨立一組品牌／產品／檔期（不沿用 ComplianceScanTest.setUp），因為需要素材真的

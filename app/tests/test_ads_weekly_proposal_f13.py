@@ -25,11 +25,6 @@ from app.core.db import new_id, now_iso
 ACTOR = "測試員"
 TODAY = date(2026, 8, 14)
 
-_BUG_EMPTY_DATE_STRING = pytest.mark.xfail(
-    strict=True,
-    reason="BUG app/ads/performance.py:364 — import_rows() 沒帶日期時送空字串 \"\" 給"
-           "date 欄位，SQLite 對空字串寬容，Postgres 一律 psycopg.errors.InvalidDatetimeFormat",
-)
 
 
 def _asset(name, *, spend, conversions, revenue, attributable=1, product_id=None):
@@ -168,7 +163,6 @@ class GenerateEndToEndTest(unittest.TestCase):
             client_name=None, actor=ACTOR)
         self.brand_id = brand["id"]
 
-    @_BUG_EMPTY_DATE_STRING
     def test_generate_end_to_end_names_this_cycles_ads_not_another_cycles_code(self):
         """產品層停掉卡要點名底下三支廣告；另一期留下來的 bad_cvr 這種內部代號一個都不能
         出現在卡片文案，也不能出現在結案確認要唸的名單裡（`unhandled_cards()` →

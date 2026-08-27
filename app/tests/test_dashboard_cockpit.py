@@ -33,17 +33,6 @@ from app.orders import repository as orders_repo  # noqa: E402
 ACTOR = "測試員"
 TODAY = "2026-08-05"
 
-# BUG app/dashboard/repository.py:364 — _is_data_stale() 的 last_sync_at[:10] 假設
-# last_sync_at 是字串（SQLite 型別親和力），但 timestamptz 欄位在 Postgres 讀回來是真的
-# datetime 物件，不能切片，一律 TypeError。cockpit()／monthly_report() 只要有任何一筆
-# performance_snapshot／llm_task／ga4_sync_status 就會跑到這裡，凡是插過任何一筆測試資料
-# 的測試都中。
-_BUG_LAST_SYNC_AT_SLICE = pytest.mark.xfail(
-    strict=True,
-    reason="BUG app/dashboard/repository.py:364 — _is_data_stale() 的 last_sync_at[:10] "
-           "假設是字串，Postgres 讀回的 timestamptz 是真的 datetime 物件，不能切片，"
-           "一律 TypeError",
-)
 
 
 def _seed_spend(conn, brand_id: str, *, date_str: str, spend: float) -> str:
@@ -158,26 +147,22 @@ class DashboardCockpitApiTest(unittest.TestCase):
 
     # -- KPI 口徑：已知資料算對 -------------------------------------------------
 
-    @_BUG_LAST_SYNC_AT_SLICE
     def test_revenue_this_month_and_mom_pct(self):
         kpis = self._get(self.brand_full["id"]).json()["data"]["kpis"]
         self.assertEqual(kpis["revenue"]["value"], 1200)
         self.assertEqual(kpis["revenue"]["mom_pct"], 20.0)
 
-    @_BUG_LAST_SYNC_AT_SLICE
     def test_orders_this_month_and_mom_pct(self):
         kpis = self._get(self.brand_full["id"]).json()["data"]["kpis"]
         self.assertEqual(kpis["orders"]["value"], 2)
         self.assertEqual(kpis["orders"]["mom_pct"], 100.0)
 
-    @_BUG_LAST_SYNC_AT_SLICE
     def test_spend_this_month_is_sum_of_performance_snapshot_spend(self):
         kpis = self._get(self.brand_full["id"]).json()["data"]["kpis"]
         # 本月三筆花費快照：300 + 1（ROAS 那筆）= 301；上月 200 + 1 = 201
         self.assertEqual(kpis["spend"]["value"], 301)
         self.assertEqual(kpis["spend"]["mom_pct"], round((301 - 201) / 201 * 100, 1))
 
-    @_BUG_LAST_SYNC_AT_SLICE
     def test_importing_a_past_months_data_does_not_change_this_months_spend(self):
         """B0-01 done-check 2：補匯不屬於本月的舊資料（例如 3 月的歷史 CSV），「本月」
         （2026-08）花費不能被污染——歸屬看資料本身的 date_range_end，不是匯入發生的時間。"""
@@ -186,7 +171,6 @@ class DashboardCockpitApiTest(unittest.TestCase):
         after = self._get(self.brand_full["id"]).json()["data"]["kpis"]["spend"]["value"]
         self.assertEqual(after, before)
 
-    @_BUG_LAST_SYNC_AT_SLICE
     def test_roas_is_recomputed_from_revenue_and_spend_not_derived_metric(self):
         """B0-01：setUp 塞了兩筆 derived_metric「舊判讀」誘餌（4.0／2.0，跟真實營收/花費
         對不上）——如果程式還在讀 derived_metric 的最近一筆，這裡會抓到 4.0／100.0，
@@ -202,13 +186,11 @@ class DashboardCockpitApiTest(unittest.TestCase):
         self.assertNotEqual(kpis["roas"]["value"], 4.0)  # 不是誘餌值
         self.assertEqual(kpis["roas"]["mom_pct"], expected_mom)
 
-    @_BUG_LAST_SYNC_AT_SLICE
     def test_chart_months_are_last_six_calendar_months_ascending(self):
         chart = self._get(self.brand_full["id"]).json()["data"]["chart"]
         self.assertEqual(chart["months"],
                          ["2026-03", "2026-04", "2026-05", "2026-06", "2026-07", "2026-08"])
 
-    @_BUG_LAST_SYNC_AT_SLICE
     def test_chart_partial_month_data_leaves_gaps_as_none(self):
         """邊界：只有一個月（3 月）有花費資料，其餘月份沒有——趨勢線該月有值、
         其他月份是 None，不是補成 0（鐵則 16）。"""
@@ -217,7 +199,6 @@ class DashboardCockpitApiTest(unittest.TestCase):
         self.assertIsNone(chart["spend"][1])  # 2026-04：完全沒資料
         self.assertIsNone(chart["spend"][2])  # 2026-05：完全沒資料
 
-    @_BUG_LAST_SYNC_AT_SLICE
     def test_kpi_trend_length_matches_chart_months(self):
         data = self._get(self.brand_full["id"]).json()["data"]
         for kpi in data["kpis"].values():
@@ -225,12 +206,10 @@ class DashboardCockpitApiTest(unittest.TestCase):
 
     # -- 票 F5：月報卡的期間／口徑 ---------------------------------------------
 
-    @_BUG_LAST_SYNC_AT_SLICE
     def test_month_matches_frozen_today(self):
         data = self._get(self.brand_full["id"]).json()["data"]
         self.assertEqual(data["month"], "2026-08")
 
-    @_BUG_LAST_SYNC_AT_SLICE
     def test_basis_note_states_period_and_true_data_source(self):
         """basis_note 不能照抄「Meta 自報數字」蓋過營收／訂單——那兩項來自訂單紀錄，
         只有花費是 Meta 成效快照回報（F5 票的核心：口徑一定要如實）。"""
@@ -242,7 +221,6 @@ class DashboardCockpitApiTest(unittest.TestCase):
 
     # -- 只讀 -----------------------------------------------------------------
 
-    @_BUG_LAST_SYNC_AT_SLICE
     def test_cockpit_endpoint_does_not_write_any_row(self):
         tables = ["brand", "order_record", "performance_snapshot", "derived_metric"]
 
@@ -427,28 +405,24 @@ class LastSyncAtTest(unittest.TestCase):
         self.assertIsNone(data["last_sync_at"])
         self.assertTrue(data["data_stale"])
 
-    @_BUG_LAST_SYNC_AT_SLICE
     def test_synced_today_is_not_stale(self):
         self._insert_snapshot(f"{TODAY}T09:00:00+00:00")
         data = self._get()
         self.assertEqual(data["last_sync_at"], f"{TODAY}T09:00:00+00:00")
         self.assertFalse(data["data_stale"])
 
-    @_BUG_LAST_SYNC_AT_SLICE
     def test_synced_yesterday_is_stale(self):
         self._insert_snapshot("2026-08-04T09:00:00+00:00")
         data = self._get()
         self.assertEqual(data["last_sync_at"], "2026-08-04T09:00:00+00:00")
         self.assertTrue(data["data_stale"])
 
-    @_BUG_LAST_SYNC_AT_SLICE
     def test_ga4_sync_time_counts_too(self):
         self._insert_ga4_sync_status(f"{TODAY}T08:00:00+00:00")
         data = self._get()
         self.assertEqual(data["last_sync_at"], f"{TODAY}T08:00:00+00:00")
         self.assertFalse(data["data_stale"])
 
-    @_BUG_LAST_SYNC_AT_SLICE
     def test_takes_the_later_of_meta_and_ga4(self):
         self._insert_snapshot("2026-08-04T09:00:00+00:00")
         self._insert_ga4_sync_status(f"{TODAY}T08:00:00+00:00")

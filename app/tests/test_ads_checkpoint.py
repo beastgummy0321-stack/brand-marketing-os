@@ -55,14 +55,8 @@ FATIGUE_CSV = (
 )
 
 
-_BUG_INTERRUPT_IS_PARAM = pytest.mark.xfail(
-    strict=True,
-    reason='BUG app/core/interrupts.py:99 — enqueue() dedup 查詢用 "brand_id IS %s"，'
-           "Postgres 的 IS 不接受綁參數，一律 psycopg.errors.SyntaxError",
-)
 
 
-@_BUG_INTERRUPT_IS_PARAM
 class _Base(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(main.app)

@@ -31,17 +31,6 @@ from app.orders import dispatch as orders_dispatch
 
 ACTOR = "測試員"
 
-# BUG app/ads/pacing.py:59 — classify() 的 budget_progress = spend / budget：
-# health_lights._spend_rate_light() 傳入 performance.totals()['spend']（Decimal，從
-# numeric 欄位加總）跟 cycle['budget']（float，ads/repository.py _with_float_budget()
-# 讀取端已轉換）混算，TypeError（同一個 BUG，其他群組已標過）。
-_BUG_PACING_DECIMAL_FLOAT = pytest.mark.xfail(
-    strict=True,
-    reason="BUG app/ads/pacing.py:59 — classify() 的 budget_progress = spend / budget："
-           "health_lights._spend_rate_light() 傳入 performance.totals()['spend']（Decimal，"
-           "從 numeric 欄位加總）跟 cycle['budget']（float，ads/repository.py "
-           "_with_float_budget() 讀取端已轉換）混算，TypeError",
-)
 
 
 def _fake(text):
@@ -50,7 +39,6 @@ def _fake(text):
                             stop_reason="end_turn")
 
 
-@_BUG_PACING_DECIMAL_FLOAT
 class F1CardsFollowImportedCycleTest(unittest.TestCase):
     def setUp(self):
         from fastapi.testclient import TestClient

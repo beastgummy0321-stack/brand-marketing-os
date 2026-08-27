@@ -60,6 +60,17 @@ def asset_totals(conn, brand_id: str, cycle_id: str, breakeven: Optional[float] 
     result = []
     for row in rows:
         data = dict(row)
+        # BUG 修復（route=C 02-3c，同 app/ads/reading_hypotheses.py comparison_cells()
+        # 那個發現，範圍更大）：spend/revenue 是 COALESCE(SUM(numeric),0) 讀回來的
+        # Decimal；impressions/clicks 底層是 bigint 欄位，但 Postgres 的 SUM(bigint)
+        # 聚合結果型別是 numeric（防溢位的既有規則），COALESCE(SUM(...),0) 讀回來
+        # 一樣是 Decimal，不是 int——conversions 是 double precision（float）。四種
+        # 型別攪在一起，compute_kpis() 內只要有任兩種不同型別相除就會 TypeError；
+        # 就近轉型一次收口。
+        data["impressions"] = int(data["impressions"])
+        data["clicks"] = int(data["clicks"])
+        data["spend"] = float(data["spend"])
+        data["revenue"] = float(data["revenue"])
         data["kpis"] = ads_performance.compute_kpis(data)
         result.append(data)
     roas_values = [r["kpis"]["roas"] for r in result if r["kpis"]["roas"] is not None]
@@ -123,7 +134,12 @@ def max_frequency_by_asset(conn, brand_id: str, cycle_id: str) -> Optional[dict]
         " LEFT JOIN experiment_cell cell ON cell.id = pkg.experiment_cell_id"
         " WHERE ps.brand_id = %s AND ps.campaign_cycle_id = %s AND ps.quarantined = false"
         " AND ps.frequency IS NOT NULL"
-        " GROUP BY pkg.id ORDER BY frequency DESC LIMIT 1", (brand_id, cycle_id),
+        # BUG 修復（route=C 02-3c，app/ads/reading_assets.py:118）：SELECT 帶了
+        # cell.creative_angle（LEFT JOIN 來的別張表欄位），只 GROUP BY pkg.id 在
+        # SQLite 能過（挑任一列），Postgres 要求非聚合欄位都要進 GROUP BY——
+        # cell.creative_angle 加進去不改變分組結果（同一個 pkg.id 只對到一個
+        # experiment_cell），只是滿足語法要求。
+        " GROUP BY pkg.id, cell.creative_angle ORDER BY frequency DESC LIMIT 1", (brand_id, cycle_id),
     ).fetchone()
     return ({"pkg_id": row["pkg_id"], "target": row["target"], "frequency": row["frequency"]}
             if row else None)

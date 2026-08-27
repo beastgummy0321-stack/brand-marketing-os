@@ -15,13 +15,6 @@ from app.brand_intelligence import repository as bi_repo
 from app.core import db
 from app.tests.test_ads_sync import ACTOR, _BaseSyncTest, _campaign, _insight
 
-# BUG app/core/interrupts.py:99 — enqueue() dedup 查詢用 "brand_id IS %s"，
-# Postgres 的 IS 不接受綁參數，一律 psycopg.errors.SyntaxError。
-_BUG_INTERRUPT_IS_PARAM = pytest.mark.xfail(
-    strict=True,
-    reason='BUG app/core/interrupts.py:99 — enqueue() dedup 查詢用 "brand_id IS %s"，'
-           "Postgres 的 IS 不接受綁參數，一律 psycopg.errors.SyntaxError",
-)
 
 
 class ProductAttributionTest(_BaseSyncTest):
@@ -59,7 +52,6 @@ class ProductAttributionTest(_BaseSyncTest):
         ).fetchone()
         self.assertEqual(row["product_id"], product["id"])
 
-    @_BUG_INTERRUPT_IS_PARAM
     def test_unmatched_ad_leaves_product_id_null(self):
         """對不到 publishing_package、檔期也沒有唯一產品可以退回時留白，匯入照樣成功。"""
         self._sync(campaigns=[_campaign("981", f"{self.brand_name}_20260806_sales")],

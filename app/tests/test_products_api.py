@@ -28,15 +28,6 @@ os.environ.setdefault("ANTHROPIC_API_KEY", "sk-ant-fake-products-api-test")
 
 ACTOR = "測試員"
 
-# BUG app/brand_intelligence/background_job.py:59 — 見 test_customer_voice.py 同名註記：
-# JobRegistry.start() 起的 threading.Thread 沒有繫連線，job target 一碰 web.conn 就
-# RuntimeError: no connection bound，job 永遠卡在 running。
-_BUG_BACKGROUND_JOB_NO_CONN = pytest.mark.xfail(
-    strict=True,
-    reason="BUG app/brand_intelligence/background_job.py:59 — JobRegistry.start()'s "
-           "threading.Thread target doesn't bind a pooled connection; any DB call in the "
-           "job raises RuntimeError: no connection bound",
-)
 
 
 def _fake_response(text: str) -> ProviderResponse:
@@ -183,7 +174,6 @@ class ResearchBackgroundTest(_BaseProductsApiTest):
             time.sleep(0.05)
         self.fail("背景任務逾時仍未完成，可能是執行緒沒有真的跑")
 
-    @_BUG_BACKGROUND_JOB_NO_CONN
     def test_start_returns_immediately_and_creates_product_before_research_finishes(self):
         product_ai.PROVIDER = FakeProvider(response=_fake_response(_GOOD_FACTS))
         started = time.time()
@@ -201,7 +191,6 @@ class ResearchBackgroundTest(_BaseProductsApiTest):
         self.assertEqual(status["status"], "done")
         self.assertEqual(status["added_count"], 2)
 
-    @_BUG_BACKGROUND_JOB_NO_CONN
     def test_success_stores_pending_facts_and_notifies(self):
         product_ai.PROVIDER = FakeProvider(response=_fake_response(_GOOD_FACTS))
         resp = self.client.post(
@@ -219,7 +208,6 @@ class ResearchBackgroundTest(_BaseProductsApiTest):
         self.assertEqual(len(matches), 1)
         self.assertLessEqual(len(matches[0]["message"]), core_interrupts.MAX_MESSAGE_LEN)
 
-    @_BUG_BACKGROUND_JOB_NO_CONN
     def test_over_budget_leaves_empty_product_not_deleted(self):
         """拿不準的點 1，方案 A：調研失敗時系統留下一個空產品，不像舊版「失敗就什麼都沒發生」。"""
         coresettings.set_setting(web.conn, coresettings.INTAKE_BUDGET_SETTING, "0.1")
@@ -250,7 +238,6 @@ class ResearchBackgroundTest(_BaseProductsApiTest):
         self.assertEqual(resp.status_code, 400)
         self.assertEqual(repo.list_products(web.conn, self.bid), [])
 
-    @_BUG_BACKGROUND_JOB_NO_CONN
     def test_rescan_idempotent_same_key_not_restarted_while_running(self):
         pid = self._create_product()
         product_ai.PROVIDER = FakeProvider(response=_fake_response(_GOOD_FACTS))

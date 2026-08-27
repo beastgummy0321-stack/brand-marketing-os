@@ -131,20 +131,8 @@ class _BaseHandoffTest(unittest.TestCase):
             json=data)
 
 
-# BUG app/core/settings.py:143 — brand_llm_spent() 回傳 row["n"] or 0.0，SUM(numeric)
-# 有值時是 Decimal，宣告回傳型別是 float 但沒轉型；budget_exceeded_message() 接著
-# `spent + cost`（Decimal + float）一律 TypeError。plan/approve 會觸發
-# theme_batch.generate_preselected_batch() -> _budget_blocked() -> 這裡，
-# _BaseHandoffTest.setUp() 呼叫 plan/approve，所以繼承它的整個測試類別都中
-# （同一個 BUG，brand_intelligence 群組已標過）。
-_BUG_DECIMAL_PLUS_FLOAT = pytest.mark.xfail(
-    strict=True,
-    reason='BUG app/core/settings.py:143 — brand_llm_spent() 回傳 Decimal，'
-           "budget_exceeded_message() 的 spent + cost 一律 TypeError",
-)
 
 
-@_BUG_DECIMAL_PLUS_FLOAT
 class PackageBuildTest(_BaseHandoffTest):
     def test_builds_one_package_per_cell_with_program_generated_names(self):
         self._build()
@@ -168,7 +156,7 @@ class PackageBuildTest(_BaseHandoffTest):
         cycle id 在投手手動調整過 Meta 活動結構後會跟實際脫鉤，動態變數才能自動跟著走。
         utm_content 維持 cell id：那是系統內部的切角格，不是 Meta 的廣告物件。"""
         self._build()
-        utm = json.loads(self._packages()[0]["utm_json"])
+        utm = self._packages()[0]["utm_json"]
         self.assertEqual(utm["utm_campaign"], "{{campaign.name}}")
         self.assertEqual(utm["utm_content"], self.cell_id)
         self.assertEqual(utm["utm_source"], "facebook")
@@ -218,7 +206,6 @@ class PackageBuildTest(_BaseHandoffTest):
         self.assertEqual(ads_handoff.list_packages(main.conn, self.bid, other), [])
 
 
-@_BUG_DECIMAL_PLUS_FLOAT
 class MissingFieldReportTest(_BaseHandoffTest):
     def test_report_is_recorded_and_acknowledged(self):
         self._build()
@@ -228,10 +215,9 @@ class MissingFieldReportTest(_BaseHandoffTest):
             "SELECT * FROM audit_log WHERE action = 'field_not_found'"
             " ORDER BY created_at DESC LIMIT 1").fetchone()
         self.assertIsNotNone(row)
-        self.assertIn("每日預算", row["after_json"])
+        self.assertEqual(row["after_json"]["label"], "每日預算")
 
 
-@_BUG_DECIMAL_PLUS_FLOAT
 class ActivationGateTest(_BaseHandoffTest):
     def test_activation_creates_named_authorization_and_mapping(self):
         self._build()

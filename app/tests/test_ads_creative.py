@@ -5,6 +5,7 @@
 """
 
 import json
+import shutil
 import tempfile
 import time
 import unittest
@@ -105,7 +106,7 @@ def _read_creative_variant_rows(conn, brand_id: str, cycle_id: str) -> list:
         (brand_id, cycle_id),
     )]
     for row in rows:
-        attributes = json.loads(row["attributes_json"] or "{}")
+        attributes = row["attributes_json"] or {}
         row["content"] = attributes.get("content", "")
         row["methodology_missing"] = attributes.get("methodology_missing") or []
         row["missing_creative_types"] = attributes.get("missing_creative_types") or []
@@ -115,7 +116,7 @@ def _read_creative_variant_rows(conn, brand_id: str, cycle_id: str) -> list:
         row["cut_type_label"] = cmx.CUT_TYPES.get(row["cut_type"]) if row["cut_type"] else None
         row["quote_source"] = attributes.get("quote_source")
         row["customer_voice_available"] = attributes.get("customer_voice_available", True)
-        row["fingerprint"] = json.loads(row["fingerprint_json"] or "{}")
+        row["fingerprint"] = row["fingerprint_json"] or {}
     return rows
 
 
@@ -177,14 +178,8 @@ class _SequencedProvider:
         return self._responses[index]
 
 
-_BUG_SETTINGS_DECIMAL = pytest.mark.xfail(
-    strict=True,
-    reason="BUG app/core/settings.py:143 — brand_llm_spent() 回傳 Decimal，"
-           "budget_exceeded_message() 拿去跟 float 相加，一律 TypeError",
-)
 
 
-@_BUG_SETTINGS_DECIMAL
 class _BaseCreativeTest(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(main.app)
@@ -379,7 +374,6 @@ class GenerationTest(_BaseCreativeTest):
         self.assertEqual(self._variants(), [])
 
 
-@_BUG_SETTINGS_DECIMAL
 class ProductScopedComplianceTest(unittest.TestCase):
     """修憲落地 L3（決策 0034 第 5、6 點）：產品層禁用宣稱要進生成 prompt，且要拆成
     「可以講／絕對不能講」兩個標題明確的區塊，英文狀態值不得進 prompt。"""
@@ -457,7 +451,6 @@ class ProductScopedComplianceTest(unittest.TestCase):
         self.assertNotIn("approved", sent)
 
 
-@_BUG_SETTINGS_DECIMAL
 class MultiProductScopedComplianceTest(unittest.TestCase):
     """一個檔期可含多個產品（決策 0022 第 5 點）：每個產品各自的禁用宣稱都要進 prompt，
     不能只顧到第一個產品、也不能互相外洩到對方名下（修憲落地 L3）。"""
@@ -708,7 +701,7 @@ class RejectionMemoryTest(_BaseCreativeTest):
             "SELECT * FROM adoption_decision WHERE target_id = %s", (target["id"],)).fetchone()
         self.assertEqual(row["decision"], "rejected")
         self.assertEqual(row["reason_code"], "too_stiff")
-        self.assertEqual(json.loads(row["fingerprint_json"]), target["fingerprint"])
+        self.assertEqual(row["fingerprint_json"], target["fingerprint"])
 
     def test_user_is_told_what_the_system_learned(self):
         learned = self._reject(self._target(), "too_stiff")

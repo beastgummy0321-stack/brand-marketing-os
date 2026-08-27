@@ -27,16 +27,6 @@ from app.llm.providers import (
 
 ACTOR = "測試員"
 
-# BUG app/brand_intelligence/background_job.py:59 — 見 test_customer_voice.py 同名註記：
-# JobRegistry.start() 起的 threading.Thread 沒有繫連線，job target 一碰 web.conn 就
-# RuntimeError: no connection bound，job 永遠卡在 running。routes_products.py 的
-# _research_jobs 跟 routes_library.py 的 _cv_jobs 是同一份 JobRegistry 機制。
-_BUG_BACKGROUND_JOB_NO_CONN = pytest.mark.xfail(
-    strict=True,
-    reason="BUG app/brand_intelligence/background_job.py:59 — JobRegistry.start()'s "
-           "threading.Thread target doesn't bind a pooled connection; any DB call in the "
-           "job raises RuntimeError: no connection bound",
-)
 
 
 def _fake_response(text: str, in_tok: int = 100, out_tok: int = 50) -> ProviderResponse:
@@ -105,7 +95,6 @@ class _BaseProductScanTest(unittest.TestCase):
 
 
 class ProductScanTest(_BaseProductScanTest):
-    @_BUG_BACKGROUND_JOB_NO_CONN
     def test_scan_success_creates_product_and_pending_facts_with_source(self):
         product_ai.PROVIDER = FakeProvider(response=_fake_response(_GOOD_FACTS))
         product_id, state = self._post()
@@ -123,21 +112,18 @@ class ProductScanTest(_BaseProductScanTest):
             src = bi_repo.get_source_reference(web.conn, self.brand["id"], f["source_reference_id"])
             self.assertEqual(src["title"], "https://example.com/products/oolong")
 
-    @_BUG_BACKGROUND_JOB_NO_CONN
     def test_missing_key_shows_human_error_and_creates_nothing(self):
         product_ai.PROVIDER = AnthropicProvider()  # 無金鑰：送網路請求之前就會擋下
         _product_id, state = self._post()
         self.assertEqual(state["status"], "failed")
         self.assertIn(MISSING_KEY_MESSAGE, state["error"])
 
-    @_BUG_BACKGROUND_JOB_NO_CONN
     def test_unparseable_reply_is_honest_failure_and_creates_nothing(self):
         product_ai.PROVIDER = FakeProvider(response=_fake_response("這不是 JSON，也不是允許的分類"))
         _product_id, state = self._post()
         self.assertEqual(state["status"], "failed")
         self.assertIn(product_ai.PARSE_FAIL_MESSAGE, state["error"])
 
-    @_BUG_BACKGROUND_JOB_NO_CONN
     def test_over_budget_blocks_before_any_llm_call(self):
         coresettings.set_setting(web.conn, coresettings.INTAKE_BUDGET_SETTING, "0.1")
         product_ai.PROVIDER = FakeProvider(response=_fake_response("不該被呼叫"))
@@ -171,7 +157,6 @@ class ProductRescanTest(_BaseProductScanTest):
         self.assertEqual(response.status_code, 202)
         return self._wait_for_research(product_id)
 
-    @_BUG_BACKGROUND_JOB_NO_CONN
     def test_url_prefilled_from_latest_product_source_reference(self):
         product_ai.PROVIDER = FakeProvider(response=_fake_response(_GOOD_FACTS))
         product_id, state = self._post()
@@ -179,7 +164,6 @@ class ProductRescanTest(_BaseProductScanTest):
         detail = self.client.get(f"/api/products/brands/{self.brand['id']}/products/{product_id}").json()["data"]
         self.assertEqual(detail["latest_source_url"], "https://example.com/products/oolong")
 
-    @_BUG_BACKGROUND_JOB_NO_CONN
     def test_rescan_success_adds_facts_and_skips_same_label(self):
         product_ai.PROVIDER = FakeProvider(response=_fake_response(_GOOD_FACTS))
         product_id, state = self._post()
@@ -196,7 +180,6 @@ class ProductRescanTest(_BaseProductScanTest):
         self.assertEqual(labels.count("單一品項"), 1)
         self.assertIn("上班族", labels)
 
-    @_BUG_BACKGROUND_JOB_NO_CONN
     def test_rescan_missing_key_shows_human_error_and_adds_nothing(self):
         product_id = self._create_product()
         product_ai.PROVIDER = AnthropicProvider()
@@ -205,7 +188,6 @@ class ProductRescanTest(_BaseProductScanTest):
         self.assertIn(MISSING_KEY_MESSAGE, state["error"])
         self.assertEqual(bi_repo.list_product_facts(web.conn, self.brand["id"], product_id), [])
 
-    @_BUG_BACKGROUND_JOB_NO_CONN
     def test_rescan_over_budget_blocks_before_any_llm_call(self):
         product_id = self._create_product()
         coresettings.set_setting(web.conn, coresettings.INTAKE_BUDGET_SETTING, "0.1")
@@ -216,7 +198,6 @@ class ProductRescanTest(_BaseProductScanTest):
         self.assertEqual(bi_repo.list_product_facts(web.conn, self.brand["id"], product_id), [])
         self.assertEqual(product_ai.PROVIDER.calls, [])
 
-    @_BUG_BACKGROUND_JOB_NO_CONN
     def test_price_found_creates_pending_economics_with_source(self):
         product_id = self._create_product()
         product_ai.PROVIDER = FakeProvider(response=_fake_response(_FACTS_WITH_PRICE))
@@ -231,7 +212,6 @@ class ProductRescanTest(_BaseProductScanTest):
         src = bi_repo.get_source_reference(web.conn, self.brand["id"], economics["source_reference_id"])
         self.assertEqual(src["title"], "https://example.com/products/oolong-v2")
 
-    @_BUG_BACKGROUND_JOB_NO_CONN
     def test_price_missing_leaves_economics_untouched(self):
         product_id = self._create_product()
         product_ai.PROVIDER = FakeProvider(response=_fake_response(_GOOD_FACTS))  # 沒有 price 欄位
@@ -239,7 +219,6 @@ class ProductRescanTest(_BaseProductScanTest):
         self.assertEqual(state["status"], "done")
         self.assertIsNone(bi_repo.get_product_economics(web.conn, self.brand["id"], product_id))
 
-    @_BUG_BACKGROUND_JOB_NO_CONN
     def test_existing_economics_not_overwritten_by_scan(self):
         product_id = self._create_product()
         bi_repo.save_product_economics(
@@ -255,7 +234,6 @@ class ProductRescanTest(_BaseProductScanTest):
         self.assertEqual(economics["currency"], "USD")
         self.assertEqual(economics["status"], "confirmed")
 
-    @_BUG_BACKGROUND_JOB_NO_CONN
     def test_pending_economics_one_click_confirm(self):
         product_id = self._create_product()
         product_ai.PROVIDER = FakeProvider(response=_fake_response(_FACTS_WITH_PRICE))

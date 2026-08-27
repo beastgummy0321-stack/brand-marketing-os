@@ -13,6 +13,7 @@
 import threading
 from typing import Callable
 
+from app.core import db as core_db
 from app.core import interrupts as core_interrupts
 
 
@@ -56,7 +57,16 @@ class JobRegistry:
                 if entry is not None and entry.get("status") == "running":
                     return
             self._jobs[key] = running_state
-        threading.Thread(target=target, args=args, daemon=True).start()
+
+        # BUG 修復（route=C 02-3c）：contextvar 不會被原生 threading.Thread 繼承，target()
+        # 裡任何一次 web.conn／db 呼叫都會炸 RuntimeError: no connection bound。這裡是唯一
+        # 啟動背景執行緒的進入點，所以在這裡包一層 with core_db.connection()，而不是要求
+        # 每個呼叫端的 target 自己記得包（同 app/main.py 02-1 的 _auto_sync_loop 寫法）。
+        def _run() -> None:
+            with core_db.connection():
+                target(*args)
+
+        threading.Thread(target=_run, daemon=True).start()
 
 
 def notify(conn, brand_id: str, *, category: str, dedupe_key: str, message: str, action_url: str) -> None:

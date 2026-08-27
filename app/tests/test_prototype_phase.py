@@ -14,16 +14,6 @@ from app.core import db
 from app.core import interrupts as core_interrupts
 from app.core import prototype_phase
 
-# BUG app/core/interrupts.py:99 — enqueue() 的去重查詢用 "brand_id IS %s"（SQLite 的
-# IS 寫法，可綁參數），Postgres 的 IS 只接受 NULL/TRUE/FALSE/UNKNOWN 字面值，不接受
-# 綁參數，一律 psycopg.errors.SyntaxError。check_and_flag() 真的觸發旗標翻轉時會呼叫
-# core_interrupts.enqueue()，炸在這裡。02-4 是測試轉移票，不改 app/core/*.py，這裡
-# 標 xfail，等後續票修正 production code。
-_BUG_INTERRUPT_IS_PARAM = pytest.mark.xfail(
-    strict=True,
-    reason='BUG app/core/interrupts.py:99 — enqueue() dedup 查詢用 "brand_id IS %s"，'
-           "Postgres 的 IS 不接受綁參數，一律 psycopg.errors.SyntaxError",
-)
 
 
 class PrototypePhaseFlagTest(unittest.TestCase):
@@ -53,7 +43,6 @@ class PrototypePhaseFlagTest(unittest.TestCase):
         self.assertFalse(triggered)
         self.assertFalse(prototype_phase.has_ended(self.conn))
 
-    @_BUG_INTERRUPT_IS_PARAM
     def test_real_spend_flags_and_notifies(self):
         triggered = prototype_phase.check_and_flag(
             self.conn, actual_spend=8500.0, actor="測試員", cycle_id="cyc_FAKE")
@@ -72,7 +61,6 @@ class PrototypePhaseFlagTest(unittest.TestCase):
         self.assertIsNone(audit_rows[0]["brand_id"])
         self.assertEqual(audit_rows[0]["action"], "ended")
 
-    @_BUG_INTERRUPT_IS_PARAM
     def test_second_call_after_ended_is_a_no_op(self):
         prototype_phase.check_and_flag(self.conn, actual_spend=100, actor="測試員")
         triggered_again = prototype_phase.check_and_flag(

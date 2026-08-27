@@ -81,16 +81,6 @@ def _fake(text: str) -> ProviderResponse:
                             stop_reason="end_turn")
 
 
-_BUG_SETTINGS_DECIMAL = pytest.mark.xfail(
-    strict=True,
-    reason="BUG app/core/settings.py:143 — brand_llm_spent() 回傳 Decimal，"
-           "budget_exceeded_message() 拿去跟 float 相加，一律 TypeError",
-)
-_BUG_PERFORMANCE_KPIS_DECIMAL = pytest.mark.xfail(
-    strict=True,
-    reason="BUG app/ads/performance.py:526 — compute_kpis() 的 spend/conversions 拿"
-           "numeric(Decimal) 除 double precision(float)，一律 TypeError",
-)
 
 
 class _Base(unittest.TestCase):
@@ -155,7 +145,6 @@ class OneTimeItemTest(_Base):
         self.assertFalse(items[0]["checked"])
         self.assertFalse(items[0]["flagged"])
 
-    @_BUG_PERFORMANCE_KPIS_DECIMAL
     def test_no_anomaly_when_conversions_present(self):
         checklist.set_one_time(main.conn, self.bid, "pixel_confirmed", True, ACTOR)
         cycle_id = self._live_cycle(start_offset_days=-4)
@@ -251,7 +240,6 @@ class RoutesDoNotBlockTest(_Base):
         items = checklist.cycle_status(main.conn, self.bid, cycle_id)
         self.assertTrue(next(i for i in items if i["key"] == "budget_matches_structure")["checked"])
 
-    @_BUG_PERFORMANCE_KPIS_DECIMAL
     def test_unfinished_checklist_does_not_block_performance_page(self):
         cycle_id = self._live_cycle(start_offset_days=-4)
         ads_performance.import_csv(main.conn, self.bid, cycle_id, GOOD_CSV, actor=ACTOR)
@@ -259,7 +247,6 @@ class RoutesDoNotBlockTest(_Base):
         self.assertEqual(resp.status_code, 200)
 
 
-@_BUG_SETTINGS_DECIMAL
 class _BaseHandoffTest(_Base):
     """比照 test_ads_handoff.py 的走法，走到有交接包可看的狀態。"""
 

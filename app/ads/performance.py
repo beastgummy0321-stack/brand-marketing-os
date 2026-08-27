@@ -17,6 +17,7 @@ CSV 解析的原則：**認概念欄，不認檔案格式**。Meta 匯出的欄�
 import csv
 import io
 from dataclasses import dataclass, field
+from datetime import date
 from typing import Optional
 
 from app.ads import guardrails
@@ -268,6 +269,13 @@ def resolve_product_id(conn, brand_id: str, cycle_id: Optional[str],
     return None
 
 
+def _date_str(value) -> str:
+    """`date` 物件（Postgres 讀回來的欄位）轉 ISO 字串；已經是字串或 None 原樣通過
+    （BUG 修復 route=C 02-3c：SQLite 沒有真正的 date 型別，讀回來一律是字串；Postgres
+    `date` 欄位讀回來是 `datetime.date`，不能再當字串切片／比對，這裡單一收口轉型）。"""
+    return value.isoformat() if isinstance(value, date) else (value or "")
+
+
 def _row_identity(row: dict) -> str:
     """廣告名稱＋活動名稱＋廣告組合名稱，解析器有給哪個算哪個（票 11 blocker 1）。
     剛匯入的列跟從 raw_json 讀回來的舊列都呼叫這支，兩邊才算得出一致的簽章——
@@ -305,9 +313,10 @@ def _existing_signatures(conn, brand_id: str, cycle_id: Optional[str]) -> set:
     for r in conn.execute(query, params):
         ad_identity = ("" if cycle_id is None else
                       _row_identity(r["raw_json"] or {}))
-        signatures.add((r["date_range_start"], r["date_range_end"], r["impressions"],
-                        r["clicks"], r["spend"], r["conversions"], r["revenue"],
-                        r["frequency"], r["reach"], r["source"], r["currency"], ad_identity))
+        signatures.add((_date_str(r["date_range_start"]), _date_str(r["date_range_end"]),
+                        r["impressions"], r["clicks"], r["spend"], r["conversions"],
+                        r["revenue"], r["frequency"], r["reach"], r["source"],
+                        r["currency"], ad_identity))
     return signatures
 
 
@@ -336,7 +345,12 @@ def import_rows(conn, brand_id: str, cycle_id: Optional[str], rows: list, *,
         derived = _derive_revenue_from_roas(row)
         revenue_source = _revenue_source(row, derived)
 
-        date_start = row.get("date_start") or row.get("date_stop") or (today or "")
+        # BUG 修復（route=C 02-3c，行號同 02-4 報告的 364）：三個來源都沒給日期時原本
+        # 退回 ""，SQLite 的 date 欄位沒有真正型別所以能收；Postgres 的 date 欄位是
+        # NOT NULL，空字串不是合法日期字面，一律 psycopg.errors.InvalidDatetimeFormat。
+        # 退回今天的實際日期，不是空字串（同 test_csv_upload_without_date_columns_
+        # uses_today_not_blank 驗證過的既有契約：沒給日期就當今天）。
+        date_start = row.get("date_start") or row.get("date_stop") or today or now_utc().date().isoformat()
         date_stop = row.get("date_stop") or date_start
 
         ad_identity = _row_identity(row) if cycle_id else ""
@@ -451,16 +465,20 @@ def totals(conn, brand_id: str, cycle_id: str, include_quarantined: bool = False
     # 不然沒收營收資料時模板格式化 None 會直接炸掉。
     rows = _cycle_rows_for_totals(conn, brand_id, cycle_id, include_quarantined)
     revenue_values = [r["revenue"] for r in rows if r["revenue"] is not None]
+    # BUG 修復（route=C 02-3c，app/ads/performance.py:526）：spend/revenue 是 numeric
+    # 欄位加總出來的 Decimal，conversions 是 double precision 欄位（float）；讀取端單一
+    # 收口轉成 float（同 _with_float_budget 的既有模式），下游 compute_kpis()／
+    # app/ads/pacing.py 的 spend/budget 才不會 Decimal 跟 float 混算炸 TypeError。
     row = {
         "impressions": sum(r["impressions"] or 0 for r in rows),
         "clicks": sum(r["clicks"] or 0 for r in rows),
-        "spend": sum(r["spend"] or 0 for r in rows),
+        "spend": float(sum(r["spend"] or 0 for r in rows)),
         "conversions": sum(r["conversions"] or 0 for r in rows),
-        "revenue": sum(revenue_values),
+        "revenue": float(sum(revenue_values)),
         "reach": sum(r["reach"] or 0 for r in rows),
         "rows": len(rows),
     }
-    revenue_raw = sum(revenue_values) if revenue_values else None
+    revenue_raw = float(sum(revenue_values)) if revenue_values else None
     row["kpis"] = compute_kpis({**row, "revenue": revenue_raw})
     return row
 
@@ -478,7 +496,10 @@ def revenue_by_source(conn, brand_id: str, cycle_id: str) -> dict:
     ).fetchall()
     out = {"reported": 0.0, "roas_derived": 0.0, "unknown": 0.0}
     for row in rows:
-        out[row["src"]] = row["amount"]
+        # BUG 修復（route=C 02-3c，app/ads/performance.py:481）：row["amount"] 是
+        # COALESCE(SUM(revenue),0) 讀回來的 Decimal，蓋掉 out 的 float 預設值後，底下
+        # sum(out.values()) 混算 float + Decimal 炸 TypeError；讀取端就近轉型。
+        out[row["src"]] = float(row["amount"])
     out["total"] = round(sum(out.values()), 2)
     return out
 
@@ -610,8 +631,11 @@ def _brand_level_rows(conn, brand_id: str) -> list:
         " AND quarantined = false ORDER BY created_at", (brand_id,),
     ).fetchall()]
     for row in rows:
-        start_month = (row["date_range_start"] or "")[:7]  # YYYY-MM
-        end_month = (row["date_range_end"] or "")[:7]
+        # BUG 修復（route=C 02-3c，app/ads/performance.py:613/614）：date_range_start/end
+        # 是 Postgres date 欄位讀回來的 datetime.date 物件，不能直接切片；SQLite 沒有
+        # 真正的 date 型別才會是字串。用 _date_str() 單一收口轉成 ISO 字串再切月份。
+        start_month = _date_str(row["date_range_start"])[:7]  # YYYY-MM
+        end_month = _date_str(row["date_range_end"])[:7]
         row["cross_month"] = bool(start_month) and start_month != end_month
     return _drop_superseded_cross_month_rows(rows)
 
@@ -632,7 +656,7 @@ def _brand_level_monthly_groups(conn, brand_id: str) -> dict:
     沒有可用日期的列跳過，不硬湊月份。"""
     grouped: dict = {}
     for row in _brand_level_rows(conn, brand_id):
-        end_month = (row["date_range_end"] or "")[:7]
+        end_month = _date_str(row["date_range_end"])[:7]
         if len(end_month) != 7:
             continue
         grouped.setdefault(end_month, []).append(row)
@@ -703,11 +727,14 @@ def brand_level_totals(conn, brand_id: str) -> dict:
     """
     rows = _brand_level_rows(conn, brand_id)
     revenue_values = [r["revenue"] for r in rows if r["revenue"] is not None]
-    revenue_raw = sum(revenue_values) if revenue_values else None
+    # BUG 修復（route=C 02-3c，同 totals() 那個既有收口模式）：spend/revenue 是 numeric
+    # 欄位加總出來的 Decimal，讀取端單一收口轉 float，compute_kpis() 才不會 Decimal
+    # 跟 float（conversions 是 double precision）混算炸 TypeError。
+    revenue_raw = float(sum(revenue_values)) if revenue_values else None
     row = {
         "impressions": sum(r["impressions"] or 0 for r in rows),
         "clicks": sum(r["clicks"] or 0 for r in rows),
-        "spend": sum(r["spend"] or 0 for r in rows),
+        "spend": float(sum(r["spend"] or 0 for r in rows)),
         "conversions": sum(r["conversions"] or 0 for r in rows),
         "revenue": revenue_raw or 0,
         "rows": len(rows),
@@ -740,7 +767,11 @@ def brand_period_spend(conn, brand_id: str, since: str, until: str) -> Optional[
         " AND date_range_end >= %s AND date_range_end <= %s",
         (brand_id, since, until),
     ).fetchone()
-    return row["spend"] if row["rows"] else None
+    if not row["rows"]:
+        return None
+    # BUG 修復（route=C 02-3c，牽連 app/dashboard/repository.py:248 的 _roas()）：
+    # SUM(spend) 讀回來是 Decimal，違反自己宣告的 -> Optional[float]。
+    return float(row["spend"])
 
 
 def last_snapshot_at(conn, brand_id: str) -> Optional[str]:
@@ -751,7 +782,12 @@ def last_snapshot_at(conn, brand_id: str) -> Optional[str]:
         "SELECT MAX(snapshot_taken_at) AS ts FROM performance_snapshot WHERE brand_id = %s",
         (brand_id,),
     ).fetchone()
-    return row["ts"] if row and row["ts"] else None
+    if not row or not row["ts"]:
+        return None
+    # BUG 修復（route=C 02-3c，牽連 app/dashboard/repository.py:364）：snapshot_taken_at
+    # 是 timestamptz，Postgres 讀回來是 datetime，違反自己宣告的 -> Optional[str]；
+    # 呼叫端（dashboard._is_data_stale() 的 [:10] 切片）要的是字串。
+    return row["ts"].isoformat()
 
 
 # delete_snapshots／list_snapshots 純搬去 performance_batches.py（票 S1-01：加 batch_id

@@ -34,23 +34,7 @@ _GA4_SCRIPT_ONLY_HTML = "<html><script src='https://www.googletagmanager.com/gta
 _PIXEL_SCRIPT_ONLY_HTML = "<html><script src='https://connect.facebook.net/en_US/fbevents.js'></script></html>"
 
 
-# BUG app/orders/channel.py:164 — pharmacy_latest_batch() 宣告回傳 Optional[str]，
-# 但 row["batch_date"] 現在是 psycopg 自動轉出的 date 物件，不是字串（同一類 BUG，orders
-# 群組已在 channel.py:183 標過一次，這是同一個檔案的另一個函式）。
-_BUG_PHARMACY_DATE_NOT_STR = pytest.mark.xfail(
-    strict=True,
-    reason="BUG app/orders/channel.py:164 — pharmacy_latest_batch() 宣告 Optional[str]"
-           "卻回傳 date 物件，比對字串時 AssertionError",
-)
 
-# BUG app/ads/routes_progress.py:96 — _progress_run() 在自己開的 threading.Thread 裡執行
-# work()，contextvar 綁定的連線不會被子執行緒繼承，背景任務裡任何 DB 呼叫都炸
-# RuntimeError: no connection bound（同一個 BUG，ads 群組已標過）。
-_BUG_PROGRESS_THREAD_NO_CONNECTION = pytest.mark.xfail(
-    strict=True,
-    reason="BUG app/ads/routes_progress.py:96 — 背景 thread 沒繼承 contextvar 綁定的連線，"
-           "work() 裡任何 DB 呼叫都是 RuntimeError: no connection bound",
-)
 
 
 class TrackingHealthBase(unittest.TestCase):
@@ -275,7 +259,6 @@ class TrackingHealthAssemblyTest(TrackingHealthBase):
         self.assertEqual(ig["status"], "ok")
         self.assertEqual(health["ready"], 2)
 
-    @_BUG_PHARMACY_DATE_NOT_STR
     def test_shopee_pharmacy_ready_after_import_with_latest_date(self):
         orders_channel.save_shopee_rows(
             main.conn, self.bid,
@@ -354,7 +337,6 @@ class TrackingHealthApiTest(TrackingHealthBase):
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(response.json()["data"], fake_node)
 
-    @_BUG_PROGRESS_THREAD_NO_CONNECTION
     def test_recheck_runs_in_background_and_updates_stored_state(self):
         """契約 1.7：背景執行，完成後 GET tracking-health 原地反映新結果。"""
         self.add_channel("website", identifier="https://example.test")

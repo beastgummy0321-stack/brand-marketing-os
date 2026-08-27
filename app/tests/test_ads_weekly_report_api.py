@@ -21,18 +21,6 @@ from app.core.db import new_id, now_iso
 ACTOR = "測試員"
 TODAY = "2026-08-17"
 
-_BUG_INTERRUPT_IS_PARAM = pytest.mark.xfail(
-    strict=True,
-    reason='BUG app/core/interrupts.py:99 — enqueue() dedup 查詢用 "brand_id IS %s"，'
-           "Postgres 的 IS 不接受綁參數，一律 psycopg.errors.SyntaxError",
-)
-_BUG_MAX_FREQUENCY_GROUP_BY = pytest.mark.xfail(
-    strict=True,
-    reason="BUG app/ads/reading_assets.py:118 — max_frequency_by_asset() 的 "
-           "GROUP BY pkg.id 沒有涵蓋 LEFT JOIN 進來的 cell.creative_angle（不像 pkg.ad_name "
-           "那樣可以靠 pkg.id 的主鍵函數相依性豁免），Postgres 拒絕，"
-           "psycopg.errors.GroupingError",
-)
 
 
 def _seed_cell(conn, brand_id: str, cycle_id: str, *, creative_angle: str,
@@ -158,7 +146,6 @@ class WeeklyReportTest(unittest.TestCase):
             [],
         )
 
-    @_BUG_INTERRUPT_IS_PARAM
     def test_ready_report_is_enqueued_once_and_weekly_engine_uses_the_same_run(self):
         with self._report_sources():
             first = weekly_reports.enqueue_if_ready(
@@ -281,7 +268,6 @@ class NewCycleDirectionApiTest(unittest.TestCase):
             "label": "沿用上期贏家：實證成分（ROAS 4.30）",
         })
 
-    @_BUG_MAX_FREQUENCY_GROUP_BY
     def test_signed_learning_naming_no_cell_shows_generic_wording_not_a_code(self):
         """票 F11 done-check 4：真實情境重現（不 mock `nextcycle`／`carry_forward`）——
         品牌歷史只有代號形狀的切角（`normal_1`／`fatigue`／`bad_cvr`），簽核學習的句子

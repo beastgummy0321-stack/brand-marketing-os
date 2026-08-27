@@ -19,13 +19,6 @@ from app.brand_intelligence import repository as bi_repo
 from app.core import db, interrupts as core_interrupts
 from app.core.db import new_id, now_iso
 
-_BUG_PROGRESS_THREAD_NO_CONN = pytest.mark.xfail(
-    strict=True,
-    reason="BUG app/ads/routes_progress.py:96 — _progress_run() 把 work() 丟進"
-           "threading.Thread 執行，contextvar 綁定的連線不會跨執行緒繼承，第一次 DB 呼叫"
-           "就 RuntimeError: no connection bound，_progress_run 的 except 把它吞成"
-           "{'status': 'failed', ...}，這裡看到的是 status 卡在 failed 而不是 done",
-)
 
 
 ACTOR = "測試員"
@@ -163,7 +156,6 @@ class WeeklyActionApiTest(unittest.TestCase):
         )
         self.assertEqual([card["grade"] for card in data["proposals"]], ["spend"])
 
-    @_BUG_PROGRESS_THREAD_NO_CONN
     def test_rejudge_runs_in_background_and_queues_completion_interrupt(self):
         status_url = f"{self.base}/rejudge/status"
         with (

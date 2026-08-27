@@ -63,15 +63,6 @@ atexit.register(_cleanup)
 
 ACTOR = "測試員"
 
-# BUG app/ads/proposal.py:169 — approve() 建 task_card 時 "done": 0（整數字面值），
-# 不是 False；Postgres 的 done 欄位是 boolean，一律 psycopg.errors.DatatypeMismatch
-# （同一個 BUG，ads 群組已標過）。approve() 是本檔每個測試的必經路徑。
-_BUG_DONE_INT_LITERAL = pytest.mark.xfail(
-    strict=True,
-    reason='BUG app/ads/proposal.py:169 — approve() 建 task_card 時 "done": 0'
-           "（整數字面值，不是 False），Postgres boolean 欄位一律"
-           " psycopg.errors.DatatypeMismatch",
-)
 
 
 def _poll(client, url, timeout=3.0):
@@ -141,7 +132,6 @@ class _Base(unittest.TestCase):
         return cell_id
 
 
-@_BUG_DONE_INT_LITERAL
 class ApproveReturnsPromptlyTest(_Base):
     def test_approve_returns_before_generation_finishes(self):
         """驗收 1：approve 這次請求不等生成跑完——不是靠量時間，而是直接證明生成被丟到
@@ -168,7 +158,6 @@ class ApproveReturnsPromptlyTest(_Base):
         _poll(self.client, self.status_url)  # 收尾：讓背景執行緒真的跑完，不留尾巴給下一測試
 
 
-@_BUG_DONE_INT_LITERAL
 class StatusPollingTest(_Base):
     def test_status_reports_running_then_done_without_manual_reload(self):
         """驗收 2：輪詢端點 running → done。"""
@@ -190,7 +179,6 @@ class StatusPollingTest(_Base):
         self.assertEqual(done["status"], "done")
 
 
-@_BUG_DONE_INT_LITERAL
 class GenerationFailureDoesNotRetractApprovalTest(_Base):
     def test_generation_exception_reports_failed_but_approval_still_stands(self):
         """驗收 3：生成炸掉回報 failed，但核可本身（D2）不受影響。"""
@@ -209,7 +197,6 @@ class GenerationFailureDoesNotRetractApprovalTest(_Base):
         self.assertTrue(approval["approved"], "生成失敗不該撤銷已經生效的核可")
 
 
-@_BUG_DONE_INT_LITERAL
 class BudgetStoppedWithZeroThemesTest(_Base):
     def test_budget_stopped_with_no_themes_reports_ceiling_plainly(self):
         """票 13 第三審查的 blocker：`budget_stopped=True` 且一個主題都沒生出來——AI 花費
@@ -232,7 +219,6 @@ class BudgetStoppedWithZeroThemesTest(_Base):
         self.assertTrue(approval["approved"], "撞到花費上限不該撤銷已經生效的核可")
 
 
-@_BUG_DONE_INT_LITERAL
 class BudgetStoppedWithSomeThemesTest(_Base):
     def test_budget_stopped_with_some_themes_reports_how_many_were_made(self):
         """`budget_stopped=True` 但部分主題已經做出來——訊息要講出做了幾份，不是只講
@@ -254,7 +240,6 @@ class BudgetStoppedWithSomeThemesTest(_Base):
         self.assertTrue(approval["approved"])
 
 
-@_BUG_DONE_INT_LITERAL
 class PartialErrorsReportSuccessAndFailureCountsTest(_Base):
     def test_some_generations_failed_reports_counts_without_raw_error_text(self):
         """`errors` 非空、`budget_stopped=False`——不是費用問題，是個別生成本身出狀況。
@@ -280,7 +265,6 @@ class PartialErrorsReportSuccessAndFailureCountsTest(_Base):
         self.assertTrue(approval["approved"])
 
 
-@_BUG_DONE_INT_LITERAL
 class ProgressCeilingScalesWithGenerationCountTest(_Base):
     """線上付費手測抓到的第一個真實缺陷（不是被造假 provider 蓋過去的那種）：8 次生成
     序列跑，`llm_task` 實測每次 23～31 秒，全批約 215 秒；`_PROGRESS_TIMEOUT_SECONDS`

@@ -1565,8 +1565,11 @@ def learning_ledger_entry_exists(conn: Conn, brand_id: str,
     `_normalize_learning_text`）是否已經進過帳（修憲落地 G4，決策 0035 第三節第 8 點：
     `_ledger_confidence` 判斷用）。已知限制（票 F3，記錄不修）：`product_id IS ?` 精確比對，同一句話掛在不同 product_id 下不會互相偵測成重複。"""
     normalized = _normalize_learning_text(learning_text)
+    # BUG 修復（route=C 02-3c）：同 app/core/interrupts.py:99——Postgres 的 IS 不接受
+    # 綁參數，改用 IS NOT DISTINCT FROM（NULL 對 NULL 一樣判真）。
     rows = conn.execute(
-        "SELECT learning_text FROM learning_ledger WHERE brand_id = %s AND product_id IS %s",
+        "SELECT learning_text FROM learning_ledger WHERE brand_id = %s"
+        " AND product_id IS NOT DISTINCT FROM %s",
         (brand_id, product_id),
     ).fetchall()
     return any(_normalize_learning_text(row["learning_text"]) == normalized for row in rows)

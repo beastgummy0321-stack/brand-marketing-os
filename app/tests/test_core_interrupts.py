@@ -19,17 +19,6 @@ import pytest
 from app.core import db
 from app.core import interrupts as core_interrupts
 
-# BUG app/core/interrupts.py:99 — enqueue() 的去重查詢用 "brand_id IS %s"，這是 SQLite
-# `IS` 運算子（可以綁參數、對 NULL／非 NULL 都成立）的寫法；Postgres 的 `IS` 只接受
-# NULL/TRUE/FALSE/UNKNOWN 字面值，不接受綁參數，一律 psycopg.errors.SyntaxError。
-# 每一個成功呼叫 enqueue() 的測試都會炸在這裡（brand_id 是不是 None 都一樣）——
-# 02-4 是測試轉移票，不改 app/core/*.py，這裡列成已知缺陷、標 xfail，等後續票修正
-# production code（正確寫法應是 "brand_id IS NOT DISTINCT FROM %s"）。
-_BUG_INTERRUPT_IS_PARAM = pytest.mark.xfail(
-    strict=True,
-    reason='BUG app/core/interrupts.py:99 — enqueue() dedup 查詢用 "brand_id IS %s"，'
-           "Postgres 的 IS 不接受綁參數，一律 psycopg.errors.SyntaxError",
-)
 
 
 class InterruptQueueTest(unittest.TestCase):
@@ -58,7 +47,6 @@ class InterruptQueueTest(unittest.TestCase):
                 message="測試", brand_id=self.brand_id,
             )
 
-    @_BUG_INTERRUPT_IS_PARAM
     def test_same_dedupe_key_enqueued_twice_leaves_one_row(self):
         """同去重鍵連塞兩次只留一筆（驗收條件的 assert 自檢）。"""
         first = self._enqueue()
@@ -74,7 +62,6 @@ class InterruptQueueTest(unittest.TestCase):
         assert rows["c"] == 1, f"同去重鍵應只留一筆，實際 {rows['c']} 筆"
         self.assertEqual(rows["c"], 1)
 
-    @_BUG_INTERRUPT_IS_PARAM
     def test_same_dedupe_key_different_brands_both_kept(self):
         """票 M6：兩個品牌用同一把 dedupe_key，兩則提醒都要各自留存，不能被對方吞掉
         （修憲落地體檢 19 第三節找到的品牌隔離缺陷：唯一索引原本只建在 dedupe_key 上）。"""
@@ -101,7 +88,6 @@ class InterruptQueueTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             self._enqueue(message="這句話刻意寫得非常非常非常非常非常非常非常長超過三十個全形字上限")
 
-    @_BUG_INTERRUPT_IS_PARAM
     def test_severity_is_looked_up_not_self_reported(self):
         """enqueue() 沒有 severity 參數：值只能由 category 反查 CATEGORIES 表得出。"""
         interrupt_id = self._enqueue()
@@ -112,7 +98,6 @@ class InterruptQueueTest(unittest.TestCase):
         self.assertEqual(row["severity"], core_interrupts.CATEGORIES["cycle_reminder"]["severity"])
         self.assertEqual(row["severity"], "informational")
 
-    @_BUG_INTERRUPT_IS_PARAM
     def test_list_open_sorted_by_severity_then_created_at(self):
         # cycle_reminder 目前是唯一登記的類別（severity=informational），這裡至少驗證
         # 同嚴重度內按建立順序排序（同級按行動價值的退化情況：無其他類別可比較時退回時間序）。
@@ -123,7 +108,6 @@ class InterruptQueueTest(unittest.TestCase):
         open_items = core_interrupts.list_open(self.conn, brand_id=self.brand_id)
         self.assertEqual([i["id"] for i in open_items], [first, second])
 
-    @_BUG_INTERRUPT_IS_PARAM
     def test_resolve_moves_item_to_done_and_writes_audit(self):
         interrupt_id = self._enqueue()
         self.conn.commit()
@@ -142,14 +126,12 @@ class InterruptQueueTest(unittest.TestCase):
         self.assertEqual(audit_row["actor"], "測試員")
         self.assertEqual(audit_row["action"], "resolve")
 
-    @_BUG_INTERRUPT_IS_PARAM
     def test_resolve_requires_actor(self):
         interrupt_id = self._enqueue()
         self.conn.commit()
         with self.assertRaises(ValueError):
             core_interrupts.resolve(self.conn, interrupt_id, actor="")
 
-    @_BUG_INTERRUPT_IS_PARAM
     def test_visible_from_hides_item_until_due(self):
         future = (date.today() + timedelta(days=5)).isoformat()
         interrupt_id = self._enqueue(visible_from=future)
@@ -163,7 +145,6 @@ class InterruptQueueTest(unittest.TestCase):
         self.assertNotIn(interrupt_id, open_ids)
         self.assertIn(due_today, open_ids)
 
-    @_BUG_INTERRUPT_IS_PARAM
     def test_stale_informational_item_auto_archives(self):
         """資訊性項目逾期自動降級封存，不再佔待辦清單（驗收條件）。"""
         interrupt_id = self._enqueue()
@@ -178,7 +159,6 @@ class InterruptQueueTest(unittest.TestCase):
         self.assertEqual([d["id"] for d in done], [interrupt_id])
         self.assertEqual(done[0]["status"], "archived")
 
-    @_BUG_INTERRUPT_IS_PARAM
     def test_current_card_is_the_first_open_item_or_none(self):
         self.assertIsNone(core_interrupts.current_card(self.conn, brand_id=self.brand_id))
         interrupt_id = self._enqueue()

@@ -29,18 +29,6 @@ from app.orders import repository as orders_repo
 
 ACTOR = "測試員"
 
-_BUG_REVENUE_BY_SOURCE_DECIMAL_FLOAT = pytest.mark.xfail(
-    strict=True,
-    reason="BUG app/ads/performance.py:481 — revenue_by_source() 的 "
-           "out = {'reported': 0.0, 'roas_derived': 0.0, 'unknown': 0.0}（float 預設值）"
-           "跟 out[row['src']] = row['amount']（Decimal，COALESCE(SUM(revenue), 0) 的"
-           "numeric 聚合結果）混在同一個 dict，round(sum(out.values()), 2) 一律 TypeError",
-)
-_BUG_EMPTY_DATE_STRING = pytest.mark.xfail(
-    strict=True,
-    reason="BUG app/ads/performance.py:364 — import_rows() 沒帶日期時送空字串 \"\" 給"
-           "date 欄位，SQLite 對空字串寬容，Postgres 一律 psycopg.errors.InvalidDatetimeFormat",
-)
 
 
 def _order(order_number, order_date, total_amount, voucher_code=None):
@@ -81,7 +69,6 @@ class _BaseInflationTest(unittest.TestCase):
 
 
 class RevenueSourceTaggingTest(_BaseInflationTest):
-    @_BUG_EMPTY_DATE_STRING
     def test_direct_revenue_column_is_tagged_reported(self):
         cycle = self._cycle("2026-06-01")
         csv_text = "行銷活動名稱,花費金額,購買轉換價值\n虛構檔期,1000,5000\n"
@@ -89,7 +76,6 @@ class RevenueSourceTaggingTest(_BaseInflationTest):
         row = ads_performance.list_snapshots(main.conn, self.bid, cycle["id"])[0]
         self.assertEqual(row["revenue_source"], "reported")
 
-    @_BUG_EMPTY_DATE_STRING
     def test_roas_derived_revenue_is_tagged_roas_derived(self):
         cycle = self._cycle("2026-06-01")
         csv_text = "行銷活動名稱,花費金額,成果 ROAS\n虛構檔期,1000,1.5\n"
@@ -98,7 +84,6 @@ class RevenueSourceTaggingTest(_BaseInflationTest):
         self.assertEqual(row["revenue_source"], "roas_derived")
         self.assertAlmostEqual(row["revenue"], 1500.0)
 
-    @_BUG_EMPTY_DATE_STRING
     def test_missing_revenue_has_no_source(self):
         cycle = self._cycle("2026-06-01")
         csv_text = "行銷活動名稱,花費金額\n虛構檔期,1000\n"
@@ -106,7 +91,6 @@ class RevenueSourceTaggingTest(_BaseInflationTest):
         row = ads_performance.list_snapshots(main.conn, self.bid, cycle["id"])[0]
         self.assertIsNone(row["revenue_source"])
 
-    @_BUG_EMPTY_DATE_STRING
     def test_revenue_by_source_breaks_down_the_totals(self):
         cycle = self._cycle("2026-06-01")
         ads_performance.import_csv(
@@ -145,7 +129,6 @@ class RevenueSourceTaggingTest(_BaseInflationTest):
 
 
 class ReconcileCycleTest(_BaseInflationTest):
-    @_BUG_EMPTY_DATE_STRING
     def test_no_orders_at_all_is_honestly_unreconcilable(self):
         cycle = self._cycle("2026-06-01")
         ads_codes.generate_codes(main.conn, self.bid, cycle["id"], discount_type="percent",
@@ -165,7 +148,6 @@ class ReconcileCycleTest(_BaseInflationTest):
         self.assertFalse(result["available"])
         self.assertIn("沒有配廣告碼", result["reason"])
 
-    @_BUG_REVENUE_BY_SOURCE_DECIMAL_FLOAT
     def test_reconciles_meta_vs_net_attributed_order_revenue(self):
         cycle = self._with_codes_and_data(
             self._cycle("2026-06-01"), meta_revenue=1000, order_revenue=1200)
@@ -177,7 +159,6 @@ class ReconcileCycleTest(_BaseInflationTest):
 
 
 class CalibrationTest(_BaseInflationTest):
-    @_BUG_REVENUE_BY_SOURCE_DECIMAL_FLOAT
     def test_first_calibration_is_not_reliable_below_sample_threshold(self):
         cycle = self._with_codes_and_data(
             self._cycle("2026-06-01"), meta_revenue=1000, order_revenue=1000)
@@ -191,7 +172,6 @@ class CalibrationTest(_BaseInflationTest):
         self.assertEqual(effective["coefficient"], ads_inflation.DEFAULT_COEFFICIENT)
         self.assertIn("不可靠", effective["note"])
 
-    @_BUG_REVENUE_BY_SOURCE_DECIMAL_FLOAT
     def test_reaching_threshold_makes_it_reliable_and_logs_ex_post_error(self):
         for i in range(ads_inflation.SAMPLE_THRESHOLD):
             cycle = self._with_codes_and_data(
@@ -211,7 +191,6 @@ class CalibrationTest(_BaseInflationTest):
         for row in errors:
             self.assertAlmostEqual(row["error_pct"], 0.0)
 
-    @_BUG_REVENUE_BY_SOURCE_DECIMAL_FLOAT
     def test_previous_version_gets_valid_to_closed(self):
         cycle1 = self._with_codes_and_data(
             self._cycle("2026-06-01"), meta_revenue=1000, order_revenue=1000)
@@ -250,7 +229,6 @@ class CadenceTest(_BaseInflationTest):
         self.assertIsNone(state["days_since_last"])
         self.assertEqual(state["confidence_label"], "尚未校準")
 
-    @_BUG_REVENUE_BY_SOURCE_DECIMAL_FLOAT
     def test_stable_errors_downgrade_to_quarterly(self):
         """連續 STABILITY_WINDOW 次事後誤差都在容忍範圍內才降頻——規則判定，非 LLM。"""
         months = ["2026-06-01", "2026-07-01", "2026-08-01", "2026-09-01"]
@@ -267,7 +245,6 @@ class CadenceTest(_BaseInflationTest):
         far_future = ads_inflation.cadence_state(main.conn, self.bid, today="2027-01-01")
         self.assertTrue(far_future["due"])
 
-    @_BUG_REVENUE_BY_SOURCE_DECIMAL_FLOAT
     def test_unstable_errors_stay_per_cycle(self):
         cycle1 = self._with_codes_and_data(
             self._cycle("2026-06-01"), meta_revenue=1000, order_revenue=1000)
@@ -280,7 +257,6 @@ class CadenceTest(_BaseInflationTest):
         self.assertEqual(state["cadence"], "per_cycle")
         self.assertTrue(state["due"])
 
-    @_BUG_REVENUE_BY_SOURCE_DECIMAL_FLOAT
     def test_downgrade_to_quarterly_enqueues_a_future_reminder(self):
         months = ["2026-06-01", "2026-07-01", "2026-08-01", "2026-09-01"]
         for start in months:
@@ -304,7 +280,6 @@ class DataGradeTest(_BaseInflationTest):
         self.assertEqual(grade["kind"], "meta_only")
         self.assertEqual(grade["label"], "Meta 視角判讀")
 
-    @_BUG_REVENUE_BY_SOURCE_DECIMAL_FLOAT
     def test_reaching_sample_threshold_upgrades_to_calibrated(self):
         for i in range(ads_inflation.SAMPLE_THRESHOLD):
             cycle = self._with_codes_and_data(
@@ -383,7 +358,6 @@ class GA4LeakEstimateTest(_BaseInflationTest):
 
 
 class CascadeTest(_BaseInflationTest):
-    @_BUG_REVENUE_BY_SOURCE_DECIMAL_FLOAT
     def test_deleting_cycle_only_detaches_coefficient_history(self):
         cycle = self._with_codes_and_data(
             self._cycle("2026-06-01"), meta_revenue=1000, order_revenue=1000)

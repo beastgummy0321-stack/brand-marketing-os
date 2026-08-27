@@ -28,17 +28,6 @@ from app.llm.providers import FakeProvider, ProviderResponse, Usage  # noqa: E40
 
 _SEQ = [0]
 
-# BUG app/brand_intelligence/background_job.py:59 — JobRegistry.start() 起的
-# threading.Thread 沒有包 with coredb.connection()，背景工作裡任何 DB 呼叫都會
-# RuntimeError: no connection bound（症狀：_poll() 逾時，因為 job 狀態卡在 "running"
-# 永遠不會變 "done"/"failed"，crash 發生在寫回狀態之前）。任何實際等背景工作跑完的
-# 測試都會中這個既有缺陷；02-4 是測試轉移票，不改 app/intake|brand_intelligence/*.py。
-_BUG_BACKGROUND_JOB_NO_CONN = pytest.mark.xfail(
-    strict=True,
-    reason="BUG app/brand_intelligence/background_job.py:59 — JobRegistry.start() 起的 "
-           "thread 沒有包 with coredb.connection()，背景工作內 DB 呼叫一律 "
-           "RuntimeError: no connection bound，job 狀態永遠停在 running，_poll() 逾時",
-)
 
 
 def _fake_response(text: str) -> ProviderResponse:
@@ -216,7 +205,6 @@ class DraftShapeTest(_Base):
 # ---------------------------------------------------------------------------
 
 class ScanBackgroundTest(_Base):
-    @_BUG_BACKGROUND_JOB_NO_CONN
     def test_start_returns_immediately_then_completes_and_notifies(self):
         bid = self._create_full()
         intake_ai.PROVIDER = FakeProvider(response=_fake_response(_SCAN_OK))
@@ -240,7 +228,6 @@ class ScanBackgroundTest(_Base):
         self.assertIn("初掃完成", matches[0]["message"])
         self.assertLessEqual(len(matches[0]["message"]), core_interrupts.MAX_MESSAGE_LEN)
 
-    @_BUG_BACKGROUND_JOB_NO_CONN
     def test_failure_notifies_with_human_error(self):
         from app.llm.providers import MISSING_KEY_MESSAGE, AnthropicProvider
         bid = self._create_full()
@@ -256,7 +243,6 @@ class ScanBackgroundTest(_Base):
         self.assertEqual(len(matches), 1)
         self.assertIn("初掃失敗", matches[0]["message"])
 
-    @_BUG_BACKGROUND_JOB_NO_CONN
     def test_idempotent_second_start_does_not_restart(self):
         import threading
         bid = self._create_full()
@@ -287,7 +273,6 @@ class ScanBackgroundTest(_Base):
         self.assertEqual(status["status"], "done")
         self.assertEqual(len(intake_ai.PROVIDER.calls), 1)  # 沒有跑出第二個背景執行緒
 
-    @_BUG_BACKGROUND_JOB_NO_CONN
     def test_already_done_is_noop(self):
         bid = self._create_full()
         intake_ai.PROVIDER = FakeProvider(response=_fake_response(_SCAN_OK))
@@ -323,7 +308,6 @@ class ScanBackgroundTest(_Base):
         status = self.client.get(f"/api/intake/brands/{bid}/scan/status").json()["data"]
         self.assertEqual(status["status"], "done")
 
-    @_BUG_BACKGROUND_JOB_NO_CONN
     def test_scan_create_products(self):
         bid = self._create_full()
         scan_with_products = json.dumps({
@@ -357,7 +341,6 @@ class QuestionBackgroundTest(_Base):
         self._poll(bid, "scan")
         return bid
 
-    @_BUG_BACKGROUND_JOB_NO_CONN
     def test_start_then_answer_flow_and_no_notification(self):
         bid = self._scanned_brand()
         # 掃描那一步本來就會通知一筆，先記下基準，確認出題完成「沒有」再多一筆
@@ -385,7 +368,6 @@ class QuestionBackgroundTest(_Base):
         self.assertEqual(draft["answers"][0]["note"], "補充意見")
         self.assertIsNone(draft["current_q"])
 
-    @_BUG_BACKGROUND_JOB_NO_CONN
     def test_answer_without_choice_selected_errors(self):
         bid = self._scanned_brand()
         intake_ai.PROVIDER = FakeProvider(response=_fake_response(_question_json(0)))
@@ -395,7 +377,6 @@ class QuestionBackgroundTest(_Base):
                                 json={"choice": "", "note": ""})
         self.assertEqual(resp.status_code, 400)  # COPY trim：精確中文文案不測
 
-    @_BUG_BACKGROUND_JOB_NO_CONN
     def test_answer_other_without_note_errors(self):
         bid = self._scanned_brand()
         intake_ai.PROVIDER = FakeProvider(response=_fake_response(_question_json(0)))
@@ -405,7 +386,6 @@ class QuestionBackgroundTest(_Base):
                                 json={"choice": "other", "note": ""})
         self.assertEqual(resp.status_code, 400)  # COPY trim：精確中文文案不測
 
-    @_BUG_BACKGROUND_JOB_NO_CONN
     def test_question_failure_does_not_notify(self):
         from app.llm.providers import AnthropicProvider
         bid = self._scanned_brand()
@@ -417,14 +397,12 @@ class QuestionBackgroundTest(_Base):
         after = len(core_interrupts.list_open(web.conn, brand_id=bid))
         self.assertEqual(after, before)
 
-    @_BUG_BACKGROUND_JOB_NO_CONN
     def test_skip_remaining_marks_qa_done(self):
         bid = self._scanned_brand()
         resp = self.client.post(f"/api/intake/brands/{bid}/question/skip-remaining")
         self.assertEqual(resp.status_code, 204)
         self.assertTrue(state.get_draft(bid)["qa_done"])
 
-    @_BUG_BACKGROUND_JOB_NO_CONN
     def test_aspect_is_saved_and_next_prompt_lists_coverage(self):
         bid = self._scanned_brand()
         intake_ai.PROVIDER = FakeProvider(response=_fake_response(_question_json(0, "價格帶")))
@@ -445,7 +423,6 @@ class QuestionBackgroundTest(_Base):
         self.assertIn("未覆蓋面向：產品線、客群、語調、法規風險", sent)
         self.assertEqual(state.current_entry(state.get_draft(bid))["aspect"], "客群")
 
-    @_BUG_BACKGROUND_JOB_NO_CONN
     def test_done_is_rejected_while_aspects_are_uncovered(self):
         bid = self._scanned_brand()
         intake_ai.PROVIDER = FakeProvider(response=_fake_response(_question_json(0, "產品線")))
@@ -463,7 +440,6 @@ class QuestionBackgroundTest(_Base):
                          "還有 4 個面向沒問到：價格帶、客群、語調、法規風險。請繼續出題。")
         self.assertFalse(state.get_draft(bid)["qa_done"])
 
-    @_BUG_BACKGROUND_JOB_NO_CONN
     def test_eight_legacy_questions_hard_stop_without_calling_ai(self):
         bid = self._scanned_brand()
         draft = state.get_draft(bid)
@@ -494,7 +470,6 @@ class BudgetTest(_Base):
         self.assertEqual(
             self.client.post(f"/api/intake/brands/{bid}/budget", json={"limit": "abc"}).status_code, 400)
 
-    @_BUG_BACKGROUND_JOB_NO_CONN
     def test_set_below_spent_rejected(self):
         bid = self._create_full()
         intake_ai.PROVIDER = FakeProvider(response=_fake_response(_SCAN_OK))
@@ -511,7 +486,6 @@ class BudgetTest(_Base):
         self.assertEqual(resp.status_code, 204)
         self.assertEqual(state.get_draft(bid)["budget_limit"], 55.0)
 
-    @_BUG_BACKGROUND_JOB_NO_CONN
     def test_raise_restarts_the_blocked_job(self):
         bid = self._create_full()
         self.client.post(f"/api/intake/brands/{bid}/budget", json={"limit": 0.05})

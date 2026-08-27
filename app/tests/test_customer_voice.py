@@ -22,21 +22,6 @@ from app.llm import providers
 
 ACTOR = "測試員"
 
-# BUG app/brand_intelligence/background_job.py:59 — JobRegistry.start() 用
-# threading.Thread(target=target, ...).start() 起背景執行緒，但 contextvars 不會被
-# 原生 threading.Thread 繼承（只有 asyncio task／contextvars.Context.run() 才會複製）。
-# 任何 job target 只要碰 web.conn／db.current()（本檔的 _run_customer_voice_job、
-# routes_products.py 的研究 job 亦同），一啟動就撞
-# RuntimeError: no connection bound; use db.connection()，job 永遠卡在 running，
-# 不會變成 done／failed。02-4 是測試轉移票，不改 app/brand_intelligence/*.py，
-# 這裡列成已知缺陷、標 xfail，等後續票修正 production code（正確寫法：target 內部自己
-# 包一層 `with coredb.connection():`，比照 app/main.py 的 _auto_sync_loop）。
-_BUG_BACKGROUND_JOB_NO_CONN = pytest.mark.xfail(
-    strict=True,
-    reason="BUG app/brand_intelligence/background_job.py:59 — JobRegistry.start()'s "
-           "threading.Thread target doesn't bind a pooled connection; any DB call in the "
-           "job raises RuntimeError: no connection bound",
-)
 
 
 def _items(tag: str) -> list:
@@ -179,7 +164,6 @@ class CustomerVoiceHttpTest(unittest.TestCase):
         self.assertEqual(resp.status_code, 400)
         self.assertEqual(len(fake.calls), 0)
 
-    @_BUG_BACKGROUND_JOB_NO_CONN
     def test_post_creates_and_redirects_to_list(self):
         bid = self._new_brand("山嵐選物-新增成功")
         with mock.patch.object(customer_voice, "PROVIDER", _fake(_items("山嵐"))):

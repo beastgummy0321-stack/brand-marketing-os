@@ -56,18 +56,9 @@ class _BaseReconcileTest(unittest.TestCase):
                    "other_campaign_running": None}
 
 
-# BUG app/ads/performance.py:364 — import_rows() 的 INSERT 對 date 欄位傳 ""，
-# Postgres 一律 psycopg.errors.InvalidDatetimeFormat（同一個 BUG，orders 群組已標過）。
-# perf.import_manual()／import_csv() 都吃這個 BUG，凡呼叫 self._spend() 的測試都中。
-_BUG_EMPTY_STRING_DATE = pytest.mark.xfail(
-    strict=True,
-    reason='BUG app/ads/performance.py:364 — import_rows() 的 INSERT 對 date 欄位傳 ""，'
-           "Postgres 一律 psycopg.errors.InvalidDatetimeFormat",
-)
 
 
 class ReconcileWiringTest(_BaseReconcileTest):
-    @_BUG_EMPTY_STRING_DATE
     def test_matching_spend_produces_no_findings(self):
         self._spend(10000)
         result = recon.run(main.conn, self.bid, self.cycle_id)
@@ -75,7 +66,6 @@ class ReconcileWiringTest(_BaseReconcileTest):
         self.assertEqual(result["confidence"], 1.0)
         self.assertEqual(result["label"], "可信")
 
-    @_BUG_EMPTY_STRING_DATE
     def test_overspend_is_caught_and_stored(self):
         self._spend(14000)
         result = recon.run(main.conn, self.bid, self.cycle_id)
@@ -85,7 +75,6 @@ class ReconcileWiringTest(_BaseReconcileTest):
         self.assertEqual(len(rows), 1)
         self.assertIn("多了", rows[0]["message"])
 
-    @_BUG_EMPTY_STRING_DATE
     def test_quarantined_rows_do_not_participate(self):
         """隔離區的壞資料不能拿去對帳，否則會對出假警報。"""
         self._spend(10000)
@@ -98,7 +87,6 @@ class ReconcileWiringTest(_BaseReconcileTest):
         result = recon.run(main.conn, self.bid, self.cycle_id)
         self.assertEqual(result["findings"], [])
 
-    @_BUG_EMPTY_STRING_DATE
     def test_rerun_replaces_instead_of_accumulating(self):
         self._spend(14000)
         recon.run(main.conn, self.bid, self.cycle_id)
@@ -106,7 +94,6 @@ class ReconcileWiringTest(_BaseReconcileTest):
         rows = ads_repo.list_findings(main.conn, self.bid, self.cycle_id, "reconciliation")
         self.assertEqual(len(rows), 1)
 
-    @_BUG_EMPTY_STRING_DATE
     def test_self_answers_add_findings_with_the_same_shape(self):
         self._spend(10000)
         result = recon.run(main.conn, self.bid, self.cycle_id,
@@ -122,7 +109,6 @@ class ReconcileWiringTest(_BaseReconcileTest):
 
 
 class ReconcilePageTest(_BaseReconcileTest):
-    @_BUG_EMPTY_STRING_DATE
     def test_answering_nothing_is_allowed(self):
         """自答是補充資訊，不是新的必經關卡——三題都不答也能按。"""
         self._spend(10000)
@@ -130,7 +116,6 @@ class ReconcilePageTest(_BaseReconcileTest):
                            self_answers=dict(self._UNANSWERED))
         self.assertEqual(result["findings"], [])
 
-    @_BUG_EMPTY_STRING_DATE
     def test_answers_flow_through_the_page(self):
         self._spend(10000)
         recon.run(main.conn, self.bid, self.cycle_id,

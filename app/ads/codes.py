@@ -137,8 +137,16 @@ def _mismatch_messages(planned: dict, actual: dict, label: str) -> list:
         out.append(f"{label}使用上限不符：規劃 {planned['usage_limit']}，後台填的是"
                    f"{actual.get('usage_limit') or '（未填）'}。")
 
-    actual_from = (actual.get("valid_from") or "").strip()
-    actual_to = (actual.get("valid_to") or "").strip()
+    # BUG 修復（route=C 02-3c，app/ads/codes.py:140）：actual 若是直接從 DB 讀回來組的
+    # dict（例如拿既有配碼原樣當「後台填的跟規劃一致」），valid_from/valid_to 會是
+    # datetime.date 物件而不是字串，.strip() 直接 AttributeError；date 物件跟字串
+    # 兩種來源都要接得住。
+    actual_from_raw = actual.get("valid_from")
+    actual_to_raw = actual.get("valid_to")
+    actual_from = (actual_from_raw.isoformat() if isinstance(actual_from_raw, date)
+                  else (actual_from_raw or "").strip())
+    actual_to = (actual_to_raw.isoformat() if isinstance(actual_to_raw, date)
+                else (actual_to_raw or "").strip())
     planned_from, planned_to = planned["valid_from"].isoformat(), planned["valid_to"].isoformat()
     if actual_from != planned_from or actual_to != planned_to:
         out.append(f"{label}效期不符：規劃 {planned_from}～{planned_to}，"
@@ -211,8 +219,11 @@ def _normalize_code(text: Optional[str]) -> str:
 
 
 def _revenue_summary(rows: list) -> dict:
+    # BUG 修復（route=C 02-3c，NEW，牽連 app/ads/inflation.py:83）：total_amount/
+    # refunded_amount 是 numeric 欄位讀回來的 Decimal，round(Decimal,2) 還是 Decimal；
+    # 呼叫端（inflation.py 的 order_revenue / meta_revenue）跟 float 算術會炸 TypeError。
     revenue = sum((r.get("total_amount") or 0) - (r.get("refunded_amount") or 0) for r in rows)
-    return {"count": len(rows), "net_revenue": round(revenue, 2)}
+    return {"count": len(rows), "net_revenue": round(float(revenue), 2)}
 
 
 def attribution_summary(conn, brand_id: str, cycle_id: str) -> dict:

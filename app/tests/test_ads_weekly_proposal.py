@@ -23,28 +23,6 @@ from app.llm.providers import FakeProvider, ProviderResponse, Usage
 ACTOR = "測試員"
 TODAY = date(2026, 8, 14)
 
-_BUG_INTERRUPT_IS_PARAM = pytest.mark.xfail(
-    strict=True,
-    reason='BUG app/core/interrupts.py:99 — enqueue() dedup 查詢用 "brand_id IS %s"，'
-           "Postgres 的 IS 不接受綁參數，一律 psycopg.errors.SyntaxError",
-)
-_BUG_MAX_FREQUENCY_GROUP_BY = pytest.mark.xfail(
-    strict=True,
-    reason="BUG app/ads/reading_assets.py:118 — max_frequency_by_asset() 的 "
-           "GROUP BY pkg.id 沒有涵蓋 LEFT JOIN 進來的 cell.creative_angle，Postgres 拒絕，"
-           "psycopg.errors.GroupingError",
-)
-_BUG_KPI_DECIMAL_FLOAT = pytest.mark.xfail(
-    strict=True,
-    reason="BUG app/ads/performance.py:526 — compute_kpis() 的 cpa = spend / conversions，"
-           "spend 讀回 Decimal（numeric 欄位）、conversions 讀回 float（double precision 欄位），"
-           "TypeError",
-)
-_BUG_EMPTY_DATE_STRING = pytest.mark.xfail(
-    strict=True,
-    reason="BUG app/ads/performance.py:364 — import_rows() 沒帶日期時送空字串 \"\" 給"
-           "date 欄位，SQLite 對空字串寬容，Postgres 一律 psycopg.errors.InvalidDatetimeFormat",
-)
 
 
 class WeeklyProposalSelectionTest(unittest.TestCase):
@@ -364,7 +342,6 @@ class WeeklyProposalPersistenceTest(unittest.TestCase):
         self.assertEqual(result.errors, [])
         return cycle_id
 
-    @_BUG_EMPTY_DATE_STRING
     def test_one_losing_ad_in_a_profitable_cycle_gets_a_stop_card(self):
         """驗收 A 第 4 節 (a)：整檔 ROAS 3.79 還在賺，週卡仍要點名該停的那一支廣告。
 
@@ -381,7 +358,6 @@ class WeeklyProposalPersistenceTest(unittest.TestCase):
         self.assertEqual(stop_cards[0]["target"], "虧損_01_ad")
         self.assertIn("0.86", stop_cards[0]["reason"])
 
-    @_BUG_EMPTY_DATE_STRING
     def test_red_fatigue_light_gets_a_replace_asset_card_naming_that_ad(self):
         """驗收 A 第 4 節 1b：頻率 4.2 過冷受眾危險門檻（3.5），週卡不能只出加碼。"""
         cycle_id = self._cycle_with_readings(["scale_candidate"])
@@ -395,7 +371,6 @@ class WeeklyProposalPersistenceTest(unittest.TestCase):
         self.assertIn("頻率 4.2", asset_cards[0]["reason"])
         self.assertIn("4 次以上", asset_cards[0]["reason"])
 
-    @_BUG_EMPTY_DATE_STRING
     def test_safe_frequency_gets_no_replace_asset_card(self):
         cycle_id = self._cycle_with_readings(["scale_candidate"])
         self._imported_ad(cycle_id, "正常頻率_01_ad", 1.8)
@@ -404,7 +379,6 @@ class WeeklyProposalPersistenceTest(unittest.TestCase):
 
         self.assertEqual([card for card in cards if card["action"] == "換素材"], [])
 
-    @_BUG_MAX_FREQUENCY_GROUP_BY
     def test_generate_persists_cards_and_queues_one_ready_interrupt(self):
         cycle_id = self._cycle_with_readings(["pause_candidate", "scale_candidate"])
 
@@ -417,7 +391,6 @@ class WeeklyProposalPersistenceTest(unittest.TestCase):
             archive_stale=False)
         self.assertEqual(len(ready), 1)
 
-    @_BUG_MAX_FREQUENCY_GROUP_BY
     def test_one_click_approve_keeps_spend_card_waiting_for_amount(self):
         cycle_id = self._cycle_with_readings(["pause_candidate", "scale_candidate"])
         generated = weekly_proposals.generate(main.conn, self.brand_id, cycle_id)
@@ -440,7 +413,6 @@ class WeeklyProposalPersistenceTest(unittest.TestCase):
         ).fetchall()
         self.assertEqual(len(audits), len(generated) - 1)
 
-    @_BUG_MAX_FREQUENCY_GROUP_BY
     def test_complete_one_accepted_card_is_idempotent(self):
         cycle_id = self._cycle_with_readings(["pause_candidate"])
         card = weekly_proposals.generate(main.conn, self.brand_id, cycle_id)[0]
@@ -462,7 +434,6 @@ class WeeklyProposalPersistenceTest(unittest.TestCase):
         ).fetchall()
         self.assertEqual(len(audits), 1)
 
-    @_BUG_KPI_DECIMAL_FLOAT
     def test_late_data_rerun_preserves_applied_weekly_proposal(self):
         cycle_id, card_id = self._approved_real_card("APPLIED")
 
@@ -474,7 +445,6 @@ class WeeklyProposalPersistenceTest(unittest.TestCase):
         self.assertIsNotNone(row)
         self.assertEqual(row["status"], "APPLIED")
 
-    @_BUG_KPI_DECIMAL_FLOAT
     def test_manual_route_rerun_preserves_accepted_and_applied_weekly_proposals(self):
         """原本打 HTTP 判讀等待頁路由 `/reading/progress?run=1`；那條路由（連同它借用的
         等待頁機制）已隨 T4 大清倉刪除——判讀本來就沒有分階段可回報，路由唯一做的事就是
@@ -490,7 +460,6 @@ class WeeklyProposalPersistenceTest(unittest.TestCase):
 
         self.assertEqual(observed, [((True, None), "ACCEPTED"), ((True, None), "APPLIED")])
 
-    @_BUG_MAX_FREQUENCY_GROUP_BY
     def test_generate_skips_approved_duplicate_and_keeps_unrelated_new_signal(self):
         cycle_id = self._cycle_with_readings(["pause_candidate", "scale_candidate"])
         ts = now_iso()
@@ -513,7 +482,6 @@ class WeeklyProposalPersistenceTest(unittest.TestCase):
             ("加碼", "虛構產品2", "GENERATED"),
         })
 
-    @_BUG_KPI_DECIMAL_FLOAT
     def test_day7_and_final_reruns_do_not_duplicate_applied_card(self):
         observed = []
         for trigger in ("day7", "final"):
@@ -538,7 +506,6 @@ class WeeklyProposalPersistenceTest(unittest.TestCase):
             ("final", "APPLIED", 1),
         ])
 
-    @_BUG_MAX_FREQUENCY_GROUP_BY
     def test_all_maintain_returns_empty_array_without_filler_cards(self):
         cycle_id = self._cycle_with_readings(["maintain", "maintain"])
 
@@ -554,7 +521,6 @@ class WeeklyProposalPersistenceTest(unittest.TestCase):
         ).fetchone()["count"]
         self.assertEqual(count, 0)
 
-    @_BUG_INTERRUPT_IS_PARAM
     def test_due_reading_automatically_generates_weekly_proposal(self):
         product = bi_repo.create_product(
             main.conn, self.brand_id, name="虛構自動加碼品", actor=ACTOR)["id"]
@@ -652,7 +618,6 @@ class SettleArchivesUnhandledCardsTest(unittest.TestCase):
         card = weekly_proposals.generate(main.conn, self.brand_id, cycle_id)[0]
         return cycle_id, card
 
-    @_BUG_KPI_DECIMAL_FLOAT
     def test_finalize_archives_unhandled_generated_cards_instead_of_deleting(self):
         cycle_id, card = self._generated_card("虛構結案未處理品")
 
@@ -668,7 +633,6 @@ class SettleArchivesUnhandledCardsTest(unittest.TestCase):
         self.assertEqual([d["category"] for d in done], ["weekly_proposal_archived_on_close"])
         self.assertIn("歸檔", done[0]["message"])
 
-    @_BUG_KPI_DECIMAL_FLOAT
     def test_settle_now_get_reports_unhandled_cards_before_settling(self):
         cycle_id, card = self._generated_card("虛構結案回報品")
 
@@ -677,7 +641,6 @@ class SettleArchivesUnhandledCardsTest(unittest.TestCase):
         data = resp.json()["data"]
         self.assertEqual(data["unhandled_cards"], {"count": 1, "names": [card["target"]]})
 
-    @_BUG_KPI_DECIMAL_FLOAT
     def test_settle_now_post_reports_archived_cards(self):
         cycle_id, card = self._generated_card("虛構結案歸檔品")
 
@@ -688,7 +651,6 @@ class SettleArchivesUnhandledCardsTest(unittest.TestCase):
         self.assertEqual(body["message"], "收帳完成，覆盤可以看了。")
         self.assertEqual(body["archived_cards"], {"count": 1, "names": [card["target"]]})
 
-    @_BUG_KPI_DECIMAL_FLOAT
     def test_settle_now_with_no_unhandled_cards_makes_no_archive_claim(self):
         cycle_id = self._cycle_ready_for_reading("虛構結案無卡品")  # 沒呼叫 generate()
 

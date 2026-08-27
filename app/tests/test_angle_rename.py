@@ -24,19 +24,6 @@ from app.shared.web import OPERATOR
 
 ACTOR = "測試員"
 
-# BUG app/ads/routes_progress.py:96 — _progress_run() 跑在一個新開的 threading.Thread
-# 裡，closure 捕捉的 main_mod.conn 靠 contextvar 找目前連線，contextvar 不會帶進手動開
-# 的執行緒，一律「RuntimeError: no connection bound」，JSON 端點把它翻成
-# status=failed——setUp() 靠 _run_plan()（走 plan/generate 這個背景引擎）先湊出一個
-# 已選定的 experiment_cell 才能測改名，所以整個檔案的每個測試都中（同一個 BUG，
-# 其他群組已標過）。
-_BUG_PROGRESS_THREAD_NO_CONNECTION = pytest.mark.xfail(
-    strict=True,
-    reason="BUG app/ads/routes_progress.py:96 — _progress_run() 在新執行緒呼叫"
-           " work()，closure 捕捉的 main_mod.conn 靠 contextvar 找目前連線，"
-           "contextvar 不會帶進手動開的執行緒，一律「RuntimeError: no connection"
-           " bound」，JSON 端點把它翻成 status=failed",
-)
 
 def _option(summary: str, angle_title: str, is_recommended: bool) -> dict:
     return {
@@ -86,7 +73,6 @@ def _run_plan(client, brand_id, cycle_id, timeout=5.0):
     return state
 
 
-@_BUG_PROGRESS_THREAD_NO_CONNECTION
 class AngleRenameTest(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(main.app)
@@ -137,8 +123,8 @@ class AngleRenameTest(unittest.TestCase):
             " AND entity_id = %s AND action = 'rename_angle'", (self.cell_id,),
         ).fetchone()
         self.assertIsNotNone(audit)
-        self.assertEqual(json.loads(audit["before_json"])["creative_angle"], "省錢角度")
-        self.assertEqual(json.loads(audit["after_json"])["creative_angle"], "省錢角度改版")
+        self.assertEqual(audit["before_json"]["creative_angle"], "省錢角度")
+        self.assertEqual(audit["after_json"]["creative_angle"], "省錢角度改版")
         self.assertEqual(audit["actor"], OPERATOR)
 
     def test_blank_name_rejected(self):

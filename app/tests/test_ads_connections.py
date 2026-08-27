@@ -28,13 +28,6 @@ META_ACCOUNT = "act_1234567890"
 GA4_PROPERTY_ID = "123456789"
 GA4_FAKE_KEY_JSON = '{"client_email": "svc@example.iam.gserviceaccount.com"}'
 
-_BUG_DISPATCH_DATE_VS_STR = pytest.mark.xfail(
-    strict=True,
-    reason="BUG app/orders/dispatch.py:141 — _import_meta_csv() 的 "
-           "c['start_date'] <= row_date <= c['end_date']：cycle 的 start_date/end_date"
-           "讀回 date 物件（ads_repo.list_cycles()），row_date 來自 CSV 欄位或 today 參數"
-           "（str），兩邊型別不同，TypeError",
-)
 
 _EASYSTORE_HEADERS = ["Order Number", "Date", "Total Amount", "Refunded Amount",
                       "Financial Status", "Fulfillment Status", "Order Status",
@@ -98,7 +91,6 @@ class ConnectionsRouteTest(unittest.TestCase):
         ).fetchone()["c"]
         self.assertEqual(count, 1)
 
-    @_BUG_DISPATCH_DATE_VS_STR
     def test_upload_meta_csv_matching_cycle_lands_and_stays_on_connections_page(self):
         cycle = ads_repo.create_cycle(main.conn, self.bid, product_ids=[], pain_value=5000,
                                       objective="流量", actor=ACTOR, start_date="2026-06-01",
@@ -114,7 +106,6 @@ class ConnectionsRouteTest(unittest.TestCase):
             (self.bid,)).fetchone()
         self.assertEqual(row["campaign_cycle_id"], cycle["id"])
 
-    @_BUG_DISPATCH_DATE_VS_STR
     def test_upload_meta_csv_outside_any_cycle_gives_warning_not_ok(self):
         content = _META_CSV.format(start="2020-01-01", end="2020-01-14").encode("utf-8")
         result = orders_dispatch.import_dropped_file(

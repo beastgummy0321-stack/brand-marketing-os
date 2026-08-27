@@ -37,15 +37,6 @@ PROPERTY_ID = "123456789"
 FAKE_KEY_JSON = '{"client_email": "svc@example.iam.gserviceaccount.com"}'
 
 
-# BUG app/ads/routes_progress.py:96 — _progress_run() 在自己開的 threading.Thread 裡執行
-# work()，contextvar 綁定的連線不會被子執行緒繼承，背景任務裡任何 DB 呼叫都炸
-# RuntimeError: no connection bound，_progress_run 把它吞成 status="failed"（同一個 BUG，
-# ads 群組已標過，見 test_ads_plan.py 等）。
-_BUG_PROGRESS_THREAD_NO_CONNECTION = pytest.mark.xfail(
-    strict=True,
-    reason="BUG app/ads/routes_progress.py:96 — 背景 thread 沒繼承 contextvar 綁定的連線，"
-           "work() 裡任何 DB 呼叫都是 RuntimeError: no connection bound",
-)
 
 
 class MonthMathTest(unittest.TestCase):
@@ -203,7 +194,6 @@ class MetaBackfillFlowTest(_BaseMetaBackfillTest):
             ads_sync.META_MAX_HISTORY_MONTHS = original
         self.assertEqual(actual_months, 2)
 
-    @_BUG_PROGRESS_THREAD_NO_CONNECTION
     def test_repeated_trigger_does_not_call_client_twice(self):
         """驗收 rubric ④：F5／多分頁重整（同一個 key 重複觸發）不會讓背景任務被多打一次
         ——直測進度引擎本身的冪等閘，接上真正的 sync_account 當 work，不只是通用假函式
@@ -312,7 +302,6 @@ class GA4BackfillFlowTest(unittest.TestCase):
         self.assertEqual(call_until, until)
         self.assertEqual(call_since, since)
 
-    @_BUG_PROGRESS_THREAD_NO_CONNECTION
     def test_repeated_trigger_does_not_call_client_twice(self):
         """驗收 rubric ④：F5／多分頁重整（同一個 key 重複觸發）不會讓背景任務被多打一次。"""
         fake = self._patch_client(rows=[], delay=0.2)

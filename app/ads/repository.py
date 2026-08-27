@@ -249,6 +249,12 @@ def list_cycle_products(conn: Conn, brand_id: str, cycle_id: str) -> list:
     for row in rows:
         product = bi.get_product(conn, brand_id, row["product_id"])
         row["product_name"] = product["name"] if product else "（產品已刪除）"
+        # BUG 修復（route=C 02-3c，NEW，牽連 app/ads/reading.py:187 judge() 的
+        # plan_budget * MIN_SPEND_RATIO）：allocated_budget 是 numeric 欄位讀回來的
+        # Decimal，跟 float 算術會炸 TypeError；讀取端單一收口轉型，同 _with_float_
+        # budget() 既有模式。
+        if row["allocated_budget"] is not None:
+            row["allocated_budget"] = float(row["allocated_budget"])
     return rows
 
 

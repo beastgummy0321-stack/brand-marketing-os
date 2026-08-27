@@ -95,8 +95,10 @@ def enqueue(conn, *, category: str, dedupe_key: str, message: str,
 
     # 去重比對要連 brand_id 一起看（票 M6）：SQLite 的 IS 運算子對 NULL 也能正確比對，
     # brand_id 為 None 時會比對「brand_id IS NULL」而不是誤判成跟別的品牌撞鍵。
+    # BUG 修復（route=C 02-3c）：Postgres 的 IS 不接受綁參數（只認 IS NULL/IS NOT NULL
+    # 字面），改用 IS NOT DISTINCT FROM——NULL 對 NULL 一樣判真，效果同原本的 SQLite IS。
     existing = conn.execute(
-        "SELECT id FROM interrupt WHERE dedupe_key = %s AND brand_id IS %s",
+        "SELECT id FROM interrupt WHERE dedupe_key = %s AND brand_id IS NOT DISTINCT FROM %s",
         (dedupe_key, brand_id),
     ).fetchone()
     if existing:

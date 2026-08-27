@@ -33,13 +33,6 @@ def _fake(text: str) -> ProviderResponse:
                             stop_reason="end_turn")
 
 
-# BUG app/ads/performance.py:364 — import_rows() 的 INSERT 對 date 欄位傳 ""，
-# Postgres 一律 psycopg.errors.InvalidDatetimeFormat（同一個 BUG，orders/ads 群組已標過）。
-_BUG_EMPTY_STRING_DATE = pytest.mark.xfail(
-    strict=True,
-    reason='BUG app/ads/performance.py:364 — import_rows() 的 INSERT 對 date 欄位傳 ""，'
-           "Postgres 一律 psycopg.errors.InvalidDatetimeFormat",
-)
 
 
 class _JudgedCycleTest(unittest.TestCase):
@@ -87,12 +80,10 @@ class _JudgedCycleTest(unittest.TestCase):
 class FixtureParityTest(_JudgedCycleTest):
     """本票只搬版面：同一組 fixture 的判讀結論、成色標籤、可信度數值要跟拆層前完全一致。"""
 
-    @_BUG_EMPTY_STRING_DATE
     def test_confidence_defaults_to_trustworthy_without_reconcile_findings(self):
         loaded = ads_reconcile.load(main.conn, self.bid, self.cycle_id)
         self.assertEqual(loaded["rows"], [])
 
-    @_BUG_EMPTY_STRING_DATE
     def test_next_cycle_draft_numbers_unchanged(self):
         budget = nextcycle.load(main.conn, self.bid, self.cycle_id)["content"]["budget"]
         self.assertEqual(budget["current_budget"], 10000)   # 這期預算
@@ -112,7 +103,6 @@ class InsufficientDataStillGradesTest(unittest.TestCase):
         self.cycle_id = resp.json()["cycle_id"]
         perf.import_manual(main.conn, self.bid, self.cycle_id, {"spend": 3000}, actor=ACTOR)
 
-    @_BUG_EMPTY_STRING_DATE
     def test_performance_page_says_insufficient_not_zero(self):
         # 分母是 0 就給 None，頁面才印得出「資料不足」而不是硬給一個 0（鐵則 16）。
         kpis = perf.totals(main.conn, self.bid, self.cycle_id)["kpis"]
@@ -124,7 +114,6 @@ class InsufficientDataStillGradesTest(unittest.TestCase):
 class ShopeeCodeReadonlyGlanceTest(_JudgedCycleTest):
     """已記錄的蝦皮碼要在成效頁的通路對照詳情內看得到唯讀摘要（不是表單）。"""
 
-    @_BUG_EMPTY_STRING_DATE
     def test_recorded_code_shows_up_readonly_on_performance_page(self):
         orders_channel.set_shopee_code(main.conn, self.bid, self.cycle_id, code="SHOP0801",
                                        redemption_count=3, actor=ACTOR)

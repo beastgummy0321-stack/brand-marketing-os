@@ -42,28 +42,12 @@ def _fake(text):
                             stop_reason="end_turn")
 
 
-# BUG app/ads/performance.py:364 — import_rows() 的 INSERT 對 date 欄位傳 ""，
-# Postgres 一律 psycopg.errors.InvalidDatetimeFormat（同一個 BUG，orders/ads 群組已標過）。
-_BUG_EMPTY_STRING_DATE = pytest.mark.xfail(
-    strict=True,
-    reason='BUG app/ads/performance.py:364 — import_rows() 的 INSERT 對 date 欄位傳 ""，'
-           "Postgres 一律 psycopg.errors.InvalidDatetimeFormat",
-)
 
-# BUG app/ads/pacing.py:59 — classify() 算 budget_progress = spend / budget，budget
-# 若來自 numeric 欄位讀回是 Decimal、spend 是 float，Postgres 下 TypeError
-# （SQLite 兩者都是 float，不會炸；同一個 BUG 本子群組其他檔已標過）。
-_BUG_PACING_DECIMAL_DIV_FLOAT = pytest.mark.xfail(
-    strict=True,
-    reason="BUG app/ads/pacing.py:59 — classify() 的 spend / budget 兩邊型別不一致"
-           "（Decimal / float），psycopg.errors 之外的 TypeError",
-)
 
 
 class PerformanceRouteTest(_BaseImportTest):
     """票 01：T4 清倉連 JSON 路由也一併清掉；復原 `/performance/manual`／`/csv` 兩條路由。"""
 
-    @_BUG_PACING_DECIMAL_DIV_FLOAT
     def test_manual_route_imports_and_returns_result_json(self):
         """票 11 D2：手動路由改跟 CSV 路由同一個回應形狀，秀出跳過幾筆——不是 204 空回應。"""
         resp = self.client.post(f"/api/campaigns/{self.bid}/{self.cycle_id}/performance/manual",
@@ -89,7 +73,6 @@ class PerformanceRouteTest(_BaseImportTest):
                                 json={"clicks": "10"})
         self.assertEqual(resp.status_code, 400)
 
-    @_BUG_PACING_DECIMAL_DIV_FLOAT
     def test_csv_route_imports_using_chinese_meta_aliases(self):
         csv_text = "花費金額,廣告名稱\n1000,廣告A\n2000,廣告B\n"
         resp = self.client.post(f"/api/campaigns/{self.bid}/{self.cycle_id}/performance/csv",
@@ -103,7 +86,6 @@ class PerformanceRouteTest(_BaseImportTest):
         self.assertEqual(resp.status_code, 400)
         self.assertIn("error", resp.json())
 
-    @_BUG_PACING_DECIMAL_DIV_FLOAT
     def test_csv_route_decodes_cp950_header(self):
         """Windows 匯出常見 cp950/big5——decode 不能默默吞成亂碼再回報 imported=0。"""
         csv_bytes = "花費金額,廣告名稱\n1000,廣告A\n2000,廣告B\n".encode("cp950")
@@ -112,7 +94,6 @@ class PerformanceRouteTest(_BaseImportTest):
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.json()["imported"], 2)
 
-    @_BUG_EMPTY_STRING_DATE
     def test_manual_route_saves_derived_metrics(self):
         """路由要照舊順序做完 import_manual 再 save_derived_metrics，不能只落快照不算 KPI。"""
         self.client.post(f"/api/campaigns/{self.bid}/{self.cycle_id}/performance/manual",
@@ -155,7 +136,6 @@ class PerformanceGetAssetBreakdownTest(_BaseImportTest):
         main.conn.commit()
         return pkg_id
 
-    @_BUG_EMPTY_STRING_DATE
     def test_reading_carries_asset_breakdown_with_documented_shape(self):
         self._package("在地手工品質_03")
         csv_text = ("行銷活動名稱,廣告名稱,曝光次數,連結點擊次數,花費金額,購買次數,購買轉換價值\n"
@@ -174,7 +154,6 @@ class PerformanceGetAssetBreakdownTest(_BaseImportTest):
         self.assertEqual(row["revenue"], 840)
         self.assertEqual(row["kpis"]["roas"], round(840 / 2500, 2))
 
-    @_BUG_EMPTY_STRING_DATE
     def test_reading_asset_breakdown_is_empty_list_not_null_without_a_split(self):
         perf.import_manual(main.conn, self.bid, self.cycle_id,
                            {"spend": 10000, "impressions": 20000, "clicks": 400,
@@ -227,7 +206,6 @@ class LiveCycleImportTriggersReadingTest(_BaseImportTest):
         main.conn.commit()
         return cycle["id"]
 
-    @_BUG_PACING_DECIMAL_DIV_FLOAT
     def test_csv_import_on_live_cycle_runs_reading_and_generates_a_stop_card(self):
         cycle_id = self._live_cycle_with_losing_ad()
         self.assertIsNone(reading.load(main.conn, self.bid, cycle_id)["cycle"])
@@ -248,7 +226,6 @@ class LiveCycleImportTriggersReadingTest(_BaseImportTest):
         cards = weekly_proposals.list_cards(main.conn, self.bid, cycle_id)
         self.assertTrue(any(card["action"] == "停掉" for card in cards))  # generate() 真的建卡了
 
-    @_BUG_PACING_DECIMAL_DIV_FLOAT
     def test_confidence_label_agrees_with_reading_right_after_import(self):
         """B0-02／B0-06（`.scratch/rehearsal-b0-fix/issues/R5-cockpit-and-state-machine.md`）：
         匯入完成、不按任何按鈕，GET /performance 的 `confidence_label` 不能還停在「這期還

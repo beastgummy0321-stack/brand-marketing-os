@@ -30,15 +30,6 @@ from app.llm.providers import FakeProvider, ProviderResponse, Usage  # noqa: E40
 
 _SEQ = [0]
 
-# BUG app/brand_intelligence/background_job.py:59 — 見 test_intake_api.py 同名常數說明：
-# JobRegistry.start() 起的 thread 沒有包 with coredb.connection()，背景工作內 DB 呼叫一律
-# RuntimeError: no connection bound，job 狀態永遠停在 running，_poll() 逾時。
-_BUG_BACKGROUND_JOB_NO_CONN = pytest.mark.xfail(
-    strict=True,
-    reason="BUG app/brand_intelligence/background_job.py:59 — JobRegistry.start() 起的 "
-           "thread 沒有包 with coredb.connection()，背景工作內 DB 呼叫一律 "
-           "RuntimeError: no connection bound，job 狀態永遠停在 running，_poll() 逾時",
-)
 
 
 def _fake_response(text: str, structured=None) -> ProviderResponse:
@@ -234,7 +225,6 @@ class PasteResolveScopeTest(_Base):
 # ---------------------------------------------------------------------------
 
 class PasteFixBackgroundTest(_Base):
-    @_BUG_BACKGROUND_JOB_NO_CONN
     def test_structured_rows_bypass_broken_text_and_land(self):
         bid = self._create_full()
         self.client.post(f"/api/intake/brands/{bid}/paste/validate",
@@ -256,7 +246,6 @@ class PasteFixBackgroundTest(_Base):
         self.assertIn("不要用 Markdown 表格語法", sent)
         self.assertIn("顧客原話", sent)
 
-    @_BUG_BACKGROUND_JOB_NO_CONN
     def test_success_reflows_lands_and_notifies(self):
         bid = self._create_full()
         bi_repo.create_product(web.conn, bid, name=script.MOCK_PRODUCT_NAME, actor="測試員")
@@ -278,7 +267,6 @@ class PasteFixBackgroundTest(_Base):
                   if r["category"] == "intake_ai_step_done"]
         self.assertTrue(any("貼回格式已修好" in m["message"] for m in matches))
 
-    @_BUG_BACKGROUND_JOB_NO_CONN
     def test_failure_notifies_with_human_error(self):
         from app.llm.providers import MISSING_KEY_MESSAGE, AnthropicProvider
         bid = self._create_full()

@@ -116,13 +116,6 @@ class IntakeWizardTest(unittest.TestCase):
 
     # -- 初掃 ----------------------------------------------------------------
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="BUG app/brand_intelligence/background_job.py:59 — JobRegistry.start() 起的 "
-               "threading.Thread 沒有包 with coredb.connection()，背景工作裡任何 DB 呼叫都會 "
-               "RuntimeError: no connection bound；這裡經 app/intake/routes_api.py _run_scan_job "
-               "透過 _JOBS.start() 觸發，同一個根因。",
-    )
     def test_scan_success_stores_impressions_and_real_cost(self):
         brand_id = self._new_wizard_brand()
         resp = self._run_scan(brand_id)

@@ -42,14 +42,6 @@ FORBIDDEN_WORDS = ("受眾", "漏斗", "CPA", "CTR", "CPC", "ROAS", "KPI")
 _ID_RE = re.compile(r"[a-z]+_[0-9A-HJKMNP-TV-Z]{26}")
 
 
-# BUG app/ads/proposal.py:169 — approve() 建 task_card 時 "done": 0（整數字面值），
-# 不是 False；Postgres 的 done 欄位是 boolean，一律 psycopg.errors.DatatypeMismatch。
-_BUG_DONE_INT_LITERAL = pytest.mark.xfail(
-    strict=True,
-    reason='BUG app/ads/proposal.py:169 — approve() 建 task_card 時 "done": 0'
-           "（整數字面值，不是 False），Postgres boolean 欄位一律"
-           " psycopg.errors.DatatypeMismatch",
-)
 
 
 class ProposalTest(unittest.TestCase):
@@ -155,7 +147,6 @@ class ProposalTest(unittest.TestCase):
         self.assertEqual(body["status"], "failed")
         self.assertIn("資料都還在", body["reason"])
 
-    @_BUG_DONE_INT_LITERAL
     def test_tracking_red_warns_but_approval_creates_only_enabled_non_social_cards(self):
         cycle = self._cycle()
         self._plan(cycle["id"])
@@ -174,7 +165,6 @@ class ProposalTest(unittest.TestCase):
         self.assertTrue(all(card["channel"] not in ("social", "kol_media") for card in cards))
         self.assertEqual({card["channel"] for card in cards}, {"google_search", "line_email", "website_landing"})
 
-    @_BUG_DONE_INT_LITERAL
     def test_return_restores_opening_status_and_keeps_values(self):
         cycle = self._cycle()
         self._plan(cycle["id"])
@@ -187,7 +177,6 @@ class ProposalTest(unittest.TestCase):
         self.assertEqual(after["status"], "PLANNING")
         self.assertEqual(after["budget"], original_budget)
 
-    @_BUG_DONE_INT_LITERAL
     def test_approve_adds_immutable_proposal_snapshot_to_plan_json(self):
         cycle = self._cycle()
         self._plan(cycle["id"])
@@ -198,8 +187,16 @@ class ProposalTest(unittest.TestCase):
 
         saved = ads_plan.get_latest_plan(main.conn, self.bid, cycle["id"])["plan"]
         self.assertIn("proposal_snapshot", saved)
-        self.assertEqual(saved["proposal_snapshot"]["channels"], before["blocks"]["channels"])
-        self.assertEqual(saved["proposal_snapshot"]["budget"], before["blocks"]["budget"])
+        # proposal_snapshot 是寫進 jsonb 欄位的快照：datetime/Decimal 這種值經過 jsonb
+        # 序列化／讀回會變成字串／float（db.jsonb() 的既有轉換規則，見 app/core/db.py
+        # _json_default），跟直接查 channel_plan／campaign_cycle_product 拿到的即時
+        # datetime/Decimal 物件型別不同、值相同——比較前用同一套規則正規化 before，
+        # 才是同一件事的公平比較（不是 production bug，是 jsonb 快照本來就會做的
+        # 正常序列化）。
+        before_blocks = json.loads(json.dumps(before["blocks"], default=coredb._json_default,
+                                              ensure_ascii=False))
+        self.assertEqual(saved["proposal_snapshot"]["channels"], before_blocks["channels"])
+        self.assertEqual(saved["proposal_snapshot"]["budget"], before_blocks["budget"])
         self.assertEqual(saved["proposal_snapshot"]["brakes"], before["blocks"]["brakes"])
         self.assertEqual(saved["proposal_snapshot"]["schedule"], before["blocks"]["schedule"])
         changed = channel_repo.list_channel_plans(main.conn, self.bid, cycle["id"])[0]
@@ -207,7 +204,7 @@ class ProposalTest(unittest.TestCase):
             main.conn, self.bid, changed["id"], job="事後調整的分工", pct=changed["pct"],
             expected=changed["expected"], enabled=bool(changed["enabled"]), depth=changed["depth"])
         after_change = ads_plan.get_latest_plan(main.conn, self.bid, cycle["id"])["plan"]
-        self.assertEqual(after_change["proposal_snapshot"]["channels"], before["blocks"]["channels"])
+        self.assertEqual(after_change["proposal_snapshot"]["channels"], before_blocks["channels"])
 
     def test_opening_creates_five_channels_and_next_cycle_inherits_enabled_choices(self):
         response = self.client.post(

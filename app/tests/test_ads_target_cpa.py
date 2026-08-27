@@ -26,15 +26,6 @@ from app.orders import repository as orders_repo  # noqa: E402
 
 ACTOR = "測試員"
 
-# BUG app/ads/performance.py:364 — import_rows() 的 INSERT 對 date 欄位傳 ""，
-# Postgres 一律 psycopg.errors.InvalidDatetimeFormat（同一個 BUG，orders 群組已標過）。
-# ads_performance.import_manual() 沒帶明確日期時就吃這個 BUG，凡呼叫它（含透過
-# _closed_cycle_with_history()）的測試都中。
-_BUG_EMPTY_STRING_DATE = pytest.mark.xfail(
-    strict=True,
-    reason='BUG app/ads/performance.py:364 — import_rows() 的 INSERT 對 date 欄位傳 ""，'
-           "Postgres 一律 psycopg.errors.InvalidDatetimeFormat",
-)
 
 
 def _order(order_number, order_date, total_amount, voucher_code=None):
@@ -76,7 +67,6 @@ class _BaseTest(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 class HistoricalTierTest(_BaseTest):
-    @_BUG_EMPTY_STRING_DATE
     def test_uses_the_closed_cycle_with_ad_code_and_net_conversions(self):
         _closed_cycle_with_history(self.bid, objective="sales", spend=5000, net_orders=10)
         result = target_cpa.resolve_target_cpa(main.conn, self.bid, "sales", [])
@@ -95,7 +85,6 @@ class HistoricalTierTest(_BaseTest):
                                      actor=ACTOR)
         self.assertIsNone(target_cpa._historical_tier(main.conn, self.bid, "sales"))
 
-    @_BUG_EMPTY_STRING_DATE
     def test_skips_a_closed_cycle_with_zero_net_conversions_and_falls_back(self):
         older = _closed_cycle_with_history(self.bid, objective="sales", spend=3000, net_orders=6,
                                            start_date="2026-01-01")
@@ -110,12 +99,10 @@ class HistoricalTierTest(_BaseTest):
         self.assertEqual(result["value"], 500.0)  # 3000/6，來自較舊那期（新那期淨歸因數為 0）
         self.assertNotEqual(older["id"], newer["id"])
 
-    @_BUG_EMPTY_STRING_DATE
     def test_ignores_a_different_objective(self):
         _closed_cycle_with_history(self.bid, objective="leads", spend=1000, net_orders=5)
         self.assertIsNone(target_cpa._historical_tier(main.conn, self.bid, "sales"))
 
-    @_BUG_EMPTY_STRING_DATE
     def test_ignores_a_cycle_that_is_not_closed(self):
         cycle = _closed_cycle_with_history(self.bid, objective="sales")
         ads_repo.update_cycle_status(main.conn, self.bid, cycle["id"], status="LIVE", actor=ACTOR)
@@ -268,7 +255,6 @@ class BudgetTiersTest(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 class NonConversionRangeTest(_BaseTest):
-    @_BUG_EMPTY_STRING_DATE
     def test_uses_previous_same_objective_actual_spend(self):
         cycle = ads_repo.create_cycle(
             main.conn, self.bid, product_ids=[], pain_value=1000, objective="awareness",
@@ -289,7 +275,6 @@ class NonConversionRangeTest(_BaseTest):
             actor=ACTOR, start_date="2026-01-01", duration_days=14)
         self.assertIsNone(target_cpa.non_conversion_range(main.conn, self.bid, "traffic"))
 
-    @_BUG_EMPTY_STRING_DATE
     def test_ignores_a_different_objective(self):
         cycle = ads_repo.create_cycle(
             main.conn, self.bid, product_ids=[], pain_value=1000, objective="engagement",
@@ -300,7 +285,6 @@ class NonConversionRangeTest(_BaseTest):
 
 
 class PreviousActualWeeklySpendTest(_BaseTest):
-    @_BUG_EMPTY_STRING_DATE
     def test_computes_the_weekly_rate_from_the_most_recent_cycle(self):
         cycle = ads_repo.create_cycle(
             main.conn, self.bid, product_ids=[], pain_value=1400, objective="sales", actor=ACTOR,
@@ -339,7 +323,6 @@ class GuardrailViewTest(_BaseTest):
         self.assertEqual(view["kind"], "non_conversion")
         self.assertIsNone(view["range"])
 
-    @_BUG_EMPTY_STRING_DATE
     def test_conversion_objective_assembles_volume_and_tiers(self):
         _closed_cycle_with_history(self.bid, objective="sales", spend=5000, net_orders=10)
         view = target_cpa.guardrail_view(main.conn, self.bid, objective="sales", product_ids=[],

@@ -34,11 +34,6 @@ def _fake(text):
                             stop_reason="end_turn")
 
 
-_BUG_EMPTY_STRING_DATE = pytest.mark.xfail(
-    strict=True,
-    reason='BUG app/ads/performance.py:364 — import_rows() 的 INSERT 對 date 欄位傳 ""，'
-           "Postgres 一律 psycopg.errors.InvalidDatetimeFormat",
-)
 
 
 class JudgeRulesTest(unittest.TestCase):
@@ -182,7 +177,6 @@ class ReadingFlowTest(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn("還沒有成效資料", err)
 
-    @_BUG_EMPTY_STRING_DATE
     def test_reading_is_stored_with_rule_result_and_explanation(self):
         self._spend(spend=10000, impressions=20000, clicks=400, conversions=10, revenue=40000)
         ok, err = reading.run(main.conn, self.bid, self.cycle_id, ACTOR)
@@ -192,14 +186,12 @@ class ReadingFlowTest(unittest.TestCase):
         self.assertIn("reasons", loaded["cycle"]["result"])
         self.assertIn("成交成本", loaded["cycle"]["llm_explanation"])
 
-    @_BUG_EMPTY_STRING_DATE
     def test_cycle_moves_to_evaluating(self):
         self._spend(spend=10000, impressions=20000, clicks=400, conversions=10, revenue=40000)
         reading.run(main.conn, self.bid, self.cycle_id, ACTOR)
         self.assertEqual(
             ads_repo.get_cycle(main.conn, self.bid, self.cycle_id)["status"], "EVALUATING")
 
-    @_BUG_EMPTY_STRING_DATE
     def test_says_it_cannot_split_by_product_when_data_is_aggregate(self):
         """手動輸入的數字沒有分產品——就要直說看不出是哪個產品拉的，不能硬掰。"""
         self._spend(spend=10000, impressions=20000, clicks=400, conversions=10, revenue=40000)
@@ -209,7 +201,6 @@ class ReadingFlowTest(unittest.TestCase):
         self.assertTrue(any("沒有分到各個產品" in r
                             for r in loaded["cycle"]["result"]["reasons"]))
 
-    @_BUG_EMPTY_STRING_DATE
     def test_llm_failure_does_not_break_the_reading(self):
         """AI 講不出話不影響判讀本身——狀態是程式算的。"""
         reading.PROVIDER = FakeProvider(exception=ProviderError("暫時無法回應"))
@@ -220,7 +211,6 @@ class ReadingFlowTest(unittest.TestCase):
         self.assertEqual(loaded["cycle"]["status"], "scale_candidate")
         self.assertIsNone(loaded["cycle"]["llm_explanation"])
 
-    @_BUG_EMPTY_STRING_DATE
     def test_confidence_from_reconciliation_is_carried_into_the_reading(self):
         from app.ads import reconcile as recon
         self._spend(spend=14000, impressions=20000, clicks=400, conversions=10, revenue=40000)
@@ -229,7 +219,6 @@ class ReadingFlowTest(unittest.TestCase):
         loaded = reading.load(main.conn, self.bid, self.cycle_id)
         self.assertIn("打折", loaded["cycle"]["confidence_level"])
 
-    @_BUG_EMPTY_STRING_DATE
     def test_prompt_feeds_actual_spend_and_revenue_not_the_budget(self):
         """ACCEPTANCE-A 第 4 節 6b：prompt 只餵「計畫預算」時，模型把預算當成花掉的錢，
         再乘投報率反推出一個沒發生過的營收。實際花費／營收要進 prompt，預算要標成上限。"""
@@ -243,7 +232,6 @@ class ReadingFlowTest(unittest.TestCase):
         # 預算 10,000 只能以「上限」的身分出現，不能再被講成這期的花費
         self.assertNotIn("計畫預算 10,000 元，", prompt)
 
-    @_BUG_EMPTY_STRING_DATE
     def test_prompt_says_revenue_is_missing_instead_of_calling_it_zero(self):
         """沒收到營收資料時不能餵「營收 0」——那是「不知道」不是「賺 0」（鐵則 16）。"""
         self._spend(spend=4000, impressions=20000, clicks=400, conversions=2)
@@ -253,7 +241,6 @@ class ReadingFlowTest(unittest.TestCase):
         self.assertIn("沒收到營收資料", prompt)
         self.assertNotIn("實際帶回營收", prompt)
 
-    @_BUG_EMPTY_STRING_DATE
     def test_rerun_replaces_previous_reading(self):
         """重判讀要能跑第二次——下期草案掛在判讀上，清理順序錯了會被外鍵擋死。"""
         self._spend(spend=10000, impressions=20000, clicks=400, conversions=10, revenue=40000)
@@ -305,7 +292,6 @@ class AssetBreakdownTest(unittest.TestCase):
         main.conn.commit()
         return pkg_id
 
-    @_BUG_EMPTY_STRING_DATE
     def test_matched_csv_rows_show_up_as_asset_breakdown(self):
         self._package("拿證據說話_01_ad")
         csv_text = ("行銷活動名稱,廣告名稱,曝光次數,連結點擊次數,花費金額,購買次數,購買轉換價值\n"
@@ -320,7 +306,6 @@ class AssetBreakdownTest(unittest.TestCase):
         self.assertEqual(asset["revenue"], 18600)
         self.assertEqual(asset["kpis"]["roas"], round(18600 / 5000, 2))
 
-    @_BUG_EMPTY_STRING_DATE
     def test_unmatched_data_leaves_asset_breakdown_empty(self):
         """對不上素材的資料只留在檔期層，不假裝有素材層結果（鐵則 16）。"""
         perf.import_manual(main.conn, self.bid, self.cycle_id,
@@ -331,7 +316,6 @@ class AssetBreakdownTest(unittest.TestCase):
         result = reading.load(main.conn, self.bid, self.cycle_id)["cycle"]["result"]
         self.assertEqual(result["asset_breakdown"], [])
 
-    @_BUG_EMPTY_STRING_DATE
     def test_worst_ad_named_when_only_asset_split_exists(self):
         """產品層拆不出來（成效資料沒帶產品）、但素材層拆得出來時，白話理由要點名拖累最兇
         的那支廣告，不能再說「看不出是哪個」（D4 觸點 2，票 03-performance-reaches-the-user）。
@@ -351,7 +335,6 @@ class AssetBreakdownTest(unittest.TestCase):
         self.assertFalse(any("沒有分到各個產品" in r for r in result["reasons"]))
         self.assertTrue(any("在地手工品質_03" in r for r in result["reasons"]))
 
-    @_BUG_EMPTY_STRING_DATE
     def test_looks_out_of_reach_line_survives_when_neither_split_exists(self):
         """產品層有配置、素材層也對不上時，「看不出是哪個」這句還是要在——不能被新加的
         判斷誤蓋掉（D4 觸點 2 只在「素材層拆得出來」時才改口）。"""
@@ -449,7 +432,6 @@ class _ReadingIntegrationBase(unittest.TestCase):
 class FinalizeTest(_ReadingIntegrationBase):
     """期末＋14 天最終結算（決策 0025 判讀節奏第 5 點）：全系統唯一把檔期轉 CLOSED 的地方。"""
 
-    @_BUG_EMPTY_STRING_DATE
     def test_finalize_closes_the_cycle(self):
         self._spend(spend=10000, impressions=20000, clicks=400, conversions=10, revenue=40000)
         ok, err = reading.finalize(main.conn, self.bid, self.cycle_id, ACTOR)
@@ -457,7 +439,6 @@ class FinalizeTest(_ReadingIntegrationBase):
         self.assertEqual(
             ads_repo.get_cycle(main.conn, self.bid, self.cycle_id)["status"], "CLOSED")
 
-    @_BUG_EMPTY_STRING_DATE
     def test_finalized_reading_is_not_tentative_but_normal_run_is(self):
         self._spend(spend=10000, impressions=20000, clicks=400, conversions=10, revenue=40000)
         reading.run(main.conn, self.bid, self.cycle_id, ACTOR)
@@ -475,7 +456,6 @@ class FinalizeTest(_ReadingIntegrationBase):
         main.conn.execute("DELETE FROM interrupt WHERE category = 'prototype_phase_ended'")
         main.conn.commit()
 
-    @_BUG_EMPTY_STRING_DATE
     def test_finalize_with_real_spend_ends_prototype_phase(self):
         """修憲落地 A6：檔期結算完成＋這期實際花費 > 0，原型階段旗標翻轉並進打斷佇列。"""
         self._reset_prototype_phase_flag()
@@ -493,7 +473,6 @@ class FinalizeTest(_ReadingIntegrationBase):
         for exemption in prototype_phase.EXEMPTIONS:
             self.assertIn(exemption["item"], resp.text)
 
-    @_BUG_EMPTY_STRING_DATE
     def test_finalize_with_zero_spend_does_not_end_prototype_phase(self):
         """花費是 0 就不算「用真錢跑完一期」，旗標不動（決策 0037 第一節第 1 條）。"""
         self._reset_prototype_phase_flag()
@@ -505,7 +484,6 @@ class FinalizeTest(_ReadingIntegrationBase):
 class UnsettledRatioInReadingTest(_ReadingIntegrationBase):
     """期末暫定判讀標注「未結案訂單佔 X%」（決策 0025 判讀節奏第 5 點）。"""
 
-    @_BUG_EMPTY_STRING_DATE
     def test_no_order_data_says_so_honestly(self):
         self._spend(spend=10000, impressions=20000, clicks=400, conversions=10, revenue=40000)
         reading.run(main.conn, self.bid, self.cycle_id, ACTOR)
@@ -513,7 +491,6 @@ class UnsettledRatioInReadingTest(_ReadingIntegrationBase):
         self.assertIsNone(result["unsettled_ratio"])
         self.assertIn("沒有比對得到訂單資料", result["unsettled_note"])
 
-    @_BUG_EMPTY_STRING_DATE
     def test_unsettled_ratio_reflects_order_data_in_range(self):
         cycle = ads_repo.get_cycle(main.conn, self.bid, self.cycle_id)
         rows = [
@@ -536,7 +513,6 @@ class LateDataRerunTest(_ReadingIntegrationBase):
         ok, err = reading.run(main.conn, self.bid, self.cycle_id, ACTOR)
         self.assertTrue(ok, err)
 
-    @_BUG_EMPTY_STRING_DATE
     def test_no_op_while_still_live(self):
         """還在投放中就不算「晚到」，即使這期已經判讀過——原樣略過，不新增版次。"""
         self._judge_once()  # 產生 v1，run() 結束後 status 會變成 EVALUATING
@@ -554,7 +530,6 @@ class LateDataRerunTest(_ReadingIntegrationBase):
         outcome = reading.rerun_for_late_data(main.conn, self.bid, self.cycle_id, actor=ACTOR)
         self.assertIsNone(outcome)
 
-    @_BUG_EMPTY_STRING_DATE
     def test_reversal_bumps_version_writes_diff_and_enqueues_interrupt(self):
         self._judge_once()  # v1：scale_candidate（roas 4.0 倍，打平線 1.67 倍）
         first_status = reading.load(main.conn, self.bid, self.cycle_id)["cycle"]["status"]
@@ -583,7 +558,6 @@ class LateDataRerunTest(_ReadingIntegrationBase):
         self.assertEqual(len(open_items), 1)
         self.assertEqual(open_items[0]["campaign_cycle_id"], self.cycle_id)
 
-    @_BUG_EMPTY_STRING_DATE
     def test_rerun_again_without_new_diffs_does_not_duplicate_the_warning(self):
         self._judge_once()
         self._spend(spend=50000, impressions=0, clicks=0, conversions=0, revenue=0)
@@ -612,7 +586,6 @@ def _repeat_customer_rows(count, *, prefix):
 class RepurchaseLineTest(_ReadingIntegrationBase):
     """票 #39：雙打平線並列，樣本不足不顯示實質線；結論相反時 AI 具名異議進佇列並可採納／駁回。"""
 
-    @_BUG_EMPTY_STRING_DATE
     def test_no_order_history_leaves_repurchase_line_unavailable(self):
         self._spend(spend=10000, impressions=20000, clicks=400, conversions=10, revenue=40000)
         reading.run(main.conn, self.bid, self.cycle_id, ACTOR)
@@ -620,7 +593,6 @@ class RepurchaseLineTest(_ReadingIntegrationBase):
         self.assertFalse(line["available"])
         self.assertTrue(line["insufficient_sample"])
 
-    @_BUG_EMPTY_STRING_DATE
     def test_below_sample_threshold_repurchase_line_stays_unavailable(self):
         orders_repo.save_orders(main.conn, self.bid, _repeat_customer_rows(29, prefix="lo"),
                                 source="easystore_xlsx", actor=ACTOR)
@@ -630,7 +602,6 @@ class RepurchaseLineTest(_ReadingIntegrationBase):
         self.assertFalse(line["available"])
         self.assertEqual(line["sample_size"], 29)
 
-    @_BUG_EMPTY_STRING_DATE
     def test_conflicting_lines_write_dissent_and_enqueue_interrupt(self):
         """首單線 roas 1.0（打平線 1.67 倍）判該停損；回購倍數 2.0 讓實質打平線降到 0.83 倍，
         同一組數字回購線判維持——結論相反，要進佇列＋留一筆 AI 具名異議。"""
@@ -657,7 +628,6 @@ class RepurchaseLineTest(_ReadingIntegrationBase):
         self.assertEqual(len(open_items), 1)
         self.assertEqual(open_items[0]["campaign_cycle_id"], self.cycle_id)
 
-    @_BUG_EMPTY_STRING_DATE
     def test_dissent_decision_is_recorded_and_can_be_adopted(self):
         orders_repo.save_orders(main.conn, self.bid, _repeat_customer_rows(30, prefix="ad"),
                                 source="easystore_xlsx", actor=ACTOR)
@@ -677,7 +647,6 @@ class RepurchaseLineTest(_ReadingIntegrationBase):
         self.assertEqual(decided["status"], "adopted")
         self.assertEqual(decided["decided_by"], OPERATOR)
 
-    @_BUG_EMPTY_STRING_DATE
     def test_resolving_the_conflict_clears_the_stale_pending_dissent(self):
         """再判讀一次，這次數字不衝突了——舊的 pending 異議要被清掉，不留殭屍紀錄。"""
         orders_repo.save_orders(main.conn, self.bid, _repeat_customer_rows(30, prefix="cl"),
@@ -699,7 +668,6 @@ class RepurchaseLineTest(_ReadingIntegrationBase):
 class DualBaselineTest(_ReadingIntegrationBase):
     """票 #39：基線兩條並列＋旺淡季標注；口徑變更記錄可見。"""
 
-    @_BUG_EMPTY_STRING_DATE
     def test_no_history_baseline_says_so_honestly(self):
         self._spend(spend=10000, impressions=20000, clicks=400, conversions=10, revenue=40000)
         reading.run(main.conn, self.bid, self.cycle_id, ACTOR)
@@ -708,7 +676,6 @@ class DualBaselineTest(_ReadingIntegrationBase):
         self.assertEqual(bl["annual_average"], {})
         self.assertEqual(bl["same_period_last_year"], {})
 
-    @_BUG_EMPTY_STRING_DATE
     def test_same_period_last_year_baseline_is_computed_from_matching_cycle(self):
         """票 #39 驗收條件：基線兩條並列——「去年同期」要真的能從去年同一段日子的檔期
         算出來，不是只有空 dict 的退路。"""
@@ -731,7 +698,6 @@ class DualBaselineTest(_ReadingIntegrationBase):
         self.assertEqual(bl["same_period_last_year"]["roas"], 4.0)
         self.assertEqual(bl["season"]["level"], "typical")
 
-    @_BUG_EMPTY_STRING_DATE
     def test_policy_change_produces_a_cross_ruler_note(self):
         orders_repo.record_policy_change(main.conn, self.bid, policy_type="discount",
                                          changed_at="2026-01-01", description="折扣規則調整",
@@ -766,13 +732,11 @@ class SimulationExcludedFromBaselineTest(_ReadingIntegrationBase):
         perf.save_derived_metrics(main.conn, self.bid, cycle["id"])
         return cycle["id"]
 
-    @_BUG_EMPTY_STRING_DATE
     def test_brand_baseline_ignores_simulation_only_history(self):
         """整個品牌只有模擬期跑過，brand_baseline 該回空 dict，不是拿假數字充數。"""
         self._make_simulation_cycle()
         self.assertEqual(reading.brand_baseline(main.conn, self.bid), {})
 
-    @_BUG_EMPTY_STRING_DATE
     def test_brand_baseline_not_pulled_by_simulation_when_real_history_exists(self):
         """真檔期＋模擬期並存：中位數只能反映真檔期，不能被模擬的極端值拉走。"""
         self._spend(spend=10000, impressions=20000, clicks=400, conversions=10, revenue=40000)
@@ -785,7 +749,6 @@ class SimulationExcludedFromBaselineTest(_ReadingIntegrationBase):
         baseline_incl = reading.brand_baseline(main.conn, self.bid)
         self.assertEqual(baseline_incl["roas"], 4.0)  # 只有真檔期的 roas，沒被模擬的極端值拉走
 
-    @_BUG_EMPTY_STRING_DATE
     def test_same_period_last_year_excludes_simulation_cycle(self):
         """去年同期若剛好是模擬期，一樣不算數——同期比較跟 annual_average 走同一個排除點。"""
         current_start = ads_repo.get_cycle(main.conn, self.bid, self.cycle_id)["start_date"]
@@ -798,7 +761,6 @@ class SimulationExcludedFromBaselineTest(_ReadingIntegrationBase):
                           self.cycle_id)["cycle"]["result"]["baseline_comparison"]
         self.assertEqual(bl["same_period_last_year"], {})
 
-    @_BUG_EMPTY_STRING_DATE
     def test_calibration_forecast_basis_not_pulled_by_simulation(self):
         """校準區間 basis（simulation._basis，經 brand_baseline）不吃模擬數據——
         品牌只有模擬史時，basis 要老實退回產業通例值，不是假裝有品牌歷史。"""

@@ -101,7 +101,11 @@ def _import_easystore(conn, brand_id: str, content: bytes, actor: str) -> Dispat
     # （決策 0025 補遺第 1 點），受影響期別靠日期範圍重疊找，不是靠外鍵查。
     date_range = _order_date_range(rows)
     if date_range:
-        since, until = date_range
+        # BUG 修復（route=C 02-3c，同 dispatch.py:141 那個根因，這裡是另一個發生點）：
+        # since/until 是 _order_date_range() 算出來的字串，cycle["start_date"]/
+        # ["end_date"] 是 Postgres date 欄位讀回來的 datetime.date，型別不同直接
+        # TypeError。轉成 date 物件再比。
+        since, until = (date_cls.fromisoformat(d) for d in date_range)
         cycles = ads_repo.list_cycles(conn, brand_id, include_archived=True)
         affected = [c["id"] for c in cycles if c["start_date"] <= until and since <= c["end_date"]]
         result.late_reruns = _rerun_affected_cycles(conn, brand_id, actor, affected)
@@ -137,7 +141,10 @@ def _import_meta_csv(conn, brand_id: str, text: str, actor: str,
     grouped: dict = {}
     brand_level_rows = []
     for row in rows:
-        row_date = row.get("date_start") or row.get("date_stop") or today
+        # BUG 修復（route=C 02-3c，app/orders/dispatch.py:141）：cycle["start_date"]/
+        # ["end_date"] 是 date 欄位讀回來的 datetime.date，row_date 是字串；SQLite
+        # 兩邊都當字串比，Postgres 型別不同直接 TypeError。轉成 date 物件再比。
+        row_date = date_cls.fromisoformat(row.get("date_start") or row.get("date_stop") or today)
         cycle = next((c for c in cycles if c["start_date"] <= row_date <= c["end_date"]), None)
         if cycle is None:
             brand_level_rows.append(row)

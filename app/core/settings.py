@@ -140,7 +140,10 @@ def brand_llm_spent(conn: db.Conn, brand_id: str, *, since: Optional[str] = None
         sql += " AND started_at >= %s"
         params.append(since)
     row = conn.execute(sql, params).fetchone()
-    return row["n"] or 0.0
+    # BUG 修復（route=C 02-3c）：SUM(cost) 讀回來是 numeric -> Decimal，這裡宣告
+    # -> float；讀取端單一收口轉型，呼叫端（budget_exceeded_message 的 spent + cost）
+    # 才能放心跟 float 算術，不必自己 float() 一次。
+    return float(row["n"] or 0.0)
 
 
 def budget_exceeded_message(conn: db.Conn, brand_id: str, cost: float, *,

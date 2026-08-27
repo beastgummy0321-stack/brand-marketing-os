@@ -31,24 +31,6 @@ from app.llm.providers import FakeProvider, ProviderError, ProviderResponse, Usa
 
 ACTOR = "測試員"
 
-# BUG app/core/settings.py:143 — brand_llm_spent() 回傳 Decimal，budget_exceeded_message()
-# 的 spent + cost 一律 TypeError（同一個 BUG，其他群組已標過）。
-_BUG_DECIMAL_PLUS_FLOAT = pytest.mark.xfail(
-    strict=True,
-    reason='BUG app/core/settings.py:143 — brand_llm_spent() 回傳 Decimal，'
-           "budget_exceeded_message() 的 spent + cost 一律 TypeError",
-)
-# 同一個 BUG，但這個測試用 subTest 對同一個品牌連呼 4 次（post/image/video/script）：
-# 中不中要看呼叫順序（哪一次是「這個品牌第一次成功生成」，此時 brand_llm_spent() 走
-# `or 0.0` 分支不中；之後每一次都因為已有花費入帳變成 Decimal 而中）——單獨跑這個檔案
-# 或整個目錄一起跑，pytest 收集測試的順序不同，「第一次」落在哪個 scope 也跟著變，
-# 不是穩定必中。strict=True 在這裡不適用，用 strict=False 誠實描述。
-_BUG_DECIMAL_PLUS_FLOAT_ORDER_DEPENDENT = pytest.mark.xfail(
-    strict=False,
-    reason='BUG app/core/settings.py:143 — brand_llm_spent() 回傳 Decimal，'
-           "budget_exceeded_message() 的 spent + cost 一律 TypeError；這個測試連呼 4 次，"
-           "只有非「這個品牌第一次成功生成」的呼叫會中，會中在哪一次隨測試收集順序而變",
-)
 _AXES_VALUES = {"angle": "benefit", "tone": "warm", "format": "single_image",
                 "selling_point": "quality"}
 
@@ -151,7 +133,6 @@ class ScopeFieldShapeTest(_Base):
         self.assertEqual(types, {"image_prompt"})
         self.assertEqual(len(result["components"]), 10)
 
-    @_BUG_DECIMAL_PLUS_FLOAT
     def test_video_scope_returns_hook_pool_script_and_body_only(self):
         self._swap(_video_reply())
         resp = self._post(scope="video", topic="送禮不失禮", product_id=None)
@@ -166,7 +147,6 @@ class ScopeFieldShapeTest(_Base):
         # 不是 3 次呼叫各 5 則疊出來的 15 則）。
         self.assertEqual(counts, {"hook_pool": 10, "script": 3, "body": 5})
 
-    @_BUG_DECIMAL_PLUS_FLOAT
     def test_script_scope_returns_hook_pool_and_script_only(self):
         self._swap(_video_reply())
         resp = self._post(scope="script", topic="送禮不失禮", product_id=None)
@@ -179,7 +159,6 @@ class ScopeFieldShapeTest(_Base):
             counts[c["component_type"]] = counts.get(c["component_type"], 0) + 1
         self.assertEqual(counts, {"hook_pool": 10, "script": 3})
 
-    @_BUG_DECIMAL_PLUS_FLOAT_ORDER_DEPENDENT
     def test_no_scope_ever_returns_title_or_description(self):
         for scope, reply in (("post", _single_image_reply()), ("image", _single_image_reply()),
                              ("video", _video_reply()), ("script", _video_reply())):
@@ -192,7 +171,6 @@ class ScopeFieldShapeTest(_Base):
                 self.assertNotIn("description", types)
 
 
-@_BUG_DECIMAL_PLUS_FLOAT
 class VideoThreeCallsSharedHookPoolTest(_Base):
     """票修復：完整影片／單則腳本要真的呼叫 3 次生成引擎（一支腳本＝一個主題，既有排程流程
     規則），且第二、三次要重用第一次的 hook_pool，不是各自重生一份。"""

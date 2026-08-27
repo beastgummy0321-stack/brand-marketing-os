@@ -46,19 +46,6 @@ atexit.register(_cleanup)
 
 ACTOR = "測試員"
 
-_BUG_CARRY_FORWARD_ROAS_DECIMAL = pytest.mark.xfail(
-    strict=True,
-    reason="BUG app/ads/carry_forward.py:62 — prior_winners() 的 "
-           "round(revenue / spend, 2) 拿 numeric 欄位(Decimal) 運算，round() 保留型別，"
-           "回傳 Decimal 不是 float，跟呼叫端期待的 float 對不上",
-)
-_BUG_COMPARISON_CELLS_GROUP_BY = pytest.mark.xfail(
-    strict=True,
-    reason="BUG app/ads/reading_hypotheses.py:82 — comparison_cells() SELECT 了"
-           " cell.creative_angle 卻只 GROUP BY pkg.experiment_cell_id；SQLite 容許"
-           "（任選一列），Postgres 嚴格要求 SELECT 清單裡的非聚合欄位都要在 GROUP BY"
-           "裡，psycopg.errors.GroupingError",
-)
 
 # 兩個方案的最小合法形狀（見 plan.py::_normalize_option）：summary、冷受眾描述、至少一個
 # 有 title／message 的切角。跟 test_ads_plan.py 的 _GOOD_OPTIONS 不共用一份——這裡只是
@@ -211,7 +198,6 @@ class _BaseCarryForwardTest(unittest.TestCase):
 class PriorWinnersRetrievalTest(_BaseCarryForwardTest):
     """直接測 `carry_forward.prior_winners()`：不經過 LLM，純粹是「贏家」定義與誠實門檻。"""
 
-    @_BUG_CARRY_FORWARD_ROAS_DECIMAL
     def test_profitable_and_well_evidenced_cell_is_a_winner(self):
         self._seed_cell(self.prior_cycle_id, creative_angle="實證成分", product_id=self.product,
                         spend=21000, conversions=60, revenue=21000 * 4.31)
@@ -297,7 +283,6 @@ class SignedOffLearningWinnerTest(_BaseCarryForwardTest):
     `WEEKLY_CONVERSIONS_PER_GROUP` 統計門檻也算贏家——低門檻給人簽的、高門檻給機器自動
     加碼／停損卡用，兩件事分開（B2 F2 ❌ 重現的正是同一個問題兩套不同的門檻）。"""
 
-    @_BUG_COMPARISON_CELLS_GROUP_BY
     def test_signed_off_learning_below_statistical_threshold_is_still_a_winner(self):
         """票 F11：贏家是學習句子點名的切角，不是那期 ROAS 最高的切角——這裡刻意讓
         「使用者見證」的 ROAS 比句子點名的「實證成分」還高，若橋接還是舊的 argmax
@@ -320,7 +305,6 @@ class SignedOffLearningWinnerTest(_BaseCarryForwardTest):
                         product_id=self.product, spend=1000, conversions=3, revenue=10000)
         self.assertEqual(carry_forward.prior_winners(main.conn, self.bid), [])
 
-    @_BUG_COMPARISON_CELLS_GROUP_BY
     def test_plan_ignoring_signed_off_winner_is_rejected_not_stored(self):
         """契約 done-check 2：`FakeProvider` 回的方案沒引用這條簽核贏家，
         `citation_violations()` 要擋下、錯誤訊息具名點出切角，不能悄悄存進去。"""
@@ -334,7 +318,6 @@ class SignedOffLearningWinnerTest(_BaseCarryForwardTest):
         self.assertEqual(
             ads_plan.get_pending_options(main.conn, self.bid, self.carry_forward_cycle_id), [])
 
-    @_BUG_COMPARISON_CELLS_GROUP_BY
     def test_plan_citing_only_one_of_two_signed_off_winners_is_rejected_naming_the_missing_one(self):
         """票 F12 done-check 6：兩個具名贏家，推薦方案只交代其中一個（連數字都寫對）——
         另一個完全沒被沿用，錯誤訊息要點名那個沒被交代的贏家，方案整批不落地。RED first：
@@ -353,7 +336,6 @@ class SignedOffLearningWinnerTest(_BaseCarryForwardTest):
         self.assertEqual(
             ads_plan.get_pending_options(main.conn, self.bid, self.carry_forward_cycle_id), [])
 
-    @_BUG_COMPARISON_CELLS_GROUP_BY
     def test_learning_naming_no_cell_of_its_cycle_contributes_no_winner(self):
         """票 F11 done-check 2：學習句子沒點名這期任何一個切角（都是代號形狀）——不准
         落回「那期 ROAS 最高的」當贏家，這條 entry 就是沒有贏家。RED first：F7 原本的
@@ -365,7 +347,6 @@ class SignedOffLearningWinnerTest(_BaseCarryForwardTest):
                    ("bad_cvr", 30, 4500, 4500 * 0.99)])
         self.assertEqual(carry_forward.prior_winners(main.conn, self.bid), [])
 
-    @_BUG_COMPARISON_CELLS_GROUP_BY
     def test_learning_naming_two_cells_returns_both_with_their_own_roas(self):
         """票 F11 done-check 3：一句學習點名兩個切角，兩個都要回來，各自帶自己的 ROAS
         ——沒被點名的第三個切角（使用者見證，ROAS 更高）不算數。"""
@@ -465,7 +446,6 @@ class UnvalidatedHypothesisNeverBecomesPlanGroundingTest(_BaseCarryForwardTest):
     這裡驗證降級後的假設真的不會回頭冒充成方案依據出現在下一期企劃 prompt 裡（契約第 3 點）。
     """
 
-    @_BUG_COMPARISON_CELLS_GROUP_BY
     def test_downgraded_hypothesis_never_reaches_the_next_plan_prompt(self):
         # 只投了 1 個切角，沒有 B 邊可比——跟 B0-32 重現步驟一樣的形狀。
         self._seed_cell(self.prior_cycle_id, creative_angle="情感痛點開場",

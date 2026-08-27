@@ -168,7 +168,12 @@ def pharmacy_latest_batch(conn, brand_id: str) -> Optional[str]:
         " ORDER BY batch_date DESC, created_at DESC LIMIT 1",
         (brand_id,),
     ).fetchone()
-    return row["batch_date"] if row else None
+    if not row:
+        return None
+    # BUG 修復（route=C 02-3c，app/orders/channel.py:164）：batch_date 是 date 欄位，
+    # Postgres 讀回來是 datetime.date，違反自己宣告的 -> Optional[str]；轉成 ISO 字串
+    # 才對得上呼叫端（字串比對）的期待。
+    return row["batch_date"].isoformat() if row["batch_date"] else None
 
 
 def shopee_revenue(conn, brand_id: str, since: str, until: str) -> Optional[float]:
@@ -180,7 +185,9 @@ def shopee_revenue(conn, brand_id: str, since: str, until: str) -> Optional[floa
     ).fetchone()
     if not row["rows"]:
         return None
-    return round(row["total"] or 0, 2)
+    # BUG 修復（route=C 02-3c，app/orders/channel.py:183）：SUM(revenue) 讀回來是
+    # Decimal，round(Decimal,2) 還是 Decimal，違反自己宣告的 -> Optional[float]。
+    return round(float(row["total"] or 0), 2)
 
 
 # ---------------------------------------------------------------------------

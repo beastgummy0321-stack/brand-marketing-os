@@ -31,13 +31,6 @@ TODAY = "2026-08-05"
 NO_NETWORK = lambda _url: True
 
 
-# BUG app/core/interrupts.py:99 — enqueue() dedup 查詢用 "brand_id IS %s"，
-# Postgres 的 IS 不接受綁參數，一律 psycopg.errors.SyntaxError（同一個 BUG，多群組已標過）。
-_BUG_INTERRUPT_IS_PARAM = pytest.mark.xfail(
-    strict=True,
-    reason='BUG app/core/interrupts.py:99 — enqueue() dedup 查詢用 "brand_id IS %s"，'
-           "Postgres 的 IS 不接受綁參數，一律 psycopg.errors.SyntaxError",
-)
 
 
 class _BaseAutoSyncTest(unittest.TestCase):
@@ -73,7 +66,6 @@ class MetaAutoSyncTest(_BaseAutoSyncTest):
         self.assertTrue(insight_calls)
         self.assertEqual(insight_calls[-1][3], TODAY)
 
-    @_BUG_INTERRUPT_IS_PARAM
     def test_sync_failure_enqueues_interrupt(self):
         coresettings.set_setting(main.conn, ads_sync.ACCOUNT_SETTING, "act_123")
         coresettings.set_setting(main.conn, ads_sync.TOKEN_SETTING, "fake-token")
@@ -92,7 +84,6 @@ class MetaAutoSyncTest(_BaseAutoSyncTest):
         ads_auto_sync.run(main.conn, today=TODAY, meta_client=fake, url_probe=NO_NETWORK)
         self.assertEqual(core_interrupts.list_open(main.conn), [])
 
-    @_BUG_INTERRUPT_IS_PARAM
     def test_repeated_same_day_failure_does_not_duplicate_interrupt(self):
         """去重鍵含日期：同一天重複跑（例如背景執行緒又檢查了一次）只留一筆，
         不會洗版打斷佇列。"""
@@ -126,7 +117,6 @@ class GA4AutoSyncTest(_BaseAutoSyncTest):
         for result in outcome["ga4"].values():
             self.assertIsNone(result.error)
 
-    @_BUG_INTERRUPT_IS_PARAM
     def test_one_brand_ga4_failure_does_not_block_the_other(self):
         brand_2 = bi_repo.create_brand(
             main.conn, name=f"虛構自動同步三號店{abs(hash(self.id())) % 100000}",

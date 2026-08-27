@@ -26,16 +26,6 @@ from unittest import mock
 
 import pytest
 
-# BUG app/core/interrupts.py:99 — enqueue() 的去重查詢用 "brand_id IS %s"，這是 SQLite
-# `IS` 運算子的寫法（可綁參數）；Postgres 的 IS 只接受 NULL/TRUE/FALSE/UNKNOWN 字面值，
-# 不接受綁參數，一律 psycopg.errors.SyntaxError。凡是會走到出卡（core_interrupts.enqueue）
-# 的路徑都會炸在這裡。02-4 是測試轉移票，不改 app/core/*.py，這裡標 xfail，等後續票修正
-# production code（正確寫法應是 "brand_id IS NOT DISTINCT FROM %s"）。
-_BUG_INTERRUPT_IS_PARAM = pytest.mark.xfail(
-    strict=True,
-    reason='BUG app/core/interrupts.py:99 — enqueue() dedup 查詢用 "brand_id IS %s"，'
-           "Postgres 的 IS 不接受綁參數，一律 psycopg.errors.SyntaxError",
-)
 
 from app.ads import auto_sync
 from app.ads import diagnosis as ads_diagnosis
@@ -100,7 +90,6 @@ class OrchestratorMechanicsTest(unittest.TestCase):
 
     # ---- 驗收 3／4：自動度閘門 ----
 
-    @_BUG_INTERRUPT_IS_PARAM
     def test_conservative_gate_cards_instead_of_calling_handle(self):
         handle_calls = []
         self._register_fake_module(
@@ -214,7 +203,6 @@ class OrchestratorMechanicsTest(unittest.TestCase):
 
     # ---- 驗收 7：連三次失敗升級出卡 ----
 
-    @_BUG_INTERRUPT_IS_PARAM
     def test_third_consecutive_failure_escalates_to_inbox(self):
         def _always_fails(conn, action):
             raise RuntimeError("still broken")

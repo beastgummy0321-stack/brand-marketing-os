@@ -31,13 +31,6 @@ from app.core.db import new_id, now_iso  # noqa: E402
 from app.llm.providers import FakeProvider, ProviderResponse, Usage  # noqa: E402
 from app.shared.web import OPERATOR  # noqa: E402
 
-# BUG app/ads/performance.py:364 — import_rows() 的 INSERT 對 date 欄位傳 ""，
-# Postgres 一律 psycopg.errors.InvalidDatetimeFormat（同一個 BUG，orders 群組已標過）。
-_BUG_EMPTY_STRING_DATE = pytest.mark.xfail(
-    strict=True,
-    reason='BUG app/ads/performance.py:364 — import_rows() 的 INSERT 對 date 欄位傳 ""，'
-           "Postgres 一律 psycopg.errors.InvalidDatetimeFormat",
-)
 
 
 def _cleanup():
@@ -197,7 +190,6 @@ class _BaseNextCycleTest(unittest.TestCase):
 
 
 class BudgetProposalTest(_BaseNextCycleTest):
-    @_BUG_EMPTY_STRING_DATE
     def test_good_cycle_proposes_a_capped_increase(self):
         self._run_cycle(spend=10000, impressions=20000, clicks=400, conversions=10,
                         revenue=40000)
@@ -207,7 +199,6 @@ class BudgetProposalTest(_BaseNextCycleTest):
         self.assertEqual(draft["budget"]["proposed_budget"], 12000.0)
         self.assertEqual(draft["budget"]["cap_ratio"], 0.2)
 
-    @_BUG_EMPTY_STRING_DATE
     def test_more_conversions_unlock_a_bigger_step(self):
         self._run_cycle(spend=10000, impressions=200000, clicks=4000, conversions=150,
                         revenue=600000)
@@ -215,7 +206,6 @@ class BudgetProposalTest(_BaseNextCycleTest):
         self.assertEqual(draft["budget"]["cap_ratio"], 1.5)
         self.assertEqual(draft["budget"]["proposed_budget"], 25000.0)
 
-    @_BUG_EMPTY_STRING_DATE
     def test_losing_cycle_proposes_cutting_in_half(self):
         self._run_cycle(spend=10000, impressions=20000, clicks=400, conversions=10,
                         revenue=10000)
@@ -224,7 +214,6 @@ class BudgetProposalTest(_BaseNextCycleTest):
         self.assertEqual(draft["budget"]["proposed_budget"], 5000.0)
         self.assertIn("收一半", draft["budget"]["advice"])
 
-    @_BUG_EMPTY_STRING_DATE
     def test_draft_is_built_together_with_the_reading(self):
         """判讀完成的同時就備好下期，不必再點一次。"""
         self._run_cycle(spend=10000, impressions=20000, clicks=400, conversions=10,
@@ -261,7 +250,6 @@ class HistoricalCellPerformanceTest(_BaseNextCycleTest):
         main.conn.commit()
         return cell_id
 
-    @_BUG_EMPTY_STRING_DATE
     def test_even_split_budget_and_join_chain_flags_underperforming(self):
         """每格均分預算 5000。角 A 有 product_id（打平線 1.67），角 B 的 product_id 是 NULL
         （票內 THE BUG 的真實形狀）退用檔期層打平線（本檔期只有角 A 這個產品，退回值同角 A）。
@@ -294,7 +282,6 @@ class HistoricalCellPerformanceTest(_BaseNextCycleTest):
                                                        exclude_cycle_id=self.cycle_id)
         self.assertEqual(cells, [])
 
-    @_BUG_EMPTY_STRING_DATE
     def test_build_wires_historical_cells_into_next_cycle_content(self):
         """下期建議回傳結果（recommendation.content_json）要能拿到這份清單——不是寫好沒人
         呼叫的孤兒函式。build() 排除本期自己（還在打的檔期不算「歷史」）。"""
@@ -605,7 +592,6 @@ class OverclaimClaimCardTest(_BaseNextCycleTest):
         self._reject_overclaim("吃三天就有感")
         self.assertEqual(nextcycle.build_rule_cards(main.conn, self.bid, ACTOR), 0)
 
-    @_BUG_EMPTY_STRING_DATE
     def test_build_wires_it_into_the_next_cycle_draft(self):
         self._reject_overclaim("這是全世界最有效的配方")
         self._reject_overclaim("吃三天就有感")

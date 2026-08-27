@@ -79,14 +79,6 @@ class SkuCostVersionTest(unittest.TestCase):
         self.assertEqual(rows["c"], 1)
 
 
-# BUG app/ads/performance.py:526 — compute_kpis() 的 "cpa": spend / conversions，
-# spend 是 numeric（讀回 Decimal），conversions 是 double precision（讀回 float），
-# Postgres 下 TypeError（SQLite 沒有型別區分，兩者都是同一種數字，不會炸）。
-_BUG_KPI_DECIMAL_DIV_FLOAT = pytest.mark.xfail(
-    strict=True,
-    reason="BUG app/ads/performance.py:526 — compute_kpis() 的 spend / conversions"
-           "（numeric 對 double precision）型別不一致，psycopg.errors 之外的 TypeError",
-)
 
 
 class SettlementFreezeTest(unittest.TestCase):
@@ -113,7 +105,6 @@ class SettlementFreezeTest(unittest.TestCase):
     def _spend(self, **values):
         perf.import_manual(main.conn, self.bid, self.cycle_id, values, actor=ACTOR)
 
-    @_BUG_KPI_DECIMAL_DIV_FLOAT
     def test_rerun_produces_new_version_each_time(self):
         self._spend(spend=10000, impressions=20000, clicks=400, conversions=10, revenue=40000)
         reading.run(main.conn, self.bid, self.cycle_id, ACTOR)
@@ -140,7 +131,6 @@ class SettlementFreezeTest(unittest.TestCase):
             (self.cycle_id,)).fetchone()["c"]
         self.assertEqual(snapshots, 3)
 
-    @_BUG_KPI_DECIMAL_DIV_FLOAT
     def test_snapshot_captures_arrival_and_summary(self):
         self._spend(spend=10000, impressions=20000, clicks=400, conversions=10, revenue=40000)
         reading.run(main.conn, self.bid, self.cycle_id, ACTOR)
@@ -152,7 +142,6 @@ class SettlementFreezeTest(unittest.TestCase):
         self.assertIn("orders", snap["missing_sources"])  # 沒訂單資料，誠實列進缺席清單
         self.assertEqual(snap["summary"]["cycle"]["spend"], 10000)
 
-    @_BUG_KPI_DECIMAL_DIV_FLOAT
     def test_snapshots_across_versions_are_comparable_field_by_field(self):
         """跨版差異必須對得上：花費從 10000 改成 20000，diff 要精準抓到 cycle.spend 這一鍵。
         兩筆手動輸入日期要不同——票 11 之後手動填寫也走檔期層去重，同一天填兩筆一模一樣
@@ -172,7 +161,6 @@ class SettlementFreezeTest(unittest.TestCase):
         self.assertEqual(spend_diff[2], "10000.0")
         self.assertEqual(spend_diff[3], "20000.0")
 
-    @_BUG_KPI_DECIMAL_DIV_FLOAT
     def test_cost_change_after_freeze_does_not_rewrite_history(self):
         """判讀只引用當時生效的成本版本：先凍結一版（成本 10），事後把成本改成 15，
         舊版快照的明細仍要顯示 10，不能被回改的成本悄悄改掉（決策 0025 審查補遺 C）。"""
@@ -217,7 +205,6 @@ class SettlementFreezeTest(unittest.TestCase):
         ).fetchone()
         self.assertEqual(new_row["value"], "15.0")
 
-    @_BUG_KPI_DECIMAL_DIV_FLOAT
     def test_is_post_close_flag_reflects_cycle_status_at_freeze_time(self):
         self._spend(spend=10000, impressions=20000, clicks=400, conversions=10, revenue=40000)
         reading.run(main.conn, self.bid, self.cycle_id, ACTOR)

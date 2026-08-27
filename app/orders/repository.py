@@ -297,8 +297,11 @@ def stats(conn: Conn, brand_id: str, *, since: Optional[str] = None,
     valid_orders = [o for o in orders if not _is_voided(o["order_status"])]
 
     order_count = len(valid_orders)
-    net_revenue = (sum((o["total_amount"] or 0) - (o["refunded_amount"] or 0)
-                       for o in valid_orders) if orders else None)
+    # BUG 修復（route=C 02-3c）：total_amount/refunded_amount 是 numeric 欄位，sum() 出來
+    # 是 Decimal；讀取端單一收口轉 float，下游（app/dashboard/repository.py _roas()）
+    # 才不會回傳跟自己宣告型別（Optional[float]）不符的 Decimal。
+    net_revenue = (float(sum((o["total_amount"] or 0) - (o["refunded_amount"] or 0)
+                            for o in valid_orders)) if orders else None)
     average_order_value = (round(net_revenue / order_count, 2)
                            if (net_revenue is not None and order_count) else None)
 
@@ -308,7 +311,12 @@ def stats(conn: Conn, brand_id: str, *, since: Optional[str] = None,
         customer = conn.execute(
             "SELECT first_order_at FROM customer WHERE id = %s", (cid,)
         ).fetchone()
-        if customer and customer["first_order_at"] and customer["first_order_at"] >= since:
+        # BUG 修復（route=C 02-3c，app/orders/repository.py:311）：first_order_at 是
+        # timestamptz 欄位讀回來的 datetime，since 是純日期字串（"YYYY-MM-DD"）；
+        # SQLite 兩邊都是字串才比得起來，Postgres 型別不同直接 TypeError。比較前
+        # 先收斂成同一種「日期」再比。
+        if (customer and customer["first_order_at"]
+                and customer["first_order_at"].date() >= date.fromisoformat(since)):
             new_customers += 1
         else:
             existing_customers += 1
@@ -377,10 +385,13 @@ def repurchase_multiplier(conn: Conn, brand_id: str, *,
         valid = [o for o in orders if not _is_voided(o["order_status"])]
         if not valid:
             continue
-        first_net = (valid[0]["total_amount"] or 0) - (valid[0]["refunded_amount"] or 0)
+        # BUG 修復（route=C 02-3c，app/orders/repository.py:384）：total_amount/
+        # refunded_amount 是 numeric 欄位讀回來的 Decimal；first_total/window_total 是
+        # float 起手（0.0），float += Decimal 直接 TypeError。讀取端就近轉 float。
+        first_net = float((valid[0]["total_amount"] or 0) - (valid[0]["refunded_amount"] or 0))
         if first_net <= 0:
             continue
-        window_net = sum((o["total_amount"] or 0) - (o["refunded_amount"] or 0) for o in valid)
+        window_net = float(sum((o["total_amount"] or 0) - (o["refunded_amount"] or 0) for o in valid))
         first_total += first_net
         window_total += window_net
         sample += 1
@@ -430,7 +441,15 @@ def list_policy_changes(conn: Conn, brand_id: str, *,
         sql += " AND changed_at <= %s"
         params.append(until)
     sql += " ORDER BY changed_at DESC"
-    return _rows(conn.execute(sql, params))
+    rows = _rows(conn.execute(sql, params))
+    # BUG 修復（route=C 02-3c，NEW）：changed_at 只曾經寫入純日期字串（record_policy_
+    # change() 呼叫端只填 "YYYY-MM-DD"），但欄位型別是 timestamptz；Postgres 讀回來是
+    # 帶時分秒的 datetime（"2026-08-01T00:00:00+00:00"），對外 API 回應變出多餘的時間
+    # 部分——只留日期，符合原本寫入的語意。
+    for row in rows:
+        if row["changed_at"] is not None:
+            row["changed_at"] = row["changed_at"].date().isoformat()
+    return rows
 
 
 def list_orders(conn: Conn, brand_id: str, limit: int = 50,

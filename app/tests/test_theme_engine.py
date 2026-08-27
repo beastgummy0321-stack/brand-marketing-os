@@ -50,13 +50,6 @@ atexit.register(_cleanup)
 
 ACTOR = "測試員"
 
-# BUG app/core/settings.py:143 — brand_llm_spent() 回傳 Decimal，budget_exceeded_message()
-# 的 spent + cost 一律 TypeError（同一個 BUG，其他群組已標過）。
-_BUG_DECIMAL_PLUS_FLOAT = pytest.mark.xfail(
-    strict=True,
-    reason='BUG app/core/settings.py:143 — brand_llm_spent() 回傳 Decimal，'
-           "budget_exceeded_message() 的 spent + cost 一律 TypeError",
-)
 
 _FIELDS = FORMAT_SPECS["single_image"]["fields"]
 _AXES_VALUES = {"angle": "benefit", "tone": "warm", "format": "single_image",
@@ -531,7 +524,6 @@ class MatrixEmptyCellGenerateTest(_Base):
             counts[c["component_type"]] = counts.get(c["component_type"], 0) + 1
         self.assertEqual(counts, {name: spec["count"] for name, spec in _FIELDS.items()})
 
-    @_BUG_DECIMAL_PLUS_FLOAT
     def test_second_generate_in_same_cell_carries_the_first_theme_into_the_prompt(self):
         """防撞衫約束：第一次生成留下的主題，要出現在第二次生成的簡報／prompt 裡。"""
         cycle_id, cell_id = self._ready_cell(objective="sales")

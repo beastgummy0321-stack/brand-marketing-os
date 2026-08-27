@@ -14,24 +14,7 @@ from app.orders import repository as orders_repo
 
 ACTOR = "測試員"
 
-# BUG app/orders/repository.py:311 — stats() 比較 customer["first_order_at"]（Postgres
-# timestamptz，psycopg 讀回 datetime）跟 since（ISO 日期字串），SQLite 兩邊都是字串比對
-# 沒事，Postgres 直接 TypeError。stats() 是 GET /orders 的資料來源，凡是打過這支 API
-# 或直接呼叫 stats() 的測試全部炸在這裡。
-_BUG_STATS_DATETIME_VS_STR = pytest.mark.xfail(
-    strict=True,
-    reason="BUG app/orders/repository.py:311 — stats() 拿 datetime 跟字串比較"
-           "（customer['first_order_at'] >= since），psycopg.errors 前是 TypeError",
-)
 
-# BUG app/orders/repository.py:384 — repurchase_multiplier() 用 float 累加
-# window_total/first_total，逐筆加的卻是 Postgres numeric 欄位（total_amount／
-# refunded_amount）讀回的 Decimal，float += Decimal 直接 TypeError。
-_BUG_REPURCHASE_FLOAT_PLUS_DECIMAL = pytest.mark.xfail(
-    strict=True,
-    reason="BUG app/orders/repository.py:384 — repurchase_multiplier() 累加器是 float，"
-           "逐筆加的是 numeric 讀回的 Decimal，float += Decimal 直接 TypeError",
-)
 
 
 def _order(order_number, order_date, total_amount, refunded_amount=0, order_status="paid",
@@ -109,7 +92,6 @@ class SaveOrdersTest(_BaseOrdersTest):
         self.assertIsNone(order["customer_id"])
 
 
-@_BUG_STATS_DATETIME_VS_STR
 class StatsFixtureTest(_BaseOrdersTest):
     """五項統計卡 fixture 驗算（issue #33 驗收條件）。"""
 
@@ -206,7 +188,6 @@ class RepurchaseMultiplierTest(_BaseOrdersTest):
                 rows.append(_order(f"R{i}", "2026-02-15", 1000, billing_email=email))
         orders_repo.save_orders(web.conn, self.bid, rows, source="easystore_xlsx", actor=ACTOR)
 
-    @_BUG_REPURCHASE_FLOAT_PLUS_DECIMAL
     def test_below_sample_threshold_does_not_enable_multiplier(self):
         """票 #39 驗收條件：樣本不足不顯示實質線（回 None，不是硬湊一個數字）。"""
         self._seed_customers(29)
@@ -215,7 +196,6 @@ class RepurchaseMultiplierTest(_BaseOrdersTest):
         self.assertEqual(result["sample_size"], 29)
         self.assertTrue(result["insufficient_sample"])
 
-    @_BUG_REPURCHASE_FLOAT_PLUS_DECIMAL
     def test_meeting_sample_threshold_computes_multiplier(self):
         """30 位顧客，首單 1000、90 天內回購再 1000 -> 倍數 2.0（fixture 驗算）。"""
         self._seed_customers(30)
@@ -224,7 +204,6 @@ class RepurchaseMultiplierTest(_BaseOrdersTest):
         self.assertEqual(result["sample_size"], 30)
         self.assertEqual(result["multiplier"], 2.0)
 
-    @_BUG_REPURCHASE_FLOAT_PLUS_DECIMAL
     def test_customer_whose_observation_window_has_not_elapsed_is_excluded(self):
         """首單日距離 today 還不滿 90 天的顧客，觀察期還沒跑完，不計入樣本。"""
         self._seed_customers(30)

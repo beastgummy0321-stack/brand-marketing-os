@@ -19,25 +19,7 @@ from app.orders import dispatch as orders_dispatch
 
 ACTOR = "測試員"
 
-# BUG app/orders/dispatch.py:141 — 拿 Meta CSV 一列的 row_date（字串）跟
-# c["start_date"]/c["end_date"]（Postgres date，psycopg 讀回 datetime.date）做
-# `<=` 比較，SQLite 兩邊都是字串沒事，Postgres 直接 TypeError。凡是匯 Meta CSV
-# 走到「找對應檔期」這段的測試都會炸在這裡。
-_BUG_DISPATCH_DATE_VS_STR = pytest.mark.xfail(
-    strict=True,
-    reason="BUG app/orders/dispatch.py:141 — 拿 date 跟字串比較"
-           "（c['start_date'] <= row_date <= c['end_date']），TypeError",
-)
 
-# BUG app/ads/performance.py:613 — `(row["date_range_start"] or "")[:7]` 假設
-# date_range_start 是字串（SQLite），Postgres 讀回 datetime.date，對 date 物件做
-# 字串切片直接 TypeError。凡是走到品牌層成效月分組（reading.run() 內部）的測試都會
-# 炸在這裡。
-_BUG_PERFORMANCE_DATE_SLICE = pytest.mark.xfail(
-    strict=True,
-    reason='BUG app/ads/performance.py:613 — (row["date_range_start"] or "")[:7] '
-           "對 datetime.date 物件切片，TypeError: 'datetime.date' object is not subscriptable",
-)
 
 _EASYSTORE_HEADERS = ["Order Number", "Date", "Total Amount", "Refunded Amount",
                       "Financial Status", "Fulfillment Status", "Order Status",
@@ -83,7 +65,6 @@ class DispatchTest(unittest.TestCase):
         self.assertEqual(result.kind, "unknown")
         self.assertTrue(result.errors)
 
-    @_BUG_DISPATCH_DATE_VS_STR
     def test_meta_csv_auto_matches_to_overlapping_cycle(self):
         cycle = ads_repo.create_cycle(web.conn, self.bid, product_ids=[], pain_value=5000,
                                       objective="流量", actor=ACTOR, start_date="2026-06-01",
@@ -100,7 +81,6 @@ class DispatchTest(unittest.TestCase):
             (self.bid,)).fetchone()
         self.assertEqual(row["campaign_cycle_id"], cycle["id"])
 
-    @_BUG_DISPATCH_DATE_VS_STR
     def test_meta_csv_row_outside_any_cycle_becomes_brand_level_history(self):
         """決策 0039 第 7 條：對不到檔期的舊廣告列不再整批丟棄，轉品牌層
         （campaign_cycle_id=NULL），並誠實回報「已入品牌層歷史」而非「沒有匯入」。"""
@@ -117,7 +97,6 @@ class DispatchTest(unittest.TestCase):
             (self.bid,)).fetchone()
         self.assertIsNone(row["campaign_cycle_id"])
 
-    @_BUG_DISPATCH_DATE_VS_STR
     def test_same_brand_level_meta_csv_dropped_twice_does_not_double_count(self):
         """票 F9（GitHub #68，F8 破壞者 Persona 發現）：同一份品牌層歷史 CSV 拖進拖檔口
         兩次，第二次不能再靜默疊加樣本數，且要誠實列出略過幾列。"""
@@ -136,7 +115,6 @@ class DispatchTest(unittest.TestCase):
         self.assertEqual(count, 1)
 
 
-@_BUG_PERFORMANCE_DATE_SLICE
 class LateDataRerunDispatchTest(unittest.TestCase):
     """票 #38：晚到檔案丟拖檔口自動觸發受影響期別的補件重判（決策 0025 懶人優先第 3 點）。"""
 

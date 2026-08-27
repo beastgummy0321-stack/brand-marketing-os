@@ -20,15 +20,6 @@ from app.orders import repository as orders_repo  # noqa: E402
 ACTOR = "測試員"
 TODAY = "2026-08-05"
 
-# BUG app/dashboard/repository.py:248 — _roas() 型別標成 -> Optional[float]，但
-# round(revenue / spend, 2) 的 revenue／spend 來自 numeric 欄位加總，Postgres 讀回來是
-# Decimal，round(Decimal, 2) 還是 Decimal，違反自己標的回傳型別。
-_BUG_ROAS_RETURNS_DECIMAL = pytest.mark.xfail(
-    strict=True,
-    reason="BUG app/dashboard/repository.py:248 — _roas() 標 -> Optional[float]，"
-           "但 revenue/spend 是 numeric 欄位加總出來的 Decimal，round() 後仍是 Decimal，"
-           "不是宣告的 float",
-)
 
 
 def _seed_spend(conn, brand_id: str, *, date_str: str, spend: float) -> str:
@@ -64,7 +55,6 @@ class DashboardMonthlyReportTest(unittest.TestCase):
             main.conn, name=f"虛構月報茶行{abs(hash(self.id())) % 100000}",
             client_name=None, actor=ACTOR)
 
-    @_BUG_ROAS_RETURNS_DECIMAL
     def test_month_boundaries_keep_current_month_data_only(self):
         orders_repo.save_orders(
             main.conn, self.brand["id"],

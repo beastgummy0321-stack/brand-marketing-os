@@ -167,7 +167,10 @@ def approve(conn: Conn, brand_id: str, cycle_id: str, actor: str) -> list:
                 "id": new_id("tsk"), "org_id": DEV_ORG_ID, "brand_id": brand_id, "cycle_id": cycle_id,
                 # ponytail: draft_hint 保留給 quick-generate 接手；此處只建卡，不預先填寫草稿。
                 "channel": channel["channel"], "title": channel["job"], "draft_hint": None,
-                "done": 0, "created_at": ts, "done_at": None,
+                # BUG 修復（route=C 02-3c，app/ads/proposal.py:169）：done 是 boolean 欄
+                # 位，綁參數傳整數 0 一樣是型別不符（DatatypeMismatch），SQLite 沒差是
+                # 因為沒有真正的 boolean 型別。
+                "done": False, "created_at": ts, "done_at": None,
             }
             conn.execute(
                 "INSERT INTO task_card (id, org_id, brand_id, cycle_id, channel, title, draft_hint, done, created_at, done_at)"
