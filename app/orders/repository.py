@@ -236,10 +236,17 @@ def _bump_sku_cost_version(conn: Conn, brand_id: str, sku: str, unit_cost: float
 def list_effective_sku_costs(conn: Conn, brand_id: str) -> list:
     """每個 SKU 目前生效中的成本版本（valid_to IS NULL）。判讀快照凍結當下引用這份清單，
     不直接讀 sku_cost 現行值——現行值之後若被覆寫，快照引用的版本 id 仍指向這裡的舊列。"""
-    return _rows(conn.execute(
+    rows = _rows(conn.execute(
         "SELECT * FROM sku_cost_version WHERE brand_id = %s AND valid_to IS NULL ORDER BY sku",
         (brand_id,),
     ))
+    # unit_cost 是 numeric（Decimal）；讀取端單一收口轉型（同 _with_float_budget 既有
+    # 模式），呼叫端 settlement.py 把它 str() 進 reading_snapshot_input.value 才不會
+    # 印出 "10.00" 這種帶零填充尾數的字串（02-3c）。
+    for row in rows:
+        if row.get("unit_cost") is not None:
+            row["unit_cost"] = float(row["unit_cost"])
+    return rows
 
 
 # ---------------------------------------------------------------------------
