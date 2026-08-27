@@ -76,3 +76,30 @@
 - 自寫 job 表＋worker 迴圈：procrastinate 就是那張表加 worker，還多重試與定時。
 - 前端直連 Supabase 靠 RLS：養出第二條邏輯路徑。
 - 新 repo：ADR、看板、閘門、歷史都是 agent 的記憶。
+
+## 附錄 A：工程工具鏈裁決（2026-08-28，依「現在不做以後要大改」為唯一判準）
+
+| 工具 | 裁決 | 時點 | 一句理由 |
+|---|---|---|---|
+| Pydantic 輸入／輸出模型＋單一錯誤 envelope | 採用 | 第 ③ 片起新路由必用，舊路由碰到才改 | 之後 Hey API 產 TS client 要靠它；晚做＝重掃 240 條路由 |
+| uv＋pyproject.toml＋uv.lock | 採用 | 02-5 之後、③ 之前 | 一次設定，可重現安裝 |
+| Ruff、Pyright（basic 模式＋凍結舊違規清單） | 採用 | 同上 | 越晚裝要凍結的越多 |
+| GitHub Actions CI（lint／typecheck／受影響測試／build／架構閘門；主線跑全套） | 採用 | 同上 | 沒有乾淨環境的閘門不算閘門 |
+| Dependabot／CodeQL／Secret scanning／branch protection | 採用 | 同上 | GitHub 免費開關 |
+| Prompt 版本記錄（`llm_task` 存方法論檔集雜湊） | 採用 | 第 ④ 片 | 沒有就無法回溯品質 |
+| 模組註冊 `register(app)` 取代 main.py 手寫 include | 採用 | 第三個新模組之前（identity 是第一個） | 「加模組」願景的直接前提 |
+| Hey API OpenAPI→TS client | 採用 | Pydantic 之後、部署前 | 消滅前後端型別漂移 |
+| Playwright 關鍵流程 | 採用 | 第 ⑦ 片先 1 條，部署前擴到 5 條 | 唯一測「使用者看得到的故事」的東西 |
+| 結構化日誌（request_id／org_id／job_id，stdlib） | 採用 | 第 ③ 片 | 幾十行；OTel 之後直接掛 |
+| Sentry SDK | 採用 | 部署前 | 3 行設定 |
+| CD：merge master → CI 綠 → **單一 job 跑 `supabase db push`** → 部署 web＋worker | 採用 | 選定部署平台後 | migration 只由這個 job 套用一次；web／worker 實例開機不得自行跑 migration |
+| pgTAP | **不採用** | — | 第二套測試框架；用 pytest 以 `anon` 角色連線斷言被拒即可 |
+| 自家 telemetry interface | **不採用** | — | 單實作介面；OTel 用現成 FastAPI／psycopg instrumentation |
+| Error tracking adapter | **不採用** | — | Sentry SDK 直接用 |
+| Supavisor | **非框架** | 正式環境換 pooler DSN | Supabase 自帶 |
+| pg_stat_statements | **已內建** | — | Supabase 預設開 |
+| Docker 正式映像 | 延後 | 選定部署平台後 | 本機已用 Docker 跑 Supabase，正式環境視平台 |
+| OTel、pgvector、feature flags、Redis、Kubernetes、微服務、GraphQL、LangChain | 延後／不採用 | 有證據再談 | 見 ADR 本文「當時排除了什麼」 |
+
+順序（取代本文「順序」一節的第 ③ 片以後部分）：
+02-3c → 02-5 → 工具鏈一次裝 → ③ 身分（含 Pydantic 錯誤格式、identity 模組註冊、結構化日誌）→ ④ 設定憑證（Vault、pydantic-settings、組織層模型設定、AI 成本上限、prompt 版本）→ ⑤ procrastinate → ⑥ Storage → ⑦ 閘門收尾＋1 條 Playwright → 部署前（Hey API、Sentry、staging、CD）→ 有證據再談其餘。
