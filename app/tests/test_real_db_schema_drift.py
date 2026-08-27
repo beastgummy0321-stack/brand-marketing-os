@@ -23,6 +23,8 @@ Postgres 裡，同一條連線查兩次 information_schema 即可，不需要另
 
 import unittest
 
+import psycopg
+
 from app.core import db
 
 # 已知且已確認過的差異。每一條都要寫明「為什麼可以留著」。目前沒有任何一條：
@@ -129,7 +131,7 @@ class RowLevelSecurityGateTest(unittest.TestCase):
         try:
             try:
                 as_anon = self.conn.execute("SELECT count(*) AS n FROM public.organisation").fetchone()["n"]
-            except Exception:  # permission denied is also a pass: anon cannot read
+            except psycopg.errors.InsufficientPrivilege:  # permission denied is also a pass
                 as_anon = 0
                 self.conn.rollback()
         finally:

@@ -42,11 +42,32 @@ def _docstring_nodes(tree):
     return out
 
 
+def _joined_text(node: ast.JoinedStr) -> str:
+    """Flatten an f-string: constant fragments kept, each `{expr}` becomes `{}` so the
+    SQL verb and a `?` on either side of an interpolation land in ONE string."""
+    parts = []
+    for v in node.values:
+        if isinstance(v, ast.Constant) and isinstance(v.value, str):
+            parts.append(v.value)
+        else:
+            parts.append("{}")
+    return "".join(parts)
+
+
 def _sql_strings(path: Path):
     tree = ast.parse(path.read_text(encoding="utf-8"))
     docs = _docstring_nodes(tree)
+    inside_fstring = set()
     for node in ast.walk(tree):
-        if isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in docs:
+        if isinstance(node, ast.JoinedStr):
+            for v in node.values:
+                inside_fstring.add(id(v))
+            text = _joined_text(node)
+            if _SQL_VERB.search(text):
+                yield node.lineno, text
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Constant) and isinstance(node.value, str)
+                and id(node) not in docs and id(node) not in inside_fstring):
             if _SQL_VERB.search(node.value):
                 yield node.lineno, node.value
 

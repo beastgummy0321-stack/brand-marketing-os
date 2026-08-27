@@ -35,6 +35,7 @@ class OrgIsolationAllTablesTest(unittest.TestCase):
             "SELECT 1 FROM information_schema.table_constraints tc"
             " JOIN information_schema.key_column_usage kcu"
             "   ON kcu.constraint_name = tc.constraint_name AND kcu.table_schema = tc.table_schema"
+            "   AND kcu.table_name = tc.table_name"
             " JOIN information_schema.constraint_column_usage ccu"
             "   ON ccu.constraint_name = tc.constraint_name AND ccu.table_schema = tc.table_schema"
             " WHERE tc.table_schema = current_schema() AND tc.constraint_type = 'FOREIGN KEY'"

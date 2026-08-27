@@ -37,7 +37,10 @@ def ownership():
     for p in sorted(MIGRATIONS_DIR.glob("*_baseline.sql")):
         mod = _module_of(p)
         for t in _created_tables(p):
-            reg[t.lower()] = mod
+            key = t.lower()
+            if key in reg and reg[key] != mod:
+                raise AssertionError(f"table {key} created by two baselines: {reg[key]} and {mod}")
+            reg[key] = mod
     return reg
 
 
