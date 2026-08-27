@@ -4,22 +4,43 @@
 標「需批准」的票動工前先提計畫等批准；動到畫面先過畫面契約（草圖 → 後端 → 前端）。
 
 
-## 第 ② 片：資料層一次翻（ADR 0027；saas 分支；依序執行，票在 .scratch/saas/tickets/）
 
-- [>] 02-3c 修 02-4 標出的產品程式 BUG 清單（`.scratch/saas/tickets/02-4-deleted.md` 與 commit 訊息；含 `substr(id,-4)`、date 切片、Decimal/float、`IS %s`），xfail 全部拿掉、改回正常斷言
-- [ ] 02-5 三條機器閘門：每表必有 org_id／migration 只 CREATE 自己前綴／零 sqlite 殘留（各紅過一次）；並對全部表 `ENABLE ROW LEVEL SECURITY`（後端以 postgres 角色連線不受影響，目的是封死 anon/authenticated 直連 PostgREST；02-2 的 Supabase advisory）
-- [ ] 02-7 工具鏈一次裝（ADR 0027 附錄 A）：uv＋pyproject＋uv.lock、Ruff、Pyright basic＋凍結清單、GitHub Actions CI（lint／typecheck／受影響測試／build／架構閘門，主線全套）、Dependabot／CodeQL／Secret scanning／branch protection
-- [ ] 02-6 測試套件瘦身（另開票，非本片閘門）：現況測試 42,164 行／程式 37,882 行＝1.11×，目標 0.7×；02-4 查實純文案斷言僅約 175 條，瘦身要靠合併重複情境而非刪文案
+## 里程碑（2026-08-28 grill 定案）：第一段 $0——整套在本機 `supabase start` 跑通、用真品牌（建檔精靈重建）跑一期廣告閉環；第二段才推免費層雲端。看板順序＝執行順序。
 
-## 舊票（排在七片之後，暫不動）
+## 第 ② 片：資料層一次翻（ADR 0027；saas 分支；票在 .scratch/saas/tickets/）
+
+- [>] 02-3c 修 02-4 標出的產品程式 BUG：WIP 檢查點 `b1cd66a`（xfail 680→3、全套 20 敗）；收尾中，目標 0 敗 0 xfail
+- [ ] 02-5 三條機器閘門：每表必有 org_id／migration 只 CREATE 自己前綴／零 sqlite 殘留（各紅過一次）；全部表 `ENABLE ROW LEVEL SECURITY` 不寫 policy；pytest 以 `anon` 角色連線斷言被拒（取代 pgTAP）
+- [ ] 02-7 工具鏈一次裝（ADR 0027 附錄 A，停一天）：uv＋pyproject＋uv.lock、Ruff、Pyright basic＋凍結清單、GitHub Actions CI（lint／typecheck／受影響測試／build／架構閘門；主線全套）、Dependabot／CodeQL／Secret scanning／branch protection
+
+## 第 ③ 片：身分（需批准：schema＋權限）
+
+- [ ] 03-1 後端：`app/identity/` 模組（JWKS 驗 Supabase JWT、`ActorContext{user_id, org_id, role}`）、organisation／app_user／membership 表、`require_actor` 回真身分、`DEV_ORG_ID` 135 處換請求組織、Pydantic 錯誤 envelope、模組註冊 `register(app)`、結構化日誌（request_id／org_id）；開發用 token 可測
+- [ ] 03-2 前端：登入頁（supabase-js 只做登入）、`src/lib/api.ts` 掛 token、「我是公司／組織」、邀請成員
+
+## 第 ④ 片：設定與憑證（需批准：schema）
+
+- [ ] 04-1 `app_setting` 改組織層；pydantic-settings 收環境變數；組織層模型選擇；AI 用量／成本上限按組織；`llm_task` 記方法論檔集雜湊（prompt 版本）
+- [ ] 04-2 已連接帳號（組織）→ 綁定（品牌）；Meta／GA4 憑證進 Vault；順手補 K1（`tracking.py` INSERT 寫 `meta_ad_id`）
+
+## 第 ⑤ 片：背景工作
+
+- [ ] 05-1 procrastinate：`enqueue／status／cancel` 契約、worker 行程；`_auto_sync_loop`／週引擎／`_progress_state`／`_immediate_sync_cache` 全數搬入；R5-S「結束後 14 天自動收帳」成為第一個週期工作
+
+## 第 ⑥ 片：素材
+
+- [ ] 06-1 Supabase Storage 每組織一 bucket；素材檔上傳掛主題；`creative_asset_root` 退役
+
+## 第 ⑦ 片：收尾
+
+- [ ] 07-1 閘門收尾：前端 depcruise 擋 supabase-js 只在登入模組；1 條 Playwright（登入→建品牌→開檔期→駕駛艙）
+- [ ] 07-2 部署前（選平台後）：Hey API TS client、Sentry、staging、CD（單一 job `supabase db push`）
+
+## 里程碑之後（Meta 端解封或上雲後才動；2026-08-28 grill 定案）
 
 - [ ] V1-02 脈動有沒有照做，機器要抓得到：現在自動對帳只比總花費不比每日預算（`reconcile.py` 檔頭：各幣別單位換算不一，比錯就狼來了），使用者不照排程調日預算抓不出來，只有對帳三題自答（`guardrails.py:157`）答「不一樣」才會降可信度。要機器自動抓，得讓 `build_actuals` 撈回 Meta 的每日預算——**被 M1-01 擋**。
 - [ ] M1-01 Meta MCP 整期一鍵建（**暫緩，2026-08-23**）：連線與參數都已驗證可用，但 Meta 以錯誤 31／子碼 3858385 擋住「用 API 建立或修改廣告」——已知的 Meta 端問題（開發者社群 thread 845129991936233），後台看不到待辦事項、無入口可完成驗證，後台手動操作不受影響。系統使用者 token 未被 Ads MCP 文件列為支援，未驗證。改走 ADR 0023 保留的手填 ID 路徑；Meta 端解除後本票即可續跑。
 - [ ] M1-02 收件匣同意即執行（停用／降額；加碼再一道金額確認）＋安全底線（需批准；被 M1-01 擋）
 - [ ] M1-03 放手檔執行器（需批准；被 M1-02 擋）
 - [ ] P1 成效回流接通：帶單切角下期加權＋反回音室自動避開（兌現 nextcycle 既有承諾；**必須在 M1 之後**——切角歸因依賴 M1 回寫的 external_ad_mapping，ADR 0022 第 6 條）
-- [ ] K1 認領既有活動時對應表沒寫 `meta_ad_id`（`app/ads/tracking.py:160-164` 那支 INSERT）：同一活動多支廣告會擠進同一個交接包，逐支投報率與廣告層「停掉」卡在這條路徑上不出（ADR 0025 決定 9 記為已知上限）。補上 `meta_ad_id` 即可；不影響 CSV 與手填 ID 路徑。
-- [ ] L3 演練殘留的孤兒學習下架（**需批准，動真實資料**；ADR 0026 決定 9）：`source_cycle_id` 為 NULL、來源期別已 purge 的列（如 `lrn_…TEZA`）走既有 `deactivate_learning_ledger_entry()` 標 `expired = 1`——不刪列、不改內容欄位、有審計軌跡。B2 覆核當時已寫「演練殘留，可設 expired」。與 B0-47 舊卡清理同一類一次性收尾，做之前先備份 `data/app.db`。
-- [ ] R5-S 過期檔期「14 天自動收帳」排程器（**需批准，架構決策**）：現況檔期過 `end_date` 後永遠停在「投放中・剩 0 天」（B0-05，C1 已過 35 天未收帳），而覆盤文案承諾「結束後 14 天自動收帳」。兌現需要一支背景排程器（誰跑、多久跑一次、失敗怎麼辦、單機單人要不要常駐 process）——屬架構決策，不擅自加背景工作。R5 本票只做「讀取時依 end_date 推導顯示狀態＋文案改成兌現得了的說法」，真正的自動收帳等批准。**R5 實作時查到**：已有一支背景執行緒 `app/main.py:_auto_sync_if_due`，但它只在 app 行程活著時才跳動——單機桌面程式不是常開，所以「幾天內一定自動收帳」這種固定天數承諾本來就交付不了。R5 已把覆盤文案改成：「這期還沒收帳。系統沒辦法保證幾天內自動幫你收帳，建議直接按下面『現在結算』，不用乾等。」若要真的兌現自動收帳，得決定：常駐服務／開機自動啟動／或改成「開啟程式時補收上次漏掉的」。**2026-08-25 使用者裁決：走「開機自動啟動」**——系統隨 Windows 開機常駐，由既有 `_auto_sync_if_due` 兌現自動收帳；待開票實作（開機啟動機制＋收帳文案改回可承諾的說法）。
-- [ ] T1 最終閘門不穩定：`pytest -n auto --dist loadfile` 每次隨機紅 1–2 條、每次不同條（2026-08-23 三次實測：`test_ads_compliance` 的 DefaultHoldTest／UnbackedClaimDefaultHoldTest、`test_dashboard_guide_card_links`；乾淨 HEAD 一樣紅＝既有問題）。疑點：`creative.list_variants()` 順序來自主題排序，測試用 `[0]` 抓第一筆，時間戳同秒即不保證。**禁止用跳過標記或放寬容忍清單處理**。
 - [ ] U1 新手五鐵則落地：全站術語大掃除＋禁用詞機器閘門＋步驟指示常駐（契約鐵則 11–12 驗收）；含鐵則 9 清理——weekly 通知雙出口（dashboard/repository.py:207，票 06 起既有）
