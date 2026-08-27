@@ -115,6 +115,17 @@ class SyncResult:
     error: Optional[str] = None
 
 
+def _sig_date(v):
+    """date 物件（DB date 欄位讀回來）跟 ISO 字串（Meta API 回傳）統一轉字串再比對，
+    型別不同會讓 tuple 永遠比不上（02-3c）。"""
+    return v.isoformat() if hasattr(v, "isoformat") else v
+
+
+def _sig_money(v):
+    """Decimal（DB numeric 欄位）跟 float（Meta API 回傳）統一轉 float 再比對（02-3c）。"""
+    return v if v is None else float(v)
+
+
 def _duplicate_signature(account_external: str, insight) -> tuple:
     """成效的重複判斷依據（issue #69，比照 F9／issue #68 的思路）：帳號＋活動／組合／
     廣告 ID＋日期範圍＋全部量測欄完全相同，視為同一列重複回填。
@@ -125,8 +136,9 @@ def _duplicate_signature(account_external: str, insight) -> tuple:
     分不出是哪支廣告」的問題。差別只在查詢既有簽章時的範圍（品牌層／某個檔期），
     見 `_existing_signatures`。"""
     return (account_external, insight.campaign_id, insight.adset_id, insight.ad_id,
-            insight.date_start, insight.date_stop, insight.impressions, insight.clicks,
-            insight.spend, insight.conversions, insight.revenue, insight.frequency,
+            _sig_date(insight.date_start), _sig_date(insight.date_stop),
+            insight.impressions, insight.clicks, _sig_money(insight.spend),
+            insight.conversions, _sig_money(insight.revenue), insight.frequency,
             insight.reach)
 
 
@@ -147,8 +159,9 @@ def _existing_signatures(conn, brand_id: str, cycle_id: Optional[str]) -> set:
             " WHERE brand_id = %s AND campaign_cycle_id = %s", (brand_id, cycle_id))
     return {
         (r["account_id"], r["meta_campaign_id"], r["meta_adset_id"], r["meta_ad_id"],
-         r["date_range_start"], r["date_range_end"], r["impressions"], r["clicks"],
-         r["spend"], r["conversions"], r["revenue"], r["frequency"], r["reach"])
+         _sig_date(r["date_range_start"]), _sig_date(r["date_range_end"]),
+         r["impressions"], r["clicks"], _sig_money(r["spend"]),
+         r["conversions"], _sig_money(r["revenue"]), r["frequency"], r["reach"])
         for r in rows
     }
 
