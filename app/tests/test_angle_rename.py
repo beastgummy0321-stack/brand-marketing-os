@@ -11,6 +11,7 @@ FakeProvider 出一個方案、選定它，落地成 `experiment_cell`（`app/ad
 import json
 import time
 import unittest
+from datetime import timedelta
 
 import pytest
 from fastapi.testclient import TestClient
@@ -18,7 +19,7 @@ from fastapi.testclient import TestClient
 import app.main as main
 from app.ads import plan as ads_plan
 from app.brand_intelligence import repository as bi_repo
-from app.core.db import DEV_ORG_ID, new_id, now_iso
+from app.core.db import DEV_ORG_ID, new_id, now_iso, now_utc
 from app.llm.providers import FakeProvider, ProviderResponse, Usage
 from app.shared.web import OPERATOR
 
@@ -159,13 +160,21 @@ class AngleRenameTest(unittest.TestCase):
         self.assertEqual(resp.status_code, 404)
 
     def test_list_cell_angles_keeps_insertion_order_not_id_order(self):
-        """同一毫秒產的 ULID 尾碼隨機，不能拿 id 排序；提案頁是用「第幾個」對齊 plan.angles。"""
-        ts = now_iso()
-        for cell_id, angle in ((new_id("exc"), "第二格"), (new_id("exc"), "第三格")):
+        """ULID 尾碼隨機，不能拿 id 排序；提案頁是用「第幾個」對齊 plan.angles。
+
+        02-3c：兩列改用遞增的 created_at，不是同一個時間戳——ORDER BY created_at, id
+        （02-3a 決議：Postgres 無 rowid，不用 ctid，見 .scratch/saas/tickets/
+        02-3a-*.md 第 5 點）只在 created_at 打平時才退回 id 排序，id 帶隨機尾碼，
+        平手時本來就不保證等於寫入順序（app/ads/plan.py:744 註解已寫明是接受的取捨）。
+        這條測試要驗的是「照 created_at 排」這件事，不是「同一毫秒仍猜得出寫入順序」。"""
+        base = now_utc()
+        for i, (cell_id, angle) in enumerate(
+                ((new_id("exc"), "第二格"), (new_id("exc"), "第三格"))):
             main.conn.execute(
                 "INSERT INTO experiment_cell (id, org_id, brand_id, campaign_cycle_id,"
                 " creative_angle, created_at) VALUES (%s, %s, %s, %s, %s, %s)",
-                (cell_id, DEV_ORG_ID, self.bid, self.cycle_id, angle, ts))
+                (cell_id, DEV_ORG_ID, self.bid, self.cycle_id, angle,
+                 base + timedelta(milliseconds=i)))
         main.conn.commit()
         names = [c["creative_angle"] for c in ads_plan.list_cell_angles(main.conn, self.bid, self.cycle_id)]
         self.assertEqual(names[-2:], ["第二格", "第三格"])
