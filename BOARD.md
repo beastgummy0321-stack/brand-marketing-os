@@ -12,8 +12,8 @@
 ## 第 ③ 片：身分（需批准：schema＋權限）
 
 - [ ] 03-1 交件 7542b30 **審查 REJECT**（跨組織：inbox resolve 未查 org、/api/jobs/active 全站回傳；首次登入併發未處理）——修法寫在 .scratch/HANDOFF-2026-08-28.md後端：`app/identity/` 模組（JWKS 驗 Supabase JWT、`ActorContext{user_id, org_id, role}`）、organisation／app_user／membership 表、`require_actor` 回真身分、`DEV_ORG_ID` 135 處換請求組織、Pydantic 錯誤 envelope、模組註冊 `register(app)`、結構化日誌（request_id／org_id）；開發用 token 可測
-- [ ] 03-1 r1（一張票）：上列三項 REJECT 修正＋租戶掃描擴到所有 `{…_id}` 路徑＋拿掉產品碼 18 處 `org_id="org_dev"` 預設參數（改必填；測試自己傳 DEV_ORG_ID）——Fable 裁決，審查結果無關
-- [ ] 03-2 前端：登入頁（supabase-js 只做登入）、`src/lib/api.ts` 掛 token、「我是公司／組織」、邀請成員
+- [ ] 03-1 r1（票 .scratch/saas/tickets/03-1-r1-identity-fixes.md，已派 Sonnet 實作）：上列三項 REJECT 修正＋租戶掃描擴到所有 `{…_id}` 路徑＋拿掉產品碼 18 處 `org_id="org_dev"` 預設參數（改必填；測試自己傳 DEV_ORG_ID）——Fable 裁決，審查結果無關
+- [ ] 03-2 前端（票 .scratch/saas/tickets/03-2-frontend-login.md，等 03-1 r1 合併後派）：登入頁（supabase-js 只做登入）、`src/lib/api.ts` 掛 token、「我是公司／組織」、邀請成員
 
 ## 第 ④ 片：設定與憑證（需批准：schema）
 
