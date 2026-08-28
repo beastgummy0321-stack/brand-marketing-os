@@ -146,6 +146,9 @@ class SettingsApiTest(unittest.TestCase):
 
     # -- POST /api/settings/creative-root ------------------------------------------
 
+    @unittest.skipUnless(os.name == "nt", "驗證邏輯用平台原生 pathlib.Path 判斷是否為絕對路徑"
+                          "（保留現存的 test_creative_assets.py 用真實 tmpdir 路徑做跨平台驗證），"
+                          "這條硬寫死 Windows 磁碟機代號字串，只在 Windows 上才是絕對路徑")
     def test_save_creative_root_valid(self):
         resp = self.client.post(
             "/api/settings/creative-root", json={"creative_root": "D:\\行銷素材"})
