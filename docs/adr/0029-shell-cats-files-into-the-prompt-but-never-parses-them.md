@@ -1,5 +1,7 @@
 # The shell cats files into the prompt, but never parses them
 
+_Status: amended by ADR 0033. The rule — paste whole files verbatim, never parse them — still governs department task and methodology `.md` files. Brand data reaches the prompt through `app/llm/context_compiler.py` instead of a workspace folder, which no longer exists._
+
 Three ways to get brand data in front of the agent were considered: leave the files in the
 workspace and let the agent open them itself; read and parse them in the shell and assemble a
 prompt for a plain model API; or paste them in whole.

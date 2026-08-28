@@ -10,7 +10,7 @@ separate new repo — that plan is dead (§5). It does **not** supersede
 `.scratch/HANDOFF-2026-08-28-pause.md`; that one still holds for slices ⑤⑥⑦, which resume
 after this work (§7).
 
-**Read before touching code:** `docs/adr/0028`–`0032` and `CONTEXT.md` §外殼與代理.
+**Read before touching code:** `docs/adr/0028`–`0033` and `CONTEXT.md` §外殼與代理.
 
 ---
 
@@ -92,8 +92,11 @@ prose has lost the decision.
    "Department" is deliberately not "module" — `CLAUDE.md` #7 and ADR 0024 already own that
    word for Python packages. Both terms are now defined in `CONTEXT.md`, pointing at each
    other under `_Avoid_`.
-3. **The shell cats files into the prompt but never parses them** (ADR 0029). Precedent:
-   `app/llm/methodology.py` already composed methodology files verbatim.
+3. **The shell composes the prompt; whole files go in verbatim and are never parsed**
+   (ADR 0029, amended by 0033). Brand data comes from `app/llm/context_compiler.py:compile()`,
+   which already reads only `confirmed` facts and `active` rules, keeps verified learnings
+   apart from unverified hypotheses, and takes a single `brand_id` so cross-brand assembly is
+   structurally impossible. Department task and methodology `.md` files are pasted in whole.
 4. **Money numbers are computed by code, never by the agent.** The agent returns *ratios and
    choices* (`budget_share: 0.4`); the shell multiplies. Keeps ADR 0016/0022/0023's "numbers by
    code, words by LLM". CPA/ROAS/spend come from the imported Meta CSV and never touch a model.
@@ -123,6 +126,14 @@ prose has lost the decision.
     The `CLAUDE.md` vs `AGENTS.md` split is no longer one of them — ADR 0031 isolates a run
     from both. Both read the prompt from **stdin** (verified 2026-08-28) — argv is not viable,
     the prompt exceeds the ~8191-char Windows limit.
+17. **There is no workspace folder** (ADR 0033). `brand`, `brand_fact`, `product`,
+    `product_fact`, `product_economics`, `rule`, `claim`, `persona`, `offer` and `sku_cost`
+    already hold what `brand.md` / `products.md` / `business.md` / `rules.md` were going to
+    hold, written by four of the eleven surviving screens. Departments are repo folders beside
+    `app/methodology/`; outputs live in `llm_task`. **Pack/unpack disappears** and takes one of
+    the three budgeted tests with it. Cost: brand facts are edited through screens, not a text
+    editor — which buys the `confirmed`/`pending` distinction markdown cannot express, and
+    tenant isolation a shared filesystem would have had to re-implement.
 16. **The agent CLI is a provider, and it returns text** (ADR 0032). `run_task` already exists:
     `app/llm/gateway.py:run_task()` is the single LLM entry point and already does the org
     lookup, the spend cap, the `llm_task` row, cost and retry — and it lives in `app/llm/`, so
@@ -309,7 +320,6 @@ Mechanical work, no grill needed.
 ## 6. Not yours — bring these back to the architecture session
 
 1. **Which 2 pages, concretely.** A grill is queued. Does not block ticket 2.
-2. **Workspace directory layout under many departments** is undesigned.
 3. **06-1's two halves**: "每組織一 bucket" *is* the cloud workspace and survives;
    "素材檔掛主題" dies with ads.
 4. **Variance is unmeasured.** A probe sits at
