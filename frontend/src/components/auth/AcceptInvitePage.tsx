@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { apiFetch } from "@/lib/http";
+import { setOrgId } from "@/lib/auth";
 
 interface AcceptInviteResponse {
   org: { id: string; name: string; kind: string; role: string };
@@ -42,6 +43,9 @@ export function AcceptInvitePage() {
           return;
         }
         const body = (await res.json()) as AcceptInviteResponse;
+        // 接受邀請的人要落在剛加入的那個組織，不是自己的個人組織——不設這一行的話
+        // 後端預設組織會挑「最早加入的」（個人組織），點邀請連結等於白點。
+        setOrgId(body.org.id);
         setState({ status: "done", orgName: body.org.name });
       })
       .catch(() => {
