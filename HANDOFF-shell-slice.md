@@ -10,7 +10,7 @@ separate new repo — that plan is dead (§5). It does **not** supersede
 `.scratch/HANDOFF-2026-08-28-pause.md`; that one still holds for slices ⑤⑥⑦, which resume
 after this work (§7).
 
-**Read before touching code:** `docs/adr/0028`, `0029`, `0030`, and `CONTEXT.md` §外殼與代理.
+**Read before touching code:** `docs/adr/0028`–`0031` and `CONTEXT.md` §外殼與代理.
 
 ---
 
@@ -108,12 +108,20 @@ prose has lost the decision.
 9. **First buttons: exactly two** — `產生本期方案`, `產生素材`. Rejected: an "auto-fill the
    brand file from the website" button — data entry, not delivery, and it has not hurt yet.
 10. **Both CLIs from day one, switchable in settings.** *Not* interchangeable at the call site;
-    six verified differences: codex refuses to run outside a git repo without
-    `--skip-git-repo-check`; instruction file is `CLAUDE.md` vs `AGENTS.md`; permissions are
-    `--permission-mode bypassPermissions` vs `-s danger-full-access`; results arrive on stdout
-    vs `-o <FILE>`; **only codex has `--output-schema`**; codex has `--ephemeral`, claude leaves
-    session files in the workspace. Both read the prompt from **stdin** (verified 2026-08-28) —
-    argv is not viable, the prompt exceeds the ~8191-char Windows limit.
+    **five** verified differences: codex refuses to run outside a git repo without
+    `--skip-git-repo-check`; permissions are `--restricted --permission-mode acceptEdits` vs
+    `-s workspace-write`; results arrive on stdout vs `-o <FILE>`; **only codex has
+    `--output-schema`**; codex has `--ephemeral`, claude leaves session files in the workspace.
+    The `CLAUDE.md` vs `AGENTS.md` split is no longer one of them — ADR 0031 isolates a run
+    from both. Both read the prompt from **stdin** (verified 2026-08-28) — argv is not viable,
+    the prompt exceeds the ~8191-char Windows limit.
+15. **Agent runs are isolated from the developer's own config** (ADR 0031). `claude -p` was
+    leaking `~/.claude/CLAUDE.md` *and* the ponytail / ADHD / skeleton-slice plugin hooks into
+    every brand prompt — ponytail steers toward the smallest thing that works, the opposite of
+    what a creative brief needs. Fixed with **`--restricted --permission-mode acceptEdits`**,
+    which also blocks the workspace's own `CLAUDE.md`, confines file tools to the workspace,
+    and keeps OAuth so the run still costs no tokens. `--bare` was rejected: it forces an API
+    key and forfeits the subscription. Codex gets `--ignore-user-config` for symmetry.
 11. **The shell validates `plan.json` itself**, because only one CLI can enforce a schema.
     Pydantic model + one automatic retry with the validation error appended. Not an abstraction
     layer: it is the dashboard's data source and the precondition of the budget gate. Rejected:
@@ -282,23 +290,19 @@ Mechanical work, no grill needed.
 ## 6. Not yours — bring these back to the architecture session
 
 1. **Which 2 pages, concretely.** A grill is queued. Does not block ticket 2.
-2. **`claude -p` loads the user's global `~/.claude/CLAUDE.md`** — verified: a bare probe came
-   back prefixed `Beast，`. Every brand prompt is contaminated by the developer's personal agent
-   rules. Unsolved. Candidates: `--settings` with a clean config, or a scoped
-   `CLAUDE_CONFIG_DIR` (which also loses auth — needs testing).
-3. **Workspace directory layout under many departments** is undesigned.
-4. **`run_task`'s two shapes** — spawn a local CLI vs call an API. The single SaaS seam;
+2. **Workspace directory layout under many departments** is undesigned.
+3. **`run_task`'s two shapes** — spawn a local CLI vs call an API. The single SaaS seam;
    decision 3 is what makes the swap cheap. Note that **slice ⑤'s 05-1 (procrastinate
    `enqueue／status／cancel` + worker) is exactly the contract `run_task` needs** — its
    contract survives even though its payload (`_auto_sync_loop`, the weekly engine) dies with
    ads. Same for **06-1**: "每組織一 bucket" *is* the cloud workspace; "素材檔掛主題" dies.
-5. **Variance is unmeasured.** A probe sits at
+4. **Variance is unmeasured.** A probe sits at
    `D:\0UserProfile\Desktop\MarketingOS Shell\variance-probe\` (stdlib only, `--selftest`
    proven red once then green). It runs one task N times against a real brand and reports how
    often the same products are chosen, the min–max spread of each `budget_share`, **how often
    the shares fail to sum to 1.0**, and angle-name repetition. Needs a real brand filled into
    `workspace/{brand,products,rules}.md`. Until it runs, decision 11's retry budget is a guess.
-6. **ADR 0004 is stale and it is not this slice's fault.** Its stated premise is "系統是單機
+5. **ADR 0004 is stale and it is not this slice's fault.** Its stated premise is "系統是單機
    單人"; ADR 0027 and `CLAUDE.md` #1 overturned it. `authorized_by` auto-filled with a fixed
    value is an audit gap under multi-tenancy. Marked, unresolved.
 
