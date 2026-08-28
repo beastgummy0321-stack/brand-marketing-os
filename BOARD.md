@@ -11,7 +11,7 @@
 
 ## 第 ③ 片：身分（需批准：schema＋權限）
 
-- [ ] 03-1 後端：`app/identity/` 模組（JWKS 驗 Supabase JWT、`ActorContext{user_id, org_id, role}`）、organisation／app_user／membership 表、`require_actor` 回真身分、`DEV_ORG_ID` 135 處換請求組織、Pydantic 錯誤 envelope、模組註冊 `register(app)`、結構化日誌（request_id／org_id）；開發用 token 可測
+- [>] 03-1 後端：`app/identity/` 模組（JWKS 驗 Supabase JWT、`ActorContext{user_id, org_id, role}`）、organisation／app_user／membership 表、`require_actor` 回真身分、`DEV_ORG_ID` 135 處換請求組織、Pydantic 錯誤 envelope、模組註冊 `register(app)`、結構化日誌（request_id／org_id）；開發用 token 可測
 - [ ] 03-2 前端：登入頁（supabase-js 只做登入）、`src/lib/api.ts` 掛 token、「我是公司／組織」、邀請成員
 
 ## 第 ④ 片：設定與憑證（需批准：schema）
@@ -31,6 +31,10 @@
 
 - [ ] 07-1 閘門收尾：前端 depcruise 擋 supabase-js 只在登入模組；1 條 Playwright（登入→建品牌→開檔期→駕駛艙）
 - [ ] 07-2 部署前（選平台後）：Hey API TS client、Sentry、staging、CD（單一 job `supabase db push`）
+
+## 小債（順手做，不排優先）
+- [ ] GitHub 四個安全開關（secret scanning／push protection／CodeQL／branch protection）需 GitHub Pro 或公開 repo——**等使用者決定**要不要付費；未付費前 CI 綠不擋合併，靠人工
+- [ ] `app/tests/test_settings_api.py` 一條測試寫死 Windows 磁碟機路徑，02-7 在非 Windows 跳過（`skipif`）；應改成跨平台斷言後拿掉 skip
 
 ## 里程碑之後（Meta 端解封或上雲後才動；2026-08-28 grill 定案）
 
