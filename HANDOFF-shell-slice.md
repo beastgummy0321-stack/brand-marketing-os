@@ -10,13 +10,18 @@ separate new repo — that plan is dead (§5). It does **not** supersede
 `.scratch/HANDOFF-2026-08-28-pause.md`; that one still holds for slices ⑤⑥⑦, which resume
 after this work (§7).
 
-**Read before touching code:** `docs/adr/0028`–`0031` and `CONTEXT.md` §外殼與代理.
+**Read before touching code:** `docs/adr/0028`–`0032` and `CONTEXT.md` §外殼與代理.
 
 ---
 
 ## 0. State, verified
 
-- Branch `saas`, HEAD `ba63f49`, pushed. Working tree clean.
+- Work is on branch `shell`, cut from `saas`.
+- **`bacda59` is mislabelled.** It carries an ADR message but also contains 98 files and
+  −23,104 lines of ticket 2's work-in-progress, swept in by a `git add -A` from the
+  architecture session while this branch was live. Nothing was lost and the content is
+  correct; only the label is wrong. History is deliberately not rewritten — this branch is
+  checked out in another session, and a rebase would cost far more than a bad commit message.
 - Full suite was **2,374 passed, zero red** at `68a52f9`; `ba63f49` is docs-only.
 - **Ticket 0 is done**: `saas` comes up locally under `supabase start` and all 11 non-ads
   routes were clicked through by hand on 2026-08-28. The base decision is final: `saas`,
@@ -92,10 +97,13 @@ prose has lost the decision.
 4. **Money numbers are computed by code, never by the agent.** The agent returns *ratios and
    choices* (`budget_share: 0.4`); the shell multiplies. Keeps ADR 0016/0022/0023's "numbers by
    code, words by LLM". CPA/ROAS/spend come from the imported Meta CSV and never touch a model.
-5. **Two new tables only**: `run` (id, brand, department, task, cli, model, status, started_at,
-   ended_at, exit_code, error, out_path) and `approval` (id, brand, department, cycle,
-   artifact_path, budget, approved_at). Brands stay folders — no second source of truth. All
-   ads tables are dropped.
+5. **One new table: `approval`** (id, brand, department, cycle, artifact_path, budget,
+   approved_at) — a human approving a budget is not an LLM call and has nowhere else to live.
+   The planned `run` table is **deleted**: `llm_task` already carries id, `org_id`, `brand_id`,
+   `task_type`, `provider`, `model`, `status`, `attempt_no`, `started_at`, `finished_at`,
+   `error` and `cost`, and `structured_output_json` / `rendered_output` *are* `plan.json` and
+   `plan.md` (ADR 0032). At most it gains a `department` column. Brands stay folders — no
+   second source of truth. All ads tables are dropped.
 6. **UI is button-driven, not a chat room.** A work-order feed of cards with stable ids, plus a
    free-text field *appended* to the fixed prompt that re-runs it. Rejected: a real chat box —
    it destroys the prompt-library discipline and leaves the approval gate nothing stable to
@@ -115,6 +123,17 @@ prose has lost the decision.
     The `CLAUDE.md` vs `AGENTS.md` split is no longer one of them — ADR 0031 isolates a run
     from both. Both read the prompt from **stdin** (verified 2026-08-28) — argv is not viable,
     the prompt exceeds the ~8191-char Windows limit.
+16. **The agent CLI is a provider, and it returns text** (ADR 0032). `run_task` already exists:
+    `app/llm/gateway.py:run_task()` is the single LLM entry point and already does the org
+    lookup, the spend cap, the `llm_task` row, cost and retry — and it lives in `app/llm/`, so
+    the amputation does not touch it. `Provider` is a one-method Protocol, so the two CLIs are a
+    third and fourth implementation of `complete()`, fed the prompt on stdin. **The agent
+    returns one text reply with a fenced `json` block and the shell writes the files**, which is
+    what makes CLI and cloud API drop-in for each other; if the agent wrote its own files the
+    two CLIs would diverge again (`--permission-mode acceptEdits` vs `-s workspace-write`).
+    `resolve_ai_credentials()` gains a third source `'local-cli'` — no API key pays, the user's
+    subscription does, `cap_applies=False`, cost 0. Background execution is **ticket 05-1's
+    procrastinate contract**, not a new invention; procrastinate is not installed yet.
 15. **Agent runs are isolated from the developer's own config** (ADR 0031). `claude -p` was
     leaking `~/.claude/CLAUDE.md` *and* the ponytail / ADHD / skeleton-slice plugin hooks into
     every brand prompt — ponytail steers toward the smallest thing that works, the opposite of
@@ -291,11 +310,8 @@ Mechanical work, no grill needed.
 
 1. **Which 2 pages, concretely.** A grill is queued. Does not block ticket 2.
 2. **Workspace directory layout under many departments** is undesigned.
-3. **`run_task`'s two shapes** — spawn a local CLI vs call an API. The single SaaS seam;
-   decision 3 is what makes the swap cheap. Note that **slice ⑤'s 05-1 (procrastinate
-   `enqueue／status／cancel` + worker) is exactly the contract `run_task` needs** — its
-   contract survives even though its payload (`_auto_sync_loop`, the weekly engine) dies with
-   ads. Same for **06-1**: "每組織一 bucket" *is* the cloud workspace; "素材檔掛主題" dies.
+3. **06-1's two halves**: "每組織一 bucket" *is* the cloud workspace and survives;
+   "素材檔掛主題" dies with ads.
 4. **Variance is unmeasured.** A probe sits at
    `D:\0UserProfile\Desktop\MarketingOS Shell\variance-probe\` (stdlib only, `--selftest`
    proven red once then green). It runs one task N times against a real brand and reports how
