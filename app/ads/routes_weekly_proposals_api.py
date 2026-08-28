@@ -11,6 +11,7 @@ from app.ads import reading_settlement, weekly_proposals, weekly_reports
 from app.ads import repository as ads_repo
 from app.ads import routes as ads_routes
 from app.ads.routes_common import _require_cycle
+from app.brand_intelligence import repository as bi_repo
 from app.core import interrupts as core_interrupts
 from app.core.db import new_id
 from app.shared.web import JSONResponse
@@ -46,8 +47,8 @@ def _brand_view(brand_id: str, cycle_id: str) -> dict:
 
 
 @router.get("/api/campaigns/brands/{brand_id}/weekly/report")
-async def weekly_report_get(brand_id: str):
-    main_mod.require_brand(brand_id)
+async def weekly_report_get(brand_id: str, request: Request):
+    main_mod.require_brand(brand_id, main_mod.require_actor(request))
     cycle = _current_cycle(brand_id)
     if cycle is None:
         return _envelope({"status": "empty"})
@@ -58,8 +59,8 @@ async def weekly_report_get(brand_id: str):
 
 
 @router.get("/api/campaigns/{brand_id}/{cycle_id}/weekly-proposals")
-async def weekly_proposals_get(brand_id: str, cycle_id: str):
-    main_mod.require_brand(brand_id)
+async def weekly_proposals_get(brand_id: str, cycle_id: str, request: Request):
+    main_mod.require_brand(brand_id, main_mod.require_actor(request))
     _require_cycle(brand_id, cycle_id)
     weekly_proposals.generate(main_mod.conn, brand_id, cycle_id)
     return _envelope(weekly_proposals.view(main_mod.conn, brand_id, cycle_id))
@@ -67,11 +68,11 @@ async def weekly_proposals_get(brand_id: str, cycle_id: str):
 
 @router.post("/api/campaigns/{brand_id}/{cycle_id}/weekly-proposals/approve")
 async def weekly_proposals_approve(request: Request, brand_id: str, cycle_id: str):
-    main_mod.require_brand(brand_id)
-    _require_cycle(brand_id, cycle_id)
     actor = main_mod.require_actor(request)
+    main_mod.require_brand(brand_id, actor)
+    _require_cycle(brand_id, cycle_id)
     try:
-        result = weekly_proposals.approve(main_mod.conn, brand_id, cycle_id, actor=actor)
+        result = weekly_proposals.approve(main_mod.conn, brand_id, cycle_id, actor=str(actor.user_id))
     except ValueError as exc:
         return _error(400, str(exc))
     return _envelope(result)
@@ -80,12 +81,12 @@ async def weekly_proposals_approve(request: Request, brand_id: str, cycle_id: st
 @router.post("/api/campaigns/{brand_id}/{cycle_id}/weekly-proposals/{recommendation_id}/complete")
 async def weekly_proposal_complete(
         request: Request, brand_id: str, cycle_id: str, recommendation_id: str):
-    main_mod.require_brand(brand_id)
-    _require_cycle(brand_id, cycle_id)
     actor = main_mod.require_actor(request)
+    main_mod.require_brand(brand_id, actor)
+    _require_cycle(brand_id, cycle_id)
     try:
         result = weekly_proposals.complete(
-            main_mod.conn, brand_id, cycle_id, recommendation_id, actor=actor)
+            main_mod.conn, brand_id, cycle_id, recommendation_id, actor=str(actor.user_id))
     except ValueError as exc:
         return _error(400, str(exc))
     return _envelope(result)
@@ -96,8 +97,8 @@ async def weekly_proposal_complete(
 # ---------------------------------------------------------------------------
 
 @router.get("/api/campaigns/brands/{brand_id}/weekly/proposals")
-async def weekly_action_proposals_get(brand_id: str):
-    main_mod.require_brand(brand_id)
+async def weekly_action_proposals_get(brand_id: str, request: Request):
+    main_mod.require_brand(brand_id, main_mod.require_actor(request))
     cycle = _current_cycle(brand_id)
     if cycle is None:
         return _envelope({"cycle_id": None, "proposals": [], "execution_checklist": []})
@@ -107,7 +108,8 @@ async def weekly_action_proposals_get(brand_id: str):
 @router.post("/api/campaigns/brands/{brand_id}/weekly/proposals/{recommendation_id}/approve")
 async def weekly_action_proposal_approve(
         request: Request, brand_id: str, recommendation_id: str):
-    main_mod.require_brand(brand_id)
+    actor = main_mod.require_actor(request)
+    main_mod.require_brand(brand_id, actor)
     # 票 F1 R2：不透過 current_cycle() 猜檔期——那是給「畫面現在該顯示哪期」用的
     # 推斷，會隨別期匯入資料而改變。使用者按的是畫面上看得到的這張卡，直接用卡
     # 本身的 campaign_cycle_id，GET 顯示的跟 POST 核可的絕對是同一期。
@@ -115,7 +117,6 @@ async def weekly_action_proposal_approve(
         main_mod.conn, brand_id, recommendation_id)
     if cycle_id is None:
         return _error(400, "找不到這張週提案卡")
-    actor = main_mod.require_actor(request)
     body = await _json_body(request)
     try:
         approved = weekly_proposals.approve_card(
@@ -123,7 +124,7 @@ async def weekly_action_proposal_approve(
             brand_id,
             cycle_id,
             recommendation_id,
-            actor=actor,
+            actor=str(actor.user_id),
             confirmed_amount=body.get("confirmed_amount"),
         )
     except ValueError as exc:
@@ -136,15 +137,15 @@ async def weekly_action_proposal_approve(
 @router.post("/api/campaigns/brands/{brand_id}/weekly/proposals/{recommendation_id}/skip")
 async def weekly_action_proposal_skip(
         request: Request, brand_id: str, recommendation_id: str):
-    main_mod.require_brand(brand_id)
+    actor = main_mod.require_actor(request)
+    main_mod.require_brand(brand_id, actor)
     cycle_id = weekly_proposals.cycle_id_for_recommendation(
         main_mod.conn, brand_id, recommendation_id)
     if cycle_id is None:
         return _error(400, "找不到這張週提案卡")
-    actor = main_mod.require_actor(request)
     try:
         weekly_proposals.skip(
-            main_mod.conn, brand_id, cycle_id, recommendation_id, actor=actor,
+            main_mod.conn, brand_id, cycle_id, recommendation_id, actor=str(actor.user_id),
         )
     except ValueError as exc:
         return _error(400, str(exc))
@@ -155,14 +156,14 @@ async def weekly_action_proposal_skip(
 
 @router.post("/api/campaigns/brands/{brand_id}/weekly/proposals/approve-all")
 async def weekly_action_proposals_approve_all(request: Request, brand_id: str):
-    main_mod.require_brand(brand_id)
+    actor = main_mod.require_actor(request)
+    main_mod.require_brand(brand_id, actor)
     cycle = _current_cycle(brand_id)
     if cycle is None:
         return _error(400, "目前沒有可判讀的檔期")
-    actor = main_mod.require_actor(request)
     try:
         result = weekly_proposals.approve(
-            main_mod.conn, brand_id, cycle["id"], actor=actor,
+            main_mod.conn, brand_id, cycle["id"], actor=str(actor.user_id),
         )
     except ValueError as exc:
         return _error(400, str(exc))
@@ -172,6 +173,7 @@ async def weekly_action_proposals_approve_all(request: Request, brand_id: str):
 def _queue_rejudge_notice(brand_id: str, cycle_id: str, *, ok: bool) -> None:
     core_interrupts.enqueue(
         main_mod.conn,
+        org_id=bi_repo.get_brand(main_mod.conn, brand_id)["org_id"],
         category="weekly_rejudge_done",
         dedupe_key=f"weekly_rejudge_done:{new_id('run')}",
         message="本週判讀完成，回駕駛艙看看。" if ok else "本週判讀未完成，回駕駛艙看看。",
@@ -184,8 +186,9 @@ def _queue_rejudge_notice(brand_id: str, cycle_id: str, *, ok: bool) -> None:
 
 @router.post("/api/campaigns/brands/{brand_id}/weekly/rejudge")
 async def weekly_rejudge_start(request: Request, brand_id: str):
-    main_mod.require_brand(brand_id)
     actor = main_mod.require_actor(request)
+    main_mod.require_brand(brand_id, actor)
+    actor_id = str(actor.user_id)
     cycle = _current_cycle(brand_id)
     if cycle is None:
         # current_cycle() 只挑 LIVE／EVALUATING，已結案的期根本不在選取範圍內，所以落到這裡
@@ -200,7 +203,7 @@ async def weekly_rejudge_start(request: Request, brand_id: str):
     def work(_on_stage):
         try:
             ok, err = ads_reading.run(
-                main_mod.conn, brand_id, cycle_id, actor=actor,
+                main_mod.conn, brand_id, cycle_id, actor=actor_id,
             )
             if ok:
                 weekly_proposals.generate(
@@ -217,8 +220,8 @@ async def weekly_rejudge_start(request: Request, brand_id: str):
 
 
 @router.get("/api/campaigns/brands/{brand_id}/weekly/rejudge/status")
-async def weekly_rejudge_status(brand_id: str):
-    main_mod.require_brand(brand_id)
+async def weekly_rejudge_status(brand_id: str, request: Request):
+    main_mod.require_brand(brand_id, main_mod.require_actor(request))
     key = ads_routes._progress_key("weekly_rejudge", brand_id, "_")
     entry = ads_routes._progress_state.get(key)
     if entry is None:

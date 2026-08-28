@@ -29,7 +29,8 @@ def _photo_content_type(name: str) -> str:
 @router.get("/brands/{brand_id}/intake/photos/{filename}")
 async def intake_photo(request: Request, brand_id: str, filename: str):
     """Return only a photo registered for the brand's active intake draft."""
-    main_mod.require_brand(brand_id)
+    actor = main_mod.require_actor(request)
+    main_mod.require_brand(brand_id, actor)
     draft = _draft_or_404(brand_id)
     entry = next((p for p in (draft.get("photos") or []) if p.get("name") == filename), None)
     if entry is None or not entry.get("path"):

@@ -33,7 +33,7 @@ from app.brand_intelligence import repository as repo
 from app.brand_web import report_service
 from app.core import vocab as md
 from app.shared import web
-from app.shared.web import NotFoundKind, clean, require_brand
+from app.shared.web import NotFoundKind, clean, require_actor, require_brand
 
 router = APIRouter()
 
@@ -91,7 +91,8 @@ _ASSET_CONTENT_TYPES = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image
 async def asset_file(request: Request, brand_id: str, asset_id: str, filename: str):
     """只回傳「這筆官方素材登記過的檔案」——不從網址參數直接組路徑，天生擋掉路徑穿越；
     找不到品牌、找不到素材、或檔名跟登記的不一致，一律 404（比照 intake 照片的做法）。"""
-    require_brand(brand_id)
+    actor = require_actor(request)
+    require_brand(brand_id, actor)
     asset = repo.get_official_asset(web.conn, brand_id, asset_id)
     if asset is None or Path(asset["file_path"]).name != filename:
         raise NotFoundKind("這個素材檔案")

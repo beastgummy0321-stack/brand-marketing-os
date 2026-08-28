@@ -21,9 +21,10 @@ from app.ads import codes as ads_codes
 from app.ads import ga4_sync as ads_ga4_sync
 from app.ads import performance as ads_performance
 from app.ads import repository as ads_repo
+from app.brand_intelligence import repository as bi
 from app.core import interrupts as core_interrupts
 from app.core.audit import write_audit
-from app.core.db import DEV_ORG_ID, new_id, now_utc
+from app.core.db import new_id, now_utc
 
 # 第 7 刀（A1 三層地界新規則：app/ads 不得 import app.orders，見
 # test_architecture_boundaries.py）：orders_repo 不在這裡 import，改由組裝根
@@ -123,6 +124,7 @@ def calibrate(conn, brand_id: str, cycle_id: str, *, actor: str,
     today 比照 app/ads/performance.py 匯入函式與 guardrails 的慣例：可覆寫，方便測試與
     補件驅動回溯重判（決策 0025 懶人優先第 3 點）指定「當作哪一天校準的」。
     """
+    org_id = bi.get_brand(conn, brand_id)["org_id"]
     if not actor or not actor.strip():
         raise ValueError("actor 為必填")
     result = reconcile_cycle(conn, brand_id, cycle_id)
@@ -141,7 +143,7 @@ def calibrate(conn, brand_id: str, cycle_id: str, *, actor: str,
             "INSERT INTO ad_revenue_coefficient_error_log (id, org_id, brand_id, coefficient_id,"
             " campaign_cycle_id, predicted_order_revenue, actual_order_revenue, error_pct,"
             " recorded_at, created_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
-            (new_id("rce"), DEV_ORG_ID, brand_id, prev["id"], cycle_id, predicted, result["order_revenue"],
+            (new_id("rce"), org_id, brand_id, prev["id"], cycle_id, predicted, result["order_revenue"],
              _error_pct(predicted, result["order_revenue"]), ts, ts),
         )
         conn.execute("UPDATE ad_revenue_coefficient SET valid_to = %s WHERE id = %s",
@@ -155,11 +157,11 @@ def calibrate(conn, brand_id: str, cycle_id: str, *, actor: str,
         "INSERT INTO ad_revenue_coefficient (id, org_id, brand_id, version, coefficient, meta_revenue,"
         " order_revenue, sample_size, reliable, source_cycle_id, valid_from, valid_to,"
         " created_by, created_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NULL, %s, %s)",
-        (coefficient_id, DEV_ORG_ID, brand_id, version, result["coefficient_now"], result["meta_revenue"],
+        (coefficient_id, org_id, brand_id, version, result["coefficient_now"], result["meta_revenue"],
          result["order_revenue"], sample_size, reliable, cycle_id, today, actor, ts),
     )
 
-    write_audit(conn, brand_id=brand_id, entity_type="ad_revenue_coefficient",
+    write_audit(conn, org_id=org_id, brand_id=brand_id, entity_type="ad_revenue_coefficient",
                 entity_id=coefficient_id, action="calibrate", actor=actor, before=None,
                 after={"version": version, "coefficient": result["coefficient_now"],
                        "sample_size": sample_size, "reliable": reliable})
@@ -224,7 +226,7 @@ def _maybe_enqueue_next_due(conn, brand_id: str, *, today: str) -> str | None:
         return None
     due_date = date.fromisoformat(today) + timedelta(days=QUARTERLY_INTERVAL_DAYS)
     interrupt_id = core_interrupts.enqueue(
-        conn, category="revenue_reconcile_due",
+        conn, org_id=bi.get_brand(conn, brand_id)["org_id"], category="revenue_reconcile_due",
         dedupe_key=f"revenue_reconcile_due:{brand_id}:{due_date.isoformat()}",
         message="灌水係數已逾校準週期，建議重新對帳。",
         brand_id=brand_id, visible_from=due_date,

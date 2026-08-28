@@ -108,7 +108,10 @@ def generate(conn, brand_id: str) -> tuple:
     normalized = _normalize(data)
     if normalized is None:
         return False, _PARSE_FAIL
-    return True, personas.replace_personas(conn, brand_id, normalized)
+    brand = repo.get_brand(conn, brand_id)
+    if brand is None:
+        raise ValueError(f"找不到品牌：{brand_id}")
+    return True, personas.replace_personas(conn, brand_id, normalized, org_id=brand["org_id"])
 
 
 def generation_state(brand_id: str) -> dict:

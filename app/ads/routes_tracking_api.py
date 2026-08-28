@@ -31,19 +31,20 @@ def _envelope(data) -> dict:
 
 
 @router.get("/api/campaigns/{brand_id}/{cycle_id}/tracking-chain")
-async def tracking_chain_get(brand_id: str, cycle_id: str):
-    main_mod.require_brand(brand_id)
+async def tracking_chain_get(brand_id: str, cycle_id: str, request: Request):
+    actor = main_mod.require_actor(request)
+    main_mod.require_brand(brand_id, actor)
     _require_cycle(brand_id, cycle_id)
     return _envelope(tracking.tracking_chain(main_mod.conn, brand_id, cycle_id))
 
 
 @router.post("/api/campaigns/{brand_id}/{cycle_id}/tracking-chain/mapping/confirm")
 async def tracking_mapping_confirm(request: Request, brand_id: str, cycle_id: str):
-    main_mod.require_brand(brand_id)
-    _require_cycle(brand_id, cycle_id)
     actor = main_mod.require_actor(request)
+    main_mod.require_brand(brand_id, actor)
+    _require_cycle(brand_id, cycle_id)
     try:
-        tracking.confirm_suggested_mapping(main_mod.conn, brand_id, cycle_id, actor)
+        tracking.confirm_suggested_mapping(main_mod.conn, brand_id, cycle_id, str(actor.user_id))
     except ValueError as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)
     tracking.run_post_sync_checks(main_mod.conn, brand_id)
@@ -55,16 +56,18 @@ async def tracking_mapping_confirm(request: Request, brand_id: str, cycle_id: st
 # ---------------------------------------------------------------------------
 
 @router.get("/api/campaigns/brands/{brand_id}/tracking-health")
-async def tracking_health_get(brand_id: str):
-    main_mod.require_brand(brand_id)
+async def tracking_health_get(brand_id: str, request: Request):
+    actor = main_mod.require_actor(request)
+    main_mod.require_brand(brand_id, actor)
     return _envelope(tracking.tracking_health(main_mod.conn, brand_id))
 
 
 @router.post("/api/campaigns/brands/{brand_id}/tracking-health/recheck")
-async def tracking_health_recheck_start(brand_id: str):
+async def tracking_health_recheck_start(brand_id: str, request: Request):
     """重新檢查全部（契約 1.7）：背景執行。實際會動網路的只有官網 GA4／Pixel 偵測——
     其餘四路每次 GET tracking-health 本來就是即時查，沒有可快取的網路呼叫要重跑。"""
-    main_mod.require_brand(brand_id)
+    actor = main_mod.require_actor(request)
+    main_mod.require_brand(brand_id, actor)
     conn = main_mod.conn
     key = ads_routes._progress_key("tracking_recheck", brand_id, "_")
 
@@ -77,9 +80,10 @@ async def tracking_health_recheck_start(brand_id: str):
 
 
 @router.get("/api/campaigns/brands/{brand_id}/tracking-health/recheck/status")
-async def tracking_health_recheck_status(brand_id: str):
+async def tracking_health_recheck_status(brand_id: str, request: Request):
     """輪詢端點，沿用 routes_campaigns_open_api.py `plan_status` 同一套讀法。"""
-    main_mod.require_brand(brand_id)
+    actor = main_mod.require_actor(request)
+    main_mod.require_brand(brand_id, actor)
     key = ads_routes._progress_key("tracking_recheck", brand_id, "_")
     entry = ads_routes._progress_state.get(key)
     if entry is None:
@@ -99,10 +103,11 @@ async def tracking_health_recheck_status(brand_id: str):
 
 
 @router.post("/api/campaigns/brands/{brand_id}/tracking-health/website/check")
-async def tracking_health_website_check(brand_id: str):
+async def tracking_health_website_check(brand_id: str, request: Request):
     """精靈頁 2.4「我裝好了，幫我檢查」：單獨重跑官網偵測，同步（fetch_raw_html 10 秒
     逾時），失敗不擋人——回應一律 200，狀態燈自己會誠實反映抓不到／沒裝的結果。"""
-    main_mod.require_brand(brand_id)
+    actor = main_mod.require_actor(request)
+    main_mod.require_brand(brand_id, actor)
     return _envelope(tracking.check_website_now(main_mod.conn, brand_id))
 
 
@@ -116,7 +121,8 @@ async def _hidden_body(request: Request) -> bool:
 
 @router.post("/api/campaigns/brands/{brand_id}/tracking-health/{channel_key}/hidden")
 async def tracking_health_hidden_set(request: Request, brand_id: str, channel_key: str):
-    main_mod.require_brand(brand_id)
+    actor = main_mod.require_actor(request)
+    main_mod.require_brand(brand_id, actor)
     if channel_key not in tracking.TRACKING_CHANNEL_KEYS:
         return JSONResponse({"error": f"不認得的通路：{channel_key}"}, status_code=404)
     hidden = await _hidden_body(request)

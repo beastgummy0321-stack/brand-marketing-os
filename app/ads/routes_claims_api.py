@@ -34,17 +34,19 @@ def _pending_item(row: dict) -> dict:
 
 
 @router.get("/api/campaigns/brands/{brand_id}/claims")
-async def list_claims(brand_id: str):
-    main_mod.require_brand(brand_id)
+async def list_claims(brand_id: str, request: Request):
+    actor = main_mod.require_actor(request)
+    main_mod.require_brand(brand_id, actor)
     pending = ads_sync.list_pending_claims(main_mod.conn, brand_id)
     return _envelope({"items": [_pending_item(row) for row in pending]})
 
 
 @router.post("/api/campaigns/brands/{brand_id}/claims/{discovered_id}/claim")
 async def claim_campaign(request: Request, brand_id: str, discovered_id: str):
-    main_mod.require_brand(brand_id)
+    actor = main_mod.require_actor(request)
+    main_mod.require_brand(brand_id, actor)
     try:
-        row = ads_sync.claim(main_mod.conn, brand_id, discovered_id, main_mod.require_actor(request))
+        row = ads_sync.claim(main_mod.conn, brand_id, discovered_id, str(actor.user_id))
     except ValueError as exc:
         return JSONResponse({"detail": str(exc)}, status_code=400)
     return {"ok": True, "message": f"「{row['campaign_name']}」記成這個品牌的了，它的成效數字會算進來。"}
@@ -52,9 +54,10 @@ async def claim_campaign(request: Request, brand_id: str, discovered_id: str):
 
 @router.post("/api/campaigns/brands/{brand_id}/claims/{discovered_id}/ignore")
 async def ignore_campaign(request: Request, brand_id: str, discovered_id: str):
-    main_mod.require_brand(brand_id)
+    actor = main_mod.require_actor(request)
+    main_mod.require_brand(brand_id, actor)
     try:
-        ads_sync.ignore(main_mod.conn, brand_id, discovered_id, main_mod.require_actor(request))
+        ads_sync.ignore(main_mod.conn, brand_id, discovered_id, str(actor.user_id))
     except ValueError as exc:
         return JSONResponse({"detail": str(exc)}, status_code=400)
     return {"ok": True, "message": "好，這個活動不算這個品牌的。"}

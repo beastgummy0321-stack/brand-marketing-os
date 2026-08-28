@@ -29,10 +29,11 @@ def _late_rerun_note(late_reruns: list) -> str:
 
 
 @router.get("/brands/{brand_id}/orders")
-async def orders(brand_id: str, page: int = Query(default=1, ge=1)):
+async def orders(request: Request, brand_id: str, page: int = Query(default=1, ge=1)):
     """回傳單一品牌的訂單統計與固定大小的一頁訂單清單。"""
+    actor = main_mod.require_actor(request)
     try:
-        brand = main_mod.require_brand(brand_id)
+        brand = main_mod.require_brand(brand_id, actor)
     except main_mod.NotFoundKind:
         return JSONResponse({"detail": "找不到品牌"}, status_code=404)
     summary = orders_repo.stats(main_mod.conn, brand_id, today=date.today().isoformat())
@@ -85,8 +86,9 @@ async def orders(brand_id: str, page: int = Query(default=1, ge=1)):
 
 @router.post("/brands/{brand_id}/orders/import")
 async def import_orders(request: Request, brand_id: str, drop_file: UploadFile = File(...)):
+    actor = main_mod.require_actor(request)
     try:
-        main_mod.require_brand(brand_id)
+        main_mod.require_brand(brand_id, actor)
     except main_mod.NotFoundKind:
         return JSONResponse({"detail": "找不到品牌"}, status_code=404)
     if not drop_file.filename:
@@ -97,7 +99,7 @@ async def import_orders(request: Request, brand_id: str, drop_file: UploadFile =
 
     result = orders_dispatch.import_dropped_file(
         main_mod.conn, brand_id, filename=drop_file.filename, content=content,
-        actor=main_mod.require_actor(request), today=date.today().isoformat(),
+        actor=str(actor.user_id), today=date.today().isoformat(),
     )
     if result.kind == "unknown":
         return _bad_request(result.errors[0] if result.errors else "認不出這個檔案的格式。")
@@ -127,8 +129,9 @@ async def import_orders(request: Request, brand_id: str, drop_file: UploadFile =
 
 @router.post("/brands/{brand_id}/orders/sku-cost")
 async def set_sku_cost(request: Request, brand_id: str, payload: dict):
+    actor = main_mod.require_actor(request)
     try:
-        main_mod.require_brand(brand_id)
+        main_mod.require_brand(brand_id, actor)
     except main_mod.NotFoundKind:
         return JSONResponse({"detail": "找不到品牌"}, status_code=404)
     sku = str(payload.get("sku", ""))
@@ -136,7 +139,7 @@ async def set_sku_cost(request: Request, brand_id: str, payload: dict):
     if not ok or value is None:
         return _bad_request("單位成本請填數字。")
     try:
-        orders_repo.set_sku_cost(main_mod.conn, brand_id, sku, value, actor=main_mod.require_actor(request))
+        orders_repo.set_sku_cost(main_mod.conn, brand_id, sku, value, actor=str(actor.user_id))
     except ValueError as exc:
         return _bad_request(str(exc))
     return {"ok": True, "message": f"「{sku}」的單位成本已更新為 {value:,.2f}。"}
@@ -144,15 +147,16 @@ async def set_sku_cost(request: Request, brand_id: str, payload: dict):
 
 @router.post("/brands/{brand_id}/orders/policy-change")
 async def record_policy_change(request: Request, brand_id: str, payload: dict):
+    actor = main_mod.require_actor(request)
     try:
-        main_mod.require_brand(brand_id)
+        main_mod.require_brand(brand_id, actor)
     except main_mod.NotFoundKind:
         return JSONResponse({"detail": "找不到品牌"}, status_code=404)
     try:
         orders_repo.record_policy_change(
             main_mod.conn, brand_id, policy_type=str(payload.get("policy_type", "")),
             changed_at=str(payload.get("changed_at", "")), description=str(payload.get("description", "")),
-            actor=main_mod.require_actor(request),
+            actor=str(actor.user_id),
         )
     except ValueError as exc:
         return _bad_request(str(exc))
@@ -161,8 +165,9 @@ async def record_policy_change(request: Request, brand_id: str, payload: dict):
 
 @router.post("/brands/{brand_id}/orders/pharmacy-batch")
 async def record_pharmacy_batch(request: Request, brand_id: str, payload: dict):
+    actor = main_mod.require_actor(request)
     try:
-        main_mod.require_brand(brand_id)
+        main_mod.require_brand(brand_id, actor)
     except main_mod.NotFoundKind:
         return JSONResponse({"detail": "找不到品牌"}, status_code=404)
     quantity = str(payload.get("quantity", ""))
@@ -172,7 +177,7 @@ async def record_pharmacy_batch(request: Request, brand_id: str, payload: dict):
     try:
         orders_channel.record_pharmacy_batch(
             main_mod.conn, brand_id, batch_date=str(payload.get("batch_date", "")), quantity=value,
-            note=str(payload.get("note", "")) or None, actor=main_mod.require_actor(request),
+            note=str(payload.get("note", "")) or None, actor=str(actor.user_id),
         )
     except ValueError as exc:
         return _bad_request(str(exc))
@@ -181,14 +186,15 @@ async def record_pharmacy_batch(request: Request, brand_id: str, payload: dict):
 
 @router.post("/brands/{brand_id}/orders/{order_id}/attribution")
 async def set_attribution(request: Request, brand_id: str, order_id: str, payload: dict):
+    actor = main_mod.require_actor(request)
     try:
-        main_mod.require_brand(brand_id)
+        main_mod.require_brand(brand_id, actor)
     except main_mod.NotFoundKind:
         return JSONResponse({"detail": "找不到品牌"}, status_code=404)
     excluded = bool(payload.get("excluded", False))
     try:
         orders_repo.set_attribution_override(
-            main_mod.conn, brand_id, order_id, excluded, actor=main_mod.require_actor(request),
+            main_mod.conn, brand_id, order_id, excluded, actor=str(actor.user_id),
         )
     except ValueError as exc:
         return _bad_request(str(exc))

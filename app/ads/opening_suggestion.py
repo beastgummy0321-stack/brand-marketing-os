@@ -169,5 +169,9 @@ def save_channel_answer(conn, brand_id: str, *, actor: str, answer: str, from_cy
     channel_type, name, platform = channel
     current = bi.list_channels(conn, brand_id)
     if not any(row["channel_type"] == channel_type and row["status"] == "active" for row in current):
-        bi.create_channel(conn, brand_id, actor=actor, channel_type=channel_type, name=name, platform=platform)
+        brand = bi.get_brand(conn, brand_id)
+        if brand is None:
+            raise ValueError(f"找不到品牌：{brand_id}")
+        bi.create_channel(conn, brand_id, org_id=brand["org_id"], actor=actor, channel_type=channel_type,
+                          name=name, platform=platform)
     return opening_suggestion(conn, brand_id, from_cycle=from_cycle)

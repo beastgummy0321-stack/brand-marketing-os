@@ -314,56 +314,56 @@ def _masked_key(key: str | None) -> str | None:
 # （HTML 表單路由已刪除，見票 T4 A4；不為了 JSON 契約重寫第二份寫入邏輯，票 B1-settings）。
 # ---------------------------------------------------------------------------
 
-def _write_api_key(api_key: str) -> str | None:
+def _write_api_key(api_key: str, *, org_id: str) -> str | None:
     key = clean(api_key)
     if not key:
         return "請貼上 AI 金鑰。"
-    coresettings.set_setting(web.conn, coresettings.API_KEY_SETTING, key)
+    coresettings.set_setting(web.conn, coresettings.API_KEY_SETTING, key, org_id=org_id)
     return None
 
 
-def _write_meta_settings(account_id: str, token: str) -> str | None:
+def _write_meta_settings(account_id: str, token: str, *, org_id: str) -> str | None:
     account = clean(account_id)
     token_c = clean(token)
     if not account:
         return "請填入廣告帳號編號。"
-    coresettings.set_setting(web.conn, ads_sync.ACCOUNT_SETTING, account)
+    coresettings.set_setting(web.conn, ads_sync.ACCOUNT_SETTING, account, org_id=org_id)
     if token_c:
-        coresettings.set_setting(web.conn, ads_sync.TOKEN_SETTING, token_c)
+        coresettings.set_setting(web.conn, ads_sync.TOKEN_SETTING, token_c, org_id=org_id)
     return None
 
 
-def _write_ga4_settings(property_id: str, service_account_json: str) -> str | None:
+def _write_ga4_settings(property_id: str, service_account_json: str, *, org_id: str) -> str | None:
     property_id_c = clean(property_id)
     key_json = (service_account_json or "").strip()
     if not property_id_c:
         return "請填入 GA4 資源編號。"
-    coresettings.set_setting(web.conn, ga4_sync.PROPERTY_SETTING, property_id_c)
+    coresettings.set_setting(web.conn, ga4_sync.PROPERTY_SETTING, property_id_c, org_id=org_id)
     if key_json:
-        coresettings.set_setting(web.conn, ga4_sync.SERVICE_ACCOUNT_SETTING, key_json)
+        coresettings.set_setting(web.conn, ga4_sync.SERVICE_ACCOUNT_SETTING, key_json, org_id=org_id)
     return None
 
 
-def _write_model(llm_model: str) -> str | None:
+def _write_model(llm_model: str, *, org_id: str) -> str | None:
     labels = {m_id: name for m_id, name in MODEL_CHOICES}
     if llm_model not in labels:
         return "請從選單中選一個模型。"
-    coresettings.set_setting(web.conn, coresettings.LLM_MODEL_SETTING, llm_model)
+    coresettings.set_setting(web.conn, coresettings.LLM_MODEL_SETTING, llm_model, org_id=org_id)
     return None
 
 
-def _write_budget(raw_budget) -> str | None:
+def _write_budget(raw_budget, *, org_id: str) -> str | None:
     """raw_budget 接受字串（表單）或數字（JSON）——先轉字串再走既有 parse_number，
     驗證規則只寫一份。"""
     raw = "" if raw_budget is None else str(raw_budget)
     value, ok = parse_number(raw)
     if not ok or value is None or value <= 0:
         return "花費上限請填大於 0 的數字，例如 30。"
-    coresettings.set_setting(web.conn, coresettings.INTAKE_BUDGET_SETTING, _num_str(value))
+    coresettings.set_setting(web.conn, coresettings.INTAKE_BUDGET_SETTING, _num_str(value), org_id=org_id)
     return None
 
 
-def _write_creative_root(raw_root: str) -> str | None:
+def _write_creative_root(raw_root: str, *, org_id: str) -> str | None:
     """三道驗證：有填、是完整路徑、不是磁碟機根目錄——刪品牌／刪檔期會刪掉這底下對應的
     子資料夾，指到 `C:\\` 這種地方很危險。不驗資料夾存不存在：使用者可能先填好路徑，
     等一下才插上那顆外接硬碟。"""
@@ -372,13 +372,14 @@ def _write_creative_root(raw_root: str) -> str | None:
     if path is None or not path.is_absolute() or path.parent == path:
         return ("請填一個完整的資料夾路徑（例如 D:\\行銷素材），"
                 "不要只填資料夾名稱，也不要填磁碟機根目錄。")
-    coresettings.set_setting(web.conn, corecreative.SETTING_KEY, str(path))
+    coresettings.set_setting(web.conn, corecreative.SETTING_KEY, str(path), org_id=org_id)
     return None
 
 
-def _write_prompt_header(prompt_header: str) -> None:
+def _write_prompt_header(prompt_header: str, *, org_id: str) -> None:
     coresettings.set_setting(
-        web.conn, coresettings.IMAGE_PROMPT_HEADER_SETTING, (prompt_header or "").strip())
+        web.conn, coresettings.IMAGE_PROMPT_HEADER_SETTING, (prompt_header or "").strip(),
+        org_id=org_id)
 
 
 def _run_ai_test_connection() -> tuple:
@@ -481,7 +482,9 @@ async def api_settings_meta_post(request: Request):
     body, err = await _parse_json_body(request)
     if err:
         return err
-    error = _write_meta_settings(body.get("meta_account_id", ""), body.get("meta_token", ""))
+    actor = web.require_actor(request)
+    error = _write_meta_settings(
+        body.get("meta_account_id", ""), body.get("meta_token", ""), org_id=actor.org_id)
     if error:
         return JSONResponse({"error": error}, status_code=400)
     return {}
@@ -497,7 +500,10 @@ async def api_settings_ga4_post(request: Request):
     body, err = await _parse_json_body(request)
     if err:
         return err
-    error = _write_ga4_settings(body.get("ga4_property_id", ""), body.get("ga4_service_account_json", ""))
+    actor = web.require_actor(request)
+    error = _write_ga4_settings(
+        body.get("ga4_property_id", ""), body.get("ga4_service_account_json", ""),
+        org_id=actor.org_id)
     if error:
         return JSONResponse({"error": error}, status_code=400)
     return {}
@@ -514,7 +520,8 @@ async def api_settings_api_key_post(request: Request):
     body, err = await _parse_json_body(request)
     if err:
         return err
-    error = _write_api_key(body.get("api_key", ""))
+    actor = web.require_actor(request)
+    error = _write_api_key(body.get("api_key", ""), org_id=actor.org_id)
     if error:
         return JSONResponse({"error": error}, status_code=400)
     return {}
@@ -539,7 +546,8 @@ async def api_settings_model_post(request: Request):
     body, err = await _parse_json_body(request)
     if err:
         return err
-    error = _write_model(body.get("llm_model", ""))
+    actor = web.require_actor(request)
+    error = _write_model(body.get("llm_model", ""), org_id=actor.org_id)
     if error:
         return JSONResponse({"error": error}, status_code=400)
     return {}
@@ -550,7 +558,8 @@ async def api_settings_creative_root_post(request: Request):
     body, err = await _parse_json_body(request)
     if err:
         return err
-    error = _write_creative_root(body.get("creative_root", ""))
+    actor = web.require_actor(request)
+    error = _write_creative_root(body.get("creative_root", ""), org_id=actor.org_id)
     if error:
         return JSONResponse({"error": error}, status_code=400)
     return {}
@@ -561,7 +570,8 @@ async def api_settings_prompt_header_post(request: Request):
     body, err = await _parse_json_body(request)
     if err:
         return err
-    _write_prompt_header(body.get("prompt_header", ""))
+    actor = web.require_actor(request)
+    _write_prompt_header(body.get("prompt_header", ""), org_id=actor.org_id)
     return {}
 
 
@@ -570,7 +580,8 @@ async def api_settings_budget_post(request: Request):
     body, err = await _parse_json_body(request)
     if err:
         return err
-    error = _write_budget(body.get("intake_budget"))
+    actor = web.require_actor(request)
+    error = _write_budget(body.get("intake_budget"), org_id=actor.org_id)
     if error:
         return JSONResponse({"error": error}, status_code=400)
     return {}

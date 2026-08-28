@@ -156,23 +156,24 @@ def _budget_tiers(pain_suggestion: dict) -> list:
 # ---- 開檔（S8.1-11／S8R.1-7） ----
 
 @router.get("/api/campaigns/brands/{brand_id}/opening-suggestion")
-async def get_opening_suggestion(brand_id: str, from_cycle: str | None = None):
-    main_mod.require_brand(brand_id)
+async def get_opening_suggestion(brand_id: str, request: Request, from_cycle: str | None = None):
+    main_mod.require_brand(brand_id, main_mod.require_actor(request))
     return opening_suggestion.opening_suggestion(main_mod.conn, brand_id, from_cycle=from_cycle)
 
 
 @router.post("/api/campaigns/brands/{brand_id}/opening-suggestion/channel-answer")
 async def post_opening_suggestion_channel_answer(request: Request, brand_id: str):
-    main_mod.require_brand(brand_id)
+    actor = main_mod.require_actor(request)
+    main_mod.require_brand(brand_id, actor)
     body = await _json_body(request)
     return opening_suggestion.save_channel_answer(
-        main_mod.conn, brand_id, actor=main_mod.require_actor(request), answer=body.get("answer"),
+        main_mod.conn, brand_id, actor=str(actor.user_id), answer=body.get("answer"),
         from_cycle=body.get("from_cycle"),
     )
 
 @router.get("/api/campaigns/{brand_id}/new-context")
-async def new_context(brand_id: str):
-    main_mod.require_brand(brand_id)
+async def new_context(brand_id: str, request: Request):
+    main_mod.require_brand(brand_id, main_mod.require_actor(request))
     conn = main_mod.conn
     products = [p for p in bi.list_products(conn, brand_id) if p.get("status") == "active"]
     product_ids = [p["id"] for p in products]
@@ -199,7 +200,7 @@ _NO_QUALIFIED_WINNER_LABEL = "沿用上期設定"  # 票 F10：歷史切角存�
 
 
 @router.get("/api/campaigns/{brand_id}/new-context/direction")
-async def new_cycle_direction(brand_id: str):
+async def new_cycle_direction(brand_id: str, request: Request):
     """歷來切角讀不到時不擋開檔，前端直接走一般推薦值。
 
     票 F10：改用 `carry_forward.prior_winners()`（F7 的誠實門檻——樣本不足、虧本、算不出
@@ -207,7 +208,7 @@ async def new_cycle_direction(brand_id: str):
     `experiment_cell.creative_angle` 的原始內部代號（例如驗收資料的 `normal_1`）原封不動
     顯示給品牌主看，鐵則 12 不許畫面出現內部代號。
     """
-    main_mod.require_brand(brand_id)
+    main_mod.require_brand(brand_id, main_mod.require_actor(request))
     try:
         cells = nextcycle.historical_cell_performance(main_mod.conn, brand_id)
     except Exception:  # noqa: BLE001 — 失敗收斂成不擋人的既有推薦路徑
@@ -226,8 +227,8 @@ async def new_cycle_direction(brand_id: str):
 
 @router.post("/api/campaigns/{brand_id}")
 async def create_cycle(request: Request, brand_id: str):
-    main_mod.require_brand(brand_id)
     actor = main_mod.require_actor(request)
+    main_mod.require_brand(brand_id, actor)
     conn = main_mod.conn
     body = await _json_body(request)
 
@@ -278,7 +279,7 @@ async def create_cycle(request: Request, brand_id: str):
             conn, brand_id, product_scope_json=list(product_ids),
             valid_from=start, valid_to=end, fields=offer_fields)
     cycle = ads_repo.create_cycle(conn, brand_id, product_ids=list(product_ids), pain_value=budget,
-                                  objective=objective, actor=actor, phase=phase,
+                                  objective=objective, actor=str(actor.user_id), phase=phase,
                                   start_date=start.isoformat(),
                                   duration_days=duration_value, background=background,
                                   offer_id=offer_id)
@@ -290,8 +291,8 @@ async def create_cycle(request: Request, brand_id: str):
 
 @router.post("/api/campaigns/{brand_id}/target-cpa-guided")
 async def target_cpa_guided(request: Request, brand_id: str):
-    main_mod.require_brand(brand_id)
     actor = main_mod.require_actor(request)
+    main_mod.require_brand(brand_id, actor)
     body = await _json_body(request)
     try:
         events = float(body.get("events_per_sale") or 0)
@@ -300,7 +301,7 @@ async def target_cpa_guided(request: Request, brand_id: str):
         return _error(400, "請把兩格都填成大於 0 的數字。")
     try:
         result = target_cpa.save_guided_target_cpa(main_mod.conn, brand_id, events_per_sale=events,
-                                                    margin_per_sale=margin, actor=actor)
+                                                    margin_per_sale=margin, actor=str(actor.user_id))
     except ValueError as exc:
         return _error(400, str(exc))
     return {"value": result["value"]}
@@ -309,8 +310,8 @@ async def target_cpa_guided(request: Request, brand_id: str):
 # ---- 右欄 AI 花費儀表 ----
 
 @router.get("/api/campaigns/{brand_id}/ai-cost-meter")
-async def ai_cost_meter(brand_id: str):
-    main_mod.require_brand(brand_id)
+async def ai_cost_meter(brand_id: str, request: Request):
+    main_mod.require_brand(brand_id, main_mod.require_actor(request))
     conn = main_mod.conn
     return _envelope({
         "brand_id": brand_id, "spent": core_settings.brand_llm_spent(conn, brand_id),
@@ -321,8 +322,8 @@ async def ai_cost_meter(brand_id: str):
 # ---- 檔期完整狀態＋封存 ----
 
 @router.get("/api/campaigns/brands/{brand_id}/cycles/{cycle_id}/proposal")
-async def proposal_get(brand_id: str, cycle_id: str):
-    main_mod.require_brand(brand_id)
+async def proposal_get(brand_id: str, cycle_id: str, request: Request):
+    main_mod.require_brand(brand_id, main_mod.require_actor(request))
     _require_cycle(brand_id, cycle_id)
     conn = main_mod.conn
     result = proposal.proposal(conn, brand_id, cycle_id)
@@ -379,25 +380,26 @@ async def proposal_approve(request: Request, brand_id: str, cycle_id: str):
     `theme_batch.generate_preselected_batch` 跑完八次生成（票 13 驗收 1）。生成本身若
     失敗，由下面 `proposal_approve_status` 回報，不回頭撤銷已經生效的核可（D2，驗收 3）。
     """
-    main_mod.require_brand(brand_id)
     actor = main_mod.require_actor(request)
+    main_mod.require_brand(brand_id, actor)
     conn = main_mod.conn
     _require_cycle(brand_id, cycle_id)
+    actor_id = str(actor.user_id)
     try:
-        proposal.approve(conn, brand_id, cycle_id, actor)
+        proposal.approve(conn, brand_id, cycle_id, actor_id)
     except ValueError as exc:
         return _error(400, str(exc))
     key = ads_routes._progress_key("proposal_generate", brand_id, cycle_id)
 
     def work(on_stage):
-        return theme_batch.generate_preselected_batch(conn, brand_id, cycle_id, actor=actor)
+        return theme_batch.generate_preselected_batch(conn, brand_id, cycle_id, actor=actor_id)
 
     ads_routes._progress_start(key, _PROPOSAL_GENERATE_STAGES, work)
     return JSONResponse(None, status_code=204)
 
 
 @router.get("/api/campaigns/brands/{brand_id}/cycles/{cycle_id}/proposal/approve-status")
-async def proposal_approve_status(brand_id: str, cycle_id: str):
+async def proposal_approve_status(brand_id: str, cycle_id: str, request: Request):
     """輪詢端點（票 13）：核可提案書後背景生成預選素材的進度。跟 `plan_status`
     （本檔下方）同一套 `_progress_state` 底層，只是 key 換成 "proposal_generate"這個
     kind——不會跟企劃出方案那份進度互相踩到。entry 不存在一律視為 done，沿用
@@ -423,7 +425,7 @@ async def proposal_approve_status(brand_id: str, cycle_id: str):
     這三種都不影響已經生效的核可（D2）——approve() 早在 `proposal_approve()` 就同步
     完成了，這裡只是把「後續生成做了多少」講清楚。
     """
-    main_mod.require_brand(brand_id)
+    main_mod.require_brand(brand_id, main_mod.require_actor(request))
     conn = main_mod.conn
     _require_cycle(brand_id, cycle_id)
     key = ads_routes._progress_key("proposal_generate", brand_id, cycle_id)
@@ -477,15 +479,15 @@ async def proposal_approve_status(brand_id: str, cycle_id: str):
 
 @router.post("/api/campaigns/brands/{brand_id}/cycles/{cycle_id}/proposal/return")
 async def proposal_return(request: Request, brand_id: str, cycle_id: str):
-    main_mod.require_brand(brand_id)
     actor = main_mod.require_actor(request)
+    main_mod.require_brand(brand_id, actor)
     _require_cycle(brand_id, cycle_id)
-    proposal.return_to_opening(main_mod.conn, brand_id, cycle_id, actor)
+    proposal.return_to_opening(main_mod.conn, brand_id, cycle_id, str(actor.user_id))
     return JSONResponse(None, status_code=204)
 
 @router.get("/api/campaigns/{brand_id}/{cycle_id}")
-async def cycle_detail(brand_id: str, cycle_id: str):
-    main_mod.require_brand(brand_id)
+async def cycle_detail(brand_id: str, cycle_id: str, request: Request):
+    main_mod.require_brand(brand_id, main_mod.require_actor(request))
     conn = main_mod.conn
     cycle = _require_cycle(brand_id, cycle_id)
     view = _cycle_view(conn, brand_id, cycle)
@@ -498,10 +500,11 @@ async def cycle_detail(brand_id: str, cycle_id: str):
 
 @router.post("/api/campaigns/{brand_id}/{cycle_id}/archive")
 async def cycle_archive(request: Request, brand_id: str, cycle_id: str):
-    main_mod.require_brand(brand_id)
     actor = main_mod.require_actor(request)
+    main_mod.require_brand(brand_id, actor)
     cycle = _require_cycle(brand_id, cycle_id)
-    ads_repo.set_cycle_archived(main_mod.conn, brand_id, cycle_id, archived=not cycle["archived"], actor=actor)
+    ads_repo.set_cycle_archived(main_mod.conn, brand_id, cycle_id, archived=not cycle["archived"],
+                                actor=str(actor.user_id))
     return JSONResponse(None, status_code=204)
 
 
@@ -509,16 +512,17 @@ async def cycle_archive(request: Request, brand_id: str, cycle_id: str):
 
 @router.post("/api/campaigns/{brand_id}/{cycle_id}/plan/generate")
 async def plan_generate(request: Request, brand_id: str, cycle_id: str):
-    main_mod.require_brand(brand_id)
     actor = main_mod.require_actor(request)
+    main_mod.require_brand(brand_id, actor)
     conn = main_mod.conn
     _require_cycle(brand_id, cycle_id)
     body = await _json_body(request)
     direction = body.get("direction") or None
     key = ads_routes._progress_key("plan", brand_id, cycle_id)
+    actor_id = str(actor.user_id)
 
     def work(on_stage):
-        return ads_plan.generate_options(conn, brand_id, cycle_id, actor, custom_direction=direction,
+        return ads_plan.generate_options(conn, brand_id, cycle_id, actor_id, custom_direction=direction,
                                          on_stage=on_stage)
 
     ads_routes._progress_start(key, _PLAN_STAGES, work)
@@ -526,7 +530,7 @@ async def plan_generate(request: Request, brand_id: str, cycle_id: str):
 
 
 @router.get("/api/campaigns/{brand_id}/{cycle_id}/plan/status")
-async def plan_status(brand_id: str, cycle_id: str):
+async def plan_status(brand_id: str, cycle_id: str, request: Request):
     """輪詢端點：沿用舊 Jinja `ads_plan_progress`（routes_plan.py）同一套背景執行緒／逾時
     判斷，只是把「轉址＋帶訊息」換成「JSON 狀態＋人話訊息」——同一個 `_progress_state`
     底層，不是第二套生成邏輯。entry 不存在（從沒生成過、或成功結果已被上一次讀取消化）
@@ -555,7 +559,7 @@ async def plan_status(brand_id: str, cycle_id: str):
        而蓋掉真正的失敗訊息。業務失敗／背景例外原本讀一次就 `_progress_clear()`，第二次
        再問就落回「entry 不存在＝done」；改成跟逾時分支一樣呼叫 `_progress_fail()` 留著
        entry，讓攔下訊息撐過重整／元件重掛載。"""
-    main_mod.require_brand(brand_id)
+    main_mod.require_brand(brand_id, main_mod.require_actor(request))
     _require_cycle(brand_id, cycle_id)
     key = ads_routes._progress_key("plan", brand_id, cycle_id)
     entry = ads_routes._progress_state.get(key)
@@ -586,8 +590,8 @@ async def plan_status(brand_id: str, cycle_id: str):
 
 
 @router.get("/api/campaigns/{brand_id}/{cycle_id}/plan/options")
-async def plan_options(brand_id: str, cycle_id: str):
-    main_mod.require_brand(brand_id)
+async def plan_options(brand_id: str, cycle_id: str, request: Request):
+    main_mod.require_brand(brand_id, main_mod.require_actor(request))
     conn = main_mod.conn
     cycle = _require_cycle(brand_id, cycle_id)
     options = ads_plan.get_pending_options(conn, brand_id, cycle_id)
@@ -615,12 +619,13 @@ async def plan_options(brand_id: str, cycle_id: str):
 
 @router.post("/api/campaigns/{brand_id}/{cycle_id}/plan/select")
 async def plan_select(request: Request, brand_id: str, cycle_id: str):
-    main_mod.require_brand(brand_id)
     actor = main_mod.require_actor(request)
+    main_mod.require_brand(brand_id, actor)
     _require_cycle(brand_id, cycle_id)
     body = await _json_body(request)
     try:
-        ads_plan.select_option(main_mod.conn, brand_id, cycle_id, actor, option_id=body.get("option_id"))
+        ads_plan.select_option(main_mod.conn, brand_id, cycle_id, str(actor.user_id),
+                               option_id=body.get("option_id"))
     except ValueError as exc:
         return _error(400, str(exc))
     return JSONResponse(None, status_code=204)
@@ -632,8 +637,8 @@ async def rename_cell_angle(request: Request, brand_id: str, cycle_id: str, cell
     形狀是這張票給的固定契約（`{"ok", "creative_angle"}` 成功；`{"detail": "..."}` 400/404）
     ——不套本檔其餘路由用的 `_envelope()`／`_error()`，兩種錯誤 envelope 前端本就雙欄兼容
     （見 warroomApi.ts getJson 註解）。"""
-    main_mod.require_brand(brand_id)
     actor = main_mod.require_actor(request)
+    main_mod.require_brand(brand_id, actor)
     _require_cycle(brand_id, cycle_id)
     conn = main_mod.conn
     cell = ads_plan.get_cell(conn, brand_id, cycle_id, cell_id)
@@ -643,7 +648,7 @@ async def rename_cell_angle(request: Request, brand_id: str, cycle_id: str, cell
     body = await _json_body(request)
     try:
         creative_angle = ads_plan.rename_angle(
-            conn, brand_id, cycle_id, cell, body.get("creative_angle", ""), actor)
+            conn, brand_id, cycle_id, cell, body.get("creative_angle", ""), str(actor.user_id))
     except ValueError as exc:
         return JSONResponse({"detail": str(exc)}, status_code=400)
     return {"ok": True, "creative_angle": creative_angle}
@@ -651,13 +656,13 @@ async def rename_cell_angle(request: Request, brand_id: str, cycle_id: str, cell
 
 @router.post("/api/campaigns/{brand_id}/{cycle_id}/dissents/{dissent_id}/decide")
 async def dissent_decide(request: Request, brand_id: str, cycle_id: str, dissent_id: str):
-    main_mod.require_brand(brand_id)
     actor = main_mod.require_actor(request)
+    main_mod.require_brand(brand_id, actor)
     _require_cycle(brand_id, cycle_id)
     body = await _json_body(request)
     decision = "adopted" if body.get("accepted") else "rejected"
     try:
-        ads_repo.decide_dissent(main_mod.conn, brand_id, cycle_id, dissent_id, decision, actor)
+        ads_repo.decide_dissent(main_mod.conn, brand_id, cycle_id, dissent_id, decision, str(actor.user_id))
     except ValueError as exc:
         return _error(400, str(exc))
     return JSONResponse(None, status_code=204)
@@ -665,28 +670,30 @@ async def dissent_decide(request: Request, brand_id: str, cycle_id: str, dissent
 
 @router.post("/api/campaigns/{brand_id}/{cycle_id}/plan/approve")
 async def plan_approve(request: Request, brand_id: str, cycle_id: str):
-    main_mod.require_brand(brand_id)
     actor = main_mod.require_actor(request)
+    main_mod.require_brand(brand_id, actor)
     conn = main_mod.conn
     _require_cycle(brand_id, cycle_id)
+    actor_id = str(actor.user_id)
     try:
-        ads_plan.approve(conn, brand_id, cycle_id, actor)
+        ads_plan.approve(conn, brand_id, cycle_id, actor_id)
     except ValueError as exc:
         return _error(400, str(exc))
-    theme_batch.generate_preselected_batch(conn, brand_id, cycle_id, actor=actor)
+    theme_batch.generate_preselected_batch(conn, brand_id, cycle_id, actor=actor_id)
     return JSONResponse(None, status_code=204)
 
 
 @router.post("/api/campaigns/{brand_id}/{cycle_id}/pacing")
 async def pacing_update(request: Request, brand_id: str, cycle_id: str):
-    main_mod.require_brand(brand_id)
     actor = main_mod.require_actor(request)
+    main_mod.require_brand(brand_id, actor)
     _require_cycle(brand_id, cycle_id)
     body = await _json_body(request)
     strategy = str(body.get("pacing_strategy") or "")
     reason = str(body.get("pacing_reason") or "")
     try:
-        ads_repo.set_cycle_pacing(main_mod.conn, brand_id, cycle_id, strategy=strategy, reason=reason, actor=actor)
+        ads_repo.set_cycle_pacing(main_mod.conn, brand_id, cycle_id, strategy=strategy, reason=reason,
+                                  actor=str(actor.user_id))
     except ValueError as exc:
         return _error(400, str(exc))
     return JSONResponse(None, status_code=204)
@@ -697,7 +704,7 @@ async def offer_save(request: Request, brand_id: str, cycle_id: str):
     """開期後補填、或編輯這期的優惠（票 V1-01）。create-or-update：檔期已經掛了 offer
     就地改，沒有就新開一筆——`offer.save_for_cycle()` 判斷，這裡只管驗證跟轉形狀。
     不重算 `derived_plan_json`（票面決策：後補優惠不動使用者已經看過的日預算數字）。"""
-    main_mod.require_brand(brand_id)
+    main_mod.require_brand(brand_id, main_mod.require_actor(request))
     cycle = _require_cycle(brand_id, cycle_id)
     body = await _json_body(request)
     fields, err = offer_mod.validate(body)
@@ -708,18 +715,18 @@ async def offer_save(request: Request, brand_id: str, cycle_id: str):
 
 
 @router.delete("/api/campaigns/{brand_id}/{cycle_id}/offer")
-async def offer_clear(brand_id: str, cycle_id: str):
+async def offer_clear(brand_id: str, cycle_id: str, request: Request):
     """清掉這期的優惠：NULL 掉 `campaign_cycle.offer_id`、刪掉 offer row（票 V1-01）。
     同樣不重算 `derived_plan_json`。"""
-    main_mod.require_brand(brand_id)
+    main_mod.require_brand(brand_id, main_mod.require_actor(request))
     cycle = _require_cycle(brand_id, cycle_id)
     offer_mod.clear_for_cycle(main_mod.conn, brand_id, cycle)
     return _envelope({"cleared": True})
 
 
 @router.get("/api/campaigns/{brand_id}/{cycle_id}/rule-cards-learned")
-async def rule_cards_learned(brand_id: str, cycle_id: str):
-    main_mod.require_brand(brand_id)
+async def rule_cards_learned(brand_id: str, cycle_id: str, request: Request):
+    main_mod.require_brand(brand_id, main_mod.require_actor(request))
     _require_cycle(brand_id, cycle_id)
     rows = list_pending_rule_cards(main_mod.conn, brand_id)
     return _envelope([{"id": r["id"], "text": r["proposed_rule_text"]} for r in rows])
@@ -728,8 +735,8 @@ async def rule_cards_learned(brand_id: str, cycle_id: str):
 # ---- 企劃排期到期提醒（S8R.9-11） ----
 
 @router.get("/api/campaigns/{brand_id}/{cycle_id}/schedule-reminder")
-async def schedule_reminder(brand_id: str, cycle_id: str):
-    main_mod.require_brand(brand_id)
+async def schedule_reminder(brand_id: str, cycle_id: str, request: Request):
+    main_mod.require_brand(brand_id, main_mod.require_actor(request))
     conn = main_mod.conn
     _require_cycle(brand_id, cycle_id)
     today = date.today().isoformat()

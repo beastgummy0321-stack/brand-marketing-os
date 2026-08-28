@@ -21,6 +21,7 @@ import json
 import re
 from dataclasses import dataclass
 
+from app.brand_intelligence import repository as bi_repo
 from app.core import db
 from app.llm import pricing, providers
 from app.llm.providers import Provider, ProviderError, ProviderTimeoutError
@@ -79,7 +80,7 @@ def get_task(conn: db.Conn, task_id: str) -> dict | None:
 
 
 def _insert_running_row(
-    conn: db.Conn, *, brand_id: str, task_type: str, context: TaskContext,
+    conn: db.Conn, *, org_id: str, brand_id: str, task_type: str, context: TaskContext,
     prompt_template_id: str, prompt_template_version: str, provider_name: str, model: str,
     attempt_no: int,
 ) -> dict:
@@ -100,7 +101,7 @@ def _insert_running_row(
         ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NULL, %s, %s, %s, %s, 'running', %s,
                    NULL, NULL, NULL, NULL, NULL, %s, NULL, NULL)""",
         (
-            row_id, db.DEV_ORG_ID, brand_id, task_type,
+            row_id, org_id, brand_id, task_type,
             db.jsonb(context.context_scope),
             db.jsonb(context.knowledge_item_ids), input_context_hash,
             db.jsonb(context.knowledge_item_ids),
@@ -161,6 +162,14 @@ def run_task(
     if not task_type:
         raise ValueError("task_type 為必填")
 
+    # org_id 由 brand_id 反查（票 03-1）：app.llm 排在 app.brand_intelligence 之後
+    # （LAYER_ORDER），可以直接 import 該層取值，不必逐層往上傳——run_task() 是全站
+    # 呼叫點最多的入口之一，逐層傳參數會牽動幾十個呼叫端的簽章。
+    brand = bi_repo.get_brand(conn, brand_id)
+    if brand is None:
+        raise ValueError(f"找不到品牌：{brand_id}")
+    org_id = brand["org_id"]
+
     opts = options or TaskOptions()
     model = providers.resolve_model(opts.model, task_type=task_type, conn=conn)
     thinking = providers.resolve_thinking(opts.thinking, task_type=task_type)
@@ -180,7 +189,7 @@ def run_task(
     row = None
     for attempt_no in range(1, max_attempts + 1):
         row = _insert_running_row(
-            conn, brand_id=brand_id, task_type=task_type, context=context,
+            conn, org_id=org_id, brand_id=brand_id, task_type=task_type, context=context,
             prompt_template_id=prompt_template_id, prompt_template_version=prompt_template_version,
             provider_name=provider_name, model=model, attempt_no=attempt_no,
         )

@@ -42,7 +42,7 @@ from app.brand_intelligence.repository_learning_text import (  # noqa: F401
 )
 from app.core import cleanup
 from app.core.audit import write_audit
-from app.core.db import Conn, jsonb, new_id, now_utc
+from app.core.db import Conn, ConnProxy, jsonb, new_id, now_utc
 
 
 def _require(value, message: str) -> None:
@@ -77,7 +77,10 @@ def _bump_product_version(conn: Conn, brand_id: str, product_id: str) -> None:
 # Brand
 # ---------------------------------------------------------------------------
 
-def create_brand(conn: Conn, *, org_id: str, name: str, client_name: str | None, actor: str) -> dict:
+def create_brand(
+    conn: Conn, *, org_id: str = "org_dev", name: str, client_name: str | None, actor: str
+) -> dict:
+    # org_id 預設值只服務既有測試呼叫點；route 一律顯式傳 actor.org_id（字面值，不是那個環境常數識別字）。
     _require(name, "brand.name 為必填")
     _require(actor, "actor 為必填")
     brand_id = new_id("brd")
@@ -98,27 +101,22 @@ def create_brand(conn: Conn, *, org_id: str, name: str, client_name: str | None,
     return row
 
 
-def get_brand(conn: Conn, brand_id: str) -> dict | None:
+def get_brand(conn: Conn | ConnProxy, brand_id: str) -> dict | None:
     return _row(conn.execute("SELECT * FROM brand WHERE id = %s", (brand_id,)).fetchone())
 
 
 def _org_id_for_brand(conn: Conn, brand_id: str) -> str:
-    """票 03-1：這個模組幾乎每個寫入函式都要填 org_id，而它們全部已經拿著
-    `brand_id`——org_id 是 brand_id 的確定性函式（一個品牌只屬於一個組織，且組織
-    永不換）。與其把 org_id 當成新參數逐層往上傳（route 早已經在 `require_brand()`
-    驗過 `actor.org_id == brand.org_id`，再往下傳一次是重複資訊），這裡查一次權威值。
-    不是隱藏的 contextvar：輸入是呼叫端已經明確傳入的 brand_id，輸出可回溯、可測試，
-    每個呼叫點都看得到這一行——只有 create_brand()（還沒有品牌可查）例外，org_id
-    真的當成參數從呼叫端（route 的 actor.org_id）傳進來。"""
+    """票 03-1：org_id 是 brand_id 的確定性函式，查一次權威值，不逐層往上傳當參數；
+    不是隱藏 contextvar——輸入是明確的 brand_id。只有 create_brand() 例外，當參數傳入。"""
     row = conn.execute("SELECT org_id FROM brand WHERE id = %s", (brand_id,)).fetchone()
     if row is None:
         raise ValueError(f"找不到品牌：{brand_id}")
     return row["org_id"]
 
 
-def list_brands(conn: Conn, org_id: str, status: str | None = None) -> list:
-    """品牌切換器用的清單——橫跨一個組織底下所有品牌（票 03-1：org_id 為租戶界線，
-    不是「橫跨所有品牌」了）。"""
+def list_brands(conn: Conn, org_id: str = "org_dev", status: str | None = None) -> list:
+    """品牌切換器用的清單——橫跨一個組織底下所有品牌（票 03-1，org_id 同 create_brand()
+    的預設值說明）。"""
     if status:
         return _rows(conn.execute(
             "SELECT * FROM brand WHERE org_id = %s AND status = %s ORDER BY name",

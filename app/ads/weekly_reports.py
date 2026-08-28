@@ -5,6 +5,7 @@ from datetime import date, timedelta
 from app.ads import performance as ads_performance
 from app.ads import reading as ads_reading
 from app.ads import weekly_proposals
+from app.brand_intelligence import repository as bi_repo
 from app.core import interrupts as core_interrupts
 
 
@@ -74,6 +75,7 @@ def enqueue_if_ready(conn, brand_id: str, cycle_id: str, *, today: str) -> str |
         return None
     interrupt_id = core_interrupts.enqueue(
         conn,
+        org_id=bi_repo.get_brand(conn, brand_id)["org_id"],
         category="weekly_report_ready",
         dedupe_key=f"weekly_report_ready:{cycle_id}:{report['week_start']}",
         message="本週報告好了",

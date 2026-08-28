@@ -21,11 +21,12 @@ guide_cards facts 時查「去年有沒有跳過」）。目前沒有 HTTP 路�
 
 
 from app.core import cleanup
-from app.core.db import DEV_ORG_ID, new_id, now_utc
+from app.core.db import new_id, now_utc
 
 
 def record_skip(conn, brand_id: str, holiday_id: str, year: int,
-                 reason: str | None = None) -> None:
+                 reason: str | None = None, *, org_id: str = "org_dev") -> None:
+    # org_id 預設值只服務既有測試呼叫點；正式呼叫端一律顯式傳。
     """標記某品牌某年不投某個節日檔期。同品牌＋節日＋年份重複標記會覆蓋舊理由
     （使用者改變心意時只留最新一筆）。會 commit。"""
     conn.execute(
@@ -33,7 +34,7 @@ def record_skip(conn, brand_id: str, holiday_id: str, year: int,
         " VALUES (%s, %s, %s, %s, %s, %s, %s)"
         " ON CONFLICT(brand_id, holiday_id, year) DO UPDATE SET"
         " reason = excluded.reason, created_at = excluded.created_at",
-        (new_id("csk"), DEV_ORG_ID, brand_id, holiday_id, year, reason, now_utc()),
+        (new_id("csk"), org_id, brand_id, holiday_id, year, reason, now_utc()),
     )
     conn.commit()
 
@@ -86,16 +87,21 @@ def demo() -> None:
     避免撞到上一次留下的列（比照本機 dev 資料可丟可重建，CLAUDE.md「資料狀態」節）。"""
     from app.core import db as coredb
 
+    # 種子資料的 dev 組織 id（見 supabase/seed.sql）。db.py 的那個開發用常數不得出現在
+    # app/core/db.py 以外的檔案（票 03-1），這裡直接寫字面值，不 import 它。
+    demo_org_id = "org_dev"
+
     with coredb.connection() as conn:
         brand_id = new_id("brd")
         assert get_skip(conn, brand_id, "cny", 2026) is None
-        record_skip(conn, brand_id, "cny", 2026, reason="收假太晚，沒空間做素材")
+        record_skip(conn, brand_id, "cny", 2026, reason="收假太晚，沒空間做素材",
+                   org_id=demo_org_id)
         assert get_skip(conn, brand_id, "cny", 2026) == {"reason": "收假太晚，沒空間做素材"}
         # 重複標記覆蓋舊理由，不是疊加
-        record_skip(conn, brand_id, "cny", 2026, reason="新理由")
+        record_skip(conn, brand_id, "cny", 2026, reason="新理由", org_id=demo_org_id)
         assert get_skip(conn, brand_id, "cny", 2026) == {"reason": "新理由"}
         # 理由選填：不填也能記下「有跳過」這件事
-        record_skip(conn, brand_id, "valentine", 2026)
+        record_skip(conn, brand_id, "valentine", 2026, org_id=demo_org_id)
         assert get_skip(conn, brand_id, "valentine", 2026) == {"reason": None}
         # 不同年份互不影響
         assert get_skip(conn, brand_id, "cny", 2027) is None

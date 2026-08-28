@@ -20,7 +20,7 @@ from app.ads import guardrails, target_cpa
 from app.ads import reading as ads_reading
 from app.ads import repository as ads_repo
 from app.core.audit import write_audit
-from app.core.db import DEV_ORG_ID, jsonb, new_id, now_utc
+from app.core.db import jsonb, new_id, now_utc
 
 # `overclaim` 候選卡（見下方 build_overclaim_claim_cards）沿用的絕對次數門檻——那裡每一則
 # 拒絕對應的是「這句話」本身（獨一無二的文字），不是可能重複出現很多次的指紋軸值，沒有
@@ -427,6 +427,8 @@ def build_rule_cards(conn, brand_id: str, actor: str, cycle_id: str | None = Non
     建議的那個檔期，`build()` 呼叫時會傳入，讀它的 `occasion` 欄位加權比較歷史拒絕紀錄。
     省略時（例如累積智慧頁的品牌整體統計，沒有「下期」這個概念）不加權，等同現行比較。
     """
+    from app.brand_intelligence import repository as bi
+    org_id = bi.get_brand(conn, brand_id)["org_id"]
     cycle_ids = _recent_cycle_ids(conn, brand_id, RULE_CARD_WINDOW_CYCLES)
     current_occasion = None
     if cycle_id:
@@ -461,7 +463,7 @@ def build_rule_cards(conn, brand_id: str, actor: str, cycle_id: str | None = Non
             "INSERT INTO creative_rule_card (id, org_id, brand_id, fingerprint_axis, fingerprint_value,"
             " proposed_rule_text, evidence_json, reject_count, status, created_at, updated_at)"
             " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'pending', %s, %s)",
-            (new_id("rcd"), DEV_ORG_ID, brand_id, axis, value,
+            (new_id("rcd"), org_id, brand_id, axis, value,
              f"以後不要再出「{fp.AXES[axis]['label']}是{label}」的素材",
              jsonb({"decision_ids": entry["ids"],
                     "reasons": sorted(entry["reasons"])}),
@@ -470,7 +472,7 @@ def build_rule_cards(conn, brand_id: str, actor: str, cycle_id: str | None = Non
         created += 1
 
     if created:
-        write_audit(conn, brand_id=brand_id, entity_type="creative_rule_card",
+        write_audit(conn, org_id=org_id, brand_id=brand_id, entity_type="creative_rule_card",
                     entity_id=brand_id, action="propose_rule_cards", actor=actor,
                     before=None, after={"created": created})
     conn.commit()
@@ -508,6 +510,8 @@ def build_overclaim_claim_cards(conn, brand_id: str, actor: str) -> int:
     門檻沿用 RULE_CARD_THRESHOLD：一次可能只是那句寫得爛，累積到第二次才值得讓
     使用者決定要不要正式登記。回傳新增張數。
     """
+    from app.brand_intelligence import repository as bi
+    org_id = bi.get_brand(conn, brand_id)["org_id"]
     rows = conn.execute(
         "SELECT id, target_id FROM adoption_decision WHERE brand_id = %s AND decision = 'rejected'"
         " AND reason_code = 'overclaim'", (brand_id,),
@@ -534,7 +538,7 @@ def build_overclaim_claim_cards(conn, brand_id: str, actor: str) -> int:
             "INSERT INTO creative_rule_card (id, org_id, brand_id, product_id, fingerprint_axis,"
             " fingerprint_value, proposed_rule_text, evidence_json, reject_count, status,"
             " created_at, updated_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 1, 'pending', %s, %s)",
-            (new_id("rcd"), DEV_ORG_ID, brand_id, variant.get("product_id"), OVERCLAIM_CLAIM_AXIS, variant_id,
+            (new_id("rcd"), org_id, brand_id, variant.get("product_id"), OVERCLAIM_CLAIM_AXIS, variant_id,
              variant["content"],
              jsonb({"decision_id": row["id"], "variant_id": variant_id}),
              ts, ts),
@@ -542,7 +546,7 @@ def build_overclaim_claim_cards(conn, brand_id: str, actor: str) -> int:
         created += 1
 
     if created:
-        write_audit(conn, brand_id=brand_id, entity_type="creative_rule_card",
+        write_audit(conn, org_id=org_id, brand_id=brand_id, entity_type="creative_rule_card",
                     entity_id=brand_id, action="propose_overclaim_claim_cards", actor=actor,
                     before=None, after={"created": created})
         conn.commit()
@@ -658,7 +662,8 @@ def decide_rule_card(conn, brand_id: str, card_id: str, *, accept: bool, actor: 
         )
         after = {"promoted_rule_id": rule_id}
 
-    write_audit(conn, brand_id=brand_id, entity_type="creative_rule_card", entity_id=card_id,
+    org_id = bi.get_brand(conn, brand_id)["org_id"]
+    write_audit(conn, org_id=org_id, brand_id=brand_id, entity_type="creative_rule_card", entity_id=card_id,
                 action="accept_rule_card" if accept else "decline_rule_card", actor=actor,
                 before=dict(row), after=after)
     conn.commit()
@@ -731,6 +736,8 @@ def check_echo_chamber(conn, brand_id: str, cycle_id: str) -> guardrails.Finding
 
 def build(conn, brand_id: str, cycle_id: str, actor: str) -> dict:
     """判讀之後一次把下期該準備的都備好：預算建議、規則卡、回音室檢查。"""
+    from app.brand_intelligence import repository as bi
+    org_id = bi.get_brand(conn, brand_id)["org_id"]
     budget = propose_budget(conn, brand_id, cycle_id)
     cards = build_rule_cards(conn, brand_id, actor, cycle_id=cycle_id)
     overclaim_cards = build_overclaim_claim_cards(conn, brand_id, actor)
@@ -769,7 +776,7 @@ def build(conn, brand_id: str, cycle_id: str, actor: str) -> dict:
         "INSERT INTO recommendation (id, org_id, brand_id, campaign_cycle_id,"
         " performance_reading_id, recommendation_type, content_json, status,"
         " created_at, updated_at) VALUES (%s, %s, %s, %s, %s, 'next_cycle', %s, 'GENERATED', %s, %s)",
-        (new_id("rec"), DEV_ORG_ID, brand_id, cycle_id,
+        (new_id("rec"), org_id, brand_id, cycle_id,
          (verdict["cycle"] or {}).get("id"),
          jsonb(content), ts, ts),
     )

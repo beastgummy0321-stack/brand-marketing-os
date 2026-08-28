@@ -264,7 +264,7 @@ def require_product(brand, product_id: str):
 
 def require_actor(request: Request):
     """需要 actor 的路由一律呼叫這個，取得 `app.identity.ActorContext`（user_id/org_id/
-    role/email）。票 03-1：取代 ADR 0004 固定 OPERATOR 常數的作法——回到具名操作人，
+    role/email）。票 03-1：取代 ADR 0004 那個固定操作人常數的作法——回到具名操作人，
     這次是「真的登入的人」而不是單機時代的假設。
 
     延遲 import：`app.identity` 依賴本檔（ApiError 系列、conn），模組層 import 會形成

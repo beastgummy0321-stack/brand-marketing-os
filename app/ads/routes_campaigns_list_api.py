@@ -78,8 +78,8 @@ def _list_item(conn, brand_id: str, cycle: dict, vs_previous_by_id: dict) -> dic
 
 
 @router.get("/api/campaigns/brands/{brand_id}")
-async def campaign_list(brand_id: str):
-    main_mod.require_brand(brand_id)
+async def campaign_list(brand_id: str, request: Request):
+    main_mod.require_brand(brand_id, main_mod.require_actor(request))
     conn = main_mod.conn
     cycles = ads_repo.list_cycles(conn, brand_id, include_archived=True)
     closed_non_archived = [c for c in cycles if c["status"] == "CLOSED" and not c["archived"]]
@@ -91,19 +91,20 @@ async def campaign_list(brand_id: str):
 
 @router.post("/api/campaigns/brands/{brand_id}/{cycle_id}/archive")
 async def campaign_archive(request: Request, brand_id: str, cycle_id: str):
-    main_mod.require_brand(brand_id)
     actor = main_mod.require_actor(request)
+    main_mod.require_brand(brand_id, actor)
     conn = main_mod.conn
     cycle = ads_repo.get_cycle(conn, brand_id, cycle_id)
     if cycle is None:
         return _error(404, "找不到這期檔期")
-    ads_repo.set_cycle_archived(conn, brand_id, cycle_id, archived=not cycle["archived"], actor=actor)
+    ads_repo.set_cycle_archived(conn, brand_id, cycle_id, archived=not cycle["archived"],
+                                actor=str(actor.user_id))
     return JSONResponse(None, status_code=204)
 
 
 @router.get("/api/campaigns/brands/{brand_id}/{cycle_id}/delete-impact")
-async def campaign_delete_impact(brand_id: str, cycle_id: str):
-    main_mod.require_brand(brand_id)
+async def campaign_delete_impact(brand_id: str, cycle_id: str, request: Request):
+    main_mod.require_brand(brand_id, main_mod.require_actor(request))
     conn = main_mod.conn
     if ads_repo.get_cycle(conn, brand_id, cycle_id) is None:
         return _error(404, "找不到這期檔期")
@@ -113,8 +114,8 @@ async def campaign_delete_impact(brand_id: str, cycle_id: str):
 
 @router.post("/api/campaigns/brands/{brand_id}/{cycle_id}/delete")
 async def campaign_delete(request: Request, brand_id: str, cycle_id: str):
-    main_mod.require_brand(brand_id)
     actor = main_mod.require_actor(request)
+    main_mod.require_brand(brand_id, actor)
     conn = main_mod.conn
     cycle = ads_repo.get_cycle(conn, brand_id, cycle_id)
     if cycle is None:
@@ -129,15 +130,15 @@ async def campaign_delete(request: Request, brand_id: str, cycle_id: str):
     if confirm_name != _cycle_label(cycle):
         return _error(400, "輸入的檔期名稱跟上面顯示的不一樣，請照著再打一次。")
 
-    ads_repo.delete_cycle(conn, brand_id, cycle_id, actor=actor)
+    ads_repo.delete_cycle(conn, brand_id, cycle_id, actor=str(actor.user_id))
     _delete_creative_folder(conn, brand_id, cycle_id)
     return JSONResponse(None, status_code=204)
 
 
 @router.post("/api/campaigns/brands/{brand_id}/interview")
 async def campaign_interview_submit(request: Request, brand_id: str):
-    main_mod.require_brand(brand_id)
     actor = main_mod.require_actor(request)
+    main_mod.require_brand(brand_id, actor)
     conn = main_mod.conn
     try:
         body = await request.json()
@@ -147,7 +148,8 @@ async def campaign_interview_submit(request: Request, brand_id: str):
     good = (body.get("good") or {}) if isinstance(body, dict) else {}
     note = body.get("note") if isinstance(body, dict) else None
 
-    result = ads_interview.submit(conn, brand_id, bad=bad, good=good, note=note, actor=actor)
+    result = ads_interview.submit(conn, brand_id, bad=bad, good=good, note=note,
+                                  actor=str(actor.user_id))
     return {
         "rule_card_count": len(result["rule_cards"]),
         "hypothesis_count": len(result["hypotheses"]),

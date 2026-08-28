@@ -17,7 +17,7 @@ from datetime import date, datetime, timedelta
 
 from app.core import cleanup
 from app.core.audit import write_audit
-from app.core.db import DEV_ORG_ID, new_id, now_utc
+from app.core.db import new_id, now_utc
 
 # 嚴重度分級（決策 0025／0026 定案，DESIGN.md §20 規則 4 的資料層對應）。
 SEVERITY_ORDER = ["money_loss", "irreversible", "rule_warning", "informational"]
@@ -73,12 +73,13 @@ MAX_MESSAGE_LEN = 30  # DESIGN.md §20 規則 4：一卡一句 ≤30 全形字
 STALE_AFTER_DAYS = 14  # 資訊性項目逾期自動降級封存的門檻（比照 0025 期末＋14 天結算節奏）
 
 
-def enqueue(conn, *, category: str, dedupe_key: str, message: str,
+def enqueue(conn, *, org_id: str = "org_dev", category: str, dedupe_key: str, message: str,
             brand_id: str | None = None, campaign_cycle_id: str | None = None,
             action_url: str | None = None, kind: str | None = None,
             visible_from: date | datetime | None = None) -> str | None:
     """送進打斷佇列；同去重鍵已存在就不重複塞（回傳 None）。不自動 commit（比照 write_audit，
-    交由呼叫端決定交易邊界，方便一次排多筆用同一個交易）。"""
+    交由呼叫端決定交易邊界，方便一次排多筆用同一個交易）。
+    org_id 預設值只服務既有測試呼叫點；正式呼叫端一律顯式傳。"""
     spec = CATEGORIES.get(category)
     if spec is None:
         raise ValueError(f"未登記的打斷類別：{category}（見 CATEGORIES，模組不得自報嚴重度）")
@@ -107,7 +108,7 @@ def enqueue(conn, *, category: str, dedupe_key: str, message: str,
         "INSERT INTO interrupt (id, org_id, brand_id, campaign_cycle_id, dedupe_key, category, kind,"
         " severity, message, action_url, visible_from, status, created_at)"
         " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'open', %s)",
-        (interrupt_id, DEV_ORG_ID, brand_id, campaign_cycle_id, dedupe_key, category, kind,
+        (interrupt_id, org_id, brand_id, campaign_cycle_id, dedupe_key, category, kind,
          spec["severity"], message, action_url, visible_from, now_utc()),
     )
     return interrupt_id
@@ -154,10 +155,13 @@ def _sort_key(row: dict):
 
 
 def list_open(conn, brand_id: str | None = None, category: str | None = None,
-              today: str | None = None, archive_stale: bool = True) -> list:
+              today: str | None = None, archive_stale: bool = True,
+              org_id: str | None = None) -> list:
     """待辦清單：已到 visible_from 的 open 項目，嚴重度為主、同級按行動價值排序。
 
-    brand_id 省略＝跨品牌查（首頁待辦、全站收件匣用）。
+    brand_id 省略＝跨品牌查（首頁待辦、全站收件匣用）——這時租戶界線改由 org_id 守
+    （票 03-1：不然沒帶 brand_id 的呼叫會查到別的組織的資料）。有 brand_id 時本來就
+    已經被上游 require_brand() 驗過該品牌屬於哪個組織，org_id 這裡不必重複。
 
     archive_stale＝False：跳過逾期資訊性項目自動封存（唯讀呼叫端專用，例如
     app/dashboard——「查詢函式」若順手寫資料庫就不是真的唯讀，見票 02 第 2 輪）。
@@ -171,6 +175,9 @@ def list_open(conn, brand_id: str | None = None, category: str | None = None,
     if brand_id:
         sql += " AND brand_id = %s"
         params.append(brand_id)
+    elif org_id:
+        sql += " AND org_id = %s"
+        params.append(org_id)
     if category:
         sql += " AND category = %s"
         params.append(category)
@@ -179,13 +186,17 @@ def list_open(conn, brand_id: str | None = None, category: str | None = None,
     return rows
 
 
-def list_done(conn, brand_id: str | None = None) -> list:
-    """已結清單（人工處理 resolved ＋ 逾期自動封存 archived），最近結案的排前面。"""
+def list_done(conn, brand_id: str | None = None, org_id: str | None = None) -> list:
+    """已結清單（人工處理 resolved ＋ 逾期自動封存 archived），最近結案的排前面。
+    org_id：同 list_open() 的說明，只有沒帶 brand_id 時才需要（沒帶會跨品牌查）。"""
     sql = "SELECT * FROM interrupt WHERE status IN ('resolved', 'archived')"
     params: list = []
     if brand_id:
         sql += " AND brand_id = %s"
         params.append(brand_id)
+    elif org_id:
+        sql += " AND org_id = %s"
+        params.append(org_id)
     sql += " ORDER BY resolved_at DESC"
     return [dict(r) for r in conn.execute(sql, params)]
 
@@ -205,8 +216,8 @@ def resolve(conn, interrupt_id: str, *, actor: str) -> None:
         "UPDATE interrupt SET status = 'resolved', resolved_at = %s WHERE id = %s",
         (now_utc(), interrupt_id),
     )
-    write_audit(conn, brand_id=row["brand_id"], entity_type="interrupt", entity_id=interrupt_id,
-                action="resolve", actor=actor)
+    write_audit(conn, org_id=row["org_id"], brand_id=row["brand_id"], entity_type="interrupt",
+                entity_id=interrupt_id, action="resolve", actor=actor)
     conn.commit()
 
 

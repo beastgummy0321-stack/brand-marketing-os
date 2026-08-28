@@ -52,8 +52,8 @@ def _dict_note(d) -> "str | None":
 # ---- 成效（S8.51-58） ----
 
 @router.get("/api/campaigns/{brand_id}/{cycle_id}/performance")
-async def performance_get(brand_id: str, cycle_id: str):
-    main_mod.require_brand(brand_id)
+async def performance_get(brand_id: str, cycle_id: str, request: Request):
+    main_mod.require_brand(brand_id, main_mod.require_actor(request))
     conn = main_mod.conn
     cycle = _require_cycle(brand_id, cycle_id)
 
@@ -104,10 +104,10 @@ async def performance_get(brand_id: str, cycle_id: str):
 
 @router.post("/api/campaigns/{brand_id}/{cycle_id}/performance/simulate")
 async def performance_simulate(request: Request, brand_id: str, cycle_id: str):
-    main_mod.require_brand(brand_id)
     actor = main_mod.require_actor(request)
+    main_mod.require_brand(brand_id, actor)
     _require_cycle(brand_id, cycle_id)
-    ok, note = simulation.generate(main_mod.conn, brand_id, cycle_id, actor)
+    ok, note = simulation.generate(main_mod.conn, brand_id, cycle_id, str(actor.user_id))
     if not ok:
         return _error(400, note)
     return JSONResponse(None, status_code=204)
@@ -120,9 +120,10 @@ _MANUAL_NUMBER_FIELDS = ("spend", "impressions", "clicks", "conversions", "reven
 async def performance_manual(request: Request, brand_id: str, cycle_id: str):
     """使用者自己填成效數字——API 掛掉、CSV 也匯不進來時的最後退路（原
     `ads_performance_manual`，T4 清倉刪掉 Jinja 路由後恢復成 JSON 版本）。"""
-    main_mod.require_brand(brand_id)
     actor = main_mod.require_actor(request)
+    main_mod.require_brand(brand_id, actor)
     _require_cycle(brand_id, cycle_id)
+    actor_id = str(actor.user_id)
     body = await request.json()
 
     values = {}
@@ -134,7 +135,7 @@ async def performance_manual(request: Request, brand_id: str, cycle_id: str):
     values["date_start"] = body.get("date_start") or None
     values["date_stop"] = body.get("date_stop") or None
 
-    result = ads_performance.import_manual(main_mod.conn, brand_id, cycle_id, values, actor=actor)
+    result = ads_performance.import_manual(main_mod.conn, brand_id, cycle_id, values, actor=actor_id)
     if result.errors:
         return _error(400, result.errors[0])
 
@@ -149,7 +150,7 @@ async def performance_manual(request: Request, brand_id: str, cycle_id: str):
         "matched_assets": result.matched_assets,
         "unmatched_columns": result.unmatched_columns,
         "warnings": [],
-        **weekly_proposals.rerun_after_late_data(main_mod.conn, brand_id, cycle_id, actor),
+        **weekly_proposals.rerun_after_late_data(main_mod.conn, brand_id, cycle_id, actor_id),
     })
 
 
@@ -157,8 +158,8 @@ async def performance_manual(request: Request, brand_id: str, cycle_id: str):
 async def performance_csv(request: Request, brand_id: str, cycle_id: str,
                           perf_file: UploadFile = File(None)):
     """Meta CSV 匯出檔匯入（原 `ads_performance_csv`，同上恢復成 JSON 版本）。"""
-    main_mod.require_brand(brand_id)
     actor = main_mod.require_actor(request)
+    main_mod.require_brand(brand_id, actor)
     _require_cycle(brand_id, cycle_id)
 
     if perf_file is None or not perf_file.filename:
@@ -180,7 +181,7 @@ async def performance_csv(request: Request, brand_id: str, cycle_id: str,
     if text is None:
         return _error(400, "這個檔案的文字編碼讀不出來，請用 Excel 另存成 UTF-8 的 CSV。")
 
-    result = ads_performance.import_csv(main_mod.conn, brand_id, cycle_id, text, actor=actor,
+    result = ads_performance.import_csv(main_mod.conn, brand_id, cycle_id, text, actor=str(actor.user_id),
                                         today=date.today().isoformat())
     if result.errors:
         return _error(400, result.errors[0])
@@ -194,15 +195,15 @@ async def performance_csv(request: Request, brand_id: str, cycle_id: str,
         "matched_assets": result.matched_assets,
         "unmatched_columns": result.unmatched_columns,
         "warnings": [],
-        **weekly_proposals.rerun_after_late_data(main_mod.conn, brand_id, cycle_id, actor),
+        **weekly_proposals.rerun_after_late_data(main_mod.conn, brand_id, cycle_id, str(actor.user_id)),
     })
 
 
 # ---- 現在結算＋匯入整批撤銷（票 S1-01） ----
 
 @router.get("/api/campaigns/{brand_id}/{cycle_id}/settle-now")
-async def settle_now_get(brand_id: str, cycle_id: str):
-    main_mod.require_brand(brand_id)
+async def settle_now_get(brand_id: str, cycle_id: str, request: Request):
+    main_mod.require_brand(brand_id, main_mod.require_actor(request))
     conn = main_mod.conn
     cycle = _require_cycle(brand_id, cycle_id)
     can_settle, reason, already_closed = performance_batches.can_settle(conn, brand_id, cycle_id, cycle)
@@ -216,14 +217,14 @@ async def settle_now_get(brand_id: str, cycle_id: str):
 
 @router.post("/api/campaigns/{brand_id}/{cycle_id}/settle-now")
 async def settle_now_post(request: Request, brand_id: str, cycle_id: str):
-    main_mod.require_brand(brand_id)
     actor = main_mod.require_actor(request)
+    main_mod.require_brand(brand_id, actor)
     conn = main_mod.conn
     cycle = _require_cycle(brand_id, cycle_id)
     can_settle, reason, _already_closed = performance_batches.can_settle(conn, brand_id, cycle_id, cycle)
     if not can_settle:
         return JSONResponse({"detail": reason}, status_code=400)
-    ok, err = ads_reading.finalize(conn, brand_id, cycle_id, actor)
+    ok, err = ads_reading.finalize(conn, brand_id, cycle_id, str(actor.user_id))
     if not ok:
         return JSONResponse({"detail": err}, status_code=400)
     # 票 F9：finalize() 內部已經把還沒處理的 GENERATED 卡轉成 ARCHIVED_ON_CLOSE 了，
@@ -235,8 +236,8 @@ async def settle_now_post(request: Request, brand_id: str, cycle_id: str):
 
 
 @router.get("/api/campaigns/{brand_id}/{cycle_id}/performance/batches")
-async def performance_batches_get(brand_id: str, cycle_id: str):
-    main_mod.require_brand(brand_id)
+async def performance_batches_get(brand_id: str, cycle_id: str, request: Request):
+    main_mod.require_brand(brand_id, main_mod.require_actor(request))
     conn = main_mod.conn
     _require_cycle(brand_id, cycle_id)
     items = performance_batches.list_batches(conn, brand_id, cycle_id)
@@ -245,8 +246,8 @@ async def performance_batches_get(brand_id: str, cycle_id: str):
 
 @router.delete("/api/campaigns/{brand_id}/{cycle_id}/performance/batches/{batch_id}")
 async def performance_batch_delete(request: Request, brand_id: str, cycle_id: str, batch_id: str):
-    main_mod.require_brand(brand_id)
     actor = main_mod.require_actor(request)
+    main_mod.require_brand(brand_id, actor)
     conn = main_mod.conn
     cycle = _require_cycle(brand_id, cycle_id)
 
@@ -258,7 +259,7 @@ async def performance_batch_delete(request: Request, brand_id: str, cycle_id: st
     # `ads_reading.run()`，從不補建週提案卡——`reading.run()` 每次重跑都會清掉未處理的舊卡
     # （見 `reading.py` 的 `preserved_weekly`），沒人接著建卡，卡片就這樣不見了。兩個分支
     # 現在走同一個共用出處，非 CLOSED 也補上 generate()。
-    outcome = weekly_proposals.rerun_after_late_data(conn, brand_id, cycle_id, actor)
+    outcome = weekly_proposals.rerun_after_late_data(conn, brand_id, cycle_id, str(actor.user_id))
     rerun = outcome["rerun"]
     message = f"撤銷了 {deleted} 筆，" + (outcome["rerun_message"] or "沒有重新算過。")
     return JSONResponse({"ok": True, "deleted": deleted, "rerun": rerun, "message": message})
@@ -267,8 +268,8 @@ async def performance_batch_delete(request: Request, brand_id: str, cycle_id: st
 # ---- 檔期健康燈號（S8R.20-21） ----
 
 @router.get("/api/campaigns/{brand_id}/{cycle_id}/health-lights")
-async def health_lights_get(brand_id: str, cycle_id: str):
-    main_mod.require_brand(brand_id)
+async def health_lights_get(brand_id: str, cycle_id: str, request: Request):
+    main_mod.require_brand(brand_id, main_mod.require_actor(request))
     _require_cycle(brand_id, cycle_id)
     try:
         return _envelope(ads_health_lights.compute(main_mod.conn, brand_id, cycle_id))
@@ -401,8 +402,8 @@ def compile_closing_review(conn, brand_id: str, cycle_id: str) -> dict:
 
 
 @router.get("/api/campaigns/{brand_id}/{cycle_id}/closing-review")
-async def closing_review_get(brand_id: str, cycle_id: str):
-    main_mod.require_brand(brand_id)
+async def closing_review_get(brand_id: str, cycle_id: str, request: Request):
+    main_mod.require_brand(brand_id, main_mod.require_actor(request))
     conn = main_mod.conn
     cycle = _require_cycle(brand_id, cycle_id)
     if cycle["status"] != "CLOSED":
@@ -414,8 +415,8 @@ async def closing_review_get(brand_id: str, cycle_id: str):
 
 @router.post("/api/campaigns/{brand_id}/{cycle_id}/hypotheses/resolve")
 async def hypotheses_resolve_post(request: Request, brand_id: str, cycle_id: str):
-    main_mod.require_brand(brand_id)
     actor = main_mod.require_actor(request)
+    main_mod.require_brand(brand_id, actor)
     conn = main_mod.conn
     _require_cycle(brand_id, cycle_id)
     # 信任邊界的輸入檢查：壞掉的 body 要回 400 說清楚，不能讓它一路炸成 500。
@@ -429,7 +430,7 @@ async def hypotheses_resolve_post(request: Request, brand_id: str, cycle_id: str
     try:
         # 業務邏輯全在 resolve_hypotheses 裡（非 pending／偽造 id 忽略、只有成立才入帳、
         # 樣本數與可信度程式帶入）——路由層不 UPDATE、不寫 ledger（票 L1-01）。
-        updated = ads_reading.resolve_hypotheses(conn, brand_id, cycle_id, verdicts, actor=actor)
+        updated = ads_reading.resolve_hypotheses(conn, brand_id, cycle_id, verdicts, actor=str(actor.user_id))
     except ValueError as exc:
         return JSONResponse({"detail": str(exc)}, status_code=400)
     return JSONResponse({"ok": True, "updated": updated, "message": "結案完成，成立的已寫進累積智慧。"})

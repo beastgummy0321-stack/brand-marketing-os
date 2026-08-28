@@ -175,13 +175,13 @@ def _run_quick_generate(conn, brand: dict, *, scope: str, topic: str, product_id
 
 
 @router.get("/brands/{brand_id}/products")
-async def quick_generate_products(brand_id: str):
+async def quick_generate_products(brand_id: str, request: Request):
     """產品 pills 的清單（契約 G12.0）：這個品牌旗下的產品，只回 id／name——pills 用不到
     其他欄位。沿用既有 `main_mod.list_products()`（app/shared/web.py:71，內部就是
     `brand_intelligence.repository.list_products()`，契約指名的同一支），不另外查表。
     「不指定」那顆是前端固定選項，不佔一筆資料。
     """
-    main_mod.require_brand(brand_id)
+    main_mod.require_brand(brand_id, main_mod.require_actor(request))
     return {"products": [{"id": p["id"], "name": p["name"]}
                          for p in main_mod.list_products(brand_id)]}
 
@@ -189,8 +189,8 @@ async def quick_generate_products(brand_id: str):
 @router.post("/brands/{brand_id}/quick-generate")
 async def quick_generate(request: Request, brand_id: str):
     """快速生成：四選一類型＋可選產品＋一句話重點 → 純顯示即棄的生成結果。"""
-    brand = main_mod.require_brand(brand_id)
     actor = main_mod.require_actor(request)
+    brand = main_mod.require_brand(brand_id, actor)
     conn = main_mod.conn
 
     try:
@@ -211,7 +211,8 @@ async def quick_generate(request: Request, brand_id: str):
         main_mod.require_product(brand, product_id)  # 找不到／不屬於這個品牌就 404
 
     result, err = _run_quick_generate(
-        conn, brand, scope=scope, topic=topic.strip(), product_id=product_id, actor=actor)
+        conn, brand, scope=scope, topic=topic.strip(), product_id=product_id,
+        actor=str(actor.user_id))
     if err:
         return JSONResponse({"error": err}, status_code=422)
 

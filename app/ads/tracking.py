@@ -12,7 +12,7 @@ from app.brand_intelligence import repository as bi_repo
 from app.core import interrupts as core_interrupts
 from app.core import net
 from app.core import settings as coresettings
-from app.core.db import DEV_ORG_ID, new_id, now_utc
+from app.core.db import new_id, now_utc
 
 # 第 7 刀（A1 三層地界新規則：app/ads 不得 import app.orders，見
 # test_architecture_boundaries.py）：orders_channel 不在這裡 import，改由組裝根
@@ -66,7 +66,7 @@ def alert_campaign_renamed(conn, ad_account_id: str, meta_campaign_id: str,
     if not brand_id:
         return
     core_interrupts.enqueue(
-        conn, category="campaign_renamed",
+        conn, org_id=bi_repo.get_brand(conn, brand_id)["org_id"], category="campaign_renamed",
         dedupe_key=f"campaign_renamed:{meta_campaign_id}:{new_name}",
         brand_id=brand_id, campaign_cycle_id=cycle_id,
         message="Meta 活動名稱被改了，請確認追蹤。",
@@ -97,6 +97,7 @@ def suggest_cycle_mapping(conn, ad_account_id: str, meta_account_id: str,
     if not brand_id or not code:
         _remove_suggestion(conn, meta_campaign_id)
         return None
+    org_id = bi_repo.get_brand(conn, brand_id)["org_id"]
 
     # BUG 修復（route=C 02-3c，app/ads/tracking.py:105）：SQLite 的 substr(x, -N) 是「取
     # 尾 N 碼」；Postgres 的 substr(string, start) 對負的 start 不是同一件事（實測
@@ -109,7 +110,7 @@ def suggest_cycle_mapping(conn, ad_account_id: str, meta_account_id: str,
         _remove_suggestion(conn, meta_campaign_id)
         if len(matches) > 1:
             core_interrupts.enqueue(
-                conn, category="tracking_broken",
+                conn, org_id=org_id, category="tracking_broken",
                 dedupe_key=f"tracking_conflict:{brand_id}:{meta_campaign_id}:{code}",
                 brand_id=brand_id, message="同一活動跨兩期，請補廣告 ID。",
                 action_url=f"/app/brands/{brand_id}/tracking",
@@ -125,7 +126,7 @@ def suggest_cycle_mapping(conn, ad_account_id: str, meta_account_id: str,
     if other_cycle:
         _remove_suggestion(conn, meta_campaign_id)
         core_interrupts.enqueue(
-            conn, category="tracking_broken",
+            conn, org_id=org_id, category="tracking_broken",
             dedupe_key=f"tracking_conflict:{brand_id}:{meta_campaign_id}:{cycle_id}",
             brand_id=brand_id, message="同一活動跨兩期，請補廣告 ID。",
             action_url=f"/app/brands/{brand_id}/tracking",
@@ -160,20 +161,24 @@ def suggest_cycle_mapping(conn, ad_account_id: str, meta_account_id: str,
             "INSERT INTO external_ad_mapping (id, org_id, brand_id, publishing_package_id,"
             " campaign_cycle_id, ad_account_id, platform, meta_account_id, meta_campaign_id,"
             " claim_status, created_at) VALUES (%s, %s, %s, %s, %s, %s, 'meta', %s, %s, 'suggested', %s)",
-            (new_id("xam"), DEV_ORG_ID, brand_id, package["id"] if package else None, cycle_id,
+            (new_id("xam"), org_id, brand_id, package["id"] if package else None, cycle_id,
              ad_account_id, meta_account_id, meta_campaign_id, now_utc()),
         )
     return "suggested"
 
 
-def alert_unmapped_spend(conn, ad_account_id: str, meta_campaign_id: str,
+def alert_unmapped_spend(conn, org_id: str, ad_account_id: str, meta_campaign_id: str,
                          spend: float, as_of_date: str) -> None:
+    """票 03-1：org_id 由呼叫端（`sync.py sync_account`，這次同步的帳號本來就只屬於一個
+    組織）傳入，不從 `_campaign_owner` 反推——這支的整個存在意義就是「這筆花費目前連
+    brand_id 都沒有」，沒有品牌可查就沒有 org_id 可反推，只能靠呼叫端已知的帳號歸屬。
+    """
     if spend <= 0:
         return
     brand_id, _cycle_id = _campaign_owner(conn, ad_account_id, meta_campaign_id)
     amount = f"{spend:,.0f}"
     core_interrupts.enqueue(
-        conn, category="burn_no_cycle",
+        conn, org_id=org_id, category="burn_no_cycle",
         dedupe_key=f"burn_no_cycle:{meta_campaign_id}:{as_of_date}",
         brand_id=brand_id, message=f"NT${amount} 廣告花費沒對應檔期。",
         action_url=(f"/app/brands/{brand_id}/tracking" if brand_id else "/app/settings"),
@@ -298,6 +303,7 @@ def run_post_sync_checks(conn, brand_id: str, *, today: str | None = None,
                          url_probe=None) -> int:
     today = today or date.today().isoformat()
     created = 0
+    org_id = bi_repo.get_brand(conn, brand_id)["org_id"]
     for cycle in ads_repo.list_cycles(conn, brand_id):
         if cycle["status"] not in ("LIVE", "EVALUATING"):
             continue
@@ -306,7 +312,7 @@ def run_post_sync_checks(conn, brand_id: str, *, today: str | None = None,
         if node["status"] != "red":
             continue
         interrupt_id = core_interrupts.enqueue(
-            conn, category="tracking_broken",
+            conn, org_id=org_id, category="tracking_broken",
             dedupe_key=f"tracking_broken:{cycle['id']}:{node['message']}",
             brand_id=brand_id, campaign_cycle_id=cycle["id"], message=node["message"][:30],
             action_url=f"/app/brands/{brand_id}/campaigns/{cycle['id']}",
@@ -420,12 +426,13 @@ def _hidden(conn, brand_id: str, channel_key: str) -> bool:
 
 def set_channel_hidden(conn, brand_id: str, channel_key: str, hidden: bool) -> None:
     """通路卡「用不到」旗標（契約 1.2：可收合、可恢復）。"""
+    org_id = bi_repo.get_brand(conn, brand_id)["org_id"]
     if channel_key not in TRACKING_CHANNEL_KEYS:
         raise ValueError(f"不認得的通路：{channel_key}")
     conn.execute(
         "INSERT INTO channel_tracking_check (org_id, brand_id, channel_key, hidden) VALUES (%s, %s, %s, %s)"
         " ON CONFLICT(brand_id, channel_key) DO UPDATE SET hidden = excluded.hidden",
-        (DEV_ORG_ID, brand_id, channel_key, bool(hidden)),
+        (org_id, brand_id, channel_key, bool(hidden)),
     )
     conn.commit()
 
@@ -434,13 +441,14 @@ def _save_website_check(conn, brand_id: str, *, ga4_found: bool, pixel_found: bo
     """寫回官網卡上次檢查結果。契約 1.3 修訂（2026-08-14）：ga4_found／pixel_found 現在代表
     「這次檢查有沒有被任一訊號確認」（掃描、或 GA4 數據、或 Pixel API），不再只是「原始碼
     掃描有沒有掃到」——欄位名不動，語意在呼叫端（check_website_now）先併好才存進來。"""
+    org_id = bi_repo.get_brand(conn, brand_id)["org_id"]
     conn.execute(
         "INSERT INTO channel_tracking_check (org_id, brand_id, channel_key, ga4_found, pixel_found, checked_at)"
         " VALUES (%s, %s, 'website', %s, %s, %s)"
         " ON CONFLICT(brand_id, channel_key) DO UPDATE SET"
         " ga4_found = excluded.ga4_found, pixel_found = excluded.pixel_found,"
         " checked_at = excluded.checked_at",
-        (DEV_ORG_ID, brand_id, bool(ga4_found), bool(pixel_found), checked_at),
+        (org_id, brand_id, bool(ga4_found), bool(pixel_found), checked_at),
     )
     conn.commit()
 
@@ -450,12 +458,13 @@ def _save_website_fetch_failure(conn, brand_id: str, *, checked_at: str) -> None
     `_website_node` 分得出「連不上」（紅燈，契約 1.3 修訂：紅燈只留給這個情境）跟「連上了
     但三訊號都沒確認到」（黃燈）——不新增資料庫欄位，沿用既有可為 NULL 的兩欄
     （migration 0018_channel_tracking_check.sql 本來就沒有 NOT NULL）。"""
+    org_id = bi_repo.get_brand(conn, brand_id)["org_id"]
     conn.execute(
         "INSERT INTO channel_tracking_check (org_id, brand_id, channel_key, ga4_found, pixel_found, checked_at)"
         " VALUES (%s, %s, 'website', NULL, NULL, %s)"
         " ON CONFLICT(brand_id, channel_key) DO UPDATE SET"
         " ga4_found = NULL, pixel_found = NULL, checked_at = excluded.checked_at",
-        (DEV_ORG_ID, brand_id, checked_at),
+        (org_id, brand_id, checked_at),
     )
     conn.commit()
 

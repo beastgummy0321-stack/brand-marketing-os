@@ -38,7 +38,7 @@ from app.identity import repository as repo
 from app.shared.web import ApiError, Forbidden, NotFound, Unauthenticated  # noqa: F401 — re-export
 
 _DEV_USER_ID = UUID("00000000-0000-0000-0000-000000000001")
-_DEV_ORG_ID = "org_dev"
+_SEED_ORG_ID = "org_dev"
 
 
 @dataclass(frozen=True)
@@ -50,7 +50,7 @@ class ActorContext:
 
 
 def _dev_actor() -> ActorContext:
-    return ActorContext(user_id=_DEV_USER_ID, org_id=_DEV_ORG_ID, role="owner", email="dev@local")
+    return ActorContext(user_id=_DEV_USER_ID, org_id=_SEED_ORG_ID, role="owner", email="dev@local")
 
 
 def _resolve_org(request: Request, user_id: UUID) -> tuple[str, str]:

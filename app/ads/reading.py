@@ -33,7 +33,7 @@ from app.brand_intelligence import repository as bi
 from app.core import interrupts as core_interrupts
 from app.core import prototype_phase
 from app.core import rule_cards
-from app.core.db import new_id, now_utc, jsonb, DEV_ORG_ID
+from app.core.db import new_id, now_utc, jsonb
 from app.llm import gateway, pricing, providers
 
 # 拆檔（票 10-split-reading-py，D2：這裡的名字全部維持可從 reading.py 匯入）——
@@ -283,7 +283,7 @@ def _repurchase_dissent_check(conn, brand_id: str, cycle_id: str, settlement_ver
                                       target_types=("repurchase_breakeven",))
     if line["conflict"]:
         core_interrupts.enqueue(
-            conn, category="repurchase_conflict",
+            conn, org_id=bi.get_brand(conn, brand_id)["org_id"], category="repurchase_conflict",
             dedupe_key=f"repurchase_conflict:{settlement_version_id}",
             message="回購校正結論跟首單線相反，去複核。", brand_id=brand_id,
             campaign_cycle_id=cycle_id,
@@ -442,7 +442,7 @@ def run(conn, brand_id: str, cycle_id: str, actor: str,
             "INSERT INTO performance_reading (id, org_id, brand_id, campaign_cycle_id, product_id,"
             " status, rule_result_json, confidence_level, llm_explanation, llm_task_id,"
             " created_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
-            (new_id("prd"), DEV_ORG_ID, brand_id, cycle_id, verdict["product_id"], verdict["status"],
+            (new_id("prd"), bi.get_brand(conn, brand_id)["org_id"], brand_id, cycle_id, verdict["product_id"], verdict["status"],
              jsonb({"reasons": verdict["reasons"], "kpis": verdict["kpis"],
                     "statistical_level": verdict["statistical_level"],
                     "statistical_level_label": verdict["statistical_level_label"],
@@ -494,7 +494,7 @@ def finalize(conn, brand_id: str, cycle_id: str, actor: str) -> tuple:
     # 才算數；已經翻過旗標的話 check_and_flag 內部直接短路，不重複提醒。
     cycle_totals = ads_performance.totals(conn, brand_id, cycle_id)
     prototype_phase.check_and_flag(
-        conn, actual_spend=cycle_totals.get("spend") or 0, actor=actor, cycle_id=cycle_id)
+        conn, org_id=bi.get_brand(conn, brand_id)["org_id"], actual_spend=cycle_totals.get("spend") or 0, actor=actor, cycle_id=cycle_id)
     return True, None
 
 
@@ -598,7 +598,7 @@ def rerun_for_late_data(conn, brand_id: str, cycle_id: str, *, actor: str) -> Op
     if shift == "reversal":
         warning = ads_settlement.late_revenue_share_warning(diffs)  # B0-35：占比過高才提醒查核
         core_interrupts.enqueue(
-            conn, category="reading_reversal",
+            conn, org_id=bi.get_brand(conn, brand_id)["org_id"], category="reading_reversal",
             dedupe_key=f"reading_reversal:{after_snapshot['settlement_version_id']}",
             message=(ads_settlement.REVERSAL_MESSAGE_WITH_LATE_REVENUE
                     if warning else ads_settlement.REVERSAL_MESSAGE),

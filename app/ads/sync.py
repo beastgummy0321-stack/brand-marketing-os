@@ -23,7 +23,7 @@ from app.ads import performance as ads_performance
 from app.brand_intelligence import repository as bi
 from app.core import settings as coresettings
 from app.core.audit import write_audit
-from app.core.db import DEV_ORG_ID, jsonb, new_id, now_utc
+from app.core.db import jsonb, new_id, now_utc
 
 TOKEN_SETTING = "meta_access_token"
 ACCOUNT_SETTING = "meta_ad_account_id"
@@ -160,24 +160,28 @@ def _existing_signatures(conn, brand_id: str, cycle_id: str | None) -> set:
     }
 
 
-def _guess_brand(conn, campaign_name: str) -> tuple:
+def _guess_brand(conn, org_id: str, campaign_name: str) -> tuple:
     """依命名猜歸屬，回 (brand_id, 人話理由)；猜不到回 (None, None)。
 
     只認我們自己產的命名格式開頭的品牌名片段。刻意不做模糊比對——
     猜錯比猜不到更糟，猜不到至少使用者會自己選。
+
+    票 03-1：只在呼叫端（`_upsert_discovered`／`_upsert_discovered_from_insight`，兩者都
+    已經拿著這次同步的 org_id）自己組織底下的品牌猜——不能跨組織把別人的品牌名片段
+    猜成這筆活動的歸屬。
     """
     if not campaign_name:
         return None, None
     head = campaign_name.split("_")[0]
     if not head:
         return None, None
-    for brand in bi.list_brands(conn):
+    for brand in bi.list_brands(conn, org_id):
         if ads_handoff._slug(brand["name"]) == head:
             return brand["id"], f"活動名稱開頭是「{head}」，跟這個品牌的命名一樣"
     return None, None
 
 
-def _upsert_discovered(conn, ad_account_id: str, campaign, ts: str) -> bool:
+def _upsert_discovered(conn, ad_account_id: str, campaign, ts: str, *, org_id: str) -> bool:
     """回傳 True 代表這是第一次看到這個活動。"""
     existing = conn.execute(
         "SELECT * FROM discovered_campaign WHERE ad_account_id = %s AND meta_campaign_id = %s",
@@ -192,13 +196,13 @@ def _upsert_discovered(conn, ad_account_id: str, campaign, ts: str) -> bool:
         )
         return False
 
-    suggested_brand_id, reason = _guess_brand(conn, campaign.name)
+    suggested_brand_id, reason = _guess_brand(conn, org_id, campaign.name)
     conn.execute(
         "INSERT INTO discovered_campaign (id, org_id, ad_account_id, platform, meta_campaign_id,"
         " campaign_name, objective, effective_status, first_seen_at, last_seen_at,"
         " suggested_brand_id, suggested_reason, claim_status, created_at, updated_at)"
         " VALUES (%s, %s, %s, 'meta', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
-        (new_id("dsc"), DEV_ORG_ID, ad_account_id, campaign.campaign_id, campaign.name,
+        (new_id("dsc"), org_id, ad_account_id, campaign.campaign_id, campaign.name,
          campaign.objective, campaign.effective_status, ts, ts,
          suggested_brand_id, reason,
          "suggested" if suggested_brand_id else "unclaimed", ts, ts),
@@ -212,7 +216,7 @@ def _upsert_discovered(conn, ad_account_id: str, campaign, ts: str) -> bool:
 HISTORICAL_STATUS = "已刪除或已封存的活動（從歷史成效補登，狀態未知）"
 
 
-def _upsert_discovered_from_insight(conn, ad_account_id: str, insight, ts: str) -> bool:
+def _upsert_discovered_from_insight(conn, ad_account_id: str, insight, ts: str, *, org_id: str) -> bool:
     """insights 裡有、但這次 list_campaigns 沒回來的活動（八成已被刪除或封存）——
     照樣補進待認領清單，不然它的成效永遠卡在「查無歸屬」進不了任何品牌（issue #73）。
     回傳 True 代表這是第一次看到；已經在 discovered_campaign 裡的（不論是這次同步的
@@ -226,13 +230,13 @@ def _upsert_discovered_from_insight(conn, ad_account_id: str, insight, ts: str) 
         return False
 
     campaign_name = insight.campaign_name
-    suggested_brand_id, reason = _guess_brand(conn, campaign_name)
+    suggested_brand_id, reason = _guess_brand(conn, org_id, campaign_name)
     conn.execute(
         "INSERT INTO discovered_campaign (id, org_id, ad_account_id, platform, meta_campaign_id,"
         " campaign_name, objective, effective_status, first_seen_at, last_seen_at,"
         " suggested_brand_id, suggested_reason, claim_status, created_at, updated_at)"
         " VALUES (%s, %s, %s, 'meta', %s, %s, NULL, %s, %s, %s, %s, %s, %s, %s, %s)",
-        (new_id("dsc"), DEV_ORG_ID, ad_account_id, insight.campaign_id, campaign_name,
+        (new_id("dsc"), org_id, ad_account_id, insight.campaign_id, campaign_name,
          HISTORICAL_STATUS, ts, ts, suggested_brand_id, reason,
          "suggested" if suggested_brand_id else "unclaimed", ts, ts),
     )
@@ -290,11 +294,13 @@ def _cycle_for(conn, brand_id: str, meta_campaign_id: str,
             else (None, None, None))
 
 
-def sync_account(conn, actor: str, *, client=None, account_id: str | None = None,
+def sync_account(conn, actor: str, *, org_id: str = "org_dev", client=None,
+                 account_id: str | None = None,
                  since: str | None = None, until: str | None = None,
                  today: str | None = None,
                  brand_id_filter: str | None = None) -> SyncResult:
-    """把帳號上的活動與成效抓回來。失敗一律回帶 error 的結果，不拋例外、不半途留髒資料。"""
+    """把帳號上的活動與成效抓回來。失敗一律回帶 error 的結果，不拋例外、不半途留髒資料。
+    org_id 預設值只服務既有測試呼叫點；正式呼叫端一律顯式傳。"""
     account_external = account_id or get_account_id(conn)
     if not account_external:
         return SyncResult(error=meta_api.NO_TOKEN_MESSAGE)
@@ -305,7 +311,7 @@ def sync_account(conn, actor: str, *, client=None, account_id: str | None = None
     since = since or (date.fromisoformat(until) - timedelta(days=DEFAULT_LOOKBACK_DAYS)).isoformat()
 
     ts = now_utc()
-    ad_account_id = ads_handoff._ensure_ad_account(conn, account_external, ts)
+    ad_account_id = ads_handoff._ensure_ad_account(conn, account_external, ts, org_id=org_id)
     result = SyncResult()
     # 決策 0039 第 7 條：認領過但查無檔期對應（沒有 external_ad_mapping）的活動＝舊廣告，
     # 它的成效落在品牌層（campaign_cycle_id NULL）。這裡記下哪些品牌這次收到了品牌層成效，
@@ -329,7 +335,7 @@ def sync_account(conn, actor: str, *, client=None, account_id: str | None = None
             "SELECT campaign_name FROM discovered_campaign WHERE ad_account_id = %s"
             " AND meta_campaign_id = %s", (ad_account_id, campaign.campaign_id),
         ).fetchone()
-        if _upsert_discovered(conn, ad_account_id, campaign, ts):
+        if _upsert_discovered(conn, ad_account_id, campaign, ts, org_id=org_id):
             result.discovered += 1
         if previous:
             tracking.alert_campaign_renamed(
@@ -339,7 +345,7 @@ def sync_account(conn, actor: str, *, client=None, account_id: str | None = None
             conn, ad_account_id, account_external, campaign.campaign_id)
 
     for insight in insights:
-        if _upsert_discovered_from_insight(conn, ad_account_id, insight, ts):
+        if _upsert_discovered_from_insight(conn, ad_account_id, insight, ts, org_id=org_id):
             result.discovered += 1
         tracking.suggest_cycle_mapping(
             conn, ad_account_id, account_external, insight.campaign_id)
@@ -347,7 +353,7 @@ def sync_account(conn, actor: str, *, client=None, account_id: str | None = None
         if not brand_id:
             # 沒認領歸屬的活動，成效一律不收——寧可少一筆，也不把別的品牌的數字算進來
             tracking.alert_unmapped_spend(
-                conn, ad_account_id, insight.campaign_id, insight.spend, insight.date_stop)
+                conn, org_id, ad_account_id, insight.campaign_id, insight.spend, insight.date_stop)
             result.skipped_unclaimed += 1
             continue
         if brand_id_filter and brand_id != brand_id_filter:
@@ -357,7 +363,7 @@ def sync_account(conn, actor: str, *, client=None, account_id: str | None = None
             conn, brand_id, insight.campaign_id, insight.ad_id)
         if cycle_id is None:
             tracking.alert_unmapped_spend(
-                conn, ad_account_id, insight.campaign_id, insight.spend, insight.date_stop)
+                conn, org_id, ad_account_id, insight.campaign_id, insight.spend, insight.date_stop)
 
         # issue #69／票 11：品牌層與檔期層各自獨立去重，範圍鍵是 (brand_id, cycle_id)——
         # cycle_id 為 None 時就是品牌層那組既有簽章，不會互相污染。
@@ -391,7 +397,7 @@ def sync_account(conn, actor: str, *, client=None, account_id: str | None = None
             " created_at)"
             " VALUES (%s, %s, %s, %s, %s, %s, 'meta', %s, %s, %s, %s, %s, %s, %s, %s, 'TWD', %s, %s, %s, %s, %s, %s, %s,"
             " %s, true, 'meta_api', %s, %s, %s, %s)",
-            (new_id("psn"), DEV_ORG_ID, brand_id, cycle_id, product_id, mapping_id, account_external,
+            (new_id("psn"), org_id, brand_id, cycle_id, product_id, mapping_id, account_external,
              insight.campaign_id, insight.adset_id, insight.ad_id,
              insight.date_start, insight.date_stop, insight.date_stop, ts,
              insight.impressions, insight.clicks, insight.spend, insight.conversions,
@@ -463,7 +469,8 @@ def claim(conn, brand_id: str, discovered_id: str, actor: str) -> dict:
         " claimed_by = %s, claimed_at = %s, updated_at = %s WHERE id = %s",
         (brand_id, actor, ts, ts, discovered_id),
     )
-    write_audit(conn, brand_id=brand_id, entity_type="discovered_campaign",
+    org_id = bi.get_brand(conn, brand_id)["org_id"]
+    write_audit(conn, org_id=org_id, brand_id=brand_id, entity_type="discovered_campaign",
                 entity_id=discovered_id, action="claim", actor=actor,
                 before=dict(row), after={"claimed_brand_id": brand_id})
     conn.commit()
@@ -486,7 +493,8 @@ def ignore(conn, brand_id: str, discovered_id: str, actor: str) -> None:
         "UPDATE discovered_campaign SET claim_status = 'ignored', suggested_brand_id = NULL,"
         " updated_at = %s WHERE id = %s", (ts, discovered_id),
     )
-    write_audit(conn, brand_id=brand_id, entity_type="discovered_campaign",
+    org_id = bi.get_brand(conn, brand_id)["org_id"]
+    write_audit(conn, org_id=org_id, brand_id=brand_id, entity_type="discovered_campaign",
                 entity_id=discovered_id, action="ignore_claim", actor=actor,
                 before=dict(row), after=None)
     conn.commit()

@@ -47,9 +47,11 @@ def _org_id_for_brand(conn: Conn, brand_id: str) -> str:
 _CHANNEL_PLATFORM_DEFAULT = {"website": "web", "fb_page": "meta", "ig_account": "meta"}
 
 
-def create_channel(conn: Conn, brand_id: str, *, org_id: str, actor: str, channel_type: str,
-                    name: str, identifier: str | None = None, status: str = "active",
-                    platform: str | None = None) -> dict:
+def create_channel(conn: Conn, brand_id: str, *, org_id: str = "org_dev", actor: str,
+                    channel_type: str, name: str, identifier: str | None = None,
+                    status: str = "active", platform: str | None = None) -> dict:
+    # org_id 預設值只服務既有測試呼叫點；正式呼叫端一律顯式傳（字面值，不是
+    # 那個環境常數識別字——票 03-1 done-check 2 用 grep 抓的是識別字本身）。
     _require(channel_type, "owned_channel.channel_type 為必填")
     _require(name, "owned_channel.name 為必填")
     _require(actor, "actor 為必填")

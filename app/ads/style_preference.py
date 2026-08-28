@@ -1,5 +1,6 @@
 """品牌層圖片風格偏好；以既有 app_setting 保存，無須新 schema。"""
 
+from app.brand_intelligence import repository as bi_repo
 from app.core import settings as core_settings
 
 _KEY_PREFIX = "ads_style_preference:"
@@ -19,5 +20,7 @@ def get_text(conn, brand_id: str) -> str:
 
 def set_text(conn, brand_id: str, text: str) -> str:
     value = str(text or "").strip()
-    core_settings.set_setting(conn, _key(brand_id), value)
+    brand = bi_repo.get_brand(conn, brand_id)
+    assert brand is not None, f"找不到品牌：{brand_id}"
+    core_settings.set_setting(conn, _key(brand_id), value, org_id=brand["org_id"])
     return value

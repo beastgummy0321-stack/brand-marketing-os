@@ -110,9 +110,10 @@ def _run_report(brand_id: str, actor: str) -> None:
 
 
 @router.get("/api/brands/{brand_id}/report")
-async def report_get(brand_id: str):
+async def report_get(request: Request, brand_id: str):
+    actor = require_actor(request)
     try:
-        brand = require_brand(brand_id)
+        brand = require_brand(brand_id, actor)
     except NotFoundKind:
         return JSONResponse({"detail": "找不到品牌"}, status_code=404)
     report = repo.get_latest_brand_report(web.conn, brand_id)
@@ -123,7 +124,7 @@ async def report_get(brand_id: str):
 async def report_generate(request: Request, brand_id: str):
     actor = require_actor(request)
     try:
-        require_brand(brand_id)
+        require_brand(brand_id, actor)
     except NotFoundKind:
         return JSONResponse({"detail": "找不到品牌"}, status_code=404)
     if _job_state(brand_id).get("status") == "running":
@@ -136,7 +137,7 @@ async def report_generate(request: Request, brand_id: str):
         brand_id,
         {"status": "running", "stage": "正在整理五章", "started_at": started_at, "brand_id": brand_id},
         _run_report,
-        (brand_id, actor),
+        (brand_id, str(actor.user_id)),
         idempotent=True,
     )
     return {"ok": True, "message": "報告生成中，好了會通知你。"}

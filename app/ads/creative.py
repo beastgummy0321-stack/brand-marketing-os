@@ -23,7 +23,7 @@ from app.ads import theme_repository as theme_repo
 from app.brand_intelligence import repository as bi
 from app.core import settings as coresettings
 from app.core.audit import write_audit
-from app.core.db import DEV_ORG_ID, jsonb, new_id, now_utc
+from app.core.db import jsonb, new_id, now_utc
 from app.llm import context_compiler, gateway, methodology, pricing, providers
 
 PROVIDER = providers.AnthropicProvider()  # 測試整包換掉
@@ -431,6 +431,7 @@ def _backfill_missing_types(conn, brand: dict, cycle: dict, plan: dict, cells: l
 
 def _brief_for_cell(conn, brand_id: str, cycle_id: str, cell: dict, ts: str) -> str:
     """每個切角一份 Execution Brief，變體掛在它下面（03 §4.2 的鏈條）。"""
+    org_id = bi.get_brand(conn, brand_id)["org_id"]
     existing = conn.execute(
         "SELECT id FROM creative_brief WHERE brand_id = %s AND experiment_cell_id = %s",
         (brand_id, cell["id"]),
@@ -442,7 +443,7 @@ def _brief_for_cell(conn, brand_id: str, cycle_id: str, cell: dict, ts: str) -> 
         "INSERT INTO creative_brief (id, org_id, campaign_cycle_id, experiment_cell_id, brand_id,"
         " brief_type, purpose, status, created_at, updated_at)"
         " VALUES (%s, %s, %s, %s, %s, 'copy', %s, 'dispatched', %s, %s)",
-        (brief_id, DEV_ORG_ID, cycle_id, cell["id"], brand_id, cell["creative_angle"] or "本期切角", ts, ts),
+        (brief_id, org_id, cycle_id, cell["id"], brand_id, cell["creative_angle"] or "本期切角", ts, ts),
     )
     return brief_id
 
@@ -451,6 +452,7 @@ def _persist(conn, brand_id: str, cycle_id: str, cells: list, variants: list,
              actor: str, methodology_missing: list | None = None,
              customer_voice_available: bool = True,
              missing_creative_types: list | None = None) -> None:
+    org_id = bi.get_brand(conn, brand_id)["org_id"]
     ts = now_utc()
     briefs = {cell["id"]: _brief_for_cell(conn, brand_id, cycle_id, cell, ts) for cell in cells}
     cell_products = {cell["id"]: cell["product_id"] for cell in cells}
@@ -467,7 +469,7 @@ def _persist(conn, brand_id: str, cycle_id: str, cells: list, variants: list,
             " campaign_cycle_id, experiment_cell_id, brand_id, product_id, attributes_json,"
             " fingerprint_json, rationale, recommendation_rank, status, created_at)"
             " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'DRAFT', %s)",
-            (new_id("cvr"), DEV_ORG_ID, variant["variant_type"], briefs[cell_id], cycle_id, cell_id,
+            (new_id("cvr"), org_id, variant["variant_type"], briefs[cell_id], cycle_id, cell_id,
              brand_id, cell_products.get(cell_id),
              jsonb({"content": variant["content"],
                     "methodology_missing": methodology_missing,
@@ -481,7 +483,7 @@ def _persist(conn, brand_id: str, cycle_id: str, cells: list, variants: list,
              variant["rationale"], rank, ts),
         )
 
-    write_audit(conn, brand_id=brand_id, entity_type="campaign_cycle", entity_id=cycle_id,
+    write_audit(conn, org_id=org_id, brand_id=brand_id, entity_type="campaign_cycle", entity_id=cycle_id,
                 action="generate_creatives", actor=actor, before=None,
                 after={"variant_count": len(variants)})
     conn.commit()
@@ -633,6 +635,7 @@ def restore(conn, brand_id: str, variant_id: str, *, actor: str) -> dict:
     「單元件恢復採用」的既有函式可呼叫（theme_repository 只有退件 reject_component()），
     維持舊碼原本直接寫 adoption_decision 的風格，只換 target_type。
     """
+    org_id = bi.get_brand(conn, brand_id)["org_id"]
     variant = get_variant(conn, brand_id, variant_id)
     if variant is None:
         raise ValueError("找不到這則素材")
@@ -640,10 +643,10 @@ def restore(conn, brand_id: str, variant_id: str, *, actor: str) -> dict:
         "INSERT INTO adoption_decision (id, org_id, brand_id, campaign_cycle_id, target_type, target_id,"
         " decision, fingerprint_json, decided_by, decided_at)"
         " VALUES (%s, %s, %s, %s, 'theme_component', %s, 'adopted', %s, %s, %s)",
-        (new_id("adp"), DEV_ORG_ID, brand_id, variant["campaign_cycle_id"], variant_id,
+        (new_id("adp"), org_id, brand_id, variant["campaign_cycle_id"], variant_id,
          jsonb(variant["fingerprint"]), actor, now_utc()),
     )
-    write_audit(conn, brand_id=brand_id, entity_type="creative_theme_component", entity_id=variant_id,
+    write_audit(conn, org_id=org_id, brand_id=brand_id, entity_type="creative_theme_component", entity_id=variant_id,
                 action="compliance_restore", actor=actor,
                 before={"decision": "rejected"}, after={"decision": "adopted"})
     conn.commit()
@@ -653,6 +656,7 @@ def restore(conn, brand_id: str, variant_id: str, *, actor: str) -> dict:
 def restore_all_auto_held(conn, brand_id: str, cycle_id: str, *, actor: str) -> int:
     """批次一鍵：把這期所有還處在「系統自動預設挑掉」狀態的素材一次勾回（修憲落地 L2，
     決策 0034 第 25 條第 3 點）。回傳勾回則數。"""
+    org_id = bi.get_brand(conn, brand_id)["org_id"]
     ts = now_utc()
     restored = 0
     for variant in list_variants(conn, brand_id, cycle_id):
@@ -662,12 +666,12 @@ def restore_all_auto_held(conn, brand_id: str, cycle_id: str, *, actor: str) -> 
             "INSERT INTO adoption_decision (id, org_id, brand_id, campaign_cycle_id, target_type,"
             " target_id, decision, fingerprint_json, decided_by, decided_at)"
             " VALUES (%s, %s, %s, %s, 'theme_component', %s, 'adopted', %s, %s, %s)",
-            (new_id("adp"), DEV_ORG_ID, brand_id, cycle_id, variant["id"],
+            (new_id("adp"), org_id, brand_id, cycle_id, variant["id"],
              jsonb(variant["fingerprint"]), actor, ts),
         )
         restored += 1
     if restored:
-        write_audit(conn, brand_id=brand_id, entity_type="campaign_cycle", entity_id=cycle_id,
+        write_audit(conn, org_id=org_id, brand_id=brand_id, entity_type="campaign_cycle", entity_id=cycle_id,
                     action="compliance_restore_batch", actor=actor, before=None,
                     after={"restored": restored})
         conn.commit()
@@ -692,6 +696,7 @@ def rewrite(conn, brand_id: str, variant_id: str, *, reason_code: str, actor: st
 
     回 (True, 新變體 id)；失敗回 (False, 人話錯誤)——原本那則保持被退狀態，不留半成品。
     """
+    org_id = bi.get_brand(conn, brand_id)["org_id"]
     variant = get_variant(conn, brand_id, variant_id)
     if variant is None:
         raise ValueError("找不到這則素材")
@@ -740,7 +745,7 @@ def rewrite(conn, brand_id: str, variant_id: str, *, reason_code: str, actor: st
         " experiment_cell_id, brand_id, product_id, attributes_json, fingerprint_json,"
         " rationale, recommendation_rank, status, created_at)"
         " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'DRAFT', %s)",
-        (new_variant_id, DEV_ORG_ID, variant["variant_type"], variant["creative_brief_id"],
+        (new_variant_id, org_id, variant["variant_type"], variant["creative_brief_id"],
          variant["campaign_cycle_id"], variant["experiment_cell_id"], brand_id,
          variant["product_id"],
          jsonb({"content": data["content"].strip(),
@@ -776,7 +781,8 @@ def approve_selection(conn, brand_id: str, cycle_id: str, actor: str, *, commit:
     """
     adopted = len([v for v in list_variants(conn, brand_id, cycle_id) if not v["rejected"]])
 
-    write_audit(conn, brand_id=brand_id, entity_type="campaign_cycle", entity_id=cycle_id,
+    org_id = bi.get_brand(conn, brand_id)["org_id"]
+    write_audit(conn, org_id=org_id, brand_id=brand_id, entity_type="campaign_cycle", entity_id=cycle_id,
                 action="approve_creatives", actor=actor, before=None,
                 after={"adopted": adopted})
     if commit:

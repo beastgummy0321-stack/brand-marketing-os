@@ -21,7 +21,7 @@ from app.ads import creative as ads_creative
 from app.ads import repository as ads_repo
 from app.brand_intelligence import repository as bi
 from app.core.audit import write_audit
-from app.core.db import DEV_ORG_ID, jsonb, new_id, now_utc
+from app.core.db import jsonb, new_id, now_utc
 
 OBJECTIVE_META_LABEL = {
     "awareness": "品牌知名度",
@@ -158,6 +158,7 @@ def build_packages(conn, brand_id: str, cycle_id: str, actor: str, *, commit: bo
     cycle = ads_repo.get_cycle(conn, brand_id, cycle_id)
     if brand is None or cycle is None:
         raise ValueError("找不到品牌或廣告檔期")
+    org_id = brand["org_id"]
 
     plan = ads_repo.derived_plan(cycle)
     allocations = {a["product_id"]: a for a in
@@ -206,7 +207,7 @@ def build_packages(conn, brand_id: str, cycle_id: str, actor: str, *, commit: bo
             " experiment_cell_id, product_id, hook_id, copy_variant_id, campaign_name,"
             " adset_name, ad_name, destination_url, utm_json, objective, daily_budget,"
             " status, created_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'ready', %s)",
-            (new_id("pkg"), DEV_ORG_ID, brand_id, cycle_id, cell["id"], product_id,
+            (new_id("pkg"), org_id, brand_id, cycle_id, cell["id"], product_id,
              hook["id"] if hook else None, copy["id"] if copy else None,
              names["campaign_name"], names["adset_name"], names["ad_name"],
              destination or "", jsonb(utm),
@@ -214,7 +215,7 @@ def build_packages(conn, brand_id: str, cycle_id: str, actor: str, *, commit: bo
         )
         count += 1
 
-    write_audit(conn, brand_id=brand_id, entity_type="campaign_cycle", entity_id=cycle_id,
+    write_audit(conn, org_id=org_id, brand_id=brand_id, entity_type="campaign_cycle", entity_id=cycle_id,
                 action="build_handoff", actor=actor, before=None, after={"packages": count})
     if commit:
         conn.commit()
@@ -297,7 +298,8 @@ def _mapping_for(conn, brand_id: str, package_id: str) -> dict | None:
 
 def report_missing_field(conn, brand_id: str, cycle_id: str, field_key: str, actor: str) -> None:
     """「我找不到這欄位」回報。Meta 介面改版時，這是我們唯一會知道的管道。"""
-    write_audit(conn, brand_id=brand_id, entity_type="publishing_package", entity_id=cycle_id,
+    org_id = bi.get_brand(conn, brand_id)["org_id"]
+    write_audit(conn, org_id=org_id, brand_id=brand_id, entity_type="publishing_package", entity_id=cycle_id,
                 action="field_not_found", actor=actor, before=None,
                 after={"field": field_key, "label": FIELD_LABELS.get(field_key, field_key)})
     conn.commit()
@@ -315,6 +317,7 @@ def go_live(conn, brand_id: str, cycle_id: str, package_id: str, mapping_id: str
     `activate_cycle()` 則是每個包真的把 Meta 實體從暫停切成開啟成功後才呼叫，
     失敗的包不會走到這裡、不會有授權列（票 M1-01）。
     """
+    org_id = bi.get_brand(conn, brand_id)["org_id"]
     package = conn.execute(
         "SELECT * FROM publishing_package WHERE brand_id = %s AND id = %s AND campaign_cycle_id = %s",
         (brand_id, package_id, cycle_id),
@@ -330,16 +333,16 @@ def go_live(conn, brand_id: str, cycle_id: str, package_id: str, mapping_id: str
         "INSERT INTO activation_authorization (id, org_id, brand_id, scope_type, scope_ref,"
         " authorized_by, authorized_at, note, created_at)"
         " VALUES (%s, %s, %s, 'campaign_activation', %s, %s, %s, %s, %s)",
-        (auth_id, DEV_ORG_ID, brand_id, package_id, actor, ts,
+        (auth_id, org_id, brand_id, package_id, actor, ts,
          f"確認已在 Meta 開始投放：{package['campaign_name']}", ts),
     )
     conn.execute(
         "INSERT INTO campaign_activation (id, org_id, brand_id, campaign_cycle_id,"
         " external_ad_mapping_id, authorization_id, activated_by, activated_at, created_at)"
         " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
-        (new_id("act"), DEV_ORG_ID, brand_id, cycle_id, mapping_id, auth_id, actor, ts, ts),
+        (new_id("act"), org_id, brand_id, cycle_id, mapping_id, auth_id, actor, ts, ts),
     )
-    write_audit(conn, brand_id=brand_id, entity_type="campaign_activation", entity_id=mapping_id,
+    write_audit(conn, org_id=org_id, brand_id=brand_id, entity_type="campaign_activation", entity_id=mapping_id,
                 action="authorize_activation", actor=actor, before=None,
                 after={"package_id": package_id, "mapping_id": mapping_id})
     conn.commit()
@@ -372,6 +375,7 @@ def authorize_and_map(conn, brand_id: str, cycle_id: str, package_id: str, *,
     ADR 0004 起 require_actor 一律回傳固定值，不會再是空字串；這裡的 `if not actor` 是給
     繞過路由層、直接呼叫本函式的呼叫端（例如測試）留的第二道保險，不是操作人攔截。
     """
+    org_id = bi.get_brand(conn, brand_id)["org_id"]
     package = conn.execute(
         "SELECT * FROM publishing_package WHERE brand_id = %s AND id = %s AND campaign_cycle_id = %s",
         (brand_id, package_id, cycle_id),
@@ -388,7 +392,7 @@ def authorize_and_map(conn, brand_id: str, cycle_id: str, package_id: str, *,
 
     ts = now_utc()
     account_id = (meta_ids.get("meta_account_id") or "").strip() or None
-    ad_account_id = _ensure_ad_account(conn, account_id, ts) if account_id else None
+    ad_account_id = _ensure_ad_account(conn, account_id, ts, org_id=org_id) if account_id else None
 
     mapping_id = new_id("xam")
     conn.execute(
@@ -397,7 +401,7 @@ def authorize_and_map(conn, brand_id: str, cycle_id: str, package_id: str, *,
         " meta_adset_id, meta_ad_id, meta_creative_id, claim_status, confirmed_by,"
         " confirmed_at, created_at)"
         " VALUES (%s, %s, %s, %s, %s, %s, 'meta', %s, %s, %s, %s, %s, 'confirmed', %s, %s, %s)",
-        (mapping_id, DEV_ORG_ID, brand_id, package_id, cycle_id, ad_account_id, account_id,
+        (mapping_id, org_id, brand_id, package_id, cycle_id, ad_account_id, account_id,
          (meta_ids.get("meta_campaign_id") or "").strip(),
          (meta_ids.get("meta_adset_id") or "").strip() or None,
          (meta_ids.get("meta_ad_id") or "").strip() or None,
@@ -527,8 +531,9 @@ def readiness_ring(conn, brand_id: str, cycle_id: str) -> dict:
     return {"passed": sum(1 for i in items if i["passed"]), "total": len(items), "items": items}
 
 
-def _ensure_ad_account(conn, external_account_id: str, ts: str) -> str:
-    """廣告帳號不綁品牌（一個帳號可服務多品牌，決策 0022 第 6 點），有就取、沒有就建。"""
+def _ensure_ad_account(conn, external_account_id: str, ts: str, *, org_id: str = "org_dev") -> str:
+    """廣告帳號不綁品牌（一個帳號可服務多品牌，決策 0022 第 6 點），有就取、沒有就建。
+    org_id 預設值只服務既有測試呼叫點；正式呼叫端一律顯式傳。"""
     row = conn.execute(
         "SELECT id FROM ad_account WHERE platform = 'meta' AND external_account_id = %s",
         (external_account_id,),
@@ -539,6 +544,6 @@ def _ensure_ad_account(conn, external_account_id: str, ts: str) -> str:
     conn.execute(
         "INSERT INTO ad_account (id, org_id, platform, external_account_id, status, created_at,"
         " updated_at) VALUES (%s, %s, 'meta', %s, 'active', %s, %s)",
-        (account_id, DEV_ORG_ID, external_account_id, ts, ts),
+        (account_id, org_id, external_account_id, ts, ts),
     )
     return account_id

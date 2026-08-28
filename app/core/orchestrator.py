@@ -25,7 +25,7 @@ from collections.abc import Callable
 
 from app.core import cleanup, rule_cards
 from app.core import interrupts as core_interrupts
-from app.core.db import DEV_ORG_ID, jsonb, new_id, now_utc
+from app.core.db import jsonb, new_id, now_utc
 
 # 登記表：模組在自己的檔案尾巴呼叫 register_module()／register_rule() 掛進來，
 # 本檔本身永遠是空字典起家（比照 app/core/cleanup.py 的 _REGISTRY）。
@@ -84,7 +84,7 @@ def _get_decision(conn, brand_id: str, dedupe_key: str) -> "dict | None":
     return dict(row) if row is not None else None
 
 
-def _insert_decision(conn, *, brand_id: str, module: str, rule_id: str, action_json,
+def _insert_decision(conn, *, org_id: str, brand_id: str, module: str, rule_id: str, action_json,
                      risk_level: str, autonomy_mode: float, dedupe_key: str, outcome: str,
                      attempt_count: int, error_text: "str | None") -> str:
     decision_id = new_id("dcs")
@@ -93,7 +93,7 @@ def _insert_decision(conn, *, brand_id: str, module: str, rule_id: str, action_j
         "INSERT INTO decision (id, org_id, module, brand_id, rule_id, action_json, risk_level,"
         " autonomy_mode, dedupe_key, outcome, attempt_count, error_text, created_at,"
         " updated_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
-        (decision_id, DEV_ORG_ID, module, brand_id, rule_id, action_json, risk_level, autonomy_mode,
+        (decision_id, org_id, module, brand_id, rule_id, action_json, risk_level, autonomy_mode,
          dedupe_key, outcome, attempt_count, error_text, ts, ts),
     )
     return decision_id
@@ -111,7 +111,7 @@ def _update_decision(conn, decision_id: str, *, outcome: str, attempt_count: int
     )
 
 
-def _process_action(conn, brand_id: str, action: dict) -> dict:
+def _process_action(conn, org_id: str, brand_id: str, action: dict) -> dict:
     """單一 Action 的閘門＋執行＋留痕，各自 try/except，一個炸掉不擋其他。"""
     dedupe_key = action["dedupe_key"]
     module_name = action["module"]
@@ -129,7 +129,7 @@ def _process_action(conn, brand_id: str, action: dict) -> dict:
     def _write(outcome: str, attempt_count: int, error_text: "str | None") -> str:
         if existing is None:
             return _insert_decision(
-                conn, brand_id=brand_id, module=module_name, rule_id=rule_id,
+                conn, org_id=org_id, brand_id=brand_id, module=module_name, rule_id=rule_id,
                 action_json=action_json, risk_level=risk_level, autonomy_mode=autonomy_mode,
                 dedupe_key=dedupe_key, outcome=outcome, attempt_count=attempt_count,
                 error_text=error_text)
@@ -141,7 +141,7 @@ def _process_action(conn, brand_id: str, action: dict) -> dict:
     if risk and autonomy_mode < _AUTONOMY_HANDSOFF:
         decision_id = _write("carded", 1, None)
         core_interrupts.enqueue(
-            conn, category=_CARD_CATEGORY, brand_id=brand_id,
+            conn, org_id=org_id, category=_CARD_CATEGORY, brand_id=brand_id,
             dedupe_key=f"decision:{decision_id}", message=_CARDED_MESSAGE,
         )
         return {"dedupe_key": dedupe_key, "outcome": "carded", "decision_id": decision_id}
@@ -154,7 +154,7 @@ def _process_action(conn, brand_id: str, action: dict) -> dict:
         decision_id = _write("failed", attempt_count, error_text)
         if risk == "spend" or attempt_count >= _MAX_ATTEMPTS_BEFORE_ESCALATION:
             core_interrupts.enqueue(
-                conn, category=_CARD_CATEGORY, brand_id=brand_id,
+                conn, org_id=org_id, category=_CARD_CATEGORY, brand_id=brand_id,
                 dedupe_key=f"decision:{decision_id}", message=_ESCALATED_MESSAGE,
             )
         return {"dedupe_key": dedupe_key, "outcome": "failed", "decision_id": decision_id,
@@ -164,7 +164,8 @@ def _process_action(conn, brand_id: str, action: dict) -> dict:
     return {"dedupe_key": dedupe_key, "outcome": "auto_done", "decision_id": decision_id}
 
 
-def run(conn, brand_id: str, *, actor: str) -> dict:
+def run(conn, brand_id: str, *, actor: str, org_id: str = "org_dev") -> dict:
+    # org_id 預設值只服務既有測試呼叫點；正式呼叫端一律顯式傳。
     """派工員：收集各登記模組的 status() 組 facts → decide() → 閘門 → 執行或出卡 → 寫
     decision 留痕。一個模組的 status() 壞了或缺席都不能讓整圈組不出 facts、更不能讓
     其他規則跟著卡住（拔根測試的程式版）。"""
@@ -177,7 +178,7 @@ def run(conn, brand_id: str, *, actor: str) -> dict:
         if module_facts:
             facts.update(module_facts)
 
-    outcomes = [_process_action(conn, brand_id, action) for action in decide(facts)]
+    outcomes = [_process_action(conn, org_id, brand_id, action) for action in decide(facts)]
     conn.commit()
     return {"brand_id": brand_id, "actor": actor, "outcomes": outcomes}
 

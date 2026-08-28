@@ -38,7 +38,7 @@ from app.ads import guardrails
 from app.brand_intelligence import compliance_wordlist
 from app.brand_intelligence import repository as bi
 from app.core.audit import write_audit
-from app.core.db import DEV_ORG_ID, jsonb, new_id, now_utc
+from app.core.db import jsonb, new_id, now_utc
 
 # 中文與英文常見的引號形式，抽「規則裡被特別標出來的字詞」用。
 _QUOTE_PATTERN = re.compile(r"[「『\"'“”]([^「」『』\"'“”]{1,20})[」』\"'“”]")
@@ -422,6 +422,7 @@ def apply_default_holds(conn, brand_id: str, cycle_id: str, flags: dict, actor: 
     每次進頁都會重掃，若不分青紅皂白每次都寫，會把使用者剛按過的「勾回」又蓋回去。
     回傳這次新寫入的則數（供頁面判斷是否要重讀 groups）。
     """
+    org_id = bi.get_brand(conn, brand_id)["org_id"]
     holdable_categories = ("law", UNBACKED_CLAIM_CATEGORY)
     hold_variant_ids = []
     seen = set()
@@ -454,11 +455,11 @@ def apply_default_holds(conn, brand_id: str, cycle_id: str, flags: dict, actor: 
             "INSERT INTO adoption_decision (id, org_id, brand_id, campaign_cycle_id, target_type,"
             " target_id, decision, reason_code, fingerprint_json, decided_by, decided_at)"
             " VALUES (%s, %s, %s, %s, 'variant', %s, 'rejected', %s, %s, %s, %s)",
-            (new_id("adp"), DEV_ORG_ID, brand_id, cycle_id, variant_id, fp.AUTO_HOLD_REASON_CODE,
+            (new_id("adp"), org_id, brand_id, cycle_id, variant_id, fp.AUTO_HOLD_REASON_CODE,
              jsonb(variant["fingerprint"]), actor, ts),
         )
-        write_audit(conn, brand_id=brand_id, entity_type="creative_variant", entity_id=variant_id,
-                    action="compliance_auto_hold", actor=actor, before=None,
+        write_audit(conn, org_id=org_id, brand_id=brand_id, entity_type="creative_variant",
+                    entity_id=variant_id, action="compliance_auto_hold", actor=actor, before=None,
                     after={"decision": "rejected", "reason_code": fp.AUTO_HOLD_REASON_CODE})
         held += 1
     if held:

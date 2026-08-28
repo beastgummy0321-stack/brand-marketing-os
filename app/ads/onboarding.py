@@ -21,6 +21,7 @@ from datetime import timedelta
 
 from app.ads import checkpoint as ads_checkpoint
 from app.ads import repository as ads_repo
+from app.brand_intelligence import repository as bi
 from app.core import interrupts as core_interrupts
 
 # 提醒卡：投放後第幾天、要說什麼。內容與門檻共用這一張表，避免兩套邏輯漂移
@@ -62,6 +63,9 @@ def create_reminders(conn, brand_id: str, cycle_id: str) -> int:
     start = cycle["start_date"]
     end = cycle["end_date"]
     created = 0
+    brand = bi.get_brand(conn, brand_id)
+    assert brand is not None, f"找不到品牌：{brand_id}"
+    org_id = brand["org_id"]
     for reminder in REMINDERS:
         if reminder["offset_from_end_days"] is not None:
             due = end + timedelta(days=reminder["offset_from_end_days"])
@@ -70,7 +74,7 @@ def create_reminders(conn, brand_id: str, cycle_id: str) -> int:
         else:
             due = start + timedelta(days=reminder["offset_days"])
         interrupt_id = core_interrupts.enqueue(
-            conn, category="cycle_reminder", kind=reminder["kind"],
+            conn, org_id=org_id, category="cycle_reminder", kind=reminder["kind"],
             dedupe_key=f"cycle_reminder:{cycle_id}:{reminder['kind']}",
             message=reminder["message"], brand_id=brand_id, campaign_cycle_id=cycle_id,
             action_url=_reminder_action_url(brand_id, cycle_id, reminder["kind"]),

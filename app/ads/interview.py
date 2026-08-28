@@ -21,7 +21,7 @@ ledger 只收經判讀驗證且經人確認的結論，訪談自述屬未驗證�
 from app.ads import fingerprint as fp
 from app.brand_intelligence import repository as bi
 from app.core.audit import write_audit
-from app.core.db import DEV_ORG_ID, jsonb, new_id, now_utc
+from app.core.db import jsonb, new_id, now_utc
 
 
 def _clean_selection(raw: dict | None) -> dict:
@@ -60,6 +60,10 @@ def _drop_conflicts(bad: dict, good: dict) -> list:
 
 def _create_self_report_card(conn, brand_id: str, axis: str, value: str, *, actor: str) -> dict | None:
     """自述負面 → 候選規則卡。同一軸值已經有候選卡（不論待決或已決）就不重複造。"""
+    brand = bi.get_brand(conn, brand_id)
+    if brand is None:
+        raise ValueError(f"找不到品牌：{brand_id}")
+    org_id = brand["org_id"]
     existing = conn.execute(
         "SELECT id FROM creative_rule_card WHERE brand_id = %s AND fingerprint_axis = %s"
         " AND fingerprint_value = %s", (brand_id, axis, value),
@@ -76,10 +80,10 @@ def _create_self_report_card(conn, brand_id: str, axis: str, value: str, *, acto
         "INSERT INTO creative_rule_card (id, org_id, brand_id, fingerprint_axis, fingerprint_value,"
         " proposed_rule_text, evidence_json, reject_count, status, created_at, updated_at)"
         " VALUES (%s, %s, %s, %s, %s, %s, %s, 0, 'pending', %s, %s)",
-        (row_id, DEV_ORG_ID, brand_id, axis, value, proposed_text, evidence, ts, ts),
+        (row_id, org_id, brand_id, axis, value, proposed_text, evidence, ts, ts),
     )
     row = dict(conn.execute("SELECT * FROM creative_rule_card WHERE id = %s", (row_id,)).fetchone())
-    write_audit(conn, brand_id=brand_id, entity_type="creative_rule_card", entity_id=row_id,
+    write_audit(conn, org_id=org_id, brand_id=brand_id, entity_type="creative_rule_card", entity_id=row_id,
                 action="self_report", actor=actor, before=None, after=row)
     return row
 
@@ -110,8 +114,12 @@ def submit(conn, brand_id: str, *, bad: dict | None, good: dict | None,
             )
             created_hyps.append(hyp)
 
+    brand = bi.get_brand(conn, brand_id)
+    if brand is None:
+        raise ValueError(f"找不到品牌：{brand_id}")
+    org_id = brand["org_id"]
     if bad or good or note:
-        write_audit(conn, brand_id=brand_id, entity_type="lesson_interview",
+        write_audit(conn, org_id=org_id, brand_id=brand_id, entity_type="lesson_interview",
                     entity_id=new_id("itv"), action="submit", actor=actor,
                     before=None, after={"bad": bad, "good": good, "note": note})
     conn.commit()
@@ -126,6 +134,10 @@ def attach_pending_hypotheses(conn, brand_id: str, cycle_id: str) -> int:
     所以不會誤抓其他假設。掛過一次之後就會出現在 campaign_cycle_hypothesis，
     不會被下一次開期重複掛進去。回傳掛了幾條。
     """
+    brand = bi.get_brand(conn, brand_id)
+    if brand is None:
+        raise ValueError(f"找不到品牌：{brand_id}")
+    org_id = brand["org_id"]
     rows = conn.execute(
         "SELECT id, hypothesis_type FROM strategy_hypothesis"
         " WHERE brand_id = %s AND status = 'proposed' AND source_cycle_id IS NULL"
@@ -137,7 +149,7 @@ def attach_pending_hypotheses(conn, brand_id: str, cycle_id: str) -> int:
             "INSERT INTO campaign_cycle_hypothesis (org_id, campaign_cycle_id,"
             " strategy_hypothesis_id, brand_id, role) VALUES (%s, %s, %s, %s, %s)"
             " ON CONFLICT (campaign_cycle_id, strategy_hypothesis_id) DO NOTHING",
-            (DEV_ORG_ID, cycle_id, row["id"], brand_id, row["hypothesis_type"]),
+            (org_id, cycle_id, row["id"], brand_id, row["hypothesis_type"]),
         )
     if rows:
         conn.commit()

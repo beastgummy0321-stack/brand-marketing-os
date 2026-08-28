@@ -9,7 +9,7 @@ from app.brand_intelligence import personas
 from app.intake import ai, persona_generation, state, truth_card
 from app.intake import repository as ir
 from app.shared import web
-from app.shared.web import JSONResponse, require_brand
+from app.shared.web import JSONResponse, require_actor, require_brand
 
 router = APIRouter()
 CONFIRMED_BY = "使用者"
@@ -33,7 +33,8 @@ async def _body(request: Request) -> dict:
 
 @router.post("/api/intake/brands/{brand_id}/scan/products/retry")
 async def photo_product_retry(request: Request, brand_id: str):
-    require_brand(brand_id)
+    actor = require_actor(request)
+    require_brand(brand_id, actor)
     draft = state.require_draft(brand_id)
     source_photo_token = str((await _body(request)).get("source_photo_token") or "").strip()
     if not source_photo_token:
@@ -47,7 +48,8 @@ async def photo_product_retry(request: Request, brand_id: str):
 
 @router.post("/api/intake/brands/{brand_id}/scan/products/skip")
 async def photo_product_skip(request: Request, brand_id: str):
-    require_brand(brand_id)
+    actor = require_actor(request)
+    require_brand(brand_id, actor)
     draft = state.require_draft(brand_id)
     source_photo_token = str((await _body(request)).get("source_photo_token") or "").strip()
     if not source_photo_token:
@@ -62,8 +64,9 @@ async def photo_product_skip(request: Request, brand_id: str):
 
 
 @router.get("/api/intake/brands/{brand_id}/truth-card")
-async def truth_card_get(brand_id: str):
-    require_brand(brand_id)
+async def truth_card_get(request: Request, brand_id: str):
+    actor = require_actor(request)
+    require_brand(brand_id, actor)
     draft = state.require_draft_or_just_completed(brand_id)
     return _envelope(truth_card.split_items(
         ir.list_truth_card_items(web.conn, brand_id, draft["id"]),
@@ -72,7 +75,8 @@ async def truth_card_get(brand_id: str):
 
 @router.post("/api/intake/brands/{brand_id}/truth-card/items/{i}/move")
 async def truth_card_item_move(request: Request, brand_id: str, i: int):
-    require_brand(brand_id)
+    actor = require_actor(request)
+    require_brand(brand_id, actor)
     draft = state.require_draft_or_just_completed(brand_id)
     item = next((row for row in ir.list_truth_card_items(web.conn, brand_id, draft["id"])
                  if row["i"] == i), None)
@@ -97,7 +101,8 @@ async def truth_card_item_move(request: Request, brand_id: str, i: int):
 
 @router.post("/api/intake/brands/{brand_id}/truth-card/confirm")
 async def truth_card_confirm(request: Request, brand_id: str):
-    require_brand(brand_id)
+    actor = require_actor(request)
+    require_brand(brand_id, actor)
     draft = state.require_draft_or_just_completed(brand_id)
     pending = ir.list_pending_items(web.conn, brand_id, draft["id"])
     body = await _body(request)
@@ -142,8 +147,9 @@ async def truth_card_confirm(request: Request, brand_id: str):
 
 
 @router.get("/api/intake/brands/{brand_id}/personas")
-async def persona_list(brand_id: str):
-    require_brand(brand_id)
+async def persona_list(request: Request, brand_id: str):
+    actor = require_actor(request)
+    require_brand(brand_id, actor)
     return _envelope({
         "personas": personas.list_personas(web.conn, brand_id),
         "generation": persona_generation.generation_state(brand_id),
@@ -152,7 +158,8 @@ async def persona_list(brand_id: str):
 
 @router.put("/api/intake/brands/{brand_id}/personas/{persona_id}")
 async def persona_update(request: Request, brand_id: str, persona_id: str):
-    require_brand(brand_id)
+    actor = require_actor(request)
+    require_brand(brand_id, actor)
     try:
         personas.update_persona(web.conn, brand_id, persona_id, await _body(request), actor=CONFIRMED_BY)
     except LookupError as exc:
@@ -163,8 +170,9 @@ async def persona_update(request: Request, brand_id: str, persona_id: str):
 
 
 @router.post("/api/intake/brands/{brand_id}/personas/regenerate")
-async def persona_regenerate(brand_id: str):
-    require_brand(brand_id)
+async def persona_regenerate(request: Request, brand_id: str):
+    actor = require_actor(request)
+    require_brand(brand_id, actor)
     persona_generation.start_generation(web.conn, brand_id)
     return JSONResponse(
         {"generation": persona_generation.generation_state(brand_id)}, status_code=202,

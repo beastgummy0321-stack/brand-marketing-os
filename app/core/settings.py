@@ -49,7 +49,8 @@ def _get_setting(conn: db.Conn, key: str, default=None):
     return row["value"] if row else default
 
 
-def set_setting(conn: db.Conn, key: str, value: str) -> None:
+def set_setting(conn: db.Conn, key: str, value: str, *, org_id: str = "org_dev") -> None:
+    # org_id 預設值只服務既有測試呼叫點；正式呼叫端一律顯式傳。
     """寫一個設定值（有則覆蓋）。value 一律存字串，數字請呼叫端先 str()。
 
     不寫 audit_log：app_setting 沒有 brand_id，也不是品牌事實；金鑰更不該被抄進稽核紀錄。
@@ -57,7 +58,7 @@ def set_setting(conn: db.Conn, key: str, value: str) -> None:
     conn.execute(
         """INSERT INTO app_setting (org_id, key, value, updated_at) VALUES (%s, %s, %s, %s)
            ON CONFLICT(org_id, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at""",
-        (db.DEV_ORG_ID, key, str(value), db.now_utc()),
+        (org_id, key, str(value), db.now_utc()),
     )
     conn.commit()
 

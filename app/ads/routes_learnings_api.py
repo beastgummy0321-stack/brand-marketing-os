@@ -133,36 +133,41 @@ def _action_response(result: dict) -> dict | JSONResponse:
 
 
 @router.get("/api/campaigns/brands/{brand_id}/learnings")
-async def list_learnings(brand_id: str):
-    main_mod.require_brand(brand_id)
+async def list_learnings(brand_id: str, request: Request):
+    actor = main_mod.require_actor(request)
+    main_mod.require_brand(brand_id, actor)
     return _envelope(learning_sections(main_mod.conn, brand_id))
 
 
 @router.post("/api/campaigns/brands/{brand_id}/learnings/ledger/{entry_id}/deactivate")
 async def deactivate_learning(request: Request, brand_id: str, entry_id: str):
-    main_mod.require_brand(brand_id)
-    return _action_response(deactivate_ledger(main_mod.conn, brand_id, entry_id, main_mod.require_actor(request)))
+    actor = main_mod.require_actor(request)
+    main_mod.require_brand(brand_id, actor)
+    return _action_response(deactivate_ledger(main_mod.conn, brand_id, entry_id, str(actor.user_id)))
 
 
 @router.post("/api/campaigns/brands/{brand_id}/learnings/rules/{rule_id}/deactivate")
 async def deactivate_active_ban(request: Request, brand_id: str, rule_id: str):
-    main_mod.require_brand(brand_id)
-    return _action_response(deactivate_rule(main_mod.conn, brand_id, rule_id, main_mod.require_actor(request)))
+    actor = main_mod.require_actor(request)
+    main_mod.require_brand(brand_id, actor)
+    return _action_response(deactivate_rule(main_mod.conn, brand_id, rule_id, str(actor.user_id)))
 
 
 @router.post("/api/campaigns/brands/{brand_id}/learnings/rules/{rule_id}/reconfirm")
 async def reconfirm_pending_rule(request: Request, brand_id: str, rule_id: str):
-    main_mod.require_brand(brand_id)
-    return _action_response(reconfirm_rule(main_mod.conn, brand_id, rule_id, main_mod.require_actor(request)))
+    actor = main_mod.require_actor(request)
+    main_mod.require_brand(brand_id, actor)
+    return _action_response(reconfirm_rule(main_mod.conn, brand_id, rule_id, str(actor.user_id)))
 
 
 @router.post("/api/campaigns/brands/{brand_id}/learnings/rule-cards/{card_id}/decide")
 async def decide_pending_rule_card(request: Request, brand_id: str, card_id: str):
-    main_mod.require_brand(brand_id)
+    actor = main_mod.require_actor(request)
+    main_mod.require_brand(brand_id, actor)
     try:
         body = await request.json()
     except Exception:
         body = {}
     accept = bool(body.get("accepted")) if isinstance(body, dict) else False
-    actor = main_mod.require_actor(request)
-    return _action_response(decide_rule_card(main_mod.conn, brand_id, card_id, accept=accept, actor=actor))
+    return _action_response(
+        decide_rule_card(main_mod.conn, brand_id, card_id, accept=accept, actor=str(actor.user_id)))

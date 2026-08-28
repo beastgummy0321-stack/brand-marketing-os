@@ -45,11 +45,14 @@ def _inbox_item(row: dict) -> dict:
 
 
 @router.get("/api/inbox")
-async def api_inbox():
+async def api_inbox(request: Request):
     """S2.2–S2.6、S2.11–S2.12：待辦／已結兩份清單一次回傳。排序沿用
     `core_interrupts.list_open()` 既有 `_sort_key`，這裡不重排。"""
-    open_items = [_inbox_item(r) for r in _with_brand_names(core_interrupts.list_open(web.conn))]
-    done_items = [_inbox_item(r) for r in _with_brand_names(core_interrupts.list_done(web.conn))]
+    actor = require_actor(request)
+    open_items = [_inbox_item(r) for r in
+                 _with_brand_names(core_interrupts.list_open(web.conn, org_id=actor.org_id))]
+    done_items = [_inbox_item(r) for r in
+                 _with_brand_names(core_interrupts.list_done(web.conn, org_id=actor.org_id))]
     return {
         "data": {"open": open_items, "done": done_items},
         "generated_at": datetime.now(UTC).isoformat(),
@@ -58,13 +61,16 @@ async def api_inbox():
 
 @router.post("/api/interrupts/{interrupt_id}/resolve")
 async def api_interrupt_resolve(request: Request, interrupt_id: str):
-    core_interrupts.resolve(web.conn, interrupt_id, actor=require_actor(request))
+    actor = require_actor(request)
+    core_interrupts.resolve(web.conn, interrupt_id, actor=str(actor.user_id))
     return {"ok": True}
 
 
 @router.get("/api/system/prototype-phase")
-async def api_prototype_phase():
-    """S2.15–S2.17：側板詳情，全站單一旗標，不帶 brand_id 參數。"""
+async def api_prototype_phase(request: Request):
+    """S2.15–S2.17：側板詳情，全站單一旗標，不帶 brand_id 參數（旗標本身刻意不分組織，
+    見 app/core/prototype_phase.py 檔頭；這裡只要求登入，不做組織過濾）。"""
+    require_actor(request)
     return {
         "data": {
             "ended": core_prototype_phase.has_ended(web.conn),

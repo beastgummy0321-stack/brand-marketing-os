@@ -7,7 +7,8 @@
 """
 
 
-from app.core.db import DEV_ORG_ID, Conn, new_id, now_utc
+from app.brand_intelligence import repository as bi
+from app.core.db import Conn, new_id, now_utc
 
 CHANNELS = ("social", "google_search", "line_email", "kol_media", "website_landing")
 CHANNEL_LABELS = {
@@ -44,11 +45,12 @@ def _validate_plan(channel: str, pct: int, depth: str) -> None:
 def create_channel_plan(conn: Conn, brand_id: str, cycle_id: str, *, channel: str,
                         job: str, pct: int, expected: str, enabled: bool = True,
                         depth: str = "full") -> dict:
+    org_id = bi.get_brand(conn, brand_id)["org_id"]
     _require_text(brand_id, "brand_id")
     _require_text(cycle_id, "cycle_id")
     _validate_plan(channel, pct, depth)
     row = {
-        "id": new_id("chp"), "org_id": DEV_ORG_ID, "brand_id": brand_id, "cycle_id": cycle_id,
+        "id": new_id("chp"), "org_id": org_id, "brand_id": brand_id, "cycle_id": cycle_id,
         "channel": channel,
         "job": _require_text(job, "job"), "pct": pct, "expected": _require_text(expected, "expected"),
         "enabled": bool(enabled), "depth": depth, "created_at": now_utc(),
@@ -117,10 +119,11 @@ def previous_enabled_defaults(conn: Conn, brand_id: str, cycle_id: str | None = 
 
 def create_task_card(conn: Conn, brand_id: str, cycle_id: str, *, channel: str, title: str,
                      draft_hint: str | None = None) -> dict:
+    org_id = bi.get_brand(conn, brand_id)["org_id"]
     _require_text(brand_id, "brand_id")
     _require_text(cycle_id, "cycle_id")
     row = {
-        "id": new_id("tsk"), "org_id": DEV_ORG_ID, "brand_id": brand_id, "cycle_id": cycle_id,
+        "id": new_id("tsk"), "org_id": org_id, "brand_id": brand_id, "cycle_id": cycle_id,
         "channel": _require_text(channel, "channel"), "title": _require_text(title, "title"),
         "draft_hint": draft_hint or None, "done": False, "created_at": now_utc(), "done_at": None,
     }

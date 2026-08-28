@@ -21,7 +21,7 @@ from app.ads import pacing_curve
 from app.brand_intelligence import repository as bi
 from app.core import cleanup
 from app.core.audit import write_audit
-from app.core.db import DEV_ORG_ID, Conn, jsonb, new_id, now_utc
+from app.core.db import Conn, jsonb, new_id, now_utc
 
 
 def _rows(cursor) -> list:
@@ -111,6 +111,7 @@ def create_cycle(conn: Conn, brand_id: str, *, product_ids: list,
     自訂天數（票 3，7–30 天）時傳入，日預算改用單純除法（budget_calc.daily_budget_for）
     重算——天數已經是人選的，程式不再自作主張改動它。
     """
+    org_id = bi.get_brand(conn, brand_id)["org_id"]
     if not objective or not objective.strip():
         raise ValueError("本期目標為必填")
     if not actor:
@@ -144,7 +145,7 @@ def create_cycle(conn: Conn, brand_id: str, *, product_ids: list,
     # derived_plan_json 用）——jsonb 欄位維持原生 dict/list，只在下面 INSERT 的參數
     # tuple 裡才包 jsonb()，避免 row 裡混進 psycopg 的 adapter 物件（02-3b）。
     row = {
-        "id": cycle_id, "org_id": DEV_ORG_ID, "brand_id": brand_id, "ad_account_id": None,
+        "id": cycle_id, "org_id": org_id, "brand_id": brand_id, "ad_account_id": None,
         "product_scope_json": product_ids, "objective": objective.strip(), "funnel_stage": funnel_stage,
         "occasion": ads_occasion.for_cycle(start, end), "budget": plan.total_budget, "currency": currency,
         "start_date": start, "end_date": end, "target_market": None, "channels_json": ["meta"],
@@ -163,7 +164,7 @@ def create_cycle(conn: Conn, brand_id: str, *, product_ids: list,
         " pain_slider_value, derived_plan_json, diff_snapshot_json, created_at, updated_at)"
         " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,"
         " %s, %s, %s, %s, %s, %s, %s, %s, %s)",
-        (cycle_id, DEV_ORG_ID, brand_id, None, jsonb(product_ids), row["objective"], funnel_stage,
+        (cycle_id, org_id, brand_id, None, jsonb(product_ids), row["objective"], funnel_stage,
          row["occasion"], plan.total_budget, currency, start, end, None, jsonb(["meta"]), None,
          offer_id, None, row["background"], "PLANNING", None, None, None, False, 0, phase,
          pain_value, jsonb(derived_plan_dict), None, ts, ts),
@@ -176,12 +177,12 @@ def create_cycle(conn: Conn, brand_id: str, *, product_ids: list,
             "INSERT INTO campaign_cycle_product (id, org_id, campaign_cycle_id, brand_id, product_id,"
             " allocated_budget, allocation_ratio, allocation_basis, economics_missing,"
             " created_at, updated_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
-            (new_id("ccp"), DEV_ORG_ID, cycle_id, brand_id, allocation.product_id,
+            (new_id("ccp"), org_id, cycle_id, brand_id, allocation.product_id,
              allocation.allocated_budget, allocation.allocation_ratio,
              allocation.allocation_basis, bool(allocation.economics_missing), ts, ts),
         )
 
-    write_audit(conn, brand_id=brand_id, entity_type="campaign_cycle", entity_id=cycle_id,
+    write_audit(conn, org_id=org_id, brand_id=brand_id, entity_type="campaign_cycle", entity_id=cycle_id,
                 action="create", actor=actor, before=None, after=row)
     conn.commit()
 
@@ -264,7 +265,7 @@ def update_cycle_status(conn: Conn, brand_id: str, cycle_id: str, *,
         (status, now_utc(), brand_id, cycle_id),
     )
     after = get_cycle(conn, brand_id, cycle_id)
-    write_audit(conn, brand_id=brand_id, entity_type="campaign_cycle", entity_id=cycle_id,
+    write_audit(conn, org_id=bi.get_brand(conn, brand_id)["org_id"], brand_id=brand_id, entity_type="campaign_cycle", entity_id=cycle_id,
                 action="update_status", actor=actor, before=before, after=after)
     conn.commit()
     return after
@@ -296,7 +297,7 @@ def set_cycle_pacing(conn: Conn, brand_id: str, cycle_id: str, *,
         (jsonb(plan), now_utc(), brand_id, cycle_id),
     )
     after = get_cycle(conn, brand_id, cycle_id)
-    write_audit(conn, brand_id=brand_id, entity_type="campaign_cycle", entity_id=cycle_id,
+    write_audit(conn, org_id=bi.get_brand(conn, brand_id)["org_id"], brand_id=brand_id, entity_type="campaign_cycle", entity_id=cycle_id,
                 action="pacing_update", actor=actor, before=before, after=after)
     conn.commit()
     return plan
@@ -325,7 +326,7 @@ def set_cycle_archived(conn: Conn, brand_id: str, cycle_id: str, *,
         (bool(archived), ts, brand_id, cycle_id),
     )
     after = get_cycle(conn, brand_id, cycle_id)
-    write_audit(conn, brand_id=brand_id, entity_type="campaign_cycle", entity_id=cycle_id,
+    write_audit(conn, org_id=bi.get_brand(conn, brand_id)["org_id"], brand_id=brand_id, entity_type="campaign_cycle", entity_id=cycle_id,
                 action="archive" if archived else "restore", actor=actor, before=before, after=after)
     conn.commit()
     return after
@@ -428,7 +429,7 @@ def delete_cycle(conn: Conn, brand_id: str, cycle_id: str, *, actor: str) -> dic
         conn.execute(f"DELETE FROM {table} WHERE campaign_cycle_id = %s", (cycle_id,))
     conn.execute("DELETE FROM campaign_cycle WHERE id = %s AND brand_id = %s", (cycle_id, brand_id))
 
-    write_audit(conn, brand_id=brand_id, entity_type="campaign_cycle", entity_id=cycle_id,
+    write_audit(conn, org_id=bi.get_brand(conn, brand_id)["org_id"], brand_id=brand_id, entity_type="campaign_cycle", entity_id=cycle_id,
                 action="delete", actor=actor, before={**before, "deleted_counts": counts},
                 after=None, reason="把關人刪除已封存檔期（比照決策 0020）")
     conn.commit()
@@ -446,6 +447,7 @@ def replace_findings(conn: Conn, brand_id: str, cycle_id: str,
     findings 是 app/ads/guardrails.py 的 Finding dataclass 清單——法務掃描與對帳
     產出的是同一種結構，所以共用這一個落庫入口。
     """
+    org_id = bi.get_brand(conn, brand_id)["org_id"]
     conn.execute(
         "DELETE FROM finding WHERE brand_id = %s AND campaign_cycle_id = %s AND finding_type = %s",
         (brand_id, cycle_id, finding_type),
@@ -456,7 +458,7 @@ def replace_findings(conn: Conn, brand_id: str, cycle_id: str,
             "INSERT INTO finding (id, org_id, brand_id, campaign_cycle_id, finding_type, target_type,"
             " target_id, severity, code, message, evidence_json, confidence_penalty, source,"
             " resolved, created_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, false, %s)",
-            (new_id("fnd"), DEV_ORG_ID, brand_id, cycle_id, finding.finding_type,
+            (new_id("fnd"), org_id, brand_id, cycle_id, finding.finding_type,
              "variant" if finding.evidence.get("variant_id") else "cycle",
              finding.evidence.get("variant_id") or cycle_id,
              finding.severity, finding.code, finding.message,
@@ -483,8 +485,7 @@ def list_findings(conn: Conn, brand_id: str, cycle_id: str,
 # ---------------------------------------------------------------------------
 
 def replace_pending_dissents(conn: Conn, brand_id: str, cycle_id: str,
-                             dissents: list, llm_task_id: str | None, *,
-                             target_types: tuple | None = None) -> int:
+                             dissents: list, llm_task_id: str | None, *, target_types: tuple | None = None) -> int:
     """整批換掉這一輪還沒被老闆處理過（pending）的舊異議；已經決定過的（adopted/rejected）
     留著不動——那是事後驗證用的歷史紀錄，不因為重新生成方案而消失。
 
@@ -493,6 +494,7 @@ def replace_pending_dissents(conn: Conn, brand_id: str, cycle_id: str,
     （app/ads/reading.py 的回購校正異議獨立一批，不能清掉還沒被決定的方案異議——issue #39）。
     """
     sql = "DELETE FROM rule_dissent WHERE brand_id = %s AND campaign_cycle_id = %s AND status = 'pending'"
+    org_id = bi.get_brand(conn, brand_id)["org_id"]
     params: list = [brand_id, cycle_id]
     if target_types:
         placeholders = ",".join("%s" for _ in target_types)
@@ -504,7 +506,7 @@ def replace_pending_dissents(conn: Conn, brand_id: str, cycle_id: str,
         conn.execute(
             "INSERT INTO rule_dissent (id, org_id, brand_id, campaign_cycle_id, target_type, suggestion,"
             " reason, llm_task_id, status, created_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'pending', %s)",
-            (new_id("dsn"), DEV_ORG_ID, brand_id, cycle_id, d["target_type"], d["suggestion"], d["reason"],
+            (new_id("dsn"), org_id, brand_id, cycle_id, d["target_type"], d["suggestion"], d["reason"],
              llm_task_id, ts),
         )
     conn.commit()
@@ -539,7 +541,7 @@ def decide_dissent(conn: Conn, brand_id: str, cycle_id: str, dissent_id: str,
         (decision, actor, ts, dissent_id),
     )
     after = {**before, "status": decision, "decided_by": actor, "decided_at": ts}
-    write_audit(conn, brand_id=brand_id, entity_type="rule_dissent", entity_id=dissent_id,
+    write_audit(conn, org_id=bi.get_brand(conn, brand_id)["org_id"], brand_id=brand_id, entity_type="rule_dissent", entity_id=dissent_id,
                 action="decide", actor=actor, before=before, after=after)
     conn.commit()
     return after

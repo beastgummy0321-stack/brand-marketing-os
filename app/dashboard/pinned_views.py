@@ -19,6 +19,7 @@ from app.ads import pacing as ads_pacing
 from app.ads import performance as ads_performance
 from app.ads import reading as ads_reading
 from app.ads.routes_common import _hub_stage_info
+from app.brand_intelligence import repository as bi_repo
 from app.core import rule_cards
 from app.core import settings as core_settings
 from app.dashboard.repository import _latest_cycle
@@ -52,7 +53,11 @@ def get_pinned_views(conn, brand_id: str) -> list:
 
 
 def set_pinned_views(conn, brand_id: str, views: list) -> None:
-    core_settings.set_setting(conn, _setting_key(brand_id), json.dumps(views, ensure_ascii=False))
+    brand = bi_repo.get_brand(conn, brand_id)
+    assert brand is not None, f"找不到品牌：{brand_id}"
+    org_id = brand["org_id"]
+    core_settings.set_setting(
+        conn, _setting_key(brand_id), json.dumps(views, ensure_ascii=False), org_id=org_id)
 
 
 def _ad_overview(conn, brand_id: str, cycle: dict) -> dict:

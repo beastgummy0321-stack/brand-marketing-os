@@ -21,9 +21,10 @@ API 軌接上後不用改這裡一行。
 from app.ads import performance as ads_performance
 from app.ads import repository as ads_repo
 from app.ads.guardrails import check_data_sanity
+from app.brand_intelligence import repository as bi
 from app.core import rule_cards
 from app.core.audit import write_audit
-from app.core.db import DEV_ORG_ID, jsonb, new_id, now_utc
+from app.core.db import jsonb, new_id, now_utc
 
 KIND_LABELS = {"day3": "第 3 天健康檢查", "day7": "第 7 天健康檢查"}
 
@@ -149,15 +150,16 @@ def run(conn, brand_id: str, cycle_id: str, kind: str, *, actor: str,
 
 
 def _store(conn, brand_id: str, cycle_id: str, kind: str, result: dict, actor: str) -> dict:
+    org_id = bi.get_brand(conn, brand_id)["org_id"]
     ts = now_utc()
     checkpoint_id = new_id("chk")
     conn.execute(
         "INSERT INTO cycle_checkpoint (id, org_id, brand_id, campaign_cycle_id, kind, result_json,"
         " status, created_at, updated_at) VALUES (%s, %s, %s, %s, %s, %s, 'active', %s, %s)",
-        (checkpoint_id, DEV_ORG_ID, brand_id, cycle_id, kind,
+        (checkpoint_id, org_id, brand_id, cycle_id, kind,
          jsonb(result), ts, ts),
     )
-    write_audit(conn, brand_id=brand_id, entity_type="cycle_checkpoint", entity_id=checkpoint_id,
+    write_audit(conn, org_id=org_id, brand_id=brand_id, entity_type="cycle_checkpoint", entity_id=checkpoint_id,
                 action="create", actor=actor, before=None, after=result)
     conn.commit()
     result["id"] = checkpoint_id
@@ -196,7 +198,8 @@ def set_status(conn, brand_id: str, checkpoint_id: str, *, status: str, actor: s
     conn.execute("UPDATE cycle_checkpoint SET status = %s, updated_at = %s WHERE id = %s",
                 (status, ts, checkpoint_id))
     after = _row(conn, brand_id, checkpoint_id)
-    write_audit(conn, brand_id=brand_id, entity_type="cycle_checkpoint", entity_id=checkpoint_id,
+    org_id = bi.get_brand(conn, brand_id)["org_id"]
+    write_audit(conn, org_id=org_id, brand_id=brand_id, entity_type="cycle_checkpoint", entity_id=checkpoint_id,
                 action="archive" if status == "archived" else "restore", actor=actor,
                 before=before, after=after)
     conn.commit()
@@ -210,6 +213,7 @@ def delete(conn, brand_id: str, checkpoint_id: str, *, actor: str) -> None:
         raise ValueError(f"找不到檢查點紀錄：{checkpoint_id}")
     conn.execute("DELETE FROM cycle_checkpoint WHERE id = %s AND brand_id = %s",
                 (checkpoint_id, brand_id))
-    write_audit(conn, brand_id=brand_id, entity_type="cycle_checkpoint", entity_id=checkpoint_id,
+    org_id = bi.get_brand(conn, brand_id)["org_id"]
+    write_audit(conn, org_id=org_id, brand_id=brand_id, entity_type="cycle_checkpoint", entity_id=checkpoint_id,
                 action="delete", actor=actor, before=before, after=None)
     conn.commit()

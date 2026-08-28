@@ -52,29 +52,33 @@ def has_ended(conn) -> bool:
     return core_settings.get_setting(conn, FLAG_SETTING) is not None
 
 
-def check_and_flag(conn, *, actual_spend: float, actor: str,
+def check_and_flag(conn, *, org_id: str = "org_dev", actual_spend: float, actor: str,
                    cycle_id: str | None = None) -> bool:
     """檔期結算完成時呼叫（app/ads/reading.finalize()）。已經結束過就什麼都不做；
     第一次「結算完成且實際花費 > 0」才設旗標、寫稽核紀錄、進打斷佇列。
 
     這是全系統唯一會把旗標設成「已結束」的地方，也是判定本身（決策 0037 配套檢查）。
     回傳這次呼叫是不是真的觸發了旗標翻轉，方便呼叫端測試，不影響外部行為。
+
+    org_id（票 03-1）：旗標本身仍是全站單一旗標（不分品牌），但 app_setting／interrupt
+    兩張表都是 NOT NULL org_id——呼叫端（app/ads/reading.py）已經有 brand_id，反查
+    org_id 傳進來；app.core 不得 import app.brand_intelligence 自己反查（LAYER_ORDER）。
     """
     if has_ended(conn):
         return False
     if not actual_spend or actual_spend <= 0:
         return False
 
-    core_settings.set_setting(conn, FLAG_SETTING, now_iso())
+    core_settings.set_setting(conn, FLAG_SETTING, now_iso(), org_id=org_id)
     write_audit(
-        conn, brand_id=None, entity_type="prototype_phase", entity_id="system",
+        conn, org_id=org_id, brand_id=None, entity_type="prototype_phase", entity_id="system",
         action="ended", actor=actor,
         after={"actual_spend": actual_spend, "triggered_by_cycle_id": cycle_id,
                "exemptions": EXEMPTIONS},
         reason="第一次用真錢跑完一期（決策 0037 第一節第 1 條）",
     )
     core_interrupts.enqueue(
-        conn, category="prototype_phase_ended",
+        conn, org_id=org_id, category="prototype_phase_ended",
         dedupe_key="prototype_phase_ended",
         message=_REMINDER_MESSAGE, brand_id=None,
         action_url="/app/inbox",

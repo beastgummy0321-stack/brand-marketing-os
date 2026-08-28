@@ -23,8 +23,9 @@ import io
 from datetime import date, timedelta
 
 from app.ads import performance as ads_performance
+from app.brand_intelligence import repository as bi_repo
 from app.core.audit import write_audit
-from app.core.db import DEV_ORG_ID, new_id, now_utc
+from app.core.db import new_id, now_utc
 
 # 蝦皮賣家中心「訂單」匯出常見欄名（未經真實檔驗證，見檔頭誠實標注）。order_sn 是
 # 唯一識別欄，跟 EasyStore 的 order_number 別名表刻意不重疊，分派層才分得清兩種檔案。
@@ -114,6 +115,7 @@ def save_shopee_rows(conn, brand_id: str, rows: list, *, source: str, actor: str
     跟 app/orders/repository.save_orders 對 EasyStore 訂單的處理方式一致。"""
     if not actor or not actor.strip():
         raise ValueError("actor 為必填")
+    org_id = bi_repo.get_brand(conn, brand_id)["org_id"]
     result = result or ShopeeImportResult()
     ts = now_utc()
     batch_id = import_batch_id or f"shopee_{ts}"
@@ -137,12 +139,12 @@ def save_shopee_rows(conn, brand_id: str, rows: list, *, source: str, actor: str
                 "INSERT INTO shopee_report_row (id, org_id, brand_id, order_sn, order_date, revenue,"
                 " voucher_code, source, import_batch_id, created_at, updated_at)"
                 " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
-                (new_id("shp"), DEV_ORG_ID, brand_id, order_sn, row.get("order_date"), row.get("revenue"),
+                (new_id("shp"), org_id, brand_id, order_sn, row.get("order_date"), row.get("revenue"),
                  row.get("voucher_code"), source, batch_id, ts, ts),
             )
             result.imported += 1
 
-    write_audit(conn, brand_id=brand_id, entity_type="shopee_report_row", entity_id=brand_id,
+    write_audit(conn, org_id=org_id, brand_id=brand_id, entity_type="shopee_report_row", entity_id=brand_id,
                 action="import_shopee", actor=actor,
                 before=None, after={"imported": result.imported, "updated": result.updated})
     conn.commit()
@@ -199,14 +201,15 @@ def record_pharmacy_batch(conn, brand_id: str, *, batch_date: str, quantity: flo
     if not actor or not actor.strip():
         raise ValueError("actor 為必填")
     ts = now_utc()
+    org_id = bi_repo.get_brand(conn, brand_id)["org_id"]
     batch_id = new_id("phb")
     conn.execute(
         "INSERT INTO pharmacy_batch (id, org_id, brand_id, batch_date, quantity, note, created_by,"
         " created_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
-        (batch_id, DEV_ORG_ID, brand_id, batch_date.strip(), quantity,
+        (batch_id, org_id, brand_id, batch_date.strip(), quantity,
          note.strip() if note and note.strip() else None, actor, ts),
     )
-    write_audit(conn, brand_id=brand_id, entity_type="pharmacy_batch", entity_id=batch_id,
+    write_audit(conn, org_id=org_id, brand_id=brand_id, entity_type="pharmacy_batch", entity_id=batch_id,
                 action="create", actor=actor, before=None,
                 after={"batch_date": batch_date, "quantity": quantity})
     conn.commit()
@@ -256,6 +259,7 @@ def set_shopee_code(conn, brand_id: str, cycle_id: str, *, code: str | None = No
     if not actor or not actor.strip():
         raise ValueError("actor 為必填")
     ts = now_utc()
+    org_id = bi_repo.get_brand(conn, brand_id)["org_id"]
     existing = conn.execute(
         "SELECT * FROM cycle_shopee_code WHERE brand_id = %s AND campaign_cycle_id = %s",
         (brand_id, cycle_id),
@@ -274,9 +278,9 @@ def set_shopee_code(conn, brand_id: str, cycle_id: str, *, code: str | None = No
             "INSERT INTO cycle_shopee_code (id, org_id, brand_id, campaign_cycle_id, code,"
             " redemption_count, updated_by, created_at, updated_at)"
             " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
-            (row_id, DEV_ORG_ID, brand_id, cycle_id, code, redemption_count, actor, ts, ts),
+            (row_id, org_id, brand_id, cycle_id, code, redemption_count, actor, ts, ts),
         )
-    write_audit(conn, brand_id=brand_id, entity_type="cycle_shopee_code", entity_id=row_id,
+    write_audit(conn, org_id=org_id, brand_id=brand_id, entity_type="cycle_shopee_code", entity_id=row_id,
                 action="set", actor=actor, before=None,
                 after={"code": code, "redemption_count": redemption_count})
     conn.commit()

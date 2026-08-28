@@ -254,8 +254,10 @@ def _flag_unresolved_hypotheses(conn, brand_id: str, cycle_id: str) -> None:
               if h["status"] in PENDING_HYPOTHESIS_STATUSES]
     if not pending:
         return
+    brand = bi.get_brand(conn, brand_id)
+    assert brand is not None, f"找不到品牌：{brand_id}"
     core_interrupts.enqueue(
-        conn, category="hypothesis_unresolved",
+        conn, org_id=brand["org_id"], category="hypothesis_unresolved",
         dedupe_key=f"hypothesis_unresolved:{cycle_id}",
         message="這期還有策略假設沒結案，去看看", brand_id=brand_id, campaign_cycle_id=cycle_id,
         action_url=f"/app/brands/{brand_id}/campaigns/{cycle_id}",

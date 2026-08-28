@@ -20,8 +20,9 @@
 
 from app.ads import performance as ads_performance
 from app.ads import repository as ads_repo
+from app.brand_intelligence import repository as bi
 from app.core.audit import write_audit
-from app.core.db import DEV_ORG_ID, new_id, now_utc
+from app.core.db import new_id, now_utc
 
 ONE_TIME_ITEMS = {
     "pixel_confirmed": {
@@ -205,6 +206,10 @@ def completeness(conn, brand_id: str, cycle_id: str) -> dict:
 
 
 def _set_brand_item(conn, brand_id: str, item_key: str, checked: bool, actor: str) -> None:
+    brand = bi.get_brand(conn, brand_id)
+    if brand is None:
+        raise ValueError(f"找不到品牌：{brand_id}")
+    org_id = brand["org_id"]
     ts = now_utc()
     conn.execute(
         "INSERT INTO brand_checklist_item (id, org_id, brand_id, item_key, checked, checked_by,"
@@ -212,10 +217,10 @@ def _set_brand_item(conn, brand_id: str, item_key: str, checked: bool, actor: st
         " ON CONFLICT(brand_id, item_key) DO UPDATE SET checked = excluded.checked,"
         " checked_by = excluded.checked_by, checked_at = excluded.checked_at,"
         " updated_at = excluded.updated_at",
-        (new_id("bcl"), DEV_ORG_ID, brand_id, item_key, bool(checked),
+        (new_id("bcl"), org_id, brand_id, item_key, bool(checked),
          actor if checked else None, ts if checked else None, ts),
     )
-    write_audit(conn, brand_id=brand_id, entity_type="brand_checklist_item", entity_id=item_key,
+    write_audit(conn, org_id=org_id, brand_id=brand_id, entity_type="brand_checklist_item", entity_id=item_key,
                 action="check" if checked else "uncheck", actor=actor, before=None,
                 after={"checked": checked})
     conn.commit()
@@ -237,6 +242,10 @@ def set_qa_launch_item(conn, brand_id: str, item_key: str, checked: bool, actor:
 
 def set_cycle_item(conn, brand_id: str, cycle_id: str, item_key: str, checked: bool,
                    actor: str) -> None:
+    brand = bi.get_brand(conn, brand_id)
+    if brand is None:
+        raise ValueError(f"找不到品牌：{brand_id}")
+    org_id = brand["org_id"]
     if item_key not in CYCLE_ITEMS:
         raise ValueError(f"沒有這個檢查項目：{item_key}")
     ts = now_utc()
@@ -246,10 +255,10 @@ def set_cycle_item(conn, brand_id: str, cycle_id: str, item_key: str, checked: b
         " ON CONFLICT(campaign_cycle_id, item_key) DO UPDATE SET checked = excluded.checked,"
         " checked_by = excluded.checked_by, checked_at = excluded.checked_at,"
         " updated_at = excluded.updated_at",
-        (new_id("ccl"), DEV_ORG_ID, brand_id, cycle_id, item_key, bool(checked),
+        (new_id("ccl"), org_id, brand_id, cycle_id, item_key, bool(checked),
          actor if checked else None, ts if checked else None, ts),
     )
-    write_audit(conn, brand_id=brand_id, entity_type="cycle_checklist_item",
+    write_audit(conn, org_id=org_id, brand_id=brand_id, entity_type="cycle_checklist_item",
                 entity_id=f"{cycle_id}.{item_key}", actor=actor, before=None,
                 action="check" if checked else "uncheck", after={"checked": checked})
     conn.commit()

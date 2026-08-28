@@ -74,6 +74,7 @@ def create_draft(conn: db.Conn, brand_id: str, description: str,
     """
     if cost_limit is None:
         cost_limit = coresettings.get_intake_budget_limit(conn)
+    org_id = bi_repo.get_brand(conn, brand_id)["org_id"]
     draft_id = db.new_id("idr")
     ts = db.now_utc()
     conn.execute(
@@ -82,7 +83,7 @@ def create_draft(conn: db.Conn, brand_id: str, description: str,
             photos_json, research_urls_json, cost_limit, llm_task_refs_json,
             created_at, updated_at
         ) VALUES (%s, %s, %s, 'draft', 2, 0, %s, %s, %s, %s, '[]', %s, %s)""",
-        (draft_id, db.DEV_ORG_ID, brand_id, description, db.jsonb(photos),
+        (draft_id, org_id, brand_id, description, db.jsonb(photos),
          db.jsonb(research_urls), cost_limit, ts, ts),
     )
     conn.commit()
@@ -275,6 +276,7 @@ def create_items(conn: db.Conn, brand_id: str, draft_id: str, rows: list) -> lis
     """
 
     ts = db.now_utc()
+    org_id = bi_repo.get_brand(conn, brand_id)["org_id"]
     try:
         conn.execute(
             "DELETE FROM intake_item WHERE intake_draft_id = %s AND brand_id = %s AND outcome = 'pending'",
@@ -288,7 +290,7 @@ def create_items(conn: db.Conn, brand_id: str, draft_id: str, rows: list) -> lis
                     id, org_id, intake_draft_id, brand_id, row_no, raw_row, kind, category, title,
                     content, scope_raw, evidence_source, outcome, created_at
                 ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'pending', %s)""",
-                (db.new_id("iit"), db.DEV_ORG_ID, draft_id, brand_id, i,
+                (db.new_id("iit"), org_id, draft_id, brand_id, i,
                  r.get("raw_row") or " | ".join([r["kind"], r["category"], r["title"],
                                                   r["content"], r["scope"], r["evidence"]]),
                  kind, category, r["title"], r["content"], r["scope"], r["evidence"], ts),
@@ -497,7 +499,8 @@ def resolve_item(conn: db.Conn, brand_id: str, item_id: str, outcome: str,
          brand_id, item_id),
     )
     write_audit(
-        conn, brand_id=brand_id, entity_type="intake_item", entity_id=item_id,
+        conn, org_id=bi_repo.get_brand(conn, brand_id)["org_id"],
+        brand_id=brand_id, entity_type="intake_item", entity_id=item_id,
         action={"confirmed": "confirm", "pending_saved": "save_pending", "discarded": "discard"}[outcome],
         actor=processed_by, before={"outcome": "pending"},
         after={"outcome": outcome, "target_table": target_table, "target_id": target_id},
@@ -584,7 +587,8 @@ def update_resolved_item(conn: db.Conn, brand_id: str, item_id: str, *,
     after = _item_to_display(after_row)
     if changed:
         write_audit(
-            conn, brand_id=brand_id, entity_type="intake_item", entity_id=item_id,
+            conn, org_id=bi_repo.get_brand(conn, brand_id)["org_id"],
+            brand_id=brand_id, entity_type="intake_item", entity_id=item_id,
             action="update", actor=processed_by, before=before, after=after,
             reason="人工編輯已落檔內容（決策 0013）",
         )
@@ -623,7 +627,8 @@ def _save_truth_card_move(conn: db.Conn, brand_id: str, item: dict, *,
     ).fetchone()
     after = _item_to_display(row)
     write_audit(
-        conn, brand_id=brand_id, entity_type="intake_item", entity_id=item["id"],
+        conn, org_id=bi_repo.get_brand(conn, brand_id)["org_id"],
+        brand_id=brand_id, entity_type="intake_item", entity_id=item["id"],
         action="move", actor=processed_by, before=before, after={**after, "target": target},
         reason="使用者搬動真相卡格位",
     )

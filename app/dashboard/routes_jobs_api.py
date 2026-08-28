@@ -10,7 +10,7 @@
 
 from datetime import UTC, datetime
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 
 from app.ads.routes_onboarding_api import active_jobs as onboarding_active_jobs
 from app.brand_intelligence import repository as bi
@@ -19,6 +19,7 @@ from app.brand_web.routes_products import active_jobs as product_research_active
 from app.brand_web.routes_report_api import active_jobs as brand_report_active_jobs
 from app.intake.routes_api import active_jobs as intake_active_jobs
 from app.shared import web
+from app.shared.web import require_actor
 
 router = APIRouter()
 
@@ -29,7 +30,11 @@ def _brand_name(conn, brand_id: str) -> str:
 
 
 @router.get("/api/jobs/active")
-async def jobs_active():
+async def jobs_active(request: Request):
+    # ponytail: 只要求登入，不做組織過濾——背景工作清單目前是行程內記憶體 registry
+    # （app.brand_web/app.intake/app.ads 各自的 JobRegistry），沒有 org_id 概念可過濾；
+    # 真的要分組織需要幫每個 registry 補 org_id，這是比本票範圍更大的改動，先報告。
+    require_actor(request)
     conn = web.conn
     active = (
         intake_active_jobs() + product_research_active_jobs() + library_active_jobs()

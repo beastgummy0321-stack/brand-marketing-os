@@ -30,7 +30,7 @@ from app.ads import performance_batches
 from app.ads import reading as ads_reading
 from app.ads import repository as ads_repo
 from app.brand_intelligence import repository as bi
-from app.core.db import DEV_ORG_ID, new_id, now_utc
+from app.core.db import new_id, now_utc
 
 # 產業通例值。只在這個品牌完全沒有歷史時使用，畫面必須標明來源。
 INDUSTRY_CTR = 0.012          # 點擊率 1.2%
@@ -94,6 +94,10 @@ def _average_price(conn, brand_id: str, cycle_id: str) -> float:
 
 def generate(conn, brand_id: str, cycle_id: str, actor: str) -> tuple:
     """替模擬檔期產生一筆假成效。成功回 (True, 來源說明)。"""
+    brand = bi.get_brand(conn, brand_id)
+    if brand is None:
+        raise ValueError(f"找不到品牌：{brand_id}")
+    org_id = brand["org_id"]
     cycle = ads_repo.get_cycle(conn, brand_id, cycle_id)
     if cycle is None:
         raise ValueError("找不到廣告檔期")
@@ -120,7 +124,7 @@ def generate(conn, brand_id: str, cycle_id: str, actor: str) -> tuple:
         " currency, impressions, clicks, spend, conversions, revenue, reconciled, source,"
         " import_batch_id, quarantined, created_at)"
         " VALUES (%s, %s, %s, %s, NULL, 'meta', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, true, 'simulated', %s, false, %s)",
-        (new_id("psn"), DEV_ORG_ID, brand_id, cycle_id, cycle["start_date"], cycle["end_date"],
+        (new_id("psn"), org_id, brand_id, cycle_id, cycle["start_date"], cycle["end_date"],
          cycle["end_date"], ts, cycle["currency"], totals["impressions"], totals["clicks"],
          totals["spend"], totals["conversions"], totals["revenue"], f"sim_{ts}", ts),
     )

@@ -34,7 +34,7 @@ from app.ads import repository as ads_repo
 from app.brand_intelligence import repository as bi
 from app.core import settings as coresettings
 from app.core.audit import write_audit
-from app.core.db import DEV_ORG_ID, jsonb, new_id, now_utc
+from app.core.db import jsonb, new_id, now_utc
 from app.llm import context_compiler, gateway, methodology, pricing, providers
 
 PROVIDER = providers.AnthropicProvider()  # 測試整包換掉
@@ -571,6 +571,7 @@ def generate_options(conn, brand_id: str, cycle_id: str, actor: str, *,
 
 def _persist_options(conn, brand_id: str, cycle_id: str, options: list, llm_task_id: str,
                      methodology_missing: list, actor: str) -> None:
+    org_id = bi.get_brand(conn, brand_id)["org_id"]
     ts = now_utc()
     conn.execute(
         "DELETE FROM campaign_plan_option WHERE brand_id = %s AND campaign_cycle_id = %s",
@@ -583,7 +584,7 @@ def _persist_options(conn, brand_id: str, cycle_id: str, options: list, llm_task
         conn.execute(
             "INSERT INTO campaign_plan_option (id, org_id, campaign_cycle_id, brand_id, option_index,"
             " is_recommended, option_json, created_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
-            (new_id("cpo"), DEV_ORG_ID, cycle_id, brand_id, index, bool(option["is_recommended"]),
+            (new_id("cpo"), org_id, cycle_id, brand_id, index, bool(option["is_recommended"]),
              jsonb(payload), ts),
         )
     ads_repo.update_cycle_status(conn, brand_id, cycle_id, status="PLAN_SELECT", actor=actor)
@@ -650,6 +651,7 @@ def select_option(conn, brand_id: str, cycle_id: str, actor: str,
 
 def _persist(conn, brand_id: str, cycle: dict, plan: dict, actor: str) -> None:
     """把選定的方案寫成正式計畫新版本，並建立對應的測試格與策略假設。"""
+    org_id = bi.get_brand(conn, brand_id)["org_id"]
     cycle_id = cycle["id"]
     version = (cycle["plan_version"] or 0) + 1
     ts = now_utc()
@@ -657,7 +659,7 @@ def _persist(conn, brand_id: str, cycle: dict, plan: dict, actor: str) -> None:
     conn.execute(
         "INSERT INTO campaign_plan (id, org_id, campaign_cycle_id, brand_id, plan_version, plan_json,"
         " status, approved_by, approved_at, created_at) VALUES (%s, %s, %s, %s, %s, %s, %s, NULL, NULL, %s)",
-        (new_id("cpl"), DEV_ORG_ID, cycle_id, brand_id, version,
+        (new_id("cpl"), org_id, cycle_id, brand_id, version,
          jsonb(plan), "draft", ts),
     )
 
@@ -680,7 +682,7 @@ def _persist(conn, brand_id: str, cycle: dict, plan: dict, actor: str) -> None:
         conn.execute(
             "INSERT INTO experiment_cell (id, org_id, campaign_cycle_id, brand_id, product_id, audience,"
             " creative_angle, created_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
-            (new_id("exc"), DEV_ORG_ID, cycle_id, brand_id, product_id, audience_text,
+            (new_id("exc"), org_id, cycle_id, brand_id, product_id, audience_text,
              angle["title"], ts),
         )
 
@@ -695,7 +697,7 @@ def _persist(conn, brand_id: str, cycle: dict, plan: dict, actor: str) -> None:
             "INSERT INTO campaign_cycle_hypothesis (org_id, campaign_cycle_id,"
             " strategy_hypothesis_id, brand_id, role) VALUES (%s, %s, %s, %s, %s)"
             " ON CONFLICT (campaign_cycle_id, strategy_hypothesis_id) DO NOTHING",
-            (DEV_ORG_ID, cycle_id, created["id"], brand_id, hypothesis["type"]),
+            (org_id, cycle_id, created["id"], brand_id, hypothesis["type"]),
         )
 
     conn.execute(
@@ -760,7 +762,8 @@ def rename_angle(conn, brand_id: str, cycle_id: str, cell: dict, creative_angle:
 
     conn.execute("UPDATE experiment_cell SET creative_angle = %s WHERE id = %s",
                 (creative_angle, cell["id"]))
-    write_audit(conn, brand_id=brand_id, entity_type="experiment_cell", entity_id=cell["id"],
+    org_id = bi.get_brand(conn, brand_id)["org_id"]
+    write_audit(conn, org_id=org_id, brand_id=brand_id, entity_type="experiment_cell", entity_id=cell["id"],
                action="rename_angle", actor=actor,
                before={"creative_angle": cell["creative_angle"]},
                after={"creative_angle": creative_angle})

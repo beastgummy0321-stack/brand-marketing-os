@@ -7,11 +7,12 @@ from app.ads import reading as ads_reading
 from app.ads import reading_assets as ads_reading_assets
 from app.ads import repository as ads_repo
 from app.ads import settlement as ads_settlement
+from app.brand_intelligence import repository as bi
 from app.core import interrupts as core_interrupts
 from app.core import orchestrator as core_orchestrator
 from app.core import rule_cards
 from app.core.audit import write_audit
-from app.core.db import DEV_ORG_ID, jsonb, new_id, now_utc
+from app.core.db import jsonb, new_id, now_utc
 
 RECOMMENDATION_TYPE = "weekly_proposal"
 # 票 F9：結案時還沒被使用者處理的 GENERATED 卡的終態——`recommendation.status` 沒有
@@ -383,8 +384,11 @@ def archive_on_close(conn, brand_id: str, cycle_id: str, actor: str) -> dict:
         " AND campaign_cycle_id = %s AND recommendation_type = %s AND status = 'GENERATED'",
         (ARCHIVED_ON_CLOSE, now_utc(), brand_id, cycle_id, RECOMMENDATION_TYPE),
     )
+    _brand = bi.get_brand(conn, brand_id)
+    assert _brand is not None, f"找不到品牌：{brand_id}"
     interrupt_id = core_interrupts.enqueue(
-        conn, category="weekly_proposal_archived_on_close",
+        conn, org_id=_brand["org_id"],
+        category="weekly_proposal_archived_on_close",
         dedupe_key=f"weekly_proposal_archived_on_close:{cycle_id}",
         message=f"{cards['count']} 張建議卡因檔期結案歸檔",
         brand_id=brand_id, campaign_cycle_id=cycle_id,
@@ -396,6 +400,10 @@ def archive_on_close(conn, brand_id: str, cycle_id: str, actor: str) -> dict:
 
 def generate(conn, brand_id: str, cycle_id: str, *, enqueue_ready: bool = True) -> list:
     """依最新判讀建卡；保留已產生卡，並略過已核可／已執行的同動作同目標。"""
+    brand = bi.get_brand(conn, brand_id)
+    if brand is None:
+        raise ValueError(f"找不到品牌：{brand_id}")
+    org_id = brand["org_id"]
     if ads_repo.get_cycle(conn, brand_id, cycle_id) is None:
         raise ValueError("找不到廣告檔期")
     existing = list_cards(conn, brand_id, cycle_id)
@@ -437,13 +445,13 @@ def generate(conn, brand_id: str, cycle_id: str, *, enqueue_ready: bool = True) 
             "INSERT INTO recommendation (id, org_id, brand_id, campaign_cycle_id, product_id,"
             " performance_reading_id, recommendation_type, content_json, status, created_at,"
             " updated_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'GENERATED', %s, %s)",
-            (new_id("rec"), DEV_ORG_ID, brand_id, cycle_id, card["product_id"],
+            (new_id("rec"), org_id, brand_id, cycle_id, card["product_id"],
              card["performance_reading_id"], RECOMMENDATION_TYPE,
              jsonb(content), ts, ts),
         )
     if cards and enqueue_ready:
         core_interrupts.enqueue(
-            conn, category="weekly_proposal_ready",
+            conn, org_id=org_id, category="weekly_proposal_ready",
             dedupe_key=f"weekly_proposal_ready:{cycle_id}",
             message=f"{len(cards)} 張提案等你核可",
             brand_id=brand_id, campaign_cycle_id=cycle_id,
@@ -556,6 +564,10 @@ def cycle_id_for_recommendation(conn, brand_id: str, recommendation_id: str) -> 
 def approve_card(conn, brand_id: str, cycle_id: str, recommendation_id: str, *,
                  actor: str, confirmed_amount=None) -> dict:
     """核可單張卡；花錢卡沒有正數確認金額就拒絕。"""
+    brand = bi.get_brand(conn, brand_id)
+    if brand is None:
+        raise ValueError(f"找不到品牌：{brand_id}")
+    org_id = brand["org_id"]
     row = conn.execute(
         "SELECT * FROM recommendation WHERE id = %s AND brand_id = %s AND campaign_cycle_id = %s"
         " AND recommendation_type = %s",
@@ -585,7 +597,8 @@ def approve_card(conn, brand_id: str, cycle_id: str, recommendation_id: str, *,
         (jsonb(content), ts, recommendation_id),
     )
     write_audit(
-        conn, brand_id=brand_id, entity_type="recommendation", entity_id=recommendation_id,
+        conn, org_id=org_id, brand_id=brand_id, entity_type="recommendation",
+        entity_id=recommendation_id,
         action="accept_weekly_proposal", actor=actor,
         before={"status": row["status"]}, after={"status": "ACCEPTED"},
     )
@@ -597,6 +610,10 @@ def approve_card(conn, brand_id: str, cycle_id: str, recommendation_id: str, *,
 
 def skip(conn, brand_id: str, cycle_id: str, recommendation_id: str, *, actor: str) -> dict:
     """略過單張卡；重送同一張維持略過。"""
+    brand = bi.get_brand(conn, brand_id)
+    if brand is None:
+        raise ValueError(f"找不到品牌：{brand_id}")
+    org_id = brand["org_id"]
     row = conn.execute(
         "SELECT * FROM recommendation WHERE id = %s AND brand_id = %s AND campaign_cycle_id = %s"
         " AND recommendation_type = %s",
@@ -613,7 +630,8 @@ def skip(conn, brand_id: str, cycle_id: str, recommendation_id: str, *, actor: s
         (now_utc(), recommendation_id),
     )
     write_audit(
-        conn, brand_id=brand_id, entity_type="recommendation", entity_id=recommendation_id,
+        conn, org_id=org_id, brand_id=brand_id, entity_type="recommendation",
+        entity_id=recommendation_id,
         action="skip_weekly_proposal", actor=actor,
         before={"status": row["status"]}, after={"status": "REJECTED"},
     )
@@ -626,6 +644,10 @@ def skip(conn, brand_id: str, cycle_id: str, recommendation_id: str, *, actor: s
 
 def approve(conn, brand_id: str, cycle_id: str, *, actor: str) -> dict:
     """一鍵核可省錢與產素材卡；花錢卡保留給逐張確認金額。"""
+    brand = bi.get_brand(conn, brand_id)
+    if brand is None:
+        raise ValueError(f"找不到品牌：{brand_id}")
+    org_id = brand["org_id"]
     if ads_repo.get_cycle(conn, brand_id, cycle_id) is None:
         raise ValueError("找不到廣告檔期")
     rows = conn.execute(
@@ -646,7 +668,7 @@ def approve(conn, brand_id: str, cycle_id: str, *, actor: str) -> dict:
             (ts, row["id"]),
         )
         write_audit(
-            conn, brand_id=brand_id, entity_type="recommendation", entity_id=row["id"],
+            conn, org_id=org_id, brand_id=brand_id, entity_type="recommendation", entity_id=row["id"],
             action="accept_weekly_proposal", actor=actor,
             before={"status": row["status"]}, after={"status": "ACCEPTED"},
         )
@@ -674,13 +696,18 @@ def complete(conn, brand_id: str, cycle_id: str, recommendation_id: str, *, acto
     if row["status"] != "ACCEPTED":
         raise ValueError("這張週提案卡還沒核可")
 
+    brand = bi.get_brand(conn, brand_id)
+    if brand is None:
+        raise ValueError(f"找不到品牌：{brand_id}")
+    org_id = brand["org_id"]
     ts = now_utc()
     conn.execute(
         "UPDATE recommendation SET status = 'APPLIED', updated_at = %s WHERE id = %s",
         (ts, recommendation_id),
     )
     write_audit(
-        conn, brand_id=brand_id, entity_type="recommendation", entity_id=recommendation_id,
+        conn, org_id=org_id, brand_id=brand_id, entity_type="recommendation",
+        entity_id=recommendation_id,
         action="apply_weekly_proposal", actor=actor,
         before={"status": "ACCEPTED"}, after={"status": "APPLIED"},
     )

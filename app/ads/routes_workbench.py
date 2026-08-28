@@ -12,7 +12,7 @@
 decision='adopted'），跟 theme_repository.adopt_theme() 寫入的那一種同一套資料，不重算。
 """
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 
 import app.shared.web as main_mod
 from app.ads import plan as ads_plan
@@ -53,11 +53,12 @@ def _cell_count(conn, brand_id: str, cycle_id: str) -> int:
 
 
 @router.get("/brands/{brand_id}/workbench/tasks")
-async def workbench_tasks(brand_id: str):
+async def workbench_tasks(brand_id: str, request: Request):
     """畫面 1 任務卡：計畫已核准＋素材未完成的檔期各出一張卡（不含已封存檔期，比照
     ads_repo.list_cycles() 預設行為）。零新資料表，全部從既有表衍生，沒有任務回空清單。
     """
-    main_mod.require_brand(brand_id)
+    actor = main_mod.require_actor(request)
+    main_mod.require_brand(brand_id, actor)
     conn = main_mod.conn
 
     tasks = []

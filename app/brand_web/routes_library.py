@@ -216,8 +216,9 @@ def _brand_profile_shape(brand_id: str, brand: dict) -> dict:
 
 
 @router.get("/api/library/brands/{brand_id}")
-async def library_bundle(brand_id: str):
-    brand = require_brand(brand_id)
+async def library_bundle(request: Request, brand_id: str):
+    actor = require_actor(request)
+    brand = require_brand(brand_id, actor)
     facts = (repo.list_brand_facts(web.conn, brand_id, status="confirmed")
              + repo.list_brand_facts(web.conn, brand_id, status="pending"))
     data = {
@@ -241,8 +242,8 @@ async def brand_delete_api(request: Request, brand_id: str):
     呼叫（`frontend/src/lib/libraryApi.ts` `deleteBrand()`）。流程跟舊頁一致——只收已
     封存品牌、打字確認名稱、備份 → 刪品牌 → 一併刪素材圖檔資料夾（決策 0008）——回傳
     訊息含備份位置與 `delete_folder()` 的 warn，畫面刪除前先讓使用者看一眼再導頁。"""
-    brand = require_brand(brand_id)
     actor = require_actor(request)
+    brand = require_brand(brand_id, actor)
     if brand["status"] != "archived":
         return JSONResponse({"error": "要先把品牌封存，才能永久刪除。"}, status_code=400)
     try:
@@ -255,7 +256,7 @@ async def brand_delete_api(request: Request, brand_id: str):
             {"error": "輸入的名稱跟品牌名稱不一樣，請照著上面顯示的名稱再打一次。"},
             status_code=400,
         )
-    repo.delete_brand(web.conn, brand_id, actor=actor)
+    repo.delete_brand(web.conn, brand_id, actor=str(actor.user_id))
     warn = creative_assets.delete_folder(web.conn, brand_id)
     message = f"已永久刪除品牌「{brand['name']}」。{warn}".strip()
     return {"message": message}
@@ -265,9 +266,10 @@ async def brand_delete_api(request: Request, brand_id: str):
 async def asset_upload_api(request: Request, brand_id: str, asset_kind: str = Form(""),
                            product_id: str = Form(""), title: str = Form(""),
                            file: UploadFile = File(...)):
-    require_brand(brand_id)
+    actor = require_actor(request)
+    require_brand(brand_id, actor)
     ok, detail = save_official_asset(
-        brand_id, actor=require_actor(request), asset_kind=asset_kind, product_id=product_id,
+        brand_id, actor=str(actor.user_id), asset_kind=asset_kind, product_id=product_id,
         title=title, filename=file.filename or "", content=await file.read(),
     )
     if not ok:
@@ -284,7 +286,7 @@ async def channel_edit_api(request: Request, brand_id: str, channel_id: str,
                             channel_type: str = Form(""), name: str = Form(""),
                             identifier: str = Form(""), status: str = Form("active")):
     actor = require_actor(request)
-    require_brand(brand_id)
+    require_brand(brand_id, actor)
     errors = {}
     if not clean(channel_type):
         errors["channel_type"] = "請選擇渠道類型。"
@@ -297,7 +299,7 @@ async def channel_edit_api(request: Request, brand_id: str, channel_id: str,
     if errors:
         return JSONResponse({"errors": errors}, status_code=400)
     try:
-        repo.update_channel(web.conn, brand_id, channel_id, actor=actor, channel_type=channel_type,
+        repo.update_channel(web.conn, brand_id, channel_id, actor=str(actor.user_id), channel_type=channel_type,
                              name=clean(name), identifier=clean(identifier), status=status)
     except ValueError:
         raise NotFoundKind("自有渠道")
@@ -307,9 +309,9 @@ async def channel_edit_api(request: Request, brand_id: str, channel_id: str,
 @router.post("/brands/{brand_id}/channels/{channel_id}/delete")
 async def channel_delete_api(request: Request, brand_id: str, channel_id: str):
     actor = require_actor(request)
-    require_brand(brand_id)
+    require_brand(brand_id, actor)
     try:
-        repo.delete_channel(web.conn, brand_id, channel_id, actor=actor)
+        repo.delete_channel(web.conn, brand_id, channel_id, actor=str(actor.user_id))
     except ValueError:
         raise NotFoundKind("自有渠道")
     return Response(status_code=200)
@@ -378,7 +380,7 @@ def _run_customer_voice_job(job_key: str, brand_id: str, actor: str, raw_text: s
 @router.post("/api/library/brands/{brand_id}/customer-voice")
 async def customer_voice_submit(request: Request, brand_id: str):
     actor = require_actor(request)
-    require_brand(brand_id)
+    require_brand(brand_id, actor)
     try:
         body = await request.json()
     except Exception:
@@ -407,11 +409,12 @@ async def customer_voice_submit(request: Request, brand_id: str):
     _cv_jobs.start(job_key, {"status": "running", "brand_id": brand_id,
                              "started_at": datetime.now(UTC).isoformat()},
                    _run_customer_voice_job,
-                   (job_key, brand_id, actor, raw_text, source_channel, source_detail))
+                   (job_key, brand_id, str(actor.user_id), raw_text, source_channel, source_detail))
     return {"job_key": job_key}
 
 
 @router.get("/api/library/brands/{brand_id}/customer-voice/jobs/{job_key}")
-async def customer_voice_job_status(brand_id: str, job_key: str):
-    require_brand(brand_id)
+async def customer_voice_job_status(request: Request, brand_id: str, job_key: str):
+    actor = require_actor(request)
+    require_brand(brand_id, actor)
     return _cv_jobs.get(job_key, {"status": "running"})

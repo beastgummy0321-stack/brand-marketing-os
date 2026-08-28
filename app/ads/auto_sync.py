@@ -39,6 +39,14 @@ from app.intake import (
 ACTOR = "auto_sync"
 WEEKLY_ACTOR = "weekly_engine"
 
+
+def _all_org_ids(conn) -> list:
+    """票 03-1：背景排程沒有登入者、沒有 X-Org-Id 表頭可讀——這裡是唯一還「跨組織」
+    的地方，逐一取出所有組織 id，下面每個迴圈各自對一個組織跑一輪（不得寫死 org_dev）。
+    `organisation` 不屬於任何一層的保護表清單（test_architecture_boundaries.py
+    CrossLayerRawSqlScanTest），任何模組可以直接查。"""
+    return [r["id"] for r in conn.execute("SELECT id FROM organisation").fetchall()]
+
 # 打斷佇列卡片內文上限 30 全形字（app/core/interrupts.py MAX_MESSAGE_LEN）——固定短句，
 # 不把原始錯誤訊息塞進去（原始錯誤訊息通常較長且長度不可控，沿用其他模組固定短句的作法）。
 _META_FAILURE_MESSAGE = "Meta 自動同步失敗，去設定頁看看。"
@@ -55,8 +63,11 @@ def check_schedule_reminder(conn, brand_id: str, cycle_id: str, today: str):
     plan = ads_repo.derived_plan(cycle)
     reminder = pacing_curve.due_schedule_change(cycle, plan.get("daily_budgets") or [], today)
     if reminder:
+        brand = bi_repo.get_brand(conn, brand_id)
+        assert brand is not None, f"找不到品牌：{brand_id}"
         core_interrupts.enqueue(
-            conn, category="pacing_schedule_due", dedupe_key=f"schedule:{cycle_id}:{today}",
+            conn, org_id=brand["org_id"],
+            category="pacing_schedule_due", dedupe_key=f"schedule:{cycle_id}:{today}",
             brand_id=brand_id, message=reminder["copy_text"][:30],
             action_url=f"/app/brands/{brand_id}/campaigns/{cycle_id}",
         )
@@ -80,35 +91,36 @@ def run_due_readings(conn, brand_id: str, today: str) -> None:
 
 
 def run_weekly_engine(conn, *, today: str) -> dict:
-    """每個營運中品牌取最新進行中檔期，重跑判讀並產出最多三張週提案。"""
+    """每個組織底下每個營運中品牌取最新進行中檔期，重跑判讀並產出最多三張週提案。"""
     outcome = {}
-    for brand in bi_repo.list_brands(conn, status="active"):
-        brand_id = brand["id"]
-        cycle = weekly_proposals.current_cycle(conn, brand_id)
-        if cycle is None:
-            outcome[brand_id] = {"status": "skipped", "reason": "沒有進行中的檔期"}
-            continue
-        try:
-            ok, err = reading.run(conn, brand_id, cycle["id"], WEEKLY_ACTOR)
-            cards = weekly_proposals.generate(conn, brand_id, cycle["id"]) if ok else []
-            if ok:
-                weekly_reports.enqueue_if_ready(conn, brand_id, cycle["id"], today=today)
-            outcome[brand_id] = {
-                "status": "done" if ok else "failed",
-                "error": err,
-                "proposal_count": len([
-                    card for card in cards if card["status"] == "GENERATED"
-                ]),
-                "checked_on": today,
-            }
-        except Exception as exc:  # noqa: BLE001 — 一個品牌失敗不能擋住其他品牌
-            conn.rollback()
-            outcome[brand_id] = {
-                "status": "failed",
-                "error": str(exc),
-                "proposal_count": 0,
-                "checked_on": today,
-            }
+    for org_id in _all_org_ids(conn):
+        for brand in bi_repo.list_brands(conn, org_id, status="active"):
+            brand_id = brand["id"]
+            cycle = weekly_proposals.current_cycle(conn, brand_id)
+            if cycle is None:
+                outcome[brand_id] = {"status": "skipped", "reason": "沒有進行中的檔期"}
+                continue
+            try:
+                ok, err = reading.run(conn, brand_id, cycle["id"], WEEKLY_ACTOR)
+                cards = weekly_proposals.generate(conn, brand_id, cycle["id"]) if ok else []
+                if ok:
+                    weekly_reports.enqueue_if_ready(conn, brand_id, cycle["id"], today=today)
+                outcome[brand_id] = {
+                    "status": "done" if ok else "failed",
+                    "error": err,
+                    "proposal_count": len([
+                        card for card in cards if card["status"] == "GENERATED"
+                    ]),
+                    "checked_on": today,
+                }
+            except Exception as exc:  # noqa: BLE001 — 一個品牌失敗不能擋住其他品牌
+                conn.rollback()
+                outcome[brand_id] = {
+                    "status": "failed",
+                    "error": str(exc),
+                    "proposal_count": 0,
+                    "checked_on": today,
+                }
     return outcome
 
 
@@ -131,8 +143,12 @@ def sync_brand_now(conn, brand_id: str, actor: str, *, meta_client=None, ga4_cli
     # 不能直接拿 now（UTC）的曆日，本機時區早於 UTC 時會晚一天才追到到期提醒。
     today = now.astimezone().date().isoformat()
     if ads_sync.is_configured(conn):
+        brand = bi_repo.get_brand(conn, brand_id)
+        if brand is None:
+            raise ValueError(f"找不到品牌：{brand_id}")
+        org_id = brand["org_id"]
         meta_result = ads_sync.sync_account(
-            conn, actor, client=meta_client, today=today, brand_id_filter=brand_id)
+            conn, actor, org_id=org_id, client=meta_client, today=today, brand_id_filter=brand_id)
         if meta_result.error:
             raise ValueError(meta_result.error)
     if ga4_sync.is_configured(conn):
@@ -154,36 +170,50 @@ def run(conn, *, today: str | None = None, meta_client=None, ga4_client=None,
     outcome = {"meta": None, "ga4": {}}
 
     if ads_sync.is_configured(conn):
-        meta_result = ads_sync.sync_account(conn, ACTOR, client=meta_client, today=today)
-        outcome["meta"] = meta_result
-        if meta_result.error:
-            core_interrupts.enqueue(
-                conn, category="auto_sync_failed",
-                dedupe_key=f"auto_sync_failed:meta:{today}",
-                message=_META_FAILURE_MESSAGE, action_url="/app/settings",
-            )
-
-    if ga4_sync.is_configured(conn):
-        for brand in bi_repo.list_brands(conn, status="active"):
-            ga4_result = ga4_sync.sync_brand(conn, brand["id"], ACTOR, client=ga4_client, today=today)
-            outcome["ga4"][brand["id"]] = ga4_result
-            if ga4_result.error:
+        # 票 03-1：Meta 帳號設定（app/core/settings.py TOKEN_SETTING／ACCOUNT_SETTING）
+        # 目前仍是全站一組、不分組織（該檔不在本票 app/ads 範圍內，沒有跟著這次改成
+        # 每組織一份）——一個 ad_account 列本身有 org_id（schema 上一個帳號只屬於一個
+        # 組織，見 handoff.py _ensure_ad_account），所以「這次要用哪個組織」優先看
+        # 這個帳號過去同步時記下的 org_id；還沒同步過（ad_account 表是空的）才退回
+        # 「隨便選第一個組織」——這條退回路徑只在全站僅有一個組織時才誠實正確，
+        # 多組織都要接同一個 Meta 帳號的情境需要 app/core/settings.py 先變成
+        # 每組織一份設定，這裡先不擴大範圍猜（報告見票 03-1 交接）。
+        existing_account = conn.execute(
+            "SELECT org_id FROM ad_account WHERE platform = 'meta' ORDER BY created_at LIMIT 1"
+        ).fetchone()
+        sync_org_id = existing_account["org_id"] if existing_account else next(iter(_all_org_ids(conn)), None)
+        if sync_org_id:
+            meta_result = ads_sync.sync_account(conn, ACTOR, org_id=sync_org_id, client=meta_client, today=today)
+            outcome["meta"] = meta_result
+            if meta_result.error:
                 core_interrupts.enqueue(
-                    conn, category="auto_sync_failed", brand_id=brand["id"],
-                    dedupe_key=f"auto_sync_failed:ga4:{brand['id']}:{today}",
-                    message=_GA4_FAILURE_MESSAGE,
-                    action_url=f"/app/brands/{brand['id']}/tracking",
+                    conn, org_id=sync_org_id, category="auto_sync_failed",
+                    dedupe_key=f"auto_sync_failed:meta:{today}",
+                    message=_META_FAILURE_MESSAGE, action_url="/app/settings",
                 )
 
-    for brand in bi_repo.list_brands(conn, status="active"):
-        run_cycle_checks(conn, brand["id"], today, url_probe=url_probe)
-        cycle = weekly_proposals.current_cycle(conn, brand["id"])
-        if cycle is not None:
-            weekly_reports.enqueue_if_ready(conn, brand["id"], cycle["id"], today=today)
-        try:
-            core_orchestrator.run(conn, brand["id"], actor=ACTOR)
-        except Exception:  # noqa: BLE001 — 一個品牌的調度台失敗不擋住其他品牌（票 O1-01）
-            conn.rollback()
+    for org_id in _all_org_ids(conn):
+        if ga4_sync.is_configured(conn):
+            for brand in bi_repo.list_brands(conn, org_id, status="active"):
+                ga4_result = ga4_sync.sync_brand(conn, brand["id"], ACTOR, client=ga4_client, today=today)
+                outcome["ga4"][brand["id"]] = ga4_result
+                if ga4_result.error:
+                    core_interrupts.enqueue(
+                        conn, org_id=brand["org_id"], category="auto_sync_failed", brand_id=brand["id"],
+                        dedupe_key=f"auto_sync_failed:ga4:{brand['id']}:{today}",
+                        message=_GA4_FAILURE_MESSAGE,
+                        action_url=f"/app/brands/{brand['id']}/tracking",
+                    )
+
+        for brand in bi_repo.list_brands(conn, org_id, status="active"):
+            run_cycle_checks(conn, brand["id"], today, url_probe=url_probe)
+            cycle = weekly_proposals.current_cycle(conn, brand["id"])
+            if cycle is not None:
+                weekly_reports.enqueue_if_ready(conn, brand["id"], cycle["id"], today=today)
+            try:
+                core_orchestrator.run(conn, brand["id"], actor=ACTOR, org_id=brand["org_id"])
+            except Exception:  # noqa: BLE001 — 一個品牌的調度台失敗不擋住其他品牌（票 O1-01）
+                conn.rollback()
 
     conn.commit()
     return outcome

@@ -77,10 +77,11 @@ async def generate_theme(request: Request, brand_id: str, cycle_id: str, cell_id
     查無此 id、格式不支援、計畫未核准、AI 失敗——這些是使用者操作或環境會真的碰到的狀態，
     一律回 JSON 錯誤訊息，不是頁面等級的 404／500。
     """
-    main_mod.require_brand(brand_id)
     actor = main_mod.require_actor(request)
+    main_mod.require_brand(brand_id, actor)
     _require_cycle(brand_id, cycle_id)
     conn = main_mod.conn
+    actor_id = str(actor.user_id)
 
     generator = GENERATORS.get(format_key)
     if generator is None:
@@ -89,18 +90,18 @@ async def generate_theme(request: Request, brand_id: str, cycle_id: str, cell_id
 
     try:
         brief, err = brief_assembler.assemble_brief(
-            conn, brand_id, cycle_id, cell_id, format_key, theme_count=1, actor=actor)
+            conn, brand_id, cycle_id, cell_id, format_key, theme_count=1, actor=actor_id)
         if err:
             return JSONResponse({"error": err}, status_code=409)
 
-        generated, err = generator(conn, brief, actor=actor)
+        generated, err = generator(conn, brief, actor=actor_id)
         if err:
             # 花費超上限與 AI 沒能產出可用內容都是「這次沒能生出主題，理由如下」，
             # 用同一個狀態碼（422）——跟純輸入錯誤（400）、計畫未核准（409）分開即可，
             # 不必為兩種「引擎沒能產出」再細分狀態碼。
             return JSONResponse({"error": err}, status_code=422)
 
-        theme = theme_engine.save_generated_theme(conn, brief, generated, actor=actor)
+        theme = theme_engine.save_generated_theme(conn, brief, generated, actor=actor_id)
     except ValueError as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)
 
@@ -120,7 +121,7 @@ async def theme_matrix(request: Request, brand_id: str, cycle_id: str):
       （見 app/ads/theme_engine.py on_stage 註解），這裡先把 state 留成一個開放列舉，
       前端包接上背景執行緒後，值改成看得到 generating 也不必動這支路由的回應形狀。
     """
-    main_mod.require_brand(brand_id)
+    main_mod.require_brand(brand_id, main_mod.require_actor(request))
     _require_cycle(brand_id, cycle_id)
     conn = main_mod.conn
 
@@ -162,7 +163,7 @@ async def get_theme_detail(request: Request, brand_id: str, cycle_id: str, theme
     id／name／status 摘要給小卡用，側板要逐則顯示元件內容（圖片提示詞／文案／標題／說明），
     需要另一次完整讀取——直接重用 `theme_repo.get_theme()`，不重寫查詢（該函式已經在
     generate_theme()／adopt_theme() 兩支路由的回應裡用過同一包資料）。"""
-    main_mod.require_brand(brand_id)
+    main_mod.require_brand(brand_id, main_mod.require_actor(request))
     _require_cycle(brand_id, cycle_id)
     conn = main_mod.conn
     theme = theme_repo.get_theme(conn, brand_id, theme_id)
@@ -175,7 +176,7 @@ async def get_theme_detail(request: Request, brand_id: str, cycle_id: str, theme
 async def open_theme_folder(request: Request, brand_id: str, cycle_id: str, theme_id: str):
     """開這個主題的素材資料夾：沿用既有 os.startfile 先例（app/core/creative_assets.py，
     決策 0008），票 04 驗收 6。"""
-    main_mod.require_brand(brand_id)
+    main_mod.require_brand(brand_id, main_mod.require_actor(request))
     _require_cycle(brand_id, cycle_id)
     conn = main_mod.conn
     theme = theme_repo.get_theme(conn, brand_id, theme_id)
@@ -187,7 +188,7 @@ async def open_theme_folder(request: Request, brand_id: str, cycle_id: str, them
 
 
 @router.get("/brands/{brand_id}/ads/{cycle_id}/folder")
-async def cycle_folder(brand_id: str, cycle_id: str):
+async def cycle_folder(brand_id: str, cycle_id: str, request: Request):
     """這期檔期素材資料夾現在多大（畫面契約畫面 2 頂部列「素材資料夾 128 MB」，
     .scratch/creative-studio/studio-wireframe.html:111）。
 
@@ -197,7 +198,7 @@ async def cycle_folder(brand_id: str, cycle_id: str):
     使用者是兩件事，不能長一樣；也不在這裡爆 404／500，沒建立是正常狀態不是錯誤。
     MB 位數沿用既有顯示慣例（舊 Jinja 檔期頁的 {:.1f} MB，該頁已刪除）。
     """
-    main_mod.require_brand(brand_id)
+    main_mod.require_brand(brand_id, main_mod.require_actor(request))
     _require_cycle(brand_id, cycle_id)
     path = creative_assets.cycle_dir(main_mod.conn, brand_id, cycle_id)
     if not path.is_dir():
@@ -206,7 +207,7 @@ async def cycle_folder(brand_id: str, cycle_id: str):
 
 
 @router.post("/brands/{brand_id}/ads/{cycle_id}/folder")
-async def open_cycle_folder(brand_id: str, cycle_id: str):
+async def open_cycle_folder(brand_id: str, cycle_id: str, request: Request):
     """開這期檔期的素材資料夾，沒有就建（畫面 2 的「開資料夾」）。
 
     跟上面 open_theme_folder() 共用同一個 creative_assets.open_folder()——它收 *ids，
@@ -217,7 +218,7 @@ async def open_cycle_folder(brand_id: str, cycle_id: str):
     舊的 app/ads/routes_plan.py:272 `/creative-folder` 不動：那支回 303 轉址＋人話訊息給
     Jinja 舊頁，新殼要的是裸 JSON（ADR 0003 兩套前端並存），共用同一個 open_folder()。
     """
-    main_mod.require_brand(brand_id)
+    main_mod.require_brand(brand_id, main_mod.require_actor(request))
     _require_cycle(brand_id, cycle_id)
     return {"folder_path": str(creative_assets.open_folder(main_mod.conn, brand_id, cycle_id))}
 
@@ -227,7 +228,7 @@ async def theme_component_performance(request: Request, brand_id: str, cycle_id:
                                       theme_id: str):
     """元件層相對排名（票 12-attribution-adjust 驗收 4）：同一則廣告裡 body／title／
     description 誰贏誰輸，只回排名所需的比較用資料，不提供絕對值對帳介面（ADR 0008 二）。"""
-    main_mod.require_brand(brand_id)
+    main_mod.require_brand(brand_id, main_mod.require_actor(request))
     _require_cycle(brand_id, cycle_id)
     conn = main_mod.conn
     theme = theme_repo.get_theme(conn, brand_id, theme_id)
@@ -239,14 +240,14 @@ async def theme_component_performance(request: Request, brand_id: str, cycle_id:
 @router.post("/brands/{brand_id}/ads/{cycle_id}/themes/{theme_id}/adopt")
 async def adopt_theme(request: Request, brand_id: str, cycle_id: str, theme_id: str):
     """一鍵採用整個主題（票 10-adopt-reject AC1）：主 CTA 只有這一顆，沒有逐欄位勾選採用。"""
-    main_mod.require_brand(brand_id)
     actor = main_mod.require_actor(request)
+    main_mod.require_brand(brand_id, actor)
     _require_cycle(brand_id, cycle_id)
     conn = main_mod.conn
     theme = theme_repo.get_theme(conn, brand_id, theme_id)
     if theme is None or theme["campaign_cycle_id"] != cycle_id:
         raise main_mod.NotFoundKind("主題")
-    theme = theme_repo.adopt_theme(conn, brand_id, theme_id, actor=actor)
+    theme = theme_repo.adopt_theme(conn, brand_id, theme_id, actor=str(actor.user_id))
     return {"theme": theme}
 
 
@@ -255,8 +256,8 @@ async def reject_theme_component(request: Request, brand_id: str, cycle_id: str,
                                  component_id: str):
     """單一元件退件＋理由（票 10-adopt-reject AC2）：理由碼沿用 app/ads/fingerprint.py
     既有的 REJECT_REASON_LABELS 清單，不新造；退件只除名這一則，不影響同主題其他元件。"""
-    main_mod.require_brand(brand_id)
     actor = main_mod.require_actor(request)
+    main_mod.require_brand(brand_id, actor)
     _require_cycle(brand_id, cycle_id)
     conn = main_mod.conn
     component = theme_repo.get_component(conn, brand_id, component_id)
@@ -273,7 +274,7 @@ async def reject_theme_component(request: Request, brand_id: str, cycle_id: str,
     try:
         component = theme_repo.reject_component(
             conn, brand_id, component_id, reason_code=body.get("reason_code", ""),
-            reason_text=body.get("reason_text"), actor=actor)
+            reason_text=body.get("reason_text"), actor=str(actor.user_id))
     except ValueError as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)
     return {"component": component}
@@ -313,7 +314,7 @@ async def copy_theme_image_prompts(request: Request, brand_id: str, cycle_id: st
     """整組複製端點（票 11 AC2／AC3）：回這個主題全部圖片提示詞，已依自訂開頭＋尺寸張數行
     組好、按 10 則拆組。沒有任何圖片提示詞元件（例如影片格式）時回人話錯誤，不回空陣列——
     呼叫端不必自己判斷「空陣列代表什麼」。"""
-    main_mod.require_brand(brand_id)
+    main_mod.require_brand(brand_id, main_mod.require_actor(request))
     _require_cycle(brand_id, cycle_id)
     conn = main_mod.conn
     theme = theme_repo.get_theme(conn, brand_id, theme_id)
@@ -332,7 +333,7 @@ async def copy_theme_component(request: Request, brand_id: str, cycle_id: str,
                                component_id: str):
     """逐則內容端點（票 11 AC4）：文案／標題／說明等文字元件各一顆純圖示複製鈕要打這支，
     回該則純內容，不夾任何裝飾文字或前後綴——貼上 Meta 後台要能直接一格一格用。"""
-    main_mod.require_brand(brand_id)
+    main_mod.require_brand(brand_id, main_mod.require_actor(request))
     _require_cycle(brand_id, cycle_id)
     conn = main_mod.conn
     component = theme_repo.get_component(conn, brand_id, component_id)
@@ -350,7 +351,7 @@ async def combine_video_script_route(request: Request, brand_id: str, cycle_id: 
     格式不是 video／找不到 Hook 三種情況，該函式已經收斂成統一的 (None, 人話錯誤) 回傳，這裡
     統一轉成 JSON 404，不逐案判斷狀態碼。cycle_id 只用來對齊既有路徑風格，
     combine_video_script() 本身不需要它（Hook 靠切角 experiment_cell_id 找，不靠檔期）。"""
-    main_mod.require_brand(brand_id)
+    main_mod.require_brand(brand_id, main_mod.require_actor(request))
     _require_cycle(brand_id, cycle_id)
     conn = main_mod.conn
 

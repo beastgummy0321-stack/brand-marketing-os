@@ -56,14 +56,16 @@ async def api_meta_mcp_page_post(request: Request):
 
 # ponytail: 品牌風格偏好使用 app_setting 的 brand-id namespaced key，沿用既有設定機制而非新表。
 @router.get("/api/settings/brands/{brand_id}/style-preference")
-async def api_style_preference_get(brand_id: str):
-    main_mod.require_brand(brand_id)
+async def api_style_preference_get(brand_id: str, request: Request):
+    actor = main_mod.require_actor(request)
+    main_mod.require_brand(brand_id, actor)
     return {"text": style_preference.get_text(main_mod.conn, brand_id)}
 
 
 @router.put("/api/settings/brands/{brand_id}/style-preference")
 async def api_style_preference_put(request: Request, brand_id: str):
-    main_mod.require_brand(brand_id)
+    actor = main_mod.require_actor(request)
+    main_mod.require_brand(brand_id, actor)
     try:
         body = await request.json()
     except ValueError:
@@ -127,8 +129,9 @@ def _rule_card_json(card: dict) -> dict:
 
 
 @router.get("/api/settings/rule-cards/brands/{brand_id}")
-async def api_rule_cards_get(brand_id: str):
-    main_mod.require_brand(brand_id)
+async def api_rule_cards_get(brand_id: str, request: Request):
+    actor = main_mod.require_actor(request)
+    main_mod.require_brand(brand_id, actor)
     cards = [_rule_card_json(c) for c in rule_cards.list_cards(main_mod.conn, brand_id)]
     return {
         "data": {"brand_id": brand_id, "cards": cards},
@@ -138,8 +141,8 @@ async def api_rule_cards_get(brand_id: str):
 
 @router.post("/api/settings/rule-cards/brands/{brand_id}/{card_key}")
 async def api_rule_cards_save(request: Request, brand_id: str, card_key: str):
-    main_mod.require_brand(brand_id)
     actor = main_mod.require_actor(request)
+    main_mod.require_brand(brand_id, actor)
     if card_key not in rule_cards.CARDS:
         raise main_mod.NotFoundKind("規則卡")
     try:
@@ -156,18 +159,19 @@ async def api_rule_cards_save(request: Request, brand_id: str, card_key: str):
         return JSONResponse(
             {"error": error_message, "field_errors": field_errors}, status_code=400)
     for field_key, value in parsed.items():
-        rule_cards.set_value(main_mod.conn, brand_id, card_key, field_key, value, actor)
+        rule_cards.set_value(main_mod.conn, brand_id, card_key, field_key, value, str(actor.user_id),
+                             org_id=actor.org_id)
     card = rule_cards.get_card(main_mod.conn, brand_id, card_key)
     return {"data": _rule_card_json(card), "generated_at": datetime.now(UTC).isoformat()}
 
 
 @router.post("/api/settings/rule-cards/brands/{brand_id}/{card_key}/reset")
 async def api_rule_cards_reset(request: Request, brand_id: str, card_key: str):
-    main_mod.require_brand(brand_id)
     actor = main_mod.require_actor(request)
+    main_mod.require_brand(brand_id, actor)
     if card_key not in rule_cards.CARDS:
         raise main_mod.NotFoundKind("規則卡")
-    rule_cards.reset_card(main_mod.conn, brand_id, card_key, actor)
+    rule_cards.reset_card(main_mod.conn, brand_id, card_key, str(actor.user_id), org_id=actor.org_id)
     card = rule_cards.get_card(main_mod.conn, brand_id, card_key)
     return {"data": _rule_card_json(card), "generated_at": datetime.now(UTC).isoformat()}
 
@@ -178,8 +182,9 @@ async def api_rule_cards_reset(request: Request, brand_id: str, card_key: str):
 # ---------------------------------------------------------------------------
 
 @router.get("/api/settings/calendar/brands/{brand_id}")
-async def api_calendar_categories_get(brand_id: str):
-    main_mod.require_brand(brand_id)
+async def api_calendar_categories_get(brand_id: str, request: Request):
+    actor = main_mod.require_actor(request)
+    main_mod.require_brand(brand_id, actor)
     categories = _calendar_categories_ctx(main_mod.conn, brand_id)
     return {
         "data": {"brand_id": brand_id, "categories": categories},
@@ -189,7 +194,8 @@ async def api_calendar_categories_get(brand_id: str):
 
 @router.post("/api/settings/calendar/brands/{brand_id}/{category}")
 async def api_calendar_category_toggle(request: Request, brand_id: str, category: str):
-    main_mod.require_brand(brand_id)
+    actor = main_mod.require_actor(request)
+    main_mod.require_brand(brand_id, actor)
     valid_categories = {cat["category"] for cat in core_calendar_dismiss.list_categories()}
     if category not in valid_categories:
         raise main_mod.NotFoundKind("節日類別")
@@ -202,6 +208,6 @@ async def api_calendar_category_toggle(request: Request, brand_id: str, category
     if body["enabled"]:
         core_calendar_dismiss.undismiss(main_mod.conn, brand_id, category)
     else:
-        core_calendar_dismiss.dismiss(main_mod.conn, brand_id, category)
+        core_calendar_dismiss.dismiss(main_mod.conn, brand_id, category, org_id=actor.org_id)
     item = next(c for c in _calendar_categories_ctx(main_mod.conn, brand_id) if c["category"] == category)
     return {"data": item, "generated_at": datetime.now(UTC).isoformat()}

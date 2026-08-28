@@ -12,6 +12,7 @@
 import threading
 from collections.abc import Callable
 
+from app.brand_intelligence import repository as bi_repo
 from app.core import db as core_db
 from app.core import interrupts as core_interrupts
 
@@ -73,8 +74,10 @@ def notify(conn, brand_id: str, *, category: str, dedupe_key: str, message: str,
     （`core_interrupts.enqueue` 對超長訊息會直接 raise，兩邊呼叫端原本都是各自截斷）。"""
     if len(message) > core_interrupts.MAX_MESSAGE_LEN:
         message = message[: core_interrupts.MAX_MESSAGE_LEN]
+    brand = bi_repo.get_brand(conn, brand_id)
+    assert brand is not None, f"找不到品牌：{brand_id}"
     core_interrupts.enqueue(
-        conn, category=category, dedupe_key=dedupe_key,
+        conn, org_id=brand["org_id"], category=category, dedupe_key=dedupe_key,
         brand_id=brand_id, message=message, action_url=action_url,
     )
     conn.commit()

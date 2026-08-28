@@ -26,14 +26,16 @@ def _config(conn, brand_id: str) -> dict:
 
 
 @router.get("/brands/{brand_id}/pinned-views")
-async def pinned_views_get(brand_id: str):
-    main_mod.require_brand(brand_id)
+async def pinned_views_get(request: Request, brand_id: str):
+    actor = main_mod.require_actor(request)
+    main_mod.require_brand(brand_id, actor)
     return _envelope(_config(main_mod.conn, brand_id))
 
 
 @router.post("/brands/{brand_id}/pinned-views")
 async def pinned_views_post(request: Request, brand_id: str):
-    main_mod.require_brand(brand_id)
+    actor = main_mod.require_actor(request)
+    main_mod.require_brand(brand_id, actor)
     conn = main_mod.conn
     try:
         body = await request.json()
@@ -54,8 +56,9 @@ async def pinned_views_post(request: Request, brand_id: str):
 
 
 @router.get("/brands/{brand_id}/performance-view/{view_key}")
-async def performance_view_get(brand_id: str, view_key: str):
-    main_mod.require_brand(brand_id)
+async def performance_view_get(request: Request, brand_id: str, view_key: str):
+    actor = main_mod.require_actor(request)
+    main_mod.require_brand(brand_id, actor)
     valid_keys = {c["key"] for c in pinned_views.PINNED_VIEW_CATALOG}
     if view_key not in valid_keys:
         return JSONResponse({"error": "沒有這個視圖。"}, status_code=404)

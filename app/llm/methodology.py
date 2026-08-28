@@ -123,12 +123,20 @@ def compile(
     for filename in filenames:
         path = methodology_dir / filename
         if not path.exists():
-            write_audit(
-                conn, brand_id=brand_id, entity_type="methodology_file", entity_id=filename,
-                action="missing", actor=actor,
-                after={"task_labels": list(task_labels)},
-                reason=f"對照表指定的方法論檔缺失，已優雅略過（不擋生成）：{filename}",
-            )
+            # 票 03-1：audit_log.org_id 現在 NOT NULL，brand_id=None（系統級事件）沒有
+            # 品牌可反查 org_id——目前四個實際呼叫端都固定傳真正的 brand_id，這條路徑
+            # 現在打不到；真的沒有 brand_id 時優雅略過稽核寫入（跟本函式對缺檔本身的
+            # 「優雅缺席」哲學一致），不是漏寫。
+            if brand_id is not None:
+                brand = repo.get_brand(conn, brand_id)
+                assert brand is not None, f"找不到品牌：{brand_id}"
+                write_audit(
+                    conn, org_id=brand["org_id"],
+                    brand_id=brand_id, entity_type="methodology_file", entity_id=filename,
+                    action="missing", actor=actor,
+                    after={"task_labels": list(task_labels)},
+                    reason=f"對照表指定的方法論檔缺失，已優雅略過（不擋生成）：{filename}",
+                )
             missing.append(filename)
             continue
         content = path.read_text(encoding="utf-8").strip()

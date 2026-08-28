@@ -63,7 +63,7 @@ def _str_field(body: dict, key: str) -> str:
 @router.post("/api/library/brands/{brand_id}/facts")
 async def fact_create_api(request: Request, brand_id: str):
     actor = require_actor(request)
-    require_brand(brand_id)
+    require_brand(brand_id, actor)
     body = await _json_body(request)
     fact_type = _str_field(body, "fact_type")
     label = _str_field(body, "label")
@@ -81,10 +81,10 @@ async def fact_create_api(request: Request, brand_id: str):
         errors["status"] = "請選擇是否已經確認過。"
     if errors:
         return JSONResponse({"errors": errors}, status_code=400)
-    src_id = brand_routes._create_source_ref(brand_id, actor, source_reference)
-    confirmed_by = actor if status == "confirmed" else None
+    src_id = brand_routes._create_source_ref(brand_id, str(actor.user_id), source_reference)
+    confirmed_by = str(actor.user_id) if status == "confirmed" else None
     row = repo.create_brand_fact(
-        web.conn, brand_id, actor=actor, fact_type=fact_type, label=clean(label), value=clean(value),
+        web.conn, brand_id, actor=str(actor.user_id), fact_type=fact_type, label=clean(label), value=clean(value),
         status=status, source_reference_id=src_id, confirmed_by=confirmed_by,
     )
     return {"data": _fact_shape(brand_id, row)}
@@ -93,7 +93,7 @@ async def fact_create_api(request: Request, brand_id: str):
 @router.post("/api/library/brands/{brand_id}/facts/{fact_id}/edit")
 async def fact_update_api(request: Request, brand_id: str, fact_id: str):
     actor = require_actor(request)
-    require_brand(brand_id)
+    require_brand(brand_id, actor)
     fact = repo.get_brand_fact(web.conn, brand_id, fact_id)
     if not fact:
         raise NotFoundKind("品牌事實")
@@ -111,8 +111,8 @@ async def fact_update_api(request: Request, brand_id: str, fact_id: str):
         errors["value"] = "請填寫事實內容。"
     if errors:
         return JSONResponse({"errors": errors}, status_code=400)
-    src_id = brand_routes._create_source_ref(brand_id, actor, source_reference) or fact["source_reference_id"]
-    row = repo.update_brand_fact(web.conn, brand_id, fact_id, actor=actor, fact_type=fact_type,
+    src_id = brand_routes._create_source_ref(brand_id, str(actor.user_id), source_reference) or fact["source_reference_id"]
+    row = repo.update_brand_fact(web.conn, brand_id, fact_id, actor=str(actor.user_id), fact_type=fact_type,
                                   label=clean(label), value=clean(value), source_reference_id=src_id)
     return {"data": _fact_shape(brand_id, row)}
 
@@ -120,7 +120,7 @@ async def fact_update_api(request: Request, brand_id: str, fact_id: str):
 @router.post("/api/library/brands/{brand_id}/facts/{fact_id}/confirm")
 async def fact_confirm_api(request: Request, brand_id: str, fact_id: str):
     actor = require_actor(request)
-    require_brand(brand_id)
+    require_brand(brand_id, actor)
     fact = repo.get_brand_fact(web.conn, brand_id, fact_id)
     if not fact:
         raise NotFoundKind("品牌事實")
@@ -128,18 +128,18 @@ async def fact_confirm_api(request: Request, brand_id: str, fact_id: str):
     confirmed_by_c = clean(_str_field(body, "confirmed_by"))
     if not confirmed_by_c:
         return JSONResponse({"errors": {"confirmed_by": "請填寫確認人是誰。"}}, status_code=400)
-    row = repo.confirm_brand_fact(web.conn, brand_id, fact_id, confirmed_by=confirmed_by_c, actor=actor)
+    row = repo.confirm_brand_fact(web.conn, brand_id, fact_id, confirmed_by=confirmed_by_c, actor=str(actor.user_id))
     return {"data": _fact_shape(brand_id, row)}
 
 
 @router.post("/api/library/brands/{brand_id}/facts/{fact_id}/delete")
 async def fact_delete_api(request: Request, brand_id: str, fact_id: str):
     actor = require_actor(request)
-    require_brand(brand_id)
+    require_brand(brand_id, actor)
     fact = repo.get_brand_fact(web.conn, brand_id, fact_id)
     if not fact:
         raise NotFoundKind("品牌事實")
-    repo.delete_brand_fact(web.conn, brand_id, fact_id, actor=actor)
+    repo.delete_brand_fact(web.conn, brand_id, fact_id, actor=str(actor.user_id))
     return {"ok": True}
 
 
@@ -162,7 +162,7 @@ def _validate_rule_fields(brand_id: str, rule_type: str, content: str, severity:
 @router.post("/api/library/brands/{brand_id}/rules")
 async def rule_create_api(request: Request, brand_id: str):
     actor = require_actor(request)
-    require_brand(brand_id)
+    require_brand(brand_id, actor)
     body = await _json_body(request)
     rule_type = _str_field(body, "rule_type")
     content = _str_field(body, "content")
@@ -172,8 +172,8 @@ async def rule_create_api(request: Request, brand_id: str):
     errors = _validate_rule_fields(brand_id, rule_type, content, severity, product_id)
     if errors:
         return JSONResponse({"errors": errors}, status_code=400)
-    src_id = brand_routes._create_source_ref(brand_id, actor, source_reference)
-    row = repo.create_rule(web.conn, brand_id, actor=actor, rule_type=rule_type, content=clean(content),
+    src_id = brand_routes._create_source_ref(brand_id, str(actor.user_id), source_reference)
+    row = repo.create_rule(web.conn, brand_id, actor=str(actor.user_id), rule_type=rule_type, content=clean(content),
                             severity=severity, product_id=product_id or None, source_reference_id=src_id)
     return {"data": _rule_shape(brand_id, row)}
 
@@ -181,7 +181,7 @@ async def rule_create_api(request: Request, brand_id: str):
 @router.post("/api/library/brands/{brand_id}/rules/{rule_id}/edit")
 async def rule_update_api(request: Request, brand_id: str, rule_id: str):
     actor = require_actor(request)
-    require_brand(brand_id)
+    require_brand(brand_id, actor)
     rule = repo.get_rule(web.conn, brand_id, rule_id)
     if not rule:
         raise NotFoundKind("限制規則")
@@ -194,8 +194,8 @@ async def rule_update_api(request: Request, brand_id: str, rule_id: str):
     errors = _validate_rule_fields(brand_id, rule_type, content, severity, product_id)
     if errors:
         return JSONResponse({"errors": errors}, status_code=400)
-    src_id = brand_routes._create_source_ref(brand_id, actor, source_reference) or rule["source_reference_id"]
-    row = repo.update_rule(web.conn, brand_id, rule_id, actor=actor, rule_type=rule_type,
+    src_id = brand_routes._create_source_ref(brand_id, str(actor.user_id), source_reference) or rule["source_reference_id"]
+    row = repo.update_rule(web.conn, brand_id, rule_id, actor=str(actor.user_id), rule_type=rule_type,
                             content=clean(content), severity=severity, product_id=product_id or None,
                             source_reference_id=src_id)
     return {"data": _rule_shape(brand_id, row)}
@@ -204,9 +204,9 @@ async def rule_update_api(request: Request, brand_id: str, rule_id: str):
 @router.post("/api/library/brands/{brand_id}/rules/{rule_id}/delete")
 async def rule_delete_api(request: Request, brand_id: str, rule_id: str):
     actor = require_actor(request)
-    require_brand(brand_id)
+    require_brand(brand_id, actor)
     try:
-        repo.delete_rule(web.conn, brand_id, rule_id, actor=actor)
+        repo.delete_rule(web.conn, brand_id, rule_id, actor=str(actor.user_id))
     except ValueError:
         raise NotFoundKind("限制規則")
     return {"ok": True}
@@ -228,7 +228,7 @@ def _validate_claim_fields(brand_id: str, claim_text: str, claim_type: str, prod
 @router.post("/api/library/brands/{brand_id}/claims")
 async def claim_create_api(request: Request, brand_id: str):
     actor = require_actor(request)
-    require_brand(brand_id)
+    require_brand(brand_id, actor)
     body = await _json_body(request)
     claim_text = _str_field(body, "claim_text")
     claim_type = _str_field(body, "claim_type") or "high_risk"
@@ -237,8 +237,8 @@ async def claim_create_api(request: Request, brand_id: str):
     errors = _validate_claim_fields(brand_id, claim_text, claim_type, product_id)
     if errors:
         return JSONResponse({"errors": errors}, status_code=400)
-    src_id = brand_routes._create_source_ref(brand_id, actor, evidence_source_reference)
-    row = repo.create_claim(web.conn, brand_id, actor=actor, claim_text=clean(claim_text),
+    src_id = brand_routes._create_source_ref(brand_id, str(actor.user_id), evidence_source_reference)
+    row = repo.create_claim(web.conn, brand_id, actor=str(actor.user_id), claim_text=clean(claim_text),
                              claim_type=claim_type, product_id=product_id or None,
                              evidence_source_reference_id=src_id)
     return {"data": _claim_shape(brand_id, row)}
@@ -247,7 +247,7 @@ async def claim_create_api(request: Request, brand_id: str):
 @router.post("/api/library/brands/{brand_id}/claims/{claim_id}/edit")
 async def claim_update_api(request: Request, brand_id: str, claim_id: str):
     actor = require_actor(request)
-    require_brand(brand_id)
+    require_brand(brand_id, actor)
     claim = repo.get_claim(web.conn, brand_id, claim_id)
     if not claim:
         raise NotFoundKind("宣稱")
@@ -259,9 +259,9 @@ async def claim_update_api(request: Request, brand_id: str, claim_id: str):
     errors = _validate_claim_fields(brand_id, claim_text, claim_type, product_id)
     if errors:
         return JSONResponse({"errors": errors}, status_code=400)
-    src_id = (brand_routes._create_source_ref(brand_id, actor, evidence_source_reference)
+    src_id = (brand_routes._create_source_ref(brand_id, str(actor.user_id), evidence_source_reference)
               or claim["evidence_source_reference_id"])
-    row = repo.update_claim(web.conn, brand_id, claim_id, actor=actor, claim_text=clean(claim_text),
+    row = repo.update_claim(web.conn, brand_id, claim_id, actor=str(actor.user_id), claim_text=clean(claim_text),
                              claim_type=claim_type, product_id=product_id or None,
                              evidence_source_reference_id=src_id)
     return {"data": _claim_shape(brand_id, row)}
@@ -270,9 +270,9 @@ async def claim_update_api(request: Request, brand_id: str, claim_id: str):
 @router.post("/api/library/brands/{brand_id}/claims/{claim_id}/delete")
 async def claim_delete_api(request: Request, brand_id: str, claim_id: str):
     actor = require_actor(request)
-    require_brand(brand_id)
+    require_brand(brand_id, actor)
     try:
-        repo.delete_claim(web.conn, brand_id, claim_id, actor=actor)
+        repo.delete_claim(web.conn, brand_id, claim_id, actor=str(actor.user_id))
     except ValueError:
         raise NotFoundKind("宣稱")
     return {"ok": True}
@@ -283,11 +283,11 @@ async def claim_delete_api(request: Request, brand_id: str, claim_id: str):
 @router.post("/api/library/brands/{brand_id}/assets/{asset_id}/delete")
 async def asset_delete_api(request: Request, brand_id: str, asset_id: str):
     actor = require_actor(request)
-    require_brand(brand_id)
+    require_brand(brand_id, actor)
     asset = repo.get_official_asset(web.conn, brand_id, asset_id)
     if not asset:
         raise NotFoundKind("官方素材")
-    repo.delete_official_asset(web.conn, brand_id, asset_id, actor=actor)
+    repo.delete_official_asset(web.conn, brand_id, asset_id, actor=str(actor.user_id))
     try:
         Path(asset["file_path"]).unlink(missing_ok=True)
     except OSError:
@@ -300,7 +300,7 @@ async def asset_delete_api(request: Request, brand_id: str, asset_id: str):
 @router.post("/api/library/brands/{brand_id}/channels")
 async def channel_create_api(request: Request, brand_id: str):
     actor = require_actor(request)
-    require_brand(brand_id)
+    require_brand(brand_id, actor)
     body = await _json_body(request)
     channel_type = _str_field(body, "channel_type")
     name = _str_field(body, "name")
@@ -317,15 +317,16 @@ async def channel_create_api(request: Request, brand_id: str):
         errors["status"] = "請選擇狀態。"
     if errors:
         return JSONResponse({"errors": errors}, status_code=400)
-    row = repo.create_channel(web.conn, brand_id, actor=actor, channel_type=channel_type,
-                               name=clean(name), identifier=clean(identifier), status=status)
+    row = repo.create_channel(web.conn, brand_id, org_id=actor.org_id, actor=str(actor.user_id),
+                               channel_type=channel_type, name=clean(name), identifier=clean(identifier),
+                               status=status)
     return {"data": _channel_shape(row)}
 
 
 @router.post("/api/library/brands/{brand_id}/channels/{channel_id}/edit")
 async def channel_update_api(request: Request, brand_id: str, channel_id: str):
     actor = require_actor(request)
-    require_brand(brand_id)
+    require_brand(brand_id, actor)
     body = await _json_body(request)
     channel_type = _str_field(body, "channel_type")
     name = _str_field(body, "name")
@@ -343,7 +344,7 @@ async def channel_update_api(request: Request, brand_id: str, channel_id: str):
     if errors:
         return JSONResponse({"errors": errors}, status_code=400)
     try:
-        row = repo.update_channel(web.conn, brand_id, channel_id, actor=actor, channel_type=channel_type,
+        row = repo.update_channel(web.conn, brand_id, channel_id, actor=str(actor.user_id), channel_type=channel_type,
                                    name=clean(name), identifier=clean(identifier), status=status)
     except ValueError:
         raise NotFoundKind("自有渠道")
@@ -353,9 +354,9 @@ async def channel_update_api(request: Request, brand_id: str, channel_id: str):
 @router.post("/api/library/brands/{brand_id}/channels/{channel_id}/delete")
 async def channel_delete_json_api(request: Request, brand_id: str, channel_id: str):
     actor = require_actor(request)
-    require_brand(brand_id)
+    require_brand(brand_id, actor)
     try:
-        repo.delete_channel(web.conn, brand_id, channel_id, actor=actor)
+        repo.delete_channel(web.conn, brand_id, channel_id, actor=str(actor.user_id))
     except ValueError:
         raise NotFoundKind("自有渠道")
     return {"ok": True}
@@ -366,7 +367,7 @@ async def channel_delete_json_api(request: Request, brand_id: str, channel_id: s
 @router.post("/api/library/brands/{brand_id}/edit")
 async def brand_update_api(request: Request, brand_id: str):
     actor = require_actor(request)
-    brand = require_brand(brand_id)
+    brand = require_brand(brand_id, actor)
     body = await _json_body(request)
     name = _str_field(body, "name")
     client_name = _str_field(body, "client_name")
@@ -393,12 +394,12 @@ async def brand_update_api(request: Request, brand_id: str):
     if errors:
         return JSONResponse({"errors": errors}, status_code=400)
     repo.update_brand(web.conn, brand_id, name=name_c, client_name=clean(client_name), status=status,
-                       actor=actor)
+                       actor=str(actor.user_id))
     repo.set_brand_switches(
         web.conn, brand_id, market_region=region_c or None,
-        conversion_goal=goal_c or brand_routes._persona_conversion_goal_default(persona), actor=actor,
+        conversion_goal=goal_c or brand_routes._persona_conversion_goal_default(persona), actor=str(actor.user_id),
     )
-    repo.set_brand_industry(web.conn, brand_id, industry=industry_c or None, actor=actor)
+    repo.set_brand_industry(web.conn, brand_id, industry=industry_c or None, actor=str(actor.user_id))
     updated = repo.get_brand(web.conn, brand_id)
     return {"data": _brand_profile_shape(brand_id, updated)}
 
@@ -409,21 +410,21 @@ async def brand_update_api(request: Request, brand_id: str):
 @router.post("/api/library/brands/{brand_id}/customer-voice/{cv_id}/archive")
 async def customer_voice_archive_api(request: Request, brand_id: str, cv_id: str):
     actor = require_actor(request)
-    require_brand(brand_id)
+    require_brand(brand_id, actor)
     voice = repo.get_customer_voice(web.conn, brand_id, cv_id)
     if voice is None:
         raise NotFoundKind("顧客原話")
     new_status = "active" if voice["status"] == "archived" else "archived"
-    row = repo.set_customer_voice_status(web.conn, brand_id, cv_id, status=new_status, actor=actor)
+    row = repo.set_customer_voice_status(web.conn, brand_id, cv_id, status=new_status, actor=str(actor.user_id))
     return {"data": _customer_voice_shape(row)}
 
 
 @router.post("/api/library/brands/{brand_id}/customer-voice/{cv_id}/delete")
 async def customer_voice_delete_api(request: Request, brand_id: str, cv_id: str):
     actor = require_actor(request)
-    require_brand(brand_id)
+    require_brand(brand_id, actor)
     voice = repo.get_customer_voice(web.conn, brand_id, cv_id)
     if voice is None:
         raise NotFoundKind("顧客原話")
-    repo.delete_customer_voice(web.conn, brand_id, cv_id, actor=actor)
+    repo.delete_customer_voice(web.conn, brand_id, cv_id, actor=str(actor.user_id))
     return {"ok": True}

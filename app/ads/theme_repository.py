@@ -12,8 +12,9 @@ CYCLE_CASCADE_TABLES／_PRODUCT_CASCADE_LABELS（該檔已頂到 800 行檔案�
 
 
 from app.ads import fingerprint as fp
+from app.brand_intelligence import repository as bi
 from app.core.audit import write_audit
-from app.core.db import DEV_ORG_ID, Conn, jsonb, new_id, now_utc
+from app.core.db import Conn, jsonb, new_id, now_utc
 
 
 def _rows(cursor) -> list:
@@ -26,6 +27,7 @@ def _row(cursor_row) -> dict | None:
 
 def _insert_component(conn: Conn, brand_id: str, campaign_cycle_id: str,
                       theme_id: str, component: dict, ts: str) -> None:
+    org_id = bi.get_brand(conn, brand_id)["org_id"]
     component_type = component.get("component_type")
     content = component.get("content")
     if not component_type or not str(component_type).strip():
@@ -38,7 +40,7 @@ def _insert_component(conn: Conn, brand_id: str, campaign_cycle_id: str,
         " creative_theme_id, component_type, sequence, content, fingerprint_json,"
         " over_budget, similarity_flag, created_at)"
         " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
-        (new_id("cthc"), DEV_ORG_ID, brand_id, campaign_cycle_id, theme_id, str(component_type).strip(),
+        (new_id("cthc"), org_id, brand_id, campaign_cycle_id, theme_id, str(component_type).strip(),
          component.get("sequence"), str(content), jsonb(fingerprint)
              if fingerprint is not None else None,
          bool(component.get("over_budget")),
@@ -52,6 +54,7 @@ def create_theme(conn: Conn, brand_id: str, *, campaign_cycle_id: str,
     """建一個主題，可一併帶入元件清單（components：每項 dict 至少含
     component_type／content，選填 sequence／fingerprint_json／over_budget／similarity_flag）。
     """
+    org_id = bi.get_brand(conn, brand_id)["org_id"]
     if not format_key or not format_key.strip():
         raise ValueError("格式 key（format_key）為必填")
     if not name or not name.strip():
@@ -67,14 +70,14 @@ def create_theme(conn: Conn, brand_id: str, *, campaign_cycle_id: str,
         "INSERT INTO creative_theme (id, org_id, brand_id, campaign_cycle_id, experiment_cell_id,"
         " format_key, name, folder_code, status, created_at, updated_at)"
         " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
-        (theme_id, DEV_ORG_ID, brand_id, campaign_cycle_id, experiment_cell_id, format_key.strip(),
+        (theme_id, org_id, brand_id, campaign_cycle_id, experiment_cell_id, format_key.strip(),
          name.strip(), folder_code.strip(), status, ts, ts),
     )
     for component in (components or []):
         _insert_component(conn, brand_id, campaign_cycle_id, theme_id, component, ts)
 
     after = get_theme(conn, brand_id, theme_id)
-    write_audit(conn, brand_id=brand_id, entity_type="creative_theme", entity_id=theme_id,
+    write_audit(conn, org_id=org_id, brand_id=brand_id, entity_type="creative_theme", entity_id=theme_id,
                 action="create", actor=actor, before=None, after=after)
     conn.commit()
     return after
@@ -195,7 +198,8 @@ def update_theme_status(conn: Conn, brand_id: str, theme_id: str, *,
         (status.strip(), now_utc(), brand_id, theme_id),
     )
     after = get_theme(conn, brand_id, theme_id)
-    write_audit(conn, brand_id=brand_id, entity_type="creative_theme", entity_id=theme_id,
+    org_id = bi.get_brand(conn, brand_id)["org_id"]
+    write_audit(conn, org_id=org_id, brand_id=brand_id, entity_type="creative_theme", entity_id=theme_id,
                 action="update_status", actor=actor, before=before, after=after)
     conn.commit()
     return after
@@ -211,6 +215,7 @@ def adopt_theme(conn: Conn, brand_id: str, theme_id: str, *, actor: str) -> dict
     一併算採用——不逐元件建決策列（AC3：不提供逐欄位勾選採用），元件層沒有獨立的
     「已採用」狀態可查，是否算數看主題本身的 status。
     """
+    org_id = bi.get_brand(conn, brand_id)["org_id"]
     before = get_theme(conn, brand_id, theme_id)
     if before is None:
         raise ValueError(f"找不到主題：{theme_id}")
@@ -225,17 +230,16 @@ def adopt_theme(conn: Conn, brand_id: str, theme_id: str, *, actor: str) -> dict
     conn.execute(
         "INSERT INTO adoption_decision (id, org_id, brand_id, campaign_cycle_id, target_type, target_id,"
         " decision, decided_by, decided_at) VALUES (%s, %s, %s, %s, 'theme', %s, 'adopted', %s, %s)",
-        (new_id("adp"), DEV_ORG_ID, brand_id, before["campaign_cycle_id"], theme_id, actor, ts),
+        (new_id("adp"), org_id, brand_id, before["campaign_cycle_id"], theme_id, actor, ts),
     )
     after = get_theme(conn, brand_id, theme_id)
-    write_audit(conn, brand_id=brand_id, entity_type="creative_theme", entity_id=theme_id,
+    write_audit(conn, org_id=org_id, brand_id=brand_id, entity_type="creative_theme", entity_id=theme_id,
                 action="adopt", actor=actor, before=before, after=after)
     conn.commit()
     return after
 
 
-def reject_component(conn: Conn, brand_id: str, component_id: str, *,
-                     reason_code: str, actor: str, reason_text: str | None = None) -> dict:
+def reject_component(conn: Conn, brand_id: str, component_id: str, *, reason_code: str, actor: str, reason_text: str | None = None) -> dict:
     """單一元件退件＋理由（AC2）：元件除名——不從資料表刪掉（append-only 稽核慣例），
     `list_theme_components()`／`get_component()` 之後回傳時標 `rejected=True`。理由碼與
     元件當下的指紋快照寫進 adoption_decision，跟 app/ads/creative.py `reject()`／
@@ -244,6 +248,7 @@ def reject_component(conn: Conn, brand_id: str, component_id: str, *,
     只影響這一個元件，同主題其他元件與主題本身狀態都不動（AC3）。
     """
     component = get_component(conn, brand_id, component_id)
+    org_id = bi.get_brand(conn, brand_id)["org_id"]
     if component is None:
         raise ValueError(f"找不到元件：{component_id}")
     if reason_code not in fp.REJECT_REASON_LABELS:
@@ -257,12 +262,12 @@ def reject_component(conn: Conn, brand_id: str, component_id: str, *,
         "INSERT INTO adoption_decision (id, org_id, brand_id, campaign_cycle_id, target_type, target_id,"
         " decision, reason_code, reason_text, fingerprint_json, decided_by, decided_at)"
         " VALUES (%s, %s, %s, %s, 'theme_component', %s, 'rejected', %s, %s, %s, %s, %s)",
-        (new_id("adp"), DEV_ORG_ID, brand_id, component["campaign_cycle_id"], component_id, reason_code,
+        (new_id("adp"), org_id, brand_id, component["campaign_cycle_id"], component_id, reason_code,
          (reason_text or "").strip() or None,
          jsonb(component["fingerprint_json"] or {}), actor, ts),
     )
     after = get_component(conn, brand_id, component_id)
-    write_audit(conn, brand_id=brand_id, entity_type="creative_theme_component",
+    write_audit(conn, org_id=org_id, brand_id=brand_id, entity_type="creative_theme_component",
                 entity_id=component_id, action="reject", actor=actor,
                 before=before, after={"rejected": after["rejected"], "reason_code": reason_code})
     conn.commit()

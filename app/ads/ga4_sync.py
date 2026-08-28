@@ -10,8 +10,9 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 
 from app.ads import ga4_api
+from app.brand_intelligence import repository as bi
 from app.core import settings as coresettings
-from app.core.db import DEV_ORG_ID, new_id, now_utc
+from app.core.db import new_id, now_utc
 
 PROPERTY_SETTING = "ga4_property_id"
 SERVICE_ACCOUNT_SETTING = "ga4_service_account_json"
@@ -53,6 +54,10 @@ def sync_brand(conn, brand_id: str, actor: str, *, client=None,
                today: str | None = None, on_stage=None) -> GA4SyncResult:
     """把這個品牌 GA4 資源的來源／媒介成效抓回來。失敗一律回帶 error 的結果，不拋例外、
     不半途留髒資料（比照 app/ads/sync.py sync_account 同一套防呆）。"""
+    brand = bi.get_brand(conn, brand_id)
+    if brand is None:
+        raise ValueError(f"找不到品牌：{brand_id}")
+    org_id = brand["org_id"]
     if not is_configured(conn):
         return GA4SyncResult(error=ga4_api.NO_CREDENTIALS_MESSAGE)
 
@@ -85,7 +90,7 @@ def sync_brand(conn, brand_id: str, actor: str, *, client=None,
             "INSERT INTO ga4_summary (id, org_id, brand_id, date_range_start, date_range_end, source,"
             " medium, sessions, conversions, revenue, synced_at, created_at)"
             " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
-            (new_id("ga4"), DEV_ORG_ID, brand_id, since, until, row.source, row.medium,
+            (new_id("ga4"), org_id, brand_id, since, until, row.source, row.medium,
              row.sessions, row.conversions, row.revenue, ts, ts),
         )
     conn.execute(
@@ -95,7 +100,7 @@ def sync_brand(conn, brand_id: str, actor: str, *, client=None,
         " date_range_end = excluded.date_range_end, row_count = excluded.row_count,"
         " purchase_event_seen = excluded.purchase_event_seen, synced_at = excluded.synced_at,"
         " updated_at = excluded.updated_at",
-        (DEV_ORG_ID, brand_id, since, until, len(rows), bool(purchase_seen), ts, ts),
+        (org_id, brand_id, since, until, len(rows), bool(purchase_seen), ts, ts),
     )
     conn.commit()
     return GA4SyncResult(rows=len(rows), purchase_event_seen=purchase_seen)

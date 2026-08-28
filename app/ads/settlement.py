@@ -23,7 +23,8 @@ settlement_version 只負責版次號碼、觸發原因、是否結案後才動�
 
 
 from app.ads import inflation as ads_inflation
-from app.core.db import DEV_ORG_ID, jsonb, new_id, now_utc
+from app.brand_intelligence import repository as bi
+from app.core.db import jsonb, new_id, now_utc
 
 # 第 7 刀（A1 三層地界新規則：app/ads 不得 import app.orders，見
 # test_architecture_boundaries.py）：orders_repo 不在這裡 import，改由組裝根
@@ -84,6 +85,7 @@ def freeze(conn, brand_id: str, cycle: dict, *, actor: str, cycle_totals: dict,
     同一期每呼叫一次就多一版（append-only，不覆寫舊版），version 從 1 起遞增
     （issue #37 acceptance：同一期重跑判讀必產生新版次）。
     """
+    org_id = bi.get_brand(conn, brand_id)["org_id"]
     if not actor or not actor.strip():
         raise ValueError("actor 為必填")
     cycle_id = cycle["id"]
@@ -95,7 +97,7 @@ def freeze(conn, brand_id: str, cycle: dict, *, actor: str, cycle_totals: dict,
     conn.execute(
         "INSERT INTO settlement_version (id, org_id, brand_id, campaign_cycle_id, version,"
         " trigger_reason, is_post_close, created_by, created_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
-        (settlement_id, DEV_ORG_ID, brand_id, cycle_id, version, reason,
+        (settlement_id, org_id, brand_id, cycle_id, version, reason,
          cycle.get("status") == "CLOSED", actor, ts),
     )
 
@@ -109,7 +111,7 @@ def freeze(conn, brand_id: str, cycle: dict, *, actor: str, cycle_totals: dict,
         "INSERT INTO reading_snapshot (id, org_id, brand_id, campaign_cycle_id, settlement_version_id,"
         " coefficient_version_id, data_arrival_json, missing_sources_json, summary_json,"
         " created_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
-        (snapshot_id, DEV_ORG_ID, brand_id, cycle_id, settlement_id,
+        (snapshot_id, org_id, brand_id, cycle_id, settlement_id,
          coefficient["id"] if coefficient else None,
          jsonb(arrival), jsonb(missing),
          # summary 混雜多來源算出來的數字（可能含 Decimal／datetime）；db.jsonb() 內建
@@ -129,7 +131,7 @@ def freeze(conn, brand_id: str, cycle: dict, *, actor: str, cycle_totals: dict,
             "INSERT INTO reading_snapshot_input (id, org_id, brand_id, campaign_cycle_id,"
             " reading_snapshot_id, scope, key, value, created_at) VALUES"
             " (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
-            (new_id("rsin"), DEV_ORG_ID, brand_id, cycle_id, snapshot_id, scope, key,
+            (new_id("rsin"), org_id, brand_id, cycle_id, snapshot_id, scope, key,
              None if value is None else str(value), ts),
         )
 

@@ -145,8 +145,9 @@ def _product_list_item(brand_id: str, product: dict) -> dict:
 # ---------------------------------------------------------------------------
 
 @router.get("/api/products/brands/{brand_id}")
-async def product_list(brand_id: str):
-    require_brand(brand_id)
+async def product_list(request: Request, brand_id: str):
+    actor = require_actor(request)
+    require_brand(brand_id, actor)
     products = web.list_products(brand_id)
     return _envelope([_product_list_item(brand_id, p) for p in products])
 
@@ -157,12 +158,12 @@ async def product_create(request: Request, brand_id: str):
     邏輯，source_url 這顆表單本來就只給旁邊的 AI 調研按鈕用，手動建立不記錄網址，
     跟搬家前的行為一致）。"""
     actor = require_actor(request)
-    require_brand(brand_id)
+    require_brand(brand_id, actor)
     body = await _json_body(request)
     name_c = clean(_str_field(body, "name"))
     if not name_c:
         return _error(400, "請填寫產品名稱。")
-    product = repo.create_product(web.conn, brand_id, name=name_c, actor=actor)
+    product = repo.create_product(web.conn, brand_id, name=name_c, actor=str(actor.user_id))
     return {"id": product["id"]}
 
 
@@ -270,7 +271,7 @@ def _valid_url(url: str) -> bool:
 @router.post("/api/products/brands/{brand_id}/research")
 async def product_research_start(request: Request, brand_id: str):
     actor = require_actor(request)
-    require_brand(brand_id)
+    require_brand(brand_id, actor)
     body = await _json_body(request)
     name_c = clean(_str_field(body, "name"))
     url_c = clean(_str_field(body, "source_url"))
@@ -280,15 +281,15 @@ async def product_research_start(request: Request, brand_id: str):
         return _error(400, "請填寫產品頁網址，才能請 AI 幫忙調研；不填網址請改用「新增這個產品」。")
     if not _valid_url(url_c):
         return _error(400, _URL_FORMAT_ERROR)
-    product = repo.create_product(web.conn, brand_id, name=name_c, actor=actor)
-    _research_start(product["id"], brand_id, actor, name_c, url_c)
+    product = repo.create_product(web.conn, brand_id, name=name_c, actor=str(actor.user_id))
+    _research_start(product["id"], brand_id, str(actor.user_id), name_c, url_c)
     return JSONResponse({"product_id": product["id"]}, status_code=202)
 
 
 @router.post("/api/products/brands/{brand_id}/products/{product_id}/rescan")
 async def product_rescan_start(request: Request, brand_id: str, product_id: str):
     actor = require_actor(request)
-    brand = require_brand(brand_id)
+    brand = require_brand(brand_id, actor)
     product = require_product(brand, product_id)
     body = await _json_body(request)
     url_c = clean(_str_field(body, "source_url"))
@@ -296,13 +297,14 @@ async def product_rescan_start(request: Request, brand_id: str, product_id: str)
         return _error(400, "請填寫網址，才能請 AI 再次調研。")
     if not _valid_url(url_c):
         return _error(400, _URL_FORMAT_ERROR)
-    _research_start(product_id, brand_id, actor, product["name"], url_c)
+    _research_start(product_id, brand_id, str(actor.user_id), product["name"], url_c)
     return JSONResponse({}, status_code=202)
 
 
 @router.get("/api/products/brands/{brand_id}/products/{product_id}/research-status")
-async def product_research_status(brand_id: str, product_id: str):
-    brand = require_brand(brand_id)
+async def product_research_status(request: Request, brand_id: str, product_id: str):
+    actor = require_actor(request)
+    brand = require_brand(brand_id, actor)
     require_product(brand, product_id)
     return _envelope(_research_state(product_id))
 
@@ -312,8 +314,9 @@ async def product_research_status(brand_id: str, product_id: str):
 # ---------------------------------------------------------------------------
 
 @router.get("/api/products/brands/{brand_id}/products/{product_id}")
-async def product_detail(brand_id: str, product_id: str):
-    brand = require_brand(brand_id)
+async def product_detail(request: Request, brand_id: str, product_id: str):
+    actor = require_actor(request)
+    brand = require_brand(brand_id, actor)
     product = require_product(brand, product_id)
     facts = repo.list_product_facts(web.conn, brand_id, product_id)
     facts_pending = sum(1 for f in facts if f["status"] == "pending")
@@ -345,10 +348,10 @@ async def product_detail(brand_id: str, product_id: str):
 @router.post("/api/products/brands/{brand_id}/products/{product_id}/archive")
 async def product_archive(request: Request, brand_id: str, product_id: str):
     actor = require_actor(request)
-    brand = require_brand(brand_id)
+    brand = require_brand(brand_id, actor)
     product = require_product(brand, product_id)
     new_status = "archived" if product["status"] == "active" else "active"
-    repo.update_product(web.conn, brand_id, product_id, name=product["name"], status=new_status, actor=actor)
+    repo.update_product(web.conn, brand_id, product_id, name=product["name"], status=new_status, actor=str(actor.user_id))
     return Response(status_code=204)
 
 
@@ -359,7 +362,7 @@ async def product_archive(request: Request, brand_id: str, product_id: str):
 @router.post("/api/products/brands/{brand_id}/products/{product_id}/facts")
 async def product_fact_create(request: Request, brand_id: str, product_id: str):
     actor = require_actor(request)
-    brand = require_brand(brand_id)
+    brand = require_brand(brand_id, actor)
     require_product(brand, product_id)
     body = await _json_body(request)
     fact_type = clean(_str_field(body, "fact_type"))
@@ -374,9 +377,9 @@ async def product_fact_create(request: Request, brand_id: str, product_id: str):
         return _error(400, "請填寫事實內容。")
     if status not in ("confirmed", "pending"):
         return _error(400, "請選擇是否已經確認過。")
-    src_id = legacy_routes._create_source_ref(brand_id, actor, _str_field(body, "source_reference"))
-    confirmed_by = actor if status == "confirmed" else None
-    repo.create_product_fact(web.conn, brand_id, product_id, actor=actor, fact_type=fact_type,
+    src_id = legacy_routes._create_source_ref(brand_id, str(actor.user_id), _str_field(body, "source_reference"))
+    confirmed_by = str(actor.user_id) if status == "confirmed" else None
+    repo.create_product_fact(web.conn, brand_id, product_id, actor=str(actor.user_id), fact_type=fact_type,
                               label=label, value=value, status=status, source_reference_id=src_id,
                               confirmed_by=confirmed_by)
     return Response(status_code=204)
@@ -385,7 +388,7 @@ async def product_fact_create(request: Request, brand_id: str, product_id: str):
 @router.post("/api/products/brands/{brand_id}/products/{product_id}/facts/{fact_id}")
 async def product_fact_edit(request: Request, brand_id: str, product_id: str, fact_id: str):
     actor = require_actor(request)
-    brand = require_brand(brand_id)
+    brand = require_brand(brand_id, actor)
     require_product(brand, product_id)
     fact = repo.get_product_fact(web.conn, brand_id, product_id, fact_id)
     if not fact:
@@ -400,9 +403,9 @@ async def product_fact_edit(request: Request, brand_id: str, product_id: str, fa
         return _error(400, "請填寫這條事實的名稱。")
     if not value:
         return _error(400, "請填寫事實內容。")
-    src_id = (legacy_routes._create_source_ref(brand_id, actor, _str_field(body, "source_reference"))
+    src_id = (legacy_routes._create_source_ref(brand_id, str(actor.user_id), _str_field(body, "source_reference"))
               or fact["source_reference_id"])
-    repo.update_product_fact(web.conn, brand_id, product_id, fact_id, actor=actor,
+    repo.update_product_fact(web.conn, brand_id, product_id, fact_id, actor=str(actor.user_id),
                               fact_type=fact_type, label=label, value=value, source_reference_id=src_id)
     return Response(status_code=204)
 
@@ -410,26 +413,26 @@ async def product_fact_edit(request: Request, brand_id: str, product_id: str, fa
 @router.post("/api/products/brands/{brand_id}/products/{product_id}/facts/{fact_id}/confirm")
 async def product_fact_confirm(request: Request, brand_id: str, product_id: str, fact_id: str):
     actor = require_actor(request)
-    brand = require_brand(brand_id)
+    brand = require_brand(brand_id, actor)
     require_product(brand, product_id)
     fact = repo.get_product_fact(web.conn, brand_id, product_id, fact_id)
     if not fact:
         raise NotFoundKind("產品事實")
     body = await _json_body(request)
     confirmed_by = clean(_str_field(body, "confirmed_by")) or "使用者"
-    repo.confirm_product_fact(web.conn, brand_id, product_id, fact_id, confirmed_by=confirmed_by, actor=actor)
+    repo.confirm_product_fact(web.conn, brand_id, product_id, fact_id, confirmed_by=confirmed_by, actor=str(actor.user_id))
     return Response(status_code=204)
 
 
 @router.post("/api/products/brands/{brand_id}/products/{product_id}/facts/{fact_id}/delete")
 async def product_fact_delete(request: Request, brand_id: str, product_id: str, fact_id: str):
     actor = require_actor(request)
-    brand = require_brand(brand_id)
+    brand = require_brand(brand_id, actor)
     require_product(brand, product_id)
     fact = repo.get_product_fact(web.conn, brand_id, product_id, fact_id)
     if not fact:
         raise NotFoundKind("產品事實")
-    repo.delete_product_fact(web.conn, brand_id, fact_id, actor=actor)
+    repo.delete_product_fact(web.conn, brand_id, fact_id, actor=str(actor.user_id))
     return Response(status_code=204)
 
 
@@ -440,7 +443,7 @@ async def product_fact_delete(request: Request, brand_id: str, product_id: str, 
 @router.post("/api/products/brands/{brand_id}/products/{product_id}/economics")
 async def economics_save(request: Request, brand_id: str, product_id: str):
     actor = require_actor(request)
-    brand = require_brand(brand_id)
+    brand = require_brand(brand_id, actor)
     require_product(brand, product_id)
     body = await _json_body(request)
     price_val, price_ok = _num_field(body, "selling_price")
@@ -462,7 +465,7 @@ async def economics_save(request: Request, brand_id: str, product_id: str):
     if not confirmed_by:
         return _error(400, "請填寫確認人是誰。")
     repo.save_product_economics(
-        web.conn, brand_id, product_id, actor=actor,
+        web.conn, brand_id, product_id, actor=str(actor.user_id),
         selling_price=price_val, currency=currency, confirmed_by=confirmed_by,
         fixed_cost=fixed_val, unit_variable_cost=unit_val, shipping_cost=ship_val,
         cpa_roas_basis=clean(_str_field(body, "cpa_roas_basis")) or None,
@@ -474,12 +477,13 @@ async def economics_save(request: Request, brand_id: str, product_id: str):
 @router.post("/api/products/brands/{brand_id}/products/{product_id}/economics/confirm")
 async def economics_confirm(request: Request, brand_id: str, product_id: str):
     actor = require_actor(request)
-    brand = require_brand(brand_id)
+    brand = require_brand(brand_id, actor)
     require_product(brand, product_id)
     existing = repo.get_product_economics(web.conn, brand_id, product_id)
     if not existing:
         raise NotFoundKind("產品經濟數字")
-    repo.confirm_product_economics(web.conn, brand_id, product_id, confirmed_by=actor, actor=actor)
+    repo.confirm_product_economics(web.conn, brand_id, product_id, confirmed_by=str(actor.user_id),
+                                    actor=str(actor.user_id))
     return Response(status_code=204)
 
 
@@ -489,8 +493,9 @@ async def economics_confirm(request: Request, brand_id: str, product_id: str):
 # ---------------------------------------------------------------------------
 
 @router.get("/api/products/brands/{brand_id}/products/{product_id}/handoff")
-async def handoff_prompt(brand_id: str, product_id: str):
-    brand = require_brand(brand_id)
+async def handoff_prompt(request: Request, brand_id: str, product_id: str):
+    actor = require_actor(request)
+    brand = require_brand(brand_id, actor)
     product = require_product(brand, product_id)
     return _envelope({"prompt_text": product_helpers._product_handoff_prompt(brand, product)})
 
@@ -498,7 +503,7 @@ async def handoff_prompt(brand_id: str, product_id: str):
 @router.post("/api/products/brands/{brand_id}/products/{product_id}/handoff")
 async def handoff_submit(request: Request, brand_id: str, product_id: str):
     actor = require_actor(request)
-    brand = require_brand(brand_id)
+    brand = require_brand(brand_id, actor)
     product = require_product(brand, product_id)
     body = await _json_body(request)
     reply_text = _str_field(body, "reply_text")
@@ -518,9 +523,9 @@ async def handoff_submit(request: Request, brand_id: str, product_id: str):
         result = fixed
 
     src_label = f"外部深研交接包・{datetime.now(UTC).date().isoformat()}"
-    src_id = legacy_routes._create_source_ref(brand_id, actor, src_label)
+    src_id = legacy_routes._create_source_ref(brand_id, str(actor.user_id), src_label)
     added, _skipped, _price_created = product_helpers._apply_product_scan_result(
-        brand_id, product_id, actor, src_id, result)
+        brand_id, product_id, str(actor.user_id), src_id, result)
     return {"added_count": added}
 
 
@@ -529,8 +534,9 @@ async def handoff_submit(request: Request, brand_id: str, product_id: str):
 # ---------------------------------------------------------------------------
 
 @router.get("/api/products/brands/{brand_id}/products/{product_id}/delete")
-async def delete_impact(brand_id: str, product_id: str):
-    brand = require_brand(brand_id)
+async def delete_impact(request: Request, brand_id: str, product_id: str):
+    actor = require_actor(request)
+    brand = require_brand(brand_id, actor)
     require_product(brand, product_id)
     rows = cleanup.count_all_product(web.conn, brand_id, product_id)
     return _envelope([{"label": label, "count": n} for label, n in rows if n > 0])
@@ -539,12 +545,12 @@ async def delete_impact(brand_id: str, product_id: str):
 @router.post("/api/products/brands/{brand_id}/products/{product_id}/delete")
 async def delete_confirm(request: Request, brand_id: str, product_id: str):
     actor = require_actor(request)
-    brand = require_brand(brand_id)
+    brand = require_brand(brand_id, actor)
     product = require_product(brand, product_id)
     if product["status"] != "archived":
         return _error(400, "要先把產品封存，才能永久刪除。")
     body = await _json_body(request)
     if clean(_str_field(body, "confirm_name")) != product["name"]:
         return _error(400, "輸入的名稱跟產品名稱不一樣，請照著上面顯示的名稱再打一次。")
-    repo.delete_product(web.conn, brand_id, product_id, actor=actor)
+    repo.delete_product(web.conn, brand_id, product_id, actor=str(actor.user_id))
     return Response(status_code=204)

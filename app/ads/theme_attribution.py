@@ -20,6 +20,7 @@ performance_synced_at）。規格書與使用者故事只要求同一主題內�
 
 
 from app.ads import theme_engine
+from app.brand_intelligence import repository as bi
 from app.core.audit import write_audit
 from app.core.db import jsonb, now_utc
 
@@ -105,7 +106,10 @@ def _reconcile_if_changed(conn, brand_id: str, component_id: str, text: str, *,
         (text, jsonb(new_fingerprint) if new_fingerprint else None,
          brand_id, component_id),
     )
-    write_audit(conn, brand_id=brand_id, entity_type="creative_theme_component",
+    brand = bi.get_brand(conn, brand_id)
+    assert brand is not None, f"找不到品牌：{brand_id}"
+    org_id = brand["org_id"]
+    write_audit(conn, org_id=org_id, brand_id=brand_id, entity_type="creative_theme_component",
                entity_id=component_id, action="sync_from_meta", actor=actor,
                before=before, after={"content": text},
                reason="偵測到 Meta 端文案跟系統存檔不一致（可能被人工改過），自動同步並重打指紋")

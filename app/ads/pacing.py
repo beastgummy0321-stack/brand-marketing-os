@@ -20,6 +20,7 @@ from datetime import date
 
 from app.ads import performance as ads_performance
 from app.ads import repository as ads_repo
+from app.brand_intelligence import repository as bi_repo
 from app.core import interrupts as core_interrupts
 from app.core import rule_cards
 
@@ -93,8 +94,11 @@ def check_cycle(conn, brand_id: str, cycle_id: str, today: str | None = None) ->
     if result["status"] not in _CATEGORY_BY_STATUS:
         return None
 
+    _brand = bi_repo.get_brand(conn, brand_id)
+    assert _brand is not None, f"找不到品牌：{brand_id}"
     interrupt_id = core_interrupts.enqueue(
-        conn, category=_CATEGORY_BY_STATUS[result["status"]], brand_id=brand_id,
+        conn, org_id=_brand["org_id"],
+        category=_CATEGORY_BY_STATUS[result["status"]], brand_id=brand_id,
         campaign_cycle_id=cycle_id, dedupe_key=f"pacing:{cycle_id}:{result['status']}",
         message=_MESSAGES[result["status"]],
         action_url=f"/app/brands/{brand_id}/campaigns/{cycle_id}",

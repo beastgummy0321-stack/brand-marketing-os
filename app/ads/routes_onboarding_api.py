@@ -15,6 +15,8 @@ from fastapi import APIRouter, HTTPException, Request
 from app.ads import data_onboarding, ga4_sync
 from app.ads import sync as ads_sync
 from app.brand_intelligence import background_job
+from app.brand_intelligence import repository as bi
+from app.core import db as coredb
 from app.core.db import new_id
 from app.shared import web
 from app.shared.web import JSONResponse, NotFoundKind, require_actor, require_brand
@@ -99,7 +101,14 @@ def _run_meta_backfill(brand_id: str, actor: str) -> None:
     started_at = _state(kind, brand_id).get("started_at", datetime.now(UTC).isoformat())
     try:
         since, until, _actual_months = ads_sync.backfill_range(BACKFILL_MONTHS)
-        result = ads_sync.sync_account(web.conn, actor, since=since, until=until)
+        # bi.get_brand() 的 conn 參數明確標了型別 Conn；web.conn 是 ConnProxy（每次呼叫轉發
+        # 到這個背景工作綁定的連線，見 app/core/db.py），這裡改成一開始就拿 coredb.current()
+        # 拿到的那個真正的 Conn 實例——跟 ConnProxy 轉發的目標完全一樣，只是型別對得上。
+        conn = coredb.current()
+        brand = bi.get_brand(conn, brand_id)
+        assert brand is not None, f"找不到品牌：{brand_id}"
+        org_id = brand["org_id"]
+        result = ads_sync.sync_account(conn, actor, org_id=org_id, since=since, until=until)
         error = result.error
     except Exception as exc:  # noqa: BLE001 - 背景例外必須回到頁面與收件匣
         error = f"背景執行發生未預期錯誤：{exc}"
@@ -146,9 +155,9 @@ def _start(kind: str, brand_id: str, actor: str, target: Callable[[str, str], No
 
 
 @router.get("/api/campaigns/brands/{brand_id}/data-onboarding")
-async def onboarding_get(brand_id: str):
+async def onboarding_get(brand_id: str, request: Request):
     try:
-        require_brand(brand_id)
+        require_brand(brand_id, require_actor(request))
     except NotFoundKind:
         return JSONResponse({"detail": "找不到品牌"}, status_code=404)
     checklist = data_onboarding.build_checklist(web.conn, brand_id)
@@ -168,12 +177,12 @@ async def onboarding_get(brand_id: str):
 async def meta_backfill(request: Request, brand_id: str):
     actor = require_actor(request)
     try:
-        require_brand(brand_id)
+        require_brand(brand_id, actor)
     except NotFoundKind:
         return JSONResponse({"detail": "找不到品牌"}, status_code=404)
     if not ads_sync.is_configured(web.conn):
         raise HTTPException(status_code=400, detail="還沒連上 Meta，先去設定頁連線。")
-    result = _start("meta_backfill", brand_id, actor, _run_meta_backfill)
+    result = _start("meta_backfill", brand_id, str(actor.user_id), _run_meta_backfill)
     return {**result, "message": "開始回填近 12 個月的 Meta 成效，好了會通知你。"}
 
 
@@ -181,12 +190,12 @@ async def meta_backfill(request: Request, brand_id: str):
 async def ga4_backfill(request: Request, brand_id: str):
     actor = require_actor(request)
     try:
-        require_brand(brand_id)
+        require_brand(brand_id, actor)
     except NotFoundKind:
         return JSONResponse({"detail": "找不到品牌"}, status_code=404)
     if not ga4_sync.is_configured(web.conn):
         raise HTTPException(status_code=400, detail="還沒連上 GA4，先去設定頁連線。")
-    result = _start("ga4_backfill", brand_id, actor, _run_ga4_backfill)
+    result = _start("ga4_backfill", brand_id, str(actor.user_id), _run_ga4_backfill)
     return {**result, "message": "開始回填近 12 個月的 GA4 資料，好了會通知你。"}
 
 
@@ -194,10 +203,10 @@ async def ga4_backfill(request: Request, brand_id: str):
 async def ga4_sync_now(request: Request, brand_id: str):
     actor = require_actor(request)
     try:
-        require_brand(brand_id)
+        require_brand(brand_id, actor)
     except NotFoundKind:
         return JSONResponse({"detail": "找不到品牌"}, status_code=404)
     if not ga4_sync.is_configured(web.conn):
         raise HTTPException(status_code=400, detail="還沒連上 GA4，先去設定頁連線。")
-    result = _start("ga4_sync", brand_id, actor, _run_ga4_sync)
+    result = _start("ga4_sync", brand_id, str(actor.user_id), _run_ga4_sync)
     return {**result, "message": "開始同步 GA4，好了會通知你。"}

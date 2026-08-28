@@ -42,8 +42,8 @@ async def _json_body(request: Request) -> dict:
 # ---- 投放前檢查清單（S8.25-27） ----
 
 @router.get("/api/campaigns/{brand_id}/{cycle_id}/checklist")
-async def checklist_get(brand_id: str, cycle_id: str):
-    main_mod.require_brand(brand_id)
+async def checklist_get(brand_id: str, cycle_id: str, request: Request):
+    main_mod.require_brand(brand_id, main_mod.require_actor(request))
     conn = main_mod.conn
     _require_cycle(brand_id, cycle_id)
     items = ads_checklist.one_time_status(conn, brand_id) + ads_checklist.cycle_status(conn, brand_id, cycle_id)
@@ -52,21 +52,22 @@ async def checklist_get(brand_id: str, cycle_id: str):
 
 @router.post("/api/campaigns/{brand_id}/{cycle_id}/checklist/{scope}/{item_key}")
 async def checklist_toggle(request: Request, brand_id: str, cycle_id: str, scope: str, item_key: str):
-    main_mod.require_brand(brand_id)
     actor = main_mod.require_actor(request)
+    main_mod.require_brand(brand_id, actor)
     conn = main_mod.conn
     _require_cycle(brand_id, cycle_id)
+    actor_id = str(actor.user_id)
     try:
         if scope == "one-time":
             current = next((i for i in ads_checklist.one_time_status(conn, brand_id) if i["key"] == item_key), None)
             if current is None:
                 return _error(404, "沒有這個檢查項目")
-            ads_checklist.set_one_time(conn, brand_id, item_key, not current["checked"], actor)
+            ads_checklist.set_one_time(conn, brand_id, item_key, not current["checked"], actor_id)
         elif scope == "cycle":
             current = next((i for i in ads_checklist.cycle_status(conn, brand_id, cycle_id) if i["key"] == item_key), None)
             if current is None:
                 return _error(404, "沒有這個檢查項目")
-            ads_checklist.set_cycle_item(conn, brand_id, cycle_id, item_key, not current["checked"], actor)
+            ads_checklist.set_cycle_item(conn, brand_id, cycle_id, item_key, not current["checked"], actor_id)
         else:
             return _error(400, "scope 只能是 one-time 或 cycle")
     except ValueError as exc:
@@ -76,15 +77,15 @@ async def checklist_toggle(request: Request, brand_id: str, cycle_id: str, scope
 
 @router.post("/api/campaigns/{brand_id}/{cycle_id}/handoff/qa-launch/{item_key}")
 async def qa_launch_toggle(request: Request, brand_id: str, cycle_id: str, item_key: str):
-    main_mod.require_brand(brand_id)
     actor = main_mod.require_actor(request)
+    main_mod.require_brand(brand_id, actor)
     conn = main_mod.conn
     _require_cycle(brand_id, cycle_id)
     current = next((i for i in ads_checklist.qa_launch_status(conn, brand_id) if i["key"] == item_key), None)
     if current is None:
         return _error(404, "沒有這個檢查項目")
     try:
-        ads_checklist.set_qa_launch_item(conn, brand_id, item_key, not current["checked"], actor)
+        ads_checklist.set_qa_launch_item(conn, brand_id, item_key, not current["checked"], str(actor.user_id))
     except ValueError as exc:
         return _error(400, str(exc))
     return JSONResponse(None, status_code=204)
@@ -93,16 +94,16 @@ async def qa_launch_toggle(request: Request, brand_id: str, cycle_id: str, item_
 # ---- QA 系統覆核（S8.32-35，票 Q1-01：五項全部改真的打 Meta 查）----
 
 @router.get("/api/campaigns/{brand_id}/{cycle_id}/handoff/qa-auto-check")
-async def qa_auto_check(brand_id: str, cycle_id: str):
-    main_mod.require_brand(brand_id)
+async def qa_auto_check(brand_id: str, cycle_id: str, request: Request):
+    main_mod.require_brand(brand_id, main_mod.require_actor(request))
     conn = main_mod.conn
     _require_cycle(brand_id, cycle_id)
     return _envelope(qa_autocheck.results(conn, brand_id, cycle_id))
 
 
 @router.get("/api/campaigns/{brand_id}/{cycle_id}/handoff/naming-check")
-async def naming_check_get(brand_id: str, cycle_id: str):
-    main_mod.require_brand(brand_id)
+async def naming_check_get(brand_id: str, cycle_id: str, request: Request):
+    main_mod.require_brand(brand_id, main_mod.require_actor(request))
     conn = main_mod.conn
     _require_cycle(brand_id, cycle_id)
     packages = ads_handoff.list_packages(conn, brand_id, cycle_id)
@@ -141,8 +142,8 @@ def _code_json(row: dict) -> dict:
 
 
 @router.get("/api/campaigns/{brand_id}/{cycle_id}/handoff")
-async def handoff_get(brand_id: str, cycle_id: str):
-    main_mod.require_brand(brand_id)
+async def handoff_get(brand_id: str, cycle_id: str, request: Request):
+    main_mod.require_brand(brand_id, main_mod.require_actor(request))
     conn = main_mod.conn
     _require_cycle(brand_id, cycle_id)
     packages = ads_handoff.list_packages(conn, brand_id, cycle_id)
@@ -167,11 +168,11 @@ async def handoff_get(brand_id: str, cycle_id: str):
 
 @router.post("/api/campaigns/{brand_id}/{cycle_id}/handoff/build")
 async def handoff_build(request: Request, brand_id: str, cycle_id: str):
-    main_mod.require_brand(brand_id)
     actor = main_mod.require_actor(request)
+    main_mod.require_brand(brand_id, actor)
     _require_cycle(brand_id, cycle_id)
     try:
-        ads_handoff.build_packages(main_mod.conn, brand_id, cycle_id, actor)
+        ads_handoff.build_packages(main_mod.conn, brand_id, cycle_id, str(actor.user_id))
     except ValueError as exc:
         return _error(400, str(exc))
     return JSONResponse(None, status_code=204)
@@ -179,12 +180,12 @@ async def handoff_build(request: Request, brand_id: str, cycle_id: str):
 
 @router.post("/api/campaigns/{brand_id}/{cycle_id}/handoff/codes")
 async def handoff_codes_generate(request: Request, brand_id: str, cycle_id: str):
-    main_mod.require_brand(brand_id)
     actor = main_mod.require_actor(request)
+    main_mod.require_brand(brand_id, actor)
     body = await _json_body(request)
     try:
         ads_codes.generate_codes(main_mod.conn, brand_id, cycle_id, discount_type="percent",
-                                 discount_value=body.get("discount_pct"), actor=actor)
+                                 discount_value=body.get("discount_pct"), actor=str(actor.user_id))
     except ValueError as exc:
         return _error(400, str(exc))
     return JSONResponse(None, status_code=204)
@@ -192,11 +193,12 @@ async def handoff_codes_generate(request: Request, brand_id: str, cycle_id: str)
 
 @router.post("/api/campaigns/{brand_id}/{cycle_id}/handoff/codes/verify")
 async def handoff_codes_verify(request: Request, brand_id: str, cycle_id: str):
-    main_mod.require_brand(brand_id)
     actor = main_mod.require_actor(request)
+    main_mod.require_brand(brand_id, actor)
     body = await _json_body(request)
     try:
-        result = ads_codes.verify(main_mod.conn, brand_id, cycle_id, actual=body.get("actual") or {}, actor=actor)
+        result = ads_codes.verify(main_mod.conn, brand_id, cycle_id, actual=body.get("actual") or {},
+                                  actor=str(actor.user_id))
     except ValueError as exc:
         return _error(400, str(exc))
     return {"mismatches": result["mismatches"]}
@@ -204,13 +206,13 @@ async def handoff_codes_verify(request: Request, brand_id: str, cycle_id: str):
 
 @router.post("/api/campaigns/{brand_id}/{cycle_id}/handoff/{package_id}/activate")
 async def handoff_activate(request: Request, brand_id: str, cycle_id: str, package_id: str):
-    main_mod.require_brand(brand_id)
     actor = main_mod.require_actor(request)
+    main_mod.require_brand(brand_id, actor)
     body = await _json_body(request)
     meta_ids = {"meta_campaign_id": body.get("meta_campaign_id")}
     try:
         ads_handoff.authorize_and_map(main_mod.conn, brand_id, cycle_id, package_id,
-                                      meta_ids=meta_ids, actor=actor)
+                                      meta_ids=meta_ids, actor=str(actor.user_id))
     except ValueError as exc:
         return _error(400, str(exc))
     return JSONResponse(None, status_code=204)
@@ -219,8 +221,8 @@ async def handoff_activate(request: Request, brand_id: str, cycle_id: str, packa
 # ---- Meta 官方 Ads MCP：一鍵建（暫停）＋發布（票 M1-01，ADR 0023） ----
 
 @router.get("/api/campaigns/{brand_id}/{cycle_id}/handoff/meta-status")
-async def handoff_meta_status(brand_id: str, cycle_id: str):
-    main_mod.require_brand(brand_id)
+async def handoff_meta_status(brand_id: str, cycle_id: str, request: Request):
+    main_mod.require_brand(brand_id, main_mod.require_actor(request))
     _require_cycle(brand_id, cycle_id)
     return _envelope(meta_mcp.connect(main_mod.conn))
 
@@ -228,10 +230,11 @@ async def handoff_meta_status(brand_id: str, cycle_id: str):
 @router.post("/api/campaigns/{brand_id}/{cycle_id}/handoff/create-all")
 async def handoff_create_all(request: Request, brand_id: str, cycle_id: str):
     """只處理 status='ready' 且尚無 mapping 的包；已有 mapping 的跳過（手填過的也算）。"""
-    main_mod.require_brand(brand_id)
     actor = main_mod.require_actor(request)
+    main_mod.require_brand(brand_id, actor)
     _require_cycle(brand_id, cycle_id)
     conn = main_mod.conn
+    actor_id = str(actor.user_id)
     targets = [p for p in ads_handoff.list_packages(conn, brand_id, cycle_id)
               if p["status"] == "ready" and not p.get("mapping")]
     created, failed = 0, []
@@ -241,7 +244,7 @@ async def handoff_create_all(request: Request, brand_id: str, cycle_id: str):
     # 素材失敗那包永遠查不到，這裡用回應本身把 campaign_id 接力傳下去）。
     campaign_id = None
     for pkg in targets:
-        result = meta_mcp.create_package(conn, brand_id, cycle_id, pkg["id"], actor=actor,
+        result = meta_mcp.create_package(conn, brand_id, cycle_id, pkg["id"], actor=actor_id,
                                          campaign_id=campaign_id)
         if result["ok"]:
             created += 1
@@ -255,10 +258,10 @@ async def handoff_create_all(request: Request, brand_id: str, cycle_id: str):
 
 @router.post("/api/campaigns/{brand_id}/{cycle_id}/handoff/publish-all")
 async def handoff_publish_all(request: Request, brand_id: str, cycle_id: str):
-    main_mod.require_brand(brand_id)
     actor = main_mod.require_actor(request)
+    main_mod.require_brand(brand_id, actor)
     _require_cycle(brand_id, cycle_id)
-    result = meta_mcp.activate_cycle(main_mod.conn, brand_id, cycle_id, actor=actor)
+    result = meta_mcp.activate_cycle(main_mod.conn, brand_id, cycle_id, actor=str(actor.user_id))
     if not result["ok"]:
         return _error(400, result["reason"])
     return result
@@ -267,8 +270,8 @@ async def handoff_publish_all(request: Request, brand_id: str, cycle_id: str):
 # ---- 交接總分環（S8R.13-17） ----
 
 @router.get("/api/campaigns/{brand_id}/{cycle_id}/readiness")
-async def readiness(brand_id: str, cycle_id: str):
-    main_mod.require_brand(brand_id)
+async def readiness(brand_id: str, cycle_id: str, request: Request):
+    main_mod.require_brand(brand_id, main_mod.require_actor(request))
     conn = main_mod.conn
     _require_cycle(brand_id, cycle_id)
     ring = ads_handoff.readiness_ring(conn, brand_id, cycle_id)
@@ -291,8 +294,8 @@ async def readiness(brand_id: str, cycle_id: str):
 # ---- 期中檢查點（S8.47-50） ----
 
 @router.get("/api/campaigns/{brand_id}/{cycle_id}/checkpoint/{kind}")
-async def checkpoint_get(brand_id: str, cycle_id: str, kind: str):
-    main_mod.require_brand(brand_id)
+async def checkpoint_get(brand_id: str, cycle_id: str, kind: str, request: Request):
+    main_mod.require_brand(brand_id, main_mod.require_actor(request))
     conn = main_mod.conn
     _require_cycle(brand_id, cycle_id)
     if kind not in ads_checkpoint.KIND_LABELS:

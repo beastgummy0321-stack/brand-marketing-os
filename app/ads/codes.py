@@ -25,9 +25,10 @@ from datetime import date
 
 from app.ads import performance as ads_performance
 from app.ads import repository as ads_repo
+from app.brand_intelligence import repository as bi
 from app.core import interrupts as core_interrupts
 from app.core.audit import write_audit
-from app.core.db import DEV_ORG_ID, jsonb, new_id, now_utc
+from app.core.db import jsonb, new_id, now_utc
 
 # 第 7 刀（A1 三層地界新規則：app/ads 不得 import app.orders，見
 # test_architecture_boundaries.py）：orders_repo 不在這裡 import，改由組裝根
@@ -73,6 +74,7 @@ def generate_codes(conn, brand_id: str, cycle_id: str, *, discount_type: str,
     """期別自動配碼：廣告碼／口播碼各一組。已經配過的來源不重新產生——碼一旦配出去，
     使用者可能已經照著去 EasyStore 後台建立，中途換掉碼字只會讓已建好的對不上。
     """
+    org_id = bi.get_brand(conn, brand_id)["org_id"]
     if discount_type not in DISCOUNT_TYPE_LABELS:
         raise ValueError("折扣類型只能是百分比或固定金額")
     if discount_value is None or discount_value <= 0:
@@ -97,13 +99,13 @@ def generate_codes(conn, brand_id: str, cycle_id: str, *, discount_type: str,
             "INSERT INTO cycle_voucher_code (id, org_id, brand_id, campaign_cycle_id, source_type, code,"
             " discount_type, discount_value, usage_limit, valid_from, valid_to, created_at,"
             " updated_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
-            (new_id("vch"), DEV_ORG_ID, brand_id, cycle_id, source_type, _code_text(cycle, source_type),
+            (new_id("vch"), org_id, brand_id, cycle_id, source_type, _code_text(cycle, source_type),
              discount_type, discount_value, usage_limit, valid_from, valid_to, ts, ts),
         )
         created.append(source_type)
 
     if created:
-        write_audit(conn, brand_id=brand_id, entity_type="campaign_cycle", entity_id=cycle_id,
+        write_audit(conn, org_id=org_id, brand_id=brand_id, entity_type="campaign_cycle", entity_id=cycle_id,
                     action="generate_voucher_codes", actor=actor, before=None,
                     after={"sources": created})
         conn.commit()
@@ -159,6 +161,7 @@ def verify(conn, brand_id: str, cycle_id: str, *, actual: dict, actor: str) -> d
     actual 格式：{"ad": {"code","discount_type","discount_value","usage_limit",
                          "valid_from","valid_to"}, "word_of_mouth": {...}}
     """
+    org_id = bi.get_brand(conn, brand_id)["org_id"]
     if not actor or not actor.strip():
         raise ValueError("actor 為必填")
     codes = {c["source_type"]: c for c in list_codes(conn, brand_id, cycle_id)}
@@ -176,10 +179,10 @@ def verify(conn, brand_id: str, cycle_id: str, *, actual: dict, actor: str) -> d
     conn.execute(
         "INSERT INTO cycle_code_verification (id, org_id, brand_id, campaign_cycle_id, passed,"
         " mismatches_json, checked_by, checked_at, created_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
-        (verification_id, DEV_ORG_ID, brand_id, cycle_id, passed,
+        (verification_id, org_id, brand_id, cycle_id, passed,
          jsonb(mismatches) if mismatches else None, actor, ts, ts),
     )
-    write_audit(conn, brand_id=brand_id, entity_type="campaign_cycle", entity_id=cycle_id,
+    write_audit(conn, org_id=org_id, brand_id=brand_id, entity_type="campaign_cycle", entity_id=cycle_id,
                 action="verify_voucher_codes", actor=actor, before=None,
                 after={"passed": passed, "mismatches": mismatches})
     conn.commit()
@@ -278,7 +281,7 @@ def check_surge(conn, brand_id: str, cycle_id: str) -> str | None:
         return None
 
     interrupt_id = core_interrupts.enqueue(
-        conn, category="code_surge_alert",
+        conn, org_id=bi.get_brand(conn, brand_id)["org_id"], category="code_surge_alert",
         dedupe_key=f"code_surge_alert:{cycle_id}:{ad_code['code']}",
         message="用碼量遠高於曝光，疑似碼外洩，去看訂單來源。",
         brand_id=brand_id, campaign_cycle_id=cycle_id,

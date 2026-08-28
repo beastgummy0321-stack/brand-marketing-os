@@ -11,9 +11,10 @@
 
 from datetime import date, timedelta
 
+from app.brand_intelligence import repository as bi_repo
 from app.core import cleanup
 from app.core.audit import write_audit
-from app.core.db import DEV_ORG_ID, Conn, new_id, now_utc
+from app.core.db import Conn, new_id, now_utc
 from app.orders import identity as identity_mod
 
 VOIDED_ORDER_STATUSES = {"cancelled", "canceled", "voided", "void"}
@@ -46,7 +47,7 @@ def _is_voided(order_status) -> bool:
 # ---------------------------------------------------------------------------
 
 def _upsert_customer(conn: Conn, brand_id: str, identity_hash: str,
-                     identity_type: str, order_date: str | None, ts: str) -> str:
+                     identity_type: str, order_date: str | None, ts: str, org_id: str) -> str:
     existing = conn.execute(
         "SELECT * FROM customer WHERE brand_id = %s AND identity_hash = %s",
         (brand_id, identity_hash),
@@ -67,7 +68,7 @@ def _upsert_customer(conn: Conn, brand_id: str, identity_hash: str,
     conn.execute(
         "INSERT INTO customer (id, org_id, brand_id, identity_hash, identity_type, first_order_at,"
         " created_at, updated_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
-        (customer_id, DEV_ORG_ID, brand_id, identity_hash, identity_type, order_date, ts, ts),
+        (customer_id, org_id, brand_id, identity_hash, identity_type, order_date, ts, ts),
     )
     return customer_id
 
@@ -88,6 +89,7 @@ def save_orders(conn: Conn, brand_id: str, rows: list, *,
     if not actor or not actor.strip():
         raise ValueError("actor 為必填")
     identity_mod.consistency_self_check()
+    org_id = bi_repo.get_brand(conn, brand_id)["org_id"]
 
     result = result or OrderImportResult()
     ts = now_utc()
@@ -105,7 +107,7 @@ def save_orders(conn: Conn, brand_id: str, rows: list, *,
         customer_id = None
         if identity_hash:
             customer_id = _upsert_customer(conn, brand_id, identity_hash, identity_type,
-                                           order_date, ts)
+                                           order_date, ts, org_id)
 
         existing = conn.execute(
             "SELECT id FROM order_record WHERE brand_id = %s AND order_number = %s",
@@ -132,7 +134,7 @@ def save_orders(conn: Conn, brand_id: str, rows: list, *,
                 " total_amount, refunded_amount, financial_status, fulfillment_status,"
                 " order_status, voucher_code, currency, source, import_batch_id, created_at,"
                 " updated_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
-                (order_id, DEV_ORG_ID, brand_id, customer_id, order_number, order_date,
+                (order_id, org_id, brand_id, customer_id, order_number, order_date,
                  row.get("total_amount"), row.get("refunded_amount"),
                  row.get("financial_status"), row.get("fulfillment_status"),
                  row.get("order_status"), row.get("voucher_code"), "TWD", source, batch_id,
@@ -146,12 +148,12 @@ def save_orders(conn: Conn, brand_id: str, rows: list, *,
             conn.execute(
                 "INSERT INTO order_item (id, org_id, brand_id, order_id, sku, item_price, quantity,"
                 " created_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
-                (new_id("oit"), DEV_ORG_ID, brand_id, order_id, item.get("sku"), item.get("item_price"),
+                (new_id("oit"), org_id, brand_id, order_id, item.get("sku"), item.get("item_price"),
                  item.get("quantity"), ts),
             )
             result.items_imported += 1
 
-    write_audit(conn, brand_id=brand_id, entity_type="order_record", entity_id=brand_id,
+    write_audit(conn, org_id=org_id, brand_id=brand_id, entity_type="order_record", entity_id=brand_id,
                 action="import_orders", actor=actor,
                 before=None, after={"source": source, "imported": result.orders_imported,
                                     "updated": result.orders_updated,
@@ -180,6 +182,7 @@ def set_sku_cost(conn: Conn, brand_id: str, sku: str, unit_cost: float, *,
         raise ValueError("actor 為必填")
     sku = sku.strip()
     ts = now_utc()
+    org_id = bi_repo.get_brand(conn, brand_id)["org_id"]
     existing = conn.execute(
         "SELECT id FROM sku_cost WHERE brand_id = %s AND sku = %s", (brand_id, sku)
     ).fetchone()
@@ -191,11 +194,11 @@ def set_sku_cost(conn: Conn, brand_id: str, sku: str, unit_cost: float, *,
         cost_id = new_id("skc")
         conn.execute(
             "INSERT INTO sku_cost (id, org_id, brand_id, sku, unit_cost, updated_at)"
-            " VALUES (%s, %s, %s, %s, %s, %s)", (cost_id, DEV_ORG_ID, brand_id, sku, unit_cost, ts),
+            " VALUES (%s, %s, %s, %s, %s, %s)", (cost_id, org_id, brand_id, sku, unit_cost, ts),
         )
-    write_audit(conn, brand_id=brand_id, entity_type="sku_cost", entity_id=cost_id,
+    write_audit(conn, org_id=org_id, brand_id=brand_id, entity_type="sku_cost", entity_id=cost_id,
                 action="set", actor=actor, before=None, after={"sku": sku, "unit_cost": unit_cost})
-    _bump_sku_cost_version(conn, brand_id, sku, unit_cost, actor=actor, today=today)
+    _bump_sku_cost_version(conn, brand_id, sku, unit_cost, actor=actor, today=today, org_id=org_id)
     conn.commit()
     return {"id": cost_id, "sku": sku, "unit_cost": unit_cost}
 
@@ -207,7 +210,7 @@ def set_sku_cost(conn: Conn, brand_id: str, sku: str, unit_cost: float, *,
 # ---------------------------------------------------------------------------
 
 def _bump_sku_cost_version(conn: Conn, brand_id: str, sku: str, unit_cost: float,
-                            *, actor: str, today: str | None = None) -> dict:
+                            *, actor: str, org_id: str, today: str | None = None) -> dict:
     today = today or date.today().isoformat()
     prev = conn.execute(
         "SELECT * FROM sku_cost_version WHERE brand_id = %s AND sku = %s AND valid_to IS NULL",
@@ -225,7 +228,7 @@ def _bump_sku_cost_version(conn: Conn, brand_id: str, sku: str, unit_cost: float
     conn.execute(
         "INSERT INTO sku_cost_version (id, org_id, brand_id, sku, version, unit_cost, valid_from,"
         " valid_to, created_by, created_at) VALUES (%s, %s, %s, %s, %s, %s, %s, NULL, %s, %s)",
-        (version_id, DEV_ORG_ID, brand_id, sku, version, unit_cost, today, actor, ts),
+        (version_id, org_id, brand_id, sku, version, unit_cost, today, actor, ts),
     )
     return {"id": version_id, "brand_id": brand_id, "sku": sku, "version": version,
             "unit_cost": unit_cost, "valid_from": today, "valid_to": None}
@@ -423,13 +426,14 @@ def record_policy_change(conn: Conn, brand_id: str, *, policy_type: str,
     if not actor or not actor.strip():
         raise ValueError("actor 為必填")
     ts = now_utc()
+    org_id = bi_repo.get_brand(conn, brand_id)["org_id"]
     row_id = new_id("pcl")
     conn.execute(
         "INSERT INTO policy_change_log (id, org_id, brand_id, policy_type, changed_at, description,"
         " created_by, created_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
-        (row_id, DEV_ORG_ID, brand_id, policy_type, changed_at.strip(), description.strip(), actor, ts),
+        (row_id, org_id, brand_id, policy_type, changed_at.strip(), description.strip(), actor, ts),
     )
-    write_audit(conn, brand_id=brand_id, entity_type="policy_change_log", entity_id=row_id,
+    write_audit(conn, org_id=org_id, brand_id=brand_id, entity_type="policy_change_log", entity_id=row_id,
                 action="create", actor=actor,
                 before=None, after={"policy_type": policy_type, "changed_at": changed_at,
                                     "description": description})
@@ -525,11 +529,12 @@ def set_attribution_override(conn: Conn, brand_id: str, order_id: str,
         raise ValueError("找不到這筆訂單")
     value = "excluded" if excluded else None
     ts = now_utc()
+    org_id = bi_repo.get_brand(conn, brand_id)["org_id"]
     conn.execute(
         "UPDATE order_record SET attribution_override = %s, updated_at = %s WHERE id = %s",
         (value, ts, order_id),
     )
-    write_audit(conn, brand_id=brand_id, entity_type="order_record", entity_id=order_id,
+    write_audit(conn, org_id=org_id, brand_id=brand_id, entity_type="order_record", entity_id=order_id,
                 action="set_attribution_override", actor=actor,
                 before={"attribution_override": before["attribution_override"]},
                 after={"attribution_override": value})

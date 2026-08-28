@@ -22,32 +22,34 @@ async def _body(request: Request) -> dict:
 
 
 @router.get("/api/campaigns/{brand_id}/{cycle_id}/delivery")
-async def delivery_get(brand_id: str, cycle_id: str):
-    main_mod.require_brand(brand_id)
+async def delivery_get(brand_id: str, cycle_id: str, request: Request):
+    main_mod.require_brand(brand_id, main_mod.require_actor(request))
     _require_cycle(brand_id, cycle_id)
     return delivery.view(main_mod.conn, brand_id, cycle_id)
 
 
 @router.post("/api/campaigns/{brand_id}/{cycle_id}/delivery/confirm")
 async def delivery_confirm(request: Request, brand_id: str, cycle_id: str):
-    main_mod.require_brand(brand_id)
+    actor = main_mod.require_actor(request)
+    main_mod.require_brand(brand_id, actor)
     _require_cycle(brand_id, cycle_id)
     body = await _body(request)
     try:
         return delivery.confirm(main_mod.conn, brand_id, cycle_id, facts=body.get("facts"),
                                 budget=body.get("budget") is True,
-                                actor=main_mod.require_actor(request))
+                                actor=str(actor.user_id))
     except ValueError as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)
 
 
 @router.post("/api/campaigns/{brand_id}/{cycle_id}/delivery/items/{item_id}/reject")
 async def delivery_reject(request: Request, brand_id: str, cycle_id: str, item_id: str):
-    main_mod.require_brand(brand_id)
+    actor = main_mod.require_actor(request)
+    main_mod.require_brand(brand_id, actor)
     _require_cycle(brand_id, cycle_id)
     try:
         return delivery.reject_item(main_mod.conn, brand_id, cycle_id, item_id,
-                                    actor=main_mod.require_actor(request))
+                                    actor=str(actor.user_id))
     except ValueError as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)
 
@@ -55,7 +57,7 @@ async def delivery_reject(request: Request, brand_id: str, cycle_id: str, item_i
 # ponytail: 提案書的 GET 與交付 API 共用這個 JSON 路由登記點；只寫既有 channel_plan.enabled。
 @router.put("/api/campaigns/brands/{brand_id}/cycles/{cycle_id}/channel-plan")
 async def channel_plan_enabled_put(request: Request, brand_id: str, cycle_id: str):
-    main_mod.require_brand(brand_id)
+    main_mod.require_brand(brand_id, main_mod.require_actor(request))
     _require_cycle(brand_id, cycle_id)
     body = await _body(request)
     changes = body.get("channels")
@@ -83,8 +85,8 @@ async def channel_plan_enabled_put(request: Request, brand_id: str, cycle_id: st
 
 
 @router.get("/api/campaigns/brands/{brand_id}/cockpit-extras")
-async def cockpit_get(brand_id: str, cycle_id: str | None = None):
-    main_mod.require_brand(brand_id)
+async def cockpit_get(brand_id: str, request: Request, cycle_id: str | None = None):
+    main_mod.require_brand(brand_id, main_mod.require_actor(request))
     if cycle_id is None:
         cycles = ads_repo.list_cycles(main_mod.conn, brand_id)
         if not cycles:
@@ -99,8 +101,7 @@ async def cockpit_get(brand_id: str, cycle_id: str | None = None):
 
 @router.post("/api/campaigns/brands/{brand_id}/task-cards/{card_id}/done")
 async def task_card_done_for_brand(request: Request, brand_id: str, card_id: str):
-    main_mod.require_brand(brand_id)
-    main_mod.require_actor(request)
+    main_mod.require_brand(brand_id, main_mod.require_actor(request))
     try:
         return cockpit_extras.mark_done(main_mod.conn, brand_id, card_id)
     except ValueError as exc:

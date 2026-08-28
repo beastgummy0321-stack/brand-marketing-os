@@ -72,7 +72,8 @@ async def _json_body(request: Request) -> dict:
 # ---------------------------------------------------------------------------
 
 @router.post("/api/intake/photos")
-async def photo_upload(photo: UploadFile = File(...)):
+async def photo_upload(request: Request, photo: UploadFile = File(...)):
+    require_actor(request)  # 這一步還沒有品牌／組織（建檔精靈第一步），只驗證登入
     if not photo.filename:
         return _error(400, "請選擇檔案。")
     content = await photo.read()
@@ -99,14 +100,14 @@ async def brand_start(request: Request):
     brand = repo.create_brand(web.conn, org_id=actor.org_id, name=brand_name,
                                client_name=client_name or None, actor=str(actor.user_id))
     draft = state.start_or_quick(web.conn, brand["id"], brand_name, description=description,
-                                 urls=urls, photos=photos, actor=actor)
+                                 urls=urls, photos=photos, actor=str(actor.user_id))
     return {"brand_id": brand["id"], "quick": draft is None}
 
 
 @router.post("/api/intake/brands/{brand_id}/restart")
 async def brand_restart(request: Request, brand_id: str):
     actor = require_actor(request)
-    brand = require_brand(brand_id)
+    brand = require_brand(brand_id, actor)
     if state.get_draft(brand_id):
         return {"quick": False, "already_running": True}  # S4.12：不開第二輪
     form = await request.form()
@@ -119,7 +120,7 @@ async def brand_restart(request: Request, brand_id: str):
     carried = state.prev_photos(ir.get_latest_completed_draft(web.conn, brand_id))
     photos = carried + new_photos
     draft = state.start_or_quick(web.conn, brand_id, brand["name"], description=description,
-                                 urls=urls, photos=photos, actor=actor)
+                                 urls=urls, photos=photos, actor=str(actor.user_id))
     return {"quick": draft is None}
 
 
@@ -153,11 +154,12 @@ def _draft_shape(brand_id: str, draft: dict) -> dict:
 
 
 @router.get("/api/intake/brands/{brand_id}/draft")
-async def draft_get(brand_id: str):
+async def draft_get(request: Request, brand_id: str):
     """建檔精靈整包讀。收尾那一下（真相卡送出）會在同一個請求裡把草稿標成 completed，
     前端緊接著 refresh 這支——所以跟 review／truth-card 一樣退回去找剛完成的那份，
     不然完成畫面會變成 404「找不到建檔進度」（e2e-adflow finding 1）。"""
-    require_brand(brand_id)
+    actor = require_actor(request)
+    require_brand(brand_id, actor)
     draft = state.require_draft_or_just_completed(brand_id)
     return _envelope(_draft_shape(brand_id, draft))
 
@@ -184,14 +186,16 @@ def _research_report_json(report: dict) -> dict:
 
 
 @router.get("/api/intake/brands/{brand_id}/research-reports")
-async def research_report_list(brand_id: str):
-    require_brand(brand_id)
+async def research_report_list(request: Request, brand_id: str):
+    actor = require_actor(request)
+    require_brand(brand_id, actor)
     return _envelope(ir.list_research_reports(web.conn, brand_id))
 
 
 @router.get("/api/intake/brands/{brand_id}/research-reports/{draft_id}")
-async def research_report_get(brand_id: str, draft_id: str):
-    require_brand(brand_id)
+async def research_report_get(request: Request, brand_id: str, draft_id: str):
+    actor = require_actor(request)
+    require_brand(brand_id, actor)
     report = ir.get_research_report(web.conn, brand_id, draft_id)
     if report is None:
         raise NotFoundKind("調研報告")
@@ -351,8 +355,9 @@ def _start_paste_fix(brand_id: str) -> None:
 # ---------------------------------------------------------------------------
 
 @router.post("/api/intake/brands/{brand_id}/scan/start")
-async def scan_start(brand_id: str):
-    require_brand(brand_id)
+async def scan_start(request: Request, brand_id: str):
+    actor = require_actor(request)
+    require_brand(brand_id, actor)
     draft = state.require_draft(brand_id)
     if draft["scan_done"]:
         return {"limit_block": None}
@@ -363,15 +368,17 @@ async def scan_start(brand_id: str):
 
 
 @router.get("/api/intake/brands/{brand_id}/scan/status")
-async def scan_status(brand_id: str):
-    require_brand(brand_id)
+async def scan_status(request: Request, brand_id: str):
+    actor = require_actor(request)
+    require_brand(brand_id, actor)
     state.require_draft(brand_id)
     return _envelope(_job_state(brand_id, "scan"))
 
 
 @router.post("/api/intake/brands/{brand_id}/scan/skip")
-async def scan_skip(brand_id: str):
-    require_brand(brand_id)
+async def scan_skip(request: Request, brand_id: str):
+    actor = require_actor(request)
+    require_brand(brand_id, actor)
     draft = state.require_draft(brand_id)
     draft["scan_done"] = True
     draft["scan_impressions"] = []
@@ -386,17 +393,17 @@ async def scan_skip(brand_id: str):
 @router.post("/api/intake/brands/{brand_id}/scan/products")
 async def scan_products(request: Request, brand_id: str):
     actor = require_actor(request)
-    require_brand(brand_id)
+    require_brand(brand_id, actor)
     draft = state.require_draft(brand_id)
     body = await _json_body(request)
     names = body.get("names")
     names = names if isinstance(names, list) else []
-    created = state.create_scanned_products(web.conn, brand_id, draft, names, actor)
+    created = state.create_scanned_products(web.conn, brand_id, draft, names, str(actor.user_id))
     product_id = None
     source_photo_token = str(body.get("source_photo_token") or "").strip()
     if source_photo_token:
         product_id = state.create_product_from_card(
-            web.conn, brand_id, draft, source_photo_token, actor,
+            web.conn, brand_id, draft, source_photo_token, str(actor.user_id),
         )
         created += 1 if product_id else 0
     return {"created_count": created, "product_id": product_id}
@@ -407,8 +414,9 @@ async def scan_products(request: Request, brand_id: str):
 # ---------------------------------------------------------------------------
 
 @router.post("/api/intake/brands/{brand_id}/question/start")
-async def question_start(brand_id: str):
-    require_brand(brand_id)
+async def question_start(request: Request, brand_id: str):
+    actor = require_actor(request)
+    require_brand(brand_id, actor)
     draft = state.require_draft(brand_id)
     if draft["step"] < 3:
         state.touch(draft, f"/brands/{brand_id}/intake/question", 3)
@@ -421,15 +429,17 @@ async def question_start(brand_id: str):
 
 
 @router.get("/api/intake/brands/{brand_id}/question/status")
-async def question_status(brand_id: str):
-    require_brand(brand_id)
+async def question_status(request: Request, brand_id: str):
+    actor = require_actor(request)
+    require_brand(brand_id, actor)
     state.require_draft(brand_id)
     return _envelope(_job_state(brand_id, "question"))
 
 
 @router.post("/api/intake/brands/{brand_id}/question/answer")
 async def question_answer(request: Request, brand_id: str):
-    require_brand(brand_id)
+    actor = require_actor(request)
+    require_brand(brand_id, actor)
     draft = state.require_draft(brand_id)
     entry = state.current_entry(draft)
     q = draft["current_q"]
@@ -459,8 +469,9 @@ async def question_answer(request: Request, brand_id: str):
 
 
 @router.post("/api/intake/brands/{brand_id}/question/skip-remaining")
-async def question_skip_remaining(brand_id: str):
-    require_brand(brand_id)
+async def question_skip_remaining(request: Request, brand_id: str):
+    actor = require_actor(request)
+    require_brand(brand_id, actor)
     draft = state.require_draft(brand_id)
     state.mark_qa_done(draft)
     state.save(draft)
@@ -474,7 +485,8 @@ async def question_skip_remaining(brand_id: str):
 
 @router.post("/api/intake/brands/{brand_id}/budget")
 async def budget_set(request: Request, brand_id: str):
-    require_brand(brand_id)
+    actor = require_actor(request)
+    require_brand(brand_id, actor)
     draft = state.require_draft(brand_id)
     body = await _json_body(request)
     limit = body.get("limit")
@@ -492,7 +504,8 @@ async def budget_set(request: Request, brand_id: str):
 
 @router.post("/api/intake/brands/{brand_id}/budget/raise")
 async def budget_raise(request: Request, brand_id: str):
-    require_brand(brand_id)
+    actor = require_actor(request)
+    require_brand(brand_id, actor)
     draft = state.require_draft(brand_id)
     body = await _json_body(request)
     kind = body.get("kind") if body.get("kind") in ("scan", "question", "paste_fix") else "scan"
@@ -508,8 +521,9 @@ async def budget_raise(request: Request, brand_id: str):
 
 
 @router.post("/api/intake/brands/{brand_id}/skip-remaining-ai")
-async def skip_remaining_ai(brand_id: str):
-    require_brand(brand_id)
+async def skip_remaining_ai(request: Request, brand_id: str):
+    actor = require_actor(request)
+    require_brand(brand_id, actor)
     draft = state.require_draft(brand_id)
     if not draft["scan_done"]:
         draft["scan_done"] = True
@@ -530,8 +544,8 @@ async def skip_remaining_ai(brand_id: str):
 
 @router.post("/api/intake/brands/{brand_id}/handoff")
 async def handoff_generate(request: Request, brand_id: str):
-    require_actor(request)
-    require_brand(brand_id)
+    actor = require_actor(request)
+    require_brand(brand_id, actor)
     draft = state.require_draft(brand_id)
     body = await _json_body(request)
     depth = body.get("depth")
@@ -548,10 +562,11 @@ async def handoff_generate(request: Request, brand_id: str):
 
 
 @router.get("/api/intake/brands/{brand_id}/handoff/{provider}")
-async def operator_card(brand_id: str, provider: str):
+async def operator_card(request: Request, brand_id: str, provider: str):
     if provider not in ("claude", "chatgpt"):
         raise NotFoundKind("操作卡")
-    require_brand(brand_id)
+    actor = require_actor(request)
+    require_brand(brand_id, actor)
     draft = state.require_draft(brand_id)
     return _envelope(script.card_for(provider, draft["handoff_depth"] or "standard"))
 
@@ -567,7 +582,8 @@ def _paste_result(draft: dict) -> dict:
 
 @router.post("/api/intake/brands/{brand_id}/paste/validate")
 async def paste_validate(request: Request, brand_id: str):
-    require_brand(brand_id)
+    actor = require_actor(request)
+    require_brand(brand_id, actor)
     draft = state.require_draft(brand_id)
     body = await _json_body(request)
     raw_text = str(body.get("raw_text") or "")
@@ -582,7 +598,7 @@ async def paste_validate(request: Request, brand_id: str):
 @router.post("/api/intake/brands/{brand_id}/paste/resolve-scope")
 async def paste_resolve_scope(request: Request, brand_id: str):
     actor = require_actor(request)
-    require_brand(brand_id)
+    require_brand(brand_id, actor)
     draft = state.require_draft(brand_id)
     body = await _json_body(request)
     scope_name = clean(str(body.get("scope_name") or ""))
@@ -590,7 +606,7 @@ async def paste_resolve_scope(request: Request, brand_id: str):
     if action == "create_product":
         known = {p["name"] for p in repo.list_products(web.conn, brand_id)}
         if scope_name and scope_name not in known:
-            repo.create_product(web.conn, brand_id, name=scope_name, actor=actor)
+            repo.create_product(web.conn, brand_id, name=scope_name, actor=str(actor.user_id))
     else:
         draft["paste_raw"] = paste_parse.rewrite_scope(draft["paste_raw"], scope_name, "整個品牌")
     n = state.apply_paste(draft, draft["paste_raw"], conn=web.conn)
@@ -600,8 +616,9 @@ async def paste_resolve_scope(request: Request, brand_id: str):
 
 
 @router.post("/api/intake/brands/{brand_id}/paste/fix/start")
-async def paste_fix_start(brand_id: str):
-    require_brand(brand_id)
+async def paste_fix_start(request: Request, brand_id: str):
+    actor = require_actor(request)
+    require_brand(brand_id, actor)
     draft = state.require_draft(brand_id)
     if state.would_exceed(draft, script.COST_PASTE_FIX):
         return {"limit_block": _limit_block(draft, "paste_fix")}
@@ -610,8 +627,9 @@ async def paste_fix_start(brand_id: str):
 
 
 @router.get("/api/intake/brands/{brand_id}/paste/fix/status")
-async def paste_fix_status(brand_id: str):
-    require_brand(brand_id)
+async def paste_fix_status(request: Request, brand_id: str):
+    actor = require_actor(request)
+    require_brand(brand_id, actor)
     state.require_draft(brand_id)
     return _envelope(_job_state(brand_id, "paste_fix"))
 
@@ -630,8 +648,9 @@ def _review_item_json(item: dict, hints: dict) -> dict:
 
 
 @router.get("/api/intake/brands/{brand_id}/review")
-async def review_list(brand_id: str):
-    require_brand(brand_id)
+async def review_list(request: Request, brand_id: str):
+    actor = require_actor(request)
+    require_brand(brand_id, actor)
     draft = state.require_draft_or_just_completed(brand_id)
     items = ir.list_pending_items(web.conn, brand_id, draft["id"])
     hints = ir.duplicate_hints(web.conn, brand_id, items)
@@ -643,11 +662,11 @@ async def review_pending_all(request: Request, brand_id: str):
     """「剩餘全部先存成待確認」一鍵收工（issue #1）。逐筆走唯一入口 `ir.resolve_item`；
     產品事實還沒指定產品的列會 raise ValueError，跳過留在清單，不整批擋下（S4.62）。"""
     actor = require_actor(request)
-    require_brand(brand_id)
+    require_brand(brand_id, actor)
     draft = state.require_draft(brand_id)
     for it in ir.list_pending_items(web.conn, brand_id, draft["id"]):
         try:
-            ir.resolve_item(web.conn, brand_id, it["id"], "pending_saved", processed_by=actor)
+            ir.resolve_item(web.conn, brand_id, it["id"], "pending_saved", processed_by=str(actor.user_id))
         except ValueError:
             continue
     if not ir.list_pending_items(web.conn, brand_id, draft["id"]):
@@ -656,8 +675,9 @@ async def review_pending_all(request: Request, brand_id: str):
 
 
 @router.get("/api/intake/brands/{brand_id}/review/{i}")
-async def review_item_get(brand_id: str, i: int):
-    require_brand(brand_id)
+async def review_item_get(request: Request, brand_id: str, i: int):
+    actor = require_actor(request)
+    require_brand(brand_id, actor)
     draft = state.require_draft_or_just_completed(brand_id)
     items = ir.list_items(web.conn, brand_id, draft["id"])
     item = next((it for it in items if it["i"] == i), None)
@@ -673,7 +693,7 @@ _OUTCOME_MAP = {"confirm": "confirmed", "pending": "pending_saved", "discard": "
 @router.post("/api/intake/brands/{brand_id}/review/{i}")
 async def review_item_post(request: Request, brand_id: str, i: int):
     actor = require_actor(request)
-    require_brand(brand_id)
+    require_brand(brand_id, actor)
     draft = state.require_draft_or_just_completed(brand_id)
     items = ir.list_items(web.conn, brand_id, draft["id"])
     item = next((it for it in items if it["i"] == i), None)
@@ -701,7 +721,7 @@ async def review_item_post(request: Request, brand_id: str, i: int):
             if scope not in known:
                 if item["outcome"] != "pending" and item["kind"] == "產品事實":
                     return _error(400, "已落檔的產品事實不能在這裡改掛其他產品。")
-                repo.create_product(web.conn, brand_id, name=scope, actor=actor)
+                repo.create_product(web.conn, brand_id, name=scope, actor=str(actor.user_id))
         edits = {"title": title, "content": content,
                  "category": ir._category_to_internal(item["kind"], category), "scope_raw": scope}
 
@@ -711,13 +731,13 @@ async def review_item_post(request: Request, brand_id: str, i: int):
             return _error(400, "已落檔內容只能修改後重新確認。")
         try:
             ir.update_resolved_item(
-                web.conn, brand_id, item["id"], processed_by=actor, edits=edits or {},
+                web.conn, brand_id, item["id"], processed_by=str(actor.user_id), edits=edits or {},
             )
         except ValueError as exc:
             return _error(400, str(exc))
         return Response(status_code=204)
     ir.resolve_item(web.conn, brand_id, item["id"], _OUTCOME_MAP[outcome],
-                    processed_by=actor, edits=edits, rule_severity=severity)
+                    processed_by=str(actor.user_id), edits=edits, rule_severity=severity)
 
     if not ir.list_pending_items(web.conn, brand_id, draft["id"]):
         state.complete_draft(draft)

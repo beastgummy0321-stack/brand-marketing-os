@@ -14,7 +14,8 @@ optional 的 offer row、再把 id 傳給 `create_cycle()`（呼叫順序見
 """
 
 
-from app.core.db import DEV_ORG_ID, Conn, jsonb, new_id, now_utc
+from app.brand_intelligence import repository as bi
+from app.core.db import Conn, jsonb, new_id, now_utc
 
 TYPES = (("discount", "折扣"), ("bundle", "組合"), ("gift", "贈品"))
 _VALID_TYPES = {code for code, _ in TYPES}
@@ -57,13 +58,14 @@ def create(conn: Conn, brand_id: str, *, product_scope_json: str,
           valid_from: str, valid_to: str, fields: dict) -> str:
     """插進一筆 offer row，回傳新 id。呼叫端已經跑過 `validate()`；`price_value`／
     `currency` 固定 NULL（3 格表單不問），`status` 固定 `active`（沒有草稿態）。"""
+    org_id = bi.get_brand(conn, brand_id)["org_id"]
     offer_id = new_id("ofr")
     ts = now_utc()
     conn.execute(
         "INSERT INTO offer (id, org_id, brand_id, product_scope_json, name, offer_type, terms,"
         " price_value, currency, valid_from, valid_to, status, created_at, updated_at)"
         " VALUES (%s, %s, %s, %s, %s, %s, %s, NULL, NULL, %s, %s, 'active', %s, %s)",
-        (offer_id, DEV_ORG_ID, brand_id, jsonb(product_scope_json), fields["name"], fields["offer_type"],
+        (offer_id, org_id, brand_id, jsonb(product_scope_json), fields["name"], fields["offer_type"],
          fields["terms"], valid_from, valid_to, ts, ts),
     )
     conn.commit()

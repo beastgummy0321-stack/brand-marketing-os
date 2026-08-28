@@ -29,7 +29,7 @@ import re
 from pathlib import Path
 
 from app.core import cleanup
-from app.core.db import DEV_ORG_ID, new_id, now_utc
+from app.core.db import new_id, now_utc
 
 _CALENDAR_DATA_PATH = (
     Path(__file__).resolve().parent.parent / "dashboard" / "campaign_calendar_data.json"
@@ -49,14 +49,15 @@ def list_categories() -> list:
     return [{"category": category, "label": label} for category, label in labels.items()]
 
 
-def dismiss(conn, brand_id: str, category: str) -> None:
+def dismiss(conn, brand_id: str, category: str, *, org_id: str = "org_dev") -> None:
+    # org_id 預設值只服務既有測試呼叫點；正式呼叫端一律顯式傳。
     """永久關閉某品牌某節日類別的提醒。重複關閉不報錯、不疊加（ON CONFLICT DO NOTHING）。
     會 commit。"""
     conn.execute(
         "INSERT INTO brand_dismissed_calendar_category"
         " (id, org_id, brand_id, category, created_at) VALUES (%s, %s, %s, %s, %s)"
         " ON CONFLICT (brand_id, category) DO NOTHING",
-        (new_id("bdc"), DEV_ORG_ID, brand_id, category, now_utc()),
+        (new_id("bdc"), org_id, brand_id, category, now_utc()),
     )
     conn.commit()
 
@@ -117,11 +118,15 @@ def demo() -> None:
     """python -m app.core.calendar_dismiss —— 最小自檢，對本機 Supabase stack 跑（02-3b 票 9）。"""
     from app.core import db as coredb
 
+    # 種子資料的 dev 組織 id（見 supabase/seed.sql）。db.py 的那個開發用常數不得出現在
+    # app/core/db.py 以外的檔案（票 03-1），這裡直接寫字面值，不 import 它。
+    demo_org_id = "org_dev"
+
     with coredb.connection() as conn:
-        dismiss(conn, "brd_x", "cny")
+        dismiss(conn, "brd_x", "cny", org_id=demo_org_id)
         assert list_dismissed(conn, "brd_x") == {"cny"}
         # 重複關閉不疊加
-        dismiss(conn, "brd_x", "cny")
+        dismiss(conn, "brd_x", "cny", org_id=demo_org_id)
         rows = conn.execute(
             "SELECT COUNT(*) AS c FROM brand_dismissed_calendar_category"
             " WHERE brand_id = %s AND category = %s", ("brd_x", "cny")).fetchone()
@@ -132,7 +137,7 @@ def demo() -> None:
         # 重新開啟一個本來就沒關閉的類別，無操作、不報錯
         undismiss(conn, "brd_x", "valentine")
         # 不同品牌互不影響
-        dismiss(conn, "brd_a", "cny")
+        dismiss(conn, "brd_a", "cny", org_id=demo_org_id)
         assert list_dismissed(conn, "brd_b") == set()
         conn.rollback()
         # 節日類別清單：真實資料檔去重後每類別只出現一次

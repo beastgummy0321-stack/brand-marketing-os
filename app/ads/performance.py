@@ -19,8 +19,9 @@ from dataclasses import dataclass, field
 from datetime import date
 
 from app.ads import guardrails
+from app.brand_intelligence import repository as bi
 from app.core.audit import write_audit
-from app.core.db import DEV_ORG_ID, jsonb, new_id, now_utc
+from app.core.db import jsonb, new_id, now_utc
 
 # 概念欄 → 可能的欄位名（全部小寫比對，去空白）。要加新別名就加在這裡，別動解析邏輯。
 COLUMN_ALIASES = {
@@ -318,8 +319,7 @@ def _existing_signatures(conn, brand_id: str, cycle_id: str | None) -> set:
     return signatures
 
 
-def import_rows(conn, brand_id: str, cycle_id: str | None, rows: list, *,
-                source: str, actor: str, result: ImportResult | None = None,
+def import_rows(conn, brand_id: str, cycle_id: str | None, rows: list, *, source: str, actor: str, result: ImportResult | None = None,
                 today: str | None = None, currency: str = "TWD") -> ImportResult:
     """把解析好的列寫成 performance_snapshot（只累積、不覆寫）。
 
@@ -334,6 +334,7 @@ def import_rows(conn, brand_id: str, cycle_id: str | None, rows: list, *,
     （票 11 D2）——使用者一看到「跳過了幾筆」就知道要改日期或數字，不會被靜默吃掉。
     """
     result = result or ImportResult()
+    org_id = bi.get_brand(conn, brand_id)["org_id"]
     ts = now_utc()
     batch_id = f"import_{ts}"
 
@@ -382,7 +383,7 @@ def import_rows(conn, brand_id: str, cycle_id: str | None, rows: list, *,
             " quarantine_reason, created_at)"
             " VALUES (%s, %s, %s, %s, %s, %s, 'meta', NULL, NULL, NULL, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,"
             " %s, %s, %s, true, %s, %s, %s, %s, %s)",
-            (new_id("psn"), DEV_ORG_ID, brand_id, cycle_id, product_id, mapping_id, date_start, date_stop,
+            (new_id("psn"), org_id, brand_id, cycle_id, product_id, mapping_id, date_start, date_stop,
              date_stop, ts, currency, row.get("impressions"), row.get("clicks"),
              row.get("spend"), row.get("conversions"), row.get("revenue"), revenue_source,
              row.get("frequency"), row.get("reach"), jsonb(raw_json), source, batch_id,
@@ -390,7 +391,7 @@ def import_rows(conn, brand_id: str, cycle_id: str | None, rows: list, *,
         )
         result.imported += 1
 
-    write_audit(conn, brand_id=brand_id, entity_type="campaign_cycle",
+    write_audit(conn, org_id=org_id, brand_id=brand_id, entity_type="campaign_cycle",
                 entity_id=cycle_id or brand_id, action="import_performance", actor=actor,
                 before=None, after={"source": source, "imported": result.imported,
                                     "quarantined": result.quarantined,
@@ -552,6 +553,7 @@ def compute_kpis(totals_row: dict) -> dict:
 
 def save_derived_metrics(conn, brand_id: str, cycle_id: str) -> int:
     """把算出來的 KPI 落地成 derived_metric（判讀要回溯「當時算出來的數字」）。"""
+    org_id = bi.get_brand(conn, brand_id)["org_id"]
     summary = totals(conn, brand_id, cycle_id)
     snapshot = conn.execute(
         "SELECT id FROM performance_snapshot WHERE brand_id = %s AND campaign_cycle_id = %s"
@@ -573,7 +575,7 @@ def save_derived_metrics(conn, brand_id: str, cycle_id: str) -> int:
             "INSERT INTO derived_metric (id, org_id, brand_id, performance_snapshot_id,"
             " campaign_cycle_id, metric, value, calc_basis, computed_at, created_at)"
             " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
-            (new_id("dmt"), DEV_ORG_ID, brand_id, snapshot["id"], cycle_id, metric, value,
+            (new_id("dmt"), org_id, brand_id, snapshot["id"], cycle_id, metric, value,
              "本期未隔離資料加總", ts, ts),
         )
         written += 1
@@ -675,6 +677,7 @@ def save_brand_level_derived_metrics(conn, brand_id: str) -> int:
 
     全量重算（先刪後寫）：呼叫端（認領後、CSV 匯入後、每次同步後）可以放心重複呼叫。
     """
+    org_id = bi.get_brand(conn, brand_id)["org_id"]
     conn.execute(
         "DELETE FROM derived_metric WHERE brand_id = %s AND campaign_cycle_id IS NULL",
         (brand_id,),
@@ -710,7 +713,7 @@ def save_brand_level_derived_metrics(conn, brand_id: str) -> int:
                 "INSERT INTO derived_metric (id, org_id, brand_id, performance_snapshot_id,"
                 " campaign_cycle_id, metric, value, calc_basis, computed_at, created_at)"
                 " VALUES (%s, %s, %s, %s, NULL, %s, %s, %s, %s, %s)",
-                (new_id("dmt"), DEV_ORG_ID, brand_id, anchor_id, metric, value, basis, ts, ts),
+                (new_id("dmt"), org_id, brand_id, anchor_id, metric, value, basis, ts, ts),
             )
             written += 1
     conn.commit()
