@@ -1,6 +1,11 @@
 # 品牌智庫規則加有效期與 prompt 上限，不再無限累積
 
-_Status: retired by ADR 0030 — the code it governed was deleted._
+_Status: **live — ADR 0030's retirement of this ADR was an error, corrected 2026-08-29.** None
+of the code it governs was deleted: `app/brand_intelligence/rule_lifecycle.py`, the
+`rule_expiry` and `rule_prompt_cap` rule cards, `rule.confirmed_at`, and the cap in
+`app/llm/context_compiler.py:_select_rules_for_prompt` are all in use. ADR 0037 depends on both
+mechanisms and amends two details: `hard` rules are no longer swept, and the expiry threshold
+is stated in days (default 90) rather than cycles._
 
 G5（2026-08-10 grill）。查證現況：`app/llm/context_compiler.py` 把 `rule` 表全部
 `status='active'` 的規則無條件整包塞進「【限制】規則」段落，無上限、無排序、無過期——
