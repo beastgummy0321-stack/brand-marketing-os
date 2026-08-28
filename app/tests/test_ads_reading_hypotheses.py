@@ -19,8 +19,8 @@ from app.core import db
 from app.core import interrupts as core_interrupts
 from app.llm import context_compiler
 from app.llm.providers import FakeProvider, ProviderError, ProviderResponse, Usage
-from app.shared.web import OPERATOR
 
+OPERATOR = "本人"  # 票 03-1：production 端已刪除，測試沿用舊字串值當 actor 名稱
 ACTOR = "測試員"
 
 

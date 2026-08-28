@@ -354,6 +354,9 @@ LAYER_ORDER = [
     "app.brand_intelligence",  # 品牌永久層
     "app.llm",                 # AI gateway 與 prompt 組裝
     "app.shared",              # web 骨架（app、templates、共用 ctx）
+    "app.identity",            # 票 03-1：身分／租戶（JWT、org 解析），依賴 app.shared 的
+                                # ApiError／conn；app.shared 對它的依賴是函式內延遲 import
+                                # （見 require_actor()），這裡的靜態掃描看不到，不算環
     "app.intake",              # 建檔精靈
     "app.brand_web",           # 品牌智庫 web 路由
     "app.ads",                 # 廣告分支

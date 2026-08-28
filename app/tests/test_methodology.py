@@ -83,8 +83,13 @@ class MethodologyCompileTest(unittest.TestCase):
     def test_missing_file_gracefully_skipped_and_audited(self):
         readme = self._write_readme("| 測試任務 | `a.md`、`missing.md` |\n")
         (self.meth_dir / "a.md").write_text("A 檔內容", encoding="utf-8")
+        # 票 03-1：audit_log.org_id 現在 NOT NULL，要反查得先有真的品牌可查
+        # （見 app/llm/methodology.py compile() 的 org_id 推導註解）。
+        brand_id = repo.create_brand(self.conn, name="方法論測試品牌",
+                                     client_name=None, actor="測試員")["id"]
+        self.conn.execute("DELETE FROM audit_log")  # create_brand() 自己那筆不算進待驗證的稽核
 
-        result = methodology.compile(self.conn, ["測試任務"], brand_id="brd_虛構",
+        result = methodology.compile(self.conn, ["測試任務"], brand_id=brand_id,
                                      actor="測試員", methodology_dir=self.meth_dir,
                                      readme_path=readme)
         self.assertIn("A 檔內容", result.text)  # 流程照走，沒缺席的檔案照樣進 prompt
@@ -96,7 +101,7 @@ class MethodologyCompileTest(unittest.TestCase):
         self.assertEqual(rows[0]["entity_type"], "methodology_file")
         self.assertEqual(rows[0]["entity_id"], "missing.md")
         self.assertEqual(rows[0]["action"], "missing")
-        self.assertEqual(rows[0]["brand_id"], "brd_虛構")
+        self.assertEqual(rows[0]["brand_id"], brand_id)
         self.assertIn("missing.md", rows[0]["reason"])
 
     def test_unknown_task_label_returns_empty_no_audit(self):

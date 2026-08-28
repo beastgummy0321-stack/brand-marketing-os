@@ -17,9 +17,9 @@ from fastapi.testclient import TestClient  # noqa: E402
 import app.main as main  # noqa: E402
 from app.ads import repository as ads_repo  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
-from app.shared.web import OPERATOR  # noqa: E402
 
-
+OPERATOR = "本人"  # 票 03-1：production 端已刪除，測試沿用舊字串值當 actor 名稱
+DEV_USER_ID = "00000000-0000-0000-0000-000000000001"  # dev token 種子使用者（conftest.py）
 def _cleanup():
     try:
         main.conn.close()
@@ -220,7 +220,7 @@ class CreateCycleTest(_BaseAdsTest):
             (cycle_id,),
         ).fetchone()
         self.assertIsNotNone(row)
-        self.assertEqual(row["actor"], OPERATOR)
+        self.assertEqual(row["actor"], DEV_USER_ID)
 
     def test_audit_log_written(self):
         resp = self._open_cycle()
@@ -230,7 +230,7 @@ class CreateCycleTest(_BaseAdsTest):
             (cycle_id,),
         ).fetchone()
         self.assertIsNotNone(row)
-        self.assertEqual(row["actor"], OPERATOR)
+        self.assertEqual(row["actor"], DEV_USER_ID)
 
 
 class PacingCurveTest(_BaseAdsTest):

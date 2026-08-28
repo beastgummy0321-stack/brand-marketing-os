@@ -24,8 +24,8 @@ from app.brand_intelligence import repository as bi_repo
 from app.core import settings as coresettings
 from app.llm import methodology
 from app.llm.providers import FakeProvider, ProviderResponse, Usage
-from app.shared.web import OPERATOR
 
+OPERATOR = "本人"  # 票 03-1：production 端已刪除，測試沿用舊字串值當 actor 名稱
 ACTOR = "測試員"
 
 _AUDIENCE = {"cold": {"description": "測試受眾"}, "warm": {"description": ""},

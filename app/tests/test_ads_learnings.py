@@ -20,8 +20,9 @@ from app.brand_intelligence import repository as bi_repo
 from app.core import db, rule_cards
 from app.core.db import new_id, now_iso
 from app.llm import context_compiler
-from app.shared.web import OPERATOR
 
+OPERATOR = "本人"  # 票 03-1：production 端已刪除，測試沿用舊字串值當 actor 名稱
+DEV_USER_ID = "00000000-0000-0000-0000-000000000001"  # dev token 種子使用者（conftest.py）
 ACTOR = "測試員"
 
 
@@ -309,7 +310,7 @@ class RuleCardDecisionApiTest(unittest.TestCase):
             "SELECT * FROM creative_rule_card WHERE id = %s", (card_id,)).fetchone())
         self.assertEqual(row["status"], "accepted")
         self.assertIsNotNone(row["promoted_rule_id"])
-        self.assertEqual(row["decided_by"], OPERATOR)
+        self.assertEqual(row["decided_by"], DEV_USER_ID)
         rules = bi_repo.list_rules_for_brand(main.conn, self.bid)
         self.assertTrue(any(r["id"] == row["promoted_rule_id"] for r in rules))
 
@@ -359,7 +360,7 @@ class RuleCardDecisionApiTest(unittest.TestCase):
         self.assertEqual(resp.status_code, 200)
         row = main.conn.execute(
             "SELECT decided_by FROM creative_rule_card WHERE id = %s", (card_id,)).fetchone()
-        self.assertEqual(row["decided_by"], OPERATOR)
+        self.assertEqual(row["decided_by"], DEV_USER_ID)
 
 
 class ContrastSampleIsNamedCellsTest(unittest.TestCase):

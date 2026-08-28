@@ -20,8 +20,9 @@ from app.brand_web import routes_products as rp
 from app.core import interrupts as core_interrupts
 from app.core import settings as coresettings
 from app.llm.providers import FakeProvider, ProviderResponse, Usage
-from app.shared.web import OPERATOR
 
+OPERATOR = "本人"  # 票 03-1：production 端已刪除，測試沿用舊字串值當 actor 名稱
+DEV_USER_ID = "00000000-0000-0000-0000-000000000001"  # dev token 種子使用者（conftest.py）
 os.environ.setdefault("ANTHROPIC_API_KEY", "sk-ant-fake-products-api-test")
 
 ACTOR = "測試員"
@@ -337,7 +338,7 @@ class EconomicsTest(_BaseProductsApiTest):
                                                selling_price=100, currency="TWD", source_reference_id=None)
         resp = self.client.post(f"/api/products/brands/{self.bid}/products/{pid}/economics/confirm")
         self.assertEqual(resp.status_code, 204)
-        self.assertEqual(repo.get_product_economics(web.conn, self.bid, pid)["confirmed_by"], OPERATOR)
+        self.assertEqual(repo.get_product_economics(web.conn, self.bid, pid)["confirmed_by"], DEV_USER_ID)
 
     def test_non_numeric_selling_price_rejected(self):
         pid = self._create_product()

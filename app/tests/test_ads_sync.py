@@ -17,8 +17,9 @@ from app.ads import sync as ads_sync
 from app.brand_intelligence import repository as bi_repo
 from app.core import db
 from app.core import settings as coresettings
-from app.shared.web import OPERATOR
 
+OPERATOR = "本人"  # 票 03-1：production 端已刪除，測試沿用舊字串值當 actor 名稱
+DEV_USER_ID = "00000000-0000-0000-0000-000000000001"  # dev token 種子使用者（conftest.py）
 ACTOR = "測試員"
 ACCOUNT = "act_1234567890"
 
@@ -288,7 +289,7 @@ class ClaimGateTest(_BaseSyncTest):
         self.assertEqual(resp.status_code, 200)  # 沒被擋去設定操作人，直接認領成功
         row = main.conn.execute(
             "SELECT claimed_by FROM discovered_campaign WHERE id = %s", (discovered_id,)).fetchone()
-        self.assertEqual(row["claimed_by"], OPERATOR)
+        self.assertEqual(row["claimed_by"], DEV_USER_ID)
 
 
 class SanityAndErrorTest(_BaseSyncTest):

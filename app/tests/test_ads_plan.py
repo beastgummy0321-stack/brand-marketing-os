@@ -30,9 +30,9 @@ from app.core.db import new_id, now_iso  # noqa: E402
 from app.llm import methodology  # noqa: E402
 from app.llm import providers as llm_providers  # noqa: E402
 from app.llm.providers import FakeProvider, ProviderResponse, Usage  # noqa: E402
-from app.shared.web import OPERATOR  # noqa: E402
 
-
+OPERATOR = "本人"  # 票 03-1：production 端已刪除，測試沿用舊字串值當 actor 名稱
+DEV_USER_ID = "00000000-0000-0000-0000-000000000001"  # dev token 種子使用者（conftest.py）
 def _cleanup():
     try:
         main.conn.close()
@@ -513,7 +513,7 @@ class PlanApprovalTest(_BasePlanTest):
         self.assertEqual(resp.status_code, 204)
         stored = ads_plan.get_latest_plan(main.conn, self.bid, self.cycle_id)
         self.assertEqual(stored["status"], "approved")
-        self.assertEqual(stored["approved_by"], OPERATOR)
+        self.assertEqual(stored["approved_by"], DEV_USER_ID)
         self.assertEqual(
             ads_repo.get_cycle(main.conn, self.bid, self.cycle_id)["status"], "PRODUCTION")
 
@@ -533,7 +533,7 @@ class PlanApprovalTest(_BasePlanTest):
         self.assertNotIn("location", resp.headers)
         stored = ads_plan.get_latest_plan(main.conn, self.bid, self.cycle_id)
         self.assertEqual(stored["status"], "approved")
-        self.assertEqual(stored["approved_by"], OPERATOR)
+        self.assertEqual(stored["approved_by"], DEV_USER_ID)
         self.assertEqual(
             ads_repo.get_cycle(main.conn, self.bid, self.cycle_id)["status"], "PRODUCTION")
 
@@ -627,7 +627,7 @@ class DissentTest(_BasePlanTest):
         updated = next(d for d in ads_repo.list_dissents(main.conn, self.bid, self.cycle_id)
                       if d["id"] == dissent_id)
         self.assertEqual(updated["status"], "adopted")
-        self.assertEqual(updated["decided_by"], OPERATOR)
+        self.assertEqual(updated["decided_by"], DEV_USER_ID)
         self.assertIsNotNone(updated["decided_at"])
 
     def test_decide_works_without_operator_cookie(self):
@@ -644,7 +644,7 @@ class DissentTest(_BasePlanTest):
         updated = next(d for d in ads_repo.list_dissents(main.conn, self.bid, self.cycle_id)
                       if d["id"] == dissent_id)
         self.assertEqual(updated["status"], "adopted")
-        self.assertEqual(updated["decided_by"], OPERATOR)
+        self.assertEqual(updated["decided_by"], DEV_USER_ID)
 
     def test_decide_unknown_dissent_id_fails_honestly(self):
         self._generate(reply=_with_dissents(*_DISSENT_ITEMS))

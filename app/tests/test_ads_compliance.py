@@ -23,9 +23,8 @@ from app.ads import theme_repository as theme_repo  # noqa: E402
 from app.brand_intelligence import compliance_wordlist  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
 from app.llm.providers import FakeProvider, ProviderResponse, Usage  # noqa: E402
-from app.shared.web import OPERATOR  # noqa: E402
 
-
+OPERATOR = "本人"  # 票 03-1：production 端已刪除，測試沿用舊字串值當 actor 名稱
 def _cleanup():
     try:
         main.conn.close()

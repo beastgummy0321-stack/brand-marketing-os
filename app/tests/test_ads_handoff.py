@@ -23,9 +23,9 @@ from app.brand_intelligence import repository as bi_repo  # noqa: E402
 from app.core import db as coredb  # noqa: E402
 from app.core.db import new_id, now_iso  # noqa: E402
 from app.llm.providers import FakeProvider, ProviderResponse, Usage  # noqa: E402
-from app.shared.web import OPERATOR  # noqa: E402
 
-
+OPERATOR = "本人"  # 票 03-1：production 端已刪除，測試沿用舊字串值當 actor 名稱
+DEV_USER_ID = "00000000-0000-0000-0000-000000000001"  # dev token 種子使用者（conftest.py）
 def _cleanup():
     try:
         main.conn.close()
@@ -223,13 +223,13 @@ class ActivationGateTest(_BaseHandoffTest):
         auth = main.conn.execute(
             "SELECT * FROM activation_authorization WHERE scope_ref = %s",
             (package["id"],)).fetchone()
-        self.assertEqual(auth["authorized_by"], OPERATOR)
+        self.assertEqual(auth["authorized_by"], DEV_USER_ID)
 
         activation = main.conn.execute(
             "SELECT * FROM campaign_activation WHERE campaign_cycle_id = %s",
             (self.cycle_id,)).fetchone()
         self.assertEqual(activation["authorization_id"], auth["id"])
-        self.assertEqual(activation["activated_by"], OPERATOR)
+        self.assertEqual(activation["activated_by"], DEV_USER_ID)
 
         mapping = main.conn.execute(
             "SELECT * FROM external_ad_mapping WHERE publishing_package_id = %s",
@@ -265,7 +265,7 @@ class ActivationGateTest(_BaseHandoffTest):
             "SELECT * FROM activation_authorization WHERE scope_ref = %s",
             (package_id,)).fetchone()
         self.assertIsNotNone(auth)
-        self.assertEqual(auth["authorized_by"], OPERATOR)
+        self.assertEqual(auth["authorized_by"], DEV_USER_ID)
 
     def test_ad_account_is_created_without_a_brand_binding(self):
         """廣告帳號不綁品牌——一個帳號可服務多個品牌（決策 0022 第 6 點）。"""

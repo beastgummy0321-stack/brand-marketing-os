@@ -18,8 +18,9 @@ from app.core import db, prototype_phase
 from app.core import interrupts as core_interrupts
 from app.llm.providers import FakeProvider, ProviderError, ProviderResponse, Usage
 from app.orders import repository as orders_repo
-from app.shared.web import OPERATOR
 
+OPERATOR = "本人"  # 票 03-1：production 端已刪除，測試沿用舊字串值當 actor 名稱
+DEV_USER_ID = "00000000-0000-0000-0000-000000000001"  # dev token 種子使用者（conftest.py）
 ACTOR = "測試員"
 
 
@@ -640,7 +641,7 @@ class RepurchaseLineTest(_ReadingIntegrationBase):
             "SELECT status, decided_by FROM rule_dissent WHERE id = %s", (dissent["id"],)
         ).fetchone()
         self.assertEqual(decided["status"], "adopted")
-        self.assertEqual(decided["decided_by"], OPERATOR)
+        self.assertEqual(decided["decided_by"], DEV_USER_ID)
 
     def test_resolving_the_conflict_clears_the_stale_pending_dissent(self):
         """再判讀一次，這次數字不衝突了——舊的 pending 異議要被清掉，不留殭屍紀錄。"""

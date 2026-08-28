@@ -41,6 +41,11 @@ BRAND_AGNOSTIC_EXCEPTIONS = {
         "（core_baseline migration 註解，brand_id 欄位存在但刻意不設 NOT NULL）",
     "interrupt": "全站打斷佇列，brand_id 可為 NULL 表示跨品牌系統級提醒"
         "（core_baseline migration 註解：NULL＝跨品牌系統級）",
+    "app_user": "身分表（票 03-1）：組織→使用者→品牌三層，使用者活在品牌之上、可橫跨"
+        "多個組織／品牌，不適用「有沒有 brand_id」這個檢查",
+    "membership": "使用者與組織的關係表（票 03-1）：綁的是 org_id，不是 brand_id——"
+        "同一個道理，membership 活在品牌之上",
+    "org_invite": "組織邀請（票 03-1）：綁的是 org_id，邀請的是加入組織、不是加入品牌",
 }
 
 

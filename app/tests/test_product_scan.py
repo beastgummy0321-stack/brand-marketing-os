@@ -25,8 +25,9 @@ from app.llm.providers import (
     ProviderResponse,
     Usage,
 )
-from app.shared.web import OPERATOR
 
+OPERATOR = "本人"  # 票 03-1：production 端已刪除，測試沿用舊字串值當 actor 名稱
+DEV_USER_ID = "00000000-0000-0000-0000-000000000001"  # dev token 種子使用者（conftest.py）
 ACTOR = "測試員"
 
 
@@ -249,7 +250,7 @@ class ProductRescanTest(_BaseProductScanTest):
         self.assertEqual(resp.status_code, 204)
         economics = bi_repo.get_product_economics(web.conn, self.brand["id"], product_id)
         self.assertEqual(economics["status"], "confirmed")
-        self.assertEqual(economics["confirmed_by"], OPERATOR)
+        self.assertEqual(economics["confirmed_by"], DEV_USER_ID)
 
 
 if __name__ == "__main__":

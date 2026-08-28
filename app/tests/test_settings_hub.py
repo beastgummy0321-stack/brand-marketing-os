@@ -6,6 +6,7 @@
 """
 
 import unittest
+from uuid import UUID
 
 from fastapi.testclient import TestClient
 
@@ -14,10 +15,14 @@ import app.shared.web as web
 from app.brand_intelligence import repository as bi_repo
 from app.core import calendar_dismiss, rule_cards
 from app.core import db as coredb
+from app.identity import ActorContext
 from app.shared import web as shared_web
-from app.shared.web import OPERATOR
 
 ACTOR = "測試員"
+DEV_USER_ID = "00000000-0000-0000-0000-000000000001"  # conftest.py 預設 dev token 對應的種子使用者
+_DUMMY_ACTOR = ActorContext(
+    user_id=UUID(DEV_USER_ID), org_id="org_dev", role="owner", email="dev@local"
+)
 
 
 # 舊頁脫鉤（T4 前置）：規則卡的讀寫改走 `/api/settings/rule-cards/**`，斷言驗的東西不變
@@ -66,7 +71,7 @@ class SettingsHubEntryPageTest(unittest.TestCase):
         # 入口頁的 404 來自 require_brand 這道守門（brand_web/routes_settings.py:65），
         # 這裡直接驗那道守門本身，不再靠舊頁網址。
         with self.assertRaises(shared_web.NotFoundKind) as caught:
-            shared_web.require_brand("brand_沒這個品牌")
+            shared_web.require_brand("brand_沒這個品牌", _DUMMY_ACTOR)
         self.assertEqual(caught.exception.status_code, 404)
 
 
@@ -104,8 +109,9 @@ class SettingsAdsPageTest(unittest.TestCase):
         cards = _cards(self.client, self.bid)
         self.assertTrue(_field(cards, "ad_creative_fatigue", "cold_warning")["customized"])
 
-    def test_edit_works_without_operator_cookie(self):
-        """ADR 0004：編輯不再要求先設定操作人。"""
+    def test_edit_records_the_authenticated_user_as_actor(self):
+        """票 03-1：ADR 0004 的「不再要求先設定操作人」還是對的，但具名對象換成登入者
+        （dev token 對應的種子使用者），不再是固定的 OPERATOR 常數。"""
         resp = self.client.post(
             f"/api/settings/rule-cards/brands/{self.bid}/pacing",
             json={"deviation_threshold_ratio": "0.2"},
@@ -113,7 +119,7 @@ class SettingsAdsPageTest(unittest.TestCase):
         self.assertEqual(resp.status_code, 200)
         row = _last_rule_card_audit(self.bid)
         self.assertIsNotNone(row)
-        self.assertEqual(row["actor"], OPERATOR)
+        self.assertEqual(row["actor"], DEV_USER_ID)
 
     def test_edit_persists_after_restart(self):
         """ADR 0027：不再有「重開連線」這回事了（連線池按 request 借連線）——改成從一條

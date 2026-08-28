@@ -19,8 +19,9 @@ from app.ads import plan as ads_plan
 from app.brand_intelligence import repository as bi_repo
 from app.core.db import DEV_ORG_ID, new_id, now_iso, now_utc
 from app.llm.providers import FakeProvider, ProviderResponse, Usage
-from app.shared.web import OPERATOR
 
+OPERATOR = "本人"  # 票 03-1：production 端已刪除，測試沿用舊字串值當 actor 名稱
+DEV_USER_ID = "00000000-0000-0000-0000-000000000001"  # dev token 種子使用者（conftest.py）
 ACTOR = "測試員"
 
 
@@ -124,7 +125,7 @@ class AngleRenameTest(unittest.TestCase):
         self.assertIsNotNone(audit)
         self.assertEqual(audit["before_json"]["creative_angle"], "省錢角度")
         self.assertEqual(audit["after_json"]["creative_angle"], "省錢角度改版")
-        self.assertEqual(audit["actor"], OPERATOR)
+        self.assertEqual(audit["actor"], DEV_USER_ID)
 
     def test_blank_name_rejected(self):
         resp = self._rename("   ")

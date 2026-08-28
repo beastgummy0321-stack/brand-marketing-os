@@ -19,16 +19,16 @@ from app.ads import fingerprint as fp  # noqa: E402
 from app.ads import (
     nextcycle,  # noqa: E402
     reading,  # noqa: E402
-    )
+)
 from app.ads import performance as perf  # noqa: E402
 from app.ads import theme_repository as theme_repo  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
 from app.core import db as coredb  # noqa: E402
 from app.core.db import new_id, now_iso  # noqa: E402
 from app.llm.providers import FakeProvider, ProviderResponse, Usage  # noqa: E402
-from app.shared.web import OPERATOR  # noqa: E402
 
-
+OPERATOR = "本人"  # 票 03-1：production 端已刪除，測試沿用舊字串值當 actor 名稱
+DEV_USER_ID = "00000000-0000-0000-0000-000000000001"  # dev token 種子使用者（conftest.py）
 def _cleanup():
     try:
         main.conn.close()
@@ -347,7 +347,7 @@ class RuleCardTest(_BaseNextCycleTest):
         row = main.conn.execute(
             "SELECT decided_by, status, promoted_rule_id FROM creative_rule_card WHERE id = %s",
             (card["id"],)).fetchone()
-        self.assertEqual(row["decided_by"], OPERATOR)
+        self.assertEqual(row["decided_by"], DEV_USER_ID)
         self.assertEqual(row["status"], "accepted")
         self.assertIsNotNone(row["promoted_rule_id"])
         rules = bi_repo.list_rules_for_brand(main.conn, self.bid)
