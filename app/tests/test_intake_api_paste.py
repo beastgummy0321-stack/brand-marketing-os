@@ -94,6 +94,17 @@ class _Base(unittest.TestCase):
             time.sleep(0.05)
         self.fail("背景任務逾時仍未完成，可能是執行緒沒有真的跑")
 
+    def _wait_for_notice(self, brand_id: str, needle: str, timeout: float = 2.0) -> None:
+        """等收件匣出現這則通知。不能只查一次：`_run_paste_fix_job()` 先翻 status、後寫
+        通知，`_poll()` 在翻 status 當下就回來了（CI run 33215616255 輸過這場競速）。"""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if any(needle in r["message"] for r in core_interrupts.list_open(web.conn, brand_id=brand_id)
+                   if r["category"] == "intake_ai_step_done"):
+                return
+            time.sleep(0.05)
+        self.fail(f"逾時仍未在收件匣看到「{needle}」通知")
+
 
 # ---------------------------------------------------------------------------
 # 貼回驗證（免費、同步）：三種錯誤樣本、成功落地並推進到步驟 5
@@ -259,9 +270,7 @@ class PasteFixBackgroundTest(_Base):
         self.assertEqual(draft["pending_item_count"], 24)
         self.assertEqual(draft["step"], 5)
 
-        matches = [r for r in core_interrupts.list_open(web.conn, brand_id=bid)
-                  if r["category"] == "intake_ai_step_done"]
-        self.assertTrue(any("貼回格式已修好" in m["message"] for m in matches))
+        self._wait_for_notice(bid, "貼回格式已修好")
 
     def test_failure_notifies_with_human_error(self):
         from app.llm.providers import MISSING_KEY_MESSAGE, AnthropicProvider
@@ -274,9 +283,7 @@ class PasteFixBackgroundTest(_Base):
         status = self._poll(bid, "paste_fix")
         self.assertEqual(status["status"], "failed")
         self.assertEqual(status["error"], MISSING_KEY_MESSAGE)
-        matches = [r for r in core_interrupts.list_open(web.conn, brand_id=bid)
-                  if r["category"] == "intake_ai_step_done"]
-        self.assertTrue(any("貼回修格式失敗" in m["message"] for m in matches))
+        self._wait_for_notice(bid, "貼回修格式失敗")
 
     def test_over_budget_blocks_before_calling_ai(self):
         bid = self._create_full()
