@@ -34,6 +34,7 @@
 
 ## 小債（順手做，不排優先）
 - [ ] GitHub 四個安全開關（secret scanning／push protection／CodeQL／branch protection）需 GitHub Pro 或公開 repo——**等使用者決定**要不要付費；未付費前 CI 綠不擋合併，靠人工
+- [ ] Dependabot #1（high）：前端間接依賴 `nanoid`（size=0 無限迴圈，開發工具鏈才用到）——03-2 動前端時 `npm audit fix` 順手收
 - [ ] `app/tests/test_settings_api.py` 一條測試寫死 Windows 磁碟機路徑，02-7 在非 Windows 跳過（`skipif`）；應改成跨平台斷言後拿掉 skip
 
 ## 里程碑之後（Meta 端解封或上雲後才動；2026-08-28 grill 定案）
