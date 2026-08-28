@@ -11,7 +11,7 @@
 
 ## 第 ③ 片：身分（需批准：schema＋權限）
 
-- [ ] 03-2 前端（票 .scratch/saas/tickets/03-2-frontend-login.md，等 03-1 r1 合併後派）：登入頁（supabase-js 只做登入）、`src/lib/api.ts` 掛 token、「我是公司／組織」、邀請成員
+- [ ] 03-3（票 .scratch/saas/tickets/03-3-invite-and-default-org.md，已派 Sonnet）：03-2 審查 REJECT（邀請連結少 `/app` 前綴＝死連結）＋實機走查抓到的兩個鎖死（改組織名後 `get_personal_membership` 找不到組織＝帳號廢掉；前端沒存 orgId）＋冷邀請者登入後丟失 token
 
 ## 第 ④ 片：設定與憑證（需批准：schema）
 
