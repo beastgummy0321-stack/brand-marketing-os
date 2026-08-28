@@ -67,13 +67,13 @@ def _resolve_org(request: Request, user_id: UUID) -> tuple[str, str]:
 
 
 def _first_login(user_id: UUID, email: str) -> None:
-    """Idempotent, called on every request (no separate "does this user exist" check before
-    it — ticket 03-1 r1 defect 3): `create_user` does the existence check and the insert in
-    one atomic statement (`ON CONFLICT (id) DO NOTHING`), so two concurrent requests for the
-    same brand-new `sub` can no longer both observe "doesn't exist yet" and both try to create
-    it. Only the request whose insert actually happened (the winner) creates the personal
-    organisation + owner membership; the other returns immediately and re-reads via
-    `_resolve_org` below like any returning user."""
+    """Idempotent — safe to call even when the caller's own `get_user` fast-path check
+    raced another request (ticket 03-1 r1 defect 3): `create_user` does the existence
+    check and the insert in one atomic statement (`ON CONFLICT (id) DO NOTHING`), so two
+    concurrent requests for the same brand-new `sub` can no longer both observe "doesn't
+    exist yet" and both try to create it. Only the request whose insert actually happened
+    (the winner) creates the personal organisation + owner membership; the other returns
+    immediately and re-reads via `_resolve_org` below like any returning user."""
     inserted = repo.create_user(web.conn, user_id, email)
     if not inserted:
         return
@@ -107,7 +107,14 @@ def authenticate(request: Request) -> ActorContext:
         raise Unauthenticated() from None
     email = claims.get("email") or ""
 
-    _first_login(user_id, email)
+    # Review follow-up (03-1 r1 note 1, ruled by ticket author): keep both layers. The
+    # atomic `create_user` (`ON CONFLICT DO NOTHING`) in `_first_login` is what actually
+    # closes the race — that alone is correct even without this check. This `get_user`
+    # read is a fast path only: without it, every single authenticated request would
+    # attempt a write (the INSERT statement) just to find out the user already exists.
+    # Do not remove the ON CONFLICT to "simplify" this back to one layer.
+    if repo.get_user(web.conn, user_id) is None:
+        _first_login(user_id, email)
 
     org_id, role = _resolve_org(request, user_id)
     return ActorContext(user_id=user_id, org_id=org_id, role=role, email=email)
