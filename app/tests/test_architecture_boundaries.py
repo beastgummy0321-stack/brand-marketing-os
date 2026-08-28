@@ -13,7 +13,11 @@
    從清單劃掉；`app/ads/interview.py`／`app/intake/ai.py`／`app/intake/state.py`
    三處讀 `strategy_hypothesis`／`brand` 仍是欠帳，留待後續票。
 
-兩道掃描都是靜態文字掃描，不是完整的 SQL parser：只認得出現在原始碼字面裡、緊接在
+外殼切片（2026-08-29）票 shell-06 再補兩道**量**的閘門（`TestRatioTest`、
+`ModuleSizeRatchetTest`，見檔案後段）：既有三道全都在看耦合與單檔大小，沒有一道在看
+「一個模組總共長到幾行」——`app/ads/` 長到 21,595 行的過程中它們一次都沒紅過。
+
+兩道 SQL／import 掃描都是靜態文字掃描，不是完整的 SQL parser：只認得出現在原始碼字面裡、緊接在
 FROM／INTO／UPDATE／JOIN 後面的表名。用 f-string 動態拼表名可以繞過去——這是刻意
 接受的天花板（ponytail: 靜態字面掃描，非 AST-level SQL 解析；真的需要更嚴謹時再升級）。
 """
@@ -465,6 +469,132 @@ class FileLineCapTest(unittest.TestCase):
         )
 
 
+
+# ---------------------------------------------------------------------------
+# A1 檢查⑥⑦：量。票 shell-06（HANDOFF-shell-slice.md §4）。
+#
+# 為什麼要有這兩道：`app/ads/` 長到 21,595 行的過程中，既有三道閘門**一次都沒有紅過**。
+#   - `FileLineCapTest` 管的是「單檔」800 行。那 21,595 行攤在幾十個檔案裡，每一個都在
+#     800 以下，每一個都通過。
+#   - `LayerDirectionTest`／`ImportCycleScanTest` 管的是耦合，不是體積。廣告模組的耦合
+#     一直很乾淨——41 個 import 全部是模組層級的。
+# 三道閘門都沒錯，只是都沒在看「量」。下面兩道補這一格。
+#
+# **誠實的天花板，寫在這裡而不是只寫在票裡**：這兩道抓不到真正的病因——為一個還沒有人
+# 跑過的系統寫 21,595 行猜出來的門檻。「先用手做，痛過兩次再寫成程式」才是對的規則，
+# 而它**不可機器檢查**。這兩道買到的是早 10 倍的警報（廣告模組會在約 2,000 行就撞上
+# `ModuleSizeRatchetTest`，而不是 21,595 行），不是解藥。真正擋得住的那條規則現在寫在
+# 全域 `CLAUDE.md`：任何數字門檻都要說得出來源，「業界標準」不算來源。
+# ---------------------------------------------------------------------------
+
+# 凍結於外殼切片後的實測值（2026-08-29）：production 15,634 行、tests 13,418 行。
+# 切之前是 39,257／42,166（1.074×）——切完降到 0.858×，因為刪掉的測試（28,748 行）比
+# 刪掉的程式（23,623 行）更多。交接文件預測「切完會變成 1.13×，更糟」，實測不成立：
+# 它假設只刪 81 個廣告測試檔，實際刪了 95 個。`docs/workflow-diet.md` 第 4 條的目標是 0.7×。
+# 這個天花板含本檔這兩道閘門自己的 128 行——閘門也是測試，也算進它自己管的數字裡。
+# **只准往下**：這個數字是天花板，不是配額。
+TEST_RATIO_CEILING = 0.858
+
+
+def _line_totals() -> tuple:
+    """(production 行數, test 行數)。只算 app/ 底下的 .py，不含 __pycache__。"""
+    production = tests = 0
+    for path in _iter_py_files():
+        n = len(path.read_text(encoding="utf-8").splitlines())
+        if _rel(path).startswith("app/tests/"):
+            tests += n
+        else:
+            production += n
+    return production, tests
+
+
+class TestRatioTest(unittest.TestCase):
+    """測試行數相對程式行數的比值，只准往下。
+
+    測試是有人要維護的程式碼，寫得越多不等於越安全（`docs/workflow-diet.md` 第 4 條）。
+    這道閘門把那條原本只是散文的目標接上機器——憲章明文：「一個沒有閘門的數字不是限制」。
+    """
+
+    def test_ratio_only_goes_down(self):
+        production, tests = _line_totals()
+        ratio = round(tests / production, 3)
+        self.assertLessEqual(
+            ratio, TEST_RATIO_CEILING,
+            f"測試行數比值從 {TEST_RATIO_CEILING} 漲到 {ratio}"
+            f"（production {production} 行、tests {tests} 行）。\n"
+            "這道閘門只准往下。要加測試就先問它守的是哪一件事——金額、租戶隔離、API 契約、"
+            "資料正確性，四者以外不寫（docs/workflow-diet.md 第 4 條）；畫面行為只給"
+            "frontend/e2e/smoke.spec.ts 那一支端到端煙霧測試，不寫單元測試。\n"
+            "真的該漲（例如新增了一整層資料正確性測試），就把 TEST_RATIO_CEILING 改掉——"
+            "改在這一行，reviewer 會在 diff 裡看到。",
+        )
+
+
+# 凍結於外殼切片後的實測值（2026-08-29）。`app/` 底下每個套件一個項目，`app` 這一項
+# 是頂層的 .py（`main.py` 組裝根等）。**允許調高，但必須改這張表**——重點不是禁止成長，
+# 是讓成長出現在 diff 裡有人看得到。廣告模組會在約 2,000 行撞上它，而不是 21,595 行。
+KNOWN_MODULE_SIZES = {
+    "app": 519,
+    "app/brand_intelligence": 2634,
+    "app/brand_web": 2155,
+    "app/core": 2148,
+    "app/dashboard": 645,
+    "app/identity": 537,
+    "app/intake": 3548,
+    "app/llm": 1271,
+    "app/orders": 1409,
+    "app/shared": 450,
+    "app/tools": 318,
+}
+
+
+def _module_sizes() -> dict:
+    """{套件: 行數}。`app/tests/` 不算（測試由 TestRatioTest 管，且 800 行上限對它豁免）。"""
+    sizes: dict = {}
+    for path in _iter_py_files():
+        rel = _rel(path)
+        if rel.startswith("app/tests/"):
+            continue
+        parts = rel.split("/")
+        module = f"{parts[0]}/{parts[1]}" if len(parts) > 2 else parts[0]
+        sizes[module] = sizes.get(module, 0) + len(path.read_text(encoding="utf-8").splitlines())
+    return sizes
+
+
+class ModuleSizeRatchetTest(unittest.TestCase):
+    """每個套件的行數凍在現況：長大要改上面那張表，改動就會出現在 diff 裡。
+
+    跟 `KNOWN_OVERSIZED_FILES` 同一個形狀（凍結現況、只能改明表），全域規則「不得為了讓
+    閘門由紅轉綠而放寬容忍清單」同樣適用於它——調高的那一次要說得出理由。
+    """
+
+    def test_no_module_grows_past_its_frozen_size(self):
+        problems = [
+            f"  {module}：{size} 行，比凍結值 {KNOWN_MODULE_SIZES[module]} 大"
+            for module, size in sorted(_module_sizes().items())
+            if module in KNOWN_MODULE_SIZES and size > KNOWN_MODULE_SIZES[module]
+        ]
+        self.assertEqual(
+            problems, [],
+            "以下套件超過凍結行數：\n" + "\n".join(problems)
+            + "\n真的該長大就把 KNOWN_MODULE_SIZES 對應那一行改掉（reviewer 會在 diff 裡"
+            "看到）。先問一句：這些行是同樣輸入必定同樣輸出的東西（算術、閘門、排序），"
+            "還是猜出來的判斷？後者屬於 rules.md 或 agent，不屬於 Python。",
+        )
+
+    def test_module_list_matches_reality(self):
+        """新套件不得靜悄悄出現，刪掉的套件不得留在表上——兩邊都要動到這張表。"""
+        actual = set(_module_sizes())
+        frozen = set(KNOWN_MODULE_SIZES)
+        self.assertEqual(
+            sorted(actual - frozen), [],
+            "以下套件不在 KNOWN_MODULE_SIZES 裡。新開一個套件要在那張表補一行，"
+            "順手回答：它為什麼是 Python 而不是一個部門資料夾（ADR 0028）？",
+        )
+        self.assertEqual(
+            sorted(frozen - actual), [],
+            "以下套件已經不存在，請從 KNOWN_MODULE_SIZES 劃掉（清單不留死名單）。",
+        )
 
 
 if __name__ == "__main__":
