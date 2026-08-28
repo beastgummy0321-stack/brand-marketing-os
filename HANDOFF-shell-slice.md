@@ -48,21 +48,24 @@ input:
 | `app/core/orchestrator.py` + `app/tests/test_core_orchestrator.py` | 215 lines + its test |
 | Ads test files | **81 of 175** files, 23,154 lines — **55% of the suite** |
 | **Total deleted** | **~44,960 lines** |
-| `import app.ads` statements to rewire | **41**, in 6 places |
+| `app/creative/` | 817 lines, imported by nothing but `app/ads/` |
+| `import app.ads` statements to rewire | **35**, in 3 places |
 
 Import distribution — **`app/main.py` is the hard one and was missed in the first count**:
 
 | Location | `import app.ads` statements |
 | --- | --- |
-| `app/main.py` (766 lines; 31 lines reference `ads_*` symbols) | 13 |
+| `app/main.py` (766 lines; 31 lines reference `ads_*` symbols) | 12 |
 | `app/dashboard` | 17 |
 | `app/orders` | 6 |
-| `app/creative` | 2 |
-| `app/brand_web` | 2 |
-| `app/brand_intelligence` | 1 |
+| `app/creative`, `app/brand_web`, `app/brand_intelligence` | **0** |
 
-All are module-level (`from app.ads import X as ads_X`). Shallow, but `main.py` and `dashboard`
-carry 30 of the 41.
+An earlier count said 41 across 6 modules. Six of those were comment lines, and what they say
+is "不 import app.ads" — the modules were documenting that they deliberately do *not* import it
+(`brand_web/routes_library.py:326`, `brand_web/routes_products.py:173`,
+`brand_intelligence/background_job.py:9`). The blast radius is three modules, not six. All 35
+are module-level (`from app.ads import X as ads_X`); `main.py` and `dashboard` carry 29 of
+them.
 
 **Frontend:** 21 routes. **10 depend on ads** — `/brands/:id/campaigns`, `campaigns/new`,
 `campaigns/:cycleId`, `workbench`, `workbench/:cycleId`, `ads-claims`, `learnings`, `report`,
@@ -157,8 +160,18 @@ green, then delete it. A 45,000-line deletion that diverges for a week is unmerg
 `app/dashboard` (17) are 30 of them and are the real work. Where a call site only rendered ads
 data, delete the call site; do not stub it.
 
-**Do NOT touch:** `app/creative/` beyond rewiring its 2 imports. Whether the 素材工作檯 survives
-as a module or becomes a department is an architecture question — §6.3.
+**`app/creative/` goes too, but extract one file first.** It is imported by nothing except
+`app/ads/` (7 sites, all inside ads) and imports nothing from ads, so the deletion leaves it
+with zero callers — the orchestrator situation again. Its 15 `workbench/*.tsx` components go
+with the two dead `/workbench` routes.
+
+- `theme_engine.py` (477) and `theme_engine_video.py` (231): delete. This logic becomes the
+  creative department's task `.md`.
+- **`format_specs.py` (108): copy its contents into the ad department's task material before
+  deleting it.** It is Meta's real format table — flexible ads cap at 10, single image is 1,
+  narrative carousel gives each card its own beat. Those numbers have a genuine source (Meta's
+  spec), unlike the thresholds this slice exists to remove, so the preamble rule keeps them.
+  Delete without extracting and someone re-invents Meta's limits from memory later.
 
 **Tolerance lists:** entries in `KNOWN_OVERSIZED_FILES`, `KNOWN_LAYER_VIOLATIONS`,
 `KNOWN_IMPORT_CYCLES` that name deleted files (e.g. `app/ads/repository.py`, 856 lines) **must
@@ -273,21 +286,19 @@ Mechanical work, no grill needed.
    back prefixed `Beast，`. Every brand prompt is contaminated by the developer's personal agent
    rules. Unsolved. Candidates: `--settings` with a clean config, or a scoped
    `CLAUDE_CONFIG_DIR` (which also loses auth — needs testing).
-3. **Does `app/creative/` survive as a module, or become a department?** Rewire it in ticket 2,
-   decide nothing.
-4. **Workspace directory layout under many departments** is undesigned.
-5. **`run_task`'s two shapes** — spawn a local CLI vs call an API. The single SaaS seam;
+3. **Workspace directory layout under many departments** is undesigned.
+4. **`run_task`'s two shapes** — spawn a local CLI vs call an API. The single SaaS seam;
    decision 3 is what makes the swap cheap. Note that **slice ⑤'s 05-1 (procrastinate
    `enqueue／status／cancel` + worker) is exactly the contract `run_task` needs** — its
    contract survives even though its payload (`_auto_sync_loop`, the weekly engine) dies with
    ads. Same for **06-1**: "每組織一 bucket" *is* the cloud workspace; "素材檔掛主題" dies.
-6. **Variance is unmeasured.** A probe sits at
+5. **Variance is unmeasured.** A probe sits at
    `D:\0UserProfile\Desktop\MarketingOS Shell\variance-probe\` (stdlib only, `--selftest`
    proven red once then green). It runs one task N times against a real brand and reports how
    often the same products are chosen, the min–max spread of each `budget_share`, **how often
    the shares fail to sum to 1.0**, and angle-name repetition. Needs a real brand filled into
    `workspace/{brand,products,rules}.md`. Until it runs, decision 11's retry budget is a guess.
-7. **ADR 0004 is stale and it is not this slice's fault.** Its stated premise is "系統是單機
+6. **ADR 0004 is stale and it is not this slice's fault.** Its stated premise is "系統是單機
    單人"; ADR 0027 and `CLAUDE.md` #1 overturned it. `authorized_by` auto-filled with a fixed
    value is an audit gap under multi-tenancy. Marked, unresolved.
 
