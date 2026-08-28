@@ -18,6 +18,7 @@
 | `ab-testing.md` | 樣本數速查表、Peeking 紀律、ICE 排序 |
 | `copywriting.md` | 五大原則、寫作規則、CTA、Hook 公式、改寫範例、心理模型 |
 | `creative-matrix.md` | 35 個創意角度、真人實拍 DNA、產圖硬規則、Hook 切法、影片腳本框架 |
+| `meta-format-specs.md` | Meta 版位格式規格表：單圖／輪播／影片的比例、欄位數、字數預算、每主題媒體上限（自 `app/creative/format_specs.py` 移出） |
 | `customer-voice.md` | 顧客原話抽取規則、台灣在地管道 |
 
 ## 任務型別 → 必讀方法論檔對照表

@@ -22,7 +22,7 @@ import csv
 import io
 from datetime import date, timedelta
 
-from app.ads import performance as ads_performance
+from app.shared import csv_columns
 from app.brand_intelligence import repository as bi_repo
 from app.core.audit import write_audit
 from app.core.db import new_id, now_utc
@@ -49,8 +49,8 @@ class ShopeeImportResult:
 
 
 def match_shopee_columns(headers: list) -> tuple:
-    """重用 app.ads.performance.match_columns 的兩階段比對演算法，換上蝦皮別名表。"""
-    return ads_performance.match_columns(headers, SHOPEE_COLUMN_ALIASES)
+    """重用 app.shared.csv_columns.match_columns 的兩階段比對演算法，換上蝦皮別名表。"""
+    return csv_columns.match_columns(headers, SHOPEE_COLUMN_ALIASES)
 
 
 def looks_like_shopee_report(headers: list) -> bool:
@@ -61,7 +61,7 @@ def looks_like_shopee_report(headers: list) -> bool:
 
 
 def parse_shopee_csv(text: str) -> tuple:
-    """蝦皮報表 CSV → (資料列, ShopeeImportResult)。不碰資料庫（比照 ads_performance.parse_csv）。"""
+    """蝦皮報表 CSV → (資料列, ShopeeImportResult)。不碰資料庫（解析與落庫分工）。"""
     result = ShopeeImportResult()
     if not text or not text.strip():
         result.errors.append("檔案是空的，沒有東西可以匯入。")
@@ -72,7 +72,7 @@ def parse_shopee_csv(text: str) -> tuple:
     if not headers:
         result.errors.append("讀不出這個檔案的欄位名稱，確認一下是不是 CSV 檔。")
         return [], result
-    headers = ads_performance.dedupe_headers(headers)
+    headers = csv_columns.dedupe_headers(headers)
     reader.fieldnames = headers
 
     mapping, unmatched = match_shopee_columns(headers)
@@ -94,7 +94,7 @@ def parse_shopee_csv(text: str) -> tuple:
         for concept, column in mapping.items():
             value = raw_row.get(column)
             if concept == "revenue":
-                row[concept] = ads_performance.to_number(value)
+                row[concept] = csv_columns.to_number(value)
             elif concept == "order_date":
                 row[concept] = (str(value).strip()[:10] or None) if value else None
             else:

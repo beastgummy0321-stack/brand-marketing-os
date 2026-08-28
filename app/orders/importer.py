@@ -4,9 +4,8 @@
 repo 只有這個模組要用到 xlsx），環境裡已裝 3.1.5——選最小方案：不新增依賴管理檔，直接
 import，缺套件時會在啟動時明顯報錯，不是這裡刻意隱藏的風險。
 
-分派層只做一件事：拖進來的檔案是 EasyStore 訂單匯出、還是 Meta 廣告 CSV？
-兩階段欄名比對機制完全重用 app/ads/performance.match_columns（只是換一張別名表），
-不重寫比對邏輯——這正是本票 DoR 指定的做法。
+分派層只做一件事：拖進來的檔案是不是 EasyStore 訂單匯出？兩階段欄名比對機制重用
+app/shared/csv_columns.match_columns（只是換一張別名表），不重寫比對邏輯。
 
 EasyStore 匯出格式（決策 0025：使用者真實 Export_Orders 檔已驗證，修正版）：一張訂單可能有
 多列（一列一個商品品項）。真實檔案裡 Order Number **每一列都有填**，不是只有首列——分組依據
@@ -17,7 +16,7 @@ email 等）只認同一組裡的第一列，後續列即使 Order Number 有填
 import io
 from dataclasses import dataclass, field
 
-from app.ads import performance as ads_performance
+from app.shared import csv_columns
 
 try:
     import openpyxl
@@ -60,8 +59,8 @@ class OrderImportResult:
 
 
 def match_order_columns(headers: list) -> tuple:
-    """重用 app.ads.performance.match_columns 的兩階段比對演算法，換上訂單別名表。"""
-    return ads_performance.match_columns(headers, ORDER_COLUMN_ALIASES)
+    """重用 app.shared.csv_columns.match_columns 的兩階段比對演算法，換上訂單別名表。"""
+    return csv_columns.match_columns(headers, ORDER_COLUMN_ALIASES)
 
 
 def looks_like_easystore_orders(headers: list) -> bool:
@@ -71,25 +70,12 @@ def looks_like_easystore_orders(headers: list) -> bool:
     return any(col in mapping for col in _EASYSTORE_CONFIRM_COLUMNS)
 
 
-def looks_like_meta_ads_csv(headers: list) -> bool:
-    """跟現有 CSV 匯入用同一套判斷：對得到「花費」欄，就是 Meta 廣告成效檔。"""
-    mapping, _ = ads_performance.match_columns(headers)
-    return "spend" in mapping
-
-
 def sniff_file_kind(filename: str, headers: list) -> str:
-    """分派層：回傳 'easystore_orders' / 'meta_ads_csv' / 'unknown'。
+    """分派層：回傳 'easystore_orders' / 'unknown'。
 
-    表頭比對優先：認得出訂單欄位就是訂單檔。認不出、但副檔名是 xlsx（Meta CSV 匯出
-    從來不是 xlsx）就誠實回 unknown，不硬套 CSV 解析器去讀二進位內容。
+    表頭比對優先：認得出訂單欄位就是訂單檔，其餘一律誠實回 unknown，不硬套解析器。
     """
-    if looks_like_easystore_orders(headers):
-        return "easystore_orders"
-    if (filename or "").lower().endswith((".xlsx", ".xlsm")):
-        return "unknown"
-    if looks_like_meta_ads_csv(headers):
-        return "meta_ads_csv"
-    return "unknown"
+    return "easystore_orders" if looks_like_easystore_orders(headers) else "unknown"
 
 
 def _sheet_rows(workbook_bytes: bytes) -> list:
@@ -103,7 +89,7 @@ def _sheet_rows(workbook_bytes: bytes) -> list:
 
 def parse_easystore_xlsx(content: bytes) -> tuple:
     """EasyStore xlsx → (訂單列, OrderImportResult)。訂單列已按 Order Number 分組、
-    合併同一張訂單的多個商品品項；不碰資料庫（比照 ads_performance.parse_csv 的分工）。
+    合併同一張訂單的多個商品品項；不碰資料庫（解析與落庫分工）。
 
     每個訂單列的形狀：{**訂單層欄位, "items": [{"sku", "item_price", "quantity"}, ...]}
     """
@@ -114,7 +100,7 @@ def parse_easystore_xlsx(content: bytes) -> tuple:
         return [], result
 
     raw_headers = [str(h).strip() if h is not None else "" for h in all_rows[0]]
-    headers = ads_performance.dedupe_headers(raw_headers)
+    headers = csv_columns.dedupe_headers(raw_headers)
     mapping, unmatched = match_order_columns(headers)
     result.found_columns = headers
     result.unmatched_columns = unmatched
@@ -148,16 +134,16 @@ def parse_easystore_xlsx(content: bytes) -> tuple:
         order_number = str(order_number).strip() if order_number is not None else ""
 
         sku = _cell(data_row, "item_sku")
-        item_price = ads_performance.to_number(_cell(data_row, "item_price"))
-        quantity = ads_performance.to_number(_cell(data_row, "quantity"))
+        item_price = csv_columns.to_number(_cell(data_row, "item_price"))
+        quantity = csv_columns.to_number(_cell(data_row, "quantity"))
 
         if order_number and order_number != current:
             # 新訂單開頭列（Order Number 跟前一列不同）：訂單層欄位在這一列
             orders[order_number] = {
                 "order_number": order_number,
                 "order_date": _cell(data_row, "order_date"),
-                "total_amount": ads_performance.to_number(_cell(data_row, "total_amount")),
-                "refunded_amount": ads_performance.to_number(_cell(data_row, "refunded_amount")),
+                "total_amount": csv_columns.to_number(_cell(data_row, "total_amount")),
+                "refunded_amount": csv_columns.to_number(_cell(data_row, "refunded_amount")),
                 "financial_status": _cell(data_row, "financial_status"),
                 "fulfillment_status": _cell(data_row, "fulfillment_status"),
                 "order_status": _cell(data_row, "order_status"),
