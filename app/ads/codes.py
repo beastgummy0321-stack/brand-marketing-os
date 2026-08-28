@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/ads/codes.py — 期別配碼＋上線前校驗＋訂單歸因（GitHub issue #35，決策 0025 補遺第 2、3、7 點）。
 
 碼分身術（備援方案，結構解）：官網走 GA4／Pixel 仍追不到來源時，才用期別配碼補上——
@@ -23,13 +22,12 @@
 """
 
 from datetime import date
-from typing import Optional
 
 from app.ads import performance as ads_performance
 from app.ads import repository as ads_repo
 from app.core import interrupts as core_interrupts
 from app.core.audit import write_audit
-from app.core.db import new_id, now_utc, jsonb, DEV_ORG_ID
+from app.core.db import DEV_ORG_ID, jsonb, new_id, now_utc
 
 # 第 7 刀（A1 三層地界新規則：app/ads 不得 import app.orders，見
 # test_architecture_boundaries.py）：orders_repo 不在這裡 import，改由組裝根
@@ -69,8 +67,8 @@ def list_codes(conn, brand_id: str, cycle_id: str) -> list:
 
 
 def generate_codes(conn, brand_id: str, cycle_id: str, *, discount_type: str,
-                   discount_value, usage_limit: Optional[int] = None,
-                   valid_from: Optional[str] = None, valid_to: Optional[str] = None,
+                   discount_value, usage_limit: int | None = None,
+                   valid_from: str | None = None, valid_to: str | None = None,
                    actor: str) -> list:
     """期別自動配碼：廣告碼／口播碼各一組。已經配過的來源不重新產生——碼一旦配出去，
     使用者可能已經照著去 EasyStore 後台建立，中途換掉碼字只會讓已建好的對不上。
@@ -188,7 +186,7 @@ def verify(conn, brand_id: str, cycle_id: str, *, actual: dict, actor: str) -> d
     return {"id": verification_id, "passed": passed, "mismatches": mismatches}
 
 
-def latest_verification(conn, brand_id: str, cycle_id: str) -> Optional[dict]:
+def latest_verification(conn, brand_id: str, cycle_id: str) -> dict | None:
     row = conn.execute(
         "SELECT * FROM cycle_code_verification WHERE brand_id = %s AND campaign_cycle_id = %s"
         " ORDER BY checked_at DESC LIMIT 1", (brand_id, cycle_id),
@@ -200,7 +198,7 @@ def latest_verification(conn, brand_id: str, cycle_id: str) -> Optional[dict]:
     return result
 
 
-def verification_warning(conn, brand_id: str, cycle_id: str) -> Optional[str]:
+def verification_warning(conn, brand_id: str, cycle_id: str) -> str | None:
     """最近一次校驗不符時的人話警示，不擋任何動作（ADR 0006，取代已作廢的鎖住規則）。
     從沒校驗過＝無警示（校驗本身可跳過）；回傳警示文字，沒有不符或沒校驗過回 None。"""
     latest = latest_verification(conn, brand_id, cycle_id)
@@ -214,7 +212,7 @@ def verification_warning(conn, brand_id: str, cycle_id: str) -> Optional[str]:
 # 訂單歸因
 # ---------------------------------------------------------------------------
 
-def _normalize_code(text: Optional[str]) -> str:
+def _normalize_code(text: str | None) -> str:
     return (text or "").strip().upper()
 
 
@@ -262,7 +260,7 @@ def attribution_summary(conn, brand_id: str, cycle_id: str) -> dict:
 # 用碼異常輕量警示
 # ---------------------------------------------------------------------------
 
-def check_surge(conn, brand_id: str, cycle_id: str) -> Optional[str]:
+def check_surge(conn, brand_id: str, cycle_id: str) -> str | None:
     """用碼暴增但曝光沒動的輕量警示：用碼量遠高於曝光次數時進打斷佇列（規則警示）。
     回傳新排的 interrupt id；沒觸發或已經排過（去重）回 None。"""
     ad_code = next((c for c in list_codes(conn, brand_id, cycle_id) if c["source_type"] == "ad"),

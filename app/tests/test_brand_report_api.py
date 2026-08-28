@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """顧問分析報告 React API：資料形狀、兩分鐘守門與背景工作狀態。"""
 
 import json
@@ -12,7 +11,6 @@ from app.brand_intelligence import repository as repo
 from app.brand_web import report_service
 from app.brand_web import routes_report_api as report_api
 from app.llm import providers
-
 
 ACTOR = "測試員"
 

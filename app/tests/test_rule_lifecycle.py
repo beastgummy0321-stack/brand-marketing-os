@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_rule_lifecycle.py — 規則有效期與重新確認（票 01-rule-expiry-reconfirm，
 ADR 0012 第一節）。
 
@@ -13,7 +12,7 @@ ADR 0012 第一節）。
 """
 
 import unittest
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from app.brand_intelligence import repository as bi_repo
 from app.brand_intelligence import rule_lifecycle
@@ -24,7 +23,7 @@ ACTOR = "測試員"
 
 
 def _ago(days: int) -> str:
-    return (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    return (datetime.now(UTC) - timedelta(days=days)).isoformat()
 
 
 class RuleLifecycleTest(unittest.TestCase):

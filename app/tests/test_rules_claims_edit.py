@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_rules_claims_edit.py — 規則／宣稱編輯（issue #2）。
 
 見 app/main.py 的 rule_edit_*／claim_edit_* 路由，比照品牌事實編輯（決策 0013）。

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/ads/guardrails.py — 護欄純函數（票 3）：對帳、增幅上限、數字合理性。
 
 ADHD 設計輸入（docs/design/14）方向一的落點。三件事：
@@ -18,7 +17,6 @@ Finding 是統一結構：API 自動比對、CSV 降級版的三題自答、法�
 """
 
 from dataclasses import dataclass, field
-from typing import Optional
 
 # --- 門檻常數（要調就改這裡）-------------------------------------------------
 
@@ -197,11 +195,11 @@ class ScaleCap:
     cap_ratio: float
     conversions: float
     capped: bool          # 建議值有沒有被上限砍下來
-    finding: Optional[Finding] = None
+    finding: Finding | None = None
 
 
 def cap_scale_up(current_budget: float, conversions: float,
-                 proposed_budget: Optional[float] = None) -> ScaleCap:
+                 proposed_budget: float | None = None) -> ScaleCap:
     """「擴大」建議的預算過上限，上限與轉換樣本數掛鉤。
 
     proposed_budget 省略時只回傳上限本身（給介面顯示「這期最多可以加到多少」）。
@@ -237,7 +235,7 @@ def cap_scale_up(current_budget: float, conversions: float,
 
 # --- 3. 合理性海關 -----------------------------------------------------------
 
-def check_data_sanity(row: dict, today: Optional[str] = None) -> list[Finding]:
+def check_data_sanity(row: dict, today: str | None = None) -> list[Finding]:
     """成效數字進資料庫前的體檢。命中就該進隔離區，不進判讀。
 
     row 用的是正規化後的欄位名（impressions／clicks／spend／conversions／revenue／as_of_date）。

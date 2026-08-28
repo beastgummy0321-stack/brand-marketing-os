@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_architecture_boundaries.py — A1 三層地界的機器檢查（修憲落地 A2）。
 
 見 docs/architecture-rules.md A1。地界靠讀文件、沒有機器檢查是體檢（19-constitution-audit.md

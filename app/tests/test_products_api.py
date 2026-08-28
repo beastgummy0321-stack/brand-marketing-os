@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_products_api.py — 產品清單＋產品詳情 JSON API（票 B2-products 第二段）。
 
 見 app/brand_intelligence/routes_products.py。全程用 FakeProvider＋假抓取
@@ -11,13 +10,12 @@ import threading
 import time
 import unittest
 
-import pytest
 from fastapi.testclient import TestClient
 
 import app.main as main
 import app.shared.web as web
-from app.brand_web import product_ai_calls as product_ai
 from app.brand_intelligence import repository as repo
+from app.brand_web import product_ai_calls as product_ai
 from app.brand_web import routes_products as rp
 from app.core import interrupts as core_interrupts
 from app.core import settings as coresettings

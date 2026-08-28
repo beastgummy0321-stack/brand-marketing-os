@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_no_branch_imports_app_main.py — 修憲落地 A4 的機器檢查。
 
 見票 A4：`app/main.py` 原本頂著「組裝根永久豁免」的身分塞了 87 條業務路由，

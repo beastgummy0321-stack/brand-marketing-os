@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_ads_performance_routes.py — HTTP route surface for performance manual/CSV
 import (ticket 01: restoring the entry points `performance_manual` and `performance_csv`
 in app/ads/routes_campaigns_performance_api.py that were deleted along with the Jinja
@@ -23,13 +22,10 @@ main` below), so this file does not need its own tempdir/atexit cleanup boilerpl
 import json
 import unittest
 
-import pytest
-
 import app.main as main
 from app.ads import performance as perf
-from app.ads import reading
+from app.ads import reading, weekly_proposals
 from app.ads import repository as ads_repo
-from app.ads import weekly_proposals
 from app.brand_intelligence import repository as bi_repo
 from app.core import db
 from app.llm.providers import FakeProvider, ProviderResponse, Usage

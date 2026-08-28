@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/ads/routes_common.py — 廣告分支路由的共用小工具（第 8 刀從 app/ads/routes.py 拆出）。
 
 原本 2213 行的 app/ads/routes.py 裡，這些常數與私有函式被 8 個主題檔（routes_home 除外，
@@ -7,18 +6,16 @@
 """
 
 from datetime import date
-from typing import Optional
 
 import app.shared.web as main_mod
 from app.ads import budget as budget_calc
 from app.ads import creative as ads_creative
 from app.ads import handoff as ads_handoff
-from app.ads import pacing_curve
+from app.ads import pacing_curve, stages
 from app.ads import performance as ads_performance
 from app.ads import plan as ads_plan
 from app.ads import reading as ads_reading
 from app.ads import repository as ads_repo
-from app.ads import stages
 from app.brand_intelligence import repository as bi
 
 # 滑桿檔位（TWD）。刻意是離散檔位而非連續數值：新手要的是「大概這個量級」，
@@ -212,7 +209,7 @@ def _hub_stage_info(conn, brand_id: str, cycle: dict) -> dict:
             "days_left": days_left}
 
 
-def _closed_cycle_reading(conn, brand_id: str, cycle: dict) -> Optional[dict]:
+def _closed_cycle_reading(conn, brand_id: str, cycle: dict) -> dict | None:
     """單一已結案檔期的判讀摘要：讀已存的判讀快照（reading.load()，不重新算判讀邏輯，
     鐵則4 數字走程式不重複）。沒判讀過就回 None——hub「最近結案的檔期」卡（下面
     `_latest_closed_summary`）與歷期戰績跨期趨勢表（GitHub issue #63）共用同一份萃取邏輯，
@@ -230,7 +227,7 @@ def _closed_cycle_reading(conn, brand_id: str, cycle: dict) -> Optional[dict]:
     }
 
 
-def _latest_closed_summary(conn, brand_id: str, cycles: list) -> Optional[dict]:
+def _latest_closed_summary(conn, brand_id: str, cycles: list) -> dict | None:
     """hub「最近結案的檔期」卡用（修憲落地 V3，決策 0033 console-ui 說明句改資料）：
     沒判讀過就整塊不顯示——日期雖然拿得到，但沒有判讀結論的「最近結案」卡片沒有資訊量，
     且 principles.md 鐵則 16「拿不到就不要放」對這裡的具體落地就是「沒有就不佔版面」，
@@ -245,7 +242,7 @@ def _latest_closed_summary(conn, brand_id: str, cycles: list) -> Optional[dict]:
     return {**cycle, **reading}
 
 
-def _roas_trend_symbol(current: Optional[float], previous: Optional[float]) -> Optional[str]:
+def _roas_trend_symbol(current: float | None, previous: float | None) -> str | None:
     """跟相鄰上一期（較舊的那期）比 ROAS 漲跌；任一邊算不出就不給箭頭（鐵則 16：拿不到
     就不要放，不硬猜方向）。"""
     if current is None or previous is None:

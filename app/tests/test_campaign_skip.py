@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_campaign_skip.py — 票 03-cycle-skip-record：這期跳過紀錄。
 
 app/core/campaign_skip.py 的 CRUD 邏輯，用 conftest.py 逐模組建的 Postgres schema

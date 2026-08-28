@@ -1,21 +1,18 @@
-# -*- coding: utf-8 -*-
 """R5/R6 追蹤鏈：短碼建議、靜態檢查與上線 72 小時後三方對照。"""
 
 from datetime import date
-from typing import Optional
 from urllib import request as urlrequest
 
 from app.ads import codes as ads_codes
-from app.ads import ga4_sync
+from app.ads import ga4_sync, meta_api
 from app.ads import handoff as ads_handoff
-from app.ads import meta_api
 from app.ads import performance as ads_performance
 from app.ads import repository as ads_repo
 from app.brand_intelligence import repository as bi_repo
 from app.core import interrupts as core_interrupts
 from app.core import net
 from app.core import settings as coresettings
-from app.core.db import new_id, now_utc, DEV_ORG_ID
+from app.core.db import DEV_ORG_ID, new_id, now_utc
 
 # 第 7 刀（A1 三層地界新規則：app/ads 不得 import app.orders，見
 # test_architecture_boundaries.py）：orders_channel 不在這裡 import，改由組裝根
@@ -39,7 +36,7 @@ def probe_url(url: str) -> bool:
         return False
 
 
-def _discovered(conn, ad_account_id: str, meta_campaign_id: str) -> Optional[dict]:
+def _discovered(conn, ad_account_id: str, meta_campaign_id: str) -> dict | None:
     row = conn.execute(
         "SELECT * FROM discovered_campaign WHERE ad_account_id = %s AND meta_campaign_id = %s",
         (ad_account_id, meta_campaign_id),
@@ -77,7 +74,7 @@ def alert_campaign_renamed(conn, ad_account_id: str, meta_campaign_id: str,
     )
 
 
-def _short_code(campaign_name: str) -> Optional[str]:
+def _short_code(campaign_name: str) -> str | None:
     tail = (campaign_name or "").rsplit("_", 1)[-1]
     return tail if len(tail) == 4 and tail.isalnum() else None
 
@@ -90,7 +87,7 @@ def _remove_suggestion(conn, meta_campaign_id: str) -> None:
 
 
 def suggest_cycle_mapping(conn, ad_account_id: str, meta_account_id: str,
-                          meta_campaign_id: str) -> Optional[str]:
+                          meta_campaign_id: str) -> str | None:
     """依活動名稱尾四碼寫入既有 external_ad_mapping 的 suggested 態。"""
     discovered = _discovered(conn, ad_account_id, meta_campaign_id)
     if not discovered:
@@ -248,7 +245,7 @@ def _post_launch_node(conn, brand_id: str, cycle: dict, static_ok: bool, today: 
     return _node("green", "Meta、GA4 與訂單配碼訊號對得上。", "查看檢查清單")
 
 
-def tracking_chain(conn, brand_id: str, cycle_id: str, *, today: Optional[str] = None,
+def tracking_chain(conn, brand_id: str, cycle_id: str, *, today: str | None = None,
                    url_probe=None) -> dict:
     cycle = ads_repo.get_cycle(conn, brand_id, cycle_id)
     if not cycle:
@@ -297,7 +294,7 @@ def confirm_suggested_mapping(conn, brand_id: str, cycle_id: str, actor: str) ->
     )
 
 
-def run_post_sync_checks(conn, brand_id: str, *, today: Optional[str] = None,
+def run_post_sync_checks(conn, brand_id: str, *, today: str | None = None,
                          url_probe=None) -> int:
     today = today or date.today().isoformat()
     created = 0
@@ -381,7 +378,7 @@ def _ga4_data_confirmed(conn, brand_id: str) -> bool:
     return (date.today() - status["synced_at"].date()).days <= _GA4_FRESH_DAYS
 
 
-def _pixel_api_confirmed(conn, *, client=None) -> Optional[bool]:
+def _pixel_api_confirmed(conn, *, client=None) -> bool | None:
     """訊號③：經既有 Meta 唯讀連線查這個廣告帳號的 Pixel 近期有沒有開火
     （meta_api.MetaClient.list_pixels，查證出處見該方法 docstring）。
 
@@ -408,7 +405,7 @@ def _pixel_api_confirmed(conn, *, client=None) -> Optional[bool]:
     return False
 
 
-def _tracking_check_row(conn, brand_id: str, channel_key: str) -> Optional[dict]:
+def _tracking_check_row(conn, brand_id: str, channel_key: str) -> dict | None:
     row = conn.execute(
         "SELECT * FROM channel_tracking_check WHERE brand_id = %s AND channel_key = %s",
         (brand_id, channel_key),
@@ -463,7 +460,7 @@ def _save_website_fetch_failure(conn, brand_id: str, *, checked_at: str) -> None
     conn.commit()
 
 
-def _website_url(conn, brand_id: str) -> Optional[str]:
+def _website_url(conn, brand_id: str) -> str | None:
     for channel in bi_repo.list_channels(conn, brand_id):
         if channel.get("channel_type") == "website" and channel.get("identifier"):
             return channel["identifier"]
@@ -473,7 +470,7 @@ def _website_url(conn, brand_id: str) -> Optional[str]:
 _SIGNAL_LABELS = {"ga4": "GA4", "pixel": "Meta Pixel"}
 
 
-def _website_node(conn, brand_id: str, url: Optional[str]) -> dict:
+def _website_node(conn, brand_id: str, url: str | None) -> dict:
     """契約 1.3 修訂（2026-08-14，三訊號誠實版）：綠＝GA4、Pixel 兩樣都被任一訊號確認；
     黃＝至少一樣未確認（誠實說「還沒驗到」，動態載入平台外部驗不到是常態，不說「沒安裝」）；
     紅＝只留給網站連不上；灰＝沒填網址（不變）。"""
@@ -535,7 +532,7 @@ def check_website_now(conn, brand_id: str, *, fetch=None, meta_client=None) -> d
 _IDENTIFIER_LABELS = {"fb_page": "FB 粉專", "ig_account": "IG 帳號"}
 
 
-def _identifier_node(conn, brand_id: str, channel_key: str, identifier: Optional[str]) -> dict:
+def _identifier_node(conn, brand_id: str, channel_key: str, identifier: str | None) -> dict:
     hidden = _hidden(conn, brand_id, channel_key)
     label = _IDENTIFIER_LABELS[channel_key]
     if identifier:
@@ -548,7 +545,7 @@ def _identifier_node(conn, brand_id: str, channel_key: str, identifier: Optional
 _IMPORT_LABELS = {"shopee": "蝦皮", "pharmacy": "藥局"}
 
 
-def _import_node(conn, brand_id: str, channel_key: str, last_date: Optional[str]) -> dict:
+def _import_node(conn, brand_id: str, channel_key: str, last_date: str | None) -> dict:
     hidden = _hidden(conn, brand_id, channel_key)
     label = _IMPORT_LABELS[channel_key]
     if last_date:

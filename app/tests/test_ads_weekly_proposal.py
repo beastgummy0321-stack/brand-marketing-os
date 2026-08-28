@@ -1,22 +1,17 @@
-# -*- coding: utf-8 -*-
 """票 06：週提案卡、一鍵核可與保守檔執行清單。"""
 
 import json
 import unittest
 from datetime import date, timedelta
 
-import pytest
 from fastapi.testclient import TestClient
 
 import app.main as main
-from app.ads import auto_sync
-from app.ads import onboarding
-from app.ads import performance
-from app.ads import reading
+from app.ads import auto_sync, onboarding, performance, reading, weekly_proposals
 from app.ads import repository as ads_repo
-from app.ads import weekly_proposals
 from app.brand_intelligence import repository as bi_repo
-from app.core import db, interrupts as core_interrupts
+from app.core import db
+from app.core import interrupts as core_interrupts
 from app.core.db import new_id, now_iso
 from app.llm.providers import FakeProvider, ProviderResponse, Usage
 

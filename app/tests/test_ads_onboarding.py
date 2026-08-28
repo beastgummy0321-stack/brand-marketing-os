@@ -1,20 +1,16 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_ads_onboarding.py — 廣告分支票 15：校準期、提醒卡、差異視圖。
 
 ADHD 設計輸入方向三的驗收：第一期先講明預期、投放後不沉默、第二期起不再重看全部設定。
 """
 
 import atexit
-import os
 import shutil
 import tempfile
 import unittest
 from datetime import date, timedelta
-from pathlib import Path
 
 _tmpdir = tempfile.mkdtemp(prefix="brand_os_ads_onb_")
 
-import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
 import app.main as main  # noqa: E402
@@ -24,7 +20,6 @@ from app.ads import reading as ads_reading  # noqa: E402
 from app.ads import repository as ads_repo  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
 from app.llm.providers import FakeProvider, ProviderResponse, Usage  # noqa: E402
-
 
 
 def _fake(text: str) -> ProviderResponse:

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_library_write_api.py — 品牌智庫六分頁寫入動作的 /api 版本
 （`app/brand_web/routes_library_write.py`）。
 

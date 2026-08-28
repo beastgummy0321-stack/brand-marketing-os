@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_orders_core_brand_cleanup.py — 訂單＋核心模組接上清理登記處（第 5 刀）。
 
 驗四件事：

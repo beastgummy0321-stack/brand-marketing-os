@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/llm/context_compiler.py — 把「最小必要上下文」組成 Prompt 文字，供 gateway 使用。
 
 見 docs/design/04-context-scope.md、docs/design/06-llm-gateway.md §7、決策 0030（學習迴路接電）。
@@ -27,13 +26,12 @@
    顯示「有 N 條規則因超過上限未生效」清單。
 """
 
-from typing import Optional
 
-from app.core.db import Conn
 from app.brand_intelligence import personas
 from app.brand_intelligence import repository as repo
 from app.brand_intelligence.repository_learning_text import collapse_learnings
 from app.core import rule_cards
+from app.core.db import Conn
 
 _UNVALIDATED_STATUSES = ("proposed", "testing")
 
@@ -84,7 +82,7 @@ def _bound_hypotheses(all_hypotheses: list, unvalidated: list) -> tuple:
 
 
 def _hypotheses_for_scope(conn: Conn, brand_id: str,
-                          product_id: Optional[str]) -> tuple:
+                          product_id: str | None) -> tuple:
     """依 compile() 既有的品牌層／產品層範圍規則篩出未驗證猜想池，回傳
     (全部猜想, 範圍內未驗證猜想)——全部猜想用來算 `_hypothesis_cycle_order()` 的期別順序，
     範圍內未驗證猜想才是真正要進 prompt 候選的池子。compile() 與
@@ -108,7 +106,7 @@ def _hypotheses_for_scope(conn: Conn, brand_id: str,
 
 
 def list_excluded_hypotheses(conn: Conn, brand_id: str,
-                             product_id: Optional[str] = None) -> list:
+                             product_id: str | None = None) -> list:
     """因超過未驗證猜想上限而不進 prompt 的清單（比照 `list_overflow_rules()`，決策 0012
     第三節：超額不悄悄丟棄）。"""
     all_hypotheses, unvalidated = _hypotheses_for_scope(conn, brand_id, product_id)
@@ -226,7 +224,7 @@ def _learning_source_note(entry: dict, *, current_track: str, learnings_by_id: d
     return f"（{'，'.join(parts)}）" if parts else ""
 
 
-def compile(conn: Conn, brand_id: str, product_id: Optional[str] = None, *,
+def compile(conn: Conn, brand_id: str, product_id: str | None = None, *,
             track: str = DEFAULT_TRACK, include_cross_track: bool = False,
             include_personas: bool = True):
     """組出最小必要上下文。

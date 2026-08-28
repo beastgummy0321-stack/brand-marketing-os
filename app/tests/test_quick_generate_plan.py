@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_quick_generate_plan.py — 快速生成欄位子集常數與純函式守門
 （票 01-quick-generate-endpoint）。
 

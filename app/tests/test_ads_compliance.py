@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_ads_compliance.py — 廣告分支票 7：交接包／素材輸出前的法務掃描。
 
 這是廣告分支第一次真正引用品牌智庫的限制層（宣稱與規則），
@@ -7,13 +6,9 @@
 
 import atexit
 import json
-import os
 import shutil
 import tempfile
 import unittest
-from pathlib import Path
-
-import pytest
 
 _tmpdir = tempfile.mkdtemp(prefix="brand_os_ads_compliance_")
 
@@ -29,7 +24,6 @@ from app.brand_intelligence import compliance_wordlist  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
 from app.llm.providers import FakeProvider, ProviderResponse, Usage  # noqa: E402
 from app.shared.web import OPERATOR  # noqa: E402
-
 
 
 def _cleanup():

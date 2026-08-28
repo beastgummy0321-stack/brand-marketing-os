@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/ads/diagnosis.py — 調度台『診斷』模組門面（票 O1-01，ADR 0024）。
 
 `app/ads/reading.py` 已經 797 行頂到 CLAUDE.md 800 行上限（唯讀，不得再加），另開新檔
@@ -12,7 +11,6 @@
 （比照 `app/core/cleanup.py` 的登記制）——調度台本身不 import 這個檔案。
 """
 
-from typing import Optional
 
 from app.ads import bottleneck as ads_bottleneck
 from app.ads import performance as ads_performance
@@ -25,7 +23,7 @@ from app.core import orchestrator as core_orchestrator
 _HANDLE_ACTOR = "orchestrator"
 
 
-def _current_cycle(conn, brand_id: str) -> "Optional[dict]":
+def _current_cycle(conn, brand_id: str) -> "dict | None":
     """比照 app/ads/weekly_proposals.py current_cycle()：取最新一個投放中或等判讀的檔期。"""
     for cycle in ads_repo.list_cycles(conn, brand_id):
         if cycle["status"] in ("LIVE", "EVALUATING"):
@@ -77,7 +75,7 @@ def handle(conn, action: dict) -> dict:
     return {"ok": ok}
 
 
-def _rule_run_reading_when_synced_unread(facts: dict) -> "Optional[dict]":
+def _rule_run_reading_when_synced_unread(facts: dict) -> "dict | None":
     """規則 1（票 03-orchestrator-core.md）：data.synced 成立且本期還沒判讀 →
     診斷.run_reading，risk 無（一律自動做）。"""
     if not facts.get("data.synced"):

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/ads/ga4_api.py — GA4 Data API 唯讀轉接層（GitHub issue #34）。
 
 決策 0025 第 4 點：GA4 走 Data API 服務帳戶自動同步，UTM 歸因（來源／媒介）放 GA4
@@ -13,7 +12,6 @@ purchase_event_seen 時才會用到；部署環境需自行 `pip install google-
 """
 
 from dataclasses import dataclass
-from typing import Optional
 
 NO_CREDENTIALS_MESSAGE = (
     "還沒有設定 GA4 服務帳戶金鑰，這次不抓任何資料。"
@@ -39,7 +37,7 @@ class SourceMediumRow:
 class GA4Client:
     """真的會呼叫 Google Analytics Data API 的用戶端。唯讀——本類別刻意沒有任何寫入方法。"""
 
-    def __init__(self, property_id: Optional[str], service_account_json: Optional[str]):
+    def __init__(self, property_id: str | None, service_account_json: str | None):
         self.property_id = (property_id or "").strip() or None
         self.service_account_json = (service_account_json or "").strip() or None
 
@@ -64,8 +62,12 @@ class GA4Client:
 
     def fetch_source_medium(self, since: str, until: str) -> list:
         """來源／媒介 × 工作階段／轉換／收益，期間內彙總。"""
-        from google.analytics.data_v1beta.types import (DateRange, Dimension, Metric,
-                                                          RunReportRequest)
+        from google.analytics.data_v1beta.types import (
+            DateRange,
+            Dimension,
+            Metric,
+            RunReportRequest,
+        )
 
         client = self._make_client()
         try:
@@ -94,9 +96,14 @@ class GA4Client:
 
     def purchase_event_seen(self, since: str, until: str) -> bool:
         """purchase 事件在指定期間內是否有收到——驗證「有沒有裝好」用（決策 0025 第 4 點）。"""
-        from google.analytics.data_v1beta.types import (DateRange, Dimension, Filter,
-                                                          FilterExpression, Metric,
-                                                          RunReportRequest)
+        from google.analytics.data_v1beta.types import (
+            DateRange,
+            Dimension,
+            Filter,
+            FilterExpression,
+            Metric,
+            RunReportRequest,
+        )
 
         client = self._make_client()
         try:
@@ -119,7 +126,7 @@ class GA4Client:
 class FakeGA4Client:
     """測試用：不發任何網路請求，回放注入的資料或拋出注入的錯誤。"""
 
-    def __init__(self, rows=None, purchase_seen: bool = True, error: Optional[Exception] = None):
+    def __init__(self, rows=None, purchase_seen: bool = True, error: Exception | None = None):
         self._rows = rows or []
         self._purchase_seen = purchase_seen
         self.error = error

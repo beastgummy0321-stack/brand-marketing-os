@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_prototype_phase.py — 原型階段結束旗標（修憲落地 A6，決策 0037 第一節）。
 
 判定方式：檔期結算完成且實際花費 > 0（本檔只測旗標本身的判定與副作用；
@@ -7,13 +6,8 @@
 
 import unittest
 
-import pytest
-
-from app.core import audit
-from app.core import db
+from app.core import db, prototype_phase
 from app.core import interrupts as core_interrupts
-from app.core import prototype_phase
-
 
 
 class PrototypePhaseFlagTest(unittest.TestCase):

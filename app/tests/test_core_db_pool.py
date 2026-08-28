@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_core_db_pool.py — 票 02-1：連線池／per-request 連線的機器驗收。
 02-4 補上 schema 隔離證明（done-check 5）。
 

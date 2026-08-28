@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_ads_reading.py — 廣告分支票 12：成效判讀。
 
 重點：狀態一律由門檻規則判定（純函數，可測），LLM 只翻人話。
@@ -8,19 +7,15 @@
 import json
 import unittest
 
-import pytest
 from fastapi.testclient import TestClient
 
 import app.main as main
 from app.ads import performance as perf
-from app.ads import reading
-from app.ads import reading_assets
+from app.ads import reading, reading_assets
 from app.ads import repository as ads_repo
-from app.ads import settlement as ads_settlement
 from app.brand_intelligence import repository as bi_repo
-from app.core import db
+from app.core import db, prototype_phase
 from app.core import interrupts as core_interrupts
-from app.core import prototype_phase
 from app.llm.providers import FakeProvider, ProviderError, ProviderResponse, Usage
 from app.orders import repository as orders_repo
 from app.shared.web import OPERATOR

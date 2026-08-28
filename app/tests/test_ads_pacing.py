@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_ads_pacing.py — 票 08-pacing-alert：檔期預算步調警示。
 
 純函數 classify() 情境測試（規格 0001「受測模組」指定 pacing 判定要純函數情境測試）：
@@ -9,12 +8,11 @@ check_cycle() 是資料庫進出口，另外測：送進打斷佇列＋去重防
 
 import unittest
 
-import pytest
-
 from app.ads import pacing
 from app.ads import performance as ads_performance
 from app.brand_intelligence import repository as bi_repo
-from app.core import db, interrupts as core_interrupts
+from app.core import db
+from app.core import interrupts as core_interrupts
 from app.core.db import new_id, now_iso
 
 ACTOR = "測試員"

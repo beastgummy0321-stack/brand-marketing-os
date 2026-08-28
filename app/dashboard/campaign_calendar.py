@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/dashboard/campaign_calendar.py — 檔期日曆第一層（票 06-campaign-calendar，規格 0001）。
 
 純函數：資料進、結論出，不碰資料庫、不呼叫 LLM（沿用判讀狀態機模式，同
@@ -24,7 +23,6 @@ import json
 import re
 from datetime import date
 from pathlib import Path
-from typing import Optional
 
 LEAD_DAYS = {"large": 90, "medium": 45, "small": 30}
 TIER_LABELS = {"large": "大檔", "medium": "中檔", "small": "小檔"}
@@ -36,7 +34,7 @@ _DATA_PATH = Path(__file__).parent / "campaign_calendar_data.json"
 _YEAR_SUFFIX_RE = re.compile(r"_\d{4}$")
 
 
-def load_events(path: Optional[str] = None) -> list:
+def load_events(path: str | None = None) -> list:
     """讀檔期資料檔（預設同目錄 campaign_calendar_data.json，可人工增修）。"""
     with open(path or _DATA_PATH, encoding="utf-8") as f:
         return json.load(f)
@@ -70,7 +68,7 @@ def in_creative_window(today: date, event_date: date) -> bool:
     return 0 <= days <= CREATIVE_LEAD_DAYS
 
 
-def campaign_stage(today: date, event_date: date, tier: str) -> Optional[str]:
+def campaign_stage(today: date, event_date: date, tier: str) -> str | None:
     """檔期目前落在三階段的哪一段；不在提前期窗口內（含已過期）回 None。
 
     提前期窗口等分三段：離窗口開啟越近＝遠期備戰，越接近檔期當天＝近期備戰。
@@ -88,7 +86,7 @@ def campaign_stage(today: date, event_date: date, tier: str) -> Optional[str]:
     return STAGE_LABELS[2]
 
 
-def prep_reminder(today: date, event: dict) -> Optional[dict]:
+def prep_reminder(today: date, event: dict) -> dict | None:
     """單一檔期的備戰提前期提醒：在提前期窗口內回傳提醒資料，否則 None。"""
     event_date = date.fromisoformat(event["date"])
     tier = event["tier"]
@@ -103,7 +101,7 @@ def prep_reminder(today: date, event: dict) -> Optional[dict]:
     }
 
 
-def industry_relevant(event: dict, brand_industry: Optional[str]) -> bool:
+def industry_relevant(event: dict, brand_industry: str | None) -> bool:
     """業種相關性比對（ADR 0014 第一節）：event 標 "all"，或 brand_industry 落在
     event["applicable_industries"] 清單內，才算相關。event 沒有 applicable_industries
     欄位（舊資料／測試手刻的 dict，如 demo() 與 test_campaign_calendar.py 的 _event()）
@@ -114,7 +112,7 @@ def industry_relevant(event: dict, brand_industry: Optional[str]) -> bool:
     return brand_industry in industries
 
 
-def creative_reminder(today: date, event: dict) -> Optional[dict]:
+def creative_reminder(today: date, event: dict) -> dict | None:
     """單一檔期的素材完稿提醒：一律提前 14 天，與等級無關。"""
     event_date = date.fromisoformat(event["date"])
     if not in_creative_window(today, event_date):
@@ -135,8 +133,8 @@ def _not_dismissed(event: dict, dismissed_categories) -> bool:
     return holiday_id(event["id"]) not in dismissed_categories
 
 
-def next_calendar_reminder(events: list, today: date, brand_industry: Optional[str] = None,
-                            dismissed_categories: Optional[set] = None) -> Optional[dict]:
+def next_calendar_reminder(events: list, today: date, brand_industry: str | None = None,
+                            dismissed_categories: set | None = None) -> dict | None:
     """全部檔期一起掃：同一檔期若備戰期與素材期限同時成立，素材期限更急迫、優先回傳；
     多檔期同時觸發時取天數最接近（days_until 最小）的一筆——最急迫的先講。與品牌業種
     不相關的檔期（ADR 0014 第一節）、品牌永久關閉的節日類別（ADR 0014 第二節）先濾掉，
@@ -155,8 +153,8 @@ def next_calendar_reminder(events: list, today: date, brand_industry: Optional[s
     return min(reminders, key=lambda c: c["days_until"])
 
 
-def current_campaign_stage(events: list, today: date, brand_industry: Optional[str] = None,
-                            dismissed_categories: Optional[set] = None) -> Optional[dict]:
+def current_campaign_stage(events: list, today: date, brand_industry: str | None = None,
+                            dismissed_categories: set | None = None) -> dict | None:
     """駕駛艙用：目前正處於三階段之一的檔期（同一時間可能有多檔重疊，取天數最接近的
     一檔優先顯示，同 next_calendar_reminder 的排序邏輯）。與品牌業種不相關的檔期
     （ADR 0014 第一節）、品牌永久關閉的節日類別（ADR 0014 第二節）先濾掉，沒有任何

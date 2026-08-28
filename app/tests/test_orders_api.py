@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """訂單唯讀 API 的回應形狀、分頁與找不到品牌情境。"""
 
 import io
@@ -6,7 +5,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-import pytest
+import openpyxl
 from fastapi.testclient import TestClient
 
 import app.main as main
@@ -14,10 +13,6 @@ import app.shared.web as web
 from app.brand_intelligence import repository as bi_repo
 from app.orders import channel as orders_channel
 from app.orders import repository as orders_repo
-
-import openpyxl
-
-
 
 _EASYSTORE_HEADERS = [
     "Order Number", "Date", "Total Amount", "Refunded Amount", "Financial Status",

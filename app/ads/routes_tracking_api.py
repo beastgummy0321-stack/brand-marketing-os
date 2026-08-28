@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """R5/R6 追蹤鏈兩支 JSON API＋票 T0 品牌層追蹤健檢 JSON API；回應逐欄對齊
 frontend/src/lib/warroomApi.ts（追蹤鏈部分）與 .scratch/grill/t0-tracking-wireframe.html
 （健檢部分）。
@@ -12,15 +11,15 @@ plan_generate／plan_status 那組寫法），不新造第二套背景框架。
 """
 
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Request
-from app.shared.web import JSONResponse
 
 import app.shared.web as main_mod
 from app.ads import routes as ads_routes
 from app.ads import tracking
 from app.ads.routes_common import _require_cycle
+from app.shared.web import JSONResponse
 
 router = APIRouter()
 
@@ -28,7 +27,7 @@ _RECHECK_STAGES = [("check_website", "檢查官網追蹤碼")]
 
 
 def _envelope(data) -> dict:
-    return {"data": data, "generated_at": datetime.now(timezone.utc).isoformat()}
+    return {"data": data, "generated_at": datetime.now(UTC).isoformat()}
 
 
 @router.get("/api/campaigns/{brand_id}/{cycle_id}/tracking-chain")

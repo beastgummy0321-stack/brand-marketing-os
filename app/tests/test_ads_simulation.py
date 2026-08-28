@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_ads_simulation.py — 廣告分支票 14：紙上模擬第 0 期。
 
 重點：模擬數字由程式產生（不讓 LLM 編）、同一期可重現、全程標示非真實、
@@ -7,26 +6,24 @@
 
 import atexit
 import json
-import os
 import shutil
 import tempfile
 import unittest
-from pathlib import Path
 
 _tmpdir = tempfile.mkdtemp(prefix="brand_os_ads_sim_")
 
-import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
 import app.main as main  # noqa: E402
 from app.ads import performance as perf  # noqa: E402
-from app.ads import reading  # noqa: E402
+from app.ads import (
+    reading,  # noqa: E402
+    simulation,  # noqa: E402
+)
 from app.ads import repository as ads_repo  # noqa: E402
-from app.ads import simulation  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
 from app.core.db import DEV_ORG_ID, new_id, now_iso  # noqa: E402
 from app.llm.providers import FakeProvider, ProviderResponse, Usage  # noqa: E402
-
 
 
 def _cleanup():

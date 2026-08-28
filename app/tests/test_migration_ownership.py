@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Gate B (ticket 02-5, ADR 0027 decision 3): a migration file only creates tables its module owns.
 
 Files are named `<timestamp>_<module>_<desc>.sql`. Ownership registry = the tables each

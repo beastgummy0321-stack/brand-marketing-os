@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_plan_status_b0_45.py — B0-45 紅燈檢查（先紅後綠，尚未修）。
 
 兩個症狀、兩條斷言，都不打真 LLM、不碰 data/app.db：
@@ -18,7 +17,6 @@ B. 真失敗（業務失敗／例外，非逾時）那條路 `plan_status` 讀�
 """
 
 import atexit
-import json
 import shutil
 import tempfile
 import time

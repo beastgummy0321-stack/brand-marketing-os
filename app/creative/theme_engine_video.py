@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/creative/theme_engine_video.py — 影片腳本主題生成的純函式庫（票 14-engine-move，
 搬自 app/ads/theme_engine_video.py）。
 
@@ -27,7 +26,6 @@ carousel 的 narrative_type（3 選 1、程式碼要用它算卡片數）不一�
 """
 
 import json
-from typing import Optional
 
 from app.creative.format_specs import FORMAT_SPECS
 
@@ -146,7 +144,7 @@ def build_video_prompt(brief, plan: dict, fp, *,
     return "\n\n".join(parts)
 
 
-def normalize_video(data, plan: dict, fp, *, needs_hook_pool: bool) -> Optional[dict]:
+def normalize_video(data, plan: dict, fp, *, needs_hook_pool: bool) -> dict | None:
     """驗證影片腳本形狀：跟 carousel 一樣整批判失敗（缺一段就斷了腳本，不猜殘缺版）；
     body/title/description 沿用 single_image 的「單則缺內容就丟掉」寬鬆規則。
 

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/ads — 廣告分支（路線圖分支 1）：開期 → 計畫 → 素材 → 交接包 → 成效 → 判讀 → 下期草案。
 
 共識與拆票見 docs/decisions/0022；資料表見 migrations/0001_tables.sql

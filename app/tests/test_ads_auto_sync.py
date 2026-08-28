@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_ads_auto_sync.py — 票 07-auto-sync：每日自動同步觸發器。
 
 全程 FakeMetaClient／FakeGA4Client，不發任何真實網路請求；時間一律用注入的 `today`，
@@ -9,17 +8,14 @@
 """
 
 import unittest
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest import mock
 
-import pytest
 from fastapi.testclient import TestClient
 
 import app.main as main
 from app.ads import auto_sync as ads_auto_sync
-from app.ads import ga4_api
-from app.ads import ga4_sync
-from app.ads import meta_api
+from app.ads import ga4_api, ga4_sync, meta_api
 from app.ads import sync as ads_sync
 from app.brand_intelligence import repository as bi_repo
 from app.core import db
@@ -164,7 +160,7 @@ class AutoSyncScheduleSafetyTest(unittest.TestCase):
         )
         main.conn.commit()
         main._last_auto_sync_check = None
-        start = datetime(2026, 8, 13, 0, 0, tzinfo=timezone.utc)
+        start = datetime(2026, 8, 13, 0, 0, tzinfo=UTC)
         with mock.patch.object(ads_auto_sync, "run") as run:
             main._auto_sync_if_due(start)
             main._auto_sync_if_due(start + timedelta(hours=3, minutes=59))
@@ -175,7 +171,7 @@ class AutoSyncScheduleSafetyTest(unittest.TestCase):
         main.conn.execute("UPDATE campaign_cycle SET status = 'CLOSED'")
         main.conn.commit()
         main._last_auto_sync_check = None
-        start = datetime(2026, 8, 13, 1, 0, tzinfo=timezone.utc)
+        start = datetime(2026, 8, 13, 1, 0, tzinfo=UTC)
         with mock.patch.object(ads_auto_sync, "run") as run:
             main._auto_sync_if_due(start)
             main._auto_sync_if_due(start + timedelta(hours=22))
@@ -216,7 +212,7 @@ class ImmediateSyncTest(_BaseAutoSyncTest):
     def test_immediate_sync_debounces_repeated_clicks(self):
         meta = meta_api.FakeMetaClient(campaigns=[], insights=[])
         ga4 = ga4_api.FakeGA4Client(rows=[])
-        start = datetime(2026, 8, 13, 8, 0, tzinfo=timezone.utc)
+        start = datetime(2026, 8, 13, 8, 0, tzinfo=UTC)
         first = ads_auto_sync.sync_brand_now(
             main.conn, self.brand["id"], ACTOR, meta_client=meta, ga4_client=ga4, now=start,
             url_probe=NO_NETWORK)

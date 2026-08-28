@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/ads/plan.py — 本期廣告計畫的多方案生成（票 4，決策 0023 第 1、13 點）。
 
 比照 app/brand_intelligence/report.py 的做法：context_compiler 組出已確認事實／規則／宣稱，
@@ -27,18 +26,15 @@ R3-carry-forward-winners（B0-29／B0-36）：上期真正打贏的切角（`car
 生成失敗一律回 (False, 人話錯誤)，不入庫半份方案。
 """
 
-from typing import Callable, Optional
+from collections.abc import Callable
 
-from app.ads import account_structure
-from app.ads import carry_forward
+from app.ads import account_structure, carry_forward, opening_suggestion, plan_citation
 from app.ads import handoff as ads_handoff
-from app.ads import opening_suggestion
-from app.ads import plan_citation
 from app.ads import repository as ads_repo
 from app.brand_intelligence import repository as bi
 from app.core import settings as coresettings
 from app.core.audit import write_audit
-from app.core.db import new_id, now_utc, jsonb, DEV_ORG_ID
+from app.core.db import DEV_ORG_ID, jsonb, new_id, now_utc
 from app.llm import context_compiler, gateway, methodology, pricing, providers
 
 PROVIDER = providers.AnthropicProvider()  # 測試整包換掉
@@ -80,7 +76,7 @@ OBJECTIVE_TO_FUNNEL_STAGE = {
 }
 
 
-def derive_funnel_stage(objective: str) -> Optional[str]:
+def derive_funnel_stage(objective: str) -> str | None:
     """本期目標推導出的漏斗階段。objective 不在對照表裡（理論上不會發生，開期表單已驗證
     只能是 OBJECTIVE_TEXT 的五個值之一）時老實回 None，不瞎猜（鐵則 16）。"""
     return OBJECTIVE_TO_FUNNEL_STAGE.get(objective)
@@ -230,7 +226,7 @@ def _normalize_audience(raw, availability: dict) -> dict:
     return {"tiers": tiers, "exclusions": exclusions}
 
 
-def _normalize_option(data, angle_count: int, availability: dict) -> Optional[dict]:
+def _normalize_option(data, angle_count: int, availability: dict) -> dict | None:
     if not isinstance(data, dict):
         return None
     summary = data.get("summary")
@@ -257,7 +253,7 @@ def _normalize_option(data, angle_count: int, availability: dict) -> Optional[di
     }
 
 
-def _normalize_options(data, angle_count: int, availability: dict) -> Optional[list]:
+def _normalize_options(data, angle_count: int, availability: dict) -> list | None:
     """回傳 2–4 個有效方案，剛好一個 is_recommended=True；不足 2 個算失敗（None）。"""
     if not isinstance(data, dict) or not isinstance(data.get("options"), list):
         return None
@@ -339,7 +335,7 @@ def _is_carry_forward_cycle(cycle: dict) -> bool:
 def _build_options_user_text(brand: dict, cycle: dict, allocations: list, context_text: str,
                              methodology_text: str, angle_count: int, fact_count: int,
                              availability: dict, option_count: int,
-                             custom_direction: Optional[str],
+                             custom_direction: str | None,
                              structure: account_structure.StructureRecommendation,
                              prior_winners: list, avoid_directions: list) -> str:
     plan = ads_repo.derived_plan(cycle)
@@ -484,9 +480,9 @@ def _build_options_user_text(brand: dict, cycle: dict, allocations: list, contex
 def generate_options(conn, brand_id: str, cycle_id: str, actor: str, *,
                      angle_count: int = DEFAULT_ANGLE_COUNT,
                      option_count: int = DEFAULT_OPTION_COUNT,
-                     custom_direction: Optional[str] = None,
+                     custom_direction: str | None = None,
                      include_methodology: bool = True,
-                     on_stage: Optional[Callable[[str], None]] = None) -> tuple:
+                     on_stage: Callable[[str], None] | None = None) -> tuple:
     """生成本期的 2–4 個方案並存成暫存批次。成功回 (True, None)；失敗回 (False, 人話錯誤)。
 
     include_methodology=False（票 11 效果盲測專用）：略過方法論載入，其餘上下文與流程
@@ -614,7 +610,7 @@ def get_pending_options(conn, brand_id: str, cycle_id: str) -> list:
 # ---------------------------------------------------------------------------
 
 def select_option(conn, brand_id: str, cycle_id: str, actor: str,
-                  option_id: Optional[str] = None) -> None:
+                  option_id: str | None = None) -> None:
     """老闆選定一個方案。省略 option_id 時預設選 AI 推薦的那個。
 
     失敗一律拋 ValueError（比照 approve()），呼叫端接住轉人話訊息。
@@ -710,7 +706,7 @@ def _persist(conn, brand_id: str, cycle: dict, plan: dict, actor: str) -> None:
     conn.commit()
 
 
-def get_latest_plan(conn, brand_id: str, cycle_id: str) -> Optional[dict]:
+def get_latest_plan(conn, brand_id: str, cycle_id: str) -> dict | None:
     """最新一版計畫（含解析好的 plan dict）。沒有就回 None。"""
     row = conn.execute(
         "SELECT * FROM campaign_plan WHERE brand_id = %s AND campaign_cycle_id = %s"
@@ -727,7 +723,7 @@ def get_latest_plan(conn, brand_id: str, cycle_id: str) -> Optional[dict]:
 MAX_ANGLE_LENGTH = 30  # 票 04-angle-rename 決議：畫面輸入框上限
 
 
-def get_cell(conn, brand_id: str, cycle_id: str, cell_id: str) -> Optional[dict]:
+def get_cell(conn, brand_id: str, cycle_id: str, cell_id: str) -> dict | None:
     """單一切角格（票 04-angle-rename：改名路由用來查 404、取改名前的值）。放在這裡而不是
     `app/ads/repository.py`：那檔已經超標凍在 `KNOWN_OVERSIZED_FILES`（見 docs/tech-debt.md），
     只准變小不准再加。"""

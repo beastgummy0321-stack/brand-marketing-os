@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/ads/nextcycle.py — 下期草案、規則卡、反回音室（票 13）。
 
 判讀完成的同時就把下一期準備好（決策 0022 第 15 點）——使用者往下滑就看到一份填好的
@@ -14,16 +13,14 @@
    並讓下一批生成時刻意留一組「故意不一樣」的實驗組。
 """
 
-from typing import Optional
 
 from app.ads import budget as ads_budget
 from app.ads import fingerprint as fp
-from app.ads import guardrails
+from app.ads import guardrails, target_cpa
 from app.ads import reading as ads_reading
 from app.ads import repository as ads_repo
-from app.ads import target_cpa
 from app.core.audit import write_audit
-from app.core.db import new_id, now_utc, jsonb, DEV_ORG_ID
+from app.core.db import DEV_ORG_ID, jsonb, new_id, now_utc
 
 # `overclaim` 候選卡（見下方 build_overclaim_claim_cards）沿用的絕對次數門檻——那裡每一則
 # 拒絕對應的是「這句話」本身（獨一無二的文字），不是可能重複出現很多次的指紋軸值，沒有
@@ -104,8 +101,8 @@ def propose_budget(conn, brand_id: str, cycle_id: str) -> dict:
 
 
 def cell_trust_flags(conversions: float, spend: float, allocated_budget: float, *,
-                     revenue: Optional[float] = None,
-                     breakeven_roas: Optional[float] = None) -> dict:
+                     revenue: float | None = None,
+                     breakeven_roas: float | None = None) -> dict:
     """切角歷史成效資料的兩道誠實旗標，只回傳「有值得提醒」的那幾個鍵——條件不成立時
     對應的鍵不出現（不是回傳 False），呼叫端用 `"evidence_sufficient" in flags` 判斷。
 
@@ -145,7 +142,7 @@ def cell_trust_flags(conversions: float, spend: float, allocated_budget: float, 
     return flags
 
 
-def historical_cell_performance(conn, brand_id: str, exclude_cycle_id: Optional[str] = None) -> list:
+def historical_cell_performance(conn, brand_id: str, exclude_cycle_id: str | None = None) -> list:
     """品牌歷來每個切角（experiment_cell）累積的成效資料，各自附加 `cell_trust_flags()`
     的誠實旗標——不影響哪些切角被列出，只影響附加資訊（ADR 0011 第二節）。
 
@@ -268,7 +265,7 @@ def _occasions_for_cycles(conn, cycle_ids: list) -> dict:
     )}
 
 
-def _occasion_weight_map(conn, cycle_ids: list, current_occasion: Optional[str]) -> dict:
+def _occasion_weight_map(conn, cycle_ids: list, current_occasion: str | None) -> dict:
     """cycle_id → 情境權重。跟 `current_occasion` 同場合的歷史檔期權重較高、不同的較低但
     仍參與（不是排除）。
 
@@ -303,7 +300,7 @@ def _empty_stat_entry() -> dict:
 
 
 def _axis_value_stats(conn, brand_id: str, cycle_ids: list,
-                      current_occasion: Optional[str] = None) -> dict:
+                      current_occasion: str | None = None) -> dict:
     """視窗內每個 (軸, 值) 出現過幾次、被拒幾次（含拆分出的政策拒絕次數）——相對判準的
     分子分母來源。
 
@@ -412,7 +409,7 @@ def _rule_card_verdict(stats: dict, axis: str, value: str) -> str:
     return "insufficient"
 
 
-def build_rule_cards(conn, brand_id: str, actor: str, cycle_id: Optional[str] = None) -> int:
+def build_rule_cards(conn, brand_id: str, actor: str, cycle_id: str | None = None) -> int:
     """統計拒絕紀錄，把達相對門檻的指紋標籤變成候選規則卡。回傳新增張數。
 
     純程式統計，不經 LLM——「被退幾次、比例高不高」是數數，不是判斷。
@@ -673,7 +670,7 @@ def decide_rule_card(conn, brand_id: str, card_id: str, *, accept: bool, actor: 
 # 反回音室
 # ---------------------------------------------------------------------------
 
-def adopted_fingerprints(conn, brand_id: str, exclude_cycle_id: Optional[str] = None) -> list:
+def adopted_fingerprints(conn, brand_id: str, exclude_cycle_id: str | None = None) -> list:
     """這個品牌歷來採用過的素材指紋（比對基準），附上來源檔期 id——情境加權比較
     （票 02-occasion-weighted-recommendations，ADR 0011 第五節）要知道每筆歷史素材是
     哪一期採用的，才能跟這次檔期比對場合。回傳 `(fingerprint, campaign_cycle_id)` tuple 列表。
@@ -692,7 +689,7 @@ def adopted_fingerprints(conn, brand_id: str, exclude_cycle_id: Optional[str] = 
     return prints
 
 
-def check_echo_chamber(conn, brand_id: str, cycle_id: str) -> Optional[guardrails.Finding]:
+def check_echo_chamber(conn, brand_id: str, cycle_id: str) -> guardrails.Finding | None:
     """本期素材是不是在重複過去。太像就回一條提示（不擋路），否則回 None。
 
     跟這次檔期同場合的歷史採用素材權重加重、不同場合的較低但仍參與比較
@@ -780,7 +777,7 @@ def build(conn, brand_id: str, cycle_id: str, actor: str) -> dict:
     return content
 
 
-def load(conn, brand_id: str, cycle_id: str) -> Optional[dict]:
+def load(conn, brand_id: str, cycle_id: str) -> dict | None:
     row = conn.execute(
         "SELECT * FROM recommendation WHERE brand_id = %s AND campaign_cycle_id = %s"
         " AND recommendation_type = 'next_cycle' ORDER BY created_at DESC LIMIT 1",

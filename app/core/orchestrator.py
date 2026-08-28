@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/core/orchestrator.py — 調度台本體（票 O1-01，ADR 0024）。
 
 `decide(facts) -> [Action]`：純函數，規則登記制（照抄 `app/dashboard/guide_cards.py`
@@ -22,12 +21,11 @@ try/except，一個炸掉不擋其他；`spend` 級失敗立刻出卡，`save`�
 去重：同一 `dedupe_key` 已有一列 `outcome` 為 `auto_done` 或 `carded` → 跳過不重做。
 """
 
-from typing import Callable, Optional
+from collections.abc import Callable
 
-from app.core import cleanup
+from app.core import cleanup, rule_cards
 from app.core import interrupts as core_interrupts
-from app.core import rule_cards
-from app.core.db import new_id, now_utc, jsonb, DEV_ORG_ID
+from app.core.db import DEV_ORG_ID, jsonb, new_id, now_utc
 
 # 登記表：模組在自己的檔案尾巴呼叫 register_module()／register_rule() 掛進來，
 # 本檔本身永遠是空字典起家（比照 app/core/cleanup.py 的 _REGISTRY）。
@@ -57,7 +55,7 @@ def register_module(name: str, *, status: Callable, handle: Callable) -> None:
     MODULES[name] = {"status": status, "handle": handle}
 
 
-def register_rule(rule_id: str, rule: "Callable[[dict], Optional[dict]]") -> None:
+def register_rule(rule_id: str, rule: "Callable[[dict], dict | None]") -> None:
     """模組登記一條規則。規則歸屬看「這條規則叫誰做事」，登記在被叫的那個模組的檔案裡
     （ADR 0024 決議 7），不是登記在調度台本身。"""
     if not rule_id or rule is None:
@@ -78,7 +76,7 @@ def decide(facts: dict) -> list:
     return actions
 
 
-def _get_decision(conn, brand_id: str, dedupe_key: str) -> "Optional[dict]":
+def _get_decision(conn, brand_id: str, dedupe_key: str) -> "dict | None":
     row = conn.execute(
         "SELECT * FROM decision WHERE brand_id = %s AND dedupe_key = %s",
         (brand_id, dedupe_key),
@@ -88,7 +86,7 @@ def _get_decision(conn, brand_id: str, dedupe_key: str) -> "Optional[dict]":
 
 def _insert_decision(conn, *, brand_id: str, module: str, rule_id: str, action_json,
                      risk_level: str, autonomy_mode: float, dedupe_key: str, outcome: str,
-                     attempt_count: int, error_text: "Optional[str]") -> str:
+                     attempt_count: int, error_text: "str | None") -> str:
     decision_id = new_id("dcs")
     ts = now_utc()
     conn.execute(
@@ -102,7 +100,7 @@ def _insert_decision(conn, *, brand_id: str, module: str, rule_id: str, action_j
 
 
 def _update_decision(conn, decision_id: str, *, outcome: str, attempt_count: int,
-                     error_text: "Optional[str]") -> None:
+                     error_text: "str | None") -> None:
     """事實欄（module／brand_id／rule_id／action_json／risk_level／autonomy_mode／
     created_at）寫入後不動；只更新狀態欄（outcome／attempt_count／error_text，2026-08-23
     更正版，見 ADR 0024）。"""
@@ -128,7 +126,7 @@ def _process_action(conn, brand_id: str, action: dict) -> dict:
     autonomy_mode = rule_cards.get_value(conn, brand_id, "autonomy", "mode")
     action_json = jsonb(action)
 
-    def _write(outcome: str, attempt_count: int, error_text: "Optional[str]") -> str:
+    def _write(outcome: str, attempt_count: int, error_text: "str | None") -> str:
         if existing is None:
             return _insert_decision(
                 conn, brand_id=brand_id, module=module_name, rule_id=rule_id,

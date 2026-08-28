@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/ads/handoff.py — 投放交接包與具名授權（票 8）。
 
 principles 第 19 條：廣告平台發佈初期走人工，自動化只做到「準備好可貼上」的程度。
@@ -14,7 +13,6 @@ LLM 不參與）——命名規則要能被機器再解析回來，交給模型�
 
 from collections import Counter
 from datetime import date
-from typing import Optional
 from urllib.parse import quote
 
 from app.ads import account_structure
@@ -23,7 +21,7 @@ from app.ads import creative as ads_creative
 from app.ads import repository as ads_repo
 from app.brand_intelligence import repository as bi
 from app.core.audit import write_audit
-from app.core.db import new_id, now_utc, jsonb, DEV_ORG_ID
+from app.core.db import DEV_ORG_ID, jsonb, new_id, now_utc
 
 OBJECTIVE_META_LABEL = {
     "awareness": "品牌知名度",
@@ -143,7 +141,7 @@ def utm_query(utm: dict) -> str:
     return "&".join(f"{k}={quote(str(v), safe='/{}')}" for k, v in ordered)
 
 
-def _default_destination(conn, brand_id: str) -> Optional[str]:
+def _default_destination(conn, brand_id: str) -> str | None:
     """預設到達網址取品牌自有渠道裡的官網（鐵則 20：AI 拿得到的先填好）。"""
     for channel in bi.list_channels(conn, brand_id):
         if channel.get("channel_type") == "website" and channel.get("identifier"):
@@ -288,7 +286,7 @@ def list_packages(conn, brand_id: str, cycle_id: str) -> list:
     return rows
 
 
-def _mapping_for(conn, brand_id: str, package_id: str) -> Optional[dict]:
+def _mapping_for(conn, brand_id: str, package_id: str) -> dict | None:
     row = conn.execute(
         "SELECT * FROM external_ad_mapping WHERE brand_id = %s AND publishing_package_id = %s"
         " AND claim_status = 'confirmed'"  # 同步猜的（suggested）列不算「已授權／已建到 Meta」

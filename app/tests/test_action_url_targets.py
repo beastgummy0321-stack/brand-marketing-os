@@ -1,10 +1,8 @@
-# -*- coding: utf-8 -*-
 """Prevent new interrupt and job action URLs from bypassing the SPA basename."""
 
 import ast
 import unittest
 from pathlib import Path
-
 
 ROOT = Path(__file__).resolve().parents[2]
 SOURCES = [

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/core/vocab.py — UI 用語對照表（固定選項清單／label 函式）。
 
 票 02-3a 從 app/mock_data.py 搬來（ADR 0027，SaaS 資料層重寫）：這裡只留 UI 用語規範，

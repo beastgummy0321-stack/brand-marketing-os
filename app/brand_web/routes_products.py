@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/brand_intelligence/routes_products.py — 產品清單＋產品詳情 JSON API（票 B2-products
 第二段，契約 `.scratch/grill/GRILL-B2-products.md`，型別逐欄對照 `frontend/src/lib/productsApi.ts`）。
 
@@ -28,23 +27,28 @@
 `app/main.py`。
 """
 
-from datetime import datetime, timezone
-from typing import Optional
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Request
 from fastapi.responses import Response
 
-from app.core import vocab as md
+from app.brand_intelligence import background_job, product_ai
+from app.brand_intelligence import repository as repo
 from app.brand_web import product_ai_calls
 from app.brand_web import routes as legacy_routes
 from app.brand_web import routes_product_helpers as product_helpers
-from app.brand_intelligence import background_job
-from app.brand_intelligence import product_ai
-from app.brand_intelligence import repository as repo
 from app.core import cleanup
+from app.core import vocab as md
 from app.core.db import new_id
 from app.shared import web
-from app.shared.web import JSONResponse, NotFoundKind, clean, require_actor, require_brand, require_product
+from app.shared.web import (
+    JSONResponse,
+    NotFoundKind,
+    clean,
+    require_actor,
+    require_brand,
+    require_product,
+)
 
 router = APIRouter()
 
@@ -53,7 +57,7 @@ def _error(status_code: int, message: str) -> JSONResponse:
 
 
 def _envelope(data) -> dict:
-    return {"data": data, "generated_at": datetime.now(timezone.utc).isoformat()}
+    return {"data": data, "generated_at": datetime.now(UTC).isoformat()}
 
 
 async def _json_body(request: Request) -> dict:
@@ -82,7 +86,7 @@ def _num_field(body: dict, key: str):
 # 等寫法，欄位集合各自對照 productsApi.ts 的型別，跟品牌智庫那份欄位不完全相同、不共用）。
 # ---------------------------------------------------------------------------
 
-def _source_ref_text(brand_id: str, source_reference_id: Optional[str]) -> Optional[str]:
+def _source_ref_text(brand_id: str, source_reference_id: str | None) -> str | None:
     if not source_reference_id:
         return None
     row = repo.get_source_reference(web.conn, brand_id, source_reference_id)
@@ -190,13 +194,13 @@ def active_jobs() -> list[dict]:
 
 def _research_state(product_id: str) -> dict:
     return _research_jobs.get(product_id, {
-        "status": "done", "stage": "", "started_at": datetime.now(timezone.utc).isoformat(),
+        "status": "done", "stage": "", "started_at": datetime.now(UTC).isoformat(),
         "usual_range_text": "", "error": None, "added_count": None, "price_created": False,
     })
 
 
 def _research_start(product_id: str, brand_id: str, actor: str, product_name: str, url: str) -> None:
-    started_at = datetime.now(timezone.utc).isoformat()
+    started_at = datetime.now(UTC).isoformat()
     running_state = {
         "status": "running", "stage": "讀取網址中", "started_at": started_at,
         "usual_range_text": _RESEARCH_USUAL_RANGE,
@@ -217,7 +221,7 @@ def _research_notify(brand_id: str, product_id: str, message: str) -> None:
 
 def _research_fail(product_id: str, brand_id: str, product_name: str, message: str) -> None:
     started_at = _research_jobs.get(product_id, {}).get("started_at",
-                                                          datetime.now(timezone.utc).isoformat())
+                                                          datetime.now(UTC).isoformat())
     _research_jobs.set(product_id, {
         "status": "failed", "stage": "整理事實中", "started_at": started_at,
         "usual_range_text": _RESEARCH_USUAL_RANGE,
@@ -245,7 +249,7 @@ def _research_run(product_id: str, brand_id: str, actor: str, product_name: str,
         added, _skipped, price_created = product_helpers._apply_product_scan_result(
             brand_id, product_id, actor, src_id, result)
         started_at = _research_jobs.get(product_id, {}).get("started_at",
-                                                              datetime.now(timezone.utc).isoformat())
+                                                              datetime.now(UTC).isoformat())
         _research_jobs.set(product_id, {
             "status": "done", "stage": "完成", "started_at": started_at,
             "usual_range_text": _RESEARCH_USUAL_RANGE,
@@ -513,7 +517,7 @@ async def handoff_submit(request: Request, brand_id: str, product_id: str):
             return _error(400, fixed)
         result = fixed
 
-    src_label = f"外部深研交接包・{datetime.now(timezone.utc).date().isoformat()}"
+    src_label = f"外部深研交接包・{datetime.now(UTC).date().isoformat()}"
     src_id = legacy_routes._create_source_ref(brand_id, actor, src_label)
     added, _skipped, _price_created = product_helpers._apply_product_scan_result(
         brand_id, product_id, actor, src_id, result)

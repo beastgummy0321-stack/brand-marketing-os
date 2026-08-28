@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """T3 的管道計畫與任務卡存取層。
 
 對外進入點：本檔公開 CRUD 函式。
@@ -7,10 +6,8 @@
 不碰什麼：不 import app.orders、app.dashboard，也不修改既有 ads repository。
 """
 
-from typing import Optional
 
-from app.core.db import new_id, now_utc, Conn, DEV_ORG_ID
-
+from app.core.db import DEV_ORG_ID, Conn, new_id, now_utc
 
 CHANNELS = ("social", "google_search", "line_email", "kol_media", "website_landing")
 CHANNEL_LABELS = {
@@ -20,7 +17,7 @@ CHANNEL_LABELS = {
 DEPTHS = ("full", "task_card", "healthcheck")
 
 
-def _row(row) -> Optional[dict]:
+def _row(row) -> dict | None:
     return dict(row) if row is not None else None
 
 
@@ -65,7 +62,7 @@ def create_channel_plan(conn: Conn, brand_id: str, cycle_id: str, *, channel: st
     return row
 
 
-def get_channel_plan(conn: Conn, brand_id: str, plan_id: str) -> Optional[dict]:
+def get_channel_plan(conn: Conn, brand_id: str, plan_id: str) -> dict | None:
     return _row(conn.execute(
         "SELECT * FROM channel_plan WHERE id = %s AND brand_id = %s", (plan_id, brand_id)
     ).fetchone())
@@ -101,7 +98,7 @@ def delete_channel_plan(conn: Conn, brand_id: str, plan_id: str) -> None:
     conn.commit()
 
 
-def previous_enabled_defaults(conn: Conn, brand_id: str, cycle_id: Optional[str] = None) -> dict:
+def previous_enabled_defaults(conn: Conn, brand_id: str, cycle_id: str | None = None) -> dict:
     """讀同品牌最近一個已有管道計畫的檔期，供下期預填「用／不用」。"""
     filters = "WHERE cp.brand_id = %s"
     params = [brand_id]
@@ -119,7 +116,7 @@ def previous_enabled_defaults(conn: Conn, brand_id: str, cycle_id: Optional[str]
 
 
 def create_task_card(conn: Conn, brand_id: str, cycle_id: str, *, channel: str, title: str,
-                     draft_hint: Optional[str] = None) -> dict:
+                     draft_hint: str | None = None) -> dict:
     _require_text(brand_id, "brand_id")
     _require_text(cycle_id, "cycle_id")
     row = {
@@ -135,7 +132,7 @@ def create_task_card(conn: Conn, brand_id: str, cycle_id: str, *, channel: str, 
     return row
 
 
-def get_task_card(conn: Conn, brand_id: str, card_id: str) -> Optional[dict]:
+def get_task_card(conn: Conn, brand_id: str, card_id: str) -> dict | None:
     return _row(conn.execute(
         "SELECT * FROM task_card WHERE id = %s AND brand_id = %s", (card_id, brand_id)
     ).fetchone())
@@ -148,7 +145,7 @@ def list_task_cards(conn: Conn, brand_id: str, cycle_id: str) -> list:
 
 
 def update_task_card(conn: Conn, brand_id: str, card_id: str, *, title: str,
-                     draft_hint: Optional[str], done: bool) -> dict:
+                     draft_hint: str | None, done: bool) -> dict:
     if get_task_card(conn, brand_id, card_id) is None:
         raise ValueError(f"找不到任務卡：{card_id}")
     done_at = now_utc() if done else None

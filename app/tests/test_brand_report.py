@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_brand_report.py — 顧問分析報告（決策 0017、GitHub issue #4）。
 
 見 app/brand_intelligence/report.py、repository.py 的 create_brand_report／get_latest_brand_report、
@@ -8,16 +7,16 @@
 
 import json
 import unittest
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest import mock
 
 from fastapi.testclient import TestClient
 
 import app.main as main
 import app.shared.web as web
+from app.brand_intelligence import repository as repo
 from app.brand_web import report_service
 from app.brand_web import routes as report
-from app.brand_intelligence import repository as repo
 from app.llm import providers
 
 ACTOR = "測試員"
@@ -124,7 +123,7 @@ class BrandReportGenerateTest(unittest.TestCase):
 
 class ReportStalenessPureTest(unittest.TestCase):
     def _report(self, days_ago):
-        generated_at = datetime.now(timezone.utc) - timedelta(days=days_ago)
+        generated_at = datetime.now(UTC) - timedelta(days=days_ago)
         return {"generated_at": generated_at.isoformat()}
 
     def test_within_threshold_no_hint(self):

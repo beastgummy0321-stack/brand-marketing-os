@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """待認領廣告 JSON API：回應形狀、認領／忽略與品牌隔離。"""
 
 import unittest

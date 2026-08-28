@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/ads/creative_pipeline.py — 內容產線小計（票 05-alerts-fuel-pipeline，駕駛艙用）。
 
 獨立成小檔而不是加進 app/ads/creative.py：那檔已經超過 800 行拆檔門檻

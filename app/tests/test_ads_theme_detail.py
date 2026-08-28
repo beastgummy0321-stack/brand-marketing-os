@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_ads_theme_detail.py — 單一主題完整內容路由（票 17-panel-single-image）。
 
 接縫二（路由層，app/ads/routes_creative_theme.py get_theme_detail()）：矩陣資料端點只回
@@ -7,11 +6,9 @@ app/tests/test_ads_theme_adopt_reject.py（票 10）。品牌與產品名一律�
 """
 
 import atexit
-import os
 import shutil
 import tempfile
 import unittest
-from pathlib import Path
 
 _tmpdir = tempfile.mkdtemp(prefix="brand_os_theme_detail_")
 
@@ -22,7 +19,6 @@ from app.ads import repository as ads_repo  # noqa: E402
 from app.ads import theme_repository as theme_repo  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
 from app.core import db  # noqa: E402
-
 
 ACTOR = "測試員"
 

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/creative/format_specs.py — Meta 平台插槽的格式規格表（票 G1-A，2026-08-08 grill 定案）。
 
 純資料，不寫類別、不寫 factory。目錄廣告刻意不進表（2026-08-08 定案：降級為排期建議）。

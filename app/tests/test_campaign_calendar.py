@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_campaign_calendar.py — 票 06-campaign-calendar：檔期日曆第一層。
 
 純函數情境測試，不碰資料庫（app/dashboard/campaign_calendar.py 只吃 today／event

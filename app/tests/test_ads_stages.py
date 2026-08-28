@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_ads_stages.py — D線票1（GitHub issue #43）檔期五格階段推導。
 
 app/ads/stages.derive_stage 是純函數（不碰資料庫），驗收重點是：單看 campaign_cycle.status

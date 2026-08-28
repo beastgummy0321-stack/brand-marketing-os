@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_intake_api_paste.py — 建檔精靈 JSON API：貼回驗證／範圍解析／AI 修格式
 背景工作／逐條 review（從 test_intake_api.py 拆出，票 B3 獨立驗證：單檔 <800 行，斷言不變）。
 
@@ -11,8 +10,6 @@ import os
 import time
 import unittest
 from unittest import mock
-
-import pytest
 
 os.environ.setdefault("ANTHROPIC_API_KEY", "sk-ant-fake-intake-api-test")
 

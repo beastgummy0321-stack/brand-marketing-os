@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/intake/routes_api.py — 建檔精靈 JSON API（票 B3-intake 第二段前半）。
 
 契約：`.scratch/grill/GRILL-B3-intake.md`「要新增的 API」節前 16 支裡屬本檔負責的部分
@@ -20,8 +19,8 @@ key 用 brand_id——同一時間一個品牌只有一份進行中草稿，三�
 `app/main.py`。
 """
 
-from datetime import datetime, timezone
 import re
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, File, Request, UploadFile
 from fastapi.responses import Response
@@ -29,7 +28,8 @@ from fastapi.responses import Response
 from app.brand_intelligence import background_job
 from app.brand_intelligence import repository as repo
 from app.core.db import new_id, now_iso, now_utc
-from app.intake import ai, paste_parse, repository as ir, script, state
+from app.intake import ai, paste_parse, script, state
+from app.intake import repository as ir
 from app.shared import web
 from app.shared.web import JSONResponse, NotFoundKind, clean, require_actor, require_brand
 
@@ -56,7 +56,7 @@ def _error(status_code: int, message: str) -> JSONResponse:
 
 
 def _envelope(data) -> dict:
-    return {"data": data, "generated_at": datetime.now(timezone.utc).isoformat()}
+    return {"data": data, "generated_at": datetime.now(UTC).isoformat()}
 
 
 async def _json_body(request: Request) -> dict:

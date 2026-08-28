@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/ads/routes_creative.py — 曾經是素材生成、反對／勾回、關卡二的舊頁（第 8 刀從
 app/ads/routes.py 拆出）；T4 廣告模組 Jinja 大清倉全部路由都已刪除——生成流程改走
 routes_creative_theme.py／routes_workbench.py 的新殼機制（`/api/ads/...`），反對／

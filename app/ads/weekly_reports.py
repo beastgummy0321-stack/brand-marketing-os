@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """週報只組既有資料，不另存一份報表或建立第二條資料管線。"""
 
 from datetime import date, timedelta

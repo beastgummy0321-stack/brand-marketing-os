@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_f1_cards_follow_imported_cycle.py — 票 F1
 （`.scratch/rehearsal-b0-fix2/issues/F1-cards-follow-imported-cycle.md`）：
 
@@ -17,13 +16,9 @@
 import json
 import unittest
 
-import pytest
-
 import app.main as main
-from app.ads import performance as perf
-from app.ads import reading
+from app.ads import reading, weekly_proposals
 from app.ads import repository as ads_repo
-from app.ads import weekly_proposals
 from app.brand_intelligence import repository as bi_repo
 from app.core.db import DEV_ORG_ID, new_id, now_iso
 from app.llm.providers import FakeProvider, ProviderResponse, Usage

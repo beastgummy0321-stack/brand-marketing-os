@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """票 07：Act3 月報數字唯讀聚合與 API。"""
 
 import os
@@ -6,7 +5,6 @@ import unittest
 
 os.environ["BRAND_OS_TODAY"] = "2026-08-05"
 
-import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
 import app.main as main  # noqa: E402

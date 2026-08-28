@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/orders/channel.py — 通路對照卡（GitHub issue #40，決策 0025 第二節 B）。
 
 治兩種系統性誤判：
@@ -22,11 +21,10 @@
 import csv
 import io
 from datetime import date, timedelta
-from typing import Optional
 
 from app.ads import performance as ads_performance
 from app.core.audit import write_audit
-from app.core.db import new_id, now_utc, DEV_ORG_ID
+from app.core.db import DEV_ORG_ID, new_id, now_utc
 
 # 蝦皮賣家中心「訂單」匯出常見欄名（未經真實檔驗證，見檔頭誠實標注）。order_sn 是
 # 唯一識別欄，跟 EasyStore 的 order_number 別名表刻意不重疊，分派層才分得清兩種檔案。
@@ -110,8 +108,8 @@ def parse_shopee_csv(text: str) -> tuple:
 
 
 def save_shopee_rows(conn, brand_id: str, rows: list, *, source: str, actor: str,
-                     result: Optional[ShopeeImportResult] = None,
-                     import_batch_id: Optional[str] = None) -> ShopeeImportResult:
+                     result: ShopeeImportResult | None = None,
+                     import_batch_id: str | None = None) -> ShopeeImportResult:
     """落地蝦皮報表列。同 order_sn 重複匯入（歷史回填月份重疊）整批覆寫最新狀態——
     跟 app/orders/repository.save_orders 對 EasyStore 訂單的處理方式一致。"""
     if not actor or not actor.strip():
@@ -151,7 +149,7 @@ def save_shopee_rows(conn, brand_id: str, rows: list, *, source: str, actor: str
     return result
 
 
-def shopee_latest_import(conn, brand_id: str) -> Optional[str]:
+def shopee_latest_import(conn, brand_id: str) -> str | None:
     """最近一次蝦皮報表匯入時間（依落地列的 created_at 取最新一筆）；從沒匯入過回 None。
     給追蹤健檢用（票 T0 契約 1.5：曾匯入過＝就緒＋最近匯入日期）。"""
     row = conn.execute(
@@ -161,7 +159,7 @@ def shopee_latest_import(conn, brand_id: str) -> Optional[str]:
     return row["created_at"] if row else None
 
 
-def pharmacy_latest_batch(conn, brand_id: str) -> Optional[str]:
+def pharmacy_latest_batch(conn, brand_id: str) -> str | None:
     """最近一筆藥局出貨批次日期；從沒記錄過回 None（同上，票 T0 契約 1.5 用）。"""
     row = conn.execute(
         "SELECT batch_date FROM pharmacy_batch WHERE brand_id = %s"
@@ -176,7 +174,7 @@ def pharmacy_latest_batch(conn, brand_id: str) -> Optional[str]:
     return row["batch_date"].isoformat() if row["batch_date"] else None
 
 
-def shopee_revenue(conn, brand_id: str, since: str, until: str) -> Optional[float]:
+def shopee_revenue(conn, brand_id: str, since: str, until: str) -> float | None:
     """這段日期範圍蝦皮營收加總。沒有任何一列落在範圍內回 None——不知道跟 0 是兩件事。"""
     row = conn.execute(
         "SELECT SUM(revenue) total, COUNT(*) rows FROM shopee_report_row"
@@ -194,8 +192,8 @@ def shopee_revenue(conn, brand_id: str, since: str, until: str) -> Optional[floa
 # 藥局出貨批次
 # ---------------------------------------------------------------------------
 
-def record_pharmacy_batch(conn, brand_id: str, *, batch_date: str, quantity: Optional[float] = None,
-                          note: Optional[str] = None, actor: str) -> dict:
+def record_pharmacy_batch(conn, brand_id: str, *, batch_date: str, quantity: float | None = None,
+                          note: str | None = None, actor: str) -> dict:
     if not batch_date or not batch_date.strip():
         raise ValueError("批次日期為必填")
     if not actor or not actor.strip():
@@ -215,7 +213,7 @@ def record_pharmacy_batch(conn, brand_id: str, *, batch_date: str, quantity: Opt
     return {"id": batch_id, "batch_date": batch_date, "quantity": quantity, "note": note}
 
 
-def list_pharmacy_batches(conn, brand_id: str, *, until: Optional[str] = None) -> list:
+def list_pharmacy_batches(conn, brand_id: str, *, until: str | None = None) -> list:
     sql = "SELECT * FROM pharmacy_batch WHERE brand_id = %s"
     params: list = [brand_id]
     if until:
@@ -253,8 +251,8 @@ def restock_interval_signal(conn, brand_id: str, until: str) -> dict:
 # 蝦皮期別專屬碼
 # ---------------------------------------------------------------------------
 
-def set_shopee_code(conn, brand_id: str, cycle_id: str, *, code: Optional[str] = None,
-                    redemption_count: Optional[int] = None, actor: str) -> dict:
+def set_shopee_code(conn, brand_id: str, cycle_id: str, *, code: str | None = None,
+                    redemption_count: int | None = None, actor: str) -> dict:
     if not actor or not actor.strip():
         raise ValueError("actor 為必填")
     ts = now_utc()
@@ -285,7 +283,7 @@ def set_shopee_code(conn, brand_id: str, cycle_id: str, *, code: Optional[str] =
     return {"id": row_id, "code": code, "redemption_count": redemption_count}
 
 
-def get_shopee_code(conn, brand_id: str, cycle_id: str) -> Optional[dict]:
+def get_shopee_code(conn, brand_id: str, cycle_id: str) -> dict | None:
     row = conn.execute(
         "SELECT * FROM cycle_shopee_code WHERE brand_id = %s AND campaign_cycle_id = %s",
         (brand_id, cycle_id),

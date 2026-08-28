@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/core/campaign_skip.py — 這期跳過紀錄（票 03-cycle-skip-record，ADR 0015）。
 
 使用者標記「這次不投某個節日檔期」：品牌＋節日＋年份＋理由（選填）。純脈絡用途——
@@ -20,14 +19,13 @@ guide_cards facts 時查「去年有沒有跳過」）。目前沒有 HTTP 路�
 沒有畫面契約項目）。
 """
 
-from typing import Optional
 
 from app.core import cleanup
-from app.core.db import new_id, now_utc, DEV_ORG_ID
+from app.core.db import DEV_ORG_ID, new_id, now_utc
 
 
 def record_skip(conn, brand_id: str, holiday_id: str, year: int,
-                 reason: Optional[str] = None) -> None:
+                 reason: str | None = None) -> None:
     """標記某品牌某年不投某個節日檔期。同品牌＋節日＋年份重複標記會覆蓋舊理由
     （使用者改變心意時只留最新一筆）。會 commit。"""
     conn.execute(
@@ -40,7 +38,7 @@ def record_skip(conn, brand_id: str, holiday_id: str, year: int,
     conn.commit()
 
 
-def get_skip(conn, brand_id: str, holiday_id: str, year: int) -> Optional[dict]:
+def get_skip(conn, brand_id: str, holiday_id: str, year: int) -> dict | None:
     """查某品牌某節日某年份的跳過紀錄，沒有就回 None。"""
     row = conn.execute(
         "SELECT reason FROM campaign_skip WHERE brand_id = %s AND holiday_id = %s AND year = %s",

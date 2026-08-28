@@ -1,0 +1,316 @@
+[project]
+name = "brand-marketing-os"
+version = "0.1.0"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "fastapi==0.141.1",
+    "uvicorn==0.52.3",
+    "python-multipart==0.0.32",
+    "openpyxl==3.1.5",
+    "anthropic==0.122.0",
+    "httpx==0.28.1",
+    "pytest==9.1.1",
+    "pytest-xdist==3.8.0",
+    "google-analytics-data==0.23.0",
+    "psycopg[binary,pool]>=3.3,<4",
+]
+
+[dependency-groups]
+dev = [
+    "pytest==9.1.1",
+    "pytest-xdist==3.8.0",
+    "ruff",
+    "pyright",
+]
+
+[tool.uv]
+package = false
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+
+[tool.ruff.lint.per-file-ignores]
+# frozen 2026-08-28, shrink only (ticket 02-7): pre-existing violations at the
+# time Ruff was introduced. New files must pass clean; do not add entries here
+# for new code, only remove entries as files are cleaned up.
+"app/ads/account_structure.py" = ["E501"]
+"app/ads/auto_sync.py" = ["E501"]
+"app/ads/bottleneck.py" = ["E501"]
+"app/ads/budget.py" = ["B905", "E501"]
+"app/ads/checklist.py" = ["E501"]
+"app/ads/checkpoint.py" = ["E501"]
+"app/ads/cockpit_extras.py" = ["E501"]
+"app/ads/codes.py" = ["E501"]
+"app/ads/creative.py" = ["E501"]
+"app/ads/data_onboarding.py" = ["E501"]
+"app/ads/delivery.py" = ["E501"]
+"app/ads/fingerprint.py" = ["B905"]
+"app/ads/ga4_api.py" = ["B904"]
+"app/ads/ga4_sync.py" = ["E501"]
+"app/ads/guardrails.py" = ["E501"]
+"app/ads/handoff.py" = ["E501"]
+"app/ads/health_lights.py" = ["E501"]
+"app/ads/inflation.py" = ["E501", "UP031"]
+"app/ads/interview.py" = ["E501"]
+"app/ads/meta_api.py" = ["B904"]
+"app/ads/meta_mcp.py" = ["B904", "E501"]
+"app/ads/nextcycle.py" = ["E501"]
+"app/ads/offer.py" = ["E501"]
+"app/ads/opening_suggestion.py" = ["E501"]
+"app/ads/pacing_curve.py" = ["B905", "E501"]
+"app/ads/performance.py" = ["E501"]
+"app/ads/plan.py" = ["E501"]
+"app/ads/plan_citation.py" = ["E501"]
+"app/ads/proposal.py" = ["E501"]
+"app/ads/qa_autocheck.py" = ["E501"]
+"app/ads/reading.py" = ["E501", "E701", "I001", "UP009", "UP045"]  # left un-autofixed: fixing pushed the file from 800 to 817 lines, over the frozen FileLineCapTest cap (test_architecture_boundaries.py)
+"app/ads/reading_assets.py" = ["E501"]
+"app/ads/reading_hypotheses.py" = ["E501"]
+"app/ads/repository.py" = ["E501"]
+"app/ads/repository_channel_plan.py" = ["E501"]
+"app/ads/routes.py" = ["E402"]
+"app/ads/routes_campaigns_handoff_api.py" = ["E501"]
+"app/ads/routes_campaigns_list_api.py" = ["E501"]
+"app/ads/routes_campaigns_open_api.py" = ["E501"]
+"app/ads/routes_campaigns_performance_api.py" = ["B008", "E501", "F841"]
+"app/ads/routes_claims_api.py" = ["E501"]
+"app/ads/routes_creative_theme.py" = ["E501"]
+"app/ads/routes_learnings_api.py" = ["E501"]
+"app/ads/routes_progress.py" = ["E501"]
+"app/ads/routes_settings.py" = ["E501"]
+"app/ads/routes_weekly_proposals_api.py" = ["E501"]
+"app/ads/settlement.py" = ["E501"]
+"app/ads/simulation.py" = ["E501"]
+"app/ads/sync.py" = ["E501"]
+"app/ads/target_cpa.py" = ["E501"]
+"app/ads/theme_attribution.py" = ["B007"]
+"app/ads/theme_feedback.py" = ["B905"]
+"app/ads/theme_repository.py" = ["E501"]
+"app/ads/tracking.py" = ["E501"]
+"app/ads/weekly_proposals.py" = ["E501"]
+"app/brand_intelligence/background_job.py" = ["E501"]
+"app/brand_intelligence/personas.py" = ["E501"]
+"app/brand_intelligence/product_ai.py" = ["E501"]
+"app/brand_intelligence/report.py" = ["E501"]
+"app/brand_intelligence/repository.py" = ["E501"]
+"app/brand_intelligence/repository_channels.py" = ["E501"]
+"app/brand_intelligence/repository_learning_text.py" = ["E501"]
+"app/brand_intelligence/rule_lifecycle.py" = ["E501"]
+"app/brand_web/product_ai_calls.py" = ["E501"]
+"app/brand_web/report_service.py" = ["E501"]
+"app/brand_web/routes.py" = ["E501"]
+"app/brand_web/routes_library.py" = ["B008", "B904", "E501"]
+"app/brand_web/routes_library_write.py" = ["B904", "E501", "F841"]
+"app/brand_web/routes_product_helpers.py" = ["E501"]
+"app/brand_web/routes_products.py" = ["E501", "F841"]
+"app/brand_web/routes_report_api.py" = ["E501"]
+"app/core/audit.py" = ["E501"]
+"app/core/db.py" = ["B904"]
+"app/core/interrupts.py" = ["E501"]
+"app/core/rule_cards.py" = ["E501"]
+"app/core/settings.py" = ["E501"]
+"app/core/vocab.py" = ["E501"]
+"app/creative/format_specs.py" = ["E501"]
+"app/dashboard/pinned_views.py" = ["E501"]
+"app/dashboard/repository.py" = ["B905", "E501"]
+"app/dashboard/routes.py" = ["B904"]
+"app/dashboard/routes_pinned_views_api.py" = ["E501"]
+"app/intake/ai.py" = ["E501"]
+"app/intake/paste_parse.py" = ["E501", "E741"]
+"app/intake/repository.py" = ["B007", "E501"]
+"app/intake/routes.py" = ["E501"]
+"app/intake/routes_api.py" = ["B008", "E501"]
+"app/intake/routes_t2_api.py" = ["E501"]
+"app/intake/script.py" = ["E501"]
+"app/intake/state.py" = ["E501"]
+"app/llm/context_compiler.py" = ["E501", "E741"]
+"app/llm/gateway.py" = ["E501"]
+"app/llm/providers.py" = ["E501"]
+"app/main.py" = ["E402", "E501"]
+"app/orders/channel.py" = ["E501"]
+"app/orders/dispatch.py" = ["E501"]
+"app/orders/repository.py" = ["E501"]
+"app/orders/routes_api.py" = ["B008", "E501"]
+"app/shared/web.py" = ["E501"]
+"app/tests/test_account_structure.py" = ["E501"]
+"app/tests/test_action_url_targets.py" = ["B905", "E501"]
+"app/tests/test_ads_auto_sync.py" = ["E501", "E731"]
+"app/tests/test_ads_backfill.py" = ["B905"]
+"app/tests/test_ads_boot_catchup.py" = ["E402", "E501"]
+"app/tests/test_ads_carry_forward.py" = ["E402", "E501"]
+"app/tests/test_ads_cell_trust_flags.py" = ["E501"]
+"app/tests/test_ads_checklist.py" = ["E402", "E501"]
+"app/tests/test_ads_checkpoint.py" = ["E402"]
+"app/tests/test_ads_compliance_scan_on_generate.py" = ["E402"]
+"app/tests/test_ads_creative.py" = ["E501"]
+"app/tests/test_ads_creative_theme.py" = ["E501"]
+"app/tests/test_ads_creative_theme_repoint.py" = ["E501"]
+"app/tests/test_ads_cycle.py" = ["E501"]
+"app/tests/test_ads_cycle_delete.py" = ["E501"]
+"app/tests/test_ads_delivery.py" = ["E501"]
+"app/tests/test_ads_handoff.py" = ["E501"]
+"app/tests/test_ads_health_lights.py" = ["E501"]
+"app/tests/test_ads_hypothesis_resolve_api.py" = ["B905", "E501"]
+"app/tests/test_ads_interview.py" = ["E501"]
+"app/tests/test_ads_learnings.py" = ["E501"]
+"app/tests/test_ads_nextcycle.py" = ["E402", "E501"]
+"app/tests/test_ads_onboarding.py" = ["E501", "F841"]
+"app/tests/test_ads_opening_suggestion.py" = ["E501"]
+"app/tests/test_ads_pacing.py" = ["E501"]
+"app/tests/test_ads_pacing_curve.py" = ["E501"]
+"app/tests/test_ads_performance.py" = ["E501"]
+"app/tests/test_ads_performance_split.py" = ["E501"]
+"app/tests/test_ads_plan.py" = ["E501", "E741"]
+"app/tests/test_ads_progress_background.py" = ["E501"]
+"app/tests/test_ads_proposal.py" = ["E402", "E501"]
+"app/tests/test_ads_qa_autocheck.py" = ["E402", "E501"]
+"app/tests/test_ads_reading.py" = ["E501"]
+"app/tests/test_ads_reading_hypotheses.py" = ["B905", "E501"]
+"app/tests/test_ads_reading_settlement.py" = ["E501"]
+"app/tests/test_ads_reading_verdict.py" = ["E501"]
+"app/tests/test_ads_settlement.py" = ["E501"]
+"app/tests/test_ads_simulation.py" = ["E402", "E501"]
+"app/tests/test_ads_sync.py" = ["E501"]
+"app/tests/test_ads_tracking.py" = ["E501"]
+"app/tests/test_ads_tracking_health.py" = ["E501"]
+"app/tests/test_ads_weekly_action_api.py" = ["E501"]
+"app/tests/test_ads_weekly_engine.py" = ["E731"]
+"app/tests/test_ads_weekly_proposal.py" = ["B905", "E501"]
+"app/tests/test_ads_weekly_proposal_f13.py" = ["E501"]
+"app/tests/test_ads_weekly_report_api.py" = ["E501"]
+"app/tests/test_angle_rename.py" = ["E501"]
+"app/tests/test_architecture_boundaries.py" = ["E501"]
+"app/tests/test_audit.py" = ["E501", "F841"]
+"app/tests/test_brand_edit_industry.py" = ["E501"]
+"app/tests/test_brand_isolation_all_tables.py" = ["E501"]
+"app/tests/test_brand_report.py" = ["E501"]
+"app/tests/test_brand_report_api.py" = ["E501"]
+"app/tests/test_campaign_calendar.py" = ["E501"]
+"app/tests/test_carousel_theme.py" = ["E402", "E731", "E741"]
+"app/tests/test_char_guard.py" = ["E402"]
+"app/tests/test_claims_api.py" = ["E501"]
+"app/tests/test_cleanup_registry.py" = ["E501"]
+"app/tests/test_cockpit_extras.py" = ["E501"]
+"app/tests/test_core_orchestrator.py" = ["E501"]
+"app/tests/test_customer_voice.py" = ["E501"]
+"app/tests/test_dashboard_guide_cards_wiring.py" = ["E501"]
+"app/tests/test_dashboard_jobs_boundary.py" = ["E501"]
+"app/tests/test_dashboard_pinned_views.py" = ["E501"]
+"app/tests/test_data_onboarding_api.py" = ["E501"]
+"app/tests/test_f1_cards_follow_imported_cycle.py" = ["E501"]
+"app/tests/test_inbox_api.py" = ["E501"]
+"app/tests/test_intake.py" = ["E501"]
+"app/tests/test_intake_api.py" = ["E501"]
+"app/tests/test_intake_api_paste.py" = ["E501"]
+"app/tests/test_intake_research_reports_api.py" = ["E501"]
+"app/tests/test_learnings_api.py" = ["E501"]
+"app/tests/test_library_api.py" = ["E501"]
+"app/tests/test_library_write_api.py" = ["E501"]
+"app/tests/test_llm_gateway.py" = ["B905", "E501"]
+"app/tests/test_meta_mcp.py" = ["E402", "E501"]
+"app/tests/test_methodology.py" = ["E501"]
+"app/tests/test_migration_ownership.py" = ["E501"]
+"app/tests/test_no_sqlite_residue.py" = ["E501"]
+"app/tests/test_orders_api.py" = ["E501"]
+"app/tests/test_orders_channel.py" = ["E501", "F841"]
+"app/tests/test_orders_core_brand_cleanup.py" = ["E501"]
+"app/tests/test_plan_status_b0_45.py" = ["E501"]
+"app/tests/test_preselect_batch.py" = ["E402", "E501", "F841"]
+"app/tests/test_product_handoff.py" = ["E501"]
+"app/tests/test_product_scan.py" = ["E501"]
+"app/tests/test_products_api.py" = ["E501"]
+"app/tests/test_proposal_approve_progress.py" = ["E402", "E501"]
+"app/tests/test_real_db_schema_drift.py" = ["E501"]
+"app/tests/test_relocation_paths.py" = ["E501"]
+"app/tests/test_rule_cards.py" = ["E501"]
+"app/tests/test_rule_cards_api.py" = ["E501"]
+"app/tests/test_rule_cards_autonomy.py" = ["E501"]
+"app/tests/test_rules_claims_edit.py" = ["E501"]
+"app/tests/test_settings_api.py" = ["E501"]
+"app/tests/test_settings_hub.py" = ["E501"]
+"app/tests/test_settle_now_and_batches.py" = ["E501", "UP031"]
+"app/tests/test_style_preference.py" = ["E501"]
+"app/tests/test_theme_attribution.py" = ["E501"]
+"app/tests/test_theme_engine.py" = ["E402", "E731"]
+"app/tests/test_versioning.py" = ["E501"]
+"app/tests/test_video_theme.py" = ["E402", "E501"]
+"app/tests/test_workbench_tasks.py" = ["E501", "F841"]
+"app/tools/boot_launcher.py" = ["E501"]
+
+[tool.pyright]
+include = ["app"]
+exclude = ["app/tests"]
+typeCheckingMode = "basic"
+ignore = [
+    # frozen 2026-08-28, shrink only (ticket 02-7): files with pre-existing
+    # pyright errors at the time Pyright was introduced. New files must pass
+    # clean; only remove entries as files are fixed, never add for new code.
+    "app/ads/bottleneck.py",
+    "app/ads/checkpoint.py",
+    "app/ads/cockpit_extras.py",
+    "app/ads/codes.py",
+    "app/ads/compliance.py",
+    "app/ads/creative.py",
+    "app/ads/data_onboarding.py",
+    "app/ads/delivery.py",
+    "app/ads/fingerprint.py",
+    "app/ads/handoff.py",
+    "app/ads/inflation.py",
+    "app/ads/meta_api.py",
+    "app/ads/meta_mcp.py",
+    "app/ads/nextcycle.py",
+    "app/ads/offer.py",
+    "app/ads/pacing_curve.py",
+    "app/ads/performance.py",
+    "app/ads/plan.py",
+    "app/ads/proposal.py",
+    "app/ads/reading.py",
+    "app/ads/repository.py",
+    "app/ads/repository_channel_plan.py",
+    "app/ads/routes_campaigns_delivery_api.py",
+    "app/ads/routes_campaigns_list_api.py",
+    "app/ads/routes_campaigns_open_api.py",
+    "app/ads/routes_campaigns_performance_api.py",
+    "app/ads/routes_common.py",
+    "app/ads/routes_creative_theme.py",
+    "app/ads/routes_settings.py",
+    "app/ads/routes_weekly_proposals_api.py",
+    "app/ads/routes_workbench.py",
+    "app/ads/settlement.py",
+    "app/ads/sync.py",
+    "app/ads/theme_repository.py",
+    "app/ads/tracking.py",
+    "app/ads/weekly_reports.py",
+    "app/brand_intelligence/personas.py",
+    "app/brand_intelligence/repository.py",
+    "app/brand_intelligence/repository_channels.py",
+    "app/brand_web/report_service.py",
+    "app/brand_web/routes.py",
+    "app/brand_web/routes_library.py",
+    "app/brand_web/routes_library_write.py",
+    "app/brand_web/routes_product_helpers.py",
+    "app/brand_web/routes_products.py",
+    "app/brand_web/routes_report_api.py",
+    "app/core/calendar_dismiss.py",
+    "app/core/settings.py",
+    "app/creative/theme_engine.py",
+    "app/creative/theme_engine_video.py",
+    "app/intake/ai.py",
+    "app/intake/paste_parse.py",
+    "app/intake/repository.py",
+    "app/intake/routes_api.py",
+    "app/intake/routes_t2_api.py",
+    "app/intake/script.py",
+    "app/intake/state.py",
+    "app/llm/gateway.py",
+    "app/llm/providers.py",
+    "app/main.py",
+    "app/orders/channel.py",
+    "app/orders/dispatch.py",
+    "app/orders/repository.py",
+    "app/orders/routes_api.py",
+    "app/shared/web.py",
+]

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/ads/settlement.py — 結算版次＋判讀快照基建（GitHub issue #37，決策 0025 審查補遺 C：
 「結算版本化＋判讀快照」）。
 
@@ -22,10 +21,9 @@ settlement_version 只負責版次號碼、觸發原因、是否結案後才動�
 （鐵則 4：數字走程式）。
 """
 
-from typing import Optional
 
 from app.ads import inflation as ads_inflation
-from app.core.db import new_id, now_utc, jsonb, DEV_ORG_ID
+from app.core.db import DEV_ORG_ID, jsonb, new_id, now_utc
 
 # 第 7 刀（A1 三層地界新規則：app/ads 不得 import app.orders，見
 # test_architecture_boundaries.py）：orders_repo 不在這裡 import，改由組裝根
@@ -80,7 +78,7 @@ def _flatten(scope: str, data: dict) -> list:
 
 
 def freeze(conn, brand_id: str, cycle: dict, *, actor: str, cycle_totals: dict,
-          per_product: dict, trigger_reason: Optional[str] = None) -> dict:
+          per_product: dict, trigger_reason: str | None = None) -> dict:
     """凍結一版判讀快照：寫一筆新 settlement_version＋一筆 reading_snapshot（彙總＋明細兩層）。
 
     同一期每呼叫一次就多一版（append-only，不覆寫舊版），version 從 1 起遞增
@@ -141,7 +139,7 @@ def freeze(conn, brand_id: str, cycle: dict, *, actor: str, cycle_totals: dict,
            "missing_sources": missing}
 
 
-def load_snapshot(conn, brand_id: str, cycle_id: str, version: Optional[int] = None) -> Optional[dict]:
+def load_snapshot(conn, brand_id: str, cycle_id: str, version: int | None = None) -> dict | None:
     """讀回某一版快照（不傳 version 給最新版）；沒判讀過回 None。"""
     # rs.* 已經帶 settlement_version_id（reading_snapshot 自己的外鍵欄），不用再從 sv.id 重複選一次。
     if version is None:
@@ -220,7 +218,7 @@ REVERSAL_MESSAGE_WITH_LATE_REVENUE = "補件翻盤但晚到營收占比高，去
 LATE_REVENUE_SHARE_WARNING_THRESHOLD = 0.30
 
 
-def late_revenue_share_warning(diffs: list) -> Optional[str]:
+def late_revenue_share_warning(diffs: list) -> str | None:
     """`diffs`＝`diff_versions()` 的回傳值。只看檔期層營收這一鍵，算這次補件新增的營收
     占補件後總營收的比例；沒有營收變動、算不出來、或沒超過門檻都回 None（分級不吵，
     決策 0025）。"""
@@ -239,7 +237,7 @@ def late_revenue_share_warning(diffs: list) -> Optional[str]:
     return f"這筆晚到營收占本期營收 {share:.0%}，建議先查核是真的晚到訂單還是誤植，再決定要不要翻案"
 
 
-def latest_version_delta(conn, brand_id: str, cycle_id: str) -> Optional[dict]:
+def latest_version_delta(conn, brand_id: str, cycle_id: str) -> dict | None:
     """這期最近兩個判讀版次之間，營收／ROAS 差了多少（B0-25：下期預算建議悄悄改了金額卻
     不說原因，要靠這個現算出「為什麼」）。只有一個版次或找不到快照就回 None——不硬編。"""
     versions = [r["version"] for r in conn.execute(

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/ads/routes_workbench.py — 素材工作檯任務卡衍生查詢（票 13-workbench-cards）。
 
 畫面契約畫面 1（.scratch/creative-studio/studio-wireframe.html）：「上游派來的任務」各

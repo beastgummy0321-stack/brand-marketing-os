@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/ads/pacing_curve.py — 排期策略推薦與逐日預算換算（票 pacing-curve）。
 
 純函數：不呼叫 AI、不碰資料庫，跟 app/ads/budget.py 同層次。跟 app/ads/pacing.py

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """品牌風格偏好採 app_setting namespaced key，且明確空值不回退。"""
 
 import unittest

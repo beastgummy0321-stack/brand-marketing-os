@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/brand_intelligence/repository_learning_text.py — 學習文字去重正規化。
 
 從 `repository.py` 拆出（票 F3-signoff-residue R4）：修多括號區段全部刪空互撞的缺陷
@@ -23,9 +22,9 @@ R5（orchestrator ruling，票 F3-signoff-residue）：R3/R4 把「」『』【�
 """
 
 import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
-_MIN_TS = datetime.min.replace(tzinfo=timezone.utc)  # learned_at 排序用的最小值墊底（02-3b：型別改 datetime 後 "" 不再能跟它比大小）
+_MIN_TS = datetime.min.replace(tzinfo=UTC)  # learned_at 排序用的最小值墊底（02-3b：型別改 datetime 後 "" 不再能跟它比大小）
 
 # 括號家族：全形／半形小括號、龜殼括號——內容是舉例性補充夾註，去重時整段丟棄（B0-23 原案）。
 # content class 額外排除引號分隔符「」（票 F3 R6 orchestrator ruling）：原本只排除自家的
@@ -97,7 +96,7 @@ def collapse_learnings(rows: list) -> list:
 
     輸出順序＝輸入順序（以每組代表列在輸入中的位置為準）。純函式，不吃 conn。
     """
-    groups: "dict[tuple, list[tuple[int, dict]]]" = {}
+    groups: dict[tuple, list[tuple[int, dict]]] = {}
     for idx, row in enumerate(rows):
         key = (_normalize_learning_text(row["learning_text"]), row["product_id"])
         groups.setdefault(key, []).append((idx, row))

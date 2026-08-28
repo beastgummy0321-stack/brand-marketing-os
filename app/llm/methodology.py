@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/llm/methodology.py — 方法論載入器（票 11，決策 0023/0024）。
 
 生成計畫／素材時，把 app/methodology/README.md「任務型別 → 必讀方法論檔」對照表指定的
@@ -11,7 +10,7 @@
 
 import re
 from pathlib import Path
-from typing import NamedTuple, Optional
+from typing import NamedTuple
 
 from app.brand_intelligence import repository as repo
 from app.core.audit import write_audit
@@ -86,10 +85,10 @@ def compile(
     conn: Conn,
     task_labels,
     *,
-    brand_id: Optional[str] = None,
+    brand_id: str | None = None,
     actor: str = "system",
-    methodology_dir: Optional[Path] = None,
-    readme_path: Optional[Path] = None,
+    methodology_dir: Path | None = None,
+    readme_path: Path | None = None,
 ) -> MethodologyResult:
     """依任務型別（對照表中的中文列名）組出方法論內容區塊。
 
@@ -108,7 +107,7 @@ def compile(
     """
     table = load_table_raw(readme_path or README_PATH)
     methodology_dir = methodology_dir or METHODOLOGY_DIR
-    switches: Optional[dict] = None  # 懶得算：沒有帶條件的檔案就不必查一次品牌資料
+    switches: dict | None = None  # 懶得算：沒有帶條件的檔案就不必查一次品牌資料
     filenames: list = []
     for label in task_labels:
         for filename, condition in table.get(label, []):

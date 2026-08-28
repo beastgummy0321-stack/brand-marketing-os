@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/core/interrupts.py — 全站打斷佇列（GitHub issue #32，決策 0025／0026）。
 
 全站所有「需要人看」的訊息只剩一個出口：這裡的 enqueue()。各模組只能認領 CATEGORIES
@@ -15,11 +14,10 @@
 """
 
 from datetime import date, datetime, timedelta
-from typing import Optional, Union
 
 from app.core import cleanup
 from app.core.audit import write_audit
-from app.core.db import new_id, now_utc, DEV_ORG_ID
+from app.core.db import DEV_ORG_ID, new_id, now_utc
 
 # 嚴重度分級（決策 0025／0026 定案，DESIGN.md §20 規則 4 的資料層對應）。
 SEVERITY_ORDER = ["money_loss", "irreversible", "rule_warning", "informational"]
@@ -76,9 +74,9 @@ STALE_AFTER_DAYS = 14  # 資訊性項目逾期自動降級封存的門檻（比�
 
 
 def enqueue(conn, *, category: str, dedupe_key: str, message: str,
-            brand_id: Optional[str] = None, campaign_cycle_id: Optional[str] = None,
-            action_url: Optional[str] = None, kind: Optional[str] = None,
-            visible_from: Optional[Union[date, datetime]] = None) -> Optional[str]:
+            brand_id: str | None = None, campaign_cycle_id: str | None = None,
+            action_url: str | None = None, kind: str | None = None,
+            visible_from: date | datetime | None = None) -> str | None:
     """送進打斷佇列；同去重鍵已存在就不重複塞（回傳 None）。不自動 commit（比照 write_audit，
     交由呼叫端決定交易邊界，方便一次排多筆用同一個交易）。"""
     spec = CATEGORIES.get(category)
@@ -122,7 +120,7 @@ def enqueue(conn, *, category: str, dedupe_key: str, message: str,
 _NEVER_STALE_KINDS = ("day3_look_dont_touch", "day7_report")
 
 
-def _archive_stale_informational(conn, today: Optional[str] = None) -> int:
+def _archive_stale_informational(conn, today: str | None = None) -> int:
     """資訊性項目逾期自動降級封存：**到期**超過 STALE_AFTER_DAYS 天沒人處理，自動轉
     archived，不再佔待辦清單（不擋路，見 0025 懶人優先總則）。
 
@@ -155,8 +153,8 @@ def _sort_key(row: dict):
     )
 
 
-def list_open(conn, brand_id: Optional[str] = None, category: Optional[str] = None,
-              today: Optional[str] = None, archive_stale: bool = True) -> list:
+def list_open(conn, brand_id: str | None = None, category: str | None = None,
+              today: str | None = None, archive_stale: bool = True) -> list:
     """待辦清單：已到 visible_from 的 open 項目，嚴重度為主、同級按行動價值排序。
 
     brand_id 省略＝跨品牌查（首頁待辦、全站收件匣用）。
@@ -181,7 +179,7 @@ def list_open(conn, brand_id: Optional[str] = None, category: Optional[str] = No
     return rows
 
 
-def list_done(conn, brand_id: Optional[str] = None) -> list:
+def list_done(conn, brand_id: str | None = None) -> list:
     """已結清單（人工處理 resolved ＋ 逾期自動封存 archived），最近結案的排前面。"""
     sql = "SELECT * FROM interrupt WHERE status IN ('resolved', 'archived')"
     params: list = []
@@ -192,7 +190,7 @@ def list_done(conn, brand_id: Optional[str] = None) -> list:
     return [dict(r) for r in conn.execute(sql, params)]
 
 
-def current_card(conn, brand_id: Optional[str] = None) -> Optional[dict]:
+def current_card(conn, brand_id: str | None = None) -> dict | None:
     """頁頂「當前一件」：待辦清單依排序取第一筆，沒有就回 None（優雅缺席）。"""
     rows = list_open(conn, brand_id=brand_id)
     return rows[0] if rows else None

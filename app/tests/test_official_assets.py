@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_official_assets.py — 官方素材上傳／列表／刪除（issue #3）。
 
 驗收重點：上傳後品牌頁見縮圖、刪除即消失（檔案與資料列皆清）、跨品牌隔離、非圖檔被擋。

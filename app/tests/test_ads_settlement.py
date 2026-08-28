@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_ads_settlement.py — 結算版次＋判讀快照基建（GitHub issue #37）。
 
 驗收條件逐條對應：
@@ -14,7 +13,6 @@
 import unittest
 from datetime import date
 
-import pytest
 from fastapi.testclient import TestClient
 
 import app.main as main

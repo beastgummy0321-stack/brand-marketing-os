@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/dashboard/repository.py — 跨品牌總覽彙整（票 02-overview-cards，規格 0001）。
 
 接口鐵則：只透過各模組的公開查詢函式取數（app.brand_intelligence／app.orders／
@@ -9,7 +8,6 @@ calendar_dismiss.list_dismissed() 讀，不呼叫任一模組的寫入函式）�
 
 from calendar import monthrange
 from datetime import date
-from typing import Optional
 
 from app.ads import creative_pipeline as ads_creative_pipeline
 from app.ads import ga4_sync as ads_ga4_sync
@@ -25,8 +23,7 @@ from app.core import calendar_dismiss as core_calendar_dismiss
 from app.core import campaign_skip as core_campaign_skip
 from app.core import interrupts as core_interrupts
 from app.core import settings as core_settings
-from app.dashboard import campaign_calendar
-from app.dashboard import guide_cards
+from app.dashboard import campaign_calendar, guide_cards
 from app.dashboard.health import brand_health
 from app.intake import state as intake_state
 from app.orders import repository as orders_repo
@@ -57,7 +54,7 @@ def _revenue_and_mom(conn, brand_id: str, today: str) -> tuple:
         conn, brand_id, since=s, until=u, today=today)["net_revenue"])
 
 
-def _latest_cycle(conn, brand_id: str) -> Optional[dict]:
+def _latest_cycle(conn, brand_id: str) -> dict | None:
     """最新一期未封存的檔期（依 list_cycles 既有排序：start_date DESC）。沒有任何檔期就
     回 None——「還沒開過檔期」跟「這期沒在投放」是兩件事，但本票只做狀態呈現，
     細分留給 03／04。"""
@@ -65,7 +62,7 @@ def _latest_cycle(conn, brand_id: str) -> Optional[dict]:
     return cycles[0] if cycles else None
 
 
-def _cycle_summary(cycle: Optional[dict]) -> Optional[dict]:
+def _cycle_summary(cycle: dict | None) -> dict | None:
     if not cycle:
         return None
     return {
@@ -87,7 +84,7 @@ def _cycle_summary(cycle: Optional[dict]) -> Optional[dict]:
 # 隨測試「今天」調整，才需要這個縫讓純函數情境測試以外的整合測試可控。
 # ---------------------------------------------------------------------------
 
-def _cycle_stage_label(conn, brand_id: str, cycle: dict) -> Optional[str]:
+def _cycle_stage_label(conn, brand_id: str, cycle: dict) -> str | None:
     """stage_label 為 None＝已經在成效格（第 5 格），指南卡不算「卡住」。"""
     stage_index = derive_cycle_stage(conn, brand_id, cycle)
     return ads_stages.STAGE_LABELS[stage_index - 1] if stage_index < 5 else None
@@ -96,7 +93,7 @@ def _cycle_stage_label(conn, brand_id: str, cycle: dict) -> Optional[str]:
 _PACING_CATEGORIES = {"pacing_overspend": "overspend", "pacing_underspend": "underspend"}
 
 
-def _pacing_alert(conn, brand_id: str, today: str) -> Optional[dict]:
+def _pacing_alert(conn, brand_id: str, today: str) -> dict | None:
     """未結的 pacing 打斷事件轉成指南卡 facts（規格：pacing 警示是指南卡貨源之一）。
     list_open 已按嚴重度排序，取第一筆 pacing 類即可。"""
     rows = core_interrupts.list_open(conn, brand_id=brand_id, today=today, archive_stale=False)
@@ -115,8 +112,8 @@ def _pacing_alert(conn, brand_id: str, today: str) -> Optional[dict]:
 # 票 03-cycle-skip-record（ADR 0015）：next_calendar_reminder() 選中的那張提醒卡，
 # 若去年同一節日有跳過紀錄，附帶顯示去年的理由——純脈絡顯示，跟 app/ads/nextcycle.py
 # 下期建議引擎完全無關（這裡只讀 campaign_skip，不寫、不影響任何演算法輸入）。
-def _attach_last_year_skip(conn, brand_id: str, reminder: Optional[dict],
-                            events: list) -> Optional[dict]:
+def _attach_last_year_skip(conn, brand_id: str, reminder: dict | None,
+                            events: list) -> dict | None:
     if not reminder:
         return reminder
     event = next((e for e in events if e["id"] == reminder["id"]), None)
@@ -130,7 +127,7 @@ def _attach_last_year_skip(conn, brand_id: str, reminder: Optional[dict],
     return {**reminder, "last_year_skipped": True, "last_year_skip_reason": skip["reason"]}
 
 
-def _intake_draft_fact(conn, brand_id: str) -> Optional[dict]:
+def _intake_draft_fact(conn, brand_id: str) -> dict | None:
     """票 B3-intake：這個品牌有沒有進行中的建檔精靈草稿——只轉 guide_cards 卡片需要的
     兩個欄位（step／resume_path），續接判斷沿用 `app/intake/state.py` 的 `_resume_path`，
     這裡不重算。"""
@@ -140,7 +137,7 @@ def _intake_draft_fact(conn, brand_id: str) -> Optional[dict]:
     return {"step": draft["step"], "resume_path": draft["resume_path"]}
 
 
-def _guide_card_facts(conn, brand_id: str, cycle: Optional[dict], today: str, events: list) -> dict:
+def _guide_card_facts(conn, brand_id: str, cycle: dict | None, today: str, events: list) -> dict:
     pending_facts = bi_repo.list_brand_facts(conn, brand_id, status="pending")
     brand = bi_repo.get_brand(conn, brand_id)
     active_cycle = None
@@ -167,7 +164,7 @@ def _guide_card_facts(conn, brand_id: str, cycle: Optional[dict], today: str, ev
     }
 
 
-def _guide_cards(conn, brand_id: str, cycle: Optional[dict], today: str, events: list) -> list:
+def _guide_cards(conn, brand_id: str, cycle: dict | None, today: str, events: list) -> list:
     return guide_cards.build(_guide_card_facts(conn, brand_id, cycle, today, events))
 
 
@@ -190,7 +187,7 @@ def _brand_card(conn, brand: dict, today: str, events: list) -> dict:
     }
 
 
-def overview(conn, *, today: Optional[str] = None, calendar_events: Optional[list] = None) -> list:
+def overview(conn, *, today: str | None = None, calendar_events: list | None = None) -> list:
     today = today or date.today().isoformat()
     events = calendar_events if calendar_events is not None else campaign_calendar.load_events()
     brands = bi_repo.list_brands(conn, status="active")
@@ -231,7 +228,7 @@ def _fuel_gauge(conn, brand_id: str, today: str) -> dict:
         "limit": core_settings.get_intake_budget_limit(conn),
     }
 
-def _mom_pct(current, previous) -> Optional[float]:
+def _mom_pct(current, previous) -> float | None:
     """環比：current／previous 任一邊「沒得算」（None 或 0）就回 None，不硬除
     （鐵則 16，比照 `_revenue_and_mom`）。"""
     return round((current - previous) / previous * 100, 1) if current is not None and previous else None
@@ -241,7 +238,7 @@ def _spend_and_mom(conn, brand_id: str, today: str) -> tuple:
     return _and_mom(today, lambda s, u: ads_performance.brand_period_spend(conn, brand_id, s, u))
 
 
-def _roas(revenue: Optional[float], spend: Optional[float]) -> Optional[float]:
+def _roas(revenue: float | None, spend: float | None) -> float | None:
     """B0-01：ROAS＝同一期間的營收÷花費，不讀 derived_metric 的「最近一次判讀」（那個
     時間戳記的是判讀發生的時刻，不是資料涵蓋的期間，會撿到不相干檔期）。花費「沒得算」
     或是 0 都不能除（鐵則 16）。"""
@@ -297,7 +294,7 @@ def _monthly_trend(conn, brand_id: str, months: list) -> dict:
     return {"revenue": revenue, "spend": spend, "roas": roas, "orders": orders}
 
 
-def _cac(spend: Optional[float], orders: Optional[int]) -> Optional[float]:
+def _cac(spend: float | None, orders: int | None) -> float | None:
     """月報 CAC＝花費／訂單；沒有訂單時「沒得算」回 None。"""
     return round(spend / orders, 2) if spend is not None and orders else None
 
@@ -347,7 +344,7 @@ def monthly_report(conn, brand_id: str, month: str) -> dict:
 # 舊數字（規格 0001）。
 # ---------------------------------------------------------------------------
 
-def _last_sync_at(conn, brand_id: str) -> Optional[str]:
+def _last_sync_at(conn, brand_id: str) -> str | None:
     # BUG 修復（route=C 02-3c，牽連 app/dashboard/repository.py:364）：
     # last_snapshot_at() 現在誠實回傳 ISO 字串（見該函式的修復），但
     # get_sync_status()["synced_at"] 是 ga4_sync_status.synced_at（timestamptz）直接
@@ -361,7 +358,7 @@ def _last_sync_at(conn, brand_id: str) -> Optional[str]:
     return max(candidates) if candidates else None
 
 
-def _is_data_stale(last_sync_at: Optional[str], today: str) -> bool:
+def _is_data_stale(last_sync_at: str | None, today: str) -> bool:
     """從沒同步過，或最後一次同步不是今天，都算「數據可能過期」。
 
     ponytail: 用日期粒度比對（同步日期不是今天就算過期），不做到時分秒精算——本檔其餘
@@ -370,8 +367,8 @@ def _is_data_stale(last_sync_at: Optional[str], today: str) -> bool:
     return not last_sync_at or last_sync_at[:10] < today
 
 
-def cockpit(conn, brand_id: str, *, today: Optional[str] = None,
-            calendar_events: Optional[list] = None) -> dict:
+def cockpit(conn, brand_id: str, *, today: str | None = None,
+            calendar_events: list | None = None) -> dict:
     today = today or date.today().isoformat()
     events = calendar_events if calendar_events is not None else campaign_calendar.load_events()
     revenue, revenue_mom = _revenue_and_mom(conn, brand_id, today)

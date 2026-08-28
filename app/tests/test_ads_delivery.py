@@ -1,21 +1,19 @@
-# -*- coding: utf-8 -*-
 """T3 交付確認的未完成與人工確認防線。"""
 
 import json
 import re
 import unittest
 
-import pytest
 from fastapi.testclient import TestClient
 
 import app.main as main
-from app.ads import creative, delivery, handoff, repository as ads_repo
+from app.ads import delivery, handoff
+from app.ads import repository as ads_repo
 from app.ads import repository_channel_plan as channel_repo
 from app.ads import theme_repository as theme_repo
 from app.brand_intelligence import repository as bi
 from app.core import db
 from app.core.db import new_id, now_iso
-
 
 # 掃術語前先把 id 拿掉：id 是 Crockford Base32 亂數（app/core/db.py:30），
 # 「CPA」「CPC」「CTR」這些字母組合會隨機出現在 id 裡，讓這個斷言隨機變紅。

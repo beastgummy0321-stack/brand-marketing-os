@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_ads_qa_autocheck.py — 票 Q1-01：上線前 QA 五項提醒改真的打 Meta 查。
 
 一律用假 MCP client（monkeypatch `meta_mcp.call_tool`——`qa_autocheck.py` 只認這支公開
@@ -13,7 +12,6 @@ import shutil
 import tempfile
 import unittest
 from datetime import date, timedelta
-from pathlib import Path
 
 _tmpdir = tempfile.mkdtemp(prefix="brand_os_qa_autocheck_")
 
@@ -21,9 +19,11 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 import app.main as main  # noqa: E402
 from app.ads import handoff as ads_handoff  # noqa: E402
-from app.ads import meta_mcp  # noqa: E402
+from app.ads import (
+    meta_mcp,  # noqa: E402
+    qa_autocheck,  # noqa: E402
+)
 from app.ads import plan as ads_plan  # noqa: E402
-from app.ads import qa_autocheck  # noqa: E402
 from app.ads import theme_repository as theme_repo  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
 from app.llm.providers import FakeProvider, ProviderResponse, Usage  # noqa: E402

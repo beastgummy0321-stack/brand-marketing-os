@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/llm/providers.py — Provider 介面（供應商中立）＋兩個實作。
 
 見 docs/design/06-llm-gateway.md §5–6、docs/decisions/0003。
@@ -13,7 +12,7 @@ from __future__ import annotations
 import base64
 import contextvars
 from dataclasses import dataclass
-from typing import Optional, Protocol
+from typing import Protocol
 
 from app.core import settings
 from app.llm import pricing
@@ -126,9 +125,9 @@ def task_default_table() -> list:
 # 呼叫完立即清除。用 contextvar 而非模組全域變數，避免併發請求互相汙染——FastAPI
 # 同步路由會跑在各自的 worker thread，anyio 會把呼叫當下的 context 複製過去，
 # 因此同一個請求內設定、讀取都在同一份 context 副本上，彼此請求不會互相干擾。
-_model_override_var: "contextvars.ContextVar[Optional[str]]" = contextvars.ContextVar(
+_model_override_var: contextvars.ContextVar[str | None] = contextvars.ContextVar(
     "brand_os_model_override", default=None)
-_thinking_override_var: "contextvars.ContextVar[Optional[str]]" = contextvars.ContextVar(
+_thinking_override_var: contextvars.ContextVar[str | None] = contextvars.ContextVar(
     "brand_os_thinking_override", default=None)
 
 
@@ -142,11 +141,11 @@ class request_overrides:
     匯入 app.main 造成循環依賴。
     """
 
-    def __init__(self, model: Optional[str] = None, thinking: Optional[str] = None):
+    def __init__(self, model: str | None = None, thinking: str | None = None):
         self._model = model if model in pricing.PRICING else None
         self._thinking = thinking if thinking in THINKING_LEVEL_ORDER else None
 
-    def __enter__(self) -> "request_overrides":
+    def __enter__(self) -> request_overrides:
         self._model_token = _model_override_var.set(self._model)
         self._thinking_token = _thinking_override_var.set(self._thinking)
         return self
@@ -157,7 +156,7 @@ class request_overrides:
         return False
 
 
-def resolve_model(override: Optional[str] = None, task_type: Optional[str] = None,
+def resolve_model(override: str | None = None, task_type: str | None = None,
                   conn=None) -> str:
     """決定實際呼叫的模型，優先鏈：本次表單覆寫 > 任務預設 > 全域設定（票 #27）。
 
@@ -182,7 +181,7 @@ def resolve_model(override: Optional[str] = None, task_type: Optional[str] = Non
     return settings.DEFAULT_LLM_MODEL
 
 
-def resolve_thinking(override: Optional[str] = None, task_type: Optional[str] = None) -> str:
+def resolve_thinking(override: str | None = None, task_type: str | None = None) -> str:
     """決定實際使用的思考等級，優先鏈與 resolve_model 相同（票 #27）。
 
     非法值（不在五檔內）視同沒填，逐層退回，不噴錯（驗收 7）。
@@ -255,7 +254,7 @@ class ProviderResponse:
     """
 
     output_text: str
-    structured: Optional[dict]
+    structured: dict | None
     usage: Usage
     stop_reason: str
     raw: object = None
@@ -270,12 +269,12 @@ class Provider(Protocol):
         self,
         *,
         model: str,
-        system: Optional[str],
+        system: str | None,
         messages: list,
         max_tokens: int,
         timeout_s: float = 120.0,
-        effort: Optional[str] = None,
-        tools: Optional[list] = None,
+        effort: str | None = None,
+        tools: list | None = None,
     ) -> ProviderResponse: ...
 
 
@@ -300,12 +299,12 @@ class AnthropicProvider:
         self,
         *,
         model: str,
-        system: Optional[str],
+        system: str | None,
         messages: list,
         max_tokens: int,
         timeout_s: float = 120.0,
-        effort: Optional[str] = None,
-        tools: Optional[list] = None,
+        effort: str | None = None,
+        tools: list | None = None,
     ) -> ProviderResponse:
         # 金鑰檢查放在 SDK import 之前：沒金鑰時連套件都不需要，就能給出人話錯誤。
         api_key = settings.get_api_key()
@@ -414,8 +413,8 @@ class FakeProvider:
 
     def __init__(
         self,
-        response: Optional[ProviderResponse] = None,
-        exception: Optional[Exception] = None,
+        response: ProviderResponse | None = None,
+        exception: Exception | None = None,
         fail_first_n: int = 0,
     ):
         self.response = response or ProviderResponse(
@@ -432,12 +431,12 @@ class FakeProvider:
         self,
         *,
         model: str,
-        system: Optional[str],
+        system: str | None,
         messages: list,
         max_tokens: int,
         timeout_s: float = 120.0,
-        effort: Optional[str] = None,
-        tools: Optional[list] = None,
+        effort: str | None = None,
+        tools: list | None = None,
     ) -> ProviderResponse:
         call_no = len(self.calls) + 1
         self.calls.append(

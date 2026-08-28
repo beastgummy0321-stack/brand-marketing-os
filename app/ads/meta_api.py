@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/ads/meta_api.py — Meta 廣告 API 唯讀用戶端（票 9）。
 
 依票 1 的調研結論（docs/design/15-meta-api-access-findings.md）：
@@ -17,7 +16,6 @@ MCP，落在 `app/ads/meta_mcp.py`（票 M1-01），手填 ID 路徑保留為 MC
 """
 
 from dataclasses import dataclass
-from typing import Optional
 
 API_VERSION = "v21.0"
 BASE_URL = f"https://graph.facebook.com/{API_VERSION}"
@@ -38,8 +36,8 @@ class MetaApiError(Exception):
 class Campaign:
     campaign_id: str
     name: str
-    objective: Optional[str]
-    effective_status: Optional[str]
+    objective: str | None
+    effective_status: str | None
 
 
 @dataclass
@@ -47,8 +45,8 @@ class Insight:
     """一個廣告層級在一段期間的成效，已轉成內部統一格式的欄位名。"""
 
     campaign_id: str
-    adset_id: Optional[str]
-    ad_id: Optional[str]
+    adset_id: str | None
+    ad_id: str | None
     date_start: str
     date_stop: str
     impressions: int
@@ -58,12 +56,12 @@ class Insight:
     revenue: float
     # 已刪除／已封存的活動不會出現在 list_campaigns，只能靠這裡補名字
     # 供品牌猜測（issue #73）；Meta 官方欄位，insights 本來就抓得到。
-    campaign_name: Optional[str] = None
+    campaign_name: str | None = None
     # 觸及（不重複人數）＋頻率（平均每人看過幾次）：漏斗上層主指標＋素材疲勞判定要用
     # （票 03-add-reach-metric）。跟 impressions／clicks 不同，Meta 缺值時誠實回 None，
     # 不當 0——「沒收到」跟「確實是 0」是兩件事（鐵則 16）。
-    reach: Optional[int] = None
-    frequency: Optional[float] = None
+    reach: int | None = None
+    frequency: float | None = None
 
 
 def _normalise_account_id(account_id: str) -> str:
@@ -111,7 +109,7 @@ COMPONENT_BREAKDOWNS = ("body_asset", "title_asset", "description_asset")
 class MetaClient:
     """真的會發網路請求的用戶端。唯讀——本類別刻意沒有任何 POST／DELETE 方法。"""
 
-    def __init__(self, access_token: Optional[str]):
+    def __init__(self, access_token: str | None):
         self.access_token = (access_token or "").strip() or None
 
     def _get(self, path: str, params: dict) -> dict:
@@ -160,7 +158,7 @@ class MetaClient:
                          effective_status=r.get("effective_status")) for r in rows]
 
     def list_insights(self, account_id: str, since: str, until: str,
-                      breakdowns: Optional[tuple] = None, time_increment: int = 1) -> list:
+                      breakdowns: tuple | None = None, time_increment: int = 1) -> list:
         params = {
             "level": "ad", "time_range": f'{{"since":"{since}","until":"{until}"}}',
             "time_increment": time_increment,
@@ -249,7 +247,7 @@ class Pixel:
 
     pixel_id: str
     name: str
-    last_fired_time: Optional[str] = None
+    last_fired_time: str | None = None
 
 
 @dataclass
@@ -267,9 +265,9 @@ class ComponentBreakdownRow:
     spend: float
     conversions: float
     revenue: float
-    body_asset: Optional[dict] = None
-    title_asset: Optional[dict] = None
-    description_asset: Optional[dict] = None
+    body_asset: dict | None = None
+    title_asset: dict | None = None
+    description_asset: dict | None = None
 
 
 def parse_component_breakdown_row(row: dict) -> ComponentBreakdownRow:
@@ -297,7 +295,7 @@ def parse_component_breakdown_row(row: dict) -> ComponentBreakdownRow:
 class FakeMetaClient:
     """測試用：不發任何網路請求，回放注入的資料或拋出注入的錯誤。"""
 
-    def __init__(self, campaigns=None, insights=None, error: Optional[Exception] = None,
+    def __init__(self, campaigns=None, insights=None, error: Exception | None = None,
                 component_breakdowns=None, pixels=None):
         self._campaigns = campaigns or []
         self._insights = insights or []
@@ -313,7 +311,7 @@ class FakeMetaClient:
         return list(self._campaigns)
 
     def list_insights(self, account_id: str, since: str, until: str,
-                      breakdowns: Optional[tuple] = None, time_increment: int = 1) -> list:
+                      breakdowns: tuple | None = None, time_increment: int = 1) -> list:
         self.calls.append(("insights", account_id, since, until))
         if self.error:
             raise self.error

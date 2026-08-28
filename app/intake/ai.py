@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/intake/ai.py — 建檔精靈的三種真實 LLM 呼叫（初掃／下一題／貼回格式修復）。
 
 全部經 app/llm/gateway.run_task 進出（寫 llm_task、算成本、失敗重試一次），呼叫後

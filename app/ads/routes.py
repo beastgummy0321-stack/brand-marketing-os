@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/ads/routes.py — 廣告分支的頁面路由（匯總檔）。
 
 T4 廣告模組 Jinja 大清倉：舊頁 66 實頁已被 React 新殼取代，本票刪掉 25 處
@@ -43,9 +42,18 @@ app.orders.channel／dispatch／repository 模組。各主題檔要用時一律
 from fastapi import APIRouter
 
 from app.ads.routes_progress import (  # noqa: F401 — 原樣接回去給 `ads_routes.` 這套慣例用
-    _progress_state, _progress_lock, _USUAL_RANGE, _PROGRESS_TIMEOUT_SECONDS,
-    _progress_key, _progress_touch, _progress_start, _progress_run,
-    _progress_set_stage, _progress_clear, _progress_fail, _progress_definition_rows,
+    _PROGRESS_TIMEOUT_SECONDS,
+    _USUAL_RANGE,
+    _progress_clear,
+    _progress_definition_rows,
+    _progress_fail,
+    _progress_key,
+    _progress_lock,
+    _progress_run,
+    _progress_set_stage,
+    _progress_start,
+    _progress_state,
+    _progress_touch,
 )
 
 # 第 7 刀（A1 三層地界新規則：app/ads 不得 import app.orders，見
@@ -62,6 +70,7 @@ router = APIRouter()
 # （改走 routes_onboarding_api.py 的 /api 端點），router 空殼，include_router 保留純為
 # import 路徑不必改（比照 routes_creative.py 的先例）。
 from app.ads import routes_sync  # noqa: E402
+
 router.include_router(routes_sync.router)
 
 # T4：routes_connections.py（Pixel／GA4 教學頁、資料與連線頁、萬用匯入、把舊資料搬進來）
@@ -71,6 +80,7 @@ router.include_router(routes_sync.router)
 # T4 第 2 刀：routes_plan.py 僅剩的打法生成進度頁 `ads_plan_progress` 也已刪除（改走
 # routes_campaigns_open_api.py 的 plan/generate＋plan/status），router 空殼。
 from app.ads import routes_plan  # noqa: E402
+
 router.include_router(routes_plan.router)
 
 # T4：素材生成流程改走 routes_creative_theme.py／routes_workbench.py 的新殼機制，
@@ -80,30 +90,37 @@ router.include_router(routes_plan.router)
 # 清空後隨這一刀一併刪除，不再 include_router。T4 第 2 刀：routes_performance.py 僅剩的
 # 成效頁、CSV／手動匯入、判讀進度頁也已刪除（改直測 app/ads/performance.py／reading.py
 # 業務函式或 /api/campaigns/.../performance 端點），router 空殼。
-from app.ads import routes_creative  # noqa: E402
-from app.ads import routes_performance  # noqa: E402
+from app.ads import (
+    routes_creative,  # noqa: E402
+    routes_performance,  # noqa: E402
+)
+
 router.include_router(routes_creative.router)
 router.include_router(routes_performance.router)
 
 # 票 04-single-image-e2e：主題生成 JSON API，`/api/ads/...` 固定前綴，跟上面任何
 # `/brands/{brand_id}/ads/{cycle_id}` 萬用路由都不會撞（前綴完全不同），掛的順序不影響。
 from app.ads import routes_creative_theme  # noqa: E402
+
 router.include_router(routes_creative_theme.router)
 
 # 票 13-workbench-cards：素材工作檯任務卡衍生查詢，同樣固定 `/api/ads/...` 前綴，
 # 掛在 routes_creative_theme 之後即可（GENERATORS 需要它先 import 完成）。
 from app.ads import routes_workbench  # noqa: E402
+
 router.include_router(routes_workbench.router)
 
 # 票 01-quick-generate-endpoint：快速生成，固定 `/api/creative/...` 前綴（不落地，見該檔
 # 檔頭），跟上面 `/api/ads/...` 前綴不會撞，掛的順序不影響。
 from app.ads import routes_quick_generate  # noqa: E402
+
 router.include_router(routes_quick_generate.router)
 
 # 票 02-qa-reminder-reset：設定中心「廣告層面」詳細頁（規則卡＋上線前提醒），固定
 # `/settings/ads` 前綴，跟上面任何 `/brands/{brand_id}/ads/...` 路由都不會撞，掛的順序
 # 不影響。這頁本來在 app.brand_intelligence，搬過來的原因見該檔案頭註解。
 from app.ads import routes_settings  # noqa: E402
+
 router.include_router(routes_settings.router)
 
 # 票 B4-campaigns／B4-warroom 接線：S7 檔期清單＋S8 檔期作戰室 JSON API，固定
@@ -112,13 +129,16 @@ router.include_router(routes_settings.router)
 # `routes_campaigns_open_api` 用通用兩段式萬用路由（`/api/campaigns/{brand_id}/{cycle_id}`）
 # ——同樣是三段路徑，有真實品牌 id 恰好等於字面 "brands" 才會撞（理論上不會發生），
 # list_api 仍必須排在 open_api 之前註冊，先到先贏（見兩檔各自檔頭說明）。
-from app.ads import routes_campaigns_list_api  # noqa: E402
-from app.ads import routes_campaigns_open_api  # noqa: E402
-from app.ads import routes_campaigns_handoff_api  # noqa: E402
-from app.ads import routes_campaigns_delivery_api  # noqa: E402
-from app.ads import routes_campaigns_performance_api  # noqa: E402
-from app.ads import routes_tracking_api  # noqa: E402
-from app.ads import routes_weekly_proposals_api  # noqa: E402
+from app.ads import (
+    routes_campaigns_delivery_api,  # noqa: E402
+    routes_campaigns_handoff_api,  # noqa: E402
+    routes_campaigns_list_api,  # noqa: E402
+    routes_campaigns_open_api,  # noqa: E402
+    routes_campaigns_performance_api,  # noqa: E402
+    routes_tracking_api,  # noqa: E402
+    routes_weekly_proposals_api,  # noqa: E402
+)
+
 router.include_router(routes_campaigns_list_api.router)
 router.include_router(routes_campaigns_open_api.router)
 router.include_router(routes_campaigns_handoff_api.router)

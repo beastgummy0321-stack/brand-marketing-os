@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_brand_edit_industry.py — 品牌編輯頁的業種欄位（code-review 補票，ADR 0014）。
 
 `set_brand_industry()` 本身已有 repository 層測試（test_dashboard_campaign_calendar_wiring.py），

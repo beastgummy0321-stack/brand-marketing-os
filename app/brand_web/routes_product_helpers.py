@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/brand_web/routes_product_helpers.py — 產品調研共用工具（T4 刪除品牌／產品管理舊頁
 時搬出）。
 
@@ -11,15 +10,14 @@ AI 調研／再次調研／調研交接包貼回等）使用；那些 handler �
 進入點：本檔函式（純工具，不掛 router）。誰依賴：app/brand_web/routes_products.py。
 """
 
-from typing import Optional
 
 from app.brand_intelligence import product_ai
 from app.brand_intelligence import repository as repo
 from app.shared import web
 
 
-def _scan_budget_error(brand_id: str, cost: Optional[float] = None, action: str = "這次調研",
-                        fallback_hint: str = "或先用「新增這個產品」手動建立。") -> Optional[str]:
+def _scan_budget_error(brand_id: str, cost: float | None = None, action: str = "這次調研",
+                        fallback_hint: str = "或先用「新增這個產品」手動建立。") -> str | None:
     """產品快掃／再次調研／調研交接包貼回修復共用的超預算檢查，通過回 None。
 
     票 M2：核心檢查（已花費 + 這次預估 vs 上限，US$ 三個數字同一幣別直接比）搬進
@@ -33,7 +31,7 @@ def _scan_budget_error(brand_id: str, cost: Optional[float] = None, action: str 
 
 
 def _apply_product_scan_result(brand_id: str, product_id: str, actor: str,
-                                source_reference_id: Optional[str], result: dict) -> tuple:
+                                source_reference_id: str | None, result: dict) -> tuple:
     """把快掃／再次調研結果套進一個產品：跳過跟既有事實（不論 pending 或 confirmed）同 label
     的結果，避免重複堆積；價格有抓到且這個產品目前完全沒有經濟數字列時，才建一筆 pending。
     回傳 (新增事實數, 跳過事實數, 是否新建了待確認經濟數字)。"""

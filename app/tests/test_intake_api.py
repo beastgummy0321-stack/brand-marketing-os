@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_intake_api.py — 建檔精靈 JSON API（票 B3-intake 第二段前半）。
 
 見 app/intake/routes_api.py。全程用 FakeProvider（跟 test_intake.py 同風格），不發任何
@@ -11,15 +10,12 @@ import time
 import unittest
 from unittest import mock
 
-import pytest
-
 os.environ.setdefault("ANTHROPIC_API_KEY", "sk-ant-fake-intake-api-test")
 
 from fastapi.testclient import TestClient  # noqa: E402
 
 import app.main as main  # noqa: E402
 import app.shared.web as web  # noqa: E402
-from app.brand_intelligence import repository as bi_repo  # noqa: E402
 from app.core import interrupts as core_interrupts  # noqa: E402
 from app.intake import ai as intake_ai  # noqa: E402
 from app.intake import routes_api as api  # noqa: E402

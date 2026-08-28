@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/core/prototype_phase.py — 原型階段結束旗標（修憲落地 A6，決策 0037 第一節）。
 
 「原型階段」＝第一次用真錢跑完一期即結束（決策 0037 第 1 條，使用者 2026-08-03 裁決）。
@@ -10,7 +9,6 @@
 直接砍掉對應項目，不要留著假裝還沒決定過。
 """
 
-from typing import Optional
 
 from app.core import interrupts as core_interrupts
 from app.core import settings as core_settings
@@ -55,7 +53,7 @@ def has_ended(conn) -> bool:
 
 
 def check_and_flag(conn, *, actual_spend: float, actor: str,
-                   cycle_id: Optional[str] = None) -> bool:
+                   cycle_id: str | None = None) -> bool:
     """檔期結算完成時呼叫（app/ads/reading.finalize()）。已經結束過就什麼都不做；
     第一次「結算完成且實際花費 > 0」才設旗標、寫稽核紀錄、進打斷佇列。
 

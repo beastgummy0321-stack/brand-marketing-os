@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_ads_reading_verdict.py — 票 10-split-reading-py：判讀結論周邊純函數測試。
 
 從 app/tests/test_ads_reading.py 搬過來，原樣不改——鏡射 app/ads/reading_verdict.py

@@ -7,11 +7,9 @@
 
 ## 里程碑（2026-08-28 grill 定案）：第一段 $0——整套在本機 `supabase start` 跑通、用真品牌（建檔精靈重建）跑一期廣告閉環；第二段才推免費層雲端。看板順序＝執行順序。
 
-## 第 ② 片：資料層一次翻（ADR 0027；saas 分支；票在 .scratch/saas/tickets/）
+## 第 ② 片：資料層一次翻（ADR 0027；saas 分支；票在 .scratch/saas/tickets/）——02-1～02-5 完成；收工前：`supabase db reset` 套 RLS 到 public＋全套一次
 
-- [ ] 02-3c（審查中）修 02-4 標出的產品程式 BUG：WIP 檢查點 `b1cd66a`（xfail 680→3、全套 20 敗）；收尾中，目標 0 敗 0 xfail
-- [ ] 02-5 三條機器閘門：每表必有 org_id／migration 只 CREATE 自己前綴／零 sqlite 殘留（各紅過一次）；全部表 `ENABLE ROW LEVEL SECURITY` 不寫 policy；pytest 以 `anon` 角色連線斷言被拒（取代 pgTAP）
-- [ ] 02-7 工具鏈一次裝（ADR 0027 附錄 A，停一天）：uv＋pyproject＋uv.lock、Ruff、Pyright basic＋凍結清單、GitHub Actions CI（lint／typecheck／受影響測試／build／架構閘門；主線全套）、Dependabot／CodeQL／Secret scanning／branch protection
+- [>] 02-7 工具鏈一次裝（ADR 0027 附錄 A，停一天）：uv＋pyproject＋uv.lock、Ruff、Pyright basic＋凍結清單、GitHub Actions CI（lint／typecheck／受影響測試／build／架構閘門；主線全套）、Dependabot／CodeQL／Secret scanning／branch protection
 
 ## 第 ③ 片：身分（需批准：schema＋權限）
 

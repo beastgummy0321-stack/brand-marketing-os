@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_ads_learnings.py — 累積智慧頁（三段＋停用規則函式，GitHub issue #56）。
 驗收條件（票 #56）：
 - 新 route `/brands/{brand_id}/ads/learnings`，註冊位置早於 `/ads/{cycle_id}` 萬用路由。
@@ -11,14 +10,11 @@
 
 import unittest
 
-import pytest
 from fastapi.testclient import TestClient
 
 import app.main as main
-from app.ads import nextcycle
+from app.ads import nextcycle, reading, reading_hypotheses
 from app.ads import performance as perf
-from app.ads import reading
-from app.ads import reading_hypotheses
 from app.ads import repository as ads_repo
 from app.brand_intelligence import repository as bi_repo
 from app.core import db, rule_cards

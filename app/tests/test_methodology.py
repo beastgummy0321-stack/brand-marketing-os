@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_methodology.py — 方法論載入器（票 11）。
 
 驗對照表解析、缺檔優雅缺席＋稽核紀錄、改對照表後行為跟著變（程式不寫死清單）。
@@ -12,8 +11,7 @@ from datetime import date
 from pathlib import Path
 
 from app.brand_intelligence import repository as repo
-from app.core import db
-from app.core import vocab
+from app.core import db, vocab
 from app.llm import methodology
 
 REPO_ROOT = Path(__file__).resolve().parents[2]

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_proposal_approve_progress.py — 票 13：核可提案書不能凍住、不能不告知
 花費（`.scratch/adloop/tickets/13-approve-must-not-block-or-surprise.md`）。
 
@@ -32,20 +31,20 @@ import threading
 import time
 import unittest
 
-import pytest
-
 _tmpdir = tempfile.mkdtemp(prefix="brand_os_proposal_approve_progress_")
 
 from fastapi.testclient import TestClient  # noqa: E402
 
 import app.main as main  # noqa: E402
-from app.ads import nextcycle  # noqa: E402
-from app.ads import proposal  # noqa: E402
+from app.ads import (
+    nextcycle,  # noqa: E402
+    proposal,  # noqa: E402
+    theme_batch,  # noqa: E402
+    theme_engine,  # noqa: E402
+    theme_feedback,  # noqa: E402
+)
 from app.ads import repository as ads_repo  # noqa: E402
 from app.ads import routes as ads_routes  # noqa: E402
-from app.ads import theme_batch  # noqa: E402
-from app.ads import theme_engine  # noqa: E402
-from app.ads import theme_feedback  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
 from app.core.db import DEV_ORG_ID, new_id, now_iso  # noqa: E402
 from app.llm import pricing, providers  # noqa: E402

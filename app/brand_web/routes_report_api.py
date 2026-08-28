@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """顧問分析報告的 React JSON API 與背景生成工作。
 
 對外進入點：本檔的 router、active_jobs()。
@@ -8,18 +7,16 @@ active_jobs() 回六欄背景工作列。
 不碰什麼：不 import app.brand_web.routes，不修改舊 Jinja 路由或 app.brand_intelligence.report。
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, HTTPException, Request
-from app.shared.web import JSONResponse
 
 from app.brand_intelligence import background_job
 from app.brand_intelligence import repository as repo
+from app.brand_web import report_service
 from app.core.db import new_id
 from app.shared import web
-from app.shared.web import NotFoundKind, require_actor, require_brand
-from app.brand_web import report_service
-
+from app.shared.web import JSONResponse, NotFoundKind, require_actor, require_brand
 
 router = APIRouter()
 _report_jobs = background_job.JobRegistry()
@@ -96,7 +93,7 @@ def _run_report(brand_id: str, actor: str) -> None:
     except Exception as exc:  # noqa: BLE001 — 背景執行緒不可讓例外憑空消失
         ok, message = False, f"背景執行發生未預期錯誤：{exc}"
 
-    started_at = _job_state(brand_id).get("started_at", datetime.now(timezone.utc).isoformat())
+    started_at = _job_state(brand_id).get("started_at", datetime.now(UTC).isoformat())
     if ok:
         _notify(brand_id, "顧問分析報告已生成。")
         _report_jobs.set(brand_id, {
@@ -134,7 +131,7 @@ async def report_generate(request: Request, brand_id: str):
     if report_service.recent(brand_id):
         raise HTTPException(status_code=400, detail="剛剛才生成過，兩分鐘後再試。")
 
-    started_at = datetime.now(timezone.utc).isoformat()
+    started_at = datetime.now(UTC).isoformat()
     _report_jobs.start(
         brand_id,
         {"status": "running", "stage": "正在整理五章", "started_at": started_at, "brand_id": brand_id},

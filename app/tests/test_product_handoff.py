@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_product_handoff.py — 產品調研交接包（GitHub issue #7）。
 
 見產品交接 API（GET／POST）、app/intake/ai.py 的
@@ -16,10 +15,14 @@ from fastapi.testclient import TestClient
 import app.main as main
 import app.shared.web as web
 from app.brand_intelligence import repository as bi_repo
-from app.core import settings as coresettings
 from app.brand_web import product_ai_calls as product_ai
+from app.core import settings as coresettings
 from app.llm.providers import (
-    MISSING_KEY_MESSAGE, AnthropicProvider, FakeProvider, ProviderResponse, Usage,
+    MISSING_KEY_MESSAGE,
+    AnthropicProvider,
+    FakeProvider,
+    ProviderResponse,
+    Usage,
 )
 
 ACTOR = "測試員"

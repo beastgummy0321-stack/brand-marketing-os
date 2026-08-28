@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_ads_performance_dedupe_attribution.py — 票 11：檔期層去重與產品歸因。
 
 獨立成檔而不是塞進 test_ads_performance.py：那個檔案已經頂到單檔行數上限（見
@@ -7,15 +6,12 @@ test_architecture_boundaries.py 的 FILE_LINE_CAP），加這兩個類別會超�
 （比照 test_ads_sync_product_attribution.py 借用 test_ads_sync 夾具的先例）。
 """
 
-import pytest
 
 import app.main as main  # noqa: E402
 from app.ads import performance as perf  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
 from app.core import db  # noqa: E402
-from app.tests.test_ads_performance import ACTOR, _CSV_ZH, _BaseImportTest  # noqa: E402
-
-
+from app.tests.test_ads_performance import _CSV_ZH, ACTOR, _BaseImportTest  # noqa: E402
 
 
 class CycleLevelDuplicateImportTest(_BaseImportTest):

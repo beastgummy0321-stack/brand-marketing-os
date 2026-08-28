@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_settle_now_and_batches.py — 票 S1-01：檔期「現在結算」＋匯入整批撤銷
 （`.scratch/s1/issues/01-settle-now-and-batch-undo.md`）。
 
@@ -12,15 +11,11 @@ that always returns `{"text": "..."}` — the only shape every LLM call site in 
 import json
 import unittest
 
-import pytest
-
 import app.main as main
 from app.ads import performance as perf
 from app.ads import reading
 from app.llm.providers import FakeProvider, ProviderResponse, Usage
-from app.tests.test_ads_performance import ACTOR, _CSV_ZH, _BaseImportTest
-
-
+from app.tests.test_ads_performance import _CSV_ZH, ACTOR, _BaseImportTest
 
 _CSV_LATE = """行銷活動名稱,報告開始,報告結束,花費金額 (TWD),購買次數,購買轉換價值
 晚到訂單,2026-07-01,2026-07-14,0,3,"2,790"

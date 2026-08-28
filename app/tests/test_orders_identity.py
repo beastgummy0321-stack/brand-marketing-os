@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_orders_identity.py — 訂單票（issue #33）：顧客單向雜湊正規化。"""
 
 import unittest

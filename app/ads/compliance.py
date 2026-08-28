@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/ads/compliance.py — 素材輸出前的法務掃描（票 7）。
 
 廣告分支第一次真正引用品牌智庫的**限制層**：拿 claim（宣稱）與 rule（限制規則）
@@ -32,15 +31,14 @@
 """
 
 import re
-from typing import Optional
 
-from app.brand_intelligence import compliance_wordlist
 from app.ads import creative as ads_creative
 from app.ads import fingerprint as fp
 from app.ads import guardrails
+from app.brand_intelligence import compliance_wordlist
 from app.brand_intelligence import repository as bi
 from app.core.audit import write_audit
-from app.core.db import new_id, now_utc, jsonb, DEV_ORG_ID
+from app.core.db import DEV_ORG_ID, jsonb, new_id, now_utc
 
 # 中文與英文常見的引號形式，抽「規則裡被特別標出來的字詞」用。
 _QUOTE_PATTERN = re.compile(r"[「『\"'“”]([^「」『』\"'“”]{1,20})[」』\"'“”]")
@@ -79,8 +77,8 @@ def extract_terms(text: str) -> list:
     return []
 
 
-def _sources(conn, brand_id: str, product_id: Optional[str] = None,
-             gaps: Optional[list] = None) -> list:
+def _sources(conn, brand_id: str, product_id: str | None = None,
+             gaps: list | None = None) -> list:
     """要比對的來源清單：(terms, severity, 人話標籤, 出處說明, 來源 id, 來源分類)。
 
     來源分類（`source_category`）三選一：`"law"`＝內建法定詞庫、`"platform"`＝平台政策
@@ -240,7 +238,7 @@ _UNBACKED_CLAIM_SOURCES = [
 ]
 
 
-def _backing_texts(conn, brand_id: str, product_id: Optional[str] = None) -> list:
+def _backing_texts(conn, brand_id: str, product_id: str | None = None) -> list:
     """D3：能佐證一句宣稱的文字——已核准的宣稱（`claim.claim_type == "approved"`）
     ＋已確認的品牌／產品事實（`brand_fact`／`product_fact` 的 `status == "confirmed"`）。
     有品牌做過功課、登記了佐證，這句話就不該被當成無中生有。
@@ -346,7 +344,7 @@ SELLING_POINT_LAW_NOTES = {
 }
 
 
-def selling_point_law_finding(variant: dict) -> Optional[guardrails.Finding]:
+def selling_point_law_finding(variant: dict) -> guardrails.Finding | None:
     """`efficacy`／`safety` 兩個賣點值的法規提醒（見 SELLING_POINT_LAW_NOTES 註解）。
     不比對字詞、只認指紋——選了這個賣點就一律附提醒，不管內容寫得多小心。
 
@@ -486,7 +484,7 @@ COMPONENT_TYPE_LABELS = {
 
 
 def scan_components(conn, brand_id: str, components: list, *,
-                    product_id: Optional[str] = None) -> dict:
+                    product_id: str | None = None) -> dict:
     """一批生成中的主題／快速生成元件逐則掃描，回傳 `{key: [hit, ...]}`——`key` 是元件的
     `id`（有的話），沒有 `id`（快速生成不落地，元件沒有 DB 主鍵）就用它在輸入清單裡的索引
     （int）。只有命中至少一則的元件才會出現在回傳的 dict 裡。

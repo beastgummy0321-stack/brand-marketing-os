@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_real_db_schema_drift.py — 真實 Postgres 跟全新 migrate 出來的 schema 差在哪。
 
 02-4 前身（SQLite 版）：比對「一路用了很久的 data/app.db」跟「全新 migrate 出來的暫存

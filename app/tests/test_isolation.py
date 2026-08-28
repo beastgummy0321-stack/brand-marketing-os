@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_isolation.py — 品牌隔離必備測試：任何查詢絕不出現另一品牌的任何一列。
 
 見 docs/design/03-data-model.md §7.6、build.md §14.7／§25.2。

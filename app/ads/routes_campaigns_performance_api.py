@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/ads/routes_campaigns_performance_api.py — S8 成效＋覆盤 JSON API（票 B4-warroom 接線，
 契約 `.scratch/grill/GRILL-B4-warroom.md`＋`GRILL-B4R-performance.md`，型別逐欄對照
 `frontend/src/lib/warroomApi.ts`）。
@@ -9,34 +8,30 @@
 對外進入點：本檔的 `router`。誰依賴它：只有 `app/ads/routes.py`。
 """
 
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 
 from fastapi import APIRouter, File, Request, UploadFile
-from app.shared.web import JSONResponse
 
 import app.shared.web as main_mod
 from app.ads import bottleneck as ads_bottleneck
 from app.ads import codes as ads_codes
 from app.ads import health_lights as ads_health_lights
-from app.ads import nextcycle
+from app.ads import nextcycle, performance_batches, simulation, target_cpa, weekly_proposals
 from app.ads import pacing as ads_pacing
 from app.ads import performance as ads_performance
-from app.ads import performance_batches
 from app.ads import reading as ads_reading
 from app.ads import repository as ads_repo
 from app.ads import settlement as ads_settlement
-from app.ads import simulation
-from app.ads import target_cpa
-from app.ads import weekly_proposals
 from app.ads.routes_common import OBJECTIVE_LABELS, _require_cycle
 from app.brand_intelligence.repository_learning_text import collapse_learnings
 from app.core import rule_cards
+from app.shared.web import JSONResponse
 
 router = APIRouter()
 
 
 def _envelope(data) -> dict:
-    return {"data": data, "generated_at": datetime.now(timezone.utc).isoformat()}
+    return {"data": data, "generated_at": datetime.now(UTC).isoformat()}
 
 
 def _error(status_code: int, message: str) -> JSONResponse:

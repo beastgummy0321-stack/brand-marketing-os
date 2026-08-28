@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """T3 提案書組裝、核可與開檔管道計畫的可判定驗收。"""
 
 import atexit
@@ -11,15 +10,16 @@ from unittest import mock
 
 _tmpdir = tempfile.mkdtemp(prefix="brand_os_proposal_")
 
-import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
 import app.main as main  # noqa: E402
-from app.ads import proposal  # noqa: E402
 from app.ads import plan as ads_plan  # noqa: E402
+from app.ads import (
+    proposal,  # noqa: E402
+    theme_repository,  # noqa: E402
+)
 from app.ads import repository as ads_repo  # noqa: E402
 from app.ads import repository_channel_plan as channel_repo  # noqa: E402
-from app.ads import theme_repository  # noqa: E402
 from app.ads import tracking as ads_tracking  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
 from app.core import db as coredb  # noqa: E402

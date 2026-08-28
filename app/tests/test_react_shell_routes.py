@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_react_shell_routes.py — 票 05-spa-routing 機器驗收：新殼子路徑
 （品牌駕駛艙等）直接貼網址／重新整理不能 404，後端 `/app` StaticFiles 掛載要接住
 react-router 接手的子路徑，退回 index.html（見 app/main.py `_SpaStaticFiles`）。
@@ -14,7 +13,6 @@ from fastapi.testclient import TestClient
 
 import app.main as main
 from app.shared import web
-
 
 _FRONTEND_DIST = web.BASE_DIR.parent / "frontend" / "dist"
 

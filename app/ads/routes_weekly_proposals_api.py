@@ -1,22 +1,19 @@
-# -*- coding: utf-8 -*-
 """週提案 JSON API：舊檔期端點與 T1 品牌層行動卡端點。"""
 
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Request
-from app.shared.web import JSONResponse
 
 import app.shared.web as main_mod
 from app.ads import reading as ads_reading
-from app.ads import reading_settlement
+from app.ads import reading_settlement, weekly_proposals, weekly_reports
 from app.ads import repository as ads_repo
 from app.ads import routes as ads_routes
-from app.ads import weekly_reports
-from app.ads import weekly_proposals
 from app.ads.routes_common import _require_cycle
 from app.core import interrupts as core_interrupts
 from app.core.db import new_id
+from app.shared.web import JSONResponse
 
 router = APIRouter()
 
@@ -24,7 +21,7 @@ _REJUDGE_STAGES = [("weekly_reading", "判讀本週資料")]
 
 
 def _envelope(data) -> dict:
-    return {"data": data, "generated_at": datetime.now(timezone.utc).isoformat()}
+    return {"data": data, "generated_at": datetime.now(UTC).isoformat()}
 
 
 def _error(status_code: int, message: str) -> JSONResponse:

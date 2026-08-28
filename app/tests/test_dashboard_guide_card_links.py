@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_dashboard_guide_card_links.py — 指南卡按鈕不得指向不存在的頁面。
 
 為什麼要有這支：test_dashboard_guide_cards.py 斷言的是「程式產出的網址字串 ==

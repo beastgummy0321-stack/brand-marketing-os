@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/shared/web.py — 全站共用的 web 工具（修憲落地 A4）。
 
 從 app/main.py 拆出：原本 87 條品牌智庫業務路由跟 app/ads、app/orders、app/intake
@@ -26,10 +25,9 @@ request／工作綁定的那條連線），所以不需要、也沒有「重開�
 """
 
 import json
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
-from typing import Optional
 from urllib.parse import urlencode
 
 from fastapi import Request
@@ -37,10 +35,10 @@ from fastapi.responses import JSONResponse as _FastAPIJSONResponse
 from fastapi.responses import RedirectResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from app.core import vocab as md
 from app.brand_intelligence import repository as repo
 from app.core import db as coredb
 from app.core import interrupts as core_interrupts
+from app.core import vocab as md
 
 BASE_DIR = Path(__file__).resolve().parent.parent  # .../app
 
@@ -115,7 +113,7 @@ def pending_product_layer_count(brand_id: str) -> int:
     return repo.count_pending_product_layer(conn, brand_id)
 
 
-def scope_label(brand_id: str, product_id: Optional[str]) -> str:
+def scope_label(brand_id: str, product_id: str | None) -> str:
     """畫面用語：適用範圍＝整個品牌 / 具體產品名稱（DESIGN.md §12.2）。"""
     if not product_id:
         return "整個品牌"
@@ -127,8 +125,8 @@ def relative_time(value) -> str:
     """§12.1 規則 7：今天／昨天／N 天前／N 週前，超過 30 天改絕對日期。"""
     dt = value if isinstance(value, datetime) else datetime.fromisoformat(value)
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    days = (datetime.now(timezone.utc) - dt).days
+        dt = dt.replace(tzinfo=UTC)
+    days = (datetime.now(UTC) - dt).days
     if days <= 0:
         return "今天"
     if days == 1:
@@ -143,7 +141,7 @@ def relative_time(value) -> str:
 FACT_STALE_DAYS = 180  # 事實鮮度門檻（天）：確認超過這麼久沒重新調研就提示過期，之後想調整只改這個數字
 
 
-def fact_staleness(fact: dict) -> Optional[str]:
+def fact_staleness(fact: dict) -> str | None:
     """confirmed 事實若確認時間超過 FACT_STALE_DAYS，回傳「上次確認 N 個月前」；
     pending 事實或未過門檻一律回傳 None（issue #5：純顯示，不動資料）。"""
     if fact.get("status") != "confirmed" or not fact.get("confirmed_at"):
@@ -152,8 +150,8 @@ def fact_staleness(fact: dict) -> Optional[str]:
     if not isinstance(confirmed_at, datetime):
         confirmed_at = datetime.fromisoformat(confirmed_at)
     if confirmed_at.tzinfo is None:
-        confirmed_at = confirmed_at.replace(tzinfo=timezone.utc)
-    days = (datetime.now(timezone.utc) - confirmed_at).days
+        confirmed_at = confirmed_at.replace(tzinfo=UTC)
+    days = (datetime.now(UTC) - confirmed_at).days
     if days <= FACT_STALE_DAYS:
         return None
     return f"上次確認 {days // 30} 個月前"
@@ -162,14 +160,14 @@ def fact_staleness(fact: dict) -> Optional[str]:
 REPORT_STALE_DAYS = 90  # 顧問報告鮮度門檻（天，決策 0017）：超過就提示重新生成，之後想調整只改這個數字
 
 
-def report_staleness(report: dict) -> Optional[str]:
+def report_staleness(report: dict) -> str | None:
     """report 超過 REPORT_STALE_DAYS 天沒重新生成時，回傳過期提示字串；未過門檻回 None。"""
     generated_at = report["generated_at"]
     if not isinstance(generated_at, datetime):
         generated_at = datetime.fromisoformat(generated_at)
     if generated_at.tzinfo is None:
-        generated_at = generated_at.replace(tzinfo=timezone.utc)
-    days = (datetime.now(timezone.utc) - generated_at).days
+        generated_at = generated_at.replace(tzinfo=UTC)
+    days = (datetime.now(UTC) - generated_at).days
     if days <= REPORT_STALE_DAYS:
         return None
     return f"這份報告已經是 {days} 天前生成的，市場與競爭觀察那一章可能過時了，建議重新生成。"
@@ -268,7 +266,7 @@ def banner_ctx(request: Request):
 
 
 def redirect_with_message(path: str, msg: str, kind: str = "ok",
-                           anchor: Optional[str] = None, again: Optional[str] = None):
+                           anchor: str | None = None, again: str | None = None):
     params = {"kind": kind, "msg": msg}
     if again:
         params["again"] = again
@@ -278,7 +276,7 @@ def redirect_with_message(path: str, msg: str, kind: str = "ok",
     return RedirectResponse(url, status_code=303)
 
 
-def parse_number(raw: Optional[str]):
+def parse_number(raw: str | None):
     """回傳 (value, ok)。空字串視為 None（選填欄位合法留空）。"""
     if raw is None or raw.strip() == "":
         return None, True
@@ -288,5 +286,5 @@ def parse_number(raw: Optional[str]):
         return None, False
 
 
-def clean(raw: Optional[str]) -> str:
+def clean(raw: str | None) -> str:
     return (raw or "").strip()

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/ads/routes_campaigns_list_api.py — S7 檔期清單 JSON API（票 B4-campaigns 接線，
 契約 `.scratch/grill/GRILL-B4-campaigns.md`，型別逐欄對照 `frontend/src/lib/campaignsApi.ts`）。
 
@@ -11,21 +10,28 @@
 對外進入點：本檔的 `router`。誰依賴它：只有 `app/ads/routes.py`。
 """
 
+from datetime import UTC
+
 from fastapi import APIRouter, Request
-from app.shared.web import JSONResponse
 
 import app.shared.web as main_mod
 from app.ads import interview as ads_interview
 from app.ads import repository as ads_repo
-from app.ads.routes_common import _closed_cycle_reading, _cycle_view, _history_trend_rows, _hub_stage_info
+from app.ads.routes_common import (
+    _closed_cycle_reading,
+    _cycle_view,
+    _history_trend_rows,
+    _hub_stage_info,
+)
 from app.core.creative_assets import delete_folder as _delete_creative_folder
+from app.shared.web import JSONResponse
 
 router = APIRouter()
 
 
 def _envelope(data) -> dict:
-    from datetime import datetime, timezone
-    return {"data": data, "generated_at": datetime.now(timezone.utc).isoformat()}
+    from datetime import datetime
+    return {"data": data, "generated_at": datetime.now(UTC).isoformat()}
 
 
 def _error(status_code: int, message: str) -> JSONResponse:

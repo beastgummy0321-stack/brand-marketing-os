@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_carousel_theme.py — 輪播主題端到端（票 07-carousel-theme）。
 
 接縫一（引擎門口，app/ads/theme_engine.py generate_carousel_theme）：假簡報進 → 驗
@@ -11,30 +10,30 @@ JSON 回應與存檔路徑跟單圖共用。全程 FakeProvider，不發任何�
 import atexit
 import inspect
 import json
-import os
 import shutil
 import tempfile
 import unittest
 from pathlib import Path
-
-import pytest
 
 _tmpdir = tempfile.mkdtemp(prefix="brand_os_carousel_theme_")
 
 from fastapi.testclient import TestClient  # noqa: E402
 
 import app.main as main  # noqa: E402
-from app.ads import brief_assembler  # noqa: E402
+from app.ads import (
+    brief_assembler,  # noqa: E402
+    theme_engine,  # noqa: E402
+)
 from app.ads import repository as ads_repo  # noqa: E402
-from app.ads import theme_engine  # noqa: E402
 from app.ads import theme_repository as theme_repo  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
-from app.core import creative_assets  # noqa: E402
-from app.core import db  # noqa: E402
+from app.core import (
+    creative_assets,  # noqa: E402
+    db,  # noqa: E402
+)
 from app.core import settings as coresettings  # noqa: E402
 from app.creative.format_specs import FORMAT_SPECS  # noqa: E402
 from app.llm.providers import FakeProvider, ProviderResponse, Usage  # noqa: E402
-
 
 ROOT = Path(_tmpdir) / "creative"
 

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_ads_data_migration.py — F7：把舊資料搬進來（決策 0039 第一節，GitHub #66）。
 
 四格狀態、部分基線小結、成熟門檻報告全部從既有資料查詢推導（app/ads/data_onboarding.py），
@@ -10,18 +9,14 @@ fixture 一律虛構品牌，嚴禁真實品牌名稱。
 """
 
 import atexit
-import os
 import shutil
 import tempfile
 import unittest
 from datetime import date, timedelta
-from pathlib import Path
 
 _tmpdir = tempfile.mkdtemp(prefix="brand_os_ads_data_migration_")
 
 from fastapi.testclient import TestClient  # noqa: E402
-
-import pytest  # noqa: E402
 
 import app.main as main  # noqa: E402
 from app.ads import data_onboarding  # noqa: E402
@@ -29,8 +24,6 @@ from app.ads import performance as ads_performance  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
 from app.core import db as coredb  # noqa: E402
 from app.core.db import new_id, now_utc  # noqa: E402
-
-
 
 ACTOR = "測試員"
 TODAY = "2026-08-04"

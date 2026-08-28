@@ -1,25 +1,22 @@
-# -*- coding: utf-8 -*-
 """T2 建檔精靈後端 API；由 routes_api.router 掛載，不碰 app/main.py。"""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Request
 from fastapi.responses import Response
 
 from app.brand_intelligence import personas
-from app.intake import ai, persona_generation
+from app.intake import ai, persona_generation, state, truth_card
 from app.intake import repository as ir
-from app.intake import state, truth_card
 from app.shared import web
 from app.shared.web import JSONResponse, require_brand
-
 
 router = APIRouter()
 CONFIRMED_BY = "使用者"
 
 
 def _envelope(data) -> dict:
-    return {"data": data, "generated_at": datetime.now(timezone.utc).isoformat()}
+    return {"data": data, "generated_at": datetime.now(UTC).isoformat()}
 
 
 def _error(status_code: int, message: str) -> JSONResponse:

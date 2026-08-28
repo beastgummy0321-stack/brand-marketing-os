@@ -1,15 +1,13 @@
-# -*- coding: utf-8 -*-
 """R5/R6：短碼反解、追蹤鏈、告警與前端契約端點。全程假用戶端。"""
 
-import json
 import unittest
 from unittest import mock
 
-import pytest
 from fastapi.testclient import TestClient
 
 import app.main as main
-from app.ads import handoff, meta_api, sync as ads_sync, tracking
+from app.ads import handoff, meta_api, tracking
+from app.ads import sync as ads_sync
 from app.brand_intelligence import repository as bi_repo
 from app.core import db
 from app.core import interrupts as core_interrupts

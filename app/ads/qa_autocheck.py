@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/ads/qa_autocheck.py — 上線前 QA 五項提醒的系統覆核（票 Q1-01，補完 ADR 0016 §1「日後升級」）。
 
 2026-08-24 對使用者真實帳號 368741390835357 實測，證實五項全部讀得到，所以這裡把原本
@@ -19,7 +18,6 @@ import json
 import re
 import time
 from datetime import date
-from typing import Optional
 
 from app.ads import checklist as ads_checklist
 from app.ads import handoff as ads_handoff
@@ -69,7 +67,7 @@ def _probe_url(url: str) -> bool:
 # 廣告組合配對（受眾排除／預算覆核共用同一次配對結果）。
 # ---------------------------------------------------------------------------
 
-def _fetch_datasets(account_id: str) -> "tuple[list, Optional[str]]":
+def _fetch_datasets(account_id: str) -> "tuple[list, str | None]":
     try:
         result = meta_mcp.call_tool("ads_get_datasets", {"ad_account_id": account_id})
     except Exception as exc:  # noqa: BLE001 — 對外呼叫一律不穿牆
@@ -92,7 +90,7 @@ def _dedupe_datasets(datasets: list) -> dict:
     return best
 
 
-def _fetch_entities(account_id: str, level: str, fields: list) -> "tuple[list, Optional[str]]":
+def _fetch_entities(account_id: str, level: str, fields: list) -> "tuple[list, str | None]":
     try:
         result = meta_mcp.call_tool("ads_get_ad_entities",
                                     {"ad_account_id": account_id, "level": level, "fields": fields})
@@ -108,7 +106,7 @@ def _fetch_entities(account_id: str, level: str, fields: list) -> "tuple[list, O
 
 
 def _match_adsets(conn, brand_id: str, cycle_id: str, packages: list,
-                  account_id: str) -> "tuple[list, Optional[str]]":
+                  account_id: str) -> "tuple[list, str | None]":
     """把交接包配對到 Meta 的廣告組合（配對規則見票面「Matching packages to Meta adsets」）：
     有 `external_ad_mapping` 就先用那批 `meta_campaign_id` 縮小範圍，再一律用
     `adset_name` 精準配對——`handoff.naming_check()` 已保證這個名字帳號內不撞名，不用另外
@@ -138,7 +136,7 @@ def _match_adsets(conn, brand_id: str, cycle_id: str, packages: list,
 # 五項檢查本體
 # ---------------------------------------------------------------------------
 
-def _pixel_check(conn, brand_id: str, datasets: list, fetch_err: Optional[str]) -> dict:
+def _pixel_check(conn, brand_id: str, datasets: list, fetch_err: str | None) -> dict:
     key, label = "qa_pixel_installed", "Pixel 已正確安裝"
     if fetch_err is not None:
         return _unavailable(key, label, f"讀不到 Meta 的 Pixel 清單：{fetch_err}")
@@ -164,7 +162,7 @@ def _pixel_check(conn, brand_id: str, datasets: list, fetch_err: Optional[str]) 
     return _available(key, label, True, "你的 Pixel 最近還在正常回報事件。")
 
 
-def _emq_check(datasets: list, fetch_err: Optional[str]) -> dict:
+def _emq_check(datasets: list, fetch_err: str | None) -> dict:
     key, label = "qa_capi_emq_quality", "CAPI／EMQ 事件品質已確認"
     if fetch_err is not None:
         return _unavailable(key, label, f"讀不到 Meta 的 Pixel 清單：{fetch_err}")
@@ -189,7 +187,7 @@ def _emq_check(datasets: list, fetch_err: Optional[str]) -> dict:
                       "去 Meta 事件管理工具確認。")
 
 
-def _audience_exclusion_check(pairs: list, match_err: Optional[str]) -> dict:
+def _audience_exclusion_check(pairs: list, match_err: str | None) -> dict:
     key, label = "qa_audience_exclusion", "受眾排除名單已設定"
     if match_err is not None:
         return _unavailable(key, label, f"讀不到 Meta 的廣告組合：{match_err}")
@@ -203,7 +201,7 @@ def _audience_exclusion_check(pairs: list, match_err: Optional[str]) -> dict:
     return _available(key, label, False, f"「{offenders[0]}」沒有設定排除受眾。{extra}")
 
 
-def _parse_budget(raw) -> Optional[int]:
+def _parse_budget(raw) -> int | None:
     """Meta 回的預算是顯示格式化字串，例如「NT$2,143 TWD」——去掉非數字字元後轉整數
     （票面 Gotcha）。缺欄位回 None（呼叫端自行決定要不要退回活動層預算）。"""
     if raw is None:
@@ -212,7 +210,7 @@ def _parse_budget(raw) -> Optional[int]:
     return int(digits) if digits else None
 
 
-def _budget_check(pairs: list, match_err: Optional[str], account_id: str) -> dict:
+def _budget_check(pairs: list, match_err: str | None, account_id: str) -> dict:
     key, label = "qa_budget_line_review", "預算已逐筆覆核"
     if match_err is not None:
         return _unavailable(key, label, f"讀不到 Meta 的廣告組合：{match_err}")

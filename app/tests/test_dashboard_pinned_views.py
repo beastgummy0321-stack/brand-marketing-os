@@ -1,15 +1,12 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_dashboard_pinned_views.py — 駕駛艙成效釘選區（B4R 收尾包項目 3）：
 目錄預設 5 筆全選、存讀來回、無效鍵被濾掉、沒開過檔期時視圖回 None、
 post_placeholder 恆定顯示。品牌一律虛構。
 """
 
 import atexit
-import os
 import shutil
 import tempfile
 import unittest
-from pathlib import Path
 
 _tmpdir = tempfile.mkdtemp(prefix="brand_os_pinned_views_")
 
@@ -17,7 +14,6 @@ import app.main as main  # noqa: E402
 from app.ads import repository as ads_repo  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
 from app.dashboard import pinned_views  # noqa: E402
-
 
 
 def _cleanup():

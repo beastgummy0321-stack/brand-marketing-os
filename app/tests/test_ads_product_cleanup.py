@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_ads_product_cleanup.py — 廣告模組接上刪產品清理登記處（第 6 刀）。
 
 驗三件事（比照品牌層那套清理測試，這裡換成產品層）：

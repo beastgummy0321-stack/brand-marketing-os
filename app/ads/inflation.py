@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/ads/inflation.py — Meta 灌水係數＋期別對帳頁（GitHub issue #36，決策 0025 七題定案
 第 1 點「系統累積『Meta 灌水係數』並記錄每次事後誤差」＋懶人優先總則第 1 點自適應降頻）。
 
@@ -17,7 +16,6 @@
 """
 
 from datetime import date, timedelta
-from typing import Optional
 
 from app.ads import codes as ads_codes
 from app.ads import ga4_sync as ads_ga4_sync
@@ -25,7 +23,7 @@ from app.ads import performance as ads_performance
 from app.ads import repository as ads_repo
 from app.core import interrupts as core_interrupts
 from app.core.audit import write_audit
-from app.core.db import new_id, now_utc, DEV_ORG_ID
+from app.core.db import DEV_ORG_ID, new_id, now_utc
 
 # 第 7 刀（A1 三層地界新規則：app/ads 不得 import app.orders，見
 # test_architecture_boundaries.py）：orders_repo 不在這裡 import，改由組裝根
@@ -92,7 +90,7 @@ def reconcile_cycle(conn, brand_id: str, cycle_id: str) -> dict:
 # 係數表：版本、樣本門檻、事後誤差
 # ---------------------------------------------------------------------------
 
-def latest_coefficient(conn, brand_id: str) -> Optional[dict]:
+def latest_coefficient(conn, brand_id: str) -> dict | None:
     row = conn.execute(
         "SELECT * FROM ad_revenue_coefficient WHERE brand_id = %s AND valid_to IS NULL"
         " ORDER BY version DESC LIMIT 1", (brand_id,),
@@ -111,14 +109,14 @@ def effective_coefficient(conn, brand_id: str) -> dict:
             "sample_size": latest["sample_size"], "note": "已校準"}
 
 
-def _error_pct(predicted: Optional[float], actual: float) -> Optional[float]:
+def _error_pct(predicted: float | None, actual: float) -> float | None:
     if not predicted:
         return None
     return round((actual - predicted) / predicted, 4)
 
 
 def calibrate(conn, brand_id: str, cycle_id: str, *, actor: str,
-              today: Optional[str] = None) -> dict:
+              today: str | None = None) -> dict:
     """用這期的對帳結果校準一版新係數。校準前先拿「上一版係數 predict 這期」跟這期實際
     訂單實收比對，記一筆事後誤差——係數的可信紀錄永遠是「用舊版猜、拿新資料對答案」。
 
@@ -185,7 +183,7 @@ def _recent_error_pcts(conn, brand_id: str, limit: int) -> list:
     return [r["error_pct"] for r in rows]
 
 
-def _confidence_label(days_since: Optional[int], cadence: str) -> str:
+def _confidence_label(days_since: int | None, cadence: str) -> str:
     if days_since is None:
         return "尚未校準"
     if days_since <= FRESH_DAYS[cadence]:
@@ -195,7 +193,7 @@ def _confidence_label(days_since: Optional[int], cadence: str) -> str:
     return "已過期，判讀信心打折"
 
 
-def cadence_state(conn, brand_id: str, *, today: Optional[str] = None) -> dict:
+def cadence_state(conn, brand_id: str, *, today: str | None = None) -> dict:
     """規則判定（不經 LLM，鐵則 4）：係數連續數期穩定就降頻為每季抽查。
 
     回傳「上次校準距今 X 天」與可信度衰減標籤，畫面直接顯示、不擋路。
@@ -218,7 +216,7 @@ def cadence_state(conn, brand_id: str, *, today: Optional[str] = None) -> dict:
             "confidence_label": _confidence_label(days_since, cadence)}
 
 
-def _maybe_enqueue_next_due(conn, brand_id: str, *, today: str) -> Optional[str]:
+def _maybe_enqueue_next_due(conn, brand_id: str, *, today: str) -> str | None:
     """降頻為每季後，下次到期才提醒一次（比照 app/ads/onboarding.py create_reminders：
     排一筆帶 visible_from 的未來提醒，不用輪詢／排程器）。"""
     state = cadence_state(conn, brand_id, today=today)

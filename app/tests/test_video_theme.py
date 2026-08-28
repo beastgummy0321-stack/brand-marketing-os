@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_video_theme.py — 影片腳本主題端到端（票 08-video-theme）。
 
 接縫一（引擎門口，app/ads/theme_engine_video.py generate_video_theme／combine_video_script）：
@@ -12,31 +11,31 @@ app/tests/test_carousel_theme.py（票 07）——本專案測試檔一律自帶
 
 import atexit
 import json
-import os
 import shutil
 import tempfile
 import unittest
 from pathlib import Path
-
-import pytest
 
 _tmpdir = tempfile.mkdtemp(prefix="brand_os_video_theme_")
 
 from fastapi.testclient import TestClient  # noqa: E402
 
 import app.main as main  # noqa: E402
-from app.ads import brief_assembler  # noqa: E402
+from app.ads import (
+    brief_assembler,  # noqa: E402
+    theme_engine,  # noqa: E402
+    theme_engine_video,  # noqa: E402
+)
 from app.ads import repository as ads_repo  # noqa: E402
-from app.ads import theme_engine  # noqa: E402
-from app.ads import theme_engine_video  # noqa: E402
 from app.ads import theme_repository as theme_repo  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
-from app.core import creative_assets  # noqa: E402
-from app.core import db  # noqa: E402
+from app.core import (
+    creative_assets,  # noqa: E402
+    db,  # noqa: E402
+)
 from app.core import settings as coresettings  # noqa: E402
 from app.creative.format_specs import FORMAT_SPECS  # noqa: E402
 from app.llm.providers import FakeProvider, ProviderResponse, Usage  # noqa: E402
-
 
 ROOT = Path(_tmpdir) / "creative"
 

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_ads_ga4.py — 廣告分支票 34：GA4 轉接層＋自動同步＋教學頁。
 
 全程 FakeGA4Client，不發任何真實網路請求（google-analytics-data 套件本機也未安裝，
@@ -11,8 +10,7 @@ import uuid
 from fastapi.testclient import TestClient
 
 import app.main as main
-from app.ads import ga4_api
-from app.ads import ga4_sync
+from app.ads import ga4_api, ga4_sync
 from app.brand_intelligence import repository as bi_repo
 from app.core import settings as coresettings
 

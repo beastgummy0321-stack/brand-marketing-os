@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/brand_intelligence/routes_library.py — 品牌智庫 JSON API（票 B2-library 第二段，
 契約 `.scratch/grill/GRILL-B2-library.md`，型別逐欄對照 `frontend/src/lib/libraryApi.ts`）。
 
@@ -20,21 +19,18 @@
 
 import os
 import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Optional
 
 from fastapi import APIRouter, File, Form, Request, UploadFile
 from fastapi.responses import Response
 
-from app.core import vocab as md
-from app.brand_intelligence import background_job
-from app.brand_intelligence import compliance_wordlist
+from app.brand_intelligence import background_job, compliance_wordlist
 from app.brand_intelligence import customer_voice as cv_mod
 from app.brand_intelligence import repository as repo
-from app.core import cleanup
-from app.core import creative_assets
+from app.core import cleanup, creative_assets
 from app.core import settings as core_settings
+from app.core import vocab as md
 from app.core.db import REPO_ROOT, new_id
 from app.llm import gateway, providers
 from app.shared import web
@@ -66,7 +62,7 @@ def _safe_asset_filename(name: str) -> str:
 
 
 def save_official_asset(brand_id: str, *, actor: str, asset_kind: str, product_id: str,
-                        title: str, filename: str, content: bytes) -> tuple[bool, Optional[str]]:
+                        title: str, filename: str, content: bytes) -> tuple[bool, str | None]:
     """儲存一筆素材；失敗一律回傳可直接給 API 或表單顯示的訊息。"""
     if asset_kind not in dict(md.ASSET_KINDS):
         return False, "請選擇素材類型。"
@@ -80,7 +76,7 @@ def save_official_asset(brand_id: str, *, actor: str, asset_kind: str, product_i
     if ext not in _ASSET_CONTENT_TYPES:
         return False, f"「{filename}」不是支援的圖片格式，請用 png、jpg、jpeg、webp 或 gif。"
 
-    dest_path: Optional[Path] = None
+    dest_path: Path | None = None
     try:
         dest_dir = _assets_upload_dir() / new_id("oas")
         dest_dir.mkdir(parents=True, exist_ok=True)
@@ -101,7 +97,7 @@ def save_official_asset(brand_id: str, *, actor: str, asset_kind: str, product_i
 
 
 def extract(conn, brand_id: str, *, actor: str, raw_text: str, source_channel: str,
-            source_detail: Optional[str] = None, source_type: str = "manual") -> tuple:
+            source_detail: str | None = None, source_type: str = "manual") -> tuple:
     """抽取一筆顧客原話並入庫。成功回 (True, row)；失敗回 (False, 人話錯誤)，不入庫。"""
     brand = repo.get_brand(conn, brand_id)
     if brand is None:
@@ -137,7 +133,7 @@ def extract(conn, brand_id: str, *, actor: str, raw_text: str, source_channel: s
 # 六分頁＋品牌資料整包讀取
 # ---------------------------------------------------------------------------
 
-def _source_ref_text(brand_id: str, source_reference_id: Optional[str]) -> Optional[str]:
+def _source_ref_text(brand_id: str, source_reference_id: str | None) -> str | None:
     if not source_reference_id:
         return None
     row = repo.get_source_reference(web.conn, brand_id, source_reference_id)
@@ -235,7 +231,7 @@ async def library_bundle(brand_id: str):
         "customer_voices": [_customer_voice_shape(v)
                              for v in repo.list_customer_voices(web.conn, brand_id)],
     }
-    return {"data": data, "generated_at": datetime.now(timezone.utc).isoformat()}
+    return {"data": data, "generated_at": datetime.now(UTC).isoformat()}
 
 
 @router.post("/api/library/brands/{brand_id}/delete")
@@ -356,7 +352,7 @@ def _cv_notify(brand_id: str, job_key: str, message: str) -> None:
 
 
 def _run_customer_voice_job(job_key: str, brand_id: str, actor: str, raw_text: str,
-                             source_channel: str, source_detail: Optional[str]) -> None:
+                             source_channel: str, source_detail: str | None) -> None:
     try:
         ok, result = extract(
             web.conn, brand_id, actor=actor, raw_text=raw_text,
@@ -409,7 +405,7 @@ async def customer_voice_submit(request: Request, brand_id: str):
     # brand_id／started_at：全站生成進度單一出口（票 B4-warroom）聚合端點列舉用，本身
     # 業務邏輯不讀這兩個鍵。
     _cv_jobs.start(job_key, {"status": "running", "brand_id": brand_id,
-                             "started_at": datetime.now(timezone.utc).isoformat()},
+                             "started_at": datetime.now(UTC).isoformat()},
                    _run_customer_voice_job,
                    (job_key, brand_id, actor, raw_text, source_channel, source_detail))
     return {"job_key": job_key}

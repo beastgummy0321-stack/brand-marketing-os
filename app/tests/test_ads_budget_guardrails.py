@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_ads_budget_guardrails.py — 票 3 兩個純函數模組的邊界測試。
 
 這兩支算的是錢與「要不要加碼」，所以測的重點放在邊界與守恆，而不是覆誦正常路徑：

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/core/rule_cards.py — 規則卡通用機制（issue #12）。
 
 「規則卡」＝可視可改的門檻數值：存資料庫（migration 附預設值種子）、有人話頁面可看可改可重設，
@@ -19,13 +18,11 @@ migration（本檔不擁有 SQL，schema 見 app/core/migrations/）。不用碰
 
 from __future__ import annotations
 
-from typing import Optional
-
 import psycopg
 
 from app.core import cleanup
 from app.core.audit import write_audit
-from app.core.db import now_utc, Conn, DEV_ORG_ID
+from app.core.db import DEV_ORG_ID, Conn, now_utc
 
 # ---------------------------------------------------------------------------
 # 卡片定義（單一權威：標題、人話說明、欄位標籤與預設值都在這裡）
@@ -264,7 +261,7 @@ def _field_def(card_key: str, field_key: str) -> dict:
         raise ValueError(f"沒有這張規則卡欄位：{card_key}.{field_key}") from None
 
 
-def get_value(conn: Optional[Conn], brand_id: str, card_key: str, field_key: str) -> float:
+def get_value(conn: Conn | None, brand_id: str, card_key: str, field_key: str) -> float:
     """讀一個門檻的目前值：這個品牌有存就用品牌覆寫值，沒有（或表還沒建起來）就用預設值。"""
     default = _field_def(card_key, field_key)["default"]
     if conn is None:
@@ -349,8 +346,8 @@ def classify_ad_frequency(conn: Conn, brand_id: str, audience_type: str,
 # 樣本數統計等級（issue #18：把「錢的門檻」與「統計的門檻」分開）
 # ---------------------------------------------------------------------------
 
-def sample_size_tier(conn: Optional[Conn], brand_id: str,
-                     sample_count: Optional[float], observed_rate: Optional[float]) -> dict:
+def sample_size_tier(conn: Conn | None, brand_id: str,
+                     sample_count: float | None, observed_rate: float | None) -> dict:
     """依樣本數速查表判斷這組數字算不算「統計等級」，回傳 'statistical' / 'directional'。
 
     沒有可比的轉換率（分母是 0，算不出比例）時，樣本數再多也無從查表比對——一律視為方向性判讀，

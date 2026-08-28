@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/ads/repository.py — 廣告模組存取層。
 
 硬性規則（比照 brand_intelligence/repository.py）：
@@ -15,7 +14,6 @@
 """
 
 from datetime import date, timedelta
-from typing import Optional
 
 from app.ads import budget as budget_calc
 from app.ads import occasion as ads_occasion
@@ -23,14 +21,14 @@ from app.ads import pacing_curve
 from app.brand_intelligence import repository as bi
 from app.core import cleanup
 from app.core.audit import write_audit
-from app.core.db import new_id, now_utc, jsonb, Conn, DEV_ORG_ID
+from app.core.db import DEV_ORG_ID, Conn, jsonb, new_id, now_utc
 
 
 def _rows(cursor) -> list:
     return [dict(r) for r in cursor.fetchall()]
 
 
-def _row(cursor_row) -> Optional[dict]:
+def _row(cursor_row) -> dict | None:
     return dict(cursor_row) if cursor_row is not None else None
 
 
@@ -101,9 +99,9 @@ def _economics_for(conn: Conn, brand_id: str, product_ids: list) -> list:
 
 def create_cycle(conn: Conn, brand_id: str, *, product_ids: list,
                  pain_value: float, objective: str, actor: str,
-                 phase: str = "normal", start_date: Optional[str] = None,
-                 duration_days: Optional[int] = None, background: Optional[str] = None,
-                 currency: str = "TWD", offer_id: Optional[str] = None) -> dict:
+                 phase: str = "normal", start_date: str | None = None,
+                 duration_days: int | None = None, background: str | None = None,
+                 currency: str = "TWD", offer_id: str | None = None) -> dict:
     """開一期廣告檔期，同時寫好各產品的預算分配。
 
     預算、期長、停損全部由 app/ads/budget.py 的純函數算（決策 0016 硬性原則 4：
@@ -211,14 +209,14 @@ def create_cycle(conn: Conn, brand_id: str, *, product_ids: list,
     return row
 
 
-def _with_float_budget(row: Optional[dict]) -> Optional[dict]:
+def _with_float_budget(row: dict | None) -> dict | None:
     """budget 是 numeric（Decimal），站內到處拿它跟 float 算術；讀取端單一收口轉型（02-3b）。"""
     if row is not None and row.get("budget") is not None:
         row["budget"] = float(row["budget"])
     return row
 
 
-def get_cycle(conn: Conn, brand_id: str, cycle_id: str) -> Optional[dict]:
+def get_cycle(conn: Conn, brand_id: str, cycle_id: str) -> dict | None:
     return _with_float_budget(_row(conn.execute(
         "SELECT * FROM campaign_cycle WHERE brand_id = %s AND id = %s", (brand_id, cycle_id)
     ).fetchone()))
@@ -470,7 +468,7 @@ def replace_findings(conn: Conn, brand_id: str, cycle_id: str,
 
 
 def list_findings(conn: Conn, brand_id: str, cycle_id: str,
-                  finding_type: Optional[str] = None) -> list:
+                  finding_type: str | None = None) -> list:
     sql = ("SELECT * FROM finding WHERE brand_id = %s AND campaign_cycle_id = %s AND resolved = false")
     params = [brand_id, cycle_id]
     if finding_type:
@@ -485,8 +483,8 @@ def list_findings(conn: Conn, brand_id: str, cycle_id: str,
 # ---------------------------------------------------------------------------
 
 def replace_pending_dissents(conn: Conn, brand_id: str, cycle_id: str,
-                             dissents: list, llm_task_id: Optional[str], *,
-                             target_types: Optional[tuple] = None) -> int:
+                             dissents: list, llm_task_id: str | None, *,
+                             target_types: tuple | None = None) -> int:
     """整批換掉這一輪還沒被老闆處理過（pending）的舊異議；已經決定過的（adopted/rejected）
     留著不動——那是事後驗證用的歷史紀錄，不因為重新生成方案而消失。
 
@@ -514,7 +512,7 @@ def replace_pending_dissents(conn: Conn, brand_id: str, cycle_id: str,
 
 
 def list_dissents(conn: Conn, brand_id: str, cycle_id: str,
-                  status: Optional[str] = None) -> list:
+                  status: str | None = None) -> list:
     sql = "SELECT * FROM rule_dissent WHERE brand_id = %s AND campaign_cycle_id = %s"
     params = [brand_id, cycle_id]
     if status:
@@ -568,12 +566,12 @@ def list_cycle_hypotheses(conn: Conn, brand_id: str, cycle_id: str) -> list:
 
 def create_learning_ledger_entry(conn: Conn, brand_id: str, *, learning_text: str,
                                   applicability_scope: str, created_by: str, actor: str,
-                                  product_id: Optional[str] = None, platform: Optional[str] = None,
-                                  source_cycle_id: Optional[str] = None,
-                                  source_reading_id: Optional[str] = None,
-                                  source_hypothesis_id: Optional[str] = None,
-                                  sample_size: Optional[str] = None,
-                                  confidence: Optional[str] = None) -> dict:
+                                  product_id: str | None = None, platform: str | None = None,
+                                  source_cycle_id: str | None = None,
+                                  source_reading_id: str | None = None,
+                                  source_hypothesis_id: str | None = None,
+                                  sample_size: str | None = None,
+                                  confidence: str | None = None) -> dict:
     """已驗證的正面學習入帳（append-only，鐵則 3）：只新增，本層不提供 UPDATE／DELETE
     入口。只收「經判讀驗證且經人確認」的條目——由呼叫端保證（決策 0030 第一節第 1 點）。
 

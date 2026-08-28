@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/ads/performance_batches.py — 檔期「現在結算」＋匯入整批撤銷（票 S1-01，
 `.scratch/s1/issues/01-settle-now-and-batch-undo.md`）。
 
@@ -11,13 +10,12 @@
 這裡不重寫第二套判讀或刪除邏輯。
 """
 
-from typing import Optional
 
 BATCH_LIST_LIMIT = 5
 
 
-def delete_snapshots(conn, brand_id: str, cycle_id: str, *, source: Optional[str] = None,
-                     batch_id: Optional[str] = None) -> int:
+def delete_snapshots(conn, brand_id: str, cycle_id: str, *, source: str | None = None,
+                     batch_id: str | None = None) -> int:
     """刪除某期的成效資料，連同掛在上面的 derived_metric 一起（先子後父）。
 
     唯一的刪除入口：derived_metric 有外鍵指向 performance_snapshot，呼叫端各自寫

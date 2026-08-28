@@ -1,13 +1,11 @@
-# -*- coding: utf-8 -*-
 """真相卡確認後的人物誌生成；資料存取留在 brand_intelligence.personas。"""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from app.brand_intelligence import background_job, personas
 from app.brand_intelligence import repository as repo
 from app.core.db import new_id
 from app.llm import context_compiler, gateway, providers
-
 
 PROVIDER = providers.AnthropicProvider()
 JOBS = background_job.JobRegistry()
@@ -155,7 +153,7 @@ def start_generation(conn, brand_id: str) -> None:
         brand_id,
         {
             "status": "running", "stage": "整理人物誌",
-            "started_at": datetime.now(timezone.utc).isoformat(),
+            "started_at": datetime.now(UTC).isoformat(),
             "usual_range_text": _USUAL_RANGE, "error": None, "brand_id": brand_id,
         },
         _run_job, (conn, brand_id, brand["name"]), idempotent=True,

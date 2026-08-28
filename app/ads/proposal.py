@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """T3 提案書聚合與核可。
 
 對外進入點：proposal()、approve()、return_to_opening()、seed_channel_plans()。
@@ -7,19 +6,14 @@
 不碰什麼：不 import orders、dashboard，不修改 ads repository 或 reading，也不呼叫 LLM。
 """
 
-from typing import Optional
 
-from app.ads import onboarding
-from app.ads import pacing_curve
+from app.ads import onboarding, pacing_curve, theme_repository, tracking
 from app.ads import plan as ads_plan
 from app.ads import repository as ads_repo
 from app.ads import repository_channel_plan as channel_repo
-from app.ads import theme_repository
-from app.ads import tracking
 from app.core import orchestrator as core_orchestrator
 from app.core import rule_cards
-from app.core.db import new_id, now_utc, jsonb, Conn, DEV_ORG_ID
-
+from app.core.db import DEV_ORG_ID, Conn, jsonb, new_id, now_utc
 
 # 開檔後的五類預設分工。現階段只有 Meta 真正投放，其他項目誠實保留為待辦或健檢。
 _CHANNEL_DEFAULTS = {
@@ -197,7 +191,7 @@ def return_to_opening(conn: Conn, brand_id: str, cycle_id: str, actor: str) -> N
 # 調度台『提案』模組門面（票 O1-02，ADR 0024）
 # ---------------------------------------------------------------------------
 
-def _current_cycle(conn, brand_id: str) -> "Optional[dict]":
+def _current_cycle(conn, brand_id: str) -> "dict | None":
     """比照 app/ads/diagnosis.py:29 _current_cycle()：取最新一個投放中或等判讀的檔期。
     不 import weekly_proposals.current_cycle()（會拉進 nextcycle／reading 一整串）。"""
     for cycle in ads_repo.list_cycles(conn, brand_id):

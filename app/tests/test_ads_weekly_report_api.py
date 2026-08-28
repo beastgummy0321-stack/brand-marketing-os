@@ -1,21 +1,18 @@
-# -*- coding: utf-8 -*-
 """T1 批次 B：四件事週報、收件匣通知與開檔方向二選一。"""
 
 import unittest
 from contextlib import contextmanager
 from unittest import mock
 
-import pytest
 from fastapi.testclient import TestClient
 
 import app.main as main
-from app.ads import auto_sync
+from app.ads import auto_sync, routes_campaigns_open_api, weekly_reports
 from app.ads import reading as ads_reading
 from app.ads import repository as ads_repo
-from app.ads import routes_campaigns_open_api
-from app.ads import weekly_reports
 from app.brand_intelligence import repository as bi_repo
-from app.core import db, interrupts as core_interrupts
+from app.core import db
+from app.core import interrupts as core_interrupts
 from app.core.db import new_id, now_iso
 
 ACTOR = "測試員"

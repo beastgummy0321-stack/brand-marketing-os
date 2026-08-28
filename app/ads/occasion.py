@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/ads/occasion.py — 檔期情境自動標籤（票 01-occasion-auto-tagging，ADR 0011 第四節）。
 
 純函數：資料進、結論出，不碰資料庫、不呼叫 LLM（同 app/dashboard/campaign_calendar.py
@@ -21,7 +20,6 @@ app.ads import app.dashboard 會形成雙向依賴，違反 code-rules.md「新�
 import json
 from datetime import date, timedelta
 from pathlib import Path
-from typing import Optional
 
 LEAD_DAYS = {"large": 90, "medium": 45, "small": 30}
 
@@ -30,7 +28,7 @@ _CALENDAR_DATA_PATH = (
 )
 
 
-def load_events(path: Optional[str] = None) -> list:
+def load_events(path: str | None = None) -> list:
     """讀節日日曆資料（預設 app/dashboard/campaign_calendar_data.json，兩層共用同一份）。"""
     with open(path or _CALENDAR_DATA_PATH, encoding="utf-8") as f:
         return json.load(f)
@@ -40,7 +38,7 @@ def _overlaps(a_start: date, a_end: date, b_start: date, b_end: date) -> bool:
     return a_start <= b_end and b_start <= a_end
 
 
-def match_occasion(events: list, start: date, end: date) -> Optional[str]:
+def match_occasion(events: list, start: date, end: date) -> str | None:
     """檔期 [start, end] 落在哪個節日的投放窗口內；沒對到任何節日回 None（常態檔期）。
 
     多個節日窗口同時重疊時，取節日當天離檔期起始日最近的一筆——跟
@@ -58,7 +56,7 @@ def match_occasion(events: list, start: date, end: date) -> Optional[str]:
     return min(candidates, key=lambda c: c[0])[1]
 
 
-def for_cycle(start: date, end: date) -> Optional[str]:
+def for_cycle(start: date, end: date) -> str | None:
     """create_cycle() 的呼叫入口：讀既有節日日曆資料檔，回傳這期該標的節日名稱或 None。"""
     return match_occasion(load_events(), start, end)
 

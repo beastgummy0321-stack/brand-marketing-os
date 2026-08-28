@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_cleanup_registry.py — 品牌刪除的清理登記處（app/core/cleanup.py，
 第 2 刀「清理登記處」）。
 
@@ -17,8 +16,7 @@ app.intake.repository 時就會自我登記「品牌智庫」「建檔精靈」�
 import unittest
 
 from app.brand_intelligence import repository as bi_repo
-from app.core import cleanup
-from app.core import db
+from app.core import cleanup, db
 
 
 def _fake_count_fixed(label, n):

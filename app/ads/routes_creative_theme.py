@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/ads/routes_creative_theme.py — 主題生成 JSON API（票 04-single-image-e2e）。
 
 新殼專用：`/api/ads/...` 前綴，比照 app/dashboard/routes.py 的 JSON 慣例——回應本身就是
@@ -11,21 +10,23 @@ JSON（票 04 What to build 原文，逐段對應下面 generate_theme() 的四�
 """
 
 from fastapi import APIRouter, Request
-from app.shared.web import JSONResponse
 
 import app.shared.web as main_mod
-from app.ads import brief_assembler
-from app.ads import compliance
+from app.ads import (
+    brief_assembler,
+    compliance,
+    style_preference,
+    theme_attribution,
+    theme_engine,
+    theme_engine_video,
+)
 from app.ads import handoff as ads_handoff
-from app.ads import theme_attribution
-from app.ads import theme_engine
-from app.ads import theme_engine_video
 from app.ads import theme_repository as theme_repo
-from app.ads import style_preference
 from app.ads.routes_common import _require_cycle
 from app.core import creative_assets
 from app.creative.format_specs import FORMAT_SPECS
 from app.llm import pricing, providers
+from app.shared.web import JSONResponse
 
 router = APIRouter(prefix="/api/ads")
 

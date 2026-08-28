@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/dashboard/health.py — 品牌健康度燈號（票 02-overview-cards，規格 0001）。
 
 純函數：資料進、結論出，不碰資料庫、不呼叫 LLM（沿用判讀狀態機模式）。
@@ -6,7 +5,7 @@
 有未結 rule_warning 警報＝黃、其餘綠。money_loss 優先於 rule_warning。
 """
 
-from typing import Iterable
+from collections.abc import Iterable
 
 RED, YELLOW, GREEN = "red", "yellow", "green"
 

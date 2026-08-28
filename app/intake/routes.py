@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Legacy intake page routes are removed; only photo-file delivery remains.
 
 Public entry point: ``router``. Input/output: the photo GET endpoint accepts a

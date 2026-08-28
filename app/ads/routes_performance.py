@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/ads/routes_performance.py — 空殼（T4 廣告模組 Jinja 大清倉第 2 刀刪光本檔全部
 路由：成效頁 `ads_performance_page`＋CSV／手動匯入兩個 POST——全部改直測業務層
 `app/ads/performance.py`（`import_csv`／`import_manual`）或 `/api/campaigns/.../performance`

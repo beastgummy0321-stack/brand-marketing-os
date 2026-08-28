@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_product_delete_routes.py — 產品封存／刪除的路由層（決策 0020）。
 
 repository 層已驗過刪除本身乾不乾淨（見 test_product_delete.py），這裡守路由層特有的兩道

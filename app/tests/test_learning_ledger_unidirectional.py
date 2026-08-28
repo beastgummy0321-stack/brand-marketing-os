@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_learning_ledger_unidirectional.py — 學習單向鐵律的機器檢查（修憲落地 A3）。
 
 鐵則 3／architecture-rules.md A1：「學習只能補充事實層，永遠不得回寫或改寫事實層。」

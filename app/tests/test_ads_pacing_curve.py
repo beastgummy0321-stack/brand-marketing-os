@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_ads_pacing_curve.py — 票 pacing-curve 兩個純函數的邊界測試。
 
 比照 test_ads_budget_guardrails.py 的既有風格：重點放在邊界與守恆（四捨五入會不會把

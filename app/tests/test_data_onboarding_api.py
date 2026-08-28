@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """資料上線新殼 API：形狀、連線檢查與背景工作完成狀態。"""
 
 import unittest
@@ -11,7 +10,6 @@ import app.shared.web as web
 from app.ads import routes_onboarding_api as onboarding_api
 from app.ads import sync as ads_sync
 from app.brand_intelligence import repository as bi_repo
-
 
 ACTOR = "測試員"
 

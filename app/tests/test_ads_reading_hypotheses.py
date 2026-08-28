@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_ads_reading_hypotheses.py — 票 10-split-reading-py：假設結案週邊測試。
 
 從 app/tests/test_ads_reading.py 搬過來，原樣不改——鏡射 app/ads/reading_hypotheses.py
@@ -9,7 +8,6 @@
 import json
 import unittest
 
-import pytest
 from fastapi.testclient import TestClient
 
 import app.main as main

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_ads_plan.py — 廣告分支票 4：計畫多方案生成、受眾三層、選定＋第一道人工關卡。
 
 全程 FakeProvider，不發任何真實網路請求；品牌與產品名一律虛構。
@@ -11,7 +10,6 @@
 
 import atexit
 import json
-import os
 import shutil
 import tempfile
 import time
@@ -20,7 +18,6 @@ from pathlib import Path
 
 _tmpdir = tempfile.mkdtemp(prefix="brand_os_ads_plan_")
 
-import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
 import app.main as main  # noqa: E402
@@ -30,13 +27,10 @@ from app.brand_intelligence import repository as bi_repo  # noqa: E402
 from app.core import db as coredb  # noqa: E402
 from app.core import settings as coresettings  # noqa: E402
 from app.core.db import new_id, now_iso  # noqa: E402
-
 from app.llm import methodology  # noqa: E402
 from app.llm import providers as llm_providers  # noqa: E402
 from app.llm.providers import FakeProvider, ProviderResponse, Usage  # noqa: E402
 from app.shared.web import OPERATOR  # noqa: E402
-
-
 
 
 def _cleanup():

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_workbench_tasks.py — 素材工作檯任務卡衍生查詢（票 13-workbench-cards）。
 
 接縫二（路由層，app/ads/routes_workbench.py）：GET /api/ads/brands/{b}/workbench/tasks
@@ -21,7 +20,6 @@ from app.ads import repository as ads_repo
 from app.ads import theme_repository as theme_repo
 from app.brand_intelligence import repository as bi_repo
 from app.core import db
-
 
 ACTOR = "測試員"
 

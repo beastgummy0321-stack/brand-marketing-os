@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/ads/checklist.py — 投放前檢查清單（票 10，GitHub issue #20，決策 0023 第 17 點）。
 
 分兩類，行為不同：
@@ -18,12 +17,11 @@
 `brand_checklist_item` 表與存取函式。
 """
 
-from typing import Optional
 
 from app.ads import performance as ads_performance
 from app.ads import repository as ads_repo
 from app.core.audit import write_audit
-from app.core.db import new_id, now_utc, DEV_ORG_ID
+from app.core.db import DEV_ORG_ID, new_id, now_utc
 
 ONE_TIME_ITEMS = {
     "pixel_confirmed": {
@@ -96,7 +94,7 @@ def _rows(cursor) -> list:
     return [dict(r) for r in cursor.fetchall()]
 
 
-def _pixel_anomaly(conn, brand_id: str) -> Optional[str]:
+def _pixel_anomaly(conn, brand_id: str) -> str | None:
     """只看有成效資料的最新一期：花了錢卻零轉換，回一句人話理由；否則回 None。"""
     for cycle in ads_repo.list_cycles(conn, brand_id):
         if cycle["status"] not in ("LIVE", "EVALUATING", "CLOSED"):

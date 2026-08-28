@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_brand_menu_categories.py — D線票7（GitHub issue #49）：
 品牌功能選單頁四分類＋品牌智庫首頁收斂（限制規則＋宣稱→規則與宣稱、
 官方素材＋自有渠道→素材與渠道）。

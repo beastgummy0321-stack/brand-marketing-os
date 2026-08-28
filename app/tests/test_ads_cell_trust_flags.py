@@ -1,12 +1,10 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_ads_cell_trust_flags.py — 純函式 `nextcycle.cell_trust_flags()` 與吃它的
 `theme_feedback.theme_quota()`。不碰資料庫，從 test_ads_nextcycle.py 分出來（該檔已達行數上限）。
 """
 
 import unittest
 
-from app.ads import nextcycle
-from app.ads import theme_feedback
+from app.ads import nextcycle, theme_feedback
 
 
 class SampleTrustFlagsTest(unittest.TestCase):

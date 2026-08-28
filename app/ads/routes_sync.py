@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/ads/routes_sync.py — 空殼（T4 廣告模組 Jinja 大清倉第 2 刀刪光本檔僅剩的兩條路由
 `ads_meta_backfill_progress`／`ads_ga4_backfill_progress`（Meta／GA4 回填精靈），隨
 `_render_wait_page`（app/ads/routes_progress.py）一併刪除——已被

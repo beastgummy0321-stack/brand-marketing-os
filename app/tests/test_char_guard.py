@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_char_guard.py — 字數守門與重寫（票 05-char-guard）。
 
 接縫一（引擎門口，app/ads/theme_engine.py `_apply_char_guard`）：假簡報進、假 gateway 回超字
@@ -12,7 +11,6 @@ app/tests/test_ads_creative.py `_SequencedProvider` 的既有寫法複製，不�
 
 import atexit
 import json
-import os
 import shutil
 import tempfile
 import unittest
@@ -23,16 +21,19 @@ _tmpdir = tempfile.mkdtemp(prefix="brand_os_char_guard_")
 from fastapi.testclient import TestClient  # noqa: E402
 
 import app.main as main  # noqa: E402
-from app.ads import brief_assembler  # noqa: E402
+from app.ads import (
+    brief_assembler,  # noqa: E402
+    theme_engine,  # noqa: E402
+)
 from app.ads import repository as ads_repo  # noqa: E402
-from app.ads import theme_engine  # noqa: E402
 from app.ads import theme_repository as theme_repo  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
-from app.core import creative_assets  # noqa: E402
-from app.core import db  # noqa: E402
+from app.core import (
+    creative_assets,  # noqa: E402
+    db,  # noqa: E402
+)
 from app.core import settings as coresettings  # noqa: E402
 from app.llm.providers import ProviderError, ProviderResponse, Usage  # noqa: E402
-
 
 ROOT = Path(_tmpdir) / "creative"
 

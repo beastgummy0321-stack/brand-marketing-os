@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_ads_backfill.py — 票 F3（GitHub #62）：回填日期參數（Meta＋GA4 一鍵 12 個月）。
 
 驗收 rubric（決策 0039 第 3 條）：
@@ -19,13 +18,10 @@ import time
 import unittest
 from datetime import date, timedelta
 
-import pytest
 from fastapi.testclient import TestClient
 
 import app.main as main
-from app.ads import ga4_api
-from app.ads import ga4_sync
-from app.ads import meta_api
+from app.ads import ga4_api, ga4_sync, meta_api
 from app.ads import routes as ads_routes
 from app.ads import sync as ads_sync
 from app.brand_intelligence import repository as bi_repo

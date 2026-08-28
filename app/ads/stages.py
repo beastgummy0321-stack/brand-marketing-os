@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/ads/stages.py — 檔期進度軌五格階段推導（D線票1，GitHub issue #43）。
 
 進度軌五格＝計畫／素材／交接包／投放前檢查／成效。單看 campaign_cycle.status 分不出

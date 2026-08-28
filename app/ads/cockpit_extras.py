@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """T3 駕駛艙補充資料；只讀既有公開品牌資料與 task_card。"""
 
 from app.ads import repository_channel_plan as plans

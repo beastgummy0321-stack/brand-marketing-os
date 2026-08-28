@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_capacity_check.py — D線票1（GitHub issue #43）容量驗收腳本自檢。
 
 票面硬性要求「腳本自檢：餵一份故意超標的 HTML 必須失敗、餵合規的必須通過（沒有自檢

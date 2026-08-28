@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/intake/dispatch.py — 調度台『開戶』模組門面（票 O1-02，ADR 0024）。
 
 `status()`／`handle()` 是本模組對調度台的唯一公開面，取值全部沿用

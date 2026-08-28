@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_ads_bottleneck.py — 票 C2-01：瓶頸判斷樹（CPA 恆等式拆解）純函數測試。
 
 `bottleneck.diagnose()` 比照 `reading.judge()` 的慣例：純函數，不碰資料庫，`conn` 可傳
@@ -6,11 +5,9 @@ None（規則卡讀不到就退回預設值，見 app/core/rule_cards.get_value�
 app.main 那套資料庫／FastAPI 骨架，跟 test_ads_reading_baselines.py 同一種輕量寫法。
 """
 
-import math
 import unittest
 
-from app.ads import bottleneck
-from app.ads import reading
+from app.ads import bottleneck, reading
 
 
 def _totals(*, impressions, clicks, spend, conversions, revenue=0.0, max_frequency=None):

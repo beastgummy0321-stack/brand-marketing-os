@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_ads_hypothesis_resolve_api.py — 票 L1-01：覆盤頁假設結案 API。
 
 `POST .../hypotheses/resolve` 這條路由本身只做一件事：把請求接進
@@ -10,7 +9,6 @@
 import json
 import unittest
 
-import pytest
 from fastapi.testclient import TestClient
 
 import app.main as main

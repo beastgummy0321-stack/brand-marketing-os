@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/dashboard/guide_cards.py — 下一步指南卡引擎（票 04-guide-card-engine，規格 0001）。
 
 純函數：資料進、結論出，不碰資料庫、不呼叫 LLM（沿用 app/ads/reading.py judge() 的
@@ -54,12 +53,12 @@ facts 欄位契約（由 app/dashboard/repository.py 組裝）：
   resume_path，沒有就是 None）
 """
 
-from typing import Callable, Optional
+from collections.abc import Callable
 
 MAX_CARDS = 3
 
 
-def _rule_conversion_goal_missing(facts: dict) -> Optional[dict]:
+def _rule_conversion_goal_missing(facts: dict) -> dict | None:
     """品牌沒設定廣告目標：方法論的條件過濾整條靠 brand.conversion_goal，沒設定就等於
     沒接電，AI 會套用電商站內交易的預設寫法（票 C 明顯提醒需求）。資料正確性前提，
     優先度高於一般提醒，登記在所有規則之前。"""
@@ -73,7 +72,7 @@ def _rule_conversion_goal_missing(facts: dict) -> Optional[dict]:
     }
 
 
-def _rule_intake_in_progress(facts: dict) -> Optional[dict]:
+def _rule_intake_in_progress(facts: dict) -> dict | None:
     """建檔精靈有進行中草稿：品牌設定還沒完成，跟 conversion_goal_missing 同樣屬於
     「這個品牌能不能正常運作」的前提，登記在其之後、其餘一般提醒之前（票 B3-intake，
     GRILL-B3-intake.md「拿不準的點」第 3 條裁決：併進本票，卡片形狀沿用既有 API 不新增
@@ -88,7 +87,7 @@ def _rule_intake_in_progress(facts: dict) -> Optional[dict]:
     }
 
 
-def _rule_pacing_alert(facts: dict) -> Optional[dict]:
+def _rule_pacing_alert(facts: dict) -> dict | None:
     """pacing 警示轉行動卡：預算步調出問題是「錢的事」，行動價值最高、登記在第一位。
     卡片只給行動入口，事件本體仍在警示區／打斷佇列（規格：pacing 同時是指南卡貨源）。"""
     alert = facts.get("pacing_alert")
@@ -102,7 +101,7 @@ def _rule_pacing_alert(facts: dict) -> Optional[dict]:
             or f"/app/brands/{facts['brand_id']}/campaigns"}
 
 
-def _rule_reading_unread(facts: dict) -> Optional[dict]:
+def _rule_reading_unread(facts: dict) -> dict | None:
     """判讀結果出爐未讀：最新一期已經跑過判讀，但下期草案還沒備好——代表判讀結論
     還沒被人看過拿去用（一旦下期草案生成，判讀結論已經被用掉，不再算「未讀」）。"""
     cycle = facts.get("active_cycle")
@@ -117,7 +116,7 @@ def _rule_reading_unread(facts: dict) -> Optional[dict]:
     }
 
 
-def _rule_next_cycle_draft(facts: dict) -> Optional[dict]:
+def _rule_next_cycle_draft(facts: dict) -> dict | None:
     """下期草案已備好：判讀完成後系統已經生出下期草案（預算建議／規則卡），等人確認。"""
     cycle = facts.get("active_cycle")
     if not cycle or not facts.get("next_cycle_draft_ready"):
@@ -129,7 +128,7 @@ def _rule_next_cycle_draft(facts: dict) -> Optional[dict]:
     }
 
 
-def _rule_cycle_stage(facts: dict) -> Optional[dict]:
+def _rule_cycle_stage(facts: dict) -> dict | None:
     """檔期卡在哪道關卡：還沒進到成效格（1–4 格）就提醒去推進；已在成效格
     （stage_label 為 None）不算卡住，不提醒。"""
     cycle = facts.get("active_cycle")
@@ -144,7 +143,7 @@ def _rule_cycle_stage(facts: dict) -> Optional[dict]:
     }
 
 
-def _rule_pending_facts(facts: dict) -> Optional[dict]:
+def _rule_pending_facts(facts: dict) -> dict | None:
     """待確認事實數：品牌智庫還有事實待確認。"""
     n = facts.get("pending_facts_count") or 0
     if n <= 0:
@@ -156,7 +155,7 @@ def _rule_pending_facts(facts: dict) -> Optional[dict]:
     }
 
 
-def _rule_campaign_calendar(facts: dict) -> Optional[dict]:
+def _rule_campaign_calendar(facts: dict) -> dict | None:
     """檔期日曆備戰提醒（票 06-campaign-calendar）：素材完稿期限比備戰提前期更急迫，
     reminder["kind"] 已經在 next_calendar_reminder() 決定好要顯示哪一種，這裡只轉文字。
     一鍵前往固定導去「開檔期」（規格範例：「農曆新年還有 4 週，開始備戰？」）。"""
@@ -176,7 +175,7 @@ def _rule_campaign_calendar(facts: dict) -> Optional[dict]:
 
 
 # 登記表：dict 順序＝優先序（越早登記代表行動價值越高，比照 interrupts.py CATEGORIES）。
-RULES: "dict[str, Callable[[dict], Optional[dict]]]" = {
+RULES: "dict[str, Callable[[dict], dict | None]]" = {
     "conversion_goal_missing": _rule_conversion_goal_missing,
     "intake_in_progress": _rule_intake_in_progress,
     "pacing_alert": _rule_pacing_alert,

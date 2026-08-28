@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/ads/account_structure.py — 帳戶結構＋預算配置底案（票 5，決策 0023 第 14、15 點）。
 
 純函數：吃這期的日預算，依 `app.core.rule_cards`「帳戶結構與預算配置門檻」規則卡（card_key

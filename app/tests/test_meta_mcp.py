@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_meta_mcp.py — 票 M1-01：Meta 官方 Ads MCP 一鍵建（暫停）＋發布。
 
 一律用假 MCP client（monkeypatch `meta_mcp._client`／`meta_mcp._upload_image`），不發任何
@@ -13,25 +12,24 @@ import tempfile
 import unittest
 from pathlib import Path
 
-import pytest
-
 _tmpdir = tempfile.mkdtemp(prefix="brand_os_meta_mcp_")
 
 from fastapi.testclient import TestClient  # noqa: E402
 
 import app.main as main  # noqa: E402
 from app.ads import handoff as ads_handoff  # noqa: E402
-from app.ads import meta_mcp  # noqa: E402
+from app.ads import (
+    meta_mcp,  # noqa: E402
+    theme_engine,  # noqa: E402
+)
 from app.ads import plan as ads_plan  # noqa: E402
 from app.ads import repository as ads_repo  # noqa: E402
-from app.ads import theme_engine  # noqa: E402
 from app.ads import theme_repository as theme_repo  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
 from app.core import creative_assets  # noqa: E402
 from app.core import settings as coresettings  # noqa: E402
 from app.core.db import DEV_ORG_ID, new_id, now_iso  # noqa: E402
 from app.llm.providers import FakeProvider, ProviderResponse, Usage  # noqa: E402
-from app.shared.web import OPERATOR  # noqa: E402
 
 # ROOT 是素材檔案（非 DB）的暫存資料夾——跟 DB schema 隔離無關，跑完仍要清掉，留著。
 ROOT = Path(_tmpdir) / "creative"

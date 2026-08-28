@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/brand_intelligence/rule_lifecycle.py — 規則有效期與重新確認（rule-lifecycle/01，
 ADR 0012 第一節）。
 
@@ -26,9 +25,9 @@ list_pending_reconfirm_rules），冪等（WHERE status = 'active' 已經翻過�
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 
-from app.core.db import new_id, now_utc, Conn, DEV_ORG_ID
+from app.core.db import DEV_ORG_ID, Conn, new_id, now_utc
 from app.core.rule_cards import get_value
 
 CARD_KEY = "rule_expiry"

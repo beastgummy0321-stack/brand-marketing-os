@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/brand_intelligence/customer_voice.py — 顧客原話抽取的純資料函式。
 
 見 GitHub issue #14、決策 0023 第 18a 條、決策 0024 第 2 條、app/methodology/customer-voice.md。
@@ -17,7 +16,6 @@
 交易邊界：沿用 repository.create_customer_voice() 的寫入、版本更新、稽核與 commit。
 """
 
-from typing import Optional
 
 TASK_LAYERS = ("functional", "emotional", "social")
 SIGNALS = ("unprompted", "prompted")
@@ -49,7 +47,7 @@ _RULES = (
 
 
 def save_research_quote(conn, brand_id: str, *, actor: str, quote: str, insight: str,
-                        task_layer: str, source_detail: Optional[str] = None) -> dict:
+                        task_layer: str, source_detail: str | None = None) -> dict:
     """把外部調研貼回後已由人確認的單句原話，接進既有 customer_voice 管線。"""
     if task_layer not in TASK_LAYERS:
         raise ValueError("顧客原話分類只能是功能任務、情感任務或社會任務")
@@ -65,7 +63,7 @@ def save_research_quote(conn, brand_id: str, *, actor: str, quote: str, insight:
     )
 
 
-def _normalize_extraction(data) -> Optional[list]:
+def _normalize_extraction(data) -> list | None:
     """驗證模型回覆的 JSON 形狀，回傳正規化後的抽取清單；形狀不符回 None。
 
     空陣列是合法結果（原話沒有值得收的重點），只有「根本不是預期形狀」才視為失敗。
@@ -95,7 +93,7 @@ def _normalize_extraction(data) -> Optional[list]:
     return normalized
 
 
-def _build_user_text(raw_text: str, source_channel: str, source_detail: Optional[str]) -> str:
+def _build_user_text(raw_text: str, source_channel: str, source_detail: str | None) -> str:
     source_line = f"出處：{source_channel}" + (f"（{source_detail}）" if source_detail else "")
     return (
         f"{_RULES}\n\n{source_line}\n\n顧客原話全文：\n{raw_text}\n\n"

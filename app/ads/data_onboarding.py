@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/ads/data_onboarding.py — 搬家精靈（畫面用語「把舊資料搬進來」）四格檢查清單狀態與
 基線成熟門檻（票 F7，決策 0039 第一、四節）。
 
@@ -8,7 +7,6 @@
 """
 
 from datetime import date
-from typing import Optional
 
 from app.ads import ga4_sync
 from app.ads import performance as ads_performance
@@ -62,7 +60,7 @@ _HINTS = {
 }
 
 
-def order_history(conn, brand_id: str, today: Optional[str] = None) -> dict:
+def order_history(conn, brand_id: str, today: str | None = None) -> dict:
     """這個品牌最早一筆訂單到今天隔了幾天，外加已匯入筆數。完全沒有訂單時
     `days`／`earliest` 回 None（鐵則 16：算不出就是算不出，不補算）。"""
     row = conn.execute(
@@ -115,7 +113,7 @@ def interview_done(conn, brand_id: str) -> bool:
     return row is not None
 
 
-def build_checklist(conn, brand_id: str, today: Optional[str] = None) -> list:
+def build_checklist(conn, brand_id: str, today: str | None = None) -> list:
     """四格檢查清單的目前狀態＋動作連結＋（有資料就有的）部分基線小結。"""
     today = today or date.today().isoformat()
     items = []
@@ -244,7 +242,7 @@ def completion(checklist: list) -> dict:
             "all_done": done_count == len(required)}
 
 
-def rail_items(checklist: list, next_item: Optional[dict]) -> list:
+def rail_items(checklist: list, next_item: dict | None) -> list:
     """餵給 `_components/wizard_steps.html` 的 `progress_rail()`：已完成格→done（可點回顧）、
     建議下一步的那一格→current，其餘→future。不隱含強制順序——四格本來就能跳著做，
     這裡只是視覺上標出「現在建議看哪格」。"""
@@ -260,7 +258,7 @@ def rail_items(checklist: list, next_item: Optional[dict]) -> list:
     return items
 
 
-def maturity_report(conn, brand_id: str, today: Optional[str] = None) -> list:
+def maturity_report(conn, brand_id: str, today: str | None = None) -> list:
     """「基線是否成熟」報告：四項門檻逐項打勾＋還缺什麼（決策 0039 第 4 條）。
     數字全部重用既有函式（訂單史／回購樣本／Meta 樣本分級／GA4 涵蓋月數），
     跟四格檢查清單的部分基線小結是同一批計算，不重算第二份。"""

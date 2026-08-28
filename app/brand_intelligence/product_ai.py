@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/brand_intelligence/product_ai.py — 產品快掃與產品調研交接包的純資料函式。
 
 原本住在 `app/intake/ai.py`：建檔精靈當初順手實作了產品快掃，但產品是

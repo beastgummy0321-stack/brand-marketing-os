@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_ads_cycle_delete.py — 檔期封存＋真刪（issue #28，三道保護＋連帶後果明講）。
 
 比照決策 0020 產品先例（app/tests/test_product_delete_routes.py）：三道保護——
@@ -10,12 +9,9 @@
 """
 
 import atexit
-import json
-import os
 import shutil
 import tempfile
 import unittest
-from pathlib import Path
 
 _tmpdir = tempfile.mkdtemp(prefix="brand_os_ads_cycle_delete_")
 
@@ -26,7 +22,6 @@ from app.ads import repository as ads_repo  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
 from app.core import db as coredb  # noqa: E402
 from app.core.db import new_id  # noqa: E402
-
 
 
 def _cleanup():

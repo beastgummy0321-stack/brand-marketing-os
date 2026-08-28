@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/core/db.py — 單一資料存取進入點（ADR 0027：Supabase Postgres，原生 SQL，不用 ORM）。
 
 集裝箱憲章 §1 邊界定案：
@@ -20,12 +19,12 @@ import json
 import logging
 import os
 import time
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
-from typing import Iterator, Optional, Sequence
 
 import psycopg
 from psycopg.rows import dict_row
@@ -48,7 +47,7 @@ DEV_ORG_ID = "org_dev"  # ADR 0027 D2a: placeholder until slice 3 (identity) bin
 
 def now_utc() -> datetime:
     """tz-aware UTC 現在時刻（D1a：寫入 `*_at`/`*_date` 欄位一律傳 datetime/date，不傳字串）。"""
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def now_iso() -> str:
@@ -157,7 +156,7 @@ class Conn:
         logger.debug("Conn.close() is a no-op; the pool owns connection lifetime")
 
 
-_pool: Optional[ConnectionPool] = None
+_pool: ConnectionPool | None = None
 _current: ContextVar["Conn"] = ContextVar("db_current_conn")
 
 

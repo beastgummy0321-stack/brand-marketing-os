@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_ads_codes.py — 配碼歸因＋交接包擴充＋上線前校驗（GitHub issue #35）。
 
 驗收重點（決策 0025 補遺第 2、3 點；補遺第 7 點的鎖住規則已由 ADR 0006 作廢）：
@@ -11,13 +10,9 @@ fixture 一律虛構品牌，嚴禁真實客戶資料（規範第八節）。
 """
 
 import atexit
-import os
 import shutil
 import tempfile
 import unittest
-from pathlib import Path
-
-import pytest
 
 _tmpdir = tempfile.mkdtemp(prefix="brand_os_ads_codes_")
 
@@ -28,9 +23,7 @@ from app.ads import performance as ads_performance  # noqa: E402
 from app.ads import repository as ads_repo  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
 from app.core import db as core_db  # noqa: E402
-from app.core import interrupts as core_interrupts  # noqa: E402
 from app.orders import repository as orders_repo  # noqa: E402
-
 
 
 def _cleanup():

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_ads_reading_settlement.py — 票 06：結算完成後必須撐過重判。
 
 setUp／fixture 比照 app/tests/test_ads_reading.py 的 _ReadingIntegrationBase（同一個
@@ -7,7 +6,6 @@ setUp／fixture 比照 app/tests/test_ads_reading.py 的 _ReadingIntegrationBase
 
 import unittest
 
-import pytest
 from fastapi.testclient import TestClient
 
 import app.main as main

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_core_interrupts.py — 全站打斷佇列（GitHub issue #32，決策 0025／0026）。
 
 驗收重點：
@@ -14,11 +13,8 @@
 import unittest
 from datetime import date, timedelta
 
-import pytest
-
 from app.core import db
 from app.core import interrupts as core_interrupts
-
 
 
 class InterruptQueueTest(unittest.TestCase):

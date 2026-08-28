@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/llm/pricing.py — 模型費率表（供應商原生計價幣別 USD，美元／百萬 token）。
 
 見 docs/design/06-llm-gateway.md §12（PriceBook）。刻意只有一個 dict，不散落他處

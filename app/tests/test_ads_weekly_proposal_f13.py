@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """票 F13：週提案卡點名這期真的漏血的廣告，不是產品；歷史切角卡只在這期還在跑那個
 角度時才出，不是另一期留下來的內部代號。
 
@@ -10,14 +9,11 @@
 import unittest
 from datetime import date, timedelta
 
-import pytest
 from fastapi.testclient import TestClient
 
 import app.main as main
-from app.ads import performance
-from app.ads import reading
+from app.ads import performance, reading, weekly_proposals
 from app.ads import repository as ads_repo
-from app.ads import weekly_proposals
 from app.brand_intelligence import repository as bi_repo
 from app.core import db
 from app.core.db import new_id, now_iso

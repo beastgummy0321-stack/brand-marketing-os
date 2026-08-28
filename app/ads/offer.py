@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/ads/offer.py — 檔期優惠（票 V1-01）。
 
 `offer` 表（`app/ads/migrations/0001_tables.sql:133`）唯一的寫入口：INSERT／UPDATE／
@@ -14,9 +13,8 @@ optional 的 offer row、再把 id 傳給 `create_cycle()`（呼叫順序見
 `routes_campaigns_open_api.py` 的 `create_cycle` 路由），不會撞外鍵。
 """
 
-from typing import Optional
 
-from app.core.db import new_id, now_utc, jsonb, Conn, DEV_ORG_ID
+from app.core.db import DEV_ORG_ID, Conn, jsonb, new_id, now_utc
 
 TYPES = (("discount", "折扣"), ("bundle", "組合"), ("gift", "贈品"))
 _VALID_TYPES = {code for code, _ in TYPES}
@@ -45,11 +43,11 @@ def validate(body: dict) -> tuple:
     return {"name": name, "offer_type": offer_type, "terms": terms}, None
 
 
-def _row(cursor_row) -> Optional[dict]:
+def _row(cursor_row) -> dict | None:
     return dict(cursor_row) if cursor_row is not None else None
 
 
-def get(conn: Conn, brand_id: str, offer_id: str) -> Optional[dict]:
+def get(conn: Conn, brand_id: str, offer_id: str) -> dict | None:
     return _row(conn.execute(
         "SELECT * FROM offer WHERE brand_id = %s AND id = %s", (brand_id, offer_id)
     ).fetchone())

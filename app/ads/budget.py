@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/ads/budget.py — 開期預算的兩個純函數（票 3）。
 
 決策 0016 硬性原則 4：數字走程式、LLM 只解釋。本檔不呼叫 LLM、不碰資料庫、不讀時間，
@@ -11,7 +10,6 @@
 """
 
 from dataclasses import dataclass
-from typing import Optional
 
 # --- 規則表（寫死常數，不讓 LLM 猜；要調就改這裡，改動會被測試接住）-----------------
 
@@ -117,7 +115,7 @@ class Allocation:
     economics_missing: bool    # 介面依此標「精準度打折」＋一鍵去補（決策 0022 第 9 點）
 
 
-def gross_margin(economics: Optional[dict]) -> Optional[float]:
+def gross_margin(economics: dict | None) -> float | None:
     """從 product_economics 算單位毛利：售價 −（單位變動成本 ＋ 運費）。
 
     回 None 代表「算不出來」——缺 economics、缺售價、或毛利 ≤ 0。毛利 ≤ 0 併入「算不出來」是

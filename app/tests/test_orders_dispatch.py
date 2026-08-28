@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_orders_dispatch.py — 訂單票（issue #33）：萬用拖檔口分派層。
 
 驗收條件：拖檔口自動辨識檔案類型並路由到對應解析器（重用既有兩階段欄名比對，只加分派層）。
@@ -8,7 +7,6 @@ import io
 import unittest
 
 import openpyxl
-import pytest
 
 import app.shared.web as web
 from app.ads import reading
@@ -59,7 +57,7 @@ class DispatchTest(unittest.TestCase):
         self.assertEqual(result.order_result.orders_imported, 1)
 
     def test_unrecognisable_file_reports_unknown_kind_honestly(self):
-        content = "foo,bar\n1,2\n".encode("utf-8")
+        content = b"foo,bar\n1,2\n"
         result = orders_dispatch.import_dropped_file(
             web.conn, self.bid, filename="mystery.csv", content=content, actor=ACTOR)
         self.assertEqual(result.kind, "unknown")
@@ -144,7 +142,7 @@ class LateDataRerunDispatchTest(unittest.TestCase):
 
         late_csv = ("Reporting starts,Reporting ends,Campaign name,Amount spent (TWD),"
                    "Impressions,Link clicks,Purchases,Purchases conversion value\n"
-                   "2026-06-01,2026-06-14,虛構檔期,9000,500,5,0,0\n").encode("utf-8")
+                   "2026-06-01,2026-06-14,虛構檔期,9000,500,5,0,0\n").encode()
         result = orders_dispatch.import_dropped_file(
             web.conn, self.bid, filename="meta2.csv", content=late_csv, actor=ACTOR,
             today="2026-06-20")

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/ads/theme_batch.py — 預選格批次生成（票 09-preselect-autogen）。
 
 計畫核准後自動先生：每個切角格（experiment_cell）以 2 個主題為基準，再由已可信的歷史
@@ -32,15 +31,11 @@ theme_engine.py 既有機制，不新寫一套）。
 批次迴圈能在呼叫引擎前就知道「該收手了」，不必解析引擎回傳的錯誤字串來分辨是不是費用問題。
 """
 
-from typing import Optional
 
-from app.core.db import Conn
-from app.ads import brief_assembler
-from app.ads import nextcycle
-from app.ads import theme_feedback
-from app.ads import theme_engine
+from app.ads import brief_assembler, nextcycle, theme_engine, theme_feedback
 from app.core import orchestrator as core_orchestrator
 from app.core import settings as coresettings
+from app.core.db import Conn
 from app.llm import pricing, providers
 
 PRESELECT_FORMAT = "single_image"
@@ -180,7 +175,7 @@ def handle(conn: Conn, action: dict) -> dict:
         conn, action["brand_id"], action["params"]["cycle_id"], actor=_HANDLE_ACTOR)
 
 
-def _rule_add_theme_on_ctr_bottleneck(facts: dict) -> "Optional[dict]":
+def _rule_add_theme_on_ctr_bottleneck(facts: dict) -> "dict | None":
     """規則 2（票 03-orchestrator-core.md）：瓶頸 primary == "ctr" → 創意.add_theme，
     risk asset（保守檔出卡等同意；放手檔自動做）。"""
     if facts.get("diagnosis.bottleneck_primary") != "ctr":

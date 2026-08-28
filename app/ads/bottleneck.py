@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/ads/bottleneck.py — 錢卡在哪一關（票 C2-01，ADR 0024 調度台核心觸發來源之一）。
 
 CPA 恆等式拆解：CPA = (CPM / 1000) / (CTR × CVR)，三個因子（cpm／ctr／cvr）的貢獻度
@@ -20,7 +19,6 @@ CPA 恆等式拆解：CPA = (CPM / 1000) / (CTR × CVR)，三個因子（cpm／c
 """
 
 import math
-from typing import Optional
 
 from app.ads import performance as ads_performance
 from app.ads import reading as ads_reading
@@ -41,7 +39,7 @@ _FATIGUE_AUDIENCE_TYPE = "cold"
 NO_NET_CHANGE_BAND = 0.01
 
 
-def _ratio(worse_numerator: Optional[float], worse_denominator: Optional[float]) -> Optional[float]:
+def _ratio(worse_numerator: float | None, worse_denominator: float | None) -> float | None:
     """算一個因子「變差了幾倍」：分子分母任一個是 None、分母是 0、或除出來 <= 0
     （log 需要正數）一律回 None——不硬猜、也不讓後面的 log 炸掉。"""
     if worse_numerator is None or worse_denominator is None or not worse_denominator:
@@ -50,19 +48,19 @@ def _ratio(worse_numerator: Optional[float], worse_denominator: Optional[float])
     return round(value, 4) if value > 0 else None
 
 
-def _factor(key: str, ratio: Optional[float], detail: str) -> dict:
+def _factor(key: str, ratio: float | None, detail: str) -> dict:
     return {"key": key, "label": _FACTOR_LABELS[key], "ratio": ratio, "share": None,
            "detail": detail, "sub": None}
 
 
-def _detail(current: Optional[float], base: Optional[float], fmt) -> str:
+def _detail(current: float | None, base: float | None, fmt) -> str:
     if current is None or base is None:
         return _NO_BASELINE_DETAIL
     return fmt(current, base)
 
 
 def diagnose(totals: dict, *, baseline: dict, brand_id: str,
-            pacing_status: Optional[str] = None, conn=None) -> dict:
+            pacing_status: str | None = None, conn=None) -> dict:
     """一組本期數字 + 這個品牌自己的歷史基線 → 錢卡在哪一關。回傳形狀見票 C2-01。"""
     baseline = baseline or {}
     impressions = totals.get("impressions") or 0
@@ -109,7 +107,7 @@ def diagnose(totals: dict, *, baseline: dict, brand_id: str,
     if cpm_ratio is not None and ctr_ratio is not None and cvr_ratio is not None:
         cpa_ratio = round(cpm_ratio * ctr_ratio * cvr_ratio, 6)
 
-    def _share(ratio: Optional[float]) -> Optional[float]:
+    def _share(ratio: float | None) -> float | None:
         if ratio is None or cpa_ratio is None:
             return None
         # 總倍率貼近 1 時 ln(cpa_ratio) 趨近 0，貢獻度會炸成天文數字（審查發現 1：

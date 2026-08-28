@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_ads_theme_adopt_reject.py — 主題採用與元件退件路由（票 10-adopt-reject）。
 
 接縫二（路由層，app/ads/routes_creative_theme.py）：一鍵採用整包主題、單元件退件＋理由，
@@ -12,12 +11,9 @@ app/tests/test_brief_assembler.py（票 03）——本專案測試檔一律自�
 """
 
 import atexit
-import json
-import os
 import shutil
 import tempfile
 import unittest
-from pathlib import Path
 
 _tmpdir = tempfile.mkdtemp(prefix="brand_os_theme_adopt_reject_")
 
@@ -29,7 +25,6 @@ from app.ads import repository as ads_repo  # noqa: E402
 from app.ads import theme_repository as theme_repo  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
 from app.core import db  # noqa: E402
-
 
 ACTOR = "測試員"
 

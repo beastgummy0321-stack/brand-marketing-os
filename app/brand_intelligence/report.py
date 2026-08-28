@@ -1,10 +1,8 @@
-# -*- coding: utf-8 -*-
 """app/brand_intelligence/report.py — 顧問分析報告的純資料函式（決策 0017、GitHub issue #4）。
 
 組提示詞與驗證模型回覆的資料形狀；AI 呼叫留在 app.brand_web.routes。
 """
 
-from typing import Optional
 
 # 五章固定順序、固定 key（只存在程式與 JSON 裡，畫面一律顯示中文章名，見 main.py REPORT_SECTIONS）
 SECTION_KEYS = ("positioning", "market", "audience", "claims", "rhythm")
@@ -24,7 +22,7 @@ _SECTION_BRIEF = {
 }
 
 
-def _normalize_sections(data) -> Optional[dict]:
+def _normalize_sections(data) -> dict | None:
     """驗證模型回覆的 JSON 形狀，回傳正規化後的五章 dict；任何一項不符回 None。"""
     if not isinstance(data, dict):
         return None

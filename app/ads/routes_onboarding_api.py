@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """資料上線 React JSON API 與背景回填工作。
 
 對外進入點：本檔的 ``router``、``active_jobs()``。
@@ -8,19 +7,17 @@ POST 回 ``{ok, message}`` 或 HTTP 400 的 ``detail``；``active_jobs()`` 回�
 不碰什麼：不 import 舊 Jinja 路由或等待頁，不重寫 Meta／GA4 同步。
 """
 
-from datetime import datetime, timezone
-from typing import Callable
+from collections.abc import Callable
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, HTTPException, Request
-from app.shared.web import JSONResponse
 
 from app.ads import data_onboarding, ga4_sync
 from app.ads import sync as ads_sync
 from app.brand_intelligence import background_job
 from app.core.db import new_id
 from app.shared import web
-from app.shared.web import NotFoundKind, require_actor, require_brand
-
+from app.shared.web import JSONResponse, NotFoundKind, require_actor, require_brand
 
 router = APIRouter()
 BACKFILL_MONTHS = 12
@@ -99,7 +96,7 @@ def _finish(kind: str, brand_id: str, started_at: str, error: str | None) -> Non
 
 def _run_meta_backfill(brand_id: str, actor: str) -> None:
     kind = "meta_backfill"
-    started_at = _state(kind, brand_id).get("started_at", datetime.now(timezone.utc).isoformat())
+    started_at = _state(kind, brand_id).get("started_at", datetime.now(UTC).isoformat())
     try:
         since, until, _actual_months = ads_sync.backfill_range(BACKFILL_MONTHS)
         result = ads_sync.sync_account(web.conn, actor, since=since, until=until)
@@ -111,9 +108,9 @@ def _run_meta_backfill(brand_id: str, actor: str) -> None:
 
 def _run_ga4_backfill(brand_id: str, actor: str) -> None:
     kind = "ga4_backfill"
-    started_at = _state(kind, brand_id).get("started_at", datetime.now(timezone.utc).isoformat())
+    started_at = _state(kind, brand_id).get("started_at", datetime.now(UTC).isoformat())
     try:
-        until = datetime.now(timezone.utc).date().isoformat()
+        until = datetime.now(UTC).date().isoformat()
         since = ads_sync.months_before(until, BACKFILL_MONTHS)
         result = ga4_sync.sync_brand(web.conn, brand_id, actor, since=since, until=until)
         error = result.error
@@ -124,7 +121,7 @@ def _run_ga4_backfill(brand_id: str, actor: str) -> None:
 
 def _run_ga4_sync(brand_id: str, actor: str) -> None:
     kind = "ga4_sync"
-    started_at = _state(kind, brand_id).get("started_at", datetime.now(timezone.utc).isoformat())
+    started_at = _state(kind, brand_id).get("started_at", datetime.now(UTC).isoformat())
     try:
         result = ga4_sync.sync_brand(web.conn, brand_id, actor)
         error = result.error
@@ -136,7 +133,7 @@ def _run_ga4_sync(brand_id: str, actor: str) -> None:
 def _start(kind: str, brand_id: str, actor: str, target: Callable[[str, str], None]) -> dict:
     if _state(kind, brand_id).get("status") == "running":
         raise HTTPException(status_code=400, detail="這個品牌的回填正在進行中。")
-    started_at = datetime.now(timezone.utc).isoformat()
+    started_at = datetime.now(UTC).isoformat()
     _jobs.start(
         _key(kind, brand_id),
         {"status": "running", "stage": _JOB_DETAILS[kind]["stage"], "started_at": started_at,
@@ -163,7 +160,7 @@ async def onboarding_get(brand_id: str):
             "maturity": {"rows": maturity, "all_met": all(row["met"] for row in maturity)},
             "jobs": {kind: _job_shape(kind, brand_id) for kind in _JOB_DETAILS},
         },
-        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "generated_at": datetime.now(UTC).isoformat(),
     }
 
 

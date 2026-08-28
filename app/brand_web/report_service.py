@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """顧問分析報告的生成與顯示資料。
 
 對外進入點：本檔。
@@ -8,13 +7,12 @@ sections(report) -> list[dict]；recent(brand_id) -> bool。
 不碰什麼：不 import app.brand_web.routes；不修改或 import app.brand_intelligence.report 的內部實作。
 """
 
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 
 from app.brand_intelligence import report as brand_report_mod
 from app.brand_intelligence import repository as repo
 from app.llm import context_compiler, gateway, providers
 from app.shared import web
-
 
 PROVIDER = providers.AnthropicProvider()
 REPORT_SECTION_LABELS = {
@@ -80,8 +78,8 @@ def recent(brand_id: str) -> bool:
         return False
     generated_at = latest["generated_at"]
     if generated_at.tzinfo is None:
-        generated_at = generated_at.replace(tzinfo=timezone.utc)
-    age = (datetime.now(timezone.utc) - generated_at).total_seconds()
+        generated_at = generated_at.replace(tzinfo=UTC)
+    age = (datetime.now(UTC) - generated_at).total_seconds()
     return age < _REPORT_RECENT_SECONDS
 
 

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_brand_delete_routes.py — 永久刪除品牌 JSON API（`routes_library.py`
 `brand_delete_api()`）。
 

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_ads_carry_forward.py — R3-carry-forward-winners（B0-29／B0-36）。
 
 「沿用有效方向」要真的讀贏家：企劃 prompt 具名帶上期真正打贏的切角（ROAS／花費／轉換數，
@@ -18,15 +17,15 @@ import shutil
 import tempfile
 import unittest
 
-import pytest
-
 _tmpdir = tempfile.mkdtemp(prefix="brand_os_ads_carry_forward_")
 
 import app.main as main  # noqa: E402
-from app.ads import carry_forward  # noqa: E402
-from app.ads import opening_suggestion  # noqa: E402
+from app.ads import (
+    carry_forward,  # noqa: E402
+    opening_suggestion,  # noqa: E402
+    plan_citation,  # noqa: E402
+)
 from app.ads import plan as ads_plan  # noqa: E402
-from app.ads import plan_citation  # noqa: E402
 from app.ads import reading as ads_reading  # noqa: E402
 from app.ads import repository as ads_repo  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402

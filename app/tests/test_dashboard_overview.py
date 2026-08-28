@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_dashboard_overview.py — 票 02-overview-cards：儀表板跨品牌總覽 API。
 
 每個測試模組一個 Postgres schema（conftest.py 的 `_module_schema` fixture），

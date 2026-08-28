@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/brand_intelligence/repository_channels.py — Owned Channel（自有渠道）存取層。
 
 從 `repository.py` 拆出（票 B2-library 第二段）：`repository.py` 行數已頂到
@@ -18,10 +17,9 @@ re-export（`from app.brand_intelligence.repository_channels import ...`），�
 `app/ads/handoff.py`（`list_channels` 找預設到達網址）。
 """
 
-from typing import Optional
 
 from app.core.audit import write_audit
-from app.core.db import new_id, now_utc, Conn, DEV_ORG_ID
+from app.core.db import DEV_ORG_ID, Conn, new_id, now_utc
 
 
 def _require(value, message: str) -> None:
@@ -29,7 +27,7 @@ def _require(value, message: str) -> None:
         raise ValueError(message)
 
 
-def _row(cursor_row) -> Optional[dict]:
+def _row(cursor_row) -> dict | None:
     return dict(cursor_row) if cursor_row is not None else None
 
 
@@ -41,8 +39,8 @@ _CHANNEL_PLATFORM_DEFAULT = {"website": "web", "fb_page": "meta", "ig_account": 
 
 
 def create_channel(conn: Conn, brand_id: str, *, actor: str, channel_type: str,
-                    name: str, identifier: Optional[str] = None, status: str = "active",
-                    platform: Optional[str] = None) -> dict:
+                    name: str, identifier: str | None = None, status: str = "active",
+                    platform: str | None = None) -> dict:
     _require(channel_type, "owned_channel.channel_type 為必填")
     _require(name, "owned_channel.name 為必填")
     _require(actor, "actor 為必填")
@@ -74,14 +72,14 @@ def list_channels(conn: Conn, brand_id: str) -> list:
     ))
 
 
-def get_channel(conn: Conn, brand_id: str, channel_id: str) -> Optional[dict]:
+def get_channel(conn: Conn, brand_id: str, channel_id: str) -> dict | None:
     return _row(conn.execute(
         "SELECT * FROM owned_channel WHERE id = %s AND brand_id = %s", (channel_id, brand_id)
     ).fetchone())
 
 
 def update_channel(conn: Conn, brand_id: str, channel_id: str, *, actor: str,
-                    channel_type: str, name: str, identifier: Optional[str] = None,
+                    channel_type: str, name: str, identifier: str | None = None,
                     status: str = "active") -> dict:
     """編輯自有渠道（票 B2-library S5.31）：人工編輯直接生效，比照 update_rule。渠道不是
     AI 生成的 context 輸入，不像 brand_fact／rule／claim 那樣要 bump knowledge_version

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/intake/state.py — 建檔精靈的草稿狀態（存 intake_draft 資料表，重啟可續接）。
 
 原本是模組層 dict 的 Mock；本輪改為每次讀寫都經 app/intake/repository.py 落地 DB。
@@ -16,11 +15,9 @@ answer_key, answer_text, skipped, llm_task_id}（03 §3A.2）。answer_key 為�
 import os
 import re
 from pathlib import Path
-from typing import Optional
 
-from app.core.db import REPO_ROOT, new_id, DEV_ORG_ID
+from app.core.db import REPO_ROOT, new_id
 from app.intake import repository as ir
-from app.intake import script
 
 REFRESH_SECONDS = 3  # 進度頁 <meta refresh> 秒數，與 DESIGN.md §19.4 範例一致
 
@@ -211,7 +208,7 @@ def new_draft(brand_id: str, brand_name: str, *, description: str, urls: list, p
     return _row_to_draft(conn, row)
 
 
-def get_draft(brand_id: str, conn=None) -> Optional[dict]:
+def get_draft(brand_id: str, conn=None) -> dict | None:
     conn = _conn(conn)
     row = ir.get_active_draft(conn, brand_id)
     return _row_to_draft(conn, row) if row else None
@@ -228,12 +225,12 @@ def is_restart_draft(brand_id: str, draft_id: str, conn=None) -> bool:
     return (row["c"] if row else 0) > 0
 
 
-def invalid_url(urls: list) -> Optional[str]:
+def invalid_url(urls: list) -> str | None:
     """回傳第一個格式不對的網址；全部合法回 None（S4.5，HTML／JSON 兩套路由共用）。"""
     return next((u for u in urls if not (u.startswith("http://") or u.startswith("https://"))), None)
 
 
-def prev_photos(last_draft_row: Optional[dict]) -> list:
+def prev_photos(last_draft_row: dict | None) -> list:
     """上一輪草稿的照片（photos_json 形狀 → 畫面／new_draft 慣用形狀）；W1b 重新調研沿用。"""
     if not last_draft_row:
         return []
@@ -246,7 +243,7 @@ def prev_photos(last_draft_row: Optional[dict]) -> list:
 
 
 def start_or_quick(conn, brand_id: str, brand_name: str, *, description: str, urls: list,
-                    photos: list, actor: str) -> Optional[dict]:
+                    photos: list, actor: str) -> dict | None:
     """S4.9／S4.10 共用判斷：描述／網址／照片三者皆空＝陽春路徑，不建草稿（回傳 None）；
     否則建立草稿並回傳。呼叫端（HTML 表單／JSON API）先各自建好／取得品牌，這裡只管
     「建不建草稿」這一刀，不重複寫兩次（CLAUDE.md 第五節：同一能力只准一條代碼路徑）。"""
@@ -256,13 +253,13 @@ def start_or_quick(conn, brand_id: str, brand_name: str, *, description: str, ur
                      actor=actor, conn=conn)
 
 
-def apply_paste(draft: dict, paste_input, conn=None) -> Optional[int]:
+def apply_paste(draft: dict, paste_input, conn=None) -> int | None:
     """驗證＋（全過才）整批落地 intake_item。回傳落地筆數；驗證失敗回 None（錯誤已寫進草稿）。
 
     W8 貼回頁的 HTML 表單與 JSON API（paste/validate、paste/resolve-scope、AI 修格式完成後）
     共用同一支，不寫兩份（CLAUDE.md 第五節；票 B3-intake 從 routes.py `_apply_paste` 搬來）。"""
-    from app.intake import paste_parse
     from app.brand_intelligence import repository as bi_repo
+    from app.intake import paste_parse
     conn = _conn(conn)
     known = {p["name"] for p in bi_repo.list_products(conn, draft["brand_id"])}
     if isinstance(paste_input, list):
@@ -304,7 +301,7 @@ def create_scanned_products(conn, brand_id: str, draft: dict, names: list, actor
 
 
 def create_product_from_card(conn, brand_id: str, draft: dict, source_photo_token: str,
-                             actor: str) -> Optional[str]:
+                             actor: str) -> str | None:
     """照片產品卡沿用既有產品／產品事實入口；價格不寫入任何欄位。"""
     from app.brand_intelligence import repository as bi_repo
     card = next((item for item in draft.get("product_card_drafts") or []
@@ -403,7 +400,7 @@ def discard_pending_photos(token: str) -> None:
 PHOTO_EXTS = ("jpg", "jpeg", "png", "webp")
 
 
-def validate_photo_upload(filename: str, content: bytes) -> Optional[str]:
+def validate_photo_upload(filename: str, content: bytes) -> str | None:
     """副檔名／單張大小驗證（S4.6）；回傳人話錯誤，通過回 None。HTML 表單與 JSON
     `/api/intake/photos` 共用同一支，不各自寫一份。"""
     ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
@@ -481,7 +478,7 @@ def cost_state(draft: dict) -> str:
 # ---------------------------------------------------------------------------
 
 def append_question(draft: dict, question: str, suggested: dict, branches: list,
-                    llm_task_id: Optional[str], aspect: Optional[str] = None) -> None:
+                    llm_task_id: str | None, aspect: str | None = None) -> None:
     entries = _qa_entries(draft["qa"])
     options = [{"key": "suggested", "label": suggested.get("label") or "",
                 "note": suggested.get("desc") or ""}]
@@ -501,7 +498,7 @@ def mark_qa_done(draft: dict) -> None:
         draft["qa_done"] = True
 
 
-def current_entry(draft: dict) -> Optional[dict]:
+def current_entry(draft: dict) -> dict | None:
     return next((e for e in _qa_entries(draft["qa"])
                  if not e.get("answer_key") and not e.get("skipped")), None)
 

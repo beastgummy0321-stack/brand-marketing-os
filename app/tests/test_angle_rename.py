@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_angle_rename.py — 票 04-angle-rename：切角改名。
 
 決議（`.scratch/e2e-adflow/issues/04-angle-rename-todo.md`）：只做改名，不動 schema
@@ -13,7 +12,6 @@ import time
 import unittest
 from datetime import timedelta
 
-import pytest
 from fastapi.testclient import TestClient
 
 import app.main as main

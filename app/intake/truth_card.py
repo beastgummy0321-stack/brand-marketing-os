@@ -1,8 +1,6 @@
-# -*- coding: utf-8 -*-
 """真相卡的機械分格與批次答案解析；不碰資料庫。"""
 
 import re
-
 
 _PRICE_TERMS = ("價格", "售價", "定價", "金額", "價錢", "單價")
 _MONEY_PATTERN = re.compile(r"(?:NT\$|TWD|USD|新台幣|元|塊)\s*\d|\d\s*(?:元|塊)", re.IGNORECASE)

@@ -1,16 +1,10 @@
-# -*- coding: utf-8 -*-
 """票 05：到期提醒由既有自動同步排程觸發判讀與期末結算。"""
 
 import unittest
 from datetime import date, timedelta
 
-import pytest
-
 import app.main as main
-from app.ads import auto_sync
-from app.ads import onboarding
-from app.ads import performance
-from app.ads import reading
+from app.ads import auto_sync, onboarding, performance, reading
 from app.ads import repository as ads_repo
 from app.brand_intelligence import repository as bi_repo
 from app.llm.providers import FakeProvider, ProviderResponse, Usage

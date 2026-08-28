@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/ads/routes_settings.py — 設定中心「廣告層面」規則卡／節日提醒 /api 端點（票
 02-qa-reminder-reset；T4 廣告模組 Jinja 大清倉刪掉本檔的 Jinja 舊頁 `/brands/{id}/
 settings/ads` 與同款表單 POST，新殼走下面這幾組 JSON API，行為不變）。
@@ -11,16 +10,15 @@ settings/ads` 與同款表單 POST，新殼走下面這幾組 JSON API，行為�
 `app/ads/routes.py`。
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Request
-from app.shared.web import JSONResponse
 
 import app.shared.web as main_mod
-from app.ads import meta_mcp
-from app.ads import style_preference
+from app.ads import meta_mcp, style_preference
 from app.core import calendar_dismiss as core_calendar_dismiss
 from app.core import rule_cards
+from app.shared.web import JSONResponse
 
 router = APIRouter()
 
@@ -40,7 +38,7 @@ async def api_meta_mcp_get():
         data["pages"] = pages_result.get("pages", []) if pages_result["ok"] else []
         data["pages_error"] = None if pages_result["ok"] else pages_result["reason"]
         data["selected_page_id"] = meta_mcp.get_page_id()
-    return {"data": data, "generated_at": datetime.now(timezone.utc).isoformat()}
+    return {"data": data, "generated_at": datetime.now(UTC).isoformat()}
 
 
 @router.post("/api/settings/meta-mcp/page")
@@ -134,7 +132,7 @@ async def api_rule_cards_get(brand_id: str):
     cards = [_rule_card_json(c) for c in rule_cards.list_cards(main_mod.conn, brand_id)]
     return {
         "data": {"brand_id": brand_id, "cards": cards},
-        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "generated_at": datetime.now(UTC).isoformat(),
     }
 
 
@@ -160,7 +158,7 @@ async def api_rule_cards_save(request: Request, brand_id: str, card_key: str):
     for field_key, value in parsed.items():
         rule_cards.set_value(main_mod.conn, brand_id, card_key, field_key, value, actor)
     card = rule_cards.get_card(main_mod.conn, brand_id, card_key)
-    return {"data": _rule_card_json(card), "generated_at": datetime.now(timezone.utc).isoformat()}
+    return {"data": _rule_card_json(card), "generated_at": datetime.now(UTC).isoformat()}
 
 
 @router.post("/api/settings/rule-cards/brands/{brand_id}/{card_key}/reset")
@@ -171,7 +169,7 @@ async def api_rule_cards_reset(request: Request, brand_id: str, card_key: str):
         raise main_mod.NotFoundKind("規則卡")
     rule_cards.reset_card(main_mod.conn, brand_id, card_key, actor)
     card = rule_cards.get_card(main_mod.conn, brand_id, card_key)
-    return {"data": _rule_card_json(card), "generated_at": datetime.now(timezone.utc).isoformat()}
+    return {"data": _rule_card_json(card), "generated_at": datetime.now(UTC).isoformat()}
 
 
 # ---------------------------------------------------------------------------
@@ -185,7 +183,7 @@ async def api_calendar_categories_get(brand_id: str):
     categories = _calendar_categories_ctx(main_mod.conn, brand_id)
     return {
         "data": {"brand_id": brand_id, "categories": categories},
-        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "generated_at": datetime.now(UTC).isoformat(),
     }
 
 
@@ -206,4 +204,4 @@ async def api_calendar_category_toggle(request: Request, brand_id: str, category
     else:
         core_calendar_dismiss.dismiss(main_mod.conn, brand_id, category)
     item = next(c for c in _calendar_categories_ctx(main_mod.conn, brand_id) if c["category"] == category)
-    return {"data": item, "generated_at": datetime.now(timezone.utc).isoformat()}
+    return {"data": item, "generated_at": datetime.now(UTC).isoformat()}

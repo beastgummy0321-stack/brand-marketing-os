@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/ads/routes_campaigns_open_api.py — S8 開檔＋企劃 JSON API（票 B4-warroom 接線，契約
 `.scratch/grill/GRILL-B4-warroom.md`＋`GRILL-B4R-performance.md`，型別逐欄對照
 `frontend/src/lib/warroomApi.ts`）。
@@ -13,36 +12,43 @@
 """
 
 import time
-from datetime import date, timedelta
+from datetime import UTC, date, timedelta
 
 from fastapi import APIRouter, Request
-from app.shared.web import JSONResponse
 
 import app.shared.web as main_mod
-from app.ads import budget as budget_calc
-from app.ads import account_structure
+from app.ads import (
+    account_structure,
+    carry_forward,
+    nextcycle,
+    opening_suggestion,
+    proposal,
+    simulation,
+    target_cpa,
+    theme_batch,
+)
 from app.ads import auto_sync as ads_auto_sync
-from app.ads import carry_forward
+from app.ads import budget as budget_calc
 from app.ads import handoff as ads_handoff
 from app.ads import offer as offer_mod
 from app.ads import plan as ads_plan
-from app.ads import nextcycle
-from app.ads import opening_suggestion
-from app.ads import proposal
 from app.ads import repository as ads_repo
 from app.ads import routes as ads_routes
-from app.ads import simulation
-from app.ads import stages
-from app.ads import target_cpa
-from app.ads import theme_batch
 from app.ads.nextcycle import list_pending_rule_cards
-from app.llm import gateway
 from app.ads.routes_common import (
-    DURATION_TIER_CONFIG, OBJECTIVES, _crumb, _cycle_view, _duration_suggestion,
-    _recommended_objective, _require_cycle, _slider_options, derive_cycle_stage,
+    DURATION_TIER_CONFIG,
+    OBJECTIVES,
+    _cycle_view,
+    _duration_suggestion,
+    _recommended_objective,
+    _require_cycle,
+    _slider_options,
+    derive_cycle_stage,
 )
 from app.brand_intelligence import repository as bi
 from app.core import settings as core_settings
+from app.llm import gateway
+from app.shared.web import JSONResponse
 
 router = APIRouter()
 
@@ -72,8 +78,8 @@ def _plan_generate_ceiling_seconds() -> int:
 
 
 def _envelope(data) -> dict:
-    from datetime import datetime, timezone
-    return {"data": data, "generated_at": datetime.now(timezone.utc).isoformat()}
+    from datetime import datetime
+    return {"data": data, "generated_at": datetime.now(UTC).isoformat()}
 
 
 def _error(status_code: int, message: str) -> JSONResponse:

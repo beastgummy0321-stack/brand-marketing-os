@@ -1,11 +1,8 @@
-# -*- coding: utf-8 -*-
 """交付前素材確認，狀態保存於既有 campaign_cycle.derived_plan_json 的新增鍵。"""
 
-from app.ads import creative
-from app.ads import handoff
+from app.ads import creative, handoff
 from app.ads import repository as ads_repo
-from app.core.db import now_utc, jsonb
-
+from app.core.db import jsonb, now_utc
 
 _STATE_KEY = "delivery_confirmation"
 

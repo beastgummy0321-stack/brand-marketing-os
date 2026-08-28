@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """累積智慧的 JSON API（票 T5-02）。
 
 對外進入點：本檔的 ``router``，以及供舊 Jinja 路由共用的讀取／動作函式。
@@ -8,10 +7,9 @@
 不碰：不改 ``context_compiler``、``nextcycle``、``rule_lifecycle``，不依賴前端或 Jinja 模板。
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Request
-from app.shared.web import JSONResponse
 
 import app.shared.web as main_mod
 from app.ads import nextcycle
@@ -20,6 +18,7 @@ from app.ads import repository as ads_repo
 from app.brand_intelligence import repository as bi
 from app.brand_intelligence.repository_learning_text import collapse_learnings
 from app.llm import context_compiler
+from app.shared.web import JSONResponse
 
 router = APIRouter()
 
@@ -124,7 +123,7 @@ def decide_rule_card(conn, brand_id: str, card_id: str, *, accept: bool, actor: 
 
 
 def _envelope(data: dict) -> dict:
-    return {"data": data, "generated_at": datetime.now(timezone.utc).isoformat()}
+    return {"data": data, "generated_at": datetime.now(UTC).isoformat()}
 
 
 def _action_response(result: dict) -> dict | JSONResponse:

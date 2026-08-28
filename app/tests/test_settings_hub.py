@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_settings_hub.py — 設定中心分品牌路由（設定中心票 01）。
 
 `/brands/{brand_id}/settings`（入口頁）與 `/brands/{brand_id}/settings/ads`（廣告層面詳細頁）。
@@ -13,9 +12,8 @@ from fastapi.testclient import TestClient
 import app.main as main
 import app.shared.web as web
 from app.brand_intelligence import repository as bi_repo
-from app.core import calendar_dismiss
+from app.core import calendar_dismiss, rule_cards
 from app.core import db as coredb
-from app.core import rule_cards
 from app.shared import web as shared_web
 from app.shared.web import OPERATOR
 

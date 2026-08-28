@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_ads_handoff.py — 廣告分支票 8：投放交接包、具名授權、回填 Meta ID。
 
 重點在安全邊界（鐵則 4）：授權必須具名、投放啟動必須引用授權、
@@ -7,15 +6,12 @@
 
 import atexit
 import json
-import os
 import shutil
 import tempfile
 import unittest
-from pathlib import Path
 
 _tmpdir = tempfile.mkdtemp(prefix="brand_os_ads_handoff_")
 
-import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
 import app.main as main  # noqa: E402
@@ -28,7 +24,6 @@ from app.core import db as coredb  # noqa: E402
 from app.core.db import new_id, now_iso  # noqa: E402
 from app.llm.providers import FakeProvider, ProviderResponse, Usage  # noqa: E402
 from app.shared.web import OPERATOR  # noqa: E402
-
 
 
 def _cleanup():

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_core_orchestrator.py — 票 O1-01：調度台本體 decide()＋派工員＋決策留痕。
 
 `OrchestratorMechanicsTest` 測 decide()／run() 本身的機制（純函數性質、去重、錯誤邊界、
@@ -24,20 +23,11 @@ import inspect
 import unittest
 from unittest import mock
 
-import pytest
-
-
-from app.ads import auto_sync
+from app.ads import auto_sync, health_lights, meta_mcp, theme_batch, weekly_proposals
 from app.ads import diagnosis as ads_diagnosis
-from app.ads import health_lights
-from app.ads import meta_mcp
 from app.ads import proposal as ads_proposal
-from app.ads import theme_batch
-from app.ads import weekly_proposals
-from app.core import db
+from app.core import db, orchestrator, rule_cards
 from app.core import interrupts as core_interrupts
-from app.core import orchestrator
-from app.core import rule_cards
 from app.intake import dispatch as intake_dispatch
 
 ACTOR = "測試員"

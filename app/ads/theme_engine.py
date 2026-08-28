@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/ads/theme_engine.py — 主題生成引擎的 ads 側入口（票 14-engine-move 拆分後）。
 
 「切角 × 廣告格式 → 主題」已落地兩個格式：single_image（單圖）、carousel（敘事型輪播）。
@@ -28,6 +27,7 @@
 """
 
 import re
+from collections.abc import Callable
 
 from app.ads import fingerprint as fp
 from app.ads import theme_repository as theme_repo
@@ -37,7 +37,6 @@ from app.core import settings as coresettings
 from app.core.db import new_id
 from app.creative import theme_engine as _engine
 from app.llm import gateway, pricing, providers
-from typing import Callable, Optional
 
 PROVIDER = providers.AnthropicProvider()  # 測試整包換掉，比照 app/ads/creative.py 慣例
 
@@ -63,7 +62,7 @@ def _carousel_fields_plan(objective: str) -> dict:
 _UNSAFE_FOLDER_CHARS = re.compile(r'[\\/:*?"<>|\r\n\t]+')
 
 
-def _call_char_rewrite(conn, brief: CreativeBrief, items: list) -> Optional[list]:
+def _call_char_rewrite(conn, brief: CreativeBrief, items: list) -> list | None:
     """走引擎同一生成入口（同一個 PROVIDER、同一個 gateway.run_task）批次重寫超字元件——
     一次呼叫帶全部超字則數，不逐則各打一次（票 05 驗收「觸發一次重寫呼叫」）。
     失敗（AI 沒回、格式讀不成）回 None，呼叫端 fallback＝保留原文、標超字，不擋採用。
@@ -101,7 +100,7 @@ def _apply_char_guard(conn, brief: CreativeBrief, components: list, plan: dict) 
     return _engine.apply_char_rewrites(components, over_idx, budgets, rewrites)
 
 
-def refresh_component_fingerprint(conn, brand_id: str, text: str) -> Optional[dict]:
+def refresh_component_fingerprint(conn, brand_id: str, text: str) -> dict | None:
     """text 進、fingerprint dict 出。AI 失敗或花費超上限回 None——呼叫端保留舊指紋，
     不擋文字本身的同步更新（AC2：文字一律跟著 Meta 同步，指紋是錦上添花，不是前提）。
     """
@@ -128,7 +127,7 @@ def refresh_component_fingerprint(conn, brand_id: str, text: str) -> Optional[di
 
 
 def generate_single_image_theme(conn, brief: CreativeBrief, *, actor: str,
-                                on_stage: Optional[Callable[[str], None]] = None) -> tuple:
+                                on_stage: Callable[[str], None] | None = None) -> tuple:
     """單圖主題生成。成功回 (generated_dict, None)；失敗回 (None, 人話錯誤)，不落地。
 
     generated_dict 形狀：{"name": str, "components": [{"component_type", "content",
@@ -186,7 +185,7 @@ def generate_single_image_theme(conn, brief: CreativeBrief, *, actor: str,
 
 
 def generate_carousel_theme(conn, brief: CreativeBrief, *, actor: str,
-                            on_stage: Optional[Callable[[str], None]] = None) -> tuple:
+                            on_stage: Callable[[str], None] | None = None) -> tuple:
     """輪播主題生成（票 07-carousel-theme）。跟 generate_single_image_theme 同一個形狀、
     同一套守門，只有 prompt 組裝（build_carousel_prompt）與驗證（normalize_carousel）
     是輪播專屬的；字數守門（_apply_char_guard）與相似度標黃（apply_similarity_flag）原封

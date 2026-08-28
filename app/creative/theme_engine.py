@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/creative/theme_engine.py — 主題生成引擎的純函式庫（票 14-engine-move，搬自
 app/ads/theme_engine.py）。
 
@@ -31,7 +30,6 @@ app/ads/theme_engine.py 當呼叫端的orchestration；本檔只管兩件事：�
 檔頭），共用本檔的字數守門與相似度標黃函式，不另寫一套。
 """
 
-from typing import Optional
 
 from app.creative.format_specs import FORMAT_SPECS, QUICK_GENERATE_SCOPES
 
@@ -263,7 +261,7 @@ def build_carousel_prompt(brief, plan: dict, fp) -> str:
     return "\n\n".join(parts)
 
 
-def normalize_single_image(data, plan: dict, fp) -> Optional[dict]:
+def normalize_single_image(data, plan: dict, fp) -> dict | None:
     """驗證形狀：缺 name／欄位不是陣列就整批判失敗；單則缺內容的直接丟掉，不猜。
 
     ponytail：不強制核對則數對規格表（AI 沒照 plan 要求的數量出時，有多少存多少）——
@@ -305,7 +303,7 @@ def normalize_single_image(data, plan: dict, fp) -> Optional[dict]:
     return {"name": name.strip(), "components": components}
 
 
-def normalize_carousel(data, plan: dict, fp) -> Optional[dict]:
+def normalize_carousel(data, plan: dict, fp) -> dict | None:
     """驗證輪播形狀，回傳跟 normalize_single_image 同一種扁平 {"name", "components"}——
     save_generated_theme() 因此不必為輪播另寫一份（票 07：走 04 的同一條存檔路徑）。
 
@@ -415,7 +413,7 @@ def over_budget_items(components: list, plan: dict) -> tuple:
 
 
 def apply_char_rewrites(components: list, over_idx: list, budgets: dict,
-                        rewrites: Optional[list]) -> list:
+                        rewrites: list | None) -> list:
     """字數守門（票 05）第二步：AI 重寫呼叫（ads 端執行）回來後，寫回內容並標記
     `over_budget`——重寫後仍超就標，不截斷、不擋採用；`rewrites` 為 None（呼叫失敗／格式
     讀不成）時 fallback＝保留原文、標超字。
@@ -474,6 +472,6 @@ def build_refingerprint_prompt(text: str, fp) -> str:
     )
 
 
-def parse_refingerprint_reply(data, fp) -> Optional[dict]:
+def parse_refingerprint_reply(data, fp) -> dict | None:
     fingerprint = fp.normalize(data.get("fingerprint")) if isinstance(data, dict) else {}
     return fingerprint or None

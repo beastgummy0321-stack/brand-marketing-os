@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """T3 開檔建議的純規則。
 
 對外進入點：opening_suggestion() 與 save_channel_answer()。
@@ -10,12 +9,9 @@ app/ads/plan.py 讀，判斷這期是不是走「沿用有效方向」（R3-carr
 
 from collections import defaultdict
 
-from app.ads import budget
-from app.ads import nextcycle
+from app.ads import budget, nextcycle, target_cpa
 from app.ads import repository as ads_repo
-from app.ads import target_cpa
 from app.brand_intelligence import repository as bi
-
 
 CARRY_FORWARD_DIRECTION = "沿用有效方向"  # 跟 frontend/.../NewCycleDirectionChoice.tsx
 # 的按鈕文案逐字同步——使用者按這顆鈕時，前端把 `f"{CARRY_FORWARD_DIRECTION}：{direction}"`

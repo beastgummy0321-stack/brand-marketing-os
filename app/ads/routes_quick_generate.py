@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/ads/routes_quick_generate.py — 快速生成端點（票 01-quick-generate-endpoint／G12）。
 
 素材工作檯「快速生成」：不開檔期、不用切角格，選一個類型（完整貼文／完整影片／單張圖片／
@@ -36,12 +35,10 @@ ponytail：多花一點 AI 產出（title／description 生完即丟）換取「
 """
 
 from fastapi import APIRouter, Request
-from app.shared.web import JSONResponse
 
 import app.shared.web as main_mod
-from app.ads import compliance
+from app.ads import compliance, theme_engine
 from app.ads import fingerprint as fp
-from app.ads import theme_engine
 from app.ads.brief_assembler import CreativeBrief
 from app.ads.creative import METHODOLOGY_TASK_LABELS, _customer_voice_block, _rejection_constraints
 from app.core import settings as coresettings
@@ -49,6 +46,7 @@ from app.creative import theme_engine as core_theme_engine
 from app.creative import theme_engine_video as core_theme_engine_video
 from app.creative.format_specs import FORMAT_SPECS, QUICK_GENERATE_SCOPES
 from app.llm import context_compiler, gateway, methodology, pricing, providers
+from app.shared.web import JSONResponse
 
 router = APIRouter(prefix="/api/creative")
 

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_ads_funnel_stage.py — 票 04：漏斗階段接上的最小自檢。
 
 品牌名一律虛構，絕不使用真實客戶品牌。

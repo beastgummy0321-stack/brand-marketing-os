@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/core/net.py — 讀一個網址、抽出純文字節錄。
 
 原本住在 `app/intake/ai.py`，只有建檔精靈在用；產品調研搬去 `brand_intelligence`

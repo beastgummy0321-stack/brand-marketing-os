@@ -1,11 +1,9 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_ads_creative_theme.py — 主題資料模型存取層（票 02-theme-tables）。
 
 驗 app/ads/theme_repository.py 的建立／讀取／依格查詢／狀態更新來回讀寫，
 以及元件的型別／序號／指紋／超字標記／標黃旗標欄位。品牌與檔期一律虛構。
 """
 
-import json
 import unittest
 
 from app.ads import fingerprint as fp

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_dashboard_health.py — 票 02-overview-cards：健康度燈號純函數情境測試。
 
 規格 0001「健康度燈號第一版」：有未結 money_loss＝紅、有未結 rule_warning＝黃、

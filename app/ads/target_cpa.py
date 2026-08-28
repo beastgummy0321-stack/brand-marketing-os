@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/ads/target_cpa.py — 目標 CPA 三層鏈＋投放量護欄＋三檔預算卡（票 21）。
 
 設計依據見 .scratch/creative-studio/issues/21-target-cpa-guardrail.md（已查證，勿另立機制）：
@@ -15,7 +14,6 @@
 """
 
 from datetime import date
-from typing import Optional
 
 from app.ads import budget as budget_calc
 from app.ads import codes as ads_codes
@@ -42,7 +40,7 @@ LEARNING_PHASE_NOTE = "新檔期會重跑 Meta 學習期，初期 CPA 偏高屬�
 # 三層鏈：解析
 # ---------------------------------------------------------------------------
 
-def _historical_tier(conn, brand_id: str, objective: str) -> Optional[dict]:
+def _historical_tier(conn, brand_id: str, objective: str) -> dict | None:
     """第 1 層：同目標最近一期已結束檔期的實際 CPA。查無廣告碼或淨歸因數為 0 就跳下一期。"""
     cycles = [c for c in ads_repo.list_cycles(conn, brand_id)
               if c["objective"] == objective and c["status"] == "CLOSED"]
@@ -61,7 +59,7 @@ def _historical_tier(conn, brand_id: str, objective: str) -> Optional[dict]:
     return None
 
 
-def _breakeven_tier(conn, brand_id: str, product_ids: list) -> Optional[dict]:
+def _breakeven_tier(conn, brand_id: str, product_ids: list) -> dict | None:
     """第 2 層（僅 sales）：這期只對應單一產品時，用該產品單位毛利當打平 CPA。"""
     if len(product_ids) != 1:
         return None
@@ -72,7 +70,7 @@ def _breakeven_tier(conn, brand_id: str, product_ids: list) -> Optional[dict]:
             "basis_label": "打平 CPA：這期唯一產品的單位毛利（賣一件不賺不賠的上限）"}
 
 
-def _guided_tier(conn, brand_id: str) -> Optional[dict]:
+def _guided_tier(conn, brand_id: str) -> dict | None:
     """第 3 層：讀最近一筆已存的引導推算值（brand-level，product_id 為 None）。"""
     baselines = bi.list_brand_performance_baselines(conn, brand_id)
     row = next((b for b in baselines if b["metric"] == "target_cpa" and b["product_id"] is None),
@@ -83,7 +81,7 @@ def _guided_tier(conn, brand_id: str) -> Optional[dict]:
 
 
 def resolve_target_cpa(conn, brand_id: str, objective: str,
-                        product_ids: Optional[list] = None) -> Optional[dict]:
+                        product_ids: list | None = None) -> dict | None:
     """目標 CPA 三層鏈，依序嘗試，回傳 {tier, value, basis_label} 或 None（三層都不可用）。"""
     tier = _historical_tier(conn, brand_id, objective)
     if tier:
@@ -132,7 +130,7 @@ def volume_guardrail(weekly_budget: float, target_cpa: float) -> dict:
     }
 
 
-def budget_tiers(target_cpa: float, previous_weekly_spend: Optional[float] = None) -> dict:
+def budget_tiers(target_cpa: float, previous_weekly_spend: float | None = None) -> dict:
     """保守／建議／積極三檔週預算。積極檔上限＝上期實際週預算 × 2，沒有上期資料不設上限。"""
     if target_cpa <= 0:
         raise ValueError("目標 CPA 必須大於 0")
@@ -160,7 +158,7 @@ def budget_tiers(target_cpa: float, previous_weekly_spend: Optional[float] = Non
 # 非轉換型目標：±30% 區間
 # ---------------------------------------------------------------------------
 
-def previous_actual_weekly_spend(conn, brand_id: str) -> Optional[float]:
+def previous_actual_weekly_spend(conn, brand_id: str) -> float | None:
     """上期（同品牌任意目標，取最近一期）實際週預算，供積極檔上限使用。沒有上期或上期
     還沒回填成效資料就回 None（不設上限）。"""
     cycles = ads_repo.list_cycles(conn, brand_id)
@@ -176,7 +174,7 @@ def previous_actual_weekly_spend(conn, brand_id: str) -> Optional[float]:
     return round(spend / duration_days * 7, 2)
 
 
-def non_conversion_range(conn, brand_id: str, objective: str) -> Optional[dict]:
+def non_conversion_range(conn, brand_id: str, objective: str) -> dict | None:
     """非轉換型目標（awareness／traffic／engagement）：上期同目標實際花費 ±30%。
     沒有上期資料回 None（畫面顯示「此目標無公式依據」）。"""
     cycles = [c for c in ads_repo.list_cycles(conn, brand_id) if c["objective"] == objective]

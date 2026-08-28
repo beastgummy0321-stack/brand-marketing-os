@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/intake — 建檔精靈（引導式建檔）。見 DESIGN.md §19。
 
 Mock —— 接真 API 輪改存 intake_draft 資料表。

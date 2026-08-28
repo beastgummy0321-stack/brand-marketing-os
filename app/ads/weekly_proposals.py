@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """把既有判讀與下期建議收斂成最多三張週提案卡。"""
 
 
@@ -12,8 +11,7 @@ from app.core import interrupts as core_interrupts
 from app.core import orchestrator as core_orchestrator
 from app.core import rule_cards
 from app.core.audit import write_audit
-from app.core.db import new_id, now_utc, jsonb, DEV_ORG_ID
-
+from app.core.db import DEV_ORG_ID, jsonb, new_id, now_utc
 
 RECOMMENDATION_TYPE = "weekly_proposal"
 # 票 F9：結案時還沒被使用者處理的 GENERATED 卡的終態——`recommendation.status` 沒有

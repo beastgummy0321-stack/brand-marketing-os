@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/ads/sync.py — Meta 唯讀同步與品牌歸屬認領（票 9）。
 
 一個廣告帳號可以服務多個品牌（決策 0022 第 6 點），所以同步回來的每一個行銷活動
@@ -17,19 +16,14 @@ build_names），所以反解得回來。使用者在 Meta 上手改名字，猜
 import calendar
 from dataclasses import asdict, dataclass
 from datetime import date, timedelta
-from typing import Optional
 
-from app.ads import guardrails
+from app.ads import guardrails, meta_api, theme_attribution, tracking
 from app.ads import handoff as ads_handoff
-from app.ads import meta_api
 from app.ads import performance as ads_performance
-from app.ads import repository as ads_repo
-from app.ads import theme_attribution
-from app.ads import tracking
 from app.brand_intelligence import repository as bi
 from app.core import settings as coresettings
 from app.core.audit import write_audit
-from app.core.db import new_id, now_utc, jsonb, DEV_ORG_ID
+from app.core.db import DEV_ORG_ID, jsonb, new_id, now_utc
 
 TOKEN_SETTING = "meta_access_token"
 ACCOUNT_SETTING = "meta_ad_account_id"
@@ -78,8 +72,8 @@ def _month_windows(since: str, until: str) -> list:
     return windows
 
 
-def backfill_range(requested_months: int, *, until: Optional[str] = None,
-                    today: Optional[str] = None) -> tuple:
+def backfill_range(requested_months: int, *, until: str | None = None,
+                    today: str | None = None) -> tuple:
     """回填用的 (since, until, actual_months)：夾住 Meta 官方歷史上限，讓呼叫端能誠實顯示
     「實際拿到 N 個月」，不是每次都宣稱拿到當初要求的數字（決策 0039 第 3 條）。"""
     today = today or date.today().isoformat()
@@ -89,11 +83,11 @@ def backfill_range(requested_months: int, *, until: Optional[str] = None,
     return since, until, actual_months
 
 
-def get_token(conn) -> Optional[str]:
+def get_token(conn) -> str | None:
     return coresettings.get_setting(conn, TOKEN_SETTING) or None
 
 
-def get_account_id(conn) -> Optional[str]:
+def get_account_id(conn) -> str | None:
     return coresettings.get_setting(conn, ACCOUNT_SETTING) or None
 
 
@@ -112,7 +106,7 @@ class SyncResult:
     quarantined: int = 0       # 數字不合理、進隔離區的列數
     skipped_unclaimed: int = 0  # 因為還沒認領歸屬而沒收的列數
     skipped_duplicate: int = 0  # 品牌層（無檔期）重複回填而略過的列數（issue #69）
-    error: Optional[str] = None
+    error: str | None = None
 
 
 def _sig_date(v):
@@ -142,7 +136,7 @@ def _duplicate_signature(account_external: str, insight) -> tuple:
             insight.reach)
 
 
-def _existing_signatures(conn, brand_id: str, cycle_id: Optional[str]) -> set:
+def _existing_signatures(conn, brand_id: str, cycle_id: str | None) -> set:
     """讀回這個範圍（品牌層或某個檔期）目前已入庫的快照，重建成跟 `_duplicate_signature`
     同一組判斷依據，供這次回填比對——品牌層與檔期層各自獨立比對，互不影響。"""
     if cycle_id is None:
@@ -246,7 +240,7 @@ def _upsert_discovered_from_insight(conn, ad_account_id: str, insight, ts: str) 
 
 
 def _claimed_brand_for(conn, ad_account_id: str, meta_campaign_id: str,
-                       meta_ad_id: Optional[str] = None) -> Optional[str]:
+                       meta_ad_id: str | None = None) -> str | None:
     """這個活動的歸屬品牌。只有 claimed 才算數——suggested 是預選，不生效。"""
     row = conn.execute(
         "SELECT claimed_brand_id FROM discovered_campaign WHERE ad_account_id = %s"
@@ -273,7 +267,7 @@ def _claimed_brand_for(conn, ad_account_id: str, meta_campaign_id: str,
 
 
 def _cycle_for(conn, brand_id: str, meta_campaign_id: str,
-               meta_ad_id: Optional[str] = None) -> tuple:
+               meta_ad_id: str | None = None) -> tuple:
     """哪個檔期／哪筆 mapping／哪個 publishing_package。優先用 meta_ad_id：同一活動底下
     可能有多支廣告分屬不同檔期，只用 meta_campaign_id 查詢會全部對到最後建立的那一筆
     （I1）。meta_ad_id 缺值（人工回填時沒填廣告 ID）才退回 meta_campaign_id，維持既有
@@ -296,10 +290,10 @@ def _cycle_for(conn, brand_id: str, meta_campaign_id: str,
             else (None, None, None))
 
 
-def sync_account(conn, actor: str, *, client=None, account_id: Optional[str] = None,
-                 since: Optional[str] = None, until: Optional[str] = None,
-                 today: Optional[str] = None,
-                 brand_id_filter: Optional[str] = None) -> SyncResult:
+def sync_account(conn, actor: str, *, client=None, account_id: str | None = None,
+                 since: str | None = None, until: str | None = None,
+                 today: str | None = None,
+                 brand_id_filter: str | None = None) -> SyncResult:
     """把帳號上的活動與成效抓回來。失敗一律回帶 error 的結果，不拋例外、不半途留髒資料。"""
     account_external = account_id or get_account_id(conn)
     if not account_external:

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_fact_staleness.py — issue #5：事實鮮度標示（純顯示，不動資料庫）。
 
 驗收：確認超過 FACT_STALE_DAYS（180 天）才提示「上次確認 N 個月前」；
@@ -6,14 +5,14 @@
 """
 
 import unittest
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import app.shared.web as web
 
 
 class FactStalenessTest(unittest.TestCase):
     def _confirmed_fact(self, days_ago):
-        confirmed_at = datetime.now(timezone.utc) - timedelta(days=days_ago)
+        confirmed_at = datetime.now(UTC) - timedelta(days=days_ago)
         return {"status": "confirmed", "confirmed_at": confirmed_at}
 
     def test_over_threshold_shows_hint(self):

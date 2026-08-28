@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Pytest 啟動與逐模組 Postgres schema 隔離（票 02-4，ADR 0027：Supabase）。
 
 取代 02-1 的 SQLite per-module 暫存目錄版本：每個測試模組拿一個獨立 Postgres

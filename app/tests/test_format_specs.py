@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_format_specs.py — 素材工作檯 G1-A：平台規格表常數檔守門測試。
 
 純資料表，不碰 DB，不用 app.main。目標維度鍵集合直接跟 app/ads/plan.py 的

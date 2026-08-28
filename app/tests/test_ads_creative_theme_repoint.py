@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_ads_creative_theme_repoint.py — 票 02-repoint-creative-readers。
 
 驗收規格（.scratch/adloop/tickets/02-repoint-creative-readers.md）「如何知道做完了」

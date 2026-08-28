@@ -35,6 +35,7 @@
 ## 快速事實
 
 - 啟動：`啟動行銷系統.bat` → http://localhost:8710/（過渡期）；本機開發 `supabase start`
+- 裝依賴：`uv sync --frozen`（不用 pip／requirements.txt，套件與版本鎖在 `pyproject.toml`／`uv.lock`）
 - 金鑰 `.env`（不進版控）
 - 語彙 `CONTEXT.md`；決策 `docs/adr/`；技術債與機器閘門 `docs/tech-debt.md`（動超標檔前先讀）；工作流減重 `docs/workflow-diet.md`
 - `app/methodology/` 是 prompt 零件不是文件，刪改先問
@@ -42,12 +43,14 @@
 
 ## Tests
 
-- 每張票：只跑受影響的測試檔＋typecheck＋build。
-- 合併進主線：`python -m pytest app/tests -q -n auto --dist loadfile`
+- 每張票：閘門＝`uv run ruff check app` ＋ `uv run pyright` ＋受影響的測試檔＋typecheck＋build。
+- 合併進主線：`uv run pytest app/tests -q -n auto --dist loadfile`
   （`--dist loadfile` 必要——`conftest.py` 給每個測試模組自己的 DB／schema）。
 - 800 行上限不適用於 `app/tests/`。
 - 分流：不動 schema／模組進入點／花錢／權限路徑的行為修改＝route B（機器閘門綠即完成）；
   route C 只留 schema、模組邊界、金流、權限。
+- CI：`.github/workflows/ci.yml`（GitHub Actions），push/PR 到 `saas`／`master` 都跑；
+  backend job 開 `supabase start` 給 Postgres／anon role，frontend job 跑 lint／typecheck／test／build。
 
 ## Migrations
 

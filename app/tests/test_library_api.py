@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_library_api.py — 品牌智庫 JSON API（票 B2-library 第二段）。
 
 見 app/brand_intelligence/routes_library.py、repository_channels.py、customer_voice.py
@@ -12,13 +11,12 @@ import time
 import unittest
 from unittest import mock
 
-import pytest
 from fastapi.testclient import TestClient
 
 import app.main as main
 import app.shared.web as web
-from app.brand_web import routes_library as customer_voice
 from app.brand_intelligence import repository as repo
+from app.brand_web import routes_library as customer_voice
 from app.core import db as coredb
 from app.core import interrupts as core_interrupts
 from app.core import settings as core_settings

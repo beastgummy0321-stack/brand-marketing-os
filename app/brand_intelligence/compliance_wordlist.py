@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/brand_intelligence/compliance_wordlist.py — 內建法定紅線詞庫（修憲落地 L1，決策
 0034 第 4 條）＋文字比對純函式。
 

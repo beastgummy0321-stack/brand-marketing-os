@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/orders/identity.py — 顧客單向雜湊（GitHub issue #33，決策 0025 補遺第 2 點）。
 
 只認訂購人（billing）email／電話，收件人（fulfillment）欄位一律不用於顧客識別。
@@ -14,16 +13,15 @@ consistency_self_check() 是每次匯入前都要跑一次的一致性自檢：�
 
 import hashlib
 import re
-from typing import Optional
 
 
-def normalize_email(raw: Optional[str]) -> Optional[str]:
+def normalize_email(raw: str | None) -> str | None:
     if not raw or not raw.strip():
         return None
     return raw.strip().lower()
 
 
-def normalize_phone(raw: Optional[str]) -> Optional[str]:
+def normalize_phone(raw: str | None) -> str | None:
     """去符號、+886／886 開頭一律轉回 0 開頭的台灣手機格式。"""
     if not raw or not raw.strip():
         return None
@@ -39,8 +37,8 @@ def _hash(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
-def identity_key(*, billing_email: Optional[str] = None,
-                  billing_phone: Optional[str] = None) -> tuple:
+def identity_key(*, billing_email: str | None = None,
+                  billing_phone: str | None = None) -> tuple:
     """回傳 (identity_hash, identity_type)；都沒有可用資料時回 (None, None)。"""
     email = normalize_email(billing_email)
     if email:

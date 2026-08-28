@@ -1,11 +1,9 @@
-# -*- coding: utf-8 -*-
 """品牌人物誌的資料入口；不依賴 LLM 或 intake。"""
 
 
 from app.core import cleanup
 from app.core.audit import write_audit
-from app.core.db import new_id, now_utc, Conn, DEV_ORG_ID
-
+from app.core.db import DEV_ORG_ID, Conn, new_id, now_utc
 
 PERSONA_FIELDS = ("title", "when_needed", "care_about", "hesitation", "where_to_find")
 PERSONA_FIELD_LABELS = {

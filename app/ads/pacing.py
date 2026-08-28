@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/ads/pacing.py — 檔期預算步調警示（票 08-pacing-alert，規格 0001）。
 
 classify() 是純函數：比較「預算消耗進度 vs 檔期時間進度」，偏差超過規則卡門檻就判定
@@ -18,7 +17,6 @@ app.ads.performance 既有公開查詢函式）、讀規則卡門檻（app.core.
 """
 
 from datetime import date
-from typing import Optional
 
 from app.ads import performance as ads_performance
 from app.ads import repository as ads_repo
@@ -34,7 +32,7 @@ _MESSAGES = {
 _CATEGORY_BY_STATUS = {"overspend": "pacing_overspend", "underspend": "pacing_underspend"}
 
 
-def classify(*, budget: Optional[float], spend: float, start_date, end_date,
+def classify(*, budget: float | None, spend: float, start_date, end_date,
             today: str, threshold_pct: float) -> dict:
     """比較預算消耗進度與檔期時間進度，回傳 {"status", "time_progress", "budget_progress",
     "deviation"}。status 四選一：
@@ -77,7 +75,7 @@ def classify(*, budget: Optional[float], spend: float, start_date, end_date,
             "budget_progress": round(budget_progress, 4), "deviation": round(deviation, 4)}
 
 
-def check_cycle(conn, brand_id: str, cycle_id: str, today: Optional[str] = None) -> Optional[str]:
+def check_cycle(conn, brand_id: str, cycle_id: str, today: str | None = None) -> str | None:
     """判定一期檔期的 pacing 狀態；overspend／underspend 就送打斷佇列。
 
     回傳這次是否真的新排了一筆（interrupt id），沒觸發、被去重鍵擋下、或這期不適用判定

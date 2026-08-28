@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/main.py — 真正的組裝根（修憲落地 A4）：app factory、router 註冊、啟動流程。
 
 原本這裡塞了 87 條品牌智庫業務路由（2426 行），卻頂著「組裝根永久豁免」的身分，
@@ -31,16 +30,14 @@ import os
 import sys
 import threading
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Optional
 
 from fastapi import FastAPI, Request
 from fastapi.exception_handlers import http_exception_handler
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
-
 
 # ---- .env → 環境變數（必須跑在任何 app.* 被 import 之前，所以擠在 import 中間）----
 
@@ -90,15 +87,16 @@ def _load_dotenv() -> int:
 _load_dotenv()
 
 from app.ads import auto_sync as ads_auto_sync  # noqa: E402
-from app.ads import ga4_api  # noqa: E402  # 只用於設定頁測試連線，見「例外」說明
-from app.ads import ga4_sync  # noqa: E402
-from app.ads import meta_api  # noqa: E402
+from app.ads import (
+    ga4_api,  # noqa: E402  # 只用於設定頁測試連線，見「例外」說明
+    ga4_sync,  # noqa: E402
+    meta_api,  # noqa: E402
+)
 from app.ads import sync as ads_sync  # noqa: E402
 from app.core import creative_assets as corecreative
 from app.core import db as coredb
 from app.core import retention as core_retention
 from app.core import settings as coresettings
-from app.intake import state as intake_state
 from app.llm import pricing as llm_pricing
 from app.llm import providers as llm_providers
 from app.shared import web
@@ -106,41 +104,37 @@ from app.shared.web import (
     MODEL_CHOICES,
     _num_str,
     _with_brand_names,
-    list_active_brands,
-    list_archived_brands,
-    list_products,
-    pending_brand_fact_count,
-    parse_number,
     clean,
+    parse_number,
 )
 
 # ---------------------------------------------------------------------------
 # 啟動流程：llm_task 保留策略清理（修憲落地 A5）
 # ---------------------------------------------------------------------------
 
-_last_retention_check: Optional[str] = None  # 記上次檢查過的日期（ISO 字串），llm_task 保留策略清理用（修憲落地 A5）
+_last_retention_check: str | None = None  # 記上次檢查過的日期（ISO 字串），llm_task 保留策略清理用（修憲落地 A5）
 
 
 def _purge_expired_llm_task_content_if_new_day() -> None:
     """跨日才清一次 llm_task 的過期大欄位（修憲落地 A5，見 app/core/retention.py）；
     每個 request 前比一次日期字串（成本極低），只有真的跨日才動手清。"""
     global _last_retention_check
-    today = datetime.now(timezone.utc).date().isoformat()
+    today = datetime.now(UTC).date().isoformat()
     if today != _last_retention_check:
         core_retention.purge_expired_llm_task_content(web.conn)
         _last_retention_check = today
 # ---------------------------------------------------------------------------
 # 自動同步（LIVE 每四小時、其餘每日；應用程式啟動時註冊程式內排程）
 # ---------------------------------------------------------------------------
-_last_auto_sync_check: Optional[datetime] = None
-_last_weekly_engine_check: Optional[datetime] = None
+_last_auto_sync_check: datetime | None = None
+_last_weekly_engine_check: datetime | None = None
 _AUTO_SYNC_POLL_SECONDS = 3600  # 每小時檢查是否已到四小時或跨日門檻
 
 
-def _auto_sync_if_due(now: Optional[datetime] = None) -> None:
+def _auto_sync_if_due(now: datetime | None = None) -> None:
     """LIVE 檔期每四小時同步；其餘狀態維持每日一次。"""
     global _last_auto_sync_check
-    now = now or datetime.now(timezone.utc)
+    now = now or datetime.now(UTC)
     has_live = bool(web.conn.execute(
         "SELECT 1 FROM campaign_cycle WHERE status = 'LIVE' AND archived = false LIMIT 1"
     ).fetchone())
@@ -158,10 +152,10 @@ def _auto_sync_if_due(now: Optional[datetime] = None) -> None:
         _last_auto_sync_check = now
 
 
-def _weekly_engine_if_due(now: Optional[datetime] = None) -> None:
+def _weekly_engine_if_due(now: datetime | None = None) -> None:
     """每個 ISO 週只跑一次週判讀；process 重啟後會補跑當週。"""
     global _last_weekly_engine_check
-    now = now or datetime.now(timezone.utc)
+    now = now or datetime.now(UTC)
     current_week = now.isocalendar()[:2]
     last_week = _last_weekly_engine_check.isocalendar()[:2] if _last_weekly_engine_check else None
     if last_week != current_week:
@@ -270,7 +264,7 @@ def _today_todos() -> list:
 
 
 @app.get("/")
-async def brand_overview(brand: Optional[str] = None):
+async def brand_overview(brand: str | None = None):
     destination = f"/app/brands/{brand}" if brand else "/app/"
     return RedirectResponse(destination, status_code=303)
 
@@ -292,7 +286,7 @@ def _model_choices():
     return out
 
 
-def _masked_key(key: Optional[str]) -> Optional[str]:
+def _masked_key(key: str | None) -> str | None:
     """金鑰遮罩：只露開頭的 sk- 與末四碼，畫面永不顯示完整金鑰（07 §1 規則 5）。"""
     if not key:
         return None
@@ -307,7 +301,7 @@ def _masked_key(key: Optional[str]) -> Optional[str]:
 # （HTML 表單路由已刪除，見票 T4 A4；不為了 JSON 契約重寫第二份寫入邏輯，票 B1-settings）。
 # ---------------------------------------------------------------------------
 
-def _write_api_key(api_key: str) -> Optional[str]:
+def _write_api_key(api_key: str) -> str | None:
     key = clean(api_key)
     if not key:
         return "請貼上 AI 金鑰。"
@@ -315,7 +309,7 @@ def _write_api_key(api_key: str) -> Optional[str]:
     return None
 
 
-def _write_meta_settings(account_id: str, token: str) -> Optional[str]:
+def _write_meta_settings(account_id: str, token: str) -> str | None:
     account = clean(account_id)
     token_c = clean(token)
     if not account:
@@ -326,7 +320,7 @@ def _write_meta_settings(account_id: str, token: str) -> Optional[str]:
     return None
 
 
-def _write_ga4_settings(property_id: str, service_account_json: str) -> Optional[str]:
+def _write_ga4_settings(property_id: str, service_account_json: str) -> str | None:
     property_id_c = clean(property_id)
     key_json = (service_account_json or "").strip()
     if not property_id_c:
@@ -337,7 +331,7 @@ def _write_ga4_settings(property_id: str, service_account_json: str) -> Optional
     return None
 
 
-def _write_model(llm_model: str) -> Optional[str]:
+def _write_model(llm_model: str) -> str | None:
     labels = {m_id: name for m_id, name in MODEL_CHOICES}
     if llm_model not in labels:
         return "請從選單中選一個模型。"
@@ -345,7 +339,7 @@ def _write_model(llm_model: str) -> Optional[str]:
     return None
 
 
-def _write_budget(raw_budget) -> Optional[str]:
+def _write_budget(raw_budget) -> str | None:
     """raw_budget 接受字串（表單）或數字（JSON）——先轉字串再走既有 parse_number，
     驗證規則只寫一份。"""
     raw = "" if raw_budget is None else str(raw_budget)
@@ -356,7 +350,7 @@ def _write_budget(raw_budget) -> Optional[str]:
     return None
 
 
-def _write_creative_root(raw_root: str) -> Optional[str]:
+def _write_creative_root(raw_root: str) -> str | None:
     """三道驗證：有填、是完整路徑、不是磁碟機根目錄——刪品牌／刪檔期會刪掉這底下對應的
     子資料夾，指到 `C:\\` 這種地方很危險。不驗資料夾存不存在：使用者可能先填好路徑，
     等一下才插上那顆外接硬碟。"""
@@ -408,7 +402,7 @@ def _run_meta_test_connection() -> tuple:
 def _run_ga4_test_connection() -> tuple:
     if not ga4_sync.is_configured(web.conn):
         return "尚未設定 GA4 連線。請先在上方填入資源編號與服務帳戶金鑰，儲存後再測試。", "warn"
-    today = datetime.now(timezone.utc).date().isoformat()
+    today = datetime.now(UTC).date().isoformat()
     try:
         ga4_sync.make_client(web.conn).fetch_source_medium(today, today)
     except ga4_api.GA4ApiError as exc:
@@ -466,7 +460,7 @@ def _settings_json_data() -> dict:
 
 @app.get("/api/settings")
 async def api_settings_get():
-    return {"data": _settings_json_data(), "generated_at": datetime.now(timezone.utc).isoformat()}
+    return {"data": _settings_json_data(), "generated_at": datetime.now(UTC).isoformat()}
 
 
 @app.post("/api/settings/meta")
@@ -573,22 +567,23 @@ async def api_settings_budget_post(request: Request):
 # Router 註冊
 # ---------------------------------------------------------------------------
 
+from app.ads.routes import router as ads_router  # noqa: E402
+from app.ads.routes_claims_api import router as claims_api_router  # noqa: E402
+from app.ads.routes_learnings_api import router as learnings_api_router  # noqa: E402
+from app.ads.routes_onboarding_api import router as onboarding_api_router  # noqa: E402
 from app.brand_web.routes import router as brand_intelligence_router  # noqa: E402
 from app.brand_web.routes_inbox import router as inbox_router  # noqa: E402
 from app.brand_web.routes_library import router as library_router  # noqa: E402
 from app.brand_web.routes_library_write import router as library_write_router  # noqa: E402
 from app.brand_web.routes_products import router as products_router  # noqa: E402
 from app.brand_web.routes_report_api import router as report_api_router  # noqa: E402
+from app.dashboard.routes import router as dashboard_router  # noqa: E402
+from app.dashboard.routes_jobs_api import router as jobs_active_router  # noqa: E402
+from app.dashboard.routes_pinned_views_api import router as pinned_views_router  # noqa: E402
 from app.intake.routes import router as intake_router  # noqa: E402
 from app.intake.routes_api import router as intake_api_router  # noqa: E402
-from app.ads.routes import router as ads_router  # noqa: E402
-from app.ads.routes_claims_api import router as claims_api_router  # noqa: E402
-from app.ads.routes_onboarding_api import router as onboarding_api_router  # noqa: E402
-from app.ads.routes_learnings_api import router as learnings_api_router  # noqa: E402
-from app.orders import routes as orders_routes, routes_api as orders_routes_api  # noqa: E402
-from app.dashboard.routes import router as dashboard_router  # noqa: E402
-from app.dashboard.routes_pinned_views_api import router as pinned_views_router  # noqa: E402
-from app.dashboard.routes_jobs_api import router as jobs_active_router  # noqa: E402
+from app.orders import routes as orders_routes  # noqa: E402
+from app.orders import routes_api as orders_routes_api
 
 app.include_router(brand_intelligence_router)
 app.include_router(inbox_router)

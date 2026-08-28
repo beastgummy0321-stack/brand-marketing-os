@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/ads/checkpoint.py — 期中檢查點（票 9，GitHub issue #19，決策 0023 第 16 點）。
 
 第 3 天與第 7 天：提醒卡觸發 → 當場匯入 CSV → 立即跑健康檢查。跟 `app/ads/reading.py`
@@ -18,14 +17,13 @@
 API 軌接上後不用改這裡一行。
 """
 
-from typing import Optional
 
 from app.ads import performance as ads_performance
 from app.ads import repository as ads_repo
 from app.ads.guardrails import check_data_sanity
 from app.core import rule_cards
 from app.core.audit import write_audit
-from app.core.db import new_id, now_utc, jsonb, DEV_ORG_ID
+from app.core.db import DEV_ORG_ID, jsonb, new_id, now_utc
 
 KIND_LABELS = {"day3": "第 3 天健康檢查", "day7": "第 7 天健康檢查"}
 
@@ -46,7 +44,7 @@ FATIGUE_AUDIENCE_TYPE = "cold"
 
 
 def run(conn, brand_id: str, cycle_id: str, kind: str, *, actor: str,
-        csv_text: Optional[str] = None) -> dict:
+        csv_text: str | None = None) -> dict:
     """跑一次期中健康檢查：可選先匯入 CSV，再讀目前累積的成效算健康訊號並落庫。
 
     回傳的 dict 保證不含任何「贏／輸」等級的欄位（硬規則，不是漏寫）。
@@ -167,7 +165,7 @@ def _store(conn, brand_id: str, cycle_id: str, kind: str, result: dict, actor: s
     return result
 
 
-def _row(conn, brand_id: str, checkpoint_id: str) -> Optional[dict]:
+def _row(conn, brand_id: str, checkpoint_id: str) -> dict | None:
     row = conn.execute(
         "SELECT * FROM cycle_checkpoint WHERE id = %s AND brand_id = %s",
         (checkpoint_id, brand_id),

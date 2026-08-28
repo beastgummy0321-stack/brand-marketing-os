@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_ads_boot_catchup.py — 票 F6：開機自動啟動的「補跑」與「不當機」。
 
 不啟動真的 server（見 CLAUDE.md／F6 票的硬限制：`_auto_sync_if_due` 一旦在活著的
@@ -27,13 +26,14 @@ from unittest import mock
 
 _tmpdir = tempfile.mkdtemp(prefix="brand_os_ads_boot_catchup_")
 
-import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
 import app.main as main  # noqa: E402
-from app.ads import onboarding  # noqa: E402
+from app.ads import (
+    onboarding,  # noqa: E402
+    reading,  # noqa: E402
+)
 from app.ads import performance as perf  # noqa: E402
-from app.ads import reading  # noqa: E402
 from app.ads import repository as ads_repo  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
 from app.llm.providers import FakeProvider, ProviderResponse, Usage  # noqa: E402

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_ads_compliance_scan_on_generate.py — 票 S1-01：生成當下即掃描。
 
 `compliance.scan_cycle()` 只掃「已採用」主題底下的元件；這裡驗證的是新的
@@ -11,22 +10,20 @@
 
 import atexit
 import json
-import os
 import shutil
 import tempfile
 import unittest
-from pathlib import Path
-
-import pytest
 
 _tmpdir = tempfile.mkdtemp(prefix="brand_os_ads_compliance_scan_on_generate_")
 
 from fastapi.testclient import TestClient  # noqa: E402
 
 import app.main as main  # noqa: E402
-from app.ads import compliance  # noqa: E402
+from app.ads import (
+    compliance,  # noqa: E402
+    theme_engine,  # noqa: E402
+)
 from app.ads import plan as ads_plan  # noqa: E402
-from app.ads import theme_engine  # noqa: E402
 from app.ads import theme_repository as theme_repo  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
 from app.core import settings as coresettings  # noqa: E402

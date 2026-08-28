@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_intake.py — 建檔精靈接真：草稿持久化、LLM 串接、花費、R10 出口。
 
 見 docs/design/07-settings-and-intake-contract.md §4、docs/design/03-data-model.md §3A。
@@ -13,7 +12,6 @@ import time
 import unittest
 from unittest import mock
 
-import pytest
 from fastapi.testclient import TestClient
 
 import app.main as main
@@ -24,7 +22,9 @@ from app.intake import card_test, script, state
 from app.intake import repository as ir
 from app.llm import pricing
 from app.llm.providers import (
-    MISSING_KEY_MESSAGE, AnthropicProvider, FakeProvider, ProviderResponse, Usage,
+    FakeProvider,
+    ProviderResponse,
+    Usage,
 )
 
 _BRAND_SEQ = [0]

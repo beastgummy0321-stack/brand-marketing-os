@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/ads/carry_forward.py — R3-carry-forward-winners：「沿用有效方向」要真的讀贏家
 （B0-29／B0-36）。
 
@@ -16,10 +15,8 @@ prompt，供 `plan.generate_options()` 呼叫。
 先例：拆檔不是拆模組，這裡跟 `plan.py`／`nextcycle.py` 仍是同一個容器）。
 """
 
-from typing import Optional
 
-from app.ads import nextcycle
-from app.ads import reading_hypotheses
+from app.ads import nextcycle, reading_hypotheses
 from app.brand_intelligence import repository as bi
 
 # 票 F7：`learning_ledger.confidence` 只有這三種值（見 `app/ads/reading.py`
@@ -28,8 +25,8 @@ from app.brand_intelligence import repository as bi
 _SIGNED_OFF_CONFIDENCE = ("preliminary", "moderate", "reinforced")
 
 
-def prior_winners(conn, brand_id: str, product_ids: Optional[set] = None,
-                  exclude_cycle_id: Optional[str] = None, limit: int = 3) -> list:
+def prior_winners(conn, brand_id: str, product_ids: set | None = None,
+                  exclude_cycle_id: str | None = None, limit: int = 3) -> list:
     """歷來真正打贏的切角，依 ROAS 高到低取前 `limit` 名：切角名、ROAS、花費、轉換數、
     來源期別，供企劃 prompt 具名引用（契約第 2 點）。
 
@@ -73,8 +70,8 @@ def prior_winners(conn, brand_id: str, product_ids: Optional[set] = None,
     return result[:limit]
 
 
-def _signed_off_winners(conn, brand_id: str, product_ids: Optional[set],
-                        exclude_cycle_id: Optional[str]) -> list:
+def _signed_off_winners(conn, brand_id: str, product_ids: set | None,
+                        exclude_cycle_id: str | None) -> list:
     """第二個贏家來源（票 F7，橋接修正票 F11）：使用者親自簽核「成立」的假設，不管統計
     證據夠不夠——人已經看過並排的 A／B 數字才按下確認，門檻比機器自動判定低是刻意的
     （契約：低門檻給人簽的，高門檻給機器自己做的；`target_cpa.WEEKLY_CONVERSIONS_PER_GROUP`
@@ -112,7 +109,7 @@ def _signed_off_winners(conn, brand_id: str, product_ids: Optional[set],
     return winners
 
 
-def rejected_directions(conn, brand_id: str, product_ids: Optional[set] = None,
+def rejected_directions(conn, brand_id: str, product_ids: set | None = None,
                         limit: int = 5) -> list:
     """已判讀「不成立」的方向（覆盤③三選一結案，`strategy_hypothesis.status == 'rejected'`），
     最新的排前面，供企劃 prompt 明講「這個方向上期賠錢，已避開」（契約第 3 點），不讓 AI

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/ads/interview.py — 前朝教訓訪談（點選式三分流，GitHub issue #55）。
 
 老品牌第一天就能把既有經驗交給系統：一次性點選式訪談，選項直接用票 #52 定版的四軸值
@@ -18,15 +17,14 @@ ledger 只收經判讀驗證且經人確認的結論，訪談自述屬未驗證�
 全程選填：`bad`／`good` 任何軸都可以不勾，補充文字可留空——跳過不擋任何流程（決策 0025）。
 """
 
-from typing import Optional
 
 from app.ads import fingerprint as fp
 from app.brand_intelligence import repository as bi
 from app.core.audit import write_audit
-from app.core.db import new_id, now_utc, jsonb, DEV_ORG_ID
+from app.core.db import DEV_ORG_ID, jsonb, new_id, now_utc
 
 
-def _clean_selection(raw: Optional[dict]) -> dict:
+def _clean_selection(raw: dict | None) -> dict:
     """把表單送來的 {axis: [value, ...]} 收斂成合法值；非法軸／值直接丟棄
     （壞資料寧可不存，也不要汙染統計，同 fingerprint.is_valid 的原則）。"""
     cleaned: dict = {}
@@ -60,7 +58,7 @@ def _drop_conflicts(bad: dict, good: dict) -> list:
     return dropped
 
 
-def _create_self_report_card(conn, brand_id: str, axis: str, value: str, *, actor: str) -> Optional[dict]:
+def _create_self_report_card(conn, brand_id: str, axis: str, value: str, *, actor: str) -> dict | None:
     """自述負面 → 候選規則卡。同一軸值已經有候選卡（不論待決或已決）就不重複造。"""
     existing = conn.execute(
         "SELECT id FROM creative_rule_card WHERE brand_id = %s AND fingerprint_axis = %s"
@@ -86,8 +84,8 @@ def _create_self_report_card(conn, brand_id: str, axis: str, value: str, *, acto
     return row
 
 
-def submit(conn, brand_id: str, *, bad: Optional[dict], good: Optional[dict],
-           note: Optional[str], actor: str) -> dict:
+def submit(conn, brand_id: str, *, bad: dict | None, good: dict | None,
+           note: str | None, actor: str) -> dict:
     """處理一次訪談送出，回傳 {"rule_cards": [...], "hypotheses": [...]} 供結果頁顯示這次記了什麼。"""
     bad = _clean_selection(bad)
     good = _clean_selection(good)

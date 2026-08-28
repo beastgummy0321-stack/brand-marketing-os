@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_llm_gateway.py — LLM Gateway 骨架、Context Compiler。
 
 見 docs/design/06-llm-gateway.md、docs/design/04-context-scope.md、docs/design/03-data-model.md
@@ -6,7 +5,7 @@
 """
 
 import unittest
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest import mock
 
@@ -16,7 +15,13 @@ from app.ads import repository as ads_repo
 from app.brand_intelligence import repository as repo
 from app.core import db, rule_cards
 from app.llm import context_compiler, gateway, pricing, providers
-from app.llm.providers import FakeProvider, ProviderError, ProviderResponse, ProviderTimeoutError, Usage
+from app.llm.providers import (
+    FakeProvider,
+    ProviderError,
+    ProviderResponse,
+    ProviderTimeoutError,
+    Usage,
+)
 
 
 class LLMGatewayTest(unittest.TestCase):
@@ -457,7 +462,7 @@ class ContextCompilerPromptCapTest(unittest.TestCase):
         天）就會被判定逾期、退回 pending_reconfirm，不再是這裡要測的「active 但排序較後
         面」——兩個機制刻意保持互不依賴，這裡只要新到舊排序的相對關係不變，基準點是多久
         以前不影響本測試類要驗的行為。"""
-        base = datetime.now(timezone.utc) - timedelta(minutes=1)
+        base = datetime.now(UTC) - timedelta(minutes=1)
         hard_rules = [
             repo.create_rule(self.conn, brand_id, rule_type="tone", content=f"hard規則{i}",
                              severity="hard", actor="小陳")
@@ -537,7 +542,7 @@ class ContextCompilerPromptCapTest(unittest.TestCase):
         self.assertEqual(context_compiler.list_overflow_rules(self.conn, self.brand["id"]), [])
 
         product = repo.create_product(self.conn, self.brand["id"], name="測試產品", actor="小陳")
-        base = datetime.now(timezone.utc) - timedelta(minutes=1)
+        base = datetime.now(UTC) - timedelta(minutes=1)
         product_rules = []
         for i in range(1, 3):
             rule = repo.create_rule(self.conn, self.brand["id"], rule_type="tone",
@@ -702,7 +707,7 @@ class ContextCompilerHypothesisPoolBoundTest(unittest.TestCase):
     def _seed_pool(self, product_id=None):
         """4 個假設分屬 4 個不同期別（ccy_c0～ccy_c3，依 created_at 遞增出現），
         第一個（ccy_c0）就是視窗上限外那個，其餘 3 個都在視窗內。"""
-        base = datetime.now(timezone.utc) - timedelta(minutes=1)
+        base = datetime.now(UTC) - timedelta(minutes=1)
         statements = ["不是咖啡不需停下來", "猜想1", "猜想2", "最新的猜想"]
         hyps = []
         for i, (cid, statement) in enumerate(zip(["ccy_c0", "ccy_c1", "ccy_c2", "ccy_c3"], statements)):

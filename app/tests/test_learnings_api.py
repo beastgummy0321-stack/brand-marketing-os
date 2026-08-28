@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """累積智慧 JSON API：七段資料、下架動作與舊頁並存。"""
 
 import unittest
@@ -7,9 +6,9 @@ import uuid
 from fastapi.testclient import TestClient
 
 import app.main as main
-from app.brand_intelligence import repository as bi_repo
 from app.ads import repository as ads_repo
 from app.ads.routes_campaigns_performance_api import compile_closing_review
+from app.brand_intelligence import repository as bi_repo
 from app.core.db import DEV_ORG_ID
 
 ACTOR = "測試員"

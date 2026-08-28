@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/ads/theme_engine_video.py — 影片主題引擎的 ads 側入口（票 14-engine-move 拆分後）。
 
 跟單圖／輪播（app/ads/theme_engine.py）同一套設計：組 prompt、驗證 AI 回覆的純邏輯搬進
@@ -20,6 +19,7 @@ import theme_engine（單向），theme_engine.py 完全不 import 回來，避�
 """
 
 import json
+from collections.abc import Callable
 
 from app.ads import fingerprint as fp
 from app.ads import theme_engine
@@ -29,7 +29,6 @@ from app.core import settings as coresettings
 from app.creative import theme_engine as core_theme_engine
 from app.creative import theme_engine_video as _engine
 from app.llm import gateway, pricing, providers
-from typing import Callable, Optional
 
 # 純轉發：既有呼叫端（routes_creative_theme.py、test_video_theme.py）繼續用
 # theme_engine_video.X 拿得到。
@@ -49,7 +48,7 @@ def _existing_video_hook_pool(conn, brand_id: str, experiment_cell_id: str) -> l
 
 
 def generate_video_theme(conn, brief: CreativeBrief, *, actor: str,
-                         on_stage: Optional[Callable[[str], None]] = None) -> tuple:
+                         on_stage: Callable[[str], None] | None = None) -> tuple:
     """影片腳本主題生成（票 08-video-theme）。跟單圖／輪播同一個形狀、同一套守門，一支
     腳本＝一個主題（票 08 驗收 4）。Hook 池重用邏輯見 `_existing_video_hook_pool()`
     （票 08 驗收 2）。"""

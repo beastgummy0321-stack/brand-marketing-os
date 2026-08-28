@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_creative_assets.py — 素材圖檔資料夾（票 T-G2-1，決策 0008）。
 
 守四件事：設定頁改得動根目錄、檔期頁開得出資料夾也看得到 MB、刪品牌／刪檔期會連資料夾
@@ -10,7 +9,6 @@ os.startfile() 會真的彈出檔案總管視窗，測試一律 patch 掉，不�
 """
 
 import atexit
-import os
 import shutil
 import tempfile
 import unittest
@@ -26,7 +24,6 @@ from app.ads import repository as ads_repo  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
 from app.core import creative_assets  # noqa: E402
 from app.core import settings as coresettings  # noqa: E402
-
 
 
 def _cleanup():

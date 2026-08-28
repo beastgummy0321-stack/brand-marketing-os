@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_ads_checklist.py — 生成管線票 10（GitHub issue #20）：投放前檢查清單、
 交接包擴充（CBO/ABO、轉換事件、歸因視窗、貼文協同）、Pixel 教學頁。
 
@@ -12,30 +11,26 @@
 
 import atexit
 import json
-import os
 import shutil
 import tempfile
 import unittest
 from datetime import date, timedelta
-from pathlib import Path
-
-import pytest
 
 _tmpdir = tempfile.mkdtemp(prefix="brand_os_ads_checklist_")
 
 from fastapi.testclient import TestClient  # noqa: E402
 
 import app.main as main  # noqa: E402
-from app.ads import checklist  # noqa: E402
+from app.ads import (
+    checklist,  # noqa: E402
+    reading,  # noqa: E402
+)
 from app.ads import handoff as ads_handoff  # noqa: E402
 from app.ads import performance as ads_performance  # noqa: E402
 from app.ads import plan as ads_plan  # noqa: E402
-from app.ads import reading  # noqa: E402
-from app.ads import repository as ads_repo  # noqa: E402
 from app.ads import theme_repository as theme_repo  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
 from app.llm.providers import FakeProvider, ProviderResponse, Usage  # noqa: E402
-
 
 
 def _cleanup():

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/ads/ga4_sync.py — GA4 服務帳戶同步（GitHub issue #34）。
 
 比照 app/ads/sync.py（Meta）的骨架，但明顯更簡單：GA4 沒有「一個帳號服務多個品牌」
@@ -9,11 +8,10 @@ UTM 層（來源／媒介）資料寫進決策 0025 第 4 點指定的新表 ga4
 
 from dataclasses import dataclass
 from datetime import date, timedelta
-from typing import Optional
 
 from app.ads import ga4_api
 from app.core import settings as coresettings
-from app.core.db import new_id, now_utc, DEV_ORG_ID
+from app.core.db import DEV_ORG_ID, new_id, now_utc
 
 PROPERTY_SETTING = "ga4_property_id"
 SERVICE_ACCOUNT_SETTING = "ga4_service_account_json"
@@ -27,11 +25,11 @@ DEFAULT_LOOKBACK_DAYS = 30
 # 完成後如實顯示「回填了 N 個月」（N＝實際請求的月數，不是猜測拿到多少真實資料）。
 
 
-def get_property_id(conn) -> Optional[str]:
+def get_property_id(conn) -> str | None:
     return coresettings.get_setting(conn, PROPERTY_SETTING) or None
 
 
-def get_service_account_json(conn) -> Optional[str]:
+def get_service_account_json(conn) -> str | None:
     return coresettings.get_setting(conn, SERVICE_ACCOUNT_SETTING) or None
 
 
@@ -46,13 +44,13 @@ def make_client(conn) -> ga4_api.GA4Client:
 @dataclass
 class GA4SyncResult:
     rows: int = 0
-    purchase_event_seen: Optional[bool] = None
-    error: Optional[str] = None
+    purchase_event_seen: bool | None = None
+    error: str | None = None
 
 
 def sync_brand(conn, brand_id: str, actor: str, *, client=None,
-               since: Optional[str] = None, until: Optional[str] = None,
-               today: Optional[str] = None, on_stage=None) -> GA4SyncResult:
+               since: str | None = None, until: str | None = None,
+               today: str | None = None, on_stage=None) -> GA4SyncResult:
     """把這個品牌 GA4 資源的來源／媒介成效抓回來。失敗一律回帶 error 的結果，不拋例外、
     不半途留髒資料（比照 app/ads/sync.py sync_account 同一套防呆）。"""
     if not is_configured(conn):
@@ -115,7 +113,7 @@ def latest_summary(conn, brand_id: str) -> list:
     )]
 
 
-def get_sync_status(conn, brand_id: str) -> Optional[dict]:
+def get_sync_status(conn, brand_id: str) -> dict | None:
     row = conn.execute(
         "SELECT * FROM ga4_sync_status WHERE brand_id = %s", (brand_id,)
     ).fetchone()

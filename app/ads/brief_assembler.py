@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/ads/brief_assembler.py — 創意簡報組裝器（票 03-brief-assembler）。
 
 給品牌＋檔期＋切角格＋格式 key，組出一份「創意簡報」（`CreativeBrief`）：11 項材料的
@@ -18,9 +17,8 @@ product_id，直接傳給 `context_compiler.compile()` 就是完整範圍）。
 不靠 LLM 回憶」模式）。
 """
 
-from typing import NamedTuple, Optional
+from typing import NamedTuple
 
-from app.core.db import Conn
 from app.ads import fingerprint as fp
 from app.ads import plan as ads_plan
 from app.ads import repository as ads_repo
@@ -31,6 +29,7 @@ from app.ads.creative import (
     _rejection_constraints,
 )
 from app.brand_intelligence import repository as bi
+from app.core.db import Conn
 from app.llm import context_compiler, methodology
 
 PLAN_NOT_APPROVED_MESSAGE = "這期的計畫還沒確認，先確認計畫再做素材。"
@@ -41,7 +40,7 @@ class CreativeBrief(NamedTuple):
 
     brand: dict
     cycle: dict                        # 含 offer_id；offer 內容另見 offer 欄位
-    offer: Optional[dict]              # 檔期沒掛 offer 時為 None
+    offer: dict | None              # 檔期沒掛 offer 時為 None
     plan: dict                         # 核准計畫內容
     cell: dict                         # 切角（單一 experiment_cell）
     brand_context: str                 # 品牌智庫 context
@@ -55,7 +54,7 @@ class CreativeBrief(NamedTuple):
     existing_themes_summary: list      # [{"name", "fingerprints": [...]}, ...]；沒有主題時 []
 
 
-def _row(cursor_row) -> Optional[dict]:
+def _row(cursor_row) -> dict | None:
     return dict(cursor_row) if cursor_row is not None else None
 
 

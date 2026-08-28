@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_orders_importer.py — 訂單票（issue #33）：EasyStore xlsx 解析＋分派層。
 
 表頭沿用 DoR 附的 EasyStore 欄位實況：Order Number/Date/Total Amount/Refunded Amount/
@@ -12,7 +11,6 @@ import unittest
 import openpyxl
 
 from app.orders import importer
-
 
 EASYSTORE_HEADERS = [
     "Order Number", "Date", "Total Amount", "Refunded Amount", "Financial Status",

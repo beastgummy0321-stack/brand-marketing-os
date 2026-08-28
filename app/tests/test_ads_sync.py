@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_ads_sync.py — 廣告分支票 9：Meta 唯讀同步與品牌歸屬認領。
 
 全程 FakeMetaClient，不發任何真實網路請求。
@@ -9,13 +8,11 @@ import calendar
 import unittest
 import uuid
 
-import pytest
 from fastapi.testclient import TestClient
 
 import app.main as main
-from app.ads import meta_api
+from app.ads import meta_api, reading
 from app.ads import performance as ads_performance
-from app.ads import reading
 from app.ads import sync as ads_sync
 from app.brand_intelligence import repository as bi_repo
 from app.core import db

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_ads_checkpoint.py — 生成管線票 9（GitHub issue #19）：期中檢查點＋素材疲勞。
 
 重點：健康檢查模式（第 3／7 天）明文不判勝負——就算故意餵會被判成「可以加碼」的漂亮數字，
@@ -7,28 +6,25 @@
 """
 
 import atexit
-import os
 import shutil
 import tempfile
 import unittest
 from datetime import date, timedelta
-from pathlib import Path
-
-import pytest
 
 _tmpdir = tempfile.mkdtemp(prefix="brand_os_ads_checkpoint_")
 
 from fastapi.testclient import TestClient  # noqa: E402
 
 import app.main as main  # noqa: E402
-from app.ads import checkpoint  # noqa: E402
-from app.ads import onboarding  # noqa: E402
+from app.ads import (
+    checkpoint,  # noqa: E402
+    onboarding,  # noqa: E402
+    reading,  # noqa: E402
+)
 from app.ads import performance as ads_performance  # noqa: E402
-from app.ads import reading  # noqa: E402
+from app.brand_intelligence import repository as bi_repo  # noqa: E402
 from app.core import interrupts as core_interrupts  # noqa: E402
 from app.core import rule_cards  # noqa: E402
-from app.brand_intelligence import repository as bi_repo  # noqa: E402
-
 
 
 def _cleanup():

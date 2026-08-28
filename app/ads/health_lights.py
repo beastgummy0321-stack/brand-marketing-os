@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/ads/health_lights.py — 檔期健康燈號（票 B4R-warroom-redesign，GRILL-B4R-performance.md
 「檔期健康燈號」小節，S8R.20／S3P.12 共用同一份邏輯，不重複兩套判定）。
 
@@ -13,7 +12,6 @@
 """
 
 from datetime import date
-from typing import Optional
 
 from app.ads import pacing as ads_pacing
 from app.ads import performance as ads_performance
@@ -29,7 +27,7 @@ def _light(status: str, value, label: str, note: str) -> dict:
     return {"status": status, "value": value, "label": label, "note": note}
 
 
-def _cycle_breakeven(conn, brand_id: str, cycle_id: str) -> Optional[float]:
+def _cycle_breakeven(conn, brand_id: str, cycle_id: str) -> float | None:
     """比照 `reading.run()` 既有算法：這期各產品打平投報率的平均值（reading.py:543-548）。"""
     allocations = ads_repo.list_cycle_products(conn, brand_id, cycle_id)
     breakevens = [ads_reading.breakeven_roas(bi.get_product_economics(conn, brand_id, a["product_id"]))
@@ -123,7 +121,7 @@ def compute(conn, brand_id: str, cycle_id: str) -> dict:
 # 調度台『監測』模組門面（票 O1-02，ADR 0024）
 # ---------------------------------------------------------------------------
 
-def _current_cycle(conn, brand_id: str) -> Optional[dict]:
+def _current_cycle(conn, brand_id: str) -> dict | None:
     """比照 app/ads/diagnosis.py:29 _current_cycle()：取最新一個投放中或等判讀的檔期。"""
     for cycle in ads_repo.list_cycles(conn, brand_id):
         if cycle["status"] in ("LIVE", "EVALUATING"):

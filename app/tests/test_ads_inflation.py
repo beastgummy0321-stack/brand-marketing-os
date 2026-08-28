@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_ads_inflation.py — 灌水係數＋revenue 反推標記＋對帳頁（GitHub issue #36）。
 
 驗收重點：
@@ -13,17 +12,15 @@ fixture 一律虛構品牌，嚴禁真實客戶資料（規範第八節）。
 
 import unittest
 
-import pytest
-
 import app.main as main
 from app.ads import codes as ads_codes
-from app.ads import ga4_api
-from app.ads import ga4_sync
+from app.ads import ga4_api, ga4_sync
 from app.ads import inflation as ads_inflation
 from app.ads import performance as ads_performance
 from app.ads import repository as ads_repo
 from app.brand_intelligence import repository as bi_repo
-from app.core import db, settings as coresettings
+from app.core import db
+from app.core import settings as coresettings
 from app.core.db import now_iso
 from app.orders import repository as orders_repo
 

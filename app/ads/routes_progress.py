@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/ads/routes_progress.py — 背景進度引擎（T4 廣告模組 Jinja 大清倉第 2 刀刪掉
 `_render_wait_page`：所有等待頁呼叫端——`routes_plan.py::ads_plan_progress`、
 `routes_performance.py::ads_reading_progress`、`routes_sync.py` 的 Meta／GA4 回填

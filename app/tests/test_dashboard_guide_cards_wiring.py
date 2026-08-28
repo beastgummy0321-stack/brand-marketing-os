@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_dashboard_guide_cards_wiring.py — 票 04-guide-card-engine：
 儀表板 API 接上指南卡引擎真貨源（app/dashboard/guide_cards.py 的純函數邏輯已在
 test_dashboard_guide_cards.py 測過，這裡只驗證 API 有把真實資料組成 facts 餵給引擎，
@@ -12,7 +11,6 @@ import unittest
 
 os.environ["BRAND_OS_TODAY"] = "2026-08-05"  # 凍結時鐘：與其他儀表板測試檔一致
 
-import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
 import app.main as main  # noqa: E402

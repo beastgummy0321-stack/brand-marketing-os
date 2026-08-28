@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_preselect_batch.py — 預選格批次生成（票 09-preselect-autogen）。
 
 接縫二（路由層，app/ads/routes_plan.py `plan/approve`）：核准計畫觸發批次生成，走真正的
@@ -14,13 +13,10 @@ setUp／_ready_cell 等寫法照抄 app/tests/test_theme_engine.py、test_video_
 
 import atexit
 import json
-import os
 import shutil
 import tempfile
 import unittest
 from pathlib import Path
-
-import pytest
 
 _tmpdir = tempfile.mkdtemp(prefix="brand_os_preselect_batch_")
 
@@ -28,16 +24,19 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 import app.main as main  # noqa: E402
 from app.ads import repository as ads_repo  # noqa: E402
-from app.ads import theme_batch  # noqa: E402
-from app.ads import theme_engine  # noqa: E402
+from app.ads import (
+    theme_batch,  # noqa: E402
+    theme_engine,  # noqa: E402
+)
 from app.ads import theme_repository as theme_repo  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
-from app.core import creative_assets  # noqa: E402
-from app.core import db  # noqa: E402
+from app.core import (
+    creative_assets,  # noqa: E402
+    db,  # noqa: E402
+)
 from app.core import settings as coresettings  # noqa: E402
 from app.llm import pricing, providers  # noqa: E402
-from app.llm.providers import FakeProvider, ProviderResponse, Usage  # noqa: E402
-
+from app.llm.providers import ProviderResponse, Usage  # noqa: E402
 
 ROOT = Path(_tmpdir) / "creative"
 

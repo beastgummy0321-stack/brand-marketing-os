@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_audit.py — audit_log 只增不改，每次異動留一筆稽核紀錄。
 
 見 docs/design/03-data-model.md §3.1、§8.5。

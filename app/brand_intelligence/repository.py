@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/brand_intelligence/repository.py — Brand Intelligence 存取層。
 
 見 docs/design/03-data-model.md §3.2、§7；DESIGN.md §17 決策 3。
@@ -20,9 +19,9 @@
    建檔精靈（intake）的資料由該模組自行清，本檔不跨模組刪表。
 """
 
-from typing import Optional
 
 from app.brand_intelligence import rule_lifecycle
+
 # Owned Channel 已拆進 repository_channels.py（票 B2-library，本檔行數頂到
 # docs/tech-debt.md 凍結上限，不得再加）；這裡 re-export，讓既有 `repo.create_channel()`
 # 等呼叫端寫法不必改。
@@ -33,6 +32,7 @@ from app.brand_intelligence.repository_channels import (  # noqa: F401
     list_channels,
     update_channel,
 )
+
 # 拆進 repository_learning_text.py（票 F3-signoff-residue R4：本檔行數頂到凍結上限，
 # 修多括號區段全部刪空互撞的缺陷加不進去，precedent 同上面 repository_channels 的拆法）；
 # 這裡 re-export，讓既有 `learning_ledger_entry_exists()` 呼叫與測試裡的
@@ -42,7 +42,7 @@ from app.brand_intelligence.repository_learning_text import (  # noqa: F401
 )
 from app.core import cleanup
 from app.core.audit import write_audit
-from app.core.db import new_id, now_utc, jsonb, Conn, DEV_ORG_ID
+from app.core.db import DEV_ORG_ID, Conn, jsonb, new_id, now_utc
 
 
 def _require(value, message: str) -> None:
@@ -50,7 +50,7 @@ def _require(value, message: str) -> None:
         raise ValueError(message)
 
 
-def _row(cursor_row) -> Optional[dict]:
+def _row(cursor_row) -> dict | None:
     return dict(cursor_row) if cursor_row is not None else None
 
 
@@ -77,7 +77,7 @@ def _bump_product_version(conn: Conn, brand_id: str, product_id: str) -> None:
 # Brand
 # ---------------------------------------------------------------------------
 
-def create_brand(conn: Conn, *, name: str, client_name: Optional[str], actor: str) -> dict:
+def create_brand(conn: Conn, *, name: str, client_name: str | None, actor: str) -> dict:
     _require(name, "brand.name 為必填")
     _require(actor, "actor 為必填")
     brand_id = new_id("brd")
@@ -98,11 +98,11 @@ def create_brand(conn: Conn, *, name: str, client_name: Optional[str], actor: st
     return row
 
 
-def get_brand(conn: Conn, brand_id: str) -> Optional[dict]:
+def get_brand(conn: Conn, brand_id: str) -> dict | None:
     return _row(conn.execute("SELECT * FROM brand WHERE id = %s", (brand_id,)).fetchone())
 
 
-def list_brands(conn: Conn, status: Optional[str] = None) -> list:
+def list_brands(conn: Conn, status: str | None = None) -> list:
     """品牌切換器用的清單，橫跨所有品牌（brand 是隔離根鍵本身，不受品牌過濾規則限制）。"""
     if status:
         return _rows(conn.execute("SELECT * FROM brand WHERE status = %s ORDER BY name", (status,)))
@@ -110,7 +110,7 @@ def list_brands(conn: Conn, status: Optional[str] = None) -> list:
 
 
 def update_brand(conn: Conn, brand_id: str, *, name: str,
-                  client_name: Optional[str], status: str, actor: str) -> dict:
+                  client_name: str | None, status: str, actor: str) -> dict:
     _require(name, "brand.name 為必填")
     _require(actor, "actor 為必填")
     if status not in ("active", "archived"):
@@ -136,7 +136,7 @@ CONVERSION_GOALS = ("purchase", "lead", "booking", "awareness")
 
 
 def set_brand_switches(conn: Conn, brand_id: str, *,
-                        market_region: Optional[str], conversion_goal: Optional[str],
+                        market_region: str | None, conversion_goal: str | None,
                         actor: str) -> dict:
     """寫入 brand.market_region／brand.conversion_goal（票 A，方法論開關讀這兩欄）。"""
     _require(actor, "actor 為必填")
@@ -166,7 +166,7 @@ INDUSTRIES = ("food_beverage", "beauty_personal_care", "fashion_apparel",
 
 
 def set_brand_industry(conn: Conn, brand_id: str, *,
-                        industry: Optional[str], actor: str) -> dict:
+                        industry: str | None, actor: str) -> dict:
     """寫入 brand.industry（ADR 0014，節日日曆比對用）。獨立於 set_brand_switches——
     那支管的是方法論開關（票 A），業種是不同功能領域，不合併進同一支函式。"""
     _require(actor, "actor 為必填")
@@ -339,7 +339,7 @@ def create_product(conn: Conn, brand_id: str, *, name: str, actor: str) -> dict:
     return row
 
 
-def get_product(conn: Conn, brand_id: str, product_id: str) -> Optional[dict]:
+def get_product(conn: Conn, brand_id: str, product_id: str) -> dict | None:
     """跨品牌存取一律回 None（呼叫端轉成「找不到」），不得洩漏資料屬於其他品牌。"""
     return _row(conn.execute(
         "SELECT * FROM product WHERE id = %s AND brand_id = %s", (product_id, brand_id)
@@ -453,9 +453,9 @@ def delete_product(conn: Conn, brand_id: str, product_id: str, *, actor: str) ->
 
 def create_brand_fact(conn: Conn, brand_id: str, *, actor: str, fact_type: str,
                        label: str, value: str, status: str,
-                       source_reference_id: Optional[str] = None,
-                       confidence: Optional[str] = None,
-                       confirmed_by: Optional[str] = None) -> dict:
+                       source_reference_id: str | None = None,
+                       confidence: str | None = None,
+                       confirmed_by: str | None = None) -> dict:
     _require(fact_type, "brand_fact.fact_type 為必填")
     _require(label, "brand_fact.label 為必填")
     _require(value, "brand_fact.value 為必填")
@@ -488,13 +488,13 @@ def create_brand_fact(conn: Conn, brand_id: str, *, actor: str, fact_type: str,
     return row
 
 
-def get_brand_fact(conn: Conn, brand_id: str, fact_id: str) -> Optional[dict]:
+def get_brand_fact(conn: Conn, brand_id: str, fact_id: str) -> dict | None:
     return _row(conn.execute(
         "SELECT * FROM brand_fact WHERE id = %s AND brand_id = %s", (fact_id, brand_id)
     ).fetchone())
 
 
-def list_brand_facts(conn: Conn, brand_id: str, status: Optional[str] = None) -> list:
+def list_brand_facts(conn: Conn, brand_id: str, status: str | None = None) -> list:
     if status:
         return _rows(conn.execute(
             "SELECT * FROM brand_fact WHERE brand_id = %s AND status = %s ORDER BY created_at",
@@ -507,8 +507,8 @@ def list_brand_facts(conn: Conn, brand_id: str, status: Optional[str] = None) ->
 
 def update_brand_fact(conn: Conn, brand_id: str, fact_id: str, *, actor: str,
                        fact_type: str, label: str, value: str,
-                       source_reference_id: Optional[str] = None,
-                       confidence: Optional[str] = None) -> dict:
+                       source_reference_id: str | None = None,
+                       confidence: str | None = None) -> dict:
     """編輯事實內容。人工編輯直接生效、不退回待確認（決策 0013 用戶優先：
     人親手改的內容本身就是最高權威的確認；編輯者成為最新確認人）。"""
     _require(fact_type, "brand_fact.fact_type 為必填")
@@ -597,9 +597,9 @@ def confirm_brand_fact(conn: Conn, brand_id: str, fact_id: str, *,
 
 def create_product_fact(conn: Conn, brand_id: str, product_id: str, *, actor: str,
                          fact_type: str, label: str, value: str, status: str,
-                         source_reference_id: Optional[str] = None,
-                         confidence: Optional[str] = None,
-                         confirmed_by: Optional[str] = None) -> dict:
+                         source_reference_id: str | None = None,
+                         confidence: str | None = None,
+                         confirmed_by: str | None = None) -> dict:
     _require(fact_type, "product_fact.fact_type 為必填")
     _require(label, "product_fact.label 為必填")
     _require(value, "product_fact.value 為必填")
@@ -634,7 +634,7 @@ def create_product_fact(conn: Conn, brand_id: str, product_id: str, *, actor: st
 
 
 def get_product_fact(conn: Conn, brand_id: str, product_id: str,
-                      fact_id: str) -> Optional[dict]:
+                      fact_id: str) -> dict | None:
     return _row(conn.execute(
         "SELECT * FROM product_fact WHERE id = %s AND brand_id = %s AND product_id = %s",
         (fact_id, brand_id, product_id),
@@ -642,7 +642,7 @@ def get_product_fact(conn: Conn, brand_id: str, product_id: str,
 
 
 def list_product_facts(conn: Conn, brand_id: str, product_id: str,
-                        status: Optional[str] = None) -> list:
+                        status: str | None = None) -> list:
     if status:
         return _rows(conn.execute(
             "SELECT * FROM product_fact WHERE brand_id = %s AND product_id = %s AND status = %s "
@@ -657,8 +657,8 @@ def list_product_facts(conn: Conn, brand_id: str, product_id: str,
 
 def update_product_fact(conn: Conn, brand_id: str, product_id: str, fact_id: str, *,
                          actor: str, fact_type: str, label: str, value: str,
-                         source_reference_id: Optional[str] = None,
-                         confidence: Optional[str] = None) -> dict:
+                         source_reference_id: str | None = None,
+                         confidence: str | None = None) -> dict:
     """編輯事實內容。人工編輯直接生效、不退回待確認（決策 0013 用戶優先）。"""
     _require(fact_type, "product_fact.fact_type 為必填")
     _require(label, "product_fact.label 為必填")
@@ -712,7 +712,7 @@ def confirm_product_fact(conn: Conn, brand_id: str, product_id: str, fact_id: st
 # Product Economics（依 product_id 只保留一筆現行資料；新值進來即更新既有列）
 # ---------------------------------------------------------------------------
 
-def get_product_economics(conn: Conn, brand_id: str, product_id: str) -> Optional[dict]:
+def get_product_economics(conn: Conn, brand_id: str, product_id: str) -> dict | None:
     return _row(conn.execute(
         "SELECT * FROM product_economics WHERE brand_id = %s AND product_id = %s "
         "ORDER BY updated_at DESC LIMIT 1",
@@ -722,12 +722,12 @@ def get_product_economics(conn: Conn, brand_id: str, product_id: str) -> Optiona
 
 def save_product_economics(conn: Conn, brand_id: str, product_id: str, *, actor: str,
                             selling_price: float, currency: str, confirmed_by: str,
-                            fixed_cost: Optional[float] = None,
-                            unit_variable_cost: Optional[float] = None,
-                            shipping_cost: Optional[float] = None,
-                            cpa_roas_basis: Optional[str] = None,
-                            effective_from: Optional[str] = None,
-                            effective_to: Optional[str] = None) -> dict:
+                            fixed_cost: float | None = None,
+                            unit_variable_cost: float | None = None,
+                            shipping_cost: float | None = None,
+                            cpa_roas_basis: str | None = None,
+                            effective_from: str | None = None,
+                            effective_to: str | None = None) -> dict:
     _require(currency, "product_economics.currency 為必填")
     _require(confirmed_by, "confirmed_by 為必填")
     _require(actor, "actor 為必填")
@@ -774,7 +774,7 @@ def save_product_economics(conn: Conn, brand_id: str, product_id: str, *, actor:
 
 
 def get_latest_product_source_url(conn: Conn, brand_id: str,
-                                   product_id: str) -> Optional[str]:
+                                   product_id: str) -> str | None:
     """這個產品最近一次帶網址的來源引用文字（產品事實或經濟數字都算），給「AI 再次調研」
     表單預填網址用；沒有就回 None（架構限制：使用者填的網址存在 source_reference.title，
     見 app/main.py 的 _create_source_ref）。"""
@@ -792,7 +792,7 @@ def get_latest_product_source_url(conn: Conn, brand_id: str,
 
 def create_pending_product_economics(conn: Conn, brand_id: str, product_id: str, *,
                                       actor: str, selling_price: float, currency: str,
-                                      source_reference_id: Optional[str]) -> dict:
+                                      source_reference_id: str | None) -> dict:
     """AI 快掃抓到售價、這個產品目前完全沒有經濟數字列時才呼叫——建一筆 pending，
     固定成本／單位變動成本／運費留白，等使用者到「更新數字」補齊或直接一鍵確認。"""
     _require(currency, "product_economics.currency 為必填")
@@ -849,8 +849,8 @@ def confirm_product_economics(conn: Conn, brand_id: str, product_id: str, *,
 # ---------------------------------------------------------------------------
 
 def create_rule(conn: Conn, brand_id: str, *, actor: str, rule_type: str, content: str,
-                 severity: str, product_id: Optional[str] = None,
-                 source_reference_id: Optional[str] = None) -> dict:
+                 severity: str, product_id: str | None = None,
+                 source_reference_id: str | None = None) -> dict:
     _require(rule_type, "rule.rule_type 為必填")
     _require(content, "rule.content 為必填")
     _require(actor, "actor 為必填")
@@ -883,14 +883,14 @@ def create_rule(conn: Conn, brand_id: str, *, actor: str, rule_type: str, conten
     return row
 
 
-def get_rule(conn: Conn, brand_id: str, rule_id: str) -> Optional[dict]:
+def get_rule(conn: Conn, brand_id: str, rule_id: str) -> dict | None:
     return _row(conn.execute(
         "SELECT * FROM rule WHERE id = %s AND brand_id = %s", (rule_id, brand_id)).fetchone())
 
 
 def update_rule(conn: Conn, brand_id: str, rule_id: str, *, actor: str,
-                 rule_type: str, content: str, severity: str, product_id: Optional[str] = None,
-                 source_reference_id: Optional[str] = None) -> dict:
+                 rule_type: str, content: str, severity: str, product_id: str | None = None,
+                 source_reference_id: str | None = None) -> dict:
     """編輯規則內容，比照 update_brand_fact：人工編輯直接生效（決策 0013）。"""
     _require(rule_type, "rule.rule_type 為必填")
     _require(content, "rule.content 為必填")
@@ -1011,8 +1011,8 @@ def list_pending_reconfirm_rules(conn: Conn, brand_id: str) -> list:
 # ---------------------------------------------------------------------------
 
 def create_claim(conn: Conn, brand_id: str, *, actor: str, claim_text: str,
-                  claim_type: str, product_id: Optional[str] = None,
-                  evidence_source_reference_id: Optional[str] = None) -> dict:
+                  claim_type: str, product_id: str | None = None,
+                  evidence_source_reference_id: str | None = None) -> dict:
     _require(claim_text, "claim.claim_text 為必填")
     _require(actor, "actor 為必填")
     if claim_type not in ("approved", "high_risk", "forbidden"):
@@ -1040,14 +1040,14 @@ def create_claim(conn: Conn, brand_id: str, *, actor: str, claim_text: str,
     return row
 
 
-def get_claim(conn: Conn, brand_id: str, claim_id: str) -> Optional[dict]:
+def get_claim(conn: Conn, brand_id: str, claim_id: str) -> dict | None:
     return _row(conn.execute(
         "SELECT * FROM claim WHERE id = %s AND brand_id = %s", (claim_id, brand_id)).fetchone())
 
 
 def update_claim(conn: Conn, brand_id: str, claim_id: str, *, actor: str,
-                  claim_text: str, claim_type: str, product_id: Optional[str] = None,
-                  evidence_source_reference_id: Optional[str] = None) -> dict:
+                  claim_text: str, claim_type: str, product_id: str | None = None,
+                  evidence_source_reference_id: str | None = None) -> dict:
     """編輯宣稱內容，比照 update_brand_fact：人工編輯直接生效（決策 0013）。"""
     _require(claim_text, "claim.claim_text 為必填")
     _require(actor, "actor 為必填")
@@ -1103,9 +1103,9 @@ def list_claims_for_product(conn: Conn, brand_id: str, product_id: str) -> list:
 # ---------------------------------------------------------------------------
 
 def create_source_reference(conn: Conn, brand_id: str, *, actor: str, title: str,
-                             source_type: str, captured_date, url: Optional[str] = None,
-                             published_date=None, locale: Optional[str] = None,
-                             note: Optional[str] = None) -> dict:
+                             source_type: str, captured_date, url: str | None = None,
+                             published_date=None, locale: str | None = None,
+                             note: str | None = None) -> dict:
     """captured_date／published_date：`date` 物件（source_reference 兩欄是 Postgres date，
     02-3b：呼叫端不再傳 ISO 字串）。"""
     _require(title, "source_reference.title 為必填")
@@ -1132,7 +1132,7 @@ def create_source_reference(conn: Conn, brand_id: str, *, actor: str, title: str
 
 
 def get_source_reference(conn: Conn, brand_id: str,
-                          source_reference_id: str) -> Optional[dict]:
+                          source_reference_id: str) -> dict | None:
     return _row(conn.execute(
         "SELECT * FROM source_reference WHERE id = %s AND brand_id = %s",
         (source_reference_id, brand_id),
@@ -1150,8 +1150,8 @@ def list_source_references(conn: Conn, brand_id: str) -> list:
 # ---------------------------------------------------------------------------
 
 def create_official_asset(conn: Conn, brand_id: str, *, actor: str, asset_kind: str,
-                           file_path: str, product_id: Optional[str] = None,
-                           title: Optional[str] = None, usage_note: Optional[str] = None) -> dict:
+                           file_path: str, product_id: str | None = None,
+                           title: str | None = None, usage_note: str | None = None) -> dict:
     _require(asset_kind, "official_asset.asset_kind 為必填")
     _require(file_path, "official_asset.file_path 為必填")
     _require(actor, "actor 為必填")
@@ -1180,7 +1180,7 @@ def list_official_assets(conn: Conn, brand_id: str) -> list:
     ))
 
 
-def get_official_asset(conn: Conn, brand_id: str, asset_id: str) -> Optional[dict]:
+def get_official_asset(conn: Conn, brand_id: str, asset_id: str) -> dict | None:
     return _row(conn.execute(
         "SELECT * FROM official_asset WHERE id = %s AND brand_id = %s", (asset_id, brand_id)
     ).fetchone())
@@ -1196,8 +1196,8 @@ def delete_official_asset(conn: Conn, brand_id: str, asset_id: str, *, actor: st
 
 def create_strategy_hypothesis(conn: Conn, brand_id: str, *, actor: str,
                                 hypothesis_type: str, statement: str, created_by: str,
-                                product_id: Optional[str] = None,
-                                source_cycle_id: Optional[str] = None) -> dict:
+                                product_id: str | None = None,
+                                source_cycle_id: str | None = None) -> dict:
     _require(hypothesis_type, "strategy_hypothesis.hypothesis_type 為必填")
     _require(statement, "strategy_hypothesis.statement 為必填")
     _require(created_by, "strategy_hypothesis.created_by 為必填")
@@ -1230,7 +1230,7 @@ def list_strategy_hypotheses(conn: Conn, brand_id: str) -> list:
     ))
 
 
-def get_strategy_hypothesis(conn: Conn, brand_id: str, hypothesis_id: str) -> Optional[dict]:
+def get_strategy_hypothesis(conn: Conn, brand_id: str, hypothesis_id: str) -> dict | None:
     return _row(conn.execute(
         "SELECT * FROM strategy_hypothesis WHERE id = %s AND brand_id = %s", (hypothesis_id, brand_id)
     ).fetchone())
@@ -1268,10 +1268,10 @@ def update_hypothesis_status(conn: Conn, brand_id: str, hypothesis_id: str, *,
 
 def create_brand_performance_baseline(conn: Conn, brand_id: str, *, actor: str,
                                        metric: str, value: float, as_of_date: str, created_by: str,
-                                       product_id: Optional[str] = None, unit: Optional[str] = None,
-                                       basis_note: Optional[str] = None,
-                                       source_cycle_id: Optional[str] = None,
-                                       sample_note: Optional[str] = None) -> dict:
+                                       product_id: str | None = None, unit: str | None = None,
+                                       basis_note: str | None = None,
+                                       source_cycle_id: str | None = None,
+                                       sample_note: str | None = None) -> dict:
     _require(metric, "brand_performance_baseline.metric 為必填")
     _require(as_of_date, "brand_performance_baseline.as_of_date 為必填")
     _require(created_by, "brand_performance_baseline.created_by 為必填")
@@ -1312,7 +1312,7 @@ def list_brand_performance_baselines(conn: Conn, brand_id: str) -> list:
 # ---------------------------------------------------------------------------
 
 def create_brand_report(conn: Conn, brand_id: str, *, actor: str, model: str,
-                         llm_task_id: Optional[str], brand_version: int,
+                         llm_task_id: str | None, brand_version: int,
                          source_fact_count: int, sections: dict) -> dict:
     _require(actor, "actor 為必填")
     _require(model, "brand_report.model 為必填")
@@ -1339,7 +1339,7 @@ def create_brand_report(conn: Conn, brand_id: str, *, actor: str, model: str,
     return row
 
 
-def get_latest_brand_report(conn: Conn, brand_id: str) -> Optional[dict]:
+def get_latest_brand_report(conn: Conn, brand_id: str) -> dict | None:
     row = _row(conn.execute(
         "SELECT * FROM brand_report WHERE brand_id = %s ORDER BY generated_at DESC, id DESC LIMIT 1",
         (brand_id,),
@@ -1353,7 +1353,7 @@ def get_latest_brand_report(conn: Conn, brand_id: str) -> Optional[dict]:
 # Customer Voice（顧客原話語料庫，GitHub issue #14，決策 0023 第 18a 條／0024 第 2 條）
 # ---------------------------------------------------------------------------
 
-def _with_extraction(row: Optional[dict]) -> Optional[dict]:
+def _with_extraction(row: dict | None) -> dict | None:
     if row is not None:
         row["extraction"] = row["extraction_json"]
     return row
@@ -1361,8 +1361,8 @@ def _with_extraction(row: Optional[dict]) -> Optional[dict]:
 
 def create_customer_voice(conn: Conn, brand_id: str, *, actor: str, raw_text: str,
                            source_channel: str, source_type: str, extraction: list,
-                           source_detail: Optional[str] = None,
-                           llm_task_id: Optional[str] = None) -> dict:
+                           source_detail: str | None = None,
+                           llm_task_id: str | None = None) -> dict:
     _require(raw_text, "customer_voice.raw_text 為必填")
     _require(source_channel, "customer_voice.source_channel 為必填")
     _require(actor, "actor 為必填")
@@ -1392,14 +1392,14 @@ def create_customer_voice(conn: Conn, brand_id: str, *, actor: str, raw_text: st
     return _with_extraction(row)
 
 
-def get_customer_voice(conn: Conn, brand_id: str, cv_id: str) -> Optional[dict]:
+def get_customer_voice(conn: Conn, brand_id: str, cv_id: str) -> dict | None:
     return _with_extraction(_row(conn.execute(
         "SELECT * FROM customer_voice WHERE id = %s AND brand_id = %s", (cv_id, brand_id)
     ).fetchone()))
 
 
 def list_customer_voices(conn: Conn, brand_id: str,
-                          status: Optional[str] = None) -> list:
+                          status: str | None = None) -> list:
     if status:
         rows = _rows(conn.execute(
             "SELECT * FROM customer_voice WHERE brand_id = %s AND status = %s ORDER BY created_at DESC",
@@ -1453,13 +1453,13 @@ def delete_customer_voice(conn, brand_id: str, cv_id: str, *, actor: str) -> Non
 
 def create_learning_ledger_entry(conn: Conn, brand_id: str, *, learning_text: str,
                                   applicability_scope: str, created_by: str, actor: str,
-                                  source_track: str, product_id: Optional[str] = None,
-                                  platform: Optional[str] = None,
-                                  source_cycle_id: Optional[str] = None,
-                                  source_reading_id: Optional[str] = None,
-                                  source_hypothesis_id: Optional[str] = None,
-                                  sample_size: Optional[str] = None,
-                                  confidence: Optional[str] = None) -> dict:
+                                  source_track: str, product_id: str | None = None,
+                                  platform: str | None = None,
+                                  source_cycle_id: str | None = None,
+                                  source_reading_id: str | None = None,
+                                  source_hypothesis_id: str | None = None,
+                                  sample_size: str | None = None,
+                                  confidence: str | None = None) -> dict:
     """已驗證的正面學習入帳（append-only，鐵則 3）：只新增，本層不提供 UPDATE／DELETE
     入口（下架走 deactivate_learning_ledger_entry，只改 expired，不改內容）。只收
     「經判讀驗證且經人確認」的條目——由呼叫端保證（決策 0030 第一節第 1 點）。
@@ -1538,7 +1538,7 @@ def deactivate_learning_ledger_entry(conn: Conn, brand_id: str, entry_id: str, *
 
 
 def list_learnings_for_prompt(conn: Conn, brand_id: str, *,
-                               track: str, product_id: Optional[str] = None,
+                               track: str, product_id: str | None = None,
                                include_cross_track: bool = False) -> list:
     """`app/llm/context_compiler.py` 組 prompt 專用（A1：跨層一律走公開函式，不得對本表
     下原生 SQL）。A4 跨分支知識可見性：預設（`include_cross_track=False`）只回傳
@@ -1560,7 +1560,7 @@ def list_learnings_for_prompt(conn: Conn, brand_id: str, *,
 
 
 def learning_ledger_entry_exists(conn: Conn, brand_id: str,
-                                  *, product_id: Optional[str], learning_text: str) -> bool:
+                                  *, product_id: str | None, learning_text: str) -> bool:
     """這個品牌、這個範圍（品牌整體或同一產品）下，同一句學習文字（拿掉括號夾註後比對，見
     `_normalize_learning_text`）是否已經進過帳（修憲落地 G4，決策 0035 第三節第 8 點：
     `_ledger_confidence` 判斷用）。已知限制（票 F3，記錄不修）：`product_id IS ?` 精確比對，同一句話掛在不同 product_id 下不會互相偵測成重複。"""

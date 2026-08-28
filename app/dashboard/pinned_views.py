@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/dashboard/pinned_views.py — 駕駛艙成效釘選區（票 B4R-cockpit-pins 接線，契約
 `.scratch/grill/GRILL-B4R-performance.md` 第一節，型別逐欄對照
 `frontend/src/lib/pinnedViewsApi.ts`）。
@@ -13,14 +12,12 @@
 
 import json
 from datetime import date
-from typing import Optional
 
 from app.ads import codes as ads_codes
 from app.ads import health_lights as ads_health_lights
 from app.ads import pacing as ads_pacing
 from app.ads import performance as ads_performance
 from app.ads import reading as ads_reading
-from app.ads import repository as ads_repo
 from app.ads.routes_common import _hub_stage_info
 from app.core import rule_cards
 from app.core import settings as core_settings
@@ -104,7 +101,7 @@ _BUILDERS = {"ad_overview": _ad_overview, "weekly_burn": _weekly_burn,
              "attribution": _attribution, "health_lights": _health_lights}
 
 
-def build_performance_view(conn, brand_id: str, view_key: str) -> Optional[dict]:
+def build_performance_view(conn, brand_id: str, view_key: str) -> dict | None:
     """`None`＝這個品牌完全沒開過任何檔期（S3P.13）；`post_placeholder` 是固定留位空態，
     恆定顯示，不查資料庫（R2-1 決定）。"""
     if view_key == "post_placeholder":

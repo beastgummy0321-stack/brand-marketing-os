@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/ads/reading_hypotheses.py — 假設結案週邊讀寫（票 10-split-reading-py）。
 
 從 `app/ads/reading.py`（凍結 1039 行、不得再長）拆出來的小檔——這幾個函式原樣搬過來，
@@ -11,7 +10,6 @@ import reading.py（集裝箱憲章：拆出來的檔不准 import 回 reading.p
 乾淨，所以兩個函式留在 reading.py，靠 import 呼叫這裡的 `comparison_cells()`。
 """
 
-from typing import Optional
 
 from app.ads import performance as ads_performance
 from app.ads import repository as ads_repo
@@ -75,7 +73,7 @@ def _pending_hypothesis_reviews(conn, brand_id: str, cycle_id: str, cycle_row: d
 
 
 def comparison_cells(conn, brand_id: str, cycle_id: str,
-                     product_id: Optional[str]) -> list:
+                     product_id: str | None) -> list:
     """這期真的投放過、有成效資料回得來的切角（experiment_cell），供假設結案畫面並排
     出示 A／B 兩邊的實際數字（切角名／樣本數／CPA／ROAS／花費——契約第 2 點），也用它的
     筆數判斷這條假設這期是不是「真的做過對照」（契約第 3 點：少於
@@ -119,11 +117,11 @@ def comparison_cells(conn, brand_id: str, cycle_id: str,
     return result
 
 
-def has_real_comparison(conn, brand_id: str, cycle_id: str, product_id: Optional[str]) -> bool:
+def has_real_comparison(conn, brand_id: str, cycle_id: str, product_id: str | None) -> bool:
     return len(comparison_cells(conn, brand_id, cycle_id, product_id)) >= MIN_COMPARISON_CELLS
 
 
-def stale_note(conn, brand_id: str, cycle_id: str, hypothesis: dict) -> Optional[str]:
+def stale_note(conn, brand_id: str, cycle_id: str, hypothesis: dict) -> str | None:
     """已結案（非 pending）的假設，簽核之後這期是不是又真的重判過、數字真的變了——回傳
     提示文字或 None（B0-34）。在讀取時算，不寫回 `strategy_hypothesis`：已簽核的
     verdict／`learning_ledger` 不因為這個提示自動改動，這裡連寫都不寫（比照
@@ -160,7 +158,7 @@ def named_cells(cells: list, text: str) -> list:
     return [c for c in cells if c["creative_angle"] in text]
 
 
-def guard_supported_verdict(conn, brand_id: str, cycle_id: str, product_id: Optional[str],
+def guard_supported_verdict(conn, brand_id: str, cycle_id: str, product_id: str | None,
                             verdict: str, statement: str) -> tuple:
     """回傳 `(實際要入帳的 verdict, sample_size)`（R2-learning-honesty 契約第 3／4 點，
     ADR 0026 決定 6／7／7b）。

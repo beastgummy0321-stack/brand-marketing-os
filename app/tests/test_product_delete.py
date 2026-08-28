@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_product_delete.py — 永久刪除產品（決策 0020，比照品牌 0015）。
 
 守四件事：

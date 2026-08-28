@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/core/retention.py — llm_task 保留策略（修憲落地 A5，architecture-rules.md A5）。
 
 問題：llm_task 內嵌完整模型輸出（structured_output_json／rendered_output／
@@ -15,9 +14,8 @@ usage_json／cost／input_context_hash／provider／model／status／時間戳�
 """
 
 from datetime import datetime, timedelta
-from typing import Optional
 
-from app.core.db import now_utc, Conn
+from app.core.db import Conn, now_utc
 
 RETENTION_DAYS = 90
 
@@ -25,7 +23,7 @@ RETENTION_DAYS = 90
 _PURGE_COLUMNS = ("structured_output_json", "rendered_output", "validation_result_json")
 
 
-def purge_expired_llm_task_content(conn: Conn, *, now: Optional[datetime] = None) -> int:
+def purge_expired_llm_task_content(conn: Conn, *, now: datetime | None = None) -> int:
     """把超過保留期的已完成任務之大欄位清空，回傳實際清空的列數。
 
     只動 finished_at 早於 cutoff 的列（還在跑的任務不動，反正沒有大內容可清）；
@@ -44,7 +42,7 @@ def purge_expired_llm_task_content(conn: Conn, *, now: Optional[datetime] = None
     return cur.rowcount
 
 
-def _cutoff(now: Optional[datetime] = None) -> datetime:
+def _cutoff(now: datetime | None = None) -> datetime:
     """回傳「現在往前推 RETENTION_DAYS 天」的 tz-aware datetime。"""
     reference = now or now_utc()
     return reference - timedelta(days=RETENTION_DAYS)

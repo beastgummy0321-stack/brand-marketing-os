@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/brand_intelligence/background_job.py — 背景工作基建（純搬家，來源：
 `routes_library.py` 的 `_cv_jobs` 與 `routes_products.py` 的 `_research_jobs`，
 兩邊原本各自寫了一份「job 狀態 dict＋鎖＋冪等閘＋thread 啟動」與「先通知後 commit」，
@@ -11,7 +10,7 @@
 """
 
 import threading
-from typing import Callable
+from collections.abc import Callable
 
 from app.core import db as core_db
 from app.core import interrupts as core_interrupts

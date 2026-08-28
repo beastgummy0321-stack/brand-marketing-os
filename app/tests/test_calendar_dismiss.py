@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_calendar_dismiss.py — 票 02-permanent-dismiss-category：節日類別永久覆寫。
 
 app/core/calendar_dismiss.py 的 CRUD 邏輯，用 conftest.py 逐模組建的 Postgres schema

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/ads/reading_verdict.py — 判讀結論周邊的純函式（票 10-split-reading-py）。
 
 從 `app/ads/reading.py`（凍結 1039 行、不得再長）拆出來的小檔——這幾個函式原樣搬過來，
@@ -16,7 +15,6 @@ Provider——這樣的搬法不是「純搬移」，是行為改變，所以 LL
 reading.py。這裡另外湊的這批函式是為了在不能動 LLM 文案縫的前提下，還是把行數壓下來。
 """
 
-from typing import Optional
 
 from app.ads import budget as budget_calc
 from app.ads import performance as ads_performance
@@ -42,7 +40,7 @@ _NEGATIVE_STATUSES = {"pause_candidate"}
 # 兩層各管各的，互不取代。
 
 
-def _verdict_group(status: Optional[str]) -> str:
+def _verdict_group(status: str | None) -> str:
     """翻盤警示（`classify_verdict_shift`）與回購雙線衝突（`_repurchase_line`）專用的
     正負向分群——`maintain` 算正面在這兩個用途下是對的。**假設結案預選不用這個**，
     見下面 `_preselect_hypothesis_status`。"""
@@ -53,7 +51,7 @@ def _verdict_group(status: Optional[str]) -> str:
     return "uncertain"
 
 
-def _preselect_hypothesis_status(status: Optional[str]) -> str:  # noqa: ARG001 — 見上方票 F3 說明
+def _preselect_hypothesis_status(status: str | None) -> str:  # noqa: ARG001 — 見上方票 F3 說明
     """畫面預選一律「看不出來」，不再依整體判讀結論猜方向（票 F3-signoff-residue）。
 
     `status` 參數保留只是不改呼叫端（`reading_hypotheses.build_hypothesis_items` 的
@@ -62,7 +60,7 @@ def _preselect_hypothesis_status(status: Optional[str]) -> str:  # noqa: ARG001 
     return "inconclusive"
 
 
-def classify_verdict_shift(before_status: Optional[str], after_status: Optional[str]) -> str:
+def classify_verdict_shift(before_status: str | None, after_status: str | None) -> str:
     """'unchanged'（結論沒變）／'adjustment'（微調，不吵）／'reversal'（翻盤，要進佇列）。"""
     if before_status == after_status:
         return "unchanged"
@@ -71,7 +69,7 @@ def classify_verdict_shift(before_status: Optional[str], after_status: Optional[
     return "adjustment"
 
 
-def _unsettled_note(ratio: Optional[float]) -> str:
+def _unsettled_note(ratio: float | None) -> str:
     """期末暫定判讀標注「未結案訂單佔 X%」（決策 0025 判讀節奏第 5 點）：貨到付款＋超商取貨
     型態下，這些訂單期末後才會定案，暫定結論可能因此翻盤。"""
     if ratio is None:
@@ -79,7 +77,7 @@ def _unsettled_note(ratio: Optional[float]) -> str:
     return f"這期還有 {ratio:.0%} 的訂單尚未結案（出貨或取貨還沒完成），這是暫定結論。"
 
 
-def breakeven_roas(economics: Optional[dict]) -> Optional[float]:
+def breakeven_roas(economics: dict | None) -> float | None:
     """打平所需的投報率＝售價 ÷ 單位毛利。算不出來回 None（不猜）。"""
     if not economics:
         return None
@@ -90,7 +88,7 @@ def breakeven_roas(economics: Optional[dict]) -> Optional[float]:
     return round(float(price) / margin, 2)
 
 
-def cycle_breakeven_roas(conn, brand_id: str, allocations: list) -> Optional[float]:
+def cycle_breakeven_roas(conn, brand_id: str, allocations: list) -> float | None:
     """檔期層打平線＝這期各產品打平線的平均，四捨五入到小數點兩位；一個都算不出來回 None。
 
     原本內嵌在 `reading.load()` 裡，ADR 0025 把它抽成函式：週提案卡的廣告層停掉卡也要用
@@ -102,8 +100,8 @@ def cycle_breakeven_roas(conn, brand_id: str, allocations: list) -> Optional[flo
     return round(sum(known) / len(known), 2) if known else None
 
 
-def repurchase_breakeven_roas(first_order_breakeven: Optional[float],
-                              multiplier: Optional[float]) -> Optional[float]:
+def repurchase_breakeven_roas(first_order_breakeven: float | None,
+                              multiplier: float | None) -> float | None:
     """含 90 天回購的實質打平線（票 #39，決策 0025 第 7 點）：回購讓客戶在 90 天內帶來
     `multiplier` 倍首單的淨營收，所以首單廣告投報率不用到打平線就已經回本——
     實質打平線＝首單打平線 ÷ 回購倍數。任一邊算不出來就回 None，不猜。"""
@@ -112,7 +110,7 @@ def repurchase_breakeven_roas(first_order_breakeven: Optional[float],
     return round(first_order_breakeven / multiplier, 2)
 
 
-def prediction_settlement(conn, brand_id: str, cycle: Optional[dict]) -> Optional[dict]:
+def prediction_settlement(conn, brand_id: str, cycle: dict | None) -> dict | None:
     """兌現預言卡的資料組裝（決策 0039 第 13–16 條，票 F5）。cycle 傳哪一期就對哪一期的
     區間快照兌現——判讀頁出口傳「正在看的這期」自己，第二期檔期內頁出口傳「上一期」
     （見 app/ads/routes.py 兩個呼叫端；上一期由 onboarding.previous_cycle() 取得，本函式

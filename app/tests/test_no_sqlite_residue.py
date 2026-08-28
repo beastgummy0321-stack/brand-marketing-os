@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Gate C (ticket 02-5, ADR 0027 decision 1): no SQLite residue in production code.
 
 Scans every non-test `app/**/*.py` with `ast`: string constants that look like SQL are

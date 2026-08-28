@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_ads_health_lights.py — 檔期健康燈號（B4R 收尾包項目 2／3）。
 
 燈號黃燈門檻改走 rule_cards 後的最小驗證：四盞燈算得出來、規則卡調整後燈號真的
@@ -7,8 +6,6 @@
 
 import unittest
 from datetime import date, timedelta
-
-import pytest
 
 import app.main as main
 from app.ads import health_lights

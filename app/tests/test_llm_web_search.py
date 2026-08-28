@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_llm_web_search.py — ADR 0005：開通 LLM 網路搜尋。
 
 全程假金鑰＋攔截掉的假 SDK client，不發任何真實網路請求、不花任何錢

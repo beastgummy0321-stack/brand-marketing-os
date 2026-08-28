@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_ads_theme_copy.py — 整組複製與逐則複製內容路由（票 11-copy-flows）。
 
 接縫二（路由層，app/ads/routes_creative_theme.py）：不需要任何 AI 呼叫——主題與元件直接用
@@ -7,11 +6,9 @@ app/tests/test_ads_theme_adopt_reject.py（票 10）。品牌與產品名一律�
 """
 
 import atexit
-import os
 import shutil
 import tempfile
 import unittest
-from pathlib import Path
 
 _tmpdir = tempfile.mkdtemp(prefix="brand_os_theme_copy_")
 
@@ -23,7 +20,6 @@ from app.ads import theme_repository as theme_repo  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
 from app.core import settings as coresettings  # noqa: E402
 from app.creative.format_specs import FORMAT_SPECS  # noqa: E402
-
 
 ACTOR = "測試員"
 

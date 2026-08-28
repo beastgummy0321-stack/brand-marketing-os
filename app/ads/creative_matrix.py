@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/ads/creative_matrix.py — 創意矩陣接線用的封閉枚舉（票 7，決策 0023 第 10、11 點）。
 
 app/methodology/creative-matrix.md 是角度與規則的權威內容——完整表格已經透過

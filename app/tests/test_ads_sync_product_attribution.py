@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_ads_sync_product_attribution.py — 票 11 D3：Meta 同步的產品歸因。
 
 獨立成檔而不是塞進 test_ads_sync.py：那個檔案已經頂到單檔行數上限（見
@@ -7,14 +6,12 @@ test_architecture_boundaries.py 的 FILE_LINE_CAP），加新測試類別會超�
 （比照 test_ads_product_cleanup.py 借用 test_ads_brand_cleanup._seed_table 的先例）。
 """
 
-import pytest
 
 import app.main as main
 from app.ads import sync as ads_sync
 from app.brand_intelligence import repository as bi_repo
 from app.core import db
 from app.tests.test_ads_sync import ACTOR, _BaseSyncTest, _campaign, _insight
-
 
 
 class ProductAttributionTest(_BaseSyncTest):

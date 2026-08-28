@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """python -m app.intake.card_test — 操作卡實測工具。
 
 做什麼：把「Claude 操作卡」會請使用者複製的那段交接包文字，經真實 API 送給

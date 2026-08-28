@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_ads_home_console.py — 修憲落地 V3：廣告首頁遷 B｜工作台式
 （DESIGN.md §21，決策 0033／0038）。
 
@@ -11,15 +10,12 @@
 """
 
 import atexit
-import os
 import shutil
 import tempfile
 import unittest
-from pathlib import Path
 
 _tmpdir = tempfile.mkdtemp(prefix="brand_os_ads_home_console_")
 
-import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
 import app.main as main  # noqa: E402
@@ -29,7 +25,6 @@ from app.ads import repository as ads_repo  # noqa: E402
 from app.ads import stages  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
 from app.llm.providers import FakeProvider, ProviderResponse, Usage  # noqa: E402
-
 
 ACTOR = "測試員"
 

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/intake/repository.py — intake_draft / intake_item 兩張表的存取層。
 
 介面契約見 docs/design/07-settings-and-intake-contract.md §4；欄位權威見
@@ -10,14 +9,14 @@ Intelligence 既有四張表）、寫 audit_log（entity_type='intake_item'）�
 呼叫端不各自實作。R10 強制客戶證實來源已由決策 0013 廢止（用戶優先，不擋確認）。
 """
 
-from typing import Optional
+
+from datetime import UTC
 
 from app.brand_intelligence import customer_voice
 from app.brand_intelligence import repository as bi_repo
-from app.core import cleanup
-from app.core import db
-from app.core.audit import write_audit
+from app.core import cleanup, db
 from app.core import settings as coresettings
+from app.core.audit import write_audit
 
 # intake_item.kind（內部代碼）↔ 畫面中文（DESIGN.md §19.7 對照）
 KIND_TO_HUMAN = {
@@ -39,7 +38,7 @@ _DRAFT_FIELDS = {
 }
 
 
-def _row_to_dict(row) -> Optional[dict]:
+def _row_to_dict(row) -> dict | None:
     return dict(row) if row is not None else None
 
 
@@ -68,7 +67,7 @@ def delete_brand_data(conn: db.Conn, brand_id: str) -> dict:
 
 def create_draft(conn: db.Conn, brand_id: str, description: str,
                  photos: list, research_urls: list, actor: str,
-                 cost_limit: Optional[float] = None) -> dict:
+                 cost_limit: float | None = None) -> dict:
     """建立一份進行中草稿。photos 為 §3A.2 形狀 [{file_path, display_name, size_bytes}]。
 
     一品牌一份進行中草稿由 DB 部分唯一索引擋（§3A.4 第 1 點），這裡不重複檢查。
@@ -90,14 +89,14 @@ def create_draft(conn: db.Conn, brand_id: str, description: str,
     return get_draft(conn, brand_id, draft_id)
 
 
-def get_active_draft(conn: db.Conn, brand_id: str) -> Optional[dict]:
+def get_active_draft(conn: db.Conn, brand_id: str) -> dict | None:
     row = conn.execute(
         "SELECT * FROM intake_draft WHERE brand_id = %s AND status = 'draft'", (brand_id,)
     ).fetchone()
     return _row_to_dict(row)
 
 
-def get_latest_completed_draft(conn: db.Conn, brand_id: str) -> Optional[dict]:
+def get_latest_completed_draft(conn: db.Conn, brand_id: str) -> dict | None:
     """重新調研的預帶來源：最近一輪已完成的草稿（issue #1）。"""
     row = conn.execute(
         "SELECT * FROM intake_draft WHERE brand_id = %s AND status = 'completed' "
@@ -123,7 +122,7 @@ def list_research_reports(conn: db.Conn, brand_id: str) -> list:
     return [dict(row) for row in rows]
 
 
-def get_research_report(conn: db.Conn, brand_id: str, draft_id: str) -> Optional[dict]:
+def get_research_report(conn: db.Conn, brand_id: str, draft_id: str) -> dict | None:
     """單份已貼回原文的調研；草稿不屬於此品牌或未貼原文都不回傳。"""
     row = conn.execute(
         """SELECT draft.id, draft.created_at, draft.paste_raw, COUNT(item.id) AS confirmed_count
@@ -140,7 +139,7 @@ def get_research_report(conn: db.Conn, brand_id: str, draft_id: str) -> Optional
     return _row_to_dict(row)
 
 
-def get_draft(conn: db.Conn, brand_id: str, draft_id: str) -> Optional[dict]:
+def get_draft(conn: db.Conn, brand_id: str, draft_id: str) -> dict | None:
     row = conn.execute(
         "SELECT * FROM intake_draft WHERE brand_id = %s AND id = %s", (brand_id, draft_id)
     ).fetchone()
@@ -274,7 +273,6 @@ def create_items(conn: db.Conn, brand_id: str, draft_id: str, rows: list) -> lis
     rows：paste_parse 的輸出（中文 kind／category），這裡轉成內部代碼存。
     重貼會先清掉這份草稿還沒處理的（outcome='pending'）舊列；已處理的列保留當追溯。
     """
-    from app.intake import paste_parse  # 延遲 import 避免循環（paste_parse → vocab）
 
     ts = db.now_utc()
     try:
@@ -379,24 +377,24 @@ def _ensure_product(conn, brand_id: str, actor: str, name: str) -> str:
     return bi_repo.create_product(conn, brand_id, name=name, actor=actor)["id"]
 
 
-def _make_source(conn, brand_id: str, actor: str, text: Optional[str],
-                 note: Optional[str] = None) -> Optional[str]:
-    from datetime import datetime, timezone
+def _make_source(conn, brand_id: str, actor: str, text: str | None,
+                 note: str | None = None) -> str | None:
+    from datetime import datetime
 
     text = (text or "").strip()
     if not text or text == "無":
         return None
     row = bi_repo.create_source_reference(
         conn, brand_id, actor=actor, title=text, source_type="other",
-        captured_date=datetime.now(timezone.utc).date(), note=(note or None),
+        captured_date=datetime.now(UTC).date(), note=(note or None),
     )
     return row["id"]
 
 
 def resolve_item(conn: db.Conn, brand_id: str, item_id: str, outcome: str,
-                 processed_by: str, client_evidence: Optional[str] = None,
-                 target_table: Optional[str] = None, target_id: Optional[str] = None,
-                 edits: Optional[dict] = None, rule_severity: Optional[str] = None) -> dict:
+                 processed_by: str, client_evidence: str | None = None,
+                 target_table: str | None = None, target_id: str | None = None,
+                 edits: dict | None = None, rule_severity: str | None = None) -> dict:
     """三種出口共用的唯一入口（03 §3A.3）。outcome：confirmed / pending_saved / discarded。
 
     寫目標表（依 kind）、回填 target_table/target_id、寫 audit_log 都在這裡完成。

@@ -1,12 +1,9 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_orders_repository.py — 訂單票（issue #33）：落庫、5 項統計卡、逐 SKU 毛利。
 
 fixture 一律虛構品牌（「虛構晨光茶行」），嚴禁真實客戶資料（規範第八節）。
 """
 
 import unittest
-
-import pytest
 
 import app.shared.web as web
 from app.brand_intelligence import repository as bi_repo

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/ads/reading_baselines.py — 品牌基線（票 10-split-reading-py）。
 
 從 `app/ads/reading.py`（凍結 1039 行、不得再長）拆出來的小檔——這幾個函式原樣搬過來，
@@ -10,9 +9,8 @@
 自動跟著函式搬家。`dual_baseline()` 留在 reading.py，靠 import 呼叫這裡的函式。
 """
 
-from datetime import date, timedelta
+from datetime import timedelta
 from statistics import median
-from typing import Optional
 
 # 基線旺淡季標注（票 #39，決策 0025 第 4 點）：拿「去年同期」跟「全年平均」比值判斷，
 # 不是拍腦袋猜哪個月熱賣——比值落在中間段一律算「一般」，避免雜訊被誤標成季節效應。
@@ -22,7 +20,7 @@ SEASON_LABELS = {"peak": "旺季", "low": "淡季", "typical": "一般"}
 
 
 def _median_derived_metrics(conn, brand_id: str, *, extra_where: str = "",
-                            extra_params: Optional[list] = None) -> dict:
+                            extra_params: list | None = None) -> dict:
     """derived_metric 依 metric 取中位數的共用聚合點——brand_baseline／
     _same_period_last_year_baseline（進而 dual_baseline／校準區間 basis，見
     app/ads/simulation.py _basis）都經這裡出，一次排除 `phase='simulation'` 的檔期
@@ -45,7 +43,7 @@ def _median_derived_metrics(conn, brand_id: str, *, extra_where: str = "",
     return {metric: round(median(values), 4) for metric, values in grouped.items() if values}
 
 
-def brand_baseline(conn, brand_id: str, exclude_cycle_id: Optional[str] = None) -> dict:
+def brand_baseline(conn, brand_id: str, exclude_cycle_id: str | None = None) -> dict:
     """這個品牌自己的基準：**過去**檔期各指標的中位數。沒有歷史就回空 dict。
 
     決策 0022 第 21 點：有歷史就用歷史，沒有才退回產業基準——而且要標明用的是哪一種，
@@ -68,7 +66,7 @@ _SEASON_METRIC_PRIORITY = ("roas", "ctr", "cpa", "cpc")
 
 
 def _same_period_last_year_baseline(conn, brand_id: str, cycle: dict,
-                                    exclude_cycle_id: Optional[str] = None) -> dict:
+                                    exclude_cycle_id: str | None = None) -> dict:
     """「去年同期」基線：這個品牌去年同一段日子（±15 天）跑過的檔期，KPI 中位數。
     找不到對應檔期就回空 dict（不硬湊）。"""
     start = cycle["start_date"]

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tools/capacity_check.py — 版面守恆憲法容量驗收腳本（決策 0026、DESIGN.md §20.2、
 GitHub issue #43；修憲落地 V2 依 §20.1 規則 1 加入 kind 分流）。
 
@@ -36,7 +35,6 @@ import html.parser
 import sys
 import unicodedata
 from pathlib import Path
-from typing import Optional
 
 CARD_LIMIT = 5
 NAV_LINK_LIMIT = 4
@@ -63,7 +61,7 @@ def _wide_char_count(text: str) -> int:
     return sum(1 for ch in text if unicodedata.east_asian_width(ch) in ("W", "F"))
 
 
-def _card_kind(classes: list) -> Optional[str]:
+def _card_kind(classes: list) -> str | None:
     """回傳這個元素的卡片種類：None＝不是卡片。是卡片時回傳 'entry'／'notice'／'content'
     三擇一，依 `_components/card.html` 的 kind 參數輸出的 class 信號判斷（修憲落地 V2，
     DESIGN.md §20.1 規則 1）：
@@ -218,7 +216,7 @@ def check_file(path, check_nav_limit: bool = False) -> tuple:
     return counts, violations(str(path), counts, check_nav_limit=check_nav_limit)
 
 
-def main(argv: Optional[list] = None) -> int:
+def main(argv: list | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     if not argv:
         print("用法：python -m app.tools.capacity_check "

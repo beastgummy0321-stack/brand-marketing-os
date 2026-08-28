@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """靜態掃描：`app/` 底下不得有用到卻沒定義也沒 import 的名字。
 
 由來（2026-08-03）：票 A4 把 `app/main.py` 拆成三份時，`brand_intelligence/routes.py`

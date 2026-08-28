@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_ads_connections.py — D線票2（GitHub issue #44）：資料與連線頁＋薄匯入路由。
 
 嗅探與匯入邏輯本身不重寫、不重測——沿用 app/tests/test_orders_dispatch.py 已驗證過的
@@ -14,12 +13,11 @@ import unittest
 from datetime import date
 
 import openpyxl
-import pytest
 
 import app.main as main
+from app.ads import ga4_sync
 from app.ads import repository as ads_repo
 from app.ads import sync as ads_sync
-from app.ads import ga4_sync
 from app.brand_intelligence import repository as bi_repo
 from app.orders import dispatch as orders_dispatch
 

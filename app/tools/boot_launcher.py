@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tools/boot_launcher.py — 票 F6：Windows 開機自動啟動用的無視窗啟動器。
 
 Windows 工作排程器（schtasks，trigger onlogon，見 docs/boot-autostart.md）叫的是這支，

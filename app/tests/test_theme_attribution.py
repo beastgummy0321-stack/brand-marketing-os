@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_theme_attribution.py — 票 12-attribution-adjust：D 段歸因調整。
 
 全程假 Meta API／假 LLM Provider，不發任何真實網路請求。品牌與產品名一律虛構。
@@ -19,18 +18,18 @@ import unittest
 from fastapi.testclient import TestClient  # noqa: E402
 
 import app.main as main  # noqa: E402
-from app.ads import meta_api  # noqa: E402
+from app.ads import (
+    meta_api,  # noqa: E402
+    theme_attribution,  # noqa: E402
+    theme_engine,  # noqa: E402
+)
 from app.ads import repository as ads_repo  # noqa: E402
 from app.ads import sync as ads_sync  # noqa: E402
-from app.ads import theme_attribution  # noqa: E402
-from app.ads import theme_engine  # noqa: E402
 from app.ads import theme_repository as theme_repo  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
 from app.core import settings as coresettings  # noqa: E402
 from app.core.db import DEV_ORG_ID, new_id, now_iso  # noqa: E402
 from app.llm.providers import FakeProvider, ProviderResponse, Usage  # noqa: E402
-
-
 
 ACTOR = "測試員"
 ACCOUNT = "act_9988776655"

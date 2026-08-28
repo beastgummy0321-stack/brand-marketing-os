@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/orders/repository.py — 訂單／顧客資料存取層＋統計卡（GitHub issue #33）。
 
 比照 app/ads/repository.py 慣例：一律以 brand_id 過濾、每次異動寫 audit_log。
@@ -11,11 +10,10 @@
 """
 
 from datetime import date, timedelta
-from typing import Optional
 
 from app.core import cleanup
 from app.core.audit import write_audit
-from app.core.db import new_id, now_utc, Conn, DEV_ORG_ID
+from app.core.db import DEV_ORG_ID, Conn, new_id, now_utc
 from app.orders import identity as identity_mod
 
 VOIDED_ORDER_STATUSES = {"cancelled", "canceled", "voided", "void"}
@@ -35,7 +33,7 @@ def _rows(cursor) -> list:
     return [dict(r) for r in cursor.fetchall()]
 
 
-def _row(cursor_row) -> Optional[dict]:
+def _row(cursor_row) -> dict | None:
     return dict(cursor_row) if cursor_row is not None else None
 
 
@@ -48,7 +46,7 @@ def _is_voided(order_status) -> bool:
 # ---------------------------------------------------------------------------
 
 def _upsert_customer(conn: Conn, brand_id: str, identity_hash: str,
-                     identity_type: str, order_date: Optional[str], ts: str) -> str:
+                     identity_type: str, order_date: str | None, ts: str) -> str:
     existing = conn.execute(
         "SELECT * FROM customer WHERE brand_id = %s AND identity_hash = %s",
         (brand_id, identity_hash),
@@ -79,7 +77,7 @@ def _upsert_customer(conn: Conn, brand_id: str, identity_hash: str,
 # ---------------------------------------------------------------------------
 
 def save_orders(conn: Conn, brand_id: str, rows: list, *,
-                source: str, actor: str, result=None, import_batch_id: Optional[str] = None):
+                source: str, actor: str, result=None, import_batch_id: str | None = None):
     """把 importer 解析好的訂單列（含 items）落地。回傳 app.orders.importer.OrderImportResult。
 
     匯入前先跑一次雜湊一致性自檢（app.orders.identity.consistency_self_check）：
@@ -173,7 +171,7 @@ def list_sku_costs(conn: Conn, brand_id: str) -> list:
 
 
 def set_sku_cost(conn: Conn, brand_id: str, sku: str, unit_cost: float, *,
-                 actor: str, today: Optional[str] = None) -> dict:
+                 actor: str, today: str | None = None) -> dict:
     if not sku or not sku.strip():
         raise ValueError("SKU 為必填")
     if unit_cost is None or unit_cost < 0:
@@ -209,7 +207,7 @@ def set_sku_cost(conn: Conn, brand_id: str, sku: str, unit_cost: float, *,
 # ---------------------------------------------------------------------------
 
 def _bump_sku_cost_version(conn: Conn, brand_id: str, sku: str, unit_cost: float,
-                            *, actor: str, today: Optional[str] = None) -> dict:
+                            *, actor: str, today: str | None = None) -> dict:
     today = today or date.today().isoformat()
     prev = conn.execute(
         "SELECT * FROM sku_cost_version WHERE brand_id = %s AND sku = %s AND valid_to IS NULL",
@@ -253,8 +251,8 @@ def list_effective_sku_costs(conn: Conn, brand_id: str) -> list:
 # 統計卡（5 項，issue #33）：確定性計算，不經 LLM（決策 0016 硬性原則 4）
 # ---------------------------------------------------------------------------
 
-def sku_margins(conn: Conn, brand_id: str, *, since: Optional[str] = None,
-                until: Optional[str] = None) -> list:
+def sku_margins(conn: Conn, brand_id: str, *, since: str | None = None,
+                until: str | None = None) -> list:
     """逐 SKU 營收／毛利。沒登記單位成本的 SKU，margin 回 None（誠實顯示不知道成本）。"""
     voided_placeholders = ",".join("%s" for _ in VOIDED_ORDER_STATUSES)
     sql = (
@@ -285,8 +283,8 @@ def sku_margins(conn: Conn, brand_id: str, *, since: Optional[str] = None,
     return rows
 
 
-def stats(conn: Conn, brand_id: str, *, since: Optional[str] = None,
-         until: Optional[str] = None, today: Optional[str] = None) -> dict:
+def stats(conn: Conn, brand_id: str, *, since: str | None = None,
+         until: str | None = None, today: str | None = None) -> dict:
     """五項統計卡：實收營收（扣退款棄單）、新舊客、客單價、回購率、逐 SKU 毛利。
 
     預設視窗＝最近 30 天。任何指標的分母是 0 時回 None，不回 0 或假造——
@@ -364,7 +362,7 @@ def stats(conn: Conn, brand_id: str, *, since: Optional[str] = None,
 # ---------------------------------------------------------------------------
 
 def repurchase_multiplier(conn: Conn, brand_id: str, *,
-                          today: Optional[str] = None) -> dict:
+                          today: str | None = None) -> dict:
     """回購倍數＝滿 90 天觀察期顧客「90 天內淨營收加總」除以「首單淨營收加總」。
 
     只算 first_order_at 已經滿 90 天的顧客（觀察期還沒跑完的顧客不算，避免統計未完成的
@@ -441,7 +439,7 @@ def record_policy_change(conn: Conn, brand_id: str, *, policy_type: str,
 
 
 def list_policy_changes(conn: Conn, brand_id: str, *,
-                        until: Optional[str] = None) -> list:
+                        until: str | None = None) -> list:
     sql = "SELECT * FROM policy_change_log WHERE brand_id = %s"
     params: list = [brand_id]
     if until:
@@ -499,7 +497,7 @@ SETTLED_FULFILLMENT_STATUSES = {"fulfilled"}
 
 
 def unsettled_order_ratio(conn: Conn, brand_id: str, since: str,
-                          until: str) -> Optional[float]:
+                          until: str) -> float | None:
     """這段期間的訂單裡，還沒結案（出貨／取貨完成）的佔比。期末暫定判讀用這個標注
     「未結案訂單佔 X%，此為暫定結論」（決策 0025 判讀節奏第 5 點）。
 

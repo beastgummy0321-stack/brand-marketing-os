@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_ads_creative_web_search.py — ADR 0005：素材生成這個呼叫點有沒有帶網路搜尋工具。
 
 setUp 沿用 test_ads_creative 的 _BaseCreativeTest——該檔已達行數上限（870 行，

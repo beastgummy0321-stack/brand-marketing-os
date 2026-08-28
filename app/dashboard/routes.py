@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/dashboard/routes.py — 儀表板 JSON API（票 02-overview-cards，規格 0001 唯一新接縫）。
 
 只讀、統一回應信封（data／generated_at）；不寫入任何資料表。給票 01 的 React 新殼
@@ -6,15 +5,14 @@
 """
 
 import os
-from datetime import date, datetime, timezone
-from typing import Optional
+from datetime import UTC, date, datetime
 
 from fastapi import APIRouter, HTTPException, Request
-from app.shared.web import JSONResponse
 
 import app.shared.web as main_mod
 from app.ads import auto_sync as ads_auto_sync
 from app.dashboard import repository as dashboard_repo
+from app.shared.web import JSONResponse
 
 router = APIRouter(prefix="/api/dashboard")
 
@@ -28,7 +26,7 @@ def _today_override():
 async def overview():
     return {
         "data": dashboard_repo.overview(main_mod.conn, today=_today_override()),
-        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "generated_at": datetime.now(UTC).isoformat(),
     }
 
 
@@ -42,11 +40,11 @@ async def cockpit(brand_id: str):
     data["brand_name"] = brand["name"]
     return {
         "data": data,
-        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "generated_at": datetime.now(UTC).isoformat(),
     }
 
 
-def _validated_month(month: Optional[str]) -> str:
+def _validated_month(month: str | None) -> str:
     selected = month or (_today_override() or date.today().isoformat())[:7]
     try:
         if len(selected) != 7 or selected[4] != "-" or not selected[:4].isdigit() \
@@ -60,7 +58,7 @@ def _validated_month(month: Optional[str]) -> str:
 
 
 @router.get("/brands/{brand_id}/monthly-report")
-async def monthly_report(brand_id: str, month: Optional[str] = None):
+async def monthly_report(brand_id: str, month: str | None = None):
     """Act3 數字月報：指定月份的花費／訂單／營收／ROAS／CAC 與六個月趨勢。"""
     brand = main_mod.require_brand(brand_id)
     data = dashboard_repo.monthly_report(
@@ -70,7 +68,7 @@ async def monthly_report(brand_id: str, month: Optional[str] = None):
     data["brand_name"] = brand["name"]
     return {
         "data": data,
-        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "generated_at": datetime.now(UTC).isoformat(),
     }
 
 
@@ -84,5 +82,5 @@ async def sync_brand(request: Request, brand_id: str):
         return JSONResponse({"error": str(exc)}, status_code=502)
     return {
         "data": {"updated_at": updated_at},
-        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "generated_at": datetime.now(UTC).isoformat(),
     }

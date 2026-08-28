@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_boot_launcher.py — 票 F6：無視窗啟動器的 port 探測邏輯。
 
 只測 `_port_is_listening` 這個純 socket 判斷——`main()` 會真的把 uvicorn 跑起來，

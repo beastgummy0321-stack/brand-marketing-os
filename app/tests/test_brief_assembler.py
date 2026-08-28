@@ -1,11 +1,9 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_brief_assembler.py — 創意簡報組裝器（票 03-brief-assembler）。
 
 純組裝、不呼叫 AI，測試一律虛構品牌，隔離 DB。核准計畫與切角格照 ticket 02 的既有測試
 先例（test_ads_creative_theme.py）直接用原生 SQL 灌資料，不必真的跑一輪 AI 計畫生成。
 """
 
-import json
 import unittest
 
 from app.ads import brief_assembler as ba

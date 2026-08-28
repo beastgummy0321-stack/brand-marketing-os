@@ -1,16 +1,14 @@
-# -*- coding: utf-8 -*-
 """T3 交付確認與駕駛艙補充 JSON API。"""
 
-from typing import Optional
 
 from fastapi import APIRouter, Request
-from app.shared.web import JSONResponse
 
 import app.shared.web as main_mod
 from app.ads import cockpit_extras, delivery
 from app.ads import repository as ads_repo
 from app.ads import repository_channel_plan as channel_repo
 from app.ads.routes_common import _require_cycle
+from app.shared.web import JSONResponse
 
 router = APIRouter()
 
@@ -85,7 +83,7 @@ async def channel_plan_enabled_put(request: Request, brand_id: str, cycle_id: st
 
 
 @router.get("/api/campaigns/brands/{brand_id}/cockpit-extras")
-async def cockpit_get(brand_id: str, cycle_id: Optional[str] = None):
+async def cockpit_get(brand_id: str, cycle_id: str | None = None):
     main_mod.require_brand(brand_id)
     if cycle_id is None:
         cycles = ads_repo.list_cycles(main_mod.conn, brand_id)

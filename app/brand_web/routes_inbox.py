@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/brand_intelligence/routes_inbox.py — 收件匣 JSON API（票 B1-inbox，契約
 `.scratch/grill/GRILL-B1-inbox.md` S2）。
 
@@ -11,7 +10,7 @@
 理由同 `app/brand_intelligence/routes_settings.py` 檔頭）。誰依賴它：只有 `app/main.py`。
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Request
 
@@ -53,7 +52,7 @@ async def api_inbox():
     done_items = [_inbox_item(r) for r in _with_brand_names(core_interrupts.list_done(web.conn))]
     return {
         "data": {"open": open_items, "done": done_items},
-        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "generated_at": datetime.now(UTC).isoformat(),
     }
 
 
@@ -71,5 +70,5 @@ async def api_prototype_phase():
             "ended": core_prototype_phase.has_ended(web.conn),
             "exemptions": core_prototype_phase.EXEMPTIONS,
         },
-        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "generated_at": datetime.now(UTC).isoformat(),
     }

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """T3 開檔建議、管道計畫與任務卡的可判定驗收。"""
 
 import unittest

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """全站進行中工作只經由各模組公開 active_jobs() 匯入 dashboard。"""
 
 import unittest

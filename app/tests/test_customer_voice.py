@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_customer_voice.py — 顧客原話語料庫（GitHub issue #14，決策 0023 第 18a 條／0024 第 2 條）。
 
 見 app/brand_intelligence/customer_voice.py（抽取）、repository.py 的 *_customer_voice
@@ -11,13 +10,12 @@ import time
 import unittest
 from unittest import mock
 
-import pytest
 from fastapi.testclient import TestClient
 
 import app.main as main
 import app.shared.web as web
-from app.brand_web import routes_library as customer_voice
 from app.brand_intelligence import repository as repo
+from app.brand_web import routes_library as customer_voice
 from app.llm import providers
 
 ACTOR = "測試員"

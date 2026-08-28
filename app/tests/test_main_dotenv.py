@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_main_dotenv.py — `.env` 自己讀（2026-08-23）。
 
 原本只有「啟動行銷系統.bat」把 `.env` 灌進環境變數，換個方式啟動就悄悄沒有金鑰，

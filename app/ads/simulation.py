@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/ads/simulation.py — 紙上模擬第 0 期（票 14）。
 
 新品牌第一次開廣告時，先零成本走完一整圈：計畫 → 素材 → 假成效 → 判讀。
@@ -25,15 +24,13 @@
 """
 
 import random
-from typing import Optional
 
-from app.ads import budget as budget_calc
 from app.ads import performance as ads_performance
 from app.ads import performance_batches
 from app.ads import reading as ads_reading
 from app.ads import repository as ads_repo
 from app.brand_intelligence import repository as bi
-from app.core.db import new_id, now_utc, DEV_ORG_ID
+from app.core.db import DEV_ORG_ID, new_id, now_utc
 
 # 產業通例值。只在這個品牌完全沒有歷史時使用，畫面必須標明來源。
 INDUSTRY_CTR = 0.012          # 點擊率 1.2%
@@ -48,7 +45,7 @@ SIMULATION_NOTE = (
 )
 
 
-def _basis(conn, brand_id: str, exclude_cycle_id: Optional[str] = None) -> tuple:
+def _basis(conn, brand_id: str, exclude_cycle_id: str | None = None) -> tuple:
     """回 (基準 dict, 來源說明)。有自己的歷史就用自己的。
 
     exclude_cycle_id 要傳當期——否則第一期會拿自己剛跑出來的數字當「過去的表現」，
@@ -64,7 +61,7 @@ def _basis(conn, brand_id: str, exclude_cycle_id: Optional[str] = None) -> tuple
             "依據產業通例值（這個品牌還沒有自己的數字）")
 
 
-def simulate_totals(cycle: dict, basis: dict, *, average_price: Optional[float] = None) -> dict:
+def simulate_totals(cycle: dict, basis: dict, *, average_price: float | None = None) -> dict:
     """產生一組模擬成效。同一個 cycle_id 永遠得到同一組數字。"""
     rng = random.Random(cycle["id"])
 
@@ -132,7 +129,7 @@ def generate(conn, brand_id: str, cycle_id: str, actor: str) -> tuple:
     return True, basis_note
 
 
-def is_simulation(cycle: Optional[dict]) -> bool:
+def is_simulation(cycle: dict | None) -> bool:
     return bool(cycle and cycle.get("phase") == "simulation")
 
 

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/orders/dispatch.py — 萬用拖檔口分派層（GitHub issue #33）。
 
 單一入口 import_dropped_file()：不管拖進來的是 EasyStore 訂單匯出（.xlsx）還是
@@ -19,7 +18,6 @@ Meta CSV 這條路徑額外做「自動對期別、跨期拆分」：這個入�
 import csv
 import io
 from datetime import date as date_cls
-from typing import Optional
 
 from app.ads import codes as ads_codes
 from app.ads import performance as ads_performance
@@ -72,7 +70,7 @@ def _csv_headers(text: str) -> list:
     return next(reader, [])
 
 
-def _order_date_range(rows: list) -> Optional[tuple]:
+def _order_date_range(rows: list) -> tuple | None:
     """解析後（尚未落庫）的訂單列裡，日期最早到最晚是哪一段——用來找「受影響期別」，
     不用等落庫後再查一次 DB（比照 app.orders.repository.save_orders 同一套 str(...)[:10]
     正規化，兩邊算出來的日期字串才對得上）。"""
@@ -127,7 +125,7 @@ def _import_shopee(conn, brand_id: str, text: str, actor: str) -> DispatchResult
 
 
 def _import_meta_csv(conn, brand_id: str, text: str, actor: str,
-                     today: Optional[str]) -> DispatchResult:
+                     today: str | None) -> DispatchResult:
     result = DispatchResult()
     result.kind = "meta_ads_csv"
     rows, parse_result = ads_performance.parse_csv(text)
@@ -183,7 +181,7 @@ def _import_meta_csv(conn, brand_id: str, text: str, actor: str,
 
 
 def import_dropped_file(conn, brand_id: str, *, filename: str, content: bytes, actor: str,
-                        today: Optional[str] = None) -> DispatchResult:
+                        today: str | None = None) -> DispatchResult:
     """萬用拖檔口的唯一入口：認出檔案類型、轉交給對應解析器＋匯入函式。"""
     is_xlsx = (filename or "").lower().endswith((".xlsx", ".xlsm"))
     if is_xlsx:

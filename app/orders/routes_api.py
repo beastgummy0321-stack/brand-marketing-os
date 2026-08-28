@@ -1,15 +1,14 @@
-# -*- coding: utf-8 -*-
 """訂單總覽的 JSON API。"""
 
 from datetime import date
 
 from fastapi import APIRouter, File, Query, Request, UploadFile
-from app.shared.web import JSONResponse
 
 import app.shared.web as main_mod
 from app.orders import channel as orders_channel
 from app.orders import dispatch as orders_dispatch
 from app.orders import repository as orders_repo
+from app.shared.web import JSONResponse
 
 router = APIRouter(prefix="/api")
 

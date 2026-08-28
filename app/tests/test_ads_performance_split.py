@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_ads_performance_split.py — D線票5（GitHub issue #47）：成效頁拆層＋資料操作子頁。
 
 驗收重點（舊頁版面斷言隨 Jinja 舊頁一起刪除，這裡只剩不綁畫面的業務行為）：
@@ -12,14 +11,12 @@
 
 import unittest
 
-import pytest
 from fastapi.testclient import TestClient
 
 import app.main as main
-from app.ads import nextcycle
-from app.ads import reconcile as ads_reconcile
+from app.ads import nextcycle, reading
 from app.ads import performance as perf
-from app.ads import reading
+from app.ads import reconcile as ads_reconcile
 from app.brand_intelligence import repository as bi_repo
 from app.llm.providers import FakeProvider, ProviderResponse, Usage
 from app.orders import channel as orders_channel

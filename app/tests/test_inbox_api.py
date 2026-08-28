@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_inbox_api.py — 收件匣 JSON API（票 B1-inbox，契約
 `.scratch/grill/GRILL-B1-inbox.md` S2）。
 
@@ -7,13 +6,9 @@
 """
 
 import atexit
-import os
 import shutil
 import tempfile
 import unittest
-from pathlib import Path
-
-import pytest
 
 _tmpdir = tempfile.mkdtemp(prefix="brand_os_inbox_api_")
 
@@ -24,7 +19,6 @@ from app.brand_intelligence import repository as bi_repo  # noqa: E402
 from app.core import interrupts as core_interrupts  # noqa: E402
 from app.core import prototype_phase as core_prototype_phase  # noqa: E402
 from app.core import settings as core_settings  # noqa: E402
-
 
 
 def _cleanup():

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/ads/theme_attribution.py — 主題元件層歸因（票 12-attribution-adjust，D 段）。
 
 同步時拉回的 body／title／description 素材元件層 breakdown（app/ads/meta_api.py
@@ -19,11 +18,10 @@ performance_synced_at）。規格書與使用者故事只要求同一主題內�
   算新指紋，文字與指紋一起寫回 creative_theme_component，並留一筆稽核（票 12 驗收 2）。
 """
 
-from typing import Optional
 
 from app.ads import theme_engine
 from app.core.audit import write_audit
-from app.core.db import now_utc, jsonb
+from app.core.db import jsonb, now_utc
 
 # Meta breakdown 鍵 → creative_theme_component.component_type（本系統的欄位名沒有
 # _asset 尾碼，見 app/creative/theme_engine.py normalize_single_image()）。
@@ -32,7 +30,7 @@ _ASSET_FIELD_TO_COMPONENT_TYPE = (
 )
 
 
-def record_component_breakdown(conn, brand_id: str, cycle_id: Optional[str], row, *,
+def record_component_breakdown(conn, brand_id: str, cycle_id: str | None, row, *,
                                actor: str) -> None:
     """一列 meta_api.ComponentBreakdownRow → 覆蓋更新一到三個 creative_theme_component
     的最新成效（body/title/description 各有值才更新）。沒有檔期歸屬（cycle_id is None，
@@ -69,7 +67,7 @@ def _record_one(conn, brand_id: str, cycle_id: str, row, *, component_type: str,
 
 
 def _resolve_component(conn, brand_id: str, cycle_id: str, asset_id: str, component_type: str,
-                       text: str, *, actor: str) -> Optional[str]:
+                       text: str, *, actor: str) -> str | None:
     prior = conn.execute(
         "SELECT id FROM creative_theme_component WHERE brand_id = %s AND meta_asset_id = %s"
         " AND component_type = %s",

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """票 T0：品牌層追蹤健檢（契約 1.1-1.8／2.1／2.4／2.6）。全程假 fetch，不打真網路。"""
 
 import time
@@ -6,14 +5,10 @@ import unittest
 from datetime import date, timedelta
 from unittest import mock
 
-import pytest
 from fastapi.testclient import TestClient
 
 import app.main as main
-from app.ads import ga4_api
-from app.ads import ga4_sync
-from app.ads import meta_api
-from app.ads import tracking
+from app.ads import ga4_api, ga4_sync, meta_api, tracking
 from app.brand_intelligence import repository as bi_repo
 from app.core import settings as coresettings
 from app.orders import channel as orders_channel

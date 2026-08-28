@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/ads/routes_plan.py — 空殼（T4 廣告模組 Jinja 大清倉第 2 刀刪光本檔唯一的路由
 `ads_plan_progress` 打法生成進度頁，隨 `_render_wait_page`（app/ads/routes_progress.py）
 一併刪除——已被 `/api/campaigns/{brand_id}/{cycle_id}/plan/generate`＋`/plan/status`

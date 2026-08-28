@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/intake/script.py — 建檔精靈的 Mock 回放腳本（DESIGN.md §19.6）。
 
 Mock —— 接真 API 那一輪，這個檔案的內容會被「真的呼叫 LLM 並解析回應」取代，
@@ -407,7 +406,7 @@ PASTE_SAMPLE_SUCCESS = PASTE_HEADER + "\n" + "\n".join(_SUCCESS_ROWS)
 # 失敗樣本：第 7 列分類寫「功效」、第 12 列只有 4 欄、第 19 列適用範圍寫「全系列」（§19.6）
 _error_rows = list(_SUCCESS_ROWS)
 _error_rows[6] = "品牌事實 | 功效 | 價格帶落點 | 單包茶葉 150 元上下、禮盒 880 元起，比同通路的量販茶包高約四成。 | 整個品牌 | 官網商品頁"
-_error_rows[11] = f"產品事實 | 差異化 | 與其他茶品的差別 | 相較於其他三款茶，這款焙火程度最重，回甘最明顯，是店內詢問度最高的品項。"
+_error_rows[11] = "產品事實 | 差異化 | 與其他茶品的差別 | 相較於其他三款茶，這款焙火程度最重，回甘最明顯，是店內詢問度最高的品項。"
 _error_rows[18] = "限制規則 | 視覺 | 禮盒版需保留燙金線條 | 禮盒版包裝設計需保留現行的燙金線條元素，用於維持與其他禮盒商品的識別度。 | 全系列 | 官網商品頁圖片"
 PASTE_SAMPLE_ERRORS = PASTE_HEADER + "\n" + "\n".join(_error_rows)
 

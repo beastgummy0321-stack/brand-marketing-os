@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_brand_delete.py — 永久刪除品牌（決策 0015）。
 
 刪除是不可逆動作，這裡守三件事：

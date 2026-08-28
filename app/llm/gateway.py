@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/llm/gateway.py — run_task：LLM 任務的唯一入口，寫 llm_task 記錄、算成本、處理重試。
 
 見 docs/design/06-llm-gateway.md §9–14、docs/design/03-data-model.md §3.1 llm_task。
@@ -21,7 +20,6 @@ import inspect
 import json
 import re
 from dataclasses import dataclass
-from typing import Optional
 
 from app.core import db
 from app.llm import pricing, providers
@@ -60,22 +58,22 @@ class TaskContext:
     context_scope: dict
     knowledge_item_ids: list
     brand_version: int
-    product_version: Optional[int] = None
+    product_version: int | None = None
 
 
 @dataclass
 class TaskOptions:
-    model: Optional[str] = None  # None → 任務預設 > 設定頁選的模型（見 providers.resolve_model）
-    thinking: Optional[str] = None  # None → 任務預設 > 中檔（見 providers.resolve_thinking，票 #27）
+    model: str | None = None  # None → 任務預設 > 設定頁選的模型（見 providers.resolve_model）
+    thinking: str | None = None  # None → 任務預設 > 中檔（見 providers.resolve_thinking，票 #27）
     max_tokens: int = 16000
     timeout_s: float = 120.0
     max_retries: int = 1  # 失敗重試次數（不含第一次嘗試；06 §11：MVP 同供應商內重試）
     # 這次呼叫要掛的工具（ADR 0005）。None＝不掛任何工具，送出的 request body 完全不變；
     # 要開網路搜尋就傳 [providers.WEB_SEARCH_TOOL]，由呼叫端逐一決定。
-    tools: Optional[list] = None
+    tools: list | None = None
 
 
-def get_task(conn: db.Conn, task_id: str) -> Optional[dict]:
+def get_task(conn: db.Conn, task_id: str) -> dict | None:
     row = conn.execute("SELECT * FROM llm_task WHERE id = %s", (task_id,)).fetchone()
     return dict(row) if row is not None else None
 
@@ -115,7 +113,7 @@ def _insert_running_row(
 
 
 def _mark_succeeded(conn: db.Conn, row_id: str, *,
-                     structured_output: Optional[dict], rendered_output: str,
+                     structured_output: dict | None, rendered_output: str,
                      usage: dict, cost: float) -> None:
     conn.execute(
         "UPDATE llm_task SET status = 'succeeded', structured_output_json = %s, rendered_output = %s, "
@@ -148,10 +146,10 @@ def run_task(
     task_type: str,
     prompt_template_id: str,
     prompt_template_version: str,
-    system: Optional[str],
+    system: str | None,
     messages: list,
     context: TaskContext,
-    options: Optional[TaskOptions] = None,
+    options: TaskOptions | None = None,
 ) -> dict:
     """執行一次 LLM 任務，回傳最終的 llm_task 資料列（dict）。
 

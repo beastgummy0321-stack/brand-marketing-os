@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_ads_reconcile.py — 廣告分支票 11：對帳護欄接上真實資料。
 
 判斷邏輯的邊界測試在 test_ads_budget_guardrails.py；這裡測的是「接得對不對」：
@@ -6,15 +5,12 @@
 """
 
 import atexit
-import os
 import shutil
 import tempfile
 import unittest
-from pathlib import Path
 
 _tmpdir = tempfile.mkdtemp(prefix="brand_os_ads_recon_")
 
-import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
 import app.main as main  # noqa: E402
@@ -22,7 +18,6 @@ from app.ads import performance as perf  # noqa: E402
 from app.ads import reconcile as recon  # noqa: E402
 from app.ads import repository as ads_repo  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
-
 
 
 def _cleanup():

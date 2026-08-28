@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """待認領廣告的 JSON API（票 T5-01）。
 
 對外進入點：本檔的 ``router``。
@@ -8,19 +7,19 @@
 不碰：不改 ``app.ads.sync`` 的認領查詢或動作，也不依賴前端或 Jinja 路由。
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Request
-from app.shared.web import JSONResponse
 
 import app.shared.web as main_mod
 from app.ads import sync as ads_sync
+from app.shared.web import JSONResponse
 
 router = APIRouter()
 
 
 def _envelope(data: dict) -> dict:
-    return {"data": data, "generated_at": datetime.now(timezone.utc).isoformat()}
+    return {"data": data, "generated_at": datetime.now(UTC).isoformat()}
 
 
 def _pending_item(row: dict) -> dict:

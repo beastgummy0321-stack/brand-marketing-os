@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/ads/creative.py — 素材包的生成與改寫（票 6）。
 
 依已確認的計畫（app/ads/plan.py）產出每個切角的素材變體，每一則都帶：
@@ -13,7 +12,8 @@
 """
 
 from collections import Counter
-from typing import Callable, NamedTuple, Optional
+from collections.abc import Callable
+from typing import NamedTuple
 
 from app.ads import creative_matrix as cmx
 from app.ads import fingerprint as fp
@@ -23,7 +23,7 @@ from app.ads import theme_repository as theme_repo
 from app.brand_intelligence import repository as bi
 from app.core import settings as coresettings
 from app.core.audit import write_audit
-from app.core.db import new_id, now_utc, jsonb, DEV_ORG_ID
+from app.core.db import DEV_ORG_ID, jsonb, new_id, now_utc
 from app.llm import context_compiler, gateway, methodology, pricing, providers
 
 PROVIDER = providers.AnthropicProvider()  # 測試整包換掉
@@ -67,7 +67,7 @@ _SYSTEM = (
 )
 
 
-def _variant_brief(variants_per_cell: Optional[dict] = None) -> str:
+def _variant_brief(variants_per_cell: dict | None = None) -> str:
     return "\n".join(
         f"- {key}（{VARIANT_LABELS[key]}）：{count} 則"
         for key, count in (variants_per_cell or VARIANTS_PER_CELL).items()
@@ -99,7 +99,7 @@ def _customer_voice_block(conn, brand_id: str, limit: int = 30) -> tuple:
 def _build_user_text(brand: dict, cycle: dict, plan: dict, cells: list,
                      context_text: str, methodology_text: str, constraints: list,
                      customer_voice_text: str, *,
-                     variants_per_cell: Optional[dict] = None) -> str:
+                     variants_per_cell: dict | None = None) -> str:
     cell_lines = "\n".join(
         f"- 切角 {index + 1}（id={cell['id']}）：{cell['creative_angle']}"
         for index, cell in enumerate(cells)
@@ -168,7 +168,7 @@ class NormalizeResult(NamedTuple):
         比對就知道整批缺了哪個型別。
     """
 
-    variants: Optional[list]
+    variants: list | None
     dropped: int
     type_counts: Counter
 
@@ -282,7 +282,7 @@ def _rejection_constraints(conn, brand_id: str, limit: int = 12) -> list:
 
 def generate(conn, brand_id: str, cycle_id: str, actor: str, *,
             include_methodology: bool = True,
-            on_stage: Optional[Callable[[str], None]] = None) -> tuple:
+            on_stage: Callable[[str], None] | None = None) -> tuple:
     """產出本期素材包。成功回 (True, None)；失敗回 (False, 人話錯誤)，不入庫。
 
     include_methodology=False（票 11 效果盲測專用）：略過方法論載入，其餘完全相同，
@@ -448,9 +448,9 @@ def _brief_for_cell(conn, brand_id: str, cycle_id: str, cell: dict, ts: str) -> 
 
 
 def _persist(conn, brand_id: str, cycle_id: str, cells: list, variants: list,
-             actor: str, methodology_missing: Optional[list] = None,
+             actor: str, methodology_missing: list | None = None,
              customer_voice_available: bool = True,
-             missing_creative_types: Optional[list] = None) -> None:
+             missing_creative_types: list | None = None) -> None:
     ts = now_utc()
     briefs = {cell["id"]: _brief_for_cell(conn, brand_id, cycle_id, cell, ts) for cell in cells}
     cell_products = {cell["id"]: cell["product_id"] for cell in cells}
@@ -503,7 +503,7 @@ def _cell_product_ids(conn, brand_id: str, cycle_id: str) -> dict:
     )}
 
 
-def _component_to_variant(component: dict, theme: dict, product_id: Optional[str]) -> Optional[dict]:
+def _component_to_variant(component: dict, theme: dict, product_id: str | None) -> dict | None:
     """主題元件 → 舊素材形狀（D1 回傳形狀不變）。component_type 對不到 D3 對照表的
     （目前只有 description，DEC-B）一律回 None，呼叫端跳過——不對照就等於不外洩。
 
@@ -581,7 +581,7 @@ def group_by_cell(conn, brand_id: str, cycle_id: str) -> list:
     return groups
 
 
-def get_variant(conn, brand_id: str, variant_id: str) -> Optional[dict]:
+def get_variant(conn, brand_id: str, variant_id: str) -> dict | None:
     """單則查詢，不受 D4「主題已採用」門檻限制——呼叫端（例如 handoff 回填交接包已存的
     id、nextcycle 的 overclaim 候選卡）本來就可能查一個已經不再是最新採用狀態的元件，
     id 存在就該查得到，是否「活的」由呼叫端自己的情境判斷。"""
@@ -602,7 +602,7 @@ def get_variant(conn, brand_id: str, variant_id: str) -> Optional[dict]:
 
 
 def reject(conn, brand_id: str, variant_id: str, *, reason_code: str, actor: str,
-           reason_text: Optional[str] = None) -> dict:
+           reason_text: str | None = None) -> dict:
     """記下一次拒絕，含當下的指紋快照（變體之後若被改寫，記憶仍指向被退的那一版）。
 
     票 02-repoint-creative-readers：轉呼叫 theme_repository.reject_component()，複用它

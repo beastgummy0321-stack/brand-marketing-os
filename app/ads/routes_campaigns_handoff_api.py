@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/ads/routes_campaigns_handoff_api.py — S8 交接＋期中檢查點 JSON API（票 B4-warroom
 接線，契約 `.scratch/grill/GRILL-B4-warroom.md`＋`GRILL-B4R-performance.md`，型別逐欄對照
 `frontend/src/lib/warroomApi.ts`）。
@@ -6,21 +5,18 @@
 對外進入點：本檔的 `router`。誰依賴它：只有 `app/ads/routes.py`。
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Request
-from app.shared.web import JSONResponse
 
 import app.shared.web as main_mod
-from app.ads import account_structure
 from app.ads import checklist as ads_checklist
 from app.ads import checkpoint as ads_checkpoint
 from app.ads import codes as ads_codes
 from app.ads import handoff as ads_handoff
-from app.ads import meta_mcp
-from app.ads import qa_autocheck
-from app.ads import repository as ads_repo
+from app.ads import meta_mcp, qa_autocheck
 from app.ads.routes_common import _require_cycle
+from app.shared.web import JSONResponse
 
 router = APIRouter()
 
@@ -28,7 +24,7 @@ _KIND_LABEL_TO_TS = {"ad": "ad", "word_of_mouth": "voiceover"}
 
 
 def _envelope(data) -> dict:
-    return {"data": data, "generated_at": datetime.now(timezone.utc).isoformat()}
+    return {"data": data, "generated_at": datetime.now(UTC).isoformat()}
 
 
 def _error(status_code: int, message: str) -> JSONResponse:

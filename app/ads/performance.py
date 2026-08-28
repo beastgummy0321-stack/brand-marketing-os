@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/ads/performance.py — 成效資料的匯入與 KPI 計算（票 10）。
 
 決策 0016 硬性原則 2：手動貼 CSV 與 Meta 唯讀 API 兩軌都要通，**兩軌正規化為同一內部
@@ -18,11 +17,10 @@ import csv
 import io
 from dataclasses import dataclass, field
 from datetime import date
-from typing import Optional
 
 from app.ads import guardrails
 from app.core.audit import write_audit
-from app.core.db import new_id, now_utc, jsonb, DEV_ORG_ID
+from app.core.db import DEV_ORG_ID, jsonb, new_id, now_utc
 
 # 概念欄 → 可能的欄位名（全部小寫比對，去空白）。要加新別名就加在這裡，別動解析邏輯。
 COLUMN_ALIASES = {
@@ -69,7 +67,7 @@ def _norm(name: str) -> str:
     return (name or "").strip().lower().replace(" ", "").replace("　", "")
 
 
-def match_columns(headers: list, aliases_table: Optional[dict] = None) -> tuple:
+def match_columns(headers: list, aliases_table: dict | None = None) -> tuple:
     """檔案表頭 → {概念欄: 實際欄名}，外加沒對上的欄位清單。
 
     兩階段比對（issue #23 bug 1）：先讓**所有**概念欄跑一輪「完全相等」，
@@ -204,15 +202,15 @@ def _derive_revenue_from_roas(row: dict) -> bool:
     return False
 
 
-def _revenue_source(row: dict, derived: bool) -> Optional[str]:
+def _revenue_source(row: dict, derived: bool) -> str | None:
     """revenue 來源標記：'reported' 原始欄位／'roas_derived' 反推／revenue 本身沒有值就沒有來源。"""
     if row.get("revenue") is None:
         return None
     return "roas_derived" if derived else "reported"
 
 
-def match_asset_mapping(conn, brand_id: str, cycle_id: Optional[str],
-                        ad_name: Optional[str]) -> tuple:
+def match_asset_mapping(conn, brand_id: str, cycle_id: str | None,
+                        ad_name: str | None) -> tuple:
     """CSV「廣告名稱」欄 → 素材層歸屬（修憲落地 G2，決策 0035 第二節第 4 點）。
     廣告名稱是我們自己在 app/ads/handoff.py build_names() 產生的固定格式，同一檔期內唯一，
     所以拿 CSV 匯出的原始字串做「完全相等」比對就夠，不做模糊猜測（決策 0022 第 7 點）。
@@ -237,8 +235,8 @@ def match_asset_mapping(conn, brand_id: str, cycle_id: Optional[str],
     return (mapping["id"] if mapping else None), package_id
 
 
-def resolve_product_id(conn, brand_id: str, cycle_id: Optional[str],
-                       publishing_package_id: Optional[str] = None) -> Optional[str]:
+def resolve_product_id(conn, brand_id: str, cycle_id: str | None,
+                       publishing_package_id: str | None = None) -> str | None:
     """票 11 D3：這筆成效歸屬哪個產品，只在能確定時才填，模稜兩可一律 None（鐵則 16）。
     CSV／Meta 同步／模擬三個寫入口共用這份解析順序，不各寫一套。命中就停：
       a. 對到的 publishing_package 自己標的 product_id
@@ -296,7 +294,7 @@ def _duplicate_signature(row: dict, date_start: str, date_stop: str, source: str
             row.get("frequency"), row.get("reach"), source, currency, ad_identity)
 
 
-def _existing_signatures(conn, brand_id: str, cycle_id: Optional[str]) -> set:
+def _existing_signatures(conn, brand_id: str, cycle_id: str | None) -> set:
     """讀回這個範圍已入庫的快照，重建成跟 `_duplicate_signature` 同一組判斷依據。
     檔期層 ad_identity 從 raw_json 讀回原始列餵給 `_row_identity`（票 11 blocker 1：
     不再靠 external_ad_mapping LEFT JOIN 反查，那條路沒對上素材的列全塌成空字串）。
@@ -320,9 +318,9 @@ def _existing_signatures(conn, brand_id: str, cycle_id: Optional[str]) -> set:
     return signatures
 
 
-def import_rows(conn, brand_id: str, cycle_id: Optional[str], rows: list, *,
-                source: str, actor: str, result: Optional[ImportResult] = None,
-                today: Optional[str] = None, currency: str = "TWD") -> ImportResult:
+def import_rows(conn, brand_id: str, cycle_id: str | None, rows: list, *,
+                source: str, actor: str, result: ImportResult | None = None,
+                today: str | None = None, currency: str = "TWD") -> ImportResult:
     """把解析好的列寫成 performance_snapshot（只累積、不覆寫）。
 
     每一列先過合理性海關；命中的照樣入庫但標記隔離，判讀不會讀到它——
@@ -401,8 +399,8 @@ def import_rows(conn, brand_id: str, cycle_id: Optional[str], rows: list, *,
     return result
 
 
-def import_csv(conn, brand_id: str, cycle_id: Optional[str], text: str, *, actor: str,
-               today: Optional[str] = None) -> ImportResult:
+def import_csv(conn, brand_id: str, cycle_id: str | None, text: str, *, actor: str,
+               today: str | None = None) -> ImportResult:
     rows, result = parse_csv(text)
     if result.errors:
         return result
@@ -411,7 +409,7 @@ def import_csv(conn, brand_id: str, cycle_id: Optional[str], text: str, *, actor
 
 
 def import_manual(conn, brand_id: str, cycle_id: str, values: dict, *, actor: str,
-                  today: Optional[str] = None) -> ImportResult:
+                  today: str | None = None) -> ImportResult:
     """手動輸入一列。API 掛掉、CSV 也匯不進來時的最後退路。"""
     row = {key: values.get(key) for key in MANUAL_FIELDS}
     row["date_start"] = values.get("date_start")
@@ -504,7 +502,7 @@ def revenue_by_source(conn, brand_id: str, cycle_id: str) -> dict:
     return out
 
 
-def max_frequency(conn, brand_id: str, cycle_id: str) -> Optional[float]:
+def max_frequency(conn, brand_id: str, cycle_id: str) -> float | None:
     """這期目前收到的最高頻率（票 9：素材疲勞判定用）。取最大值而不是平均——
 
     看最嚴重的那一筆，不能讓平均把警訊稀釋掉。沒有任何一筆帶頻率資料時回 None，
@@ -517,7 +515,7 @@ def max_frequency(conn, brand_id: str, cycle_id: str) -> Optional[float]:
     return row["freq"] if row and row["freq"] is not None else None
 
 
-def total_reach(conn, brand_id: str, cycle_id: str) -> Optional[int]:
+def total_reach(conn, brand_id: str, cycle_id: str) -> int | None:
     """這期目前收到的觸及加總（漏斗上層主指標，票 03-add-reach-metric）。沒有任何一筆
     帶觸及資料時回 None，不假裝算得出來（鐵則 16；比照 max_frequency 的既有寫法）。"""
     row = conn.execute(
@@ -754,7 +752,7 @@ def brand_level_totals(conn, brand_id: str) -> dict:
 # 不直接對 performance_snapshot／derived_metric 下 SQL）。
 # ---------------------------------------------------------------------------
 
-def brand_period_spend(conn, brand_id: str, since: str, until: str) -> Optional[float]:
+def brand_period_spend(conn, brand_id: str, since: str, until: str) -> float | None:
     """指定區間的花費加總，不分檔期（規格 KPI 口徑：廣告花費＝成效快照 spend 加總）。
 
     依資料期間末日（date_range_end）落在區間內判斷歸屬，沿用 `_brand_level_monthly_groups()`
@@ -774,7 +772,7 @@ def brand_period_spend(conn, brand_id: str, since: str, until: str) -> Optional[
     return float(row["spend"])
 
 
-def last_snapshot_at(conn, brand_id: str) -> Optional[str]:
+def last_snapshot_at(conn, brand_id: str) -> str | None:
     """這個品牌最新一筆成效快照的抓取時間（snapshot_taken_at），給駕駛艙「最後同步
     時間」用（票 07-auto-sync）。從沒同步過時回 None——「還沒同步過」跟「同步時間是
     某個值」是兩件事（鐵則 16）。"""

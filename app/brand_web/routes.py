@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/brand_web/routes.py — 品牌智庫舊版 Jinja handler 的最後殘留（T4 步驟 1，2026-08-22）。
 
 原本 87 條路由的大檔，經多輪拆分＋T4 刪光純頁面渲染部分後，只剩極少數東西还留在這裡：
@@ -23,19 +22,18 @@ POST 端點與它們 303 redirect 落地用的 GET 頁。
 `/api` 版本。
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Optional
 
 from fastapi import APIRouter, Request
 from fastapi.responses import FileResponse
 
-from app.core import vocab as md
 from app.brand_intelligence import report as brand_report_mod
 from app.brand_intelligence import repository as repo
+from app.brand_web import report_service
+from app.core import vocab as md
 from app.shared import web
 from app.shared.web import NotFoundKind, clean, require_brand
-from app.brand_web import report_service
 
 router = APIRouter()
 
@@ -52,19 +50,19 @@ def generate(conn, brand_id: str, actor: str) -> tuple:
 # 小工具：`routes_library_write.py` / `routes_products.py` 還在用，不重複維護第二份。
 # ---------------------------------------------------------------------------
 
-def _create_source_ref(brand_id: str, actor: str, text: str) -> Optional[str]:
+def _create_source_ref(brand_id: str, actor: str, text: str) -> str | None:
     """使用者填的「資料來源」自由文字 -> source_reference 表一筆列的 id；空字串回 None。"""
     text = clean(text)
     if not text:
         return None
     row = repo.create_source_reference(
         web.conn, brand_id, actor=actor, title=text, source_type="other",
-        captured_date=datetime.now(timezone.utc).date(),
+        captured_date=datetime.now(UTC).date(),
     )
     return row["id"]
 
 
-def _persona_conversion_goal_default(persona: str) -> Optional[str]:
+def _persona_conversion_goal_default(persona: str) -> str | None:
     """人設沒填 conversion_goal 時的預設值：從既有的 persona_switch_defaults() 開關表
     推回轉換目標，不另外發明第二張人設對照表。推法對齊
     repo.compute_methodology_switches() 對「站內交易」的定義本身就是

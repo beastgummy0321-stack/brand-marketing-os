@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_dashboard_guide_cards.py — 票 04-guide-card-engine：下一步指南卡引擎。
 
 純函數測試，不碰資料庫（app/dashboard/guide_cards.py 只吃一份 facts dict）。

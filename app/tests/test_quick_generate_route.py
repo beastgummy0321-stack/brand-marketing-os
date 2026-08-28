@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_quick_generate_route.py — 快速生成端點（票 01-quick-generate-endpoint）。
 
 接縫二（路由層，app/ads/routes_quick_generate.py）：不開檔期、不用切角格，四選一類型＋
@@ -10,13 +9,9 @@
 
 import atexit
 import json
-import os
 import shutil
 import tempfile
 import unittest
-from pathlib import Path
-
-import pytest
 
 _tmpdir = tempfile.mkdtemp(prefix="brand_os_quick_generate_")
 
@@ -27,7 +22,6 @@ from app.ads import theme_engine  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
 from app.core import settings as coresettings  # noqa: E402
 from app.llm.providers import FakeProvider, ProviderError, ProviderResponse, Usage  # noqa: E402
-
 
 ACTOR = "測試員"
 

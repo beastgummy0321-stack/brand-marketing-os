@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/brand_web/routes_library_write.py — 品牌智庫六分頁寫入動作的 /api 版本
 （票：解除刪 app/brand_web/routes.py 最後 17 支舊頁 handler 的前置阻塞）。
 
@@ -27,9 +26,7 @@ handler 與它們 redirect 落地用的 GET hub 頁整批刪除了（只留 `_cr
 from pathlib import Path
 
 from fastapi import APIRouter, Request
-from app.shared.web import JSONResponse
 
-from app.core import vocab as md
 from app.brand_intelligence import repository as repo
 from app.brand_web import routes as brand_routes
 from app.brand_web.routes_library import (
@@ -40,8 +37,9 @@ from app.brand_web.routes_library import (
     _fact_shape,
     _rule_shape,
 )
+from app.core import vocab as md
 from app.shared import web
-from app.shared.web import NotFoundKind, clean, require_actor, require_brand
+from app.shared.web import JSONResponse, NotFoundKind, clean, require_actor, require_brand
 
 router = APIRouter()
 

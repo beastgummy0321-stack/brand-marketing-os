@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_dashboard_campaign_calendar_wiring.py — 票 06-campaign-calendar：
 儀表板 API 接上檔期日曆真貨源（純函數邏輯已在 test_campaign_calendar.py 測過，這裡
 只驗證 repository 有把純函數結果組進指南卡與駕駛艙 campaign_stage 欄位）。
@@ -12,7 +11,6 @@
 """
 
 import atexit
-import os
 import shutil
 import tempfile
 import unittest
@@ -24,7 +22,6 @@ from app.brand_intelligence import repository as bi_repo  # noqa: E402
 from app.core import calendar_dismiss as core_calendar_dismiss  # noqa: E402
 from app.core import campaign_skip as core_campaign_skip  # noqa: E402
 from app.dashboard import repository as dashboard_repo  # noqa: E402
-
 
 
 def _cleanup():

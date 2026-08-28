@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/ads/onboarding.py — 新手心理曲線（票 15）。
 
 ADHD 設計輸入方向三：第一期數字通常很難看，新手歸咎「我不行」就放棄了。三個對策：
@@ -18,8 +17,7 @@ ADHD 設計輸入方向三：第一期數字通常很難看，新手歸咎「我
 廣告模組的專屬知識，實際儲存／去重／嚴重度都交給佇列那層統一處理。
 """
 
-from datetime import date, timedelta
-from typing import Optional
+from datetime import timedelta
 
 from app.ads import checkpoint as ads_checkpoint
 from app.ads import repository as ads_repo
@@ -98,7 +96,7 @@ def resolve_stale_checkpoint_reminders(conn, brand_id: str, cycle_id: str, *, ac
     return merged
 
 
-def due_reminders(conn, brand_id: Optional[str] = None, today: Optional[str] = None) -> list:
+def due_reminders(conn, brand_id: str | None = None, today: str | None = None) -> list:
     """到期而且還沒被關掉的提醒。brand_id 省略時跨品牌查（只有首頁待辦用）。
 
     只有 LIVE／EVALUATING 且未封存的檔期才會浮出——這段檔期狀態知識只有廣告模組有，
@@ -145,7 +143,7 @@ def mark_calibration_if_first(conn, brand_id: str, cycle_id: str) -> bool:
     return True
 
 
-def calibration_forecast(conn, brand_id: str, cycle_id: str) -> Optional[dict]:
+def calibration_forecast(conn, brand_id: str, cycle_id: str) -> dict | None:
     """校準期的預期區間。事先講明「大概會落在哪裡」，第一期就不會被難看的數字嚇跑。"""
     from app.ads import simulation
 
@@ -166,7 +164,7 @@ def calibration_forecast(conn, brand_id: str, cycle_id: str) -> Optional[dict]:
     }
 
 
-def in_forecast(forecast: Optional[dict], totals: dict) -> Optional[bool]:
+def in_forecast(forecast: dict | None, totals: dict) -> bool | None:
     """實際結果有沒有落在事先預告的範圍內。沒有預告就回 None。"""
     if not forecast:
         return None
@@ -190,7 +188,7 @@ def forecast_gap(forecast: dict, totals: dict) -> dict:
     return {"direction": "below", "segment": segment}
 
 
-def forecast_snapshot(cycle: dict) -> Optional[dict]:
+def forecast_snapshot(cycle: dict) -> dict | None:
     """讀開期當下寫入 derived_plan_json 的區間快照（票 F1，決策 0039 第 14 條）。
 
     顯示端（ads_cycle.html）與後續兌現預言卡（F5）一律經由這個函式取值，不得另外
@@ -230,7 +228,7 @@ def _comparable(conn, brand_id: str, cycle: dict) -> dict:
     }
 
 
-def previous_cycle(conn, brand_id: str, cycle: dict) -> Optional[dict]:
+def previous_cycle(conn, brand_id: str, cycle: dict) -> dict | None:
     """跟這期同一品牌、時間序上最近的前一個「真的」檔期（跳過模擬期）。差異視圖
     （diff_with_previous）與兌現預言卡第二個出口（票 F5，決策 0039 第 15 條：第二期檔期
     內頁頂部常駐卡）共用同一份查詢，不重複寫第二份 SQL。"""
@@ -249,7 +247,7 @@ def previous_cycle(conn, brand_id: str, cycle: dict) -> Optional[dict]:
     return result
 
 
-def diff_with_previous(conn, brand_id: str, cycle_id: str) -> Optional[dict]:
+def diff_with_previous(conn, brand_id: str, cycle_id: str) -> dict | None:
     """跟上一期比，哪些變了、哪些沒變。沒有上一期就回 None（第一期不需要差異視圖）。"""
     cycle = ads_repo.get_cycle(conn, brand_id, cycle_id)
     if cycle is None:

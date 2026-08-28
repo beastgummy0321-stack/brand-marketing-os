@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_ads_cycle.py — 廣告分支票 4：開期入口、歷期清單、開新檔期。
 
 品牌與產品名一律虛構，絕不使用真實客戶品牌。
@@ -6,12 +5,10 @@
 
 import atexit
 import json
-import os
 import shutil
 import tempfile
 import unittest
 from datetime import date
-from pathlib import Path
 
 _tmpdir = tempfile.mkdtemp(prefix="brand_os_ads_cycle_")
 
@@ -21,7 +18,6 @@ import app.main as main  # noqa: E402
 from app.ads import repository as ads_repo  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
 from app.shared.web import OPERATOR  # noqa: E402
-
 
 
 def _cleanup():

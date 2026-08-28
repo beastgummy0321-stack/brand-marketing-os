@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_orders_channel.py — 通路對照卡（GitHub issue #40，決策 0025 第二節 B）。
 
 驗收重點：
@@ -11,8 +10,6 @@ fixture 一律虛構品牌，嚴禁真實客戶資料（規範第八節）。
 """
 
 import unittest
-
-import pytest
 
 import app.shared.web as web
 from app.ads import reading

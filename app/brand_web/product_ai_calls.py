@@ -1,11 +1,11 @@
-# -*- coding: utf-8 -*-
 """app/brand_web/product_ai_calls.py — 產品 AI 呼叫邊界。
 進入點＝本檔。
 誰依賴＝routes.py、routes_products.py。
 不碰＝不得 import app/brand_web 其他檔。
 """
 
-from app.brand_intelligence import product_ai, repository as repo
+from app.brand_intelligence import product_ai
+from app.brand_intelligence import repository as repo
 from app.core import net
 from app.llm import gateway, providers
 

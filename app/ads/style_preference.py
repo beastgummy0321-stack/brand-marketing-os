@@ -1,8 +1,6 @@
-# -*- coding: utf-8 -*-
 """品牌層圖片風格偏好；以既有 app_setting 保存，無須新 schema。"""
 
 from app.core import settings as core_settings
-
 
 _KEY_PREFIX = "ads_style_preference:"
 

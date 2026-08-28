@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/ads/auto_sync.py — 每日自動同步觸發器（票 07-auto-sync，規格 0001）。
 
 沿用既有唯讀同步邏輯：Meta 帳號同步（app/ads/sync.py `sync_account`，全站一組連線、
@@ -10,28 +9,32 @@ GA4 每品牌同步（app/ads/ga4_sync.py `sync_brand`，比照手動同步鈕 `
 失敗才送進打斷佇列（`auto_sync_failed` 類別，見 app/core/interrupts.py CATEGORIES）。
 """
 
-from datetime import date, datetime, timedelta, timezone
-from typing import Optional
+from datetime import UTC, date, datetime, timedelta
 
 from app.ads import diagnosis as ads_diagnosis  # noqa: F401 — 匯入觸發調度台模組登記（票 O1-01）
-from app.ads import ga4_sync
-from app.ads import health_lights  # noqa: F401 — 同上：monitor 模組登記在這支（票 O1-02）
-from app.ads import meta_mcp  # noqa: F401 — 同上：publish 模組登記在這支（票 O1-02）
-from app.ads import onboarding
-from app.ads import pacing_curve
-from app.ads import proposal  # noqa: F401 — 同上：proposal 模組登記在這支（票 O1-02）
-from app.ads import reading
+
+# 少了這行就只靠別處的 import 鏈碰巧先跑到，鏈一改規則會安靜地不再觸發（審查備註）
+from app.ads import (
+    ga4_sync,
+    health_lights,  # noqa: F401 — 同上：monitor 模組登記在這支（票 O1-02）
+    meta_mcp,  # noqa: F401 — 同上：publish 模組登記在這支（票 O1-02）
+    onboarding,
+    pacing_curve,
+    proposal,  # noqa: F401 — 同上：proposal 模組登記在這支（票 O1-02）
+    reading,
+    theme_batch,  # noqa: F401 — 同上：規則 2（創意.補主題）登記在這支，
+    tracking,
+    weekly_proposals,
+    weekly_reports,
+)
 from app.ads import repository as ads_repo
 from app.ads import sync as ads_sync
-from app.ads import theme_batch  # noqa: F401 — 同上：規則 2（創意.補主題）登記在這支，
-# 少了這行就只靠別處的 import 鏈碰巧先跑到，鏈一改規則會安靜地不再觸發（審查備註）
-from app.ads import tracking
-from app.ads import weekly_proposals
-from app.ads import weekly_reports
 from app.brand_intelligence import repository as bi_repo
 from app.core import interrupts as core_interrupts
 from app.core import orchestrator as core_orchestrator
-from app.intake import dispatch as intake_dispatch  # noqa: F401 — 同上：intake 模組登記在這支（票 O1-02）
+from app.intake import (
+    dispatch as intake_dispatch,  # noqa: F401 — 同上：intake 模組登記在這支（票 O1-02）
+)
 
 ACTOR = "auto_sync"
 WEEKLY_ACTOR = "weekly_engine"
@@ -118,9 +121,9 @@ def run_cycle_checks(conn, brand_id: str, today: str, *, url_probe=None) -> None
 
 
 def sync_brand_now(conn, brand_id: str, actor: str, *, meta_client=None, ga4_client=None,
-                   now: Optional[datetime] = None, url_probe=None) -> str:
+                   now: datetime | None = None, url_probe=None) -> str:
     """同步單一品牌；30 秒內重按直接沿用同一次完成時間。"""
-    now = now or datetime.now(timezone.utc)
+    now = now or datetime.now(UTC)
     cached = _immediate_sync_cache.get(brand_id)
     if cached and now - cached[0] < _IMMEDIATE_SYNC_DEBOUNCE:
         return cached[1]
@@ -143,7 +146,7 @@ def sync_brand_now(conn, brand_id: str, actor: str, *, meta_client=None, ga4_cli
     return completed_at
 
 
-def run(conn, *, today: Optional[str] = None, meta_client=None, ga4_client=None,
+def run(conn, *, today: str | None = None, meta_client=None, ga4_client=None,
         url_probe=None) -> dict:
     """跑一輪每日自動同步。回傳 {"meta": SyncResult|None, "ga4": {brand_id: GA4SyncResult}}
     給呼叫端（測試、未來的執行紀錄）檢查跑了什麼。"""

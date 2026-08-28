@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/ads/reading_assets.py — 素材層成效（修憲落地 G2，決策 0035 第二節第 4 點）。
 
 從 `app/ads/reading.py`（凍結 1039 行、不得再長）拆出來的小檔——`_asset_totals()` 原樣
@@ -7,12 +6,11 @@
 同樣的理由：加進 reading.py 會讓它破凍結上限。
 """
 
-from typing import Optional
 
 from app.ads import performance as ads_performance
 
 
-def asset_totals(conn, brand_id: str, cycle_id: str, breakeven: Optional[float] = None) -> list:
+def asset_totals(conn, brand_id: str, cycle_id: str, breakeven: float | None = None) -> list:
     """依素材（廣告名稱對回的交接包）分開的成效加總（修憲落地 G2，決策 0035 第二節第 4 點）。
 
     只有 CSV 匯入時廣告名稱對得回已授權素材的資料列才會出現在這裡（見
@@ -81,7 +79,7 @@ def asset_totals(conn, brand_id: str, cycle_id: str, breakeven: Optional[float] 
     return result
 
 
-def worst_asset_reason(asset_breakdown: list, breakeven=None) -> Optional[str]:
+def worst_asset_reason(asset_breakdown: list, breakeven=None) -> str | None:
     """素材層成效裡投報率最差的那支，用一句白話點名（D4 觸點 2，票
     03-performance-reaches-the-user；拖累用詞的損益兩平前提見票
     09-worst-ad-wording-must-respect-breakeven）。算不出投報率（沒花費或沒收到營收資料）
@@ -110,7 +108,7 @@ def worst_asset_reason(asset_breakdown: list, breakeven=None) -> Optional[str]:
     return sentence
 
 
-def max_frequency_by_asset(conn, brand_id: str, cycle_id: str) -> Optional[dict]:
+def max_frequency_by_asset(conn, brand_id: str, cycle_id: str) -> dict | None:
     """本期頻率最高的那支廣告：`{"target", "frequency"}`，一筆頻率都沒有就回 None。
 
     JOIN 與 `asset_totals()` 同一條（只走「廣告名稱對得回交接包」的資料列）。健康燈的

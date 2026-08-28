@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_ads_interview.py — 前朝教訓訪談（點選式三分流，GitHub issue #55）。
 
 驗收條件（票 #55）：
@@ -12,12 +11,9 @@
 """
 
 import atexit
-import json
-import os
 import shutil
 import tempfile
 import unittest
-from pathlib import Path
 
 _tmpdir = tempfile.mkdtemp(prefix="brand_os_ads_interview_")
 
@@ -28,7 +24,6 @@ from app.ads import fingerprint as fp  # noqa: E402
 from app.ads import interview  # noqa: E402
 from app.ads import repository as ads_repo  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
-
 
 
 def _cleanup():

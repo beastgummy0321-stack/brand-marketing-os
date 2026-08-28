@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """票 21：品牌層投放自動度規則卡與 JSON API。"""
 
 import unittest

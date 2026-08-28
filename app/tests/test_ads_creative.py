@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_ads_creative.py — 廣告分支票 6：素材包、反對制勾選、拒絕記憶與當場改寫。
 
 全程 FakeProvider，不發任何真實網路請求；品牌與產品名一律虛構。
@@ -11,7 +10,6 @@ import time
 import unittest
 from pathlib import Path
 
-import pytest
 from fastapi.testclient import TestClient
 
 import app.main as main
@@ -24,7 +22,6 @@ from app.ads import theme_repository as theme_repo
 from app.ads.routes_creative import _CREATIVE_STAGES
 from app.brand_intelligence import repository as bi_repo
 from app.core import settings as coresettings
-from app.core.db import new_id, now_iso
 from app.llm import methodology
 from app.llm.providers import FakeProvider, ProviderResponse, Usage
 from app.shared.web import OPERATOR

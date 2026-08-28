@@ -1,13 +1,10 @@
-# -*- coding: utf-8 -*-
 """成效回流給預選批次的純規則；真正的生成迴圈仍只有 theme_batch 一條。"""
 
 from itertools import product
 
 from app.ads import fingerprint as fp
-from app.ads import nextcycle
-from app.ads import onboarding
+from app.ads import nextcycle, onboarding
 from app.ads import repository as ads_repo
-
 
 # P1 配額規則（固定常數，不做學習率）：基準 2；可信且有轉換 +1；表現差（零轉換且花費達
 # cell_trust_flags() 既有 50% 門檻，或轉換數不為 0 但沒打平——票 03-performance-reaches-

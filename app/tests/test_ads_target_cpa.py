@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_ads_target_cpa.py — 目標 CPA 三層鏈＋投放量護欄＋三檔預算卡（票 21）。
 
 驗收重點：
@@ -13,7 +12,6 @@ fixture 一律虛構品牌，嚴禁真實客戶資料（規範第八節）。
 
 import unittest
 
-import pytest
 from fastapi.testclient import TestClient  # noqa: E402
 
 import app.main as main  # noqa: E402

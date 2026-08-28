@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_ads_progress_background.py — 修憲落地票 M3：等待頁改背景執行＋冪等閘。
 
 體檢原文（docs/design/19-constitution-audit.md §3.1）：「?run=1 那一次請求同步跑完整個
@@ -14,15 +13,11 @@ LLM 呼叫」，瀏覽器凍住 20–90 秒，且按 F5 會再打一次付費 AP
 
 import atexit
 import json
-import os
 import shutil
 import tempfile
 import threading
 import time
 import unittest
-from pathlib import Path
-
-import pytest
 
 _tmpdir = tempfile.mkdtemp(prefix="brand_os_ads_progress_bg_")
 
@@ -35,7 +30,6 @@ from app.ads import routes as ads_routes  # noqa: E402
 from app.ads import routes_campaigns_open_api  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
 from app.llm.providers import ProviderResponse, Usage  # noqa: E402
-
 
 
 def _cleanup():

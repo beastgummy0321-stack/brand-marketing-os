@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_ads_nextcycle.py — 廣告分支票 13：下期草案、規則卡、反回音室。
 
 三件事都由程式決定（加多少、學不學、像不像），LLM 不參與判斷。
@@ -6,31 +5,28 @@
 
 import atexit
 import json
-import os
 import shutil
 import tempfile
 import unittest
-from pathlib import Path
 
 _tmpdir = tempfile.mkdtemp(prefix="brand_os_ads_next_")
 
-import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
 import app.main as main  # noqa: E402
 from app.ads import creative as ads_creative  # noqa: E402
 from app.ads import fingerprint as fp  # noqa: E402
-from app.ads import nextcycle  # noqa: E402
+from app.ads import (
+    nextcycle,  # noqa: E402
+    reading,  # noqa: E402
+    )
 from app.ads import performance as perf  # noqa: E402
-from app.ads import reading  # noqa: E402
-from app.ads import theme_feedback  # noqa: E402
 from app.ads import theme_repository as theme_repo  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
 from app.core import db as coredb  # noqa: E402
 from app.core.db import new_id, now_iso  # noqa: E402
 from app.llm.providers import FakeProvider, ProviderResponse, Usage  # noqa: E402
 from app.shared.web import OPERATOR  # noqa: E402
-
 
 
 def _cleanup():

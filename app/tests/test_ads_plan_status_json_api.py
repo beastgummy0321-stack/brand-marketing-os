@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_ads_plan_status_json_api.py — 修「投放與成效」企劃階段卡住 BUG：
 JSON `/api/campaigns/{brand_id}/{cycle_id}/plan/status` 過去只看 `entry is None or
 status == "done"` 就無條件回 `{"status": "done"}`，背景生成失敗（例外或業務失敗）或
@@ -13,12 +12,10 @@ LLM 呼叫、不發任何真實網路請求。全程假品牌（虛構晨光豆�
 """
 
 import atexit
-import os
 import shutil
 import tempfile
 import time
 import unittest
-from pathlib import Path
 
 _tmpdir = tempfile.mkdtemp(prefix="brand_os_ads_plan_status_")
 
@@ -30,7 +27,6 @@ from app.ads import routes_campaigns_open_api  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
 from app.core import db as coredb  # noqa: E402
 from app.core.db import new_id, now_utc  # noqa: E402
-
 
 
 def _cleanup():

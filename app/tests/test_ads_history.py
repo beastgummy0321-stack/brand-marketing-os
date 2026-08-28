@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_ads_history.py — D線票3（GitHub issue #45）：廣告 hub 五卡＋歷期戰績頁。
 
 品牌與產品名一律虛構，絕不使用真實客戶品牌。
@@ -6,7 +5,6 @@
 
 import unittest
 
-import pytest
 from fastapi.testclient import TestClient
 
 import app.main as main

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/ads/meta_mcp.py — Meta 官方 Ads MCP：建廣告（暫停）＋發布（票 M1-01，ADR 0023）。
 
 進入點（其餘檔案只能 import 這支，不得直接打 MCP 或 Graph API）：
@@ -32,13 +31,11 @@ import base64
 import json
 import os
 from pathlib import Path
-from typing import Optional
 
 from app.ads import creative as ads_creative
 from app.ads import handoff as ads_handoff
-from app.ads import meta_api
+from app.ads import meta_api, theme_engine
 from app.ads import repository as ads_repo
-from app.ads import theme_engine
 from app.ads import theme_repository as theme_repo
 from app.core import creative_assets
 from app.core import orchestrator as core_orchestrator
@@ -128,7 +125,8 @@ def _conversation_id() -> str:
     """一個伺服器行程共用一組 20 字元追蹤碼（A-Z a-z 0-9）；ponytail: 每次 create-all 換一組
     更貼近「一段對話」，但工具只要求格式與一致性，先一行解決。"""
     if not _CONVERSATION["id"]:
-        import secrets, string
+        import secrets
+        import string
         alphabet = string.ascii_letters + string.digits
         _CONVERSATION["id"] = "".join(secrets.choice(alphabet) for _ in range(20))
     return _CONVERSATION["id"]
@@ -179,7 +177,7 @@ def _client(name: str, arguments: dict) -> dict:
     return {}
 
 
-def _parse_response(text: str) -> Optional[dict]:
+def _parse_response(text: str) -> dict | None:
     """回應可能是純 JSON，也可能是 SSE（`data: {...}` 那一行）——兩種都認。"""
     text = (text or "").strip()
     if not text:
@@ -258,7 +256,7 @@ def graph_post(path: str, data: dict) -> dict:
     return payload
 
 
-def budget_in_minor_units(amount: Optional[float], currency: Optional[str]) -> int:
+def budget_in_minor_units(amount: float | None, currency: str | None) -> int:
     """把「元」換算成 Meta 預算欄位要的單位。查證過的幣別才換算，其餘一律拋
     `MetaMcpError`——見 `CURRENCY_MINOR_UNIT_FACTOR` 的註解。"""
     factor = CURRENCY_MINOR_UNIT_FACTOR.get((currency or "").strip().upper())
@@ -270,7 +268,7 @@ def budget_in_minor_units(amount: Optional[float], currency: Optional[str]) -> i
 _CURRENCY_CACHE: dict = {}
 
 
-def _account_currency(account_id: str) -> Optional[str]:
+def _account_currency(account_id: str) -> str | None:
     """這個廣告帳戶的幣別。`ads_get_ad_accounts` 本來就會回 currency，不另外打 Graph。"""
     if account_id in _CURRENCY_CACHE:
         return _CURRENCY_CACHE[account_id]
@@ -303,7 +301,7 @@ raw_account_id = _raw_account_id
 plain_error = _plain_error
 
 
-def get_page_id() -> Optional[str]:
+def get_page_id() -> str | None:
     return os.environ.get(PAGE_ID_ENV_VAR, "").strip() or None
 
 
@@ -386,7 +384,7 @@ def ads_manager_url(meta_account_id: str) -> str:
 # app/ads/theme_engine.theme_folder_name() ＋ app/core/creative_assets.theme_dir()。
 # ---------------------------------------------------------------------------
 
-def _first_image_path(conn, brand_id: str, experiment_cell_id: Optional[str]) -> Optional[Path]:
+def _first_image_path(conn, brand_id: str, experiment_cell_id: str | None) -> Path | None:
     if not experiment_cell_id:
         return None
     themes = [t for t in theme_repo.list_themes_for_cell(conn, brand_id, experiment_cell_id)
@@ -420,7 +418,7 @@ def _upload_image(account_id: str, image_path: Path) -> str:
     raise MetaMcpError("圖片上傳失敗：Meta 沒有回傳圖片雜湊值。")
 
 
-def _variant_text(conn, brand_id: str, variant_id: Optional[str]) -> Optional[str]:
+def _variant_text(conn, brand_id: str, variant_id: str | None) -> str | None:
     if not variant_id:
         return None
     variant = ads_creative.get_variant(conn, brand_id, variant_id)
@@ -478,7 +476,7 @@ def _create_creative(conn, brand_id: str, account_id: str, page_id: str,
     return creative_id
 
 
-def _pick_pixel(account_id: str) -> Optional[str]:
+def _pick_pixel(account_id: str) -> str | None:
     """帳戶的像素：取啟用中、最近有開火的那個；沒有回 None（呼叫端退 LINK_CLICKS）。"""
     result = _client("ads_get_datasets", {"ad_account_id": account_id})
     seen, active = set(), []
@@ -492,7 +490,7 @@ def _pick_pixel(account_id: str) -> Optional[str]:
     return str(active[0]["dataset_id"])
 
 
-def _lookup_taiwan_identity(account_id: str) -> Optional[str]:
+def _lookup_taiwan_identity(account_id: str) -> str | None:
     """GET 帳戶既有廣告組合，抓第一個台灣通用受益人身分 ID——新建組合一律沿用同一個
     （已經驗證過的）身分，不猜、不自己造一個。查不到／連不上都回 None，呼叫端擋下。"""
     token = os.environ.get(TOKEN_ENV_VAR, "").strip()
@@ -517,7 +515,7 @@ def _lookup_taiwan_identity(account_id: str) -> Optional[str]:
     return None
 
 
-def _taiwan_identity(account_id: str) -> Optional[str]:
+def _taiwan_identity(account_id: str) -> str | None:
     """`META_TW_IDENTITY_ID` 環境變數優先（每次都現讀，不快取，設定變更立刻生效）；
     沒設就查帳戶既有廣告組合，查過的結果快取在行程記憶體（`_TW_IDENTITY_CACHE`）——
     同一次 create-all 建好幾包，不必每包都打一次 Graph API。"""
@@ -580,7 +578,7 @@ def _create_ad(account_id: str, adset_id: str, creative_id: str, package: dict) 
 
 
 def create_package(conn, brand_id: str, cycle_id: str, package_id: str, *, actor: str,
-                   campaign_id: Optional[str] = None) -> dict:
+                   campaign_id: str | None = None) -> dict:
     """`campaign_id`：呼叫端（create-all 路由）已經知道這期用的是哪個 Meta campaign 時
     直接傳進來，跳過 `_ensure_campaign()`——真人實測發現的問題：campaign 建成功、
     素材建失敗（例如缺到達網址）的包從來沒走到 authorize_and_map()，DB 裡沒留下
@@ -753,7 +751,7 @@ def activate_cycle(conn, brand_id: str, cycle_id: str, *, actor: str) -> dict:
 # 使用者 2026-08-23 裁決：create_package()／activate_cycle() 一律不開放成 op，建廣告
 # 與開啟廣告永遠只由使用者在畫面上按（Meta 寫入被 error 31 擋住，看板 M1-01）。
 
-def _current_cycle(conn, brand_id: str) -> "Optional[dict]":
+def _current_cycle(conn, brand_id: str) -> "dict | None":
     """比照 app/ads/diagnosis.py:29 _current_cycle()：取最新一個投放中或等判讀的檔期。"""
     for cycle in ads_repo.list_cycles(conn, brand_id):
         if cycle["status"] in ("LIVE", "EVALUATING"):

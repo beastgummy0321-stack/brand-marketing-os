@@ -1,25 +1,21 @@
-# -*- coding: utf-8 -*-
 """T1 批次 A：品牌層週提案行動卡 API、背景重判與每週排程。"""
 
 import json
 import time
 import unittest
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest import mock
 
-import pytest
 from fastapi.testclient import TestClient
 
 import app.main as main
-from app.ads import auto_sync
-from app.ads import routes as ads_routes
-from app.ads import routes_weekly_proposals_api
+from app.ads import auto_sync, routes_weekly_proposals_api
 from app.ads import repository as ads_repo
+from app.ads import routes as ads_routes
 from app.brand_intelligence import repository as bi_repo
-from app.core import db, interrupts as core_interrupts
+from app.core import db
+from app.core import interrupts as core_interrupts
 from app.core.db import new_id, now_iso
-
-
 
 ACTOR = "測試員"
 
@@ -188,9 +184,9 @@ class WeeklyScheduleGateTest(unittest.TestCase):
         main._last_weekly_engine_check = None
         try:
             with mock.patch.object(auto_sync, "run_weekly_engine") as run:
-                main._weekly_engine_if_due(datetime(2026, 8, 17, 1, tzinfo=timezone.utc))
-                main._weekly_engine_if_due(datetime(2026, 8, 20, 1, tzinfo=timezone.utc))
-                main._weekly_engine_if_due(datetime(2026, 8, 24, 1, tzinfo=timezone.utc))
+                main._weekly_engine_if_due(datetime(2026, 8, 17, 1, tzinfo=UTC))
+                main._weekly_engine_if_due(datetime(2026, 8, 20, 1, tzinfo=UTC))
+                main._weekly_engine_if_due(datetime(2026, 8, 24, 1, tzinfo=UTC))
         finally:
             main._last_weekly_engine_check = original
 

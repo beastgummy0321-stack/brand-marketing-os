@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/dashboard/routes_pinned_views_api.py — 駕駛艙成效釘選區 JSON API（票 B4R-cockpit-pins
 接線，契約 `.scratch/grill/GRILL-B4R-performance.md` 第一節）。獨立成檔（不併進
 `routes.py`）：`routes.py` 檔頭明文「只讀、不寫入任何資料表」，本檔的 POST 端點會寫
@@ -7,19 +6,19 @@
 對外進入點：本檔的 `router`。誰依賴它：只有 `app/main.py`。
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Request
-from app.shared.web import JSONResponse
 
 import app.shared.web as main_mod
 from app.dashboard import pinned_views
+from app.shared.web import JSONResponse
 
 router = APIRouter(prefix="/api/dashboard")
 
 
 def _envelope(data) -> dict:
-    return {"data": data, "generated_at": datetime.now(timezone.utc).isoformat()}
+    return {"data": data, "generated_at": datetime.now(UTC).isoformat()}
 
 
 def _config(conn, brand_id: str) -> dict:

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/ads/theme_repository.py — 主題資料模型存取層（票 02-theme-tables）。
 
 主題（creative_theme）＝一則廣告：屬於某個切角格（experiment_cell），對應某個廣告格式
@@ -11,18 +10,17 @@ CYCLE_CASCADE_TABLES／_PRODUCT_CASCADE_LABELS（該檔已頂到 800 行檔案�
 不把 CRUD 也塞進去），本檔只管建立／讀取／依格查詢／狀態更新。
 """
 
-from typing import Optional
 
 from app.ads import fingerprint as fp
 from app.core.audit import write_audit
-from app.core.db import new_id, now_utc, jsonb, Conn, DEV_ORG_ID
+from app.core.db import DEV_ORG_ID, Conn, jsonb, new_id, now_utc
 
 
 def _rows(cursor) -> list:
     return [dict(r) for r in cursor.fetchall()]
 
 
-def _row(cursor_row) -> Optional[dict]:
+def _row(cursor_row) -> dict | None:
     return dict(cursor_row) if cursor_row is not None else None
 
 
@@ -50,7 +48,7 @@ def _insert_component(conn: Conn, brand_id: str, campaign_cycle_id: str,
 
 def create_theme(conn: Conn, brand_id: str, *, campaign_cycle_id: str,
                  experiment_cell_id: str, format_key: str, name: str, folder_code: str,
-                 actor: str, status: str = "draft", components: Optional[list] = None) -> dict:
+                 actor: str, status: str = "draft", components: list | None = None) -> dict:
     """建一個主題，可一併帶入元件清單（components：每項 dict 至少含
     component_type／content，選填 sequence／fingerprint_json／over_budget／similarity_flag）。
     """
@@ -82,7 +80,7 @@ def create_theme(conn: Conn, brand_id: str, *, campaign_cycle_id: str,
     return after
 
 
-def get_theme(conn: Conn, brand_id: str, theme_id: str) -> Optional[dict]:
+def get_theme(conn: Conn, brand_id: str, theme_id: str) -> dict | None:
     theme = _row(conn.execute(
         "SELECT * FROM creative_theme WHERE brand_id = %s AND id = %s", (brand_id, theme_id)
     ).fetchone())
@@ -124,7 +122,7 @@ def _attach_component_decision(conn: Conn, brand_id: str, row: dict) -> None:
         row["rejected"] and decision["reason_code"] == fp.AUTO_HOLD_REASON_CODE)
 
 
-def get_component(conn: Conn, brand_id: str, component_id: str) -> Optional[dict]:
+def get_component(conn: Conn, brand_id: str, component_id: str) -> dict | None:
     row = _row(conn.execute(
         "SELECT * FROM creative_theme_component WHERE brand_id = %s AND id = %s",
         (brand_id, component_id),
@@ -148,7 +146,7 @@ def list_themes_for_cell(conn: Conn, brand_id: str,
 
 
 def list_themes_for_cycle(conn: Conn, brand_id: str, campaign_cycle_id: str, *,
-                          status: Optional[str] = None) -> list:
+                          status: str | None = None) -> list:
     """依期查詢：整個檔期底下的全部主題（含各自元件），可選狀態篩選（票
     02-repoint-creative-readers D2：app/ads/creative.py 的讀取三函式改源後只能透過本檔
     取資料，不得直接查 creative_theme／creative_theme_component，這支補上「依期」的
@@ -237,7 +235,7 @@ def adopt_theme(conn: Conn, brand_id: str, theme_id: str, *, actor: str) -> dict
 
 
 def reject_component(conn: Conn, brand_id: str, component_id: str, *,
-                     reason_code: str, actor: str, reason_text: Optional[str] = None) -> dict:
+                     reason_code: str, actor: str, reason_text: str | None = None) -> dict:
     """單一元件退件＋理由（AC2）：元件除名——不從資料表刪掉（append-only 稽核慣例），
     `list_theme_components()`／`get_component()` 之後回傳時標 `rejected=True`。理由碼與
     元件當下的指紋快照寫進 adoption_decision，跟 app/ads/creative.py `reject()`／

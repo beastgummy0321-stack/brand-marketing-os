@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """T3 駕駛艙補充資料保留任務卡完成紀錄。"""
 
 import unittest
@@ -6,7 +5,8 @@ import unittest
 from fastapi.testclient import TestClient
 
 import app.main as main
-from app.ads import cockpit_extras, repository as ads_repo
+from app.ads import cockpit_extras
+from app.ads import repository as ads_repo
 from app.ads import repository_channel_plan as plans
 from app.brand_intelligence import repository as bi
 from app.core import db

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Gate A (ticket 02-5, ADR 0027 decision 4): every table carries the tenant boundary.
 
 Every base table in this module's schema except `organisation` must have a NOT NULL

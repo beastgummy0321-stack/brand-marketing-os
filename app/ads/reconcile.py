@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/ads/reconcile.py — 把對帳護欄接上真實資料（票 11）。
 
 判斷邏輯全部在 app/ads/guardrails.py（票 3 的純函數），這一層只做三件事：
@@ -14,7 +13,6 @@ Meta API 回傳的預算金額帶「幣別最小單位」的換算（多數幣�
 寧可少比一項，也不要製造假警報讓人從此無視所有黃標。
 """
 
-from typing import Optional
 
 from app.ads import guardrails
 from app.ads import performance as ads_performance
@@ -45,7 +43,7 @@ def build_actuals(conn, brand_id: str, cycle_id: str) -> dict:
     return {"spend": summary["spend"] if summary["rows"] else None}
 
 
-def run(conn, brand_id: str, cycle_id: str, *, self_answers: Optional[dict] = None) -> dict:
+def run(conn, brand_id: str, cycle_id: str, *, self_answers: dict | None = None) -> dict:
     """跑一次對帳，回傳 {findings, confidence, label, note}。結果同時存進 finding 表。"""
     cycle = ads_repo.get_cycle(conn, brand_id, cycle_id)
     if cycle is None:

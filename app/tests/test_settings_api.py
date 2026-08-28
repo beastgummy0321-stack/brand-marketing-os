@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_settings_api.py — 設定頁 JSON API（票 B1-settings，契約
 `.scratch/grill/GRILL-B1-settings.md` S15，不含規則卡——規則卡見 test_rule_cards_api.py）。
 

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/core/calendar_dismiss.py — 節日類別永久覆寫（票 02-permanent-dismiss-category，
 ADR 0014 第二、三節）。
 
@@ -28,10 +27,9 @@ campaign_calendar_data.json**：LAYER_ORDER 裡 app.core 排最前面，只准�
 import json
 import re
 from pathlib import Path
-from typing import Optional
 
 from app.core import cleanup
-from app.core.db import new_id, now_utc, DEV_ORG_ID
+from app.core.db import DEV_ORG_ID, new_id, now_utc
 
 _CALENDAR_DATA_PATH = (
     Path(__file__).resolve().parent.parent / "dashboard" / "campaign_calendar_data.json"

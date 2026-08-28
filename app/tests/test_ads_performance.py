@@ -1,14 +1,11 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_ads_performance.py — 廣告分支票 10：成效兩軌（CSV／手動）與 KPI。
 
 決策 0016 硬性原則 2：兩軌正規化為同一格式，下游只認這一種。
 ⚠ CSV 別名表尚未用真實 Meta 匯出檔驗證（鐵則 11），使用者提供後要再校準。
 """
 
-import json
 import unittest
 
-import pytest
 from fastapi.testclient import TestClient
 
 import app.main as main

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_brand_isolation_all_tables.py — 品牌隔離全站測試（修憲落地 A2）。
 
 見 docs/architecture-rules.md A1、鐵則 5（使用者紅線）、決策 0037 第四節第 17 點。

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/orders/importer.py — EasyStore 訂單匯出檔解析＋萬用拖檔口分派層（GitHub issue #33）。
 
 依賴：openpyxl（讀 .xlsx）。專案沒有 requirements.txt／Pipfile 等依賴管理檔（find 過整個
@@ -17,7 +16,6 @@ email 等）只認同一組裡的第一列，後續列即使 Order Number 有填
 
 import io
 from dataclasses import dataclass, field
-from typing import Optional
 
 from app.ads import performance as ads_performance
 

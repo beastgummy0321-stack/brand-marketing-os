@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_ads_occasion.py — 票 01-occasion-auto-tagging：檔期情境自動標籤。
 
 品牌名一律虛構，絕不使用真實客戶品牌。

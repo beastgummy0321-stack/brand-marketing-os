@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/tests/test_product_scan.py — 產品快掃（GitHub issue #6）。
 
 見產品調研 API、app/intake/ai.py 的
@@ -12,18 +11,21 @@ import time
 import unittest
 from unittest import mock
 
-import pytest
 from fastapi.testclient import TestClient
 
 import app.main as main
 import app.shared.web as web
 from app.brand_intelligence import repository as bi_repo
-from app.core import settings as coresettings
 from app.brand_web import product_ai_calls as product_ai
-from app.shared.web import OPERATOR
+from app.core import settings as coresettings
 from app.llm.providers import (
-    MISSING_KEY_MESSAGE, AnthropicProvider, FakeProvider, ProviderResponse, Usage,
+    MISSING_KEY_MESSAGE,
+    AnthropicProvider,
+    FakeProvider,
+    ProviderResponse,
+    Usage,
 )
+from app.shared.web import OPERATOR
 
 ACTOR = "測試員"
 

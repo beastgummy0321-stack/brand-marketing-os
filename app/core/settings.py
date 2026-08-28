@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app/core/settings.py — 全站設定（app_setting 表）的最小存取層。
 
 只做兩件事：讀一個鍵、寫一個鍵；外加三個語意函式（金鑰、模型、精靈花費上限），
@@ -10,7 +9,6 @@
 from __future__ import annotations
 
 import os
-from typing import Optional
 
 import psycopg
 
@@ -27,7 +25,7 @@ INTAKE_BUDGET_SETTING = "intake_budget_limit"
 IMAGE_PROMPT_HEADER_SETTING = "image_prompt_batch_header"
 
 
-def get_setting(conn: Optional[db.Conn], key: str, default=None):
+def get_setting(conn: db.Conn | None, key: str, default=None):
     """讀一個設定值；沒設過（或 app_setting 表還沒建起來）回 default。
 
     conn 傳 None 代表「自己開一條短命連線讀」——給 providers 這種手上沒有連線的呼叫端用。
@@ -64,7 +62,7 @@ def set_setting(conn: db.Conn, key: str, value: str) -> None:
     conn.commit()
 
 
-def get_api_key(conn: Optional[db.Conn] = None) -> Optional[str]:
+def get_api_key(conn: db.Conn | None = None) -> str | None:
     """AI 金鑰：環境變數 ANTHROPIC_API_KEY 優先 > DB 設定回退 > None（代表尚未設定）。
 
     修憲落地 M4：優先序反轉。環境變數不落地在任何檔案；DB 裡的金鑰是明文，
@@ -75,7 +73,7 @@ def get_api_key(conn: Optional[db.Conn] = None) -> Optional[str]:
     return os.environ.get(API_KEY_ENV_VAR) or get_setting(conn, API_KEY_SETTING) or None
 
 
-def api_key_source(conn: Optional[db.Conn] = None) -> Optional[str]:
+def api_key_source(conn: db.Conn | None = None) -> str | None:
     """get_api_key() 實際採用的來源：'env'（環境變數，安全）／'db'（資料庫回退，明文、
     會被備份）／None（兩邊都沒設）。設定頁靠這個誠實顯示金鑰來源，不讓使用者以為
     改用了環境變數、其實系統還在用 DB 裡的舊值（修憲落地 M4）。"""
@@ -97,7 +95,7 @@ def clear_api_key_from_db(conn: db.Conn) -> None:
     conn.commit()
 
 
-def get_llm_model(conn: Optional[db.Conn] = None) -> str:
+def get_llm_model(conn: db.Conn | None = None) -> str:
     """使用的模型：DB 設定 > 環境變數 BRAND_OS_LLM_MODEL > 預設 claude-opus-5。"""
     return (
         get_setting(conn, LLM_MODEL_SETTING)
@@ -106,7 +104,7 @@ def get_llm_model(conn: Optional[db.Conn] = None) -> str:
     )
 
 
-def get_intake_budget_limit(conn: Optional[db.Conn] = None) -> float:
+def get_intake_budget_limit(conn: db.Conn | None = None) -> float:
     """AI 生成的花費上限：DB 設定 > app/intake/script.py 的 DEFAULT_BUDGET。
 
     設定鍵沿用 intake_budget_limit 這個舊名（原本只管建檔精靈），票 M2 起改成全站共用的
@@ -124,7 +122,7 @@ def get_intake_budget_limit(conn: Optional[db.Conn] = None) -> float:
         return script.DEFAULT_BUDGET
 
 
-def brand_llm_spent(conn: db.Conn, brand_id: str, *, since: Optional[str] = None) -> float:
+def brand_llm_spent(conn: db.Conn, brand_id: str, *, since: str | None = None) -> float:
     """這個品牌到目前為止真的花了多少 AI 生成費用（美元，累加所有成功呼叫的 llm_task.cost）。
 
     跨模組共用的花費上限查詢（票 M2）：品牌智庫調研、廣告分支計畫／素材生成都算進來，
@@ -148,7 +146,7 @@ def brand_llm_spent(conn: db.Conn, brand_id: str, *, since: Optional[str] = None
 
 def budget_exceeded_message(conn: db.Conn, brand_id: str, cost: float, *,
                             action: str = "這次調研",
-                            fallback_hint: str = "或先用「新增這個產品」手動建立。") -> Optional[str]:
+                            fallback_hint: str = "或先用「新增這個產品」手動建立。") -> str | None:
     """這個品牌已花的錢加上這次預估要花的，會不會超過花費上限。沒有超過回 None；
     超過回一句人話錯誤，呼叫端接住轉成表單錯誤或導頁訊息（票 M2：原本只有品牌智庫的
     產品調研／交接包修復在用這道檢查，廣告分支的計畫與素材生成現在也共用同一個函式
