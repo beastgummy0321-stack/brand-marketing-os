@@ -1,7 +1,7 @@
 """app/tests/test_identity_orgs.py — 票 03-1：組織改名、邀請、移除成員。"""
 
 import unittest
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from fastapi.testclient import TestClient
 
@@ -42,6 +42,46 @@ class OrgManagementTest(unittest.TestCase):
         self.assertEqual(org["kind"], "company")
         self.assertEqual(org["name"], "測試公司")
 
+    def test_rename_does_not_lock_owner_out(self):
+        """票 03-3 §1：改名把 kind 從 personal 變成 company 後，沒帶 X-Org-Id 的請求
+        仍要能解析回同一個組織（不能 403 forbidden_org）。"""
+        token, org_id = self._new_owner()
+        rename_resp = self.client.post(
+            "/api/identity/orgs/current/rename",
+            json={"name": "測試公司"},
+            headers=self._auth(token),
+        )
+        self.assertEqual(rename_resp.status_code, 200, rename_resp.text)
+        me = self.client.get("/api/identity/me", headers=self._auth(token))
+        self.assertEqual(me.status_code, 200, me.text)
+        self.assertEqual(me.json()["org"]["id"], org_id)
+
+    def test_default_org_is_earliest_membership_deterministic(self):
+        """票 03-3 done-check 6：兩個組織成員時，沒帶 X-Org-Id 一律拿最早加入的那個
+        （不論 kind），連續問兩次答案要一樣。第一個組織改名成 company 之後才建第二個
+        組織，確保「最早」跟「kind='personal'」給的答案不一樣——這樣才是真的在測
+        「最早」而不是巧合過關。"""
+        token, first_org_id = self._new_owner()
+        me = self.client.get("/api/identity/me", headers=self._auth(token))
+        user_id = UUID(me.json()["user"]["id"])
+
+        rename_resp = self.client.post(
+            "/api/identity/orgs/current/rename",
+            json={"name": "第一組織改名"},
+            headers=self._auth(token),
+        )
+        self.assertEqual(rename_resp.status_code, 200, rename_resp.text)
+
+        second_org_id = identity_repo.create_personal_organisation(web.conn, "第二組織")
+        identity_repo.create_membership(web.conn, second_org_id, user_id, "owner")
+        web.conn.commit()
+
+        first_call = self.client.get("/api/identity/me", headers=self._auth(token))
+        second_call = self.client.get("/api/identity/me", headers=self._auth(token))
+        self.assertEqual(first_call.status_code, 200, first_call.text)
+        self.assertEqual(first_call.json()["org"]["id"], first_org_id)
+        self.assertEqual(second_call.json()["org"]["id"], first_org_id)
+
     def test_rename_requires_owner(self):
         owner_token, org_id = self._new_owner()
         member_id = uuid4()
@@ -68,6 +108,12 @@ class OrgManagementTest(unittest.TestCase):
         self.assertEqual(create_resp.status_code, 200, create_resp.text)
         body = create_resp.json()
         self.assertIsNotNone(body["accept_url"], "SUPABASE_URL 是本機時應該直接回傳連結")
+        # 票 03-3 §2：SPA 只掛在 /app，accept_url 沒有這個前綴的話，連結點下去只會
+        # 打到 FastAPI 的通用 404 頁，邀請連結完全不能用。
+        self.assertTrue(
+            body["accept_url"].startswith("/app/accept-invite?token="),
+            f"accept_url 要有 /app 前綴（SPA 掛載點），實際是 {body['accept_url']!r}",
+        )
         token_str = body["accept_url"].split("token=")[1]
 
         invitee_id = uuid4()

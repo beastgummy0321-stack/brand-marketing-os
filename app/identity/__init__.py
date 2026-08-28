@@ -15,9 +15,9 @@ First-login: an unknown `sub` gets an `app_user` row, a personal organisation
 §"On first authenticated request for an unknown sub").
 
 Org resolution: `X-Org-Id` header must name an org the user has a membership in, else 403
-`forbidden_org`; without the header, the user's personal org (else 403 `forbidden_org` — a
-user always has exactly one personal org after first login, so this only fires for the dev
-token's fixed actor if seed data is missing).
+`forbidden_org`; without the header, the user's earliest membership by `created_at`
+(ticket 03-3 §1 — not filtered by `kind`, so renaming the org to 'company' doesn't lock the
+user out; else 403 `forbidden_org`, which only fires for a user with zero memberships).
 
 Dev bypass: `IDENTITY_DEV_TOKEN` — when the bearer token equals it, the actor is the seed dev
 user (`00000000-0000-0000-0000-000000000001`) in `org_dev` as owner, no JWT involved.
@@ -60,7 +60,7 @@ def _resolve_org(request: Request, user_id: UUID) -> tuple[str, str]:
         if membership is None:
             raise Forbidden("你不在這個組織裡，或這個組織不存在。", code="forbidden_org")
         return org_id, membership["role"]
-    membership = repo.get_personal_membership(web.conn, user_id)
+    membership = repo.get_default_membership(web.conn, user_id)
     if membership is None:
         raise Forbidden("找不到可用的組織。", code="forbidden_org")
     return membership["org_id"], membership["role"]

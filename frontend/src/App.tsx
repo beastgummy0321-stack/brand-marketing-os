@@ -26,6 +26,7 @@ import { MatrixPage } from "@/components/workbench/MatrixPage";
 import { WorkbenchPage } from "@/components/workbench/WorkbenchPage";
 import { fetchOverview, type DashboardBrandCard } from "@/lib/api";
 import { useSession } from "@/lib/auth";
+import { takePendingPath } from "@/lib/http";
 
 /** 新殼唯一進入點。路徑式路由（票 05-spa-routing，裝 react-router-dom，basename="/app"
  * 見 main.tsx）：`/` 是跨品牌總覽（票 02），`/brands/:brandId` 是單品牌駕駛艙（票 03）。
@@ -85,11 +86,23 @@ function RequireSession() {
 }
 
 /** `/login`：已經登入的人不該停留在登入頁，轉去首頁（`useSession()` 收到
- * `onAuthStateChange` 廣播後這裡會自動重新渲染，登入成功不用自己 `navigate`）。 */
+ * `onAuthStateChange` 廣播後這裡會自動重新渲染，登入成功不用自己 `navigate`）——除非
+ * `lib/http.ts` 的 401 攔截器在導來這裡之前記了一個「原本要去哪裡」（票 03-3 §3，
+ * 冷邀請連結那條路：沒登入點連結 → 401 → 被導來這裡 → 登入/註冊成功後要送回邀請頁，
+ * 不是首頁）。用 `useEffect` 讀一次、清一次，不在 render 期間動 sessionStorage
+ * （避免 React StrictMode 的 dev 期雙重呼叫把它提早清掉）。 */
 function LoginRoute() {
   const { loading, session } = useSession();
+  const [redirectTo, setRedirectTo] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (session && redirectTo === null) {
+      setRedirectTo(takePendingPath() ?? "/");
+    }
+  }, [session, redirectTo]);
+
   if (loading) return null;
-  if (session) return <Navigate to="/" replace />;
+  if (session) return redirectTo ? <Navigate to={redirectTo} replace /> : null;
   return <LoginPage />;
 }
 

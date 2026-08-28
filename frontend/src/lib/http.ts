@@ -24,6 +24,27 @@ export function _setRedirectForTest(fn: (path: string) => void): void {
   redirectToLogin = fn;
 }
 
+const PENDING_PATH_KEY = "pendingPath";
+
+/** 票 03-3 §3：沒登入的受邀者點開 `/app/accept-invite?token=…`，該頁一掛載就打
+ * `apiFetch` 拿 401（沒 token），整頁換成 `/app/login` 之前先把當下路徑（react-router
+ * 看得懂的、不含 `/app` 前綴那種）記下來，登入頁成功後撈回去用（見 `App.tsx`
+ * `LoginRoute`）。只存一次、讀一次就清掉，不是全站導頁框架。 */
+function rememberPendingPath(): void {
+  const path = window.location.pathname.replace(/^\/app\/?/, "/") + window.location.search;
+  if (path && path !== "/login") {
+    sessionStorage.setItem(PENDING_PATH_KEY, path);
+  }
+}
+
+/** `App.tsx` 的 `LoginRoute` 登入成功後呼叫一次：撈回並清掉上面記住的路徑；沒有就回
+ * `null`，呼叫端自己決定要不要用預設值 `/`。 */
+export function takePendingPath(): string | null {
+  const path = sessionStorage.getItem(PENDING_PATH_KEY);
+  sessionStorage.removeItem(PENDING_PATH_KEY);
+  return path;
+}
+
 export async function apiFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   const token = await getAccessToken();
   const orgId = getOrgId();
@@ -36,6 +57,7 @@ export async function apiFetch(input: RequestInfo | URL, init?: RequestInit): Pr
 
   if (res.status === 401) {
     await signOut();
+    rememberPendingPath();
     redirectToLogin("/app/login");
     // 導頁已經觸發：不把 401 這個 Response 交還給呼叫端，呼叫端多半是
     // `if (!res.ok) throw new Error(...)` 這種寫法，會在畫面短暫閃出一句「讀取失敗」

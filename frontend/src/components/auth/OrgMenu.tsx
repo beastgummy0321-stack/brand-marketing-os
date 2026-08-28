@@ -55,7 +55,12 @@ export function OrgMenu() {
           setMe("error");
           return;
         }
-        setMe((await res.json()) as MeResponse);
+        const body = (await res.json()) as MeResponse;
+        setMe(body);
+        // 票 03-3 §4：後端已經決定好落在哪個組織（沒帶 X-Org-Id 時用預設組織），把它記
+        // 回 localStorage——不然單一組織的使用者永遠不會寫過 orgId，之後每次請求都要
+        // 靠後端重新猜一次預設組織，多繞一手也少了「明確帶著自己組織打請求」這件事。
+        setOrgId(body.org.id);
       })
       .catch(() => {
         if (!cancelled) setMe("error");

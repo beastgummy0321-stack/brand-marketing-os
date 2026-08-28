@@ -90,10 +90,16 @@ def list_memberships(conn: Conn | ConnProxy, user_id: UUID) -> list:
     return [dict(r) for r in rows]
 
 
-def get_personal_membership(conn: Conn | ConnProxy, user_id: UUID) -> dict | None:
+def get_default_membership(conn: Conn | ConnProxy, user_id: UUID) -> dict | None:
+    """The org a request lands in when no `X-Org-Id` header is sent: the user's earliest
+    membership, whatever the org's `kind` is now. Ticket 03-3 §1: this used to filter on
+    `o.kind = 'personal'`, so renaming your org (which flips `kind` to 'company') left you
+    with zero matches and a 403 on every subsequent request — a real account lockout.
+    Ordered by `m.created_at` with `m.org_id` as a tie-break so the answer is deterministic
+    even if two memberships share a timestamp."""
     row = conn.execute(
-        """SELECT m.org_id, m.role FROM membership m JOIN organisation o ON o.id = m.org_id
-           WHERE m.user_id = %s AND o.kind = 'personal'""",
+        """SELECT m.org_id, m.role FROM membership m
+           WHERE m.user_id = %s ORDER BY m.created_at, m.org_id LIMIT 1""",
         (str(user_id),),
     ).fetchone()
     return dict(row) if row else None

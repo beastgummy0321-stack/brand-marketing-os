@@ -149,7 +149,9 @@ async def create_invite(request: Request, body: CreateInviteRequest):
     return CreateInviteResponse(
         invite=InviteOut(id=invite["id"], email=invite["email"], role=invite["role"],
                           expires_at=invite["expires_at"]),
-        accept_url=f"/accept-invite?token={invite['token']}" if local else None,
+        # SPA 只掛在 /app（app/main.py、vite.config.ts base），連結一定要帶這個前綴，
+        # 不然點下去會打到 FastAPI 的通用 404 頁（票 03-3 §2）。
+        accept_url=f"/app/accept-invite?token={invite['token']}" if local else None,
     )
 
 

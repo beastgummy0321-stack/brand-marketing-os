@@ -9,7 +9,7 @@ vi.mock("@/lib/auth", () => ({
 }));
 
 import { getAccessToken, getOrgId, signOut } from "@/lib/auth";
-import { _setRedirectForTest, apiFetch } from "@/lib/http";
+import { _setRedirectForTest, apiFetch, takePendingPath } from "@/lib/http";
 
 const mockGetAccessToken = vi.mocked(getAccessToken);
 const mockGetOrgId = vi.mocked(getOrgId);
@@ -18,6 +18,8 @@ const mockSignOut = vi.mocked(signOut);
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.clearAllMocks();
+  sessionStorage.clear();
+  window.history.pushState({}, "", "/");
 });
 
 describe("apiFetch", () => {
@@ -72,6 +74,22 @@ describe("apiFetch", () => {
     expect(mockSignOut).toHaveBeenCalledTimes(1);
     expect(redirect).toHaveBeenCalledWith("/app/login");
     expect(settled).toBe(false);
+  });
+
+  it("票 03-3 §3：401 時記住當下路徑（去掉 /app 前綴），登入頁可以撈回來一次就清掉", async () => {
+    mockGetAccessToken.mockResolvedValue(null);
+    mockGetOrgId.mockReturnValue(null);
+    mockSignOut.mockResolvedValue(undefined);
+    const fetchMock = vi.fn(async () => new Response("{}", { status: 401 }));
+    vi.stubGlobal("fetch", fetchMock);
+    _setRedirectForTest(vi.fn());
+    window.history.pushState({}, "", "/app/accept-invite?token=abc123");
+
+    void apiFetch("/api/identity/invites/abc123/accept", { method: "POST" });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(takePendingPath()).toBe("/accept-invite?token=abc123");
+    expect(takePendingPath()).toBeNull(); // 撈第二次應該是空的——只消費一次
   });
 
   it("非 401 的回應原樣交還給呼叫端", async () => {
