@@ -6,7 +6,9 @@ conftest.py 的 `TestClient` 已經 monkeypatch 成預設帶 dev token 的 Autho
 """
 
 import re
+import threading
 import unittest
+from unittest import mock
 from uuid import UUID, uuid4
 
 from fastapi.testclient import TestClient
@@ -191,6 +193,65 @@ class TokenVerificationTest(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 403)
         self.assertEqual(response.json()["error"]["code"], "forbidden_org")
+
+
+class ConcurrentFirstLoginTest(unittest.TestCase):
+    """票 03-1 r1 defect 3：先查後插的競態。用 barrier 逼真兩個 thread 幾乎同時打
+    `POST`/`GET`（這裡用 `/api/identity/me`）——`starlette.testclient` 每次呼叫各開
+    一個獨立 portal（背景 event loop thread），兩個真正的 python thread 各自送一個
+    request 真的會平行跑到 `app.identity.repository.create_user`，barrier 逼兩邊
+    同時卡在那個呼叫點，模擬「兩個 request 幾乎同時抵達」的最壞情況。"""
+
+    def setUp(self):
+        # raise_server_exceptions=False: TestClient 預設把 500 也重新 raise 到呼叫端
+        # （方便單一同步請求的測試直接看到堆疊），但這裡兩個 request 各自跑在自己的
+        # portal thread 裡，raise 出來的例外會變成背景 thread 自己吃掉、main thread
+        # 完全看不到（pytest 只會印一條 warning，斷言照樣「通過」）——關掉這個旗標，
+        # 500 老實變成一個平常的 response，才能在 main thread 用 assertEqual 斷言。
+        self.client = TestClient(main.app, raise_server_exceptions=False)
+
+    def test_two_concurrent_logins_same_sub_yield_one_user_one_org(self):
+        user_id = uuid4()
+        email = f"race-{user_id.hex[:8]}@example.com"
+        token = mint_hs256(sub=str(user_id), email=email)
+
+        barrier = threading.Barrier(2, timeout=5)
+        original_create_user = identity_repo.create_user
+
+        def synced_create_user(conn, uid, em):
+            barrier.wait()
+            return original_create_user(conn, uid, em)
+
+        responses = {}
+
+        def worker(key):
+            responses[key] = self.client.get(
+                "/api/identity/me", headers={"Authorization": f"Bearer {token}"}
+            )
+
+        with mock.patch("app.identity.repository.create_user", side_effect=synced_create_user):
+            threads = [threading.Thread(target=worker, args=(k,)) for k in ("a", "b")]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+
+        for key, resp in responses.items():
+            self.assertEqual(resp.status_code, 200, f"thread {key}: {resp.text}")
+
+        n_users = web.conn.execute(
+            "SELECT count(*) AS n FROM app_user WHERE id = %s", (str(user_id),)
+        ).fetchone()["n"]
+        n_memberships = web.conn.execute(
+            "SELECT count(*) AS n FROM membership WHERE user_id = %s", (str(user_id),)
+        ).fetchone()["n"]
+        n_personal_orgs = web.conn.execute(
+            "SELECT count(*) AS n FROM organisation o JOIN membership m ON m.org_id = o.id"
+            " WHERE m.user_id = %s AND o.kind = 'personal'", (str(user_id),)
+        ).fetchone()["n"]
+        self.assertEqual(n_users, 1, "app_user 應該只有一列")
+        self.assertEqual(n_memberships, 1, "membership 應該只有一列")
+        self.assertEqual(n_personal_orgs, 1, "個人組織應該只有一個")
 
 
 if __name__ == "__main__":

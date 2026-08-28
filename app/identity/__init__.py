@@ -67,7 +67,16 @@ def _resolve_org(request: Request, user_id: UUID) -> tuple[str, str]:
 
 
 def _first_login(user_id: UUID, email: str) -> None:
-    repo.create_user(web.conn, user_id, email)
+    """Idempotent, called on every request (no separate "does this user exist" check before
+    it — ticket 03-1 r1 defect 3): `create_user` does the existence check and the insert in
+    one atomic statement (`ON CONFLICT (id) DO NOTHING`), so two concurrent requests for the
+    same brand-new `sub` can no longer both observe "doesn't exist yet" and both try to create
+    it. Only the request whose insert actually happened (the winner) creates the personal
+    organisation + owner membership; the other returns immediately and re-reads via
+    `_resolve_org` below like any returning user."""
+    inserted = repo.create_user(web.conn, user_id, email)
+    if not inserted:
+        return
     org_id = repo.create_personal_organisation(web.conn, email)
     repo.create_membership(web.conn, org_id, user_id, "owner")
     web.conn.commit()
@@ -98,8 +107,7 @@ def authenticate(request: Request) -> ActorContext:
         raise Unauthenticated() from None
     email = claims.get("email") or ""
 
-    if repo.get_user(web.conn, user_id) is None:
-        _first_login(user_id, email)
+    _first_login(user_id, email)
 
     org_id, role = _resolve_org(request, user_id)
     return ActorContext(user_id=user_id, org_id=org_id, role=role, email=email)

@@ -22,17 +22,28 @@ def get_user(conn: Conn | ConnProxy, user_id: UUID) -> dict | None:
     return dict(row) if row else None
 
 
-def create_user(conn: Conn | ConnProxy, user_id: UUID, email: str) -> dict:
-    conn.execute(
-        "INSERT INTO app_user (id, email, created_at) VALUES (%s, %s, %s)",
+def create_user(conn: Conn | ConnProxy, user_id: UUID, email: str) -> bool:
+    """Idempotent insert (`ON CONFLICT (id) DO NOTHING`) — returns whether this call actually
+    inserted the row. Ticket 03-1 r1 defect 3: two concurrent first logins for the same `sub`
+    used to both pass a `get_user() is None` check and then both INSERT, crashing on the
+    duplicate key. Now every request just tries to insert; only the one that actually inserted
+    (`rowcount > 0`) is the "winner" that goes on to create the personal organisation +
+    membership — the loser sees `False` and does nothing, safe to call unconditionally."""
+    cursor = conn.execute(
+        "INSERT INTO app_user (id, email, created_at) VALUES (%s, %s, %s)"
+        " ON CONFLICT (id) DO NOTHING",
         (str(user_id), email, now_utc()),
     )
-    return {"id": user_id, "email": email}
+    return cursor.rowcount > 0
 
 
 def create_membership(conn: Conn | ConnProxy, org_id: str, user_id: UUID, role: str) -> None:
+    """`ON CONFLICT DO NOTHING` on the (org_id, user_id) primary key — same idempotency
+    treatment as `create_user` (ticket 03-1 r1 defect 3) for the two call sites that reach
+    here (first-login's owner membership, invite acceptance), in case either double-fires."""
     conn.execute(
-        "INSERT INTO membership (org_id, user_id, role, created_at) VALUES (%s, %s, %s, %s)",
+        "INSERT INTO membership (org_id, user_id, role, created_at) VALUES (%s, %s, %s, %s)"
+        " ON CONFLICT (org_id, user_id) DO NOTHING",
         (org_id, str(user_id), role, now_utc()),
     )
 
