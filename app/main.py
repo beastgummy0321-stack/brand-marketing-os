@@ -31,7 +31,7 @@ import sys
 import threading
 import time
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 from fastapi import FastAPI, Request
 from fastapi.exception_handlers import http_exception_handler
@@ -353,9 +353,15 @@ def _write_budget(raw_budget) -> str | None:
 def _write_creative_root(raw_root: str) -> str | None:
     """三道驗證：有填、是完整路徑、不是磁碟機根目錄——刪品牌／刪檔期會刪掉這底下對應的
     子資料夾，指到 `C:\\` 這種地方很危險。不驗資料夾存不存在：使用者可能先填好路徑，
-    等一下才插上那顆外接硬碟。"""
+    等一下才插上那顆外接硬碟。
+
+    用 `PureWindowsPath` 而不是平台相依的 `Path` 驗證格式：這條路徑是給桌面版
+    Windows 檔案總管用的（決策 0008），`D:\\行銷素材` 這種格式本來就只該照 Windows
+    規則判斷是不是完整路徑——在 Linux 上跑（例如 CI）`Path` 會變成 `PosixPath`，
+    看不懂磁碟機代號，把合法路徑誤判成相對路徑；`PureWindowsPath` 不管在哪個平台
+    跑都用同一套規則，這台機器本來就是 Windows，所以這裡的驗證結果不變。"""
     raw = clean(raw_root)
-    path = Path(raw) if raw else None
+    path = PureWindowsPath(raw) if raw else None
     if path is None or not path.is_absolute() or path.parent == path:
         return ("請填一個完整的資料夾路徑（例如 D:\\行銷素材），"
                 "不要只填資料夾名稱，也不要填磁碟機根目錄。")
