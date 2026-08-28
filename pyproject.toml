@@ -244,6 +244,12 @@ select = ["E", "F", "W", "I", "B", "UP"]
 include = ["app"]
 exclude = ["app/tests"]
 typeCheckingMode = "basic"
+# pinned Windows (not the CI runner's Linux default): app/core/creative_assets.py
+# calls os.startfile() deliberately (decision 0008, desktop-only helper); without
+# this pin, Pyright loads Linux typeshed stubs where os.startfile doesn't exist
+# and flags a false error that doesn't reproduce on this repo's actual (Windows)
+# deployment target for that code path.
+pythonPlatform = "Windows"
 ignore = [
     # frozen 2026-08-28, shrink only (ticket 02-7): files with pre-existing
     # pyright errors at the time Pyright was introduced. New files must pass
