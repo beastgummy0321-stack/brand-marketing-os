@@ -1,7 +1,7 @@
 # Handoff — amputate `app/ads/`, then gate what let it grow
 
-**First sentence for the next session:** "Read `HANDOFF-shell-slice.md` and execute tickets
-1 through 4. Do not redesign anything — the design is settled; §3 is the constraint list, not
+**First sentence for the next session:** "Read `HANDOFF-shell-slice.md` and execute tickets 1
+through 7. Do not redesign anything — the design is settled; §3 is the constraint list, not
 a menu. Anything in §6 comes back to the architecture session, not to you."
 
 Date: 2026-08-28. Produced by a `/grill-with-docs` session. Paperwork committed as `ba63f49`
@@ -129,22 +129,29 @@ prose has lost the decision.
 
 ## 4. Tickets — execute these
 
+**Read your global `~/.claude/CLAUDE.md` § "Workflow overrides" first.** It was rewritten on
+2026-08-28 and it wins over the plugin's `workflow.md` wherever they disagree. The four that
+change how you work here: main chat does its own read-only scans (do not dispatch a scout for
+a grep); work sequentially, not in parallel worktrees; every ticket's done-checks spell out the
+gate command verbatim; a reject must quote the done-check it fails, word for word, or it is a
+note and the ticket ships.
+
 ### Ticket 1 — branch
 
-`git checkout -b shell` from `saas` at `ba63f49`. **Short-lived**: merge back the moment
-ticket 2's gate is green, then delete the branch. A 45,000-line deletion that diverges for a
-week produces an unmergeable diff.
+`git checkout -b shell` from `saas`. **Short-lived**: merge back the moment ticket 5's gate is
+green, then delete it. A 45,000-line deletion that diverges for a week is unmergeable.
 
-### Ticket 2 — the amputation
+### Ticket 2 — the amputation (route B: no schema, no money, no permission path)
 
 **Delete:**
 - `app/ads/` entirely
 - `app/core/orchestrator.py` and `app/tests/test_core_orchestrator.py`
 - the 81 ads test files under `app/tests/`
-- the 8 dead frontend routes and their page components (see §2 for the list; keep
-  `/brands/:id` — it becomes the shell dashboard later, so strip it to a brand header plus a
-  "本期還沒有方案" empty state rather than deleting it)
-- every ads table, in a new `supabase/migrations/` file
+- `AdsMustNotImportOrdersTest` from `app/tests/test_architecture_boundaries.py` (its subject
+  is gone)
+- the 8 dead frontend routes and their page components (§2). **Keep `/brands/:id`** — it
+  becomes the shell dashboard later, so strip it to a brand header plus a "本期還沒有方案"
+  empty state rather than deleting it.
 
 **Rewire:** the 41 import statements. `app/main.py` (13 imports, 31 referencing lines) and
 `app/dashboard` (17) are 30 of them and are the real work. Where a call site only rendered ads
@@ -153,25 +160,58 @@ data, delete the call site; do not stub it.
 **Do NOT touch:** `app/creative/` beyond rewiring its 2 imports. Whether the 素材工作檯 survives
 as a module or becomes a department is an architecture question — §6.3.
 
-**Tolerance lists:** `app/tests/test_architecture_boundaries.py` holds
-`KNOWN_OVERSIZED_FILES`, `KNOWN_LAYER_VIOLATIONS`, `KNOWN_IMPORT_CYCLES`. Entries naming
-deleted files (e.g. `app/ads/repository.py` at 856 lines) **must be removed**. Removing an
-entry makes a gate stricter and is always allowed. **Adding or widening an entry to turn a red
-gate green is forbidden** (global `CLAUDE.md`) — if the cut turns a gate red, fix the code.
+**Tolerance lists:** entries in `KNOWN_OVERSIZED_FILES`, `KNOWN_LAYER_VIOLATIONS`,
+`KNOWN_IMPORT_CYCLES` that name deleted files (e.g. `app/ads/repository.py`, 856 lines) **must
+be removed** — that makes a gate stricter and is always allowed. **Adding or widening an entry
+to turn a red gate green is forbidden.** If the cut turns a gate red, fix the code.
 
-**Done-checks:**
-- `git grep -l "app\.ads" -- app/ frontend/src/` returns nothing
-- `app/ads/`, `app/core/orchestrator.py` do not exist
-- full backend suite: **zero red** (the count will drop well below 2,374 — that is the point)
-- `cd frontend && npm run build` green, `npm run lint` green
-- **By hand in a browser**: log in, and click all 11 surviving routes. Two of the four bugs in
-  slice ③ were only findable this way.
+**Done-checks (run exactly these):**
+- `git grep -l "app\.ads" -- app/ frontend/src/` prints nothing
+- `test ! -d app/ads && test ! -f app/core/orchestrator.py`
+- `uv run python -m pytest app/tests -q` — zero red. The count drops well below 2,374; that is
+  the point, not a regression.
+- `cd frontend && npm run build && npm run lint`
 
-### Ticket 3 — merge and delete the branch
+### Ticket 3 — drop the ads tables (route C: migration)
 
-Merge `shell` into `saas`, run the full suite on `saas`, delete `shell`.
+Split from ticket 2 deliberately. Ticket 2 is route B and needs no independent review; **this
+one is a migration, so it is the only part of the cut that earns one.** Do not let a 45,000-line
+deletion get dragged through route C because one migration was bundled into it.
 
-### Ticket 4 — gate what let it grow
+New file under `supabase/migrations/`. Done-check: `supabase db reset` applies clean, then the
+suite from ticket 2 stays green.
+
+### Ticket 4 — one e2e smoke, and delete the screen scans it replaces
+
+**This is the gate that proves the cut did not break the 11 surviving screens.** It runs before
+the merge, not after.
+
+**Add** one Playwright spec: log in → land on 跨品牌總覽 → open a brand → 建檔精靈 → products →
+orders. One file, one path, no fixtures, no page objects.
+
+**Delete** from `app/tests/test_architecture_boundaries.py`:
+- `ClipboardHonestyScanTest` (lines ~512–553)
+- `ReviewStepSettleRefetchWiringTest` (lines ~555–623)
+
+Together ~111 lines. Both assert **screen behaviour** — one scans copy buttons, the other
+asserts a React prop is passed down — and the rules say screen behaviour gets one e2e smoke,
+not unit tests. They exist only because this project has no smoke: the cheap broad check was
+never built, so its absence was paid for with expensive brittle narrow ones. This ticket pays
+the debt properly. It pulls board item **07-1's** Playwright line forward; delete that half of
+07-1 in ticket 7.
+
+Ten boundary classes become seven, and the screens end up better protected than before.
+
+**Done-checks:** the smoke passes against the freshly-cut branch; `pytest` still zero red;
+`grep -c "ClipboardHonestyScanTest\|ReviewStepSettleRefetchWiringTest" app/tests/test_architecture_boundaries.py`
+returns 0.
+
+### Ticket 5 — merge and delete the branch
+
+Merge `shell` into `saas`, run the **full** suite on `saas` (this is the only place it runs in
+full), delete `shell`.
+
+### Ticket 6 — gate what let it grow
 
 The three existing gates **could not have caught this**, and that is the finding that matters:
 
@@ -180,34 +220,37 @@ The three existing gates **could not have caught this**, and that is the finding
 - `LayerDirectionTest` / `ImportCycleScanTest` catch coupling, not volume. Ads' coupling was
   clean — all 41 imports are module-level.
 
-Measured 2026-08-28: production 38,491 lines, tests 42,166 → **ratio 1.10×**, against the 0.7×
-stated in the workflow rules **with no gate behind it** — which the global `CLAUDE.md` itself
-forbids ("A limit in prose is not a limit… otherwise do not state it"). **After the cut the
-ratio is 1.13× — it gets worse.** The test bloat is not concentrated in ads.
+Measured 2026-08-28: production 38,491 lines, tests 42,166 → **ratio 1.10×**. **After the cut
+it is 1.13× — it gets worse.** The test bloat is not concentrated in ads.
 
-Add to `app/tests/test_architecture_boundaries.py`, **frozen at the post-cut numbers**:
+Add to `test_architecture_boundaries.py`, **frozen at the post-cut numbers**:
 
 1. `TestRatioTest` — one frozen number, **may only go down**.
 2. `ModuleSizeRatchetTest` — a frozen `{module: lines}` dict. Raising an entry is allowed but
-   shows up in the diff where a reviewer sees it. Same shape as `KNOWN_OVERSIZED_FILES`, and
-   the global rule against widening tolerance lists already guards it. Ads would have hit this
-   at ~2,000 lines instead of 21,595.
+   appears in the diff where a reviewer sees it. Same shape as `KNOWN_OVERSIZED_FILES`, and the
+   global rule against widening tolerance lists already guards it. Ads would have hit this at
+   ~2,000 lines instead of 21,595.
 
-Optional third, and the most direct attack on 42,166 test lines: require every test file to
-open with `# protects: money | tenant-isolation | api-contract | data-correctness`. That turns
-the existing prose rule ("a test must name what it protects") into a gate.
+Optional third, and the most direct attack on the remaining 19,012 test lines: require every
+test file to open with `# protects: money | tenant-isolation | api-contract | data-correctness`.
+That turns an existing prose rule into a gate.
 
-**Honest limit, state it in the ticket:** no gate can catch the actual cause — writing 21,595
+Once `TestRatioTest` exists, write "test lines ≈ 0.7× production lines" back into the workflow
+rules — until then it stays deleted, because a number with no gate behind it is forbidden.
+
+**Honest limit, state it in the ticket:** no gate catches the actual cause — writing 21,595
 lines of guessed thresholds for a system nobody had run. "Do it by hand first; code it after it
 has hurt twice" is the right rule and is **not machine-checkable**. These gates buy a 10×
-earlier warning, not a cure.
+earlier warning, not a cure. The rule that would have caught it is now in the global
+`CLAUDE.md`: **a numeric threshold must name its source, and "industry benchmark" is not one.**
 
-### Ticket 5 — rewrite the board
+### Ticket 7 — rewrite the board
 
-`BOARD.md`'s milestone reads "用真品牌跑一期廣告閉環". **That closed loop was `app/ads/`** —
-as written the milestone is now unreachable. Rewrite it as "two buttons → plan → creatives →
-the human posts by hand". Under 「里程碑之後」, V1-02, M1-01, M1-02, M1-03 and P1 all die with
-ads; U1 (術語大掃除) survives. Mechanical work, no grill needed.
+`BOARD.md`'s milestone reads "用真品牌跑一期廣告閉環". **That closed loop was `app/ads/`** — as
+written it is unreachable. Rewrite it as "two buttons → plan → creatives → the human posts by
+hand". Under 「里程碑之後」, V1-02, M1-01, M1-02, M1-03 and P1 die with ads; U1 (術語大掃除)
+survives. Delete **04-0b** entirely (§5) and the Playwright half of **07-1** (done in ticket 4).
+Mechanical work, no grill needed.
 
 ## 5. Voided by the grill session
 
