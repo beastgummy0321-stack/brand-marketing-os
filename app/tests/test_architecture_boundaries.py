@@ -403,6 +403,65 @@ class LayerDirectionTest(unittest.TestCase):
         )
 
 
+# ---- 票 04-1a（D4-3）：誰的金鑰付錢，只准 app/core/settings.py 一個檔案知道 ----
+# 日後開放第三個 key source（付費層自帶端點等）時，只改這一個檔案就要能做到——這兩道
+# 掃描把「不准」的部分機器化，不靠人工複查 code review。
+
+_AI_KEY_SOURCE_ENV_VAR_PATTERN = re.compile(r"ANTHROPIC_API_KEY")
+_AI_KEY_SOURCE_ONLY_FILE = "app/core/settings.py"
+
+# source 變數（或 .source 屬性）直接跟 'platform'／'own' 字面值比較——這是「呼叫端自己
+# 判斷該用哪個分支」的訊號。單純出現 "platform"／"own" 這兩個英文字不算（app/ads 等模組
+# 拿它們當廣告平台、法規來源分類用，見既有 app/ads/compliance.py、routes_claims_api.py），
+# 只掃「跟 source 做字面比較」這個精確樣式，不是任何出現這兩個字的地方。
+_SOURCE_BRANCH_PATTERN = re.compile(
+    r"""source\s*==\s*['"](?:platform|own)['"]|['"](?:platform|own)['"]\s*==\s*source"""
+)
+
+
+class AiKeySourceSingleSourceOfTruthTest(unittest.TestCase):
+    """票 04-1a：`resolve_ai_credentials()` 是唯一知道「誰的金鑰付錢」的地方。
+
+    兩道掃描對齊 ticket 04-1a-ai-money-gate.md 驗收條件 8：
+    1. `ANTHROPIC_API_KEY`（環境變數名）只准出現在 app/core/settings.py——別的模組
+       一律問 resolve_ai_credentials()／get_api_key()，不准自己讀環境變數。
+    2. 對 `source`（AiCredentials.source）的值做 'platform'／'own' 字面比較，只准出現在
+       app/core/settings.py——加第三個 tier 時只改這一個檔案，呼叫端不必跟著改。
+    """
+
+    def test_only_settings_module_reads_the_anthropic_env_var_name(self):
+        violations = []
+        for path in _iter_py_files():
+            rel = _rel(path)
+            if rel == _AI_KEY_SOURCE_ONLY_FILE or rel.startswith("app/tests/"):
+                continue
+            text = path.read_text(encoding="utf-8")
+            if _AI_KEY_SOURCE_ENV_VAR_PATTERN.search(text):
+                violations.append(rel)
+        self.assertEqual(
+            violations, [],
+            "以下檔案直接出現 ANTHROPIC_API_KEY 這個環境變數名，違反票 04-1a「只有一個地方"
+            "知道操作者的金鑰放哪裡」——一律改問 app.core.settings.get_api_key()／"
+            "resolve_ai_credentials()：\n" + "\n".join(violations),
+        )
+
+    def test_only_settings_module_branches_on_ai_key_source(self):
+        violations = []
+        for path in _iter_py_files():
+            rel = _rel(path)
+            if rel == _AI_KEY_SOURCE_ONLY_FILE or rel.startswith("app/tests/"):
+                continue
+            text = path.read_text(encoding="utf-8")
+            if _SOURCE_BRANCH_PATTERN.search(text):
+                violations.append(rel)
+        self.assertEqual(
+            violations, [],
+            "以下檔案對 source 的值做 'platform'／'own' 字面比較，違反票 04-1a「誰付錢的"
+            "分流只准在 resolve_ai_credentials() 一個地方」——呼叫端只能問 resolver 拿"
+            "AiCredentials，不准自己判斷 source 的字面值：\n" + "\n".join(violations),
+        )
+
+
 # ---- A1 檢查⑤：單檔行數只准變小 ----
 # CLAUDE.md：單檔超過 800 行即為待拆，不得再往裡面加新功能。原本只是一句話沒有閘門，
 # 2026-08-07 票 C 就在 routes.py 加了 48 行淨成長。凍住現況：超標檔只准變小。

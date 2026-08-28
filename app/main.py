@@ -363,6 +363,18 @@ def _write_budget(raw_budget, *, org_id: str) -> str | None:
     return None
 
 
+def _write_ai_monthly_cost_limit(raw_limit, *, org_id: str) -> str | None:
+    """組織每月 AI 花費上限（票 04-1a，D4-2）——只有 owner 可以改，呼叫端在路由層先擋
+    （app.identity 已經在 ActorContext 帶 role，不必另外查一次）。"""
+    raw = "" if raw_limit is None else str(raw_limit)
+    value, ok = parse_number(raw)
+    if not ok or value is None or value <= 0:
+        return "AI 月費上限請填大於 0 的數字，例如 200。"
+    coresettings.set_setting(
+        web.conn, coresettings.AI_MONTHLY_COST_LIMIT_SETTING, _num_str(value), org_id=org_id)
+    return None
+
+
 def _write_creative_root(raw_root: str, *, org_id: str) -> str | None:
     """三道驗證：有填、是完整路徑、不是磁碟機根目錄——刪品牌／刪檔期會刪掉這底下對應的
     子資料夾，指到 `C:\\` 這種地方很危險。不驗資料夾存不存在：使用者可能先填好路徑，
@@ -447,10 +459,12 @@ async def _parse_json_body(request: Request):
     return body, None
 
 
-def _settings_json_data(*, org_id: str) -> dict:
+def _settings_json_data(*, org_id: str, is_owner: bool) -> dict:
     """GET /api/settings 的資料組裝（契約 SettingsData 型別）。讀值邏輯與 settings_ctx()
     共用同一批底層存取函式，這裡只是換一種給 JSON 用的型別（原始 float／list，不是表單
     用的字串）。"""
+    ai_creds = coresettings.resolve_ai_credentials(web.conn, org_id=org_id)
+    this_month_start = datetime.now(UTC).strftime("%Y-%m-01T00:00:00")
     return {
         "masked_key": _masked_key(coresettings.get_api_key(web.conn, org_id=org_id)),
         "api_key_source": coresettings.api_key_source(web.conn, org_id=org_id),
@@ -473,13 +487,24 @@ def _settings_json_data(*, org_id: str) -> dict:
         "prompt_header": coresettings.get_setting(
             web.conn, coresettings.IMAGE_PROMPT_HEADER_SETTING, "", org_id=org_id),
         "intake_budget": coresettings.get_intake_budget_limit(web.conn, org_id=org_id),
+        # AI 月費上限（票 04-1a，D4-2／D4-3）：跟上面 intake_budget（單一品牌、全期）是不同
+        # 的兩道關卡——這裡是整個組織、當月，見 app/core/settings.py org_ai_spent_this_month()。
+        "ai_key_source": ai_creds.source,
+        "ai_cap_applies": ai_creds.cap_applies,
+        "ai_monthly_spend": coresettings.org_ai_spent_this_month(
+            web.conn, org_id=org_id, since=this_month_start),
+        "ai_monthly_cost_limit": coresettings.get_ai_monthly_cost_limit(web.conn, org_id=org_id),
+        "is_owner": is_owner,
     }
 
 
 @app.get("/api/settings")
 async def api_settings_get(request: Request):
     actor = web.require_actor(request)
-    return {"data": _settings_json_data(org_id=actor.org_id), "generated_at": datetime.now(UTC).isoformat()}
+    return {
+        "data": _settings_json_data(org_id=actor.org_id, is_owner=actor.role == "owner"),
+        "generated_at": datetime.now(UTC).isoformat(),
+    }
 
 
 @app.post("/api/settings/meta")
@@ -591,6 +616,23 @@ async def api_settings_budget_post(request: Request):
         return err
     actor = web.require_actor(request)
     error = _write_budget(body.get("intake_budget"), org_id=actor.org_id)
+    if error:
+        return JSONResponse({"error": error}, status_code=400)
+    return {}
+
+
+@app.post("/api/settings/ai-monthly-cost-limit")
+async def api_settings_ai_monthly_cost_limit_post(request: Request):
+    """組織每月 AI 花費上限（票 04-1a，D4-2）：只有 owner 可以調整——這是操作者的錢包
+    保護閥，成員把它調高等於幫組織加大操作者的曝險，比照 app/identity/routes.py
+    `_require_owner()` 同一套 role 檢查與訊息。"""
+    body, err = await _parse_json_body(request)
+    if err:
+        return err
+    actor = web.require_actor(request)
+    if actor.role != "owner":
+        raise web.Forbidden("只有組織的擁有者可以調整 AI 月費上限。")
+    error = _write_ai_monthly_cost_limit(body.get("ai_monthly_cost_limit"), org_id=actor.org_id)
     if error:
         return JSONResponse({"error": error}, status_code=400)
     return {}

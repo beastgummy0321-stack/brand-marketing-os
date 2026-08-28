@@ -8,11 +8,15 @@
 
 from __future__ import annotations
 
+import logging
 import os
+from dataclasses import dataclass
 
 import psycopg
 
 from app.core import db
+
+logger = logging.getLogger(__name__)
 
 API_KEY_SETTING = "anthropic_api_key"
 API_KEY_ENV_VAR = "ANTHROPIC_API_KEY"
@@ -23,6 +27,24 @@ INTAKE_BUDGET_SETTING = "intake_budget_limit"
 # 整組複製提示詞的自訂開頭（票 11-copy-flows；ADR 0008 三）：全站一份，不分品牌——
 # 它描述的是「使用者用哪個生圖工具」，不是品牌事實。
 IMAGE_PROMPT_HEADER_SETTING = "image_prompt_batch_header"
+
+# 誰的金鑰付錢（票 04-1a，D4-3）。'platform'＝操作者付錢（預設，今天唯一真的能用的值）；
+# 'own'＝組織自帶金鑰付錢（Vault 儲存是 04-2 的事，這裡先讀跟 'platform' 同一個 DB 欄位）。
+# 日後開放付費層要加第三個值，只改 resolve_ai_credentials() 這一個函式——不准在別的檔案
+# 對這把設定值的內容（'platform'／'own' 字面值）做 if 判斷，見
+# test_architecture_boundaries.py 的 AiKeySourceSingleSourceOfTruthTest。
+AI_KEY_SOURCE_SETTING = "ai_key_source"
+_AI_KEY_SOURCES = ("platform", "own")
+
+# 組織每月 AI 花費上限（US$，票 04-1a，D4-2）：操作者的錢包保護閥，跟品牌花費上限
+# （INTAKE_BUDGET_SETTING，per-brand、all-time）是不同的兩道關卡，見
+# resolve_ai_credentials() 與 org_ai_spent_this_month() 的檔頭說明。
+AI_MONTHLY_COST_LIMIT_SETTING = "ai_monthly_cost_limit"
+# 預設 US$200／月／組織：比單一品牌的 US$30（DEFAULT_BUDGET，全期一次性）高一個數量級，
+# 讓一個組織底下開好幾個品牌、每個都在跑建檔精靈／廣告生成時不會平白被擋，但仍然是
+# 「就算整月忘記調整，操作者也賠得起」的量級（20 個品牌同時打滿全期精靈預算才會碰到）。
+# 這是本票作者提出的數字，不是使用者定案——設定頁可隨時調整。
+DEFAULT_AI_MONTHLY_COST_LIMIT = 200.0
 
 
 def get_setting(conn: db.Conn | None, key: str, default=None, *, org_id: str):
@@ -68,26 +90,109 @@ def set_setting(conn: db.Conn, key: str, value: str, *, org_id: str) -> None:
     conn.commit()
 
 
-def get_api_key(conn: db.Conn | None = None, *, org_id: str) -> str | None:
-    """AI 金鑰：環境變數 ANTHROPIC_API_KEY 優先 > DB 設定回退 > None（代表尚未設定）。
+@dataclass(frozen=True)
+class AiCredentials:
+    """resolve_ai_credentials() 的回傳形狀（票 04-1a，D4-3）：誰的金鑰、要不要管月費上限，
+    一次問清楚，呼叫端不必自己再判斷 source 的字面值。"""
 
-    修憲落地 M4：優先序反轉。環境變數不落地在任何檔案；DB 裡的金鑰是明文，
-    而決策 0008 指示使用者把整個 `backups/` 資料夾同步進雲端硬碟，明文金鑰會跟著
-    每日備份外流。環境變數優先，才不會出現「使用者已經設好環境變數，AI 功能卻仍在
-    偷用 DB 裡那把舊金鑰」的情況。
+    api_key: str | None  # None＝沒設定，呼叫端既有的優雅缺席處理照舊生效
+    source: str  # 'platform' | 'own'
+    cap_applies: bool  # True＝操作者付錢，月費上限是硬性關卡；False＝上限只是參考數字
+
+
+def resolve_ai_credentials(conn: db.Conn | None, *, org_id: str) -> AiCredentials:
+    """誰的金鑰付錢、月費上限管不管得到——集中在這裡回答一次（票 04-1a，D4-3）。
+
+    'platform'（預設，DB 沒設這把鍵時）：跟修憲落地 M4 以前的 get_api_key() 完全同一套
+    優先序——環境變數 ANTHROPIC_API_KEY 優先，DB 設定回退——操作者的錢付這筆帳，月費上限
+    是硬性關卡（cap_applies=True）。
+
+    'own'：組織自帶金鑰付錢（Vault 儲存是 04-2 的事，這裡先讀 API_KEY_SETTING 這個既有
+    DB 欄位——今天金鑰放哪裡不變，只是「誰付錢」的認定變了）。刻意不看環境變數：那是
+    操作者自己的金鑰，'own' 層的組織不能偷用，否則「上限只是參考數字」會變成操作者
+    平白倒貼的免費額度。月費上限只顯示、不擋（cap_applies=False）。
+
+    DB 裡存了看不懂的值（設定打錯字）→ 當 'platform' 處理並記警告，不讓 AI 功能因為
+    一個打錯的字整個掛掉（誠實狀態，principles 第 16 條：能繼續運作就不裝死）。
     """
-    return os.environ.get(API_KEY_ENV_VAR) or get_setting(conn, API_KEY_SETTING, org_id=org_id) or None
+    raw_source = get_setting(conn, AI_KEY_SOURCE_SETTING, org_id=org_id)
+    if raw_source in _AI_KEY_SOURCES:
+        source = raw_source
+    else:
+        if raw_source:
+            logger.warning(
+                "org %s 的 %s 設定值不是合法值：%r，當作 'platform' 處理",
+                org_id, AI_KEY_SOURCE_SETTING, raw_source,
+            )
+        source = "platform"
+
+    if source == "own":
+        api_key = get_setting(conn, API_KEY_SETTING, org_id=org_id) or None
+        return AiCredentials(api_key=api_key, source="own", cap_applies=False)
+
+    api_key = os.environ.get(API_KEY_ENV_VAR) or get_setting(conn, API_KEY_SETTING, org_id=org_id) or None
+    return AiCredentials(api_key=api_key, source="platform", cap_applies=True)
+
+
+def get_api_key(conn: db.Conn | None = None, *, org_id: str) -> str | None:
+    """AI 金鑰：厚度為零的包裝，實際邏輯全部在 resolve_ai_credentials()（票 04-1a）。
+
+    既有呼叫端（intake、providers…）不用跟著改：'platform' 層（今天唯一有資料的層）
+    的優先序跟修憲落地 M4 那版一模一樣——環境變數 ANTHROPIC_API_KEY 優先 > DB 設定
+    回退 > None（代表尚未設定）。
+    """
+    return resolve_ai_credentials(conn, org_id=org_id).api_key
 
 
 def api_key_source(conn: db.Conn | None = None, *, org_id: str) -> str | None:
-    """get_api_key() 實際採用的來源：'env'（環境變數，安全）／'db'（資料庫回退，明文、
-    會被備份）／None（兩邊都沒設）。設定頁靠這個誠實顯示金鑰來源，不讓使用者以為
-    改用了環境變數、其實系統還在用 DB 裡的舊值（修憲落地 M4）。"""
-    if os.environ.get(API_KEY_ENV_VAR):
-        return "env"
-    if get_setting(conn, API_KEY_SETTING, org_id=org_id):
+    """目前生效的金鑰實際放在哪裡：'env'（環境變數，安全）／'db'（資料庫，明文、會被
+    備份）／None（兩邊都沒設）。設定頁靠這個誠實顯示金鑰來源，不讓使用者以為改用了
+    環境變數、其實系統還在用 DB 裡的舊值（修憲落地 M4）。
+
+    這是「金鑰實際存放位置」的誠實回報，跟 resolve_ai_credentials() 的 source
+    （'platform'／'own'，「誰付錢」）是不同的問題——見票 04-1a：'own' 層的組織一定是
+    讀 DB（該層刻意不看環境變數，見 resolve_ai_credentials() 說明），這裡照實回報
+    'db'，不會因為操作者剛好也設了環境變數就誤報成 'env'。
+    """
+    creds = resolve_ai_credentials(conn, org_id=org_id)
+    if creds.api_key is None:
+        return None
+    if creds.source == "own":
         return "db"
-    return None
+    return "env" if os.environ.get(API_KEY_ENV_VAR) else "db"
+
+
+def get_ai_monthly_cost_limit(conn: db.Conn | None = None, *, org_id: str) -> float:
+    """組織每月 AI 花費上限（US$），DB 設定 > DEFAULT_AI_MONTHLY_COST_LIMIT（票 04-1a）。
+
+    壞值（空字串、非數字）當作沒設定，回預設值——設定頁壞一格不該讓 AI 功能整個打不開
+    （比照 get_intake_budget_limit() 同一套容錯）。
+    """
+    raw = get_setting(conn, AI_MONTHLY_COST_LIMIT_SETTING, org_id=org_id)
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return DEFAULT_AI_MONTHLY_COST_LIMIT
+
+
+def org_ai_spent_this_month(conn: db.Conn, *, org_id: str, since: str) -> float:
+    """這個組織這個月已經花了多少 AI 費用（US$，累加全組織所有品牌成功呼叫的
+    llm_task.cost；票 04-1a，D4-2／D4-3）。
+
+    跟 brand_llm_spent() 是兩道不同的關卡，刻意不合併：brand_llm_spent() 是單一品牌、
+    all-time，保護的是客戶自己設的品牌預算；這裡是整個組織、當月，保護的是操作者的
+    帳單（操作者付的是 'platform' 層每個組織每個月的總帳，不分品牌）。
+
+    since 由呼叫端算好傳入（當月 1 號的時間戳記字串），這裡不呼叫 db.now_utc() 或
+    date.today()——比照 app/dashboard/repository.py `today` 參數的既有慣例：呼叫端在
+    正式路徑用真實時鐘算，測試可以帶假的 since 精準驗證月份邊界，不必等到月初才測得到。
+    """
+    row = conn.execute(
+        "SELECT SUM(cost) AS n FROM llm_task WHERE org_id = %s AND status = 'succeeded'"
+        " AND started_at >= %s",
+        (org_id, since),
+    ).fetchone()
+    return float(row["n"] or 0.0)
 
 
 def clear_api_key_from_db(conn: db.Conn, *, org_id: str) -> None:

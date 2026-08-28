@@ -22,9 +22,9 @@ import re
 from dataclasses import dataclass
 
 from app.brand_intelligence import repository as bi_repo
-from app.core import db
+from app.core import db, settings
 from app.llm import pricing, providers
-from app.llm.providers import Provider, ProviderError, ProviderTimeoutError
+from app.llm.providers import Provider, ProviderError, ProviderTimeoutError, SpendCapExceededError
 
 
 def parse_json_reply(text: str):
@@ -169,6 +169,21 @@ def run_task(
     if brand is None:
         raise ValueError(f"找不到品牌：{brand_id}")
     org_id = brand["org_id"]
+
+    # 組織每月 AI 花費上限（票 04-1a，D4-2／D4-3）：在還沒寫入 llm_task 列、還沒打
+    # provider 之前擋下——命中就沒有任何一筆多出來的紀錄或費用。只有 cap_applies=True
+    # （'platform' 層，操作者付錢）才擋；'own' 層的組織自己付錢，上限只是參考數字，
+    # 見 resolve_ai_credentials()。已經在跑的那次呼叫不受影響，只擋下一次。
+    ai_creds = settings.resolve_ai_credentials(conn, org_id=org_id)
+    if ai_creds.cap_applies:
+        limit = settings.get_ai_monthly_cost_limit(conn, org_id=org_id)
+        since = db.now_utc().strftime("%Y-%m-01T00:00:00")
+        spent = settings.org_ai_spent_this_month(conn, org_id=org_id, since=since)
+        if spent >= limit:
+            raise SpendCapExceededError(
+                f"這個月的 AI 用量已達上限（US$ {spent:.2f}／US$ {limit:.2f}），"
+                "到「設定」頁調整上限後才能繼續。"
+            )
 
     opts = options or TaskOptions()
     model = providers.resolve_model(opts.model, task_type=task_type, conn=conn, brand_id=brand_id)

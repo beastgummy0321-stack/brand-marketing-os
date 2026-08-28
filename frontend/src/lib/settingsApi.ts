@@ -31,6 +31,17 @@ export interface SettingsData {
   creative_root: string;
   prompt_header: string;
   intake_budget: number;
+  /** 誰的金鑰付錢（票 04-1a，D4-3）：'platform'＝操作者付錢（今天預設）；
+   * 'own'＝組織自己的金鑰付錢，月費上限只是參考數字（ai_cap_applies＝false）。 */
+  ai_key_source: "platform" | "own";
+  ai_cap_applies: boolean;
+  /** 這個月整個組織已花的 AI 費用（US$，不分品牌）。 */
+  ai_monthly_spend: number;
+  /** 組織每月 AI 花費上限（US$）——跟上面 intake_budget（單一品牌、全期）是不同的
+   * 兩道關卡，見 AssetsSection／ApiKeySection 的標籤文案。 */
+  ai_monthly_cost_limit: number;
+  /** 目前登入者是不是這個組織的擁有者——AI 月費上限只有 owner 可以改。 */
+  is_owner: boolean;
 }
 
 export interface RuleCardField {
@@ -138,6 +149,10 @@ export function savePromptHeader(promptHeader: string): Promise<void> {
 
 export function saveBudget(intakeBudget: number): Promise<void> {
   return postSettings("budget", { intake_budget: intakeBudget });
+}
+
+export function saveAiMonthlyCostLimit(limit: number): Promise<void> {
+  return postSettings("ai-monthly-cost-limit", { ai_monthly_cost_limit: limit });
 }
 
 export async function fetchMetaMcpStatus(): Promise<MetaMcpSettingsData> {

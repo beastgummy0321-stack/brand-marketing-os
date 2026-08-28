@@ -99,7 +99,7 @@ export function AssetsSection({ data, onSaved }: { data: SettingsData; onSaved: 
       </div>
 
       <div className="flex flex-col gap-2 border-t border-border pt-4">
-        <h3 className="text-sm font-medium text-foreground">花費上限</h3>
+        <h3 className="text-sm font-medium text-foreground">單一品牌的花費上限</h3>
         <form
           className="flex flex-col gap-4"
           onSubmit={(e) => {
@@ -108,7 +108,7 @@ export function AssetsSection({ data, onSaved }: { data: SettingsData; onSaved: 
           }}
         >
           <label className="flex flex-col gap-1 text-sm">
-            <span className="font-medium text-foreground">AI 生成的花費上限</span>
+            <span className="font-medium text-foreground">建檔精靈等 AI 生成的花費上限</span>
             <div className="flex items-center gap-2">
               <span className="text-muted-foreground">US$</span>
               <input
@@ -122,7 +122,8 @@ export function AssetsSection({ data, onSaved }: { data: SettingsData; onSaved: 
               />
             </div>
             <span className="text-xs text-muted-foreground">
-              累計花費達到上限時會先停下來問你，不會直接繼續花錢。
+              只管單一品牌、只算這個品牌從頭到現在的累計花費，不會每月歸零；累計達到上限時會先停下來問你，
+              不會直接繼續花錢。跟「AI 金鑰」小節裡整個組織每月自動歸零的上限是不同的兩道關卡。
             </span>
           </label>
           {budgetForm.error && <p className="text-sm text-danger">{budgetForm.error}</p>}

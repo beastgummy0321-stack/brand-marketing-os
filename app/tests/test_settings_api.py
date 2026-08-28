@@ -10,6 +10,7 @@ AnthropicProvider／pricing 直接單元測試（不經 HTTP 路由，票 T4 A4 
 import os
 import unittest
 from unittest import mock
+from uuid import uuid4
 
 from fastapi.testclient import TestClient
 
@@ -19,7 +20,10 @@ from app.ads import ga4_api, ga4_sync, meta_api
 from app.ads import sync as ads_sync
 from app.core import db as coredb
 from app.core import settings as coresettings
+from app.identity import repository as identity_repo
 from app.llm import pricing, providers
+
+from .identity_test_helpers import mint_hs256
 
 TEST_KEY = "sk-ant-test-0000-1234abcd"
 
@@ -27,6 +31,7 @@ SETTINGS_DATA_KEYS = {
     "masked_key", "api_key_source", "db_key_present", "model_choices", "current_model",
     "task_model_thinking_table", "masked_meta_token", "meta_account_id", "masked_ga4_key",
     "ga4_property_id", "creative_root", "prompt_header", "intake_budget",
+    "ai_key_source", "ai_cap_applies", "ai_monthly_spend", "ai_monthly_cost_limit", "is_owner",
 }
 
 
@@ -64,6 +69,15 @@ class SettingsApiTest(unittest.TestCase):
             {"task_label", "model_label", "thinking_label"},
         )
         self.assertIsInstance(body["data"]["intake_budget"], (int, float))
+        # 票 04-1a：預設沒設過 ai_key_source → 'platform'（操作者付錢），上限是硬性關卡，
+        # 這個月還沒花錢，上限用系統預設值。dev token 固定是 org_dev 的 owner（見
+        # app/identity/__init__.py _dev_actor），is_owner 應該是 True。
+        self.assertEqual(body["data"]["ai_key_source"], "platform")
+        self.assertTrue(body["data"]["ai_cap_applies"])
+        self.assertEqual(body["data"]["ai_monthly_spend"], 0)
+        self.assertEqual(
+            body["data"]["ai_monthly_cost_limit"], coresettings.DEFAULT_AI_MONTHLY_COST_LIMIT)
+        self.assertTrue(body["data"]["is_owner"])
 
     def test_get_settings_reflects_saved_values(self):
         coresettings.set_setting(web.conn, coresettings.API_KEY_SETTING, TEST_KEY, org_id=coredb.DEV_ORG_ID)
@@ -241,6 +255,54 @@ class SettingsApiTest(unittest.TestCase):
         self.assertTrue(body["db_key_present"])  # DB 仍有舊金鑰，清除路徑仍該可用
         self.assertEqual(body["masked_key"], "…hown")  # 遮罩後只露末四碼
         self.assertNotIn("env-only-value-not-shown", str(body))
+
+    # -- 票 04-1a：AI 月費上限（組織每月，D4-2／D4-3）------------------------------
+
+    def test_ai_monthly_cost_limit_owner_can_save(self):
+        resp = self.client.post(
+            "/api/settings/ai-monthly-cost-limit", json={"ai_monthly_cost_limit": 350})
+        self.assertEqual(resp.status_code, 200, resp.text)
+        self.assertEqual(
+            self.client.get("/api/settings").json()["data"]["ai_monthly_cost_limit"], 350)
+
+    def test_ai_monthly_cost_limit_rejects_non_positive(self):
+        resp = self.client.post(
+            "/api/settings/ai-monthly-cost-limit", json={"ai_monthly_cost_limit": 0})
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("大於 0", resp.json()["error"])
+
+    def test_ai_monthly_cost_limit_requires_owner(self):
+        """比照 test_identity_orgs.py::test_rename_requires_owner 同一套：member 角色不能
+        調整這個上限——這是操作者的錢包保護閥，不是品牌層設定。"""
+        member_id = uuid4()
+        member_token = mint_hs256(
+            sub=str(member_id), email=f"member-{member_id.hex[:8]}@example.com")
+        identity_repo.create_user(web.conn, member_id, f"member-{member_id.hex[:8]}@example.com")
+        identity_repo.create_membership(web.conn, coredb.DEV_ORG_ID, member_id, "member")
+        web.conn.commit()
+        resp = self.client.post(
+            "/api/settings/ai-monthly-cost-limit",
+            json={"ai_monthly_cost_limit": 999},
+            headers={"Authorization": f"Bearer {member_token}", "X-Org-Id": coredb.DEV_ORG_ID},
+        )
+        self.assertEqual(resp.status_code, 403)
+
+    def test_ai_key_source_own_tier_reports_advisory_cap(self):
+        """'own' 層（票 04-1a D4-3）：cap_applies 變 False，api_key_source 誠實回報實體
+        存放位置＝'db'（該層刻意不看環境變數，見 resolve_ai_credentials() 說明）。"""
+        coresettings.set_setting(
+            web.conn, coresettings.AI_KEY_SOURCE_SETTING, "own", org_id=coredb.DEV_ORG_ID)
+        coresettings.set_setting(web.conn, coresettings.API_KEY_SETTING, TEST_KEY, org_id=coredb.DEV_ORG_ID)
+        os.environ["ANTHROPIC_API_KEY"] = "operator-env-key-should-not-leak-to-own-tier"
+        try:
+            body = self.client.get("/api/settings").json()["data"]
+        finally:
+            os.environ.pop("ANTHROPIC_API_KEY", None)
+        self.assertEqual(body["ai_key_source"], "own")
+        self.assertFalse(body["ai_cap_applies"])
+        self.assertEqual(body["api_key_source"], "db")
+        self.assertEqual(
+            coresettings.get_api_key(web.conn, org_id=coredb.DEV_ORG_ID), TEST_KEY)
 
     def test_ai_test_connection_failure_returns_danger_kind(self):
         """金鑰錯誤：danger kind + 人話訊息原樣透出（原 test_test_connection_key_error_shows_human_message）。"""

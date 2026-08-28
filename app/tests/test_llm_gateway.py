@@ -14,12 +14,14 @@ import anthropic
 from app.ads import repository as ads_repo
 from app.brand_intelligence import repository as repo
 from app.core import db, rule_cards
+from app.core import settings as coresettings
 from app.llm import context_compiler, gateway, pricing, providers
 from app.llm.providers import (
     FakeProvider,
     ProviderError,
     ProviderResponse,
     ProviderTimeoutError,
+    SpendCapExceededError,
     Usage,
 )
 
@@ -769,6 +771,155 @@ class CostCeilingTest(unittest.TestCase):
         real = pricing.calculate_cost("claude-haiku-4-5", 0, 5_000)
         ceiling = pricing.cost_ceiling("claude-haiku-4-5", 5_000)
         self.assertAlmostEqual(real, ceiling)
+
+
+ORG_A_04_1A = "org_04_1a_test_a"
+ORG_B_04_1A = "org_04_1a_test_b"
+
+
+class AiSpendCapGateTest(unittest.TestCase):
+    """票 04-1a（D4-2／D4-3）：組織每月 AI 花費上限是硬性關卡，`run_task()` 是全站
+    唯一的把關處——命中上限時，命中前不能有任何一筆 llm_task 紀錄、也不能真的打到
+    provider（這是操作者的錢，不是警告）。
+
+    刻意不用 db.DEV_ORG_ID：這個檔案裡其他測試類別也拿 DEV_ORG_ID 跑真的 run_task()、
+    寫下真的 llm_task 成功列，跟這裡要精算的「這個月花了多少」算同一個組織會互相汙染
+    （撞過：算出來的花費多了其他測試種下去的錢）。改用兩個本票專屬、跟既有測試完全不共用
+    的組織 id，比照 test_settings_org_scope.py 的 ORG_A／ORG_B 寫法。"""
+
+    def setUp(self):
+        self.conn = db.current()
+        for org_id in (ORG_A_04_1A, ORG_B_04_1A):
+            self.conn.execute(
+                "INSERT INTO organisation (id, name, kind) VALUES (%s, %s, 'personal')"
+                " ON CONFLICT (id) DO NOTHING",
+                (org_id, org_id),
+            )
+        self.conn.commit()
+        self.brand = repo.create_brand(
+            self.conn, name="品牌A（花費上限測試）", client_name=None, actor="小陳",
+            org_id=ORG_A_04_1A)
+        self.brand_b = repo.create_brand(
+            self.conn, name="品牌B（另一組織，花費上限測試）", client_name=None, actor="小李",
+            org_id=ORG_B_04_1A)
+
+    def tearDown(self):
+        self.conn.execute(
+            "DELETE FROM llm_task WHERE org_id IN (%s, %s)", (ORG_A_04_1A, ORG_B_04_1A))
+        self.conn.execute(
+            "DELETE FROM app_setting WHERE org_id IN (%s, %s)", (ORG_A_04_1A, ORG_B_04_1A))
+        # repo.create_brand() 順手寫了一筆 audit_log（org_id 有 FK 指回 organisation），
+        # 刪 organisation 前要先清掉，否則違反外鍵約束（實測撞過）。
+        self.conn.execute(
+            "DELETE FROM audit_log WHERE org_id IN (%s, %s)", (ORG_A_04_1A, ORG_B_04_1A))
+        self.conn.execute(
+            "DELETE FROM brand WHERE org_id IN (%s, %s)", (ORG_A_04_1A, ORG_B_04_1A))
+        self.conn.execute(
+            "DELETE FROM organisation WHERE id IN (%s, %s)", (ORG_A_04_1A, ORG_B_04_1A))
+        self.conn.commit()
+
+    def _context(self, brand: dict) -> gateway.TaskContext:
+        return gateway.TaskContext(
+            context_scope={"brand_id": brand["id"]}, knowledge_item_ids=[],
+            brand_version=brand["knowledge_version"], product_version=None)
+
+    def _seed_spend(self, org_id: str, brand_id: str, cost: float, started_at: str) -> None:
+        """比照 app/tests/test_dashboard_cockpit.py `_spend()` 同一套直接種 llm_task 列
+        （succeeded、任意 task_type），不經 run_task()——這裡要驗的是「已經花掉的錢」，
+        不是某一次呼叫本身。"""
+        self.conn.execute(
+            "INSERT INTO llm_task (id, org_id, brand_id, task_type, context_scope_json,"
+            " input_context_ids_json, input_context_hash, knowledge_item_ids_json,"
+            " brand_version, prompt_template_id, prompt_template_version, provider, model,"
+            " status, attempt_no, cost, started_at, finished_at)"
+            " VALUES (%s, %s, %s, 't', '{}', '[]', '', '[]', 1, 'p', 'v1', 'seed', 'seed',"
+            " 'succeeded', 1, %s, %s, %s)",
+            (db.new_id("llm"), org_id, brand_id, cost, started_at, started_at),
+        )
+        self.conn.commit()
+
+    def _run(self, brand: dict, provider) -> dict:
+        return gateway.run_task(
+            self.conn, provider, brand_id=brand["id"], task_type="analyzeBrandContext",
+            prompt_template_id="tpl_cap_test", prompt_template_version="v1", system=None,
+            messages=[{"role": "user", "content": "hi"}], context=self._context(brand),
+        )
+
+    # -- 驗收 4：超過上限就擋，擋在打 provider 跟寫 running 列之前 -----------------------
+
+    def test_over_cap_refuses_before_any_charge(self):
+        coresettings.set_setting(
+            self.conn, coresettings.AI_MONTHLY_COST_LIMIT_SETTING, "10", org_id=ORG_A_04_1A)
+        now = db.now_utc()
+        self._seed_spend(ORG_A_04_1A, self.brand["id"], 10.0, now.strftime("%Y-%m-02T00:00:00"))
+        fake = FakeProvider()
+
+        with self.assertRaises(SpendCapExceededError) as ctx:
+            self._run(self.brand, fake)
+
+        self.assertIn("US$ 10.00／US$ 10.00", str(ctx.exception))
+        self.assertEqual(fake.calls, [], "命中上限不該真的打到 provider")
+        rows = self.conn.execute(
+            "SELECT count(*) AS n FROM llm_task WHERE brand_id = %s", (self.brand["id"],)
+        ).fetchone()
+        self.assertEqual(rows["n"], 1, "只該有 setUp 種下去那一列，不該多一筆 running 列")
+
+    # -- 驗收 5：跨月不算，只看當月 1 號以後 --------------------------------------------
+
+    def test_month_rollover_only_counts_this_months_spend(self):
+        coresettings.set_setting(
+            self.conn, coresettings.AI_MONTHLY_COST_LIMIT_SETTING, "10", org_id=ORG_A_04_1A)
+        now = db.now_utc()
+        # 顯式算上個月的邊界（跨年也對）：這個月 1 號往前一天，一定是上個月的某一天；
+        # 固定塞成 15 號──每個月都有 15 號，不必擔心 2 月 30 號這種不存在的日期。
+        last_month_boundary = now.replace(day=1) - timedelta(days=1)
+        self._seed_spend(
+            ORG_A_04_1A, self.brand["id"], 999.0,
+            last_month_boundary.strftime("%Y-%m-15T00:00:00"))
+        self._seed_spend(
+            ORG_A_04_1A, self.brand["id"], 3.0, now.strftime("%Y-%m-02T00:00:00"))
+        fake = FakeProvider()
+
+        row = self._run(self.brand, fake)
+
+        self.assertEqual(row["status"], "succeeded", "上個月花的 999 不該算進這個月的上限")
+        self.assertEqual(len(fake.calls), 1)
+
+    # -- 驗收 6：各組織互不影響 ----------------------------------------------------------
+
+    def test_org_over_cap_does_not_block_another_org(self):
+        coresettings.set_setting(
+            self.conn, coresettings.AI_MONTHLY_COST_LIMIT_SETTING, "10", org_id=ORG_A_04_1A)
+        now = db.now_utc()
+        self._seed_spend(ORG_A_04_1A, self.brand["id"], 999.0, now.strftime("%Y-%m-02T00:00:00"))
+        fake = FakeProvider()
+
+        with self.assertRaises(SpendCapExceededError):
+            self._run(self.brand, fake)
+
+        row = self._run(self.brand_b, fake)  # 另一個組織，沒種過任何花費，用預設上限
+        self.assertEqual(row["status"], "succeeded")
+        self.assertEqual(len(fake.calls), 1)
+
+    # -- 驗收 7：'own' 層不受上限阻擋（上限只是參考數字） --------------------------------
+
+    def test_own_tier_is_never_gated_even_when_over_cap(self):
+        coresettings.set_setting(
+            self.conn, coresettings.AI_KEY_SOURCE_SETTING, "own", org_id=ORG_A_04_1A)
+        coresettings.set_setting(
+            self.conn, coresettings.AI_MONTHLY_COST_LIMIT_SETTING, "1", org_id=ORG_A_04_1A)
+        now = db.now_utc()
+        self._seed_spend(ORG_A_04_1A, self.brand["id"], 999.0, now.strftime("%Y-%m-02T00:00:00"))
+        fake = FakeProvider()
+
+        row = self._run(self.brand, fake)
+
+        self.assertEqual(row["status"], "succeeded", "'own' 層的上限只是參考數字，不該被擋")
+        self.assertEqual(len(fake.calls), 1)
+        # 「用組織自己的金鑰，不是操作者的環境變數金鑰」這個主張本身在資源層直接驗證
+        # （見 app/tests/test_settings_api.py::test_ai_key_source_own_tier_reports_advisory_cap，
+        # 用真的操作者 env 值＋org 存的 DB 值同框，證明 get_api_key() 回的是後者）——
+        # 這裡只驗「不擋」，兩層各自證各自的主張，不重複組一份一樣的斷言。
 
 
 if __name__ == "__main__":

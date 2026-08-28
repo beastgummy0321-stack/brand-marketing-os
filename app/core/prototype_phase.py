@@ -21,9 +21,9 @@ FLAG_SETTING = "prototype_phase_ended_at"
 EXEMPTIONS = [
     {
         "item": "明文 API 金鑰入庫",
-        "status": "修憲落地 M4 已把環境變數 ANTHROPIC_API_KEY 設為優先來源"
-                  "（app/core/settings.py get_api_key）；DB 回退仍會存明文、仍隨 backups/ 外流"
-                  "（決策 0008）。待決：要不要拿掉 DB 回退這條路徑。",
+        "status": "修憲落地 M4 已把操作者的環境變數金鑰設為優先來源"
+                  "（app/core/settings.py get_api_key／resolve_ai_credentials）；DB 回退仍會"
+                  "存明文、仍隨 backups/ 外流（決策 0008）。待決：要不要拿掉 DB 回退這條路徑。",
     },
     {
         "item": "全域單一無鎖連線",

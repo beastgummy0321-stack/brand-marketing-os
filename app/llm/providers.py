@@ -239,6 +239,14 @@ class ProviderTimeoutError(ProviderError):
     """逾時（對應 llm_task.status = timeout，與其他失敗的 status = failed 區分）。"""
 
 
+class SpendCapExceededError(ProviderError):
+    """這個月的 AI 花費已經到操作者付費上限（票 04-1a，D4-2／D4-3）。gateway.run_task()
+    在還沒寫入 llm_task 列、還沒呼叫 provider.complete() 之前就拋出這個型別（在重試迴圈
+    最外層，不是迴圈裡的 try/except 包住的那段），所以不會被當成一次失敗嘗試而重試、
+    也不會有任何一筆多出來的紀錄或費用——跟 ProviderTimeoutError 一樣是 ProviderError
+    的子類別，呼叫端不用另外認得一個新型別家族。"""
+
+
 @dataclass
 class Usage:
     """對齊 docs/design/06-llm-gateway.md 的 TokenUsage 形狀。"""
