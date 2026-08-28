@@ -1,0 +1,68 @@
+name: CI
+
+# ADR 0027 appendix A / ticket 02-7. Affected-only test selection on PRs is a
+# later optimisation (not done here) — both pull_request and push run the
+# full backend suite.
+on:
+  pull_request:
+  push:
+    branches: [saas, master]
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10
+        with:
+          enable-cache: true
+
+      - run: uv sync --frozen
+
+      # test_react_shell_routes.py skips itself when frontend/dist is missing
+      # (SPA fallback route needs the built assets) — build it so that test
+      # actually runs instead of being silently skipped in CI.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build frontend (for test_react_shell_routes.py)
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Install Supabase CLI
+        uses: supabase/setup-cli@v3
+
+      - run: supabase start
+
+      - run: uv run ruff check app
+
+      - run: uv run pyright
+
+      - run: uv run pytest app/tests -q -n auto --dist loadfile
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - run: npm ci
+      - run: npm run lint
+      - run: npx tsc -b --noEmit
+      - run: npm test
+      - run: npm run build
