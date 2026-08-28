@@ -61,7 +61,7 @@ class JobRegistry:
         # BUG 修復（route=C 02-3c）：contextvar 不會被原生 threading.Thread 繼承，target()
         # 裡任何一次 web.conn／db 呼叫都會炸 RuntimeError: no connection bound。這裡是唯一
         # 啟動背景執行緒的進入點，所以在這裡包一層 with core_db.connection()，而不是要求
-        # 每個呼叫端的 target 自己記得包（同 app/main.py 02-1 的 _auto_sync_loop 寫法）。
+        # 每個呼叫端的 target 自己記得包（02-1 起的慣例；原參考實作已隨 app/ads/ 刪除）。
         def _run() -> None:
             with core_db.connection():
                 target(*args)
