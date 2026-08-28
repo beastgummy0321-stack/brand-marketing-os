@@ -15,6 +15,7 @@
 ## 第 ④ 片：設定與憑證（需批准：schema）
 
 - [ ] **04-0（插隊，先做）** `app/core/settings.py:44` 讀設定沒帶 `org_id`（`WHERE key = %s`）＝跨組織讀取，21 個呼叫點；Meta token／GA4 憑證／Anthropic 金鑰／花費上限都走這條。計畫見 .scratch/saas/tickets/04-plan.md
+- [ ] 04-0b `app/ads/sync.py:457-459` `claim()`／`:486-487` `ignore()`：`SELECT * FROM discovered_campaign WHERE id = %s` 沒篩 org_id，唯一邊界是品牌層的 `claimed_brand_id != brand_id`——猜中 id 就能碰到別組織未認領的活動（04-0 §3 鄰居掃描發現）
 - [ ] 04-1 `app_setting` 改組織層；pydantic-settings 收環境變數；組織層模型選擇；AI 用量／成本上限按組織；`llm_task` 記方法論檔集雜湊（prompt 版本）；**組織時區**設定——02-3c 把排程「今天」改成伺服器本地時間（`app/main.py`、`ads/auto_sync.py`），SaaS 上要改成組織時區
 - [ ] 04-2 已連接帳號（組織）→ 綁定（品牌）；Meta／GA4 憑證進 Vault；順手補 K1（`tracking.py` INSERT 寫 `meta_ad_id`）
 
