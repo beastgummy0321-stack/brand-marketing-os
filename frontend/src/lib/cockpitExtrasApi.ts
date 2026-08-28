@@ -1,3 +1,5 @@
+import { apiFetch } from "./http";
+
 export interface CockpitLegacyCard {
   key: "wisdom" | "effective_direction" | "prohibition" | "material_stock" | "customer_understanding";
   value: number | boolean;
@@ -16,7 +18,7 @@ export interface CockpitExtras {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(path, init);
+  const response = await apiFetch(path, init);
   if (!response.ok) throw new Error(`讀取失敗（狀態碼 ${response.status}）`);
   return response.json() as Promise<T>;
 }

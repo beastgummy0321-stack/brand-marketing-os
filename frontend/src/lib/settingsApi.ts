@@ -3,6 +3,7 @@
  * {data, generated_at}，見 lib/api.ts `Envelope<T>`。表單欄位名沿用既有 Jinja 表單
  * （settings.html／settings_ads.html）的既有欄位名，不自創命名。 */
 import { fetchOverview } from "./api";
+import { apiFetch } from "./http";
 
 export interface ModelChoice {
   id: string;
@@ -85,7 +86,7 @@ interface Envelope<T> {
 }
 
 export async function fetchSettings(): Promise<SettingsData> {
-  const res = await fetch("/api/settings");
+  const res = await apiFetch("/api/settings");
   if (!res.ok) {
     throw new Error(`設定讀取失敗（狀態碼 ${res.status}）`);
   }
@@ -94,7 +95,7 @@ export async function fetchSettings(): Promise<SettingsData> {
 }
 
 async function postSettings(path: string, body: Record<string, unknown>): Promise<void> {
-  const res = await fetch(`/api/settings/${path}`, {
+  const res = await apiFetch(`/api/settings/${path}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -140,7 +141,7 @@ export function saveBudget(intakeBudget: number): Promise<void> {
 }
 
 export async function fetchMetaMcpStatus(): Promise<MetaMcpSettingsData> {
-  const res = await fetch("/api/settings/meta-mcp");
+  const res = await apiFetch("/api/settings/meta-mcp");
   if (!res.ok) {
     throw new Error(`讀取失敗（狀態碼 ${res.status}）`);
   }
@@ -149,7 +150,7 @@ export async function fetchMetaMcpStatus(): Promise<MetaMcpSettingsData> {
 }
 
 export async function saveMetaMcpPage(pageId: string): Promise<void> {
-  const res = await fetch("/api/settings/meta-mcp/page", {
+  const res = await apiFetch("/api/settings/meta-mcp/page", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ page_id: pageId }),
@@ -167,13 +168,13 @@ export async function saveMetaMcpPage(pageId: string): Promise<void> {
 }
 
 export async function fetchStylePreference(brandId: string): Promise<{ text: string }> {
-  const res = await fetch(`/api/settings/brands/${encodeURIComponent(brandId)}/style-preference`);
+  const res = await apiFetch(`/api/settings/brands/${encodeURIComponent(brandId)}/style-preference`);
   if (!res.ok) throw new Error(`風格偏好讀取失敗（狀態碼 ${res.status}）`);
   return res.json() as Promise<{ text: string }>;
 }
 
 export async function saveStylePreference(brandId: string, text: string): Promise<{ text: string }> {
-  const res = await fetch(`/api/settings/brands/${encodeURIComponent(brandId)}/style-preference`, {
+  const res = await apiFetch(`/api/settings/brands/${encodeURIComponent(brandId)}/style-preference`, {
     method: "PUT",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ text }),
@@ -199,7 +200,7 @@ export async function fetchBrandOptions(): Promise<BrandOption[]> {
 }
 
 export async function fetchRuleCards(brandId: string): Promise<RuleCardsData> {
-  const res = await fetch(`/api/settings/rule-cards/brands/${encodeURIComponent(brandId)}`);
+  const res = await apiFetch(`/api/settings/rule-cards/brands/${encodeURIComponent(brandId)}`);
   if (!res.ok) {
     throw new Error(`規則卡讀取失敗（狀態碼 ${res.status}）`);
   }
@@ -212,7 +213,7 @@ export async function saveRuleCard(
   cardKey: string,
   fields: Record<string, number>,
 ): Promise<RuleCard> {
-  const res = await fetch(
+  const res = await apiFetch(
     `/api/settings/rule-cards/brands/${encodeURIComponent(brandId)}/${encodeURIComponent(cardKey)}`,
     {
       method: "POST",
@@ -228,7 +229,7 @@ export async function saveRuleCard(
 }
 
 export async function resetRuleCard(brandId: string, cardKey: string): Promise<RuleCard> {
-  const res = await fetch(
+  const res = await apiFetch(
     `/api/settings/rule-cards/brands/${encodeURIComponent(brandId)}/${encodeURIComponent(cardKey)}/reset`,
     { method: "POST" },
   );
@@ -252,7 +253,7 @@ export interface CalendarCategoriesData {
 }
 
 export async function fetchCalendarCategories(brandId: string): Promise<CalendarCategoriesData> {
-  const res = await fetch(`/api/settings/calendar/brands/${encodeURIComponent(brandId)}`);
+  const res = await apiFetch(`/api/settings/calendar/brands/${encodeURIComponent(brandId)}`);
   if (!res.ok) {
     throw new Error(`節日提醒清單讀取失敗（狀態碼 ${res.status}）`);
   }
@@ -265,7 +266,7 @@ export async function toggleCalendarCategory(
   category: string,
   enabled: boolean,
 ): Promise<CalendarCategory> {
-  const res = await fetch(
+  const res = await apiFetch(
     `/api/settings/calendar/brands/${encodeURIComponent(brandId)}/${encodeURIComponent(category)}`,
     {
       method: "POST",

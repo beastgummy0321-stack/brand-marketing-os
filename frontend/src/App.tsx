@@ -1,8 +1,10 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { Link, Navigate, Route, Routes, useParams, useSearchParams } from "react-router-dom";
+import { Link, Navigate, Outlet, Route, Routes, useParams, useSearchParams } from "react-router-dom";
 import { AppShell } from "@/components/layout/AppShell";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { EmptyState } from "@/components/layout/EmptyState";
+import { AcceptInvitePage } from "@/components/auth/AcceptInvitePage";
+import { LoginPage } from "@/components/auth/LoginPage";
 import { CampaignListPage } from "@/components/campaigns/CampaignListPage";
 import { ClaimsPage } from "@/components/campaigns/ClaimsPage";
 import { DataOnboardingPage } from "@/components/onboarding/DataOnboardingPage";
@@ -23,6 +25,7 @@ import { WarroomPage } from "@/components/warroom/WarroomPage";
 import { MatrixPage } from "@/components/workbench/MatrixPage";
 import { WorkbenchPage } from "@/components/workbench/WorkbenchPage";
 import { fetchOverview, type DashboardBrandCard } from "@/lib/api";
+import { useSession } from "@/lib/auth";
 
 /** 新殼唯一進入點。路徑式路由（票 05-spa-routing，裝 react-router-dom，basename="/app"
  * 見 main.tsx）：`/` 是跨品牌總覽（票 02），`/brands/:brandId` 是單品牌駕駛艙（票 03）。
@@ -37,29 +40,57 @@ import { fetchOverview, type DashboardBrandCard } from "@/lib/api";
 function App() {
   return (
     <Routes>
-      <Route path="/" element={<RootRoute />} />
-      <Route path="/inbox" element={<InboxRoute />} />
-      <Route path="/settings" element={<SettingsRoute />} />
-      <Route path="/intake/new" element={<IntakeNewRoute />} />
-      <Route path="/brands/:brandId" element={<BrandRoute />} />
-      <Route path="/brands/:brandId/intake" element={<IntakeRoute />} />
-      <Route path="/brands/:brandId/library" element={<LibraryRoute />} />
-      <Route path="/brands/:brandId/products" element={<ProductListRoute />} />
-      <Route path="/brands/:brandId/products/:productId" element={<ProductDetailRoute />} />
-      <Route path="/brands/:brandId/orders" element={<OrdersRoute />} />
-      <Route path="/brands/:brandId/campaigns" element={<CampaignListRoute />} />
-      <Route path="/brands/:brandId/ads-claims" element={<ClaimsRoute />} />
-      <Route path="/brands/:brandId/data-onboarding" element={<DataOnboardingRoute />} />
-      <Route path="/brands/:brandId/learnings" element={<LearningsRoute />} />
-      <Route path="/brands/:brandId/campaigns/new" element={<WarroomNewRoute />} />
-      <Route path="/brands/:brandId/campaigns/:cycleId" element={<WarroomRoute />} />
-      <Route path="/brands/:brandId/workbench" element={<WorkbenchRoute />} />
-      <Route path="/brands/:brandId/workbench/:cycleId" element={<MatrixRoute />} />
-      <Route path="/brands/:brandId/tracking" element={<TrackingHealthRoute />} />
-      <Route path="/brands/:brandId/tracking/setup" element={<TrackingSetupRoute />} />
-      <Route path="/brands/:brandId/report" element={<BrandReportRoute />} />
+      <Route path="/login" element={<LoginRoute />} />
+      <Route path="/accept-invite" element={<AcceptInvitePage />} />
+      <Route element={<RequireSession />}>
+        <Route path="/" element={<RootRoute />} />
+        <Route path="/inbox" element={<InboxRoute />} />
+        <Route path="/settings" element={<SettingsRoute />} />
+        <Route path="/intake/new" element={<IntakeNewRoute />} />
+        <Route path="/brands/:brandId" element={<BrandRoute />} />
+        <Route path="/brands/:brandId/intake" element={<IntakeRoute />} />
+        <Route path="/brands/:brandId/library" element={<LibraryRoute />} />
+        <Route path="/brands/:brandId/products" element={<ProductListRoute />} />
+        <Route path="/brands/:brandId/products/:productId" element={<ProductDetailRoute />} />
+        <Route path="/brands/:brandId/orders" element={<OrdersRoute />} />
+        <Route path="/brands/:brandId/campaigns" element={<CampaignListRoute />} />
+        <Route path="/brands/:brandId/ads-claims" element={<ClaimsRoute />} />
+        <Route path="/brands/:brandId/data-onboarding" element={<DataOnboardingRoute />} />
+        <Route path="/brands/:brandId/learnings" element={<LearningsRoute />} />
+        <Route path="/brands/:brandId/campaigns/new" element={<WarroomNewRoute />} />
+        <Route path="/brands/:brandId/campaigns/:cycleId" element={<WarroomRoute />} />
+        <Route path="/brands/:brandId/workbench" element={<WorkbenchRoute />} />
+        <Route path="/brands/:brandId/workbench/:cycleId" element={<MatrixRoute />} />
+        <Route path="/brands/:brandId/tracking" element={<TrackingHealthRoute />} />
+        <Route path="/brands/:brandId/tracking/setup" element={<TrackingSetupRoute />} />
+        <Route path="/brands/:brandId/report" element={<BrandReportRoute />} />
+      </Route>
     </Routes>
   );
+}
+
+/** 登入守門（票 03-2）：包住除了 `/login`／`/accept-invite` 以外的每一條路由（layout
+ * route＋`<Outlet/>`，react-router v6 起的標準寫法，不用另外巢一層 `<Routes>`）。session
+ * 從 `src/lib/auth.ts` 的 `useSession()` 讀，不直接戳 `localStorage`——session 有沒有
+ * 過期、要不要刷新是 supabase-js 的事。 */
+function RequireSession() {
+  const { loading, session } = useSession();
+  if (loading) {
+    return <EmptyState title="讀取中…" description="正在確認登入狀態。" />;
+  }
+  if (!session) {
+    return <Navigate to="/login" replace />;
+  }
+  return <Outlet />;
+}
+
+/** `/login`：已經登入的人不該停留在登入頁，轉去首頁（`useSession()` 收到
+ * `onAuthStateChange` 廣播後這裡會自動重新渲染，登入成功不用自己 `navigate`）。 */
+function LoginRoute() {
+  const { loading, session } = useSession();
+  if (loading) return null;
+  if (session) return <Navigate to="/" replace />;
+  return <LoginPage />;
 }
 
 /** 根路徑：舊查詢字串網址 `/app/?brand=<id>` 轉到新的 `/app/brands/<id>`，書籤不斷。 */

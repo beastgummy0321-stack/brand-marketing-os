@@ -2,6 +2,8 @@
  * 條文 1.1-1.9／2.1-2.7）。型別逐欄對照 `app/ads/routes_tracking_api.py`／
  * `app/ads/tracking.py`（查證日 2026-08-14），不是自創形狀。 */
 
+import { apiFetch } from "./http";
+
 export type TrackingChannelKey = "website" | "fb_page" | "ig_account" | "shopee" | "pharmacy";
 export type TrackingStatus = "ok" | "warn" | "bad" | "off";
 export type TrackingActionKind = "install" | "fill" | "none";
@@ -43,7 +45,7 @@ interface Envelope<T> {
 }
 
 async function getJson<T>(path: string): Promise<T> {
-  const res = await fetch(path);
+  const res = await apiFetch(path);
   if (!res.ok) {
     throw new Error(res.status === 404 ? "找不到這個品牌。" : `讀取失敗（狀態碼 ${res.status}）`);
   }
@@ -52,7 +54,7 @@ async function getJson<T>(path: string): Promise<T> {
 }
 
 async function postJson<T = void>(path: string, body?: unknown): Promise<T> {
-  const res = await fetch(path, {
+  const res = await apiFetch(path, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body ?? {}),

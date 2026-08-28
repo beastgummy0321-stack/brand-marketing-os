@@ -4,6 +4,8 @@
  * （查證日 2026-08-12），四軸選項對照 `app/ads/fingerprint.py:19-67`（查證日 2026-08-12）——
  * 這幾份是後端已定版的封閉枚舉，前端原型照抄值與標籤，不是自己命名。 */
 
+import { apiFetch } from "./http";
+
 export type CampaignStatus =
   | "PLANNING" | "PLAN_SELECT" | "REVIEW" | "PRODUCTION" | "LIVE" | "EVALUATING" | "CLOSED";
 
@@ -155,7 +157,7 @@ interface Envelope<T> {
 }
 
 async function getJson<T>(path: string): Promise<T> {
-  const res = await fetch(path);
+  const res = await apiFetch(path);
   if (!res.ok) {
     throw new Error(res.status === 404 ? "找不到這筆資料。" : `讀取失敗（狀態碼 ${res.status}）`);
   }
@@ -164,7 +166,7 @@ async function getJson<T>(path: string): Promise<T> {
 }
 
 async function postJson<T = void>(path: string, body?: unknown): Promise<T> {
-  const res = await fetch(path, {
+  const res = await apiFetch(path, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body ?? {}),

@@ -3,6 +3,7 @@
  * `HealthLight`／`HealthLightStatus` 跟作戰室健康燈號共用同一份定義（`lib/warroomApi.ts`），
  * 不重複兩套判定型別（契約 S3P.12／S8R.20「共用」註記）。 */
 import type { HealthLight, HealthLightStatus, PerformanceSummary, ReadingResult } from "./warroomApi";
+import { apiFetch } from "./http";
 
 export type { HealthLight, HealthLightStatus };
 
@@ -75,7 +76,7 @@ interface Envelope<T> {
 }
 
 async function getJson<T>(path: string): Promise<T> {
-  const res = await fetch(path);
+  const res = await apiFetch(path);
   if (!res.ok) {
     throw new Error(res.status === 404 ? "找不到這筆資料。" : `讀取失敗（狀態碼 ${res.status}）`);
   }
@@ -84,7 +85,7 @@ async function getJson<T>(path: string): Promise<T> {
 }
 
 async function postJson<T>(path: string, body: unknown): Promise<T> {
-  const res = await fetch(path, {
+  const res = await apiFetch(path, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),

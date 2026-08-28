@@ -7,6 +7,8 @@
  * 「產品偵測清單至少 1 筆已存在（測試「已建立」鎖選狀態）」必須要有的欄位——契約本身要求
  * 的測試資料需要它才能表達，不是額外自創的外部規格。 */
 
+import { apiFetch } from "./http";
+
 export type IntakeJobKind = "scan" | "question" | "paste_fix";
 export type IntakeJobStatus = "waiting" | "running" | "done" | "failed";
 
@@ -174,7 +176,7 @@ interface Envelope<T> {
 }
 
 async function getJson<T>(path: string): Promise<T> {
-  const res = await fetch(path);
+  const res = await apiFetch(path);
   if (!res.ok) {
     throw new Error(res.status === 404 ? "找不到這筆資料。" : `讀取失敗（狀態碼 ${res.status}）`);
   }
@@ -192,7 +194,7 @@ async function extractError(res: Response, fallback: string): Promise<string> {
 }
 
 async function postJson<T = void>(path: string, body?: unknown): Promise<T> {
-  const res = await fetch(path, {
+  const res = await apiFetch(path, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body ?? {}),
@@ -203,7 +205,7 @@ async function postJson<T = void>(path: string, body?: unknown): Promise<T> {
 }
 
 async function postForm<T = void>(path: string, form: FormData): Promise<T> {
-  const res = await fetch(path, { method: "POST", body: form });
+  const res = await apiFetch(path, { method: "POST", body: form });
   if (!res.ok) throw new Error(await extractError(res, `處理失敗（狀態碼 ${res.status}）`));
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;

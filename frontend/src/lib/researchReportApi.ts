@@ -1,5 +1,7 @@
 /** T2a 調研報告回顯 API。兩支讀取端點都拆既有 {data, generated_at} 信封。 */
 
+import { apiFetch } from "./http";
+
 export interface ResearchReportSummary {
   id: string;
   created_at: string;
@@ -23,7 +25,7 @@ interface Envelope<T> {
 }
 
 async function getJson<T>(path: string): Promise<T> {
-  const res = await fetch(path);
+  const res = await apiFetch(path);
   if (!res.ok) {
     throw new Error(res.status === 404 ? "找不到這份調研報告。" : `讀取失敗（狀態碼 ${res.status}）`);
   }

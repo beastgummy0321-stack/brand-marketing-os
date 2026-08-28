@@ -5,6 +5,7 @@
  * 契約本身沒有給（契約只列了各段落各自的資料形狀），是本票把它們組成單一 GET 回應的
  * 內部決定，不是外部規格。 */
 import type { CampaignStatus } from "./campaignsApi";
+import { apiFetch } from "./http";
 
 export type CampaignStage = "intake" | "plan" | "creative" | "handoff" | "prelaunch" | "performance" | "review";
 export type FunnelStage = "exposure" | "consideration" | "conversion";
@@ -532,7 +533,7 @@ interface Envelope<T> {
 }
 
 async function getJson<T>(path: string): Promise<T> {
-  const res = await fetch(path);
+  const res = await apiFetch(path);
   if (!res.ok) {
     // 後端的 4xx 幾乎都附一句寫給使用者看的白話理由（例如覆盤：「這期還沒有結案…」）。
     // 原本只印狀態碼，等於把那句話丟掉，非工程使用者只看到「讀取失敗（狀態碼 400）」，
@@ -555,7 +556,7 @@ async function getJson<T>(path: string): Promise<T> {
 }
 
 async function postJson<T = void>(path: string, body?: unknown): Promise<T> {
-  const res = await fetch(path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body ?? {}) });
+  const res = await apiFetch(path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body ?? {}) });
   if (!res.ok) {
     let message = `處理失敗（狀態碼 ${res.status}）`;
     try {
@@ -574,7 +575,7 @@ async function postJson<T = void>(path: string, body?: unknown): Promise<T> {
 // 票 04-angle-rename：整檔第一個 PATCH 呼叫端，錯誤處理沿用 postJson 同一套雙欄兼容
 // （error／detail）——後端這支改名路由用 FastAPI 的 detail 欄，不是本檔多數路由的 error。
 async function patchJson<T = void>(path: string, body?: unknown): Promise<T> {
-  const res = await fetch(path, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(body ?? {}) });
+  const res = await apiFetch(path, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(body ?? {}) });
   if (!res.ok) {
     let message = `處理失敗（狀態碼 ${res.status}）`;
     try {
@@ -593,7 +594,7 @@ async function patchJson<T = void>(path: string, body?: unknown): Promise<T> {
 // 票 S1-01：整批撤銷用，本檔第一個 DELETE 呼叫端，錯誤處理沿用 postJson 同一套雙欄
 // 兼容（error／detail）。
 async function deleteJson<T = void>(path: string): Promise<T> {
-  const res = await fetch(path, { method: "DELETE" });
+  const res = await apiFetch(path, { method: "DELETE" });
   if (!res.ok) {
     let message = `撤銷失敗（狀態碼 ${res.status}）`;
     try {
@@ -613,7 +614,7 @@ async function deleteJson<T = void>(path: string): Promise<T> {
 // （這個模組全檔的慣例），不是 intakeApi 那邊的 extractError 寫法，兩邊各自維持自己檔案
 // 的風格，不跨檔抽共用（container-contract 第八節：兩寫法擇一，取同檔案一致的那個）。
 async function postForm<T = void>(path: string, form: FormData): Promise<T> {
-  const res = await fetch(path, { method: "POST", body: form });
+  const res = await apiFetch(path, { method: "POST", body: form });
   if (!res.ok) {
     let message = `處理失敗（狀態碼 ${res.status}）`;
     try {
@@ -659,7 +660,7 @@ export const archiveCycle = (brandId: string, cycleId: string): Promise<void> =>
 // deleteJson 既有行為（`deleteJson` 唯一既有呼叫端 performance/batches 那支吃的是裸
 // JSON，共用同一顆解法會撞型別）。
 async function envelopeJson<T>(path: string, method: "PUT" | "DELETE", body?: unknown): Promise<T> {
-  const res = await fetch(path, {
+  const res = await apiFetch(path, {
     method,
     headers: body === undefined ? undefined : { "content-type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),

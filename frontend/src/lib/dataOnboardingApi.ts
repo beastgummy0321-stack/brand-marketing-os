@@ -1,3 +1,5 @@
+import { apiFetch } from "./http";
+
 export interface OnboardingItem {
   key: string;
   label: string;
@@ -44,22 +46,22 @@ async function errorMessage(res: Response): Promise<string> {
 }
 
 export async function fetchDataOnboarding(brandId: string): Promise<DataOnboardingResponse> {
-  const res = await fetch(`${base(brandId)}/data-onboarding`);
+  const res = await apiFetch(`${base(brandId)}/data-onboarding`);
   if (!res.ok) throw new Error(await errorMessage(res));
   return res.json();
 }
 
 export async function startMetaBackfill(brandId: string): Promise<void> {
-  const res = await fetch(`${base(brandId)}/backfill/meta`, { method: "POST" });
+  const res = await apiFetch(`${base(brandId)}/backfill/meta`, { method: "POST" });
   if (!res.ok) throw new Error(await errorMessage(res));
 }
 
 export async function startGa4Backfill(brandId: string): Promise<void> {
-  const res = await fetch(`${base(brandId)}/backfill/ga4`, { method: "POST" });
+  const res = await apiFetch(`${base(brandId)}/backfill/ga4`, { method: "POST" });
   if (!res.ok) throw new Error(await errorMessage(res));
 }
 
 export async function startGa4Sync(brandId: string): Promise<void> {
-  const res = await fetch(`${base(brandId)}/sync/ga4`, { method: "POST" });
+  const res = await apiFetch(`${base(brandId)}/sync/ga4`, { method: "POST" });
   if (!res.ok) throw new Error(await errorMessage(res));
 }

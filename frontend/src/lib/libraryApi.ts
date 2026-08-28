@@ -12,6 +12,8 @@
  * constant table has no enumeration endpoint, so the frontend side-panel dropdown options are
  * copied here next to the matching API calls as "values that never change" (code-rules §2). */
 
+import { apiFetch } from "./http";
+
 export interface LibraryBrandFact {
   id: string;
   fact_type: string;
@@ -222,7 +224,7 @@ interface Envelope<T> {
 }
 
 export async function fetchLibrary(brandId: string): Promise<LibraryData> {
-  const res = await fetch(`/api/library/brands/${encodeURIComponent(brandId)}`);
+  const res = await apiFetch(`/api/library/brands/${encodeURIComponent(brandId)}`);
   if (!res.ok) {
     throw new Error(
       res.status === 404 ? "找不到這個品牌。" : `品牌智庫讀取失敗（狀態碼 ${res.status}）`,
@@ -239,7 +241,7 @@ export async function fetchLibrary(brandId: string): Promise<LibraryData> {
  * `campaignsApi.ts` postJson(). `body` defaults to `{}` for delete/confirm-style calls that
  * carry no fields. */
 async function postJson<T>(path: string, body: unknown = {}): Promise<T> {
-  const res = await fetch(path, {
+  const res = await apiFetch(path, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
@@ -351,7 +353,7 @@ export async function uploadAsset(
   body.append("product_id", fields.product_id);
   body.append("title", fields.title);
   body.append("file", fields.file);
-  const res = await fetch(`/api/brands/${encodeURIComponent(brandId)}/assets`, { method: "POST", body });
+  const res = await apiFetch(`/api/brands/${encodeURIComponent(brandId)}/assets`, { method: "POST", body });
   if (!res.ok) {
     throw new Error(`上傳失敗（狀態碼 ${res.status}）`);
   }
@@ -397,7 +399,7 @@ export async function submitCustomerVoice(
   brandId: string,
   fields: { source_channel: string; source_detail: string; raw_text: string },
 ): Promise<{ job_key: string }> {
-  const res = await fetch(`/api/library/brands/${encodeURIComponent(brandId)}/customer-voice`, {
+  const res = await apiFetch(`/api/library/brands/${encodeURIComponent(brandId)}/customer-voice`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(fields),
@@ -414,7 +416,7 @@ export async function fetchCustomerVoiceJob(
   brandId: string,
   jobKey: string,
 ): Promise<CustomerVoiceJobStatus> {
-  const res = await fetch(
+  const res = await apiFetch(
     `/api/library/brands/${encodeURIComponent(brandId)}/customer-voice/jobs/${encodeURIComponent(jobKey)}`,
   );
   if (!res.ok) {

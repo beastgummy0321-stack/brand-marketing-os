@@ -1,3 +1,5 @@
+import { apiFetch } from "./http";
+
 export interface DeliveryItem {
   id: string;
   copy: string;
@@ -24,7 +26,7 @@ export interface DeliveryActionCard {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(path, init);
+  const response = await apiFetch(path, init);
   if (!response.ok) {
     let message = `處理失敗（狀態碼 ${response.status}）`;
     try {

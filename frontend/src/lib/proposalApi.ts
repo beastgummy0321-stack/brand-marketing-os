@@ -8,6 +8,8 @@
  * - 不碰：不 import 元件或 `warroomApi.ts` 的內部實作；不在前端保存任何提案狀態。
  */
 
+import { apiFetch } from "./http";
+
 export interface OpeningSuggestion {
   platform: string;
   product_id: string;
@@ -91,7 +93,7 @@ export interface PendingProposalResponse {
 export type ProposalResponse = ReadyProposalResponse | PendingProposalResponse;
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(path, init);
+  const response = await apiFetch(path, init);
   if (!response.ok) {
     let message = `處理失敗（狀態碼 ${response.status}）`;
     try {

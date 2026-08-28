@@ -1,5 +1,6 @@
 /** T2 真相卡／人物誌 API。信封拆解與錯誤處理照 trackingApi.ts；不混進舊逐條確認路徑。 */
 import type { IntakeReviewItem } from "./intakeApi";
+import { apiFetch } from "./http";
 
 export type TruthCardBucket = "accepted" | "needs_confirmation" | "forbidden";
 export type TruthAnswerKind = "price" | "claim_permission" | null;
@@ -48,14 +49,14 @@ interface Envelope<T> {
 }
 
 async function getJson<T>(path: string): Promise<T> {
-  const res = await fetch(path);
+  const res = await apiFetch(path);
   if (!res.ok) throw new Error(res.status === 404 ? "找不到這筆資料。" : `讀取失敗（狀態碼 ${res.status}）`);
   const body: Envelope<T> = await res.json();
   return body.data;
 }
 
 async function postJson<T = void>(path: string, body?: unknown): Promise<T> {
-  const res = await fetch(path, {
+  const res = await apiFetch(path, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body ?? {}),
@@ -75,7 +76,7 @@ async function postJson<T = void>(path: string, body?: unknown): Promise<T> {
 }
 
 async function putJson(path: string, body: unknown): Promise<void> {
-  const res = await fetch(path, {
+  const res = await apiFetch(path, {
     method: "PUT",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),

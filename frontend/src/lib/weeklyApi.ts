@@ -1,5 +1,7 @@
 /** T1 本週作戰 API；所有成功與失敗回應都先拆 {data, generated_at} 信封。 */
 
+import { apiFetch } from "./http";
+
 export type WeeklyGrade = "save" | "spend" | "asset";
 export type WeeklyRejudgeStatus = "running" | "done" | "failed";
 
@@ -70,7 +72,7 @@ interface Envelope<T> {
 }
 
 async function requestData<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(path, init);
+  const response = await apiFetch(path, init);
   let body: Envelope<T> | null = null;
   try {
     body = (await response.json()) as Envelope<T>;

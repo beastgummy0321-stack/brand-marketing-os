@@ -1,5 +1,7 @@
 /** 待認領廣告 API（票 T5-01）：型別僅含後端 list_pending_claims 已提供且畫面會使用的欄位。 */
 
+import { apiFetch } from "./http";
+
 export interface PendingClaim {
   id: string;
   campaign_name: string | null;
@@ -33,14 +35,14 @@ async function responseError(res: Response, fallback: string): Promise<never> {
 }
 
 export async function fetchClaims(brandId: string): Promise<PendingClaim[]> {
-  const res = await fetch(base(brandId));
+  const res = await apiFetch(base(brandId));
   if (!res.ok) await responseError(res, `讀取失敗（狀態碼 ${res.status}）`);
   const body = (await res.json()) as Envelope<{ items: PendingClaim[] }>;
   return body.data.items;
 }
 
 async function act(brandId: string, discoveredId: string, action: "claim" | "ignore"): Promise<ClaimActionResult> {
-  const res = await fetch(`${base(brandId)}/${encodeURIComponent(discoveredId)}/${action}`, { method: "POST" });
+  const res = await apiFetch(`${base(brandId)}/${encodeURIComponent(discoveredId)}/${action}`, { method: "POST" });
   if (!res.ok) await responseError(res, `處理失敗（狀態碼 ${res.status}）`);
   return (await res.json()) as ClaimActionResult;
 }

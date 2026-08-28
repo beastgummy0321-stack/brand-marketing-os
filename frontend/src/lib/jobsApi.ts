@@ -4,6 +4,8 @@
  * 不含 `app.ads` 的生成進度（該節「不碰什麼」明講理由），所以 `kind` 沒有任何 campaigns
  * 分支的值。 */
 
+import { apiFetch } from "./http";
+
 export type ActiveJobKind = "scan" | "question" | "paste_fix" | "product_research" | "library_convert" | "brand_report";
 export type ActiveJobStatus = "waiting" | "running" | "done" | "failed";
 
@@ -32,7 +34,7 @@ interface Envelope<T> {
 }
 
 export async function fetchActiveJobs(): Promise<ActiveJob[]> {
-  const res = await fetch("/api/jobs/active");
+  const res = await apiFetch("/api/jobs/active");
   if (!res.ok) throw new Error(`讀取失敗（狀態碼 ${res.status}）`);
   const body: Envelope<ActiveJob[]> = await res.json();
   return body.data;

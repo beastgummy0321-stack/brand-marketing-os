@@ -3,6 +3,8 @@
  * （不是駕駛艙模組 lib/api.ts 用的 {data, generated_at} 信封）；失敗回
  * {"error": "訊息"} ＋非 2xx 狀態碼（見 app/ads 底下其他路由的既有慣例）。 */
 
+import { apiFetch } from "./http";
+
 /** 工作檯任務卡（畫面1）：目前唯一來源是「廣告檔期」——計畫已核准且矩陣還沒生完的檔期
  * 各出一張（app/ads/routes_workbench.py workbench_tasks()）。檔期沒有名稱欄位，
  * `cycle_label` 是後端組好的日期範圍字串，前端直接顯示、不必自己拼。 */
@@ -16,7 +18,7 @@ export interface WorkbenchTask {
 }
 
 export async function fetchWorkbenchTasks(brandId: string): Promise<WorkbenchTask[]> {
-  const res = await fetch(`/api/ads/brands/${encodeURIComponent(brandId)}/workbench/tasks`);
+  const res = await apiFetch(`/api/ads/brands/${encodeURIComponent(brandId)}/workbench/tasks`);
   if (!res.ok) {
     throw new Error(await extractErrorMessage(res, "工作檯任務讀取失敗"));
   }
@@ -61,7 +63,7 @@ export async function fetchMatrix(
   brandId: string,
   cycleId: string,
 ): Promise<{ cells: MatrixCellRow[]; angleLocked: boolean }> {
-  const res = await fetch(
+  const res = await apiFetch(
     `/api/ads/brands/${encodeURIComponent(brandId)}/ads/${encodeURIComponent(cycleId)}/matrix`,
   );
   if (!res.ok) {
@@ -84,7 +86,7 @@ export async function renameAngle(
   cellId: string,
   creativeAngle: string,
 ): Promise<string> {
-  const res = await fetch(
+  const res = await apiFetch(
     `/api/campaigns/${encodeURIComponent(brandId)}/${encodeURIComponent(cycleId)}` +
       `/cells/${encodeURIComponent(cellId)}/angle`,
     {
@@ -108,7 +110,7 @@ export async function generateTheme(
   cellId: string,
   formatKey: string,
 ): Promise<MatrixTheme> {
-  const res = await fetch(
+  const res = await apiFetch(
     `/api/ads/brands/${encodeURIComponent(brandId)}/ads/${encodeURIComponent(cycleId)}` +
       `/cells/${encodeURIComponent(cellId)}/formats/${encodeURIComponent(formatKey)}/themes`,
     { method: "POST" },
@@ -187,7 +189,7 @@ export async function fetchThemeDetail(
   cycleId: string,
   themeId: string,
 ): Promise<ThemeDetail> {
-  const res = await fetch(
+  const res = await apiFetch(
     `/api/ads/brands/${encodeURIComponent(brandId)}/ads/${encodeURIComponent(cycleId)}` +
       `/themes/${encodeURIComponent(themeId)}`,
   );
@@ -206,7 +208,7 @@ export async function adoptTheme(
   cycleId: string,
   themeId: string,
 ): Promise<ThemeDetail> {
-  const res = await fetch(
+  const res = await apiFetch(
     `/api/ads/brands/${encodeURIComponent(brandId)}/ads/${encodeURIComponent(cycleId)}` +
       `/themes/${encodeURIComponent(themeId)}/adopt`,
     { method: "POST" },
@@ -225,7 +227,7 @@ export async function rejectComponent(
   componentId: string,
   reasonCode: string,
 ): Promise<ThemeComponentData> {
-  const res = await fetch(
+  const res = await apiFetch(
     `/api/ads/brands/${encodeURIComponent(brandId)}/ads/${encodeURIComponent(cycleId)}` +
       `/components/${encodeURIComponent(componentId)}/reject`,
     {
@@ -248,7 +250,7 @@ export async function fetchImagePromptsCopy(
   cycleId: string,
   themeId: string,
 ): Promise<{ content: string; count: number }[]> {
-  const res = await fetch(
+  const res = await apiFetch(
     `/api/ads/brands/${encodeURIComponent(brandId)}/ads/${encodeURIComponent(cycleId)}` +
       `/themes/${encodeURIComponent(themeId)}/image-prompts/copy`,
   );
@@ -268,7 +270,7 @@ export interface CycleFolder {
 }
 
 export async function fetchCycleFolder(brandId: string, cycleId: string): Promise<CycleFolder> {
-  const res = await fetch(
+  const res = await apiFetch(
     `/api/ads/brands/${encodeURIComponent(brandId)}/ads/${encodeURIComponent(cycleId)}/folder`,
   );
   if (!res.ok) {
@@ -280,7 +282,7 @@ export async function fetchCycleFolder(brandId: string, cycleId: string): Promis
 /** 開這期檔期的素材資料夾（沒有就建）：對應 open_cycle_folder()，跟主題層同一支
  * creative_assets.open_folder()，只差不傳主題資料夾名。 */
 export async function openCycleFolder(brandId: string, cycleId: string): Promise<string> {
-  const res = await fetch(
+  const res = await apiFetch(
     `/api/ads/brands/${encodeURIComponent(brandId)}/ads/${encodeURIComponent(cycleId)}/folder`,
     { method: "POST" },
   );
@@ -298,7 +300,7 @@ export async function openThemeFolder(
   cycleId: string,
   themeId: string,
 ): Promise<string> {
-  const res = await fetch(
+  const res = await apiFetch(
     `/api/ads/brands/${encodeURIComponent(brandId)}/ads/${encodeURIComponent(cycleId)}` +
       `/themes/${encodeURIComponent(themeId)}/folder`,
     { method: "POST" },
@@ -447,7 +449,7 @@ export interface QuickGenerateProduct {
 export async function fetchQuickGenerateProducts(
   brandId: string,
 ): Promise<QuickGenerateProduct[]> {
-  const res = await fetch(`/api/creative/brands/${encodeURIComponent(brandId)}/products`);
+  const res = await apiFetch(`/api/creative/brands/${encodeURIComponent(brandId)}/products`);
   if (!res.ok) {
     throw new Error(await extractErrorMessage(res, "產品清單讀取失敗"));
   }
@@ -463,7 +465,7 @@ export async function quickGenerate(
   topic: string,
   productId: string | null,
 ): Promise<QuickGenerateResult> {
-  const res = await fetch(
+  const res = await apiFetch(
     `/api/creative/brands/${encodeURIComponent(brandId)}/quick-generate`,
     {
       method: "POST",
@@ -489,7 +491,7 @@ export async function combineVideoScript(
   themeId: string,
   hookComponentId: string,
 ): Promise<string> {
-  const res = await fetch(
+  const res = await apiFetch(
     `/api/ads/brands/${encodeURIComponent(brandId)}/ads/${encodeURIComponent(cycleId)}` +
       `/themes/${encodeURIComponent(themeId)}/combine-script`,
     {

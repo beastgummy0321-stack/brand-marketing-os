@@ -1,6 +1,8 @@
 /** 儀表板 API 型別與呼叫（票 02-overview-cards）。
  * 對應 app/dashboard/routes.py 的統一回應信封：{ data, generated_at }。 */
 
+import { apiFetch } from "./http";
+
 export interface ActiveCycle {
   id: string;
   status: string;
@@ -31,7 +33,7 @@ interface Envelope<T> {
 }
 
 export async function fetchOverview(): Promise<DashboardBrandCard[]> {
-  const res = await fetch("/api/dashboard/overview");
+  const res = await apiFetch("/api/dashboard/overview");
   if (!res.ok) {
     throw new Error(`儀表板 API 回應異常（狀態碼 ${res.status}）`);
   }
@@ -122,7 +124,7 @@ export interface ImmediateSyncResult {
 }
 
 export async function triggerImmediateSync(brandId: string): Promise<ImmediateSyncResult> {
-  const res = await fetch("/api/dashboard/brands/" + encodeURIComponent(brandId) + "/sync", { method: "POST" });
+  const res = await apiFetch("/api/dashboard/brands/" + encodeURIComponent(brandId) + "/sync", { method: "POST" });
   if (!res.ok) {
     let message = "更新失敗（狀態碼 " + res.status + "）";
     try {
@@ -140,7 +142,7 @@ export async function triggerImmediateSync(brandId: string): Promise<ImmediateSy
   return { updated_at: updatedAt };
 }
 export async function fetchCockpit(brandId: string): Promise<CockpitData> {
-  const res = await fetch(`/api/dashboard/brands/${encodeURIComponent(brandId)}/cockpit`);
+  const res = await apiFetch(`/api/dashboard/brands/${encodeURIComponent(brandId)}/cockpit`);
   if (!res.ok) {
     throw new Error(
       res.status === 404 ? "找不到這個品牌。" : `儀表板 API 回應異常（狀態碼 ${res.status}）`,
@@ -152,7 +154,7 @@ export async function fetchCockpit(brandId: string): Promise<CockpitData> {
 
 /** 一鍵「知道了」：使用 SPA 專用 JSON 端點，避免 fetch 跟隨舊 Jinja 的 PRG 轉址。 */
 export async function resolveAlert(interruptId: string): Promise<void> {
-  const res = await fetch(`/api/interrupts/${encodeURIComponent(interruptId)}/resolve`, {
+  const res = await apiFetch(`/api/interrupts/${encodeURIComponent(interruptId)}/resolve`, {
     method: "POST",
   });
   if (!res.ok) {

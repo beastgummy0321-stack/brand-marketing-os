@@ -1,5 +1,7 @@
 /** 累積智慧 API：型別直接沿用後端既有資料鍵，只為畫面加上已存在的顯示欄位。 */
 
+import { apiFetch } from "./http";
+
 interface Envelope<T> {
   data: T;
   generated_at: string;
@@ -75,13 +77,13 @@ async function responseError(res: Response, fallback: string): Promise<never> {
 }
 
 export async function fetchLearnings(brandId: string): Promise<LearningSections> {
-  const res = await fetch(base(brandId));
+  const res = await apiFetch(base(brandId));
   if (!res.ok) await responseError(res, `讀取失敗（狀態碼 ${res.status}）`);
   return ((await res.json()) as Envelope<LearningSections>).data;
 }
 
 async function act(brandId: string, path: string, body?: unknown): Promise<LearningActionResult> {
-  const res = await fetch(`${base(brandId)}${path}`, {
+  const res = await apiFetch(`${base(brandId)}${path}`, {
     method: "POST",
     ...(body !== undefined ? { headers: { "content-type": "application/json" }, body: JSON.stringify(body) } : {}),
   });

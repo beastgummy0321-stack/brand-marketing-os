@@ -2,6 +2,7 @@
  * 對應 app/core/interrupts.py（待辦／已結清單）與 app/core/prototype_phase.py（側板）。
  * 信封格式沿用既有慣例 {data, generated_at}，見 lib/api.ts `Envelope<T>`。 */
 import type { AlertSeverity } from "./api";
+import { apiFetch } from "./http";
 
 export type InboxSeverity = AlertSeverity;
 
@@ -31,7 +32,7 @@ interface Envelope<T> {
 }
 
 export async function fetchInbox(): Promise<InboxData> {
-  const res = await fetch("/api/inbox");
+  const res = await apiFetch("/api/inbox");
   if (!res.ok) {
     throw new Error(`收件匣讀取失敗（狀態碼 ${res.status}）`);
   }
@@ -51,7 +52,7 @@ export interface PrototypePhaseDetail {
 }
 
 export async function fetchPrototypePhase(): Promise<PrototypePhaseDetail> {
-  const res = await fetch("/api/system/prototype-phase");
+  const res = await apiFetch("/api/system/prototype-phase");
   if (!res.ok) {
     throw new Error(`原型階段詳情讀取失敗（狀態碼 ${res.status}）`);
   }

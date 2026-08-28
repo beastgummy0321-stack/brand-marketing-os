@@ -1,3 +1,5 @@
+import { apiFetch } from "./http";
+
 export interface BrandReportSection {
   label: string;
   summary: string;
@@ -35,12 +37,12 @@ async function errorMessage(res: Response): Promise<string> {
 }
 
 export async function fetchBrandReport(brandId: string): Promise<BrandReportResponse> {
-  const res = await fetch(base(brandId));
+  const res = await apiFetch(base(brandId));
   if (!res.ok) throw new Error(await errorMessage(res));
   return res.json();
 }
 
 export async function generateBrandReport(brandId: string): Promise<void> {
-  const res = await fetch(`${base(brandId)}/generate`, { method: "POST" });
+  const res = await apiFetch(`${base(brandId)}/generate`, { method: "POST" });
   if (!res.ok) throw new Error(await errorMessage(res));
 }
