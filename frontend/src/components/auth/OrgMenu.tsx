@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { CopyIconButton } from "@/components/workbench/shared/CopyIconButton";
 import { SidePanel } from "@/components/layout/SidePanel";
 import { setOrgId, signOut } from "@/lib/auth";
 import { apiFetch } from "@/lib/http";
@@ -229,13 +230,11 @@ export function OrgMenu() {
                       className="flex-1 rounded-md border border-border bg-card px-2 py-1 text-xs text-foreground"
                       onFocus={(e) => e.currentTarget.select()}
                     />
-                    <button
-                      type="button"
-                      onClick={() => void navigator.clipboard.writeText(`${window.location.origin}${inviteResult.accept_url}`)}
-                      className="rounded-md border border-border px-2 py-1 text-xs font-medium text-muted-foreground hover:border-primary hover:text-primary"
-                    >
-                      複製
-                    </button>
+                    <CopyIconButton
+                      getText={() => `${window.location.origin}${inviteResult.accept_url}`}
+                      label="複製"
+                      ariaLabel="複製邀請連結"
+                    />
                   </div>
                 </>
               ) : (
