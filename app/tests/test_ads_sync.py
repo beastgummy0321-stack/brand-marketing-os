@@ -323,7 +323,7 @@ class SanityAndErrorTest(_BaseSyncTest):
         main.conn.commit()
         result = ads_sync.sync_account(main.conn, ACTOR, org_id=db.DEV_ORG_ID)
         self.assertEqual(result.error, meta_api.NO_TOKEN_MESSAGE)  # 人話提示，不當機
-        self.assertFalse(ads_sync.is_configured(main.conn))
+        self.assertFalse(ads_sync.is_configured(main.conn, org_id=db.DEV_ORG_ID))
 
 
 class BrandLevelBaselineTest(_BaseSyncTest):

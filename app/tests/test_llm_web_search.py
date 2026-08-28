@@ -68,12 +68,12 @@ def _complete(*, tools=None, web_search_requests=None):
     """跑一次 AnthropicProvider.complete()，回 (送出的 request body, ProviderResponse)。"""
     captured = []
     client_cls = _capturing_client(captured, _sdk_response(web_search_requests))
-    with mock.patch.object(providers.settings, "get_api_key", lambda: FAKE_KEY), \
+    with mock.patch.object(providers.settings, "get_api_key", lambda *a, **k: FAKE_KEY), \
             mock.patch.object(anthropic, "Anthropic", client_cls):
         response = providers.AnthropicProvider().complete(
             model="claude-opus-5", system="你是助手",
             messages=[{"role": "user", "content": "測試"}],
-            max_tokens=1000, tools=tools,
+            max_tokens=1000, tools=tools, org_id=db.DEV_ORG_ID,
         )
     return captured[0], response
 

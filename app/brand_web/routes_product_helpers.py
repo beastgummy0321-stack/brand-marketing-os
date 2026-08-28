@@ -26,8 +26,9 @@ def _scan_budget_error(brand_id: str, cost: float | None = None, action: str = "
     """
     from app.core import settings as coresettings
     cost = product_ai.COST_PRODUCT_SCAN if cost is None else cost
+    org_id = repo._org_id_for_brand(web.conn, brand_id)
     return coresettings.budget_exceeded_message(
-        web.conn, brand_id, cost, action=action, fallback_hint=fallback_hint)
+        web.conn, brand_id, cost, org_id=org_id, action=action, fallback_hint=fallback_hint)
 
 
 def _apply_product_scan_result(brand_id: str, product_id: str, actor: str,

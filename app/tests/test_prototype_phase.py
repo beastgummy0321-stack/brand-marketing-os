@@ -25,26 +25,26 @@ class PrototypePhaseFlagTest(unittest.TestCase):
         self.conn.commit()
 
     def test_not_ended_initially(self):
-        self.assertFalse(prototype_phase.has_ended(self.conn))
+        self.assertFalse(prototype_phase.has_ended(self.conn, org_id=db.DEV_ORG_ID))
 
     def test_zero_spend_does_not_flag(self):
         triggered = prototype_phase.check_and_flag(self.conn, actual_spend=0, actor="測試員",
             org_id=db.DEV_ORG_ID)
         self.assertFalse(triggered)
-        self.assertFalse(prototype_phase.has_ended(self.conn))
+        self.assertFalse(prototype_phase.has_ended(self.conn, org_id=db.DEV_ORG_ID))
 
     def test_none_spend_does_not_flag(self):
         triggered = prototype_phase.check_and_flag(self.conn, actual_spend=None, actor="測試員",
             org_id=db.DEV_ORG_ID)
         self.assertFalse(triggered)
-        self.assertFalse(prototype_phase.has_ended(self.conn))
+        self.assertFalse(prototype_phase.has_ended(self.conn, org_id=db.DEV_ORG_ID))
 
     def test_real_spend_flags_and_notifies(self):
         triggered = prototype_phase.check_and_flag(
             self.conn, actual_spend=8500.0, actor="測試員", cycle_id="cyc_FAKE",
                 org_id=db.DEV_ORG_ID)
         self.assertTrue(triggered)
-        self.assertTrue(prototype_phase.has_ended(self.conn))
+        self.assertTrue(prototype_phase.has_ended(self.conn, org_id=db.DEV_ORG_ID))
 
         open_items = core_interrupts.list_open(self.conn)
         matches = [i for i in open_items if i["category"] == "prototype_phase_ended"]

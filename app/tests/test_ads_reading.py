@@ -457,7 +457,7 @@ class FinalizeTest(_ReadingIntegrationBase):
         self._reset_prototype_phase_flag()
         self._spend(spend=10000, impressions=20000, clicks=400, conversions=10, revenue=40000)
         reading.finalize(main.conn, self.bid, self.cycle_id, ACTOR)
-        self.assertTrue(prototype_phase.has_ended(main.conn))
+        self.assertTrue(prototype_phase.has_ended(main.conn, org_id=db.DEV_ORG_ID))
         open_items = core_interrupts.list_open(main.conn)
         matches = [i for i in open_items if i["category"] == "prototype_phase_ended"]
         self.assertTrue(matches)
@@ -474,7 +474,7 @@ class FinalizeTest(_ReadingIntegrationBase):
         self._reset_prototype_phase_flag()
         self._spend(spend=0, impressions=20000, clicks=400, conversions=10, revenue=0)
         reading.finalize(main.conn, self.bid, self.cycle_id, ACTOR)
-        self.assertFalse(prototype_phase.has_ended(main.conn))
+        self.assertFalse(prototype_phase.has_ended(main.conn, org_id=db.DEV_ORG_ID))
 
 
 class UnsettledRatioInReadingTest(_ReadingIntegrationBase):

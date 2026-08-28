@@ -209,7 +209,7 @@ async def settle_now_get(brand_id: str, cycle_id: str, request: Request):
     can_settle, reason, already_closed = performance_batches.can_settle(conn, brand_id, cycle_id, cycle)
     return _envelope({
         "can_settle": can_settle, "reason": reason,
-        "estimated_cost": ads_reading.estimated_run_cost(conn), "already_closed": already_closed,
+        "estimated_cost": ads_reading.estimated_run_cost(conn, brand_id), "already_closed": already_closed,
         # 票 F9：按下結算前先問「還有幾張建議卡沒處理」，畫面拿這個問使用者要不要確認結案。
         "unhandled_cards": weekly_proposals.unhandled_cards(conn, brand_id, cycle_id),
     })
@@ -241,7 +241,7 @@ async def performance_batches_get(brand_id: str, cycle_id: str, request: Request
     conn = main_mod.conn
     _require_cycle(brand_id, cycle_id)
     items = performance_batches.list_batches(conn, brand_id, cycle_id)
-    return _envelope({"items": items, "estimated_rerun_cost": ads_reading.estimated_run_cost(conn)})
+    return _envelope({"items": items, "estimated_rerun_cost": ads_reading.estimated_run_cost(conn, brand_id)})
 
 
 @router.delete("/api/campaigns/{brand_id}/{cycle_id}/performance/batches/{batch_id}")

@@ -384,15 +384,15 @@ def _ga4_data_confirmed(conn, brand_id: str) -> bool:
     return (date.today() - status["synced_at"].date()).days <= _GA4_FRESH_DAYS
 
 
-def _pixel_api_confirmed(conn, *, client=None) -> bool | None:
+def _pixel_api_confirmed(conn, *, org_id: str, client=None) -> bool | None:
     """訊號③：經既有 Meta 唯讀連線查這個廣告帳號的 Pixel 近期有沒有開火
     （meta_api.MetaClient.list_pixels，查證出處見該方法 docstring）。
 
     回傳 None＝沒設定 Meta 連線，或查詢失敗（權限不夠／連不上）——這個訊號跳過，
     不算「確認沒有」，呼叫端不得因為 None 就判定使用者沒裝（契約 2.4：失敗不擋人）。
     回傳 True／False＝真的查到了。"""
-    token = coresettings.get_setting(conn, _META_TOKEN_SETTING)
-    account_id = coresettings.get_setting(conn, _META_ACCOUNT_SETTING)
+    token = coresettings.get_setting(conn, _META_TOKEN_SETTING, org_id=org_id)
+    account_id = coresettings.get_setting(conn, _META_ACCOUNT_SETTING, org_id=org_id)
     if not token or not account_id:
         return None
     client = client or meta_api.MetaClient(token)
@@ -529,8 +529,10 @@ def check_website_now(conn, brand_id: str, *, fetch=None, meta_client=None) -> d
     if url:
         ok, raw_html = fetch(url)
         if ok:
+            org_id = bi_repo._org_id_for_brand(conn, brand_id)
             ga4_confirmed = _detect_ga4(raw_html) or _ga4_data_confirmed(conn, brand_id)
-            pixel_confirmed = _detect_pixel(raw_html) or bool(_pixel_api_confirmed(conn, client=meta_client))
+            pixel_confirmed = _detect_pixel(raw_html) or bool(
+                _pixel_api_confirmed(conn, org_id=org_id, client=meta_client))
             _save_website_check(conn, brand_id, ga4_found=ga4_confirmed, pixel_found=pixel_confirmed,
                                 checked_at=now_utc())
         else:

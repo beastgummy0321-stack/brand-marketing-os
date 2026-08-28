@@ -25,8 +25,12 @@ INTAKE_BUDGET_SETTING = "intake_budget_limit"
 IMAGE_PROMPT_HEADER_SETTING = "image_prompt_batch_header"
 
 
-def get_setting(conn: db.Conn | None, key: str, default=None):
+def get_setting(conn: db.Conn | None, key: str, default=None, *, org_id: str):
     """讀一個設定值；沒設過（或 app_setting 表還沒建起來）回 default。
+
+    org_id 必填、不給預設值（票 04-0）：`app_setting` 主鍵是 (org_id, key)，沒有 org_id
+    篩選就是跨租戶讀——上一版曾經漏掉這道篩選，任一組織都可能讀到另一組織存的值
+    （含 Meta 權杖、GA4 服務帳戶、AI 金鑰），此為該次修復。
 
     conn 傳 None 代表「自己開一條短命連線讀」——給 providers 這種手上沒有連線的呼叫端用。
     表不存在時不噴錯誤碼而是回 default（principles 16 優雅缺席：沒設定就是沒設定）。
@@ -36,14 +40,16 @@ def get_setting(conn: db.Conn | None, key: str, default=None):
     進來就跟連線池借一條、離開 with 區塊自動歸還。
     """
     if conn is not None:
-        return _get_setting(conn, key, default)
+        return _get_setting(conn, key, default, org_id=org_id)
     with db.connection() as owned_conn:
-        return _get_setting(owned_conn, key, default)
+        return _get_setting(owned_conn, key, default, org_id=org_id)
 
 
-def _get_setting(conn: db.Conn, key: str, default=None):
+def _get_setting(conn: db.Conn, key: str, default=None, *, org_id: str):
     try:
-        row = conn.execute("SELECT value FROM app_setting WHERE key = %s", (key,)).fetchone()
+        row = conn.execute(
+            "SELECT value FROM app_setting WHERE org_id = %s AND key = %s", (org_id, key)
+        ).fetchone()
     except psycopg.Error:
         return default
     return row["value"] if row else default
@@ -62,7 +68,7 @@ def set_setting(conn: db.Conn, key: str, value: str, *, org_id: str) -> None:
     conn.commit()
 
 
-def get_api_key(conn: db.Conn | None = None) -> str | None:
+def get_api_key(conn: db.Conn | None = None, *, org_id: str) -> str | None:
     """AI 金鑰：環境變數 ANTHROPIC_API_KEY 優先 > DB 設定回退 > None（代表尚未設定）。
 
     修憲落地 M4：優先序反轉。環境變數不落地在任何檔案；DB 裡的金鑰是明文，
@@ -70,41 +76,43 @@ def get_api_key(conn: db.Conn | None = None) -> str | None:
     每日備份外流。環境變數優先，才不會出現「使用者已經設好環境變數，AI 功能卻仍在
     偷用 DB 裡那把舊金鑰」的情況。
     """
-    return os.environ.get(API_KEY_ENV_VAR) or get_setting(conn, API_KEY_SETTING) or None
+    return os.environ.get(API_KEY_ENV_VAR) or get_setting(conn, API_KEY_SETTING, org_id=org_id) or None
 
 
-def api_key_source(conn: db.Conn | None = None) -> str | None:
+def api_key_source(conn: db.Conn | None = None, *, org_id: str) -> str | None:
     """get_api_key() 實際採用的來源：'env'（環境變數，安全）／'db'（資料庫回退，明文、
     會被備份）／None（兩邊都沒設）。設定頁靠這個誠實顯示金鑰來源，不讓使用者以為
     改用了環境變數、其實系統還在用 DB 裡的舊值（修憲落地 M4）。"""
     if os.environ.get(API_KEY_ENV_VAR):
         return "env"
-    if get_setting(conn, API_KEY_SETTING):
+    if get_setting(conn, API_KEY_SETTING, org_id=org_id):
         return "db"
     return None
 
 
-def clear_api_key_from_db(conn: db.Conn) -> None:
+def clear_api_key_from_db(conn: db.Conn, *, org_id: str) -> None:
     """把 DB 裡存的金鑰刪掉，不影響環境變數來源（修憲落地 M4）。
 
     這是不可逆動作，只能由使用者在設定頁明確按下按鈕才會呼叫——本函式本身不自動執行、
     不在任何啟動流程或排程中被呼叫。刪掉後若環境變數也沒設，get_api_key() 回 None，
     等同「尚未設定金鑰」，既有的優雅缺席處理（例如 providers 的人話錯誤）照常生效。
+
+    org_id 必填（票 04-0）：沒有這道篩選會刪掉別的組織存在 DB 裡的金鑰。
     """
-    conn.execute("DELETE FROM app_setting WHERE key = %s", (API_KEY_SETTING,))
+    conn.execute("DELETE FROM app_setting WHERE org_id = %s AND key = %s", (org_id, API_KEY_SETTING))
     conn.commit()
 
 
-def get_llm_model(conn: db.Conn | None = None) -> str:
+def get_llm_model(conn: db.Conn | None = None, *, org_id: str) -> str:
     """使用的模型：DB 設定 > 環境變數 BRAND_OS_LLM_MODEL > 預設 claude-opus-5。"""
     return (
-        get_setting(conn, LLM_MODEL_SETTING)
+        get_setting(conn, LLM_MODEL_SETTING, org_id=org_id)
         or os.environ.get(LLM_MODEL_ENV_VAR)
         or DEFAULT_LLM_MODEL
     )
 
 
-def get_intake_budget_limit(conn: db.Conn | None = None) -> float:
+def get_intake_budget_limit(conn: db.Conn | None = None, *, org_id: str) -> float:
     """AI 生成的花費上限：DB 設定 > app/intake/script.py 的 DEFAULT_BUDGET。
 
     設定鍵沿用 intake_budget_limit 這個舊名（原本只管建檔精靈），票 M2 起改成全站共用的
@@ -115,7 +123,7 @@ def get_intake_budget_limit(conn: db.Conn | None = None) -> float:
     """
     from app.intake import script  # 延遲 import：避免 core 在 import 期就相依 intake
 
-    raw = get_setting(conn, INTAKE_BUDGET_SETTING)
+    raw = get_setting(conn, INTAKE_BUDGET_SETTING, org_id=org_id)
     try:
         return float(raw)
     except (TypeError, ValueError):
@@ -144,7 +152,7 @@ def brand_llm_spent(conn: db.Conn, brand_id: str, *, since: str | None = None) -
     return float(row["n"] or 0.0)
 
 
-def budget_exceeded_message(conn: db.Conn, brand_id: str, cost: float, *,
+def budget_exceeded_message(conn: db.Conn, brand_id: str, cost: float, *, org_id: str,
                             action: str = "這次調研",
                             fallback_hint: str = "或先用「新增這個產品」手動建立。") -> str | None:
     """這個品牌已花的錢加上這次預估要花的，會不會超過花費上限。沒有超過回 None；
@@ -155,9 +163,12 @@ def budget_exceeded_message(conn: db.Conn, brand_id: str, cost: float, *,
     幣別統一為美元（US$）並在訊息中明講——跟 app/llm/pricing.calculate_cost() 回傳的
     真實成本同一幣別直接比較，不做匯率換算（避免引入會過期的匯率常數；理由詳見
     app/intake/script.py DEFAULT_BUDGET 註解，票 M2）。
+
+    org_id 必填（票 04-0）：本檔（app.core）依 LAYER_ORDER 不得 import app.brand_intelligence
+    自己反查，呼叫端（app.ads／app.brand_web）已經有 brand_id，反查 org_id 傳進來。
     """
     spent = brand_llm_spent(conn, brand_id)
-    limit = get_intake_budget_limit(conn)
+    limit = get_intake_budget_limit(conn, org_id=org_id)
     if spent + cost > limit:
         return (
             f"這個品牌目前已經花了 US$ {spent:.2f}，{action}預估要花 US$ {cost:.2f}，"

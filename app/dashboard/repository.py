@@ -222,11 +222,12 @@ def _alerts(conn, brand_id: str, today: str) -> list:
 
 
 def _fuel_gauge(conn, brand_id: str, today: str) -> dict:
-    """AI 油錢錶：本月已花（llm_task 成本紀錄，since＝當月 1 號）／上限（全站共用設定）。"""
+    """AI 油錢錶：本月已花（llm_task 成本紀錄，since＝當月 1 號）／上限（全組織共用設定）。"""
     since, _until = _month_to_date_range(today)
+    org_id = bi_repo._org_id_for_brand(conn, brand_id)
     return {
         "spent_this_month": core_settings.brand_llm_spent(conn, brand_id, since=since),
-        "limit": core_settings.get_intake_budget_limit(conn),
+        "limit": core_settings.get_intake_budget_limit(conn, org_id=org_id),
     }
 
 def _mom_pct(current, previous) -> float | None:

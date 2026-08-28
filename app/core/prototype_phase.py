@@ -47,9 +47,9 @@ EXEMPTIONS = [
 _REMINDER_MESSAGE = "原型階段已結束，4項技術豁免待重新決定"
 
 
-def has_ended(conn) -> bool:
+def has_ended(conn, *, org_id: str) -> bool:
     """原型階段是否已結束（旗標是否已設）。"""
-    return core_settings.get_setting(conn, FLAG_SETTING) is not None
+    return core_settings.get_setting(conn, FLAG_SETTING, org_id=org_id) is not None
 
 
 def check_and_flag(conn, *, org_id: str, actual_spend: float, actor: str,
@@ -64,7 +64,7 @@ def check_and_flag(conn, *, org_id: str, actual_spend: float, actor: str,
     兩張表都是 NOT NULL org_id——呼叫端（app/ads/reading.py）已經有 brand_id，反查
     org_id 傳進來；app.core 不得 import app.brand_intelligence 自己反查（LAYER_ORDER）。
     """
-    if has_ended(conn):
+    if has_ended(conn, org_id=org_id):
         return False
     if not actual_spend or actual_spend <= 0:
         return False

@@ -82,7 +82,7 @@ def _quick_generate_ai_call(conn, brand: dict, *, scope: str, product_id, cost_c
     避免 gateway.run_task() 的呼叫組態複製多份。
     """
     budget_err = coresettings.budget_exceeded_message(
-        conn, brand["id"], cost_ceiling,
+        conn, brand["id"], cost_ceiling, org_id=brand["org_id"],
         action="快速生成", fallback_hint="可以到設定頁調高上限後再試。")
     if budget_err:
         return None, budget_err
@@ -126,7 +126,7 @@ def _run_quick_generate(conn, brand: dict, *, scope: str, topic: str, product_id
     brief = _assemble_quick_brief(
         conn, brand, product_id=product_id, topic=topic, base_format=base_format, actor=actor)
 
-    model = providers.resolve_model(task_type="creative_theme", conn=conn)
+    model = providers.resolve_model(task_type="creative_theme", conn=conn, brand_id=brand["id"])
     cost_ceiling = pricing.cost_ceiling(model, theme_engine.THEME_MAX_TOKENS)
 
     if base_format == "single_image":

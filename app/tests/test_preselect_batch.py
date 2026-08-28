@@ -476,7 +476,7 @@ class BudgetCeilingBatchTest(_Base):
         cell_id = self._insert_cell(cycle_id)
         self._insert_approved_plan(cycle_id)
 
-        model = providers.resolve_model(task_type="creative_theme", conn=main.conn)
+        model = providers.resolve_model(task_type="creative_theme", conn=main.conn, brand_id=self.bid)
         ceiling = pricing.cost_ceiling(model, theme_engine.THEME_MAX_TOKENS)
         # 剛好卡在「第一次呼叫前檢查會過、第一次呼叫真的花掉一點錢之後，第二次呼叫前檢查
         # 就會超」的邊界——算法跟 app/ads/theme_batch.py._budget_blocked 用同一組函式，

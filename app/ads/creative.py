@@ -307,9 +307,9 @@ def generate(conn, brand_id: str, cycle_id: str, actor: str, *,
         return False, "這期沒有可用的切角，請重新產一次計畫。"
 
     # 花費上限攔截（票 M2）：跟計畫生成、品牌智庫的產品調研共用同一道上限與同一個檢查函式。
-    model = providers.resolve_model(task_type="creative_batch", conn=conn)
+    model = providers.resolve_model(task_type="creative_batch", conn=conn, brand_id=brand_id)
     budget_err = coresettings.budget_exceeded_message(
-        conn, brand_id, pricing.cost_ceiling(model, CREATIVE_MAX_TOKENS),
+        conn, brand_id, pricing.cost_ceiling(model, CREATIVE_MAX_TOKENS), org_id=brand["org_id"],
         action="這期的素材生成",
         fallback_hint="可以先採用已經產出的素材，或到設定頁調高上限後再試。")
     if budget_err:

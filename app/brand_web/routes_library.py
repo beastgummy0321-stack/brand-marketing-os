@@ -257,7 +257,7 @@ async def brand_delete_api(request: Request, brand_id: str):
             status_code=400,
         )
     repo.delete_brand(web.conn, brand_id, actor=str(actor.user_id))
-    warn = creative_assets.delete_folder(web.conn, brand_id)
+    warn = creative_assets.delete_folder(web.conn, brand_id, org_id=brand["org_id"])
     message = f"已永久刪除品牌「{brand['name']}」。{warn}".strip()
     return {"message": message}
 
@@ -397,8 +397,8 @@ async def customer_voice_submit(request: Request, brand_id: str):
         return JSONResponse({"error": "請貼上顧客的原文內容。"}, status_code=400)
 
     budget_err = core_settings.budget_exceeded_message(
-        web.conn, brand_id, cv_mod.COST_CUSTOMER_VOICE_EXTRACTION, action="這次顧客原話分析",
-        fallback_hint="或稍後再試。",
+        web.conn, brand_id, cv_mod.COST_CUSTOMER_VOICE_EXTRACTION, org_id=actor.org_id,
+        action="這次顧客原話分析", fallback_hint="或稍後再試。",
     )
     if budget_err:
         return JSONResponse({"error": budget_err}, status_code=422)

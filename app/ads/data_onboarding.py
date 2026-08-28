@@ -11,6 +11,7 @@ from datetime import date
 from app.ads import ga4_sync
 from app.ads import performance as ads_performance
 from app.ads import sync as ads_sync
+from app.brand_intelligence import repository as bi_repo
 from app.core import rule_cards
 
 # 第 7 刀（A1 三層地界新規則：app/ads 不得 import app.orders，見
@@ -117,9 +118,10 @@ def build_checklist(conn, brand_id: str, today: str | None = None) -> list:
     """四格檢查清單的目前狀態＋動作連結＋（有資料就有的）部分基線小結。"""
     today = today or date.today().isoformat()
     items = []
+    org_id = bi_repo._org_id_for_brand(conn, brand_id)
 
     # ① Meta 認領
-    meta_configured = ads_sync.is_configured(conn)
+    meta_configured = ads_sync.is_configured(conn, org_id=org_id)
     pending = len(ads_sync.list_pending_claims(conn, brand_id)) if meta_configured else 0
     meta = meta_click_tier(conn, brand_id)
     meta_totals = meta["totals"]
@@ -187,7 +189,7 @@ def build_checklist(conn, brand_id: str, today: str | None = None) -> list:
     })
 
     # ③ GA4 回填
-    ga4_configured = ga4_sync.is_configured(conn)
+    ga4_configured = ga4_sync.is_configured(conn, org_id=org_id)
     coverage = ga4_coverage(conn, brand_id)
     ga4_has_data = coverage["months"] is not None
     if ga4_has_data and coverage["months"] >= GA4_COVERAGE_MATURE_MONTHS:

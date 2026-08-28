@@ -24,31 +24,36 @@ SETTING_KEY = "creative_asset_root"
 DEFAULT_ROOT = REPO_ROOT / "data" / "creative"
 
 
-def get_root(conn=None) -> Path:
-    """素材資料夾根目錄：設定頁存的值 > 預設 data/creative。"""
-    raw = (settings.get_setting(conn, SETTING_KEY) or "").strip()
+def get_root(conn=None, *, org_id: str) -> Path:
+    """素材資料夾根目錄：設定頁存的值 > 預設 data/creative。
+
+    org_id 必填、不給預設值（票 04-0）：本檔（app.core）依 LAYER_ORDER 不得 import
+    app.brand_intelligence 自己拿 brand_id 反查 org_id，呼叫端（app.ads／app.brand_web）
+    已經有 brand_id，反查後傳進來。
+    """
+    raw = (settings.get_setting(conn, SETTING_KEY, org_id=org_id) or "").strip()
     return Path(raw) if raw else DEFAULT_ROOT
 
 
-def cycle_dir(conn, brand_id: str, cycle_id: str) -> Path:
+def cycle_dir(conn, brand_id: str, cycle_id: str, *, org_id: str) -> Path:
     """這一期檔期的素材資料夾路徑（不保證存在，開資料夾那一步才會建）。"""
-    return _child(get_root(conn), brand_id, cycle_id)
+    return _child(get_root(conn, org_id=org_id), brand_id, cycle_id)
 
 
-def theme_dir(conn, brand_id: str, cycle_id: str, theme_folder_name: str) -> Path:
+def theme_dir(conn, brand_id: str, cycle_id: str, theme_folder_name: str, *, org_id: str) -> Path:
     """單一主題的素材資料夾路徑（不保證存在）。命名＝人話名＋四碼短碼，由呼叫端組好傳進來
     （票 04-single-image-e2e；決策 0008「人看得懂的名字在前，四碼短碼在後」）。"""
-    return _child(get_root(conn), brand_id, cycle_id, theme_folder_name)
+    return _child(get_root(conn, org_id=org_id), brand_id, cycle_id, theme_folder_name)
 
 
-def open_folder(conn, *ids: str) -> Path:
+def open_folder(conn, *ids: str, org_id: str) -> Path:
     """沒有就建，然後叫出檔案總管。os.startfile() 只有 Windows 有，這台就是 Windows
     （決策 0008 指定用它；不為了跨平台包一層抽象）。
 
     *ids：開檔期資料夾傳 (brand_id, cycle_id)，開主題資料夾多傳一段
     (brand_id, cycle_id, theme_folder_name)——同一個函式，_child() 本來就吃任意層數。
     """
-    path = _child(get_root(conn), *ids)
+    path = _child(get_root(conn, org_id=org_id), *ids)
     path.mkdir(parents=True, exist_ok=True)
     os.startfile(path)
     return path
@@ -66,7 +71,7 @@ def size_mb(path: Path) -> float:
     return sum(f.stat().st_size for f in path.rglob("*") if f.is_file()) / (1024 * 1024)
 
 
-def delete_folder(conn, *ids: str) -> str:
+def delete_folder(conn, *ids: str, org_id: str) -> str:
     """刪掉一個素材資料夾（品牌層傳 brand_id；檔期層傳 brand_id, cycle_id）。
 
     刪之前一定先確認算出來的路徑真的落在根目錄底下、而且不是根目錄本身。根目錄是使用者
@@ -78,7 +83,7 @@ def delete_folder(conn, *ids: str) -> str:
     commit 了，這時炸出 500 會讓使用者以為整件事失敗、回頭再刪一次。回一句人話讓呼叫端
     接在成功訊息後面，沒事就回空字串。
     """
-    root = get_root(conn)
+    root = get_root(conn, org_id=org_id)
     path = _child(root, *ids)
     if not _inside(path, root):
         raise ValueError(f"拒絕刪除 {path}：不在素材資料夾根目錄 {root} 底下。")

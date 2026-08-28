@@ -245,7 +245,7 @@ async def handoff_create_all(request: Request, brand_id: str, cycle_id: str):
     campaign_id = None
     for pkg in targets:
         result = meta_mcp.create_package(conn, brand_id, cycle_id, pkg["id"], actor=actor_id,
-                                         campaign_id=campaign_id)
+                                         org_id=actor.org_id, campaign_id=campaign_id)
         if result["ok"]:
             created += 1
             campaign_id = campaign_id or result["meta_ids"]["meta_campaign_id"]

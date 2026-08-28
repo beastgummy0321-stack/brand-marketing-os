@@ -42,7 +42,8 @@ def _setting_key(brand_id: str) -> str:
 
 def get_pinned_views(conn, brand_id: str) -> list:
     """未存過就回目錄全部 5 筆（S3P：首次進駕駛艙全部預設釘選）。"""
-    raw = core_settings.get_setting(conn, _setting_key(brand_id))
+    org_id = bi_repo._org_id_for_brand(conn, brand_id)
+    raw = core_settings.get_setting(conn, _setting_key(brand_id), org_id=org_id)
     if not raw:
         return [c["key"] for c in PINNED_VIEW_CATALOG]
     try:

@@ -171,19 +171,20 @@ def run_task(
     org_id = brand["org_id"]
 
     opts = options or TaskOptions()
-    model = providers.resolve_model(opts.model, task_type=task_type, conn=conn)
+    model = providers.resolve_model(opts.model, task_type=task_type, conn=conn, brand_id=brand_id)
     thinking = providers.resolve_thinking(opts.thinking, task_type=task_type)
     provider_name = getattr(provider, "name", "unknown")
 
-    # 思考等級（票 #27）與工具（ADR 0005）都只在 provider.complete() 真的接受該參數時才傳——
-    # 保留舊版 Provider 實作（例如測試檔裡手寫、只認 5 個既有參數的假 Provider）不用跟著改
-    # 也能繼續動。
+    # 思考等級（票 #27）、工具（ADR 0005）、org_id（票 04-0：AnthropicProvider 讀 DB 金鑰
+    # 要分租戶）都只在 provider.complete() 真的接受該參數時才傳——保留舊版 Provider 實作
+    # （例如測試檔裡手寫、只認 5 個既有參數的假 Provider）不用跟著改也能繼續動。
     try:
         accepted = inspect.signature(provider.complete).parameters
     except (TypeError, ValueError):
         accepted = {}
     provider_accepts_effort = "effort" in accepted
     provider_accepts_tools = "tools" in accepted
+    provider_accepts_org_id = "org_id" in accepted
 
     max_attempts = 1 + max(opts.max_retries, 0)
     row = None
@@ -202,6 +203,8 @@ def run_task(
                 complete_kwargs["effort"] = thinking
             if provider_accepts_tools and opts.tools:
                 complete_kwargs["tools"] = opts.tools
+            if provider_accepts_org_id:
+                complete_kwargs["org_id"] = org_id
             response = provider.complete(**complete_kwargs)
         except ProviderTimeoutError as exc:
             _mark_failed(conn, row["id"], status="timeout", error=str(exc))

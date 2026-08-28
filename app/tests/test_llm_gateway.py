@@ -214,12 +214,13 @@ class AnthropicStructuredToolTest(unittest.TestCase):
             "input_schema": {"type": "object", "properties": {"rows": {"type": "array"}},
                              "required": ["rows"]},
         }
-        with mock.patch.object(providers.settings, "get_api_key", lambda: "sk-ant-fake-test"), \
+        with mock.patch.object(
+                providers.settings, "get_api_key", lambda *a, **k: "sk-ant-fake-test"), \
                 mock.patch.object(anthropic, "Anthropic", FakeClient):
             response = providers.AnthropicProvider().complete(
                 model="claude-opus-5", system=None,
                 messages=[{"role": "user", "content": "整理"}], max_tokens=1000,
-                tools=[tool],
+                tools=[tool], org_id=db.DEV_ORG_ID,
             )
 
         self.assertEqual(captured[0]["tools"], [tool])
@@ -300,12 +301,14 @@ class TaskModelThinkingDefaultsTest(unittest.TestCase):
 
     def test_resolve_model_invalid_override_falls_back_without_error(self):
         self.assertEqual(
-            providers.resolve_model("hacked-model-xyz", task_type="campaign_plan", conn=self.conn),
+            providers.resolve_model("hacked-model-xyz", task_type="campaign_plan", conn=self.conn,
+                                    brand_id=self.brand["id"]),
             "claude-opus-5")
 
     def test_resolve_model_valid_override_still_used(self):
         self.assertEqual(
-            providers.resolve_model("claude-sonnet-5", task_type="campaign_plan", conn=self.conn),
+            providers.resolve_model("claude-sonnet-5", task_type="campaign_plan", conn=self.conn,
+                                    brand_id=self.brand["id"]),
             "claude-sonnet-5")
 
     def test_request_override_invalid_model_ignored_falls_back_without_error(self):

@@ -128,7 +128,7 @@ async def theme_matrix(request: Request, brand_id: str, cycle_id: str):
     cells = [dict(r) for r in conn.execute(
         "SELECT * FROM experiment_cell WHERE brand_id = %s AND campaign_cycle_id = %s"
         " ORDER BY id", (brand_id, cycle_id))]
-    model = providers.resolve_model(task_type="creative_theme", conn=conn)
+    model = providers.resolve_model(task_type="creative_theme", conn=conn, brand_id=brand_id)
     estimated_cost = pricing.cost_ceiling(model, theme_engine.THEME_MAX_TOKENS)
 
     rows = []
@@ -176,14 +176,14 @@ async def get_theme_detail(request: Request, brand_id: str, cycle_id: str, theme
 async def open_theme_folder(request: Request, brand_id: str, cycle_id: str, theme_id: str):
     """開這個主題的素材資料夾：沿用既有 os.startfile 先例（app/core/creative_assets.py，
     決策 0008），票 04 驗收 6。"""
-    main_mod.require_brand(brand_id, main_mod.require_actor(request))
+    brand = main_mod.require_brand(brand_id, main_mod.require_actor(request))
     _require_cycle(brand_id, cycle_id)
     conn = main_mod.conn
     theme = theme_repo.get_theme(conn, brand_id, theme_id)
     if theme is None or theme["campaign_cycle_id"] != cycle_id:
         raise main_mod.NotFoundKind("主題")
     path = creative_assets.open_folder(
-        conn, brand_id, cycle_id, theme_engine.theme_folder_name(theme))
+        conn, brand_id, cycle_id, theme_engine.theme_folder_name(theme), org_id=brand["org_id"])
     return {"folder_path": str(path)}
 
 
@@ -198,9 +198,9 @@ async def cycle_folder(brand_id: str, cycle_id: str, request: Request):
     使用者是兩件事，不能長一樣；也不在這裡爆 404／500，沒建立是正常狀態不是錯誤。
     MB 位數沿用既有顯示慣例（舊 Jinja 檔期頁的 {:.1f} MB，該頁已刪除）。
     """
-    main_mod.require_brand(brand_id, main_mod.require_actor(request))
+    brand = main_mod.require_brand(brand_id, main_mod.require_actor(request))
     _require_cycle(brand_id, cycle_id)
-    path = creative_assets.cycle_dir(main_mod.conn, brand_id, cycle_id)
+    path = creative_assets.cycle_dir(main_mod.conn, brand_id, cycle_id, org_id=brand["org_id"])
     if not path.is_dir():
         return {"exists": False, "size_label": None}
     return {"exists": True, "size_label": f"{creative_assets.size_mb(path):.1f} MB"}
@@ -218,9 +218,10 @@ async def open_cycle_folder(brand_id: str, cycle_id: str, request: Request):
     舊的 app/ads/routes_plan.py:272 `/creative-folder` 不動：那支回 303 轉址＋人話訊息給
     Jinja 舊頁，新殼要的是裸 JSON（ADR 0003 兩套前端並存），共用同一個 open_folder()。
     """
-    main_mod.require_brand(brand_id, main_mod.require_actor(request))
+    brand = main_mod.require_brand(brand_id, main_mod.require_actor(request))
     _require_cycle(brand_id, cycle_id)
-    return {"folder_path": str(creative_assets.open_folder(main_mod.conn, brand_id, cycle_id))}
+    return {"folder_path": str(creative_assets.open_folder(
+        main_mod.conn, brand_id, cycle_id, org_id=brand["org_id"]))}
 
 
 @router.get("/brands/{brand_id}/ads/{cycle_id}/themes/{theme_id}/components/performance")

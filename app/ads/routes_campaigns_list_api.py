@@ -131,7 +131,7 @@ async def campaign_delete(request: Request, brand_id: str, cycle_id: str):
         return _error(400, "輸入的檔期名稱跟上面顯示的不一樣，請照著再打一次。")
 
     ads_repo.delete_cycle(conn, brand_id, cycle_id, actor=str(actor.user_id))
-    _delete_creative_folder(conn, brand_id, cycle_id)
+    _delete_creative_folder(conn, brand_id, cycle_id, org_id=actor.org_id)
     return JSONResponse(None, status_code=204)
 
 

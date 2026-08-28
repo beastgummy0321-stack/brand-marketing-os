@@ -355,7 +355,7 @@ class EstimatedCostMatchesMatrixTest(_Base):
         self.assertEqual(body["status"], "ready")
         estimated = body["approval"]["estimated_generation_cost"]
 
-        model = providers.resolve_model(task_type="creative_theme", conn=main.conn)
+        model = providers.resolve_model(task_type="creative_theme", conn=main.conn, brand_id=self.bid)
         per_generation_ceiling = pricing.cost_ceiling(model, theme_engine.THEME_MAX_TOKENS)
         historical_cells = nextcycle.historical_cell_performance(
             main.conn, self.bid, exclude_cycle_id=self.cycle_id)

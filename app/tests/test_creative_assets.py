@@ -70,14 +70,15 @@ class _Base(unittest.TestCase):
 class RootSettingTest(_Base):
     def test_blank_setting_falls_back_to_default_root(self):
         coresettings.set_setting(main.conn, creative_assets.SETTING_KEY, "", org_id=DEV_ORG_ID)
-        self.assertEqual(creative_assets.get_root(main.conn), creative_assets.DEFAULT_ROOT)
+        self.assertEqual(
+            creative_assets.get_root(main.conn, org_id=DEV_ORG_ID), creative_assets.DEFAULT_ROOT)
 
     def test_setting_page_saves_an_absolute_path(self):
         target = Path(_tmpdir) / "另一顆硬碟"
         resp = self.client.post("/api/settings/creative-root",
                                 json={"creative_root": str(target)})
         self.assertEqual(resp.status_code, 200)
-        self.assertEqual(creative_assets.get_root(main.conn), target)
+        self.assertEqual(creative_assets.get_root(main.conn, org_id=DEV_ORG_ID), target)
         coresettings.set_setting(main.conn, creative_assets.SETTING_KEY, str(ROOT),
             org_id=DEV_ORG_ID)
 
@@ -87,14 +88,15 @@ class RootSettingTest(_Base):
                 resp = self.client.post("/api/settings/creative-root",
                                         json={"creative_root": bad})
                 self.assertEqual(resp.status_code, 400)
-                self.assertEqual(creative_assets.get_root(main.conn), ROOT)
+                self.assertEqual(creative_assets.get_root(main.conn, org_id=DEV_ORG_ID), ROOT)
 
 
 class CycleFolderTest(_Base):
     def test_folder_path_is_root_slash_brand_slash_cycle(self):
         cycle_id = self._open_cycle()
-        self.assertEqual(creative_assets.cycle_dir(main.conn, self.bid, cycle_id),
-                         ROOT / self.bid / cycle_id)
+        self.assertEqual(
+            creative_assets.cycle_dir(main.conn, self.bid, cycle_id, org_id=DEV_ORG_ID),
+            ROOT / self.bid / cycle_id)
 
     def test_button_creates_the_folder_and_opens_explorer(self):
         cycle_id = self._open_cycle()
@@ -102,7 +104,7 @@ class CycleFolderTest(_Base):
         self.assertFalse(target.exists())
 
         with mock.patch("os.startfile", create=True) as startfile:
-            opened = creative_assets.open_folder(main.conn, self.bid, cycle_id)
+            opened = creative_assets.open_folder(main.conn, self.bid, cycle_id, org_id=DEV_ORG_ID)
 
         self.assertEqual(opened, target)
         self.assertTrue(target.is_dir())
@@ -176,7 +178,7 @@ class OpenFolderGuardTest(_Base):
 
         with mock.patch("os.startfile", create=True) as startfile:
             with self.assertRaises(ValueError):
-                creative_assets.open_folder(main.conn, "..", "根目錄外面")
+                creative_assets.open_folder(main.conn, "..", "根目錄外面", org_id=DEV_ORG_ID)
 
         self.assertFalse(outside.exists(), "被擋下的路徑不該被建出來")
         startfile.assert_not_called()
@@ -206,17 +208,18 @@ class DeleteFolderGuardTest(_Base):
         (outside / "重要.txt").write_text("不可以被刪掉", encoding="utf-8")
 
         with self.assertRaises(ValueError):
-            creative_assets.delete_folder(main.conn, "..", "別的東西")
+            creative_assets.delete_folder(main.conn, "..", "別的東西", org_id=DEV_ORG_ID)
         self.assertTrue((outside / "重要.txt").exists())
 
     def test_refuses_to_delete_the_root_itself(self):
         ROOT.mkdir(parents=True, exist_ok=True)
         with self.assertRaises(ValueError):
-            creative_assets.delete_folder(main.conn, ".")
+            creative_assets.delete_folder(main.conn, ".", org_id=DEV_ORG_ID)
         self.assertTrue(ROOT.is_dir())
 
     def test_missing_folder_is_not_an_error(self):
-        self.assertEqual(creative_assets.delete_folder(main.conn, "brd_不存在"), "")
+        self.assertEqual(
+            creative_assets.delete_folder(main.conn, "brd_不存在", org_id=DEV_ORG_ID), "")
 
 
 class DeleteCascadeTest(_Base):

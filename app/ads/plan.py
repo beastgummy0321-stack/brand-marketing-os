@@ -501,9 +501,9 @@ def generate_options(conn, brand_id: str, cycle_id: str, actor: str, *,
 
     # 花費上限攔截（票 M2）：跟品牌智庫的產品調研共用同一道上限與同一個檢查函式，呼叫前先擋，
     # 沒有真實用量校準資料可用時改用 pricing.cost_ceiling() 抓一個不會低估的保守天花板。
-    model = providers.resolve_model(task_type="campaign_plan", conn=conn)
+    model = providers.resolve_model(task_type="campaign_plan", conn=conn, brand_id=brand_id)
     budget_err = coresettings.budget_exceeded_message(
-        conn, brand_id, pricing.cost_ceiling(model, PLAN_MAX_TOKENS),
+        conn, brand_id, pricing.cost_ceiling(model, PLAN_MAX_TOKENS), org_id=brand["org_id"],
         action="這期的計畫生成",
         fallback_hint="可以先選用已經產出的方案，或到設定頁調高上限後再試。")
     if budget_err:

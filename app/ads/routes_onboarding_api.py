@@ -180,7 +180,7 @@ async def meta_backfill(request: Request, brand_id: str):
         require_brand(brand_id, actor)
     except NotFoundKind:
         return JSONResponse({"detail": "找不到品牌"}, status_code=404)
-    if not ads_sync.is_configured(web.conn):
+    if not ads_sync.is_configured(web.conn, org_id=actor.org_id):
         raise HTTPException(status_code=400, detail="還沒連上 Meta，先去設定頁連線。")
     result = _start("meta_backfill", brand_id, str(actor.user_id), _run_meta_backfill)
     return {**result, "message": "開始回填近 12 個月的 Meta 成效，好了會通知你。"}
@@ -193,7 +193,7 @@ async def ga4_backfill(request: Request, brand_id: str):
         require_brand(brand_id, actor)
     except NotFoundKind:
         return JSONResponse({"detail": "找不到品牌"}, status_code=404)
-    if not ga4_sync.is_configured(web.conn):
+    if not ga4_sync.is_configured(web.conn, org_id=actor.org_id):
         raise HTTPException(status_code=400, detail="還沒連上 GA4，先去設定頁連線。")
     result = _start("ga4_backfill", brand_id, str(actor.user_id), _run_ga4_backfill)
     return {**result, "message": "開始回填近 12 個月的 GA4 資料，好了會通知你。"}
@@ -206,7 +206,7 @@ async def ga4_sync_now(request: Request, brand_id: str):
         require_brand(brand_id, actor)
     except NotFoundKind:
         return JSONResponse({"detail": "找不到品牌"}, status_code=404)
-    if not ga4_sync.is_configured(web.conn):
+    if not ga4_sync.is_configured(web.conn, org_id=actor.org_id):
         raise HTTPException(status_code=400, detail="還沒連上 GA4，先去設定頁連線。")
     result = _start("ga4_sync", brand_id, str(actor.user_id), _run_ga4_sync)
     return {**result, "message": "開始同步 GA4，好了會通知你。"}

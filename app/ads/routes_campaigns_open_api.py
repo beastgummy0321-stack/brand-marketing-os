@@ -311,11 +311,13 @@ async def target_cpa_guided(request: Request, brand_id: str):
 
 @router.get("/api/campaigns/{brand_id}/ai-cost-meter")
 async def ai_cost_meter(brand_id: str, request: Request):
-    main_mod.require_brand(brand_id, main_mod.require_actor(request))
+    actor = main_mod.require_actor(request)
+    main_mod.require_brand(brand_id, actor)
     conn = main_mod.conn
     return _envelope({
         "brand_id": brand_id, "spent": core_settings.brand_llm_spent(conn, brand_id),
-        "limit": core_settings.get_intake_budget_limit(conn), "settings_url": "/settings",
+        "limit": core_settings.get_intake_budget_limit(conn, org_id=actor.org_id),
+        "settings_url": "/settings",
     })
 
 
@@ -425,7 +427,8 @@ async def proposal_approve_status(brand_id: str, cycle_id: str, request: Request
     這三種都不影響已經生效的核可（D2）——approve() 早在 `proposal_approve()` 就同步
     完成了，這裡只是把「後續生成做了多少」講清楚。
     """
-    main_mod.require_brand(brand_id, main_mod.require_actor(request))
+    actor = main_mod.require_actor(request)
+    main_mod.require_brand(brand_id, actor)
     conn = main_mod.conn
     _require_cycle(brand_id, cycle_id)
     key = ads_routes._progress_key("proposal_generate", brand_id, cycle_id)
@@ -457,7 +460,7 @@ async def proposal_approve_status(brand_id: str, cycle_id: str, request: Request
     # generate_preselected_batch() 的回傳 dict，見上方 docstring 的三種分岔。
     themes_made = len(payload["themes"])
     if payload["budget_stopped"]:
-        limit = core_settings.get_intake_budget_limit(conn)
+        limit = core_settings.get_intake_budget_limit(conn, org_id=actor.org_id)
         made_clause = f"先做出 {themes_made} 份就停下，其餘還沒生成" if themes_made \
             else "一份都還沒開始生成就先停下了"
         return _envelope({

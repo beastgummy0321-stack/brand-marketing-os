@@ -14,6 +14,7 @@ import contextvars
 from dataclasses import dataclass
 from typing import Protocol
 
+from app.brand_intelligence import repository as bi_repo
 from app.core import settings
 from app.llm import pricing
 
@@ -157,7 +158,7 @@ class request_overrides:
 
 
 def resolve_model(override: str | None = None, task_type: str | None = None,
-                  conn=None) -> str:
+                  conn=None, *, brand_id: str) -> str:
     """決定實際呼叫的模型，優先鏈：本次表單覆寫 > 任務預設 > 全域設定（票 #27）。
 
     全域設定＝ DB > 環境變數 > 預設值，見 core/settings。conn：手上已有資料庫連線時
@@ -166,6 +167,10 @@ def resolve_model(override: str | None = None, task_type: str | None = None,
     每一層都要在 pricing.PRICING 白名單內才採用，非法值（表單覆寫、DB 設定值都算）
     視同沒填、往下一層退，不噴錯——避免手改網址塞不存在的 model 一路通到真的打 API
     （破壞者情境；與 resolve_thinking 同一套防線）。
+
+    brand_id 必填（票 04-0）：全域設定現在依 org_id 分租戶存放，app.llm 依 LAYER_ORDER
+    排在 app.brand_intelligence 之後，可以直接 import 該層反查 org_id，不必逐層往上傳
+    （同 app/llm/gateway.py run_task() 既有的作法）。
     """
     if override in pricing.PRICING:
         return override
@@ -175,7 +180,8 @@ def resolve_model(override: str | None = None, task_type: str | None = None,
     task_model = TASK_DEFAULTS.get(task_type, {}).get("model") if task_type else None
     if task_model in pricing.PRICING:
         return task_model
-    global_model = settings.get_llm_model(conn)
+    org_id = bi_repo._org_id_for_brand(conn, brand_id)
+    global_model = settings.get_llm_model(conn, org_id=org_id)
     if global_model in pricing.PRICING:
         return global_model
     return settings.DEFAULT_LLM_MODEL
@@ -275,6 +281,7 @@ class Provider(Protocol):
         timeout_s: float = 120.0,
         effort: str | None = None,
         tools: list | None = None,
+        org_id: str | None = None,
     ) -> ProviderResponse: ...
 
 
@@ -283,6 +290,10 @@ class AnthropicProvider:
 
     - 金鑰：呼叫前經 settings.get_api_key() 取得（環境變數優先、DB 設定回退，修憲落地 M4），
       沒有金鑰時在打出網路請求前就拋出人話錯誤。不快取到模組層——設定頁改完金鑰要立刻生效（07 §3）。
+      DB 回退依 org_id 分租戶存放（票 04-0）：`org_id` 在 Provider 介面上維持可選（同
+      effort／tools 的假 Provider 相容寫法），但 AnthropicProvider 真的要打 DB 查金鑰，
+      沒收到就整段拒絕——不會、也不能猜一個組織頂著用（那正是本票要修的洩漏）。
+      `app/llm/gateway.py run_task()` 已經從 brand_id 反查出 org_id，經 kwargs 傳下來。
     - 目標模型 Claude Opus 5 預設即有思考、不傳 thinking 參數時就是 adaptive（claude-api
       skill 查證），因此本實作刻意不傳 temperature/top_p/top_k/thinking——但思考「深度」
       經 effort 參數控制（output_config.effort，票 #27），只在 EFFORT_SUPPORTED_MODELS
@@ -305,9 +316,15 @@ class AnthropicProvider:
         timeout_s: float = 120.0,
         effort: str | None = None,
         tools: list | None = None,
+        org_id: str | None = None,
     ) -> ProviderResponse:
+        # org_id 在介面上是可選（同 effort／tools，讓假 Provider 不必跟著改），但真的要
+        # 打 DB 查金鑰時沒有它就是呼叫端沒把租戶身分傳下來——這是程式錯誤，不是「使用者
+        # 沒設定金鑰」那種人話錯誤，直接炸掉，不猜一個組織頂著用（票 04-0 就是在修這個洩漏）。
+        if org_id is None:
+            raise ValueError("AnthropicProvider.complete() 缺 org_id：呼叫端沒有正確傳遞租戶身分")
         # 金鑰檢查放在 SDK import 之前：沒金鑰時連套件都不需要，就能給出人話錯誤。
-        api_key = settings.get_api_key()
+        api_key = settings.get_api_key(org_id=org_id)
         if not api_key:
             raise ProviderError(MISSING_KEY_MESSAGE)
 
@@ -437,6 +454,7 @@ class FakeProvider:
         timeout_s: float = 120.0,
         effort: str | None = None,
         tools: list | None = None,
+        org_id: str | None = None,
     ) -> ProviderResponse:
         call_no = len(self.calls) + 1
         self.calls.append(

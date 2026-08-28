@@ -78,10 +78,10 @@ async def api_interrupt_resolve(request: Request, interrupt_id: str):
 async def api_prototype_phase(request: Request):
     """S2.15–S2.17：側板詳情，全站單一旗標，不帶 brand_id 參數（旗標本身刻意不分組織，
     見 app/core/prototype_phase.py 檔頭；這裡只要求登入，不做組織過濾）。"""
-    require_actor(request)
+    actor = require_actor(request)
     return {
         "data": {
-            "ended": core_prototype_phase.has_ended(web.conn),
+            "ended": core_prototype_phase.has_ended(web.conn, org_id=actor.org_id),
             "exemptions": core_prototype_phase.EXEMPTIONS,
         },
         "generated_at": datetime.now(UTC).isoformat(),

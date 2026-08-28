@@ -12,6 +12,7 @@
 
 import sys
 
+from app.core import db
 from app.core import settings as coresettings
 from app.intake import paste_parse, script
 from app.llm import providers
@@ -33,7 +34,19 @@ def _sample_draft() -> dict:
 
 
 def main() -> int:
-    if not coresettings.get_api_key():
+    # 本工具沒有登入者、沒有 HTTP request，因此沒有 actor.org_id 可用；設定值改成每組織
+    # 一份之後（票 04-0），這裡只能誠實選「第一個組織」——單一租戶的本機開發環境下這就是
+    # 唯一的組織，多租戶環境要測哪個組織的金鑰請直接改這裡，不猜、不用 DEV_ORG_ID。
+    with db.connection() as conn:
+        org_row = conn.execute(
+            "SELECT id FROM organisation ORDER BY created_at LIMIT 1"
+        ).fetchone()
+    if org_row is None:
+        print("這個系統還沒有任何組織，無法測試。")
+        return 0
+    org_id = org_row["id"]
+
+    if not coresettings.get_api_key(org_id=org_id):
         print("還沒有設定 AI 金鑰，這次不送出任何請求。")
         print("請先到系統的「設定」頁填入金鑰，之後再執行一次：python -m app.intake.card_test")
         print("（ChatGPT 操作卡無法自動測：請手動開 ChatGPT 照 W7 步驟貼上交接包文字，"
@@ -42,13 +55,13 @@ def main() -> int:
 
     prompt = script.build_prompt(_sample_draft(), "standard",
                                  known_products=[script.MOCK_PRODUCT_NAME])
-    model = coresettings.get_llm_model()
+    model = coresettings.get_llm_model(org_id=org_id)
     print(f"用模型「{model}」送出 Claude 操作卡的交接包文字（標準調研），等它回覆⋯⋯")
     provider = providers.AnthropicProvider()
     try:
         resp = provider.complete(model=model, system=None,
                                   messages=[{"role": "user", "content": prompt}],
-                                  max_tokens=16000, timeout_s=300.0)
+                                  max_tokens=16000, timeout_s=300.0, org_id=org_id)
     except providers.ProviderError as exc:
         print(f"這次呼叫沒有成功：{exc}")
         return 1

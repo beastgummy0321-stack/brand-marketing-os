@@ -83,20 +83,20 @@ def backfill_range(requested_months: int, *, until: str | None = None,
     return since, until, actual_months
 
 
-def get_token(conn) -> str | None:
-    return coresettings.get_setting(conn, TOKEN_SETTING) or None
+def get_token(conn, *, org_id: str) -> str | None:
+    return coresettings.get_setting(conn, TOKEN_SETTING, org_id=org_id) or None
 
 
-def get_account_id(conn) -> str | None:
-    return coresettings.get_setting(conn, ACCOUNT_SETTING) or None
+def get_account_id(conn, *, org_id: str) -> str | None:
+    return coresettings.get_setting(conn, ACCOUNT_SETTING, org_id=org_id) or None
 
 
-def is_configured(conn) -> bool:
-    return bool(get_token(conn) and get_account_id(conn))
+def is_configured(conn, *, org_id: str) -> bool:
+    return bool(get_token(conn, org_id=org_id) and get_account_id(conn, org_id=org_id))
 
 
-def make_client(conn) -> meta_api.MetaClient:
-    return meta_api.MetaClient(get_token(conn))
+def make_client(conn, *, org_id: str) -> meta_api.MetaClient:
+    return meta_api.MetaClient(get_token(conn, org_id=org_id))
 
 
 @dataclass
@@ -300,11 +300,11 @@ def sync_account(conn, actor: str, *, org_id: str, client=None,
                  today: str | None = None,
                  brand_id_filter: str | None = None) -> SyncResult:
     """把帳號上的活動與成效抓回來。失敗一律回帶 error 的結果，不拋例外、不半途留髒資料。"""
-    account_external = account_id or get_account_id(conn)
+    account_external = account_id or get_account_id(conn, org_id=org_id)
     if not account_external:
         return SyncResult(error=meta_api.NO_TOKEN_MESSAGE)
 
-    client = client or make_client(conn)
+    client = client or make_client(conn, org_id=org_id)
     today = today or date.today().isoformat()
     until = until or today
     since = since or (date.fromisoformat(until) - timedelta(days=DEFAULT_LOOKBACK_DAYS)).isoformat()

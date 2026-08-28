@@ -80,9 +80,9 @@ class SettingsApiTest(unittest.TestCase):
         寫入那個 request 的連線快取裡（同樣的持久性主張，換了機制去驗）。"""
         resp = self.client.post("/api/settings/api-key", json={"api_key": TEST_KEY})
         self.assertEqual(resp.status_code, 200)
-        self.assertEqual(coresettings.get_api_key(web.conn), TEST_KEY)
+        self.assertEqual(coresettings.get_api_key(web.conn, org_id=coredb.DEV_ORG_ID), TEST_KEY)
         with coredb.connection() as fresh:
-            self.assertEqual(coresettings.get_api_key(fresh), TEST_KEY)
+            self.assertEqual(coresettings.get_api_key(fresh, org_id=coredb.DEV_ORG_ID), TEST_KEY)
 
     def test_save_api_key_empty_gives_human_error(self):
         resp = self.client.post("/api/settings/api-key", json={"api_key": "  "})
@@ -93,7 +93,8 @@ class SettingsApiTest(unittest.TestCase):
         coresettings.set_setting(web.conn, coresettings.API_KEY_SETTING, TEST_KEY, org_id=coredb.DEV_ORG_ID)
         resp = self.client.post("/api/settings/api-key/clear-db")
         self.assertEqual(resp.status_code, 200)
-        self.assertIsNone(coresettings.get_setting(web.conn, coresettings.API_KEY_SETTING))
+        self.assertIsNone(coresettings.get_setting(
+            web.conn, coresettings.API_KEY_SETTING, org_id=coredb.DEV_ORG_ID))
 
     # -- POST /api/settings/meta ------------------------------------------------
 
@@ -101,8 +102,8 @@ class SettingsApiTest(unittest.TestCase):
         resp = self.client.post(
             "/api/settings/meta", json={"meta_account_id": "act_999", "meta_token": "tok"})
         self.assertEqual(resp.status_code, 200)
-        self.assertEqual(ads_sync.get_account_id(web.conn), "act_999")
-        self.assertEqual(ads_sync.get_token(web.conn), "tok")
+        self.assertEqual(ads_sync.get_account_id(web.conn, org_id=coredb.DEV_ORG_ID), "act_999")
+        self.assertEqual(ads_sync.get_token(web.conn, org_id=coredb.DEV_ORG_ID), "tok")
 
     def test_save_meta_settings_missing_account_gives_human_error(self):
         resp = self.client.post("/api/settings/meta", json={"meta_account_id": "", "meta_token": "x"})
@@ -116,14 +117,15 @@ class SettingsApiTest(unittest.TestCase):
             "ga4_property_id": "123456789", "ga4_service_account_json": '{"type":"service_account"}',
         })
         self.assertEqual(resp.status_code, 200)
-        self.assertEqual(ga4_sync.get_property_id(web.conn), "123456789")
+        self.assertEqual(ga4_sync.get_property_id(web.conn, org_id=coredb.DEV_ORG_ID), "123456789")
 
     # -- POST /api/settings/model -------------------------------------------------
 
     def test_save_model_valid(self):
         resp = self.client.post("/api/settings/model", json={"llm_model": "claude-sonnet-5"})
         self.assertEqual(resp.status_code, 200)
-        self.assertEqual(coresettings.get_llm_model(web.conn), "claude-sonnet-5")
+        self.assertEqual(
+            coresettings.get_llm_model(web.conn, org_id=coredb.DEV_ORG_ID), "claude-sonnet-5")
 
     def test_save_model_invalid_choice_gives_human_error(self):
         resp = self.client.post("/api/settings/model", json={"llm_model": "不存在的模型"})
@@ -135,7 +137,8 @@ class SettingsApiTest(unittest.TestCase):
     def test_save_budget_valid(self):
         resp = self.client.post("/api/settings/budget", json={"intake_budget": 45})
         self.assertEqual(resp.status_code, 200)
-        self.assertEqual(coresettings.get_intake_budget_limit(web.conn), 45.0)
+        self.assertEqual(
+            coresettings.get_intake_budget_limit(web.conn, org_id=coredb.DEV_ORG_ID), 45.0)
 
     def test_save_budget_zero_is_rejected(self):
         """0 是下限邊界：契約假資料拿它當展示值，但送出寫入仍要擋（沿用既有『大於 0』規則，
@@ -166,7 +169,8 @@ class SettingsApiTest(unittest.TestCase):
             "/api/settings/prompt-header", json={"prompt_header": "一律平面實填"})
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(
-            coresettings.get_setting(web.conn, coresettings.IMAGE_PROMPT_HEADER_SETTING),
+            coresettings.get_setting(
+                web.conn, coresettings.IMAGE_PROMPT_HEADER_SETTING, org_id=coredb.DEV_ORG_ID),
             "一律平面實填")
 
     # -- 測試連線：假供應商，不打真網路 ------------------------------------------------
@@ -278,7 +282,8 @@ class SettingsApiTest(unittest.TestCase):
         resp = self.client.post("/api/settings/prompt-header", json={"prompt_header": "  "})
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(
-            coresettings.get_setting(web.conn, coresettings.IMAGE_PROMPT_HEADER_SETTING), "")
+            coresettings.get_setting(
+                web.conn, coresettings.IMAGE_PROMPT_HEADER_SETTING, org_id=coredb.DEV_ORG_ID), "")
 
     def test_save_budget_non_numeric_and_negative_rejected(self):
         """0 之外的無效輸入（非數字／負數）也要擋（原 test_budget_validation_and_save）。"""
@@ -303,6 +308,7 @@ class SettingsApiTest(unittest.TestCase):
             providers.AnthropicProvider().complete(
                 model="claude-opus-5", system=None,
                 messages=[{"role": "user", "content": "hi"}], max_tokens=1,
+                org_id=coredb.DEV_ORG_ID,
             )
         message = str(cm.exception)
         self.assertIn("尚未設定 AI 金鑰", message)
@@ -331,6 +337,7 @@ class SettingsApiTest(unittest.TestCase):
                 providers.AnthropicProvider().complete(
                     model="claude-opus-5", system=None,
                     messages=[{"role": "user", "content": "hi"}], max_tokens=1,
+                    org_id=coredb.DEV_ORG_ID,
                 )
         message = str(cm.exception)
         self.assertIn("金鑰錯誤", message)

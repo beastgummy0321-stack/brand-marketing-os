@@ -26,20 +26,20 @@ DEFAULT_LOOKBACK_DAYS = 30
 # 完成後如實顯示「回填了 N 個月」（N＝實際請求的月數，不是猜測拿到多少真實資料）。
 
 
-def get_property_id(conn) -> str | None:
-    return coresettings.get_setting(conn, PROPERTY_SETTING) or None
+def get_property_id(conn, *, org_id: str) -> str | None:
+    return coresettings.get_setting(conn, PROPERTY_SETTING, org_id=org_id) or None
 
 
-def get_service_account_json(conn) -> str | None:
-    return coresettings.get_setting(conn, SERVICE_ACCOUNT_SETTING) or None
+def get_service_account_json(conn, *, org_id: str) -> str | None:
+    return coresettings.get_setting(conn, SERVICE_ACCOUNT_SETTING, org_id=org_id) or None
 
 
-def is_configured(conn) -> bool:
-    return bool(get_property_id(conn) and get_service_account_json(conn))
+def is_configured(conn, *, org_id: str) -> bool:
+    return bool(get_property_id(conn, org_id=org_id) and get_service_account_json(conn, org_id=org_id))
 
 
-def make_client(conn) -> ga4_api.GA4Client:
-    return ga4_api.GA4Client(get_property_id(conn), get_service_account_json(conn))
+def make_client(conn, *, org_id: str) -> ga4_api.GA4Client:
+    return ga4_api.GA4Client(get_property_id(conn, org_id=org_id), get_service_account_json(conn, org_id=org_id))
 
 
 @dataclass
@@ -58,10 +58,10 @@ def sync_brand(conn, brand_id: str, actor: str, *, client=None,
     if brand is None:
         raise ValueError(f"找不到品牌：{brand_id}")
     org_id = brand["org_id"]
-    if not is_configured(conn):
+    if not is_configured(conn, org_id=org_id):
         return GA4SyncResult(error=ga4_api.NO_CREDENTIALS_MESSAGE)
 
-    client = client or make_client(conn)
+    client = client or make_client(conn, org_id=org_id)
     today = today or date.today().isoformat()
     until = until or today
     since = since or (date.fromisoformat(until) - timedelta(days=DEFAULT_LOOKBACK_DAYS)).isoformat()

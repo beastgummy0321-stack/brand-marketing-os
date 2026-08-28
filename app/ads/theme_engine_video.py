@@ -58,9 +58,11 @@ def generate_video_theme(conn, brief: CreativeBrief, *, actor: str,
     existing_hooks = _existing_video_hook_pool(conn, brief.brand["id"], brief.cell["id"])
     needs_hook_pool = not existing_hooks
 
-    model = providers.resolve_model(task_type="creative_theme", conn=conn)
+    model = providers.resolve_model(
+        task_type="creative_theme", conn=conn, brand_id=brief.brand["id"])
     budget_err = coresettings.budget_exceeded_message(
         conn, brief.brand["id"], pricing.cost_ceiling(model, theme_engine.THEME_MAX_TOKENS),
+        org_id=brief.brand["org_id"],
         action="這個主題生成",
         fallback_hint="可以先採用已經產出的主題，或到設定頁調高上限後再試。")
     if budget_err:

@@ -116,7 +116,7 @@ class SyncWriteTest(_BaseGA4Test):
         main.conn.execute("DELETE FROM app_setting WHERE key IN (%s, %s)",
                           (ga4_sync.PROPERTY_SETTING, ga4_sync.SERVICE_ACCOUNT_SETTING))
         main.conn.commit()
-        self.assertFalse(ga4_sync.is_configured(main.conn))
+        self.assertFalse(ga4_sync.is_configured(main.conn, org_id=DEV_ORG_ID))
         result = ga4_sync.sync_brand(main.conn, self.bid, ACTOR,
                                      client=ga4_api.FakeGA4Client(), today="2026-07-31")
         self.assertTrue(result.error)  # 有錯誤訊息（拒絕），不比對確切文案

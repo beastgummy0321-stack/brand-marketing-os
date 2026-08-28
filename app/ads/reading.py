@@ -507,14 +507,13 @@ _RUN_LLM_CALLS = (
 )
 
 
-def estimated_run_cost(conn) -> float:
+def estimated_run_cost(conn, brand_id: str) -> float:
     """票 S1-01：settle-now 按下前，把 run() 內三次 LLM 呼叫的天花板成本相加給使用者看。
     是天花板不是預估（理由同 pricing.cost_ceiling()），取法照 theme_batch.estimated_batch_cost。
     """
-    return sum(
-        pricing.cost_ceiling(providers.resolve_model(task_type=t, conn=conn), max_tokens)
-        for t, max_tokens in _RUN_LLM_CALLS
-    )
+    return sum(pricing.cost_ceiling(
+        providers.resolve_model(task_type=t, conn=conn, brand_id=brand_id), max_tokens)
+        for t, max_tokens in _RUN_LLM_CALLS)
 
 
 # ---------------------------------------------------------------------------

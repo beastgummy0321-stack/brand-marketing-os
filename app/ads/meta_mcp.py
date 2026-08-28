@@ -4,7 +4,7 @@
 - `connect(conn)`：連線狀態＋這個帳號開不開放自動建廣告。
 - `list_pages(conn)`：這個廣告帳號底下能選的粉絲專頁（設定中心用）。
 - `get_page_id()` / `save_page_id(page_id)`：選定的粉絲專頁，存在 `.env`（不進 DB）。
-- `create_package(conn, brand_id, cycle_id, package_id, *, actor)`：把一份交接包建成
+- `create_package(conn, brand_id, cycle_id, package_id, *, actor, org_id)`：把一份交接包建成
   Meta 活動／廣告組合／素材／廣告，全部暫停；成功後呼叫既有 `handoff.authorize_and_map()`
   （`go_live=False`）寫 `external_ad_mapping`，不另寫 INSERT——這時候還沒開始花錢
   （ADR 0019 第 7 條），不建投放授權、不切檔期 LIVE、不建提醒卡。
@@ -384,14 +384,15 @@ def ads_manager_url(meta_account_id: str) -> str:
 # app/ads/theme_engine.theme_folder_name() ＋ app/core/creative_assets.theme_dir()。
 # ---------------------------------------------------------------------------
 
-def _first_image_path(conn, brand_id: str, experiment_cell_id: str | None) -> Path | None:
+def _first_image_path(conn, brand_id: str, experiment_cell_id: str | None, *, org_id: str) -> Path | None:
     if not experiment_cell_id:
         return None
     themes = [t for t in theme_repo.list_themes_for_cell(conn, brand_id, experiment_cell_id)
               if t["status"] == "adopted"]
     for theme in themes:
         folder = creative_assets.theme_dir(
-            conn, brand_id, theme["campaign_cycle_id"], theme_engine.theme_folder_name(theme))
+            conn, brand_id, theme["campaign_cycle_id"], theme_engine.theme_folder_name(theme),
+            org_id=org_id)
         if not folder.is_dir():
             continue
         images = sorted(p for p in folder.iterdir()
@@ -577,7 +578,7 @@ def _create_ad(account_id: str, adset_id: str, creative_id: str, package: dict) 
     return ad_id
 
 
-def create_package(conn, brand_id: str, cycle_id: str, package_id: str, *, actor: str,
+def create_package(conn, brand_id: str, cycle_id: str, package_id: str, *, actor: str, org_id: str,
                    campaign_id: str | None = None) -> dict:
     """`campaign_id`：呼叫端（create-all 路由）已經知道這期用的是哪個 Meta campaign 時
     直接傳進來，跳過 `_ensure_campaign()`——真人實測發現的問題：campaign 建成功、
@@ -595,7 +596,7 @@ def create_package(conn, brand_id: str, cycle_id: str, package_id: str, *, actor
     # 打 Meta 之前先查完能查的、不必連線就能判斷的兩件事——沒圖／沒到達網址的包不該打一次
     # API 才發現要擋下（票二 1(b)；真人實測發現：ready 的包也可能沒有到達網址，Meta 建
     # 素材會直接拒絕 image ads 缺 link_url）。
-    image_path = _first_image_path(conn, brand_id, package["experiment_cell_id"])
+    image_path = _first_image_path(conn, brand_id, package["experiment_cell_id"], org_id=org_id)
     if image_path is None:
         return {"ok": False, "reason": "這個主題還沒放圖"}
 

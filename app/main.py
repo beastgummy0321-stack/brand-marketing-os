@@ -382,15 +382,16 @@ def _write_prompt_header(prompt_header: str, *, org_id: str) -> None:
         org_id=org_id)
 
 
-def _run_ai_test_connection() -> tuple:
+def _run_ai_test_connection(*, org_id: str) -> tuple:
     """回傳 (人話訊息, kind)：kind 沿用 `redirect_with_message` 既有的 'ok'／'warn'／'danger'
     三種，HTML 與 JSON 路由共用同一份判斷。"""
-    if not coresettings.get_api_key(web.conn):
+    if not coresettings.get_api_key(web.conn, org_id=org_id):
         return "尚未設定金鑰。請先在上方填入 AI 金鑰，儲存後再測試。", "warn"
     try:
         llm_providers.AnthropicProvider().complete(
-            model=coresettings.get_llm_model(web.conn), system=None,
+            model=coresettings.get_llm_model(web.conn, org_id=org_id), system=None,
             messages=[{"role": "user", "content": "hi"}], max_tokens=1, timeout_s=30.0,
+            org_id=org_id,
         )
     except llm_providers.ProviderError as exc:
         # providers 已統一把供應商例外轉成人話（含 401＝金鑰錯誤、餘額不足），
@@ -401,11 +402,12 @@ def _run_ai_test_connection() -> tuple:
     return "金鑰有效：AI 服務有正常回應，可以開始使用 AI 功能。", "ok"
 
 
-def _run_meta_test_connection() -> tuple:
-    if not ads_sync.is_configured(web.conn):
+def _run_meta_test_connection(*, org_id: str) -> tuple:
+    if not ads_sync.is_configured(web.conn, org_id=org_id):
         return "尚未設定 Meta 連線。請先在上方填入廣告帳號編號與唯讀金鑰，儲存後再測試。", "warn"
     try:
-        ads_sync.make_client(web.conn).list_campaigns(ads_sync.get_account_id(web.conn))
+        ads_sync.make_client(web.conn, org_id=org_id).list_campaigns(
+            ads_sync.get_account_id(web.conn, org_id=org_id))
     except meta_api.MetaApiError as exc:
         return str(exc), "danger"
     except Exception:
@@ -413,12 +415,12 @@ def _run_meta_test_connection() -> tuple:
     return "連線正常：可以讀到 Meta 廣告帳號的資料。", "ok"
 
 
-def _run_ga4_test_connection() -> tuple:
-    if not ga4_sync.is_configured(web.conn):
+def _run_ga4_test_connection(*, org_id: str) -> tuple:
+    if not ga4_sync.is_configured(web.conn, org_id=org_id):
         return "尚未設定 GA4 連線。請先在上方填入資源編號與服務帳戶金鑰，儲存後再測試。", "warn"
     today = datetime.now(UTC).date().isoformat()
     try:
-        ga4_sync.make_client(web.conn).fetch_source_medium(today, today)
+        ga4_sync.make_client(web.conn, org_id=org_id).fetch_source_medium(today, today)
     except ga4_api.GA4ApiError as exc:
         return str(exc), "danger"
     except Exception:
@@ -445,16 +447,17 @@ async def _parse_json_body(request: Request):
     return body, None
 
 
-def _settings_json_data() -> dict:
+def _settings_json_data(*, org_id: str) -> dict:
     """GET /api/settings 的資料組裝（契約 SettingsData 型別）。讀值邏輯與 settings_ctx()
     共用同一批底層存取函式，這裡只是換一種給 JSON 用的型別（原始 float／list，不是表單
     用的字串）。"""
     return {
-        "masked_key": _masked_key(coresettings.get_api_key(web.conn)),
-        "api_key_source": coresettings.api_key_source(web.conn),
-        "db_key_present": bool(coresettings.get_setting(web.conn, coresettings.API_KEY_SETTING)),
+        "masked_key": _masked_key(coresettings.get_api_key(web.conn, org_id=org_id)),
+        "api_key_source": coresettings.api_key_source(web.conn, org_id=org_id),
+        "db_key_present": bool(
+            coresettings.get_setting(web.conn, coresettings.API_KEY_SETTING, org_id=org_id)),
         "model_choices": _model_choices(),
-        "current_model": coresettings.get_llm_model(web.conn),
+        "current_model": coresettings.get_llm_model(web.conn, org_id=org_id),
         # 契約 TaskModelThinkingRow 只有這三欄；task_default_table() 另外多回一個
         # task_type（HTML 頁不用、JSON 契約沒寫），這裡投影掉，不把內部鍵洩漏出去。
         "task_model_thinking_table": [
@@ -462,19 +465,21 @@ def _settings_json_data() -> dict:
              "thinking_label": r["thinking_label"]}
             for r in llm_providers.task_default_table()
         ],
-        "masked_meta_token": _masked_key(ads_sync.get_token(web.conn)),
-        "meta_account_id": ads_sync.get_account_id(web.conn) or "",
-        "masked_ga4_key": _masked_key(ga4_sync.get_service_account_json(web.conn)),
-        "ga4_property_id": ga4_sync.get_property_id(web.conn) or "",
-        "creative_root": str(corecreative.get_root(web.conn)),
-        "prompt_header": coresettings.get_setting(web.conn, coresettings.IMAGE_PROMPT_HEADER_SETTING, ""),
-        "intake_budget": coresettings.get_intake_budget_limit(web.conn),
+        "masked_meta_token": _masked_key(ads_sync.get_token(web.conn, org_id=org_id)),
+        "meta_account_id": ads_sync.get_account_id(web.conn, org_id=org_id) or "",
+        "masked_ga4_key": _masked_key(ga4_sync.get_service_account_json(web.conn, org_id=org_id)),
+        "ga4_property_id": ga4_sync.get_property_id(web.conn, org_id=org_id) or "",
+        "creative_root": str(corecreative.get_root(web.conn, org_id=org_id)),
+        "prompt_header": coresettings.get_setting(
+            web.conn, coresettings.IMAGE_PROMPT_HEADER_SETTING, "", org_id=org_id),
+        "intake_budget": coresettings.get_intake_budget_limit(web.conn, org_id=org_id),
     }
 
 
 @app.get("/api/settings")
-async def api_settings_get():
-    return {"data": _settings_json_data(), "generated_at": datetime.now(UTC).isoformat()}
+async def api_settings_get(request: Request):
+    actor = web.require_actor(request)
+    return {"data": _settings_json_data(org_id=actor.org_id), "generated_at": datetime.now(UTC).isoformat()}
 
 
 @app.post("/api/settings/meta")
@@ -490,8 +495,9 @@ async def api_settings_meta_post(request: Request):
     return {}
 
 @app.post("/api/settings/meta/test-connection")
-async def api_settings_meta_test_connection_post():
-    message, kind = _run_meta_test_connection()
+async def api_settings_meta_test_connection_post(request: Request):
+    actor = web.require_actor(request)
+    message, kind = _run_meta_test_connection(org_id=actor.org_id)
     return {"message": message, "kind": kind}
 
 
@@ -510,8 +516,9 @@ async def api_settings_ga4_post(request: Request):
 
 
 @app.post("/api/settings/ga4/test-connection")
-async def api_settings_ga4_test_connection_post():
-    message, kind = _run_ga4_test_connection()
+async def api_settings_ga4_test_connection_post(request: Request):
+    actor = web.require_actor(request)
+    message, kind = _run_ga4_test_connection(org_id=actor.org_id)
     return {"message": message, "kind": kind}
 
 
@@ -528,16 +535,18 @@ async def api_settings_api_key_post(request: Request):
 
 
 @app.post("/api/settings/api-key/clear-db")
-async def api_settings_api_key_clear_db_post():
+async def api_settings_api_key_clear_db_post(request: Request):
     """不可逆動作：清空資料庫裡的金鑰。二次確認在前端做（S15.17），這裡跟舊表單路由
     一樣不再另外確認一次。"""
-    coresettings.clear_api_key_from_db(web.conn)
+    actor = web.require_actor(request)
+    coresettings.clear_api_key_from_db(web.conn, org_id=actor.org_id)
     return {}
 
 
 @app.post("/api/settings/test-connection")
-async def api_settings_test_connection_post():
-    message, kind = _run_ai_test_connection()
+async def api_settings_test_connection_post(request: Request):
+    actor = web.require_actor(request)
+    message, kind = _run_ai_test_connection(org_id=actor.org_id)
     return {"message": message, "kind": kind}
 
 

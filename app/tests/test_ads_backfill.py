@@ -125,7 +125,7 @@ class _BaseMetaBackfillTest(unittest.TestCase):
                 return real_list_campaigns(account_id)
 
             fake.list_campaigns = _slow_list_campaigns
-        ads_sync.make_client = lambda conn: fake
+        ads_sync.make_client = lambda conn, org_id=None: fake
         return fake
 
 
@@ -136,7 +136,7 @@ class MetaBackfillConfigurationTest(_BaseMetaBackfillTest):
         main.conn.execute("DELETE FROM app_setting WHERE key IN (%s, %s)",
                           (ads_sync.TOKEN_SETTING, ads_sync.ACCOUNT_SETTING))
         main.conn.commit()
-        self.assertFalse(ads_sync.is_configured(main.conn))
+        self.assertFalse(ads_sync.is_configured(main.conn, org_id=DEV_ORG_ID))
 
     def test_progress_touch_alone_does_not_trigger_any_sync(self):
         """安全底線：只是「看過」進度狀態（`_progress_touch`，等待頁 run!=1 那個分支
@@ -238,7 +238,7 @@ class GA4BackfillConfigurationTest(unittest.TestCase):
         main.conn.execute("DELETE FROM app_setting WHERE key IN (%s, %s)",
                           (ga4_sync.PROPERTY_SETTING, ga4_sync.SERVICE_ACCOUNT_SETTING))
         main.conn.commit()
-        self.assertFalse(ga4_sync.is_configured(main.conn))
+        self.assertFalse(ga4_sync.is_configured(main.conn, org_id=DEV_ORG_ID))
 
     def test_progress_touch_alone_does_not_trigger_any_sync(self):
         coresettings.set_setting(main.conn, ga4_sync.PROPERTY_SETTING, PROPERTY_ID,
@@ -246,7 +246,7 @@ class GA4BackfillConfigurationTest(unittest.TestCase):
         coresettings.set_setting(main.conn, ga4_sync.SERVICE_ACCOUNT_SETTING, FAKE_KEY_JSON,
             org_id=DEV_ORG_ID)
         fake = ga4_api.FakeGA4Client(rows=[])
-        ga4_sync.make_client = lambda conn: fake
+        ga4_sync.make_client = lambda conn, org_id=None: fake
         key = ads_routes._progress_key("ga4_backfill", self.bid, "_brand_")
         for _ in range(3):
             ads_routes._progress_touch(key, [("connect", "連線 GA4 服務帳戶")])
@@ -283,7 +283,7 @@ class GA4BackfillFlowTest(unittest.TestCase):
                 return real_fetch(since, until)
 
             fake.fetch_source_medium = _slow_fetch
-        ga4_sync.make_client = lambda conn: fake
+        ga4_sync.make_client = lambda conn, org_id=None: fake
         return fake
 
     def test_full_flow_reports_requested_months_and_requests_twelve_month_range(self):

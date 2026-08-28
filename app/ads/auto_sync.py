@@ -143,16 +143,16 @@ def sync_brand_now(conn, brand_id: str, actor: str, *, meta_client=None, ga4_cli
     # 02-3c：本機時區才是全站「今天」的基準（同 app/main.py _auto_sync_if_due()），
     # 不能直接拿 now（UTC）的曆日，本機時區早於 UTC 時會晚一天才追到到期提醒。
     today = now.astimezone().date().isoformat()
-    if ads_sync.is_configured(conn):
-        brand = bi_repo.get_brand(conn, brand_id)
-        if brand is None:
-            raise ValueError(f"找不到品牌：{brand_id}")
-        org_id = brand["org_id"]
+    brand = bi_repo.get_brand(conn, brand_id)
+    if brand is None:
+        raise ValueError(f"找不到品牌：{brand_id}")
+    org_id = brand["org_id"]
+    if ads_sync.is_configured(conn, org_id=org_id):
         meta_result = ads_sync.sync_account(
             conn, actor, org_id=org_id, client=meta_client, today=today, brand_id_filter=brand_id)
         if meta_result.error:
             raise ValueError(meta_result.error)
-    if ga4_sync.is_configured(conn):
+    if ga4_sync.is_configured(conn, org_id=org_id):
         ga4_result = ga4_sync.sync_brand(conn, brand_id, actor, client=ga4_client, today=today)
         if ga4_result.error:
             raise ValueError(ga4_result.error)
@@ -170,31 +170,28 @@ def run(conn, *, today: str | None = None, meta_client=None, ga4_client=None,
     today = today or date.today().isoformat()
     outcome = {"meta": None, "ga4": {}}
 
-    if ads_sync.is_configured(conn):
-        # 票 03-1：Meta 帳號設定（app/core/settings.py TOKEN_SETTING／ACCOUNT_SETTING）
-        # 目前仍是全站一組、不分組織（該檔不在本票 app/ads 範圍內，沒有跟著這次改成
-        # 每組織一份）——一個 ad_account 列本身有 org_id（schema 上一個帳號只屬於一個
-        # 組織，見 handoff.py _ensure_ad_account），所以「這次要用哪個組織」優先看
-        # 這個帳號過去同步時記下的 org_id；還沒同步過（ad_account 表是空的）才退回
-        # 「隨便選第一個組織」——這條退回路徑只在全站僅有一個組織時才誠實正確，
-        # 多組織都要接同一個 Meta 帳號的情境需要 app/core/settings.py 先變成
-        # 每組織一份設定，這裡先不擴大範圍猜（報告見票 03-1 交接）。
-        existing_account = conn.execute(
-            "SELECT org_id FROM ad_account WHERE platform = 'meta' ORDER BY created_at LIMIT 1"
-        ).fetchone()
-        sync_org_id = existing_account["org_id"] if existing_account else next(iter(_all_org_ids(conn)), None)
-        if sync_org_id:
-            meta_result = ads_sync.sync_account(conn, ACTOR, org_id=sync_org_id, client=meta_client, today=today)
-            outcome["meta"] = meta_result
-            if meta_result.error:
-                core_interrupts.enqueue(
-                    conn, org_id=sync_org_id, category="auto_sync_failed",
-                    dedupe_key=f"auto_sync_failed:meta:{today}",
-                    message=_META_FAILURE_MESSAGE, action_url="/app/settings",
-                )
+    # 票 04-0：app/core/settings.py 的 Meta 帳號設定（TOKEN_SETTING／ACCOUNT_SETTING）
+    # 已經改成每組織一份、讀值一定要帶 org_id（見 app/ads/sync.py is_configured）——一個
+    # ad_account 列本身有 org_id（schema 上一個帳號只屬於一個組織，見 handoff.py
+    # _ensure_ad_account），所以「這次要用哪個組織」優先看這個帳號過去同步時記下的
+    # org_id；還沒同步過（ad_account 表是空的）才退回「隨便選第一個組織」——這條退回
+    # 路徑只在全站僅有一個組織時才誠實正確（報告見票 03-1 交接，票 04-0 沿用同一段話）。
+    existing_account = conn.execute(
+        "SELECT org_id FROM ad_account WHERE platform = 'meta' ORDER BY created_at LIMIT 1"
+    ).fetchone()
+    sync_org_id = existing_account["org_id"] if existing_account else next(iter(_all_org_ids(conn)), None)
+    if sync_org_id and ads_sync.is_configured(conn, org_id=sync_org_id):
+        meta_result = ads_sync.sync_account(conn, ACTOR, org_id=sync_org_id, client=meta_client, today=today)
+        outcome["meta"] = meta_result
+        if meta_result.error:
+            core_interrupts.enqueue(
+                conn, org_id=sync_org_id, category="auto_sync_failed",
+                dedupe_key=f"auto_sync_failed:meta:{today}",
+                message=_META_FAILURE_MESSAGE, action_url="/app/settings",
+            )
 
     for org_id in _all_org_ids(conn):
-        if ga4_sync.is_configured(conn):
+        if ga4_sync.is_configured(conn, org_id=org_id):
             for brand in bi_repo.list_brands(conn, org_id, status="active"):
                 ga4_result = ga4_sync.sync_brand(conn, brand["id"], ACTOR, client=ga4_client, today=today)
                 outcome["ga4"][brand["id"]] = ga4_result
@@ -226,10 +223,19 @@ def run(conn, *, today: str | None = None, meta_client=None, ga4_client=None,
 
 def status(conn, brand_id: str) -> dict:
     """調度台 facts：`sync.meta_configured`／`sync.ga4_configured`（Meta／GA4 連線設定
-    好了沒，全站一組設定，不分品牌）。"""
+    好了沒，全組織一組設定，不分品牌）。
+
+    調度台契約：全新／不存在的品牌也要照樣回傳全部 key、不得丟例外（見
+    test_core_orchestrator.py NewModuleStatusShapeTest）——用 get_brand() 而不是會噴
+    ValueError 的 _org_id_for_brand()，查無此品牌就當作「什麼都沒設定」。
+    """
+    brand = bi_repo.get_brand(conn, brand_id)
+    if brand is None:
+        return {"sync.meta_configured": False, "sync.ga4_configured": False}
+    org_id = brand["org_id"]
     return {
-        "sync.meta_configured": ads_sync.is_configured(conn),
-        "sync.ga4_configured": ga4_sync.is_configured(conn),
+        "sync.meta_configured": ads_sync.is_configured(conn, org_id=org_id),
+        "sync.ga4_configured": ga4_sync.is_configured(conn, org_id=org_id),
     }
 
 

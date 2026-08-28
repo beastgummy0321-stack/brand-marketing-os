@@ -32,6 +32,7 @@ from collections.abc import Callable
 from app.ads import fingerprint as fp
 from app.ads import theme_repository as theme_repo
 from app.ads.brief_assembler import CreativeBrief
+from app.brand_intelligence import repository as bi_repo
 from app.core import creative_assets
 from app.core import settings as coresettings
 from app.core.db import new_id
@@ -104,9 +105,11 @@ def refresh_component_fingerprint(conn, brand_id: str, text: str) -> dict | None
     """text 進、fingerprint dict 出。AI 失敗或花費超上限回 None——呼叫端保留舊指紋，
     不擋文字本身的同步更新（AC2：文字一律跟著 Meta 同步，指紋是錦上添花，不是前提）。
     """
-    model = providers.resolve_model(task_type="creative_theme", conn=conn)
+    org_id = bi_repo._org_id_for_brand(conn, brand_id)
+    model = providers.resolve_model(task_type="creative_theme", conn=conn, brand_id=brand_id)
     budget_err = coresettings.budget_exceeded_message(
         conn, brand_id, pricing.cost_ceiling(model, _engine.COMPONENT_FINGERPRINT_MAX_TOKENS),
+        org_id=org_id,
         action="重打指紋", fallback_hint="可以先跳過這則，之後到設定頁調高上限後再試。")
     if budget_err:
         return None
@@ -142,9 +145,11 @@ def generate_single_image_theme(conn, brief: CreativeBrief, *, actor: str,
         raise ValueError(UNSUPPORTED_FORMAT_MESSAGE)
     plan = _engine.single_image_fields_plan(brief.cycle["objective"])
 
-    model = providers.resolve_model(task_type="creative_theme", conn=conn)
+    model = providers.resolve_model(
+        task_type="creative_theme", conn=conn, brand_id=brief.brand["id"])
     budget_err = coresettings.budget_exceeded_message(
         conn, brief.brand["id"], pricing.cost_ceiling(model, THEME_MAX_TOKENS),
+        org_id=brief.brand["org_id"],
         action="這個主題生成",
         fallback_hint="可以先採用已經產出的主題，或到設定頁調高上限後再試。")
     if budget_err:
@@ -199,9 +204,11 @@ def generate_carousel_theme(conn, brief: CreativeBrief, *, actor: str,
         raise ValueError(CAROUSEL_FORMAT_MISMATCH_MESSAGE)
     plan = _engine.carousel_fields_plan(brief.cycle["objective"])
 
-    model = providers.resolve_model(task_type="creative_theme", conn=conn)
+    model = providers.resolve_model(
+        task_type="creative_theme", conn=conn, brand_id=brief.brand["id"])
     budget_err = coresettings.budget_exceeded_message(
         conn, brief.brand["id"], pricing.cost_ceiling(model, THEME_MAX_TOKENS),
+        org_id=brief.brand["org_id"],
         action="這個主題生成",
         fallback_hint="可以先採用已經產出的主題，或到設定頁調高上限後再試。")
     if budget_err:
@@ -268,7 +275,8 @@ def save_generated_theme(conn, brief: CreativeBrief, generated: dict, *, actor: 
         components=generated["components"],
     )
     folder_path = creative_assets.theme_dir(
-        conn, brief.brand["id"], brief.cycle["id"], theme_folder_name(theme))
+        conn, brief.brand["id"], brief.cycle["id"], theme_folder_name(theme),
+        org_id=brief.brand["org_id"])
     folder_path.mkdir(parents=True, exist_ok=True)
     theme["folder_path"] = str(folder_path)
     return theme

@@ -33,6 +33,7 @@ theme_engine.py 既有機制，不新寫一套）。
 
 
 from app.ads import brief_assembler, nextcycle, theme_engine, theme_feedback
+from app.brand_intelligence import repository as bi_repo
 from app.core import orchestrator as core_orchestrator
 from app.core import settings as coresettings
 from app.core.db import Conn
@@ -54,9 +55,10 @@ def preselected_cells(conn: Conn, brand_id: str, cycle_id: str) -> list:
 
 
 def _budget_blocked(conn: Conn, brand_id: str) -> bool:
-    model = providers.resolve_model(task_type="creative_theme", conn=conn)
+    org_id = bi_repo._org_id_for_brand(conn, brand_id)
+    model = providers.resolve_model(task_type="creative_theme", conn=conn, brand_id=brand_id)
     return coresettings.budget_exceeded_message(
-        conn, brand_id, pricing.cost_ceiling(model, theme_engine.THEME_MAX_TOKENS),
+        conn, brand_id, pricing.cost_ceiling(model, theme_engine.THEME_MAX_TOKENS), org_id=org_id,
     ) is not None
 
 
@@ -86,7 +88,7 @@ def estimated_batch_cost(conn: Conn, brand_id: str, cycle_id: str) -> float:
 
     純讀取：不呼叫 AI、不檢查費用上限、不寫入任何東西。
     """
-    model = providers.resolve_model(task_type="creative_theme", conn=conn)
+    model = providers.resolve_model(task_type="creative_theme", conn=conn, brand_id=brand_id)
     per_generation_ceiling = pricing.cost_ceiling(model, theme_engine.THEME_MAX_TOKENS)
     return per_generation_ceiling * generation_count(conn, brand_id, cycle_id)
 

@@ -72,9 +72,9 @@ def create_draft(conn: db.Conn, brand_id: str, description: str,
 
     一品牌一份進行中草稿由 DB 部分唯一索引擋（§3A.4 第 1 點），這裡不重複檢查。
     """
-    if cost_limit is None:
-        cost_limit = coresettings.get_intake_budget_limit(conn)
     org_id = bi_repo.get_brand(conn, brand_id)["org_id"]
+    if cost_limit is None:
+        cost_limit = coresettings.get_intake_budget_limit(conn, org_id=org_id)
     draft_id = db.new_id("idr")
     ts = db.now_utc()
     conn.execute(

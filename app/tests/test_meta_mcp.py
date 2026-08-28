@@ -234,7 +234,8 @@ class _BaseMetaMcpTest(unittest.TestCase):
         theme_repo.adopt_theme(main.conn, self.bid, theme["id"], actor=ACTOR)
         if with_image:
             folder = creative_assets.theme_dir(
-                main.conn, self.bid, cycle_id, theme_engine.theme_folder_name(theme))
+                main.conn, self.bid, cycle_id, theme_engine.theme_folder_name(theme),
+                org_id=DEV_ORG_ID)
             folder.mkdir(parents=True, exist_ok=True)
             (folder / "shot.png").write_bytes(b"\x89PNG\r\n\x1a\n" + b"0" * 32)
         return theme
@@ -282,7 +283,7 @@ class CreatePreflightTest(_BaseMetaMcpTest):
         main.conn.commit()
 
         result = meta_mcp.create_package(main.conn, self.bid, cycle_id, package["id"],
-                                         actor=ACTOR)
+                                         actor=ACTOR, org_id=DEV_ORG_ID)
         self.assertFalse(result["ok"])
         self.assertIn("到達網址", result["reason"])
         self.assertEqual(self.fake_client.calls, [])
@@ -298,7 +299,7 @@ class CreatePreflightTest(_BaseMetaMcpTest):
         main.conn.commit()
 
         result = meta_mcp.create_package(main.conn, self.bid, cycle_id, package["id"],
-                                         actor=ACTOR)
+                                         actor=ACTOR, org_id=DEV_ORG_ID)
         self.assertTrue(result["ok"], result)
 
         creative_calls = [c for c in self.fake_client.calls if c[0] == "ads_create_creative"]
@@ -317,7 +318,7 @@ class CreatePackageTest(_BaseMetaMcpTest):
     def test_a_writes_mapping_with_four_ids_confirmed(self):
         cycle_id, package = self._build_one_package()
         result = meta_mcp.create_package(main.conn, self.bid, cycle_id, package["id"],
-                                         actor=ACTOR)
+                                         actor=ACTOR, org_id=DEV_ORG_ID)
         self.assertTrue(result["ok"], result)
         meta_ids = result["meta_ids"]
         self.assertEqual(meta_ids["meta_campaign_id"], "cmp_1")
@@ -341,7 +342,7 @@ class CreatePackageTest(_BaseMetaMcpTest):
     def test_b_missing_image_returns_reason_without_calling_client(self):
         cycle_id, package = self._build_one_package(with_image=False)
         result = meta_mcp.create_package(main.conn, self.bid, cycle_id, package["id"],
-                                         actor=ACTOR)
+                                         actor=ACTOR, org_id=DEV_ORG_ID)
         self.assertFalse(result["ok"])
         self.assertEqual(result["reason"], "這個主題還沒放圖")
         self.assertEqual(self.fake_client.calls, [])
@@ -364,9 +365,9 @@ class CreatePackageTest(_BaseMetaMcpTest):
         self.assertEqual(len(packages), 2)
 
         first = meta_mcp.create_package(main.conn, self.bid, cycle_id, packages[0]["id"],
-                                        actor=ACTOR)
+                                        actor=ACTOR, org_id=DEV_ORG_ID)
         second = meta_mcp.create_package(main.conn, self.bid, cycle_id, packages[1]["id"],
-                                         actor=ACTOR)
+                                         actor=ACTOR, org_id=DEV_ORG_ID)
         self.assertTrue(first["ok"], first)
         self.assertTrue(second["ok"], second)
         self.assertEqual(first["meta_ids"]["meta_campaign_id"],
@@ -378,7 +379,7 @@ class CreatePackageTest(_BaseMetaMcpTest):
         cycle_id, package = self._build_one_package()
         self.fake_graph_post.fail_on_suffix = "/adsets"  # 廣告組合已改走 graph_post
         result = meta_mcp.create_package(main.conn, self.bid, cycle_id, package["id"],
-                                         actor=ACTOR)
+                                         actor=ACTOR, org_id=DEV_ORG_ID)
         self.assertFalse(result["ok"])
         self.assertIn("reason", result)
         self.assertIsNone(self._mapping_for(package["id"]))
@@ -558,7 +559,7 @@ class TaiwanIdentityTest(_BaseMetaMcpTest):
         meta_mcp._lookup_taiwan_identity = lambda account_id: TAIWAN_IDENTITY_ID
 
         result = meta_mcp.create_package(main.conn, self.bid, cycle_id, package["id"],
-                                         actor=ACTOR)
+                                         actor=ACTOR, org_id=DEV_ORG_ID)
         self.assertTrue(result["ok"], result)
 
         adset_calls = [c for c in self.fake_graph_post.calls if c[0].endswith("/adsets")]
@@ -583,7 +584,7 @@ class TaiwanIdentityTest(_BaseMetaMcpTest):
         meta_mcp._lookup_taiwan_identity = lambda account_id: None
 
         result = meta_mcp.create_package(main.conn, self.bid, cycle_id, package["id"],
-                                         actor=ACTOR)
+                                         actor=ACTOR, org_id=DEV_ORG_ID)
         self.assertFalse(result["ok"])
         self.assertEqual(result["reason"], meta_mcp.TAIWAN_IDENTITY_MISSING_REASON)
         create_calls = [c for c in self.fake_client.calls if c[0].startswith("ads_create")]
@@ -599,7 +600,7 @@ class TaiwanIdentityTest(_BaseMetaMcpTest):
             lambda account_id: lookup_calls.append(account_id) or TAIWAN_IDENTITY_ID)
         try:
             result = meta_mcp.create_package(main.conn, self.bid, cycle_id, package["id"],
-                                             actor=ACTOR)
+                                             actor=ACTOR, org_id=DEV_ORG_ID)
         finally:
             os.environ.pop(meta_mcp.TAIWAN_IDENTITY_ENV_VAR, None)
 
