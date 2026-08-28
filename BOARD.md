@@ -15,7 +15,6 @@
 ## 第 ④ 片：設定與憑證（需批准：schema）
 
 - [ ] 04-0b `app/ads/sync.py:457-459` `claim()`／`:486-487` `ignore()`：`SELECT * FROM discovered_campaign WHERE id = %s` 沒篩 org_id，唯一邊界是品牌層的 `claimed_brand_id != brand_id`——猜中 id 就能碰到別組織未認領的活動（04-0 §3 鄰居掃描發現）
-- [ ] 04-1a（票 04-1a-ai-money-gate.md，已派 Sonnet）金鑰來源解析器（platform／own，不寫死）＋每組織每月 AI 花費上限硬擋，閘門放在 `app/llm/gateway.py:run_task()`（全站 27 個 AI 呼叫的唯一入口）
 - [ ] 04-1b pydantic-settings 收環境變數＋組織時區（`org_timezone`，IANA，預設 Asia/Taipei，只改排程面的「今天」）＋`llm_task.methodology_hash`（動 schema，一個欄位）
 - [ ] 04-2 憑證進 Supabase Vault（本機已裝 0.3.1）＋「已連接帳號」（組織）→ 綁定（品牌）＋順手補 K1（`tracking.py` INSERT 寫 `meta_ad_id`）
 
@@ -38,6 +37,9 @@
 - [ ] **上雲前必還（2026-08-28 使用者裁決：本機單人階段不修）** 邀請連結是「持有即可用」：`app/identity/routes.py` accept_invite 不比對 invite.email 與登入者 email；且 `AcceptInvitePage` 一掛載就自動接受，沒有確認步驟（03-3 審查 note 5）——等使用者裁決要不要改成 email 嚴格比對
 - [ ] `pendingPath`（登入後導回原路徑）沒有時效也不會在登出時清掉：同一分頁先冷開邀請連結、之後做別的登入，會被靜默導回舊邀請頁（03-3 審查 note 4）
 - [ ] `CopyIconButton` 放在 `components/workbench/shared/`，已有 4 個跨功能呼叫端——照集裝箱憲章 §5 該升級成真正的共用位置（03-3 審查 note 6）
+- [ ] 兩個繞過每月花費閘門的既有路徑（04-1a 審查 note）：`app/main.py:403` 設定頁「測試連線」（1 token 探測）、`app/intake/card_test.py:60-62` CLI 診斷工具（HTTP 碰不到）。風險小，但閘門既然蓋好了應該補齊
+- [ ] `resolve_ai_credentials()` 的「DB 值打錯字→當 platform 處理」分支沒有測試覆蓋（04-1a 審查 note）
+- [ ] 用自己金鑰（`own`）的組織看不到「調整月上限」欄位，切回 `platform` 時不好調——04-2 開放切換來源時一併處理（04-1a 審查 note）
 - [ ] AI 成本對帳：`llm_task.cost` 是我們自己用 `app/llm/pricing.py` 算的**估算值**，不是 Anthropic 實際帳單。官方有 `/v1/organizations/cost_report`（按 workspace／api_key 分組，約 5 分鐘延遲，需 Admin API key）——上雲收費前要拿它跟自己的估算對一次帳，否則「每月上限」擋的是估算不是真錢（2026-08-28 查證）
 - [ ] 404 信封兩種格式並存：`require_brand` 走 `NotFoundKind` 吐 `{"detail": …}`，`web.NotFound` 走 `handle_api_error` 吐 `{"error": {"code", "message"}}`（03-1 r1 審查 note 2）——第 ⑦ 片統一信封時一併收
 - [ ] `app/tests/test_settings_api.py` 一條測試寫死 Windows 磁碟機路徑，02-7 在非 Windows 跳過（`skipif`）；應改成跨平台斷言後拿掉 skip
