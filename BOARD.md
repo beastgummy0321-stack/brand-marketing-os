@@ -18,7 +18,6 @@
 - [ ] 04-1a（票 04-1a-ai-money-gate.md，已派 Sonnet）金鑰來源解析器（platform／own，不寫死）＋每組織每月 AI 花費上限硬擋，閘門放在 `app/llm/gateway.py:run_task()`（全站 27 個 AI 呼叫的唯一入口）
 - [ ] 04-1b pydantic-settings 收環境變數＋組織時區（`org_timezone`，IANA，預設 Asia/Taipei，只改排程面的「今天」）＋`llm_task.methodology_hash`（動 schema，一個欄位）
 - [ ] 04-2 憑證進 Supabase Vault（本機已裝 0.3.1）＋「已連接帳號」（組織）→ 綁定（品牌）＋順手補 K1（`tracking.py` INSERT 寫 `meta_ad_id`）
-- [ ] 04-2 已連接帳號（組織）→ 綁定（品牌）；Meta／GA4 憑證進 Vault；順手補 K1（`tracking.py` INSERT 寫 `meta_ad_id`）
 
 ## 第 ⑤ 片：背景工作
 
