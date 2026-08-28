@@ -282,7 +282,7 @@ def demo() -> None:
     from app.core import db as core_db
 
     with core_db.connection() as conn:
-        brand = bi_repo.create_brand(conn, name="虛構示範品牌", client_name=None, actor="demo")
+        brand = bi_repo.create_brand(conn, org_id="org_dev", name="虛構示範品牌", client_name=None, actor="demo")
         suggestion = suggest_pain_value(conn, brand["id"], "sales", [])
         assert suggestion["is_ai_suggested"] is False
         assert suggestion["amount"] == _nearest_slider_step(5000)

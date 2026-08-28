@@ -42,7 +42,7 @@ from app.brand_intelligence.repository_learning_text import (  # noqa: F401
 )
 from app.core import cleanup
 from app.core.audit import write_audit
-from app.core.db import DEV_ORG_ID, Conn, jsonb, new_id, now_utc
+from app.core.db import Conn, jsonb, new_id, now_utc
 
 
 def _require(value, message: str) -> None:
@@ -77,7 +77,7 @@ def _bump_product_version(conn: Conn, brand_id: str, product_id: str) -> None:
 # Brand
 # ---------------------------------------------------------------------------
 
-def create_brand(conn: Conn, *, name: str, client_name: str | None, actor: str) -> dict:
+def create_brand(conn: Conn, *, org_id: str, name: str, client_name: str | None, actor: str) -> dict:
     _require(name, "brand.name 為必填")
     _require(actor, "actor 為必填")
     brand_id = new_id("brd")
@@ -89,10 +89,10 @@ def create_brand(conn: Conn, *, name: str, client_name: str | None, actor: str) 
     conn.execute(
         "INSERT INTO brand (id, org_id, name, client_name, status, knowledge_version, created_at, updated_at) "
         "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
-        (row["id"], DEV_ORG_ID, row["name"], row["client_name"], row["status"], row["knowledge_version"],
+        (row["id"], org_id, row["name"], row["client_name"], row["status"], row["knowledge_version"],
          row["created_at"], row["updated_at"]),
     )
-    write_audit(conn, brand_id=brand_id, entity_type="brand", entity_id=brand_id,
+    write_audit(conn, org_id=org_id, brand_id=brand_id, entity_type="brand", entity_id=brand_id,
                 action="create", actor=actor, before=None, after=row)
     conn.commit()
     return row
@@ -102,11 +102,28 @@ def get_brand(conn: Conn, brand_id: str) -> dict | None:
     return _row(conn.execute("SELECT * FROM brand WHERE id = %s", (brand_id,)).fetchone())
 
 
-def list_brands(conn: Conn, status: str | None = None) -> list:
-    """品牌切換器用的清單，橫跨所有品牌（brand 是隔離根鍵本身，不受品牌過濾規則限制）。"""
+def _org_id_for_brand(conn: Conn, brand_id: str) -> str:
+    """票 03-1：這個模組幾乎每個寫入函式都要填 org_id，而它們全部已經拿著
+    `brand_id`——org_id 是 brand_id 的確定性函式（一個品牌只屬於一個組織，且組織
+    永不換）。與其把 org_id 當成新參數逐層往上傳（route 早已經在 `require_brand()`
+    驗過 `actor.org_id == brand.org_id`，再往下傳一次是重複資訊），這裡查一次權威值。
+    不是隱藏的 contextvar：輸入是呼叫端已經明確傳入的 brand_id，輸出可回溯、可測試，
+    每個呼叫點都看得到這一行——只有 create_brand()（還沒有品牌可查）例外，org_id
+    真的當成參數從呼叫端（route 的 actor.org_id）傳進來。"""
+    row = conn.execute("SELECT org_id FROM brand WHERE id = %s", (brand_id,)).fetchone()
+    if row is None:
+        raise ValueError(f"找不到品牌：{brand_id}")
+    return row["org_id"]
+
+
+def list_brands(conn: Conn, org_id: str, status: str | None = None) -> list:
+    """品牌切換器用的清單——橫跨一個組織底下所有品牌（票 03-1：org_id 為租戶界線，
+    不是「橫跨所有品牌」了）。"""
     if status:
-        return _rows(conn.execute("SELECT * FROM brand WHERE status = %s ORDER BY name", (status,)))
-    return _rows(conn.execute("SELECT * FROM brand ORDER BY name"))
+        return _rows(conn.execute(
+            "SELECT * FROM brand WHERE org_id = %s AND status = %s ORDER BY name",
+            (org_id, status)))
+    return _rows(conn.execute("SELECT * FROM brand WHERE org_id = %s ORDER BY name", (org_id,)))
 
 
 def update_brand(conn: Conn, brand_id: str, *, name: str,
@@ -124,7 +141,8 @@ def update_brand(conn: Conn, brand_id: str, *, name: str,
         (name, client_name or None, status, ts, brand_id),
     )
     after = get_brand(conn, brand_id)
-    write_audit(conn, brand_id=brand_id, entity_type="brand", entity_id=brand_id,
+    org_id = _org_id_for_brand(conn, brand_id)
+    write_audit(conn, org_id=org_id, brand_id=brand_id, entity_type="brand", entity_id=brand_id,
                 action="update", actor=actor, before=before, after=after)
     conn.commit()
     return after
@@ -151,7 +169,8 @@ def set_brand_switches(conn: Conn, brand_id: str, *,
         (market_region, conversion_goal, ts, brand_id),
     )
     after = get_brand(conn, brand_id)
-    write_audit(conn, brand_id=brand_id, entity_type="brand", entity_id=brand_id,
+    org_id = _org_id_for_brand(conn, brand_id)
+    write_audit(conn, org_id=org_id, brand_id=brand_id, entity_type="brand", entity_id=brand_id,
                 action="update", actor=actor, before=before, after=after)
     conn.commit()
     return after
@@ -181,7 +200,8 @@ def set_brand_industry(conn: Conn, brand_id: str, *,
         (industry, ts, brand_id),
     )
     after = get_brand(conn, brand_id)
-    write_audit(conn, brand_id=brand_id, entity_type="brand", entity_id=brand_id,
+    org_id = _org_id_for_brand(conn, brand_id)
+    write_audit(conn, org_id=org_id, brand_id=brand_id, entity_type="brand", entity_id=brand_id,
                 action="update", actor=actor, before=before, after=after)
     conn.commit()
     return after
@@ -299,10 +319,11 @@ def delete_brand(conn: Conn, brand_id: str, *, actor: str) -> dict:
     # 憲章把跨模組外鍵維持在 0（見 .scratch/saas/tickets/02-2-type-decisions.md 第 6
     # 點），各登記模組只剩模組內的外鍵，而各模組的 CHILD_TABLES／CASCADE_TABLES 早已
     # 手動排成子表先於父表的拓樸順序，順序本身就是正確的。
+    org_id = _org_id_for_brand(conn, brand_id)
     try:
         counts = cleanup.delete_all(conn, brand_id)
         conn.execute("DELETE FROM brand WHERE id = %s", (brand_id,))
-        write_audit(conn, brand_id=brand_id, entity_type="brand", entity_id=brand_id,
+        write_audit(conn, org_id=org_id, brand_id=brand_id, entity_type="brand", entity_id=brand_id,
                     action="delete", actor=actor, before={**before, "deleted_counts": counts},
                     after=None, reason="把關人刪除已封存品牌（決策 0015）")
         conn.commit()
@@ -327,13 +348,14 @@ def create_product(conn: Conn, brand_id: str, *, name: str, actor: str) -> dict:
         "id": product_id, "brand_id": brand_id, "name": name, "status": "active",
         "knowledge_version": 1, "created_at": ts, "updated_at": ts,
     }
+    org_id = _org_id_for_brand(conn, brand_id)
     conn.execute(
         "INSERT INTO product (id, org_id, brand_id, name, status, knowledge_version, created_at, updated_at) "
         "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
-        (row["id"], DEV_ORG_ID, row["brand_id"], row["name"], row["status"], row["knowledge_version"],
+        (row["id"], org_id, row["brand_id"], row["name"], row["status"], row["knowledge_version"],
          row["created_at"], row["updated_at"]),
     )
-    write_audit(conn, brand_id=brand_id, entity_type="product", entity_id=product_id,
+    write_audit(conn, org_id=org_id, brand_id=brand_id, entity_type="product", entity_id=product_id,
                 action="create", actor=actor, before=None, after=row)
     conn.commit()
     return row
@@ -365,7 +387,8 @@ def update_product(conn: Conn, brand_id: str, product_id: str, *,
         (name, status, ts, product_id, brand_id),
     )
     after = get_product(conn, brand_id, product_id)
-    write_audit(conn, brand_id=brand_id, entity_type="product", entity_id=product_id,
+    org_id = _org_id_for_brand(conn, brand_id)
+    write_audit(conn, org_id=org_id, brand_id=brand_id, entity_type="product", entity_id=product_id,
                 action="update", actor=actor, before=before, after=after)
     conn.commit()
     return after
@@ -434,10 +457,11 @@ def delete_product(conn: Conn, brand_id: str, product_id: str, *, actor: str) ->
     # 工作，不再全 app 共用一條，原本的 in_transaction 搶佔檢查、顯式 BEGIN、PRAGMA
     # defer_foreign_keys 都拿掉（跨模組外鍵已在 02-2 維持在 0，各模組表本就照子表先於
     # 父表排序）。
+    org_id = _org_id_for_brand(conn, brand_id)
     try:
         counts = cleanup.delete_all_product(conn, brand_id, product_id)
         conn.execute("DELETE FROM product WHERE id = %s AND brand_id = %s", (product_id, brand_id))
-        write_audit(conn, brand_id=brand_id, entity_type="product", entity_id=product_id,
+        write_audit(conn, org_id=org_id, brand_id=brand_id, entity_type="product", entity_id=product_id,
                     action="delete", actor=actor, before={**before, "deleted_counts": counts},
                     after=None, reason="把關人刪除已封存產品（決策 0020）")
         conn.commit()
@@ -473,16 +497,17 @@ def create_brand_fact(conn: Conn, brand_id: str, *, actor: str, fact_type: str,
         "confirmed_at": ts if status == "confirmed" else None,
         "created_at": ts, "updated_at": ts,
     }
+    org_id = _org_id_for_brand(conn, brand_id)
     conn.execute(
         "INSERT INTO brand_fact (id, org_id, brand_id, fact_type, label, value, status, source_reference_id, "
         "confidence, confirmed_by, confirmed_at, created_at, updated_at) "
         "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
-        (row["id"], DEV_ORG_ID, row["brand_id"], row["fact_type"], row["label"], row["value"], row["status"],
+        (row["id"], org_id, row["brand_id"], row["fact_type"], row["label"], row["value"], row["status"],
          row["source_reference_id"], row["confidence"], row["confirmed_by"], row["confirmed_at"],
          row["created_at"], row["updated_at"]),
     )
     _bump_brand_version(conn, brand_id)
-    write_audit(conn, brand_id=brand_id, entity_type="brand_fact", entity_id=fact_id,
+    write_audit(conn, org_id=org_id, brand_id=brand_id, entity_type="brand_fact", entity_id=fact_id,
                 action="create", actor=actor, before=None, after=row)
     conn.commit()
     return row
@@ -532,7 +557,8 @@ def update_brand_fact(conn: Conn, brand_id: str, fact_id: str, *, actor: str,
     after = get_brand_fact(conn, brand_id, fact_id)
     _bump_brand_version(conn, brand_id)
     reason = "人工編輯直接生效（決策 0013）" if was_confirmed else None
-    write_audit(conn, brand_id=brand_id, entity_type="brand_fact", entity_id=fact_id,
+    org_id = _org_id_for_brand(conn, brand_id)
+    write_audit(conn, org_id=org_id, brand_id=brand_id, entity_type="brand_fact", entity_id=fact_id,
                 action="update", actor=actor, before=before, after=after, reason=reason)
     conn.commit()
     return after
@@ -548,7 +574,8 @@ def _delete_entity(conn: Conn, brand_id: str, table: str, entity_id: str, *,
         raise ValueError(f"找不到{kind_label}：{entity_id}")
     conn.execute(f"DELETE FROM {table} WHERE id = %s AND brand_id = %s", (entity_id, brand_id))
     _bump_brand_version(conn, brand_id)
-    write_audit(conn, brand_id=brand_id, entity_type=table, entity_id=entity_id,
+    org_id = _org_id_for_brand(conn, brand_id)
+    write_audit(conn, org_id=org_id, brand_id=brand_id, entity_type=table, entity_id=entity_id,
                 action="delete", actor=actor, before=before, after=None,
                 reason="把關人刪除（決策 0013）")
     conn.commit()
@@ -585,7 +612,8 @@ def confirm_brand_fact(conn: Conn, brand_id: str, fact_id: str, *,
     )
     after = get_brand_fact(conn, brand_id, fact_id)
     _bump_brand_version(conn, brand_id)
-    write_audit(conn, brand_id=brand_id, entity_type="brand_fact", entity_id=fact_id,
+    org_id = _org_id_for_brand(conn, brand_id)
+    write_audit(conn, org_id=org_id, brand_id=brand_id, entity_type="brand_fact", entity_id=fact_id,
                 action="confirm", actor=actor, before=before, after=after)
     conn.commit()
     return after
@@ -618,16 +646,17 @@ def create_product_fact(conn: Conn, brand_id: str, product_id: str, *, actor: st
         "confirmed_at": ts if status == "confirmed" else None,
         "created_at": ts, "updated_at": ts,
     }
+    org_id = _org_id_for_brand(conn, brand_id)
     conn.execute(
         "INSERT INTO product_fact (id, org_id, product_id, brand_id, fact_type, label, value, status, "
         "source_reference_id, confidence, confirmed_by, confirmed_at, created_at, updated_at) "
         "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
-        (row["id"], DEV_ORG_ID, row["product_id"], row["brand_id"], row["fact_type"], row["label"], row["value"],
+        (row["id"], org_id, row["product_id"], row["brand_id"], row["fact_type"], row["label"], row["value"],
          row["status"], row["source_reference_id"], row["confidence"], row["confirmed_by"],
          row["confirmed_at"], row["created_at"], row["updated_at"]),
     )
     _bump_product_version(conn, brand_id, product_id)
-    write_audit(conn, brand_id=brand_id, entity_type="product_fact", entity_id=fact_id,
+    write_audit(conn, org_id=org_id, brand_id=brand_id, entity_type="product_fact", entity_id=fact_id,
                 action="create", actor=actor, before=None, after=row)
     conn.commit()
     return row
@@ -681,7 +710,8 @@ def update_product_fact(conn: Conn, brand_id: str, product_id: str, fact_id: str
     after = get_product_fact(conn, brand_id, product_id, fact_id)
     _bump_product_version(conn, brand_id, product_id)
     reason = "人工編輯直接生效（決策 0013）" if was_confirmed else None
-    write_audit(conn, brand_id=brand_id, entity_type="product_fact", entity_id=fact_id,
+    org_id = _org_id_for_brand(conn, brand_id)
+    write_audit(conn, org_id=org_id, brand_id=brand_id, entity_type="product_fact", entity_id=fact_id,
                 action="update", actor=actor, before=before, after=after, reason=reason)
     conn.commit()
     return after
@@ -702,7 +732,8 @@ def confirm_product_fact(conn: Conn, brand_id: str, product_id: str, fact_id: st
     )
     after = get_product_fact(conn, brand_id, product_id, fact_id)
     _bump_product_version(conn, brand_id, product_id)
-    write_audit(conn, brand_id=brand_id, entity_type="product_fact", entity_id=fact_id,
+    org_id = _org_id_for_brand(conn, brand_id)
+    write_audit(conn, org_id=org_id, brand_id=brand_id, entity_type="product_fact", entity_id=fact_id,
                 action="confirm", actor=actor, before=before, after=after)
     conn.commit()
     return after
@@ -745,6 +776,7 @@ def save_product_economics(conn: Conn, brand_id: str, product_id: str, *, actor:
         "confirmed_by": confirmed_by, "confirmed_at": ts,
         "created_at": before["created_at"] if before else ts, "updated_at": ts,
     }
+    org_id = _org_id_for_brand(conn, brand_id)
     if before:
         conn.execute(
             "UPDATE product_economics SET selling_price = %s, fixed_cost = %s, unit_variable_cost = %s, "
@@ -761,13 +793,13 @@ def save_product_economics(conn: Conn, brand_id: str, product_id: str, *, actor:
             "unit_variable_cost, shipping_cost, currency, cpa_roas_basis, effective_from, effective_to, "
             "status, source_reference_id, confirmed_by, confirmed_at, created_at, updated_at) "
             "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
-            (row["id"], DEV_ORG_ID, row["product_id"], row["brand_id"], row["selling_price"], row["fixed_cost"],
+            (row["id"], org_id, row["product_id"], row["brand_id"], row["selling_price"], row["fixed_cost"],
              row["unit_variable_cost"], row["shipping_cost"], row["currency"], row["cpa_roas_basis"],
              row["effective_from"], row["effective_to"], row["status"], row["source_reference_id"],
              row["confirmed_by"], row["confirmed_at"], row["created_at"], row["updated_at"]),
         )
         action = "create"
-    write_audit(conn, brand_id=brand_id, entity_type="product_economics", entity_id=row["id"],
+    write_audit(conn, org_id=org_id, brand_id=brand_id, entity_type="product_economics", entity_id=row["id"],
                 action=action, actor=actor, before=before, after=row)
     conn.commit()
     return row
@@ -790,8 +822,7 @@ def get_latest_product_source_url(conn: Conn, brand_id: str,
     return row["url"] if row else None
 
 
-def create_pending_product_economics(conn: Conn, brand_id: str, product_id: str, *,
-                                      actor: str, selling_price: float, currency: str,
+def create_pending_product_economics(conn: Conn, brand_id: str, product_id: str, *, actor: str, selling_price: float, currency: str,
                                       source_reference_id: str | None) -> dict:
     """AI 快掃抓到售價、這個產品目前完全沒有經濟數字列時才呼叫——建一筆 pending，
     固定成本／單位變動成本／運費留白，等使用者到「更新數字」補齊或直接一鍵確認。"""
@@ -806,17 +837,18 @@ def create_pending_product_economics(conn: Conn, brand_id: str, product_id: str,
         "source_reference_id": source_reference_id, "confirmed_by": None, "confirmed_at": None,
         "created_at": ts, "updated_at": ts,
     }
+    org_id = _org_id_for_brand(conn, brand_id)
     conn.execute(
         "INSERT INTO product_economics (id, org_id, product_id, brand_id, selling_price, fixed_cost, "
         "unit_variable_cost, shipping_cost, currency, cpa_roas_basis, effective_from, effective_to, "
         "status, source_reference_id, confirmed_by, confirmed_at, created_at, updated_at) "
         "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
-        (row["id"], DEV_ORG_ID, row["product_id"], row["brand_id"], row["selling_price"], row["fixed_cost"],
+        (row["id"], org_id, row["product_id"], row["brand_id"], row["selling_price"], row["fixed_cost"],
          row["unit_variable_cost"], row["shipping_cost"], row["currency"], row["cpa_roas_basis"],
          row["effective_from"], row["effective_to"], row["status"], row["source_reference_id"],
          row["confirmed_by"], row["confirmed_at"], row["created_at"], row["updated_at"]),
     )
-    write_audit(conn, brand_id=brand_id, entity_type="product_economics", entity_id=row["id"],
+    write_audit(conn, org_id=org_id, brand_id=brand_id, entity_type="product_economics", entity_id=row["id"],
                 action="create", actor=actor, before=None, after=row)
     conn.commit()
     return row
@@ -838,7 +870,8 @@ def confirm_product_economics(conn: Conn, brand_id: str, product_id: str, *,
         (confirmed_by, ts, ts, before["id"]),
     )
     after = get_product_economics(conn, brand_id, product_id)
-    write_audit(conn, brand_id=brand_id, entity_type="product_economics", entity_id=before["id"],
+    org_id = _org_id_for_brand(conn, brand_id)
+    write_audit(conn, org_id=org_id, brand_id=brand_id, entity_type="product_economics", entity_id=before["id"],
                 action="confirm", actor=actor, before=before, after=after)
     conn.commit()
     return after
@@ -865,11 +898,12 @@ def create_rule(conn: Conn, brand_id: str, *, actor: str, rule_type: str, conten
         "confirmed_at": ts,  # 建立即視為已確認（rule-lifecycle 02，ADR 0012 第二節）；
         # 重新確認的顯式操作留給 rule-lifecycle 01。
     }
+    org_id = _org_id_for_brand(conn, brand_id)
     conn.execute(
         "INSERT INTO rule (id, org_id, brand_id, product_id, rule_type, content, severity, status, "
         "source_reference_id, created_at, updated_at, confirmed_at) "
         "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
-        (row["id"], DEV_ORG_ID, row["brand_id"], row["product_id"], row["rule_type"], row["content"],
+        (row["id"], org_id, row["brand_id"], row["product_id"], row["rule_type"], row["content"],
          row["severity"], row["status"], row["source_reference_id"], row["created_at"],
          row["updated_at"], row["confirmed_at"]),
     )
@@ -877,7 +911,7 @@ def create_rule(conn: Conn, brand_id: str, *, actor: str, rule_type: str, conten
         _bump_product_version(conn, brand_id, product_id)
     else:
         _bump_brand_version(conn, brand_id)
-    write_audit(conn, brand_id=brand_id, entity_type="rule", entity_id=rule_id,
+    write_audit(conn, org_id=org_id, brand_id=brand_id, entity_type="rule", entity_id=rule_id,
                 action="create", actor=actor, before=None, after=row)
     conn.commit()
     return row
@@ -913,7 +947,8 @@ def update_rule(conn: Conn, brand_id: str, rule_id: str, *, actor: str,
         _bump_brand_version(conn, brand_id)
     if before["product_id"] and before["product_id"] != product_id:
         _bump_product_version(conn, brand_id, before["product_id"])
-    write_audit(conn, brand_id=brand_id, entity_type="rule", entity_id=rule_id,
+    org_id = _org_id_for_brand(conn, brand_id)
+    write_audit(conn, org_id=org_id, brand_id=brand_id, entity_type="rule", entity_id=rule_id,
                 action="update", actor=actor, before=before, after=after,
                 reason="人工編輯直接生效（決策 0013）")
     conn.commit()
@@ -940,7 +975,8 @@ def deactivate_rule(conn: Conn, brand_id: str, rule_id: str, *, actor: str) -> d
         _bump_product_version(conn, brand_id, after["product_id"])
     else:
         _bump_brand_version(conn, brand_id)
-    write_audit(conn, brand_id=brand_id, entity_type="rule", entity_id=rule_id,
+    org_id = _org_id_for_brand(conn, brand_id)
+    write_audit(conn, org_id=org_id, brand_id=brand_id, entity_type="rule", entity_id=rule_id,
                 action="deactivate", actor=actor, before=before, after=after,
                 reason="人工下架，不再進生成 prompt（決策 0030）")
     conn.commit()
@@ -966,7 +1002,8 @@ def reconfirm_rule(conn: Conn, brand_id: str, rule_id: str, *, actor: str) -> di
         _bump_product_version(conn, brand_id, after["product_id"])
     else:
         _bump_brand_version(conn, brand_id)
-    write_audit(conn, brand_id=brand_id, entity_type="rule", entity_id=rule_id,
+    org_id = _org_id_for_brand(conn, brand_id)
+    write_audit(conn, org_id=org_id, brand_id=brand_id, entity_type="rule", entity_id=rule_id,
                 action="reconfirm", actor=actor, before=before, after=after,
                 reason="使用者延續，恢復生效並更新確認時間（ADR 0012 第一節）")
     conn.commit()
@@ -1024,17 +1061,18 @@ def create_claim(conn: Conn, brand_id: str, *, actor: str, claim_text: str,
         "claim_type": claim_type, "evidence_source_reference_id": evidence_source_reference_id,
         "status": "active", "created_at": ts, "updated_at": ts,
     }
+    org_id = _org_id_for_brand(conn, brand_id)
     conn.execute(
         "INSERT INTO claim (id, org_id, brand_id, product_id, claim_text, claim_type, "
         "evidence_source_reference_id, status, created_at, updated_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
-        (row["id"], DEV_ORG_ID, row["brand_id"], row["product_id"], row["claim_text"], row["claim_type"],
+        (row["id"], org_id, row["brand_id"], row["product_id"], row["claim_text"], row["claim_type"],
          row["evidence_source_reference_id"], row["status"], row["created_at"], row["updated_at"]),
     )
     if product_id:
         _bump_product_version(conn, brand_id, product_id)
     else:
         _bump_brand_version(conn, brand_id)
-    write_audit(conn, brand_id=brand_id, entity_type="claim", entity_id=claim_id,
+    write_audit(conn, org_id=org_id, brand_id=brand_id, entity_type="claim", entity_id=claim_id,
                 action="create", actor=actor, before=None, after=row)
     conn.commit()
     return row
@@ -1069,7 +1107,8 @@ def update_claim(conn: Conn, brand_id: str, claim_id: str, *, actor: str,
         _bump_brand_version(conn, brand_id)
     if before["product_id"] and before["product_id"] != product_id:
         _bump_product_version(conn, brand_id, before["product_id"])
-    write_audit(conn, brand_id=brand_id, entity_type="claim", entity_id=claim_id,
+    org_id = _org_id_for_brand(conn, brand_id)
+    write_audit(conn, org_id=org_id, brand_id=brand_id, entity_type="claim", entity_id=claim_id,
                 action="update", actor=actor, before=before, after=after,
                 reason="人工編輯直接生效（決策 0013）")
     conn.commit()
@@ -1119,13 +1158,14 @@ def create_source_reference(conn: Conn, brand_id: str, *, actor: str, title: str
         "published_date": published_date, "captured_date": captured_date, "locale": locale,
         "note": note, "created_at": ts,
     }
+    org_id = _org_id_for_brand(conn, brand_id)
     conn.execute(
         "INSERT INTO source_reference (id, org_id, brand_id, title, url, source_type, published_date, "
         "captured_date, locale, note, created_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
-        (row["id"], DEV_ORG_ID, row["brand_id"], row["title"], row["url"], row["source_type"],
+        (row["id"], org_id, row["brand_id"], row["title"], row["url"], row["source_type"],
          row["published_date"], row["captured_date"], row["locale"], row["note"], row["created_at"]),
     )
-    write_audit(conn, brand_id=brand_id, entity_type="source_reference", entity_id=src_id,
+    write_audit(conn, org_id=org_id, brand_id=brand_id, entity_type="source_reference", entity_id=src_id,
                 action="create", actor=actor, before=None, after=row)
     conn.commit()
     return row
@@ -1162,13 +1202,14 @@ def create_official_asset(conn: Conn, brand_id: str, *, actor: str, asset_kind: 
         "file_path": file_path, "title": title, "usage_note": usage_note, "status": "active",
         "created_at": ts, "updated_at": ts,
     }
+    org_id = _org_id_for_brand(conn, brand_id)
     conn.execute(
         "INSERT INTO official_asset (id, org_id, brand_id, product_id, asset_kind, file_path, title, "
         "usage_note, status, created_at, updated_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
-        (row["id"], DEV_ORG_ID, row["brand_id"], row["product_id"], row["asset_kind"], row["file_path"],
+        (row["id"], org_id, row["brand_id"], row["product_id"], row["asset_kind"], row["file_path"],
          row["title"], row["usage_note"], row["status"], row["created_at"], row["updated_at"]),
     )
-    write_audit(conn, brand_id=brand_id, entity_type="official_asset", entity_id=asset_id,
+    write_audit(conn, org_id=org_id, brand_id=brand_id, entity_type="official_asset", entity_id=asset_id,
                 action="create", actor=actor, before=None, after=row)
     conn.commit()
     return row
@@ -1210,15 +1251,16 @@ def create_strategy_hypothesis(conn: Conn, brand_id: str, *, actor: str,
         "source_cycle_id": source_cycle_id, "created_by": created_by, "expired_at": None,
         "created_at": ts, "updated_at": ts,
     }
+    org_id = _org_id_for_brand(conn, brand_id)
     conn.execute(
         "INSERT INTO strategy_hypothesis (id, org_id, brand_id, product_id, hypothesis_type, statement, "
         "status, source_cycle_id, created_by, expired_at, created_at, updated_at) "
         "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
-        (row["id"], DEV_ORG_ID, row["brand_id"], row["product_id"], row["hypothesis_type"], row["statement"],
+        (row["id"], org_id, row["brand_id"], row["product_id"], row["hypothesis_type"], row["statement"],
          row["status"], row["source_cycle_id"], row["created_by"], row["expired_at"],
          row["created_at"], row["updated_at"]),
     )
-    write_audit(conn, brand_id=brand_id, entity_type="strategy_hypothesis", entity_id=hyp_id,
+    write_audit(conn, org_id=org_id, brand_id=brand_id, entity_type="strategy_hypothesis", entity_id=hyp_id,
                 action="create", actor=actor, before=None, after=row)
     conn.commit()
     return row
@@ -1256,7 +1298,8 @@ def update_hypothesis_status(conn: Conn, brand_id: str, hypothesis_id: str, *,
         (status, now_utc(), hypothesis_id, brand_id),
     )
     after = get_strategy_hypothesis(conn, brand_id, hypothesis_id)
-    write_audit(conn, brand_id=brand_id, entity_type="strategy_hypothesis", entity_id=hypothesis_id,
+    org_id = _org_id_for_brand(conn, brand_id)
+    write_audit(conn, org_id=org_id, brand_id=brand_id, entity_type="strategy_hypothesis", entity_id=hypothesis_id,
                 action="update_status", actor=actor, before=before, after=after)
     conn.commit()
     return after
@@ -1286,15 +1329,16 @@ def create_brand_performance_baseline(conn: Conn, brand_id: str, *, actor: str,
         "sample_note": sample_note, "as_of_date": as_of_date, "created_by": created_by,
         "created_at": ts, "updated_at": ts,
     }
+    org_id = _org_id_for_brand(conn, brand_id)
     conn.execute(
         "INSERT INTO brand_performance_baseline (id, org_id, brand_id, product_id, metric, value, unit, "
         "basis_note, source_cycle_id, sample_note, as_of_date, created_by, created_at, updated_at) "
         "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
-        (row["id"], DEV_ORG_ID, row["brand_id"], row["product_id"], row["metric"], row["value"], row["unit"],
+        (row["id"], org_id, row["brand_id"], row["product_id"], row["metric"], row["value"], row["unit"],
          row["basis_note"], row["source_cycle_id"], row["sample_note"], row["as_of_date"],
          row["created_by"], row["created_at"], row["updated_at"]),
     )
-    write_audit(conn, brand_id=brand_id, entity_type="brand_performance_baseline",
+    write_audit(conn, org_id=org_id, brand_id=brand_id, entity_type="brand_performance_baseline",
                 entity_id=baseline_id, action="create", actor=actor, before=None, after=row)
     conn.commit()
     return row
@@ -1324,13 +1368,14 @@ def create_brand_report(conn: Conn, brand_id: str, *, actor: str, model: str,
         "source_fact_count": source_fact_count,
         "sections_json": sections,
     }
+    org_id = _org_id_for_brand(conn, brand_id)
     conn.execute(
         "INSERT INTO brand_report (id, org_id, brand_id, generated_at, generated_by, model, llm_task_id, "
         "brand_version, source_fact_count, sections_json) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
-        (row["id"], DEV_ORG_ID, row["brand_id"], row["generated_at"], row["generated_by"], row["model"],
+        (row["id"], org_id, row["brand_id"], row["generated_at"], row["generated_by"], row["model"],
          row["llm_task_id"], row["brand_version"], row["source_fact_count"], jsonb(row["sections_json"])),
     )
-    write_audit(conn, brand_id=brand_id, entity_type="brand_report", entity_id=report_id,
+    write_audit(conn, org_id=org_id, brand_id=brand_id, entity_type="brand_report", entity_id=report_id,
                 action="create", actor=actor,
                 after={"model": model, "llm_task_id": llm_task_id, "source_fact_count": source_fact_count},
                 reason="生成顧問分析報告")
@@ -1376,16 +1421,17 @@ def create_customer_voice(conn: Conn, brand_id: str, *, actor: str, raw_text: st
         "extraction_json": extraction, "llm_task_id": llm_task_id,
         "created_by": actor, "created_at": ts, "updated_at": ts,
     }
+    org_id = _org_id_for_brand(conn, brand_id)
     conn.execute(
         "INSERT INTO customer_voice (id, org_id, brand_id, raw_text, source_channel, source_detail, "
         "source_type, status, extraction_json, llm_task_id, created_by, created_at, updated_at) "
         "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
-        (row["id"], DEV_ORG_ID, row["brand_id"], row["raw_text"], row["source_channel"], row["source_detail"],
+        (row["id"], org_id, row["brand_id"], row["raw_text"], row["source_channel"], row["source_detail"],
          row["source_type"], row["status"], jsonb(row["extraction_json"]), row["llm_task_id"],
          row["created_by"], row["created_at"], row["updated_at"]),
     )
     _bump_brand_version(conn, brand_id)
-    write_audit(conn, brand_id=brand_id, entity_type="customer_voice", entity_id=cv_id,
+    write_audit(conn, org_id=org_id, brand_id=brand_id, entity_type="customer_voice", entity_id=cv_id,
                 action="create", actor=actor, before=None,
                 after={**row, "extraction": extraction})
     conn.commit()
@@ -1429,7 +1475,8 @@ def set_customer_voice_status(conn: Conn, brand_id: str, cv_id: str, *,
         (status, ts, cv_id, brand_id),
     )
     after = get_customer_voice(conn, brand_id, cv_id)
-    write_audit(conn, brand_id=brand_id, entity_type="customer_voice", entity_id=cv_id,
+    org_id = _org_id_for_brand(conn, brand_id)
+    write_audit(conn, org_id=org_id, brand_id=brand_id, entity_type="customer_voice", entity_id=cv_id,
                 action="archive" if status == "archived" else "restore", actor=actor,
                 before=before, after=after)
     conn.commit()
@@ -1482,18 +1529,19 @@ def create_learning_ledger_entry(conn: Conn, brand_id: str, *, learning_text: st
         "confidence": confidence, "needs_revalidation": False, "expired": False,
         "learned_at": ts, "created_by": created_by, "created_at": ts, "source_track": source_track,
     }
+    org_id = _org_id_for_brand(conn, brand_id)
     conn.execute(
         "INSERT INTO learning_ledger (id, org_id, brand_id, product_id, platform, learning_text,"
         " applicability_scope, source_cycle_id, source_reading_id, source_hypothesis_id,"
         " sample_size, confidence, needs_revalidation, expired, learned_at, created_by,"
         " created_at, source_track) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
-        (row["id"], DEV_ORG_ID, row["brand_id"], row["product_id"], row["platform"], row["learning_text"],
+        (row["id"], org_id, row["brand_id"], row["product_id"], row["platform"], row["learning_text"],
          row["applicability_scope"], row["source_cycle_id"], row["source_reading_id"],
          row["source_hypothesis_id"], row["sample_size"], row["confidence"],
          row["needs_revalidation"], row["expired"], row["learned_at"], row["created_by"],
          row["created_at"], row["source_track"]),
     )
-    write_audit(conn, brand_id=brand_id, entity_type="learning_ledger", entity_id=entry_id,
+    write_audit(conn, org_id=org_id, brand_id=brand_id, entity_type="learning_ledger", entity_id=entry_id,
                 action="create", actor=actor, before=None, after=row)
     conn.commit()
     return row
@@ -1530,7 +1578,8 @@ def deactivate_learning_ledger_entry(conn: Conn, brand_id: str, entry_id: str, *
     after = _row(conn.execute(
         "SELECT * FROM learning_ledger WHERE id = %s AND brand_id = %s", (entry_id, brand_id),
     ).fetchone())
-    write_audit(conn, brand_id=brand_id, entity_type="learning_ledger", entity_id=entry_id,
+    org_id = _org_id_for_brand(conn, brand_id)
+    write_audit(conn, org_id=org_id, brand_id=brand_id, entity_type="learning_ledger", entity_id=entry_id,
                 action="deactivate", actor=actor, before=before, after=after,
                 reason="人工下架，不再進生成 prompt（決策 0030）")
     conn.commit()

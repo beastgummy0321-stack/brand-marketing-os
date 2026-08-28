@@ -6,12 +6,13 @@
 """
 
 
-from app.core.db import DEV_ORG_ID, Conn, jsonb, new_id, now_utc
+from app.core.db import Conn, jsonb, new_id, now_utc
 
 
 def write_audit(
     conn: Conn,
     *,
+    org_id: str,
     brand_id: str | None,
     entity_type: str,
     entity_id: str,
@@ -34,7 +35,7 @@ def write_audit(
            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
         (
             audit_id,
-            DEV_ORG_ID,
+            org_id,
             brand_id,
             entity_type,
             entity_id,

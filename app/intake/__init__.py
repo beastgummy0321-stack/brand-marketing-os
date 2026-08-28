@@ -7,3 +7,12 @@ app.brand_intelligence.repository；其餘所有步驟（初掃、問答、交�
 一律回放 app/intake/script.py 的預寫腳本，不呼叫任何 LLM、不產生任何真實花費。
 草稿進度存在本模組的模組層 dict（app/intake/state.py 的 DRAFTS），行程重啟即消失。
 """
+
+
+def register(app) -> None:
+    """掛本模組所有路由（票 03-1，機械式搬移自 app/main.py）。"""
+    from app.intake.routes import router as intake_router
+    from app.intake.routes_api import router as intake_api_router
+
+    app.include_router(intake_router)
+    app.include_router(intake_api_router)

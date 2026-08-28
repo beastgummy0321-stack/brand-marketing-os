@@ -1,9 +1,10 @@
 """品牌人物誌的資料入口；不依賴 LLM 或 intake。"""
 
 
+from app.brand_intelligence.repository import _org_id_for_brand
 from app.core import cleanup
 from app.core.audit import write_audit
-from app.core.db import DEV_ORG_ID, Conn, new_id, now_utc
+from app.core.db import Conn, new_id, now_utc
 
 PERSONA_FIELDS = ("title", "when_needed", "care_about", "hesitation", "where_to_find")
 PERSONA_FIELD_LABELS = {
@@ -27,7 +28,7 @@ def list_personas(conn: Conn, brand_id: str, *, limit: int = None) -> list:
     return [dict(row) for row in conn.execute(sql, params)]
 
 
-def replace_personas(conn: Conn, brand_id: str, rows: list) -> list:
+def replace_personas(conn: Conn, brand_id: str, rows: list, *, org_id: str) -> list:
     """新一批先完整驗證，通過後才取代舊批；不會先清空再發現資料壞掉。"""
     normalized = []
     for row in rows:
@@ -43,7 +44,7 @@ def replace_personas(conn: Conn, brand_id: str, rows: list) -> list:
             conn.execute(
                 "INSERT INTO persona (id, org_id, brand_id, title, when_needed, care_about, hesitation, "
                 "where_to_find, created_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
-                (new_id("psn"), DEV_ORG_ID, brand_id, row["title"], row["when_needed"], row["care_about"],
+                (new_id("psn"), org_id, brand_id, row["title"], row["when_needed"], row["care_about"],
                  row["hesitation"], row["where_to_find"], now_utc()),
             )
         conn.commit()
@@ -65,6 +66,7 @@ def update_persona(conn: Conn, brand_id: str, persona_id: str, fields: dict, *, 
     if before_row is None:
         raise LookupError("找不到這位典型客人。")
     before = dict(before_row)
+    org_id = _org_id_for_brand(conn, brand_id)
     try:
         conn.execute(
             "UPDATE persona SET title = %s, when_needed = %s, care_about = %s, hesitation = %s, "
@@ -74,7 +76,7 @@ def update_persona(conn: Conn, brand_id: str, persona_id: str, fields: dict, *, 
         after = dict(conn.execute(
             "SELECT * FROM persona WHERE id = %s AND brand_id = %s", (persona_id, brand_id),
         ).fetchone())
-        write_audit(conn, brand_id=brand_id, entity_type="persona", entity_id=persona_id,
+        write_audit(conn, org_id=org_id, brand_id=brand_id, entity_type="persona", entity_id=persona_id,
                     action="update", actor=actor, before=before, after=after)
         conn.commit()
     except Exception:

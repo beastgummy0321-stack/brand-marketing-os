@@ -96,7 +96,8 @@ async def brand_start(request: Request):
         return _error(400, f"「{bad}」不是有效的網址，請以 https:// 或 http:// 開頭。")
     photos = state.resolve_photo_tokens([str(t) for t in form.getlist("photo_tokens")])
     client_name = clean(str(form.get("client_name") or ""))
-    brand = repo.create_brand(web.conn, name=brand_name, client_name=client_name or None, actor=actor)
+    brand = repo.create_brand(web.conn, org_id=actor.org_id, name=brand_name,
+                               client_name=client_name or None, actor=str(actor.user_id))
     draft = state.start_or_quick(web.conn, brand["id"], brand_name, description=description,
                                  urls=urls, photos=photos, actor=actor)
     return {"brand_id": brand["id"], "quick": draft is None}

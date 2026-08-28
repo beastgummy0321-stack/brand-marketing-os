@@ -27,7 +27,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
-from app.core.db import DEV_ORG_ID, Conn, new_id, now_utc
+from app.core.db import Conn, new_id, now_utc
 from app.core.rule_cards import get_value
 
 CARD_KEY = "rule_expiry"
@@ -69,7 +69,7 @@ def demo() -> None:
         conn.execute(
             "INSERT INTO brand (id, org_id, name, status, knowledge_version, created_at, updated_at) "
             "VALUES (%s, %s, '示範品牌', 'active', 1, %s, %s)",
-            (brand_id, DEV_ORG_ID, ts, ts),
+            (brand_id, "org_dev", ts, ts),
         )
         fresh_ts = now_utc()
         stale_ts = now_utc() - timedelta(days=200)
@@ -78,8 +78,8 @@ def demo() -> None:
             "created_at, updated_at, confirmed_at) VALUES "
             "(%s, %s, %s, 'tone', '剛確認', 'soft', 'active', %s, %s, %s), "
             "(%s, %s, %s, 'tone', '早就沒人確認', 'soft', 'active', %s, %s, %s)",
-            (fresh_id, DEV_ORG_ID, brand_id, fresh_ts, fresh_ts, fresh_ts,
-             stale_id, DEV_ORG_ID, brand_id, stale_ts, stale_ts, stale_ts),
+            (fresh_id, "org_dev", brand_id, fresh_ts, fresh_ts, fresh_ts,
+             stale_id, "org_dev", brand_id, stale_ts, stale_ts, stale_ts),
         )
         conn.commit()
 

@@ -13,6 +13,7 @@ dependencies = [
     "pytest-xdist==3.8.0",
     "google-analytics-data==0.23.0",
     "psycopg[binary,pool]>=3.3,<4",
+    "pyjwt[crypto]>=2.13.0",
 ]
 
 [dependency-groups]

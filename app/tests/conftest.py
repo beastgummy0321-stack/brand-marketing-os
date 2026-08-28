@@ -28,7 +28,36 @@ from pathlib import Path
 import psycopg
 import pytest
 
-from app.core import db as coredb
+# 票 03-1：測試預設走 dev token（本機 Supabase 一定是 localhost，app.identity.register()
+# 才不會 RuntimeError）。放在任何 app.* import 之前——app.main 組裝時 register() 會
+# 立刻讀這兩個環境變數。IDENTITY_ALLOW_HS256／SUPABASE_JWT_SECRET 是另一條測試路徑
+# （手動 mint HS256 token 驗 JWKS 以外的驗簽路徑），見 test_identity_auth.py。
+os.environ.setdefault("SUPABASE_URL", "http://127.0.0.1:54321")
+os.environ.setdefault("IDENTITY_DEV_TOKEN", "test-dev-token")
+os.environ.setdefault("IDENTITY_ALLOW_HS256", "1")
+os.environ.setdefault(
+    "SUPABASE_JWT_SECRET", "super-secret-jwt-token-with-at-least-32-characters-long"
+)
+
+from starlette.testclient import TestClient as _TestClient  # noqa: E402
+
+from app.core import db as coredb  # noqa: E402 — 環境變數必須先設好才能 import app.*
+
+# 票 03-1：既有測試遍地 `TestClient(app)` 直接送請求，全站現在每條 /api 路由都要 Bearer
+# token（`require_actor()`）。與其去改每個測試檔的建構呼叫，這裡一次幫 `TestClient`
+# 這個類別本身補一個預設 `Authorization` header（dev token，見上面 IDENTITY_DEV_TOKEN）——
+# `fastapi.testclient.TestClient` 就是這個類別的重新匯出，不管測試檔從哪裡 import，
+# patch 的是同一顆類別物件。想測「沒帶 token」就在該測試自己
+# `self.client.headers.pop("Authorization", None)`（或整段覆寫 headers）。
+_orig_testclient_init = _TestClient.__init__
+
+
+def _testclient_init_with_dev_token(self, *args, **kwargs):
+    _orig_testclient_init(self, *args, **kwargs)
+    self.headers["Authorization"] = f"Bearer {os.environ['IDENTITY_DEV_TOKEN']}"
+
+
+_TestClient.__init__ = _testclient_init_with_dev_token
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 _MIGRATIONS_DIR = _REPO_ROOT / "supabase" / "migrations"

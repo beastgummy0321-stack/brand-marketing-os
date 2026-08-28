@@ -8,8 +8,9 @@
 本檔放「每一條路由都會用到」的地基：DB 連線（conn，ADR 0027 起是 `coredb.ConnProxy()`，
 每次呼叫即時轉發到這個 request／工作綁定的連線，見 app/core/db.py connection()）、
 Jinja2 樣板、request context 組裝（ctx／banner_ctx）、品牌存取守門
-（require_brand／require_product）、稽核用的固定操作人（OPERATOR／require_actor）、
-還有幾個純顯示用的小工具（clean／parse_number／redirect_with_message／鮮度標示等）。
+（require_brand／require_product）、租戶界線（require_actor，票 03-1 起回傳
+`app.identity.ActorContext` 而不是固定常數）、還有幾個純顯示用的小工具
+（clean／parse_number／redirect_with_message／鮮度標示等）。
 
 品牌永久層（app.brand_intelligence）在本檔的依賴方向是允許的——「品牌」是每條路由
 都要碰的核心概念，這裡不算 A1 說的「分支專屬層」。真正要守住的是：本檔不得
@@ -17,8 +18,10 @@ import 任何分支專屬層（app.ads／app.orders／app.intake），那些模�
 不能回頭 import app.main（app/ads/routes.py 等改成 `import app.shared.web as main_mod`
 就是為了斷開這個回頭依賴，呼叫端寫法不變）。
 
-ADR 0004（取消具名授權）：系統單機單人，`require_actor()` 不再讀 cookie、不再有
-中斷路徑，一律回傳固定常數 OPERATOR。呼叫端寫法不變（仍是 `actor = require_actor(request)`）。
+票 03-1（ADR 0004 反轉為多租戶）：`require_actor()` 不再回傳固定常數，改回傳
+`app.identity.ActorContext`（登入者的 user_id／org_id／role／email）。呼叫端寫法不變
+（仍是 `actor = require_actor(request)`），但下游要具名字串（`audit_log.actor`、
+`create_x(..., actor=...)` 等既有簽章）的地方要改傳 `str(actor.user_id)`。
 
 `conn` 是 `ConnProxy()`，代理本身固定不換；它每次呼叫都即時查 `db.current()`（這個
 request／工作綁定的那條連線），所以不需要、也沒有「重開一條換掉」這回事了。
@@ -37,7 +40,6 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.brand_intelligence import repository as repo
 from app.core import db as coredb
-from app.core import interrupts as core_interrupts
 from app.core import vocab as md
 
 BASE_DIR = Path(__file__).resolve().parent.parent  # .../app
@@ -87,20 +89,12 @@ def _sorted_by_id(rows: list) -> list:
     return sorted(rows, key=lambda r: r["id"])
 
 
-def list_active_brands() -> list:
-    return _sorted_by_id(repo.list_brands(conn, status="active"))
-
-
-def list_archived_brands() -> list:
-    return _sorted_by_id(repo.list_brands(conn, status="archived"))
-
-
 def list_products(brand_id: str) -> list:
     return _sorted_by_id(repo.list_products(conn, brand_id))
 
 
-def _color_index(brand_id: str) -> int:
-    ids = sorted(b["id"] for b in repo.list_brands(conn))
+def _color_index(brand_id: str, org_id: str) -> int:
+    ids = sorted(b["id"] for b in repo.list_brands(conn, org_id))
     return ids.index(brand_id) % len(md.BRAND_COLOR_PALETTE)
 
 
@@ -214,11 +208,50 @@ class NotFoundKind(StarletteHTTPException):
         super().__init__(status_code=404, detail=kind)
 
 
-def require_brand(brand_id: str):
+class ApiError(Exception):
+    """票 03-1 附錄 A：全站錯誤信封 `{"error": {"code","message","details"}}`。
+
+    一個 FastAPI exception handler（app/main.py `handle_api_error`）統一把這個轉成 JSON。
+    既有路由丟的 `HTTPException`／`NotFoundKind` 維持原樣不受影響（各自的 handler 沒變）——
+    這是新路由（identity）專用的錯誤形狀，不強迫回填舊路由。
+    """
+
+    def __init__(self, status: int, code: str, message: str, details: dict | None = None):
+        self.status = status
+        self.code = code
+        self.message = message
+        self.details = details
+        super().__init__(message)
+
+
+class Unauthenticated(ApiError):
+    def __init__(self, message: str = "請先登入", details: dict | None = None):
+        super().__init__(401, "unauthenticated", message, details)
+
+
+class Forbidden(ApiError):
+    def __init__(self, message: str = "沒有權限", code: str = "forbidden", details: dict | None = None):
+        super().__init__(403, code, message, details)
+
+
+class NotFound(ApiError):
+    def __init__(self, message: str = "找不到", details: dict | None = None):
+        super().__init__(404, "not_found", message, details)
+
+
+def require_brand(brand_id: str, actor):
+    """票 03-1：加上租戶界線——brand 存在但屬於別的組織一律視同不存在（404，不用 403，
+    不洩漏「這個品牌其實存在，只是不是你的」這件事，見 03-plan.md D3-1 決策）。
+
+    ponytail: 用「先按主鍵查出整列（含 org_id 欄），再用 Python 比對」而不是在 SQL 加
+    `AND org_id = %s`——單筆主鍵查詢兩種寫法查詢成本相同，這裡不必為了「SQL 裡有沒有
+    org_id 字樣」這件事再多過一次 repository 簽章改動；`require_brand` 本身就是全站
+    唯一的品牌租戶界線關卡（217 個呼叫點都經過這裡），界線本身沒有變弱。
+    """
     brand = repo.get_brand(conn, brand_id)
-    if not brand:
+    if not brand or brand["org_id"] != actor.org_id:
         raise NotFoundKind("品牌")
-    brand["color_index"] = _color_index(brand_id)
+    brand["color_index"] = _color_index(brand_id, actor.org_id)
     return brand
 
 
@@ -229,29 +262,21 @@ def require_product(brand, product_id: str):
     return product
 
 
-OPERATOR = "本人"  # 固定操作人值（ADR 0004）：單機單人，不再具名，全站稽核一律用這個值。
+def require_actor(request: Request):
+    """需要 actor 的路由一律呼叫這個，取得 `app.identity.ActorContext`（user_id/org_id/
+    role/email）。票 03-1：取代 ADR 0004 固定 OPERATOR 常數的作法——回到具名操作人，
+    這次是「真的登入的人」而不是單機時代的假設。
 
+    延遲 import：`app.identity` 依賴本檔（ApiError 系列、conn），模組層 import 會形成
+    環；函式內延遲 import 是本庫既有的解環寫法（見 test_architecture_boundaries.py
+    ImportCycleScanTest 檔頭說明、app/core/settings.py:108 同款前例）。
+    """
+    from app.identity import authenticate
+    from app.shared import logging as app_logging
 
-def require_actor(request: Request) -> str:
-    """需要 actor 的 POST 一律呼叫這個：ADR 0004 起單機單人不再具名，固定回傳 OPERATOR，
-    不再有任何中斷路徑（取代原本讀 cookie、沒設定就轉址 /settings/operator 的做法）。"""
-    return OPERATOR
-
-
-def ctx(request: Request, brand=None, active_brands=None, **extra):
-    # 打斷佇列待辦清單只查一次：「當前一件」取第一筆，側欄收件匣徽章（修憲落地 V5，
-    # DESIGN.md §21.1 第 2 點）用總筆數，避免重複查詢同一份資料。
-    open_items = core_interrupts.list_open(conn, brand_id=brand["id"] if brand else None)
-    data = {
-        "request": request,
-        "brand": brand,
-        "active_brands": active_brands if active_brands is not None else list_active_brands(),
-        # 頁頂「當前一件」（決策 0026）：有品牌上下文就只看該品牌的，否則跨品牌看最急的那筆。
-        "current_interrupt": open_items[0] if open_items else None,
-        "inbox_count": len(open_items),
-    }
-    data.update(extra)
-    return data
+    actor = authenticate(request)
+    app_logging.bind_actor(user_id=str(actor.user_id), org_id=actor.org_id)
+    return actor
 
 
 def banner_ctx(request: Request):

@@ -30,6 +30,7 @@ import os
 import sys
 import threading
 import time
+import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -99,6 +100,7 @@ from app.core import retention as core_retention
 from app.core import settings as coresettings
 from app.llm import pricing as llm_pricing
 from app.llm import providers as llm_providers
+from app.shared import logging as app_logging
 from app.shared import web
 from app.shared.web import (
     MODEL_CHOICES,
@@ -185,6 +187,8 @@ def _auto_sync_loop() -> None:
 # FastAPI app
 # ---------------------------------------------------------------------------
 
+app_logging.install()  # 票 03-1 附錄 A：JSON formatter + request_id/user_id/org_id filter
+
 app = FastAPI(title="行銷作業系統（Phase 0 Mock UI）")
 
 # 新殼（票 01-react-shell，ADR 0003）：production 掛 frontend/dist 於 /app，
@@ -243,10 +247,19 @@ async def _db_connection_middleware(request: Request, call_next):
 
     順帶補一次「今天清過 llm_task 過期大欄位了嗎」（修憲落地 A5；原本掛在已退場的
     每日備份 middleware——備份是複製 sqlite 檔案，Postgres 世界沒有意義，ADR 0027
-    決策 5 整個模組退場，見 docs/adr/0027）。"""
+    決策 5 整個模組退場，見 docs/adr/0027）。
+
+    票 03-1 附錄 A：順便產生這個 request 的 request_id（uuid4），存進 logging 的
+    contextvar、也回傳成 `X-Request-Id` header；user_id／org_id 由 `require_actor()`
+    在拿到 `ActorContext` 後補上（見 app/shared/web.py）。
+    """
+    request_id = str(uuid.uuid4())
+    app_logging.set_request_id(request_id)
     with coredb.connection():
         _purge_expired_llm_task_content_if_new_day()
-        return await call_next(request)
+        response = await call_next(request)
+    response.headers["X-Request-Id"] = request_id
+    return response
 
 
 # ---------------------------------------------------------------------------
@@ -567,41 +580,20 @@ async def api_settings_budget_post(request: Request):
 # Router 註冊
 # ---------------------------------------------------------------------------
 
-from app.ads.routes import router as ads_router  # noqa: E402
-from app.ads.routes_claims_api import router as claims_api_router  # noqa: E402
-from app.ads.routes_learnings_api import router as learnings_api_router  # noqa: E402
-from app.ads.routes_onboarding_api import router as onboarding_api_router  # noqa: E402
-from app.brand_web.routes import router as brand_intelligence_router  # noqa: E402
-from app.brand_web.routes_inbox import router as inbox_router  # noqa: E402
-from app.brand_web.routes_library import router as library_router  # noqa: E402
-from app.brand_web.routes_library_write import router as library_write_router  # noqa: E402
-from app.brand_web.routes_products import router as products_router  # noqa: E402
-from app.brand_web.routes_report_api import router as report_api_router  # noqa: E402
-from app.dashboard.routes import router as dashboard_router  # noqa: E402
-from app.dashboard.routes_jobs_api import router as jobs_active_router  # noqa: E402
-from app.dashboard.routes_pinned_views_api import router as pinned_views_router  # noqa: E402
-from app.intake.routes import router as intake_router  # noqa: E402
-from app.intake.routes_api import router as intake_api_router  # noqa: E402
-from app.orders import routes as orders_routes  # noqa: E402
-from app.orders import routes_api as orders_routes_api
+from app import ads as ads_module  # noqa: E402
+from app import brand_web as brand_web_module  # noqa: E402
+from app import dashboard as dashboard_module  # noqa: E402
+from app import identity as identity_module  # noqa: E402
+from app import intake as intake_module  # noqa: E402
+from app import orders as orders_module  # noqa: E402
 
-app.include_router(brand_intelligence_router)
-app.include_router(inbox_router)
-app.include_router(library_router)
-app.include_router(library_write_router)
-app.include_router(products_router)
-app.include_router(report_api_router)
-app.include_router(intake_router)
-app.include_router(intake_api_router)
-app.include_router(ads_router)
-app.include_router(claims_api_router)
-app.include_router(onboarding_api_router)
-app.include_router(learnings_api_router)
-app.include_router(orders_routes.router)
-app.include_router(orders_routes_api.router)
-app.include_router(dashboard_router)
-app.include_router(pinned_views_router)
-app.include_router(jobs_active_router)
+# 票 03-1：每個模組的路由掛載交給它自己的 register(app)（機械式：路由本身不變，
+# 只是把 main.py 逐條 include_router 收斂成一個迴圈）。identity 排最後——它的
+# register() 會在 IDENTITY_DEV_TOKEN 設定錯誤時 raise，讓這種設定錯誤盡早炸在啟動
+# 階段，而不是等到第一個請求才發現。
+for _module in (ads_module, brand_web_module, intake_module, orders_module,
+                 dashboard_module, identity_module):
+    _module.register(app)
 
 # ---------------------------------------------------------------------------
 # app.ads → app.orders 依賴注入（第 7 刀，A1 三層地界新規則：app/ads 不得 import
@@ -672,6 +664,16 @@ def _error_page(message: str) -> str:
         "<body style=\"font-family:sans-serif;text-align:center;padding:4rem 1rem;\">"
         f"<p>{message}</p><p><a href=\"/app/\">回首頁</a></p>"
         "</body></html>"
+    )
+
+
+@app.exception_handler(web.ApiError)
+async def handle_api_error(request: Request, exc: web.ApiError):
+    """票 03-1 附錄 A：新路由（目前是 app.identity）統一用這個信封回應——既有路由的
+    HTTPException 走下面 handle_http_exception，兩邊互不影響。"""
+    return JSONResponse(
+        {"error": {"code": exc.code, "message": exc.message, "details": exc.details}},
+        status_code=exc.status,
     )
 
 
