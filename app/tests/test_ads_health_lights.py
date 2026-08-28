@@ -13,6 +13,7 @@ from app.ads import performance as ads_performance
 from app.ads import repository as ads_repo
 from app.brand_intelligence import repository as bi_repo
 from app.core import rule_cards
+from app.core.db import DEV_ORG_ID  # noqa: E402
 
 ACTOR = "測試員"
 
@@ -21,7 +22,7 @@ ACTOR = "測試員"
 class HealthLightsTest(unittest.TestCase):
     def setUp(self):
         self.bid = bi_repo.create_brand(
-            main.conn, name="虛構晨露茶行", client_name="測試客戶", actor=ACTOR)["id"]
+            main.conn, name="虛構晨露茶行", client_name="測試客戶", actor=ACTOR, org_id=DEV_ORG_ID)["id"]
 
     def _cycle(self, *, start_offset_days: int, product_ids=None) -> dict:
         start = date.today() - timedelta(days=start_offset_days)
@@ -54,7 +55,7 @@ class HealthLightsTest(unittest.TestCase):
         default_light = health_lights.compute(main.conn, self.bid, cycle["id"])["spend_rate"]
         self.assertEqual(default_light["status"], "green")  # 預設比例 0.6：0.05 <= 0.15*0.6=0.09
 
-        rule_cards.set_value(main.conn, self.bid, "health_lights", "spend_yellow_ratio", 0.1, ACTOR)
+        rule_cards.set_value(main.conn, self.bid, "health_lights", "spend_yellow_ratio", 0.1, ACTOR, org_id=DEV_ORG_ID)
         changed_light = health_lights.compute(main.conn, self.bid, cycle["id"])["spend_rate"]
         self.assertEqual(changed_light["status"], "yellow")  # 0.15*0.1=0.015，0.05 超過了
 
@@ -72,7 +73,7 @@ class HealthLightsTest(unittest.TestCase):
         default_light = health_lights.compute(main.conn, self.bid, cycle["id"])["cpa"]
         self.assertEqual(default_light["status"], "yellow")  # 預設倍率 1.3：250 <= 200*1.3=260
 
-        rule_cards.set_value(main.conn, self.bid, "health_lights", "cpa_yellow_multiplier", 1.1, ACTOR)
+        rule_cards.set_value(main.conn, self.bid, "health_lights", "cpa_yellow_multiplier", 1.1, ACTOR, org_id=DEV_ORG_ID)
         changed_light = health_lights.compute(main.conn, self.bid, cycle["id"])["cpa"]
         self.assertEqual(changed_light["status"], "red")  # 200*1.1=220，250 超過了
 
@@ -90,7 +91,7 @@ class HealthLightsTest(unittest.TestCase):
         default_light = health_lights.compute(main.conn, self.bid, cycle["id"])["roas"]
         self.assertEqual(default_light["status"], "yellow")  # 預設倍率 0.8：2.0 >= 2.5*0.8=2.0
 
-        rule_cards.set_value(main.conn, self.bid, "health_lights", "roas_yellow_multiplier", 0.9, ACTOR)
+        rule_cards.set_value(main.conn, self.bid, "health_lights", "roas_yellow_multiplier", 0.9, ACTOR, org_id=DEV_ORG_ID)
         changed_light = health_lights.compute(main.conn, self.bid, cycle["id"])["roas"]
         self.assertEqual(changed_light["status"], "red")  # 2.5*0.9=2.25，2.0 沒到
 

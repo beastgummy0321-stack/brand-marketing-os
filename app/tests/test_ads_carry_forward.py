@@ -136,7 +136,7 @@ def _seed_cell(conn, brand_id: str, cycle_id: str, *, creative_angle: str, produ
 class _BaseCarryForwardTest(unittest.TestCase):
     def setUp(self):
         self.brand = bi_repo.create_brand(main.conn, name="虛構贏家品牌",
-                                          client_name="測試客戶", actor=ACTOR)
+                                          client_name="測試客戶", actor=ACTOR, org_id=DEV_ORG_ID)
         self.bid = self.brand["id"]
         self.product = bi_repo.create_product(main.conn, self.bid, name="虛構主打品",
                                               actor=ACTOR)["id"]

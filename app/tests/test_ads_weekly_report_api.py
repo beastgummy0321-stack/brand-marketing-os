@@ -57,7 +57,7 @@ class WeeklyReportTest(unittest.TestCase):
         self.client = TestClient(main.app)
         self.brand = bi_repo.create_brand(
             main.conn, name=f"虛構週報品牌{abs(hash(self.id())) % 100000}",
-            client_name=None, actor=ACTOR,
+            client_name=None, actor=ACTOR, org_id=db.DEV_ORG_ID,
         )
         self.cycle = ads_repo.create_cycle(
             main.conn, self.brand["id"], product_ids=[], pain_value=12000,
@@ -180,7 +180,7 @@ class NewCycleDirectionApiTest(unittest.TestCase):
         self.client = TestClient(main.app)
         self.brand = bi_repo.create_brand(
             main.conn, name=f"虛構開檔品牌{abs(hash(self.id())) % 100000}",
-            client_name=None, actor=ACTOR,
+            client_name=None, actor=ACTOR, org_id=db.DEV_ORG_ID,
         )
         self.url = f"/api/campaigns/{self.brand['id']}/new-context/direction"
 

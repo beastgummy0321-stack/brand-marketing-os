@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 import app.main as main
 import app.shared.web as web
 from app.brand_intelligence import repository as repo
+from app.core.db import DEV_ORG_ID  # noqa: E402
 
 _SEQ = [0]
 
@@ -23,7 +24,8 @@ class OfficialAssetTest(unittest.TestCase):
     def _new_brand(self, name_prefix: str) -> str:
         _SEQ[0] += 1
         name = f"{name_prefix}{_SEQ[0]}"
-        return repo.create_brand(web.conn, name=name, client_name=None, actor="測試員")["id"]
+        return repo.create_brand(web.conn, name=name, client_name=None, actor="測試員",
+            org_id=DEV_ORG_ID)["id"]
 
     def _upload(self, brand_id: str, *, filename="logo.png", content=b"\x89PNG fake bytes",
                 content_type="image/png", asset_kind="logo", title="測試素材"):

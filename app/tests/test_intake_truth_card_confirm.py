@@ -4,6 +4,7 @@ from fastapi.testclient import TestClient
 import app.main as main
 import app.shared.web as web
 from app.brand_intelligence import repository as bi_repo
+from app.core.db import DEV_ORG_ID  # noqa: E402
 from app.intake import repository as ir
 from app.intake import state
 
@@ -14,7 +15,8 @@ def test_truth_card_batch_rejects_product_fact_scoped_to_whole_brand_before_writ
     """e2e-adflow 修復驗證：交接包在品牌沒產品時叫外部 AI 只填「整個品牌」，貼回的
     「產品事實｜…｜整個品牌」列走到真相卡確認會在 _ensure_product 炸 ValueError → 500。
     要在任何一列落檔前就擋成 400，並指名哪幾條要按「改」掛到真正的產品。"""
-    brand = bi_repo.create_brand(web.conn, name="虛構無產品品牌", client_name=None, actor=ACTOR)
+    brand = bi_repo.create_brand(web.conn, name="虛構無產品品牌", client_name=None, actor=ACTOR,
+        org_id=DEV_ORG_ID)
     draft = state.new_draft(brand["id"], brand["name"], description="沒有產品就建檔。",
                             urls=[], photos=[], actor=ACTOR, conn=web.conn)
     items = ir.create_items(web.conn, brand["id"], draft["id"], [

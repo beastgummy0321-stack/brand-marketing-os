@@ -14,7 +14,8 @@ class BrandIsolationTest(unittest.TestCase):
         self.conn = db.current()
 
     def _seed_brand(self, name):
-        brand = repo.create_brand(self.conn, name=name, client_name="測試客戶", actor="測試員")
+        brand = repo.create_brand(self.conn, name=name, client_name="測試客戶", actor="測試員",
+            org_id=db.DEV_ORG_ID)
         bid = brand["id"]
         product = repo.create_product(self.conn, bid, name=f"{name}-產品", actor="測試員")
         pid = product["id"]
@@ -34,6 +35,7 @@ class BrandIsolationTest(unittest.TestCase):
         )
         channel = repo.create_channel(
             self.conn, bid, channel_type="website", name="測試官網", actor="測試員",
+                org_id=db.DEV_ORG_ID,
         )
         economics = repo.save_product_economics(
             self.conn, bid, pid, selling_price=100, currency="TWD",

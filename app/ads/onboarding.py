@@ -91,11 +91,12 @@ def resolve_stale_checkpoint_reminders(conn, brand_id: str, cycle_id: str, *, ac
     事後回頭補做（決策 0025 審查補遺第 4 點：期中檢查點是事件不是死線）。由
     app/ads/reading.py run() 在判讀完成時呼叫——單一觸發點，不靠使用者自己來關。"""
     rows = core_interrupts.list_open(conn, brand_id=brand_id, category="cycle_reminder")
+    org_id = bi._org_id_for_brand(conn, brand_id)
     merged = 0
     for row in rows:
         if row["campaign_cycle_id"] != cycle_id or row["kind"] not in _MID_CYCLE_KINDS:
             continue
-        core_interrupts.resolve(conn, row["id"], actor=actor)
+        core_interrupts.resolve(conn, row["id"], actor=actor, org_id=org_id)
         merged += 1
     return merged
 
@@ -123,7 +124,9 @@ def dismiss(conn, brand_id: str, reminder_id: str, *, actor: str) -> None:
     ).fetchone()
     if row is None or row["brand_id"] != brand_id:
         raise ValueError("找不到這則提醒")
-    core_interrupts.resolve(conn, reminder_id, actor=actor)
+    core_interrupts.resolve(
+        conn, reminder_id, actor=actor, org_id=bi._org_id_for_brand(conn, brand_id)
+    )
 
 
 # ---------------------------------------------------------------------------

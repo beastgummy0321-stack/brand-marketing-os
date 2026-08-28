@@ -15,6 +15,7 @@ import app.shared.web as web
 from app.ads import routes_settings as ads_routes_settings
 from app.brand_intelligence import repository as bi_repo
 from app.core import rule_cards
+from app.core.db import DEV_ORG_ID  # noqa: E402
 
 ACTOR = "測試員"
 
@@ -22,7 +23,7 @@ ACTOR = "測試員"
 class RuleCardsApiTest(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(main.app)
-        self.brand = bi_repo.create_brand(web.conn, name="虛構北風羊毛", client_name=None, actor=ACTOR)
+        self.brand = bi_repo.create_brand(web.conn, name="虛構北風羊毛", client_name=None, actor=ACTOR, org_id=DEV_ORG_ID)
         self.bid = self.brand["id"]
 
     def test_get_shape_matches_contract_type(self):
@@ -82,7 +83,7 @@ class RuleCardsApiTest(unittest.TestCase):
         self.assertEqual(resp.status_code, 404)
 
     def test_reset_restores_default(self):
-        rule_cards.set_value(web.conn, self.bid, "pacing", "deviation_threshold_ratio", 0.5, actor=ACTOR)
+        rule_cards.set_value(web.conn, self.bid, "pacing", "deviation_threshold_ratio", 0.5, actor=ACTOR, org_id=DEV_ORG_ID)
         resp = self.client.post(f"/api/settings/rule-cards/brands/{self.bid}/pacing/reset")
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(
@@ -93,7 +94,7 @@ class RuleCardsApiTest(unittest.TestCase):
 
     def test_brand_isolation(self):
         """A 品牌改的值不影響 B 品牌透過 API 讀到的現值（沿用 rule_cards 既有分品牌行為）。"""
-        brand_b = bi_repo.create_brand(web.conn, name="虛構深夜廚房", client_name=None, actor=ACTOR)
+        brand_b = bi_repo.create_brand(web.conn, name="虛構深夜廚房", client_name=None, actor=ACTOR, org_id=DEV_ORG_ID)
         self.client.post(
             f"/api/settings/rule-cards/brands/{self.bid}/pacing",
             json={"deviation_threshold_ratio": 0.9},
@@ -109,7 +110,7 @@ class RuleCardsApiTest(unittest.TestCase):
             "pacing", {"deviation_threshold_ratio": "0.3"})
         self.assertEqual(field_errors, {})
         for field_key, value in parsed.items():
-            rule_cards.set_value(web.conn, self.bid, "pacing", field_key, value, ACTOR)
+            rule_cards.set_value(web.conn, self.bid, "pacing", field_key, value, ACTOR, org_id=DEV_ORG_ID)
         self.assertEqual(
             rule_cards.get_value(web.conn, self.bid, "pacing", "deviation_threshold_ratio"), 0.3)
 

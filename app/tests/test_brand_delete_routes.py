@@ -20,6 +20,7 @@ import app.shared.web as web
 from app.brand_intelligence import repository as repo
 from app.core import creative_assets
 from app.core import settings as core_settings
+from app.core.db import DEV_ORG_ID  # noqa: E402
 
 ACTOR = "測試員"
 _SEQ = [0]
@@ -29,13 +30,15 @@ class BrandDeleteRouteTest(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(main.app)
         self._asset_tmpdir = tempfile.TemporaryDirectory(prefix="brand_os_brand_delete_assets_")
-        core_settings.set_setting(web.conn, creative_assets.SETTING_KEY, self._asset_tmpdir.name)
+        core_settings.set_setting(web.conn, creative_assets.SETTING_KEY, self._asset_tmpdir.name,
+            org_id=DEV_ORG_ID)
         self.addCleanup(self._asset_tmpdir.cleanup)
 
     def _new_brand(self, prefix: str):
         _SEQ[0] += 1
         name = f"{prefix}{_SEQ[0]}"
-        brand_id = repo.create_brand(web.conn, name=name, client_name=None, actor=ACTOR)["id"]
+        brand_id = repo.create_brand(web.conn, name=name, client_name=None, actor=ACTOR,
+            org_id=DEV_ORG_ID)["id"]
         return brand_id, name
 
     def test_delete_blocked_while_active(self):

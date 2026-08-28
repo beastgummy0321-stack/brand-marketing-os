@@ -27,6 +27,7 @@ from app.ads import plan as ads_plan  # noqa: E402
 from app.ads import theme_repository as theme_repo  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
 from app.core import settings as coresettings  # noqa: E402
+from app.core.db import DEV_ORG_ID  # noqa: E402
 from app.llm.providers import FakeProvider, ProviderResponse, Usage  # noqa: E402
 
 
@@ -80,7 +81,7 @@ class ScanComponentsTest(unittest.TestCase):
 
     def setUp(self):
         self.brand = bi_repo.create_brand(main.conn, name="虛構晨光茶行（掃描票）",
-                                          client_name="測試客戶", actor=ACTOR)
+                                          client_name="測試客戶", actor=ACTOR, org_id=DEV_ORG_ID)
         self.bid = self.brand["id"]
 
     def test_builtin_statutory_term_is_flagged_as_law(self):
@@ -143,7 +144,7 @@ class UnbackedClaimComponentTest(unittest.TestCase):
 
     def setUp(self):
         self.brand = bi_repo.create_brand(main.conn, name="虛構手工蜜餞坊（掃描票）",
-                                          client_name="測試客戶", actor=ACTOR)
+                                          client_name="測試客戶", actor=ACTOR, org_id=DEV_ORG_ID)
         self.bid = self.brand["id"]
         self.product = bi_repo.create_product(main.conn, self.bid, name="測試蜜餞禮盒",
                                               actor=ACTOR)
@@ -178,7 +179,7 @@ class ThemeDetailEndpointScanTest(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(main.app)
         self.brand = bi_repo.create_brand(main.conn, name="虛構草本茶集（掃描票端點）",
-                                          client_name="測試客戶", actor=ACTOR)
+                                          client_name="測試客戶", actor=ACTOR, org_id=DEV_ORG_ID)
         self.bid = self.brand["id"]
         resp = self.client.post(f"/api/campaigns/{self.bid}",
                                 json={"product_ids": [], "budget": 10000, "objective": "sales"})
@@ -240,15 +241,15 @@ class QuickGenerateEndpointScanTest(unittest.TestCase):
 
     def setUp(self):
         self.client = TestClient(main.app)
-        coresettings.set_setting(main.conn, "intake_budget_limit", "1000")
+        coresettings.set_setting(main.conn, "intake_budget_limit", "1000", org_id=DEV_ORG_ID)
         self.brand = bi_repo.create_brand(main.conn, name="虛構晨光茶行（掃描票快速生成）",
-                                          client_name="測試客戶", actor=ACTOR)
+                                          client_name="測試客戶", actor=ACTOR, org_id=DEV_ORG_ID)
         self.bid = self.brand["id"]
         self._orig_provider = theme_engine.PROVIDER
 
     def tearDown(self):
         theme_engine.PROVIDER = self._orig_provider
-        coresettings.set_setting(main.conn, "intake_budget_limit", "30")
+        coresettings.set_setting(main.conn, "intake_budget_limit", "30", org_id=DEV_ORG_ID)
 
     def _text_item(self, content: str) -> dict:
         return {"content": content, "fingerprint": _AXES_VALUES}

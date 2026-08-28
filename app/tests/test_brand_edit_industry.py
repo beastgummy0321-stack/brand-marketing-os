@@ -9,6 +9,7 @@ import unittest
 import app.main as main
 import app.shared.web as web
 from app.brand_intelligence import repository as bi_repo
+from app.core.db import DEV_ORG_ID  # noqa: E402
 
 ACTOR = "測試員"
 
@@ -18,7 +19,7 @@ class BrandEditIndustryFieldTest(unittest.TestCase):
         from fastapi.testclient import TestClient
         self.client = TestClient(main.app)
         self.brand = bi_repo.create_brand(web.conn, name="虛構業種茶行", client_name=None,
-                                          actor=ACTOR)
+                                          actor=ACTOR, org_id=DEV_ORG_ID)
         self.bid = self.brand["id"]
 
     def test_edit_page_shows_industry_dropdown(self):

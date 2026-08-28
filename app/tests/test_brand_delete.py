@@ -21,7 +21,8 @@ class BrandDeleteTest(unittest.TestCase):
 
     def _seed_brand(self, name):
         """一個品牌，每張表都塞一列，才驗得出「刪乾淨」。"""
-        bid = repo.create_brand(self.conn, name=name, client_name="測試客戶", actor="測試員")["id"]
+        bid = repo.create_brand(self.conn, name=name, client_name="測試客戶", actor="測試員",
+            org_id=db.DEV_ORG_ID)["id"]
         pid = repo.create_product(self.conn, bid, name=f"{name}-產品", actor="測試員")["id"]
         repo.create_brand_fact(self.conn, bid, fact_type="positioning", label="定位",
                                 value="測試內容", status="pending", actor="測試員")
@@ -32,7 +33,7 @@ class BrandDeleteTest(unittest.TestCase):
         repo.create_claim(self.conn, bid, claim_text="測試宣稱", claim_type="approved",
                            actor="測試員")
         repo.create_channel(self.conn, bid, channel_type="website", name="測試官網",
-                             actor="測試員")
+                             actor="測試員", org_id=db.DEV_ORG_ID)
         repo.save_product_economics(self.conn, bid, pid, selling_price=100, currency="TWD",
                                      confirmed_by="測試員", actor="測試員")
         repo.create_source_reference(self.conn, bid, title="測試來源", source_type="web",

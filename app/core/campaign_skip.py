@@ -25,8 +25,7 @@ from app.core.db import new_id, now_utc
 
 
 def record_skip(conn, brand_id: str, holiday_id: str, year: int,
-                 reason: str | None = None, *, org_id: str = "org_dev") -> None:
-    # org_id 預設值只服務既有測試呼叫點；正式呼叫端一律顯式傳。
+                 reason: str | None = None, *, org_id: str) -> None:
     """標記某品牌某年不投某個節日檔期。同品牌＋節日＋年份重複標記會覆蓋舊理由
     （使用者改變心意時只留最新一筆）。會 commit。"""
     conn.execute(

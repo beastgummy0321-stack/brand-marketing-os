@@ -30,7 +30,7 @@ class RuleLifecycleTest(unittest.TestCase):
     def setUp(self):
         self.conn = db.current()
         self.brand = bi_repo.create_brand(self.conn, name="虛構晨光咖啡規則有效期",
-                                          client_name=None, actor=ACTOR)
+                                          client_name=None, actor=ACTOR, org_id=db.DEV_ORG_ID)
         self.bid = self.brand["id"]
 
     def _age_rule(self, rule_id: str, days: int) -> None:
@@ -150,11 +150,11 @@ class RuleLifecycleTest(unittest.TestCase):
 
     def test_brand_override_of_reconfirm_cycles_does_not_leak(self):
         other_brand = bi_repo.create_brand(self.conn, name="虛構晨光咖啡規則有效期二號",
-                                           client_name=None, actor=ACTOR)
+                                           client_name=None, actor=ACTOR, org_id=db.DEV_ORG_ID)
         other_bid = other_brand["id"]
         # A 品牌把門檻拉長到 100 期（1400 天），200 天不該逾期
         rule_cards.set_value(self.conn, self.bid, "rule_expiry", "reconfirm_cycles", 100.0,
-                             actor=ACTOR)
+                             actor=ACTOR, org_id=db.DEV_ORG_ID)
         rule = bi_repo.create_rule(self.conn, self.bid, actor=ACTOR, rule_type="tone",
                                    content="A 品牌拉長門檻的規則", severity="soft")
         self._age_rule(rule["id"], days=200)

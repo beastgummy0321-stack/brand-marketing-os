@@ -153,8 +153,8 @@ class _FakeGraphPost:
 class _BaseMetaMcpTest(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(main.app)
-        coresettings.set_setting(main.conn, creative_assets.SETTING_KEY, str(ROOT))
-        coresettings.set_setting(main.conn, "intake_budget_limit", "1000")
+        coresettings.set_setting(main.conn, creative_assets.SETTING_KEY, str(ROOT), org_id=DEV_ORG_ID)
+        coresettings.set_setting(main.conn, "intake_budget_limit", "1000", org_id=DEV_ORG_ID)
 
         self._orig_env = {k: os.environ.get(k) for k in
                           ("META_MCP_TOKEN", "META_AD_ACCOUNT_ID", "META_PAGE_ID")}
@@ -178,13 +178,13 @@ class _BaseMetaMcpTest(unittest.TestCase):
         meta_mcp._CURRENCY_CACHE.clear()
 
         self.brand = bi_repo.create_brand(main.conn, name="虛構晨光咖啡（MCP 票）",
-                                          client_name="測試客戶", actor=ACTOR)
+                                          client_name="測試客戶", actor=ACTOR, org_id=DEV_ORG_ID)
         self.bid = self.brand["id"]
         # 交接包的到達網址來自品牌自有渠道的官網（handoff._default_destination）；
         # 沒登記官網時 destination_url 是空字串——真人實測發現的情境（票二：preflight
         # 擋這個），CreatePreflightTest 專門測那個情境，其餘測試都先登記好官網。
         bi_repo.create_channel(main.conn, self.bid, channel_type="website", name="官網",
-                               identifier="https://example.test", actor=ACTOR)
+                               identifier="https://example.test", actor=ACTOR, org_id=DEV_ORG_ID)
 
         self._orig_plan = ads_plan.PROVIDER
         ads_plan.PROVIDER = FakeProvider(
@@ -198,7 +198,7 @@ class _BaseMetaMcpTest(unittest.TestCase):
         meta_mcp._TW_IDENTITY_CACHE.clear()
         meta_mcp._CURRENCY_CACHE.clear()
         ads_plan.PROVIDER = self._orig_plan
-        coresettings.set_setting(main.conn, "intake_budget_limit", "30")
+        coresettings.set_setting(main.conn, "intake_budget_limit", "30", org_id=DEV_ORG_ID)
         for key, value in self._orig_env.items():
             if value is None:
                 os.environ.pop(key, None)

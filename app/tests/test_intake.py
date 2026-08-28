@@ -111,7 +111,7 @@ class IntakeWizardTest(unittest.TestCase):
 
     def test_budget_limit_default_reads_setting(self):
         from app.core import settings as coresettings
-        coresettings.set_setting(web.conn, "intake_budget_limit", "55")
+        coresettings.set_setting(web.conn, "intake_budget_limit", "55", org_id=coredb.DEV_ORG_ID)
         brand_id = self._new_wizard_brand()
         self.assertEqual(ir.get_active_draft(web.conn, brand_id)["cost_limit"], 55.0)
 

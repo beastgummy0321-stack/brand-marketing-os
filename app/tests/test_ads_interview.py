@@ -24,6 +24,7 @@ from app.ads import fingerprint as fp  # noqa: E402
 from app.ads import interview  # noqa: E402
 from app.ads import repository as ads_repo  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
+from app.core.db import DEV_ORG_ID  # noqa: E402
 
 
 def _cleanup():
@@ -48,7 +49,7 @@ def _ledger_count(brand_id):
 class InterviewSubmitTest(unittest.TestCase):
     def setUp(self):
         self.brand = bi_repo.create_brand(main.conn, name="虛構晨光咖啡",
-                                          client_name=None, actor=ACTOR)
+                                          client_name=None, actor=ACTOR, org_id=DEV_ORG_ID)
         self.bid = self.brand["id"]
 
     def test_bad_selection_becomes_pending_rule_card_with_self_report_evidence(self):
@@ -156,7 +157,7 @@ class InterviewSubmitTest(unittest.TestCase):
 class AttachPendingHypothesesTest(unittest.TestCase):
     def setUp(self):
         self.brand = bi_repo.create_brand(main.conn, name="虛構晨光咖啡二號",
-                                          client_name=None, actor=ACTOR)
+                                          client_name=None, actor=ACTOR, org_id=DEV_ORG_ID)
         self.bid = self.brand["id"]
         self.product = bi_repo.create_product(main.conn, self.bid, name="虛構濾掛組",
                                               actor=ACTOR)["id"]
@@ -205,7 +206,7 @@ class InterviewRouteTest(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(main.app)
         self.brand = bi_repo.create_brand(main.conn, name="虛構晨光咖啡三號",
-                                          client_name=None, actor=ACTOR)
+                                          client_name=None, actor=ACTOR, org_id=DEV_ORG_ID)
         self.bid = self.brand["id"]
 
     def test_post_with_nothing_selected_does_not_block(self):
@@ -234,7 +235,7 @@ class InterviewConflictTest(unittest.TestCase):
 
     def setUp(self):
         self.brand = bi_repo.create_brand(main.conn, name="虛構湖畔燕麥",
-                                          client_name=None, actor=ACTOR)
+                                          client_name=None, actor=ACTOR, org_id=DEV_ORG_ID)
         self.bid = self.brand["id"]
 
     def test_same_axis_value_on_both_sides_creates_nothing(self):

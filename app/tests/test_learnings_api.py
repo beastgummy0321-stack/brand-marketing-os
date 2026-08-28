@@ -18,7 +18,7 @@ class LearningsApiTest(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(main.app)
         self.brand_id = bi_repo.create_brand(
-            main.conn, name=f"累積智慧 API 測試{uuid.uuid4().hex[:8]}", client_name=None, actor=ACTOR,
+            main.conn, name=f"累積智慧 API 測試{uuid.uuid4().hex[:8]}", client_name=None, actor=ACTOR, org_id=DEV_ORG_ID,
         )["id"]
         self.learning = ads_repo.create_learning_ledger_entry(
             main.conn, self.brand_id, learning_text="真人分享更容易讓人理解", applicability_scope="brand",
@@ -105,7 +105,7 @@ class ClosingReviewLedgerCollapseTest(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(main.app)
         self.brand_id = bi_repo.create_brand(
-            main.conn, name=f"覆盤收斂測試{uuid.uuid4().hex[:8]}", client_name=None, actor=ACTOR,
+            main.conn, name=f"覆盤收斂測試{uuid.uuid4().hex[:8]}", client_name=None, actor=ACTOR, org_id=DEV_ORG_ID,
         )["id"]
         product = bi_repo.create_product(main.conn, self.brand_id, name="測試產品", actor=ACTOR)
         self.old_cycle = ads_repo.create_cycle(

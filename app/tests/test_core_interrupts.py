@@ -32,7 +32,7 @@ class InterruptQueueTest(unittest.TestCase):
         return core_interrupts.enqueue(
             self.conn, category="cycle_reminder",
             dedupe_key=dedupe_key or self._default_dedupe_key,
-            message=message, brand_id=self.brand_id, **extra,
+            message=message, brand_id=self.brand_id, **extra, org_id=db.DEV_ORG_ID,
         )
 
     def test_unknown_category_is_rejected(self):
@@ -40,7 +40,7 @@ class InterruptQueueTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             core_interrupts.enqueue(
                 self.conn, category="made_up_category", dedupe_key="x",
-                message="測試", brand_id=self.brand_id,
+                message="測試", brand_id=self.brand_id, org_id=db.DEV_ORG_ID,
             )
 
     def test_same_dedupe_key_enqueued_twice_leaves_one_row(self):
@@ -63,12 +63,12 @@ class InterruptQueueTest(unittest.TestCase):
         （修憲落地體檢 19 第三節找到的品牌隔離缺陷：唯一索引原本只建在 dedupe_key 上）。"""
         first = core_interrupts.enqueue(
             self.conn, category="cycle_reminder", dedupe_key="shared-key",
-            message="品牌一的提醒。", brand_id="brn_FAKE_A",
+            message="品牌一的提醒。", brand_id="brn_FAKE_A", org_id=db.DEV_ORG_ID,
         )
         self.conn.commit()
         second = core_interrupts.enqueue(
             self.conn, category="cycle_reminder", dedupe_key="shared-key",
-            message="品牌二的提醒。", brand_id="brn_FAKE_B",
+            message="品牌二的提醒。", brand_id="brn_FAKE_B", org_id=db.DEV_ORG_ID,
         )
         self.conn.commit()
 
@@ -107,7 +107,7 @@ class InterruptQueueTest(unittest.TestCase):
     def test_resolve_moves_item_to_done_and_writes_audit(self):
         interrupt_id = self._enqueue()
         self.conn.commit()
-        core_interrupts.resolve(self.conn, interrupt_id, actor="測試員")
+        core_interrupts.resolve(self.conn, interrupt_id, actor="測試員", org_id=db.DEV_ORG_ID)
 
         self.assertEqual(core_interrupts.list_open(self.conn, brand_id=self.brand_id), [])
         done = core_interrupts.list_done(self.conn, brand_id=self.brand_id)
@@ -126,7 +126,7 @@ class InterruptQueueTest(unittest.TestCase):
         interrupt_id = self._enqueue()
         self.conn.commit()
         with self.assertRaises(ValueError):
-            core_interrupts.resolve(self.conn, interrupt_id, actor="")
+            core_interrupts.resolve(self.conn, interrupt_id, actor="", org_id=db.DEV_ORG_ID)
 
     def test_visible_from_hides_item_until_due(self):
         future = (date.today() + timedelta(days=5)).isoformat()

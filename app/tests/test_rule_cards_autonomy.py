@@ -30,11 +30,11 @@ class AutonomyRuleCardTest(unittest.TestCase):
         self.assertEqual(rule_cards.get_value(self.conn, "brand_a", "autonomy", "mode"), 1.0)
 
     def test_set_and_reset_keep_brand_value_and_audit(self):
-        rule_cards.set_value(self.conn, "brand_a", "autonomy", "mode", 2.0, actor="測試員")
+        rule_cards.set_value(self.conn, "brand_a", "autonomy", "mode", 2.0, actor="測試員", org_id=db.DEV_ORG_ID)
         self.assertEqual(rule_cards.get_value(self.conn, "brand_a", "autonomy", "mode"), 2.0)
         self.assertEqual(rule_cards.get_value(self.conn, "brand_b", "autonomy", "mode"), 1.0)
 
-        rule_cards.reset_card(self.conn, "brand_a", "autonomy", actor="測試員")
+        rule_cards.reset_card(self.conn, "brand_a", "autonomy", actor="測試員", org_id=db.DEV_ORG_ID)
         self.assertEqual(rule_cards.get_value(self.conn, "brand_a", "autonomy", "mode"), 1.0)
         rows = self._audit_rows()
         self.assertEqual(len(rows), 2)
@@ -46,7 +46,7 @@ class AutonomyRuleCardTest(unittest.TestCase):
 class AutonomyRuleCardApiTest(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(main.app)
-        brand = bi_repo.create_brand(web.conn, name="自動度驗收品牌", client_name=None, actor="測試員")
+        brand = bi_repo.create_brand(web.conn, name="自動度驗收品牌", client_name=None, actor="測試員", org_id=db.DEV_ORG_ID)
         self.brand_id = brand["id"]
 
     def test_post_accepts_both_positive_mode_codes(self):

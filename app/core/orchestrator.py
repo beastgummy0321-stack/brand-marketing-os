@@ -164,8 +164,7 @@ def _process_action(conn, org_id: str, brand_id: str, action: dict) -> dict:
     return {"dedupe_key": dedupe_key, "outcome": "auto_done", "decision_id": decision_id}
 
 
-def run(conn, brand_id: str, *, actor: str, org_id: str = "org_dev") -> dict:
-    # org_id 預設值只服務既有測試呼叫點；正式呼叫端一律顯式傳。
+def run(conn, brand_id: str, *, actor: str, org_id: str) -> dict:
     """派工員：收集各登記模組的 status() 組 facts → decide() → 閘門 → 執行或出卡 → 寫
     decision 留痕。一個模組的 status() 壞了或缺席都不能讓整圈組不出 facts、更不能讓
     其他規則跟著卡住（拔根測試的程式版）。"""

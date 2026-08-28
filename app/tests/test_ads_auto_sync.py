@@ -38,7 +38,7 @@ class _BaseAutoSyncTest(unittest.TestCase):
         main.conn.commit()
         self.brand = bi_repo.create_brand(
             main.conn, name=f"虛構自動同步茶行{abs(hash(self.id())) % 100000}",
-            client_name=None, actor=ACTOR)
+            client_name=None, actor=ACTOR, org_id=db.DEV_ORG_ID)
 
 
 class MetaAutoSyncTest(_BaseAutoSyncTest):
@@ -48,8 +48,8 @@ class MetaAutoSyncTest(_BaseAutoSyncTest):
         self.assertEqual(core_interrupts.list_open(main.conn), [])
 
     def test_configured_calls_sync_account_with_injected_today(self):
-        coresettings.set_setting(main.conn, ads_sync.ACCOUNT_SETTING, "act_123")
-        coresettings.set_setting(main.conn, ads_sync.TOKEN_SETTING, "fake-token")
+        coresettings.set_setting(main.conn, ads_sync.ACCOUNT_SETTING, "act_123", org_id=db.DEV_ORG_ID)
+        coresettings.set_setting(main.conn, ads_sync.TOKEN_SETTING, "fake-token", org_id=db.DEV_ORG_ID)
         fake = meta_api.FakeMetaClient(campaigns=[], insights=[])
         outcome = ads_auto_sync.run(
             main.conn, today=TODAY, meta_client=fake, url_probe=NO_NETWORK)
@@ -63,8 +63,8 @@ class MetaAutoSyncTest(_BaseAutoSyncTest):
         self.assertEqual(insight_calls[-1][3], TODAY)
 
     def test_sync_failure_enqueues_interrupt(self):
-        coresettings.set_setting(main.conn, ads_sync.ACCOUNT_SETTING, "act_123")
-        coresettings.set_setting(main.conn, ads_sync.TOKEN_SETTING, "fake-token")
+        coresettings.set_setting(main.conn, ads_sync.ACCOUNT_SETTING, "act_123", org_id=db.DEV_ORG_ID)
+        coresettings.set_setting(main.conn, ads_sync.TOKEN_SETTING, "fake-token", org_id=db.DEV_ORG_ID)
         fake = meta_api.FakeMetaClient(error=meta_api.MetaApiError("模擬 Meta 連線失敗"))
         outcome = ads_auto_sync.run(
             main.conn, today=TODAY, meta_client=fake, url_probe=NO_NETWORK)
@@ -74,8 +74,8 @@ class MetaAutoSyncTest(_BaseAutoSyncTest):
         self.assertEqual(rows[0]["category"], "auto_sync_failed")
 
     def test_sync_success_does_not_enqueue_interrupt(self):
-        coresettings.set_setting(main.conn, ads_sync.ACCOUNT_SETTING, "act_123")
-        coresettings.set_setting(main.conn, ads_sync.TOKEN_SETTING, "fake-token")
+        coresettings.set_setting(main.conn, ads_sync.ACCOUNT_SETTING, "act_123", org_id=db.DEV_ORG_ID)
+        coresettings.set_setting(main.conn, ads_sync.TOKEN_SETTING, "fake-token", org_id=db.DEV_ORG_ID)
         fake = meta_api.FakeMetaClient(campaigns=[], insights=[])
         ads_auto_sync.run(main.conn, today=TODAY, meta_client=fake, url_probe=NO_NETWORK)
         self.assertEqual(core_interrupts.list_open(main.conn), [])
@@ -83,8 +83,8 @@ class MetaAutoSyncTest(_BaseAutoSyncTest):
     def test_repeated_same_day_failure_does_not_duplicate_interrupt(self):
         """去重鍵含日期：同一天重複跑（例如背景執行緒又檢查了一次）只留一筆，
         不會洗版打斷佇列。"""
-        coresettings.set_setting(main.conn, ads_sync.ACCOUNT_SETTING, "act_123")
-        coresettings.set_setting(main.conn, ads_sync.TOKEN_SETTING, "fake-token")
+        coresettings.set_setting(main.conn, ads_sync.ACCOUNT_SETTING, "act_123", org_id=db.DEV_ORG_ID)
+        coresettings.set_setting(main.conn, ads_sync.TOKEN_SETTING, "fake-token", org_id=db.DEV_ORG_ID)
         fake = meta_api.FakeMetaClient(error=meta_api.MetaApiError("模擬 Meta 連線失敗"))
         ads_auto_sync.run(main.conn, today=TODAY, meta_client=fake, url_probe=NO_NETWORK)
         ads_auto_sync.run(main.conn, today=TODAY, meta_client=fake, url_probe=NO_NETWORK)
@@ -99,10 +99,10 @@ class GA4AutoSyncTest(_BaseAutoSyncTest):
     def test_configured_syncs_each_active_brand(self):
         brand_2 = bi_repo.create_brand(
             main.conn, name=f"虛構自動同步二號店{abs(hash(self.id())) % 100000}",
-            client_name=None, actor=ACTOR)
-        coresettings.set_setting(main.conn, ga4_sync.PROPERTY_SETTING, "123456789")
+            client_name=None, actor=ACTOR, org_id=db.DEV_ORG_ID)
+        coresettings.set_setting(main.conn, ga4_sync.PROPERTY_SETTING, "123456789", org_id=db.DEV_ORG_ID)
         coresettings.set_setting(main.conn, ga4_sync.SERVICE_ACCOUNT_SETTING,
-                                 '{"type": "service_account"}')
+                                 '{"type": "service_account"}', org_id=db.DEV_ORG_ID)
         fake = ga4_api.FakeGA4Client(rows=[])
         outcome = ads_auto_sync.run(
             main.conn, today=TODAY, ga4_client=fake, url_probe=NO_NETWORK)
@@ -116,10 +116,10 @@ class GA4AutoSyncTest(_BaseAutoSyncTest):
     def test_one_brand_ga4_failure_does_not_block_the_other(self):
         brand_2 = bi_repo.create_brand(
             main.conn, name=f"虛構自動同步三號店{abs(hash(self.id())) % 100000}",
-            client_name=None, actor=ACTOR)
-        coresettings.set_setting(main.conn, ga4_sync.PROPERTY_SETTING, "123456789")
+            client_name=None, actor=ACTOR, org_id=db.DEV_ORG_ID)
+        coresettings.set_setting(main.conn, ga4_sync.PROPERTY_SETTING, "123456789", org_id=db.DEV_ORG_ID)
         coresettings.set_setting(main.conn, ga4_sync.SERVICE_ACCOUNT_SETTING,
-                                 '{"type": "service_account"}')
+                                 '{"type": "service_account"}', org_id=db.DEV_ORG_ID)
         fake = ga4_api.FakeGA4Client(error=ga4_api.GA4ApiError("模擬 GA4 連線失敗"))
         outcome = ads_auto_sync.run(
             main.conn, today=TODAY, ga4_client=fake, url_probe=NO_NETWORK)
@@ -141,15 +141,15 @@ class AutoSyncScheduleSafetyTest(unittest.TestCase):
         main.conn.commit()
 
     def test_testclient_without_context_manager_never_triggers_auto_sync(self):
-        coresettings.set_setting(main.conn, ads_sync.ACCOUNT_SETTING, "act_123")
-        coresettings.set_setting(main.conn, ads_sync.TOKEN_SETTING, "fake-token")
+        coresettings.set_setting(main.conn, ads_sync.ACCOUNT_SETTING, "act_123", org_id=db.DEV_ORG_ID)
+        coresettings.set_setting(main.conn, ads_sync.TOKEN_SETTING, "fake-token", org_id=db.DEV_ORG_ID)
         main.conn.commit()
         before = main._last_auto_sync_check
         TestClient(main.app)  # 不進 context manager，不觸發 startup 排程
         self.assertEqual(main._last_auto_sync_check, before)
 
     def test_live_cycle_runs_every_four_hours(self):
-        brand = bi_repo.create_brand(main.conn, name="虛構四小時排程", client_name=None, actor=ACTOR)
+        brand = bi_repo.create_brand(main.conn, name="虛構四小時排程", client_name=None, actor=ACTOR, org_id=db.DEV_ORG_ID)
         ts = db.now_utc()
         main.conn.execute(
             "INSERT INTO campaign_cycle (id, org_id, brand_id, product_scope_json, objective,"
@@ -179,7 +179,7 @@ class AutoSyncScheduleSafetyTest(unittest.TestCase):
         self.assertEqual(run.call_count, 2)
 
     def test_cycle_checks_run_live_reminder_and_post_sync_chain(self):
-        brand = bi_repo.create_brand(main.conn, name="虛構同步檢查", client_name=None, actor=ACTOR)
+        brand = bi_repo.create_brand(main.conn, name="虛構同步檢查", client_name=None, actor=ACTOR, org_id=db.DEV_ORG_ID)
         ts = db.now_utc()
         cycle_id = db.new_id("ccy")
         main.conn.execute(
@@ -203,11 +203,11 @@ class ImmediateSyncTest(_BaseAutoSyncTest):
     def setUp(self):
         super().setUp()
         ads_auto_sync._immediate_sync_cache.clear()
-        coresettings.set_setting(main.conn, ads_sync.ACCOUNT_SETTING, "act_123")
-        coresettings.set_setting(main.conn, ads_sync.TOKEN_SETTING, "fake-token")
-        coresettings.set_setting(main.conn, ga4_sync.PROPERTY_SETTING, "123456789")
+        coresettings.set_setting(main.conn, ads_sync.ACCOUNT_SETTING, "act_123", org_id=db.DEV_ORG_ID)
+        coresettings.set_setting(main.conn, ads_sync.TOKEN_SETTING, "fake-token", org_id=db.DEV_ORG_ID)
+        coresettings.set_setting(main.conn, ga4_sync.PROPERTY_SETTING, "123456789", org_id=db.DEV_ORG_ID)
         coresettings.set_setting(main.conn, ga4_sync.SERVICE_ACCOUNT_SETTING,
-                                 '{"type": "service_account"}')
+                                 '{"type": "service_account"}', org_id=db.DEV_ORG_ID)
 
     def test_immediate_sync_debounces_repeated_clicks(self):
         meta = meta_api.FakeMetaClient(campaigns=[], insights=[])

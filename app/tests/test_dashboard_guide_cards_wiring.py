@@ -73,7 +73,7 @@ class OverviewNextStepWiringTest(unittest.TestCase):
     def test_pending_facts_surface_as_next_step(self):
         brand = bi_repo.create_brand(
             main.conn, name=f"虛構待確認茶行{abs(hash(self.id())) % 100000}",
-            client_name=None, actor=ACTOR)
+            client_name=None, actor=ACTOR, org_id=coredb.DEV_ORG_ID)
         bi_repo.set_brand_switches(main.conn, brand["id"], market_region=None,
                                    conversion_goal="purchase", actor=ACTOR)
         bi_repo.create_brand_fact(
@@ -88,7 +88,7 @@ class OverviewNextStepWiringTest(unittest.TestCase):
     def test_cycle_stuck_before_launch_surfaces_stage_as_next_step(self):
         brand = bi_repo.create_brand(
             main.conn, name=f"虛構卡關雜貨店{abs(hash(self.id())) % 100000}",
-            client_name=None, actor=ACTOR)
+            client_name=None, actor=ACTOR, org_id=coredb.DEV_ORG_ID)
         bi_repo.set_brand_switches(main.conn, brand["id"], market_region=None,
                                    conversion_goal="purchase", actor=ACTOR)
         cycle_id = _insert_cycle(main.conn, brand["id"], status="PLANNING")
@@ -104,7 +104,7 @@ class OverviewNextStepWiringTest(unittest.TestCase):
         兩條規則同時觸發時 next_step 該是 reading_unread。"""
         brand = bi_repo.create_brand(
             main.conn, name=f"虛構判讀待看茶行{abs(hash(self.id())) % 100000}",
-            client_name=None, actor=ACTOR)
+            client_name=None, actor=ACTOR, org_id=coredb.DEV_ORG_ID)
         bi_repo.set_brand_switches(main.conn, brand["id"], market_region=None,
                                    conversion_goal="purchase", actor=ACTOR)
         cycle_id = _insert_cycle(main.conn, brand["id"], status="EVALUATING")
@@ -122,7 +122,7 @@ class OverviewNextStepWiringTest(unittest.TestCase):
     def test_next_cycle_draft_ready_surfaces_once_reading_is_used(self):
         brand = bi_repo.create_brand(
             main.conn, name=f"虛構下期已備妥雜貨店{abs(hash(self.id())) % 100000}",
-            client_name=None, actor=ACTOR)
+            client_name=None, actor=ACTOR, org_id=coredb.DEV_ORG_ID)
         bi_repo.set_brand_switches(main.conn, brand["id"], market_region=None,
                                    conversion_goal="purchase", actor=ACTOR)
         cycle_id = _insert_cycle(main.conn, brand["id"], status="CLOSED")
@@ -149,7 +149,7 @@ class CockpitGuideCardsWiringTest(unittest.TestCase):
     def test_empty_list_when_nothing_to_do(self):
         brand = bi_repo.create_brand(
             main.conn, name=f"虛構一切正常茶行{abs(hash(self.id())) % 100000}",
-            client_name=None, actor=ACTOR)
+            client_name=None, actor=ACTOR, org_id=coredb.DEV_ORG_ID)
         bi_repo.set_brand_switches(main.conn, brand["id"], market_region=None,
                                    conversion_goal="purchase", actor=ACTOR)
         self.assertEqual(self._guide_cards(brand["id"]), [])
@@ -158,7 +158,7 @@ class CockpitGuideCardsWiringTest(unittest.TestCase):
         """票 C：conversion_goal 沒設定本身就是待辦，駕駛艙要看得到。"""
         brand = bi_repo.create_brand(
             main.conn, name=f"虛構沒設定目標茶行{abs(hash(self.id())) % 100000}",
-            client_name=None, actor=ACTOR)
+            client_name=None, actor=ACTOR, org_id=coredb.DEV_ORG_ID)
         cards = self._guide_cards(brand["id"])
         self.assertEqual(len(cards), 1)
         self.assertIn("廣告目標", cards[0]["title"])
@@ -167,7 +167,7 @@ class CockpitGuideCardsWiringTest(unittest.TestCase):
     def test_stuck_cycle_and_pending_facts_both_surface_up_to_three(self):
         brand = bi_repo.create_brand(
             main.conn, name=f"虛構雙待辦雜貨店{abs(hash(self.id())) % 100000}",
-            client_name=None, actor=ACTOR)
+            client_name=None, actor=ACTOR, org_id=coredb.DEV_ORG_ID)
         bi_repo.set_brand_switches(main.conn, brand["id"], market_region=None,
                                    conversion_goal="purchase", actor=ACTOR)
         _insert_cycle(main.conn, brand["id"], status="PRODUCTION")
@@ -202,7 +202,7 @@ class CockpitGuideCardsWiringTest(unittest.TestCase):
         （跟「看這期完整作戰室」指到不同檔期時，兩處都得標日期區間）。"""
         brand = bi_repo.create_brand(
             main.conn, name=f"虛構步調警示茶行{abs(hash(self.id())) % 100000}",
-            client_name=None, actor=ACTOR)
+            client_name=None, actor=ACTOR, org_id=coredb.DEV_ORG_ID)
         bi_repo.set_brand_switches(main.conn, brand["id"], market_region=None,
                                    conversion_goal="purchase", actor=ACTOR)
         cycle = ads_repo.create_cycle(
@@ -223,7 +223,7 @@ class CockpitGuideCardsWiringTest(unittest.TestCase):
         recommendation／brand_fact 幾張表，補進只讀防線的快照清單裡一起驗。"""
         brand = bi_repo.create_brand(
             main.conn, name=f"虛構只讀驗證茶行{abs(hash(self.id())) % 100000}",
-            client_name=None, actor=ACTOR)
+            client_name=None, actor=ACTOR, org_id=coredb.DEV_ORG_ID)
         cycle_id = _insert_cycle(main.conn, brand["id"], status="EVALUATING")
         _insert_reading(main.conn, brand["id"], cycle_id)
         bi_repo.create_brand_fact(

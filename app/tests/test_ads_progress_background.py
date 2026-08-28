@@ -29,6 +29,7 @@ from app.ads import repository as ads_repo  # noqa: E402
 from app.ads import routes as ads_routes  # noqa: E402
 from app.ads import routes_campaigns_open_api  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
+from app.core.db import DEV_ORG_ID  # noqa: E402
 from app.llm.providers import ProviderResponse, Usage  # noqa: E402
 
 
@@ -107,7 +108,7 @@ class _BaseProgressTest(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(main.app)
         self.brand = bi_repo.create_brand(main.conn, name="虛構晨光咖啡",
-                                          client_name="測試客戶", actor=ACTOR)
+                                          client_name="測試客戶", actor=ACTOR, org_id=DEV_ORG_ID)
         self.bid = self.brand["id"]
         resp = self.client.post(f"/api/campaigns/{self.bid}",
                                 json={"product_ids": [], "budget": 10000, "objective": "sales"})

@@ -20,6 +20,7 @@ from app.ads import performance as ads_performance  # noqa: E402
 from app.ads import repository as ads_repo  # noqa: E402
 from app.ads import target_cpa  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
+from app.core.db import DEV_ORG_ID  # noqa: E402
 from app.orders import repository as orders_repo  # noqa: E402
 
 ACTOR = "測試員"
@@ -56,7 +57,7 @@ class _BaseTest(unittest.TestCase):
     def setUp(self):
         self.brand = bi_repo.create_brand(
             main.conn, name=f"虛構晨露茶行{abs(hash(self.id())) % 100000}",
-            client_name=None, actor=ACTOR)
+            client_name=None, actor=ACTOR, org_id=DEV_ORG_ID)
         self.bid = self.brand["id"]
 
 

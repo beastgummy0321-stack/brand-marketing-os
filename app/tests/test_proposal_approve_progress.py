@@ -80,7 +80,7 @@ class _Base(unittest.TestCase):
         self.client = TestClient(main.app)
         self.brand = bi_repo.create_brand(
             main.conn, name=f"提案核可背景票測試品牌{abs(hash(self.id())) % 100000}",
-            client_name=None, actor=ACTOR)
+            client_name=None, actor=ACTOR, org_id=DEV_ORG_ID)
         self.bid = self.brand["id"]
         product = bi_repo.create_product(main.conn, self.bid, name="測試商品", actor=ACTOR)
         bi_repo.save_product_economics(

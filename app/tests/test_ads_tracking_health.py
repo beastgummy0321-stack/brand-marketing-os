@@ -11,6 +11,7 @@ import app.main as main
 from app.ads import ga4_api, ga4_sync, meta_api, tracking
 from app.brand_intelligence import repository as bi_repo
 from app.core import settings as coresettings
+from app.core.db import DEV_ORG_ID  # noqa: E402
 from app.orders import channel as orders_channel
 
 ACTOR = "測試員"
@@ -37,22 +38,22 @@ class TrackingHealthBase(unittest.TestCase):
         self.client = TestClient(main.app)
         self.brand = bi_repo.create_brand(
             main.conn, name=f"虛構健檢茶行{abs(hash(self.id())) % 100000}",
-            client_name=None, actor=ACTOR)
+            client_name=None, actor=ACTOR, org_id=DEV_ORG_ID)
         self.bid = self.brand["id"]
 
     def add_channel(self, channel_type, identifier=None, name="通路"):
         return bi_repo.create_channel(
             main.conn, self.bid, actor=ACTOR, channel_type=channel_type, name=name,
-            identifier=identifier)
+            identifier=identifier, org_id=DEV_ORG_ID)
 
     def sync_ga4(self, *, sessions=10, days_ago=0):
         """訊號②測試小工具：跑一次假 GA4 同步，讓 ga4_sync_status／ga4_summary 有資料列。
         全程 FakeGA4Client，不打真 GA4 API（比照 app/tests/test_ads_ga4.py 既有寫法）。
         days_ago>0 用來造「同步過但已經不新鮮」的情境，直接改寫 synced_at
         （sync_brand 一律用當下真實時間戳，測試要驗過期只能事後覆寫）。"""
-        coresettings.set_setting(main.conn, ga4_sync.PROPERTY_SETTING, "123456789")
+        coresettings.set_setting(main.conn, ga4_sync.PROPERTY_SETTING, "123456789", org_id=DEV_ORG_ID)
         coresettings.set_setting(main.conn, ga4_sync.SERVICE_ACCOUNT_SETTING,
-                                 '{"client_email": "svc@example.iam.gserviceaccount.com"}')
+                                 '{"client_email": "svc@example.iam.gserviceaccount.com"}', org_id=DEV_ORG_ID)
         row = ga4_api.SourceMediumRow(source="google", medium="organic", sessions=sessions,
                                       conversions=0.0, revenue=0.0)
         client = ga4_api.FakeGA4Client(rows=[row], purchase_seen=False)
@@ -64,8 +65,8 @@ class TrackingHealthBase(unittest.TestCase):
             main.conn.commit()
 
     def configure_meta(self):
-        coresettings.set_setting(main.conn, "meta_access_token", "測試唯讀金鑰")
-        coresettings.set_setting(main.conn, "meta_ad_account_id", "act_999")
+        coresettings.set_setting(main.conn, "meta_access_token", "測試唯讀金鑰", org_id=DEV_ORG_ID)
+        coresettings.set_setting(main.conn, "meta_ad_account_id", "act_999", org_id=DEV_ORG_ID)
 
 
 class WebsiteDetectionTest(TrackingHealthBase):
@@ -191,8 +192,8 @@ class WebsiteDetectionTest(TrackingHealthBase):
         """沒接 Meta 連線＝這個訊號跳過（回 None），不是錯誤、不擋人，也不誤判成「沒有」。
         先明確清掉 Meta 設定：這兩把是全站設定，不分品牌，其他測試方法（同一支模組共用
         一條隔離 DB連線）可能已經設過，這裡強制回到「沒接」的前提，不依賴測試執行順序。"""
-        coresettings.set_setting(main.conn, "meta_access_token", "")
-        coresettings.set_setting(main.conn, "meta_ad_account_id", "")
+        coresettings.set_setting(main.conn, "meta_access_token", "", org_id=DEV_ORG_ID)
+        coresettings.set_setting(main.conn, "meta_ad_account_id", "", org_id=DEV_ORG_ID)
         self.add_channel("website", identifier="https://example.test")
         node = tracking.check_website_now(
             main.conn, self.bid, fetch=lambda _url: (True, _NEITHER_HTML))

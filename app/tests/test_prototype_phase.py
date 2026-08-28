@@ -28,18 +28,21 @@ class PrototypePhaseFlagTest(unittest.TestCase):
         self.assertFalse(prototype_phase.has_ended(self.conn))
 
     def test_zero_spend_does_not_flag(self):
-        triggered = prototype_phase.check_and_flag(self.conn, actual_spend=0, actor="測試員")
+        triggered = prototype_phase.check_and_flag(self.conn, actual_spend=0, actor="測試員",
+            org_id=db.DEV_ORG_ID)
         self.assertFalse(triggered)
         self.assertFalse(prototype_phase.has_ended(self.conn))
 
     def test_none_spend_does_not_flag(self):
-        triggered = prototype_phase.check_and_flag(self.conn, actual_spend=None, actor="測試員")
+        triggered = prototype_phase.check_and_flag(self.conn, actual_spend=None, actor="測試員",
+            org_id=db.DEV_ORG_ID)
         self.assertFalse(triggered)
         self.assertFalse(prototype_phase.has_ended(self.conn))
 
     def test_real_spend_flags_and_notifies(self):
         triggered = prototype_phase.check_and_flag(
-            self.conn, actual_spend=8500.0, actor="測試員", cycle_id="cyc_FAKE")
+            self.conn, actual_spend=8500.0, actor="測試員", cycle_id="cyc_FAKE",
+                org_id=db.DEV_ORG_ID)
         self.assertTrue(triggered)
         self.assertTrue(prototype_phase.has_ended(self.conn))
 
@@ -56,9 +59,10 @@ class PrototypePhaseFlagTest(unittest.TestCase):
         self.assertEqual(audit_rows[0]["action"], "ended")
 
     def test_second_call_after_ended_is_a_no_op(self):
-        prototype_phase.check_and_flag(self.conn, actual_spend=100, actor="測試員")
+        prototype_phase.check_and_flag(self.conn, actual_spend=100, actor="測試員",
+            org_id=db.DEV_ORG_ID)
         triggered_again = prototype_phase.check_and_flag(
-            self.conn, actual_spend=999, actor="測試員")
+            self.conn, actual_spend=999, actor="測試員", org_id=db.DEV_ORG_ID)
         self.assertFalse(triggered_again)
 
         open_items = core_interrupts.list_open(self.conn)

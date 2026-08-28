@@ -19,6 +19,7 @@ from app.ads import ga4_sync
 from app.ads import repository as ads_repo
 from app.ads import sync as ads_sync
 from app.brand_intelligence import repository as bi_repo
+from app.core.db import DEV_ORG_ID  # noqa: E402
 from app.orders import dispatch as orders_dispatch
 
 ACTOR = "測試員"
@@ -59,7 +60,7 @@ class ConnectionsRouteTest(unittest.TestCase):
         main.conn.commit()
         self.brand_name = f"虛構晨光茶行{abs(hash(self.id())) % 100000}"
         self.brand = bi_repo.create_brand(main.conn, name=self.brand_name,
-                                          client_name=None, actor=ACTOR)
+                                          client_name=None, actor=ACTOR, org_id=DEV_ORG_ID)
         self.bid = self.brand["id"]
 
     # ---- 頁面直達＋空狀態＋金鑰深連結 --------------------------------------

@@ -294,13 +294,12 @@ def _cycle_for(conn, brand_id: str, meta_campaign_id: str,
             else (None, None, None))
 
 
-def sync_account(conn, actor: str, *, org_id: str = "org_dev", client=None,
+def sync_account(conn, actor: str, *, org_id: str, client=None,
                  account_id: str | None = None,
                  since: str | None = None, until: str | None = None,
                  today: str | None = None,
                  brand_id_filter: str | None = None) -> SyncResult:
-    """把帳號上的活動與成效抓回來。失敗一律回帶 error 的結果，不拋例外、不半途留髒資料。
-    org_id 預設值只服務既有測試呼叫點；正式呼叫端一律顯式傳。"""
+    """把帳號上的活動與成效抓回來。失敗一律回帶 error 的結果，不拋例外、不半途留髒資料。"""
     account_external = account_id or get_account_id(conn)
     if not account_external:
         return SyncResult(error=meta_api.NO_TOKEN_MESSAGE)

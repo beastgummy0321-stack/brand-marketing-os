@@ -156,7 +156,7 @@ class GenerateEndToEndTest(unittest.TestCase):
         self.client = TestClient(main.app)
         brand = bi_repo.create_brand(
             main.conn, name=f"虛構F13品牌{abs(hash(self.id())) % 100000}",
-            client_name=None, actor=ACTOR)
+            client_name=None, actor=ACTOR, org_id=db.DEV_ORG_ID)
         self.brand_id = brand["id"]
 
     def test_generate_end_to_end_names_this_cycles_ads_not_another_cycles_code(self):

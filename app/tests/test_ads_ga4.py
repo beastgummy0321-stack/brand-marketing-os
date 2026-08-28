@@ -13,6 +13,7 @@ import app.main as main
 from app.ads import ga4_api, ga4_sync
 from app.brand_intelligence import repository as bi_repo
 from app.core import settings as coresettings
+from app.core.db import DEV_ORG_ID  # noqa: E402
 
 ACTOR = "測試員"
 PROPERTY_ID = "123456789"
@@ -54,10 +55,12 @@ class _BaseGA4Test(unittest.TestCase):
         # 用 uuid4 不用 hash(self.id())：hash() 受 PYTHONHASHSEED 隨機化，跟 test_ads_sync.py
         # 同前綴同 mod 可能撞名（B4R 收尾包踢出的 flaky 根因）。
         self.brand = bi_repo.create_brand(main.conn, name=f"虛構晨光咖啡{uuid.uuid4().hex[:8]}",
-                                          client_name=None, actor=ACTOR)
+                                          client_name=None, actor=ACTOR, org_id=DEV_ORG_ID)
         self.bid = self.brand["id"]
-        coresettings.set_setting(main.conn, ga4_sync.PROPERTY_SETTING, PROPERTY_ID)
-        coresettings.set_setting(main.conn, ga4_sync.SERVICE_ACCOUNT_SETTING, FAKE_KEY_JSON)
+        coresettings.set_setting(main.conn, ga4_sync.PROPERTY_SETTING, PROPERTY_ID,
+            org_id=DEV_ORG_ID)
+        coresettings.set_setting(main.conn, ga4_sync.SERVICE_ACCOUNT_SETTING, FAKE_KEY_JSON,
+            org_id=DEV_ORG_ID)
 
     def _sync(self, rows=None, purchase_seen=True, error=None, **kwargs):
         client = ga4_api.FakeGA4Client(rows=rows, purchase_seen=purchase_seen, error=error)

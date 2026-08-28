@@ -66,7 +66,8 @@ class GuideCardLinksResolveTest(unittest.TestCase):
         # 另一條連線都看得到這裡 commit 過的資料）。
         with coredb.connection():
             brand = bi_repo.create_brand(
-                main.conn, name="虛構連結檢查花坊", client_name=None, actor=ACTOR)
+                main.conn, name="虛構連結檢查花坊", client_name=None, actor=ACTOR,
+                    org_id=coredb.DEV_ORG_ID)
             cls.brand_id = brand["id"]
             cls.cycle_id = _insert_cycle(main.conn, cls.brand_id)
             # 票 B3-intake：intake_in_progress 的網址要真的能接到一份進行中草稿，不能只是

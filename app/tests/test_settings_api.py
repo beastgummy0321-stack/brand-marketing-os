@@ -66,7 +66,7 @@ class SettingsApiTest(unittest.TestCase):
         self.assertIsInstance(body["data"]["intake_budget"], (int, float))
 
     def test_get_settings_reflects_saved_values(self):
-        coresettings.set_setting(web.conn, coresettings.API_KEY_SETTING, TEST_KEY)
+        coresettings.set_setting(web.conn, coresettings.API_KEY_SETTING, TEST_KEY, org_id=coredb.DEV_ORG_ID)
         body = self.client.get("/api/settings").json()["data"]
         self.assertEqual(body["api_key_source"], "db")
         self.assertTrue(body["db_key_present"])
@@ -90,7 +90,7 @@ class SettingsApiTest(unittest.TestCase):
         self.assertIn("請貼上 AI 金鑰", resp.json()["error"])
 
     def test_clear_api_key_from_db(self):
-        coresettings.set_setting(web.conn, coresettings.API_KEY_SETTING, TEST_KEY)
+        coresettings.set_setting(web.conn, coresettings.API_KEY_SETTING, TEST_KEY, org_id=coredb.DEV_ORG_ID)
         resp = self.client.post("/api/settings/api-key/clear-db")
         self.assertEqual(resp.status_code, 200)
         self.assertIsNone(coresettings.get_setting(web.conn, coresettings.API_KEY_SETTING))
@@ -179,7 +179,7 @@ class SettingsApiTest(unittest.TestCase):
         self.assertIn("尚未設定金鑰", body["message"])
 
     def test_ai_test_connection_success_uses_fake_provider(self):
-        coresettings.set_setting(web.conn, coresettings.API_KEY_SETTING, TEST_KEY)
+        coresettings.set_setting(web.conn, coresettings.API_KEY_SETTING, TEST_KEY, org_id=coredb.DEV_ORG_ID)
         fake = providers.FakeProvider()
         with mock.patch.object(providers, "AnthropicProvider", return_value=fake):
             resp = self.client.post("/api/settings/test-connection")
@@ -196,8 +196,8 @@ class SettingsApiTest(unittest.TestCase):
         self.assertEqual(body["kind"], "warn")
 
     def test_meta_test_connection_success_uses_fake_client(self):
-        coresettings.set_setting(web.conn, ads_sync.ACCOUNT_SETTING, "act_123")
-        coresettings.set_setting(web.conn, ads_sync.TOKEN_SETTING, "fake-token")
+        coresettings.set_setting(web.conn, ads_sync.ACCOUNT_SETTING, "act_123", org_id=coredb.DEV_ORG_ID)
+        coresettings.set_setting(web.conn, ads_sync.TOKEN_SETTING, "fake-token", org_id=coredb.DEV_ORG_ID)
         fake = meta_api.FakeMetaClient(campaigns=[])
         with mock.patch.object(ads_sync, "make_client", return_value=fake):
             resp = self.client.post("/api/settings/meta/test-connection")
@@ -207,9 +207,9 @@ class SettingsApiTest(unittest.TestCase):
         self.assertEqual(fake.calls, [("campaigns", "act_123")])
 
     def test_ga4_test_connection_success_uses_fake_client(self):
-        coresettings.set_setting(web.conn, ga4_sync.PROPERTY_SETTING, "123456789")
+        coresettings.set_setting(web.conn, ga4_sync.PROPERTY_SETTING, "123456789", org_id=coredb.DEV_ORG_ID)
         coresettings.set_setting(web.conn, ga4_sync.SERVICE_ACCOUNT_SETTING,
-                                 '{"type": "service_account"}')
+                                 '{"type": "service_account"}', org_id=coredb.DEV_ORG_ID)
         fake = ga4_api.FakeGA4Client(rows=[])
         with mock.patch.object(ga4_sync, "make_client", return_value=fake):
             resp = self.client.post("/api/settings/ga4/test-connection")
@@ -227,7 +227,7 @@ class SettingsApiTest(unittest.TestCase):
     def test_get_settings_reports_env_source_and_masks_env_key(self):
         """環境變數優先於 DB 且來源誠實回報；env 金鑰本身也要遮罩，不能原樣外流
         （原 test_settings_page.py::test_env_key_takes_priority_and_page_says_so）。"""
-        coresettings.set_setting(web.conn, coresettings.API_KEY_SETTING, TEST_KEY)
+        coresettings.set_setting(web.conn, coresettings.API_KEY_SETTING, TEST_KEY, org_id=coredb.DEV_ORG_ID)
         os.environ["ANTHROPIC_API_KEY"] = "env-only-value-not-shown"
         try:
             body = self.client.get("/api/settings").json()["data"]
@@ -240,7 +240,7 @@ class SettingsApiTest(unittest.TestCase):
 
     def test_ai_test_connection_failure_returns_danger_kind(self):
         """金鑰錯誤：danger kind + 人話訊息原樣透出（原 test_test_connection_key_error_shows_human_message）。"""
-        coresettings.set_setting(web.conn, coresettings.API_KEY_SETTING, TEST_KEY)
+        coresettings.set_setting(web.conn, coresettings.API_KEY_SETTING, TEST_KEY, org_id=coredb.DEV_ORG_ID)
         fake = providers.FakeProvider(exception=providers.ProviderError("金鑰錯誤：測試訊息。"))
         with mock.patch.object(providers, "AnthropicProvider", return_value=fake):
             resp = self.client.post("/api/settings/test-connection")
@@ -250,8 +250,8 @@ class SettingsApiTest(unittest.TestCase):
 
     def test_meta_test_connection_failure_returns_danger_kind(self):
         """原 test_meta_test_connection_failure_shows_human_error。"""
-        coresettings.set_setting(web.conn, ads_sync.ACCOUNT_SETTING, "act_123")
-        coresettings.set_setting(web.conn, ads_sync.TOKEN_SETTING, "fake-token")
+        coresettings.set_setting(web.conn, ads_sync.ACCOUNT_SETTING, "act_123", org_id=coredb.DEV_ORG_ID)
+        coresettings.set_setting(web.conn, ads_sync.TOKEN_SETTING, "fake-token", org_id=coredb.DEV_ORG_ID)
         fake = meta_api.FakeMetaClient(error=meta_api.MetaApiError("Meta 拒絕了這次連線。"))
         with mock.patch.object(ads_sync, "make_client", return_value=fake):
             resp = self.client.post("/api/settings/meta/test-connection")
@@ -261,9 +261,9 @@ class SettingsApiTest(unittest.TestCase):
 
     def test_ga4_test_connection_failure_returns_danger_kind(self):
         """原 test_ga4_test_connection_failure_shows_human_error。"""
-        coresettings.set_setting(web.conn, ga4_sync.PROPERTY_SETTING, "123456789")
+        coresettings.set_setting(web.conn, ga4_sync.PROPERTY_SETTING, "123456789", org_id=coredb.DEV_ORG_ID)
         coresettings.set_setting(web.conn, ga4_sync.SERVICE_ACCOUNT_SETTING,
-                                 '{"type": "service_account"}')
+                                 '{"type": "service_account"}', org_id=coredb.DEV_ORG_ID)
         fake = ga4_api.FakeGA4Client(error=ga4_api.GA4ApiError("連不上 GA4。"))
         with mock.patch.object(ga4_sync, "make_client", return_value=fake):
             resp = self.client.post("/api/settings/ga4/test-connection")
@@ -274,7 +274,7 @@ class SettingsApiTest(unittest.TestCase):
     def test_save_prompt_header_can_be_saved_empty(self):
         """留白代表整組複製時不加開頭那一行，不是輸入錯誤（原
         test_prompt_header_can_be_saved_empty）。"""
-        coresettings.set_setting(web.conn, coresettings.IMAGE_PROMPT_HEADER_SETTING, "舊的開頭")
+        coresettings.set_setting(web.conn, coresettings.IMAGE_PROMPT_HEADER_SETTING, "舊的開頭", org_id=coredb.DEV_ORG_ID)
         resp = self.client.post("/api/settings/prompt-header", json={"prompt_header": "  "})
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(

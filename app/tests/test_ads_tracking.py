@@ -23,7 +23,7 @@ class TrackingBase(unittest.TestCase):
         self.client = TestClient(main.app)
         self.brand = bi_repo.create_brand(
             main.conn, name=f"虛構追蹤茶行{abs(hash(self.id())) % 100000}",
-            client_name=None, actor=ACTOR)
+            client_name=None, actor=ACTOR, org_id=db.DEV_ORG_ID)
         self.bid = self.brand["id"]
 
     def cycle(self, *, cycle_id=None, start="2026-08-01", status="PRODUCTION"):
@@ -61,7 +61,7 @@ class TrackingBase(unittest.TestCase):
             insights=insights or [],
         )
         return ads_sync.sync_account(
-            main.conn, ACTOR, client=fake, account_id="act_tracking", today="2026-08-13")
+            main.conn, ACTOR, client=fake, account_id="act_tracking", today="2026-08-13", org_id=db.DEV_ORG_ID)
 
 
 class ShortCodeAndAlertTest(TrackingBase):

@@ -22,6 +22,7 @@ from app.ads import repository as ads_repo  # noqa: E402
 from app.ads import theme_repository as theme_repo  # noqa: E402
 from app.brand_intelligence import compliance_wordlist  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
+from app.core.db import DEV_ORG_ID  # noqa: E402
 from app.llm.providers import FakeProvider, ProviderResponse, Usage  # noqa: E402
 
 OPERATOR = "本人"  # 票 03-1：production 端已刪除，測試沿用舊字串值當 actor 名稱
@@ -137,7 +138,7 @@ class CoverageGapsTest(unittest.TestCase):
 
     def setUp(self):
         self.brand = bi_repo.create_brand(main.conn, name="虛構晨露茶飲",
-                                          client_name="測試客戶", actor=ACTOR)
+                                          client_name="測試客戶", actor=ACTOR, org_id=DEV_ORG_ID)
         self.bid = self.brand["id"]
 
     def test_single_character_forbidden_claim_is_reported_as_a_gap(self):
@@ -172,7 +173,7 @@ class ComplianceScanTest(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(main.app)
         self.brand = bi_repo.create_brand(main.conn, name="虛構草本工坊",
-                                          client_name="測試客戶", actor=ACTOR)
+                                          client_name="測試客戶", actor=ACTOR, org_id=DEV_ORG_ID)
         self.bid = self.brand["id"]
         resp = self.client.post(f"/api/campaigns/{self.bid}",
                                 json={"product_ids": [], "budget": 10000, "objective": "sales"})
@@ -669,7 +670,7 @@ class UnbackedClaimBackedByProductFactTest(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(main.app)
         self.brand = bi_repo.create_brand(main.conn, name="虛構手工果乾坊",
-                                          client_name="測試客戶", actor=ACTOR)
+                                          client_name="測試客戶", actor=ACTOR, org_id=DEV_ORG_ID)
         self.bid = self.brand["id"]
         self.product = bi_repo.create_product(main.conn, self.bid, name="測試蜜漬果乾",
                                               actor=ACTOR)

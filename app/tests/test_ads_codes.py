@@ -55,7 +55,7 @@ class _BaseCodesTest(unittest.TestCase):
     def setUp(self):
         self.brand_name = f"虛構晨露茶行{abs(hash(self.id())) % 100000}"
         self.brand = bi_repo.create_brand(main.conn, name=self.brand_name,
-                                          client_name=None, actor=ACTOR)
+                                          client_name=None, actor=ACTOR, org_id=core_db.DEV_ORG_ID)
         self.bid = self.brand["id"]
         self.cycle = ads_repo.create_cycle(
             main.conn, self.bid, product_ids=[], pain_value=5000, objective="流量",

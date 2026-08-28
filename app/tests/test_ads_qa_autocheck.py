@@ -26,6 +26,7 @@ from app.ads import (
 from app.ads import plan as ads_plan  # noqa: E402
 from app.ads import theme_repository as theme_repo  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
+from app.core.db import DEV_ORG_ID  # noqa: E402
 from app.llm.providers import FakeProvider, ProviderResponse, Usage  # noqa: E402
 
 
@@ -93,10 +94,10 @@ class _BaseQaAutoCheckTest(unittest.TestCase):
         qa_autocheck._cache.clear()
 
         self.brand = bi_repo.create_brand(main.conn, name="虛構晨光咖啡（QA 票）",
-                                          client_name="測試客戶", actor=ACTOR)
+                                          client_name="測試客戶", actor=ACTOR, org_id=DEV_ORG_ID)
         self.bid = self.brand["id"]
         bi_repo.create_channel(main.conn, self.bid, channel_type="website", name="官網",
-                               identifier="https://example.test", actor=ACTOR)
+                               identifier="https://example.test", actor=ACTOR, org_id=DEV_ORG_ID)
         resp = self.client.post(f"/api/campaigns/{self.bid}",
                                 json={"product_ids": [], "budget": 10000, "objective": "sales"})
         self.cycle_id = resp.json()["cycle_id"]

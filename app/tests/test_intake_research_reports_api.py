@@ -21,7 +21,7 @@ class ResearchReportApiTest(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(main.app)
         brand = brand_repo.create_brand(
-            web.conn, name=f"虛構調研回顯品牌{new_id('test')}", client_name=None, actor="測試員",
+            web.conn, name=f"虛構調研回顯品牌{new_id('test')}", client_name=None, actor="測試員", org_id=coredb.DEV_ORG_ID,
         )
         self.brand_id = brand["id"]
 

@@ -79,7 +79,7 @@ class CheckCycleTest(unittest.TestCase):
     def setUp(self):
         self.conn = db.current()
         self.brand = bi_repo.create_brand(self.conn, name="虛構步調茶行", client_name=None,
-                                          actor=ACTOR)
+                                          actor=ACTOR, org_id=db.DEV_ORG_ID)
         self.bid = self.brand["id"]
 
     def _make_cycle(self, *, budget=10000, start_date="2026-01-01", end_date="2026-04-10",

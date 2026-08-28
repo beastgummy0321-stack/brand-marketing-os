@@ -190,7 +190,7 @@ class WeeklyProposalPersistenceTest(unittest.TestCase):
         self.client = TestClient(main.app)
         brand = bi_repo.create_brand(
             main.conn, name=f"虛構週提案品牌{abs(hash(self.id())) % 100000}",
-            client_name=None, actor=ACTOR)
+            client_name=None, actor=ACTOR, org_id=db.DEV_ORG_ID)
         self.brand_id = brand["id"]
         self._original_provider = reading.PROVIDER
         reading.PROVIDER = FakeProvider(response=ProviderResponse(
@@ -567,7 +567,7 @@ class SettleArchivesUnhandledCardsTest(unittest.TestCase):
         self.client = TestClient(main.app)
         brand = bi_repo.create_brand(
             main.conn, name=f"虛構結案歸檔品牌{abs(hash(self.id())) % 100000}",
-            client_name=None, actor=ACTOR)
+            client_name=None, actor=ACTOR, org_id=db.DEV_ORG_ID)
         self.brand_id = brand["id"]
         self._original_provider = reading.PROVIDER
         reading.PROVIDER = FakeProvider(response=ProviderResponse(

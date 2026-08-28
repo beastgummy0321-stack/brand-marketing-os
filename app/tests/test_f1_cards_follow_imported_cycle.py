@@ -40,7 +40,7 @@ class F1CardsFollowImportedCycleTest(unittest.TestCase):
         self.client = TestClient(main.app)
         self.bid = bi_repo.create_brand(
             main.conn, name=f"虛構F1品牌{abs(hash(self.id())) % 100000}",
-            client_name=None, actor=ACTOR)["id"]
+            client_name=None, actor=ACTOR, org_id=DEV_ORG_ID)["id"]
         self._orig_provider = reading.PROVIDER
         reading.PROVIDER = FakeProvider(response=_fake(
             json.dumps({"text": "說明文字"}, ensure_ascii=False)))

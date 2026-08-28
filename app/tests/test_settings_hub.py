@@ -50,7 +50,7 @@ class SettingsHubEntryPageTest(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(main.app)
         self.brand = bi_repo.create_brand(web.conn, name="虛構設定茶行", client_name=None,
-                                          actor=ACTOR)
+                                          actor=ACTOR, org_id=coredb.DEV_ORG_ID)
         self.bid = self.brand["id"]
 
     def test_empty_state_shows_system_default_and_no_modified_time(self):
@@ -62,7 +62,7 @@ class SettingsHubEntryPageTest(unittest.TestCase):
 
     def test_after_override_entry_page_shows_new_value_and_modified_time(self):
         rule_cards.set_value(web.conn, self.bid, "budget_structure", "min_daily_per_group",
-                             450.0, actor=ACTOR)
+                             450.0, actor=ACTOR, org_id=coredb.DEV_ORG_ID)
         field = _field(_cards(self.client, self.bid), "budget_structure", "min_daily_per_group")
         self.assertEqual(field["value"], 450)
         self.assertIsNotNone(_last_rule_card_audit(self.bid))  # 有「上次修改」可顯示
@@ -79,7 +79,7 @@ class SettingsAdsPageTest(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(main.app)
         self.brand = bi_repo.create_brand(web.conn, name="虛構設定茶行二號", client_name=None,
-                                          actor=ACTOR)
+                                          actor=ACTOR, org_id=coredb.DEV_ORG_ID)
         self.bid = self.brand["id"]
 
     def test_page_renders_all_four_cards_with_seed_values(self):
@@ -144,7 +144,7 @@ class SettingsAdsPageTest(unittest.TestCase):
 
     def test_reset_restores_default_after_edit(self):
         rule_cards.set_value(web.conn, self.bid, "ad_creative_fatigue", "cold_warning", 9.9,
-                             actor=ACTOR)
+                             actor=ACTOR, org_id=coredb.DEV_ORG_ID)
         resp = self.client.post(
             f"/api/settings/rule-cards/brands/{self.bid}/ad_creative_fatigue/reset")
         self.assertEqual(resp.status_code, 200)
@@ -171,9 +171,9 @@ class SettingsHubBrandIsolationTest(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(main.app)
         self.brand_a = bi_repo.create_brand(web.conn, name="虛構隔離茶行 A", client_name=None,
-                                            actor=ACTOR)
+                                            actor=ACTOR, org_id=coredb.DEV_ORG_ID)
         self.brand_b = bi_repo.create_brand(web.conn, name="虛構隔離茶行 B", client_name=None,
-                                            actor=ACTOR)
+                                            actor=ACTOR, org_id=coredb.DEV_ORG_ID)
 
     def test_brand_a_edit_does_not_leak_into_brand_b_page(self):
         self.client.post(
@@ -195,7 +195,7 @@ class SettingsCalendarDismissTest(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(main.app)
         self.brand = bi_repo.create_brand(web.conn, name="虛構節日提醒茶行", client_name=None,
-                                          actor=ACTOR)
+                                          actor=ACTOR, org_id=coredb.DEV_ORG_ID)
         self.bid = self.brand["id"]
 
     def test_empty_state_all_categories_show_reminding(self):
@@ -209,24 +209,24 @@ class SettingsCalendarDismissTest(unittest.TestCase):
         self.assertEqual(calendar_dismiss.list_dismissed(web.conn, self.bid), set())
 
     def test_toggle_off_marks_category_closed_and_persists(self):
-        calendar_dismiss.dismiss(web.conn, self.bid, "cny")
+        calendar_dismiss.dismiss(web.conn, self.bid, "cny", org_id=coredb.DEV_ORG_ID)
         self.assertEqual(calendar_dismiss.list_dismissed(web.conn, self.bid), {"cny"})
 
     def test_toggle_on_after_off_restores_reminding(self):
-        calendar_dismiss.dismiss(web.conn, self.bid, "cny")
+        calendar_dismiss.dismiss(web.conn, self.bid, "cny", org_id=coredb.DEV_ORG_ID)
         calendar_dismiss.undismiss(web.conn, self.bid, "cny")
         self.assertEqual(calendar_dismiss.list_dismissed(web.conn, self.bid), set())
 
     def test_persists_after_restart(self):
         """ADR 0027：不再有「重開連線」這回事了——改成從一條全新借來的連線讀回。"""
-        calendar_dismiss.dismiss(web.conn, self.bid, "cny")
+        calendar_dismiss.dismiss(web.conn, self.bid, "cny", org_id=coredb.DEV_ORG_ID)
         with coredb.connection() as fresh:
             self.assertEqual(calendar_dismiss.list_dismissed(fresh, self.bid), {"cny"})
 
     def test_toggle_does_not_leak_across_brands(self):
         other = bi_repo.create_brand(web.conn, name="虛構節日提醒茶行二號", client_name=None,
-                                     actor=ACTOR)
-        calendar_dismiss.dismiss(web.conn, self.bid, "cny")
+                                     actor=ACTOR, org_id=coredb.DEV_ORG_ID)
+        calendar_dismiss.dismiss(web.conn, self.bid, "cny", org_id=coredb.DEV_ORG_ID)
         self.assertEqual(calendar_dismiss.list_dismissed(web.conn, other["id"]), set())
 
 
@@ -236,7 +236,7 @@ class SettingsCalendarApiTest(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(main.app)
         self.brand = bi_repo.create_brand(web.conn, name="虛構節日提醒新殼茶行", client_name=None,
-                                          actor=ACTOR)
+                                          actor=ACTOR, org_id=coredb.DEV_ORG_ID)
         self.bid = self.brand["id"]
 
     def _categories(self):

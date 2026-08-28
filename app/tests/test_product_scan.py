@@ -18,6 +18,7 @@ import app.shared.web as web
 from app.brand_intelligence import repository as bi_repo
 from app.brand_web import product_ai_calls as product_ai
 from app.core import settings as coresettings
+from app.core.db import DEV_ORG_ID  # noqa: E402
 from app.llm.providers import (
     MISSING_KEY_MESSAGE,
     AnthropicProvider,
@@ -68,7 +69,7 @@ class _BaseProductScanTest(unittest.TestCase):
         self._orig_provider = product_ai.PROVIDER
         self._orig_fetch = product_ai.fetch_url
         product_ai.fetch_url = lambda url: (True, "假抓到的產品頁文字節錄。")
-        self.brand = bi_repo.create_brand(web.conn, name="虛構茶研所", client_name="測試客戶", actor=ACTOR)
+        self.brand = bi_repo.create_brand(web.conn, name="虛構茶研所", client_name="測試客戶", actor=ACTOR, org_id=DEV_ORG_ID)
 
     def tearDown(self):
         product_ai.PROVIDER = self._orig_provider
@@ -128,7 +129,7 @@ class ProductScanTest(_BaseProductScanTest):
         self.assertIn(product_ai.PARSE_FAIL_MESSAGE, state["error"])
 
     def test_over_budget_blocks_before_any_llm_call(self):
-        coresettings.set_setting(web.conn, coresettings.INTAKE_BUDGET_SETTING, "0.1")
+        coresettings.set_setting(web.conn, coresettings.INTAKE_BUDGET_SETTING, "0.1", org_id=DEV_ORG_ID)
         product_ai.PROVIDER = FakeProvider(response=_fake_response("不該被呼叫"))
         _product_id, state = self._post()
         self.assertEqual(state["status"], "failed")
@@ -193,7 +194,7 @@ class ProductRescanTest(_BaseProductScanTest):
 
     def test_rescan_over_budget_blocks_before_any_llm_call(self):
         product_id = self._create_product()
-        coresettings.set_setting(web.conn, coresettings.INTAKE_BUDGET_SETTING, "0.1")
+        coresettings.set_setting(web.conn, coresettings.INTAKE_BUDGET_SETTING, "0.1", org_id=DEV_ORG_ID)
         product_ai.PROVIDER = FakeProvider(response=_fake_response("不該被呼叫"))
         state = self._rescan(product_id)
         self.assertEqual(state["status"], "failed")

@@ -21,6 +21,7 @@ import app.main as main  # noqa: E402
 from app.ads import theme_engine  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
 from app.core import settings as coresettings  # noqa: E402
+from app.core.db import DEV_ORG_ID  # noqa: E402
 from app.llm.providers import FakeProvider, ProviderError, ProviderResponse, Usage  # noqa: E402
 
 ACTOR = "測試員"
@@ -77,9 +78,9 @@ def _video_reply(*, name: str = "虛構主題：送禮不失禮", framework: str
 class _Base(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(main.app)
-        coresettings.set_setting(main.conn, "intake_budget_limit", "1000")
+        coresettings.set_setting(main.conn, "intake_budget_limit", "1000", org_id=DEV_ORG_ID)
         self.brand = bi_repo.create_brand(main.conn, name="虛構晨光咖啡（快速生成票）",
-                                          client_name="測試客戶", actor=ACTOR)
+                                          client_name="測試客戶", actor=ACTOR, org_id=DEV_ORG_ID)
         self.bid = self.brand["id"]
         self.product_id = bi_repo.create_product(main.conn, self.bid, name="虛構濾掛組",
                                                   actor=ACTOR)["id"]
@@ -87,7 +88,7 @@ class _Base(unittest.TestCase):
 
     def tearDown(self):
         theme_engine.PROVIDER = self._orig_provider
-        coresettings.set_setting(main.conn, "intake_budget_limit", "30")
+        coresettings.set_setting(main.conn, "intake_budget_limit", "30", org_id=DEV_ORG_ID)
 
     def _swap(self, reply: str, **kwargs) -> FakeProvider:
         provider = FakeProvider(response=_fake(reply), **kwargs)
@@ -236,7 +237,7 @@ class ProductListRouteTest(_Base):
 
     def test_lists_only_this_brands_products(self):
         other = bi_repo.create_brand(main.conn, name="虛構隔壁茶行（快速生成票）",
-                                     client_name="測試客戶", actor=ACTOR)
+                                     client_name="測試客戶", actor=ACTOR, org_id=DEV_ORG_ID)
         bi_repo.create_product(main.conn, other["id"], name="虛構隔壁產品", actor=ACTOR)
         resp = self.client.get(f"/api/creative/brands/{self.bid}/products")
         self.assertEqual(resp.status_code, 200, resp.text)
@@ -273,7 +274,7 @@ class FailureModeTest(_Base):
         self.assertIn("error", resp.json())
 
     def test_budget_exceeded_returns_422(self):
-        coresettings.set_setting(main.conn, "intake_budget_limit", "0")
+        coresettings.set_setting(main.conn, "intake_budget_limit", "0", org_id=DEV_ORG_ID)
         self._swap(_single_image_reply())
         resp = self._post(scope="post", topic="第一杯 39 元", product_id=None)
         self.assertEqual(resp.status_code, 422)

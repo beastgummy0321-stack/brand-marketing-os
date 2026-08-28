@@ -24,6 +24,7 @@ from app.ads import repository as ads_repo  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
 from app.core import creative_assets  # noqa: E402
 from app.core import settings as coresettings  # noqa: E402
+from app.core.db import DEV_ORG_ID  # noqa: E402
 
 
 def _cleanup():
@@ -43,9 +44,10 @@ ROOT = Path(_tmpdir) / "creative"
 class _Base(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(main.app)
-        coresettings.set_setting(main.conn, creative_assets.SETTING_KEY, str(ROOT))
+        coresettings.set_setting(main.conn, creative_assets.SETTING_KEY, str(ROOT),
+            org_id=DEV_ORG_ID)
         self.brand = bi_repo.create_brand(main.conn, name="虛構月見茶飲（素材資料夾）",
-                                          client_name="測試客戶", actor=ACTOR)
+                                          client_name="測試客戶", actor=ACTOR, org_id=DEV_ORG_ID)
         self.bid = self.brand["id"]
         self.pid = bi_repo.create_product(main.conn, self.bid, name="虛構冷萃包",
                                           actor=ACTOR)["id"]
@@ -67,7 +69,7 @@ class _Base(unittest.TestCase):
 
 class RootSettingTest(_Base):
     def test_blank_setting_falls_back_to_default_root(self):
-        coresettings.set_setting(main.conn, creative_assets.SETTING_KEY, "")
+        coresettings.set_setting(main.conn, creative_assets.SETTING_KEY, "", org_id=DEV_ORG_ID)
         self.assertEqual(creative_assets.get_root(main.conn), creative_assets.DEFAULT_ROOT)
 
     def test_setting_page_saves_an_absolute_path(self):
@@ -76,7 +78,8 @@ class RootSettingTest(_Base):
                                 json={"creative_root": str(target)})
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(creative_assets.get_root(main.conn), target)
-        coresettings.set_setting(main.conn, creative_assets.SETTING_KEY, str(ROOT))
+        coresettings.set_setting(main.conn, creative_assets.SETTING_KEY, str(ROOT),
+            org_id=DEV_ORG_ID)
 
     def test_setting_page_rejects_relative_path_and_drive_root(self):
         for bad in ("", "行銷素材", "C:\\"):

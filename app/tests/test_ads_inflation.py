@@ -41,7 +41,7 @@ class _BaseInflationTest(unittest.TestCase):
     def setUp(self):
         self.brand_name = f"虛構浪潮飲品{abs(hash(self.id())) % 100000}"
         self.brand = bi_repo.create_brand(main.conn, name=self.brand_name,
-                                          client_name=None, actor=ACTOR)
+                                          client_name=None, actor=ACTOR, org_id=db.DEV_ORG_ID)
         self.bid = self.brand["id"]
 
     def _cycle(self, start_date, duration_days=7):
@@ -300,8 +300,10 @@ class GA4LeakEstimateTest(_BaseInflationTest):
     FAKE_KEY_JSON = '{"client_email": "svc@example.iam.gserviceaccount.com"}'
 
     def _configure_ga4(self):
-        coresettings.set_setting(main.conn, ga4_sync.PROPERTY_SETTING, self.PROPERTY_ID)
-        coresettings.set_setting(main.conn, ga4_sync.SERVICE_ACCOUNT_SETTING, self.FAKE_KEY_JSON)
+        coresettings.set_setting(main.conn, ga4_sync.PROPERTY_SETTING, self.PROPERTY_ID,
+            org_id=db.DEV_ORG_ID)
+        coresettings.set_setting(main.conn, ga4_sync.SERVICE_ACCOUNT_SETTING, self.FAKE_KEY_JSON,
+            org_id=db.DEV_ORG_ID)
 
     def _sync_ga4(self, conversions, since, until):
         self._configure_ga4()

@@ -163,14 +163,14 @@ class _BaseSyncTest(unittest.TestCase):
         # ads_handoff._slug() 的 20 字元截斷門檻內，這裡本來就靠猜品牌測試比對整段名稱。
         self.brand_name = f"虛構晨光咖啡{uuid.uuid4().hex[:8]}"
         self.brand = bi_repo.create_brand(main.conn, name=self.brand_name,
-                                          client_name=None, actor=ACTOR)
+                                          client_name=None, actor=ACTOR, org_id=db.DEV_ORG_ID)
         self.bid = self.brand["id"]
-        coresettings.set_setting(main.conn, ads_sync.ACCOUNT_SETTING, ACCOUNT)
-        coresettings.set_setting(main.conn, ads_sync.TOKEN_SETTING, "fake-token")
+        coresettings.set_setting(main.conn, ads_sync.ACCOUNT_SETTING, ACCOUNT, org_id=db.DEV_ORG_ID)
+        coresettings.set_setting(main.conn, ads_sync.TOKEN_SETTING, "fake-token", org_id=db.DEV_ORG_ID)
 
     def _sync(self, campaigns=None, insights=None, error=None):
         client = meta_api.FakeMetaClient(campaigns=campaigns, insights=insights, error=error)
-        return ads_sync.sync_account(main.conn, ACTOR, client=client, today="2026-07-31")
+        return ads_sync.sync_account(main.conn, ACTOR, client=client, today="2026-07-31", org_id=db.DEV_ORG_ID)
 
 
 class DiscoveryTest(_BaseSyncTest):
@@ -252,7 +252,7 @@ class ClaimGateTest(_BaseSyncTest):
     def test_claim_list_never_shows_another_brands_campaign(self):
         """品牌隔離（鐵則 13）：A 品牌的頁面不得出現已認領給 B 的活動。"""
         other = bi_repo.create_brand(main.conn, name="虛構隔壁烘焙", client_name=None,
-                                     actor=ACTOR)["id"]
+                                     actor=ACTOR, org_id=db.DEV_ORG_ID)["id"]
         self._sync(campaigns=[_campaign("333", "隔壁的活動")])
         discovered_id = main.conn.execute("SELECT id FROM discovered_campaign").fetchone()["id"]
         ads_sync.claim(main.conn, other, discovered_id, ACTOR)
@@ -264,7 +264,7 @@ class ClaimGateTest(_BaseSyncTest):
 
     def test_cannot_steal_another_brands_claim(self):
         other = bi_repo.create_brand(main.conn, name="虛構隔壁烘焙2", client_name=None,
-                                     actor=ACTOR)["id"]
+                                     actor=ACTOR, org_id=db.DEV_ORG_ID)["id"]
         self._sync(campaigns=[_campaign("444", "某活動")])
         discovered_id = main.conn.execute("SELECT id FROM discovered_campaign").fetchone()["id"]
         ads_sync.claim(main.conn, other, discovered_id, ACTOR)
@@ -321,7 +321,7 @@ class SanityAndErrorTest(_BaseSyncTest):
         main.conn.execute("DELETE FROM app_setting WHERE key IN (%s, %s)",
                           (ads_sync.TOKEN_SETTING, ads_sync.ACCOUNT_SETTING))
         main.conn.commit()
-        result = ads_sync.sync_account(main.conn, ACTOR)
+        result = ads_sync.sync_account(main.conn, ACTOR, org_id=db.DEV_ORG_ID)
         self.assertEqual(result.error, meta_api.NO_TOKEN_MESSAGE)  # 人話提示，不當機
         self.assertFalse(ads_sync.is_configured(main.conn))
 
@@ -581,7 +581,7 @@ class BrandLevelMultiMonthBackfillTest(_BaseSyncTest):
         client = self._MonthlyFakeClient([_campaign(cid, name)], insights_by_month)
         result = ads_sync.sync_account(main.conn, ACTOR, client=client,
                                        since="2025-08-01", until="2026-07-31",
-                                       today="2026-07-31")
+                                       today="2026-07-31", org_id=db.DEV_ORG_ID)
 
         self.assertEqual(result.snapshots, 12)
         self.assertEqual(len(client.calls), 12)  # 逐月各打一次，不是整段一次問完
@@ -639,7 +639,7 @@ class BrandLevelMultiMonthBackfillTest(_BaseSyncTest):
         client = self._MonthlyFakeClient([_campaign(cid, name)], insights_by_month)
         result = ads_sync.sync_account(main.conn, ACTOR, client=client,
                                        since="2025-08-01", until="2026-07-31",
-                                       today="2026-07-31")
+                                       today="2026-07-31", org_id=db.DEV_ORG_ID)
         self.assertEqual(result.snapshots, 12)  # 新月列跟舊混合列日期範圍不同，簽章不會擋
 
         rows = main.conn.execute(
@@ -658,7 +658,7 @@ class BrandLevelMultiMonthBackfillTest(_BaseSyncTest):
         # F10 冪等：同一批回填再跑一次，不再新增，先前算出的數字也不會被再放大
         second = ads_sync.sync_account(main.conn, ACTOR, client=client,
                                        since="2025-08-01", until="2026-07-31",
-                                       today="2026-07-31")
+                                       today="2026-07-31", org_id=db.DEV_ORG_ID)
         self.assertEqual(second.snapshots, 0)
         self.assertEqual(second.skipped_duplicate, 12)
         totals_after_resync = ads_performance.brand_level_totals(main.conn, self.bid)

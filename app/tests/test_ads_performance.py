@@ -211,7 +211,7 @@ class _BaseImportTest(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(main.app)
         self.brand = bi_repo.create_brand(main.conn, name="虛構晨光咖啡",
-                                          client_name=None, actor=ACTOR)
+                                          client_name=None, actor=ACTOR, org_id=db.DEV_ORG_ID)
         self.bid = self.brand["id"]
         resp = self.client.post(f"/api/campaigns/{self.bid}",
                                 json={"product_ids": [], "budget": 10000, "objective": "sales"})
@@ -519,7 +519,7 @@ class PerformanceIsolationTest(_BaseImportTest):
     def test_other_brand_sees_nothing(self):
         perf.import_csv(main.conn, self.bid, self.cycle_id, _CSV_ZH, actor=ACTOR)
         other = bi_repo.create_brand(main.conn, name="虛構隔壁烘焙2", client_name=None,
-                                     actor=ACTOR)["id"]
+                                     actor=ACTOR, org_id=db.DEV_ORG_ID)["id"]
         self.assertEqual(perf.list_snapshots(main.conn, other, self.cycle_id), [])
         self.assertEqual(perf.totals(main.conn, other, self.cycle_id)["rows"], 0)
 

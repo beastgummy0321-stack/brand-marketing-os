@@ -79,10 +79,11 @@ def _theme_reply(*, image_count: int, text_count: int, name: str = "虛構主題
 class _Base(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(main.app)
-        coresettings.set_setting(main.conn, creative_assets.SETTING_KEY, str(ROOT))
-        coresettings.set_setting(main.conn, "intake_budget_limit", "1000")
+        coresettings.set_setting(main.conn, creative_assets.SETTING_KEY, str(ROOT),
+            org_id=db.DEV_ORG_ID)
+        coresettings.set_setting(main.conn, "intake_budget_limit", "1000", org_id=db.DEV_ORG_ID)
         self.brand = bi_repo.create_brand(main.conn, name="虛構晨光咖啡（主題引擎票）",
-                                          client_name="測試客戶", actor=ACTOR)
+                                          client_name="測試客戶", actor=ACTOR, org_id=db.DEV_ORG_ID)
         self.bid = self.brand["id"]
         self.product_id = bi_repo.create_product(main.conn, self.bid, name="虛構濾掛組",
                                                   actor=ACTOR)["id"]
@@ -90,7 +91,7 @@ class _Base(unittest.TestCase):
 
     def tearDown(self):
         theme_engine.PROVIDER = self._orig_provider
-        coresettings.set_setting(main.conn, "intake_budget_limit", "30")
+        coresettings.set_setting(main.conn, "intake_budget_limit", "30", org_id=db.DEV_ORG_ID)
 
     def _open_cycle(self, *, objective: str = "sales") -> str:
         cycle = ads_repo.create_cycle(
@@ -388,7 +389,7 @@ class BudgetCapTest(_Base):
     """票 04 驗收 7（前半）：費用上限攔截沿用既有機制。"""
 
     def test_over_limit_blocks_before_calling_provider(self):
-        coresettings.set_setting(main.conn, "intake_budget_limit", "0.0001")
+        coresettings.set_setting(main.conn, "intake_budget_limit", "0.0001", org_id=db.DEV_ORG_ID)
         cycle_id, cell_id = self._ready_cell(objective="sales")
         brief = self._assemble(cycle_id, cell_id)
         provider = self._swap(_theme_reply(image_count=10, text_count=5))

@@ -58,7 +58,7 @@ class LibraryBundleTest(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(main.app)
         self.brand = repo.create_brand(web.conn, name="晨露茶飲－智庫整包", client_name="測試客戶",
-                                        actor=ACTOR)
+                                        actor=ACTOR, org_id=coredb.DEV_ORG_ID)
         self.bid = self.brand["id"]
 
     def test_envelope_and_empty_shape(self):
@@ -100,7 +100,7 @@ class LibraryBundleTest(unittest.TestCase):
         repo.create_claim(web.conn, self.bid, actor=ACTOR, claim_text="無添加防腐劑",
                            claim_type="high_risk")
         repo.create_channel(web.conn, self.bid, actor=ACTOR, channel_type="website",
-                             name="官網", identifier="https://example.com")
+                             name="官網", identifier="https://example.com", org_id=coredb.DEV_ORG_ID)
         data = self.client.get(f"/api/library/brands/{self.bid}").json()["data"]
 
         self.assertEqual(
@@ -135,10 +135,10 @@ class ChannelEditDeleteTest(unittest.TestCase):
 
     def setUp(self):
         self.client = TestClient(main.app)
-        self.brand = repo.create_brand(web.conn, name="山嵐選物－渠道", client_name=None, actor=ACTOR)
+        self.brand = repo.create_brand(web.conn, name="山嵐選物－渠道", client_name=None, actor=ACTOR, org_id=coredb.DEV_ORG_ID)
         self.bid = self.brand["id"]
         self.channel = repo.create_channel(web.conn, self.bid, actor=ACTOR, channel_type="website",
-                                            name="官網", identifier="https://old.example.com")
+                                            name="官網", identifier="https://old.example.com", org_id=coredb.DEV_ORG_ID)
 
     def test_edit_updates_fields_and_audit(self):
         repo.update_channel(
@@ -187,7 +187,7 @@ class CustomerVoiceBackgroundTest(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(main.app)
         self.brand = repo.create_brand(web.conn, name="晨露茶飲－背景抽取", client_name=None,
-                                        actor=ACTOR)
+                                        actor=ACTOR, org_id=coredb.DEV_ORG_ID)
         self.bid = self.brand["id"]
 
     def _poll(self, job_key: str, timeout: float = 5.0) -> dict:
@@ -273,7 +273,7 @@ class CustomerVoiceBackgroundTest(unittest.TestCase):
 
     def test_over_budget_blocks_before_any_llm_call(self):
         """票要求：extract() 前補預算檢查，比照 product_ai._scan_budget_error 模式。"""
-        core_settings.set_setting(web.conn, "intake_budget_limit", "1")
+        core_settings.set_setting(web.conn, "intake_budget_limit", "1", org_id=coredb.DEV_ORG_ID)
         _spend(web.conn, self.bid, 5.0)
         fake = _fake([{"task_layer": "functional", "quote": "不該被呼叫",
                         "insight": "不該被呼叫", "signal": "unprompted"}])

@@ -12,6 +12,7 @@ import app.shared.web as web
 from app.ads import reading
 from app.ads import repository as ads_repo
 from app.brand_intelligence import repository as bi_repo
+from app.core.db import DEV_ORG_ID  # noqa: E402
 from app.llm.providers import FakeProvider, ProviderResponse, Usage
 from app.orders import dispatch as orders_dispatch
 
@@ -45,7 +46,7 @@ class DispatchTest(unittest.TestCase):
     def setUp(self):
         self.brand_name = f"虛構晨光茶行{abs(hash(self.id())) % 100000}"
         self.brand = bi_repo.create_brand(web.conn, name=self.brand_name,
-                                          client_name=None, actor=ACTOR)
+                                          client_name=None, actor=ACTOR, org_id=DEV_ORG_ID)
         self.bid = self.brand["id"]
 
     def test_easystore_xlsx_routes_to_order_importer(self):
@@ -119,7 +120,7 @@ class LateDataRerunDispatchTest(unittest.TestCase):
     def setUp(self):
         self.brand_name = f"虛構晨光茶行{abs(hash(self.id())) % 100000}"
         self.brand = bi_repo.create_brand(web.conn, name=self.brand_name,
-                                          client_name=None, actor=ACTOR)
+                                          client_name=None, actor=ACTOR, org_id=DEV_ORG_ID)
         self.bid = self.brand["id"]
         self.cycle = ads_repo.create_cycle(web.conn, self.bid, product_ids=[], pain_value=5000,
                                            objective="流量", actor=ACTOR, start_date="2026-06-01",

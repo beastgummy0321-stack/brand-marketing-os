@@ -109,7 +109,7 @@ class AdsProductCleanupTest(unittest.TestCase):
 
     def _make_archived_product(self, brand_name: str, product_name: str):
         bid = bi_repo.create_brand(self.conn, name=brand_name, client_name=None,
-                                    actor="測試員")["id"]
+                                    actor="測試員", org_id=db.DEV_ORG_ID)["id"]
         pid = bi_repo.create_product(self.conn, bid, name=product_name, actor="測試員")["id"]
         bi_repo.update_product(self.conn, bid, pid, name=product_name, status="archived",
                                 actor="測試員")

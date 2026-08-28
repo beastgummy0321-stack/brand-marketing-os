@@ -24,7 +24,7 @@ class DeliveryTest(unittest.TestCase):
     def setUp(self):
         self.conn = db.current()
         self.client = TestClient(main.app)
-        self.brand = bi.create_brand(self.conn, name="交付測試", client_name=None, actor="tester")
+        self.brand = bi.create_brand(self.conn, name="交付測試", client_name=None, actor="tester", org_id=db.DEV_ORG_ID)
         product = bi.create_product(self.conn, self.brand["id"], name="商品", actor="tester")
         self.product_id = product["id"]
         self.cycle = ads_repo.create_cycle(self.conn, self.brand["id"], product_ids=[self.product_id],

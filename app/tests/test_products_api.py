@@ -19,6 +19,7 @@ from app.brand_web import product_ai_calls as product_ai
 from app.brand_web import routes_products as rp
 from app.core import interrupts as core_interrupts
 from app.core import settings as coresettings
+from app.core.db import DEV_ORG_ID  # noqa: E402
 from app.llm.providers import FakeProvider, ProviderResponse, Usage
 
 OPERATOR = "本人"  # 票 03-1：production 端已刪除，測試沿用舊字串值當 actor 名稱
@@ -50,7 +51,7 @@ class _BaseProductsApiTest(unittest.TestCase):
         self._orig_fetch = product_ai.fetch_url
         product_ai.fetch_url = lambda url: (True, "假抓到的產品頁文字節錄。")
         self.brand = repo.create_brand(web.conn, name="虛構茶研所－API測試", client_name="測試客戶",
-                                        actor=ACTOR)
+                                        actor=ACTOR, org_id=DEV_ORG_ID)
         self.bid = self.brand["id"]
 
     def tearDown(self):
@@ -209,7 +210,7 @@ class ResearchBackgroundTest(_BaseProductsApiTest):
 
     def test_over_budget_leaves_empty_product_not_deleted(self):
         """拿不準的點 1，方案 A：調研失敗時系統留下一個空產品，不像舊版「失敗就什麼都沒發生」。"""
-        coresettings.set_setting(web.conn, coresettings.INTAKE_BUDGET_SETTING, "0.1")
+        coresettings.set_setting(web.conn, coresettings.INTAKE_BUDGET_SETTING, "0.1", org_id=DEV_ORG_ID)
         product_ai.PROVIDER = FakeProvider(response=_fake_response("不該被呼叫"))
         resp = self.client.post(
             f"/api/products/brands/{self.bid}/research",

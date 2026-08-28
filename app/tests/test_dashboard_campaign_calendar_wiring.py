@@ -21,6 +21,7 @@ import app.main as main  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
 from app.core import calendar_dismiss as core_calendar_dismiss  # noqa: E402
 from app.core import campaign_skip as core_campaign_skip  # noqa: E402
+from app.core.db import DEV_ORG_ID  # noqa: E402
 from app.dashboard import repository as dashboard_repo  # noqa: E402
 
 
@@ -42,7 +43,7 @@ class CampaignCalendarCockpitWiringTest(unittest.TestCase):
     def setUp(self):
         self.brand = bi_repo.create_brand(
             main.conn, name=f"虛構備戰茶行{abs(hash(self.id())) % 100000}",
-            client_name=None, actor=ACTOR)
+            client_name=None, actor=ACTOR, org_id=DEV_ORG_ID)
         # 票 C：conversion_goal 沒設定會多冒出一張提醒卡，蓋掉本檔要測的檔期日曆卡；
         # 先設定好讓本檔繼續只測檔期日曆這一件事。
         bi_repo.set_brand_switches(main.conn, self.brand["id"], market_region=None,
@@ -88,7 +89,7 @@ class CampaignCalendarIndustryRelevanceWiringTest(unittest.TestCase):
     def setUp(self):
         self.brand = bi_repo.create_brand(
             main.conn, name=f"虛構業種備戰茶行{abs(hash(self.id())) % 100000}",
-            client_name=None, actor=ACTOR)
+            client_name=None, actor=ACTOR, org_id=DEV_ORG_ID)
         bi_repo.set_brand_switches(main.conn, self.brand["id"], market_region=None,
                                    conversion_goal="purchase", actor=ACTOR)
 
@@ -137,7 +138,7 @@ class CampaignSkipRecordWiringTest(unittest.TestCase):
     def setUp(self):
         self.brand = bi_repo.create_brand(
             main.conn, name=f"虛構跳過紀錄茶行{abs(hash(self.id())) % 100000}",
-            client_name=None, actor=ACTOR)
+            client_name=None, actor=ACTOR, org_id=DEV_ORG_ID)
         bi_repo.set_brand_switches(main.conn, self.brand["id"], market_region=None,
                                    conversion_goal="purchase", actor=ACTOR)
         # 明年（2027）同一節日的合成事件，today 訂在提前期窗口內、素材窗口外
@@ -152,7 +153,7 @@ class CampaignSkipRecordWiringTest(unittest.TestCase):
 
     def test_reminder_still_triggers_and_carries_last_year_reason(self):
         core_campaign_skip.record_skip(main.conn, self.brand["id"], "cny", 2026,
-                                       reason="收假太晚，沒空間做素材")
+                                       reason="收假太晚，沒空間做素材", org_id=DEV_ORG_ID)
         data = self._cockpit()
         titles = " ".join(c["title"] for c in data["guide_cards"])
         self.assertIn("農曆新年", titles, "去年跳過不代表明年不提醒")
@@ -166,7 +167,7 @@ class CampaignSkipRecordWiringTest(unittest.TestCase):
 
     def test_skip_recorded_for_a_different_holiday_does_not_leak_in(self):
         core_campaign_skip.record_skip(main.conn, self.brand["id"], "double11", 2026,
-                                       reason="不相干的理由")
+                                       reason="不相干的理由", org_id=DEV_ORG_ID)
         data = self._cockpit()
         titles = " ".join(c["title"] for c in data["guide_cards"])
         self.assertNotIn("不相干的理由", titles)
@@ -178,7 +179,7 @@ class CampaignSkipRecordWiringTest(unittest.TestCase):
         before = dashboard_repo._guide_card_facts(main.conn, self.brand["id"], None,
                                                    self.today, self.events)
         core_campaign_skip.record_skip(main.conn, self.brand["id"], "cny", 2026,
-                                       reason="收假太晚")
+                                       reason="收假太晚", org_id=DEV_ORG_ID)
         after = dashboard_repo._guide_card_facts(main.conn, self.brand["id"], None,
                                                   self.today, self.events)
         for key in ("active_cycle", "reading_ready", "next_cycle_draft_ready",
@@ -193,7 +194,7 @@ class CalendarDismissWiringTest(unittest.TestCase):
     def setUp(self):
         self.brand = bi_repo.create_brand(
             main.conn, name=f"虛構永久覆寫茶行{abs(hash(self.id())) % 100000}",
-            client_name=None, actor=ACTOR)
+            client_name=None, actor=ACTOR, org_id=DEV_ORG_ID)
         bi_repo.set_brand_switches(main.conn, self.brand["id"], market_region=None,
                                    conversion_goal="purchase", actor=ACTOR)
         self.events = [{"id": "cny_2026", "name": "農曆新年", "date": "2026-11-03",
@@ -204,14 +205,14 @@ class CalendarDismissWiringTest(unittest.TestCase):
                                       calendar_events=self.events)
 
     def test_dismissed_category_suppresses_stage_and_guide_card(self):
-        core_calendar_dismiss.dismiss(main.conn, self.brand["id"], "cny")
+        core_calendar_dismiss.dismiss(main.conn, self.brand["id"], "cny", org_id=DEV_ORG_ID)
         data = self._cockpit()
         self.assertIsNone(data["campaign_stage"])
         titles = " ".join(c["title"] for c in data["guide_cards"])
         self.assertNotIn("農曆新年", titles)
 
     def test_undismissed_category_restores_stage_and_guide_card(self):
-        core_calendar_dismiss.dismiss(main.conn, self.brand["id"], "cny")
+        core_calendar_dismiss.dismiss(main.conn, self.brand["id"], "cny", org_id=DEV_ORG_ID)
         core_calendar_dismiss.undismiss(main.conn, self.brand["id"], "cny")
         data = self._cockpit()
         self.assertIsNotNone(data["campaign_stage"])
@@ -220,7 +221,7 @@ class CalendarDismissWiringTest(unittest.TestCase):
         self.assertIn("農曆新年", titles)
 
     def test_dismissing_unrelated_category_does_not_leak_in(self):
-        core_calendar_dismiss.dismiss(main.conn, self.brand["id"], "double11")
+        core_calendar_dismiss.dismiss(main.conn, self.brand["id"], "double11", org_id=DEV_ORG_ID)
         data = self._cockpit()
         self.assertIsNotNone(data["campaign_stage"])
         self.assertEqual(data["campaign_stage"]["name"], "農曆新年")
@@ -230,12 +231,13 @@ class CampaignCalendarOverviewWiringTest(unittest.TestCase):
     def test_next_step_can_surface_campaign_reminder_when_nothing_else_pending(self):
         brand = bi_repo.create_brand(
             main.conn, name=f"虛構總覽備戰雜貨店{abs(hash(self.id())) % 100000}",
-            client_name=None, actor=ACTOR)
+            client_name=None, actor=ACTOR, org_id=DEV_ORG_ID)
         bi_repo.set_brand_switches(main.conn, brand["id"], market_region=None,
                                    conversion_goal="purchase", actor=ACTOR)
         events = [{"id": "double11", "name": "雙11購物節", "date": "2026-11-03",
                   "tier": "large"}]
-        cards = dashboard_repo.overview(main.conn, today=TODAY, calendar_events=events)
+        cards = dashboard_repo.overview(main.conn, today=TODAY, calendar_events=events,
+            org_id=DEV_ORG_ID)
         card = next(c for c in cards if c["brand_id"] == brand["id"])
         self.assertIsNotNone(card["next_step"])
         self.assertIn("雙11購物節", card["next_step"]["title"])

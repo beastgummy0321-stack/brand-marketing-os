@@ -26,7 +26,7 @@ class _Base(unittest.TestCase):
     def setUp(self):
         self.conn = db.current()
         self.brand = bi_repo.create_brand(self.conn, name="虛構晨光咖啡（簡報票）",
-                                          client_name="測試客戶", actor=ACTOR)
+                                          client_name="測試客戶", actor=ACTOR, org_id=db.DEV_ORG_ID)
         self.bid = self.brand["id"]
         self.product_id = bi_repo.create_product(self.conn, self.bid, name="虛構濾掛組",
                                                   actor=ACTOR)["id"]

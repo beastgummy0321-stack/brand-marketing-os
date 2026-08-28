@@ -86,7 +86,7 @@ class MethodologyCompileTest(unittest.TestCase):
         # 票 03-1：audit_log.org_id 現在 NOT NULL，要反查得先有真的品牌可查
         # （見 app/llm/methodology.py compile() 的 org_id 推導註解）。
         brand_id = repo.create_brand(self.conn, name="方法論測試品牌",
-                                     client_name=None, actor="測試員")["id"]
+                                     client_name=None, actor="測試員", org_id=db.DEV_ORG_ID)["id"]
         self.conn.execute("DELETE FROM audit_log")  # create_brand() 自己那筆不算進待驗證的稽核
 
         result = methodology.compile(self.conn, ["測試任務"], brand_id=brand_id,
@@ -189,7 +189,7 @@ class MethodologyConditionalFileTest(unittest.TestCase):
     def test_compile_filters_out_conditional_file_when_switch_off(self):
         readme = self._write_readme("| 測試任務 | `a.md`（需要：有商品） |\n")
         self._write_files("a.md")
-        bid = repo.create_brand(self.conn, name="虛構品牌無商品", client_name=None, actor="測試員")["id"]
+        bid = repo.create_brand(self.conn, name="虛構品牌無商品", client_name=None, actor="測試員", org_id=db.DEV_ORG_ID)["id"]
         result = methodology.compile(self.conn, ["測試任務"], brand_id=bid, actor="測試員",
                                      methodology_dir=self.meth_dir, readme_path=readme)
         self.assertNotIn("a.md 內容", result.text)
@@ -198,7 +198,7 @@ class MethodologyConditionalFileTest(unittest.TestCase):
     def test_compile_includes_conditional_file_when_switch_on(self):
         readme = self._write_readme("| 測試任務 | `a.md`（需要：有商品） |\n")
         self._write_files("a.md")
-        bid = repo.create_brand(self.conn, name="虛構品牌有商品", client_name=None, actor="測試員")["id"]
+        bid = repo.create_brand(self.conn, name="虛構品牌有商品", client_name=None, actor="測試員", org_id=db.DEV_ORG_ID)["id"]
         repo.create_product(self.conn, bid, name="虛構產品", actor="測試員")
         result = methodology.compile(self.conn, ["測試任務"], brand_id=bid, actor="測試員",
                                      methodology_dir=self.meth_dir, readme_path=readme)
@@ -211,7 +211,7 @@ class MethodologyConditionalFileTest(unittest.TestCase):
             "| 測試任務 | `a.md`、`b.md`（需要：有商品）、`c.md`（需要：健康類法規）、`missing.md` |\n")
         self._write_files("a.md", "b.md", "c.md")  # 故意不寫 missing.md
         bid = repo.create_brand(self.conn, name="虛構品牌只有商品", client_name=None,
-                                actor="測試員")["id"]
+                                actor="測試員", org_id=db.DEV_ORG_ID)["id"]
         repo.create_product(self.conn, bid, name="虛構產品", actor="測試員")  # 有商品、無法規
 
         result = methodology.compile(self.conn, ["測試任務"], brand_id=bid, actor="測試員",
@@ -223,7 +223,7 @@ class MethodologyConditionalFileTest(unittest.TestCase):
     def test_unconditional_file_always_loads_regardless_of_switch(self):
         readme = self._write_readme("| 測試任務 | `a.md`、`b.md`（需要：健康類法規） |\n")
         self._write_files("a.md", "b.md")
-        bid = repo.create_brand(self.conn, name="虛構品牌無法規", client_name=None, actor="測試員")["id"]
+        bid = repo.create_brand(self.conn, name="虛構品牌無法規", client_name=None, actor="測試員", org_id=db.DEV_ORG_ID)["id"]
         result = methodology.compile(self.conn, ["測試任務"], brand_id=bid, actor="測試員",
                                      methodology_dir=self.meth_dir, readme_path=readme)
         self.assertIn("a.md 內容", result.text)
@@ -237,41 +237,41 @@ class MethodologySwitchComputationTest(unittest.TestCase):
         self.conn = db.current()
 
     def test_all_switches_off_by_default(self):
-        bid = repo.create_brand(self.conn, name="虛構品牌空白", client_name=None, actor="測試員")["id"]
+        bid = repo.create_brand(self.conn, name="虛構品牌空白", client_name=None, actor="測試員", org_id=db.DEV_ORG_ID)["id"]
         self.assertEqual(
             repo.compute_methodology_switches(self.conn, bid),
             {"有商品": False, "站內交易": False, "有自有網站": False, "健康類法規": False},
         )
 
     def test_has_product_switch(self):
-        bid = repo.create_brand(self.conn, name="虛構品牌有貨", client_name=None, actor="測試員")["id"]
+        bid = repo.create_brand(self.conn, name="虛構品牌有貨", client_name=None, actor="測試員", org_id=db.DEV_ORG_ID)["id"]
         repo.create_product(self.conn, bid, name="虛構產品", actor="測試員")
         self.assertTrue(repo.compute_methodology_switches(self.conn, bid)["有商品"])
 
     def test_purchase_conversion_goal_triggers_transaction_switch(self):
-        bid = repo.create_brand(self.conn, name="虛構品牌購買轉換", client_name=None, actor="測試員")["id"]
+        bid = repo.create_brand(self.conn, name="虛構品牌購買轉換", client_name=None, actor="測試員", org_id=db.DEV_ORG_ID)["id"]
         repo.set_brand_switches(self.conn, bid, market_region="TW", conversion_goal="purchase",
                                  actor="測試員")
         self.assertTrue(repo.compute_methodology_switches(self.conn, bid)["站內交易"])
 
     def test_lead_conversion_goal_does_not_trigger_transaction_switch(self):
-        bid = repo.create_brand(self.conn, name="虛構品牌名單", client_name=None, actor="測試員")["id"]
+        bid = repo.create_brand(self.conn, name="虛構品牌名單", client_name=None, actor="測試員", org_id=db.DEV_ORG_ID)["id"]
         repo.set_brand_switches(self.conn, bid, market_region=None, conversion_goal="lead",
                                  actor="測試員")
         self.assertFalse(repo.compute_methodology_switches(self.conn, bid)["站內交易"])
 
     def test_website_channel_triggers_switch(self):
-        bid = repo.create_brand(self.conn, name="虛構品牌有官網", client_name=None, actor="測試員")["id"]
-        repo.create_channel(self.conn, bid, channel_type="website", name="虛構官網", actor="測試員")
+        bid = repo.create_brand(self.conn, name="虛構品牌有官網", client_name=None, actor="測試員", org_id=db.DEV_ORG_ID)["id"]
+        repo.create_channel(self.conn, bid, channel_type="website", name="虛構官網", actor="測試員", org_id=db.DEV_ORG_ID)
         self.assertTrue(repo.compute_methodology_switches(self.conn, bid)["有自有網站"])
 
     def test_non_website_channel_type_does_not_trigger_switch(self):
-        bid = repo.create_brand(self.conn, name="虛構品牌只有粉專", client_name=None, actor="測試員")["id"]
-        repo.create_channel(self.conn, bid, channel_type="fb_page", name="虛構粉專", actor="測試員")
+        bid = repo.create_brand(self.conn, name="虛構品牌只有粉專", client_name=None, actor="測試員", org_id=db.DEV_ORG_ID)["id"]
+        repo.create_channel(self.conn, bid, channel_type="fb_page", name="虛構粉專", actor="測試員", org_id=db.DEV_ORG_ID)
         self.assertFalse(repo.compute_methodology_switches(self.conn, bid)["有自有網站"])
 
     def test_confirmed_regulatory_fact_triggers_switch(self):
-        bid = repo.create_brand(self.conn, name="虛構品牌法規", client_name=None, actor="測試員")["id"]
+        bid = repo.create_brand(self.conn, name="虛構品牌法規", client_name=None, actor="測試員", org_id=db.DEV_ORG_ID)["id"]
         repo.create_brand_fact(self.conn, bid, fact_type="regulatory", label="法規限制",
                                 value="測試內容", status="confirmed", confirmed_by="測試員",
                                 actor="測試員")
@@ -279,7 +279,7 @@ class MethodologySwitchComputationTest(unittest.TestCase):
 
     def test_pending_regulatory_fact_does_not_trigger_switch(self):
         bid = repo.create_brand(self.conn, name="虛構品牌法規待確認", client_name=None,
-                                 actor="測試員")["id"]
+                                 actor="測試員", org_id=db.DEV_ORG_ID)["id"]
         repo.create_brand_fact(self.conn, bid, fact_type="regulatory", label="法規限制",
                                 value="測試內容", status="pending", actor="測試員")
         self.assertFalse(repo.compute_methodology_switches(self.conn, bid)["健康類法規"])
@@ -292,14 +292,14 @@ class BrandSwitchesWriteTest(unittest.TestCase):
         self.conn = db.current()
 
     def test_set_brand_switches_writes_both_fields(self):
-        bid = repo.create_brand(self.conn, name="虛構品牌設定", client_name=None, actor="測試員")["id"]
+        bid = repo.create_brand(self.conn, name="虛構品牌設定", client_name=None, actor="測試員", org_id=db.DEV_ORG_ID)["id"]
         after = repo.set_brand_switches(self.conn, bid, market_region="TW",
                                          conversion_goal="purchase", actor="測試員")
         self.assertEqual(after["market_region"], "TW")
         self.assertEqual(after["conversion_goal"], "purchase")
 
     def test_set_brand_switches_rejects_unknown_conversion_goal(self):
-        bid = repo.create_brand(self.conn, name="虛構品牌壞值", client_name=None, actor="測試員")["id"]
+        bid = repo.create_brand(self.conn, name="虛構品牌壞值", client_name=None, actor="測試員", org_id=db.DEV_ORG_ID)["id"]
         with self.assertRaises(ValueError):
             repo.set_brand_switches(self.conn, bid, market_region="TW", conversion_goal="checkout",
                                      actor="測試員")

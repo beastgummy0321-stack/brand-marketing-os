@@ -56,7 +56,7 @@ class CreateCycleWritesFunnelStageTest(unittest.TestCase):
     def setUp(self):
         self.conn = db.current()
         self.brand = bi_repo.create_brand(self.conn, name="虛構晨光咖啡",
-                                          client_name="測試客戶", actor=ACTOR)
+                                          client_name="測試客戶", actor=ACTOR, org_id=db.DEV_ORG_ID)
         self.bid = self.brand["id"]
 
     def test_new_cycle_gets_funnel_stage_from_objective(self):

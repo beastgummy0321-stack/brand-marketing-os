@@ -29,7 +29,7 @@ ACTOR = "測試員"
 
 class LearningLedgerRepositoryTest(unittest.TestCase):
     def setUp(self):
-        self.brand = bi_repo.create_brand(main.conn, name="虛構晨光咖啡", client_name=None, actor=ACTOR)
+        self.brand = bi_repo.create_brand(main.conn, name="虛構晨光咖啡", client_name=None, actor=ACTOR, org_id=db.DEV_ORG_ID)
         self.bid = self.brand["id"]
 
     def _make_entry(self):
@@ -72,7 +72,7 @@ class LearningLedgerRepositoryTest(unittest.TestCase):
 
 class DeactivateRuleTest(unittest.TestCase):
     def setUp(self):
-        self.brand = bi_repo.create_brand(main.conn, name="虛構晨光咖啡二號", client_name=None, actor=ACTOR)
+        self.brand = bi_repo.create_brand(main.conn, name="虛構晨光咖啡二號", client_name=None, actor=ACTOR, org_id=db.DEV_ORG_ID)
         self.bid = self.brand["id"]
         self.rule = bi_repo.create_rule(main.conn, self.bid, actor=ACTOR, rule_type="tone",
                                         content="以後不要再出現太急迫催促的語氣", severity="soft")
@@ -113,7 +113,7 @@ class DeactivateRuleTest(unittest.TestCase):
 class LearningsPageRouteTest(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(main.app)
-        self.brand = bi_repo.create_brand(main.conn, name="虛構晨光咖啡三號", client_name=None, actor=ACTOR)
+        self.brand = bi_repo.create_brand(main.conn, name="虛構晨光咖啡三號", client_name=None, actor=ACTOR, org_id=db.DEV_ORG_ID)
         self.bid = self.brand["id"]
 
     def _sections(self):
@@ -189,7 +189,7 @@ class LearningsPageRouteTest(unittest.TestCase):
         pending_reconfirm），confirmed_at 太舊會先被那條掃描收走，測不到「未生效清單」
         這個獨立的行為——兩個機制刻意保持互不依賴，這裡的日期只是避開兩者疊加的巧合。"""
         rule_cards.set_value(main.conn, self.bid, "rule_prompt_cap", "max_active_rules",
-                             1.0, actor=ACTOR)
+                             1.0, actor=ACTOR, org_id=db.DEV_ORG_ID)
         kept = bi_repo.create_rule(main.conn, self.bid, actor=ACTOR, rule_type="tone",
                                    content="留在提示詞裡的規則", severity="soft")
         main.conn.execute("UPDATE rule SET confirmed_at = '2026-08-06T00:00:00+00:00' WHERE id = %s",
@@ -279,7 +279,7 @@ class RuleCardDecisionApiTest(unittest.TestCase):
 
     def setUp(self):
         self.client = TestClient(main.app)
-        self.brand = bi_repo.create_brand(main.conn, name="虛構晨光咖啡四號", client_name=None, actor=ACTOR)
+        self.brand = bi_repo.create_brand(main.conn, name="虛構晨光咖啡四號", client_name=None, actor=ACTOR, org_id=db.DEV_ORG_ID)
         self.bid = self.brand["id"]
 
     def _insert_card(self, card_id=None, axis="tone", value="urgent",
@@ -370,7 +370,7 @@ class ContrastSampleIsNamedCellsTest(unittest.TestCase):
 
     def setUp(self):
         self.brand = bi_repo.create_brand(main.conn, name="虛構日光眼鏡", client_name=None,
-                                          actor=ACTOR)
+                                          actor=ACTOR, org_id=db.DEV_ORG_ID)
         self.bid = self.brand["id"]
         self.cycle_id = ads_repo.create_cycle(
             main.conn, self.bid, product_ids=[], pain_value=10000, objective="sales",

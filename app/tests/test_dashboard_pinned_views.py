@@ -13,6 +13,7 @@ _tmpdir = tempfile.mkdtemp(prefix="brand_os_pinned_views_")
 import app.main as main  # noqa: E402
 from app.ads import repository as ads_repo  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
+from app.core.db import DEV_ORG_ID  # noqa: E402
 from app.dashboard import pinned_views  # noqa: E402
 
 
@@ -32,7 +33,7 @@ ACTOR = "測試員"
 class PinnedViewsStorageTest(unittest.TestCase):
     def setUp(self):
         self.bid = bi_repo.create_brand(
-            main.conn, name="虛構晨露茶行", client_name="測試客戶", actor=ACTOR)["id"]
+            main.conn, name="虛構晨露茶行", client_name="測試客戶", actor=ACTOR, org_id=DEV_ORG_ID)["id"]
 
     def test_defaults_to_full_catalog_before_first_save(self):
         self.assertEqual(pinned_views.get_pinned_views(main.conn, self.bid),
@@ -49,7 +50,7 @@ class PinnedViewsStorageTest(unittest.TestCase):
 
     def test_different_brands_do_not_share_pins(self):
         other_bid = bi_repo.create_brand(
-            main.conn, name="虛構霧語咖啡", client_name="測試客戶", actor=ACTOR)["id"]
+            main.conn, name="虛構霧語咖啡", client_name="測試客戶", actor=ACTOR, org_id=DEV_ORG_ID)["id"]
         pinned_views.set_pinned_views(main.conn, self.bid, ["health_lights"])
         self.assertEqual(pinned_views.get_pinned_views(main.conn, other_bid),
                          [c["key"] for c in pinned_views.PINNED_VIEW_CATALOG])
@@ -58,7 +59,7 @@ class PinnedViewsStorageTest(unittest.TestCase):
 class BuildPerformanceViewTest(unittest.TestCase):
     def setUp(self):
         self.bid = bi_repo.create_brand(
-            main.conn, name="虛構晨露茶行二號店", client_name="測試客戶", actor=ACTOR)["id"]
+            main.conn, name="虛構晨露茶行二號店", client_name="測試客戶", actor=ACTOR, org_id=DEV_ORG_ID)["id"]
 
     def test_post_placeholder_is_constant_even_without_any_cycle(self):
         self.assertEqual(pinned_views.build_performance_view(main.conn, self.bid, "post_placeholder"),

@@ -87,7 +87,8 @@ def run_due_readings(conn, brand_id: str, today: str) -> None:
             )
             if ok:
                 weekly_proposals.generate(conn, brand_id, reminder["campaign_cycle_id"])
-                core_interrupts.resolve(conn, reminder["id"], actor=ACTOR)
+                org_id = bi_repo._org_id_for_brand(conn, brand_id)
+                core_interrupts.resolve(conn, reminder["id"], actor=ACTOR, org_id=org_id)
 
 
 def run_weekly_engine(conn, *, today: str) -> dict:

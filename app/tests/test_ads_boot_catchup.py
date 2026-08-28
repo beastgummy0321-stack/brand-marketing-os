@@ -36,6 +36,7 @@ from app.ads import (
 from app.ads import performance as perf  # noqa: E402
 from app.ads import repository as ads_repo  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
+from app.core.db import DEV_ORG_ID  # noqa: E402
 from app.llm.providers import FakeProvider, ProviderResponse, Usage  # noqa: E402
 
 
@@ -67,7 +68,7 @@ class OverdueSettlementCatchupTest(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(main.app)
         self.brand = bi_repo.create_brand(main.conn, name="虛構補跑咖啡", client_name=None,
-                                          actor=ACTOR)
+                                          actor=ACTOR, org_id=DEV_ORG_ID)
         self.bid = self.brand["id"]
         self.product = bi_repo.create_product(main.conn, self.bid, name="虛構濾掛組",
                                               actor=ACTOR)["id"]

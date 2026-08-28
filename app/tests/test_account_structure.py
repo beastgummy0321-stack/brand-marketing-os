@@ -68,7 +68,7 @@ class AccountStructureTest(unittest.TestCase):
         """
         bid = "brand_demo_rule_card_override"
         rule_cards.set_value(self.conn, bid, "budget_structure", "medium_validation_ratio",
-                             0.5, actor="測試員")
+                             0.5, actor="測試員", org_id=db.DEV_ORG_ID)
         rec = account_structure.recommend(self.conn, bid, 1000)
         self.assertEqual(rec.groups[0].daily_budget, 500.0)
         self.assertEqual(rec.groups[1].daily_budget, 500.0)
@@ -77,7 +77,7 @@ class AccountStructureTest(unittest.TestCase):
         """A 品牌改規則卡值不影響 B 品牌（設定中心票 01 分品牌驗收）。"""
         brand_a = "brand_demo_isolation_a"
         rule_cards.set_value(self.conn, brand_a, "budget_structure", "medium_validation_ratio",
-                             0.5, actor="測試員")
+                             0.5, actor="測試員", org_id=db.DEV_ORG_ID)
         other = account_structure.recommend(self.conn, "brand_demo_isolation_b", 1000)
         self.assertEqual(other.groups[0].daily_budget, 700.0)  # 系統預設 0.7，沒被 A 品牌的覆寫值污染
 

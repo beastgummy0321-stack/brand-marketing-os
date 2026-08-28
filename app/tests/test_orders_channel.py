@@ -16,6 +16,7 @@ from app.ads import reading
 from app.ads import repository as ads_repo
 from app.brand_intelligence import repository as bi_repo
 from app.core import interrupts as core_interrupts
+from app.core.db import DEV_ORG_ID  # noqa: E402
 from app.llm.providers import FakeProvider, ProviderResponse, Usage
 from app.orders import channel as orders_channel
 from app.orders import dispatch as orders_dispatch
@@ -36,7 +37,7 @@ class _BaseChannelTest(unittest.TestCase):
     def setUp(self):
         self.brand_name = f"虛構晨露茶行{abs(hash(self.id())) % 100000}"
         self.brand = bi_repo.create_brand(web.conn, name=self.brand_name,
-                                          client_name=None, actor=ACTOR)
+                                          client_name=None, actor=ACTOR, org_id=DEV_ORG_ID)
         self.bid = self.brand["id"]
 
 

@@ -48,7 +48,7 @@ class ProductDeleteTest(unittest.TestCase):
 
     def test_active_product_cannot_be_deleted(self):
         bid = repo.create_brand(self.conn, name="測試皂坊（產品刪除）", client_name="測試客戶",
-                                 actor="測試員")["id"]
+                                 actor="測試員", org_id=db.DEV_ORG_ID)["id"]
         pid = self._seed_product(bid, "未封存產品（刪除測試）")
         with self.assertRaises(ValueError):
             repo.delete_product(self.conn, bid, pid, actor="測試員")
@@ -56,7 +56,7 @@ class ProductDeleteTest(unittest.TestCase):
 
     def test_archived_product_is_wiped_from_every_child_table(self):
         bid = repo.create_brand(self.conn, name="測試皂坊（產品刪除2）", client_name="測試客戶",
-                                 actor="測試員")["id"]
+                                 actor="測試員", org_id=db.DEV_ORG_ID)["id"]
         pid = self._seed_product(bid, "待刪產品（刪除測試）")
         self.assertTrue(all(n > 0 for n in self._row_counts(pid).values()))
 
@@ -76,7 +76,7 @@ class ProductDeleteTest(unittest.TestCase):
         的 try/except）。
         """
         bid = repo.create_brand(self.conn, name="測試皂坊（產品回捲）", client_name="測試客戶",
-                                 actor="測試員")["id"]
+                                 actor="測試員", org_id=db.DEV_ORG_ID)["id"]
         pid = self._seed_product(bid, "回捲產品（刪除測試）")
         before = self._row_counts(pid)
         repo.update_product(self.conn, bid, pid, name="回捲產品（刪除測試）",
@@ -99,7 +99,7 @@ class ProductDeleteTest(unittest.TestCase):
 
     def test_delete_leaves_audit_trail(self):
         bid = repo.create_brand(self.conn, name="測試皂坊（產品刪除3）", client_name="測試客戶",
-                                 actor="測試員")["id"]
+                                 actor="測試員", org_id=db.DEV_ORG_ID)["id"]
         pid = self._seed_product(bid, "留痕產品（刪除測試）")
         repo.update_product(self.conn, bid, pid, name="留痕產品（刪除測試）",
                              status="archived", actor="測試員")
@@ -116,7 +116,7 @@ class ProductDeleteTest(unittest.TestCase):
 
     def test_other_product_and_brand_level_rows_untouched(self):
         bid = repo.create_brand(self.conn, name="測試皂坊（產品刪除4）", client_name="測試客戶",
-                                 actor="測試員")["id"]
+                                 actor="測試員", org_id=db.DEV_ORG_ID)["id"]
         gone = self._seed_product(bid, "要刪的產品（隔離測試）")
         kept = self._seed_product(bid, "留著的產品（隔離測試）")
         # 品牌層規則（product_id=None），不該被產品刪除動到。
@@ -140,7 +140,7 @@ class ProductDeleteTest(unittest.TestCase):
 
     def test_archive_and_restore_round_trip(self):
         bid = repo.create_brand(self.conn, name="測試皂坊（封存恢復）", client_name="測試客戶",
-                                 actor="測試員")["id"]
+                                 actor="測試員", org_id=db.DEV_ORG_ID)["id"]
         pid = repo.create_product(self.conn, bid, name="來回封存產品", actor="測試員")["id"]
 
         archived = repo.update_product(self.conn, bid, pid, name="來回封存產品",

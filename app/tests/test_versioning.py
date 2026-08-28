@@ -12,7 +12,7 @@ from app.core import db
 class VersioningTest(unittest.TestCase):
     def setUp(self):
         self.conn = db.current()
-        self.brand = repo.create_brand(self.conn, name="品牌A（版本測試）", client_name=None, actor="小陳")
+        self.brand = repo.create_brand(self.conn, name="品牌A（版本測試）", client_name=None, actor="小陳", org_id=db.DEV_ORG_ID)
         self.product = repo.create_product(self.conn, self.brand["id"], name="產品A-1", actor="小陳")
 
     def _brand_version(self):

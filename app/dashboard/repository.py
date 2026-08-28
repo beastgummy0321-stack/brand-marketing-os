@@ -187,9 +187,8 @@ def _brand_card(conn, brand: dict, today: str, events: list) -> dict:
     }
 
 
-def overview(conn, *, org_id: str = "org_dev", today: str | None = None,
+def overview(conn, *, org_id: str, today: str | None = None,
              calendar_events: list | None = None) -> list:
-    # org_id 預設值只服務既有測試呼叫點；正式路由一律顯式傳 actor.org_id。
     today = today or date.today().isoformat()
     events = calendar_events if calendar_events is not None else campaign_calendar.load_events()
     brands = bi_repo.list_brands(conn, org_id, status="active")

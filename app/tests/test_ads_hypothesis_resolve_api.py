@@ -35,7 +35,7 @@ class HypothesisResolveApiTest(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(main.app)
         self.brand = bi_repo.create_brand(main.conn, name="虛構晨露茶行",
-                                          client_name=None, actor=ACTOR)
+                                          client_name=None, actor=ACTOR, org_id=db.DEV_ORG_ID)
         self.bid = self.brand["id"]
         self.product = bi_repo.create_product(main.conn, self.bid, name="虛構烏龍茶包",
                                               actor=ACTOR)["id"]

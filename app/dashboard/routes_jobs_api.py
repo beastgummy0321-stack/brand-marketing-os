@@ -24,21 +24,22 @@ from app.shared.web import require_actor
 router = APIRouter()
 
 
-def _brand_name(conn, brand_id: str) -> str:
-    brand = bi.get_brand(conn, brand_id)
-    return brand["name"] if brand else "（品牌已刪除）"
-
-
 @router.get("/api/jobs/active")
 async def jobs_active(request: Request):
-    # ponytail: 只要求登入，不做組織過濾——背景工作清單目前是行程內記憶體 registry
-    # （app.brand_web/app.intake/app.ads 各自的 JobRegistry），沒有 org_id 概念可過濾；
-    # 真的要分組織需要幫每個 registry 補 org_id，這是比本票範圍更大的改動，先報告。
-    require_actor(request)
+    """票 03-1 r1 defect 2：五個 registry 是行程內記憶體、沒有 org_id 可查——過濾改在這裡
+    做，每個 job 的 brand_id 反查一次 brand 列（本來就要查來補 brand_name），比對
+    `brand["org_id"] == actor.org_id` 才留下。品牌已被刪掉的 job 直接丟棄（不再算得出
+    是哪個組織的，「（品牌已刪除）」這個標籤這裡不再出現）。"""
+    actor = require_actor(request)
     conn = web.conn
     active = (
         intake_active_jobs() + product_research_active_jobs() + library_active_jobs()
         + brand_report_active_jobs() + onboarding_active_jobs()
     )
-    jobs = [{**job, "brand_name": _brand_name(conn, job["brand_id"])} for job in active]
+    jobs = []
+    for job in active:
+        brand = bi.get_brand(conn, job["brand_id"])
+        if brand is None or brand["org_id"] != actor.org_id:
+            continue
+        jobs.append({**job, "brand_name": brand["name"]})
     return {"data": jobs, "generated_at": datetime.now(UTC).isoformat()}

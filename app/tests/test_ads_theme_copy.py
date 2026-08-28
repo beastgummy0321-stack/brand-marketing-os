@@ -19,6 +19,7 @@ from app.ads import repository as ads_repo  # noqa: E402
 from app.ads import theme_repository as theme_repo  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
 from app.core import settings as coresettings  # noqa: E402
+from app.core.db import DEV_ORG_ID  # noqa: E402
 from app.creative.format_specs import FORMAT_SPECS  # noqa: E402
 
 ACTOR = "測試員"
@@ -41,7 +42,7 @@ class _Base(unittest.TestCase):
         main.conn.commit()
         self.client = TestClient(main.app)
         self.brand = bi_repo.create_brand(main.conn, name="虛構晨光咖啡（複製票）",
-                                          client_name="測試客戶", actor=ACTOR)
+                                          client_name="測試客戶", actor=ACTOR, org_id=DEV_ORG_ID)
         self.bid = self.brand["id"]
         self.product_id = bi_repo.create_product(main.conn, self.bid, name="虛構濾掛組",
                                                   actor=ACTOR)["id"]
@@ -71,7 +72,7 @@ class ImagePromptBatchCopyTest(_Base):
     def test_batch_content_is_header_plus_size_line_plus_prompts(self):
         coresettings.set_setting(
             main.conn, coresettings.IMAGE_PROMPT_HEADER_SETTING,
-            "圖上文字一律平面實填，不要浮雕字")
+            "圖上文字一律平面實填，不要浮雕字", org_id=DEV_ORG_ID)
         theme = self._create_theme(components=[
             {"component_type": "image_prompt", "content": "第一則提示詞"},
             {"component_type": "image_prompt", "content": "第二則提示詞"},

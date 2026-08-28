@@ -17,6 +17,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 import app.main as main  # noqa: E402
 from app.ads import repository as ads_repo  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
+from app.core.db import DEV_ORG_ID  # noqa: E402
 
 OPERATOR = "本人"  # 票 03-1：production 端已刪除，測試沿用舊字串值當 actor 名稱
 DEV_USER_ID = "00000000-0000-0000-0000-000000000001"  # dev token 種子使用者（conftest.py）
@@ -37,7 +38,7 @@ class _BaseAdsTest(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(main.app)
         self.brand = bi_repo.create_brand(main.conn, name="虛構晨光咖啡",
-                                          client_name="測試客戶", actor=ACTOR)
+                                          client_name="測試客戶", actor=ACTOR, org_id=DEV_ORG_ID)
         self.bid = self.brand["id"]
         self.product_a = bi_repo.create_product(main.conn, self.bid, name="虛構濾掛組",
                                                 actor=ACTOR)["id"]
@@ -380,7 +381,7 @@ class AdsBrandIsolationTest(_BaseAdsTest):
         resp = self._open_cycle()
         cycle_id = resp.json()["cycle_id"]
 
-        other = bi_repo.create_brand(main.conn, name="虛構隔壁烘焙", client_name=None, actor=ACTOR)
+        other = bi_repo.create_brand(main.conn, name="虛構隔壁烘焙", client_name=None, actor=ACTOR, org_id=DEV_ORG_ID)
         other_id = other["id"]
 
         self.assertEqual(ads_repo.list_cycles(main.conn, other_id), [])

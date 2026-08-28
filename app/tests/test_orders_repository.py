@@ -7,6 +7,7 @@ import unittest
 
 import app.shared.web as web
 from app.brand_intelligence import repository as bi_repo
+from app.core.db import DEV_ORG_ID  # noqa: E402
 from app.orders import repository as orders_repo
 
 ACTOR = "測試員"
@@ -29,7 +30,7 @@ class _BaseOrdersTest(unittest.TestCase):
     def setUp(self):
         self.brand_name = f"虛構晨光茶行{abs(hash(self.id())) % 100000}"
         self.brand = bi_repo.create_brand(web.conn, name=self.brand_name,
-                                          client_name=None, actor=ACTOR)
+                                          client_name=None, actor=ACTOR, org_id=DEV_ORG_ID)
         self.bid = self.brand["id"]
 
 

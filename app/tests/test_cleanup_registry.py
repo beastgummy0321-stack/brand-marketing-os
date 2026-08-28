@@ -95,7 +95,7 @@ class CleanupRegistryTest(unittest.TestCase):
         self._registered_names.append(name)
 
     def _make_brand(self, name):
-        return bi_repo.create_brand(self.conn, name=name, client_name=None, actor="測試員")["id"]
+        return bi_repo.create_brand(self.conn, name=name, client_name=None, actor="測試員", org_id=db.DEV_ORG_ID)["id"]
 
     # (a) 兩個假模組都登記，刪品牌時兩個的清除函式都要被呼叫到 -------------------
 
@@ -123,7 +123,7 @@ class CleanupRegistryTest(unittest.TestCase):
 
     def test_one_module_failing_rolls_back_everything(self):
         bid = self._make_brand("假模組回捲品牌（清理登記處測試）")
-        bi_repo.create_channel(self.conn, bid, actor="測試員", channel_type="website", name="測試官網")
+        bi_repo.create_channel(self.conn, bid, actor="測試員", channel_type="website", name="測試官網", org_id=db.DEV_ORG_ID)
 
         # 登記順序：先一個會真的下 DELETE 的正常模組，再一個故意壞掉的模組——
         # 這樣壞掉之前，正常模組的 DELETE 已經下過但還沒 commit，才驗得出回捲有效。
@@ -264,7 +264,7 @@ class CleanupRegistryTest(unittest.TestCase):
 
     def test_real_delete_brand_rolls_back_on_module_failure(self):
         bid = self._make_brand("真實刪除回捲品牌（清理登記處測試）")
-        bi_repo.create_channel(self.conn, bid, actor="測試員", channel_type="website", name="測試官網")
+        bi_repo.create_channel(self.conn, bid, actor="測試員", channel_type="website", name="測試官網", org_id=db.DEV_ORG_ID)
         bi_repo.update_brand(self.conn, bid, name="真實刪除回捲品牌（清理登記處測試）",
                               client_name=None, status="archived", actor="測試員")
 

@@ -39,7 +39,7 @@ class SkuCostVersionTest(unittest.TestCase):
     def setUp(self):
         self.conn = db.current()
         self.bid = bi_repo.create_brand(self.conn, name="虛構晨光咖啡（成本版本）",
-                                        client_name=None, actor=ACTOR)["id"]
+                                        client_name=None, actor=ACTOR, org_id=db.DEV_ORG_ID)["id"]
 
     def test_first_set_creates_version_1(self):
         orders_repo.set_sku_cost(self.conn, self.bid, "SKU-A", 10, actor=ACTOR, today="2026-01-01")
@@ -83,7 +83,7 @@ class SettlementFreezeTest(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(main.app)
         self.brand = bi_repo.create_brand(main.conn, name="虛構晨光咖啡（結算快照）",
-                                          client_name=None, actor=ACTOR)
+                                          client_name=None, actor=ACTOR, org_id=db.DEV_ORG_ID)
         self.bid = self.brand["id"]
         self.product = bi_repo.create_product(main.conn, self.bid, name="虛構濾掛組",
                                               actor=ACTOR)["id"]

@@ -19,7 +19,7 @@ class _Base(unittest.TestCase):
     def setUp(self):
         self.conn = db.current()
         self.brand = bi_repo.create_brand(self.conn, name="虛構晨光咖啡（主題票）",
-                                          client_name="測試客戶", actor=ACTOR)
+                                          client_name="測試客戶", actor=ACTOR, org_id=db.DEV_ORG_ID)
         self.bid = self.brand["id"]
         self.product_id = bi_repo.create_product(self.conn, self.bid, name="虛構濾掛組",
                                                   actor=ACTOR)["id"]
@@ -65,7 +65,7 @@ class CreateAndReadRoundTripTest(_Base):
     def test_wrong_brand_cannot_read_another_brands_theme(self):
         created = self._create()
         other_brand = bi_repo.create_brand(self.conn, name="虛構隔壁咖啡（主題票）",
-                                           client_name="測試客戶", actor=ACTOR)["id"]
+                                           client_name="測試客戶", actor=ACTOR, org_id=db.DEV_ORG_ID)["id"]
         self.assertIsNone(theme_repo.get_theme(self.conn, other_brand, created["id"]))
 
     def test_create_requires_name_and_folder_code_and_actor(self):

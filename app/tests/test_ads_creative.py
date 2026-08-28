@@ -22,6 +22,7 @@ from app.ads import theme_repository as theme_repo
 from app.ads.routes_creative import _CREATIVE_STAGES
 from app.brand_intelligence import repository as bi_repo
 from app.core import settings as coresettings
+from app.core.db import DEV_ORG_ID  # noqa: E402
 from app.llm import methodology
 from app.llm.providers import FakeProvider, ProviderResponse, Usage
 
@@ -181,7 +182,7 @@ class _BaseCreativeTest(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(main.app)
         self.brand = bi_repo.create_brand(main.conn, name="虛構晨光咖啡",
-                                          client_name="測試客戶", actor=ACTOR)
+                                          client_name="測試客戶", actor=ACTOR, org_id=DEV_ORG_ID)
         self.bid = self.brand["id"]
         bi_repo.create_brand_fact(main.conn, self.bid, actor=ACTOR, fact_type="positioning",
                                   label="定位", value="單一產區濾掛咖啡。",
@@ -260,12 +261,12 @@ class CreativeBudgetCapTest(_BaseCreativeTest):
     """
 
     def setUp(self):
-        coresettings.set_setting(main.conn, "intake_budget_limit", "1000")
+        coresettings.set_setting(main.conn, "intake_budget_limit", "1000", org_id=DEV_ORG_ID)
         super().setUp()
-        self.addCleanup(coresettings.set_setting, main.conn, "intake_budget_limit", "30")
+        self.addCleanup(coresettings.set_setting, main.conn, "intake_budget_limit", "30", org_id=DEV_ORG_ID)
 
     def test_over_limit_blocks_before_calling_provider(self):
-        coresettings.set_setting(main.conn, "intake_budget_limit", "0.0001")
+        coresettings.set_setting(main.conn, "intake_budget_limit", "0.0001", org_id=DEV_ORG_ID)
         provider = FakeProvider(response=_fake(_variants_reply(self.cell_ids)))
         ads_creative.PROVIDER = provider
         ok, err = ads_creative.generate(main.conn, self.bid, self.cycle_id, ACTOR)
@@ -276,7 +277,7 @@ class CreativeBudgetCapTest(_BaseCreativeTest):
         self.assertEqual(self._variants(), [])
 
     def test_under_limit_still_generates_normally(self):
-        coresettings.set_setting(main.conn, "intake_budget_limit", "1000")
+        coresettings.set_setting(main.conn, "intake_budget_limit", "1000", org_id=DEV_ORG_ID)
         ok, err = self._generate()
         self.assertTrue(ok, err)
         self.assertTrue(self._variants())
@@ -381,7 +382,7 @@ class ProductScopedComplianceTest(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(main.app)
         self.brand = bi_repo.create_brand(main.conn, name="虛構晨光咖啡二號",
-                                          client_name="測試客戶", actor=ACTOR)
+                                          client_name="測試客戶", actor=ACTOR, org_id=DEV_ORG_ID)
         self.bid = self.brand["id"]
         self.product = bi_repo.create_product(main.conn, self.bid, name="虛構晨光濾掛咖啡",
                                               actor=ACTOR)
@@ -458,7 +459,7 @@ class MultiProductScopedComplianceTest(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(main.app)
         self.brand = bi_repo.create_brand(main.conn, name="虛構晨光咖啡三號",
-                                          client_name="測試客戶", actor=ACTOR)
+                                          client_name="測試客戶", actor=ACTOR, org_id=DEV_ORG_ID)
         self.bid = self.brand["id"]
         self.product_a = bi_repo.create_product(main.conn, self.bid, name="虛構晨光濾掛咖啡",
                                                 actor=ACTOR)
@@ -733,7 +734,7 @@ class CreativeIsolationTest(_BaseCreativeTest):
     def test_other_brand_sees_no_variants(self):
         """票 02-repoint-creative-readers：brand_id 隔離改驗主題化後的讀取層。"""
         target = _adopted_theme_component(self.bid, self.cycle_id, self.cell_ids[0])
-        other = bi_repo.create_brand(main.conn, name="虛構隔壁烘焙", client_name=None, actor=ACTOR)["id"]
+        other = bi_repo.create_brand(main.conn, name="虛構隔壁烘焙", client_name=None, actor=ACTOR, org_id=DEV_ORG_ID)["id"]
         self.assertEqual(ads_creative.list_variants(main.conn, other, self.cycle_id), [])
         self.assertIsNone(ads_creative.get_variant(main.conn, other, target["id"]))
 

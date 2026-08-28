@@ -225,7 +225,7 @@ class LearningLedgerDedupeWidenedNormalizationTest(unittest.TestCase):
 
     def setUp(self):
         self.brand = bi_repo.create_brand(main.conn, name="虛構晨露茶行去重測試",
-                                          client_name=None, actor=ACTOR)
+                                          client_name=None, actor=ACTOR, org_id=db.DEV_ORG_ID)
         self.bid = self.brand["id"]
         bi_repo.create_learning_ledger_entry(
             main.conn, self.bid, learning_text="情感訴求角度轉換率比功能訴求高（第二輪驗證）",
@@ -271,7 +271,7 @@ class _HypothesisReviewBase(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(main.app)
         self.brand = bi_repo.create_brand(main.conn, name="虛構晨露茶行",
-                                          client_name=None, actor=ACTOR)
+                                          client_name=None, actor=ACTOR, org_id=db.DEV_ORG_ID)
         self.bid = self.brand["id"]
         self.product = bi_repo.create_product(main.conn, self.bid, name="虛構烏龍茶包",
                                               actor=ACTOR)["id"]

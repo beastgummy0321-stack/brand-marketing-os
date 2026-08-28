@@ -49,8 +49,7 @@ def list_categories() -> list:
     return [{"category": category, "label": label} for category, label in labels.items()]
 
 
-def dismiss(conn, brand_id: str, category: str, *, org_id: str = "org_dev") -> None:
-    # org_id 預設值只服務既有測試呼叫點；正式呼叫端一律顯式傳。
+def dismiss(conn, brand_id: str, category: str, *, org_id: str) -> None:
     """永久關閉某品牌某節日類別的提醒。重複關閉不報錯、不疊加（ON CONFLICT DO NOTHING）。
     會 commit。"""
     conn.execute(

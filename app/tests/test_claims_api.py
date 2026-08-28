@@ -20,11 +20,11 @@ class ClaimsApiTest(unittest.TestCase):
         self.client = TestClient(main.app)
         web.conn.execute("DELETE FROM discovered_campaign")
         web.conn.commit()
-        self.brand_id = bi_repo.create_brand(web.conn, name=f"認領測試{uuid.uuid4().hex[:8]}", client_name=None, actor=ACTOR)["id"]
-        self.account_id = ads_handoff._ensure_ad_account(web.conn, f"act_claims_{uuid.uuid4().hex[:8]}", now_iso())
+        self.brand_id = bi_repo.create_brand(web.conn, name=f"認領測試{uuid.uuid4().hex[:8]}", client_name=None, actor=ACTOR, org_id=coredb.DEV_ORG_ID)["id"]
+        self.account_id = ads_handoff._ensure_ad_account(web.conn, f"act_claims_{uuid.uuid4().hex[:8]}", now_iso(), org_id=coredb.DEV_ORG_ID)
         self.suggested_id = self._insert_campaign("夏季全站9折_轉換", "suggested", self.brand_id)
         self.unclaimed_id = self._insert_campaign("秋季新品", "unclaimed", None)
-        self.other_brand_id = bi_repo.create_brand(web.conn, name=f"隔壁品牌{uuid.uuid4().hex[:8]}", client_name=None, actor=ACTOR)["id"]
+        self.other_brand_id = bi_repo.create_brand(web.conn, name=f"隔壁品牌{uuid.uuid4().hex[:8]}", client_name=None, actor=ACTOR, org_id=coredb.DEV_ORG_ID)["id"]
         self.other_suggested_id = self._insert_campaign("隔壁品牌的活動", "suggested", self.other_brand_id)
         web.conn.commit()
 

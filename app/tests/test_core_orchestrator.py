@@ -56,7 +56,7 @@ class OrchestratorMechanicsTest(unittest.TestCase):
         orchestrator.register_module(name, status=status, handle=handle)
 
     def _set_autonomy(self, mode: float):
-        rule_cards.set_value(self.conn, self.brand_id, "autonomy", "mode", mode, ACTOR)
+        rule_cards.set_value(self.conn, self.brand_id, "autonomy", "mode", mode, ACTOR, org_id=db.DEV_ORG_ID)
 
     # ---- 驗收 1：decide() 是純函數 ----
 
@@ -91,7 +91,7 @@ class OrchestratorMechanicsTest(unittest.TestCase):
             if facts.get("fake.ready") else None))
         self._set_autonomy(1.0)
 
-        result = orchestrator.run(self.conn, self.brand_id, actor=ACTOR)
+        result = orchestrator.run(self.conn, self.brand_id, actor=ACTOR, org_id=db.DEV_ORG_ID)
 
         self.assertEqual(handle_calls, [])
         outcome = next(o for o in result["outcomes"] if o["dedupe_key"] == "fake:conservative")
@@ -114,7 +114,7 @@ class OrchestratorMechanicsTest(unittest.TestCase):
             if facts.get("fake.ready") else None))
         self._set_autonomy(2.0)
 
-        result = orchestrator.run(self.conn, self.brand_id, actor=ACTOR)
+        result = orchestrator.run(self.conn, self.brand_id, actor=ACTOR, org_id=db.DEV_ORG_ID)
 
         self.assertEqual(len(handle_calls), 1)
         outcome = next(o for o in result["outcomes"] if o["dedupe_key"] == "fake:handsoff")
@@ -132,7 +132,7 @@ class OrchestratorMechanicsTest(unittest.TestCase):
             if facts.get("fake.ready") else None))
         self._set_autonomy(1.0)  # 保守檔
 
-        result = orchestrator.run(self.conn, self.brand_id, actor=ACTOR)
+        result = orchestrator.run(self.conn, self.brand_id, actor=ACTOR, org_id=db.DEV_ORG_ID)
 
         self.assertEqual(len(handle_calls), 1)
         outcome = next(o for o in result["outcomes"] if o["dedupe_key"] == "fake:riskless")
@@ -150,8 +150,8 @@ class OrchestratorMechanicsTest(unittest.TestCase):
              "risk": None, "dedupe_key": "fake:dedupe"}
             if facts.get("fake.ready") else None))
 
-        orchestrator.run(self.conn, self.brand_id, actor=ACTOR)
-        orchestrator.run(self.conn, self.brand_id, actor=ACTOR)
+        orchestrator.run(self.conn, self.brand_id, actor=ACTOR, org_id=db.DEV_ORG_ID)
+        orchestrator.run(self.conn, self.brand_id, actor=ACTOR, org_id=db.DEV_ORG_ID)
 
         self.assertEqual(len(handle_calls), 1)
         row = self.conn.execute(
@@ -179,7 +179,7 @@ class OrchestratorMechanicsTest(unittest.TestCase):
             {"module": "fake_good", "op": "do_it", "brand_id": facts["brand_id"], "params": {},
              "risk": None, "dedupe_key": "fake:good"} if facts.get("good.ready") else None))
 
-        result = orchestrator.run(self.conn, self.brand_id, actor=ACTOR)
+        result = orchestrator.run(self.conn, self.brand_id, actor=ACTOR, org_id=db.DEV_ORG_ID)
 
         self.assertEqual(len(good_calls), 1)
         bad_outcome = next(o for o in result["outcomes"] if o["dedupe_key"] == "fake:bad")
@@ -204,7 +204,7 @@ class OrchestratorMechanicsTest(unittest.TestCase):
              "risk": None, "dedupe_key": "fake:escalate"} if facts.get("fake.ready") else None))
 
         for _ in range(3):
-            orchestrator.run(self.conn, self.brand_id, actor=ACTOR)
+            orchestrator.run(self.conn, self.brand_id, actor=ACTOR, org_id=db.DEV_ORG_ID)
 
         row = self.conn.execute(
             "SELECT attempt_count, outcome FROM decision WHERE brand_id = %s AND dedupe_key = %s",
@@ -224,8 +224,8 @@ class OrchestratorMechanicsTest(unittest.TestCase):
             {"module": "fake", "op": "do_it", "brand_id": facts["brand_id"], "params": {},
              "risk": None, "dedupe_key": "fake:not_yet"} if facts.get("fake.ready") else None))
 
-        orchestrator.run(self.conn, self.brand_id, actor=ACTOR)
-        orchestrator.run(self.conn, self.brand_id, actor=ACTOR)
+        orchestrator.run(self.conn, self.brand_id, actor=ACTOR, org_id=db.DEV_ORG_ID)
+        orchestrator.run(self.conn, self.brand_id, actor=ACTOR, org_id=db.DEV_ORG_ID)
 
         open_cards = core_interrupts.list_open(self.conn, brand_id=self.brand_id)
         self.assertEqual(open_cards, [])
@@ -251,7 +251,7 @@ class OrchestratorMechanicsTest(unittest.TestCase):
 
         del orchestrator.MODULES["fake_missing"]
 
-        result = orchestrator.run(self.conn, self.brand_id, actor=ACTOR)  # 不炸
+        result = orchestrator.run(self.conn, self.brand_id, actor=ACTOR, org_id=db.DEV_ORG_ID)  # 不炸
 
         self.assertEqual(len(good_calls), 1)
         missing_outcome = next(o for o in result["outcomes"] if o["dedupe_key"] == "fake:missing")
@@ -273,7 +273,7 @@ class OrchestratorMechanicsTest(unittest.TestCase):
             {"module": "fake", "op": "unknown_op", "brand_id": facts["brand_id"], "params": {},
              "risk": None, "dedupe_key": "fake:unknown_op"} if facts.get("fake.ready") else None))
 
-        result = orchestrator.run(self.conn, self.brand_id, actor=ACTOR)
+        result = orchestrator.run(self.conn, self.brand_id, actor=ACTOR, org_id=db.DEV_ORG_ID)
 
         outcome = next(o for o in result["outcomes"] if o["dedupe_key"] == "fake:unknown_op")
         self.assertEqual(outcome["outcome"], "failed")

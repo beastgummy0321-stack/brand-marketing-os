@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 import app.main as main
 import app.shared.web as web
 from app.brand_intelligence import repository as bi_repo
+from app.core.db import DEV_ORG_ID  # noqa: E402
 from app.orders import channel as orders_channel
 from app.orders import repository as orders_repo
 
@@ -37,7 +38,7 @@ def _easystore_xlsx_bytes():
 class OrdersApiTest(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(main.app)
-        self.brand = bi_repo.create_brand(web.conn, name="訂單 API 測試品牌", client_name=None, actor="測試員")
+        self.brand = bi_repo.create_brand(web.conn, name="訂單 API 測試品牌", client_name=None, actor="測試員", org_id=DEV_ORG_ID)
         self.brand_id = self.brand["id"]
         rows = []
         for index in range(13):

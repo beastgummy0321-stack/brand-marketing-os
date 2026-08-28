@@ -17,6 +17,7 @@ import app.shared.web as web
 from app.brand_intelligence import repository as bi_repo
 from app.brand_web import product_ai_calls as product_ai
 from app.core import settings as coresettings
+from app.core.db import DEV_ORG_ID  # noqa: E402
 from app.llm.providers import (
     MISSING_KEY_MESSAGE,
     AnthropicProvider,
@@ -59,7 +60,7 @@ class _BaseHandoffTest(unittest.TestCase):
         os.environ.pop("ANTHROPIC_API_KEY", None)
         os.environ.pop("BRAND_OS_LLM_MODEL", None)
         self._orig_provider = product_ai.PROVIDER
-        self.brand = bi_repo.create_brand(web.conn, name="虛構茶研所", client_name="測試客戶", actor=ACTOR)
+        self.brand = bi_repo.create_brand(web.conn, name="虛構茶研所", client_name="測試客戶", actor=ACTOR, org_id=DEV_ORG_ID)
         self.product_id = bi_repo.create_product(
             web.conn, self.brand["id"], name="虛構回甘烏龍", actor=ACTOR
         )["id"]
@@ -155,7 +156,7 @@ class HandoffPasteFixTest(_BaseHandoffTest):
         self.assertEqual(bi_repo.list_product_facts(web.conn, self.brand["id"], self.product_id), [])
 
     def test_over_budget_blocks_repair_before_any_llm_call(self):
-        coresettings.set_setting(web.conn, coresettings.INTAKE_BUDGET_SETTING, "0.1")
+        coresettings.set_setting(web.conn, coresettings.INTAKE_BUDGET_SETTING, "0.1", org_id=DEV_ORG_ID)
         product_ai.PROVIDER = FakeProvider(response=_fake_response("不該被呼叫"))
         resp = self._post(_GARBLED)
         self.assertEqual(resp.status_code, 400)

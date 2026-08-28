@@ -165,7 +165,7 @@ class _BasePlanTest(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(main.app)
         self.brand = bi_repo.create_brand(main.conn, name="虛構晨光咖啡",
-                                          client_name="測試客戶", actor=ACTOR)
+                                          client_name="測試客戶", actor=ACTOR, org_id=coredb.DEV_ORG_ID)
         self.bid = self.brand["id"]
         self.product = bi_repo.create_product(main.conn, self.bid, name="虛構濾掛組",
                                               actor=ACTOR)["id"]
@@ -441,10 +441,10 @@ class PlanBudgetCapTest(_BasePlanTest):
 
     def setUp(self):
         super().setUp()
-        self.addCleanup(coresettings.set_setting, main.conn, "intake_budget_limit", "30")
+        self.addCleanup(coresettings.set_setting, main.conn, "intake_budget_limit", "30", org_id=coredb.DEV_ORG_ID)
 
     def test_over_limit_blocks_before_calling_provider(self):
-        coresettings.set_setting(main.conn, "intake_budget_limit", "0.0001")
+        coresettings.set_setting(main.conn, "intake_budget_limit", "0.0001", org_id=coredb.DEV_ORG_ID)
         provider = FakeProvider(response=_fake(json.dumps(_GOOD_OPTIONS, ensure_ascii=False)))
         ads_plan.PROVIDER = provider
         ok, err = ads_plan.generate_options(main.conn, self.bid, self.cycle_id, ACTOR)
@@ -455,14 +455,14 @@ class PlanBudgetCapTest(_BasePlanTest):
         self.assertIsNone(ads_plan.get_latest_plan(main.conn, self.bid, self.cycle_id))
 
     def test_under_limit_still_generates_normally(self):
-        coresettings.set_setting(main.conn, "intake_budget_limit", "1000")
+        coresettings.set_setting(main.conn, "intake_budget_limit", "1000", org_id=coredb.DEV_ORG_ID)
         state = self._generate()
         self.assertEqual(state["status"], "done")  # 舊頁的「303 轉去 /plan/select」
 
     def test_shares_the_same_cap_as_intake_and_product_research(self):
         """M2 要求「同一道上限」：先用掉大半額度的是別的模組（模擬 llm_task 直接入庫），
         廣告計畫生成一樣要被擋，證明不是各模組各管各的。"""
-        coresettings.set_setting(main.conn, "intake_budget_limit", "1.00")
+        coresettings.set_setting(main.conn, "intake_budget_limit", "1.00", org_id=coredb.DEV_ORG_ID)
         main.conn.execute(
             "INSERT INTO llm_task (id, org_id, brand_id, task_type, context_scope_json,"
             " input_context_ids_json, input_context_hash, knowledge_item_ids_json,"
@@ -485,7 +485,7 @@ class AudienceAvailabilityTest(unittest.TestCase):
 
     def setUp(self):
         self.brand = bi_repo.create_brand(main.conn, name="虛構受眾測試品牌",
-                                          client_name="測試客戶", actor=ACTOR)
+                                          client_name="測試客戶", actor=ACTOR, org_id=coredb.DEV_ORG_ID)
         self.bid = self.brand["id"]
 
     def test_cold_always_available_warm_and_hot_default_unavailable(self):

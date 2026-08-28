@@ -10,6 +10,7 @@ import app.shared.web as web
 from app.brand_intelligence import repository as repo
 from app.brand_web import report_service
 from app.brand_web import routes_report_api as report_api
+from app.core.db import DEV_ORG_ID  # noqa: E402
 from app.llm import providers
 
 ACTOR = "測試員"
@@ -41,7 +42,7 @@ class BrandReportApiTest(unittest.TestCase):
         report_api._report_jobs.clear()
 
     def _brand_with_report(self, fact_count: int):
-        brand = repo.create_brand(web.conn, name=f"報告 API 測試 {fact_count}", client_name=None, actor=ACTOR)
+        brand = repo.create_brand(web.conn, name=f"報告 API 測試 {fact_count}", client_name=None, actor=ACTOR, org_id=DEV_ORG_ID)
         for index in range(fact_count):
             repo.create_brand_fact(
                 web.conn, brand["id"], fact_type="positioning", label=f"事實 {index}",
@@ -54,7 +55,7 @@ class BrandReportApiTest(unittest.TestCase):
         return brand
 
     def test_generate_with_provider_keeps_default_provider_unchanged(self):
-        brand = repo.create_brand(web.conn, name="注入 Provider 報告", client_name=None, actor=ACTOR)
+        brand = repo.create_brand(web.conn, name="注入 Provider 報告", client_name=None, actor=ACTOR, org_id=DEV_ORG_ID)
         default_provider = report_service.PROVIDER
 
         ok, error = report_service.generate(
@@ -88,7 +89,7 @@ class BrandReportApiTest(unittest.TestCase):
         self.assertEqual(set(response.json()), {"detail"})
 
     def test_get_exposes_running_job(self):
-        brand = repo.create_brand(web.conn, name="執行中報告", client_name=None, actor=ACTOR)
+        brand = repo.create_brand(web.conn, name="執行中報告", client_name=None, actor=ACTOR, org_id=DEV_ORG_ID)
         report_api._report_jobs.set(brand["id"], {
             "status": "running", "stage": "正在整理五章",
             "started_at": "2026-08-20T04:11:02+00:00", "brand_id": brand["id"],

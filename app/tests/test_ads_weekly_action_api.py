@@ -27,7 +27,7 @@ class WeeklyActionApiTest(unittest.TestCase):
             main.conn,
             name=f"虛構行動卡品牌{abs(hash(self.id())) % 100000}",
             client_name=None,
-            actor=ACTOR,
+            actor=ACTOR, org_id=db.DEV_ORG_ID,
         )
         cycle = ads_repo.create_cycle(
             main.conn,

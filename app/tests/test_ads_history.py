@@ -14,6 +14,7 @@ from app.ads import repository as ads_repo
 from app.ads import routes_common
 from app.ads import sync as ads_sync
 from app.brand_intelligence import repository as bi_repo
+from app.core.db import DEV_ORG_ID  # noqa: E402
 from app.llm.providers import FakeProvider, ProviderResponse, Usage
 
 
@@ -33,7 +34,7 @@ class _BaseHubTest(unittest.TestCase):
                           (ads_sync.ACCOUNT_SETTING, ads_sync.TOKEN_SETTING))
         main.conn.commit()
         self.brand = bi_repo.create_brand(main.conn, name=f"虛構晨光咖啡{self.id()[-6:]}",
-                                          client_name=None, actor=ACTOR)
+                                          client_name=None, actor=ACTOR, org_id=DEV_ORG_ID)
         self.bid = self.brand["id"]
 
     def _open_cycle(self, **overrides):

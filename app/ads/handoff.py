@@ -531,9 +531,8 @@ def readiness_ring(conn, brand_id: str, cycle_id: str) -> dict:
     return {"passed": sum(1 for i in items if i["passed"]), "total": len(items), "items": items}
 
 
-def _ensure_ad_account(conn, external_account_id: str, ts: str, *, org_id: str = "org_dev") -> str:
-    """廣告帳號不綁品牌（一個帳號可服務多品牌，決策 0022 第 6 點），有就取、沒有就建。
-    org_id 預設值只服務既有測試呼叫點；正式呼叫端一律顯式傳。"""
+def _ensure_ad_account(conn, external_account_id: str, ts: str, *, org_id: str) -> str:
+    """廣告帳號不綁品牌（一個帳號可服務多品牌，決策 0022 第 6 點），有就取、沒有就建。"""
     row = conn.execute(
         "SELECT id FROM ad_account WHERE platform = 'meta' AND external_account_id = %s",
         (external_account_id,),

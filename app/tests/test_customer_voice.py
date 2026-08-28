@@ -16,6 +16,7 @@ import app.main as main
 import app.shared.web as web
 from app.brand_intelligence import repository as repo
 from app.brand_web import routes_library as customer_voice
+from app.core.db import DEV_ORG_ID  # noqa: E402
 from app.llm import providers
 
 ACTOR = "測試員"
@@ -44,7 +45,7 @@ class CustomerVoiceExtractTest(unittest.TestCase):
     """直接測 customer_voice.extract()／repository，不經 HTTP。"""
 
     def setUp(self):
-        self.brand = repo.create_brand(web.conn, name="晨露茶飲", client_name="測試客戶", actor=ACTOR)
+        self.brand = repo.create_brand(web.conn, name="晨露茶飲", client_name="測試客戶", actor=ACTOR, org_id=DEV_ORG_ID)
 
     def test_extract_success_stores_row_with_items(self):
         fake = _fake(_items("晨露"))
@@ -135,7 +136,7 @@ class CustomerVoiceHttpTest(unittest.TestCase):
         self.client = TestClient(main.app)
 
     def _new_brand(self, name):
-        b = repo.create_brand(web.conn, name=name, client_name=None, actor=ACTOR)
+        b = repo.create_brand(web.conn, name=name, client_name=None, actor=ACTOR, org_id=DEV_ORG_ID)
         return b["id"]
 
     def _poll(self, bid, job_key):

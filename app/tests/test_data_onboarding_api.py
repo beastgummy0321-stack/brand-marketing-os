@@ -10,6 +10,7 @@ import app.shared.web as web
 from app.ads import routes_onboarding_api as onboarding_api
 from app.ads import sync as ads_sync
 from app.brand_intelligence import repository as bi_repo
+from app.core.db import DEV_ORG_ID  # noqa: E402
 
 ACTOR = "測試員"
 
@@ -18,7 +19,7 @@ class DataOnboardingApiTest(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(main.app)
         self.brand = bi_repo.create_brand(web.conn, name=f"虛構資料上線茶行{self.id()[-8:]}",
-                                          client_name=None, actor=ACTOR)
+                                          client_name=None, actor=ACTOR, org_id=DEV_ORG_ID)
         self.brand_id = self.brand["id"]
         onboarding_api._jobs.clear()
 

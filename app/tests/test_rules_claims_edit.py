@@ -18,7 +18,7 @@ class RuleClaimEditTest(unittest.TestCase):
                 self.conn.execute("SELECT * FROM audit_log ORDER BY created_at, id").fetchall()]
 
     def test_update_rule_changes_content_and_severity(self):
-        brand = repo.create_brand(self.conn, name="晨露茶飲", client_name=None, actor="測試員")
+        brand = repo.create_brand(self.conn, name="晨露茶飲", client_name=None, actor="測試員", org_id=db.DEV_ORG_ID)
         rule = repo.create_rule(self.conn, brand["id"], rule_type="tone", content="舊內容",
                                  severity="soft", actor="測試員")
         after = repo.update_rule(self.conn, brand["id"], rule["id"], actor="測試員",
@@ -30,7 +30,7 @@ class RuleClaimEditTest(unittest.TestCase):
         self.assertEqual(repo.get_rule(self.conn, brand["id"], rule["id"])["content"], "新內容")
 
     def test_update_claim_changes_text_and_type(self):
-        brand = repo.create_brand(self.conn, name="山嵐選物", client_name=None, actor="測試員")
+        brand = repo.create_brand(self.conn, name="山嵐選物", client_name=None, actor="測試員", org_id=db.DEV_ORG_ID)
         claim = repo.create_claim(self.conn, brand["id"], claim_text="舊宣稱",
                                    claim_type="high_risk", actor="測試員")
         after = repo.update_claim(self.conn, brand["id"], claim["id"], actor="測試員",
@@ -40,8 +40,8 @@ class RuleClaimEditTest(unittest.TestCase):
         self.assertEqual(repo.get_claim(self.conn, brand["id"], claim["id"])["claim_text"], "新宣稱")
 
     def test_cross_brand_lookup_and_update_blocked(self):
-        a = repo.create_brand(self.conn, name="晨露茶飲（跨品牌測試）", client_name=None, actor="測試員")
-        b = repo.create_brand(self.conn, name="山嵐選物（跨品牌測試）", client_name=None, actor="測試員")
+        a = repo.create_brand(self.conn, name="晨露茶飲（跨品牌測試）", client_name=None, actor="測試員", org_id=db.DEV_ORG_ID)
+        b = repo.create_brand(self.conn, name="山嵐選物（跨品牌測試）", client_name=None, actor="測試員", org_id=db.DEV_ORG_ID)
         rule = repo.create_rule(self.conn, a["id"], rule_type="tone", content="A的規則",
                                  severity="soft", actor="測試員")
         claim = repo.create_claim(self.conn, a["id"], claim_text="A的宣稱",
@@ -63,7 +63,7 @@ class RuleClaimEditTest(unittest.TestCase):
         self.assertEqual(repo.get_claim(self.conn, a["id"], claim["id"])["claim_text"], "A的宣稱")
 
     def test_audit_log_has_before_and_after(self):
-        brand = repo.create_brand(self.conn, name="晨露茶飲（稽核測試）", client_name=None, actor="小陳")
+        brand = repo.create_brand(self.conn, name="晨露茶飲（稽核測試）", client_name=None, actor="小陳", org_id=db.DEV_ORG_ID)
         rule = repo.create_rule(self.conn, brand["id"], rule_type="tone", content="舊規則內容",
                                  severity="soft", actor="小陳")
         claim = repo.create_claim(self.conn, brand["id"], claim_text="舊宣稱內容",

@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 import app.main as main
 import app.shared.web as web
 from app.brand_intelligence import repository as repo
+from app.core.db import DEV_ORG_ID  # noqa: E402
 
 _SEQ = [0]
 ACTOR = "本人"
@@ -26,7 +27,7 @@ class LibraryWriteApiTest(unittest.TestCase):
     def _new_brand(self, prefix: str) -> str:
         _SEQ[0] += 1
         name = f"{prefix}{_SEQ[0]}"
-        return repo.create_brand(web.conn, name=name, client_name=None, actor=ACTOR)["id"]
+        return repo.create_brand(web.conn, name=name, client_name=None, actor=ACTOR, org_id=DEV_ORG_ID)["id"]
 
     # ---- 品牌事實 ----
 

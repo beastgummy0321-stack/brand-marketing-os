@@ -35,18 +35,21 @@ class RecordAndGetSkipTest(unittest.TestCase):
         self.assertIsNone(campaign_skip.get_skip(self.conn, self.bid, "cny", 2026))
 
     def test_record_with_reason_is_retrievable(self):
-        campaign_skip.record_skip(self.conn, self.bid, "cny", 2026, reason="收假太晚")
+        campaign_skip.record_skip(self.conn, self.bid, "cny", 2026, reason="收假太晚",
+            org_id=db.DEV_ORG_ID)
         self.assertEqual(
             campaign_skip.get_skip(self.conn, self.bid, "cny", 2026), {"reason": "收假太晚"})
 
     def test_reason_is_optional(self):
-        campaign_skip.record_skip(self.conn, self.bid, "valentine", 2026)
+        campaign_skip.record_skip(self.conn, self.bid, "valentine", 2026, org_id=db.DEV_ORG_ID)
         self.assertEqual(
             campaign_skip.get_skip(self.conn, self.bid, "valentine", 2026), {"reason": None})
 
     def test_repeated_record_overwrites_reason_not_duplicates(self):
-        campaign_skip.record_skip(self.conn, self.bid, "cny", 2026, reason="舊理由")
-        campaign_skip.record_skip(self.conn, self.bid, "cny", 2026, reason="新理由")
+        campaign_skip.record_skip(self.conn, self.bid, "cny", 2026, reason="舊理由",
+            org_id=db.DEV_ORG_ID)
+        campaign_skip.record_skip(self.conn, self.bid, "cny", 2026, reason="新理由",
+            org_id=db.DEV_ORG_ID)
         self.assertEqual(
             campaign_skip.get_skip(self.conn, self.bid, "cny", 2026), {"reason": "新理由"})
         rows = self.conn.execute(
@@ -55,12 +58,14 @@ class RecordAndGetSkipTest(unittest.TestCase):
         self.assertEqual(rows["c"], 1, "同品牌＋節日＋年份只該留一列，不是疊加")
 
     def test_different_year_is_independent(self):
-        campaign_skip.record_skip(self.conn, self.bid, "cny", 2026, reason="今年跳過")
+        campaign_skip.record_skip(self.conn, self.bid, "cny", 2026, reason="今年跳過",
+            org_id=db.DEV_ORG_ID)
         self.assertIsNone(campaign_skip.get_skip(self.conn, self.bid, "cny", 2027))
 
     def test_different_brand_is_independent(self):
         other = f"brd_{db.new_id('t')}"
-        campaign_skip.record_skip(self.conn, self.bid, "cny", 2026, reason="A 跳過")
+        campaign_skip.record_skip(self.conn, self.bid, "cny", 2026, reason="A 跳過",
+            org_id=db.DEV_ORG_ID)
         self.assertIsNone(campaign_skip.get_skip(self.conn, other, "cny", 2026))
 
 
@@ -74,8 +79,9 @@ class CleanupRegistrationTest(unittest.TestCase):
         self.bid = f"brd_{db.new_id('t')}"
 
     def test_delete_brand_data_removes_rows_and_count_matches(self):
-        campaign_skip.record_skip(self.conn, self.bid, "cny", 2026, reason="理由")
-        campaign_skip.record_skip(self.conn, self.bid, "valentine", 2026)
+        campaign_skip.record_skip(self.conn, self.bid, "cny", 2026, reason="理由",
+            org_id=db.DEV_ORG_ID)
+        campaign_skip.record_skip(self.conn, self.bid, "valentine", 2026, org_id=db.DEV_ORG_ID)
         self.assertEqual(
             dict(campaign_skip.count_brand_data(self.conn, self.bid)), {"檔期跳過紀錄": 2})
 

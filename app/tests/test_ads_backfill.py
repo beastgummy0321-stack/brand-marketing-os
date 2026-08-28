@@ -26,6 +26,7 @@ from app.ads import routes as ads_routes
 from app.ads import sync as ads_sync
 from app.brand_intelligence import repository as bi_repo
 from app.core import settings as coresettings
+from app.core.db import DEV_ORG_ID  # noqa: E402
 
 ACTOR = "測試員"
 ACCOUNT = "act_1234567890"
@@ -105,10 +106,10 @@ class _BaseMetaBackfillTest(unittest.TestCase):
         main.conn.commit()
         self.brand = bi_repo.create_brand(
             main.conn, name=f"虛構回填晨光咖啡{abs(hash(self.id())) % 10000}",
-            client_name=None, actor=ACTOR)
+            client_name=None, actor=ACTOR, org_id=DEV_ORG_ID)
         self.bid = self.brand["id"]
-        coresettings.set_setting(main.conn, ads_sync.ACCOUNT_SETTING, ACCOUNT)
-        coresettings.set_setting(main.conn, ads_sync.TOKEN_SETTING, "fake-token")
+        coresettings.set_setting(main.conn, ads_sync.ACCOUNT_SETTING, ACCOUNT, org_id=DEV_ORG_ID)
+        coresettings.set_setting(main.conn, ads_sync.TOKEN_SETTING, "fake-token", org_id=DEV_ORG_ID)
         self._orig_make_client = ads_sync.make_client
 
     def tearDown(self):
@@ -160,7 +161,8 @@ class MetaBackfillFlowTest(_BaseMetaBackfillTest):
         fake = self._patch_client(campaigns=[_campaign("1", "某活動")])
 
         since, until, actual_months = ads_sync.backfill_range(12)
-        result = ads_sync.sync_account(main.conn, ACTOR, since=since, until=until)
+        result = ads_sync.sync_account(main.conn, ACTOR, since=since, until=until,
+            org_id=DEV_ORG_ID)
 
         self.assertEqual(actual_months, 12)
         self.assertEqual(result.discovered, 1)
@@ -199,7 +201,8 @@ class MetaBackfillFlowTest(_BaseMetaBackfillTest):
 
         def work(on_stage):
             since, until, _months = ads_sync.backfill_range(12)
-            return ads_sync.sync_account(main.conn, ACTOR, since=since, until=until)
+            return ads_sync.sync_account(main.conn, ACTOR, since=since, until=until,
+                org_id=DEV_ORG_ID)
 
         ads_routes._progress_start(key, [("run", "回填 Meta 廣告成效中")], work)
         ads_routes._progress_start(key, [("run", "回填 Meta 廣告成效中")], work)  # 模擬 F5
@@ -224,7 +227,7 @@ class GA4BackfillConfigurationTest(unittest.TestCase):
         main.conn.commit()
         self.brand = bi_repo.create_brand(
             main.conn, name=f"虛構回填晨光咖啡GA{abs(hash(self.id())) % 10000}",
-            client_name=None, actor=ACTOR)
+            client_name=None, actor=ACTOR, org_id=DEV_ORG_ID)
         self.bid = self.brand["id"]
         self._orig_make_client = ga4_sync.make_client
 
@@ -238,8 +241,10 @@ class GA4BackfillConfigurationTest(unittest.TestCase):
         self.assertFalse(ga4_sync.is_configured(main.conn))
 
     def test_progress_touch_alone_does_not_trigger_any_sync(self):
-        coresettings.set_setting(main.conn, ga4_sync.PROPERTY_SETTING, PROPERTY_ID)
-        coresettings.set_setting(main.conn, ga4_sync.SERVICE_ACCOUNT_SETTING, FAKE_KEY_JSON)
+        coresettings.set_setting(main.conn, ga4_sync.PROPERTY_SETTING, PROPERTY_ID,
+            org_id=DEV_ORG_ID)
+        coresettings.set_setting(main.conn, ga4_sync.SERVICE_ACCOUNT_SETTING, FAKE_KEY_JSON,
+            org_id=DEV_ORG_ID)
         fake = ga4_api.FakeGA4Client(rows=[])
         ga4_sync.make_client = lambda conn: fake
         key = ads_routes._progress_key("ga4_backfill", self.bid, "_brand_")
@@ -257,10 +262,12 @@ class GA4BackfillFlowTest(unittest.TestCase):
         main.conn.commit()
         self.brand = bi_repo.create_brand(
             main.conn, name=f"虛構回填晨光咖啡GA2{abs(hash(self.id())) % 10000}",
-            client_name=None, actor=ACTOR)
+            client_name=None, actor=ACTOR, org_id=DEV_ORG_ID)
         self.bid = self.brand["id"]
-        coresettings.set_setting(main.conn, ga4_sync.PROPERTY_SETTING, PROPERTY_ID)
-        coresettings.set_setting(main.conn, ga4_sync.SERVICE_ACCOUNT_SETTING, FAKE_KEY_JSON)
+        coresettings.set_setting(main.conn, ga4_sync.PROPERTY_SETTING, PROPERTY_ID,
+            org_id=DEV_ORG_ID)
+        coresettings.set_setting(main.conn, ga4_sync.SERVICE_ACCOUNT_SETTING, FAKE_KEY_JSON,
+            org_id=DEV_ORG_ID)
         self._orig_make_client = ga4_sync.make_client
 
     def tearDown(self):
@@ -333,7 +340,7 @@ class DailySyncUnaffectedTest(unittest.TestCase):
 
     def test_sync_account_without_since_until_keeps_default_thirty_day_window(self):
         fake = meta_api.FakeMetaClient(campaigns=[], insights=[])
-        ads_sync.sync_account(main.conn, ACTOR, client=fake, today="2026-07-31")
+        ads_sync.sync_account(main.conn, ACTOR, client=fake, today="2026-07-31", org_id=DEV_ORG_ID)
         insight_calls = [c for c in fake.calls if c[0] == "insights"]
         _, _, since, until = insight_calls[0]
         self.assertEqual(until, "2026-07-31")

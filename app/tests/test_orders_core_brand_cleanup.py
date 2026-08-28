@@ -120,7 +120,7 @@ class OrdersCoreBrandCleanupTest(unittest.TestCase):
         self.conn = db.current()
 
     def _make_archived_brand(self, name: str) -> str:
-        bid = bi_repo.create_brand(self.conn, name=name, client_name=None, actor="測試員")["id"]
+        bid = bi_repo.create_brand(self.conn, name=name, client_name=None, actor="測試員", org_id=db.DEV_ORG_ID)["id"]
         bi_repo.update_brand(self.conn, bid, name=name, client_name=None,
                               status="archived", actor="測試員")
         return bid

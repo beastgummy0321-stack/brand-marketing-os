@@ -70,7 +70,7 @@ class _BaseHandoffTest(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(main.app)
         self.brand = bi_repo.create_brand(main.conn, name="虛構晨光咖啡",
-                                          client_name="測試客戶", actor=ACTOR)
+                                          client_name="測試客戶", actor=ACTOR, org_id=coredb.DEV_ORG_ID)
         self.bid = self.brand["id"]
         resp = self.client.post(f"/api/campaigns/{self.bid}",
                                 json={"product_ids": [], "budget": 10000, "objective": "sales"})
@@ -161,7 +161,7 @@ class PackageBuildTest(_BaseHandoffTest):
         Meta 就認不出這是動態變數了（票 22 UTM 值改動連帶要顧到的編碼細節）。"""
         bi_repo.create_channel(main.conn, self.bid, channel_type="website",
                                name="官網", identifier="https://example.test",
-                               actor=ACTOR)
+                               actor=ACTOR, org_id=coredb.DEV_ORG_ID)
         self._build()
         full_url = self._packages()[0]["full_url"]
         self.assertIn("utm_campaign={{campaign.name}}", full_url)
@@ -187,7 +187,7 @@ class PackageBuildTest(_BaseHandoffTest):
     def test_website_channel_becomes_destination_url(self):
         bi_repo.create_channel(main.conn, self.bid, channel_type="website",
                                name="官網", identifier="https://example.test",
-                               actor=ACTOR)
+                               actor=ACTOR, org_id=coredb.DEV_ORG_ID)
         self._build()
         package = self._packages()[0]
         self.assertTrue(package["full_url"].startswith("https://example.test?utm_source"))
@@ -303,7 +303,7 @@ class DailyBudgetInvariantTest(unittest.TestCase):
 
     def setUp(self):
         self.bid = bi_repo.create_brand(
-            main.conn, name="虛構晨光咖啡二號店", client_name="測試客戶", actor=ACTOR)["id"]
+            main.conn, name="虛構晨光咖啡二號店", client_name="測試客戶", actor=ACTOR, org_id=coredb.DEV_ORG_ID)["id"]
 
     def _product(self, name: str) -> str:
         return bi_repo.create_product(main.conn, self.bid, name=name, actor=ACTOR)["id"]
@@ -406,7 +406,7 @@ class NamingCheckTest(unittest.TestCase):
 
     def setUp(self):
         self.bid = bi_repo.create_brand(
-            main.conn, name="虛構晨露茶行", client_name="測試客戶", actor=ACTOR)["id"]
+            main.conn, name="虛構晨露茶行", client_name="測試客戶", actor=ACTOR, org_id=coredb.DEV_ORG_ID)["id"]
 
     def _cell(self, cycle_id: str, angle: str) -> str:
         """直接建一個切角＋一顆已採用主題（標題／文案），不經 LLM 生成管線（比照

@@ -28,7 +28,7 @@ class AuditLogTest(unittest.TestCase):
             self.assertNotIn("delete", lowered)
 
     def test_every_mutation_writes_one_audit_row(self):
-        brand = repo.create_brand(self.conn, name="品牌A（稽核測試）", client_name=None, actor="小陳")
+        brand = repo.create_brand(self.conn, name="品牌A（稽核測試）", client_name=None, actor="小陳", org_id=db.DEV_ORG_ID)
         rows = self._audit_rows()
         self.assertEqual(len(rows), 1)
         first = rows[0]
@@ -69,12 +69,12 @@ class AuditLogTest(unittest.TestCase):
 
     def test_actor_required_to_write_audit(self):
         with self.assertRaises(ValueError):
-            repo.create_brand(self.conn, name="品牌B（無操作人）", client_name=None, actor="")
+            repo.create_brand(self.conn, name="品牌B（無操作人）", client_name=None, actor="", org_id=db.DEV_ORG_ID)
         with self.assertRaises(ValueError):
-            repo.create_brand(self.conn, name="品牌C（無操作人）", client_name=None, actor="   ")
+            repo.create_brand(self.conn, name="品牌C（無操作人）", client_name=None, actor="   ", org_id=db.DEV_ORG_ID)
         # 失敗的呼叫不該留下任何稽核紀錄或資料列
         self.assertEqual(len(self._audit_rows()), 0)
-        self.assertEqual(len(repo.list_brands(self.conn)), 0)
+        self.assertEqual(len(repo.list_brands(self.conn, db.DEV_ORG_ID)), 0)
 
 
 if __name__ == "__main__":

@@ -46,12 +46,12 @@ def _breakdown(ad_id="ad1", *, body=None, title=None, description=None, **overri
 class _Base(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(main.app)
-        coresettings.set_setting(main.conn, "intake_budget_limit", "1000")
-        coresettings.set_setting(main.conn, ads_sync.ACCOUNT_SETTING, ACCOUNT)
-        coresettings.set_setting(main.conn, ads_sync.TOKEN_SETTING, "fake-token")
+        coresettings.set_setting(main.conn, "intake_budget_limit", "1000", org_id=DEV_ORG_ID)
+        coresettings.set_setting(main.conn, ads_sync.ACCOUNT_SETTING, ACCOUNT, org_id=DEV_ORG_ID)
+        coresettings.set_setting(main.conn, ads_sync.TOKEN_SETTING, "fake-token", org_id=DEV_ORG_ID)
         self.brand = bi_repo.create_brand(
             main.conn, name=f"虛構晨光咖啡（歸因{abs(hash(self.id())) % 10000}）",
-            client_name="測試客戶", actor=ACTOR)
+            client_name="測試客戶", actor=ACTOR, org_id=DEV_ORG_ID)
         self.bid = self.brand["id"]
         self.product_id = bi_repo.create_product(main.conn, self.bid, name="虛構濾掛組",
                                                   actor=ACTOR)["id"]
@@ -59,7 +59,7 @@ class _Base(unittest.TestCase):
 
     def tearDown(self):
         theme_engine.PROVIDER = self._orig_provider
-        coresettings.set_setting(main.conn, "intake_budget_limit", "30")
+        coresettings.set_setting(main.conn, "intake_budget_limit", "30", org_id=DEV_ORG_ID)
 
     def _swap_provider(self, reply: dict) -> FakeProvider:
         response = ProviderResponse(
@@ -109,7 +109,7 @@ class _Base(unittest.TestCase):
         # ——FakeMetaClient 不看日期篩選，跨月會讓假資料被 extend 兩次，重複計數
         # （比照 app/tests/test_ads_sync.py 既有測試一律選在月底的同款理由）。
         client = client_cls(component_breakdowns=component_breakdowns)
-        return ads_sync.sync_account(main.conn, ACTOR, client=client, today="2026-08-31")
+        return ads_sync.sync_account(main.conn, ACTOR, client=client, today="2026-08-31", org_id=DEV_ORG_ID)
 
 
 class RequestShapeTest(unittest.TestCase):
@@ -255,7 +255,7 @@ class RecordAndMatchBackTest(_Base):
                                    impressions=100, clicks=5, spend=10.0, conversions=1.0,
                                    revenue=50.0)
         client = _FailingClient(campaigns=[campaign], insights=[insight])
-        result = ads_sync.sync_account(main.conn, ACTOR, client=client, today="2026-08-31")
+        result = ads_sync.sync_account(main.conn, ACTOR, client=client, today="2026-08-31", org_id=DEV_ORG_ID)
 
         self.assertIsNone(result.error)
         self.assertEqual(result.snapshots, 1)  # 廣告層照樣進來

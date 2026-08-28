@@ -27,7 +27,7 @@ from app.llm.providers import (
 class LLMGatewayTest(unittest.TestCase):
     def setUp(self):
         self.conn = db.current()
-        self.brand = repo.create_brand(self.conn, name="品牌A（Gateway測試）", client_name=None, actor="小陳")
+        self.brand = repo.create_brand(self.conn, name="品牌A（Gateway測試）", client_name=None, actor="小陳", org_id=db.DEV_ORG_ID)
 
     def _context(self):
         return gateway.TaskContext(
@@ -235,7 +235,7 @@ class TaskModelThinkingDefaultsTest(unittest.TestCase):
 
     def setUp(self):
         self.conn = db.current()
-        self.brand = repo.create_brand(self.conn, name="品牌E（模型思考測試）", client_name=None, actor="小陳")
+        self.brand = repo.create_brand(self.conn, name="品牌E（模型思考測試）", client_name=None, actor="小陳", org_id=db.DEV_ORG_ID)
 
     def _context(self):
         return gateway.TaskContext(
@@ -324,8 +324,8 @@ class ContextCompilerTest(unittest.TestCase):
         self.conn = db.current()
 
     def test_only_confirmed_facts_included_and_isolated_by_brand(self):
-        brand_a = repo.create_brand(self.conn, name="品牌A（Compiler測試）", client_name=None, actor="小陳")
-        brand_b = repo.create_brand(self.conn, name="品牌B（Compiler測試）", client_name=None, actor="小陳")
+        brand_a = repo.create_brand(self.conn, name="品牌A（Compiler測試）", client_name=None, actor="小陳", org_id=db.DEV_ORG_ID)
+        brand_b = repo.create_brand(self.conn, name="品牌B（Compiler測試）", client_name=None, actor="小陳", org_id=db.DEV_ORG_ID)
 
         confirmed = repo.create_brand_fact(
             self.conn, brand_a["id"], fact_type="positioning", label="定位",
@@ -377,7 +377,7 @@ class ContextCompilerTest(unittest.TestCase):
         self.assertIsNone(product_version)
 
     def test_product_scope_includes_brand_level_but_excludes_other_products(self):
-        brand = repo.create_brand(self.conn, name="品牌C（Compiler測試）", client_name=None, actor="小陳")
+        brand = repo.create_brand(self.conn, name="品牌C（Compiler測試）", client_name=None, actor="小陳", org_id=db.DEV_ORG_ID)
         product_1 = repo.create_product(self.conn, brand["id"], name="產品C-1", actor="小陳")
         product_2 = repo.create_product(self.conn, brand["id"], name="產品C-2", actor="小陳")
 
@@ -421,7 +421,7 @@ class ContextCompilerTest(unittest.TestCase):
         )
 
     def test_brand_only_scope_excludes_all_products_specific_items(self):
-        brand = repo.create_brand(self.conn, name="品牌D（Compiler測試）", client_name=None, actor="小陳")
+        brand = repo.create_brand(self.conn, name="品牌D（Compiler測試）", client_name=None, actor="小陳", org_id=db.DEV_ORG_ID)
         product = repo.create_product(self.conn, brand["id"], name="產品D-1", actor="小陳")
         repo.create_rule(
             self.conn, brand["id"], product_id=product["id"], rule_type="claim",
@@ -450,7 +450,7 @@ class ContextCompilerPromptCapTest(unittest.TestCase):
 
     def setUp(self):
         self.conn = db.current()
-        self.brand = repo.create_brand(self.conn, name="品牌F（規則上限測試）", client_name=None, actor="小陳")
+        self.brand = repo.create_brand(self.conn, name="品牌F（規則上限測試）", client_name=None, actor="小陳", org_id=db.DEV_ORG_ID)
 
     def _make_rules(self, brand_id, hard_count, soft_count):
         """建 hard_count 條 hard ＋ soft_count 條 soft 規則。soft 規則的 confirmed_at 直接
@@ -526,7 +526,7 @@ class ContextCompilerPromptCapTest(unittest.TestCase):
         self.assertEqual(context_compiler.list_overflow_rules(self.conn, self.brand["id"]), [])
 
         rule_cards.set_value(self.conn, self.brand["id"], "rule_prompt_cap", "max_active_rules",
-                             3.0, actor="小陳")
+                             3.0, actor="小陳", org_id=db.DEV_ORG_ID)
         overflow = context_compiler.list_overflow_rules(self.conn, self.brand["id"])
         self.assertEqual({o["id"] for o in overflow}, {r["id"] for r in soft_rules[:2]})
 
@@ -535,7 +535,7 @@ class ContextCompilerPromptCapTest(unittest.TestCase):
         對該產品生成會排除幾條產品專屬規則——這幾條要出現在未生效清單，不能因為「只看品牌
         整體規則」而回報 0 條（bug 回歸：compile() 跟 list_overflow_rules() 邏輯要一致）。"""
         rule_cards.set_value(self.conn, self.brand["id"], "rule_prompt_cap", "max_active_rules",
-                             3.0, actor="小陳")
+                             3.0, actor="小陳", org_id=db.DEV_ORG_ID)
         _hard, brand_soft = self._make_rules(self.brand["id"], hard_count=0, soft_count=2)
 
         # 品牌整體 2 條 soft 本身在上限（3）內，未生效清單是空的。
@@ -570,7 +570,7 @@ class ContextCompilerLearningLoopTest(unittest.TestCase):
 
     def setUp(self):
         self.conn = db.current()
-        self.brand = repo.create_brand(self.conn, name="品牌E（學習迴路測試）", client_name=None, actor="小陳")
+        self.brand = repo.create_brand(self.conn, name="品牌E（學習迴路測試）", client_name=None, actor="小陳", org_id=db.DEV_ORG_ID)
         self.product = repo.create_product(self.conn, self.brand["id"], name="產品E-1", actor="小陳")
 
     def test_zero_learning_records_output_unchanged_regression(self):
@@ -701,7 +701,7 @@ class ContextCompilerHypothesisPoolBoundTest(unittest.TestCase):
 
     def setUp(self):
         self.conn = db.current()
-        self.brand = repo.create_brand(self.conn, name="品牌G（假設上限測試）", client_name=None, actor="小陳")
+        self.brand = repo.create_brand(self.conn, name="品牌G（假設上限測試）", client_name=None, actor="小陳", org_id=db.DEV_ORG_ID)
         self.product = repo.create_product(self.conn, self.brand["id"], name="產品G-1", actor="小陳")
 
     def _seed_pool(self, product_id=None):

@@ -21,12 +21,12 @@ class ListDismissedTest(unittest.TestCase):
         self.assertEqual(calendar_dismiss.list_dismissed(self.conn, self.bid), set())
 
     def test_dismiss_adds_to_dismissed_set(self):
-        calendar_dismiss.dismiss(self.conn, self.bid, "cny")
+        calendar_dismiss.dismiss(self.conn, self.bid, "cny", org_id=db.DEV_ORG_ID)
         self.assertEqual(calendar_dismiss.list_dismissed(self.conn, self.bid), {"cny"})
 
     def test_dismiss_is_idempotent_not_duplicated(self):
-        calendar_dismiss.dismiss(self.conn, self.bid, "cny")
-        calendar_dismiss.dismiss(self.conn, self.bid, "cny")
+        calendar_dismiss.dismiss(self.conn, self.bid, "cny", org_id=db.DEV_ORG_ID)
+        calendar_dismiss.dismiss(self.conn, self.bid, "cny", org_id=db.DEV_ORG_ID)
         rows = self.conn.execute(
             "SELECT COUNT(*) AS c FROM brand_dismissed_calendar_category"
             " WHERE brand_id = %s AND category = %s", (self.bid, "cny")).fetchone()
@@ -34,7 +34,7 @@ class ListDismissedTest(unittest.TestCase):
 
     def test_undismiss_removes_from_dismissed_set(self):
         """驗收清單：重新開啟＝刪除該筆，恢復提醒。"""
-        calendar_dismiss.dismiss(self.conn, self.bid, "cny")
+        calendar_dismiss.dismiss(self.conn, self.bid, "cny", org_id=db.DEV_ORG_ID)
         calendar_dismiss.undismiss(self.conn, self.bid, "cny")
         self.assertEqual(calendar_dismiss.list_dismissed(self.conn, self.bid), set())
 
@@ -43,14 +43,14 @@ class ListDismissedTest(unittest.TestCase):
         self.assertEqual(calendar_dismiss.list_dismissed(self.conn, self.bid), set())
 
     def test_multiple_categories_can_be_dismissed_independently(self):
-        calendar_dismiss.dismiss(self.conn, self.bid, "cny")
-        calendar_dismiss.dismiss(self.conn, self.bid, "valentine")
+        calendar_dismiss.dismiss(self.conn, self.bid, "cny", org_id=db.DEV_ORG_ID)
+        calendar_dismiss.dismiss(self.conn, self.bid, "valentine", org_id=db.DEV_ORG_ID)
         calendar_dismiss.undismiss(self.conn, self.bid, "cny")
         self.assertEqual(calendar_dismiss.list_dismissed(self.conn, self.bid), {"valentine"})
 
     def test_different_brand_is_independent(self):
         other = f"brd_{db.new_id('t')}"
-        calendar_dismiss.dismiss(self.conn, self.bid, "cny")
+        calendar_dismiss.dismiss(self.conn, self.bid, "cny", org_id=db.DEV_ORG_ID)
         self.assertEqual(calendar_dismiss.list_dismissed(self.conn, other), set())
 
 
@@ -81,8 +81,8 @@ class CleanupRegistrationTest(unittest.TestCase):
         self.bid = f"brd_{db.new_id('t')}"
 
     def test_delete_brand_data_removes_rows_and_count_matches(self):
-        calendar_dismiss.dismiss(self.conn, self.bid, "cny")
-        calendar_dismiss.dismiss(self.conn, self.bid, "valentine")
+        calendar_dismiss.dismiss(self.conn, self.bid, "cny", org_id=db.DEV_ORG_ID)
+        calendar_dismiss.dismiss(self.conn, self.bid, "valentine", org_id=db.DEV_ORG_ID)
         self.assertEqual(
             dict(calendar_dismiss.count_brand_data(self.conn, self.bid)),
             {"節日類別永久覆寫": 2})

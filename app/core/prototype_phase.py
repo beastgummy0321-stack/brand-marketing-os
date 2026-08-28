@@ -52,7 +52,7 @@ def has_ended(conn) -> bool:
     return core_settings.get_setting(conn, FLAG_SETTING) is not None
 
 
-def check_and_flag(conn, *, org_id: str = "org_dev", actual_spend: float, actor: str,
+def check_and_flag(conn, *, org_id: str, actual_spend: float, actor: str,
                    cycle_id: str | None = None) -> bool:
     """檔期結算完成時呼叫（app/ads/reading.finalize()）。已經結束過就什麼都不做；
     第一次「結算完成且實際花費 > 0」才設旗標、寫稽核紀錄、進打斷佇列。

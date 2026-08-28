@@ -51,7 +51,7 @@ class DashboardMonthlyReportTest(unittest.TestCase):
         self.client = TestClient(main.app)
         self.brand = bi_repo.create_brand(
             main.conn, name=f"虛構月報茶行{abs(hash(self.id())) % 100000}",
-            client_name=None, actor=ACTOR)
+            client_name=None, actor=ACTOR, org_id=coredb.DEV_ORG_ID)
 
     def test_month_boundaries_keep_current_month_data_only(self):
         orders_repo.save_orders(

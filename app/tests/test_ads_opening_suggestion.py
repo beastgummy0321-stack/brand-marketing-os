@@ -20,7 +20,7 @@ class _BaseOpeningSuggestionTest(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(main.app)
         self.brand = bi_repo.create_brand(
-            main.conn, name=f"虛構開檔茶行{abs(hash(self.id())) % 100000}", client_name=None, actor=ACTOR)
+            main.conn, name=f"虛構開檔茶行{abs(hash(self.id())) % 100000}", client_name=None, actor=ACTOR, org_id=db.DEV_ORG_ID)
         self.bid = self.brand["id"]
 
     def add_product(self, name: str, *, selling_price: float = 100, cost: float = 0) -> dict:
@@ -34,7 +34,7 @@ class _BaseOpeningSuggestionTest(unittest.TestCase):
     def add_channel(self):
         return bi_repo.create_channel(
             main.conn, self.bid, actor=ACTOR, channel_type="website", name="虛構官網",
-            identifier="https://example.test",
+            identifier="https://example.test", org_id=db.DEV_ORG_ID,
         )
 
     def add_cycle(self, *, status: str = "PLANNING", start_date: str = "2026-08-01",
@@ -278,7 +278,7 @@ class OpeningSuggestionApiTest(_BaseOpeningSuggestionTest):
         self.store_next_cycle_recommendation(newest, proposed_budget=75000)
 
         other_brand = bi_repo.create_brand(
-            main.conn, name=f"別家茶行{abs(hash(self.id())) % 100000}", client_name=None, actor=ACTOR)
+            main.conn, name=f"別家茶行{abs(hash(self.id())) % 100000}", client_name=None, actor=ACTOR, org_id=db.DEV_ORG_ID)
         other_cid = new_id("ccy")
         ts = now_iso()
         main.conn.execute(
@@ -352,9 +352,9 @@ class OpeningSuggestionApiTest(_BaseOpeningSuggestionTest):
         self.assertNotIn("首次", with_history["summary"])
 
         fresh_brand = bi_repo.create_brand(
-            main.conn, name=f"真正第一次茶行{abs(hash(self.id())) % 100000}", client_name=None, actor=ACTOR)
+            main.conn, name=f"真正第一次茶行{abs(hash(self.id())) % 100000}", client_name=None, actor=ACTOR, org_id=db.DEV_ORG_ID)
         bi_repo.create_channel(main.conn, fresh_brand["id"], actor=ACTOR, channel_type="website",
-                               name="虛構官網", identifier="https://example.test")
+                               name="虛構官網", identifier="https://example.test", org_id=db.DEV_ORG_ID)
         bi_repo.create_product(main.conn, fresh_brand["id"], name="第一次商品", actor=ACTOR)
 
         first_ever = self.client.get(f"/api/campaigns/brands/{fresh_brand['id']}/opening-suggestion").json()

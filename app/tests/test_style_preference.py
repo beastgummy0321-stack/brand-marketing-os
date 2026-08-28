@@ -17,9 +17,9 @@ class StylePreferenceTest(unittest.TestCase):
     def setUp(self):
         self.conn = db.current()
         self.client = TestClient(main.app)
-        self.one = bi.create_brand(self.conn, name="甲", client_name=None, actor="tester")
-        self.two = bi.create_brand(self.conn, name="乙", client_name=None, actor="tester")
-        settings.set_setting(self.conn, settings.IMAGE_PROMPT_HEADER_SETTING, "舊全域開頭")
+        self.one = bi.create_brand(self.conn, name="甲", client_name=None, actor="tester", org_id=db.DEV_ORG_ID)
+        self.two = bi.create_brand(self.conn, name="乙", client_name=None, actor="tester", org_id=db.DEV_ORG_ID)
+        settings.set_setting(self.conn, settings.IMAGE_PROMPT_HEADER_SETTING, "舊全域開頭", org_id=db.DEV_ORG_ID)
 
     def test_default_and_brand_isolation(self):
         self.assertEqual(style_preference.get_text(self.conn, self.one["id"]), "舊全域開頭")

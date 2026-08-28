@@ -73,13 +73,12 @@ MAX_MESSAGE_LEN = 30  # DESIGN.md §20 規則 4：一卡一句 ≤30 全形字
 STALE_AFTER_DAYS = 14  # 資訊性項目逾期自動降級封存的門檻（比照 0025 期末＋14 天結算節奏）
 
 
-def enqueue(conn, *, org_id: str = "org_dev", category: str, dedupe_key: str, message: str,
+def enqueue(conn, *, org_id: str, category: str, dedupe_key: str, message: str,
             brand_id: str | None = None, campaign_cycle_id: str | None = None,
             action_url: str | None = None, kind: str | None = None,
             visible_from: date | datetime | None = None) -> str | None:
     """送進打斷佇列；同去重鍵已存在就不重複塞（回傳 None）。不自動 commit（比照 write_audit，
-    交由呼叫端決定交易邊界，方便一次排多筆用同一個交易）。
-    org_id 預設值只服務既有測試呼叫點；正式呼叫端一律顯式傳。"""
+    交由呼叫端決定交易邊界，方便一次排多筆用同一個交易）。"""
     spec = CATEGORIES.get(category)
     if spec is None:
         raise ValueError(f"未登記的打斷類別：{category}（見 CATEGORIES，模組不得自報嚴重度）")
@@ -207,9 +206,16 @@ def current_card(conn, brand_id: str | None = None) -> dict | None:
     return rows[0] if rows else None
 
 
-def resolve(conn, interrupt_id: str, *, actor: str) -> None:
-    """人工處理完畢，轉 resolved；寫一筆 audit_log（write_audit 會擋空 actor）。會 commit。"""
-    row = conn.execute("SELECT * FROM interrupt WHERE id = %s", (interrupt_id,)).fetchone()
+def resolve(conn, interrupt_id: str, *, actor: str, org_id: str) -> None:
+    """人工處理完畢，轉 resolved；寫一筆 audit_log（write_audit 會擋空 actor）。會 commit。
+
+    org_id 為必填租戶界線（票 03-1 r1 defect 1）：只能結掉自己組織的中斷提醒——找不到
+    這筆、或這筆屬於別的組織，一律同一個 ValueError（呼叫端，例如
+    app/brand_web/routes_inbox.py，轉成 404，不區分「不存在」跟「不是你的」，同
+    app/shared/web.py require_brand() 對跨租戶資源的處理方式）。"""
+    row = conn.execute(
+        "SELECT * FROM interrupt WHERE id = %s AND org_id = %s", (interrupt_id, org_id)
+    ).fetchone()
     if row is None:
         raise ValueError(f"找不到打斷佇列項目：{interrupt_id}")
     conn.execute(

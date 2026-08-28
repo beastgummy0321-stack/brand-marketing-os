@@ -61,8 +61,16 @@ async def api_inbox(request: Request):
 
 @router.post("/api/interrupts/{interrupt_id}/resolve")
 async def api_interrupt_resolve(request: Request, interrupt_id: str):
+    """票 03-1 r1 defect 1：跨租戶界線由 core_interrupts.resolve() 的 org_id 過濾守住——
+    別的組織的 id（或根本不存在的 id）一律同一個 ValueError，轉成 404，不洩漏「其實存在，
+    只是不是你的」（同 require_brand 的處理方式，不用 403）。"""
     actor = require_actor(request)
-    core_interrupts.resolve(web.conn, interrupt_id, actor=str(actor.user_id))
+    try:
+        core_interrupts.resolve(
+            web.conn, interrupt_id, actor=str(actor.user_id), org_id=actor.org_id
+        )
+    except ValueError:
+        raise web.NotFound("找不到中斷提醒。") from None
     return {"ok": True}
 
 

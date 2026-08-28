@@ -138,7 +138,7 @@ class RuleCardValueTest(unittest.TestCase):
         # 改之前：頻率 3.0 在冷受眾門檻下是「警示」（警示 2.5–4.0）
         self.assertEqual(rule_cards.classify_ad_frequency(self.conn, BID_A, "cold", 3.0), "warning")
 
-        rule_cards.set_value(self.conn, BID_A, "ad_creative_fatigue", "cold_warning", 5.0, actor="測試員")
+        rule_cards.set_value(self.conn, BID_A, "ad_creative_fatigue", "cold_warning", 5.0, actor="測試員", org_id=db.DEV_ORG_ID)
         # 改完：警示門檻拉高到 5.0，同樣頻率 3.0 現在落在安全區
         self.assertEqual(rule_cards.classify_ad_frequency(self.conn, BID_A, "cold", 3.0), "safe")
         self.assertEqual(rule_cards.get_value(self.conn, BID_A, "ad_creative_fatigue", "cold_warning"), 5.0)
@@ -152,8 +152,8 @@ class RuleCardValueTest(unittest.TestCase):
         self.assertEqual(rows[0]["brand_id"], BID_A)  # 分品牌後是真正的品牌事件（不再是 None）
 
     def test_set_value_upserts_without_duplicating_row(self):
-        rule_cards.set_value(self.conn, BID_A, "ad_creative_fatigue", "cold_warning", 3.0, actor="A")
-        rule_cards.set_value(self.conn, BID_A, "ad_creative_fatigue", "cold_warning", 3.3, actor="B")
+        rule_cards.set_value(self.conn, BID_A, "ad_creative_fatigue", "cold_warning", 3.0, actor="A", org_id=db.DEV_ORG_ID)
+        rule_cards.set_value(self.conn, BID_A, "ad_creative_fatigue", "cold_warning", 3.3, actor="B", org_id=db.DEV_ORG_ID)
         count = self.conn.execute(
             "SELECT COUNT(*) AS n FROM rule_card_value WHERE brand_id = %s AND card_key = 'ad_creative_fatigue'"
             " AND field_key = 'cold_warning'", (BID_A,)
@@ -165,31 +165,31 @@ class RuleCardValueTest(unittest.TestCase):
 
     def test_brand_override_does_not_leak_into_other_brand(self):
         """A 品牌改規則卡值，B 品牌完全不受影響——各自一份覆寫值。"""
-        rule_cards.set_value(self.conn, BID_A, "ad_creative_fatigue", "cold_warning", 9.9, actor="測試員")
+        rule_cards.set_value(self.conn, BID_A, "ad_creative_fatigue", "cold_warning", 9.9, actor="測試員", org_id=db.DEV_ORG_ID)
         self.assertEqual(rule_cards.get_value(self.conn, BID_A, "ad_creative_fatigue", "cold_warning"), 9.9)
         self.assertEqual(rule_cards.get_value(self.conn, BID_B, "ad_creative_fatigue", "cold_warning"), 2.5)
 
     def test_brand_without_override_falls_back_to_system_default(self):
         """B 品牌從沒改過這個欄位——就算 A 品牌已經改過，B 品牌繼續拿系統預設值。"""
         rule_cards.set_value(self.conn, BID_A, "budget_structure", "min_daily_per_group", 500.0,
-                             actor="測試員")
+                             actor="測試員", org_id=db.DEV_ORG_ID)
         self.assertEqual(
             rule_cards.get_value(self.conn, BID_B, "budget_structure", "min_daily_per_group"), 300.0)
 
     # -- 重設 -----------------------------------------------------------------
 
     def test_reset_card_restores_defaults(self):
-        rule_cards.set_value(self.conn, BID_A, "ad_creative_fatigue", "cold_warning", 9.9, actor="測試員")
-        rule_cards.set_value(self.conn, BID_A, "ad_creative_fatigue", "niche_danger", 1.0, actor="測試員")
-        rule_cards.reset_card(self.conn, BID_A, "ad_creative_fatigue", actor="測試員")
+        rule_cards.set_value(self.conn, BID_A, "ad_creative_fatigue", "cold_warning", 9.9, actor="測試員", org_id=db.DEV_ORG_ID)
+        rule_cards.set_value(self.conn, BID_A, "ad_creative_fatigue", "niche_danger", 1.0, actor="測試員", org_id=db.DEV_ORG_ID)
+        rule_cards.reset_card(self.conn, BID_A, "ad_creative_fatigue", actor="測試員", org_id=db.DEV_ORG_ID)
 
         self.assertEqual(rule_cards.get_value(self.conn, BID_A, "ad_creative_fatigue", "cold_warning"), 2.5)
         self.assertEqual(rule_cards.get_value(self.conn, BID_A, "ad_creative_fatigue", "niche_danger"), 8.0)
 
     def test_reset_skips_fields_already_at_default_no_noise_audit(self):
-        rule_cards.set_value(self.conn, BID_A, "ad_creative_fatigue", "cold_warning", 9.9, actor="測試員")
+        rule_cards.set_value(self.conn, BID_A, "ad_creative_fatigue", "cold_warning", 9.9, actor="測試員", org_id=db.DEV_ORG_ID)
         before = len(self._audit_rows())
-        rule_cards.reset_card(self.conn, BID_A, "ad_creative_fatigue", actor="測試員")
+        rule_cards.reset_card(self.conn, BID_A, "ad_creative_fatigue", actor="測試員", org_id=db.DEV_ORG_ID)
         after_rows = self._audit_rows()
         # 只有 cold_warning 被測試改過；分品牌新表沒有殘留的舊 migration 種子值，其餘 5 個
         # 欄位（含 cold_danger）本來就是 CARDS 現在的 default，reset 不該產生額外稽核噪音。
@@ -199,7 +199,7 @@ class RuleCardValueTest(unittest.TestCase):
 
     def test_reset_unknown_card_raises(self):
         with self.assertRaises(ValueError):
-            rule_cards.reset_card(self.conn, BID_A, "沒這張卡", actor="測試員")
+            rule_cards.reset_card(self.conn, BID_A, "沒這張卡", actor="測試員", org_id=db.DEV_ORG_ID)
 
 
 class ClassifyAdFrequencyTest(unittest.TestCase):
@@ -299,14 +299,14 @@ class SampleSizeTierTest(unittest.TestCase):
 
     def test_custom_rule_card_value_takes_effect_immediately(self):
         """改規則卡數值後，統計等級判定立即用新值——跟其他規則卡同一套機制。"""
-        rule_cards.set_value(self.conn, BID_A, "sample_size", "baseline_5pct", 100.0, actor="測試員")
+        rule_cards.set_value(self.conn, BID_A, "sample_size", "baseline_5pct", 100.0, actor="測試員", org_id=db.DEV_ORG_ID)
         result = rule_cards.sample_size_tier(self.conn, BID_A, 150, 0.05)
         self.assertEqual(result["level"], "statistical")
         self.assertEqual(result["required"], 100.0)
 
     def test_brand_override_does_not_leak_into_other_brand(self):
         """A 品牌改過的樣本數門檻不影響 B 品牌的統計等級判定。"""
-        rule_cards.set_value(self.conn, BID_A, "sample_size", "baseline_5pct", 100.0, actor="測試員")
+        rule_cards.set_value(self.conn, BID_A, "sample_size", "baseline_5pct", 100.0, actor="測試員", org_id=db.DEV_ORG_ID)
         result = rule_cards.sample_size_tier(self.conn, BID_B, 150, 0.05)
         self.assertEqual(result["level"], "directional")  # B 品牌仍用系統預設 18000
 

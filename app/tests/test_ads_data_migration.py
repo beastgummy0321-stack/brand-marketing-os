@@ -74,7 +74,7 @@ class _BaseTest(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(main.app)
         self.brand = bi_repo.create_brand(main.conn, name=f"虛構搬家茶行{self.id()[-8:]}",
-                                          client_name=None, actor=ACTOR)
+                                          client_name=None, actor=ACTOR, org_id=coredb.DEV_ORG_ID)
         self.bid = self.brand["id"]
 
     def _onboarding(self):

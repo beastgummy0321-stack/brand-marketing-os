@@ -24,6 +24,7 @@ from app.ads import reading as ads_reading  # noqa: E402
 from app.ads import repository as ads_repo  # noqa: E402
 from app.ads import stages  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
+from app.core.db import DEV_ORG_ID  # noqa: E402
 from app.llm.providers import FakeProvider, ProviderResponse, Usage  # noqa: E402
 
 ACTOR = "測試員"
@@ -50,7 +51,7 @@ class _BaseTest(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(main.app)
         self.brand = bi_repo.create_brand(main.conn, name=f"虛構晨露茶行{self.id()[-6:]}",
-                                          client_name=None, actor=ACTOR)
+                                          client_name=None, actor=ACTOR, org_id=DEV_ORG_ID)
         self.bid = self.brand["id"]
 
     def _open_cycle(self, **overrides):

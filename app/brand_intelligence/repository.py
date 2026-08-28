@@ -78,9 +78,8 @@ def _bump_product_version(conn: Conn, brand_id: str, product_id: str) -> None:
 # ---------------------------------------------------------------------------
 
 def create_brand(
-    conn: Conn, *, org_id: str = "org_dev", name: str, client_name: str | None, actor: str
+    conn: Conn, *, org_id: str, name: str, client_name: str | None, actor: str
 ) -> dict:
-    # org_id 預設值只服務既有測試呼叫點；route 一律顯式傳 actor.org_id（字面值，不是那個環境常數識別字）。
     _require(name, "brand.name 為必填")
     _require(actor, "actor 為必填")
     brand_id = new_id("brd")
@@ -114,9 +113,8 @@ def _org_id_for_brand(conn: Conn, brand_id: str) -> str:
     return row["org_id"]
 
 
-def list_brands(conn: Conn, org_id: str = "org_dev", status: str | None = None) -> list:
-    """品牌切換器用的清單——橫跨一個組織底下所有品牌（票 03-1，org_id 同 create_brand()
-    的預設值說明）。"""
+def list_brands(conn: Conn, org_id: str, status: str | None = None) -> list:
+    """品牌切換器用的清單——橫跨一個組織底下所有品牌（票 03-1）。"""
     if status:
         return _rows(conn.execute(
             "SELECT * FROM brand WHERE org_id = %s AND status = %s ORDER BY name",

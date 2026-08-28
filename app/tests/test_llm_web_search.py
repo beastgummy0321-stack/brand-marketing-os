@@ -148,7 +148,7 @@ class GatewayWebSearchCostTest(unittest.TestCase):
     def setUp(self):
         self.conn = db.current()
         self.brand = repo.create_brand(self.conn, name="虛構晨星燕麥",
-                                       client_name=None, actor="測試員")
+                                       client_name=None, actor="測試員", org_id=db.DEV_ORG_ID)
 
     def _run(self, provider, tools=None):
         return gateway.run_task(

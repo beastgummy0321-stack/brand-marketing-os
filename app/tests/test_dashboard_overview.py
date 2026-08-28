@@ -43,10 +43,10 @@ class DashboardOverviewApiTest(unittest.TestCase):
         self.client = TestClient(main.app)
         self.brand_red = bi_repo.create_brand(
             main.conn, name=f"虛構燒錢茶行{abs(hash(self.id())) % 100000}",
-            client_name=None, actor=ACTOR)
+            client_name=None, actor=ACTOR, org_id=coredb.DEV_ORG_ID)
         self.brand_green = bi_repo.create_brand(
             main.conn, name=f"虛構安穩雜貨店{abs(hash(self.id())) % 100000}",
-            client_name=None, actor=ACTOR)
+            client_name=None, actor=ACTOR, org_id=coredb.DEV_ORG_ID)
         # 票 C：conversion_goal 沒設定會冒出提醒卡，蓋掉本檔要測的「四條規則都不觸發
         # →next_step 為 None」情境；先設定好維持本檔原本要測的東西。
         bi_repo.set_brand_switches(main.conn, self.brand_green["id"], market_region=None,

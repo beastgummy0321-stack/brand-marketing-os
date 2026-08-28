@@ -293,8 +293,7 @@ def list_cards(conn: Conn, brand_id: str) -> list:
 
 
 def set_value(conn: Conn, brand_id: str, card_key: str, field_key: str,
-             value: float, actor: str, *, org_id: str = "org_dev") -> None:
-    # org_id 預設值只服務既有測試呼叫點；正式呼叫端一律顯式傳。
+             value: float, actor: str, *, org_id: str) -> None:
     """改一個門檻值：落庫＋留稽核（brand_id 是真正的品牌事件，見 03 §3.1）。"""
     _field_def(card_key, field_key)  # 順便驗證卡／欄位存在
     before = get_value(conn, brand_id, card_key, field_key)
@@ -314,9 +313,8 @@ def set_value(conn: Conn, brand_id: str, card_key: str, field_key: str,
 
 
 def reset_card(conn: Conn, brand_id: str, card_key: str, actor: str, *,
-               org_id: str = "org_dev") -> None:
-    """整張卡重設回預設值。已經是預設值的欄位不重覆寫入、不留無意義的稽核紀錄。
-    org_id 預設值只服務既有測試呼叫點；正式呼叫端一律顯式傳。"""
+               org_id: str) -> None:
+    """整張卡重設回預設值。已經是預設值的欄位不重覆寫入、不留無意義的稽核紀錄。"""
     if card_key not in CARDS:
         raise ValueError(f"沒有這張規則卡：{card_key}")
     for field_key, meta in CARDS[card_key]["fields"].items():

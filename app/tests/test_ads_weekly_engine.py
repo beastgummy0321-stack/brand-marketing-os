@@ -7,6 +7,7 @@ import app.main as main
 from app.ads import auto_sync, onboarding, performance, reading
 from app.ads import repository as ads_repo
 from app.brand_intelligence import repository as bi_repo
+from app.core.db import DEV_ORG_ID  # noqa: E402
 from app.llm.providers import FakeProvider, ProviderResponse, Usage
 
 ACTOR = "測試員"
@@ -26,7 +27,7 @@ class WeeklyEngineScheduleTest(unittest.TestCase):
     def setUp(self):
         self.brand = bi_repo.create_brand(
             main.conn, name=f"虛構週引擎品牌{abs(hash(self.id())) % 100000}",
-            client_name=None, actor=ACTOR,
+            client_name=None, actor=ACTOR, org_id=DEV_ORG_ID,
         )
         self._original_provider = reading.PROVIDER
         reading.PROVIDER = FakeProvider(response=_fake_reading_response())

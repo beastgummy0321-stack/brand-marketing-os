@@ -28,9 +28,7 @@ def list_personas(conn: Conn, brand_id: str, *, limit: int = None) -> list:
     return [dict(row) for row in conn.execute(sql, params)]
 
 
-def replace_personas(conn: Conn, brand_id: str, rows: list, *, org_id: str = "org_dev") -> list:
-    # org_id 預設值只服務既有測試呼叫點；正式呼叫端一律顯式傳（字面值，不是
-    # 那個環境常數識別字——票 03-1 done-check 2 用 grep 抓的是識別字本身）。
+def replace_personas(conn: Conn, brand_id: str, rows: list, *, org_id: str) -> list:
     """新一批先完整驗證，通過後才取代舊批；不會先清空再發現資料壞掉。"""
     normalized = []
     for row in rows:

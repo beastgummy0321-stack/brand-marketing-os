@@ -394,7 +394,7 @@ def archive_on_close(conn, brand_id: str, cycle_id: str, actor: str) -> dict:
         brand_id=brand_id, campaign_cycle_id=cycle_id,
     )
     if interrupt_id:  # None＝去重命中，理論上結案只會轉態一次，這裡只是不假設呼叫端不重複呼叫
-        core_interrupts.resolve(conn, interrupt_id, actor=actor)
+        core_interrupts.resolve(conn, interrupt_id, actor=actor, org_id=_brand["org_id"])
     return cards
 
 
@@ -543,10 +543,11 @@ def _resolve_ready_interrupt_if_finished(conn, brand_id: str, cycle_id: str, act
     ).fetchone()
     if pending:
         return
+    org_id = bi._org_id_for_brand(conn, brand_id)
     for interrupt in core_interrupts.list_open(
             conn, brand_id=brand_id, category="weekly_proposal_ready", archive_stale=False):
         if interrupt["campaign_cycle_id"] == cycle_id:
-            core_interrupts.resolve(conn, interrupt["id"], actor=actor)
+            core_interrupts.resolve(conn, interrupt["id"], actor=actor, org_id=org_id)
 
 
 def cycle_id_for_recommendation(conn, brand_id: str, recommendation_id: str) -> "str | None":

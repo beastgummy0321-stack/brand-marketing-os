@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 import app.main as main
 import app.shared.web as web
 from app.brand_intelligence import repository as bi_repo
+from app.core.db import DEV_ORG_ID  # noqa: E402
 
 ACTOR = "測試員"
 
@@ -20,7 +21,7 @@ class _Base(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(main.app)
         self.brand = bi_repo.create_brand(web.conn, name="虛構晨光咖啡",
-                                          client_name="測試客戶", actor=ACTOR)
+                                          client_name="測試客戶", actor=ACTOR, org_id=DEV_ORG_ID)
         self.bid = self.brand["id"]
 
 

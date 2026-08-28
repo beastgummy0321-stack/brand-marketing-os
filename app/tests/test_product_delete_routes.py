@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 import app.main as main
 import app.shared.web as web
 from app.brand_intelligence import repository as repo
+from app.core.db import DEV_ORG_ID  # noqa: E402
 
 _SEQ = [0]
 ACTOR = "測試者"
@@ -26,7 +27,8 @@ class ProductDeleteRouteTest(unittest.TestCase):
     def _new_brand_and_product(self, prefix: str):
         _SEQ[0] += 1
         name = f"{prefix}{_SEQ[0]}"
-        brand_id = repo.create_brand(web.conn, name=name, client_name=None, actor=ACTOR)["id"]
+        brand_id = repo.create_brand(web.conn, name=name, client_name=None, actor=ACTOR,
+            org_id=DEV_ORG_ID)["id"]
         product_id = repo.create_product(
             web.conn, brand_id, name=f"{name}-產品", actor=ACTOR
         )["id"]

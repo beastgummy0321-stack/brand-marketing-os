@@ -68,10 +68,10 @@ class DashboardCockpitApiTest(unittest.TestCase):
         self.client = TestClient(main.app)
         self.brand_empty = bi_repo.create_brand(
             main.conn, name=f"虛構空白茶行{abs(hash(self.id())) % 100000}",
-            client_name=None, actor=ACTOR)
+            client_name=None, actor=ACTOR, org_id=coredb.DEV_ORG_ID)
         self.brand_full = bi_repo.create_brand(
             main.conn, name=f"虛構滿載雜貨店{abs(hash(self.id())) % 100000}",
-            client_name=None, actor=ACTOR)
+            client_name=None, actor=ACTOR, org_id=coredb.DEV_ORG_ID)
 
         # 訂單：本月 2 筆共 1200、上月 1 筆共 1000 → 營收環比 +20%、訂單數環比 +100%
         orders_repo.save_orders(
@@ -239,7 +239,7 @@ class AlertsFuelPipelineTest(unittest.TestCase):
         self.client = TestClient(main.app)
         self.brand = bi_repo.create_brand(
             main.conn, name=f"虛構警示茶行{abs(hash(self.id())) % 100000}",
-            client_name=None, actor=ACTOR)
+            client_name=None, actor=ACTOR, org_id=coredb.DEV_ORG_ID)
 
     def _get(self):
         resp = self.client.get(f"/api/dashboard/brands/{self.brand['id']}/cockpit")
@@ -287,7 +287,7 @@ class AlertsFuelPipelineTest(unittest.TestCase):
         或它既有的測試斷言，只驗證駕駛艙讀取面確實反映結果）。"""
         interrupt_id = self._insert_interrupt(severity="rule_warning", dedupe_key="d-resolve")
         self.assertEqual(len(self._get()["alerts"]), 1)
-        core_interrupts.resolve(main.conn, interrupt_id, actor=ACTOR)
+        core_interrupts.resolve(main.conn, interrupt_id, actor=ACTOR, org_id=coredb.DEV_ORG_ID)
         self.assertEqual(self._get()["alerts"], [])
 
     # -- AI 油錢錶：本月已花／上限，聚合 llm_task 成本紀錄 ---------------------------
@@ -312,7 +312,8 @@ class AlertsFuelPipelineTest(unittest.TestCase):
         self.assertAlmostEqual(gauge["spent_this_month"], 4.0)
 
     def test_fuel_gauge_limit_matches_settings(self):
-        core_settings.set_setting(main.conn, core_settings.INTAKE_BUDGET_SETTING, "88")
+        core_settings.set_setting(main.conn, core_settings.INTAKE_BUDGET_SETTING, "88",
+            org_id=coredb.DEV_ORG_ID)
         gauge = self._get()["fuel_gauge"]
         self.assertEqual(gauge["limit"], 88.0)
 
@@ -368,7 +369,7 @@ class LastSyncAtTest(unittest.TestCase):
         self.client = TestClient(main.app)
         self.brand = bi_repo.create_brand(
             main.conn, name=f"虛構同步茶行{abs(hash(self.id())) % 100000}",
-            client_name=None, actor=ACTOR)
+            client_name=None, actor=ACTOR, org_id=coredb.DEV_ORG_ID)
 
     def _get(self):
         resp = self.client.get(f"/api/dashboard/brands/{self.brand['id']}/cockpit")

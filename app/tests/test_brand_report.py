@@ -17,6 +17,7 @@ import app.shared.web as web
 from app.brand_intelligence import repository as repo
 from app.brand_web import report_service
 from app.brand_web import routes as report
+from app.core.db import DEV_ORG_ID  # noqa: E402
 from app.llm import providers
 
 ACTOR = "測試員"
@@ -49,7 +50,7 @@ class BrandReportGenerateTest(unittest.TestCase):
     """直接測 report.generate()／repository，不經 HTTP。"""
 
     def setUp(self):
-        self.brand = repo.create_brand(web.conn, name="晨露茶飲", client_name="測試客戶", actor=ACTOR)
+        self.brand = repo.create_brand(web.conn, name="晨露茶飲", client_name="測試客戶", actor=ACTOR, org_id=DEV_ORG_ID)
 
     def test_generate_success_stores_full_report(self):
         repo.create_brand_fact(web.conn, self.brand["id"], fact_type="positioning", label="定位",
@@ -142,7 +143,7 @@ class BrandReportHttpTest(unittest.TestCase):
         self.client = TestClient(main.app)
 
     def _new_brand(self, name):
-        b = repo.create_brand(web.conn, name=name, client_name=None, actor=ACTOR)
+        b = repo.create_brand(web.conn, name=name, client_name=None, actor=ACTOR, org_id=DEV_ORG_ID)
         return b["id"]
 
     def test_empty_state(self):
