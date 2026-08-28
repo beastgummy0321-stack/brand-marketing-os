@@ -190,21 +190,21 @@ class OrdersApiTest(unittest.TestCase):
         self.assertEqual(invalid.status_code, 400)
         self.assertEqual(set(invalid.json()), {"detail"})
 
-    def test_meta_ads_partial_import_returns_success_with_warning(self):
+    def test_shopee_import_reports_imported_and_updated_counts(self):
         result = SimpleNamespace(
-            kind="meta_ads_csv", ads_imported=2, ads_quarantined=0,
-            late_reruns=[], errors=["有 1 列欄位不完整。"],
+            kind="shopee_report", errors=[],
+            shopee_result=SimpleNamespace(imported=2, updated=1),
         )
         with patch("app.orders.routes_api.orders_dispatch.import_dropped_file", return_value=result):
             response = self.client.post(
                 f"/api/brands/{self.brand_id}/orders/import",
-                files={"drop_file": ("meta.csv", b"date,spend\n", "text/csv")},
+                files={"drop_file": ("shopee.csv", b"order sn,order amount\n", "text/csv")},
             )
         self.assertEqual(response.status_code, 200)
         body = response.json()
         self.assertEqual(body["ok"], True)
         self.assertIn("2", body["message"])
-        self.assertIn("有 1 列欄位不完整。", body["message"])
+        self.assertIn("1", body["message"])
 
     def test_all_post_endpoints_return_json_when_brand_is_missing(self):
         missing_brand = "missing"

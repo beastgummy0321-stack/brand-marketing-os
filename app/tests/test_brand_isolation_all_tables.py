@@ -34,9 +34,6 @@ BRAND_AGNOSTIC_EXCEPTIONS = {
         "不是 organisation 掛在 brand 底下，不適用這個檢查",
     "app_setting": "整台機器的全站設定（AI 金鑰、模型選擇等），不是品牌資料"
         "（core_baseline migration 註解）",
-    "ad_account": "一個廣告帳號可服務多個品牌，歸屬不由帳號推導（決策 0022 第 6 點）",
-    "discovered_campaign": "未認領的東西不屬於任何品牌，認領後才寫 external_ad_mapping"
-        "（決策 0022 第 7 點）",
     "audit_log": "跨全部分支的稽核紀錄，brand_id 可為 NULL 表示系統級動作"
         "（core_baseline migration 註解，brand_id 欄位存在但刻意不設 NOT NULL）",
     "interrupt": "全站打斷佇列，brand_id 可為 NULL 表示跨品牌系統級提醒"

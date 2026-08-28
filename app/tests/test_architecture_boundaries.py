@@ -3,9 +3,9 @@
 見 docs/architecture-rules.md A1。地界靠讀文件、沒有機器檢查是體檢（19-constitution-audit.md
 第七節）點名的致命發現，這裡補上兩道掃描：
 
-1. **import 掃描**：除排除清單外，任何模組不得 import 分支專屬層（`app.ads` 等）。
+1. **import 掃描**：除排除清單外，任何模組不得 import 分支專屬層。
 2. **跨層原生 SQL 掃描**：任何模組不得直接對「品牌永久層」（`app.brand_intelligence`）
-   或「分支專屬層」（`app.ads`）的資料表下原生 SQL，必須走該層的公開函式（A1、鐵則 7）。
+   或「分支專屬層」的資料表下原生 SQL，必須走該層的公開函式（A1、鐵則 7）。
    實測原有三處偷讀（見 docs/design/19-constitution-audit.md 第七節），先列進
    KNOWN_SQL_VIOLATIONS 讓測試通過——這是明文記錄的欠帳（見 docs/rule-checks.md）。
    修憲落地 A3（`learning_ledger` 遷出 `app/ads` 進品牌永久層）已修好其中一處
@@ -26,23 +26,16 @@ from pathlib import Path
 APP_DIR = Path(__file__).resolve().parent.parent  # .../app
 REPO_ROOT = APP_DIR.parent
 
-# ---- 分支專屬層（A1 表格；未來新分支加進來即可，目前只有 app.ads）----
-BRANCH_PACKAGES = ("app.ads",)
+# ---- 分支專屬層（A1 表格；未來新分支加進來即可）----
+# 外殼切片（2026-08-28）：唯一的分支專屬層（廣告模組）已刪除，這個 tuple 因此是空的，
+# 下面的 ImportBoundaryScanTest 現在掃不到任何東西。留著機器與規則，等下一個分支層
+# （例如新的部門模組）出現時把套件名填回來即可，不必重寫掃描本身。
+BRANCH_PACKAGES: tuple = ()
 
-# 分支專屬層的資料表清單（來自 app/ads/migrations 的 CREATE TABLE，供跨層 SQL 掃描比對）
-BRANCH_TABLES = {
-    "activation_authorization", "ad_account", "ad_revenue_coefficient",
-    "ad_revenue_coefficient_error_log", "adoption_decision", "brand_checklist_item",
-    "campaign_activation", "campaign_cycle", "campaign_cycle_goal", "campaign_cycle_hypothesis",
-    "campaign_cycle_product", "campaign_plan", "campaign_plan_option", "creative_brief",
-    "creative_rule_card", "creative_theme", "creative_theme_component", "creative_variant",
-    "cycle_checklist_item", "cycle_checkpoint",
-    "cycle_code_verification", "cycle_voucher_code", "derived_metric", "discovered_campaign",
-    "experiment_cell", "external_ad_mapping", "final_asset", "finding", "ga4_summary",
-    "ga4_sync_status", "marketing_goal", "offer", "performance_reading",
-    "performance_snapshot", "publishing_package", "reading_snapshot", "reading_snapshot_input",
-    "recommendation", "rule_dissent", "settlement_version", "success_criterion",
-}
+# 分支專屬層的資料表清單（供跨層 SQL 掃描比對）。外殼切片（2026-08-28）票 3 的 migration
+# 已經 DROP 掉這 44 張表（20260828000003_ads_drop_module_tables.sql），沒有表可以偷讀了，
+# 所以這個集合是空的。下一個分支層出現時把它的表名填回來即可。
+BRANCH_TABLES: set = set()
 
 # 品牌永久層的資料表清單（來自 app/brand_intelligence/migrations 的 CREATE TABLE）。
 # learning_ledger 修憲落地 A3（決策 0037）從 app/ads 遷入——它是品牌長期資產，不是廣告
@@ -58,7 +51,6 @@ _SQL_TABLE_REF = re.compile(r"(?:FROM|INTO|UPDATE|JOIN)\s+([a-zA-Z_][a-zA-Z0-9_]
 # 已知違例（三處偷讀，體檢 19-constitution-audit.md 第七節；狀態見 docs/rule-checks.md）。
 # 這份清單本身有 test_known_violations_list_is_not_stale 把關，修好了要記得同步刪除兩邊。
 KNOWN_SQL_VIOLATIONS = {
-    "app/ads/interview.py": {"strategy_hypothesis"},
     "app/intake/ai.py": {"brand"},
     "app/intake/state.py": {"brand"},
 }
@@ -166,8 +158,8 @@ def _owner_module(rel: str) -> str:
 
 def _is_allowed_branch_importer(rel: str) -> bool:
     """A1 排除清單（永久豁免）：app/main.py 組裝根部分、app/tests/*、app/orders/*、
-    app/dashboard/*（票 02：跨品牌總覽要讀檔期狀態，資料只活在 app.ads 層，只能靠
-    呼叫該層公開函式取數——見 docs/specs/0001-cockpit-stage0-1.md 接口鐵則）。"""
+    app/dashboard/*（跨層取數只能走該層公開函式——見 docs/specs/0001-cockpit-stage0-1.md
+    接口鐵則）。"""
     if rel == "app/main.py":
         return True
     if rel.startswith("app/tests/"):
@@ -186,8 +178,6 @@ class ImportBoundaryScanTest(unittest.TestCase):
         violations = []
         for path in _iter_py_files():
             rel = _rel(path)
-            if rel.startswith("app/ads/"):
-                continue  # 分支自己 import 自己不算跨界
             if _is_allowed_branch_importer(rel):
                 continue
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=rel)
@@ -205,37 +195,6 @@ class ImportBoundaryScanTest(unittest.TestCase):
             violations, [],
             "以下模組 import 了分支專屬層，違反 A1 三層地界（排除清單見 architecture-rules.md）：\n"
             + "\n".join(violations),
-        )
-
-
-class AdsMustNotImportOrdersTest(unittest.TestCase):
-    """第 7 刀：app/ads → app/orders 那 9 處呼叫已經拆光，這裡補一條機器閘門把圈鎖死成
-    單行道——app/orders 允許 import app.ads（見 `_is_allowed_branch_importer`），反過來
-    app/ads import app.orders 一律禁止，不設排除清單，跟上面 `BRANCH_PACKAGES` 的
-    import 掃描同一個風格（靜態 AST，只認 import／from...import 語句本身）。"""
-
-    def test_no_ads_module_imports_orders(self):
-        violations = []
-        for path in _iter_py_files():
-            rel = _rel(path)
-            if not rel.startswith("app/ads/"):
-                continue
-            tree = ast.parse(path.read_text(encoding="utf-8"), filename=rel)
-            for node in ast.walk(tree):
-                if isinstance(node, ast.Import):
-                    names = [alias.name for alias in node.names]
-                elif isinstance(node, ast.ImportFrom) and node.module:
-                    names = [node.module]
-                else:
-                    names = []
-                for name in names:
-                    if name == "app.orders" or name.startswith("app.orders."):
-                        violations.append(f"{rel} 竟然 import 了 {name}")
-        self.assertEqual(
-            violations, [],
-            "以下 app/ads 模組 import 了 app.orders，違反第 7 刀單向依賴（app/orders 允許"
-            " import app.ads，反向不行，不設例外——需要訂單資料一律改由呼叫端傳入或由"
-            " app/main.py 這個組裝根注入）：\n" + "\n".join(violations),
         )
 
 
@@ -260,7 +219,9 @@ class CrossLayerRawSqlScanTest(unittest.TestCase):
                 for table in tables_hit & BRAND_PERMANENT_TABLES - known:
                     violations.append(f"{rel} 直接對品牌永久層資料表 {table} 下 SQL")
 
-            if owner != "app/ads" and not rel.startswith("app/orders/"):
+            # 分支專屬層的表在外殼切片後沒有擁有者了（`app/ads/` 已刪），這些表本身
+            # 在票 3 的 migration 裡 DROP；在那之前仍守著「別的模組不准偷讀」。
+            if not rel.startswith("app/orders/"):
                 for table in tables_hit & BRANCH_TABLES - known:
                     violations.append(f"{rel} 直接對分支專屬層資料表 {table} 下 SQL")
 
@@ -348,9 +309,6 @@ class ImportCycleScanTest(unittest.TestCase):
 # 「只剩 brand_intelligence 那三條」的排法，其餘七個套件零違規。
 LAYER_ORDER = [
     "app.core",                # 基礎設施：DB、migration、audit、interrupts
-    "app.creative",            # 票 04-single-image-e2e：素材生成引擎的規格表／零狀態零件，
-                                # 零內部依賴（不 import app.ads，見 format_specs.py 檔頭），
-                                # 排在 app.core 之後——之後有其他模組要用規格表也不會撞牆。
     "app.brand_intelligence",  # 品牌永久層
     "app.llm",                 # AI gateway 與 prompt 組裝
     "app.shared",              # web 骨架（app、templates、共用 ctx）
@@ -359,7 +317,6 @@ LAYER_ORDER = [
                                 # （見 require_actor()），這裡的靜態掃描看不到，不算環
     "app.intake",              # 建檔精靈
     "app.brand_web",           # 品牌智庫 web 路由
-    "app.ads",                 # 廣告分支
     "app.orders",              # 訂單
     "app.dashboard",           # 駕駛艙（只讀，跨分支彙總）
     "app.tools",               # 一次性工具
@@ -470,7 +427,6 @@ class AiKeySourceSingleSourceOfTruthTest(unittest.TestCase):
 FILE_LINE_CAP = 800
 KNOWN_OVERSIZED_FILES = {
     "app/brand_intelligence/repository.py": 1667,
-    "app/ads/repository.py": 858,
 }
 
 
@@ -509,114 +465,6 @@ class FileLineCapTest(unittest.TestCase):
         )
 
 
-class ClipboardHonestyScanTest(unittest.TestCase):
-    """複製鈕不准謊報成功：writeText 的結果必須等到了才回報。
-
-    `navigator.clipboard.writeText()` 回的是 Promise。同步寫
-    `writeText(...); this.textContent='已複製'` 的話，瀏覽器拒絕時（分頁沒有焦點、
-    沒有權限、非安全來源）按鈕照樣顯示成功——實測確認過剪貼簿真的沒收到東西。
-    後果是使用者把上一次的舊內容貼進投放後台，這是靜默的資料錯誤，不是樣式問題。
-
-    ponytail: 逐行字面掃描，不是 JS parser；把 writeText 跟 .then 拆成兩行寫可以繞過去。
-    真的需要更嚴謹時再升級成 AST 解析。
-    """
-
-    # T4: Jinja pages are gone; copy buttons now live in the React shell (frontend/src).
-    SRC_DIR = APP_DIR.parent / "frontend" / "src"
-
-    def _writetext_lines(self) -> list:
-        found = []
-        for path in sorted(self.SRC_DIR.rglob("*.ts*")):
-            for lineno, line in enumerate(
-                    path.read_text(encoding="utf-8").splitlines(), start=1):
-                if "clipboard.writeText(" in line:
-                    found.append((_rel(path), lineno, line.strip()))
-        return found
-
-    def test_scan_actually_finds_the_copy_buttons(self):
-        """掃描腳本自身的體檢：抓不到東西時上面那條會空過，得先確認它真的掃得到。"""
-        self.assertGreaterEqual(
-            len(self._writetext_lines()), 3,
-            "掃不到已知的複製鈕（素材頁、交接包、copy_block）——先修掃描腳本，不要當作沒有違規",
-        )
-
-    def test_every_copy_button_reports_only_after_writetext_resolves(self):
-        problems = [
-            f"  {rel}:{lineno} 同步回報成功，沒等 writeText：{line}"
-            for rel, lineno, line in self._writetext_lines()
-            if ".then(" not in line and "await " not in line
-        ]
-        self.assertEqual(
-            problems, [],
-            "複製鈕謊報成功（成功訊息要掛在 .then() 的 resolve 分支上）：\n" + "\n".join(problems),
-        )
-
-
-class ReviewStepSettleRefetchWiringTest(unittest.TestCase):
-    """F14：`ReviewStep` 結算成功只重抓自己的覆盤資料，`WarroomPage` 手上的 `cycle`
-    不會跟著動——「成效」階段條的文案是 `WarroomPage` 從 `cycle.status` 算出來的
-    （見 `WarroomPage.tsx` 的 `stepSummaries`），結算後這段文案會停在結算前那句，
-    直到使用者手動重新整理頁面。`ReviewStep` 對外唯一呼叫點是 `WarroomPage.tsx`
-    （已核實），contract 見
-    `.scratch/rehearsal-b0-fix4/issues/F14-performance-step-label-after-settlement.md`。
-
-    ponytail: 逐行字面掃描，不是 JSX／TS parser——把這幾行拆成很怪的多行寫法可以繞過去，
-    真的需要更嚴謹時再升級成 AST 解析（跟上面 `ClipboardHonestyScanTest` 同一份 note）。
-    """
-
-    WARROOM_PAGE = ClipboardHonestyScanTest.SRC_DIR / "components" / "warroom" / "WarroomPage.tsx"
-    REVIEW_STEP = ClipboardHonestyScanTest.SRC_DIR / "components" / "warroom" / "steps" / "ReviewStep.tsx"
-
-    @staticmethod
-    def _line_with(path: Path, needle: str):
-        for line in path.read_text(encoding="utf-8").splitlines():
-            if needle in line:
-                return line
-        return None
-
-    def test_scan_actually_finds_the_wiring_lines(self):
-        """掃描腳本自身的體檢：抓不到東西時下面幾條會空過，得先確認它們真的掃得到。"""
-        self.assertIsNotNone(
-            self._line_with(self.WARROOM_PAGE, "<ReviewStep "),
-            "掃不到 WarroomPage.tsx 掛載 ReviewStep 的那行——先修掃描腳本，不要當作沒有違規",
-        )
-        self.assertIsNotNone(
-            self._line_with(self.REVIEW_STEP, "export function ReviewStep("),
-            "掃不到 ReviewStep 的函式簽名——先修掃描腳本，不要當作沒有違規",
-        )
-        self.assertIsNotNone(
-            self._line_with(self.REVIEW_STEP, "<SettleNowPanel "),
-            "掃不到 ReviewStep 掛載 SettleNowPanel 的那行——先修掃描腳本，不要當作沒有違規",
-        )
-
-    def test_warroom_page_passes_onSettled_to_review_step(self):
-        line = self._line_with(self.WARROOM_PAGE, "<ReviewStep ")
-        self.assertIn(
-            "onSettled=", line,
-            "WarroomPage.tsx 沒有把 onSettled 傳給 ReviewStep——結算後 cycle.status 不會重抓，"
-            "「成效」階段條的文案會停在結算前那句：" + repr(line),
-        )
-
-    def test_review_step_requires_onSettled_prop(self):
-        line = self._line_with(self.REVIEW_STEP, "export function ReviewStep(")
-        self.assertRegex(
-            line, r"onSettled:\s*\(\)\s*=>\s*void",
-            "ReviewStep 沒有必填的 onSettled prop（寫成選填 onSettled?: 一樣會被擋——"
-            "選填的話 tsc 不會擋掉忘記傳的呼叫端）：" + repr(line),
-        )
-
-    def test_review_step_calls_onSettled_on_settle_success(self):
-        line = self._line_with(self.REVIEW_STEP, "<SettleNowPanel ")
-        self.assertIn(
-            "load()", line,
-            "ReviewStep 傳給 SettleNowPanel 的 onSettled 不再呼叫自己的 load()——"
-            "覆盤本身不會重抓：" + repr(line),
-        )
-        self.assertIn(
-            "onSettled()", line,
-            "ReviewStep 傳給 SettleNowPanel 的 onSettled 沒有呼叫外層傳進來的 onSettled prop——"
-            "結算成功後只有覆盤自己更新，WarroomPage 的 cycle 還是舊的：" + repr(line),
-        )
 
 
 if __name__ == "__main__":

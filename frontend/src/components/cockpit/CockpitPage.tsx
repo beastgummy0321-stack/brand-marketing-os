@@ -1,42 +1,33 @@
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
-import { AlertsPanel } from "@/components/cockpit/AlertsPanel";
-import { CampaignStageBadge } from "@/components/cockpit/CampaignStageBadge";
-import { CockpitChart } from "@/components/cockpit/CockpitChart";
-import { ContentPipelineSummary } from "@/components/cockpit/ContentPipelineSummary";
-import { FuelGauge } from "@/components/cockpit/FuelGauge";
-import { GuideCards } from "@/components/cockpit/GuideCards";
-import { KpiCard } from "@/components/cockpit/KpiCard";
-import { LastSyncBadge } from "@/components/cockpit/LastSyncBadge";
-import { PerformancePins } from "@/components/cockpit/pins/PinnedViewsSection";
-import { WeeklyBattleSection } from "@/components/cockpit/WeeklyBattleSection";
-import { CockpitExtrasSection } from "@/components/cockpit/CockpitExtrasSection";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { EmptyState } from "@/components/layout/EmptyState";
-import { fetchCockpit, triggerImmediateSync, type CockpitData } from "@/lib/api";
-import { formatCount, formatCurrency, formatRoas } from "@/lib/format";
-import { hasSeenCockpitTour, runCockpitTour } from "@/lib/tour";
+import { fetchOverview } from "@/lib/api";
 
-/** 單品牌駕駛艙第一屏（票 03/05）：四張 KPI 卡＋營收 vs 花費疊線主圖＋下一步指南卡／
- * 異常警示區並排＋窄條（AI 油錢錶／內容產線小計）。品牌由路徑參數 `/brands/:brandId`
- * 決定（票 05-spa-routing），呼叫端在 App.tsx 用 `useParams` 取出後傳進來，
- * 見 App.tsx／BrandCard.tsx 的路由筆記。 */
+/** 單品牌頁（`/brands/:brandId`）。
+ *
+ * 外殼切片（2026-08-28）：原本的駕駛艙（KPI 卡、營收 vs 花費主圖、成效釘選區、警示區、
+ * AI 油錢錶、內容產線）整組隨 `app/ads/` 一起刪掉——那些數字全部來自廣告成效快照，
+ * 沒有成效資料就沒有數字（HANDOFF-shell-slice.md §3.8）。這一頁刻意保留而不是刪掉：
+ * 它是外殼儀表板未來的位置，現在先是品牌標題＋一句空態。
+ *
+ * 品牌名稱從跨品牌總覽那支既有端點取（`/api/dashboard/overview`），不另開新端點——
+ * 這一頁還沒有自己的資料，多開一支只為了拿一個名字不划算。 */
 type LoadState =
   | { status: "loading" }
   | { status: "error"; message: string }
-  | { status: "ready"; data: CockpitData };
+  | { status: "ready"; brandName: string | null };
 
 export function CockpitPage({ brandId }: { brandId: string }) {
   const [state, setState] = useState<LoadState>({ status: "loading" });
-  const [syncing, setSyncing] = useState(false);
-  const [syncError, setSyncError] = useState<string | null>(null);
 
-  const load = useCallback(() => {
+  useEffect(() => {
     let cancelled = false;
-    setState((prev) => (prev.status === "ready" ? prev : { status: "loading" }));
-    fetchCockpit(brandId)
-      .then((data) => {
-        if (!cancelled) setState({ status: "ready", data });
+    fetchOverview()
+      .then((cards) => {
+        if (cancelled) return;
+        const card = cards.find((c) => c.brand_id === brandId);
+        setState({ status: "ready", brandName: card ? card.brand_name : null });
       })
       .catch((err: unknown) => {
         if (!cancelled) {
@@ -51,41 +42,18 @@ export function CockpitPage({ brandId }: { brandId: string }) {
     };
   }, [brandId]);
 
-  useEffect(() => load(), [load]);
-
-  async function handleImmediateSync() {
-    setSyncing(true);
-    setSyncError(null);
-    try {
-      await triggerImmediateSync(brandId);
-      load();
-    } catch (err) {
-      setSyncError(err instanceof Error ? err.message : "更新失敗，請稍後再試。");
-    } finally {
-      setSyncing(false);
-    }
-  }
-
-  // 首次進駕駛艙自動跑一次 30 秒重點導覽（票 09，規格使用者故事 20）；資料就緒後才跑，
-  // 不然 KPI／指南卡／警示區的 data-tour 元素還沒掛上去，driver.js 會找不到目標。
-  useEffect(() => {
-    if (state.status === "ready" && !hasSeenCockpitTour()) {
-      runCockpitTour();
-    }
-  }, [state.status]);
-
   const breadcrumb = (
     <Breadcrumb
       items={[
         { label: "跨品牌總覽", href: "/" },
-        { label: state.status === "ready" ? state.data.brand_name : "品牌駕駛艙" },
+        { label: state.status === "ready" && state.brandName ? state.brandName : "品牌" },
       ]}
     />
   );
 
   let content: ReactNode;
   if (state.status === "loading") {
-    content = <EmptyState title="讀取中…" description="正在載入這個品牌的駕駛艙資料。" />;
+    content = <EmptyState title="讀取中…" description="正在載入這個品牌。" />;
   } else if (state.status === "error") {
     content = (
       <EmptyState
@@ -96,65 +64,32 @@ export function CockpitPage({ brandId }: { brandId: string }) {
         actionLabel="回跨品牌總覽"
       />
     );
+  } else if (state.brandName === null) {
+    content = (
+      <EmptyState
+        title="找不到這個品牌"
+        description="這個品牌可能已經被刪除，或者網址打錯了。"
+        actionHref="/"
+        actionInternal
+        actionLabel="回跨品牌總覽"
+      />
+    );
   } else {
-    const { data } = state;
     content = (
       <div className="flex flex-col gap-6">
         <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <h1 className="font-display text-2xl text-foreground">{data.brand_name}</h1>
-            <CampaignStageBadge stage={data.campaign_stage} />
-            <LastSyncBadge lastSyncAt={data.last_sync_at} stale={data.data_stale} />
-          </div>
-          <div className="flex items-center gap-4">
-            <button
-              type="button"
-              onClick={runCockpitTour}
-              className="text-sm font-medium text-primary underline-offset-4 hover:underline"
-            >
-              重新導覽
-            </button>
-            <button type="button" onClick={() => void handleImmediateSync()} disabled={syncing} className="rounded-md border border-primary px-3 py-1.5 text-sm font-medium text-primary hover:bg-primary/10 disabled:cursor-not-allowed disabled:opacity-50">
-              {syncing ? "更新中…" : "立刻更新"}
-            </button>
-            <Link
-              to="/"
-              className="text-sm font-medium text-primary underline-offset-4 hover:underline"
-            >
-              回跨品牌總覽
-            </Link>
-          </div>
+          <h1 className="font-display text-2xl text-foreground">{state.brandName}</h1>
+          <Link
+            to="/"
+            className="text-sm font-medium text-primary underline-offset-4 hover:underline"
+          >
+            回跨品牌總覽
+          </Link>
         </div>
-
-        {syncError && <p className="rounded-md border border-danger/30 bg-danger/10 px-3 py-2 text-sm text-danger">{syncError}</p>}
-
-        <WeeklyBattleSection brandId={brandId} />
-
-        <section className="flex flex-col gap-4" aria-labelledby="monthly-report-heading">
-          <h2 id="monthly-report-heading" className="font-display text-lg text-foreground">月報</h2>
-          <p className="text-xs text-muted-foreground">{data.basis_note}</p>
-          <div data-tour="kpis" className="grid grid-cols-4 gap-4">
-            <KpiCard label="本月營收" kpi={data.kpis.revenue} format={formatCurrency} />
-            <KpiCard label="廣告花費" kpi={data.kpis.spend} format={formatCurrency} />
-            <KpiCard label="ROAS" kpi={data.kpis.roas} format={formatRoas} />
-            <KpiCard label="訂單數" kpi={data.kpis.orders} format={formatCount} />
-          </div>
-          <CockpitChart chart={data.chart} />
-        </section>
-
-        <CockpitExtrasSection brandId={brandId} />
-
-        <PerformancePins brandId={brandId} />
-
-        <div className="grid grid-cols-2 gap-4">
-          <GuideCards cards={data.guide_cards} />
-          <AlertsPanel alerts={data.alerts} onResolved={load} />
-        </div>
-
-        <div className="grid grid-cols-2 gap-4">
-          <FuelGauge gauge={data.fuel_gauge} />
-          <ContentPipelineSummary pipeline={data.content_pipeline} />
-        </div>
+        <EmptyState
+          title="本期還沒有方案"
+          description="產生本期方案的按鈕還沒接上來。品牌資料、產品與訂單可以先從左側選單進去看。"
+        />
       </div>
     );
   }

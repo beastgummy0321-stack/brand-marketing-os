@@ -51,10 +51,6 @@ export function BrandCard({ card }: { card: DashboardBrandCard }) {
         </p>
       </div>
 
-      <p className="text-sm text-secondary">
-        檔期：{card.active_cycle ? card.active_cycle.status_label : "尚無進行中檔期"}
-      </p>
-
       {card.next_step ? (
         <span
           role="link"

@@ -22,7 +22,7 @@ import psycopg
 
 from app.core import cleanup
 from app.core.audit import write_audit
-from app.core.db import Conn, now_utc
+from app.core.db import Conn, ConnProxy, now_utc
 
 # ---------------------------------------------------------------------------
 # 卡片定義（單一權威：標題、人話說明、欄位標籤與預設值都在這裡）
@@ -261,7 +261,7 @@ def _field_def(card_key: str, field_key: str) -> dict:
         raise ValueError(f"沒有這張規則卡欄位：{card_key}.{field_key}") from None
 
 
-def get_value(conn: Conn | None, brand_id: str, card_key: str, field_key: str) -> float:
+def get_value(conn: Conn | ConnProxy | None, brand_id: str, card_key: str, field_key: str) -> float:
     """讀一個門檻的目前值：這個品牌有存就用品牌覆寫值，沒有（或表還沒建起來）就用預設值。"""
     default = _field_def(card_key, field_key)["default"]
     if conn is None:
@@ -276,7 +276,7 @@ def get_value(conn: Conn | None, brand_id: str, card_key: str, field_key: str) -
     return row["value"] if row is not None else default
 
 
-def get_card(conn: Conn, brand_id: str, card_key: str) -> dict:
+def get_card(conn: Conn | ConnProxy, brand_id: str, card_key: str) -> dict:
     """整張卡：標題、說明、每個欄位的定義與目前值（這個品牌的）——規則卡頁直接拿這個渲染。"""
     if card_key not in CARDS:
         raise ValueError(f"沒有這張規則卡：{card_key}")
@@ -288,11 +288,11 @@ def get_card(conn: Conn, brand_id: str, card_key: str) -> dict:
     return {"key": card_key, "title": defn["title"], "description": defn["description"], "fields": fields}
 
 
-def list_cards(conn: Conn, brand_id: str) -> list:
+def list_cards(conn: Conn | ConnProxy, brand_id: str) -> list:
     return [get_card(conn, brand_id, key) for key in CARDS]
 
 
-def set_value(conn: Conn, brand_id: str, card_key: str, field_key: str,
+def set_value(conn: Conn | ConnProxy, brand_id: str, card_key: str, field_key: str,
              value: float, actor: str, *, org_id: str) -> None:
     """改一個門檻值：落庫＋留稽核（brand_id 是真正的品牌事件，見 03 §3.1）。"""
     _field_def(card_key, field_key)  # 順便驗證卡／欄位存在
@@ -312,7 +312,7 @@ def set_value(conn: Conn, brand_id: str, card_key: str, field_key: str,
     conn.commit()
 
 
-def reset_card(conn: Conn, brand_id: str, card_key: str, actor: str, *,
+def reset_card(conn: Conn | ConnProxy, brand_id: str, card_key: str, actor: str, *,
                org_id: str) -> None:
     """整張卡重設回預設值。已經是預設值的欄位不重覆寫入、不留無意義的稽核紀錄。"""
     if card_key not in CARDS:

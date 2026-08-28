@@ -14,7 +14,6 @@ org_id 這個參數。本檔的測試因此在修復前是「呼叫就炸」（T
 
 import unittest
 
-from app.ads import sync as ads_sync
 from app.core import db
 from app.core import settings as coresettings
 
@@ -53,18 +52,6 @@ class SettingsOrgScopeTest(unittest.TestCase):
         篩選，資料表裡這把鍵只有一列，B 的讀取 100% 會拿到 A 的值，不是巧合。"""
         coresettings.set_setting(self.conn, "only_a_key_04_0", "A-secret", org_id=ORG_A)
         self.assertIsNone(coresettings.get_setting(self.conn, "only_a_key_04_0", org_id=ORG_B))
-
-    # -- 驗收 4：金鑰形狀的版本（Meta 權杖），走 app/ads/sync.py 的讀取路徑 -------------
-
-    def test_meta_token_scoped_per_org(self):
-        coresettings.set_setting(self.conn, ads_sync.TOKEN_SETTING, "A-token", org_id=ORG_A)
-        coresettings.set_setting(self.conn, ads_sync.TOKEN_SETTING, "B-token", org_id=ORG_B)
-        self.assertEqual(ads_sync.get_token(self.conn, org_id=ORG_B), "B-token")
-        self.assertEqual(ads_sync.get_token(self.conn, org_id=ORG_A), "A-token")
-
-    def test_meta_token_org_with_no_token_never_sees_the_others(self):
-        coresettings.set_setting(self.conn, ads_sync.TOKEN_SETTING, "A-token", org_id=ORG_A)
-        self.assertIsNone(ads_sync.get_token(self.conn, org_id=ORG_B))
 
     # -- 根因重放：不經過修好的 get_setting()，直接示範舊查詢字面上為什麼會洩漏 ---------
 

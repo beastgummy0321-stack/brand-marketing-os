@@ -6,7 +6,7 @@
 
 對外進入點：`JobRegistry` 類別、`notify()` 函式。
 誰依賴它：`routes_library.py`、`routes_products.py`（單向：routes → helper，
-本檔不 import routes_*，不 import app.ads）。
+本檔不 import routes_*）。
 """
 
 import threading

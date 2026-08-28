@@ -270,7 +270,7 @@ def budget_exceeded_message(conn: db.Conn, brand_id: str, cost: float, *, org_id
     app/intake/script.py DEFAULT_BUDGET 註解，票 M2）。
 
     org_id 必填（票 04-0）：本檔（app.core）依 LAYER_ORDER 不得 import app.brand_intelligence
-    自己反查，呼叫端（app.ads／app.brand_web）已經有 brand_id，反查 org_id 傳進來。
+    自己反查，呼叫端（app.brand_web 等分支層）已經有 brand_id，反查 org_id 傳進來。
     """
     spent = brand_llm_spent(conn, brand_id)
     limit = get_intake_budget_limit(conn, org_id=org_id)

@@ -1,8 +1,10 @@
 """app/tests/test_settings_api.py — 設定頁 JSON API（票 B1-settings，契約
 `.scratch/grill/GRILL-B1-settings.md` S15，不含規則卡——規則卡見 test_rule_cards_api.py）。
 
-全程用暫存 DB，不發任何真實網路請求（測試連線改用既有 FakeProvider／FakeMetaClient／
-FakeGA4Client）。ProviderHumanErrorTest 是從已刪除的 test_settings_page.py 搬過來的
+全程用暫存 DB，不發任何真實網路請求（測試連線改用既有 FakeProvider）。
+
+外殼切片（2026-08-28）：Meta／GA4 連線設定的欄位與端點隨 `app/ads/` 一起刪掉，
+相關案例一併移除。ProviderHumanErrorTest 是從已刪除的 test_settings_page.py 搬過來的
 AnthropicProvider／pricing 直接單元測試（不經 HTTP 路由，票 T4 A4 刪 Jinja 頁面時
 這幾條測試本來就不碰模板，只是恰好住在同一個檔案）。
 """
@@ -16,8 +18,6 @@ from fastapi.testclient import TestClient
 
 import app.main as main
 import app.shared.web as web
-from app.ads import ga4_api, ga4_sync, meta_api
-from app.ads import sync as ads_sync
 from app.core import db as coredb
 from app.core import settings as coresettings
 from app.identity import repository as identity_repo
@@ -29,8 +29,7 @@ TEST_KEY = "sk-ant-test-0000-1234abcd"
 
 SETTINGS_DATA_KEYS = {
     "masked_key", "api_key_source", "db_key_present", "model_choices", "current_model",
-    "task_model_thinking_table", "masked_meta_token", "meta_account_id", "masked_ga4_key",
-    "ga4_property_id", "creative_root", "prompt_header", "intake_budget",
+    "task_model_thinking_table", "creative_root", "prompt_header", "intake_budget",
     "ai_key_source", "ai_cap_applies", "ai_monthly_spend", "ai_monthly_cost_limit", "is_owner",
 }
 
@@ -110,29 +109,6 @@ class SettingsApiTest(unittest.TestCase):
         self.assertIsNone(coresettings.get_setting(
             web.conn, coresettings.API_KEY_SETTING, org_id=coredb.DEV_ORG_ID))
 
-    # -- POST /api/settings/meta ------------------------------------------------
-
-    def test_save_meta_settings(self):
-        resp = self.client.post(
-            "/api/settings/meta", json={"meta_account_id": "act_999", "meta_token": "tok"})
-        self.assertEqual(resp.status_code, 200)
-        self.assertEqual(ads_sync.get_account_id(web.conn, org_id=coredb.DEV_ORG_ID), "act_999")
-        self.assertEqual(ads_sync.get_token(web.conn, org_id=coredb.DEV_ORG_ID), "tok")
-
-    def test_save_meta_settings_missing_account_gives_human_error(self):
-        resp = self.client.post("/api/settings/meta", json={"meta_account_id": "", "meta_token": "x"})
-        self.assertEqual(resp.status_code, 400)
-        self.assertIn("請填入廣告帳號編號", resp.json()["error"])
-
-    # -- POST /api/settings/ga4 --------------------------------------------------
-
-    def test_save_ga4_settings(self):
-        resp = self.client.post("/api/settings/ga4", json={
-            "ga4_property_id": "123456789", "ga4_service_account_json": '{"type":"service_account"}',
-        })
-        self.assertEqual(resp.status_code, 200)
-        self.assertEqual(ga4_sync.get_property_id(web.conn, org_id=coredb.DEV_ORG_ID), "123456789")
-
     # -- POST /api/settings/model -------------------------------------------------
 
     def test_save_model_valid(self):
@@ -205,35 +181,6 @@ class SettingsApiTest(unittest.TestCase):
         body = resp.json()
         self.assertEqual(body["kind"], "ok")
         self.assertIn("金鑰有效", body["message"])
-        self.assertEqual(len(fake.calls), 1)
-
-    def test_meta_test_connection_without_config_warns_and_sends_no_request(self):
-        resp = self.client.post("/api/settings/meta/test-connection")
-        self.assertEqual(resp.status_code, 200)
-        body = resp.json()
-        self.assertEqual(body["kind"], "warn")
-
-    def test_meta_test_connection_success_uses_fake_client(self):
-        coresettings.set_setting(web.conn, ads_sync.ACCOUNT_SETTING, "act_123", org_id=coredb.DEV_ORG_ID)
-        coresettings.set_setting(web.conn, ads_sync.TOKEN_SETTING, "fake-token", org_id=coredb.DEV_ORG_ID)
-        fake = meta_api.FakeMetaClient(campaigns=[])
-        with mock.patch.object(ads_sync, "make_client", return_value=fake):
-            resp = self.client.post("/api/settings/meta/test-connection")
-        self.assertEqual(resp.status_code, 200)
-        body = resp.json()
-        self.assertEqual(body["kind"], "ok")
-        self.assertEqual(fake.calls, [("campaigns", "act_123")])
-
-    def test_ga4_test_connection_success_uses_fake_client(self):
-        coresettings.set_setting(web.conn, ga4_sync.PROPERTY_SETTING, "123456789", org_id=coredb.DEV_ORG_ID)
-        coresettings.set_setting(web.conn, ga4_sync.SERVICE_ACCOUNT_SETTING,
-                                 '{"type": "service_account"}', org_id=coredb.DEV_ORG_ID)
-        fake = ga4_api.FakeGA4Client(rows=[])
-        with mock.patch.object(ga4_sync, "make_client", return_value=fake):
-            resp = self.client.post("/api/settings/ga4/test-connection")
-        self.assertEqual(resp.status_code, 200)
-        body = resp.json()
-        self.assertEqual(body["kind"], "ok")
         self.assertEqual(len(fake.calls), 1)
 
     # -- 票 T4 A4：HTML 表單路由與 GET /settings 頁面已刪除（React /settings 頁只打
@@ -313,29 +260,6 @@ class SettingsApiTest(unittest.TestCase):
         body = resp.json()
         self.assertEqual(body["kind"], "danger")
         self.assertIn("金鑰錯誤", body["message"])
-
-    def test_meta_test_connection_failure_returns_danger_kind(self):
-        """原 test_meta_test_connection_failure_shows_human_error。"""
-        coresettings.set_setting(web.conn, ads_sync.ACCOUNT_SETTING, "act_123", org_id=coredb.DEV_ORG_ID)
-        coresettings.set_setting(web.conn, ads_sync.TOKEN_SETTING, "fake-token", org_id=coredb.DEV_ORG_ID)
-        fake = meta_api.FakeMetaClient(error=meta_api.MetaApiError("Meta 拒絕了這次連線。"))
-        with mock.patch.object(ads_sync, "make_client", return_value=fake):
-            resp = self.client.post("/api/settings/meta/test-connection")
-        body = resp.json()
-        self.assertEqual(body["kind"], "danger")
-        self.assertIn("Meta 拒絕了這次連線", body["message"])
-
-    def test_ga4_test_connection_failure_returns_danger_kind(self):
-        """原 test_ga4_test_connection_failure_shows_human_error。"""
-        coresettings.set_setting(web.conn, ga4_sync.PROPERTY_SETTING, "123456789", org_id=coredb.DEV_ORG_ID)
-        coresettings.set_setting(web.conn, ga4_sync.SERVICE_ACCOUNT_SETTING,
-                                 '{"type": "service_account"}', org_id=coredb.DEV_ORG_ID)
-        fake = ga4_api.FakeGA4Client(error=ga4_api.GA4ApiError("連不上 GA4。"))
-        with mock.patch.object(ga4_sync, "make_client", return_value=fake):
-            resp = self.client.post("/api/settings/ga4/test-connection")
-        body = resp.json()
-        self.assertEqual(body["kind"], "danger")
-        self.assertIn("連不上 GA4", body["message"])
 
     def test_save_prompt_header_can_be_saved_empty(self):
         """留白代表整組複製時不加開頭那一行，不是輸入錯誤（原

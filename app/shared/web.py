@@ -14,7 +14,7 @@ Jinja2 樣板、request context 組裝（ctx／banner_ctx）、品牌存取守�
 
 品牌永久層（app.brand_intelligence）在本檔的依賴方向是允許的——「品牌」是每條路由
 都要碰的核心概念，這裡不算 A1 說的「分支專屬層」。真正要守住的是：本檔不得
-import 任何分支專屬層（app.ads／app.orders／app.intake），那些模組只能單向依賴這裡，
+import 任何分支專屬層（app.orders／app.intake 等），那些模組只能單向依賴這裡，
 不能回頭 import app.main（app/ads/routes.py 等改成 `import app.shared.web as main_mod`
 就是為了斷開這個回頭依賴，呼叫端寫法不變）。
 

@@ -25,3 +25,7 @@ dist-ssr
 
 *storybook.log
 storybook-static
+
+# Playwright（票 shell-04 煙霧測試）：跑測試留下的報告與 trace，不進版控。
+test-results
+playwright-report

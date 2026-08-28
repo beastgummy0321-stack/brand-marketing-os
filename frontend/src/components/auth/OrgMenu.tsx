@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { CopyIconButton } from "@/components/workbench/shared/CopyIconButton";
+import { CopyIconButton } from "@/components/layout/CopyIconButton";
 import { SidePanel } from "@/components/layout/SidePanel";
 import { setOrgId, signOut } from "@/lib/auth";
 import { apiFetch } from "@/lib/http";

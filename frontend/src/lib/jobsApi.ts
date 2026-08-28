@@ -1,7 +1,7 @@
 /** 全站生成進度單一出口 API 型別與呼叫（票 B4-warroom，`.scratch/grill/GRILL-B4-warroom.md`
  * 「全站生成進度單一出口（模組邊界定案）」節）。型別逐字對照契約「假資料形狀」節的
  * `ActiveJob`——聚合對象刻意只有 intake／products／library 三處既有 `JobRegistry`，
- * 不含 `app.ads` 的生成進度（該節「不碰什麼」明講理由），所以 `kind` 沒有任何 campaigns
+ * 不含廣告模組的生成進度（該模組已於外殼切片刪除），所以 `kind` 沒有任何 campaigns
  * 分支的值。 */
 
 import { apiFetch } from "./http";

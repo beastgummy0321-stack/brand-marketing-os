@@ -3,10 +3,9 @@
 圖檔不上傳進系統，使用者自己把生圖工具下載的檔案倒進系統指定的資料夾。本檔只做四件事
 ——算路徑、叫出檔案總管、即時算佔用空間、刪資料夾——DB 一個位元組都不存。
 
-# 2026-08-09 票 04-single-image-e2e 接續：主題有自己的 id 與資料夾短碼了，`theme_dir()`
-# 把 ponytail 原本規劃的第三層接上（<根目錄>/<品牌 id>/<檔期 id>/<主題名_短碼>/）；
-# `open_folder()` 改收 *ids，讓開檔期資料夾／開主題資料夾共用同一個函式，呼叫端多傳一段
-# 路徑即可，不必另外寫一個 open_theme_folder()。已倒好的圖不會自動搬。
+# 外殼切片（2026-08-28）：`cycle_dir()`／`theme_dir()` 隨 `app/ads/` 一起刪掉——檔期與
+# 主題都是廣告模組的概念，沒有呼叫端了。`open_folder()`／`delete_folder()` 仍收 *ids
+# （<根目錄>/<品牌 id>/…），要開第二層再多傳一段路徑即可，不必另外寫一個函式。
 """
 
 from __future__ import annotations
@@ -28,30 +27,18 @@ def get_root(conn=None, *, org_id: str) -> Path:
     """素材資料夾根目錄：設定頁存的值 > 預設 data/creative。
 
     org_id 必填、不給預設值（票 04-0）：本檔（app.core）依 LAYER_ORDER 不得 import
-    app.brand_intelligence 自己拿 brand_id 反查 org_id，呼叫端（app.ads／app.brand_web）
+    app.brand_intelligence 自己拿 brand_id 反查 org_id，呼叫端（app.brand_web 等分支層）
     已經有 brand_id，反查後傳進來。
     """
     raw = (settings.get_setting(conn, SETTING_KEY, org_id=org_id) or "").strip()
     return Path(raw) if raw else DEFAULT_ROOT
 
 
-def cycle_dir(conn, brand_id: str, cycle_id: str, *, org_id: str) -> Path:
-    """這一期檔期的素材資料夾路徑（不保證存在，開資料夾那一步才會建）。"""
-    return _child(get_root(conn, org_id=org_id), brand_id, cycle_id)
-
-
-def theme_dir(conn, brand_id: str, cycle_id: str, theme_folder_name: str, *, org_id: str) -> Path:
-    """單一主題的素材資料夾路徑（不保證存在）。命名＝人話名＋四碼短碼，由呼叫端組好傳進來
-    （票 04-single-image-e2e；決策 0008「人看得懂的名字在前，四碼短碼在後」）。"""
-    return _child(get_root(conn, org_id=org_id), brand_id, cycle_id, theme_folder_name)
-
-
 def open_folder(conn, *ids: str, org_id: str) -> Path:
     """沒有就建，然後叫出檔案總管。os.startfile() 只有 Windows 有，這台就是 Windows
     （決策 0008 指定用它；不為了跨平台包一層抽象）。
 
-    *ids：開檔期資料夾傳 (brand_id, cycle_id)，開主題資料夾多傳一段
-    (brand_id, cycle_id, theme_folder_name)——同一個函式，_child() 本來就吃任意層數。
+    *ids：品牌層傳 (brand_id,)，要更深一層就多傳一段——_child() 本來就吃任意層數。
     """
     path = _child(get_root(conn, org_id=org_id), *ids)
     path.mkdir(parents=True, exist_ok=True)
@@ -72,7 +59,7 @@ def size_mb(path: Path) -> float:
 
 
 def delete_folder(conn, *ids: str, org_id: str) -> str:
-    """刪掉一個素材資料夾（品牌層傳 brand_id；檔期層傳 brand_id, cycle_id）。
+    """刪掉一個素材資料夾（品牌層傳 brand_id；更深的層級多傳一段）。
 
     刪之前一定先確認算出來的路徑真的落在根目錄底下、而且不是根目錄本身。根目錄是使用者
     在設定頁自己填的字串，指到 OneDrive 或磁碟機根目錄都有可能，這道檢查是唯一擋住遞迴

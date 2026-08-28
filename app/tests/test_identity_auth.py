@@ -41,12 +41,8 @@ _MINIMAL_BODIES = {
 #   利用來繞過租戶界線（require_brand 檢查在 provider 合法時一定會跑到）。
 _SWEEP_SKIP: dict[tuple[str, str], str] = {
     ("/api/settings", "GET"): "設定頁全域作用域，slice ④ 才分組織（identity-inventory.md）",
-    ("/api/settings/meta/test-connection", "POST"): "同上，測試連線不落地資料",
-    ("/api/settings/ga4/test-connection", "POST"): "同上，測試連線不落地資料",
     ("/api/settings/api-key/clear-db", "POST"): "同上，設定頁全域作用域",
     ("/api/settings/test-connection", "POST"): "同上，測試連線不落地資料",
-    ("/api/settings/meta-mcp", "GET"): "同上，設定頁全域作用域",
-    ("/api/settings/meta-mcp/page", "POST"): "同上，設定頁全域作用域",
     ("/api/brands/{brand_id}/assets", "POST"): "multipart 檔案上傳，route 內已有 require_actor",
     ("/api/intake/photos", "POST"): "multipart 檔案上傳，route 內已有 require_actor",
     ("/api/brands/{brand_id}/orders/import", "POST"):
@@ -105,7 +101,10 @@ class NoAuthorizationSweepTest(unittest.TestCase):
                     attempts.append((filled, response.status_code))
                 if not passed:
                     failures.append(f"{method} {path} -> {attempts} (body={body})")
-        self.assertGreater(checked, 100, "route sweep looks too small; registration broken?")
+        # 外殼切片（2026-08-28）：`app/ads/` 刪掉後路由總數從 130 降到 99，門檻跟著下修
+        # 到 90（保留一成餘裕）。這個數字守的是「註冊迴圈壞掉、整批路由沒掛上」，不是
+        # 「路由只能增加」；程式碼真的縮小時要跟著改，否則它永遠紅。
+        self.assertGreater(checked, 90, "route sweep looks too small; registration broken?")
         stale_skips = set(_SWEEP_SKIP) - skip_used
         self.assertEqual(stale_skips, set(), f"逃生門清單裡這些已經用不到了，清掉：{stale_skips}")
         self.assertEqual(failures, [], "以下 route 沒有在缺 Authorization 時回 401 信封：\n"

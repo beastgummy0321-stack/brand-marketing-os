@@ -24,10 +24,6 @@ export interface SettingsData {
   model_choices: ModelChoice[];
   current_model: string;
   task_model_thinking_table: TaskModelThinkingRow[];
-  masked_meta_token: string | null;
-  meta_account_id: string;
-  masked_ga4_key: string | null;
-  ga4_property_id: string;
   creative_root: string;
   prompt_header: string;
   intake_budget: number;
@@ -75,22 +71,6 @@ export interface BrandOption {
   brand_name: string;
 }
 
-/** 「連接 Meta 廣告帳戶」卡（票 M1-01，`app/ads/routes_settings.py` `/api/settings/meta-mcp`）：
- * 跟上面既有唯讀 `MetaSection`（成效回讀用金鑰）是完全不同的一組憑證與端點，形狀不共用。 */
-export interface MetaMcpPage {
-  page_id: string;
-  page_name: string;
-}
-
-export interface MetaMcpSettingsData {
-  ok: boolean;
-  account_id?: string;
-  reason?: string;
-  pages?: MetaMcpPage[];
-  pages_error?: string | null;
-  selected_page_id?: string | null;
-}
-
 interface Envelope<T> {
   data: T;
   generated_at: string;
@@ -114,17 +94,6 @@ async function postSettings(path: string, body: Record<string, unknown>): Promis
   if (!res.ok) {
     throw new Error(`儲存失敗（狀態碼 ${res.status}）`);
   }
-}
-
-export function saveMeta(metaAccountId: string, metaToken: string): Promise<void> {
-  return postSettings("meta", { meta_account_id: metaAccountId, meta_token: metaToken });
-}
-
-export function saveGa4(propertyId: string, serviceAccountJson: string): Promise<void> {
-  return postSettings("ga4", {
-    ga4_property_id: propertyId,
-    ga4_service_account_json: serviceAccountJson,
-  });
 }
 
 export function saveApiKey(apiKey: string): Promise<void> {
@@ -153,58 +122,6 @@ export function saveBudget(intakeBudget: number): Promise<void> {
 
 export function saveAiMonthlyCostLimit(limit: number): Promise<void> {
   return postSettings("ai-monthly-cost-limit", { ai_monthly_cost_limit: limit });
-}
-
-export async function fetchMetaMcpStatus(): Promise<MetaMcpSettingsData> {
-  const res = await apiFetch("/api/settings/meta-mcp");
-  if (!res.ok) {
-    throw new Error(`讀取失敗（狀態碼 ${res.status}）`);
-  }
-  const body: Envelope<MetaMcpSettingsData> = await res.json();
-  return body.data;
-}
-
-export async function saveMetaMcpPage(pageId: string): Promise<void> {
-  const res = await apiFetch("/api/settings/meta-mcp/page", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ page_id: pageId }),
-  });
-  if (!res.ok) {
-    let message = `儲存失敗（狀態碼 ${res.status}）`;
-    try {
-      const body = (await res.json()) as { error?: string };
-      if (body.error) message = body.error;
-    } catch {
-      // 回應不是 JSON，用預設訊息。
-    }
-    throw new Error(message);
-  }
-}
-
-export async function fetchStylePreference(brandId: string): Promise<{ text: string }> {
-  const res = await apiFetch(`/api/settings/brands/${encodeURIComponent(brandId)}/style-preference`);
-  if (!res.ok) throw new Error(`風格偏好讀取失敗（狀態碼 ${res.status}）`);
-  return res.json() as Promise<{ text: string }>;
-}
-
-export async function saveStylePreference(brandId: string, text: string): Promise<{ text: string }> {
-  const res = await apiFetch(`/api/settings/brands/${encodeURIComponent(brandId)}/style-preference`, {
-    method: "PUT",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ text }),
-  });
-  if (!res.ok) {
-    let message = `儲存失敗（狀態碼 ${res.status}）`;
-    try {
-      const body = (await res.json()) as { error?: string };
-      if (body.error) message = body.error;
-    } catch {
-      // 回應不是 JSON，用預設訊息。
-    }
-    throw new Error(message);
-  }
-  return res.json() as Promise<{ text: string }>;
 }
 
 /** 品牌選擇器（S15.29）：不新開端點，沿用跨品牌總覽既有回應，只取 brand_id／brand_name

@@ -21,23 +21,6 @@ ACTOR = "測試員"
 TODAY = "2026-08-05"
 
 
-def _insert_cycle(conn, brand_id: str, *, status: str, start_date: str) -> str:
-    """檔期建立走公開函式（create_cycle）需要先備妥產品與單位經濟資料，對本票的
-    「有一期進行中檔期」情境過重；改直接塞一列 campaign_cycle（測試檔豁免跨層 SQL
-    掃描，見 test_architecture_boundaries.py 的 app/tests/ 排除清單）。"""
-    cycle_id = new_id("ccy")
-    ts = now_iso()
-    conn.execute(
-        "INSERT INTO campaign_cycle (id, org_id, brand_id, product_scope_json, objective,"
-        " budget, currency, start_date, end_date, channels_json, status, archived,"
-        " plan_version, phase, created_at, updated_at) VALUES (%s, %s, %s, '[]', 'sales',"
-        " 5000, 'TWD', %s, %s, '[\"meta\"]', %s, false, 0, 'normal', %s, %s)",
-        (cycle_id, coredb.DEV_ORG_ID, brand_id, start_date, start_date, status, ts, ts),
-    )
-    conn.commit()
-    return cycle_id
-
-
 class DashboardOverviewApiTest(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(main.app)
@@ -76,8 +59,6 @@ class DashboardOverviewApiTest(unittest.TestCase):
             source="test", actor=ACTOR)
 
         # 綠燈品牌有一期投放中的檔期
-        self.cycle_id = _insert_cycle(main.conn, self.brand_green["id"],
-                                      status="LIVE", start_date="2026-07-20")
 
     def _card(self, resp_data, brand_id):
         return next(c for c in resp_data if c["brand_id"] == brand_id)
@@ -106,23 +87,18 @@ class DashboardOverviewApiTest(unittest.TestCase):
         self.assertEqual(card["revenue_this_month"], 1200)
         self.assertEqual(card["revenue_mom_pct"], 20.0)
 
-    def test_active_cycle_status_surfaced(self):
+    def test_card_no_longer_carries_a_cycle(self):
+        """外殼切片（2026-08-28）：`active_cycle` 隨 `app/ads/` 一起從卡片契約移除——
+        檔期概念不存在了（票 3 的 migration 也 DROP 掉了 campaign_cycle 表），
+        欄位留著會是永遠 null 的假欄位。"""
         body = self.client.get("/api/dashboard/overview").json()
         card = self._card(body["data"], self.brand_green["id"])
-        self.assertIsNotNone(card["active_cycle"])
-        self.assertEqual(card["active_cycle"]["id"], self.cycle_id)
-        self.assertEqual(card["active_cycle"]["status"], "LIVE")
-        self.assertEqual(card["active_cycle"]["status_label"], "投放中")
-
-    def test_brand_with_no_cycle_has_null_active_cycle(self):
-        body = self.client.get("/api/dashboard/overview").json()
-        card = self._card(body["data"], self.brand_red["id"])
-        self.assertIsNone(card["active_cycle"])
+        self.assertNotIn("active_cycle", card)
 
     def test_next_step_is_none_when_no_guide_card_rule_triggers(self):
         """票 04-guide-card-engine：next_step 接上指南卡引擎的真貨源。brand_green 這裡
         的 LIVE 檔期已經在成效格（stage_label 為 None）、沒有判讀、沒有待確認事實，
-        四條規則都不觸發，next_step 該是 None，不是佔位字串。"""
+        沒有判讀、沒有待確認事實，規則都不觸發，next_step 該是 None，不是佔位字串。"""
         body = self.client.get("/api/dashboard/overview").json()
         card = self._card(body["data"], self.brand_green["id"])
         self.assertIn("next_step", card)
@@ -132,7 +108,7 @@ class DashboardOverviewApiTest(unittest.TestCase):
         """接口鐵則：只讀，不寫任何資料。呼叫兩次前後各資料表『整列內容』不變（不能只比
         COUNT——第 2 輪驗證退回的正是 UPDATE 不增減列數、COUNT 抓不到的死角，見票 02
         second-round review）。"""
-        tables = ["brand", "interrupt", "order_record", "campaign_cycle"]
+        tables = ["brand", "interrupt", "order_record"]
 
         def _snapshot():
             return {t: [dict(r) for r in main.conn.execute(f"SELECT * FROM {t} ORDER BY id")]

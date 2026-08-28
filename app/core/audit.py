@@ -6,11 +6,11 @@
 """
 
 
-from app.core.db import Conn, jsonb, new_id, now_utc
+from app.core.db import Conn, ConnProxy, jsonb, new_id, now_utc
 
 
 def write_audit(
-    conn: Conn,
+    conn: Conn | ConnProxy,
     *,
     org_id: str,
     brand_id: str | None,

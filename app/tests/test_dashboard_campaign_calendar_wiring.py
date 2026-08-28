@@ -1,6 +1,10 @@
 """app/tests/test_dashboard_campaign_calendar_wiring.py — 票 06-campaign-calendar：
 儀表板 API 接上檔期日曆真貨源（純函數邏輯已在 test_campaign_calendar.py 測過，這裡
-只驗證 repository 有把純函數結果組進指南卡與駕駛艙 campaign_stage 欄位）。
+只驗證 repository 有把純函數結果組進跨品牌總覽卡的下一步）。
+
+外殼切片（2026-08-28）：`dashboard_repo.cockpit()` 隨 `app/ads/` 一起刪掉，本檔全部改走
+`overview()`；`campaign_stage` 欄位是駕駛艙專屬、跟著端點一起消失，相關斷言改成驗
+「這張提醒有沒有變成總覽卡的下一步」——同一條資料路徑，只是出口換了一個。
 
 真實檔期日期是外部世界的事實（雙11 就是 11 月 11 日），沒辦法像訂單那樣隨測試
 「今天」調整，所以用 calendar_events 這個測試縫注入合成檔期，維持跟其他隔離測試
@@ -49,42 +53,28 @@ class CampaignCalendarCockpitWiringTest(unittest.TestCase):
         bi_repo.set_brand_switches(main.conn, self.brand["id"], market_region=None,
                                    conversion_goal="purchase", actor=ACTOR)
 
-    def _cockpit(self, events):
-        return dashboard_repo.cockpit(main.conn, self.brand["id"], today=TODAY,
-                                      calendar_events=events)
+    def _next_step(self, events):
+        cards = dashboard_repo.overview(main.conn, org_id=DEV_ORG_ID, today=TODAY,
+                                        calendar_events=events)
+        return next(c for c in cards if c["brand_id"] == self.brand["id"])["next_step"]
 
-    def test_campaign_stage_is_none_without_active_campaign(self):
-        data = self._cockpit([{"id": "far", "name": "遠檔期", "date": "2028-01-01",
-                               "tier": "large"}])
-        self.assertIsNone(data["campaign_stage"])
+    def test_no_reminder_when_event_is_outside_the_window(self):
+        self.assertIsNone(self._next_step([{"id": "far", "name": "遠檔期",
+                                            "date": "2028-01-01", "tier": "large"}]))
 
-    def test_campaign_stage_surfaces_current_stage_label(self):
+    def test_reminder_surfaces_when_event_enters_the_window(self):
         # 2026-08-05 到 2026-11-03 恰好 90 天，剛進大檔提前期窗口的第一天＝遠期備戰
         events = [{"id": "double11", "name": "雙11購物節", "date": "2026-11-03",
                   "tier": "large"}]
-        data = self._cockpit(events)
-        self.assertIsNotNone(data["campaign_stage"])
-        self.assertEqual(data["campaign_stage"]["stage"], "遠期備戰")
-        self.assertEqual(data["campaign_stage"]["name"], "雙11購物節")
-
-    def test_guide_cards_include_campaign_reminder_pointing_to_open_new_cycle(self):
-        events = [{"id": "double11", "name": "雙11購物節", "date": "2026-11-03",
-                  "tier": "large"}]
-        data = self._cockpit(events)
-        titles = " ".join(c["title"] for c in data["guide_cards"])
-        self.assertIn("雙11購物節", titles)
-        card = next(c for c in data["guide_cards"] if "雙11購物節" in c["title"])
-        self.assertEqual(card["action_url"], f"/app/brands/{self.brand['id']}/campaigns/new")
-
-    def test_no_guide_card_when_no_event_in_window(self):
-        data = self._cockpit([{"id": "far", "name": "遠檔期", "date": "2028-01-01",
-                               "tier": "large"}])
-        self.assertEqual(data["guide_cards"], [])
+        step = self._next_step(events)
+        self.assertIsNotNone(step)
+        self.assertIn("雙11購物節", step["title"])
+        self.assertEqual(step["action_url"], f"/app/brands/{self.brand['id']}")
 
 
 class CampaignCalendarIndustryRelevanceWiringTest(unittest.TestCase):
-    """ADR 0014 第一節：brand.industry 一路接到 cockpit 的 campaign_stage／指南卡，
-    業種對不到節日的 applicable_industries 清單就不提醒（完整流程，不只純函數）。"""
+    """ADR 0014 第一節：brand.industry 一路接到指南卡，業種對不到節日的
+    applicable_industries 清單就不提醒（完整流程，不只純函數）。"""
 
     def setUp(self):
         self.brand = bi_repo.create_brand(
@@ -93,36 +83,31 @@ class CampaignCalendarIndustryRelevanceWiringTest(unittest.TestCase):
         bi_repo.set_brand_switches(main.conn, self.brand["id"], market_region=None,
                                    conversion_goal="purchase", actor=ACTOR)
 
-    def _cockpit(self, events):
-        return dashboard_repo.cockpit(main.conn, self.brand["id"], today=TODAY,
-                                      calendar_events=events)
+    def _next_step(self, events):
+        cards = dashboard_repo.overview(main.conn, org_id=DEV_ORG_ID, today=TODAY,
+                                        calendar_events=events)
+        return next(c for c in cards if c["brand_id"] == self.brand["id"])["next_step"]
 
-    def test_irrelevant_industry_suppresses_reminder_and_stage(self):
+    def test_irrelevant_industry_suppresses_reminder(self):
         bi_repo.set_brand_industry(main.conn, self.brand["id"],
                                    industry="food_beverage", actor=ACTOR)
         events = [{"id": "beauty_evt", "name": "美妝檔期", "date": "2026-11-03",
                   "tier": "large", "applicable_industries": ["beauty_personal_care"]}]
-        data = self._cockpit(events)
-        self.assertIsNone(data["campaign_stage"])
-        self.assertEqual(data["guide_cards"], [])
+        self.assertIsNone(self._next_step(events))
 
-    def test_matching_industry_surfaces_reminder_and_stage(self):
+    def test_matching_industry_surfaces_reminder(self):
         bi_repo.set_brand_industry(main.conn, self.brand["id"],
                                    industry="beauty_personal_care", actor=ACTOR)
         events = [{"id": "beauty_evt", "name": "美妝檔期", "date": "2026-11-03",
                   "tier": "large", "applicable_industries": ["beauty_personal_care"]}]
-        data = self._cockpit(events)
-        self.assertIsNotNone(data["campaign_stage"])
-        self.assertEqual(data["campaign_stage"]["name"], "美妝檔期")
-        titles = " ".join(c["title"] for c in data["guide_cards"])
-        self.assertIn("美妝檔期", titles)
+        self.assertIn("美妝檔期", self._next_step(events)["title"])
 
     def test_all_tagged_event_ignores_brand_industry(self):
         """業種沒設定（None），節日標 all 一樣要提醒——不能因為業種未知就整批不提醒。"""
         events = [{"id": "double11", "name": "雙11購物節", "date": "2026-11-03",
                   "tier": "large", "applicable_industries": "all"}]
-        data = self._cockpit(events)  # 未呼叫 set_brand_industry，industry 仍是 None
-        self.assertIsNotNone(data["campaign_stage"])
+        # 未呼叫 set_brand_industry，industry 仍是 None
+        self.assertIn("雙11購物節", self._next_step(events)["title"])
 
     def test_set_brand_industry_rejects_unknown_value(self):
         with self.assertRaises(ValueError):
@@ -147,49 +132,45 @@ class CampaignSkipRecordWiringTest(unittest.TestCase):
                         "tier": "small"}]
         self.today = "2027-01-20"
 
-    def _cockpit(self):
-        return dashboard_repo.cockpit(main.conn, self.brand["id"], today=self.today,
-                                      calendar_events=self.events)
+    def _title(self):
+        cards = dashboard_repo.overview(main.conn, org_id=DEV_ORG_ID, today=self.today,
+                                        calendar_events=self.events)
+        step = next(c for c in cards if c["brand_id"] == self.brand["id"])["next_step"]
+        return step["title"] if step else ""
 
     def test_reminder_still_triggers_and_carries_last_year_reason(self):
         core_campaign_skip.record_skip(main.conn, self.brand["id"], "cny", 2026,
                                        reason="收假太晚，沒空間做素材", org_id=DEV_ORG_ID)
-        data = self._cockpit()
-        titles = " ".join(c["title"] for c in data["guide_cards"])
-        self.assertIn("農曆新年", titles, "去年跳過不代表明年不提醒")
-        self.assertIn("收假太晚，沒空間做素材", titles)
+        title = self._title()
+        self.assertIn("農曆新年", title, "去年跳過不代表明年不提醒")
+        self.assertIn("收假太晚，沒空間做素材", title)
 
     def test_no_skip_record_means_no_note(self):
-        data = self._cockpit()
-        titles = " ".join(c["title"] for c in data["guide_cards"])
-        self.assertIn("農曆新年", titles)
-        self.assertNotIn("跳過", titles)
+        title = self._title()
+        self.assertIn("農曆新年", title)
+        self.assertNotIn("跳過", title)
 
     def test_skip_recorded_for_a_different_holiday_does_not_leak_in(self):
         core_campaign_skip.record_skip(main.conn, self.brand["id"], "double11", 2026,
                                        reason="不相干的理由", org_id=DEV_ORG_ID)
-        data = self._cockpit()
-        titles = " ".join(c["title"] for c in data["guide_cards"])
-        self.assertNotIn("不相干的理由", titles)
+        self.assertNotIn("不相干的理由", self._title())
 
-    def test_skip_reason_does_not_change_next_cycle_recommendation_facts(self):
-        """驗收清單：跳過紀錄不寫入、不影響下期建議引擎的任何計算——這裡驗證同一份
-        guide_card facts 裡除了 campaign_reminder 本身多出脈絡欄位外，其餘欄位
-        （含跟下期建議相關的 active_cycle／next_cycle_draft_ready）完全不受影響。"""
-        before = dashboard_repo._guide_card_facts(main.conn, self.brand["id"], None,
+    def test_skip_reason_only_touches_the_reminder_fact(self):
+        """驗收清單：跳過紀錄不寫入、不影響其他任何計算——這裡驗證同一份 guide_card
+        facts 裡除了 campaign_reminder 本身多出脈絡欄位外，其餘欄位完全不受影響。"""
+        before = dashboard_repo._guide_card_facts(main.conn, self.brand["id"],
                                                    self.today, self.events)
         core_campaign_skip.record_skip(main.conn, self.brand["id"], "cny", 2026,
                                        reason="收假太晚", org_id=DEV_ORG_ID)
-        after = dashboard_repo._guide_card_facts(main.conn, self.brand["id"], None,
+        after = dashboard_repo._guide_card_facts(main.conn, self.brand["id"],
                                                   self.today, self.events)
-        for key in ("active_cycle", "reading_ready", "next_cycle_draft_ready",
-                    "pending_facts_count", "conversion_goal", "pacing_alert"):
+        for key in ("pending_facts_count", "conversion_goal", "intake_draft"):
             self.assertEqual(before[key], after[key], f"{key} 不該被跳過紀錄影響")
 
 
 class CalendarDismissWiringTest(unittest.TestCase):
     """票 02-permanent-dismiss-category（ADR 0014 第二節）：品牌永久關閉某節日類別後，
-    cockpit 的 campaign_stage／指南卡都不再提醒；重新開啟後恢復（完整流程，不只純函數）。"""
+    指南卡不再提醒；重新開啟後恢復（完整流程，不只純函數）。"""
 
     def setUp(self):
         self.brand = bi_repo.create_brand(
@@ -200,31 +181,24 @@ class CalendarDismissWiringTest(unittest.TestCase):
         self.events = [{"id": "cny_2026", "name": "農曆新年", "date": "2026-11-03",
                         "tier": "large", "applicable_industries": "all"}]
 
-    def _cockpit(self):
-        return dashboard_repo.cockpit(main.conn, self.brand["id"], today=TODAY,
-                                      calendar_events=self.events)
+    def _title(self):
+        cards = dashboard_repo.overview(main.conn, org_id=DEV_ORG_ID, today=TODAY,
+                                        calendar_events=self.events)
+        step = next(c for c in cards if c["brand_id"] == self.brand["id"])["next_step"]
+        return step["title"] if step else ""
 
-    def test_dismissed_category_suppresses_stage_and_guide_card(self):
+    def test_dismissed_category_suppresses_guide_card(self):
         core_calendar_dismiss.dismiss(main.conn, self.brand["id"], "cny", org_id=DEV_ORG_ID)
-        data = self._cockpit()
-        self.assertIsNone(data["campaign_stage"])
-        titles = " ".join(c["title"] for c in data["guide_cards"])
-        self.assertNotIn("農曆新年", titles)
+        self.assertNotIn("農曆新年", self._title())
 
-    def test_undismissed_category_restores_stage_and_guide_card(self):
+    def test_undismissed_category_restores_guide_card(self):
         core_calendar_dismiss.dismiss(main.conn, self.brand["id"], "cny", org_id=DEV_ORG_ID)
         core_calendar_dismiss.undismiss(main.conn, self.brand["id"], "cny")
-        data = self._cockpit()
-        self.assertIsNotNone(data["campaign_stage"])
-        self.assertEqual(data["campaign_stage"]["name"], "農曆新年")
-        titles = " ".join(c["title"] for c in data["guide_cards"])
-        self.assertIn("農曆新年", titles)
+        self.assertIn("農曆新年", self._title())
 
     def test_dismissing_unrelated_category_does_not_leak_in(self):
         core_calendar_dismiss.dismiss(main.conn, self.brand["id"], "double11", org_id=DEV_ORG_ID)
-        data = self._cockpit()
-        self.assertIsNotNone(data["campaign_stage"])
-        self.assertEqual(data["campaign_stage"]["name"], "農曆新年")
+        self.assertIn("農曆新年", self._title())
 
 
 class CampaignCalendarOverviewWiringTest(unittest.TestCase):

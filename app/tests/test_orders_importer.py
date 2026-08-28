@@ -113,16 +113,17 @@ class SniffFileKindTest(unittest.TestCase):
         self.assertEqual(importer.sniff_file_kind("Export_Orders.xlsx", EASYSTORE_HEADERS),
                          "easystore_orders")
 
-    def test_meta_headers_detected(self):
+    def test_meta_headers_are_no_longer_a_known_kind(self):
+        """外殼切片（2026-08-28）：Meta 成效 CSV 那條匯入路徑隨 `app/ads/` 一起刪掉，
+        拖進來只會誠實回 unknown，不假裝認得。"""
         meta_headers = ["Reporting starts", "Reporting ends", "Campaign name", "Amount spent (TWD)"]
-        self.assertTrue(importer.looks_like_meta_ads_csv(meta_headers))
-        self.assertEqual(importer.sniff_file_kind("meta_export.csv", meta_headers), "meta_ads_csv")
+        self.assertEqual(importer.sniff_file_kind("meta_export.csv", meta_headers), "unknown")
 
     def test_unrecognised_headers_are_unknown(self):
         self.assertEqual(importer.sniff_file_kind("mystery.csv", ["foo", "bar"]), "unknown")
 
     def test_reuses_two_phase_match_columns_algorithm(self):
-        """分派層只加別名表，兩階段比對演算法是同一份（app.ads.performance.match_columns）：
+        """分派層只加別名表，兩階段比對演算法是同一份（app.shared.csv_columns.match_columns）：
         「成果」類前綴截胡的既有防線（issue #23 bug 1）套用同一組規則也該對訂單欄位生效。"""
         mapping, unmatched = importer.match_order_columns(EASYSTORE_HEADERS)
         self.assertEqual(mapping["order_number"], "Order Number")

@@ -5,7 +5,7 @@
 但畫面上的按鈕會靜默 404**（code review 2026-08-06 發現的缺口，階段 4 全站遷移會
 大量改動舊路由，屆時這個缺口就是真的斷鏈）。
 
-這支的做法：用真的品牌＋真的檔期把每條規則各觸發一次，拿它產出的 action_url
+這支的做法：用真的品牌把每條規則各觸發一次，拿它產出的 action_url
 **實際打一次**，只要回 404 就讓測試紅。這樣「路由改名」跟「規則寫錯網址」都擋得住。
 
 CASES 必須涵蓋 guide_cards.RULES 的每一條（test_every_rule_has_a_link_case 把關）
@@ -24,35 +24,10 @@ from fastapi.testclient import TestClient  # noqa: E402
 import app.main as main  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
 from app.core import db as coredb  # noqa: E402
-from app.core.db import new_id, now_utc  # noqa: E402
 from app.dashboard import guide_cards  # noqa: E402
 from app.intake import state as intake_state  # noqa: E402
 
 ACTOR = "測試員"
-
-
-def _insert_cycle(conn, brand_id: str) -> str:
-    """比照 test_dashboard_guide_cards_wiring.py 直接塞一列（測試檔豁免跨層 SQL 掃描）。
-
-    比那邊多塞一個 derived_plan_json：期長／日預算是從這欄解出來的
-    （app/ads/routes_common.py `_cycle_view`），檔期頁面拿它排版。真實檔期一律經由
-    `create_cycle` 建立、這欄必定有值，所以測試資料也要有——否則測到的是「頁面能不能
-    扛住不可能出現的殘缺資料」，不是這支要測的連結完整性。
-    """
-    cycle_id = new_id("ccy")
-    ts = now_utc()
-    conn.execute(
-        "INSERT INTO campaign_cycle (id, org_id, brand_id, product_scope_json, objective,"
-        " budget, currency, start_date, end_date, channels_json, status, archived,"
-        " plan_version, phase, derived_plan_json, created_at, updated_at) VALUES"
-        " (%s, %s, %s, '[]', 'sales', 5000, 'TWD', '2026-07-20', '2026-08-20',"
-        " '[\"meta\"]', 'LIVE', false, 0, 'normal', %s, %s, %s)",
-        (cycle_id, coredb.DEV_ORG_ID, brand_id, coredb.jsonb(
-            {"duration_days": 14, "daily_budget": 357.14, "daily_stop_loss": 714.28,
-             "pause_threshold_spend": 2500, "daily_below_floor": False}), ts, ts),
-    )
-    conn.commit()
-    return cycle_id
 
 
 class GuideCardLinksResolveTest(unittest.TestCase):
@@ -69,7 +44,6 @@ class GuideCardLinksResolveTest(unittest.TestCase):
                 main.conn, name="虛構連結檢查花坊", client_name=None, actor=ACTOR,
                     org_id=coredb.DEV_ORG_ID)
             cls.brand_id = brand["id"]
-            cls.cycle_id = _insert_cycle(main.conn, cls.brand_id)
             # 票 B3-intake：intake_in_progress 的網址要真的能接到一份進行中草稿，不能只是
             # 拼字串——真的開一份草稿，用它算出來的 resume_path 當這條規則的測試網址。
             draft = intake_state.new_draft(
@@ -83,29 +57,16 @@ class GuideCardLinksResolveTest(unittest.TestCase):
             "brand_id": self.brand_id,
             "conversion_goal": "purchase",
             "pending_facts_count": 0,
-            "active_cycle": None,
-            "reading_ready": False,
-            "next_cycle_draft_ready": False,
             "campaign_reminder": None,
-            "pacing_alert": None,
+            "intake_draft": None,
         }
         base.update(overrides)
         return base
 
     def _cases(self) -> dict:
         """規則 id → 能觸發該規則的 facts。每條規則各一組（有些規則互斥，不能共用一份）。"""
-        cycle = {"id": self.cycle_id, "stage_label": "素材"}
         return {
             "conversion_goal_missing": self._facts(conversion_goal=None),
-            # action_url 為 None 時走 fallback，這裡刻意不給，測的是 fallback 那條網址
-            "pacing_alert": self._facts(
-                pacing_alert={"kind": "overspend", "action_url": None}),
-            "reading_unread": self._facts(
-                active_cycle={"id": self.cycle_id, "stage_label": None}, reading_ready=True),
-            "next_cycle_draft": self._facts(
-                active_cycle={"id": self.cycle_id, "stage_label": None},
-                next_cycle_draft_ready=True),
-            "cycle_stage": self._facts(active_cycle=cycle),
             "pending_facts": self._facts(pending_facts_count=3),
             "campaign_calendar": self._facts(campaign_reminder={
                 "id": "cny_2026", "name": "農曆新年", "days_until": 28,

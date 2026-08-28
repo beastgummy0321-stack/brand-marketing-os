@@ -7,11 +7,10 @@ brand`／`list_rules_for_product` 只挑 `status = 'active'`），但不刪除�
 使用者到累積智慧頁一鍵「延續」（`repository.reconfirm_rule`）即可恢復生效，不必重新輸入內容。
 
 門檻期數讀 `app.core.rule_cards` 的 `rule_expiry.reconfirm_cycles`（分品牌，不寫死成常數，
-settings-hub/01 已把 rule_cards 機制擴充成分品牌）。「期」換算天數比照 `app.ads.budget.
-DEFAULT_DURATION_DAYS`（檔期預設 14 天）——這裡不直接 import `app.ads`：A1 三層地界只准
-依賴排在自己前面的層（`test_architecture_boundaries.py` LAYER_ORDER），`app.ads` 排在
-`app.brand_intelligence` 之後，反向 import 會被機器閘門擋下。改用本地常數並註明對應關係，
-兩處數字若有一天要拆開也各自獨立，不必共用。
+settings-hub/01 已把 rule_cards 機制擴充成分品牌）。「期」換算天數用本地常數
+`CYCLE_DAYS_APPROX`（14 天）——原本比照已刪除的廣告模組檔期預設天數，兩處數字本來就
+各自獨立、刻意不共用（A1 三層地界只准依賴排在自己前面的層，反向 import 會被機器閘門
+擋下）。
 
 sweep_expired_rules() 比照 `app/core/interrupts.py` 的 `_archive_stale_informational`：
 系統自動的 housekeeping 轉態，不寫 audit_log（沒有人類 actor，audit_log.actor 為必填）、
@@ -33,7 +32,7 @@ from app.core.rule_cards import get_value
 CARD_KEY = "rule_expiry"
 FIELD_KEY = "reconfirm_cycles"
 
-# 比照 app.ads.budget.DEFAULT_DURATION_DAYS（檔期預設天數）；不直接 import 避免跨層依賴。
+# 檔期預設天數的近似值（原本比照已刪除的 app/ads 常數，現在是本模組自己的數字）。
 CYCLE_DAYS_APPROX = 14
 
 

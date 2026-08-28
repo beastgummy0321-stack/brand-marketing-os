@@ -4,7 +4,10 @@ import { cn, PRESS_FEEDBACK } from "@/lib/utils";
 
 type CopyState = "idle" | "copying" | "copied" | "failed";
 
-/** 複製按鈕三態（票 17 共用元件之一，跨畫面 3／4／5 側板重用）：`getText()` 先把要複製的
+/** 複製按鈕三態（票 17 共用元件之一）：外殼切片（2026-08-28）從
+ * `components/workbench/shared/` 搬到 `components/layout/`——素材工作檯整個刪掉了，
+ * 但這顆按鈕的最後一個呼叫端（`components/auth/OrgMenu.tsx` 的邀請連結）還在。
+ * `getText()` 先把要複製的
  * 內容準備好（逐則複製直接回傳已在記憶體裡的內容；整組複製要先打 API 組內容，見
  * ThemePanel 的用法），拿到內容才呼叫 `navigator.clipboard.writeText()`，await resolve
  * 才顯示 ✓，reject 顯示錯誤態＋「請手動選取複製」提示——不樂觀更新（規範鐵則）。 */

@@ -12,8 +12,8 @@ from fastapi.testclient import TestClient
 
 import app.main as main
 import app.shared.web as web
-from app.ads import routes_settings as ads_routes_settings
 from app.brand_intelligence import repository as bi_repo
+from app.brand_web import routes_brand_settings
 from app.core import rule_cards
 from app.core.db import DEV_ORG_ID  # noqa: E402
 
@@ -106,7 +106,7 @@ class RuleCardsApiTest(unittest.TestCase):
     def test_old_html_route_still_works_after_extraction(self):
         """驗證 _validate_card_fields() 的抽函式重構沒有改變 HTML 表單路由行為（純搬家）。"""
         # HTML 表單路由送進來的是字串，驗證與寫入都走抽出來的共用函式（純搬家的那一份）
-        parsed, field_errors = ads_routes_settings._validate_card_fields(
+        parsed, field_errors = routes_brand_settings._validate_card_fields(
             "pacing", {"deviation_threshold_ratio": "0.3"})
         self.assertEqual(field_errors, {})
         for field_key, value in parsed.items():

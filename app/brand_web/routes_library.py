@@ -323,7 +323,7 @@ async def channel_delete_api(request: Request, brand_id: str, channel_id: str):
 # 跟 app/ads/routes.py 的等待頁背景引擎（_progress_state 等）不同的地方：那套是給
 # 「同一個 key（brand+cycle）F5 重整也不該重複觸發」的冪等閘 + meta-refresh 等待頁；
 # 這裡每次貼入都是一筆新內容、天生不重複，job_key 用 new_id() 現生一個就夠，
-# 不需要冪等閘與逾時清除那一整套，前端也是輪詢 JSON 而不是等待頁。不 import app.ads
+# 不需要冪等閘與逾時清除那一整套，前端也是輪詢 JSON 而不是等待頁。
 # （票要求：在 brand_intelligence 內重實作，不跨層依賴廣告分支）。
 # ---------------------------------------------------------------------------
 

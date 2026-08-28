@@ -111,12 +111,14 @@ class RouteTableTenantTest(unittest.TestCase):
                 )
                 if not passed:
                     failures.append(f"{method} {path_template} -> {attempts}")
-        # 03-1 r1 §5：門檻從 100 提高到 200（沿用既有 brand_id sweep 的規模），另外直接斷言
+        # 03-1 r1 §5：門檻原本 200（沿用既有 brand_id sweep 的規模）。外殼切片
+        # （2026-08-28）刪掉 `app/ads/` 後帶路徑參數的路由從 250 降到 90，門檻下修到 80
+        # （保留一成餘裕）——這個數字守的是「註冊迴圈壞掉」，不是「路由只能增加」。另外直接斷言
         # 「有 route 是走非 brand_id 分支」——這才是真的驗到擴大範圍生效，而不是單純
         # 依賴一個總數門檻（總數門檻對「擴大範圍那段程式碼被誤刪」不敏感，因為
         # brand_id 路由本身數量就遠超過舊門檻）。
         self.assertGreater(
-            checked, 200, "path-param route sweep looks too small; registration broken?"
+            checked, 80, "path-param route sweep looks too small; registration broken?"
         )
         self.assertGreaterEqual(
             checked_non_brand, 1,

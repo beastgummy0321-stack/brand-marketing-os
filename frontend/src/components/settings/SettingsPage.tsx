@@ -6,15 +6,10 @@ import type { SettingsData } from "@/lib/settingsApi";
 import { fetchSettings } from "@/lib/settingsApi";
 import { ApiKeySection } from "./ApiKeySection";
 import { AssetsSection } from "./AssetsSection";
-import { Ga4Section } from "./Ga4Section";
-import { MetaSection } from "./MetaSection";
-import { MetaMcpSection } from "./MetaMcpSection";
 import { ModelSection } from "./ModelSection";
 import { AutonomySection } from "./AutonomySection";
 import { CalendarSection } from "./CalendarSection";
 import { RuleCardsSection } from "./RuleCardsSection";
-import { TrackingHealthEntrySection } from "./TrackingHealthEntrySection";
-import { StylePreferenceSection } from "./StylePreferenceSection";
 
 type LoadState =
   | { status: "loading" }
@@ -68,15 +63,10 @@ export function SettingsPage() {
     const { data } = state;
     content = (
       <div className="flex flex-col gap-5">
-        <MetaSection data={data} onSaved={load} />
-        <MetaMcpSection />
-        <Ga4Section data={data} onSaved={load} />
         <ApiKeySection data={data} onSaved={load} />
         <ModelSection data={data} onSaved={load} />
         <AssetsSection data={data} onSaved={load} />
         <AutonomySection />
-        <TrackingHealthEntrySection />
-        <StylePreferenceSection />
         <RuleCardsSection />
         <CalendarSection />
       </div>

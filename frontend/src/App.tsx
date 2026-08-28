@@ -5,10 +5,6 @@ import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { EmptyState } from "@/components/layout/EmptyState";
 import { AcceptInvitePage } from "@/components/auth/AcceptInvitePage";
 import { LoginPage } from "@/components/auth/LoginPage";
-import { CampaignListPage } from "@/components/campaigns/CampaignListPage";
-import { ClaimsPage } from "@/components/campaigns/ClaimsPage";
-import { DataOnboardingPage } from "@/components/onboarding/DataOnboardingPage";
-import { LearningsPage } from "@/components/campaigns/LearningsPage";
 import { CockpitPage } from "@/components/cockpit/CockpitPage";
 import { IntakeWizard } from "@/components/intake/IntakeWizard";
 import { InboxPage } from "@/components/inbox/InboxPage";
@@ -19,11 +15,6 @@ import { ProductListPage } from "@/components/products/ProductListPage";
 import { BrandReportPage } from "@/components/report/BrandReportPage";
 import { OrdersPage } from "@/components/orders/OrdersPage";
 import { SettingsPage } from "@/components/settings/SettingsPage";
-import { TrackingHealthPage } from "@/components/tracking/TrackingHealthPage";
-import { TrackingSetupPage } from "@/components/tracking/TrackingSetupPage";
-import { WarroomPage } from "@/components/warroom/WarroomPage";
-import { MatrixPage } from "@/components/workbench/MatrixPage";
-import { WorkbenchPage } from "@/components/workbench/WorkbenchPage";
 import { fetchOverview, type DashboardBrandCard } from "@/lib/api";
 import { useSession } from "@/lib/auth";
 import { takePendingPath } from "@/lib/http";
@@ -33,9 +24,11 @@ import { takePendingPath } from "@/lib/http";
  * production 的 `/app` StaticFiles 掛載已加子路徑 catch-all（app/main.py），子路徑
  * 直接整理／分享網址不會 404，React Router 接手決定畫面。
  *
- * 21 支廣告頁重建會在 `/brands/:brandId` 之下疊檔期、步驟這些更深層級——現在只有
- * 一顆元件掛在這個路徑，之後要加子路徑（如 `/brands/:brandId/cycles/:cycleId`）
- * 直接在 `<Routes>` 裡加同層或巢狀 `<Route>` 即可，不必重構這裡的結構。
+ * 外殼切片（2026-08-28）：10 支相依於 `app/ads/` 的路由（檔期清單／作戰室／素材工作檯／
+ * 矩陣／宣稱／累積智慧／追蹤健檢／安裝精靈／資料上手）連同頁面元件一起刪掉，**不做轉址**
+ * ——轉址會讓一支死掉的頁面看起來還活著（HANDOFF-shell-slice.md §3.7）。它們之後由外殼的
+ * 兩支新頁面（工單流＋儀表板）取代；要加子路徑直接在 `<Routes>` 裡加同層或巢狀
+ * `<Route>` 即可，不必重構這裡的結構。
  *
  * 舊書籤 `?brand=<id>` 仍要能用：根路徑先看查詢字串，有就轉去新網址（見 RootRoute）。 */
 function App() {
@@ -54,16 +47,6 @@ function App() {
         <Route path="/brands/:brandId/products" element={<ProductListRoute />} />
         <Route path="/brands/:brandId/products/:productId" element={<ProductDetailRoute />} />
         <Route path="/brands/:brandId/orders" element={<OrdersRoute />} />
-        <Route path="/brands/:brandId/campaigns" element={<CampaignListRoute />} />
-        <Route path="/brands/:brandId/ads-claims" element={<ClaimsRoute />} />
-        <Route path="/brands/:brandId/data-onboarding" element={<DataOnboardingRoute />} />
-        <Route path="/brands/:brandId/learnings" element={<LearningsRoute />} />
-        <Route path="/brands/:brandId/campaigns/new" element={<WarroomNewRoute />} />
-        <Route path="/brands/:brandId/campaigns/:cycleId" element={<WarroomRoute />} />
-        <Route path="/brands/:brandId/workbench" element={<WorkbenchRoute />} />
-        <Route path="/brands/:brandId/workbench/:cycleId" element={<MatrixRoute />} />
-        <Route path="/brands/:brandId/tracking" element={<TrackingHealthRoute />} />
-        <Route path="/brands/:brandId/tracking/setup" element={<TrackingSetupRoute />} />
         <Route path="/brands/:brandId/report" element={<BrandReportRoute />} />
       </Route>
     </Routes>
@@ -207,105 +190,6 @@ function OrdersRoute() {
   return (
     <AppShell brandId={brandId ?? null}>
       <OrdersPage brandId={brandId ?? ""} />
-    </AppShell>
-  );
-}
-
-/** 檔期清單（S7，票 B4-campaigns）：搬家舊版 `ads_home`／`ads_history`／`ads_interview`
- * 三頁合一，見 `.scratch/grill/GRILL-B4-campaigns.md`。 */
-function CampaignListRoute() {
-  const { brandId } = useParams<{ brandId: string }>();
-  return (
-    <AppShell brandId={brandId ?? null}>
-      <CampaignListPage brandId={brandId ?? ""} />
-    </AppShell>
-  );
-}
-
-function ClaimsRoute() {
-  const { brandId } = useParams<{ brandId: string }>();
-  return (
-    <AppShell brandId={brandId ?? null}>
-      <ClaimsPage brandId={brandId ?? ""} />
-    </AppShell>
-  );
-}
-
-function DataOnboardingRoute() {
-  const { brandId } = useParams<{ brandId: string }>();
-  return (
-    <AppShell brandId={brandId ?? null}>
-      <DataOnboardingPage brandId={brandId ?? ""} />
-    </AppShell>
-  );
-}
-
-function LearningsRoute() {
-  const { brandId } = useParams<{ brandId: string }>();
-  return (
-    <AppShell brandId={brandId ?? null}>
-      <LearningsPage brandId={brandId ?? ""} />
-    </AppShell>
-  );
-}
-
-/** S8 檔期作戰室：開新檔期（票 B4-warroom）。 */
-function WarroomNewRoute() {
-  const { brandId } = useParams<{ brandId: string }>();
-  const [params] = useSearchParams();
-  return (
-    <AppShell brandId={brandId ?? null}>
-      <WarroomPage brandId={brandId ?? ""} cycleId={null} fromCycle={params.get("from_cycle")} />
-    </AppShell>
-  );
-}
-
-/** S8 檔期作戰室：既有檔期（票 B4-warroom）。 */
-function WarroomRoute() {
-  const { brandId, cycleId } = useParams<{ brandId: string; cycleId: string }>();
-  return (
-    <AppShell brandId={brandId ?? null}>
-      <WarroomPage brandId={brandId ?? ""} cycleId={cycleId ?? ""} />
-    </AppShell>
-  );
-}
-
-/** 素材工作檯入口（畫面1，票 15-workbench-entry）。 */
-function WorkbenchRoute() {
-  const { brandId } = useParams<{ brandId: string }>();
-  return (
-    <AppShell brandId={brandId ?? null}>
-      <WorkbenchPage brandId={brandId ?? ""} />
-    </AppShell>
-  );
-}
-
-/** 矩陣頁（畫面2）路由殼：本票只接路由，內容留給票 16-matrix-page。 */
-function MatrixRoute() {
-  const { brandId, cycleId } = useParams<{ brandId: string; cycleId: string }>();
-  return (
-    <AppShell brandId={brandId ?? null}>
-      <MatrixPage brandId={brandId ?? ""} cycleId={cycleId ?? ""} />
-    </AppShell>
-  );
-}
-
-/** T0 追蹤健檢總覽（票 T0-tracking-health）。 */
-function TrackingHealthRoute() {
-  const { brandId } = useParams<{ brandId: string }>();
-  return (
-    <AppShell brandId={brandId ?? null}>
-      <TrackingHealthPage brandId={brandId ?? ""} />
-    </AppShell>
-  );
-}
-
-/** T0 安裝精靈（官網追蹤，票 T0-tracking-health）。 */
-function TrackingSetupRoute() {
-  const { brandId } = useParams<{ brandId: string }>();
-  return (
-    <AppShell brandId={brandId ?? null}>
-      <TrackingSetupPage brandId={brandId ?? ""} />
     </AppShell>
   );
 }

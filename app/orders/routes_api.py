@@ -19,15 +19,6 @@ def _bad_request(message: str) -> JSONResponse:
     return JSONResponse({"detail": message}, status_code=400)
 
 
-def _late_rerun_note(late_reruns: list) -> str:
-    if not late_reruns:
-        return ""
-    reversed_count = sum(1 for rerun in late_reruns if rerun["shift"] == "reversal")
-    if reversed_count:
-        return f" 有 {reversed_count} 期因此重判翻盤，已排進收件匣。"
-    return f" 有 {len(late_reruns)} 期因此自動重判過一次。"
-
-
 @router.get("/brands/{brand_id}/orders")
 async def orders(request: Request, brand_id: str, page: int = Query(default=1, ge=1)):
     """回傳單一品牌的訂單統計與固定大小的一頁訂單清單。"""
@@ -111,20 +102,11 @@ async def import_orders(request: Request, brand_id: str, drop_file: UploadFile =
             f"匯入 {imported.orders_imported} 筆新訂單、更新 {imported.orders_updated} 筆、"
             f"{imported.items_imported} 個商品品項。"
         )
-        return {"ok": True, "message": message + _late_rerun_note(result.late_reruns)}
-    if result.kind == "shopee_report":
-        if result.errors:
-            return _bad_request(result.errors[0])
-        imported = result.shopee_result
-        return {"ok": True, "message": f"匯入 {imported.imported} 筆新蝦皮訂單、更新 {imported.updated} 筆。"}
-
-    message = f"匯入 {result.ads_imported} 筆廣告成效資料到對應檔期。"
-    if result.ads_quarantined:
-        message += f"其中 {result.ads_quarantined} 筆數字不合理，先擱在一旁不列入計算。"
-    message += _late_rerun_note(result.late_reruns)
+        return {"ok": True, "message": message}
     if result.errors:
-        return {"ok": True, "message": message + result.errors[0]}
-    return {"ok": True, "message": message}
+        return _bad_request(result.errors[0])
+    imported = result.shopee_result
+    return {"ok": True, "message": f"匯入 {imported.imported} 筆新蝦皮訂單、更新 {imported.updated} 筆。"}
 
 
 @router.post("/brands/{brand_id}/orders/sku-cost")

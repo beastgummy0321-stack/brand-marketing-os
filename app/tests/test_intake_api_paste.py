@@ -17,7 +17,6 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 import app.main as main  # noqa: E402
 import app.shared.web as web  # noqa: E402
-from app.ads import creative as ads_creative  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
 from app.core import interrupts as core_interrupts  # noqa: E402
 from app.intake import ai as intake_ai  # noqa: E402
@@ -358,9 +357,6 @@ class ReviewTest(_Base):
         self.assertEqual(voices[0]["raw_text"], quote)
         self.assertEqual(voices[0]["source_detail"], "虛構 Dcard 討論串")
         self.assertEqual(voices[0]["extraction"][0]["task_layer"], "functional")
-        prompt_block, available = ads_creative._customer_voice_block(web.conn, bid)
-        self.assertTrue(available)
-        self.assertIn(quote, prompt_block)
         row = web.conn.execute(
             "SELECT target_table FROM intake_item WHERE brand_id = %s AND row_no = 1", (bid,)
         ).fetchone()

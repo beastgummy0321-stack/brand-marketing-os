@@ -11,11 +11,10 @@
 拆完後 app/ads、app/orders、app/intake 一律改 import `app.shared.web`，不再 import
 本檔，main → ads.routes → main 的循環自然消失（見 test_no_branch_imports_app_main）。
 
-**例外**（刻意留在這裡，未搬進 brand_intelligence/routes.py，行數因此超過 100 行）：
-首頁「今天要處理的事」（`_today_todos`／`/` 首頁）與 AI／Meta／GA4 設定頁——這兩處
-直接碰 `app.ads`（讀廣告到期提醒；讀寫 Meta／GA4 連線設定），而 A2 落地的 import
-掃描測試（test_architecture_boundaries.py）目前只允許 `app/main.py` 這個路徑 import
-分支專屬層，本票不得為了搬移方便去修改那份既有測試。詳見票 A4 回報「Remaining risks」。
+**外殼切片（2026-08-28）**：`app/ads/` 刪掉之後，本檔原本的兩處「例外」（首頁
+`_today_todos` 的廣告到期提醒、Meta／GA4 連線設定頁）一併消失——AI 金鑰／模型／
+花費上限那批設定端點留下，它們不碰任何分支專屬層。自動同步排程（每四小時抓 Meta
+成效、每週判讀）也隨之退場。
 
 ADR 0027 起：連線不再全程共用一條，改成每個 request／背景工作跟連線池借一條
 （`app.core.db.connection()`，見本檔最外層那道 HTTP middleware）；`app.shared.web.conn`
@@ -28,10 +27,8 @@ ADR 0027 起：連線不再全程共用一條，改成每個 request／背景工
 
 import os
 import sys
-import threading
-import time
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 
 from fastapi import FastAPI, Request
@@ -87,13 +84,6 @@ def _load_dotenv() -> int:
 
 _load_dotenv()
 
-from app.ads import auto_sync as ads_auto_sync  # noqa: E402
-from app.ads import (
-    ga4_api,  # noqa: E402  # 只用於設定頁測試連線，見「例外」說明
-    ga4_sync,  # noqa: E402
-    meta_api,  # noqa: E402
-)
-from app.ads import sync as ads_sync  # noqa: E402
 from app.core import creative_assets as corecreative
 from app.core import db as coredb
 from app.core import retention as core_retention
@@ -105,7 +95,6 @@ from app.shared import web
 from app.shared.web import (
     MODEL_CHOICES,
     _num_str,
-    _with_brand_names,
     clean,
     parse_number,
 )
@@ -125,64 +114,6 @@ def _purge_expired_llm_task_content_if_new_day() -> None:
     if today != _last_retention_check:
         core_retention.purge_expired_llm_task_content(web.conn)
         _last_retention_check = today
-# ---------------------------------------------------------------------------
-# 自動同步（LIVE 每四小時、其餘每日；應用程式啟動時註冊程式內排程）
-# ---------------------------------------------------------------------------
-_last_auto_sync_check: datetime | None = None
-_last_weekly_engine_check: datetime | None = None
-_AUTO_SYNC_POLL_SECONDS = 3600  # 每小時檢查是否已到四小時或跨日門檻
-
-
-def _auto_sync_if_due(now: datetime | None = None) -> None:
-    """LIVE 檔期每四小時同步；其餘狀態維持每日一次。"""
-    global _last_auto_sync_check
-    now = now or datetime.now(UTC)
-    has_live = bool(web.conn.execute(
-        "SELECT 1 FROM campaign_cycle WHERE status = 'LIVE' AND archived = false LIMIT 1"
-    ).fetchone())
-    due = (_last_auto_sync_check is None
-           or (has_live and now - _last_auto_sync_check >= timedelta(hours=4))
-           or (not has_live and now.date() != _last_auto_sync_check.date()))
-    if due:
-        # 02-3c：餵給業務邏輯的「今天」要轉本機時區再取日期——app/ads、app/orders
-        # 全站幾十處預設值都是 date.today()（本機時區）；這裡原本直接用 now.date()
-        # （UTC 曆日），本機時區早於 UTC 時（例如台灣 UTC+8 的凌晨）會跟
-        # onboarding.create_reminders() 訂出來的 visible_from 差一天，到期提醒
-        # （如 final_settlement）晚一天才追上。astimezone() 而不是改叫 date.today()，
-        # 是為了保留 now 參數本來就有的可測試性（測試傳固定 now 仍決定得了「今天」）。
-        ads_auto_sync.run(web.conn, today=now.astimezone().date().isoformat())
-        _last_auto_sync_check = now
-
-
-def _weekly_engine_if_due(now: datetime | None = None) -> None:
-    """每個 ISO 週只跑一次週判讀；process 重啟後會補跑當週。"""
-    global _last_weekly_engine_check
-    now = now or datetime.now(UTC)
-    current_week = now.isocalendar()[:2]
-    last_week = _last_weekly_engine_check.isocalendar()[:2] if _last_weekly_engine_check else None
-    if last_week != current_week:
-        # 02-3c：同 _auto_sync_if_due()，本機時區才是全站「今天」的基準。
-        ads_auto_sync.run_weekly_engine(web.conn, today=now.astimezone().date().isoformat())
-        _last_weekly_engine_check = now
-
-
-def _auto_sync_loop() -> None:
-    """背景執行緒，每小時檢查同步門檻——用背景執行緒而不是像 llm_task 保留策略那樣掛在
-    每個 HTTP 請求的 middleware，是因為自動同步會打外部 API：絕不能讓它被測試的
-    TestClient 請求意外觸發。這個迴圈只掛在 FastAPI `startup` 事件底下才會啟動，而
-    `TestClient(app)`（不用 `with` context manager，這個 repo 目前所有測試都是這樣用）
-    不會觸發 startup 事件——測試因此永遠碰不到這條路徑，見
-    app/tests/test_ads_auto_sync.py 檔頭驗證過的行為。
-
-    ADR 0027：背景執行緒不在任何 request 裡，沒有 middleware 幫忙借連線，body 自己
-    包一層 `with coredb.connection():`（procrastinate 在切片 ⑤ 取代這整個執行緒）。"""
-    while True:
-        time.sleep(_AUTO_SYNC_POLL_SECONDS)
-        with coredb.connection():
-            _auto_sync_if_due()
-            _weekly_engine_if_due()
-
-
 # ---------------------------------------------------------------------------
 # FastAPI app
 # ---------------------------------------------------------------------------
@@ -217,27 +148,6 @@ _FRONTEND_DIST = web.BASE_DIR.parent / "frontend" / "dist"
 if _FRONTEND_DIST.is_dir():
     app.mount("/app", _SpaStaticFiles(directory=_FRONTEND_DIST, html=True), name="react-shell")
 
-@app.on_event("startup")
-def _register_auto_sync_schedule() -> None:
-    """票 07-auto-sync：應用程式啟動時註冊程式內排程。啟動當下先跑一次（不等第一個
-    小時），之後交給背景執行緒每小時檢查四小時／每日門檻。
-
-    票 F6：這次補跑常常是「機器關了一陣子、開機馬上要追上進度」那一下，外部 API／
-    資料庫都比平常更容易撞到暫時性錯誤。補跑本身丟例外不能讓這支 FastAPI startup
-    handler 跟著炸——那等於開機直接失敗，比「晚一點才結算」嚴重得多（集裝箱憲章
-    第 5 節：錯誤不穿牆）。背景執行緒仍要照常掛上去，下一個整點會再檢查一次。
-
-    ADR 0027：這支 startup handler 跑在任何 HTTP request 之外，沒有 middleware
-    幫忙借連線，自己包一層 `with coredb.connection():`。"""
-    with coredb.connection():
-        try:
-            _auto_sync_if_due()
-        except Exception:  # noqa: BLE001 — 開機補跑失敗不能把整個 app 帶垮，見上方說明
-            web.conn.rollback()
-        _weekly_engine_if_due()
-    threading.Thread(target=_auto_sync_loop, daemon=True).start()
-
-
 @app.middleware("http")
 async def _db_connection_middleware(request: Request, call_next):
     """ADR 0027：每個 request 從連線池借一條連線，掛在這個 request 的 contextvar 上
@@ -260,20 +170,6 @@ async def _db_connection_middleware(request: Request, call_next):
         response = await call_next(request)
     response.headers["X-Request-Id"] = request_id
     return response
-
-
-# ---------------------------------------------------------------------------
-# 品牌總覽（例外，見檔頭說明：today todos 直接讀 app.ads 的廣告到期提醒）
-# ---------------------------------------------------------------------------
-
-def _today_todos() -> list:
-    """首頁「今天要處理的事」：各品牌到期的廣告提醒（鐵則 15 聚合待辦）。
-
-    這是全站唯一跨品牌的清單，因為品牌總覽本來就是跨品牌的頁面；
-    每一則都標明是哪個品牌，點進去才會進入該品牌的畫面（不混排內容）。
-    """
-    from app.ads import onboarding as ads_onboarding
-    return _with_brand_names(ads_onboarding.due_reminders(web.conn))
 
 
 @app.get("/")
@@ -319,28 +215,6 @@ def _write_api_key(api_key: str, *, org_id: str) -> str | None:
     if not key:
         return "請貼上 AI 金鑰。"
     coresettings.set_setting(web.conn, coresettings.API_KEY_SETTING, key, org_id=org_id)
-    return None
-
-
-def _write_meta_settings(account_id: str, token: str, *, org_id: str) -> str | None:
-    account = clean(account_id)
-    token_c = clean(token)
-    if not account:
-        return "請填入廣告帳號編號。"
-    coresettings.set_setting(web.conn, ads_sync.ACCOUNT_SETTING, account, org_id=org_id)
-    if token_c:
-        coresettings.set_setting(web.conn, ads_sync.TOKEN_SETTING, token_c, org_id=org_id)
-    return None
-
-
-def _write_ga4_settings(property_id: str, service_account_json: str, *, org_id: str) -> str | None:
-    property_id_c = clean(property_id)
-    key_json = (service_account_json or "").strip()
-    if not property_id_c:
-        return "請填入 GA4 資源編號。"
-    coresettings.set_setting(web.conn, ga4_sync.PROPERTY_SETTING, property_id_c, org_id=org_id)
-    if key_json:
-        coresettings.set_setting(web.conn, ga4_sync.SERVICE_ACCOUNT_SETTING, key_json, org_id=org_id)
     return None
 
 
@@ -414,42 +288,14 @@ def _run_ai_test_connection(*, org_id: str) -> tuple:
     return "金鑰有效：AI 服務有正常回應，可以開始使用 AI 功能。", "ok"
 
 
-def _run_meta_test_connection(*, org_id: str) -> tuple:
-    if not ads_sync.is_configured(web.conn, org_id=org_id):
-        return "尚未設定 Meta 連線。請先在上方填入廣告帳號編號與唯讀金鑰，儲存後再測試。", "warn"
-    try:
-        ads_sync.make_client(web.conn, org_id=org_id).list_campaigns(
-            ads_sync.get_account_id(web.conn, org_id=org_id))
-    except meta_api.MetaApiError as exc:
-        return str(exc), "danger"
-    except Exception:
-        return "測試失敗：系統發生問題，請再試一次。", "danger"
-    return "連線正常：可以讀到 Meta 廣告帳號的資料。", "ok"
-
-
-def _run_ga4_test_connection(*, org_id: str) -> tuple:
-    if not ga4_sync.is_configured(web.conn, org_id=org_id):
-        return "尚未設定 GA4 連線。請先在上方填入資源編號與服務帳戶金鑰，儲存後再測試。", "warn"
-    today = datetime.now(UTC).date().isoformat()
-    try:
-        ga4_sync.make_client(web.conn, org_id=org_id).fetch_source_medium(today, today)
-    except ga4_api.GA4ApiError as exc:
-        return str(exc), "danger"
-    except Exception:
-        return "測試失敗：系統發生問題，請再試一次。", "danger"
-    return "連線正常：可以讀到 GA4 網站數據。", "ok"
-
-
 # ---------------------------------------------------------------------------
 # 設定頁 JSON API（票 B1-settings，契約 `.scratch/grill/GRILL-B1-settings.md` S15）。
 # 讀值與寫入邏輯全部重用上面既有函式，這裡只做「解析請求 → 呼叫 → 組 JSON」的薄層
 # （HTML 表單路由已刪除，見票 T4 A4；React /settings 頁只打這批 /api/settings/*）。
-# 規則卡（S15.29–S15.33）另掛在 app/ads/routes_settings.py 同模組。
 # ---------------------------------------------------------------------------
 
 async def _parse_json_body(request: Request):
-    """回傳 (body, None) 成功；(None, 錯誤回應) 失敗。錯誤文案沿用既有
-    `app/ads/routes_quick_generate.py` 的慣例，不重複發明第二份。"""
+    """回傳 (body, None) 成功；(None, 錯誤回應) 失敗。"""
     try:
         body = await request.json()
     except ValueError:
@@ -479,10 +325,6 @@ def _settings_json_data(*, org_id: str, is_owner: bool) -> dict:
              "thinking_label": r["thinking_label"]}
             for r in llm_providers.task_default_table()
         ],
-        "masked_meta_token": _masked_key(ads_sync.get_token(web.conn, org_id=org_id)),
-        "meta_account_id": ads_sync.get_account_id(web.conn, org_id=org_id) or "",
-        "masked_ga4_key": _masked_key(ga4_sync.get_service_account_json(web.conn, org_id=org_id)),
-        "ga4_property_id": ga4_sync.get_property_id(web.conn, org_id=org_id) or "",
         "creative_root": str(corecreative.get_root(web.conn, org_id=org_id)),
         "prompt_header": coresettings.get_setting(
             web.conn, coresettings.IMAGE_PROMPT_HEADER_SETTING, "", org_id=org_id),
@@ -505,46 +347,6 @@ async def api_settings_get(request: Request):
         "data": _settings_json_data(org_id=actor.org_id, is_owner=actor.role == "owner"),
         "generated_at": datetime.now(UTC).isoformat(),
     }
-
-
-@app.post("/api/settings/meta")
-async def api_settings_meta_post(request: Request):
-    body, err = await _parse_json_body(request)
-    if err:
-        return err
-    actor = web.require_actor(request)
-    error = _write_meta_settings(
-        body.get("meta_account_id", ""), body.get("meta_token", ""), org_id=actor.org_id)
-    if error:
-        return JSONResponse({"error": error}, status_code=400)
-    return {}
-
-@app.post("/api/settings/meta/test-connection")
-async def api_settings_meta_test_connection_post(request: Request):
-    actor = web.require_actor(request)
-    message, kind = _run_meta_test_connection(org_id=actor.org_id)
-    return {"message": message, "kind": kind}
-
-
-@app.post("/api/settings/ga4")
-async def api_settings_ga4_post(request: Request):
-    body, err = await _parse_json_body(request)
-    if err:
-        return err
-    actor = web.require_actor(request)
-    error = _write_ga4_settings(
-        body.get("ga4_property_id", ""), body.get("ga4_service_account_json", ""),
-        org_id=actor.org_id)
-    if error:
-        return JSONResponse({"error": error}, status_code=400)
-    return {}
-
-
-@app.post("/api/settings/ga4/test-connection")
-async def api_settings_ga4_test_connection_post(request: Request):
-    actor = web.require_actor(request)
-    message, kind = _run_ga4_test_connection(org_id=actor.org_id)
-    return {"message": message, "kind": kind}
 
 
 @app.post("/api/settings/api-key")
@@ -642,7 +444,6 @@ async def api_settings_ai_monthly_cost_limit_post(request: Request):
 # Router 註冊
 # ---------------------------------------------------------------------------
 
-from app import ads as ads_module  # noqa: E402
 from app import brand_web as brand_web_module  # noqa: E402
 from app import dashboard as dashboard_module  # noqa: E402
 from app import identity as identity_module  # noqa: E402
@@ -653,63 +454,15 @@ from app import orders as orders_module  # noqa: E402
 # 只是把 main.py 逐條 include_router 收斂成一個迴圈）。identity 排最後——它的
 # register() 會在 IDENTITY_DEV_TOKEN 設定錯誤時 raise，讓這種設定錯誤盡早炸在啟動
 # 階段，而不是等到第一個請求才發現。
-for _module in (ads_module, brand_web_module, intake_module, orders_module,
+for _module in (brand_web_module, intake_module, orders_module,
                  dashboard_module, identity_module):
     _module.register(app)
-
-# ---------------------------------------------------------------------------
-# app.ads → app.orders 依賴注入（第 7 刀，A1 三層地界新規則：app/ads 不得 import
-# app.orders；app/orders 允許 import app.ads，方向只能單向，見
-# test_architecture_boundaries.py）。這幾個 app.ads 模組原本各自 import
-# app.orders.repository／channel／dispatch，改成在這裡（唯一合法跨層組裝的組裝根）
-# 把真正的模組指派進去，模組內部呼叫寫法完全不變（等同延用同一顆物件）。
-# ---------------------------------------------------------------------------
-from app.ads import codes as ads_codes  # noqa: E402
-from app.ads import data_onboarding as ads_data_onboarding  # noqa: E402
-from app.ads import inflation as ads_inflation  # noqa: E402
-from app.ads import reading as ads_reading  # noqa: E402
-from app.ads import routes as ads_routes_mod  # noqa: E402
-from app.ads import settlement as ads_settlement  # noqa: E402
-from app.ads import tracking as ads_tracking  # noqa: E402
-from app.orders import channel as orders_channel  # noqa: E402
-from app.orders import dispatch as orders_dispatch  # noqa: E402
-from app.orders import repository as orders_repo  # noqa: E402
-
-ads_codes.orders_repo = orders_repo
-ads_data_onboarding.orders_repo = orders_repo
-ads_inflation.orders_repo = orders_repo
-ads_reading.orders_repo = orders_repo
-ads_reading.orders_channel = orders_channel
-ads_routes_mod.orders_channel = orders_channel
-ads_routes_mod.orders_dispatch = orders_dispatch
-ads_routes_mod.orders_repo = orders_repo
-ads_settlement.orders_repo = orders_repo
-ads_tracking.orders_channel = orders_channel
-
-# 啟動斷言：確認上面每一格都真的注入了。那幾個模組裡的預設值是 None——少注入一格
-# 不會當場報錯，要等到使用者剛好走到那條路徑才炸出一句看不懂的
-# 「'NoneType' object has no attribute ...」。這裡當場擋下來，比照清理登記處那道斷言。
-_INJECTIONS = (
-    ("app.ads.codes.orders_repo", ads_codes.orders_repo),
-    ("app.ads.data_onboarding.orders_repo", ads_data_onboarding.orders_repo),
-    ("app.ads.inflation.orders_repo", ads_inflation.orders_repo),
-    ("app.ads.reading.orders_repo", ads_reading.orders_repo),
-    ("app.ads.reading.orders_channel", ads_reading.orders_channel),
-    ("app.ads.routes.orders_channel", ads_routes_mod.orders_channel),
-    ("app.ads.routes.orders_dispatch", ads_routes_mod.orders_dispatch),
-    ("app.ads.routes.orders_repo", ads_routes_mod.orders_repo),
-    ("app.ads.settlement.orders_repo", ads_settlement.orders_repo),
-    ("app.ads.tracking.orders_channel", ads_tracking.orders_channel),
-)
-_missing_injections = [name for name, value in _INJECTIONS if value is None]
-if _missing_injections:
-    raise RuntimeError(f"app.ads → app.orders 依賴注入少了：{_missing_injections}")
 
 # 啟動斷言（第 2 刀「清理登記處」）：確認刪品牌時該連鎖清資料的模組都有登記進
 # app.core.cleanup，少一個就不讓服務起來，避免又漏掉誰。
 from app.core import cleanup as core_cleanup  # noqa: E402
 
-_REQUIRED_CLEANUP_MODULES = ("品牌智庫", "建檔精靈", "廣告", "訂單", "中斷提醒")
+_REQUIRED_CLEANUP_MODULES = ("品牌智庫", "建檔精靈", "訂單", "中斷提醒")
 _missing_cleanup = [n for n in _REQUIRED_CLEANUP_MODULES if n not in core_cleanup.registered_names()]
 if _missing_cleanup:
     raise RuntimeError(f"清理登記處少登記了：{_missing_cleanup}")

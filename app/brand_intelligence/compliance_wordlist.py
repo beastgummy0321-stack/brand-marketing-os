@@ -34,8 +34,8 @@
 票 03-claim-wordlist-todo（決議 2026-08-23）要讓「存宣稱」「宣稱列表」（都在
 `app.brand_web`）也能對這份詞庫做同一套字詞比對，不開第二套比對邏輯。但 A1 三層地界
 （`app/tests/test_architecture_boundaries.py` `ImportBoundaryScanTest`／`LayerDirectionTest`）
-禁止 `app.brand_web` import `app.ads`（分支專屬層）——`app.brand_intelligence`（品牌永久層）
-排在兩邊都夠得到的位置（`app.ads`／`app.brand_web` 都可以往前依賴它），所以資料＋比對
+禁止 `app.brand_web` import 分支專屬層——`app.brand_intelligence`（品牌永久層）
+排在兩邊都夠得到的位置（分支專屬層／`app.brand_web` 都可以往前依賴它），所以資料＋比對
 純函式一起搬來這裡；`app/ads/compliance.py` 的 `_sources()`／`scan_cycle()` 等仍是唯一
 組來源清單、跑整批素材掃描、寫 Finding 的地方，那段業務邏輯留在原處不搬。
 """

@@ -5,12 +5,9 @@
   (b) llm_task 刻意不刪——使用者定案的行為，用測試釘住，以後有人手滑把它加進哪個模組的
       brand_tables 也會被抓到。
   (c) 品牌隔離：刪一個品牌，不會動到另一個品牌掛在同一批表底下的資料。
-  (d) 跨模組 id 沒有外鍵、且模組登記順序不影響刪除完整性：cycle_shopee_code.campaign_cycle_id
-      指向廣告模組的 campaign_cycle，但集裝箱憲章禁止跨模組外鍵（02-2 決策 6），這欄
-      刻意沒有 REFERENCES（見 orders_baseline migration 該欄位註解）。02-4 前身（SQLite）
-      靠 `PRAGMA defer_foreign_keys = ON` 讓「不管哪個模組先登記」都刪得掉；Postgres 版
-      壓根沒有這條外鍵可違反，這裡改成直接證明：(1) 真的沒有外鍵存在，(2) 刻意喬成地雷
-      順序（廣告先於訂單登記）刪除品牌，兩張表照樣清空、不留孤兒列。
+  (d) 已刪除（外殼切片 2026-08-28）：原本驗「跨模組 id 沒有外鍵、模組登記順序不影響
+      刪除完整性」，那兩個模組指的是廣告與訂單；`app/ads/` 刪掉之後沒有第二個模組可以
+      喬順序了，測試的主體不存在。
 
 不依賴 app.main，直接用這個測試模組自己的 schema（conftest.py 的 `_module_schema`
 fixture 已經灌好 baseline migrations）。塞資料用本檔自己的 `_seed_table`（依
@@ -22,7 +19,6 @@ information_schema 自動推導必填欄位；原本 SQLite 版靠 `test_ads_bra
 import unittest
 
 from app.brand_intelligence import repository as bi_repo
-from app.core import cleanup as core_cleanup
 from app.core import db
 from app.core import interrupts as interrupts_repo  # noqa: F401  # import 觸發它的自我登記
 from app.core.db import new_id
@@ -126,11 +122,14 @@ class OrdersCoreBrandCleanupTest(unittest.TestCase):
         return bid
 
     def _seed_orders_and_interrupt(self, brand_id: str) -> None:
-        """訂單 9 張表 + interrupt 各塞一列。cycle_shopee_code 帶了個跨模組 id
-        （campaign_cycle_id，沒有外鍵，見檔頭說明），得先塞一列 campaign_cycle 讓
-        fk_ids 有值可接，即使資料庫層面不強制。"""
-        fk_ids: dict = {}
-        fk_ids["campaign_cycle"] = _seed_table(self.conn, "campaign_cycle", brand_id, fk_ids)
+        """訂單 9 張表 + interrupt 各塞一列。
+
+        外殼切片（2026-08-28）：原本會先塞一列 `campaign_cycle` 讓 `cycle_shopee_code`
+        的 `campaign_cycle_id` 有值可接——那張表已經被票 3 的 migration DROP 掉了。那個
+        欄位本來就沒有外鍵（見檔頭），所以這裡只給一個每個品牌各自不同的假 id：
+        `cycle_shopee_code.campaign_cycle_id` 上有 UNIQUE 索引，兩個品牌共用同一個字面值
+        會撞號（`_seed_table` 通用分支對每個欄位塞同一個固定字串）。"""
+        fk_ids: dict = {"campaign_cycle": db.new_id("ccy")}
         for table, _label in orders_repo.BRAND_CASCADE_TABLES:
             _seed_table(self.conn, table, brand_id, fk_ids)
         _seed_table(self.conn, "interrupt", brand_id, {})
@@ -186,59 +185,6 @@ class OrdersCoreBrandCleanupTest(unittest.TestCase):
             n = self.conn.execute(
                 f"SELECT COUNT(*) AS c FROM {table} WHERE brand_id = %s", (survivor,)).fetchone()["c"]
             self.assertEqual(n, 1, f"{table}（{label}）誤刪了別的品牌的資料，品牌隔離失敗")
-
-    # (d) 跨模組 id 沒有外鍵、登記順序不影響刪除完整性 -------------------------------
-
-    def test_cross_module_column_has_no_foreign_key_and_cleanup_order_is_irrelevant(self):
-        fk_row = self.conn.execute(
-            "SELECT 1 AS hit FROM information_schema.table_constraints tc"
-            " JOIN information_schema.key_column_usage kcu"
-            "   ON kcu.constraint_name = tc.constraint_name AND kcu.table_schema = tc.table_schema"
-            " WHERE tc.constraint_type = 'FOREIGN KEY' AND tc.table_schema = current_schema()"
-            "   AND tc.table_name = 'cycle_shopee_code' AND kcu.column_name = 'campaign_cycle_id'"
-        ).fetchone()
-        self.assertIsNone(fk_row, "cycle_shopee_code.campaign_cycle_id 冒出了外鍵——"
-                           "跨模組外鍵違反集裝箱憲章（02-2 決策 6），這欄故意留白")
-
-        import app.ads.repository  # noqa: F401  # 確保「廣告」已登記
-
-        bid = self._make_archived_brand("虛構寵物品牌（跨模組刪除順序測試）")
-        fk_ids: dict = {}
-        cycle_id = _seed_table(self.conn, "campaign_cycle", bid, fk_ids)
-        fk_ids["campaign_cycle"] = cycle_id
-        _seed_table(self.conn, "cycle_shopee_code", bid, fk_ids)
-        self.conn.commit()
-
-        # 刻意把登記表順序喬成「廣告」排到「訂單」前面（測試專用手法，直接操作
-        # cleanup._REGISTRY；正式程式碼不會這樣做，也不該這樣做）。
-        registry = core_cleanup._REGISTRY
-        self.assertIn("廣告", registry)
-        self.assertIn("訂單", registry)
-        original_items = list(registry.items())
-        self.addCleanup(lambda: (registry.clear(), registry.update(original_items)))
-        ads_entry = registry.pop("廣告")
-        reordered = []
-        for name, entry in registry.items():
-            if name == "訂單":
-                reordered.append(("廣告", ads_entry))
-            reordered.append((name, entry))
-        registry.clear()
-        registry.update(reordered)
-        names = core_cleanup.registered_names()
-        self.assertLess(names.index("廣告"), names.index("訂單"),
-                         "測試前置作業沒喬成功：「廣告」要排在「訂單」前面才逼得出地雷順序")
-
-        bi_repo.delete_brand(self.conn, bid, actor="測試員")
-
-        self.assertEqual(
-            self.conn.execute(
-                "SELECT COUNT(*) AS c FROM campaign_cycle WHERE id = %s", (cycle_id,)).fetchone()["c"],
-            0, "campaign_cycle 應該被刪光")
-        self.assertEqual(
-            self.conn.execute(
-                "SELECT COUNT(*) AS c FROM cycle_shopee_code WHERE campaign_cycle_id = %s",
-                (cycle_id,)).fetchone()["c"],
-            0, "cycle_shopee_code 應該被刪光")
 
 
 if __name__ == "__main__":

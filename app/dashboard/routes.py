@@ -2,17 +2,18 @@
 
 只讀、統一回應信封（data／generated_at）；不寫入任何資料表。給票 01 的 React 新殼
 首頁（跨品牌總覽）打這支端點取資料。
+
+外殼切片（2026-08-28）：單品牌駕駛艙、數字月報、手動同步三支端點隨 `app/ads/` 一起
+刪掉（見 `app/dashboard/repository.py` 檔頭）。只剩 `/overview`。
 """
 
 import os
-from datetime import UTC, date, datetime
+from datetime import UTC, datetime
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Request
 
 import app.shared.web as main_mod
-from app.ads import auto_sync as ads_auto_sync
 from app.dashboard import repository as dashboard_repo
-from app.shared.web import JSONResponse
 
 router = APIRouter(prefix="/api/dashboard")
 
@@ -28,63 +29,5 @@ async def overview(request: Request):
     return {
         "data": dashboard_repo.overview(
             main_mod.conn, org_id=actor.org_id, today=_today_override()),
-        "generated_at": datetime.now(UTC).isoformat(),
-    }
-
-
-@router.get("/brands/{brand_id}/cockpit")
-async def cockpit(request: Request, brand_id: str):
-    """單品牌駕駛艙（票 03-cockpit-kpi-chart）：KPI 卡＋主圖時間序列。404 沿用
-    既有 `require_brand`（app/shared/web.py），跟舊介面一致的「找不到品牌」回應。"""
-    actor = main_mod.require_actor(request)
-    brand = main_mod.require_brand(brand_id, actor)
-    data = dashboard_repo.cockpit(main_mod.conn, brand_id, today=_today_override())
-    data["brand_id"] = brand["id"]
-    data["brand_name"] = brand["name"]
-    return {
-        "data": data,
-        "generated_at": datetime.now(UTC).isoformat(),
-    }
-
-
-def _validated_month(month: str | None) -> str:
-    selected = month or (_today_override() or date.today().isoformat())[:7]
-    try:
-        if len(selected) != 7 or selected[4] != "-" or not selected[:4].isdigit() \
-                or not selected[5:].isdigit():
-            raise ValueError
-        date.fromisoformat(f"{selected}-01")
-    except (TypeError, ValueError):
-        raise HTTPException(status_code=400,
-                            detail="月份格式需為 YYYY-MM，例如 2026-08")
-    return selected
-
-
-@router.get("/brands/{brand_id}/monthly-report")
-async def monthly_report(request: Request, brand_id: str, month: str | None = None):
-    """Act3 數字月報：指定月份的花費／訂單／營收／ROAS／CAC 與六個月趨勢。"""
-    actor = main_mod.require_actor(request)
-    brand = main_mod.require_brand(brand_id, actor)
-    data = dashboard_repo.monthly_report(
-        main_mod.conn, brand_id, _validated_month(month),
-    )
-    data["brand_id"] = brand["id"]
-    data["brand_name"] = brand["name"]
-    return {
-        "data": data,
-        "generated_at": datetime.now(UTC).isoformat(),
-    }
-
-
-@router.post("/brands/{brand_id}/sync")
-async def sync_brand(request: Request, brand_id: str):
-    actor = main_mod.require_actor(request)
-    main_mod.require_brand(brand_id, actor)
-    try:
-        updated_at = ads_auto_sync.sync_brand_now(main_mod.conn, brand_id, str(actor.user_id))
-    except ValueError as exc:
-        return JSONResponse({"error": str(exc)}, status_code=502)
-    return {
-        "data": {"updated_at": updated_at},
         "generated_at": datetime.now(UTC).isoformat(),
     }

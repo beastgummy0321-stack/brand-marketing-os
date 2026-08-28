@@ -7,23 +7,8 @@ conftest.py 的 schema 是整個模組共用一份，不是逐測試重建，共
 """
 
 import unittest
-from pathlib import Path
 
 from app.core import campaign_skip, db
-
-_NEXTCYCLE_PATH = Path(__file__).resolve().parent.parent / "ads" / "nextcycle.py"
-
-
-class NextCycleEngineNotCoupledTest(unittest.TestCase):
-    """驗收清單：跳過紀錄不寫入、不影響下期建議引擎（app/ads/nextcycle.py）的任何計算
-    （ADR 0015 第二節）。最直接、最不會腐爛的保證：下期建議引擎的原始碼裡完全不提
-    campaign_skip 這個字——沒有 import 就沒有耦合，之後有人想接進去也會在 code review
-    被這條測試攔下來。"""
-
-    def test_nextcycle_source_never_mentions_campaign_skip(self):
-        self.assertTrue(_NEXTCYCLE_PATH.exists(), f"{_NEXTCYCLE_PATH} 不存在")
-        text = _NEXTCYCLE_PATH.read_text(encoding="utf-8")
-        self.assertNotIn("campaign_skip", text)
 
 
 class RecordAndGetSkipTest(unittest.TestCase):

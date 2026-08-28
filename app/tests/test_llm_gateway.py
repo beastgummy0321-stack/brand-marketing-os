@@ -11,7 +11,6 @@ from unittest import mock
 
 import anthropic
 
-from app.ads import repository as ads_repo
 from app.brand_intelligence import repository as repo
 from app.core import db, rule_cards
 from app.core import settings as coresettings
@@ -592,9 +591,9 @@ class ContextCompilerLearningLoopTest(unittest.TestCase):
         self.assertNotIn("尚未驗證的猜想", text)
 
     def test_learning_ledger_included_with_source_note(self):
-        entry = ads_repo.create_learning_ledger_entry(
+        entry = repo.create_learning_ledger_entry(
             self.conn, self.brand["id"], learning_text="早鳥優惠切角轉換率最高",
-            applicability_scope="brand", created_by="小陳", actor="小陳",
+            applicability_scope="brand", created_by="小陳", actor="小陳", source_track="ads",
             source_cycle_id=None, sample_size="42", confidence="B",
         )
         text, knowledge_item_ids, _bv, _pv = context_compiler.compile(self.conn, self.brand["id"])
@@ -632,9 +631,9 @@ class ContextCompilerLearningLoopTest(unittest.TestCase):
         self.assertNotIn("已驗證的學習", text)  # 未驗證段不得混進已驗證段
 
     def test_expired_learning_excluded(self):
-        entry = ads_repo.create_learning_ledger_entry(
+        entry = repo.create_learning_ledger_entry(
             self.conn, self.brand["id"], learning_text="這條學習已下架",
-            applicability_scope="brand", created_by="小陳", actor="小陳",
+            applicability_scope="brand", created_by="小陳", actor="小陳", source_track="ads",
         )
         self.conn.execute("UPDATE learning_ledger SET expired = true WHERE id = %s", (entry["id"],))
         self.conn.commit()
@@ -646,18 +645,18 @@ class ContextCompilerLearningLoopTest(unittest.TestCase):
 
     def test_product_scope_includes_brand_wide_but_excludes_other_product(self):
         other_product = repo.create_product(self.conn, self.brand["id"], name="產品E-2", actor="小陳")
-        brand_wide = ads_repo.create_learning_ledger_entry(
+        brand_wide = repo.create_learning_ledger_entry(
             self.conn, self.brand["id"], learning_text="品牌整體都適用的學習",
-            applicability_scope="brand", created_by="小陳", actor="小陳",
+            applicability_scope="brand", created_by="小陳", actor="小陳", source_track="ads",
         )
-        this_product = ads_repo.create_learning_ledger_entry(
+        this_product = repo.create_learning_ledger_entry(
             self.conn, self.brand["id"], learning_text="只適用本產品的學習",
-            applicability_scope="product", created_by="小陳", actor="小陳",
+            applicability_scope="product", created_by="小陳", actor="小陳", source_track="ads",
             product_id=self.product["id"],
         )
-        ads_repo.create_learning_ledger_entry(
+        repo.create_learning_ledger_entry(
             self.conn, self.brand["id"], learning_text="只適用另一個產品的學習不該外洩",
-            applicability_scope="product", created_by="小陳", actor="小陳",
+            applicability_scope="product", created_by="小陳", actor="小陳", source_track="ads",
             product_id=other_product["id"],
         )
         brand_hyp = repo.create_strategy_hypothesis(
@@ -683,9 +682,9 @@ class ContextCompilerLearningLoopTest(unittest.TestCase):
         self.assertIn(brand_hyp["id"], knowledge_item_ids)
 
     def test_brand_level_compile_excludes_product_specific_learning(self):
-        ads_repo.create_learning_ledger_entry(
+        repo.create_learning_ledger_entry(
             self.conn, self.brand["id"], learning_text="產品專屬學習不該出現在品牌層",
-            applicability_scope="product", created_by="小陳", actor="小陳",
+            applicability_scope="product", created_by="小陳", actor="小陳", source_track="ads",
             product_id=self.product["id"],
         )
         repo.create_strategy_hypothesis(

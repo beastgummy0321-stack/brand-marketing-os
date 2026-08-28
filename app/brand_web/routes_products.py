@@ -15,7 +15,7 @@
 5. 背景調研狀態機（S6.29–S6.31）：跟 `routes_library.py` 的顧客原話抽取是同一種模式
    （模組層 dict＋`threading.Thread`），差別是這裡的 key＝`product_id`、且新建與再次調研
    共用同一套（冪等：同一個 key 已經在跑就不重新啟動），仿 `app/ads/routes.py` 的
-   `_progress_state` 形狀但不 import `app.ads`（ADR 0017 模組邊界）。
+   `_progress_state` 形狀，但各自一份、不跨模組共用（ADR 0017 模組邊界）。
 6. 產品事實／經濟數字／規則／宣稱／交接包／永久刪除，一律重用既有的私有工具函式與
    `repository.py` 既有的 CRUD 函式——不重寫第二份業務邏輯，這裡只負責重新包一層 JSON 殼。
    `_create_source_ref` 仍在 `app/brand_web/routes.py`（那裡的品牌事實／規則／宣稱舊表單
@@ -170,7 +170,7 @@ async def product_create(request: Request, brand_id: str):
 # ---------------------------------------------------------------------------
 # AI 調研新增與再次調研（背景工作，S6.10–S6.11／S6.17／S6.29–S6.31）：兩個入口共用同一套
 # 背景機制，key＝product_id（一個產品同時只會有一份調研在跑，不需要再併 brand_id）。
-# 仿 app/ads/routes.py 的 _progress_state 形狀，這裡自己另開一份，不 import app.ads。
+# _progress_state 形狀在幾個模組各自一份，刻意不抽共用（ADR 0017 模組邊界）。
 # ---------------------------------------------------------------------------
 
 _research_jobs = background_job.JobRegistry()

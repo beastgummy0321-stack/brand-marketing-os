@@ -56,7 +56,10 @@ class OrgIsolationAllTablesTest(unittest.TestCase):
 
     def test_every_table_has_not_null_org_id_with_fk(self):
         tables = self._tables()
-        self.assertGreater(len(tables), 50, "schema looks empty; baseline not applied?")
+        # 外殼切片（2026-08-28）：票 3 的 migration DROP 掉 44 張廣告表後，public schema
+        # 剩 39 張，門檻從 50 下修到 30。這個數字守的是「baseline 沒套用、schema 是空的」，
+        # 不是「表只能增加」。
+        self.assertGreater(len(tables), 30, "schema looks empty; baseline not applied?")
         missing, nullable, no_fk = [], [], []
         for t in tables:
             if t in EXEMPT_TABLES:
