@@ -1,5 +1,7 @@
 # 圖片不進系統：只出提示詞，成效歸因收在主題層
 
+_Status: retired by ADR 0030 — the code it governed was deleted._
+
 舊規則：素材產出以「切角」為唯一分層，`app/ads/creative.py:40` 的 `VARIANTS_PER_CELL`
 一格產 1 個 `image_prompt` ＋ 2 個 `hook` ＋ 1 個 `copy`；`creative.py:131` 的硬規則第 4 條
 要求「同一個切角底下的幾則不要只是換句話說，要真的不一樣」，全域適用。圖片只以提示詞交付

@@ -1,5 +1,7 @@
 # 0022 檔期可「現在結算」、匯入可整批撤銷；M1 排在 P1 之前（2026-08-23）
 
+_Status: retired by ADR 0030 — the code it governed was deleted._
+
 依據 `.scratch/e2e-adflow/REPORT.md`（瀏覽器全程實測）第 1–3 節，使用者逐題裁決。
 
 ## 決定

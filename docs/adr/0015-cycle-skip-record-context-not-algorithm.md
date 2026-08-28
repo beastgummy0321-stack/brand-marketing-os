@@ -1,5 +1,7 @@
 # 「這期跳過」只留脈絡給提醒卡片，不進下期建議演算法
 
+_Status: retired by ADR 0030 — the code it governed was deleted._
+
 G8（2026-08-10 grill）。查證現況：系統裡沒有任何「跳過這次檔期」的機制；週報模組尚未
 建置（`docs/redesign-blueprint.md` 列為「缺」，程式碼庫內查無相關檔案）——本輪「進不進
 週報」問題留待週報動工時再處理，非本次決定範圍。

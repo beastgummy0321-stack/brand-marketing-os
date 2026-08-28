@@ -1,5 +1,7 @@
 # 節日相關性：業種標籤自動比對，永久覆寫掛進設定中心
 
+_Status: retired by ADR 0030 — the code it governed was deleted._
+
 G7（2026-08-10 grill）。查證現況：`campaign_calendar_data.json` 每筆事件只有
 `{id, name, date, tier}`，`brand` 表沒有業種欄位，`app/dashboard/campaign_calendar.py`
 全部函式純日期數學，沒有任何相關性判斷——目前每個節日對所有品牌一視同仁地提醒。

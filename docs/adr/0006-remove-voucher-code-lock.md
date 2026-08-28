@@ -1,5 +1,7 @@
 # 拿掉配碼校驗不符鎖住開跑的效果，改為只提醒
 
+_Status: retired by ADR 0030 — the code it governed was deleted._
+
 舊規則（決策 0025 補遺第 7 點）：期別配碼上線前校驗，規劃碼（系統算出來的）與後台實際
 設定（EasyStore 無 API，人工輸入）逐欄比對，不符時鎖住**僅該期**的開跑動作
 （`app/ads/codes.py` `is_activation_locked`，由 `app/ads/handoff.authorize_and_map`

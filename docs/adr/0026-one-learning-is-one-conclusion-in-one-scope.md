@@ -1,5 +1,7 @@
 # 0026 一條學習＝一個結論＋一個適用範圍；重複驗證是信心加強，不是第二份證據（2026-08-25）
 
+_Status: retired by ADR 0030 — the code it governed was deleted._
+
 起因：B0-23（`.scratch/orchestrator/rehearsal-B0/FINDINGS.md`）記為「累積智慧沒有去重」，
 B2 覆核（`B2-VERIFY.md` 第 29 行）判為「非漏（代理 A 誤報）：不同期各自驗證同一結論的設計」。
 兩份紀錄各對一半，至今沒有定論——本 ADR 是那個定論。

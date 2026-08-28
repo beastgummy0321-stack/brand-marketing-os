@@ -1,5 +1,7 @@
 # 下期建議補兩道守門：最小樣本數門檻＋檔期情境加權，不做硬性樣本分割
 
+_Status: retired by ADR 0030 — the code it governed was deleted._
+
 G4＋G13（2026-08-10 grill，GRILL-PENDING.md 已標記「同場 grill」，因為都動
 `app/ads/nextcycle.py` 的同一段歷史資料比對邏輯）。
 

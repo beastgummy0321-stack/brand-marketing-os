@@ -1,5 +1,7 @@
 # QA 五項統一做成上線前提醒＋自行確認，不做擋人硬性關卡
 
+_Status: retired by ADR 0030 — the code it governed was deleted._
+
 G10（2026-08-10 grill）。查證現況：`app/ads/meta_api.py` 唯讀（`ads_read`／
 `read_insights`），受眾排除名單、CAPI/EMQ 事件品質兩項需要更高階權限（`business_management`
 等級）才驗證得到；預算逐筆覆核、到達頁實點測試、像素驗證三項技術上現在就做得到（但像素只能

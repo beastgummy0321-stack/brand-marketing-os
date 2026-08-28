@@ -1,5 +1,7 @@
 # 排期曲線（脈動／間歇）接受觸發學習期重置，不為了迴避重置而壓平強度差
 
+_Status: retired by ADR 0030 — the code it governed was deleted._
+
 G9（2026-08-10 grill）新增排期策略三選一：連續（現況，日預算平均分攤）／間歇／脈動。
 `docs/redesign-blueprint.md` 第四節列為「要補」項目，本 ADR 記錄形狀與最關鍵的取捨。
 

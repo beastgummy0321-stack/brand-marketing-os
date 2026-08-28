@@ -1,5 +1,7 @@
 # 0024 調度台：無事件表、模組自報狀態、決策單一收口（2026-08-23）
 
+_Status: code removed, design retained. `app/core/orchestrator.py` (215 lines) is deleted with `app/ads/` — its only caller was `app/ads/auto_sync.py:212` and 7 of its 8 `status()` providers lived in `app/ads/`. The decision is NOT reversed: rebuild from this ADR when automation returns. See ADR 0030._
+
 承 ADR 0018（背景執行緒＋輪詢、使用者關卡 ≤4、不做統一任務表）與 ADR 0019。
 規劃草稿 `.scratch/orchestrator/PLAN.md`「不可逆決定」5 條，經 grill 八問裁決如下。
 調度台＝`decide(facts) -> [Action]` 純函數（規則登記制）＋派工員，掛在既有 4 小時／每週執行緒。

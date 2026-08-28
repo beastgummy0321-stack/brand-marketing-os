@@ -1,5 +1,7 @@
 # 凍結猜消費者反應的拒絕理由，刪除試水溫解禁整套機制
 
+_Status: retired by ADR 0030 — the code it governed was deleted._
+
 舊規則（決策 0030 第二節第 6 點、第 14 點；決策 0035 第一節、第 5 點 G3）：`REASON_TO_AXIS`
 （`app/ads/fingerprint.py`）九條拒絕理由裡，`too_stiff`（太生硬）、`off_brand`（不是品牌
 調性）、`too_ad_like`（太像廣告）、`discount_too_deep`（折扣太深）、`hook_weak`（開頭抓不
