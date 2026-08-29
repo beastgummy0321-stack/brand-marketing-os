@@ -8,6 +8,7 @@ import { ApiKeySection } from "./ApiKeySection";
 import { AssetsSection } from "./AssetsSection";
 import { ModelSection } from "./ModelSection";
 import { AutonomySection } from "./AutonomySection";
+import { MetaSection } from "./MetaSection";
 import { RuleCardsSection } from "./RuleCardsSection";
 
 type LoadState =
@@ -64,6 +65,7 @@ export function SettingsPage() {
         <ApiKeySection data={data} onSaved={load} />
         <ModelSection data={data} onSaved={load} />
         <AssetsSection data={data} onSaved={load} />
+        <MetaSection />
         <AutonomySection />
         <RuleCardsSection />
       </div>

@@ -22,10 +22,11 @@ from .identity_test_helpers import flatten_routes, mint_hs256
 _DEV_USER_ID = UUID("00000000-0000-0000-0000-000000000001")
 
 # 通用 sweep 送不出「符合形狀」的 body 時，各自補一份最小合法 body（Pydantic 型別
-# route 專用——本模組目前只有這兩條用 Pydantic body model）。
+# route 專用）。
 _MINIMAL_BODIES = {
     ("/api/identity/orgs/current/rename", "POST"): {"name": "x"},
     ("/api/identity/invites", "POST"): {"email": "x@x.com", "role": "member"},
+    ("/api/meta/token", "POST"): {"token": "x"},  # 票 04
 }
 
 # route 真的沒辦法用泛用打法打通、又不是本票要驗的行為，才准列在這裡（同票 03-1

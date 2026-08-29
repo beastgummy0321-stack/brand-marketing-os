@@ -448,13 +448,14 @@ from app import brand_web as brand_web_module  # noqa: E402
 from app import dashboard as dashboard_module  # noqa: E402
 from app import identity as identity_module  # noqa: E402
 from app import intake as intake_module  # noqa: E402
+from app import meta as meta_module  # noqa: E402
 from app import orders as orders_module  # noqa: E402
 
 # 票 03-1：每個模組的路由掛載交給它自己的 register(app)（機械式：路由本身不變，
 # 只是把 main.py 逐條 include_router 收斂成一個迴圈）。identity 排最後——它的
 # register() 會在 IDENTITY_DEV_TOKEN 設定錯誤時 raise，讓這種設定錯誤盡早炸在啟動
 # 階段，而不是等到第一個請求才發現。
-for _module in (brand_web_module, intake_module, orders_module,
+for _module in (brand_web_module, intake_module, meta_module, orders_module,
                  dashboard_module, identity_module):
     _module.register(app)
 

@@ -24,7 +24,7 @@
 ## 第 ④ 片：設定與憑證（需批准：schema）
 
 - [ ] 04-1b pydantic-settings 收環境變數＋組織時區（`org_timezone`，IANA，預設 Asia/Taipei，只改排程面的「今天」）＋`llm_task.methodology_hash`（動 schema，一個欄位）
-- [ ] 04-2 憑證進 Supabase Vault（本機已裝 0.3.1）＋「已連接帳號」（組織）→ 綁定（品牌）
+- [ ] 04-2 剩下的一半：自帶金鑰（`own`）的 AI 金鑰進 Vault＋設定頁切換金鑰來源。Meta 憑證進 Vault、組織層「已連接帳號」→ 品牌綁定**已完成**（`.scratch/schedule-module/issues/04`，見 git log）
 
 ## 第 ⑤ 片：背景工作
 
@@ -48,7 +48,7 @@
 - [ ] `pendingPath`（登入後導回原路徑）沒有時效也不會在登出時清掉：同一分頁先冷開邀請連結、之後做別的登入，會被靜默導回舊邀請頁（03-3 審查 note 4）
 - [ ] 兩個繞過每月花費閘門的既有路徑（04-1a 審查 note）：`app/main.py:279` 設定頁「測試連線」（1 token 探測）、`app/intake/card_test.py:60-62` CLI 診斷工具（HTTP 碰不到）。風險小，但閘門既然蓋好了應該補齊
 - [ ] `resolve_ai_credentials()` 的「DB 值打錯字→當 platform 處理」分支沒有測試覆蓋（04-1a 審查 note）
-- [ ] 用自己金鑰（`own`）的組織看不到「調整月上限」欄位，切回 `platform` 時不好調——04-2 開放切換來源時一併處理（04-1a 審查 note）
+- [ ] 用自己金鑰（`own`）的組織看不到「調整月上限」欄位，切回 `platform` 時不好調——04-2 剩下那一半開放切換來源時一併處理（04-1a 審查 note）
 - [ ] AI 成本對帳：`llm_task.cost` 是我們自己用 `app/llm/pricing.py` 算的**估算值**，不是 Anthropic 實際帳單。官方有 `/v1/organizations/cost_report`（按 workspace／api_key 分組，約 5 分鐘延遲，需 Admin API key）——上雲收費前要拿它跟自己的估算對一次帳，否則「每月上限」擋的是估算不是真錢（2026-08-28 查證）
 - [ ] 404 信封兩種格式並存：`require_brand` 走 `NotFoundKind` 吐 `{"detail": …}`，`web.NotFound` 走 `handle_api_error` 吐 `{"error": {"code", "message"}}`（03-1 r1 審查 note 2）——第 ⑦ 片統一信封時一併收
 - [ ] `app/tests/test_settings_api.py:142` 一條測試寫死 Windows 磁碟機路徑，非 Windows 跳過（`skipUnless`）；應改成跨平台斷言後拿掉 skip
