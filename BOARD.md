@@ -48,7 +48,6 @@
 ## 小債（順手做，不排優先）
 
 - [ ] **左側導覽有四條死連結**（投放與成效／累積智慧／素材工作檯／資料上線）：外殼切片刪掉那 8 條路由，導覽沒跟著刪，點下去整頁空白（2026-08-29 瀏覽器實測）。**這是使用者看得到的謊**，且 `HANDOFF-shell-slice.md` §3.7 寫的是「刪掉，不做轉址」
-- [ ] **`ModuleSizeRatchetTest` 紅著**（2026-08-29 全套實測）：`app` 546／540、`app/intake` 3571／3570、`app/llm` 1605／1311、`app/schedule` 923／883。`app/llm` 那 294 行是 codex CLI 供應商。**等使用者裁決**：調高明表（該閘門設計上允許，但全域規範禁止放寬容忍清單）還是縮碼
 - [ ] **選了產品，產品名稱卻沒進 prompt**：`context_compiler.compile()` 只吐「已確認的事實／規則／宣稱／典型客人」，`_plan_params_text()` 不列產品名與售價。晨光咖啡 0 筆 confirmed fact ⇒ 品牌上下文長度為 0，方案只能靠「促銷或重點」那一欄的字（2026-08-29 實測）
 - [ ] 排程表單的「行銷目標」下拉每次回到第一個選項（認知），不記得上次送出的目標
 - [ ] `app/core/rule_cards.py` 8 張規則卡有 6 張失效（`budget_structure`／`sample_size`／`ad_creative_fatigue`／`pacing`／`health_lights`／`autonomy`），設定頁照樣顯示、照樣可以調，但調了不影響任何東西——**這是使用者看得到的謊**（明細見 `docs/tech-debt.md` 第〇節）

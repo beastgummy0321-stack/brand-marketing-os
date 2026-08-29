@@ -533,7 +533,8 @@ class TestRatioTest(unittest.TestCase):
 # 是頂層的 .py（`main.py` 組裝根等）。**允許調高，但必須改這張表**——重點不是禁止成長，
 # 是讓成長出現在 diff 裡有人看得到。廣告模組會在約 2,000 行撞上它，而不是 21,595 行。
 KNOWN_MODULE_SIZES = {
-    "app": 540,  # 票 05 fix round：main.py 加 FastAPI lifespan（掛/收 procrastinate worker）
+    "app": 546,  # 本機 codex CLI 線路（c47bc36）：main.py 依環境變數換供應商。前一次是票 05
+                  # fix round 的 540（main.py 加 FastAPI lifespan，掛/收 procrastinate worker）
     "app/background": 215,  # 2026-08-29 修 Windows 起不來：worker 移到自己的執行緒／loop
                             # ＋起不來不得弄死網站（ADR 0039 amended）
                              # 掛進既有 process，不再只有 app()
@@ -542,10 +543,18 @@ KNOWN_MODULE_SIZES = {
     "app/core": 2148,
     "app/dashboard": 645,
     "app/identity": 537,
-    "app/intake": 3570,  # 缺陷 1：intake_question 改走強制工具結構化輸出，新增
+    "app/intake": 3571,  # 本機 codex CLI 線路（c47bc36）：card_test.py 診斷工具跟著印出這次
+                          # 真正跑的供應商。前一次是 3570——
+                          # 缺陷 1：intake_question 改走強制工具結構化輸出，新增
                           # _QUESTION_TOOL／_CHOICE_SCHEMA schema（散文裡的 JSON 格式
                           # 說明同時刪掉，仍淨增）。前一次是 3548
-    "app/llm": 1311,  # 缺陷 1／2：parse_json_reply 換成 raw_decode 單錨點（含為什麼不能
+    "app/llm": 1605,  # 本機 codex CLI 線路（c47bc36，使用者 2026-08-29 裁決調高明表）：
+                       # CodexCliProvider 是 `Provider` 這個單方法 Protocol 的第三種實作
+                       # （ADR 0032），265 行在 providers.py——prompt 攤平、圖片還原成暫存檔、
+                       # Windows 程序樹逾時清理、截斷偵測；gateway/pricing 各補訂閱額度
+                       # 不計費的分支。開發期不打 API 帳單靠這條線，正式版仍走 Anthropic。
+                       # 前一次是 1311——
+                       # 缺陷 1／2：parse_json_reply 換成 raw_decode 單錨點（含為什麼不能
                        # 退而求其次的理由註解）＋timeout_s 300 秒與 max_retries=0 兩段
                        # 來源註解（實測列號、SDK 常數位置）。前一次是票 09 的 1298
     "app/meta": 805,  # 票 11：campaign_ids_by_exact_name()（名稱精準比對，13 行）＋
@@ -554,7 +563,10 @@ KNOWN_MODULE_SIZES = {
     "app/orders": 1423,  # 票 12：channel_revenue 一張表取代三張（刪掉藥局專屬那一整組
                           # 之後仍淨增）——官網帳本寫入路徑、channel_revenue_summary()、
                           # 通用手動登錄（含「官網不能手動登錄」那道錢的守門）
-    "app/schedule": 883,  # 票 11：POST .../tree/bind（名稱比對、存平台 id、之後一律靠 id
+    "app/schedule": 923,  # 2026-08-29 修「畫面吐 [object Object]、活動樹算好的結果被下一次
+                           # 嘗試蓋掉」（53c285e）：_display_task_row() 正在跑的時候繼續顯示
+                           # 上一次成功的樹，另外標明有一次在跑。前一次是 883——
+                           # 票 11：POST .../tree/bind（名稱比對、存平台 id、之後一律靠 id
                           # 讀數字）＋_fill_node_spend()／_current_month_window()（把票 05
                           # 的當月花費補到綁定節點上）＋tree.py 三個新欄位。前一次是票
                           # 10-feedback-entries 的 POST .../reject（784）
