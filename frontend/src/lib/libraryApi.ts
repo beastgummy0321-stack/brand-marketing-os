@@ -12,7 +12,7 @@
  * constant table has no enumeration endpoint, so the frontend side-panel dropdown options are
  * copied here next to the matching API calls as "values that never change" (code-rules §2). */
 
-import { apiFetch } from "./http";
+import { apiFetch, errorMessageFrom } from "./http";
 
 export interface LibraryBrandFact {
   id: string;
@@ -232,9 +232,9 @@ async function postJson<T>(path: string, body: unknown = {}): Promise<T> {
     let message = `處理失敗（狀態碼 ${res.status}）`;
     try {
       const data = (await res.json()) as { error?: string; errors?: Record<string, string>; detail?: string };
-      if (data.error) message = data.error;
-      else if (data.errors) message = Object.values(data.errors).join("；");
-      else if (data.detail) message = data.detail;
+      // 欄位錯誤表是這支獨有的形狀；其餘兩種外殼交給共用的 errorMessageFrom
+      if (data.errors) message = Object.values(data.errors).join("；");
+      else message = errorMessageFrom(data, message);
     } catch {
       // Response body isn't JSON, use the default message.
     }

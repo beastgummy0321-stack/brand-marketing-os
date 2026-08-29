@@ -3,7 +3,7 @@
  * 這支端點不用 `{data, generated_at}` 信封（見 `lib/api.ts` 的 `Envelope<T>`）——
  * 票 07 settled 段「API — 字面契約」直接寫死回應形狀，這裡逐欄對照，不套用別支
  * feature 的信封慣例。 */
-import { apiFetch } from "./http";
+import { apiFetch, errorMessageFrom } from "./http";
 
 export interface ScheduleSplit {
   label: string;
@@ -158,7 +158,7 @@ export async function createSchedulePlan(
     let message = `排程失敗（狀態碼 ${res.status}）`;
     try {
       const data = (await res.json()) as { error?: { message?: string } };
-      if (data.error?.message) message = data.error.message;
+      message = errorMessageFrom(data, message);
     } catch {
       // 回應不是 JSON，用預設訊息。
     }
@@ -180,7 +180,7 @@ export async function expandPlanIntoTree(brandId: string, planIndex: number): Pr
     let message = `展開失敗（狀態碼 ${res.status}）`;
     try {
       const data = (await res.json()) as { error?: { message?: string } };
-      if (data.error?.message) message = data.error.message;
+      message = errorMessageFrom(data, message);
     } catch {
       // 回應不是 JSON，用預設訊息。
     }
@@ -202,7 +202,7 @@ export async function bindScheduleTree(brandId: string): Promise<ScheduleState> 
     let message = `配對失敗（狀態碼 ${res.status}）`;
     try {
       const data = (await res.json()) as { error?: { message?: string } };
-      if (data.error?.message) message = data.error.message;
+      message = errorMessageFrom(data, message);
     } catch {
       // 回應不是 JSON，用預設訊息。
     }
@@ -232,7 +232,7 @@ export async function rejectSchedulePlans(
     let message = `送出失敗（狀態碼 ${res.status}）`;
     try {
       const data = (await res.json()) as { error?: { message?: string } };
-      if (data.error?.message) message = data.error.message;
+      message = errorMessageFrom(data, message);
     } catch {
       // 回應不是 JSON，用預設訊息。
     }

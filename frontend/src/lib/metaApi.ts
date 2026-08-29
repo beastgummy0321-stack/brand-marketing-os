@@ -3,7 +3,7 @@
  * 不是 /api/settings 那種 {data, generated_at} 信封——照抄
  * frontend/src/components/auth/AcceptInvitePage.tsx 已經在用的解析方式，不要自己
  * 另外發明一套錯誤格式。 */
-import { apiFetch } from "./http";
+import { apiFetch, errorMessageFrom } from "./http";
 
 export interface MetaAccount {
   id: string;
@@ -26,7 +26,7 @@ interface ErrorEnvelope {
 async function readOrThrow<T>(res: Response, fallback: string): Promise<T> {
   if (!res.ok) {
     const body = (await res.json().catch(() => null)) as ErrorEnvelope | null;
-    throw new Error(body?.error?.message ?? fallback);
+    throw new Error(errorMessageFrom(body, fallback));
   }
   return res.json() as Promise<T>;
 }

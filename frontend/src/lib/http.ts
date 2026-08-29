@@ -68,3 +68,37 @@ export async function apiFetch(input: RequestInfo | URL, init?: RequestInit): Pr
 
   return res;
 }
+
+/** 後端有兩種錯誤外殼，這支兩種都吃得下：
+ *  - `{"error": "請填寫品牌名稱。"}`——`app/main.py` 的 `_error()` 與各路由的手寫回應
+ *  - `{"error": {"code": …, "message": "請先登入", "details": …}}`——`web.ApiError` 的
+ *    exception handler（`app/main.py:506`）
+ *
+ * 2026-08-29 修：五個 api 檔各自只認得其中一種。認字串的那幾支（intake／library／
+ * products）碰到物件外殼時，`new Error(物件)` 會變成畫面上的 **`[object Object]`**——
+ * 建檔精靈第一步上傳產品照踩到的就是這個：真正的原因是 401「請先登入」，但使用者看到
+ * 一句沒有意義的話，不知道自己該重新登入。認物件的那幾支（meta／schedule）反過來會把
+ * 字串外殼吃掉、只顯示 fallback。
+ *
+ * 兩種外殼誰對不在這裡處理——畫面的職責是把後端真的回了什麼講給人聽。 */
+export function errorMessageFrom(body: unknown, fallback: string): string {
+  if (!body || typeof body !== "object") return fallback;
+  const err = (body as { error?: unknown }).error;
+  if (typeof err === "string" && err) return err;
+  if (err && typeof err === "object") {
+    const message = (err as { message?: unknown }).message;
+    if (typeof message === "string" && message) return message;
+  }
+  const detail = (body as { detail?: unknown }).detail;
+  if (typeof detail === "string" && detail) return detail;
+  return fallback;
+}
+
+/** `errorMessageFrom` 的 Response 版：讀不出 JSON（例如 502 回了 HTML）就用 fallback。 */
+export async function errorMessageFromResponse(res: Response, fallback: string): Promise<string> {
+  try {
+    return errorMessageFrom(await res.json(), fallback);
+  } catch {
+    return fallback;
+  }
+}

@@ -7,7 +7,7 @@
  * 「產品偵測清單至少 1 筆已存在（測試「已建立」鎖選狀態）」必須要有的欄位——契約本身要求
  * 的測試資料需要它才能表達，不是額外自創的外部規格。 */
 
-import { apiFetch } from "./http";
+import { apiFetch, errorMessageFromResponse } from "./http";
 
 export type IntakeJobKind = "scan" | "question" | "paste_fix";
 export type IntakeJobStatus = "waiting" | "running" | "done" | "failed";
@@ -185,12 +185,7 @@ async function getJson<T>(path: string): Promise<T> {
 }
 
 async function extractError(res: Response, fallback: string): Promise<string> {
-  try {
-    const data = (await res.json()) as { error?: string };
-    return data.error || fallback;
-  } catch {
-    return fallback;
-  }
+  return errorMessageFromResponse(res, fallback);
 }
 
 async function postJson<T = void>(path: string, body?: unknown): Promise<T> {

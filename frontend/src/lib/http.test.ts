@@ -9,7 +9,7 @@ vi.mock("@/lib/auth", () => ({
 }));
 
 import { getAccessToken, getOrgId, signOut } from "@/lib/auth";
-import { _setRedirectForTest, apiFetch, takePendingPath } from "@/lib/http";
+import { _setRedirectForTest, apiFetch, errorMessageFrom, takePendingPath } from "@/lib/http";
 
 const mockGetAccessToken = vi.mocked(getAccessToken);
 const mockGetOrgId = vi.mocked(getOrgId);
@@ -102,5 +102,32 @@ describe("apiFetch", () => {
 
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ok: true });
+  });
+});
+
+describe("errorMessageFrom", () => {
+  /** 2026-08-29：建檔精靈第一步上傳產品照，畫面顯示 `[object Object]`。真正的原因是 401
+   * 「請先登入」，但後端的 `ApiError` 外殼是物件（`{error:{code,message,details}}`），而這
+   * 幾支 api 檔只認得字串外殼（`{error:"…"}`），`new Error(物件)` 就變成那句沒有意義的話。
+   * 兩種外殼都要讀得出來，讀不出來時退回可讀的預設句，永遠不要把物件丟給 `new Error`。 */
+  it("讀得出物件外殼的 message（就是那個 [object Object] 的成因）", () => {
+    const body = { error: { code: "unauthenticated", message: "請先登入", details: null } };
+    expect(errorMessageFrom(body, "預設")).toBe("請先登入");
+  });
+
+  it("讀得出字串外殼", () => {
+    expect(errorMessageFrom({ error: "請填寫品牌名稱。" }, "預設")).toBe("請填寫品牌名稱。");
+  });
+
+  it("讀得出 FastAPI 的 detail", () => {
+    expect(errorMessageFrom({ detail: "Not Found" }, "預設")).toBe("Not Found");
+  });
+
+  it("認不得的形狀一律退回預設句，不吐出 [object Object]", () => {
+    for (const body of [null, undefined, "字串", 42, {}, { error: {} }, { error: { code: "x" } }]) {
+      const message = errorMessageFrom(body, "預設");
+      expect(message).toBe("預設");
+      expect(message).not.toContain("[object");
+    }
   });
 });

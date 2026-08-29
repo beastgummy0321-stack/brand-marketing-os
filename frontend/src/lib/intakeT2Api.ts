@@ -1,6 +1,6 @@
 /** T2 真相卡／人物誌 API。信封拆解與錯誤處理照 trackingApi.ts；不混進舊逐條確認路徑。 */
 import type { IntakeReviewItem } from "./intakeApi";
-import { apiFetch } from "./http";
+import { apiFetch, errorMessageFrom } from "./http";
 
 export type TruthCardBucket = "accepted" | "needs_confirmation" | "forbidden";
 export type TruthAnswerKind = "price" | "claim_permission" | null;
@@ -65,7 +65,7 @@ async function postJson<T = void>(path: string, body?: unknown): Promise<T> {
     let message = `處理失敗（狀態碼 ${res.status}）`;
     try {
       const data = (await res.json()) as { error?: string };
-      if (data.error) message = data.error;
+      message = errorMessageFrom(data, message);
     } catch {
       // 非 JSON 回應就沿用白話預設錯誤。
     }
@@ -85,7 +85,7 @@ async function putJson(path: string, body: unknown): Promise<void> {
     let message = `儲存失敗（狀態碼 ${res.status}）`;
     try {
       const data = (await res.json()) as { error?: string };
-      if (data.error) message = data.error;
+      message = errorMessageFrom(data, message);
     } catch {
       // 非 JSON 回應就沿用白話預設錯誤。
     }
