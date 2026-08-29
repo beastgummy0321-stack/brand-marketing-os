@@ -195,6 +195,7 @@ def run_task(
     opts = options or TaskOptions()
     model = providers.resolve_model(opts.model, task_type=task_type, conn=conn, brand_id=brand_id)
     thinking = providers.resolve_thinking(opts.thinking, task_type=task_type)
+    provider = providers.select_provider(provider)  # 開發用 codex_cli 開關，見 providers.py 開頭
     provider_name = getattr(provider, "name", "unknown")
 
     # 思考等級（票 #27）、工具（ADR 0005）、org_id（票 04-0：AnthropicProvider 讀 DB 金鑰
@@ -257,6 +258,26 @@ def run_task(
             pricing.calculate_cost(model, response.usage.input_tokens, response.usage.output_tokens)
             + web_search_requests * pricing.WEB_SEARCH_USD_PER_SEARCH
         )
+        # 2026-08-29：`stop_reason == "max_tokens"` 代表模型還沒講完就被 max_tokens 切斷，
+        # 回來的是半句 JSON。以前這裡照樣寫 succeeded，呼叫端拿到解不開的字串，只能回報
+        # 「代理沒有回傳看得懂的東西」——把「超過長度上限」講成「模型亂回」，看的人完全
+        # 不知道該調哪個旋鈕。實測 llm_01M16CM5CS8Q435MVWEJ5BYA9D：output_tokens 剛好
+        # 16000，字串停在 `"value": "最大化轉換次`。截斷是失敗，而且要說出是哪一種失敗。
+        if getattr(response, "stop_reason", None) == "max_tokens":
+            # 失敗歸失敗，錢照記：這些 token 真的生成過、真的計費了。只寫 error 不寫 cost，
+            # 等於再犯一次今天稍早修掉的「花費上限少算」（見本檔 providers 的 max_retries
+            # 註解）——那次是重試漏記，這次會變成截斷漏記，同一個洞的兩個入口。
+            conn.execute(
+                "UPDATE llm_task SET rendered_output = %s, usage_json = %s, cost = %s "
+                "WHERE id = %s",
+                (response.output_text, db.jsonb(usage), cost, row["id"]),
+            )
+            _mark_failed(
+                conn, row["id"], status="failed",
+                error=(f"產出超過長度上限（{opts.max_tokens} tokens）被截斷，這次的內容不完整。"
+                       "請提高該任務的 max_tokens，或把要產出的東西拆小。"),
+            )
+            return get_task(conn, row["id"]) or {}
         _mark_succeeded(
             conn, row["id"], structured_output=response.structured,
             rendered_output=response.output_text, usage=usage, cost=cost,

@@ -46,7 +46,8 @@ def main() -> int:
         return 0
     org_id = org_row["id"]
 
-    if not coresettings.get_api_key(org_id=org_id):
+    codex_cli = providers.codex_cli_enabled()
+    if not codex_cli and not coresettings.get_api_key(org_id=org_id):
         print("還沒有設定 AI 金鑰，這次不送出任何請求。")
         print("請先到系統的「設定」頁填入金鑰，之後再執行一次：python -m app.intake.card_test")
         print("（ChatGPT 操作卡無法自動測：請手動開 ChatGPT 照 W7 步驟貼上交接包文字，"
@@ -55,9 +56,9 @@ def main() -> int:
 
     prompt = script.build_prompt(_sample_draft(), "standard",
                                  known_products=[script.MOCK_PRODUCT_NAME])
-    model = coresettings.get_llm_model(org_id=org_id)
+    model = providers.CODEX_CLI_MODEL if codex_cli else coresettings.get_llm_model(org_id=org_id)
     print(f"用模型「{model}」送出 Claude 操作卡的交接包文字（標準調研），等它回覆⋯⋯")
-    provider = providers.AnthropicProvider()
+    provider = providers.select_provider(providers.AnthropicProvider())
     try:
         resp = provider.complete(model=model, system=None,
                                   messages=[{"role": "user", "content": prompt}],

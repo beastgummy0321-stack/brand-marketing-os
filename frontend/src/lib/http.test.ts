@@ -5,14 +5,16 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 vi.mock("@/lib/auth", () => ({
   getAccessToken: vi.fn(),
   getOrgId: vi.fn(),
+  setOrgId: vi.fn(),
   signOut: vi.fn(),
 }));
 
-import { getAccessToken, getOrgId, signOut } from "@/lib/auth";
+import { getAccessToken, getOrgId, setOrgId, signOut } from "@/lib/auth";
 import { _setRedirectForTest, apiFetch, errorMessageFrom, takePendingPath } from "@/lib/http";
 
 const mockGetAccessToken = vi.mocked(getAccessToken);
 const mockGetOrgId = vi.mocked(getOrgId);
+const mockSetOrgId = vi.mocked(setOrgId);
 const mockSignOut = vi.mocked(signOut);
 
 afterEach(() => {
@@ -23,6 +25,45 @@ afterEach(() => {
 });
 
 describe("apiFetch", () => {
+  it("403 forbidden_org：清掉記住的組織、不帶 X-Org-Id 重打一次", async () => {
+    mockGetAccessToken.mockResolvedValue("tok123");
+    mockGetOrgId.mockReturnValue("org_stale");
+    const fetchMock = vi
+      .fn(async (_input: RequestInfo | URL, _init?: RequestInit) => new Response("{}", { status: 200 }))
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ error: { code: "forbidden_org", message: "你不在這個組織裡" } }), {
+          status: 403,
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const res = await apiFetch("/api/settings");
+
+    expect(res.status).toBe(200);
+    expect(mockSetOrgId).toHaveBeenCalledWith(null);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(new Headers(fetchMock.mock.calls[0][1]?.headers).get("X-Org-Id")).toBe("org_stale");
+    expect(new Headers(fetchMock.mock.calls[1][1]?.headers).get("X-Org-Id")).toBeNull();
+  });
+
+  it("其他 403 原樣交還，不清組織也不重試", async () => {
+    mockGetAccessToken.mockResolvedValue("tok123");
+    mockGetOrgId.mockReturnValue("org_abc");
+    const fetchMock = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        new Response(JSON.stringify({ error: { code: "forbidden_role", message: "只有負責人可以改" } }), {
+          status: 403,
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const res = await apiFetch("/api/settings");
+
+    expect(res.status).toBe(403);
+    expect(mockSetOrgId).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it("有 session 時帶上 Authorization 與 X-Org-Id", async () => {
     mockGetAccessToken.mockResolvedValue("tok123");
     mockGetOrgId.mockReturnValue("org_abc");

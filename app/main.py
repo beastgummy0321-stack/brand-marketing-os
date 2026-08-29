@@ -284,12 +284,18 @@ def _write_prompt_header(prompt_header: str, *, org_id: str) -> None:
 
 def _run_ai_test_connection(*, org_id: str) -> tuple:
     """回傳 (人話訊息, kind)：kind 沿用 `redirect_with_message` 既有的 'ok'／'warn'／'danger'
-    三種，HTML 與 JSON 路由共用同一份判斷。"""
-    if not coresettings.get_api_key(web.conn, org_id=org_id):
+    三種，HTML 與 JSON 路由共用同一份判斷。
+
+    本機 Codex CLI 開關（BRAND_OS_LLM_PROVIDER=codex_cli）開著時跟著走那條線：不檢查
+    Anthropic 金鑰（CLI 走 ChatGPT 訂閱額度，不需要），直接打一次 codex。
+    """
+    codex_cli = llm_providers.codex_cli_enabled()
+    if not codex_cli and not coresettings.get_api_key(web.conn, org_id=org_id):
         return "尚未設定金鑰。請先在上方填入 AI 金鑰，儲存後再測試。", "warn"
     try:
-        llm_providers.AnthropicProvider().complete(
-            model=coresettings.get_llm_model(web.conn, org_id=org_id), system=None,
+        model = llm_providers.CODEX_CLI_MODEL if codex_cli else coresettings.get_llm_model(web.conn, org_id=org_id)
+        llm_providers.select_provider(llm_providers.AnthropicProvider()).complete(
+            model=model, system=None,
             messages=[{"role": "user", "content": "hi"}], max_tokens=1, timeout_s=30.0,
             org_id=org_id,
         )

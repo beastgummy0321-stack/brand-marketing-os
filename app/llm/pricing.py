@@ -25,6 +25,14 @@ PRICING = {
         "input_per_mtok": 10.0,
         "output_per_mtok": 50.0,
     },
+    # 本機 Codex CLI 線路（內部測試用，非正式版功能）：走 ChatGPT 訂閱額度，不是 per-token
+    # 計費，這個 0 不是猜的牌價，是這條路本身不會產生 API 帳單的事實。已知副作用：這條路
+    # 走的每一筆呼叫的 cost 都算 0，代表每月花費上限（app/core/settings.py）對這條路
+    # 形同無上限——這是設計取捨，不是漏算。
+    "gpt-5.6-luna": {
+        "input_per_mtok": 0.0,
+        "output_per_mtok": 0.0,
+    },
 }
 
 

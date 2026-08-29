@@ -11,7 +11,13 @@ from __future__ import annotations
 
 import base64
 import contextvars
+import json
+import os
+import subprocess
+import sys
+import tempfile
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Protocol
 
 from app.brand_intelligence import repository as bi_repo
@@ -20,6 +26,72 @@ from app.llm import pricing
 
 # 缺金鑰的人話訊息：不出現環境變數名（使用者看不懂），一律指向設定頁（07 §3 規則 3）。
 MISSING_KEY_MESSAGE = "尚未設定 AI 金鑰，請到「設定」頁填入後再試一次"
+
+# ---------------------------------------------------------------------------
+# 本機 Codex CLI 線路（內部測試用，非正式版功能）：正式版仍走 Anthropic。
+# BRAND_OS_LLM_PROVIDER=codex_cli 時，LLM 呼叫改走本機 codex 指令、走 ChatGPT 訂閱額度，
+# 不產生 API 帳單；沒設這個環境變數就完全維持現狀。模型固定 gpt-5.6-luna，刻意不放進
+# app/shared/web.py 的 MODEL_CHOICES（正式版選單不該看得到它）。
+# ---------------------------------------------------------------------------
+CODEX_CLI_MODEL = "gpt-5.6-luna"
+_CODEX_CLI_ENV_VAR = "BRAND_OS_LLM_PROVIDER"
+_CODEX_CLI_ENV_VALUE = "codex_cli"
+
+
+def codex_cli_enabled() -> bool:
+    """環境變數開著＝這次呼叫要換走本機 Codex CLI 線路，不用猜也不用查其他旗標。"""
+    return os.environ.get(_CODEX_CLI_ENV_VAR) == _CODEX_CLI_ENV_VALUE
+
+
+def select_provider(provider: Provider) -> Provider:
+    """codex_cli_enabled() 開著時換成 CodexCliProvider，否則原樣回傳既有 provider——
+    給每個呼叫端（gateway.run_task、設定頁測試連線、intake 操作卡實測工具）共用同一個
+    切換點，不必各自重寫判斷式。"""
+    if codex_cli_enabled():
+        return CodexCliProvider()
+    return provider
+
+
+def to_strict_schema(schema: dict) -> dict:
+    """Anthropic 工具用的 input_schema（JSON Schema 子集）→ OpenAI strict 模式版本。
+
+    OpenAI strict 模式規定 properties 內每個鍵都要出現在 required 裡（實測：漏列會回 400，
+    'required' is required to be supplied and to be an array including every key in
+    properties）。本來非必填的欄位改成「列入 required，但型別／enum 加上 null」頂替
+    （實測可行）。純函式，不連網、不吃 I/O，遞迴處理巢狀 object／array。
+    """
+    if not isinstance(schema, dict):
+        return schema
+    schema = dict(schema)
+    if schema.get("type") == "object" and isinstance(schema.get("properties"), dict):
+        properties = schema["properties"]
+        required_now = set(schema.get("required") or [])
+        new_properties = {}
+        for key, subschema in properties.items():
+            converted = to_strict_schema(subschema)
+            if key not in required_now:
+                converted = _make_nullable(converted)
+            new_properties[key] = converted
+        schema["properties"] = new_properties
+        schema["required"] = list(properties.keys())
+        schema.setdefault("additionalProperties", False)
+    elif schema.get("type") == "array" and isinstance(schema.get("items"), dict):
+        schema["items"] = to_strict_schema(schema["items"])
+    return schema
+
+
+def _make_nullable(schema: dict) -> dict:
+    """把一個欄位的 schema 改成型別（與 enum，如果有）多容許 null——OpenAI strict 模式
+    表達「非必填」的方式：必須列進 required，但值可以是 null。"""
+    schema = dict(schema)
+    field_type = schema.get("type")
+    if isinstance(field_type, str):
+        schema["type"] = [field_type, "null"]
+    elif isinstance(field_type, list) and "null" not in field_type:
+        schema["type"] = [*field_type, "null"]
+    if isinstance(schema.get("enum"), list) and None not in schema["enum"]:
+        schema["enum"] = [*schema["enum"], None]
+    return schema
 
 # Anthropic Vision 官方格式與限制（查證日 2026-08-15）：Messages 的 user content 使用
 # image block，base64 source 需帶 media_type／data；直接 Claude API 的單張 base64 編碼後上限
@@ -173,7 +245,12 @@ def resolve_model(override: str | None = None, task_type: str | None = None,
     brand_id 必填（票 04-0）：全域設定現在依 org_id 分租戶存放，app.llm 依 LAYER_ORDER
     排在 app.brand_intelligence 之後，可以直接 import 該層反查 org_id，不必逐層往上傳
     （同 app/llm/gateway.py run_task() 既有的作法）。
+
+    本機 Codex CLI 線路開著時（codex_cli_enabled()）無視上面整條優先鏈，一律回
+    CODEX_CLI_MODEL——llm_task.model 因此記的是真的跑的那顆模型，不是設定頁選的那顆。
     """
+    if codex_cli_enabled():
+        return CODEX_CLI_MODEL
     if override in pricing.PRICING:
         return override
     request_override = _model_override_var.get()
@@ -450,6 +527,194 @@ class AnthropicProvider:
             raw=response,
             search_sources=search_sources,
         )
+
+
+_CODEX_IMAGE_EXTENSIONS = {
+    "image/jpeg": ".jpg", "image/png": ".png", "image/gif": ".gif", "image/webp": ".webp",
+}
+
+
+def _build_codex_prompt(system: str | None, messages: list) -> tuple:
+    """多輪訊息攤平成一段 prompt（票 codex-cli-dev 規則 10）：system 原文放最前面，之後
+    每則訊息加 [user]／[assistant] 標頭；不可以只送最後一則、把上下文丟掉。
+
+    回傳 (prompt文字, 這次呼叫用到的 image content block 清單)。
+    """
+    parts = [system] if system else []
+    image_blocks = []
+    for message in messages:
+        header = "[assistant]" if message.get("role") == "assistant" else "[user]"
+        content = message.get("content")
+        if isinstance(content, str):
+            parts.append(f"{header}\n{content}")
+            continue
+        texts = []
+        for block in content or []:
+            block_type = block.get("type")
+            if block_type == "text":
+                texts.append(block.get("text", ""))
+            elif block_type == "image":
+                image_blocks.append(block)
+        parts.append(f"{header}\n" + "\n".join(texts))
+    return "\n\n".join(parts), image_blocks
+
+
+def _write_codex_image(tmp_path: Path, index: int, block: dict) -> Path:
+    """把 Anthropic base64 image block 解回暫存檔（票 codex-cli-dev 規則 9）；檔案跟著
+    呼叫端的 TemporaryDirectory 一起清掉，不需要另外的 try/finally。"""
+    source = block.get("source") or {}
+    ext = _CODEX_IMAGE_EXTENSIONS.get(source.get("media_type", ""), ".bin")
+    path = tmp_path / f"image_{index}{ext}"
+    path.write_bytes(base64.b64decode(source.get("data", "")))
+    return path
+
+
+def _kill_codex_process_tree(proc: subprocess.Popen) -> None:
+    """逾時後連子程序一起殺（codex 會再開 node）：Windows 沒有 os.killpg，用 taskkill
+    /F /T 連整棵程序樹一起殺；其他平台 proc.kill() 只殺母行程（票 codex-cli-dev 規則 6）。
+    """
+    if sys.platform == "win32":
+        subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)], capture_output=True, text=True)
+    else:
+        proc.kill()
+
+
+class CodexCliProvider:
+    """本機 Codex CLI 線路（內部測試用，見本檔開頭 codex_cli_enabled 區塊）：實作跟
+    AnthropicProvider 一樣的 Provider 介面，靠 select_provider() 換上，呼叫端完全不用改。
+
+    - 隔離：--ignore-user-config 擋掉使用者 config.toml 的 plugins／MCP／memories；
+      cwd 指向一個空的 TemporaryDirectory，不讓 codex 在專案目錄裡跑（同時也是暫存的
+      輸出檔／schema 檔／圖片檔的家，離開 with 區塊自動清掉）。
+    - 結構化輸出：tools 裡若有帶 input_schema 的工具（呼叫端原本要 Anthropic 強制呼叫
+      該工具），改用 to_strict_schema() 轉換後的 --output-schema 逼模型輸出對應 JSON——
+      CLI 沒有 tool_choice，沒辦法強制呼叫工具，因此改成直接約束最終輸出的形狀。
+    - 網路搜尋：tools 裡有 WEB_SEARCH_TOOL 時加 -c tools.web_search=true；JSONL 裡
+      web_search 這種 item.completed 事件的則數當作 usage.web_search_requests；
+      search_sources 拿不到，固定回空清單（已知且接受的缺口，見票內容）。
+    - 最終文字一律讀 -o 那個檔，不從 JSONL 的 agent_message 事件裡撿——模型可能先講一句
+      「我要去搜尋了」才給答案，那些都不是最終文字。
+    - 截斷偵測：CLI 沒有 max_tokens、也沒有 stop_reason，stop_reason 固定回 "end_turn"，
+      本機模式偵測不到產出截斷，這是已知限制不是 bug。
+    - cost 一律 0（見 app/llm/pricing.py 對 gpt-5.6-luna 的註記）。
+    """
+
+    name = "codex_cli"
+
+    def complete(
+        self,
+        *,
+        model: str,
+        system: str | None,
+        messages: list,
+        max_tokens: int,
+        timeout_s: float = 120.0,
+        effort: str | None = None,
+        tools: list | None = None,
+        org_id: str | None = None,
+    ) -> ProviderResponse:
+        prompt, image_blocks = _build_codex_prompt(system, messages)
+
+        structured_tool = next((tool for tool in (tools or []) if tool.get("input_schema")), None)
+        web_search = any(tool == WEB_SEARCH_TOOL for tool in (tools or []))
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            output_file = tmp_path / "output.txt"
+            image_paths = [_write_codex_image(tmp_path, i, b) for i, b in enumerate(image_blocks)]
+
+            cmd = [
+                "codex", "exec", "--ignore-user-config", "--skip-git-repo-check", "--ephemeral",
+                "-s", "read-only", "-m", model, "--json", "-o", str(output_file),
+            ]
+            if structured_tool is not None:
+                schema_file = tmp_path / "schema.json"
+                schema_file.write_text(
+                    json.dumps(to_strict_schema(structured_tool["input_schema"]), ensure_ascii=False),
+                    encoding="utf-8",
+                )
+                cmd += ["--output-schema", str(schema_file)]
+            if web_search:
+                cmd += ["-c", "tools.web_search=true"]
+            for image_path in image_paths:
+                cmd += ["-i", str(image_path)]
+            cmd.append("-")
+
+            proc = subprocess.Popen(
+                cmd, cwd=tmpdir, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace",
+            )
+            try:
+                stdout, stderr = proc.communicate(input=prompt, timeout=timeout_s)
+            except subprocess.TimeoutExpired as exc:
+                _kill_codex_process_tree(proc)
+                proc.wait()
+                raise ProviderTimeoutError("AI 服務（本機 Codex CLI）逾時未回應，請再試一次。") from exc
+
+            events = []
+            for line in stdout.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    events.append(json.loads(line))
+                except ValueError:
+                    continue  # 非 JSON 的雜訊行（不應該出現，但不因此整段爆掉）
+
+            for event in events:
+                # 頂層 error／turn.failed 才是致命失敗；item.completed 底下型別為 error 的
+                # 事件是非致命通知，規格明講必須忽略，不在這個迴圈的判斷範圍內。
+                if event.get("type") in ("error", "turn.failed"):
+                    # 兩種形狀：頂層 error 的訊息在 event["message"]，turn.failed 的在
+                    # event["error"]["message"]（例如 schema 被退的 400 就只出現在後者）。
+                    # 只讀前者的話，看的人會拿到一句沒有內容的「執行失敗」。
+                    message = (event.get("message")
+                               or (event.get("error") or {}).get("message")
+                               or "本機 Codex CLI 執行失敗")
+                    raise ProviderError(f"AI 服務（本機 Codex CLI）失敗：{message}")
+
+            if proc.returncode != 0:
+                raise ProviderError(
+                    f"AI 服務（本機 Codex CLI）失敗（結束碼 {proc.returncode}）："
+                    f"{stderr.strip() or '無詳細訊息'}"
+                )
+            if not output_file.exists():
+                raise ProviderError("AI 服務（本機 Codex CLI）沒有產生輸出，請再試一次。")
+            output_text = output_file.read_text(encoding="utf-8", errors="replace")
+
+            web_search_requests = sum(
+                1 for event in events
+                if event.get("type") == "item.completed"
+                and (event.get("item") or {}).get("type") == "web_search"
+            )
+            usage_event = next(
+                (event.get("usage") or {} for event in events if event.get("type") == "turn.completed"),
+                {},
+            )
+
+            structured = None
+            if structured_tool is not None:
+                try:
+                    structured = json.loads(output_text)
+                except ValueError:
+                    structured = None
+
+            return ProviderResponse(
+                output_text=output_text,
+                structured=structured,
+                usage=Usage(
+                    input_tokens=usage_event.get("input_tokens", 0) or 0,
+                    output_tokens=usage_event.get("output_tokens", 0) or 0,
+                    cache_read_input_tokens=usage_event.get("cached_input_tokens", 0) or 0,
+                    cache_creation_input_tokens=usage_event.get("cache_write_input_tokens", 0) or 0,
+                    web_search_requests=web_search_requests,
+                ),
+                stop_reason="end_turn",
+                # reasoning_output_tokens 不確定是否已含在 output_tokens 內，不編、不併，
+                # 原樣存在 raw 這個自由格式欄位裡（票 codex-cli-dev 規則 11）。
+                raw=usage_event,
+                search_sources=[],
+            )
 
 
 class FakeProvider:
