@@ -375,7 +375,6 @@ async def brand_update_api(request: Request, brand_id: str):
     persona = _str_field(body, "persona")
     market_region = _str_field(body, "market_region")
     conversion_goal = _str_field(body, "conversion_goal")
-    industry = _str_field(body, "industry")
     errors = {}
     name_c = clean(name)
     if not name_c:
@@ -388,9 +387,6 @@ async def brand_update_api(request: Request, brand_id: str):
     goal_c = clean(conversion_goal)
     if goal_c and goal_c not in repo.CONVERSION_GOALS:
         errors["conversion_goal"] = "請選擇有效的廣告目標。"
-    industry_c = clean(industry)
-    if industry_c and industry_c not in repo.INDUSTRIES:
-        errors["industry"] = "請選擇有效的業種。"
     if errors:
         return JSONResponse({"errors": errors}, status_code=400)
     repo.update_brand(web.conn, brand_id, name=name_c, client_name=clean(client_name), status=status,
@@ -399,7 +395,6 @@ async def brand_update_api(request: Request, brand_id: str):
         web.conn, brand_id, market_region=region_c or None,
         conversion_goal=goal_c or brand_routes._persona_conversion_goal_default(persona), actor=str(actor.user_id),
     )
-    repo.set_brand_industry(web.conn, brand_id, industry=industry_c or None, actor=str(actor.user_id))
     updated = repo.get_brand(web.conn, brand_id)
     return {"data": _brand_profile_shape(brand_id, updated)}
 

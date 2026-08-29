@@ -57,7 +57,6 @@ class GuideCardLinksResolveTest(unittest.TestCase):
             "brand_id": self.brand_id,
             "conversion_goal": "purchase",
             "pending_facts_count": 0,
-            "campaign_reminder": None,
             "intake_draft": None,
         }
         base.update(overrides)
@@ -68,9 +67,6 @@ class GuideCardLinksResolveTest(unittest.TestCase):
         return {
             "conversion_goal_missing": self._facts(conversion_goal=None),
             "pending_facts": self._facts(pending_facts_count=3),
-            "campaign_calendar": self._facts(campaign_reminder={
-                "id": "cny_2026", "name": "農曆新年", "days_until": 28,
-                "kind": "prep", "weeks_until": 4, "tier_label": "大檔"}),
             "intake_in_progress": self._facts(
                 intake_draft={"step": 2, "resume_path": self.intake_resume_path}),
         }

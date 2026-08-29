@@ -13,8 +13,8 @@ from fastapi.testclient import TestClient
 import app.main as main
 import app.shared.web as web
 from app.brand_intelligence import repository as bi_repo
-from app.core import calendar_dismiss, rule_cards
 from app.core import db as coredb
+from app.core import rule_cards
 from app.identity import ActorContext
 from app.shared import web as shared_web
 
@@ -186,98 +186,3 @@ class SettingsHubBrandIsolationTest(unittest.TestCase):
                          "budget_structure", "min_daily_per_group")
         self.assertNotEqual(field_b["value"], 999)
         self.assertEqual(field_b["value"], 300)  # B 品牌仍是系統預設值
-
-
-class SettingsCalendarDismissTest(unittest.TestCase):
-    """票 02-permanent-dismiss-category（ADR 0014 第三節，G14.9／G14.10）：「廣告層面」頁
-    「節日提醒」小節，逐節日類別開關。"""
-
-    def setUp(self):
-        self.client = TestClient(main.app)
-        self.brand = bi_repo.create_brand(web.conn, name="虛構節日提醒茶行", client_name=None,
-                                          actor=ACTOR, org_id=coredb.DEV_ORG_ID)
-        self.bid = self.brand["id"]
-
-    def test_empty_state_all_categories_show_reminding(self):
-        """G14.10：空狀態下節日開關全部預設「提醒中」。
-
-        舊頁每一列的「提醒中／已關閉」就是照 `list_dismissed()` 有沒有這個類別掛的
-        （routes_settings.py `_calendar_categories_ctx`），這裡直接驗那份現況。"""
-        categories = calendar_dismiss.list_categories()
-        self.assertIn("農曆新年", {cat["label"] for cat in categories})
-        # 一個都沒關掉＝每一列都是「提醒中」，沒有任何一列是「已關閉」
-        self.assertEqual(calendar_dismiss.list_dismissed(web.conn, self.bid), set())
-
-    def test_toggle_off_marks_category_closed_and_persists(self):
-        calendar_dismiss.dismiss(web.conn, self.bid, "cny", org_id=coredb.DEV_ORG_ID)
-        self.assertEqual(calendar_dismiss.list_dismissed(web.conn, self.bid), {"cny"})
-
-    def test_toggle_on_after_off_restores_reminding(self):
-        calendar_dismiss.dismiss(web.conn, self.bid, "cny", org_id=coredb.DEV_ORG_ID)
-        calendar_dismiss.undismiss(web.conn, self.bid, "cny")
-        self.assertEqual(calendar_dismiss.list_dismissed(web.conn, self.bid), set())
-
-    def test_persists_after_restart(self):
-        """ADR 0027：不再有「重開連線」這回事了——改成從一條全新借來的連線讀回。"""
-        calendar_dismiss.dismiss(web.conn, self.bid, "cny", org_id=coredb.DEV_ORG_ID)
-        with coredb.connection() as fresh:
-            self.assertEqual(calendar_dismiss.list_dismissed(fresh, self.bid), {"cny"})
-
-    def test_toggle_does_not_leak_across_brands(self):
-        other = bi_repo.create_brand(web.conn, name="虛構節日提醒茶行二號", client_name=None,
-                                     actor=ACTOR, org_id=coredb.DEV_ORG_ID)
-        calendar_dismiss.dismiss(web.conn, self.bid, "cny", org_id=coredb.DEV_ORG_ID)
-        self.assertEqual(calendar_dismiss.list_dismissed(web.conn, other["id"]), set())
-
-
-# 新殼 JSON API：/api/settings/calendar/brands/{brand_id}/**（節日提醒永久關閉開關搬進新殼，
-# 舊頁邏輯照舊沿用 `_calendar_categories_ctx()`／`calendar_dismiss`，這裡只驗 HTTP 層行為）。
-class SettingsCalendarApiTest(unittest.TestCase):
-    def setUp(self):
-        self.client = TestClient(main.app)
-        self.brand = bi_repo.create_brand(web.conn, name="虛構節日提醒新殼茶行", client_name=None,
-                                          actor=ACTOR, org_id=coredb.DEV_ORG_ID)
-        self.bid = self.brand["id"]
-
-    def _categories(self):
-        resp = self.client.get(f"/api/settings/calendar/brands/{self.bid}")
-        self.assertEqual(resp.status_code, 200, resp.text)
-        return {c["category"]: c for c in resp.json()["data"]["categories"]}
-
-    def test_list_defaults_to_all_enabled(self):
-        categories = self._categories()
-        self.assertIn("cny", categories)
-        self.assertTrue(all(c["enabled"] for c in categories.values()))
-
-    def test_toggle_off_disables_and_is_reflected_in_list(self):
-        resp = self.client.post(f"/api/settings/calendar/brands/{self.bid}/cny", json={"enabled": False})
-        self.assertEqual(resp.status_code, 200, resp.text)
-        self.assertFalse(resp.json()["data"]["enabled"])
-        self.assertFalse(self._categories()["cny"]["enabled"])
-
-    def test_toggle_on_after_off_restores(self):
-        self.client.post(f"/api/settings/calendar/brands/{self.bid}/cny", json={"enabled": False})
-        resp = self.client.post(f"/api/settings/calendar/brands/{self.bid}/cny", json={"enabled": True})
-        self.assertEqual(resp.status_code, 200, resp.text)
-        self.assertTrue(resp.json()["data"]["enabled"])
-        self.assertTrue(self._categories()["cny"]["enabled"])
-
-    def test_unknown_category_404s(self):
-        resp = self.client.post(f"/api/settings/calendar/brands/{self.bid}/沒這個類別", json={"enabled": False})
-        self.assertEqual(resp.status_code, 404)
-
-    def test_unknown_brand_404s(self):
-        resp = self.client.get("/api/settings/calendar/brands/沒這個品牌")
-        self.assertEqual(resp.status_code, 404)
-
-    def test_toggle_off_one_category_does_not_affect_others(self):
-        self.client.post(f"/api/settings/calendar/brands/{self.bid}/cny", json={"enabled": False})
-        categories = self._categories()
-        self.assertFalse(categories["cny"]["enabled"])
-        others = [c for key, c in categories.items() if key != "cny"]
-        self.assertTrue(others)
-        self.assertTrue(all(c["enabled"] for c in others))
-
-
-if __name__ == "__main__":
-    unittest.main()

@@ -172,21 +172,11 @@ def set_brand_switches(conn: Conn, brand_id: str, *,
     return after
 
 
-# 業種標籤（ADR 0014 第一節）：節日日曆比對用，跟節日資料的 applicable_industries
-# 清單（app/dashboard/campaign_calendar_data.json）值域對齊，不得各自發明。目前只涵蓋
-# 這批內建節日（情人節／白色情人節／母親節等送禮檔期）需要區分的業種粒度，之後有新
-# 節日需要更細的業種再擴充——業種清單跟 conversion_goal 一樣可人工增修。
-INDUSTRIES = ("food_beverage", "beauty_personal_care", "fashion_apparel",
-              "home_lifestyle", "service")
-
-
 def set_brand_industry(conn: Conn, brand_id: str, *,
                         industry: str | None, actor: str) -> dict:
-    """寫入 brand.industry（ADR 0014，節日日曆比對用）。獨立於 set_brand_switches——
-    那支管的是方法論開關（票 A），業種是不同功能領域，不合併進同一支函式。"""
+    """寫入 brand.industry。ADR 0036 刪掉了唯一的讀者（節日日曆的業種比對）與五個內建
+    業種代碼，本函式與 brand.industry 欄位一起在票 03 隨 migration 移除。"""
     _require(actor, "actor 為必填")
-    if industry is not None and industry not in INDUSTRIES:
-        raise ValueError(f"industry 只能是 {'/'.join(INDUSTRIES)} 其中之一")
     before = get_brand(conn, brand_id)
     if before is None:
         raise ValueError(f"找不到品牌：{brand_id}")

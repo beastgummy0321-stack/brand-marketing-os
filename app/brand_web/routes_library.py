@@ -25,7 +25,7 @@ from pathlib import Path
 from fastapi import APIRouter, File, Form, Request, UploadFile
 from fastapi.responses import Response
 
-from app.brand_intelligence import background_job, compliance_wordlist
+from app.brand_intelligence import background_job
 from app.brand_intelligence import customer_voice as cv_mod
 from app.brand_intelligence import repository as repo
 from app.core import cleanup, creative_assets
@@ -168,10 +168,6 @@ def _claim_shape(brand_id: str, claim: dict) -> dict:
         "scope_label": web.scope_label(brand_id, claim["product_id"]),
         "evidence_source_reference": _source_ref_text(
             brand_id, claim.get("evidence_source_reference_id")),
-        # 票 03-claim-wordlist-todo（決議 2026-08-23）：任何類別命中內建法定詞庫都要標紅字
-        # 警告，不擋、不落欄位，讀取時現算。同一顆純函式，create/edit（呼叫這裡）與列表
-        # （下面 `library_get_api`）共用，不開第二套比對。
-        "wordlist_hits": compliance_wordlist.claim_wordlist_hits(claim["claim_text"]),
     }
 
 

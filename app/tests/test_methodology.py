@@ -26,7 +26,7 @@ class MethodologyTableParseTest(unittest.TestCase):
         # load_table() 回傳純檔名清單（條件由 compile() 處理），所以帶（需要：X）的檔名也在裡面
         self.assertEqual(
             table["檔期計畫生成"],
-            ["ads-core.md", "ads-commerce.md", "ads-health.md", "ab-testing.md", "customer-voice.md"],
+            ["ads-core.md", "ads-commerce.md", "ab-testing.md", "customer-voice.md"],
         )
         self.assertEqual(
             table["Hook／文案生成"],

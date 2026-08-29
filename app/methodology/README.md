@@ -13,7 +13,6 @@
 |---|---|
 | `ads-core.md` | Meta 投放核心（平台中立）：現行打法、受眾、帳戶結構、出價與學習期、素材疲勞、擴量紀律、再行銷、投放前清單 |
 | `ads-commerce.md` | 電商特有：毛利與成本上限公式、ASC、購物事件與 Pixel／網域檢查清單 |
-| `ads-health.md` | Meta 健康類／受法規管制品類廣告政策 |
 | `ad-creative.md` | 三種生成模式、grounding 要求、15 款樣板、Meta 字數規格 |
 | `ab-testing.md` | 樣本數速查表、Peeking 紀律、ICE 排序 |
 | `copywriting.md` | 五大原則、寫作規則、CTA、Hook 公式、改寫範例、心理模型 |
@@ -30,7 +29,7 @@
 
 | 任務型別 | 必讀方法論檔 |
 |---|---|
-| 檔期計畫生成 | `ads-core.md`、`ads-commerce.md`（需要：有商品）、`ads-health.md`（需要：健康類法規）、`ab-testing.md`、`customer-voice.md` |
+| 檔期計畫生成 | `ads-core.md`、`ads-commerce.md`（需要：有商品）、`ab-testing.md`、`customer-voice.md` |
 | Hook／文案生成 | `ad-creative.md`、`copywriting.md`、`creative-matrix.md`、`customer-voice.md` |
 | 圖片 Prompt 生成 | `creative-matrix.md`、`ad-creative.md` |
 | 影片腳本生成 | `creative-matrix.md`、`copywriting.md` |
@@ -76,3 +75,5 @@
 **2026-08-07 移除的外部數字**（改用相對自身基準或直接刪，不再需要維護）：產能基準每週 3 則（Motion Creative Benchmarks 2026）、ASC 每次購買成本低 5%（Meta 官方頁；2023 年的 17% 為舊說法）、概念壽命 2–3 週與 10 天衰退曲線（`adlibrary.com/posts/ad-fatigue`，業界回報值）。要查原始數字回這個 commit 的訊息。
 
 **2026-08-07 ads.md 拆檔**：`ads.md` 拆成 `ads-core.md`／`ads-commerce.md`／`ads-health.md`，原檔已刪除，內容對應見上方檔案索引表；歷史沿革查這個 commit 前的版本。
+
+**2026-08-29 ads-health.md 刪除**（ADR 0036）：健康類／受法規管制品類的廣告政策整份刪掉，產品不再於程式裡帶任何產業法規知識。品牌要避開的說法寫成品牌規則，由 `context_compiler` 進每一份 prompt。

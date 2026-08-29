@@ -115,12 +115,10 @@ class LibraryBundleTest(unittest.TestCase):
         self.assertEqual(
             set(claim.keys()),
             {"id", "claim_text", "claim_type", "product_id", "scope_label",
-             "evidence_source_reference", "wordlist_hits"},
+             "evidence_source_reference"},
         )
         # 高風險缺佐證：evidence_source_reference 應為 None，前端才會畫警示（S5.20）
         self.assertIsNone(claim["evidence_source_reference"])
-        # 「防腐劑」不命中內建法定詞庫，wordlist_hits 空陣列（票 03-claim-wordlist-todo）
-        self.assertEqual(claim["wordlist_hits"], [])
 
         channel = data["channels"][0]
         self.assertEqual(

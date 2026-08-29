@@ -42,12 +42,6 @@ export interface LibraryRule {
 
 export type ClaimType = "approved" | "high_risk" | "forbidden";
 
-export interface ClaimWordlistHit {
-  term: string;
-  detail: string;
-  source_id: string;
-}
-
 export interface LibraryClaim {
   id: string;
   claim_text: string;
@@ -55,9 +49,6 @@ export interface LibraryClaim {
   product_id: string | null;
   scope_label: string;
   evidence_source_reference: string | null;
-  /** 票 03-claim-wordlist-todo（決議 2026-08-23）：任何類別命中內建法定詞庫都在這裡，
-   * 不擋存檔，只標紅字警告。空陣列＝沒命中。 */
-  wordlist_hits: ClaimWordlistHit[];
 }
 
 export interface LibraryAsset {
@@ -204,14 +195,6 @@ export const CONVERSION_GOALS: [string, string][] = [
   ["lead", "留資料"],
   ["booking", "預約"],
   ["awareness", "認識品牌"],
-];
-
-export const INDUSTRIES: [string, string][] = [
-  ["food_beverage", "食品飲料"],
-  ["beauty_personal_care", "美妝個人護理"],
-  ["fashion_apparel", "服飾"],
-  ["home_lifestyle", "居家生活"],
-  ["service", "服務業"],
 ];
 
 export function optionLabel(pairs: [string, string][], value: string): string {
@@ -448,7 +431,6 @@ export async function saveBrandProfile(
     persona: string;
     market_region: string;
     conversion_goal: string;
-    industry: string;
   },
 ): Promise<void> {
   await postJson(`/api/library/brands/${encodeURIComponent(brandId)}/edit`, fields);

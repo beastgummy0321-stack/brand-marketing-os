@@ -142,17 +142,6 @@ CONVERSION_GOAL_LABELS = {
     "awareness": "認識品牌",
 }
 
-# industry 內部值→白話中文，順序對齊 app.brand_intelligence.repository.INDUSTRIES
-# （該檔是值域的唯一來源，跟節日日曆的 applicable_industries 值域對齊，不得各自發明）。
-INDUSTRY_LABELS = {
-    "food_beverage": "食品飲料",
-    "beauty_personal_care": "美妝個人護理",
-    "fashion_apparel": "服飾",
-    "home_lifestyle": "居家生活",
-    "service": "服務業",
-}
-
-
 def _label(pairs, value):
     for internal, human in pairs:
         if internal == value:
