@@ -6,7 +6,10 @@ this (container contract §1); it is only ever loaded via `register()`.
 ADR 0028／0029／0032／0033：部門是 repo 裡的一個資料夾
 （`app/departments/ads/schedule.md`），外殼原樣把它貼進 prompt，從不解析；品牌上下文經
 既有的 `context_compiler.compile()` 組出來；`gateway.run_task()` 是全站唯一的 LLM 入口，
-這裡不重寫第二個。money 由 `plan.py` 的純函數算，代理只給比例。
+這裡不重寫第二個。money 由 `plan.py` 的純函數算，代理只給比例。票 10-feedback-entries
+（ADR 0037）：拒絕一批方案＝把每條意見寫成 `rule` 表的一列（呼叫既有的
+`bi_repo.create_rule()`，不自己下 SQL），再用最新一次成功的 `schedule_plan` 凍結參數重跑，
+沒有第二條把回饋文字塞進 prompt 的路徑。
 
 平台／行銷目標不是外殼的業務詞（CONTEXT.md：外殼只認得檔期／核准／預算上限），一律從
 `platform_objectives.json` 這份資料檔讀出來，不寫死成 Python 常數或畫面 label（票 08）。
@@ -19,6 +22,7 @@ ADR 0028／0029／0032／0033：部門是 repo 裡的一個資料夾
 """
 
 import json
+from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Request
 from pydantic import BaseModel
@@ -26,18 +30,25 @@ from pydantic import BaseModel
 import app.shared.web as web
 from app.brand_intelligence import repository as bi_repo
 from app.core import rule_cards
-from app.core.db import APP_DIR
+from app.core.db import APP_DIR, jsonb
 from app.llm import context_compiler, gateway, methodology, providers
+from app.meta import repository as meta_repo
 from app.schedule import plan as plan_mod
+from app.schedule import tree as tree_mod
 
 router = APIRouter(prefix="/api/schedule")
 
 # task_type：providers.py TASK_TYPE_LABELS／TASK_DEFAULTS 的 "schedule_plan"（票 07 settled 段：
 # 重新命名死掉的 campaign_plan，不是新增第二個型別）。
 TASK_TYPE = "schedule_plan"
-# 對照 app/methodology/README.md 既有的「檔期計畫生成」列，不新增列。
+# 票 09：選定一個方案之後展開成三層活動樹，第二個 task_type，同一支 llm_task 表。
+TREE_TASK_TYPE = "schedule_tree"
+# 對照 app/methodology/README.md 既有的「檔期計畫生成」列，不新增列——展開活動樹用的到的
+# 平台知識（帳戶結構、AB 測試分流）跟出方案是同一批，沒有真的用到才新增專屬列（維護規則
+# 「只按消費拉動萃取」）。
 METHODOLOGY_TASK_LABELS = ["檔期計畫生成"]
 DEPARTMENT_FILE = APP_DIR / "departments" / "ads" / "schedule.md"
+TREE_DEPARTMENT_FILE = APP_DIR / "departments" / "ads" / "campaign_tree.md"
 # 平台／行銷目標資料檔（票 08 §3）：改這個檔案不必重新部署程式；每次讀都重新讀檔
 # （不快取到模組層），比照 DEPARTMENT_FILE 既有的讀法。
 PLATFORM_DATA_FILE = APP_DIR / "schedule" / "platform_objectives.json"
@@ -59,15 +70,31 @@ class PlanRequest(BaseModel):
     plan_count: int = 3  # 畫面預設值；程式真正允許的範圍讀規則卡 schedule_plan_count（票 08）
 
 
+class TreeRequest(BaseModel):
+    plan_index: int = 0  # 沒有型別上界，超出方案數的驗證在 `_run_tree()` 裡回人話 400
+
+
+class RejectEntry(BaseModel):
+    # 票 10-feedback-entries（ADR 0037）：一條回饋＝rule 表的一列。這裡全部給預設值，同樣
+    # 理由（租戶界線先於欄位驗證），真正的驗證在 `_validate_reject_entries()`。
+    severity: str = ""
+    rule_type: str | None = None
+    content: str = ""
+
+
+class RejectRequest(BaseModel):
+    entries: list[RejectEntry] = []
+
+
 def _load_platform_data() -> dict:
     return json.loads(PLATFORM_DATA_FILE.read_text(encoding="utf-8"))
 
 
-def _latest_task_row(conn, brand_id: str) -> dict | None:
+def _latest_task_row(conn, brand_id: str, task_type: str) -> dict | None:
     row = conn.execute(
         "SELECT * FROM llm_task WHERE brand_id = %s AND task_type = %s "
         "ORDER BY started_at DESC LIMIT 1",
-        (brand_id, TASK_TYPE),
+        (brand_id, task_type),
     ).fetchone()
     return dict(row) if row is not None else None
 
@@ -78,12 +105,42 @@ def _plan_count_bounds(conn, brand_id: str) -> tuple[int, int]:
     return int(plan_count_min), int(plan_count_max)  # get_value 回 float，這裡才是個數，轉 int
 
 
-def _brand_response(conn, brand_id: str) -> dict:
+def _current_month_window() -> tuple:
+    """[月初, 下月初) 半開區間——跟 app/meta/routes.py brand_spend 同一個窗口（票 11
+    settled 段第 9 點：綁定節點的花費／ROAS 用這一期，不是另開一套時間規則）。"""
+    today = datetime.now(UTC).date()
+    month_start = today.replace(day=1)
+    month_end = (month_start + timedelta(days=32)).replace(day=1)
+    return month_start, month_end
+
+
+def _fill_node_spend(conn, org_id: str, brand_id: str, tree: dict) -> None:
+    """票 11：把已綁定的第一層節點對上 ticket 05 的當月花費／ROAS——一棵樹裡沒有任何
+    節點綁定，就完全不查（省一次查詢），比對用 campaign_id，不重讀名稱。"""
+    bound_ids = {n["bound_external_id"] for n in tree["nodes"] if n["bound_external_id"]}
+    if not bound_ids:
+        return
+    account_ids = meta_repo.bound_account_ids_for_brand(conn, org_id, brand_id)
+    month_start, month_end = _current_month_window()
+    summary = meta_repo.spend_summary(conn, org_id, account_ids, month_start, month_end)
+    by_campaign_id = {c["campaign_id"]: c for c in summary["campaigns"]}
+    for node in tree["nodes"]:
+        campaign = by_campaign_id.get(node["bound_external_id"])
+        if campaign is not None:
+            node["spend"] = campaign["spend"]
+            node["roas"] = campaign["roas"]
+
+
+def _brand_response(conn, brand_id: str, org_id: str) -> dict:
     current_daily_budget = rule_cards.get_value(conn, brand_id, "schedule_budget", "daily_budget")
     plan_count_min, plan_count_max = _plan_count_bounds(conn, brand_id)
     data = _load_platform_data()
-    row = _latest_task_row(conn, brand_id)
+    row = _latest_task_row(conn, brand_id, TASK_TYPE)
     plan = plan_mod.plan_from_task_row(row) if row is not None else None
+    tree_row = _latest_task_row(conn, brand_id, TREE_TASK_TYPE)
+    tree = tree_mod.tree_from_task_row(tree_row) if tree_row is not None else None
+    if tree is not None:
+        _fill_node_spend(conn, org_id, brand_id, tree)
     return {
         "daily_budget": current_daily_budget,
         "plan_count_min": plan_count_min,
@@ -91,6 +148,7 @@ def _brand_response(conn, brand_id: str) -> dict:
         "platforms": data["platforms"],
         "objectives": data["objectives"],
         "plan": plan,
+        "tree": tree,
     }
 
 
@@ -158,7 +216,82 @@ def _plan_params_text(platform_label: str, objective_label: str, promotion_note:
     ])
 
 
-def _run_plan(conn, brand_id: str, body: "PlanRequest") -> dict:
+NO_PLAN_TO_EXPAND_MESSAGE = "還沒有成功產生的方案可以展開，請先完成排程。"
+PLAN_INDEX_OUT_OF_RANGE_MESSAGE = "找不到這個方案編號，請重新選擇。"
+
+
+def _tree_params_text(platform_label: str, plan_index: int, chosen_plan: dict) -> str:
+    """這次要展開的參數：選定的第幾個方案、方案本身的摘要／理由／每個方向的比例與金額，
+    原樣列給代理看——跟 `_plan_params_text` 同一個道理，平台標籤是呼叫端從資料檔查出來的，
+    方案內容是使用者已經看過、選定的那張卡片，不是這裡自己編的。"""
+    lines = [
+        "## 這次要展開的參數",
+        f"平台：{platform_label}",
+        f"選定的方案（第 {plan_index + 1} 個）摘要：{chosen_plan['summary']}",
+        f"這個方案的理由：{chosen_plan['reasoning']}",
+        "這個方案裡錢怎麼分：",
+    ]
+    for split in chosen_plan["splits"]:
+        lines.append(
+            f"- {split['label']}：{split['share'] * 100:.0f}%，"
+            f"每日 {split['daily_amount']} 元（{split['why']}）"
+        )
+    return "\n".join(lines)
+
+
+def _run_tree(conn, brand_id: str, org_id: str, body: "TreeRequest") -> dict:
+    """票 09：選定一個既有方案，展開成三層活動樹——重讀最新一次 `schedule_plan` 那列
+    `llm_task`（凍結的預算／平台），選出 `body.plan_index` 那個方案，交給
+    `campaign_tree.md` 展開。找不到成功的方案、或方案編號超出範圍，都在打代理之前回
+    人話 400（比照 `_run_plan` 的「先驗證、後花錢」次序）。"""
+    plan_row = _latest_task_row(conn, brand_id, TASK_TYPE)
+    if plan_row is None or plan_row["status"] != "succeeded":
+        raise web.ApiError(400, "no_plan", NO_PLAN_TO_EXPAND_MESSAGE)
+
+    plan_scope = plan_row.get("context_scope_json") or {}
+    daily_budget = plan_scope.get("daily_budget", 0)
+    product_ids = plan_scope.get("product_ids", [])
+    platform = plan_scope.get("platform", "")
+
+    plans, failure = plan_mod.build_plans(plan_row.get("rendered_output") or "", daily_budget)
+    if failure is not None or not (0 <= body.plan_index < len(plans)):
+        raise web.ApiError(400, "plan_index_out_of_range", PLAN_INDEX_OUT_OF_RANGE_MESSAGE)
+    chosen_plan = plans[body.plan_index]
+
+    data = _load_platform_data()
+    platform_label = next((p["label"] for p in data["platforms"] if p["id"] == platform), platform)
+
+    brand_context, knowledge_item_ids, brand_version = _compile_brand_context(
+        conn, brand_id, product_ids
+    )
+    department_text = TREE_DEPARTMENT_FILE.read_text(encoding="utf-8")
+    methodology_result = methodology.compile(conn, METHODOLOGY_TASK_LABELS, brand_id=brand_id)
+    params_text = _tree_params_text(platform_label, body.plan_index, chosen_plan)
+    prompt = "\n\n".join(
+        section for section in
+        (department_text, methodology_result.text, params_text, brand_context) if section
+    )
+
+    context = gateway.TaskContext(
+        # 票 09 settled 段第 6 點：預算凍結自選定方案的來源列，不重讀規則卡——樹要跟使用者
+        # 選的那張方案卡一致，不是跟當下的規則卡設定一致。
+        context_scope={
+            "brand_id": brand_id, "plan_index": body.plan_index, "daily_budget": daily_budget,
+            "source_plan_task_id": plan_row["id"],
+        },
+        knowledge_item_ids=knowledge_item_ids,
+        brand_version=brand_version,
+        product_version=None,
+    )
+    gateway.run_task(
+        conn, PROVIDER, brand_id=brand_id, task_type=TREE_TASK_TYPE,
+        prompt_template_id=TREE_TASK_TYPE, prompt_template_version="v1",
+        system=None, messages=[{"role": "user", "content": prompt}], context=context,
+    )
+    return _brand_response(conn, brand_id, org_id)
+
+
+def _run_plan(conn, brand_id: str, org_id: str, body: "PlanRequest") -> dict:
     _validate_products(conn, brand_id, body.product_ids)
     data = _load_platform_data()
     _validate_platform_and_objective(data, body.platform, body.objective)
@@ -193,7 +326,9 @@ def _run_plan(conn, brand_id: str, body: "PlanRequest") -> dict:
         context_scope={
             "brand_id": brand_id, "product_ids": body.product_ids, "daily_budget": daily_budget,
             "platform": body.platform, "objective": body.objective,
-            "promotion_note": body.promotion_note,
+            "promotion_note": body.promotion_note, "plan_count": body.plan_count,
+            # plan_count 票 10-feedback-entries 補：拒絕方案重排要能原樣重跑同一組參數，
+            # 缺了這欄會找不到「上次要幾個方案」。
         },
         knowledge_item_ids=knowledge_item_ids,
         brand_version=brand_version,
@@ -208,18 +343,149 @@ def _run_plan(conn, brand_id: str, body: "PlanRequest") -> dict:
         # （見 app/llm/providers.py AnthropicProvider.complete() 對搜尋結果區塊的處理）。
         options=gateway.TaskOptions(tools=[providers.WEB_SEARCH_TOOL]),
     )
-    return _brand_response(conn, brand_id)
+    return _brand_response(conn, brand_id, org_id)
+
+
+# 票 10-feedback-entries（ADR 0037）：soft 回饋允許的類別——vocab.py RULE_TYPES 新增的
+# 五個（四個偏好分類＋other）；hard 回饋一律強制 forbidden_word，不接受這份清單裡任何值
+# （dropdown 只問後果、不問內容，見 ADR 0037「兩個值，永遠不會有第三個」）。
+SOFT_REJECT_RULE_TYPES = frozenset({"angle", "audience", "product_pick", "budget_split", "other"})
+
+REJECT_NO_ENTRIES_MESSAGE = "拒絕一批之前，請至少填一條意見。"
+REJECT_CONTENT_INVALID_MESSAGE = "每一條意見請填 1～100 字。"
+REJECT_SEVERITY_INVALID_MESSAGE = "請選擇「紅線」或「偏好」。"
+REJECT_CATEGORY_INVALID_MESSAGE = "請為這條偏好選一個類別。"
+NO_PLAN_TO_RERUN_MESSAGE = "還沒有成功產生的方案可以重新排程，請先完成排程。"
+
+
+def _validate_reject_entries(entries: list["RejectEntry"]) -> list[dict]:
+    """票 10 settled 段第 3 點：空清單先擋（「拒絕一批要先寫至少一條」不只在表單擋，這裡
+    也擋）；每條意見驗證後轉成 `bi_repo.create_rule()` 要的形狀。任何一條不合法，整批不建立
+    ——不挑合法的先建立、不合法的丟掉（比照 `plan.py` 的「整批失敗」慣例）。"""
+    if not entries:
+        raise web.ApiError(400, "no_entries", REJECT_NO_ENTRIES_MESSAGE)
+    validated = []
+    for entry in entries:
+        content = entry.content.strip()
+        if not content or len(content) > 100:
+            raise web.ApiError(400, "content_invalid", REJECT_CONTENT_INVALID_MESSAGE)
+        if entry.severity == "hard":
+            rule_type = "forbidden_word"  # 強制，不採信呼叫端傳的任何值（settled 段第 3 點）
+        elif entry.severity == "soft":
+            if entry.rule_type not in SOFT_REJECT_RULE_TYPES:
+                raise web.ApiError(400, "rule_type_invalid", REJECT_CATEGORY_INVALID_MESSAGE)
+            rule_type = entry.rule_type
+        else:
+            raise web.ApiError(400, "severity_invalid", REJECT_SEVERITY_INVALID_MESSAGE)
+        validated.append({"severity": entry.severity, "rule_type": rule_type, "content": content})
+    return validated
+
+
+def _run_reject(conn, brand_id: str, actor, body: "RejectRequest") -> dict:
+    """票 10 settled 段第 3 點：驗證、把每條意見建成品牌層規則（`product_id=None`），
+    再用最新一次成功的 `schedule_plan` 任務凍結的參數重新排程——規則在重新排程組 prompt
+    之前已經 `active`，`context_compiler.compile()` 既有的注入邏輯就會吃到，不另開第二條
+    把回饋文字直接塞進 prompt 的路徑。"""
+    validated = _validate_reject_entries(body.entries)
+
+    plan_row = _latest_task_row(conn, brand_id, TASK_TYPE)
+    if plan_row is None or plan_row["status"] != "succeeded":
+        raise web.ApiError(400, "no_plan", NO_PLAN_TO_RERUN_MESSAGE)
+    scope = plan_row.get("context_scope_json") or {}
+
+    for entry in validated:
+        bi_repo.create_rule(
+            conn, brand_id, actor=str(actor.user_id), rule_type=entry["rule_type"],
+            content=entry["content"], severity=entry["severity"],
+        )
+
+    rerun_body = PlanRequest(
+        product_ids=scope.get("product_ids", []),
+        platform=scope.get("platform", ""),
+        objective=scope.get("objective", ""),
+        promotion_note=scope.get("promotion_note", ""),
+        plan_count=scope.get("plan_count", 3),
+    )
+    return _run_plan(conn, brand_id, actor.org_id, rerun_body)
+
+
+NO_TREE_TO_BIND_MESSAGE = "還沒有成功產生的活動樹可以綁定，請先展開活動樹。"
+BIND_FAILURE_MESSAGE = "配對失敗，請檢查名稱是否完全相符"
+
+
+def _run_bind(conn, brand_id: str, org_id: str) -> dict:
+    """票 11：把手動在平台上發布的活動用名稱精準比對回這棵樹的第一層節點——SQL '=' 比對，
+    區分大小寫、不 trim（settled 段第 2 點）。名稱只用一次：已經有 bound_external_id 的
+    節點跳過不重比對，之後一律靠存下來的 id 找資料（settled 段第 3 點，改名不斷線）。
+    零筆或兩筆以上都是失敗，不猜——整批回同一句訊息，不逐節點分開講（settled 段第 4 點）。
+    還沒有成功展開過的活動樹，先擋在比對之前（比照 `_run_tree` 的「先驗證、後動作」次序）。
+    """
+    tree_row = _latest_task_row(conn, brand_id, TREE_TASK_TYPE)
+    if tree_row is None or tree_row["status"] != "succeeded":
+        raise web.ApiError(400, "no_tree", NO_TREE_TO_BIND_MESSAGE)
+
+    scope = tree_row.get("context_scope_json") or {}
+    bound_external_ids = dict(scope.get("bound_external_ids") or {})
+    tree = tree_mod.tree_from_task_row(tree_row)
+
+    account_ids = meta_repo.bound_account_ids_for_brand(conn, org_id, brand_id)
+    any_failure = False
+    newly_bound = False
+    for node in tree["nodes"]:
+        if node["bound_external_id"] is not None:
+            continue
+        matches = meta_repo.campaign_ids_by_exact_name(conn, org_id, account_ids, node["name"])
+        if len(matches) == 1:
+            bound_external_ids[node["name"]] = matches[0]
+            newly_bound = True
+        else:
+            any_failure = True
+
+    if newly_bound:
+        conn.execute(
+            "UPDATE llm_task SET context_scope_json = %s WHERE id = %s",
+            (jsonb({**scope, "bound_external_ids": bound_external_ids}), tree_row["id"]),
+        )
+        conn.commit()
+
+    response = _brand_response(conn, brand_id, org_id)
+    # settled 段第 7 點：這個欄位只在這支路由的回應裡非空，且從不落地——重讀
+    # tree_from_task_row() 之後才蓋上，GET／plan／tree／reject 走的都是同一個
+    # tree_from_task_row()，一律留 null。
+    response["tree"]["bind_failure"] = BIND_FAILURE_MESSAGE if any_failure else None
+    return response
 
 
 @router.get("/brands/{brand_id}")
 async def get_schedule(request: Request, brand_id: str):
     actor = web.require_actor(request)
     web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
-    return _brand_response(web.conn, brand_id)
+    return _brand_response(web.conn, brand_id, actor.org_id)
 
 
 @router.post("/brands/{brand_id}/plans")
 async def create_plan(request: Request, brand_id: str, body: PlanRequest):
     actor = web.require_actor(request)
     web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
-    return _run_plan(web.conn, brand_id, body)
+    return _run_plan(web.conn, brand_id, actor.org_id, body)
+
+
+@router.post("/brands/{brand_id}/tree")
+async def create_tree(request: Request, brand_id: str, body: TreeRequest):
+    actor = web.require_actor(request)
+    web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
+    return _run_tree(web.conn, brand_id, actor.org_id, body)
+
+
+@router.post("/brands/{brand_id}/tree/bind")
+async def bind_tree(request: Request, brand_id: str):
+    actor = web.require_actor(request)
+    web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
+    return _run_bind(web.conn, brand_id, actor.org_id)
+
+
+@router.post("/brands/{brand_id}/reject")
+async def create_reject(request: Request, brand_id: str, body: RejectRequest):
+    actor = web.require_actor(request)
+    web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
+    return _run_reject(web.conn, brand_id, actor, body)

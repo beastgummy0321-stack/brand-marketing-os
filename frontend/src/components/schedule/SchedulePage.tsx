@@ -5,17 +5,38 @@ import { Skeleton } from "@/components/layout/Skeleton";
 import { formatCurrency } from "@/lib/format";
 import { fetchProductList, type ProductListItem } from "@/lib/productsApi";
 import {
+  bindScheduleTree,
   createSchedulePlan,
+  expandPlanIntoTree,
   fetchSchedule,
+  rejectSchedulePlans,
+  SCHEDULE_REJECT_CATEGORIES,
+  type RejectEntryInput,
+  type RejectSeverity,
   type SchedulePlanItem,
   type ScheduleSource,
   type ScheduleState,
 } from "@/lib/scheduleApi";
+import { CampaignTree } from "./CampaignTree";
 
 type LoadState =
   | { status: "loading" }
   | { status: "error"; message: string }
   | { status: "ready"; products: ProductListItem[]; schedule: ScheduleState };
+
+/** 票 10-feedback-entries：一條回饋——畫面上多的 `id` 只是 React key，不進 API。 */
+interface FeedbackEntry {
+  id: number;
+  severity: RejectSeverity;
+  ruleType: string;
+  content: string;
+}
+
+let _feedbackEntryId = 0;
+function newFeedbackEntry(): FeedbackEntry {
+  _feedbackEntryId += 1;
+  return { id: _feedbackEntryId, severity: "soft", ruleType: SCHEDULE_REJECT_CATEGORIES[0][0], content: "" };
+}
 
 /** 檔期規劃（票 07：最薄路徑；票 08：表單加平台／目標／促銷重點／方案數，一次拿回 N 張
  * 方案卡）。選產品、填表、確認，畫面下方長出方案卡——同一頁，不換路由、不開 modal
@@ -30,6 +51,51 @@ export function SchedulePage({ brandId }: { brandId: string }) {
   const [confirming, setConfirming] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [expandingIndex, setExpandingIndex] = useState<number | null>(null);
+  const [expandError, setExpandError] = useState<string | null>(null);
+  const [binding, setBinding] = useState(false);
+  const [bindError, setBindError] = useState<string | null>(null);
+  const [feedbackByPlan, setFeedbackByPlan] = useState<Record<number, FeedbackEntry[]>>({});
+  const [rejecting, setRejecting] = useState(false);
+  const [rejectError, setRejectError] = useState<string | null>(null);
+
+  function addFeedbackEntry(planIndex: number) {
+    setFeedbackByPlan((prev) => ({
+      ...prev,
+      [planIndex]: [...(prev[planIndex] ?? []), newFeedbackEntry()],
+    }));
+  }
+
+  function updateFeedbackEntry(planIndex: number, id: number, patch: Partial<FeedbackEntry>) {
+    setFeedbackByPlan((prev) => ({
+      ...prev,
+      [planIndex]: (prev[planIndex] ?? []).map((e) => (e.id === id ? { ...e, ...patch } : e)),
+    }));
+  }
+
+  function removeFeedbackEntry(planIndex: number, id: number) {
+    setFeedbackByPlan((prev) => ({
+      ...prev,
+      [planIndex]: (prev[planIndex] ?? []).filter((e) => e.id !== id),
+    }));
+  }
+
+  async function handleReject() {
+    const entries: RejectEntryInput[] = Object.values(feedbackByPlan)
+      .flat()
+      .map((e) => ({ severity: e.severity, ruleType: e.ruleType, content: e.content }));
+    setRejecting(true);
+    setRejectError(null);
+    try {
+      const schedule = await rejectSchedulePlans(brandId, entries);
+      setState((prev) => (prev.status === "ready" ? { ...prev, schedule } : prev));
+      setFeedbackByPlan({});
+    } catch (err) {
+      setRejectError(err instanceof Error ? err.message : "送出失敗，請稍後再試。");
+    } finally {
+      setRejecting(false);
+    }
+  }
 
   function load() {
     setState({ status: "loading" });
@@ -66,10 +132,37 @@ export function SchedulePage({ brandId }: { brandId: string }) {
       });
       setState((prev) => (prev.status === "ready" ? { ...prev, schedule } : prev));
       setConfirming(false);
+      setFeedbackByPlan({}); // 新的一批方案，舊方案卡上寫的回饋不再對得上號
     } catch (err) {
       setSubmitError(err instanceof Error ? err.message : "排程失敗，請稍後再試。");
     } finally {
       setSubmitting(false);
+    }
+  }
+
+  async function handleExpand(planIndex: number) {
+    setExpandingIndex(planIndex);
+    setExpandError(null);
+    try {
+      const schedule = await expandPlanIntoTree(brandId, planIndex);
+      setState((prev) => (prev.status === "ready" ? { ...prev, schedule } : prev));
+    } catch (err) {
+      setExpandError(err instanceof Error ? err.message : "展開失敗，請稍後再試。");
+    } finally {
+      setExpandingIndex(null);
+    }
+  }
+
+  async function handleBind() {
+    setBinding(true);
+    setBindError(null);
+    try {
+      const schedule = await bindScheduleTree(brandId);
+      setState((prev) => (prev.status === "ready" ? { ...prev, schedule } : prev));
+    } catch (err) {
+      setBindError(err instanceof Error ? err.message : "配對失敗，請稍後再試。");
+    } finally {
+      setBinding(false);
     }
   }
 
@@ -233,7 +326,24 @@ export function SchedulePage({ brandId }: { brandId: string }) {
           </div>
         )}
 
-        {schedule.plan && <PlanResult plan={schedule.plan} />}
+        {schedule.plan && (
+          <PlanResult
+            plan={schedule.plan}
+            expandingIndex={expandingIndex}
+            expandError={expandError}
+            onExpand={handleExpand}
+            feedbackByPlan={feedbackByPlan}
+            onAddFeedback={addFeedbackEntry}
+            onUpdateFeedback={updateFeedbackEntry}
+            onRemoveFeedback={removeFeedbackEntry}
+            onReject={handleReject}
+            rejecting={rejecting}
+            rejectError={rejectError}
+          />
+        )}
+        {schedule.tree && (
+          <CampaignTree tree={schedule.tree} binding={binding} bindError={bindError} onBind={handleBind} />
+        )}
       </div>
     );
   }
@@ -247,7 +357,31 @@ export function SchedulePage({ brandId }: { brandId: string }) {
   );
 }
 
-function PlanResult({ plan }: { plan: NonNullable<ScheduleState["plan"]> }) {
+function PlanResult({
+  plan,
+  expandingIndex,
+  expandError,
+  onExpand,
+  feedbackByPlan,
+  onAddFeedback,
+  onUpdateFeedback,
+  onRemoveFeedback,
+  onReject,
+  rejecting,
+  rejectError,
+}: {
+  plan: NonNullable<ScheduleState["plan"]>;
+  expandingIndex: number | null;
+  expandError: string | null;
+  onExpand: (planIndex: number) => void;
+  feedbackByPlan: Record<number, FeedbackEntry[]>;
+  onAddFeedback: (planIndex: number) => void;
+  onUpdateFeedback: (planIndex: number, id: number, patch: Partial<FeedbackEntry>) => void;
+  onRemoveFeedback: (planIndex: number, id: number) => void;
+  onReject: () => void;
+  rejecting: boolean;
+  rejectError: string | null;
+}) {
   if (plan.failure) {
     return (
       <div className="rounded-md border border-danger/40 bg-card p-4 shadow-[var(--shadow-card)]">
@@ -257,12 +391,37 @@ function PlanResult({ plan }: { plan: NonNullable<ScheduleState["plan"]> }) {
     );
   }
 
+  const totalFeedbackCount = Object.values(feedbackByPlan).reduce((n, list) => n + list.length, 0);
+
   return (
     <div className="flex flex-col gap-3">
       {plan.sources.length > 0 && <SourceList sources={plan.sources} />}
+      {expandError && <p className="text-sm text-danger">{expandError}</p>}
       {plan.plans.map((item, i) => (
-        <PlanCard key={i} index={i} plan={item} />
+        <PlanCard
+          key={i}
+          index={i}
+          plan={item}
+          expanding={expandingIndex === i}
+          onExpand={() => onExpand(i)}
+          entries={feedbackByPlan[i] ?? []}
+          onAddEntry={() => onAddFeedback(i)}
+          onUpdateEntry={(id, patch) => onUpdateFeedback(i, id, patch)}
+          onRemoveEntry={(id) => onRemoveFeedback(i, id)}
+        />
       ))}
+
+      <div className="rounded-md border border-border bg-card p-4 shadow-[var(--shadow-card)]">
+        {rejectError && <p className="mb-2 text-sm text-danger">{rejectError}</p>}
+        <button
+          type="button"
+          onClick={onReject}
+          disabled={totalFeedbackCount === 0 || rejecting}
+          className="rounded-md border border-danger px-3 py-1.5 text-sm font-medium text-danger hover:bg-danger/10 disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          {rejecting ? "送出中…" : "這批都不要，重新出方案"}
+        </button>
+      </div>
     </div>
   );
 }
@@ -284,10 +443,38 @@ function SourceList({ sources }: { sources: ScheduleSource[] }) {
   );
 }
 
-function PlanCard({ index, plan }: { index: number; plan: SchedulePlanItem }) {
+function PlanCard({
+  index,
+  plan,
+  expanding,
+  onExpand,
+  entries,
+  onAddEntry,
+  onUpdateEntry,
+  onRemoveEntry,
+}: {
+  index: number;
+  plan: SchedulePlanItem;
+  expanding: boolean;
+  onExpand: () => void;
+  entries: FeedbackEntry[];
+  onAddEntry: () => void;
+  onUpdateEntry: (id: number, patch: Partial<FeedbackEntry>) => void;
+  onRemoveEntry: (id: number) => void;
+}) {
   return (
     <div className="rounded-md border border-border bg-card p-4 shadow-[var(--shadow-card)]">
-      <h2 className="mb-2 font-display text-lg text-foreground">方案 {index + 1}</h2>
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <h2 className="font-display text-lg text-foreground">方案 {index + 1}</h2>
+        <button
+          type="button"
+          onClick={onExpand}
+          disabled={expanding}
+          className="rounded-md border border-primary px-2.5 py-1 text-sm font-medium text-primary hover:bg-primary/10 disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          {expanding ? "展開中…" : "用這個方案展開"}
+        </button>
+      </div>
       <p className="mb-2 whitespace-pre-wrap text-sm text-foreground">{plan.summary}</p>
       <p className="mb-3 whitespace-pre-wrap text-sm text-muted-foreground">{plan.reasoning}</p>
       {plan.splits.length > 0 && (
@@ -318,6 +505,79 @@ function PlanCard({ index, plan }: { index: number; plan: SchedulePlanItem }) {
           </table>
         </div>
       )}
+
+      <FeedbackControl entries={entries} onAdd={onAddEntry} onUpdate={onUpdateEntry} onRemove={onRemoveEntry} />
+    </div>
+  );
+}
+
+/** 票 10-feedback-entries（ADR 0037）：每張方案卡自己的回饋清單，一次加一條（+）。
+ * 送出時（`PlanResult` 的「這批都不要，重新出方案」）跨卡片彙整成一批——這裡只管輸入。 */
+function FeedbackControl({
+  entries,
+  onAdd,
+  onUpdate,
+  onRemove,
+}: {
+  entries: FeedbackEntry[];
+  onAdd: () => void;
+  onUpdate: (id: number, patch: Partial<FeedbackEntry>) => void;
+  onRemove: (id: number) => void;
+}) {
+  return (
+    <div className="mt-3 flex flex-col gap-2 border-t border-border pt-3">
+      {entries.map((entry) => (
+        <div key={entry.id} className="flex flex-col gap-1 rounded-md border border-border p-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <select
+              value={entry.severity}
+              onChange={(e) => onUpdate(entry.id, { severity: e.target.value as RejectSeverity })}
+              className="rounded-md border border-border bg-background px-2 py-1 text-sm"
+            >
+              <option value="soft">偏好</option>
+              <option value="hard">紅線</option>
+            </select>
+            {entry.severity === "soft" && (
+              <select
+                value={entry.ruleType}
+                onChange={(e) => onUpdate(entry.id, { ruleType: e.target.value })}
+                className="rounded-md border border-border bg-background px-2 py-1 text-sm"
+              >
+                {SCHEDULE_REJECT_CATEGORIES.map(([value, label]) => (
+                  <option key={value} value={value}>
+                    {label}
+                  </option>
+                ))}
+              </select>
+            )}
+            <button
+              type="button"
+              onClick={() => onRemove(entry.id)}
+              className="ml-auto text-sm text-muted-foreground hover:text-danger"
+            >
+              移除
+            </button>
+          </div>
+          <input
+            type="text"
+            value={entry.content}
+            onChange={(e) => onUpdate(entry.id, { content: e.target.value })}
+            maxLength={100}
+            placeholder="一句話說明哪裡不對"
+            className="rounded-md border border-border bg-background px-2 py-1.5 text-sm"
+          />
+          <p className="text-xs text-muted-foreground">
+            一句話就好——系統只記得 20 條規則，寫太長會擠掉別的。
+          </p>
+        </div>
+      ))}
+      <button
+        type="button"
+        onClick={onAdd}
+        className="self-start rounded-md border border-border px-2.5 py-1 text-sm font-medium text-foreground hover:bg-muted"
+      >
+        ＋ 加一條意見
+      </button>
     </div>
   );
 }

@@ -3,8 +3,8 @@
 Shapes other modules may use:
     register(app: FastAPI) -> None    # mounts /api/schedule/*
 
-Everything else in this package (`plan.py`, `routes.py`) is private — nothing outside this
-package imports them. Callers: `app/main.py`'s register loop, and nothing else.
+Everything else in this package (`plan.py`, `tree.py`, `routes.py`) is private — nothing outside
+this package imports them. Callers: `app/main.py`'s register loop, and nothing else.
 
 Depends on `app.core` (db, rule_cards), `app.llm` (gateway, providers, context_compiler,
 methodology), `app.shared.web`, `app.brand_intelligence.repository`. Does not import or

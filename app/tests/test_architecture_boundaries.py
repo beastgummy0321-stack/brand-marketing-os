@@ -321,7 +321,8 @@ LAYER_ORDER = [
                                 # ApiError／conn；app.shared 對它的依賴是函式內延遲 import
                                 # （見 require_actor()），這裡的靜態掃描看不到，不算環
     "app.meta",                # 票 04：Meta 廣告帳戶連接（Graph API、Vault 權杖），依賴
-                                # app.core 與 app.shared；本身尚無人依賴它
+                                # app.core 與 app.shared；票 11 起 app.schedule 依賴它讀
+                                # meta_campaign_spend（比照既有的 app.dashboard 依賴方向）
     "app.schedule",            # 票 07：檔期規劃最薄路徑，依賴 app.core／app.llm／app.shared／
                                 # app.brand_intelligence；本身尚無人依賴它
     "app.intake",              # 建檔精靈
@@ -541,11 +542,17 @@ KNOWN_MODULE_SIZES = {
     "app/dashboard": 645,
     "app/identity": 537,
     "app/intake": 3548,
-    "app/llm": 1296,  # 票 08：ProviderResponse.search_sources／網路搜尋結果解析
-    "app/meta": 784,  # 票 05 fix round：periodic dispatch task（_dispatch_daily_pull／
-                       # register_task() 一併掛 cron）
-    "app/orders": 1409,
-    "app/schedule": 426,  # 票 08：表單擴成 N 個方案＋平台／目標／方案數驗證
+    "app/llm": 1298,  # 票 09：TASK_TYPE_LABELS／TASK_DEFAULTS 新增 schedule_tree 兩行
+    "app/meta": 805,  # 票 11：campaign_ids_by_exact_name()（名稱精準比對，13 行）＋
+                       # spend_summary 改成只按 campaign_id 分組（活動月中改名不再裂成
+                       # 兩列各拿半個月花費，8 行含理由註解）
+    "app/orders": 1423,  # 票 12：channel_revenue 一張表取代三張（刪掉藥局專屬那一整組
+                          # 之後仍淨增）——官網帳本寫入路徑、channel_revenue_summary()、
+                          # 通用手動登錄（含「官網不能手動登錄」那道錢的守門）
+    "app/schedule": 883,  # 票 11：POST .../tree/bind（名稱比對、存平台 id、之後一律靠 id
+                          # 讀數字）＋_fill_node_spend()／_current_month_window()（把票 05
+                          # 的當月花費補到綁定節點上）＋tree.py 三個新欄位。前一次是票
+                          # 10-feedback-entries 的 POST .../reject（784）
     "app/shared": 450,
     "app/tools": 318,
 }
