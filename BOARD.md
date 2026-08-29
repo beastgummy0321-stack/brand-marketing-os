@@ -49,6 +49,7 @@ Meta 端只建了一個 **PAUSED、沒有廣告組合、沒有廣告、沒有預
 - [ ] **左側導覽有四條死連結**（投放與成效／累積智慧／素材工作檯／資料上線）：外殼切片刪掉那 8 條路由，導覽沒跟著刪，點下去整頁空白（2026-08-29 瀏覽器實測）。**這是使用者看得到的謊**，且 `HANDOFF-shell-slice.md` §3.7 寫的是「刪掉，不做轉址」
 - [ ] **晨光咖啡 0 筆已確認事實、0 條規則**：產品名稱已經會進 prompt（2026-08-29 修），但品牌上下文仍是空的——代理不知道這個品牌是誰、賣多少錢、對誰賣。要讓方案再準一階，下一步是去建檔精靈把事實填起來，不是寫程式
 - [ ] 排程表單的「行銷目標」下拉每次回到第一個選項（認知），不記得上次送出的目標
+- [ ] 同時開兩個後端（8710＋另一個）再跑 `-n auto` 全套，本機 Postgres 連線槽會被吃光，測試整片 `remaining connection slots are reserved` 紅——不是程式壞了。跑全套前先關掉多餘的後端（2026-08-29 踩到）
 - [ ] `app/core/rule_cards.py` 8 張規則卡有 6 張失效（`budget_structure`／`sample_size`／`ad_creative_fatigue`／`pacing`／`health_lights`／`autonomy`），設定頁照樣顯示、照樣可以調，但調了不影響任何東西——**這是使用者看得到的謊**（明細見 `docs/tech-debt.md` 第〇節）
 - [ ] **上雲前必還（ADR 0039）** 每日 Meta 花費拉取的 worker 跑在網站行程裡：網站沒開就不拉，那天沒有數字（handler 可重跑，但沒人叫它就沒人補；手動補：`uv run python -m app.meta.daily_pull`）；cron `0 3 * * *` 是機器本地時間，沒有時區處理（等 04-1b 的 `org_timezone`）。上雲時 worker 要拆成自己的行程
 - [ ] GitHub 四個安全開關（secret scanning／push protection／CodeQL／branch protection）需 GitHub Pro 或公開 repo——**等使用者決定**要不要付費；未付費前 CI 綠不擋合併，靠人工
