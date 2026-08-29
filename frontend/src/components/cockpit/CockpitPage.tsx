@@ -17,7 +17,18 @@ import { fetchMetaSpend, type MetaCampaignSpend, type MetaSpendSummary } from "@
  * 這一頁還沒有自己的資料，多開一支只為了拿一個名字不划算。
  *
  * 票 05：加回本月 Meta 花費（獨立於品牌名稱那次讀取，見下面 MetaSpendSection——花費
- * 讀取失敗不該連品牌標題都出不來）。 */
+ * 讀取失敗不該連品牌標題都出不來）。
+ *
+ * 缺陷 3（2026-08-29，實機操作發現）：原本這裡是一張空態卡，寫「產生本期方案的按鈕還沒
+ * 接上來」——但檔期頁（`/brands/:brandId/schedule`，票 07-12）早就能用了。空態整塊移除、
+ * 改成標題列的主要按鈕，比照產品頁「新增產品」、訂單頁「匯入訂單檔」。
+ *
+ * 「本期還沒有方案」這句是這一頁沒查過就下的斷言（它從來沒打過檔期那支端點），有方案時
+ * 就是一句假話；查要多一次 GET，只為了把按鈕的動詞從「排」換成「看」不划算——改用一句
+ * 兩種情況都成立的按鈕文字，這一頁就不必知道有沒有方案。
+ *
+ * 按鈕不叫「產生本期方案」（BOARD.md 里程碑的用詞）：它只是導頁，真正產生方案是檔期頁上
+ * 的「開始排程」，那一步要花 AI 的錢。導頁的按鈕不掛動作的名字。 */
 type LoadState =
   | { status: "loading" }
   | { status: "error"; message: string }
@@ -84,17 +95,24 @@ export function CockpitPage({ brandId }: { brandId: string }) {
       <div className="flex flex-col gap-6">
         <div className="flex items-center justify-between">
           <h1 className="font-display text-2xl text-foreground">{state.brandName}</h1>
-          <Link
-            to="/"
-            className="text-sm font-medium text-primary underline-offset-4 hover:underline"
-          >
-            回跨品牌總覽
-          </Link>
+          <div className="flex items-center gap-3">
+            <Link
+              to="/"
+              className="text-sm font-medium text-primary underline-offset-4 hover:underline"
+            >
+              回跨品牌總覽
+            </Link>
+            {/* ponytail: 這顆按鈕不查有沒有方案（要多打一支 /api/schedule/brands/{id} 才知道），
+                文字在「有方案／沒方案」兩種情況都成立。真的要分「去看方案／去排方案」時，
+                在這裡加 fetchSchedule 的第四個載入狀態。 */}
+            <Link
+              to={`/brands/${encodeURIComponent(brandId)}/schedule`}
+              className="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:opacity-90"
+            >
+              排這期的檔期
+            </Link>
+          </div>
         </div>
-        <EmptyState
-          title="本期還沒有方案"
-          description="產生本期方案的按鈕還沒接上來。品牌資料、產品與訂單可以先從左側選單進去看。"
-        />
         <MonthMoneySection brandId={brandId} />
         <MetaSpendSection brandId={brandId} />
       </div>

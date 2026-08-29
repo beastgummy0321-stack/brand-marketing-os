@@ -542,8 +542,12 @@ KNOWN_MODULE_SIZES = {
     "app/core": 2148,
     "app/dashboard": 645,
     "app/identity": 537,
-    "app/intake": 3548,
-    "app/llm": 1298,  # 票 09：TASK_TYPE_LABELS／TASK_DEFAULTS 新增 schedule_tree 兩行
+    "app/intake": 3570,  # 缺陷 1：intake_question 改走強制工具結構化輸出，新增
+                          # _QUESTION_TOOL／_CHOICE_SCHEMA schema（散文裡的 JSON 格式
+                          # 說明同時刪掉，仍淨增）。前一次是 3548
+    "app/llm": 1311,  # 缺陷 1／2：parse_json_reply 換成 raw_decode 單錨點（含為什麼不能
+                       # 退而求其次的理由註解）＋timeout_s 300 秒與 max_retries=0 兩段
+                       # 來源註解（實測列號、SDK 常數位置）。前一次是票 09 的 1298
     "app/meta": 805,  # 票 11：campaign_ids_by_exact_name()（名稱精準比對，13 行）＋
                        # spend_summary 改成只按 campaign_id 分組（活動月中改名不再裂成
                        # 兩列各拿半個月花費，8 行含理由註解）

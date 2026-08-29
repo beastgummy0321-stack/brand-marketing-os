@@ -362,7 +362,13 @@ class AnthropicProvider:
                 # https://docs.claude.com/en/docs/agents-and-tools/tool-use/implement-tool-use
                 kwargs["tool_choice"] = {"type": "tool", "name": forced_tool_name}
 
-        client = anthropic.Anthropic(api_key=api_key).with_options(timeout=timeout_s)
+        # max_retries=0：重試歸 gateway 管，每次重試都是自己一列 llm_task（06 §11、本模組
+        # gateway.py 開頭第 4 條）。SDK 預設會自己重試 2 次（DEFAULT_MAX_RETRIES，
+        # anthropic/_constants.py:10），一次 complete() 因此變成最多 3 個 HTTP 請求：
+        # timeout_s 實際上是 3×timeout_s（實測 llm_01M167R89MVG8F7JK6YCQWM1NW 設 120 秒卻
+        # 跑了 361.58 秒），而那些被放棄、伺服器端卻已經產生的回應照樣計費，卻永遠不會寫進
+        # llm_task.cost——每月花費上限加總的就是那個欄位（gateway.py run_task 開頭）。
+        client = anthropic.Anthropic(api_key=api_key).with_options(timeout=timeout_s, max_retries=0)
 
         try:
             response = client.messages.create(**kwargs)

@@ -6,7 +6,7 @@
 1. 建 llm_task 列（status=running），記 brand_id、task_type、context_scope_json、
    knowledge_item_ids_json、brand_version/product_version、prompt_template_id/version、
    provider、model、attempt_no。
-2. 呼叫 provider.complete()（timeout 預設 120s）。
+2. 呼叫 provider.complete()（timeout 預設 300s，來源見 TaskOptions.timeout_s）。
 3. 成功：寫 structured_output_json／rendered_output／usage_json／cost／finished_at，
    status=succeeded；逐字保留模型輸出，不改寫（principles 第 2 條）。
 4. 失敗：寫 error／finished_at，status=failed 或 timeout；失敗重試 1 次，
@@ -18,7 +18,6 @@
 import hashlib
 import inspect
 import json
-import re
 from dataclasses import dataclass
 
 from app.brand_intelligence import repository as bi_repo
@@ -28,21 +27,22 @@ from app.llm.providers import Provider, ProviderError, ProviderTimeoutError, Spe
 
 
 def parse_json_reply(text: str):
-    """模型回覆 → JSON。容忍圍欄與前後贅字：抓第一個 { 或 [ 到最後一個對應括號。
+    """模型回覆 → JSON。從第一個 { 或 [（誰先出現算誰）往後解「一個」完整的 JSON 值。
 
-    原本是 app/intake/ai.py 的私有函式，報告生成（app/brand_intelligence/report.py）
-    需要同一套解析邏輯，搬到這裡公開後兩邊共用一份（ai.py 保留別名，行為零變化）。
+    raw_decode 只認那一個起點：解不完整就回 None，不會退而求其次撿內層的陣列或物件。
+    舊版「第一個 { 到最後一個 }」的切片法在模型少收一個括號時會落到 [ ] 分支，撿到內層的
+    branches 陣列，把「JSON 不完整」誤報成「形狀不對」；單元素的頂層陣列也會被 { } 分支
+    切成第一個元素（customer_voice 的一句話萃取因此被靜靜丟掉）。兩種錯法都不會再發生。
+    圍欄不必先剝：```json 落在第一個 { 之前、收尾的 ``` 落在值結束之後，都在解析範圍外。
     """
-    text = re.sub(r"```(?:json)?", "", text or "").strip()
-    for open_ch, close_ch in (("{", "}"), ("[", "]")):
-        start = text.find(open_ch)
-        end = text.rfind(close_ch)
-        if start != -1 and end > start:
-            try:
-                return json.loads(text[start:end + 1])
-            except ValueError:
-                continue
-    return None
+    text = text or ""
+    starts = [i for i in (text.find("{"), text.find("[")) if i != -1]
+    if not starts:
+        return None
+    try:
+        return json.JSONDecoder().raw_decode(text, min(starts))[0]
+    except ValueError:
+        return None
 
 
 @dataclass
@@ -67,7 +67,14 @@ class TaskOptions:
     model: str | None = None  # None → 任務預設 > 設定頁選的模型（見 providers.resolve_model）
     thinking: str | None = None  # None → 任務預設 > 中檔（見 providers.resolve_thinking，票 #27）
     max_tokens: int = 16000
-    timeout_s: float = 120.0
+    # 300 秒的來源是本系統自己的量測，不是猜的：llm_task 列 llm_01M168X5443Y7PGV5D5ZDE2J1W
+    # （schedule_plan，thinking=high＋網路搜尋 2 次）實測 170.57 秒產出 9,186 個 output token
+    # ＝53.9 tok/s；同一個 dataclass 允許的 max_tokens=16000 除以這個速率＝297 秒，取整 300。
+    # 交叉驗算：rule card schedule_plan_count 上限 5 個方案是實測 3 個的 1.67 倍＝284 秒。
+    # 天花板 600 秒——SDK 非串流呼叫的上限（anthropic/_base_client.py:769-777），本路徑走
+    # client.messages.create()，超過 600 秒是要改設計不是改數字。逾時是天花板不是目標：
+    # 170 秒的呼叫在 300 秒天花板下一樣是 170 秒回來，放寬不會讓快的任務變慢。
+    timeout_s: float = 300.0
     max_retries: int = 1  # 失敗重試次數（不含第一次嘗試；06 §11：MVP 同供應商內重試）
     # 這次呼叫要掛的工具（ADR 0005）。None＝不掛任何工具，送出的 request body 完全不變；
     # 要開網路搜尋就傳 [providers.WEB_SEARCH_TOOL]，由呼叫端逐一決定。

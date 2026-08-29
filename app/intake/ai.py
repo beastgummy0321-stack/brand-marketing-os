@@ -236,8 +236,35 @@ def run_scan(conn, draft: dict, on_photo_progress=None) -> tuple:
 
 _QUESTION_SYSTEM = (
     "你是資深品牌顧問，正在用少量的選擇題把品牌調研的方向抓準。"
-    "只回傳 JSON，不要任何 JSON 以外的文字。"
+    "請用指定工具回傳。"
 )
+
+_CHOICE_SCHEMA = {
+    "type": "object",
+    "properties": {"label": {"type": "string"}, "desc": {"type": "string"}},
+    "required": ["label", "desc"],
+    "additionalProperties": False,
+}
+
+# 出題改走強制工具（跟同檔的 _PHOTO_PRODUCT_TOOL／_PASTE_ROWS_TOOL 一致）：以前是在散文裡
+# 要求「只回傳 JSON」，模型少收一個括號就整題讀不出來。工具回來的 input 已經是解析好的
+# dict，格式壞掉這個可能性直接消失。只有 done 必填，讓「問夠了」是一次合法的單欄位呼叫。
+_QUESTION_TOOL = {
+    "name": "submit_next_question",
+    "description": "提交下一題；已經問夠了就只送 done=true。",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "done": {"type": "boolean"},
+            "aspect": {"type": "string", "enum": list(QUESTION_ASPECTS)},
+            "question": {"type": "string"},
+            "suggested": _CHOICE_SCHEMA,
+            "branches": {"type": "array", "items": _CHOICE_SCHEMA, "minItems": 2, "maxItems": 3},
+        },
+        "required": ["done"],
+        "additionalProperties": False,
+    },
+}
 
 
 def run_next_question(conn, draft: dict) -> tuple:
@@ -272,22 +299,18 @@ def run_next_question(conn, draft: dict) -> tuple:
     lines.append(
         f"你已經問了 {asked} 題（上限 {script.MAX_QUESTIONS} 題）。"
         "收斂規則（硬性）：問到第 5 題起，除非還有一個「不問就會讓調研方向走錯」的明顯缺口，"
-        '一律回 {"done": true} 收尾——寧可少問，不要為了問而問。\n'
+        "一律把 done 設為 true 收尾——寧可少問，不要為了問而問。\n"
         "只要還有未覆蓋面向且尚未達題數上限，就不能回 done，必須從未覆蓋面向繼續出題。"
         "還需要問時，每一題要有：所屬面向、問題本身、一個你最建議的答案"
         "（含一句白話說明為什麼建議、選了調研會往哪去）、2 到 3 個分支選項（各含說明）。"
-        "問題要根據前面的回答遞進，不要重複問過的面向。\n"
-        '還需要問：只回傳 {"done": false, "aspect": "產品線/價格帶/客群/語調/法規風險其中一個", '
-        '"question": "問題", '
-        '"suggested": {"label": "建議答案", "desc": "說明"}, '
-        '"branches": [{"label": "分支", "desc": "說明"}]}\n'
-        '不用再問了：只回傳 {"done": true}'
+        "問題要根據前面的回答遞進，不要重複問過的面向。"
     )
     task = _run(conn, draft, task_type="intake_question", purpose=f"第 {asked + 1} 題",
-                system=_QUESTION_SYSTEM, user_text="\n".join(lines))
+                system=_QUESTION_SYSTEM, user_text="\n".join(lines),
+                options=gateway.TaskOptions(tools=[_QUESTION_TOOL]))
     if task["status"] != "succeeded":
         return False, task["error"]
-    data = _parse_json_reply(task["rendered_output"])
+    data = task["structured_output_json"]
     if not isinstance(data, dict):
         return False, PARSE_FAIL_MESSAGE
     if data.get("done"):

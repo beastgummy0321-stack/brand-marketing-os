@@ -40,14 +40,6 @@ _SCAN_OK = json.dumps({
 }, ensure_ascii=False)
 
 
-def _question_json(i: int = 0, aspect: str = "產品線") -> str:
-    q = script.QUESTIONS[i]
-    return json.dumps({"done": False, "aspect": aspect, "question": q["question"],
-                       "suggested": {"label": q["suggested"]["label"], "desc": q["suggested"]["desc"]},
-                       "branches": [{"label": b["label"], "desc": b["desc"]} for b in q["branches"]]},
-                      ensure_ascii=False)
-
-
 class _Base(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(main.app)
