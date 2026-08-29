@@ -132,30 +132,6 @@ class LibraryWriteApiTest(unittest.TestCase):
         self.assertEqual(edit_resp.status_code, 200)
         self.assertEqual(edit_resp.json()["data"]["claim_text"], "有機認證（更新）")
 
-    def test_claim_create_flags_statutory_wordlist_hit_but_still_saves(self):
-        """票 03-claim-wordlist-todo（決議 2026-08-23）：存宣稱不擋，只標紅字警告——
-        任何類別（這裡用「可用」，正是 012 audit 踩到的破口）命中內建法定詞庫都要在
-        `wordlist_hits` 帶回來。"""
-        brand_id = self._new_brand("違規詞品牌")
-        resp = self.client.post(
-            f"/api/library/brands/{brand_id}/claims",
-            json={"claim_text": "根治關節炎，七天見效不復發", "claim_type": "approved"},
-        )
-        self.assertEqual(resp.status_code, 200)
-        data = resp.json()["data"]
-        self.assertIsNotNone(repo.get_claim(web.conn, brand_id, data["id"]))
-        terms = {hit["term"] for hit in data["wordlist_hits"]}
-        self.assertIn("根治", terms)
-
-    def test_claim_create_without_statutory_term_has_empty_hits(self):
-        brand_id = self._new_brand("乾淨宣稱品牌")
-        resp = self.client.post(
-            f"/api/library/brands/{brand_id}/claims",
-            json={"claim_text": "使用天然原料", "claim_type": "approved"},
-        )
-        self.assertEqual(resp.status_code, 200)
-        self.assertEqual(resp.json()["data"]["wordlist_hits"], [])
-
     def test_claim_create_rejects_bad_type(self):
         brand_id = self._new_brand("宣稱品牌")
         resp = self.client.post(
@@ -268,12 +244,11 @@ class LibraryWriteApiTest(unittest.TestCase):
         resp = self.client.post(
             f"/api/library/brands/{brand_id}/edit",
             json={"name": "新名稱", "client_name": "客戶", "status": "active", "persona": "kol",
-                  "market_region": "TW", "conversion_goal": "purchase", "industry": "food_beverage"},
+                  "market_region": "TW", "conversion_goal": "purchase"},
         )
         self.assertEqual(resp.status_code, 200)
         data = resp.json()["data"]
         self.assertEqual(data["name"], "新名稱")
-        self.assertEqual(data["industry"], "food_beverage")
         updated = repo.get_brand(web.conn, brand_id)
         self.assertEqual(updated["name"], "新名稱")
         self.assertEqual(updated["conversion_goal"], "purchase")

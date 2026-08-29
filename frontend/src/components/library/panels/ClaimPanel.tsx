@@ -1,11 +1,10 @@
 import { useState } from "react";
-import { TriangleAlert, X } from "lucide-react";
+import { X } from "lucide-react";
 import { SidePanel } from "@/components/layout/SidePanel";
 import {
   createClaim,
   updateClaim,
   type ClaimType,
-  type ClaimWordlistHit,
   type LibraryClaim,
   type LibraryProductOption,
 } from "@/lib/libraryApi";
@@ -31,10 +30,6 @@ export function ClaimPanel({
   const [claimType, setClaimType] = useState<ClaimType>(claim?.claim_type ?? "high_risk");
   const [productId, setProductId] = useState(claim?.product_id ?? "");
   const [evidence, setEvidence] = useState(claim?.evidence_source_reference ?? "");
-  // 票 03-claim-wordlist-todo（決議 2026-08-23）：存檔不擋，但命中內建法定詞庫要讓使用者
-  // 看到才關閉——存了就有這個結果，關掉面板重新整理列表也看得到同一個紅字徽章
-  // （ClaimsTab.tsx），這裡只是讓使用者當下就看到，不用多繞一次。
-  const [savedHits, setSavedHits] = useState<ClaimWordlistHit[] | null>(null);
 
   const form = useFormSubmit(async () => {
     const fields = {
@@ -43,9 +38,9 @@ export function ClaimPanel({
       product_id: productId,
       evidence_source_reference: evidence,
     };
-    const saved = editing ? await updateClaim(brandId, claim.id, fields) : await createClaim(brandId, fields);
-    if (saved.wordlist_hits.length > 0) setSavedHits(saved.wordlist_hits);
-    else onSaved();
+    if (editing) await updateClaim(brandId, claim.id, fields);
+    else await createClaim(brandId, fields);
+    onSaved();
   });
 
   return (
@@ -138,25 +133,9 @@ export function ClaimPanel({
           </select>
         </label>
 
-        {savedHits && (
-          <p className="flex items-start gap-1.5 text-sm font-medium text-danger">
-            <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
-            已存檔，但含法規禁用詞{savedHits.map((hit) => `「${hit.term}」`).join("、")}，正式使用前請再確認。
-          </p>
-        )}
         {form.error && <p className="text-sm text-danger">{form.error}</p>}
         <div>
-          {savedHits ? (
-            <button
-              type="button"
-              onClick={onSaved}
-              className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90"
-            >
-              知道了，關閉
-            </button>
-          ) : (
-            <PanelSaveButton saving={form.saving} label={editing ? "儲存修改" : "新增這句宣稱"} />
-          )}
+          <PanelSaveButton saving={form.saving} label={editing ? "儲存修改" : "新增這句宣稱"} />
         </div>
       </form>
     </SidePanel>

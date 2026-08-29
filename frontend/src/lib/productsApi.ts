@@ -12,7 +12,7 @@
  * 其餘寫入端點沿用契約「改回 JSON」的決定，用 JSON body（跟 S5 沿用舊版 FormData 端點不同，
  * 因為 S6 這些端點契約本來就標記為新端點）。 */
 
-import { apiFetch } from "./http";
+import { apiFetch, errorMessageFrom } from "./http";
 
 export interface ProductListItem {
   id: string;
@@ -178,7 +178,7 @@ async function postJson<T = void>(path: string, body?: unknown): Promise<T> {
     let message = `處理失敗（狀態碼 ${res.status}）`;
     try {
       const data = (await res.json()) as { error?: string };
-      if (data.error) message = data.error;
+      message = errorMessageFrom(data, message);
     } catch {
       // 回應不是 JSON，用預設訊息。
     }

@@ -64,7 +64,7 @@ async def photo_product_skip(request: Request, brand_id: str):
 
 
 @router.get("/api/intake/brands/{brand_id}/truth-card")
-async def truth_card_get(request: Request, brand_id: str):
+def truth_card_get(request: Request, brand_id: str):
     actor = require_actor(request)
     require_brand(brand_id, actor)
     draft = state.require_draft_or_just_completed(brand_id)
@@ -147,7 +147,7 @@ async def truth_card_confirm(request: Request, brand_id: str):
 
 
 @router.get("/api/intake/brands/{brand_id}/personas")
-async def persona_list(request: Request, brand_id: str):
+def persona_list(request: Request, brand_id: str):
     actor = require_actor(request)
     require_brand(brand_id, actor)
     return _envelope({
@@ -170,7 +170,7 @@ async def persona_update(request: Request, brand_id: str, persona_id: str):
 
 
 @router.post("/api/intake/brands/{brand_id}/personas/regenerate")
-async def persona_regenerate(request: Request, brand_id: str):
+def persona_regenerate(request: Request, brand_id: str):
     actor = require_actor(request)
     require_brand(brand_id, actor)
     persona_generation.start_generation(web.conn, brand_id)

@@ -77,6 +77,39 @@ def _upsert_customer(conn: Conn, brand_id: str, identity_hash: str,
 # 匯入落庫（app/orders/importer.py 解析出來的訂單列在這裡寫進 DB）
 # ---------------------------------------------------------------------------
 
+def _sync_website_channel_revenue(conn: Conn, org_id: str, brand_id: str, *, order_number: str,
+                                  order_date, total_amount, refunded_amount,
+                                  order_status, source: str, batch_id: str, ts: str) -> None:
+    """訂單的通路營收帳（channel='website'，票 12）：跟訂單同一交易寫進 channel_revenue，
+    用 partial unique index (brand_id, channel, external_id=order_number) 去重。作廢訂單
+    算 0（已知的數字），不是 NULL（不知道）——跟 stats() 的判斷一致。
+
+    沒有日期的訂單連同已經存在的帳一起清掉：`stats()` 按 order_date 篩選，沒日期的訂單
+    永遠不算進實收；帳本留著就會比訂單頁多一筆（重新匯入把日期洗掉時真的會發生）。"""
+    if not order_date:
+        conn.execute("DELETE FROM channel_revenue WHERE brand_id = %s AND channel = 'website'"
+                     " AND external_id = %s", (brand_id, order_number))
+        return
+    revenue = 0 if _is_voided(order_status) else float((total_amount or 0) - (refunded_amount or 0))
+    existing = conn.execute(
+        "SELECT id FROM channel_revenue WHERE brand_id = %s AND channel = 'website'"
+        " AND external_id = %s",
+        (brand_id, order_number),
+    ).fetchone()
+    if existing:
+        conn.execute(
+            "UPDATE channel_revenue SET entry_date = %s, revenue = %s, source = %s,"
+            " import_batch_id = %s, updated_at = %s WHERE id = %s",
+            (order_date, revenue, source, batch_id, ts, existing["id"]))
+    else:
+        conn.execute(
+            "INSERT INTO channel_revenue (id, org_id, brand_id, channel, entry_date, external_id,"
+            " revenue, source, import_batch_id, created_at, updated_at)"
+            " VALUES (%s, %s, %s, 'website', %s, %s, %s, %s, %s, %s, %s)",
+            (new_id("chr"), org_id, brand_id, order_date, order_number, revenue, source, batch_id,
+             ts, ts))
+
+
 def save_orders(conn: Conn, brand_id: str, rows: list, *,
                 source: str, actor: str, result=None, import_batch_id: str | None = None):
     """把 importer 解析好的訂單列（含 items）落地。回傳 app.orders.importer.OrderImportResult。
@@ -141,6 +174,11 @@ def save_orders(conn: Conn, brand_id: str, rows: list, *,
                  ts, ts),
             )
             result.orders_imported += 1
+
+        _sync_website_channel_revenue(
+            conn, org_id, brand_id, order_number=order_number, order_date=order_date,
+            total_amount=row.get("total_amount"), refunded_amount=row.get("refunded_amount"),
+            order_status=row.get("order_status"), source=source, batch_id=batch_id, ts=ts)
 
         for item in row.get("items") or []:
             if item.get("sku") is None and item.get("item_price") is None and item.get("quantity") is None:
@@ -476,6 +514,22 @@ def count_orders(conn: Conn, brand_id: str) -> int:
     ).fetchone()["n"]
 
 
+# 全通路營收（票 12，ADR 0035）：dashboard 讀這裡，不是只讀官網訂單——revenue 是 None
+# 代表這段視窗一列都沒有，或列都在但金額全不知道（不知道 != 0，鐵則 16）。
+def channel_revenue_summary(conn: Conn, brand_id: str, *, since: str, until: str) -> dict:
+    row = conn.execute(
+        "SELECT SUM(revenue) total, COUNT(*) rows,"
+        " COUNT(*) FILTER (WHERE channel = 'marketplace') marketplace_rows"
+        " FROM channel_revenue WHERE brand_id = %s AND entry_date >= %s AND entry_date <= %s",
+        (brand_id, since, until),
+    ).fetchone()
+    if not row["rows"]:
+        return {"revenue": None, "has_rows": False, "marketplace_uncalibrated": False}
+    revenue = round(float(row["total"]), 2) if row["total"] is not None else None  # Decimal -> float
+    return {"revenue": revenue, "has_rows": True,
+           "marketplace_uncalibrated": bool(row["marketplace_rows"])}
+
+
 # ---------------------------------------------------------------------------
 # 配碼歸因（GitHub issue #35）：app/ads/codes.py 依此清單比對 voucher_code，
 # 分類毛歸因／淨歸因／排除／自然。這裡只給資料，分類規則屬於 ads 模組
@@ -545,22 +599,18 @@ def set_attribution_override(conn: Conn, brand_id: str, order_id: str,
 # ---------------------------------------------------------------------------
 # 刪品牌（第 5 刀「訂單模組接上清理登記處」）
 #
-# 這 9 張表都掛 brand_id，彼此之間、跟本模組其他表之間都沒有真的外鍵約束
+# 這 7 張表都掛 brand_id，彼此之間、跟本模組其他表之間都沒有真的外鍵約束
 # （order_item.order_id、order_record.customer_id 都只是欄位，schema 沒下 REFERENCES）。
-# 票 02-3a：cycle_shopee_code.campaign_cycle_id -> campaign_cycle(id) 這條唯一的跨模組
-# 外鍵已在 02-2 拿掉（集裝箱憲章禁止跨模組外鍵，見
-# .scratch/saas/tickets/02-2-type-decisions.md 第 6 點），改成不帶 REFERENCES 的純
-# TEXT 欄位，跨模組清理順序從此不重要，不必再靠 PRAGMA defer_foreign_keys 之類的機制。
+# 票 12（ADR 0035）：shopee_report_row／pharmacy_batch 併進 channel_revenue 一張表；
+# cycle_shopee_code（原本這裡唯一的跨模組外鍵，02-2 已拿掉 REFERENCES）沒有呼叫端，隨遷移刪除。
 BRAND_CASCADE_TABLES = (
     ("customer", "顧客"),
     ("order_record", "訂單"),
     ("order_item", "訂單品項"),
     ("sku_cost", "SKU 成本"),
     ("sku_cost_version", "SKU 成本版本歷史"),
-    ("pharmacy_batch", "藥局出貨批次"),
-    ("shopee_report_row", "蝦皮賣家中心報表"),
+    ("channel_revenue", "通路營收"),
     ("policy_change_log", "折扣／退款口徑變更紀錄"),
-    ("cycle_shopee_code", "蝦皮期別配碼與回收數"),
 )
 
 
@@ -579,7 +629,7 @@ def count_brand_data(conn: Conn, brand_id: str) -> list:
 
 
 def delete_brand_data(conn: Conn, brand_id: str) -> dict:
-    """清掉本模組掛在該品牌下的資料（BRAND_CASCADE_TABLES 這 9 張表），登記進
+    """清掉本模組掛在該品牌下的資料（BRAND_CASCADE_TABLES 這 7 張表），登記進
     app.core.cleanup 給 delete_brand() 呼叫用。只下 DELETE、不 commit、不 rollback
     （Q4 單一交易、全有全無，commit 與 rollback 統一在 brand_intelligence.delete_brand()）。
     """

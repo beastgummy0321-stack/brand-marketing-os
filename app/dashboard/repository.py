@@ -1,9 +1,7 @@
 """app/dashboard/repository.py — 跨品牌總覽彙整（票 02-overview-cards，規格 0001）。
 
 接口鐵則：只透過各模組的公開查詢函式取數（app.brand_intelligence／app.orders／
-app.core.interrupts／app.core.campaign_skip／app.core.calendar_dismiss），
-不直接對別層資料表下 SQL、不寫入任何資料表（本檔只呼叫 campaign_skip.get_skip()／
-calendar_dismiss.list_dismissed() 讀，不呼叫任一模組的寫入函式）。
+app.core.interrupts／app.meta），不直接對別層資料表下 SQL、不寫入任何資料表。
 
 外殼切片（2026-08-28）：單品牌駕駛艙 `cockpit()` 與數字月報 `monthly_report()` 隨
 `app/ads/` 一起刪掉——花費、ROAS、CAC、內容產線、最後同步時間全部來自廣告成效快照，
@@ -12,15 +10,14 @@ calendar_dismiss.list_dismissed() 讀，不呼叫任一模組的寫入函式）�
 """
 
 import calendar
-from datetime import date
+from datetime import date, timedelta
 
 from app.brand_intelligence import repository as bi_repo
-from app.core import calendar_dismiss as core_calendar_dismiss
-from app.core import campaign_skip as core_campaign_skip
 from app.core import interrupts as core_interrupts
-from app.dashboard import campaign_calendar, guide_cards
+from app.dashboard import guide_cards
 from app.dashboard.health import brand_health
 from app.intake import state as intake_state
+from app.meta import repository as meta_repo
 from app.orders import repository as orders_repo
 
 
@@ -48,47 +45,64 @@ def _mom_pct(current, previous) -> float | None:
 
 
 def _revenue_and_mom(conn, brand_id: str, today: str) -> tuple:
-    """規格 KPI 口徑：本月營收＝訂單實收；環比＝與上月同期比較。
+    """規格 KPI 口徑：本月營收＝全通路營收（票 12：`channel_revenue` 彙總，不只官網訂單）；
+    環比＝與上月同期比較。
 
     上月同期抓不到（分母是 0 或 None）時環比回 None——「沒得算」跟「等於 0」是兩件事
-    （鐵則 16，比照 app/orders/repository.py stats()）。
+    （鐵則 16）。跟 `brand_month_money` 讀同一個來源，兩個畫面才不會顯示兩個不同的營收。
     """
     since, until = _month_to_date_range(today)
 
     def fetch(s, u):
-        return orders_repo.stats(conn, brand_id, since=s, until=u, today=today)["net_revenue"]
+        return orders_repo.channel_revenue_summary(conn, brand_id, since=s, until=u)["revenue"]
 
     current = fetch(since, until)
     previous = fetch(_months_before(since, 1), _months_before(until, 1))
     return current, _mom_pct(current, previous)
 
 
+def brand_month_money(conn, *, org_id: str, brand_id: str, today: str | None = None) -> dict:
+    """票 06：品牌頁的本月花費／營收／毛利／ROAS 併桌——花費來自 app.meta；營收來自
+    app.orders 的 `channel_revenue`（票 12：全通路彙總，不只官網），毛利仍只算官網——
+    毛利來自 order_item × sku_cost，只有官網訂單有明細行。
+
+    月份窗口跟 app/meta/routes.py `brand_spend` 用同一種算法（本月曆月），兩支端點的
+    花費數字才不會對不上；營收／毛利沿用本檔既有的 `_month_to_date_range`（字串，含頭含尾）。
+    """
+    today = today or date.today().isoformat()
+    since, until = _month_to_date_range(today)
+    month_start = date.fromisoformat(today).replace(day=1)
+    month_end = (month_start + timedelta(days=32)).replace(day=1)  # 半開區間，比照 brand_spend
+
+    account_ids = meta_repo.bound_account_ids_for_brand(conn, org_id, brand_id)
+    spend = meta_repo.spend_summary(conn, org_id, account_ids, month_start, month_end)["total"]["spend"]
+
+    revenue_summary = orders_repo.channel_revenue_summary(conn, brand_id, since=since, until=until)
+    revenue = revenue_summary["revenue"]
+
+    sku_rows = orders_repo.sku_margins(conn, brand_id, since=since, until=until)
+    known_margins = [r["margin"] for r in sku_rows if r["margin"] is not None]
+    # 「沒得算」跟「等於 0」是兩件事（鐵則 16）：一個成本都沒登記就回 None，不是 0。
+    margin = round(sum(known_margins), 2) if known_margins else None
+    margin_unknown_sku_count = sum(1 for r in sku_rows if r["margin"] is None)
+
+    roas = round(revenue / spend, 2) if spend and revenue is not None else None
+
+    return {
+        "spend": spend,
+        "revenue": revenue,
+        "margin": margin,
+        "margin_unknown_sku_count": margin_unknown_sku_count,
+        "roas": roas,
+        "has_orders": revenue_summary["has_rows"],
+        "marketplace_uncalibrated": revenue_summary["marketplace_uncalibrated"],
+    }
+
+
 # ---------------------------------------------------------------------------
 # 下一步指南卡（票 04-guide-card-engine，規格 0001）：純函數引擎在
 # app/dashboard/guide_cards.py，這裡只負責組 facts。facts 契約見 guide_cards.py 檔頭。
-#
-# events（票 06-campaign-calendar 檔期資料）預設吃 campaign_calendar.load_events()
-# 讀內建 JSON；overview() 開 calendar_events 這個測試縫（HTTP API 不暴露，routes.py
-# 呼叫時一律用預設值）——真實檔期日期是外部世界的事實，沒辦法像訂單那樣隨測試「今天」
-# 調整，才需要這個縫讓純函數情境測試以外的整合測試可控。
 # ---------------------------------------------------------------------------
-
-# 票 03-cycle-skip-record（ADR 0015）：next_calendar_reminder() 選中的那張提醒卡，
-# 若去年同一節日有跳過紀錄，附帶顯示去年的理由——純脈絡顯示（這裡只讀 campaign_skip，
-# 不寫、不影響任何演算法輸入）。
-def _attach_last_year_skip(conn, brand_id: str, reminder: dict | None,
-                            events: list) -> dict | None:
-    if not reminder:
-        return reminder
-    event = next((e for e in events if e["id"] == reminder["id"]), None)
-    if not event:
-        return reminder
-    event_year = date.fromisoformat(event["date"]).year
-    skip = core_campaign_skip.get_skip(
-        conn, brand_id, campaign_calendar.holiday_id(event["id"]), event_year - 1)
-    if not skip:
-        return reminder
-    return {**reminder, "last_year_skipped": True, "last_year_skip_reason": skip["reason"]}
 
 
 def _intake_draft_fact(conn, brand_id: str) -> dict | None:
@@ -101,31 +115,27 @@ def _intake_draft_fact(conn, brand_id: str) -> dict | None:
     return {"step": draft["step"], "resume_path": draft["resume_path"]}
 
 
-def _guide_card_facts(conn, brand_id: str, today: str, events: list) -> dict:
+def _guide_card_facts(conn, brand_id: str) -> dict:
     pending_facts = bi_repo.list_brand_facts(conn, brand_id, status="pending")
     brand = bi_repo.get_brand(conn, brand_id)
-    campaign_reminder = campaign_calendar.next_calendar_reminder(
-        events, date.fromisoformat(today), brand["industry"] if brand else None,
-        dismissed_categories=core_calendar_dismiss.list_dismissed(conn, brand_id))
     return {
         "brand_id": brand_id,
         # 票 C：guide_cards.conversion_goal_missing 讀這個判斷方法論開關有沒有接電。
         "conversion_goal": brand["conversion_goal"] if brand else None,
         "pending_facts_count": len(pending_facts),
-        "campaign_reminder": _attach_last_year_skip(conn, brand_id, campaign_reminder, events),
         "intake_draft": _intake_draft_fact(conn, brand_id),
     }
 
 
-def _guide_cards(conn, brand_id: str, today: str, events: list) -> list:
-    return guide_cards.build(_guide_card_facts(conn, brand_id, today, events))
+def _guide_cards(conn, brand_id: str) -> list:
+    return guide_cards.build(_guide_card_facts(conn, brand_id))
 
 
-def _brand_card(conn, brand: dict, today: str, events: list) -> dict:
+def _brand_card(conn, brand: dict, today: str) -> dict:
     open_interrupts = core_interrupts.list_open(conn, brand_id=brand["id"], today=today,
                                                 archive_stale=False)
     revenue, revenue_mom_pct = _revenue_and_mom(conn, brand["id"], today)
-    cards = _guide_cards(conn, brand["id"], today, events)
+    cards = _guide_cards(conn, brand["id"])
     return {
         "brand_id": brand["id"],
         "brand_name": brand["name"],
@@ -138,9 +148,7 @@ def _brand_card(conn, brand: dict, today: str, events: list) -> dict:
     }
 
 
-def overview(conn, *, org_id: str, today: str | None = None,
-             calendar_events: list | None = None) -> list:
+def overview(conn, *, org_id: str, today: str | None = None) -> list:
     today = today or date.today().isoformat()
-    events = calendar_events if calendar_events is not None else campaign_calendar.load_events()
     brands = bi_repo.list_brands(conn, org_id, status="active")
-    return [_brand_card(conn, brand, today, events) for brand in brands]
+    return [_brand_card(conn, brand, today) for brand in brands]

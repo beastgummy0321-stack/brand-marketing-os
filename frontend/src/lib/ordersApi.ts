@@ -41,11 +41,30 @@ export interface PolicyChange {
   description: string;
 }
 
-export interface PharmacyBatch {
-  batch_date: string;
+export interface ChannelEntry {
+  channel: string;
+  channel_label: string;
+  entry_date: string;
+  revenue: number | null;
   quantity: number | null;
   note: string;
 }
+
+/** 通路清單，手動對照 app/core/vocab.py CHANNEL_TYPES——各自維護，不共用一份。 */
+export const CHANNEL_TYPES: [string, string][] = [
+  ["website", "官方網站"],
+  ["fb_page", "粉絲專頁"],
+  ["ig_account", "Instagram 帳號"],
+  ["line", "LINE 官方帳號"],
+  ["marketplace", "平台商店"],
+  ["physical_store", "實體店"],
+];
+
+/** 手動登錄用的通路清單＝上面那份扣掉官網：官網營收由訂單匯入自動記帳，手動再輸一筆
+ * 會讓帳本跟訂單頁的實收對不起來（後端 `record_channel_entry` 也擋，這裡只是不給選）。 */
+export const HAND_ENTRY_CHANNEL_TYPES: [string, string][] = CHANNEL_TYPES.filter(
+  ([value]) => value !== "website",
+);
 
 export interface OrdersPageData {
   brand: { id: string; name: string };
@@ -57,7 +76,7 @@ export interface OrdersPageData {
     total: number;
   };
   policy_changes: PolicyChange[];
-  pharmacy_batches: PharmacyBatch[];
+  channel_entries: ChannelEntry[];
 }
 
 export async function fetchOrders(brandId: string, page = 1): Promise<OrdersPageData> {
@@ -100,11 +119,11 @@ export function createPolicyChange(
   });
 }
 
-export function createPharmacyBatch(
+export function createChannelEntry(
   brandId: string,
-  fields: { batch_date: string; quantity: string; note: string },
+  fields: { channel: string; entry_date: string; revenue: string; quantity: string; note: string },
 ): Promise<string> {
-  return postOrderAction(actionPath(brandId, "/pharmacy-batch"), JSON.stringify(fields), {
+  return postOrderAction(actionPath(brandId, "/channel-entry"), JSON.stringify(fields), {
     "content-type": "application/json",
   });
 }

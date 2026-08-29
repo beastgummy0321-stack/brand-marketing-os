@@ -14,6 +14,7 @@ import { ProductDetailPage } from "@/components/products/ProductDetailPage";
 import { ProductListPage } from "@/components/products/ProductListPage";
 import { BrandReportPage } from "@/components/report/BrandReportPage";
 import { OrdersPage } from "@/components/orders/OrdersPage";
+import { SchedulePage } from "@/components/schedule/SchedulePage";
 import { SettingsPage } from "@/components/settings/SettingsPage";
 import { fetchOverview, type DashboardBrandCard } from "@/lib/api";
 import { useSession } from "@/lib/auth";
@@ -48,6 +49,7 @@ function App() {
         <Route path="/brands/:brandId/products/:productId" element={<ProductDetailRoute />} />
         <Route path="/brands/:brandId/orders" element={<OrdersRoute />} />
         <Route path="/brands/:brandId/report" element={<BrandReportRoute />} />
+        <Route path="/brands/:brandId/schedule" element={<ScheduleRoute />} />
       </Route>
     </Routes>
   );
@@ -190,6 +192,16 @@ function OrdersRoute() {
   return (
     <AppShell brandId={brandId ?? null}>
       <OrdersPage brandId={brandId ?? ""} />
+    </AppShell>
+  );
+}
+
+/** 檔期規劃（票 07：最薄路徑）。 */
+function ScheduleRoute() {
+  const { brandId } = useParams<{ brandId: string }>();
+  return (
+    <AppShell brandId={brandId ?? null}>
+      <SchedulePage brandId={brandId ?? ""} />
     </AppShell>
   );
 }

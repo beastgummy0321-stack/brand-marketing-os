@@ -38,12 +38,17 @@ _SCAN_OK = json.dumps({
 }, ensure_ascii=False)
 
 
-def _question_json(i: int = 0, aspect: str = "產品線") -> str:
+def _question_payload(i: int = 0, aspect: str = "產品線") -> dict:
     q = script.QUESTIONS[i]
-    return json.dumps({"done": False, "aspect": aspect, "question": q["question"],
-                       "suggested": {"label": q["suggested"]["label"], "desc": q["suggested"]["desc"]},
-                       "branches": [{"label": b["label"], "desc": b["desc"]} for b in q["branches"]]},
-                      ensure_ascii=False)
+    return {"done": False, "aspect": aspect, "question": q["question"],
+            "suggested": {"label": q["suggested"]["label"], "desc": q["suggested"]["desc"]},
+            "branches": [{"label": b["label"], "desc": b["desc"]} for b in q["branches"]]}
+
+
+def _question_response(payload: dict) -> ProviderResponse:
+    """出題走強制工具，結構化欄位才是答案來源；rendered_output 是空的（見 intake/ai.py）。"""
+    return ProviderResponse(output_text="", structured=payload,
+                            usage=Usage(input_tokens=10, output_tokens=10), stop_reason="end_turn")
 
 
 class _Base(unittest.TestCase):
@@ -341,7 +346,7 @@ class QuestionBackgroundTest(_Base):
         bid = self._scanned_brand()
         # 掃描那一步本來就會通知一筆，先記下基準，確認出題完成「沒有」再多一筆
         before = len(core_interrupts.list_open(web.conn, brand_id=bid))
-        intake_ai.PROVIDER = FakeProvider(response=_fake_response(_question_json(0)))
+        intake_ai.PROVIDER = FakeProvider(response=_question_response(_question_payload(0)))
         resp = self.client.post(f"/api/intake/brands/{bid}/question/start")
         self.assertEqual(resp.status_code, 200)
         status = self._poll(bid, "question")
@@ -366,7 +371,7 @@ class QuestionBackgroundTest(_Base):
 
     def test_answer_without_choice_selected_errors(self):
         bid = self._scanned_brand()
-        intake_ai.PROVIDER = FakeProvider(response=_fake_response(_question_json(0)))
+        intake_ai.PROVIDER = FakeProvider(response=_question_response(_question_payload(0)))
         self.client.post(f"/api/intake/brands/{bid}/question/start")
         self._poll(bid, "question")
         resp = self.client.post(f"/api/intake/brands/{bid}/question/answer",
@@ -375,7 +380,7 @@ class QuestionBackgroundTest(_Base):
 
     def test_answer_other_without_note_errors(self):
         bid = self._scanned_brand()
-        intake_ai.PROVIDER = FakeProvider(response=_fake_response(_question_json(0)))
+        intake_ai.PROVIDER = FakeProvider(response=_question_response(_question_payload(0)))
         self.client.post(f"/api/intake/brands/{bid}/question/start")
         self._poll(bid, "question")
         resp = self.client.post(f"/api/intake/brands/{bid}/question/answer",
@@ -401,7 +406,7 @@ class QuestionBackgroundTest(_Base):
 
     def test_aspect_is_saved_and_next_prompt_lists_coverage(self):
         bid = self._scanned_brand()
-        intake_ai.PROVIDER = FakeProvider(response=_fake_response(_question_json(0, "價格帶")))
+        intake_ai.PROVIDER = FakeProvider(response=_question_response(_question_payload(0, "價格帶")))
         self.client.post(f"/api/intake/brands/{bid}/question/start")
         self._poll(bid, "question")
         draft = state.get_draft(bid)
@@ -409,11 +414,13 @@ class QuestionBackgroundTest(_Base):
         self.client.post(f"/api/intake/brands/{bid}/question/answer",
                          json={"choice": "suggested", "note": ""})
 
-        provider = FakeProvider(response=_fake_response(_question_json(1, "客群")))
+        provider = FakeProvider(response=_question_response(_question_payload(1, "客群")))
         intake_ai.PROVIDER = provider
         self.client.post(f"/api/intake/brands/{bid}/question/start")
         self._poll(bid, "question")
 
+        # 出題一定掛強制工具：格式壞掉這個故障模式就是這樣消失的（API 契約）
+        self.assertEqual(provider.calls[0]["tools"][0]["name"], "submit_next_question")
         sent = provider.calls[0]["messages"][0]["content"]
         self.assertIn("已覆蓋面向：價格帶", sent)
         self.assertIn("未覆蓋面向：產品線、客群、語調、法規風險", sent)
@@ -421,12 +428,12 @@ class QuestionBackgroundTest(_Base):
 
     def test_done_is_rejected_while_aspects_are_uncovered(self):
         bid = self._scanned_brand()
-        intake_ai.PROVIDER = FakeProvider(response=_fake_response(_question_json(0, "產品線")))
+        intake_ai.PROVIDER = FakeProvider(response=_question_response(_question_payload(0, "產品線")))
         self.client.post(f"/api/intake/brands/{bid}/question/start")
         self._poll(bid, "question")
         self.client.post(f"/api/intake/brands/{bid}/question/answer",
                          json={"choice": "suggested", "note": ""})
-        intake_ai.PROVIDER = FakeProvider(response=_fake_response(json.dumps({"done": True})))
+        intake_ai.PROVIDER = FakeProvider(response=_question_response({"done": True}))
 
         self.client.post(f"/api/intake/brands/{bid}/question/start")
         status = self._poll(bid, "question")
@@ -444,7 +451,7 @@ class QuestionBackgroundTest(_Base):
             state.append_question(draft, q["question"], q["suggested"], q["branches"], None)
             state.current_entry(draft)["answer_key"] = "suggested"
         state.save(draft)
-        provider = FakeProvider(response=_fake_response(_question_json(0, "產品線")))
+        provider = FakeProvider(response=_question_response(_question_payload(0, "產品線")))
         intake_ai.PROVIDER = provider
 
         ok, error = intake_ai.run_next_question(web.conn, state.get_draft(bid))

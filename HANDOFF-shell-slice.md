@@ -17,11 +17,17 @@ after this work (§7).
 ## 0. State, verified
 
 - Work is on branch `shell`, cut from `saas`.
-- **`bacda59` is mislabelled.** It carries an ADR message but also contains 98 files and
-  −23,104 lines of ticket 2's work-in-progress, swept in by a `git add -A` from the
-  architecture session while this branch was live. Nothing was lost and the content is
-  correct; only the label is wrong. History is deliberately not rewritten — this branch is
-  checked out in another session, and a rebase would cost far more than a bad commit message.
+- **`bacda59` and `dd50ce1` are mislabelled.** Both carry ADR messages and both also contain
+  ticket 2's work-in-progress (98 files / −23,104 lines, then 100 files / −27,542), swept in
+  from the architecture session while this branch was live. The first was a `git add -A`; the
+  second used explicit paths but a bare `git commit`, which commits the whole index — and the
+  index already held this session's staged deletions. Nothing was lost and the content is
+  correct; only the labels are wrong. History is deliberately not rewritten: this branch is
+  checked out in another session and a rebase would cost far more than two bad messages.
+- **The architecture session no longer commits on this branch.** Two sessions writing one
+  branch is a race that `git add <paths>` does not fix (`git commit -- <paths>` would, but the
+  race remains). Docs written from that session are left uncommitted for whoever holds the
+  branch to carry in their next commit.
 - Full suite was **2,374 passed, zero red** at `68a52f9`; `ba63f49` is docs-only.
 - **Ticket 0 is done**: `saas` comes up locally under `supabase start` and all 11 non-ads
   routes were clicked through by hand on 2026-08-28. The base decision is final: `saas`,

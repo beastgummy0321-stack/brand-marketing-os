@@ -31,6 +31,7 @@
 ## 開場
 
 讀 `BOARD.md`；有 `[>]` 的票，主動報「哪張、進度、卡在哪」。看板只放未完成，完成即刪行。
+`HANDOFF-*.md` 讀完即轉成看板行或票，同一 session 內刪除；「現在做到哪」只活在 `BOARD.md`，寫第二份必漂移。
 
 ## 快速事實
 
@@ -43,7 +44,10 @@
 
 ## Tests
 
-- 每張票：閘門＝`uv run ruff check app` ＋ `uv run pyright` ＋受影響的測試檔＋typecheck＋build。
+- 每張票：閘門＝`uv run ruff check app` ＋ `uv run pyright` ＋受影響的測試檔＋typecheck＋build
+  ＋**端到端 smoke**（`cd frontend && npm run e2e`——它自己 build 前端、起一個測試專用後端在 8720、跑完收掉；
+  唯一前提是 `supabase start` 已起。你自己開著 8710 的系統不影響它）。
+  後端票也要跑——server 起不來、畫面吐 `[object Object]`、排程凍住全站，這類整合 bug 只在這裡現形（2026-08-29 那七個 `fix:`）。
 - 合併進主線：`uv run pytest app/tests -q -n auto --dist loadfile`
   （`--dist loadfile` 必要——`conftest.py` 給每個測試模組自己的 DB／schema）。
 - 800 行上限不適用於 `app/tests/`。

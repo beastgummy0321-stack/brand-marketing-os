@@ -2,7 +2,9 @@ import { useEffect, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { EmptyState } from "@/components/layout/EmptyState";
-import { fetchOverview } from "@/lib/api";
+import { fetchBrandMonth, fetchOverview, type BrandMonthMoney } from "@/lib/api";
+import { formatCurrency, formatMetaRoas, formatRelativeHours, formatRoas } from "@/lib/format";
+import { fetchMetaSpend, type MetaCampaignSpend, type MetaSpendSummary } from "@/lib/metaApi";
 
 /** 單品牌頁（`/brands/:brandId`）。
  *
@@ -12,7 +14,21 @@ import { fetchOverview } from "@/lib/api";
  * 它是外殼儀表板未來的位置，現在先是品牌標題＋一句空態。
  *
  * 品牌名稱從跨品牌總覽那支既有端點取（`/api/dashboard/overview`），不另開新端點——
- * 這一頁還沒有自己的資料，多開一支只為了拿一個名字不划算。 */
+ * 這一頁還沒有自己的資料，多開一支只為了拿一個名字不划算。
+ *
+ * 票 05：加回本月 Meta 花費（獨立於品牌名稱那次讀取，見下面 MetaSpendSection——花費
+ * 讀取失敗不該連品牌標題都出不來）。
+ *
+ * 缺陷 3（2026-08-29，實機操作發現）：原本這裡是一張空態卡，寫「產生本期方案的按鈕還沒
+ * 接上來」——但檔期頁（`/brands/:brandId/schedule`，票 07-12）早就能用了。空態整塊移除、
+ * 改成標題列的主要按鈕，比照產品頁「新增產品」、訂單頁「匯入訂單檔」。
+ *
+ * 「本期還沒有方案」這句是這一頁沒查過就下的斷言（它從來沒打過檔期那支端點），有方案時
+ * 就是一句假話；查要多一次 GET，只為了把按鈕的動詞從「排」換成「看」不划算——改用一句
+ * 兩種情況都成立的按鈕文字，這一頁就不必知道有沒有方案。
+ *
+ * 按鈕不叫「產生本期方案」（BOARD.md 里程碑的用詞）：它只是導頁，真正產生方案是檔期頁上
+ * 的「開始排程」，那一步要花 AI 的錢。導頁的按鈕不掛動作的名字。 */
 type LoadState =
   | { status: "loading" }
   | { status: "error"; message: string }
@@ -79,17 +95,26 @@ export function CockpitPage({ brandId }: { brandId: string }) {
       <div className="flex flex-col gap-6">
         <div className="flex items-center justify-between">
           <h1 className="font-display text-2xl text-foreground">{state.brandName}</h1>
-          <Link
-            to="/"
-            className="text-sm font-medium text-primary underline-offset-4 hover:underline"
-          >
-            回跨品牌總覽
-          </Link>
+          <div className="flex items-center gap-3">
+            <Link
+              to="/"
+              className="text-sm font-medium text-primary underline-offset-4 hover:underline"
+            >
+              回跨品牌總覽
+            </Link>
+            {/* ponytail: 這顆按鈕不查有沒有方案（要多打一支 /api/schedule/brands/{id} 才知道），
+                文字在「有方案／沒方案」兩種情況都成立。真的要分「去看方案／去排方案」時，
+                在這裡加 fetchSchedule 的第四個載入狀態。 */}
+            <Link
+              to={`/brands/${encodeURIComponent(brandId)}/schedule`}
+              className="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:opacity-90"
+            >
+              排這期的檔期
+            </Link>
+          </div>
         </div>
-        <EmptyState
-          title="本期還沒有方案"
-          description="產生本期方案的按鈕還沒接上來。品牌資料、產品與訂單可以先從左側選單進去看。"
-        />
+        <MonthMoneySection brandId={brandId} />
+        <MetaSpendSection brandId={brandId} />
       </div>
     );
   }
@@ -100,4 +125,199 @@ export function CockpitPage({ brandId }: { brandId: string }) {
       {content}
     </div>
   );
+}
+
+type MoneyState =
+  | { status: "loading" }
+  | { status: "error"; message: string }
+  | { status: "ready"; data: BrandMonthMoney };
+
+/** 票 06：本月花費／營收／毛利／ROAS 併桌——回答 ADR 0034 第二個失敗案例：不用再把
+ * Meta 儀表板、Shopee 儀表板、自己網站後台各開一次，自己心算出這個月賺不賺錢。
+ *
+ * 票 12：營收改讀 `channel_revenue`，是跨通路總和（官網＋粉專／IG／LINE＋平台商店＋
+ * 實體店），不再只算官網。毛利仍然只算官網——毛利算式吃 `order_item` × 單位成本，
+ * 其他通路沒有逐項商品資料可算。平台商店（marketplace，蝦皮等）的欄位對照還沒拿真實
+ * 匯出檔驗證過，`marketplace_uncalibrated` 為 true 時說明句要補這句提醒。
+ *
+ * 這裡的 ROAS 是「全通路營收 ÷ 花費」，跟下面逐活動表格裡 Meta 自己回報的 ROAS 是
+ * 兩件不同的事——用 label 分開講清楚，不動下面表格既有的 ROAS 欄位。 */
+function MonthMoneySection({ brandId }: { brandId: string }) {
+  const [state, setState] = useState<MoneyState>({ status: "loading" });
+
+  useEffect(() => {
+    let cancelled = false;
+    setState({ status: "loading" });
+    fetchBrandMonth(brandId)
+      .then((data) => {
+        if (!cancelled) setState({ status: "ready", data });
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) {
+          setState({
+            status: "error",
+            message: err instanceof Error ? err.message : "讀取失敗，請稍後再試。",
+          });
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [brandId]);
+
+  if (state.status === "loading") {
+    return <p className="text-sm text-muted-foreground">本月概況讀取中…</p>;
+  }
+  if (state.status === "error") {
+    return <p className="text-sm text-danger">本月概況讀取失敗：{state.message}</p>;
+  }
+
+  const {
+    spend,
+    revenue,
+    margin,
+    margin_unknown_sku_count: unknownSkuCount,
+    roas,
+    has_orders: hasOrders,
+    marketplace_uncalibrated: marketplaceUncalibrated,
+  } = state.data;
+
+  const revenueText = hasOrders ? formatCurrency(revenue) : "本月還沒有訂單";
+  let marginText: string;
+  if (!hasOrders) {
+    marginText = "本月還沒有訂單";
+  } else if (margin !== null) {
+    marginText = formatCurrency(margin);
+  } else if (revenue === null) {
+    marginText = "累積中";
+  } else {
+    marginText = `成本還沒登記，算不出毛利（${unknownSkuCount} 個 SKU 還沒登記成本）`;
+  }
+
+  return (
+    <section className="flex flex-col gap-3">
+      <h2 className="font-display text-xl text-foreground">本月概況</h2>
+      <p className="text-sm text-muted-foreground">
+        營收是每個通路加總（官網、粉專／IG／LINE、平台商店、實體店）。
+        {marketplaceUncalibrated &&
+          "其中平台商店的數字來自還沒拿真實匯出檔驗證過的匯入程式，這部分還不能全信。"}
+      </p>
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <MoneyTile label="本月花費" value={formatCurrency(spend)} />
+        <MoneyTile label="本月營收（全通路）" value={revenueText} />
+        <MoneyTile label="本月毛利（官網）" value={marginText} />
+        <MoneyTile label="全通路 ROAS（營收 ÷ 花費，非平台回報）" value={formatRoas(roas)} />
+      </div>
+    </section>
+  );
+}
+
+function MoneyTile({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-md border border-border p-3">
+      <p className="text-xs text-muted-foreground">{label}</p>
+      <p className="text-lg font-medium text-foreground">{value}</p>
+    </div>
+  );
+}
+
+type SpendState =
+  | { status: "loading" }
+  | { status: "error"; message: string }
+  | { status: "ready"; data: MetaSpendSummary };
+
+/** 票 05：本月 Meta 花費／成效，逐活動＋一列總計。獨立於品牌標題的讀取，失敗互不
+ * 牽連。ROAS 為 null 一律顯示「未追蹤」，不是 0（`formatMetaRoas`）——這是這張票
+ * 存在的理由，見票面說明。 */
+function MetaSpendSection({ brandId }: { brandId: string }) {
+  const [state, setState] = useState<SpendState>({ status: "loading" });
+
+  useEffect(() => {
+    let cancelled = false;
+    setState({ status: "loading" });
+    fetchMetaSpend(brandId)
+      .then((data) => {
+        if (!cancelled) setState({ status: "ready", data });
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) {
+          setState({
+            status: "error",
+            message: err instanceof Error ? err.message : "讀取失敗，請稍後再試。",
+          });
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [brandId]);
+
+  if (state.status === "loading") {
+    return <p className="text-sm text-muted-foreground">本月 Meta 花費讀取中…</p>;
+  }
+  if (state.status === "error") {
+    return <p className="text-sm text-danger">本月 Meta 花費讀取失敗：{state.message}</p>;
+  }
+
+  const { campaigns, total, last_pull_at: lastPullAt } = state.data;
+
+  return (
+    <section className="flex flex-col gap-3">
+      <div className="flex items-baseline justify-between gap-3">
+        <h2 className="font-display text-xl text-foreground">本月 Meta 花費</h2>
+        <span className="text-sm text-muted-foreground">
+          {lastPullAt ? `上次成功拉取：${formatRelativeHours(lastPullAt)}` : "尚未成功拉取過"}
+        </span>
+      </div>
+      {campaigns.length === 0 ? (
+        <EmptyState
+          title="這個月還沒有 Meta 花費資料"
+          description="把 Meta 廣告帳戶連接並綁定到這個品牌，資料會在每日拉取後出現在這裡。"
+          actionHref="/settings"
+          actionInternal
+          actionLabel="前往設定連接 Meta"
+        />
+      ) : (
+        <div className="overflow-x-auto rounded-md border border-border">
+          <table className="w-full text-left text-sm">
+            <thead className="bg-muted text-muted-foreground">
+              <tr>
+                <SpendHeader>活動</SpendHeader>
+                <SpendHeader>花費</SpendHeader>
+                <SpendHeader>曝光</SpendHeader>
+                <SpendHeader>點擊</SpendHeader>
+                <SpendHeader>ROAS</SpendHeader>
+              </tr>
+            </thead>
+            <tbody>
+              {campaigns.map((row) => (
+                <SpendRow key={row.campaign_id} row={row} />
+              ))}
+              <SpendRow row={total} isTotal />
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function SpendRow({ row, isTotal = false }: { row: MetaCampaignSpend; isTotal?: boolean }) {
+  return (
+    <tr className={`border-t border-border ${isTotal ? "font-medium text-foreground" : ""}`}>
+      <SpendCell>{row.campaign_name}</SpendCell>
+      <SpendCell>{formatCurrency(row.spend)}</SpendCell>
+      <SpendCell>{row.impressions.toLocaleString("zh-TW")}</SpendCell>
+      <SpendCell>{row.clicks.toLocaleString("zh-TW")}</SpendCell>
+      <SpendCell>{formatMetaRoas(row.roas)}</SpendCell>
+    </tr>
+  );
+}
+
+function SpendHeader({ children }: { children: ReactNode }) {
+  return <th className="whitespace-nowrap px-3 py-2 font-medium">{children}</th>;
+}
+
+function SpendCell({ children }: { children: ReactNode }) {
+  return <td className="whitespace-nowrap px-3 py-2 text-foreground">{children}</td>;
 }

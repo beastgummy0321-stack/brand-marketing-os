@@ -1,11 +1,9 @@
-"""app/tests/test_orders_channel.py — 通路對照卡（GitHub issue #40，決策 0025 第二節 B）。
+"""app/tests/test_orders_channel.py — 通路對照卡（GitHub issue #40，決策 0025 第二節 B；
+票 12／ADR 0035 通路是資料）：蝦皮檔解析＋落地到共用 channel_revenue、手動登記、
+revenue NULL＝「不知道」不能在彙總途中變成假的 0（鐵則 16）。
 
-驗收重點：
-1. 蝦皮檔解析＋藥局批次表單；全部選填。
-2. 藥局補貨間隔訊號：資料不足時誠實說不知道，間隔縮短才標記。
-
-外殼切片（2026-08-28）：燈號規則、灰燈債務、蝦皮期別碼、判讀整合四組測試隨
-`app/ads/` 一起刪掉——它們的主體（檔期、判讀）不存在了，見 `app/orders/channel.py` 檔頭。
+外殼切片（2026-08-28）＋票 12（2026-08-29）：燈號規則、灰燈債務、蝦皮期別碼、判讀整合、
+藥局補貨間隔訊號（RestockIntervalTest）隨 `app/ads/` 一起刪掉——呼叫端不存在了。
 
 fixture 一律虛構品牌，嚴禁真實客戶資料（規範第八節）。
 """
@@ -17,6 +15,7 @@ from app.brand_intelligence import repository as bi_repo
 from app.core.db import DEV_ORG_ID  # noqa: E402
 from app.orders import channel as orders_channel
 from app.orders import dispatch as orders_dispatch
+from app.orders import repository as orders_repo
 
 ACTOR = "測試員"
 
@@ -75,6 +74,8 @@ class SniffTest(_BaseChannelTest):
 
 
 class SaveShopeeRowsTest(_BaseChannelTest):
+    """票 12：save_shopee_rows 現在寫 channel_revenue（channel='marketplace'）。"""
+
     def test_reimporting_same_order_sn_overwrites_not_duplicates(self):
         rows1, _ = orders_channel.parse_shopee_csv(
             _shopee_csv([("SN001", "2026-06-02", "500", None)]))
@@ -87,15 +88,20 @@ class SaveShopeeRowsTest(_BaseChannelTest):
         self.assertEqual(result.updated, 1)
         self.assertEqual(result.imported, 0)
         count = web.conn.execute(
-            "SELECT COUNT(*) c FROM shopee_report_row WHERE brand_id = %s", (self.bid,)
+            "SELECT COUNT(*) c FROM channel_revenue WHERE brand_id = %s AND channel = 'marketplace'",
+            (self.bid,),
         ).fetchone()["c"]
         self.assertEqual(count, 1)
-        revenue = orders_channel.shopee_revenue(web.conn, self.bid, "2026-06-01", "2026-06-30")
-        self.assertEqual(revenue, 800.0)
+        summary = orders_repo.channel_revenue_summary(
+            web.conn, self.bid, since="2026-06-01", until="2026-06-30")
+        self.assertEqual(summary["revenue"], 800.0)
+        self.assertTrue(summary["marketplace_uncalibrated"])
 
     def test_no_rows_in_range_returns_none_not_zero(self):
-        self.assertIsNone(
-            orders_channel.shopee_revenue(web.conn, self.bid, "2026-01-01", "2026-01-31"))
+        summary = orders_repo.channel_revenue_summary(
+            web.conn, self.bid, since="2026-01-01", until="2026-01-31")
+        self.assertIsNone(summary["revenue"])
+        self.assertFalse(summary["has_rows"])
 
 
 class DispatchShopeeTest(_BaseChannelTest):
@@ -108,33 +114,62 @@ class DispatchShopeeTest(_BaseChannelTest):
         self.assertEqual(result.shopee_result.imported, 1)
 
 
-class RestockIntervalTest(_BaseChannelTest):
-    def _batch(self, batch_date):
-        orders_channel.record_pharmacy_batch(web.conn, self.bid, batch_date=batch_date,
-                                             actor=ACTOR)
+def _website_ledger(bid):
+    row = web.conn.execute(
+        "SELECT SUM(revenue) s, COUNT(*) c FROM channel_revenue"
+        " WHERE brand_id = %s AND channel = 'website'", (bid,)).fetchone()
+    return float(row["s"]), row["c"]
 
-    def test_fewer_than_three_batches_is_insufficient_data(self):
-        self._batch("2026-05-01")
-        self._batch("2026-06-01")
-        result = orders_channel.restock_interval_signal(web.conn, self.bid, "2026-06-15")
-        self.assertIsNone(result["shortened"])
 
-    def test_shortened_interval_is_detected(self):
-        """間隔從 30 天縮到 10 天（縮短 67%），達門檻應判為外溢訊號。"""
-        self._batch("2026-04-01")
-        self._batch("2026-05-01")  # 間隔 30 天
-        self._batch("2026-05-11")  # 間隔 10 天
-        result = orders_channel.restock_interval_signal(web.conn, self.bid, "2026-06-01")
-        self.assertTrue(result["shortened"])
-        self.assertEqual(result["latest_interval_days"], 10)
-        self.assertEqual(result["baseline_interval_days"], 30.0)
+class WebsiteChannelRevenueMatchesStatsTest(_BaseChannelTest):
+    """定案 5（ADR 0035）：保護的是錢——channel='website' 加總要跟 stats()['net_revenue']
+    對得上（退款、棄單都要算對），重複匯入不能讓帳翻倍。"""
 
-    def test_stable_interval_is_not_flagged(self):
-        self._batch("2026-04-01")
-        self._batch("2026-05-01")
-        self._batch("2026-06-01")  # 間隔穩定在 30 天上下
-        result = orders_channel.restock_interval_signal(web.conn, self.bid, "2026-06-15")
-        self.assertFalse(result["shortened"])
+    def test_website_ledger_sum_equals_stats_net_revenue_and_survives_reimport(self):
+        rows = [
+            {"order_number": "WEB-1", "order_date": "2026-06-01", "total_amount": 1000,
+             "refunded_amount": 0, "order_status": "paid", "items": []},
+            {"order_number": "WEB-2", "order_date": "2026-06-05", "total_amount": 800,
+             "refunded_amount": 200, "order_status": "paid", "items": []},
+            {"order_number": "WEB-3", "order_date": "2026-06-10", "total_amount": 500,
+             "refunded_amount": 0, "order_status": "cancelled", "items": []},
+        ]
+        orders_repo.save_orders(web.conn, self.bid, rows, source="test", actor=ACTOR)
+        stats = orders_repo.stats(web.conn, self.bid, since="2026-06-01", until="2026-06-30",
+                                  today="2026-06-30")
+        ledger_sum, _ = _website_ledger(self.bid)
+        self.assertEqual(stats["net_revenue"], 1600)
+        self.assertEqual(ledger_sum, stats["net_revenue"])
+
+        orders_repo.save_orders(web.conn, self.bid, rows, source="test", actor=ACTOR)  # 重丟同一批
+        ledger_sum_after, count = _website_ledger(self.bid)
+        self.assertEqual(count, 3, "重複匯入把帳翻倍了")
+        self.assertEqual(ledger_sum_after, 1600)
+
+        # 重新匯入把日期洗掉：stats() 按 order_date 篩選，這筆從此不算進實收，帳本也要
+        # 跟著清掉，否則帳本會比訂單頁多一筆而且永遠對不回來。
+        rows[0]["order_date"] = None
+        orders_repo.save_orders(web.conn, self.bid, rows, source="test", actor=ACTOR)
+        stats_after = orders_repo.stats(web.conn, self.bid, since="2026-06-01",
+                                        until="2026-06-30", today="2026-06-30")
+        ledger_sum_final, count_final = _website_ledger(self.bid)
+        self.assertEqual(count_final, 2)
+        self.assertEqual(ledger_sum_final, stats_after["net_revenue"])
+
+
+class ManualChannelEntryDataCorrectnessTest(_BaseChannelTest):
+    """定案 1／鐵則 16：revenue NULL＝不知道，不能在彙總途中變成假的 0。"""
+
+    def test_offline_entry_without_revenue_survives_as_unknown_not_zero(self):
+        orders_channel.record_channel_entry(
+            web.conn, self.bid, channel="physical_store", entry_date="2026-06-01",
+            revenue=None, quantity=12, note="到貨", actor=ACTOR)
+        summary = orders_repo.channel_revenue_summary(
+            web.conn, self.bid, since="2026-06-01", until="2026-06-30")
+        self.assertTrue(summary["has_rows"])
+        self.assertIsNone(summary["revenue"])
+        # 不認得的通路、以及「官網不能手動登錄」，都在 test_orders_api.py 的
+        # channel-entry 契約測試裡驗（同一個行為不在兩層各測一次）。
 
 
 if __name__ == "__main__":

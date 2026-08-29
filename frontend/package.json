@@ -11,7 +11,7 @@
     "storybook": "storybook dev -p 6006",
     "build-storybook": "storybook build",
     "test": "vitest run",
-    "e2e": "playwright test"
+    "e2e": "npm run build && playwright test"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.112.4",

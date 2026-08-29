@@ -43,6 +43,14 @@ BRAND_AGNOSTIC_EXCEPTIONS = {
     "membership": "使用者與組織的關係表（票 03-1）：綁的是 org_id，不是 brand_id——"
         "同一個道理，membership 活在品牌之上",
     "org_invite": "組織邀請（票 03-1）：綁的是 org_id，邀請的是加入組織、不是加入品牌",
+    "meta_credential": "票 04：組織層的 Meta 權杖指標（一個組織一份），一個組織可能同時"
+        "服務好幾個品牌，權杖本身不屬於單一品牌",
+    "meta_ad_account": "票 04：組織層「已連接帳號」清單（ADR 0027 決策 6）——帳號要先在"
+        "組織層連接，才談得上綁哪個品牌；真正的品牌歸屬在 brand_meta_ad_account（有"
+        "NOT NULL brand_id，照常過這個檢查，不在例外清單）",
+    "meta_campaign_spend": "票 05：帳號＋活動＋日的每日花費紀錄，跟 meta_ad_account 同一個"
+        "道理——一個帳號可能同時綁兩個品牌（brand_meta_ad_account 是 m:n），花費列存在"
+        "帳號層，不能硬塞一個 brand_id 進去（否則要嘛雙算，要嘛得任意選一個品牌）",
 }
 
 

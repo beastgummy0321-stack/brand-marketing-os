@@ -5,6 +5,7 @@ from datetime import date
 from fastapi import APIRouter, File, Query, Request, UploadFile
 
 import app.shared.web as main_mod
+from app.core import vocab
 from app.orders import channel as orders_channel
 from app.orders import dispatch as orders_dispatch
 from app.orders import repository as orders_repo
@@ -20,7 +21,7 @@ def _bad_request(message: str) -> JSONResponse:
 
 
 @router.get("/brands/{brand_id}/orders")
-async def orders(request: Request, brand_id: str, page: int = Query(default=1, ge=1)):
+def orders(request: Request, brand_id: str, page: int = Query(default=1, ge=1)):
     """回傳單一品牌的訂單統計與固定大小的一頁訂單清單。"""
     actor = main_mod.require_actor(request)
     try:
@@ -53,13 +54,16 @@ async def orders(request: Request, brand_id: str, page: int = Query(default=1, g
         }
         for row in orders_repo.list_policy_changes(main_mod.conn, brand_id)
     ]
-    pharmacy_batches = [
+    channel_entries = [
         {
-            "batch_date": row["batch_date"],
+            "channel": row["channel"],
+            "channel_label": vocab.channel_type_label(row["channel"]),
+            "entry_date": row["entry_date"],
+            "revenue": row["revenue"],
             "quantity": row["quantity"],
             "note": row["note"] or "",
         }
-        for row in reversed(orders_channel.list_pharmacy_batches(main_mod.conn, brand_id)[-10:])
+        for row in orders_channel.list_channel_entries(main_mod.conn, brand_id)
     ]
     return {
         "brand": {"id": brand["id"], "name": brand["name"]},
@@ -71,7 +75,7 @@ async def orders(request: Request, brand_id: str, page: int = Query(default=1, g
             "total": total,
         },
         "policy_changes": policy_changes,
-        "pharmacy_batches": pharmacy_batches,
+        "channel_entries": channel_entries,
     }
 
 
@@ -110,7 +114,7 @@ async def import_orders(request: Request, brand_id: str, drop_file: UploadFile =
 
 
 @router.post("/brands/{brand_id}/orders/sku-cost")
-async def set_sku_cost(request: Request, brand_id: str, payload: dict):
+def set_sku_cost(request: Request, brand_id: str, payload: dict):
     actor = main_mod.require_actor(request)
     try:
         main_mod.require_brand(brand_id, actor)
@@ -128,7 +132,7 @@ async def set_sku_cost(request: Request, brand_id: str, payload: dict):
 
 
 @router.post("/brands/{brand_id}/orders/policy-change")
-async def record_policy_change(request: Request, brand_id: str, payload: dict):
+def record_policy_change(request: Request, brand_id: str, payload: dict):
     actor = main_mod.require_actor(request)
     try:
         main_mod.require_brand(brand_id, actor)
@@ -145,29 +149,35 @@ async def record_policy_change(request: Request, brand_id: str, payload: dict):
     return {"ok": True, "message": "已記錄口徑變更。"}
 
 
-@router.post("/brands/{brand_id}/orders/pharmacy-batch")
-async def record_pharmacy_batch(request: Request, brand_id: str, payload: dict):
+@router.post("/brands/{brand_id}/orders/channel-entry")
+def record_channel_entry(request: Request, brand_id: str, payload: dict):
     actor = main_mod.require_actor(request)
     try:
         main_mod.require_brand(brand_id, actor)
     except main_mod.NotFoundKind:
         return JSONResponse({"detail": "找不到品牌"}, status_code=404)
-    quantity = str(payload.get("quantity", ""))
-    value, ok = main_mod.parse_number(quantity)
-    if not ok:
+    # 通路合不合法只在 orders_channel.record_channel_entry() 判一次（含「官網不能手動
+    # 登錄」），這裡不抄第二份——不合法就是它丟 ValueError，下面統一轉成 400。
+    channel = str(payload.get("channel", ""))
+    revenue, revenue_ok = main_mod.parse_number(str(payload.get("revenue", "")))
+    if not revenue_ok:
+        return _bad_request("營收請填數字，或留空。")
+    quantity, quantity_ok = main_mod.parse_number(str(payload.get("quantity", "")))
+    if not quantity_ok:
         return _bad_request("數量請填數字，或留空。")
     try:
-        orders_channel.record_pharmacy_batch(
-            main_mod.conn, brand_id, batch_date=str(payload.get("batch_date", "")), quantity=value,
-            note=str(payload.get("note", "")) or None, actor=str(actor.user_id),
+        orders_channel.record_channel_entry(
+            main_mod.conn, brand_id, channel=channel, entry_date=str(payload.get("entry_date", "")),
+            revenue=revenue, quantity=quantity, note=str(payload.get("note", "")) or None,
+            actor=str(actor.user_id),
         )
     except ValueError as exc:
         return _bad_request(str(exc))
-    return {"ok": True, "message": "已記下這筆藥局出貨批次。"}
+    return {"ok": True, "message": "已記下這筆通路營收。"}
 
 
 @router.post("/brands/{brand_id}/orders/{order_id}/attribution")
-async def set_attribution(request: Request, brand_id: str, order_id: str, payload: dict):
+def set_attribution(request: Request, brand_id: str, order_id: str, payload: dict):
     actor = main_mod.require_actor(request)
     try:
         main_mod.require_brand(brand_id, actor)

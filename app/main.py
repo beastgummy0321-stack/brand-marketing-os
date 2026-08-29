@@ -28,6 +28,7 @@ ADR 0027 起：連線不再全程共用一條，改成每個 request／背景工
 import os
 import sys
 import uuid
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -84,6 +85,7 @@ def _load_dotenv() -> int:
 
 _load_dotenv()
 
+from app import background as background_module
 from app.core import creative_assets as corecreative
 from app.core import db as coredb
 from app.core import retention as core_retention
@@ -120,7 +122,19 @@ def _purge_expired_llm_task_content_if_new_day() -> None:
 
 app_logging.install()  # 票 03-1 附錄 A：JSON formatter + request_id/user_id/org_id filter
 
-app = FastAPI(title="行銷作業系統（Phase 0 Mock UI）")
+
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    """票 05 fix round：啟動時把這個 process（啟動行銷系統.bat 開的那個 uvicorn）順便掛成
+    procrastinate worker，接手 app/meta 每日花費拉取的排程（見
+    app/background/__init__.py start_worker() 檔頭「為什麼不是新開一個部署形態」）；關閉時
+    收乾淨，不留一個游離的背景 task。"""
+    await background_module.start_worker()
+    yield
+    await background_module.stop_worker()
+
+
+app = FastAPI(title="行銷作業系統（Phase 0 Mock UI）", lifespan=_lifespan)
 
 # 新殼（票 01-react-shell，ADR 0003）：production 掛 frontend/dist 於 /app，
 # 舊 145 條 HTML 路由原封不動。frontend/dist 是建置產物、不進版控，開發期走
@@ -173,7 +187,7 @@ async def _db_connection_middleware(request: Request, call_next):
 
 
 @app.get("/")
-async def brand_overview(brand: str | None = None):
+def brand_overview(brand: str | None = None):
     destination = f"/app/brands/{brand}" if brand else "/app/"
     return RedirectResponse(destination, status_code=303)
 
@@ -270,12 +284,18 @@ def _write_prompt_header(prompt_header: str, *, org_id: str) -> None:
 
 def _run_ai_test_connection(*, org_id: str) -> tuple:
     """回傳 (人話訊息, kind)：kind 沿用 `redirect_with_message` 既有的 'ok'／'warn'／'danger'
-    三種，HTML 與 JSON 路由共用同一份判斷。"""
-    if not coresettings.get_api_key(web.conn, org_id=org_id):
+    三種，HTML 與 JSON 路由共用同一份判斷。
+
+    本機 Codex CLI 開關（BRAND_OS_LLM_PROVIDER=codex_cli）開著時跟著走那條線：不檢查
+    Anthropic 金鑰（CLI 走 ChatGPT 訂閱額度，不需要），直接打一次 codex。
+    """
+    codex_cli = llm_providers.codex_cli_enabled()
+    if not codex_cli and not coresettings.get_api_key(web.conn, org_id=org_id):
         return "尚未設定金鑰。請先在上方填入 AI 金鑰，儲存後再測試。", "warn"
     try:
-        llm_providers.AnthropicProvider().complete(
-            model=coresettings.get_llm_model(web.conn, org_id=org_id), system=None,
+        model = llm_providers.CODEX_CLI_MODEL if codex_cli else coresettings.get_llm_model(web.conn, org_id=org_id)
+        llm_providers.select_provider(llm_providers.AnthropicProvider()).complete(
+            model=model, system=None,
             messages=[{"role": "user", "content": "hi"}], max_tokens=1, timeout_s=30.0,
             org_id=org_id,
         )
@@ -341,7 +361,7 @@ def _settings_json_data(*, org_id: str, is_owner: bool) -> dict:
 
 
 @app.get("/api/settings")
-async def api_settings_get(request: Request):
+def api_settings_get(request: Request):
     actor = web.require_actor(request)
     return {
         "data": _settings_json_data(org_id=actor.org_id, is_owner=actor.role == "owner"),
@@ -362,7 +382,7 @@ async def api_settings_api_key_post(request: Request):
 
 
 @app.post("/api/settings/api-key/clear-db")
-async def api_settings_api_key_clear_db_post(request: Request):
+def api_settings_api_key_clear_db_post(request: Request):
     """不可逆動作：清空資料庫裡的金鑰。二次確認在前端做（S15.17），這裡跟舊表單路由
     一樣不再另外確認一次。"""
     actor = web.require_actor(request)
@@ -371,7 +391,7 @@ async def api_settings_api_key_clear_db_post(request: Request):
 
 
 @app.post("/api/settings/test-connection")
-async def api_settings_test_connection_post(request: Request):
+def api_settings_test_connection_post(request: Request):
     actor = web.require_actor(request)
     message, kind = _run_ai_test_connection(org_id=actor.org_id)
     return {"message": message, "kind": kind}
@@ -448,15 +468,22 @@ from app import brand_web as brand_web_module  # noqa: E402
 from app import dashboard as dashboard_module  # noqa: E402
 from app import identity as identity_module  # noqa: E402
 from app import intake as intake_module  # noqa: E402
+from app import meta as meta_module  # noqa: E402
 from app import orders as orders_module  # noqa: E402
+from app import schedule as schedule_module  # noqa: E402
 
 # 票 03-1：每個模組的路由掛載交給它自己的 register(app)（機械式：路由本身不變，
 # 只是把 main.py 逐條 include_router 收斂成一個迴圈）。identity 排最後——它的
 # register() 會在 IDENTITY_DEV_TOKEN 設定錯誤時 raise，讓這種設定錯誤盡早炸在啟動
 # 階段，而不是等到第一個請求才發現。
-for _module in (brand_web_module, intake_module, orders_module,
-                 dashboard_module, identity_module):
+for _module in (brand_web_module, intake_module, meta_module, orders_module,
+                 schedule_module, dashboard_module, identity_module):
     _module.register(app)
+
+# 票 05：掛每日 Meta 花費拉取的 procrastinate task（冪等，見 app/meta/daily_pull.py
+# 檔頭說明——DSN 換了 app.background.app() 會整顆重建，所以呼叫端不能只做這一次就
+# 假設永遠有效；本機單一部署 DSN 不會變，這裡呼叫一次就夠）。
+meta_module.register_task()
 
 # 啟動斷言（第 2 刀「清理登記處」）：確認刪品牌時該連鎖清資料的模組都有登記進
 # app.core.cleanup，少一個就不讓服務起來，避免又漏掉誰。

@@ -4,7 +4,6 @@ import { SidePanel } from "@/components/layout/SidePanel";
 import {
   CONVERSION_GOALS,
   deleteBrand,
-  INDUSTRIES,
   MARKET_REGIONS,
   PERSONA_TYPES,
   saveBrandProfile,
@@ -71,7 +70,6 @@ function ProfileView({
   const [persona, setPersona] = useState(""); // 只是填表捷徑，不入庫（S5.46），不必回填
   const [marketRegion, setMarketRegion] = useState(profile.market_region ?? "");
   const [conversionGoal, setConversionGoal] = useState(profile.conversion_goal ?? "");
-  const [industry, setIndustry] = useState(profile.industry ?? "");
 
   const form = useFormSubmit(async () => {
     await saveBrandProfile(brandId, {
@@ -81,7 +79,6 @@ function ProfileView({
       persona,
       market_region: marketRegion,
       conversion_goal: conversionGoal,
-      industry,
     });
     onSaved();
   });
@@ -214,25 +211,6 @@ function ProfileView({
               </option>
             ))}
           </select>
-        </label>
-
-        <label className="flex flex-col gap-1 text-sm">
-          <span className="font-medium text-foreground">業種</span>
-          <select
-            value={industry}
-            onChange={(e) => setIndustry(e.target.value)}
-            className="rounded-md border border-border px-3 py-2 text-sm text-foreground"
-          >
-            <option value="">未設定</option>
-            {INDUSTRIES.map(([v, l]) => (
-              <option key={v} value={v}>
-                {l}
-              </option>
-            ))}
-          </select>
-          <span className="text-xs text-muted-foreground">
-            業種決定節日日曆會不會提醒你，留空就只會收到不分業種的節日提醒。
-          </span>
         </label>
 
         {form.error && <p className="text-sm text-danger">{form.error}</p>}

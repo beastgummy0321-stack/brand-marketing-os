@@ -88,7 +88,7 @@ _ASSET_CONTENT_TYPES = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image
 
 
 @router.get("/brands/{brand_id}/assets/file/{asset_id}/{filename}")
-async def asset_file(request: Request, brand_id: str, asset_id: str, filename: str):
+def asset_file(request: Request, brand_id: str, asset_id: str, filename: str):
     """只回傳「這筆官方素材登記過的檔案」——不從網址參數直接組路徑，天生擋掉路徑穿越；
     找不到品牌、找不到素材、或檔名跟登記的不一致，一律 404（比照 intake 照片的做法）。"""
     actor = require_actor(request)

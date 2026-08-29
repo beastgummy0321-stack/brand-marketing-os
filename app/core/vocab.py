@@ -36,6 +36,13 @@ RULE_TYPES = [
     ("asset_usage", "素材使用"),
     ("platform_spec", "平台規格"),
     ("policy", "政策"),
+    # 票 10-feedback-entries（ADR 0037）：檔期排程模組的偏好類別，soft 回饋專用；
+    # hard 回饋一律強制 forbidden_word，不接受下面這五種。
+    ("angle", "切角"),
+    ("audience", "受眾"),
+    ("product_pick", "商品選擇"),
+    ("budget_split", "預算分配"),
+    ("other", "其他"),
 ]
 
 CLAIM_TYPES = [
@@ -141,17 +148,6 @@ CONVERSION_GOAL_LABELS = {
     "booking": "預約",
     "awareness": "認識品牌",
 }
-
-# industry 內部值→白話中文，順序對齊 app.brand_intelligence.repository.INDUSTRIES
-# （該檔是值域的唯一來源，跟節日日曆的 applicable_industries 值域對齊，不得各自發明）。
-INDUSTRY_LABELS = {
-    "food_beverage": "食品飲料",
-    "beauty_personal_care": "美妝個人護理",
-    "fashion_apparel": "服飾",
-    "home_lifestyle": "居家生活",
-    "service": "服務業",
-}
-
 
 def _label(pairs, value):
     for internal, human in pairs:

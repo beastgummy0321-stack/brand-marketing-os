@@ -46,10 +46,13 @@ export function LoginPage() {
         >
           <label className="flex flex-col gap-1 text-sm">
             <span className="font-medium text-foreground">Email</span>
+            {/* 內部測試用：帳號改成不是信箱格式的短字串（例如 123），type="email" 會被
+                瀏覽器自己擋在送出之前。Supabase Auth 本身收非信箱的帳號，擋人的是這一行。
+                正式發布前改回 type="email"。 */}
             <input
-              type="email"
+              type="text"
               required
-              autoComplete="email"
+              autoComplete="username"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               className="rounded-md border border-border px-3 py-2 text-sm text-foreground"

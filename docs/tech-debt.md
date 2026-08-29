@@ -107,3 +107,81 @@
 
 `brand.market_region` 收 ISO 3166-1 alpha-2，但方法論檔目前只有 `TW` 有對應內容。
 待建置範圍與細節記在 `app/methodology/README.md` 的「待建置」一節，不在此處重複。
+
+## 四、全套平行測試會隨機紅：測試 schema 的 queue 隔壁房沒被砍（2026-08-29 已修）
+
+**已修**（`app/tests/conftest.py`，本節保留成因，因為坑本身還在：`__queue` 這個後綴寫死在
+三個地方，改一個要改三個）。
+
+### 症狀（修之前）
+
+`uv run pytest app/tests -q -n auto --dist loadfile` **每跑一次紅在不同的模組**，錯誤永遠是
+同一句：
+
+```
+psycopg.errors.DuplicateObject: type "procrastinate_job_status" already exists
+```
+
+被打到的模組隨機（實測四次分別是 `test_methodology.py`／`test_capacity_check.py`／
+`test_main_dotenv.py`／`test_inbox_api.py`＋`test_brand_delete_routes.py`），**單獨跑一定綠**，
+再跑一次整套也可能整套綠。已驗證不是哪一張票帶進來的：在停在 `4777392` 的乾淨 worktree
+上跑同一條指令，一樣紅。
+
+### 成因（2026-08-29 實測證實，不是推測）
+
+`conftest.py` 每個測試模組建自己的 schema `t_<module>_<pid>`，但 ADR 0038 讓 procrastinate
+的四張表住在**隔壁的** `t_<module>_<pid>__queue`（migration
+`20260829000001_background_baseline.sql` 的 prelude 由 `current_schema() || '__queue'` 導出）。
+建房和退房都只砍了模組 schema，**隔壁房從來沒有人砍**。
+
+`_schema_name()` 用 `os.getpid()` 當後綴，而 pid 作業系統會回收再發。下一輪某個 worker 拿到
+同一個 pid、`--dist loadfile` 又剛好把同一個測試檔分給它 → 房名一模一樣 → prelude 那句
+`CREATE SCHEMA IF NOT EXISTS` 看到房還在就跳過 → 接著的 `CREATE TYPE procrastinate_job_status`
+撞上上一輪留下的同名 type。
+
+當時資料庫實測：**499 個殘留的 `__queue` schema，各裝一份 `procrastinate_job_status`；
+只有 150 個不重複 pid，最兇的一個 pid 被 15 個不同模組用過**。主房殘留 0 個——只有隔壁房漏。
+
+決定性重現：把 `conftest.py` 的建房 SQL 對同一個房名連跑兩次，第二次必噴上面那句，字句一致。
+
+### 修法
+
+建房與退房的 SQL 各多一句 `DROP SCHEMA IF EXISTS "<schema>__queue" CASCADE`。
+修完同一支重現腳本兩次都過、不留東西；清掉 499 個殘留後全套閘門**連跑四次結果一模一樣**
+（721 passed，0 個 DuplicateObject），隨機紅消失。
+
+### 留下的小尾巴（不追）
+
+`-n auto` 下每輪仍會留 1 間 `__queue`，只發生在該輪失敗的那個模組（單跑不留），推測是
+xdist 在 session 結束時提前收掉 worker、module-scope teardown 沒跑完。**數量不會長**
+（連三輪都是 1），因為建房時會先砍同名的隔壁房——這反而是修法在生效的證據。
+
+沒有為這條補新測試：它保護的是測試腳手架，不是金流／租戶隔離／API 契約／資料正確性，
+照 `CLAUDE.md` 的規則不寫。守門員就是閘門本身現在會穩定重現。
+
+## 五、路由處理器不得是「`async def` 但從不 `await`」（2026-08-29 全站修正，無機器閘門）
+
+**已修**：全站 75 個路由處理器拿掉 `async`。留下的規則是給未來的人看的：
+
+> 路由處理器如果體內從不 `await`，就宣告成 `def`，不要宣告成 `async def`。
+
+FastAPI 的規則：`def` 會被丟進執行緒池，`async def` 跑在 uvicorn 自己的 event loop 上。一個
+從不 await 的 `async def` 拿不到任何非同步的好處，卻把自己的阻塞時間變成**全站停頓**——
+2026-08-29 實測，排程端點那 170～300 秒的 LLM 呼叫期間，整個網站對**所有組織**都沒有反應，
+不是只有按下按鈕的那個人在等。多租戶下這代表 A 組織的一次排程會凍住 B 組織的每一個請求。
+
+搬進執行緒池不影響連線綁定：`app/core/db.py:160` 的 `_current` 是 ContextVar，Starlette 的
+執行緒池會複製 context。真正被 await 的東西（lifespan 的 `start_worker`／`stop_worker`、
+`@app.exception_handler` 註冊的處理器）沒有路由裝飾器，本來就不在這條規則範圍內。
+
+**為什麼這條沒有機器閘門**——寫了，然後刪掉了，兩個獨立的理由：
+
+1. `TestRatioTest` 直接擋下來。天花板 0.858，動工前已經是 0.857，只剩約 40 行測試碼的空間；
+   最精簡的版本仍然超標。那個閘門的職責就是拒絕「產品碼加一行、測試碼加五十行」，它做對了，
+   而它明文只准往下調，不准為了讓自己過而放寬。
+2. 憲章：「測試必須說出它保護什麼：金流、租戶隔離、API 契約、資料正確性。其餘一律不寫。」
+   全站反應速度可以硬拗成租戶隔離（A 組織凍住 B 組織），但那是硬拗。
+
+所以這條活在這裡而不是活在測試裡。要抓回歸，一行 grep 就夠：
+
+    git grep -n "^async def " -- app/ | # 再確認每個都真的有 await

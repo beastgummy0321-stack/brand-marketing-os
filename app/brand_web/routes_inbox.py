@@ -45,7 +45,7 @@ def _inbox_item(row: dict) -> dict:
 
 
 @router.get("/api/inbox")
-async def api_inbox(request: Request):
+def api_inbox(request: Request):
     """S2.2–S2.6、S2.11–S2.12：待辦／已結兩份清單一次回傳。排序沿用
     `core_interrupts.list_open()` 既有 `_sort_key`，這裡不重排。"""
     actor = require_actor(request)
@@ -60,7 +60,7 @@ async def api_inbox(request: Request):
 
 
 @router.post("/api/interrupts/{interrupt_id}/resolve")
-async def api_interrupt_resolve(request: Request, interrupt_id: str):
+def api_interrupt_resolve(request: Request, interrupt_id: str):
     """票 03-1 r1 defect 1：跨租戶界線由 core_interrupts.resolve() 的 org_id 過濾守住——
     別的組織的 id（或根本不存在的 id）一律同一個 ValueError，轉成 404，不洩漏「其實存在，
     只是不是你的」（同 require_brand 的處理方式，不用 403）。"""
@@ -75,7 +75,7 @@ async def api_interrupt_resolve(request: Request, interrupt_id: str):
 
 
 @router.get("/api/system/prototype-phase")
-async def api_prototype_phase(request: Request):
+def api_prototype_phase(request: Request):
     """S2.15–S2.17：側板詳情，全站單一旗標，不帶 brand_id 參數（旗標本身刻意不分組織，
     見 app/core/prototype_phase.py 檔頭；這裡只要求登入，不做組織過濾）。"""
     actor = require_actor(request)

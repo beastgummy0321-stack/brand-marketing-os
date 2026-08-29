@@ -8,9 +8,10 @@ import { Skeleton } from "@/components/layout/Skeleton";
 import { StatBig } from "@/components/layout/StatBig";
 import { formatCurrency } from "@/lib/format";
 import {
-  createPharmacyBatch,
+  createChannelEntry,
   createPolicyChange,
   fetchOrders,
+  HAND_ENTRY_CHANNEL_TYPES,
   importOrdersFile,
   saveSkuCost,
   setOrderAttribution,
@@ -28,7 +29,7 @@ type Panel =
   | { kind: "import" }
   | { kind: "sku-cost"; sku: string }
   | { kind: "policy-change" }
-  | { kind: "pharmacy-batch" }
+  | { kind: "channel-entry" }
   | null;
 
 function displayNumber(value: number | null): string {
@@ -75,7 +76,7 @@ export function OrdersPage({ brandId }: { brandId: string }) {
   } else if (state.status === "error") {
     content = <EmptyState title="讀取失敗" description={state.message} onAction={() => load()} actionLabel="重新載入" />;
   } else {
-    const { brand, summary, orders, policy_changes: policyChanges, pharmacy_batches: pharmacyBatches } = state.data;
+    const { brand, summary, orders, policy_changes: policyChanges, channel_entries: channelEntries } = state.data;
     const noData = !summary.has_history && orders.total === 0;
     const pageCount = Math.ceil(orders.total / orders.page_size);
     content = <>
@@ -111,8 +112,8 @@ export function OrdersPage({ brandId }: { brandId: string }) {
         {policyChanges.length === 0 ? <p className="text-sm text-muted-foreground">還沒有口徑變更紀錄。</p> : <Table><thead className="bg-muted text-muted-foreground"><tr><Header>類型</Header><Header>變更日</Header><Header>說明</Header></tr></thead><tbody>{policyChanges.map((item) => <tr key={`${item.policy_type}-${item.changed_at}-${item.description}`} className="border-t border-border"><Cell>{item.policy_type_label}</Cell><Cell>{item.changed_at}</Cell><Cell>{item.description}</Cell></tr>)}</tbody></Table>}
       </section>
       <section className="flex flex-col gap-3">
-        <SectionHeading title="藥局出貨批次" onAdd={() => setPanel({ kind: "pharmacy-batch" })} />
-        {pharmacyBatches.length === 0 ? <p className="text-sm text-muted-foreground">還沒有藥局出貨批次。</p> : <Table><thead className="bg-muted text-muted-foreground"><tr><Header>批次日期</Header><Header>數量</Header><Header>備註</Header></tr></thead><tbody>{pharmacyBatches.map((item) => <tr key={`${item.batch_date}-${item.note}`} className="border-t border-border"><Cell>{item.batch_date}</Cell><Cell>{item.quantity === null ? "—" : displayNumber(item.quantity)}</Cell><Cell>{item.note || "—"}</Cell></tr>)}</tbody></Table>}
+        <SectionHeading title="通路營收登記" onAdd={() => setPanel({ kind: "channel-entry" })} />
+        {channelEntries.length === 0 ? <p className="text-sm text-muted-foreground">還沒有手動登記的通路營收。</p> : <Table><thead className="bg-muted text-muted-foreground"><tr><Header>通路</Header><Header>日期</Header><Header>金額</Header><Header>數量</Header><Header>備註</Header></tr></thead><tbody>{channelEntries.map((item) => <tr key={`${item.channel}-${item.entry_date}-${item.note}`} className="border-t border-border"><Cell>{item.channel_label}</Cell><Cell>{item.entry_date}</Cell><Cell>{item.revenue === null ? "未填" : formatCurrency(item.revenue)}</Cell><Cell>{item.quantity === null ? "—" : displayNumber(item.quantity)}</Cell><Cell>{item.note || "—"}</Cell></tr>)}</tbody></Table>}
       </section>
     </>;
   }
@@ -121,7 +122,7 @@ export function OrdersPage({ brandId }: { brandId: string }) {
     {panel?.kind === "import" && <ImportPanel brandId={brandId} onClose={() => setPanel(null)} onSaved={refreshAfterSave} />}
     {panel?.kind === "sku-cost" && <SkuCostPanel brandId={brandId} sku={panel.sku} onClose={() => setPanel(null)} onSaved={refreshAfterSave} />}
     {panel?.kind === "policy-change" && <PolicyChangePanel brandId={brandId} onClose={() => setPanel(null)} onSaved={refreshAfterSave} />}
-    {panel?.kind === "pharmacy-batch" && <PharmacyBatchPanel brandId={brandId} onClose={() => setPanel(null)} onSaved={refreshAfterSave} />}
+    {panel?.kind === "channel-entry" && <ChannelEntryPanel brandId={brandId} onClose={() => setPanel(null)} onSaved={refreshAfterSave} />}
   </div>;
 }
 
@@ -147,12 +148,14 @@ function PolicyChangePanel({ brandId, onClose, onSaved }: PanelProps) {
   return <PanelShell title="新增口徑變更" onClose={onClose}><form className="flex flex-col gap-4" onSubmit={(event) => { event.preventDefault(); void form.submit(); }}><label className="flex flex-col gap-1 text-sm"><span className="font-medium text-foreground">類型</span><select value={policyType} onChange={(event) => setPolicyType(event.target.value)} className="rounded-md border border-border px-3 py-2 text-sm text-foreground"><option value="discount">折扣規則</option><option value="refund">退款政策</option></select></label><label className="flex flex-col gap-1 text-sm"><span className="font-medium text-foreground">變更日</span><input type="date" value={changedAt} onChange={(event) => setChangedAt(event.target.value)} className="rounded-md border border-border px-3 py-2 text-sm text-foreground" /></label><label className="flex flex-col gap-1 text-sm"><span className="font-medium text-foreground">說明</span><input value={description} onChange={(event) => setDescription(event.target.value)} className="rounded-md border border-border px-3 py-2 text-sm text-foreground" /></label><FormError message={form.error} /><SubmitButton saving={form.saving} label="記錄口徑變更" pendingLabel="儲存中…" /></form></PanelShell>;
 }
 
-function PharmacyBatchPanel({ brandId, onClose, onSaved }: PanelProps) {
-  const [batchDate, setBatchDate] = useState("");
+function ChannelEntryPanel({ brandId, onClose, onSaved }: PanelProps) {
+  const [channel, setChannel] = useState("physical_store");
+  const [entryDate, setEntryDate] = useState("");
+  const [revenue, setRevenue] = useState("");
   const [quantity, setQuantity] = useState("");
   const [note, setNote] = useState("");
-  const form = useFormSubmit(async () => onSaved(await createPharmacyBatch(brandId, { batch_date: batchDate, quantity, note })));
-  return <PanelShell title="新增藥局出貨批次" onClose={onClose}><form className="flex flex-col gap-4" onSubmit={(event) => { event.preventDefault(); void form.submit(); }}><label className="flex flex-col gap-1 text-sm"><span className="font-medium text-foreground">批次日期</span><input type="date" value={batchDate} onChange={(event) => setBatchDate(event.target.value)} className="rounded-md border border-border px-3 py-2 text-sm text-foreground" /></label><label className="flex flex-col gap-1 text-sm"><span className="font-medium text-foreground">數量（選填）</span><input inputMode="decimal" value={quantity} onChange={(event) => setQuantity(event.target.value)} className="rounded-md border border-border px-3 py-2 text-sm text-foreground" /></label><label className="flex flex-col gap-1 text-sm"><span className="font-medium text-foreground">備註（選填）</span><input value={note} onChange={(event) => setNote(event.target.value)} className="rounded-md border border-border px-3 py-2 text-sm text-foreground" /></label><FormError message={form.error} /><SubmitButton saving={form.saving} label="記下批次" pendingLabel="儲存中…" /></form></PanelShell>;
+  const form = useFormSubmit(async () => onSaved(await createChannelEntry(brandId, { channel, entry_date: entryDate, revenue, quantity, note })));
+  return <PanelShell title="新增通路營收" onClose={onClose}><form className="flex flex-col gap-4" onSubmit={(event) => { event.preventDefault(); void form.submit(); }}><label className="flex flex-col gap-1 text-sm"><span className="font-medium text-foreground">通路</span><select value={channel} onChange={(event) => setChannel(event.target.value)} className="rounded-md border border-border px-3 py-2 text-sm text-foreground">{HAND_ENTRY_CHANNEL_TYPES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><label className="flex flex-col gap-1 text-sm"><span className="font-medium text-foreground">日期</span><input type="date" value={entryDate} onChange={(event) => setEntryDate(event.target.value)} className="rounded-md border border-border px-3 py-2 text-sm text-foreground" /></label><label className="flex flex-col gap-1 text-sm"><span className="font-medium text-foreground">金額（選填）</span><input inputMode="decimal" value={revenue} onChange={(event) => setRevenue(event.target.value)} className="rounded-md border border-border px-3 py-2 text-sm text-foreground" /></label><label className="flex flex-col gap-1 text-sm"><span className="font-medium text-foreground">數量（選填）</span><input inputMode="decimal" value={quantity} onChange={(event) => setQuantity(event.target.value)} className="rounded-md border border-border px-3 py-2 text-sm text-foreground" /></label><label className="flex flex-col gap-1 text-sm"><span className="font-medium text-foreground">備註（選填）</span><input value={note} onChange={(event) => setNote(event.target.value)} className="rounded-md border border-border px-3 py-2 text-sm text-foreground" /></label><FormError message={form.error} /><SubmitButton saving={form.saving} label="記下這筆" pendingLabel="儲存中…" /></form></PanelShell>;
 }
 
 function AttributionButton({ brandId, orderId, excluded, onSaved }: { brandId: string; orderId: string; excluded: boolean; onSaved: (message: string) => void }) {

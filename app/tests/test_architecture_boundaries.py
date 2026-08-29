@@ -313,12 +313,18 @@ class ImportCycleScanTest(unittest.TestCase):
 # 「只剩 brand_intelligence 那三條」的排法，其餘七個套件零違規。
 LAYER_ORDER = [
     "app.core",                # 基礎設施：DB、migration、audit、interrupts
+    "app.background",          # 票 schedule-01：procrastinate App，只依賴 app.core（db.dsn()）
     "app.brand_intelligence",  # 品牌永久層
     "app.llm",                 # AI gateway 與 prompt 組裝
     "app.shared",              # web 骨架（app、templates、共用 ctx）
     "app.identity",            # 票 03-1：身分／租戶（JWT、org 解析），依賴 app.shared 的
                                 # ApiError／conn；app.shared 對它的依賴是函式內延遲 import
                                 # （見 require_actor()），這裡的靜態掃描看不到，不算環
+    "app.meta",                # 票 04：Meta 廣告帳戶連接（Graph API、Vault 權杖），依賴
+                                # app.core 與 app.shared；票 11 起 app.schedule 依賴它讀
+                                # meta_campaign_spend（比照既有的 app.dashboard 依賴方向）
+    "app.schedule",            # 票 07：檔期規劃最薄路徑，依賴 app.core／app.llm／app.shared／
+                                # app.brand_intelligence；本身尚無人依賴它
     "app.intake",              # 建檔精靈
     "app.brand_web",           # 品牌智庫 web 路由
     "app.orders",              # 訂單
@@ -527,15 +533,31 @@ class TestRatioTest(unittest.TestCase):
 # 是頂層的 .py（`main.py` 組裝根等）。**允許調高，但必須改這張表**——重點不是禁止成長，
 # 是讓成長出現在 diff 裡有人看得到。廣告模組會在約 2,000 行撞上它，而不是 21,595 行。
 KNOWN_MODULE_SIZES = {
-    "app": 519,
+    "app": 540,  # 票 05 fix round：main.py 加 FastAPI lifespan（掛/收 procrastinate worker）
+    "app/background": 215,  # 2026-08-29 修 Windows 起不來：worker 移到自己的執行緒／loop
+                            # ＋起不來不得弄死網站（ADR 0039 amended）
+                             # 掛進既有 process，不再只有 app()
     "app/brand_intelligence": 2634,
     "app/brand_web": 2155,
     "app/core": 2148,
     "app/dashboard": 645,
     "app/identity": 537,
-    "app/intake": 3548,
-    "app/llm": 1271,
-    "app/orders": 1409,
+    "app/intake": 3570,  # 缺陷 1：intake_question 改走強制工具結構化輸出，新增
+                          # _QUESTION_TOOL／_CHOICE_SCHEMA schema（散文裡的 JSON 格式
+                          # 說明同時刪掉，仍淨增）。前一次是 3548
+    "app/llm": 1311,  # 缺陷 1／2：parse_json_reply 換成 raw_decode 單錨點（含為什麼不能
+                       # 退而求其次的理由註解）＋timeout_s 300 秒與 max_retries=0 兩段
+                       # 來源註解（實測列號、SDK 常數位置）。前一次是票 09 的 1298
+    "app/meta": 805,  # 票 11：campaign_ids_by_exact_name()（名稱精準比對，13 行）＋
+                       # spend_summary 改成只按 campaign_id 分組（活動月中改名不再裂成
+                       # 兩列各拿半個月花費，8 行含理由註解）
+    "app/orders": 1423,  # 票 12：channel_revenue 一張表取代三張（刪掉藥局專屬那一整組
+                          # 之後仍淨增）——官網帳本寫入路徑、channel_revenue_summary()、
+                          # 通用手動登錄（含「官網不能手動登錄」那道錢的守門）
+    "app/schedule": 883,  # 票 11：POST .../tree/bind（名稱比對、存平台 id、之後一律靠 id
+                          # 讀數字）＋_fill_node_spend()／_current_month_window()（把票 05
+                          # 的當月花費補到綁定節點上）＋tree.py 三個新欄位。前一次是票
+                          # 10-feedback-entries 的 POST .../reject（784）
     "app/shared": 450,
     "app/tools": 318,
 }

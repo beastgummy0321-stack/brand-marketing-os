@@ -27,7 +27,7 @@ def _photo_content_type(name: str) -> str:
 
 
 @router.get("/brands/{brand_id}/intake/photos/{filename}")
-async def intake_photo(request: Request, brand_id: str, filename: str):
+def intake_photo(request: Request, brand_id: str, filename: str):
     """Return only a photo registered for the brand's active intake draft."""
     actor = main_mod.require_actor(request)
     main_mod.require_brand(brand_id, actor)

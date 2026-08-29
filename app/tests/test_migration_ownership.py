@@ -13,7 +13,7 @@ from pathlib import Path
 MIGRATIONS_DIR = Path(__file__).resolve().parents[2] / "supabase" / "migrations"
 _CREATE = re.compile(r"^\s*CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?\"?([a-z0-9_]+)\"?", re.I | re.M)
 _FILE = re.compile(r"^\d{14}_(.+)\.sql$")
-MODULES = ("core", "brand_intelligence", "intake", "ads", "orders", "identity")
+MODULES = ("core", "brand_intelligence", "intake", "ads", "orders", "identity", "background", "meta")
 
 
 def _module_of(path: Path):

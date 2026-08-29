@@ -230,6 +230,46 @@ class AnthropicStructuredToolTest(unittest.TestCase):
         self.assertEqual(response.output_text, "")
 
 
+class AnthropicRetryPolicyTest(unittest.TestCase):
+    """守金額：SDK 不准自己偷偷重試。
+
+    SDK 預設重試 2 次，一次 complete() 就是最多 3 個 HTTP 請求——逾時變成 3×timeout_s
+    （實測 llm_01M167R89MVG8F7JK6YCQWM1NW 設 120 秒跑了 361.58 秒），而被放棄卻已經在
+    伺服器端產生的回應照樣計費，永遠不會變成一列 llm_task。每月花費上限加總的就是
+    llm_task.cost，看不到的那幾次生成＝上限漏算。重試歸 gateway 管，一次一列。
+    """
+
+    def test_sdk_retries_are_disabled_so_every_try_is_its_own_llm_task_row(self):
+        captured = {}
+
+        class FakeClient:
+            def __init__(self, **_kwargs):
+                pass
+
+            def with_options(self, **kwargs):
+                captured.update(kwargs)
+                return self
+
+            @property
+            def messages(self):
+                return self
+
+            def create(self, **_kwargs):
+                return SimpleNamespace(
+                    stop_reason="end_turn", content=[],
+                    usage=SimpleNamespace(input_tokens=1, output_tokens=1, server_tool_use=None))
+
+        with mock.patch.object(
+                providers.settings, "get_api_key", lambda *a, **k: "sk-ant-fake-test"), \
+                mock.patch.object(anthropic, "Anthropic", FakeClient):
+            providers.AnthropicProvider().complete(
+                model="claude-opus-5", system=None, messages=[{"role": "user", "content": "嗨"}],
+                max_tokens=100, timeout_s=7.0, org_id=db.DEV_ORG_ID)
+
+        self.assertEqual(captured["max_retries"], 0)
+        self.assertEqual(captured["timeout"], 7.0)
+
+
 class TaskModelThinkingDefaultsTest(unittest.TestCase):
     """票 #27：任務 →（模型、思考等級）對照表、優先鏈（本次覆寫 > 任務預設 > 全域設定）、
     覆寫只生效一次、非法值退回預設不噴錯。全程 FakeProvider，不發任何真實網路請求。
@@ -256,7 +296,7 @@ class TaskModelThinkingDefaultsTest(unittest.TestCase):
         return row, provider
 
     def test_resolve_thinking_uses_task_default(self):
-        self.assertEqual(providers.resolve_thinking(task_type="campaign_plan"), "high")
+        self.assertEqual(providers.resolve_thinking(task_type="schedule_plan"), "high")
         self.assertEqual(providers.resolve_thinking(task_type="creative_batch"), "medium")
         self.assertEqual(providers.resolve_thinking(task_type="intake_scan"), "low")
 
@@ -266,10 +306,10 @@ class TaskModelThinkingDefaultsTest(unittest.TestCase):
 
     def test_resolve_thinking_invalid_override_falls_back_without_error(self):
         # 表單被動手腳送了非法值，不噴錯，退回任務預設
-        self.assertEqual(providers.resolve_thinking("亂打的值", task_type="campaign_plan"), "high")
+        self.assertEqual(providers.resolve_thinking("亂打的值", task_type="schedule_plan"), "high")
 
     def test_gateway_uses_task_default_thinking_when_no_override(self):
-        _row, provider = self._run("campaign_plan")
+        _row, provider = self._run("schedule_plan")
         self.assertEqual(provider.calls[0]["effort"], "high")
         _row, provider = self._run("intake_scan")
         self.assertEqual(provider.calls[0]["effort"], "low")
@@ -285,11 +325,11 @@ class TaskModelThinkingDefaultsTest(unittest.TestCase):
 
     def test_request_override_model_affects_only_one_call_then_reverts(self):
         with providers.request_overrides(model="claude-sonnet-5"):
-            row, _provider = self._run("campaign_plan")
+            row, _provider = self._run("schedule_plan")
         self.assertEqual(row["model"], "claude-sonnet-5")
 
-        # 下一次呼叫回到全域設定（campaign_plan 本身沒有指定模型預設）
-        row2, _provider2 = self._run("campaign_plan")
+        # 下一次呼叫回到全域設定（schedule_plan 本身沒有指定模型預設）
+        row2, _provider2 = self._run("schedule_plan")
         self.assertEqual(row2["model"], "claude-opus-5")
 
     def test_request_override_invalid_thinking_ignored_not_raised(self):
@@ -302,24 +342,24 @@ class TaskModelThinkingDefaultsTest(unittest.TestCase):
 
     def test_resolve_model_invalid_override_falls_back_without_error(self):
         self.assertEqual(
-            providers.resolve_model("hacked-model-xyz", task_type="campaign_plan", conn=self.conn,
+            providers.resolve_model("hacked-model-xyz", task_type="schedule_plan", conn=self.conn,
                                     brand_id=self.brand["id"]),
             "claude-opus-5")
 
     def test_resolve_model_valid_override_still_used(self):
         self.assertEqual(
-            providers.resolve_model("claude-sonnet-5", task_type="campaign_plan", conn=self.conn,
+            providers.resolve_model("claude-sonnet-5", task_type="schedule_plan", conn=self.conn,
                                     brand_id=self.brand["id"]),
             "claude-sonnet-5")
 
     def test_request_override_invalid_model_ignored_falls_back_without_error(self):
         with providers.request_overrides(model="hacked-model-xyz"):
-            row, _provider = self._run("campaign_plan")
+            row, _provider = self._run("schedule_plan")
         self.assertEqual(row["model"], "claude-opus-5")
 
     def test_request_override_valid_model_still_effective(self):
         with providers.request_overrides(model="claude-fable-5"):
-            row, _provider = self._run("campaign_plan")
+            row, _provider = self._run("schedule_plan")
         self.assertEqual(row["model"], "claude-fable-5")
 
 
@@ -919,6 +959,28 @@ class AiSpendCapGateTest(unittest.TestCase):
         # （見 app/tests/test_settings_api.py::test_ai_key_source_own_tier_reports_advisory_cap，
         # 用真的操作者 env 值＋org 存的 DB 值同框，證明 get_api_key() 回的是後者）——
         # 這裡只驗「不擋」，兩層各自證各自的主張，不重複組一份一樣的斷言。
+
+
+class ParseJsonReplyShapeTest(unittest.TestCase):
+    """守 API 契約：parse_json_reply 絕不回傳模型沒送出的形狀（六個呼叫端共用這一支）。
+
+    兩個斷言都取自真實故障：截斷的 intake_question 回覆（5 個 {、4 個 }）被舊解析器
+    退回 [ ] 分支，撿到內層 branches 陣列；合法的單元素頂層陣列被 { } 分支切成第一個元素。
+    """
+
+    _TRUNCATED = (
+        '{"done": false, "aspect": "產品線", "question": "主力是哪一條產品線？", '
+        '"suggested": {"label": "a", "desc": "b"}, '
+        '"branches": [{"label": "c", "desc": "d"}, {"label": "e", "desc": "f"}, '
+        '{"label": "g", "desc": "h"}]'
+    )
+
+    def test_truncated_object_is_none_not_the_inner_array(self):
+        self.assertIsNone(gateway.parse_json_reply(self._TRUNCATED))
+
+    def test_single_element_top_level_array_stays_a_list(self):
+        self.assertEqual(gateway.parse_json_reply('[{"task_layer": "functional"}]'),
+                         [{"task_layer": "functional"}])
 
 
 if __name__ == "__main__":

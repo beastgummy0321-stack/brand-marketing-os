@@ -59,6 +59,14 @@ export function navModules(brandId: string | null): NavItem[] {
       : { label: "顧問分析報告", status: "disabled", reason: "請先在跨品牌總覽選擇品牌" },
     brandId
       ? {
+          label: "檔期",
+          href: `/brands/${brandId}/schedule`,
+          status: "active",
+          internal: true,
+        }
+      : { label: "檔期", status: "disabled", reason: "請先在跨品牌總覽選擇品牌" },
+    brandId
+      ? {
           label: "投放與成效",
           href: `/brands/${brandId}/campaigns`,
           status: "active",

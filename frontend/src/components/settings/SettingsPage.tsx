@@ -8,7 +8,7 @@ import { ApiKeySection } from "./ApiKeySection";
 import { AssetsSection } from "./AssetsSection";
 import { ModelSection } from "./ModelSection";
 import { AutonomySection } from "./AutonomySection";
-import { CalendarSection } from "./CalendarSection";
+import { MetaSection } from "./MetaSection";
 import { RuleCardsSection } from "./RuleCardsSection";
 
 type LoadState =
@@ -44,10 +44,9 @@ export function SettingsPage() {
         {Array.from({ length: 6 }, (_, i) => (
           <Skeleton key={i} className="h-32" />
         ))}
-        {/* 規則卡／節日提醒骨架不等 /api/settings：兩者都自己讀 /api/dashboard/overview，
-            掛載當下就會自己顯示骨架（見各檔），跟整頁 loading 態同框即可，不用另外複製一份。 */}
+        {/* 規則卡骨架不等 /api/settings：它自己讀 /api/dashboard/overview，掛載當下就會
+            自己顯示骨架（見該檔），跟整頁 loading 態同框即可，不用另外複製一份。 */}
         <RuleCardsSection />
-        <CalendarSection />
       </div>
     );
   } else if (state.status === "error") {
@@ -66,9 +65,9 @@ export function SettingsPage() {
         <ApiKeySection data={data} onSaved={load} />
         <ModelSection data={data} onSaved={load} />
         <AssetsSection data={data} onSaved={load} />
+        <MetaSection />
         <AutonomySection />
         <RuleCardsSection />
-        <CalendarSection />
       </div>
     );
   }

@@ -1,28 +1,29 @@
 """app/orders/channel.py — 通路對照卡（GitHub issue #40，決策 0025 第二節 B）。
 
 治兩種系統性誤判：
-- **外溢低估**：廣告把人帶去蝦皮或藥局買，官網數字看不到，被誤判成「廣告沒效」。
-- **互噬高估**：蝦皮既有客被搬來官網下單，官網「新客」其實是舊客換通路，假新增。
+- **外溢低估**：廣告把人帶去平台商店或實體通路買，官網數字看不到，被誤判成「廣告沒效」。
+- **互噬高估**：平台商店既有客被搬來官網下單，官網「新客」其實是舊客換通路，假新增。
 
-三種選填資料源，缺哪個都不擋路（決策 0025 懶人優先第 5 點：「選填層被動觸發」）：
+兩種選填資料源，缺哪個都不擋路（決策 0025 懶人優先第 5 點：「選填層被動觸發」）：
 1. 蝦皮賣家中心報表拖檔匯入（重用 app/shared/csv_columns.match_columns 兩階段欄名比對，
    分派層在 app/orders/dispatch.py）。
-2. 藥局出貨批次紀錄（人工填批次日期＋數量），判讀看**補貨間隔縮短**——抗批發雜訊，
-   單月出貨量本身容易受批發商下單節奏干擾，間隔縮短是更穩的訊號。
+2. 手動通路營收登記——任何一種實體通路（藥局、車行、批發，任何行業），一個通用表單。
 
 ⚠ 蝦皮報表欄位別名表是依蝦皮賣家中心「訂單」匯出常見欄名的合理假設寫的，**尚未用真實
 匯出檔驗證過**（鐵則 11：假資料全過≠擋得住真實格式）。使用者提供真實檔後要再校準一次。
 
-外殼切片（2026-08-28）：燈號規則（外溢／互噬／缺資料）、蝦皮期別專屬碼、灰燈債務隨
-`app/ads/` 一起刪掉——它們全部以「檔期」為單位、也只有廣告判讀讀它們，檔期概念沒了就
-沒有呼叫端。留下的是三種資料源本身的匯入與查詢：蝦皮報表、藥局出貨批次。門檻常數
-（SPILLOVER_GROWTH_RATIO 等）從沒被真實檔期驗證過，一併移除，不留在程式裡當規格。
+票 12（ADR 0035「通路是資料，離線通路只有一種」，2026-08-29）：通路營收統一落在
+app/orders/repository.channel_revenue 這一張表，`channel` 值來自
+app.core.vocab.CHANNEL_TYPES，不再是各通路各自一張表。藥局出貨批次的補貨間隔訊號隨
+`app/ads/` 一起刪除（訊號的呼叫端已經不存在），留下的日期／數量／備註併入通用列
+（revenue 留 NULL，代表「不知道」，不是 0）。
 """
 
 import csv
 import io
 
 from app.brand_intelligence import repository as bi_repo
+from app.core import vocab
 from app.core.audit import write_audit
 from app.core.db import new_id, now_utc
 from app.shared import csv_columns
@@ -111,8 +112,9 @@ def parse_shopee_csv(text: str) -> tuple:
 def save_shopee_rows(conn, brand_id: str, rows: list, *, source: str, actor: str,
                      result: ShopeeImportResult | None = None,
                      import_batch_id: str | None = None) -> ShopeeImportResult:
-    """落地蝦皮報表列。同 order_sn 重複匯入（歷史回填月份重疊）整批覆寫最新狀態——
-    跟 app/orders/repository.save_orders 對 EasyStore 訂單的處理方式一致。"""
+    """落地蝦皮報表列到 channel_revenue（channel='marketplace'，external_id=order_sn）。
+    同 order_sn 重複匯入（歷史回填月份重疊）整批覆寫最新狀態——跟
+    app/orders/repository.save_orders 對 EasyStore 訂單的處理方式一致（票 12）。"""
     if not actor or not actor.strip():
         raise ValueError("actor 為必填")
     org_id = bi_repo.get_brand(conn, brand_id)["org_id"]
@@ -123,131 +125,83 @@ def save_shopee_rows(conn, brand_id: str, rows: list, *, source: str, actor: str
     for row in rows:
         order_sn = row.get("order_sn")
         existing = conn.execute(
-            "SELECT id FROM shopee_report_row WHERE brand_id = %s AND order_sn = %s",
+            "SELECT id FROM channel_revenue WHERE brand_id = %s AND channel = 'marketplace'"
+            " AND external_id = %s",
             (brand_id, order_sn),
         ).fetchone()
         if existing:
             conn.execute(
-                "UPDATE shopee_report_row SET order_date = %s, revenue = %s, voucher_code = %s,"
-                " source = %s, import_batch_id = %s, updated_at = %s WHERE id = %s",
-                (row.get("order_date"), row.get("revenue"), row.get("voucher_code"), source,
-                 batch_id, ts, existing["id"]),
+                "UPDATE channel_revenue SET entry_date = %s, revenue = %s, source = %s,"
+                " import_batch_id = %s, updated_at = %s WHERE id = %s",
+                (row.get("order_date"), row.get("revenue"), source, batch_id, ts, existing["id"]),
             )
             result.updated += 1
         else:
             conn.execute(
-                "INSERT INTO shopee_report_row (id, org_id, brand_id, order_sn, order_date, revenue,"
-                " voucher_code, source, import_batch_id, created_at, updated_at)"
-                " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
-                (new_id("shp"), org_id, brand_id, order_sn, row.get("order_date"), row.get("revenue"),
-                 row.get("voucher_code"), source, batch_id, ts, ts),
+                "INSERT INTO channel_revenue (id, org_id, brand_id, channel, entry_date, external_id,"
+                " revenue, source, import_batch_id, created_at, updated_at)"
+                " VALUES (%s, %s, %s, 'marketplace', %s, %s, %s, %s, %s, %s, %s)",
+                (new_id("chr"), org_id, brand_id, row.get("order_date"), order_sn,
+                 row.get("revenue"), source, batch_id, ts, ts),
             )
             result.imported += 1
 
-    write_audit(conn, org_id=org_id, brand_id=brand_id, entity_type="shopee_report_row", entity_id=brand_id,
+    write_audit(conn, org_id=org_id, brand_id=brand_id, entity_type="channel_revenue", entity_id=brand_id,
                 action="import_shopee", actor=actor,
                 before=None, after={"imported": result.imported, "updated": result.updated})
     conn.commit()
     return result
 
 
-def shopee_latest_import(conn, brand_id: str) -> str | None:
-    """最近一次蝦皮報表匯入時間（依落地列的 created_at 取最新一筆）；從沒匯入過回 None。
-    給追蹤健檢用（票 T0 契約 1.5：曾匯入過＝就緒＋最近匯入日期）。"""
-    row = conn.execute(
-        "SELECT created_at FROM shopee_report_row WHERE brand_id = %s ORDER BY created_at DESC LIMIT 1",
-        (brand_id,),
-    ).fetchone()
-    return row["created_at"] if row else None
-
-
-def pharmacy_latest_batch(conn, brand_id: str) -> str | None:
-    """最近一筆藥局出貨批次日期；從沒記錄過回 None（同上，票 T0 契約 1.5 用）。"""
-    row = conn.execute(
-        "SELECT batch_date FROM pharmacy_batch WHERE brand_id = %s"
-        " ORDER BY batch_date DESC, created_at DESC LIMIT 1",
-        (brand_id,),
-    ).fetchone()
-    if not row:
-        return None
-    # BUG 修復（route=C 02-3c，app/orders/channel.py:164）：batch_date 是 date 欄位，
-    # Postgres 讀回來是 datetime.date，違反自己宣告的 -> Optional[str]；轉成 ISO 字串
-    # 才對得上呼叫端（字串比對）的期待。
-    return row["batch_date"].isoformat() if row["batch_date"] else None
-
-
-def shopee_revenue(conn, brand_id: str, since: str, until: str) -> float | None:
-    """這段日期範圍蝦皮營收加總。沒有任何一列落在範圍內回 None——不知道跟 0 是兩件事。"""
-    row = conn.execute(
-        "SELECT SUM(revenue) total, COUNT(*) rows FROM shopee_report_row"
-        " WHERE brand_id = %s AND order_date >= %s AND order_date <= %s",
-        (brand_id, since, until),
-    ).fetchone()
-    if not row["rows"]:
-        return None
-    # BUG 修復（route=C 02-3c，app/orders/channel.py:183）：SUM(revenue) 讀回來是
-    # Decimal，round(Decimal,2) 還是 Decimal，違反自己宣告的 -> Optional[float]。
-    return round(float(row["total"] or 0), 2)
-
-
 # ---------------------------------------------------------------------------
-# 藥局出貨批次
+# 手動通路營收登記（票 12：一個通用表單，取代藥局專屬表單）
 # ---------------------------------------------------------------------------
 
-def record_pharmacy_batch(conn, brand_id: str, *, batch_date: str, quantity: float | None = None,
-                          note: str | None = None, actor: str) -> dict:
-    if not batch_date or not batch_date.strip():
-        raise ValueError("批次日期為必填")
+# 官網那一列帳是 `repository.save_orders()` 從訂單推出來的（票 12 settled 段第 4 點：
+# 一個通路的帳只有一條寫入路徑）。手動再輸一筆，帳本就會跟訂單頁的實收永遠對不起來，
+# 而且手動列沒有 external_id、連唯一索引都去不了重——票 12 審查抓到的錯，這裡擋掉。
+AUTO_LEDGER_CHANNELS = frozenset({"website"})
+HAND_ENTRY_CHANNEL_FORBIDDEN_MESSAGE = "官網營收由訂單匯入自動記帳，不能手動登錄。"
+
+
+def record_channel_entry(conn, brand_id: str, *, channel: str, entry_date: str,
+                         revenue: float | None = None, quantity: float | None = None,
+                         note: str | None = None, actor: str) -> dict:
+    valid_channels = {code for code, _ in vocab.CHANNEL_TYPES}
+    if channel not in valid_channels:
+        raise ValueError(f"不認得的通路：{channel}")
+    if channel in AUTO_LEDGER_CHANNELS:
+        raise ValueError(HAND_ENTRY_CHANNEL_FORBIDDEN_MESSAGE)
+    if not entry_date or not entry_date.strip():
+        raise ValueError("日期為必填")
     if not actor or not actor.strip():
         raise ValueError("actor 為必填")
     ts = now_utc()
     org_id = bi_repo.get_brand(conn, brand_id)["org_id"]
-    batch_id = new_id("phb")
+    entry_id = new_id("chr")
+    note = note.strip() if note and note.strip() else None
     conn.execute(
-        "INSERT INTO pharmacy_batch (id, org_id, brand_id, batch_date, quantity, note, created_by,"
-        " created_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
-        (batch_id, org_id, brand_id, batch_date.strip(), quantity,
-         note.strip() if note and note.strip() else None, actor, ts),
+        "INSERT INTO channel_revenue (id, org_id, brand_id, channel, entry_date, revenue, quantity,"
+        " note, source, created_at, updated_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'manual',"
+        " %s, %s)",
+        (entry_id, org_id, brand_id, channel, entry_date.strip(), revenue, quantity, note, ts, ts),
     )
-    write_audit(conn, org_id=org_id, brand_id=brand_id, entity_type="pharmacy_batch", entity_id=batch_id,
-                action="create", actor=actor, before=None,
-                after={"batch_date": batch_date, "quantity": quantity})
+    write_audit(conn, org_id=org_id, brand_id=brand_id, entity_type="channel_revenue", entity_id=entry_id,
+                action="create", actor=actor,
+                before=None, after={"channel": channel, "entry_date": entry_date,
+                                    "revenue": revenue, "quantity": quantity})
     conn.commit()
-    return {"id": batch_id, "batch_date": batch_date, "quantity": quantity, "note": note}
+    return {"id": entry_id, "channel": channel, "entry_date": entry_date, "revenue": revenue,
+           "quantity": quantity, "note": note}
 
 
-def list_pharmacy_batches(conn, brand_id: str, *, until: str | None = None) -> list:
-    sql = "SELECT * FROM pharmacy_batch WHERE brand_id = %s"
-    params: list = [brand_id]
-    if until:
-        sql += " AND batch_date <= %s"
-        params.append(until)
-    sql += " ORDER BY batch_date"
-    return [dict(r) for r in conn.execute(sql, params)]
-
-
-# 補貨間隔縮短視為外溢訊號的門檻：縮短達此比例才算，避免正常出貨節奏的小幅波動誤觸
-# （ponytail：粗略比例門檻，非統計檢定；藥局批次量通常不大，等樣本多了再考慮更嚴謹的判斷）。
-RESTOCK_SHORTEN_RATIO = 0.2
-
-
-def restock_interval_signal(conn, brand_id: str, until: str) -> dict:
-    """補貨間隔縮短判定：拿「最新一次間隔」跟「前面幾次間隔的平均」比，縮短達門檻才算訊號。
-
-    至少要有 3 筆批次（兩段間隔可比）才算得出來；不夠回 shortened=None（誠實說看不出來）。
-    """
-    batches = list_pharmacy_batches(conn, brand_id, until=until)
-    if len(batches) < 3:
-        return {"shortened": None, "latest_interval_days": None, "baseline_interval_days": None,
-               "sample_size": len(batches)}
-
-    dates = [b["batch_date"] for b in batches]
-    gaps = [(dates[i + 1] - dates[i]).days for i in range(len(dates) - 1)]
-    latest = gaps[-1]
-    baseline = sum(gaps[:-1]) / len(gaps[:-1])
-    shortened = bool(baseline > 0 and latest <= baseline * (1 - RESTOCK_SHORTEN_RATIO))
-    return {"shortened": shortened, "latest_interval_days": latest,
-           "baseline_interval_days": round(baseline, 1), "sample_size": len(batches)}
+def list_channel_entries(conn, brand_id: str, *, limit: int = 10) -> list:
+    """最近的手動登記列（source='manual'），最新的在前面，給訂單頁的通路區塊用。"""
+    return [dict(r) for r in conn.execute(
+        "SELECT * FROM channel_revenue WHERE brand_id = %s AND source = 'manual'"
+        " ORDER BY entry_date DESC, created_at DESC LIMIT %s",
+        (brand_id, limit),
+    )]
 
 
 def demo() -> None:

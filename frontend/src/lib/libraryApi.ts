@@ -12,7 +12,7 @@
  * constant table has no enumeration endpoint, so the frontend side-panel dropdown options are
  * copied here next to the matching API calls as "values that never change" (code-rules §2). */
 
-import { apiFetch } from "./http";
+import { apiFetch, errorMessageFrom } from "./http";
 
 export interface LibraryBrandFact {
   id: string;
@@ -42,12 +42,6 @@ export interface LibraryRule {
 
 export type ClaimType = "approved" | "high_risk" | "forbidden";
 
-export interface ClaimWordlistHit {
-  term: string;
-  detail: string;
-  source_id: string;
-}
-
 export interface LibraryClaim {
   id: string;
   claim_text: string;
@@ -55,9 +49,6 @@ export interface LibraryClaim {
   product_id: string | null;
   scope_label: string;
   evidence_source_reference: string | null;
-  /** 票 03-claim-wordlist-todo（決議 2026-08-23）：任何類別命中內建法定詞庫都在這裡，
-   * 不擋存檔，只標紅字警告。空陣列＝沒命中。 */
-  wordlist_hits: ClaimWordlistHit[];
 }
 
 export interface LibraryAsset {
@@ -111,7 +102,6 @@ export interface LibraryBrandProfile {
   status: "active" | "archived";
   market_region: string | null;
   conversion_goal: string | null;
-  industry: string | null;
   delete_impact: { label: string; count: number }[];
 }
 
@@ -206,14 +196,6 @@ export const CONVERSION_GOALS: [string, string][] = [
   ["awareness", "認識品牌"],
 ];
 
-export const INDUSTRIES: [string, string][] = [
-  ["food_beverage", "食品飲料"],
-  ["beauty_personal_care", "美妝個人護理"],
-  ["fashion_apparel", "服飾"],
-  ["home_lifestyle", "居家生活"],
-  ["service", "服務業"],
-];
-
 export function optionLabel(pairs: [string, string][], value: string): string {
   return pairs.find(([v]) => v === value)?.[1] ?? value;
 }
@@ -250,9 +232,9 @@ async function postJson<T>(path: string, body: unknown = {}): Promise<T> {
     let message = `處理失敗（狀態碼 ${res.status}）`;
     try {
       const data = (await res.json()) as { error?: string; errors?: Record<string, string>; detail?: string };
-      if (data.error) message = data.error;
-      else if (data.errors) message = Object.values(data.errors).join("；");
-      else if (data.detail) message = data.detail;
+      // 欄位錯誤表是這支獨有的形狀；其餘兩種外殼交給共用的 errorMessageFrom
+      if (data.errors) message = Object.values(data.errors).join("；");
+      else message = errorMessageFrom(data, message);
     } catch {
       // Response body isn't JSON, use the default message.
     }
@@ -448,7 +430,6 @@ export async function saveBrandProfile(
     persona: string;
     market_region: string;
     conversion_goal: string;
-    industry: string;
   },
 ): Promise<void> {
   await postJson(`/api/library/brands/${encodeURIComponent(brandId)}/edit`, fields);

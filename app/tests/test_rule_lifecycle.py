@@ -55,7 +55,7 @@ class RuleLifecycleTest(unittest.TestCase):
     def test_stale_rule_flips_to_pending_reconfirm_on_list(self):
         rule = bi_repo.create_rule(self.conn, self.bid, actor=ACTOR, rule_type="tone",
                                    content="太久沒人確認的規則", severity="soft")
-        self._age_rule(rule["id"], days=200)  # 6 期 × 14 天 = 84 天，200 天遠超過門檻
+        self._age_rule(rule["id"], days=200)  # 門檻預設 90 天，200 天遠超過門檻
 
         rules = bi_repo.list_rules_for_brand(self.conn, self.bid)
         self.assertNotIn(rule["id"], [r["id"] for r in rules])  # 不再進生效清單
@@ -65,10 +65,10 @@ class RuleLifecycleTest(unittest.TestCase):
         self.assertIsNotNone(row)  # 沒有被刪除，該列還在
 
     def test_rule_just_under_threshold_stays_active(self):
-        """83 天（略少於 6 期 × 14 天 = 84 天）不該被判定逾期，避免差一點就誤觸發。"""
+        """89 天（略少於門檻預設 90 天）不該被判定逾期，避免差一點就誤觸發。"""
         rule = bi_repo.create_rule(self.conn, self.bid, actor=ACTOR, rule_type="tone",
                                    content="還沒到門檻的規則", severity="soft")
-        self._age_rule(rule["id"], days=83)
+        self._age_rule(rule["id"], days=89)
         rules = bi_repo.list_rules_for_brand(self.conn, self.bid)
         self.assertIn(rule["id"], [r["id"] for r in rules])
 
@@ -91,6 +91,16 @@ class RuleLifecycleTest(unittest.TestCase):
         self._age_rule(rule["id"], days=200)
         text_after, _, _, _ = context_compiler.compile(self.conn, self.bid)
         self.assertNotIn("逾期規則不該出現在提示詞裡", text_after)
+
+    def test_hard_rule_is_never_swept(self):
+        """ADR 0037：紅線（severity='hard'）過期不退回待確認——法規／品牌紅線不因三個月
+        過去就不成立。"""
+        rule = bi_repo.create_rule(self.conn, self.bid, actor=ACTOR, rule_type="forbidden_word",
+                                   content="紅線：不得宣稱醫療效果", severity="hard")
+        self._age_rule(rule["id"], days=200)
+        rule_lifecycle.sweep_expired_rules(self.conn, self.bid)
+        row = self.conn.execute("SELECT status FROM rule WHERE id = %s", (rule["id"],)).fetchone()
+        self.assertEqual(row["status"], "active")
 
     def test_deactivated_rule_is_not_swept_into_pending_reconfirm(self):
         """已被人工下架（inactive）的規則不受這條自動掃描影響——只掃 status='active' 的列。"""
@@ -148,12 +158,12 @@ class RuleLifecycleTest(unittest.TestCase):
 
     # -- 分品牌：門檻期數各自覆寫 ------------------------------------------------
 
-    def test_brand_override_of_reconfirm_cycles_does_not_leak(self):
+    def test_brand_override_of_reconfirm_days_does_not_leak(self):
         other_brand = bi_repo.create_brand(self.conn, name="虛構晨光咖啡規則有效期二號",
                                            client_name=None, actor=ACTOR, org_id=db.DEV_ORG_ID)
         other_bid = other_brand["id"]
-        # A 品牌把門檻拉長到 100 期（1400 天），200 天不該逾期
-        rule_cards.set_value(self.conn, self.bid, "rule_expiry", "reconfirm_cycles", 100.0,
+        # A 品牌把門檻拉長到 400 天，200 天不該逾期
+        rule_cards.set_value(self.conn, self.bid, "rule_expiry", "reconfirm_days", 400.0,
                              actor=ACTOR, org_id=db.DEV_ORG_ID)
         rule = bi_repo.create_rule(self.conn, self.bid, actor=ACTOR, rule_type="tone",
                                    content="A 品牌拉長門檻的規則", severity="soft")
@@ -161,7 +171,7 @@ class RuleLifecycleTest(unittest.TestCase):
         rules = bi_repo.list_rules_for_brand(self.conn, self.bid)
         self.assertIn(rule["id"], [r["id"] for r in rules])  # A 品牌用自己拉長的門檻，還沒逾期
 
-        # B 品牌沒改過，繼續用系統預設 6 期（84 天），200 天早該逾期
+        # B 品牌沒改過，繼續用系統預設 90 天，200 天早該逾期
         other_rule = bi_repo.create_rule(self.conn, other_bid, actor=ACTOR, rule_type="tone",
                                          content="B 品牌沒改過門檻的規則", severity="soft")
         self.conn.execute(

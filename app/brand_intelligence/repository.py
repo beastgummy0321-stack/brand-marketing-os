@@ -172,36 +172,6 @@ def set_brand_switches(conn: Conn, brand_id: str, *,
     return after
 
 
-# 業種標籤（ADR 0014 第一節）：節日日曆比對用，跟節日資料的 applicable_industries
-# 清單（app/dashboard/campaign_calendar_data.json）值域對齊，不得各自發明。目前只涵蓋
-# 這批內建節日（情人節／白色情人節／母親節等送禮檔期）需要區分的業種粒度，之後有新
-# 節日需要更細的業種再擴充——業種清單跟 conversion_goal 一樣可人工增修。
-INDUSTRIES = ("food_beverage", "beauty_personal_care", "fashion_apparel",
-              "home_lifestyle", "service")
-
-
-def set_brand_industry(conn: Conn, brand_id: str, *,
-                        industry: str | None, actor: str) -> dict:
-    """寫入 brand.industry（ADR 0014，節日日曆比對用）。獨立於 set_brand_switches——
-    那支管的是方法論開關（票 A），業種是不同功能領域，不合併進同一支函式。"""
-    _require(actor, "actor 為必填")
-    if industry is not None and industry not in INDUSTRIES:
-        raise ValueError(f"industry 只能是 {'/'.join(INDUSTRIES)} 其中之一")
-    before = get_brand(conn, brand_id)
-    if before is None:
-        raise ValueError(f"找不到品牌：{brand_id}")
-    ts = now_utc()
-    conn.execute(
-        "UPDATE brand SET industry = %s, updated_at = %s WHERE id = %s",
-        (industry, ts, brand_id),
-    )
-    after = get_brand(conn, brand_id)
-    org_id = _org_id_for_brand(conn, brand_id)
-    write_audit(conn, org_id=org_id, brand_id=brand_id, entity_type="brand", entity_id=brand_id,
-                action="update", actor=actor, before=before, after=after)
-    conn.commit()
-    return after
-
 
 # 方法論開關名（中文，供 app/methodology/README.md 對照表的（需要：X）條件比對，
 # 見 app/llm/methodology.py）。只有 'website' 屬於網站型——值域見 app/core/vocab.py

@@ -396,10 +396,9 @@ _SUCCESS_ROWS = [
     f"宣稱 | 可用 | 手採一心二葉 | 茶葉為人工採摘的一心二葉等級，非機採。 | {MOCK_PRODUCT_NAME} | 製茶紀錄摘要",
     "宣稱 | 高風險 | 幫助代謝 | 商品頁目前有這句話，但查不到具體依據，需要客戶提供檢驗或文獻佐證才能繼續使用。 | 整個品牌 | 無",
     f"宣稱 | 高風險 | 適合天天飲用不影響睡眠 | 這句話涉及生理影響的宣稱，目前只有業主口頭說法，沒有第三方資料佐證。 | {MOCK_PRODUCT_NAME} | 無",
-    "宣稱 | 禁用 | 可以取代西藥或保健品 | 這類宣稱明顯逾越食品可以宣稱的範圍，不得使用。 | 整個品牌 | 無",
 ]
 
-assert len(_SUCCESS_ROWS) == 24
+assert len(_SUCCESS_ROWS) == 23
 
 PASTE_SAMPLE_SUCCESS = PASTE_HEADER + "\n" + "\n".join(_SUCCESS_ROWS)
 

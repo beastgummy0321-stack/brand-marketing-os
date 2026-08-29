@@ -40,14 +40,6 @@ _SCAN_OK = json.dumps({
 }, ensure_ascii=False)
 
 
-def _question_json(i: int = 0, aspect: str = "產品線") -> str:
-    q = script.QUESTIONS[i]
-    return json.dumps({"done": False, "aspect": aspect, "question": q["question"],
-                       "suggested": {"label": q["suggested"]["label"], "desc": q["suggested"]["desc"]},
-                       "branches": [{"label": b["label"], "desc": b["desc"]} for b in q["branches"]]},
-                      ensure_ascii=False)
-
-
 class _Base(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(main.app)
@@ -131,10 +123,10 @@ class PasteValidateTest(_Base):
         self.assertEqual(resp.status_code, 200)
         body = resp.json()
         self.assertEqual(body["errors"], [])
-        self.assertEqual(body["data_line_count"], 24)
+        self.assertEqual(body["data_line_count"], 23)
         draft = state.get_draft(bid)
         self.assertEqual(draft["step"], 5)
-        self.assertEqual(draft["pending_item_count"], 24)
+        self.assertEqual(draft["pending_item_count"], 23)
 
     def test_three_error_kinds_reported_together(self):
         """三種驗證錯誤各自回報，不是短路在第一個：欄數不對／種類不對／適用範圍不認得。"""
@@ -267,7 +259,7 @@ class PasteFixBackgroundTest(_Base):
 
         draft = state.get_draft(bid)
         self.assertTrue(draft["paste_fix_used"])
-        self.assertEqual(draft["pending_item_count"], 24)
+        self.assertEqual(draft["pending_item_count"], 23)
         self.assertEqual(draft["step"], 5)
 
         self._wait_for_notice(bid, "貼回格式已修好")
@@ -314,7 +306,7 @@ class ReviewTest(_Base):
         resp = self.client.get(f"/api/intake/brands/{bid}/review")
         self.assertEqual(resp.status_code, 200)
         items = resp.json()["data"]
-        self.assertEqual(len(items), 24)
+        self.assertEqual(len(items), 23)
         expected_keys = {"id", "i", "kind", "category", "title", "content", "scope",
                          "evidence", "dup_hint", "severity"}
         self.assertEqual(set(items[0].keys()), expected_keys)

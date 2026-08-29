@@ -7,7 +7,7 @@
 
 只收 Meta（Facebook／Instagram）。Google Ads／LinkedIn／TikTok、B2B 名單型打法不在範圍。
 金額依品牌幣別，本檔不假設特定幣別。電商特有規則（毛利公式、購物車事件、Pixel／網域、ASC）
-見 `ads-commerce.md`；健康類／受法規管制品類的廣告政策見 `ads-health.md`。
+見 `ads-commerce.md`。
 
 ## 目錄
 

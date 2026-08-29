@@ -110,7 +110,7 @@ def _run_report(brand_id: str, actor: str) -> None:
 
 
 @router.get("/api/brands/{brand_id}/report")
-async def report_get(request: Request, brand_id: str):
+def report_get(request: Request, brand_id: str):
     actor = require_actor(request)
     try:
         brand = require_brand(brand_id, actor)
@@ -121,7 +121,7 @@ async def report_get(request: Request, brand_id: str):
 
 
 @router.post("/api/brands/{brand_id}/report/generate")
-async def report_generate(request: Request, brand_id: str):
+def report_generate(request: Request, brand_id: str):
     actor = require_actor(request)
     try:
         require_brand(brand_id, actor)
