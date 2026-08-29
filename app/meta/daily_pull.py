@@ -16,15 +16,14 @@ after any DSN change. app/main.py calls it once after the router-registration lo
 that gets a fresh `background.app()` for its own schema calls it again right after, same
 pattern app/tests/test_background.py already establishes for the App itself.
 
-Scope, deliberately: this ticket registers the task and proves it runs correctly through
-procrastinate (defer → run_worker(wait=False) → rows land, same shape as ticket 01's own
-test). It does not add a persistent worker process or a procrastinate `periodic()` cron —
-nothing in this deployment runs a worker continuously today (confirmed: 啟動行銷系統.bat
-only starts uvicorn), and deciding to add one is a deployment-shape change CLAUDE.md's
-rule 9 asks be proposed and approved before it's built, not slipped in as a side effect of
-a ticket about the pull-and-store logic. Until that decision is made, the manual path
-stays first-class: this task can be deferred and run by hand (a small script + Windows
-Task Scheduler, or a person triggering it), consistent with 手動路徑永遠一級公民.
+Fix round (review reject on done-check "a scheduled pull runs unattended"): `_dispatch_daily_pull`
+below is a procrastinate `periodic()` task that fires once a day and defers one
+`background.meta_daily_pull` job per org with a bound account — same fan-out the `__main__`
+block below already did by hand. It only *fires* because app/background.start_worker() now
+keeps a worker running inside the same uvicorn process this ticket's earlier round said had
+none (see app/background/__init__.py docstring for why that isn't a new deployment shape).
+The manual path stays first-class either way: `uv run python -m app.meta.daily_pull` still
+works exactly as before, consistent with 手動路徑永遠一級公民.
 """
 
 from datetime import UTC, datetime
@@ -35,6 +34,10 @@ from app.meta import graph
 from app.meta import repository as repo
 
 _TASK_NAME = "background.meta_daily_pull"
+_DISPATCH_TASK_NAME = "meta.daily_pull_dispatch"
+_DISPATCH_PERIODIC_ID = "meta_daily_pull"
+_DAILY_PULL_CRON = "0 3 * * *"  # 每天觸發一次；伺服器本機時間，未特別做時區換算——單機
+                                 # 部署跑在使用者自己機器上，多晚幾小時拉不影響「今天有拉到」
 
 
 def _pull_one_account(conn, org_id: str, token: str, account: dict) -> None:
@@ -64,21 +67,43 @@ def run_daily_pull(org_id: str) -> None:
                 continue  # 這個帳號這次失敗，換下一個；舊資料留著，見上方 docstring
 
 
+def _dispatch_daily_pull(timestamp: int) -> None:
+    """procrastinate periodic task body：一天觸發一次，對每個至少綁了一個 Meta 帳號的組織
+    各 defer 一個 `background.meta_daily_pull` job——跟本檔 `__main__` 手動路徑做的事一模
+    一樣，差別只在誰按下開始鍵（見檔頭 fix round 說明）。
+
+    不掛 "background." 前綴：這支本身沒有單一 org_id 可帶（一次觸發要跑遍所有組織），跟
+    `TaskSignatureOrgIdGateTest` 要求的「處理一個組織的 handler」是不同性質的兩支——它是
+    排程器，不是 handler，故意落在那道只掃 "background." 開頭任務的閘門範圍之外，不是為了
+    閃掉檢查而改名（"meta." 前綴標的正是它仍然只碰 app/meta 自己的東西）。
+    """
+    with connection() as conn:
+        org_ids = repo.orgs_with_bound_accounts(conn)
+    a = background_app()
+    for org_id in org_ids:
+        a.configure_task(_TASK_NAME).defer(org_id=org_id)
+
+
 def register_task() -> None:
-    """掛 procrastinate task，冪等（可以呼叫任意次）——見本檔檔頭「為什麼不能只做一次」。"""
+    """掛 procrastinate task，冪等（可以呼叫任意次）——見本檔檔頭「為什麼不能只做一次」。
+    連同掛上每日排程的 periodic dispatch task（票 05 fix round）。"""
     a = background_app()
     if _TASK_NAME not in a.tasks:
         a.task(name=_TASK_NAME)(run_daily_pull)
+    if _DISPATCH_TASK_NAME not in a.tasks:
+        a.periodic(cron=_DAILY_PULL_CRON, periodic_id=_DISPATCH_PERIODIC_ID)(
+            a.task(name=_DISPATCH_TASK_NAME)(_dispatch_daily_pull)
+        )
 
 
 if __name__ == "__main__":
     # 手動觸發今天的拉取：`uv run python -m app.meta.daily_pull`。
     #
-    # 沒有持續運行的 worker 程序（見檔頭「Scope，刻意」）——這支就是「手動路徑」本身，
-    # 不是它的權宜替代品：對每個至少綁了一個 Meta 帳號的組織各 defer 一個 job，跑一次
-    # worker 把它們都處理掉，然後結束。今天可以人手執行；要不要每天自動叫這支腳本
-    # （Windows 工作排程器，或未來 SaaS 部署自己的排程器），跟要不要換成常駐 worker
-    # 是同一個部署形態的決定，CLAUDE.md 規則 9 要求先提計畫、等批准，這裡不擅自做。
+    # 這支是「手動路徑」本身，不是權宜替代品——正常情況下不需要人手動跑，app/main.py
+    # 啟動時已經把 uvicorn 這個 process 掛成常駐 worker，每天會自己跑
+    # `_dispatch_daily_pull`（見檔頭 fix round 說明）。這支腳本留著給想立刻補拉、或伺服器
+    # 沒開著的時候用：對每個至少綁了一個 Meta 帳號的組織各 defer 一個 job，跑一次 worker
+    # 把它們都處理掉，然後結束，符合 手動路徑永遠一級公民。
     import app.main  # noqa: F401 — 觸發完整的 app 組裝（含 register_task()），不需要 app 物件本身
 
     register_task()

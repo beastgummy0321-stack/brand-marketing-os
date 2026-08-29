@@ -337,6 +337,46 @@ class QueueWiringTest(_MetaDailySpendTestBase):
         self.assertEqual(len(self._spend_rows(bp_id)), 3)
 
 
+# -- 5b. 排程本身：不用人手動跑（票 05 fix round，review 打回的 done-check）-------------
+#
+# 「defer → worker → 落地」已經被上面 QueueWiringTest 證過；這裡只補「誰按下開始鍵」的
+# 那一段——periodic dispatch task 真的掛上了、觸發時真的對每個有綁帳號的組織各 defer 一個
+# job。worker 是否真的常駐、lifespan 收不收得乾淨，是 app/background 自己的事，見
+# app/tests/test_background.py WorkerLifespanTest。
+
+class ScheduledDispatchTest(_MetaDailySpendTestBase):
+    def test_register_task_wires_the_periodic_cron(self):
+        a = background_module.app()
+        self.assertIn(daily_pull._DISPATCH_TASK_NAME, a.tasks,
+                       "register_task() 必須連 periodic dispatch task 一起掛")
+        key = (daily_pull._DISPATCH_TASK_NAME, daily_pull._DISPATCH_PERIODIC_ID)
+        self.assertIn(key, a.periodic_registry.periodic_tasks,
+                       "dispatch task 必須真的用 periodic() 註冊，不能只是掛了普通 task")
+        self.assertEqual(
+            a.periodic_registry.periodic_tasks[key].cron, daily_pull._DAILY_PULL_CRON)
+
+    def test_dispatch_defers_and_lands_rows_for_every_bound_account(self):
+        """periodic 觸發時實際會跑的路徑：dispatch → defer → worker → 落地——跟
+        QueueWiringTest 同一條鏈路，差別只在 defer 這一步由 `_dispatch_daily_pull`（一天
+        觸發一次的排程本身）做，不是測試手動 configure_task().defer()。"""
+        org_id, _ = self._make_org("dispatch")
+        bp_id = self._connect_account(org_id, BP_ACCOUNT_ID, "BP AD")
+        brand_id = bi_repo.create_brand(
+            web.conn, org_id=org_id, name="排程 dispatch 測試品牌", client_name=None, actor="test",
+        )["id"]
+        self._bind(org_id, brand_id, bp_id)
+        web.conn.commit()
+        graph.fetch_page = _dispatch_insights({BP_ACCOUNT_ID: BP_INSIGHTS_PAGE})
+
+        a = background_module.app()
+        with a.open():
+            daily_pull._dispatch_daily_pull(0)
+        a.run_worker(wait=False)
+
+        self.assertEqual(len(self._spend_rows(bp_id)), 3,
+                          "periodic dispatch 觸發後，綁定的帳號也要真的落地資料")
+
+
 # -- 6. API 契約：GET /api/meta/brands/{brand_id}/spend -----------------------------
 
 class BrandSpendRouteTest(_MetaDailySpendTestBase):

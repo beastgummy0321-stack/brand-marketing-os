@@ -532,8 +532,9 @@ class TestRatioTest(unittest.TestCase):
 # 是頂層的 .py（`main.py` 組裝根等）。**允許調高，但必須改這張表**——重點不是禁止成長，
 # 是讓成長出現在 diff 裡有人看得到。廣告模組會在約 2,000 行撞上它，而不是 21,595 行。
 KNOWN_MODULE_SIZES = {
-    "app": 526,  # 票 05：main.py 多呼叫一次 meta_module.register_task()
-    "app/background": 93,
+    "app": 540,  # 票 05 fix round：main.py 加 FastAPI lifespan（掛/收 procrastinate worker）
+    "app/background": 143,  # 票 05 fix round：start_worker()／stop_worker()，把常駐 worker
+                             # 掛進既有 process，不再只有 app()
     "app/brand_intelligence": 2634,
     "app/brand_web": 2155,
     "app/core": 2148,
@@ -541,8 +542,8 @@ KNOWN_MODULE_SIZES = {
     "app/identity": 537,
     "app/intake": 3548,
     "app/llm": 1271,
-    "app/meta": 759,  # 票 05：每日花費拉取（daily_pull.py 新增，含手動觸發 __main__）
-                       # ＋品牌頁花費路由／查詢
+    "app/meta": 784,  # 票 05 fix round：periodic dispatch task（_dispatch_daily_pull／
+                       # register_task() 一併掛 cron）
     "app/orders": 1409,
     "app/schedule": 286,
     "app/shared": 450,

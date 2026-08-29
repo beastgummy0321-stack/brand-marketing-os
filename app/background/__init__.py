@@ -4,14 +4,26 @@
 1. 對外進入點：本檔（`app/background/__init__.py`）。
 2. 進出形狀：`app() -> procrastinate.App`（無參數，回傳可用來
    `.configure_task(name).defer(org_id=..., ...)` 或 `.run_worker(...)` 的 procrastinate App
-   物件）。其餘一律私有。
-3. 呼叫端：目前只有本模組自己的測試檔與手動 done-check；05-1（`enqueue`/`status`/`cancel`
-   契約、job 註冊表、正式 worker 進場點）落地後才會有真正的產品呼叫端。
+   物件），加上票 05 fix round 補的 `start_worker()`／`stop_worker()`（都是 async、無參數，
+   見下方函式檔頭）。其餘一律私有。
+3. 呼叫端：`app()` 目前只有本模組自己的測試檔、app/meta（掛 task）與手動 done-check；
+   `start_worker()`／`stop_worker()` 目前只有 app/main.py 的 FastAPI lifespan
+   （啟動／關閉各呼叫一次）與本模組自己的測試檔。05-1（`enqueue`/`status`/`cancel` 契約、
+   job 註冊表）落地後才會有更多產品呼叫端。
 4. 不碰什麼：procrastinate 套件內部（`procrastinate.schema`／`procrastinate.cli` 等）——本檔
    ／本模組永遠不呼叫 `procrastinate schema --apply`；schema 已經 vendor 進
    `supabase/migrations/20260829000001_background_baseline.sql`，由 Supabase CLI 管，跟全站
    其他模組一樣，但落在自己的 `<current_schema()>__queue` 命名空間裡（ADR 0038），不是這個
    process 平常讀寫資料的 schema。
+
+票 05 fix round：review 打回「排程不能只靠人手動跑」（done-check「A scheduled pull runs
+unattended」）。原本的判斷是「加一個常駐 worker process 是部署形態決定，CLAUDE.md 規則 9
+要先提案批准」——但這不必是「加一個新 process」：`啟動行銷系統.bat` 起的 uvicorn 本來就是
+唯一持續運行的東西，procrastinate 官方文件本身就替「把 worker 掛進一個更大的既有應用程式
+裡跑」這個用法點名了 `install_signal_handlers=False` 這個參數（見 `start_worker()`
+docstring）。讓這個既有 process 多做一件事，不是新開一個部署形態，是加法，符合規則 6
+「手動路徑永遠一級公民；自動化是加法」——`python -m app.meta.daily_pull` 手動觸發路徑原封
+不動留著。
 
 ADR 0038（round 2 補丁）：procrastinate 的四張表沒有 `org_id`，也不會加——加了也沒有任何
 程式碼會填它、會拿它篩選，是看起來像隔離、其實不是隔離的裝飾欄位（見 ADR 全文）。它們活在
@@ -55,6 +67,8 @@ if sys.platform == "win32":
 
 _app: procrastinate.App | None = None
 _app_dsn: str | None = None
+_worker_task: asyncio.Task | None = None
+_worker_app: procrastinate.App | None = None  # 跟 _worker_task 成對開／關，見 start/stop_worker()
 
 
 def _noop(org_id: str) -> None:
@@ -91,3 +105,39 @@ def app() -> procrastinate.App:
         _app = new_app
         _app_dsn = current_dsn
     return _app
+
+
+async def start_worker() -> None:
+    """把這個 process 掛成 procrastinate worker（票 05 fix round，見檔頭「為什麼不是新開
+    一個部署形態」）。冪等——再呼叫一次，已經在跑就直接回傳，不會開出第二個 worker task。
+
+    `install_signal_handlers=False`：procrastinate 官方文件替這個確切用法點名的參數
+    （"if you run the work as an async task in a bigger application"）——worker 跑在
+    uvicorn 自己的 event loop 上，不是獨立的主程序，裝自己的訊號處理只會跟 uvicorn 原本的
+    Ctrl+C／SIGTERM 處理打架，甚至在非主執行緒（測試用的 TestClient portal）直接炸掉。
+    """
+    global _worker_task, _worker_app
+    if _worker_task is not None and not _worker_task.done():
+        return
+    _worker_app = app()
+    await _worker_app.open_async()  # run_worker_async 需要連線池先開好，不開會炸 AppNotOpen
+    _worker_task = asyncio.create_task(
+        _worker_app.run_worker_async(install_signal_handlers=False))
+
+
+async def stop_worker() -> None:
+    """FastAPI lifespan 關閉時呼叫：取消 `start_worker()` 開的 task 並等它真的收尾，關掉
+    對應那個連線池，不留一個游離的背景 task或開著的連線。沒在跑就直接回傳。"""
+    global _worker_task, _worker_app
+    if _worker_task is None:
+        return
+    task, worker_app = _worker_task, _worker_app
+    _worker_task = None
+    _worker_app = None
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+    if worker_app is not None:
+        await worker_app.close_async()

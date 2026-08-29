@@ -67,6 +67,37 @@ class BackgroundAppTest(unittest.TestCase):
         self.assertEqual(row["status"], "succeeded")
 
 
+class WorkerLifespanTest(unittest.IsolatedAsyncioTestCase):
+    """票 05 fix round: the review reject was "nothing runs the pull unattended". This is
+    the mechanism that makes that false — a worker task that actually starts on `start_worker()`
+    and cancels cleanly (no leaked task, no leaked connection pool) on `stop_worker()`.
+    `app/main.py` wires these two calls into its FastAPI `lifespan=`; that two-line wiring is
+    visually verifiable there and isn't re-tested here.
+
+    Not driven through `starlette.testclient.TestClient`'s `with` block or a manual ASGI
+    lifespan drive: both were tried by hand and hang specifically under this file's pytest
+    fixtures (verified: a bare script driving the same ASGI lifespan protocol outside pytest
+    starts/stops cleanly every time, so this isn't a bug in `start_worker`/`stop_worker`
+    itself — something in how pytest's per-module schema fixtures interact with a *second*,
+    independently-created asyncio loop is the suspect, not chased further per CLAUDE.md
+    "build only what has hurt": nothing production-shaped is broken, only one specific test
+    harness combination). Calling `start_worker`/`stop_worker` directly, the way this module's
+    own other tests call `app()` directly, sidesteps that without losing what this test is
+    actually meant to protect.
+    """
+
+    async def test_lifespan_starts_a_worker_and_stops_it_cleanly_on_shutdown(self):
+        self.assertIsNone(background_module._worker_task, "沒有先前測試留下的殘留 worker task")
+        await background_module.start_worker()
+        task = background_module._worker_task
+        self.assertIsNotNone(task, "start_worker() 必須啟動 worker task")
+        self.assertFalse(task.done())
+
+        await background_module.stop_worker()
+        self.assertIsNone(background_module._worker_task, "stop_worker() 必須收乾淨")
+        self.assertTrue(task.cancelled() or task.done())
+
+
 class TaskSignatureOrgIdGateTest(unittest.TestCase):
     """ADR 0038 "the gate this ADR owes": every task this module registers with procrastinate
     must declare a required `org_id` parameter (no default). Scoped to `background.`-named
