@@ -265,6 +265,10 @@ class ProviderResponse:
     """統一回傳物件（本輪任務指示）：output_text／structured／usage／stop_reason／raw。
 
     output_text 與 structured 皆逐字來自模型，gateway 不得再改寫（principles 第 2 條）。
+
+    search_sources（票 08）：網路搜尋工具（ADR 0005）成功時找到的結果，`[{"title", "url"}]`。
+    沒開工具、開了但沒搜、或搜尋本身出錯，都是空清單——不是例外、不擋下這次任務（票 08 兩條
+    不可妥協規則：查詢不是排程的先決條件；伺服器端工具出錯是 HTTP 200 帶錯誤物件，不是例外）。
     """
 
     output_text: str
@@ -272,6 +276,7 @@ class ProviderResponse:
     usage: Usage
     stop_reason: str
     raw: object = None
+    search_sources: list | None = None
 
 
 class Provider(Protocol):
@@ -403,6 +408,21 @@ class AnthropicProvider:
              and isinstance(getattr(block, "input", None), dict)),
             None,
         )
+        # 網路搜尋結果（票 08）：官方回應形狀見 web_search_tool_result_block.py——
+        # block.content 成功時是 list[WebSearchResultBlock]，出錯時是單一
+        # WebSearchToolResultError（.error_code），一律先判斷型別再取值，出錯的區塊直接跳過，
+        # 不索引、不拋例外（票 08 兩條不可妥協規則第 2 條）。
+        search_sources = []
+        for block in response.content:
+            if getattr(block, "type", None) != "web_search_tool_result":
+                continue
+            content = getattr(block, "content", None)
+            if not isinstance(content, list):
+                continue  # WebSearchToolResultError：搜尋本身出錯，跳過這個區塊，不是例外
+            for result in content:
+                url = getattr(result, "url", None)
+                if url:
+                    search_sources.append({"title": getattr(result, "title", "") or "", "url": url})
         usage = response.usage
         # server_tool_use 只在真的用了伺服器端工具時才有值，沒開工具時是 None（ADR 0005）。
         server_tool_use = getattr(usage, "server_tool_use", None)
@@ -420,6 +440,7 @@ class AnthropicProvider:
             ),
             stop_reason=response.stop_reason,
             raw=response,
+            search_sources=search_sources,
         )
 
 

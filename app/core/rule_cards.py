@@ -231,6 +231,24 @@ CARDS = {
             },
         },
     },
+    "schedule_plan_count": {
+        "title": "檔期方案數量上下限",
+        "description": (
+            "檔期規劃一次要代理出幾個方案，使用者從下拉選單挑一個數字——這張卡決定那個"
+            "下拉選單的上下限，程式在送出前會擋掉超出範圍的數字，不是只在說明文字裡寫"
+            "一個上限（票 08）。"
+        ),
+        "fields": {
+            "plan_count_min": {
+                "label": "方案數量下限", "unit": "個", "default": 1.0,
+                "help": "一次最少出幾個方案。",
+            },
+            "plan_count_max": {
+                "label": "方案數量上限", "unit": "個", "default": 5.0,
+                "help": "一次最多出幾個方案——方案數愈多，代理輸出的 token 愈多，成本愈高。",
+            },
+        },
+    },
     "autonomy": {
         "title": "投放自動度",
         "description": (

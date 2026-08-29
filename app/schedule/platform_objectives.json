@@ -1,0 +1,52 @@
+{
+  "_comment": "app/schedule/platform_objectives.json — 平台與行銷目標的資料檔（票 08）。改這裡不必重新部署程式；平台改名或新增目標，改這個檔案就好。每筆 objective 都附 source_url／verified_date，方便日後查證是不是又改名了。",
+  "platforms": [
+    {"id": "meta", "label": "Meta", "enabled": true},
+    {"id": "google", "label": "Google", "enabled": false},
+    {"id": "tiktok", "label": "TikTok", "enabled": false}
+  ],
+  "objectives": [
+    {
+      "platform": "meta",
+      "value": "OUTCOME_AWARENESS",
+      "label": "認知",
+      "source_url": "https://developers.facebook.com/docs/marketing-api/reference/ad-campaign-group/",
+      "verified_date": "2026-08-29"
+    },
+    {
+      "platform": "meta",
+      "value": "OUTCOME_TRAFFIC",
+      "label": "流量",
+      "source_url": "https://developers.facebook.com/docs/marketing-api/reference/ad-campaign-group/",
+      "verified_date": "2026-08-29"
+    },
+    {
+      "platform": "meta",
+      "value": "OUTCOME_ENGAGEMENT",
+      "label": "互動",
+      "source_url": "https://developers.facebook.com/docs/marketing-api/reference/ad-campaign-group/",
+      "verified_date": "2026-08-29"
+    },
+    {
+      "platform": "meta",
+      "value": "OUTCOME_LEADS",
+      "label": "名單開發",
+      "source_url": "https://developers.facebook.com/docs/marketing-api/reference/ad-campaign-group/",
+      "verified_date": "2026-08-29"
+    },
+    {
+      "platform": "meta",
+      "value": "OUTCOME_APP_PROMOTION",
+      "label": "應用程式推廣",
+      "source_url": "https://developers.facebook.com/docs/marketing-api/reference/ad-campaign-group/",
+      "verified_date": "2026-08-29"
+    },
+    {
+      "platform": "meta",
+      "value": "OUTCOME_SALES",
+      "label": "業績",
+      "source_url": "https://developers.facebook.com/docs/marketing-api/reference/ad-campaign-group/",
+      "verified_date": "2026-08-29"
+    }
+  ]
+}

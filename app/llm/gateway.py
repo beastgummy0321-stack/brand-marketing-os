@@ -231,7 +231,10 @@ def run_task(
             continue
 
         # 舊版 Provider 實作（測試檔裡手寫的假 Provider）可能回傳沒有 web_search_requests
-        # 欄位的 Usage，用 getattr 取值，缺就當 0。
+        # 欄位的 Usage，用 getattr 取值，缺就當 0。search_sources 同理（票 08：不是每個
+        # Provider 實作都會填這個欄位），沒有就存空清單，不是 null——呼叫端不必再判斷
+        # None／[] 兩種「沒有」。usage_json 本來就是給對帳與除錯用的自由格式欄位
+        # （schema 沒有per-card 結構），加這個鍵不是 schema 變更，不必開 migration。
         web_search_requests = getattr(response.usage, "web_search_requests", 0) or 0
         usage = {
             "input_tokens": response.usage.input_tokens,
@@ -239,6 +242,7 @@ def run_task(
             "cache_read_input_tokens": response.usage.cache_read_input_tokens,
             "cache_creation_input_tokens": response.usage.cache_creation_input_tokens,
             "web_search_requests": web_search_requests,
+            "search_sources": getattr(response, "search_sources", None) or [],
         }
         # 網路搜尋按次另外收費（ADR 0005），token 費之外要加上去，llm_task.cost 才是這次呼叫
         # 的真實花費——全站花費上限讀的就是這個欄位的總和。

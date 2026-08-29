@@ -541,11 +541,11 @@ KNOWN_MODULE_SIZES = {
     "app/dashboard": 645,
     "app/identity": 537,
     "app/intake": 3548,
-    "app/llm": 1271,
+    "app/llm": 1296,  # 票 08：ProviderResponse.search_sources／網路搜尋結果解析
     "app/meta": 784,  # 票 05 fix round：periodic dispatch task（_dispatch_daily_pull／
                        # register_task() 一併掛 cron）
     "app/orders": 1409,
-    "app/schedule": 286,
+    "app/schedule": 426,  # 票 08：表單擴成 N 個方案＋平台／目標／方案數驗證
     "app/shared": 450,
     "app/tools": 318,
 }
