@@ -557,13 +557,20 @@ KNOWN_MODULE_SIZES = {
                        # 缺陷 1／2：parse_json_reply 換成 raw_decode 單錨點（含為什麼不能
                        # 退而求其次的理由註解）＋timeout_s 300 秒與 max_retries=0 兩段
                        # 來源註解（實測列號、SDK 常數位置）。前一次是票 09 的 1298
-    "app/meta": 805,  # 票 11：campaign_ids_by_exact_name()（名稱精準比對，13 行）＋
+    "app/meta": 855,  # 票 11 缺陷修正（2026-08-29 對真帳號實測）：名稱比對改讀平台上的活動
+                       # 清單——graph.list_campaigns()＋_to_campaign()（28 行，含為什麼不能
+                       # 讀 insights 的理由），campaign_ids_by_exact_name() 換成逐帳號比對
+                       # ＋連不上 Meta 時回人話 502。前一次是 805——
+                       # 票 11：campaign_ids_by_exact_name()（名稱精準比對，13 行）＋
                        # spend_summary 改成只按 campaign_id 分組（活動月中改名不再裂成
                        # 兩列各拿半個月花費，8 行含理由註解）
     "app/orders": 1423,  # 票 12：channel_revenue 一張表取代三張（刪掉藥局專屬那一整組
                           # 之後仍淨增）——官網帳本寫入路徑、channel_revenue_summary()、
                           # 通用手動登錄（含「官網不能手動登錄」那道錢的守門）
-    "app/schedule": 923,  # 2026-08-29 修「畫面吐 [object Object]、活動樹算好的結果被下一次
+    "app/schedule": 933,  # 2026-08-29：選定的產品名稱進 prompt（_validate_products() 改回傳
+                           # 名稱、_plan_params_text() 多列一行）——沒有這 10 行，勾產品對代理
+                           # 完全沒有作用，因為品牌上下文只吐「已確認的事實」。前一次是 923——
+                           # 2026-08-29 修「畫面吐 [object Object]、活動樹算好的結果被下一次
                            # 嘗試蓋掉」（53c285e）：_display_task_row() 正在跑的時候繼續顯示
                            # 上一次成功的樹，另外標明有一次在跑。前一次是 883——
                            # 票 11：POST .../tree/bind（名稱比對、存平台 id、之後一律靠 id

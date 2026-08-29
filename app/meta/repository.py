@@ -2,6 +2,11 @@
 app/meta/daily_pull.py import this (both inside this package; container contract §1) —
 it is never imported outside the package.
 
+One function here is not pure DB access: `campaign_ids_by_exact_name` reads the account's
+live campaign list through `graph.py`, because a campaign built by hand and left paused
+exists on the platform but has no rows in any of our tables. Its docstring carries the
+reason; everything else below is Postgres only.
+
 Four tables (see supabase/migrations/20260829000002_meta_baseline.sql and
 20260829000004_meta_daily_spend.sql):
     meta_credential        — one row per org, points at the Vault secret (never the token)
@@ -22,8 +27,10 @@ is the index instead.
 
 from datetime import date
 
+import app.shared.web as web
 from app.core import cleanup
 from app.core.db import Conn, ConnProxy, new_id, now_utc
+from app.meta import graph
 
 _AnyConn = Conn | ConnProxy
 
@@ -182,16 +189,33 @@ def bound_account_ids_for_brand(conn: _AnyConn, org_id: str, brand_id: str) -> l
 def campaign_ids_by_exact_name(
     conn: _AnyConn, org_id: str, ad_account_ids: list, name: str,
 ) -> list:
-    """票 11：這批帳號裡，`campaign_name` 逐字（區分大小寫、不 trim、不正規化）等於 `name`
-    的 DISTINCT campaign_id——外殼精準比對的唯一資料來源，`org_id` 是租戶界線。"""
+    """票 11：這批帳號裡，活動名稱逐字（區分大小寫、不 trim、不正規化）等於 `name` 的
+    campaign_id——外殼精準比對的唯一資料來源，`org_id` 是租戶界線。
+
+    資料來源是**平台上的活動清單**（`graph.list_campaigns`），不是 `meta_campaign_spend`。
+    2026-08-29 實測發現的缺陷：手動建好、維持關閉的活動沒有任何 insights 列，靠花費表比對
+    永遠是「配對失敗」——而「先建成關閉、配對確認、才開跑」正是這條手動路徑該有的順序。
+    比對完存下 id，之後讀數字一律靠 id（改名不斷線），那部分仍然走 meta_campaign_spend。
+    """
     if not ad_account_ids:
         return []
+    token = get_token(conn, org_id)
+    if token is None:
+        return []  # 這個組織還沒接權杖：沒有可比對的清單，交給呼叫端當「配對失敗」處理
     rows = conn.execute(
-        "SELECT DISTINCT campaign_id FROM meta_campaign_spend"
-        " WHERE org_id = %s AND ad_account_id = ANY(%s) AND campaign_name = %s",
-        (org_id, ad_account_ids, name),
+        "SELECT account_id FROM meta_ad_account WHERE org_id = %s AND id = ANY(%s)",
+        (org_id, ad_account_ids),
     )
-    return [r["campaign_id"] for r in rows]
+    matched: list = []
+    for row in rows:
+        try:
+            campaigns = graph.list_campaigns(token, row["account_id"])
+        except graph.GraphError as exc:
+            raise web.ApiError(
+                502, "meta_unreachable", f"連不上 Meta，沒辦法比對名稱：{exc.message}"
+            ) from exc
+        matched.extend(c["campaign_id"] for c in campaigns if c["name"] == name)
+    return sorted(set(matched))
 
 
 def last_pull_at(conn: _AnyConn, org_id: str, ad_account_ids: list):

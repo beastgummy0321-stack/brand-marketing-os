@@ -14,6 +14,7 @@ import json
 import unittest
 from datetime import UTC, datetime
 from pathlib import Path
+from unittest import mock
 
 from fastapi.testclient import TestClient
 
@@ -24,6 +25,7 @@ from app.core import db as coredb
 from app.core import rule_cards
 from app.identity import repository as identity_repo
 from app.llm import providers
+from app.meta import graph as meta_graph
 from app.meta import repository as meta_repo
 from app.schedule import plan as plan_mod
 from app.schedule import routes as schedule_routes
@@ -583,6 +585,7 @@ class BindTreeApiContractTest(_ScheduleApiTestBase):
     def setUp(self):
         super().setUp()
         self.today = datetime.now(UTC).date()
+        self._external_account_ids: dict = {}
         self.account_id = self._connect_account(coredb.DEV_ORG_ID, "測試廣告帳號")
         meta_repo.bind(web.conn, coredb.DEV_ORG_ID, self.brand["id"], self.account_id)
         web.conn.commit()
@@ -598,7 +601,28 @@ class BindTreeApiContractTest(_ScheduleApiTestBase):
         web.conn.commit()
         row = next(a for a in meta_repo.list_accounts(web.conn, org_id)
                    if a["account_id"] == external_id)
+        self._external_account_ids[row["id"]] = external_id
         return row["id"]
+
+    def _platform_campaigns(self, by_account: dict):
+        """換掉平台上的活動清單（不打網路）：`by_account` 是
+        {本地 meta_ad_account.id: [(campaign_id, 活動名稱), …]}。
+
+        名稱比對問的是平台上有沒有這個活動，不是 `meta_campaign_spend`——手動建好、維持
+        關閉的活動沒有任何 insights 列（見 app/meta/graph.py `list_campaigns`），所以這裡
+        換掉的是 `graph.list_campaigns`，不是塞花費列進去。"""
+        wanted = {
+            self._external_account_ids[row_id]: entries
+            for row_id, entries in by_account.items()
+        }
+
+        def fake_list_campaigns(_token: str, account_id: str) -> list[dict]:
+            return [
+                {"campaign_id": campaign_id, "name": name}
+                for campaign_id, name in wanted.get(account_id, [])
+            ]
+
+        return mock.patch.object(meta_graph, "list_campaigns", fake_list_campaigns)
 
     def _seed_campaign(self, org_id: str, account_id: str, campaign_id: str, campaign_name: str,
                         *, spend: float = 1000.0, roas: float | None = 2.0) -> None:
@@ -635,7 +659,8 @@ class BindTreeApiContractTest(_ScheduleApiTestBase):
         self._succeed_plan_and_tree()
         self._seed_campaign(coredb.DEV_ORG_ID, self.account_id, "camp-1", "活動一")
 
-        resp = self._bind()
+        with self._platform_campaigns({self.account_id: [("camp-1", "活動一")]}):
+            resp = self._bind()
         self.assertEqual(resp.status_code, 200, resp.text)
         tree = resp.json()["tree"]
         self.assertIsNone(tree["bind_failure"])
@@ -655,12 +680,33 @@ class BindTreeApiContractTest(_ScheduleApiTestBase):
         self.assertEqual(node["spend"], 1500.0)
         self.assertEqual(node["roas"], 3.0)
 
+    # -- 資料正確性：關閉中、還沒花過錢的活動照樣配得到 ----------------------------------
+
+    def test_a_paused_campaign_with_no_spend_still_binds(self):
+        """手動路徑的順序是「照樹建成關閉 → 配對確認 → 才開跑」，所以配對時活動一定還沒
+        花過錢，一列 insights 都沒有。名稱比對若建在 `meta_campaign_spend` 上，這一步永遠
+        是「配對失敗，請檢查名稱是否完全相符」——名字明明一字不差（2026-08-29 對真帳號實測：
+        建了一個 PAUSED 活動，拉完當天花費，那個活動不在花費表裡）。"""
+        self._succeed_plan_and_tree()
+
+        with self._platform_campaigns({self.account_id: [("camp-paused", "活動一")]}):
+            resp = self._bind()
+
+        self.assertEqual(resp.status_code, 200, resp.text)
+        tree = resp.json()["tree"]
+        self.assertIsNone(tree["bind_failure"])
+        node = tree["nodes"][0]
+        self.assertEqual(node["bound_external_id"], "camp-paused")
+        self.assertIsNone(node["spend"])  # 還沒跑過就是沒有數字，不是 0
+        self.assertIsNone(node["roas"])
+
     # -- 零筆比對 -> 唯一的失敗訊息，不綁定、不落地 --------------------------------------
 
     def test_no_match_shows_failure_message_and_binds_nothing(self):
         self._succeed_plan_and_tree()  # 帳號裡沒有任何叫「活動一」的活動
 
-        resp = self._bind()
+        with self._platform_campaigns({self.account_id: []}):
+            resp = self._bind()
         self.assertEqual(resp.status_code, 200, resp.text)
         tree = resp.json()["tree"]
         self.assertEqual(tree["bind_failure"], "配對失敗，請檢查名稱是否完全相符")
@@ -671,10 +717,11 @@ class BindTreeApiContractTest(_ScheduleApiTestBase):
 
     def test_two_matches_is_a_failure_not_a_guess(self):
         self._succeed_plan_and_tree()
-        self._seed_campaign(coredb.DEV_ORG_ID, self.account_id, "camp-1", "活動一")
-        self._seed_campaign(coredb.DEV_ORG_ID, self.account_id, "camp-2", "活動一")
 
-        resp = self._bind()
+        with self._platform_campaigns(
+            {self.account_id: [("camp-1", "活動一"), ("camp-2", "活動一")]}
+        ):
+            resp = self._bind()
         self.assertEqual(resp.status_code, 200, resp.text)
         tree = resp.json()["tree"]
         self.assertEqual(tree["bind_failure"], "配對失敗，請檢查名稱是否完全相符")
@@ -687,9 +734,10 @@ class BindTreeApiContractTest(_ScheduleApiTestBase):
         self._succeed_plan_and_tree()
         org_b, _token_b = self._make_org("bind-isolation")
         account_b = self._connect_account(org_b, "另一個組織的帳號")
-        self._seed_campaign(org_b, account_b, "camp-b", "活動一")
 
-        resp = self._bind()
+        # 只有 org B 的帳號上有這個名稱的活動；org A 的品牌配對時根本不該去讀那個帳號。
+        with self._platform_campaigns({account_b: [("camp-b", "活動一")]}):
+            resp = self._bind()
         self.assertEqual(resp.status_code, 200, resp.text)
         tree = resp.json()["tree"]
         self.assertEqual(tree["bind_failure"], "配對失敗，請檢查名稱是否完全相符")

@@ -153,6 +153,32 @@ def _to_campaign_row(item: dict) -> dict | None:
     }
 
 
+def _to_campaign(item: dict) -> dict | None:
+    """帳號活動清單的一筆 → 我們要的兩個欄位；缺 id 這一筆不能用（跳過，比照 _to_account）。
+    名稱缺席補空字串——精準比對永遠不會等於空字串，所以缺名稱＝配不到，不是配到別人。"""
+    campaign_id = item.get("id")
+    if not campaign_id:
+        return None
+    return {"campaign_id": campaign_id, "name": item.get("name") or ""}
+
+
+def list_campaigns(token: str, account_id: str) -> list[dict]:
+    """這個帳號目前所有活動的 [{"campaign_id","name"}]，**包含還沒開跑的**。
+
+    名稱比對要問的是「平台上存不存在這個活動」，不是「它花過錢」。insights 端點只回有
+    投遞的活動：手動建好但維持關閉（PAUSED）的活動在那裡查不到，所以名稱比對不能建在
+    `meta_campaign_spend` 上——買廣告的人本來就是先照樹把活動建成關閉狀態、確認無誤才開跑
+    （2026-08-29 對真帳號實測：BP AD 有 3 個活動，當天的 insights 只回 1 個）。
+
+    `account_id` 同 `list_campaign_insights`，是 `meta_ad_account.account_id`（純數字），
+    act_ 前綴在這裡補。"""
+    headers = {"Authorization": f"Bearer {token}"}
+    url = f"{GRAPH_BASE_URL}/act_{account_id}/campaigns"
+    params: dict | None = {"fields": "id,name", "limit": 200}
+    items = _fetch_all_pages(url, params, headers)
+    return [r for r in (_to_campaign(item) for item in items) if r is not None]
+
+
 def list_campaign_insights(token: str, account_id: str, day: date) -> list[dict]:
     """回傳這個帳號『某一天』每個活動的成效
     [{"campaign_id","campaign_name","spend","impressions","clicks","roas"}]（roas 可能是

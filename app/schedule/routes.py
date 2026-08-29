@@ -175,12 +175,20 @@ def _brand_response(conn, brand_id: str, org_id: str) -> dict:
     }
 
 
-def _validate_products(conn, brand_id: str, product_ids: list) -> None:
+def _validate_products(conn, brand_id: str, product_ids: list) -> list:
+    """驗證之外還回傳選定產品的名稱（順序照使用者送來的），給 `_plan_params_text` 列進
+    prompt。名稱非得從這裡帶出去不可：`context_compiler.compile()` 只吐「已確認的事實／
+    規則／宣稱／典型客人」，產品自己的名字不在裡面——一個還沒建過事實的產品，勾了等於
+    沒勾（2026-08-29 實測：晨光咖啡 0 筆 confirmed fact，品牌上下文長度為 0）。"""
     if not product_ids:
         raise web.ApiError(400, "no_products", "請至少選擇一項產品。")
+    names = []
     for product_id in product_ids:
-        if bi_repo.get_product(conn, brand_id, product_id) is None:
+        product = bi_repo.get_product(conn, brand_id, product_id)
+        if product is None:
             raise web.ApiError(400, "product_not_found", f"找不到產品：{product_id}")
+        names.append(product["name"])
+    return names
 
 
 def _validate_platform_and_objective(data: dict, platform: str, objective: str) -> None:
@@ -227,12 +235,14 @@ def _compile_brand_context(conn, brand_id: str, product_ids: list) -> tuple:
 
 
 def _plan_params_text(platform_label: str, objective_label: str, promotion_note: str,
-                       plan_count: int) -> str:
+                       plan_count: int, product_names: list) -> str:
     """這次排程的參數，原樣列給代理看——平台／目標的人話標籤都是呼叫端從資料檔查出來的，
-    不是這裡自己編的（票 08：CONTEXT.md 的三詞界線只管外殼自己造詞，轉述資料檔內容不算）。"""
+    不是這裡自己編的（票 08：CONTEXT.md 的三詞界線只管外殼自己造詞，轉述資料檔內容不算）。
+    產品名稱同理，是 `product` 表裡使用者自己打的字；見 `_validate_products` 為什麼非列不可。"""
     return "\n".join([
         "## 這次排程的參數",
         f"平台：{platform_label}",
+        f"這期要投放的產品：{'、'.join(product_names)}",
         f"行銷目標：{objective_label}",
         f"促銷或重點：{promotion_note or '（未填寫）'}",
         f"要幾個方案：{plan_count}",
@@ -322,7 +332,7 @@ def _run_tree(conn, brand_id: str, org_id: str, body: "TreeRequest") -> dict:
 
 
 def _run_plan(conn, brand_id: str, org_id: str, body: "PlanRequest") -> dict:
-    _validate_products(conn, brand_id, body.product_ids)
+    product_names = _validate_products(conn, brand_id, body.product_ids)
     data = _load_platform_data()
     _validate_platform_and_objective(data, body.platform, body.objective)
     _validate_plan_count(conn, brand_id, body.plan_count)
@@ -343,7 +353,7 @@ def _run_plan(conn, brand_id: str, org_id: str, body: "PlanRequest") -> dict:
     department_text = DEPARTMENT_FILE.read_text(encoding="utf-8")
     methodology_result = methodology.compile(conn, METHODOLOGY_TASK_LABELS, brand_id=brand_id)
     params_text = _plan_params_text(
-        platform_label, objective_label, body.promotion_note, body.plan_count
+        platform_label, objective_label, body.promotion_note, body.plan_count, product_names
     )
     prompt = "\n\n".join(
         section for section in
