@@ -28,7 +28,7 @@
 
 ## 第 ⑤ 片：背景工作
 
-- [ ] 05-1 procrastinate：`enqueue／status／cancel` 契約、worker 行程。**契約活著、載荷換人**——原本要搬進來的 `_auto_sync_loop`／週引擎／`_immediate_sync_cache` 隨 `app/ads/` 一起刪了；現在它要背的是外殼的 agent 執行（一次 CLI 呼叫可能跑好幾分鐘，`HANDOFF-shell-slice.md` §6）。`_progress_state`（brand_web 的 library／products 各一份）仍在待搬清單裡。
+- [ ] 05-1 procrastinate：`enqueue／status／cancel` 契約、job 註冊表。**worker 進場點已完成**（票 05 修正輪：worker 是 uvicorn 行程裡的一個 asyncio task，由 FastAPI `lifespan` 開關，使用者 2026-08-29 裁決放行，ADR 0039）。**契約活著、載荷換人**——原本要搬進來的 `_auto_sync_loop`／週引擎／`_immediate_sync_cache` 隨 `app/ads/` 一起刪了；現在它要背的是外殼的 agent 執行（一次 CLI 呼叫可能跑好幾分鐘，`HANDOFF-shell-slice.md` §6）。`_progress_state`（brand_web 的 library／products 各一份）仍在待搬清單裡。
 
 ## 第 ⑥ 片：素材
 
@@ -42,6 +42,7 @@
 ## 小債（順手做，不排優先）
 
 - [ ] **外殼切片留下的三筆，沒有閘門在守**，明細見 `docs/tech-debt.md` 第〇節。最急的是：`app/core/rule_cards.py` 8 張規則卡有 6 張失效（`budget_structure`／`sample_size`／`ad_creative_fatigue`／`pacing`／`health_lights`／`autonomy`），設定頁照樣顯示、照樣可以調，但調了不影響任何東西——**這是使用者看得到的謊**
+- [ ] **上雲前必還（ADR 0039）** 每日 Meta 花費拉取的 worker 跑在網站行程裡：網站沒開就不拉，那天沒有數字（handler 可重跑，但沒人叫它就沒人補）；cron `0 3 * * *` 是機器本地時間，沒有時區處理（等 04-1b 的 `org_timezone`）。上雲時 worker 要拆成自己的行程
 - [ ] GitHub 四個安全開關（secret scanning／push protection／CodeQL／branch protection）需 GitHub Pro 或公開 repo——**等使用者決定**要不要付費；未付費前 CI 綠不擋合併，靠人工
 - [ ] Dependabot #1（high）：前端間接依賴 `nanoid`（size=0 無限迴圈，開發工具鏈才用到）——動前端時 `npm audit fix` 順手收
 - [ ] **上雲前必還（2026-08-28 使用者裁決：本機單人階段不修）** 邀請連結是「持有即可用」：`app/identity/routes.py` accept_invite 不比對 invite.email 與登入者 email；且 `AcceptInvitePage` 一掛載就自動接受，沒有確認步驟（03-3 審查 note 5）——等使用者裁決要不要改成 email 嚴格比對
