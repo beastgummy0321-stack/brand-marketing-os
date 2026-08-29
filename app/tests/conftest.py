@@ -82,6 +82,20 @@ def _schema_name(module_name: str) -> str:
     return f"t_{short}_{os.getpid()}"
 
 
+# ADR 0038：procrastinate 的表不住在模組 schema 裡，住在隔壁的 `<模組 schema>__queue`。
+# 這個後綴有三份，SQL 那份無法 import Python，所以只能各寫各的：
+# `supabase/migrations/20260829000001_background_baseline.sql`（`current_schema() || '__queue'`）、
+# `app/background/__init__.py:_queue_search_path()`、這裡。改一個要改三個。
+#
+# 為什麼下面建/砍 schema 兩處都要連它一起砍：`_schema_name()` 用 `os.getpid()` 當後綴，
+# 而 pid 作業系統會回收再發。以前只砍模組 schema、沒砍 queue schema，殘留的 queue schema
+# 就一直堆在資料庫裡（實測 2026-08-29：499 個殘留，150 個不重複 pid，最兇的一個 pid 被 15
+# 個不同模組用過）。下一輪同 pid＋同模組＝同名，migration 那句 `CREATE SCHEMA IF NOT EXISTS`
+# 看到房還在就直接跳過，接著 `CREATE TYPE procrastinate_job_status` 撞上上一輪留下的同名
+# type，噴 DuplicateObject。這就是「全套平行測試隨機紅」的成因（docs/tech-debt.md 第四節）。
+_QUEUE_SUFFIX = "__queue"
+
+
 def _admin_conn() -> psycopg.Connection:
     """管理連線：固定用 `_BASE_DSN`（不受逐模組 search_path 覆寫影響），autocommit，
     只用來建/砍 test schema。"""
@@ -130,6 +144,7 @@ def _module_schema(request):
     with _admin_conn() as admin:
         _ddl(admin, (
             f'DROP SCHEMA IF EXISTS "{schema}" CASCADE;'
+            f' DROP SCHEMA IF EXISTS "{schema}{_QUEUE_SUFFIX}" CASCADE;'
             f' CREATE SCHEMA "{schema}";'
             f' SET search_path TO "{schema}";'
         ) + _baseline_sql())
@@ -142,7 +157,10 @@ def _module_schema(request):
     _reset_pool()
     os.environ["DATABASE_URL"] = _BASE_DSN
     with _admin_conn() as admin:
-        _ddl(admin, f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        _ddl(admin, (
+            f'DROP SCHEMA IF EXISTS "{schema}" CASCADE;'
+            f' DROP SCHEMA IF EXISTS "{schema}{_QUEUE_SUFFIX}" CASCADE;'
+        ))
 
 
 @pytest.fixture(autouse=True)
