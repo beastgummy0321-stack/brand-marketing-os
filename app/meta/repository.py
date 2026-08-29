@@ -179,6 +179,21 @@ def bound_account_ids_for_brand(conn: _AnyConn, org_id: str, brand_id: str) -> l
     return [r["ad_account_id"] for r in rows]
 
 
+def campaign_ids_by_exact_name(
+    conn: _AnyConn, org_id: str, ad_account_ids: list, name: str,
+) -> list:
+    """票 11：這批帳號裡，`campaign_name` 逐字（區分大小寫、不 trim、不正規化）等於 `name`
+    的 DISTINCT campaign_id——外殼精準比對的唯一資料來源，`org_id` 是租戶界線。"""
+    if not ad_account_ids:
+        return []
+    rows = conn.execute(
+        "SELECT DISTINCT campaign_id FROM meta_campaign_spend"
+        " WHERE org_id = %s AND ad_account_id = ANY(%s) AND campaign_name = %s",
+        (org_id, ad_account_ids, name),
+    )
+    return [r["campaign_id"] for r in rows]
+
+
 def last_pull_at(conn: _AnyConn, org_id: str, ad_account_ids: list):
     """這批帳號裡『最早的』上次成功拉取時間——品牌可能綁了不只一個帳號，畫面要誠實
     反映「最舊鮮度」，不是挑一個看起來最新的帳號蓋過去（票 05：失敗要讓使用者看得出
@@ -209,14 +224,20 @@ def spend_summary(
         return {"campaigns": [], "total": dict(_EMPTY_TOTAL)}
     args = (org_id, ad_account_ids, month_start, month_end)
     campaigns = conn.execute(
-        "SELECT campaign_id, campaign_name, SUM(spend) AS spend,"
+        # 一個活動一列，GROUP BY 只按 campaign_id——名稱不進 GROUP BY（票 11 審查發現）：
+        # 使用者月中在平台上改名，改名前後的日列各自留著自己那天的 campaign_name，按
+        # (id, 名稱) 分組會把同一個活動裂成兩列、各拿半個月的花費。顯示的名稱取「最後
+        # 一天用的那個」，也就是使用者現在在平台上看得到的那個。
+        "SELECT campaign_id,"
+        " (array_agg(campaign_name ORDER BY spend_date DESC))[1] AS campaign_name,"
+        " SUM(spend) AS spend,"
         " SUM(impressions) AS impressions, SUM(clicks) AS clicks,"
         " CASE WHEN bool_and(roas IS NOT NULL)"
         "      THEN SUM(spend * roas) / NULLIF(SUM(spend), 0) ELSE NULL END AS roas"
         " FROM meta_campaign_spend"
         " WHERE org_id = %s AND ad_account_id = ANY(%s)"
         "   AND spend_date >= %s AND spend_date < %s"
-        " GROUP BY campaign_id, campaign_name ORDER BY campaign_id",
+        " GROUP BY campaign_id ORDER BY campaign_id",
         args,
     ).fetchall()
     total = conn.execute(

@@ -390,13 +390,30 @@ class BrandSpendRouteTest(_MetaDailySpendTestBase):
         self._bind(self.org_id, self.brand_id, self.account_id)
         self.auth = self._headers(self.token, self.org_id)
 
-    def _insert_row(self, campaign_id, day, spend, roas, impressions=1000, clicks=10):
+    def _insert_row(self, campaign_id, day, spend, roas, impressions=1000, clicks=10, name=None):
         meta_repo.upsert_campaign_spend(
             web.conn, self.org_id, self.account_id, day,
-            [{"campaign_id": campaign_id, "campaign_name": campaign_id, "spend": spend,
+            [{"campaign_id": campaign_id, "campaign_name": name or campaign_id, "spend": spend,
               "impressions": impressions, "clicks": clicks, "roas": roas}],
         )
         web.conn.commit()
+
+    def test_a_campaign_renamed_mid_month_stays_one_row_with_its_latest_name(self):
+        """錢的正確性（票 11 審查發現）：改名前後的日列各自留著當天的名稱，若照
+        (campaign_id, campaign_name) 分組，同一個活動會裂成兩列、各拿半個月的花費——
+        畫面上就少算一半，而且沒有任何錯誤訊息提醒。"""
+        from datetime import UTC, datetime, timedelta
+        month_start = datetime.now(UTC).date().replace(day=1)
+        self._insert_row("c1", month_start, 1000, 2.0, name="活動一")
+        self._insert_row("c1", month_start + timedelta(days=1), 3000, 4.0, name="活動一（改名後）")
+
+        resp = self.client.get(f"/api/meta/brands/{self.brand_id}/spend", headers=self.auth)
+        body = resp.json()
+        self.assertEqual(len(body["campaigns"]), 1, "同一個活動改名不該裂成兩列")
+        row = body["campaigns"][0]
+        self.assertAlmostEqual(row["spend"], 4000.0, places=2)
+        self.assertEqual(row["campaign_name"], "活動一（改名後）", "顯示最後一天用的名稱")
+        self.assertAlmostEqual(row["roas"], 3.5, places=2)  # 花費加權：(1000*2+3000*4)/4000
 
     def test_weighted_total_roas_and_null_propagation(self):
         from datetime import UTC, datetime
