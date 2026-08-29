@@ -187,7 +187,7 @@ async def _db_connection_middleware(request: Request, call_next):
 
 
 @app.get("/")
-async def brand_overview(brand: str | None = None):
+def brand_overview(brand: str | None = None):
     destination = f"/app/brands/{brand}" if brand else "/app/"
     return RedirectResponse(destination, status_code=303)
 
@@ -355,7 +355,7 @@ def _settings_json_data(*, org_id: str, is_owner: bool) -> dict:
 
 
 @app.get("/api/settings")
-async def api_settings_get(request: Request):
+def api_settings_get(request: Request):
     actor = web.require_actor(request)
     return {
         "data": _settings_json_data(org_id=actor.org_id, is_owner=actor.role == "owner"),
@@ -376,7 +376,7 @@ async def api_settings_api_key_post(request: Request):
 
 
 @app.post("/api/settings/api-key/clear-db")
-async def api_settings_api_key_clear_db_post(request: Request):
+def api_settings_api_key_clear_db_post(request: Request):
     """不可逆動作：清空資料庫裡的金鑰。二次確認在前端做（S15.17），這裡跟舊表單路由
     一樣不再另外確認一次。"""
     actor = web.require_actor(request)
@@ -385,7 +385,7 @@ async def api_settings_api_key_clear_db_post(request: Request):
 
 
 @app.post("/api/settings/test-connection")
-async def api_settings_test_connection_post(request: Request):
+def api_settings_test_connection_post(request: Request):
     actor = web.require_actor(request)
     message, kind = _run_ai_test_connection(org_id=actor.org_id)
     return {"message": message, "kind": kind}

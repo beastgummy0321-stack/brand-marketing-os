@@ -21,7 +21,7 @@ def _bad_request(message: str) -> JSONResponse:
 
 
 @router.get("/brands/{brand_id}/orders")
-async def orders(request: Request, brand_id: str, page: int = Query(default=1, ge=1)):
+def orders(request: Request, brand_id: str, page: int = Query(default=1, ge=1)):
     """回傳單一品牌的訂單統計與固定大小的一頁訂單清單。"""
     actor = main_mod.require_actor(request)
     try:
@@ -114,7 +114,7 @@ async def import_orders(request: Request, brand_id: str, drop_file: UploadFile =
 
 
 @router.post("/brands/{brand_id}/orders/sku-cost")
-async def set_sku_cost(request: Request, brand_id: str, payload: dict):
+def set_sku_cost(request: Request, brand_id: str, payload: dict):
     actor = main_mod.require_actor(request)
     try:
         main_mod.require_brand(brand_id, actor)
@@ -132,7 +132,7 @@ async def set_sku_cost(request: Request, brand_id: str, payload: dict):
 
 
 @router.post("/brands/{brand_id}/orders/policy-change")
-async def record_policy_change(request: Request, brand_id: str, payload: dict):
+def record_policy_change(request: Request, brand_id: str, payload: dict):
     actor = main_mod.require_actor(request)
     try:
         main_mod.require_brand(brand_id, actor)
@@ -150,7 +150,7 @@ async def record_policy_change(request: Request, brand_id: str, payload: dict):
 
 
 @router.post("/brands/{brand_id}/orders/channel-entry")
-async def record_channel_entry(request: Request, brand_id: str, payload: dict):
+def record_channel_entry(request: Request, brand_id: str, payload: dict):
     actor = main_mod.require_actor(request)
     try:
         main_mod.require_brand(brand_id, actor)
@@ -177,7 +177,7 @@ async def record_channel_entry(request: Request, brand_id: str, payload: dict):
 
 
 @router.post("/brands/{brand_id}/orders/{order_id}/attribution")
-async def set_attribution(request: Request, brand_id: str, order_id: str, payload: dict):
+def set_attribution(request: Request, brand_id: str, order_id: str, payload: dict):
     actor = main_mod.require_actor(request)
     try:
         main_mod.require_brand(brand_id, actor)

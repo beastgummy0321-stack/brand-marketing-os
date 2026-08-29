@@ -25,7 +25,7 @@ def _today_override():
 
 
 @router.get("/overview")
-async def overview(request: Request):
+def overview(request: Request):
     actor = main_mod.require_actor(request)
     return {
         "data": dashboard_repo.overview(
@@ -35,7 +35,7 @@ async def overview(request: Request):
 
 
 @router.get("/brands/{brand_id}/month")
-async def brand_month(request: Request, brand_id: str):
+def brand_month(request: Request, brand_id: str):
     """票 06：品牌頁本月花費／營收／毛利／ROAS 併桌。"""
     actor = main_mod.require_actor(request)
     main_mod.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404

@@ -154,7 +154,7 @@ def _draft_shape(brand_id: str, draft: dict) -> dict:
 
 
 @router.get("/api/intake/brands/{brand_id}/draft")
-async def draft_get(request: Request, brand_id: str):
+def draft_get(request: Request, brand_id: str):
     """建檔精靈整包讀。收尾那一下（真相卡送出）會在同一個請求裡把草稿標成 completed，
     前端緊接著 refresh 這支——所以跟 review／truth-card 一樣退回去找剛完成的那份，
     不然完成畫面會變成 404「找不到建檔進度」（e2e-adflow finding 1）。"""
@@ -186,14 +186,14 @@ def _research_report_json(report: dict) -> dict:
 
 
 @router.get("/api/intake/brands/{brand_id}/research-reports")
-async def research_report_list(request: Request, brand_id: str):
+def research_report_list(request: Request, brand_id: str):
     actor = require_actor(request)
     require_brand(brand_id, actor)
     return _envelope(ir.list_research_reports(web.conn, brand_id))
 
 
 @router.get("/api/intake/brands/{brand_id}/research-reports/{draft_id}")
-async def research_report_get(request: Request, brand_id: str, draft_id: str):
+def research_report_get(request: Request, brand_id: str, draft_id: str):
     actor = require_actor(request)
     require_brand(brand_id, actor)
     report = ir.get_research_report(web.conn, brand_id, draft_id)
@@ -355,7 +355,7 @@ def _start_paste_fix(brand_id: str) -> None:
 # ---------------------------------------------------------------------------
 
 @router.post("/api/intake/brands/{brand_id}/scan/start")
-async def scan_start(request: Request, brand_id: str):
+def scan_start(request: Request, brand_id: str):
     actor = require_actor(request)
     require_brand(brand_id, actor)
     draft = state.require_draft(brand_id)
@@ -368,7 +368,7 @@ async def scan_start(request: Request, brand_id: str):
 
 
 @router.get("/api/intake/brands/{brand_id}/scan/status")
-async def scan_status(request: Request, brand_id: str):
+def scan_status(request: Request, brand_id: str):
     actor = require_actor(request)
     require_brand(brand_id, actor)
     state.require_draft(brand_id)
@@ -376,7 +376,7 @@ async def scan_status(request: Request, brand_id: str):
 
 
 @router.post("/api/intake/brands/{brand_id}/scan/skip")
-async def scan_skip(request: Request, brand_id: str):
+def scan_skip(request: Request, brand_id: str):
     actor = require_actor(request)
     require_brand(brand_id, actor)
     draft = state.require_draft(brand_id)
@@ -414,7 +414,7 @@ async def scan_products(request: Request, brand_id: str):
 # ---------------------------------------------------------------------------
 
 @router.post("/api/intake/brands/{brand_id}/question/start")
-async def question_start(request: Request, brand_id: str):
+def question_start(request: Request, brand_id: str):
     actor = require_actor(request)
     require_brand(brand_id, actor)
     draft = state.require_draft(brand_id)
@@ -429,7 +429,7 @@ async def question_start(request: Request, brand_id: str):
 
 
 @router.get("/api/intake/brands/{brand_id}/question/status")
-async def question_status(request: Request, brand_id: str):
+def question_status(request: Request, brand_id: str):
     actor = require_actor(request)
     require_brand(brand_id, actor)
     state.require_draft(brand_id)
@@ -469,7 +469,7 @@ async def question_answer(request: Request, brand_id: str):
 
 
 @router.post("/api/intake/brands/{brand_id}/question/skip-remaining")
-async def question_skip_remaining(request: Request, brand_id: str):
+def question_skip_remaining(request: Request, brand_id: str):
     actor = require_actor(request)
     require_brand(brand_id, actor)
     draft = state.require_draft(brand_id)
@@ -521,7 +521,7 @@ async def budget_raise(request: Request, brand_id: str):
 
 
 @router.post("/api/intake/brands/{brand_id}/skip-remaining-ai")
-async def skip_remaining_ai(request: Request, brand_id: str):
+def skip_remaining_ai(request: Request, brand_id: str):
     actor = require_actor(request)
     require_brand(brand_id, actor)
     draft = state.require_draft(brand_id)
@@ -562,7 +562,7 @@ async def handoff_generate(request: Request, brand_id: str):
 
 
 @router.get("/api/intake/brands/{brand_id}/handoff/{provider}")
-async def operator_card(request: Request, brand_id: str, provider: str):
+def operator_card(request: Request, brand_id: str, provider: str):
     if provider not in ("claude", "chatgpt"):
         raise NotFoundKind("操作卡")
     actor = require_actor(request)
@@ -616,7 +616,7 @@ async def paste_resolve_scope(request: Request, brand_id: str):
 
 
 @router.post("/api/intake/brands/{brand_id}/paste/fix/start")
-async def paste_fix_start(request: Request, brand_id: str):
+def paste_fix_start(request: Request, brand_id: str):
     actor = require_actor(request)
     require_brand(brand_id, actor)
     draft = state.require_draft(brand_id)
@@ -627,7 +627,7 @@ async def paste_fix_start(request: Request, brand_id: str):
 
 
 @router.get("/api/intake/brands/{brand_id}/paste/fix/status")
-async def paste_fix_status(request: Request, brand_id: str):
+def paste_fix_status(request: Request, brand_id: str):
     actor = require_actor(request)
     require_brand(brand_id, actor)
     state.require_draft(brand_id)
@@ -648,7 +648,7 @@ def _review_item_json(item: dict, hints: dict) -> dict:
 
 
 @router.get("/api/intake/brands/{brand_id}/review")
-async def review_list(request: Request, brand_id: str):
+def review_list(request: Request, brand_id: str):
     actor = require_actor(request)
     require_brand(brand_id, actor)
     draft = state.require_draft_or_just_completed(brand_id)
@@ -658,7 +658,7 @@ async def review_list(request: Request, brand_id: str):
 
 
 @router.post("/api/intake/brands/{brand_id}/review/pending-all")
-async def review_pending_all(request: Request, brand_id: str):
+def review_pending_all(request: Request, brand_id: str):
     """「剩餘全部先存成待確認」一鍵收工（issue #1）。逐筆走唯一入口 `ir.resolve_item`；
     產品事實還沒指定產品的列會 raise ValueError，跳過留在清單，不整批擋下（S4.62）。"""
     actor = require_actor(request)
@@ -675,7 +675,7 @@ async def review_pending_all(request: Request, brand_id: str):
 
 
 @router.get("/api/intake/brands/{brand_id}/review/{i}")
-async def review_item_get(request: Request, brand_id: str, i: int):
+def review_item_get(request: Request, brand_id: str, i: int):
     actor = require_actor(request)
     require_brand(brand_id, actor)
     draft = state.require_draft_or_just_completed(brand_id)

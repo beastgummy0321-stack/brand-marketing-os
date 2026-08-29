@@ -24,7 +24,7 @@ router = APIRouter()
 
 
 @router.get("/api/jobs/active")
-async def jobs_active(request: Request):
+def jobs_active(request: Request):
     """票 03-1 r1 defect 2：四個 registry 是行程內記憶體、沒有 org_id 可查——過濾改在這裡
     做，每個 job 的 brand_id 反查一次 brand 列（本來就要查來補 brand_name），比對
     `brand["org_id"] == actor.org_id` 才留下。品牌已被刪掉的 job 直接丟棄（不再算得出

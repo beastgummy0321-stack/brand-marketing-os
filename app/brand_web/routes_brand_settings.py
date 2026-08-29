@@ -61,7 +61,7 @@ def _rule_card_json(card: dict) -> dict:
 
 
 @router.get("/api/settings/rule-cards/brands/{brand_id}")
-async def api_rule_cards_get(brand_id: str, request: Request):
+def api_rule_cards_get(brand_id: str, request: Request):
     actor = main_mod.require_actor(request)
     main_mod.require_brand(brand_id, actor)
     cards = [_rule_card_json(c) for c in rule_cards.list_cards(main_mod.conn, brand_id)]
@@ -98,7 +98,7 @@ async def api_rule_cards_save(request: Request, brand_id: str, card_key: str):
 
 
 @router.post("/api/settings/rule-cards/brands/{brand_id}/{card_key}/reset")
-async def api_rule_cards_reset(request: Request, brand_id: str, card_key: str):
+def api_rule_cards_reset(request: Request, brand_id: str, card_key: str):
     actor = main_mod.require_actor(request)
     main_mod.require_brand(brand_id, actor)
     if card_key not in rule_cards.CARDS:

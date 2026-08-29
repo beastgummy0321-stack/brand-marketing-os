@@ -145,7 +145,7 @@ def _product_list_item(brand_id: str, product: dict) -> dict:
 # ---------------------------------------------------------------------------
 
 @router.get("/api/products/brands/{brand_id}")
-async def product_list(request: Request, brand_id: str):
+def product_list(request: Request, brand_id: str):
     actor = require_actor(request)
     require_brand(brand_id, actor)
     products = web.list_products(brand_id)
@@ -302,7 +302,7 @@ async def product_rescan_start(request: Request, brand_id: str, product_id: str)
 
 
 @router.get("/api/products/brands/{brand_id}/products/{product_id}/research-status")
-async def product_research_status(request: Request, brand_id: str, product_id: str):
+def product_research_status(request: Request, brand_id: str, product_id: str):
     actor = require_actor(request)
     brand = require_brand(brand_id, actor)
     require_product(brand, product_id)
@@ -314,7 +314,7 @@ async def product_research_status(request: Request, brand_id: str, product_id: s
 # ---------------------------------------------------------------------------
 
 @router.get("/api/products/brands/{brand_id}/products/{product_id}")
-async def product_detail(request: Request, brand_id: str, product_id: str):
+def product_detail(request: Request, brand_id: str, product_id: str):
     actor = require_actor(request)
     brand = require_brand(brand_id, actor)
     product = require_product(brand, product_id)
@@ -346,7 +346,7 @@ async def product_detail(request: Request, brand_id: str, product_id: str):
 
 
 @router.post("/api/products/brands/{brand_id}/products/{product_id}/archive")
-async def product_archive(request: Request, brand_id: str, product_id: str):
+def product_archive(request: Request, brand_id: str, product_id: str):
     actor = require_actor(request)
     brand = require_brand(brand_id, actor)
     product = require_product(brand, product_id)
@@ -425,7 +425,7 @@ async def product_fact_confirm(request: Request, brand_id: str, product_id: str,
 
 
 @router.post("/api/products/brands/{brand_id}/products/{product_id}/facts/{fact_id}/delete")
-async def product_fact_delete(request: Request, brand_id: str, product_id: str, fact_id: str):
+def product_fact_delete(request: Request, brand_id: str, product_id: str, fact_id: str):
     actor = require_actor(request)
     brand = require_brand(brand_id, actor)
     require_product(brand, product_id)
@@ -475,7 +475,7 @@ async def economics_save(request: Request, brand_id: str, product_id: str):
 
 
 @router.post("/api/products/brands/{brand_id}/products/{product_id}/economics/confirm")
-async def economics_confirm(request: Request, brand_id: str, product_id: str):
+def economics_confirm(request: Request, brand_id: str, product_id: str):
     actor = require_actor(request)
     brand = require_brand(brand_id, actor)
     require_product(brand, product_id)
@@ -493,7 +493,7 @@ async def economics_confirm(request: Request, brand_id: str, product_id: str):
 # ---------------------------------------------------------------------------
 
 @router.get("/api/products/brands/{brand_id}/products/{product_id}/handoff")
-async def handoff_prompt(request: Request, brand_id: str, product_id: str):
+def handoff_prompt(request: Request, brand_id: str, product_id: str):
     actor = require_actor(request)
     brand = require_brand(brand_id, actor)
     product = require_product(brand, product_id)
@@ -534,7 +534,7 @@ async def handoff_submit(request: Request, brand_id: str, product_id: str):
 # ---------------------------------------------------------------------------
 
 @router.get("/api/products/brands/{brand_id}/products/{product_id}/delete")
-async def delete_impact(request: Request, brand_id: str, product_id: str):
+def delete_impact(request: Request, brand_id: str, product_id: str):
     actor = require_actor(request)
     brand = require_brand(brand_id, actor)
     require_product(brand, product_id)

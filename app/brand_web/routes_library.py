@@ -212,7 +212,7 @@ def _brand_profile_shape(brand_id: str, brand: dict) -> dict:
 
 
 @router.get("/api/library/brands/{brand_id}")
-async def library_bundle(request: Request, brand_id: str):
+def library_bundle(request: Request, brand_id: str):
     actor = require_actor(request)
     brand = require_brand(brand_id, actor)
     facts = (repo.list_brand_facts(web.conn, brand_id, status="confirmed")
@@ -278,7 +278,7 @@ async def asset_upload_api(request: Request, brand_id: str, asset_kind: str = Fo
 # ---------------------------------------------------------------------------
 
 @router.post("/brands/{brand_id}/channels/{channel_id}/edit")
-async def channel_edit_api(request: Request, brand_id: str, channel_id: str,
+def channel_edit_api(request: Request, brand_id: str, channel_id: str,
                             channel_type: str = Form(""), name: str = Form(""),
                             identifier: str = Form(""), status: str = Form("active")):
     actor = require_actor(request)
@@ -303,7 +303,7 @@ async def channel_edit_api(request: Request, brand_id: str, channel_id: str,
 
 
 @router.post("/brands/{brand_id}/channels/{channel_id}/delete")
-async def channel_delete_api(request: Request, brand_id: str, channel_id: str):
+def channel_delete_api(request: Request, brand_id: str, channel_id: str):
     actor = require_actor(request)
     require_brand(brand_id, actor)
     try:
@@ -410,7 +410,7 @@ async def customer_voice_submit(request: Request, brand_id: str):
 
 
 @router.get("/api/library/brands/{brand_id}/customer-voice/jobs/{job_key}")
-async def customer_voice_job_status(request: Request, brand_id: str, job_key: str):
+def customer_voice_job_status(request: Request, brand_id: str, job_key: str):
     actor = require_actor(request)
     require_brand(brand_id, actor)
     return _cv_jobs.get(job_key, {"status": "running"})

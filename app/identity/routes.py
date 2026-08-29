@@ -102,12 +102,12 @@ def _send_invite_email(email: str) -> None:
 
 
 @router.get("/health")
-async def health():
+def health():
     return {"ok": True}
 
 
 @router.get("/me", response_model=MeResponse)
-async def me(request: Request):
+def me(request: Request):
     actor = authenticate(request)
     org = repo.get_organisation(web.conn, actor.org_id)
     assert org is not None, f"actor.org_id 指向不存在的組織：{actor.org_id}"
@@ -123,7 +123,7 @@ async def me(request: Request):
 
 
 @router.post("/orgs/current/rename", response_model=OrgOut)
-async def rename_current_org(request: Request, body: RenameOrgRequest):
+def rename_current_org(request: Request, body: RenameOrgRequest):
     actor = authenticate(request)
     _require_owner(actor)
     name = body.name.strip()
@@ -135,7 +135,7 @@ async def rename_current_org(request: Request, body: RenameOrgRequest):
 
 
 @router.post("/invites", response_model=CreateInviteResponse)
-async def create_invite(request: Request, body: CreateInviteRequest):
+def create_invite(request: Request, body: CreateInviteRequest):
     actor = authenticate(request)
     _require_owner(actor)
     email = body.email.strip()
@@ -156,7 +156,7 @@ async def create_invite(request: Request, body: CreateInviteRequest):
 
 
 @router.post("/invites/{token}/accept", response_model=AcceptInviteResponse)
-async def accept_invite(request: Request, token: str):
+def accept_invite(request: Request, token: str):
     actor = authenticate(request)
     invite = repo.get_invite_by_token(web.conn, token)
     if invite is None:
@@ -173,7 +173,7 @@ async def accept_invite(request: Request, token: str):
 
 
 @router.delete("/members/{user_id}")
-async def remove_member(request: Request, user_id: UUID):
+def remove_member(request: Request, user_id: UUID):
     actor = authenticate(request)
     _require_owner(actor)
     target = repo.get_membership(web.conn, actor.org_id, user_id)

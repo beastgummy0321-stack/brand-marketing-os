@@ -133,7 +133,7 @@ async def fact_confirm_api(request: Request, brand_id: str, fact_id: str):
 
 
 @router.post("/api/library/brands/{brand_id}/facts/{fact_id}/delete")
-async def fact_delete_api(request: Request, brand_id: str, fact_id: str):
+def fact_delete_api(request: Request, brand_id: str, fact_id: str):
     actor = require_actor(request)
     require_brand(brand_id, actor)
     fact = repo.get_brand_fact(web.conn, brand_id, fact_id)
@@ -202,7 +202,7 @@ async def rule_update_api(request: Request, brand_id: str, rule_id: str):
 
 
 @router.post("/api/library/brands/{brand_id}/rules/{rule_id}/delete")
-async def rule_delete_api(request: Request, brand_id: str, rule_id: str):
+def rule_delete_api(request: Request, brand_id: str, rule_id: str):
     actor = require_actor(request)
     require_brand(brand_id, actor)
     try:
@@ -268,7 +268,7 @@ async def claim_update_api(request: Request, brand_id: str, claim_id: str):
 
 
 @router.post("/api/library/brands/{brand_id}/claims/{claim_id}/delete")
-async def claim_delete_api(request: Request, brand_id: str, claim_id: str):
+def claim_delete_api(request: Request, brand_id: str, claim_id: str):
     actor = require_actor(request)
     require_brand(brand_id, actor)
     try:
@@ -281,7 +281,7 @@ async def claim_delete_api(request: Request, brand_id: str, claim_id: str):
 # ---- 官方素材（上傳已有 /api/brands/{id}/assets，這裡補刪除）----
 
 @router.post("/api/library/brands/{brand_id}/assets/{asset_id}/delete")
-async def asset_delete_api(request: Request, brand_id: str, asset_id: str):
+def asset_delete_api(request: Request, brand_id: str, asset_id: str):
     actor = require_actor(request)
     require_brand(brand_id, actor)
     asset = repo.get_official_asset(web.conn, brand_id, asset_id)
@@ -352,7 +352,7 @@ async def channel_update_api(request: Request, brand_id: str, channel_id: str):
 
 
 @router.post("/api/library/brands/{brand_id}/channels/{channel_id}/delete")
-async def channel_delete_json_api(request: Request, brand_id: str, channel_id: str):
+def channel_delete_json_api(request: Request, brand_id: str, channel_id: str):
     actor = require_actor(request)
     require_brand(brand_id, actor)
     try:
@@ -403,7 +403,7 @@ async def brand_update_api(request: Request, brand_id: str):
 # `customer_voice_archive_post`／`customer_voice_delete_post`）的 /api 對應版本 ----
 
 @router.post("/api/library/brands/{brand_id}/customer-voice/{cv_id}/archive")
-async def customer_voice_archive_api(request: Request, brand_id: str, cv_id: str):
+def customer_voice_archive_api(request: Request, brand_id: str, cv_id: str):
     actor = require_actor(request)
     require_brand(brand_id, actor)
     voice = repo.get_customer_voice(web.conn, brand_id, cv_id)
@@ -415,7 +415,7 @@ async def customer_voice_archive_api(request: Request, brand_id: str, cv_id: str
 
 
 @router.post("/api/library/brands/{brand_id}/customer-voice/{cv_id}/delete")
-async def customer_voice_delete_api(request: Request, brand_id: str, cv_id: str):
+def customer_voice_delete_api(request: Request, brand_id: str, cv_id: str):
     actor = require_actor(request)
     require_brand(brand_id, actor)
     voice = repo.get_customer_voice(web.conn, brand_id, cv_id)

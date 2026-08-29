@@ -53,7 +53,7 @@ def _accounts_response(org_id: str) -> AccountsResponse:
 
 
 @router.post("/token", response_model=AccountsResponse)
-async def connect_token(request: Request, body: TokenRequest):
+def connect_token(request: Request, body: TokenRequest):
     actor = web.require_actor(request)
     token = body.token.strip()
     if not token:
@@ -72,13 +72,13 @@ async def connect_token(request: Request, body: TokenRequest):
 
 
 @router.get("/accounts", response_model=AccountsResponse)
-async def list_accounts(request: Request):
+def list_accounts(request: Request):
     actor = web.require_actor(request)
     return _accounts_response(actor.org_id)
 
 
 @router.post("/brands/{brand_id}/accounts/{ad_account_id}")
-async def bind_account(request: Request, brand_id: str, ad_account_id: str):
+def bind_account(request: Request, brand_id: str, ad_account_id: str):
     actor = web.require_actor(request)
     web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
     account = repo.get_account(web.conn, actor.org_id, ad_account_id)
@@ -95,7 +95,7 @@ async def bind_account(request: Request, brand_id: str, ad_account_id: str):
 
 
 @router.delete("/brands/{brand_id}/accounts/{ad_account_id}")
-async def unbind_account(request: Request, brand_id: str, ad_account_id: str):
+def unbind_account(request: Request, brand_id: str, ad_account_id: str):
     actor = web.require_actor(request)
     web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
     deleted = repo.unbind(web.conn, actor.org_id, brand_id, ad_account_id)
@@ -127,7 +127,7 @@ class SpendSummaryResponse(BaseModel):
 
 
 @router.get("/brands/{brand_id}/spend", response_model=SpendSummaryResponse)
-async def brand_spend(request: Request, brand_id: str):
+def brand_spend(request: Request, brand_id: str):
     """本月（今天所在的日曆月，[月初, 下月初) 半開區間）逐活動花費／成效＋一列總計，
     見 repo.spend_summary 的總 ROAS 算法（花費加權，任一列未追蹤整組回 None）。"""
     actor = web.require_actor(request)

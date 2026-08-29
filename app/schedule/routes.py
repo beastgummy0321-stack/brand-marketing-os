@@ -457,35 +457,35 @@ def _run_bind(conn, brand_id: str, org_id: str) -> dict:
 
 
 @router.get("/brands/{brand_id}")
-async def get_schedule(request: Request, brand_id: str):
+def get_schedule(request: Request, brand_id: str):
     actor = web.require_actor(request)
     web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
     return _brand_response(web.conn, brand_id, actor.org_id)
 
 
 @router.post("/brands/{brand_id}/plans")
-async def create_plan(request: Request, brand_id: str, body: PlanRequest):
+def create_plan(request: Request, brand_id: str, body: PlanRequest):
     actor = web.require_actor(request)
     web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
     return _run_plan(web.conn, brand_id, actor.org_id, body)
 
 
 @router.post("/brands/{brand_id}/tree")
-async def create_tree(request: Request, brand_id: str, body: TreeRequest):
+def create_tree(request: Request, brand_id: str, body: TreeRequest):
     actor = web.require_actor(request)
     web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
     return _run_tree(web.conn, brand_id, actor.org_id, body)
 
 
 @router.post("/brands/{brand_id}/tree/bind")
-async def bind_tree(request: Request, brand_id: str):
+def bind_tree(request: Request, brand_id: str):
     actor = web.require_actor(request)
     web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
     return _run_bind(web.conn, brand_id, actor.org_id)
 
 
 @router.post("/brands/{brand_id}/reject")
-async def create_reject(request: Request, brand_id: str, body: RejectRequest):
+def create_reject(request: Request, brand_id: str, body: RejectRequest):
     actor = web.require_actor(request)
     web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
     return _run_reject(web.conn, brand_id, actor, body)

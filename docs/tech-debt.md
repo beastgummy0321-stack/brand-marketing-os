@@ -131,3 +131,30 @@ baseline migration，`-n auto` 下多個 worker 同時建 procrastinate 的 enum
 
 修法尚未決定（候選：建 type 時吃掉 DuplicateObject、或把 procrastinate 的 schema 建置移到
 一次性的 session fixture）。修之前，合併前那一輪紅了先重跑一次確認是不是這條，再判斷。
+
+## 五、路由處理器不得是「`async def` 但從不 `await`」（2026-08-29 全站修正，無機器閘門）
+
+**已修**：全站 75 個路由處理器拿掉 `async`。留下的規則是給未來的人看的：
+
+> 路由處理器如果體內從不 `await`，就宣告成 `def`，不要宣告成 `async def`。
+
+FastAPI 的規則：`def` 會被丟進執行緒池，`async def` 跑在 uvicorn 自己的 event loop 上。一個
+從不 await 的 `async def` 拿不到任何非同步的好處，卻把自己的阻塞時間變成**全站停頓**——
+2026-08-29 實測，排程端點那 170～300 秒的 LLM 呼叫期間，整個網站對**所有組織**都沒有反應，
+不是只有按下按鈕的那個人在等。多租戶下這代表 A 組織的一次排程會凍住 B 組織的每一個請求。
+
+搬進執行緒池不影響連線綁定：`app/core/db.py:160` 的 `_current` 是 ContextVar，Starlette 的
+執行緒池會複製 context。真正被 await 的東西（lifespan 的 `start_worker`／`stop_worker`、
+`@app.exception_handler` 註冊的處理器）沒有路由裝飾器，本來就不在這條規則範圍內。
+
+**為什麼這條沒有機器閘門**——寫了，然後刪掉了，兩個獨立的理由：
+
+1. `TestRatioTest` 直接擋下來。天花板 0.858，動工前已經是 0.857，只剩約 40 行測試碼的空間；
+   最精簡的版本仍然超標。那個閘門的職責就是拒絕「產品碼加一行、測試碼加五十行」，它做對了，
+   而它明文只准往下調，不准為了讓自己過而放寬。
+2. 憲章：「測試必須說出它保護什麼：金流、租戶隔離、API 契約、資料正確性。其餘一律不寫。」
+   全站反應速度可以硬拗成租戶隔離（A 組織凍住 B 組織），但那是硬拗。
+
+所以這條活在這裡而不是活在測試裡。要抓回歸，一行 grep 就夠：
+
+    git grep -n "^async def " -- app/ | # 再確認每個都真的有 await
