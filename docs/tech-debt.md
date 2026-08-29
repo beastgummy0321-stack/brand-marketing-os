@@ -107,3 +107,27 @@
 
 `brand.market_region` 收 ISO 3166-1 alpha-2，但方法論檔目前只有 `TW` 有對應內容。
 待建置範圍與細節記在 `app/methodology/README.md` 的「待建置」一節，不在此處重複。
+
+## 四、全套平行測試會隨機紅：`procrastinate_job_status` 競態（2026-08-29 盤點）
+
+`uv run pytest app/tests -q -n auto --dist loadfile` **每跑一次紅在不同的模組**，錯誤永遠是
+同一句：
+
+```
+psycopg.errors.DuplicateObject: type "procrastinate_job_status" already exists
+```
+
+被打到的模組隨機（實測四次分別是 `test_methodology.py`／`test_capacity_check.py`／
+`test_main_dotenv.py`／`test_inbox_api.py`＋`test_brand_delete_routes.py`），**單獨跑一定綠**，
+再跑一次整套也可能整套綠。
+
+**已驗證是既有問題，不是哪一張票帶進來的**：2026-08-29 在乾淨的 worktree（`git worktree add`
+停在 `4777392`，即檔期票 06／09／10 動工前）跑同一條指令，一樣紅、一樣紅在又一組不同的模組。
+
+成因方向：`app/tests/conftest.py` 每個測試模組建自己的 schema（`t_<module>_<pid>`）並灌
+baseline migration，`-n auto` 下多個 worker 同時建 procrastinate 的 enum type 會撞在一起。
+沒有機器閘門守這件事——**閘門本身就是那條指令**，所以它隨機紅等於「合併前的最後一道關卡
+不可信」，人只能靠重跑判斷真假。
+
+修法尚未決定（候選：建 type 時吃掉 DuplicateObject、或把 procrastinate 的 schema 建置移到
+一次性的 session fixture）。修之前，合併前那一輪紅了先重跑一次確認是不是這條，再判斷。
