@@ -313,6 +313,7 @@ class ImportCycleScanTest(unittest.TestCase):
 # 「只剩 brand_intelligence 那三條」的排法，其餘七個套件零違規。
 LAYER_ORDER = [
     "app.core",                # 基礎設施：DB、migration、audit、interrupts
+    "app.background",          # 票 schedule-01：procrastinate App，只依賴 app.core（db.dsn()）
     "app.brand_intelligence",  # 品牌永久層
     "app.llm",                 # AI gateway 與 prompt 組裝
     "app.shared",              # web 骨架（app、templates、共用 ctx）
@@ -528,6 +529,7 @@ class TestRatioTest(unittest.TestCase):
 # 是讓成長出現在 diff 裡有人看得到。廣告模組會在約 2,000 行撞上它，而不是 21,595 行。
 KNOWN_MODULE_SIZES = {
     "app": 519,
+    "app/background": 93,
     "app/brand_intelligence": 2634,
     "app/brand_web": 2155,
     "app/core": 2148,
