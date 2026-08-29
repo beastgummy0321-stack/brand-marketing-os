@@ -17,6 +17,7 @@ import app.shared.web as web
 from app.brand_intelligence import repository as repo
 from app.brand_web import report_service
 from app.brand_web import routes as report
+from app.brand_web import routes_report_api as report_api
 from app.core.db import DEV_ORG_ID  # noqa: E402
 from app.llm import providers
 
@@ -204,6 +205,42 @@ class BrandReportHttpTest(unittest.TestCase):
         self.assertTrue(ok, error)
         self.assertTrue(report_service.recent(bid))
         self.assertEqual(len(fake.calls), 1)
+
+
+class ReportBackgroundJobTest(unittest.TestCase):
+    """票 dead-code-sweep 02：`brand_report_done` 沒登記在 CATEGORIES 時，`_notify()` 會在
+    try 區塊外炸 ValueError，執行緒死掉、job 狀態永遠卡在 running（GET 一直顯示「正在整理
+    五章」、POST 一直擋 400）。這裡直接呼叫 `_run_report`（不經執行緒，同步跑，斷言才不會
+    flaky），驗證成功／失敗都能把 job 狀態帶出 running。"""
+
+    def setUp(self):
+        self.brand = repo.create_brand(web.conn, name="晨露茶飲-背景工作", client_name=None,
+                                        actor=ACTOR, org_id=DEV_ORG_ID)
+        report_api._report_jobs.clear()
+
+    def tearDown(self):
+        report_api._report_jobs.clear()
+
+    def test_success_reaches_done(self):
+        with mock.patch.object(report_service, "generate", return_value=(True, None)):
+            report_api._run_report(self.brand["id"], ACTOR)
+        state = report_api._report_jobs.get(self.brand["id"], {})
+        self.assertEqual(state.get("status"), "done")
+
+    def test_failure_reaches_failed_with_message(self):
+        with mock.patch.object(report_service, "generate", return_value=(False, "provider 逾時")):
+            report_api._run_report(self.brand["id"], ACTOR)
+        state = report_api._report_jobs.get(self.brand["id"], {})
+        self.assertEqual(state.get("status"), "failed")
+        self.assertIn("provider 逾時", state.get("message", ""))
+
+    def test_long_failure_message_does_not_raise_on_notify(self):
+        """background_job.notify 截斷到 MAX_MESSAGE_LEN，長失敗訊息不該讓 enqueue 的長度檢查炸開。"""
+        long_message = "發生錯誤" * 30
+        with mock.patch.object(report_service, "generate", return_value=(False, long_message)):
+            report_api._run_report(self.brand["id"], ACTOR)  # 不該 raise
+        state = report_api._report_jobs.get(self.brand["id"], {})
+        self.assertEqual(state.get("status"), "failed")
 
 
 if __name__ == "__main__":

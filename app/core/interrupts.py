@@ -59,6 +59,9 @@ CATEGORIES = {
     "product_research_done": {"severity": "informational", "label": "產品調研完成"},
     # 建檔精靈初掃／貼回修格式背景工作，完成／失敗都進這裡；出下一題不進（票 B3-intake）。
     "intake_ai_step_done": {"severity": "informational", "label": "建檔精靈 AI 步驟完成"},
+    # 顧問分析報告背景生成，完成／失敗都進這裡（票 dead-code-sweep 02：漏登記導致背景
+    # 執行緒在 _notify() 炸 ValueError、job 狀態卡在 running 永遠不會變成 done/failed）。
+    "brand_report_done": {"severity": "informational", "label": "顧問分析報告完成"},
     "personas_ready": {"severity": "informational", "label": "人物誌好了"},
     # 排期到期提醒：選了間歇／脈動策略時，到了要中途調整日預算的那天提醒一次（票
     # B4R-warroom-redesign，S8R.9-11）。
