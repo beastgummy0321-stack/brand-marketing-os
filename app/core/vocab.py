@@ -36,6 +36,13 @@ RULE_TYPES = [
     ("asset_usage", "素材使用"),
     ("platform_spec", "平台規格"),
     ("policy", "政策"),
+    # 票 10-feedback-entries（ADR 0037）：檔期排程模組的偏好類別，soft 回饋專用；
+    # hard 回饋一律強制 forbidden_word，不接受下面這五種。
+    ("angle", "切角"),
+    ("audience", "受眾"),
+    ("product_pick", "商品選擇"),
+    ("budget_split", "預算分配"),
+    ("other", "其他"),
 ]
 
 CLAIM_TYPES = [

@@ -125,11 +125,11 @@ class RuleCardValueTest(unittest.TestCase):
         self.assertEqual(
             rule_cards.get_value(self.conn, BID_A, "rule_prompt_cap", "max_active_rules"), 20.0)
 
-    def test_rule_expiry_default_matches_adr_0012(self):
-        """票 01-rule-expiry-reconfirm：規則重新確認門檻，系統預設 6 期（ADR 0012 第一節），
-        沒有種子 migration，靠 CARDS default 落地就夠。"""
+    def test_rule_expiry_default_matches_adr_0037(self):
+        """票 10-feedback-entries：規則重新確認門檻，系統預設 90 天（ADR 0037，取代
+        ADR 0012 第一節原本的「6 期」單位），沒有種子 migration，靠 CARDS default 落地就夠。"""
         self.assertEqual(
-            rule_cards.get_value(self.conn, BID_A, "rule_expiry", "reconfirm_cycles"), 6.0)
+            rule_cards.get_value(self.conn, BID_A, "rule_expiry", "reconfirm_days"), 90.0)
 
     # -- 改值即時生效 ---------------------------------------------------------
 
