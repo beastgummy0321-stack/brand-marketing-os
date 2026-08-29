@@ -33,7 +33,7 @@ class RuleCardsApiTest(unittest.TestCase):
         self.assertEqual(set(body["data"].keys()), {"brand_id", "cards"})
         self.assertEqual(body["data"]["brand_id"], self.bid)
         cards = body["data"]["cards"]
-        self.assertEqual(len(cards), 8)
+        self.assertEqual(len(cards), 9)  # 票 07 新增 schedule_budget
         card = next(c for c in cards if c["key"] == "pacing")
         self.assertEqual(set(card.keys()), {"key", "title", "description", "fields"})
         field = card["fields"][0]

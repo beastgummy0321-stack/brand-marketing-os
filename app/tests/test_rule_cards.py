@@ -82,7 +82,7 @@ class RuleCardValueTest(unittest.TestCase):
 
     def test_list_cards_includes_human_readable_metadata(self):
         cards = rule_cards.list_cards(self.conn, BID_A)
-        self.assertEqual(len(cards), 8)
+        self.assertEqual(len(cards), 9)  # 票 07 新增 schedule_budget
         by_key = {c["key"]: c for c in cards}
         card = by_key["ad_creative_fatigue"]
         self.assertIn("素材疲勞", card["title"])

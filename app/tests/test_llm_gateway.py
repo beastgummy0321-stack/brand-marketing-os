@@ -256,7 +256,7 @@ class TaskModelThinkingDefaultsTest(unittest.TestCase):
         return row, provider
 
     def test_resolve_thinking_uses_task_default(self):
-        self.assertEqual(providers.resolve_thinking(task_type="campaign_plan"), "high")
+        self.assertEqual(providers.resolve_thinking(task_type="schedule_plan"), "high")
         self.assertEqual(providers.resolve_thinking(task_type="creative_batch"), "medium")
         self.assertEqual(providers.resolve_thinking(task_type="intake_scan"), "low")
 
@@ -266,10 +266,10 @@ class TaskModelThinkingDefaultsTest(unittest.TestCase):
 
     def test_resolve_thinking_invalid_override_falls_back_without_error(self):
         # 表單被動手腳送了非法值，不噴錯，退回任務預設
-        self.assertEqual(providers.resolve_thinking("亂打的值", task_type="campaign_plan"), "high")
+        self.assertEqual(providers.resolve_thinking("亂打的值", task_type="schedule_plan"), "high")
 
     def test_gateway_uses_task_default_thinking_when_no_override(self):
-        _row, provider = self._run("campaign_plan")
+        _row, provider = self._run("schedule_plan")
         self.assertEqual(provider.calls[0]["effort"], "high")
         _row, provider = self._run("intake_scan")
         self.assertEqual(provider.calls[0]["effort"], "low")
@@ -285,11 +285,11 @@ class TaskModelThinkingDefaultsTest(unittest.TestCase):
 
     def test_request_override_model_affects_only_one_call_then_reverts(self):
         with providers.request_overrides(model="claude-sonnet-5"):
-            row, _provider = self._run("campaign_plan")
+            row, _provider = self._run("schedule_plan")
         self.assertEqual(row["model"], "claude-sonnet-5")
 
-        # 下一次呼叫回到全域設定（campaign_plan 本身沒有指定模型預設）
-        row2, _provider2 = self._run("campaign_plan")
+        # 下一次呼叫回到全域設定（schedule_plan 本身沒有指定模型預設）
+        row2, _provider2 = self._run("schedule_plan")
         self.assertEqual(row2["model"], "claude-opus-5")
 
     def test_request_override_invalid_thinking_ignored_not_raised(self):
@@ -302,24 +302,24 @@ class TaskModelThinkingDefaultsTest(unittest.TestCase):
 
     def test_resolve_model_invalid_override_falls_back_without_error(self):
         self.assertEqual(
-            providers.resolve_model("hacked-model-xyz", task_type="campaign_plan", conn=self.conn,
+            providers.resolve_model("hacked-model-xyz", task_type="schedule_plan", conn=self.conn,
                                     brand_id=self.brand["id"]),
             "claude-opus-5")
 
     def test_resolve_model_valid_override_still_used(self):
         self.assertEqual(
-            providers.resolve_model("claude-sonnet-5", task_type="campaign_plan", conn=self.conn,
+            providers.resolve_model("claude-sonnet-5", task_type="schedule_plan", conn=self.conn,
                                     brand_id=self.brand["id"]),
             "claude-sonnet-5")
 
     def test_request_override_invalid_model_ignored_falls_back_without_error(self):
         with providers.request_overrides(model="hacked-model-xyz"):
-            row, _provider = self._run("campaign_plan")
+            row, _provider = self._run("schedule_plan")
         self.assertEqual(row["model"], "claude-opus-5")
 
     def test_request_override_valid_model_still_effective(self):
         with providers.request_overrides(model="claude-fable-5"):
-            row, _provider = self._run("campaign_plan")
+            row, _provider = self._run("schedule_plan")
         self.assertEqual(row["model"], "claude-fable-5")
 
 

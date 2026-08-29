@@ -153,7 +153,7 @@ class GatewayWebSearchCostTest(unittest.TestCase):
     def _run(self, provider, tools=None):
         return gateway.run_task(
             self.conn, provider,
-            brand_id=self.brand["id"], task_type="campaign_plan",
+            brand_id=self.brand["id"], task_type="schedule_plan",
             prompt_template_id="tpl_test", prompt_template_version="v1",
             system="系統提示", messages=[{"role": "user", "content": "測試"}],
             context=gateway.TaskContext(

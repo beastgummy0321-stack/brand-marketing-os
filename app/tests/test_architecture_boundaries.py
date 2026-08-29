@@ -322,6 +322,8 @@ LAYER_ORDER = [
                                 # （見 require_actor()），這裡的靜態掃描看不到，不算環
     "app.meta",                # 票 04：Meta 廣告帳戶連接（Graph API、Vault 權杖），依賴
                                 # app.core 與 app.shared；本身尚無人依賴它
+    "app.schedule",            # 票 07：檔期規劃最薄路徑，依賴 app.core／app.llm／app.shared／
+                                # app.brand_intelligence；本身尚無人依賴它
     "app.intake",              # 建檔精靈
     "app.brand_web",           # 品牌智庫 web 路由
     "app.orders",              # 訂單
@@ -530,7 +532,7 @@ class TestRatioTest(unittest.TestCase):
 # 是頂層的 .py（`main.py` 組裝根等）。**允許調高，但必須改這張表**——重點不是禁止成長，
 # 是讓成長出現在 diff 裡有人看得到。廣告模組會在約 2,000 行撞上它，而不是 21,595 行。
 KNOWN_MODULE_SIZES = {
-    "app": 520,
+    "app": 521,  # 票 07：app/main.py 註冊迴圈多一行 schedule_module
     "app/background": 93,
     "app/brand_intelligence": 2634,
     "app/brand_web": 2155,
@@ -541,6 +543,7 @@ KNOWN_MODULE_SIZES = {
     "app/llm": 1271,
     "app/meta": 378,
     "app/orders": 1409,
+    "app/schedule": 286,
     "app/shared": 450,
     "app/tools": 318,
 }

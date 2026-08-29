@@ -63,7 +63,7 @@ EFFORT_SUPPORTED_MODELS = {"claude-opus-5", "claude-sonnet-5", "claude-fable-5"}
 # （settings 頁「使用的模型」）——目前只有思考等級依任務性質分檔，模型維持全站一致，
 # 需要哪個任務換模型時再回來改這裡，不用動呼叫端。
 TASK_TYPE_LABELS = {
-    "campaign_plan": "檔期規劃（出方案）",
+    "schedule_plan": "檔期規劃（出方案）",
     "creative_batch": "素材生成（整批）",
     "creative_backfill": "素材生成（補打缺型別）",
     "creative_rewrite": "素材生成（單則改寫）",
@@ -83,7 +83,7 @@ TASK_TYPE_LABELS = {
 
 TASK_DEFAULTS = {
     # 規劃：較高思考
-    "campaign_plan": {"model": None, "thinking": "high"},
+    "schedule_plan": {"model": None, "thinking": "high"},
     # 素材文案生成：中等思考
     "creative_batch": {"model": None, "thinking": "medium"},
     "creative_backfill": {"model": None, "thinking": "medium"},
