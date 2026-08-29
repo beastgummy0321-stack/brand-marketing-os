@@ -6,7 +6,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 SOURCES = [
-    ROOT / "app" / "core" / "prototype_phase.py",
     ROOT / "app" / "brand_web" / "routes_library.py",
     ROOT / "app" / "brand_web" / "routes_products.py",
     ROOT / "app" / "intake" / "routes_api.py",

@@ -41,7 +41,6 @@ def orders(request: Request, brand_id: str, page: int = Query(default=1, ge=1)):
             "total_amount": row["total_amount"],
             "order_status": row["order_status"],
             "voucher_code": row["voucher_code"],
-            "attribution_override": row["attribution_override"],
         }
         for row in rows
     ]
@@ -174,21 +173,3 @@ def record_channel_entry(request: Request, brand_id: str, payload: dict):
     except ValueError as exc:
         return _bad_request(str(exc))
     return {"ok": True, "message": "已記下這筆通路營收。"}
-
-
-@router.post("/brands/{brand_id}/orders/{order_id}/attribution")
-def set_attribution(request: Request, brand_id: str, order_id: str, payload: dict):
-    actor = main_mod.require_actor(request)
-    try:
-        main_mod.require_brand(brand_id, actor)
-    except main_mod.NotFoundKind:
-        return JSONResponse({"detail": "找不到品牌"}, status_code=404)
-    excluded = bool(payload.get("excluded", False))
-    try:
-        orders_repo.set_attribution_override(
-            main_mod.conn, brand_id, order_id, excluded, actor=str(actor.user_id),
-        )
-    except ValueError as exc:
-        return _bad_request(str(exc))
-    message = "已標記為非廣告來源，淨歸因不會算進去。" if excluded else "已取消標記，恢復計入廣告歸因。"
-    return {"ok": True, "message": message}

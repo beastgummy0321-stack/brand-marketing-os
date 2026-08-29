@@ -30,7 +30,7 @@ TEST_KEY = "sk-ant-test-0000-1234abcd"
 
 SETTINGS_DATA_KEYS = {
     "masked_key", "api_key_source", "db_key_present", "model_choices", "current_model",
-    "task_model_thinking_table", "creative_root", "prompt_header", "intake_budget",
+    "task_model_thinking_table", "creative_root", "intake_budget",
     "ai_key_source", "ai_cap_applies", "ai_monthly_spend", "ai_monthly_cost_limit", "is_owner",
 }
 
@@ -153,17 +153,6 @@ class SettingsApiTest(unittest.TestCase):
         resp = self.client.post("/api/settings/creative-root", json={"creative_root": "素材"})
         self.assertEqual(resp.status_code, 400)
         self.assertIn("完整的資料夾路徑", resp.json()["error"])
-
-    # -- POST /api/settings/prompt-header -------------------------------------------
-
-    def test_save_prompt_header(self):
-        resp = self.client.post(
-            "/api/settings/prompt-header", json={"prompt_header": "一律平面實填"})
-        self.assertEqual(resp.status_code, 200)
-        self.assertEqual(
-            coresettings.get_setting(
-                web.conn, coresettings.IMAGE_PROMPT_HEADER_SETTING, org_id=coredb.DEV_ORG_ID),
-            "一律平面實填")
 
     # -- 測試連線：假供應商，不打真網路 ------------------------------------------------
 
@@ -300,16 +289,6 @@ class SettingsApiTest(unittest.TestCase):
         body = resp.json()
         self.assertEqual(body["kind"], "danger")
         self.assertIn("金鑰錯誤", body["message"])
-
-    def test_save_prompt_header_can_be_saved_empty(self):
-        """留白代表整組複製時不加開頭那一行，不是輸入錯誤（原
-        test_prompt_header_can_be_saved_empty）。"""
-        coresettings.set_setting(web.conn, coresettings.IMAGE_PROMPT_HEADER_SETTING, "舊的開頭", org_id=coredb.DEV_ORG_ID)
-        resp = self.client.post("/api/settings/prompt-header", json={"prompt_header": "  "})
-        self.assertEqual(resp.status_code, 200)
-        self.assertEqual(
-            coresettings.get_setting(
-                web.conn, coresettings.IMAGE_PROMPT_HEADER_SETTING, org_id=coredb.DEV_ORG_ID), "")
 
     def test_save_budget_non_numeric_and_negative_rejected(self):
         """0 之外的無效輸入（非數字／負數）也要擋（原 test_budget_validation_and_save）。"""

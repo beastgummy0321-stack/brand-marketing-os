@@ -63,7 +63,7 @@ class OrdersApiTest(unittest.TestCase):
         self.assertEqual(len(body["orders"]["items"]), 1)
         self.assertEqual(set(body["orders"]["items"][0]), {
             "id", "order_number", "order_date", "total_amount", "order_status",
-            "voucher_code", "attribution_override",
+            "voucher_code",
         })
         self.assertEqual(set(body["summary"]), {
             "since", "until", "has_history", "order_count", "net_revenue",
@@ -175,28 +175,6 @@ class OrdersApiTest(unittest.TestCase):
         body = self.client.get(f"/api/brands/{self.brand_id}/orders").json()
         self.assertEqual(len(body["channel_entries"]), 1, "被擋下的那筆不該落地")
 
-    def test_attribution_returns_exact_success_and_failure_messages(self):
-        order_id = self.client.get(f"/api/brands/{self.brand_id}/orders").json()["orders"]["items"][0]["id"]
-        response = self.client.post(
-            f"/api/brands/{self.brand_id}/orders/{order_id}/attribution",
-            json={"excluded": True},
-        )
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["ok"], True)
-        restored = self.client.post(
-            f"/api/brands/{self.brand_id}/orders/{order_id}/attribution",
-            json={"excluded": False},
-        )
-        self.assertEqual(restored.status_code, 200)
-        self.assertEqual(restored.json()["ok"], True)
-
-        invalid = self.client.post(
-            f"/api/brands/{self.brand_id}/orders/missing/attribution",
-            json={"excluded": True},
-        )
-        self.assertEqual(invalid.status_code, 400)
-        self.assertEqual(set(invalid.json()), {"detail"})
-
     def test_shopee_import_reports_imported_and_updated_counts(self):
         result = SimpleNamespace(
             kind="shopee_report", errors=[],
@@ -232,10 +210,6 @@ class OrdersApiTest(unittest.TestCase):
                 f"/api/brands/{missing_brand}/orders/channel-entry",
                 json={"channel": "physical_store", "entry_date": "2026-08-18",
                       "revenue": "", "quantity": "24", "note": ""},
-            ),
-            self.client.post(
-                f"/api/brands/{missing_brand}/orders/missing/attribution",
-                json={"excluded": True},
             ),
         ]
         for response in responses:

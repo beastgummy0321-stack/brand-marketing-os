@@ -18,18 +18,13 @@ export function InboxItemCard({
   resolving = false,
   error,
   onResolve,
-  onOpenPrototypePanel,
 }: {
   item: InboxItem;
   variant: "open" | "done";
   resolving?: boolean;
   error?: string;
   onResolve?: (id: string) => void;
-  /** category === "prototype_phase_ended" 時，「詳情」開側板而不是外部連結（S2.7 唯一例外）。 */
-  onOpenPrototypePanel?: () => void;
 }) {
-  const isPrototypeDetail = item.category === "prototype_phase_ended";
-
   return (
     <li className="flex flex-col gap-2 rounded-md border border-border bg-card p-4 shadow-[var(--shadow-card)]">
       <div className="flex items-start justify-between gap-3">
@@ -49,23 +44,14 @@ export function InboxItemCard({
           </span>
           <span className="text-muted-foreground">{item.category_label}</span>
         </div>
-        {item.action_url &&
-          (isPrototypeDetail ? (
-            <button
-              type="button"
-              onClick={onOpenPrototypePanel}
-              className="shrink-0 text-sm text-primary underline-offset-4 hover:underline"
-            >
-              詳情
-            </button>
-          ) : (
-            <a
-              href={item.action_url}
-              className="shrink-0 text-sm text-primary underline-offset-4 hover:underline"
-            >
-              詳情
-            </a>
-          ))}
+        {item.action_url && (
+          <a
+            href={item.action_url}
+            className="shrink-0 text-sm text-primary underline-offset-4 hover:underline"
+          >
+            詳情
+          </a>
+        )}
       </div>
 
       <p className="text-sm text-foreground">{item.message}</p>

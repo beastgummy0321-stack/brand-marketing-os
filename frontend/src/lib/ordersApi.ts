@@ -31,7 +31,6 @@ export interface OrderListItem {
   total_amount: number | null;
   order_status: string | null;
   voucher_code: string | null;
-  attribution_override: string | null;
 }
 
 export interface PolicyChange {
@@ -128,8 +127,3 @@ export function createChannelEntry(
   });
 }
 
-export function setOrderAttribution(brandId: string, orderId: string, excluded: boolean): Promise<string> {
-  return postOrderAction(actionPath(brandId, `/${encodeURIComponent(orderId)}/attribution`), JSON.stringify({ excluded }), {
-    "content-type": "application/json",
-  });
-}

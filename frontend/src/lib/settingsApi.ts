@@ -25,7 +25,6 @@ export interface SettingsData {
   current_model: string;
   task_model_thinking_table: TaskModelThinkingRow[];
   creative_root: string;
-  prompt_header: string;
   intake_budget: number;
   /** 誰的金鑰付錢（票 04-1a，D4-3）：'platform'＝操作者付錢（今天預設）；
    * 'own'＝組織自己的金鑰付錢，月費上限只是參考數字（ai_cap_applies＝false）。 */
@@ -106,10 +105,6 @@ export function saveModel(llmModel: string): Promise<void> {
 
 export function saveCreativeRoot(creativeRoot: string): Promise<void> {
   return postSettings("creative-root", { creative_root: creativeRoot });
-}
-
-export function savePromptHeader(promptHeader: string): Promise<void> {
-  return postSettings("prompt-header", { prompt_header: promptHeader });
 }
 
 export function saveBudget(intakeBudget: number): Promise<void> {

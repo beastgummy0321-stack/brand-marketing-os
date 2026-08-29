@@ -277,12 +277,6 @@ def _write_creative_root(raw_root: str, *, org_id: str) -> str | None:
     return None
 
 
-def _write_prompt_header(prompt_header: str, *, org_id: str) -> None:
-    coresettings.set_setting(
-        web.conn, coresettings.IMAGE_PROMPT_HEADER_SETTING, (prompt_header or "").strip(),
-        org_id=org_id)
-
-
 def _run_ai_test_connection(*, org_id: str) -> tuple:
     """回傳 (人話訊息, kind)：kind 沿用 `redirect_with_message` 既有的 'ok'／'warn'／'danger'
     三種，HTML 與 JSON 路由共用同一份判斷。
@@ -353,8 +347,6 @@ def _settings_json_data(*, org_id: str, is_owner: bool) -> dict:
             for r in llm_providers.task_default_table()
         ],
         "creative_root": str(corecreative.get_root(web.conn, org_id=org_id)),
-        "prompt_header": coresettings.get_setting(
-            web.conn, coresettings.IMAGE_PROMPT_HEADER_SETTING, "", org_id=org_id),
         "intake_budget": coresettings.get_intake_budget_limit(web.conn, org_id=org_id),
         # AI 月費上限（票 04-1a，D4-2／D4-3）：跟上面 intake_budget（單一品牌、全期）是不同
         # 的兩道關卡——這裡是整個組織、當月，見 app/core/settings.py org_ai_spent_this_month()。
@@ -425,16 +417,6 @@ async def api_settings_creative_root_post(request: Request):
     error = _write_creative_root(body.get("creative_root", ""), org_id=actor.org_id)
     if error:
         return JSONResponse({"error": error}, status_code=400)
-    return {}
-
-
-@app.post("/api/settings/prompt-header")
-async def api_settings_prompt_header_post(request: Request):
-    body, err = await _parse_json_body(request)
-    if err:
-        return err
-    actor = web.require_actor(request)
-    _write_prompt_header(body.get("prompt_header", ""), org_id=actor.org_id)
     return {}
 
 

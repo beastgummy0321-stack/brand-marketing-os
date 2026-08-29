@@ -15,7 +15,6 @@ from datetime import UTC, datetime
 from fastapi import APIRouter, Request
 
 from app.core import interrupts as core_interrupts
-from app.core import prototype_phase as core_prototype_phase
 from app.shared import web
 from app.shared.web import _with_brand_names, require_actor
 
@@ -72,17 +71,3 @@ def api_interrupt_resolve(request: Request, interrupt_id: str):
     except ValueError:
         raise web.NotFound("找不到中斷提醒。") from None
     return {"ok": True}
-
-
-@router.get("/api/system/prototype-phase")
-def api_prototype_phase(request: Request):
-    """S2.15–S2.17：側板詳情，全站單一旗標，不帶 brand_id 參數（旗標本身刻意不分組織，
-    見 app/core/prototype_phase.py 檔頭；這裡只要求登入，不做組織過濾）。"""
-    actor = require_actor(request)
-    return {
-        "data": {
-            "ended": core_prototype_phase.has_ended(web.conn, org_id=actor.org_id),
-            "exemptions": core_prototype_phase.EXEMPTIONS,
-        },
-        "generated_at": datetime.now(UTC).isoformat(),
-    }

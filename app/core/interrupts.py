@@ -38,7 +38,6 @@ CATEGORIES = {
     "reading_reversal": {"severity": "rule_warning", "label": "判讀翻盤警示"},  # 票 #38
     "repurchase_conflict": {"severity": "rule_warning", "label": "回購校正異議"},  # 票 #39
     "hypothesis_unresolved": {"severity": "informational", "label": "假設待結案"},  # 票 #53
-    "prototype_phase_ended": {"severity": "rule_warning", "label": "原型階段結束提醒"},  # 修憲落地 A6
     "auto_sync_failed": {"severity": "rule_warning", "label": "自動同步失敗"},  # 票 07-auto-sync
     "weekly_proposal_ready": {"severity": "informational", "label": "週提案待核可"},  # 票 06
     # 結案時還沒處理的週提案卡自動歸檔，enqueue 後立刻 resolve，只為了在收件匣「已結」

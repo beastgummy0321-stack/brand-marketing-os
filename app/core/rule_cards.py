@@ -34,7 +34,7 @@ CARDS = {
         "description": (
             "生成 prompt 會把這個品牌全部生效中的 hard 規則整包塞進去；soft 規則依最近確認"
             "時間排序，只取排在前面的部分——避免規則隨時間單調累積、prompt 被灌到失焦。"
-            "超過上限而這次沒進 prompt 的規則不會消失，累積智慧頁會列出清單。"
+            "超過上限而這次沒進 prompt 的規則不會消失，仍留在系統裡，只是這次生成用不到。"
             "數值來源：docs/adr/0012-rule-card-expiry-and-prompt-cap.md 第二、三節。"
         ),
         "fields": {

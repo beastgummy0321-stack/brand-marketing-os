@@ -571,31 +571,6 @@ def unsettled_order_ratio(conn: Conn, brand_id: str, since: str,
     return round(unsettled / len(orders), 4)
 
 
-def set_attribution_override(conn: Conn, brand_id: str, order_id: str,
-                             excluded: bool, *, actor: str) -> dict:
-    """訂單手動標記「非廣告來源」／取消標記。淨歸因看這個欄位排除，毛歸因不受影響。"""
-    if not actor or not actor.strip():
-        raise ValueError("actor 為必填")
-    before = conn.execute(
-        "SELECT * FROM order_record WHERE brand_id = %s AND id = %s", (brand_id, order_id)
-    ).fetchone()
-    if before is None:
-        raise ValueError("找不到這筆訂單")
-    value = "excluded" if excluded else None
-    ts = now_utc()
-    org_id = bi_repo.get_brand(conn, brand_id)["org_id"]
-    conn.execute(
-        "UPDATE order_record SET attribution_override = %s, updated_at = %s WHERE id = %s",
-        (value, ts, order_id),
-    )
-    write_audit(conn, org_id=org_id, brand_id=brand_id, entity_type="order_record", entity_id=order_id,
-                action="set_attribution_override", actor=actor,
-                before={"attribution_override": before["attribution_override"]},
-                after={"attribution_override": value})
-    conn.commit()
-    return {"id": order_id, "attribution_override": value}
-
-
 # ---------------------------------------------------------------------------
 # 刪品牌（第 5 刀「訂單模組接上清理登記處」）
 #

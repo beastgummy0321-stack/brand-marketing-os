@@ -7,7 +7,6 @@ import { resolveAlert } from "@/lib/api";
 import { fetchInbox, type InboxData } from "@/lib/inboxApi";
 import { usePagination } from "@/lib/usePagination";
 import { InboxItemCard } from "./InboxItemCard";
-import { PrototypePhasePanel } from "./PrototypePhasePanel";
 
 type LoadState =
   | { status: "loading" }
@@ -22,7 +21,6 @@ export function InboxPage() {
   const [state, setState] = useState<LoadState>({ status: "loading" });
   const [resolvingId, setResolvingId] = useState<string | null>(null);
   const [errors, setErrors] = useState<Record<string, string>>({});
-  const [panelOpen, setPanelOpen] = useState(false);
   const openItems = state.status === "ready" ? state.data.open : [];
   const doneItems = state.status === "ready" ? state.data.done : [];
   const openPage = usePagination(openItems);
@@ -112,7 +110,6 @@ export function InboxPage() {
                     resolving={resolvingId === item.id}
                     error={errors[item.id]}
                     onResolve={handleResolve}
-                    onOpenPrototypePanel={() => setPanelOpen(true)}
                   />
                 ))}
               </ul>
@@ -143,7 +140,6 @@ export function InboxPage() {
                       key={item.id}
                       item={item}
                       variant="done"
-                    onOpenPrototypePanel={() => setPanelOpen(true)}
                     />
                   ))}
                 </ul>
@@ -166,7 +162,6 @@ export function InboxPage() {
       <Breadcrumb items={[{ label: "跨品牌總覽", href: "/" }, { label: "收件匣" }]} />
       <h1 className="font-display text-2xl text-foreground">收件匣</h1>
       {content}
-      {panelOpen && <PrototypePhasePanel onClose={() => setPanelOpen(false)} />}
     </div>
   );
 }

@@ -14,7 +14,6 @@ import {
   HAND_ENTRY_CHANNEL_TYPES,
   importOrdersFile,
   saveSkuCost,
-  setOrderAttribution,
   type OrdersPageData,
   type SkuMargin,
 } from "@/lib/ordersApi";
@@ -103,7 +102,7 @@ export function OrdersPage({ brandId }: { brandId: string }) {
         </section>
         <section className="flex flex-col gap-3">
           <h2 className="font-display text-xl text-foreground">最近訂單</h2>
-          <Table><thead className="bg-muted text-muted-foreground"><tr><Header>訂單編號</Header><Header>日期</Header><Header>金額</Header><Header>訂單狀態</Header><Header>優惠碼</Header><Header>來源</Header></tr></thead><tbody>{orders.items.map((item) => <tr key={item.id} className="border-t border-border"><Cell>{item.order_number}</Cell><Cell>{item.order_date ?? "—"}</Cell><Cell>{formatCurrency(item.total_amount)}</Cell><Cell>{item.order_status ?? "—"}</Cell><Cell>{item.voucher_code ?? "—"}</Cell><Cell><AttributionButton brandId={brandId} orderId={item.id} excluded={item.attribution_override === "excluded"} onSaved={refreshAfterSave} /></Cell></tr>)}</tbody></Table>
+          <Table><thead className="bg-muted text-muted-foreground"><tr><Header>訂單編號</Header><Header>日期</Header><Header>金額</Header><Header>訂單狀態</Header><Header>優惠碼</Header></tr></thead><tbody>{orders.items.map((item) => <tr key={item.id} className="border-t border-border"><Cell>{item.order_number}</Cell><Cell>{item.order_date ?? "—"}</Cell><Cell>{formatCurrency(item.total_amount)}</Cell><Cell>{item.order_status ?? "—"}</Cell><Cell>{item.voucher_code ?? "—"}</Cell></tr>)}</tbody></Table>
           <Pager page={orders.page} pageCount={pageCount} totalCount={orders.total} onChange={load} />
         </section>
       </>}
@@ -156,11 +155,6 @@ function ChannelEntryPanel({ brandId, onClose, onSaved }: PanelProps) {
   const [note, setNote] = useState("");
   const form = useFormSubmit(async () => onSaved(await createChannelEntry(brandId, { channel, entry_date: entryDate, revenue, quantity, note })));
   return <PanelShell title="新增通路營收" onClose={onClose}><form className="flex flex-col gap-4" onSubmit={(event) => { event.preventDefault(); void form.submit(); }}><label className="flex flex-col gap-1 text-sm"><span className="font-medium text-foreground">通路</span><select value={channel} onChange={(event) => setChannel(event.target.value)} className="rounded-md border border-border px-3 py-2 text-sm text-foreground">{HAND_ENTRY_CHANNEL_TYPES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><label className="flex flex-col gap-1 text-sm"><span className="font-medium text-foreground">日期</span><input type="date" value={entryDate} onChange={(event) => setEntryDate(event.target.value)} className="rounded-md border border-border px-3 py-2 text-sm text-foreground" /></label><label className="flex flex-col gap-1 text-sm"><span className="font-medium text-foreground">金額（選填）</span><input inputMode="decimal" value={revenue} onChange={(event) => setRevenue(event.target.value)} className="rounded-md border border-border px-3 py-2 text-sm text-foreground" /></label><label className="flex flex-col gap-1 text-sm"><span className="font-medium text-foreground">數量（選填）</span><input inputMode="decimal" value={quantity} onChange={(event) => setQuantity(event.target.value)} className="rounded-md border border-border px-3 py-2 text-sm text-foreground" /></label><label className="flex flex-col gap-1 text-sm"><span className="font-medium text-foreground">備註（選填）</span><input value={note} onChange={(event) => setNote(event.target.value)} className="rounded-md border border-border px-3 py-2 text-sm text-foreground" /></label><FormError message={form.error} /><SubmitButton saving={form.saving} label="記下這筆" pendingLabel="儲存中…" /></form></PanelShell>;
-}
-
-function AttributionButton({ brandId, orderId, excluded, onSaved }: { brandId: string; orderId: string; excluded: boolean; onSaved: (message: string) => void }) {
-  const form = useFormSubmit(async () => onSaved(await setOrderAttribution(brandId, orderId, !excluded)));
-  return <button type="button" disabled={form.saving} onClick={() => void form.submit()} className="text-left text-sm text-primary hover:underline disabled:opacity-60">{form.saving ? "儲存中…" : excluded ? "已標記非廣告來源，取消" : "標記非廣告來源"}{form.error && <span className="block text-danger">{form.error}</span>}</button>;
 }
 
 function PanelShell({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
