@@ -172,26 +172,6 @@ def set_brand_switches(conn: Conn, brand_id: str, *,
     return after
 
 
-def set_brand_industry(conn: Conn, brand_id: str, *,
-                        industry: str | None, actor: str) -> dict:
-    """寫入 brand.industry。ADR 0036 刪掉了唯一的讀者（節日日曆的業種比對）與五個內建
-    業種代碼，本函式與 brand.industry 欄位一起在票 03 隨 migration 移除。"""
-    _require(actor, "actor 為必填")
-    before = get_brand(conn, brand_id)
-    if before is None:
-        raise ValueError(f"找不到品牌：{brand_id}")
-    ts = now_utc()
-    conn.execute(
-        "UPDATE brand SET industry = %s, updated_at = %s WHERE id = %s",
-        (industry, ts, brand_id),
-    )
-    after = get_brand(conn, brand_id)
-    org_id = _org_id_for_brand(conn, brand_id)
-    write_audit(conn, org_id=org_id, brand_id=brand_id, entity_type="brand", entity_id=brand_id,
-                action="update", actor=actor, before=before, after=after)
-    conn.commit()
-    return after
-
 
 # 方法論開關名（中文，供 app/methodology/README.md 對照表的（需要：X）條件比對，
 # 見 app/llm/methodology.py）。只有 'website' 屬於網站型——值域見 app/core/vocab.py

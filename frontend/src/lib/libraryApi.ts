@@ -102,7 +102,6 @@ export interface LibraryBrandProfile {
   status: "active" | "archived";
   market_region: string | null;
   conversion_goal: string | null;
-  industry: string | null;
   delete_impact: { label: string; count: number }[];
 }
 

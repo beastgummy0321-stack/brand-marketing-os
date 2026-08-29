@@ -206,7 +206,7 @@ def _brand_profile_shape(brand_id: str, brand: dict) -> dict:
     return {
         "id": brand["id"], "name": brand["name"], "client_name": brand.get("client_name"),
         "status": brand["status"], "market_region": brand.get("market_region"),
-        "conversion_goal": brand.get("conversion_goal"), "industry": brand.get("industry"),
+        "conversion_goal": brand.get("conversion_goal"),
         "delete_impact": delete_impact,
     }
 
