@@ -25,6 +25,9 @@ export function _setRedirectForTest(fn: (path: string) => void): void {
 }
 
 const PENDING_PATH_KEY = "pendingPath";
+/** 記住的路徑放多久算數。邀請連結是「點開、幾分鐘內登入」的即時意圖；同一個分頁隔了
+ * 更久之後為了別的事登入，是另一件事，不該被丟回那張沒收完的邀請頁。 */
+const PENDING_PATH_TTL_MS = 10 * 60 * 1000;
 
 /** 票 03-3 §3：沒登入的受邀者點開 `/app/accept-invite?token=…`，該頁一掛載就打
  * `apiFetch` 拿 401（沒 token），整頁換成 `/app/login` 之前先把當下路徑（react-router
@@ -33,16 +36,31 @@ const PENDING_PATH_KEY = "pendingPath";
 function rememberPendingPath(): void {
   const path = window.location.pathname.replace(/^\/app\/?/, "/") + window.location.search;
   if (path && path !== "/login") {
-    sessionStorage.setItem(PENDING_PATH_KEY, path);
+    sessionStorage.setItem(PENDING_PATH_KEY, JSON.stringify({ path, at: Date.now() }));
   }
 }
 
-/** `App.tsx` 的 `LoginRoute` 登入成功後呼叫一次：撈回並清掉上面記住的路徑；沒有就回
- * `null`，呼叫端自己決定要不要用預設值 `/`。 */
+/** `App.tsx` 的 `LoginRoute` 登入成功後呼叫一次：撈回並清掉上面記住的路徑；沒有、過期、
+ * 或存的東西讀不懂（這版之前存的是純字串，跨這次部署的舊分頁就是那種）都回 `null`，
+ * 呼叫端自己決定要不要用預設值 `/`。 */
 export function takePendingPath(): string | null {
-  const path = sessionStorage.getItem(PENDING_PATH_KEY);
+  const raw = sessionStorage.getItem(PENDING_PATH_KEY);
   sessionStorage.removeItem(PENDING_PATH_KEY);
-  return path;
+  if (!raw) return null;
+  try {
+    const { path, at } = JSON.parse(raw) as { path?: unknown; at?: unknown };
+    if (typeof path !== "string" || typeof at !== "number") return null;
+    return Date.now() - at > PENDING_PATH_TTL_MS ? null : path;
+  } catch {
+    return null;
+  }
+}
+
+/** 使用者自己按登出時呼叫（`OrgMenu`）：把記住的路徑丟掉。刻意不塞進 `lib/auth.ts` 的
+ * `signOut()`——`apiFetch` 的 401 分支是先 `signOut()` 再記路徑，藏在裡面會讓那個順序
+ * 變成看不見卻不能動的東西。 */
+export function clearPendingPath(): void {
+  sessionStorage.removeItem(PENDING_PATH_KEY);
 }
 
 export async function apiFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {

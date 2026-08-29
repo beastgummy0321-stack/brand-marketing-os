@@ -43,26 +43,43 @@ Meta 端只建了一個 **PAUSED、沒有廣告組合、沒有廣告、沒有預
 
 - [ ] 07-1 閘門收尾：前端 depcruise 擋 supabase-js 只在登入模組（**Playwright 那一半已於 2026-08-29 完成**，見 `frontend/e2e/smoke.spec.ts`，`cd frontend && npm run e2e` 一行跑完）
 - [ ] 07-2 部署前（選平台後）：Hey API TS client、Sentry、staging、CD（單一 job `supabase db push`）
+- [ ] 07-3 統一 404 信封（2026-08-30 從小債移來）：`require_brand` 走 `NotFoundKind` 吐
+      `{"detail": …}`，identity 路由走 `handle_api_error` 吐 `{"error": {"code","message"}}`；
+      前端三處讀 `.detail`（`brandReportApi.ts:36`、`http.ts:116`、`ordersApi.ts:93`）要跟著改。
+      這是 API 契約改動，不是順手小事（03-1 r1 審查 note 2）
+- [ ] 07-4 GitHub 四個安全開關（secret scanning／push protection／CodeQL／branch protection）：
+      需 GitHub Pro 或公開 repo。**2026-08-30 使用者裁決：本機單人階段先不付費**，
+      跟 Sentry／staging／CD 同一批再決定；在那之前 CI 綠不擋合併，靠人工
 
 ## 小債（順手做，不排優先）
 
-- [ ] **左側導覽有四條死連結**（投放與成效／累積智慧／素材工作檯／資料上線）：外殼切片刪掉那 8 條路由，導覽沒跟著刪，點下去整頁空白（2026-08-29 瀏覽器實測）。**這是使用者看得到的謊**，且 `HANDOFF-shell-slice.md` §3.7 寫的是「刪掉，不做轉址」
-- [ ] **晨光咖啡 0 筆已確認事實、0 條規則**：產品名稱已經會進 prompt（2026-08-29 修），但品牌上下文仍是空的——代理不知道這個品牌是誰、賣多少錢、對誰賣。要讓方案再準一階，下一步是去建檔精靈把事實填起來，不是寫程式
-- [ ] 排程表單的「行銷目標」下拉每次回到第一個選項（認知），不記得上次送出的目標
-- [ ] 同時開兩個後端（8710＋另一個）再跑 `-n auto` 全套，本機 Postgres 連線槽會被吃光，測試整片 `remaining connection slots are reserved` 紅——不是程式壞了。跑全套前先關掉多餘的後端（2026-08-29 踩到）
-- [ ] `app/core/rule_cards.py` 8 張規則卡有 6 張失效（`budget_structure`／`sample_size`／`ad_creative_fatigue`／`pacing`／`health_lights`／`autonomy`），設定頁照樣顯示、照樣可以調，但調了不影響任何東西——**這是使用者看得到的謊**（明細見 `docs/tech-debt.md` 第〇節）
-- [ ] **上雲前必還（ADR 0039）** 每日 Meta 花費拉取的 worker 跑在網站行程裡：網站沒開就不拉，那天沒有數字（handler 可重跑，但沒人叫它就沒人補；手動補：`uv run python -m app.meta.daily_pull`）；cron `0 3 * * *` 是機器本地時間，沒有時區處理（等 04-1b 的 `org_timezone`）。上雲時 worker 要拆成自己的行程
-- [ ] GitHub 四個安全開關（secret scanning／push protection／CodeQL／branch protection）需 GitHub Pro 或公開 repo——**等使用者決定**要不要付費；未付費前 CI 綠不擋合併，靠人工
-- [ ] Dependabot #1（high）：前端間接依賴 `nanoid`（size=0 無限迴圈，開發工具鏈才用到）——動前端時 `npm audit fix` 順手收
-- [ ] **上雲前必還（2026-08-28 使用者裁決：本機單人階段不修）** 邀請連結是「持有即可用」：`app/identity/routes.py` accept_invite 不比對 invite.email 與登入者 email；且 `AcceptInvitePage` 一掛載就自動接受，沒有確認步驟（03-3 審查 note 5）
-- [ ] `pendingPath`（登入後導回原路徑）沒有時效也不會在登出時清掉：同一分頁先冷開邀請連結、之後做別的登入，會被靜默導回舊邀請頁（03-3 審查 note 4）
-- [ ] 兩個繞過每月花費閘門的既有路徑（04-1a 審查 note）：`app/main.py` 設定頁「測試連線」（1 token 探測）、`app/intake/card_test.py` CLI 診斷工具（HTTP 碰不到）。風險小，但閘門既然蓋好了應該補齊
-- [ ] `resolve_ai_credentials()` 的「DB 值打錯字→當 platform 處理」分支沒有測試覆蓋（04-1a 審查 note）
-- [ ] 用自己金鑰（`own`）的組織看不到「調整月上限」欄位，切回 `platform` 時不好調——04-2 剩下那一半開放切換來源時一併處理（04-1a 審查 note）
-- [ ] AI 成本對帳：`llm_task.cost` 是我們自己用 `app/llm/pricing.py` 算的**估算值**，不是 Anthropic 實際帳單。官方有 `/v1/organizations/cost_report`（按 workspace／api_key 分組，約 5 分鐘延遲，需 Admin API key）——上雲收費前要拿它跟自己的估算對一次帳，否則「每月上限」擋的是估算不是真錢（2026-08-28 查證）
-- [ ] 404 信封兩種格式並存：`require_brand` 走 `NotFoundKind` 吐 `{"detail": …}`，`web.NotFound` 走 `handle_api_error` 吐 `{"error": {"code", "message"}}`（03-1 r1 審查 note 2）——第 ⑦ 片統一信封時一併收
-- [ ] `app/tests/test_settings_api.py` 一條測試寫死 Windows 磁碟機路徑，非 Windows 跳過（`skipUnless`）；應改成跨平台斷言後拿掉 skip
-- [ ] 變異度（同一份輸入跑 N 次結果差多少）仍未量測：探針在 `D:\0UserProfile\Desktop\MarketingOS Shell\variance-probe\`，從沒跑過。排程會做即時網路查詢，兩次跑本來就看到不同素材，重試預算現在是猜的
+2026-08-30 清掉一輪（死連結、行銷目標記憶、六張失效規則卡、pendingPath 時效、
+測試連線繞過花費閘門、兩條測試缺口）；`nanoid` 早就已經是修好的 3.3.18，`npm audit` 零漏洞；
+「兩個後端吃光連線槽」是知識不是債，進了 `CLAUDE.md` 的 Tests 段。剩下這些各有理由。
+
+- [ ] **上雲前必還（ADR 0039）** 每日 Meta 花費拉取的 worker 跑在網站行程裡：網站沒開就不拉，
+      那天沒有數字（handler 可重跑，但沒人叫它就沒人補；手動補：`uv run python -m app.meta.daily_pull`）；
+      cron `0 3 * * *` 是機器本地時間，沒有時區處理（等 04-1b 的 `org_timezone`）。上雲時 worker 要拆成自己的行程
+- [ ] **上雲前必還（2026-08-28 使用者裁決：本機單人階段不修）** 邀請連結是「持有即可用」：
+      `app/identity/routes.py` accept_invite 不比對 invite.email 與登入者 email；且 `AcceptInvitePage`
+      一掛載就自動接受，沒有確認步驟（03-3 審查 note 5）
+- [ ] 用自己金鑰（`own`）的組織看不到「調整月上限」欄位，切回 `platform` 時不好調——
+      04-2 剩下那一半開放切換來源時一併處理（04-1a 審查 note）
+- [ ] AI 成本對帳：`llm_task.cost` 是我們自己用 `app/llm/pricing.py` 算的**估算值**，不是 Anthropic
+      實際帳單。官方有 `/v1/organizations/cost_report`（按 workspace／api_key 分組，約 5 分鐘延遲，
+      需 Admin API key）——上雲收費前要拿它跟自己的估算對一次帳，否則「每月上限」擋的是估算不是真錢（2026-08-28 查證）
+- [ ] **需裁決**：設定頁「整組複製提示詞的自訂開頭」整塊已死（2026-08-30 清規則卡時順手發現）——
+      `image_prompt_batch_header` 除了自己存、自己讀回來顯示，沒有任何程式在用；它服務的「整組複製」
+      按鈕在素材工作檯裡，那個畫面已隨 `app/ads/` 刪掉。跟六張失效規則卡同一種謊。刪它要連
+      `AssetsSection.tsx` 那一區＋`POST /api/settings/prompt-header`＋兩條測試一起走
+
+## 使用者待辦（不是程式債，做的人是你；我做不了，所以不放小債）
+
+- [ ] 晨光咖啡 0 筆已確認事實、0 條規則：產品名稱已經會進 prompt（2026-08-29 修），但品牌上下文
+      仍是空的——代理不知道這個品牌是誰、賣多少錢、對誰賣。去建檔精靈把事實填起來，方案才會再準一階
+- [ ] 變異度（同一份輸入跑 N 次結果差多少）從沒量過：探針在
+      `D:\0UserProfile\Desktop\MarketingOS Shell\variance-probe\`，一次都沒跑過。排程會做即時網路查詢，
+      兩次跑本來就看到不同素材，重試預算現在是猜的
 
 ## 里程碑之後（上雲後才動）
 

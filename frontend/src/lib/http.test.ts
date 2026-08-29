@@ -133,6 +133,22 @@ describe("apiFetch", () => {
     expect(takePendingPath()).toBeNull(); // 撈第二次應該是空的——只消費一次
   });
 
+  /** 記住的路徑只代表「剛剛點開邀請連結」那個當下的意圖。同一個分頁隔了很久之後為了
+   * 別的事登入，還被丟回別人的邀請頁，是把一個帳號的入口交給另一次登入。過期的、以及
+   * 這版之前存的純字串（跨部署的舊分頁），一律當成沒有並清掉。 */
+  it("過期或讀不懂的 pendingPath 一律當成沒有，並且清掉", () => {
+    sessionStorage.setItem(
+      "pendingPath",
+      JSON.stringify({ path: "/accept-invite?token=abc123", at: Date.now() - 11 * 60 * 1000 }),
+    );
+    expect(takePendingPath()).toBeNull();
+    expect(sessionStorage.getItem("pendingPath")).toBeNull();
+
+    sessionStorage.setItem("pendingPath", "/accept-invite?token=abc123"); // 舊格式：純字串
+    expect(takePendingPath()).toBeNull();
+    expect(sessionStorage.getItem("pendingPath")).toBeNull();
+  });
+
   it("非 401 的回應原樣交還給呼叫端", async () => {
     mockGetAccessToken.mockResolvedValue(null);
     mockGetOrgId.mockReturnValue(null);

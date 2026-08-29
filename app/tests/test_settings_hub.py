@@ -55,16 +55,16 @@ class SettingsHubEntryPageTest(unittest.TestCase):
 
     def test_empty_state_shows_system_default_and_no_modified_time(self):
         """G14.8 空態：品牌從沒自訂過，入口頁摘要顯示系統預設值，不假裝有修改時間。"""
-        field = _field(_cards(self.client, self.bid), "budget_structure", "min_daily_per_group")
+        field = _field(_cards(self.client, self.bid), "rule_prompt_cap", "max_active_rules")
         self.assertFalse(field["customized"])  # 尚未自訂過
-        self.assertEqual(field["value"], 300)  # min_daily_per_group 系統預設 300
+        self.assertEqual(field["value"], 20)  # max_active_rules 系統預設 20
         self.assertIsNone(_last_rule_card_audit(self.bid))  # 沒有修改時間可拿
 
     def test_after_override_entry_page_shows_new_value_and_modified_time(self):
-        rule_cards.set_value(web.conn, self.bid, "budget_structure", "min_daily_per_group",
-                             450.0, actor=ACTOR, org_id=coredb.DEV_ORG_ID)
-        field = _field(_cards(self.client, self.bid), "budget_structure", "min_daily_per_group")
-        self.assertEqual(field["value"], 450)
+        rule_cards.set_value(web.conn, self.bid, "rule_prompt_cap", "max_active_rules",
+                             45.0, actor=ACTOR, org_id=coredb.DEV_ORG_ID)
+        field = _field(_cards(self.client, self.bid), "rule_prompt_cap", "max_active_rules")
+        self.assertEqual(field["value"], 45)
         self.assertIsNotNone(_last_rule_card_audit(self.bid))  # 有「上次修改」可顯示
 
     def test_unknown_brand_404s(self):
@@ -85,11 +85,9 @@ class SettingsAdsPageTest(unittest.TestCase):
     def test_page_renders_all_four_cards_with_seed_values(self):
         cards = _cards(self.client, self.bid)
         titles = {card["title"] for card in cards.values()}
-        for title in ("帳戶結構與預算配置門檻", "樣本數門檻（統計等級 vs 方向性判讀）",
-                      "素材疲勞頻率門檻", "檔期預算步調門檻"):
+        for title in ("品牌智庫規則上限", "規則有效期", "檔期日預算", "檔期方案數量上下限"):
             self.assertIn(title, titles)
-        # ad_creative_fatigue.cold_warning 系統預設值（舊頁是輸入框的 value="2.5"）
-        self.assertEqual(_field(cards, "ad_creative_fatigue", "cold_warning")["value"], 2.5)
+        self.assertEqual(_field(cards, "schedule_plan_count", "plan_count_max")["value"], 5.0)
 
     def test_no_customized_badge_when_untouched(self):
         """原本比對帶分隔符的完整標籤「・ 已自訂」以避開說明句的巧合命中；改走 API 之後
@@ -99,22 +97,21 @@ class SettingsAdsPageTest(unittest.TestCase):
 
     def test_edit_saves_and_marks_customized(self):
         resp = self.client.post(
-            f"/api/settings/rule-cards/brands/{self.bid}/ad_creative_fatigue",
-            json={"cold_warning": "3", "cold_danger": "5", "retargeting_warning": "4",
-                  "retargeting_danger": "6", "niche_warning": "5", "niche_danger": "8"},
+            f"/api/settings/rule-cards/brands/{self.bid}/schedule_plan_count",
+            json={"plan_count_min": "2", "plan_count_max": "8"},
         )
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(
-            rule_cards.get_value(web.conn, self.bid, "ad_creative_fatigue", "cold_warning"), 3.0)
+            rule_cards.get_value(web.conn, self.bid, "schedule_plan_count", "plan_count_min"), 2.0)
         cards = _cards(self.client, self.bid)
-        self.assertTrue(_field(cards, "ad_creative_fatigue", "cold_warning")["customized"])
+        self.assertTrue(_field(cards, "schedule_plan_count", "plan_count_min")["customized"])
 
     def test_edit_records_the_authenticated_user_as_actor(self):
         """票 03-1：ADR 0004 的「不再要求先設定操作人」還是對的，但具名對象換成登入者
         （dev token 對應的種子使用者），不再是固定的 OPERATOR 常數。"""
         resp = self.client.post(
-            f"/api/settings/rule-cards/brands/{self.bid}/pacing",
-            json={"deviation_threshold_ratio": "0.2"},
+            f"/api/settings/rule-cards/brands/{self.bid}/rule_expiry",
+            json={"reconfirm_days": "60"},
         )
         self.assertEqual(resp.status_code, 200)
         row = _last_rule_card_audit(self.bid)
@@ -124,36 +121,35 @@ class SettingsAdsPageTest(unittest.TestCase):
     def test_edit_persists_after_restart(self):
         """ADR 0027：不再有「重開連線」這回事了（連線池按 request 借連線）——改成從一條
         全新借來的連線讀回，證明真的落庫，不是只留在寫入那個 request 的連線快取裡。"""
-        self.client.post(f"/api/settings/rule-cards/brands/{self.bid}/pacing",
-                         json={"deviation_threshold_ratio": "0.25"})
+        self.client.post(f"/api/settings/rule-cards/brands/{self.bid}/rule_expiry",
+                         json={"reconfirm_days": "75"})
         with coredb.connection() as fresh:
             self.assertEqual(
-                rule_cards.get_value(fresh, self.bid, "pacing", "deviation_threshold_ratio"), 0.25)
+                rule_cards.get_value(fresh, self.bid, "rule_expiry", "reconfirm_days"), 75.0)
 
     def test_edit_invalid_number_shows_error_and_keeps_other_fields_unchanged(self):
-        before = rule_cards.get_value(web.conn, self.bid, "ad_creative_fatigue", "cold_danger")
+        before = rule_cards.get_value(web.conn, self.bid, "schedule_plan_count", "plan_count_max")
         resp = self.client.post(
-            f"/api/settings/rule-cards/brands/{self.bid}/ad_creative_fatigue",
-            json={"cold_warning": "不是數字", "cold_danger": "5", "retargeting_warning": "4",
-                  "retargeting_danger": "6", "niche_warning": "5", "niche_danger": "8"},
+            f"/api/settings/rule-cards/brands/{self.bid}/schedule_plan_count",
+            json={"plan_count_min": "不是數字", "plan_count_max": "8"},
         )
         self.assertEqual(resp.status_code, 400)
-        self.assertIn("請填一個大於 0 的數字", resp.json()["field_errors"]["cold_warning"])
+        self.assertIn("請填一個大於 0 的數字", resp.json()["field_errors"]["plan_count_min"])
         self.assertEqual(
-            rule_cards.get_value(web.conn, self.bid, "ad_creative_fatigue", "cold_danger"), before)
+            rule_cards.get_value(web.conn, self.bid, "schedule_plan_count", "plan_count_max"), before)
 
     def test_reset_restores_default_after_edit(self):
-        rule_cards.set_value(web.conn, self.bid, "ad_creative_fatigue", "cold_warning", 9.9,
+        rule_cards.set_value(web.conn, self.bid, "schedule_plan_count", "plan_count_max", 9.0,
                              actor=ACTOR, org_id=coredb.DEV_ORG_ID)
         resp = self.client.post(
-            f"/api/settings/rule-cards/brands/{self.bid}/ad_creative_fatigue/reset")
+            f"/api/settings/rule-cards/brands/{self.bid}/schedule_plan_count/reset")
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(
-            rule_cards.get_value(web.conn, self.bid, "ad_creative_fatigue", "cold_warning"), 2.5)
-        # 舊頁靠 flash 句「已將『素材疲勞頻率門檻』重設為系統預設值」證明重設的是這張卡、
+            rule_cards.get_value(web.conn, self.bid, "schedule_plan_count", "plan_count_max"), 5.0)
+        # 舊頁靠 flash 句「已將『檔期方案數量上下限』重設為系統預設值」證明重設的是這張卡、
         # 且回到系統預設；API 回的是同一件事的資料版：這張卡的欄位全部不再是「已自訂」。
         card = resp.json()["data"]
-        self.assertEqual(card["title"], "素材疲勞頻率門檻")
+        self.assertEqual(card["title"], "檔期方案數量上下限")
         self.assertFalse(any(f["customized"] for f in card["fields"]))
 
     def test_unknown_card_key_404s(self):
@@ -177,12 +173,10 @@ class SettingsHubBrandIsolationTest(unittest.TestCase):
 
     def test_brand_a_edit_does_not_leak_into_brand_b_page(self):
         self.client.post(
-            f"/api/settings/rule-cards/brands/{self.brand_a['id']}/budget_structure",
-            json={"min_daily_per_group": "999", "medium_tier_floor": "600",
-                  "large_tier_floor": "1200", "medium_validation_ratio": "0.7",
-                  "large_scaling_ratio": "0.8"},
+            f"/api/settings/rule-cards/brands/{self.brand_a['id']}/rule_prompt_cap",
+            json={"max_active_rules": "999"},
         )
         field_b = _field(_cards(self.client, self.brand_b["id"]),
-                         "budget_structure", "min_daily_per_group")
+                         "rule_prompt_cap", "max_active_rules")
         self.assertNotEqual(field_b["value"], 999)
-        self.assertEqual(field_b["value"], 300)  # B 品牌仍是系統預設值
+        self.assertEqual(field_b["value"], 20)  # B 品牌仍是系統預設值

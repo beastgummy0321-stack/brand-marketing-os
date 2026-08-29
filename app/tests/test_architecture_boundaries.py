@@ -533,14 +533,21 @@ class TestRatioTest(unittest.TestCase):
 # 是頂層的 .py（`main.py` 組裝根等）。**允許調高，但必須改這張表**——重點不是禁止成長，
 # 是讓成長出現在 diff 裡有人看得到。廣告模組會在約 2,000 行撞上它，而不是 21,595 行。
 KNOWN_MODULE_SIZES = {
-    "app": 546,  # 本機 codex CLI 線路（c47bc36）：main.py 依環境變數換供應商。前一次是票 05
-                  # fix round 的 540（main.py 加 FastAPI lifespan，掛/收 procrastinate worker）
+    "app": 553,  # 2026-08-30 補上設定頁「測試連線」的月費上限（小債）：那顆按鈕真的會打一次
+                  # provider，原本不經 run_task() 所以完全繞過上限。7 行＝import gateway ＋
+                  # 打 provider 前先問 check_spend_cap()。前一次是本機 codex CLI 線路
+                  # （c47bc36）的 546：main.py 依環境變數換供應商
     "app/background": 215,  # 2026-08-29 修 Windows 起不來：worker 移到自己的執行緒／loop
                             # ＋起不來不得弄死網站（ADR 0039 amended）
                              # 掛進既有 process，不再只有 app()
     "app/brand_intelligence": 2634,
-    "app/brand_web": 2155,
-    "app/core": 2148,
+    "app/brand_web": 2091,  # 2026-08-30 刪失效規則卡（小債）：autonomy 那張卡的兩處專屬
+                             # 驗證跟著走。前一次是 2155
+    "app/core": 1687,  # 2026-08-30 刪失效規則卡（小債）：rule_cards.py 的 6 張卡（budget_structure／
+                        # sample_size／ad_creative_fatigue／pacing／health_lights／autonomy）隨
+                        # app/ads/ 失去全部呼叫端，設定頁照樣顯示照樣可調＝使用者看得到的謊；
+                        # 連 fatigue_level()／sample_size_verdict() 兩支零呼叫端純函數一起刪。
+                        # 前一次是 2148
     "app/dashboard": 645,
     "app/identity": 537,
     "app/intake": 3571,  # 本機 codex CLI 線路（c47bc36）：card_test.py 診斷工具跟著印出這次
@@ -548,7 +555,10 @@ KNOWN_MODULE_SIZES = {
                           # 缺陷 1：intake_question 改走強制工具結構化輸出，新增
                           # _QUESTION_TOOL／_CHOICE_SCHEMA schema（散文裡的 JSON 格式
                           # 說明同時刪掉，仍淨增）。前一次是 3548
-    "app/llm": 1605,  # 本機 codex CLI 線路（c47bc36，使用者 2026-08-29 裁決調高明表）：
+    "app/llm": 1617,  # 2026-08-30 月費上限抽成 check_spend_cap()（小債）：算法原本寫死在
+                       # run_task() 裡，設定頁「測試連線」繞過去了；抽成一支共用函式，第三個
+                       # 呼叫端才不會又悄悄繞開。前一次是 1605——
+                       # 本機 codex CLI 線路（c47bc36，使用者 2026-08-29 裁決調高明表）：
                        # CodexCliProvider 是 `Provider` 這個單方法 Protocol 的第三種實作
                        # （ADR 0032），265 行在 providers.py——prompt 攤平、圖片還原成暫存檔、
                        # Windows 程序樹逾時清理、截斷偵測；gateway/pricing 各補訂閱額度

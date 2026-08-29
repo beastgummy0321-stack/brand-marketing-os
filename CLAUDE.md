@@ -52,6 +52,9 @@
   後端票也要跑——server 起不來、畫面吐 `[object Object]`、排程凍住全站，這類整合 bug 只在這裡現形（2026-08-29 那七個 `fix:`）。
 - 合併進主線：`uv run pytest app/tests -q -n auto --dist loadfile`
   （`--dist loadfile` 必要——`conftest.py` 給每個測試模組自己的 DB／schema）。
+  **跑之前先關掉多餘的後端**：同時開著兩個後端（8710＋另一個）再跑 `-n auto`，本機 Postgres
+  的連線槽會被吃光，測試整片紅在 `remaining connection slots are reserved`——那不是程式壞了
+  （2026-08-29 踩到）。
 - 800 行上限不適用於 `app/tests/`。
 - 分流：不動 schema／模組進入點／花錢／權限路徑的行為修改＝route B（機器閘門綠即完成）；
   route C 只留 schema、模組邊界、金流、權限。

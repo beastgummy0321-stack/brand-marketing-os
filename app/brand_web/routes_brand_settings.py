@@ -35,9 +35,6 @@ def _validate_card_fields(card_key: str, raw_values: dict) -> tuple:
         if not ok or value is None or value <= 0:
             field_errors[field_key] = "請填一個大於 0 的數字。"
             continue
-        if card_key == "autonomy" and value not in (1.0, 2.0):
-            field_errors[field_key] = "投放自動度只有保守檔（1）與放手檔（2）兩種。"
-            continue
         parsed[field_key] = value
     return parsed, field_errors
 
@@ -85,11 +82,9 @@ async def api_rule_cards_save(request: Request, brand_id: str, card_key: str):
         return JSONResponse({"error": "請求格式不是合法的 JSON"}, status_code=400)
     parsed, field_errors = _validate_card_fields(card_key, body)
     if field_errors:
-        error_message = "有欄位沒有填一個大於 0 的數字。"
-        if card_key == "autonomy" and "mode" in field_errors:
-            error_message = field_errors["mode"]
         return JSONResponse(
-            {"error": error_message, "field_errors": field_errors}, status_code=400)
+            {"error": "有欄位沒有填一個大於 0 的數字。", "field_errors": field_errors},
+            status_code=400)
     for field_key, value in parsed.items():
         rule_cards.set_value(main_mod.conn, brand_id, card_key, field_key, value,
                              str(actor.user_id), org_id=actor.org_id)

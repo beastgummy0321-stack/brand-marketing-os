@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { CopyIconButton } from "@/components/layout/CopyIconButton";
 import { SidePanel } from "@/components/layout/SidePanel";
 import { setOrgId, signOut } from "@/lib/auth";
-import { apiFetch } from "@/lib/http";
+import { apiFetch, clearPendingPath } from "@/lib/http";
 import { useFormSubmit } from "@/lib/useFormSubmit";
 
 interface OrgOut {
@@ -144,7 +144,10 @@ export function OrgMenu() {
 
       <button
         type="button"
-        onClick={() => void signOut()}
+        onClick={() => {
+          clearPendingPath();
+          void signOut();
+        }}
         className="text-xs text-muted-foreground hover:underline"
       >
         登出

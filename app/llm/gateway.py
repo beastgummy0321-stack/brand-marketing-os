@@ -146,6 +146,29 @@ def _mark_failed(conn: db.Conn, row_id: str, *, status: str, error: str) -> None
     conn.commit()
 
 
+def check_spend_cap(conn: db.Conn, *, org_id: str) -> None:
+    """組織每月 AI 花費上限（票 04-1a，D4-2／D4-3）：命中就拋 SpendCapExceededError。
+
+    每一條會真的花到錢的路徑都必須先過這裡——run_task() 之外還有設定頁的「測試連線」
+    按鈕（app/main.py `_run_ai_test_connection`），它直接打 provider 不經 run_task()。
+    上限的算法只留這一份，第三個呼叫端才不會又悄悄繞過去。
+
+    只有 cap_applies=True（'platform' 層，操作者付錢）才擋；'own' 層的組織自己付錢，
+    上限只是參考數字，見 resolve_ai_credentials()。已經在跑的那次呼叫不受影響，只擋下一次。
+    """
+    ai_creds = settings.resolve_ai_credentials(conn, org_id=org_id)
+    if not ai_creds.cap_applies:
+        return
+    limit = settings.get_ai_monthly_cost_limit(conn, org_id=org_id)
+    since = db.now_utc().strftime("%Y-%m-01T00:00:00")
+    spent = settings.org_ai_spent_this_month(conn, org_id=org_id, since=since)
+    if spent >= limit:
+        raise SpendCapExceededError(
+            f"這個月的 AI 用量已達上限（US$ {spent:.2f}／US$ {limit:.2f}），"
+            "到「設定」頁調整上限後才能繼續。"
+        )
+
+
 def run_task(
     conn: db.Conn,
     provider: Provider,
@@ -177,20 +200,9 @@ def run_task(
         raise ValueError(f"找不到品牌：{brand_id}")
     org_id = brand["org_id"]
 
-    # 組織每月 AI 花費上限（票 04-1a，D4-2／D4-3）：在還沒寫入 llm_task 列、還沒打
-    # provider 之前擋下——命中就沒有任何一筆多出來的紀錄或費用。只有 cap_applies=True
-    # （'platform' 層，操作者付錢）才擋；'own' 層的組織自己付錢，上限只是參考數字，
-    # 見 resolve_ai_credentials()。已經在跑的那次呼叫不受影響，只擋下一次。
-    ai_creds = settings.resolve_ai_credentials(conn, org_id=org_id)
-    if ai_creds.cap_applies:
-        limit = settings.get_ai_monthly_cost_limit(conn, org_id=org_id)
-        since = db.now_utc().strftime("%Y-%m-01T00:00:00")
-        spent = settings.org_ai_spent_this_month(conn, org_id=org_id, since=since)
-        if spent >= limit:
-            raise SpendCapExceededError(
-                f"這個月的 AI 用量已達上限（US$ {spent:.2f}／US$ {limit:.2f}），"
-                "到「設定」頁調整上限後才能繼續。"
-            )
+    # 在還沒寫入 llm_task 列、還沒打 provider 之前擋下——命中就沒有任何一筆多出來的
+    # 紀錄或費用。
+    check_spend_cap(conn, org_id=org_id)
 
     opts = options or TaskOptions()
     model = providers.resolve_model(opts.model, task_type=task_type, conn=conn, brand_id=brand_id)

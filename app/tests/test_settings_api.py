@@ -10,6 +10,7 @@ AnthropicProvider／pricing 直接單元測試（不經 HTTP 路由，票 T4 A4 
 """
 
 import os
+import tempfile
 import unittest
 from unittest import mock
 from uuid import uuid4
@@ -37,6 +38,7 @@ SETTINGS_DATA_KEYS = {
 class SettingsApiTest(unittest.TestCase):
     def setUp(self):
         web.conn.execute("DELETE FROM app_setting")
+        web.conn.execute("DELETE FROM llm_task")  # 月費上限的分母，別讓前一條測試種的花費外溢
         web.conn.commit()
         self.client = TestClient(main.app)
         self._env = mock.patch.dict(os.environ)
@@ -139,12 +141,12 @@ class SettingsApiTest(unittest.TestCase):
 
     # -- POST /api/settings/creative-root ------------------------------------------
 
-    @unittest.skipUnless(os.name == "nt", "驗證邏輯用平台原生 pathlib.Path 判斷是否為絕對路徑"
-                          "（保留現存的 test_creative_assets.py 用真實 tmpdir 路徑做跨平台驗證），"
-                          "這條硬寫死 Windows 磁碟機代號字串，只在 Windows 上才是絕對路徑")
     def test_save_creative_root_valid(self):
-        resp = self.client.post(
-            "/api/settings/creative-root", json={"creative_root": "D:\\行銷素材"})
+        # 用執行平台自己認得的絕對路徑（Windows 是 C:\...\Temp\行銷素材、POSIX 是
+        # /tmp/行銷素材），不硬寫死磁碟機代號；底下多接一層資料夾名，才不會撞到
+        # 「不可以是磁碟機根目錄」那道驗證。
+        root = os.path.join(tempfile.gettempdir(), "行銷素材")
+        resp = self.client.post("/api/settings/creative-root", json={"creative_root": root})
         self.assertEqual(resp.status_code, 200)
 
     def test_save_creative_root_relative_path_rejected(self):
@@ -182,6 +184,35 @@ class SettingsApiTest(unittest.TestCase):
         self.assertEqual(body["kind"], "ok")
         self.assertIn("金鑰有效", body["message"])
         self.assertEqual(len(fake.calls), 1)
+
+    def test_ai_test_connection_over_monthly_cap_warns_without_calling_provider(self):
+        """票 04-1a：這顆按鈕會真的打一次 provider＝真的花錢，所以跟 run_task() 走同一道
+        月費上限（gateway.check_spend_cap），而且要擋在打 provider 之前——否則它就是繞過
+        上限的洞。kind 用 'warn'：下一步是去調高上限，不是系統壞掉。"""
+        coresettings.set_setting(web.conn, coresettings.API_KEY_SETTING, TEST_KEY, org_id=coredb.DEV_ORG_ID)
+        coresettings.set_setting(
+            web.conn, coresettings.AI_MONTHLY_COST_LIMIT_SETTING, "10", org_id=coredb.DEV_ORG_ID)
+        started_at = coredb.now_utc().strftime("%Y-%m-01T00:00:00")
+        web.conn.execute(
+            "INSERT INTO llm_task (id, org_id, brand_id, task_type, context_scope_json,"
+            " input_context_ids_json, input_context_hash, knowledge_item_ids_json,"
+            " brand_version, prompt_template_id, prompt_template_version, provider, model,"
+            " status, attempt_no, cost, started_at, finished_at)"
+            " VALUES (%s, %s, 'b_cap_test', 't', '{}', '[]', '', '[]', 1, 'p', 'v1', 'seed',"
+            " 'seed', 'succeeded', 1, 10.0, %s, %s)",
+            (coredb.new_id("llm"), coredb.DEV_ORG_ID, started_at, started_at),
+        )
+        web.conn.commit()
+
+        fake = providers.FakeProvider()
+        with mock.patch.object(providers, "AnthropicProvider", return_value=fake):
+            resp = self.client.post("/api/settings/test-connection")
+
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertEqual(body["kind"], "warn")
+        self.assertIn("已達上限", body["message"])
+        self.assertEqual(fake.calls, [], "命中上限不該真的打到 provider")
 
     # -- 票 T4 A4：HTML 表單路由與 GET /settings 頁面已刪除（React /settings 頁只打
     # /api/settings/*），下面補回從 test_settings_page.py 搬過來、原本只在舊頁面測過的
@@ -250,6 +281,15 @@ class SettingsApiTest(unittest.TestCase):
         self.assertEqual(body["api_key_source"], "db")
         self.assertEqual(
             coresettings.get_api_key(web.conn, org_id=coredb.DEV_ORG_ID), TEST_KEY)
+
+    def test_ai_key_source_typo_falls_back_to_capped_platform_tier(self):
+        """設定值打錯字（不是 'platform' 也不是 'own'）→ 當 'platform' 處理，上限照擋。
+        打錯一個字不可以靜靜把錢包保護閥關掉（票 04-1a）。"""
+        coresettings.set_setting(
+            web.conn, coresettings.AI_KEY_SOURCE_SETTING, "onw", org_id=coredb.DEV_ORG_ID)
+        creds = coresettings.resolve_ai_credentials(web.conn, org_id=coredb.DEV_ORG_ID)
+        self.assertEqual(creds.source, "platform")
+        self.assertTrue(creds.cap_applies)
 
     def test_ai_test_connection_failure_returns_danger_kind(self):
         """金鑰錯誤：danger kind + 人話訊息原樣透出（原 test_test_connection_key_error_shows_human_message）。"""

@@ -90,6 +90,7 @@ from app.core import creative_assets as corecreative
 from app.core import db as coredb
 from app.core import retention as core_retention
 from app.core import settings as coresettings
+from app.llm import gateway as llm_gateway
 from app.llm import pricing as llm_pricing
 from app.llm import providers as llm_providers
 from app.shared import logging as app_logging
@@ -292,6 +293,12 @@ def _run_ai_test_connection(*, org_id: str) -> tuple:
     codex_cli = llm_providers.codex_cli_enabled()
     if not codex_cli and not coresettings.get_api_key(web.conn, org_id=org_id):
         return "尚未設定金鑰。請先在上方填入 AI 金鑰，儲存後再測試。", "warn"
+    try:
+        # 這顆按鈕會真的打一次 provider，跟 run_task() 走同一道月費上限（票 04-1a）。
+        # 命中是 'warn'：下一步是去設定頁調高上限，不是系統壞掉。
+        llm_gateway.check_spend_cap(web.conn, org_id=org_id)
+    except llm_providers.SpendCapExceededError as exc:
+        return str(exc), "warn"
     try:
         model = llm_providers.CODEX_CLI_MODEL if codex_cli else coresettings.get_llm_model(web.conn, org_id=org_id)
         llm_providers.select_provider(llm_providers.AnthropicProvider()).complete(

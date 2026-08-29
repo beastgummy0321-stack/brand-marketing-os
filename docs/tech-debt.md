@@ -18,19 +18,31 @@
 檢查。這兩道買到的是早 10 倍的警報（廣告模組會在約 2,000 行撞上 `ModuleSizeRatchetTest`，
 不是 21,595 行），不是解藥。
 
-## 〇、外殼切片（2026-08-29）留下的三筆：沒有閘門，靠這份清單記得
+## 〇、外殼切片（2026-08-29）留下的兩筆：沒有閘門，靠這份清單記得
 
-切掉 `app/ads/` 之後，下面三處失去了呼叫端但沒有一起刪——刪它們超出票 2 的範圍，
-留給使用者決定。**沒有機器閘門守這三筆**，所以寫在這裡。
+切掉 `app/ads/` 之後，下面兩處失去了呼叫端但沒有一起刪——刪它們超出票 2 的範圍，
+留給使用者決定。**沒有機器閘門守這兩筆**，所以寫在這裡。
+
+原本的第三筆（規則卡）2026-08-29 已清掉：`budget_structure`／`sample_size`／
+`ad_creative_fatigue`／`pacing`／`health_lights`／`autonomy` 六張卡連同前端投放自動度
+區塊一起刪除，設定頁不再顯示調了不影響任何東西的門檻。
 
 | 是什麼 | 現況 | 為什麼沒順手刪 |
 |---|---|---|
-| `app/core/rule_cards.py` 的 8 張規則卡有 6 張失效（`budget_structure`／`sample_size`／`ad_creative_fatigue`／`pacing`／`health_lights`／`autonomy`） | 設定頁照樣顯示、照樣可以調，但調了不影響任何東西 | 清掉要連動 3 個測試檔＋前端兩個區塊。**這是使用者看得到的謊**，優先處理 |
 | `cycle_shopee_code` 資料表與 `app/orders/channel.py` 的 `set_shopee_code`／`get_shopee_code` | 零呼叫端；欄位 `campaign_cycle_id` 指向已刪除的概念 | 它是 orders 模組的表，票 3 的 migration 伸手去刪別的模組的表會違反模組邊界（`CLAUDE.md` #7） |
 | `app/dashboard/campaign_calendar.py` 的 `current_campaign_stage()` | 零呼叫端（原本只有駕駛艙在用） | 節日日曆本身活著，這支純函數之後的儀表板可能會用；有自己的單元測試 |
 
 另有一道空轉的閘門：`ImportBoundaryScanTest` 的 `BRANCH_PACKAGES` 現在是空的（唯一的分支
 專屬層就是廣告）。掃描器留著等下一個分支層，或直接刪掉——兩種都行，但別假裝它在守東西。
+
+## 〇之二、`card_test.py` 不受每月 AI 花費上限管（2026-08-30 使用者裁決：不補）
+
+每月上限的算法現在只有一份——`app/llm/gateway.py` 的 `check_spend_cap()`，
+`run_task()` 與設定頁「測試連線」都問它。**唯一還繞過去的是
+`python -m app.intake.card_test`**：它直接呼叫 provider，沒有登入者、要自己挑組織，
+HTTP 打不到。使用者 2026-08-30 裁決不補——那是開發者自己在命令列上跑的診斷工具，
+跑的人本來就知道自己在花錢。**新增第三個會花錢的路徑時請先問 `check_spend_cap()`**，
+不要再自己抄一份算法。
 
 ## 一、超過 800 行的檔案：加新功能前先拆
 

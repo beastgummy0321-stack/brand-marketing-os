@@ -1,9 +1,9 @@
 /** 側邊導覽資料（票 01-react-shell，票 02 更新「跨品牌總覽」連結）。
  *
  * 舊介面的側欄骨架已有原型（app/templates/_layouts/console.html，尚未套用到任何路由），
- * 這裡沿用同一份分類：收件匣／品牌智庫／投放與成效／內容與曝光／顧客與口碑／設定。
+ * 這裡沿用同一份分類：收件匣／品牌智庫／內容與曝光／顧客與口碑／設定。
  *
- * 品牌智庫、投放與成效兩項要選定品牌才有意義，新殼還沒有單品牌駕駛艙（票 03 才做），
+ * 品牌智庫等品牌模組要選定品牌才有意義，新殼還沒有單品牌駕駛艙（票 03 才做），
  * 所以先灰掉並說明原因，不做成看起來能點但沒反應的假連結（規格使用者故事 23）。
  */
 
@@ -67,44 +67,12 @@ export function navModules(brandId: string | null): NavItem[] {
       : { label: "檔期", status: "disabled", reason: "請先在跨品牌總覽選擇品牌" },
     brandId
       ? {
-          label: "投放與成效",
-          href: `/brands/${brandId}/campaigns`,
-          status: "active",
-          internal: true,
-        }
-      : { label: "投放與成效", status: "disabled", reason: "請先在跨品牌總覽選擇品牌" },
-    brandId
-      ? {
-          label: "累積智慧",
-          href: `/brands/${brandId}/learnings`,
-          status: "active",
-          internal: true,
-        }
-      : { label: "累積智慧", status: "disabled", reason: "請先在跨品牌總覽選擇品牌" },
-    brandId
-      ? {
-          label: "素材工作檯",
-          href: `/brands/${brandId}/workbench`,
-          status: "active",
-          internal: true,
-        }
-      : { label: "素材工作檯", status: "disabled", reason: "請先在跨品牌總覽選擇品牌" },
-    brandId
-      ? {
           label: "訂單與顧客",
           href: `/brands/${brandId}/orders`,
           status: "active",
           internal: true,
         }
       : { label: "訂單與顧客", status: "disabled", reason: "請先在跨品牌總覽選擇品牌" },
-    brandId
-      ? {
-          label: "資料上線",
-          href: `/brands/${brandId}/data-onboarding`,
-          status: "active",
-          internal: true,
-        }
-      : { label: "資料上線", status: "disabled", reason: "請先在跨品牌總覽選擇品牌" },
     { label: "內容與曝光", status: "disabled", reason: "即將推出" },
     { label: "顧客與口碑", status: "disabled", reason: "即將推出" },
   ];

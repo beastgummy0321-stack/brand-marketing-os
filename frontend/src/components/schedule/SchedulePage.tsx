@@ -102,10 +102,22 @@ export function SchedulePage({ brandId }: { brandId: string }) {
     Promise.all([fetchProductList(brandId), fetchSchedule(brandId)])
       .then(([products, schedule]) => {
         setState({ status: "ready", products, schedule });
-        const firstEnabled = schedule.platforms.find((p) => p.enabled);
-        setPlatform(firstEnabled?.id ?? "");
-        const firstObjective = schedule.objectives.find((o) => o.platform === firstEnabled?.id);
-        setObjective(firstObjective?.value ?? "");
+        // 上次送出的平台／目標要一起還原——目標是掛在平台底下的，只還原一個會讓選單顯示
+        // 不在自己選項裡的值；選項來自資料檔、會變，對不上就退回第一個選項。
+        const last = schedule.plan;
+        if (
+          last &&
+          schedule.platforms.some((p) => p.id === last.platform && p.enabled) &&
+          schedule.objectives.some((o) => o.platform === last.platform && o.value === last.objective)
+        ) {
+          setPlatform(last.platform);
+          setObjective(last.objective);
+        } else {
+          const firstEnabled = schedule.platforms.find((p) => p.enabled);
+          setPlatform(firstEnabled?.id ?? "");
+          const firstObjective = schedule.objectives.find((o) => o.platform === firstEnabled?.id);
+          setObjective(firstObjective?.value ?? "");
+        }
         setPromotionNote("");
         setPlanCount(Math.min(Math.max(3, schedule.plan_count_min), schedule.plan_count_max));
       })
