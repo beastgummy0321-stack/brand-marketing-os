@@ -59,3 +59,40 @@ that does not exist. Rule: build only what has hurt.
   job registry. The worker entry point is done.
 - `install_signal_handlers=False` is required, not optional: the worker shares uvicorn's event
   loop, and installing its own signal handlers fights uvicorn's Ctrl+C and SIGTERM handling.
+
+## Amended 2026-08-29: it rides in the process, not on the loop
+
+The first implementation put the worker on **uvicorn's own event loop**, and the site would not
+start at all. Booting it produced `PoolTimeout: pool initialization incomplete after 30.0 sec`
+out of the FastAPI lifespan, then `Application startup failed. Exiting.` and exit code 3 — with
+the log filling up with psycopg saying, plainly, that it *cannot use the ProactorEventLoop to
+run in async mode*.
+
+Two mistakes, and the second is the one worth remembering.
+
+**Windows gives uvicorn a loop psycopg cannot use, and the policy fix does not reach it.** The
+module already switched the process policy to `WindowsSelectorEventLoopPolicy` at import, which
+was the right diagnosis and the wrong lever: `Server.run` hands `asyncio_run` an explicit
+`loop_factory` from `config.get_loop_factory()`, and `asyncio_loop_factory` returns
+`ProactorEventLoop` on win32 outright. uvicorn never consults the policy, so nothing riding its
+loop can benefit from one. The worker now owns **its own thread and its own loop**, built by
+`asyncio.run()`, which does read the policy. That is the difference between "in the process" and
+"on the loop", and only the first was ever the decision.
+
+**A worker that cannot start must not take the site down.** The exception propagated out of
+`lifespan`, so the price of the daily pull failing was that nothing opened at all — the
+dashboard, the scheduling page, the settings screen, all of it. This ADR argued the worker was
+*additive* under rule 6, and an addition that can remove the whole primary path is not additive.
+`start_worker()` now logs and swallows every failure, and `python -m app.meta.daily_pull` is
+still there. That belongs in the cost list above and was missing from it.
+
+**Why no test caught it:** nothing started the application through its real lifespan. The
+worker test called `start_worker()` / `stop_worker()` directly, because driving the lifespan
+under this file's pytest fixtures hangs — a limitation its own docstring recorded. Testing
+around the failing path is how the failing path survived. The replacement test asserts the
+invariant that actually protects the site: `start_worker()` never raises. It was proven red by
+restoring the old fatal behaviour, then green.
+
+`install_signal_handlers=False` is still required, for a smaller reason than before: the worker
+is no longer on uvicorn's loop, but it is still not the main thread, and signal handlers can
+only be installed there.

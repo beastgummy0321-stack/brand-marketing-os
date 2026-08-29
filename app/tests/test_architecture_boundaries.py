@@ -534,7 +534,8 @@ class TestRatioTest(unittest.TestCase):
 # 是讓成長出現在 diff 裡有人看得到。廣告模組會在約 2,000 行撞上它，而不是 21,595 行。
 KNOWN_MODULE_SIZES = {
     "app": 540,  # 票 05 fix round：main.py 加 FastAPI lifespan（掛/收 procrastinate worker）
-    "app/background": 143,  # 票 05 fix round：start_worker()／stop_worker()，把常駐 worker
+    "app/background": 215,  # 2026-08-29 修 Windows 起不來：worker 移到自己的執行緒／loop
+                            # ＋起不來不得弄死網站（ADR 0039 amended）
                              # 掛進既有 process，不再只有 app()
     "app/brand_intelligence": 2634,
     "app/brand_web": 2155,
