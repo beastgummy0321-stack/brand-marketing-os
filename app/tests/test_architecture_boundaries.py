@@ -555,7 +555,10 @@ KNOWN_MODULE_SIZES = {
                           # 缺陷 1：intake_question 改走強制工具結構化輸出，新增
                           # _QUESTION_TOOL／_CHOICE_SCHEMA schema（散文裡的 JSON 格式
                           # 說明同時刪掉，仍淨增）。前一次是 3548
-    "app/llm": 1617,  # 2026-08-30 月費上限抽成 check_spend_cap()（小債）：算法原本寫死在
+    "app/llm": 1619,  # 票 01：providers.py 的 TASK_TYPE_LABELS／TASK_DEFAULTS 各補一行
+                       # "schedule_creative"（跟既有的 schedule_plan／schedule_tree 同一組）。
+                       # 前一次是 1617——
+                       # 2026-08-30 月費上限抽成 check_spend_cap()（小債）：算法原本寫死在
                        # run_task() 裡，設定頁「測試連線」繞過去了；抽成一支共用函式，第三個
                        # 呼叫端才不會又悄悄繞開。前一次是 1605——
                        # 本機 codex CLI 線路（c47bc36，使用者 2026-08-29 裁決調高明表）：
@@ -577,7 +580,13 @@ KNOWN_MODULE_SIZES = {
     "app/orders": 1423,  # 票 12：channel_revenue 一張表取代三張（刪掉藥局專屬那一整組
                           # 之後仍淨增）——官網帳本寫入路徑、channel_revenue_summary()、
                           # 通用手動登錄（含「官網不能手動登錄」那道錢的守門）
-    "app/schedule": 933,  # 2026-08-29：選定的產品名稱進 prompt（_validate_products() 改回傳
+    "app/schedule": 1145,  # 票 01（`.scratch/creative-slice/issues/01-ad-creative-per-ad-node.md`）：
+                           # 第三個 task_type「schedule_creative」——app/schedule/creative.py
+                           # 新檔（build_creative／creative_from_task_row，96 行）＋
+                           # routes.py 的 POST .../creative、_run_creative()、
+                           # _leaf_ad_node_names()／_creative_ad_node_names()、_brand_response()
+                           # 多回一個 creative 鍵。前一次是 933——
+                           # 2026-08-29：選定的產品名稱進 prompt（_validate_products() 改回傳
                            # 名稱、_plan_params_text() 多列一行）——沒有這 10 行，勾產品對代理
                            # 完全沒有作用，因為品牌上下文只吐「已確認的事實」。前一次是 923——
                            # 2026-08-29 修「畫面吐 [object Object]、活動樹算好的結果被下一次

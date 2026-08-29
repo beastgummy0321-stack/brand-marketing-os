@@ -9,6 +9,7 @@ import {
   createSchedulePlan,
   expandPlanIntoTree,
   fetchSchedule,
+  generateCreative,
   rejectSchedulePlans,
   SCHEDULE_REJECT_CATEGORIES,
   type RejectEntryInput,
@@ -55,6 +56,8 @@ export function SchedulePage({ brandId }: { brandId: string }) {
   const [expandError, setExpandError] = useState<string | null>(null);
   const [binding, setBinding] = useState(false);
   const [bindError, setBindError] = useState<string | null>(null);
+  const [generatingCreative, setGeneratingCreative] = useState(false);
+  const [creativeError, setCreativeError] = useState<string | null>(null);
   const [feedbackByPlan, setFeedbackByPlan] = useState<Record<number, FeedbackEntry[]>>({});
   const [rejecting, setRejecting] = useState(false);
   const [rejectError, setRejectError] = useState<string | null>(null);
@@ -139,8 +142,9 @@ export function SchedulePage({ brandId }: { brandId: string }) {
   // 進行中，按下去就開始輪詢，那個阻塞的 POST 中途斷掉也接得回來。
   const runningNow =
     state.status === "ready" &&
-    Boolean(submitting || expandingIndex !== null
-            || state.schedule.plan?.running || state.schedule.tree?.running);
+    Boolean(submitting || expandingIndex !== null || generatingCreative
+            || state.schedule.plan?.running || state.schedule.tree?.running
+            || state.schedule.creative?.running);
   useEffect(() => {
     if (!runningNow) return;
     const timer = setInterval(load, 2000);
@@ -191,6 +195,19 @@ export function SchedulePage({ brandId }: { brandId: string }) {
       setBindError(err instanceof Error ? err.message : "配對失敗，請稍後再試。");
     } finally {
       setBinding(false);
+    }
+  }
+
+  async function handleGenerateCreative() {
+    setGeneratingCreative(true);
+    setCreativeError(null);
+    try {
+      const schedule = await generateCreative(brandId);
+      setState((prev) => (prev.status === "ready" ? { ...prev, schedule } : prev));
+    } catch (err) {
+      setCreativeError(err instanceof Error ? err.message : "產出失敗，請稍後再試。");
+    } finally {
+      setGeneratingCreative(false);
     }
   }
 
@@ -375,7 +392,16 @@ export function SchedulePage({ brandId }: { brandId: string }) {
           </p>
         )}
         {schedule.tree && !schedule.tree.running && (
-          <CampaignTree tree={schedule.tree} binding={binding} bindError={bindError} onBind={handleBind} />
+          <CampaignTree
+            tree={schedule.tree}
+            binding={binding}
+            bindError={bindError}
+            onBind={handleBind}
+            creative={schedule.creative}
+            generatingCreative={generatingCreative}
+            creativeError={creativeError}
+            onGenerateCreative={handleGenerateCreative}
+          />
         )}
       </div>
     );

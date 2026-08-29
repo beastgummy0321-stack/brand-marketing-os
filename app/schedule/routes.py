@@ -9,7 +9,10 @@ ADR 0028／0029／0032／0033：部門是 repo 裡的一個資料夾
 這裡不重寫第二個。money 由 `plan.py` 的純函數算，代理只給比例。票 10-feedback-entries
 （ADR 0037）：拒絕一批方案＝把每條意見寫成 `rule` 表的一列（呼叫既有的
 `bi_repo.create_rule()`，不自己下 SQL），再用最新一次成功的 `schedule_plan` 凍結參數重跑，
-沒有第二條把回饋文字塞進 prompt 的路徑。
+沒有第二條把回饋文字塞進 prompt 的路徑。票 01（`.scratch/creative-slice/issues/`）：
+`app/departments/creative/ad_creative.md` 是創意部門的第一個任務檔（ADR 0028 加的第二個
+部門資料夾），把展開好的活動樹每個最深層節點各配一份內容，`task_type = "schedule_creative"`
+——外殼一樣不解析這份任務檔，也不認得任何一個具體欄位名稱（見 `app/schedule/creative.py`）。
 
 平台／行銷目標不是外殼的業務詞（CONTEXT.md：外殼只認得檔期／核准／預算上限），一律從
 `platform_objectives.json` 這份資料檔讀出來，不寫死成 Python 常數或畫面 label（票 08）。
@@ -33,6 +36,7 @@ from app.core import rule_cards
 from app.core.db import APP_DIR, jsonb
 from app.llm import context_compiler, gateway, methodology, providers
 from app.meta import repository as meta_repo
+from app.schedule import creative as creative_mod
 from app.schedule import plan as plan_mod
 from app.schedule import tree as tree_mod
 
@@ -43,12 +47,18 @@ router = APIRouter(prefix="/api/schedule")
 TASK_TYPE = "schedule_plan"
 # 票 09：選定一個方案之後展開成三層活動樹，第二個 task_type，同一支 llm_task 表。
 TREE_TASK_TYPE = "schedule_tree"
+# 票 01（`.scratch/creative-slice/issues/01-ad-creative-per-ad-node.md`）：把展開好的活動樹
+# 每個最深層節點各配一份內容，第三個 task_type，同一支 llm_task 表（frozen decision 1）。
+CREATIVE_TASK_TYPE = "schedule_creative"
 # 對照 app/methodology/README.md 既有的「檔期計畫生成」列，不新增列——展開活動樹用的到的
 # 平台知識（帳戶結構、AB 測試分流）跟出方案是同一批，沒有真的用到才新增專屬列（維護規則
 # 「只按消費拉動萃取」）。
 METHODOLOGY_TASK_LABELS = ["檔期計畫生成"]
 DEPARTMENT_FILE = APP_DIR / "departments" / "ads" / "schedule.md"
 TREE_DEPARTMENT_FILE = APP_DIR / "departments" / "ads" / "campaign_tree.md"
+# 票 01 frozen decision 2：這是創意部門的第一個任務檔，`app/departments/` 底下新增一個
+# 資料夾，程式一行不改（ADR 0028）——這裡只是讀檔路徑，不是新的 Python 套件。
+CREATIVE_DEPARTMENT_FILE = APP_DIR / "departments" / "creative" / "ad_creative.md"
 # 平台／行銷目標資料檔（票 08 §3）：改這個檔案不必重新部署程式；每次讀都重新讀檔
 # （不快取到模組層），比照 DEPARTMENT_FILE 既有的讀法。
 PLATFORM_DATA_FILE = APP_DIR / "schedule" / "platform_objectives.json"
@@ -150,6 +160,33 @@ def _fill_node_spend(conn, org_id: str, brand_id: str, tree: dict) -> None:
             node["roas"] = campaign["roas"]
 
 
+def _leaf_ad_node_names(nodes: list) -> list[str]:
+    """活動樹最深層（沒有 `children` 的）節點名稱，照文件順序（深度優先、前序）——票 01：
+    內容跟這一層的節點一一對應，不是每一層都配一份。"""
+    names = []
+    for node in nodes:
+        if node["children"]:
+            names.extend(_leaf_ad_node_names(node["children"]))
+        else:
+            names.append(node["name"])
+    return names
+
+
+def _creative_ad_node_names(conn, creative_row: dict) -> list[str]:
+    """從這一列內容任務凍結的 `source_tree_task_id` 找回當時的那棵樹，重算最深層節點名稱
+    ——frozen decision 5：核對用的永遠是產出當下的那棵樹，使用者之後重新展開樹不會悄悄
+    改寫已經產出的內容，所以這裡不能讀「最新一次的樹」，只能讀凍結住的那一列。"""
+    scope = creative_row.get("context_scope_json") or {}
+    source_tree_task_id = scope.get("source_tree_task_id")
+    if not source_tree_task_id:
+        return []
+    tree_row = gateway.get_task(conn, source_tree_task_id)
+    if tree_row is None:
+        return []
+    tree = tree_mod.tree_from_task_row(tree_row)
+    return _leaf_ad_node_names(tree["nodes"])
+
+
 def _brand_response(conn, brand_id: str, org_id: str) -> dict:
     current_daily_budget = rule_cards.get_value(conn, brand_id, "schedule_budget", "daily_budget")
     plan_count_min, plan_count_max = _plan_count_bounds(conn, brand_id)
@@ -164,6 +201,13 @@ def _brand_response(conn, brand_id: str, org_id: str) -> dict:
         tree["running"] = True
     if tree is not None:
         _fill_node_spend(conn, org_id, brand_id, tree)
+    creative_row, creative_running = _display_task_row(conn, brand_id, CREATIVE_TASK_TYPE)
+    creative = None
+    if creative_row is not None:
+        ad_node_names = _creative_ad_node_names(conn, creative_row)
+        creative = creative_mod.creative_from_task_row(creative_row, ad_node_names)
+        if creative_running:
+            creative["running"] = True
     return {
         "daily_budget": current_daily_budget,
         "plan_count_min": plan_count_min,
@@ -172,6 +216,7 @@ def _brand_response(conn, brand_id: str, org_id: str) -> dict:
         "objectives": data["objectives"],
         "plan": plan,
         "tree": tree,
+        "creative": creative,
     }
 
 
@@ -326,6 +371,69 @@ def _run_tree(conn, brand_id: str, org_id: str, body: "TreeRequest") -> dict:
         # 已知不夠的數字的 1.5 倍；以同一批量測的 53.9 tok/s（見 TaskOptions.timeout_s 註解）
         # 換算需要 445 秒，所以 timeout 一起抬到 480，仍在 SDK 非串流的 600 秒上限之內。
         # 兩個數字必須一起動：只抬 max_tokens 會把「被截斷」換成「逾時」。
+        options=gateway.TaskOptions(max_tokens=24000, timeout_s=480.0),
+    )
+    return _brand_response(conn, brand_id, org_id)
+
+
+NO_TREE_TO_GENERATE_CREATIVE_MESSAGE = "還沒有成功展開的活動樹可以產出內容，請先展開活動樹。"
+
+
+def _creative_params_text(tree: dict) -> str:
+    """這次要產內容的活動結構，原樣列給代理看——跟 `_tree_params_text` 同一個道理，這裡
+    不解讀 tree 的內容，只把已經算好的 JSON 轉成代理看得懂的字串，好讓代理知道每個最深層
+    節點屬於哪個上層、已經有什麼欄位／提醒。"""
+    body = {"levels": tree["levels"], "nodes": tree["nodes"]}
+    return "\n".join([
+        "## 這次要產文案的活動結構",
+        json.dumps(body, ensure_ascii=False, indent=2),
+    ])
+
+
+def _run_creative(conn, brand_id: str, org_id: str) -> dict:
+    """票 01：把已展開的活動樹每個最深層節點各配一份內容——重讀最新一次成功的
+    `schedule_tree` 那列，把它的 id 凍結進這次任務的 `context_scope_json`（frozen decision
+    5：之後使用者重新展開樹，不會悄悄改寫已經產出的內容）。找不到成功的樹、或樹沒有任何
+    最深層節點，都在打代理之前回人話 400（比照 `_run_tree` 的「先驗證、後花錢」次序）。"""
+    tree_row = _latest_task_row(conn, brand_id, TREE_TASK_TYPE)
+    if tree_row is None or tree_row["status"] != "succeeded":
+        raise web.ApiError(400, "no_tree", NO_TREE_TO_GENERATE_CREATIVE_MESSAGE)
+    tree = tree_mod.tree_from_task_row(tree_row)
+    ad_node_names = _leaf_ad_node_names(tree["nodes"]) if tree["failure"] is None else []
+    if not ad_node_names:
+        raise web.ApiError(400, "no_tree", NO_TREE_TO_GENERATE_CREATIVE_MESSAGE)
+
+    plan_scope = tree_row.get("context_scope_json") or {}
+    plan_row = gateway.get_task(conn, plan_scope.get("source_plan_task_id") or "")
+    plan_row_scope = (plan_row.get("context_scope_json") or {}) if plan_row else {}
+    product_ids = plan_row_scope.get("product_ids", [])
+
+    brand_context, knowledge_item_ids, brand_version = _compile_brand_context(
+        conn, brand_id, product_ids
+    )
+    department_text = CREATIVE_DEPARTMENT_FILE.read_text(encoding="utf-8")
+    params_text = _creative_params_text(tree)
+    prompt = "\n\n".join(
+        section for section in (department_text, params_text, brand_context) if section
+    )
+
+    context = gateway.TaskContext(
+        # frozen decision 5：字面契約只有這三個鍵——凍結來源樹的 id，不是凍結當下算出的
+        # 節點名稱清單，讀回來的時候（`_creative_ad_node_names`）永遠重新從這棵凍結的樹算。
+        context_scope={
+            "brand_id": brand_id, "source_tree_task_id": tree_row["id"],
+            "plan_index": tree["plan_index"],
+        },
+        knowledge_item_ids=knowledge_item_ids,
+        brand_version=brand_version,
+        product_version=None,
+    )
+    gateway.run_task(
+        conn, PROVIDER, brand_id=brand_id, task_type=CREATIVE_TASK_TYPE,
+        prompt_template_id=CREATIVE_TASK_TYPE, prompt_template_version="v1",
+        system=None, messages=[{"role": "user", "content": prompt}], context=context,
+        # frozen decision 6：跟 `_run_tree` 完全相同的兩個數字，來源見那裡的註解——不是
+        # 新猜的，是同一批量測的重用；這裡不重新量測、不重新定義。
         options=gateway.TaskOptions(max_tokens=24000, timeout_s=480.0),
     )
     return _brand_response(conn, brand_id, org_id)
@@ -529,3 +637,10 @@ def create_reject(request: Request, brand_id: str, body: RejectRequest):
     actor = web.require_actor(request)
     web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
     return _run_reject(web.conn, brand_id, actor, body)
+
+
+@router.post("/brands/{brand_id}/creative")
+def create_creative(request: Request, brand_id: str):
+    actor = web.require_actor(request)
+    web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
+    return _run_creative(web.conn, brand_id, actor.org_id)

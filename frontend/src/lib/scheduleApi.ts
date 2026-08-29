@@ -89,6 +89,30 @@ export interface CampaignTreeResult {
   bind_failure: string | null;
 }
 
+/** 票 01：活動樹每個最深層節點各配一份內容——`label`／`value` 都是後端部門任務檔
+ * （`app/departments/creative/ad_creative.md`）的決定，這裡的型別一樣不知道任何具體欄位
+ * 叫什麼名字，跟 `CampaignTreeField` 同一個道理。 */
+export interface CreativeField {
+  label: string;
+  value: string;
+}
+
+export interface CreativeAd {
+  node: string;
+  fields: CreativeField[];
+  warnings: string[];
+}
+
+export interface CreativeResult {
+  task_id: string;
+  created_at: string;
+  source_tree_task_id: string;
+  ads: CreativeAd[];
+  narrative: string;
+  failure: string | null;
+  running: boolean;
+}
+
 export interface ScheduleState {
   daily_budget: number;
   plan_count_min: number;
@@ -97,6 +121,7 @@ export interface ScheduleState {
   objectives: ScheduleObjectiveOption[];
   plan: SchedulePlan | null;
   tree: CampaignTreeResult | null;
+  creative: CreativeResult | null;
 }
 
 export interface CreateSchedulePlanInput {
@@ -202,6 +227,28 @@ export async function bindScheduleTree(brandId: string): Promise<ScheduleState> 
   });
   if (!res.ok) {
     let message = `配對失敗（狀態碼 ${res.status}）`;
+    try {
+      const data = (await res.json()) as { error?: { message?: string } };
+      message = errorMessageFrom(data, message);
+    } catch {
+      // 回應不是 JSON，用預設訊息。
+    }
+    throw new Error(message);
+  }
+  return (await res.json()) as ScheduleState;
+}
+
+/** 票 01：把已展開的活動樹每個最深層節點各配一份內容——比對規則、儲存位置全部凍結在
+ * 後端，這裡只負責打那支端點，回傳整個 `ScheduleState`（跟其他三支端點一樣，`creative`
+ * 欄位換新）。 */
+export async function generateCreative(brandId: string): Promise<ScheduleState> {
+  const res = await apiFetch(`/api/schedule/brands/${encodeURIComponent(brandId)}/creative`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({}),
+  });
+  if (!res.ok) {
+    let message = `產出失敗（狀態碼 ${res.status}）`;
     try {
       const data = (await res.json()) as { error?: { message?: string } };
       message = errorMessageFrom(data, message);

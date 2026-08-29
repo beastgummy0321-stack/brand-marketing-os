@@ -137,6 +137,7 @@ EFFORT_SUPPORTED_MODELS = {"claude-opus-5", "claude-sonnet-5", "claude-fable-5"}
 TASK_TYPE_LABELS = {
     "schedule_plan": "檔期規劃（出方案）",
     "schedule_tree": "檔期規劃（展開活動樹，票 09）",
+    "schedule_creative": "檔期規劃（產出節點內容，票 01）",
     "creative_batch": "素材生成（整批）",
     "creative_backfill": "素材生成（補打缺型別）",
     "creative_rewrite": "素材生成（單則改寫）",
@@ -158,6 +159,7 @@ TASK_DEFAULTS = {
     # 規劃：較高思考
     "schedule_plan": {"model": None, "thinking": "high"},
     "schedule_tree": {"model": None, "thinking": "high"},
+    "schedule_creative": {"model": None, "thinking": "high"},
     # 素材文案生成：中等思考
     "creative_batch": {"model": None, "thinking": "medium"},
     "creative_backfill": {"model": None, "thinking": "medium"},

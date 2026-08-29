@@ -106,6 +106,24 @@ def _one_tree_nodes(shares: tuple = (0.7, 0.3)) -> list:
     ]
 
 
+def _creative_fenced(creatives: list) -> str:
+    body = json.dumps({"creatives": creatives}, ensure_ascii=False)
+    return f"這是一段給老闆看的說明文字。\n\n```json\n{body}\n```"
+
+
+def _one_creative(node: str, **overrides) -> dict:
+    creative = {
+        "node": node,
+        "fields": [
+            {"label": "主要文字", "value": "測試內容"},
+            {"label": "圖片提示詞", "value": "測試提示詞"},
+        ],
+        "warnings": [],
+    }
+    creative.update(overrides)
+    return creative
+
+
 def _fake(rendered_output: str, search_sources: list | None = None) -> providers.FakeProvider:
     return providers.FakeProvider(response=providers.ProviderResponse(
         output_text=rendered_output, structured=None,
@@ -256,21 +274,48 @@ class BuildTreeTest(unittest.TestCase):
 class CampaignTreeVocabularyGateTest(unittest.TestCase):
     """加一個通路＝加一個部門任務檔（`app/departments/ads/campaign_tree.md`），不是改這支
     前端元件——這道閘門逐字掃過去確保沒人偷懶寫死。字面比對區分大小寫：元件本身叫
-    `CampaignTree`（大寫 C），跟清單裡小寫的 `campaign` 不是同一個字串，不誤判。"""
+    `CampaignTree`（大寫 C），跟清單裡小寫的 `campaign` 不是同一個字串，不誤判。
+
+    票 01：這個元件延伸到 CONTEXT.md「外殼認得的業務詞只有三個」那條界線——切角／主題／
+    素材檔／創意簡報／一條學習全部下放給 `app/departments/creative/ad_creative.md`，一併
+    加進這裡的清單（這支元件現在也渲染最深層節點的內容）。"""
 
     _BANNED_WORDS = [
         "Meta", "Facebook", "Instagram", "Google", "TikTok",
         "campaign", "adset", "ad set", "行銷活動", "廣告組合", "廣告",
+        "切角", "主題", "素材檔", "創意簡報", "一條學習",
     ]
 
-    def test_component_has_no_platform_vocabulary(self):
+    def test_component_has_no_platform_or_creative_vocabulary(self):
         path = (
             Path(__file__).resolve().parents[2]
             / "frontend" / "src" / "components" / "schedule" / "CampaignTree.tsx"
         )
         text = path.read_text(encoding="utf-8")
         hits = [word for word in self._BANNED_WORDS if word in text]
-        self.assertEqual(hits, [], f"CampaignTree.tsx 含通路詞彙：{hits}")
+        self.assertEqual(hits, [], f"CampaignTree.tsx 含通路或創意詞彙：{hits}")
+
+    # 票 01 done-check 最後一條：「不要寫死」延伸到 Python 那一側。這裡只掃創意詞彙
+    # （切角／主題／素材檔／創意簡報／一條學習），不套用平台詞彙清單——`routes.py` 的註解
+    # 本來就會提到 Meta／Google／TikTok 這類平台名稱解釋歷史決定（例如 46 行「campaign_plan」
+    # 改名的由來），那從來不是這道閘門要抓的東西；但這五個創意詞彙沒有任何理由出現在後端
+    # 程式碼的任何角落，包含註解——它們的定義只准活在 `ad_creative.md` 這份任務檔裡。
+    _CREATIVE_WORDS = ["切角", "主題", "素材檔", "創意簡報", "一條學習"]
+    _BACKEND_SCANNED_PATHS = [
+        ("app", "schedule", "routes.py"),
+        ("app", "schedule", "creative.py"),
+    ]
+
+    def test_new_backend_files_have_no_creative_vocabulary(self):
+        repo_root = Path(__file__).resolve().parents[2]
+        problems = []
+        for parts in self._BACKEND_SCANNED_PATHS:
+            path = repo_root.joinpath(*parts)
+            text = path.read_text(encoding="utf-8")
+            hits = [word for word in self._CREATIVE_WORDS if word in text]
+            if hits:
+                problems.append(f"{'/'.join(parts)}：{hits}")
+        self.assertEqual(problems, [], "後端程式碼含創意詞彙：\n" + "\n".join(problems))
 
 
 # -- 3／4／5：API 契約、租戶隔離、prompt 原樣貼入（ADR 0029）、票 08 表單驗證 -----------
@@ -422,6 +467,13 @@ class PlanApiContractTest(_ScheduleApiTestBase):
             headers=self._headers(token_b, _org_b),
         )
         self.assertEqual(reject_resp.status_code, 404)
+
+        creative_resp = self.client.post(
+            f"/api/schedule/brands/{self.brand['id']}/creative",
+            json={},
+            headers=self._headers(token_b, _org_b),
+        )
+        self.assertEqual(creative_resp.status_code, 404)
 
 
 class RejectApiContractTest(_ScheduleApiTestBase):
@@ -743,6 +795,132 @@ class BindTreeApiContractTest(_ScheduleApiTestBase):
         self.assertEqual(tree["bind_failure"], "配對失敗，請檢查名稱是否完全相符")
         self.assertIsNone(tree["nodes"][0]["bound_external_id"])
         self.assertEqual(self._stored_bound_external_ids(), {})
+
+
+class CreativeApiContractTest(_ScheduleApiTestBase):
+    """票 01（`.scratch/creative-slice/issues/01-ad-creative-per-ad-node.md`）：POST
+    .../creative——活動樹每個最深層節點各配一份內容。這裡的最深層節點固定是 `_one_tree_nodes()`
+    產生的「單元1」「單元2」（見本檔頂部），照文件順序。"""
+
+    _LEAF_NODE_NAMES = ["單元1", "單元2"]
+
+    def _succeed_plan_and_tree(self) -> None:
+        schedule_routes.PROVIDER = _fake(_fenced_plans([_one_plan()]))
+        resp = self._post(plan_count=1)
+        self.assertEqual(resp.status_code, 200, resp.text)
+        schedule_routes.PROVIDER = _fake(_tree_fenced(_one_tree_nodes()))
+        resp = self.client.post(
+            f"/api/schedule/brands/{self.brand['id']}/tree", json={"plan_index": 0}
+        )
+        self.assertEqual(resp.status_code, 200, resp.text)
+
+    def _generate(self):
+        return self.client.post(f"/api/schedule/brands/{self.brand['id']}/creative", json={})
+
+    def test_post_creative_returns_one_ad_per_leaf_node_and_prompt_carries_department_file(self):
+        self._succeed_plan_and_tree()
+        # 代理故意回覆「反過來」的順序——用來證明回應真的是照樹的文件順序重排，不是原樣
+        # 照抄代理回覆的順序（代理不保證照樹的順序回覆）。
+        reversed_names = list(reversed(self._LEAF_NODE_NAMES))
+        fake = _fake(_creative_fenced([_one_creative(name) for name in reversed_names]))
+        schedule_routes.PROVIDER = fake
+
+        resp = self._generate()
+        self.assertEqual(resp.status_code, 200, resp.text)
+        creative = resp.json()["creative"]
+        self.assertIsNone(creative["failure"])
+        # 樹的文件順序（單元1、單元2），不是代理回覆的順序（單元2、單元1）。
+        self.assertEqual([ad["node"] for ad in creative["ads"]], self._LEAF_NODE_NAMES)
+        self.assertEqual(
+            creative["ads"][0]["fields"],
+            [
+                {"label": "主要文字", "value": "測試內容"},
+                {"label": "圖片提示詞", "value": "測試提示詞"},
+            ],
+        )
+
+        # ADR 0029：部門任務檔原樣貼進 prompt——用檔案裡的識別行證明真的貼進去了。
+        self.assertEqual(len(fake.calls), 1)
+        prompt_text = fake.calls[0]["messages"][0]["content"]
+        self.assertIn("AD-CREATIVE-TASK-V1", prompt_text)
+
+    def test_get_after_post_returns_identical_creative(self):
+        self._succeed_plan_and_tree()
+        schedule_routes.PROVIDER = _fake(_creative_fenced(
+            [_one_creative(name) for name in self._LEAF_NODE_NAMES]
+        ))
+        post_resp = self._generate()
+        get_resp = self.client.get(f"/api/schedule/brands/{self.brand['id']}")
+        self.assertEqual(post_resp.json()["creative"], get_resp.json()["creative"])
+
+    def test_no_succeeded_tree_is_rejected_before_calling_agent(self):
+        fake = _fake(_creative_fenced([_one_creative("單元1")]))
+        schedule_routes.PROVIDER = fake
+        resp = self._generate()
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(fake.calls, [])
+
+    def test_missing_node_fails_the_whole_run(self):
+        self._succeed_plan_and_tree()
+        # 少一份：「單元2」沒有配到內容。
+        schedule_routes.PROVIDER = _fake(_creative_fenced([_one_creative("單元1")]))
+        resp = self._generate()
+        self.assertEqual(resp.status_code, 200, resp.text)
+        creative = resp.json()["creative"]
+        self.assertTrue(creative["failure"])
+        self.assertEqual(creative["ads"], [])
+
+    def test_duplicate_node_fails_the_whole_run(self):
+        self._succeed_plan_and_tree()
+        schedule_routes.PROVIDER = _fake(_creative_fenced(
+            [_one_creative("單元1"), _one_creative("單元1"), _one_creative("單元2")]
+        ))
+        resp = self._generate()
+        self.assertEqual(resp.status_code, 200, resp.text)
+        creative = resp.json()["creative"]
+        self.assertTrue(creative["failure"])
+        self.assertEqual(creative["ads"], [])
+
+    def test_unknown_node_fails_the_whole_run(self):
+        self._succeed_plan_and_tree()
+        schedule_routes.PROVIDER = _fake(_creative_fenced(
+            [_one_creative("單元1"), _one_creative("不存在的節點")]
+        ))
+        resp = self._generate()
+        self.assertEqual(resp.status_code, 200, resp.text)
+        creative = resp.json()["creative"]
+        self.assertTrue(creative["failure"])
+        self.assertEqual(creative["ads"], [])
+
+    def test_running_creative_renders_as_running_not_failure(self):
+        self._succeed_plan_and_tree()
+        tree_row = schedule_routes._latest_task_row(
+            web.conn, self.brand["id"], schedule_routes.TREE_TASK_TYPE
+        )
+        web.conn.execute(
+            "INSERT INTO llm_task (id, org_id, brand_id, task_type, context_scope_json,"
+            " input_context_ids_json, input_context_hash, knowledge_item_ids_json,"
+            " brand_version, prompt_template_id, prompt_template_version, provider, model,"
+            " status, attempt_no, started_at)"
+            " VALUES (%s, %s, %s, %s, %s, '[]', '', '[]', 1, 'p', 'v1', 'seed', 'seed',"
+            " 'running', 1, %s)",
+            (
+                coredb.new_id("llm"), coredb.DEV_ORG_ID, self.brand["id"],
+                schedule_routes.CREATIVE_TASK_TYPE,
+                coredb.jsonb({
+                    "brand_id": self.brand["id"], "source_tree_task_id": tree_row["id"],
+                    "plan_index": 0,
+                }),
+                coredb.now_iso(),
+            ),
+        )
+        web.conn.commit()
+
+        resp = self.client.get(f"/api/schedule/brands/{self.brand['id']}")
+        self.assertEqual(resp.status_code, 200, resp.text)
+        creative = resp.json()["creative"]
+        self.assertTrue(creative["running"])
+        self.assertIsNone(creative["failure"])
 
 
 class SearchSourcesReadbackTest(_ScheduleApiTestBase):
