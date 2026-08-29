@@ -1,13 +1,16 @@
 """app/tests/test_orders_core_brand_cleanup.py — 訂單＋核心模組接上清理登記處（第 5 刀）。
 
-驗四件事：
-  (a) orders 9 張表 + interrupt，刪品牌後全部歸零。
+驗五件事：
+  (a) orders 7 張表 + interrupt，刪品牌後全部歸零。
   (b) llm_task 刻意不刪——使用者定案的行為，用測試釘住，以後有人手滑把它加進哪個模組的
       brand_tables 也會被抓到。
   (c) 品牌隔離：刪一個品牌，不會動到另一個品牌掛在同一批表底下的資料。
   (d) 已刪除（外殼切片 2026-08-28）：原本驗「跨模組 id 沒有外鍵、模組登記順序不影響
       刪除完整性」，那兩個模組指的是廣告與訂單；`app/ads/` 刪掉之後沒有第二個模組可以
       喬順序了，測試的主體不存在。
+  (e) 票 12（ADR 0035）：`shopee_report_row`／`pharmacy_batch`／`cycle_shopee_code` 併進
+      `channel_revenue` 一張表，三張舊表從 BRAND_CASCADE_TABLES 消失——釘住這個事實，
+      以後有人手滑把舊表名加回來也會被抓到。
 
 不依賴 app.main，直接用這個測試模組自己的 schema（conftest.py 的 `_module_schema`
 fixture 已經灌好 baseline migrations）。塞資料用本檔自己的 `_seed_table`（依
@@ -107,7 +110,7 @@ def _seed_table(conn, table: str, brand_id: str, fk_ids: dict, product_id: str =
     return row_id
 
 
-# 這 10 張表（orders 9 張 + interrupt 1 張）是本刀的清理範圍。
+# 這 8 張表（orders 7 張 + interrupt 1 張）是本刀的清理範圍。
 _ALL_TABLES = list(orders_repo.BRAND_CASCADE_TABLES) + list(interrupts_repo.BRAND_CASCADE_TABLES)
 
 
@@ -122,19 +125,20 @@ class OrdersCoreBrandCleanupTest(unittest.TestCase):
         return bid
 
     def _seed_orders_and_interrupt(self, brand_id: str) -> None:
-        """訂單 9 張表 + interrupt 各塞一列。
-
-        外殼切片（2026-08-28）：原本會先塞一列 `campaign_cycle` 讓 `cycle_shopee_code`
-        的 `campaign_cycle_id` 有值可接——那張表已經被票 3 的 migration DROP 掉了。那個
-        欄位本來就沒有外鍵（見檔頭），所以這裡只給一個每個品牌各自不同的假 id：
-        `cycle_shopee_code.campaign_cycle_id` 上有 UNIQUE 索引，兩個品牌共用同一個字面值
-        會撞號（`_seed_table` 通用分支對每個欄位塞同一個固定字串）。"""
-        fk_ids: dict = {"campaign_cycle": db.new_id("ccy")}
+        """訂單 7 張表 + interrupt 各塞一列。"""
         for table, _label in orders_repo.BRAND_CASCADE_TABLES:
-            _seed_table(self.conn, table, brand_id, fk_ids)
+            _seed_table(self.conn, table, brand_id, {})
         _seed_table(self.conn, "interrupt", brand_id, {})
 
-    # (a) orders 9 張 + interrupt 刪品牌後全部歸零 --------------------------------
+    # (e) 票 12：三張通路專屬舊表從 BRAND_CASCADE_TABLES 消失 -----------------------
+
+    def test_deleted_channel_tables_are_gone_from_cascade_list(self):
+        table_names = {t for t, _ in orders_repo.BRAND_CASCADE_TABLES}
+        for gone in ("shopee_report_row", "pharmacy_batch", "cycle_shopee_code"):
+            self.assertNotIn(gone, table_names, f"{gone} 該併進 channel_revenue，不該還在清單裡")
+        self.assertIn("channel_revenue", table_names)
+
+    # (a) orders 7 張 + interrupt 刪品牌後全部歸零 --------------------------------
 
     def test_delete_brand_clears_orders_and_interrupt_tables(self):
         bid = self._make_archived_brand("虛構寵物品牌（第5刀刪品牌測試）")

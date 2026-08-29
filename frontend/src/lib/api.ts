@@ -38,6 +38,33 @@ export async function fetchOverview(): Promise<DashboardBrandCard[]> {
   return body.data;
 }
 
+/** 票 06：品牌頁本月花費／營收／毛利／ROAS 併桌。對應 app/dashboard/repository.py
+ * `brand_month_money()`。revenue／margin／roas 為 null 一律代表「沒得算」（鐵則 16），
+ * 不是 0。票 12：revenue 是全通路加總（官網、平台商店、實體店…），margin 仍然只有官網
+ * ——只有官網訂單有品項與成本，見 CockpitPage.tsx MonthMoneySection 檔頭說明。 */
+export interface BrandMonthMoney {
+  spend: number;
+  revenue: number | null;
+  margin: number | null;
+  /** 有營收但沒登記單位成本的 SKU 數——毛利算不出來時，畫面用這個數字講清楚原因。 */
+  margin_unknown_sku_count: number;
+  roas: number | null;
+  /** 這個品牌本月以外是不是曾經有過任何訂單；false＝空態，不是零收入。 */
+  has_orders: boolean;
+  /** 這段區間內是否有任何平台商店（marketplace）通路的營收列——蝦皮等平台的欄位對照
+   * 還沒拿真實匯出檔驗證過，true 時畫面要繼續提醒這部分數字還不能全信。 */
+  marketplace_uncalibrated: boolean;
+}
+
+export async function fetchBrandMonth(brandId: string): Promise<BrandMonthMoney> {
+  const res = await apiFetch(`/api/dashboard/brands/${encodeURIComponent(brandId)}/month`);
+  if (!res.ok) {
+    throw new Error(`本月營收讀取失敗（狀態碼 ${res.status}）`);
+  }
+  const body: Envelope<BrandMonthMoney> = await res.json();
+  return body.data;
+}
+
 /** 打斷佇列的嚴重度（app/core/interrupts.py SEVERITY_ORDER）。收件匣與
  * `lib/severity.ts` 的顏色／文字對照共用這個型別；駕駛艙的警示區已隨 `app/ads/`
  * 刪掉，但打斷佇列本身還在。 */

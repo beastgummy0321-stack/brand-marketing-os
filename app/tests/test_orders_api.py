@@ -12,7 +12,6 @@ import app.main as main
 import app.shared.web as web
 from app.brand_intelligence import repository as bi_repo
 from app.core.db import DEV_ORG_ID  # noqa: E402
-from app.orders import channel as orders_channel
 from app.orders import repository as orders_repo
 
 _EASYSTORE_HEADERS = [
@@ -141,32 +140,40 @@ class OrdersApiTest(unittest.TestCase):
         self.assertEqual(invalid.status_code, 400)
         self.assertIn("unknown", invalid.json()["detail"])
 
-    def test_pharmacy_batch_returns_exact_messages_and_gets_list(self):
+    def test_channel_entry_returns_exact_messages_and_gets_list(self):
+        """票 12：通用通路營收登記取代藥局專屬表單，POST 落地後 GET 從
+        channel_entries 讀得回來（channel_label 來自 vocab，不是內部值）。"""
         response = self.client.post(
-            f"/api/brands/{self.brand_id}/orders/pharmacy-batch",
-            json={"batch_date": "2026-08-18", "quantity": "24", "note": ""},
+            f"/api/brands/{self.brand_id}/orders/channel-entry",
+            json={"channel": "physical_store", "entry_date": "2026-08-18", "revenue": "",
+                  "quantity": "24", "note": ""},
         )
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["ok"], True)
         body = self.client.get(f"/api/brands/{self.brand_id}/orders").json()
-        self.assertEqual(body["pharmacy_batches"], [{"batch_date": "2026-08-18", "quantity": 24.0, "note": ""}])
-
-        for day in range(19, 30):
-            orders_channel.record_pharmacy_batch(
-                web.conn, self.brand_id, batch_date=f"2026-08-{day}", quantity=None,
-                note=f"批次 {day}", actor="測試員",
-            )
-        batches = self.client.get(f"/api/brands/{self.brand_id}/orders").json()["pharmacy_batches"]
-        self.assertEqual(len(batches), 10)
-        self.assertEqual(batches[0]["batch_date"], "2026-08-29")
-        self.assertEqual(batches[-1]["batch_date"], "2026-08-20")
+        self.assertEqual(body["channel_entries"], [{
+            "channel": "physical_store", "channel_label": "實體店",
+            "entry_date": "2026-08-18", "revenue": None, "quantity": 24.0, "note": "",
+        }])
 
         invalid = self.client.post(
-            f"/api/brands/{self.brand_id}/orders/pharmacy-batch",
-            json={"batch_date": "2026-08-18", "quantity": "二十四", "note": ""},
+            f"/api/brands/{self.brand_id}/orders/channel-entry",
+            json={"channel": "pharmacy", "entry_date": "2026-08-18", "revenue": "",
+                  "quantity": "", "note": ""},
         )
         self.assertEqual(invalid.status_code, 400)
         self.assertEqual(set(invalid.json()), {"detail"})
+
+        # 錢：官網那一列帳由訂單匯入自動記，手動不准再記第二筆——記得成，帳本就會跟
+        # 訂單頁的實收永遠對不起來（票 12 settled 段第 4、5 點）。
+        website = self.client.post(
+            f"/api/brands/{self.brand_id}/orders/channel-entry",
+            json={"channel": "website", "entry_date": "2026-08-18", "revenue": "5000",
+                  "quantity": "", "note": ""},
+        )
+        self.assertEqual(website.status_code, 400)
+        body = self.client.get(f"/api/brands/{self.brand_id}/orders").json()
+        self.assertEqual(len(body["channel_entries"]), 1, "被擋下的那筆不該落地")
 
     def test_attribution_returns_exact_success_and_failure_messages(self):
         order_id = self.client.get(f"/api/brands/{self.brand_id}/orders").json()["orders"]["items"][0]["id"]
@@ -222,8 +229,9 @@ class OrdersApiTest(unittest.TestCase):
                 json={"policy_type": "discount", "changed_at": "2026-08-01", "description": "test"},
             ),
             self.client.post(
-                f"/api/brands/{missing_brand}/orders/pharmacy-batch",
-                json={"batch_date": "2026-08-18", "quantity": "24", "note": ""},
+                f"/api/brands/{missing_brand}/orders/channel-entry",
+                json={"channel": "physical_store", "entry_date": "2026-08-18",
+                      "revenue": "", "quantity": "24", "note": ""},
             ),
             self.client.post(
                 f"/api/brands/{missing_brand}/orders/missing/attribution",

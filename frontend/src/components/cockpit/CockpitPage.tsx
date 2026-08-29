@@ -2,8 +2,8 @@ import { useEffect, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { EmptyState } from "@/components/layout/EmptyState";
-import { fetchOverview } from "@/lib/api";
-import { formatCurrency, formatMetaRoas, formatRelativeHours } from "@/lib/format";
+import { fetchBrandMonth, fetchOverview, type BrandMonthMoney } from "@/lib/api";
+import { formatCurrency, formatMetaRoas, formatRelativeHours, formatRoas } from "@/lib/format";
 import { fetchMetaSpend, type MetaCampaignSpend, type MetaSpendSummary } from "@/lib/metaApi";
 
 /** 單品牌頁（`/brands/:brandId`）。
@@ -95,6 +95,7 @@ export function CockpitPage({ brandId }: { brandId: string }) {
           title="本期還沒有方案"
           description="產生本期方案的按鈕還沒接上來。品牌資料、產品與訂單可以先從左側選單進去看。"
         />
+        <MonthMoneySection brandId={brandId} />
         <MetaSpendSection brandId={brandId} />
       </div>
     );
@@ -104,6 +105,100 @@ export function CockpitPage({ brandId }: { brandId: string }) {
     <div className="flex flex-col gap-4">
       {breadcrumb}
       {content}
+    </div>
+  );
+}
+
+type MoneyState =
+  | { status: "loading" }
+  | { status: "error"; message: string }
+  | { status: "ready"; data: BrandMonthMoney };
+
+/** 票 06：本月花費／營收／毛利／ROAS 併桌——回答 ADR 0034 第二個失敗案例：不用再把
+ * Meta 儀表板、Shopee 儀表板、自己網站後台各開一次，自己心算出這個月賺不賺錢。
+ *
+ * 票 12：營收改讀 `channel_revenue`，是跨通路總和（官網＋粉專／IG／LINE＋平台商店＋
+ * 實體店），不再只算官網。毛利仍然只算官網——毛利算式吃 `order_item` × 單位成本，
+ * 其他通路沒有逐項商品資料可算。平台商店（marketplace，蝦皮等）的欄位對照還沒拿真實
+ * 匯出檔驗證過，`marketplace_uncalibrated` 為 true 時說明句要補這句提醒。
+ *
+ * 這裡的 ROAS 是「全通路營收 ÷ 花費」，跟下面逐活動表格裡 Meta 自己回報的 ROAS 是
+ * 兩件不同的事——用 label 分開講清楚，不動下面表格既有的 ROAS 欄位。 */
+function MonthMoneySection({ brandId }: { brandId: string }) {
+  const [state, setState] = useState<MoneyState>({ status: "loading" });
+
+  useEffect(() => {
+    let cancelled = false;
+    setState({ status: "loading" });
+    fetchBrandMonth(brandId)
+      .then((data) => {
+        if (!cancelled) setState({ status: "ready", data });
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) {
+          setState({
+            status: "error",
+            message: err instanceof Error ? err.message : "讀取失敗，請稍後再試。",
+          });
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [brandId]);
+
+  if (state.status === "loading") {
+    return <p className="text-sm text-muted-foreground">本月概況讀取中…</p>;
+  }
+  if (state.status === "error") {
+    return <p className="text-sm text-danger">本月概況讀取失敗：{state.message}</p>;
+  }
+
+  const {
+    spend,
+    revenue,
+    margin,
+    margin_unknown_sku_count: unknownSkuCount,
+    roas,
+    has_orders: hasOrders,
+    marketplace_uncalibrated: marketplaceUncalibrated,
+  } = state.data;
+
+  const revenueText = hasOrders ? formatCurrency(revenue) : "本月還沒有訂單";
+  let marginText: string;
+  if (!hasOrders) {
+    marginText = "本月還沒有訂單";
+  } else if (margin !== null) {
+    marginText = formatCurrency(margin);
+  } else if (revenue === null) {
+    marginText = "累積中";
+  } else {
+    marginText = `成本還沒登記，算不出毛利（${unknownSkuCount} 個 SKU 還沒登記成本）`;
+  }
+
+  return (
+    <section className="flex flex-col gap-3">
+      <h2 className="font-display text-xl text-foreground">本月概況</h2>
+      <p className="text-sm text-muted-foreground">
+        營收是每個通路加總（官網、粉專／IG／LINE、平台商店、實體店）。
+        {marketplaceUncalibrated &&
+          "其中平台商店的數字來自還沒拿真實匯出檔驗證過的匯入程式，這部分還不能全信。"}
+      </p>
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <MoneyTile label="本月花費" value={formatCurrency(spend)} />
+        <MoneyTile label="本月營收（全通路）" value={revenueText} />
+        <MoneyTile label="本月毛利（官網）" value={marginText} />
+        <MoneyTile label="全通路 ROAS（營收 ÷ 花費，非平台回報）" value={formatRoas(roas)} />
+      </div>
+    </section>
+  );
+}
+
+function MoneyTile({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-md border border-border p-3">
+      <p className="text-xs text-muted-foreground">{label}</p>
+      <p className="text-lg font-medium text-foreground">{value}</p>
     </div>
   );
 }

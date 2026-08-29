@@ -4,7 +4,8 @@
 首頁（跨品牌總覽）打這支端點取資料。
 
 外殼切片（2026-08-28）：單品牌駕駛艙、數字月報、手動同步三支端點隨 `app/ads/` 一起
-刪掉（見 `app/dashboard/repository.py` 檔頭）。只剩 `/overview`。
+刪掉（見 `app/dashboard/repository.py` 檔頭）。票 06 補回品牌頁的本月花費／營收／毛利／
+ROAS 併桌：`/brands/{brand_id}/month`。
 """
 
 import os
@@ -29,5 +30,17 @@ async def overview(request: Request):
     return {
         "data": dashboard_repo.overview(
             main_mod.conn, org_id=actor.org_id, today=_today_override()),
+        "generated_at": datetime.now(UTC).isoformat(),
+    }
+
+
+@router.get("/brands/{brand_id}/month")
+async def brand_month(request: Request, brand_id: str):
+    """票 06：品牌頁本月花費／營收／毛利／ROAS 併桌。"""
+    actor = main_mod.require_actor(request)
+    main_mod.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
+    return {
+        "data": dashboard_repo.brand_month_money(
+            main_mod.conn, org_id=actor.org_id, brand_id=brand_id, today=_today_override()),
         "generated_at": datetime.now(UTC).isoformat(),
     }
