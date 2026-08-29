@@ -162,8 +162,12 @@ def tree_from_task_row(row: dict) -> dict:
     plan_index = scope.get("plan_index", 0)
     rendered_output = row.get("rendered_output") or ""
 
+    # 2026-08-29：`running` 不是失敗。原本這裡把「還在跑」也算進失敗分支，而執行中的列
+    # `error` 是 NULL，於是使用者看到「請重新一次」——一按又開一個 running，永遠回不到
+    # 已經算好的結果。呼叫端靠 `running` 決定要顯示進行中還是失敗。
+    running = row["status"] == "running"
     if row["status"] != "succeeded":
-        failure = row.get("error") or NO_REPLY_MESSAGE
+        failure = None if running else (row.get("error") or NO_REPLY_MESSAGE)
         body: dict = {}
     else:
         body, failure = build_tree(rendered_output, daily_budget)
@@ -184,6 +188,7 @@ def tree_from_task_row(row: dict) -> dict:
         "nodes": body.get("nodes", []),
         "narrative": rendered_output,
         "failure": failure,
+        "running": running,
         # settled 段第 7 點：這個欄位只在 POST .../tree/bind 的回應裡非空，GET／
         # plan／tree／reject 一律 null，且從不落地——routes.py 的 bind 路由算完之後才
         # 蓋上這個值。

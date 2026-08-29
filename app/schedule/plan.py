@@ -155,8 +155,12 @@ def plan_from_task_row(row: dict) -> dict:
     usage = row.get("usage_json") or {}
     sources = usage.get("search_sources") or []
 
+    # 2026-08-29：`running` 不是失敗。原本這裡把「還在跑」也算進失敗分支，而執行中的列
+    # `error` 是 NULL，於是使用者看到「請重新一次」——一按又開一個 running，永遠回不到
+    # 已經算好的結果。呼叫端靠 `running` 決定要顯示進行中還是失敗。
+    running = row["status"] == "running"
     if row["status"] != "succeeded":
-        failure = row.get("error") or NO_REPLY_MESSAGE
+        failure = None if running else (row.get("error") or NO_REPLY_MESSAGE)
         plans: list[dict] = []
     else:
         plans, failure = build_plans(rendered_output, daily_budget)
@@ -173,4 +177,5 @@ def plan_from_task_row(row: dict) -> dict:
         "plans": plans,
         "sources": sources,
         "failure": failure,
+        "running": running,
     }

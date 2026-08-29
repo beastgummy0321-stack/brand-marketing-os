@@ -119,6 +119,22 @@ export function SchedulePage({ brandId }: { brandId: string }) {
 
   useEffect(load, [brandId]);
 
+  // 決策 12（等待就是前端輪詢）：出方案與展開都是幾分鐘的呼叫，離開頁面、重新整理、或
+  // 伺服器重啟都會讓那個阻塞的 POST 斷掉。輪詢讓畫面自己接回進行中的那一次，不必再按一次
+  // ——再按一次只會多開一個工作，那正是 2026-08-29 那個「展開失敗→重按→又失敗」迴圈的成因。
+  // `submitting`／`expandingIndex` 也算在內：剛按下去的那一刻，畫面上的資料還是上一次載入
+  // 的（running 是 false），只靠伺服器狀態會等到第一次輪詢才啟動。把「我剛送出」一起算成
+  // 進行中，按下去就開始輪詢，那個阻塞的 POST 中途斷掉也接得回來。
+  const runningNow =
+    state.status === "ready" &&
+    Boolean(submitting || expandingIndex !== null
+            || state.schedule.plan?.running || state.schedule.tree?.running);
+  useEffect(() => {
+    if (!runningNow) return;
+    const timer = setInterval(load, 2000);
+    return () => clearInterval(timer);
+  }, [runningNow, brandId]);
+
   function toggleProduct(id: string) {
     setSelectedIds((ids) => (ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id]));
   }
@@ -341,7 +357,12 @@ export function SchedulePage({ brandId }: { brandId: string }) {
             rejectError={rejectError}
           />
         )}
-        {schedule.tree && (
+        {schedule.tree?.running && (
+          <p className="rounded-md border border-dashed border-border bg-muted/40 p-3 text-sm text-muted-foreground">
+            展開中…這一步通常要 3 到 5 分鐘，可以先離開這一頁，回來會自己接上。
+          </p>
+        )}
+        {schedule.tree && !schedule.tree.running && (
           <CampaignTree tree={schedule.tree} binding={binding} bindError={bindError} onBind={handleBind} />
         )}
       </div>

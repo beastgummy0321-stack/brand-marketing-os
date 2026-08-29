@@ -99,6 +99,25 @@ def _latest_task_row(conn, brand_id: str, task_type: str) -> dict | None:
     return dict(row) if row is not None else None
 
 
+def _display_task_row(conn, brand_id: str, task_type: str) -> tuple:
+    """回傳 (要顯示的那一列, 有沒有更新的一次正在跑)。
+
+    2026-08-29：原本畫面一律拿 `started_at` 最新的那一列，於是「還在跑的這一次」會蓋掉
+    「上一次已經成功的樹」——12,815 字算好的結果就在隔壁列，使用者卻只看得到一句
+    「展開失敗，請重新展開一次」，按下去又開一個 running，再蓋掉一次。已經算出來的東西
+    不該被下一次嘗試抹掉：正在跑的時候繼續顯示上一次成功的結果，另外標明有一次在跑。
+    """
+    newest = _latest_task_row(conn, brand_id, task_type)
+    if newest is None or newest["status"] != "running":
+        return newest, False
+    row = conn.execute(
+        "SELECT * FROM llm_task WHERE brand_id = %s AND task_type = %s AND status = 'succeeded' "
+        "ORDER BY started_at DESC LIMIT 1",
+        (brand_id, task_type),
+    ).fetchone()
+    return (dict(row) if row is not None else newest), True
+
+
 def _plan_count_bounds(conn, brand_id: str) -> tuple[int, int]:
     plan_count_min = rule_cards.get_value(conn, brand_id, "schedule_plan_count", "plan_count_min")
     plan_count_max = rule_cards.get_value(conn, brand_id, "schedule_plan_count", "plan_count_max")
@@ -135,10 +154,14 @@ def _brand_response(conn, brand_id: str, org_id: str) -> dict:
     current_daily_budget = rule_cards.get_value(conn, brand_id, "schedule_budget", "daily_budget")
     plan_count_min, plan_count_max = _plan_count_bounds(conn, brand_id)
     data = _load_platform_data()
-    row = _latest_task_row(conn, brand_id, TASK_TYPE)
+    row, plan_running = _display_task_row(conn, brand_id, TASK_TYPE)
     plan = plan_mod.plan_from_task_row(row) if row is not None else None
-    tree_row = _latest_task_row(conn, brand_id, TREE_TASK_TYPE)
+    if plan is not None and plan_running:
+        plan["running"] = True
+    tree_row, tree_running = _display_task_row(conn, brand_id, TREE_TASK_TYPE)
     tree = tree_mod.tree_from_task_row(tree_row) if tree_row is not None else None
+    if tree is not None and tree_running:
+        tree["running"] = True
     if tree is not None:
         _fill_node_spend(conn, org_id, brand_id, tree)
     return {
@@ -287,6 +310,13 @@ def _run_tree(conn, brand_id: str, org_id: str, body: "TreeRequest") -> dict:
         conn, PROVIDER, brand_id=brand_id, task_type=TREE_TASK_TYPE,
         prompt_template_id=TREE_TASK_TYPE, prompt_template_version="v1",
         system=None, messages=[{"role": "user", "content": prompt}], context=context,
+        # 展開一棵三層樹比出方案重得多，兩個數字都不是猜的，來源是本系統自己的量測：
+        # llm_01M16CM5CS8Q435MVWEJ5BYA9D 的 output_tokens 剛好 16000（TaskOptions 的預設）
+        # 而且字串停在 `"value": "最大化轉換次`——撞上限被切斷，不是模型亂回。24000 是那個
+        # 已知不夠的數字的 1.5 倍；以同一批量測的 53.9 tok/s（見 TaskOptions.timeout_s 註解）
+        # 換算需要 445 秒，所以 timeout 一起抬到 480，仍在 SDK 非串流的 600 秒上限之內。
+        # 兩個數字必須一起動：只抬 max_tokens 會把「被截斷」換成「逾時」。
+        options=gateway.TaskOptions(max_tokens=24000, timeout_s=480.0),
     )
     return _brand_response(conn, brand_id, org_id)
 

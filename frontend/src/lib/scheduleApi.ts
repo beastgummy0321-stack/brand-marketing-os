@@ -35,6 +35,7 @@ export interface SchedulePlan {
   plans: SchedulePlanItem[];
   sources: ScheduleSource[];
   failure: string | null;
+  running: boolean;
 }
 
 /** 平台／行銷目標選項——內容全部來自 `app/schedule/platform_objectives.json`，前端只轉譯
@@ -82,6 +83,7 @@ export interface CampaignTreeResult {
   nodes: CampaignTreeNode[];
   narrative: string;
   failure: string | null;
+  running: boolean;
   /** 票 11：只在「配對」這支端點的回應裡會非 null（不落地儲存）——GET／tree／reject
    * 一律是 null。 */
   bind_failure: string | null;
