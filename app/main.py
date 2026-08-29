@@ -460,6 +460,11 @@ for _module in (brand_web_module, intake_module, meta_module, orders_module,
                  schedule_module, dashboard_module, identity_module):
     _module.register(app)
 
+# 票 05：掛每日 Meta 花費拉取的 procrastinate task（冪等，見 app/meta/daily_pull.py
+# 檔頭說明——DSN 換了 app.background.app() 會整顆重建，所以呼叫端不能只做這一次就
+# 假設永遠有效；本機單一部署 DSN 不會變，這裡呼叫一次就夠）。
+meta_module.register_task()
+
 # 啟動斷言（第 2 刀「清理登記處」）：確認刪品牌時該連鎖清資料的模組都有登記進
 # app.core.cleanup，少一個就不讓服務起來，避免又漏掉誰。
 from app.core import cleanup as core_cleanup  # noqa: E402

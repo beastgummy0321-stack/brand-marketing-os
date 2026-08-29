@@ -23,6 +23,14 @@ export function formatRoas(value: number | null): string {
   return `${value.toFixed(2)}x`;
 }
 
+/** 票 05：Meta 廣告單一活動／總計的 ROAS。這裡的 null 跟 formatRoas() 的「累積中」是
+ * 不同的事實——「累積中」暗示數字之後會出現，但 Meta 對這個活動本來就沒有追蹤轉換
+ * （或加總時範圍內有活動未追蹤），不會有出現的一天，畫面必須明講「未追蹤」。 */
+export function formatMetaRoas(value: number | null): string {
+  if (value === null) return "未追蹤";
+  return `${value.toFixed(2)}x`;
+}
+
 /** 比率 → 百分比字串。後端存的是比值（app/ads/performance.py:467 `clicks / impressions`），
  * 不是百分數，所以顯示前必須乘 100——三個 CTR 呼叫端各自手寫 `${ctr}%` 少了這一步，
  * 1.03% 被印成 0.0103%，看起來像廣告爛掉 100 倍。格式化集中在這裡，呼叫端不再自己拼。 */

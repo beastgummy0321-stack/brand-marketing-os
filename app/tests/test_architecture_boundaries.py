@@ -532,7 +532,7 @@ class TestRatioTest(unittest.TestCase):
 # 是頂層的 .py（`main.py` 組裝根等）。**允許調高，但必須改這張表**——重點不是禁止成長，
 # 是讓成長出現在 diff 裡有人看得到。廣告模組會在約 2,000 行撞上它，而不是 21,595 行。
 KNOWN_MODULE_SIZES = {
-    "app": 521,  # 票 07：app/main.py 註冊迴圈多一行 schedule_module
+    "app": 526,  # 票 05：main.py 多呼叫一次 meta_module.register_task()
     "app/background": 93,
     "app/brand_intelligence": 2634,
     "app/brand_web": 2155,
@@ -541,7 +541,8 @@ KNOWN_MODULE_SIZES = {
     "app/identity": 537,
     "app/intake": 3548,
     "app/llm": 1271,
-    "app/meta": 378,
+    "app/meta": 759,  # 票 05：每日花費拉取（daily_pull.py 新增，含手動觸發 __main__）
+                       # ＋品牌頁花費路由／查詢
     "app/orders": 1409,
     "app/schedule": 286,
     "app/shared": 450,

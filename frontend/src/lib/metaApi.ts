@@ -60,3 +60,25 @@ export async function unbindMetaAccount(brandId: string, adAccountId: string): P
   );
   await readOrThrow(res, `取消綁定失敗（狀態碼 ${res.status}）`);
 }
+
+/** 票 05：品牌頁的本月 Meta 花費／成效。roas 為 null＝未追蹤（不是 0），對應
+ * app/meta/routes.py CampaignSpendOut——這一頁刻意不叫「0」，兩者是不同的事實。 */
+export interface MetaCampaignSpend {
+  campaign_id: string;
+  campaign_name: string;
+  spend: number;
+  impressions: number;
+  clicks: number;
+  roas: number | null;
+}
+
+export interface MetaSpendSummary {
+  last_pull_at: string | null;
+  campaigns: MetaCampaignSpend[];
+  total: MetaCampaignSpend;
+}
+
+export async function fetchMetaSpend(brandId: string): Promise<MetaSpendSummary> {
+  const res = await apiFetch(`/api/meta/brands/${encodeURIComponent(brandId)}/spend`);
+  return readOrThrow<MetaSpendSummary>(res, `讀取失敗（狀態碼 ${res.status}）`);
+}

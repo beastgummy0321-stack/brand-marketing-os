@@ -1,10 +1,16 @@
-"""app/meta/repository.py — private DB access for app/meta. Only app/meta/routes.py
-imports this (container contract §1); it is never imported outside the package.
+"""app/meta/repository.py — private DB access for app/meta. Only app/meta/routes.py and
+app/meta/daily_pull.py import this (both inside this package; container contract §1) —
+it is never imported outside the package.
 
-Three tables (see supabase/migrations/20260829000002_meta_baseline.sql):
+Four tables (see supabase/migrations/20260829000002_meta_baseline.sql and
+20260829000004_meta_daily_spend.sql):
     meta_credential        — one row per org, points at the Vault secret (never the token)
-    meta_ad_account        — accounts a token has revealed, org-scoped
+    meta_ad_account        — accounts a token has revealed, org-scoped; also carries
+                              last_pull_at (ticket 05 — set only on a *successful* pull)
     brand_meta_ad_account  — which brand(s) use which account(s), the m:n mapping
+    meta_campaign_spend    — per account, per campaign, per day (ticket 05); org+account
+                              scoped, not brand-scoped, for the same reason meta_ad_account
+                              isn't (an account can serve more than one brand)
 
 The token itself never touches meta_credential (or any other table, audit_log, or a log
 line) — it lives in Supabase Vault. `save_token` does not give the secret a name:
@@ -13,6 +19,8 @@ app/tests/conftest.py gives every test module its own Postgres schema — a name
 would collide across test modules and across organisations. `meta_credential.secret_id`
 is the index instead.
 """
+
+from datetime import date
 
 from app.core import cleanup
 from app.core.db import Conn, ConnProxy, new_id, now_utc
@@ -63,6 +71,20 @@ def save_token(conn: _AnyConn, org_id: str, token: str) -> str:
     return tail
 
 
+def get_token(conn: _AnyConn, org_id: str) -> str | None:
+    """讀回這個組織的真正權杖（從 Vault 解密），給背景拉取用——`get_credential` 只回
+    `secret_id` 指標，這裡才是真正的 Vault round-trip 讀值端（同 repository 頂端說明的
+    write 端 `_vault_create_secret`/`_vault_update_secret` 對稱）。"""
+    credential = get_credential(conn, org_id)
+    if credential is None:
+        return None
+    row = conn.execute(
+        "SELECT decrypted_secret FROM vault.decrypted_secrets WHERE id = %s",
+        (credential["secret_id"],),
+    ).fetchone()
+    return row["decrypted_secret"] if row else None
+
+
 # ---- meta_ad_account ----------------------------------------------------------------
 
 def upsert_accounts(conn: _AnyConn, org_id: str, accounts: list[dict]) -> None:
@@ -93,6 +115,139 @@ def get_account(conn: _AnyConn, org_id: str, ad_account_id: str) -> dict | None:
         " WHERE org_id = %s AND id = %s",
         (org_id, ad_account_id),
     ).fetchone()
+
+
+def list_bound_accounts(conn: _AnyConn, org_id: str) -> list:
+    """這個組織『至少綁了一個品牌』的帳號（[{"id","account_id"}]）——票 05 的每日拉取
+    只打這些帳號：連了帳號但還沒綁任何品牌的，還沒有人真的在用它。"""
+    return list(conn.execute(
+        "SELECT DISTINCT maa.id, maa.account_id FROM meta_ad_account maa"
+        " JOIN brand_meta_ad_account bmaa ON bmaa.ad_account_id = maa.id"
+        " WHERE maa.org_id = %s ORDER BY maa.id",
+        (org_id,),
+    ))
+
+
+def orgs_with_bound_accounts(conn: _AnyConn) -> list:
+    """跨組織列舉『至少有一個綁定帳號』的組織 id——刻意不帶 org_id 篩選，因為這不是
+    一個 handler，是每日觸發腳本用來決定要對哪些組織各自 defer 一個 job 的清單
+    （daily_pull.py `__main__`；每個真正碰資料表的動作仍然是 org_id 範圍內的
+    run_daily_pull()，這支只負責「有誰」）。"""
+    rows = conn.execute(
+        "SELECT DISTINCT maa.org_id FROM meta_ad_account maa"
+        " JOIN brand_meta_ad_account bmaa ON bmaa.ad_account_id = maa.id"
+    )
+    return [r["org_id"] for r in rows]
+
+
+def mark_pull_succeeded(conn: _AnyConn, org_id: str, ad_account_id: str) -> None:
+    """只在成功時呼叫——失敗留舊資料、也留舊的『上次成功時間』（票 05 done-check）。"""
+    conn.execute(
+        "UPDATE meta_ad_account SET last_pull_at = %s WHERE org_id = %s AND id = %s",
+        (now_utc(), org_id, ad_account_id),
+    )
+
+
+# ---- meta_campaign_spend --------------------------------------------------------------
+
+def upsert_campaign_spend(
+    conn: _AnyConn, org_id: str, ad_account_id: str, day: date, rows: list[dict],
+) -> None:
+    """Upsert 一個帳號『某一天』每個活動的成效。(ad_account_id, campaign_id, spend_date)
+    的唯一索引（migration）是重跑同一天不重複、不 double count 的真正機制——這裡只是
+    照著那個索引寫 ON CONFLICT，機制在資料庫，不是這段程式碼自己防呆。"""
+    for row in rows:
+        conn.execute(
+            "INSERT INTO meta_campaign_spend"
+            " (id, org_id, ad_account_id, campaign_id, campaign_name, spend_date,"
+            "  spend, impressions, clicks, roas, pulled_at)"
+            " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
+            " ON CONFLICT (ad_account_id, campaign_id, spend_date) DO UPDATE SET"
+            "  campaign_name = excluded.campaign_name, spend = excluded.spend,"
+            "  impressions = excluded.impressions, clicks = excluded.clicks,"
+            "  roas = excluded.roas, pulled_at = excluded.pulled_at",
+            (new_id("mcs"), org_id, ad_account_id, row["campaign_id"], row["campaign_name"],
+             day, row["spend"], row["impressions"], row["clicks"], row["roas"], now_utc()),
+        )
+
+
+def bound_account_ids_for_brand(conn: _AnyConn, org_id: str, brand_id: str) -> list:
+    rows = conn.execute(
+        "SELECT ad_account_id FROM brand_meta_ad_account WHERE org_id = %s AND brand_id = %s",
+        (org_id, brand_id),
+    )
+    return [r["ad_account_id"] for r in rows]
+
+
+def last_pull_at(conn: _AnyConn, org_id: str, ad_account_ids: list):
+    """這批帳號裡『最早的』上次成功拉取時間——品牌可能綁了不只一個帳號，畫面要誠實
+    反映「最舊鮮度」，不是挑一個看起來最新的帳號蓋過去（票 05：失敗要讓使用者看得出
+    哪些數字舊了）。一個帳號都沒有、或全部都還沒成功拉過，回 None。"""
+    if not ad_account_ids:
+        return None
+    row = conn.execute(
+        "SELECT min(last_pull_at) AS t FROM meta_ad_account WHERE org_id = %s AND id = ANY(%s)",
+        (org_id, ad_account_ids),
+    ).fetchone()
+    return row["t"] if row else None
+
+
+_EMPTY_TOTAL = {"spend": 0.0, "impressions": 0, "clicks": 0, "roas": None}
+
+
+def spend_summary(
+    conn: _AnyConn, org_id: str, ad_account_ids: list, month_start: date, month_end: date,
+) -> dict:
+    """[month_start, month_end) 這個半開區間裡，這批帳號逐活動加總＋一列總計。
+
+    ROAS 是比率，加總不能直接平均（票 05：「加總比率沒有意義」）——用花費加權
+    （SUM(spend*roas)/SUM(spend)，數學上等於「這個範圍的總營收 ÷ 總花費」）算出誠實的
+    總 ROAS；但只要範圍裡有任何一列 roas 是 NULL（未追蹤），代表那部分花費的營收根本
+    不知道，總數就不能假裝把它算進去了——整組（那個活動的小計，或最下面的總計）直接
+    回 None，畫面一樣顯示未追蹤，不印一個不真實的數字。"""
+    if not ad_account_ids:
+        return {"campaigns": [], "total": dict(_EMPTY_TOTAL)}
+    args = (org_id, ad_account_ids, month_start, month_end)
+    campaigns = conn.execute(
+        "SELECT campaign_id, campaign_name, SUM(spend) AS spend,"
+        " SUM(impressions) AS impressions, SUM(clicks) AS clicks,"
+        " CASE WHEN bool_and(roas IS NOT NULL)"
+        "      THEN SUM(spend * roas) / NULLIF(SUM(spend), 0) ELSE NULL END AS roas"
+        " FROM meta_campaign_spend"
+        " WHERE org_id = %s AND ad_account_id = ANY(%s)"
+        "   AND spend_date >= %s AND spend_date < %s"
+        " GROUP BY campaign_id, campaign_name ORDER BY campaign_id",
+        args,
+    ).fetchall()
+    total = conn.execute(
+        "SELECT COALESCE(SUM(spend), 0) AS spend, COALESCE(SUM(impressions), 0) AS impressions,"
+        " COALESCE(SUM(clicks), 0) AS clicks,"
+        " CASE WHEN count(*) > 0 AND bool_and(roas IS NOT NULL)"
+        "      THEN SUM(spend * roas) / NULLIF(SUM(spend), 0) ELSE NULL END AS roas"
+        " FROM meta_campaign_spend"
+        " WHERE org_id = %s AND ad_account_id = ANY(%s)"
+        "   AND spend_date >= %s AND spend_date < %s",
+        args,
+    ).fetchone()
+    assert total is not None, "聚合查詢沒有 GROUP BY，SELECT 一定回一列"
+    return {
+        "campaigns": [_spend_row(r) for r in campaigns],
+        "total": _spend_row(total),
+    }
+
+
+def _spend_row(row: dict) -> dict:
+    """numeric（Decimal）欄位單一收口轉 float，讀取端只轉這一次（比照
+    app/orders/repository.py 的既有慣例）。roas 是 None 原樣穿過——未追蹤就是未追蹤。"""
+    roas = row["roas"]
+    out = {
+        "spend": float(row["spend"]), "impressions": int(row["impressions"]),
+        "clicks": int(row["clicks"]), "roas": float(roas) if roas is not None else None,
+    }
+    if "campaign_id" in row:
+        out["campaign_id"] = row["campaign_id"]
+        out["campaign_name"] = row["campaign_name"]
+    return out
 
 
 # ---- brand_meta_ad_account ----------------------------------------------------------
