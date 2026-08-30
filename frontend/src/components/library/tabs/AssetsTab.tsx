@@ -3,6 +3,7 @@ import { ImageOff } from "lucide-react";
 import { EmptyState } from "@/components/layout/EmptyState";
 import { Pager } from "@/components/layout/Pager";
 import { deleteAsset, type LibraryAsset, type LibraryProductOption } from "@/lib/libraryApi";
+import { useAuthedImage } from "@/lib/useAuthedImage";
 import { usePagination } from "@/lib/usePagination";
 import { Badge } from "../shared/Badge";
 import { InlineDeleteButton } from "../shared/InlineDeleteButton";
@@ -82,24 +83,26 @@ function AssetCard({
   brandId: string;
   onDeleted: () => void;
 }) {
-  const [broken, setBroken] = useState(false);
+  // 圖片路由要求登入，而 <img> 自己發的請求不會帶權杖——所以繞 apiFetch 拿，
+  // 見 useAuthedImage 檔頭（2026-08-30 實機驗收抓到的，本來就壞）。
+  const { src, failed } = useAuthedImage(asset.file_url);
 
   return (
     <div className="flex flex-col overflow-hidden rounded-md border border-border bg-card shadow-[var(--shadow-card)]">
       <div className="flex aspect-[4/3] items-center justify-center bg-muted">
-        {broken ? (
+        {failed ? (
           <div className="flex flex-col items-center gap-1 text-xs text-muted-foreground">
             <ImageOff className="h-6 w-6" aria-hidden="true" />
             圖片載入失敗
           </div>
-        ) : (
+        ) : src ? (
           <img
-            src={asset.file_url}
+            src={src}
             alt={asset.title ?? asset.asset_kind_label}
-            loading="lazy"
             className="h-full w-full object-cover"
-            onError={() => setBroken(true)}
           />
+        ) : (
+          <span className="text-xs text-muted-foreground">載入中…</span>
         )}
       </div>
       <div className="flex flex-col gap-1.5 p-3">

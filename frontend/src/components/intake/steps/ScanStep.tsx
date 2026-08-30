@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { ImageOff } from "lucide-react";
 import type { IntakeDraft, ProductCardDraft } from "@/lib/intakeApi";
+import { useAuthedImage } from "@/lib/useAuthedImage";
 import {
   createProductFromCard,
   createScannedProducts,
@@ -334,18 +335,21 @@ function PhotoProductCard({
 }
 
 function PhotoThumbnail({ brandId, photoName }: { brandId: string; photoName: string | undefined }) {
-  const [unavailable, setUnavailable] = useState(!photoName);
-  if (unavailable || !photoName) {
-    return <span aria-label="沒有可用照片縮圖" className="flex h-14 w-14 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground"><ImageOff className="h-5 w-5" aria-hidden="true" /></span>;
+  // 照片路由要求登入，而 <img> 自己發的請求不會帶權杖——所以繞 apiFetch 拿，
+  // 見 useAuthedImage 檔頭（2026-08-30 實機驗收抓到的，本來就壞）。
+  const url = photoName
+    ? `/brands/${encodeURIComponent(brandId)}/intake/photos/${encodeURIComponent(photoName)}`
+    : undefined;
+  const { src, failed } = useAuthedImage(url);
+  if (!src) {
+    return <span aria-label={failed ? "沒有可用照片縮圖" : "照片縮圖載入中"} className="flex h-14 w-14 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground"><ImageOff className="h-5 w-5" aria-hidden="true" /></span>;
   }
   return (
     <img
-      src={`/brands/${encodeURIComponent(brandId)}/intake/photos/${encodeURIComponent(photoName)}`}
+      src={src}
       alt="這張產品卡的來源照片"
       width={56}
       height={56}
-      loading="lazy"
-      onError={() => setUnavailable(true)}
       className="h-14 w-14 shrink-0 rounded-md object-cover"
     />
   );

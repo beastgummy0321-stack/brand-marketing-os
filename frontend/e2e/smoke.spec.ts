@@ -57,4 +57,31 @@ test("走完切片後活下來的主要畫面", async ({ page }) => {
   // --- 訂單 -----------------------------------------------------------------
   await page.goto(`/app/brands/${brandId}/orders`);
   await expect(page.getByRole("heading", { name: "訂單與顧客" })).toBeVisible();
+
+  // --- 品牌智庫：上傳一張圖，而且那張圖真的畫得出來 --------------------------
+  // 第 ⑥ 片（2026-08-30）加。上傳走的是真的 Supabase Storage（ADR 0043），所以這一段
+  // 順便證明「存得進去、讀得回來」；但它真正守的是**縮圖有沒有真的顯示**——
+  // `naturalWidth > 0` 才算數，`toBeVisible()` 不算：破圖的 <img> 也是可見的。
+  // 這條路以前沒有任何測試走過，於是「圖片路由要求登入、<img> 不會帶權杖」這個 401
+  // 在畫面上安靜地退化成一個小圖示，撐到 2026-08-30 手動驗收才被抓到。
+  await page.goto(`/app/brands/${brandId}/library`);
+  await page.getByRole("button", { name: "官方素材" }).click();
+  await page.getByRole("button", { name: "上傳素材" }).click();
+  await page.locator('input[type="file"]').setInputFiles({
+    name: "smoke.png",
+    mimeType: "image/png",
+    // 1x1 紅點 PNG：夠小、是合法的 PNG，瀏覽器解得開才會有 naturalWidth。
+    buffer: Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+      "base64",
+    ),
+  });
+  await page.getByLabel("種類").selectOption("logo");
+  await page.getByRole("button", { name: "上傳這個素材" }).click();
+
+  const thumbnail = page.locator('img[alt="Logo"]').first();
+  await expect(thumbnail).toBeVisible();
+  await expect
+    .poll(() => thumbnail.evaluate((img) => (img as HTMLImageElement).naturalWidth))
+    .toBeGreaterThan(0);
 });
