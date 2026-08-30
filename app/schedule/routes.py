@@ -32,7 +32,7 @@ ADR 0028／0029／0032／0033：部門是 repo 裡的一個資料夾
 
 import hashlib
 import json
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Request
 from pydantic import BaseModel
@@ -41,6 +41,7 @@ import app.shared.web as web
 from app.brand_intelligence import repository as bi_repo
 from app.core import approval as approval_mod
 from app.core import rule_cards
+from app.core import settings as coresettings
 from app.core.db import APP_DIR, jsonb
 from app.llm import context_compiler, gateway, methodology, providers
 from app.meta import repository as meta_repo
@@ -142,10 +143,12 @@ def _plan_count_bounds(conn, brand_id: str) -> tuple[int, int]:
     return int(plan_count_min), int(plan_count_max)  # get_value 回 float，這裡才是個數，轉 int
 
 
-def _current_month_window() -> tuple:
+def _current_month_window(conn, org_id: str) -> tuple:
     """[月初, 下月初) 半開區間——跟 app/meta/routes.py brand_spend 同一個窗口（票 11
-    settled 段第 9 點：綁定節點的花費／ROAS 用這一期，不是另開一套時間規則）。"""
-    today = datetime.now(UTC).date()
+    settled 段第 9 點：綁定節點的花費／ROAS 用這一期，不是另開一套時間規則）。
+
+    「今天」用組織自己的時區算（票 04-1b），跟 brand_spend 同一個來源。"""
+    today = coresettings.today_for_org(conn, org_id=org_id)
     month_start = today.replace(day=1)
     month_end = (month_start + timedelta(days=32)).replace(day=1)
     return month_start, month_end
@@ -158,7 +161,7 @@ def _fill_node_spend(conn, org_id: str, brand_id: str, tree: dict) -> None:
     if not bound_ids:
         return
     account_ids = meta_repo.bound_account_ids_for_brand(conn, org_id, brand_id)
-    month_start, month_end = _current_month_window()
+    month_start, month_end = _current_month_window(conn, org_id)
     summary = meta_repo.spend_summary(conn, org_id, account_ids, month_start, month_end)
     by_campaign_id = {c["campaign_id"]: c for c in summary["campaigns"]}
     for node in tree["nodes"]:
@@ -222,7 +225,7 @@ def _approval_overspend(conn, org_id: str, brand_id: str, tree: dict, approval_r
     兩件事，印 0 會被讀成「還沒花錢」）。不設門檻：兩個數字都給，讓使用者自己判斷。"""
     approved_at = approval_row["approved_at"]
     approval_date = approved_at.date() if isinstance(approved_at, datetime) else approved_at
-    today = datetime.now(UTC).date()
+    today = coresettings.today_for_org(conn, org_id=org_id)  # 組織時區的今天（票 04-1b）
     month_start = today.replace(day=1)
     window_start = max(month_start, approval_date)
     days_elapsed = (today - window_start).days + 1

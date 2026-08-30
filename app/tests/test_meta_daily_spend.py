@@ -26,7 +26,9 @@ procrastinate 的實際排程／worker 機制（defer → run_worker → 真的�
 """
 
 import unittest
+from datetime import datetime
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 from fastapi.testclient import TestClient
 
@@ -36,6 +38,7 @@ import app.meta.daily_pull as daily_pull
 import app.shared.web as web
 from app.brand_intelligence import repository as bi_repo
 from app.core import db as coredb
+from app.core import settings as coresettings
 from app.identity import repository as identity_repo
 from app.meta import graph
 from app.meta import repository as meta_repo
@@ -310,6 +313,36 @@ class OrgIsolationTest(_MetaDailySpendTestBase):
             "SELECT last_pull_at FROM meta_ad_account WHERE id = %s", (account_b,)
         ).fetchone()["last_pull_at"]
         self.assertIsNone(b_last_pull, "org B 的帳號沒被拉過，last_pull_at 該還是 NULL")
+
+
+# -- 4b. 花費記在哪一天＝組織自己的時區的今天（票 04-1b）-------------------------------
+
+class SpendDateFollowsOrgTimezoneTest(_MetaDailySpendTestBase):
+    """`spend_date` 是這筆錢算在哪一天。修復前它是 `datetime.now(UTC).date()`——伺服器
+    搬到 UTC 機房，台北的整個上午拉到的花費就會掛在前一天。兩個相差 26 小時的組織在
+    同一個瞬間跑，日期必須不同（修復前必然相同）。"""
+
+    def _pull_one_org(self, suffix: str, timezone: str, account_id: str, page: dict) -> str:
+        org_id, _ = self._make_org(suffix)
+        coresettings.set_setting(
+            web.conn, coresettings.ORG_TIMEZONE_SETTING, timezone, org_id=org_id)
+        internal_id = self._connect_account(org_id, account_id, f"{suffix} 的帳號")
+        brand_id = bi_repo.create_brand(
+            web.conn, org_id=org_id, name=f"{suffix} 的品牌", client_name=None, actor="test")["id"]
+        self._bind(org_id, brand_id, internal_id)
+        graph.fetch_page = _dispatch_insights({account_id: page})
+        daily_pull.run_daily_pull(org_id)
+        return web.conn.execute(
+            "SELECT DISTINCT spend_date FROM meta_campaign_spend WHERE ad_account_id = %s",
+            (internal_id,),
+        ).fetchone()["spend_date"]
+
+    def test_two_orgs_a_day_apart_file_the_same_pull_under_different_dates(self):
+        east = self._pull_one_org("tz_east", "Pacific/Kiritimati", BP_ACCOUNT_ID, BP_INSIGHTS_PAGE)
+        west = self._pull_one_org("tz_west", "Etc/GMT+12", SD_ACCOUNT_ID, SD_INSIGHTS_PAGE)
+        self.assertEqual(east, datetime.now(ZoneInfo("Pacific/Kiritimati")).date())
+        self.assertEqual(west, datetime.now(ZoneInfo("Etc/GMT+12")).date())
+        self.assertNotEqual(east, west, "相差 26 小時的兩個組織不可能把同一次拉取記在同一天")
 
 
 # -- 5. 真的透過 procrastinate 排程跑一次（證明 register_task() 掛對名字、defer 得到）--

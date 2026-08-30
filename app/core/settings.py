@@ -11,6 +11,8 @@ from __future__ import annotations
 import logging
 import os
 from dataclasses import dataclass
+from datetime import date, datetime
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import psycopg
 
@@ -43,8 +45,15 @@ AI_MONTHLY_COST_LIMIT_SETTING = "ai_monthly_cost_limit"
 # 這是本票作者提出的數字，不是使用者定案——設定頁可隨時調整。
 DEFAULT_AI_MONTHLY_COST_LIMIT = 200.0
 
+# 組織所在時區（票 04-1b）：IANA 名稱，例如 Asia/Taipei、America/New_York。
+# 預設值的來源是使用者本人所在地（2026-08-30 裁決），不是猜的門檻。今天沒有設定畫面
+# （全系統只有一個組織，比照「切換金鑰來源」同一個理由留到里程碑之後）；要改就改
+# app_setting 這一列，程式不必動。
+ORG_TIMEZONE_SETTING = "org_timezone"
+DEFAULT_ORG_TIMEZONE = "Asia/Taipei"
 
-def get_setting(conn: db.Conn | None, key: str, default=None, *, org_id: str):
+
+def get_setting(conn: db.Conn | db.ConnProxy | None, key: str, default=None, *, org_id: str):
     """讀一個設定值；沒設過（或 app_setting 表還沒建起來）回 default。
 
     org_id 必填、不給預設值（票 04-0）：`app_setting` 主鍵是 (org_id, key)，沒有 org_id
@@ -64,7 +73,7 @@ def get_setting(conn: db.Conn | None, key: str, default=None, *, org_id: str):
         return _get_setting(owned_conn, key, default, org_id=org_id)
 
 
-def _get_setting(conn: db.Conn, key: str, default=None, *, org_id: str):
+def _get_setting(conn: db.Conn | db.ConnProxy, key: str, default=None, *, org_id: str):
     try:
         row = conn.execute(
             "SELECT value FROM app_setting WHERE org_id = %s AND key = %s", (org_id, key)
@@ -212,6 +221,33 @@ def get_llm_model(conn: db.Conn | None = None, *, org_id: str) -> str:
         or os.environ.get(LLM_MODEL_ENV_VAR)
         or DEFAULT_LLM_MODEL
     )
+
+
+def today_for_org(conn: db.Conn | db.ConnProxy | None, *, org_id: str) -> date:
+    """這個組織所在時區的「今天」（票 04-1b）。
+
+    為什麼不是 `date.today()` 也不是 `datetime.now(UTC).date()`：那兩個問的都是「機器的
+    今天」。台北比 UTC 早 8 小時，所以每個月 1 號的台北凌晨到早上 8 點之間，UTC 還停在
+    上個月——排程頁與 Meta 花費頁的「本月」會整段端出上個月的數字，核准超支的
+    `days_elapsed` 每天也有 8 小時少算一天。上雲後伺服器多半跑 UTC，這件事會從「每月
+    8 小時」變成常態。改成問組織自己的時區，答案就跟伺服器擺在哪一國無關。
+
+    範圍只有排程面問「今天幾號」的地方（票 04-1b）：稽核時間戳、`started_at` 這類
+    事件發生時刻一律維持 UTC，不走這裡。
+
+    壞值（打錯的時區名、空字串）當作沒設定，回預設值——比照
+    `get_ai_monthly_cost_limit()` 同一套容錯，設定頁壞一格不該讓每日花費拉取整個停擺。
+    但預設值本身載不起來（部署環境沒有 IANA 時區資料庫）就讓它炸：那不是設定壞了，是
+    機器缺東西，安靜地退回 UTC 等於把本票要修的 bug 藏起來。
+    """
+    name = get_setting(conn, ORG_TIMEZONE_SETTING, org_id=org_id) or DEFAULT_ORG_TIMEZONE
+    try:
+        tz = ZoneInfo(name)
+    except (ZoneInfoNotFoundError, ValueError):
+        logger.warning("組織 %s 的時區設定 %r 不是合法的 IANA 名稱，改用 %s",
+                       org_id, name, DEFAULT_ORG_TIMEZONE)
+        tz = ZoneInfo(DEFAULT_ORG_TIMEZONE)
+    return datetime.now(tz).date()
 
 
 def get_intake_budget_limit(conn: db.Conn | None = None, *, org_id: str) -> float:

@@ -2,12 +2,13 @@
 (container contract §1); it is only ever loaded via `register()`.
 """
 
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Request
 from pydantic import BaseModel
 
 import app.shared.web as web
+from app.core import settings as coresettings
 from app.core.audit import write_audit
 from app.meta import graph
 from app.meta import repository as repo
@@ -129,11 +130,14 @@ class SpendSummaryResponse(BaseModel):
 @router.get("/brands/{brand_id}/spend", response_model=SpendSummaryResponse)
 def brand_spend(request: Request, brand_id: str):
     """本月（今天所在的日曆月，[月初, 下月初) 半開區間）逐活動花費／成效＋一列總計，
-    見 repo.spend_summary 的總 ROAS 算法（花費加權，任一列未追蹤整組回 None）。"""
+    見 repo.spend_summary 的總 ROAS 算法（花費加權，任一列未追蹤整組回 None）。
+
+    「今天」用組織自己的時區算（票 04-1b）：用 UTC 的話，台北時間每個月 1 號早上 8 點
+    以前打開這一頁，看到的會是上個月的花費。"""
     actor = web.require_actor(request)
     web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
     account_ids = repo.bound_account_ids_for_brand(web.conn, actor.org_id, brand_id)
-    today = datetime.now(UTC).date()
+    today = coresettings.today_for_org(web.conn, org_id=actor.org_id)
     month_start = today.replace(day=1)
     month_end = (month_start + timedelta(days=32)).replace(day=1)
     summary = repo.spend_summary(web.conn, actor.org_id, account_ids, month_start, month_end)

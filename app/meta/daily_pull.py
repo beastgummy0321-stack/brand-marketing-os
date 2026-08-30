@@ -26,9 +26,8 @@ The manual path stays first-class either way: `uv run python -m app.meta.daily_p
 works exactly as before, consistent with 手動路徑永遠一級公民.
 """
 
-from datetime import UTC, datetime
-
 from app.background import app as background_app
+from app.core import settings as coresettings
 from app.core.db import connection
 from app.meta import graph
 from app.meta import repository as repo
@@ -37,15 +36,21 @@ _TASK_NAME = "background.meta_daily_pull"
 _DISPATCH_TASK_NAME = "meta.daily_pull_dispatch"
 _DISPATCH_PERIODIC_ID = "meta_daily_pull"
 _DAILY_PULL_CRON = "0 3 * * *"  # 每天觸發一次；伺服器本機時間，未特別做時區換算——單機
-                                 # 部署跑在使用者自己機器上，多晚幾小時拉不影響「今天有拉到」
+                                 # 部署跑在使用者自己機器上，多晚幾小時拉不影響「今天有拉到」。
+                                 # 票 04-1b 之後，被拉的「哪一天」已經改用組織時區
+                                 # （_pull_one_account），所以觸發時刻早晚不再決定日期標籤；
+                                 # 觸發時刻本身的時區處理仍是上雲前的債（BOARD.md 小債）。
 
 
 def _pull_one_account(conn, org_id: str, token: str, account: dict) -> None:
     """抓一個帳號『今天』的每檔活動 insights，upsert 進 meta_campaign_spend，只有成功
     才更新 last_pull_at——GraphError 就直接放掉這個帳號，舊資料原封不動（票 05
     done-check：失敗的拉取不覆蓋好資料，且看得出上次成功是什麼時候）。一個帳號失敗
-    不影響其他帳號：迴圈由呼叫端做，這裡只管一個帳號。"""
-    today = datetime.now(UTC).date()
+    不影響其他帳號：迴圈由呼叫端做，這裡只管一個帳號。
+
+    「今天」是這個組織所在時區的今天（票 04-1b），不是伺服器的今天——這個日期同時是
+    跟 Meta 要哪一天的 insights、以及那筆花費記在哪一天，兩邊都不能跟著機器搬家。"""
+    today = coresettings.today_for_org(conn, org_id=org_id)
     rows = graph.list_campaign_insights(token, account["account_id"], today)
     repo.upsert_campaign_spend(conn, org_id, account["id"], today, rows)
     repo.mark_pull_succeeded(conn, org_id, account["id"])

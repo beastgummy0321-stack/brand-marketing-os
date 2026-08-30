@@ -26,11 +26,6 @@ Meta 端只建了一個 **PAUSED、沒有廣告組合、沒有廣告、沒有預
 各自搬到會真的用到它的地方：pydantic-settings → 07-2；提示詞指紋 → 使用者待辦的變異度那條；
 切換金鑰來源的畫面 → 里程碑之後。拆完這片不再動 schema。
 
-- [ ] 04-1b 組織時區 `org_timezone`（IANA 名稱，預設 `Asia/Taipei`，存 `app_setting`）。
-      現在的「今天」是伺服器那台機器的今天；上雲後伺服器多半跑 UTC，凌晨三點的每日花費
-      拉取會把整天的數字掛在錯的日子上（差 8 小時＝差一天）。只換排程面那 6 個問「今天
-      幾號」的地方，稽核時間戳一律維持 UTC，**不動**全站 42 個 `datetime.now()`。
-      不動 schema／金流／權限＝**route B**，機器閘門綠即完成，不需批准
 - [ ] 04-2 剩下的一半（**需批准：憑證路徑**）：自帶金鑰（`own`）的 AI 金鑰進 Vault。
       今天設定頁貼的 Anthropic 金鑰以**明文**存進 `app_setting`（`app/main.py:232`）——
       Meta 權杖已經在 Vault 裡，同一個櫃子一半上鎖一半沒鎖。第一個帶自己金鑰的客戶進來
@@ -52,6 +47,9 @@ Meta 端只建了一個 **PAUSED、沒有廣告組合、沒有廣告、沒有預
       ＋**pydantic-settings 收環境變數**（2026-08-30 從第 ④ 片移來）：現在 19 個地方各自讀
       環境變數、8 個不同的鍵，缺了或打錯字會安靜地用預設值繼續跑。它真正值錢的時刻就是
       第一次部署——開機當場大聲失敗，好過上線後某個功能莫名不動、查半天發現少一個變數
+      ＋**部署映像檔要有 IANA 時區資料庫**（04-1b 的 `today_for_org()` 靠 `zoneinfo`；本機是
+      psycopg 順帶裝的 `tzdata`（只在 Windows），Debian 系映像檔內建，Alpine 沒有——沒有就
+      開機第一次算日期時大聲炸掉，這是刻意的，不要讓它安靜退回 UTC）
 - [ ] 07-3 統一 404 信封（2026-08-30 從小債移來）：`require_brand` 走 `NotFoundKind` 吐
       `{"detail": …}`，identity 路由走 `handle_api_error` 吐 `{"error": {"code","message"}}`；
       前端三處讀 `.detail`（`brandReportApi.ts:36`、`http.ts:116`、`ordersApi.ts:93`）要跟著改。
@@ -72,7 +70,8 @@ Dependabot #1（`nanoid`，修補版是 3.3.18）：**`saas` 這邊已經是 3.3
 
 - [ ] **上雲前必還（ADR 0039）** 每日 Meta 花費拉取的 worker 跑在網站行程裡：網站沒開就不拉，
       那天沒有數字（handler 可重跑，但沒人叫它就沒人補；手動補：`uv run python -m app.meta.daily_pull`）；
-      cron `0 3 * * *` 是機器本地時間，沒有時區處理（等 04-1b 的 `org_timezone`）。上雲時 worker 要拆成自己的行程
+      cron `0 3 * * *` 觸發的**時刻**仍是機器本地時間（04-1b 已經讓「拉到的數字算在哪一天」
+      改用組織時區，所以早拉晚拉不再標錯日期；剩下的是觸發時刻本身）。上雲時 worker 要拆成自己的行程
 - [ ] **上雲前必還（2026-08-28 使用者裁決：本機單人階段不修）** 邀請連結是「持有即可用」：
       `app/identity/routes.py` accept_invite 不比對 invite.email 與登入者 email；且 `AcceptInvitePage`
       一掛載就自動接受，沒有確認步驟（03-3 審查 note 5）

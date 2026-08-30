@@ -511,7 +511,16 @@ class FileLineCapTest(unittest.TestCase):
 # 的 id，不是品牌 id」。它守的是資料正確性（事後查得回去「當初簽的是哪一棵」），屬於
 # docs/workflow-diet.md 第 4 條允許的四類之一。先證過紅：把 scope_ref 改回 brand_id，
 # 這條斷言就抓到（`'brd_…' != 'llm_…'`）。這正是 ADR 0041 說的「該漲就改這一行、寫理由」。
-TEST_LINES_CEILING = 14317
+#
+# 2026-08-30 票 04-1b 組織時區：14,317 → 14,410（含本段註解自己佔掉的行）。新增兩支：
+# `test_meta_daily_spend.py::SpendDateFollowsOrgTimezoneTest`（相差 26 小時的兩個組織，
+# 同一次拉取必須記在不同的 `spend_date`）與 `test_org_timezone.py`（時區設定壞掉或從沒設過
+# 一律退回預設，不拋例外）。兩者守的都是資料正確性——一筆花費算在哪一天、以及設定壞一格
+# 不會讓那天完全沒有數字——屬 docs/workflow-diet.md 第 4 條允許的四類之一。
+# 先證過紅：把 `today_for_org()` 改回 `datetime.now(UTC).date()`，兩支同時抓到。
+# 初稿寫了四支（+104 行），刪掉跟端到端那支重複的兩支之後才是這個數字：同一件事驗兩遍
+# 不是更安全，是多一份要維護的東西。
+TEST_LINES_CEILING = 14410
 
 
 def _line_totals() -> tuple:
@@ -594,7 +603,10 @@ KNOWN_MODULE_SIZES = {
                        # 缺陷 1／2：parse_json_reply 換成 raw_decode 單錨點（含為什麼不能
                        # 退而求其次的理由註解）＋timeout_s 300 秒與 max_retries=0 兩段
                        # 來源註解（實測列號、SDK 常數位置）。前一次是票 09 的 1298
-    "app/meta": 855,  # 票 11 缺陷修正（2026-08-29 對真帳號實測）：名稱比對改讀平台上的活動
+    "app/meta": 864,  # 2026-08-30 票 04-1b 組織時區：`_pull_one_account` 與 brand_spend 的
+                       # 「今天」改問 `today_for_org()`（＋9 行，全是為什麼不能用 UTC 的理由
+                       # 註解；程式碼本身是換掉兩行）。前一次是 855——
+                       # 票 11 缺陷修正（2026-08-29 對真帳號實測）：名稱比對改讀平台上的活動
                        # 清單——graph.list_campaigns()＋_to_campaign()（28 行，含為什麼不能
                        # 讀 insights 的理由），campaign_ids_by_exact_name() 換成逐帳號比對
                        # ＋連不上 Meta 時回人話 502。前一次是 805——
@@ -604,7 +616,10 @@ KNOWN_MODULE_SIZES = {
     "app/orders": 1423,  # 票 12：channel_revenue 一張表取代三張（刪掉藥局專屬那一整組
                           # 之後仍淨增）——官網帳本寫入路徑、channel_revenue_summary()、
                           # 通用手動登錄（含「官網不能手動登錄」那道錢的守門）
-    "app/schedule": 1285,  # 2026-08-30 scope_ref 修正：改存被核准那棵樹的 id（＋2 行註解，
+    "app/schedule": 1288,  # 2026-08-30 票 04-1b 組織時區：`_current_month_window()` 收
+                            # (conn, org_id)、`_approval_overspend()` 的今天改問
+                            # `today_for_org()`（＋3 行）。前一次是 1285——
+                            # 2026-08-30 scope_ref 修正：改存被核准那棵樹的 id（＋2 行註解，
                             # 說明「簽的是哪一份」與「還是不是同一份」是兩件事）。前一次 1283
                             # ——票 01（approval-slice，ADR 0040）：核准端點＋金額／雜湊／超支
                            # 三個業務函式，`app/core/approval.py` 只管落地。前一次是 1145——
