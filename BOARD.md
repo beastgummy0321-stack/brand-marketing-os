@@ -76,54 +76,26 @@ Dependabot #1（`nanoid`，修補版是 3.3.18）：**`saas` 這邊已經是 3.3
       按鈕在素材工作檯裡，那個畫面已隨 `app/ads/` 刪掉。跟六張失效規則卡同一種謊。刪它要連
       `AssetsSection.tsx` 那一區＋`POST /api/settings/prompt-header`＋兩條測試一起走
 
-## 刪 `app/ads/` 那天一起死、但沒人發現（2026-08-30 掃描，每筆都經第二輪反駁才留下）
+## 刪 `app/ads/` 那天一起死（2026-08-30 掃描 → 四張票已全部落地，剩下這些）
 
-掃法：四個角度平行掃全 repo，每筆再派人專門去證明它是錯的，證不倒才留。32 筆去重後如下。
-`git show v0.2-ads-last` 可看刪掉的內容。**優先序＝使用者看得到的排前面。**
+掃法：四個角度平行掃全 repo，每筆再派人專門去證明它是錯的，證不倒才留。32 筆去重後做完了
+11 項（票 02–05，commit `d9b2c90`／`454f8a8`／`7e0697e`／`2571b73`）。剩下這些各有理由。
 
-- [ ] **這是壞的，不是死的**：顧問分析報告的背景工作送出沒登記的打斷類別
-      `brand_report_done`（`routes_report_api.py:83`），`enqueue` 對沒登記的類別直接 raise
-      （`interrupts.py:84`），而 `_notify()` 在 try 區塊外面（`:97`／`:105`）、背景執行緒
-      `_run()`（`background_job.py:66`）也不接例外。**成功與失敗兩條路都在同一個地方炸**，
-      執行緒死在 `_report_jobs.set("done")` 之前 → 狀態永遠停在「正在整理五章」、重新生成鈕
-      永久鎖死、每次重按拿 400，要重開後端才會清。報告本身其實有寫進 DB、也看得到。
-      修法＝在 `CATEGORIES` 補一列 `informational`＋一條回歸測試。route B
-- [ ] **資料默默消失**：soft（建議遵守）規則滿 `reconfirm_days`（預設 90 天）就被
-      `rule_lifecycle.py:45` 掃成 `pending_reconfirm`，從品牌智庫規則分頁與生成 prompt 一起
-      不見；**全站沒有任何路由能列出或救回它**——`reconfirm_rule`／`list_pending_reconfirm_rules`
-      只剩測試在呼叫，唯一的 UI（累積智慧頁）隨 `app/ads/` 刪了。
-      **2026-08-30 使用者裁決：拆掉引信**——規則不再自動過期，寫下去就永遠生效，要刪自己刪
-- [ ] 訂單表「標記非廣告來源」按鈕：寫進 `order_record.attribution_override`，**全庫沒有任何
-      數字讀這一欄**（只讀回來換按鈕自己的字）；回傳訊息還承諾「淨歸因不會算進去」，而淨歸因
-      計算在 `app/ads/codes.py`，已刪。跟六張失效規則卡同一種謊
-- [ ] 收件匣「原型階段結束」整條路是死的：唯一翻旗標的 `prototype_phase.check_and_flag()`
-      呼叫端是已刪的 `app/ads/reading.finalize()` → 卡永遠不出現、側板永遠打不開；側板要顯示
-      的四項豁免有兩項在講已刪的 `app/ads/routes.py` 與早就不存在的 `_LockingConnection`／
-      `sqlite3`。刪整片：`prototype_phase.py`＋`/api/system/prototype-phase`＋`PrototypePhasePanel.tsx`
-      ＋類別列＋它的測試
-- [ ] 設定頁兩張規則卡（`rule_cards.py:37`／`:54`）叫使用者去「累積智慧頁」看超額清單、
-      按一鍵「延續」——那一頁 2026-08-28 已刪，沒有替代入口
-- [ ] 設定頁素材資料夾說明還在講「每一期檔期在這個資料夾底下有自己的子資料夾／刪檔期會連帶
-      刪掉」（`AssetsSection.tsx:33`／`:36`）——`cycle_dir()` 已隨 `app/ads/` 刪，現在只有品牌層
-- [ ] **需裁決**：`learning_ledger` 與 `strategy_hypothesis` 兩張表的**寫入面全死**（唯一呼叫端
-      在 `app/ads/`），但 `context_compiler` 每次組 prompt 都還在讀它們——所以「已驗證的學習」
-      「尚未驗證的猜想」兩段永遠是空的、也永遠不會再有新的一筆。
-      **2026-08-30 使用者裁決：兩邊一起刪**——連 `context_compiler` 那兩段讀取一起拿掉。
-      以後真的要「學習回饋」再重新設計
-- [ ] 23 個打斷類別只有 4 個還發得出來（`interrupts.py:34-69`）；`enqueue()` 的
-      `visible_from`／`kind`／`campaign_cycle_id` 三個參數沒有任何生產呼叫端
-- [ ] 純死碼，沒有使用者看得到的部分，可直接刪：orders 四個函式
-      （`list_effective_sku_costs`／`repurchase_multiplier`／`list_orders_in_range`／
-      `unsettled_order_ratio`）、`core/net.py fetch_raw_html`、`schedule/plan.py build_splits`、
-      `web.report_staleness`、`importer.sniff_file_kind`、`interrupts.current_card`；
-      前端零匯入三檔 `lib/tour.ts`（連帶 `driver.js` 依賴）／`lib/glossary.ts`／
-      `cockpit/GuideCards.tsx`；`decision` 表沒讀也沒寫（要 migration）。
-      **它們的測試要一起刪**——測一支沒人呼叫的函式，是在保護空氣
-- [ ] 三處檔頭「誰依賴我」清單指向不存在的檔，會誤導下一個讀的人：
-      `repository_channels.py:14-17`（3/4 路徑錯，真正的六個呼叫端一個都沒列）、
-      `repository_learning_text.py:16-21`、`TaskFlowShell.tsx:6-22`
-- [ ] `frontend/src/lib/auth.ts:6` 的註解寫著「dependency-cruiser 規則盯住這支檔案」——
-      **那條規則不存在**（沒有設定檔、沒有 npm script）。散文裡的限制不是限制，見 07-1
+- [ ] **需裁決**：`TEST_RATIO_CEILING` 今天被往上調了兩次（0.858 → 0.862 → 0.865），
+      而這道閘門自己的註解寫著**「只准往下」**。兩次都寫了理由、都在 diff 裡、審查也看過，
+      理由也成立（刪死碼會讓 production 掉得比 tests 快，比值是被動漲的）——但**紅轉綠靠
+      調數字，本來就是規範明文禁止的動作**。目前實測 0.864、天花板 0.865，只剩 0.001。
+      三條路：(a) 認了，把「只准往下」改成「刪碼期間可被動漲，要寫理由」；
+      (b) 真的去砍測試把比值壓回 0.858 以下（目標是 0.7）；(c) 改成量「測試/程式」以外的東西。
+      **不決定的話，下一張刪碼票會再撞一次，然後再調一次**
+- [ ] **需批准（schema）** 兩支 migration 被這輪刻意留著沒寫：
+      `DROP TABLE decision`（沒讀也沒寫，它的主人 `app/core/orchestrator.py` 已刪）＋
+      刪 `order_record.attribution_override`、`interrupt.kind`／`visible_from`／`campaign_cycle_id`
+      四個沒人用的欄位。欄位還在，所以 `enqueue()` 那三個沒有生產呼叫端的參數也還留著
+- [ ] `frontend/src/components/layout/FluidCard.tsx` 現在只剩 Storybook 在用（票 05 拆掉
+      `TaskFlowShell` 的三個死參數之後）。要留當設計素材還是刪，下一輪順手決定
+- [ ] `frontend/src/lib/auth.ts` 的 depcruise 註解已改成「規則還沒建」並指向 07-1——
+      真正把規則建起來還是 07-1 的工作
 
 ## 使用者待辦（不是程式債，做的人是你；我做不了，所以不放小債）
 
