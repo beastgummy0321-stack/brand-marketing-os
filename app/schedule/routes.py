@@ -17,6 +17,12 @@ ADR 0028／0029／0032／0033：部門是 repo 裡的一個資料夾
 平台／行銷目標不是外殼的業務詞（CONTEXT.md：外殼只認得檔期／核准／預算上限），一律從
 `platform_objectives.json` 這份資料檔讀出來，不寫死成 Python 常數或畫面 label（票 08）。
 
+票 01（`.scratch/approval-slice/issues/01-approval-is-the-money-brake.md`，ADR 0040）：
+「核准」＝花錢煞車，POST .../tree/approve 與 .../tree/approve/revoke 兩支端點，資料落在
+`app.core.approval`（外殼自己的字，不是排程模組的資料）。核准金額由這裡算（`_sum_daily_amounts`），
+絕不採信呼叫端傳的數字；`content_hash` 由這裡算（`_tree_content_hash`），刻意排除
+`bound_external_id`／`spend`／`roas` 三個綁定之後才補上的欄位——見該函式的說明。
+
 `conn` 在下面的私有函式一律不標型別：`web.conn` 是 `ConnProxy`、
 `context_compiler.compile()`／`gateway.run_task()`／`repo.get_product()` 三個既有函式簽章
 都吃 `Conn`（非 `ConnProxy`），比照 `app/intake/persona_generation.py`／
@@ -24,6 +30,7 @@ ADR 0028／0029／0032／0033：部門是 repo 裡的一個資料夾
 不定（Unknown）通過，呼叫端只在路由這一層傳入真正的 `web.conn`。
 """
 
+import hashlib
 import json
 from datetime import UTC, datetime, timedelta
 
@@ -32,6 +39,7 @@ from pydantic import BaseModel
 
 import app.shared.web as web
 from app.brand_intelligence import repository as bi_repo
+from app.core import approval as approval_mod
 from app.core import rule_cards
 from app.core.db import APP_DIR, jsonb
 from app.llm import context_compiler, gateway, methodology, providers
@@ -160,6 +168,98 @@ def _fill_node_spend(conn, org_id: str, brand_id: str, tree: dict) -> None:
             node["roas"] = campaign["roas"]
 
 
+# ---------------------------------------------------------------------------
+# 票 01（ADR 0040）：核准——花錢煞車。scope_type 固定 "schedule_tree"，scope_ref 見
+# app.core.approval 表 migration 的欄位註解：用 brand_id，不是這棵樹自己的 llm_task id
+# ——原因寫在那裡（re-expand 每次都開一列新的 llm_task，pin 住舊 id 會讓「核准之後又
+# 重新展開」這件事永遠查不到舊核准，content_hash 要抓的「悄悄過期」就永遠不會發生）。
+# ---------------------------------------------------------------------------
+APPROVAL_SCOPE_TYPE = "schedule_tree"
+
+NO_TREE_TO_APPROVE_MESSAGE = "還沒有成功展開的活動樹可以核准，請先展開活動樹。"
+
+
+def _tree_signature(tree: dict) -> dict:
+    """把 `tree_from_task_row()` 的回傳形狀，剝到「使用者當時看到、簽核的那份結構」——
+    `content_hash` 只對這份剝過的資料算雜湊。排除清單（ticket 明文，理由寫在這裡）：
+    `bound_external_id`／`spend`／`roas`（配對一顆活動、或花費進來，都是樹核准之後才
+    發生的事，不該讓已經簽過的核准悄悄失效）；`task_id`／`created_at`／`narrative`／
+    `failure`／`running`／`bind_failure` 是殼層欄位，不是代理生成的樹本身內容。"""
+    def _node(n: dict) -> dict:
+        return {
+            "name": n["name"], "fields": n["fields"], "share": n["share"],
+            "daily_amount": n["daily_amount"], "warnings": n["warnings"],
+            "children": [_node(c) for c in n["children"]],
+        }
+    return {
+        "levels": tree["levels"], "budget_level": tree["budget_level"],
+        "nodes": [_node(n) for n in tree["nodes"]],
+    }
+
+
+def _tree_content_hash(tree: dict) -> str:
+    body = json.dumps(_tree_signature(tree), sort_keys=True, ensure_ascii=False)
+    return hashlib.sha256(body.encode("utf-8")).hexdigest()
+
+
+def _sum_daily_amounts(nodes: list) -> float:
+    """核准金額＝整棵樹扛預算節點的 `daily_amount` 加總，外殼算，絕不採信呼叫端傳的
+    數字（花錢的數字是外殼唯一能信任的來源）。"""
+    total = 0
+    for node in nodes:
+        if node["daily_amount"] is not None:
+            total += node["daily_amount"]
+        total += _sum_daily_amounts(node["children"])
+    return total
+
+
+def _approval_overspend(conn, org_id: str, brand_id: str, tree: dict, approval_row: dict) -> dict:
+    """兩個數字要蓋同一段日子（ticket 明講的第一版錯誤）：從「核准當天」跟「這個月月初」
+    兩者較晚的那個開始，算到今天（含）——不是整個月，避免核准前的花費被誤算進超支。
+    沒有任何節點綁定時 `spend_to_date` 是 None（沒在追蹤），不是 0（0 跟「不知道」是
+    兩件事，印 0 會被讀成「還沒花錢」）。不設門檻：兩個數字都給，讓使用者自己判斷。"""
+    approved_at = approval_row["approved_at"]
+    approval_date = approved_at.date() if isinstance(approved_at, datetime) else approved_at
+    today = datetime.now(UTC).date()
+    month_start = today.replace(day=1)
+    window_start = max(month_start, approval_date)
+    days_elapsed = (today - window_start).days + 1
+    approved_amount = float(approval_row["approved_amount"])
+
+    bound_ids = {n["bound_external_id"] for n in tree["nodes"] if n["bound_external_id"]}
+    spend_to_date = None
+    if bound_ids:
+        account_ids = meta_repo.bound_account_ids_for_brand(conn, org_id, brand_id)
+        window_end = today + timedelta(days=1)  # 半開區間含今天
+        summary = meta_repo.spend_summary(conn, org_id, account_ids, window_start, window_end)
+        spend_to_date = summary["total"]["spend"]
+
+    return {
+        "expected_to_date": approved_amount * days_elapsed,
+        "spend_to_date": spend_to_date,
+        "days_elapsed": days_elapsed,
+    }
+
+
+def _fill_approval(conn, org_id: str, brand_id: str, tree: dict) -> None:
+    approval_row = approval_mod.latest(
+        conn, org_id=org_id, brand_id=brand_id,
+        scope_type=APPROVAL_SCOPE_TYPE, scope_ref=brand_id,
+    )
+    if approval_row is None:
+        tree["approval"] = None
+        return
+    overspend = _approval_overspend(conn, org_id, brand_id, tree, approval_row)
+    tree["approval"] = {
+        "id": approval_row["id"],
+        "approved_amount": float(approval_row["approved_amount"]),
+        "approved_by": approval_row["approved_by"],
+        "approved_at": approval_row["approved_at"],
+        "matches_current_tree": approval_row["content_hash"] == _tree_content_hash(tree),
+        **overspend,
+    }
+
+
 def _leaf_ad_node_names(nodes: list) -> list[str]:
     """活動樹最深層（沒有 `children` 的）節點名稱，照文件順序（深度優先、前序）——票 01：
     內容跟這一層的節點一一對應，不是每一層都配一份。"""
@@ -201,6 +301,7 @@ def _brand_response(conn, brand_id: str, org_id: str) -> dict:
         tree["running"] = True
     if tree is not None:
         _fill_node_spend(conn, org_id, brand_id, tree)
+        _fill_approval(conn, org_id, brand_id, tree)
     creative_row, creative_running = _display_task_row(conn, brand_id, CREATIVE_TASK_TYPE)
     creative = None
     if creative_row is not None:
@@ -604,6 +705,38 @@ def _run_bind(conn, brand_id: str, org_id: str) -> dict:
     return response
 
 
+def _run_approve(conn, brand_id: str, org_id: str, actor: str) -> dict:
+    """票 01：核准目前展開的活動樹——金額、雜湊都在這裡算，`approval` 表本身完全不知道
+    「樹」長什麼樣子（集裝箱憲章）。先驗證有沒有一棵可以核准的樹，再落地（比照
+    `_run_tree`／`_run_bind` 的「先驗證、後動作」次序）。舊列從不覆寫，一次核准就是
+    一列新的（ticket 明文）。"""
+    tree_row = _latest_task_row(conn, brand_id, TREE_TASK_TYPE)
+    if tree_row is None or tree_row["status"] != "succeeded":
+        raise web.ApiError(400, "no_tree", NO_TREE_TO_APPROVE_MESSAGE)
+    tree = tree_mod.tree_from_task_row(tree_row)
+    if tree["failure"] is not None:
+        raise web.ApiError(400, "no_tree", NO_TREE_TO_APPROVE_MESSAGE)
+
+    approval_mod.approve(
+        conn, org_id=org_id, brand_id=brand_id, scope_type=APPROVAL_SCOPE_TYPE,
+        scope_ref=brand_id, content_hash=_tree_content_hash(tree),
+        amount=_sum_daily_amounts(tree["nodes"]), actor=actor,
+    )
+    return _brand_response(conn, brand_id, org_id)
+
+
+def _run_approve_revoke(conn, brand_id: str, org_id: str, actor: str) -> dict:
+    """撤回目前有效的核准；沒有可撤回的核准就是沒事發生（比照畫面只在有核准時才會顯示
+    「撤回」按鈕，這裡不必為了「按到一個畫面上不該出現的按鈕」另開一條錯誤訊息）。"""
+    approval_row = approval_mod.latest(
+        conn, org_id=org_id, brand_id=brand_id,
+        scope_type=APPROVAL_SCOPE_TYPE, scope_ref=brand_id,
+    )
+    if approval_row is not None:
+        approval_mod.revoke(conn, approval_id=approval_row["id"], org_id=org_id, actor=actor)
+    return _brand_response(conn, brand_id, org_id)
+
+
 @router.get("/brands/{brand_id}")
 def get_schedule(request: Request, brand_id: str):
     actor = web.require_actor(request)
@@ -630,6 +763,20 @@ def bind_tree(request: Request, brand_id: str):
     actor = web.require_actor(request)
     web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
     return _run_bind(web.conn, brand_id, actor.org_id)
+
+
+@router.post("/brands/{brand_id}/tree/approve")
+def approve_tree(request: Request, brand_id: str):
+    actor = web.require_actor(request)
+    web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
+    return _run_approve(web.conn, brand_id, actor.org_id, str(actor.user_id))
+
+
+@router.post("/brands/{brand_id}/tree/approve/revoke")
+def revoke_tree_approval(request: Request, brand_id: str):
+    actor = web.require_actor(request)
+    web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
+    return _run_approve_revoke(web.conn, brand_id, actor.org_id, str(actor.user_id))
 
 
 @router.post("/brands/{brand_id}/reject")

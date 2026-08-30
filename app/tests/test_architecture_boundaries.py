@@ -593,7 +593,9 @@ KNOWN_MODULE_SIZES = {
     "app/orders": 1423,  # 票 12：channel_revenue 一張表取代三張（刪掉藥局專屬那一整組
                           # 之後仍淨增）——官網帳本寫入路徑、channel_revenue_summary()、
                           # 通用手動登錄（含「官網不能手動登錄」那道錢的守門）
-    "app/schedule": 1145,  # 票 01（`.scratch/creative-slice/issues/01-ad-creative-per-ad-node.md`）：
+    "app/schedule": 1283,  # 票 01（approval-slice，ADR 0040）：核准端點＋金額／雜湊／超支
+                           # 三個業務函式，`app/core/approval.py` 只管落地。前一次是 1145——
+                           # 票 01（`.scratch/creative-slice/issues/01-ad-creative-per-ad-node.md`）：
                            # 第三個 task_type「schedule_creative」——app/schedule/creative.py
                            # 新檔（build_creative／creative_from_task_row，96 行）＋
                            # routes.py 的 POST .../creative、_run_creative()、

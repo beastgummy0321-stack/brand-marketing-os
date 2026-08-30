@@ -5,12 +5,14 @@ import { Skeleton } from "@/components/layout/Skeleton";
 import { formatCurrency } from "@/lib/format";
 import { fetchProductList, type ProductListItem } from "@/lib/productsApi";
 import {
+  approveScheduleTree,
   bindScheduleTree,
   createSchedulePlan,
   expandPlanIntoTree,
   fetchSchedule,
   generateCreative,
   rejectSchedulePlans,
+  revokeScheduleApproval,
   SCHEDULE_REJECT_CATEGORIES,
   type RejectEntryInput,
   type RejectSeverity,
@@ -56,6 +58,10 @@ export function SchedulePage({ brandId }: { brandId: string }) {
   const [expandError, setExpandError] = useState<string | null>(null);
   const [binding, setBinding] = useState(false);
   const [bindError, setBindError] = useState<string | null>(null);
+  const [approving, setApproving] = useState(false);
+  const [approveError, setApproveError] = useState<string | null>(null);
+  const [revoking, setRevoking] = useState(false);
+  const [revokeError, setRevokeError] = useState<string | null>(null);
   const [generatingCreative, setGeneratingCreative] = useState(false);
   const [creativeError, setCreativeError] = useState<string | null>(null);
   const [feedbackByPlan, setFeedbackByPlan] = useState<Record<number, FeedbackEntry[]>>({});
@@ -195,6 +201,32 @@ export function SchedulePage({ brandId }: { brandId: string }) {
       setBindError(err instanceof Error ? err.message : "配對失敗，請稍後再試。");
     } finally {
       setBinding(false);
+    }
+  }
+
+  async function handleApprove() {
+    setApproving(true);
+    setApproveError(null);
+    try {
+      const schedule = await approveScheduleTree(brandId);
+      setState((prev) => (prev.status === "ready" ? { ...prev, schedule } : prev));
+    } catch (err) {
+      setApproveError(err instanceof Error ? err.message : "核准失敗，請稍後再試。");
+    } finally {
+      setApproving(false);
+    }
+  }
+
+  async function handleRevoke() {
+    setRevoking(true);
+    setRevokeError(null);
+    try {
+      const schedule = await revokeScheduleApproval(brandId);
+      setState((prev) => (prev.status === "ready" ? { ...prev, schedule } : prev));
+    } catch (err) {
+      setRevokeError(err instanceof Error ? err.message : "撤回失敗，請稍後再試。");
+    } finally {
+      setRevoking(false);
     }
   }
 
@@ -397,6 +429,12 @@ export function SchedulePage({ brandId }: { brandId: string }) {
             binding={binding}
             bindError={bindError}
             onBind={handleBind}
+            approving={approving}
+            approveError={approveError}
+            onApprove={handleApprove}
+            revoking={revoking}
+            revokeError={revokeError}
+            onRevoke={handleRevoke}
             creative={schedule.creative}
             generatingCreative={generatingCreative}
             creativeError={creativeError}

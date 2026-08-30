@@ -1,7 +1,13 @@
 import { useState } from "react";
 import { CopyIconButton } from "@/components/layout/CopyIconButton";
 import { formatCurrency } from "@/lib/format";
-import type { CampaignTreeNode, CampaignTreeResult, CreativeAd, CreativeResult } from "@/lib/scheduleApi";
+import type {
+  CampaignTreeNode,
+  CampaignTreeResult,
+  CreativeAd,
+  CreativeResult,
+  ScheduleApproval,
+} from "@/lib/scheduleApi";
 
 /** 票 09：把選定的方案展開成使用者接下來要打造的結構。這支元件不知道任何投放通路的
  * 詞彙——有幾層、每層叫什麼、扛預算的是哪一層，全部來自代理回覆的 `levels`／`share`，
@@ -11,12 +17,22 @@ import type { CampaignTreeNode, CampaignTreeResult, CreativeAd, CreativeResult }
  * ——名字對不上（零筆或兩筆以上都算）就顯示後端給的那句失敗訊息，不提供挑選、不猜。
  * 票 01：加一顆「產素材」按鈕，把每個最深層節點各配一份內容——這支元件一樣不知道那份
  * 內容裡有哪些欄位（`label` 由部門任務檔決定），只按 `node` 名稱對回樹上的節點、把
- * `fields` 原樣列出來，機器閘門的字面比對同樣蓋到這個檔案。 */
+ * `fields` 原樣列出來，機器閘門的字面比對同樣蓋到這個檔案。
+ * 票 01（`.scratch/approval-slice/issues/01-approval-is-the-money-brake.md`，ADR 0040）：
+ * 加一顆「核准」／「重新核准」按鈕跟一顆「撤回」——這是花錢煞車，但這支元件不假裝它擋
+ * 得住什麼：今天沒有任何一步是因為核准而被擋下來的，因為系統還不會自己發布，畫面只說
+ * 「已核准」，不說「已解鎖」／「可以投放了」。 */
 export function CampaignTree({
   tree,
   binding,
   bindError,
   onBind,
+  approving,
+  approveError,
+  onApprove,
+  revoking,
+  revokeError,
+  onRevoke,
   creative,
   generatingCreative,
   creativeError,
@@ -26,6 +42,12 @@ export function CampaignTree({
   binding: boolean;
   bindError: string | null;
   onBind: () => void;
+  approving: boolean;
+  approveError: string | null;
+  onApprove: () => void;
+  revoking: boolean;
+  revokeError: string | null;
+  onRevoke: () => void;
   creative: CreativeResult | null;
   generatingCreative: boolean;
   creativeError: string | null;
@@ -55,6 +77,16 @@ export function CampaignTree({
           >
             {binding ? "配對中…" : "配對"}
           </button>
+          {(tree.approval === null || !tree.approval.matches_current_tree) && (
+            <button
+              type="button"
+              onClick={onApprove}
+              disabled={approving}
+              className="rounded-md border border-primary px-2.5 py-1 text-sm font-medium text-primary hover:bg-primary/10 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {approving ? "核准中…" : tree.approval === null ? "核准" : "重新核准"}
+            </button>
+          )}
           <button
             type="button"
             onClick={onGenerateCreative}
@@ -75,6 +107,14 @@ export function CampaignTree({
       {(bindError ?? tree.bind_failure) && (
         <p className="mb-3 text-sm text-danger">{bindError ?? tree.bind_failure}</p>
       )}
+      {approveError && <p className="mb-3 text-sm text-danger">{approveError}</p>}
+      {revokeError && <p className="mb-3 text-sm text-danger">{revokeError}</p>}
+      {tree.approval && (
+        <ApprovalStatus approval={tree.approval} revoking={revoking} onRevoke={onRevoke} />
+      )}
+      <p className="mb-3 text-xs text-muted-foreground">
+        核准不會自動發布——今天沒有任何一步會因為核准而被擋下來，投放仍由人工在通路自己的後台操作。
+      </p>
       {(creativeError ?? creative?.failure) && (
         <p className="mb-3 text-sm text-danger">{creativeError ?? creative?.failure}</p>
       )}
@@ -88,6 +128,57 @@ export function CampaignTree({
           <TreeNode key={i} node={node} depth={0} levels={tree.levels} adsByNode={adsByNode} />
         ))}
       </div>
+    </div>
+  );
+}
+
+function formatApprovedDate(iso: string): string {
+  const d = new Date(iso);
+  return `${d.getMonth() + 1} 月 ${d.getDate()} 日`;
+}
+
+/** 已核准的那一行，加上超支比對（票 01：`spend_to_date` null＝這棵樹還沒有節點配對到
+ * 通路上的活動，花費根本沒在追蹤，不是「花了 0 元」——兩件事分開講）。不設門檻：兩個
+ * 數字都印出來，讓使用者自己判斷，不猜一個「超支多少算警訊」。 */
+function ApprovalStatus({
+  approval,
+  revoking,
+  onRevoke,
+}: {
+  approval: ScheduleApproval;
+  revoking: boolean;
+  onRevoke: () => void;
+}) {
+  const diff =
+    approval.spend_to_date === null ? null : approval.spend_to_date - approval.expected_to_date;
+  return (
+    <div className="mb-3 rounded-md border border-dashed border-border bg-muted/30 p-2 text-sm text-foreground">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <span>
+          已於 {formatApprovedDate(approval.approved_at)} 核准，每日 {formatCurrency(approval.approved_amount)}
+          {!approval.matches_current_tree && "（活動結構已變更，此核准對應先前版本，請重新核准）"}
+        </span>
+        <button
+          type="button"
+          onClick={onRevoke}
+          disabled={revoking}
+          className="text-sm text-muted-foreground hover:text-danger disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          {revoking ? "撤回中…" : "撤回"}
+        </button>
+      </div>
+      <p className="mt-1 text-xs text-muted-foreground">
+        {approval.spend_to_date === null ? (
+          "花費尚未開始追蹤（還沒有節點配對到通路上的活動）。"
+        ) : (
+          <>
+            核准後 {approval.days_elapsed} 天：預期累積 {formatCurrency(approval.expected_to_date)}
+            ・實際花費 {formatCurrency(approval.spend_to_date)}
+            ・差額 {diff !== null && diff >= 0 ? "+" : ""}
+            {diff !== null && formatCurrency(diff)}
+          </>
+        )}
+      </p>
     </div>
   );
 }

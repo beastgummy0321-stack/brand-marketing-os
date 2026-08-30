@@ -74,6 +74,21 @@ export interface CampaignTreeNode {
   roas: number | null;
 }
 
+/** 票 01（ADR 0040）：核准——花錢煞車。`spend_to_date` 是 null 代表這棵樹還沒有任何節點
+ * 配對到通路上的活動，不是「花了 0 元」（兩件事不同，見 `CampaignTree.tsx`）。
+ * `matches_current_tree` 是 false 代表樹的內容跟簽核當下已經不一樣（重新展開過），畫面
+ * 要說清楚、請使用者重新核准，不是悄悄沿用舊的簽核。 */
+export interface ScheduleApproval {
+  id: string;
+  approved_amount: number;
+  approved_by: string;
+  approved_at: string;
+  matches_current_tree: boolean;
+  spend_to_date: number | null;
+  expected_to_date: number;
+  days_elapsed: number;
+}
+
 export interface CampaignTreeResult {
   task_id: string;
   created_at: string;
@@ -87,6 +102,8 @@ export interface CampaignTreeResult {
   /** 票 11：只在「配對」這支端點的回應裡會非 null（不落地儲存）——GET／tree／reject
    * 一律是 null。 */
   bind_failure: string | null;
+  /** null＝這棵樹從沒核准過，或最新一次核准已經撤回。 */
+  approval: ScheduleApproval | null;
 }
 
 /** 票 01：活動樹每個最深層節點各配一份內容——`label`／`value` 都是後端部門任務檔
@@ -227,6 +244,47 @@ export async function bindScheduleTree(brandId: string): Promise<ScheduleState> 
   });
   if (!res.ok) {
     let message = `配對失敗（狀態碼 ${res.status}）`;
+    try {
+      const data = (await res.json()) as { error?: { message?: string } };
+      message = errorMessageFrom(data, message);
+    } catch {
+      // 回應不是 JSON，用預設訊息。
+    }
+    throw new Error(message);
+  }
+  return (await res.json()) as ScheduleState;
+}
+
+/** 票 01（ADR 0040）：核准目前展開的活動樹——金額、雜湊全部在後端算，這裡不接受、也
+ * 不送任何金額欄位（花錢的數字只能由伺服器自己算）。回傳整個 `ScheduleState`（`tree`
+ * 欄位換新，帶著新的 `approval`）。 */
+export async function approveScheduleTree(brandId: string): Promise<ScheduleState> {
+  const res = await apiFetch(`/api/schedule/brands/${encodeURIComponent(brandId)}/tree/approve`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({}),
+  });
+  if (!res.ok) {
+    let message = `核准失敗（狀態碼 ${res.status}）`;
+    try {
+      const data = (await res.json()) as { error?: { message?: string } };
+      message = errorMessageFrom(data, message);
+    } catch {
+      // 回應不是 JSON，用預設訊息。
+    }
+    throw new Error(message);
+  }
+  return (await res.json()) as ScheduleState;
+}
+
+/** 票 01（ADR 0040）：撤回目前有效的核准——舊列留著（`revoked_at` 標記），不會被刪除。 */
+export async function revokeScheduleApproval(brandId: string): Promise<ScheduleState> {
+  const res = await apiFetch(
+    `/api/schedule/brands/${encodeURIComponent(brandId)}/tree/approve/revoke`,
+    { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({}) },
+  );
+  if (!res.ok) {
+    let message = `撤回失敗（狀態碼 ${res.status}）`;
     try {
       const data = (await res.json()) as { error?: { message?: string } };
       message = errorMessageFrom(data, message);

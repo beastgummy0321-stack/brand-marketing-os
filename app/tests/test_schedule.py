@@ -438,6 +438,14 @@ class PlanApiContractTest(_ScheduleApiTestBase):
         )
         self.assertEqual(creative_resp.status_code, 404)
 
+        # 票 01（ADR 0040）：核准／撤回一樣經 require_brand。
+        for path in ("tree/approve", "tree/approve/revoke"):
+            resp = self.client.post(
+                f"/api/schedule/brands/{self.brand['id']}/{path}",
+                headers=self._headers(token_b, _org_b),
+            )
+            self.assertEqual(resp.status_code, 404)
+
 
 class RejectApiContractTest(_ScheduleApiTestBase):
     """票 10-feedback-entries（ADR 0037）：POST .../reject——每條意見變一列 rule，
