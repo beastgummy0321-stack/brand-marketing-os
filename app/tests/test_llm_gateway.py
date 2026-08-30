@@ -417,6 +417,13 @@ class ContextCompilerTest(unittest.TestCase):
         self.assertNotIn("B牌獨有機密規則", text)
         self.assertNotIn("B牌獨有機密宣稱", text)
 
+        # dead-code-sweep 票 04 刪了學習／猜想兩段之後，其餘段落標題不變（回歸鐵條）。
+        self.assertIn("【限制】規則", text)
+        self.assertIn("【可以講】宣稱", text)
+        self.assertIn("【事實】品牌事實", text)
+        self.assertNotIn("已驗證的學習", text)
+        self.assertNotIn("尚未驗證的猜想", text)
+
         self.assertEqual(brand_version, repo.get_brand(self.conn, brand_a["id"])["knowledge_version"])
         self.assertIsNone(product_version)
 
@@ -489,6 +496,35 @@ class ContextCompilerTest(unittest.TestCase):
             context_compiler.compile(self.conn, "brd_不存在")
 
 
+class RuleNeverExpiresTest(unittest.TestCase):
+    """dead-code-sweep 票 04：規則不再自動過期（曾經的 sweep 已刪，唯一救回來的入口只長
+    在已刪除的累積智慧頁）。紅一次：把 sweep 呼叫加回 list_rules_for_brand() 開頭會轉紅。"""
+
+    def setUp(self):
+        self.conn = db.current()
+        self.brand = repo.create_brand(self.conn, name="品牌H（規則不過期測試）", client_name=None, actor="小陳", org_id=db.DEV_ORG_ID)
+
+    def test_soft_rule_older_than_90_days_still_active_and_in_prompt(self):
+        rule = repo.create_rule(
+            self.conn, self.brand["id"], rule_type="tone", content="很久以前確認過的偏好規則",
+            severity="soft", actor="小陳",
+        )
+        ancient = (datetime.now(UTC) - timedelta(days=200)).isoformat()
+        self.conn.execute(
+            "UPDATE rule SET confirmed_at = %s, updated_at = %s WHERE id = %s",
+            (ancient, ancient, rule["id"]),
+        )
+        self.conn.commit()
+
+        rules = repo.list_rules_for_brand(self.conn, self.brand["id"])
+        self.assertEqual({r["id"] for r in rules}, {rule["id"]})
+        self.assertEqual(rules[0]["status"], "active")
+
+        text, knowledge_item_ids, _bv, _pv = context_compiler.compile(self.conn, self.brand["id"])
+        self.assertIn("很久以前確認過的偏好規則", text)
+        self.assertIn(rule["id"], knowledge_item_ids)
+
+
 class ContextCompilerPromptCapTest(unittest.TestCase):
     """票 02-prompt-cap-and-overflow-list（決策 0012 第二、三節）：進 prompt 上限與未生效清單。"""
 
@@ -499,13 +535,7 @@ class ContextCompilerPromptCapTest(unittest.TestCase):
     def _make_rules(self, brand_id, hard_count, soft_count):
         """建 hard_count 條 hard ＋ soft_count 條 soft 規則。soft 規則的 confirmed_at 直接
         指定成遞增的固定字串（第 i 條比第 i-1 條晚 1 秒），不靠 now_iso() 的時間精度賭排序斷言。
-
-        基準時間用「現在往前推 1 分鐘」而不是固定日曆日期：票 01-rule-expiry-reconfirm
-        （ADR 0012 第一節）之後，`list_rules_for_brand`／`list_rules_for_product` 讀取前
-        會先掃一次逾期未確認的規則，固定寫死的舊日期一旦超過門檻期數（系統預設 6 期＝84
-        天）就會被判定逾期、退回 pending_reconfirm，不再是這裡要測的「active 但排序較後
-        面」——兩個機制刻意保持互不依賴，這裡只要新到舊排序的相對關係不變，基準點是多久
-        以前不影響本測試類要驗的行為。"""
+        基準時間用「現在往前推 1 分鐘」，只要新到舊排序的相對關係不變即可。"""
         base = datetime.now(UTC) - timedelta(minutes=1)
         hard_rules = [
             repo.create_rule(self.conn, brand_id, rule_type="tone", content=f"hard規則{i}",
@@ -523,13 +553,12 @@ class ContextCompilerPromptCapTest(unittest.TestCase):
             soft_rules.append(rule)
         return hard_rules, soft_rules
 
-    def test_25_rules_top_20_hard_first_enter_prompt_rest_overflow(self):
-        """驗收條件：25 條 active 規則（3 條 hard＋22 條 soft），只有前 20 條（hard 優先＋
-        soft 依 confirmed_at 新到舊）進提示詞組裝結果，另外 5 條出現在未生效清單。"""
+    def test_25_rules_top_20_hard_first_enter_prompt(self):
+        """25 條 active 規則（3 條 hard＋22 條 soft），只有前 20 條（hard 優先＋soft 依
+        confirmed_at 新到舊）進提示詞組裝結果，其餘 5 條不進。"""
         hard_rules, soft_rules = self._make_rules(self.brand["id"], hard_count=3, soft_count=22)
 
         text, knowledge_item_ids, _bv, _pv = context_compiler.compile(self.conn, self.brand["id"])
-        overflow = context_compiler.list_overflow_rules(self.conn, self.brand["id"])
 
         # 3 條 hard 全部保留 + 17 條最新 soft（confirmed_at 最新的那 17 條）＝ 20 條進 prompt。
         newest_17 = soft_rules[-17:]
@@ -541,49 +570,35 @@ class ContextCompilerPromptCapTest(unittest.TestCase):
             self.assertNotIn(r["content"], text)
             self.assertNotIn(r["id"], knowledge_item_ids)
 
-        self.assertEqual(len(overflow), 5)
-        self.assertEqual({o["id"] for o in overflow}, {r["id"] for r in oldest_5})
-
-    def test_overflow_rules_are_not_deactivated(self):
-        """未生效不等於刪除或下架：overflow 清單裡的規則狀態仍是 active（決策 0012 第三節）。"""
-        _hard, soft_rules = self._make_rules(self.brand["id"], hard_count=0, soft_count=21)
-        overflow = context_compiler.list_overflow_rules(self.conn, self.brand["id"])
-        self.assertEqual(len(overflow), 1)
-        self.assertEqual(overflow[0]["id"], soft_rules[0]["id"])
-        row = repo.get_rule(self.conn, self.brand["id"], overflow[0]["id"])
-        self.assertEqual(row["status"], "active")
-
     def test_hard_rules_never_truncated_even_past_cap(self):
-        """hard 規則全部保留是硬性不變量：就算 hard 數量本身就超過上限也不截斷 hard，
-        這時所有 soft 規則全部進未生效清單。"""
-        hard_rules, soft_rules = self._make_rules(self.brand["id"], hard_count=21, soft_count=2)
+        """hard 規則全部保留是硬性不變量：就算 hard 數量本身就超過上限也不截斷 hard。"""
+        hard_rules, _soft_rules = self._make_rules(self.brand["id"], hard_count=21, soft_count=2)
         text, _ids, _bv, _pv = context_compiler.compile(self.conn, self.brand["id"])
         for r in hard_rules:
             self.assertIn(r["content"], text)
-        overflow = context_compiler.list_overflow_rules(self.conn, self.brand["id"])
-        self.assertEqual({o["id"] for o in overflow}, {r["id"] for r in soft_rules})
 
     def test_cap_threshold_reads_per_brand_rule_cards_override(self):
         """上限門檻不寫死常數，讀 rule_cards「rule_prompt_cap」的品牌覆寫值（settings-hub/01
-        分品牌機制）：改小上限後同一批規則的未生效清單立刻變多，不用重開程式。"""
+        分品牌機制）：改小上限後同一批規則裡較舊的幾條立刻不再進 prompt，不用重開程式。"""
         _hard, soft_rules = self._make_rules(self.brand["id"], hard_count=0, soft_count=5)
-        self.assertEqual(context_compiler.list_overflow_rules(self.conn, self.brand["id"]), [])
+        text, _ids, _bv, _pv = context_compiler.compile(self.conn, self.brand["id"])
+        for r in soft_rules:
+            self.assertIn(r["content"], text)
 
         rule_cards.set_value(self.conn, self.brand["id"], "rule_prompt_cap", "max_active_rules",
                              3.0, actor="小陳", org_id=db.DEV_ORG_ID)
-        overflow = context_compiler.list_overflow_rules(self.conn, self.brand["id"])
-        self.assertEqual({o["id"] for o in overflow}, {r["id"] for r in soft_rules[:2]})
+        text, _ids, _bv, _pv = context_compiler.compile(self.conn, self.brand["id"])
+        for r in soft_rules[:2]:  # 最舊 2 條超過新上限 3，不再進 prompt
+            self.assertNotIn(r["content"], text)
+        for r in soft_rules[2:]:
+            self.assertIn(r["content"], text)
 
-    def test_product_only_overflow_not_hidden_when_brand_alone_is_within_cap(self):
+    def test_product_scope_merges_brand_rules_before_applying_cap(self):
         """品牌整體規則本身在上限內，但加上某產品的專屬規則後合併超過上限時，compile()
-        對該產品生成會排除幾條產品專屬規則——這幾條要出現在未生效清單，不能因為「只看品牌
-        整體規則」而回報 0 條（bug 回歸：compile() 跟 list_overflow_rules() 邏輯要一致）。"""
+        對該產品生成會排除幾條品牌整體規則——不是「只看品牌整體規則」躲過上限。"""
         rule_cards.set_value(self.conn, self.brand["id"], "rule_prompt_cap", "max_active_rules",
                              3.0, actor="小陳", org_id=db.DEV_ORG_ID)
         _hard, brand_soft = self._make_rules(self.brand["id"], hard_count=0, soft_count=2)
-
-        # 品牌整體 2 條 soft 本身在上限（3）內，未生效清單是空的。
-        self.assertEqual(context_compiler.list_overflow_rules(self.conn, self.brand["id"]), [])
 
         product = repo.create_product(self.conn, self.brand["id"], name="測試產品", actor="小陳")
         base = datetime.now(UTC) - timedelta(minutes=1)
@@ -604,195 +619,6 @@ class ContextCompilerPromptCapTest(unittest.TestCase):
         for r in product_rules:
             self.assertIn(r["content"], text)
         self.assertNotIn(brand_soft[0]["content"], text)
-
-        overflow = context_compiler.list_overflow_rules(self.conn, self.brand["id"])
-        self.assertIn(brand_soft[0]["id"], {o["id"] for o in overflow})
-
-
-class ContextCompilerLearningLoopTest(unittest.TestCase):
-    """GitHub issue #54（決策 0030）：learning_ledger／strategy_hypothesis 讀取通電。"""
-
-    def setUp(self):
-        self.conn = db.current()
-        self.brand = repo.create_brand(self.conn, name="品牌E（學習迴路測試）", client_name=None, actor="小陳", org_id=db.DEV_ORG_ID)
-        self.product = repo.create_product(self.conn, self.brand["id"], name="產品E-1", actor="小陳")
-
-    def test_zero_learning_records_output_unchanged_regression(self):
-        """回歸鐵條：零學習紀錄時，輸出必須與改動前逐字相同（不多出任何段落）。"""
-        fact = repo.create_brand_fact(
-            self.conn, self.brand["id"], fact_type="positioning", label="定位",
-            value="E牌已確認的定位事實", status="confirmed", confirmed_by="小陳", actor="小陳",
-        )
-        text, knowledge_item_ids, _bv, _pv = context_compiler.compile(self.conn, self.brand["id"])
-
-        self.assertEqual(text, "【事實】品牌事實\n- 定位：E牌已確認的定位事實")
-        self.assertEqual(knowledge_item_ids, [fact["id"]])
-        self.assertNotIn("已驗證的學習", text)
-        self.assertNotIn("尚未驗證的猜想", text)
-
-    def test_learning_ledger_included_with_source_note(self):
-        entry = repo.create_learning_ledger_entry(
-            self.conn, self.brand["id"], learning_text="早鳥優惠切角轉換率最高",
-            applicability_scope="brand", created_by="小陳", actor="小陳", source_track="ads",
-            source_cycle_id=None, sample_size="42", confidence="B",
-        )
-        text, knowledge_item_ids, _bv, _pv = context_compiler.compile(self.conn, self.brand["id"])
-
-        self.assertIn("【已驗證的學習】", text)
-        self.assertIn("早鳥優惠切角轉換率最高", text)
-        self.assertIn("對照樣本 42", text)  # 票 L2：收斂後文案「樣本數」改「對照樣本」，單列時結果等價
-        self.assertIn(entry["id"], knowledge_item_ids)
-
-    def test_hypothesis_proposed_and_testing_included_supported_excluded(self):
-        proposed = repo.create_strategy_hypothesis(
-            self.conn, self.brand["id"], actor="小陳", hypothesis_type="audience",
-            statement="這群受眾在意睡眠品質", created_by="小陳",
-        )
-        testing = repo.create_strategy_hypothesis(
-            self.conn, self.brand["id"], actor="小陳", hypothesis_type="angle",
-            statement="用價格切角轉換較好", created_by="小陳",
-        )
-        repo.update_hypothesis_status(self.conn, self.brand["id"], testing["id"], status="testing", actor="小陳")
-        supported = repo.create_strategy_hypothesis(
-            self.conn, self.brand["id"], actor="小陳", hypothesis_type="angle",
-            statement="已驗證不該出現在猜想段", created_by="小陳",
-        )
-        repo.update_hypothesis_status(self.conn, self.brand["id"], supported["id"], status="supported", actor="小陳")
-
-        text, knowledge_item_ids, _bv, _pv = context_compiler.compile(self.conn, self.brand["id"])
-
-        self.assertIn("【尚未驗證的猜想】", text)
-        self.assertIn("這群受眾在意睡眠品質", text)
-        self.assertIn("用價格切角轉換較好", text)
-        self.assertNotIn("已驗證不該出現在猜想段", text)
-        self.assertIn(proposed["id"], knowledge_item_ids)
-        self.assertIn(testing["id"], knowledge_item_ids)
-        self.assertNotIn(supported["id"], knowledge_item_ids)
-        self.assertNotIn("已驗證的學習", text)  # 未驗證段不得混進已驗證段
-
-    def test_expired_learning_excluded(self):
-        entry = repo.create_learning_ledger_entry(
-            self.conn, self.brand["id"], learning_text="這條學習已下架",
-            applicability_scope="brand", created_by="小陳", actor="小陳", source_track="ads",
-        )
-        self.conn.execute("UPDATE learning_ledger SET expired = true WHERE id = %s", (entry["id"],))
-        self.conn.commit()
-
-        text, knowledge_item_ids, _bv, _pv = context_compiler.compile(self.conn, self.brand["id"])
-
-        self.assertNotIn("這條學習已下架", text)
-        self.assertNotIn(entry["id"], knowledge_item_ids)
-
-    def test_product_scope_includes_brand_wide_but_excludes_other_product(self):
-        other_product = repo.create_product(self.conn, self.brand["id"], name="產品E-2", actor="小陳")
-        brand_wide = repo.create_learning_ledger_entry(
-            self.conn, self.brand["id"], learning_text="品牌整體都適用的學習",
-            applicability_scope="brand", created_by="小陳", actor="小陳", source_track="ads",
-        )
-        this_product = repo.create_learning_ledger_entry(
-            self.conn, self.brand["id"], learning_text="只適用本產品的學習",
-            applicability_scope="product", created_by="小陳", actor="小陳", source_track="ads",
-            product_id=self.product["id"],
-        )
-        repo.create_learning_ledger_entry(
-            self.conn, self.brand["id"], learning_text="只適用另一個產品的學習不該外洩",
-            applicability_scope="product", created_by="小陳", actor="小陳", source_track="ads",
-            product_id=other_product["id"],
-        )
-        brand_hyp = repo.create_strategy_hypothesis(
-            self.conn, self.brand["id"], actor="小陳", hypothesis_type="audience",
-            statement="品牌層級猜想", created_by="小陳",
-        )
-        repo.create_strategy_hypothesis(
-            self.conn, self.brand["id"], actor="小陳", hypothesis_type="audience",
-            statement="另一個產品的猜想不該外洩", created_by="小陳", product_id=other_product["id"],
-        )
-
-        text, knowledge_item_ids, _bv, _pv = context_compiler.compile(
-            self.conn, self.brand["id"], self.product["id"]
-        )
-
-        self.assertIn("品牌整體都適用的學習", text)
-        self.assertIn("只適用本產品的學習", text)
-        self.assertIn("品牌層級猜想", text)
-        self.assertNotIn("只適用另一個產品的學習不該外洩", text)
-        self.assertNotIn("另一個產品的猜想不該外洩", text)
-        self.assertIn(brand_wide["id"], knowledge_item_ids)
-        self.assertIn(this_product["id"], knowledge_item_ids)
-        self.assertIn(brand_hyp["id"], knowledge_item_ids)
-
-    def test_brand_level_compile_excludes_product_specific_learning(self):
-        repo.create_learning_ledger_entry(
-            self.conn, self.brand["id"], learning_text="產品專屬學習不該出現在品牌層",
-            applicability_scope="product", created_by="小陳", actor="小陳", source_track="ads",
-            product_id=self.product["id"],
-        )
-        repo.create_strategy_hypothesis(
-            self.conn, self.brand["id"], actor="小陳", hypothesis_type="angle",
-            statement="產品專屬猜想不該出現在品牌層", created_by="小陳", product_id=self.product["id"],
-        )
-
-        text, _ids, _bv, _pv = context_compiler.compile(self.conn, self.brand["id"])
-
-        self.assertNotIn("產品專屬學習不該出現在品牌層", text)
-        self.assertNotIn("產品專屬猜想不該出現在品牌層", text)
-
-
-class ContextCompilerHypothesisPoolBoundTest(unittest.TestCase):
-    """票 F2（B0-29／B0-36 重現）：一條從沒被判讀結案的 proposed 假設不得逐字重複出現在
-    每一期的 prompt 裡。手法比照 `ContextCompilerPromptCapTest`：上限 + `list_excluded_*()`
-    未生效清單，不悄悄丟棄。"""
-
-    def setUp(self):
-        self.conn = db.current()
-        self.brand = repo.create_brand(self.conn, name="品牌G（假設上限測試）", client_name=None, actor="小陳", org_id=db.DEV_ORG_ID)
-        self.product = repo.create_product(self.conn, self.brand["id"], name="產品G-1", actor="小陳")
-
-    def _seed_pool(self, product_id=None):
-        """4 個假設分屬 4 個不同期別（ccy_c0～ccy_c3，依 created_at 遞增出現），
-        第一個（ccy_c0）就是視窗上限外那個，其餘 3 個都在視窗內。"""
-        base = datetime.now(UTC) - timedelta(minutes=1)
-        statements = ["不是咖啡不需停下來", "猜想1", "猜想2", "最新的猜想"]
-        hyps = []
-        for i, (cid, statement) in enumerate(zip(["ccy_c0", "ccy_c1", "ccy_c2", "ccy_c3"], statements)):
-            h = repo.create_strategy_hypothesis(
-                self.conn, self.brand["id"], actor="小陳", hypothesis_type="message",
-                statement=statement, created_by="小陳", product_id=product_id, source_cycle_id=cid,
-            )
-            created_at = (base + timedelta(seconds=i * 10)).isoformat()
-            self.conn.execute("UPDATE strategy_hypothesis SET created_at = %s WHERE id = %s",
-                              (created_at, h["id"]))
-            self.conn.commit()
-            hyps.append(h)
-        return hyps
-
-    def test_stale_hypothesis_dropped_at_brand_scope(self):
-        stale, *rest = self._seed_pool(product_id=None)
-
-        text, knowledge_item_ids, _bv, _pv = context_compiler.compile(self.conn, self.brand["id"])
-        excluded = context_compiler.list_excluded_hypotheses(self.conn, self.brand["id"])
-
-        self.assertNotIn("不是咖啡不需停下來", text)
-        self.assertNotIn(stale["id"], knowledge_item_ids)
-        for h in rest:
-            self.assertIn(h["statement"], text)
-        self.assertEqual([e["id"] for e in excluded], [stale["id"]])
-        self.assertIn("期", excluded[0]["reason"])
-
-    def test_stale_hypothesis_dropped_at_product_scope_too(self):
-        """契約明講：兩個分支都要套上限，不是只改品牌層那一支。"""
-        stale, *rest = self._seed_pool(product_id=self.product["id"])
-
-        text, knowledge_item_ids, _bv, _pv = context_compiler.compile(
-            self.conn, self.brand["id"], self.product["id"])
-        excluded = context_compiler.list_excluded_hypotheses(
-            self.conn, self.brand["id"], self.product["id"])
-
-        self.assertNotIn("不是咖啡不需停下來", text)
-        self.assertNotIn(stale["id"], knowledge_item_ids)
-        for h in rest:
-            self.assertIn(h["statement"], text)
-        self.assertEqual([e["id"] for e in excluded], [stale["id"]])
 
 
 class CostCeilingTest(unittest.TestCase):

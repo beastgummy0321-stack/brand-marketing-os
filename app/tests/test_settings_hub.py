@@ -82,11 +82,13 @@ class SettingsAdsPageTest(unittest.TestCase):
                                           actor=ACTOR, org_id=coredb.DEV_ORG_ID)
         self.bid = self.brand["id"]
 
-    def test_page_renders_all_four_cards_with_seed_values(self):
+    def test_page_renders_all_three_cards_with_seed_values(self):
+        # dead-code-sweep 票 04（2026-08-30）刪了「規則有效期」卡（規則不再過期），剩三張。
         cards = _cards(self.client, self.bid)
         titles = {card["title"] for card in cards.values()}
-        for title in ("品牌智庫規則上限", "規則有效期", "檔期日預算", "檔期方案數量上下限"):
+        for title in ("品牌智庫規則上限", "檔期日預算", "檔期方案數量上下限"):
             self.assertIn(title, titles)
+        self.assertNotIn("規則有效期", titles)
         self.assertEqual(_field(cards, "schedule_plan_count", "plan_count_max")["value"], 5.0)
 
     def test_no_customized_badge_when_untouched(self):
@@ -110,8 +112,8 @@ class SettingsAdsPageTest(unittest.TestCase):
         """票 03-1：ADR 0004 的「不再要求先設定操作人」還是對的，但具名對象換成登入者
         （dev token 對應的種子使用者），不再是固定的 OPERATOR 常數。"""
         resp = self.client.post(
-            f"/api/settings/rule-cards/brands/{self.bid}/rule_expiry",
-            json={"reconfirm_days": "60"},
+            f"/api/settings/rule-cards/brands/{self.bid}/rule_prompt_cap",
+            json={"max_active_rules": "30"},
         )
         self.assertEqual(resp.status_code, 200)
         row = _last_rule_card_audit(self.bid)
@@ -121,11 +123,11 @@ class SettingsAdsPageTest(unittest.TestCase):
     def test_edit_persists_after_restart(self):
         """ADR 0027：不再有「重開連線」這回事了（連線池按 request 借連線）——改成從一條
         全新借來的連線讀回，證明真的落庫，不是只留在寫入那個 request 的連線快取裡。"""
-        self.client.post(f"/api/settings/rule-cards/brands/{self.bid}/rule_expiry",
-                         json={"reconfirm_days": "75"})
+        self.client.post(f"/api/settings/rule-cards/brands/{self.bid}/rule_prompt_cap",
+                         json={"max_active_rules": "30"})
         with coredb.connection() as fresh:
             self.assertEqual(
-                rule_cards.get_value(fresh, self.bid, "rule_expiry", "reconfirm_days"), 75.0)
+                rule_cards.get_value(fresh, self.bid, "rule_prompt_cap", "max_active_rules"), 30.0)
 
     def test_edit_invalid_number_shows_error_and_keeps_other_fields_unchanged(self):
         before = rule_cards.get_value(web.conn, self.bid, "schedule_plan_count", "plan_count_max")

@@ -20,8 +20,6 @@
 """
 
 
-from app.brand_intelligence import rule_lifecycle
-
 # Owned Channel 已拆進 repository_channels.py（票 B2-library，本檔行數頂到
 # docs/tech-debt.md 凍結上限，不得再加）；這裡 re-export，讓既有 `repo.create_channel()`
 # 等呼叫端寫法不必改。
@@ -31,14 +29,6 @@ from app.brand_intelligence.repository_channels import (  # noqa: F401
     get_channel,
     list_channels,
     update_channel,
-)
-
-# 拆進 repository_learning_text.py（票 F3-signoff-residue R4：本檔行數頂到凍結上限，
-# 修多括號區段全部刪空互撞的缺陷加不進去，precedent 同上面 repository_channels 的拆法）；
-# 這裡 re-export，讓既有 `learning_ledger_entry_exists()` 呼叫與測試裡的
-# `bi_repo._normalize_learning_text(...)` 寫法不必改。
-from app.brand_intelligence.repository_learning_text import (  # noqa: F401
-    _normalize_learning_text,
 )
 from app.core import cleanup
 from app.core.audit import write_audit
@@ -949,38 +939,15 @@ def deactivate_rule(conn: Conn, brand_id: str, rule_id: str, *, actor: str) -> d
     return after
 
 
-def reconfirm_rule(conn: Conn, brand_id: str, rule_id: str, *, actor: str) -> dict:
-    """待確認規則的「延續」（rule-lifecycle/01，ADR 0012 第一節）：恢復 active、更新
-    確認時間，不必重新輸入規則內容。不限定 before 一定是 pending_reconfirm——直接呼叫
-    也等同「主動延長效期」，語意上無害（比照 deactivate_rule 不檢查現有狀態的寫法）。"""
-    _require(actor, "actor 為必填")
-    before = get_rule(conn, brand_id, rule_id)
-    if before is None:
-        raise ValueError(f"找不到規則：{rule_id}")
-    ts = now_utc()
-    conn.execute(
-        "UPDATE rule SET status = 'active', confirmed_at = %s, updated_at = %s "
-        "WHERE id = %s AND brand_id = %s",
-        (ts, ts, rule_id, brand_id),
-    )
-    after = get_rule(conn, brand_id, rule_id)
-    if after["product_id"]:
-        _bump_product_version(conn, brand_id, after["product_id"])
-    else:
-        _bump_brand_version(conn, brand_id)
-    org_id = _org_id_for_brand(conn, brand_id)
-    write_audit(conn, org_id=org_id, brand_id=brand_id, entity_type="rule", entity_id=rule_id,
-                action="reconfirm", actor=actor, before=before, after=after,
-                reason="使用者延續，恢復生效並更新確認時間（ADR 0012 第一節）")
-    conn.commit()
-    return after
-
-
 def list_rules_for_brand(conn: Conn, brand_id: str) -> list:
     """品牌底下所有生效中的規則（含品牌整體與各產品專屬——品牌檔案頁要看到全部）。
-    讀取前先掃一次逾期未確認的規則（rule-lifecycle/01），比照
-    app/core/interrupts.py 的 list_open() 呼叫 _archive_stale_informational 的寫法。"""
-    rule_lifecycle.sweep_expired_rules(conn, brand_id)
+
+    規則不再過期（dead-code-sweep 票 04，2026-08-30 使用者裁決）：曾經有一支
+    rule_lifecycle.sweep_expired_rules() 在這裡先把逾期未重新確認的 soft 規則掃成
+    pending_reconfirm，唯一能救回來的入口只長在已刪除的累積智慧頁，等於規則會無聲
+    消失、沒人救得回來。裁決：使用者寫的規則除非自己刪除，否則永遠生效——已刪除該
+    掃描與 pending_reconfirm 狀態的所有讀寫端；測到的資料庫沒有任何列處在
+    pending_reconfirm，故不需放寬這裡的 status 過濾。"""
     return _rows(conn.execute(
         "SELECT * FROM rule WHERE brand_id = %s AND status = 'active' ORDER BY created_at",
         (brand_id,),
@@ -988,24 +955,12 @@ def list_rules_for_brand(conn: Conn, brand_id: str) -> list:
 
 
 def list_rules_for_product(conn: Conn, brand_id: str, product_id: str) -> list:
-    """整個品牌的規則 + 本產品專屬規則（不含其他產品的專屬規則）。讀取前先掃一次逾期未確認
-    的規則（rule-lifecycle/01），理由同 list_rules_for_brand。"""
-    rule_lifecycle.sweep_expired_rules(conn, brand_id)
+    """整個品牌的規則 + 本產品專屬規則（不含其他產品的專屬規則）。理由同 list_rules_for_brand
+    ——規則不再過期（dead-code-sweep 票 04）。"""
     return _rows(conn.execute(
         "SELECT * FROM rule WHERE brand_id = %s AND status = 'active' "
         "AND (product_id IS NULL OR product_id = %s) ORDER BY created_at",
         (brand_id, product_id),
-    ))
-
-
-def list_pending_reconfirm_rules(conn: Conn, brand_id: str) -> list:
-    """待確認清單（累積智慧頁用，rule-lifecycle/01）：先掃一次逾期未確認的規則，確保
-    這裡看到的是最新狀態，再撈目前退回待確認的規則。"""
-    rule_lifecycle.sweep_expired_rules(conn, brand_id)
-    return _rows(conn.execute(
-        "SELECT * FROM rule WHERE brand_id = %s AND status = 'pending_reconfirm' "
-        "ORDER BY updated_at DESC",
-        (brand_id,),
     ))
 
 
@@ -1198,80 +1153,6 @@ def delete_official_asset(conn: Conn, brand_id: str, asset_id: str, *, actor: st
 
 
 # ---------------------------------------------------------------------------
-# Strategy Hypothesis（基本建立與查詢，無 UI 亦需可程式存取）
-# ---------------------------------------------------------------------------
-
-def create_strategy_hypothesis(conn: Conn, brand_id: str, *, actor: str,
-                                hypothesis_type: str, statement: str, created_by: str,
-                                product_id: str | None = None,
-                                source_cycle_id: str | None = None) -> dict:
-    _require(hypothesis_type, "strategy_hypothesis.hypothesis_type 為必填")
-    _require(statement, "strategy_hypothesis.statement 為必填")
-    _require(created_by, "strategy_hypothesis.created_by 為必填")
-    _require(actor, "actor 為必填")
-    hyp_id = new_id("hyp")
-    ts = now_utc()
-    row = {
-        "id": hyp_id, "brand_id": brand_id, "product_id": product_id,
-        "hypothesis_type": hypothesis_type, "statement": statement, "status": "proposed",
-        "source_cycle_id": source_cycle_id, "created_by": created_by, "expired_at": None,
-        "created_at": ts, "updated_at": ts,
-    }
-    org_id = _org_id_for_brand(conn, brand_id)
-    conn.execute(
-        "INSERT INTO strategy_hypothesis (id, org_id, brand_id, product_id, hypothesis_type, statement, "
-        "status, source_cycle_id, created_by, expired_at, created_at, updated_at) "
-        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
-        (row["id"], org_id, row["brand_id"], row["product_id"], row["hypothesis_type"], row["statement"],
-         row["status"], row["source_cycle_id"], row["created_by"], row["expired_at"],
-         row["created_at"], row["updated_at"]),
-    )
-    write_audit(conn, org_id=org_id, brand_id=brand_id, entity_type="strategy_hypothesis", entity_id=hyp_id,
-                action="create", actor=actor, before=None, after=row)
-    conn.commit()
-    return row
-
-
-def list_strategy_hypotheses(conn: Conn, brand_id: str) -> list:
-    return _rows(conn.execute(
-        "SELECT * FROM strategy_hypothesis WHERE brand_id = %s ORDER BY created_at DESC", (brand_id,)
-    ))
-
-
-def get_strategy_hypothesis(conn: Conn, brand_id: str, hypothesis_id: str) -> dict | None:
-    return _row(conn.execute(
-        "SELECT * FROM strategy_hypothesis WHERE id = %s AND brand_id = %s", (hypothesis_id, brand_id)
-    ).fetchone())
-
-
-# 生命週期（docs/domain.md）：Proposed → Testing → Supported／Rejected／Inconclusive／Expired。
-HYPOTHESIS_STATUSES = ("proposed", "testing", "supported", "rejected", "inconclusive", "expired")
-
-
-def update_hypothesis_status(conn: Conn, brand_id: str, hypothesis_id: str, *,
-                              status: str, actor: str) -> dict:
-    """假設結案（GitHub issue #53）：只改 status，不碰其他欄位——`status` 為無 CHECK 的 TEXT，
-    這是新增程式碼、不是改 schema。"""
-    _require(status, "strategy_hypothesis.status 為必填")
-    _require(actor, "actor 為必填")
-    if status not in HYPOTHESIS_STATUSES:
-        raise ValueError(f"未知的假設狀態：{status}")
-    before = get_strategy_hypothesis(conn, brand_id, hypothesis_id)
-    if before is None:
-        raise ValueError("找不到這條策略假設")
-    conn.execute(
-        "UPDATE strategy_hypothesis SET status = %s, updated_at = %s WHERE id = %s AND brand_id = %s",
-        (status, now_utc(), hypothesis_id, brand_id),
-    )
-    after = get_strategy_hypothesis(conn, brand_id, hypothesis_id)
-    org_id = _org_id_for_brand(conn, brand_id)
-    write_audit(conn, org_id=org_id, brand_id=brand_id, entity_type="strategy_hypothesis", entity_id=hypothesis_id,
-                action="update_status", actor=actor, before=before, after=after)
-    conn.commit()
-    return after
-
-
-# ---------------------------------------------------------------------------
 # Brand Performance Baseline（基本建立與查詢，無 UI 亦需可程式存取）
 # ---------------------------------------------------------------------------
 
@@ -1451,177 +1332,6 @@ def set_customer_voice_status(conn: Conn, brand_id: str, cv_id: str, *,
 
 def delete_customer_voice(conn, brand_id: str, cv_id: str, *, actor: str) -> None:
     _delete_entity(conn, brand_id, "customer_voice", cv_id, actor=actor, kind_label="顧客原話")
-
-
-# ---------------------------------------------------------------------------
-# Learning Ledger（修憲落地 A3，決策 0037 第三節；docs/architecture-rules.md A1／A4）
-#
-# 遷自 app/ads——Brand Learning 依 docs/domain.md 是品牌永久層概念，不該只讓廣告分支
-# 摸得到。append-only（鐵則 3 單向鐵律：學習只能補充事實層，永遠不得回寫或改寫事實層，
-# 本模組的 brand_fact／product_fact 寫入函式在別處，這裡不得也不會碰它們——
-# 見 app/tests/test_learning_ledger_unidirectional.py 的機器檢查）。
-# 各分支自己的 repository 應包一層薄封裝呼叫這裡的公開函式，不得對本表下原生 SQL
-# （A1：跨層一律走公開函式）；app/ads/repository.py 是目前唯一的例子。
-# ---------------------------------------------------------------------------
-
-def create_learning_ledger_entry(conn: Conn, brand_id: str, *, learning_text: str,
-                                  applicability_scope: str, created_by: str, actor: str,
-                                  source_track: str, product_id: str | None = None,
-                                  platform: str | None = None,
-                                  source_cycle_id: str | None = None,
-                                  source_reading_id: str | None = None,
-                                  source_hypothesis_id: str | None = None,
-                                  sample_size: str | None = None,
-                                  confidence: str | None = None) -> dict:
-    """已驗證的正面學習入帳（append-only，鐵則 3）：只新增，本層不提供 UPDATE／DELETE
-    入口（下架走 deactivate_learning_ledger_entry，只改 expired，不改內容）。只收
-    「經判讀驗證且經人確認」的條目——由呼叫端保證（決策 0030 第一節第 1 點）。
-
-    `source_track` 必填、不給預設值（A4）：來源分支不該用猜的，呼叫端（或它自己模組的
-    薄封裝，如 app/ads/repository.py）必須明確交代這筆學習是哪個分支學到的。
-    """
-    _require(learning_text, "learning_ledger.learning_text 為必填")
-    _require(applicability_scope, "learning_ledger.applicability_scope 為必填")
-    _require(created_by, "learning_ledger.created_by 為必填")
-    _require(source_track, "learning_ledger.source_track 為必填")
-    _require(actor, "actor 為必填")
-    entry_id = new_id("lrn")
-    ts = now_utc()
-    row = {
-        "id": entry_id, "brand_id": brand_id, "product_id": product_id, "platform": platform,
-        "learning_text": learning_text, "applicability_scope": applicability_scope,
-        "source_cycle_id": source_cycle_id, "source_reading_id": source_reading_id,
-        "source_hypothesis_id": source_hypothesis_id, "sample_size": sample_size,
-        "confidence": confidence, "needs_revalidation": False, "expired": False,
-        "learned_at": ts, "created_by": created_by, "created_at": ts, "source_track": source_track,
-    }
-    org_id = _org_id_for_brand(conn, brand_id)
-    conn.execute(
-        "INSERT INTO learning_ledger (id, org_id, brand_id, product_id, platform, learning_text,"
-        " applicability_scope, source_cycle_id, source_reading_id, source_hypothesis_id,"
-        " sample_size, confidence, needs_revalidation, expired, learned_at, created_by,"
-        " created_at, source_track) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
-        (row["id"], org_id, row["brand_id"], row["product_id"], row["platform"], row["learning_text"],
-         row["applicability_scope"], row["source_cycle_id"], row["source_reading_id"],
-         row["source_hypothesis_id"], row["sample_size"], row["confidence"],
-         row["needs_revalidation"], row["expired"], row["learned_at"], row["created_by"],
-         row["created_at"], row["source_track"]),
-    )
-    write_audit(conn, org_id=org_id, brand_id=brand_id, entity_type="learning_ledger", entity_id=entry_id,
-                action="create", actor=actor, before=None, after=row)
-    conn.commit()
-    return row
-
-
-def list_learning_ledger(conn: Conn, brand_id: str, *,
-                          include_expired: bool = False) -> list:
-    """累積智慧頁讀取用：已驗證的正面學習清單（不分分支——頁面是給人看「這個品牌學到
-    什麼」，不是給 prompt 組裝用；分支過濾只在 `list_learnings_for_prompt` 做，見下）。
-    預設只列 `expired = false`，跟 `list_learnings_for_prompt` 讀取端的過濾條件一致。"""
-    sql = "SELECT * FROM learning_ledger WHERE brand_id = %s"
-    if not include_expired:
-        sql += " AND expired = false"
-    sql += " ORDER BY learned_at DESC"
-    return _rows(conn.execute(sql, (brand_id,)))
-
-
-def deactivate_learning_ledger_entry(conn: Conn, brand_id: str, entry_id: str, *,
-                                      actor: str) -> dict:
-    """下架一條已確認學習：把 `expired` 標成 1，不刪列、不改 `learning_text` 等內容欄位
-    ——append-only 表不提供 UPDATE 指的是改寫學習內容本身；`expired` 是本表建表時就留給
-    下架用的狀態欄，`list_learnings_for_prompt` 讀取端已過濾 `expired = false`。"""
-    if not actor:
-        raise ValueError("actor 為必填")
-    before = _row(conn.execute(
-        "SELECT * FROM learning_ledger WHERE id = %s AND brand_id = %s", (entry_id, brand_id),
-    ).fetchone())
-    if before is None:
-        raise ValueError(f"找不到這條學習紀錄：{entry_id}")
-    conn.execute(
-        "UPDATE learning_ledger SET expired = true WHERE id = %s AND brand_id = %s",
-        (entry_id, brand_id),
-    )
-    after = _row(conn.execute(
-        "SELECT * FROM learning_ledger WHERE id = %s AND brand_id = %s", (entry_id, brand_id),
-    ).fetchone())
-    org_id = _org_id_for_brand(conn, brand_id)
-    write_audit(conn, org_id=org_id, brand_id=brand_id, entity_type="learning_ledger", entity_id=entry_id,
-                action="deactivate", actor=actor, before=before, after=after,
-                reason="人工下架，不再進生成 prompt（決策 0030）")
-    conn.commit()
-    return after
-
-
-def list_learnings_for_prompt(conn: Conn, brand_id: str, *,
-                               track: str, product_id: str | None = None,
-                               include_cross_track: bool = False) -> list:
-    """`app/llm/context_compiler.py` 組 prompt 專用（A1：跨層一律走公開函式，不得對本表
-    下原生 SQL）。A4 跨分支知識可見性：預設（`include_cross_track=False`）只回傳
-    `source_track == track` 的條目；開啟後回傳全部分支，呼叫端須在 prompt 標示來源分支
-    （見 context_compiler._learning_source_note）。"""
-    _require(track, "list_learnings_for_prompt 的 track 為必填")
-    if product_id is not None:
-        sql = ("SELECT * FROM learning_ledger WHERE brand_id = %s AND expired = false"
-               " AND (product_id IS NULL OR product_id = %s)")
-        params = [brand_id, product_id]
-    else:
-        sql = "SELECT * FROM learning_ledger WHERE brand_id = %s AND expired = false AND product_id IS NULL"
-        params = [brand_id]
-    if not include_cross_track:
-        sql += " AND source_track = %s"
-        params.append(track)
-    sql += " ORDER BY learned_at"
-    return _rows(conn.execute(sql, params))
-
-
-def learning_ledger_entry_exists(conn: Conn, brand_id: str,
-                                  *, product_id: str | None, learning_text: str) -> bool:
-    """這個品牌、這個範圍（品牌整體或同一產品）下，同一句學習文字（拿掉括號夾註後比對，見
-    `_normalize_learning_text`）是否已經進過帳（修憲落地 G4，決策 0035 第三節第 8 點：
-    `_ledger_confidence` 判斷用）。已知限制（票 F3，記錄不修）：`product_id IS ?` 精確比對，同一句話掛在不同 product_id 下不會互相偵測成重複。"""
-    normalized = _normalize_learning_text(learning_text)
-    # BUG 修復（route=C 02-3c）：同 app/core/interrupts.py:99——Postgres 的 IS 不接受
-    # 綁參數，改用 IS NOT DISTINCT FROM（NULL 對 NULL 一樣判真）。
-    rows = conn.execute(
-        "SELECT learning_text FROM learning_ledger WHERE brand_id = %s"
-        " AND product_id IS NOT DISTINCT FROM %s",
-        (brand_id, product_id),
-    ).fetchall()
-    return any(_normalize_learning_text(row["learning_text"]) == normalized for row in rows)
-
-
-def unlink_learning_ledger_reading(conn: Conn, reading_ids: list) -> None:
-    """把 learning_ledger 指向這些判讀版次的 `source_reading_id` 解除關聯（設為 NULL），
-    不刪列——append-only 表本身不受影響，只是來源指標失效。呼叫端（`app/ads`）負責算出
-    要解除哪些 `performance_reading.id`：本函式刻意不自己下子查詢去查那張表，
-    避免品牌永久層反向依賴分支專屬層的資料表（A1 單向地界）。"""
-    if not reading_ids:
-        return
-    placeholders = ",".join("%s" for _ in reading_ids)
-    conn.execute(
-        f"UPDATE learning_ledger SET source_reading_id = NULL"
-        f" WHERE source_reading_id IN ({placeholders})",
-        list(reading_ids),
-    )
-
-
-def unlink_learning_ledger_cycle(conn: Conn, cycle_id: str) -> None:
-    """把 learning_ledger 指向這個檔期的 `source_cycle_id` 解除關聯（設為 NULL），不刪列
-    ——學習是跨期累積的資產，來源檔期被刪不代表學習作廢。"""
-    conn.execute(
-        "UPDATE learning_ledger SET source_cycle_id = NULL WHERE source_cycle_id = %s",
-        (cycle_id,),
-    )
-
-
-def mark_learning_ledger_needs_revalidation(conn: Conn, brand_id: str,
-                                             entry_id: str) -> None:
-    """單條標記「建議找機會重新驗證」（修憲落地 G4，決策 0035 第三節第 10 點）：只提醒、
-    不擋路、不自動下架（決策 0013）。"""
-    conn.execute(
-        "UPDATE learning_ledger SET needs_revalidation = true WHERE id = %s AND brand_id = %s",
-        (entry_id, brand_id),
-    )
 
 
 # ---------------------------------------------------------------------------

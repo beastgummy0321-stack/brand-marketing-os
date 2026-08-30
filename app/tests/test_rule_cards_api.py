@@ -33,13 +33,15 @@ class RuleCardsApiTest(unittest.TestCase):
         self.assertEqual(set(body["data"].keys()), {"brand_id", "cards"})
         self.assertEqual(body["data"]["brand_id"], self.bid)
         cards = body["data"]["cards"]
-        self.assertEqual(len(cards), 4)  # 2026-08-29 刪掉六張沒有消費端的卡，剩四張
-        card = next(c for c in cards if c["key"] == "rule_expiry")
+        # 2026-08-29 刪掉六張沒有消費端的卡剩四張；dead-code-sweep 票 04（2026-08-30）
+        # 再刪 rule_expiry（規則不再過期），剩三張。
+        self.assertEqual(len(cards), 3)
+        card = next(c for c in cards if c["key"] == "rule_prompt_cap")
         self.assertEqual(set(card.keys()), {"key", "title", "description", "fields"})
         field = card["fields"][0]
         self.assertEqual(set(field.keys()), {"key", "label", "unit", "help", "value", "customized"})
         self.assertFalse(field["customized"])  # 從沒改過，非自訂
-        self.assertEqual(field["value"], 90.0)
+        self.assertEqual(field["value"], 20.0)
 
     def test_get_unknown_brand_404s(self):
         resp = self.client.get("/api/settings/rule-cards/brands/brand_沒這個品牌")
@@ -71,8 +73,8 @@ class RuleCardsApiTest(unittest.TestCase):
 
     def test_save_non_positive_number_rejected(self):
         resp = self.client.post(
-            f"/api/settings/rule-cards/brands/{self.bid}/rule_expiry",
-            json={"reconfirm_days": 0},
+            f"/api/settings/rule-cards/brands/{self.bid}/rule_prompt_cap",
+            json={"max_active_rules": 0},
         )
         self.assertEqual(resp.status_code, 400)
 
@@ -82,36 +84,36 @@ class RuleCardsApiTest(unittest.TestCase):
         self.assertEqual(resp.status_code, 404)
 
     def test_reset_restores_default(self):
-        rule_cards.set_value(web.conn, self.bid, "rule_expiry", "reconfirm_days", 45.0, actor=ACTOR, org_id=DEV_ORG_ID)
-        resp = self.client.post(f"/api/settings/rule-cards/brands/{self.bid}/rule_expiry/reset")
+        rule_cards.set_value(web.conn, self.bid, "rule_prompt_cap", "max_active_rules", 45.0, actor=ACTOR, org_id=DEV_ORG_ID)
+        resp = self.client.post(f"/api/settings/rule-cards/brands/{self.bid}/rule_prompt_cap/reset")
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(
-            rule_cards.get_value(web.conn, self.bid, "rule_expiry", "reconfirm_days"), 90.0)
+            rule_cards.get_value(web.conn, self.bid, "rule_prompt_cap", "max_active_rules"), 20.0)
         field = resp.json()["data"]["fields"][0]
         self.assertFalse(field["customized"])
-        self.assertEqual(field["value"], 90.0)
+        self.assertEqual(field["value"], 20.0)
 
     def test_brand_isolation(self):
         """A 品牌改的值不影響 B 品牌透過 API 讀到的現值（沿用 rule_cards 既有分品牌行為）。"""
         brand_b = bi_repo.create_brand(web.conn, name="虛構深夜廚房", client_name=None, actor=ACTOR, org_id=DEV_ORG_ID)
         self.client.post(
-            f"/api/settings/rule-cards/brands/{self.bid}/rule_expiry",
-            json={"reconfirm_days": 120},
+            f"/api/settings/rule-cards/brands/{self.bid}/rule_prompt_cap",
+            json={"max_active_rules": 30},
         )
         body_b = self.client.get(f"/api/settings/rule-cards/brands/{brand_b['id']}").json()
-        card = next(c for c in body_b["data"]["cards"] if c["key"] == "rule_expiry")
-        self.assertEqual(card["fields"][0]["value"], 90.0)  # 系統預設，未被 A 品牌污染
+        card = next(c for c in body_b["data"]["cards"] if c["key"] == "rule_prompt_cap")
+        self.assertEqual(card["fields"][0]["value"], 20.0)  # 系統預設，未被 A 品牌污染
 
     def test_old_html_route_still_works_after_extraction(self):
         """驗證 _validate_card_fields() 的抽函式重構沒有改變 HTML 表單路由行為（純搬家）。"""
         # HTML 表單路由送進來的是字串，驗證與寫入都走抽出來的共用函式（純搬家的那一份）
         parsed, field_errors = routes_brand_settings._validate_card_fields(
-            "rule_expiry", {"reconfirm_days": "30"})
+            "rule_prompt_cap", {"max_active_rules": "30"})
         self.assertEqual(field_errors, {})
         for field_key, value in parsed.items():
-            rule_cards.set_value(web.conn, self.bid, "rule_expiry", field_key, value, ACTOR, org_id=DEV_ORG_ID)
+            rule_cards.set_value(web.conn, self.bid, "rule_prompt_cap", field_key, value, ACTOR, org_id=DEV_ORG_ID)
         self.assertEqual(
-            rule_cards.get_value(web.conn, self.bid, "rule_expiry", "reconfirm_days"), 30.0)
+            rule_cards.get_value(web.conn, self.bid, "rule_prompt_cap", "max_active_rules"), 30.0)
 
 
 if __name__ == "__main__":

@@ -64,7 +64,9 @@ class RuleCardValueTest(unittest.TestCase):
 
     def test_list_cards_includes_human_readable_metadata(self):
         cards = rule_cards.list_cards(self.conn, BID_A)
-        self.assertEqual(len(cards), 4)  # 2026-08-29 刪掉六張沒有消費端的卡，剩四張
+        # 2026-08-29 刪掉六張沒有消費端的卡剩四張；dead-code-sweep 票 04（2026-08-30）
+        # 再刪 rule_expiry（規則不再過期），剩三張。
+        self.assertEqual(len(cards), 3)
         by_key = {c["key"]: c for c in cards}
         self.assertIn("規則", by_key["rule_prompt_cap"]["title"])
         for c in cards:
@@ -78,12 +80,6 @@ class RuleCardValueTest(unittest.TestCase):
         （ADR 0012 第二節），沒有種子 migration，靠 CARDS default 落地就夠。"""
         self.assertEqual(
             rule_cards.get_value(self.conn, BID_A, "rule_prompt_cap", "max_active_rules"), 20.0)
-
-    def test_rule_expiry_default_matches_adr_0037(self):
-        """票 10-feedback-entries：規則重新確認門檻，系統預設 90 天（ADR 0037，取代
-        ADR 0012 第一節原本的「6 期」單位），沒有種子 migration，靠 CARDS default 落地就夠。"""
-        self.assertEqual(
-            rule_cards.get_value(self.conn, BID_A, "rule_expiry", "reconfirm_days"), 90.0)
 
     # -- 改值即時生效 ---------------------------------------------------------
 

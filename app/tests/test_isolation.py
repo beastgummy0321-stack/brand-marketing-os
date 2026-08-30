@@ -48,10 +48,7 @@ class BrandIsolationTest(unittest.TestCase):
         asset = repo.create_official_asset(
             self.conn, bid, asset_kind="logo", file_path="C:/tmp/logo.png", actor="測試員",
         )
-        hyp = repo.create_strategy_hypothesis(
-            self.conn, bid, hypothesis_type="audience", statement="測試假設",
-            created_by="測試員", actor="測試員",
-        )
+        # strategy_hypothesis 的 create／list 都已刪除（票 04），這裡不再塞這張表。
         baseline = repo.create_brand_performance_baseline(
             self.conn, bid, metric="典型CTR", value=1.2, as_of_date="2026-01-01",
             created_by="測試員", actor="測試員",
@@ -59,7 +56,7 @@ class BrandIsolationTest(unittest.TestCase):
         return {
             "brand": brand, "product": product, "fact": fact, "pfact": pfact, "rule": rule,
             "claim": claim, "channel": channel, "economics": economics, "source": source,
-            "asset": asset, "hyp": hyp, "baseline": baseline,
+            "asset": asset, "baseline": baseline,
         }
 
     def test_no_cross_brand_leakage_in_lists(self):
@@ -75,7 +72,6 @@ class BrandIsolationTest(unittest.TestCase):
             (a["channel"]["id"], [x["id"] for x in repo.list_channels(self.conn, b_id)]),
             (a["source"]["id"], [x["id"] for x in repo.list_source_references(self.conn, b_id)]),
             (a["asset"]["id"], [x["id"] for x in repo.list_official_assets(self.conn, b_id)]),
-            (a["hyp"]["id"], [x["id"] for x in repo.list_strategy_hypotheses(self.conn, b_id)]),
             (a["baseline"]["id"],
              [x["id"] for x in repo.list_brand_performance_baselines(self.conn, b_id)]),
         ]

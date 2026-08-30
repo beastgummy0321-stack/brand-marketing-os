@@ -10,7 +10,7 @@
 | `FileLineCapTest` | 超標檔只准變小，不准有新的超標檔 | `KNOWN_OVERSIZED_FILES` |
 | `LayerDirectionTest` | 只准依賴排在自己前面的層 | `LAYER_ORDER`／`KNOWN_LAYER_VIOLATIONS` |
 | `ImportCycleScanTest` | 不得新增 import 環 | `KNOWN_IMPORT_CYCLES` |
-| `TestRatioTest` | 測試行數／程式行數只准往下 | `TEST_RATIO_CEILING`（0.858） |
+| `TestRatioTest` | 測試行數／程式行數只准往下 | `TEST_RATIO_CEILING`（0.862，2026-08-30 dead-code-sweep 票 04 從 0.858 調高：規則過期機制與 learning_ledger／strategy_hypothesis 整條讀寫面刪除，production 淨減 697 行、測試只淨減 322 行，比例被動漲） |
 | `ModuleSizeRatchetTest` | 每個套件的行數凍在現況，調高要改明表 | `KNOWN_MODULE_SIZES` |
 
 後兩道是票 shell-06 補的。**誠實的天花板**：它們抓不到真正的病因——為一個還沒有人跑過的

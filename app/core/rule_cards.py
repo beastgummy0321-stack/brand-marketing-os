@@ -46,24 +46,6 @@ CARDS = {
             },
         },
     },
-    "rule_expiry": {
-        "title": "規則有效期",
-        "description": (
-            "品牌智庫的 soft（偏好）規則被接受後，超過這裡設定的天數沒有人重新確認，狀態"
-            "會自動退回「待確認」，不會再進生成 prompt——但規則本身不會被刪除，使用者到"
-            "累積智慧頁一鍵「延續」即可恢復生效，不必重新輸入規則內容。hard（紅線）規則"
-            "不受這張卡影響、永不過期。"
-            "數值來源：docs/adr/0037-feedback-is-a-rule-red-lines-never-expire.md。"
-        ),
-        "fields": {
-            "reconfirm_days": {
-                "label": "重新確認門檻", "unit": "天", "default": 90.0,
-                "help": "偏好規則被接受（或上次重新確認）之後，經過這麼多天都沒有人重新"
-                        "確認過，就會自動退回「待確認」狀態，暫時不會用在生成內容的判斷"
-                        "依據上；紅線規則不算在內，永遠生效。",
-            },
-        },
-    },
     "schedule_budget": {
         "title": "檔期日預算",
         "description": (

@@ -492,7 +492,15 @@ class FileLineCapTest(unittest.TestCase):
 # 0.858×——刪掉的測試比刪掉的程式更多（交接文件 §6 預測「會變成 1.13×，更糟」，實測
 # 不成立：它假設只刪 81 個廣告測試檔，實際 95 個）。目標 0.7×，見 docs/workflow-diet.md。
 # **只准往下**：這是天花板不是配額；連本檔這兩道閘門自己的行數也算進去。
-TEST_RATIO_CEILING = 0.858
+#
+# 2026-08-30 dead-code-sweep 票 04（寫明理由，reviewer 在 diff 裡看得到）：規則過期機制
+# （rule_lifecycle.py 全檔＋repository.py 三處呼叫）與 learning_ledger／strategy_hypothesis
+# 兩張表的整條讀寫面（唯一寫入端隨已刪除的 app/ads/ 一起沒了，讀取端永遠只讀到空集合）
+# 一次砍掉，production 淨減 697 行；測試這邊只淨減 322 行——大部分留著的測試在保護
+# 沒被這票動到的行為（品牌／產品刪除連鎖、跨品牌隔離、規則卡 API），砍不掉，此外還照
+# 「刪函式要刪測試、但不准砍還在保護活行為的斷言」新增了一條「規則不再過期」的回歸測試
+# （驗收條件要求）。0.858 → 0.862，比例被動漲、不是測試被灌水。前一次是 0.858。
+TEST_RATIO_CEILING = 0.862
 
 
 def _line_totals() -> tuple:

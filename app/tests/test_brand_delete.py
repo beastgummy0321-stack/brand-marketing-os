@@ -40,8 +40,14 @@ class BrandDeleteTest(unittest.TestCase):
                                       captured_date="2026-01-01", actor="測試員")
         repo.create_official_asset(self.conn, bid, asset_kind="logo",
                                     file_path="C:/tmp/logo.png", actor="測試員")
-        repo.create_strategy_hypothesis(self.conn, bid, hypothesis_type="audience",
-                                         statement="測試假設", created_by="測試員", actor="測試員")
+        # strategy_hypothesis 沒有寫入端了（票 04：唯一寫入端隨 app/ads/ 一起刪除，表留著）。
+        self.conn.execute(
+            "INSERT INTO strategy_hypothesis (id, org_id, brand_id, product_id, hypothesis_type,"
+            " statement, status, created_by, created_at, updated_at)"
+            " VALUES (%s, %s, %s, %s, 'audience', '測試假設', 'proposed', '測試員', %s, %s)",
+            (db.new_id("hyp"), db.DEV_ORG_ID, bid, pid, db.now_utc(), db.now_utc()),
+        )
+        self.conn.commit()
         repo.create_brand_performance_baseline(self.conn, bid, metric="典型CTR", value=1.2,
                                                 as_of_date="2026-01-01", created_by="測試員",
                                                 actor="測試員")
@@ -51,9 +57,14 @@ class BrandDeleteTest(unittest.TestCase):
         repo.create_brand_report(self.conn, bid, actor="測試員", model="test-model",
                                   llm_task_id=None, brand_version=1, source_fact_count=1,
                                   sections={"定位": "測試段落"})
-        repo.create_learning_ledger_entry(self.conn, bid, learning_text="測試學習",
-                                           applicability_scope="brand", created_by="測試員",
-                                           actor="測試員", source_track="ads", product_id=pid)
+        # learning_ledger 一樣沒有寫入端了（同上）。
+        self.conn.execute(
+            "INSERT INTO learning_ledger (id, org_id, brand_id, product_id, learning_text,"
+            " applicability_scope, learned_at, created_by, created_at, source_track)"
+            " VALUES (%s, %s, %s, %s, '測試學習', 'brand', %s, '測試員', %s, 'ads')",
+            (db.new_id("lrn"), db.DEV_ORG_ID, bid, pid, db.now_utc(), db.now_utc()),
+        )
+        self.conn.commit()
         draft = intake_repo.create_draft(self.conn, bid, "測試品牌描述", [], [], actor="測試員")
         intake_repo.create_items(self.conn, bid, draft["id"], [{
             "kind": "品牌事實", "category": "品牌定位", "title": "測試標題",
