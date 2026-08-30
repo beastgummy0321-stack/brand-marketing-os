@@ -71,7 +71,7 @@ export function ApiKeySection({ data, onSaved }: { data: SettingsData; onSaved: 
   return (
     <SectionCard
       title="AI 金鑰"
-      description="建檔精靈等 AI 功能需要一把 Anthropic 的金鑰才能運作。系統優先採用環境變數裡的金鑰；沒有設環境變數時才會用這頁存進資料庫的金鑰（明文）。"
+      description="建檔精靈等 AI 功能需要一把 Anthropic 的金鑰才能運作。系統優先採用環境變數裡的金鑰；沒有設環境變數時才會用這頁存進資料庫的金鑰（加密存放在保管庫，不是明文）。"
     >
       {data.api_key_source === "env" && (
         <p className="text-sm text-foreground">
@@ -81,13 +81,12 @@ export function ApiKeySection({ data, onSaved }: { data: SettingsData; onSaved: 
         </p>
       )}
       {data.api_key_source === "db" && (
-        <div className="rounded-md border border-warning/40 bg-warning/10 p-3 text-sm">
-          <p className="font-medium text-foreground">目前使用中的金鑰來自資料庫（明文）</p>
+        <div className="rounded-md border border-border bg-muted/40 p-3 text-sm">
+          <p className="font-medium text-foreground">目前使用中的金鑰來自資料庫（加密保管）</p>
           <p className="mt-1 text-muted-foreground">
             目前用的是這頁存進資料庫的金鑰：<span className="font-mono">{data.masked_key}</span>
-            。如果 <code className="rounded bg-muted px-1">backups/</code>
-            資料夾有同步到雲端硬碟，這把金鑰的明文也會被每天的備份一起帶出去。建議改用下面
-            「改用環境變數」的做法。
+            。金鑰本身加密存放在系統的保管庫（Vault），不是明文，備份帶出去的也不是原文。
+            也可以改用下面「改用環境變數」的做法。
           </p>
         </div>
       )}

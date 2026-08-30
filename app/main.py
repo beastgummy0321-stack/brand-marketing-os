@@ -229,7 +229,7 @@ def _write_api_key(api_key: str, *, org_id: str) -> str | None:
     key = clean(api_key)
     if not key:
         return "請貼上 AI 金鑰。"
-    coresettings.set_setting(web.conn, coresettings.API_KEY_SETTING, key, org_id=org_id)
+    coresettings.save_api_key(web.conn, key, org_id=org_id)
     return None
 
 
@@ -336,7 +336,7 @@ def _settings_json_data(*, org_id: str, is_owner: bool) -> dict:
         "masked_key": _masked_key(coresettings.get_api_key(web.conn, org_id=org_id)),
         "api_key_source": coresettings.api_key_source(web.conn, org_id=org_id),
         "db_key_present": bool(
-            coresettings.get_setting(web.conn, coresettings.API_KEY_SETTING, org_id=org_id)),
+            coresettings.get_setting(web.conn, coresettings.API_KEY_SECRET_ID_SETTING, org_id=org_id)),
         "model_choices": _model_choices(),
         "current_model": coresettings.get_llm_model(web.conn, org_id=org_id),
         # 契約 TaskModelThinkingRow 只有這三欄；task_default_table() 另外多回一個

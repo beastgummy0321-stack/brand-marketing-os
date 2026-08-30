@@ -12,6 +12,7 @@ AnthropicProvider／pricing 直接單元測試（不經 HTTP 路由，票 T4 A4 
 import os
 import tempfile
 import unittest
+import uuid as uuid_module
 from unittest import mock
 from uuid import uuid4
 
@@ -81,7 +82,7 @@ class SettingsApiTest(unittest.TestCase):
         self.assertTrue(body["data"]["is_owner"])
 
     def test_get_settings_reflects_saved_values(self):
-        coresettings.set_setting(web.conn, coresettings.API_KEY_SETTING, TEST_KEY, org_id=coredb.DEV_ORG_ID)
+        coresettings.save_api_key(web.conn, TEST_KEY, org_id=coredb.DEV_ORG_ID)
         body = self.client.get("/api/settings").json()["data"]
         self.assertEqual(body["api_key_source"], "db")
         self.assertTrue(body["db_key_present"])
@@ -104,12 +105,72 @@ class SettingsApiTest(unittest.TestCase):
         self.assertEqual(resp.status_code, 400)
         self.assertIn("請貼上 AI 金鑰", resp.json()["error"])
 
+    def test_save_api_key_never_writes_plaintext_and_clears_legacy_row(self):
+        """票 04-2 驗收 1＋6：手寫一列模擬修好前的明文世界，存一次新金鑰後，app_setting
+        沒有任何一格含金鑰子字串、指標是 uuid、舊明文列被清掉不再被當金鑰讀。"""
+        coresettings.set_setting(
+            web.conn, coresettings.API_KEY_SETTING, "legacy-plaintext-value", org_id=coredb.DEV_ORG_ID)
+        resp = self.client.post("/api/settings/api-key", json={"api_key": TEST_KEY})
+        self.assertEqual(resp.status_code, 200)
+        rows = web.conn.execute(
+            "SELECT key, value FROM app_setting WHERE org_id = %s", (coredb.DEV_ORG_ID,)
+        ).fetchall()
+        for row in rows:
+            self.assertNotIn(TEST_KEY, row["value"])
+        self.assertFalse(any(r["key"] == coresettings.API_KEY_SETTING for r in rows))
+        secret_id_row = next(r for r in rows if r["key"] == coresettings.API_KEY_SECRET_ID_SETTING)
+        uuid_module.UUID(secret_id_row["value"])  # 炸掉＝格式不是 uuid
+        self.assertEqual(coresettings.get_api_key(web.conn, org_id=coredb.DEV_ORG_ID), TEST_KEY)
+
+    def test_save_api_key_twice_replaces_secret_not_adds_second(self):
+        """票 04-2 驗收 3：第二次存是就地覆寫同一個 Vault secret——這個組織的
+        secret_id 指標第二次存之後不變，讀回的是新金鑰。不比對 `vault.secrets` 的
+        全域列數：那張表全組織共用一個 schema，`-n auto --dist loadfile` 下別的測試
+        模組同時 save_token／save_api_key 會讓總數跳動，這裡只看自己這個組織的指標。"""
+        self.client.post("/api/settings/api-key", json={"api_key": TEST_KEY})
+        secret_id_before = coresettings.get_setting(
+            web.conn, coresettings.API_KEY_SECRET_ID_SETTING, org_id=coredb.DEV_ORG_ID)
+        second_key = "sk-ant-test-second-9999wxyz"
+        resp = self.client.post("/api/settings/api-key", json={"api_key": second_key})
+        self.assertEqual(resp.status_code, 200)
+        secret_id_after = coresettings.get_setting(
+            web.conn, coresettings.API_KEY_SECRET_ID_SETTING, org_id=coredb.DEV_ORG_ID)
+        self.assertEqual(secret_id_after, secret_id_before, "第二次存不該換一個新的 secret 指標")
+        self.assertEqual(coresettings.get_api_key(web.conn, org_id=coredb.DEV_ORG_ID), second_key)
+
+    def test_save_api_key_org_isolation(self):
+        """票 04-2 驗收 5，同 test_settings_org_scope.py 同一種形狀：兩個組織各存各的
+        金鑰，各自讀回自己的。"""
+        org_b = "org_04_2_test_b"
+        web.conn.execute(
+            "INSERT INTO organisation (id, name, kind) VALUES (%s, %s, 'personal')"
+            " ON CONFLICT (id) DO NOTHING", (org_b, org_b))
+        web.conn.commit()
+        try:
+            key_b = "sk-ant-test-orgb-5555qrst"
+            coresettings.save_api_key(web.conn, TEST_KEY, org_id=coredb.DEV_ORG_ID)
+            coresettings.save_api_key(web.conn, key_b, org_id=org_b)
+            self.assertEqual(coresettings.get_api_key(web.conn, org_id=coredb.DEV_ORG_ID), TEST_KEY)
+            self.assertEqual(coresettings.get_api_key(web.conn, org_id=org_b), key_b)
+        finally:
+            coresettings.clear_api_key_from_db(web.conn, org_id=org_b)
+            web.conn.execute("DELETE FROM app_setting WHERE org_id = %s", (org_b,))
+            web.conn.execute("DELETE FROM organisation WHERE id = %s", (org_b,))
+            web.conn.commit()
+
     def test_clear_api_key_from_db(self):
-        coresettings.set_setting(web.conn, coresettings.API_KEY_SETTING, TEST_KEY, org_id=coredb.DEV_ORG_ID)
+        coresettings.save_api_key(web.conn, TEST_KEY, org_id=coredb.DEV_ORG_ID)
+        secret_id = coresettings.get_setting(
+            web.conn, coresettings.API_KEY_SECRET_ID_SETTING, org_id=coredb.DEV_ORG_ID)
         resp = self.client.post("/api/settings/api-key/clear-db")
         self.assertEqual(resp.status_code, 200)
         self.assertIsNone(coresettings.get_setting(
+            web.conn, coresettings.API_KEY_SECRET_ID_SETTING, org_id=coredb.DEV_ORG_ID))
+        self.assertIsNone(coresettings.get_setting(
             web.conn, coresettings.API_KEY_SETTING, org_id=coredb.DEV_ORG_ID))
+        self.assertIsNone(web.conn.execute(
+            "SELECT id FROM vault.secrets WHERE id = %s", (secret_id,)).fetchone())
+        self.assertIsNone(coresettings.get_api_key(web.conn, org_id=coredb.DEV_ORG_ID))
 
     # -- POST /api/settings/model -------------------------------------------------
 
@@ -164,7 +225,7 @@ class SettingsApiTest(unittest.TestCase):
         self.assertIn("尚未設定金鑰", body["message"])
 
     def test_ai_test_connection_success_uses_fake_provider(self):
-        coresettings.set_setting(web.conn, coresettings.API_KEY_SETTING, TEST_KEY, org_id=coredb.DEV_ORG_ID)
+        coresettings.save_api_key(web.conn, TEST_KEY, org_id=coredb.DEV_ORG_ID)
         fake = providers.FakeProvider()
         with mock.patch.object(providers, "AnthropicProvider", return_value=fake):
             resp = self.client.post("/api/settings/test-connection")
@@ -178,7 +239,7 @@ class SettingsApiTest(unittest.TestCase):
         """票 04-1a：這顆按鈕會真的打一次 provider＝真的花錢，所以跟 run_task() 走同一道
         月費上限（gateway.check_spend_cap），而且要擋在打 provider 之前——否則它就是繞過
         上限的洞。kind 用 'warn'：下一步是去調高上限，不是系統壞掉。"""
-        coresettings.set_setting(web.conn, coresettings.API_KEY_SETTING, TEST_KEY, org_id=coredb.DEV_ORG_ID)
+        coresettings.save_api_key(web.conn, TEST_KEY, org_id=coredb.DEV_ORG_ID)
         coresettings.set_setting(
             web.conn, coresettings.AI_MONTHLY_COST_LIMIT_SETTING, "10", org_id=coredb.DEV_ORG_ID)
         started_at = coredb.now_utc().strftime("%Y-%m-01T00:00:00")
@@ -212,7 +273,7 @@ class SettingsApiTest(unittest.TestCase):
     def test_get_settings_reports_env_source_and_masks_env_key(self):
         """環境變數優先於 DB 且來源誠實回報；env 金鑰本身也要遮罩，不能原樣外流
         （原 test_settings_page.py::test_env_key_takes_priority_and_page_says_so）。"""
-        coresettings.set_setting(web.conn, coresettings.API_KEY_SETTING, TEST_KEY, org_id=coredb.DEV_ORG_ID)
+        coresettings.save_api_key(web.conn, TEST_KEY, org_id=coredb.DEV_ORG_ID)
         os.environ["ANTHROPIC_API_KEY"] = "env-only-value-not-shown"
         try:
             body = self.client.get("/api/settings").json()["data"]
@@ -259,7 +320,7 @@ class SettingsApiTest(unittest.TestCase):
         存放位置＝'db'（該層刻意不看環境變數，見 resolve_ai_credentials() 說明）。"""
         coresettings.set_setting(
             web.conn, coresettings.AI_KEY_SOURCE_SETTING, "own", org_id=coredb.DEV_ORG_ID)
-        coresettings.set_setting(web.conn, coresettings.API_KEY_SETTING, TEST_KEY, org_id=coredb.DEV_ORG_ID)
+        coresettings.save_api_key(web.conn, TEST_KEY, org_id=coredb.DEV_ORG_ID)
         os.environ["ANTHROPIC_API_KEY"] = "operator-env-key-should-not-leak-to-own-tier"
         try:
             body = self.client.get("/api/settings").json()["data"]
@@ -282,7 +343,7 @@ class SettingsApiTest(unittest.TestCase):
 
     def test_ai_test_connection_failure_returns_danger_kind(self):
         """金鑰錯誤：danger kind + 人話訊息原樣透出（原 test_test_connection_key_error_shows_human_message）。"""
-        coresettings.set_setting(web.conn, coresettings.API_KEY_SETTING, TEST_KEY, org_id=coredb.DEV_ORG_ID)
+        coresettings.save_api_key(web.conn, TEST_KEY, org_id=coredb.DEV_ORG_ID)
         fake = providers.FakeProvider(exception=providers.ProviderError("金鑰錯誤：測試訊息。"))
         with mock.patch.object(providers, "AnthropicProvider", return_value=fake):
             resp = self.client.post("/api/settings/test-connection")

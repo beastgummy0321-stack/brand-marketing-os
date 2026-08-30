@@ -520,7 +520,16 @@ class FileLineCapTest(unittest.TestCase):
 # 先證過紅：把 `today_for_org()` 改回 `datetime.now(UTC).date()`，兩支同時抓到。
 # 初稿寫了四支（+104 行），刪掉跟端到端那支重複的兩支之後才是這個數字：同一件事驗兩遍
 # 不是更安全，是多一份要維護的東西。
-TEST_LINES_CEILING = 14410
+# 2026-08-30 票 04-2 AI 金鑰進 Vault：14,410 → 14,480（含本段註解自己佔掉的行；審查回饋後
+# 修正過一次算法，這是修正後的實測值，不是估的）。test_settings_api.py 新增四支，守的是
+# 資料正確性／租戶隔離（docs/workflow-diet.md 第 4 條）：存金鑰後 app_setting 不留明文、
+# 舊明文列被清掉；第二次存 secret_id 指標不變（同一個 secret 就地覆寫——不比對
+# vault.secrets 全域列數，那張表全組織共用一個 schema，`-n auto --dist loadfile` 下別的
+# 模組同時 save_token／save_api_key 會讓總數跳動）；清除同時砍掉指標與 secret；兩個組織
+# 各存各的讀不到對方的，用完清乾淨（vault secret／app_setting／organisation 都刪，比照
+# test_settings_org_scope.py 的 tearDown 形狀）。先證過紅：把 save_api_key() 改回呼叫
+# set_setting() 直寫明文，這幾支立刻抓到。
+TEST_LINES_CEILING = 14480
 
 
 def _line_totals() -> tuple:

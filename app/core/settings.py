@@ -20,7 +20,8 @@ from app.core import db
 
 logger = logging.getLogger(__name__)
 
-API_KEY_SETTING = "anthropic_api_key"
+API_KEY_SETTING = "anthropic_api_key"  # 舊世界的明文鍵：只用來認得、刪掉遺留資料，不再當金鑰讀
+API_KEY_SECRET_ID_SETTING = "anthropic_api_key_secret_id"  # 指標，值是 vault.secrets.id
 API_KEY_ENV_VAR = "ANTHROPIC_API_KEY"
 LLM_MODEL_SETTING = "llm_model"
 LLM_MODEL_ENV_VAR = "BRAND_OS_LLM_MODEL"
@@ -83,6 +84,41 @@ def _get_setting(conn: db.Conn | db.ConnProxy, key: str, default=None, *, org_id
     return row["value"] if row else default
 
 
+# ---- Vault（AI 金鑰唯一落地位置，票 04-2 D4-1；形狀抄 app/meta/repository.py 的 Meta
+# 權杖 create/update/decrypt-read：secret 不取名字，app_setting 的 secret_id 就是索引）。
+
+def _vault_read_secret(conn: db.Conn | db.ConnProxy, secret_id: str) -> str | None:
+    row = conn.execute(
+        "SELECT decrypted_secret FROM vault.decrypted_secrets WHERE id = %s", (secret_id,)
+    ).fetchone()
+    return row["decrypted_secret"] if row else None
+
+
+def _read_vault_api_key(conn: db.Conn | db.ConnProxy | None, *, org_id: str) -> str | None:
+    """三道讀門共用的底層讀取；conn 傳 None 比照 get_setting() 自己借一條連線。"""
+    secret_id = get_setting(conn, API_KEY_SECRET_ID_SETTING, org_id=org_id)
+    if not secret_id:
+        return None
+    if conn is not None:
+        return _vault_read_secret(conn, secret_id)
+    with db.connection() as owned_conn:
+        return _vault_read_secret(owned_conn, secret_id)
+
+
+def save_api_key(conn: db.Conn, key: str, *, org_id: str) -> None:
+    """設定頁存金鑰唯一路徑（票 04-2 D4-1），'platform'／'own' 都走這裡不分流，否則
+    預設層繼續明文落地；已有 secret 就地覆寫，沒有就新建，順手清掉舊世界的明文列。"""
+    existing_secret_id = get_setting(conn, API_KEY_SECRET_ID_SETTING, org_id=org_id)
+    if existing_secret_id:
+        conn.execute("SELECT vault.update_secret(%s, %s)", (existing_secret_id, key))
+    else:
+        row = conn.execute("SELECT vault.create_secret(%s) AS id", (key,)).fetchone()
+        assert row is not None, "vault.create_secret() 是純量函式，SELECT 一定回一列"
+        set_setting(conn, API_KEY_SECRET_ID_SETTING, str(row["id"]), org_id=org_id)
+    conn.execute("DELETE FROM app_setting WHERE org_id = %s AND key = %s", (org_id, API_KEY_SETTING))
+    conn.commit()
+
+
 def set_setting(conn: db.Conn, key: str, value: str, *, org_id: str) -> None:
     """寫一個設定值（有則覆蓋）。value 一律存字串，數字請呼叫端先 str()。
 
@@ -133,10 +169,10 @@ def resolve_ai_credentials(conn: db.Conn | None, *, org_id: str) -> AiCredential
         source = "platform"
 
     if source == "own":
-        api_key = get_setting(conn, API_KEY_SETTING, org_id=org_id) or None
+        api_key = _read_vault_api_key(conn, org_id=org_id)
         return AiCredentials(api_key=api_key, source="own", cap_applies=False)
 
-    api_key = os.environ.get(API_KEY_ENV_VAR) or get_setting(conn, API_KEY_SETTING, org_id=org_id) or None
+    api_key = os.environ.get(API_KEY_ENV_VAR) or _read_vault_api_key(conn, org_id=org_id)
     return AiCredentials(api_key=api_key, source="platform", cap_applies=True)
 
 
@@ -151,9 +187,9 @@ def get_api_key(conn: db.Conn | None = None, *, org_id: str) -> str | None:
 
 
 def api_key_source(conn: db.Conn | None = None, *, org_id: str) -> str | None:
-    """目前生效的金鑰實際放在哪裡：'env'（環境變數，安全）／'db'（資料庫，明文、會被
-    備份）／None（兩邊都沒設）。設定頁靠這個誠實顯示金鑰來源，不讓使用者以為改用了
-    環境變數、其實系統還在用 DB 裡的舊值（修憲落地 M4）。
+    """目前生效的金鑰實際放在哪裡：'env'（環境變數，安全）／'db'（本系統的保管庫
+    Vault，加密存放，票 04-2 D4-1）／None（兩邊都沒設）。設定頁靠這個誠實顯示金鑰
+    來源，不讓使用者以為改用了環境變數、其實系統還在用 DB 裡的舊值（修憲落地 M4）。
 
     這是「金鑰實際存放位置」的誠實回報，跟 resolve_ai_credentials() 的 source
     （'platform'／'own'，「誰付錢」）是不同的問題——見票 04-1a：'own' 層的組織一定是
@@ -202,7 +238,7 @@ def org_ai_spent_this_month(conn: db.Conn, *, org_id: str, since: str) -> float:
 
 
 def clear_api_key_from_db(conn: db.Conn, *, org_id: str) -> None:
-    """把 DB 裡存的金鑰刪掉，不影響環境變數來源（修憲落地 M4）。
+    """把 DB 裡存的金鑰刪掉，不影響環境變數來源（修憲落地 M4；票 04-2 D4-1 起連 Vault secret 一起刪）。
 
     這是不可逆動作，只能由使用者在設定頁明確按下按鈕才會呼叫——本函式本身不自動執行、
     不在任何啟動流程或排程中被呼叫。刪掉後若環境變數也沒設，get_api_key() 回 None，
@@ -210,7 +246,13 @@ def clear_api_key_from_db(conn: db.Conn, *, org_id: str) -> None:
 
     org_id 必填（票 04-0）：沒有這道篩選會刪掉別的組織存在 DB 裡的金鑰。
     """
-    conn.execute("DELETE FROM app_setting WHERE org_id = %s AND key = %s", (org_id, API_KEY_SETTING))
+    secret_id = get_setting(conn, API_KEY_SECRET_ID_SETTING, org_id=org_id)
+    if secret_id:
+        conn.execute("DELETE FROM vault.secrets WHERE id = %s", (secret_id,))
+    conn.execute(
+        "DELETE FROM app_setting WHERE org_id = %s AND key IN (%s, %s)",
+        (org_id, API_KEY_SECRET_ID_SETTING, API_KEY_SETTING),
+    )
     conn.commit()
 
 
