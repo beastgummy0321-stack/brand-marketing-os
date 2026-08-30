@@ -6,13 +6,13 @@ handler），這裡只守路由層：happy path 有沒有真的寫進 DB、驗�
 查無此 id 是不是回 404。比照 `test_brand_delete_routes.py` 的慣例。
 """
 
-import tempfile
 import unittest
 
 from fastapi.testclient import TestClient
 
 import app.main as main
 import app.shared.web as web
+import app.storage as storage
 from app.brand_intelligence import repository as repo
 from app.core.db import DEV_ORG_ID  # noqa: E402
 
@@ -153,14 +153,17 @@ class LibraryWriteApiTest(unittest.TestCase):
 
     def test_asset_delete_happy_path_and_unknown_id(self):
         brand_id = self._new_brand("素材品牌")
-        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
-            f.write(b"fake image bytes")
-            file_path = f.name
+        key = f"{DEV_ORG_ID}/brands/{brand_id}/assets/oas_test/logo.png"
+        storage.put(org_id=DEV_ORG_ID, key=key, filename="logo.png", content=b"fake image bytes",
+                    content_type="image/png")
+        self.addCleanup(storage.delete, org_id=DEV_ORG_ID, key=key)
         asset = repo.create_official_asset(web.conn, brand_id, actor=ACTOR, asset_kind="logo",
-                                            file_path=file_path)
+                                            storage_key=key)
         resp = self.client.post(f"/api/library/brands/{brand_id}/assets/{asset['id']}/delete")
         self.assertEqual(resp.status_code, 200)
         self.assertIsNone(repo.get_official_asset(web.conn, brand_id, asset["id"]))
+        with self.assertRaises(storage.NotFound):
+            storage.get(org_id=DEV_ORG_ID, key=key)
 
         resp_404 = self.client.post(f"/api/library/brands/{brand_id}/assets/does-not-exist/delete")
         self.assertEqual(resp_404.status_code, 404)

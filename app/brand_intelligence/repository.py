@@ -1111,23 +1111,23 @@ def list_source_references(conn: Conn, brand_id: str) -> list:
 # ---------------------------------------------------------------------------
 
 def create_official_asset(conn: Conn, brand_id: str, *, actor: str, asset_kind: str,
-                           file_path: str, product_id: str | None = None,
+                           storage_key: str, product_id: str | None = None,
                            title: str | None = None, usage_note: str | None = None) -> dict:
     _require(asset_kind, "official_asset.asset_kind 為必填")
-    _require(file_path, "official_asset.file_path 為必填")
+    _require(storage_key, "official_asset.storage_key 為必填")
     _require(actor, "actor 為必填")
     asset_id = new_id("oas")
     ts = now_utc()
     row = {
         "id": asset_id, "brand_id": brand_id, "product_id": product_id, "asset_kind": asset_kind,
-        "file_path": file_path, "title": title, "usage_note": usage_note, "status": "active",
+        "storage_key": storage_key, "title": title, "usage_note": usage_note, "status": "active",
         "created_at": ts, "updated_at": ts,
     }
     org_id = _org_id_for_brand(conn, brand_id)
     conn.execute(
-        "INSERT INTO official_asset (id, org_id, brand_id, product_id, asset_kind, file_path, title, "
+        "INSERT INTO official_asset (id, org_id, brand_id, product_id, asset_kind, storage_key, title, "
         "usage_note, status, created_at, updated_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
-        (row["id"], org_id, row["brand_id"], row["product_id"], row["asset_kind"], row["file_path"],
+        (row["id"], org_id, row["brand_id"], row["product_id"], row["asset_kind"], row["storage_key"],
          row["title"], row["usage_note"], row["status"], row["created_at"], row["updated_at"]),
     )
     write_audit(conn, org_id=org_id, brand_id=brand_id, entity_type="official_asset", entity_id=asset_id,

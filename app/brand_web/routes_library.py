@@ -25,13 +25,14 @@ from pathlib import Path
 from fastapi import APIRouter, File, Form, Request, UploadFile
 from fastapi.responses import Response
 
+import app.storage as storage
 from app.brand_intelligence import background_job
 from app.brand_intelligence import customer_voice as cv_mod
 from app.brand_intelligence import repository as repo
-from app.core import cleanup, creative_assets
+from app.core import cleanup
 from app.core import settings as core_settings
 from app.core import vocab as md
-from app.core.db import REPO_ROOT, new_id
+from app.core.db import new_id
 from app.llm import gateway, providers
 from app.shared import web
 from app.shared.web import JSONResponse, NotFoundKind, clean, require_actor, require_brand
@@ -49,21 +50,16 @@ _ASSET_CONTENT_TYPES = {
 _UNSAFE_ASSET_FILENAME_CHARS = re.compile(r"[^A-Za-z0-9._-]+")
 
 
-def _assets_upload_dir() -> Path:
-    raw = os.environ.get("BRAND_OS_UPLOADS")
-    base = Path(raw) if raw else REPO_ROOT / "data" / "uploads"
-    return base / "assets"
-
-
 def _safe_asset_filename(name: str) -> str:
     name = os.path.basename((name or "").strip())
     name = _UNSAFE_ASSET_FILENAME_CHARS.sub("_", name)
     return name or "file"
 
 
-def save_official_asset(brand_id: str, *, actor: str, asset_kind: str, product_id: str,
+def save_official_asset(brand_id: str, *, org_id: str, actor: str, asset_kind: str, product_id: str,
                         title: str, filename: str, content: bytes) -> tuple[bool, str | None]:
-    """儲存一筆素材；失敗一律回傳可直接給 API 或表單顯示的訊息。"""
+    """儲存一筆素材（Storage，票 storage-02）；失敗一律回傳可直接給 API 或表單顯示的訊息。
+    `put` 失敗就不寫列——一列指到不存在的物件，畫面會永遠是張破圖（SPEC D9）。"""
     if asset_kind not in dict(md.ASSET_KINDS):
         return False, "請選擇素材類型。"
     product_id = clean(product_id)
@@ -76,22 +72,17 @@ def save_official_asset(brand_id: str, *, actor: str, asset_kind: str, product_i
     if ext not in _ASSET_CONTENT_TYPES:
         return False, f"「{filename}」不是支援的圖片格式，請用 png、jpg、jpeg、webp 或 gif。"
 
-    dest_path: Path | None = None
+    asset_id = new_id("oas")
+    safe_name = _safe_asset_filename(filename)
+    key = f"{org_id}/brands/{brand_id}/assets/{asset_id}/{safe_name}"
     try:
-        dest_dir = _assets_upload_dir() / new_id("oas")
-        dest_dir.mkdir(parents=True, exist_ok=True)
-        dest_path = dest_dir / _safe_asset_filename(filename)
-        dest_path.write_bytes(content)
+        storage.put(org_id=org_id, key=key, filename=safe_name, content=content,
+                    content_type=_ASSET_CONTENT_TYPES[ext])
         repo.create_official_asset(
-            web.conn, brand_id, actor=actor, asset_kind=asset_kind, file_path=str(dest_path),
+            web.conn, brand_id, actor=actor, asset_kind=asset_kind, storage_key=key,
             product_id=product_id or None, title=clean(title) or None,
         )
-    except (OSError, ValueError):
-        if dest_path is not None:
-            try:
-                dest_path.unlink(missing_ok=True)
-            except OSError:
-                pass
+    except storage.StorageError:
         return False, "素材儲存失敗，請稍後再試。"
     return True, None
 
@@ -172,7 +163,7 @@ def _claim_shape(brand_id: str, claim: dict) -> dict:
 
 
 def _asset_shape(brand_id: str, asset: dict) -> dict:
-    filename = Path(asset["file_path"]).name
+    filename = Path(asset["storage_key"]).name
     product = repo.get_product(web.conn, brand_id, asset["product_id"]) if asset.get("product_id") else None
     return {
         "id": asset["id"], "asset_kind": asset["asset_kind"],
@@ -236,8 +227,10 @@ async def brand_delete_api(request: Request, brand_id: str):
     """永久刪除品牌（S5.49 危險區二次確認）：取代舊版 Jinja 表單端點
     `/brands/{brand_id}/delete`，供 `BrandProfilePanel.tsx` 的 `ConfirmDeleteView`
     呼叫（`frontend/src/lib/libraryApi.ts` `deleteBrand()`）。流程跟舊頁一致——只收已
-    封存品牌、打字確認名稱、備份 → 刪品牌 → 一併刪素材圖檔資料夾（決策 0008）——回傳
-    訊息含備份位置與 `delete_folder()` 的 warn，畫面刪除前先讓使用者看一眼再導頁。"""
+    封存品牌、打字確認名稱、備份 → 刪品牌 → 一併刪掉這個品牌在 Storage 底下的整個前綴
+    （票 storage-02，取代舊版刪本機資料夾，順便補上舊版的漏洞：舊版只刪一個沒人寫過的
+    空資料夾，官方素材檔案永遠留在磁碟上）。DB 已經 commit，這裡失敗不能 500，回一句
+    人話讓呼叫端接在成功訊息後面，跟 `delete_folder()` 原本的 warn 契約一樣。"""
     actor = require_actor(request)
     brand = require_brand(brand_id, actor)
     if brand["status"] != "archived":
@@ -253,7 +246,11 @@ async def brand_delete_api(request: Request, brand_id: str):
             status_code=400,
         )
     repo.delete_brand(web.conn, brand_id, actor=str(actor.user_id))
-    warn = creative_assets.delete_folder(web.conn, brand_id, org_id=brand["org_id"])
+    try:
+        storage.delete_prefix(org_id=brand["org_id"], prefix=f"{brand['org_id']}/brands/{brand_id}/")
+        warn = ""
+    except storage.StorageError as exc:
+        warn = f"（品牌的素材檔案沒有刪乾淨：{exc}，請自己到 Storage 後台確認。）"
     message = f"已永久刪除品牌「{brand['name']}」。{warn}".strip()
     return {"message": message}
 
@@ -263,10 +260,10 @@ async def asset_upload_api(request: Request, brand_id: str, asset_kind: str = Fo
                            product_id: str = Form(""), title: str = Form(""),
                            file: UploadFile = File(...)):
     actor = require_actor(request)
-    require_brand(brand_id, actor)
+    brand = require_brand(brand_id, actor)
     ok, detail = save_official_asset(
-        brand_id, actor=str(actor.user_id), asset_kind=asset_kind, product_id=product_id,
-        title=title, filename=file.filename or "", content=await file.read(),
+        brand_id, org_id=brand["org_id"], actor=str(actor.user_id), asset_kind=asset_kind,
+        product_id=product_id, title=title, filename=file.filename or "", content=await file.read(),
     )
     if not ok:
         return JSONResponse({"detail": detail}, status_code=400)

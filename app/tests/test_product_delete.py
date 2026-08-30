@@ -29,7 +29,8 @@ class ProductDeleteTest(unittest.TestCase):
         repo.create_claim(self.conn, brand_id, claim_text="測試宣稱", claim_type="approved",
                            product_id=pid, actor="測試員")
         repo.create_official_asset(self.conn, brand_id, asset_kind="logo",
-                                    file_path="C:/tmp/logo.png", product_id=pid, actor="測試員")
+                                    storage_key=f"{db.DEV_ORG_ID}/brands/{brand_id}/assets/oas_fake/logo.png",
+                                    product_id=pid, actor="測試員")
         # strategy_hypothesis／learning_ledger 沒有寫入端了（票 04：唯一寫入端隨 app/ads/
         # 一起刪除，表留著）。
         self.conn.execute(

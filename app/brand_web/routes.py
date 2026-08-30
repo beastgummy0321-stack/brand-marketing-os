@@ -26,8 +26,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from fastapi import APIRouter, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import Response
 
+import app.storage as storage
 from app.brand_intelligence import report as brand_report_mod
 from app.brand_intelligence import repository as repo
 from app.brand_web import report_service
@@ -83,19 +84,17 @@ def _persona_conversion_goal_default(persona: str) -> str | None:
 # routes_library_write.py），這支 FileResponse 不是頁面渲染，必留。
 # ---------------------------------------------------------------------------
 
-_ASSET_CONTENT_TYPES = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png",
-                         "webp": "image/webp", "gif": "image/gif"}
-
-
 @router.get("/brands/{brand_id}/assets/file/{asset_id}/{filename}")
 def asset_file(request: Request, brand_id: str, asset_id: str, filename: str):
     """只回傳「這筆官方素材登記過的檔案」——不從網址參數直接組路徑，天生擋掉路徑穿越；
-    找不到品牌、找不到素材、或檔名跟登記的不一致，一律 404（比照 intake 照片的做法）。"""
+    找不到品牌、找不到素材、或檔名跟登記的不一致，一律 404（比照 intake 照片的做法）。
+
+    票 storage-02：檔案不在本機磁碟了，這裡改成向 Storage 拿 bytes 再包成 `Response`
+    （`ponytail:` 犧牲 ETag／Range，換一顆 `<img>` 標籤夠用的簡單實作——SPEC D2）。"""
     actor = require_actor(request)
-    require_brand(brand_id, actor)
+    brand = require_brand(brand_id, actor)
     asset = repo.get_official_asset(web.conn, brand_id, asset_id)
-    if asset is None or Path(asset["file_path"]).name != filename:
+    if asset is None or Path(asset["storage_key"]).name != filename:
         raise NotFoundKind("這個素材檔案")
-    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
-    return FileResponse(asset["file_path"], media_type=_ASSET_CONTENT_TYPES.get(ext, "application/octet-stream"),
-                         filename=filename)
+    content, content_type = storage.get(org_id=brand["org_id"], key=asset["storage_key"])
+    return Response(content=content, media_type=content_type)

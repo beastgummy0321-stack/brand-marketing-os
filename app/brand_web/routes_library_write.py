@@ -23,10 +23,9 @@ handler 與它們 redirect 落地用的 GET hub 頁整批刪除了（只留 `_cr
 誰依賴它：只有 `app/main.py`。
 """
 
-from pathlib import Path
-
 from fastapi import APIRouter, Request
 
+import app.storage as storage
 from app.brand_intelligence import repository as repo
 from app.brand_web import routes as brand_routes
 from app.brand_web.routes_library import (
@@ -283,14 +282,14 @@ def claim_delete_api(request: Request, brand_id: str, claim_id: str):
 @router.post("/api/library/brands/{brand_id}/assets/{asset_id}/delete")
 def asset_delete_api(request: Request, brand_id: str, asset_id: str):
     actor = require_actor(request)
-    require_brand(brand_id, actor)
+    brand = require_brand(brand_id, actor)
     asset = repo.get_official_asset(web.conn, brand_id, asset_id)
     if not asset:
         raise NotFoundKind("官方素材")
     repo.delete_official_asset(web.conn, brand_id, asset_id, actor=str(actor.user_id))
     try:
-        Path(asset["file_path"]).unlink(missing_ok=True)
-    except OSError:
+        storage.delete(org_id=brand["org_id"], key=asset["storage_key"])
+    except storage.StorageError:
         pass
     return {"ok": True}
 

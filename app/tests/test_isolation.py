@@ -46,7 +46,8 @@ class BrandIsolationTest(unittest.TestCase):
             actor="測試員",
         )
         asset = repo.create_official_asset(
-            self.conn, bid, asset_kind="logo", file_path="C:/tmp/logo.png", actor="測試員",
+            self.conn, bid, asset_kind="logo",
+            storage_key=f"{db.DEV_ORG_ID}/brands/{bid}/assets/oas_fake/logo.png", actor="測試員",
         )
         # strategy_hypothesis 的 create／list 都已刪除（票 04），這裡不再塞這張表。
         baseline = repo.create_brand_performance_baseline(

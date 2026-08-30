@@ -1,16 +1,20 @@
-"""app/tests/test_official_assets.py — 官方素材上傳／列表／刪除（issue #3）。
+"""app/tests/test_official_assets.py — 官方素材上傳／列表／刪除（issue #3；票 storage-02
+改走 Supabase Storage）。
 
-驗收重點：上傳後品牌頁見縮圖、刪除即消失（檔案與資料列皆清）、跨品牌隔離、非圖檔被擋。
+驗收重點：上傳後品牌頁見縮圖、`storage_key` 帶 org_id 首段、刪除即消失（Storage 物件與
+資料列皆清）、跨品牌隔離、非圖檔被擋、檔案服務路由回對的 bytes／content-type、上傳失敗
+不留孤兒列（SPEC D9：一列指到不存在的物件，畫面會永遠是張破圖）。
 """
 
 import io
 import unittest
-from pathlib import Path
+from unittest import mock
 
 from fastapi.testclient import TestClient
 
 import app.main as main
 import app.shared.web as web
+import app.storage as storage
 from app.brand_intelligence import repository as repo
 from app.core.db import DEV_ORG_ID  # noqa: E402
 
@@ -42,28 +46,36 @@ class OfficialAssetTest(unittest.TestCase):
 
         assets = repo.list_official_assets(web.conn, brand_id)
         self.assertEqual(len(assets), 1)
-        self.assertTrue(Path(assets[0]["file_path"]).exists())
+        asset = assets[0]
+        self.addCleanup(storage.delete, org_id=DEV_ORG_ID, key=asset["storage_key"])
+        self.assertTrue(asset["storage_key"].startswith(f"{DEV_ORG_ID}/"))
+        content, content_type = storage.get(org_id=DEV_ORG_ID, key=asset["storage_key"])
+        self.assertEqual(content, b"\x89PNG fake bytes")
+        self.assertEqual(content_type, "image/png")
 
         bundle = self.client.get(f"/api/library/brands/{brand_id}").json()["data"]
         self.assertEqual(bundle["assets"][0]["title"], "測試素材")
 
-    def test_delete_removes_row_and_file(self):
+    def test_delete_removes_row_and_storage_object(self):
         brand_id = self._new_brand("山嵐選物")
         self._upload(brand_id)
         asset = repo.list_official_assets(web.conn, brand_id)[0]
-        file_path = Path(asset["file_path"])
-        self.assertTrue(file_path.exists())
+        storage_key = asset["storage_key"]
+        content, _ = storage.get(org_id=DEV_ORG_ID, key=storage_key)
+        self.assertTrue(content)
 
         repo.delete_official_asset(web.conn, brand_id, asset["id"], actor="測試員")
-        file_path.unlink()
+        storage.delete(org_id=DEV_ORG_ID, key=storage_key)
         self.assertEqual(repo.list_official_assets(web.conn, brand_id), [])
-        self.assertFalse(file_path.exists())
+        with self.assertRaises(storage.NotFound):
+            storage.get(org_id=DEV_ORG_ID, key=storage_key)
 
     def test_cross_brand_isolation(self):
         brand_a = self._new_brand("晨露茶飲-A")
         brand_b = self._new_brand("山嵐選物-B")
         self._upload(brand_a)
         asset = repo.list_official_assets(web.conn, brand_a)[0]
+        self.addCleanup(storage.delete, org_id=DEV_ORG_ID, key=asset["storage_key"])
 
         bundle_b = self.client.get(f"/api/library/brands/{brand_b}").json()["data"]
         self.assertNotIn(asset["id"], [row["id"] for row in bundle_b["assets"]])
@@ -72,7 +84,8 @@ class OfficialAssetTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "找不到"):
             repo.delete_official_asset(web.conn, brand_b, asset["id"], actor="測試員")
         self.assertEqual(len(repo.list_official_assets(web.conn, brand_a)), 1)
-        self.assertTrue(Path(asset["file_path"]).exists())
+        content, _ = storage.get(org_id=DEV_ORG_ID, key=asset["storage_key"])
+        self.assertTrue(content)
 
     def test_non_image_rejected_with_plain_language_error(self):
         brand_id = self._new_brand("晨露茶飲-拒收")
@@ -81,6 +94,33 @@ class OfficialAssetTest(unittest.TestCase):
         self.assertEqual(resp.status_code, 400)
         self.assertIn("detail", resp.json())
         self.assertEqual(repo.list_official_assets(web.conn, brand_id), [])
+
+    def test_put_failure_leaves_no_asset_row(self):
+        """money/data-correctness 案例（SPEC D9）：`put` 炸了，就不可以留一列指到不存在
+        的物件——那張圖會永遠是破的。用 mock 模擬 Storage 失敗，不必真的打斷網路。"""
+        brand_id = self._new_brand("上傳失敗品牌")
+        with mock.patch("app.brand_web.routes_library.storage.put",
+                         side_effect=storage.StorageError("模擬 Storage 失敗")):
+            resp = self._upload(brand_id)
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(repo.list_official_assets(web.conn, brand_id), [])
+
+    def test_file_route_returns_bytes_and_content_type_mismatched_filename_404s(self):
+        brand_id = self._new_brand("檔案服務品牌")
+        self._upload(brand_id, filename="logo.png", content=b"\x89PNG round trip bytes",
+                     content_type="image/png")
+        asset = repo.list_official_assets(web.conn, brand_id)[0]
+        self.addCleanup(storage.delete, org_id=DEV_ORG_ID, key=asset["storage_key"])
+        filename = asset["storage_key"].rsplit("/", 1)[-1]
+
+        resp = self.client.get(f"/brands/{brand_id}/assets/file/{asset['id']}/{filename}")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.content, b"\x89PNG round trip bytes")
+        self.assertEqual(resp.headers["content-type"], "image/png")
+
+        resp_wrong_name = self.client.get(
+            f"/brands/{brand_id}/assets/file/{asset['id']}/不是這個檔名.png")
+        self.assertEqual(resp_wrong_name.status_code, 404)
 
 
 if __name__ == "__main__":
