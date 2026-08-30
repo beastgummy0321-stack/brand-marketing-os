@@ -14,9 +14,9 @@ answer_key, answer_text, skipped, llm_task_id}（03 §3A.2）。answer_key 為�
 
 import os
 import re
-from pathlib import Path
 
-from app.core.db import REPO_ROOT, new_id
+from app import storage
+from app.core.db import new_id
 from app.intake import repository as ir
 
 REFRESH_SECONDS = 3  # 進度頁 <meta refresh> 秒數，與 DESIGN.md §19.4 範例一致
@@ -80,7 +80,7 @@ def _scan_product_data(raw) -> tuple[list, list]:
 def _row_to_draft(conn, row: dict) -> dict:
     brand_row = conn.execute("SELECT name FROM brand WHERE id = %s", (row["brand_id"],)).fetchone()
     photos = [
-        {"name": p.get("display_name"), "path": p.get("file_path"),
+        {"name": p.get("display_name"), "storage_key": p.get("storage_key"),
          "size_mb": round((p.get("size_bytes") or 0) / (1024 * 1024), 1),
          "token": p.get("token") or ""}
         for p in _loads(row["photos_json"], [])
@@ -157,7 +157,7 @@ def save(draft: dict, conn=None) -> None:
     """把畫面草稿 dict 的可變欄位寫回 intake_draft（每一步送出即存草稿，§19.3 規則 1）。"""
     conn = _conn(conn)
     photos = [
-        {"file_path": p.get("path"), "display_name": p.get("name"),
+        {"storage_key": p.get("storage_key"), "display_name": p.get("name"),
          "size_bytes": int(round((p.get("size_mb") or 0) * 1024 * 1024)),
          "token": p.get("token") or ""}
         for p in draft["photos"]
@@ -199,7 +199,7 @@ def new_draft(brand_id: str, brand_name: str, *, description: str, urls: list, p
               actor: str = "", conn=None) -> dict:
     conn = _conn(conn)
     photos_db = [
-        {"file_path": p.get("path"), "display_name": p.get("name"),
+        {"storage_key": p.get("storage_key"), "display_name": p.get("name"),
          "size_bytes": int(round((p.get("size_mb") or 0) * 1024 * 1024)),
          "token": p.get("token") or ""}
         for p in photos
@@ -235,7 +235,7 @@ def prev_photos(last_draft_row: dict | None) -> list:
     if not last_draft_row:
         return []
     return [
-        {"name": p.get("display_name"), "path": p.get("file_path"),
+        {"name": p.get("display_name"), "storage_key": p.get("storage_key"),
          "size_mb": round((p.get("size_bytes") or 0) / (1024 * 1024), 1),
          "token": p.get("token") or ""}
         for p in (last_draft_row["photos_json"] or [])
@@ -341,24 +341,22 @@ def touch(draft: dict, path: str, step: int, conn=None) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 照片上傳（W1）：真的存檔到本機資料夾（DESIGN.md §17 第 14 項），data/ 已在 .gitignore。
+# 照片上傳（W1）：存進 Supabase Storage（app/storage，票 storage-03；ADR 0043 key 形狀
+# `<org_id>/intake/<token>/<filename>`），本機磁碟不再落地。
 #
 # W1 送出時可能還沒有品牌（表單驗證失敗要重來），所以先用一個跟 brand_id 無關的暫存
-# token 當資料夾名稱；驗證通過真的建立品牌、寫進草稿後，token 這個暫存記錄就可以丟了。
+# token 當 key 的一段；驗證通過真的建立品牌、寫進草稿後，token 這個暫存記錄就可以丟了。
 # 暫存區留在記憶體沒關係——它只活在「表單還沒送成功」的幾分鐘內，不屬於草稿續接範圍。
 # ---------------------------------------------------------------------------
 
-DEFAULT_UPLOAD_DIR = REPO_ROOT / "data" / "uploads" / "intake"
-
 _UNSAFE_FILENAME_CHARS = re.compile(r"[^A-Za-z0-9._-]+")
 
-# token -> [{"name":.., "size_mb":.., "path":..}]（尚未落地成草稿前的暫存區）
+_PHOTO_CONTENT_TYPES = {
+    "jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "webp": "image/webp",
+}
+
+# token -> [{"name":.., "size_mb":.., "storage_key":..}]（尚未落地成草稿前的暫存區）
 PENDING_PHOTOS: dict = {}
-
-
-def get_upload_dir() -> Path:
-    raw = os.environ.get("BRAND_OS_UPLOADS")
-    return Path(raw) if raw else DEFAULT_UPLOAD_DIR
 
 
 def safe_filename(name: str) -> str:
@@ -376,24 +374,27 @@ def get_pending_photos(token: str) -> list:
     return list(PENDING_PHOTOS.get(token) or [])
 
 
-def save_photo(token: str, filename: str, content: bytes) -> dict:
-    """把這張照片的位元組真的寫進磁碟，並記進 token 的暫存清單。
+def save_photo(token: str, filename: str, content: bytes, *, org_id: str) -> dict:
+    """把這張照片的位元組存進 Storage（`<org_id>/intake/<token>/<filename>`），並記進
+    token 的暫存清單。
 
     W1 驗證失敗、使用者補資料重送時，同一個 token 沿用已經存好的照片——不必也
     不會要求使用者重新選檔。
     """
     name = safe_filename(filename)
-    folder = get_upload_dir() / token
-    folder.mkdir(parents=True, exist_ok=True)
-    path = folder / name
-    path.write_bytes(content)
-    entry = {"name": name, "size_mb": round(len(content) / (1024 * 1024), 1), "path": str(path)}
+    key = f"{org_id}/intake/{token}/{name}"
+    ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
+    content_type = _PHOTO_CONTENT_TYPES.get(ext, "application/octet-stream")
+    storage.put(org_id=org_id, key=key, filename=name, content=content, content_type=content_type)
+    entry = {"name": name, "size_mb": round(len(content) / (1024 * 1024), 1), "storage_key": key}
     PENDING_PHOTOS.setdefault(token, []).append(entry)
     return entry
 
 
 def discard_pending_photos(token: str) -> None:
-    """草稿建立後，照片已經轉存進 photos_json，暫存區這筆就不再需要。"""
+    """草稿建立後，照片已經轉存進 photos_json，暫存區這筆就不再需要——不刪 Storage 物件，
+    草稿此刻已經引用它了（票 storage-03「Explicitly not fixed here」：中途放棄的精靈
+    session 留下孤兒物件，跟今天留下孤兒檔案一樣，行為不變、範圍之外）。"""
     PENDING_PHOTOS.pop(token, None)
 
 
@@ -411,11 +412,11 @@ def validate_photo_upload(filename: str, content: bytes) -> str | None:
     return None
 
 
-def save_new_photo(filename: str, content: bytes) -> dict:
+def save_new_photo(filename: str, content: bytes, *, org_id: str) -> dict:
     """新 API 專用：單檔上傳各自拿一個 token（跟舊表單「一批共用一個 token」語意不同，
     對應前端 `IntakePhoto{token,name,size_mb}`），底層仍是同一套 `save_photo` 存檔邏輯。"""
     token = new_photo_token()
-    entry = save_photo(token, filename, content)
+    entry = save_photo(token, filename, content, org_id=org_id)
     return {"token": token, "name": entry["name"], "size_mb": entry["size_mb"]}
 
 

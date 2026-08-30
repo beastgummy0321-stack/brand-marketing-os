@@ -73,14 +73,14 @@ async def _json_body(request: Request) -> dict:
 
 @router.post("/api/intake/photos")
 async def photo_upload(request: Request, photo: UploadFile = File(...)):
-    require_actor(request)  # 這一步還沒有品牌／組織（建檔精靈第一步），只驗證登入
+    actor = require_actor(request)  # 這一步還沒有品牌（建檔精靈第一步），但組織一定有
     if not photo.filename:
         return _error(400, "請選擇檔案。")
     content = await photo.read()
     err = state.validate_photo_upload(photo.filename, content)
     if err:
         return _error(400, err)
-    return state.save_new_photo(photo.filename, content)
+    return state.save_new_photo(photo.filename, content, org_id=actor.org_id)
 
 
 @router.post("/api/intake/brands")

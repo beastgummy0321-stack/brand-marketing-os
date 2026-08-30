@@ -16,6 +16,7 @@ from fastapi.testclient import TestClient
 
 import app.main as main
 import app.shared.web as web
+from app import storage
 from app.core import db as coredb
 from app.intake import ai as intake_ai
 from app.intake import card_test, script, state
@@ -63,9 +64,12 @@ class IntakeWizardTest(unittest.TestCase):
         photo = self.client.post(
             "/api/intake/photos", files={"photo": ("t.jpg", io.BytesIO(b"x" * 100), "image/jpeg")})
         assert photo.status_code == 200
+        token = photo.json()["token"]
+        storage_key = state.get_pending_photos(token)[0]["storage_key"]
+        self.addCleanup(storage.delete, org_id=coredb.DEV_ORG_ID, key=storage_key)
         resp = self.client.post("/api/intake/brands", data={
             "brand_name": name, "description": "測試品牌的描述文字，超過十個字。",
-            "photo_tokens": photo.json()["token"],
+            "photo_tokens": token,
         })
         assert resp.status_code == 200
         return resp.json()["brand_id"]

@@ -563,7 +563,14 @@ class FileLineCapTest(unittest.TestCase):
 # NotFound（同上，錯誤模型不能是死碼）、delete_prefix 真的刪掉兩層深的物件而不是回報
 # 成功卻什麼都沒刪（data correctness，就是 SPEC D3 點名的那個坑）、四個函式各一支
 # key/prefix 首段必須等於 org_id 的測試，不寫迴圈（tenant isolation）。
-TEST_LINES_CEILING = 14861
+# 票 storage-03：14,861 → 14,955。建檔精靈照片搬進 Storage：
+# `POST /api/intake/photos` 存進去的 key 第一段必須是呼叫者的 org_id（tenant isolation，
+# proven red once：暫時斷言錯的 org 前綴，看它真的紅，再改回來）；新增
+# `GET /brands/{id}/intake/photos/{filename}` 回真的位元組、沒登記在草稿上的檔名仍 404
+# （API contract，這條路由先前完全沒有測試）；既有的
+# `test_scan_success_stores_impressions_and_real_cost`（cost_items 長度斷言）現在順帶
+# 證明照片掃描真的經 `storage.get` 讀回位元組——沒改斷言，只是背後的路徑換了。
+TEST_LINES_CEILING = 14955
 
 
 def _line_totals() -> tuple:

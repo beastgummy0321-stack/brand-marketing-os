@@ -7,23 +7,17 @@ routes_api, repositories, business logic, or methodology.
 """
 
 from fastapi import APIRouter, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import Response
 
 import app.shared.web as main_mod
+from app import storage
 from app.intake import state
 
 router = APIRouter()
 
-_PHOTO_CONTENT_TYPES = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "webp": "image/webp"}
-
 
 def _draft_or_404(brand_id: str) -> dict:
     return state.require_draft(brand_id, conn=main_mod.conn)
-
-
-def _photo_content_type(name: str) -> str:
-    ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
-    return _PHOTO_CONTENT_TYPES.get(ext, "application/octet-stream")
 
 
 @router.get("/brands/{brand_id}/intake/photos/{filename}")
@@ -33,6 +27,7 @@ def intake_photo(request: Request, brand_id: str, filename: str):
     main_mod.require_brand(brand_id, actor)
     draft = _draft_or_404(brand_id)
     entry = next((p for p in (draft.get("photos") or []) if p.get("name") == filename), None)
-    if entry is None or not entry.get("path"):
+    if entry is None or not entry.get("storage_key"):
         raise main_mod.NotFoundKind("\u9019\u5f35\u7167\u7247")
-    return FileResponse(entry["path"], media_type=_photo_content_type(entry["name"]), filename=entry["name"])
+    content, content_type = storage.get(org_id=actor.org_id, key=entry["storage_key"])
+    return Response(content=content, media_type=content_type)

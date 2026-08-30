@@ -13,8 +13,8 @@
 """
 
 import json
-from pathlib import Path
 
+from app import storage
 from app.core import net
 from app.intake import repository as ir
 from app.intake import script, state
@@ -85,12 +85,6 @@ _PHOTO_PRODUCT_TOOL = {
     },
 }
 
-_PHOTO_MEDIA_TYPES = {
-    ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
-    ".gif": "image/gif", ".webp": "image/webp",
-}
-
-
 def _photo_card(photo: dict, *, status: str, message: str = None, data: dict = None) -> dict:
     data = data or {}
     name = str(data.get("name") or "").strip()
@@ -115,11 +109,12 @@ def _photo_card(photo: dict, *, status: str, message: str = None, data: dict = N
 
 def _read_photo_product(conn, draft: dict, photo: dict, purpose: str) -> dict:
     try:
-        path = Path(photo.get("path") or "")
-        if not path.is_file():
+        storage_key = photo.get("storage_key") or ""
+        if not storage_key:
             raise ValueError("找不到照片檔案，可以重試或先跳過。")
-        media_type = _PHOTO_MEDIA_TYPES.get(path.suffix.lower())
-        image = providers.base64_image_block(media_type or "", path.read_bytes())
+        org_id = storage_key.split("/", 1)[0]
+        content, content_type = storage.get(org_id=org_id, key=storage_key)
+        image = providers.base64_image_block(content_type, content)
         text = {
             "type": "text",
             "text": (
@@ -141,7 +136,7 @@ def _read_photo_product(conn, draft: dict, photo: dict, purpose: str) -> dict:
                 message="這張照片讀不出產品資訊，可以自己填或略過。",
             )
         return _photo_card(photo, status="ready", data=data)
-    except (OSError, ValueError, json.JSONDecodeError) as exc:
+    except (storage.StorageError, ValueError, json.JSONDecodeError) as exc:
         return _photo_card(photo, status="failed", message=str(exc))
 
 

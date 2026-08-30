@@ -16,7 +16,9 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 import app.main as main  # noqa: E402
 import app.shared.web as web  # noqa: E402
+from app import storage  # noqa: E402
 from app.core import interrupts as core_interrupts  # noqa: E402
+from app.core.db import DEV_ORG_ID  # noqa: E402
 from app.intake import ai as intake_ai  # noqa: E402
 from app.intake import routes_api as api  # noqa: E402
 from app.intake import script, state  # noqa: E402
@@ -164,6 +166,8 @@ class PhotoUploadTest(_Base):
         self.assertEqual(up.status_code, 200)
         body = up.json()
         self.assertEqual(set(body.keys()), {"token", "name", "size_mb"})
+        storage_key = state.get_pending_photos(body["token"])[0]["storage_key"]
+        self.addCleanup(storage.delete, org_id=DEV_ORG_ID, key=storage_key)
         name = self._brand_name()
         resp = self.client.post("/api/intake/brands", data={
             "brand_name": name, "photo_tokens": body["token"],
@@ -172,6 +176,39 @@ class PhotoUploadTest(_Base):
         draft = state.get_draft(resp.json()["brand_id"])
         self.assertEqual(len(draft["photos"]), 1)
         self.assertEqual(draft["photos"][0]["name"], "t.jpg")
+
+    def test_upload_stores_object_under_callers_org_id(self):
+        """票 storage-03：物件 key 第一段必須是呼叫者的 org_id——租戶邊界檢查
+        （proven red once：暫時把斷言換成別的 org 前綴，看它真的失敗，再改回來）。"""
+        import io
+        up = self.client.post("/api/intake/photos",
+                              files={"photo": ("t.jpg", io.BytesIO(b"x" * 100), "image/jpeg")})
+        self.assertEqual(up.status_code, 200)
+        token = up.json()["token"]
+        storage_key = state.get_pending_photos(token)[0]["storage_key"]
+        self.addCleanup(storage.delete, org_id=DEV_ORG_ID, key=storage_key)
+        self.assertTrue(storage_key.startswith(f"{DEV_ORG_ID}/"))
+
+    def test_get_photo_returns_bytes_and_unregistered_filename_404s(self):
+        import io
+        content = b"\x89PNG\r\n\x1a\nfake-png-bytes"
+        up = self.client.post("/api/intake/photos",
+                              files={"photo": ("p.png", io.BytesIO(content), "image/png")})
+        self.assertEqual(up.status_code, 200)
+        token = up.json()["token"]
+        storage_key = state.get_pending_photos(token)[0]["storage_key"]
+        self.addCleanup(storage.delete, org_id=DEV_ORG_ID, key=storage_key)
+        resp = self.client.post("/api/intake/brands", data={
+            "brand_name": self._brand_name(), "photo_tokens": token,
+        })
+        brand_id = resp.json()["brand_id"]
+
+        got = self.client.get(f"/brands/{brand_id}/intake/photos/p.png")
+        self.assertEqual(got.status_code, 200)
+        self.assertEqual(got.content, content)
+
+        missing = self.client.get(f"/brands/{brand_id}/intake/photos/nope.png")
+        self.assertEqual(missing.status_code, 404)
 
     def test_bad_extension_rejected(self):
         import io
