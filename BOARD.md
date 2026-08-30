@@ -26,11 +26,12 @@ Meta 端只建了一個 **PAUSED、沒有廣告組合、沒有廣告、沒有預
 各自搬到會真的用到它的地方：pydantic-settings → 07-2；提示詞指紋 → 使用者待辦的變異度那條；
 切換金鑰來源的畫面 → 里程碑之後。拆完這片不再動 schema。
 
-- [ ] 04-2 剩下的一半（**需批准：憑證路徑**）：自帶金鑰（`own`）的 AI 金鑰進 Vault。
+- [>] 04-2 剩下的一半（**需批准：憑證路徑**）：自帶金鑰（`own`）的 AI 金鑰進 Vault。
       今天設定頁貼的 Anthropic 金鑰以**明文**存進 `app_setting`（`app/main.py:232`）——
       Meta 權杖已經在 Vault 裡，同一個櫃子一半上鎖一半沒鎖。第一個帶自己金鑰的客戶進來
       之前必須補上；本機單人階段那個欄位是空的，所以現在不痛。切換來源的畫面**不在這張**。
-      Meta 憑證進 Vault、組織層「已連接帳號」→ 品牌綁定**已完成**（`.scratch/schedule-module/issues/04`）
+      Meta 憑證進 Vault、組織層「已連接帳號」→ 品牌綁定**已完成**（`.scratch/schedule-module/issues/04`）。
+      **2026-08-30 站①過：票已凍結、使用者已批准**，票面 `.scratch/saas/tickets/04-2-ai-key-into-vault.md`；站②實作中
 
 ## 第 ⑤ 片：背景工作
 
