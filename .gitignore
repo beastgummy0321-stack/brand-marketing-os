@@ -34,3 +34,6 @@ archive/
 
 # 開機無視窗啟動器的 log（票 F6），不進版控
 logs/
+
+# Supabase Studio 的 SQL Editor 暫存片段：本機隨手查的東西，不是專案內容
+supabase/snippets/
