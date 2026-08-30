@@ -102,7 +102,7 @@ export function ApiKeySection({ data, onSaved }: { data: SettingsData; onSaved: 
           這個月整個組織（不分品牌）已花 US$ {data.ai_monthly_spend.toFixed(2)}，上限 US${" "}
           {data.ai_monthly_cost_limit.toFixed(2)}
           {data.ai_cap_applies
-            ? "。用到上限會自動擋下新的 AI 呼叫，下個月 1 號自動歸零；跟下面「素材」小節的品牌花費上限是不同的兩道關卡，那個只管單一品牌、不會每月重置。"
+            ? "。用到上限會自動擋下新的 AI 呼叫，下個月 1 號自動歸零；跟下面「花費上限」小節的品牌花費上限是不同的兩道關卡，那個只管單一品牌、不會每月重置。"
             : "（僅供參考：這個組織用自己的金鑰付費，不受這道上限限制）。"}
         </p>
         {data.ai_cap_applies && data.is_owner && (

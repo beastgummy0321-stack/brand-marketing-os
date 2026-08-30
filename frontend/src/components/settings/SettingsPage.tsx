@@ -5,7 +5,7 @@ import { Skeleton } from "@/components/layout/Skeleton";
 import type { SettingsData } from "@/lib/settingsApi";
 import { fetchSettings } from "@/lib/settingsApi";
 import { ApiKeySection } from "./ApiKeySection";
-import { AssetsSection } from "./AssetsSection";
+import { SpendCapSection } from "./SpendCapSection";
 import { ModelSection } from "./ModelSection";
 import { MetaSection } from "./MetaSection";
 import { RuleCardsSection } from "./RuleCardsSection";
@@ -63,7 +63,7 @@ export function SettingsPage() {
       <div className="flex flex-col gap-5">
         <ApiKeySection data={data} onSaved={load} />
         <ModelSection data={data} onSaved={load} />
-        <AssetsSection data={data} onSaved={load} />
+        <SpendCapSection data={data} onSaved={load} />
         <MetaSection />
         <RuleCardsSection />
       </div>

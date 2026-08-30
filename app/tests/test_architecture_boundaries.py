@@ -570,7 +570,11 @@ class FileLineCapTest(unittest.TestCase):
 # （API contract，這條路由先前完全沒有測試）；既有的
 # `test_scan_success_stores_impressions_and_real_cost`（cost_items 長度斷言）現在順帶
 # 證明照片掃描真的經 `storage.get` 讀回位元組——沒改斷言，只是背後的路徑換了。
-TEST_LINES_CEILING = 14955
+# 票 storage-04：14,955 → 14,772。素材資料夾設定退役，整支測試檔（160 行）隨模組一起
+# 刪；test_relocation_paths.py 收斂成只剩一條還站得住腳的斷言（官方素材／建檔精靈照片
+# 的本機上傳目錄測試隨 storage-02／03 一起失去測試對象）、test_settings_api.py 少幾行
+# 不再測的斷言與 import。
+TEST_LINES_CEILING = 14772
 
 
 def _line_totals() -> tuple:
@@ -630,7 +634,9 @@ KNOWN_MODULE_SIZES = {
     "app/brand_intelligence": 2634,
     "app/brand_web": 2091,  # 2026-08-30 刪失效規則卡（小債）：autonomy 那張卡的兩處專屬
                              # 驗證跟著走。前一次是 2155
-    "app/core": 1687,  # 2026-08-30 刪失效規則卡（小債）：rule_cards.py 的 6 張卡（budget_structure／
+    "app/core": 1554,  # 票 storage-04：素材資料夾設定退役，整支模組檔（131 行）連同
+                        # main.py 的呼叫端一起刪。前一次是 1687——
+                        # 2026-08-30 刪失效規則卡（小債）：rule_cards.py 的 6 張卡（budget_structure／
                         # sample_size／ad_creative_fatigue／pacing／health_lights／autonomy）隨
                         # app/ads/ 失去全部呼叫端，設定頁照樣顯示照樣可調＝使用者看得到的謊；
                         # 連 fatigue_level()／sample_size_verdict() 兩支零呼叫端純函數一起刪。

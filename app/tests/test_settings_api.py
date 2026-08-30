@@ -10,7 +10,6 @@ AnthropicProvider／pricing 直接單元測試（不經 HTTP 路由，票 T4 A4 
 """
 
 import os
-import tempfile
 import unittest
 import uuid as uuid_module
 from unittest import mock
@@ -31,7 +30,7 @@ TEST_KEY = "sk-ant-test-0000-1234abcd"
 
 SETTINGS_DATA_KEYS = {
     "masked_key", "api_key_source", "db_key_present", "model_choices", "current_model",
-    "task_model_thinking_table", "creative_root", "intake_budget",
+    "task_model_thinking_table", "intake_budget",
     "ai_key_source", "ai_cap_applies", "ai_monthly_spend", "ai_monthly_cost_limit", "is_owner",
 }
 
@@ -199,21 +198,6 @@ class SettingsApiTest(unittest.TestCase):
         resp = self.client.post("/api/settings/budget", json={"intake_budget": 0})
         self.assertEqual(resp.status_code, 400)
         self.assertIn("花費上限請填大於 0 的數字", resp.json()["error"])
-
-    # -- POST /api/settings/creative-root ------------------------------------------
-
-    def test_save_creative_root_valid(self):
-        # 用執行平台自己認得的絕對路徑（Windows 是 C:\...\Temp\行銷素材、POSIX 是
-        # /tmp/行銷素材），不硬寫死磁碟機代號；底下多接一層資料夾名，才不會撞到
-        # 「不可以是磁碟機根目錄」那道驗證。
-        root = os.path.join(tempfile.gettempdir(), "行銷素材")
-        resp = self.client.post("/api/settings/creative-root", json={"creative_root": root})
-        self.assertEqual(resp.status_code, 200)
-
-    def test_save_creative_root_relative_path_rejected(self):
-        resp = self.client.post("/api/settings/creative-root", json={"creative_root": "素材"})
-        self.assertEqual(resp.status_code, 400)
-        self.assertIn("完整的資料夾路徑", resp.json()["error"])
 
     # -- 測試連線：假供應商，不打真網路 ------------------------------------------------
 

@@ -86,7 +86,6 @@ def _load_dotenv() -> int:
 _load_dotenv()
 
 from app import background as background_module
-from app.core import creative_assets as corecreative
 from app.core import db as coredb
 from app.core import retention as core_retention
 from app.core import settings as coresettings
@@ -271,19 +270,6 @@ def _write_ai_monthly_cost_limit(raw_limit, *, org_id: str) -> str | None:
     return None
 
 
-def _write_creative_root(raw_root: str, *, org_id: str) -> str | None:
-    """三道驗證：有填、是完整路徑、不是磁碟機根目錄——刪品牌／刪檔期會刪掉這底下對應的
-    子資料夾，指到 `C:\\` 這種地方很危險。不驗資料夾存不存在：使用者可能先填好路徑，
-    等一下才插上那顆外接硬碟。"""
-    raw = clean(raw_root)
-    path = Path(raw) if raw else None
-    if path is None or not path.is_absolute() or path.parent == path:
-        return ("請填一個完整的資料夾路徑（例如 D:\\行銷素材），"
-                "不要只填資料夾名稱，也不要填磁碟機根目錄。")
-    coresettings.set_setting(web.conn, corecreative.SETTING_KEY, str(path), org_id=org_id)
-    return None
-
-
 def _run_ai_test_connection(*, org_id: str) -> tuple:
     """回傳 (人話訊息, kind)：kind 沿用 `redirect_with_message` 既有的 'ok'／'warn'／'danger'
     三種，HTML 與 JSON 路由共用同一份判斷。
@@ -353,7 +339,6 @@ def _settings_json_data(*, org_id: str, is_owner: bool) -> dict:
              "thinking_label": r["thinking_label"]}
             for r in llm_providers.task_default_table()
         ],
-        "creative_root": str(corecreative.get_root(web.conn, org_id=org_id)),
         "intake_budget": coresettings.get_intake_budget_limit(web.conn, org_id=org_id),
         # AI 月費上限（票 04-1a，D4-2／D4-3）：跟上面 intake_budget（單一品牌、全期）是不同
         # 的兩道關卡——這裡是整個組織、當月，見 app/core/settings.py org_ai_spent_this_month()。
@@ -410,18 +395,6 @@ async def api_settings_model_post(request: Request):
         return err
     actor = web.require_actor(request)
     error = _write_model(body.get("llm_model", ""), org_id=actor.org_id)
-    if error:
-        return JSONResponse({"error": error}, status_code=400)
-    return {}
-
-
-@app.post("/api/settings/creative-root")
-async def api_settings_creative_root_post(request: Request):
-    body, err = await _parse_json_body(request)
-    if err:
-        return err
-    actor = web.require_actor(request)
-    error = _write_creative_root(body.get("creative_root", ""), org_id=actor.org_id)
     if error:
         return JSONResponse({"error": error}, status_code=400)
     return {}

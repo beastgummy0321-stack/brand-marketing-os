@@ -24,7 +24,6 @@ export interface SettingsData {
   model_choices: ModelChoice[];
   current_model: string;
   task_model_thinking_table: TaskModelThinkingRow[];
-  creative_root: string;
   intake_budget: number;
   /** 誰的金鑰付錢（票 04-1a，D4-3）：'platform'＝操作者付錢（今天預設）；
    * 'own'＝組織自己的金鑰付錢，月費上限只是參考數字（ai_cap_applies＝false）。 */
@@ -33,7 +32,7 @@ export interface SettingsData {
   /** 這個月整個組織已花的 AI 費用（US$，不分品牌）。 */
   ai_monthly_spend: number;
   /** 組織每月 AI 花費上限（US$）——跟上面 intake_budget（單一品牌、全期）是不同的
-   * 兩道關卡，見 AssetsSection／ApiKeySection 的標籤文案。 */
+   * 兩道關卡，見 SpendCapSection／ApiKeySection 的標籤文案。 */
   ai_monthly_cost_limit: number;
   /** 目前登入者是不是這個組織的擁有者——AI 月費上限只有 owner 可以改。 */
   is_owner: boolean;
@@ -101,10 +100,6 @@ export function clearApiKey(): Promise<void> {
 
 export function saveModel(llmModel: string): Promise<void> {
   return postSettings("model", { llm_model: llmModel });
-}
-
-export function saveCreativeRoot(creativeRoot: string): Promise<void> {
-  return postSettings("creative-root", { creative_root: creativeRoot });
 }
 
 export function saveBudget(intakeBudget: number): Promise<void> {

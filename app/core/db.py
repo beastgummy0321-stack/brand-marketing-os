@@ -33,10 +33,10 @@ from psycopg_pool import ConnectionPool
 
 logger = logging.getLogger(__name__)
 
-# 不在票 02-1 的刪除清單裡：好幾個模組（app/ads/meta_mcp.py、app/core/creative_assets.py、
-# app/intake/state.py、app/llm/methodology.py、app/brand_web/routes_library.py）在 import
-# 時就從這裡拿 REPO_ROOT／APP_DIR 當路徑基準（跟 migration/sqlite 無關），刪了會炸掉它們的
-# import，牽連 app.shared.web——這兩個常數留著。
+# 不在票 02-1 的刪除清單裡：好幾個模組（app/ads/meta_mcp.py、app/intake/state.py、
+# app/llm/methodology.py、app/brand_web/routes_library.py）在 import 時就從這裡拿
+# REPO_ROOT／APP_DIR 當路徑基準（跟 migration/sqlite 無關），刪了會炸掉它們的 import，
+# 牽連 app.shared.web——這兩個常數留著。
 APP_DIR = Path(__file__).resolve().parent.parent  # .../app
 REPO_ROOT = APP_DIR.parent
 
