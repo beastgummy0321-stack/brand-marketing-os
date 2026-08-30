@@ -488,24 +488,24 @@ class FileLineCapTest(unittest.TestCase):
 # 早 10 倍的警報，不是解藥。完整說明見 `docs/tech-debt.md` 開頭。
 # ---------------------------------------------------------------------------
 
-# 凍結於外殼切片後的實測值（2026-08-29）。切之前 39,257／42,166（1.074×），切完降到
-# 0.858×——刪掉的測試比刪掉的程式更多（交接文件 §6 預測「會變成 1.13×，更糟」，實測
-# 不成立：它假設只刪 81 個廣告測試檔，實際 95 個）。目標 0.7×，見 docs/workflow-diet.md。
-# **只准往下**：這是天花板不是配額；連本檔這兩道閘門自己的行數也算進去。
+# 2026-08-30 使用者裁決（ADR 0041）：這道閘門從「比值」改成「測試絕對行數」。
 #
-# 2026-08-30 dead-code-sweep 票 04（寫明理由，reviewer 在 diff 裡看得到）：規則過期機制
-# （rule_lifecycle.py 全檔＋repository.py 三處呼叫）與 learning_ledger／strategy_hypothesis
-# 兩張表的整條讀寫面（唯一寫入端隨已刪除的 app/ads/ 一起沒了，讀取端永遠只讀到空集合）
-# 一次砍掉，production 淨減 697 行；測試這邊只淨減 322 行——大部分留著的測試在保護
-# 沒被這票動到的行為（品牌／產品刪除連鎖、跨品牌隔離、規則卡 API），砍不掉，此外還照
-# 「刪函式要刪測試、但不准砍還在保護活行為的斷言」新增了一條「規則不再過期」的回歸測試
-# （驗收條件要求）。0.858 → 0.862，比例被動漲、不是測試被灌水。前一次是 0.858。
+# 原本量的是 tests/production 的比值，凍結在 0.858，只准往下。它在同一天被迫往上調了
+# 兩次（0.858 → 0.862 → 0.865），兩次都不是因為有人多寫測試，而是因為**刪掉了死程式碼**
+# ——分母變小，比值就漲。也就是說：這道閘門在懲罰「刪碼」這件我們最想做的事，而唯一能讓
+# 它變綠的動作就是調高它自己。一道只能靠調鬆自己來通過的閘門，不是閘門。
 #
-# 2026-08-30 dead-code-sweep 票 05：同一種被動漲——六支 production 檔各刪一兩個沒有
-# 生產呼叫端的函式／常數，淨減 191 行；測試那邊淨減得少（留著的既有測試在保護沒被這票
-# 動到的行為，砍不掉），加上驗收條件明文要求新增一條回歸測試（類別從 CATEGORIES 移除後，
-# DB 舊列 list_open() 仍不炸）。前一次是 0.862。
-TEST_RATIO_CEILING = 0.865
+# 改成量測試的絕對行數之後，因果就對了：刪 production 不影響這個數字（本來就不該紅），
+# 加測試才會紅。要加測試就改這一行、寫理由，reviewer 在 diff 裡看得到——完全比照下面
+# KNOWN_MODULE_SIZES 已經在用的機制（「允許調高，但必須改這張表」）。
+#
+# 比值本身沒有消失，只是降級成參考值：失敗訊息裡照印，目標仍是 0.7×
+# （docs/workflow-diet.md）。它現在是北極星，不是煞車。
+#
+# 凍結於 2026-08-30 核准票（fdf619a）落地後的實測值 14,300，**加上改寫這道閘門自己花掉的
+# 5 行**（比值版 14,300 → 絕對行數版 14,305；本檔自己的行數也算進去，所以改閘門就會動到它
+# 守的數字——這裡照實記，不藏）。當下比值 0.866，目標仍是 0.7。
+TEST_LINES_CEILING = 14305
 
 
 def _line_totals() -> tuple:
@@ -521,24 +521,29 @@ def _line_totals() -> tuple:
 
 
 class TestRatioTest(unittest.TestCase):
-    """測試行數相對程式行數的比值，只准往下。
+    """測試的絕對行數，只准往下（ADR 0041）。
 
     測試是有人要維護的程式碼，寫得越多不等於越安全（`docs/workflow-diet.md` 第 4 條）。
     這道閘門把那條原本只是散文的目標接上機器——憲章明文：「一個沒有閘門的數字不是限制」。
+
+    量絕對行數而不是比值，是 2026-08-30 的裁決：比值會因為「刪掉 production 死碼」而
+    被動上漲，逼人去調鬆閘門本身才能通過，等於懲罰刪碼。絕對行數只在「真的多寫了測試」
+    時才紅，因果對得上。
     """
 
-    def test_ratio_only_goes_down(self):
+    def test_test_lines_only_go_down(self):
         production, tests = _line_totals()
-        ratio = round(tests / production, 3)
+        ratio = round(tests / production, 3) if production else 0
         self.assertLessEqual(
-            ratio, TEST_RATIO_CEILING,
-            f"測試行數比值從 {TEST_RATIO_CEILING} 漲到 {ratio}"
-            f"（production {production} 行、tests {tests} 行）。\n"
-            "這道閘門只准往下。要加測試就先問它守的是哪一件事——金額、租戶隔離、API 契約、"
-            "資料正確性，四者以外不寫（docs/workflow-diet.md 第 4 條）；畫面行為只給"
-            "frontend/e2e/smoke.spec.ts 那一支端到端煙霧測試，不寫單元測試。\n"
-            "真的該漲（例如新增了一整層資料正確性測試），就把 TEST_RATIO_CEILING 改掉——"
-            "改在這一行，reviewer 會在 diff 裡看到。",
+            tests, TEST_LINES_CEILING,
+            f"測試行數從 {TEST_LINES_CEILING} 漲到 {tests}"
+            f"（production {production} 行，比值 {ratio}，目標 0.7）。\n"
+            "先問這條測試守的是哪一件事——金額、租戶隔離、API 契約、資料正確性，四者以外"
+            "不寫（docs/workflow-diet.md 第 4 條）；畫面行為只給 frontend/e2e/smoke.spec.ts "
+            "那一支端到端煙霧測試，不寫單元測試。\n"
+            "刪 production 死碼不會讓這道閘門變紅（那正是 2026-08-30 改掉比值版的理由）——"
+            "會紅就代表測試真的變多了。真的該漲就改 TEST_LINES_CEILING 那一行、把理由寫在"
+            "它上面，reviewer 會在 diff 裡看到。",
         )
 
 
