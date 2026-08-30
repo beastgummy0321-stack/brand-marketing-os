@@ -21,7 +21,12 @@ Meta 端只建了一個 **PAUSED、沒有廣告組合、沒有廣告、沒有預
 
 ## 第 ⑥ 片：素材
 
-- [ ] 06-1 Supabase Storage 每組織一 bucket（雲端版的素材落腳處）；`creative_asset_root` 退役
+- [>] 06-1 素材檔搬進 Supabase Storage（②站 做後端）。**票面「每組織一 bucket」已由 ADR 0043 推翻**
+      ——一個 private bucket `assets`，組織 id 當物件路徑第一段（Supabase 官方多租戶做法；
+      每組織一 bucket 要在註冊路徑上多打一次管理 API）。ADR 0027 第 7 條的另一半「掛在主題下」
+      隨 `app/ads/` 已死。規格 `.scratch/storage-slice/SPEC.md`，四張票在同目錄 `issues/`：
+      01 新模組＋bucket＋環境變數／02 官方素材（欄位改名，順便修「刪品牌不刪圖檔」的漏洞）／
+      03 建檔精靈照片／04 `creative_asset_root` 退役
 
 ## 第 ⑦ 片：收尾
 
