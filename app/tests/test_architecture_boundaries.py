@@ -529,7 +529,33 @@ class FileLineCapTest(unittest.TestCase):
 # 各存各的讀不到對方的，用完清乾淨（vault secret／app_setting／organisation 都刪，比照
 # test_settings_org_scope.py 的 tearDown 形狀）。先證過紅：把 save_api_key() 改回呼叫
 # set_setting() 直寫明文，這幾支立刻抓到。
-TEST_LINES_CEILING = 14480
+#
+# 票 05-1（三個檔期生成改走佇列）：14,480 → 14,662（含本段註解自己佔掉的行，實測值）。
+# test_schedule.py：新增 QueuedGenerationTest（money：同一個品牌／task_type 已經在跑，第
+# 二次 POST 409 且不多排一個工作；API contract：POST 回來時代理還沒被打過，worker 跑過
+# 一次才打），既有成功路徑的測試（PlanApiContractTest／RejectApiContractTest／
+# TreeApiContractTest／BindTreeApiContractTest／CreativeApiContractTest／
+# SearchSourcesReadbackTest）從「POST 直接讀結果」改成「POST → commit → run_worker(wait=
+# False) → GET 讀結果」（POST 不再在 request 裡打代理，見 app/schedule/routes.py 檔頭）。
+# test_llm_gateway.py：新增 FailInterruptedTasksTest（資料正確性：process 重啟時，中斷的
+# running 列標記失敗，succeeded 列原封不動）。test_approval.py 的 `_succeed_plan_and_tree()`
+# 助手方法同一個改法，不算新測試（既有斷言原封不動，只是等 worker 跑過一次）。三支新斷言
+# 都屬 docs/workflow-diet.md 第 4 條允許的類別（money／API 契約／資料正確性），先證過紅：
+# 分別把 _display_task_row() 的 running 檢查、enqueue() 之前的順序、
+# fail_interrupted_tasks() 的 WHERE 條件改壞，三支各自單獨抓到。
+# 票 05-1 fix round 1（money）：14,662 → 14,740（含本段註解自己佔掉的行，實測值）。
+# test_schedule.py 新增一支：`QueuedGenerationTest::test_creative_job_uses_the_tree_pinned_at_enqueue_not_a_later_running_row`
+# ——`schedule_creative` 過去在 job 執行時重讀「這個品牌最新一次 schedule_tree」而不是
+# enqueue 當下驗證過的那一列；frozen decision 3「一次一個」是按 task type 算的，擋不住
+# 使用者先按產素材（排進佇列）又按展開活動樹（插進一列新的 running）這段交錯窗口——job
+# 真的跑到時撿到那列還在跑的、對著錯的（甚至空的）樹打代理，花錢的結果對不上任何廣告
+# 節點。這支測試守的就是這個：enqueue 一個 creative job、在它被 worker 撿走之前插一列
+# 更新的 running schedule_tree，斷言 job 用的還是 enqueue 當下釘住的那棵樹（
+# `context_scope_json["source_tree_task_id"]` 對得上、prompt 裡看得到真的葉節點名稱），
+# 不是後來插隊的那一列。屬 docs/workflow-diet.md 第 4 條「money」——先證過紅：把
+# `schedule_creative()` 改回用 `_latest_task_row()` 重讀最新的 schedule_tree，這支立刻
+# 抓到（斷言接住的是 `source_tree_task_id` 對不上，不是隨便崩潰在別的地方）。
+TEST_LINES_CEILING = 14740
 
 
 def _line_totals() -> tuple:
@@ -579,8 +605,12 @@ KNOWN_MODULE_SIZES = {
                   # provider，原本不經 run_task() 所以完全繞過上限。7 行＝import gateway ＋
                   # 打 provider 前先問 check_spend_cap()。前一次是本機 codex CLI 線路
                   # （c47bc36）的 546：main.py 依環境變數換供應商
-    "app/background": 215,  # 2026-08-29 修 Windows 起不來：worker 移到自己的執行緒／loop
-                            # ＋起不來不得弄死網站（ADR 0039 amended）
+    "app/background": 272,  # 票 05-1：新增 enqueue()（defer 一個 job，同一個 lock 已經在
+                             # todo 排隊就回 False）＋模組私有的 `_sync_app_for_defer()`
+                             # （接 SyncPsycopgConnector，不能借 app() 那顆 async connector
+                             # 的 pool，理由見模組檔頭「enqueue() 為什麼要蓋第二個 App」）。
+                             # 前一次是 215——2026-08-29 修 Windows 起不來：worker 移到自己
+                             # 的執行緒／loop＋起不來不得弄死網站（ADR 0039 amended）
                              # 掛進既有 process，不再只有 app()
     "app/brand_intelligence": 2634,
     "app/brand_web": 2091,  # 2026-08-30 刪失效規則卡（小債）：autonomy 那張卡的兩處專屬
@@ -625,7 +655,19 @@ KNOWN_MODULE_SIZES = {
     "app/orders": 1423,  # 票 12：channel_revenue 一張表取代三張（刪掉藥局專屬那一整組
                           # 之後仍淨增）——官網帳本寫入路徑、channel_revenue_summary()、
                           # 通用手動登錄（含「官網不能手動登錄」那道錢的守門）
-    "app/schedule": 1288,  # 2026-08-30 票 04-1b 組織時區：`_current_month_window()` 收
+    "app/schedule": 1452,  # 票 05-1 fix round 1（money）：`schedule_tree`／
+                           # `schedule_creative` 過去在 job 執行時用 `_latest_task_row()`
+                           # 重讀「這個品牌最新一次」來源列——frozen decision 3 的
+                           # 「一次一個」是按 task type 算的，擋不住兩種工作交錯排隊那段
+                           # 窗口，job 真的跑到時可能撿到別種工作插隊留下的新 running
+                           # 列，照著錯的（甚至空的）內容打代理，花錢。改成 enqueue 當下
+                           # 把來源列 id 釘進 job 參數（`plan_task_id`／`tree_task_id`），
+                           # job 只認這個 id。前一次是 1433——
+                           # 票 05-1：三個生成端點不再在 request 裡打代理（POST 只驗證＋
+                           # enqueue＋409），真正打代理的程式碼搬進新檔 jobs.py（含
+                           # register_tasks()）——routes.py 淨減（798 → 661 行），jobs.py
+                           # 新增 265 行，套件總數淨增。前一次是 1288——
+                           # 2026-08-30 票 04-1b 組織時區：`_current_month_window()` 收
                             # (conn, org_id)、`_approval_overspend()` 的今天改問
                             # `today_for_org()`（＋3 行）。前一次是 1285——
                             # 2026-08-30 scope_ref 修正：改存被核准那棵樹的 id（＋2 行註解，

@@ -787,6 +787,50 @@ class AiSpendCapGateTest(unittest.TestCase):
         # 這裡只驗「不擋」，兩層各自證各自的主張，不重複組一份一樣的斷言。
 
 
+class FailInterruptedTasksTest(unittest.TestCase):
+    """票 05-1 frozen decision 2：process 重啟時，上一個 process 死掉留下的 `llm_task`
+    running 列要標記失敗，絕不自動重跑——`succeeded` 的列原封不動。守的是資料正確性：
+    一列真的中斷的工作，重啟後不能還顯示「還在跑」（畫面永遠出不了那個狀態，就是這張票
+    要修的 bug）。"""
+
+    def setUp(self):
+        self.conn = db.current()
+        self.brand = repo.create_brand(
+            self.conn, name="品牌（interrupted 測試）", client_name=None, actor="小陳",
+            org_id=db.DEV_ORG_ID,
+        )
+
+    def _insert(self, status: str) -> str:
+        row_id = db.new_id("llm")
+        self.conn.execute(
+            "INSERT INTO llm_task (id, org_id, brand_id, task_type, context_scope_json,"
+            " input_context_ids_json, input_context_hash, knowledge_item_ids_json,"
+            " brand_version, prompt_template_id, prompt_template_version, provider, model,"
+            " status, attempt_no, started_at)"
+            " VALUES (%s, %s, %s, 'schedule_plan', '{}', '[]', '', '[]', 1, 'p', 'v1',"
+            " 'seed', 'seed', %s, 1, %s)",
+            (row_id, db.DEV_ORG_ID, self.brand["id"], status, db.now_utc()),
+        )
+        self.conn.commit()
+        return row_id
+
+    def test_running_becomes_failed_succeeded_is_left_alone(self):
+        running_id = self._insert("running")
+        succeeded_id = self._insert("succeeded")
+
+        count = gateway.fail_interrupted_tasks(self.conn)
+        self.assertGreaterEqual(count, 1)
+
+        running_row = gateway.get_task(self.conn, running_id)
+        self.assertEqual(running_row["status"], "failed")
+        self.assertEqual(running_row["error"], gateway.INTERRUPTED_TASK_ERROR)
+        self.assertIsNotNone(running_row["finished_at"])
+
+        succeeded_row = gateway.get_task(self.conn, succeeded_id)
+        self.assertEqual(succeeded_row["status"], "succeeded")
+        self.assertIsNone(succeeded_row["error"])
+
+
 class ParseJsonReplyShapeTest(unittest.TestCase):
     """守 API 契約：parse_json_reply 絕不回傳模型沒送出的形狀（六個呼叫端共用這一支）。
 

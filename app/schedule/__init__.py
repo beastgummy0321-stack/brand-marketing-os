@@ -1,15 +1,25 @@
-"""app/schedule/__init__.py — single entry point (container contract §1, ticket 07).
+"""app/schedule/__init__.py — single entry point (container contract §1, ticket 07, 票 05-1)。
 
 Shapes other modules may use:
     register(app: FastAPI) -> None    # mounts /api/schedule/*
+    register_tasks() -> None          # idempotently registers the three generation
+                                       # procrastinate tasks against the current
+                                       # app.background.app() (票 05-1)
 
-Everything else in this package (`plan.py`, `tree.py`, `creative.py`, `routes.py`) is private —
-nothing outside this package imports them. Callers: `app/main.py`'s register loop, and nothing
-else.
+Everything else in this package (`plan.py`, `tree.py`, `creative.py`, `routes.py`, `jobs.py`)
+is private — nothing outside this package imports them. Callers: `app/main.py`'s register loop
+(both exports, `register_tasks()` called once right after the loop, same spot as
+`meta_module.register_task()`) and app/tests (which call `register_tasks()` again after they
+get their own test module's fresh `background.app()` — see `app/schedule/jobs.py`'s
+`register_tasks()` docstring for why that second call is needed, not optional, same reason
+`app/meta/daily_pull.py` already documents).
 
 Depends on `app.core` (db, rule_cards), `app.llm` (gateway, providers, context_compiler,
-methodology), `app.shared.web`, `app.brand_intelligence.repository`. Does not import or
-touch `app.main`, any other module's tables, or `procrastinate_*`.
+methodology), `app.shared.web`, `app.brand_intelligence.repository`, `app.background`
+(forward dependency for `enqueue()`/`register_tasks()`'s target App, LAYER_ORDER already
+allows it — same pattern `app.meta` uses). Does not import or touch `app.main`, any other
+module's tables, or `procrastinate_*` internals directly — `app.background` is the only door
+to procrastinate, this package's own module docstring in `routes.py` promises that.
 
 No `app.core.cleanup` registration: this module owns no table of its own — the record is
 `llm_task` (ADR 0032), which lives in `app.llm`'s territory — so a brand deletion has
@@ -24,3 +34,10 @@ def register(app: FastAPI) -> None:
     from app.schedule import routes as schedule_routes
 
     app.include_router(schedule_routes.router)
+
+
+def register_tasks() -> None:
+    """票 05-1：掛三個生成 task（出方案／展開活動樹／產內容），冪等。見 jobs.py。"""
+    from app.schedule import jobs as schedule_jobs
+
+    schedule_jobs.register_tasks()

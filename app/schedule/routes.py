@@ -28,6 +28,18 @@ ADR 0028／0029／0032／0033：部門是 repo 裡的一個資料夾
 都吃 `Conn`（非 `ConnProxy`），比照 `app/intake/persona_generation.py`／
 `app/brand_web/product_ai_calls.py` 既有寫法——`conn` 參數留白讓 pyright 用型別
 不定（Unknown）通過，呼叫端只在路由這一層傳入真正的 `web.conn`。
+
+票 05-1：三個生成端點（POST .../plans、.../tree、.../creative）不再在這支 request 裡打代理
+（本檔頭原本那句「兩到六分鐘」的阻塞 POST，process 被殺掉就留一列 `llm_task` 永遠卡在
+`running`，畫面永遠出不了那個狀態）。這裡現在只做四件事：驗證（跟改之前逐字一樣的次序、
+代碼、訊息）＋`gateway.check_spend_cap()`；查 `_display_task_row()` 有沒有一次還在跑，是就
+409；`background.enqueue()`，`False`（同一個 lock 已經排隊）也是同一個 409；回
+`_brand_response()`——跟 GET 回的形狀一模一樣，`plan`／`tree`／`creative` 在剛排進去、worker
+還沒撿走的那一刻可能還是 null（如果是第一次跑）或上一次成功的結果（如果是重跑）。真正打
+代理、寫 `llm_task` 的程式碼搬進 `app/schedule/jobs.py`（procrastinate task body，
+`register_tasks()` 掛給 `app.background`），因為 `app/schedule` 自己永遠不 import
+`procrastinate`（本模組既有的界線）；enqueue／worker 過場的通用機制在 `app/background`，
+不在這裡重寫第二份。
 """
 
 import hashlib
@@ -38,12 +50,13 @@ from fastapi import APIRouter, Request
 from pydantic import BaseModel
 
 import app.shared.web as web
+from app.background import enqueue as background_enqueue
 from app.brand_intelligence import repository as bi_repo
 from app.core import approval as approval_mod
 from app.core import rule_cards
 from app.core import settings as coresettings
 from app.core.db import APP_DIR, jsonb
-from app.llm import context_compiler, gateway, methodology, providers
+from app.llm import gateway
 from app.meta import repository as meta_repo
 from app.schedule import creative as creative_mod
 from app.schedule import plan as plan_mod
@@ -72,9 +85,13 @@ CREATIVE_DEPARTMENT_FILE = APP_DIR / "departments" / "creative" / "ad_creative.m
 # （不快取到模組層），比照 DEPARTMENT_FILE 既有的讀法。
 PLATFORM_DATA_FILE = APP_DIR / "schedule" / "platform_objectives.json"
 
-# 唯一的供應商實例，比照 app/brand_web/routes_library.py 既有寫法：測試用
-# `mock.patch.object(routes, "PROVIDER", FakeProvider(...))` 換掉，不動這裡的呼叫端程式碼。
-PROVIDER = providers.AnthropicProvider()
+# 票 05-1：這一份端點驗證通過就 enqueue，第二次按下去在這一份 llm_task 列還在跑的時候
+# 一律回這個訊息——三支端點共用同一個 code／message，不必各自造一句。
+ALREADY_RUNNING_MESSAGE = "上一次還在跑，請等它跑完再按。"
+
+
+def _already_running_error() -> web.ApiError:
+    return web.ApiError(409, "already_running", ALREADY_RUNNING_MESSAGE)
 
 
 class PlanRequest(BaseModel):
@@ -362,145 +379,48 @@ def _validate_plan_count(conn, brand_id: str, plan_count: int) -> None:
         )
 
 
-def _compile_brand_context(conn, brand_id: str, product_ids: list) -> tuple:
-    """對每個選定產品各跑一次 `context_compiler.compile()`，用空行接起來；`knowledge_item_ids`
-    取聯集、保留原順序去重（票 07 settled 段「品牌上下文」）。回傳 (prompt 片段,
-    knowledge_item_ids, brand_version)。
-
-    ponytail: 品牌層段落（規則／宣稱／品牌事實）會隨產品數重複出現——每個產品各自一次
-    compile()，沒有跨產品去重這件事。這是票 07 明文接受的上限（最薄路徑，先求打通），
-    真的因為 prompt 太長而困擾時再考慮把品牌層與產品層拆開各編一次。
-    """
-    texts, knowledge_item_ids, seen = [], [], set()
-    brand_version = None
-    for product_id in product_ids:
-        text, ids, brand_version, _product_version = context_compiler.compile(
-            conn, brand_id, product_id
-        )
-        texts.append(text)
-        for kid in ids:
-            if kid not in seen:
-                seen.add(kid)
-                knowledge_item_ids.append(kid)
-    return "\n\n".join(texts), knowledge_item_ids, brand_version
-
-
-def _plan_params_text(platform_label: str, objective_label: str, promotion_note: str,
-                       plan_count: int, product_names: list) -> str:
-    """這次排程的參數，原樣列給代理看——平台／目標的人話標籤都是呼叫端從資料檔查出來的，
-    不是這裡自己編的（票 08：CONTEXT.md 的三詞界線只管外殼自己造詞，轉述資料檔內容不算）。
-    產品名稱同理，是 `product` 表裡使用者自己打的字；見 `_validate_products` 為什麼非列不可。"""
-    return "\n".join([
-        "## 這次排程的參數",
-        f"平台：{platform_label}",
-        f"這期要投放的產品：{'、'.join(product_names)}",
-        f"行銷目標：{objective_label}",
-        f"促銷或重點：{promotion_note or '（未填寫）'}",
-        f"要幾個方案：{plan_count}",
-    ])
-
-
 NO_PLAN_TO_EXPAND_MESSAGE = "還沒有成功產生的方案可以展開，請先完成排程。"
 PLAN_INDEX_OUT_OF_RANGE_MESSAGE = "找不到這個方案編號，請重新選擇。"
-
-
-def _tree_params_text(platform_label: str, plan_index: int, chosen_plan: dict) -> str:
-    """這次要展開的參數：選定的第幾個方案、方案本身的摘要／理由／每個方向的比例與金額，
-    原樣列給代理看——跟 `_plan_params_text` 同一個道理，平台標籤是呼叫端從資料檔查出來的，
-    方案內容是使用者已經看過、選定的那張卡片，不是這裡自己編的。"""
-    lines = [
-        "## 這次要展開的參數",
-        f"平台：{platform_label}",
-        f"選定的方案（第 {plan_index + 1} 個）摘要：{chosen_plan['summary']}",
-        f"這個方案的理由：{chosen_plan['reasoning']}",
-        "這個方案裡錢怎麼分：",
-    ]
-    for split in chosen_plan["splits"]:
-        lines.append(
-            f"- {split['label']}：{split['share'] * 100:.0f}%，"
-            f"每日 {split['daily_amount']} 元（{split['why']}）"
-        )
-    return "\n".join(lines)
+NO_TREE_TO_GENERATE_CREATIVE_MESSAGE = "還沒有成功展開的活動樹可以產出內容，請先展開活動樹。"
 
 
 def _run_tree(conn, brand_id: str, org_id: str, body: "TreeRequest") -> dict:
-    """票 09：選定一個既有方案，展開成三層活動樹——重讀最新一次 `schedule_plan` 那列
-    `llm_task`（凍結的預算／平台），選出 `body.plan_index` 那個方案，交給
-    `campaign_tree.md` 展開。找不到成功的方案、或方案編號超出範圍，都在打代理之前回
-    人話 400（比照 `_run_plan` 的「先驗證、後花錢」次序）。"""
+    """票 09：選定一個既有方案，展開成三層活動樹。票 05-1：這裡只做驗證——重讀最新一次
+    `schedule_plan` 那列 `llm_task`（凍結的預算／平台），確認 `body.plan_index` 落在這批
+    方案的範圍內；找不到成功的方案、或方案編號超出範圍，都在 enqueue 之前回人話 400
+    （比照 `_run_plan` 的「先驗證、後花錢」次序）。真正展開活動樹在
+    `app/schedule/jobs.py` 的 `schedule_tree()`（worker 執行，見該檔檔頭）——`plan_row["id"]`
+    在這裡（enqueue 當下）就釘進 job 參數，job 執行時不重讀「這個品牌最新一次」（fix
+    round 1：frozen decision 3 的「一次一個」是按 task type 算的，這中間可能已經有另一種
+    工作的新列插進來）。"""
     plan_row = _latest_task_row(conn, brand_id, TASK_TYPE)
     if plan_row is None or plan_row["status"] != "succeeded":
         raise web.ApiError(400, "no_plan", NO_PLAN_TO_EXPAND_MESSAGE)
 
     plan_scope = plan_row.get("context_scope_json") or {}
     daily_budget = plan_scope.get("daily_budget", 0)
-    product_ids = plan_scope.get("product_ids", [])
-    platform = plan_scope.get("platform", "")
-
     plans, failure = plan_mod.build_plans(plan_row.get("rendered_output") or "", daily_budget)
     if failure is not None or not (0 <= body.plan_index < len(plans)):
         raise web.ApiError(400, "plan_index_out_of_range", PLAN_INDEX_OUT_OF_RANGE_MESSAGE)
-    chosen_plan = plans[body.plan_index]
 
-    data = _load_platform_data()
-    platform_label = next((p["label"] for p in data["platforms"] if p["id"] == platform), platform)
-
-    brand_context, knowledge_item_ids, brand_version = _compile_brand_context(
-        conn, brand_id, product_ids
-    )
-    department_text = TREE_DEPARTMENT_FILE.read_text(encoding="utf-8")
-    methodology_result = methodology.compile(conn, METHODOLOGY_TASK_LABELS, brand_id=brand_id)
-    params_text = _tree_params_text(platform_label, body.plan_index, chosen_plan)
-    prompt = "\n\n".join(
-        section for section in
-        (department_text, methodology_result.text, params_text, brand_context) if section
-    )
-
-    context = gateway.TaskContext(
-        # 票 09 settled 段第 6 點：預算凍結自選定方案的來源列，不重讀規則卡——樹要跟使用者
-        # 選的那張方案卡一致，不是跟當下的規則卡設定一致。
-        context_scope={
-            "brand_id": brand_id, "plan_index": body.plan_index, "daily_budget": daily_budget,
-            "source_plan_task_id": plan_row["id"],
-        },
-        knowledge_item_ids=knowledge_item_ids,
-        brand_version=brand_version,
-        product_version=None,
-    )
-    gateway.run_task(
-        conn, PROVIDER, brand_id=brand_id, task_type=TREE_TASK_TYPE,
-        prompt_template_id=TREE_TASK_TYPE, prompt_template_version="v1",
-        system=None, messages=[{"role": "user", "content": prompt}], context=context,
-        # 展開一棵三層樹比出方案重得多，兩個數字都不是猜的，來源是本系統自己的量測：
-        # llm_01M16CM5CS8Q435MVWEJ5BYA9D 的 output_tokens 剛好 16000（TaskOptions 的預設）
-        # 而且字串停在 `"value": "最大化轉換次`——撞上限被切斷，不是模型亂回。24000 是那個
-        # 已知不夠的數字的 1.5 倍；以同一批量測的 53.9 tok/s（見 TaskOptions.timeout_s 註解）
-        # 換算需要 445 秒，所以 timeout 一起抬到 480，仍在 SDK 非串流的 600 秒上限之內。
-        # 兩個數字必須一起動：只抬 max_tokens 會把「被截斷」換成「逾時」。
-        options=gateway.TaskOptions(max_tokens=24000, timeout_s=480.0),
-    )
+    gateway.check_spend_cap(conn, org_id=org_id)
+    if _display_task_row(conn, brand_id, TREE_TASK_TYPE)[1]:
+        raise _already_running_error()
+    if not background_enqueue(
+        f"background.{TREE_TASK_TYPE}", org_id=org_id, lock=f"{TREE_TASK_TYPE}:{brand_id}",
+        brand_id=brand_id, plan_index=body.plan_index, plan_task_id=plan_row["id"],
+    ):
+        raise _already_running_error()
     return _brand_response(conn, brand_id, org_id)
 
 
-NO_TREE_TO_GENERATE_CREATIVE_MESSAGE = "還沒有成功展開的活動樹可以產出內容，請先展開活動樹。"
-
-
-def _creative_params_text(tree: dict) -> str:
-    """這次要產內容的活動結構，原樣列給代理看——跟 `_tree_params_text` 同一個道理，這裡
-    不解讀 tree 的內容，只把已經算好的 JSON 轉成代理看得懂的字串，好讓代理知道每個最深層
-    節點屬於哪個上層、已經有什麼欄位／提醒。"""
-    body = {"levels": tree["levels"], "nodes": tree["nodes"]}
-    return "\n".join([
-        "## 這次要產文案的活動結構",
-        json.dumps(body, ensure_ascii=False, indent=2),
-    ])
-
-
 def _run_creative(conn, brand_id: str, org_id: str) -> dict:
-    """票 01：把已展開的活動樹每個最深層節點各配一份內容——重讀最新一次成功的
-    `schedule_tree` 那列，把它的 id 凍結進這次任務的 `context_scope_json`（frozen decision
-    5：之後使用者重新展開樹，不會悄悄改寫已經產出的內容）。找不到成功的樹、或樹沒有任何
-    最深層節點，都在打代理之前回人話 400（比照 `_run_tree` 的「先驗證、後花錢」次序）。"""
+    """票 01：把已展開的活動樹每個最深層節點各配一份內容。票 05-1：這裡只做驗證——重讀
+    最新一次成功的 `schedule_tree` 那列，確認它至少有一個最深層節點；找不到成功的樹、或
+    樹沒有任何最深層節點，都在 enqueue 之前回人話 400（比照 `_run_tree` 的
+    「先驗證、後花錢」次序）。真正產內容、把來源樹的 id 凍結進 `context_scope_json`
+    （frozen decision 5）在 `app/schedule/jobs.py` 的 `schedule_creative()`——`tree_row["id"]`
+    同樣在這裡釘進 job 參數，理由見 `_run_tree()` 的 fix round 1 註解。"""
     tree_row = _latest_task_row(conn, brand_id, TREE_TASK_TYPE)
     if tree_row is None or tree_row["status"] != "succeeded":
         raise web.ApiError(400, "no_tree", NO_TREE_TO_GENERATE_CREATIVE_MESSAGE)
@@ -509,44 +429,23 @@ def _run_creative(conn, brand_id: str, org_id: str) -> dict:
     if not ad_node_names:
         raise web.ApiError(400, "no_tree", NO_TREE_TO_GENERATE_CREATIVE_MESSAGE)
 
-    plan_scope = tree_row.get("context_scope_json") or {}
-    plan_row = gateway.get_task(conn, plan_scope.get("source_plan_task_id") or "")
-    plan_row_scope = (plan_row.get("context_scope_json") or {}) if plan_row else {}
-    product_ids = plan_row_scope.get("product_ids", [])
-
-    brand_context, knowledge_item_ids, brand_version = _compile_brand_context(
-        conn, brand_id, product_ids
-    )
-    department_text = CREATIVE_DEPARTMENT_FILE.read_text(encoding="utf-8")
-    params_text = _creative_params_text(tree)
-    prompt = "\n\n".join(
-        section for section in (department_text, params_text, brand_context) if section
-    )
-
-    context = gateway.TaskContext(
-        # frozen decision 5：字面契約只有這三個鍵——凍結來源樹的 id，不是凍結當下算出的
-        # 節點名稱清單，讀回來的時候（`_creative_ad_node_names`）永遠重新從這棵凍結的樹算。
-        context_scope={
-            "brand_id": brand_id, "source_tree_task_id": tree_row["id"],
-            "plan_index": tree["plan_index"],
-        },
-        knowledge_item_ids=knowledge_item_ids,
-        brand_version=brand_version,
-        product_version=None,
-    )
-    gateway.run_task(
-        conn, PROVIDER, brand_id=brand_id, task_type=CREATIVE_TASK_TYPE,
-        prompt_template_id=CREATIVE_TASK_TYPE, prompt_template_version="v1",
-        system=None, messages=[{"role": "user", "content": prompt}], context=context,
-        # frozen decision 6：跟 `_run_tree` 完全相同的兩個數字，來源見那裡的註解——不是
-        # 新猜的，是同一批量測的重用；這裡不重新量測、不重新定義。
-        options=gateway.TaskOptions(max_tokens=24000, timeout_s=480.0),
-    )
+    gateway.check_spend_cap(conn, org_id=org_id)
+    if _display_task_row(conn, brand_id, CREATIVE_TASK_TYPE)[1]:
+        raise _already_running_error()
+    if not background_enqueue(
+        f"background.{CREATIVE_TASK_TYPE}", org_id=org_id,
+        lock=f"{CREATIVE_TASK_TYPE}:{brand_id}", brand_id=brand_id, tree_task_id=tree_row["id"],
+    ):
+        raise _already_running_error()
     return _brand_response(conn, brand_id, org_id)
 
 
 def _run_plan(conn, brand_id: str, org_id: str, body: "PlanRequest") -> dict:
-    product_names = _validate_products(conn, brand_id, body.product_ids)
+    """票 07／08：出 N 個方案。票 05-1：這裡只做驗證（產品／平台／目標／方案數存在且
+    合法、日預算已設定、月費上限沒破）＋enqueue；真正打代理、寫 prompt 在
+    `app/schedule/jobs.py` 的 `schedule_plan()`（worker 執行，見該檔檔頭「為什麼分兩邊」）。
+    """
+    _validate_products(conn, brand_id, body.product_ids)
     data = _load_platform_data()
     _validate_platform_and_objective(data, body.platform, body.objective)
     _validate_plan_count(conn, brand_id, body.plan_count)
@@ -555,48 +454,16 @@ def _run_plan(conn, brand_id: str, org_id: str, body: "PlanRequest") -> dict:
     if not daily_budget:
         raise web.ApiError(400, "budget_not_set", plan_mod.BUDGET_NOT_SET_MESSAGE)
 
-    platform_label = next(p["label"] for p in data["platforms"] if p["id"] == body.platform)
-    objective_label = next(
-        o["label"] for o in data["objectives"]
-        if o["platform"] == body.platform and o["value"] == body.objective
-    )
-
-    brand_context, knowledge_item_ids, brand_version = _compile_brand_context(
-        conn, brand_id, body.product_ids
-    )
-    department_text = DEPARTMENT_FILE.read_text(encoding="utf-8")
-    methodology_result = methodology.compile(conn, METHODOLOGY_TASK_LABELS, brand_id=brand_id)
-    params_text = _plan_params_text(
-        platform_label, objective_label, body.promotion_note, body.plan_count, product_names
-    )
-    prompt = "\n\n".join(
-        section for section in
-        (department_text, methodology_result.text, params_text, brand_context) if section
-    )
-
-    context = gateway.TaskContext(
-        # 這次跑的參數凍結在跑的當下（票 07 settled 段「No migration」延伸到票 08 的新
-        # 欄位）：之後改規則卡或資料檔不會悄悄改寫這張已經出過的方案。
-        context_scope={
-            "brand_id": brand_id, "product_ids": body.product_ids, "daily_budget": daily_budget,
-            "platform": body.platform, "objective": body.objective,
-            "promotion_note": body.promotion_note, "plan_count": body.plan_count,
-            # plan_count 票 10-feedback-entries 補：拒絕方案重排要能原樣重跑同一組參數，
-            # 缺了這欄會找不到「上次要幾個方案」。
-        },
-        knowledge_item_ids=knowledge_item_ids,
-        brand_version=brand_version,
-        product_version=None,  # 一次任務跨 N 個產品，這個欄位只吃單一值，見票 07 settled 段
-    )
-    gateway.run_task(
-        conn, PROVIDER, brand_id=brand_id, task_type=TASK_TYPE,
-        prompt_template_id=TASK_TYPE, prompt_template_version="v1",
-        system=None, messages=[{"role": "user", "content": prompt}], context=context,
-        # 開網路搜尋（ADR 0005）：代理排方案前先查這期有沒有真正相關的節慶或時事（票 08）。
-        # 查詢不是排程的先決條件——查不到、查失敗，run_task 本身不受影響，一樣正常出方案
-        # （見 app/llm/providers.py AnthropicProvider.complete() 對搜尋結果區塊的處理）。
-        options=gateway.TaskOptions(tools=[providers.WEB_SEARCH_TOOL]),
-    )
+    gateway.check_spend_cap(conn, org_id=org_id)
+    if _display_task_row(conn, brand_id, TASK_TYPE)[1]:
+        raise _already_running_error()
+    if not background_enqueue(
+        f"background.{TASK_TYPE}", org_id=org_id, lock=f"{TASK_TYPE}:{brand_id}",
+        brand_id=brand_id, product_ids=body.product_ids, platform=body.platform,
+        objective=body.objective, promotion_note=body.promotion_note,
+        plan_count=body.plan_count,
+    ):
+        raise _already_running_error()
     return _brand_response(conn, brand_id, org_id)
 
 

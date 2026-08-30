@@ -111,6 +111,15 @@ export function SchedulePage({ brandId }: { brandId: string }) {
     Promise.all([fetchProductList(brandId), fetchSchedule(brandId)])
       .then(([products, schedule]) => {
         setState({ status: "ready", products, schedule });
+        // 票 05-1：出方案／展開／產內容三支 POST 現在排進佇列、幾百毫秒就回來——按下去那一刻
+        // 設的這三個旗標不能在 POST 的 finally 就清掉，那會在 worker 真的插進 llm_task 那一列
+        // 之前把 runningNow 提早關掉，2 秒輪詢永遠不會啟動。改在這裡（每次 load() 成功都會
+        // 經過，輪詢也是靠它跑）清：worker 真的還在跑，schedule.*.running 會是 true 撐住
+        // runningNow，這裡清掉 submitting 不影響畫面顯示「還在跑」；worker 已經死了，這裡清
+        // 掉之後 runningNow 一起變 false，畫面自己退回 idle。不設逾時常數，自己會收斂。
+        setSubmitting(false);
+        setExpandingIndex(null);
+        setGeneratingCreative(false);
         // 上次送出的平台／目標要一起還原——目標是掛在平台底下的，只還原一個會讓選單顯示
         // 不在自己選項裡的值；選項來自資料檔、會變，對不上就退回第一個選項。
         const last = schedule.plan;
@@ -173,8 +182,8 @@ export function SchedulePage({ brandId }: { brandId: string }) {
       setFeedbackByPlan({}); // 新的一批方案，舊方案卡上寫的回饋不再對得上號
     } catch (err) {
       setSubmitError(err instanceof Error ? err.message : "排程失敗，請稍後再試。");
-    } finally {
-      setSubmitting(false);
+      setSubmitting(false); // 票 05-1：成功時不在這裡清，見 load() 註解；失敗（含 409）沒有
+      // 後續的輪詢會清，這裡不清就永遠鎖住按鈕。
     }
   }
 
@@ -186,8 +195,7 @@ export function SchedulePage({ brandId }: { brandId: string }) {
       setState((prev) => (prev.status === "ready" ? { ...prev, schedule } : prev));
     } catch (err) {
       setExpandError(err instanceof Error ? err.message : "展開失敗，請稍後再試。");
-    } finally {
-      setExpandingIndex(null);
+      setExpandingIndex(null); // 票 05-1：理由同 handleStart 的 catch
     }
   }
 
@@ -238,8 +246,7 @@ export function SchedulePage({ brandId }: { brandId: string }) {
       setState((prev) => (prev.status === "ready" ? { ...prev, schedule } : prev));
     } catch (err) {
       setCreativeError(err instanceof Error ? err.message : "產出失敗，請稍後再試。");
-    } finally {
-      setGeneratingCreative(false);
+      setGeneratingCreative(false); // 票 05-1：理由同 handleStart 的 catch
     }
   }
 
@@ -267,7 +274,11 @@ export function SchedulePage({ brandId }: { brandId: string }) {
       { length: Math.max(schedule.plan_count_max - schedule.plan_count_min + 1, 0) },
       (_, i) => schedule.plan_count_min + i,
     );
-    const canConfirm = selectedIds.length > 0 && platform !== "" && objective !== "";
+    // 票 05-1 驗收回饋：出方案已經排進佇列在跑的時候，不准再按一次——後端本來就會回 409
+    // （同一個品牌同一種工作一次一份），畫面先擋掉才不會讓人按了才吃到錯誤訊息。
+    const planRunning = Boolean(schedule.plan?.running);
+    const canConfirm =
+      selectedIds.length > 0 && platform !== "" && objective !== "" && !planRunning;
 
     content = (
       <div className="flex flex-col gap-4">
@@ -394,7 +405,7 @@ export function SchedulePage({ brandId }: { brandId: string }) {
               <button
                 type="button"
                 onClick={handleStart}
-                disabled={submitting}
+                disabled={submitting || planRunning}
                 className="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {submitting ? "排程中…" : "開始排程"}
@@ -403,6 +414,15 @@ export function SchedulePage({ brandId }: { brandId: string }) {
           </div>
         )}
 
+        {/* 票 05-1 驗收回饋：`submitting` 也要算——按下去到第一次輪詢之間（約 2 秒）伺服器
+            還沒有那一列 running，只靠 planRunning 會有一段畫面看起來什麼都沒發生，而確認框
+            在送出成功那一刻就收起來了。量到的時間來自 llm_task 實測（平均 106 秒、最久 171
+            秒），不是估的。 */}
+        {(planRunning || submitting) && (
+          <p className="rounded-md border border-dashed border-border bg-muted/40 p-3 text-sm text-muted-foreground">
+            出方案中…這一步通常要 1 到 3 分鐘，可以先離開這一頁，回來會自己接上。
+          </p>
+        )}
         {schedule.plan && (
           <PlanResult
             plan={schedule.plan}

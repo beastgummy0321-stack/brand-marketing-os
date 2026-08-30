@@ -8,6 +8,13 @@ API 契約（含 ADR 0029「原樣貼進 prompt」的可驗證證據、票 08 �
 不得寫死通路詞彙這道機器閘門。全程只用 FakeProvider，不發任何真實網路請求；網路搜尋工具
 本身怎麼解析 SDK 回應（成功／出錯兩種形狀）不在這裡測，那是 `AnthropicProvider.complete()`
 的責任，見 test_llm_web_search.py。
+
+票 05-1：三支 POST（.../plans、.../tree、.../creative）不再在 request 裡打代理，改
+`background.enqueue()` 排進佇列——POST 回來的當下代理還沒被打過，`plan`／`tree`／`creative`
+可能還是上一次的內容或 null。凡是要看「代理真的跑完之後」那個結果的測試，都得先
+`self._run_worker()`（POST → commit → `background.app().run_worker(wait=False)` → 再
+GET），跟 `app/tests/test_meta_daily_spend.py:351-363` 已經在用的 QueueWiringTest 同一個
+寫法；只驗證同步驗證行為（400、404）的測試不受影響，那些仍在 enqueue 之前擋下。
 """
 
 import json
@@ -18,7 +25,9 @@ from unittest import mock
 
 from fastapi.testclient import TestClient
 
+import app.background as background_module
 import app.main as main
+import app.schedule as schedule_module
 import app.shared.web as web
 from app.brand_intelligence import repository as bi_repo
 from app.core import db as coredb
@@ -27,6 +36,7 @@ from app.identity import repository as identity_repo
 from app.llm import providers
 from app.meta import graph as meta_graph
 from app.meta import repository as meta_repo
+from app.schedule import jobs as schedule_jobs
 from app.schedule import plan as plan_mod
 from app.schedule import routes as schedule_routes
 from app.schedule import tree as tree_mod
@@ -286,6 +296,11 @@ class CampaignTreeVocabularyGateTest(unittest.TestCase):
 class _ScheduleApiTestBase(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(main.app)
+        # 票 05-1：這個測試模組自己有一份 schema（見 conftest.py），這個模組自己那份
+        # `background.app()` 要重新掛一次三個生成 task——DSN 換了 App 整顆重建，跟
+        # test_meta_daily_spend.py `daily_pull.register_task()` 同一個理由（見
+        # app/schedule/__init__.py 的 register_tasks() 檔頭）。
+        schedule_module.register_tasks()
         self.brand = bi_repo.create_brand(
             web.conn, org_id=coredb.DEV_ORG_ID, name="測試品牌：晨露茶飲",
             client_name=None, actor=ACTOR,
@@ -297,10 +312,17 @@ class _ScheduleApiTestBase(unittest.TestCase):
             web.conn, self.brand["id"], "schedule_budget", "daily_budget", 3000.0,
             ACTOR, org_id=coredb.DEV_ORG_ID,
         )
-        self._orig_provider = schedule_routes.PROVIDER
+        self._orig_provider = schedule_jobs.PROVIDER
 
     def tearDown(self):
-        schedule_routes.PROVIDER = self._orig_provider
+        schedule_jobs.PROVIDER = self._orig_provider
+
+    def _run_worker(self) -> None:
+        """票 05-1：POST 現在只 enqueue，真正打代理在 worker 裡——`web.conn.commit()` 先把
+        這個 request 留下的異動送出去，job 自己開一條新連線，看不到還沒 commit 的交易
+        （test_meta_daily_spend.py:351-363 QueueWiringTest 已經在用同一個寫法）。"""
+        web.conn.commit()
+        background_module.app().run_worker(wait=False)
 
     def _make_org(self, suffix: str) -> tuple:
         org_id = f"org_schedule_test_{suffix}"
@@ -346,11 +368,12 @@ class PlanApiContractTest(_ScheduleApiTestBase):
 
     def test_post_returns_n_plan_cards_and_prompt_carries_department_file(self):
         fake = _fake(_fenced_plans([_one_plan(), _one_plan(summary="第二個方案")]))
-        schedule_routes.PROVIDER = fake
+        schedule_jobs.PROVIDER = fake
 
         resp = self._post(plan_count=2)
         self.assertEqual(resp.status_code, 200, resp.text)
-        body = resp.json()
+        self._run_worker()
+        body = self.client.get(f"/api/schedule/brands/{self.brand['id']}").json()
         plan = body["plan"]
         self.assertIsNone(plan["failure"])
         self.assertEqual(plan["product_ids"], [self.product["id"]])
@@ -365,10 +388,13 @@ class PlanApiContractTest(_ScheduleApiTestBase):
         self.assertIn("SCHEDULE-PLAN-TASK-V1", prompt_text)
 
     def test_get_after_post_returns_identical_plans(self):
-        schedule_routes.PROVIDER = _fake(_fenced_plans([_one_plan()]))
-        post_resp = self._post(plan_count=1)
-        get_resp = self.client.get(f"/api/schedule/brands/{self.brand['id']}")
-        self.assertEqual(post_resp.json()["plan"], get_resp.json()["plan"])
+        schedule_jobs.PROVIDER = _fake(_fenced_plans([_one_plan()]))
+        resp = self._post(plan_count=1)
+        self.assertEqual(resp.status_code, 200, resp.text)
+        self._run_worker()
+        get_resp_1 = self.client.get(f"/api/schedule/brands/{self.brand['id']}")
+        get_resp_2 = self.client.get(f"/api/schedule/brands/{self.brand['id']}")
+        self.assertEqual(get_resp_1.json()["plan"], get_resp_2.json()["plan"])
 
     def test_budget_not_set_refuses_before_calling_agent(self):
         rule_cards.set_value(
@@ -376,7 +402,7 @@ class PlanApiContractTest(_ScheduleApiTestBase):
             ACTOR, org_id=coredb.DEV_ORG_ID,
         )
         fake = _fake(_fenced_plans([_one_plan()]))
-        schedule_routes.PROVIDER = fake
+        schedule_jobs.PROVIDER = fake
         resp = self._post()
         self.assertEqual(resp.status_code, 400)
         self.assertEqual(resp.json()["error"]["message"], plan_mod.BUDGET_NOT_SET_MESSAGE)
@@ -384,21 +410,21 @@ class PlanApiContractTest(_ScheduleApiTestBase):
 
     def test_disabled_platform_is_rejected_before_calling_agent(self):
         fake = _fake(_fenced_plans([_one_plan()]))
-        schedule_routes.PROVIDER = fake
+        schedule_jobs.PROVIDER = fake
         resp = self._post(platform=DISABLED_PLATFORM)
         self.assertEqual(resp.status_code, 400)
         self.assertEqual(fake.calls, [])
 
     def test_objective_not_belonging_to_platform_is_rejected(self):
         fake = _fake(_fenced_plans([_one_plan()]))
-        schedule_routes.PROVIDER = fake
+        schedule_jobs.PROVIDER = fake
         resp = self._post(objective="這不是有效的目標值")
         self.assertEqual(resp.status_code, 400)
         self.assertEqual(fake.calls, [])
 
     def test_plan_count_out_of_rule_card_range_is_rejected(self):
         fake = _fake(_fenced_plans([_one_plan()]))
-        schedule_routes.PROVIDER = fake
+        schedule_jobs.PROVIDER = fake
         resp = self._post(plan_count=6)  # 規則卡預設上限 5
         self.assertEqual(resp.status_code, 400)
         self.assertEqual(fake.calls, [])
@@ -447,16 +473,123 @@ class PlanApiContractTest(_ScheduleApiTestBase):
             self.assertEqual(resp.status_code, 404)
 
 
+class QueuedGenerationTest(_ScheduleApiTestBase):
+    """票 05-1：三個生成端點不再在 request 裡打代理，改進 procrastinate 佇列——這裡守兩件事
+    （ticket「How we know it's done」點名的兩條，只寫這兩條）：
+
+    money：同一個品牌／task_type 已經有一列 `llm_task` 在跑的時候，第二次 POST 一律 409，
+    且不會多排一個工作（多排＝多花一次代理的錢）。
+
+    API contract：POST 回來的時候代理還沒被打過（`run_task()` 在 worker 裡才會呼叫），只有
+    真的跑過一次 worker 之後代理才被打到。
+    """
+
+    def _insert_running_row(self, task_type: str, context_scope: dict | None = None) -> None:
+        web.conn.execute(
+            "INSERT INTO llm_task (id, org_id, brand_id, task_type, context_scope_json,"
+            " input_context_ids_json, input_context_hash, knowledge_item_ids_json,"
+            " brand_version, prompt_template_id, prompt_template_version, provider, model,"
+            " status, attempt_no, started_at)"
+            " VALUES (%s, %s, %s, %s, %s, '[]', '', '[]', 1, 'p', 'v1', 'seed', 'seed',"
+            " 'running', 1, %s)",
+            (coredb.new_id("llm"), coredb.DEV_ORG_ID, self.brand["id"], task_type,
+             coredb.jsonb(context_scope or {}), coredb.now_iso()),
+        )
+        web.conn.commit()
+
+    def test_second_post_while_one_is_running_is_refused_and_defers_no_second_job(self):
+        self._insert_running_row(schedule_routes.TASK_TYPE)
+        fake = _fake(_fenced_plans([_one_plan()]))
+        schedule_jobs.PROVIDER = fake
+
+        resp = self._post(plan_count=1)
+        self.assertEqual(resp.status_code, 409)
+        self.assertEqual(resp.json()["error"]["code"], "already_running")
+
+        self._run_worker()
+        self.assertEqual(fake.calls, [], "409 沒有多排一個工作，代理一次都不該被打到")
+
+    def test_post_returns_before_the_provider_is_called_worker_calls_it_once(self):
+        fake = _fake(_fenced_plans([_one_plan()]))
+        schedule_jobs.PROVIDER = fake
+
+        resp = self._post(plan_count=1)
+        self.assertEqual(resp.status_code, 200, resp.text)
+        self.assertEqual(fake.calls, [], "POST 回來的時候，代理還不該被打過")
+
+        self._run_worker()
+        self.assertEqual(len(fake.calls), 1, "worker 真的跑過一次，代理才被打")
+
+    def test_creative_job_uses_the_tree_pinned_at_enqueue_not_a_later_running_row(self):
+        """fix round 1（money）：`schedule_creative` 過去在 job 執行時用
+        `_latest_task_row()` 重讀「這個品牌最新一次 schedule_tree」——frozen decision 3
+        的「一次一個」是按 task type 算的，擋不住這段情境：使用者按了「產素材」（排進
+        佇列，還沒跑）之後又按了一次「展開活動樹」，插進一列新的 running schedule_tree。
+        job 真的跑的時候重讀「最新」會撿到那一列還在跑的——`tree_from_task_row()` 對
+        running 列回空樹（`levels: []`／`nodes: []`），不拋例外，job 照著空樹組 prompt、
+        照樣打代理，花錢的結果卻對不上任何廣告節點。修法：enqueue 當下把
+        `tree_row["id"]` 釘進 job 參數，job 只認這個 id，不重讀「最新」。"""
+        schedule_jobs.PROVIDER = _fake(_fenced_plans([_one_plan()]))
+        resp = self._post(plan_count=1)
+        self.assertEqual(resp.status_code, 200, resp.text)
+        self._run_worker()
+        succeeded_plan_id = schedule_routes._latest_task_row(
+            web.conn, self.brand["id"], schedule_routes.TASK_TYPE
+        )["id"]
+
+        schedule_jobs.PROVIDER = _fake(_tree_fenced(_one_tree_nodes()))
+        resp = self.client.post(
+            f"/api/schedule/brands/{self.brand['id']}/tree", json={"plan_index": 0}
+        )
+        self.assertEqual(resp.status_code, 200, resp.text)
+        self._run_worker()
+        succeeded_tree_id = schedule_routes._latest_task_row(
+            web.conn, self.brand["id"], schedule_routes.TREE_TASK_TYPE
+        )["id"]
+
+        fake = _fake(_creative_fenced([_one_creative("單元1"), _one_creative("單元2")]))
+        schedule_jobs.PROVIDER = fake
+        resp = self.client.post(f"/api/schedule/brands/{self.brand['id']}/creative", json={})
+        self.assertEqual(resp.status_code, 200, resp.text)
+
+        # 產素材已經排進佇列（釘住上面那棵成功的樹），使用者這時又按了一次展開活動樹，
+        # 插進一列「更新」的 running schedule_tree——worker 還沒跑到 creative job。這一列
+        # 帶著真的 source_plan_task_id（跟真正的 schedule_tree job 會寫的一樣），才會真的
+        # 讓舊版重讀「最新」的 bug 打到代理、燒錢產出空樹的內容，不是隨便崩潰在別的地方。
+        self._insert_running_row(
+            schedule_routes.TREE_TASK_TYPE,
+            context_scope={
+                "brand_id": self.brand["id"], "plan_index": 0, "daily_budget": 3000.0,
+                "source_plan_task_id": succeeded_plan_id,
+            },
+        )
+
+        self._run_worker()
+
+        creative_row = schedule_routes._latest_task_row(
+            web.conn, self.brand["id"], schedule_routes.CREATIVE_TASK_TYPE
+        )
+        self.assertEqual(
+            creative_row["context_scope_json"]["source_tree_task_id"], succeeded_tree_id,
+            "creative job 必須用 enqueue 當下釘住的那棵樹，不是後來插隊、還在跑的那一列",
+        )
+        self.assertEqual(len(fake.calls), 1)
+        prompt_text = fake.calls[0]["messages"][0]["content"]
+        self.assertIn("單元1", prompt_text)
+        self.assertIn("單元2", prompt_text)
+
+
 class RejectApiContractTest(_ScheduleApiTestBase):
     """票 10-feedback-entries（ADR 0037）：POST .../reject——每條意見變一列 rule，
     再用凍結參數重新排程。"""
 
     def _succeed_plan(self, plan_count: int = 2, promotion_note: str = "這期主打新品") -> None:
-        schedule_routes.PROVIDER = _fake(
+        schedule_jobs.PROVIDER = _fake(
             _fenced_plans([_one_plan(), _one_plan(summary="第二個方案")][:plan_count])
         )
         resp = self._post(plan_count=plan_count, promotion_note=promotion_note)
         self.assertEqual(resp.status_code, 200, resp.text)
+        self._run_worker()
 
     def _reject(self, entries: list):
         return self.client.post(
@@ -466,7 +599,7 @@ class RejectApiContractTest(_ScheduleApiTestBase):
     def test_empty_entries_is_rejected_before_creating_rules_or_calling_agent(self):
         self._succeed_plan()
         fake = _fake(_fenced_plans([_one_plan()]))
-        schedule_routes.PROVIDER = fake
+        schedule_jobs.PROVIDER = fake
         resp = self._reject([])
         self.assertEqual(resp.status_code, 400)
         self.assertEqual(fake.calls, [])
@@ -511,17 +644,19 @@ class RejectApiContractTest(_ScheduleApiTestBase):
         ).json()["plan"]["task_id"]  # 讀目前的 task_id，不能再 POST 一次（會覆蓋掉凍結參數）
 
         fake = _fake(_fenced_plans([_one_plan()]))  # 重排只回 1 個方案，證明真的重打了代理
-        schedule_routes.PROVIDER = fake
+        schedule_jobs.PROVIDER = fake
         resp = self._reject([
             {"severity": "hard", "content": "絕不可宣稱醫療效果"},
             {"severity": "soft", "rule_type": "audience", "content": "受眾偏了，不該對到長輩"},
         ])
         self.assertEqual(resp.status_code, 200, resp.text)
-        body = resp.json()
 
         rules = bi_repo.list_rules_for_brand(web.conn, self.brand["id"])
-        self.assertEqual(len(rules), 2)  # 兩條意見各自一列
+        self.assertEqual(len(rules), 2)  # 兩條意見各自一列——寫規則是同步的，不必等 worker
+
+        self._run_worker()  # 票 05-1：重跑的排程現在排進佇列，跑一次 worker 才會真的重打代理
         self.assertEqual(len(fake.calls), 1)  # 真的重跑了一次排程
+        body = self.client.get(f"/api/schedule/brands/{self.brand['id']}").json()
 
         # 重跑用的是舊方案凍結的參數：一樣的產品／平台／目標／促銷重點／方案數。
         self.assertEqual(body["plan"]["product_ids"], [self.product["id"]])
@@ -542,22 +677,24 @@ class TreeApiContractTest(_ScheduleApiTestBase):
     """票 09：POST .../tree、GET 回應多帶的 tree 欄位。"""
 
     def _succeed_plan(self, plan_count: int = 2) -> None:
-        schedule_routes.PROVIDER = _fake(
+        schedule_jobs.PROVIDER = _fake(
             _fenced_plans([_one_plan(), _one_plan(summary="第二個方案")][:plan_count])
         )
         resp = self._post(plan_count=plan_count)
         self.assertEqual(resp.status_code, 200, resp.text)
+        self._run_worker()
 
     def test_post_tree_returns_tree_and_prompt_carries_department_file(self):
         self._succeed_plan()
         fake = _fake(_tree_fenced(_one_tree_nodes()))
-        schedule_routes.PROVIDER = fake
+        schedule_jobs.PROVIDER = fake
 
         resp = self.client.post(
             f"/api/schedule/brands/{self.brand['id']}/tree", json={"plan_index": 0}
         )
         self.assertEqual(resp.status_code, 200, resp.text)
-        tree = resp.json()["tree"]
+        self._run_worker()
+        tree = self.client.get(f"/api/schedule/brands/{self.brand['id']}").json()["tree"]
         self.assertIsNone(tree["failure"])
         self.assertEqual(tree["plan_index"], 0)
         self.assertEqual(tree["levels"], ["行銷活動", "廣告組合", "廣告"])
@@ -573,17 +710,20 @@ class TreeApiContractTest(_ScheduleApiTestBase):
 
     def test_get_after_post_tree_returns_identical_tree(self):
         self._succeed_plan()
-        schedule_routes.PROVIDER = _fake(_tree_fenced(_one_tree_nodes()))
-        post_resp = self.client.post(
+        schedule_jobs.PROVIDER = _fake(_tree_fenced(_one_tree_nodes()))
+        resp = self.client.post(
             f"/api/schedule/brands/{self.brand['id']}/tree", json={"plan_index": 0}
         )
-        get_resp = self.client.get(f"/api/schedule/brands/{self.brand['id']}")
-        self.assertEqual(post_resp.json()["tree"], get_resp.json()["tree"])
+        self.assertEqual(resp.status_code, 200, resp.text)
+        self._run_worker()
+        get_resp_1 = self.client.get(f"/api/schedule/brands/{self.brand['id']}")
+        get_resp_2 = self.client.get(f"/api/schedule/brands/{self.brand['id']}")
+        self.assertEqual(get_resp_1.json()["tree"], get_resp_2.json()["tree"])
 
     def test_plan_index_out_of_range_is_rejected_before_calling_agent(self):
         self._succeed_plan(plan_count=2)
         fake = _fake(_tree_fenced(_one_tree_nodes()))
-        schedule_routes.PROVIDER = fake
+        schedule_jobs.PROVIDER = fake
         resp = self.client.post(
             f"/api/schedule/brands/{self.brand['id']}/tree", json={"plan_index": 5}
         )
@@ -592,7 +732,7 @@ class TreeApiContractTest(_ScheduleApiTestBase):
 
     def test_no_succeeded_plan_is_rejected_before_calling_agent(self):
         fake = _fake(_tree_fenced(_one_tree_nodes()))
-        schedule_routes.PROVIDER = fake
+        schedule_jobs.PROVIDER = fake
         resp = self.client.post(
             f"/api/schedule/brands/{self.brand['id']}/tree", json={"plan_index": 0}
         )
@@ -656,14 +796,16 @@ class BindTreeApiContractTest(_ScheduleApiTestBase):
         web.conn.commit()
 
     def _succeed_plan_and_tree(self) -> None:
-        schedule_routes.PROVIDER = _fake(_fenced_plans([_one_plan()]))
+        schedule_jobs.PROVIDER = _fake(_fenced_plans([_one_plan()]))
         resp = self._post(plan_count=1)
         self.assertEqual(resp.status_code, 200, resp.text)
-        schedule_routes.PROVIDER = _fake(_tree_fenced(_one_tree_nodes()))
+        self._run_worker()
+        schedule_jobs.PROVIDER = _fake(_tree_fenced(_one_tree_nodes()))
         resp = self.client.post(
             f"/api/schedule/brands/{self.brand['id']}/tree", json={"plan_index": 0}
         )
         self.assertEqual(resp.status_code, 200, resp.text)
+        self._run_worker()
 
     def _bind(self):
         return self.client.post(f"/api/schedule/brands/{self.brand['id']}/tree/bind")
@@ -776,14 +918,16 @@ class CreativeApiContractTest(_ScheduleApiTestBase):
     _LEAF_NODE_NAMES = ["單元1", "單元2"]
 
     def _succeed_plan_and_tree(self) -> None:
-        schedule_routes.PROVIDER = _fake(_fenced_plans([_one_plan()]))
+        schedule_jobs.PROVIDER = _fake(_fenced_plans([_one_plan()]))
         resp = self._post(plan_count=1)
         self.assertEqual(resp.status_code, 200, resp.text)
-        schedule_routes.PROVIDER = _fake(_tree_fenced(_one_tree_nodes()))
+        self._run_worker()
+        schedule_jobs.PROVIDER = _fake(_tree_fenced(_one_tree_nodes()))
         resp = self.client.post(
             f"/api/schedule/brands/{self.brand['id']}/tree", json={"plan_index": 0}
         )
         self.assertEqual(resp.status_code, 200, resp.text)
+        self._run_worker()
 
     def _generate(self):
         return self.client.post(f"/api/schedule/brands/{self.brand['id']}/creative", json={})
@@ -794,11 +938,12 @@ class CreativeApiContractTest(_ScheduleApiTestBase):
         # 照抄代理回覆的順序（代理不保證照樹的順序回覆）。
         reversed_names = list(reversed(self._LEAF_NODE_NAMES))
         fake = _fake(_creative_fenced([_one_creative(name) for name in reversed_names]))
-        schedule_routes.PROVIDER = fake
+        schedule_jobs.PROVIDER = fake
 
         resp = self._generate()
         self.assertEqual(resp.status_code, 200, resp.text)
-        creative = resp.json()["creative"]
+        self._run_worker()
+        creative = self.client.get(f"/api/schedule/brands/{self.brand['id']}").json()["creative"]
         self.assertIsNone(creative["failure"])
         # 樹的文件順序（單元1、單元2），不是代理回覆的順序（單元2、單元1）。
         self.assertEqual([ad["node"] for ad in creative["ads"]], self._LEAF_NODE_NAMES)
@@ -817,16 +962,19 @@ class CreativeApiContractTest(_ScheduleApiTestBase):
 
     def test_get_after_post_returns_identical_creative(self):
         self._succeed_plan_and_tree()
-        schedule_routes.PROVIDER = _fake(_creative_fenced(
+        schedule_jobs.PROVIDER = _fake(_creative_fenced(
             [_one_creative(name) for name in self._LEAF_NODE_NAMES]
         ))
-        post_resp = self._generate()
-        get_resp = self.client.get(f"/api/schedule/brands/{self.brand['id']}")
-        self.assertEqual(post_resp.json()["creative"], get_resp.json()["creative"])
+        resp = self._generate()
+        self.assertEqual(resp.status_code, 200, resp.text)
+        self._run_worker()
+        get_resp_1 = self.client.get(f"/api/schedule/brands/{self.brand['id']}")
+        get_resp_2 = self.client.get(f"/api/schedule/brands/{self.brand['id']}")
+        self.assertEqual(get_resp_1.json()["creative"], get_resp_2.json()["creative"])
 
     def test_no_succeeded_tree_is_rejected_before_calling_agent(self):
         fake = _fake(_creative_fenced([_one_creative("單元1")]))
-        schedule_routes.PROVIDER = fake
+        schedule_jobs.PROVIDER = fake
         resp = self._generate()
         self.assertEqual(resp.status_code, 400)
         self.assertEqual(fake.calls, [])
@@ -834,32 +982,35 @@ class CreativeApiContractTest(_ScheduleApiTestBase):
     def test_missing_node_fails_the_whole_run(self):
         self._succeed_plan_and_tree()
         # 少一份：「單元2」沒有配到內容。
-        schedule_routes.PROVIDER = _fake(_creative_fenced([_one_creative("單元1")]))
+        schedule_jobs.PROVIDER = _fake(_creative_fenced([_one_creative("單元1")]))
         resp = self._generate()
         self.assertEqual(resp.status_code, 200, resp.text)
-        creative = resp.json()["creative"]
+        self._run_worker()
+        creative = self.client.get(f"/api/schedule/brands/{self.brand['id']}").json()["creative"]
         self.assertTrue(creative["failure"])
         self.assertEqual(creative["ads"], [])
 
     def test_duplicate_node_fails_the_whole_run(self):
         self._succeed_plan_and_tree()
-        schedule_routes.PROVIDER = _fake(_creative_fenced(
+        schedule_jobs.PROVIDER = _fake(_creative_fenced(
             [_one_creative("單元1"), _one_creative("單元1"), _one_creative("單元2")]
         ))
         resp = self._generate()
         self.assertEqual(resp.status_code, 200, resp.text)
-        creative = resp.json()["creative"]
+        self._run_worker()
+        creative = self.client.get(f"/api/schedule/brands/{self.brand['id']}").json()["creative"]
         self.assertTrue(creative["failure"])
         self.assertEqual(creative["ads"], [])
 
     def test_unknown_node_fails_the_whole_run(self):
         self._succeed_plan_and_tree()
-        schedule_routes.PROVIDER = _fake(_creative_fenced(
+        schedule_jobs.PROVIDER = _fake(_creative_fenced(
             [_one_creative("單元1"), _one_creative("不存在的節點")]
         ))
         resp = self._generate()
         self.assertEqual(resp.status_code, 200, resp.text)
-        creative = resp.json()["creative"]
+        self._run_worker()
+        creative = self.client.get(f"/api/schedule/brands/{self.brand['id']}").json()["creative"]
         self.assertTrue(creative["failure"])
         self.assertEqual(creative["ads"], [])
 
@@ -902,16 +1053,21 @@ class SearchSourcesReadbackTest(_ScheduleApiTestBase):
 
     def test_search_sources_are_stored_and_read_back(self):
         sources = [{"title": "雙十一活動頁", "url": "https://example.com/1111"}]
-        schedule_routes.PROVIDER = _fake(_fenced_plans([_one_plan()]), search_sources=sources)
+        schedule_jobs.PROVIDER = _fake(_fenced_plans([_one_plan()]), search_sources=sources)
         resp = self._post(plan_count=1)
-        self.assertEqual(resp.json()["plan"]["sources"], sources)
+        self.assertEqual(resp.status_code, 200, resp.text)
+        self._run_worker()
+        body = self.client.get(f"/api/schedule/brands/{self.brand['id']}").json()
+        self.assertEqual(body["plan"]["sources"], sources)
 
     def test_no_search_sources_still_returns_plans(self):
         # FakeProvider 預設 search_sources=None（沒開搜尋、或搜尋沒找到東西）：排程照樣成功，
         # 不會因為沒有搜尋結果就整個排程失敗。
-        schedule_routes.PROVIDER = _fake(_fenced_plans([_one_plan()]))
+        schedule_jobs.PROVIDER = _fake(_fenced_plans([_one_plan()]))
         resp = self._post(plan_count=1)
-        body = resp.json()
+        self.assertEqual(resp.status_code, 200, resp.text)
+        self._run_worker()
+        body = self.client.get(f"/api/schedule/brands/{self.brand['id']}").json()
         self.assertIsNone(body["plan"]["failure"])
         self.assertEqual(body["plan"]["sources"], [])
 

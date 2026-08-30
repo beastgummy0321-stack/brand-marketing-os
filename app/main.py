@@ -129,7 +129,14 @@ async def _lifespan(_app: FastAPI):
     """票 05 fix round：啟動時把這個 process（啟動行銷系統.bat 開的那個 uvicorn）順便掛成
     procrastinate worker，接手 app/meta 每日花費拉取的排程（見
     app/background/__init__.py start_worker() 檔頭「為什麼不是新開一個部署形態」）；關閉時
-    收乾淨，不留一個游離的背景 task。"""
+    收乾淨，不留一個游離的背景 task。
+
+    票 05-1 frozen decision 2：`start_worker()` 之前先把上一個 process 死掉時留下的
+    `llm_task` running 列標記失敗（見 `app/llm/gateway.py` `fail_interrupted_tasks()`
+    檔頭）——順序要緊：worker 一旦開始跑，新任務也是 running，先掃再啟動才不會誤殺
+    這次剛啟動、真的在跑的那些。"""
+    with coredb.connection() as conn:
+        llm_gateway.fail_interrupted_tasks(conn)
     await background_module.start_worker()
     yield
     await background_module.stop_worker()
@@ -473,6 +480,10 @@ for _module in (brand_web_module, intake_module, meta_module, orders_module,
 # 檔頭說明——DSN 換了 app.background.app() 會整顆重建，所以呼叫端不能只做這一次就
 # 假設永遠有效；本機單一部署 DSN 不會變，這裡呼叫一次就夠）。
 meta_module.register_task()
+
+# 票 05-1：掛三個檔期生成 task（出方案／展開活動樹／產內容），同一個「DSN 換了要重掛」的
+# 理由，見 app/schedule/jobs.py register_tasks() 檔頭。
+schedule_module.register_tasks()
 
 # 啟動斷言（第 2 刀「清理登記處」）：確認刪品牌時該連鎖清資料的模組都有登記進
 # app.core.cleanup，少一個就不讓服務起來，避免又漏掉誰。

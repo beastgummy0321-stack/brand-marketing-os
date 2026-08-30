@@ -86,6 +86,30 @@ def get_task(conn: db.Conn, task_id: str) -> dict | None:
     return dict(row) if row is not None else None
 
 
+INTERRUPTED_TASK_ERROR = "上次執行到一半被中斷了，請再按一次。"
+
+
+def fail_interrupted_tasks(conn: db.Conn) -> int:
+    """票 05-1 frozen decision 2：process 重啟時，上一個 process 死掉留下的
+    `status = 'running'` 列沒有人會再把它改掉——中斷的工作標記失敗，絕不自動重跑（重跑會
+    再花一次錢，做的可能是幾乎跑完的工作）。`app.llm` 是唯一寫 `llm_task` 的模組（一張表
+    只有一個模組會寫，見 `app/schedule/routes.py` 檔頭），所以這支掃描函式落在這裡，不是
+    `app/background`——呼叫端是 `app/main.py` 的 `_lifespan`，在 `start_worker()` 之前跑一次。
+    回傳受影響列數。
+
+    ponytail: 假設同一時間只有一個 process 擁有全部 `running` 列，正是 ADR 0039 現在站的
+    位置（worker 跟 web 同一個 process，直到出現第二台機器）。worker 真的變成獨立 process
+    那天，這裡要換成心跳／存活時間判斷——跟 ADR 0039 說 `start_worker()` 離開 `lifespan`
+    是同一天。"""
+    rows = conn.execute(
+        "UPDATE llm_task SET status = 'failed', error = %s, finished_at = %s "
+        "WHERE status = 'running'",
+        (INTERRUPTED_TASK_ERROR, db.now_utc()),
+    )
+    conn.commit()
+    return rows.rowcount
+
+
 def _insert_running_row(
     conn: db.Conn, *, org_id: str, brand_id: str, task_type: str, context: TaskContext,
     prompt_template_id: str, prompt_template_version: str, provider_name: str, model: str,

@@ -3,6 +3,10 @@
 
 只寫這些事（docs/workflow-diet.md 第 4 條）：金額伺服器算、`content_hash` 排除清單、
 租戶隔離、API 契約、超支比對兩個時間窗必須對齊。只用 FakeProvider，不發真實網路請求。
+
+票 05-1：`_succeed_plan_and_tree()` 用到的 POST .../plans、.../tree 兩支現在只 enqueue，
+真正打代理搬進 worker——助手方法自己 `self._run_worker()`，見那裡的說明；核准／撤回／綁定
+三支端點沒有移動，仍是同步的。
 """
 
 import json
@@ -13,7 +17,9 @@ from unittest import mock
 
 from fastapi.testclient import TestClient
 
+import app.background as background_module
 import app.main as main
+import app.schedule as schedule_module
 import app.shared.web as web
 from app.brand_intelligence import repository as bi_repo
 from app.core import approval as approval_mod
@@ -22,6 +28,7 @@ from app.core import rule_cards
 from app.llm import providers
 from app.meta import graph as meta_graph
 from app.meta import repository as meta_repo
+from app.schedule import jobs as schedule_jobs
 from app.schedule import routes as schedule_routes
 
 ACTOR = "測試員"
@@ -56,6 +63,9 @@ def _fake(rendered_output: str) -> providers.FakeProvider:
 class ApprovalApiContractTest(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(main.app)
+        # 票 05-1：這個測試模組自己有一份 schema，這個模組自己那份 `background.app()` 要
+        # 重新掛一次三個生成 task（見 app/schedule/__init__.py register_tasks() 檔頭）。
+        schedule_module.register_tasks()
         self.brand = bi_repo.create_brand(
             web.conn, org_id=coredb.DEV_ORG_ID, name="測試品牌：核准",
             client_name=None, actor=ACTOR,
@@ -67,24 +77,31 @@ class ApprovalApiContractTest(unittest.TestCase):
             web.conn, self.brand["id"], "schedule_budget", "daily_budget", 1000.0,
             ACTOR, org_id=coredb.DEV_ORG_ID,
         )
-        self._orig_provider = schedule_routes.PROVIDER
+        self._orig_provider = schedule_jobs.PROVIDER
 
     def tearDown(self):
-        schedule_routes.PROVIDER = self._orig_provider
+        schedule_jobs.PROVIDER = self._orig_provider
+
+    def _run_worker(self) -> None:
+        """票 05-1：POST 只 enqueue，見 test_schedule.py 同名助手方法的說明。"""
+        web.conn.commit()
+        background_module.app().run_worker(wait=False)
 
     def _succeed_plan_and_tree(self, node_name: str = "活動一") -> None:
-        schedule_routes.PROVIDER = _fake(_PLAN_FENCED)
+        schedule_jobs.PROVIDER = _fake(_PLAN_FENCED)
         resp = self.client.post(
             f"/api/schedule/brands/{self.brand['id']}/plans",
             json={"product_ids": [self.product["id"]], "platform": VALID_PLATFORM,
                   "objective": VALID_OBJECTIVE, "promotion_note": "", "plan_count": 1},
         )
         self.assertEqual(resp.status_code, 200, resp.text)
-        schedule_routes.PROVIDER = _fake(_tree_fenced(node_name))
+        self._run_worker()
+        schedule_jobs.PROVIDER = _fake(_tree_fenced(node_name))
         resp = self.client.post(
             f"/api/schedule/brands/{self.brand['id']}/tree", json={"plan_index": 0}
         )
         self.assertEqual(resp.status_code, 200, resp.text)
+        self._run_worker()
 
     def _approve(self):
         return self.client.post(f"/api/schedule/brands/{self.brand['id']}/tree/approve")
@@ -174,12 +191,13 @@ class ApprovalApiContractTest(unittest.TestCase):
         self.assertTrue(approval_now["matches_current_tree"])  # 綁定／花費不翻臉
         self.assertEqual(approval_now["spend_to_date"], 500.0)  # 月初那筆被排除
 
-        schedule_routes.PROVIDER = _fake(_tree_fenced("活動一（改過）"))
+        schedule_jobs.PROVIDER = _fake(_tree_fenced("活動一（改過）"))
         resp = self.client.post(
             f"/api/schedule/brands/{self.brand['id']}/tree", json={"plan_index": 0}
         )
         self.assertEqual(resp.status_code, 200, resp.text)
-        approval_after = resp.json()["tree"]["approval"]
+        self._run_worker()
+        approval_after = self._get().json()["tree"]["approval"]
         self.assertFalse(approval_after["matches_current_tree"])
         self.assertEqual(approval_after["approved_at"], approval_before["approved_at"])
         self.assertEqual(approval_after["approved_amount"], approval_before["approved_amount"])

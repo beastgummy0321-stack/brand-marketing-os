@@ -1,15 +1,18 @@
-"""app/background/__init__.py — single entry point (container contract §1, ticket schedule-01).
+"""app/background/__init__.py — single entry point (container contract §1, ticket schedule-01,
+票 05-1 補 `enqueue()`)。
 
 集裝箱憲章 §1 邊界定案：
 1. 對外進入點：本檔（`app/background/__init__.py`）。
 2. 進出形狀：`app() -> procrastinate.App`（無參數，回傳可用來
    `.configure_task(name).defer(org_id=..., ...)` 或 `.run_worker(...)` 的 procrastinate App
    物件），加上票 05 fix round 補的 `start_worker()`／`stop_worker()`（都是 async、無參數，
-   見下方函式檔頭）。其餘一律私有。
-3. 呼叫端：`app()` 目前只有本模組自己的測試檔、app/meta（掛 task）與手動 done-check；
-   `start_worker()`／`stop_worker()` 目前只有 app/main.py 的 FastAPI lifespan
-   （啟動／關閉各呼叫一次）與本模組自己的測試檔。05-1（`enqueue`/`status`/`cancel` 契約、
-   job 註冊表）落地後才會有更多產品呼叫端。
+   見下方函式檔頭），加上票 05-1 補的
+   `enqueue(task_name, *, org_id, lock, **kwargs) -> bool`（見下方函式檔頭：defer 一個 job，
+   同一個 `lock` 已經有一個在 `todo` 狀態排隊時回 False，不拋例外）。其餘一律私有。
+3. 呼叫端：`app()` 目前是本模組自己的測試檔、app/meta（掛 task）、app/schedule（票 05-1：
+   `register_tasks()` 掛三個生成 task）與手動 done-check；`start_worker()`／`stop_worker()`
+   目前只有 app/main.py 的 FastAPI lifespan（啟動／關閉各呼叫一次）與本模組自己的測試檔；
+   `enqueue()` 目前是 app/schedule/routes.py（三支 POST 端點）與本模組自己的測試檔。
 4. 不碰什麼：procrastinate 套件內部（`procrastinate.schema`／`procrastinate.cli` 等）——本檔
    ／本模組永遠不呼叫 `procrastinate schema --apply`；schema 已經 vendor 進
    `supabase/migrations/20260829000001_background_baseline.sql`，由 Supabase CLI 管，跟全站
@@ -66,6 +69,28 @@ uvicorn 自己的 loop 上，就一定是 Proactor。
 同一輪的第二個修正：**worker 起不來不准把網站一起弄死**。原本 `start_worker()` 的例外直接
 從 lifespan 竄出去，等於「關掉自動排程」的代價是「整個系統打不開」——那不是加法。現在一律
 記錄後吞掉，網站照常起來，手動路徑 `python -m app.meta.daily_pull` 照常可用。
+
+票 05-1：`enqueue()` 為什麼要蓋第二個 App（不是重用 `app()`）——`app()` 是一顆
+`PsycopgConnector`，它的 async pool 是在 worker 執行緒自己的 loop 上開的
+（`_worker_main`）。`PsycopgConnector.get_sync_connector()` 只要那顆 async pool 是開的就回傳
+`self`（`.venv/Lib/site-packages/procrastinate/psycopg_connector.py:110-112`），而在一顆
+async connector 上呼叫任何 sync 方法都會走 `utils.async_to_sync`
+（`connector.py:107-118`）——它會另開一個**新的** event loop 去跑那個 coroutine，等於拿一顆
+綁在別的執行緒的 loop 上的 psycopg pool，硬塞進這個新 loop 裡用。從 request 執行緒（FastAPI
+的 loop）呼叫 `app().configure_task(...).defer(...)` 就是這個模式，會炸。所以 `enqueue()`
+另外蓋一顆獨立、模組私有的 `procrastinate.App`，接的是
+`procrastinate.SyncPsycopgConnector(conninfo=<跟 app() 一樣的 queue DSN>)`——這顆 connector
+本來就是同步的，沒有「借別的 loop 的 pool」這個問題。DSN 換了照 `app()` 同一套規則整顆重建
+（見上面「DSN／schema 都延遲解析」那段）。它不需要註冊任何 task——`App.configure_task()`
+預設 `allow_unknown=True`（procrastinate `app.py:209-211`），沒註冊過的任務名一樣 defer
+得出去；真正的 task body 只在 `app()`（worker 用的那顆）上註冊，見 `app/schedule/jobs.py`
+`register_tasks()`。
+
+ponytail: `queueing_lock` 的唯一索引只擋 `WHERE status = 'todo'`
+（`supabase/migrations/20260829000001_background_baseline.sql:148`），`enqueue()` 因此只
+擋得住「連按兩次、worker 都還沒撿走第一個」這個窗口；一個任務真的在跑（`llm_task` 那一列
+`status = 'running'`）之後，擋第二次按下去是呼叫端自己查 `llm_task` 的責任——見
+`app/schedule/routes.py` 每支 POST 端點的 409 檢查，不是這裡的事。
 """
 
 import asyncio
@@ -75,6 +100,7 @@ import threading
 from urllib.parse import quote, urlsplit, urlunsplit
 
 import procrastinate
+from procrastinate.exceptions import AlreadyEnqueued
 
 from app.core import db
 
@@ -85,6 +111,8 @@ _log = logging.getLogger(__name__)
 
 _app: procrastinate.App | None = None
 _app_dsn: str | None = None
+_sync_app: procrastinate.App | None = None  # 票 05-1：enqueue() 專用，見模組檔頭
+_sync_app_dsn: str | None = None
 _worker_thread: threading.Thread | None = None
 _worker_loop: asyncio.AbstractEventLoop | None = None  # 由 worker thread 自己填
 _worker_stop: asyncio.Event | None = None              # 建在 worker loop 上，只能 threadsafe 觸發
@@ -126,6 +154,35 @@ def app() -> procrastinate.App:
         _app = new_app
         _app_dsn = current_dsn
     return _app
+
+
+def _sync_app_for_defer() -> procrastinate.App:
+    """惰性建立／`db.dsn()` 換了就重建的模組私有 App，`enqueue()` 專用——跟 `app()` 同一套
+    rebuild 規則，但接的是 `SyncPsycopgConnector`，不是 `app()` 那顆 async 的
+    `PsycopgConnector`（為什麼不能共用見模組檔頭「enqueue() 為什麼要蓋第二個 App」）。"""
+    global _sync_app, _sync_app_dsn
+    current_dsn = db.dsn()
+    if _sync_app is None or _sync_app_dsn != current_dsn:
+        queue_dsn = _with_search_path(current_dsn, _queue_search_path())
+        connector = procrastinate.SyncPsycopgConnector(conninfo=queue_dsn)
+        new_app = procrastinate.App(connector=connector)
+        new_app.open()
+        _sync_app = new_app
+        _sync_app_dsn = current_dsn
+    return _sync_app
+
+
+def enqueue(task_name: str, *, org_id: str, lock: str, **kwargs) -> bool:
+    """Defer one job onto the queue. `org_id` is passed through as a task argument (ADR 0038:
+    the tenant travels in the args, not in a procrastinate column). `lock` becomes
+    procrastinate's `queueing_lock`: `False` when a job with this lock is already waiting in
+    `todo` — see module docstring for exactly how much that window covers."""
+    deferrer = _sync_app_for_defer().configure_task(task_name, queueing_lock=lock)
+    try:
+        deferrer.defer(org_id=org_id, **kwargs)
+    except AlreadyEnqueued:
+        return False
+    return True
 
 
 async def _worker_main(ready: threading.Event) -> None:
