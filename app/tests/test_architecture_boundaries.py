@@ -504,8 +504,14 @@ class FileLineCapTest(unittest.TestCase):
 #
 # 凍結於 2026-08-30 核准票（fdf619a）落地後的實測值 14,300，**加上改寫這道閘門自己花掉的
 # 5 行**（比值版 14,300 → 絕對行數版 14,305；本檔自己的行數也算進去，所以改閘門就會動到它
-# 守的數字——這裡照實記，不藏）。當下比值 0.866，目標仍是 0.7。
-TEST_LINES_CEILING = 14305
+# 守的數字——這裡照實記，不藏）。
+#
+# 2026-08-30 核准票 scope_ref 修正：14,305 → 14,317（含本段註解與 KNOWN_MODULE_SIZES 那筆理由自己佔掉的行）。這次是**真的多寫了 4 行測試**，不是
+# 刪碼造成的被動漲——`test_approval.py` 加了一條斷言，釘住「`scope_ref` 存的是被核准那棵樹
+# 的 id，不是品牌 id」。它守的是資料正確性（事後查得回去「當初簽的是哪一棵」），屬於
+# docs/workflow-diet.md 第 4 條允許的四類之一。先證過紅：把 scope_ref 改回 brand_id，
+# 這條斷言就抓到（`'brd_…' != 'llm_…'`）。這正是 ADR 0041 說的「該漲就改這一行、寫理由」。
+TEST_LINES_CEILING = 14317
 
 
 def _line_totals() -> tuple:
@@ -598,7 +604,9 @@ KNOWN_MODULE_SIZES = {
     "app/orders": 1423,  # 票 12：channel_revenue 一張表取代三張（刪掉藥局專屬那一整組
                           # 之後仍淨增）——官網帳本寫入路徑、channel_revenue_summary()、
                           # 通用手動登錄（含「官網不能手動登錄」那道錢的守門）
-    "app/schedule": 1283,  # 票 01（approval-slice，ADR 0040）：核准端點＋金額／雜湊／超支
+    "app/schedule": 1285,  # 2026-08-30 scope_ref 修正：改存被核准那棵樹的 id（＋2 行註解，
+                            # 說明「簽的是哪一份」與「還是不是同一份」是兩件事）。前一次 1283
+                            # ——票 01（approval-slice，ADR 0040）：核准端點＋金額／雜湊／超支
                            # 三個業務函式，`app/core/approval.py` 只管落地。前一次是 1145——
                            # 票 01（`.scratch/creative-slice/issues/01-ad-creative-per-ad-node.md`）：
                            # 第三個 task_type「schedule_creative」——app/schedule/creative.py

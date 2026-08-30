@@ -151,6 +151,10 @@ class ApprovalApiContractTest(unittest.TestCase):
             (self.brand["id"],),
         )], ["approve"])
         self.assertEqual(self._get().json()["tree"]["approval"], approval)  # 讀回同一列
+        row = next(iter(web.conn.execute(
+            "SELECT scope_ref FROM approval WHERE brand_id = %s", (self.brand["id"],))))
+        # scope_ref 記的是「簽的是哪一棵」，不是品牌自己——事後查得回去的那一欄
+        self.assertEqual(row["scope_ref"], self._get().json()["tree"]["task_id"])
 
     def test_binding_and_spend_survive_hash_but_reexpanding_does_not(self):
         """item 4/5/9：核准之後綁定活動、花費進來都不翻臉（`content_hash` 排除清單真的

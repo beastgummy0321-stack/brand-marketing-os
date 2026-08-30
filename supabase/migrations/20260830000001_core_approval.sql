@@ -20,15 +20,16 @@ CREATE TABLE approval (
     org_id text NOT NULL REFERENCES organisation(id),
     brand_id TEXT NOT NULL,
     scope_type TEXT NOT NULL,                  -- 'schedule_tree' is the only value today
-    -- For scope_type = 'schedule_tree': brand_id itself (app/schedule/routes.py is the one
-    -- caller). A specific schedule_tree llm_task id would NOT work here — re-expanding a
-    -- tree creates a brand new llm_task row every time, so a scope_ref pinned to that row's
-    -- id could never again be found by a later lookup, and the whole point of content_hash
-    -- (catching a re-expanded tree that silently drifted from what was signed) would never
-    -- fire: the lookup would just always come back empty instead of stale. brand_id is the
-    -- stable "one live tree per brand" subject that content_hash then checks for staleness
-    -- against. A second real scope_type (something other than the brand's tree) is the
-    -- point at which scope_ref stops being interchangeable with brand_id — not before.
+    -- What was signed. For scope_type = 'schedule_tree' this is that tree's own llm_task id,
+    -- so "which tree did I approve on the 30th" is answerable later by reading one column
+    -- rather than by hashing every tree until one matches.
+    -- It is deliberately NOT what the lookup filters on. Re-expanding a tree creates a brand
+    -- new llm_task row, so a lookup keyed on the current tree's id would never find the
+    -- previous approval and the screen would read "never approved" instead of "approved, but
+    -- the tree has changed" — content_hash would never get to fire. app/core/approval.py's
+    -- latest() therefore filters on brand_id + scope_type and lets content_hash decide
+    -- staleness. Two different questions, two different columns: scope_ref answers "which
+    -- one did I sign", content_hash answers "is it still that one".
     scope_ref TEXT NOT NULL,
     content_hash TEXT NOT NULL,                -- fingerprint of what was approved
     approved_amount numeric(14,2) NOT NULL,    -- the daily total the human signed

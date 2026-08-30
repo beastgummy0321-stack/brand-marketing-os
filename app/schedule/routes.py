@@ -169,10 +169,12 @@ def _fill_node_spend(conn, org_id: str, brand_id: str, tree: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 票 01（ADR 0040）：核准——花錢煞車。scope_type 固定 "schedule_tree"，scope_ref 見
-# app.core.approval 表 migration 的欄位註解：用 brand_id，不是這棵樹自己的 llm_task id
-# ——原因寫在那裡（re-expand 每次都開一列新的 llm_task，pin 住舊 id 會讓「核准之後又
-# 重新展開」這件事永遠查不到舊核准，content_hash 要抓的「悄悄過期」就永遠不會發生）。
+# 票 01（ADR 0040）：核准——花錢煞車。scope_type 固定 "schedule_tree"，scope_ref 存的是
+# 被核准的那棵樹自己的 `llm_task` id——事後查「我那天到底簽了哪一棵」靠的就是這一欄。
+# 查詢不靠它（`approval.latest()` 只用品牌＋類型找最新一筆），因為樹每重新展開一次就是
+# 全新一列；拿當下的 id 去查會永遠查不到上一次的核准，畫面就會顯示「從沒核准過」而不是
+# 「核准過、但內容已經變了」。「簽的是哪一份」與「還是不是同一份」是兩件事：前者是
+# scope_ref，後者是 content_hash。
 # ---------------------------------------------------------------------------
 APPROVAL_SCOPE_TYPE = "schedule_tree"
 
@@ -244,7 +246,7 @@ def _approval_overspend(conn, org_id: str, brand_id: str, tree: dict, approval_r
 def _fill_approval(conn, org_id: str, brand_id: str, tree: dict) -> None:
     approval_row = approval_mod.latest(
         conn, org_id=org_id, brand_id=brand_id,
-        scope_type=APPROVAL_SCOPE_TYPE, scope_ref=brand_id,
+        scope_type=APPROVAL_SCOPE_TYPE,
     )
     if approval_row is None:
         tree["approval"] = None
@@ -719,7 +721,7 @@ def _run_approve(conn, brand_id: str, org_id: str, actor: str) -> dict:
 
     approval_mod.approve(
         conn, org_id=org_id, brand_id=brand_id, scope_type=APPROVAL_SCOPE_TYPE,
-        scope_ref=brand_id, content_hash=_tree_content_hash(tree),
+        scope_ref=tree["task_id"], content_hash=_tree_content_hash(tree),
         amount=_sum_daily_amounts(tree["nodes"]), actor=actor,
     )
     return _brand_response(conn, brand_id, org_id)
@@ -730,7 +732,7 @@ def _run_approve_revoke(conn, brand_id: str, org_id: str, actor: str) -> dict:
     「撤回」按鈕，這裡不必為了「按到一個畫面上不該出現的按鈕」另開一條錯誤訊息）。"""
     approval_row = approval_mod.latest(
         conn, org_id=org_id, brand_id=brand_id,
-        scope_type=APPROVAL_SCOPE_TYPE, scope_ref=brand_id,
+        scope_type=APPROVAL_SCOPE_TYPE,
     )
     if approval_row is not None:
         approval_mod.revoke(conn, approval_id=approval_row["id"], org_id=org_id, actor=actor)

@@ -59,26 +59,34 @@ that tree's own `context_scope_json.platform`. Adding a platform column here wou
 adding data, not columns (ADR 0035's principle) — and would leak a platform name into a
 core-module table that's supposed to survive every platform this system ever writes to.
 
-## `scope_ref`, and the one deviation from the ticket's draft SQL comment worth recording
+## `scope_ref` answers "which one did I sign", `content_hash` answers "is it still that one"
 
-The ticket's own SQL sketch commented `scope_ref` as "the llm_task id of the approved
-tree." Implementing it that way breaks the ticket's own acceptance test: re-expanding a
-tree always creates a brand-new `llm_task` row with a new id, so a lookup pinned to "the
-current tree's id" would find nothing after every re-expansion — `approval` would go
-straight to `null`, and `content_hash`'s entire purpose (catching a tree that silently
-drifted from what was signed) would never fire, because there would never be an old row
-left to compare against.
+These are two different questions and they were briefly collapsed into one, so the reasoning is
+recorded here rather than left to be rediscovered.
 
-`scope_ref` for `scope_type = 'schedule_tree'` is **`brand_id`** — the one thing stable
-across re-expansions, since there is exactly one live schedule tree per brand
-(`_latest_task_row` already treats it that way). `latest()` finds the newest
-non-revoked approval for that brand's tree stream regardless of which specific `llm_task`
-row produced it; `content_hash` is what actually detects staleness. This does make
-`scope_ref` redundant with the table's own `brand_id` column for this one caller — accepted
-deliberately, because the alternative silently defeats the feature. A second real
-`scope_type` (something that is not "the brand's one live tree") is the point where
-`scope_ref` stops being interchangeable with `brand_id` — not before, and the ceiling below
-says not to build that until it exists.
+Implementing `scope_ref` literally as the ticket's draft SQL sketch described it — the approved
+tree's `llm_task` id — and then *looking approvals up by it* breaks the feature. Re-expanding a
+tree always creates a brand-new `llm_task` row with a new id, so a lookup pinned to the current
+tree's id finds nothing after every re-expansion. `approval` would go straight to `null`, the
+screen would read "never approved" instead of "approved, but the tree has changed", and
+`content_hash` would never get the chance to fire.
+
+The first implementation solved that by storing `brand_id` in `scope_ref`. That works, and it was
+shipped and reviewed that way, but it pays for the fix with the column's only job: with `brand_id`
+in it, `scope_ref` carries nothing the neighbouring `brand_id` column does not, and the question
+"which tree did I sign on the 30th" can then only be answered by hashing every tree until one
+matches. For a money-path record whose whole justification is that a future executor and a future
+audit will read it, that is the wrong half to give up.
+
+So the lookup moved instead of the stored value. `app/core/approval.py:latest()` filters on
+`org_id + brand_id + scope_type` and takes the newest non-revoked row; `content_hash` decides
+whether that row still describes the tree on screen. `scope_ref` keeps the approved tree's
+`llm_task` id and stays a real answer to a real question.
+
+The consequence, stated plainly: `latest()` assumes one live subject per brand per `scope_type`.
+That is true today (there is exactly one live schedule tree per brand, and `_latest_task_row`
+already treats it that way). The day a second concurrent subject of the same type exists, this
+lookup needs a subject key — and `scope_ref` will already be holding the right value for it.
 
 ## What we looked at
 

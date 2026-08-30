@@ -46,13 +46,20 @@ def approve(
 
 
 def latest(
-    conn: _AnyConn, *, org_id: str, brand_id: str, scope_type: str, scope_ref: str,
+    conn: _AnyConn, *, org_id: str, brand_id: str, scope_type: str,
 ) -> dict | None:
-    """這個主體目前有效（未撤回）的最新一列，或 None。"""
+    """這個品牌這一類主體目前有效（未撤回）的最新一列，或 None。
+
+    **刻意不篩 `scope_ref`**（2026-08-30 修正）：`scope_ref` 記的是「當初簽的是哪一份東西」
+    ——以排程樹為例，是那棵樹自己的 `llm_task` id。樹每重新展開一次就是全新一列，所以拿
+    當下那棵樹的 id 去查，永遠查不到上一次的核准，畫面會顯示「從沒核准過」而不是「核准過、
+    但內容已經變了」，`content_hash` 也就永遠沒機會比對。查詢用「品牌＋類型」找最新一筆，
+    `content_hash` 負責判斷新不新——兩件事分開，`scope_ref` 才留得住「簽的是哪一份」這個
+    事後查得回去的答案。"""
     row = conn.execute(
         "SELECT * FROM approval WHERE org_id = %s AND brand_id = %s AND scope_type = %s"
-        " AND scope_ref = %s AND revoked_at IS NULL ORDER BY approved_at DESC LIMIT 1",
-        (org_id, brand_id, scope_type, scope_ref),
+        " AND revoked_at IS NULL ORDER BY approved_at DESC LIMIT 1",
+        (org_id, brand_id, scope_type),
     ).fetchone()
     return dict(row) if row is not None else None
 
