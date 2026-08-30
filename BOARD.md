@@ -99,10 +99,7 @@ CPA／CVR 算得出來。細節與另外三個發現寫在 `.scratch/adloop/GRIL
 `.scratch/adloop/GRILL.md`（十條凍結決定＋證據）與 `SPEC.md`（資料模型、平台事實、兩輪審查結果）。
 **grill、to-spec、to-tickets、兩輪審查都已經走完，不要重跑。**
 
-- [ ] **S0b（只有文件，零行程式）＝下一個動工點** 兩張 ADR 先寫：ADR A 鎖的主體改成「工作項目」
-      （修訂 0042，順便定案核准指檔期）、ADR B 學習帳本回來（寫成**推翻 8/30 裁決**，
-      並記下被否決的替代方案）。原本 S2 第二個跑卻要用 S4／S5 才寫的 ADR，那是順序錯
-- [ ] **S1（schema／money）** 三層成效：`meta_entity_spend`（多一欄 `attribution_window`，
+- [ ] **S1（schema／money）＝下一個動工點** 三層成效：`meta_entity_spend`（多一欄 `attribution_window`，
       NOT NULL）、按月切的區間拉取、CTR／CPC／CPM／CPA 進現有那句聚合 SQL。
       `httpx` 的 10 秒逾時對 ad 層一個月可能太緊
 - [ ] **S2** 開帳讀歷史：91 天現成真資料 → 並行分析員 → 人按下才進 `learning_ledger`。
