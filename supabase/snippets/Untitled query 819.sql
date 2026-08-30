@@ -1,0 +1,1 @@
+SELECT key, value FROM app_setting;
