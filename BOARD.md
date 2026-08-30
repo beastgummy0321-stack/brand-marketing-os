@@ -19,10 +19,23 @@ Meta 端只建了一個 **PAUSED、沒有廣告組合、沒有廣告、沒有預
 刪除（21,595 行；要回頭看用 tag `v0.2-ads-last`）。回收成效（CSV 匯入）、覆盤、下一期都
 **不在 v1**（`HANDOFF-shell-slice.md` §3.1，該檔已於本次併入後刪除，內容進 git log 與本看板）。
 
-## 第 ④ 片：設定與憑證（需批准：schema）
+## 第 ④ 片：設定與憑證
 
-- [ ] 04-1b pydantic-settings 收環境變數＋組織時區（`org_timezone`，IANA，預設 Asia/Taipei，只改排程面的「今天」）＋`llm_task.methodology_hash`（動 schema，一個欄位）
-- [ ] 04-2 剩下的一半：自帶金鑰（`own`）的 AI 金鑰進 Vault＋設定頁切換金鑰來源。Meta 憑證進 Vault、組織層「已連接帳號」→ 品牌綁定**已完成**（`.scratch/schedule-module/issues/04`）
+2026-08-30 使用者裁決：這片原本五件事，拆成**兩件必須留下、三件外移**。判準是「上雲或賣出去
+之前會不會真的錯」，不是「規劃書（`.scratch/saas/tickets/04-plan.md`）上有寫」。外移的三件
+各自搬到會真的用到它的地方：pydantic-settings → 07-2；提示詞指紋 → 使用者待辦的變異度那條；
+切換金鑰來源的畫面 → 里程碑之後。拆完這片不再動 schema。
+
+- [ ] 04-1b 組織時區 `org_timezone`（IANA 名稱，預設 `Asia/Taipei`，存 `app_setting`）。
+      現在的「今天」是伺服器那台機器的今天；上雲後伺服器多半跑 UTC，凌晨三點的每日花費
+      拉取會把整天的數字掛在錯的日子上（差 8 小時＝差一天）。只換排程面那 6 個問「今天
+      幾號」的地方，稽核時間戳一律維持 UTC，**不動**全站 42 個 `datetime.now()`。
+      不動 schema／金流／權限＝**route B**，機器閘門綠即完成，不需批准
+- [ ] 04-2 剩下的一半（**需批准：憑證路徑**）：自帶金鑰（`own`）的 AI 金鑰進 Vault。
+      今天設定頁貼的 Anthropic 金鑰以**明文**存進 `app_setting`（`app/main.py:232`）——
+      Meta 權杖已經在 Vault 裡，同一個櫃子一半上鎖一半沒鎖。第一個帶自己金鑰的客戶進來
+      之前必須補上；本機單人階段那個欄位是空的，所以現在不痛。切換來源的畫面**不在這張**。
+      Meta 憑證進 Vault、組織層「已連接帳號」→ 品牌綁定**已完成**（`.scratch/schedule-module/issues/04`）
 
 ## 第 ⑤ 片：背景工作
 
@@ -36,6 +49,9 @@ Meta 端只建了一個 **PAUSED、沒有廣告組合、沒有廣告、沒有預
 
 - [ ] 07-1 閘門收尾：前端 depcruise 擋 supabase-js 只在登入模組（**Playwright 那一半已於 2026-08-29 完成**，見 `frontend/e2e/smoke.spec.ts`，`cd frontend && npm run e2e` 一行跑完）
 - [ ] 07-2 部署前（選平台後）：Hey API TS client、Sentry、staging、CD（單一 job `supabase db push`）
+      ＋**pydantic-settings 收環境變數**（2026-08-30 從第 ④ 片移來）：現在 19 個地方各自讀
+      環境變數、8 個不同的鍵，缺了或打錯字會安靜地用預設值繼續跑。它真正值錢的時刻就是
+      第一次部署——開機當場大聲失敗，好過上線後某個功能莫名不動、查半天發現少一個變數
 - [ ] 07-3 統一 404 信封（2026-08-30 從小債移來）：`require_brand` 走 `NotFoundKind` 吐
       `{"detail": …}`，identity 路由走 `handle_api_error` 吐 `{"error": {"code","message"}}`；
       前端三處讀 `.detail`（`brandReportApi.ts:36`、`http.ts:116`、`ordersApi.ts:93`）要跟著改。
@@ -61,7 +77,7 @@ Dependabot #1（`nanoid`，修補版是 3.3.18）：**`saas` 這邊已經是 3.3
       `app/identity/routes.py` accept_invite 不比對 invite.email 與登入者 email；且 `AcceptInvitePage`
       一掛載就自動接受，沒有確認步驟（03-3 審查 note 5）
 - [ ] 用自己金鑰（`own`）的組織看不到「調整月上限」欄位，切回 `platform` 時不好調——
-      04-2 剩下那一半開放切換來源時一併處理（04-1a 審查 note）
+      跟「設定頁切換金鑰來源」同一張做（2026-08-30 隨那張一起移到「里程碑之後」，04-1a 審查 note）
 - [ ] AI 成本對帳：`llm_task.cost` 是我們自己用 `app/llm/pricing.py` 算的**估算值**，不是 Anthropic
       實際帳單。官方有 `/v1/organizations/cost_report`（按 workspace／api_key 分組，約 5 分鐘延遲，
       需 Admin API key）——上雲收費前要拿它跟自己的估算對一次帳，否則「每月上限」擋的是估算不是真錢（2026-08-28 查證）
@@ -90,11 +106,18 @@ Dependabot #1（`nanoid`，修補版是 3.3.18）：**`saas` 這邊已經是 3.3
       仍是空的——代理不知道這個品牌是誰、賣多少錢、對誰賣。去建檔精靈把事實填起來，方案才會再準一階
 - [ ] 變異度（同一份輸入跑 N 次結果差多少）從沒量過：探針在
       `D:\0UserProfile\Desktop\MarketingOS Shell\variance-probe\`，一次都沒跑過。排程會做即時網路查詢，
-      兩次跑本來就看到不同素材，重試預算現在是猜的
+      兩次跑本來就看到不同素材，重試預算現在是猜的。
+      **這條也是「提示詞指紋」的前置**：`llm_task.methodology_hash`（原 04-1b 的一部分，一個
+      欄位，動 schema）是用來回答「為什麼這個月的方案跟上個月不一樣」，但差異本來有多大都
+      還沒量過，先蓋工具去解釋差異＝替一個沒人跑過的系統猜門檻。**2026-08-30 判定不做**；
+      這條探針跑出數字之後才回頭重判
 
 ## 里程碑之後（上雲後才動）
 
 - [ ] U1 新手五鐵則落地：全站術語大掃除＋禁用詞機器閘門＋步驟指示常駐（契約鐵則 11–12 驗收）
+- [ ] 設定頁切換金鑰來源（`platform`／`own`，2026-08-30 從第 ④ 片移來）：前提是「自帶金鑰」
+      真的是一個在賣的方案，那還不存在——今天要切只能直接改資料庫，而全系統只有一個組織。
+      做這張時一併補上面小債那條「用自己金鑰的組織看不到調整月上限欄位」
 
 2026-08-29：V1-02（每日預算對帳）、M1-01（Meta MCP 一鍵建）、M1-02（同意即執行）、
 M1-03（放手檔執行器）、P1（成效回流接通）五張隨 `app/ads/` 一起死——它們全部建立在檔期、
