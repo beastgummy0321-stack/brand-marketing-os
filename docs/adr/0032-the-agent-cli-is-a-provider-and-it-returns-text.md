@@ -55,3 +55,20 @@ CLIs diverge for it.
   and a CLI run takes minutes, so it needs the procrastinate `enqueue / status / cancel`
   contract that slice ⑤ already specifies. procrastinate is not installed yet. 05-1's payload
   (`_auto_sync_loop`, the weekly engine) dies with ads; its contract is what the shell needs.
+
+## 2026-08-30: only one CLI provider is built
+
+This ADR named two — `ClaudeCodeProvider` and `CodexProvider`. Only `CodexCliProvider`
+was built (`app/llm/providers.py`, switched by `BRAND_OS_LLM_PROVIDER=codex_cli`), and on
+2026-08-29 it carried a full real-brand run end to end at $0 without failing once. The
+second one is **not built**: it would be ~150 more lines of subprocess and event-stream
+plumbing doing the job a working provider already does, and nothing has yet hurt for want
+of it. The ADR's claim — that a local agent CLI is a provider, not a second runner — is
+already proven by one implementation; a second proves nothing new.
+
+Two known gaps in the codex line are accepted, not reasons to build the second: it cannot
+return `search_sources` (so the plan's source list is empty in $0 mode), and it cannot
+detect truncated output. If either starts to hurt, the cheaper fix is inside the existing
+line — have the model cite its own sources in the structured output — not a second CLI.
+
+Reopen this only with a written record of the codex line actually failing.
