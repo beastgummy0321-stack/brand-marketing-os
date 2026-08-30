@@ -79,24 +79,10 @@ Dependabot #1（`nanoid`，修補版是 3.3.18）：**`saas` 這邊已經是 3.3
 掃法：四個角度平行掃全 repo，每筆再派人專門去證明它是錯的，證不倒才留。32 筆去重後做完了
 11 項（票 02–05，commit `d9b2c90`／`454f8a8`／`7e0697e`／`2571b73`）。剩下這些各有理由。
 
-- [ ] **需裁決，而且現在卡住了**：`TEST_RATIO_CEILING` 今天被往上調了兩次（0.858 → 0.862 → 0.865），
-      而這道閘門自己的註解寫著**「只准往下」**。兩次都寫了理由、都在 diff 裡、審查也看過，
-      理由也成立（刪死碼會讓 production 掉得比 tests 快，比值是被動漲的）——但**紅轉綠靠
-      調數字，本來就是規範明文禁止的動作**。目前實測 0.864、天花板 0.865，只剩 0.001。
-      三條路：(a) 認了，把「只准往下」改成「刪碼期間可被動漲，要寫理由」；
-      (b) 真的去砍測試把比值壓回 0.858 以下（目標是 0.7）；(c) 改成量「測試/程式」以外的東西。
-      **2026-08-30 核准票落地後，實測正好等於天花板 0.865，headroom 歸零**——下一張票只要多
-      一行測試就會紅。這不再是「之後再說」，是下一張票的先決條件
 - [ ] **需批准（schema）** 兩支 migration 被這輪刻意留著沒寫：
       `DROP TABLE decision`（沒讀也沒寫，它的主人 `app/core/orchestrator.py` 已刪）＋
       刪 `order_record.attribution_override`、`interrupt.kind`／`visible_from`／`campaign_cycle_id`
       四個沒人用的欄位。欄位還在，所以 `enqueue()` 那三個沒有生產呼叫端的參數也還留著
-- [ ] 核准票的 `scope_ref` 存的是 `brand_id`，不是「被核准的那棵樹的 llm_task id」（實作者的
-      偏離，理由寫在 ADR 0040 與 migration 註解裡，獨立審查接受了）。功能上夠用——執行器拿
-      當下的樹算雜湊比對就行——但這一欄因此不帶任何資訊（跟隔壁的 `brand_id` 欄一模一樣），
-      而且事後查「我 8/30 到底簽了哪一棵」只能靠掃全部樹逐一算雜湊。正解是：`scope_ref` 存
-      樹的 task id，查詢改用 `brand_id + scope_type` 找最新一筆。約 6 行，但要一條測試——
-      **卡在上面那條天花板**
 - [ ] `frontend/src/components/layout/FluidCard.tsx` 現在只剩 Storybook 在用（票 05 拆掉
       `TaskFlowShell` 的三個死參數之後）。要留當設計素材還是刪，下一輪順手決定
 - [ ] `frontend/src/lib/auth.ts` 的 depcruise 註解已改成「規則還沒建」並指向 07-1——
