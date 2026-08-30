@@ -74,10 +74,14 @@ class BrandMonthMoneyTest(unittest.TestCase):
         main.conn.commit()
         account = meta_repo.list_accounts(main.conn, self.org_id)[-1]
         meta_repo.bind(main.conn, self.org_id, brand_id, account["id"])
-        meta_repo.upsert_campaign_spend(
-            main.conn, self.org_id, account["id"], date(2026, 8, 2),
-            [{"campaign_id": "c1", "campaign_name": "c1", "spend": spend,
-              "impressions": 100, "clicks": 10, "roas": None}],
+        meta_repo.upsert_entity_spend(
+            main.conn, self.org_id, account["id"],
+            [{"level": "campaign", "entity_id": "c1", "entity_name": "c1",
+              "campaign_id": "c1", "adset_id": None, "ad_id": None,
+              "spend_date": date(2026, 8, 2), "spend": spend,
+              "impressions": 100, "clicks": 10, "roas": None,
+              "actions": None, "action_values": None,
+              "attribution_window": "7d_click,1d_view"}],
         )
         main.conn.commit()
 

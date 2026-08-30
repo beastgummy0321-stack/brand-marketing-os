@@ -1,10 +1,10 @@
 """app/meta/graph.py — Graph API client: listing the ad accounts a Meta access token can
-see, and pulling one account's daily campaign insights. Private: only app/meta/routes.py
-and app/meta/daily_pull.py (both inside this package) import this.
+see, and pulling one account's insights across all three levels over a date range. Private:
+only app/meta/routes.py and app/meta/daily_pull.py (both inside this package) import this.
 
 `fetch_page` does the real network call and is the unit tests replace by name (same
 pattern as app/core/net.py's `fetch_url`, replaced in test_intake.py) — no network in
-tests. `list_ad_accounts`/`list_campaign_insights` do the paging and shape-parsing
+tests. `list_ad_accounts`/`list_entity_insights` do the paging and shape-parsing
 around it and are exercised for real; only the network edge is faked.
 
 Verified live against the real host, 2026-08-29 (04-design-approved.md): v26.0 is the
@@ -18,17 +18,24 @@ Trust-boundary hardening (review round 1): Meta is a live third party — a non-
 (5xx edge, HTML error page) or an account entry missing a field are real possibilities,
 not hypotheticals, and must become a human GraphError instead of an uncaught 500.
 
-Ticket 05 (`insights`, `list_campaign_insights`): the official Marketing API `insights`
-reference confirms `spend`/`impressions`/`clicks`/`campaign_id`/`campaign_name` as plain
-fields and `purchase_roas` as `list[{"action_type","value"}]` — not a scalar, and real
-accounts often carry several synonymous `action_type` entries for the same purchase event
-(`omni_purchase`, `onsite_web_purchase`, `offsite_conversion.fb_pixel_purchase`, …), so
-`_extract_roas` below picks one deterministically instead of taking `list[0]`. Whether an
+Ticket 05 (`insights`, formerly `list_campaign_insights`): the official Marketing API
+`insights` reference confirms `spend`/`impressions`/`clicks`/`campaign_id`/`campaign_name`
+as plain fields and `purchase_roas` as `list[{"action_type","value"}]` — not a scalar, and
+real accounts often carry several synonymous `action_type` entries for the same purchase
+event (`omni_purchase`, `onsite_web_purchase`, `offsite_conversion.fb_pixel_purchase`, …),
+so `_extract_roas` below picks one deterministically instead of taking `list[0]`. Whether an
 untracked campaign omits the key entirely, returns an empty list, or returns null could
 not be confirmed against a real token in this session — `_extract_roas` treats all three
 the same way (→ None, i.e. 未追蹤) so the behaviour is correct regardless of which shape
 Meta actually sends; this should still be checked against a real token before trusting the
 distinction never matters for some other reason.
+
+票 S1 (`list_entity_insights`, replaces `list_campaign_insights`): 三個層級（campaign／
+adset／ad）共用一支函式，收一個日期範圍而不是單一天——`time_increment: 1` 的一次呼叫在
+同一份回應裡回好幾天，見 `_to_entity_row` 為什麼 `spend_date` 要從每一列自己的
+`date_start` 讀，不能從呼叫端的迴圈變數來。`app/meta/repository.py` 的 `spend_summary()`
+CPA 計算沿用下面 `_ROAS_ACTION_PRIORITY` 這份同義字優先序（同一組同義字只維護一份）——
+改這裡的順序會連動改動 CPA。
 """
 
 import json
@@ -59,7 +66,13 @@ def fetch_page(url: str, *, params: dict | None, headers: dict) -> dict:
     """一頁的真正網路呼叫；不呼叫 raise_for_status()——Graph API 的錯誤形狀
     （{"error": {...}}）本來就會用一般 HTTP 狀態碼回來，直接回傳解析好的 JSON 讓
     list_ad_accounts 統一判斷成功／失敗。測試換掉這支（同 app/core/net.py fetch_url
-    的替換慣例），不打真正的網路。"""
+    的替換慣例），不打真正的網路。
+
+    `timeout=10.0` 這次（票 S1）**維持不動**：ad 層一整個月的拉取實際要花多久，這個
+    session 沒有量過——沒量到的數字不改。真的開始逾時時，官方文件給的下一步是
+    "try to break down the query into smaller queries by putting in filters like date
+    range"（SPEC §7.4(b)），再上去是 async insights job，**都不是把 timeout 調大**；
+    而按月切分 backfill（見 daily_pull.py `_month_chunks`）已經在做了。"""
     resp = httpx.get(url, params=params, headers=headers, timeout=10.0)
     return resp.json()
 
@@ -78,7 +91,7 @@ def _to_account(item: dict) -> dict | None:
 
 
 def _fetch_all_pages(url: str, params: dict | None, headers: dict) -> list[dict]:
-    """共用的翻頁＋錯誤處理骨架（list_ad_accounts／list_campaign_insights 都要「打一頁→
+    """共用的翻頁＋錯誤處理骨架（list_ad_accounts／list_entity_insights 都要「打一頁→
     判斷錯誤形狀→收集 data→跟 paging.next」，只有 data 裡每一項怎麼轉型不同，抽出來
     避免兩份幾乎一樣的錯誤處理各錯各的）。回傳收集到的原始 data 項目，轉型交給呼叫端。
 
@@ -142,28 +155,6 @@ def _extract_roas(action_stats) -> Decimal | None:
     return None
 
 
-def _to_campaign_row(item: dict) -> dict | None:
-    """一天一個活動的 insights 條目 → 我們要存的六個欄位；缺 campaign_id 或
-    spend/impressions/clicks 解析不出數字，這一筆不能用（跳過，不讓整包報廢）。"""
-    campaign_id = item.get("campaign_id")
-    if not campaign_id:
-        return None
-    try:
-        spend = Decimal(str(item.get("spend", "0")))
-        impressions = int(item.get("impressions", 0) or 0)
-        clicks = int(item.get("clicks", 0) or 0)
-    except (InvalidOperation, TypeError, ValueError):
-        return None
-    return {
-        "campaign_id": campaign_id,
-        "campaign_name": item.get("campaign_name") or campaign_id,
-        "spend": spend,
-        "impressions": impressions,
-        "clicks": clicks,
-        "roas": _extract_roas(item.get("purchase_roas")),
-    }
-
-
 def _to_campaign(item: dict) -> dict | None:
     """帳號活動清單的一筆 → 我們要的兩個欄位；缺 id 這一筆不能用（跳過，比照 _to_account）。
     名稱缺席補空字串——精準比對永遠不會等於空字串，所以缺名稱＝配不到，不是配到別人。"""
@@ -178,10 +169,10 @@ def list_campaigns(token: str, account_id: str) -> list[dict]:
 
     名稱比對要問的是「平台上存不存在這個活動」，不是「它花過錢」。insights 端點只回有
     投遞的活動：手動建好但維持關閉（PAUSED）的活動在那裡查不到，所以名稱比對不能建在
-    `meta_campaign_spend` 上——買廣告的人本來就是先照樹把活動建成關閉狀態、確認無誤才開跑
+    `meta_entity_spend` 上——買廣告的人本來就是先照樹把活動建成關閉狀態、確認無誤才開跑
     （2026-08-29 對真帳號實測：BP AD 有 3 個活動，當天的 insights 只回 1 個）。
 
-    `account_id` 同 `list_campaign_insights`，是 `meta_ad_account.account_id`（純數字），
+    `account_id` 同 `list_entity_insights`，是 `meta_ad_account.account_id`（純數字），
     act_ 前綴在這裡補。"""
     headers = {"Authorization": f"Bearer {token}"}
     url = f"{GRAPH_BASE_URL}/act_{account_id}/campaigns"
@@ -190,19 +181,124 @@ def list_campaigns(token: str, account_id: str) -> list[dict]:
     return [r for r in (_to_campaign(item) for item in items) if r is not None]
 
 
-def list_campaign_insights(token: str, account_id: str, day: date) -> list[dict]:
-    """回傳這個帳號『某一天』每個活動的成效
-    [{"campaign_id","campaign_name","spend","impressions","clicks","roas"}]（roas 可能是
-    None＝未追蹤）。`account_id` 是 `meta_ad_account.account_id`（純數字，無 act_ 前綴——
-    見 migration 註解），這裡才補上 insights 端點要的 act_ 前綴。"""
+# 三個層級要的度量欄位完全一樣，只寫一次——三份幾乎相同的字串各自漂移是這種表格最典型的
+# 壞法。
+#
+# **不要加 `reach`，不要加任何 breakdown（age／gender／placement）。** 官方 insights 參考頁
+# 寫「The start date of the time range cannot be beyond 37 months from the current date」
+# （developers.facebook.com/docs/marketing-api/reference/ad-account/insights/），但
+# 2025-06-10 起「reach will no longer be returned for standard queries that apply
+# breakdowns and use start_dates more than 13 months old」
+# （/docs/marketing-api/insights/best-practices/），2025-10-16 官方公告再把 unique-count
+# 類欄位與 hourly breakdown 收到 13 個月、frequency 收到 6 個月。多要一個 reach、或多要一個
+# breakdown，可讀的歷史會從 37 個月**無聲**掉到 13 個月——不是報錯，是回來的資料變少，而少
+# 掉的資料看起來就跟「那時候沒投」一模一樣。接手舊帳號的讀取（SPEC §7.4(a)、GRILL 決策 9）
+# 就建在這 37 個月上。要加欄位前先回來讀這段。
+_INSIGHT_METRIC_FIELDS = "spend,impressions,clicks,purchase_roas,actions,action_values"
+
+# 每一層要「自己這層的 id／名稱」，再加上所有**上層**的 id——上層 id 不是裝飾，是
+# meta_entity_spend 的 campaign_id／adset_id 兩欄：每一列都得知道自己掛在誰底下，否則
+# 「level 2 分了多少錢、level 3 花在哪」永遠接不起來（GRILL.md §1：錢在 level 2 分，數字
+# 只在 level 1，這個迴圈才學不起來）。官方 insights 欄位表把 campaign_id／campaign_name／
+# adset_id／adset_name／ad_id／ad_name 都列為一般欄位，且是相對父鏈定義的（campaign_id＝
+# 「your ad set belongs to」的那個活動），所以在 adset 層一起要 campaign_id 是文件內的用法。
+# 反過來文件沒有保證較高層級要得到較低層級的 id——campaign 層不要 ad_id，那一列底下有好幾個
+# ad，那個 id 沒有唯一值。也不要 campaign_name／adset_name 當父層名稱：這張表每一列只存自己
+# 那層的 entity_name，要顯示父層名稱時去讀父層那幾列，不在每一列複製一份會各自過期的字串。
+_LEVEL_FIELDS = {
+    "campaign": f"campaign_id,campaign_name,{_INSIGHT_METRIC_FIELDS}",
+    "adset": f"campaign_id,adset_id,adset_name,{_INSIGHT_METRIC_FIELDS}",
+    "ad": f"campaign_id,adset_id,ad_id,ad_name,{_INSIGHT_METRIC_FIELDS}",
+}
+
+# 送出去的歸因窗，同時也是存進 meta_entity_spend.attribution_window 的那個字串——同一份
+# 常數兩個用途，不會一邊改一邊沒改。為什麼不吃 API 預設值：文件寫預設值就是這個陣列，但
+# 2025-10-16 官方公告寫「On January 12, 2026, we will deprecate certain attribution windows
+# available today」——那天已經過了七個月。預設值是 Meta 的，不是我們的，而且它可以在我們
+# 不知情的情況下改。兩個用不同窗量出來的 ROAS 不能互相比較，而 backfill 一次就會把舊列跟
+# 新列混在同一張表裡（SPEC §7.4(d)，票 S1 D6）。
+_ATTRIBUTION_WINDOWS = ("7d_click", "1d_view")
+
+
+def _to_entity_row(item: dict, level: str, attribution_window: str) -> dict | None:
+    """一天一個實體的 insights 條目 → meta_entity_spend 的一列。
+
+    `entity_id`／`entity_name` 取的是**這一列自己那層**的 id 與名稱（ad 層就是 ad_id／
+    ad_name）；`campaign_id` 每一層都有；`adset_id`／`ad_id` 在自己以上的層級一律 None——
+    這正是那張表哪幾欄 NOT NULL、哪幾欄可 NULL 的分法。名稱缺席退回 id（比照
+    `_to_campaign`）：entity_name 是 NOT NULL 而且是給人看的，退回 id 至少指得回同一個東西。
+
+    `spend_date` 一律取這一列自己的 `date_start`，**不可以**用呼叫端迴圈裡的日期：
+    `time_increment: 1` 的一次呼叫回的是「一個實體 x 一天」一列，一個月的範圍在同一份
+    回應裡就有三十種日期。缺了它，這一列不知道自己是哪天的，唯一索引
+    (ad_account_id, level, entity_id, spend_date) 也就無從落地——跳過，不猜。
+
+    `actions`／`action_values` 原封不動往下傳，不解析、不挑選：哪一種 action_type 才算
+    「一次轉換」是行業判斷，ADR 0036 不准把它編進程式；`app/meta/repository.py`
+    `spend_summary()` 才是唯一算 CPA 的地方，且只在那裡讀這兩欄。`roas` 沿用 `_extract_roas`
+    未改——2026-08-30 對真帳號實測，這個帳號回的就是 `omni_purchase`，本來就是那份優先序的
+    第一個（GRILL.md §1(a)）。
+
+    解析不出來的一列跳過、不讓整批報廢（沿用原 `_to_campaign_row` 的規矩）。在這裡這條規矩
+    比原本更重要：ad 層一個月是好幾百列，一列壞掉就丟掉整個月，而少一列的損失跟平台本來就
+    有的缺列同形（GRILL.md §1(d)：81% 的 (實體, 日) 組合本來就沒有列）——真的需要分辨兩者
+    時，最便宜的作法是回傳被跳過的列數，不是每列寫 log。"""
+    campaign_id = item.get("campaign_id")
+    entity_id = item.get(f"{level}_id")
+    date_start = item.get("date_start")
+    if not campaign_id or not entity_id or not date_start:
+        return None
+    try:
+        spend_date = date.fromisoformat(date_start)
+        spend = Decimal(str(item.get("spend", "0")))
+        impressions = int(item.get("impressions", 0) or 0)
+        clicks = int(item.get("clicks", 0) or 0)
+    except (InvalidOperation, TypeError, ValueError):
+        return None
+    return {
+        "level": level,
+        "entity_id": entity_id,
+        "entity_name": item.get(f"{level}_name") or entity_id,
+        "campaign_id": campaign_id,
+        "adset_id": item.get("adset_id") if level != "campaign" else None,
+        "ad_id": item.get("ad_id") if level == "ad" else None,
+        "spend_date": spend_date,
+        "spend": spend,
+        "impressions": impressions,
+        "clicks": clicks,
+        "roas": _extract_roas(item.get("purchase_roas")),
+        "actions": item.get("actions"),
+        "action_values": item.get("action_values"),
+        "attribution_window": attribution_window,
+    }
+
+
+def list_entity_insights(
+    token: str, account_id: str, level: str, since: date, until: date,
+) -> list[dict]:
+    """這個帳號在 [since, until] 之間、`level`（campaign／adset／ad）每個實體**每一天**
+    一列的成效；一列的形狀見 `_to_entity_row`。`account_id` 是 `meta_ad_account.account_id`
+    （純數字、無 act_ 前綴——見 migration 註解），act_ 在這裡補。日期是閉區間：Meta 的
+    `time_range` 兩端都含，since 當天與 until 當天都會回。
+
+    沒有投遞的那一天**不會有列**，這裡也絕不補一列 0。2026-08-30 對真帳號實測：ad 層 35
+    個實體 x 91 天 = 3,185 個 (實體, 日) 組合，只回 591 列——81% 根本沒有列（GRILL.md
+    §1(d)）。「沒投遞」跟「投了沒成效」是兩件不同的事，補 0 會把前者偽造成後者。"""
     headers = {"Authorization": f"Bearer {token}"}
     url = f"{GRAPH_BASE_URL}/act_{account_id}/insights"
+    # `time_range` 與 `action_attribution_windows` 都是 Graph API 的結構化參數，在 GET
+    # query string 裡以 JSON 字面值當參數值傳（httpx 負責 URL 編碼）：官方參考頁把
+    # time_range 印成 object、action_attribution_windows 印成 list<enum{...}>，並把預設值
+    # 直接印成 `["7d_click","1d_view"]` 這個 JSON 陣列形狀；time_range 這條編碼路徑本檔已於
+    # 2026-08-29 對真主機驗過（見檔頭）。
     params: dict | None = {
-        "level": "campaign",
+        "level": level,
         "time_increment": 1,
-        "time_range": json.dumps({"since": day.isoformat(), "until": day.isoformat()}),
-        "fields": "campaign_id,campaign_name,spend,impressions,clicks,purchase_roas",
+        "time_range": json.dumps({"since": since.isoformat(), "until": until.isoformat()}),
+        "action_attribution_windows": json.dumps(list(_ATTRIBUTION_WINDOWS)),
+        "fields": _LEVEL_FIELDS[level],
         "limit": 100,
     }
+    window = ",".join(_ATTRIBUTION_WINDOWS)
     items = _fetch_all_pages(url, params, headers)
-    return [r for r in (_to_campaign_row(item) for item in items) if r is not None]
+    return [r for r in (_to_entity_row(i, level, window) for i in items) if r is not None]

@@ -134,9 +134,12 @@ class ApprovalApiContractTest(unittest.TestCase):
         return account_id
 
     def _seed_spend(self, account_id: str, campaign_id: str, day, *, spend: float) -> None:
-        meta_repo.upsert_campaign_spend(web.conn, coredb.DEV_ORG_ID, account_id, day, [
-            {"campaign_id": campaign_id, "campaign_name": "活動一",
-             "spend": spend, "impressions": 10, "clicks": 1, "roas": None},
+        meta_repo.upsert_entity_spend(web.conn, coredb.DEV_ORG_ID, account_id, [
+            {"level": "campaign", "entity_id": campaign_id, "entity_name": "活動一",
+             "campaign_id": campaign_id, "adset_id": None, "ad_id": None, "spend_date": day,
+             "spend": spend, "impressions": 10, "clicks": 1, "roas": None,
+             "actions": None, "action_values": None,
+             "attribution_window": "7d_click,1d_view"},
         ])
         web.conn.commit()
 

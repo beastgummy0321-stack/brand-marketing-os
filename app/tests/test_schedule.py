@@ -771,7 +771,7 @@ class BindTreeApiContractTest(_ScheduleApiTestBase):
         """換掉平台上的活動清單（不打網路）：`by_account` 是
         {本地 meta_ad_account.id: [(campaign_id, 活動名稱), …]}。
 
-        名稱比對問的是平台上有沒有這個活動，不是 `meta_campaign_spend`——手動建好、維持
+        名稱比對問的是平台上有沒有這個活動，不是 `meta_entity_spend`——手動建好、維持
         關閉的活動沒有任何 insights 列（見 app/meta/graph.py `list_campaigns`），所以這裡
         換掉的是 `graph.list_campaigns`，不是塞花費列進去。"""
         wanted = {
@@ -789,9 +789,12 @@ class BindTreeApiContractTest(_ScheduleApiTestBase):
 
     def _seed_campaign(self, org_id: str, account_id: str, campaign_id: str, campaign_name: str,
                         *, spend: float = 1000.0, roas: float | None = 2.0) -> None:
-        meta_repo.upsert_campaign_spend(web.conn, org_id, account_id, self.today, [
-            {"campaign_id": campaign_id, "campaign_name": campaign_name,
-             "spend": spend, "impressions": 100, "clicks": 10, "roas": roas},
+        meta_repo.upsert_entity_spend(web.conn, org_id, account_id, [
+            {"level": "campaign", "entity_id": campaign_id, "entity_name": campaign_name,
+             "campaign_id": campaign_id, "adset_id": None, "ad_id": None,
+             "spend_date": self.today, "spend": spend, "impressions": 100, "clicks": 10,
+             "roas": roas, "actions": None, "action_values": None,
+             "attribution_window": "7d_click,1d_view"},
         ])
         web.conn.commit()
 
@@ -849,7 +852,7 @@ class BindTreeApiContractTest(_ScheduleApiTestBase):
 
     def test_a_paused_campaign_with_no_spend_still_binds(self):
         """手動路徑的順序是「照樹建成關閉 → 配對確認 → 才開跑」，所以配對時活動一定還沒
-        花過錢，一列 insights 都沒有。名稱比對若建在 `meta_campaign_spend` 上，這一步永遠
+        花過錢，一列 insights 都沒有。名稱比對若建在 `meta_entity_spend` 上，這一步永遠
         是「配對失敗，請檢查名稱是否完全相符」——名字明明一字不差（2026-08-29 對真帳號實測：
         建了一個 PAUSED 活動，拉完當天花費，那個活動不在花費表裡）。"""
         self._succeed_plan_and_tree()

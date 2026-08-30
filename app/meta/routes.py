@@ -130,7 +130,9 @@ class SpendSummaryResponse(BaseModel):
 @router.get("/brands/{brand_id}/spend", response_model=SpendSummaryResponse)
 def brand_spend(request: Request, brand_id: str):
     """本月（今天所在的日曆月，[月初, 下月初) 半開區間）逐活動花費／成效＋一列總計，
-    見 repo.spend_summary 的總 ROAS 算法（花費加權，任一列未追蹤整組回 None）。
+    見 repo.spend_summary 的總 ROAS 算法（花費加權，任一列未追蹤整組回 None）。**只看
+    campaign 層**（票 S1：這支端點的畫面契約沒變，仍然是逐活動；adset／ad 層的數字給
+    排程模組的樹狀節點用，不在這裡）。
 
     「今天」用組織自己的時區算（票 04-1b）：用 UTC 的話，台北時間每個月 1 號早上 8 點
     以前打開這一頁，看到的會是上個月的花費。"""
@@ -140,9 +142,28 @@ def brand_spend(request: Request, brand_id: str):
     today = coresettings.today_for_org(web.conn, org_id=actor.org_id)
     month_start = today.replace(day=1)
     month_end = (month_start + timedelta(days=32)).replace(day=1)
-    summary = repo.spend_summary(web.conn, actor.org_id, account_ids, month_start, month_end)
+    summary = repo.spend_summary(
+        web.conn, actor.org_id, account_ids, month_start, month_end, level="campaign",
+    )
+    # repo.spend_summary 票 S1 起回 entity_id／entity_name（三層共用一支函式）——這支端點
+    # 的 HTTP 回應形狀不變（票 S1 D2）：對回 campaign_id／campaign_name，
+    # frontend/src/lib/metaApi.ts、CockpitPage.tsx 一個字都不用改。多出來的 ctr／cpc／
+    # cpm／cpa 四個鍵，CampaignSpendOut 沒有對應欄位，Pydantic v2 預設 extra="ignore"
+    # 會安靜丟掉，不會 500。
+    campaigns = [
+        CampaignSpendOut(
+            campaign_id=e["entity_id"], campaign_name=e["entity_name"], spend=e["spend"],
+            impressions=e["impressions"], clicks=e["clicks"], roas=e["roas"],
+        )
+        for e in summary["entities"]
+    ]
+    total = CampaignSpendOut(
+        campaign_id="total", campaign_name="總計", spend=summary["total"]["spend"],
+        impressions=summary["total"]["impressions"], clicks=summary["total"]["clicks"],
+        roas=summary["total"]["roas"],
+    )
     return SpendSummaryResponse(
         last_pull_at=repo.last_pull_at(web.conn, actor.org_id, account_ids),
-        campaigns=[CampaignSpendOut(**c) for c in summary["campaigns"]],
-        total=CampaignSpendOut(campaign_id="total", campaign_name="總計", **summary["total"]),
+        campaigns=campaigns,
+        total=total,
     )

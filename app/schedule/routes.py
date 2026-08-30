@@ -173,14 +173,19 @@ def _current_month_window(conn, org_id: str) -> tuple:
 
 def _fill_node_spend(conn, org_id: str, brand_id: str, tree: dict) -> None:
     """票 11：把已綁定的第一層節點對上 ticket 05 的當月花費／ROAS——一棵樹裡沒有任何
-    節點綁定，就完全不查（省一次查詢），比對用 campaign_id，不重讀名稱。"""
+    節點綁定，就完全不查（省一次查詢），比對用 campaign_id，不重讀名稱。
+
+    `level="campaign"`（票 S1）：這棵樹綁定的是第一層節點，meta_entity_spend 三層共用
+    一張表，不篩層級會把 adset／ad 層的花費一起加進來，變成三倍。"""
     bound_ids = {n["bound_external_id"] for n in tree["nodes"] if n["bound_external_id"]}
     if not bound_ids:
         return
     account_ids = meta_repo.bound_account_ids_for_brand(conn, org_id, brand_id)
     month_start, month_end = _current_month_window(conn, org_id)
-    summary = meta_repo.spend_summary(conn, org_id, account_ids, month_start, month_end)
-    by_campaign_id = {c["campaign_id"]: c for c in summary["campaigns"]}
+    summary = meta_repo.spend_summary(
+        conn, org_id, account_ids, month_start, month_end, level="campaign",
+    )
+    by_campaign_id = {e["entity_id"]: e for e in summary["entities"]}
     for node in tree["nodes"]:
         campaign = by_campaign_id.get(node["bound_external_id"])
         if campaign is not None:
@@ -253,7 +258,12 @@ def _approval_overspend(conn, org_id: str, brand_id: str, tree: dict, approval_r
     if bound_ids:
         account_ids = meta_repo.bound_account_ids_for_brand(conn, org_id, brand_id)
         window_end = today + timedelta(days=1)  # 半開區間含今天
-        summary = meta_repo.spend_summary(conn, org_id, account_ids, window_start, window_end)
+        # level="campaign"（票 S1）：這是核准金額的比對對象，核准只認第一層節點的
+        # daily_amount（見 _sum_daily_amounts），不篩層級會把 adset／ad 層也算進實際花費，
+        # 超支判斷會抓到假警報（ADR 0040 的錢煞車，錯的方向是更嚴格不是更寬鬆，但仍是錯的）。
+        summary = meta_repo.spend_summary(
+            conn, org_id, account_ids, window_start, window_end, level="campaign",
+        )
         spend_to_date = summary["total"]["spend"]
 
     return {

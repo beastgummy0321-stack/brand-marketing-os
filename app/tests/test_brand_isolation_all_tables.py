@@ -48,8 +48,8 @@ BRAND_AGNOSTIC_EXCEPTIONS = {
     "meta_ad_account": "票 04：組織層「已連接帳號」清單（ADR 0027 決策 6）——帳號要先在"
         "組織層連接，才談得上綁哪個品牌；真正的品牌歸屬在 brand_meta_ad_account（有"
         "NOT NULL brand_id，照常過這個檢查，不在例外清單）",
-    "meta_campaign_spend": "票 05：帳號＋活動＋日的每日花費紀錄，跟 meta_ad_account 同一個"
-        "道理——一個帳號可能同時綁兩個品牌（brand_meta_ad_account 是 m:n），花費列存在"
+    "meta_entity_spend": "票 05／S1：帳號＋層級＋實體＋日的每日花費紀錄，跟 meta_ad_account"
+        "同一個道理——一個帳號可能同時綁兩個品牌（brand_meta_ad_account 是 m:n），花費列存在"
         "帳號層，不能硬塞一個 brand_id 進去（否則要嘛雙算，要嘛得任意選一個品牌）",
 }
 

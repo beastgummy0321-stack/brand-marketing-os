@@ -325,7 +325,7 @@ LAYER_ORDER = [
                                 # （見 require_actor()），這裡的靜態掃描看不到，不算環
     "app.meta",                # 票 04：Meta 廣告帳戶連接（Graph API、Vault 權杖），依賴
                                 # app.core 與 app.shared；票 11 起 app.schedule 依賴它讀
-                                # meta_campaign_spend（比照既有的 app.dashboard 依賴方向）
+                                # meta_entity_spend（比照既有的 app.dashboard 依賴方向）
     "app.schedule",            # 票 07：檔期規劃最薄路徑，依賴 app.core／app.llm／app.shared／
                                 # app.brand_intelligence；本身尚無人依賴它
     "app.intake",              # 建檔精靈
@@ -578,7 +578,28 @@ class FileLineCapTest(unittest.TestCase):
 # 以及正常翻完三頁仍然全部回得來（後者守的是這次把 `break` 改成 `return` 的那行）。
 # 守的是**資料正確性**：殘缺的拉取比拉不到更危險，因為它看起來像資料——少掉的那幾天
 # 會讓一則正在贏的廣告看起來像是停止投遞了。沒有第三條，畫面行為不寫單元測試。
-TEST_LINES_CEILING = 14813
+# 票 S1（三層成效）：14,813 → 15,144（實測值，含本段註解與 KNOWN_MODULE_SIZES 兩筆理由
+# 自己佔掉的行）。`test_meta_daily_spend.py` 新增七支，
+# 每一支的 docstring 都點名守的是四類之一：`LevelNeverSumsTest`（**money**——
+# `meta_entity_spend` 三層共用一張表，`spend_summary` 沒篩 `level` 就把三層的花費疊在一起，
+# 同一筆錢算三遍；先證過紅——暫時把 `_SPEND_WHERE` 的 `level` 條件拿掉，這支從斷言
+# 「只有一個實體」變成「3 != 1」，見票 S1 報告的 RED 輸出）、
+# `RerunIsIdempotentTest::test_upserting_same_entity_twice_...`（**資料正確性**：同一個
+# (account, level, entity, date) upsert 兩次，只留第二次的數字）、`AbsenceIsNotZeroTest`
+# （**資料正確性**：某一層某一天 Meta 沒回任何列，就是零列，不是補一列 spend=0）、
+# `AttributionWindowStoredAsSentTest`（**資料正確性**：存進去的 attribution_window 是這次
+# 請求真的送出的值，不是測試自己寫死的字串）、`CpaMappingTest`（**money**：CPA 沒設定
+# 轉換目標是 NULL，設定了就照 README 對照表 map 出來的 action_type 算）、
+# `RetentionGuardTest`（**money**：backfill 的 37 個月保護要在任何 HTTP 呼叫之前擋下）、
+# `MonthlyChunkingTest`（**API 契約**：3 個月的補拉每層該送 3 次請求，不是 1 次也不是
+# 90 次）。沒有重複驗證同一件事的兩支，也沒有畫面行為的單元測試。
+# 票 S1 審查缺陷修正：15,144 → 15,178。`CpaMappingTest` 新增一支
+# `test_cpa_is_null_when_any_day_in_range_has_no_tracked_conversions`（**money**：同一個
+# 實體、同一個月，一天有對得上的 action、另一天 actions 是 SQL NULL——沒有 bool_and 保護
+# 的話那天的花費照樣進分子、卻不進分母，印出一個過度樂觀的假 CPA；這支證明加了保護之後
+# 總計跟實體小計都正確回 None）。沒有第二支重複驗證同一件事，也沒有畫面行為的單元測試。
+# 多出來的行數還含這段理由註解本身與 KNOWN_MODULE_SIZES 那筆理由。
+TEST_LINES_CEILING = 15178
 
 
 def _line_totals() -> tuple:
@@ -667,7 +688,26 @@ KNOWN_MODULE_SIZES = {
                        # 缺陷 1／2：parse_json_reply 換成 raw_decode 單錨點（含為什麼不能
                        # 退而求其次的理由註解）＋timeout_s 300 秒與 max_retries=0 兩段
                        # 來源註解（實測列號、SDK 常數位置）。前一次是票 09 的 1298
-    "app/meta": 875,  # 2026-08-30 票 S0：`_fetch_all_pages` 擞到 `_MAX_PAGES` 改成拋例外、
+    "app/meta": 1323,  # 2026-08-30 票 S1 審查缺陷修正（money）：cpa 從 `_RATE_METRICS`
+                       # 抽成自己的 `_CPA_METRIC`，補上 roas 已經有的 `bool_and` 保護——
+                       # `_CONVERSIONS_LATERAL` 對不上 action_type（含 actions 本身是 SQL
+                       # NULL）時 `conv.conversions` 是 SQL NULL，SUM() 會跳過它不當 0 加總，
+                       # 沒有這條保護，一天「有花費、沒追蹤到轉換」的花費照樣進分子、卻不
+                       # 進分母，印出一個過度樂觀的假 CPA（GRILL 決定1(d)／SPEC §3.3：560
+                       # 個有花費的廣告日只有 191 天有 purchase_roas，這是常態不是邊角案例）。
+                       # 兩處呼叫端（逐實體、總計）都要接上；順帶把 `_RATE_METRICS` 上方、
+                       # `spend_summary` docstring 裡「這四個不套用 bool_and」的舊說法改成
+                       # 「ctr／cpc／cpm 不套用，cpa 要套用」。多出來的行數大半是理由註解。
+                       # 前一次是 1300——
+                       # 2026-08-30 票 S1（三層成效）：`meta_campaign_spend` → `meta_entity_
+                       # spend`，graph.py 的 `list_campaign_insights` 換成三層共用的
+                       # `list_entity_insights`／`_to_entity_row`（含 37→13 個月陷阱、
+                       # 歸因窗常數的理由註解）；repository.py 的 `spend_summary` 加
+                       # `level`（必填）與 `conversion_goal`（新關鍵字），新增 ctr／cpc／
+                       # cpm／cpa 四個算式與 CPA 的 LATERAL join（含為什麼不能直接 join
+                       # jsonb_array_elements 的實測理由）。多出來的行數大半是理由註解，
+                       # 不是邏輯本身變複雜。前一次是 875——
+                       # 2026-08-30 票 S0：`_fetch_all_pages` 擞到 `_MAX_PAGES` 改成拋例外、
                        # 不再回一份殘缺的清單（＋11 行，十行是為什麼不能默默截斷的理由與實測值；
                        # 程式本身是 `break`→`return` 加一句 raise）。前一次是 864——
                        # 2026-08-30 票 04-1b 組織時區：`_pull_one_account` 與 brand_spend 的
@@ -683,7 +723,13 @@ KNOWN_MODULE_SIZES = {
     "app/orders": 1423,  # 票 12：channel_revenue 一張表取代三張（刪掉藥局專屬那一整組
                           # 之後仍淨增）——官網帳本寫入路徑、channel_revenue_summary()、
                           # 通用手動登錄（含「官網不能手動登錄」那道錢的守門）
-    "app/schedule": 1452,  # 票 05-1 fix round 1（money）：`schedule_tree`／
+    "app/schedule": 1462,  # 2026-08-30 票 S1：`_fill_node_spend`／`_approval_overspend`
+                           # 呼叫 `meta_repo.spend_summary` 改傳 `level="campaign"`（三層
+                           # 共用一張表之後，忘記篩層級會把 adset／ad 層的花費也算進來），
+                           # 讀回應的鍵從 `summary["campaigns"]`／`c["campaign_id"]` 改成
+                           # `summary["entities"]`／`e["entity_id"]`——10 行全是這兩處呼叫
+                           # 端的理由註解。前一次是 1452——
+                           # 票 05-1 fix round 1（money）：`schedule_tree`／
                            # `schedule_creative` 過去在 job 執行時用 `_latest_task_row()`
                            # 重讀「這個品牌最新一次」來源列——frozen decision 3 的
                            # 「一次一個」是按 task type 算的，擋不住兩種工作交錯排隊那段

@@ -75,7 +75,11 @@ def brand_month_money(conn, *, org_id: str, brand_id: str, today: str | None = N
     month_end = (month_start + timedelta(days=32)).replace(day=1)  # 半開區間，比照 brand_spend
 
     account_ids = meta_repo.bound_account_ids_for_brand(conn, org_id, brand_id)
-    spend = meta_repo.spend_summary(conn, org_id, account_ids, month_start, month_end)["total"]["spend"]
+    # level="campaign"（票 S1）：meta_entity_spend 三層共用一張表，這裡只看月報要的
+    # campaign 層總花費，不然 adset／ad 層的列會被一起加進來，變成三倍。
+    spend = meta_repo.spend_summary(
+        conn, org_id, account_ids, month_start, month_end, level="campaign",
+    )["total"]["spend"]
 
     revenue_summary = orders_repo.channel_revenue_summary(conn, brand_id, since=since, until=until)
     revenue = revenue_summary["revenue"]

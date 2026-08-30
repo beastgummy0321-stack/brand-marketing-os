@@ -1,23 +1,31 @@
-"""app/tests/test_meta_daily_spend.py — 票 05：每日拉 Meta 花費並顯示。
+"""app/tests/test_meta_daily_spend.py — 票 05／S1：每日拉 Meta 花費並顯示，三層都拉。
 
-四件事，只寫這四件（docs/workflow-diet.md 第 4 條：金額、租戶隔離、API 契約、資料
-正確性；畫面行為不寫單元測試，只留 frontend/e2e/smoke.spec.ts 一支端到端煙霧測試）：
+只寫 docs/workflow-diet.md 第 4 條允許的四類（金額、租戶隔離、API 契約、資料正確性；
+畫面行為不寫單元測試，只留 frontend/e2e/smoke.spec.ts 一支端到端煙霧測試）：
 
 1. 金額正確：拿票面點名的真實數字當 fixture（BP AD 三檔活動共 NT$172,081，ROAS
    3.22／2.21；上等生技四檔活動共 NT$22,256，ROAS 0.54，三檔未追蹤），驗證存進
-   `meta_campaign_spend` 的加總與逐檔金額對得上，且「未追蹤」（purchase_roas 缺 key、
+   `meta_entity_spend` 的加總與逐檔金額對得上，且「未追蹤」（purchase_roas 缺 key、
    空陣列、顯式 null 三種可能形狀都要驗）永遠存成 NULL，不是 0。
-2. 重跑同一天不重複、不 double count：同一份 fixture 跑兩次，列數與金額不變
-   （meta_campaign_spend 的 (ad_account_id, campaign_id, spend_date) 唯一索引撐住的
-   upsert，見 migration／repository.upsert_campaign_spend）。
+2. 重跑同一天不重複、不 double count：同一份 fixture 跑兩次，列數與金額不變；同一個
+   (account, level, entity, date) upsert 兩次、數字不同，只留第二次的值（
+   meta_entity_spend 的 (ad_account_id, level, entity_id, spend_date) 唯一索引撐住的
+   upsert，見 migration／repository.upsert_entity_spend）。
 3. 一次拉取失敗（GraphError）留舊資料、不動 last_pull_at；同一輪跑裡另一個帳號成功
-   互不牽連（部分成功優於全部放棄）。
+   互不牽連（部分成功優於全部放棄）；某一層某一天 Meta 沒回任何列，就是零列，不補一列
+   spend=0（票 S1 D8：沒投遞跟投了沒成效是兩件事）。
 4. 租戶隔離：對一個組織跑 `run_daily_pull` 完全不寫另一個組織的列——即使兩個組織都
    有綁定的帳號、都能被拉。
 
-外加 API 契約：GET /api/meta/brands/{brand_id}/spend 的加總邏輯（ROAS 是比率，花費
-加權平均；任一列未追蹤，該活動或總計就整組回 None，不能悄悄假裝把那筆花費的營收
-算進去了）與跨組織 404。
+外加：
+- API 契約：GET /api/meta/brands/{brand_id}/spend 的加總邏輯（ROAS 是比率，花費加權
+  平均；任一列未追蹤，該活動或總計就整組回 None，不能悄悄假裝把那筆花費的營收算進去
+  了）與跨組織 404；`attribution_window` 存的是這次請求真的送出的值（票 S1 D6）；
+  `backfill` 按日曆月切段，三個月該送三次請求，不是一次也不是九十次（票 S1 D4）。
+- 金額：三層共用一張表，`spend_summary(level="campaign")` 不能把 adset／ad 層的花費
+  疊進來變三倍（票 S1 done-check 1）；CPA 沒設定轉換目標就是 NULL，設定了就照對應的
+  action_type 算（票 S1 D4）；backfill 的 37 個月保護要在任何 HTTP 呼叫之前就擋下
+  （票 S1 D10）。
 
 procrastinate 的實際排程／worker 機制（defer → run_worker → 真的跑）已經是票 01 的
 測試範圍（test_background.py）；這裡只補一支證明 `register_task()` 掛的名字
@@ -25,6 +33,7 @@ procrastinate 的實際排程／worker 機制（defer → run_worker → 真的�
 "background." 前綴掃描）真的能被 defer／跑，不重複整套機制的測試。
 """
 
+import json
 import unittest
 from datetime import datetime
 from uuid import uuid4
@@ -87,14 +96,39 @@ SD_INSIGHTS_PAGE = {
 }
 
 
+def _with_date_start(page: dict, params: dict) -> dict:
+    """幫 fixture 每一列補上 `date_start`——`_to_entity_row`（票 S1 D7）要求每一列自己帶
+    日期，不能從呼叫端的迴圈變數來；夾具本身不用管日期，這裡從送出的 `time_range` 讀
+    `since` 補上去，比照 `time_increment: 1` 對單日範圍只會回一天資料的真實行為。"""
+    since = json.loads(params["time_range"])["since"]
+    return {**page, "data": [dict(item, date_start=since) for item in page.get("data", [])]}
+
+
 def _dispatch_insights(pages_by_account: dict):
-    """回傳一個 fetch_page 替身：依 URL 裡的 act_<account_id> 決定回哪一頁。"""
+    """回傳一個 fetch_page 替身：依 URL 裡的 act_<account_id> 決定回哪一頁（不分層級——
+    這批既有測試只餵 campaign 形狀的資料，adset／ad 層請求會因為缺 adset_id／ad_id
+    被 `_to_entity_row` 跳過，落地列數不受影響，見 `AbsenceIsNotZeroTest` 對這個行為的
+    正面驗證）。"""
 
     def fake(url, *, params, headers):
         for account_id, page in pages_by_account.items():
             if f"act_{account_id}/insights" in url:
-                return page
+                return _with_date_start(page, params)
         raise AssertionError(f"沒有對應的 fixture：{url}")
+
+    return fake
+
+
+def _dispatch_by_level(account_id: str, pages_by_level: dict):
+    """回傳一個 fetch_page 替身：依 URL 裡的 act_<account_id> **與** `params["level"]`
+    決定回哪一頁——比 `_dispatch_insights` 精細，用在需要驗證「這一層真的什麼都沒有」
+    （票 S1 D8：絕不能補一列 0）的測試。沒對到的層級回一頁空資料，不是憑空造錯。"""
+
+    def fake(url, *, params, headers):
+        if f"act_{account_id}/insights" not in url:
+            raise AssertionError(f"沒有對應的 fixture：{url}")
+        page = pages_by_level.get(params["level"], {"data": [], "paging": {}})
+        return _with_date_start(page, params)
 
     return fake
 
@@ -165,9 +199,11 @@ class _MetaDailySpendTestBase(unittest.TestCase):
         web.conn.commit()
 
     def _spend_rows(self, ad_account_id: str) -> list:
+        """只看 campaign 層——這批既有測試的 fixture 本來就只餵得出 campaign 層的列
+        （見 `_dispatch_insights` 的說明），這裡明講篩 level 而不是巧合地只有一層。"""
         return list(web.conn.execute(
-            "SELECT campaign_id, spend, roas FROM meta_campaign_spend"
-            " WHERE ad_account_id = %s ORDER BY campaign_id",
+            "SELECT entity_id, spend, roas FROM meta_entity_spend"
+            " WHERE ad_account_id = %s AND level = 'campaign' ORDER BY entity_id",
             (ad_account_id,),
         ))
 
@@ -193,7 +229,7 @@ class MoneyMathTest(_MetaDailySpendTestBase):
         rows = self._spend_rows(self.bp_id)
         self.assertEqual(len(rows), 3)
         self.assertAlmostEqual(sum(float(r["spend"]) for r in rows), 172081.00, places=2)
-        by_id = {r["campaign_id"]: r for r in rows}
+        by_id = {r["entity_id"]: r for r in rows}
         self.assertAlmostEqual(float(by_id["bp-c1"]["roas"]), 3.22, places=2)
         self.assertAlmostEqual(float(by_id["bp-c2"]["roas"]), 2.21, places=2)
         self.assertIsNone(by_id["bp-c3"]["roas"], "缺 purchase_roas key 必須存成 NULL，不是 0")
@@ -203,7 +239,7 @@ class MoneyMathTest(_MetaDailySpendTestBase):
         rows = self._spend_rows(self.sd_id)
         self.assertEqual(len(rows), 4)
         self.assertAlmostEqual(sum(float(r["spend"]) for r in rows), 22256.00, places=2)
-        by_id = {r["campaign_id"]: r for r in rows}
+        by_id = {r["entity_id"]: r for r in rows}
         self.assertAlmostEqual(float(by_id["sd-c1"]["roas"]), 0.54, places=2)
         # 空陣列、缺 key、顯式 null 三種形狀，一律是 NULL（未追蹤），不是 0。
         self.assertIsNone(by_id["sd-c2"]["roas"])
@@ -241,6 +277,33 @@ class RerunIsIdempotentTest(_MetaDailySpendTestBase):
         self.assertEqual(len(rows), 3, "同一天重跑不該多出列")
         self.assertAlmostEqual(sum(float(r["spend"]) for r in rows), 172081.00, places=2)
 
+    def test_upserting_same_entity_twice_with_different_numbers_keeps_only_the_second(self):
+        """資料正確性（票 S1 done-check 2）：同一個 (account, level, entity, date) upsert
+        兩次、數字不同，只留一列、值是第二次的——這是 (ad_account_id, level, entity_id,
+        spend_date) 唯一索引撐住的重跑安全機制，不是程式碼自己防呆。"""
+        from datetime import UTC, datetime
+
+        org_id, _ = self._make_org("upsert_twice")
+        bp_id = self._connect_account(org_id, BP_ACCOUNT_ID, "BP AD")
+        day = datetime.now(UTC).date()
+
+        def row(spend):
+            return {"level": "campaign", "entity_id": "c1", "entity_name": "活動一",
+                    "campaign_id": "c1", "adset_id": None, "ad_id": None, "spend_date": day,
+                    "spend": spend, "impressions": 100, "clicks": 10, "roas": None,
+                    "actions": None, "action_values": None,
+                    "attribution_window": "7d_click,1d_view"}
+
+        meta_repo.upsert_entity_spend(web.conn, org_id, bp_id, [row(1000)])
+        web.conn.commit()
+        meta_repo.upsert_entity_spend(web.conn, org_id, bp_id, [row(2000)])
+        web.conn.commit()
+
+        rows = self._spend_rows(bp_id)
+        self.assertEqual(len(rows), 1, "同一個實體同一天，不該留下兩列")
+        self.assertAlmostEqual(float(rows[0]["spend"]), 2000.0, places=2,
+                                msg="留下的該是第二次寫進去的數字")
+
 
 # -- 3. 失敗留舊資料、不動 last_pull_at；同輪別的帳號互不牽連 -------------------------
 
@@ -276,8 +339,8 @@ class FailedPullLeavesOldDataTest(_MetaDailySpendTestBase):
             "SELECT last_pull_at FROM meta_ad_account WHERE id = %s", (bp_id,)
         ).fetchone()["last_pull_at"]
         self.assertEqual(
-            [(r["campaign_id"], r["spend"]) for r in bp_rows_before],
-            [(r["campaign_id"], r["spend"]) for r in bp_rows_after],
+            [(r["entity_id"], r["spend"]) for r in bp_rows_before],
+            [(r["entity_id"], r["spend"]) for r in bp_rows_after],
             "失敗的帳號，舊的花費數字必須原封不動",
         )
         self.assertEqual(bp_last_pull_before, bp_last_pull_after, "失敗不該更新上次成功時間")
@@ -286,6 +349,32 @@ class FailedPullLeavesOldDataTest(_MetaDailySpendTestBase):
             "SELECT last_pull_at FROM meta_ad_account WHERE id = %s", (sd_id,)
         ).fetchone()["last_pull_at"]
         self.assertIsNotNone(sd_after, "同一輪裡，成功的帳號不該被失敗的帳號拖累")
+
+
+# -- 3b. 缺席不是零：Meta 對某一層某一天沒回任何列，就是零列，不是一列 spend=0 ----------
+
+class AbsenceIsNotZeroTest(_MetaDailySpendTestBase):
+    def test_a_level_with_no_data_produces_no_rows_not_a_zero_row(self):
+        """資料正確性（票 S1 done-check 3、D8）：ad 層這次完全沒回任何資料，
+        meta_entity_spend 就該是零列——補一列 spend=0 會把「沒投遞」偽造成「投了沒
+        成效」，兩者是完全不同的事實。"""
+        org_id, _ = self._make_org("absence")
+        bp_id = self._connect_account(org_id, BP_ACCOUNT_ID, "BP AD")
+        brand_id = bi_repo.create_brand(
+            web.conn, org_id=org_id, name="缺席測試品牌", client_name=None, actor="test")["id"]
+        self._bind(org_id, brand_id, bp_id)
+        # 只給 campaign 層資料；adset／ad 層明講回空資料，不是巧合地缺欄位被跳過。
+        graph.fetch_page = _dispatch_by_level(BP_ACCOUNT_ID, {"campaign": BP_INSIGHTS_PAGE})
+
+        daily_pull.run_daily_pull(org_id)
+
+        ad_rows = web.conn.execute(
+            "SELECT * FROM meta_entity_spend WHERE ad_account_id = %s AND level = 'ad'",
+            (bp_id,),
+        ).fetchall()
+        self.assertEqual(ad_rows, [], "ad 層沒有回任何資料，就該是零列，不是一列 spend=0")
+        # campaign 層照樣落地，證明「缺席」只影響沒資料的那一層，不是整個帳號都不寫。
+        self.assertEqual(len(self._spend_rows(bp_id)), 3)
 
 
 # -- 4. 租戶隔離：一個組織的 run 不寫另一個組織的列 -----------------------------------
@@ -333,7 +422,8 @@ class SpendDateFollowsOrgTimezoneTest(_MetaDailySpendTestBase):
         graph.fetch_page = _dispatch_insights({account_id: page})
         daily_pull.run_daily_pull(org_id)
         return web.conn.execute(
-            "SELECT DISTINCT spend_date FROM meta_campaign_spend WHERE ad_account_id = %s",
+            "SELECT DISTINCT spend_date FROM meta_entity_spend"
+            " WHERE ad_account_id = %s AND level = 'campaign'",
             (internal_id,),
         ).fetchone()["spend_date"]
 
@@ -424,10 +514,13 @@ class BrandSpendRouteTest(_MetaDailySpendTestBase):
         self.auth = self._headers(self.token, self.org_id)
 
     def _insert_row(self, campaign_id, day, spend, roas, impressions=1000, clicks=10, name=None):
-        meta_repo.upsert_campaign_spend(
-            web.conn, self.org_id, self.account_id, day,
-            [{"campaign_id": campaign_id, "campaign_name": name or campaign_id, "spend": spend,
-              "impressions": impressions, "clicks": clicks, "roas": roas}],
+        meta_repo.upsert_entity_spend(
+            web.conn, self.org_id, self.account_id,
+            [{"level": "campaign", "entity_id": campaign_id, "entity_name": name or campaign_id,
+              "campaign_id": campaign_id, "adset_id": None, "ad_id": None, "spend_date": day,
+              "spend": spend, "impressions": impressions, "clicks": clicks, "roas": roas,
+              "actions": None, "action_values": None,
+              "attribution_window": "7d_click,1d_view"}],
         )
         web.conn.commit()
 
@@ -501,6 +594,222 @@ class BrandSpendRouteTest(_MetaDailySpendTestBase):
             headers=self._headers(token_b, org_b),
         )
         self.assertEqual(resp.status_code, 404)
+
+
+# -- 7. 金額：三層共用一張表，spend_summary(level=) 不能把別層的花費疊進來 --------------
+
+class LevelNeverSumsTest(unittest.TestCase):
+    """money（票 S1 done-check 1）：meta_entity_spend 三層共用一張表，`level` 是 NOT NULL
+    沒有預設值就是為了擋住這件事——spend_summary 沒篩 level，campaign／adset／ad 三層的
+    花費會被疊在一起，同一筆錢算三遍。"""
+
+    def setUp(self):
+        self.org_id = f"org_level_test_{uuid4().hex[:10]}"
+        web.conn.execute(
+            "INSERT INTO organisation (id, name, kind) VALUES (%s, %s, 'personal')"
+            " ON CONFLICT (id) DO NOTHING",
+            (self.org_id, self.org_id),
+        )
+        meta_repo.upsert_accounts(web.conn, self.org_id, [
+            {"account_id": BP_ACCOUNT_ID, "name": "BP AD", "currency": "TWD"},
+        ])
+        web.conn.commit()
+        self.account_id = next(
+            a["id"] for a in meta_repo.list_accounts(web.conn, self.org_id)
+            if a["account_id"] == BP_ACCOUNT_ID
+        )
+        from datetime import UTC, datetime
+        self.today = datetime.now(UTC).date()
+        self._seed("campaign", "camp-1", "camp-1", None, spend=1000)
+        self._seed("adset", "adset-1", "camp-1", None, spend=2000)
+        self._seed("ad", "ad-1", "camp-1", "adset-1", spend=4000)
+
+    def _seed(self, level, entity_id, campaign_id, adset_id, *, spend):
+        meta_repo.upsert_entity_spend(web.conn, self.org_id, self.account_id, [{
+            "level": level, "entity_id": entity_id, "entity_name": entity_id,
+            "campaign_id": campaign_id, "adset_id": adset_id, "ad_id": None,
+            "spend_date": self.today, "spend": spend, "impressions": 100, "clicks": 10,
+            "roas": None, "actions": None, "action_values": None,
+            "attribution_window": "7d_click,1d_view",
+        }])
+        web.conn.commit()
+
+    def test_campaign_level_summary_excludes_adset_and_ad_rows(self):
+        from datetime import timedelta
+        month_start = self.today.replace(day=1)
+        month_end = (month_start + timedelta(days=32)).replace(day=1)
+        summary = meta_repo.spend_summary(
+            web.conn, self.org_id, [self.account_id], month_start, month_end, level="campaign",
+        )
+        self.assertEqual(len(summary["entities"]), 1, "只有一個 campaign 層實體")
+        self.assertAlmostEqual(
+            summary["total"]["spend"], 1000.0, places=2,
+            msg="level='campaign' 混進了 adset（2000）／ad（4000）層的花費",
+        )
+
+
+# -- 8. attribution_window 存的是這次請求真的送出的值 -----------------------------------
+
+class AttributionWindowStoredAsSentTest(unittest.TestCase):
+    def setUp(self):
+        self._orig_fetch_page = graph.fetch_page
+
+    def tearDown(self):
+        graph.fetch_page = self._orig_fetch_page
+
+    def test_stored_attribution_window_matches_the_request_not_a_hardcoded_string(self):
+        """資料正確性（票 S1 done-check 4、D6）：存進去的 attribution_window 是這次請求
+        真的送出的 action_attribution_windows，不是測試自己寫死的一個字串——比對的對象是
+        `graph._ATTRIBUTION_WINDOWS` 這個模組常數，不是複製一份字面值。"""
+        from datetime import UTC, datetime
+
+        sent = list(graph._ATTRIBUTION_WINDOWS)
+
+        def fake(url, *, params, headers):
+            self.assertEqual(json.loads(params["action_attribution_windows"]), sent,
+                              "送出的 action_attribution_windows 跟模組常數對不上")
+            since = json.loads(params["time_range"])["since"]
+            return {"data": [{**BP_INSIGHTS_PAGE["data"][0], "date_start": since}], "paging": {}}
+
+        graph.fetch_page = fake
+        today = datetime.now(UTC).date()
+        rows = graph.list_entity_insights("tok", BP_ACCOUNT_ID, "campaign", today, today)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["attribution_window"], ",".join(sent))
+
+
+# -- 9. CPA：沒設定轉換目標是 NULL，設定了就照對應的 action_type 算 ---------------------
+
+class CpaMappingTest(unittest.TestCase):
+    """money（票 S1 done-check 6、D4）：CPA 該用哪個 action_type 由 conversion_goal 決定，
+    沒設定就是 NULL，不是 0；設定了就用 README 對照表 map 出來的那個 action_type。"""
+
+    def setUp(self):
+        self.org_id = f"org_cpa_test_{uuid4().hex[:10]}"
+        web.conn.execute(
+            "INSERT INTO organisation (id, name, kind) VALUES (%s, %s, 'personal')"
+            " ON CONFLICT (id) DO NOTHING",
+            (self.org_id, self.org_id),
+        )
+        meta_repo.upsert_accounts(web.conn, self.org_id, [
+            {"account_id": BP_ACCOUNT_ID, "name": "BP AD", "currency": "TWD"},
+        ])
+        web.conn.commit()
+        self.account_id = next(
+            a["id"] for a in meta_repo.list_accounts(web.conn, self.org_id)
+            if a["account_id"] == BP_ACCOUNT_ID
+        )
+        from datetime import UTC, datetime
+        self.today = datetime.now(UTC).date()
+        meta_repo.upsert_entity_spend(web.conn, self.org_id, self.account_id, [{
+            "level": "campaign", "entity_id": "c1", "entity_name": "活動一",
+            "campaign_id": "c1", "adset_id": None, "ad_id": None, "spend_date": self.today,
+            "spend": 1000, "impressions": 1000, "clicks": 50, "roas": None,
+            "actions": [{"action_type": "lead", "value": "5"}], "action_values": None,
+            "attribution_window": "7d_click,1d_view",
+        }])
+        web.conn.commit()
+
+    def _summary(self, conversion_goal):
+        from datetime import timedelta
+        month_start = self.today.replace(day=1)
+        month_end = (month_start + timedelta(days=32)).replace(day=1)
+        return meta_repo.spend_summary(
+            web.conn, self.org_id, [self.account_id], month_start, month_end,
+            level="campaign", conversion_goal=conversion_goal,
+        )
+
+    def test_cpa_is_null_when_conversion_goal_is_unset(self):
+        summary = self._summary(None)
+        self.assertIsNone(summary["total"]["cpa"], "沒設定轉換目標，CPA 不該算出任何數字")
+
+    def test_cpa_uses_the_mapped_action_type_when_goal_is_set(self):
+        summary = self._summary("lead")
+        # spend 1000 / lead 5 次 = 200；"lead" 目標映射到 ("lead", "complete_registration")，
+        # 這一列的 actions 剛好有 lead=5。
+        self.assertAlmostEqual(summary["total"]["cpa"], 200.0, places=2)
+
+    def test_cpa_is_null_when_any_day_in_range_has_no_tracked_conversions(self):
+        """money：同一個實體，一天有對得上的 action、另一天 actions 是 NULL（未追蹤，不是
+        零轉換）——那天的花費照樣算進分子，NULL 卻不會被 SUM() 算進分母，沒有 bool_and
+        保護就會印出一個過度樂觀的假 CPA。這裡驗證加了保護之後，整組正確地回 None。"""
+        other_day = self.today.replace(day=1 if self.today.day != 1 else 2)
+        meta_repo.upsert_entity_spend(web.conn, self.org_id, self.account_id, [{
+            "level": "campaign", "entity_id": "c1", "entity_name": "活動一",
+            "campaign_id": "c1", "adset_id": None, "ad_id": None, "spend_date": other_day,
+            "spend": 1000, "impressions": 1000, "clicks": 50, "roas": None,
+            "actions": None, "action_values": None, "attribution_window": "7d_click,1d_view",
+        }])
+        web.conn.commit()
+        summary = self._summary("lead")
+        self.assertIsNone(
+            summary["total"]["cpa"], "有一天未追蹤到轉換，CPA 該回 None，不是灌水數字")
+        self.assertIsNone(summary["entities"][0]["cpa"], "同一個實體小計也要一樣回 None")
+
+
+# -- 10. backfill：37 個月保護在任何 HTTP 呼叫之前就擋下 --------------------------------
+
+class RetentionGuardTest(_MetaDailySpendTestBase):
+    def test_since_far_in_the_past_raises_before_any_http_call(self):
+        """money（票 S1 done-check 7、D10）：backfill 的 `since` 超過 37 個月要在任何
+        HTTP 呼叫之前就拒絕——不然一次補拉會打一串注定被 Meta 拒絕、或安靜少給資料的
+        API 呼叫。"""
+        from datetime import UTC, date, datetime
+
+        org_id, _ = self._make_org("retention")
+        called = []
+
+        def fake(url, *, params, headers):
+            called.append(url)
+            return {"data": [], "paging": {}}
+
+        graph.fetch_page = fake
+        with self.assertRaises(ValueError):
+            daily_pull.backfill(org_id, date(2000, 1, 1), datetime.now(UTC).date())
+        self.assertEqual(called, [], "37 個月保護要在任何 HTTP 呼叫之前擋下")
+
+
+# -- 11. backfill：按日曆月切段，三個月該送三次請求，不是一次也不是九十次 ----------------
+
+class MonthlyChunkingTest(_MetaDailySpendTestBase):
+    def test_three_month_backfill_issues_three_requests_per_level_not_one_and_not_ninety(self):
+        """API 契約（票 S1 done-check 8）：官方對「查詢太大」的處方是把日期範圍切小
+        （SPEC §7.4(b)），不是一次全要，也不是逐日發送——三個月的補拉，三層各自該是
+        3 次請求（一段一個日曆月），不是 1 次（塞進單一呼叫）也不是 90 次（逐日）。"""
+        from datetime import date
+
+        org_id, _ = self._make_org("chunking")
+        bp_id = self._connect_account(org_id, BP_ACCOUNT_ID, "BP AD")
+        brand_id = bi_repo.create_brand(
+            web.conn, org_id=org_id, name="切段測試品牌", client_name=None, actor="test")["id"]
+        self._bind(org_id, brand_id, bp_id)
+        calls: list[dict] = []
+
+        def fake(url, *, params, headers):
+            calls.append(dict(params))
+            level = params["level"]
+            since = json.loads(params["time_range"])["since"]
+            # 每一層造一筆自己那層形狀的資料（帶對的 {level}_id），這樣三層都真的落地，
+            # 才驗證得出「9 次請求 → 9 列」，不是巧合地因為 fixture 缺欄位被跳過。
+            item = {"campaign_id": "camp-1", f"{level}_id": f"{level}-1", "spend": "100",
+                    "impressions": "1000", "clicks": "10", "date_start": since}
+            return {"data": [item], "paging": {}}
+
+        graph.fetch_page = fake
+        since = date(2026, 6, 1)
+        until = date(2026, 8, 30)  # 剛好橫跨六、七、八三個日曆月
+
+        written = daily_pull.backfill(org_id, since, until)
+
+        self.assertEqual(len(calls), 9, "三個月 x 三層，該是 9 次請求")
+        for level in ("campaign", "adset", "ad"):
+            level_calls = [c for c in calls if c["level"] == level]
+            self.assertEqual(len(level_calls), 3, f"{level} 層三個月該是 3 次請求")
+        self.assertEqual(written, 9, "9 次請求各回一列，backfill 回傳值該是總共寫入的列數")
+        rows = web.conn.execute(
+            "SELECT count(*) AS n FROM meta_entity_spend WHERE ad_account_id = %s", (bp_id,)
+        ).fetchone()
+        self.assertEqual(rows["n"], 9, "三層 x 三個月，各自不同的 (level, entity_id, date)")
 
 
 class PagingNeverTruncatesSilentlyTest(unittest.TestCase):
