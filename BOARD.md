@@ -21,7 +21,17 @@ Meta 端只建了一個 **PAUSED、沒有廣告組合、沒有廣告、沒有預
 
 ## 第 ⑤ 片：背景工作
 
-- [ ] 05-1 procrastinate 的 `enqueue／status／cancel` 契約、job 註冊表。**安裝與 worker 進場點已完成**（票 01＋ADR 0038／0039：自己的 schema、worker 是 uvicorn 行程裡的一個 asyncio task，由 FastAPI `lifespan` 開關）。目前實際跑在上面的只有 Meta 每日花費拉取；`_progress_state`（brand_web 的 library／products 各一份）仍在待搬清單裡
+- [>] 05-1 **站①完成（凍結）**，票＝`.scratch/saas/tickets/05-1-schedule-work-runs-in-the-background.md`。
+      範圍收斂成：排程頁三支長工作（出方案／展開活動樹／產素材）改成背景跑，`enqueue` 是
+      唯一新增的公開形狀（`status` 沿用既有的 `llm_task` 列＋前端輪詢，`cancel` 沒痛過不做）。
+      實測痛點：出方案平均 106 秒、展開樹平均 139 秒，四次逾時（362 秒），一列從 2026-08-29
+      早上卡在「執行中」到今天。使用者裁決（2026-08-30）：中斷不自動重跑（不自動花錢）、
+      同一品牌同一種工作同時只留一份、產素材一起搬。
+      **安裝與 worker 進場點已完成**（票 01＋ADR 0038／0039）。
+      五個記憶體背景工作（brand_web library／products／report、intake 兩支）**不在這片**——
+      沒有量到痛過；仍在待搬清單裡。
+      **使用者備忘錄（2026-08-30）**：之後任何「使用者要等、時間比較長」的生成，一律照這片
+      的做法辦——背景工作、關掉分頁沒差、中斷就標中斷。（站③收工時寫成 ADR）
 
 ## 第 ⑥ 片：素材
 
