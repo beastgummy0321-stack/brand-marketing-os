@@ -12,9 +12,8 @@ re-export（`from app.brand_intelligence.repository_channels import ...`），�
 
 對外進入點：本檔的五個公開函式（`create_channel`／`list_channels`／`get_channel`／
 `update_channel`／`delete_channel`）。誰依賴它：`repository.py`（re-export）、
-`app/brand_intelligence/routes.py`（`channels/new`）、
-`app/brand_intelligence/routes_library.py`（渠道編輯／刪除、整包讀取）、
-`app/ads/handoff.py`（`list_channels` 找預設到達網址）。
+`app/brand_web/routes_library.py`（整包讀取、渠道編輯／刪除）、
+`app/brand_web/routes_library_write.py`（新增渠道、編輯／刪除）。
 """
 
 

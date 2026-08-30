@@ -49,11 +49,12 @@ class InboxApiTest(unittest.TestCase):
         """契約 InboxItem 型別：id／brand_id／brand_name／category／category_label／severity／
         message／action_url／resolved_at 九個欄位，逐一比對，契約沒寫的欄位不得混進來。"""
         core_interrupts.enqueue(
-            main.conn, category="pacing_overspend", dedupe_key="k1", message="燒太快",
+            main.conn, category="product_research_done", dedupe_key="k1", message="燒太快",
             brand_id=self.bid, action_url="/brands/x/ads/cycle-1", org_id=DEV_ORG_ID,
         )
         core_interrupts.enqueue(
-            main.conn, category="cycle_reminder", dedupe_key="k2", message="全站事項", brand_id=None, org_id=DEV_ORG_ID,
+            main.conn, category="customer_voice_extraction_done", dedupe_key="k2",
+            message="全站事項", brand_id=None, org_id=DEV_ORG_ID,
         )
         main.conn.commit()
 
@@ -65,7 +66,7 @@ class InboxApiTest(unittest.TestCase):
         self.assertEqual(set(body["data"].keys()), {"open", "done"})
         self.assertEqual(len(body["data"]["open"]), 2)
 
-        item = next(i for i in body["data"]["open"] if i["category"] == "pacing_overspend")
+        item = next(i for i in body["data"]["open"] if i["category"] == "product_research_done")
         self.assertEqual(
             set(item.keys()),
             {"id", "brand_id", "brand_name", "category", "category_label", "severity",
@@ -73,20 +74,21 @@ class InboxApiTest(unittest.TestCase):
         )
         self.assertEqual(item["brand_id"], self.bid)
         self.assertEqual(item["brand_name"], "虛構貓山咖啡")
-        self.assertEqual(item["category_label"], "檔期步調－燒太快")
-        self.assertEqual(item["severity"], "rule_warning")
+        self.assertEqual(item["category_label"], "產品調研完成")
+        self.assertEqual(item["severity"], "informational")
         self.assertEqual(item["message"], "燒太快")
         self.assertEqual(item["action_url"], "/brands/x/ads/cycle-1")
         self.assertIsNone(item["resolved_at"])
 
         # 全站事項：brand_id／brand_name 皆為 null（S2.3）
-        site_item = next(i for i in body["data"]["open"] if i["category"] == "cycle_reminder")
+        site_item = next(i for i in body["data"]["open"]
+                         if i["category"] == "customer_voice_extraction_done")
         self.assertIsNone(site_item["brand_id"])
         self.assertIsNone(site_item["brand_name"])
 
     def test_done_list_has_resolved_at(self):
         interrupt_id = core_interrupts.enqueue(
-            main.conn, category="auto_sync_failed", dedupe_key="k3", message="同步失敗", brand_id=self.bid, org_id=DEV_ORG_ID,
+            main.conn, category="brand_report_done", dedupe_key="k3", message="同步失敗", brand_id=self.bid, org_id=DEV_ORG_ID,
         )
         main.conn.commit()
         core_interrupts.resolve(main.conn, interrupt_id, actor=ACTOR, org_id=DEV_ORG_ID)
@@ -103,7 +105,7 @@ class InboxApiTest(unittest.TestCase):
         """S2.8：「知道了」呼叫 `POST /api/interrupts/{id}/resolve`
         （T4 步驟 1 刪除舊版 `POST /interrupts/{id}/resolve` HTML 端點，前端已改打這支）。"""
         interrupt_id = core_interrupts.enqueue(
-            main.conn, category="cycle_reminder", dedupe_key="k4", message="測試", brand_id=self.bid, org_id=DEV_ORG_ID,
+            main.conn, category="personas_ready", dedupe_key="k4", message="測試", brand_id=self.bid, org_id=DEV_ORG_ID,
         )
         main.conn.commit()
         resp = self.client.post(f"/api/interrupts/{interrupt_id}/resolve")
@@ -121,7 +123,7 @@ class InterruptResolveApiTest(unittest.TestCase):
 
     def test_resolve_api_returns_json(self):
         interrupt_id = core_interrupts.enqueue(
-            main.conn, category="cycle_reminder", dedupe_key="api-resolve", message="test", org_id=DEV_ORG_ID,
+            main.conn, category="personas_ready", dedupe_key="api-resolve", message="test", org_id=DEV_ORG_ID,
         )
         main.conn.commit()
         response = self.client.post(f"/api/interrupts/{interrupt_id}/resolve")
@@ -158,7 +160,7 @@ class InterruptResolveTenantIsolationTest(unittest.TestCase):
         )["id"]
         main.conn.commit()
         self.interrupt_id = core_interrupts.enqueue(
-            main.conn, org_id=self.org_b, category="cycle_reminder",
+            main.conn, org_id=self.org_b, category="personas_ready",
             dedupe_key="cross-org-resolve", message="B組織的提醒", brand_id=self.brand_b,
         )
         main.conn.commit()

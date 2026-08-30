@@ -7,7 +7,6 @@
 
 import json
 import unittest
-from datetime import UTC, datetime, timedelta
 from unittest import mock
 
 from fastapi.testclient import TestClient
@@ -121,20 +120,6 @@ class BrandReportGenerateTest(unittest.TestCase):
         self.assertTrue(ok, err)
         stored = repo.get_latest_brand_report(web.conn, self.brand["id"])
         self.assertEqual(stored["source_fact_count"], 0)
-
-
-class ReportStalenessPureTest(unittest.TestCase):
-    def _report(self, days_ago):
-        generated_at = datetime.now(UTC) - timedelta(days=days_ago)
-        return {"generated_at": generated_at.isoformat()}
-
-    def test_within_threshold_no_hint(self):
-        self.assertIsNone(web.report_staleness(self._report(89)))
-
-    def test_over_threshold_shows_hint(self):
-        hint = web.report_staleness(self._report(91))
-        self.assertIsNotNone(hint)
-        self.assertIn("重新生成", hint)
 
 
 class BrandReportHttpTest(unittest.TestCase):

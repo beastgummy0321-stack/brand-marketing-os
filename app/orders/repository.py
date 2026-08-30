@@ -22,11 +22,6 @@ VOIDED_ORDER_STATUSES = {"cancelled", "canceled", "voided", "void"}
 # 統計卡預設視窗：比照 app/ads/sync.py DEFAULT_LOOKBACK_DAYS 的「最近一段時間」慣例。
 DEFAULT_STATS_WINDOW_DAYS = 30
 
-# 回購倍數（GitHub issue #39，決策 0025 第 7 點）：程式常數，不走規則卡——
-# 「90 天觀察期」與「30 位樣本門檻」是這個功能定義本身的一部分，不是使用者會想調的營運參數。
-REPURCHASE_OBSERVATION_DAYS = 90
-REPURCHASE_MIN_SAMPLE = 30
-
 POLICY_TYPE_LABELS = {"discount": "折扣規則", "refund": "退款政策"}
 
 
@@ -272,22 +267,6 @@ def _bump_sku_cost_version(conn: Conn, brand_id: str, sku: str, unit_cost: float
             "unit_cost": unit_cost, "valid_from": today, "valid_to": None}
 
 
-def list_effective_sku_costs(conn: Conn, brand_id: str) -> list:
-    """每個 SKU 目前生效中的成本版本（valid_to IS NULL）。判讀快照凍結當下引用這份清單，
-    不直接讀 sku_cost 現行值——現行值之後若被覆寫，快照引用的版本 id 仍指向這裡的舊列。"""
-    rows = _rows(conn.execute(
-        "SELECT * FROM sku_cost_version WHERE brand_id = %s AND valid_to IS NULL ORDER BY sku",
-        (brand_id,),
-    ))
-    # unit_cost 是 numeric（Decimal）；讀取端單一收口轉型（同 _with_float_budget 既有
-    # 模式），呼叫端 settlement.py 把它 str() 進 reading_snapshot_input.value 才不會
-    # 印出 "10.00" 這種帶零填充尾數的字串（02-3c）。
-    for row in rows:
-        if row.get("unit_cost") is not None:
-            row["unit_cost"] = float(row["unit_cost"])
-    return rows
-
-
 # ---------------------------------------------------------------------------
 # 統計卡（5 項，issue #33）：確定性計算，不經 LLM（決策 0016 硬性原則 4）
 # ---------------------------------------------------------------------------
@@ -398,57 +377,6 @@ def stats(conn: Conn, brand_id: str, *, since: str | None = None,
 
 
 # ---------------------------------------------------------------------------
-# 回購倍數（GitHub issue #39）：首單打平線之外，另算一條「含 90 天回購」的實質倍數，
-# 供 app/ads/reading.py 把打平線放寬——回購越強，越不需要靠首單就打平。
-# ---------------------------------------------------------------------------
-
-def repurchase_multiplier(conn: Conn, brand_id: str, *,
-                          today: str | None = None) -> dict:
-    """回購倍數＝滿 90 天觀察期顧客「90 天內淨營收加總」除以「首單淨營收加總」。
-
-    只算 first_order_at 已經滿 90 天的顧客（觀察期還沒跑完的顧客不算，避免統計未完成的
-    視窗）；樣本數低於 REPURCHASE_MIN_SAMPLE 就回 multiplier=None——不能拿小樣本冒充規律
-    （決策 0025 第 7 點）。首單淨營收為 0 或負值（全額退款）的顧客不計入分母，避免除以 0。
-    """
-    today = today or date.today().isoformat()
-    cutoff = (date.fromisoformat(today) - timedelta(days=REPURCHASE_OBSERVATION_DAYS)).isoformat()
-    customers = _rows(conn.execute(
-        "SELECT id, first_order_at FROM customer WHERE brand_id = %s AND first_order_at IS NOT NULL"
-        " AND first_order_at <= %s", (brand_id, cutoff),
-    ))
-
-    first_total = 0.0
-    window_total = 0.0
-    sample = 0
-    for cust in customers:
-        window_end = (cust["first_order_at"].date()
-                      + timedelta(days=REPURCHASE_OBSERVATION_DAYS)).isoformat()
-        orders = _rows(conn.execute(
-            "SELECT total_amount, refunded_amount, order_status FROM order_record"
-            " WHERE brand_id = %s AND customer_id = %s AND order_date >= %s AND order_date <= %s"
-            " ORDER BY order_date", (brand_id, cust["id"], cust["first_order_at"], window_end),
-        ))
-        valid = [o for o in orders if not _is_voided(o["order_status"])]
-        if not valid:
-            continue
-        # BUG 修復（route=C 02-3c，app/orders/repository.py:384）：total_amount/
-        # refunded_amount 是 numeric 欄位讀回來的 Decimal；first_total/window_total 是
-        # float 起手（0.0），float += Decimal 直接 TypeError。讀取端就近轉 float。
-        first_net = float((valid[0]["total_amount"] or 0) - (valid[0]["refunded_amount"] or 0))
-        if first_net <= 0:
-            continue
-        window_net = float(sum((o["total_amount"] or 0) - (o["refunded_amount"] or 0) for o in valid))
-        first_total += first_net
-        window_total += window_net
-        sample += 1
-
-    insufficient = sample < REPURCHASE_MIN_SAMPLE
-    multiplier = (round(window_total / first_total, 4)
-                 if (first_total and not insufficient) else None)
-    return {"multiplier": multiplier, "sample_size": sample, "insufficient_sample": insufficient}
-
-
-# ---------------------------------------------------------------------------
 # 折扣／退款口徑變更紀錄（GitHub issue #39，決策 0025 第 4 點）：跨口徑比較要標「不同尺」，
 # 這裡只負責記變更日與描述，「哪次比較該標不同尺」的判斷留給 app/ads/reading.py。
 # ---------------------------------------------------------------------------
@@ -528,47 +456,6 @@ def channel_revenue_summary(conn: Conn, brand_id: str, *, since: str, until: str
     revenue = round(float(row["total"]), 2) if row["total"] is not None else None  # Decimal -> float
     return {"revenue": revenue, "has_rows": True,
            "marketplace_uncalibrated": bool(row["marketplace_rows"])}
-
-
-# ---------------------------------------------------------------------------
-# 配碼歸因（GitHub issue #35）：app/ads/codes.py 依此清單比對 voucher_code，
-# 分類毛歸因／淨歸因／排除／自然。這裡只給資料，分類規則屬於 ads 模組
-# （鐵則 7：模組間走明確介面，不跨模組直接 join 對方的表）。
-# ---------------------------------------------------------------------------
-
-def list_orders_in_range(conn: Conn, brand_id: str, since: str,
-                         until: str) -> list:
-    """本期日期範圍內、非作廢的訂單（含 voucher_code／attribution_override），供歸因分類用。"""
-    rows = _rows(conn.execute(
-        "SELECT * FROM order_record WHERE brand_id = %s AND order_date >= %s AND order_date <= %s"
-        " ORDER BY order_date", (brand_id, since, until),
-    ))
-    return [o for o in rows if not _is_voided(o["order_status"])]
-
-
-# 已結案的出貨狀態值：目前只認 EasyStore 真實匯出檔驗證過的 'fulfilled'（決策 0025
-# 使用者真實 Export_Orders 檔已驗證的欄名／格式）。其餘值或空值一律算「未結案」，
-# 不誤判成已結——貨到付款＋超商取貨型態下，還沒出貨完成的訂單都可能在期末後才棄單退款
-# （決策 0025 判讀節奏第 5 點）；之後遇到別的平台或別的狀態字串再補，不先猜（鐵則：
-# 認不出就誠實說，不硬猜）。
-SETTLED_FULFILLMENT_STATUSES = {"fulfilled"}
-
-
-def unsettled_order_ratio(conn: Conn, brand_id: str, since: str,
-                          until: str) -> float | None:
-    """這段期間的訂單裡，還沒結案（出貨／取貨完成）的佔比。期末暫定判讀用這個標注
-    「未結案訂單佔 X%，此為暫定結論」（決策 0025 判讀節奏第 5 點）。
-
-    分母是非作廢訂單筆數，是 0 時回 None——沒有訂單資料就是沒得算，不是 0%（鐵則 16）。
-    """
-    orders = list_orders_in_range(conn, brand_id, since, until)
-    if not orders:
-        return None
-    unsettled = sum(
-        1 for o in orders
-        if (o["fulfillment_status"] or "").strip().lower() not in SETTLED_FULFILLMENT_STATUSES
-    )
-    return round(unsettled / len(orders), 4)
 
 
 # ---------------------------------------------------------------------------

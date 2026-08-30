@@ -151,22 +151,6 @@ def fact_staleness(fact: dict) -> str | None:
     return f"上次確認 {days // 30} 個月前"
 
 
-REPORT_STALE_DAYS = 90  # 顧問報告鮮度門檻（天，決策 0017）：超過就提示重新生成，之後想調整只改這個數字
-
-
-def report_staleness(report: dict) -> str | None:
-    """report 超過 REPORT_STALE_DAYS 天沒重新生成時，回傳過期提示字串；未過門檻回 None。"""
-    generated_at = report["generated_at"]
-    if not isinstance(generated_at, datetime):
-        generated_at = datetime.fromisoformat(generated_at)
-    if generated_at.tzinfo is None:
-        generated_at = generated_at.replace(tzinfo=UTC)
-    days = (datetime.now(UTC) - generated_at).days
-    if days <= REPORT_STALE_DAYS:
-        return None
-    return f"這份報告已經是 {days} 天前生成的，市場與競爭觀察那一章可能過時了，建議重新生成。"
-
-
 def _num_str(value) -> str:
     """數字轉字串塞回表單欄位：SQLite REAL 一律回傳 float，整數值要顯示成「1280」
     而不是「1280.0」（避免使用者看到跟自己輸入不一樣的字樣）。"""

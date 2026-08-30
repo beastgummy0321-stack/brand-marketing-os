@@ -110,17 +110,6 @@ class ParseEasyStoreXlsxTest(unittest.TestCase):
 class SniffFileKindTest(unittest.TestCase):
     def test_easystore_headers_detected(self):
         self.assertTrue(importer.looks_like_easystore_orders(EASYSTORE_HEADERS))
-        self.assertEqual(importer.sniff_file_kind("Export_Orders.xlsx", EASYSTORE_HEADERS),
-                         "easystore_orders")
-
-    def test_meta_headers_are_no_longer_a_known_kind(self):
-        """外殼切片（2026-08-28）：Meta 成效 CSV 那條匯入路徑隨 `app/ads/` 一起刪掉，
-        拖進來只會誠實回 unknown，不假裝認得。"""
-        meta_headers = ["Reporting starts", "Reporting ends", "Campaign name", "Amount spent (TWD)"]
-        self.assertEqual(importer.sniff_file_kind("meta_export.csv", meta_headers), "unknown")
-
-    def test_unrecognised_headers_are_unknown(self):
-        self.assertEqual(importer.sniff_file_kind("mystery.csv", ["foo", "bar"]), "unknown")
 
     def test_reuses_two_phase_match_columns_algorithm(self):
         """分派層只加別名表，兩階段比對演算法是同一份（app.shared.csv_columns.match_columns）：

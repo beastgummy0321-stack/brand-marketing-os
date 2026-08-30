@@ -166,53 +166,6 @@ class NoHistoryTest(_BaseOrdersTest):
         self.assertEqual(summary["sku_margins"], [])
 
 
-class RepurchaseMultiplierTest(_BaseOrdersTest):
-    """票 #39：回購倍數＝滿 90 天觀察期顧客的「90 天內淨營收」÷「首單淨營收」。"""
-
-    def test_no_customers_returns_none_not_zero(self):
-        result = orders_repo.repurchase_multiplier(web.conn, self.bid, today="2026-06-30")
-        self.assertIsNone(result["multiplier"])
-        self.assertEqual(result["sample_size"], 0)
-        self.assertTrue(result["insufficient_sample"])
-
-    def _seed_customers(self, count, *, repeat=True):
-        """count 位顧客，首單 2026-01-01（早於 today 90 天以上）；repeat=True 時第 46 天
-        再下一筆等額訂單（回購倍數 2 倍）。"""
-        rows = []
-        for i in range(count):
-            email = f"c{i}@example.com"
-            rows.append(_order(f"F{i}", "2026-01-01", 1000, billing_email=email))
-            if repeat:
-                rows.append(_order(f"R{i}", "2026-02-15", 1000, billing_email=email))
-        orders_repo.save_orders(web.conn, self.bid, rows, source="easystore_xlsx", actor=ACTOR)
-
-    def test_below_sample_threshold_does_not_enable_multiplier(self):
-        """票 #39 驗收條件：樣本不足不顯示實質線（回 None，不是硬湊一個數字）。"""
-        self._seed_customers(29)
-        result = orders_repo.repurchase_multiplier(web.conn, self.bid, today="2026-06-30")
-        self.assertIsNone(result["multiplier"])
-        self.assertEqual(result["sample_size"], 29)
-        self.assertTrue(result["insufficient_sample"])
-
-    def test_meeting_sample_threshold_computes_multiplier(self):
-        """30 位顧客，首單 1000、90 天內回購再 1000 -> 倍數 2.0（fixture 驗算）。"""
-        self._seed_customers(30)
-        result = orders_repo.repurchase_multiplier(web.conn, self.bid, today="2026-06-30")
-        self.assertFalse(result["insufficient_sample"])
-        self.assertEqual(result["sample_size"], 30)
-        self.assertEqual(result["multiplier"], 2.0)
-
-    def test_customer_whose_observation_window_has_not_elapsed_is_excluded(self):
-        """首單日距離 today 還不滿 90 天的顧客，觀察期還沒跑完，不計入樣本。"""
-        self._seed_customers(30)
-        # 額外 5 位顧客首單在 today 前 10 天，觀察期還沒跑完
-        recent = [_order(f"L{i}", "2026-06-20", 1000, billing_email=f"late{i}@example.com")
-                  for i in range(5)]
-        orders_repo.save_orders(web.conn, self.bid, recent, source="easystore_xlsx", actor=ACTOR)
-        result = orders_repo.repurchase_multiplier(web.conn, self.bid, today="2026-06-30")
-        self.assertEqual(result["sample_size"], 30)  # 還是 30，不是 35
-
-
 class PolicyChangeLogTest(_BaseOrdersTest):
     """票 #39：折扣／退款口徑變更記變更日（決策 0025 第 4 點）。"""
 
@@ -238,39 +191,6 @@ class PolicyChangeLogTest(_BaseOrdersTest):
                                                               until="2026-06-30")), 0)
         self.assertEqual(len(orders_repo.list_policy_changes(web.conn, self.bid,
                                                               until="2026-07-31")), 1)
-
-
-class UnsettledRatioTest(_BaseOrdersTest):
-    """票 #38：期末暫定判讀標注「未結案訂單佔 X%」（決策 0025 判讀節奏第 5 點）。"""
-
-    def _order_with_fulfillment(self, order_number, fulfillment_status, order_status="paid"):
-        row = _order(order_number, "2026-06-05", 1000, order_status=order_status)
-        row["fulfillment_status"] = fulfillment_status
-        return row
-
-    def test_no_orders_returns_none_not_zero(self):
-        self.assertIsNone(orders_repo.unsettled_order_ratio(
-            web.conn, self.bid, "2026-06-01", "2026-06-30"))
-
-    def test_ratio_counts_non_fulfilled_as_unsettled(self):
-        rows = [
-            self._order_with_fulfillment("O1", "fulfilled"),
-            self._order_with_fulfillment("O2", "unfulfilled"),
-            self._order_with_fulfillment("O3", None),
-            self._order_with_fulfillment("O4", "fulfilled"),
-        ]
-        orders_repo.save_orders(web.conn, self.bid, rows, source="easystore_xlsx", actor=ACTOR)
-        ratio = orders_repo.unsettled_order_ratio(web.conn, self.bid, "2026-06-01", "2026-06-30")
-        self.assertEqual(ratio, 0.5)  # O2、O3 未結案，共 2/4
-
-    def test_voided_orders_are_excluded_from_the_denominator(self):
-        rows = [
-            self._order_with_fulfillment("O1", "fulfilled"),
-            self._order_with_fulfillment("O2", "unfulfilled", order_status="cancelled"),
-        ]
-        orders_repo.save_orders(web.conn, self.bid, rows, source="easystore_xlsx", actor=ACTOR)
-        ratio = orders_repo.unsettled_order_ratio(web.conn, self.bid, "2026-06-01", "2026-06-30")
-        self.assertEqual(ratio, 0.0)  # 作廢訂單不計入分母，剩下的都已結案
 
 
 if __name__ == "__main__":

@@ -32,25 +32,6 @@ SEVERITY_LABELS = {
 # 類別登記表（單一權威）：新模組要送打斷佇列，在這裡登記一筆，不得在呼叫端自報 severity。
 # dict 順序＝同嚴重度內的行動價值排序。
 CATEGORIES = {
-    "cycle_reminder": {"severity": "informational", "label": "檔期提醒"},
-    "code_surge_alert": {"severity": "rule_warning", "label": "用碼異常警示"},  # 票 #35
-    "revenue_reconcile_due": {"severity": "informational", "label": "營收對帳提醒"},  # 票 #36
-    "reading_reversal": {"severity": "rule_warning", "label": "判讀翻盤警示"},  # 票 #38
-    "repurchase_conflict": {"severity": "rule_warning", "label": "回購校正異議"},  # 票 #39
-    "auto_sync_failed": {"severity": "rule_warning", "label": "自動同步失敗"},  # 票 07-auto-sync
-    "weekly_proposal_ready": {"severity": "informational", "label": "週提案待核可"},  # 票 06
-    # 結案時還沒處理的週提案卡自動歸檔，enqueue 後立刻 resolve，只為了在收件匣「已結」
-    # 留一筆痕跡（票 F9），不是真的要使用者去處理待辦。
-    "weekly_proposal_archived_on_close": {"severity": "informational", "label": "週提案卡結案歸檔"},
-    "weekly_rejudge_done": {"severity": "informational", "label": "本週判讀完成"},
-    "weekly_report_ready": {"severity": "informational", "label": "本週報告"},
-    "burn_no_cycle": {"severity": "rule_warning", "label": "廣告花費未對應檔期"},
-    "campaign_renamed": {"severity": "informational", "label": "Meta 活動名稱被改"},
-    "tracking_broken": {"severity": "informational", "label": "廣告追蹤斷鏈"},
-    # 燒太快是「錢有風險」不是「錢已損失」：money_loss 會把品牌燈號直接判紅，
-    # code review 2026-08-06 定調降為 rule_warning（真的賠錢由判讀狀態機負責喊）。
-    "pacing_overspend": {"severity": "rule_warning", "label": "檔期步調－燒太快"},  # 票 08-pacing-alert
-    "pacing_underspend": {"severity": "rule_warning", "label": "檔期步調－花不完"},  # 票 08-pacing-alert
     # 顧客原話貼入後背景 AI 抽取，完成／失敗都進這裡（票 B2-library，五鐵則③生成不擋路）。
     "customer_voice_extraction_done": {"severity": "informational", "label": "顧客原話分析完成"},
     # 產品 AI 調研（新建與再次調研共用）背景工作，完成／失敗都進這裡（票 B2-products）。
@@ -61,12 +42,6 @@ CATEGORIES = {
     # 執行緒在 _notify() 炸 ValueError、job 狀態卡在 running 永遠不會變成 done/failed）。
     "brand_report_done": {"severity": "informational", "label": "顧問分析報告完成"},
     "personas_ready": {"severity": "informational", "label": "人物誌好了"},
-    # 排期到期提醒：選了間歇／脈動策略時，到了要中途調整日預算的那天提醒一次（票
-    # B4R-warroom-redesign，S8R.9-11）。
-    "pacing_schedule_due": {"severity": "rule_warning", "label": "排期到期提醒"},
-    # 調度台（app/core/orchestrator.py，票 O1-01）：保守檔出卡等同意、或同一 dedupe_key
-    # 連續失敗滿 3 次升級，兩種情境共用這一類，訊息固定短句不塞動態內容。
-    "orchestrator_pending": {"severity": "rule_warning", "label": "調度台待處理"},
 }
 _CATEGORY_RANK = {name: i for i, name in enumerate(CATEGORIES)}
 
@@ -199,12 +174,6 @@ def list_done(conn, brand_id: str | None = None, org_id: str | None = None) -> l
         params.append(org_id)
     sql += " ORDER BY resolved_at DESC"
     return [dict(r) for r in conn.execute(sql, params)]
-
-
-def current_card(conn, brand_id: str | None = None) -> dict | None:
-    """頁頂「當前一件」：待辦清單依排序取第一筆，沒有就回 None（優雅缺席）。"""
-    rows = list_open(conn, brand_id=brand_id)
-    return rows[0] if rows else None
 
 
 def resolve(conn, interrupt_id: str, *, actor: str, org_id: str) -> None:

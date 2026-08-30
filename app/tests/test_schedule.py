@@ -157,43 +157,6 @@ class LargestRemainderAllocationTest(unittest.TestCase):
         self.assertTrue(all(isinstance(a, int) for a in amounts))
         self.assertEqual(sum(amounts), 1000)
 
-    def test_build_splits_success_shape(self):
-        splits, failure = plan_mod.build_splits(_fenced([
-            {"label": "主力方向", "share": 0.7, "why": "已驗證的受眾"},
-            {"label": "測試方向", "share": 0.3, "why": "新概念"},
-        ]), daily_budget=3000)
-        self.assertIsNone(failure)
-        self.assertEqual(sum(s["daily_amount"] for s in splits), 3000)
-        self.assertEqual([s["label"] for s in splits], ["主力方向", "測試方向"])
-
-
-# -- 2. 比例加總不是 1.0 → failure 設定，splits 清空，沒有金額 -------------------------
-
-class BadSharesTest(unittest.TestCase):
-    def test_shares_not_summing_to_one_is_a_failure(self):
-        splits, failure = plan_mod.build_splits(_fenced([
-            {"label": "主力方向", "share": 0.5, "why": "x"},
-            {"label": "測試方向", "share": 0.2, "why": "y"},
-        ]), daily_budget=3000)
-        self.assertEqual(splits, [])
-        self.assertTrue(failure)
-
-    def test_missing_json_block_is_a_failure(self):
-        splits, failure = plan_mod.build_splits(
-            "這裡面沒有任何 fenced json 區塊。", daily_budget=3000
-        )
-        self.assertEqual(splits, [])
-        self.assertTrue(failure)
-
-    def test_float_slack_within_tolerance_still_succeeds(self):
-        # 0.7 + 0.3 == 0.9999999999999999（IEEE-754），不得被當成失敗。
-        splits, failure = plan_mod.build_splits(_fenced([
-            {"label": "A", "share": 0.7, "why": "x"},
-            {"label": "B", "share": 0.3, "why": "y"},
-        ]), daily_budget=100)
-        self.assertIsNone(failure)
-        self.assertEqual(sum(s["daily_amount"] for s in splits), 100)
-
 
 # -- 2b. 票 08：N 個方案，任何一個壞掉整批失敗 -----------------------------------------
 

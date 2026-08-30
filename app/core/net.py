@@ -50,16 +50,3 @@ def fetch_url(url: str) -> tuple:
     except Exception:
         text = raw
     return True, text[:URL_EXCERPT_CHARS]
-
-
-def fetch_raw_html(url: str) -> tuple:
-    """讀一個網址，回 (ok, 原始 HTML)——不濾 script／style。追蹤碼健檢（app/ads/tracking.py）
-    要在原始碼裡找 <script src="..."> 這類特徵字串，fetch_url() 的純文字節錄會把 script
-    內容整段濾掉，兩支用途不同、不能共用一支。讀不到只回 (False, "")，同 fetch_url 的
-    優雅缺席寫法（不存狀態碼、不存例外訊息）。"""
-    try:
-        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (BrandOS intake)"})
-        with urllib.request.urlopen(req, timeout=URL_FETCH_TIMEOUT_S) as resp:
-            return True, resp.read(500_000).decode("utf-8", errors="replace")
-    except Exception:
-        return False, ""

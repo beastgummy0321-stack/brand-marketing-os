@@ -70,14 +70,6 @@ def looks_like_easystore_orders(headers: list) -> bool:
     return any(col in mapping for col in _EASYSTORE_CONFIRM_COLUMNS)
 
 
-def sniff_file_kind(filename: str, headers: list) -> str:
-    """分派層：回傳 'easystore_orders' / 'unknown'。
-
-    表頭比對優先：認得出訂單欄位就是訂單檔，其餘一律誠實回 unknown，不硬套解析器。
-    """
-    return "easystore_orders" if looks_like_easystore_orders(headers) else "unknown"
-
-
 def _sheet_rows(workbook_bytes: bytes) -> list:
     """xlsx 二進位 → [表頭, 資料列...]（每列都是 cell 值的 list，openpyxl 唯讀模式）。"""
     if openpyxl is None:

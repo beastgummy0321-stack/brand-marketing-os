@@ -20,9 +20,9 @@ from app.core import interrupts as core_interrupts
 class InterruptQueueTest(unittest.TestCase):
     def setUp(self):
         self.conn = db.current()
-        # 測試借用既有登記的 "cycle_reminder" 類別（severity=informational）即可，
-        # 不需要為了測試另外登記一個假類別。conftest.py 是逐模組一個 schema（不是逐測試），
-        # 這個類別本身的品牌 id／預設 dedupe_key 每個測試方法各自唯一，
+        # 測試借用既有登記的 "customer_voice_extraction_done" 類別（severity=informational）
+        # 即可，不需要為了測試另外登記一個假類別。conftest.py 是逐模組一個 schema（不是逐測
+        # 試），這個類別本身的品牌 id／預設 dedupe_key 每個測試方法各自唯一，
         # 避免不同測試方法在同一個 schema 裡互相看到對方 enqueue 的列
         # （list_open() 沒有篩選 dedupe_key，共用品牌 id 會讓斷言看到別的測試留下的殘留）。
         self.brand_id = f"brn_FAKE_{db.new_id('t')}"
@@ -30,7 +30,7 @@ class InterruptQueueTest(unittest.TestCase):
 
     def _enqueue(self, dedupe_key=None, message="測試訊息，一句話。", **extra):
         return core_interrupts.enqueue(
-            self.conn, category="cycle_reminder",
+            self.conn, category="customer_voice_extraction_done",
             dedupe_key=dedupe_key or self._default_dedupe_key,
             message=message, brand_id=self.brand_id, **extra, org_id=db.DEV_ORG_ID,
         )
@@ -62,12 +62,12 @@ class InterruptQueueTest(unittest.TestCase):
         """票 M6：兩個品牌用同一把 dedupe_key，兩則提醒都要各自留存，不能被對方吞掉
         （修憲落地體檢 19 第三節找到的品牌隔離缺陷：唯一索引原本只建在 dedupe_key 上）。"""
         first = core_interrupts.enqueue(
-            self.conn, category="cycle_reminder", dedupe_key="shared-key",
+            self.conn, category="customer_voice_extraction_done", dedupe_key="shared-key",
             message="品牌一的提醒。", brand_id="brn_FAKE_A", org_id=db.DEV_ORG_ID,
         )
         self.conn.commit()
         second = core_interrupts.enqueue(
-            self.conn, category="cycle_reminder", dedupe_key="shared-key",
+            self.conn, category="customer_voice_extraction_done", dedupe_key="shared-key",
             message="品牌二的提醒。", brand_id="brn_FAKE_B", org_id=db.DEV_ORG_ID,
         )
         self.conn.commit()
@@ -91,12 +91,13 @@ class InterruptQueueTest(unittest.TestCase):
         row = self.conn.execute(
             "SELECT severity FROM interrupt WHERE id = %s", (interrupt_id,)
         ).fetchone()
-        self.assertEqual(row["severity"], core_interrupts.CATEGORIES["cycle_reminder"]["severity"])
+        self.assertEqual(row["severity"],
+                        core_interrupts.CATEGORIES["customer_voice_extraction_done"]["severity"])
         self.assertEqual(row["severity"], "informational")
 
     def test_list_open_sorted_by_severity_then_created_at(self):
-        # cycle_reminder 目前是唯一登記的類別（severity=informational），這裡至少驗證
-        # 同嚴重度內按建立順序排序（同級按行動價值的退化情況：無其他類別可比較時退回時間序）。
+        # 這裡固定用同一個類別，至少驗證同嚴重度內按建立順序排序
+        # （同級按行動價值的退化情況：無其他類別可比較時退回時間序）。
         first = self._enqueue(dedupe_key="a", message="第一筆。")
         self.conn.commit()
         second = self._enqueue(dedupe_key="b", message="第二筆。")
@@ -155,12 +156,21 @@ class InterruptQueueTest(unittest.TestCase):
         self.assertEqual([d["id"] for d in done], [interrupt_id])
         self.assertEqual(done[0]["status"], "archived")
 
-    def test_current_card_is_the_first_open_item_or_none(self):
-        self.assertIsNone(core_interrupts.current_card(self.conn, brand_id=self.brand_id))
-        interrupt_id = self._enqueue()
+    def test_row_with_deregistered_category_still_lists_and_sorts(self):
+        """票 dead-code-sweep 05：CATEGORIES 清掉了一批沒有生產呼叫端的類別，但舊 DB 列
+        可能還留著已刪掉的類別字串（本測試直接寫欄位繞過 enqueue() 的登記檢查，模擬那種
+        列）。_sort_key／_CATEGORY_RANK 用 .get() 給預設值，這種列不該讓 list_open() 整批
+        炸掉——找不到就排最後，不是報錯（優雅缺席，同本模組其他「找不到就誠實回應」的慣例）。"""
+        interrupt_id = db.new_id("itr")
+        self.conn.execute(
+            "INSERT INTO interrupt (id, org_id, brand_id, dedupe_key, category, severity, message,"
+            " status, created_at) VALUES (%s, %s, %s, %s, %s, %s, %s, 'open', %s)",
+            (interrupt_id, db.DEV_ORG_ID, self.brand_id, self._default_dedupe_key,
+             "a_category_removed_from_categories", "informational", "測試訊息。", db.now_utc()),
+        )
         self.conn.commit()
-        card = core_interrupts.current_card(self.conn, brand_id=self.brand_id)
-        self.assertEqual(card["id"], interrupt_id)
+        open_items = core_interrupts.list_open(self.conn, brand_id=self.brand_id)
+        self.assertEqual([i["id"] for i in open_items], [interrupt_id])
 
 
 if __name__ == "__main__":

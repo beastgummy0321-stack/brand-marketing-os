@@ -95,15 +95,6 @@ def _build_splits_from_raw(raw_splits, daily_budget: float) -> tuple[list[dict],
     return splits, None
 
 
-def build_splits(rendered_output: str, daily_budget: float) -> tuple[list[dict], str | None]:
-    """代理回覆（票 07 的單方案 `{"splits": [...]}`）→ (splits, failure)。票 08 之後
-    `plan_from_task_row` 改讀 `{"plans": [...]}`（見 `build_plans`），這支函式保留給還在測
-    「單一方案的錢怎麼分」這件事的既有測試，行為不變。"""
-    data = _extract_last_json_block(rendered_output)
-    raw_splits = data.get("splits") if data is not None else None
-    return _build_splits_from_raw(raw_splits, daily_budget)
-
-
 def _build_one_plan(item, daily_budget: float) -> tuple[dict | None, str | None]:
     """`plans` 底下一個元素 → (方案 dict, failure)。失敗時方案是 None。"""
     if not isinstance(item, dict):
