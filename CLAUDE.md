@@ -39,7 +39,10 @@
 - 裝依賴：`uv sync --frozen`（不用 pip／requirements.txt，套件與版本鎖在 `pyproject.toml`／`uv.lock`）
 - 金鑰 `.env`（不進版控）；`BRAND_OS_LLM_PROVIDER=codex_cli` 開著＝所有 LLM 呼叫走本機 codex CLI，不產生 API 帳單
 - bash 裡跑 docker／supabase 前先：`export PATH="/c/Users/User/AppData/Local/Programs/DockerDesktop/resources/bin:/c/Users/User/scoop/shims:$PATH"`
-- 本機登入帳號是 `auth.users` 的 `123`（密碼未知）；要用 HTTP 直接測 API 就自簽 HS256 JWT（`.env` 已開 `IDENTITY_ALLOW_HS256=1`，密鑰＝`SUPABASE_JWT_SECRET`）
+- 本機測試帳號 `123@test.com` / `123456`（2026-08-30 第 ⑥ 片 `supabase db reset` 之後重建的；
+  舊的 `123` 帳號隨那次重置消失）。這是本機、未發布、資料可隨時重建的系統，寫在這裡是刻意的
+  ——上一版寫「密碼未知」，害人每次要驗畫面都得繞路。要用 HTTP 直接測 API 仍可自簽 HS256 JWT
+  （`.env` 已開 `IDENTITY_ALLOW_HS256=1`，密鑰＝`SUPABASE_JWT_SECRET`）
 - 語彙 `CONTEXT.md`；決策 `docs/adr/`；技術債與機器閘門 `docs/tech-debt.md`（動超標檔前先讀）；工作流減重 `docs/workflow-diet.md`
 - `app/methodology/` 是 prompt 零件不是文件，刪改先問
 - 議題：`.scratch/<effort>/issues/`，規則見 `docs/agents/`
