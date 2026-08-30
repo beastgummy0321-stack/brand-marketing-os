@@ -39,7 +39,11 @@ import httpx
 
 GRAPH_API_VERSION = "v26.0"
 GRAPH_BASE_URL = f"https://graph.facebook.com/{GRAPH_API_VERSION}"
-_MAX_PAGES = 10  # design ceiling — a real account list is nowhere near this many pages
+# Runaway guard, not a data limit — hitting it raises (see `_fetch_all_pages`). Measured
+# 2026-08-30 against a real account: a 91-day ad-level insights pull needs 6 pages at
+# `limit: 100`. The old value of 10 was sized for the account list, and silently capped a
+# multi-month pull at 1,000 rows.
+_MAX_PAGES = 200
 
 
 class GraphError(Exception):
@@ -76,7 +80,12 @@ def _to_account(item: dict) -> dict | None:
 def _fetch_all_pages(url: str, params: dict | None, headers: dict) -> list[dict]:
     """共用的翻頁＋錯誤處理骨架（list_ad_accounts／list_campaign_insights 都要「打一頁→
     判斷錯誤形狀→收集 data→跟 paging.next」，只有 data 裡每一項怎麼轉型不同，抽出來
-    避免兩份幾乎一樣的錯誤處理各錯各的）。回傳收集到的原始 data 項目，轉型交給呼叫端。"""
+    避免兩份幾乎一樣的錯誤處理各錯各的）。回傳收集到的原始 data 項目，轉型交給呼叫端。
+
+    2026-08-30（票 S0）：撞到 `_MAX_PAGES` 時**拋例外，不回一份殘缺的清單**。原本的寫法
+    翻完上限就把手上有的回去，呼叫端沒有任何辦法知道自己拿到的是不是全部——少掉的那幾天
+    會讓一則正在贏的廣告看起來像是停止投遞了。沒拿全的資料比拿不到更危險，因為它看起來
+    像資料。"""
     items: list[dict] = []
     for _ in range(_MAX_PAGES):
         try:
@@ -91,9 +100,11 @@ def _fetch_all_pages(url: str, params: dict | None, headers: dict) -> list[dict]
         items.extend(body.get("data", []))
         next_url = body.get("paging", {}).get("next")
         if not next_url:
-            break
+            return items
         url, params = next_url, None
-    return items
+    raise GraphError(
+        "Meta 的資料超過一次可以取回的上限，這次沒有全部拿到，請縮小日期範圍再試一次。"
+    )
 
 
 def list_ad_accounts(token: str) -> list[dict]:

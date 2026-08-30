@@ -503,5 +503,39 @@ class BrandSpendRouteTest(_MetaDailySpendTestBase):
         self.assertEqual(resp.status_code, 404)
 
 
+class PagingNeverTruncatesSilentlyTest(unittest.TestCase):
+    """守的是資料正確性（票 S0）：撞到頁數上限時回一份殘缺的清單、不出聲，少掉的那幾天
+    會讓一則正在贏的廣告看起來像是停止投遞了。"""
+
+    def setUp(self):
+        self._orig_fetch_page = graph.fetch_page
+
+    def tearDown(self):
+        graph.fetch_page = self._orig_fetch_page
+
+    def test_hitting_the_page_ceiling_raises_instead_of_returning_a_short_list(self):
+        def always_one_more_page(url, *, params, headers):
+            return {"data": [{"campaign_id": "c1"}], "paging": {"next": "https://example/next"}}
+
+        graph.fetch_page = always_one_more_page
+        with self.assertRaises(graph.GraphError):
+            graph._fetch_all_pages("https://example/first", None, {})
+
+    def test_a_walk_that_ends_normally_still_returns_every_page(self):
+        pages = [
+            {"data": [{"campaign_id": "c1"}], "paging": {"next": "https://example/2"}},
+            {"data": [{"campaign_id": "c2"}], "paging": {"next": "https://example/3"}},
+            {"data": [{"campaign_id": "c3"}], "paging": {}},
+        ]
+        calls = iter(pages)
+
+        def walk(url, *, params, headers):
+            return next(calls)
+
+        graph.fetch_page = walk
+        items = graph._fetch_all_pages("https://example/1", None, {})
+        self.assertEqual([i["campaign_id"] for i in items], ["c1", "c2", "c3"])
+
+
 if __name__ == "__main__":
     unittest.main()

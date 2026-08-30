@@ -574,7 +574,11 @@ class FileLineCapTest(unittest.TestCase):
 # 刪；test_relocation_paths.py 收斂成只剩一條還站得住腳的斷言（官方素材／建檔精靈照片
 # 的本機上傳目錄測試隨 storage-02／03 一起失去測試對象）、test_settings_api.py 少幾行
 # 不再測的斷言與 import。
-TEST_LINES_CEILING = 14772
+# 票 S0：14,772 → 14,813。`PagingNeverTruncatesSilentlyTest` 兩條：擞到翻頁上限要拋例外、
+# 以及正常翻完三頁仍然全部回得來（後者守的是這次把 `break` 改成 `return` 的那行）。
+# 守的是**資料正確性**：殘缺的拉取比拉不到更危險，因為它看起來像資料——少掉的那幾天
+# 會讓一則正在贏的廣告看起來像是停止投遞了。沒有第三條，畫面行為不寫單元測試。
+TEST_LINES_CEILING = 14813
 
 
 def _line_totals() -> tuple:
@@ -663,7 +667,10 @@ KNOWN_MODULE_SIZES = {
                        # 缺陷 1／2：parse_json_reply 換成 raw_decode 單錨點（含為什麼不能
                        # 退而求其次的理由註解）＋timeout_s 300 秒與 max_retries=0 兩段
                        # 來源註解（實測列號、SDK 常數位置）。前一次是票 09 的 1298
-    "app/meta": 864,  # 2026-08-30 票 04-1b 組織時區：`_pull_one_account` 與 brand_spend 的
+    "app/meta": 875,  # 2026-08-30 票 S0：`_fetch_all_pages` 擞到 `_MAX_PAGES` 改成拋例外、
+                       # 不再回一份殘缺的清單（＋11 行，十行是為什麼不能默默截斷的理由與實測值；
+                       # 程式本身是 `break`→`return` 加一句 raise）。前一次是 864——
+                       # 2026-08-30 票 04-1b 組織時區：`_pull_one_account` 與 brand_spend 的
                        # 「今天」改問 `today_for_org()`（＋9 行，全是為什麼不能用 UTC 的理由
                        # 註解；程式碼本身是換掉兩行）。前一次是 855——
                        # 票 11 缺陷修正（2026-08-29 對真帳號實測）：名稱比對改讀平台上的活動
