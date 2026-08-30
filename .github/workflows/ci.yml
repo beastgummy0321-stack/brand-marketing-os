@@ -41,6 +41,9 @@ jobs:
 
       - run: supabase start
 
+      - name: Export SUPABASE_SERVICE_ROLE_KEY (storage-slice ticket 01)
+        run: echo "SUPABASE_SERVICE_ROLE_KEY=$(supabase status -o json | jq -r .SERVICE_ROLE_KEY)" >> "$GITHUB_ENV"
+
       - run: uv run ruff check app
 
       - run: uv run pyright

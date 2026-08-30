@@ -35,6 +35,14 @@ import pytest
 os.environ.setdefault("SUPABASE_URL", "http://127.0.0.1:54321")
 os.environ.setdefault("IDENTITY_DEV_TOKEN", "test-dev-token")
 os.environ.setdefault("IDENTITY_ALLOW_HS256", "1")
+# 票 storage-01：app.storage 打 Storage REST API 需要 service-role key。這是 Supabase CLI
+# 本機開發固定發的 demo JWT（`supabase status` 印出來的那把），不是真的憑證，所以在這裡
+# setdefault 不違反 app/main.py:73「測試程序不該拿到真金鑰」的規則。
+os.environ.setdefault(
+    "SUPABASE_SERVICE_ROLE_KEY",
+    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vf"
+    "cm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU",
+)
 os.environ.setdefault(
     "SUPABASE_JWT_SECRET", "super-secret-jwt-token-with-at-least-32-characters-long"
 )

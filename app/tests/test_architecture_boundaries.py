@@ -314,6 +314,9 @@ class ImportCycleScanTest(unittest.TestCase):
 LAYER_ORDER = [
     "app.core",                # 基礎設施：DB、migration、audit、interrupts
     "app.background",          # 票 schedule-01：procrastinate App，只依賴 app.core（db.dsn()）
+    "app.storage",             # 票 storage-01：Supabase Storage 四函式，只依賴 stdlib／httpx／
+                                # 環境變數，不依賴任何租戶模組（比照 app.background，ADR 0038
+                                # 先例）
     "app.brand_intelligence",  # 品牌永久層
     "app.llm",                 # AI gateway 與 prompt 組裝
     "app.shared",              # web 骨架（app、templates、共用 ctx）
@@ -555,7 +558,12 @@ class FileLineCapTest(unittest.TestCase):
 # 不是後來插隊的那一列。屬 docs/workflow-diet.md 第 4 條「money」——先證過紅：把
 # `schedule_creative()` 改回用 `_latest_task_row()` 重讀最新的 schedule_tree，這支立刻
 # 抓到（斷言接住的是 `source_tree_task_id` 對不上，不是隨便崩潰在別的地方）。
-TEST_LINES_CEILING = 14740
+# 票 storage-01：14,740 → 14,861。新檔 app/tests/test_storage.py（對真的本機 Storage
+# 跑）：put/get 位元組與 content-type 原樣往返（data correctness）、get 對缺物件丟
+# NotFound（同上，錯誤模型不能是死碼）、delete_prefix 真的刪掉兩層深的物件而不是回報
+# 成功卻什麼都沒刪（data correctness，就是 SPEC D3 點名的那個坑）、四個函式各一支
+# key/prefix 首段必須等於 org_id 的測試，不寫迴圈（tenant isolation）。
+TEST_LINES_CEILING = 14861
 
 
 def _line_totals() -> tuple:
@@ -691,6 +699,12 @@ KNOWN_MODULE_SIZES = {
                           # 的當月花費補到綁定節點上）＋tree.py 三個新欄位。前一次是票
                           # 10-feedback-entries 的 POST .../reject（784）
     "app/shared": 450,
+    "app/storage": 163,  # 票 storage-01：新模組——put／get／delete／delete_prefix 四函式，
+                          # 對 Supabase Storage 的 assets bucket（ADR 0043）。
+                          # `_list_v2` 補 cursor 分頁（實測 2026-08-30，105 個物件、limit
+                          # 10）：第二頁不帶上一頁的 `nextCursor` 當 `cursor`，API 會原地回
+                          # 同一頁，不會往前走——單靠「hasNext 為真就重打同一個 body」會
+                          # 卡死或漏物件。前一次是 154。
     "app/tools": 318,
 }
 

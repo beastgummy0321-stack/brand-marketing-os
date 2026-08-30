@@ -124,6 +124,11 @@ file_size_limit = "50MiB"
 # allowed_mime_types = ["image/png", "image/jpeg"]
 # objects_path = "./images"
 
+# storage-slice ticket 01 / ADR 0043: one private bucket, org_id is the first key segment.
+# No file_size_limit / allowed_mime_types here — callers already validate in Chinese (SPEC D8).
+[storage.buckets.assets]
+public = false
+
 # Allow connections via S3 compatible clients
 [storage.s3_protocol]
 enabled = true
