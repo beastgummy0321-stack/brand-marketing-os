@@ -953,6 +953,74 @@ class SetupGapsAreStatedNotSilentTest(_OnboardingReadTestBase):
         self.assertIn("每個桶會額外附上花費最高的那天與轉換最高的那天", prompt_text)
 
 
+# -- 13. 只重讀一個活動（2026-08-31 裁決：解析失敗量到三次都是 1/24）---------------------
+
+class RetryOneCampaignTest(_OnboardingReadTestBase):
+    def test_retrying_one_campaign_finishes_the_read_without_double_counting(self):
+        """資料正確性：兩個活動、其中一個的分析師失敗——只重派那一個之後，(a) 讀取變成
+        全部完成，(b) 那個活動只剩一張卡（新的那一次取代舊的，不是並排兩張），
+        (c) `succeeded` 是 2 / 2 不是 3 / 2——數列數會超過 `expected` 讓「全部完成」永遠
+        是 False，數活動才對，(d) 另一個活動不會跟著多跑一次（那是多花一次錢）。
+
+        最後一段是租戶界線：別的品牌的 task_id 拿來重派 → 404，不會替別人重跑。
+        """
+        org_id, token, brand_id, ad_account_id = self._setup_brand_with_account("retry")
+        self._insert_spend_row(org_id, ad_account_id, "campaign", "c2", "活動二", "c2")
+        campaigns = [self._campaign("c1", "活動一"), self._campaign("c2", "活動二")]
+        meta_graph.list_entities = _fake_entities(
+            campaigns,
+            [self._adset("as1", "c1"), self._adset("as2", "c2")],
+            [self._ad("ad1", "c1"), self._ad("ad2", "c2")],
+        )
+        meta_graph.list_ad_creatives = _fake_creatives(
+            {"ad1": [{"body": "文案一"}], "ad2": [{"body": "文案二"}]}
+        )
+        ok_response = providers.ProviderResponse(
+            output_text=_fenced_conclusions([_one_conclusion()]), structured=None,
+            usage=providers.Usage(input_tokens=500, output_tokens=200), stop_reason="end_turn",
+        )
+        onboarding.PROVIDER = _FailByMarkerProvider("campaign：[c2]", ok_response)
+        headers = self._headers(token, org_id)
+
+        self.client.post(f"/api/schedule/brands/{brand_id}/onboarding-read", headers=headers)
+        self._run_worker()
+
+        read = self.client.get(
+            f"/api/schedule/brands/{brand_id}/onboarding-read", headers=headers,
+        ).json()["read"]
+        self.assertFalse(read["finished"])
+        by_campaign = {job["campaign_id"]: job for job in read["jobs"]}
+        failed_task_id = by_campaign["c2"]["task_id"]
+        c1_task_id = by_campaign["c1"]["task_id"]
+        self.assertIsNotNone(by_campaign["c2"]["failure"])
+
+        onboarding.PROVIDER = _fake_provider(_fenced_conclusions([_one_conclusion()]))
+        retry = self.client.post(
+            f"/api/schedule/brands/{brand_id}/onboarding-read/retry",
+            headers=headers, json={"task_id": failed_task_id},
+        )
+        self.assertEqual(retry.status_code, 200, retry.text)
+        self._run_worker()
+
+        read = self.client.get(
+            f"/api/schedule/brands/{brand_id}/onboarding-read", headers=headers,
+        ).json()["read"]
+        self.assertEqual(read["expected"], 2)
+        self.assertEqual(read["succeeded"], 2, "數的是活動不是列，重讀不該變成 3 / 2")
+        self.assertTrue(read["finished"], "重讀那一個活動之後，全部完成該是 True")
+        self.assertEqual(len(read["jobs"]), 2, "同一個活動不該並排兩張卡")
+        by_campaign = {job["campaign_id"]: job for job in read["jobs"]}
+        self.assertNotEqual(by_campaign["c2"]["task_id"], failed_task_id, "卡片沒換成新的一次")
+        self.assertIsNone(by_campaign["c2"]["failure"])
+        self.assertEqual(by_campaign["c1"]["task_id"], c1_task_id, "另一個活動不該跟著重跑")
+
+        stranger = self.client.post(
+            f"/api/schedule/brands/{brand_id}/onboarding-read/retry",
+            headers=headers, json={"task_id": "llm_not_mine"},
+        )
+        self.assertEqual(stranger.status_code, 404)
+
+
 # -- 8. A4 保險絲：抽不出 body／title 就送原始 JSON ---------------------------------------
 
 class CreativeFuseSendsRawJsonOnUnexpectedShapeTest(unittest.TestCase):

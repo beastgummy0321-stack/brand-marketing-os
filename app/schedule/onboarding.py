@@ -66,6 +66,7 @@ NO_SPEND_DATA_MESSAGE = (
 # 不從那邊 import（本檔頭已說明為什麼不 import routes.py），兩行字串各留一份。
 ALREADY_RUNNING_MESSAGE = "上一次還在跑，請等它跑完再按。"
 NO_READING_MESSAGE = "找不到這筆判讀。"
+NOT_LATEST_READ_MESSAGE = "這是上一次讀取裡的活動，請重新整理頁面。"
 NO_REPLY_MESSAGE = "讀取失敗，請重新讀一次這個活動。"
 NO_CONCLUSIONS_MESSAGE = "代理沒有回傳看得懂的結論，請重新讀一次這個活動。"
 INDEX_OUT_OF_RANGE_MESSAGE = "找不到這個結論編號，請重新整理頁面。"
@@ -328,6 +329,42 @@ def start_onboarding_read(conn, brand_id: str, org_id: str) -> dict:
     return response
 
 
+def retry_campaign(conn, brand_id: str, org_id: str, task_id: str) -> dict:
+    """POST .../retry：只重派**一個活動**的分析師。整批重跑是 24 次代理呼叫、12 分鐘，
+    而真跑三次量到的失敗率是穩定 1/24（2026-08-31：三次完整讀取各掉一個，每次是不同的
+    活動；失敗那三筆輸出 1,505／2,076／1,601 字，遠低於成功的平均 3,157 字，所以不是被
+    截斷，是那 4% 沒把結尾的 fenced json 吐出來）。
+
+    重派用的是**那一列自己存下來的** `context_scope_json`，不重算：`read_id`／
+    `frozen_facts`／`expected_jobs` 是整個讀取共用的一份（D6），重算一次就會跟同一次
+    讀取裡其他活動的既定事實對不起來。鎖字面值跟 dispatch 逐字相同，所以那個活動正在
+    跑的時候按下去是 409，不會偷偷跑第二份、花第二次錢。
+
+    只准重派「最新那一次讀取」裡的活動：舊讀取的列重派下去，會在現在這一次讀取裡多出
+    一個不屬於它的活動。"""
+    row = gateway.get_task(conn, task_id)
+    if row is None or row["brand_id"] != brand_id or row["task_type"] != TASK_TYPE:
+        raise web.ApiError(404, "not_found", NO_READING_MESSAGE)
+    scope = row.get("context_scope_json") or {}
+    if scope.get("onboarding_read_id") != _newest_read_id(conn, brand_id):
+        raise web.ApiError(404, "not_latest_read", NOT_LATEST_READ_MESSAGE)
+
+    # 先驗證、後花錢（同 `start_onboarding_read()` 的次序）。
+    gateway.check_spend_cap(conn, org_id=org_id)
+    if not background_enqueue(
+        f"background.{TASK_TYPE}", org_id=org_id,
+        lock=f"{TASK_TYPE}:{scope['account_external_id']}:{scope['campaign_id']}",
+        brand_id=brand_id, read_id=scope["onboarding_read_id"],
+        ad_account_id=scope["ad_account_id"],
+        account_external_id=scope["account_external_id"],
+        campaign_id=scope["campaign_id"], campaign_name=scope.get("campaign_name", ""),
+        campaign_effective_status=scope.get("campaign_effective_status", ""),
+        expected_jobs=scope["expected_jobs"], frozen_facts=scope["frozen_facts"],
+    ):
+        raise _already_running_error()
+    return brand_response(conn, brand_id, org_id)
+
+
 # ---------------------------------------------------------------------------
 # 讀出目前狀態（GET，以及 POST 之後回同一個形狀）
 # ---------------------------------------------------------------------------
@@ -343,15 +380,27 @@ def brand_response(conn, brand_id: str, org_id: str) -> dict:
     }
 
 
+def _latest_attempt_per_campaign(rows: list[dict]) -> list[dict]:
+    """一個活動只留最後一次嘗試（`rows` 已經照 started_at 排好）。重派一個活動之後那個
+    活動會有兩列，數列數會讓 24 個活動的讀取變成 25 / 24 永遠不完成，畫面上也會留著那
+    張已經被取代的失敗卡片。工作項是「這個活動」（ADR 0042），計數與顯示就都以活動為
+    單位。舊那一列不刪——它是真的發生過的一次嘗試，只是不再代表這個活動的現況。"""
+    latest: dict = {}
+    for row in rows:
+        latest[(row.get("context_scope_json") or {}).get("campaign_id")] = row
+    return list(latest.values())
+
+
 def _read_response(conn, brand_id: str, rows: list[dict]) -> dict:
     scope = rows[0].get("context_scope_json") or {}
+    attempts = _latest_attempt_per_campaign(rows)
     return _read_payload(
         scope.get("onboarding_read_id"),
         scope.get("expected_jobs") or [],
         scope.get("frozen_facts") or {},
         started_at=rows[0]["started_at"],
-        jobs=[_job_response(conn, brand_id, row) for row in rows],
-        succeeded=sum(1 for row in rows if row["status"] == "succeeded"),
+        jobs=[_job_response(conn, brand_id, row) for row in attempts],
+        succeeded=sum(1 for row in attempts if row["status"] == "succeeded"),
     )
 
 

@@ -113,6 +113,33 @@ export async function startOnboardingRead(brandId: string): Promise<OnboardingRe
   return (await res.json()) as OnboardingReadState;
 }
 
+/** 只重讀一個活動（票 S2「解析失敗 1/24」）。整批重跑是 24 次代理呼叫、12 分鐘，這支
+ * 只重派那一個活動；後端拿那一列自己存下來的 `context_scope_json` 重派，前端只給 task_id。 */
+export async function retryOnboardingCampaign(
+  brandId: string,
+  taskId: string,
+): Promise<OnboardingReadState> {
+  const res = await apiFetch(
+    `/api/schedule/brands/${encodeURIComponent(brandId)}/onboarding-read/retry`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ task_id: taskId }),
+    },
+  );
+  if (!res.ok) {
+    let message = `重讀失敗（狀態碼 ${res.status}）`;
+    try {
+      const data = (await res.json()) as { error?: { message?: string } };
+      message = errorMessageFrom(data, message);
+    } catch {
+      // 回應不是 JSON，用預設訊息。
+    }
+    throw new Error(message);
+  }
+  return (await res.json()) as OnboardingReadState;
+}
+
 export async function acceptOnboardingConclusions(
   brandId: string,
   taskId: string,

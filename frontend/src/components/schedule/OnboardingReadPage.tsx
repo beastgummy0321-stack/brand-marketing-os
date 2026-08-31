@@ -5,6 +5,7 @@ import { Skeleton } from "@/components/layout/Skeleton";
 import {
   acceptOnboardingConclusions,
   fetchOnboardingRead,
+  retryOnboardingCampaign,
   startOnboardingRead,
   type OnboardingJob,
   type OnboardingReadState,
@@ -26,6 +27,13 @@ export function OnboardingReadPage({ brandId }: { brandId: string }) {
   const [startError, setStartError] = useState<string | null>(null);
   const [acceptingTaskId, setAcceptingTaskId] = useState<string | null>(null);
   const [acceptErrors, setAcceptErrors] = useState<Record<string, string>>({});
+  /** 正在重讀的那一個活動，存的是**舊那一列**的 task_id：後端重派之後會多寫一列，那個
+   * 活動的卡片就換成新的一列（後端只回每個活動最後一次嘗試），舊 task_id 從 `jobs` 裡
+   * 消失就是「新的一次真的開始了」的信號。跟 `awaitedReadIdRef` 同一個理由用 ref：
+   * `setInterval` 抓住的是舊閉包，ref 讀到的永遠是當下的。 */
+  const retryingTaskIdRef = useRef<string | null>(null);
+  const [retryingTaskId, setRetryingTaskId] = useState<string | null>(null);
+  const [retryErrors, setRetryErrors] = useState<Record<string, string>>({});
   /** 「我剛按下去的那一次讀取」的 read_id；`"pending"` 是 POST 還在路上、還不知道 id
    * （那支端點會同步打一次 Meta Graph 列活動，真帳號要好幾秒，輪詢一定會插在中間跑）；
    * `null` 是沒有在等任何一次（一般瀏覽）。用 ref 不用 state：`load()` 每次 render 都是
@@ -39,6 +47,16 @@ export function OnboardingReadPage({ brandId }: { brandId: string }) {
    *
    * 同一個理由，silent 模式失敗時不把已經在畫面上的資料換成錯誤頁：一次 40 分鐘的讀取
    * 中間掉一個封包，不該讓人已經讀到一半的結論整片消失。畫面上還沒有東西時才報錯。 */
+  /** 重讀的那一次真的開始了嗎——舊 task_id 還在 `jobs` 裡就代表 worker 還沒寫新的一列，
+   * 這時候不能清旗標，清了輪詢會停在「什麼都沒發生」的畫面上（跟 `starting` 同一種坑）。 */
+  function noteRetryStarted(data: OnboardingReadState) {
+    const waiting = retryingTaskIdRef.current;
+    if (waiting !== null && !(data.read?.jobs ?? []).some((job) => job.task_id === waiting)) {
+      retryingTaskIdRef.current = null;
+      setRetryingTaskId(null);
+    }
+  }
+
   function load(silent = false) {
     if (!silent) setState({ status: "loading" });
     fetchOnboardingRead(brandId)
@@ -57,6 +75,7 @@ export function OnboardingReadPage({ brandId }: { brandId: string }) {
           return;
         }
         awaitedReadIdRef.current = null;
+        noteRetryStarted(data);
         setState({ status: "ready", data });
         // 票 05-1 的既有理由同樣適用這裡：剛按下「開始讀取」那一刻，worker 可能還沒把
         // 第一列 llm_task 插進去，`starting` 要撐住輪詢直到 load() 真的看到伺服器狀態，
@@ -102,7 +121,8 @@ export function OnboardingReadPage({ brandId }: { brandId: string }) {
   const read = state.status === "ready" ? state.data.read : null;
   const anyJobRunning = Boolean(read?.jobs.some((j) => j.running));
   const anyJobNotStartedYet = read !== null && read.jobs.length < read.expected;
-  const runningNow = starting || anyJobRunning || anyJobNotStartedYet;
+  const runningNow =
+    starting || anyJobRunning || anyJobNotStartedYet || retryingTaskId !== null;
   useEffect(() => {
     if (!runningNow) return;
     const timer = setInterval(() => load(true), 2000);
@@ -123,6 +143,29 @@ export function OnboardingReadPage({ brandId }: { brandId: string }) {
       awaitedReadIdRef.current = null;
       setStartError(err instanceof Error ? err.message : "開始讀取失敗，請稍後再試。");
       setStarting(false); // 失敗（含 409）不會有後續輪詢清掉，這裡不清就永遠鎖住按鈕。
+    }
+  }
+
+  /** 只重讀這一個活動：整批重跑是 24 次代理呼叫、12 分鐘，一個活動掉了不該付那個價錢。 */
+  async function handleRetry(taskId: string) {
+    retryingTaskIdRef.current = taskId;
+    setRetryingTaskId(taskId);
+    setRetryErrors((prev) => {
+      const next = { ...prev };
+      delete next[taskId];
+      return next;
+    });
+    try {
+      const data = await retryOnboardingCampaign(brandId, taskId);
+      noteRetryStarted(data);
+      setState({ status: "ready", data });
+    } catch (err) {
+      retryingTaskIdRef.current = null;
+      setRetryingTaskId(null); // 失敗（含 409）不會有後續輪詢清掉，這裡不清就永遠鎖住按鈕。
+      setRetryErrors((prev) => ({
+        ...prev,
+        [taskId]: err instanceof Error ? err.message : "重讀失敗，請稍後再試。",
+      }));
     }
   }
 
@@ -247,6 +290,9 @@ export function OnboardingReadPage({ brandId }: { brandId: string }) {
               busy={acceptingTaskId === job.task_id}
               error={acceptErrors[job.task_id] ?? null}
               onAccept={handleAccept}
+              onRetry={handleRetry}
+              retrying={retryingTaskId === job.task_id}
+              retryError={retryErrors[job.task_id] ?? null}
             />
           ))}
         </div>
@@ -284,11 +330,17 @@ function JobCard({
   busy,
   error,
   onAccept,
+  onRetry,
+  retrying,
+  retryError,
 }: {
   job: OnboardingJob;
   busy: boolean;
   error: string | null;
   onAccept: (taskId: string, indexes: number[]) => void;
+  onRetry: (taskId: string) => void;
+  retrying: boolean;
+  retryError: string | null;
 }) {
   return (
     <div className="rounded-md border border-border bg-card p-4 shadow-[var(--shadow-card)]">
@@ -296,7 +348,22 @@ function JobCard({
         {job.campaign_name || job.campaign_id}
       </h2>
       {job.running && <p className="text-sm text-muted-foreground">讀取中…</p>}
-      {!job.running && job.failure && <p className="text-sm text-danger">{job.failure}</p>}
+      {/* 失敗的活動給一顆自己的重讀鍵：真跑量到 1/24 的分析師會漏掉結尾那塊 JSON，
+          為了一個活動整批重跑是 24 次代理呼叫、12 分鐘。按下去只重派這一個。 */}
+      {!job.running && job.failure && (
+        <div className="flex flex-col items-start gap-2">
+          <p className="text-sm text-danger">{job.failure}</p>
+          {retryError && <p className="text-sm text-danger">{retryError}</p>}
+          <button
+            type="button"
+            onClick={() => onRetry(job.task_id)}
+            disabled={retrying}
+            className="rounded-md border border-primary px-3 py-1.5 text-sm font-medium text-primary hover:bg-primary/10 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {retrying ? "重讀中…" : "重讀這一個活動"}
+          </button>
+        </div>
+      )}
       {job.unreadable_ads.length > 0 && (
         <p className="mb-2 text-xs text-muted-foreground">
           Meta 現在回不出這幾則的素材：

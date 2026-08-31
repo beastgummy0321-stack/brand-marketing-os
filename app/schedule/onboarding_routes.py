@@ -19,6 +19,11 @@ from app.schedule import onboarding
 router = APIRouter(prefix="/api/schedule")
 
 
+class RetryRequest(BaseModel):
+    # 同 AcceptRequest 的理由：欄位給預設值，租戶界線先於「填了什麼」。
+    task_id: str = ""
+
+
 class AcceptRequest(BaseModel):
     # 全部欄位給預設值（同 routes.py PlanRequest 的理由）：租戶界線要先於「填了什麼」被
     # 檢查，真正的驗證在 `onboarding.accept_conclusions()` 裡逐一做，不在這裡假裝合法。
@@ -38,6 +43,13 @@ def create_onboarding_read(request: Request, brand_id: str):
     actor = web.require_actor(request)
     web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
     return onboarding.start_onboarding_read(web.conn, brand_id, actor.org_id)
+
+
+@router.post("/brands/{brand_id}/onboarding-read/retry")
+def retry_onboarding_read(request: Request, brand_id: str, body: RetryRequest):
+    actor = web.require_actor(request)
+    web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
+    return onboarding.retry_campaign(web.conn, brand_id, actor.org_id, body.task_id)
 
 
 @router.post("/brands/{brand_id}/onboarding-read/accept")
