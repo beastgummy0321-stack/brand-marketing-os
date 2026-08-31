@@ -777,7 +777,14 @@ class FileLineCapTest(unittest.TestCase):
 # 「有資料但零 ROAS 的桶」「兩種編碼都帶文案」這四種形狀，才會綠燈放過。
 # 同一批改動也刪掉了 `DailyCsv*` 兩支的舊粒度斷言（改寫成桶粒度，不是多留一份）。
 # 16964 → 17010：多出的 46 行就是上面這段理由註解自己佔的行（比照前幾次的記法）。
-TEST_LINES_CEILING = 17010
+#
+# 真瀏覽器驗收兩個 bug（2026-08-31）：17010 → 17074（多的 15 行含這段理由本身）。一支新測試，守的是 **API 契約**
+# （ADR 0041 四選一）：`StartReportsTheReadItJustStartedTest`——POST 建立讀取之後回的必須是
+# 這一次剛派出去的讀取，不是上一次那份已完成的。先證過紅（把結尾改回 `brand_response(...)`，
+# 第二次 POST 回的 read_id 跟第一次一模一樣）。不重複既有斷言：既有測試從沒對 POST 自己的
+# 回應斷言過任何東西，只驗過之後 GET 回來的內容，所以綠燈一路放過這個 bug。
+# 另一個 bug（畫面每 2 秒閃一次）在 `frontend/`，那一層照 CLAUDE.md 只收 e2e smoke，不寫單元測試。
+TEST_LINES_CEILING = 17074
 
 
 def _line_totals() -> tuple:
@@ -950,7 +957,15 @@ KNOWN_MODULE_SIZES = {
     "app/orders": 1423,  # 票 12：channel_revenue 一張表取代三張（刪掉藥局專屬那一整組
                           # 之後仍淨增）——官網帳本寫入路徑、channel_revenue_summary()、
                           # 通用手動登錄（含「官網不能手動登錄」那道錢的守門）
-    "app/schedule": 3461,  # 票 S2b B1＋完整性審查三件 major（2026-08-31）：3155 → 3461。
+    "app/schedule": 3489,  # 真瀏覽器驗收兩個 bug（2026-08-31）：3461 → 3489。POST 建立讀取
+                           # 之後，回應必須是**這一次**剛派出去的讀取——原本結尾
+                           # `return brand_response(...)` 是去資料庫查「最新讀取」，而那幾列
+                           # 要等 worker 跑起來才寫得進去，所以按下「重新開始讀取」當下回的
+                           # 是上一次那份已完成的，畫面看起來像沒反應、人再按一次吃 409。
+                           # read_id 本來就在那支函式手上。順手把讀取的 API 形狀抽成
+                           # `_read_payload()` 一份（兩個呼叫端各組一次同一個字典必漂移）。
+                           #
+                           # 前一次是 3461——票 S2b B1＋完整性審查三件 major（2026-08-31）：3155 → 3461。
                            # 這是**淨**增加——同一批改動先刪掉了 `daily_csv()` 與
                            # `_daily_cell_value()` 共 69 行（`bucketed_csv()` 取代它們，
                            # 沒有第二個呼叫端，留著就是會漂移的死碼）。

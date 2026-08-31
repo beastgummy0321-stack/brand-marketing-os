@@ -260,6 +260,55 @@ class GenerationWritesNothingToLedgerTest(_OnboardingReadTestBase):
         self.assertFalse(conclusions[0]["accepted"], "沒勾過，不該顯示已接受")
 
 
+class StartReportsTheReadItJustStartedTest(_OnboardingReadTestBase):
+    def test_post_never_answers_with_the_previous_finished_read(self):
+        """API 契約（2026-08-31 真瀏覽器驗收抓到）：POST 建立讀取之後，回應必須是**這一次**
+        剛派出去的讀取，不是上一次那份。
+
+        壞掉的樣子：`start_onboarding_read()` 最後 `return brand_response(...)`，那支是拿
+        `_latest_read_rows()` 去查 `llm_task`；而那幾列要等 worker 真的開始跑第一個活動才
+        寫得進去。所以按下「重新開始讀取」的當下，POST 自己回的是上一次那份已完成的讀取，
+        畫面顯示「1 / 1 個活動完成」，看起來像什麼都沒發生——人於是再按一次，拿到 409。
+
+        先證過紅：把 `start_onboarding_read()` 結尾改回 `return brand_response(...)`，這支
+        從綠翻紅：`AssertionError: 'onb_...A' == 'onb_...A'`（第二次 POST 回的 read_id 跟
+        第一次那份一模一樣），改回來才又綠。"""
+        org_id, token, brand_id, _ad_account_id = self._setup_brand_with_account("restart")
+        meta_graph.list_entities = _fake_entities(
+            [self._campaign()], [self._adset("as1", "c1")], [self._ad("ad1", "c1")],
+        )
+        meta_graph.list_ad_creatives = _fake_creatives({"ad1": [{"body": "文案"}]})
+        onboarding.PROVIDER = _fake_provider(_fenced_conclusions([_one_conclusion()]))
+        headers = self._headers(token, org_id)
+
+        first = self.client.post(
+            f"/api/schedule/brands/{brand_id}/onboarding-read", headers=headers,
+        ).json()
+        self.assertIsNotNone(
+            first["read"], "第一次 POST 也不能回 null——這次讀取已經派出去了，不是不存在"
+        )
+        self.assertEqual(first["read"]["succeeded"], 0, "還沒有任何活動跑完")
+        self.assertEqual(first["read"]["jobs"], [], "worker 還沒寫任何一列，這是此刻的真相")
+        self.assertEqual(first["read"]["expected"], 1, "派了幾個活動是這支函式自己知道的")
+        self._run_worker()
+
+        second = self.client.post(
+            f"/api/schedule/brands/{brand_id}/onboarding-read", headers=headers,
+        ).json()
+        self.assertNotEqual(
+            second["read"]["read_id"], first["read"]["read_id"],
+            "第二次 POST 回的必須是新的那一次讀取，不是上一次已完成的那份",
+        )
+        self.assertEqual(
+            second["read"]["succeeded"], 0,
+            "新讀取一個活動都還沒跑完——回上一次的『已完成』等於對畫面說什麼都沒發生",
+        )
+        # 第二次 POST 派出去的工作要在這裡跑掉：procrastinate 的佇列是同一個資料庫，留一個
+        # 沒跑的 job 在裡面，下一支測試呼叫 `_run_worker()` 時會連它一起跑，那支測試就會
+        # 莫名多出一列（先踩到才加這一行，不是預防性的）。
+        self._run_worker()
+
+
 # -- 2. 逐條接受／全選／不預先打勾／imported 標記 ---------------------------------------
 
 class AcceptPerConclusionTest(_OnboardingReadTestBase):

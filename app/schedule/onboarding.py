@@ -33,7 +33,7 @@ CrossLayerRawSqlScanTest（app/tests/test_architecture_boundaries.py）逐字掃
 名稱的字樣。
 """
 
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 import app.shared.web as web
 from app.background import enqueue as background_enqueue
@@ -274,7 +274,21 @@ def start_onboarding_read(conn, brand_id: str, org_id: str) -> dict:
             # 下），這一次讀取因此半途而廢——跟上面 `_read_rows` 的 ponytail 同一類已接受
             # 的殘餘風險，不為了這個邊界情境做整批 enqueue 的復原。
             raise _already_running_error()
-    return brand_response(conn, brand_id, org_id)
+
+    # 剛入列的這一次讀取，**這支自己回報**，不回頭去查資料庫（2026-08-31 真瀏覽器驗收
+    # 抓到）：`brand_response()` 是拿 `_latest_read_rows()` 去查 `llm_task`，而那幾列要等
+    # worker 真的開始跑第一個活動才寫得進去。所以按下「重新開始讀取」的當下，POST 自己的
+    # 回應會是**上一次**那份已完成的讀取——畫面收到「24 / 24 個活動完成」，看起來像什麼
+    # 都沒發生，人就再按一次，吃到 409。read_id 明明就在這支函式手上，丟掉它去查一個還
+    # 不存在的東西才是問題所在。`jobs` 是空的、`succeeded` 是 0：那是此刻的真相，不是
+    # 佔位符——這次讀取已經派出去了，還沒有任何一個活動開始。
+    response = brand_response(conn, brand_id, org_id)
+    if (response["read"] or {}).get("read_id") != read_id:
+        response["read"] = _read_payload(
+            read_id, expected_jobs, frozen_facts,
+            started_at=datetime.now(UTC), jobs=[], succeeded=0,
+        )
+    return response
 
 
 # ---------------------------------------------------------------------------
@@ -291,13 +305,27 @@ def brand_response(conn, brand_id: str, org_id: str) -> dict:
 
 def _read_response(conn, brand_id: str, rows: list[dict]) -> dict:
     scope = rows[0].get("context_scope_json") or {}
-    expected_jobs = scope.get("expected_jobs") or []
-    frozen_facts = scope.get("frozen_facts") or {}
-    succeeded = sum(1 for row in rows if row["status"] == "succeeded")
+    return _read_payload(
+        scope.get("onboarding_read_id"),
+        scope.get("expected_jobs") or [],
+        scope.get("frozen_facts") or {},
+        started_at=rows[0]["started_at"],
+        jobs=[_job_response(conn, brand_id, row) for row in rows],
+        succeeded=sum(1 for row in rows if row["status"] == "succeeded"),
+    )
+
+
+def _read_payload(
+    read_id, expected_jobs: list, frozen_facts: dict, *, started_at, jobs: list, succeeded: int,
+) -> dict:
+    """一次讀取在 API 上的形狀，**只有這一份**——兩個呼叫端各自組一次同一個字典，遲早
+    會有一邊多一個欄位、另一邊沒有（`start_onboarding_read()` 剛派完工作時手上沒有任何
+    `llm_task` 列，卻要回報同一個形狀）。`jobs`／`succeeded` 由呼叫端算好傳進來：一邊是
+    真的有列可以數，另一邊是「還沒有任何活動開始」的 0，兩個都是事實。"""
     since, until = frozen_facts.get("since"), frozen_facts.get("until")
     return {
-        "read_id": scope.get("onboarding_read_id"),
-        "started_at": rows[0]["started_at"],
+        "read_id": read_id,
+        "started_at": started_at,
         "window": {"since": since, "until": until} if since and until else None,
         "attribution_windows": frozen_facts.get("attribution_windows") or [],
         "days_without_data": frozen_facts.get("days_without_data") or [],
@@ -309,7 +337,7 @@ def _read_response(conn, brand_id: str, rows: list[dict]) -> dict:
         "expected": len(expected_jobs),
         "succeeded": succeeded,
         "finished": succeeded == len(expected_jobs),
-        "jobs": [_job_response(conn, brand_id, row) for row in rows],
+        "jobs": jobs,
     }
 
 

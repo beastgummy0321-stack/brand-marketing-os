@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { EmptyState } from "@/components/layout/EmptyState";
 import { Skeleton } from "@/components/layout/Skeleton";
@@ -26,11 +26,37 @@ export function OnboardingReadPage({ brandId }: { brandId: string }) {
   const [startError, setStartError] = useState<string | null>(null);
   const [acceptingTaskId, setAcceptingTaskId] = useState<string | null>(null);
   const [acceptErrors, setAcceptErrors] = useState<Record<string, string>>({});
+  /** 「我剛按下去的那一次讀取」的 read_id；`"pending"` 是 POST 還在路上、還不知道 id
+   * （那支端點會同步打一次 Meta Graph 列活動，真帳號要好幾秒，輪詢一定會插在中間跑）；
+   * `null` 是沒有在等任何一次（一般瀏覽）。用 ref 不用 state：`load()` 每次 render 都是
+   * 新的閉包，`setInterval` 抓住的那一份讀到的會是舊值，ref 讀到的永遠是當下的。 */
+  const awaitedReadIdRef = useRef<string | null>(null);
 
-  function load() {
-    setState({ status: "loading" });
+  /** `silent`：輪詢用。**輪詢絕不可以把畫面打回 loading**（2026-08-31 真瀏覽器驗收抓到）
+   * ——原本 `load()` 開頭無條件 `setState({ status: "loading" })`，讀取進行中每 2 秒一次
+   * 的輪詢就把整頁換成三條骨架屏、拿到資料再換回來，畫面每 2 秒閃一次，捲動位置與展開
+   * 狀態一起跳掉。骨架屏是給「畫面上還沒有東西」用的，不是給「正在拿新的一份」用的。
+   *
+   * 同一個理由，silent 模式失敗時不把已經在畫面上的資料換成錯誤頁：一次 40 分鐘的讀取
+   * 中間掉一個封包，不該讓人已經讀到一半的結論整片消失。畫面上還沒有東西時才報錯。 */
+  function load(silent = false) {
+    if (!silent) setState({ status: "loading" });
     fetchOnboardingRead(brandId)
       .then((data) => {
+        const awaited = awaitedReadIdRef.current;
+        if (awaited !== null && data.read?.read_id !== awaited) {
+          // 伺服器還在回**上一次**那份讀取：新讀取的第一列 `llm_task` 要等 worker 真的
+          // 開始跑第一個活動才寫得進去，而 GET 是拿「最新有列的讀取」回答的（真帳號實測
+          // 這個空窗是 9 秒：POST 07:55:59、第一列 07:56:08）。這一份不能拿來覆蓋畫面上
+          // 剛開始的那一次——覆蓋下去，畫面就從「0 / 24 讀取中」跳回上一次的「24 / 24
+          // 完成」，看起來像按了沒反應，而且輪詢會就此停住。
+          //
+          // 這正是 ADR 0042 那條「用工作項自己找列，不是用『最新』找列」在畫面這一層的
+          // 樣子：我等的是**我按下去的那一次**，不是「伺服器現在覺得最新的那一次」。
+          // 直接 return，`starting` 不清、輪詢繼續，等到伺服器認得這一次為止。
+          return;
+        }
+        awaitedReadIdRef.current = null;
         setState({ status: "ready", data });
         // 票 05-1 的既有理由同樣適用這裡：剛按下「開始讀取」那一刻，worker 可能還沒把
         // 第一列 llm_task 插進去，`starting` 要撐住輪詢直到 load() 真的看到伺服器狀態，
@@ -39,34 +65,62 @@ export function OnboardingReadPage({ brandId }: { brandId: string }) {
         setStarting(false);
       })
       .catch((err: unknown) =>
-        setState({
-          status: "error",
-          message: err instanceof Error ? err.message : "讀取失敗，請稍後再試。",
-        }),
+        setState((prev) =>
+          silent && prev.status === "ready"
+            ? prev
+            : {
+                status: "error",
+                message: err instanceof Error ? err.message : "讀取失敗，請稍後再試。",
+              },
+        ),
       );
   }
 
-  useEffect(load, [brandId]);
+  useEffect(() => {
+    load();
+  }, [brandId]);
 
   // 沒有「整個讀取還在跑」的單一旗標（後端的 `finished` 只代表『全部成功』，一個活動
   // 永久失敗也會讓 `finished` 停在 false，但那不是還在跑）——用逐一活動自己的 `running`
-  // 判斷，跟本地「我剛按下去」旗標一起撐住輪詢，是 `SchedulePage.tsx:152-167` 同一個模式。
-  const anyJobRunning =
-    state.status === "ready" && Boolean(state.data.read?.jobs.some((j) => j.running));
-  const runningNow = starting || anyJobRunning;
+  // 判斷，是 `SchedulePage.tsx:152-167` 同一個模式。
+  //
+  // **外加「還有活動連第一列都還沒寫進去」**（2026-08-31 真瀏覽器驗收抓到）：`llm_task`
+  // 那幾列是 worker 真的開始跑某個活動時才寫的，所以剛派完工作的那幾秒，`jobs` 是空的、
+  // 沒有任何一個 `running`。原本只靠本地 `starting` 旗標撐住，而 `starting` 在**第一次**
+  // 輪詢回來就被清掉——那一次回來如果剛好還沒有任何一列，輪詢就此停住，畫面停在 0 / 24
+  // 不再動，看起來像沒反應。`jobs.length < expected` 是伺服器講的事實，不是本地猜測；
+  // 正常路徑會自己終止：24 列都寫進去、沒有一個在跑，它就是 false（有活動永久失敗也一樣，
+  // 不會像 `finished` 那樣永遠輪詢下去）。
+  //
+  // ponytail: 例外是「job 在 `gateway.run_task()` 寫進第一列之前就死掉」（Graph 認證掛了、
+  // 借不到連線——`app/schedule/onboarding.py` `_read_rows()` 的 ponytail 記的是同一個缺口）：
+  // 那一列永遠不會出現，這個條件、以及上面 `awaitedReadIdRef` 那條等待，都不會自己收斂，
+  // 分頁會每 2 秒打一次 API 停不下來、按鈕一直停在「開始讀取中…」。上限就是這個。升級路徑
+  // 是後端把「佇列裡還剩幾個 job」一起報出來（procrastinate 知道，API 現在沒講），有了那個
+  // 數字才分得出「還沒開始」跟「永遠不會開始」。真的被咬到再做——今天沒有那個數字，硬訂一個
+  // 逾時秒數就是憑空發明一個沒有來源的常數。
+  const read = state.status === "ready" ? state.data.read : null;
+  const anyJobRunning = Boolean(read?.jobs.some((j) => j.running));
+  const anyJobNotStartedYet = read !== null && read.jobs.length < read.expected;
+  const runningNow = starting || anyJobRunning || anyJobNotStartedYet;
   useEffect(() => {
     if (!runningNow) return;
-    const timer = setInterval(load, 2000);
+    const timer = setInterval(() => load(true), 2000);
     return () => clearInterval(timer);
   }, [runningNow, brandId]);
 
   async function handleStart() {
     setStarting(true);
     setStartError(null);
+    // POST 還沒回來之前就先擋住輪詢覆蓋畫面——這支端點會同步列一次 Meta 的活動，真帳號
+    // 上要好幾秒，2 秒一次的輪詢一定會插在中間跑完並蓋掉狀態。
+    awaitedReadIdRef.current = "pending";
     try {
       const data = await startOnboardingRead(brandId);
+      awaitedReadIdRef.current = data.read?.read_id ?? null;
       setState({ status: "ready", data });
     } catch (err) {
+      awaitedReadIdRef.current = null;
       setStartError(err instanceof Error ? err.message : "開始讀取失敗，請稍後再試。");
       setStarting(false); // 失敗（含 409）不會有後續輪詢清掉，這裡不清就永遠鎖住按鈕。
     }
@@ -103,7 +157,9 @@ export function OnboardingReadPage({ brandId }: { brandId: string }) {
     );
   } else if (state.status === "error") {
     content = (
-      <EmptyState title="讀取失敗" description={state.message} onAction={load} actionLabel="重新載入" />
+      // `() => load()` 不是 `load`：直接傳函式，點擊事件會變成第一個參數，`silent` 就
+      // 被當成 true——人按「重新載入」時反而不顯示骨架屏，看起來像沒反應。
+      <EmptyState title="讀取失敗" description={state.message} onAction={() => load()} actionLabel="重新載入" />
     );
   } else {
     const { data } = state;
