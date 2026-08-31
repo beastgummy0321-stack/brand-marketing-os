@@ -1335,6 +1335,88 @@ def delete_customer_voice(conn, brand_id: str, cv_id: str, *, actor: str) -> Non
 
 
 # ---------------------------------------------------------------------------
+# Learning Ledger（修憲落地 A3，決策 0037 第三節；docs/architecture-rules.md A1／A4；
+# 2026-08-31 依 ADR 0044 復原寫入函式，讀取函式仍留給 S5）
+#
+# 遷自 app/ads——Brand Learning 依 docs/domain.md 是品牌永久層概念，不該只讓廣告分支
+# 摸得到。append-only（鐵則 3 單向鐵律：學習只能補充事實層，永遠不得回寫或改寫事實層，
+# 本模組的 brand_fact／product_fact 寫入函式在別處，這裡不得也不會碰它們——
+# 見 app/tests/test_learning_ledger_unidirectional.py 的機器檢查）。
+# 各分支自己的 repository 應包一層薄封裝呼叫這裡的公開函式，不得對本表下原生 SQL
+# （A1：跨層一律走公開函式）；app/ads 連同它的 repository.py 已整支刪除，現在唯一的
+# 呼叫端是 app/schedule（onboarding-read 判讀的接受畫面，見
+# docs/adr/0044-the-learning-ledger-comes-back.md）。
+# ---------------------------------------------------------------------------
+
+# ADR 0044 把這個值留給本票決定：欄位預設 'ads' 標記的是已刪除 ads 模組寫入的舊列；
+# 這裡是接手既有帳號、把過去已經投過的成效讀回來，不是這套系統自己跑出來的實驗，
+# 所以另立一個值、不借用預設值。S5 復原 list_learnings_for_prompt（依 source_track
+# 過濾）時，imported 的列仍要讓排程模型看得到——那個過濾條件不在這裡建。
+SOURCE_TRACK_IMPORTED = "imported"   # 接手既有帳號讀回來的，不是這套系統自己賺到的
+
+
+def create_learning_ledger_entry(conn: Conn, brand_id: str, *, learning_text: str,
+                                  applicability_scope: str, created_by: str, actor: str,
+                                  source_track: str, product_id: str | None = None,
+                                  platform: str | None = None,
+                                  source_cycle_id: str | None = None,
+                                  source_reading_id: str | None = None,
+                                  source_hypothesis_id: str | None = None,
+                                  sample_size: str | None = None,
+                                  confidence: str | None = None) -> dict:
+    """已驗證的正面學習入帳（append-only，鐵則 3）：只新增，本層不提供 UPDATE／DELETE
+    入口（下架走 deactivate_learning_ledger_entry，只改 expired，不改內容）。只收
+    「經判讀驗證且經人確認」的條目——由呼叫端保證（決策 0030 第一節第 1 點）。
+
+    `source_track` 必填、不給預設值（A4）：來源分支不該用猜的，呼叫端（或它自己模組的
+    薄封裝，如 app/ads/repository.py）必須明確交代這筆學習是哪個分支學到的。
+    """
+    _require(learning_text, "learning_ledger.learning_text 為必填")
+    _require(applicability_scope, "learning_ledger.applicability_scope 為必填")
+    _require(created_by, "learning_ledger.created_by 為必填")
+    _require(source_track, "learning_ledger.source_track 為必填")
+    _require(actor, "actor 為必填")
+    entry_id = new_id("lrn")
+    ts = now_utc()
+    row = {
+        "id": entry_id, "brand_id": brand_id, "product_id": product_id, "platform": platform,
+        "learning_text": learning_text, "applicability_scope": applicability_scope,
+        "source_cycle_id": source_cycle_id, "source_reading_id": source_reading_id,
+        "source_hypothesis_id": source_hypothesis_id, "sample_size": sample_size,
+        "confidence": confidence, "needs_revalidation": False, "expired": False,
+        "learned_at": ts, "created_by": created_by, "created_at": ts, "source_track": source_track,
+    }
+    org_id = _org_id_for_brand(conn, brand_id)
+    conn.execute(
+        "INSERT INTO learning_ledger (id, org_id, brand_id, product_id, platform, learning_text,"
+        " applicability_scope, source_cycle_id, source_reading_id, source_hypothesis_id,"
+        " sample_size, confidence, needs_revalidation, expired, learned_at, created_by,"
+        " created_at, source_track) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+        (row["id"], org_id, row["brand_id"], row["product_id"], row["platform"], row["learning_text"],
+         row["applicability_scope"], row["source_cycle_id"], row["source_reading_id"],
+         row["source_hypothesis_id"], row["sample_size"], row["confidence"],
+         row["needs_revalidation"], row["expired"], row["learned_at"], row["created_by"],
+         row["created_at"], row["source_track"]),
+    )
+    write_audit(conn, org_id=org_id, brand_id=brand_id, entity_type="learning_ledger", entity_id=entry_id,
+                action="create", actor=actor, before=None, after=row)
+    conn.commit()
+    return row
+
+
+def list_learning_ledger_by_source_reading(conn: Conn, brand_id: str, *,
+                                            source_reading_id: str) -> list:
+    """判讀（onboarding_read 等）的接受畫面用：這一次讀出的結論裡哪些已經入帳過
+    ——用 source_reading_id（那次 llm_task 的 id）比對，同一個 llm_task 對同一段文字
+    不會重複入帳（ADR 0044：比對是否已接受走 exact match，不做正規化）。"""
+    return _rows(conn.execute(
+        "SELECT * FROM learning_ledger WHERE brand_id = %s AND source_reading_id = %s "
+        "ORDER BY created_at",
+        (brand_id, source_reading_id),
+    ))
+
+
+# ---------------------------------------------------------------------------
 # 清理登記處（第 2 刀）：向 app.core.cleanup 登記本模組的清點／清除函式，
 # 刪品牌時由登記處統一呼叫，本模組不必再被別人手寫死「記得通知它」。
 # ---------------------------------------------------------------------------

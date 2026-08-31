@@ -599,7 +599,52 @@ class FileLineCapTest(unittest.TestCase):
 # 的話那天的花費照樣進分子、卻不進分母，印出一個過度樂觀的假 CPA；這支證明加了保護之後
 # 總計跟實體小計都正確回 None）。沒有第二支重複驗證同一件事，也沒有畫面行為的單元測試。
 # 多出來的行數還含這段理由註解本身與 KNOWN_MODULE_SIZES 那筆理由。
-TEST_LINES_CEILING = 15178
+# 票 S2（開帳讀歷史）：15178 → 15714（實測值，含本段註解與四筆 KNOWN_MODULE_SIZES 理由
+# 自己佔掉的行）。新檔 `test_onboarding_read.py`（482 行）六支，每一支的 docstring 都點名
+# 守的是四類之一：`GenerationWritesNothingToLedgerTest`（**資料正確性**：跑完一次讀取、
+# 不勾選任何結論，`learning_ledger` 一列都不該多出來——先證過紅：暫時讓
+# `onboarding_read()` 生成當下就寫帳本，這支從綠翻紅（`1 != 0`），改回來才又綠）、
+# `AcceptPerConclusionTest`（**資料正確性**：勾一條只多一列且是被勾的那條、全選補齊其餘、
+# 讀取剛完成時沒有任何一條預先打勾、寫進去的列 `source_track` 標成 imported——四件事一支
+# 測完，不拆成四支各自重建一次 fixture）、`ParallelCampaignsBothSucceedTest`（**money**：
+# ADR 0042 修正版明講的那支——鎖字面值是 `onboarding_read:{account}:{campaign}`，兩個活動
+# 平行各自成功一次，沒有任何一個被鎖拒收，鎖抓太寬會白花錢又查不到帳，抓太窄會同一份工作
+# 算兩次錢）、`FanInCountsTest`（**資料正確性**：一個活動故意失敗，「全部完成」該是
+# False；只重跑那一個活動之後變 True，另一個活動不會跟著多跑一次）、
+# `UnreadableAdIsReportedTest`（**資料正確性**：Meta 回不出素材的廣告要出現在
+# `unreadable_ads`，斷言「被靜悄悄丟掉」必須失敗）、`PromptCarriesMethodologyTableTest`
+# （**資料正確性**：組出來的 prompt 真的貼進 `ab-testing.md` 第 3 節樣本數速查表逐字內容
+# 跟部門任務檔識別行——這是模型真正需要的判斷依據有沒有到位，取代已刪掉的「grep diff 找
+# 常數」檢查）。沒有第七支重複驗證同一件事，也沒有畫面行為的單元測試（那支留給
+# `frontend/e2e/smoke.spec.ts`，S2-DESIGN.md D0-b）。
+# 票 S2 審查回應：15714 → 15725。沒有多寫任何一支測試——多的 6 行全是上面
+# `KNOWN_MODULE_SIZES` 裡 `app/schedule` 那筆新增的理由註解（accept 的冪等只是先查再寫，
+# 那個上限現在寫在 `accept_conclusions()` 的 `ponytail:` 段落裡）。審查抓到的是一個
+# 沒有測試守得住的上限：要守它得先有唯一索引，而 ADR 0044 不准這張票動 schema，所以
+# 這裡不新增一支「會通過但什麼都沒證明」的測試來假裝守住了。
+# 票 S2 實機驗收（第三件）：15793 → 15842。新增第八支
+# `DailyCsvFlattensActionsWithoutInventingZeroTest`（**資料正確性**：`actions` 攤平成欄位
+# 只准改形狀，回報過的數字原樣留著、沒回報的那天留空白絕不填 0——後者正是
+# `meta_entity_spend` 的 null≠0 規矩在 CSV 這一層的樣子）。先證過紅：把留空白改成填 0，
+# 這支立刻紅在 `'0' != ''`，改回來才綠。純函式測試，不跑 worker、不進資料庫。
+# 前一次是 15793——
+# 票 S2 實機驗收（第二件）：15740 → 15793。新增第七支
+# `CampaignWithoutNumbersIsReportedTest`（**資料正確性**：Meta 列得出來、但這段期間手上
+# 一列數字都沒有的活動不派分析師，卻一定要被點名——真帳號 58 個活動裡 34 個屬於這類，
+# 靜靜跳過等於謊報這次讀了整個帳號），另外兩支多活動的測試各補一列 c2 的花費（不補的話
+# 它們的第二個活動會被正確跳過，那兩支要驗的「兩個活動」就只剩一個）。
+# 這一條是假的 Graph 替身量不到、只有真的打一次 Meta 才看得見的東西。
+# 前一次是 15740——
+# 票 S2 實機驗收：15725 → 15740。一樣沒有多寫測試——多的 11 行是上面 `app/meta` 與
+# `app/schedule` 兩筆新增的理由註解（Meta 實際拒收 `DELETED`，跟報告表頭那句話因此要
+# 講得更精確）。這是第一次真的打 Meta 才量得到的事，不是漏測：測試裡的 Graph 是假的，
+# 假的那支不會替我們拒絕一個官方文件明明列出來的枚舉值。
+# 票 S2b 步驟 0（純搬移）：15842 → 15854（含本段註解自己佔掉的 5 行）。**一支測試都沒有多寫**——多的 12 行全部是本段與上面
+# `KNOWN_MODULE_SIZES` 裡 `app/schedule` 那筆新增的理由註解。測試檔本身只改了兩行：
+# `DailyCsvFlattensActionsWithoutInventingZeroTest` 呼叫的 `onboarding._daily_csv` 改成
+# `onboarding_slice.daily_csv`，import 那行跟著加一個名字（淨增 0 行）。它守的那件事
+# （**資料正確性**：沒回報的那天留空白絕不填 0）一個字都沒放寬，只是換了個 import 路徑。
+TEST_LINES_CEILING = 15854
 
 
 def _line_totals() -> tuple:
@@ -656,7 +701,20 @@ KNOWN_MODULE_SIZES = {
                              # 前一次是 215——2026-08-29 修 Windows 起不來：worker 移到自己
                              # 的執行緒／loop＋起不來不得弄死網站（ADR 0039 amended）
                              # 掛進既有 process，不再只有 app()
-    "app/brand_intelligence": 2634,
+    "app/brand_intelligence": 2060,  # 票 S2（ADR 0044 落地）：復原 learning_ledger 的寫入
+                                      # 函式——`create_learning_ledger_entry` 逐字照抄
+                                      # `git show 7e0697e^:app/brand_intelligence/repository.py`
+                                      # 復原，加一支新讀者 `list_learning_ledger_by_source_reading`
+                                      # 給接受畫面判斷哪幾條已經勾過（D11），連同
+                                      # `SOURCE_TRACK_IMPORTED` 常數與理由註解共 82 行。
+                                      # 前一次的凍結值 2634 早在這張票之前就已經高過真實
+                                      # 行數——2026-08-30 票 04（commit 7e0697e）刪掉
+                                      # learning_ledger／strategy_hypothesis 整條讀寫面
+                                      # （那次淨減 290 行），這道棘輪只鎖「不得再超過凍結
+                                      # 值」，縮小之後沒有人回頭調低過那個數字（同一份
+                                      # ponytail：FileLineCapTest 上方「縮小後不強制回來
+                                      # 調低數字」）。這裡照票 S2 的要求把表格對齊實測值，
+                                      # 不是新增了 574 行。
     "app/brand_web": 2091,  # 2026-08-30 刪失效規則卡（小債）：autonomy 那張卡的兩處專屬
                              # 驗證跟著走。前一次是 2155
     "app/core": 1554,  # 票 storage-04：素材資料夾設定退役，整支模組檔（131 行）連同
@@ -673,7 +731,16 @@ KNOWN_MODULE_SIZES = {
                           # 缺陷 1：intake_question 改走強制工具結構化輸出，新增
                           # _QUESTION_TOOL／_CHOICE_SCHEMA schema（散文裡的 JSON 格式
                           # 說明同時刪掉，仍淨增）。前一次是 3548
-    "app/llm": 1619,  # 票 01：providers.py 的 TASK_TYPE_LABELS／TASK_DEFAULTS 各補一行
+    "app/llm": 1482,  # 票 S2：providers.py 的 TASK_TYPE_LABELS／TASK_DEFAULTS 各補一行
+                       # "onboarding_read"（跟既有三個排程任務同一組 thinking="high"，理由見
+                       # `app/llm/providers.py` 該行註解），淨增 6 行。前一次的凍結值 1619
+                       # 早在這張票之前就已經高過真實行數——2026-08-30 票 04（commit
+                       # 7e0697e）同一次刪掉 learning_ledger／strategy_hypothesis 時，
+                       # `context_compiler.py` 的【已驗證的學習】整節（兩個表的讀取面，
+                       # 從沒有過真的呼叫端）也一起刪掉，那次淨減 167 行；這道棘輪縮小後
+                       # 沒有人回頭調低過凍結值（同上，FileLineCapTest 的 ponytail 說明）。
+                       # 這裡照票 S2 的要求把表格對齊實測值，不是新增了 137 行。
+                       # 票 01：providers.py 的 TASK_TYPE_LABELS／TASK_DEFAULTS 各補一行
                        # "schedule_creative"（跟既有的 schedule_plan／schedule_tree 同一組）。
                        # 前一次是 1617——
                        # 2026-08-30 月費上限抽成 check_spend_cap()（小債）：算法原本寫死在
@@ -688,7 +755,26 @@ KNOWN_MODULE_SIZES = {
                        # 缺陷 1／2：parse_json_reply 換成 raw_decode 單錨點（含為什麼不能
                        # 退而求其次的理由註解）＋timeout_s 300 秒與 max_retries=0 兩段
                        # 來源註解（實測列號、SDK 常數位置）。前一次是票 09 的 1298
-    "app/meta": 1323,  # 2026-08-30 票 S1 審查缺陷修正（money）：cpa 從 `_RATE_METRICS`
+    "app/meta": 1646,  # 票 S2 實機驗收（第二件）：`campaign_ids_with_rows()`——真帳號
+                       # Meta 列得出 58 個活動，這段期間有數字的只有 24 個，剩下 34 個
+                       # 派分析師過去只會拿到空 CSV。呼叫端用這支把派工單篩過，被篩掉的
+                       # 活動照票 S2 §1 報出來、不靜靜跳過。前一次是 1622——
+                       # 票 S2 實機驗收：`_HISTORICAL_STATUSES` 拿掉 `DELETED`，上面補一段
+                       # 實測紀錄——官方三個 edge 的參考頁都把 `DELETED` 印在枚舉裡，但
+                       # 2026-08-31 對真帳號打 v26.0，三層只要陣列出現 `DELETED` 就回
+                       # code 100／subcode 1815001「Invalid parameter」，拿掉就全部正常。
+                       # 文件與實際行為不一致時以實際為準，量測寫在程式旁邊，免得下一個人
+                       # 照文件又加回去。前一次是 1610——
+                       # 票 S2：graph.py 新增 `list_entities`（三層物件端點，含逐頁查證的
+                       # `effective_status` 官方枚舉值與 JSON 陣列編碼理由）與
+                       # `list_ad_creatives`（逐廣告打文件記載的 per-ad edge，不用未證實的
+                       # `?ids=` 批次或欄位展開語法）；repository.py 新增五支只讀
+                       # `meta_entity_spend` 的函式（`entity_rows`／`entity_action_totals`／
+                       # `spend_date_bounds`／`spend_dates_with_data`／
+                       # `attribution_windows_in_range`，D6／D7）。多出來的行數大半是「文件
+                       # 只證實了什麼、沒證實什麼」的理由註解，不是邏輯本身變複雜。
+                       # 前一次是 1323——
+                       # 2026-08-30 票 S1 審查缺陷修正（money）：cpa 從 `_RATE_METRICS`
                        # 抽成自己的 `_CPA_METRIC`，補上 roas 已經有的 `bool_and` 保護——
                        # `_CONVERSIONS_LATERAL` 對不上 action_type（含 actions 本身是 SQL
                        # NULL）時 `conv.conversions` 是 SQL NULL，SUM() 會跳過它不當 0 加總，
@@ -723,7 +809,43 @@ KNOWN_MODULE_SIZES = {
     "app/orders": 1423,  # 票 12：channel_revenue 一張表取代三張（刪掉藥局專屬那一整組
                           # 之後仍淨增）——官網帳本寫入路徑、channel_revenue_summary()、
                           # 通用手動登錄（含「官網不能手動登錄」那道錢的守門）
-    "app/schedule": 1462,  # 2026-08-30 票 S1：`_fill_node_spend`／`_approval_overspend`
+    "app/schedule": 2314,  # 票 S2b 步驟 0（純搬移，不是新行為）：`onboarding.py` 當時
+                           # 768 行、`FILE_LINE_CAP` 是 800，只剩 32 行餘裕，而 S2b 的
+                           # A1～A4 與 B1 改的就是 segment [4] 那一族函式。七支搬進新的
+                           # `onboarding_slice.py`（768 → 583），淨增的 20 行全部是新檔的
+                           # 檔頭 docstring 與它自己的 import——一行函式本體都沒改，只有
+                           # 函式名去掉開頭底線（它們現在是跨檔接口，底線原本的意思是
+                           # 「這一檔私有」，已經不成立）。前一次是 2294——
+                           # 票 S2 實機驗收（第三件，這是真的打過才看得見的缺陷）：
+                           # `_daily_csv` 把 `actions`／`action_values` 攤平成欄位。原本
+                           # 每一列塞一段原始 JSON，一個 722 列的活動組出 2,735,699 字元、
+                           # 整份提示詞 2.1 MB，撞破本機 codex CLI 的 1,048,576 字元輸入
+                           # 上限，24 個活動裡有 4 個整批讀不到。攤平之後同一份資料是
+                           # 236,696 字元（11.6 倍），一天不刪、一個節點不省——SPEC §4
+                           # 允許的正是這種「只改形狀不改內容」。多的行數大半是那段
+                           # 實測理由與 `ponytail:`（再撞上限時的下一步是把工作項切成
+                           # 一個廣告組，不是開始丟資料）。前一次是 2230——
+                           # 票 S2 實機驗收（第二件）：dispatch 只派給「這段期間真的有
+                           # 數字」的活動，沒有數字的進 `campaigns_without_numbers`，
+                           # 提示詞（模型要知道自己看到的是子集合）與 API 回應（畫面要
+                           # 看得見）各多一段。前一次是 2202——
+                           # 票 S2 實機驗收第一次真的打 Meta 撿到的：`CAMPAIGNS_NOTE` 從
+                           # 一行變三行——已刪除的活動 Meta 根本不讓我們列（實測見
+                           # `app/meta/graph.py` 的 `_HISTORICAL_STATUSES`），報告表頭
+                           # 那句誠實聲明因此要講得更精確，不能只說「不是全部」。
+                           # 前一次是 2198——
+                           # 票 S2 審查回應：`accept_conclusions()` 的 docstring 多一段
+                           # `ponytail:`（13 行）——把「冪等是先查再寫、不是資料庫保證」這個
+                           # 上限寫明白：沒有唯一索引，兩個同時進來的 accept 會各寫一列，而
+                           # 重複的列會對下一期企劃謊稱「這條被觀察到兩次」（ADR 0044）。
+                           # 修法是加唯一索引，而 ADR 0044 明文不准這張票動 schema，所以是
+                           # 寫下來、不是蓋掉。前一次是 2185——
+                           # 票 S2：兩個新檔——`onboarding.py`（dispatch＋fan-in＋
+                           # procrastinate task body，同一個檔案兩種角色的理由見該檔檔頭）
+                           # 與 `onboarding_routes.py`（第二個 `APIRouter`，不擠進已經在
+                           # `FILE_LINE_CAP` 邊上的 `routes.py`，見該檔檔頭）；`__init__.py`／
+                           # `jobs.py` 各補幾行掛第二個 router、第四個 task。前一次是 1462——
+                           # 2026-08-30 票 S1：`_fill_node_spend`／`_approval_overspend`
                            # 呼叫 `meta_repo.spend_summary` 改傳 `level="campaign"`（三層
                            # 共用一張表之後，忘記篩層級會把 adset／ad 層的花費也算進來），
                            # 讀回應的鍵從 `summary["campaigns"]`／`c["campaign_id"]` 改成

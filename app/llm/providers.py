@@ -138,6 +138,7 @@ TASK_TYPE_LABELS = {
     "schedule_plan": "檔期規劃（出方案）",
     "schedule_tree": "檔期規劃（展開活動樹，票 09）",
     "schedule_creative": "檔期規劃（產出節點內容，票 01）",
+    "onboarding_read": "開帳讀歷史（票 S2）",
     "creative_batch": "素材生成（整批）",
     "creative_backfill": "素材生成（補打缺型別）",
     "creative_rewrite": "素材生成（單則改寫）",
@@ -160,6 +161,11 @@ TASK_DEFAULTS = {
     "schedule_plan": {"model": None, "thinking": "high"},
     "schedule_tree": {"model": None, "thinking": "high"},
     "schedule_creative": {"model": None, "thinking": "high"},
+    # 開帳讀歷史（票 S2）：跟同部門另外三個任務一樣高思考——判讀一個活動過去的歷史數字是
+    # 判斷，不是格式化（SPEC §7.5 記錄的四個實測案例：拒絕把空白 ROAS 當零、拒絕把平台自己
+    # 分配的預算當實驗、把三筆訂單衝出的 66 倍 ROAS 標成待驗證的假說），這是同部門內部一致，
+    # 不是另外猜一個數字。
+    "onboarding_read": {"model": None, "thinking": "high"},
     # 素材文案生成：中等思考
     "creative_batch": {"model": None, "thinking": "medium"},
     "creative_backfill": {"model": None, "thinking": "medium"},

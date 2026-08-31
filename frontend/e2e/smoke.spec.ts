@@ -84,4 +84,13 @@ test("走完切片後活下來的主要畫面", async ({ page }) => {
   await expect
     .poll(() => thumbnail.evaluate((img) => (img as HTMLImageElement).naturalWidth))
     .toBeGreaterThan(0);
+
+  // --- 開帳讀歷史（票 S2）-----------------------------------------------------
+  // D0-b（S2-DESIGN.md，使用者 2026-08-31 裁定）：這支帳號是每次都重新註冊的全新帳號，
+  // 沒有 Meta token、沒有任何成效資料，不可能有一筆真的 onboarding_read 判讀存在，所以
+  // 這裡只證明路由掛得上、畫面亮得出來、誠實的空狀態出現；「勾一條結論→ 剛好一筆帳本
+  // 紀錄」改由後端測試直接打真的 HTTP 路由證明（done-check 1-3 本來就是那樣做的）。
+  await page.goto(`/app/brands/${brandId}/onboarding-read`);
+  await expect(page.getByRole("heading", { name: "開帳讀歷史", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "還沒有綁定 Meta 廣告帳戶" })).toBeVisible();
 });

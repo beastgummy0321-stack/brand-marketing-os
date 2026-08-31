@@ -14,6 +14,7 @@ import { ProductDetailPage } from "@/components/products/ProductDetailPage";
 import { ProductListPage } from "@/components/products/ProductListPage";
 import { BrandReportPage } from "@/components/report/BrandReportPage";
 import { OrdersPage } from "@/components/orders/OrdersPage";
+import { OnboardingReadPage } from "@/components/schedule/OnboardingReadPage";
 import { SchedulePage } from "@/components/schedule/SchedulePage";
 import { SettingsPage } from "@/components/settings/SettingsPage";
 import { fetchOverview, type DashboardBrandCard } from "@/lib/api";
@@ -50,6 +51,7 @@ function App() {
         <Route path="/brands/:brandId/orders" element={<OrdersRoute />} />
         <Route path="/brands/:brandId/report" element={<BrandReportRoute />} />
         <Route path="/brands/:brandId/schedule" element={<ScheduleRoute />} />
+        <Route path="/brands/:brandId/onboarding-read" element={<OnboardingReadRoute />} />
       </Route>
     </Routes>
   );
@@ -202,6 +204,17 @@ function ScheduleRoute() {
   return (
     <AppShell brandId={brandId ?? null}>
       <SchedulePage brandId={brandId ?? ""} />
+    </AppShell>
+  );
+}
+
+/** 開帳讀歷史（票 S2）：讀一個品牌過去在 Meta 上投過的活動，逐活動判讀，交人勾選要不要
+ * 存進學習帳本。跟 `ScheduleRoute` 同一種形狀，只是掛在不同子路徑。 */
+function OnboardingReadRoute() {
+  const { brandId } = useParams<{ brandId: string }>();
+  return (
+    <AppShell brandId={brandId ?? null}>
+      <OnboardingReadPage brandId={brandId ?? ""} />
     </AppShell>
   );
 }
