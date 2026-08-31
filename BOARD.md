@@ -39,6 +39,17 @@
 
 ## 待做
 
+- [ ] **一次半途而廢的讀取卡在畫面上，開頁面就會撞到（2026-08-31）**
+      `onb_01M1BDXHNT5HTSDXF4F66469Y1` 只跑完 6/24 就被關掉後端打斷，剩下 18 個 job 在佇列裡是
+      `failed`，永遠不會補寫 `llm_task` 列。畫面拿它當「最新的讀取」，而 `jobs.length(6) < expected(24)`
+      會讓輪詢**停不下來**——每 2 秒打一次 API、按鈕一直停在「開始讀取中…」。
+      這正是 `OnboardingReadPage.tsx` 那條 `ponytail:` 記的上限，現在它不是理論了。
+      **最快解（測試資料，憲法「資料狀態」段允許直接刪）**：
+      `DELETE FROM llm_task WHERE context_scope_json->>'onboarding_read_id'='onb_01M1BDXHNT5HTSDXF4F66469Y1';`
+      刪完畫面會退回顯示上一次完整的 24/24。
+      **根治**是那條 ponytail 寫的升級路徑：後端把「佇列裡還剩幾個 job」報出來，前端才分得出
+      「還沒開始」和「永遠不會開始」。等它再咬一次再做。
+
 - [ ] **S2 真跑撿到、還沒修的三件**（S2 與 S2b 都已收工，不再撞檔；三件都是同一類：
       **這個品牌的設定不完整，而外殼沒把「因此我少做了什麼」講出來**）
       ① **提示詞沒告訴模型這個品牌有哪些產品**：122 條裡 12 條的 `scope` 是猜的（有的把 adset id
@@ -134,12 +145,28 @@ Dependabot #1（`nanoid`，修補版 3.3.18）：**`saas` 這邊已經是 3.3.18
       它的主人 `app/core/orchestrator.py` 已刪）＋刪 `order_record.attribution_override`、
       `interrupt.kind`／`visible_from`／`campaign_cycle_id` 四個沒人用的欄位。欄位還在，
       所以 `enqueue()` 那三個沒有生產呼叫端的參數也還留著
+- [ ] `FILE_LINE_CAP = 800` 仍然用行數下令拆檔（`新超過 800 行上限——先拆再加`），
+      而工作流規範寫的是「**Line count never orders a split** — a split is a module-boundary decision」。
+      2026-08-31 使用者裁決留規範那一份。已超標檔改成棘輪了，新檔還是被行數逼拆——
+      S2b 當天 `onboarding_slice.py` 就被它逼著拆兩次，驅動力是註解量不是邏輯量。要不要一起收掉是你的決定
 - [ ] `frontend/src/components/layout/FluidCard.tsx` 現在只剩 Storybook 在用。要留當設計素材還是刪，
       下一輪順手決定
 - [ ] `frontend/src/lib/auth.ts` 的 depcruise 註解已改成「規則還沒建」並指向 07-1——
       真正把規則建起來還是 07-1 的工作
 
 ## 使用者待辦（不是程式債，做的人是你；我做不了）
+
+- [ ] **設定這個品牌的 `conversion_goal`**（約 1 分鐘）。現在是 NULL，離群日規則因此只跑了一半——
+      每個桶只挑得出花費最高日，轉換最高日那一半從沒啟動過。實測設成 `purchase` 之後，
+      舊編碼引用過、新編碼掉了的那一天（2025-12-24，ROAS 40.0）就回來了。**這是資料，不是程式**
+- [ ] **確認這個品牌要不要建產品**。現在 0 個，所以開帳讀取的 122 條裡有 12 條的 `scope` 是猜的。
+      要嘛建產品，要嘛確認「這個品牌就是沒有產品」——兩種答案都能讓提示詞講實話，猜不行
+- [ ] **讀一輪開帳讀取的結論**（新的那跑 `onb_01M1BD2SFW1C0HYKSQH8C7WRV0`，24 個活動 134 條）。
+      不是為了驗收——B1 已經收掉了——是為了**說得出「哪一類看了就想跳過」**。
+      在你講得出來之前，任何篩選機制都是外殼替你判斷哪條重要
+- [ ] **跑 `claude plugin update` 讓工作流新規則生效**（約 30 秒）。規則已改進 plugin repo
+      （`skeleton-slice-pencil` v4.7.0，`c50ff15`，**還沒 push**），但這台機器的 cache 還是 4.6.1——
+      **在更新之前，新開的 session 注入的仍然是舊規則**
 
 - [ ] **2026-08-30 承諾：這幾天真的貼一則廣告到 Meta**（用排程頁產出的圖片提示詞生一張圖 →
       上傳進品牌智庫的官方素材 → 手動貼進 Meta 建一則廣告）。這條走過之前，**「把圖掛到廣告節點上」
