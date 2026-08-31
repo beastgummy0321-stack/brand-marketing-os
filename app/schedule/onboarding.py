@@ -42,7 +42,7 @@ from app.core.db import APP_DIR, connection, new_id
 from app.llm import context_compiler, gateway, methodology, providers
 from app.meta import graph
 from app.meta import repository as meta_repo
-from app.schedule import onboarding_slice
+from app.schedule import onboarding_slice, onboarding_slice_csv, onboarding_slice_totals
 from app.schedule.plan import _extract_last_json_block
 
 TASK_TYPE = "onboarding_read"
@@ -524,35 +524,67 @@ def onboarding_read(
         conversion_goal = brand["conversion_goal"] if brand is not None else None
         adset_ids = [adset["id"] for adset in adsets]
 
-        totals = onboarding_slice.entity_totals(
+        totals = onboarding_slice_totals.entity_totals(
             conn, org_id, account_ids, since, until, conversion_goal, campaign_id, adset_ids, ad_ids
         )
         action_totals = meta_repo.entity_action_totals(
             conn, org_id, account_ids, since, until, campaign_id=campaign_id
         )
-        totals_text = onboarding_slice.totals_text(totals, action_totals)
 
         rows = meta_repo.entity_rows(
             conn, org_id, account_ids, since, until, campaign_id=campaign_id
         )
-        csv_text = onboarding_slice.daily_csv(rows)
+        # A1（票 S2b）：送了什麼／省了什麼是在 CSV 這條路算的，兩份名單原封傳進
+        # totals_text()，不在這裡重算一次同一份判斷。A3：entity_dict_text 是實體對照表
+        # 文字，放在 CSV 表格前面——它是散文不是 CSV 資料列，不進 ```csv``` 圍籬。
+        # B1（票 S2b／ADR 0045）：`daily_csv()` 換成 `bucketed_csv()`——逐日列改成
+        # 月×（平日｜週末）分桶，每個桶再附最多兩列原封的逐日原列。`conversion_types`
+        # 決定「這個桶裡轉換最高的那一天」是哪一天，定義跟 CPA 分母同一份
+        # （`meta_repo.conversion_action_types()`），不在 app/schedule/ 另抄一份。
+        conversion_types = meta_repo.conversion_action_types(conversion_goal)
+        entity_dict_text, csv_text, kept_columns, omitted_columns = (
+            onboarding_slice_csv.bucketed_csv(rows, since, until, conversion_types)
+        )
+        totals_text = onboarding_slice_totals.totals_text(
+            totals, action_totals, kept_columns, omitted_columns
+        )
+        # A2（票 S2b）：roster 是這個活動底下*所有*實體（不是只有 rows 裡真的有資料
+        # 的那幾個）——一列資料都沒有的 adset／ad 才不會在涵蓋範圍那段悄悄消失。
+        roster = (
+            [{"level": "campaign", "entity_id": campaign_id, "entity_name": campaign_name}]
+            + [{"level": "adset", "entity_id": a["id"], "entity_name": a.get("name", "")}
+               for a in adsets]
+            + [{"level": "ad", "entity_id": a["id"], "entity_name": a.get("name", "")}
+               for a in ads]
+        )
+        coverage_text = onboarding_slice_totals.coverage_text(rows, since, until, roster)
 
         department_text = DEPARTMENT_FILE.read_text(encoding="utf-8")
         methodology_result = methodology.compile(conn, METHODOLOGY_TASK_LABELS, brand_id=brand_id)
         compiled = context_compiler.compile(conn, brand_id)
         brand_context, knowledge_item_ids, brand_version, _product_version = compiled
         frozen_facts_text = _frozen_facts_text(frozen_facts)
-        segment4 = "\n\n".join([
-            structure_text, totals_text,
-            # 表頭說明必須跟著 CSV 一起走：`action_*` 欄位是攤平來的
-            # （見 `onboarding_slice.daily_csv`），
-            # 空白格代表「Meta 那天沒有回報這個事件」，不是「那天是 0 次」——這兩件事分不
-            # 清楚，整份判讀就會把沒追蹤到的日子當成失敗的日子。
-            "## 逐日成效（CSV）\n"
-            "`action_*`／`action_value_*` 欄位是 Meta 回報的事件攤平成的欄位；"
-            "**空白格是「那天沒有回報這個事件」，不是 0。**\n"
-            "```csv\n" + csv_text + "```",
-        ])
+        segment4 = "\n\n".join(
+            section for section in [
+                structure_text, totals_text, coverage_text, entity_dict_text,
+                # 表頭說明必須跟著 CSV 一起走：`action_*` 欄位是攤平來的
+                # （見 `onboarding_slice_csv.bucketed_csv`），
+                # 空白格代表「Meta 那天沒有回報這個事件」，不是「那天是 0 次」——這兩件事
+                # 分不清楚，整份判讀就會把沒追蹤到的日子當成失敗的日子。
+                "## 成效（CSV，時間分桶）\n"
+                "一列＝一個實體的一個時間桶（**月 ×（平日｜週末）**，週末永遠不跟平日"
+                "併在一起）。`spend_date` 空白的列是那個桶的加總；`spend_date` 有值的列"
+                "是原封送出的某一天——每個桶會額外附上花費最高的那天與轉換最高的那天，"
+                "讓單日的異常不會被加總磨掉。\n"
+                "`days_covered`／`days_with_data`／`days_with_roas` 分別是這個桶涵蓋幾天、"
+                "其中幾天有資料、其中幾天帶 ROAS（ROAS 那一欄的分母）。"
+                "**整個窗口沒有資料的桶不會出現在這張表裡，它們在上面「涵蓋範圍」那節"
+                "逐個點名。**\n"
+                "`action_*`／`action_value_*` 欄位是 Meta 回報的事件攤平成的欄位；"
+                "**空白格是「那個桶／那天沒有回報這個事件」，不是 0。**\n"
+                "```csv\n" + csv_text + "```",
+            ] if section
+        )
         # D8：段落順序固定 [1] 部門任務檔＋方法論 [2] 品牌上下文 [3] 既定事實 [4] 這個活動
         # 自己的切片，不得調換。
         prompt = "\n\n".join(

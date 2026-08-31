@@ -644,7 +644,140 @@ class FileLineCapTest(unittest.TestCase):
 # `DailyCsvFlattensActionsWithoutInventingZeroTest` 呼叫的 `onboarding._daily_csv` 改成
 # `onboarding_slice.daily_csv`，import 那行跟著加一個名字（淨增 0 行）。它守的那件事
 # （**資料正確性**：沒回報的那天留空白絕不填 0）一個字都沒放寬，只是換了個 import 路徑。
-TEST_LINES_CEILING = 15854
+# 票 S2b A1：15854 → 15919（含本段註解自己佔掉的行數）。新增一支
+# `DailyCsvOmitsAllZeroColumnsTest`（**資料正確性**：整個窗口加總是 0 的欄位不送，且
+# `totals_text()` 要把「送了幾種、省了哪幾種」點名出來，presence 跟 absence 都是事實，
+# 沉默才是說謊），`DailyCsvFlattensActionsWithoutInventingZeroTest` 跟著新的
+# `daily_csv()` 回傳形狀多接兩個變數、多兩行斷言確認這次的兩種欄位都沒被誤砍——它守的
+# 「blank≠0」那條規矩一個字沒放寬，只是多驗一件事：A1 新加的「加總是 0 才砍」不會把
+# blank 誤判成 0 一起砍掉。多的行數同時也是上面 `KNOWN_MODULE_SIZES["app/schedule"]`
+# 那筆新增理由註解自己佔的行。
+# 票 S2b A3：15919 → 15962（含本段註解、上面 `KNOWN_MODULE_SIZES["app/schedule"]` 那筆
+# 新增理由註解，以及測試檔本身的改動自己佔的行）。**沒有新增測試類別**：
+# `DailyCsvOmitsAllZeroColumnsTest` 本來就是 A1 的資料正確性閘門，這裡只是多驗同一支
+# 測試就該驗的另一件事——長的 `entity_name` 不該重複出現在逐日資料列裡，應該只在
+# `daily_csv()` 新回傳的實體對照表出現一次（六行新斷言＋長名字測試資料）；
+# `DailyCsvFlattensActionsWithoutInventingZeroTest` 只是函式簽名從三元組變四元組，多接
+# 一個變數，它守的「blank≠0」規矩一個字沒動。都不是「新測試」，是既有測試跟著新形狀
+# 補斷言，兩支測試守的事一個沒變。
+# 票 S2b A2：15962 → 16048（含本段註解、上面 `KNOWN_MODULE_SIZES["app/schedule"]` 那筆
+# 新增理由註解自己佔的行，兩邊都會被這支測試算進 `tests`）。新增一支
+# `CoverageTextComputesLongestGapTest`（**資料正確性**：餵一個已知的缺口分布，斷言算
+# 出來的最長缺口起訖日剛好對得上，同時涵蓋票 S2b 明講的三個邊界——一列資料都沒有的
+# 實體、缺口只落在窗口最前面、窗口裡天天都有資料所以沒有缺口）——這是貨真價實的新測試，
+# 不是既有測試補斷言，守的是「涵蓋範圍全部外殼算好、絕不問模型」這件事，第一次有機器
+# 檢查。
+# 票 S2b A4：16048 → 16119（含本段註解、上面 `KNOWN_MODULE_SIZES["app/schedule"]` 那筆
+# 新增理由註解自己佔的行，兩邊都會被這支測試算進 `tests`）。新增一支
+# `CreativeFuseSendsRawJsonOnUnexpectedShapeTest`（**資料正確性**：文案藏在
+# `_creative_variants()` 認不得的鍵名裡，斷言保險絲點火——這則素材的原始 JSON 原封不動
+# 送出去，且不算進 `unreadable`——先證過紅：暫時拿掉 `_ad_fact_card()` 的保險絲分支，
+# 這支從綠翻紅，訊息是 `AssertionError: '保險絲觸發' not found in '...'`，改回來才又綠）。
+# `FanInCountsTest` 的 `_FailByMarkerProvider` 標記字串跟著 `structure_text()` 的新形狀
+# 換了一次（`"id": "c2"` → `campaign：[c2]`），不是新測試，是既有測試補上新格式下同一份
+# 判斷依據，多出的幾行是這支測試自己 docstring 的更新說明。
+# 票 S2b A4 審查回應（四位獨立審查者對同一份 diff）：16119 → 16245（含本段註解、上面
+# `KNOWN_MODULE_SIZES["app/schedule"]` 那筆新增理由註解自己佔的行）。新增三支，三支都
+# 是既有測試守不住、審查真的抓到程式在跑的資料正確性缺陷：
+# `VideoCreativeTitleFieldIsNotDroppedTest`（**資料正確性**：`video_data` 的標題鍵是
+# `title`，`_creative_variants()` 原本三種形狀共用 `link_data` 的 `name`，video 廣告的
+# 標題整個消失且保險絲不會點火——先證過紅：把 `_STORY_SHAPES` 的 video_data 那一列
+# 標題鍵改回 `name`，這支從綠翻紅，`AssertionError: None != '限時五折｜補水面膜'`，
+# 改回來才又綠）、`ZeroSumSplitDoesNotProveZeroFromMissingValueTest`（**資料正確性**：
+# 一個種類有回報但沒給數字，`_zero_sum_split()` 原本先 `setdefault` 成 0 才看
+# `raw is None`，把「無法證明」偷渡成「證明是 0」——先證過紅：拿掉 `raw is None` 分支
+# 裡的 `unprovable.add()`，這支從綠翻紅，`AssertionError: 'lead' not found in
+# ['link_click']`，改回來才又綠）、`AdsetFactCardCarriesBudgetModeFieldsTest`
+# （**資料正確性**：`effective_status`／`optimization_goal`／`billing_event` 是
+# ADR 0045 點名的「budget mode（結構性事實）」，`app/meta/graph.py` 本來就打這三個
+# 欄位回來，`_adset_fact_card()` 原本漏接——先證過紅：拿掉卡片那三個欄位的輸出行，
+# 這支從綠翻紅，`AssertionError: 'PAUSED' not found in '...'`，改回來才又綠）。
+# `app/schedule` 那邊其餘的修法（video_data 以外的欄位對應、輪播、`asset_feed_spec`
+# 沒有 `asset_customization_rules` 時的抽法、興趣去重、實體對照表改名、CPM／CPC 精度）
+# 已經被 `DailyCsvOmitsAllZeroColumnsTest`／`DailyCsvFlattensActionsWithoutInventingZeroTest`／
+# `CreativeFuseSendsRawJsonOnUnexpectedShapeTest` 這幾支既有測試間接守住（跑過，全
+# 綠），沒有為了同一類邏輯重複開測試。
+# 票 S2b（拆檔，二次）：16245 → 16257。零新測試——這 12 行是 `KNOWN_MODULE_SIZES`
+# ["app/schedule"] 那筆新增理由註解，跟本段自己這兩行理由註解，合起來佔的行。
+# 票 S2b A4 完整性審查（2026-08-31，真帳號 368741390835357）：16257 → 16358。新增兩支，
+# 兩支都守**資料正確性**，且都先證過紅：
+# `LabelledAssetResolvesAdAssetLabelObjectTest`（真帳號驗證過 `asset_customization_rules`
+# 的 `body_label`／`title_label` 是 AdAssetLabel 物件不是字串——先證過紅：把
+# `_resolve_labelled_asset()` 改回只比 `adlabel.get("name") == label`（label 還是物件），
+# 這支從綠翻紅，`AssertionError: 0 != 1`，改回來才又綠）、
+# `AssetFeedSpecCtaAndDescriptionsAreNotDroppedTest`（真帳號驗證過 `asset_feed_spec` 回
+# `call_to_action_types`（純字串陣列）不是原本讀的 `call_to_actions`，且完全沒讀
+# `descriptions`——先證過紅：改回 `call_to_actions`，`AssertionError: None != 'SHOP_NOW'`；
+# 另外把 `descriptions` 讀取改回 `None`，`AssertionError: [] is not true`；兩處分別改回來
+# 才又綠）。這兩支不是既有測試補斷言，是舊測試（`CreativeFuseSendsRawJsonOnUnexpectedShapeTest`
+# 等）從沒餵過這兩種真帳號形狀，才會綠燈放過這兩個 bug。多出的 101 行含這段理由本身跟上面
+# `KNOWN_MODULE_SIZES["app/schedule"]` 那筆新增理由註解自己佔的行。
+# 票 S2b A4 完整性審查回應第二輪（2026-08-31，真帳號 368741390835357）：16358 → 16448。
+# 新增兩支，兩支都守**資料正確性**，且都先證過紅：
+# `AssetFeedSpecUnpairedBodiesAndTitlesAreHonestTest`（`asset_feed_spec` 沒有
+# `asset_customization_rules` 時，上一輪把每個 body／title 各自印成一則帶
+# `placement_count：1` 的假變體，這裡讀不出配對就不該印一個看似有意義的數字——先證過紅：
+# 把這個分支改回舊邏輯（body／title 各自造一個假變體），這支從綠翻紅，
+# `AssertionError: 4 != 1`，改回來才又綠）、`RoundSigFigsDoesNotEmitScientificNotationTest`
+# （`_round_sig_figs()` 磨一個 ≥ 1000 的大數字，結果印成科學記號跟這支函式自己 docstring
+# 講的相反——先證過紅：拿掉 `format(rounded, "f")` 那行重建，這支從綠翻紅，
+# `AssertionError: '1.23E+3' != '1230'`，改回來才又綠）。多出的 90 行含這段理由本身跟上面
+# `KNOWN_MODULE_SIZES["app/schedule"]` 那筆新增理由註解自己佔的行。
+# 票 S2b A4 完整性審查回應第三輪（2026-08-31，真帳號 368741390835357，三個獨立審查者
+# realdata／fuse／gate 逐一量到、上一輪綠燈閘門守不住的資料正確性缺陷）：16448 → 16706。
+# 新增八支，全部守**資料正確性**，全部先證過紅：
+# `TemplateDataShapeAndChildOnlyAttachmentsAreNotDroppedTest`（兩支，`object_story_spec.
+# template_data` 是 `_STORY_SHAPES` 原本不認得的第四種真實形狀，25/158 則素材是這個形狀；
+# 另一支是 `link_data` 沒有 `message`／`name`、文案全在 `child_attachments` 裡卻被
+# `continue` 跳過——先證過紅：分別拿掉新加的 `_STORY_SHAPES` 那筆、把 continue 判斷式
+# 改回不看 `child_attachments`，兩支都從綠翻紅 `AssertionError: 0 != 3` 與
+# `AssertionError: 0 != 2`，改回來才又綠）、`CallToActionFallsBackToTopLevelFieldTest`
+# （CTA 只在素材最外層有、`object_story_spec`／`asset_feed_spec` 兩邊都沒有時原本印
+# None——先證過紅：拿掉兩處 `or creative.get("call_to_action_type")` 退回層，
+# `AssertionError: None != 'SHOP_NOW'`，改回來才又綠）、
+# `AssetCustomizationRulesUnreferencedAssetTriggersFuseTest`（真帳號驗證過同一份 body／
+# title 資產的 `adlabels` 常帶著全部規則的 label，first-match-wins 因此把全部規則收斂成
+# 一組、其他資產悄悄消失——改成分組後斷言涵蓋率，讀不懂真配對就回空清單讓保險絲接手；先
+# 證過紅：拿掉這段涵蓋率檢查，回傳 2 個不完整的變體而非空清單，改回來才又綠）、
+# `UnpairedVariantSeedsFromTopLevelTitleWhenFeedHasNoneTest`（`asset_feed_spec` 只有
+# bodies 沒有 titles 時，素材最外層 `title` 原本被丟掉，印出「titles（0）」這句假話——
+# 先證過紅：拿掉新加的補值那兩行，`AssertionError: [] != ['留言...']`，改回來才又綠）、
+# `ExtraListFieldsPrintVerbatimNotAsPythonReprTest`（`extra` 的清單值——`descriptions`
+# 這類——原本塞進 f-string 印成 Python `repr()`，帶換行的文案因此不是逐字；改成共用的
+# `_extra_lines()` 印成一行標頭＋逐則清單，兩處呼叫端一次修好——先證過紅：把
+# `_extra_lines()` 改回單行版本，帶換行那句真話不再逐字出現，改回來才又通過）、
+# `AdsetFactCardCarriesAgeRangeAdvantageAudienceAndAllDetailedTargetingKindsTest`（真帳號
+# 30/50 個廣告組開了 `advantage_audience`，`age_min`／`age_max` 因此被灌成平台上限，
+# 廣告主真正選的範圍留在 `age_range`；`behaviors`／`industries`／`work_positions` 原本
+# 完全沒收集；`excluded_product_audience_specs` 原本沒算進 exclusion_count——先證過紅：
+# 拿掉 `age_range`／`advantage_audience` 那行跟 `*flexible_lines`，`age_range=[18, 40]`
+# 不再出現，改回來才又綠）、`TotalsTextRendersMissingMetricAsBlankNotNoneLiteralTest`
+# （`totals_text()` 沒套 `_ad_fact_card()` 那族已經在用的 `_blank_or()`，一個活動沒有
+# 轉換事件時 ROAS／CPA 印出裸的 Python `None`——先證過紅：拿掉三個 `_blank_or(...)`，
+# `AssertionError: 'None' unexpectedly found in`，改回來才又通過）。八支都是拿真帳號
+# 368741390835357 逐欄位驗證過的形狀剪下來當 fixture，不是重複既有測試的斷言：既有測試
+# 從沒餵過「兩邊都沒 CTA」「同一份文案被全部規則的 label 都認得」「feed 只有一邊」
+# 「清單值 extra」「age_range 跟 age_min／age_max 不一致」「總計裡的 None」這幾種形狀，
+# 才會綠燈放過這幾個 bug。多出的 328 行含這段理由本身跟上面
+# `KNOWN_MODULE_SIZES["app/schedule"]` 那筆新增理由註解自己佔的行。
+# 票 S2b B1＋完整性審查三件 major（2026-08-31）：16776 → 16964。四支新測試，每一支都
+# 指名它守的是**資料正確性**（ADR 0041 要求的四選一），而且都先證過紅、看它失敗、再改回來：
+#   1. `BucketSumsEqualTheDailyValuesTheyReplaceTest`——B1 閘門 1：一個桶的 spend／
+#      impressions／clicks 等於它取代的那幾天加總（ADR 0045：分桶可以改形狀，不准改總和）。
+#      順便守「先加總再四捨五入」：三天各 0.005 元，先捨入再加是 0.03，正確是 0.02。
+#   2. `EmptyBucketIsNamedNotSilentlyDroppedTest`——B1 閘門 2：空桶不進表格但要在涵蓋範圍
+#      那節被逐個點名（缺席不准變沉默），而且有資料卻沒 ROAS 的桶那一格是空白不是 0。
+#   3. `OutlierDaysSurviveBucketingTest`——分桶最容易磨掉「某一天爆單」，所以每個桶額外
+#      原封送出花費最高日與轉換最高日；「轉換」用品牌自己的目標，不是所有 actions 加總
+#      （fixture 就是那個差別：800 次點擊 0 筆成交那天 vs 9 筆成交花費最低那天）。
+#   4. `CreativeFuseSendsRawJsonOnUnexpectedShapeTest` 新增的第二支——保險絲理由要講出
+#      真正觸發的那一條路。真帳號 34 次觸發裡 27 次原本那句「抽不出 body 也抽不出 title」
+#      被緊接著印出的 JSON 當場推翻，系統在對分析員說謊。
+# 沒有一支重複既有斷言：既有測試從沒餵過「同一個實體跨兩個桶」「先捨入 vs 先加總」
+# 「有資料但零 ROAS 的桶」「兩種編碼都帶文案」這四種形狀，才會綠燈放過。
+# 同一批改動也刪掉了 `DailyCsv*` 兩支的舊粒度斷言（改寫成桶粒度，不是多留一份）。
+# 16964 → 17010：多出的 46 行就是上面這段理由註解自己佔的行（比照前幾次的記法）。
+TEST_LINES_CEILING = 17010
 
 
 def _line_totals() -> tuple:
@@ -755,7 +888,15 @@ KNOWN_MODULE_SIZES = {
                        # 缺陷 1／2：parse_json_reply 換成 raw_decode 單錨點（含為什麼不能
                        # 退而求其次的理由註解）＋timeout_s 300 秒與 max_retries=0 兩段
                        # 來源註解（實測列號、SDK 常數位置）。前一次是票 09 的 1298
-    "app/meta": 1646,  # 票 S2 實機驗收（第二件）：`campaign_ids_with_rows()`——真帳號
+    "app/meta": 1659,  # 票 S2b B1（2026-08-31）：1646 → 1659。多的 13 行是
+                       # `conversion_action_types()` 這一支存取子加它的理由註解——B1 的
+                       # 「這個桶裡轉換最高的那一天」要用的「轉換」定義，必須跟 CPA 分母
+                       # 的 `_CONVERSION_ACTION_PRIORITY` 是同一份。開一支存取子讓
+                       # app/schedule 讀這一份，比在那邊抄第二份對照表便宜也安全：同一份
+                       # 提示詞裡「轉換」有兩種定義的話，模型看到的 CPA 跟被挑出來的那
+                       # 一天會來自兩套算法，而那種矛盾從輸出上完全看不出來。零新測試。
+                       #
+                       # 前一次是 1646——票 S2 實機驗收（第二件）：`campaign_ids_with_rows()`——真帳號
                        # Meta 列得出 58 個活動，這段期間有數字的只有 24 個，剩下 34 個
                        # 派分析師過去只會拿到空 CSV。呼叫端用這支把派工單篩過，被篩掉的
                        # 活動照票 S2 §1 報出來、不靜靜跳過。前一次是 1622——
@@ -809,7 +950,197 @@ KNOWN_MODULE_SIZES = {
     "app/orders": 1423,  # 票 12：channel_revenue 一張表取代三張（刪掉藥局專屬那一整組
                           # 之後仍淨增）——官網帳本寫入路徑、channel_revenue_summary()、
                           # 通用手動登錄（含「官網不能手動登錄」那道錢的守門）
-    "app/schedule": 2314,  # 票 S2b 步驟 0（純搬移，不是新行為）：`onboarding.py` 當時
+    "app/schedule": 3461,  # 票 S2b B1＋完整性審查三件 major（2026-08-31）：3155 → 3461。
+                           # 這是**淨**增加——同一批改動先刪掉了 `daily_csv()` 與
+                           # `_daily_cell_value()` 共 69 行（`bucketed_csv()` 取代它們，
+                           # 沒有第二個呼叫端，留著就是會漂移的死碼）。
+                           #
+                           # 加的東西：(1) B1／ADR 0045 的時間分桶——`time_bucket()`（週末
+                           # 絕不跟平日併，這條規則連同理由只活在那一行）、`bucketed_csv()`
+                           # 與它的 `_bucket_row()`／`_outlier_row()`／`_bucket_roas()`／
+                           # `_action_sums()`／`_outlier_days()`／`_conversion_count()`；
+                           # (2) `coverage_text()` 逐個實體點名整個窗口沒資料的桶——ADR
+                           # 0045 原句要空桶各佔一列，2026-08-31 拿真帳號量過改成點名
+                           # （195 實體 × 24 桶有 83% 是空的，照原句做列數從 3,531 漲到
+                           # 5,702，B1 存在的理由當場消失；改動寫進 ADR 0045 自己那一節）；
+                           # (3) 完整性審查三件 major：保險絲理由跟著回傳值走（四條路各有
+                           # 各的理由，原本共用一句真帳號 34 次裡 27 次是假的話）、
+                           # `unpaired` 分支補印 media_ids（69/158 則素材原本一個都沒印）、
+                           # A1 註記行拿掉假的完整性宣稱。
+                           #
+                           # 這些行絕大多數是理由註解與 docstring 本身：`bucketed_csv()`
+                           # 那族的函式本體加起來不到 120 行。
+                           #
+                           # 前一次是 3155——票 S2b A4 完整性審查回應第三輪（2026-08-31，真帳號
+                           # 368741390835357，三個獨立審查者 realdata／fuse／gate 逐一
+                           # 量到、上一輪綠燈閘門一樣守不住的資料正確性缺陷）：
+                           # 3028 → 3155。修八個問題，全部根因修法（同一個 bug 出現在
+                           # 兩個呼叫端的，只改共用函式，不逐一補丁）：`_STORY_SHAPES`
+                           # 補上 `template_data`（第四種真實形狀，25/158 則素材）；
+                           # 「這個形狀有沒有讀到東西」的判斷式一併看
+                           # `child_attachments`，不再只看外層 body／title；CTA 在
+                           # `_STORY_SHAPES` 分支跟 `asset_feed_spec` 分支都退回素材最
+                           # 外層的 `call_to_action_type`（86/158 則廣告的 CTA 只在那裡
+                           # 有）；`asset_customization_rules` 分組完之後斷言涵蓋率，
+                           # body／title 資產沒被任何規則引用到就整組回空清單讓保險絲
+                           # 接手（真帳號驗證過 label 解析法在這個帳號上讀不懂真配對，
+                           # 不是試著解得更聰明）；`asset_feed_spec` 只有一邊
+                           # bodies／titles 時，用素材最外層同名欄位補另一邊
+                           # （35/158 則廣告）；新增共用的 `_extra_lines()`，
+                           # `_unpaired_variant_lines()` 跟 `_ad_fact_card()` 都改叫
+                           # 它——`extra` 的清單值（`descriptions`）原本直接塞進
+                           # f-string 印成 Python `repr()`，帶換行的文案就不是逐字；
+                           # 廣告組卡片加 `age_range`／`targeting_automation.
+                           # advantage_audience`（30/50 個廣告組開了受眾擴張，
+                           # age_min／age_max 因此被灌成平台上限）、
+                           # `behaviors`／`industries`／`work_positions`
+                           # （27/50 個廣告組帶了其中之一，原本完全沒被收集）、
+                           # `excluded_product_audience_specs` 併入 exclusion_count；
+                           # `totals_text()` 補上 `_ad_fact_card()` 那族已經在用的
+                           # `_blank_or()`（真帳號 24 個活動 194 行指標原本全部印出裸的
+                           # Python `None`）。多出的 127 行：八處修法本身（含新增的
+                           # `_flexible_spec_items()`／`_flexible_spec_line()`／
+                           # `_extra_lines()` 三支共用函式）＋各自的審查說明 docstring／
+                           # 行內註解＋這筆理由本身；`onboarding_slice_totals.py` 因此
+                           # 新增一個 cross-file import（`_blank_or`，見那個檔案自己的
+                           # docstring）。
+                           # 前一次是 3028——票 S2b A4 完整性審查回應第二輪（2026-08-31，真帳號
+                           # 368741390835357）：2981 → 3028。修兩個第一輪審查沒抓到、
+                           # 綠燈閘門一樣守不住的問題——`asset_feed_spec` 沒有
+                           # `asset_customization_rules` 那個分支（真帳號 158 則素材
+                           # 92 則是這個形狀，最常見的一種）原本把每個 body／title 各自
+                           # 印成一則帶 `title：（無）`／`media_ids：[]`／
+                           # `placement_count：1` 的假變體，三個欄位全是編出來的結構，
+                           # 不是 Meta 給的事實；改成 `unpaired` 標記＋
+                           # `_unpaired_variant_lines()` 印成兩份逐字清單＋一句配對規則
+                           # 的說明。`_round_sig_figs()` 磨一個 ≥ 1000 的大數字（誇張的
+                           # ROAS／CPM）留下的 Decimal 內部指數是正的，`str()` 印出來是
+                           # `1.23E+3`，跟這支函式自己 docstring 講的「不會像 float 那樣
+                           # 印成科學記號」正好相反——上一輪只修了小數字那半。多出的
+                           # 47 行：兩處修法本身（`_creative_variants()` 沒有規則那個
+                           # 分支、`_ad_fact_card()` 加 `_unpaired_variant_lines()`
+                           # 分支、`_round_sig_figs()` 加一行重建）＋各自的審查說明
+                           # docstring／行內註解＋這筆理由本身。
+                           # 前一次是 2981——
+                           # 票 S2b A4 完整性審查（2026-08-31，真帳號 368741390835357）：
+                           # 2933 → 2981。修兩個綠燈閘門守不住的資料正確性 bug——
+                           # `_resolve_labelled_asset()` 原本拿 AdAssetLabel 物件直接跟
+                           # 字串比對，字典永遠不等於字串，這個帳號 23 則
+                           # asset_customization_rules 素材全部因此掉進保險絲（量到
+                           # 147,946 字元原始 JSON，改完只要 14,829）；`asset_feed_spec`
+                           # 原本讀 `call_to_actions`（Meta 從不回這個鍵）又完全沒讀
+                           # `descriptions`，CTA 永遠是 None、77 則素材的逐字說明悄悄
+                           # 消失。多出的 48 行：兩段各自的審查說明（`_resolve_labelled_
+                           # asset()` docstring／`_creative_variants()` 讀 cta_types／
+                           # descriptions 那幾行行內註解）＋這筆理由本身。
+                           # 前一次是 2933——
+                           # 票 S2b（拆檔，二次）：2891 → 2933。`onboarding_slice.py`
+                           # 頂到 `FILE_LINE_CAP = 800`（765 行，A1～A4 陸續加完），先拆
+                           # 再讓 B1 加：拆成三個各自獨立的家族——結構與素材事實卡留住
+                           # `onboarding_slice.py` 這個檔名（351，往後 A4 收尾多半落在
+                           # 這裡，留最多餘裕）；期間總計／涵蓋範圍搬去新檔
+                           # `onboarding_slice_totals.py`（189）；逐日 CSV／實體對照表／
+                           # 四捨五入搬去新檔 `onboarding_slice_csv.py`（265）。函式本體
+                           # 一行沒改，只動了檔案歸屬、import 跟三份 docstring；多出來的
+                           # 42 行是兩份新檔各自的檔頭（含這行理由本身）跟 import 陳述式。
+                           # 前一次是 2891——
+                           # 票 S2b A4 審查回應（四位獨立審查者對同一份 diff）：2726 → 2891。
+                           # 補回審查抓到的幾處真的漏資料：`_adset_fact_card()`／
+                           # `_ad_fact_card()` 補回 `effective_status`／`optimization_goal`／
+                           # `billing_event`（`app/meta/graph.py` 本來就打這幾個欄位回來，
+                           # A4 漏接了，PAUSED／ARCHIVED 的實體因此跟正在跑的長得一模一樣）；
+                           # `_creative_variants()` 改成 `_STORY_SHAPES` 逐形狀對欄位名
+                           # （`video_data` 的標題鍵是 `title` 不是 `name`，原本讀錯鍵讓
+                           # 影片廣告的標題整個消失、印出 `title：None`）、加輪播
+                           # `child_attachments` 逐卡片抽變體、`asset_feed_spec` 沒有
+                           # `asset_customization_rules` 時也能抽（最常見的 Advantage+
+                           # 形狀，原本一律退保險絲）、任何一條版位規則對不到 label 就讓
+                           # 整組退保險絲（不再只送對得到的那幾條）、media_ids 改成跨規則
+                           # 聯集（原本只留第一條規則的）、object_story_spec 與
+                           # asset_feed_spec 兩邊都帶文案時退保險絲（不再只印一半）；
+                           # `_zero_sum_split()` 把「有回報但沒給數字」改進 unprovable
+                           # （原本被 `setdefault` 偷渡成 0，跟這支函式自己要擋的
+                           # blank→0 是同一種錯），並改用絕對值加總判斷有沒有活動（一筆
+                           # 全額退款不再被講成「這個窗口沒有這個事件」）；
+                           # `entity_dictionary_text()` 改用窗口內最後一次出現的名字
+                           # （原本取第一次，實體改名時新名字會消失），分隔符改成跟
+                           # `coverage_text()` 一致的 `[level] name（id）`（原本的 `｜`
+                           # 是台灣廣告命名常見字元，會撐爆成分不清楚的欄位）；
+                           # `_adset_fact_card()` 的興趣去重改用 (id, name) 當 key（原本
+                           # 只用 id，沒有 id 的興趣全部收斂成同一把，honesty counter 卻
+                           # 沒有跟著少算）；CPM／CPC 改走 `_round_money`（原本誤用
+                           # `_round_sig_figs`，磨掉的精度跟 Ads Manager 顯示的對不上）；
+                           # `_round_money`／`_round_sig_figs` 全程留在 `Decimal`（原本轉
+                           # `float`，四捨五入到分可能差一分錢，小數字會印成科學記號進
+                           # CSV）。`app/departments/ads/onboarding_read.md` 也跟著改
+                           # （不計進這個數字，那個檔不是 .py）：「外殼不會改寫或摘要，
+                           # 你看到的就是全部」這句話已經不成立，改成如實列出外殼真的做
+                           # 了哪幾種形狀變動。一個字沒放寬任何既有規矩——全部是補回原本
+                           # 該有、A4 漏接的資料，或修掉會把「無法證明」印成「證明是 0」
+                           # 的邏輯錯誤，沒有新增任何摘要或臆測。前一次是 2726——
+                           # 票 S2b A4（創意與受眾攤成事實卡）：2554 → 2726。
+                           # `onboarding_slice.py` 428 → 600：`structure_text()` 從整包
+                           # `json.dumps(indent=2)` 改成一個廣告組一張受眾卡、一則廣告一張
+                           # 素材卡（2026-08-31 實機驗收量到舊寫法一個活動 97,220 字元）。
+                           # 新函式：`_classify_audience_type()`（lookalike／retargeting／
+                           # interest／prospecting 四選一，帶 `ponytail:` 標明是啟發式、
+                           # 非 Meta 欄位）、`_adset_fact_card()`（受眾型態／前 10 個興趣＋
+                           # 「還有 N 個未列出」／geo_locations／age_min／age_max／genders／
+                           # exclusion_count，全部沿用 Meta 自己的鍵名，不新造友善名字）、
+                           # `_resolve_labelled_asset()`（`asset_feed_spec` 用 adlabels 名字
+                           # 間接對應，不是位置對位）、`_creative_variants()`（依序試
+                           # `object_story_spec`／`asset_feed_spec`+`asset_customization_rules`
+                           # ／素材最外層 `body`／`title` 三種已知形狀，同一份文案被好幾條
+                           # 版位規則共用時分組回傳 `placement_count`，講清楚幾條規則共用，
+                           # 不是每條各印一次；三種都抽不出 body 也抽不出 title 就回空清單）、
+                           # `_ad_fact_card()`（呼叫端看到空清單就點火保險絲，原始素材 JSON
+                           # 原封不動送出——票明講三個獨立審查者都要求這條，寧可貴不可漏）。
+                           # `app/tests/test_onboarding_read.py` 新增一支
+                           # `CreativeFuseSendsRawJsonOnUnexpectedShapeTest`（見下面
+                           # `TEST_LINES_CEILING` 的理由）。**一個字都沒放寬既有規矩**：
+                           # 保險絲是新增的安全網，不是砍掉任何一種原本讀得到的欄位；
+                           # `targeting` 原始形狀不再整包塞給模型，但地理／年齡性別／興趣／
+                           # 排除數這些欄位裡的內容一個字沒少，只是從一包 JSON 攤成講人話
+                           # 的卡片。前一次是 2554——
+                           # 票 S2b A2（每個實體的涵蓋範圍，外殼算好的）：2465 → 2554。
+                           # `onboarding_slice.py` 349 → 428：新函式 `coverage_text()`（一個
+                           # 實體一行，窗口天數／有資料天數／有花費卻沒 ROAS 的天數／首末
+                           # 有資料／最長缺口，全部 Python 算好，不問模型——ADR 0045 把這兩個
+                           # 涵蓋數字訂成未來時間分桶的先決條件）＋ `_longest_gap()`（缺口
+                           # 計算涵蓋整段 `since`～`until`，不是只看第一筆到最後一筆資料
+                           # 之間，這樣缺口落在窗口最前面或最後面也算得到），兩支都帶
+                           # docstring 講清楚為什麼要收 `roster` 這個新參數。`onboarding.py`
+                           # 呼叫端 590 → 600：組 `roster`（campaign 自己＋它的 adsets／ads，
+                           # 不是只有 `rows` 裡真的有資料的那幾個，這樣一列資料都沒有的實體
+                           # 才不會從涵蓋範圍那段消失）、呼叫 `coverage_text()`、`segment4`
+                           # 清單裡多塞一個元素。**一個字都沒放寬既有規矩**：這是新增資訊，
+                           # 不是砍任何東西，`totals_text()`／daily CSV 內容一個字沒動。
+                           # 前一次是 2465——
+                           # 票 S2b A3（實體對照表＋誠實精度）：2382 → 2465。
+                           # `onboarding_slice.py` 269 → 349（新函式 `_round_money()`／
+                           # `_round_sig_figs()`／`entity_dictionary_text()`／
+                           # `_daily_cell_value()` 各自帶 docstring 講清楚「為什麼是分／
+                           # 有效數字」跟「為什麼非 0 不會被磨成 0」；`daily_csv()` 從三元組
+                           # 改回傳四元組，多出的第一個元素是實體對照表文字，資料列拿掉
+                           # `entity_name`／`level` 兩欄；`totals_text()` 的花費／CTR／CPC／
+                           # CPM／ROAS／CPA 六個數字全部套用同一組四捨五入）；`onboarding.py`
+                           # 呼叫端 587 → 590（多接一個變數、`segment4` 改成用 filter 濾掉
+                           # 空字串再組，因為 `entity_dict_text` 在整個活動一列資料都沒有時
+                           # 會是空字串，不該留一段空白落在提示詞裡）。**一個字都沒放寬既有
+                           # 規矩**：blank≠0、null≠0 兩條規矩原封不動；新增的四捨五入明文
+                           # 保證「非 0 不會被磨成 0、`None` 不會變成 0」，是加一條規矩，不是
+                           # 取代任何一條。前一次是 2382——
+                           # 票 S2b A1（省掉整個窗口加總是 0 的 action 欄位，並在期間總計
+                           # 那一行點名省了什麼、送了什麼）：2314 → 2382。`daily_csv()` 從
+                           # 回傳一份字串改成回傳 (csv, 送出的欄位, 省掉的欄位)；新函式
+                           # `_zero_sum_split()` 先加總才判斷是不是 0（assert 先、才能砍），
+                           # 加總不出來的值當「無法證明是 0」留著送；`totals_text()` 多兩個
+                           # 參數把這兩份名單印成一行，不在那裡重算一次。多的 68 行大宗是
+                           # 這幾支函式和它們新增的 docstring（解釋「加總是 0」跟「整欄從
+                           # 沒出現過」是兩件不同的事），`onboarding.py` 呼叫端跟著改。
+                           # **一個字都沒放寬既有規矩**：blank≠0 那條規矩原封不動，這裡新增
+                           # 的是另一條「證明是 0 才能砍」的規矩，不是取代它。前一次是 2314——
+                           # 票 S2b 步驟 0（純搬移，不是新行為）：`onboarding.py` 當時
                            # 768 行、`FILE_LINE_CAP` 是 800，只剩 32 行餘裕，而 S2b 的
                            # A1～A4 與 B1 改的就是 segment [4] 那一族函式。七支搬進新的
                            # `onboarding_slice.py`（768 → 583），淨增的 20 行全部是新檔的

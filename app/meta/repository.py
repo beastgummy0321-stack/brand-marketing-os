@@ -308,6 +308,19 @@ _CONVERSION_ACTION_PRIORITY: dict[str, tuple[str, ...]] = {
     "awareness": (),  # README：無對應標準事件——沒有分母，CPA 一律 NULL
 }
 
+
+def conversion_action_types(conversion_goal: str | None) -> tuple[str, ...]:
+    """這個品牌的轉換目標對應到哪幾個 `action_type`（同義字算同一件事）。
+
+    `_CONVERSION_ACTION_PRIORITY` 是 CPA 分母的唯一定義來源，票 S2b B1 的「這個桶裡轉換
+    最高的那一天」要用的是同一個定義——所以是開一支存取子讓外面讀這一份，不是在
+    `app/schedule/` 再抄一份對照表。同一份提示詞裡「轉換」如果有兩種定義，模型看到的
+    CPA 跟被挑出來的那一天會來自兩套算法，那種矛盾從輸出上看不出來。
+
+    認不得的目標（含 `None`）回空 tuple，跟 `awareness` 同一條路：沒有分母就沒有「轉換
+    最高的一天」可挑，呼叫端要照這件事處理，不是隨便挑一天充數。"""
+    return _CONVERSION_ACTION_PRIORITY.get(conversion_goal or "", ())
+
 # CPA 的分母：**每一列先各自算出自己的轉換數，再相加**。LATERAL + LIMIT 1 是一列進一列出，
 # 所以 SUM(spend)、count(*) 的列數完全沒變，才能跟 roas 待在同一個 SELECT 裡。
 #

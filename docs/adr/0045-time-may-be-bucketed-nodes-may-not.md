@@ -1,7 +1,8 @@
 # Time may be bucketed. Nodes may not.
 
-Ticket S2b, 2026-08-31. **This overturns a decision frozen in the ad-loop spec on 2026-08-30**,
-recorded here in the style ADR 0044 used for the `learning_ledger` reversal.
+Ticket S2b, 2026-08-31. **Approved by the user 2026-08-31**; B1 landed that day and one condition
+below was amended after measurement (marked inline). **This overturns a decision frozen in the
+ad-loop spec on 2026-08-30**, in the style ADR 0044 used for the `learning_ledger` reversal.
 
 ## The sentence being overturned
 
@@ -65,10 +66,12 @@ overturned sentence existed to prevent. So the permission is conditional:
 
 - **Every bucket states how many days it covers and how many of those had data.** Without both
   numbers, bucketing is forbidden.
-- **A bucket with no data reports zero days-with-data and stays in the table.** It does not vanish,
-  and its ROAS is `None`, not `0`. Null ≠ zero survives the change of shape
-  (`app/tests/test_onboarding_read.py:498`, `DailyCsvFlattensActionsWithoutInventingZeroTest` —
-  its assertions change with the grain, the rule it protects does not).
+- **A bucket with no data is named, and its ROAS is `None`, not `0`.** *Amended 2026-08-31, on
+  implementation day; original wording was "stays in the table".* Measured: 83% of 195 entities ×
+  24 buckets are empty, and a row each takes the CSV from 3,531 to 5,702 rows — fatter than the
+  grain it replaces, killing the reason B1 exists. So no CSV row; `coverage_text()` names it per
+  entity, by bucket name, with a denominator. **Naming is not silence**, and laundering absence
+  into silence stays forbidden (`EmptyBucketIsNamedNotSilentlyDroppedTest`).
 - **Bucket sums equal the daily sums they replace.** Spend, impressions and clicks per bucket must
   equal the per-day figures added up. Bucketing may change shape; it may not change a total.
 
@@ -107,10 +110,11 @@ That diff is the acceptance condition of the ticket, not a follow-up.
 
 ## Consequences
 
-- Prompt per campaign ~370 KB → ~60 KB; the account ~8.9 MB → ~1.4 MB. No campaign approaches the
-  CLI input ceiling.
-- Counting gaps moves from the model to the shell, which is where decision ④ always put it.
-- The four-segment prompt order (`SPEC.md:242-247`) is untouched, and stays the precondition for
-  prompt caching when this moves to a billed API.
-- The overturned sentence survives here, quoted. `.scratch/` is disposable under CLAUDE.md's
-  資料狀態 section, so this file — not the spec — is its record.
+- **Measured 2026-08-31; the "~60 KB per campaign" predicted above was wrong.** Account daily CSV
+  1,080,281 → 405,658 chars (−62%), empty-bucket naming costs 48,585 back, net −626,038 (−57%);
+  largest campaign 223,455 → 58,435, whole prompt ≈156 KB — under the CLI's 1,048,576 ceiling,
+  over S2b's 80 KB done-check, which no A-series or B1 lever can reach.
+- Counting gaps moved from the model to the shell, where decision ④ always put it. The four-segment
+  prompt order (`SPEC.md:242-247`) is untouched and stays the precondition for prompt caching on a
+  billed API. The overturned sentence survives here, quoted — `.scratch/` is disposable under
+  CLAUDE.md's 資料狀態 section, so this file, not the spec, is its record.
