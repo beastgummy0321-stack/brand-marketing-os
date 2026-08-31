@@ -41,8 +41,8 @@ from app.background import app as background_app
 from app.core import rule_cards
 from app.core.db import connection
 from app.llm import context_compiler, gateway, methodology, providers
-from app.schedule import onboarding, routes
 from app.schedule import plan as plan_mod
+from app.schedule import routes
 from app.schedule import tree as tree_mod
 
 # 唯一的供應商實例：這三支 task body 現在是全站唯一真的打代理的地方（routes.py 的三支 POST
@@ -265,9 +265,6 @@ _JOBS = {
     routes.TASK_TYPE: schedule_plan,
     routes.TREE_TASK_TYPE: schedule_tree,
     routes.CREATIVE_TASK_TYPE: schedule_creative,
-    # 票 S2：第四個 task，body 本身連同 dispatch 都住在 onboarding.py（不是這裡）——見該檔
-    # 檔頭「為什麼不像另外三個一樣分兩邊」。
-    onboarding.TASK_TYPE: onboarding.onboarding_read,
 }
 
 

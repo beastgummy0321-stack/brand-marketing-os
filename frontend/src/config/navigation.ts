@@ -67,14 +67,6 @@ export function navModules(brandId: string | null): NavItem[] {
       : { label: "檔期", status: "disabled", reason: "請先在跨品牌總覽選擇品牌" },
     brandId
       ? {
-          label: "開帳讀歷史",
-          href: `/brands/${brandId}/onboarding-read`,
-          status: "active",
-          internal: true,
-        }
-      : { label: "開帳讀歷史", status: "disabled", reason: "請先在跨品牌總覽選擇品牌" },
-    brandId
-      ? {
           label: "訂單與顧客",
           href: `/brands/${brandId}/orders`,
           status: "active",

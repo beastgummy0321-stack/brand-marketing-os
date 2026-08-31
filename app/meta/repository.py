@@ -2,7 +2,7 @@
 app/meta/daily_pull.py, and (since 票 S1) app/schedule/routes.py:60 — the schedule layer
 sits above app.meta in LAYER_ORDER and is allowed to read this module's public functions
 directly (container contract §1 governs what crosses a package boundary, not which package
-does the crossing). 票 S2 adds app/schedule/onboarding.py as a fourth importer, for the
+does the crossing).
 five read functions this ticket adds below. Never imported from outside app/schedule or
 app/meta.
 
@@ -32,7 +32,7 @@ would collide across test modules and across organisations. `meta_credential.sec
 is the index instead.
 """
 
-from datetime import date, timedelta
+from datetime import date
 
 import app.shared.web as web
 from app.core import cleanup
@@ -309,18 +309,6 @@ _CONVERSION_ACTION_PRIORITY: dict[str, tuple[str, ...]] = {
 }
 
 
-def conversion_action_types(conversion_goal: str | None) -> tuple[str, ...]:
-    """這個品牌的轉換目標對應到哪幾個 `action_type`（同義字算同一件事）。
-
-    `_CONVERSION_ACTION_PRIORITY` 是 CPA 分母的唯一定義來源，票 S2b B1 的「這個桶裡轉換
-    最高的那一天」要用的是同一個定義——所以是開一支存取子讓外面讀這一份，不是在
-    `app/schedule/` 再抄一份對照表。同一份提示詞裡「轉換」如果有兩種定義，模型看到的
-    CPA 跟被挑出來的那一天會來自兩套算法，那種矛盾從輸出上看不出來。
-
-    認不得的目標（含 `None`）回空 tuple，跟 `awareness` 同一條路：沒有分母就沒有「轉換
-    最高的一天」可挑，呼叫端要照這件事處理，不是隨便挑一天充數。"""
-    return _CONVERSION_ACTION_PRIORITY.get(conversion_goal or "", ())
-
 # CPA 的分母：**每一列先各自算出自己的轉換數，再相加**。LATERAL + LIMIT 1 是一列進一列出，
 # 所以 SUM(spend)、count(*) 的列數完全沒變，才能跟 roas 待在同一個 SELECT 裡。
 #
@@ -483,193 +471,6 @@ def _spend_row(row: dict) -> dict:
 
 def _float_or_none(value) -> float | None:
     return float(value) if value is not None else None
-
-
-# ---- 票 S2：開帳讀歷史──五支新的讀函式 ------------------------------------------------
-#
-# 這五支函式全部只讀 meta_entity_spend，不碰其他表；`since`／`until` 跟出處一致
-# （`daily_pull.py backfill()`）——**頭尾都含**，不是 spend_summary 那種行事曆月半開
-# 區間，因為呼叫端（app/schedule/onboarding.py）給的窗口一律是「實際拉回來的最早一天／
-# 最晚一天」（D6，spend_date_bounds 的回傳值），本來就是兩個都有資料的日期。
-
-def entity_rows(
-    conn: _AnyConn, org_id: str, ad_account_ids: list, since: date, until: date,
-    *, campaign_id: str | None = None,
-) -> list[dict]:
-    """[since, until] 這段日子裡三層全部的日列——CSV 要的那份「逐日成效」原始資料
-    （票 S2 D8 segment [4]-3）。回傳每一列是 meta_entity_spend 的每一欄**扣掉**
-    `id`／`org_id`／`ad_account_id`／`pulled_at` 這四個純資料庫欄位（SPEC §4：拿掉的
-    只是 DB-only 欄位，不是內容——CSV 不需要知道自己是哪一列、哪個組織、哪個帳號，
-    後三者本來就是這次呼叫的參數，寫進每一列反而是重複）；不做任何四捨五入或欄位改名，
-    要送給模型的是原始數字，CSV 化是呼叫端用 stdlib csv 模組做的事，不是這裡的事。
-
-    三層一起回、依 `level, entity_id, spend_date` 排序：`_SPEND_WHERE` 本身要求
-    `level` 是一個值，所以在這裡逐層跑一遍再依 `LEVELS` 固定順序串接——串接後的順序
-    自然就是「level 分區塊、每個區塊內再照 entity_id, spend_date」，不需要另外
-    ORDER BY 三個欄位的複合鍵。`campaign_id` 給了就多加一個條件：這一欄在三層都存在
-    （每一層都知道自己掛在哪個活動下，見 graph.py `_to_entity_row` 的說明），篩下去
-    剛好就是「這個活動的活動列本身＋它的廣告組＋它的廣告」三層一次到齊，這正是
-    分析一個活動要的切片。
-
-    `until_exclusive`：`_SPEND_WHERE` 是半開區間（`spend_date < %s`），跟本檔既有
-    `spend_summary` 共用同一份 WHERE 片段是設計裡明講要重用的（票 S2 D7：「reuse the
-    existing … _SPEND_WHERE … rather than writing parallel versions」）——加一天轉成
-    半開，比另外寫一份頭尾都含的 WHERE 更不會兩份 WHERE 各自漂移。"""
-    if not ad_account_ids:
-        return []
-    until_exclusive = until + timedelta(days=1)
-    rows: list = []
-    for level in LEVELS:
-        query = (
-            "SELECT level, entity_id, entity_name, campaign_id, adset_id, ad_id, spend_date,"
-            " spend, impressions, clicks, roas, actions, action_values, attribution_window"
-            " FROM meta_entity_spend mes"
-            + _SPEND_WHERE
-        )
-        args = [org_id, ad_account_ids, level, since, until_exclusive]
-        if campaign_id is not None:
-            query += " AND mes.campaign_id = %s"
-            args.append(campaign_id)
-        query += " ORDER BY entity_id, spend_date"
-        rows.extend(conn.execute(query, args))
-    return rows
-
-
-def entity_action_totals(
-    conn: _AnyConn, org_id: str, ad_account_ids: list, since: date, until: date,
-    *, campaign_id: str | None = None,
-) -> list[dict]:
-    """[since, until] 這段日子、每個實體、每個 action_type 加總起來的次數——外殼自己
-    算好的「期間總計」（票 S2 D8 segment [4]-2；票 S2 D4：手跑那次唯一的錯就是這種
-    加總，八天的 view_content 手動加成 344，真正是 342，所以這件事交給外殼算，不是
-    交給模型口算）。回傳 `[{"level","entity_id","action_type","total"}, ...]`。
-
-    **這裡的 `jsonb_array_elements` 是拿來 JOIN 的，一列 actions 陣列展開成好幾列**——
-    只能拿來加總 `actions` 裡的 value，**絕對不能**在同一個查詢裡順手 `SUM(spend)`：
-    同一次成交常常被好幾個同義 action_type 各報一次（`omni_purchase`／
-    `onsite_web_purchase`／…，graph.py 檔頭已記錄），展開之後那一列的 spend 會被
-    乘上同義字個數重複計入。`spend_summary`（本檔 308-326 行 `_CONVERSIONS_LATERAL`）
-    正是為了同一個理由才改用 `LATERAL … LIMIT 1`（一列進一列出，SUM(spend) 的列數
-    完全不變）——這裡不重複那個保護，因為這支函式的職責只有 actions 加總，從來不算錢。
-
-    `jsonb_typeof(mes.actions) = 'array'` 的守門比照 `_CONVERSIONS_LATERAL`：actions
-    是第三方原封不動存進來的欄位，SQL NULL、JSON null、哪天筆誤存成物件，都不該讓這支
-    看數字的查詢當場 500。三層照樣逐層跑、依 `LEVELS` 順序串接，理由同 `entity_rows`。"""
-    if not ad_account_ids:
-        return []
-    until_exclusive = until + timedelta(days=1)
-    out: list[dict] = []
-    for level in LEVELS:
-        query = (
-            "SELECT mes.entity_id AS entity_id, act.entry->>'action_type' AS action_type,"
-            " SUM((act.entry->>'value')::numeric) AS total"
-            " FROM meta_entity_spend mes"
-            " JOIN jsonb_array_elements("
-            "        CASE WHEN jsonb_typeof(mes.actions) = 'array'"
-            "             THEN mes.actions ELSE '[]'::jsonb END) AS act(entry) ON TRUE"
-            + _SPEND_WHERE
-        )
-        args = [org_id, ad_account_ids, level, since, until_exclusive]
-        if campaign_id is not None:
-            query += " AND mes.campaign_id = %s"
-            args.append(campaign_id)
-        query += " GROUP BY mes.entity_id, action_type ORDER BY mes.entity_id, action_type"
-        out.extend(
-            {
-                "level": level, "entity_id": r["entity_id"], "action_type": r["action_type"],
-                "total": _float_or_none(r["total"]),
-            }
-            for r in conn.execute(query, args)
-        )
-    return out
-
-
-def spend_date_bounds(
-    conn: _AnyConn, org_id: str, ad_account_ids: list,
-) -> tuple[date | None, date | None]:
-    """這批帳號目前實際拉回來的最早／最晚 `spend_date`（票 S2 D6「窗口讀＝實際存在的
-    範圍」）——**沒有任何預設回看天數**，S1 已經定案「回看多久」是沒辦法放進品牌層規則卡
-    的偏好（一個廣告帳號可能服務好幾個品牌），所以 `backfill` 才強制要 `--since`。這裡
-    只能誠實回答「拉到了什麼」，不能用猜的。
-
-    不套 `_SPEND_WHERE`：那個片段要求 `level` 跟一段日期範圍當條件，這裡兩者都沒有——
-    要問的是這批帳號**全部**資料的邊界，不分層、不分日期段，套上任何一個條件都會把
-    答案問窄。一個帳號都沒有、或這批帳號一列資料都沒有，聚合函式在零列上回 NULL，
-    元組自然是 `(None, None)`，不必另外判斷。"""
-    if not ad_account_ids:
-        return (None, None)
-    row = conn.execute(
-        "SELECT min(spend_date) AS min_date, max(spend_date) AS max_date"
-        " FROM meta_entity_spend WHERE org_id = %s AND ad_account_id = ANY(%s)",
-        (org_id, ad_account_ids),
-    ).fetchone()
-    assert row is not None, "聚合查詢沒有 GROUP BY，SELECT 一定回一列"
-    return (row["min_date"], row["max_date"])
-
-
-def spend_dates_with_data(
-    conn: _AnyConn, org_id: str, ad_account_ids: list, since: date, until: date,
-) -> list[date]:
-    """[since, until]（頭尾都含）這段日子裡，**任何一層**只要有一列資料，這天就算數——
-    回傳的是有資料的日期，讀日曆窗口跟這份清單的差集，就是票 S2 D6「完全沒有資料的
-    那幾天」。不分層（不套 `level` 條件、不重用 `_SPEND_WHERE`）是刻意的：只要活動層、
-    廣告組層、廣告層任何一層那天有列，這天就不是空的，分層各問一次再自己在 Python
-    做聯集只是把同一件事拆成三次查詢，SQL 用 `DISTINCT` 一次就問到答案。"""
-    if not ad_account_ids:
-        return []
-    rows = conn.execute(
-        "SELECT DISTINCT spend_date FROM meta_entity_spend"
-        " WHERE org_id = %s AND ad_account_id = ANY(%s)"
-        "   AND spend_date >= %s AND spend_date <= %s"
-        " ORDER BY spend_date",
-        (org_id, ad_account_ids, since, until),
-    )
-    return [r["spend_date"] for r in rows]
-
-
-def attribution_windows_in_range(
-    conn: _AnyConn, org_id: str, ad_account_ids: list, since: date, until: date,
-) -> list[str]:
-    """[since, until] 這段日子裡實際送出過的 `attribution_window` 字串（原樣，逗號分隔，
-    見 `meta_entity_spend.attribution_window` 的欄位說明），供票 S2 D6 判斷「這段範圍
-    是不是混了不只一種歸因窗」——兩個用不同窗量出來的 ROAS 不能直接比較（SPEC
-    §7.4(d)）。不分層：同一次 backfill 三層一起送同一個 `action_attribution_windows`
-    （graph.py `list_entity_insights`），混不混窗是整段拉取的屬性，不是某一層獨有的，
-    不需要也不該分層各問一次。"""
-    if not ad_account_ids:
-        return []
-    rows = conn.execute(
-        "SELECT DISTINCT attribution_window FROM meta_entity_spend"
-        " WHERE org_id = %s AND ad_account_id = ANY(%s)"
-        "   AND spend_date >= %s AND spend_date <= %s"
-        " ORDER BY attribution_window",
-        (org_id, ad_account_ids, since, until),
-    )
-    return [r["attribution_window"] for r in rows]
-
-
-def campaign_ids_with_rows(
-    conn: _AnyConn, org_id: str, ad_account_ids: list, since: date, until: date,
-) -> set:
-    """[since, until] 這段日子裡，**手上真的有數字**的 campaign_id 集合。
-
-    票 S2 實機驗收（2026-08-31）撿到的：Meta 對這個真帳號列得出 58 個活動，其中只有 24 個
-    在這段期間有任何一列成效。剩下 34 個派一個分析師過去，拿到的是一份空的 CSV——不但白花
-    一次代理呼叫，還會生出 34 條無中生有的結論等人一條一條拒絕，正好傷到這張票唯一要證明
-    的東西（判讀品質，以及人真的看過才勾）。呼叫端拿這個集合把派工單篩過，被篩掉的活動要
-    **報出來**、不是靜靜消失（票 S2 §1「Missing entities are reported, never inferred」）。
-
-    不分層、只看 campaign_id：`meta_entity_spend` 每一層的列都帶 campaign_id（見那張表的
-    欄位說明），所以某個活動只要底下任何一層有一列，就代表這個活動讀得出東西。"""
-    if not ad_account_ids:
-        return set()
-    rows = conn.execute(
-        "SELECT DISTINCT campaign_id FROM meta_entity_spend"
-        " WHERE org_id = %s AND ad_account_id = ANY(%s)"
-        "   AND spend_date >= %s AND spend_date <= %s",
-        (org_id, ad_account_ids, since, until),
-    )
-    return {r["campaign_id"] for r in rows}
 
 
 # ---- brand_meta_ad_account ----------------------------------------------------------
