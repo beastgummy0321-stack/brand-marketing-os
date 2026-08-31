@@ -158,6 +158,43 @@ def _frozen_facts_text(frozen_facts: dict) -> str:
     return "\n".join(lines)
 
 
+def _setup_gaps(conn, brand_id: str) -> list[str]:
+    """這個品牌的設定缺了什麼、**外殼因此少做了什麼**——提示詞與畫面逐字共用同一份
+    （2026-08-31 S2 真跑撿到的兩件）。跟素材保險絲同一條規矩：少做可以，不講理由不行。
+
+    沉默的代價兩邊都量到了：模型那邊會自己造一個產品 id（真跑 122 條結論裡有 12 條的
+    `scope` 是猜的，外殼只能一條一條標成不能採用），人這邊則看不出畫面上少了哪一半。
+    一份文字給兩種讀者，不是省事——同一件事寫成兩份，遲早只會改到其中一份。"""
+    brand = bi_repo.get_brand(conn, brand_id)
+    gaps = []
+    if not bi_repo.list_products(conn, brand_id):
+        gaps.append(
+            "這個品牌一個產品都還沒建，所以沒有任何產品編號（product_id）可以填——"
+            "每一條結論的適用範圍一律是「整個品牌」。"
+        )
+    if not meta_repo.conversion_action_types(brand["conversion_goal"] if brand else None):
+        gaps.append(
+            "這個品牌還沒設轉換目標，所以沒有一個定義說什麼算一次轉換："
+            "成效表每個時間段只挑得出花費最高的那一天，挑不出成交最高的那一天；"
+            "每次成交花多少錢（CPA）也一律空白——那是「不知道什麼算成交」，"
+            "不是「一次都沒成交」。"
+        )
+    return gaps
+
+
+def _brand_setup_text(conn, brand_id: str) -> str:
+    """D8 segment [2b]：`scope` 這一欄填得出什麼。產品名冊用的是 `_conclusions_response()`
+    判斷「這條結論能不能採用」的同一支 `list_products`——兩邊同一個來源，才不會出現
+    「模型照著名冊填、外殼卻說這個範圍不能採用」。"""
+    products = bi_repo.list_products(conn, brand_id)
+    lines = ["## 這個品牌的設定"]
+    if products:
+        lines.append('結論的 `scope` 只能填 `"brand"`，或下面這幾個 `product_id` 之一：')
+        lines += [f"- `{p['id']}`：{p['name']}" for p in products]
+    lines += _setup_gaps(conn, brand_id)
+    return "\n".join(lines)
+
+
 # ---------------------------------------------------------------------------
 # 建立一次讀取（HTTP 請求裡同步做完；只有真正打代理的部分留給 worker）
 # ---------------------------------------------------------------------------
@@ -299,6 +336,9 @@ def brand_response(conn, brand_id: str, org_id: str) -> dict:
     rows = _latest_read_rows(conn, brand_id)
     return {
         "bound_accounts": _bound_accounts(conn, org_id, brand_id),
+        # 刻意**不放進 `read` 裡面**：還沒讀過的品牌也看得到，而那正是把設定補起來最划算
+        # 的時刻——等讀完才講，等於叫人再讀一次。
+        "setup_gaps": _setup_gaps(conn, brand_id),
         "read": _read_response(conn, brand_id, rows) if rows else None,
     }
 
@@ -573,6 +613,14 @@ def onboarding_read(
         entity_dict_text, csv_text, kept_columns, omitted_columns = (
             onboarding_slice_csv.bucketed_csv(rows, since, until, conversion_types)
         )
+        # 沒有轉換目標時「轉換最高的那天」根本挑不出來（`_outlier_days()`），這句說明就得
+        # 跟著改：說明文字講的是外殼**這一次真的做了什麼**，不是它平常會做什麼。理由不在
+        # 這裡重講一次，上面「這個品牌的設定」那節（`_setup_gaps()`）已經講過。
+        outlier_note = (
+            "每個桶會額外附上花費最高的那天與轉換最高的那天" if conversion_types
+            else "每個桶只額外附上花費最高的那天（轉換最高的那天挑不出來，理由見上面"
+                 "「這個品牌的設定」）"
+        )
         totals_text = onboarding_slice_totals.totals_text(
             totals, action_totals, kept_columns, omitted_columns
         )
@@ -591,6 +639,7 @@ def onboarding_read(
         methodology_result = methodology.compile(conn, METHODOLOGY_TASK_LABELS, brand_id=brand_id)
         compiled = context_compiler.compile(conn, brand_id)
         brand_context, knowledge_item_ids, brand_version, _product_version = compiled
+        setup_text = _brand_setup_text(conn, brand_id)
         frozen_facts_text = _frozen_facts_text(frozen_facts)
         segment4 = "\n\n".join(
             section for section in [
@@ -602,8 +651,7 @@ def onboarding_read(
                 "## 成效（CSV，時間分桶）\n"
                 "一列＝一個實體的一個時間桶（**月 ×（平日｜週末）**，週末永遠不跟平日"
                 "併在一起）。`spend_date` 空白的列是那個桶的加總；`spend_date` 有值的列"
-                "是原封送出的某一天——每個桶會額外附上花費最高的那天與轉換最高的那天，"
-                "讓單日的異常不會被加總磨掉。\n"
+                "是原封送出的某一天——" + outlier_note + "，讓單日的異常不會被加總磨掉。\n"
                 "`days_covered`／`days_with_data`／`days_with_roas` 分別是這個桶涵蓋幾天、"
                 "其中幾天有資料、其中幾天帶 ROAS（ROAS 那一欄的分母）。"
                 "**整個窗口沒有資料的桶不會出現在這張表裡，它們在上面「涵蓋範圍」那節"
@@ -613,11 +661,14 @@ def onboarding_read(
                 "```csv\n" + csv_text + "```",
             ] if section
         )
-        # D8：段落順序固定 [1] 部門任務檔＋方法論 [2] 品牌上下文 [3] 既定事實 [4] 這個活動
-        # 自己的切片，不得調換。
+        # D8：段落順序固定 [1] 部門任務檔＋方法論 [2] 品牌上下文 [2b] 這個品牌的設定
+        # （scope 填得出什麼、缺的設定害外殼少做了什麼）[3] 既定事實 [4] 這個活動自己的
+        # 切片，不得調換。[2b] 跟在品牌上下文後面：它講的是這個品牌的現況，不是這次讀取
+        # 的範圍。
         prompt = "\n\n".join(
             section for section in
-            (department_text, methodology_result.text, brand_context, frozen_facts_text, segment4)
+            (department_text, methodology_result.text, brand_context, setup_text,
+             frozen_facts_text, segment4)
             if section
         )
 

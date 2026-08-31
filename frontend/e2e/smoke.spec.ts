@@ -93,4 +93,9 @@ test("走完切片後活下來的主要畫面", async ({ page }) => {
   await page.goto(`/app/brands/${brandId}/onboarding-read`);
   await expect(page.getByRole("heading", { name: "開帳讀歷史", exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "還沒有綁定 Meta 廣告帳戶" })).toBeVisible();
+  // 品牌設定缺一角時外殼會少做事（沒有產品可指名、挑不出成交最高的那天），這幾句是
+  // 後端 `_setup_gaps()` 給模型跟畫面的同一份文字——這支帳號每次都是全新品牌，兩句
+  // 都會在。
+  await expect(page.getByText("這個品牌一個產品都還沒建", { exact: false })).toBeVisible();
+  await expect(page.getByText("這個品牌還沒設轉換目標", { exact: false })).toBeVisible();
 });

@@ -886,6 +886,73 @@ class PromptCarriesMethodologyTableTest(_OnboardingReadTestBase):
         self.assertIn("1,500,000", prompt_text)
 
 
+# -- 12. 品牌設定缺什麼、外殼因此少做了什麼，要講出來（2026-08-31 S2 真跑撿到 ①②）-------
+
+class SetupGapsAreStatedNotSilentTest(_OnboardingReadTestBase):
+    """資料正確性：品牌設定不完整時，外殼會安靜地少做事——沒有產品就沒有 product_id
+    可以指名（真跑 122 條結論裡有 12 條的 `scope` 是模型自己造出來的產品 id，只能一條
+    一條標成不能採用），沒有 conversion_goal 就挑不出「成交最高的那一天」、CPA 也一律
+    空白。少做可以，不講理由不行：兩件事都要進提示詞（模型讀），也都要進 API 回應
+    （畫面讀）。設定補齊之後，產品名冊要逐字出現，那兩句話要收回去。"""
+
+    def _run_one_read(self, suffix: str, prepare=None) -> tuple:
+        """跑完一次讀取，回 (POST 回應 json, 送出去的提示詞)。`prepare(brand_id)` 在
+        POST 之前跑，兩支測試的差別只在那裡。"""
+        org_id, token, brand_id, _ = self._setup_brand_with_account(suffix)
+        if prepare is not None:
+            prepare(brand_id)
+        meta_graph.list_entities = _fake_entities(
+            [self._campaign()], [self._adset("as1", "c1")], [self._ad("ad1", "c1")],
+        )
+        meta_graph.list_ad_creatives = _fake_creatives({"ad1": [{"body": "文案"}]})
+        fake = _fake_provider(_fenced_conclusions([_one_conclusion()]))
+        onboarding.PROVIDER = fake
+        res = self.client.post(
+            f"/api/schedule/brands/{brand_id}/onboarding-read",
+            headers=self._headers(token, org_id),
+        )
+        self.assertEqual(res.status_code, 200, res.text)
+        self._run_worker()
+        self.assertEqual(len(fake.calls), 1)
+        return res.json(), fake.calls[0]["messages"][0]["content"]
+
+    def test_no_products_and_no_conversion_goal_are_named_in_prompt_and_api(self):
+        """資料正確性：新品牌（0 個產品、conversion_goal 是 NULL）——兩句話都要出現在
+        API 回應的 `setup_gaps` 與提示詞裡，而且分桶說明不准繼續宣稱有挑「轉換最高的
+        那天」（這一次根本挑不出來）。"""
+        payload, prompt_text = self._run_one_read("gaps")
+
+        gaps = payload["setup_gaps"]
+        self.assertEqual(len(gaps), 2, gaps)
+        self.assertTrue(any("一個產品都還沒建" in gap for gap in gaps), gaps)
+        self.assertTrue(any("還沒設轉換目標" in gap for gap in gaps), gaps)
+        for gap in gaps:
+            self.assertIn(gap, prompt_text)
+        self.assertNotIn("每個桶會額外附上花費最高的那天與轉換最高的那天", prompt_text)
+
+    def test_products_are_listed_by_id_and_gaps_disappear_once_setup_is_done(self):
+        """資料正確性：建了產品、設了轉換目標之後——提示詞逐字列出 `product_id`＋名稱
+        （模型不必用猜的），`setup_gaps` 收回成空，分桶說明恢復成「花費最高＋轉換最高
+        那兩天」。"""
+        created = {}
+
+        def prepare(brand_id: str) -> None:
+            created["product"] = bi_repo.create_product(
+                web.conn, brand_id, name="冰滴壺", actor=ACTOR,
+            )
+            bi_repo.set_brand_switches(
+                web.conn, brand_id, market_region=None, conversion_goal="purchase",
+                actor=ACTOR,
+            )
+            web.conn.commit()
+
+        payload, prompt_text = self._run_one_read("roster", prepare)
+
+        self.assertEqual(payload["setup_gaps"], [])
+        self.assertIn(f"- `{created['product']['id']}`：冰滴壺", prompt_text)
+        self.assertIn("每個桶會額外附上花費最高的那天與轉換最高的那天", prompt_text)
+
+
 # -- 8. A4 保險絲：抽不出 body／title 就送原始 JSON ---------------------------------------
 
 class CreativeFuseSendsRawJsonOnUnexpectedShapeTest(unittest.TestCase):

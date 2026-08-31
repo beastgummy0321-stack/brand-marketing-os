@@ -75,6 +75,10 @@ export interface OnboardingRead {
 
 export interface OnboardingReadState {
   bound_accounts: OnboardingBoundAccount[];
+  /** 這個品牌的設定缺什麼、外殼因此少做了什麼（後端 `_setup_gaps()`，跟提示詞裡給模型讀
+   * 的是逐字同一份）。空陣列＝設定齊了，沒有東西少做。不在 `read` 裡面：還沒讀過的品牌
+   * 也看得到，那正是去把設定補起來最划算的時刻。 */
+  setup_gaps: string[];
   read: OnboardingRead | null;
 }
 

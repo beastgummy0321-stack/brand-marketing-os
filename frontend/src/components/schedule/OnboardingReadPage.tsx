@@ -258,6 +258,22 @@ export function OnboardingReadPage({ brandId }: { brandId: string }) {
     <div className="flex flex-col gap-4">
       <Breadcrumb items={[{ label: "跨品牌總覽", href: "/" }, { label: "開帳讀歷史" }]} />
       <h1 className="font-display text-2xl text-foreground">開帳讀歷史</h1>
+      {/* 品牌設定缺一角時，外殼會安靜地少做事（沒有產品可以指名、挑不出成交最高的那天）。
+          少做可以，不講不行——後端把同一份文字同時給模型跟這裡（`_setup_gaps()`），所以
+          畫面上這幾句跟分析師讀到的逐字相同。放在最上面、三種狀態都顯示：還沒綁帳戶、
+          還沒讀過的時候補設定最划算。 */}
+      {state.status === "ready" && state.data.setup_gaps.length > 0 && (
+        <div className="rounded-md border border-border bg-card p-4 text-sm shadow-[var(--shadow-card)]">
+          <p className="mb-2 font-medium text-foreground">
+            這個品牌有設定還沒補，所以這次讀取有幾件事我做不了：
+          </p>
+          <ul className="flex list-disc flex-col gap-1 pl-5 text-muted-foreground">
+            {state.data.setup_gaps.map((gap) => (
+              <li key={gap}>{gap}</li>
+            ))}
+          </ul>
+        </div>
+      )}
       {content}
     </div>
   );
