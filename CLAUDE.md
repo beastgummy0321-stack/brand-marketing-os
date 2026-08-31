@@ -39,11 +39,11 @@
 - 裝依賴：`uv sync --frozen`（不用 pip／requirements.txt，套件與版本鎖在 `pyproject.toml`／`uv.lock`）
 - 金鑰 `.env`（不進版控）；`BRAND_OS_LLM_PROVIDER=codex_cli` 開著＝所有 LLM 呼叫走本機 codex CLI，不產生 API 帳單
 - bash 裡跑 docker／supabase 前先：`export PATH="/c/Users/User/AppData/Local/Programs/DockerDesktop/resources/bin:/c/Users/User/scoop/shims:$PATH"`
-- 本機測試帳號：**2026-08-31 查證，一個都不存在**——`auth.users` 裡只剩 e2e 每次自己註冊的
-  `smoke-*@example.com`（密碼是當下的時間戳，撿不回來）。`123@test.com` / `123456` 那組隨後來
-  某次 `supabase db reset` 一起消失了。要驗畫面就到 http://localhost:8710/ 按「還沒有帳號？
-  註冊新帳號」自己開一個（本機 Supabase 關掉了信箱驗證，註冊完直接就有 session）。
-  這一段刻意寫實話而不是寫一組帳號密碼：寫一組會過期的，比寫「自己註冊一個」更浪費時間。
+- 本機測試帳號：`123@gmail.com` / `Verify123456`（2026-08-31 設）。**唯一看得到真實資料的帳號**
+  ——`org_01M1AKNVS9YAD3BDMTB1257YZ6` 的 owner，底下是品牌「Beast Prime 野獸至尊」
+  （`brd_01M1AKPX50SNQ6BVR4J83K1D0F`）、Meta 廣告帳戶與開帳讀取結果；新註冊的只拿到空組織。
+  被 `supabase db reset` 洗掉後重設密碼：`PUT {SUPABASE_URL}/auth/v1/admin/users/1061ec1c-a145-42c7-a632-6d4be5f6968b`
+  body `{"password": "..."}`，headers `apikey`＋`Authorization: Bearer {SUPABASE_SERVICE_ROLE_KEY}`。
   要用 HTTP 直接測 API 仍可自簽 HS256 JWT
   （`.env` 已開 `IDENTITY_ALLOW_HS256=1`，密鑰＝`SUPABASE_JWT_SECRET`）
 - 語彙 `CONTEXT.md`；決策 `docs/adr/`；技術債與機器閘門 `docs/tech-debt.md`（動超標檔前先讀）；工作流減重 `docs/workflow-diet.md`
