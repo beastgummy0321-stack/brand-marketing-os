@@ -35,7 +35,11 @@ CASCADE 今早已修、上傳有 50MB 上限、產品照那條查無此事）。
 表的形狀一律看 ADR 0050 的表清單；migration 檔名前綴一律看 ADR 0049（前綴＝擁有那張表的模組，
 不是要它的那張票，所以一張票可以有好幾個不同前綴的 migration 檔）。
 
-- [ ] **T1b（route C，依 ADR 0047：排程只給視覺方向，不產圖片提示詞）** `brand_coordinate` ＋ 35 條種子
+- [>] **T1b（route C，依 ADR 0047：排程只給視覺方向，不產圖片提示詞）** ——站①完成（三題已答，
+      票在 `docs/issues/T1b-brand-coordinate/ticket.md`），等 schema 批准後進站②。
+      站①裁決：①否決的角度走 `feedback`，`context_compiler`／`rule_cards` 不動；
+      ②`script`／`hook_pool` 的「無字數預算」這批不收，閘門只擋圖片欄位；
+      ③新增停用畫面＝品牌智庫第 8 個分頁籤，自己打 API，不擴充 `fetchLibrary()`。 `brand_coordinate` ＋ 35 條種子
       （`creative-matrix.md:12-46`，類別在第 2 欄，沒有 key 欄要自己發，另 4 欄別丟）＋新品牌誰種＋新增停用畫面
       ＋ `creative_slot`／`creative_candidate`／`creative_candidate_item`（座標生成當下凍結複寫在 candidate）
       ＋ `feedback` ＋ `official_asset` 放寬（純文字素材現在被 `storage_key NOT NULL` 擋死）。
@@ -140,13 +144,16 @@ Dependabot #1（`nanoid`，修補版 3.3.18）：**`saas` 這邊已經是 3.3.18
 - [ ] `FILE_LINE_CAP = 800` 仍用行數下令拆檔，工作流規範卻寫「line count never orders a split」。
       2026-08-31 裁決留規範那份；已超標檔已改棘輪，新檔還是被行數逼拆。要不要收掉是你的決定
 - [ ] `meta-format-specs.md:52-53` 的 `script`／`hook_pool` 也掛著「無字數預算」（同一次實跑佔 18.1%／7.3%）。
-      ADR 0047 只處理圖片提示詞那一項，這兩項還沒判——要不要一起收，跟 T1b 同一批決定
+      ADR 0047 只處理圖片提示詞那一項。**2026-09-01 裁決：這批不收**——0047 已經拿掉約六成輸出，
+  「太長會被截斷」的痛小很多，而且實跑從沒真的被截斷過。T1b 的閘門只擋圖片欄位，不做全域字串禁令。
+  真的被截斷一次再回頭收
 - [ ] T1 收尾時記下、不擋合併的四條（票已刪，留在這裡）：`creative.py:77` 的 `all([])` 是 True，
       所以 `value: []` 與 `value: ["", ""]` 會過關、畫面出現空欄位；七個維度名住三個地方
       （`COORDINATE_KEYS`、TS 介面、前端中文標籤）沒有同步閘門；
       `test_creative_task_gets_methodology` 斷言方法論檔的行文，上游改標題就無故變紅
-      （改斷言 `【方法論：creative-matrix.md】` 這個穩定標記就不脆）；
-      `ad_creative.md` 精簡時掉了一句實質指示「誠實優先於好看，看不準就直說看不準」，要不要補回來待裁
+      （改斷言 `【方法論：creative-matrix.md】` 這個穩定標記就不脆）。
+      第四條（`ad_creative.md` 掉了「誠實優先於好看」）**2026-09-01 查證為誤報，那句還在
+      `app/departments/creative/ad_creative.md:35-36`**，已結案
 - [ ] `assets` bucket 沒設 `file_size_limit`（`supabase/migrations/20260830000002_core_storage_assets_bucket.sql`
       的 insert 只給 id／name／public）。**上傳端已經擋兩道 50MB**（`app/brand_web/routes_library.py:57`／`:79`／`:273`），
       所以這是第二道防線不是沒有防線——架構圖說「上傳無大小上限」是錯的。順手補一行
