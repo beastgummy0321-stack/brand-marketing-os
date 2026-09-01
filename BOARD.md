@@ -44,7 +44,8 @@
 - [ ] **T5（route C）** 成效回流接座標 ＋ 診斷（程式先壓縮、三個 agent、程式排序取前 5）。**閉環在這裡合攏**
 - [ ] **T6（route B/C）** 四象限泡泡看板 ＋ 建議落 `decision`（補欄位，不新開表）
 
-- [ ] **現在就壞著（route C，schema，各自一張小票）** `app/meta` 沒註冊 `cleanup`＝刪綁過 Meta 的品牌必失敗｜`meta_entity_spend` 的 FK 是 CASCADE＝解綁帳戶洗掉花費歷史｜`official_asset.storage_key` NOT NULL＝純文字素材進不來
+- [ ] **T-fk（route C，schema）** `meta_entity_spend` 對 ad account 的 FK 是 CASCADE（實查 `confdeltype='c'`）＝解綁帳戶洗掉全部花費歷史，而這是全庫唯一的花費來源。改 RESTRICT ＋軟停用。票在 `docs/issues/T-fk-spend-history/`
+- [ ] **pyright 12 個錯是既有的**（`app/identity/jwt.py` 10、`app/background/__init__.py` 2），閘門本來就紅：要嘛修、要嘛在票裡寫明豁免。壓測兩條回報**查證後是假的**：`app/meta` 有註冊 cleanup（`repository.py:526`，14 張 brand 子表全涵蓋、`test_brand_delete` 全綠）；`storage_key` NOT NULL 不是活 bug 是 T1b 的門
 
 ## 仍然成立的事實（不是票，是量到的東西）
 
@@ -55,7 +56,6 @@
 - `app/methodology/README.md` 的「成效判讀／下期草案」與「期中檢查點」兩列**零個呼叫端**，
   `providers.py:154` 的 `performance_reading` 標籤空著。覆盤要的方法論早就寫好了。
 - 心智圖的 C 診斷、D 市場競品、E 客群、P 週月報**摘要留存不排票**，閉環跑起來再判。
-
 ## 第 ⑦ 片：收尾
 
 - [ ] 07-1 閘門收尾：前端 depcruise 擋 supabase-js 只在登入模組（**Playwright 那一半已完成**，

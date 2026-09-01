@@ -49,6 +49,13 @@ _ASSET_CONTENT_TYPES = {
 }
 _UNSAFE_ASSET_FILENAME_CHARS = re.compile(r"[^A-Za-z0-9._-]+")
 
+# 上傳大小上限。50 MiB **不是這裡挑的數字**——它是 `supabase/config.toml` `[storage]` 的
+# `file_size_limit`，Storage 本來就會擋。這裡先擋一次的理由只有一個：`await file.read()`
+# 會把整個 body 讀進記憶體之後才輪到 Storage 說不行，而那時錯誤是英文的 Storage 例外，
+# 不是使用者看得懂的一句話（bucket 註解自稱「callers already validate in Chinese」，
+# 但呼叫端只驗了格式沒驗大小）。
+_MAX_ASSET_BYTES = 50 * 1024 * 1024
+
 
 def _safe_asset_filename(name: str) -> str:
     name = os.path.basename((name or "").strip())
@@ -69,6 +76,8 @@ def save_official_asset(brand_id: str, *, org_id: str, actor: str, asset_kind: s
     ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
     if not filename or not content:
         return False, "請選擇一個圖檔上傳。"
+    if len(content) > _MAX_ASSET_BYTES:  # 路由已擋一次；這裡是給非 HTTP 呼叫端的第二道
+        return False, "這個檔案超過 50 MB，請壓小一點再上傳。"
     if ext not in _ASSET_CONTENT_TYPES:
         return False, f"「{filename}」不是支援的圖片格式，請用 png、jpg、jpeg、webp 或 gif。"
 
@@ -261,6 +270,8 @@ async def asset_upload_api(request: Request, brand_id: str, asset_kind: str = Fo
                            file: UploadFile = File(...)):
     actor = require_actor(request)
     brand = require_brand(brand_id, actor)
+    if (file.size or 0) > _MAX_ASSET_BYTES:
+        return JSONResponse({"detail": "這個檔案超過 50 MB，請壓小一點再上傳。"}, status_code=400)
     ok, detail = save_official_asset(
         brand_id, org_id=brand["org_id"], actor=str(actor.user_id), asset_kind=asset_kind,
         product_id=product_id, title=title, filename=file.filename or "", content=await file.read(),

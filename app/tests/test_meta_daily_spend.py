@@ -35,7 +35,7 @@ procrastinate 的實際排程／worker 機制（defer → run_worker → 真的�
 
 import json
 import unittest
-from datetime import datetime
+from datetime import datetime, timedelta
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
@@ -99,9 +99,14 @@ SD_INSIGHTS_PAGE = {
 def _with_date_start(page: dict, params: dict) -> dict:
     """幫 fixture 每一列補上 `date_start`——`_to_entity_row`（票 S1 D7）要求每一列自己帶
     日期，不能從呼叫端的迴圈變數來；夾具本身不用管日期，這裡從送出的 `time_range` 讀
-    `since` 補上去，比照 `time_increment: 1` 對單日範圍只會回一天資料的真實行為。"""
-    since = json.loads(params["time_range"])["since"]
-    return {**page, "data": [dict(item, date_start=since) for item in page.get("data", [])]}
+    `until` 補上去。
+
+    2026-09-01 從 `since` 改成 `until`：拉取範圍不再是單日（歸因窗 7d_click，見
+    `daily_pull._ATTRIBUTION_LOOKBACK_DAYS`），`since` 現在是七天前。夾具只回一列，
+    那一列代表的是「今天」——所以要蓋上範圍的**最後一天**。用 `since` 會讓每一個
+    「這次拉取落在哪一天」的斷言都指向七天前。"""
+    until = json.loads(params["time_range"])["until"]
+    return {**page, "data": [dict(item, date_start=until) for item in page.get("data", [])]}
 
 
 def _dispatch_insights(pages_by_account: dict):
@@ -332,7 +337,12 @@ class FailedPullLeavesOldDataTest(_MetaDailySpendTestBase):
             BP_ACCOUNT_ID,
             otherwise=_dispatch_insights({SD_ACCOUNT_ID: SD_INSIGHTS_PAGE}),
         )
-        daily_pull.run_daily_pull(org_id)
+        # 2026-09-01：失敗不再靜默。以前這一支照樣算成功，於是「Meta 限流」跟「今天真的
+        # 沒有花費」在系統裡長得一模一樣。現在跑完所有帳號才拋，所以下面「成功的帳號沒被
+        # 拖累」那條斷言仍然成立。
+        with self.assertRaises(graph.GraphError) as caught:
+            daily_pull.run_daily_pull(org_id)
+        self.assertIn(BP_ACCOUNT_ID, str(caught.exception), "錯誤訊息要指名是哪個帳號失敗")
 
         bp_rows_after = self._spend_rows(bp_id)
         bp_last_pull_after = web.conn.execute(
@@ -349,6 +359,45 @@ class FailedPullLeavesOldDataTest(_MetaDailySpendTestBase):
             "SELECT last_pull_at FROM meta_ad_account WHERE id = %s", (sd_id,)
         ).fetchone()["last_pull_at"]
         self.assertIsNotNone(sd_after, "同一輪裡，成功的帳號不該被失敗的帳號拖累")
+
+
+# -- 3a-2. 拉取範圍要蓋住歸因窗 -------------------------------------------------------
+
+class PullCoversTheAttributionWindowTest(_MetaDailySpendTestBase):
+    """歸因窗是 `7d_click`：一天的 roas 在那天之後還會被改變七天。只拉當天等於把每一天
+    的數字凍在第 0 天，最近一週系統性偏低，而且看起來像「新廣告都在賠」。"""
+
+    def test_time_range_spans_the_attribution_window_not_just_today(self):
+        org_id, _ = self._make_org("window")
+        bp_id = self._connect_account(org_id, BP_ACCOUNT_ID, "BP AD")
+        brand_id = bi_repo.create_brand(
+            web.conn, org_id=org_id, name="歸因窗測試品牌", client_name=None, actor="test",
+        )["id"]
+        self._bind(org_id, brand_id, bp_id)
+
+        seen: list = []
+        inner = _dispatch_insights({BP_ACCOUNT_ID: BP_INSIGHTS_PAGE})
+
+        def recording(url, *, params, headers):
+            seen.append(json.loads(params["time_range"]) if params else None)
+            return inner(url, params=params, headers=headers)
+
+        graph.fetch_page = recording
+        daily_pull.run_daily_pull(org_id)
+
+        self.assertTrue(seen, "沒有任何一次 insights 請求")
+        today = coresettings.today_for_org(web.conn, org_id=org_id)
+        # 天數從 `graph._ATTRIBUTION_WINDOWS`（"7d_click"）推，**不是**從被測的
+        # `daily_pull._ATTRIBUTION_LOOKBACK_DAYS` 推——第一版就是拿後者當期望值，
+        # 結果把回補天數改成 0 照樣綠（同義反覆）。歸因窗多長，拉取就得回頭蓋多長。
+        window_days = max(int(w.split("d_")[0]) for w in graph._ATTRIBUTION_WINDOWS)
+        expected_since = (today - timedelta(days=window_days)).isoformat()
+        for rng in seen:
+            self.assertEqual(rng["until"], today.isoformat())
+            self.assertEqual(
+                rng["since"], expected_since,
+                "拉取起點要往回蓋住歸因窗，不是今天",
+            )
 
 
 # -- 3b. 缺席不是零：Meta 對某一層某一天沒回任何列，就是零列，不是一列 spend=0 ----------

@@ -95,6 +95,20 @@ class OfficialAssetTest(unittest.TestCase):
         self.assertIn("detail", resp.json())
         self.assertEqual(repo.list_official_assets(web.conn, brand_id), [])
 
+    def test_oversized_upload_rejected_before_it_reaches_storage(self):
+        """資料正確性／可用性：`await file.read()` 會把整個 body 讀進記憶體，之後才輪到
+        Storage 說不行——而 Storage 的上限（`supabase/config.toml` `[storage]`
+        `file_size_limit = "50MiB"`）擋下來時吐的是英文例外，不是使用者看得懂的一句話。
+        50 MiB 這個數字不是這裡挑的，是那份設定檔裡的值。"""
+        brand_id = self._new_brand("晨露茶飲-過大")
+        oversized = b"0" * (50 * 1024 * 1024 + 1)
+        resp = self._upload(brand_id, filename="巨圖.png", content=oversized,
+                             content_type="image/png")
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("50 MB", resp.json()["detail"])
+        self.assertEqual(repo.list_official_assets(web.conn, brand_id), [],
+                         "被擋下來的上傳不可以留下任何一列")
+
     def test_put_failure_leaves_no_asset_row(self):
         """money/data-correctness 案例（SPEC D9）：`put` 炸了，就不可以留一列指到不存在
         的物件——那張圖會永遠是破的。用 mock 模擬 Storage 失敗，不必真的打斷網路。"""

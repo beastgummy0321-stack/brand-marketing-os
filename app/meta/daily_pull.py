@@ -51,6 +51,10 @@ _DAILY_PULL_CRON = "0 3 * * *"  # 每天觸發一次；伺服器本機時間，�
 # 三層一起拉，順序固定 campaign→adset→ad（票 S1，GRILL 決策 1）：錢分在 level 2 的 adset
 # 預算，數字卻只有 level 1 的話，計畫寫的「70% 主打／30% 測試」事後永遠對不起來——那不是
 # 少一個功能，是一個學不會的迴圈。
+# 每天回頭補拉幾天。7 取自 graph.py `_ATTRIBUTION_WINDOWS` 的 `7d_click`——歸因窗多長，
+# 一天的數字就要重拉多久，不是另外挑一個數字。
+_ATTRIBUTION_LOOKBACK_DAYS = 7
+
 _LEVELS = ("campaign", "adset", "ad")
 
 # Meta 只保留 37 個月的 insights：
@@ -82,8 +86,14 @@ def _pull_one_account(conn, org_id: str, token: str, account: dict) -> None:
     `spend_date` 不是從這裡的 today 寫進資料庫：每一列用 Meta 自己回的 `date_start`（票 S1
     D7）。今天的拉取兩者相同，補拉時一次回應橫跨好幾天，只有 `date_start` 是對的。"""
     today = coresettings.today_for_org(conn, org_id=org_id)
+    # 拉的是 [今天-7, 今天]，不是只有今天。歸因窗是 `7d_click`（graph.py `_ATTRIBUTION_WINDOWS`）
+    # ——一天的 roas 在那天之後還會被歸因進來的轉換改變七天。只拉當天，等於把每一天的數字
+    # 永遠凍在第 0 天，最近一週會系統性偏低，而且看起來像「新廣告都在賠」。
+    # 重拉不會長出重複列：`meta_entity_spend` 的唯一鍵是
+    # (ad_account_id, level, entity_id, spend_date)，`upsert_entity_spend` 走 ON CONFLICT。
+    since = today - timedelta(days=_ATTRIBUTION_LOOKBACK_DAYS)
     for level in _LEVELS:
-        rows = graph.list_entity_insights(token, account["account_id"], level, today, today)
+        rows = graph.list_entity_insights(token, account["account_id"], level, since, today)
         repo.upsert_entity_spend(conn, org_id, account["id"], rows)
     repo.mark_pull_succeeded(conn, org_id, account["id"])
 
@@ -97,11 +107,18 @@ def run_daily_pull(org_id: str) -> None:
         token = repo.get_token(conn, org_id)
         if token is None:
             return  # 這個組織還沒接 Meta 權杖，沒有東西可拉
+        failed: list[str] = []
         for account in repo.list_bound_accounts(conn, org_id):
             try:
                 _pull_one_account(conn, org_id, token, account)
-            except graph.GraphError:
-                continue  # 這個帳號這次失敗，換下一個；舊資料留著，見上方 docstring
+            except graph.GraphError as exc:
+                # 這個帳號這次失敗，換下一個；舊資料留著，`last_pull_at` 不動（見上方 docstring）。
+                # 但**不再靜默**：以前整支 task 照樣算成功，於是「Meta 限流」跟「今天真的沒有
+                # 花費」在系統裡長得一模一樣。收集起來，跑完全部帳號再一次拋出去，讓
+                # procrastinate 把這次 run 記成失敗。
+                failed.append(f"{account['account_id']}：{exc}")
+        if failed:
+            raise graph.GraphError("這次拉取有帳號失敗——" + "；".join(failed))
 
 
 def _dispatch_daily_pull(timestamp: int) -> None:
