@@ -895,5 +895,39 @@ class PagingNeverTruncatesSilentlyTest(unittest.TestCase):
         self.assertEqual([i["campaign_id"] for i in items], ["c1", "c2", "c3"])
 
 
+# -- 4. FK 保護：有花費紀錄的帳號不能被刪（T-fk） -------------------------------------
+
+class SpendHistoryOutlivesTheAccountTest(_MetaDailySpendTestBase):
+    """`meta_entity_spend` 是花費唯一存在的地方，沒有第二份副本。刪掉一個還有花費列的
+    `meta_ad_account`，那些列必須連帶消失不了——見 docs/issues/T-fk-spend-history。"""
+
+    def test_deleting_an_account_with_spend_is_refused(self):
+        import psycopg  # module import, not `from ... import`
+
+        org_id, _ = self._make_org("delete_guard")
+        bp_id = self._connect_account(org_id, BP_ACCOUNT_ID, "BP AD")
+        brand_id = bi_repo.create_brand(
+            web.conn, org_id=org_id, name="刪除保護測試品牌", client_name=None, actor="test",
+        )["id"]
+        self._bind(org_id, brand_id, bp_id)
+        graph.fetch_page = _dispatch_insights({BP_ACCOUNT_ID: BP_INSIGHTS_PAGE})
+        daily_pull.run_daily_pull(org_id)
+
+        rows_before = self._spend_rows(bp_id)
+        self.assertEqual(len(rows_before), 3, "前置：這個帳號要真的有花費紀錄")
+
+        with self.assertRaises(psycopg.errors.ForeignKeyViolation):
+            web.conn.execute("DELETE FROM meta_ad_account WHERE id = %s", (bp_id,))
+        web.conn.rollback()  # required — psycopg leaves the transaction aborted, every later
+                             # statement raises InFailedSqlTransaction without this
+
+        rows_after = self._spend_rows(bp_id)
+        self.assertEqual(
+            [(r["entity_id"], r["spend"]) for r in rows_before],
+            [(r["entity_id"], r["spend"]) for r in rows_after],
+            "被拒絕的 DELETE 不該動到任何一列花費紀錄",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
