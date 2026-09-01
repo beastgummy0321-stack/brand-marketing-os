@@ -18,7 +18,10 @@
 
 ## 廣告閉環（2026-09-01 重訂——舊的七張票全部作廢）
 
-依據只有兩份：`CONSTITUTION.md`（廣告／排程模組憲法）＋廣告閉環架構圖 11 節。
+依據三份，全部在 repo 裡：`CONSTITUTION.md`（廣告／排程模組憲法）＋`docs/adr/0050`（資料模型之記錄：
+25 張表、每張的擁有模組、哪張票落它）＋`docs/contracts/schedule.md`（模組進入點與生效決策）。
+架構圖仍是可讀的概覽，**兩邊不一致以 ADR 0050 為準**——0050 已更正圖上四條（cleanup 早就註冊了、
+CASCADE 今早已修、上傳有 50MB 上限、產品照那條查無此事）。表的形狀不再寫在看板行上，票死不會帶走決定。
 2026-08-26～31 那輪的十條凍結決定與 S3／S4／S5／⑨ **全部作廢**——不是做錯，是這輪重新訪談
 加九份壓測之後資料模型換了（廣告屬通路、檔期是濾鏡、素材帶七維指紋、不得用現況欄位回答當時）。
 舊碼與舊決策留在 git：`v0.2-ads-last`、`v0.3-onboarding-read-last`、`.scratch/adloop/`。
@@ -29,17 +32,36 @@
 
 ### 新票單（2026-09-01，垂直切，循序做不平行）
 
-- [ ] **T1b（route C，依 ADR 0047：排程只給視覺方向，不產圖片提示詞）** `brand_coordinate` ＋ 35 條種子（`creative-matrix.md:12-46`，類別在第 2 欄，
-      沒有 key 欄要自己發，另 4 欄別丟）＋新品牌誰種＋新增停用畫面＋三張 `creative_*` 表（座標凍結複寫）。
-      **`schedule` 要不要成為 migration 擁有模組＝模組邊界決定，動工前先升級**
-- [ ] **T2（route C）** 檔期 ＋ `ad_set_period_membership`（帶 `allocation_weight`，**絕不加
-      `unique(ad_set_id)`**）＋預算池與配額變更紀錄 ＋結算快照與狀態機
+表的形狀一律看 ADR 0050 的表清單；migration 檔名前綴一律看 ADR 0049（前綴＝擁有那張表的模組，
+不是要它的那張票，所以一張票可以有好幾個不同前綴的 migration 檔）。
+
+- [ ] **T1b（route C，依 ADR 0047：排程只給視覺方向，不產圖片提示詞）** `brand_coordinate` ＋ 35 條種子
+      （`creative-matrix.md:12-46`，類別在第 2 欄，沒有 key 欄要自己發，另 4 欄別丟）＋新品牌誰種＋新增停用畫面
+      ＋ `creative_slot`／`creative_candidate`／`creative_candidate_item`（座標生成當下凍結複寫在 candidate）
+      ＋ `feedback` ＋ `official_asset` 放寬（純文字素材現在被 `storage_key NOT NULL` 擋死）。
+      **站①要先答一題**：否決的角度走 `feedback` 的「生成後排除清單」，還是繼續走 `rule(severity='hard')`
+      ——ADR 0012 在管那條路，這是模組邊界不是票的細節。
+      本票是 schedule 第一次擁有自己的表 → 同一張票補 `app.core.cleanup` 註冊，並改掉
+      `app/schedule/__init__.py` 裡「本模組不擁有任何表」那段檔頭
+- [ ] **T2（route C）** `campaign_period`（含結算快照與四值狀態機）＋ `campaign_period_budget_version`
+      ＋ `ad_set_period_membership`（**絕不加 `unique(ad_set_id)`**）＋ `product_economics_version`（半開區間，
+      現行 `save_product_economics` 是原地改同一列）＋ `holiday` ＋ `interrupt.dedupe_key` 含檔期 id
+      ＋ `llm_task.campaign_period_id`。**`approval.max_daily_amount` 不在本票**——見下面「需批准」那條
 - [ ] **T3（route C）** `channel_entity_map`（`node_key` 路徑式、`external_status` 存平台原話、
-      `learning_reset_at`）＋綁定改吃 id 不吃名稱——一鍵建立不再建出兩份
-- [ ] **T4（route C）** `ad_channel` ＋ `ad_channel_format_spec` ＋ `channel_credential`
-      取代 `meta_credential`（現在主鍵是 org_id＝一個組織只能一個 token）
-- [ ] **T5（route C）** 成效回流接座標 ＋ 診斷（程式先壓縮、三個 agent、程式排序取前 5）。**閉環在這裡合攏**
-- [ ] **T6（route B/C）** 四象限泡泡看板 ＋ 建議落 `decision`（補欄位，不新開表）
+      `learning_reset_at`、`unique(org_id, brand_id, node_key)` 就是冪等鍵）＋ `brand_meta_ad_account.allocation_weight`
+      ＋綁定改吃 id 不吃名稱——一鍵建立不再建出兩份
+- [ ] **T4（route C）** `ad_channel` ＋ `ad_channel_format_spec`（鍵是 (channel, format)）＋ `channel_credential`
+      取代 `meta_credential`（現在主鍵是 org_id＝一個組織只能一個 token）＋ `meta_ad_account` 補 `timezone_name`
+      （Meta 回的日期是廣告帳戶時區，現在沒有這欄）
+- [ ] **T5（route C）** 成效回流接座標 ＋ 診斷（程式先壓縮、三個 agent、程式排序取前 5）
+      ＋ `meta_entity_spend` 補 `currency` 與 `(adset_id, spend_date)` 索引 ＋ `channel_revenue` 補 spend／檔期／幣別／
+      通路／來源雜湊與唯一鍵（現在手填列完全不去重）＋ `learning_ledger` 趁 0 列一次補齊
+      ＋ 破除 `_latest_task_row`（`app/schedule/routes.py:133-139`）的「最新一列即真相」。**閉環在這裡合攏**
+- [ ] **T6（route C）** 四象限泡泡看板 ＋ 建議落 `decision`（補六欄，不新開表；該表 0 列、程式零引用）
+      ＋ `order_record.utm_json`。**現在畫不出來的五個理由，票裡要逐條有解**：`spend_summary` 的
+      `bool_and(roas IS NOT NULL)`（`app/meta/repository.py:424,437`）讓整支回 None；`roas = 0` 的列一列都沒有，
+      賠錢象限畫不出來；真實毛利接不到廣告（就是 utm_json 那條）；`daily_pull` 只拉今天但歸因窗是 7d_click；
+      `frontend/src/lib/echarts.ts:11` 沒註冊 ScatterChart——**沒註冊的圖種靜默不畫也不報錯，閘門會是綠的**
 
 ## 仍然成立的事實（不是票，是量到的東西）
 
@@ -66,6 +88,16 @@
 - [ ] 07-4 GitHub 四個安全開關（secret scanning／push protection／CodeQL／branch protection）：
       需 GitHub Pro 或公開 repo。**本機單人階段先不付費**（2026-08-30 裁決），跟 Sentry／staging／CD
       同一批再決定；在那之前 CI 綠不擋合併，靠人工
+
+## 需批准（金流路徑）：核准的到底是「上限」還是「當時那個數字」——T2 動工前要答
+
+`_tree_signature`（`app/schedule/routes.py:213-224`）把每個節點的 `daily_amount` 算進 `content_hash`，
+所以預算一動，已簽過的核准就失效。**今天咬不到人**——repo 裡沒有任何程式會自己改 `daily_amount`
+（grep 零命中），所以架構圖說它「現在就壞」是未來式。但 ADR 0050 的表清單裡有 `campaign_period_budget_version`
+帶 `change_type = auto_decrease`：那張票一落地，系統就會自己調預算，這條當天生效。
+
+要改的是核准的語意（`approval` 加 `max_daily_amount`，核准的是上限而不是當下的數字），
+**那等於修改 ADR 0040 那道錢煞車**，是金流路徑：先提計畫、等批准、寫自己的 ADR，不併進 T2 順手做。
 
 ## 需批准（金流路徑）：核准超支的「過了幾天」把 UTC 跟組織時區混著減
 
@@ -109,6 +141,15 @@ Dependabot #1（`nanoid`，修補版 3.3.18）：**`saas` 這邊已經是 3.3.18
       2026-08-31 裁決留規範那份；已超標檔已改棘輪，新檔還是被行數逼拆。要不要收掉是你的決定
 - [ ] `meta-format-specs.md:52-53` 的 `script`／`hook_pool` 也掛著「無字數預算」（同一次實跑佔 18.1%／7.3%）。
       ADR 0047 只處理圖片提示詞那一項，這兩項還沒判——要不要一起收，跟 T1b 同一批決定
+- [ ] T1 收尾時記下、不擋合併的四條（票已刪，留在這裡）：`creative.py:77` 的 `all([])` 是 True，
+      所以 `value: []` 與 `value: ["", ""]` 會過關、畫面出現空欄位；七個維度名住三個地方
+      （`COORDINATE_KEYS`、TS 介面、前端中文標籤）沒有同步閘門；
+      `test_creative_task_gets_methodology` 斷言方法論檔的行文，上游改標題就無故變紅
+      （改斷言 `【方法論：creative-matrix.md】` 這個穩定標記就不脆）；
+      `ad_creative.md` 精簡時掉了一句實質指示「誠實優先於好看，看不準就直說看不準」，要不要補回來待裁
+- [ ] `assets` bucket 沒設 `file_size_limit`（`supabase/migrations/20260830000002_core_storage_assets_bucket.sql`
+      的 insert 只給 id／name／public）。**上傳端已經擋兩道 50MB**（`app/brand_web/routes_library.py:57`／`:79`／`:273`），
+      所以這是第二道防線不是沒有防線——架構圖說「上傳無大小上限」是錯的。順手補一行
 - [ ] `frontend/src/components/layout/FluidCard.tsx` 現在只剩 Storybook 在用。要留當設計素材還是刪，
       下一輪順手決定
 - [ ] `frontend/src/lib/auth.ts` 的 depcruise 註解已改成「規則還沒建」並指向 07-1——

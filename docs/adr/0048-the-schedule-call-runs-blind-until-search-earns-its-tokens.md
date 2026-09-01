@@ -1,6 +1,6 @@
 ---
 id: 0048
-decision: schedule_plan runs with no web search; the mechanism stays, the call site is off until search returns visible sources and stops dumping whole pages into the prompt.
+decision: schedule_plan runs with no web search until search returns visible sources instead of whole dumped pages.
 applies-to: [app/schedule/jobs.py, app/departments/ads/schedule.md]
 supersedes: none
 status: in-force

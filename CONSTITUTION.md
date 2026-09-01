@@ -14,4 +14,4 @@
 8. **The manual path is always first class.** Automation is addition, never replacement.
 9. **Money**: the system spends nothing without the user's press. It may save money on its own, and must be able to undo it.
 10. **Not in v1**: image generation, video files, landing pages, the agency client tier, any platform but Meta — each already has its seat in the schema, per rule 3.
-11. Board `BOARD.md` · vocabulary `CONTEXT.md` · decisions `docs/adr/` · tickets `docs/issues/<slug>/` (gitignored). Architecture of record: the ad-loop diagram — the constitution says *what*, the diagram says *how*.
+11. Board `BOARD.md` · vocabulary `CONTEXT.md` · decisions `docs/adr/` · module contracts `docs/contracts/` · tickets `docs/issues/<slug>/` (gitignored). The constitution says *what*; the *how* is ADR 0050 (data model of record) and `docs/contracts/schedule.md`. The published diagram <https://claude.ai/code/artifact/534811bd-7078-424c-b839-7493b2c73b25> is the readable overview only — where it and ADR 0050 differ, the ADR wins.
