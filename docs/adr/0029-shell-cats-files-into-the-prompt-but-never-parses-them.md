@@ -1,3 +1,11 @@
+---
+id: 0029
+decision: The shell pastes whole .md files into the prompt verbatim and never parses them.
+applies-to: [app/departments/, app/methodology/, app/llm/context_compiler.py]
+supersedes: none
+status: in-force
+---
+
 # The shell cats files into the prompt, but never parses them
 
 _Status: amended by ADR 0033. The rule — paste whole files verbatim, never parse them — still governs department task and methodology `.md` files. Brand data reaches the prompt through `app/llm/context_compiler.py` instead of a workspace folder, which no longer exists._

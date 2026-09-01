@@ -1,3 +1,11 @@
+---
+id: 0001
+decision: Trim methodology files in place; no progressive disclosure — the model has no tools to follow a pointer with.
+applies-to: [app/methodology/, app/llm/methodology.py]
+supersedes: none
+status: in-force
+---
+
 # 方法論檔就地精簡，不採用 progressive disclosure
 
 Anthropic 官方 Skill 撰寫最佳實務主打 progressive disclosure——主檔只留指路標，明細放旁邊檔案，模型需要時自己去讀，因為「reference files don't consume context tokens until actually read」。本專案**刻意不採用**：`app/llm/gateway.py` 是單次 Messages API 呼叫，沒有給模型任何工具，模型無法自己讀檔，指路標會指到一個它到不了的地方。

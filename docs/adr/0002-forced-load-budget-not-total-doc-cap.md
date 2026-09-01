@@ -1,3 +1,11 @@
+---
+id: 0002
+decision: Cap the forced-load budget (CLAUDE.md and every .md it names), not the total .md line count on disk.
+applies-to: [CLAUDE.md, docs/]
+supersedes: none
+status: in-force
+---
+
 # 文件膨脹只卡「強制載入預算」，不卡 .md 總量
 
 2026-08-04 整個 `docs/` 因為膨脹到無法維護而被清空重來。事後檢討：拖垮專案的**不是文件存在**，而是 `AGENTS.md` 的權威順序表逼每個 session 都得讀它們。Anthropic 官方明講「No context penalty for large files：reference files don't consume context tokens until actually read」——沒被讀的檔案是零成本。

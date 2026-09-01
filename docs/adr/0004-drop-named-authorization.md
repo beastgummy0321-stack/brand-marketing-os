@@ -1,3 +1,11 @@
+---
+id: 0004
+decision: Drop the named-authorization step; keep the three one-click gates and auto-fill authorized_by.
+applies-to: [app/core/approval.py]
+supersedes: none
+status: superseded-by: 0027
+---
+
 # 取消「具名授權」手續，關卡保留一鍵確認
 
 _Status: stale — its premise (single-user desktop) was overturned by ADR 0027 and CLAUDE.md #1. See ADR 0030._

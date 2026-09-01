@@ -1,3 +1,11 @@
+---
+id: 0039
+decision: The procrastinate worker is an asyncio task inside the uvicorn process, until a second machine exists.
+applies-to: [app/main.py, app/background/]
+supersedes: none
+status: in-force
+---
+
 # The worker rides inside the web process, until a second machine exists
 
 Ticket 05 needed a daily Meta spend pull that runs unattended. Procrastinate was already

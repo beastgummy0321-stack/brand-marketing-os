@@ -1,3 +1,11 @@
+---
+id: 0013
+decision: The settings hub reuses the rule_cards mechanism, and every threshold and credential is per brand, not global.
+applies-to: [app/core/rule_cards.py, app/brand_web/routes_brand_settings.py]
+supersedes: none
+status: in-force
+---
+
 # 設定中心：重用既有 rule_cards 機制，全面改成分品牌，不做成獨立新架構
 
 G14（2026-08-10 grill，從 G5 延伸出的新模組）。查證現況：系統裡已有 `/settings`（全域，

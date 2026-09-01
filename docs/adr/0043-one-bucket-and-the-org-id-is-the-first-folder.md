@@ -1,3 +1,11 @@
+---
+id: 0043
+decision: Uploaded files live in one private assets bucket; the org id is the first path segment of the object key.
+applies-to: [app/storage/]
+supersedes: none
+status: in-force
+---
+
 # One bucket, and the org id is the first folder
 
 Slice ⑥ ticket 06-1, 2026-08-30. **Supersedes ADR 0027 decision 7** ("素材檔上傳進系統（Storage，

@@ -1,3 +1,11 @@
+---
+id: 0028
+decision: A department is a folder of prompt .md files, not a Python package; adding one changes no code.
+applies-to: [app/departments/]
+supersedes: none
+status: in-force
+---
+
 # Departments are folders of prompts, not code
 
 Terminology first, because this ADR nearly stole a word that was already taken. This repo's

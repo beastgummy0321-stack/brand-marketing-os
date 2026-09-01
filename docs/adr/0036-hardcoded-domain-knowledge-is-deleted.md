@@ -1,3 +1,11 @@
+---
+id: 0036
+decision: Delete hardcoded domain knowledge; the agent looks it up in the prompt and the user vets the result.
+applies-to: [app/brand_intelligence/, app/dashboard/, app/departments/]
+supersedes: none
+status: in-force
+---
+
 # Hardcoded domain knowledge is deleted; the agent looks it up and the user vets it
 
 Three bodies of domain knowledge are written into this codebase as Python. All three are

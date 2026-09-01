@@ -1,3 +1,11 @@
+---
+id: 0033
+decision: There is no workspace folder: brand inputs live in Postgres and context_compiler composes the prompt.
+applies-to: [app/llm/context_compiler.py]
+supersedes: none
+status: in-force
+---
+
 # There is no workspace folder
 
 Every version of this plan until now had a `workspace/<brand>/` folder holding `brand.md`,

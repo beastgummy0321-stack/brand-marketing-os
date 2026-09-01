@@ -1,3 +1,11 @@
+---
+id: 0009
+decision: Four brand switches decide which methodology files load; a persona only pre-fills them, never reaching the prompt.
+applies-to: [app/methodology/, app/llm/methodology.py, app/brand_intelligence/repository.py]
+supersedes: none
+status: in-force
+---
+
 # 方法論不預設使用者身分：人設只填預設值，開關才是機制
 
 舊規則：`app/methodology/` 六個檔從第一行就寫死使用者身分——`ads.md` 開頭宣告「只收 Meta」、

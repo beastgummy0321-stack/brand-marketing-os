@@ -1,3 +1,11 @@
+---
+id: 0038
+decision: Procrastinate's tables live in their own Postgres schema and must never gain an org_id column.
+applies-to: [supabase/migrations/, app/background/, app/tests/test_org_isolation_all_tables.py]
+supersedes: none
+status: in-force
+---
+
 # The queue lives in its own schema, because it is not in the data model
 
 Procrastinate's four tables — `procrastinate_workers`, `procrastinate_jobs`,

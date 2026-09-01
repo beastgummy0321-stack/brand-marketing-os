@@ -1,3 +1,11 @@
+---
+id: 0032
+decision: The agent CLI is one more Provider behind complete(); gateway.run_task stays the only LLM entry point.
+applies-to: [app/llm/providers.py, app/llm/gateway.py]
+supersedes: none
+status: in-force
+---
+
 # The agent CLI is a provider, and it returns text
 
 `HANDOFF-shell-shell.md` planned a new seam, `run_task(workspace, task) -> result`, that would

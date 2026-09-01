@@ -1,3 +1,11 @@
+---
+id: 0031
+decision: Run the agent CLI isolated from the developer's own config, so no local persona leaks into brand prompts.
+applies-to: [app/llm/providers.py]
+supersedes: none
+status: in-force
+---
+
 # Agent runs are isolated from the developer's own config
 
 `claude -p` loads the machine's personal agent configuration into every run. Measured on

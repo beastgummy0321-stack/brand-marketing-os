@@ -1,3 +1,11 @@
+---
+id: 0005
+decision: Web search is an opt-in tools argument on complete(), off by default and enabled per call site.
+applies-to: [app/llm/providers.py]
+supersedes: none
+status: in-force
+---
+
 # 開通 LLM 網路搜尋（Anthropic web_search 伺服器端工具）
 
 _Status: partially retired — the mechanism survives, both call sites were deleted with `app/ads/`. See ADR 0030._

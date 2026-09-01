@@ -1,3 +1,11 @@
+---
+id: 0016
+decision: The five QA items are a pre-launch reminder with self-confirmation; they never block the launch button.
+applies-to: [app/ads/qa_autocheck.py]
+supersedes: none
+status: superseded-by: 0030
+---
+
 # QA 五項統一做成上線前提醒＋自行確認，不做擋人硬性關卡
 
 _Status: retired by ADR 0030 — the code it governed was deleted._

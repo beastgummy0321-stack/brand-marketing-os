@@ -1,3 +1,11 @@
+---
+id: 0046
+decision: The 2026-09-01 ads-loop rebuild retires eighteen ADRs into docs/adr/retired/, out of the read path.
+applies-to: [docs/adr/]
+supersedes: none
+status: in-force
+---
+
 # The 2026-09-01 rebuild retires eighteen ADRs
 
 The ads-loop was re-interviewed from scratch and stress-tested nine times. The data model changed

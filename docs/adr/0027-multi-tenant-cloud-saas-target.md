@@ -1,3 +1,11 @@
+---
+id: 0027
+decision: The target is a multi-tenant cloud SaaS on Supabase: org to user to brand, and every table carries org_id.
+applies-to: [app/, supabase/migrations/, frontend/]
+supersedes: 0004
+status: in-force
+---
+
 # 0027 目標＝多租戶雲端 SaaS；單機單人不再是設計前提（2026-08-26 定案）
 
 使用者發起，第三方視角盤點（8 條 Haiku 掃描＋12 條 Sonnet 覆核）後 grill 五輪 35 題逐條定案。

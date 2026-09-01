@@ -1,3 +1,11 @@
+---
+id: 0042
+decision: Any generation the user waits for is deferred to the queue; the request validates, enqueues and returns.
+applies-to: [app/schedule/jobs.py, app/background/]
+supersedes: none
+status: in-force
+---
+
 # Work the user waits for runs on the queue, not in the request
 
 Ticket 05-1, 2026-08-30. The three schedule generations — plan, campaign tree, ad creative — ran

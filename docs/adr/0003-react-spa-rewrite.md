@@ -1,3 +1,11 @@
+---
+id: 0003
+decision: The frontend is React, rewritten whole; do not extend the Jinja server-rendered pages.
+applies-to: [frontend/]
+supersedes: none
+status: in-force
+---
+
 # 前端整站改用 React 重寫，放棄升級既有 Jinja 架構
 
 現況盤點（2026-08-05）確認：前端是純 Jinja2 伺服器端渲染，零 JavaScript、零圖表庫，CLAUDE.md 寫的 HTMX 實際上從未導入。重設計目標是圖表密集的駕駛艙（KPI 卡、趨勢圖、pacing 警示、常駐指南卡），曾評估的替代方案是「保留 Jinja＋補 ECharts＋HTMX 局部更新」——工程較小、風險較低，但使用者明確選擇 React 整站重寫，理由：這是決定產品最終走向的介面，不願意停在互動性打折的中間態。

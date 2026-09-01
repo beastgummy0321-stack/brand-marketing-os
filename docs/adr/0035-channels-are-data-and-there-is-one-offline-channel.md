@@ -1,3 +1,11 @@
+---
+id: 0035
+decision: A sales channel is a row plus an importer, not a table, a pair of endpoints and a screen of its own.
+applies-to: [app/orders/]
+supersedes: none
+status: in-force
+---
+
 # Channels are data, and there is one offline channel
 
 A sales channel is a row, not a module. Adding a channel adds an importer; it does not add a

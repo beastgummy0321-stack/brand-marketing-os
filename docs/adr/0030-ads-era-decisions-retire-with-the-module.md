@@ -1,3 +1,11 @@
+---
+id: 0030
+decision: ADRs that governed deleted ads code are retired, not deleted — the record is the vaccine.
+applies-to: [docs/adr/]
+supersedes: 0016
+status: in-force
+---
+
 # Ads-era decisions retire with the module
 
 `app/ads/` (21,595 lines) and its 81 test files are deleted and replaced by a prompt shell

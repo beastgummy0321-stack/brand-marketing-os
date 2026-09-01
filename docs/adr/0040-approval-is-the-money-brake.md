@@ -1,3 +1,11 @@
+---
+id: 0040
+decision: Approval is the money brake: it is recorded in its own table at the gate, not yet wired to any spending.
+applies-to: [app/core/approval.py, app/schedule/routes.py]
+supersedes: none
+status: in-force
+---
+
 # Approval is the money brake, recorded now, not connected to a wheel yet
 
 Ticket: `.scratch/approval-slice/issues/01-approval-is-the-money-brake.md`. New table

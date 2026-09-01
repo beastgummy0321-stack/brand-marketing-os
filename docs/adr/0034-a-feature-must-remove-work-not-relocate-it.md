@@ -1,3 +1,11 @@
+---
+id: 0034
+decision: A feature must remove a user action, not relocate it; if the after-list is not shorter, it is not built.
+applies-to: [CONSTITUTION.md, BOARD.md]
+supersedes: none
+status: in-force
+---
+
 # A feature must remove work, not relocate it
 
 Every feature answers one question before it is built: **which action does the user no longer

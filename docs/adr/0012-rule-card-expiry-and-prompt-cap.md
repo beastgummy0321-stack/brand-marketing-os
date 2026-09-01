@@ -1,3 +1,11 @@
+---
+id: 0012
+decision: Unconfirmed rules expire out of the prompt and only a capped set enters it; the overflow is shown, not hidden.
+applies-to: [app/llm/context_compiler.py, app/core/rule_cards.py]
+supersedes: none
+status: in-force
+---
+
 # 品牌智庫規則加有效期與 prompt 上限，不再無限累積
 
 _Status: **live — ADR 0030's retirement of this ADR was an error, corrected 2026-08-29.** None

@@ -1,3 +1,11 @@
+---
+id: 0041
+decision: The test gate counts test lines, not a test-to-production ratio that deleting dead code turns red.
+applies-to: [app/tests/, docs/tech-debt.md]
+supersedes: none
+status: in-force
+---
+
 # The test gate counts lines, not a ratio
 
 A gate whose only way to pass is to loosen itself is not a gate.
