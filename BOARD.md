@@ -44,8 +44,6 @@
 - [ ] **T5（route C）** 成效回流接座標 ＋ 診斷（程式先壓縮、三個 agent、程式排序取前 5）。**閉環在這裡合攏**
 - [ ] **T6（route B/C）** 四象限泡泡看板 ＋ 建議落 `decision`（補欄位，不新開表）
 
-- [ ] **pyright 12 個錯是既有的**（`app/identity/jwt.py` 10、`app/background/__init__.py` 2），閘門本來就紅：要嘛修、要嘛在票裡寫明豁免。壓測兩條回報**查證後是假的**：`app/meta` 有註冊 cleanup（`repository.py:526`，14 張 brand 子表全涵蓋、`test_brand_delete` 全綠）；`storage_key` NOT NULL 不是活 bug 是 T1b 的門
-
 ## 仍然成立的事實（不是票，是量到的東西）
 
 - 里程碑第一段 2026-08-29 用真帳號整條走通過。**這輪踩在它上面，不是取代它。**

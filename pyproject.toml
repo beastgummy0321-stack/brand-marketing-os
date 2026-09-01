@@ -153,6 +153,12 @@ typeCheckingMode = "basic"
 # and flags a false error that doesn't reproduce on this repo's actual (Windows)
 # deployment target for that code path.
 pythonPlatform = "Windows"
+# pin the project venv so every caller (bare `pyright`, editor LSP, CI) analyses the
+# same interpreter. Without this, pyright falls back to the first `python` on PATH —
+# on a dev box that is the global 3.12, which lacks procrastinate and resolves `jwt`
+# to app/identity/jwt.py itself, producing 12 errors that do not exist.
+venvPath = "."
+venv = ".venv"
 ignore = [
     # frozen 2026-08-28, shrink only (ticket 02-7): files with pre-existing
     # pyright errors at the time Pyright was introduced. New files must pass
