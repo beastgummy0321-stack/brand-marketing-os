@@ -111,7 +111,23 @@ Two decisions were found while writing it. Neither is filled in here.
    That changes the meaning of the money brake (ADR 0040) and touches the money path, so it needs
    the user's approval and its own ADR before T2 writes it. It is also the other half of the
    `_tree_signature` question above.
-2. **Rejected angles as a post-generation exclusion list, instead of `rule(severity='hard')`.**
-   ADR 0012 is in force over `app/llm/context_compiler.py` and `app/core/rule_cards.py`, and hard
-   rules bypass its prompt cap. Whether `feedback` replaces that path for angles, or sits beside
-   it, is a boundary question for T1b station (1), not a ticket detail.
+2. ~~**Rejected angles as a post-generation exclusion list, instead of `rule(severity='hard')`.**~~
+   **Settled 2026-09-01 at T1b station (1), by the user.** A rejected angle is a `feedback` row
+   with `scope='coordinate'`, and the picker skips it **before the prompt is built** — so a
+   rejection costs nothing in prompt budget and lifting it is one column (`lifted_at`), not a
+   rewritten rule. `feedback` does not sit beside ADR 0012's path; it replaces it for angles, and
+   ADR 0012 keeps brand rules and gains nothing. `app/llm/context_compiler.py` and
+   `app/core/rule_cards.py` were not touched by T1b.
+
+   The two coordinate switches are not one mechanism wearing two names:
+   `brand_coordinate.disabled_at` is the screen switch ("never this angle for this brand"),
+   `feedback` is the loop judgement ("not this one, because …") and is what T5 counts. The picker
+   skips a coordinate when either fires.
+
+   Rejected, and recorded so it is not re-proposed: writing each rejection as a
+   `rule(severity='hard')`. Hard rules bypass ADR 0012's twenty-rule cap, so every rejection would
+   permanently consume prompt space with no ceiling — 35 angles per brand is an unbounded list;
+   `rule` belongs to `brand_intelligence`, so `app/schedule/` would be writing another module's
+   table (ADR 0049 rule 3); and a sentence of prose cannot be grouped or counted when performance
+   comes back in T5. Also rejected: writing both, which makes one decision have two sources of
+   truth and keeps the growth problem intact.
