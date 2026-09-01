@@ -29,8 +29,7 @@
 
 ### 新票單（2026-09-01，垂直切，循序做不平行）
 
-- [ ] **T1a（ADR，先於 T1b）** 排程只給視覺方向，不產圖片提示詞（模組邊界）。草稿＋依據 `docs/issues/T1a-visual-direction/`
-- [ ] **T1b（route C）** `brand_coordinate` ＋ 35 條種子（`creative-matrix.md:12-46`，類別在第 2 欄，
+- [ ] **T1b（route C，依 ADR 0047：排程只給視覺方向，不產圖片提示詞）** `brand_coordinate` ＋ 35 條種子（`creative-matrix.md:12-46`，類別在第 2 欄，
       沒有 key 欄要自己發，另 4 欄別丟）＋新品牌誰種＋新增停用畫面＋三張 `creative_*` 表（座標凍結複寫）。
       **`schedule` 要不要成為 migration 擁有模組＝模組邊界決定，動工前先升級**
 - [ ] **T2（route C）** 檔期 ＋ `ad_set_period_membership`（帶 `allocation_weight`，**絕不加
@@ -108,6 +107,8 @@ Dependabot #1（`nanoid`，修補版 3.3.18）：**`saas` 這邊已經是 3.3.18
       所以 `enqueue()` 那三個沒有生產呼叫端的參數也還留著
 - [ ] `FILE_LINE_CAP = 800` 仍用行數下令拆檔，工作流規範卻寫「line count never orders a split」。
       2026-08-31 裁決留規範那份；已超標檔已改棘輪，新檔還是被行數逼拆。要不要收掉是你的決定
+- [ ] `meta-format-specs.md:52-53` 的 `script`／`hook_pool` 也掛著「無字數預算」（同一次實跑佔 18.1%／7.3%）。
+      ADR 0047 只處理圖片提示詞那一項，這兩項還沒判——要不要一起收，跟 T1b 同一批決定
 - [ ] `frontend/src/components/layout/FluidCard.tsx` 現在只剩 Storybook 在用。要留當設計素材還是刪，
       下一輪順手決定
 - [ ] `frontend/src/lib/auth.ts` 的 depcruise 註解已改成「規則還沒建」並指向 07-1——
