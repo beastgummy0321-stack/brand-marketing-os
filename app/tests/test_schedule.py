@@ -36,6 +36,7 @@ from app.identity import repository as identity_repo
 from app.llm import providers
 from app.meta import graph as meta_graph
 from app.meta import repository as meta_repo
+from app.schedule import creative as creative_mod
 from app.schedule import jobs as schedule_jobs
 from app.schedule import plan as plan_mod
 from app.schedule import routes as schedule_routes
@@ -124,6 +125,12 @@ def _creative_fenced(creatives: list) -> str:
 def _one_creative(node: str, **overrides) -> dict:
     creative = {
         "node": node,
+        # 票 T1 站③收尾：預設帶上座標，讓 CreativeApiContractTest 對座標不是零斷言——
+        # 之前這裡沒有這個鍵，API 契約測試全走「沒有這個鍵 → 補七個 null」那條路。
+        "coordinates": {
+            "angle": "測試角度", "audience": None, "pain": None, "hook": None,
+            "proof": None, "offer": None, "format": None,
+        },
         "fields": [
             {"label": "主要文字", "value": "測試內容"},
             {"label": "圖片提示詞", "value": "測試提示詞"},
@@ -240,6 +247,77 @@ class BuildTreeTest(unittest.TestCase):
         body, failure = tree_mod.build_tree(_tree_fenced(nodes), daily_budget=1000)
         self.assertEqual(body, {})
         self.assertTrue(failure)
+
+
+# -- 2c. 票 T1（docs/issues/T1-creative-fingerprint/ticket.md）：build_creative() 純函數 ---
+
+class BuildCreativeTest(unittest.TestCase):
+    """decision 3 收窄（多認得一個手足鍵 `coordinates`）、decision 4 不動（node 逐一對上
+    樹）、`fields.value` 收 `string | string[]`——直接測 `creative.build_creative()`，
+    不必經過 API／worker。"""
+
+    def test_coordinates_survive_the_shell(self):
+        """票 T1 唯一要問的問題：代理回覆裡的 `coordinates.angle` 撐得過外殼，原封不動地
+        出現在回傳值裡。"""
+        creative = _one_creative("單元1", coordinates={
+            "angle": "疑慮 Q&A 連發", "audience": None, "pain": None, "hook": None,
+            "proof": None, "offer": None, "format": None,
+        })
+        ads, failure = creative_mod.build_creative(_creative_fenced([creative]), ["單元1"])
+        self.assertIsNone(failure)
+        self.assertEqual(ads[0]["coordinates"]["angle"], "疑慮 Q&A 連發")
+
+    def test_bad_coordinate_values_fall_back_to_null_and_copy_still_ships(self):
+        """票 T1 站③收尾第 2 條：座標是診斷用中繼資料不是交付物。個別維度給 `""`／數字，
+        或整個 `coordinates` 給錯形狀，都退回 null，文案照樣交付——不整批失敗（那次生成
+        的錢已經花掉了，整批作廢等於白燒）。"""
+        creative = _one_creative(
+            "單元1", coordinates={"angle": "", "pain": 3, "hook": "真的鉤子"}
+        )
+        ads, failure = creative_mod.build_creative(_creative_fenced([creative]), ["單元1"])
+        self.assertIsNone(failure)
+        self.assertIsNone(ads[0]["coordinates"]["angle"])
+        self.assertIsNone(ads[0]["coordinates"]["pain"])
+        self.assertEqual(ads[0]["coordinates"]["hook"], "真的鉤子")
+        self.assertEqual(ads[0]["fields"][0]["value"], ["測試內容"])
+
+        # 整個 coordinates 給錯形狀（list）也一樣：七維全 null，文案照交。
+        creative = _one_creative("單元1", coordinates=["不是 dict"])
+        ads, failure = creative_mod.build_creative(_creative_fenced([creative]), ["單元1"])
+        self.assertIsNone(failure)
+        self.assertEqual(
+            ads[0]["coordinates"], {key: None for key in creative_mod.COORDINATE_KEYS}
+        )
+        self.assertEqual(ads[0]["fields"][0]["value"], ["測試內容"])
+
+    def test_decision_4_still_holds(self):
+        # node 對不上樹裡任何一個最深層節點，整批失敗——加 coordinates 沒有放寬這一條。
+        ads, failure = creative_mod.build_creative(
+            _creative_fenced([_one_creative("不存在的節點")]), ["單元1"]
+        )
+        self.assertEqual(ads, [])
+        self.assertEqual(failure, creative_mod.NODE_MISMATCH_MESSAGE)
+
+    def test_field_value_accepts_list_and_string(self):
+        creative = _one_creative("單元1", fields=[
+            {"label": "主要文字", "value": "單一字串"},
+            {"label": "標題", "value": ["變體一", "變體二"]},
+        ])
+        ads, failure = creative_mod.build_creative(_creative_fenced([creative]), ["單元1"])
+        self.assertIsNone(failure)
+        self.assertEqual(ads[0]["fields"], [
+            {"label": "主要文字", "value": ["單一字串"]},
+            {"label": "標題", "value": ["變體一", "變體二"]},
+        ])
+
+    def test_unknown_coordinate_key_is_dropped(self):
+        creative = _one_creative(
+            "單元1", coordinates={"angle": "測試角度", "not_a_real_key": "不該出現"}
+        )
+        ads, failure = creative_mod.build_creative(_creative_fenced([creative]), ["單元1"])
+        self.assertIsNone(failure)
+        self.assertNotIn("not_a_real_key", ads[0]["coordinates"])
+        self.assertEqual(set(ads[0]["coordinates"]), set(creative_mod.COORDINATE_KEYS))
 
 
 # -- 2d. 票 09 settled 段第 8 點：活動樹元件不得寫死通路詞彙 ---------------------------
@@ -950,18 +1028,40 @@ class CreativeApiContractTest(_ScheduleApiTestBase):
         self.assertIsNone(creative["failure"])
         # 樹的文件順序（單元1、單元2），不是代理回覆的順序（單元2、單元1）。
         self.assertEqual([ad["node"] for ad in creative["ads"]], self._LEAF_NODE_NAMES)
+        # 票 T1：`value` 一律正規化成陣列——`_one_creative()` 給的是單一字串，撐過外殼之後
+        # 變成單元素陣列（既有的單字串回覆照樣能用，只是形狀換了）。
         self.assertEqual(
             creative["ads"][0]["fields"],
             [
-                {"label": "主要文字", "value": "測試內容"},
-                {"label": "圖片提示詞", "value": "測試提示詞"},
+                {"label": "主要文字", "value": ["測試內容"]},
+                {"label": "圖片提示詞", "value": ["測試提示詞"]},
             ],
         )
+        # 票 T1 站③收尾：座標撐得過 API 層，不只撐得過 build_creative() 這支純函式。
+        self.assertEqual(creative["ads"][0]["coordinates"]["angle"], "測試角度")
 
         # ADR 0029：部門任務檔原樣貼進 prompt——用檔案裡的識別行證明真的貼進去了。
         self.assertEqual(len(fake.calls), 1)
         prompt_text = fake.calls[0]["messages"][0]["content"]
         self.assertIn("AD-CREATIVE-TASK-V1", prompt_text)
+
+    def test_creative_task_gets_methodology(self):
+        """票 T1 第 4 節：`jobs.schedule_creative()` 過去沒有接方法論，代理看不到 35 個
+        創意角度、也看不到 Meta 版位字數規格。紅法：把 `app/methodology/README.md` 的
+        「廣告內容生成」那一列拿掉，`methodology.compile()` 就找不到這兩份檔案，prompt
+        裡不會再出現這兩句斷言字串。"""
+        self._succeed_plan_and_tree()
+        fake = _fake(_creative_fenced([_one_creative(name) for name in self._LEAF_NODE_NAMES]))
+        schedule_jobs.PROVIDER = fake
+
+        resp = self._generate()
+        self.assertEqual(resp.status_code, 200, resp.text)
+        self._run_worker()
+
+        self.assertEqual(len(fake.calls), 1)
+        prompt_text = fake.calls[0]["messages"][0]["content"]
+        self.assertIn("創意矩陣（35 個角度）", prompt_text)  # creative-matrix.md
+        self.assertIn("5 個，125 字", prompt_text)  # meta-format-specs.md
 
     def test_get_after_post_returns_identical_creative(self):
         self._succeed_plan_and_tree()

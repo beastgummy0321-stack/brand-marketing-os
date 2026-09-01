@@ -76,6 +76,10 @@ CREATIVE_TASK_TYPE = "schedule_creative"
 # 平台知識（帳戶結構、AB 測試分流）跟出方案是同一批，沒有真的用到才新增專屬列（維護規則
 # 「只按消費拉動萃取」）。
 METHODOLOGY_TASK_LABELS = ["檔期計畫生成"]
+# 票 T1 站③收尾：曾經跟上面共用一張清單餵給三支 job，副作用是計畫／活動樹的方法論區塊
+# 平白多讀到創意矩陣、Meta 版位格式規格這兩份不相干的檔案（21,432 → 38,074 字，＋78%）。
+# 改成 schedule_creative 專屬一張清單，計畫／活動樹維持只吃「檔期計畫生成」。
+CREATIVE_METHODOLOGY_TASK_LABELS = ["廣告內容生成"]
 DEPARTMENT_FILE = APP_DIR / "departments" / "ads" / "schedule.md"
 TREE_DEPARTMENT_FILE = APP_DIR / "departments" / "ads" / "campaign_tree.md"
 # 票 01 frozen decision 2：這是創意部門的第一個任務檔，`app/departments/` 底下新增一個

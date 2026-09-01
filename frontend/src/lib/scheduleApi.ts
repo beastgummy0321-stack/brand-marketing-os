@@ -108,14 +108,29 @@ export interface CampaignTreeResult {
 
 /** 票 01：活動樹每個最深層節點各配一份內容——`label`／`value` 都是後端部門任務檔
  * （`app/departments/creative/ad_creative.md`）的決定，這裡的型別一樣不知道任何具體欄位
- * 叫什麼名字，跟 `CampaignTreeField` 同一個道理。 */
+ * 叫什麼名字，跟 `CampaignTreeField` 同一個道理。票 T1：`value` 收 `string | string[]`，
+ * 後端一律正規化成陣列（`app/schedule/creative.py` `_valid_creative_fields`），這裡不再是
+ * 單一字串。 */
 export interface CreativeField {
   label: string;
-  value: string;
+  value: string[];
+}
+
+/** 票 T1：`CONSTITUTION.md` 規則 5 簽下的七個維度名稱——這則內容產出當下選定的座標，值是
+ * 非空字串或 `null`（vocabulary 驗證留給 T1b，這裡的型別不知道每個值合不合法）。 */
+export interface CreativeCoordinates {
+  audience: string | null;
+  pain: string | null;
+  angle: string | null;
+  hook: string | null;
+  proof: string | null;
+  offer: string | null;
+  format: string | null;
 }
 
 export interface CreativeAd {
   node: string;
+  coordinates: CreativeCoordinates;
   fields: CreativeField[];
   warnings: string[];
 }

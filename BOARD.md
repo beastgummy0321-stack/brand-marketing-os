@@ -29,9 +29,7 @@
 
 ### 新票單（2026-09-01，垂直切，循序做不平行）
 
-- [>] **T1（route C）** 外殼讓座標穿過去（tracer，**不建表不寫 migration**）：decision 3 收窄、
-      decision 4 不動、`fields.value` 收 5 變體、creative task 接方法論、`CampaignTree.tsx` 顯示座標。
-      票在 `docs/issues/T1-creative-fingerprint/`（含首版被打回的六點）。**站②**
+- [ ] **T1a（ADR，先於 T1b）** 排程只給視覺方向，不產圖片提示詞（模組邊界）。草稿＋依據 `docs/issues/T1a-visual-direction/`
 - [ ] **T1b（route C）** `brand_coordinate` ＋ 35 條種子（`creative-matrix.md:12-46`，類別在第 2 欄，
       沒有 key 欄要自己發，另 4 欄別丟）＋新品牌誰種＋新增停用畫面＋三張 `creative_*` 表（座標凍結複寫）。
       **`schedule` 要不要成為 migration 擁有模組＝模組邊界決定，動工前先升級**

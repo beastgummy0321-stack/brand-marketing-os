@@ -35,6 +35,7 @@
 | 影片腳本生成 | `creative-matrix.md`、`copywriting.md` |
 | 成效判讀／下期草案 | `ab-testing.md`、`ads-core.md`、`ads-commerce.md`（需要：有商品） |
 | 期中檢查點 | `ab-testing.md`（禁判勝負節） |
+| 廣告內容生成 | `creative-matrix.md`、`meta-format-specs.md` |
 
 ## 平台中立值 → Meta 標準事件對照
 

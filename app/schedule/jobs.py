@@ -239,9 +239,17 @@ def schedule_creative(org_id: str, brand_id: str, tree_task_id: str) -> None:
             conn, brand_id, product_ids
         )
         department_text = routes.CREATIVE_DEPARTMENT_FILE.read_text(encoding="utf-8")
+        # 票 T1：跟 schedule_plan／schedule_tree 一樣接方法論——這支 job 過去沒有這一段，
+        # `creative-matrix.md`（35 個角度）與 `meta-format-specs.md`（5 個變體、字數上限）
+        # 都沒有真的貼進 prompt，代理只能自己亂猜。票 T1 站③收尾：改用自己專屬一張清單
+        # （見 routes.CREATIVE_METHODOLOGY_TASK_LABELS 的理由註解），不再跟計畫／活動樹共用。
+        methodology_result = methodology.compile(
+            conn, routes.CREATIVE_METHODOLOGY_TASK_LABELS, brand_id=brand_id
+        )
         params_text = _creative_params_text(tree)
         prompt = "\n\n".join(
-            section for section in (department_text, params_text, brand_context) if section
+            section for section in
+            (department_text, methodology_result.text, params_text, brand_context) if section
         )
 
         context = gateway.TaskContext(

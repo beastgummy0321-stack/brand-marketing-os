@@ -5,9 +5,22 @@ import type {
   CampaignTreeNode,
   CampaignTreeResult,
   CreativeAd,
+  CreativeCoordinates,
   CreativeResult,
   ScheduleApproval,
 } from "@/lib/scheduleApi";
+
+/** 票 T1：座標七個鍵的顯示順序與中文標籤——外殼不懂詞彙表裡的「值」合不合法，這裡只是
+ * 把 `CONSTITUTION.md` 規則 5 的七個英文鍵名翻成使用者看得懂的字，不是業務判斷。 */
+const COORDINATE_LABELS: [keyof CreativeCoordinates, string][] = [
+  ["audience", "受眾"],
+  ["pain", "痛點"],
+  ["angle", "角度"],
+  ["hook", "鉤子"],
+  ["proof", "證明"],
+  ["offer", "優惠"],
+  ["format", "格式"],
+];
 
 /** 票 09：把選定的方案展開成使用者接下來要打造的結構。這支元件不知道任何投放通路的
  * 詞彙——有幾層、每層叫什麼、扛預算的是哪一層，全部來自代理回覆的 `levels`／`share`，
@@ -196,6 +209,7 @@ function TreeNode({
 }) {
   const ad = node.children.length === 0 ? adsByNode.get(node.name) : undefined;
   const [warningsOpen, setWarningsOpen] = useState(false);
+  const [coordinatesOpen, setCoordinatesOpen] = useState(false);
   const levelLabel = levels[depth] ?? `第 ${depth + 1} 層`;
 
   return (
@@ -238,11 +252,37 @@ function TreeNode({
 
       {ad && (
         <div className="mt-2 flex flex-col gap-1.5 border-t border-dashed border-border pt-2">
+          <button
+            type="button"
+            onClick={() => setCoordinatesOpen((open) => !open)}
+            className="self-start rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground hover:bg-muted/70"
+          >
+            {coordinatesOpen ? "收起座標" : "這則內容打的座標"}
+          </button>
+          {coordinatesOpen && (
+            <dl className="flex flex-wrap gap-x-4 gap-y-0.5 text-xs text-muted-foreground">
+              {COORDINATE_LABELS.map(([key, label]) => (
+                <div key={key} className="flex gap-1">
+                  <dt>{label}：</dt>
+                  <dd className="text-foreground">{ad.coordinates[key] ?? "—"}</dd>
+                </div>
+              ))}
+            </dl>
+          )}
           {ad.fields.map((field, i) => (
-            <div key={i} className="flex items-center gap-2">
-              <span className="w-20 shrink-0 text-xs text-muted-foreground">{field.label}</span>
-              <span className="flex-1 text-sm text-foreground">{field.value}</span>
-              <CopyIconButton getText={() => field.value} ariaLabel={`複製${field.label}`} />
+            <div key={i} className="flex items-start gap-2">
+              <span className="w-20 shrink-0 pt-0.5 text-xs text-muted-foreground">{field.label}</span>
+              <div className="flex flex-1 flex-col gap-1">
+                {field.value.map((variant, j) => (
+                  <div key={j} className="flex items-center gap-2">
+                    <span className="flex-1 text-sm text-foreground">{variant}</span>
+                    <CopyIconButton
+                      getText={() => variant}
+                      ariaLabel={`複製${field.label}第${j + 1}個變體`}
+                    />
+                  </div>
+                ))}
+              </div>
             </div>
           ))}
           {ad.warnings.length > 0 && (
