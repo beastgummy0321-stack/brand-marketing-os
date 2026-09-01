@@ -1,5 +1,7 @@
 # 切片看板（只放未開始＋進行中；完成即刪行，歷史＝git log）
 
+> 憲法：[`CONSTITUTION.md`](CONSTITUTION.md)（廣告／排程模組，2026-09-01 簽署）
+
 排序＝執行順序。標「需批准」的票動工前先提計畫等批准；動到畫面先過畫面契約（草圖 → 後端 → 前端）。
 
 ## 里程碑
@@ -14,56 +16,45 @@
 那是品牌層圖庫，跟樹上哪一則廣告無關。**等使用者真的手動貼過一次圖進 Meta 之後再重判**
 （不做的理由：到今天為止一次都沒痛過）。
 
-## 廣告閉環：十條凍結決定
+## 廣告閉環（2026-09-01 重訂——舊的七張票全部作廢）
 
-目標：**排程模組能真的投一期、從數字學到東西、下一期因此不一樣**。
-不做：Meta 自動建置、內建生圖、Meta 以外的通路（使用者裁決）。
-每條的檔案證據在 `.scratch/adloop/GRILL.md`，規格書 `.scratch/adloop/SPEC.md`，票在
-`.scratch/adloop/issues/`。**grill、to-spec、to-tickets、兩輪審查都走完了，不要重跑；
-七張票已全部批准，不必再問一次。循序做不平行**（平行 worktree 是例外，agent 互等通知是最大時間黑洞）。
+依據只有兩份：`CONSTITUTION.md`（廣告／排程模組憲法）＋廣告閉環架構圖 11 節。
+2026-08-26～31 那輪的十條凍結決定與 S3／S4／S5／⑨ **全部作廢**——不是做錯，是這輪重新訪談
+加九份壓測之後資料模型換了（廣告屬通路、檔期是濾鏡、素材帶七維指紋、不得用現況欄位回答當時）。
+舊碼與舊決策留在 git：`v0.2-ads-last`、`v0.3-onboarding-read-last`、`.scratch/adloop/`。
 
-① 拉廣告組合層＋廣告層＋轉換數（**已做，S1**）
-② 「檔期」是實體，底下可以有多輪。**但「輪」不建表**——那是在第一輪跑完之前替第二輪建模；
-   輪次＝那個檔期的樹跑了第幾次，用算的，真的需要第二輪再加表
-③ 一輪＝調整單，舊節點不動、可以長新枝（重畫樹會讓綁定歸零、洗掉 Meta 自己的學習期）
-④ 分界線：程式管算術與搬運、LLM 管判斷（舊模組就是死在把判斷寫死）。**統計門檻不開新規則卡**
-   ——`app/methodology/ab-testing.md:73` 明文「不用自訂常數」，樣本速查表就在同一份檔案裡
-⑤ 多 agent 並行，數量由派工單決定；`campaign_tree.md:53` 那三條「篇幅上限」硬規則拿掉。
-   鎖的主體改成「工作項目」（ADR 0042 修訂，**已做**）
-⑥ 命令進 `rule`，觀察進 `learning_ledger`（**已做**）。ADR 0026 那套程式判斷不復活，
-   收斂與認贏家改由 LLM 讀
-⑦ 只要 JSON，思考交給 thinking 預算（`narrative` 從後端傳到前端，但前端從沒渲染過）
-⑧ 這一包只做閉環
-⑨ 接手既有品牌：讀歷史數字＋歷史廣告的文案與受眾。**2026-08-31 整包刪除、待重建**（裁決理由：
-   一顆按鈕全都讀不能選、看不到圖也看不到活動目標欄位、134 條裡約 40 條是方法論套話）。舊碼在
-   tag `v0.3-onboarding-read-last`，單檔撿回 `git show v0.3-onboarding-read-last:<path>`
-⑩ 期中檢查＝你按＋系統主動提醒「現在看得準了」（不排固定週期，worker 還住在網站行程裡）
+其中三條的內容被這輪吸收，不必重想：舊③「舊節點不動、可以長新枝，重畫樹會洗掉學習期」＝
+這輪的「贏家畢業、不插進既有廣告組合」；舊④「統計門檻不開新規則卡」＝財務線／統計線分離；
+舊②「檔期是實體、輪不建表」＝membership（輪次用算的）。
 
-## 待做
+### 新票單（2026-09-01，垂直切，循序做不平行）
 
-- [ ] **S3（schema／模組邊界）** 檔期：`schedule_period`＋`schedule_binding`（三層都能綁，
-      綁定從樹搬到檔期上，重畫樹不再歸零）＋品牌刪除連鎖＋`test_architecture_boundaries.py` 行數表
-      ＋核准改指檔期
-- [ ] **S4（模組邊界）** 派工單與並行生產：新的鎖主體、每節點一個 job、收攏用一句 count、
-      三條篇幅上限拿掉、提示詞只要 JSON（ADR 0042 修訂）。
-      **S2 量到、S4 要面對的**：鎖改對了，但 worker 的 `concurrency` 是 procrastinate 3.9.0 的預設值 1
-      （`app/background` 的 `run_worker_async()` 沒指定）——N 個工作項不會被 409 拒收，但仍是一個一個跑。
-      真帳號 24 個活動＝24 次代理呼叫排隊。要真的同時跑得調 `concurrency`，那是動佇列本身、
-      而且同時開 N 個代理＝同時花 N 份錢，**先量一次真實單次耗時再決定調到幾，不要憑感覺挑數字**
-- [ ] **S5（模組邊界）** 期中／期末判讀：接上那兩列方法論、拉取破洞要看得見、
-      結論讀回 `context_compiler`。**閉環在這裡合攏**，也是唯一一片非得有真實檔期才驗得了的
-- [ ] **重建「接手既有品牌」（⑨，S3～S5 之後）**：動工前先走 grill，至少要答出——要不要能挑活動、
-      要不要真的看得到圖與活動目標、方法論套話該不該算成一條結論、收攏該由誰做。
-      收攏那一版的原始素材（134 條收成 33 組、2 組互相矛盾）在 `.scratch/` 底下，過期即刪
-- [ ] `graph.fetch_page` 的 `timeout=10.0` **還沒量過**（S1 留下的，票規定先量再改）。
-      S2／S2b 已經拉過真帳號 ad 層多次沒撞到，但沒人記下實際耗時。真的不夠時，官方寫的下一步是
-      切更小的日期區間，不是加大逾時
-- [ ] 順手撿到、不必等規格書：`app/methodology/README.md` 的「成效判讀／下期草案」與
-      「期中檢查點」兩列**零個呼叫端**（`app/schedule/routes.py:78` 只掛了「檔期計畫生成」），
-      `providers.py:154` 的 `performance_reading` 標籤也空著。覆盤要的方法論早就寫好了
-- [ ] **摘要留存，不排票（⑧ 裁決）** 心智圖 C 診斷、D 市場／競品研究（Meta 廣告資料庫，
-      MCP 已有 `ads_library_search`）、E 客群研究、P 週報月報——閉環跑起來之後再判。
-      接口先留好：出方案時讀得到 `learning_ledger`，那一段就是它們日後接進來的位置
+- [>] **T1（route C）** 外殼讓座標穿過去（tracer，**不建表不寫 migration**）：decision 3 收窄、
+      decision 4 不動、`fields.value` 收 5 變體、creative task 接方法論、`CampaignTree.tsx` 顯示座標。
+      票在 `docs/issues/T1-creative-fingerprint/`（含首版被打回的六點）。**站②**
+- [ ] **T1b（route C）** `brand_coordinate` ＋ 35 條種子（`creative-matrix.md:12-46`，類別在第 2 欄，
+      沒有 key 欄要自己發，另 4 欄別丟）＋新品牌誰種＋新增停用畫面＋三張 `creative_*` 表（座標凍結複寫）。
+      **`schedule` 要不要成為 migration 擁有模組＝模組邊界決定，動工前先升級**
+- [ ] **T2（route C）** 檔期 ＋ `ad_set_period_membership`（帶 `allocation_weight`，**絕不加
+      `unique(ad_set_id)`**）＋預算池與配額變更紀錄 ＋結算快照與狀態機
+- [ ] **T3（route C）** `channel_entity_map`（`node_key` 路徑式、`external_status` 存平台原話、
+      `learning_reset_at`）＋綁定改吃 id 不吃名稱——一鍵建立不再建出兩份
+- [ ] **T4（route C）** `ad_channel` ＋ `ad_channel_format_spec` ＋ `channel_credential`
+      取代 `meta_credential`（現在主鍵是 org_id＝一個組織只能一個 token）
+- [ ] **T5（route C）** 成效回流接座標 ＋ 診斷（程式先壓縮、三個 agent、程式排序取前 5）。**閉環在這裡合攏**
+- [ ] **T6（route B/C）** 四象限泡泡看板 ＋ 建議落 `decision`（補欄位，不新開表）
+
+- [ ] **現在就壞著（route C，schema，各自一張小票）** `app/meta` 沒註冊 `cleanup`＝刪綁過 Meta 的品牌必失敗｜`meta_entity_spend` 的 FK 是 CASCADE＝解綁帳戶洗掉花費歷史｜`official_asset.storage_key` NOT NULL＝純文字素材進不來
+
+## 仍然成立的事實（不是票，是量到的東西）
+
+- 里程碑第一段 2026-08-29 用真帳號整條走通過。**這輪踩在它上面，不是取代它。**
+- worker `concurrency` 是 procrastinate 3.9.0 預設值 1（`app/background` 沒指定）——N 個工作項
+  仍一個一個跑。要真的同時跑得調它，而同時開 N 個代理＝同時花 N 份錢。**先量一次真實單次耗時再決定。**
+- `graph.fetch_page` 的 `timeout=10.0` 還沒量過。真不夠時官方寫的下一步是切更小的日期區間，不是加大逾時。
+- `app/methodology/README.md` 的「成效判讀／下期草案」與「期中檢查點」兩列**零個呼叫端**，
+  `providers.py:154` 的 `performance_reading` 標籤空著。覆盤要的方法論早就寫好了。
+- 心智圖的 C 診斷、D 市場競品、E 客群、P 週月報**摘要留存不排票**，閉環跑起來再判。
 
 ## 第 ⑦ 片：收尾
 
@@ -116,8 +107,8 @@ Dependabot #1（`nanoid`，修補版 3.3.18）：**`saas` 這邊已經是 3.3.18
 - [ ] 五個記憶體背景工作（品牌智庫抽原話、產品調研、顧問報告、建檔精靈初掃與出題）還是
       「一張 dict＋一條執行緒」：重開後端就整個消失，狀態不進資料庫。排程那三支已搬上佇列
       （ADR 0042），這五支**沒有量到痛過**所以沒搬——真的痛了照 ADR 0042 同一個做法搬
-- [ ] **需批准（schema）** 兩支 migration 刻意留著沒寫：`DROP TABLE decision`（沒讀也沒寫，
-      它的主人 `app/core/orchestrator.py` 已刪）＋刪 `order_record.attribution_override`、
+- [ ] **需批准（schema）** `DROP TABLE decision` **2026-09-01 改判：不刪**——這輪要拿它當「建議落表」，
+      形狀剛好（action_json／risk_level／dedupe_key／outcome），補幾個欄位就能用。仍要刪的是： `order_record.attribution_override`、
       `interrupt.kind`／`visible_from`／`campaign_cycle_id` 四個沒人用的欄位。欄位還在，
       所以 `enqueue()` 那三個沒有生產呼叫端的參數也還留著
 - [ ] `FILE_LINE_CAP = 800` 仍用行數下令拆檔，工作流規範卻寫「line count never orders a split」。

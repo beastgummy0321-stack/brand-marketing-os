@@ -38,3 +38,12 @@ logs/
 
 # Supabase Studio 的 SQL Editor 暫存片段：本機隨手查的東西，不是專案內容
 supabase/snippets/
+
+# skeleton-slice：票的工作資料夾，票死即刪，不進版控
+docs/issues/
+
+# skeleton-slice：安裝進來的 skill 檔不進版控（檔案留在本機，只是不追蹤）
+.claude/skills/
+
+# 退役的 ADR：留在硬碟與 git 歷史，但不在讀取路徑上（ADR 0046）
+docs/adr/retired/
