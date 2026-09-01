@@ -8,7 +8,7 @@ status: in-force
 
 # 開通 LLM 網路搜尋（Anthropic web_search 伺服器端工具）
 
-_Status: partially retired — the mechanism survives, both call sites were deleted with `app/ads/`. See ADR 0030._
+_Status: partially retired — the mechanism survives and has no live call site. The original two were deleted with `app/ads/` (ADR 0030); the later `app/schedule/` call site is switched off by ADR 0048._
 
 舊前提：系統的 AI 呼叫（`app/llm/providers.py` `AnthropicProvider.complete()`）不掛任何工具，AI 看不到網路——這也是交接包設計成「使用者手動搬去外部 Claude/ChatGPT」的原因之一。使用者的駕駛艙願景要求系統像「連著網路的廣告顧問團隊」，知道當下檔期與市場氛圍。
 

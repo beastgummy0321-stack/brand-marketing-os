@@ -152,7 +152,8 @@ def schedule_plan(org_id: str, brand_id: str, product_ids: list, platform: str, 
             conn, PROVIDER, brand_id=brand_id, task_type=routes.TASK_TYPE,
             prompt_template_id=routes.TASK_TYPE, prompt_template_version="v1",
             system=None, messages=[{"role": "user", "content": prompt}], context=context,
-            options=gateway.TaskOptions(tools=[providers.WEB_SEARCH_TOOL]),
+            # 網路搜尋暫緩（ADR 0048）：這裡曾傳 tools=[providers.WEB_SEARCH_TOOL]。機制還在，
+            # 開回來是加回這一個參數，不動 schema。開回來的條件見該 ADR。
         )
 
 
