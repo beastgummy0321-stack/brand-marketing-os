@@ -1148,6 +1148,154 @@ class CreativeApiContractTest(_ScheduleApiTestBase):
         self.assertIsNone(creative["failure"])
 
 
+class CoordinateSeedTest(_ScheduleApiTestBase):
+    """票 T1b done-check：一個品牌的座標第一次被讀出時，剛好 35 個 `dimension='angle'`；
+    讀第二次不會多出 70 個（`ensure_coordinates_seeded` 冪等）。"""
+
+    def test_first_read_seeds_35_angles_second_read_does_not_duplicate(self):
+        resp1 = self.client.get(f"/api/schedule/brands/{self.brand['id']}/coordinates")
+        self.assertEqual(resp1.status_code, 200, resp1.text)
+        angles1 = [c for c in resp1.json()["coordinates"] if c["dimension"] == "angle"]
+        self.assertEqual(len(angles1), 35)
+
+        resp2 = self.client.get(f"/api/schedule/brands/{self.brand['id']}/coordinates")
+        self.assertEqual(resp2.status_code, 200, resp2.text)
+        angles2 = [c for c in resp2.json()["coordinates"] if c["dimension"] == "angle"]
+        self.assertEqual(len(angles2), 35)
+
+
+class CoordinateTenantIsolationTest(_ScheduleApiTestBase):
+    """票 T1b done-check：品牌 A 的座標對品牌 B 不可見；停用 A 的角度不影響 B。"""
+
+    def test_brand_a_coordinates_invisible_to_brand_b_and_disable_does_not_cross(self):
+        brand_b = bi_repo.create_brand(
+            web.conn, org_id=coredb.DEV_ORG_ID, name="測試品牌：另一個品牌座標",
+            client_name=None, actor=ACTOR,
+        )
+
+        coords_a = self.client.get(
+            f"/api/schedule/brands/{self.brand['id']}/coordinates"
+        ).json()["coordinates"]
+        target = next(c for c in coords_a if c["label"] == "稀缺性行銷")
+
+        disable_resp = self.client.post(
+            f"/api/schedule/brands/{self.brand['id']}/coordinates/{target['id']}/disable",
+            json={"disabled": True},
+        )
+        self.assertEqual(disable_resp.status_code, 200, disable_resp.text)
+        self.assertIsNotNone(disable_resp.json()["disabled_at"])
+
+        coords_b = self.client.get(
+            f"/api/schedule/brands/{brand_b['id']}/coordinates"
+        ).json()["coordinates"]
+        self.assertNotIn(target["id"], [c["id"] for c in coords_b])
+        b_target = next(c for c in coords_b if c["label"] == "稀缺性行銷")
+        self.assertIsNone(b_target["disabled_at"])  # 品牌 A 停用不影響品牌 B 自己那一列
+
+
+class CreativePersistenceTest(_ScheduleApiTestBase):
+    """票 T1b done-check：`schedule_creative` 任務成功後落地
+    `creative_slot`／`creative_candidate`／`creative_candidate_item`，候選的七個 `*_key`
+    撐得住代理回覆，查無此字的座標退回 `*_key = NULL`／`coordinates_status = 'pending'`，
+    文案照樣回傳；讀第二次不會多寫一份（同一支 `llm_task_id` 擋掉）。"""
+
+    _LEAF_NODE_NAMES = ["單元1", "單元2"]
+
+    def _succeed_plan_and_tree(self) -> None:
+        schedule_jobs.PROVIDER = _fake(_fenced_plans([_one_plan()]))
+        resp = self._post(plan_count=1)
+        self.assertEqual(resp.status_code, 200, resp.text)
+        self._run_worker()
+        schedule_jobs.PROVIDER = _fake(_tree_fenced(_one_tree_nodes()))
+        resp = self.client.post(
+            f"/api/schedule/brands/{self.brand['id']}/tree", json={"plan_index": 0}
+        )
+        self.assertEqual(resp.status_code, 200, resp.text)
+        self._run_worker()
+
+    def test_success_persists_resolved_and_unresolved_coordinates_copy_still_returned(self):
+        self._succeed_plan_and_tree()
+        matched = _one_creative("單元1", coordinates={
+            "angle": "稀缺性行銷", "audience": None, "pain": None, "hook": None,
+            "proof": None, "offer": None, "format": None,
+        })
+        # 「單元2」沿用 _one_creative() 預設座標「測試角度」——查無此字，35 個種子裡沒有它。
+        unmatched = _one_creative("單元2")
+        schedule_jobs.PROVIDER = _fake(_creative_fenced([matched, unmatched]))
+        resp = self.client.post(f"/api/schedule/brands/{self.brand['id']}/creative", json={})
+        self.assertEqual(resp.status_code, 200, resp.text)
+        self._run_worker()
+
+        get_resp = self.client.get(f"/api/schedule/brands/{self.brand['id']}")
+        self.assertEqual(get_resp.status_code, 200, get_resp.text)
+        creative = get_resp.json()["creative"]
+        self.assertIsNone(creative["failure"])
+        self.assertEqual(len(creative["ads"]), 2)  # 查無此字的座標不讓文案跟著作廢
+
+        slots = web.conn.execute(
+            "SELECT * FROM creative_slot WHERE brand_id = %s", (self.brand["id"],),
+        ).fetchall()
+        candidates = web.conn.execute(
+            "SELECT * FROM creative_candidate WHERE brand_id = %s", (self.brand["id"],),
+        ).fetchall()
+        items = web.conn.execute(
+            "SELECT * FROM creative_candidate_item WHERE brand_id = %s", (self.brand["id"],),
+        ).fetchall()
+        self.assertEqual(len(slots), 2)      # 一個廣告節點一個 slot
+        self.assertEqual(len(candidates), 2)  # 一個 slot 一個候選
+        self.assertEqual(len(items), 2)       # 一個候選一個 item（v1）
+
+        by_node = {
+            next(s for s in slots if s["id"] == c["slot_id"])["ad_node_name"]: c
+            for c in candidates
+        }
+        self.assertEqual(by_node["單元1"]["angle_key"], "scarcity_marketing")
+        self.assertEqual(by_node["單元1"]["coordinates_status"], "tagged")
+        self.assertIsNone(by_node["單元1"]["pain_key"])
+
+        self.assertIsNone(by_node["單元2"]["angle_key"])
+        self.assertEqual(by_node["單元2"]["coordinates_status"], "pending")
+
+        # 讀第二次不會多寫一份（llm_task_id 擋掉重複落地）。
+        self.client.get(f"/api/schedule/brands/{self.brand['id']}")
+        count = web.conn.execute(
+            "SELECT COUNT(*) AS n FROM creative_candidate WHERE brand_id = %s",
+            (self.brand["id"],),
+        ).fetchone()["n"]
+        self.assertEqual(count, 2)
+
+    def test_visual_tone_round_trips_and_bad_value_degrades_to_null_without_failing_the_batch(self):
+        """票 T1b wave 3 done-check：`visual_tone` 兩個合法值之一原樣落地；不合法值（DB
+        `CHECK` 只收兩個字串）退回 NULL——跟座標同一條規則，壞值不讓這批文案跟著整批作廢，
+        也不能讓 INSERT 整批失敗。"""
+        self._succeed_plan_and_tree()
+        good = _one_creative("單元1", visual_tone="暖調生活", visual_concept="測試視覺概念")
+        bad = _one_creative("單元2", visual_tone="螢光粉", visual_concept="測試視覺概念")
+        schedule_jobs.PROVIDER = _fake(_creative_fenced([good, bad]))
+        resp = self.client.post(f"/api/schedule/brands/{self.brand['id']}/creative", json={})
+        self.assertEqual(resp.status_code, 200, resp.text)
+        self._run_worker()
+
+        get_resp = self.client.get(f"/api/schedule/brands/{self.brand['id']}")
+        self.assertEqual(get_resp.status_code, 200, get_resp.text)
+        creative = get_resp.json()["creative"]
+        self.assertIsNone(creative["failure"])  # 壞值不讓整批作廢
+        self.assertEqual(len(creative["ads"]), 2)
+
+        slots = web.conn.execute(
+            "SELECT * FROM creative_slot WHERE brand_id = %s", (self.brand["id"],),
+        ).fetchall()
+        candidates = web.conn.execute(
+            "SELECT * FROM creative_candidate WHERE brand_id = %s", (self.brand["id"],),
+        ).fetchall()
+        by_node = {
+            next(s for s in slots if s["id"] == c["slot_id"])["ad_node_name"]: c
+            for c in candidates
+        }
+        self.assertEqual(by_node["單元1"]["visual_tone"], "暖調生活")
+        self.assertIsNone(by_node["單元2"]["visual_tone"])  # 不合法值退回 NULL，不炸整批 INSERT
+
+
 class SearchSourcesReadbackTest(_ScheduleApiTestBase):
     """票 08 兩條不可妥協規則之一：查詢不是排程的先決條件——這裡只驗證 gateway →
     usage_json → plan_from_task_row 這段管線本身接得起來；SDK 回應怎麼解析成

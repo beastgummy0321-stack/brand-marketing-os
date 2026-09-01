@@ -23,9 +23,10 @@ LAYER_ORDER already allows it — same pattern `app.meta` uses). Does not import
 `app.background` is the only door to procrastinate, this package's own module docstring in
 `routes.py` promises that.
 
-No `app.core.cleanup` registration: this module owns no table of its own — the record is
-`llm_task` (ADR 0032), which lives in `app.llm`'s territory — so a brand deletion has
-nothing here of its own to cascade.
+`app.core.cleanup` registration (ticket T1b, ADR 0049): this module owns five tables now —
+`brand_coordinate`, `creative_slot`, `creative_candidate`, `creative_candidate_item`,
+`feedback` (see `app/schedule/repository.py`'s module docstring) — registered as
+「創意座標與素材候選」, so a brand deletion cascades into all five.
 """
 
 from fastapi import FastAPI

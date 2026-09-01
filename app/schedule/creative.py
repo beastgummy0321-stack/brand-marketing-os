@@ -29,6 +29,12 @@ Private to app/schedule/（集裝箱憲章第一節）：只有 app/schedule/rou
 的那棵樹」有哪些最深層節點——這份清單不落在 `context_scope_json`（frozen decision 5 的
 字面契約只有三個鍵），呼叫端（`routes.py`）必須自己重讀那筆凍結的 `source_tree_task_id`
 再算一次，這支函式本身仍然不碰 DB。
+
+票 T1b wave 3（`docs/issues/T1b-brand-coordinate/ticket.md` 「Wave 3」，ADR 0047）：`coordinates`
+之外再認得兩個手足鍵，一樣不是 `fields` 裡的欄位名稱——`visual_tone`（ADR 0047 兩個值之一，
+或 `null`）跟 `visual_concept`（一到兩句話的畫面概念）。壞值一律退回 `None`，理由跟
+`_valid_coordinates` 一樣：`creative_candidate.visual_tone` 有 `CHECK` 只收那兩個字串，寫壞值
+會讓整筆 INSERT 失敗——座標是診斷用中繼資料不是交付物，這條規則對這兩個新鍵一樣適用。
 """
 
 from app.schedule.plan import _extract_last_json_block
@@ -40,6 +46,22 @@ NO_REPLY_MESSAGE = "產出失敗，請重新產出一次。"
 
 # `CONSTITUTION.md` 規則 5 簽下的七個維度名稱，逐字沿用，這支模組不定義任何別的名字。
 COORDINATE_KEYS = ("audience", "pain", "angle", "hook", "proof", "offer", "format")
+
+# ADR 0047「`visual_tone`：一個欄位、兩個值」——`creative_candidate.visual_tone` 的 DB CHECK
+# 逐字沿用這兩個字串，這支模組不發明第三個值。
+VISUAL_TONE_VALUES = ("暗調強對比", "暖調生活")
+
+
+def _valid_visual_tone(raw) -> str | None:
+    """`visual_tone`：不是這兩個字串之一（含 `None`、其他字串、非字串）一律退回 `None`——
+    DB 的 `CHECK` 只收這兩個值，壞值原樣寫進去會讓整筆 INSERT 失敗，跟 `_valid_coordinates`
+    同一條規則：壞值不讓這批文案跟著整批作廢。"""
+    return raw if raw in VISUAL_TONE_VALUES else None
+
+
+def _valid_visual_concept(raw) -> str | None:
+    """`visual_concept`：非空字串才算數，其餘（缺欄位、空字串、非字串）退回 `None`。"""
+    return raw if isinstance(raw, str) and raw else None
 
 
 def _valid_coordinates(raw) -> dict:
@@ -80,8 +102,8 @@ def _valid_creative_fields(raw_fields) -> list[dict] | None:
 
 def build_creative(rendered_output: str, ad_node_names: list[str]) -> tuple[list[dict], str | None]:
     """代理回覆 → (ads, failure)。失敗時 ads 是 `[]`；成功時每個元素是
-    `{"node", "coordinates", "fields", "warnings"}`，順序照 `ad_node_names`（樹的文件順序），
-    不是代理回覆裡的順序——代理不保證照樹的順序回覆。"""
+    `{"node", "coordinates", "visual_tone", "visual_concept", "fields", "warnings"}`，順序照
+    `ad_node_names`（樹的文件順序），不是代理回覆裡的順序——代理不保證照樹的順序回覆。"""
     data = _extract_last_json_block(rendered_output)
     if data is None:
         return [], NO_CREATIVE_MESSAGE
@@ -98,6 +120,8 @@ def build_creative(rendered_output: str, ad_node_names: list[str]) -> tuple[list
         if not isinstance(node, str) or not node:
             return [], NO_CREATIVE_MESSAGE
         coordinates = _valid_coordinates(item.get("coordinates"))
+        visual_tone = _valid_visual_tone(item.get("visual_tone"))
+        visual_concept = _valid_visual_concept(item.get("visual_concept"))
         fields = _valid_creative_fields(item.get("fields", []))
         if fields is None:
             return [], NO_CREATIVE_MESSAGE
@@ -107,7 +131,8 @@ def build_creative(rendered_output: str, ad_node_names: list[str]) -> tuple[list
         if node in by_node:
             return [], NODE_MISMATCH_MESSAGE  # 同一個節點回了兩份，不猜哪一份才對
         by_node[node] = {
-            "node": node, "coordinates": coordinates, "fields": fields, "warnings": warnings,
+            "node": node, "coordinates": coordinates, "visual_tone": visual_tone,
+            "visual_concept": visual_concept, "fields": fields, "warnings": warnings,
         }
 
     if set(by_node) != set(ad_node_names):

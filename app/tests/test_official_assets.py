@@ -10,13 +10,14 @@ import io
 import unittest
 from unittest import mock
 
+import psycopg
 from fastapi.testclient import TestClient
 
 import app.main as main
 import app.shared.web as web
 import app.storage as storage
 from app.brand_intelligence import repository as repo
-from app.core.db import DEV_ORG_ID  # noqa: E402
+from app.core.db import DEV_ORG_ID, new_id  # noqa: E402
 
 _SEQ = [0]
 
@@ -135,6 +136,47 @@ class OfficialAssetTest(unittest.TestCase):
         resp_wrong_name = self.client.get(
             f"/brands/{brand_id}/assets/file/{asset['id']}/不是這個檔名.png")
         self.assertEqual(resp_wrong_name.status_code, 404)
+
+
+class OfficialAssetBodyColumnsTest(unittest.TestCase):
+    """票 T1b：`official_asset` 放寬 `storage_key` 可為 NULL，新增 `body_text`／`body_json`
+    ——一個素材可以只有內嵌本體、沒有 Storage 物件。`official_asset_has_body` CHECK 守住
+    底線：三者（`storage_key`／`body_text`／`body_json`）至少要有一個，不能三個都空。"""
+
+    def setUp(self):
+        self.client = TestClient(main.app)
+        self.brand_id = repo.create_brand(
+            web.conn, name="測試品牌：素材本體", client_name=None, actor="測試員",
+            org_id=DEV_ORG_ID,
+        )["id"]
+
+    def test_body_text_without_storage_key_inserts(self):
+        asset_id = new_id("oas")
+        web.conn.execute(
+            "INSERT INTO official_asset (id, org_id, brand_id, asset_kind, body_text, status)"
+            " VALUES (%s, %s, %s, 'logo', %s, 'active')",
+            (asset_id, DEV_ORG_ID, self.brand_id, "純文字素材內容，沒有 Storage 物件"),
+        )
+        web.conn.commit()
+        row = web.conn.execute(
+            "SELECT storage_key, body_text FROM official_asset WHERE id = %s", (asset_id,),
+        ).fetchone()
+        self.assertIsNone(row["storage_key"])
+        self.assertEqual(row["body_text"], "純文字素材內容，沒有 Storage 物件")
+
+    def test_row_with_no_body_at_all_is_rejected(self):
+        asset_id = new_id("oas")
+        with self.assertRaises(psycopg.errors.CheckViolation):
+            web.conn.execute(
+                "INSERT INTO official_asset (id, org_id, brand_id, asset_kind, status)"
+                " VALUES (%s, %s, %s, 'logo', 'active')",
+                (asset_id, DEV_ORG_ID, self.brand_id),
+            )
+        web.conn.rollback()  # psycopg 讓交易卡在 aborted 狀態，後續語句都得先 rollback
+        row = web.conn.execute(
+            "SELECT id FROM official_asset WHERE id = %s", (asset_id,),
+        ).fetchone()
+        self.assertIsNone(row)
 
 
 if __name__ == "__main__":

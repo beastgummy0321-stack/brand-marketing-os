@@ -8,12 +8,21 @@ import { BrandProfilePanel } from "./panels/BrandProfilePanel";
 import { AssetsTab } from "./tabs/AssetsTab";
 import { ChannelsTab } from "./tabs/ChannelsTab";
 import { ClaimsTab } from "./tabs/ClaimsTab";
+import { CoordinatesTab } from "./tabs/CoordinatesTab";
 import { CustomerVoiceTab } from "./tabs/CustomerVoiceTab";
 import { FactsTab } from "./tabs/FactsTab";
 import { ResearchReportsTab } from "./tabs/ResearchReportsTab";
 import { RulesTab } from "./tabs/RulesTab";
 
-type TabKey = "facts" | "rules" | "claims" | "assets" | "channels" | "customer-voice" | "research-reports";
+type TabKey =
+  | "facts"
+  | "rules"
+  | "claims"
+  | "assets"
+  | "channels"
+  | "customer-voice"
+  | "research-reports"
+  | "coordinates";
 
 const TABS: { key: TabKey; label: string; count?: (data: LibraryData) => number }[] = [
   { key: "facts", label: "品牌事實", count: (d) => d.facts.length },
@@ -23,6 +32,7 @@ const TABS: { key: TabKey; label: string; count?: (data: LibraryData) => number 
   { key: "channels", label: "自有渠道", count: (d) => d.channels.length },
   { key: "customer-voice", label: "顧客原話", count: (d) => d.customer_voices.length },
   { key: "research-reports", label: "調研報告" },
+  { key: "coordinates", label: "創意座標" },
 ];
 
 type LoadState =
@@ -138,6 +148,7 @@ export function LibraryPage({ brandId }: { brandId: string }) {
           <CustomerVoiceTab brandId={brandId} voices={data.customer_voices} onChanged={load} />
         )}
         {activeTab === "research-reports" && <ResearchReportsTab brandId={brandId} />}
+        {activeTab === "coordinates" && <CoordinatesTab brandId={brandId} />}
 
         {profileOpen && (
           <BrandProfilePanel

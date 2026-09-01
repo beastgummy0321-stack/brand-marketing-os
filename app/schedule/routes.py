@@ -60,6 +60,7 @@ from app.llm import gateway
 from app.meta import repository as meta_repo
 from app.schedule import creative as creative_mod
 from app.schedule import plan as plan_mod
+from app.schedule import repository as schedule_repo
 from app.schedule import tree as tree_mod
 
 router = APIRouter(prefix="/api/schedule")
@@ -124,6 +125,18 @@ class RejectEntry(BaseModel):
 
 class RejectRequest(BaseModel):
     entries: list[RejectEntry] = []
+
+
+class CreateCoordinateRequest(BaseModel):
+    # 票 T1b：新增一個座標——租戶界線先於欄位驗證（同上），真正的驗證在
+    # `create_coordinate()` 這支路由函式裡。
+    dimension: str = ""
+    label: str = ""
+    category: str = ""
+
+
+class DisableCoordinateRequest(BaseModel):
+    disabled: bool = True
 
 
 def _load_platform_data() -> dict:
@@ -345,6 +358,15 @@ def _brand_response(conn, brand_id: str, org_id: str) -> dict:
         creative = creative_mod.creative_from_task_row(creative_row, ad_node_names)
         if creative_running:
             creative["running"] = True
+        # 票 T1b：內容一旦成功就落地成 creative_slot／creative_candidate／
+        # creative_candidate_item——跟 35 個座標種子同一套「讀的時候順手確保落地」寫法，
+        # 冪等（見 schedule_repo.persist_creative_result 檔頭），這裡不判斷「是不是第一次
+        # 讀」，每次成功讀都呼叫一次，函式自己用 llm_task_id 擋掉重複寫入。
+        if creative["failure"] is None and not creative["running"]:
+            schedule_repo.persist_creative_result(
+                conn, org_id, brand_id, creative["task_id"],
+                creative["source_tree_task_id"], creative["ads"],
+            )
     return {
         "daily_budget": current_daily_budget,
         "plan_count_min": plan_count_min,
@@ -677,3 +699,49 @@ def create_creative(request: Request, brand_id: str):
     actor = web.require_actor(request)
     web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
     return _run_creative(web.conn, brand_id, actor.org_id)
+
+
+# ---------------------------------------------------------------------------
+# 票 T1b：品牌智庫「創意座標」分頁（frontend/src/components/library/ 自己吃資料，站①
+# decision 3——這裡只是資料源，不是那個分頁本身）。維度限定 creative.COORDINATE_KEYS
+# 這七個，不另開一份清單（DB CHECK／Python 端只該有一份事實）。
+# ---------------------------------------------------------------------------
+COORDINATE_NOT_FOUND_MESSAGE = "找不到這個座標。"
+COORDINATE_DIMENSION_INVALID_MESSAGE = "請選擇一個有效的維度。"
+COORDINATE_LABEL_REQUIRED_MESSAGE = "請填寫座標名稱。"
+
+
+@router.get("/brands/{brand_id}/coordinates")
+def list_brand_coordinates(request: Request, brand_id: str):
+    actor = web.require_actor(request)
+    web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
+    return {"coordinates": schedule_repo.list_coordinates(web.conn, actor.org_id, brand_id)}
+
+
+@router.post("/brands/{brand_id}/coordinates")
+def create_brand_coordinate(request: Request, brand_id: str, body: CreateCoordinateRequest):
+    actor = web.require_actor(request)
+    web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
+    dimension = body.dimension.strip()
+    label = body.label.strip()
+    if dimension not in creative_mod.COORDINATE_KEYS:
+        raise web.ApiError(400, "dimension_invalid", COORDINATE_DIMENSION_INVALID_MESSAGE)
+    if not label:
+        raise web.ApiError(400, "label_required", COORDINATE_LABEL_REQUIRED_MESSAGE)
+    return schedule_repo.create_coordinate(
+        web.conn, actor.org_id, brand_id, dimension, label, body.category.strip() or None,
+    )
+
+
+@router.post("/brands/{brand_id}/coordinates/{coordinate_id}/disable")
+def disable_brand_coordinate(
+    request: Request, brand_id: str, coordinate_id: str, body: DisableCoordinateRequest,
+):
+    actor = web.require_actor(request)
+    web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
+    row = schedule_repo.set_coordinate_disabled(
+        web.conn, actor.org_id, brand_id, coordinate_id, body.disabled,
+    )
+    if row is None:
+        raise web.ApiError(404, "coordinate_not_found", COORDINATE_NOT_FOUND_MESSAGE)
+    return row

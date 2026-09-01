@@ -47,6 +47,5 @@ Allowed dependencies: `app.core`, `app.llm`, `app.shared.web`,
 
 Module-local and reversible, decided here rather than in an ADR:
 
-- The module registered no `app.core.cleanup` function because it owned no table. **ADR 0049
-  changes that**: the first ticket that creates a `schedule`-owned table registers a cleanup
-  function in the same ticket, and updates the `__init__.py` docstring that still says otherwise.
+- The module now registers an `app.core.cleanup` function (ticket T1b): `app/schedule/repository.py`
+  registers 「創意座標與素材候選」, covering the five tables this ticket added.

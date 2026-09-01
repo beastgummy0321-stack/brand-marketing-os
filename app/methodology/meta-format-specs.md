@@ -16,7 +16,9 @@
 ## 1. 單圖 single_image
 
 - 比例 4:5，1080×1350（查證日 2026-08-07）
-- `image_prompt`：10 個，無字數預算。主題層互為替身：同訊息同圖上文字，只差配色／模特兒／角度
+- 視覺方向：每個廣告節點 1 份，不分品項變體另產（ADR 0047）。內容＝七維座標＋一個
+  `visual_tone`＋一到兩句話的畫面概念，由創意任務決定（`app/departments/creative/ad_creative.md`），
+  這裡不重複規格，也不是給圖片工具直接貼上生圖的完整提示詞
 - `body`：5 個，125 字。Reels 版位約 40 字即截斷，不另設變體（G2 定案單圖只出 4:5）
 - `title`：5 個，27 字。Meta 顯示截斷約 27–40 依版位而異，取最嚴 27 當品質預算
 - `description`：5 個，30 字
@@ -35,7 +37,7 @@
 - 卡片數 2–10
 - 敘事型態：`steps` 步驟型（卡片數＝步驟數）、`before_after` 對比型（固定 2 卡）、
   `multi_product` 多商品型（卡片數＝商品數）
-- `card_image_prompt`：每卡 1 個，無字數預算
+- 視覺方向：沿用該廣告節點唯一的一份（見「1. 單圖 single_image」），不逐卡另產
 - `card_title`：每卡 1 個，45 字
 - `card_description`：每卡 1 個，20 字（業界整理的顯示截斷值，Meta 官方規格未明列，查證日 2026-08-08）
 - `body`：5 個，80 字（廣告層，非卡片層）
@@ -66,7 +68,7 @@
 
 | 類型 | 基底格式 | 欄位 |
 |---|---|---|
-| 完整貼文 post | single_image | `image_prompt`、`body` |
+| 完整貼文 post | single_image | 視覺方向、`body` |
 | 完整影片 video | video | `hook_pool`、`script`、`body` |
-| 單張圖片 image | single_image | `image_prompt` |
+| 單張圖片 image | single_image | 視覺方向 |
 | 單則腳本 script | video | `hook_pool`、`script` |

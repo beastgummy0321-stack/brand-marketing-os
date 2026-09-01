@@ -35,18 +35,6 @@ CASCADE 今早已修、上傳有 50MB 上限、產品照那條查無此事）。
 表的形狀一律看 ADR 0050 的表清單；migration 檔名前綴一律看 ADR 0049（前綴＝擁有那張表的模組，
 不是要它的那張票，所以一張票可以有好幾個不同前綴的 migration 檔）。
 
-- [>] **T1b（route C，依 ADR 0047：排程只給視覺方向，不產圖片提示詞）** ——站①完成（三題已答，
-      票在 `docs/issues/T1b-brand-coordinate/ticket.md`），等 schema 批准後進站②。
-      站①裁決：①否決的角度走 `feedback`，`context_compiler`／`rule_cards` 不動；
-      ②`script`／`hook_pool` 的「無字數預算」這批不收，閘門只擋圖片欄位；
-      ③新增停用畫面＝品牌智庫第 8 個分頁籤，自己打 API，不擴充 `fetchLibrary()`。 `brand_coordinate` ＋ 35 條種子
-      （`creative-matrix.md:12-46`，類別在第 2 欄，沒有 key 欄要自己發，另 4 欄別丟）＋新品牌誰種＋新增停用畫面
-      ＋ `creative_slot`／`creative_candidate`／`creative_candidate_item`（座標生成當下凍結複寫在 candidate）
-      ＋ `feedback` ＋ `official_asset` 放寬（純文字素材現在被 `storage_key NOT NULL` 擋死）。
-      **站①要先答一題**：否決的角度走 `feedback` 的「生成後排除清單」，還是繼續走 `rule(severity='hard')`
-      ——ADR 0012 在管那條路，這是模組邊界不是票的細節。
-      本票是 schedule 第一次擁有自己的表 → 同一張票補 `app.core.cleanup` 註冊，並改掉
-      `app/schedule/__init__.py` 裡「本模組不擁有任何表」那段檔頭
 - [ ] **T2（route C）** `campaign_period`（含結算快照與四值狀態機）＋ `campaign_period_budget_version`
       ＋ `ad_set_period_membership`（**絕不加 `unique(ad_set_id)`**）＋ `product_economics_version`（半開區間，
       現行 `save_product_economics` 是原地改同一列）＋ `holiday` ＋ `interrupt.dedupe_key` 含檔期 id
@@ -123,6 +111,14 @@ Dependabot #1（`nanoid`，修補版 3.3.18）：**`saas` 這邊已經是 3.3.18
 但 GitHub 掃的是預設分支 `master`，那邊還凍在 `v0.1-desktop` 的 3.3.17。警示會亮到 `saas` 併回
 `master` 為止——**不是還沒修，是修在另一條線上**。不為了關掉警示單獨去動凍結的 master。
 
+- [ ] **需你裁決：畫面固定 1440px 寬，比它窄的螢幕右側看不到也捲不到**（2026-09-01 T1b 走查量到）。
+      `AppShell.tsx:10` 是 `w-[var(--width-shell)]`，`tokens.css:66` 把它寫死 1440px，註解寫明
+      「不做響應式」（ADR 0003／決策 0038）。`overflow-x: hidden` 一路傳到 body，所以 **1280 寬的視窗
+      不是「要捲很久」，是右邊 160px 根本捲不到**。T1b 當場踩到：創意座標表格的停用勾選框落在
+      x=[1100,1407]，1280 螢幕上真人點不到（1440 正常）。當下用「表格不撐滿容器」一行修掉那張表，
+      **但根因還在**——任何一張把東西放到版面右緣的畫面都會再中一次。
+      要嘛整站改響應式（大工程、要修憲），要嘛加一條閘門禁止內容貼右緣，要嘛承認 1440 是硬需求
+      並在小螢幕給明確提示。**這三條都不是順手做，等你決定。**
 - [ ] **上雲前必還（ADR 0039）** 每日 Meta 花費拉取的 worker 跑在網站行程裡：網站沒開就不拉，
       那天沒有數字（手動補：`uv run python -m app.meta.daily_pull`）；cron `0 3 * * *` 觸發的**時刻**
       仍是機器本地時間。上雲時 worker 要拆成自己的行程
