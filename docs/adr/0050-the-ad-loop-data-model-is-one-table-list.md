@@ -19,6 +19,15 @@ deleted the decisions with it.
 This ADR is the record. The diagram stays as the readable overview; where the two differ, this
 file wins.
 
+**Amended 2026-09-03 at T3 station ①. ADR 0055** corrects three things this ADR got wrong by
+thinking only about Meta, and the rows below are struck through accordingly: the idempotency key
+must carry the channel (`unique(org_id, brand_id, channel_id, node_key)`, not
+`unique(org_id, brand_id, node_key)`); the level column is a **depth number**, never Meta's
+`campaign`／`adset`／`ad`; and `ad_set_period_membership` is renamed `period_node_membership`
+with `node_key` replacing `ad_set_external_id`, because ADR 0053's rule is about the
+budget-carrying node and "ad set" is only Meta's name for it. 0055 also moves a minimal
+`ad_channel` forward to T3, so the foreign key is real from day one (constitution rule 3).
+
 **Amended 2026-09-02 at T2 station ①.** This ADR names tables; it never said how a period lives.
 **ADR 0053** settles that (birth on the schedule form, settlement by hand, late money, the
 overlap split, product-cost versioning) and deletes `cpa_basis` from the list above. **ADR 0054**
@@ -58,11 +67,11 @@ wants it. `ticket` is the board row that lands it.
 | `feedback` | schedule | T1b | `scope` CHECK `('coordinate','candidate','period')` — all three values defined now, only the first two written in v1 · `reason_code` · `note` · `lifted_at` · all three owner columns nullable |
 | `campaign_period` | schedule | T2 | `version` (optimistic lock) · `status` four values (planning／running／awaiting_data／settled) · `force_settled_at` / `reason` · **`settled_spend` / `settled_revenue` / `settled_at` snapshot** · ~~`cpa_basis`~~ (deleted, ADR 0053 §7) · `currency` · `recurrence_rule` / `source_period_id` · `start_date` / `end_date` (ADR 0053 §1) |
 | `campaign_period_budget_version` | schedule | T2 | shaped like `sku_cost_version` · `change_type` including `auto_decrease` · `actor_kind` (human／system) · `reverted_from_id` |
-| `ad_set_period_membership` | schedule | T2 | `from_date` / `to_date` · `allocation_weight` DEFAULT 1.0 · **never add `unique(ad_set_id)`** |
+| ~~`ad_set_period_membership`~~ → `period_node_membership` | schedule | T2, renamed by T3 | `from_date` / `to_date` · `allocation_weight` DEFAULT 1.0 · **never add a unique key on the node** · ~~`ad_set_external_id`~~ → `channel_id` + `node_key` (ADR 0055 §6) |
 | `product_economics_version` | brand_intelligence | T2 | append-only · **half-open interval** (`< effective_to`) · ~~EXCLUDE constraint against overlap~~ → partial unique index, ADR 0053 §5 |
 | ~~`holiday`~~ | — | — | **Not built. ADR 0054**: the shared calendar is a department data file, and `campaign_skip` is dropped rather than repointed |
-| `channel_entity_map` | schedule | T3 | path-style `node_key` · `external_id` · **`external_status` stores the platform's own words** plus a separate `local_state` · `learning_reset_at` · `unique(org_id, brand_id, node_key)` is the idempotency key |
-| `ad_channel` | schedule | T4 | five capability flags each with its own CHECK · `last_data_at` / `data_lag_days` · `spec jsonb` (level count, platform minimum daily budget) |
+| `channel_entity_map` | schedule | T3 | path-style `node_key` · `external_id` · **`external_status` stores the platform's own words** plus a separate `local_state` · `node_name_at_bind` · `learning_reset_at` · a generated `depth` number, **never Meta's level names** · ~~`unique(org_id, brand_id, node_key)`~~ → **`unique(org_id, brand_id, channel_id, node_key)`** is the idempotency key (ADR 0055 §2–§4) |
+| `ad_channel` | schedule | **minimal in T3**, rest in T4 | per organisation, rows created lazily on first use, so `channel_entity_map`'s FK is real from day one (ADR 0055 §5) · T4 adds: five capability flags each with its own CHECK · `last_data_at` / `data_lag_days` · `spec jsonb` (level count, platform minimum daily budget) |
 | `ad_channel_format_spec` | schedule | T4 | keyed on **(channel, format)**, not channel · `field` / `max_chars` / `aspect_ratio` |
 | `channel_credential` | schedule | T4 | replaces `meta_credential` (whose PRIMARY KEY is `org_id` — one token per organisation) · `unique(org_id, channel_id, account_scope)` · `expires_at` · `last_error_code` · `scopes` · Vault logic carries over unchanged |
 
@@ -73,7 +82,8 @@ wants it. `ticket` is the board row that lands it.
 | `official_asset` | brand_intelligence | T1b | `storage_key` (renamed from `file_path` in `20260830000003`) is `TEXT NOT NULL` today → relax to nullable and add `body_text` / `body_json`; add `parent_asset_id` (indexed) / `platform` / `aspect_ratio`, `superseded_by_asset_id`, `usable_until` / `provider` / `no_derivative`, `content_hash`, `unique(id, brand_id)` for composite FKs |
 | `interrupt` | core | T2 | `dedupe_key` must include the period id, or two overlapping periods eat each other's warnings |
 | `llm_task` | core | T2 / T5 | `campaign_period_id` so LLM cost has an owner (T2); breaking "the newest row is the truth" (`app/schedule/routes.py:133-139`) is a T5 job and is code, not schema |
-| `brand_meta_ad_account` | meta | T3 | `allocation_weight` DEFAULT 1.0, **no unique constraint** — the application layer blocks a second brand, the schema does not |
+| `creative_slot` | schedule | T1b, repointed by T3 | `ad_node_name` → `node_key` + `channel_id` (ADR 0055 §1). Named a node by its name, and `creative.py:138` compares with `set()`, so two same-named leaves are one slot today |
+| `brand_meta_ad_account` | meta | T3 | `allocation_weight` DEFAULT 1.0, **no unique constraint** — the application layer blocks a second brand, the schema does not. Deliberately Meta-shaped: account tables stay one per channel (ADR 0055 §8) |
 | `meta_ad_account` | meta | T4 | `timezone_name` (Meta returns dates in the ad account's timezone; there is no such column today) · `rate_limited_until` · a soft-disable column |
 | `meta_entity_spend` | meta | T5 | `currency` · index on `(adset_id, spend_date)`. The FK is already `RESTRICT` — done, see above |
 | `channel_revenue` | orders | T5 | `spend` · `campaign_period_id` · `currency` · `ad_channel_id` · `source_row_hash` and a unique key. Verified today: 13 columns, none of them currency, and the only unique index is `WHERE external_id IS NOT NULL`, so hand-entered rows are not deduplicated at all |

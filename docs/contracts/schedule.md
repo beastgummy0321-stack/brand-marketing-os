@@ -47,6 +47,7 @@ cycle, and `app.dashboard` already depends on it the same way.
 - ADR 0050 — the ad-loop data model of record (table list, ticket owners, open questions).
 - ADR 0053 — the campaign period's life: born on the form, settled by hand, shorter period wins.
 - ADR 0054 — the shared commerce calendar is a department data file, not a `holiday` table.
+- ADR 0055 — a tree node is identified by a path-style `node_key` plus its channel.
 - ADR 0042 — work the user waits for runs on the queue.
 - ADR 0040 — approval is the money brake.
 

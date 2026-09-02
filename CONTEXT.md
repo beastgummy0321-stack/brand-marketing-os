@@ -96,6 +96,30 @@ _Avoid_: briefing、材料包、輸入參數
 _Avoid_: 草稿、待審、pending（暗示「還沒做完」，但候選已是完整成品，只是還沒被選）、
 `creative_theme.status`（那張表已刪）
 
+## 活動樹與通路（2026-09-03 T3 定案，ADR 0055）
+
+**節點鍵**（`node_key`）：
+一個活動樹節點的身分，寫成 1 起算的位置路徑——`1`、`1.2`、`1.2.3`。全站每一張要指名某個節點的表
+都用它，**沒有任何一張表拿節點名稱當鍵**。名稱會重複、會被改，位置不會。
+_Avoid_: 節點名稱、`ad_node_name`、節點 id
+
+**通路**（`ad_channel`）：
+一個買廣告的平台——Meta／Google／TikTok。表在組織底下，一個組織一組。
+注意「通路」這個詞在系統裡已經被用掉三次（`owned_channel` 自有通路、`channel_revenue.channel`
+營收來源、`channel_plan.channel`），**廣告平台一律叫 `ad_channel`，不要簡稱 channel**。
+_Avoid_: 平台、channel、媒體
+
+**扛預算的那一層**（`budget_level`）：
+三層活動樹裡真正掛日預算的那一層——Meta 是第 2 層（廣告組合），Google 是第 1 層（活動）。
+檔期的重疊分帳規則（ADR 0053）綁的是這一層，不是「廣告組合」這個 Meta 專有名詞。
+_Avoid_: 廣告組合層、ad set 層
+
+**對照表**（`channel_entity_map`）：
+「我這棵樹上的哪個節點 ＝ 平台上的哪個實體」的那張表。同一個 `(組織, 品牌, 通路, 節點鍵)`
+只准一列——這就是防止同一個節點被建成兩份廣告的鎖。平台回的狀態逐字存進 `external_status`，
+不翻譯成我們自己的字；我們自己的看法存 `local_state`（已對上／脫鉤／退役）。
+_Avoid_: 綁定表、mapping、`bound_external_ids`（那是 T3 之前住在 JSON 裡的舊做法）
+
 ## 這份檔給誰看
 
 給開發者與 AI，不對使用者顯示。（曾有一份給使用者看的白話版 `app/dashboard/glossary.py`，

@@ -35,13 +35,42 @@ CASCADE 今早已修、上傳有 50MB 上限、產品照那條查無此事）。
 表的形狀一律看 ADR 0050 的表清單；migration 檔名前綴一律看 ADR 0049（前綴＝擁有那張表的模組，
 不是要它的那張票，所以一張票可以有好幾個不同前綴的 migration 檔）。
 
-- [ ] **T3（route C）** `channel_entity_map`（`node_key` 路徑式、`external_status` 存平台原話、
-      `learning_reset_at`、`unique(org_id, brand_id, node_key)` 就是冪等鍵）＋ `brand_meta_ad_account.allocation_weight`
-      ＋綁定改吃 id 不吃名稱——一鍵建立不再建出兩份
-- [ ] **T4（route C）** `ad_channel` ＋ `ad_channel_format_spec`（鍵是 (channel, format)）＋ `channel_credential`
+- [>] **T3（route C）節點身分：一個節點只有一個身分，而且帶通路**——決策已簽：`docs/adr/0055`
+      （2026-09-03 站① 凍結，同時更正 ADR 0050 三處 Meta 專屬寫法）。站②，四張票已開、循序做，
+      第五張（T3e，金流）等使用者回答一個問題才開：
+      - **T3a 表（全部休眠，零寫入端）**：`ad_channel`（最小、每組織一組、用到才建列，
+        讓外鍵第一天就是真的）＋ `channel_entity_map`
+        （`unique(org_id, brand_id, channel_id, node_key)`＝冪等鍵；`depth` 是 GENERATED 欄位，
+        **不准出現 campaign／adset／ad 這三個 Meta 字**）＋ `ad_set_period_membership` 改名
+        `period_node_membership`、`ad_set_external_id` 換成 `channel_id`＋`node_key`
+        ＋ `brand_meta_ad_account.allocation_weight`。既有測試全綠就是它的證明
+      - **T3b 綁定改吃節點鍵**：`node_key` 從樹的文件順序算出來，綁定寫進 `channel_entity_map`
+        （第 1 層；`external_status` 存 Meta 的 `effective_status` 原話），讀樹改讀表。
+        重展樹時同位置沿用、但節點名字要對得上，對不上轉 `orphaned` 並在畫面顯示未綁定。
+        **前端 diff 必須為零**
+      - **T3c 第 2 層（扛預算的那一層）**：新增 `graph.list_ad_sets`
+        （`GET /{campaign_id}/adsets`，官方頁面 2026-09-03 查證），把廣告組合綁進
+        `channel_entity_map`，只在自己父活動底下比對
+      - **T3e 檔期分帳細到節點（金流路徑，等使用者裁決後才開票）**：`period_node_membership`
+        在綁定時寫列、結算時讀列，`period.py:125 compute_money()` 的主詞從「整個品牌那天的
+        花費」細到「這個節點那天的花費」（ADR 0053 §4 的規則本身不變）。
+        **卡在一個 ADR 0053 沒回答的問題**：沒有登記在任何檔期底下的廣告（不是照樹建的），
+        它那天的花費算誰的？不回答就會破壞 ADR 0053 自己的不變量
+        （所有檔期加總＝真的付給 Meta 的錢）
+      - **T3d `creative_slot` 改吃節點鍵**：`ad_node_name` → `node_key`＋`channel_id`。
+        今天兩個同名的葉節點會被 `creative.py:138` 的 `set()` 壓成同一格
+      第 3 層（廣告）**這輪不綁**：它唯一的用途是接七維座標，那是 T5，而且沒有真實成效數字驗不了。
+      schema 位置已留好，開它是多幾列、不是 migration
+- [ ] **T4（route C）** `ad_channel` 補完（T3a 已建最小版：id／org_id／channel_key／label／enabled，
+      這裡補五個能力旗標＋`last_data_at`／`data_lag_days`／`spec`，並決定它和
+      `platform_objectives.json` 誰是「有哪些平台」的真相——T3 刻意不搬那個檔）
+      ＋ `ad_channel_format_spec`（鍵是 (channel, format)）＋ `channel_credential`
       取代 `meta_credential`（現在主鍵是 org_id＝一個組織只能一個 token）＋ `meta_ad_account` 補 `timezone_name`
       （Meta 回的日期是廣告帳戶時區，現在沒有這欄）
-- [ ] **T5（route C）** 成效回流接座標 ＋ 診斷（程式先壓縮、三個 agent、程式排序取前 5）
+- [ ] **T5（route C）** 成效回流接座標——**第 3 層（廣告）的綁定是這張票的**（ADR 0055 §7：
+      schema 位置 T3a 已留好，開它是多幾列不是 migration），同時決定
+      `creative_candidate.published_ad_external_id` 是留成便利欄位還是刪掉
+      ＋ 診斷（程式先壓縮、三個 agent、程式排序取前 5）
       ＋ `meta_entity_spend` 補 `currency` 與 `(adset_id, spend_date)` 索引 ＋ `channel_revenue` 補 spend／檔期／幣別／
       通路／來源雜湊與唯一鍵（現在手填列完全不去重）＋ `learning_ledger` 趁 0 列一次補齊
       ＋ 破除 `_latest_task_row`（`app/schedule/routes.py:133-139`）的「最新一列即真相」。**閉環在這裡合攏**
