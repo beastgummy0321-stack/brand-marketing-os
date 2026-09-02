@@ -211,20 +211,35 @@ Offered at the premise check and not chosen — recorded so they are not re-prop
 - **Move T4 ahead of T3.** Rejected: T4 also replaces the credential table, which is the
   permission path, and pulling it forward makes this round much longer.
 
-## 11. Open, and deliberately not settled here
+## 11. An ad that belongs to no period falls back to the day's owner
 
-**Whose spend is an ad that belongs to no period?** ADR 0053 §4 promised T3 would refine the
-subject of the overlap rule from "the brand's spend that day" to "this node's spend that day",
-and `period_node_membership` is the table that makes it nameable. But a brand's Meta account
-also holds ad sets that were never built from a tree, and a node-level settlement that only
-counts membership rows would drop their spend — breaking the one invariant ADR 0053 says matters
-most: **the sum over all periods equals the money actually paid to Meta.**
+ADR 0053 §4 promised T3 would refine the subject of the overlap rule from "the brand's spend that
+day" to "this node's spend that day", and `period_node_membership` is the table that makes it
+nameable. But a brand's Meta account also holds ad sets that were never built from a tree —
+opened by hand, or left over — and a node-level settlement that counted only membership rows
+would drop their spend, breaking the one invariant ADR 0053 says matters most: **the sum over all
+periods equals the money actually paid to Meta.**
 
-Two readings, both defensible, neither written down anywhere: an ad set with no membership falls
-back to whichever period owns that *day* at brand level (today's rule, applied to the remainder),
-or it belongs to no period and shows on the screen as unassigned spend. This changes settled
-money, so it is the user's decision, not this ADR's. It is held on `BOARD.md` as T3e and no
-ticket is dispatched until it is answered. The rest of T3 does not depend on it.
+Settled by the user, 2026-09-03. Spend on a given day is split in two:
+
+- **Registered** — an ad set with at least one membership covering that day goes to the period
+  that owns *it* on that day, by ADR 0053 §4's rule applied to the memberships (shortest period
+  wins, ties split by `allocation_weight`).
+- **The remainder** — everything else that day goes to the period that owns *the day* at brand
+  level, by ADR 0053 §4's rule applied to the periods' own date ranges. That is today's
+  behaviour, unchanged, applied to what is left.
+
+Both parts are clipped to the period's own `[start_date, end_date]`; a membership reaching
+outside its period's dates never drags outside spend in. A day covered by no period is taken by
+nobody, exactly as today.
+
+**Revenue is not split this way.** `channel_revenue_summary` has no node dimension, and ADR 0053
+already says attributing revenue to an ad is T5/T6's problem. Revenue keeps the brand-level rule
+in full.
+
+Rejected: showing unregistered spend as a separate "unassigned" figure. More honest in the
+abstract, but it puts a number on the settlement screen that reconciles with nothing, and the
+invariant above is the one the user actually settles against.
 
 ## 12. What we looked at (reuse-first §2)
 
