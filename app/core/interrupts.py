@@ -50,7 +50,7 @@ STALE_AFTER_DAYS = 14  # 資訊性項目逾期自動降級封存的門檻（比�
 
 
 def enqueue(conn, *, org_id: str, category: str, dedupe_key: str, message: str,
-            brand_id: str | None = None, campaign_cycle_id: str | None = None,
+            brand_id: str | None = None, campaign_period_id: str | None = None,
             action_url: str | None = None, kind: str | None = None,
             visible_from: date | datetime | None = None) -> str | None:
     """送進打斷佇列；同去重鍵已存在就不重複塞（回傳 None）。不自動 commit（比照 write_audit，
@@ -80,10 +80,10 @@ def enqueue(conn, *, org_id: str, category: str, dedupe_key: str, message: str,
 
     interrupt_id = new_id("itr")
     conn.execute(
-        "INSERT INTO interrupt (id, org_id, brand_id, campaign_cycle_id, dedupe_key, category, kind,"
+        "INSERT INTO interrupt (id, org_id, brand_id, campaign_period_id, dedupe_key, category, kind,"
         " severity, message, action_url, visible_from, status, created_at)"
         " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'open', %s)",
-        (interrupt_id, org_id, brand_id, campaign_cycle_id, dedupe_key, category, kind,
+        (interrupt_id, org_id, brand_id, campaign_period_id, dedupe_key, category, kind,
          spec["severity"], message, action_url, visible_from, now_utc()),
     )
     return interrupt_id

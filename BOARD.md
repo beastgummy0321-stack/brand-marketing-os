@@ -39,10 +39,8 @@ CASCADE 今早已修、上傳有 50MB 上限、產品照那條查無此事）。
       與 **ADR 0054**（節慶清單改走部門資料檔，修訂 ADR 0036）；ADR 0050 的表清單同步劃掉
       `holiday` 與 `cpa_basis`。補了兩份缺的契約頁（`brand_intelligence`／`brand_web`）。
       **T2 太大，垂直切成三張，循序做**（票在 `docs/issues/`）：
-  - [ ] **T2a** 檔期三張表（`campaign_period`／`campaign_period_budget_version`／
-        `ad_set_period_membership`，**絕不加 `unique(ad_set_id)`**）＋ `interrupt.campaign_period_id`
-        ＋ `llm_task.campaign_period_id` ＋ 刪 `campaign_skip`。**休眠票**：不寫任何一列，現有測試全綠即證明
-  - [ ] **T2b** 排程頁起訖日→建檔期、四值狀態、「已結束，需人工確認」紅標、結算按鈕與快照、
+  - [x] ~~**T2a**~~ 2026-09-02 done（審查 ship，跨租戶讀取實測擋住）
+  - [>] **T2b** 排程頁起訖日→建檔期、四值狀態、「已結束，需人工確認」紅標、結算按鈕與快照、
         重疊「短的贏」。**`approval.max_daily_amount` 不在本票**——見下面「需批准」那條
   - [ ] **T2c** `product_economics_version`（半開區間，存檔即以「今天」切版）＋刪掉
         `cpa_roas_basis`「計算口徑」與產品頁的「生效日」輸入框。與 T2a／T2b 零共用檔
