@@ -113,12 +113,19 @@ Supabase（`postgres@127.0.0.1:54322`）：
 R3 已切成兩張，決策全部收在 **ADR 0052**（表的形狀、角色、claim、為什麼不寫 FORCE、
 為什麼佇列不碰、哪些過期敘述要改哪些不改，都在裡面；看板不再重複一份）。R2 併進 R3a。
 
-- [ ] **R3b（route C，需批准）打開開關。** 票已寫好在 `docs/issues/r3b-rls-switch/`，等 R3a 綠了再派。
-      `require_actor()` 之後降權、連線還回池子時重置、rollback 後重新套用，然後修被咬出來的東西。
-      三件實測釘死在票裡：沒帶 claim 與空字串 claim 都看到 0 列；**沒 commit 的 `SET ROLE`
-      會被 rollback 默默還原**（RLS 悄悄關掉、閘門全綠）；`app/identity/` 那五條路由直接呼叫
-      `authenticate()` 不走 `require_actor`，所以天然不被咬——這是對的，`accept_invite`
-      本來就要跨組織讀寫
+**2026-09-02 實測：把開關打開跑一次全套，708 支裡壞 22 支，而且全部同一個原因**——降權之後
+讀不到 Supabase Vault（`permission denied for schema vault`，`app/core/settings.py:90`）。
+所以 R3 的後半再切成兩張：先開一扇只認自己組織的保險箱門（使用者裁決，2026-09-02），
+再打開開關。另外 25 個「錯誤」只在 `-n auto` 平行時出現、單獨跑全綠，R3c 要負責解釋清楚。
+
+- [>] **R3b（route C）Vault 開一扇只給自己組織的門。** 票在 `docs/issues/r3b-vault-org-door/`，已派工。
+      三個以管理員身分執行的函式（讀／存／刪），沒帶 claim 時照現況放行（所以這張票行為零改變），
+      帶了 claim 就只認自己組織的 secret。**它比現況更嚴**：今天程式裡任何一行都讀得到所有組織的金鑰
+- [ ] **R3c（route C）打開開關。** 票已寫好在 `docs/issues/r3c-rls-switch/`，等 R3b 綠了再派。
+      `require_actor()` 之後降權、連線還回池子時重置、rollback 後重新套用。
+      **`app/core` 的行數棘輪 1554 頂滿了，這張票調高並寫理由**（2026-09-02 使用者裁決：
+      全域規則「不得放寬容忍清單求綠」與這道閘門自己的說明「長大就改那張表」直接相撞，
+      裁決是調高、寫理由、調到量到的數字不留餘裕，並在 `docs/tech-debt.md` 留一條）
 
 ## 需批准（金流路徑）：核准的到底是「上限」還是「當時那個數字」——T2 動工前要答
 
