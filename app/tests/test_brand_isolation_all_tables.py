@@ -51,6 +51,9 @@ BRAND_AGNOSTIC_EXCEPTIONS = {
     "meta_entity_spend": "票 05／S1：帳號＋層級＋實體＋日的每日花費紀錄，跟 meta_ad_account"
         "同一個道理——一個帳號可能同時綁兩個品牌（brand_meta_ad_account 是 m:n），花費列存在"
         "帳號層，不能硬塞一個 brand_id 進去（否則要嘛雙算，要嘛得任意選一個品牌）",
+    "ad_channel": "票 T3a（ADR 0055 §5）：組織層「這個組織連了哪些廣告平台」清單，一個"
+        "組織可能同時服務好幾個品牌，頻道本身不屬於單一品牌；真正的品牌歸屬在"
+        "channel_entity_map（有 NOT NULL brand_id，照常過這個檢查，不在例外清單）",
 }
 
 
