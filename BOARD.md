@@ -81,6 +81,40 @@ CASCADE 今早已修、上傳有 50MB 上限、產品照那條查無此事）。
       需 GitHub Pro 或公開 repo。**本機單人階段先不付費**（2026-08-30 裁決），跟 Sentry／staging／CD
       同一批再決定；在那之前 CI 綠不擋合併，靠人工
 
+## 租戶隔離與 RLS（2026-09-02 工作流壓測後新增）
+
+背景一句話：`test_org_isolation_all_tables.py` 守的是「每張表有沒有 `org_id` 欄位」（schema 層），
+2026-09-02 新增的 `UnscopedTenantReadScanTest`（`test_architecture_boundaries.py:257`）守的是
+「讀租戶表的函式有沒有帶租戶欄位」（查詢層）。**兩層都守到了，但資料庫本身一條 RLS 都沒有**——
+20 個 migration、99 張表、0 條 `row level security`，後端用 `postgres` 超級使用者連線
+（`app/core/db.py:92-94`），超級使用者無視 RLS，連 FORCE 都無視。
+
+急迫性判定：前端只跟 FastAPI 講話（憲法 3），**沒有不受信任的客戶端握有 DB 連線**，
+所以 RLS 在這裡是第二道防線，不是主要門禁——這跟瀏覽器直連的一般 Supabase 專案不同，低一階。
+但 T2～T6 要新增約 25 張表（ADR 0050），**現在不帶，將來要補的是 124 張而不是 99 張。**
+
+- [ ] **R1（route C，半天）RLS 追蹤切片：只做一張表。**
+      挑一張現有的表，開 RLS ＋ 寫 org policy ＋ **用非超級使用者角色連進去**，
+      測「B 組織看到 0 列」。沒跑過的 policy 是沒驗過的碼——先在一張表上證明形狀對，
+      才知道換連線角色會炸到什麼、真實代價多少。**排在 T2 之前**，因為 ② 要照抄它的形狀
+- [ ] **R2（跟著 T2～T6 做，每張新表約 3 行）新表出生就帶 RLS ＋ policy。**
+      今天完全不作用（超級使用者無視），零行為改變、零風險；價值是「開啟它是打開開關，不是改 schema」。
+      **配套棘輪**：`test_org_isolation_all_tables.py` 加一條「新表必須開 RLS」，既有 99 張凍住——
+      沒有棘輪，做到 T4 就會忘
+- [ ] **R3（route C，排進 07-2 部署前，1～2 天，需批准）真正的開關。**
+      連線角色 `postgres` → 帶 org claim 的 `authenticated`、補完 99 張舊表的 policy、
+      `FORCE ROW LEVEL SECURITY`、寫自己的 ADR。排這裡的理由：跟 Sentry／staging／CD 同一批，
+      是 RLS 第一次真的承重（多組織共用雲端）的時刻，而且**還沒有真實客戶資料**。
+      **絕對不要排在上雲後**——帶著付費客戶資料 retrofit，中間任何一條 policy 寫錯就是 A 看到 B。
+      **豁免四張佇列表**（`procrastinate_events`／`_jobs`／`_periodic_defers`／`_workers`）：
+      沒有 `org_id`，開 RLS 會把 worker 鎖死
+- [ ] **R4（調查，非 route C）四處凍結的無租戶欄位讀取，去看呼叫端有沒有先驗。**
+      `KNOWN_UNSCOPED_TENANT_READS`（`test_architecture_boundaries.py:277`）凍了四項：
+      `routes_report_api.py::_report_shape`、`intake/repository.py::list_llm_cost_items`、
+      `intake/repository.py::get_draft_spend`、`llm/gateway.py::get_task`。
+      四個都是「id 由呼叫端給、函式內沒有租戶欄位」的形狀。**要清掉是去追呼叫鏈確認 id 驗過，
+      不是把它們從清單刪掉。** 追完若真的沒驗＝跨租戶讀取，當場升 route C
+
 ## 需批准（金流路徑）：核准的到底是「上限」還是「當時那個數字」——T2 動工前要答
 
 `_tree_signature`（`app/schedule/routes.py:213-224`）把每個節點的 `daily_amount` 算進 `content_hash`，
@@ -170,8 +204,11 @@ Dependabot #1（`nanoid`，修補版 3.3.18）：**`saas` 這邊已經是 3.3.18
 
 - [ ] **設這個品牌的 `conversion_goal`**（1 分鐘）。現在 NULL，所以任何地方的 CPA（每次成交花多少錢）
       都是空白——那是「不知道什麼算成交」，不是「沒有成交」。**這是資料不是程式**
-- [ ] **跑 `claude plugin update`**（30 秒）。規則已進 plugin repo v4.7.0（`c50ff15`，**還沒 push**），
-      但這台機器 cache 還是 4.6.1——**在更新之前，新開的 session 注入的仍然是舊規則**
+- [ ] **push plugin repo 並跑 `claude plugin update`**（1 分鐘）。規則已進 plugin repo **v5.5.1**
+      （2026-09-02 壓測後的三種判決／第二次紅換工作種類／派工單帶 `agent-brief.md`／模型閘門，
+      證據與失敗數據在該 repo 的 `STRESS-2026-09-02.md`）。**還沒 push**；
+      這台機器的 cache 目錄名仍是 `5.4.0`，但檔案已就地同步過，**本機現在跑的就是新規則**。
+      其他機器或重裝之後要拿到新規則，得先 push 再 `claude plugin update`
 - [ ] **2026-08-30 承諾：這幾天真的貼一則廣告到 Meta**（用排程頁產出的圖片提示詞生一張圖 →
       上傳進品牌智庫的官方素材 → 手動貼進 Meta 建一則廣告）。這條走過之前，**「把圖掛到廣告節點上」
       一律判「不做」**——圖的落腳處蓋好了，但圖片這件事一次都沒真的痛過，沒走過就蓋下一層＝

@@ -57,6 +57,11 @@
   ＋**端到端 smoke**（`cd frontend && npm run e2e`——它自己 build 前端、起一個測試專用後端在 8720、跑完收掉；
   唯一前提是 `supabase start` 已起。你自己開著 8710 的系統不影響它）。
   後端票也要跑——server 起不來、畫面吐 `[object Object]`、排程凍住全站，這類整合 bug 只在這裡現形（2026-08-29 那七個 `fix:`）。
+- **動 schema／migration 的票，閘門一律再加這三個檔**（它們守的是全站不變量，不是「受影響的測試」，
+  只跑受影響的檔會漏掉，要等合併跑全套才紅）：
+  `uv run pytest app/tests/test_org_isolation_all_tables.py app/tests/test_brand_isolation_all_tables.py app/tests/test_architecture_boundaries.py -q`
+  ——每張表有 NOT NULL `org_id`＋FK、每張表有 NOT NULL `brand_id`（除具名豁免）、
+  以及讀租戶表的函式有沒有帶租戶欄位（`UnscopedTenantReadScanTest`，2026-09-02 加，凍結四處既有欠帳）
 - 合併進主線：`uv run pytest app/tests -q -n auto --dist loadfile`
   （`--dist loadfile` 必要——`conftest.py` 給每個測試模組自己的 DB／schema）。
   **跑之前先關掉多餘的後端**：同時開著兩個後端（8710＋另一個）再跑 `-n auto`，本機 Postgres

@@ -254,6 +254,103 @@ class CrossLayerRawSqlScanTest(unittest.TestCase):
                 )
 
 
+# ---- A1 檢查⑤：讀租戶資料表的函式，函式裡要出現租戶欄位（org_id 或 brand_id）----
+# 為什麼是這一條：`test_org_isolation_all_tables.py` 守的是「每張表有沒有 org_id 這個欄位」，
+# 那是 schema 層。欄位存在不代表查詢有用它——`SELECT ... FROM x WHERE id = %s` 照樣過那道閘門，
+# 而它就是跨租戶讀取的標準長相。這一條補的是查詢層。
+#
+# 天花板（刻意接受，同本檔開頭那段）：靜態掃描，不是 SQL parser。
+# - 粒度是「函式」不是「字串」：SQL 常常先寫基底字串、再依參數 `sql += " AND org_id = %s"`
+#   接起來（`app/core/interrupts.py:148` 就是），只看單一字面會把它誤判成違規。
+# - 反過來，一個函式裡兩句 SQL、只有一句帶租戶欄位，這道掃描看不出來。它是絆索，不是證明。
+_TENANT_CREATE_TABLE = re.compile(
+    r"create\s+table\s+(?:if\s+not\s+exists\s+)?([a-zA-Z_][\w]*)\s*\((.*?)\n\s*\)\s*;",
+    re.IGNORECASE | re.DOTALL,
+)
+_TENANT_ORG_COLUMN = re.compile(r"\borg_id\b", re.IGNORECASE)
+_TENANT_READ_VERB = re.compile(r"^\s*(SELECT|UPDATE|DELETE)\b", re.IGNORECASE)
+_TENANT_READ_TABLE = re.compile(r"\b(?:FROM|JOIN)\s+([a-zA-Z_][\w]*)", re.IGNORECASE)
+_TENANT_SCOPE_COLUMN = re.compile(r"\b(org_id|brand_id)\b", re.IGNORECASE)
+
+# 已知違例：四個函式拿原始 id 取租戶資料，整個函式沒有任何租戶欄位。凍結現況、只准減不准加，
+# 寫法比照 KNOWN_SQL_VIOLATIONS。四個都是「id 由呼叫端給」的形狀——呼叫端若沒先驗過那個 id
+# 屬於誰，就是跨租戶讀取。要清掉這四項是去看呼叫端有沒有驗，不是把它們從清單刪掉。
+KNOWN_UNSCOPED_TENANT_READS = {
+    ("app/brand_web/routes_report_api.py", "_report_shape"),
+    ("app/intake/repository.py", "list_llm_cost_items"),
+    ("app/intake/repository.py", "get_draft_spend"),
+    ("app/llm/gateway.py", "get_task"),
+}
+
+
+def _tenant_tables() -> set:
+    """租戶資料表＝migration 的 CREATE TABLE 內文出現 org_id 的那些表。
+
+    從 migration 檔靜態反推，不連資料庫：這道掃描掃的是原始碼，要能在沒有 Postgres 時跑。
+    連 DB 的那道是 `test_org_isolation_all_tables.py`，兩者守的不是同一件事。
+    """
+    tables = set()
+    for path in sorted((REPO_ROOT / "supabase" / "migrations").glob("*.sql")):
+        for name, body in _TENANT_CREATE_TABLE.findall(path.read_text(encoding="utf-8")):
+            if _TENANT_ORG_COLUMN.search(body):
+                tables.add(name.lower())
+    return tables
+
+
+def _unscoped_tenant_read_functions() -> set:
+    """回傳 {(檔案相對路徑, 函式名)}：函式讀了租戶表，但整個函式沒提到租戶欄位。"""
+    tenant = _tenant_tables()
+    found = set()
+    for path in _iter_py_files():
+        rel = _rel(path)
+        if rel.startswith("app/tests/"):
+            continue
+        source = path.read_text(encoding="utf-8")
+        try:
+            tree = ast.parse(source)
+        except SyntaxError:
+            continue
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            reads_tenant = any(
+                isinstance(child, ast.Constant)
+                and isinstance(child.value, str)
+                and _TENANT_READ_VERB.match(child.value)
+                and ({t.lower() for t in _TENANT_READ_TABLE.findall(child.value)} & tenant)
+                for child in ast.walk(node)
+            )
+            if not reads_tenant:
+                continue
+            body = ast.get_source_segment(source, node) or ""
+            if not _TENANT_SCOPE_COLUMN.search(body):
+                found.add((rel, node.name))
+    return found
+
+
+class UnscopedTenantReadScanTest(unittest.TestCase):
+    """讀租戶表的函式必須在函式內出現 org_id 或 brand_id；既有四處凍在清單裡。"""
+
+    def test_no_new_unscoped_tenant_reads(self):
+        new = _unscoped_tenant_read_functions() - KNOWN_UNSCOPED_TENANT_READS
+        self.assertEqual(
+            set(), new,
+            "以下函式讀了帶 org_id 的資料表，卻整個函式都沒有租戶欄位——跨租戶讀取的標準長相。"
+            "修好它，不要加進 KNOWN_UNSCOPED_TENANT_READS：\n"
+            + "\n".join(f"  {rel}::{fn}()" for rel, fn in sorted(new)),
+        )
+
+    def test_known_unscoped_list_is_not_stale(self):
+        """清單本身要保持真實：修好了要記得刪那一項，否則清單會變成掩護新違例的死名單。"""
+        fixed = KNOWN_UNSCOPED_TENANT_READS - _unscoped_tenant_read_functions()
+        self.assertEqual(
+            set(), fixed,
+            "以下項目已經不再違規，KNOWN_UNSCOPED_TENANT_READS 該清掉它們了：\n"
+            + "\n".join(f"  {rel}::{fn}()" for rel, fn in sorted(fixed)),
+        )
+
+
+
 _WRITE_SQL_VERB = re.compile(r"\b(INSERT|UPDATE|DELETE)\b", re.IGNORECASE)
 
 
