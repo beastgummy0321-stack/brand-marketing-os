@@ -48,6 +48,10 @@ segment of the object key, not the bucket.**
 3. **No RLS policy on `storage.objects`.** The bucket is private and the only client is the backend
    holding a key that bypasses RLS; a policy written today protects nothing. Consistent with ADR
    0027 decision 9. The day a browser talks to Storage directly, D1 makes it one policy.
+   **2026-09-02:** ADR 0052 gave every `public` table a policy, but not this one, and this point
+   stands unchanged — 0052 governs the app's own psycopg connection to `public`, while Storage is
+   reached over REST with the service-role key, which bypasses RLS regardless of any policy. The
+   citation of 0027 decision 9 above now reads against that decision's correction line.
 4. **No bucket-level size or MIME limit.** `app/intake/state.py:403-411` and
    `app/brand_web/routes_library.py:71-76` already validate, in Chinese, before anything is
    written. A second number with no source is a guess.

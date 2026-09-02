@@ -82,6 +82,20 @@ are written down here.
    `authenticated` policy is a red gate. The existing 47 are fixed in the same slice, so the
    gate ships with nothing frozen. T2–T6's ~25 new tables inherit it.
 
+## What counts as a stale claim, and what does not
+
+Nine places in the repo say some version of "RLS is on, there are no policies, and the backend
+connects as `postgres`". Two kinds, handled differently:
+
+- **In-force documents** — `app/tests/test_real_db_schema_drift.py` (corrected by R1), ADR 0027
+  decision 9 (correction line added by R1), ADR 0038 and ADR 0043. These describe the system in
+  the present tense and are read as current fact. They are corrected.
+- **Applied migration files** — the header comments in `20260828000001_core_rls.sql`,
+  `20260830000001_core_approval.sql` and `20260830000004_meta_entity_spend.sql`. An applied
+  migration is a dated record of one change, not a claim about today; the project rule is that
+  applied files are never edited, and rewriting their comments to match a later decision would
+  make the history lie about what that migration did. They stay as written.
+
 ## Why this is a second lock, not the front door
 
 Constitution 3: the frontend only talks to FastAPI. No untrusted client holds a database

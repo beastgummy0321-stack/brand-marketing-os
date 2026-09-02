@@ -70,6 +70,13 @@ connection and is never exposed through PostgREST, which is what RLS on `public`
 close. If the drift gate's RLS check reaches the new schema, enable RLS on the four tables with
 no policies, exactly as every other table does.
 
+**2026-09-02, ADR 0052:** the second half of that last sentence no longer describes the other
+tables — every table in `public` that carries `org_id` now has a policy. The queue still does
+not, and that is deliberate, not an oversight: `background.enqueue()` opens its own connection
+(`app/background/__init__.py:159-172`), so the per-request role switch 0052 introduces never
+reaches these four tables. They stay policy-less and grant-less. Everything else in this
+paragraph is unchanged.
+
 ## The gate this ADR owes
 
 A limit in prose is not a limit. Rule 5's "touches only its own organisation" has never had a

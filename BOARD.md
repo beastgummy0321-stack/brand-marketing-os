@@ -110,24 +110,18 @@ Supabase（`postgres@127.0.0.1:54322`）：
 降成 `authenticated` 角色並帶上 org claim；背景工作、登入、開機掃描維持現狀。放棄的是
 「背景工作寫錯組織時資料庫會擋」，那一層仍由 `UnscopedTenantReadScanTest` 守。
 
-- [ ] **R2 縮成一條棘輪**（原本的「新表必須開 RLS」已經存在，見上面的更正）：
-      R3 收尾時在 `test_real_db_schema_drift.py` 再加一條——**有 `org_id` 的表必須有一條
-      `TO authenticated` 的 policy**，例外只有具名的那幾張。既有的 47 張在 R3 當場補完，
-      所以這條棘輪不需要凍結清單（不得新開豁免名單）。沒有它，做到 T4 就會忘
-- [ ] **R3（route C，1～2 天，需批准）真正的開關。2026-09-02 改判：提前到這一輪做，不等 07-2。**
-      改判的理由是量出來的——`public` 只有 47 張表不是 99 張，而且 RLS 早就開好了，
-      剩下的是 policy 與角色；再加上 T2～T6 馬上要多 25 張表，晚做等於多寫 25 次。
-      內容：`require_actor()` 之後 `SET ROLE authenticated` ＋ `SET app.org_id`、
-      連線歸還連線池時 `RESET`（psycopg_pool 3.3.1 的 `reset=` 掛勾，`pool.py:54`）、
-      補完 45 張表的 policy（`organisation`／`app_user` 兩張沒有 `org_id`，另外寫）、
-      `FORCE ROW LEVEL SECURITY`（因為 `postgres` 帶 BYPASSRLS，不 FORCE 也沒用——
-      **要先量 FORCE 會不會把 migration 與背景工作鎖死**）、寫自己的 ADR（下一個編號 0052），
-      並且同一個 commit 修掉九處「no policies／backend connects as postgres」的過期敘述
-      （`core_rls.sql:1-2`、`core_approval.sql:47`、`meta_entity_spend.sql:48`、
-      `test_real_db_schema_drift.py:101,103,138`、ADR 0038:71、ADR 0043:49、ADR 0027 決策 9）。
-      **豁免四張佇列表**（`procrastinate_events`／`_jobs`／`_periodic_defers`／`_workers`，
-      住在 `public__queue`）：沒有 `org_id`，給 policy 會把 worker 鎖死；但已登入的請求會
-      enqueue，所以那四張要給 `authenticated` 一條 `USING (true)` 或等效授權，**這點要實測**
+R3 已切成兩張，決策全部收在 **ADR 0052**（表的形狀、角色、claim、為什麼不寫 FORCE、
+為什麼佇列不碰、哪些過期敘述要改哪些不改，都在裡面；看板不再重複一份）。R2 併進 R3a。
+
+- [>] **R3a（route C）47 張表全部補 policy ＋ 授權，開關不打開。** 票在 `docs/issues/r3a-rls-policies/`，
+      已派工。含 R2 那條棘輪：有 `org_id` 的表沒有 `TO authenticated` policy 就紅，
+      **不開豁免清單**（既有 45 張同一個 commit 補完）。行為零改變，用整套測試證明
+- [ ] **R3b（route C，需批准）打開開關。** 票已寫好在 `docs/issues/r3b-rls-switch/`，等 R3a 綠了再派。
+      `require_actor()` 之後降權、連線還回池子時重置、rollback 後重新套用，然後修被咬出來的東西。
+      三件實測釘死在票裡：沒帶 claim 與空字串 claim 都看到 0 列；**沒 commit 的 `SET ROLE`
+      會被 rollback 默默還原**（RLS 悄悄關掉、閘門全綠）；`app/identity/` 那五條路由直接呼叫
+      `authenticate()` 不走 `require_actor`，所以天然不被咬——這是對的，`accept_invite`
+      本來就要跨組織讀寫
 
 ## 需批准（金流路徑）：核准的到底是「上限」還是「當時那個數字」——T2 動工前要答
 
