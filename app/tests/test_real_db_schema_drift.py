@@ -98,12 +98,15 @@ class RealDbSchemaDriftTest(unittest.TestCase):
 
 
 class RowLevelSecurityGateTest(unittest.TestCase):
-    """Gate D (ticket 02-5, ADR 0027 decision 9): RLS enabled on every table, no policies.
+    """Gate D (ticket 02-5, ADR 0027 decision 9): RLS enabled on every table, and policies
+    scoped to role `authenticated` — which `anon` is not (docs/issues/r1-rls-tracer/ticket.md).
 
-    Backend connects as `postgres` (bypasses RLS). RLS exists to close anon/authenticated
-    access through PostgREST. Two checks: (1) every base table in this module's schema has
-    `relrowsecurity = true`; (2) on the real `public` schema, `SET ROLE anon` sees zero rows
-    of `organisation` while postgres sees the seeded `org_dev` — a live proof, not a flag check.
+    Backend connects as `postgres` (bypasses RLS). RLS closes off `anon` entirely; `authenticated`
+    gets only what a policy grants it — as of r1-rls-tracer that is `brand`, scoped by the
+    `app.org_id` GUC (app/tests/test_rls_tenant_policy.py). Two checks: (1) every base table in
+    this module's schema has `relrowsecurity = true`; (2) on the real `public` schema, `SET ROLE
+    anon` sees zero rows of `organisation` while postgres sees the seeded `org_dev` — a live
+    proof, not a flag check.
     """
 
     def setUp(self):
@@ -135,7 +138,7 @@ class RowLevelSecurityGateTest(unittest.TestCase):
                 self.conn.rollback()
         finally:
             self.conn.execute("RESET ROLE")
-        self.assertEqual(as_anon, 0, "anon must not see tenant rows (RLS on, no policies)")
+        self.assertEqual(as_anon, 0, "anon must not see tenant rows (RLS on, policies scoped to authenticated)")
 
 
 if __name__ == "__main__":

@@ -85,30 +85,51 @@ CASCADE 今早已修、上傳有 50MB 上限、產品照那條查無此事）。
 
 背景一句話：`test_org_isolation_all_tables.py` 守的是「每張表有沒有 `org_id` 欄位」（schema 層），
 2026-09-02 新增的 `UnscopedTenantReadScanTest`（`test_architecture_boundaries.py:257`）守的是
-「讀租戶表的函式有沒有帶租戶欄位」（查詢層）。**兩層都守到了，但資料庫本身一條 RLS 都沒有**——
-20 個 migration、99 張表、0 條 `row level security`，後端用 `postgres` 超級使用者連線
-（`app/core/db.py:92-94`），超級使用者無視 RLS，連 FORCE 都無視。
+「讀租戶表的函式有沒有帶租戶欄位」（查詢層）。兩層都守到了，缺的是資料庫自己那一層。
+
+**2026-09-02 實測更正（本節原本寫的三個數字都錯，錯在偏悲觀）**，數字全部量自跑著的本機
+Supabase（`postgres@127.0.0.1:54322`）：
+
+- 「一條 RLS 都沒有」**是錯的**。`supabase/migrations/20260828000001_core_rls.sql` 加後續六個檔
+  已經 `ALTER … ENABLE ROW LEVEL SECURITY` 共 95 次，`public` 的 47 張表**每一張都開著**。
+- 「99 張表」**是錯的**：`public` 是 47 張（票 3 那個 migration DROP 掉 44 張廣告表之後的現況），
+  另有 4 張 procrastinate 表住在隔壁 schema `public__queue`（ADR 0038）。
+- 「新表必須開 RLS 的棘輪要新增」**是錯的，它已經存在而且更嚴**：
+  `test_real_db_schema_drift.py:112` `test_every_table_has_rls_enabled` 要求 schema 裡
+  **每一張**表都開，不是只有新表。T2～T6 的新表漏開就是紅的。
+- 真正缺的是另外兩件：`pg_policies` 在 `public` 是 **0 列**（有鎖沒有鑰匙規則），
+  以及後端連線用的 `postgres` 帶 `rolbypassrls = true`（`app/core/db.py:91`）——
+  它其實不是 superuser，是 BYPASSRLS，效果一樣：無視 RLS，連 FORCE 都無視。
 
 急迫性判定：前端只跟 FastAPI 講話（憲法 3），**沒有不受信任的客戶端握有 DB 連線**，
 所以 RLS 在這裡是第二道防線，不是主要門禁——這跟瀏覽器直連的一般 Supabase 專案不同，低一階。
-但 T2～T6 要新增約 25 張表（ADR 0050），**現在不帶，將來要補的是 124 張而不是 99 張。**
+但 T2～T6 要新增約 25 張表（ADR 0050），**現在不帶 policy，將來要補的是 72 張而不是 47 張。**
 
-- [ ] **R1（route C，半天）RLS 追蹤切片：只做一張表。**
-      挑一張現有的表，開 RLS ＋ 寫 org policy ＋ **用非超級使用者角色連進去**，
-      測「B 組織看到 0 列」。沒跑過的 policy 是沒驗過的碼——先在一張表上證明形狀對，
-      才知道換連線角色會炸到什麼、真實代價多少。**排在 T2 之前**，因為 ② 要照抄它的形狀
-- [ ] **R2（跟著 T2～T6 做，每張新表約 3 行）新表出生就帶 RLS ＋ policy。**
-      今天完全不作用（超級使用者無視），零行為改變、零風險；價值是「開啟它是打開開關，不是改 schema」。
-      **配套棘輪**：`test_org_isolation_all_tables.py` 加一條「新表必須開 RLS」，既有 99 張凍住——
-      沒有棘輪，做到 T4 就會忘
-- [ ] **R3（route C，排進 07-2 部署前，1～2 天，需批准）真正的開關。**
-      連線角色 `postgres` → 帶 org claim 的 `authenticated`、補完 99 張舊表的 policy、
-      `FORCE ROW LEVEL SECURITY`、寫自己的 ADR。排這裡的理由：跟 Sentry／staging／CD 同一批，
-      是 RLS 第一次真的承重（多組織共用雲端）的時刻，而且**還沒有真實客戶資料**。
-      **絕對不要排在上雲後**——帶著付費客戶資料 retrofit，中間任何一條 policy 寫錯就是 A 看到 B。
-      **豁免四張佇列表**（`procrastinate_events`／`_jobs`／`_periodic_defers`／`_workers`）：
-      沒有 `org_id`，開 RLS 會把 worker 鎖死
-- [ ] **R4（調查，非 route C）四處凍結的無租戶欄位讀取，去看呼叫端有沒有先驗。**
+**2026-09-02 訪談定案（使用者選）：R1～R4 這輪全清，且 RLS 只咬「已登入的 API 請求」**——
+`require_actor()`（`app/shared/web.py:249`，全站 133 條路由的唯一入口）確認身分之後才把連線
+降成 `authenticated` 角色並帶上 org claim；背景工作、登入、開機掃描維持現狀。放棄的是
+「背景工作寫錯組織時資料庫會擋」，那一層仍由 `UnscopedTenantReadScanTest` 守。
+
+- [ ] **R2 縮成一條棘輪**（原本的「新表必須開 RLS」已經存在，見上面的更正）：
+      R3 收尾時在 `test_real_db_schema_drift.py` 再加一條——**有 `org_id` 的表必須有一條
+      `TO authenticated` 的 policy**，例外只有具名的那幾張。既有的 47 張在 R3 當場補完，
+      所以這條棘輪不需要凍結清單（不得新開豁免名單）。沒有它，做到 T4 就會忘
+- [ ] **R3（route C，1～2 天，需批准）真正的開關。2026-09-02 改判：提前到這一輪做，不等 07-2。**
+      改判的理由是量出來的——`public` 只有 47 張表不是 99 張，而且 RLS 早就開好了，
+      剩下的是 policy 與角色；再加上 T2～T6 馬上要多 25 張表，晚做等於多寫 25 次。
+      內容：`require_actor()` 之後 `SET ROLE authenticated` ＋ `SET app.org_id`、
+      連線歸還連線池時 `RESET`（psycopg_pool 3.3.1 的 `reset=` 掛勾，`pool.py:54`）、
+      補完 45 張表的 policy（`organisation`／`app_user` 兩張沒有 `org_id`，另外寫）、
+      `FORCE ROW LEVEL SECURITY`（因為 `postgres` 帶 BYPASSRLS，不 FORCE 也沒用——
+      **要先量 FORCE 會不會把 migration 與背景工作鎖死**）、寫自己的 ADR（下一個編號 0052），
+      並且同一個 commit 修掉九處「no policies／backend connects as postgres」的過期敘述
+      （`core_rls.sql:1-2`、`core_approval.sql:47`、`meta_entity_spend.sql:48`、
+      `test_real_db_schema_drift.py:101,103,138`、ADR 0038:71、ADR 0043:49、ADR 0027 決策 9）。
+      **豁免四張佇列表**（`procrastinate_events`／`_jobs`／`_periodic_defers`／`_workers`，
+      住在 `public__queue`）：沒有 `org_id`，給 policy 會把 worker 鎖死；但已登入的請求會
+      enqueue，所以那四張要給 `authenticated` 一條 `USING (true)` 或等效授權，**這點要實測**
+- [>] **R4（調查，非 route C）四處凍結的無租戶欄位讀取，去看呼叫端有沒有先驗。**
+      票在 `docs/issues/r4-unscoped-reads/`，已派工。
       `KNOWN_UNSCOPED_TENANT_READS`（`test_architecture_boundaries.py:277`）凍了四項：
       `routes_report_api.py::_report_shape`、`intake/repository.py::list_llm_cost_items`、
       `intake/repository.py::get_draft_spend`、`llm/gateway.py::get_task`。

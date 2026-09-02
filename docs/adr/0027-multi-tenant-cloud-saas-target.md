@@ -52,6 +52,9 @@ status: in-force
    ADR 0018／0024 皆已退休，程式裡沒有 `automation_level`；要重開需新 ADR。
    「下次不再提醒」存使用者層。M1–M3 降為 Meta 解封後的加法。
 9. **不做**：付費／方案、i18n、Convex、起手範本（借 JWT middleware 寫法即可）。RLS **開但不寫 policy**（02-5）：後端以 postgres 角色連線不受影響，用途是封死 anon／authenticated 直連 PostgREST；租戶隔離仍靠後端 `org_id` 過濾。
+   **2026-09-02 起，這條的「不寫 policy／後端不受影響」已被 ADR 0052 修正、不再成立**：
+   policy 現在有了，已登入的請求也不再帶 bypass——`require_actor()` 之後連線降成 `authenticated`
+   角色並帶 `app.org_id` claim。「RLS 全開」與「租戶隔離的主力仍是後端過濾」兩句維持不變。
 10. `app/mock_data.py` 改名 `app/core/vocab.py`（它是詞彙常數表）；`DEMO_BRANDS`、`seed_demo.py` 刪除。
 
 ## 取代／修正的既有決策
