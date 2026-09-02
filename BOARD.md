@@ -111,6 +111,11 @@ Dependabot #1（`nanoid`，修補版 3.3.18）：**`saas` 這邊已經是 3.3.18
 但 GitHub 掃的是預設分支 `master`，那邊還凍在 `v0.1-desktop` 的 3.3.17。警示會亮到 `saas` 併回
 `master` 為止——**不是還沒修，是修在另一條線上**。不為了關掉警示單獨去動凍結的 master。
 
+- [ ] **上線前必刪（2026-09-02 建，使用者要求）** `supabase/seed.sql` 尾巴那段排查用帳號：
+      `123@example.com` ／ `123456`，固定 UUID、固定組織 `org_bughunt`、固定品牌 `brd_bughunt`。
+      每次 `supabase db reset` 自動重建，這正是它存在的理由——重置資料庫來查 bug，不會連查 bug
+      的工具一起炸掉。**`supabase db push` 不會跑 seed 檔**，所以它到不了雲端，但它仍然是一組
+      進了版控的已知帳密：**任何一次真的部署之前，這整段連同這一行一起刪掉**
 - [ ] **需你裁決：畫面固定 1440px 寬，比它窄的螢幕右側看不到也捲不到**（2026-09-01 T1b 走查量到）。
       `AppShell.tsx:10` 是 `w-[var(--width-shell)]`，`tokens.css:66` 把它寫死 1440px，註解寫明
       「不做響應式」（ADR 0003／決策 0038）。`overflow-x: hidden` 一路傳到 body，所以 **1280 寬的視窗
