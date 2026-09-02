@@ -113,9 +113,6 @@ Supabase（`postgres@127.0.0.1:54322`）：
 R3 已切成兩張，決策全部收在 **ADR 0052**（表的形狀、角色、claim、為什麼不寫 FORCE、
 為什麼佇列不碰、哪些過期敘述要改哪些不改，都在裡面；看板不再重複一份）。R2 併進 R3a。
 
-- [>] **R3a（route C）47 張表全部補 policy ＋ 授權，開關不打開。** 票在 `docs/issues/r3a-rls-policies/`，
-      已派工。含 R2 那條棘輪：有 `org_id` 的表沒有 `TO authenticated` policy 就紅，
-      **不開豁免清單**（既有 45 張同一個 commit 補完）。行為零改變，用整套測試證明
 - [ ] **R3b（route C，需批准）打開開關。** 票已寫好在 `docs/issues/r3b-rls-switch/`，等 R3a 綠了再派。
       `require_actor()` 之後降權、連線還回池子時重置、rollback 後重新套用，然後修被咬出來的東西。
       三件實測釘死在票裡：沒帶 claim 與空字串 claim 都看到 0 列；**沒 commit 的 `SET ROLE`
