@@ -2,11 +2,15 @@
 id: 0051
 decision: The interface is a dashboard read at a glance, not a document read top to bottom; the shell is fluid up to 1920px.
 applies-to: [frontend/]
-supersedes: decision-0038-desktop-only-1440 (no file in repo; was cited by ADR 0003 and three code comments)
+supersedes: none
 status: in-force
 ---
 
 # The interface is a dashboard, not a document
+
+**Supersedes, in prose because it has no ADR file:** 「決策 0038 純桌機 1440px」. It was never
+written down as an ADR — it was cited by ADR 0003 and three code comments and nothing else.
+The `supersedes:` field only takes ADR ids, so it is recorded here.
 
 2026-09-02, dictated by the user in an interview. Until today **nothing in this repo decided
 what the product looks like.** Three things did, none of them a decision:

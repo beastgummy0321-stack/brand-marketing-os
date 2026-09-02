@@ -1,7 +1,7 @@
 ---
 id: 0027
 decision: The target is a multi-tenant cloud SaaS on Supabase: org to user to brand, and every table carries org_id.
-applies-to: [app/, supabase/migrations/, frontend/]
+applies-to: [supabase/migrations/, app/tests/test_org_isolation_all_tables.py, app/tests/test_brand_isolation_all_tables.py]
 supersedes: 0004
 status: in-force
 ---
@@ -35,20 +35,30 @@ status: in-force
    租戶隔離在後端一律以 `org_id` 過濾，升級 `test_brand_isolation_all_tables.py` 為
    「每張表必有 org_id」機器閘門。
 5. **背景工作：`procrastinate`**（Postgres 原生、SKIP LOCKED、重試、週期排程），獨立 worker 行程。
-   handler 契約：可重跑、只碰自己組織的資料、失敗丟例外由 worker 記錄；ADR 0024 第 5 條
-   「每個 Action 各自 try/except、三次失敗升級出卡」精神不變。每日備份模組退役（平台自帶）。
+   handler 契約：可重跑、只碰自己組織的資料、失敗丟例外由 worker 記錄；失敗處理沿用
+   「每件工作各自 try/except、三次失敗升級成一張卡吵人」（原出處 ADR 0024 第 5 條，該 ADR
+   已由 0046 退休，規則本身在此重述並繼續適用）。每日備份模組退役（平台自帶）。
 6. **憑證與設定**
    - AI 金鑰平台付（伺服器環境變數），用量按組織記錄（沿用 `llm/pricing.py`）。
      模型選擇改為**組織層**設定；多模型／客戶自帶金鑰只留 Provider 協定接縫，等第一個企業戶。
    - Meta／GA4：**組織層「已連接帳號」清單 → 品牌「綁定」其中一個**，憑證存 Supabase Vault。
      第一版仍貼 token／上傳 JSON，之後換 OAuth。
-7. **素材檔上傳進系統**（Storage，每組織一 bucket），掛在主題下；成效判讀仍只到主題（ADR 0008 不變）。
-8. **手動路徑永遠一級公民**：自動化不得讓手動路徑退化。自動度存品牌層（ADR 0018 第 4 條），
+7. **素材檔上傳進系統**（Storage，每組織一 bucket）。~~掛在主題下；成效判讀仍只到主題
+   （ADR 0008 不變）~~ **作廢 2026-09-02**：`creative_theme` 表已於 2026-08-29 隨 `app/ads/`
+   刪除，ADR 0008 已退休；落腳處由 ADR 0043 定案（`assets` bucket，路徑第一段是組織 id），
+   歸屬由 ADR 0050 定案（素材檔掛品牌，成效座標在 `creative_candidate`）。
+8. **手動路徑永遠一級公民**：自動化不得讓手動路徑退化（憲法第 8 條）。
+   ~~自動度存品牌層（ADR 0018 第 4 條）~~ **作廢 2026-09-02**：自動度是調度台的設定，
+   ADR 0018／0024 皆已退休，程式裡沒有 `automation_level`；要重開需新 ADR。
    「下次不再提醒」存使用者層。M1–M3 降為 Meta 解封後的加法。
 9. **不做**：付費／方案、i18n、Convex、起手範本（借 JWT middleware 寫法即可）。RLS **開但不寫 policy**（02-5）：後端以 postgres 角色連線不受影響，用途是封死 anon／authenticated 直連 PostgREST；租戶隔離仍靠後端 `org_id` 過濾。
 10. `app/mock_data.py` 改名 `app/core/vocab.py`（它是詞彙常數表）；`DEMO_BRANDS`、`seed_demo.py` 刪除。
 
 ## 取代／修正的既有決策
+
+**讀這張表前先看這句（2026-09-02 補）**：表中 ADR 0004、0018、0024 後來已由 ADR 0046
+整份退休，移到 `docs/adr/retired/`。下面的「修正」是寫在退休之前的歷史紀錄，不是現行依據——
+現行依據是憲法與 0046 之後的在行 ADR。
 
 | 既有 | 處置 |
 |---|---|

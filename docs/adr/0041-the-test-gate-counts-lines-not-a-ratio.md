@@ -38,8 +38,11 @@ Now the cause and the alarm line up:
 - Adding test lines turns it red. Proven the same way: adding 30 lines to a test file turns it
   red immediately.
 
-The ratio has not been thrown away. It is computed and printed in the failure message, and the
-0.7 target in `docs/workflow-diet.md` still stands. It is a north star, not a brake.
+The ratio has not been thrown away. It is computed and printed in the failure message so the
+trend stays visible. **No document sets a target number for it any more** — `docs/workflow-diet.md`
+carried a 0.7 north star and was deleted (2026-09-01); its rules moved to the global `CLAUDE.md`
+and the skeleton-slice workflow, neither of which states a ratio. Restating 0.7 here would be
+inventing a number with no source, so the printed ratio is a reading, not a target.
 
 ## What this does not license
 

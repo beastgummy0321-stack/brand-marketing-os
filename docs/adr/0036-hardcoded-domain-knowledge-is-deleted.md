@@ -62,7 +62,9 @@ theoretical.
 The user's decision, recorded knowingly: **the program is an aid, the user vets what it
 produces, and excessive constraints in the prompt interfere with the agent's creative range.**
 A brand that wants a specific claim avoided writes it as a brand rule, which reaches every
-prompt through `context_compiler` — see ADR 0037, which makes that one button press.
+prompt through `context_compiler`. (This sentence used to cite ADR 0037 for the one-button
+version; 0037 was retired by ADR 0046 and the exclusion path is now ADR 0050's `feedback`
+table. The brand-rule path itself is unchanged and still live.)
 
 Deleting a check outright is beyond narrowing what a gate applies to, and the global rules
 require an explicit written decision for that. This section is that decision.

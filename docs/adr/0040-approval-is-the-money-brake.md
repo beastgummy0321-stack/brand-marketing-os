@@ -11,13 +11,20 @@ status: in-force
 Ticket: `.scratch/approval-slice/issues/01-approval-is-the-money-brake.md`. New table
 `approval`, new module `app/core/approval.py`, two endpoints on `app/schedule/routes.py`.
 
-## 核准 is one of exactly four user gates
+## 核准 is a user gate, and it passes the gate test
 
-`docs/adr/0018-agency-model.md` §1 fixes the ceiling: at most four places a user must act
-—開戶訪談／提案書核可／上線授權／週提案核可——and a gate survives only if it answers either
-「這是平台限制」or「這是花錢煞車」. 核准 (approval) is the money-brake one. `CONTEXT.md:214`
-lists it as one of exactly three business words the shell itself is allowed to know
-(檔期／核准／預算上限). This ticket is the first place that word gets a table.
+**The gate test, restated here so this ADR stands on its own** (ruled 2026-09-02): a screen may
+demand a user action only if it answers either 「這是平台限制」or 「這是花錢煞車」. Anything
+else the system does for itself. 核准 (approval) is the 花錢煞車 one.
+
+This test came from `docs/adr/0018-agency-model.md` §1, which also fixed a ceiling of exactly
+four gates by name (開戶訪談／提案書核可／上線授權／週提案核可). ADR 0046 retired 0018: those
+four names belong to the three-act product model, which is void — so **the number and the names
+are void with it; the test above is what survives.** A future ADR may set a new ceiling once the
+loop's own gates are known; until then there is no counted ceiling, only the test.
+
+`CONTEXT.md` §外殼與代理 lists 核准 as one of the three business words the shell itself is
+allowed to know (檔期／核准／預算上限). This ticket is the first place that word gets a table.
 
 ## The brake is not connected to a wheel yet, and that is said out loud on screen
 
