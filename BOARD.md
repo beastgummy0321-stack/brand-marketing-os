@@ -128,13 +128,6 @@ Supabase（`postgres@127.0.0.1:54322`）：
       **豁免四張佇列表**（`procrastinate_events`／`_jobs`／`_periodic_defers`／`_workers`，
       住在 `public__queue`）：沒有 `org_id`，給 policy 會把 worker 鎖死；但已登入的請求會
       enqueue，所以那四張要給 `authenticated` 一條 `USING (true)` 或等效授權，**這點要實測**
-- [>] **R4（調查，非 route C）四處凍結的無租戶欄位讀取，去看呼叫端有沒有先驗。**
-      票在 `docs/issues/r4-unscoped-reads/`，已派工。
-      `KNOWN_UNSCOPED_TENANT_READS`（`test_architecture_boundaries.py:277`）凍了四項：
-      `routes_report_api.py::_report_shape`、`intake/repository.py::list_llm_cost_items`、
-      `intake/repository.py::get_draft_spend`、`llm/gateway.py::get_task`。
-      四個都是「id 由呼叫端給、函式內沒有租戶欄位」的形狀。**要清掉是去追呼叫鏈確認 id 驗過，
-      不是把它們從清單刪掉。** 追完若真的沒驗＝跨租戶讀取，當場升 route C
 
 ## 需批准（金流路徑）：核准的到底是「上限」還是「當時那個數字」——T2 動工前要答
 

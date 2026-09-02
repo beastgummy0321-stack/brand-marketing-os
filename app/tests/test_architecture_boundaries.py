@@ -272,13 +272,26 @@ _TENANT_READ_VERB = re.compile(r"^\s*(SELECT|UPDATE|DELETE)\b", re.IGNORECASE)
 _TENANT_READ_TABLE = re.compile(r"\b(?:FROM|JOIN)\s+([a-zA-Z_][\w]*)", re.IGNORECASE)
 _TENANT_SCOPE_COLUMN = re.compile(r"\b(org_id|brand_id)\b", re.IGNORECASE)
 
-# 已知違例：四個函式拿原始 id 取租戶資料，整個函式沒有任何租戶欄位。凍結現況、只准減不准加，
-# 寫法比照 KNOWN_SQL_VIOLATIONS。四個都是「id 由呼叫端給」的形狀——呼叫端若沒先驗過那個 id
-# 屬於誰，就是跨租戶讀取。要清掉這四項是去看呼叫端有沒有驗，不是把它們從清單刪掉。
+# 已知違例：函式拿原始 id 取租戶資料，整個函式沒有任何租戶欄位。凍結現況、只准減不准加，
+# 寫法比照 KNOWN_SQL_VIOLATIONS。都是「id 由呼叫端給」的形狀——呼叫端若沒先驗過那個 id
+# 屬於誰，就是跨租戶讀取。要清掉是去看呼叫端有沒有驗，不是把它們從清單刪掉。
+#
+# 2026-09-02（票 R4）把每一條的呼叫鏈追到了 HTTP／背景工作進入點，結論寫在這裡而不是票裡，
+# 因為票會被刪掉。三條全部「呼叫端有先驗」，所以留在清單裡是正確的——它們不是漏洞，是
+# 「這道靜態掃描看不到驗證發生在上一層」。第四條 `intake/repository.py::get_draft_spend`
+# 是死碼（零呼叫端），同一次一併刪掉，所以清單少了一項：
+#
+# - `brand_web/routes_report_api.py::_report_shape`：唯一呼叫端在 routes_report_api.py:116，
+#   先過 `require_brand`；讀的 `llm_task_id` 本來就是同一個 brand_id 寫進去的
+#   （`report_service.py:47`）。
+# - `intake/repository.py::list_llm_cost_items`：約 30 個入口，每一個要嘛帶著已經過
+#   `app/shared/web.py:236` `require_brand` 的 brand_id，要嘛帶著剛用 `actor.org_id` 建出來的。
+# - `llm/gateway.py::get_task`：`run_task` 內部自己讀自己剛寫的列（id 由 `gateway.py:118`
+#   `db.new_id()` 產生，外人換不掉）；`schedule/jobs.py` 那條的 id 凍結自
+#   `schedule/routes.py:665` `require_brand` 之後的查詢。
 KNOWN_UNSCOPED_TENANT_READS = {
     ("app/brand_web/routes_report_api.py", "_report_shape"),
     ("app/intake/repository.py", "list_llm_cost_items"),
-    ("app/intake/repository.py", "get_draft_spend"),
     ("app/llm/gateway.py", "get_task"),
 }
 

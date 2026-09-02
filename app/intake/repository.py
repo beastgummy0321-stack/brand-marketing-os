@@ -192,23 +192,6 @@ def list_llm_cost_items(conn: db.Conn, draft: dict) -> list:
     return items
 
 
-def get_draft_spend(conn: db.Conn, draft_id: str) -> float:
-    row = conn.execute(
-        "SELECT llm_task_refs_json FROM intake_draft WHERE id = %s", (draft_id,)
-    ).fetchone()
-    if row is None:
-        return 0.0
-    ids = [r["llm_task_id"] for r in (row["llm_task_refs_json"] or [])]
-    if not ids:
-        return 0.0
-    placeholders = ",".join("%s" for _ in ids)
-    total = conn.execute(
-        f"SELECT SUM(cost) AS n FROM llm_task WHERE id IN ({placeholders}) AND status = 'succeeded'",
-        ids,
-    ).fetchone()["n"]
-    return float(total or 0.0)
-
-
 # ---------------------------------------------------------------------------
 # 已確認資料摘要／重複提示（交接包＋貼回重複提示共用；票 B3-intake 從 routes.py 搬來，
 # HTML 表單與 JSON API 兩套路由共用同一支，不再各自一份，CLAUDE.md 第五節）。
