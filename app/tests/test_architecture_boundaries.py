@@ -967,7 +967,15 @@ KNOWN_MODULE_SIZES = {
                                       # 不是新增了 574 行。
     "app/brand_web": 2091,  # 2026-08-30 刪失效規則卡（小債）：autonomy 那張卡的兩處專屬
                              # 驗證跟著走。前一次是 2155
-    "app/core": 1554,  # 票 storage-04：素材資料夾設定退役，整支模組檔（131 行）連同
+    "app/core": 1559,  # 票 R3b（ADR 0052）：settings.py 的三處 Vault 直接存取改走
+                        # core_vault_read_secret／save_secret／delete_secret 三道以管理員身分
+                        # 執行、只認自己組織 secret 的門，＋5 行（含理由註解）。
+                        # **這次調高是使用者 2026-09-02 的明示裁決**：全域規則「不得為了讓閘門
+                        # 由紅轉綠而放寬容忍清單」與這張表自己的說明「允許調高，但必須改這張表」
+                        # 直接相撞，而 app/core 當時正好卡在凍結值上、任何一行新增都是紅的。
+                        # 裁決＝調高、寫理由、**調到量到的數字不留餘裕**（留餘裕等於廢掉棘輪）。
+                        # 同一件事在 docs/tech-debt.md 有一條，下一個撞到的人不必重跑這段對話。
+                        # 前一次是 1554——票 storage-04：素材資料夾設定退役，整支模組檔（131 行）連同
                         # main.py 的呼叫端一起刪。前一次是 1687——
                         # 2026-08-30 刪失效規則卡（小債）：rule_cards.py 的 6 張卡（budget_structure／
                         # sample_size／ad_creative_fatigue／pacing／health_lights／autonomy）隨

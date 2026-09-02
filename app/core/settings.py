@@ -88,8 +88,11 @@ def _get_setting(conn: db.Conn | db.ConnProxy, key: str, default=None, *, org_id
 # 權杖 create/update/decrypt-read：secret 不取名字，app_setting 的 secret_id 就是索引）。
 
 def _vault_read_secret(conn: db.Conn | db.ConnProxy, secret_id: str) -> str | None:
+    # 走 core_vault_read_secret()（票 R3b），不再直接讀 vault.decrypted_secrets——
+    # SECURITY DEFINER，只在呼叫端帶了 app.org_id claim 時才驗證這把 secret 是不是自己
+    # 組織的；今天 claim 還沒設（R3c 才切），行為跟原本直接讀完全一樣。
     row = conn.execute(
-        "SELECT decrypted_secret FROM vault.decrypted_secrets WHERE id = %s", (secret_id,)
+        "SELECT core_vault_read_secret(%s) AS decrypted_secret", (secret_id,)
     ).fetchone()
     return row["decrypted_secret"] if row else None
 
@@ -108,12 +111,14 @@ def _read_vault_api_key(conn: db.Conn | db.ConnProxy | None, *, org_id: str) -> 
 def save_api_key(conn: db.Conn, key: str, *, org_id: str) -> None:
     """設定頁存金鑰唯一路徑（票 04-2 D4-1），'platform'／'own' 都走這裡不分流，否則
     預設層繼續明文落地；已有 secret 就地覆寫，沒有就新建，順手清掉舊世界的明文列。"""
+    # 走 core_vault_save_secret()（票 R3b）：帶 id 就地更新、不帶就新建，合併原本
+    # vault.update_secret／vault.create_secret 兩條路徑成一道門。
     existing_secret_id = get_setting(conn, API_KEY_SECRET_ID_SETTING, org_id=org_id)
-    if existing_secret_id:
-        conn.execute("SELECT vault.update_secret(%s, %s)", (existing_secret_id, key))
-    else:
-        row = conn.execute("SELECT vault.create_secret(%s) AS id", (key,)).fetchone()
-        assert row is not None, "vault.create_secret() 是純量函式，SELECT 一定回一列"
+    row = conn.execute(
+        "SELECT core_vault_save_secret(%s, %s) AS id", (existing_secret_id, key)
+    ).fetchone()
+    assert row is not None, "core_vault_save_secret() 是純量函式，SELECT 一定回一列"
+    if not existing_secret_id:
         set_setting(conn, API_KEY_SECRET_ID_SETTING, str(row["id"]), org_id=org_id)
     conn.execute("DELETE FROM app_setting WHERE org_id = %s AND key = %s", (org_id, API_KEY_SETTING))
     conn.commit()
@@ -248,7 +253,7 @@ def clear_api_key_from_db(conn: db.Conn, *, org_id: str) -> None:
     """
     secret_id = get_setting(conn, API_KEY_SECRET_ID_SETTING, org_id=org_id)
     if secret_id:
-        conn.execute("DELETE FROM vault.secrets WHERE id = %s", (secret_id,))
+        conn.execute("SELECT core_vault_delete_secret(%s)", (secret_id,))  # 票 R3b
     conn.execute(
         "DELETE FROM app_setting WHERE org_id = %s AND key IN (%s, %s)",
         (org_id, API_KEY_SECRET_ID_SETTING, API_KEY_SETTING),

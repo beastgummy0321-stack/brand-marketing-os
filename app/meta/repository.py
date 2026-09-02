@@ -45,13 +45,15 @@ _AnyConn = Conn | ConnProxy
 # ---- Vault ----------------------------------------------------------------------
 
 def _vault_create_secret(conn: _AnyConn, token: str) -> str:
-    row = conn.execute("SELECT vault.create_secret(%s) AS id", (token,)).fetchone()
-    assert row is not None, "vault.create_secret() 是純量函式，SELECT 一定回一列"
+    # 票 R3b：走 core_vault_save_secret()（p_secret_id 傳 NULL＝建新的），不再直接呼叫
+    # vault.create_secret。
+    row = conn.execute("SELECT core_vault_save_secret(NULL, %s) AS id", (token,)).fetchone()
+    assert row is not None, "core_vault_save_secret() 是純量函式，SELECT 一定回一列"
     return str(row["id"])
 
 
 def _vault_update_secret(conn: _AnyConn, secret_id: str, token: str) -> None:
-    conn.execute("SELECT vault.update_secret(%s, %s)", (secret_id, token))
+    conn.execute("SELECT core_vault_save_secret(%s, %s)", (secret_id, token))  # 票 R3b
 
 
 # ---- meta_credential --------------------------------------------------------------
@@ -92,8 +94,11 @@ def get_token(conn: _AnyConn, org_id: str) -> str | None:
     credential = get_credential(conn, org_id)
     if credential is None:
         return None
+    # 票 R3b：走 core_vault_read_secret()，不再直接讀 vault.decrypted_secrets（不在票的
+    # 「Measured facts」清單裡，但同一份 grep 閘門 [8] 涵蓋這一行——用票已經定義好的同一道
+    # 門，不是發明新東西）。
     row = conn.execute(
-        "SELECT decrypted_secret FROM vault.decrypted_secrets WHERE id = %s",
+        "SELECT core_vault_read_secret(%s) AS decrypted_secret",
         (credential["secret_id"],),
     ).fetchone()
     return row["decrypted_secret"] if row else None

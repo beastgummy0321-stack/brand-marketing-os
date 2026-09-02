@@ -11,13 +11,21 @@ get a different rule each.
 Every test here proves a policy live, with a real `SET ROLE authenticated` on a role that
 does not bypass RLS (`postgres` does, so seed inserts are done as `postgres` — the policy
 would never engage otherwise). None of this touches `require_actor()`, the connection pool,
-or any route; wiring the role switch into live requests is R3b's job.
+or any route; wiring the role switch into live requests is R3c's job.
+
+`20260902000003_core_vault_org_scoped_access.sql` (R3b, docs/issues/r3b-vault-org-door/
+ticket.md, ADR 0052) adds the one door into Supabase Vault: three `SECURITY DEFINER`
+functions granted to `authenticated`, each checking the secret id belongs to the caller's
+own org — but only when a claim is present, since every caller today still runs unscoped.
+`VaultOrgScopedAccessTest` below proves both halves of that.
 """
 
 import unittest
 from uuid import uuid4
 
-from app.core import db
+import psycopg
+
+from app.core import db, settings
 
 
 class RlsTenantPolicyTest(unittest.TestCase):
@@ -168,6 +176,134 @@ class AppUserRlsIsolationTest(unittest.TestCase):
                 "org A's claim must see only the user holding a membership in org A",
             )
         finally:
+            conn.execute("RESET ROLE")  # pooled connection must not go back poisoned
+
+
+class VaultOrgScopedAccessTest(unittest.TestCase):
+    """R3b: `core_vault_read_secret` only ever hands back a secret belonging to the
+    caller's own org — and, until R3c flips the switch, an unset claim is a no-op so today's
+    unscoped callers see no behaviour change."""
+
+    def test_read_secret_is_scoped_to_the_claimed_org(self):
+        conn = db.current()
+
+        org_a = db.new_id("org")
+        org_b = db.new_id("org")
+
+        # As postgres (bypasses RLS): seed two orgs, each saving its own AI key through the
+        # app's own save path (settings.save_api_key -> core_vault_save_secret), not by
+        # writing vault.secrets directly.
+        conn.execute(
+            "INSERT INTO organisation (id, name, kind) VALUES (%s, %s, 'company')",
+            (org_a, "R3b tracer org A"),
+        )
+        conn.execute(
+            "INSERT INTO organisation (id, name, kind) VALUES (%s, %s, 'company')",
+            (org_b, "R3b tracer org B"),
+        )
+        settings.save_api_key(conn, "sk-r3b-tracer-a", org_id=org_a)
+        settings.save_api_key(conn, "sk-r3b-tracer-b", org_id=org_b)
+        secret_a = settings.get_setting(conn, settings.API_KEY_SECRET_ID_SETTING, org_id=org_a)
+        secret_b = settings.get_setting(conn, settings.API_KEY_SECRET_ID_SETTING, org_id=org_b)
+
+        conn.execute("SET ROLE authenticated")
+        try:
+            conn.execute("SELECT set_config('app.org_id', %s, false)", (org_a,))
+            row = conn.execute(
+                "SELECT core_vault_read_secret(%s) AS v", (secret_a,)
+            ).fetchone()
+            self.assertEqual(
+                row["v"], "sk-r3b-tracer-a", "org A's claim must read org A's own secret"
+            )
+
+            with self.assertRaises(psycopg.errors.InsufficientPrivilege):
+                conn.execute("SELECT core_vault_read_secret(%s) AS v", (secret_b,))
+        finally:
+            # The raise above leaves the transaction aborted; rollback clears it and, since
+            # SET ROLE / set_config(..., false) are both transactional (ADR 0052 clause 5),
+            # also reverts role and claim before the connection goes back to the pool.
+            conn.rollback()
+            conn.execute("RESET ROLE")  # pooled connection must not go back poisoned
+
+    def test_read_secret_with_no_claim_is_unchanged_no_op_behaviour(self):
+        """Pins the branch that keeps this ticket a no-op: every caller today runs with no
+        `app.org_id` claim at all (R3c hasn't flipped the switch), and the read must still
+        succeed exactly as the direct `vault.decrypted_secrets` query it replaces did."""
+        conn = db.current()
+
+        org_a = db.new_id("org")
+        conn.execute(
+            "INSERT INTO organisation (id, name, kind) VALUES (%s, %s, 'company')",
+            (org_a, "R3b tracer org A, no claim"),
+        )
+        settings.save_api_key(conn, "sk-r3b-tracer-noclaim", org_id=org_a)
+        secret_a = settings.get_setting(conn, settings.API_KEY_SECRET_ID_SETTING, org_id=org_a)
+
+        conn.execute("SET ROLE authenticated")
+        try:
+            # The pooled connection is shared across this file's tests and nothing before
+            # this one is required to clear app.org_id (only its own RESET ROLE, matching
+            # this file's existing convention) — reset it explicitly so "no claim" is
+            # actually true, not just "not set by this test".
+            conn.execute("RESET app.org_id")
+            row = conn.execute(
+                "SELECT core_vault_read_secret(%s) AS v", (secret_a,)
+            ).fetchone()
+            self.assertEqual(
+                row["v"], "sk-r3b-tracer-noclaim", "an unset claim must not block the read"
+            )
+        finally:
+            conn.execute("RESET ROLE")  # pooled connection must not go back poisoned
+
+    def test_read_secret_ownership_check_survives_a_shadow_temp_table(self):
+        """R3b round 2 (docs/issues/r3b-vault-org-door/ticket.md ## Blocked): an unpinned
+        `search_path` on a `SECURITY DEFINER` function is a privilege escalation, because
+        Postgres searches `pg_temp` first unless `pg_temp` is named explicitly in the path.
+        An authenticated caller could shadow `app_setting` with a session-local temp table,
+        seed it claiming ownership of another org's secret, and have the ownership check
+        inside the function read the fake row instead of the real table. Reproduced live
+        against `public` before this fix (see the ticket's ## Blocked section)."""
+        conn = db.current()
+
+        org_a = db.new_id("org")
+        org_b = db.new_id("org")
+
+        # As postgres (bypasses RLS): seed two orgs, each saving its own AI key through the
+        # app's own save path, not by writing vault.secrets directly.
+        conn.execute(
+            "INSERT INTO organisation (id, name, kind) VALUES (%s, %s, 'company')",
+            (org_a, "R3b shadow-attack org A"),
+        )
+        conn.execute(
+            "INSERT INTO organisation (id, name, kind) VALUES (%s, %s, 'company')",
+            (org_b, "R3b shadow-attack org B"),
+        )
+        settings.save_api_key(conn, "sk-r3b-shadow-a", org_id=org_a)
+        settings.save_api_key(conn, "sk-r3b-shadow-b", org_id=org_b)
+        secret_b = settings.get_setting(conn, settings.API_KEY_SECRET_ID_SETTING, org_id=org_b)
+
+        conn.execute("SET ROLE authenticated")
+        try:
+            # Claim org A, then shadow app_setting with a temp table claiming org A owns
+            # org B's secret. A search_path that does not name pg_temp resolves the
+            # function's unqualified `app_setting` to this temp table first.
+            conn.execute("SELECT set_config('app.org_id', %s, false)", (org_a,))
+            conn.execute("CREATE TEMP TABLE app_setting (org_id text, key text, value text)")
+            conn.execute(
+                "INSERT INTO app_setting (org_id, key, value) VALUES (%s, %s, %s)",
+                (org_a, settings.API_KEY_SECRET_ID_SETTING, secret_b),
+            )
+
+            with self.assertRaises(psycopg.errors.InsufficientPrivilege):
+                conn.execute("SELECT core_vault_read_secret(%s) AS v", (secret_b,))
+        finally:
+            # The raise above leaves the transaction aborted; rollback clears it (and, per
+            # ADR 0052 clause 5, reverts role/claim too) — this also undoes the CREATE TEMP
+            # TABLE, since DDL is transactional. The explicit DROP is a defensive no-op for
+            # that expected case and a real cleanup for any other: the temp table dies with
+            # the session, but the pooled connection outlives this test.
+            conn.rollback()
+            conn.execute("DROP TABLE IF EXISTS pg_temp.app_setting")
             conn.execute("RESET ROLE")  # pooled connection must not go back poisoned
 
 

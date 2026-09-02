@@ -82,6 +82,37 @@ are written down here.
    `authenticated` policy is a red gate. The existing 47 are fixed in the same slice, so the
    gate ships with nothing frozen. T2–T6's ~25 new tables inherit it.
 
+## The vault door, and the hole that pinning `search_path` does not close by itself
+
+Switching a request to `authenticated` takes away the bypass that let it read Supabase Vault.
+Measured: with the switch on, 22 of 708 tests failed and every one failed on `permission denied
+for schema vault`. The user chose, on 2026-09-02, to open a door rather than to widen a grant or
+to keep the credentials path outside the lock: three `SECURITY DEFINER` functions —
+`core_vault_read_secret`, `core_vault_save_secret`, `core_vault_delete_secret` — that hand back a
+secret only if it belongs to the caller's own org. They check ownership against the only two
+places a secret id is stored, `app_setting` and `meta_credential`, and they skip the check when
+no claim is set, so every path that still runs as `postgres` behaves exactly as before.
+
+**`SET search_path = <schema>, vault` on a `SECURITY DEFINER` function is not enough, and the
+gap is invisible until someone attacks it.** PostgreSQL searches the temporary schema *first*
+unless `pg_temp` appears in the path explicitly. So an `authenticated` caller can
+`CREATE TEMP TABLE app_setting`, seed one row claiming it owns someone else's secret, and the
+ownership check inside the definer function reads the attacker's table. Reproduced on this
+machine against the real `public` schema: the attack returned another org's Meta token, 193
+characters of it. The fix is to name `pg_temp` in the path, **last** — naming it at all stops the
+implicit first-position search, and putting it last stops a temp object shadowing a real one.
+Verified both directions: the same attack against the fixed functions raises
+`insufficient_privilege`.
+
+Checked at the same time, so the next person does not have to: `authenticated` holds no `CREATE`
+on `public` and no `CREATE` or `USAGE` on `vault`, so `pg_temp` is the only schema in that path
+it can write to. Schema-qualifying the two tables inside the functions would be defence in depth,
+not a fix for a live hole.
+
+The general form, worth more than this one instance: **a gate that has never been attacked is not
+evidence.** Eight machine gates and 710 tests were green over the vulnerable version, because
+nothing in the suite creates a temp table. What found it was one reviewer asked to try.
+
 ## What counts as a stale claim, and what does not
 
 Nine places in the repo say some version of "RLS is on, there are no policies, and the backend
