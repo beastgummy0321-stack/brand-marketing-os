@@ -80,3 +80,12 @@ require an explicit written decision for that. This section is that decision.
   agent needs to know what a brand does, `brand_fact` says so in plain language.
 - **`campaign_calendar_data.json` is not preserved anywhere.** If a fixed calendar is ever
   wanted again it is a department task file, not code.
+
+## Amended 2026-09-02 by ADR 0054 — the shared calendar came back, as a file
+
+The last consequence above was taken up. **ADR 0054** puts a list of shared commerce dates
+(雙11, 618, 黑五, 母親節, 年終慶, the lunar festivals) into the ads department task file, read
+into the prompt verbatim. What this ADR deleted stays deleted: the industry enum, the filtering
+code, the calendar tables and their settings screen. The rule that survives is the one this ADR
+was really about — **domain knowledge may be data the agent reads; it may not be code that
+decides for the brand.**

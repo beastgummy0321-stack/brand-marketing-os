@@ -19,6 +19,12 @@ deleted the decisions with it.
 This ADR is the record. The diagram stays as the readable overview; where the two differ, this
 file wins.
 
+**Amended 2026-09-02 at T2 station ①.** This ADR names tables; it never said how a period lives.
+**ADR 0053** settles that (birth on the schedule form, settlement by hand, late money, the
+overlap split, product-cost versioning) and deletes `cpa_basis` from the list above. **ADR 0054**
+replaces the `holiday` table with a department data file. Both rows above are struck through
+accordingly. `approval.max_daily_amount` stays open — see the last section.
+
 ## What changed against the diagram (verified in the repo on 2026-09-01)
 
 The diagram's §9 list of "broken right now" was checked line by line. Four entries do not
@@ -50,11 +56,11 @@ wants it. `ticket` is the board row that lands it.
 | `creative_candidate` | schedule | T1b | **the seven dimensions frozen again here at generation time** · `generation_round` · `selected_at` · `reject_reason` · `published_ad_external_id` · `provider` / `provider_job_id` / `provider_status` · `llm_task_id` |
 | `creative_candidate_item` | schedule | T1b | carousel: `candidate_id` · `position` · `fields_json` (array values from day one) · exactly one row in v1 |
 | `feedback` | schedule | T1b | `scope` CHECK `('coordinate','candidate','period')` — all three values defined now, only the first two written in v1 · `reason_code` · `note` · `lifted_at` · all three owner columns nullable |
-| `campaign_period` | schedule | T2 | `version` (optimistic lock) · `status` four values (planning／running／awaiting_data／settled) · `force_settled_at` / `reason` · **`settled_spend` / `settled_revenue` / `settled_at` snapshot** · `cpa_basis` · `currency` · `recurrence_rule` / `source_period_id` |
+| `campaign_period` | schedule | T2 | `version` (optimistic lock) · `status` four values (planning／running／awaiting_data／settled) · `force_settled_at` / `reason` · **`settled_spend` / `settled_revenue` / `settled_at` snapshot** · ~~`cpa_basis`~~ (deleted, ADR 0053 §7) · `currency` · `recurrence_rule` / `source_period_id` · `start_date` / `end_date` (ADR 0053 §1) |
 | `campaign_period_budget_version` | schedule | T2 | shaped like `sku_cost_version` · `change_type` including `auto_decrease` · `actor_kind` (human／system) · `reverted_from_id` |
 | `ad_set_period_membership` | schedule | T2 | `from_date` / `to_date` · `allocation_weight` DEFAULT 1.0 · **never add `unique(ad_set_id)`** |
-| `product_economics_version` | brand_intelligence | T2 | append-only · **half-open interval** (`< effective_to`) · EXCLUDE constraint against overlap |
-| `holiday` | schedule | T2 | `source` / `source_key` / `holiday_date` · `campaign_skip` (core) repoints at it, its `year` column becomes a date |
+| `product_economics_version` | brand_intelligence | T2 | append-only · **half-open interval** (`< effective_to`) · ~~EXCLUDE constraint against overlap~~ → partial unique index, ADR 0053 §5 |
+| ~~`holiday`~~ | — | — | **Not built. ADR 0054**: the shared calendar is a department data file, and `campaign_skip` is dropped rather than repointed |
 | `channel_entity_map` | schedule | T3 | path-style `node_key` · `external_id` · **`external_status` stores the platform's own words** plus a separate `local_state` · `learning_reset_at` · `unique(org_id, brand_id, node_key)` is the idempotency key |
 | `ad_channel` | schedule | T4 | five capability flags each with its own CHECK · `last_data_at` / `data_lag_days` · `spec jsonb` (level count, platform minimum daily budget) |
 | `ad_channel_format_spec` | schedule | T4 | keyed on **(channel, format)**, not channel · `field` / `max_chars` / `aspect_ratio` |

@@ -68,6 +68,8 @@ is `app/shared/web.py`'s job. `db.current()` outside a `db.connection()` block r
 - ADR 0040 — approval is the money brake.
 - ADR 0042 — work the user waits for runs on the queue.
 - ADR 0052 — a logged-in request runs as role `authenticated` with an `app.org_id` claim.
+- ADR 0053 — an `interrupt` raised for a campaign period carries the period id in its
+  `dedupe_key`; `campaign_cycle_id` becomes `campaign_period_id`.
 
 Module-local and reversible, decided here rather than in an ADR:
 

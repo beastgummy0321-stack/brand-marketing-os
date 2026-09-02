@@ -35,10 +35,17 @@ CASCADE 今早已修、上傳有 50MB 上限、產品照那條查無此事）。
 表的形狀一律看 ADR 0050 的表清單；migration 檔名前綴一律看 ADR 0049（前綴＝擁有那張表的模組，
 不是要它的那張票，所以一張票可以有好幾個不同前綴的 migration 檔）。
 
-- [ ] **T2（route C）** `campaign_period`（含結算快照與四值狀態機）＋ `campaign_period_budget_version`
-      ＋ `ad_set_period_membership`（**絕不加 `unique(ad_set_id)`**）＋ `product_economics_version`（半開區間，
-      現行 `save_product_economics` 是原地改同一列）＋ `holiday` ＋ `interrupt.dedupe_key` 含檔期 id
-      ＋ `llm_task.campaign_period_id`。**`approval.max_daily_amount` 不在本票**——見下面「需批准」那條
+- [>] **T2（route C）站①完成 2026-09-02**：七個 UNKNOWN 全清，決定寫進 **ADR 0053**（檔期的一生）
+      與 **ADR 0054**（節慶清單改走部門資料檔，修訂 ADR 0036）；ADR 0050 的表清單同步劃掉
+      `holiday` 與 `cpa_basis`。補了兩份缺的契約頁（`brand_intelligence`／`brand_web`）。
+      **T2 太大，垂直切成三張，循序做**（票在 `docs/issues/`）：
+  - [ ] **T2a** 檔期三張表（`campaign_period`／`campaign_period_budget_version`／
+        `ad_set_period_membership`，**絕不加 `unique(ad_set_id)`**）＋ `interrupt.campaign_period_id`
+        ＋ `llm_task.campaign_period_id` ＋ 刪 `campaign_skip`。**休眠票**：不寫任何一列，現有測試全綠即證明
+  - [ ] **T2b** 排程頁起訖日→建檔期、四值狀態、「已結束，需人工確認」紅標、結算按鈕與快照、
+        重疊「短的贏」。**`approval.max_daily_amount` 不在本票**——見下面「需批准」那條
+  - [ ] **T2c** `product_economics_version`（半開區間，存檔即以「今天」切版）＋刪掉
+        `cpa_roas_basis`「計算口徑」與產品頁的「生效日」輸入框。與 T2a／T2b 零共用檔
 - [ ] **T3（route C）** `channel_entity_map`（`node_key` 路徑式、`external_status` 存平台原話、
       `learning_reset_at`、`unique(org_id, brand_id, node_key)` 就是冪等鍵）＋ `brand_meta_ad_account.allocation_weight`
       ＋綁定改吃 id 不吃名稱——一鍵建立不再建出兩份
@@ -52,7 +59,8 @@ CASCADE 今早已修、上傳有 50MB 上限、產品照那條查無此事）。
 - [ ] **T6（route C）** 四象限泡泡看板 ＋ 建議落 `decision`（補六欄，不新開表；該表 0 列、程式零引用）
       ＋ `order_record.utm_json`。**現在畫不出來的五個理由，票裡要逐條有解**：`spend_summary` 的
       `bool_and(roas IS NOT NULL)`（`app/meta/repository.py:424,437`）讓整支回 None；`roas = 0` 的列一列都沒有，
-      賠錢象限畫不出來；真實毛利接不到廣告（就是 utm_json 那條）；`daily_pull` 只拉今天但歸因窗是 7d_click；
+      賠錢象限畫不出來；真實毛利接不到廣告（就是 utm_json 那條）；~~`daily_pull` 只拉今天但歸因窗是 7d_click~~
+      ——**2026-09-02 查證為誤報**，`app/meta/daily_pull.py:89` 拉的是 `[今天-7, 今天]`，理由就寫在 `:54`；
       `frontend/src/lib/echarts.ts:11` 沒註冊 ScatterChart——**沒註冊的圖種靜默不畫也不報錯，閘門會是綠的**
 
 ## 仍然成立的事實（不是票，是量到的東西）

@@ -34,7 +34,10 @@ raised: they are recorded on the `llm_task` row and read back through the task e
 - `procrastinate_*` internals. `app.background` is the only door.
 
 Allowed dependencies: `app.core`, `app.llm`, `app.shared.web`,
-`app.brand_intelligence.repository`, `app.meta`, `app.background`.
+`app.brand_intelligence.repository`, `app.meta`, `app.background`, and — added 2026-09-02 at T2
+station ① — `app.orders.repository`, read-only, for `channel_revenue_summary()` when settling a
+period. `app.orders` imports only `brand_intelligence`, `core` and `shared`, so this closes no
+cycle, and `app.dashboard` already depends on it the same way.
 
 ## Decisions in force
 
@@ -42,6 +45,8 @@ Allowed dependencies: `app.core`, `app.llm`, `app.shared.web`,
 - ADR 0048 — `schedule_plan` runs with no web search.
 - ADR 0049 — this module owns migrations; a migration file takes the prefix of the table's owner.
 - ADR 0050 — the ad-loop data model of record (table list, ticket owners, open questions).
+- ADR 0053 — the campaign period's life: born on the form, settled by hand, shorter period wins.
+- ADR 0054 — the shared commerce calendar is a department data file, not a `holiday` table.
 - ADR 0042 — work the user waits for runs on the queue.
 - ADR 0040 — approval is the money brake.
 
