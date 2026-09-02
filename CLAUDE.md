@@ -39,13 +39,15 @@
 - 裝依賴：`uv sync --frozen`（不用 pip／requirements.txt，套件與版本鎖在 `pyproject.toml`／`uv.lock`）
 - 金鑰 `.env`（不進版控）；`BRAND_OS_LLM_PROVIDER=codex_cli` 開著＝所有 LLM 呼叫走本機 codex CLI，不產生 API 帳單
 - bash 裡跑 docker／supabase 前先：`export PATH="/c/Users/User/AppData/Local/Programs/DockerDesktop/resources/bin:/c/Users/User/scoop/shims:$PATH"`
-- 本機測試帳號：`123@gmail.com` / `Verify123456`（2026-08-31 設）。**唯一看得到真實資料的帳號**
-  ——`org_01M1AKNVS9YAD3BDMTB1257YZ6` 的 owner，底下是品牌「Beast Prime 野獸至尊」
-  （`brd_01M1AKPX50SNQ6BVR4J83K1D0F`）、Meta 廣告帳戶與開帳讀取結果；新註冊的只拿到空組織。
-  被 `supabase db reset` 洗掉後重設密碼：`PUT {SUPABASE_URL}/auth/v1/admin/users/1061ec1c-a145-42c7-a632-6d4be5f6968b`
-  body `{"password": "..."}`，headers `apikey`＋`Authorization: Bearer {SUPABASE_SERVICE_ROLE_KEY}`。
-  要用 HTTP 直接測 API 仍可自簽 HS256 JWT
+- 本機測試帳號：`123@example.com` / `123456`（在 `supabase/seed.sql`，每次 `supabase db reset`
+  自動重建，組織 `org_bughunt`、品牌 `brd_bughunt`）。**這是唯一活得過 db reset 的帳號。**
+  信箱驗證本機關著，所以在畫面上直接註冊一個新帳號也隨時可以（`frontend/e2e/smoke.spec.ts:24-32`
+  就是這樣做）。要用 HTTP 直接測 API 仍可自簽 HS256 JWT
   （`.env` 已開 `IDENTITY_ALLOW_HS256=1`，密鑰＝`SUPABASE_JWT_SECRET`）
+- **`supabase db reset` 會洗掉 seed 檔以外的所有東西，包含帳號本身。** 2026-09-02 查證：舊的
+  `123@gmail.com`／`org_01M1AKNVS9YAD3BDMTB1257YZ6`／品牌「Beast Prime 野獸至尊」／Meta 廣告帳戶
+  在資料庫裡各 0 筆。本節原本寫「洗掉後重設密碼就好」是錯的——那個使用者列根本不會留下來。
+  真實資料要重建就是重新註冊、重新建檔、重新綁 Meta。RLS 相關的票幾乎一定會 reset 資料庫。
 - 語彙 `CONTEXT.md`；決策 `docs/adr/`；技術債與機器閘門 `docs/tech-debt.md`（動超標檔前先讀）
 - 測試只寫四類（金額／租戶隔離／API 契約／資料正確性）——規則在全域 CLAUDE.md 與 skeleton-slice-pencil 工作流，`docs/workflow-diet.md` 已刪除
 - `app/methodology/` 是 prompt 零件不是文件，刪改先問

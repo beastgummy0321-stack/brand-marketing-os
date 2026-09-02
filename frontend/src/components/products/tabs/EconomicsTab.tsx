@@ -67,8 +67,6 @@ export function EconomicsTab({
             </dd>
             <dt className="text-muted-foreground">幣別</dt>
             <dd className="text-foreground">{economics.currency}</dd>
-            <dt className="text-muted-foreground">生效日</dt>
-            <dd className="text-foreground">{economics.effective_from ?? "未填寫"}</dd>
           </dl>
 
           {economics.status === "pending" && (

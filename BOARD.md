@@ -35,15 +35,6 @@ CASCADE 今早已修、上傳有 50MB 上限、產品照那條查無此事）。
 表的形狀一律看 ADR 0050 的表清單；migration 檔名前綴一律看 ADR 0049（前綴＝擁有那張表的模組，
 不是要它的那張票，所以一張票可以有好幾個不同前綴的 migration 檔）。
 
-- [>] **T2（route C）站①完成 2026-09-02**：七個 UNKNOWN 全清，決定寫進 **ADR 0053**（檔期的一生）
-      與 **ADR 0054**（節慶清單改走部門資料檔，修訂 ADR 0036）；ADR 0050 的表清單同步劃掉
-      `holiday` 與 `cpa_basis`。補了兩份缺的契約頁（`brand_intelligence`／`brand_web`）。
-      **T2 太大，垂直切成三張，循序做**（票在 `docs/issues/`）：
-  - [x] ~~**T2a**~~ 2026-09-02 done（審查 ship，跨租戶讀取實測擋住）
-  - [x] ~~**T2b**~~ 2026-09-02 done（退件一輪：閘門被改寬、平手改成贏家全拿；複審 ship）。
-        **瀏覽器驗收待做**，跟 T2c 併成一次走
-  - [>] **T2c** `product_economics_version`（半開區間，存檔即以「今天」切版）＋刪掉
-        `cpa_roas_basis`「計算口徑」與產品頁的「生效日」輸入框。與 T2a／T2b 零共用檔
 - [ ] **T3（route C）** `channel_entity_map`（`node_key` 路徑式、`external_status` 存平台原話、
       `learning_reset_at`、`unique(org_id, brand_id, node_key)` 就是冪等鍵）＋ `brand_meta_ad_account.allocation_weight`
       ＋綁定改吃 id 不吃名稱——一鍵建立不再建出兩份
@@ -99,15 +90,18 @@ CASCADE 今早已修、上傳有 50MB 上限、產品照那條查無此事）。
 有 `org_id` 的表要有 policy（`test_rls_tenant_policy.py`）、讀租戶表的函式要帶租戶欄位
 （`test_architecture_boundaries.py`）。**T2～T6 新增的表照這三條走，不必再想一次。**
 
-## 需批准（金流路徑）：核准的到底是「上限」還是「當時那個數字」——T2 動工前要答
+## 需批准（金流路徑）：核准的到底是「上限」還是「當時那個數字」——T2 已刻意跳過它
 
 `_tree_signature`（`app/schedule/routes.py:213-224`）把每個節點的 `daily_amount` 算進 `content_hash`，
 所以預算一動，已簽過的核准就失效。**今天咬不到人**——repo 裡沒有任何程式會自己改 `daily_amount`
-（grep 零命中），所以架構圖說它「現在就壞」是未來式。但 ADR 0050 的表清單裡有 `campaign_period_budget_version`
-帶 `change_type = auto_decrease`：那張票一落地，系統就會自己調預算，這條當天生效。
+（grep 零命中），所以架構圖說它「現在就壞」是未來式。**2026-09-02 更新**：T2a 已經把
+`campaign_period_budget_version` 這張表建起來了（含 `change_type = auto_decrease` 這個值），
+但 **T2 全程沒有任何程式寫它**——引信裝好了，還沒有人點火。哪天有一張票讓系統自己調預算，
+這條當天生效。
 
 要改的是核准的語意（`approval` 加 `max_daily_amount`，核准的是上限而不是當下的數字），
-**那等於修改 ADR 0040 那道錢煞車**，是金流路徑：先提計畫、等批准、寫自己的 ADR，不併進 T2 順手做。
+**那等於修改 ADR 0040 那道錢煞車**，是金流路徑：先提計畫、等批准、寫自己的 ADR。
+T2 三張票逐字寫明不碰它，審查也逐字驗過 diff 裡沒有 `max_daily_amount`。
 
 ## 需批准（金流路徑）：核准超支的「過了幾天」把 UTC 跟組織時區混著減
 
@@ -201,6 +195,11 @@ Dependabot #1（`nanoid`，修補版 3.3.18）：**`saas` 這邊已經是 3.3.18
       上傳進品牌智庫的官方素材 → 手動貼進 Meta 建一則廣告）。這條走過之前，**「把圖掛到廣告節點上」
       一律判「不做」**——圖的落腳處蓋好了，但圖片這件事一次都沒真的痛過，沒走過就蓋下一層＝
       替沒人跑過的系統猜門檻
+- [ ] **Beast Prime 也要重建（2026-09-02）**：T2 這輪的 RLS 紅綠證明跑過 `supabase db reset`，
+      `123@gmail.com` 那個帳號、它的組織、品牌「Beast Prime 野獸至尊」、Meta 廣告帳戶綁定
+      **全部歸零**（實際查過，各 0 筆）。CLAUDE.md 原本寫「洗掉後重設密碼就好」是錯的，已改成事實。
+      要重來就是：註冊 → 建檔精靈建品牌 → 重綁 Meta 廣告帳戶。**這是設計上允許的**（憲法「資料狀態」
+      那節：發布前資料庫內容全為測試資料），只是你得知道它沒了
 - [ ] 晨光咖啡要重建：2026-08-30 跑過 `supabase db reset`，8/29 那次實跑的資料全部消失。
       品牌、已確認事實、規則都要重來——去建檔精靈把品牌事實填起來，方案才會再準一階
 - [ ] 變異度（同一份輸入跑 N 次結果差多少）從沒量過：探針在
