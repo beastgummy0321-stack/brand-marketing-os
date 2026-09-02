@@ -113,7 +113,7 @@ def fail_interrupted_tasks(conn: db.Conn) -> int:
 def _insert_running_row(
     conn: db.Conn, *, org_id: str, brand_id: str, task_type: str, context: TaskContext,
     prompt_template_id: str, prompt_template_version: str, provider_name: str, model: str,
-    attempt_no: int,
+    attempt_no: int, campaign_period_id: str | None = None,
 ) -> dict:
     row_id = db.new_id("llm")
     ts = db.now_utc()
@@ -128,9 +128,9 @@ def _insert_running_row(
             knowledge_item_ids_json, brand_version, product_version, campaign_plan_version,
             prompt_template_id, prompt_template_version, provider, model, status, attempt_no,
             structured_output_json, rendered_output, validation_result_json, usage_json, cost,
-            started_at, finished_at, error
+            started_at, finished_at, error, campaign_period_id
         ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NULL, %s, %s, %s, %s, 'running', %s,
-                   NULL, NULL, NULL, NULL, NULL, %s, NULL, NULL)""",
+                   NULL, NULL, NULL, NULL, NULL, %s, NULL, NULL, %s)""",
         (
             row_id, org_id, brand_id, task_type,
             db.jsonb(context.context_scope),
@@ -138,6 +138,7 @@ def _insert_running_row(
             db.jsonb(context.knowledge_item_ids),
             context.brand_version, context.product_version,
             prompt_template_id, prompt_template_version, provider_name, model, attempt_no, ts,
+            campaign_period_id,
         ),
     )
     conn.commit()
@@ -205,8 +206,10 @@ def run_task(
     messages: list,
     context: TaskContext,
     options: TaskOptions | None = None,
+    campaign_period_id: str | None = None,
 ) -> dict:
-    """執行一次 LLM 任務，回傳最終的 llm_task 資料列（dict）。
+    """執行一次 LLM 任務，回傳最終的 llm_task 資料列（dict）。`campaign_period_id`
+    （票 T2b，ADR 0053）選填、預設 None——給 LLM 花費一個檔期主人，舊呼叫端不必改。
 
     呼叫端請依回傳值的 row["status"] 判斷成敗（"succeeded" / "failed" / "timeout"），
     本函式不拋例外偽裝結果——除非傳入參數本身不合法（ValueError，例如缺 brand_id）。
@@ -252,6 +255,7 @@ def run_task(
             conn, org_id=org_id, brand_id=brand_id, task_type=task_type, context=context,
             prompt_template_id=prompt_template_id, prompt_template_version=prompt_template_version,
             provider_name=provider_name, model=model, attempt_no=attempt_no,
+            campaign_period_id=campaign_period_id,
         )
         try:
             complete_kwargs = {

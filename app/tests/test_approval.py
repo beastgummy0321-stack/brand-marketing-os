@@ -92,7 +92,10 @@ class ApprovalApiContractTest(unittest.TestCase):
         resp = self.client.post(
             f"/api/schedule/brands/{self.brand['id']}/plans",
             json={"product_ids": [self.product["id"]], "platform": VALID_PLATFORM,
-                  "objective": VALID_OBJECTIVE, "promotion_note": "", "plan_count": 1},
+                  "objective": VALID_OBJECTIVE, "promotion_note": "", "plan_count": 1,
+                  # 票 T2b（ADR 0053）：開始日／結束日現在是必填——這裡不測檔期本身，
+                  # 隨便給一段合法區間讓既有的核准流程走得下去。
+                  "start_date": "2026-09-10", "end_date": "2026-09-24"},
         )
         self.assertEqual(resp.status_code, 200, resp.text)
         self._run_worker()

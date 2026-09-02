@@ -156,6 +156,11 @@ def _post_body(**overrides) -> dict:
         "objective": VALID_OBJECTIVE,
         "promotion_note": "",
         "plan_count": 2,
+        # 票 T2b（ADR 0053）：開始日／結束日現在是必填——這裡的兩個既有測試檔不測檔期
+        # 本身，隨便給一段合法區間讓既有流程走得下去；真的要測檔期日期驗證的測試自己
+        # 用 overrides 蓋掉。
+        "start_date": "2026-09-10",
+        "end_date": "2026-09-24",
     }
     body.update(overrides)
     return body

@@ -436,11 +436,19 @@ LAYER_ORDER = [
     "app.meta",                # 票 04：Meta 廣告帳戶連接（Graph API、Vault 權杖），依賴
                                 # app.core 與 app.shared；票 11 起 app.schedule 依賴它讀
                                 # meta_entity_spend（比照既有的 app.dashboard 依賴方向）
+    "app.orders",              # 訂單，只依賴 app.brand_intelligence／app.core／app.shared
+                                # （docs/contracts/schedule.md）——挪到這裡，讓它排在
+                                # app.schedule 前面
     "app.schedule",            # 票 07：檔期規劃最薄路徑，依賴 app.core／app.llm／app.shared／
-                                # app.brand_intelligence；本身尚無人依賴它
+                                # app.brand_intelligence／app.meta；票 T2b（ADR 0053，
+                                # docs/contracts/schedule.md 2026-09-02）起也依賴
+                                # app.orders.repository（結算讀全通路營收）——contract 只多
+                                # 授權這一個依賴，所以只把 app.orders 挪到它前面，不整段挪到
+                                # app.intake／app.brand_web 後面：這個順位不准 app.schedule
+                                # 依賴 app.intake 或 app.brand_web，contract 沒授權的依賴，
+                                # 這張表也不授權
     "app.intake",              # 建檔精靈
     "app.brand_web",           # 品牌智庫 web 路由
-    "app.orders",              # 訂單
     "app.dashboard",           # 駕駛艙（只讀，跨分支彙總）
     "app.tools",               # 一次性工具
 ]

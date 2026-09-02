@@ -59,6 +59,7 @@ from app.core.db import APP_DIR, jsonb
 from app.llm import gateway
 from app.meta import repository as meta_repo
 from app.schedule import creative as creative_mod
+from app.schedule import period as period_mod
 from app.schedule import plan as plan_mod
 from app.schedule import repository as schedule_repo
 from app.schedule import tree as tree_mod
@@ -109,6 +110,8 @@ class PlanRequest(BaseModel):
     objective: str = ""
     promotion_note: str = ""
     plan_count: int = 3  # 畫面預設值；程式真正允許的範圍讀規則卡 schedule_plan_count（票 08）
+    start_date: str = ""  # 票 T2b：檔期日期，真正的驗證在 `period.validate_dates()`
+    end_date: str = ""
 
 
 class TreeRequest(BaseModel):
@@ -376,6 +379,7 @@ def _brand_response(conn, brand_id: str, org_id: str) -> dict:
         "plan": plan,
         "tree": tree,
         "creative": creative,
+        "period": period_mod.brand_period_response(conn, org_id, brand_id),
     }
 
 
@@ -442,9 +446,11 @@ def _run_tree(conn, brand_id: str, org_id: str, body: "TreeRequest") -> dict:
     gateway.check_spend_cap(conn, org_id=org_id)
     if _display_task_row(conn, brand_id, TREE_TASK_TYPE)[1]:
         raise _already_running_error()
+    period = schedule_repo.get_latest_period(conn, org_id, brand_id)
     if not background_enqueue(
         f"background.{TREE_TASK_TYPE}", org_id=org_id, lock=f"{TREE_TASK_TYPE}:{brand_id}",
         brand_id=brand_id, plan_index=body.plan_index, plan_task_id=plan_row["id"],
+        campaign_period_id=period["id"] if period else None,
     ):
         raise _already_running_error()
     return _brand_response(conn, brand_id, org_id)
@@ -468,9 +474,11 @@ def _run_creative(conn, brand_id: str, org_id: str) -> dict:
     gateway.check_spend_cap(conn, org_id=org_id)
     if _display_task_row(conn, brand_id, CREATIVE_TASK_TYPE)[1]:
         raise _already_running_error()
+    current_period = schedule_repo.get_latest_period(conn, org_id, brand_id)
     if not background_enqueue(
         f"background.{CREATIVE_TASK_TYPE}", org_id=org_id,
         lock=f"{CREATIVE_TASK_TYPE}:{brand_id}", brand_id=brand_id, tree_task_id=tree_row["id"],
+        campaign_period_id=current_period["id"] if current_period else None,
     ):
         raise _already_running_error()
     return _brand_response(conn, brand_id, org_id)
@@ -485,10 +493,25 @@ def _run_plan(conn, brand_id: str, org_id: str, body: "PlanRequest") -> dict:
     data = _load_platform_data()
     _validate_platform_and_objective(data, body.platform, body.objective)
     _validate_plan_count(conn, brand_id, body.plan_count)
+    start_date, end_date, dates_code, dates_message = period_mod.validate_dates(
+        body.start_date, body.end_date
+    )
+    if dates_code is not None:
+        raise web.ApiError(400, dates_code, dates_message)
 
     daily_budget = rule_cards.get_value(conn, brand_id, "schedule_budget", "daily_budget")
     if not daily_budget:
         raise web.ApiError(400, "budget_not_set", plan_mod.BUDGET_NOT_SET_MESSAGE)
+
+    # ADR 0053 決策 1：這期誕生在這裡（出方案成功的當下），不是等到核准——同一個品牌
+    # 最多一個草稿，第二次以後改的是同一列的日期／預算（票 T2b「on success, before the
+    # enqueue」）。
+    period_id = schedule_repo.upsert_draft_period(
+        conn, org_id, brand_id,
+        name=f"{start_date.isoformat()} ~ {end_date.isoformat()}",
+        start_date=start_date, end_date=end_date, daily_budget=daily_budget,
+        currency=period_mod.CURRENCY,
+    )
 
     gateway.check_spend_cap(conn, org_id=org_id)
     if _display_task_row(conn, brand_id, TASK_TYPE)[1]:
@@ -497,7 +520,7 @@ def _run_plan(conn, brand_id: str, org_id: str, body: "PlanRequest") -> dict:
         f"background.{TASK_TYPE}", org_id=org_id, lock=f"{TASK_TYPE}:{brand_id}",
         brand_id=brand_id, product_ids=body.product_ids, platform=body.platform,
         objective=body.objective, promotion_note=body.promotion_note,
-        plan_count=body.plan_count,
+        plan_count=body.plan_count, campaign_period_id=period_id,
     ):
         raise _already_running_error()
     return _brand_response(conn, brand_id, org_id)
@@ -556,12 +579,17 @@ def _run_reject(conn, brand_id: str, actor, body: "RejectRequest") -> dict:
             content=entry["content"], severity=entry["severity"],
         )
 
+    # 票 T2b：檔期日期不是 `schedule_plan` 凍結參數的一部分（那是檔期自己的欄位）——
+    # 重新排程沿用同一個檔期，從品牌目前的檔期讀日期，不必使用者重填。
+    current_period = schedule_repo.get_latest_period(conn, actor.org_id, brand_id)
     rerun_body = PlanRequest(
         product_ids=scope.get("product_ids", []),
         platform=scope.get("platform", ""),
         objective=scope.get("objective", ""),
         promotion_note=scope.get("promotion_note", ""),
         plan_count=scope.get("plan_count", 3),
+        start_date=current_period["start_date"].isoformat() if current_period else "",
+        end_date=current_period["end_date"].isoformat() if current_period else "",
     )
     return _run_plan(conn, brand_id, actor.org_id, rerun_body)
 
@@ -630,6 +658,10 @@ def _run_approve(conn, brand_id: str, org_id: str, actor: str) -> dict:
         scope_ref=tree["task_id"], content_hash=_tree_content_hash(tree),
         amount=_sum_daily_amounts(tree["nodes"]), actor=actor,
     )
+    # ADR 0053 決策 1：核准這一press＝「這期真的要投」，草稿在這裡變 running。找不到草稿
+    # （例如已經核准過一次）就什麼都不做——approval.py 自己已經 commit 過，這裡是同一個
+    # 請求裡緊接著的下一個落地動作，不是另開一支路由。
+    schedule_repo.approve_draft_period(conn, org_id, brand_id)
     return _brand_response(conn, brand_id, org_id)
 
 
@@ -642,6 +674,20 @@ def _run_approve_revoke(conn, brand_id: str, org_id: str, actor: str) -> dict:
     )
     if approval_row is not None:
         approval_mod.revoke(conn, approval_id=approval_row["id"], org_id=org_id, actor=actor)
+    return _brand_response(conn, brand_id, org_id)
+
+
+def _run_settle(conn, brand_id: str, org_id: str, period_id: str, actor: str) -> dict:
+    """票 T2b（ADR 0053 §3／§4）：結算——算法／落地都在 `period.settle()`（租戶界線在
+    `schedule_repo.get_period()` 的 WHERE 裡，不是靠 `require_brand` 就夠——`brand_id`
+    對了不代表 `period_id` 也是這個組織的，ticket 矛盾檢查段第三點），這裡只管把失敗代碼
+    翻成 HTTP 錯誤。"""
+    error = period_mod.settle(conn, org_id=org_id, brand_id=brand_id, period_id=period_id,
+                               actor=actor)
+    if error == "not_found":
+        raise web.NotFoundKind("檔期")
+    if error == "not_started":
+        raise web.ApiError(400, "not_started", period_mod.NOT_STARTED_MESSAGE)
     return _brand_response(conn, brand_id, org_id)
 
 
@@ -699,6 +745,13 @@ def create_creative(request: Request, brand_id: str):
     actor = web.require_actor(request)
     web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
     return _run_creative(web.conn, brand_id, actor.org_id)
+
+
+@router.post("/brands/{brand_id}/periods/{period_id}/settle")
+def settle_period(request: Request, brand_id: str, period_id: str):
+    actor = web.require_actor(request)
+    web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
+    return _run_settle(web.conn, brand_id, actor.org_id, period_id, str(actor.user_id))
 
 
 # ---------------------------------------------------------------------------

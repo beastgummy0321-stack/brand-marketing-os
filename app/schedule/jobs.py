@@ -110,7 +110,8 @@ def _creative_params_text(tree: dict) -> str:
 
 
 def schedule_plan(org_id: str, brand_id: str, product_ids: list, platform: str, objective: str,
-                   promotion_note: str, plan_count: int) -> None:
+                   promotion_note: str, plan_count: int,
+                   campaign_period_id: str | None = None) -> None:
     """procrastinate task body（`background.schedule_plan`）——`routes.py` 的 `_run_plan()`
     驗證通過、`enqueue()` 成功之後，真正打代理、寫 `llm_task` 的地方。"""
     with connection() as conn:
@@ -152,12 +153,14 @@ def schedule_plan(org_id: str, brand_id: str, product_ids: list, platform: str, 
             conn, PROVIDER, brand_id=brand_id, task_type=routes.TASK_TYPE,
             prompt_template_id=routes.TASK_TYPE, prompt_template_version="v1",
             system=None, messages=[{"role": "user", "content": prompt}], context=context,
+            campaign_period_id=campaign_period_id,
             # 網路搜尋暫緩（ADR 0048）：這裡曾傳 tools=[providers.WEB_SEARCH_TOOL]。機制還在，
             # 開回來是加回這一個參數，不動 schema。開回來的條件見該 ADR。
         )
 
 
-def schedule_tree(org_id: str, brand_id: str, plan_index: int, plan_task_id: str) -> None:
+def schedule_tree(org_id: str, brand_id: str, plan_index: int, plan_task_id: str,
+                   campaign_period_id: str | None = None) -> None:
     """procrastinate task body（`background.schedule_tree`）——見 `schedule_plan()` 檔頭。
 
     fix round 1：`plan_task_id` 是 `routes._run_tree()` enqueue 當下釘住的那一列 id，不能
@@ -211,10 +214,12 @@ def schedule_tree(org_id: str, brand_id: str, plan_index: int, plan_task_id: str
             prompt_template_id=routes.TREE_TASK_TYPE, prompt_template_version="v1",
             system=None, messages=[{"role": "user", "content": prompt}], context=context,
             options=gateway.TaskOptions(max_tokens=24000, timeout_s=480.0),
+            campaign_period_id=campaign_period_id,
         )
 
 
-def schedule_creative(org_id: str, brand_id: str, tree_task_id: str) -> None:
+def schedule_creative(org_id: str, brand_id: str, tree_task_id: str,
+                       campaign_period_id: str | None = None) -> None:
     """procrastinate task body（`background.schedule_creative`）——見 `schedule_plan()` 檔頭。
 
     fix round 1：`tree_task_id` 是 `routes._run_creative()` enqueue 當下釘住的那一列 id，
@@ -267,6 +272,7 @@ def schedule_creative(org_id: str, brand_id: str, tree_task_id: str) -> None:
             prompt_template_id=routes.CREATIVE_TASK_TYPE, prompt_template_version="v1",
             system=None, messages=[{"role": "user", "content": prompt}], context=context,
             options=gateway.TaskOptions(max_tokens=24000, timeout_s=480.0),
+            campaign_period_id=campaign_period_id,
         )
 
 

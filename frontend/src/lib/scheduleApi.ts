@@ -145,6 +145,29 @@ export interface CreativeResult {
   running: boolean;
 }
 
+/** 票 T2b（ADR 0053）：檔期——誕生在表單，結算靠使用者按鍵。`settled` 是 `null` 代表
+ * 還沒結算過；`late_*_since` 是「現在」跟凍結快照的差，`0` 代表沒有晚到的錢，`null`
+ * 代表還沒結算所以無從比較（跟 `settled` 是不是 `null` 是同一件事，見後端說明）。 */
+export interface SchedulePeriodSettled {
+  spend: number;
+  revenue: number;
+  settled_at: string;
+  late_spend_since: number;
+  late_revenue_since: number;
+}
+
+export interface SchedulePeriod {
+  id: string;
+  name: string;
+  status: "planning" | "running" | "awaiting_data" | "settled";
+  start_date: string;
+  end_date: string;
+  daily_budget: number | null;
+  currency: string;
+  settle_advice_date: string;
+  settled: SchedulePeriodSettled | null;
+}
+
 export interface ScheduleState {
   daily_budget: number;
   plan_count_min: number;
@@ -154,6 +177,7 @@ export interface ScheduleState {
   plan: SchedulePlan | null;
   tree: CampaignTreeResult | null;
   creative: CreativeResult | null;
+  period: SchedulePeriod | null;
 }
 
 export interface CreateSchedulePlanInput {
@@ -162,7 +186,17 @@ export interface CreateSchedulePlanInput {
   objective: string;
   promotionNote: string;
   planCount: number;
+  startDate: string;
+  endDate: string;
 }
+
+/** 狀態徽章文字（票 T2b「The screen」）——四個狀態、逐字四句，畫面元件照抄，不重譯。 */
+export const PERIOD_STATUS_LABELS: Record<SchedulePeriod["status"], string> = {
+  planning: "規劃中",
+  running: "進行中",
+  awaiting_data: "已結束，需人工確認",
+  settled: "已結算",
+};
 
 /** 票 10-feedback-entries（ADR 0037）：拒絕一批方案的回饋條目——嚴重程度只問「紅線／
  * 偏好」兩個值，決定 rule.severity 與是否需要選類別，畫面從不問內容是哪種危害
@@ -211,6 +245,8 @@ export async function createSchedulePlan(
       objective: input.objective,
       promotion_note: input.promotionNote,
       plan_count: input.planCount,
+      start_date: input.startDate,
+      end_date: input.endDate,
     }),
   });
   if (!res.ok) {
@@ -322,6 +358,26 @@ export async function generateCreative(brandId: string): Promise<ScheduleState> 
   });
   if (!res.ok) {
     let message = `產出失敗（狀態碼 ${res.status}）`;
+    try {
+      const data = (await res.json()) as { error?: { message?: string } };
+      message = errorMessageFrom(data, message);
+    } catch {
+      // 回應不是 JSON，用預設訊息。
+    }
+    throw new Error(message);
+  }
+  return (await res.json()) as ScheduleState;
+}
+
+/** 票 T2b（ADR 0053）：結算目前這個檔期——算法全部在後端，這裡不接受、也不送任何金額
+ * 欄位。回傳整個 `ScheduleState`（`period` 欄位換新，帶著新的 `settled`）。 */
+export async function settleSchedulePeriod(brandId: string, periodId: string): Promise<ScheduleState> {
+  const res = await apiFetch(
+    `/api/schedule/brands/${encodeURIComponent(brandId)}/periods/${encodeURIComponent(periodId)}/settle`,
+    { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({}) },
+  );
+  if (!res.ok) {
+    let message = `結算失敗（狀態碼 ${res.status}）`;
     try {
       const data = (await res.json()) as { error?: { message?: string } };
       message = errorMessageFrom(data, message);

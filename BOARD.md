@@ -40,9 +40,9 @@ CASCADE 今早已修、上傳有 50MB 上限、產品照那條查無此事）。
       `holiday` 與 `cpa_basis`。補了兩份缺的契約頁（`brand_intelligence`／`brand_web`）。
       **T2 太大，垂直切成三張，循序做**（票在 `docs/issues/`）：
   - [x] ~~**T2a**~~ 2026-09-02 done（審查 ship，跨租戶讀取實測擋住）
-  - [>] **T2b** 排程頁起訖日→建檔期、四值狀態、「已結束，需人工確認」紅標、結算按鈕與快照、
-        重疊「短的贏」。**`approval.max_daily_amount` 不在本票**——見下面「需批准」那條
-  - [ ] **T2c** `product_economics_version`（半開區間，存檔即以「今天」切版）＋刪掉
+  - [x] ~~**T2b**~~ 2026-09-02 done（退件一輪：閘門被改寬、平手改成贏家全拿；複審 ship）。
+        **瀏覽器驗收待做**，跟 T2c 併成一次走
+  - [>] **T2c** `product_economics_version`（半開區間，存檔即以「今天」切版）＋刪掉
         `cpa_roas_basis`「計算口徑」與產品頁的「生效日」輸入框。與 T2a／T2b 零共用檔
 - [ ] **T3（route C）** `channel_entity_map`（`node_key` 路徑式、`external_status` 存平台原話、
       `learning_reset_at`、`unique(org_id, brand_id, node_key)` 就是冪等鍵）＋ `brand_meta_ad_account.allocation_weight`

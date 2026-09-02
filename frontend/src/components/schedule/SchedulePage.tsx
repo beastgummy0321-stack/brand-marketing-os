@@ -11,11 +11,14 @@ import {
   expandPlanIntoTree,
   fetchSchedule,
   generateCreative,
+  PERIOD_STATUS_LABELS,
   rejectSchedulePlans,
   revokeScheduleApproval,
   SCHEDULE_REJECT_CATEGORIES,
+  settleSchedulePeriod,
   type RejectEntryInput,
   type RejectSeverity,
+  type SchedulePeriod,
   type SchedulePlanItem,
   type ScheduleSource,
   type ScheduleState,
@@ -51,6 +54,11 @@ export function SchedulePage({ brandId }: { brandId: string }) {
   const [objective, setObjective] = useState("");
   const [promotionNote, setPromotionNote] = useState("");
   const [planCount, setPlanCount] = useState(3);
+  // 票 T2b（ADR 0053）：檔期的開始日／結束日——沒有預設值，使用者自己填。
+  const [startDate, setStartDate] = useState("");
+  const [endDate, setEndDate] = useState("");
+  const [settling, setSettling] = useState(false);
+  const [settleError, setSettleError] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
@@ -138,6 +146,15 @@ export function SchedulePage({ brandId }: { brandId: string }) {
         }
         setPromotionNote("");
         setPlanCount(Math.min(Math.max(3, schedule.plan_count_min), schedule.plan_count_max));
+        // 票 T2b：草稿（planning）還原上次填的日期；已經核准過的檔期不還原——再按一次
+        // 出方案是開新草稿，不是延續那個已經在投的檔期，日期不該被悄悄帶過去。
+        if (schedule.period && schedule.period.status === "planning") {
+          setStartDate(schedule.period.start_date);
+          setEndDate(schedule.period.end_date);
+        } else {
+          setStartDate("");
+          setEndDate("");
+        }
       })
       .catch((err: unknown) =>
         setState({
@@ -176,6 +193,7 @@ export function SchedulePage({ brandId }: { brandId: string }) {
     try {
       const schedule = await createSchedulePlan(brandId, {
         productIds: selectedIds, platform, objective, promotionNote, planCount,
+        startDate, endDate,
       });
       setState((prev) => (prev.status === "ready" ? { ...prev, schedule } : prev));
       setConfirming(false);
@@ -250,6 +268,19 @@ export function SchedulePage({ brandId }: { brandId: string }) {
     }
   }
 
+  async function handleSettle(periodId: string) {
+    setSettling(true);
+    setSettleError(null);
+    try {
+      const schedule = await settleSchedulePeriod(brandId, periodId);
+      setState((prev) => (prev.status === "ready" ? { ...prev, schedule } : prev));
+    } catch (err) {
+      setSettleError(err instanceof Error ? err.message : "結算失敗，請稍後再試。");
+    } finally {
+      setSettling(false);
+    }
+  }
+
   let content: ReactNode;
   if (state.status === "loading") {
     content = (
@@ -278,10 +309,19 @@ export function SchedulePage({ brandId }: { brandId: string }) {
     // （同一個品牌同一種工作一次一份），畫面先擋掉才不會讓人按了才吃到錯誤訊息。
     const planRunning = Boolean(schedule.plan?.running);
     const canConfirm =
-      selectedIds.length > 0 && platform !== "" && objective !== "" && !planRunning;
+      selectedIds.length > 0 && platform !== "" && objective !== "" && !planRunning
+      && startDate !== "" && endDate !== "" && endDate >= startDate;
 
     content = (
       <div className="flex flex-col gap-4">
+        {schedule.period && (
+          <PeriodPanel
+            period={schedule.period}
+            settling={settling}
+            settleError={settleError}
+            onSettle={handleSettle}
+          />
+        )}
         <div className="rounded-md border border-border bg-card p-4 shadow-[var(--shadow-card)]">
           <h2 className="mb-1 font-display text-lg text-foreground">這期要投放哪些產品</h2>
           <p className="mb-3 text-sm text-muted-foreground">
@@ -372,6 +412,30 @@ export function SchedulePage({ brandId }: { brandId: string }) {
                 ))}
               </select>
             </label>
+
+            <div className="flex flex-wrap gap-3">
+              <label className="flex flex-col gap-1 text-sm text-foreground">
+                開始日
+                <input
+                  type="date"
+                  value={startDate}
+                  onChange={(e) => setStartDate(e.target.value)}
+                  className="rounded-md border border-border bg-background px-2 py-1.5 text-sm"
+                />
+              </label>
+              <label className="flex flex-col gap-1 text-sm text-foreground">
+                結束日
+                <input
+                  type="date"
+                  value={endDate}
+                  onChange={(e) => setEndDate(e.target.value)}
+                  className="rounded-md border border-border bg-background px-2 py-1.5 text-sm"
+                />
+              </label>
+            </div>
+            {startDate !== "" && endDate !== "" && endDate < startDate && (
+              <p className="text-sm text-danger">結束日不能早於開始日。</p>
+            )}
           </div>
 
           <button
@@ -391,7 +455,8 @@ export function SchedulePage({ brandId }: { brandId: string }) {
             <p className="mb-1 text-sm text-foreground">平台：{platformLabel}</p>
             <p className="mb-1 text-sm text-foreground">行銷目標：{objectiveLabel}</p>
             {promotionNote && <p className="mb-1 text-sm text-foreground">促銷或重點：{promotionNote}</p>}
-            <p className="mb-3 text-sm text-foreground">方案數：{planCount}</p>
+            <p className="mb-1 text-sm text-foreground">方案數：{planCount}</p>
+            <p className="mb-3 text-sm text-foreground">檔期：{startDate} ～ {endDate}</p>
             {submitError && <p className="mb-3 text-sm text-danger">{submitError}</p>}
             <div className="flex gap-2">
               <button
@@ -470,6 +535,92 @@ export function SchedulePage({ brandId }: { brandId: string }) {
       <Breadcrumb items={[{ label: "跨品牌總覽", href: "/" }, { label: "檔期" }]} />
       <h1 className="font-display text-2xl text-foreground">檔期</h1>
       {content}
+    </div>
+  );
+}
+
+/** 票 T2b（ADR 0053）：檔期狀態面板——四個狀態的徽章、已結束時的結算建議與按鈕、
+ * 已結算時的兩個凍結數字與（有晚到的錢才顯示的）重新結算按鈕。ADR 0051：既有頁面上的
+ * 一塊面板，不是新的長頁。 */
+function PeriodPanel({
+  period,
+  settling,
+  settleError,
+  onSettle,
+}: {
+  period: SchedulePeriod;
+  settling: boolean;
+  settleError: string | null;
+  onSettle: (periodId: string) => void;
+}) {
+  const badgeClass =
+    period.status === "awaiting_data"
+      ? "bg-danger/10 text-danger"
+      : period.status === "running"
+        ? "bg-success/10 text-success"
+        : "bg-muted text-muted-foreground";
+  const settled = period.settled;
+  const hasLateMoney = settled !== null
+    && (settled.late_spend_since !== 0 || settled.late_revenue_since !== 0);
+
+  return (
+    <div className="rounded-md border border-border bg-card p-4 shadow-[var(--shadow-card)]">
+      <div className="mb-2 flex flex-wrap items-center gap-2">
+        <h2 className="font-display text-lg text-foreground">{period.name}</h2>
+        <span className={`inline-flex shrink-0 items-center rounded-full px-2 py-0.5 text-xs font-medium ${badgeClass}`}>
+          {PERIOD_STATUS_LABELS[period.status]}
+        </span>
+      </div>
+
+      {period.status === "awaiting_data" && (
+        <div className="flex flex-col items-start gap-2">
+          <p className="text-sm text-foreground">
+            這期已結束。Meta 的成交回報最長 7 天才補齊，建議 {period.settle_advice_date} 之後再結算。
+          </p>
+          {settleError && <p className="text-sm text-danger">{settleError}</p>}
+          <button
+            type="button"
+            onClick={() => onSettle(period.id)}
+            disabled={settling}
+            className="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {settling ? "結算中…" : "結算這期"}
+          </button>
+        </div>
+      )}
+
+      {settled && (
+        <div className="flex flex-col items-start gap-1">
+          <p className="text-sm text-foreground">花費：{formatCurrency(settled.spend)}</p>
+          <p className="text-sm text-foreground">這期間全通路營收：{formatCurrency(settled.revenue)}</p>
+          <p className="text-sm text-muted-foreground">
+            結算時間：{new Date(settled.settled_at).toLocaleString("zh-TW")}
+          </p>
+          {settled.late_spend_since !== 0 && (
+            <p className="text-sm text-foreground">
+              結算後花費又進來 {formatCurrency(settled.late_spend_since)}
+            </p>
+          )}
+          {settled.late_revenue_since !== 0 && (
+            <p className="text-sm text-foreground">
+              結算後營收又進來 {formatCurrency(settled.late_revenue_since)}
+            </p>
+          )}
+          {hasLateMoney && (
+            <>
+              {settleError && <p className="text-sm text-danger">{settleError}</p>}
+              <button
+                type="button"
+                onClick={() => onSettle(period.id)}
+                disabled={settling}
+                className="mt-1 rounded-md border border-primary px-3 py-1.5 text-sm font-medium text-primary hover:bg-primary/10 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {settling ? "結算中…" : "重新結算"}
+              </button>
+            </>
+          )}
+        </div>
+      )}
     </div>
   );
 }
