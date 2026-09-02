@@ -1,6 +1,6 @@
 # CONSTITUTION — Ads & Scheduling module
 
-**Scope**: this governs the **ads & scheduling** module only. Brand Marketing OS will also carry brand content, SEO and more; each gets its own contract under `docs/contracts/`. Rules 1–3 are program-wide and bind every module and every agent working in this repo.
+**Scope**: this governs the **ads & scheduling** module only. Brand Marketing OS will also carry brand content, SEO and more; each gets its own contract under `docs/contracts/`. Rules 1–3 and 12 are program-wide and bind every module and every agent working in this repo.
 
 **Status: SIGNED 2026-09-01.** Gate A passed. The seven previously approved ad-loop tickets are retired; this document and the ad-loop diagram are the only source.
 
@@ -15,3 +15,4 @@
 9. **Money**: the system spends nothing without the user's press. It may save money on its own, and must be able to undo it.
 10. **Not in v1**: image generation, video files, landing pages, the agency client tier, any platform but Meta — each already has its seat in the schema, per rule 3.
 11. Board `BOARD.md` · vocabulary `CONTEXT.md` · decisions `docs/adr/` · module contracts `docs/contracts/` · tickets `docs/issues/<slug>/` (gitignored). The constitution says *what*; the *how* is ADR 0050 (data model of record) and `docs/contracts/schedule.md`. The published diagram <https://claude.ai/code/artifact/534811bd-7078-424c-b839-7493b2c73b25> is the readable overview only — where it and ADR 0050 differ, the ADR wins.
+12. **The interface is a dashboard, not a document.** Overview first, legible at a glance; dense information is split by tabs and disclosure, never one long scroll; interface text uses standard UI vocabulary and never talks down to the user. The rules are `docs/adr/0051`.
