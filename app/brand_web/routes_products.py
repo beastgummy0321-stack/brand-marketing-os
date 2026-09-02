@@ -107,7 +107,7 @@ def _economics_shape(economics: dict) -> dict:
     return {
         "selling_price": economics["selling_price"], "fixed_cost": economics["fixed_cost"],
         "unit_variable_cost": economics["unit_variable_cost"], "shipping_cost": economics["shipping_cost"],
-        "currency": economics["currency"], "cpa_roas_basis": economics["cpa_roas_basis"],
+        "currency": economics["currency"],
         "effective_from": economics["effective_from"], "status": economics["status"],
         "confirmed_by": economics["confirmed_by"],
     }
@@ -468,7 +468,6 @@ async def economics_save(request: Request, brand_id: str, product_id: str):
         web.conn, brand_id, product_id, actor=str(actor.user_id),
         selling_price=price_val, currency=currency, confirmed_by=confirmed_by,
         fixed_cost=fixed_val, unit_variable_cost=unit_val, shipping_cost=ship_val,
-        cpa_roas_basis=clean(_str_field(body, "cpa_roas_basis")) or None,
         effective_from=clean(_str_field(body, "effective_from")) or None,
     )
     return Response(status_code=204)

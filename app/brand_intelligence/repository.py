@@ -20,6 +20,8 @@
 """
 
 
+from datetime import date
+
 # Owned Channel 已拆進 repository_channels.py（票 B2-library，本檔行數頂到
 # docs/tech-debt.md 凍結上限，不得再加）；這裡 re-export，讓既有 `repo.create_channel()`
 # 等呼叫端寫法不必改。
@@ -31,6 +33,7 @@ from app.brand_intelligence.repository_channels import (  # noqa: F401
     update_channel,
 )
 from app.core import cleanup
+from app.core import settings as coresettings
 from app.core.audit import write_audit
 from app.core.db import Conn, ConnProxy, jsonb, new_id, now_utc
 
@@ -197,6 +200,7 @@ def compute_methodology_switches(conn: Conn, brand_id: str) -> dict:
 BRAND_CHILD_TABLES = (
     ("product_fact", "產品事實"),
     ("product_economics", "產品經濟數據"),
+    ("product_economics_version", "產品經濟數字版本"),
     ("brand_performance_baseline", "成效基準"),
     ("rule", "規則"),
     ("claim", "宣稱"),
@@ -237,7 +241,7 @@ def count_pending_product_layer(conn: Conn, brand_id: str) -> int:
 
 
 def delete_brand_data(conn: Conn, brand_id: str) -> dict:
-    """清掉本模組掛在該品牌下的子表資料（只清 BRAND_CHILD_TABLES 這 13 張子表，
+    """清掉本模組掛在該品牌下的子表資料（只清 BRAND_CHILD_TABLES 這 15 張子表，
     不碰 brand 那一列、不寫稽核），登記進 app.core.cleanup 給 delete_brand() 呼叫用。
     只下 DELETE、不 commit（Q4 單一交易、全有全無，commit 由 delete_brand() 統一做）。
     """
@@ -355,6 +359,7 @@ def update_product(conn: Conn, brand_id: str, product_id: str, *,
 PRODUCT_CHILD_TABLES = (
     ("product_fact", "產品事實"),
     ("product_economics", "產品經濟數據"),
+    ("product_economics_version", "產品經濟數字版本"),
     ("brand_performance_baseline", "成效基準"),
     ("rule", "規則"),
     ("claim", "宣稱"),
@@ -375,7 +380,7 @@ def count_product_data(conn: Conn, brand_id: str, product_id: str) -> list:
 
 
 def delete_product_data(conn: Conn, brand_id: str, product_id: str) -> dict:
-    """清掉本模組掛在該產品下的子表資料（只清 PRODUCT_CHILD_TABLES 這 8 張子表，
+    """清掉本模組掛在該產品下的子表資料（只清 PRODUCT_CHILD_TABLES 這 9 張子表，
     不碰 product 那一列、不寫稽核），登記進 app.core.cleanup 給 delete_product() 呼叫用。
     只下 DELETE、不 commit（Q4 單一交易、全有全無，commit 由 delete_product() 統一做）。
     """
@@ -712,7 +717,6 @@ def save_product_economics(conn: Conn, brand_id: str, product_id: str, *, actor:
                             fixed_cost: float | None = None,
                             unit_variable_cost: float | None = None,
                             shipping_cost: float | None = None,
-                            cpa_roas_basis: str | None = None,
                             effective_from: str | None = None,
                             effective_to: str | None = None) -> dict:
     _require(currency, "product_economics.currency 為必填")
@@ -722,35 +726,62 @@ def save_product_economics(conn: Conn, brand_id: str, product_id: str, *, actor:
         raise ValueError("product_economics.selling_price 為必填")
     before = get_product_economics(conn, brand_id, product_id)
     ts = now_utc()
+    org_id = _org_id_for_brand(conn, brand_id)
     row = {
         "id": before["id"] if before else new_id("pec"),
         "product_id": product_id, "brand_id": brand_id, "selling_price": selling_price,
         "fixed_cost": fixed_cost, "unit_variable_cost": unit_variable_cost,
-        "shipping_cost": shipping_cost, "currency": currency, "cpa_roas_basis": cpa_roas_basis,
+        "shipping_cost": shipping_cost, "currency": currency,
         "effective_from": effective_from, "effective_to": effective_to, "status": "confirmed",
         "source_reference_id": before["source_reference_id"] if before else None,
         "confirmed_by": confirmed_by, "confirmed_at": ts,
         "created_at": before["created_at"] if before else ts, "updated_at": ts,
     }
-    org_id = _org_id_for_brand(conn, brand_id)
+    # ADR 0053 §5：成本一改就是新的一版，只能從今天生效、絕不回溯——關掉這個產品目前開著
+    # 的那一版（若有），開一筆新的、從組織自己的今天生效（today_for_org，不是 date.today()：
+    # 機器的今天跟組織的今天在台北時區每天差 8 小時）。同一天存兩次會關出一筆
+    # [today, today) 的零長度版本，這是對的、讀起來等於沒發生，不加分支去閃避它（票 T2c
+    # 矛盾檢查段）——close 跟 insert 兩句話跟下面 product_economics 的寫入共用同一個
+    # request 交易，靠函式最後同一個 conn.commit() 一起落地。
+    today = coresettings.today_for_org(conn, org_id=org_id)
+    open_version = conn.execute(
+        "SELECT id, version FROM product_economics_version"
+        " WHERE product_id = %s AND effective_to IS NULL",
+        (product_id,),
+    ).fetchone()
+    if open_version is not None:
+        conn.execute(
+            "UPDATE product_economics_version SET effective_to = %s WHERE id = %s",
+            (today, open_version["id"]),
+        )
+    conn.execute(
+        "INSERT INTO product_economics_version (id, org_id, brand_id, product_id, version,"
+        " selling_price, fixed_cost, unit_variable_cost, shipping_cost, currency,"
+        " effective_from, effective_to, created_by, created_at)"
+        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NULL, %s, %s)",
+        (new_id("pev"), org_id, brand_id, product_id,
+         (open_version["version"] if open_version else 0) + 1,
+         selling_price, fixed_cost, unit_variable_cost, shipping_cost, currency,
+         today, actor, ts),
+    )
     if before:
         conn.execute(
             "UPDATE product_economics SET selling_price = %s, fixed_cost = %s, unit_variable_cost = %s, "
-            "shipping_cost = %s, currency = %s, cpa_roas_basis = %s, effective_from = %s, effective_to = %s, "
+            "shipping_cost = %s, currency = %s, effective_from = %s, effective_to = %s, "
             "status = %s, confirmed_by = %s, confirmed_at = %s, updated_at = %s WHERE id = %s",
             (row["selling_price"], row["fixed_cost"], row["unit_variable_cost"], row["shipping_cost"],
-             row["currency"], row["cpa_roas_basis"], row["effective_from"], row["effective_to"],
+             row["currency"], row["effective_from"], row["effective_to"],
              row["status"], row["confirmed_by"], row["confirmed_at"], row["updated_at"], row["id"]),
         )
         action = "update"
     else:
         conn.execute(
             "INSERT INTO product_economics (id, org_id, product_id, brand_id, selling_price, fixed_cost, "
-            "unit_variable_cost, shipping_cost, currency, cpa_roas_basis, effective_from, effective_to, "
+            "unit_variable_cost, shipping_cost, currency, effective_from, effective_to, "
             "status, source_reference_id, confirmed_by, confirmed_at, created_at, updated_at) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
             (row["id"], org_id, row["product_id"], row["brand_id"], row["selling_price"], row["fixed_cost"],
-             row["unit_variable_cost"], row["shipping_cost"], row["currency"], row["cpa_roas_basis"],
+             row["unit_variable_cost"], row["shipping_cost"], row["currency"],
              row["effective_from"], row["effective_to"], row["status"], row["source_reference_id"],
              row["confirmed_by"], row["confirmed_at"], row["created_at"], row["updated_at"]),
         )
@@ -759,6 +790,17 @@ def save_product_economics(conn: Conn, brand_id: str, product_id: str, *, actor:
                 action=action, actor=actor, before=before, after=row)
     conn.commit()
     return row
+
+
+def economics_at(conn: Conn, brand_id: str, product_id: str, on_date: date) -> dict | None:
+    """哪一版 product_economics_version 在 `on_date` 生效（ADR 0053 §5）：`[effective_from,
+    effective_to)` 半開區間包含 `on_date` 的那一筆。T5 的毛利計算用它讀「當時生效」的成本，
+    不吃 product_economics 的現在值——本票沒有呼叫端，先落地給下一票用。"""
+    return _row(conn.execute(
+        "SELECT * FROM product_economics_version WHERE brand_id = %s AND product_id = %s"
+        " AND effective_from <= %s AND (effective_to IS NULL OR effective_to > %s)",
+        (brand_id, product_id, on_date, on_date),
+    ).fetchone())
 
 
 def get_latest_product_source_url(conn: Conn, brand_id: str,
@@ -788,7 +830,7 @@ def create_pending_product_economics(conn: Conn, brand_id: str, product_id: str,
     row = {
         "id": new_id("pec"), "product_id": product_id, "brand_id": brand_id,
         "selling_price": selling_price, "fixed_cost": None, "unit_variable_cost": None,
-        "shipping_cost": None, "currency": currency, "cpa_roas_basis": None,
+        "shipping_cost": None, "currency": currency,
         "effective_from": None, "effective_to": None, "status": "pending",
         "source_reference_id": source_reference_id, "confirmed_by": None, "confirmed_at": None,
         "created_at": ts, "updated_at": ts,
@@ -796,11 +838,11 @@ def create_pending_product_economics(conn: Conn, brand_id: str, product_id: str,
     org_id = _org_id_for_brand(conn, brand_id)
     conn.execute(
         "INSERT INTO product_economics (id, org_id, product_id, brand_id, selling_price, fixed_cost, "
-        "unit_variable_cost, shipping_cost, currency, cpa_roas_basis, effective_from, effective_to, "
+        "unit_variable_cost, shipping_cost, currency, effective_from, effective_to, "
         "status, source_reference_id, confirmed_by, confirmed_at, created_at, updated_at) "
-        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
         (row["id"], org_id, row["product_id"], row["brand_id"], row["selling_price"], row["fixed_cost"],
-         row["unit_variable_cost"], row["shipping_cost"], row["currency"], row["cpa_roas_basis"],
+         row["unit_variable_cost"], row["shipping_cost"], row["currency"],
          row["effective_from"], row["effective_to"], row["status"], row["source_reference_id"],
          row["confirmed_by"], row["confirmed_at"], row["created_at"], row["updated_at"]),
     )

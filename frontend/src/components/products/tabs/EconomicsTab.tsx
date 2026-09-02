@@ -67,8 +67,6 @@ export function EconomicsTab({
             </dd>
             <dt className="text-muted-foreground">幣別</dt>
             <dd className="text-foreground">{economics.currency}</dd>
-            <dt className="text-muted-foreground">計算口徑</dt>
-            <dd className="text-foreground">{economics.cpa_roas_basis ?? "未填寫"}</dd>
             <dt className="text-muted-foreground">生效日</dt>
             <dd className="text-foreground">{economics.effective_from ?? "未填寫"}</dd>
           </dl>

@@ -327,7 +327,7 @@ class EconomicsTest(_BaseProductsApiTest):
         resp = self.client.post(
             f"/api/products/brands/{self.bid}/products/{pid}/economics",
             json={"selling_price": 690, "fixed_cost": 0, "unit_variable_cost": 0, "shipping_cost": 0,
-                  "currency": "TWD", "cpa_roas_basis": "", "effective_from": "", "confirmed_by": "小陳"},
+                  "currency": "TWD", "effective_from": "", "confirmed_by": "小陳"},
         )
         self.assertEqual(resp.status_code, 204)
         economics = repo.get_product_economics(web.conn, self.bid, pid)
@@ -346,7 +346,7 @@ class EconomicsTest(_BaseProductsApiTest):
         resp = self.client.post(
             f"/api/products/brands/{self.bid}/products/{pid}/economics",
             json={"selling_price": "not-a-number", "fixed_cost": 0, "unit_variable_cost": 0,
-                  "shipping_cost": 0, "currency": "TWD", "cpa_roas_basis": "", "effective_from": "",
+                  "shipping_cost": 0, "currency": "TWD", "effective_from": "",
                   "confirmed_by": "小陳"},
         )
         self.assertEqual(resp.status_code, 400)

@@ -57,7 +57,6 @@ export interface ProductEconomics {
   unit_variable_cost: number | null;
   shipping_cost: number | null;
   currency: string;
-  cpa_roas_basis: string | null;
   effective_from: string | null;
   status: "confirmed" | "pending";
   confirmed_by: string | null;
@@ -290,7 +289,6 @@ export function saveProductEconomics(
     unit_variable_cost: number;
     shipping_cost: number;
     currency: string;
-    cpa_roas_basis: string;
     effective_from: string;
     confirmed_by: string;
   },

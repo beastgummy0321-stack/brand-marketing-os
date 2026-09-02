@@ -25,8 +25,6 @@ export function EconomicsPanel({
   const [unitVariableCost, setUnitVariableCost] = useState(String(economics?.unit_variable_cost ?? 0));
   const [shippingCost, setShippingCost] = useState(String(economics?.shipping_cost ?? 0));
   const [currency, setCurrency] = useState(economics?.currency ?? CURRENCIES[0][0]);
-  const [cpaRoasBasis, setCpaRoasBasis] = useState(economics?.cpa_roas_basis ?? "");
-  const [effectiveFrom, setEffectiveFrom] = useState(economics?.effective_from ?? "");
   const [confirmedBy, setConfirmedBy] = useState(economics?.confirmed_by ?? "");
 
   const form = useFormSubmit(async () => {
@@ -36,8 +34,8 @@ export function EconomicsPanel({
       unit_variable_cost: Number(unitVariableCost) || 0,
       shipping_cost: Number(shippingCost) || 0,
       currency,
-      cpa_roas_basis: cpaRoasBasis,
-      effective_from: effectiveFrom,
+      // ADR 0053 §5：生效日一律是今天，這裡不再收使用者輸入，固定送空字串（後端視為未填）。
+      effective_from: "",
       confirmed_by: confirmedBy,
     });
     onSaved();
@@ -119,25 +117,6 @@ export function EconomicsPanel({
               </option>
             ))}
           </select>
-        </label>
-        <label className="flex flex-col gap-1 text-sm">
-          <span className="font-medium text-foreground">計算口徑（選填）</span>
-          <textarea
-            value={cpaRoasBasis}
-            onChange={(e) => setCpaRoasBasis(e.target.value)}
-            rows={3}
-            placeholder="例如「以月結算，含平台抽成」"
-            className="rounded-md border border-border px-3 py-2 text-sm text-foreground"
-          />
-        </label>
-        <label className="flex flex-col gap-1 text-sm">
-          <span className="font-medium text-foreground">生效日（選填）</span>
-          <input
-            type="date"
-            value={effectiveFrom}
-            onChange={(e) => setEffectiveFrom(e.target.value)}
-            className="rounded-md border border-border px-3 py-2 text-sm text-foreground"
-          />
         </label>
         <label className="flex flex-col gap-1 text-sm">
           <span className="font-medium text-foreground">確認人是誰？</span>
