@@ -260,6 +260,9 @@ def require_actor(request: Request):
 
     actor = authenticate(request)
     app_logging.bind_actor(user_id=str(actor.user_id), org_id=actor.org_id)
+    # ADR 0052: from here on this connection runs as role `authenticated`, scoped to
+    # this actor's org, for the rest of the request.
+    coredb.set_tenant_scope(coredb.current(), actor.org_id)
     return actor
 
 

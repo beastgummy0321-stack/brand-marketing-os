@@ -132,10 +132,11 @@ class Conn:
       生命週期歸連線池管，不由呼叫端關）。
     """
 
-    __slots__ = ("_pg",)
+    __slots__ = ("_pg", "_tenant_org_id")
 
     def __init__(self, pg_conn: "psycopg.Connection"):
         self._pg = pg_conn
+        self._tenant_org_id: str | None = None
 
     def execute(self, sql, params: Sequence = ()) -> _Rows:
         cur = self._pg.execute(sql, params)
@@ -150,7 +151,23 @@ class Conn:
         self._pg.commit()
 
     def rollback(self) -> None:
+        """ADR 0052 clause 5: a `SET ROLE` issued inside a transaction that is then
+        rolled back is undone (measured on this machine, see the R3c ticket). The
+        switch commits immediately in `set_tenant_scope()`, which protects it against
+        any *later*, separate rollback -- but that commit cannot protect a switch that
+        is still part of the same open transaction when a rollback happens (e.g. the
+        commit is skipped or delayed for any reason). Re-assert the recorded scope
+        here so a rollback can never silently leave the connection unscoped or on the
+        wrong org -- the RLS-silently-off failure mode this whole ticket exists to
+        close.
+        """
         self._pg.rollback()
+        if self._tenant_org_id is not None:
+            self._pg.execute("SET ROLE authenticated")
+            self._pg.execute(
+                "SELECT set_config('app.org_id', %s, false)", (self._tenant_org_id,)
+            )
+            self._pg.commit()
 
     def close(self) -> None:
         logger.debug("Conn.close() is a no-op; the pool owns connection lifetime")
@@ -160,12 +177,31 @@ _pool: ConnectionPool | None = None
 _current: ContextVar["Conn"] = ContextVar("db_current_conn")
 
 
+def _reset_pooled_connection(pg_conn: "psycopg.Connection") -> None:
+    """ADR 0052 clause 4 -- the single most important line in the R3c ticket: a
+    connection returning to the pool must never hand the next request the previous
+    request's role or org claim. `psycopg_pool.ConnectionPool`'s `reset=` callback
+    (psycopg_pool/pool.py:54) runs on every return, after any dirty transaction has
+    already been rolled back (`_reset_connection`, pool.py:783) -- so this only needs
+    to clear session-level state and commit; a connection this leaves in a bad status
+    is discarded by the pool rather than handed on (pool.py:810-816).
+    """
+    pg_conn.execute("RESET ROLE")
+    pg_conn.execute("RESET app.org_id")
+    pg_conn.commit()
+
+
 def pool() -> ConnectionPool:
     """模組層單例，惰性建立（第一次呼叫才真的開連線池）。"""
     global _pool
     if _pool is None:
         _pool = ConnectionPool(
-            dsn(), min_size=1, max_size=10, kwargs={"row_factory": dict_row}, open=True
+            dsn(),
+            min_size=1,
+            max_size=10,
+            kwargs={"row_factory": dict_row},
+            open=True,
+            reset=_reset_pooled_connection,
         )
     return _pool
 
@@ -193,6 +229,24 @@ def current() -> Conn:
         return _current.get()
     except LookupError:
         raise RuntimeError("no connection bound; use db.connection()")
+
+
+def set_tenant_scope(conn: Conn, org_id: str) -> None:
+    """ADR 0052: switch this connection to role `authenticated` with the `app.org_id`
+    claim set to `org_id`, for the rest of this request/job. Called once, from
+    `require_actor()` (`app/shared/web.py`), right after the actor is known -- never
+    from `app/identity/`, which stays unscoped on purpose (see the ADR's identity
+    section).
+
+    Commits immediately: an uncommitted `SET ROLE` is undone by the next rollback,
+    silently (measured, see the ticket) -- RLS would go silently off with every gate
+    still green. `Conn.rollback()` re-applies the org recorded here if a rollback ever
+    catches the switch before this commit lands.
+    """
+    conn.execute("SET ROLE authenticated")
+    conn.execute("SELECT set_config('app.org_id', %s, false)", (org_id,))
+    conn._tenant_org_id = org_id
+    conn.commit()
 
 
 class ConnProxy:

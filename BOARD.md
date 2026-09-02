@@ -81,48 +81,17 @@ CASCADE 今早已修、上傳有 50MB 上限、產品照那條查無此事）。
       需 GitHub Pro 或公開 repo。**本機單人階段先不付費**（2026-08-30 裁決），跟 Sentry／staging／CD
       同一批再決定；在那之前 CI 綠不擋合併，靠人工
 
-## 租戶隔離與 RLS（2026-09-02 工作流壓測後新增）
+## 租戶隔離與 RLS（2026-09-02 完成，R1～R4 全清）
 
-背景一句話：`test_org_isolation_all_tables.py` 守的是「每張表有沒有 `org_id` 欄位」（schema 層），
-2026-09-02 新增的 `UnscopedTenantReadScanTest`（`test_architecture_boundaries.py:257`）守的是
-「讀租戶表的函式有沒有帶租戶欄位」（查詢層）。兩層都守到了，缺的是資料庫自己那一層。
+這一節原本的四張票全部做完了，決策與量到的數字收在 **ADR 0052**（角色、claim、為什麼不寫 FORCE、
+為什麼佇列不碰、Vault 那扇門與它的 `pg_temp` 洞），不在看板重複一份。
+現在的狀態：`public` 47 張表每張都有 `TO authenticated` 的 policy，已登入的請求在 `require_actor()`
+之後降成 `authenticated` 角色並帶 `app.org_id`，連線還回池子時清乾淨。
+**RLS 仍然是第二道防線**——主要門禁是 `require_brand` 與查詢層的 `org_id` 篩選，這個順位沒有變。
 
-**2026-09-02 實測更正（本節原本寫的三個數字都錯，錯在偏悲觀）**，數字全部量自跑著的本機
-Supabase（`postgres@127.0.0.1:54322`）：
-
-- 「一條 RLS 都沒有」**是錯的**。`supabase/migrations/20260828000001_core_rls.sql` 加後續六個檔
-  已經 `ALTER … ENABLE ROW LEVEL SECURITY` 共 95 次，`public` 的 47 張表**每一張都開著**。
-- 「99 張表」**是錯的**：`public` 是 47 張（票 3 那個 migration DROP 掉 44 張廣告表之後的現況），
-  另有 4 張 procrastinate 表住在隔壁 schema `public__queue`（ADR 0038）。
-- 「新表必須開 RLS 的棘輪要新增」**是錯的，它已經存在而且更嚴**：
-  `test_real_db_schema_drift.py:112` `test_every_table_has_rls_enabled` 要求 schema 裡
-  **每一張**表都開，不是只有新表。T2～T6 的新表漏開就是紅的。
-- 真正缺的是另外兩件：`pg_policies` 在 `public` 是 **0 列**（有鎖沒有鑰匙規則），
-  以及後端連線用的 `postgres` 帶 `rolbypassrls = true`（`app/core/db.py:91`）——
-  它其實不是 superuser，是 BYPASSRLS，效果一樣：無視 RLS，連 FORCE 都無視。
-
-急迫性判定：前端只跟 FastAPI 講話（憲法 3），**沒有不受信任的客戶端握有 DB 連線**，
-所以 RLS 在這裡是第二道防線，不是主要門禁——這跟瀏覽器直連的一般 Supabase 專案不同，低一階。
-但 T2～T6 要新增約 25 張表（ADR 0050），**現在不帶 policy，將來要補的是 72 張而不是 47 張。**
-
-**2026-09-02 訪談定案（使用者選）：R1～R4 這輪全清，且 RLS 只咬「已登入的 API 請求」**——
-`require_actor()`（`app/shared/web.py:249`，全站 133 條路由的唯一入口）確認身分之後才把連線
-降成 `authenticated` 角色並帶上 org claim；背景工作、登入、開機掃描維持現狀。放棄的是
-「背景工作寫錯組織時資料庫會擋」，那一層仍由 `UnscopedTenantReadScanTest` 守。
-
-R3 已切成兩張，決策全部收在 **ADR 0052**（表的形狀、角色、claim、為什麼不寫 FORCE、
-為什麼佇列不碰、哪些過期敘述要改哪些不改，都在裡面；看板不再重複一份）。R2 併進 R3a。
-
-**2026-09-02 實測：把開關打開跑一次全套，708 支裡壞 22 支，而且全部同一個原因**——降權之後
-讀不到 Supabase Vault（`permission denied for schema vault`，`app/core/settings.py:90`）。
-所以 R3 的後半再切成兩張：先開一扇只認自己組織的保險箱門（使用者裁決，2026-09-02），
-再打開開關。另外 25 個「錯誤」只在 `-n auto` 平行時出現、單獨跑全綠，R3c 要負責解釋清楚。
-
-- [ ] **R3c（route C）打開開關。** 票已寫好在 `docs/issues/r3c-rls-switch/`。
-      `require_actor()` 之後降權、連線還回池子時重置、rollback 後重新套用。
-      **`app/core` 的行數棘輪 1554 頂滿了，這張票調高並寫理由**（2026-09-02 使用者裁決：
-      全域規則「不得放寬容忍清單求綠」與這道閘門自己的說明「長大就改那張表」直接相撞，
-      裁決是調高、寫理由、調到量到的數字不留餘裕，並在 `docs/tech-debt.md` 留一條）
+棘輪三條，新表漏了任何一條都會紅：每張表開 RLS（`test_real_db_schema_drift.py`）、
+有 `org_id` 的表要有 policy（`test_rls_tenant_policy.py`）、讀租戶表的函式要帶租戶欄位
+（`test_architecture_boundaries.py`）。**T2～T6 新增的表照這三條走，不必再想一次。**
 
 ## 需批准（金流路徑）：核准的到底是「上限」還是「當時那個數字」——T2 動工前要答
 

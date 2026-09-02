@@ -967,7 +967,14 @@ KNOWN_MODULE_SIZES = {
                                       # 不是新增了 574 行。
     "app/brand_web": 2091,  # 2026-08-30 刪失效規則卡（小債）：autonomy 那張卡的兩處專屬
                              # 驗證跟著走。前一次是 2155
-    "app/core": 1559,  # 票 R3b（ADR 0052）：settings.py 的三處 Vault 直接存取改走
+    "app/core": 1613,  # 票 R3c（ADR 0052）：db.py 補 `set_tenant_scope()`（SET ROLE +
+                        # set_config + commit）、`_reset_pooled_connection()`（pool() 的
+                        # reset= callback，票裡點名「全票最重要的一行」）、`Conn.rollback()`
+                        # 補上兩個沉默失敗防線的理由註解與重放邏輯、`Conn.__slots__` 多一個
+                        # `_tenant_org_id` 欄位——db.py 218 → 272（+54 行），app/core 其餘
+                        # 檔案沒動，1559 → 1613 剛好對得上。量到的數字，不留餘裕（docs/
+                        # tech-debt.md §6 的裁決同樣適用於這次）。前一次是 1559——票 R3b（ADR
+                        # 0052）：settings.py 的三處 Vault 直接存取改走
                         # core_vault_read_secret／save_secret／delete_secret 三道以管理員身分
                         # 執行、只認自己組織 secret 的門，＋5 行（含理由註解）。
                         # **這次調高是使用者 2026-09-02 的明示裁決**：全域規則「不得為了讓閘門
