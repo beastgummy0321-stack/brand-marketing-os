@@ -206,7 +206,7 @@ def compute_money(conn, org_id: str, brand_id: str, period: dict, competitors: l
     `[start_date, end_date]` 那段的逐日逐實體花費（`meta_repo.daily_entity_spend(...,
     level="adset")`——**這裡從 `level="campaign"` 換成 `level="adset"`，因為
     membership 認的是廣告組合，用不同層算剩下的錢會兜不起來，見 ticket §5**；
-    `routes._approval_overspend()` 是另一條獨立的呼叫路徑，不經過這裡，沒有被這個
+    `tree_approval._approval_overspend()` 是另一條獨立的呼叫路徑，不經過這裡，沒有被這個
     改動動到）＋這個品牌的 `period_node_membership`（JOIN 過 `channel_entity_map` 換出
     entity_id，`schedule_repo.period_node_memberships_for_brand()`），純函數自己決定
     每一筆錢算誰的。

@@ -18,7 +18,7 @@ from app.schedule import creative as creative_mod
 from app.schedule import period as period_mod
 from app.schedule import plan as plan_mod
 from app.schedule import repository as schedule_repo
-from app.schedule import routes
+from app.schedule import tree_approval
 
 # task_type：providers.py TASK_TYPE_LABELS／TASK_DEFAULTS 的 "schedule_plan"（票 07 settled 段：
 # 重新命名死掉的 campaign_plan，不是新增第二個型別）。
@@ -158,7 +158,7 @@ def _brand_response(conn, brand_id: str, org_id: str) -> dict:
         tree["running"] = True
     if tree is not None:
         _fill_node_spend(conn, org_id, brand_id, tree)
-        routes._fill_approval(conn, org_id, brand_id, tree)
+        tree_approval._fill_approval(conn, org_id, brand_id, tree)
     creative_row, creative_running = _display_task_row(conn, brand_id, CREATIVE_TASK_TYPE)
     creative = None
     if creative_row is not None:
