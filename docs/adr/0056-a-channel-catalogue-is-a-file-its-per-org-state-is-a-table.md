@@ -120,6 +120,20 @@ lazy insert — container contract §5 permits duplication until the third calle
 second. The third caller extracts it to a shared accessor; that is the trigger, written down so
 the copy is a decision rather than an oversight.
 
+**Replacing the table moves a permission boundary, and that is the expensive half.** The three
+`SECURITY DEFINER` Vault door functions hardcode their ownership check to two tables, one of
+which is `meta_credential` (`20260902000003_core_vault_org_scoped_access.sql:69`, `:113`, `:149`;
+ADR 0052 states the pair in prose). Dropping the table without redefining the functions leaves
+the only door into Vault raising `UndefinedTable` on every authenticated call. The check follows
+the table to `channel_credential`, in a new `core_`-prefixed migration, approved by the user
+2026-09-03 as a permission-path change.
+
+That branch of the ownership check has never had a test: the existing vault tests all reach it
+through `app_setting` (`app/tests/test_rls_tenant_policy.py:209`). It gets one here. The general
+lesson, worth more than this instance: **a table named in a `SECURITY DEFINER` function body is a
+dependency that no Python grep will ever find**, and both of this slice's upstream blocks came
+from searching `app/` and calling it settled.
+
 The old table is dropped, not migrated. The project has not shipped; `CLAUDE.md` records every
 row as test data, and the previous real Meta binding was already lost to a `supabase db reset`
 (0 rows, verified 2026-09-02). A backfill would carry nothing.
