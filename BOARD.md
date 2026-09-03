@@ -35,12 +35,17 @@ CASCADE 今早已修、上傳有 50MB 上限、產品照那條查無此事）。
 表的形狀一律看 ADR 0050 的表清單；migration 檔名前綴一律看 ADR 0049（前綴＝擁有那張表的模組，
 不是要它的那張票，所以一張票可以有好幾個不同前綴的 migration 檔）。
 
-- [ ] **T4（route C）** `ad_channel` 補完（T3a 已建最小版：id／org_id／channel_key／label／enabled，
-      這裡補五個能力旗標＋`last_data_at`／`data_lag_days`／`spec`，並決定它和
-      `platform_objectives.json` 誰是「有哪些平台」的真相——T3 刻意不搬那個檔）
-      ＋ `ad_channel_format_spec`（鍵是 (channel, format)）＋ `channel_credential`
-      取代 `meta_credential`（現在主鍵是 org_id＝一個組織只能一個 token）＋ `meta_ad_account` 補 `timezone_name`
-      （Meta 回的日期是廣告帳戶時區，現在沒有這欄）
+- [>] **T4（route C）站①完成** 通路變成資料。票 `docs/issues/t4-channel-catalogue/ticket.md`，
+      決定紀錄 **ADR 0056**（2026-09-03 四題全簽）。**範圍比原本這行小很多，縮的理由全在 0056 裡**：
+      `platform_objectives.json` → `channel_catalogue.json`（平台的規矩住檔案，組織的狀態住資料表，
+      檔案永遠贏）＋ `ad_channel` **拿掉** `label`（不加任何欄位）＋ `channel_credential` 取代
+      `meta_credential`（`account_scope` 欄位留好、v1 只寫 `*`）＋ `meta_ad_account` 補
+      `timezone_name` **並且 `daily_pull` 真的改用它**——那是這張票唯一現在就會算錯的洞。
+      **刻意不做**（0056 §3、§5 各自寫了什麼時候要回來做）：`ad_channel_format_spec` 不建
+      （規格已在 `app/methodology/meta-format-specs.md`，帶官方出處）、`last_data_at` 不加
+      （`meta_ad_account.last_pull_at` 已經有）、`data_lag_days` 不加（Meta 的它就是歸因窗，
+      抽出去會拆掉 `daily_pull.py:57` 刻意寫下的耦合）、`spec` 不加（平台常數屬目錄檔）。
+      「五個能力旗標」全 repo 從來沒有定義過，0056 §2 改成由閉環的四個動作推導、住目錄檔。
 - [ ] **T5（route C）** 成效回流接座標——**第 3 層（廣告）的綁定是這張票的**（ADR 0055 §7：
       schema 位置 T3a 已留好，開它是多幾列不是 migration），同時決定
       `creative_candidate.published_ad_external_id` 是留成便利欄位還是刪掉
