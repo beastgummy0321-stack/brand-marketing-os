@@ -41,6 +41,7 @@ from app.background import app as background_app
 from app.core import rule_cards
 from app.core.db import connection
 from app.llm import context_compiler, gateway, methodology, providers
+from app.schedule import binding as binding_mod
 from app.schedule import plan as plan_mod
 from app.schedule import routes
 
@@ -233,7 +234,7 @@ def schedule_creative(org_id: str, brand_id: str, tree_task_id: str,
         # routes.py 的 _run_creative() 在 enqueue 之前已經驗證過這一列存在且 succeeded；
         # 列從不刪除，這裡讀回來的就是釘住的那一列本身。
         assert tree_row is not None
-        tree = routes._tree_with_bindings(conn, tree_row, org_id, brand_id)
+        tree = binding_mod.tree_with_bindings(conn, tree_row, org_id, brand_id)
 
         plan_scope = tree_row.get("context_scope_json") or {}
         plan_row = gateway.get_task(conn, plan_scope.get("source_plan_task_id") or "")

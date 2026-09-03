@@ -432,7 +432,7 @@ def write_settlement(conn: _AnyConn, *, org_id: str, period_id: str, spend: floa
 
 def bindings_by_node_key(conn: _AnyConn, org_id: str, brand_id: str, channel_key: str) -> dict:
     """這個品牌在這個通路上，`node_key → {external_id, node_name_at_bind}`（只挑
-    `local_state = 'mapped'` 的列——`routes._tree_with_bindings()` 疊圖用）。跟
+    `local_state = 'mapped'` 的列——`binding.tree_with_bindings()` 疊圖用）。跟
     `ad_channel` JOIN 是為了用 `channel_key`（'meta'）而不是內部 id 篩——沒有那一列，
     JOIN 自然是空集合，讀從不建它（ADR 0055 §4／§5：讀永遠不寫）。"""
     rows = conn.execute(

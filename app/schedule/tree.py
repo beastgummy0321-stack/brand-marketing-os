@@ -111,7 +111,7 @@ def _collect_nodes(
             "name": name, "node_key": node_key, "fields": fields, "share": share,
             "daily_amount": None, "warnings": warnings, "children": children,
             # tree.py 不碰 DB，一律留白；只有第一層節點會被 routes.py 的
-            # _tree_with_bindings() 疊上 bound_external_id（第一層以下永遠是
+            # binding.tree_with_bindings() 疊上 bound_external_id（第一層以下永遠是
             # null——T3b 只綁第一層，ADR 0055 §7），spend／roas 只有綁定的節點才補上。
             "bound_external_id": None, "spend": None, "roas": None,
         }
@@ -181,7 +181,7 @@ def tree_from_task_row(row: dict) -> dict:
 
     # 票 T3b（ADR 0055 §4）：綁定不再從這一列自己的 context_scope_json 讀——這是純函數，
     # 沒有連線，讀不到 channel_entity_map。bound_external_id 一律是 null；填值是呼叫端
-    # `routes._tree_with_bindings()` 的事。
+    # `binding.tree_with_bindings()` 的事。
     return {
         "task_id": row["id"],
         "created_at": row["started_at"],

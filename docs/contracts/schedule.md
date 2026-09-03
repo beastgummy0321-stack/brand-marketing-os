@@ -6,7 +6,12 @@ it is not repeated here, because a second copy goes stale.
 ## Entry path
 
 `app/schedule/__init__.py`. Everything else in the package (`plan.py`, `tree.py`, `creative.py`,
-`routes.py`, `jobs.py`) is private and imported by nothing outside it.
+`period.py`, `binding.py`, `repository.py`, `routes.py`, `jobs.py`) is private and imported by
+nothing outside it.
+
+The split inside the package is by job, not by size: `routes.py` takes HTTP requests, and the
+others do the work. `binding.py` was carved out of `routes.py` on 2026-09-03 (user-approved) on
+exactly that line — matching a tree node to a live platform entity is work, not routing.
 
 ## Exported shapes
 
