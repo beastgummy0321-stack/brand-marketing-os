@@ -21,8 +21,8 @@ user out; else 403 `forbidden_org`, which only fires for a user with zero member
 
 Dev bypass: `IDENTITY_DEV_TOKEN` — when the bearer token equals it, the actor is the seed dev
 user (`00000000-0000-0000-0000-000000000001`) in `org_dev` as owner, no JWT involved.
-`register()` refuses to start (`RuntimeError`) if this env var is set while `SUPABASE_URL`
-is not a localhost/127.0.0.1 URL.
+`register()` refuses to start (`RuntimeError`) if this env var, or `IDENTITY_ALLOW_HS256`, is
+set while `SUPABASE_URL` is not a localhost/127.0.0.1 URL.
 """
 
 import os
@@ -39,6 +39,11 @@ from app.shared.web import ApiError, Forbidden, NotFound, Unauthenticated  # noq
 
 _DEV_USER_ID = UUID("00000000-0000-0000-0000-000000000001")
 _SEED_ORG_ID = "org_dev"
+
+
+def _is_local() -> bool:
+    host = urlparse(os.environ.get("SUPABASE_URL", "")).hostname or ""
+    return host in ("localhost", "127.0.0.1")
 
 
 @dataclass(frozen=True)
@@ -121,16 +126,19 @@ def authenticate(request: Request) -> ActorContext:
 
 
 def register(app: FastAPI) -> None:
-    """掛 /api/identity/* 路由。啟動檢查：`IDENTITY_DEV_TOKEN` 只能在本機（`SUPABASE_URL`
-    是 localhost/127.0.0.1）設定，避免正式環境不小心留著開發後門。"""
+    """掛 /api/identity/* 路由。啟動檢查：`IDENTITY_DEV_TOKEN`／`IDENTITY_ALLOW_HS256` 都只能
+    在本機（`SUPABASE_URL` 是 localhost/127.0.0.1）設定，避免正式環境不小心留著開發後門。"""
     dev_token = os.environ.get("IDENTITY_DEV_TOKEN")
-    if dev_token:
-        host = urlparse(os.environ.get("SUPABASE_URL", "")).hostname or ""
-        if host not in ("localhost", "127.0.0.1"):
-            raise RuntimeError(
-                "IDENTITY_DEV_TOKEN 只能在本機開發環境使用"
-                "（SUPABASE_URL 必須是 localhost 或 127.0.0.1，目前不是）"
-            )
+    if dev_token and not _is_local():
+        raise RuntimeError(
+            "IDENTITY_DEV_TOKEN 只能在本機開發環境使用"
+            "（SUPABASE_URL 必須是 localhost 或 127.0.0.1，目前不是）"
+        )
+    if os.environ.get("IDENTITY_ALLOW_HS256") == "1" and not _is_local():
+        raise RuntimeError(
+            "IDENTITY_ALLOW_HS256 只能在本機開發環境使用"
+            "（SUPABASE_URL 必須是 localhost 或 127.0.0.1，目前不是）"
+        )
     from app.identity import routes as identity_routes  # 延遲 import：見檔頭「Internals」
 
     app.include_router(identity_routes.router)

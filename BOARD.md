@@ -125,6 +125,72 @@ T2 三張票逐字寫明不碰它，審查也逐字驗過 diff 裡沒有 `max_da
 只在台北 00:00–08:00 會紅，白天全綠——**所以它躲過了每一次在正常時間跑的閘門**，包括 CI。
 **動的是金流路徑，先提計畫等批准，不順手改。**
 
+## 2026-09-03 規範體檢：對過真實數字的一輪，四條已裁決
+
+看板／憲法／55 份 ADR／5 份契約／機器閘門常數／plugin 5.7.0 三個 hook 全部對過**實測值**，
+不是照文件抄。已裁決的四條與當下狀態：
+
+- [x] ~~**`.env.example` 的 HS256 後門**~~ **2026-09-03 完成，route C 審查 `ship`（尚未 commit）**。
+      原狀：範本第 15-16 行同時附上 `IDENTITY_ALLOW_HS256=1` 與 Supabase 公開示範密鑰，
+      照範本複製上雲＝任何人能自簽任意 `org_id` 的權杖讀全部租戶。修法不是新決定——
+      `IDENTITY_DEV_TOKEN` 早就有同一道開機守衛，這張票把**已經存在的裁決**套到漏掉的第二個後門。
+      兩個後門現在共用 `app/identity/__init__.py:44-46` 的 `_is_local()`；`.env.example` 全檔
+      已無示範密鑰。順手補了 `docs/contracts/identity.md`（identity 模組**一份 ADR 都沒有**，
+      寫進頁裡當事實記著）。審查逐條打過：`register()` 是唯一 FastAPI 實例的必經之路、
+      背景 worker 完全不碰 identity、`mock.patch.dict` 確實還原、循環沒被重新接上
+- [ ] **`_is_local()` 只認 localhost／127.0.0.1，交給 07-2**（2026-09-03 審查發現，**先天限制不是本輪引入**，
+      `IDENTITY_DEV_TOKEN` 從票 03-1 起就靠同一個判斷）：自架 Supabase 跟網站同機是合理的正式拓撲，
+      那種機器上 `SUPABASE_URL=http://127.0.0.1:...`，守衛會判它「本機」而放行。要根治就要一個
+      「這是不是正式環境」的變數——**那顆空白屬於 07-2，不在任何單張票的權限裡**。
+      順帶：沒有 scheme 的 `SUPABASE_URL`（`localhost:54321`）`urlparse` 回 `hostname=None`，
+      會讓開發者開機失敗；不影響安全，但會浪費一個下午
+- [>] **`app/schedule/routes.py` 768／上限 800**：T5（成效回流＋第 3 層綁定＋拆 `_latest_task_row`）
+      必破。已派 READ-ONLY 盤點（工作流規範「A boundary escalation is not a menu」的做法），
+      結果轉成一張 route C 模組邊界票，**排在 T4 前面**
+- [x] ~~`AGENTS.md`~~ **已刪（使用者裁決）**：它第 1 行寫「SQLite、單機單人使用」，正是
+      `CONSTITUTION.md` 第 1 條禁止的前提，而且它不在 adr-sweep 的掃描樹、也不在
+      「CONSTITUTION > ADR > 契約 > 票」的優先序裡——沒有任何機制守它。ADR 0031:55 本來就寫
+      「workspace 不放 `AGENTS.md`」。同一個 commit 修掉兩個指回來的指標
+      （`app/core/__init__.py:2`、ADR 0002 的載入預算定義）
+- [ ] **契約頁：16 個模組缺 11 份**（不是 `CLAUDE.md:79` 寫的「只有 schedule.md」——現在有
+      brand_intelligence／brand_web／core／meta／schedule 五份，加上剛補的 identity＝六份）。
+      **裁決：route C 逐票補，並裝閘門**（`CLAUDE.md` 那句「不加機器閘門」已改掉，
+      否則它跟全域規則「散文裡的限制不是限制」永久對撞）。**閘門還沒建**，形狀已定：
+      在 `test_architecture_boundaries.py` 加一份 `MODULES_WITHOUT_CONTRACT` 凍結清單，
+      **只准變短**——開票當天清單＝現況所以是綠的，新模組沒有頁會紅，補完一份劃掉一行。
+      跟 `KNOWN_OVERSIZED_FILES` 同一種棘輪。**要先弄紅一次才算數**（加一個假模組資料夾看它紅）
+
+### 查到但還沒裁決（都已查證是真的，不是文件上的說法）
+
+- [ ] **CI 從來不跑 e2e smoke**。`.github/workflows/ci.yml` 只有 ruff／pyright／pytest／前端
+      lint-typecheck-test-build。而 `CLAUDE.md` 與工作流規範都把 e2e 當「整合 bug 唯一現形處」
+      ——**這個系統最吃重的閘門只活在開發機上**，CI 綠不代表 server 起得來
+- [ ] **十處 production 程式用現在式引用已退休的 ADR**：`決策 0015`
+      （`brand_intelligence/repository.py:18,255,288`、`intake/repository.py:56`）、
+      `ADR 0017`（`brand_web/routes_products.py:18,173`、`brand_intelligence/report.py:1`、
+      `repository.py:1244`）。adr-sweep **只掃 `.md`**，所以這些永遠不會紅
+- [ ] **十幾個檔引用 `5eca0db` 刪掉的文件**：`docs/design/*`、`architecture-rules.md`、
+      `rule-checks.md`、`workflow-diet.md`。最糟的一處是
+      `test_architecture_boundaries.py:988`——**最常紅的那道閘門，錯誤訊息叫人去讀不存在的
+      `docs/workflow-diet.md`，還印出「目標 0.7」，而 ADR 0041 明文寫「沒有任何文件再訂這個數字」**
+- [ ] **`docs/tech-debt.md` 四筆事實已錯**（它是 `CLAUDE.md` 指定「動超標檔前先讀」的檔）：
+      `TEST_LINES_CEILING` 寫 14,305（實際 **17,823**）；`brand_intelligence/repository.py`
+      寫 1667 行（實際 **1387**）；§〇 那兩筆「沒有閘門守的欠帳」——`cycle_shopee_code` 已在
+      `20260829000005` DROP、`app/dashboard/campaign_calendar.py` 整支已刪，兩個都不存在了
+- [ ] **前端完全沒有行數閘門**：`FileLineCapTest` 只掃 `app/**.py`。
+      `frontend/src/components/schedule/SchedulePage.tsx` 已 851 行、超過 800，而 U2 還要再動它
+- [ ] **棘輪餘裕實測（2026-09-03）**：`TEST_LINES_CEILING` 17823／實測 17823＝**0**；
+      `app/core`／`app/identity`／`app/background`／`app/storage`／`app/tools` 五個模組也是 **0**，
+      `app/llm` 剩 2 行。ADR 0041 允許「寫理由調高」所以不是死結，但 **T4～T6 每一張票都得動閘門
+      常數行**，每次都要重打一次「這算不算放寬容忍清單」的官司。測試／production 比值 **0.949**
+- [ ] **`app/identity/` 沒有任何 ADR 管**（`adr-index.mjs` 對它零列）。認證、組織解析、兩個開發
+      後門都在裡面，一條決策紀錄都沒有。已寫進 `docs/contracts/identity.md` 當事實記著
+- [ ] 記憶 `model-assignment-preference`（「Opus 只協調與審查」）**已與 hook 對撞**：
+      `ticket-fields.mjs:88` 擋掉任何帶票路徑的 opus 派工，route C 審查者是 **sonnet**。要更新記憶
+- [ ] 殘留 worktree：`C:/Users/User/orca/workspaces/marketing/t3-frontend`（分支
+      `beastgummy0321-stack/t3-frontend`）。**已確認完全併進 `saas`，沒有未合併的工作**，
+      `git worktree remove` 即可
+
 ## 小債（順手做，不排優先）
 
 Dependabot #1（`nanoid`，修補版 3.3.18）：**`saas` 這邊已經是 3.3.18、`npm audit` 零漏洞**，
@@ -165,8 +231,12 @@ Dependabot #1（`nanoid`，修補版 3.3.18）：**`saas` 這邊已經是 3.3.18
       形狀剛好（action_json／risk_level／dedupe_key／outcome），補幾個欄位就能用。仍要刪的是： `order_record.attribution_override`、
       `interrupt.kind`／`visible_from`／`campaign_cycle_id` 四個沒人用的欄位。欄位還在，
       所以 `enqueue()` 那三個沒有生產呼叫端的參數也還留著
-- [ ] `FILE_LINE_CAP = 800` 仍用行數下令拆檔，工作流規範卻寫「line count never orders a split」。
-      2026-08-31 裁決留規範那份；已超標檔已改棘輪，新檔還是被行數逼拆。要不要收掉是你的決定
+- [x] ~~`FILE_LINE_CAP = 800` 與「line count never orders a split」相撞~~ **2026-09-03 由新版
+      工作流規範自己解掉**：規範「A boundary escalation is not a menu」一節明講**行數上限是警報、
+      不是命令**，撞到時的正確回應是派一支 READ-ONLY 問「這個檔該裝什麼、每個函式去哪、哪些碰錢」，
+      把它的表變成一張 route C 模組邊界票，排在觸發警報的那張票**前面**——不是登記成
+      known-oversized，也不是搬走最小的那個函式。閘門留著，只是它說的話換了意思。
+      唯一要改的是 `FileLineCapTest` 的錯誤訊息（現在寫「先拆再加」＝命令）
 - [ ] `meta-format-specs.md:52-53` 的 `script`／`hook_pool` 也掛著「無字數預算」（同一次實跑佔 18.1%／7.3%）。
       ADR 0047 只處理圖片提示詞那一項。**2026-09-01 裁決：這批不收**——0047 已經拿掉約六成輸出，
   「太長會被截斷」的痛小很多，而且實跑從沒真的被截斷過。T1b 的閘門只擋圖片欄位，不做全域字串禁令。
@@ -204,15 +274,11 @@ Dependabot #1（`nanoid`，修補版 3.3.18）：**`saas` 這邊已經是 3.3.18
 
 - [ ] **設這個品牌的 `conversion_goal`**（1 分鐘）。現在 NULL，所以任何地方的 CPA（每次成交花多少錢）
       都是空白——那是「不知道什麼算成交」，不是「沒有成交」。**這是資料不是程式**
-- [ ] **跑 `claude plugin update`**（30 秒）。規則已進 plugin repo **v5.6.0** 並已 push（`6c21ae6`）。
-      repo 在 `D:\0UserProfile\Desktop\Default\skeleton-slice-pen`（**不是** `skeleton-slice`，
-      那個是停在 v3.1.0 的舊代；記憶裡寫錯過一次）。內容兩批：
-      v5.5.1＝2026-09-02 壓測後的三種判決／第二次紅換工作種類／派工單帶 `agent-brief.md`／模型閘門
-      （證據在該 repo 的 `STRESS-2026-09-02.md`）；v5.6.0＝這輪 RLS 切片反推的四條
-      （記住的「配方」跟記住的數字一樣是填空白且票的作者同樣受約束／route C 審查者要動手打一次／
-      未知波及面先丟棄式實測再開票、全域開關拆成休眠＋開燈兩張／派工進行中不得 `git add -A`）。
-      這台機器的 cache 目錄名仍是 `5.4.0`，但檔案已就地同步過，**本機現在跑的就是新規則**；
-      跑 update 只是讓版號對得上。其他機器或重裝之後必須跑它才拿得到新規則
+- [x] ~~跑 `claude plugin update`~~ **2026-09-03 查證已完成**：cache 裡有
+      `skeleton-slice-pencil/5.7.0/`，`hooks/` 下 `adr-index.mjs`／`ticket-fields.mjs` 都在，
+      session 注入的規則就是 5.7.0 那份。plugin repo 在
+      `D:\0UserProfile\Desktop\Default\skeleton-slice-pen`（**不是** `skeleton-slice`，
+      那個停在 v3.1.0）。其他機器或重裝之後仍要跑 update 才拿得到
 - [ ] **2026-08-30 承諾：這幾天真的貼一則廣告到 Meta**（用排程頁產出的圖片提示詞生一張圖 →
       上傳進品牌智庫的官方素材 → 手動貼進 Meta 建一則廣告）。這條走過之前，**「把圖掛到廣告節點上」
       一律判「不做」**——圖的落腳處蓋好了，但圖片這件事一次都沒真的痛過，沒走過就蓋下一層＝

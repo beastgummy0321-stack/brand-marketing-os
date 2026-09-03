@@ -7,7 +7,6 @@ here at module level is safe.
 import os
 from datetime import datetime
 from typing import Literal
-from urllib.parse import urlparse
 from uuid import UUID
 
 from fastapi import APIRouter, Request
@@ -15,7 +14,7 @@ from pydantic import BaseModel
 
 import app.shared.web as web
 from app.core.db import now_utc
-from app.identity import ActorContext, Forbidden, NotFound, authenticate
+from app.identity import ActorContext, Forbidden, NotFound, _is_local, authenticate
 from app.identity import repository as repo
 from app.shared.web import ApiError
 
@@ -63,11 +62,6 @@ class CreateInviteResponse(BaseModel):
 
 class AcceptInviteResponse(BaseModel):
     org: OrgOut
-
-
-def _is_local() -> bool:
-    host = urlparse(os.environ.get("SUPABASE_URL", "")).hostname or ""
-    return host in ("localhost", "127.0.0.1")
 
 
 def _require_owner(actor: ActorContext) -> None:

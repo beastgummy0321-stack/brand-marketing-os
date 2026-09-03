@@ -5,19 +5,25 @@ conftest.py 的 `TestClient` 已經 monkeypatch 成預設帶 dev token 的 Autho
 自己覆寫 `headers`，不依賴那個預設值。
 """
 
+import os
 import re
 import threading
 import unittest
+from pathlib import Path
 from unittest import mock
 from uuid import UUID, uuid4
 
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import app.main as main
 import app.shared.web as web
+from app import identity as identity_module
 from app.identity import repository as identity_repo
 
 from .identity_test_helpers import flatten_routes, mint_hs256
+
+_REPO_ROOT = Path(__file__).resolve().parents[2]
 
 _DEV_USER_ID = UUID("00000000-0000-0000-0000-000000000001")
 
@@ -252,6 +258,33 @@ class ConcurrentFirstLoginTest(unittest.TestCase):
         self.assertEqual(n_users, 1, "app_user 應該只有一列")
         self.assertEqual(n_memberships, 1, "membership 應該只有一列")
         self.assertEqual(n_personal_orgs, 1, "個人組織應該只有一個")
+
+
+class Hs256StartupGuardTest(unittest.TestCase):
+    """票 identity-hs256-startup-guard done-check 2：兩半都要證——`register()` 真的會在
+    非本機 + HS256 開著時炸掉（跑進閘門的東西），`.env.example` 出廠真的沒有把後門打開
+    （擋回歸的模板）。單一測試同時證兩件事，不多開第二支。"""
+
+    def test_register_refuses_non_local_hs256_and_env_example_ships_it_closed(self):
+        with mock.patch.dict(
+            os.environ,
+            {
+                "SUPABASE_URL": "https://example.supabase.co",
+                "IDENTITY_ALLOW_HS256": "1",
+                "IDENTITY_DEV_TOKEN": "",  # 只想測 HS256 這一半，先關掉 dev-token 那一半的檢查
+            },
+        ):
+            with self.assertRaises(RuntimeError):
+                identity_module.register(FastAPI())
+
+        env_example = (_REPO_ROOT / ".env.example").read_text(encoding="utf-8")
+        self.assertNotIn(
+            "\nIDENTITY_ALLOW_HS256=1", env_example, ".env.example 出廠不該打開 HS256 後門",
+        )
+        self.assertNotIn(
+            "super-secret-jwt-token-with-at-least-32-characters-long", env_example,
+            ".env.example 出廠不該帶 Supabase 本機示範密鑰",
+        )
 
 
 if __name__ == "__main__":

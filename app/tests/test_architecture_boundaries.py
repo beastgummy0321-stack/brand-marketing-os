@@ -952,7 +952,15 @@ class FileLineCapTest(unittest.TestCase):
 # `node_key`、`BuildCreativeTest` 五支既有純函數測試改吃新版 `ad_nodes`
 # （`{"node_key", "name"}`）形狀必要的 fixture 更新（`_nodes()` 小工具，簽章換了、不是新
 # 斷言），以及本段理由註解自己佔的行。17761 → 17823。
-TEST_LINES_CEILING = 17823
+#
+# 票 identity-hs256-startup-guard：17823 → 17867（含本段理由註解自己佔的行）。新增一支
+# `Hs256StartupGuardTest`（**租戶隔離**：`.env.example` 原樣複製到雲端時，`IDENTITY_ALLOW_HS256`
+# 這道開發後門會跟著打開，任何知道 Supabase 本機示範密鑰的人都能簽出帶任意 `org_id` 的
+# token、讀到別人的租戶——這支同時證兩件事：`register()` 在非本機＋
+# `IDENTITY_ALLOW_HS256=1` 時會 `RuntimeError` 拒絕啟動（守執行期），`.env.example` 出廠
+# 沒有打開這個變數也沒有帶那把示範密鑰（守模板，擋回歸）。沒有第二支重複驗證同一件事，
+# 這是 ticket 本身明講的測試預算。
+TEST_LINES_CEILING = 17867
 
 
 def _line_totals() -> tuple:
@@ -1048,7 +1056,10 @@ KNOWN_MODULE_SIZES = {
                         # 連 fatigue_level()／sample_size_verdict() 兩支零呼叫端純函數一起刪。
                         # 前一次是 2148
     "app/dashboard": 645,
-    "app/identity": 537,
+    "app/identity": 539,  # 票 identity-hs256-startup-guard：`_is_local()` 從 routes.py 搬進
+                          # __init__.py（兩個呼叫端共用同一份定義，不留第二份），register()
+                          # 新增 IDENTITY_ALLOW_HS256 的啟動檢查，跟既有 IDENTITY_DEV_TOKEN
+                          # 那道同形狀。前一次是 537（外殼切片凍結值）。
     "app/intake": 3571,  # 本機 codex CLI 線路（c47bc36）：card_test.py 診斷工具跟著印出這次
                           # 真正跑的供應商。前一次是 3570——
                           # 缺陷 1：intake_question 改走強制工具結構化輸出，新增
