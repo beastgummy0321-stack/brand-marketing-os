@@ -24,7 +24,8 @@ Private to app/schedule/（集裝箱憲章第一節）：只有 app/schedule/rou
 `_collect_nodes` 共用，改了會連動改到活動樹自己的欄位契約；這裡另外寫一支
 `_valid_creative_fields`。
 
-`creative_from_task_row(row, ad_node_names)` 比 `tree_from_task_row(row)` 多吃一個參數：
+`creative_from_task_row(row, ad_nodes)`（票 T3d 前叫 `ad_node_names`，見下方段落）比
+`tree_from_task_row(row)` 多吃一個參數：
 `plan`／`tree` 的合法性只看自己那份回覆（比例加總、層數），但這裡的合法性還要看「當初凍結
 的那棵樹」有哪些最深層節點——這份清單不落在 `context_scope_json`（frozen decision 5 的
 字面契約只有三個鍵），呼叫端（`routes.py`）必須自己重讀那筆凍結的 `source_tree_task_id`
@@ -35,7 +36,18 @@ Private to app/schedule/（集裝箱憲章第一節）：只有 app/schedule/rou
 或 `null`）跟 `visual_concept`（一到兩句話的畫面概念）。壞值一律退回 `None`，理由跟
 `_valid_coordinates` 一樣：`creative_candidate.visual_tone` 有 `CHECK` 只收那兩個字串，寫壞值
 會讓整筆 INSERT 失敗——座標是診斷用中繼資料不是交付物，這條規則對這兩個新鍵一樣適用。
+
+票 T3d（ADR 0055 §1）：`build_creative(rendered_output, ad_nodes)` 的第二個參數從純名稱清單
+換成 `[{"node_key", "name"}, ...]`（樹的文件順序）。代理的回覆契約沒有變——它仍然只答
+`node`（節點名稱），不認得 `node_key`（frozen decision 3：外殼不懂通路或部門自己的詞彙，
+代理當然也不懂殼層內部的位置編碼）。但同名的兩個最深層節點今天分不出彼此（`creative_slot`
+過去拿名稱當鍵），所以比對這一步改成「同名字各自排隊」：回覆裡第 K 個某名字的區塊，配給
+樹裡文件順序第 K 個同名字的節點；不同名字之間彼此順序不受限——代理不保證照樹的順序回覆
+（票 01 既有規則，這裡不收窄）。整批合法性看「回覆的名稱多重集合」跟「樹葉節點的名稱多重
+集合」是否相同，不是 `set()`（`set` 會把兩個同名節點吃成一個，這正是這張票要關掉的洞）。
 """
+
+from collections import Counter
 
 from app.schedule.plan import _extract_last_json_block
 from app.schedule.tree import _valid_warnings
@@ -100,10 +112,11 @@ def _valid_creative_fields(raw_fields) -> list[dict] | None:
     return fields
 
 
-def build_creative(rendered_output: str, ad_node_names: list[str]) -> tuple[list[dict], str | None]:
+def build_creative(rendered_output: str, ad_nodes: list[dict]) -> tuple[list[dict], str | None]:
     """代理回覆 → (ads, failure)。失敗時 ads 是 `[]`；成功時每個元素是
-    `{"node", "coordinates", "visual_tone", "visual_concept", "fields", "warnings"}`，順序照
-    `ad_node_names`（樹的文件順序），不是代理回覆裡的順序——代理不保證照樹的順序回覆。"""
+    `{"node", "node_key", "coordinates", "visual_tone", "visual_concept", "fields",
+    "warnings"}`，順序照 `ad_nodes`（樹的文件順序），不是代理回覆裡的順序——代理不保證
+    照樹的順序回覆。`ad_nodes` 是 `[{"node_key", "name"}, ...]`（票 T3d，ADR 0055 §1）。"""
     data = _extract_last_json_block(rendered_output)
     if data is None:
         return [], NO_CREATIVE_MESSAGE
@@ -112,7 +125,7 @@ def build_creative(rendered_output: str, ad_node_names: list[str]) -> tuple[list
     if not isinstance(raw_creatives, list) or not raw_creatives:
         return [], NO_CREATIVE_MESSAGE
 
-    by_node: dict[str, dict] = {}
+    parsed = []
     for item in raw_creatives:
         if not isinstance(item, dict):
             return [], NO_CREATIVE_MESSAGE
@@ -128,25 +141,27 @@ def build_creative(rendered_output: str, ad_node_names: list[str]) -> tuple[list
         warnings = _valid_warnings(item.get("warnings", []))
         if warnings is None:
             return [], NO_CREATIVE_MESSAGE
-        if node in by_node:
-            return [], NODE_MISMATCH_MESSAGE  # 同一個節點回了兩份，不猜哪一份才對
-        by_node[node] = {
+        parsed.append({
             "node": node, "coordinates": coordinates, "visual_tone": visual_tone,
             "visual_concept": visual_concept, "fields": fields, "warnings": warnings,
-        }
+        })
 
-    if set(by_node) != set(ad_node_names):
+    if Counter(item["node"] for item in parsed) != Counter(n["name"] for n in ad_nodes):
         return [], NODE_MISMATCH_MESSAGE  # 少一個、多一個、或名稱對不上樹
 
-    ads = [by_node[name] for name in ad_node_names]
+    # 同名字各自排隊、依序配對（見檔頭票 T3d 段）：不同名字之間彼此順序不受限。
+    queues: dict[str, list[dict]] = {}
+    for item in parsed:
+        queues.setdefault(item["node"], []).append(item)
+    ads = [{**queues[node["name"]].pop(0), "node_key": node["node_key"]} for node in ad_nodes]
     return ads, None
 
 
-def creative_from_task_row(row: dict, ad_node_names: list[str]) -> dict:
+def creative_from_task_row(row: dict, ad_nodes: list[dict]) -> dict:
     """把一列 `llm_task`（`task_type = "schedule_creative"`）轉成 API 回傳的 `creative`
-    形狀——GET／POST 回傳同一個形狀，且對同一個 `(row, ad_node_names)` 每次呼叫都算出一樣
+    形狀——GET／POST 回傳同一個形狀，且對同一個 `(row, ad_nodes)` 每次呼叫都算出一樣
     的結果（比照 `plan.plan_from_task_row`：`structured_output_json` 不落地，從
-    `rendered_output` 逐次重算，同輸入同輸出）。`ad_node_names` 由呼叫端重讀這一列凍結的
+    `rendered_output` 逐次重算，同輸入同輸出）。`ad_nodes` 由呼叫端重讀這一列凍結的
     `source_tree_task_id` 現算——frozen decision 5：核對用的永遠是產出當下的那棵樹，使用者
     之後重新展開樹不會悄悄改寫已經產出的內容。"""
     scope = row.get("context_scope_json") or {}
@@ -159,7 +174,7 @@ def creative_from_task_row(row: dict, ad_node_names: list[str]) -> dict:
         failure = None if running else (row.get("error") or NO_REPLY_MESSAGE)
         ads: list[dict] = []
     else:
-        ads, failure = build_creative(rendered_output, ad_node_names)
+        ads, failure = build_creative(rendered_output, ad_nodes)
 
     return {
         "task_id": row["id"],

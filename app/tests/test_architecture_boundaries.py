@@ -941,7 +941,18 @@ class FileLineCapTest(unittest.TestCase):
 # 是 ADR 0053 §4 的規則本體，卻**沒有任何測試在守**——把 `period.py` 的 `min()` 改成
 # `max()`，原本九支測試全部照樣綠燈。補的那一支餵「同一個廣告組合同時登記在兩個不等長
 # 檔期底下」這個輸入，已證過紅（同樣的變異現在只殺它一支）。守的是金額。
-TEST_LINES_CEILING = 17761
+#
+# 票 T3d（ADR 0055 §1）：`creative_slot` 改用 `node_key` 識別，不再用節點名稱。守的是
+# **資料正確性**：舊版兩個同名的最深層節點會撞成同一個 slot、兩份文案分不出彼此；新測試
+# 證明新版不會——`_two_top_nodes` 兩個分支底下的最深層節點固定同名，各自綁到不同的
+# `node_key`，各自落地成獨立的 slot 跟候選
+# （`CreativePersistenceTest.test_two_same_name_leaves_under_different_parents_produce_two_slots_and_two_candidates`，
+# 紅法：讓兩個節點共用同一個 `node_key` 落地，兩個 slot 撞成一個，已證過紅、已還原）。
+# 多出來的行數也含 `CreativePersistenceTest` 既有兩支測試把斷言鍵從 `ad_node_name` 換成
+# `node_key`、`BuildCreativeTest` 五支既有純函數測試改吃新版 `ad_nodes`
+# （`{"node_key", "name"}`）形狀必要的 fixture 更新（`_nodes()` 小工具，簽章換了、不是新
+# 斷言），以及本段理由註解自己佔的行。17761 → 17823。
+TEST_LINES_CEILING = 17823
 
 
 def _line_totals() -> tuple:

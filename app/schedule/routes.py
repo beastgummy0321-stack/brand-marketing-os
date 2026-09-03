@@ -312,20 +312,21 @@ def _fill_approval(conn, org_id: str, brand_id: str, tree: dict) -> None:
     }
 
 
-def _leaf_ad_node_names(nodes: list) -> list[str]:
-    """活動樹最深層（沒有 `children` 的）節點名稱，照文件順序（深度優先、前序）——票 01：
-    內容跟這一層的節點一一對應，不是每一層都配一份。"""
-    names = []
+def _leaf_ad_nodes(nodes: list) -> list[dict]:
+    """活動樹最深層（沒有 `children` 的）節點，照文件順序（深度優先、前序）——票 01：
+    內容跟這一層的節點一一對應，不是每一層都配一份。每個元素 `{"node_key", "name"}`
+    （票 T3d，ADR 0055 §1：身分是 `node_key`，`name` 只給代理比對用）。"""
+    result = []
     for node in nodes:
         if node["children"]:
-            names.extend(_leaf_ad_node_names(node["children"]))
+            result.extend(_leaf_ad_nodes(node["children"]))
         else:
-            names.append(node["name"])
-    return names
+            result.append({"node_key": node["node_key"], "name": node["name"]})
+    return result
 
 
-def _creative_ad_node_names(conn, creative_row: dict, org_id: str, brand_id: str) -> list[str]:
-    """從這一列內容任務凍結的 `source_tree_task_id` 找回當時的那棵樹，重算最深層節點名稱——
+def _creative_ad_nodes(conn, creative_row: dict, org_id: str, brand_id: str) -> list[dict]:
+    """從這一列內容任務凍結的 `source_tree_task_id` 找回當時的那棵樹，重算最深層節點——
     frozen decision 5：只能讀凍結住的那一列，不能讀「最新一次的樹」。"""
     source_tree_task_id = (creative_row.get("context_scope_json") or {}).get("source_tree_task_id")
     if not source_tree_task_id:
@@ -334,7 +335,7 @@ def _creative_ad_node_names(conn, creative_row: dict, org_id: str, brand_id: str
     if tree_row is None:
         return []
     tree = binding_mod.tree_with_bindings(conn, tree_row, org_id, brand_id)
-    return _leaf_ad_node_names(tree["nodes"])
+    return _leaf_ad_nodes(tree["nodes"])
 
 
 def _brand_response(conn, brand_id: str, org_id: str) -> dict:
@@ -356,8 +357,8 @@ def _brand_response(conn, brand_id: str, org_id: str) -> dict:
     creative_row, creative_running = _display_task_row(conn, brand_id, CREATIVE_TASK_TYPE)
     creative = None
     if creative_row is not None:
-        ad_node_names = _creative_ad_node_names(conn, creative_row, org_id, brand_id)
-        creative = creative_mod.creative_from_task_row(creative_row, ad_node_names)
+        ad_nodes = _creative_ad_nodes(conn, creative_row, org_id, brand_id)
+        creative = creative_mod.creative_from_task_row(creative_row, ad_nodes)
         if creative_running:
             creative["running"] = True
         # 票 T1b：內容一旦成功就落地成 creative_slot／creative_candidate／
@@ -466,8 +467,8 @@ def _run_creative(conn, brand_id: str, org_id: str) -> dict:
     if tree_row is None or tree_row["status"] != "succeeded":
         raise web.ApiError(400, "no_tree", NO_TREE_TO_GENERATE_CREATIVE_MESSAGE)
     tree = binding_mod.tree_with_bindings(conn, tree_row, org_id, brand_id)
-    ad_node_names = _leaf_ad_node_names(tree["nodes"]) if tree["failure"] is None else []
-    if not ad_node_names:
+    ad_nodes = _leaf_ad_nodes(tree["nodes"]) if tree["failure"] is None else []
+    if not ad_nodes:
         raise web.ApiError(400, "no_tree", NO_TREE_TO_GENERATE_CREATIVE_MESSAGE)
 
     gateway.check_spend_cap(conn, org_id=org_id)

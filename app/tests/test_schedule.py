@@ -143,6 +143,12 @@ def _creative_fenced(creatives: list) -> str:
     return f"這是一段給老闆看的說明文字。\n\n```json\n{body}\n```"
 
 
+def _nodes(*names: str) -> list[dict]:
+    """票 T3d：`build_creative()` 的 `ad_nodes` 參數——`BuildCreativeTest` 只測名稱比對，
+    不看 `node_key` 內容，序號頂著即可。"""
+    return [{"node_key": str(i + 1), "name": name} for i, name in enumerate(names)]
+
+
 def _one_creative(node: str, **overrides) -> dict:
     creative = {
         "node": node,
@@ -427,7 +433,7 @@ class BuildCreativeTest(unittest.TestCase):
             "angle": "疑慮 Q&A 連發", "audience": None, "pain": None, "hook": None,
             "proof": None, "offer": None, "format": None,
         })
-        ads, failure = creative_mod.build_creative(_creative_fenced([creative]), ["單元1"])
+        ads, failure = creative_mod.build_creative(_creative_fenced([creative]), _nodes("單元1"))
         self.assertIsNone(failure)
         self.assertEqual(ads[0]["coordinates"]["angle"], "疑慮 Q&A 連發")
 
@@ -438,7 +444,7 @@ class BuildCreativeTest(unittest.TestCase):
         creative = _one_creative(
             "單元1", coordinates={"angle": "", "pain": 3, "hook": "真的鉤子"}
         )
-        ads, failure = creative_mod.build_creative(_creative_fenced([creative]), ["單元1"])
+        ads, failure = creative_mod.build_creative(_creative_fenced([creative]), _nodes("單元1"))
         self.assertIsNone(failure)
         self.assertIsNone(ads[0]["coordinates"]["angle"])
         self.assertIsNone(ads[0]["coordinates"]["pain"])
@@ -447,7 +453,7 @@ class BuildCreativeTest(unittest.TestCase):
 
         # 整個 coordinates 給錯形狀（list）也一樣：七維全 null，文案照交。
         creative = _one_creative("單元1", coordinates=["不是 dict"])
-        ads, failure = creative_mod.build_creative(_creative_fenced([creative]), ["單元1"])
+        ads, failure = creative_mod.build_creative(_creative_fenced([creative]), _nodes("單元1"))
         self.assertIsNone(failure)
         self.assertEqual(
             ads[0]["coordinates"], {key: None for key in creative_mod.COORDINATE_KEYS}
@@ -457,7 +463,7 @@ class BuildCreativeTest(unittest.TestCase):
     def test_decision_4_still_holds(self):
         # node 對不上樹裡任何一個最深層節點，整批失敗——加 coordinates 沒有放寬這一條。
         ads, failure = creative_mod.build_creative(
-            _creative_fenced([_one_creative("不存在的節點")]), ["單元1"]
+            _creative_fenced([_one_creative("不存在的節點")]), _nodes("單元1")
         )
         self.assertEqual(ads, [])
         self.assertEqual(failure, creative_mod.NODE_MISMATCH_MESSAGE)
@@ -467,7 +473,7 @@ class BuildCreativeTest(unittest.TestCase):
             {"label": "主要文字", "value": "單一字串"},
             {"label": "標題", "value": ["變體一", "變體二"]},
         ])
-        ads, failure = creative_mod.build_creative(_creative_fenced([creative]), ["單元1"])
+        ads, failure = creative_mod.build_creative(_creative_fenced([creative]), _nodes("單元1"))
         self.assertIsNone(failure)
         self.assertEqual(ads[0]["fields"], [
             {"label": "主要文字", "value": ["單一字串"]},
@@ -478,7 +484,7 @@ class BuildCreativeTest(unittest.TestCase):
         creative = _one_creative(
             "單元1", coordinates={"angle": "測試角度", "not_a_real_key": "不該出現"}
         )
-        ads, failure = creative_mod.build_creative(_creative_fenced([creative]), ["單元1"])
+        ads, failure = creative_mod.build_creative(_creative_fenced([creative]), _nodes("單元1"))
         self.assertIsNone(failure)
         self.assertNotIn("not_a_real_key", ads[0]["coordinates"])
         self.assertEqual(set(ads[0]["coordinates"]), set(creative_mod.COORDINATE_KEYS))
@@ -1830,16 +1836,18 @@ class CreativePersistenceTest(_ScheduleApiTestBase):
         self.assertEqual(len(candidates), 2)  # 一個 slot 一個候選
         self.assertEqual(len(items), 2)       # 一個候選一個 item（v1）
 
+        # 票 T3d：鍵是 node_key，不是名稱——「單元1」在 _one_tree_nodes() 固定是 "1.1.1"，
+        # 「單元2」固定是 "1.2.1"。
         by_node = {
-            next(s for s in slots if s["id"] == c["slot_id"])["ad_node_name"]: c
+            next(s for s in slots if s["id"] == c["slot_id"])["node_key"]: c
             for c in candidates
         }
-        self.assertEqual(by_node["單元1"]["angle_key"], "scarcity_marketing")
-        self.assertEqual(by_node["單元1"]["coordinates_status"], "tagged")
-        self.assertIsNone(by_node["單元1"]["pain_key"])
+        self.assertEqual(by_node["1.1.1"]["angle_key"], "scarcity_marketing")
+        self.assertEqual(by_node["1.1.1"]["coordinates_status"], "tagged")
+        self.assertIsNone(by_node["1.1.1"]["pain_key"])
 
-        self.assertIsNone(by_node["單元2"]["angle_key"])
-        self.assertEqual(by_node["單元2"]["coordinates_status"], "pending")
+        self.assertIsNone(by_node["1.2.1"]["angle_key"])
+        self.assertEqual(by_node["1.2.1"]["coordinates_status"], "pending")
 
         # 讀第二次不會多寫一份（llm_task_id 擋掉重複落地）。
         self.client.get(f"/api/schedule/brands/{self.brand['id']}")
@@ -1873,12 +1881,55 @@ class CreativePersistenceTest(_ScheduleApiTestBase):
         candidates = web.conn.execute(
             "SELECT * FROM creative_candidate WHERE brand_id = %s", (self.brand["id"],),
         ).fetchall()
+        # 票 T3d：鍵是 node_key，不是名稱——同上一個測試的固定映射。
         by_node = {
-            next(s for s in slots if s["id"] == c["slot_id"])["ad_node_name"]: c
+            next(s for s in slots if s["id"] == c["slot_id"])["node_key"]: c
             for c in candidates
         }
-        self.assertEqual(by_node["單元1"]["visual_tone"], "暖調生活")
-        self.assertIsNone(by_node["單元2"]["visual_tone"])  # 不合法值退回 NULL，不炸整批 INSERT
+        self.assertEqual(by_node["1.1.1"]["visual_tone"], "暖調生活")
+        self.assertIsNone(by_node["1.2.1"]["visual_tone"])  # 不合法值退回 NULL，不炸整批 INSERT
+
+    def test_two_same_name_leaves_under_different_parents_produce_two_slots_and_two_candidates(
+        self,
+    ):
+        """票 T3d done-check 2（ADR 0055 §1）：舊版拿 `ad_node_name` 當鍵，兩個同名的最深層
+        節點會撞成一個 slot；新版鍵是 `node_key`，各自成為獨立的 slot 跟候選——`_two_top_nodes`
+        兩個分支底下的最深層節點固定都叫「單元」，node_key 各自是 "1.1.1"／"2.1.1"，這是舊版
+        （`set()`／單一名稱 dict）表達不出來的狀態。"""
+        schedule_jobs.PROVIDER = _fake(_fenced_plans([_one_plan()]))
+        resp = self._post(plan_count=1)
+        self.assertEqual(resp.status_code, 200, resp.text)
+        self._run_worker()
+        schedule_jobs.PROVIDER = _fake(_tree_fenced(_two_top_nodes("活動A", "活動B")))
+        resp = self.client.post(
+            f"/api/schedule/brands/{self.brand['id']}/tree", json={"plan_index": 0}
+        )
+        self.assertEqual(resp.status_code, 200, resp.text)
+        self._run_worker()
+
+        schedule_jobs.PROVIDER = _fake(_creative_fenced(
+            [_one_creative("單元"), _one_creative("單元")]
+        ))
+        resp = self.client.post(f"/api/schedule/brands/{self.brand['id']}/creative", json={})
+        self.assertEqual(resp.status_code, 200, resp.text)
+        self._run_worker()
+
+        get_resp = self.client.get(f"/api/schedule/brands/{self.brand['id']}")
+        self.assertEqual(get_resp.status_code, 200, get_resp.text)
+        creative = get_resp.json()["creative"]
+        self.assertIsNone(creative["failure"])
+        self.assertEqual(len(creative["ads"]), 2)
+
+        slots = web.conn.execute(
+            "SELECT * FROM creative_slot WHERE brand_id = %s", (self.brand["id"],),
+        ).fetchall()
+        candidates = web.conn.execute(
+            "SELECT * FROM creative_candidate WHERE brand_id = %s", (self.brand["id"],),
+        ).fetchall()
+        self.assertEqual(len(slots), 2)  # 同名的兩個節點，不是撞成一個
+        self.assertEqual({s["node_key"] for s in slots}, {"1.1.1", "2.1.1"})
+        self.assertEqual(len(candidates), 2)  # 每個 slot 各自一個候選，不是同一份重複算兩次
+        self.assertEqual({c["slot_id"] for c in candidates}, {s["id"] for s in slots})
 
 
 class SearchSourcesReadbackTest(_ScheduleApiTestBase):

@@ -204,6 +204,12 @@ Dependabot #1（`nanoid`，修補版 3.3.18）：**`saas` 這邊已經是 3.3.18
 - [ ] `assets` bucket 沒設 `file_size_limit`（`supabase/migrations/20260830000002_core_storage_assets_bucket.sql`
       的 insert 只給 id／name／public）。**上傳端已經擋兩道 50MB**（`app/brand_web/routes_library.py:57`／`:79`／`:273`），
       所以這是第二道防線不是沒有防線——架構圖說「上傳無大小上限」是錯的。順手補一行
+- [ ] **同名的最深層節點，哪份內容配哪個位置是任意的（2026-09-03 T3d，使用者裁決「先不根治」）**：
+      代理的回覆只帶節點**名稱**、不帶編號，所以同一份方案裡兩個廣告取了一模一樣的名字時，
+      「先出現的那段配第一個節點」——穩定，但無法證明是對的（審查原話：構造上無法證偽）。
+      規則寫在 `docs/contracts/schedule.md`。**根治法是讓代理把 `node_key` 一起回傳**
+      （要改部門提示詞檔＋解析＋測試，動到 ADR 0047 的地盤）。今天一次都沒咬到人，
+      真的咬到再開票
 - [ ] **租戶防線不對稱（2026-09-03 T3c 審查發現，已查證今天咬不到人）**：
       `ad_set_ids_by_exact_name`（`app/meta/repository.py`）只拿 `org_id` 去取權杖，呼叫端給的
       `campaign_id` 原封不動送去 Meta，函式自己不驗證那顆活動是不是這個組織的。它的姊妹函式

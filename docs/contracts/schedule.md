@@ -60,3 +60,12 @@ Module-local and reversible, decided here rather than in an ADR:
 
 - The module now registers an `app.core.cleanup` function (ticket T1b): `app/schedule/repository.py`
   registers 「創意座標與素材候選」, covering the five tables this ticket added.
+- **How a creative reply is matched to a tree node** (T3d, 2026-09-03, user-approved): the agent
+  answers per node **name**, and names locate their nodes on their own — different names may
+  arrive in any order and are reordered back to document order, which is behaviour this module
+  has had and tested since ticket 09. Position is used **only inside a group of identically
+  named leaves**: the Kth reply block carrying a name goes to the Kth leaf carrying that name, in
+  document order. A count mismatch per name is the same failure it has always been, with the same
+  message. T3d's ticket demanded a global positional zip instead, which is not implementable
+  against this module's own reordering test; the reviewer returned `blocked-upstream` and this
+  line is the corrected rule.

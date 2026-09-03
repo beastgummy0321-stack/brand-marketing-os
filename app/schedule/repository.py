@@ -225,20 +225,20 @@ def _resolve_coordinates(conn: _AnyConn, org_id: str, brand_id: str,
     return keys, status
 
 
-def _find_or_create_slot(conn: _AnyConn, org_id: str, brand_id: str, ad_node_name: str,
+def _find_or_create_slot(conn: _AnyConn, org_id: str, brand_id: str, node_key: str,
                           source_tree_task_id: str | None) -> str:
     row = conn.execute(
         "SELECT id FROM creative_slot WHERE org_id = %s AND brand_id = %s"
-        " AND ad_node_name = %s AND source_tree_task_id IS NOT DISTINCT FROM %s",
-        (org_id, brand_id, ad_node_name, source_tree_task_id),
+        " AND node_key = %s AND source_tree_task_id IS NOT DISTINCT FROM %s",
+        (org_id, brand_id, node_key, source_tree_task_id),
     ).fetchone()
     if row is not None:
         return row["id"]
     slot_id = new_id("csl")
     conn.execute(
-        "INSERT INTO creative_slot (id, org_id, brand_id, ad_node_name,"
+        "INSERT INTO creative_slot (id, org_id, brand_id, node_key,"
         " source_tree_task_id, status) VALUES (%s, %s, %s, %s, %s, 'open')",
-        (slot_id, org_id, brand_id, ad_node_name, source_tree_task_id),
+        (slot_id, org_id, brand_id, node_key, source_tree_task_id),
     )
     return slot_id
 
@@ -261,7 +261,7 @@ def persist_creative_result(conn: _AnyConn, org_id: str, brand_id: str, task_id:
     # 分頁，落地前自己確保一次（跟 list_coordinates() 同一支冪等函式，讀第二次不動作）。
     ensure_coordinates_seeded(conn, org_id, brand_id)
     for ad in ads:
-        slot_id = _find_or_create_slot(conn, org_id, brand_id, ad["node"], source_tree_task_id)
+        slot_id = _find_or_create_slot(conn, org_id, brand_id, ad["node_key"], source_tree_task_id)
         round_row = conn.execute(
             "SELECT COALESCE(MAX(generation_round), 0) + 1 AS n FROM creative_candidate"
             " WHERE slot_id = %s", (slot_id,),
