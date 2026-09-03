@@ -53,6 +53,12 @@ def bind_tree(conn, tree_row: dict, org_id: str, brand_id: str) -> bool:
     呼叫端貼（整批同一句，不逐節點分開講，ADR 0055 §4）。"""
     tree = tree_with_bindings(conn, tree_row, org_id, brand_id)
     account_ids = meta_repo.bound_account_ids_for_brand(conn, org_id, brand_id)
+    # 票 T3e（ADR 0055 §11）：深度 2（扛預算）節點綁定成功時，順手記一列
+    # `period_node_membership`——「品牌當下的檔期」用模組既有的同一條讀
+    # （`schedule_repo.get_latest_period`），不是另開一條。沒有檔期（這個品牌從沒出過
+    # 方案就直接綁定，理論上不會發生，但不是不可能）就不寫、也不算失敗——寫在這裡，不是
+    # 悄悄跳過沒人知道。
+    period = schedule_repo.get_latest_period(conn, org_id, brand_id)
     channel_id, any_failure, newly_bound = None, False, False
 
     for node in tree["nodes"]:
@@ -89,6 +95,13 @@ def bind_tree(conn, tree_row: dict, org_id: str, brand_id: str) -> bool:
                 external_id=matches[0]["adset_id"],
                 external_status=matches[0]["external_status"],
             )
+            if period is not None:
+                schedule_repo.insert_period_node_membership(
+                    conn, org_id=org_id, brand_id=brand_id,
+                    campaign_period_id=period["id"], channel_id=channel_id,
+                    node_key=child["node_key"],
+                    from_date=period["start_date"], to_date=period["end_date"],
+                )
             newly_bound = True
 
     if newly_bound:

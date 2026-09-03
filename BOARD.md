@@ -88,6 +88,10 @@ CASCADE 今早已修、上傳有 50MB 上限、產品照那條查無此事）。
 - `app/methodology/README.md` 的「成效判讀／下期草案」與「期中檢查點」兩列**零個呼叫端**，
   `providers.py:154` 的 `performance_reading` 標籤空著。覆盤要的方法論早就寫好了。
 - 心智圖的 C 診斷、D 市場競品、E 客群、P 週月報**摘要留存不排票**，閉環跑起來再判。
+- `compute_money()` 的花費（T3e，ADR 0055 §11）從 `spend_summary(level="campaign")` 換成
+  `daily_entity_spend(level="adset")`——membership 認的是廣告組合，用不同層算會兜不起來。
+  **Meta 的活動層跟廣告組合層加總理論上該一致，這件事至今沒有拿真帳號量過**：
+  2026-09-03 `meta_entity_spend` 是 0 列。等真帳號重新走一次通路那天再驗，不先加容錯。
 ## 第 ⑦ 片：收尾
 
 - [ ] 07-1 閘門收尾：前端 depcruise 擋 supabase-js 只在登入模組（**Playwright 那一半已完成**，

@@ -19,7 +19,7 @@ GET），跟 `app/tests/test_meta_daily_spend.py:351-363` 已經在用的 QueueW
 
 import json
 import unittest
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from unittest import mock
 
@@ -38,6 +38,7 @@ from app.meta import graph as meta_graph
 from app.meta import repository as meta_repo
 from app.schedule import creative as creative_mod
 from app.schedule import jobs as schedule_jobs
+from app.schedule import period as period_mod
 from app.schedule import plan as plan_mod
 from app.schedule import routes as schedule_routes
 from app.schedule import tree as tree_mod
@@ -198,6 +199,144 @@ class LargestRemainderAllocationTest(unittest.TestCase):
         amounts = plan_mod.largest_remainder_allocation(1000, [1 / 3, 1 / 3, 1 / 3])
         self.assertTrue(all(isinstance(a, int) for a in amounts))
         self.assertEqual(sum(amounts), 1000)
+
+
+# -- 1b. 票 T3e（ADR 0055 §11）：node_level_spend——純函數，桌面案例，不碰資料庫 ---------
+
+def _period(period_id: str, start: date, end: date) -> dict:
+    return {"id": period_id, "start_date": start, "end_date": end}
+
+
+def _membership(entity_id: str, period_id: str, start: date, end: date | None,
+                 weight: float = 1.0) -> dict:
+    return {"entity_id": entity_id, "campaign_period_id": period_id,
+            "from_date": start, "to_date": end, "allocation_weight": weight}
+
+
+def _spend_row(day: date, entity_id: str, spend: float) -> dict:
+    return {"spend_date": day, "entity_id": entity_id, "spend": spend}
+
+
+class NodeLevelSpendTest(unittest.TestCase):
+    """ticket done-check 2：每一支對應 ticket 明講的一條規則，一條一支，不多不少。"""
+
+    D = date(2026, 9, 10)
+
+    def test_invariant_every_periods_take_sums_to_the_days_total(self):
+        a = _period("cpd_a", date(2026, 9, 8), date(2026, 9, 12))   # 4 天
+        b = _period("cpd_b", date(2026, 9, 1), date(2026, 9, 20))   # 19 天，較長
+        competitors = [a, b]
+        memberships = [
+            _membership("ent-1", "cpd_a", a["start_date"], a["end_date"]),  # 只登記給 a
+            _membership("ent-2", "cpd_b", b["start_date"], b["end_date"]),  # 只登記給 b
+        ]
+        daily_rows = [
+            _spend_row(self.D, "ent-1", 100.0),
+            _spend_row(self.D, "ent-2", 50.0),
+            _spend_row(self.D, "ent-3", 30.0),  # 沒登記
+        ]
+        spend_a = period_mod.node_level_spend(a, competitors, memberships, daily_rows)
+        spend_b = period_mod.node_level_spend(b, competitors, memberships, daily_rows)
+        self.assertAlmostEqual(spend_a + spend_b, 180.0, places=2)
+
+    def test_registered_entity_goes_to_its_registered_period_not_the_day_owner(self):
+        """`ent-1` 只登記給 `p2`（3 天）；`p1`（1 天，較短）雖然是這天的品牌層擁有者，
+        但它沒有 `ent-1` 的 membership——「among those memberships' periods」只看
+        `ent-1` 自己登記過的那些期，不是全部競爭者。"""
+        p1 = _period("cpd_p1", date(2026, 9, 9), date(2026, 9, 10))   # 1 天
+        p2 = _period("cpd_p2", date(2026, 9, 8), date(2026, 9, 11))   # 3 天
+        competitors = [p1, p2]
+        memberships = [_membership("ent-1", "cpd_p2", p2["start_date"], p2["end_date"])]
+        daily_rows = [_spend_row(self.D, "ent-1", 200.0)]
+        self.assertEqual(
+            period_mod.node_level_spend(p2, competitors, memberships, daily_rows), 200.0,
+        )
+        self.assertEqual(
+            period_mod.node_level_spend(p1, competitors, memberships, daily_rows), 0.0,
+        )
+
+    def test_one_entity_registered_to_two_periods_goes_to_the_shorter_one(self):
+        """ADR 0053 §4 的規則本體，套在節點上：同一個廣告組合同時登記在兩個**不等長**的
+        檔期底下時，短的整天全拿、長的拿 0。
+
+        T3e 審查發現的覆蓋缺口補的就是這一支——把 `period.py` 的 `shortest = min(...)`
+        改成 `max(...)`（讓長的贏），原本九支測試**全部照樣綠燈**：沒有任何一支餵過
+        「同一實體、兩個不等長的已登記期互相競爭」這個輸入。既有的
+        `test_registered_entity_goes_to_its_registered_period_not_the_day_owner` 比的是
+        「已登記的期」對「這天的品牌層擁有者」，不是兩個已登記期彼此比。守的是金額。"""
+        short = _period("cpd_short", date(2026, 9, 8), date(2026, 9, 12))   # 4 天
+        long_ = _period("cpd_long", date(2026, 9, 1), date(2026, 9, 20))    # 19 天
+        competitors = [short, long_]
+        memberships = [
+            _membership("ent-1", "cpd_short", short["start_date"], short["end_date"]),
+            _membership("ent-1", "cpd_long", long_["start_date"], long_["end_date"]),
+        ]
+        daily_rows = [_spend_row(self.D, "ent-1", 120.0)]
+        self.assertEqual(
+            period_mod.node_level_spend(short, competitors, memberships, daily_rows), 120.0,
+        )
+        self.assertEqual(
+            period_mod.node_level_spend(long_, competitors, memberships, daily_rows), 0.0,
+        )
+
+    def test_unregistered_entity_goes_to_the_days_brand_level_owner(self):
+        short = _period("cpd_short", date(2026, 9, 9), date(2026, 9, 10))  # 1 天
+        long_ = _period("cpd_long", date(2026, 9, 1), date(2026, 9, 20))
+        competitors = [short, long_]
+        daily_rows = [_spend_row(self.D, "ent-x", 77.0)]
+        self.assertEqual(
+            period_mod.node_level_spend(short, competitors, [], daily_rows), 77.0,
+        )
+        self.assertEqual(
+            period_mod.node_level_spend(long_, competitors, [], daily_rows), 0.0,
+        )
+
+    def test_equal_length_periods_split_a_registered_entity_by_allocation_weight(self):
+        p1 = _period("cpd_p1", date(2026, 9, 8), date(2026, 9, 12))  # 4 天
+        p2 = _period("cpd_p2", date(2026, 9, 6), date(2026, 9, 10))  # 4 天，一樣長
+        competitors = [p1, p2]
+        daily_rows = [_spend_row(self.D, "ent-1", 100.0)]
+
+        even = [
+            _membership("ent-1", "cpd_p1", p1["start_date"], p1["end_date"], weight=1.0),
+            _membership("ent-1", "cpd_p2", p2["start_date"], p2["end_date"], weight=1.0),
+        ]
+        self.assertEqual(
+            (period_mod.node_level_spend(p1, competitors, even, daily_rows),
+             period_mod.node_level_spend(p2, competitors, even, daily_rows)),
+            (50.0, 50.0),
+        )
+
+        two_to_one = [
+            _membership("ent-1", "cpd_p1", p1["start_date"], p1["end_date"], weight=2.0),
+            _membership("ent-1", "cpd_p2", p2["start_date"], p2["end_date"], weight=1.0),
+        ]
+        s1 = period_mod.node_level_spend(p1, competitors, two_to_one, daily_rows)
+        s2 = period_mod.node_level_spend(p2, competitors, two_to_one, daily_rows)
+        self.assertAlmostEqual(s1, 66.67, places=2)
+        self.assertAlmostEqual(s2, 33.33, places=2)
+        self.assertEqual(round(s1 + s2, 2), 100.0)
+
+    def test_membership_reaching_past_its_periods_end_date_contributes_nothing_outside_it(self):
+        """ticket 矛盾檢查段：membership 自己宣稱蓋到 9/10，但它掛的檔期 `stale` 自己的
+        `end_date` 只到 9/5——兩邊都要夾，夾不住這筆錢在這天當沒登記，落給這天真正的品牌層
+        擁有者 `owner`。"""
+        stale = _period("cpd_stale", date(2026, 9, 1), date(2026, 9, 5))
+        owner = _period("cpd_owner", date(2026, 9, 1), date(2026, 9, 20))
+        competitors = [stale, owner]
+        memberships = [_membership("ent-1", "cpd_stale", date(2026, 9, 1), date(2026, 9, 10))]
+        daily_rows = [_spend_row(self.D, "ent-1", 40.0)]
+        self.assertEqual(
+            period_mod.node_level_spend(owner, competitors, memberships, daily_rows), 40.0,
+        )
+        self.assertEqual(
+            period_mod.node_level_spend(stale, competitors, memberships, daily_rows), 0.0,
+        )
+
+    def test_day_covered_by_no_period_is_taken_by_nobody(self):
+        lonely = _period("cpd_lonely", date(2026, 9, 8), date(2026, 9, 12))
+        daily_rows = [_spend_row(self.D, "ent-1", 15.0)]
+        self.assertEqual(period_mod.node_level_spend(lonely, [], [], daily_rows), 0.0)
 
 
 # -- 2b. 票 08：N 個方案，任何一個壞掉整批失敗 -----------------------------------------
@@ -940,6 +1079,17 @@ class BindTreeApiContractTest(_ScheduleApiTestBase):
         ).fetchall()
         return [dict(r) for r in rows]
 
+    def _period_node_membership_rows(self, brand_id: str | None = None) -> list:
+        """票 T3e：深度 2 綁定時記進 `period_node_membership` 的那一列——欄位比照
+        `_channel_entity_map_rows()`，只挑跟斷言相關的幾欄。"""
+        rows = web.conn.execute(
+            "SELECT node_key, campaign_period_id, from_date, to_date"
+            " FROM period_node_membership WHERE org_id = %s AND brand_id = %s"
+            " ORDER BY node_key",
+            (coredb.DEV_ORG_ID, brand_id or self.brand["id"]),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
     # -- 資料正確性：綁一次之後，平台端改名不斷線，花費／ROAS 照樣讀得到 -----------------
 
     def test_exact_match_binds_once_and_survives_a_rename(self):
@@ -1347,6 +1497,83 @@ class BindTreeApiContractTest(_ScheduleApiTestBase):
         self.assertEqual(tree["nodes"][0]["bound_external_id"], "camp-1")  # 第一層沒動過
         self.assertIsNone(tree["nodes"][0]["children"][0]["bound_external_id"])  # 改名了
         self.assertEqual(tree["nodes"][0]["children"][1]["bound_external_id"], "as-2")  # 沒改名
+
+    # -- 票 T3e（ADR 0055 §11）：深度 2 綁定時記 period_node_membership --------------------
+
+    def test_depth_two_binding_writes_period_node_membership_for_the_current_period(self):
+        """ticket §1：`from_date`／`to_date` 是檔期自己的 `start_date`／`end_date`，深度 1
+        （`node_key` "1"）不寫——membership 只在扛預算那一層（ADR 0055 §6）。"""
+        self._succeed_plan_and_tree()
+        period = web.conn.execute(
+            "SELECT id, start_date, end_date FROM campaign_period"
+            " WHERE org_id = %s AND brand_id = %s",
+            (coredb.DEV_ORG_ID, self.brand["id"]),
+        ).fetchone()
+        with self._platform_campaigns({self.account_id: [("camp-1", "活動一")]}), \
+                self._platform_ad_sets({"camp-1": [("as-1", "組合1"), ("as-2", "組合2")]}):
+            resp = self._bind()
+        self.assertEqual(resp.status_code, 200, resp.text)
+        rows = self._period_node_membership_rows()
+        self.assertEqual({r["node_key"] for r in rows}, {"1.1", "1.2"})
+        for row in rows:
+            self.assertEqual(row["campaign_period_id"], period["id"])
+            self.assertEqual(row["from_date"], period["start_date"])
+            self.assertEqual(row["to_date"], period["end_date"])
+
+    def test_binding_with_no_period_writes_no_membership_and_still_succeeds(self):
+        """ticket §1：「沒有檔期 → 不寫 membership、也不是錯誤」。今天的畫面一定先出方案
+        才綁得到樹，方案一出檔期就在了，所以這是防禦性分支——直接把檔期刪掉，逼出這條
+        今天走不到、但寫在 ticket 上要求釘住的路。"""
+        self._succeed_plan_and_tree()
+        # llm_task.campaign_period_id 是 nullable 外鍵（票 T2 留的：「LLM 花費有主人」），
+        # 刪檔期之前先解開這棵樹的參照，不然刪檔期會撞外鍵——這裡要刪的是檔期，不是樹。
+        web.conn.execute(
+            "UPDATE llm_task SET campaign_period_id = NULL"
+            " WHERE org_id = %s AND brand_id = %s",
+            (coredb.DEV_ORG_ID, self.brand["id"]),
+        )
+        web.conn.execute(
+            "DELETE FROM campaign_period WHERE org_id = %s AND brand_id = %s",
+            (coredb.DEV_ORG_ID, self.brand["id"]),
+        )
+        web.conn.commit()
+        with self._platform_campaigns({self.account_id: [("camp-1", "活動一")]}), \
+                self._platform_ad_sets({"camp-1": [("as-1", "組合1"), ("as-2", "組合2")]}):
+            resp = self._bind()
+        self.assertEqual(resp.status_code, 200, resp.text)
+        self.assertIsNone(resp.json()["tree"]["bind_failure"])
+        self.assertEqual(self._period_node_membership_rows(), [])
+
+    def test_depth_two_rebind_in_the_same_period_does_not_duplicate_membership(self):
+        """ticket done-check 3：雙寫在結構上不可能。改名逼出真的第二次 `upsert_binding`
+        （跟上面第一層 `test_second_bind_after_rename_updates_the_row_not_a_unique_violation`
+        同一個手法）——同一期、同一個 `node_key`，migration 那把唯一鍵讓第二次 INSERT
+        變成 `ON CONFLICT DO NOTHING`，不是應用層自己記得寫過。"""
+        self._succeed_plan_and_tree()
+        with self._platform_campaigns({self.account_id: [("camp-1", "活動一")]}), \
+                self._platform_ad_sets({"camp-1": [("as-1", "組合1"), ("as-2", "組合2")]}):
+            self._bind()
+        self.assertEqual(
+            {r["node_key"] for r in self._period_node_membership_rows()}, {"1.1", "1.2"},
+        )
+
+        schedule_jobs.PROVIDER = _fake(
+            _tree_fenced(_one_tree_nodes(child_names=("組合1（新版）", "組合2")))
+        )
+        resp = self.client.post(
+            f"/api/schedule/brands/{self.brand['id']}/tree", json={"plan_index": 0}
+        )
+        self.assertEqual(resp.status_code, 200, resp.text)
+        self._run_worker()
+
+        with self._platform_campaigns({self.account_id: [("camp-1", "活動一")]}), \
+                self._platform_ad_sets(
+                    {"camp-1": [("as-1x", "組合1（新版）"), ("as-2", "組合2")]}
+                ):
+            resp = self._bind()
+        self.assertEqual(resp.status_code, 200, resp.text)
+        rows = self._period_node_membership_rows()
+        self.assertEqual(sorted(r["node_key"] for r in rows), ["1.1", "1.2"])
 
 
 class CreativeApiContractTest(_ScheduleApiTestBase):

@@ -122,25 +122,111 @@ def _split_evenly(total: float, n: int, my_index: int) -> float:
     return shares[my_index] / 100
 
 
-def compute_money(conn, org_id: str, brand_id: str, period: dict, competitors: list) -> tuple:
-    """回傳 (spend, revenue)——範圍是這個檔期依 `_owned_ranges_and_ties()` 擁有／分到的
-    那些日子。花費走 `routes._approval_overspend()` 已經在用的同一條路
-    (`bound_account_ids_for_brand` + `spend_summary(..., level="campaign")`，`level`
-    沒得省，見該函式的說明)；營收走 `orders_repo.channel_revenue_summary()`——這是這期間
-    全通路營收，不是這期廣告帶來的營收（ticket 明講：歸因是 T5／T6 的事）。
+def node_level_spend(period: dict, competitors: list, memberships: list, daily_rows: list) -> float:
+    """票 T3e（ADR 0055 §11）：`period` 這一期在它自己 `[start_date, end_date]` 裡拿到
+    多少花費——「已登記」＋「沒登記時落到它頭上的那份」。ADR 0053 §4 的規則本身不變
+    （並列最短全拿、平手看權重／均分），改的只是套用的主詞：從「整個品牌那天的花費」
+    換成「這個節點那天的花費」。純函數、無 I/O，跟旁邊的 `_owned_ranges_and_ties()`
+    同一個形狀——連接資料庫的事留給呼叫端 `compute_money()`。
 
-    並列的日子（ADR 0053 決策 4：天數並列最短時平分）逐日單獨查一次那一天的總額再
-    `_split_evenly()`，不是整段一起查——並列組每天的成員可能不一樣（另一個並列檔期的
-    日期範圍不必跟這個檔期完全重疊）。"""
+    - **已登記**：`daily_rows` 裡一筆（某實體、某天）的花費，只要那個實體那天至少有一筆
+      `memberships` 蓋到，就照 ADR 0053 §4 在「蓋到那天的那些 membership 各自所屬的檔期」
+      之間分——天數並列最短的檔期全拿；並列時照 `allocation_weight` 正規化分（跟品牌層
+      的並列不同：品牌層沒有 `allocation_weight` 可讀，只能均分）。
+      「蓋到」同時夾兩層：membership 自己的 `[from_date, to_date]`要蓋到那天，**而且**
+      它掛的檔期（用 `campaign_period_id` 去 `competitors` 查）自己的 `[start_date,
+      end_date]` 也要蓋到那天——ticket 矛盾檢查段的結論：membership 說蓋到不代表那期真的
+      擁有那天，兩邊都要夾（ADR 0055 §11：「兩邊都夾在檔期自己的日期範圍裡」）。任一邊夾
+      不住，這筆錢在這天就當沒登記，落進未登記那堆。
+    - **未登記**：當天沒有（夾過範圍的）membership 蓋到的實體，花費照舊算給「那天歸誰」
+      的品牌層擁有者——`_day_ownership()`，今天的規則原封不動套用在剩下的那些錢上
+      （ADR 0055 §11：「這是今天的行為，不變，套用在剩下的東西上」）。
+    - `period` 自己範圍外的天，兩邊都不算——外層只走 `period` 自己的
+      `[start_date, end_date]`，不會有機會替範圍外的一天分錢。
+
+    金額一律用「分」的整數刻度切（`largest_remainder_allocation()`，跟 `_split_evenly()`
+    同一套工具），不是浮點數各自相除——並列組的加總永遠精確等於那筆錢，最後一分錢一定有
+    人拿。"""
+    periods_by_id = {p["id"]: p for p in competitors}
+    rows_by_day: dict = {}
+    for row in daily_rows:
+        rows_by_day.setdefault(row["spend_date"], []).append(row)
+
+    total = 0.0
+    day = period["start_date"]
+    while day <= period["end_date"]:
+        unregistered = 0.0
+        for row in rows_by_day.get(day, []):
+            covering = [
+                m for m in memberships
+                if m["entity_id"] == row["entity_id"]
+                and m["from_date"] <= day
+                and (m["to_date"] is None or day <= m["to_date"])
+                and (mp := periods_by_id.get(m["campaign_period_id"])) is not None
+                and mp["start_date"] <= day <= mp["end_date"]
+            ]
+            if not covering:
+                unregistered += row["spend"]
+                continue
+            by_period: dict = {}
+            for m in covering:
+                by_period.setdefault(m["campaign_period_id"], []).append(m)
+            shortest = min(_duration_days(periods_by_id[pid]) for pid in by_period)
+            tied_pids = [
+                pid for pid in by_period if _duration_days(periods_by_id[pid]) == shortest
+            ]
+            if len(tied_pids) == 1:
+                if tied_pids[0] == period["id"]:
+                    total += row["spend"]
+                continue
+            if period["id"] not in tied_pids:
+                continue
+            weights = {
+                pid: sum(m["allocation_weight"] for m in by_period[pid]) for pid in tied_pids
+            }
+            total_weight = sum(weights.values())
+            shares = [weights[pid] / total_weight for pid in tied_pids]
+            cents = largest_remainder_allocation(round(row["spend"] * 100), shares)
+            total += cents[tied_pids.index(period["id"])] / 100
+        owns, tied_group = _day_ownership(period, competitors, day)
+        if owns:
+            total += unregistered
+        elif tied_group:
+            n = len(tied_group)
+            my_index = next(i for i, p in enumerate(tied_group) if p["id"] == period["id"])
+            total += _split_evenly(unregistered, n, my_index)
+        day += timedelta(days=1)
+    return total
+
+
+def compute_money(conn, org_id: str, brand_id: str, period: dict, competitors: list) -> tuple:
+    """回傳 (spend, revenue)。
+
+    花費（票 T3e，ADR 0055 §11）走 `node_level_spend()`：讀這個檔期自己
+    `[start_date, end_date]` 那段的逐日逐實體花費（`meta_repo.daily_entity_spend(...,
+    level="adset")`——**這裡從 `level="campaign"` 換成 `level="adset"`，因為
+    membership 認的是廣告組合，用不同層算剩下的錢會兜不起來，見 ticket §5**；
+    `routes._approval_overspend()` 是另一條獨立的呼叫路徑，不經過這裡，沒有被這個
+    改動動到）＋這個品牌的 `period_node_membership`（JOIN 過 `channel_entity_map` 換出
+    entity_id，`schedule_repo.period_node_memberships_for_brand()`），純函數自己決定
+    每一筆錢算誰的。
+
+    營收走 `orders_repo.channel_revenue_summary()`，範圍是 `_owned_ranges_and_ties()`
+    算出來、這個檔期在品牌層擁有／分到的那些日子——這是這期間全通路營收，不是這期廣告
+    帶來的營收（ticket 明講：歸因是 T5／T6 的事），也不按節點拆（ADR 0053／0055 §11：
+    營收不分節點，這一段完全不動）。並列的日子（ADR 0053 決策 4）逐日單獨查一次再
+    `_split_evenly()`，不是整段一起查——並列組每天的成員可能不一樣。"""
     account_ids = meta_repo.bound_account_ids_for_brand(conn, org_id, brand_id)
+    daily_rows = meta_repo.daily_entity_spend(
+        conn, org_id, account_ids, period["start_date"],
+        period["end_date"] + timedelta(days=1), level="adset",
+    )
+    memberships = schedule_repo.period_node_memberships_for_brand(conn, org_id, brand_id)
+    spend = node_level_spend(period, competitors, memberships, daily_rows)
+
     owned, tied_days = _owned_ranges_and_ties(period, competitors)
-    spend = 0.0
     revenue = 0.0
     for start, end in owned:
-        spend_summary = meta_repo.spend_summary(
-            conn, org_id, account_ids, start, end + timedelta(days=1), level="campaign",
-        )
-        spend += spend_summary["total"]["spend"]
         revenue_summary = orders_repo.channel_revenue_summary(
             conn, brand_id, since=start.isoformat(), until=end.isoformat(),
         )
@@ -148,10 +234,6 @@ def compute_money(conn, org_id: str, brand_id: str, period: dict, competitors: l
     for day, tied_group in tied_days:
         n = len(tied_group)
         my_index = next(i for i, p in enumerate(tied_group) if p["id"] == period["id"])
-        day_spend = meta_repo.spend_summary(
-            conn, org_id, account_ids, day, day + timedelta(days=1), level="campaign",
-        )["total"]["spend"]
-        spend += _split_evenly(day_spend, n, my_index)
         day_revenue = orders_repo.channel_revenue_summary(
             conn, brand_id, since=day.isoformat(), until=day.isoformat(),
         )["revenue"] or 0.0

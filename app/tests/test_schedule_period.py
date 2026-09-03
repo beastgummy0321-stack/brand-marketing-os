@@ -11,6 +11,14 @@
 test_approval.py 測過；這裡直接寫 `campaign_period`／`meta_entity_spend`／
 `channel_revenue` 三張表造資料，只測結算端點自己的算法與租戶界線。只用直接寫表，不打
 真實網路請求。
+
+票 T3e（ADR 0055 §11）沒有列這個檔案，但它的花費改讀 `level="adset"`（ticket §5）動到
+`_seed_spend()` 這一個字——原本寫死 `level="campaign"` 的花費列在新的查詢層下讀不到，
+呼叫 `_seed_spend()` 的兩支 money 測試（`SettlementOwnershipSumTest`、
+`ResettlementAuditTest`）會全部靜靜地變成「這期花了 0 元」（另外兩支不呼叫
+`_seed_spend()`，不受影響）。這裡沒有綁定、沒有 membership，所以改的只是花費列寫在
+哪一層，測的規則（品牌層擁有者、並列平分、重新結算）一個字都沒變——跟 T3b／T3c 兩張票
+都各自「多動了一個 ticket 沒列的檔案」同一個模式（見 T3b 的 commit message）。
 """
 
 import unittest
@@ -73,10 +81,14 @@ class _PeriodTestBase(unittest.TestCase):
 
     def _seed_spend(self, org_id: str, account_id: str, day: date, spend: float,
                      campaign_id: str = "camp-1") -> None:
+        # 票 T3e：`compute_money()` 的花費從 `level="campaign"` 換成 `level="adset"`
+        # （ticket §5）——這裡沒有任何綁定／membership，所以每一筆花費在這支測試裡都是
+        # 「未登記」，照舊落到品牌層的檔期擁有者（ADR 0055 §11 的既有行為，這支測試守的
+        # 就是那條規則本身，不是綁定），只是資料現在要寫在正確的層才讀得到。
         meta_repo.upsert_entity_spend(web.conn, org_id, account_id, [
-            {"level": "campaign", "entity_id": campaign_id, "entity_name": "活動一",
-             "campaign_id": campaign_id, "adset_id": None, "ad_id": None, "spend_date": day,
-             "spend": spend, "impressions": 10, "clicks": 1, "roas": None,
+            {"level": "adset", "entity_id": campaign_id, "entity_name": "廣告組合一",
+             "campaign_id": campaign_id, "adset_id": campaign_id, "ad_id": None,
+             "spend_date": day, "spend": spend, "impressions": 10, "clicks": 1, "roas": None,
              "actions": None, "action_values": None,
              "attribution_window": "7d_click,1d_view"},
         ])

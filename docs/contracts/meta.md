@@ -31,7 +31,9 @@ Read functions `app.schedule` is allowed to call, listed by their tenant boundar
 their signature, because the boundary is the part of the shape that matters:
 
 - Filter on `org_id` in SQL before they reach the platform: `get_token`, `list_accounts`,
-  `bound_account_ids_for_brand`, `spend_summary`, `last_pull_at`, and
+  `bound_account_ids_for_brand`, `spend_summary`, `daily_entity_spend` (T3e — the same
+  `org_id`/`ad_account_ids`/`level` boundary as `spend_summary`, spend only, one row per day
+  per entity instead of one aggregate per entity), `last_pull_at`, and
   `campaign_ids_by_exact_name` (which re-checks the caller's `ad_account_ids` against
   `meta_ad_account WHERE org_id = …` before asking Meta anything).
 - **`ad_set_ids_by_exact_name` does not**, and this is written down rather than smoothed over.

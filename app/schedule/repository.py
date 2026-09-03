@@ -482,6 +482,44 @@ def upsert_binding(conn: _AnyConn, *, org_id: str, brand_id: str, channel_id: st
     )
 
 
+# ---- 票 T3e（ADR 0055 §11）：period_node_membership，深度 2 節點綁定時記一列 -------------
+
+def insert_period_node_membership(conn: _AnyConn, *, org_id: str, brand_id: str,
+                                   campaign_period_id: str, channel_id: str, node_key: str,
+                                   from_date, to_date, allocation_weight: float = 1.0) -> None:
+    """一個深度 2 節點綁定成功、且品牌當下有檔期時記一列（ticket §1）——`from_date`／
+    `to_date` 是檔期自己的 `start_date`／`end_date`，記的是「規劃上屬於哪一期」，不是
+    「哪幾天真的有花費」。`ON CONFLICT DO NOTHING` 對的是 migration 那條唯一鍵
+    `(org_id, brand_id, campaign_period_id, channel_id, node_key)`——同一個節點在同一期
+    按第二次綁定鈕不會多寫一列（ticket done-check 3：雙寫在結構上不可能）。呼叫端批次
+    呼叫，這裡不 commit（跟 `upsert_binding` 同一個既有慣例）。"""
+    conn.execute(
+        "INSERT INTO period_node_membership (id, org_id, brand_id, campaign_period_id,"
+        " channel_id, node_key, from_date, to_date, allocation_weight)"
+        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)"
+        " ON CONFLICT (org_id, brand_id, campaign_period_id, channel_id, node_key) DO NOTHING",
+        (new_id("pnm"), org_id, brand_id, campaign_period_id, channel_id, node_key,
+         from_date, to_date, allocation_weight),
+    )
+
+
+def period_node_memberships_for_brand(conn: _AnyConn, org_id: str, brand_id: str) -> list[dict]:
+    """這個品牌全部的 `period_node_membership`，JOIN 上 `channel_entity_map` 換出
+    `entity_id`——ticket §4 講的「這個品牌的 memberships 跟指名它們實體的綁定」：
+    membership 本身只存 `node_key`，`period.node_level_spend()` 要拿
+    `meta_repo.daily_entity_spend()` 回來的 `entity_id` 去對，兩邊得先接在一起。"""
+    rows = conn.execute(
+        "SELECT pnm.campaign_period_id, pnm.from_date, pnm.to_date, pnm.allocation_weight,"
+        " cem.external_id AS entity_id"
+        " FROM period_node_membership pnm JOIN channel_entity_map cem"
+        " ON cem.org_id = pnm.org_id AND cem.brand_id = pnm.brand_id"
+        " AND cem.channel_id = pnm.channel_id AND cem.node_key = pnm.node_key"
+        " WHERE pnm.org_id = %s AND pnm.brand_id = %s",
+        (org_id, brand_id),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
 # ---- 品牌刪除清理登記（app/core/cleanup.py；pattern: app/meta/repository.py:526）---------
 
 _CHILD_TABLES = (

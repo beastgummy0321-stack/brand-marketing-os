@@ -509,6 +509,33 @@ def _float_or_none(value) -> float | None:
     return float(value) if value is not None else None
 
 
+def daily_entity_spend(
+    conn: _AnyConn, org_id: str, ad_account_ids: list, start: date, end: date, *, level: str,
+) -> list[dict]:
+    """[start, end) 這個半開區間裡，**這一層**逐日逐實體的花費——`spend_summary()` 加總整段
+    期間成一列，這支給每一天自己一列，`app/schedule/period.py` 的 `node_level_spend()`
+    （票 T3e，ADR 0055 §11）要逐日判斷一個實體那天算誰的檔期。
+
+    `level` 必填、只能用關鍵字傳、沒有預設值——理由跟 `spend_summary()` 一樣：campaign／
+    adset／ad 三層的列躺在同一張表，漏掉這個篩選就是把同一筆錢算三遍。這裡只回花費，
+    不算 ROAS／CTR／CPA 等比率指標（票 T3e 明講：這不是第二支 `spend_summary`，也不准長成
+    那樣）。`org_id` 篩選加呼叫端傳進來的 `ad_account_ids` 是租戶界線。"""
+    if level not in LEVELS:
+        raise ValueError(f"level 只能是 {'/'.join(LEVELS)} 其中之一")
+    if not ad_account_ids:
+        return []
+    rows = conn.execute(
+        "SELECT spend_date, entity_id, SUM(spend) AS spend FROM meta_entity_spend mes"
+        + _SPEND_WHERE
+        + " GROUP BY spend_date, entity_id ORDER BY spend_date, entity_id",
+        (org_id, ad_account_ids, level, start, end),
+    ).fetchall()
+    return [
+        {"spend_date": r["spend_date"], "entity_id": r["entity_id"], "spend": float(r["spend"])}
+        for r in rows
+    ]
+
+
 # ---- brand_meta_ad_account ----------------------------------------------------------
 
 def bound_brand_ids_by_account(conn: _AnyConn, org_id: str) -> dict:

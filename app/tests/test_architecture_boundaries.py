@@ -923,7 +923,25 @@ class FileLineCapTest(unittest.TestCase):
 # 組合剛好同名兩邊都不猜、改名後跟第一層一樣顯示未綁定）。多出來的行數也含既有六支
 # 測試补上 `_platform_ad_sets` 這道新配對步驟必要的 mock（第二層現在一定會被嘗試，不
 # mock 就真的打網路），以及本段理由註解自己佔的行。17263 → 17504。
-TEST_LINES_CEILING = 17504
+#
+# 票 T3e（ADR 0055 §11）：檔期分帳細到節點。守的是**金額**與**資料正確性**：
+# `test_schedule.py` 新增 `NodeLevelSpendTest`（`node_level_spend()` 純函數、桌面案例、
+# 不碰資料庫）六支，逐條對應 ticket done-check 2 明講的六條規則——並列日全部期加總對到
+# 分（金額）、已登記的實體去它自己登記的那期而不是品牌層擁有者、沒登記的照舊落給品牌層
+# 擁有者、天數並列時照 `allocation_weight` 分（1:1 與 2:1 兩案）、membership 蓋到的天數
+# 夾不進它自己那期的真實範圍就不算登記、沒有任何檔期的一天誰都拿不到（皆資料正確性）；
+# `BindTreeApiContractTest` 新增三支：深度 2 綁定時 `period_node_membership` 落地一列且
+# 深度 1 不落地（資料正確性）、沒有檔期時不寫也不報錯（資料正確性）、改名逼出真的第二次
+# `upsert_binding` 時 migration 的唯一鍵讓 `period_node_membership` 仍只有一列（金額——
+# 這是雙寫算兩次錢的防線）。`test_schedule_period.py` 的 `_seed_spend()` 從
+# `level="campaign"` 改成 `level="adset"`（ticket §5 的 level 換層逼的，這支測試本身
+# 守的規則一個字沒變，見檔頭新增那段說明）。多出來的行數也含本段理由註解自己佔的行。
+# 17504 → 17733。
+# T3e 審查補洞（2026-09-03 主對話台，+28 行，含這段理由自己佔的行）：`node_level_spend()` 的「短檔期優先」
+# 是 ADR 0053 §4 的規則本體，卻**沒有任何測試在守**——把 `period.py` 的 `min()` 改成
+# `max()`，原本九支測試全部照樣綠燈。補的那一支餵「同一個廣告組合同時登記在兩個不等長
+# 檔期底下」這個輸入，已證過紅（同樣的變異現在只殺它一支）。守的是金額。
+TEST_LINES_CEILING = 17761
 
 
 def _line_totals() -> tuple:
