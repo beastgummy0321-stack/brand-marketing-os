@@ -76,9 +76,12 @@
 - 800 行上限不適用於 `app/tests/`。
 - 分流：不動 schema／模組進入點／花錢／權限路徑的行為修改＝route B（機器閘門綠即完成）；
   route C 只留 schema、模組邊界、金流、權限。
-- **契約頁隨票補**：`app/` 有 16 個模組，`docs/contracts/` 只有 `schedule.md`。動到某個模組的
-  route C 票，先照 `container-contract.md` §1 的四行登記格式把那個模組的 `docs/contracts/<module>.md`
-  寫出來，再開始改。**不加機器閘門**——閘門一開就是 15 個模組同時紅，最後只會被繞過。
+- **契約頁隨票補**：`app/` 有 16 個模組，`docs/contracts/` 現有 6 份（brand_intelligence／
+  brand_web／core／identity／meta／schedule），缺 10 份。動到某個模組的 route C 票，先照
+  `container-contract.md` §8 的五項格式把那個模組的 `docs/contracts/<module>.md` 寫出來，再開始改。
+  **閘門形狀（2026-09-03 裁決，尚未建，見 BOARD.md）**：一份「還沒有契約頁的模組」凍結清單，
+  **只准變短**——開票當天不會紅（清單就是現況），新模組沒有頁會紅，補完一份就從清單劃掉一行。
+  跟 `KNOWN_OVERSIZED_FILES` 同一種棘輪，不是「全站 10 個一起紅」那種一開就會被繞過的閘門。
 - CI：`.github/workflows/ci.yml`（GitHub Actions），push/PR 到 `saas`／`master` 都跑；
   backend job 開 `supabase start` 給 Postgres／anon role，frontend job 跑 lint／typecheck／test／build。
 

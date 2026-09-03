@@ -10,7 +10,7 @@ status: in-force
 
 2026-08-04 整個 `docs/` 因為膨脹到無法維護而被清空重來。事後檢討：拖垮專案的**不是文件存在**，而是 `AGENTS.md` 的權威順序表逼每個 session 都得讀它們。Anthropic 官方明講「No context penalty for large files：reference files don't consume context tokens until actually read」——沒被讀的檔案是零成本。
 
-因此擋膨脹的閘門卡的是**強制載入預算**（`CLAUDE.md` ＋ `AGENTS.md` ＋ 它們點名要讀的所有 `.md` 的行數總和，上限 500 行，對齊官方 SKILL.md 建議值），**不是磁碟上 `.md` 的總行數**。沒被點名的參考資料想放幾份都可以。唯一的例外是 `app/methodology/`：那裡是程式無條件整檔注入，沒有「不讀」的選項，另外用 pytest 卡每檔 150 行（見 ADR 0001）。
+因此擋膨脹的閘門卡的是**強制載入預算**（`CLAUDE.md` ＋ `CONSTITUTION.md` ＋ 它們點名要讀的所有 `.md` 的行數總和，上限 500 行，對齊官方 SKILL.md 建議值。**根目錄的 `AGENTS.md` 於 2026-09-03 刪除**——它逐字寫著「SQLite、單機單人使用」，正是 `CONSTITUTION.md` 第 1 條禁止的前提，而它不在任何 sweep 的掃描樹裡；ADR 0031 也明文「workspace 不放 `AGENTS.md`」），**不是磁碟上 `.md` 的總行數**。沒被點名的參考資料想放幾份都可以。唯一的例外是 `app/methodology/`：那裡是程式無條件整檔注入，沒有「不讀」的選項，另外用 pytest 卡每檔 150 行（見 ADR 0001）。
 
 ## Considered Options
 
