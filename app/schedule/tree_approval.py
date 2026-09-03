@@ -28,11 +28,15 @@ def _tree_signature(tree: dict) -> dict:
     `content_hash` 只對這份剝過的資料算雜湊。排除清單（ticket 明文，理由寫在這裡）：
     `bound_external_id`／`spend`／`roas`（配對一顆活動、或花費進來，都是樹核准之後才
     發生的事，不該讓已經簽過的核准悄悄失效）；`task_id`／`created_at`／`narrative`／
-    `failure`／`running`／`bind_failure` 是殼層欄位，不是代理生成的樹本身內容。"""
+    `failure`／`running`／`bind_failure` 是殼層欄位，不是代理生成的樹本身內容；
+    `daily_amount`（ADR 0059：`daily_amount` 就是 `share × 總額`，純比例縮放——整棵樹依
+    比例縮小是規則 9 允許系統自己做的事，不該讓已經簽過的核准悄悄失效。**`share` 仍留在
+    雜湊裡**：把預算在節點之間搬動是另一份計畫，一樣要讓核准失效，這是 check 2 守住的
+    底線，跟這一條排除不是同一件事）。"""
     def _node(n: dict) -> dict:
         return {
             "name": n["name"], "fields": n["fields"], "share": n["share"],
-            "daily_amount": n["daily_amount"], "warnings": n["warnings"],
+            "warnings": n["warnings"],
             "children": [_node(c) for c in n["children"]],
         }
     return {
@@ -61,7 +65,13 @@ def _approval_overspend(conn, org_id: str, brand_id: str, tree: dict, approval_r
     """兩個數字要蓋同一段日子（ticket 明講的第一版錯誤）：從「核准當天」跟「這個月月初」
     兩者較晚的那個開始，算到今天（含）——不是整個月，避免核准前的花費被誤算進超支。
     沒有任何節點綁定時 `spend_to_date` 是 None（沒在追蹤），不是 0（0 跟「不知道」是
-    兩件事，印 0 會被讀成「還沒花錢」）。不設門檻：兩個數字都給，讓使用者自己判斷。"""
+    兩件事，印 0 會被讀成「還沒花錢」）。不設門檻：兩個數字都給，讓使用者自己判斷。
+
+    ADR 0059：`expected_to_date` 改從樹目前的總額（`current_daily_amount`）算，不再讀
+    `approved_amount`——一旦總額可以縮到上限以下，`approved_amount` 就高估了實際會花的
+    錢，讓真正的超支看起來比較不嚴重，跟 ADR 0058 剛關掉的誤差同方向（ADR 0040 的煞車
+    不准往「更寬鬆」那個方向錯）。`within_approved_ceiling` 問的是另一件事：目前總額有
+    沒有壓在核准當時定的每日上限（`max_daily_amount`）之下。"""
     approved_at = approval_row["approved_at"]
     # 票 M1（ADR 0058）：approved_at 是 timestamptz，psycopg 回傳的是 UTC 時刻；
     # today 問的是組織時區的今天，兩個日期要先落在同一個時區才能相減，否則台北每天
@@ -74,7 +84,8 @@ def _approval_overspend(conn, org_id: str, brand_id: str, tree: dict, approval_r
     month_start = today.replace(day=1)
     window_start = max(month_start, approval_date)
     days_elapsed = (today - window_start).days + 1
-    approved_amount = float(approval_row["approved_amount"])
+    current_daily_amount = _sum_daily_amounts(tree["nodes"])
+    max_daily_amount = float(approval_row["max_daily_amount"])
 
     bound_ids = {n["bound_external_id"] for n in tree["nodes"] if n["bound_external_id"]}
     spend_to_date = None
@@ -90,7 +101,10 @@ def _approval_overspend(conn, org_id: str, brand_id: str, tree: dict, approval_r
         spend_to_date = summary["total"]["spend"]
 
     return {
-        "expected_to_date": approved_amount * days_elapsed,
+        "max_daily_amount": max_daily_amount,
+        "current_daily_amount": current_daily_amount,
+        "within_approved_ceiling": current_daily_amount <= max_daily_amount,
+        "expected_to_date": current_daily_amount * days_elapsed,
         "spend_to_date": spend_to_date,
         "days_elapsed": days_elapsed,
     }

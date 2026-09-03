@@ -152,7 +152,11 @@ function formatApprovedDate(iso: string): string {
 
 /** 已核准的那一行，加上超支比對（票 01：`spend_to_date` null＝這棵樹還沒有節點配對到
  * 通路上的活動，花費根本沒在追蹤，不是「花了 0 元」——兩件事分開講）。不設門檻：兩個
- * 數字都印出來，讓使用者自己判斷，不猜一個「超支多少算警訊」。 */
+ * 數字都印出來，讓使用者自己判斷，不猜一個「超支多少算警訊」。
+ * 票 M2（ADR 0059）：總額縮小不再讓 `matches_current_tree` 翻臉，畫面補兩句話——縮小但
+ * 仍在上限內是好消息（跟結構變更那句放在同一個 span，同樣的低調語氣）；壓過上限是花錢
+ * 警訊，要跟「活動結構已變更」那句一樣顯眼，這裡給它自己一行加上 danger 色，比原本那句
+ * 純文字更醒目（規則：至少一樣顯眼，不是只能一樣）。 */
 function ApprovalStatus({
   approval,
   revoking,
@@ -164,12 +168,16 @@ function ApprovalStatus({
 }) {
   const diff =
     approval.spend_to_date === null ? null : approval.spend_to_date - approval.expected_to_date;
+  const budgetReduced =
+    approval.within_approved_ceiling && approval.current_daily_amount < approval.max_daily_amount;
   return (
     <div className="mb-3 rounded-md border border-dashed border-border bg-muted/30 p-2 text-sm text-foreground">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <span>
           已於 {formatApprovedDate(approval.approved_at)} 核准，每日 {formatCurrency(approval.approved_amount)}
           {!approval.matches_current_tree && "（活動結構已變更，此核准對應先前版本，請重新核准）"}
+          {budgetReduced &&
+            `（每日預算已調降為 ${formatCurrency(approval.current_daily_amount)}，仍在核准的每日上限 ${formatCurrency(approval.max_daily_amount)} 內）`}
         </span>
         <button
           type="button"
@@ -180,6 +188,12 @@ function ApprovalStatus({
           {revoking ? "撤回中…" : "撤回"}
         </button>
       </div>
+      {!approval.within_approved_ceiling && (
+        <p className="mt-1 text-sm font-medium text-danger">
+          今日預算 {formatCurrency(approval.current_daily_amount)} 已超過核准的每日上限{" "}
+          {formatCurrency(approval.max_daily_amount)}，需要重新核准。
+        </p>
+      )}
       <p className="mt-1 text-xs text-muted-foreground">
         {approval.spend_to_date === null ? (
           "花費尚未開始追蹤（還沒有節點配對到通路上的活動）。"

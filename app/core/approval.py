@@ -21,25 +21,33 @@ _AnyConn = Conn | ConnProxy
 
 def approve(
     conn: _AnyConn, *, org_id: str, brand_id: str, scope_type: str, scope_ref: str,
-    content_hash: str, amount: float, actor: str, note: str | None = None,
+    content_hash: str, amount: float, max_daily_amount: float, actor: str,
+    note: str | None = None,
 ) -> str:
     """插入一列核准紀錄，寫一筆 audit_log，回傳新 id。舊列從不覆寫——重新核准是新的一列
     （ticket 明文：the old row is never rewritten）。比照 `rule_cards.set_value()` ／
     `interrupts.resolve()` 既有慣例：會 commit（這是一次完整、獨立的落地動作，不是留給
-    呼叫端拼在別的交易裡）。"""
+    呼叫端拼在別的交易裡）。
+
+    `max_daily_amount` 必填、沒有預設值（ADR 0059）：給預設值等於把「上限＝簽核總額」
+    這條業務規則塞進 `app/core`，跟本檔檔頭那句「核准內容、金額怎麼算……一律是呼叫端的
+    業務知識，本檔不碰」矛盾——這裡只負責落地，上限要多少一律由呼叫端算好再傳進來。"""
     approval_id = new_id("apv")
     approved_at = now_utc()
     conn.execute(
         "INSERT INTO approval (id, org_id, brand_id, scope_type, scope_ref, content_hash,"
-        " approved_amount, approved_by, approved_at, note, created_at)"
-        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
-        (approval_id, org_id, brand_id, scope_type, scope_ref, content_hash, amount, actor,
-         approved_at, note, now_utc()),
+        " approved_amount, max_daily_amount, approved_by, approved_at, note, created_at)"
+        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+        (approval_id, org_id, brand_id, scope_type, scope_ref, content_hash, amount,
+         max_daily_amount, actor, approved_at, note, now_utc()),
     )
     write_audit(
         conn, org_id=org_id, brand_id=brand_id, entity_type="approval", entity_id=approval_id,
         action="approve", actor=actor,
-        after={"scope_type": scope_type, "scope_ref": scope_ref, "amount": amount},
+        after={
+            "scope_type": scope_type, "scope_ref": scope_ref, "amount": amount,
+            "max_daily_amount": max_daily_amount,
+        },
     )
     conn.commit()
     return approval_id

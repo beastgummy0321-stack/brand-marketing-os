@@ -12,13 +12,11 @@
 
 ### 第 1 級：錢已經算錯了，或會靜靜算錯
 
-1. **M2 `approval` 核准的是「上限」還是「當時那個數字」**（詳見〈需批准〉那節）。今天咬不到人
-   （沒有任何程式會自己改 `daily_amount`），但引信已經裝好（`campaign_period_budget_version`
-   已建表、含 `auto_decrease`）。哪天有一張票讓系統自己調預算，這條當天生效。
-   **2026-09-04：使用者已批准，計畫已簽成 `docs/adr/0059`**（簽的是形狀＋上限：`share` 留在
-   雜湊裡、`daily_amount` 拿出來、`expected_to_date` 改用當下總額）。**今天做是免費的**——
-   實測 `approval` 0 列、`campaign_period_budget_version` 0 列，改 `content_hash` 配方零成本；
-   第一個真客戶之後，每一筆已簽核准都會在同一天讀成「內容已變更」
+1. **超過核准上限時，畫面說「需要重新核准」但沒有按鈕可以按**（2026-09-04 M2 完成後，
+   審查與瀏覽器驗收**各自獨立**撞到同一件事）。核准鈕（`CampaignTree.tsx:93`）只看
+   `matches_current_tree`，而「總額調高、結構沒變」正好結構沒變，所以鈕不會出現。
+   有逃生路徑（先按「撤回」再核准），但那不是使用者猜得到的動線。M2 逐字禁止動這個
+   結構閘門，所以留成獨立一張票。**畫面已經會講對的話，只是講完沒有地方按**
 
 ### 第 2 級：產品的核心承諾現在是半真的
 
@@ -176,19 +174,6 @@ CASCADE 今早已修、上傳有 50MB 上限、產品照那條查無此事）。
 棘輪三條，新表漏了任何一條都會紅：每張表開 RLS（`test_real_db_schema_drift.py`）、
 有 `org_id` 的表要有 policy（`test_rls_tenant_policy.py`）、讀租戶表的函式要帶租戶欄位
 （`test_architecture_boundaries.py`）。**T2～T6 新增的表照這三條走，不必再想一次。**
-
-## 需批准（金流路徑）：核准的到底是「上限」還是「當時那個數字」——T2 已刻意跳過它
-
-`_tree_signature`（**2026-09-03 已搬到 `app/schedule/tree_approval.py`**）把每個節點的 `daily_amount` 算進 `content_hash`，
-所以預算一動，已簽過的核准就失效。**今天咬不到人**——repo 裡沒有任何程式會自己改 `daily_amount`
-（grep 零命中），所以架構圖說它「現在就壞」是未來式。**2026-09-02 更新**：T2a 已經把
-`campaign_period_budget_version` 這張表建起來了（含 `change_type = auto_decrease` 這個值），
-但 **T2 全程沒有任何程式寫它**——引信裝好了，還沒有人點火。哪天有一張票讓系統自己調預算，
-這條當天生效。
-
-要改的是核准的語意（`approval` 加 `max_daily_amount`，核准的是上限而不是當下的數字），
-**那等於修改 ADR 0040 那道錢煞車**，是金流路徑：先提計畫、等批准、寫自己的 ADR。
-T2 三張票逐字寫明不碰它，審查也逐字驗過 diff 裡沒有 `max_daily_amount`。
 
 ## 2026-09-03 規範體檢：對過真實數字的一輪，四條已裁決
 

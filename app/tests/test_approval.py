@@ -54,6 +54,20 @@ def _tree_fenced(name: str) -> str:
     return f"文字。\n\n```json\n{json.dumps(payload, ensure_ascii=False)}\n```"
 
 
+def _tree_fenced_two(name_a: str, name_b: str, share_a: float, share_b: float) -> str:
+    """票 M2（ADR 0059 done-check 2）：兩個扛預算節點的版本——`_tree_fenced` 只有一個
+    root，share 永遠是 1.0，測不出「share 在節點之間搬動」，得要至少兩個 root 才行。"""
+    def _campaign(name: str, share: float) -> dict:
+        leaf = {"name": "單元1", "fields": [], "share": None, "warnings": [], "children": []}
+        mid = {"name": "組合1", "fields": [], "share": None, "warnings": [], "children": [leaf]}
+        return {"name": name, "fields": [], "share": share, "warnings": [], "children": [mid]}
+    payload = {
+        "levels": ["行銷活動", "廣告組合", "廣告"], "budget_level": 1,
+        "nodes": [_campaign(name_a, share_a), _campaign(name_b, share_b)],
+    }
+    return f"文字。\n\n```json\n{json.dumps(payload, ensure_ascii=False)}\n```"
+
+
 def _fake(rendered_output: str) -> providers.FakeProvider:
     return providers.FakeProvider(response=providers.ProviderResponse(
         output_text=rendered_output, structured=None,
@@ -153,6 +167,89 @@ class ApprovalApiContractTest(unittest.TestCase):
              "attribution_window": "7d_click,1d_view"},
         ])
         web.conn.commit()
+
+    def _set_tree_daily_budget(self, amount: float) -> None:
+        """票 M2（ADR 0059）：今天系統自己還沒有任何一條路會改動 `daily_amount`（ADR 0059
+        「why now」段落親口承認），這是唯一能在不重新展開（不換 content_hash 結構）的
+        前提下，模擬「系統自己把總額縮小／放大」這件事的槓桿——跟 ADR 0058 那支測試直接
+        改 `approved_at` 是同一招：`tree_from_task_row()` 每次都從 `rendered_output` 加
+        `context_scope_json.daily_budget` 重算（同輸入同輸出，不落地快取），改這一欄、
+        不重新展開，node 名字／`share`／結構都不變，只有 `daily_amount` 跟著新總額重算。"""
+        web.conn.execute(
+            "UPDATE llm_task SET context_scope_json ="
+            " jsonb_set(context_scope_json, '{daily_budget}', %s::jsonb)"
+            " WHERE id = (SELECT id FROM llm_task WHERE brand_id = %s AND task_type = %s"
+            " ORDER BY started_at DESC LIMIT 1)",
+            (json.dumps(amount), self.brand["id"], schedule_state.TREE_TASK_TYPE),
+        )
+        web.conn.commit()
+
+    def test_scaling_the_whole_tree_down_keeps_the_approval_valid(self):
+        """done-check 1／4（ADR 0059）：只把總額縮小、`share`（唯一節點吃滿 1.0）不動——
+        `matches_current_tree` 仍是 true，`within_approved_ceiling` 仍是 true，
+        `expected_to_date` 跟著現在的總額走、比用核准當時的總額算出來的數字小（這是煞車
+        往「更嚴格」錯，不是往「更寬鬆」錯，ADR 0058／0040 那個方向）。"""
+        self._succeed_plan_and_tree()
+        approved = self._approve().json()["tree"]["approval"]
+        self.assertEqual(approved["approved_amount"], 1000)
+        self.assertEqual(approved["max_daily_amount"], 1000)
+
+        self._set_tree_daily_budget(850)  # 總額縮 15%
+        after = self._get().json()["tree"]["approval"]
+        self.assertTrue(after["matches_current_tree"])
+        self.assertEqual(after["current_daily_amount"], 850)
+        self.assertTrue(after["within_approved_ceiling"])
+        self.assertEqual(
+            after["expected_to_date"], after["current_daily_amount"] * after["days_elapsed"]
+        )
+        self.assertLess(
+            after["expected_to_date"], approved["approved_amount"] * after["days_elapsed"]
+        )
+
+    def test_moving_budget_between_nodes_still_voids_it(self):
+        """done-check 2：把 share 在兩個節點之間搬動——即使總額沒變，`matches_current_tree`
+        要變 false。這是擋住 check 1 被誤讀成「整份雜湊都不用管金額」的底線：如果連
+        `share` 都被拿掉，這支測試會失敗而上一支會過；如果一個都沒拿掉，上一支會失敗而
+        這一支會過——兩支都要綠，才代表只拿掉了 `daily_amount` 一個鍵（ticket 矛盾檢查表）。
+        """
+        schedule_jobs.PROVIDER = _fake(_PLAN_FENCED)
+        resp = self.client.post(
+            f"/api/schedule/brands/{self.brand['id']}/plans",
+            json={"product_ids": [self.product["id"]], "platform": VALID_PLATFORM,
+                  "objective": VALID_OBJECTIVE, "promotion_note": "", "plan_count": 1,
+                  "start_date": "2026-09-10", "end_date": "2026-09-24"},
+        )
+        self.assertEqual(resp.status_code, 200, resp.text)
+        self._run_worker()
+        schedule_jobs.PROVIDER = _fake(_tree_fenced_two("活動A", "活動B", 0.6, 0.4))
+        resp = self.client.post(
+            f"/api/schedule/brands/{self.brand['id']}/tree", json={"plan_index": 0}
+        )
+        self.assertEqual(resp.status_code, 200, resp.text)
+        self._run_worker()
+        approved = self._approve().json()["tree"]["approval"]
+        self.assertEqual(approved["approved_amount"], 1000)  # 600 + 400
+
+        schedule_jobs.PROVIDER = _fake(_tree_fenced_two("活動A", "活動B", 0.5, 0.5))
+        resp = self.client.post(
+            f"/api/schedule/brands/{self.brand['id']}/tree", json={"plan_index": 0}
+        )
+        self.assertEqual(resp.status_code, 200, resp.text)
+        self._run_worker()
+        after = self._get().json()["tree"]["approval"]
+        self.assertFalse(after["matches_current_tree"])  # 名字沒變，share 搬動了
+
+    def test_above_the_ceiling_is_caught(self):
+        """done-check 3：把總額拉到核准當時的每日上限之上，`within_approved_ceiling` 要
+        變 false。"""
+        self._succeed_plan_and_tree()
+        approved = self._approve().json()["tree"]["approval"]
+        self.assertEqual(approved["max_daily_amount"], 1000)
+
+        self._set_tree_daily_budget(1200)
+        after = self._get().json()["tree"]["approval"]
+        self.assertEqual(after["current_daily_amount"], 1200)
+        self.assertFalse(after["within_approved_ceiling"])
 
     def test_approve_refuses_without_a_tree_then_writes_correct_amount_audit_and_overspend(self):
         resp = self._approve()  # item 2：沒有成功展開的樹，先擋，不寫任何東西

@@ -77,14 +77,21 @@ export interface CampaignTreeNode {
 
 /** 票 01（ADR 0040）：核准——花錢煞車。`spend_to_date` 是 null 代表這棵樹還沒有任何節點
  * 配對到通路上的活動，不是「花了 0 元」（兩件事不同，見 `CampaignTree.tsx`）。
- * `matches_current_tree` 是 false 代表樹的內容跟簽核當下已經不一樣（重新展開過），畫面
- * 要說清楚、請使用者重新核准，不是悄悄沿用舊的簽核。 */
+ * `matches_current_tree` 是 false 代表樹的結構跟簽核當下已經不一樣（重新展開過，或節點
+ * 之間的 `share` 被搬動過），畫面要說清楚、請使用者重新核准，不是悄悄沿用舊的簽核。
+ * 票 M2（ADR 0059）：`matches_current_tree` 不再管總額縮放——`max_daily_amount` 是簽核
+ * 當下定的每日上限，`current_daily_amount` 是樹現在的總額，`within_approved_ceiling` 是
+ * 前者有沒有壓在後者之下。總額只准往下滑仍算數；壓過上限就是另一個警訊，兩者是分開的
+ * 兩件事。 */
 export interface ScheduleApproval {
   id: string;
   approved_amount: number;
   approved_by: string;
   approved_at: string;
   matches_current_tree: boolean;
+  max_daily_amount: number;
+  current_daily_amount: number;
+  within_approved_ceiling: boolean;
   spend_to_date: number | null;
   expected_to_date: number;
   days_elapsed: number;

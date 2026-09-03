@@ -75,6 +75,10 @@ cycle, and `app.dashboard` already depends on it the same way.
 - ADR 0056 — a channel catalogue is a file; its per-org state is a table.
 - ADR 0057 — ad-level spend meets the coordinate through the depth-3 binding, which freezes the
   tree that produced it.
+- ADR 0058 — a stored UTC timestamp becomes a date in the org's timezone before any money
+  comparison against `today_for_org()`.
+- ADR 0059 — an approval signs the tree's shape plus a daily ceiling; a total that only shrinks
+  under that ceiling keeps it valid.
 
 Module-local and reversible, decided here rather than in an ADR:
 

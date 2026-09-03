@@ -359,10 +359,13 @@ def _run_approve(conn, brand_id: str, org_id: str, actor: str) -> dict:
     if tree["failure"] is not None:
         raise web.ApiError(400, "no_tree", NO_TREE_TO_APPROVE_MESSAGE)
 
+    # ADR 0059：上限＝簽核當下的總額，一次算好傳兩次——兩次呼叫 _sum_daily_amounts 會是
+    # 兩次可能飄移的機會（ticket 明文）。
+    daily_amount = tree_approval._sum_daily_amounts(tree["nodes"])
     approval_mod.approve(
         conn, org_id=org_id, brand_id=brand_id, scope_type=tree_approval.APPROVAL_SCOPE_TYPE,
         scope_ref=tree["task_id"], content_hash=tree_approval._tree_content_hash(tree),
-        amount=tree_approval._sum_daily_amounts(tree["nodes"]), actor=actor,
+        amount=daily_amount, max_daily_amount=daily_amount, actor=actor,
     )
     # ADR 0053 決策 1：核准這一press＝「這期真的要投」，草稿在這裡變 running。找不到草稿
     # （例如已經核准過一次）就什麼都不做——approval.py 自己已經 commit 過，這裡是同一個

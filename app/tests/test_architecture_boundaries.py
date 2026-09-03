@@ -1134,7 +1134,26 @@ class CoordinateDimensionSyncTest(unittest.TestCase):
 #   2. `test_schedule.py::CoordinateSeedTest`（擴充既有測試，+14 行）——**data
 #      correctness**：新增斷言確認第一次讀完七個維度都有座標、六個新維度加總 33 個，讀
 #      第二次仍是 33 個（不是 66）——這正是本票 done-check 1 的字面內容，不是新開測試。
-TEST_LINES_CEILING = 18601
+#
+# 票 M2（ADR 0059，`docs/issues/m2-approval-signs-a-ceiling/ticket.md`）：18601 → 18721
+# （實測，含本段理由註解自己佔的行，也含 `KNOWN_MODULE_SIZES["app/core"]` 那筆理由自己
+# 佔的行）。使用者已在票面「Line-budget authorisations」段授權
+# 調高，終值照票上的規矩——量到的數字，不留餘裕。`test_approval.py` 新增三支，都是
+# **money**（核准是花錢煞車，ADR 0040）：
+#   1. `test_scaling_the_whole_tree_down_keeps_the_approval_valid`（done-check 1／4）——
+#      只縮總額、`share` 不動，`matches_current_tree`／`within_approved_ceiling` 仍要是
+#      true，`expected_to_date` 要跟著現在的總額走、比核准當時的總額算出來的小。證過紅：
+#      把 `daily_amount` 放回 `_tree_signature()` 的 `_node()`，這支斷在
+#      `self.assertTrue(after["matches_current_tree"])`（`AssertionError: False is not
+#      true`，`test_architecture_boundaries.py:1166` 那次跑是另一支，這裡指
+#      `test_approval.py` 這支本身）；拿掉又綠，7 passed。
+#   2. `test_moving_budget_between_nodes_still_voids_it`（done-check 2）——把 `share` 在
+#      兩個節點之間搬動、總額不變，`matches_current_tree` 要變 false。這是擋住 check 1
+#      被誤讀成「整份雜湊都不用管金額」的底線（ticket 矛盾檢查表：`share` 不在雜湊裡兩支
+#      都會變成互相矛盾）。
+#   3. `test_above_the_ceiling_is_caught`（done-check 3）——把總額拉到核准當時的每日上限
+#      之上，`within_approved_ceiling` 要變 false。
+TEST_LINES_CEILING = 18721
 
 
 def _line_totals() -> tuple:
@@ -1207,7 +1226,11 @@ KNOWN_MODULE_SIZES = {
                                       # 不是新增了 574 行。
     "app/brand_web": 2091,  # 2026-08-30 刪失效規則卡（小債）：autonomy 那張卡的兩處專屬
                              # 驗證跟著走。前一次是 2155
-    "app/core": 1622,  # 票 M1（ADR 0058）：settings.py 從 `today_for_org()` 抽出姊妹函式
+    "app/core": 1630,  # 票 M2（ADR 0059）：`approval.py` 的 `approve()` 加一個必填參數
+                        # `max_daily_amount`（沒有預設值，理由寫在函式自己的 docstring 裡）、
+                        # INSERT／`write_audit` 各多帶一欄——1622 → 1630（+8 行）。量到的
+                        # 數字，不留餘裕。前一次是 1622——
+                        # 票 M1（ADR 0058）：settings.py 從 `today_for_org()` 抽出姊妹函式
                         # `org_timezone()`（時區容錯只留一份），`_approval_overspend()`
                         # 比對 approved_at／today 之前先讓兩者落在同一個時區——
                         # 1613 → 1622（+9 行）。量到的數字，不留餘裕。前一次是 1613——
