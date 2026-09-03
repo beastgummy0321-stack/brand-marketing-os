@@ -20,7 +20,9 @@ app.core.vocab.CHANNEL_TYPES，不再是各通路各自一張表。藥局出貨�
 """
 
 import csv
+import hashlib
 import io
+import json
 
 from app.brand_intelligence import repository as bi_repo
 from app.core import vocab
@@ -163,6 +165,23 @@ def save_shopee_rows(conn, brand_id: str, rows: list, *, source: str, actor: str
 AUTO_LEDGER_CHANNELS = frozenset({"website"})
 HAND_ENTRY_CHANNEL_FORBIDDEN_MESSAGE = "官網營收由訂單匯入自動記帳，不能手動登錄。"
 
+# 票 T7：手動登記本來沒有 external_id，partial unique index 去不了重，按兩次表單＝營收
+# 翻倍。五欄湊成「同一個事件」的雜湊，跟 app/schedule/tree_approval.py:44-46 的
+# content_hash 同一套配方（json.dumps sort_keys+ensure_ascii=False 餵 sha256）——repo 只有
+# 一種雜湊記錄的方式，不重造第二種。brand_id／channel 已經是唯一索引自己的前導欄，不進雜湊本體。
+# note 必須在雜湊裡：兩筆日期金額都一樣、只有 note 不同的實體通路營收（例如同一天兩趟不同
+# 藥局出貨），是使用者刻意打字要它們分開落兩列。
+_ROW_HASH_FIELDS = ("channel", "entry_date", "revenue", "quantity", "note")
+
+
+def _row_hash(channel: str, entry_date: str, revenue, quantity, note: str | None) -> str:
+    body = json.dumps(
+        {"channel": channel, "entry_date": entry_date, "revenue": revenue,
+         "quantity": quantity, "note": note},
+        sort_keys=True, ensure_ascii=False,
+    )
+    return hashlib.sha256(body.encode("utf-8")).hexdigest()
+
 
 def record_channel_entry(conn, brand_id: str, *, channel: str, entry_date: str,
                          revenue: float | None = None, quantity: float | None = None,
@@ -178,16 +197,40 @@ def record_channel_entry(conn, brand_id: str, *, channel: str, entry_date: str,
         raise ValueError("actor 為必填")
     ts = now_utc()
     org_id = bi_repo.get_brand(conn, brand_id)["org_id"]
-    entry_id = new_id("chr")
+    entry_date = entry_date.strip()
     note = note.strip() if note and note.strip() else None
-    conn.execute(
-        "INSERT INTO channel_revenue (id, org_id, brand_id, channel, entry_date, revenue, quantity,"
-        " note, source, created_at, updated_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'manual',"
-        " %s, %s)",
-        (entry_id, org_id, brand_id, channel, entry_date.strip(), revenue, quantity, note, ts, ts),
-    )
+    row_hash = _row_hash(channel, entry_date, revenue, quantity, note)
+
+    # 跟另外兩條寫入路徑（_sync_website_channel_revenue／save_shopee_rows）同一種
+    # SELECT-then-UPDATE-or-INSERT 形狀，只是鍵不同：那兩條用 external_id，這裡沒有
+    # external_id 可用，用 (brand_id, channel, source_row_hash) 對齊新的 partial unique
+    # index。重複送出「悄悄更新」而不是丟錯——鐵則 8 手動路徑永遠一級公民，另外兩條自動
+    # 路徑遇到重複也是照樣更新，不對使用者報錯。
+    existing = conn.execute(
+        "SELECT id FROM channel_revenue WHERE brand_id = %s AND channel = %s"
+        " AND source_row_hash = %s",
+        (brand_id, channel, row_hash),
+    ).fetchone()
+    if existing:
+        entry_id = existing["id"]
+        conn.execute(
+            "UPDATE channel_revenue SET entry_date = %s, revenue = %s, quantity = %s, note = %s,"
+            " updated_at = %s WHERE id = %s",
+            (entry_date, revenue, quantity, note, ts, entry_id),
+        )
+        audit_action = "update"
+    else:
+        entry_id = new_id("chr")
+        conn.execute(
+            "INSERT INTO channel_revenue (id, org_id, brand_id, channel, entry_date, revenue,"
+            " quantity, note, source, source_row_hash, created_at, updated_at)"
+            " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'manual', %s, %s, %s)",
+            (entry_id, org_id, brand_id, channel, entry_date, revenue, quantity, note, row_hash,
+             ts, ts),
+        )
+        audit_action = "create"
     write_audit(conn, org_id=org_id, brand_id=brand_id, entity_type="channel_revenue", entity_id=entry_id,
-                action="create", actor=actor,
+                action=audit_action, actor=actor,
                 before=None, after={"channel": channel, "entry_date": entry_date,
                                     "revenue": revenue, "quantity": quantity})
     conn.commit()

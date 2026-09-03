@@ -74,13 +74,17 @@ def _upsert_customer(conn: Conn, brand_id: str, identity_hash: str,
 
 def _sync_website_channel_revenue(conn: Conn, org_id: str, brand_id: str, *, order_number: str,
                                   order_date, total_amount, refunded_amount,
-                                  order_status, source: str, batch_id: str, ts: str) -> None:
+                                  order_status, currency: str, source: str, batch_id: str,
+                                  ts: str) -> None:
     """訂單的通路營收帳（channel='website'，票 12）：跟訂單同一交易寫進 channel_revenue，
     用 partial unique index (brand_id, channel, external_id=order_number) 去重。作廢訂單
     算 0（已知的數字），不是 NULL（不知道）——跟 stats() 的判斷一致。
 
     沒有日期的訂單連同已經存在的帳一起清掉：`stats()` 按 order_date 篩選，沒日期的訂單
-    永遠不算進實收；帳本留著就會比訂單頁多一筆（重新匯入把日期洗掉時真的會發生）。"""
+    永遠不算進實收；帳本留著就會比訂單頁多一筆（重新匯入把日期洗掉時真的會發生）。
+
+    `currency` 逐字照抄呼叫端傳進來的 order_record.currency（票 T7）——那一欄本身也是
+    逐字寫死 "TWD"（見 save_orders() 呼叫端），這裡不重新判斷，只是不讓新欄位停在 NULL。"""
     if not order_date:
         conn.execute("DELETE FROM channel_revenue WHERE brand_id = %s AND channel = 'website'"
                      " AND external_id = %s", (brand_id, order_number))
@@ -93,16 +97,16 @@ def _sync_website_channel_revenue(conn: Conn, org_id: str, brand_id: str, *, ord
     ).fetchone()
     if existing:
         conn.execute(
-            "UPDATE channel_revenue SET entry_date = %s, revenue = %s, source = %s,"
+            "UPDATE channel_revenue SET entry_date = %s, revenue = %s, currency = %s, source = %s,"
             " import_batch_id = %s, updated_at = %s WHERE id = %s",
-            (order_date, revenue, source, batch_id, ts, existing["id"]))
+            (order_date, revenue, currency, source, batch_id, ts, existing["id"]))
     else:
         conn.execute(
             "INSERT INTO channel_revenue (id, org_id, brand_id, channel, entry_date, external_id,"
-            " revenue, source, import_batch_id, created_at, updated_at)"
-            " VALUES (%s, %s, %s, 'website', %s, %s, %s, %s, %s, %s, %s)",
-            (new_id("chr"), org_id, brand_id, order_date, order_number, revenue, source, batch_id,
-             ts, ts))
+            " revenue, currency, source, import_batch_id, created_at, updated_at)"
+            " VALUES (%s, %s, %s, 'website', %s, %s, %s, %s, %s, %s, %s, %s)",
+            (new_id("chr"), org_id, brand_id, order_date, order_number, revenue, currency, source,
+             batch_id, ts, ts))
 
 
 def save_orders(conn: Conn, brand_id: str, rows: list, *,
@@ -173,7 +177,8 @@ def save_orders(conn: Conn, brand_id: str, rows: list, *,
         _sync_website_channel_revenue(
             conn, org_id, brand_id, order_number=order_number, order_date=order_date,
             total_amount=row.get("total_amount"), refunded_amount=row.get("refunded_amount"),
-            order_status=row.get("order_status"), source=source, batch_id=batch_id, ts=ts)
+            order_status=row.get("order_status"), currency="TWD", source=source, batch_id=batch_id,
+            ts=ts)
 
         for item in row.get("items") or []:
             if item.get("sku") is None and item.get("item_price") is None and item.get("quantity") is None:

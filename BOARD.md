@@ -12,24 +12,23 @@
 
 ### 第 1 級：錢已經算錯了，或會靜靜算錯
 
-1. **T7 `channel_revenue` 沒有去重**（詳見票單那節）。**2026-09-04 實測改寫**：本行原本寫
-   「同一份 CSV 匯兩次營收就翻倍」——**那是錯的**，兩條 CSV 路徑（`_sync_website_channel_revenue`／
-   `save_shopee_rows`）都用訂單編號去重，蝦皮報表沒有訂單編號欄還會直接拒收。真正不設防的
-   只有**手動通路營收登錄表單**（`record_channel_entry`，一個裸 `INSERT`）：同一筆按兩次就是兩列，
-   實測 5000 變 10000。仍是每個用手動登錄的租戶都會中
-2. **`approval` 核准的是「上限」還是「當時那個數字」**（詳見〈需批准〉那節）。今天咬不到人
+1. **M2 `approval` 核准的是「上限」還是「當時那個數字」**（詳見〈需批准〉那節）。今天咬不到人
    （沒有任何程式會自己改 `daily_amount`），但引信已經裝好（`campaign_period_budget_version`
-   已建表、含 `auto_decrease`）。哪天有一張票讓系統自己調預算，這條當天生效
+   已建表、含 `auto_decrease`）。哪天有一張票讓系統自己調預算，這條當天生效。
+   **2026-09-04：使用者已批准，計畫已簽成 `docs/adr/0059`**（簽的是形狀＋上限：`share` 留在
+   雜湊裡、`daily_amount` 拿出來、`expected_to_date` 改用當下總額）。**今天做是免費的**——
+   實測 `approval` 0 列、`campaign_period_budget_version` 0 列，改 `content_hash` 配方零成本；
+   第一個真客戶之後，每一筆已簽核准都會在同一天讀成「內容已變更」
 
 ### 第 2 級：產品的核心承諾現在是半真的
 
-3. **T8 六維座標沒有詞彙種子**——見票單那節。憲法第 5 條說「閉環之所以成立是因為素材帶
+2. **T8 六維座標沒有詞彙種子**——見票單那節。憲法第 5 條說「閉環之所以成立是因為素材帶
    七維指紋」，**2026-09-04 重量**：`brand_coordinate` **140 列全部是 `angle`**（35×4 品牌，
    舊寫的 105 已過期），另外六維 **0 列**，所以素材的座標快照是**七格填一格**。
    **T6 的價值被它卡住**：只有一維，四象限泡泡圖就只是一張角度排行榜。
    **站①已完成（2026-09-04）**：使用者裁決「先訪談出受控清單」，33 個候選值的草案在
    <https://claude.ai/code/artifact/7d1ab1eb-04ca-4e16-9462-83656f140564>，等四題裁決回來才開票
-4. **T6 四象限泡泡看板 ＋ 三個 agent 診斷**——閉環的判斷層，在這裡合攏。排在 T8 後面是因為
+3. **T6 四象限泡泡看板 ＋ 三個 agent 診斷**——閉環的判斷層，在這裡合攏。排在 T8 後面是因為
    輸入還不夠寬，不是因為它不重要
 
 ### 第 3 級：第一次真的部署當天會咬人
@@ -37,40 +36,40 @@
 **這五條 2026-09-04 全部確認「現在清不掉」**，卡點是同一個：**還沒選部署平台**。不是拖延，
 是 07-2 那顆空白沒填之前，第 8 條根治不了、第 9 條無從動工、第 6 條刪掉會炸掉本機開發。
 
-5. **上線前必刪：`supabase/seed.sql` 尾巴的排查帳號**（`123@example.com`／`123456`，進了版控）
-6. **邀請連結是「持有即可用」**（`accept_invite` 不比對 email，畫面一掛載就自動接受）
-7. **`_is_local()` 只認 localhost／127.0.0.1** → 自架 Supabase 同機的正式拓撲會被判「本機」而放行；
+4. **上線前必刪：`supabase/seed.sql` 尾巴的排查帳號**（`123@example.com`／`123456`，進了版控）
+5. **邀請連結是「持有即可用」**（`accept_invite` 不比對 email，畫面一掛載就自動接受）
+6. **`_is_local()` 只認 localhost／127.0.0.1** → 自架 Supabase 同機的正式拓撲會被判「本機」而放行；
    要根治需要一個「這是不是正式環境」的變數，那顆空白屬於 07-2
-8. **07-2 部署前**：pydantic-settings 收環境變數（現在 19 處各自讀、8 個鍵，打錯字會安靜用預設值）
+7. **07-2 部署前**：pydantic-settings 收環境變數（現在 19 處各自讀、8 個鍵，打錯字會安靜用預設值）
    ＋部署映像檔要有 IANA 時區資料庫＋Sentry／staging／CD
-9. **上雲前必還（ADR 0039）**：每日 Meta 花費拉取的 worker 跑在網站行程裡，網站沒開就沒有數字
+8. **上雲前必還（ADR 0039）**：每日 Meta 花費拉取的 worker 跑在網站行程裡，網站沒開就沒有數字
 
 ### 第 4 級：裝一次就永久自動執行的閘門（做完就不再是待辦）
 
-10. **⑤ `ImportCycleScanTest` 看不到套件內部的環**——**2026-09-04 已量**：把掃描降到檔案層級
+9. **⑤ `ImportCycleScanTest` 看不到套件內部的環**——**2026-09-04 已量**：把掃描降到檔案層級
     重新跑過整個 `app/`（含 `app/schedule/state.py` ⇄ `routes.py` 那個曾被點名的路徑），
     **今天違規數是 0**——T5 把 `routes.py` 拆成 `state.py`／`tree_approval.py` 時已經連帶解掉。
     **2026-09-04 使用者裁決：裝**（0 違規也是「以後再犯也擋得住」的保險）。先弄紅一次才算數
-11. **七個維度名住三個地方沒有同步閘門**（`COORDINATE_KEYS`＝`app/schedule/creative.py:60`、
+10. **七個維度名住三個地方沒有同步閘門**（`COORDINATE_KEYS`＝`app/schedule/creative.py:60`、
     `frontend/src/lib/coordinatesApi.ts:10,12-20`、`frontend/src/components/schedule/CampaignTree.tsx:18`）。
     **2026-09-04 使用者裁決：裝**，掛在 T8 上一起做（那張票正好要動這三處）。先弄紅一次
 
 ### 第 5 級：介面與一致性
 
-12. **U2 前端版面規範落地**（ADR 0051：1920 流動、`auto-fit`、scrollWidth 閘門，先弄紅一次）
-13. **07-3 統一 404 信封**——**2026-09-04 重讀後改寫**：本行原本寫「統一信封形狀」，但真正的
+11. **U2 前端版面規範落地**（ADR 0051：1920 流動、`auto-fit`、scrollWidth 閘門，先弄紅一次）
+12. **07-3 統一 404 信封**——**2026-09-04 重讀後改寫**：本行原本寫「統一信封形狀」，但真正的
     病不是形狀。`NotFoundKind`（`app/shared/web.py:188-192`）只吐一個中文名詞、**沒有機器可讀的
     代碼**，所以「這個品牌不存在」跟 FastAPI 自己對不存在路由吐的 404 在前端**長得一模一樣**
     ——這正是 T5 拔根測試看到的現象（模組被拔掉，畫面說「找不到這個品牌」）。
     `ApiError`／`handle_api_error` 那套 `{"error":{"code","message"}}`（票 03-1 附錄 A）已經有代碼。
     所以這張票的價值在**加代碼**，前端三處（`brandReportApi.ts:36`、`http.ts:134`、
     `ordersApi.ts:92`）跟著改。這是 API 契約改動
-14. **07-4 GitHub 四個安全開關**——需付費或公開 repo，本機單人階段先不付
+13. **07-4 GitHub 四個安全開關**——需付費或公開 repo，本機單人階段先不付
 
 ### 第 6 級：一次性清理，掛在會碰到那個檔的票上順手做
 
-15. **⑥ `app/identity/` 沒有任何 ADR 管**——下一個碰 identity 的 route C 問題順手寫第一份
-16. **其餘小債**見〈小債〉那節
+14. **⑥ `app/identity/` 沒有任何 ADR 管**——下一個碰 identity 的 route C 問題順手寫第一份
+15. **其餘小債**見〈小債〉那節
 
 〈使用者待辦〉那節不進這份排序——做的人是你，不是 agent。
 
@@ -105,18 +104,26 @@ CASCADE 今早已修、上傳有 50MB 上限、產品照那條查無此事）。
 表的形狀一律看 ADR 0050 的表清單；migration 檔名前綴一律看 ADR 0049（前綴＝擁有那張表的模組，
 不是要它的那張票，所以一張票可以有好幾個不同前綴的 migration 檔）。
 
-- [ ] **T8（route C，2026-09-03 實測開的票）** 六維座標的詞彙從哪來——**閉環的核心承諾現在是
-      七格填一格**。實查：`brand_coordinate` **105 列全部 `dimension='angle'`**，
-      `ensure_coordinates_seeded()`（`app/schedule/repository.py:114-132`）只種角度、判斷式也只看
-      `dimension='angle'`；於是 6 個候選素材的 `coordinates_snapshot_json` 是
-      `{"angle": "產品講解", "pain": null, "proof": null, ...}`。**T5 的畫面因此只有「角度」那個
-      分頁籤會有數字，另外六個永遠空著**，投多少廣告都一樣。
-      站①要問的是業務題不是技術題：那六維（受眾／痛點／鉤子／證明／優惠／格式）的詞彙**誰決定、
-      從哪來**——35 個角度有 `creative-matrix.md` 當現成種子，這六維有沒有對應的現成清單？
-      沒有就是「AI 每次自由生成」還是「先訪談出一份受控清單」？（憲法第 5 條說受控清單，
-      ADR 0050 的 `brand_coordinate` 也是為受控清單設計的：`key` 穩定、`canonical_key` 收別名、
-      `disabled_at` 可停用。）**schema 不必動**——`dimension` 的 CHECK 七個值第一天就在，
-      補詞彙是加資料，不是 migration
+**T8 站①已完成（2026-09-04）**，切成兩張票。使用者簽了 33 個候選值與四題裁決，草案頁
+<https://claude.ai/code/artifact/7d1ab1eb-04ca-4e16-9462-83656f140564>。裁決摘要：
+①`format` 只有 3 個（Meta 版位），15 款靜態樣板**不算**格式；②`audience`／`pain` 給的是**軸**
+（漏斗關係／痛苦類型），品牌自己的名字用 `parent_id` 掛在底下；③`proof: none`／`offer: none`
+**要有 key**，不留 `null`——不然「沒放證明的廣告」會整批從圖上消失，而那可能正是花最多錢的一批；
+④代理挑不到值就回 `null`＋`coordinates_status='pending'`，不准硬挑（硬挑會製造假分群）。
+**站①的意外收穫：repo 裡本來就有四維的種子**，`hook` 在 `copywriting.md:35-43`（5 個公式）、
+`format` 在 `meta-format-specs.md:16/34/49`（3 個），`proof`／`offer` 的材料散在
+`ad-creative.md:36-56` 的出處建議欄與 15 個心理模型裡。看板原本寫「這六維沒有現成清單」是錯的。
+**清單刻意短**（每維 3–7 個）：全庫只有 6 支素材候選，一維開 35 個值每格 0.17 支，圖上是散點不是分群。
+
+- [ ] **T8a（route C）** 六維詞彙入庫：`ensure_coordinates_seeded()` 改成七維都種（判斷式現在
+      只看 `dimension='angle'`）＋一支 migration 回填既有品牌＋**七維名稱同步閘門**（第 4 級第 10 條，
+      使用者已批准，掛在這張一起做）。每個品牌 33 列。**票已寫好**：
+      `docs/issues/t8a-six-dimension-vocabulary/ticket.md`。schema 不必動——`dimension` 的 CHECK
+      七個值第一天就在，補詞彙是加資料
+- [ ] **T8b（route C，T8a 之後）** 翻開關：改 `app/departments/creative/ad_creative.md:26-29`
+      ——它現在逐字寫著「其餘六個先給 `null`」，不改這句，種再多詞彙也不會有人填。
+      **這半段沒有機器閘門**（LLM 的行為不是單元測試測得出來的），驗收要真跑一次素材生成、
+      使用者自己看填出來的六格對不對，會花錢。所以跟 T8a 分開兩張票，紅起來的樣子完全不同
 
 - [ ] **T6（route C）** 四象限泡泡看板 ＋ 建議落 `decision`（補六欄，不新開表；該表 0 列、程式零引用）
       ＋ `order_record.utm_json`。**現在畫不出來的五個理由，票裡要逐條有解**：`spend_summary` 的
@@ -127,11 +134,6 @@ CASCADE 今早已修、上傳有 50MB 上限、產品照那條查無此事）。
       ＋ **三個 agent 的診斷（程式先壓縮、AI 只判斷、程式排序取前 5）從 T5 搬來這裡**，
       因為它讀的就是這張看板的數字（ADR 0057 §6）。讀數陷阱先記著：廣告層 `effective_status`
       有 12 個值，`DISAPPROVED`／`PENDING_REVIEW` 的廣告花費是 0，**在座標表上長得跟「這個角度沒人要」一模一樣**
-- [ ] **T7（route C，從 T5 切出來）** `channel_revenue` 去重與補欄位：補 `spend`／`campaign_period_id`／
-      `currency`／`ad_channel_id`／`source_row_hash` ＋唯一鍵。**現在手填與無單號的列完全不去重**
-      （唯一索引只開在 `WHERE external_id IS NOT NULL`），同一份 CSV 匯兩次＝營收翻倍，**每個租戶都會中**。
-      不在 T5 是因為它在收入匯入那條路上，不在「座標接成效」那條（ADR 0057 §9）；ADR 0055 §11
-      本輪維持收入走品牌層
 
 ## 仍然成立的事實（不是票，是量到的東西）
 
@@ -316,6 +318,15 @@ Dependabot #1（`nanoid`，修補版 3.3.18）：**`saas` 這邊已經是 3.3.18
 但 GitHub 掃的是預設分支 `master`，那邊還凍在 `v0.1-desktop` 的 3.3.17。警示會亮到 `saas` 併回
 `master` 為止——**不是還沒修，是修在另一條線上**。不為了關掉警示單獨去動凍結的 master。
 
+- [ ] **`_row_hash()` 對 int／float 不穩定，今天靠一道隱性防線擋著（2026-09-04 T7 審查活體證出）**：
+      `app/orders/channel.py` 的 `_row_hash()` 把 `revenue`／`quantity` 直接餵 `json.dumps`，
+      所以 `hash(5000, 3)` ≠ `hash(5000.0, 3.0)`——**審查實跑證實兩個雜湊真的不同**。
+      今天咬不到人的唯一原因是唯一的生產呼叫端 `app/orders/routes_api.py:161,164` 一定先過
+      `str()` ＋ `parse_number()`（`app/shared/web.py:291-298`，回傳型別永遠是 `float | None`），
+      三種 JSON 型別（int／string／float）進去都壓成同一個 float、雜湊完全相同（審查已實跑）。
+      **問題在這道防線是隱性的**：`_row_hash()` 自己不做型別正規化。第二個不走那條路由的呼叫端
+      （補登腳本、後台工具、另一支前端）一出現，去重就靜靜失效，營收翻倍那顆 bug 原樣回來。
+      根治是在 `_row_hash()` 裡把數字統一 `float()`，兩行——但那是金流路徑，要走 route C
 - [ ] **上線前必刪（2026-09-02 建，使用者要求）** `supabase/seed.sql` 尾巴那段排查用帳號：
       `123@example.com` ／ `123456`，固定 UUID、固定組織 `org_bughunt`、固定品牌 `brd_bughunt`。
       每次 `supabase db reset` 自動重建，這正是它存在的理由——重置資料庫來查 bug，不會連查 bug

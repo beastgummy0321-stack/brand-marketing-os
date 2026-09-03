@@ -1049,7 +1049,20 @@ class FileLineCapTest(unittest.TestCase):
 # 模板或呼叫端（`git grep` 四個命中全是它自己、它自己的測試、`BOARD.md`、`docs/tech-debt.md`），
 # 這支「版面守恆」腳本服務的是已刪除的 Jinja／`app/ads/` 舊 UI 世代，React 前端接手後
 # 零呼叫端。`KNOWN_MODULE_SIZES["app/tools"]` 同步 318 → 58。
-TEST_LINES_CEILING = 18467
+#
+# 票 T7（channel_revenue 去重）：18467 → 18515（含本段理由註解自己佔的行）。使用者已在票面
+# 「Line-budget authorisations」段授權調高，終值照票上的規矩——量到的數字，不留餘裕。新增
+# `app/tests/test_orders_channel.py::ManualChannelEntryDedupeTest`（兩支）＋既有
+# `SaveShopeeRowsTest` 一支新斷言：
+#   1. `test_identical_resubmit_updates_not_duplicates`——**money**：手動通路營收表單按兩次要
+#      更新同一列，不是翻倍。證過紅：`record_channel_entry()` 的去重分支暫時改回單純
+#      INSERT（拿掉 SELECT-then-UPDATE-or-INSERT），這支立刻紅在 `2 != 1`；改回去綠。
+#   2. `test_a_genuinely_different_second_entry_still_lands`——**data correctness**：只有
+#      `note` 不同的第二筆手動登記，不能被雜湊誤判成同一筆而漏記（鐵則 8 手動路徑優先）。
+#   3. `SaveShopeeRowsTest` 新斷言（同一個測試方法內，不是新開測試）——**data correctness**：
+#      蝦皮匯入寫的列，新欄位 `source_row_hash` 要是 NULL，不然兩筆金額剛好相同的不同蝦皮
+#      訂單會被新的 partial unique index 誤判成重複，去重修好反而變成漏記營收。
+TEST_LINES_CEILING = 18515
 
 
 def _line_totals() -> tuple:

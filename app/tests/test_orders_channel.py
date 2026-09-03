@@ -96,6 +96,12 @@ class SaveShopeeRowsTest(_BaseChannelTest):
             web.conn, self.bid, since="2026-06-01", until="2026-06-30")
         self.assertEqual(summary["revenue"], 800.0)
         self.assertTrue(summary["marketplace_uncalibrated"])
+        # 票 T7：這條路徑已經靠 external_id 去重，新的 source_row_hash 欄位不歸它管——
+        # 留 NULL，否則兩筆金額剛好一樣的不同蝦皮訂單會被新的 partial unique index 誤判成重複。
+        row_hash = web.conn.execute(
+            "SELECT source_row_hash FROM channel_revenue"
+            " WHERE brand_id = %s AND channel = 'marketplace'", (self.bid,)).fetchone()
+        self.assertIsNone(row_hash["source_row_hash"])
 
     def test_no_rows_in_range_returns_none_not_zero(self):
         summary = orders_repo.channel_revenue_summary(
@@ -170,6 +176,35 @@ class ManualChannelEntryDataCorrectnessTest(_BaseChannelTest):
         self.assertIsNone(summary["revenue"])
         # 不認得的通路、以及「官網不能手動登錄」，都在 test_orders_api.py 的
         # channel-entry 契約測試裡驗（同一個行為不在兩層各測一次）。
+
+
+class ManualChannelEntryDedupeTest(_BaseChannelTest):
+    """票 T7：手動登記本來沒有 external_id，partial unique index 去不了重——按兩次同一張
+    表單＝營收翻倍。保護的是錢（done-check 1）與資料正確性（done-check 2，鐵則 8 手動
+    路徑不能因為去重機制被誤傷）。"""
+
+    def test_identical_resubmit_updates_not_duplicates(self):
+        for _ in range(2):
+            orders_channel.record_channel_entry(
+                web.conn, self.bid, channel="physical_store", entry_date="2026-06-01",
+                revenue=5000, quantity=3, note="到貨", actor=ACTOR)
+        row = web.conn.execute(
+            "SELECT COUNT(*) n, SUM(revenue) s FROM channel_revenue"
+            " WHERE brand_id = %s AND channel = 'physical_store'", (self.bid,)).fetchone()
+        self.assertEqual(row["n"], 1, "按兩次同一張手動登記表單把營收翻倍了")
+        self.assertEqual(float(row["s"]), 5000.0, "重複送出後營收金額變了，不是單純更新")
+
+    def test_a_genuinely_different_second_entry_still_lands(self):
+        orders_channel.record_channel_entry(
+            web.conn, self.bid, channel="physical_store", entry_date="2026-06-01",
+            revenue=5000, quantity=3, note="到貨", actor=ACTOR)
+        orders_channel.record_channel_entry(
+            web.conn, self.bid, channel="physical_store", entry_date="2026-06-01",
+            revenue=5000, quantity=3, note="到貨（補開一趟車，不是同一筆）", actor=ACTOR)
+        count = web.conn.execute(
+            "SELECT COUNT(*) c FROM channel_revenue"
+            " WHERE brand_id = %s AND channel = 'physical_store'", (self.bid,)).fetchone()["c"]
+        self.assertEqual(count, 2, "只有備註不同的第二筆手動登記被誤判成重複，沒有落地")
 
 
 if __name__ == "__main__":
