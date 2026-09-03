@@ -621,7 +621,7 @@ class FileLineCapTest(unittest.TestCase):
 # KNOWN_MODULE_SIZES 已經在用的機制（「允許調高，但必須改這張表」）。
 #
 # 比值本身沒有消失，只是降級成參考值：失敗訊息裡照印，目標仍是 0.7×
-# （docs/workflow-diet.md）。它現在是北極星，不是煞車。
+# （全域 CLAUDE.md）。它現在是北極星，不是煞車。
 #
 # 凍結於 2026-08-30 核准票（fdf619a）落地後的實測值 14,300，**加上改寫這道閘門自己花掉的
 # 5 行**（比值版 14,300 → 絕對行數版 14,305；本檔自己的行數也算進去，所以改閘門就會動到它
@@ -630,20 +630,20 @@ class FileLineCapTest(unittest.TestCase):
 # 2026-08-30 核准票 scope_ref 修正：14,305 → 14,317（含本段註解與 KNOWN_MODULE_SIZES 那筆理由自己佔掉的行）。這次是**真的多寫了 4 行測試**，不是
 # 刪碼造成的被動漲——`test_approval.py` 加了一條斷言，釘住「`scope_ref` 存的是被核准那棵樹
 # 的 id，不是品牌 id」。它守的是資料正確性（事後查得回去「當初簽的是哪一棵」），屬於
-# docs/workflow-diet.md 第 4 條允許的四類之一。先證過紅：把 scope_ref 改回 brand_id，
+# 全域 CLAUDE.md 測試四類允許的四類之一。先證過紅：把 scope_ref 改回 brand_id，
 # 這條斷言就抓到（`'brd_…' != 'llm_…'`）。這正是 ADR 0041 說的「該漲就改這一行、寫理由」。
 #
 # 2026-08-30 票 04-1b 組織時區：14,317 → 14,410（含本段註解自己佔掉的行）。新增兩支：
 # `test_meta_daily_spend.py::SpendDateFollowsOrgTimezoneTest`（相差 26 小時的兩個組織，
 # 同一次拉取必須記在不同的 `spend_date`）與 `test_org_timezone.py`（時區設定壞掉或從沒設過
 # 一律退回預設，不拋例外）。兩者守的都是資料正確性——一筆花費算在哪一天、以及設定壞一格
-# 不會讓那天完全沒有數字——屬 docs/workflow-diet.md 第 4 條允許的四類之一。
+# 不會讓那天完全沒有數字——屬 全域 CLAUDE.md 測試四類允許的四類之一。
 # 先證過紅：把 `today_for_org()` 改回 `datetime.now(UTC).date()`，兩支同時抓到。
 # 初稿寫了四支（+104 行），刪掉跟端到端那支重複的兩支之後才是這個數字：同一件事驗兩遍
 # 不是更安全，是多一份要維護的東西。
 # 2026-08-30 票 04-2 AI 金鑰進 Vault：14,410 → 14,480（含本段註解自己佔掉的行；審查回饋後
 # 修正過一次算法，這是修正後的實測值，不是估的）。test_settings_api.py 新增四支，守的是
-# 資料正確性／租戶隔離（docs/workflow-diet.md 第 4 條）：存金鑰後 app_setting 不留明文、
+# 資料正確性／租戶隔離（全域 CLAUDE.md 測試四類）：存金鑰後 app_setting 不留明文、
 # 舊明文列被清掉；第二次存 secret_id 指標不變（同一個 secret 就地覆寫——不比對
 # vault.secrets 全域列數，那張表全組織共用一個 schema，`-n auto --dist loadfile` 下別的
 # 模組同時 save_token／save_api_key 會讓總數跳動）；清除同時砍掉指標與 secret；兩個組織
@@ -661,7 +661,7 @@ class FileLineCapTest(unittest.TestCase):
 # test_llm_gateway.py：新增 FailInterruptedTasksTest（資料正確性：process 重啟時，中斷的
 # running 列標記失敗，succeeded 列原封不動）。test_approval.py 的 `_succeed_plan_and_tree()`
 # 助手方法同一個改法，不算新測試（既有斷言原封不動，只是等 worker 跑過一次）。三支新斷言
-# 都屬 docs/workflow-diet.md 第 4 條允許的類別（money／API 契約／資料正確性），先證過紅：
+# 都屬 全域 CLAUDE.md 測試四類允許的類別（money／API 契約／資料正確性），先證過紅：
 # 分別把 _display_task_row() 的 running 檢查、enqueue() 之前的順序、
 # fail_interrupted_tasks() 的 WHERE 條件改壞，三支各自單獨抓到。
 # 票 05-1 fix round 1（money）：14,662 → 14,740（含本段註解自己佔掉的行，實測值）。
@@ -673,7 +673,7 @@ class FileLineCapTest(unittest.TestCase):
 # 節點。這支測試守的就是這個：enqueue 一個 creative job、在它被 worker 撿走之前插一列
 # 更新的 running schedule_tree，斷言 job 用的還是 enqueue 當下釘住的那棵樹（
 # `context_scope_json["source_tree_task_id"]` 對得上、prompt 裡看得到真的葉節點名稱），
-# 不是後來插隊的那一列。屬 docs/workflow-diet.md 第 4 條「money」——先證過紅：把
+# 不是後來插隊的那一列。屬 全域 CLAUDE.md 測試四類「money」——先證過紅：把
 # `schedule_creative()` 改回用 `_latest_task_row()` 重讀最新的 schedule_tree，這支立刻
 # 抓到（斷言接住的是 `source_tree_task_id` 對不上，不是隨便崩潰在別的地方）。
 # 票 storage-01：14,740 → 14,861。新檔 app/tests/test_storage.py（對真的本機 Storage
@@ -987,7 +987,7 @@ def _line_totals() -> tuple:
 class TestRatioTest(unittest.TestCase):
     """測試的絕對行數，只准往下（ADR 0041）。
 
-    測試是有人要維護的程式碼，寫得越多不等於越安全（`docs/workflow-diet.md` 第 4 條）。
+    測試是有人要維護的程式碼，寫得越多不等於越安全（全域 `CLAUDE.md` 測試四類）。
     這道閘門把那條原本只是散文的目標接上機器——憲章明文：「一個沒有閘門的數字不是限制」。
 
     量絕對行數而不是比值，是 2026-08-30 的裁決：比值會因為「刪掉 production 死碼」而
@@ -1003,7 +1003,7 @@ class TestRatioTest(unittest.TestCase):
             f"測試行數從 {TEST_LINES_CEILING} 漲到 {tests}"
             f"（production {production} 行，比值 {ratio}，目標 0.7）。\n"
             "先問這條測試守的是哪一件事——金額、租戶隔離、API 契約、資料正確性，四者以外"
-            "不寫（docs/workflow-diet.md 第 4 條）；畫面行為只給 frontend/e2e/smoke.spec.ts "
+            "不寫（全域 CLAUDE.md 測試四類）；畫面行為只給 frontend/e2e/smoke.spec.ts "
             "那一支端到端煙霧測試，不寫單元測試。\n"
             "刪 production 死碼不會讓這道閘門變紅（那正是 2026-08-30 改掉比值版的理由）——"
             "會紅就代表測試真的變多了。真的該漲就改 TEST_LINES_CEILING 那一行、把理由寫在"

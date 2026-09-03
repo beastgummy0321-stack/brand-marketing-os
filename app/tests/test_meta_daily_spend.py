@@ -1,6 +1,6 @@
 """app/tests/test_meta_daily_spend.py — 票 05／S1：每日拉 Meta 花費並顯示，三層都拉。
 
-只寫 docs/workflow-diet.md 第 4 條允許的四類（金額、租戶隔離、API 契約、資料正確性；
+只寫 全域 CLAUDE.md 測試四類允許的四類（金額、租戶隔離、API 契約、資料正確性；
 畫面行為不寫單元測試，只留 frontend/e2e/smoke.spec.ts 一支端到端煙霧測試）：
 
 1. 金額正確：拿票面點名的真實數字當 fixture（BP AD 三檔活動共 NT$172,081，ROAS

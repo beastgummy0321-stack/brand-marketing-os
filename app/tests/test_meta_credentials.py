@@ -1,6 +1,6 @@
 """app/tests/test_meta_credentials.py — 票 04：連接 Meta 廣告帳戶。
 
-四件事，只寫這四件（docs/workflow-diet.md 第 4 條：金額、租戶隔離、API 契約、資料
+四件事，只寫這四件（全域 CLAUDE.md 測試四類：金額、租戶隔離、API 契約、資料
 正確性；畫面行為不寫單元測試，見 04-design-approved.md「Tests」節）：
 
 1. 貼上的權杖經過 Vault 存好；`app_setting` 完全沒被動到，`meta_credential` 沒有任何

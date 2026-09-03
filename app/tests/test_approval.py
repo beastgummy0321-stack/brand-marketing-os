@@ -1,7 +1,7 @@
 """app/tests/test_approval.py — 票 01
 （`.scratch/approval-slice/issues/01-approval-is-the-money-brake.md`，ADR 0040）：核准＝花錢煞車。
 
-只寫這些事（docs/workflow-diet.md 第 4 條）：金額伺服器算、`content_hash` 排除清單、
+只寫這些事（全域 CLAUDE.md 測試四類）：金額伺服器算、`content_hash` 排除清單、
 租戶隔離、API 契約、超支比對兩個時間窗必須對齊。只用 FakeProvider，不發真實網路請求。
 
 票 05-1：`_succeed_plan_and_tree()` 用到的 POST .../plans、.../tree 兩支現在只 enqueue，

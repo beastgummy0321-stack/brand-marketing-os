@@ -1,6 +1,6 @@
 """app/tests/test_dashboard_brand_month.py — 票 06：品牌頁本月花費／營收／毛利／ROAS 併桌。
 
-五件事，只寫這五件（docs/workflow-diet.md 第 4 條）：
+五件事，只寫這五件（全域 CLAUDE.md 測試四類）：
 1. 金額正確：花費（app.meta）＋營收（app.orders 訂單實收）＋毛利（逐 SKU 成本，部分
    SKU 沒登記成本時只算已知的那部分）＋ROAS（營收 ÷ 花費）四個數字對得上手算的真實值。
 2. 租戶隔離：另一個組織讀不到這個品牌的月報，404。
