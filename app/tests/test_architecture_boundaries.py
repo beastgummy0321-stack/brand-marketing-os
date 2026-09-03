@@ -960,7 +960,16 @@ class FileLineCapTest(unittest.TestCase):
 # `IDENTITY_ALLOW_HS256=1` 時會 `RuntimeError` 拒絕啟動（守執行期），`.env.example` 出廠
 # 沒有打開這個變數也沒有帶那把示範密鑰（守模板，擋回歸）。沒有第二支重複驗證同一件事，
 # 這是 ticket 本身明講的測試預算。
-TEST_LINES_CEILING = 17867
+#
+# 票 schedule-extract-state：17867 → 17877（含本段理由註解自己佔的行）。**一支新測試都沒有**
+# ——這 +1 行是一句 import：`_load_platform_data()` 從 `routes.py` 搬進 `state.py`，
+# `test_approval.py` 必須跟著多一行 `from app.schedule import state as schedule_state`，
+# 否則整個測試檔在 collect 當下就 `AttributeError`。`test_schedule.py` 那邊先加後刪抵銷成淨零，
+# 只有這個檔少不掉。實作者拒絕自己調這個數字、回報 blocked-upstream，是對的：本票第 5 項
+# 只授權他在 `KNOWN_MODULE_SIZES` 真的變紅時調那一個尺，沒有延伸到這裡。裁決在主對話台，
+# 判準用 `docs/tech-debt.md` §六那一句——「新增的行數是那張票的交付物本身，還是為了繞過閘門
+# 塞進來的？」搬家要求的 import 是前者。
+TEST_LINES_CEILING = 17877
 
 
 def _line_totals() -> tuple:

@@ -40,7 +40,7 @@ from app.schedule import creative as creative_mod
 from app.schedule import jobs as schedule_jobs
 from app.schedule import period as period_mod
 from app.schedule import plan as plan_mod
-from app.schedule import routes as schedule_routes
+from app.schedule import state as schedule_state
 from app.schedule import tree as tree_mod
 
 from .identity_test_helpers import mint_hs256
@@ -49,7 +49,7 @@ ACTOR = "測試員"
 
 # 有效的平台／目標——照 app/schedule/platform_objectives.json 的內容取，測試不重寫一份
 # 平行的資料（改資料檔不用跟著改這裡）。
-_DATA = schedule_routes._load_platform_data()
+_DATA = schedule_state._load_platform_data()
 VALID_PLATFORM = next(p["id"] for p in _DATA["platforms"] if p["enabled"])
 VALID_OBJECTIVE = next(o["value"] for o in _DATA["objectives"] if o["platform"] == VALID_PLATFORM)
 DISABLED_PLATFORM = next(p["id"] for p in _DATA["platforms"] if not p["enabled"])
@@ -746,7 +746,7 @@ class QueuedGenerationTest(_ScheduleApiTestBase):
         web.conn.commit()
 
     def test_second_post_while_one_is_running_is_refused_and_defers_no_second_job(self):
-        self._insert_running_row(schedule_routes.TASK_TYPE)
+        self._insert_running_row(schedule_state.TASK_TYPE)
         fake = _fake(_fenced_plans([_one_plan()]))
         schedule_jobs.PROVIDER = fake
 
@@ -781,8 +781,8 @@ class QueuedGenerationTest(_ScheduleApiTestBase):
         resp = self._post(plan_count=1)
         self.assertEqual(resp.status_code, 200, resp.text)
         self._run_worker()
-        succeeded_plan_id = schedule_routes._latest_task_row(
-            web.conn, self.brand["id"], schedule_routes.TASK_TYPE
+        succeeded_plan_id = schedule_state._latest_task_row(
+            web.conn, self.brand["id"], schedule_state.TASK_TYPE
         )["id"]
 
         schedule_jobs.PROVIDER = _fake(_tree_fenced(_one_tree_nodes()))
@@ -791,8 +791,8 @@ class QueuedGenerationTest(_ScheduleApiTestBase):
         )
         self.assertEqual(resp.status_code, 200, resp.text)
         self._run_worker()
-        succeeded_tree_id = schedule_routes._latest_task_row(
-            web.conn, self.brand["id"], schedule_routes.TREE_TASK_TYPE
+        succeeded_tree_id = schedule_state._latest_task_row(
+            web.conn, self.brand["id"], schedule_state.TREE_TASK_TYPE
         )["id"]
 
         fake = _fake(_creative_fenced([_one_creative("單元1"), _one_creative("單元2")]))
@@ -805,7 +805,7 @@ class QueuedGenerationTest(_ScheduleApiTestBase):
         # 帶著真的 source_plan_task_id（跟真正的 schedule_tree job 會寫的一樣），才會真的
         # 讓舊版重讀「最新」的 bug 打到代理、燒錢產出空樹的內容，不是隨便崩潰在別的地方。
         self._insert_running_row(
-            schedule_routes.TREE_TASK_TYPE,
+            schedule_state.TREE_TASK_TYPE,
             context_scope={
                 "brand_id": self.brand["id"], "plan_index": 0, "daily_budget": 3000.0,
                 "source_plan_task_id": succeeded_plan_id,
@@ -814,8 +814,8 @@ class QueuedGenerationTest(_ScheduleApiTestBase):
 
         self._run_worker()
 
-        creative_row = schedule_routes._latest_task_row(
-            web.conn, self.brand["id"], schedule_routes.CREATIVE_TASK_TYPE
+        creative_row = schedule_state._latest_task_row(
+            web.conn, self.brand["id"], schedule_state.CREATIVE_TASK_TYPE
         )
         self.assertEqual(
             creative_row["context_scope_json"]["source_tree_task_id"], succeeded_tree_id,
@@ -1710,8 +1710,8 @@ class CreativeApiContractTest(_ScheduleApiTestBase):
 
     def test_running_creative_renders_as_running_not_failure(self):
         self._succeed_plan_and_tree()
-        tree_row = schedule_routes._latest_task_row(
-            web.conn, self.brand["id"], schedule_routes.TREE_TASK_TYPE
+        tree_row = schedule_state._latest_task_row(
+            web.conn, self.brand["id"], schedule_state.TREE_TASK_TYPE
         )
         web.conn.execute(
             "INSERT INTO llm_task (id, org_id, brand_id, task_type, context_scope_json,"
@@ -1722,7 +1722,7 @@ class CreativeApiContractTest(_ScheduleApiTestBase):
             " 'running', 1, %s)",
             (
                 coredb.new_id("llm"), coredb.DEV_ORG_ID, self.brand["id"],
-                schedule_routes.CREATIVE_TASK_TYPE,
+                schedule_state.CREATIVE_TASK_TYPE,
                 coredb.jsonb({
                     "brand_id": self.brand["id"], "source_tree_task_id": tree_row["id"],
                     "plan_index": 0,

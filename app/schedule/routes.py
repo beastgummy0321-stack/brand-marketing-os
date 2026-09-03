@@ -55,7 +55,6 @@ from app.brand_intelligence import repository as bi_repo
 from app.core import approval as approval_mod
 from app.core import rule_cards
 from app.core import settings as coresettings
-from app.core.db import APP_DIR
 from app.llm import gateway
 from app.meta import repository as meta_repo
 from app.schedule import binding as binding_mod
@@ -63,33 +62,10 @@ from app.schedule import creative as creative_mod
 from app.schedule import period as period_mod
 from app.schedule import plan as plan_mod
 from app.schedule import repository as schedule_repo
+from app.schedule import state
 
 router = APIRouter(prefix="/api/schedule")
 
-# task_type：providers.py TASK_TYPE_LABELS／TASK_DEFAULTS 的 "schedule_plan"（票 07 settled 段：
-# 重新命名死掉的 campaign_plan，不是新增第二個型別）。
-TASK_TYPE = "schedule_plan"
-# 票 09：選定一個方案之後展開成三層活動樹，第二個 task_type，同一支 llm_task 表。
-TREE_TASK_TYPE = "schedule_tree"
-# 票 01（`.scratch/creative-slice/issues/01-ad-creative-per-ad-node.md`）：把展開好的活動樹
-# 每個最深層節點各配一份內容，第三個 task_type，同一支 llm_task 表（frozen decision 1）。
-CREATIVE_TASK_TYPE = "schedule_creative"
-# 對照 app/methodology/README.md 既有的「檔期計畫生成」列，不新增列——展開活動樹用的到的
-# 平台知識（帳戶結構、AB 測試分流）跟出方案是同一批，沒有真的用到才新增專屬列（維護規則
-# 「只按消費拉動萃取」）。
-METHODOLOGY_TASK_LABELS = ["檔期計畫生成"]
-# 票 T1 站③收尾：曾經跟上面共用一張清單餵給三支 job，副作用是計畫／活動樹的方法論區塊
-# 平白多讀到創意矩陣、Meta 版位格式規格這兩份不相干的檔案（21,432 → 38,074 字，＋78%）。
-# 改成 schedule_creative 專屬一張清單，計畫／活動樹維持只吃「檔期計畫生成」。
-CREATIVE_METHODOLOGY_TASK_LABELS = ["廣告內容生成"]
-DEPARTMENT_FILE = APP_DIR / "departments" / "ads" / "schedule.md"
-TREE_DEPARTMENT_FILE = APP_DIR / "departments" / "ads" / "campaign_tree.md"
-# 票 01 frozen decision 2：這是創意部門的第一個任務檔，`app/departments/` 底下新增一個
-# 資料夾，程式一行不改（ADR 0028）——這裡只是讀檔路徑，不是新的 Python 套件。
-CREATIVE_DEPARTMENT_FILE = APP_DIR / "departments" / "creative" / "ad_creative.md"
-# 平台／行銷目標資料檔（票 08 §3）：改這個檔案不必重新部署程式；每次讀都重新讀檔
-# （不快取到模組層），比照 DEPARTMENT_FILE 既有的讀法。
-PLATFORM_DATA_FILE = APP_DIR / "schedule" / "platform_objectives.json"
 
 # 票 05-1：這一份端點驗證通過就 enqueue，第二次按下去在這一份 llm_task 列還在跑的時候
 # 一律回這個訊息——三支端點共用同一個 code／message，不必各自造一句。
@@ -140,77 +116,6 @@ class CreateCoordinateRequest(BaseModel):
 
 class DisableCoordinateRequest(BaseModel):
     disabled: bool = True
-
-
-def _load_platform_data() -> dict:
-    return json.loads(PLATFORM_DATA_FILE.read_text(encoding="utf-8"))
-
-
-def _latest_task_row(conn, brand_id: str, task_type: str) -> dict | None:
-    row = conn.execute(
-        "SELECT * FROM llm_task WHERE brand_id = %s AND task_type = %s "
-        "ORDER BY started_at DESC LIMIT 1",
-        (brand_id, task_type),
-    ).fetchone()
-    return dict(row) if row is not None else None
-
-
-def _display_task_row(conn, brand_id: str, task_type: str) -> tuple:
-    """回傳 (要顯示的那一列, 有沒有更新的一次正在跑)。
-
-    2026-08-29：原本畫面一律拿 `started_at` 最新的那一列，於是「還在跑的這一次」會蓋掉
-    「上一次已經成功的樹」——12,815 字算好的結果就在隔壁列，使用者卻只看得到一句
-    「展開失敗，請重新展開一次」，按下去又開一個 running，再蓋掉一次。已經算出來的東西
-    不該被下一次嘗試抹掉：正在跑的時候繼續顯示上一次成功的結果，另外標明有一次在跑。
-    """
-    newest = _latest_task_row(conn, brand_id, task_type)
-    if newest is None or newest["status"] != "running":
-        return newest, False
-    row = conn.execute(
-        "SELECT * FROM llm_task WHERE brand_id = %s AND task_type = %s AND status = 'succeeded' "
-        "ORDER BY started_at DESC LIMIT 1",
-        (brand_id, task_type),
-    ).fetchone()
-    return (dict(row) if row is not None else newest), True
-
-
-def _plan_count_bounds(conn, brand_id: str) -> tuple[int, int]:
-    plan_count_min = rule_cards.get_value(conn, brand_id, "schedule_plan_count", "plan_count_min")
-    plan_count_max = rule_cards.get_value(conn, brand_id, "schedule_plan_count", "plan_count_max")
-    return int(plan_count_min), int(plan_count_max)  # get_value 回 float，這裡才是個數，轉 int
-
-
-def _current_month_window(conn, org_id: str) -> tuple:
-    """[月初, 下月初) 半開區間——跟 app/meta/routes.py brand_spend 同一個窗口（票 11
-    settled 段第 9 點：綁定節點的花費／ROAS 用這一期，不是另開一套時間規則）。
-
-    「今天」用組織自己的時區算（票 04-1b），跟 brand_spend 同一個來源。"""
-    today = coresettings.today_for_org(conn, org_id=org_id)
-    month_start = today.replace(day=1)
-    month_end = (month_start + timedelta(days=32)).replace(day=1)
-    return month_start, month_end
-
-
-def _fill_node_spend(conn, org_id: str, brand_id: str, tree: dict) -> None:
-    """票 11：把已綁定的第一層節點對上 ticket 05 的當月花費／ROAS——一棵樹裡沒有任何
-    節點綁定，就完全不查（省一次查詢），比對用 campaign_id，不重讀名稱。
-
-    `level="campaign"`（票 S1）：這棵樹綁定的是第一層節點，meta_entity_spend 三層共用
-    一張表，不篩層級會把 adset／ad 層的花費一起加進來，變成三倍。"""
-    bound_ids = {n["bound_external_id"] for n in tree["nodes"] if n["bound_external_id"]}
-    if not bound_ids:
-        return
-    account_ids = meta_repo.bound_account_ids_for_brand(conn, org_id, brand_id)
-    month_start, month_end = _current_month_window(conn, org_id)
-    summary = meta_repo.spend_summary(
-        conn, org_id, account_ids, month_start, month_end, level="campaign",
-    )
-    by_campaign_id = {e["entity_id"]: e for e in summary["entities"]}
-    for node in tree["nodes"]:
-        campaign = by_campaign_id.get(node["bound_external_id"])
-        if campaign is not None:
-            node["spend"] = campaign["spend"]
-            node["roas"] = campaign["roas"]
 
 
 # ---------------------------------------------------------------------------
@@ -312,77 +217,6 @@ def _fill_approval(conn, org_id: str, brand_id: str, tree: dict) -> None:
     }
 
 
-def _leaf_ad_nodes(nodes: list) -> list[dict]:
-    """活動樹最深層（沒有 `children` 的）節點，照文件順序（深度優先、前序）——票 01：
-    內容跟這一層的節點一一對應，不是每一層都配一份。每個元素 `{"node_key", "name"}`
-    （票 T3d，ADR 0055 §1：身分是 `node_key`，`name` 只給代理比對用）。"""
-    result = []
-    for node in nodes:
-        if node["children"]:
-            result.extend(_leaf_ad_nodes(node["children"]))
-        else:
-            result.append({"node_key": node["node_key"], "name": node["name"]})
-    return result
-
-
-def _creative_ad_nodes(conn, creative_row: dict, org_id: str, brand_id: str) -> list[dict]:
-    """從這一列內容任務凍結的 `source_tree_task_id` 找回當時的那棵樹，重算最深層節點——
-    frozen decision 5：只能讀凍結住的那一列，不能讀「最新一次的樹」。"""
-    source_tree_task_id = (creative_row.get("context_scope_json") or {}).get("source_tree_task_id")
-    if not source_tree_task_id:
-        return []
-    tree_row = gateway.get_task(conn, source_tree_task_id)
-    if tree_row is None:
-        return []
-    tree = binding_mod.tree_with_bindings(conn, tree_row, org_id, brand_id)
-    return _leaf_ad_nodes(tree["nodes"])
-
-
-def _brand_response(conn, brand_id: str, org_id: str) -> dict:
-    current_daily_budget = rule_cards.get_value(conn, brand_id, "schedule_budget", "daily_budget")
-    plan_count_min, plan_count_max = _plan_count_bounds(conn, brand_id)
-    data = _load_platform_data()
-    row, plan_running = _display_task_row(conn, brand_id, TASK_TYPE)
-    plan = plan_mod.plan_from_task_row(row) if row is not None else None
-    if plan is not None and plan_running:
-        plan["running"] = True
-    tree_row, tree_running = _display_task_row(conn, brand_id, TREE_TASK_TYPE)
-    tree = (binding_mod.tree_with_bindings(conn, tree_row, org_id, brand_id)
-            if tree_row is not None else None)
-    if tree is not None and tree_running:
-        tree["running"] = True
-    if tree is not None:
-        _fill_node_spend(conn, org_id, brand_id, tree)
-        _fill_approval(conn, org_id, brand_id, tree)
-    creative_row, creative_running = _display_task_row(conn, brand_id, CREATIVE_TASK_TYPE)
-    creative = None
-    if creative_row is not None:
-        ad_nodes = _creative_ad_nodes(conn, creative_row, org_id, brand_id)
-        creative = creative_mod.creative_from_task_row(creative_row, ad_nodes)
-        if creative_running:
-            creative["running"] = True
-        # 票 T1b：內容一旦成功就落地成 creative_slot／creative_candidate／
-        # creative_candidate_item——跟 35 個座標種子同一套「讀的時候順手確保落地」寫法，
-        # 冪等（見 schedule_repo.persist_creative_result 檔頭），這裡不判斷「是不是第一次
-        # 讀」，每次成功讀都呼叫一次，函式自己用 llm_task_id 擋掉重複寫入。
-        if creative["failure"] is None and not creative["running"]:
-            schedule_repo.persist_creative_result(
-                conn, org_id, brand_id, creative["task_id"],
-                creative["source_tree_task_id"], creative["ads"],
-            )
-    return {
-        "daily_budget": current_daily_budget,
-        "plan_count_min": plan_count_min,
-        "plan_count_max": plan_count_max,
-        "platforms": data["platforms"],
-        "objectives": data["objectives"],
-        "plan": plan,
-        "tree": tree,
-        "creative": creative,
-        "period": period_mod.brand_period_response(conn, org_id, brand_id),
-    }
-
-
 def _validate_products(conn, brand_id: str, product_ids: list) -> list:
     """驗證之外還回傳選定產品的名稱（順序照使用者送來的），給 `_plan_params_text` 列進
     prompt。名稱非得從這裡帶出去不可：`context_compiler.compile()` 只吐「已確認的事實／
@@ -411,7 +245,7 @@ def _validate_platform_and_objective(data: dict, platform: str, objective: str) 
 
 
 def _validate_plan_count(conn, brand_id: str, plan_count: int) -> None:
-    plan_count_min, plan_count_max = _plan_count_bounds(conn, brand_id)
+    plan_count_min, plan_count_max = state._plan_count_bounds(conn, brand_id)
     if not (plan_count_min <= plan_count <= plan_count_max):
         raise web.ApiError(
             400, "plan_count_out_of_range",
@@ -433,7 +267,7 @@ def _run_tree(conn, brand_id: str, org_id: str, body: "TreeRequest") -> dict:
     在這裡（enqueue 當下）就釘進 job 參數，job 執行時不重讀「這個品牌最新一次」（fix
     round 1：frozen decision 3 的「一次一個」是按 task type 算的，這中間可能已經有另一種
     工作的新列插進來）。"""
-    plan_row = _latest_task_row(conn, brand_id, TASK_TYPE)
+    plan_row = state._latest_task_row(conn, brand_id, state.TASK_TYPE)
     if plan_row is None or plan_row["status"] != "succeeded":
         raise web.ApiError(400, "no_plan", NO_PLAN_TO_EXPAND_MESSAGE)
 
@@ -444,16 +278,17 @@ def _run_tree(conn, brand_id: str, org_id: str, body: "TreeRequest") -> dict:
         raise web.ApiError(400, "plan_index_out_of_range", PLAN_INDEX_OUT_OF_RANGE_MESSAGE)
 
     gateway.check_spend_cap(conn, org_id=org_id)
-    if _display_task_row(conn, brand_id, TREE_TASK_TYPE)[1]:
+    if state._display_task_row(conn, brand_id, state.TREE_TASK_TYPE)[1]:
         raise _already_running_error()
     period = schedule_repo.get_latest_period(conn, org_id, brand_id)
     if not background_enqueue(
-        f"background.{TREE_TASK_TYPE}", org_id=org_id, lock=f"{TREE_TASK_TYPE}:{brand_id}",
+        f"background.{state.TREE_TASK_TYPE}", org_id=org_id,
+        lock=f"{state.TREE_TASK_TYPE}:{brand_id}",
         brand_id=brand_id, plan_index=body.plan_index, plan_task_id=plan_row["id"],
         campaign_period_id=period["id"] if period else None,
     ):
         raise _already_running_error()
-    return _brand_response(conn, brand_id, org_id)
+    return state._brand_response(conn, brand_id, org_id)
 
 
 def _run_creative(conn, brand_id: str, org_id: str) -> dict:
@@ -463,25 +298,26 @@ def _run_creative(conn, brand_id: str, org_id: str) -> dict:
     「先驗證、後花錢」次序）。真正產內容、把來源樹的 id 凍結進 `context_scope_json`
     （frozen decision 5）在 `app/schedule/jobs.py` 的 `schedule_creative()`——`tree_row["id"]`
     同樣在這裡釘進 job 參數，理由見 `_run_tree()` 的 fix round 1 註解。"""
-    tree_row = _latest_task_row(conn, brand_id, TREE_TASK_TYPE)
+    tree_row = state._latest_task_row(conn, brand_id, state.TREE_TASK_TYPE)
     if tree_row is None or tree_row["status"] != "succeeded":
         raise web.ApiError(400, "no_tree", NO_TREE_TO_GENERATE_CREATIVE_MESSAGE)
     tree = binding_mod.tree_with_bindings(conn, tree_row, org_id, brand_id)
-    ad_nodes = _leaf_ad_nodes(tree["nodes"]) if tree["failure"] is None else []
+    ad_nodes = state._leaf_ad_nodes(tree["nodes"]) if tree["failure"] is None else []
     if not ad_nodes:
         raise web.ApiError(400, "no_tree", NO_TREE_TO_GENERATE_CREATIVE_MESSAGE)
 
     gateway.check_spend_cap(conn, org_id=org_id)
-    if _display_task_row(conn, brand_id, CREATIVE_TASK_TYPE)[1]:
+    if state._display_task_row(conn, brand_id, state.CREATIVE_TASK_TYPE)[1]:
         raise _already_running_error()
     current_period = schedule_repo.get_latest_period(conn, org_id, brand_id)
     if not background_enqueue(
-        f"background.{CREATIVE_TASK_TYPE}", org_id=org_id,
-        lock=f"{CREATIVE_TASK_TYPE}:{brand_id}", brand_id=brand_id, tree_task_id=tree_row["id"],
+        f"background.{state.CREATIVE_TASK_TYPE}", org_id=org_id,
+        lock=f"{state.CREATIVE_TASK_TYPE}:{brand_id}", brand_id=brand_id,
+        tree_task_id=tree_row["id"],
         campaign_period_id=current_period["id"] if current_period else None,
     ):
         raise _already_running_error()
-    return _brand_response(conn, brand_id, org_id)
+    return state._brand_response(conn, brand_id, org_id)
 
 
 def _run_plan(conn, brand_id: str, org_id: str, body: "PlanRequest") -> dict:
@@ -490,7 +326,7 @@ def _run_plan(conn, brand_id: str, org_id: str, body: "PlanRequest") -> dict:
     `app/schedule/jobs.py` 的 `schedule_plan()`（worker 執行，見該檔檔頭「為什麼分兩邊」）。
     """
     _validate_products(conn, brand_id, body.product_ids)
-    data = _load_platform_data()
+    data = state._load_platform_data()
     _validate_platform_and_objective(data, body.platform, body.objective)
     _validate_plan_count(conn, brand_id, body.plan_count)
     start_date, end_date, dates_code, dates_message = period_mod.validate_dates(
@@ -514,16 +350,16 @@ def _run_plan(conn, brand_id: str, org_id: str, body: "PlanRequest") -> dict:
     )
 
     gateway.check_spend_cap(conn, org_id=org_id)
-    if _display_task_row(conn, brand_id, TASK_TYPE)[1]:
+    if state._display_task_row(conn, brand_id, state.TASK_TYPE)[1]:
         raise _already_running_error()
     if not background_enqueue(
-        f"background.{TASK_TYPE}", org_id=org_id, lock=f"{TASK_TYPE}:{brand_id}",
+        f"background.{state.TASK_TYPE}", org_id=org_id, lock=f"{state.TASK_TYPE}:{brand_id}",
         brand_id=brand_id, product_ids=body.product_ids, platform=body.platform,
         objective=body.objective, promotion_note=body.promotion_note,
         plan_count=body.plan_count, campaign_period_id=period_id,
     ):
         raise _already_running_error()
-    return _brand_response(conn, brand_id, org_id)
+    return state._brand_response(conn, brand_id, org_id)
 
 
 # 票 10-feedback-entries（ADR 0037）：soft 回饋允許的類別——vocab.py RULE_TYPES 新增的
@@ -568,7 +404,7 @@ def _run_reject(conn, brand_id: str, actor, body: "RejectRequest") -> dict:
     把回饋文字直接塞進 prompt 的路徑。"""
     validated = _validate_reject_entries(body.entries)
 
-    plan_row = _latest_task_row(conn, brand_id, TASK_TYPE)
+    plan_row = state._latest_task_row(conn, brand_id, state.TASK_TYPE)
     if plan_row is None or plan_row["status"] != "succeeded":
         raise web.ApiError(400, "no_plan", NO_PLAN_TO_RERUN_MESSAGE)
     scope = plan_row.get("context_scope_json") or {}
@@ -598,12 +434,12 @@ def _run_bind(conn, brand_id: str, org_id: str) -> dict:
     """綁定的本體住在 `binding.py`（票 T3c 站①：那是做事，不是收請求）。這裡只留路由該做
     的三件事：先驗證有沒有一棵可以綁的樹（比照 `_run_tree` 的「先驗證、後動作」次序）、
     交給 `binding.bind_tree()`、把整批共用的失敗訊息貼回回應。"""
-    tree_row = _latest_task_row(conn, brand_id, TREE_TASK_TYPE)
+    tree_row = state._latest_task_row(conn, brand_id, state.TREE_TASK_TYPE)
     if tree_row is None or tree_row["status"] != "succeeded":
         raise web.ApiError(400, "no_tree", binding_mod.NO_TREE_TO_BIND_MESSAGE)
 
     any_failure = binding_mod.bind_tree(conn, tree_row, org_id, brand_id)
-    response = _brand_response(conn, brand_id, org_id)
+    response = state._brand_response(conn, brand_id, org_id)
     # settled 段第 7 點：這個欄位只在這支路由的回應裡非空、從不落地，其餘讀取路徑一律 null。
     response["tree"]["bind_failure"] = binding_mod.BIND_FAILURE_MESSAGE if any_failure else None
     return response
@@ -614,7 +450,7 @@ def _run_approve(conn, brand_id: str, org_id: str, actor: str) -> dict:
     「樹」長什麼樣子（集裝箱憲章）。先驗證有沒有一棵可以核准的樹，再落地（比照
     `_run_tree`／`_run_bind` 的「先驗證、後動作」次序）。舊列從不覆寫，一次核准就是
     一列新的（ticket 明文）。"""
-    tree_row = _latest_task_row(conn, brand_id, TREE_TASK_TYPE)
+    tree_row = state._latest_task_row(conn, brand_id, state.TREE_TASK_TYPE)
     if tree_row is None or tree_row["status"] != "succeeded":
         raise web.ApiError(400, "no_tree", NO_TREE_TO_APPROVE_MESSAGE)
     tree = binding_mod.tree_with_bindings(conn, tree_row, org_id, brand_id)
@@ -630,7 +466,7 @@ def _run_approve(conn, brand_id: str, org_id: str, actor: str) -> dict:
     # （例如已經核准過一次）就什麼都不做——approval.py 自己已經 commit 過，這裡是同一個
     # 請求裡緊接著的下一個落地動作，不是另開一支路由。
     schedule_repo.approve_draft_period(conn, org_id, brand_id)
-    return _brand_response(conn, brand_id, org_id)
+    return state._brand_response(conn, brand_id, org_id)
 
 
 def _run_approve_revoke(conn, brand_id: str, org_id: str, actor: str) -> dict:
@@ -642,7 +478,7 @@ def _run_approve_revoke(conn, brand_id: str, org_id: str, actor: str) -> dict:
     )
     if approval_row is not None:
         approval_mod.revoke(conn, approval_id=approval_row["id"], org_id=org_id, actor=actor)
-    return _brand_response(conn, brand_id, org_id)
+    return state._brand_response(conn, brand_id, org_id)
 
 
 def _run_settle(conn, brand_id: str, org_id: str, period_id: str, actor: str) -> dict:
@@ -656,14 +492,14 @@ def _run_settle(conn, brand_id: str, org_id: str, period_id: str, actor: str) ->
         raise web.NotFoundKind("檔期")
     if error == "not_started":
         raise web.ApiError(400, "not_started", period_mod.NOT_STARTED_MESSAGE)
-    return _brand_response(conn, brand_id, org_id)
+    return state._brand_response(conn, brand_id, org_id)
 
 
 @router.get("/brands/{brand_id}")
 def get_schedule(request: Request, brand_id: str):
     actor = web.require_actor(request)
     web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
-    return _brand_response(web.conn, brand_id, actor.org_id)
+    return state._brand_response(web.conn, brand_id, actor.org_id)
 
 
 @router.post("/brands/{brand_id}/plans")

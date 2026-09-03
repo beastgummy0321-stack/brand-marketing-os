@@ -43,7 +43,7 @@ from app.core.db import connection
 from app.llm import context_compiler, gateway, methodology, providers
 from app.schedule import binding as binding_mod
 from app.schedule import plan as plan_mod
-from app.schedule import routes
+from app.schedule import routes, state
 
 # 唯一的供應商實例：這三支 task body 現在是全站唯一真的打代理的地方（routes.py 的三支 POST
 # 端點自己不再打），比照 routes.py 搬過來之前的既有寫法——測試用
@@ -116,7 +116,7 @@ def schedule_plan(org_id: str, brand_id: str, product_ids: list, platform: str, 
     驗證通過、`enqueue()` 成功之後，真正打代理、寫 `llm_task` 的地方。"""
     with connection() as conn:
         product_names = routes._validate_products(conn, brand_id, product_ids)
-        data = routes._load_platform_data()
+        data = state._load_platform_data()
         daily_budget = rule_cards.get_value(conn, brand_id, "schedule_budget", "daily_budget")
         platform_label = next(p["label"] for p in data["platforms"] if p["id"] == platform)
         objective_label = next(
@@ -127,9 +127,9 @@ def schedule_plan(org_id: str, brand_id: str, product_ids: list, platform: str, 
         brand_context, knowledge_item_ids, brand_version = _compile_brand_context(
             conn, brand_id, product_ids
         )
-        department_text = routes.DEPARTMENT_FILE.read_text(encoding="utf-8")
+        department_text = state.DEPARTMENT_FILE.read_text(encoding="utf-8")
         methodology_result = methodology.compile(
-            conn, routes.METHODOLOGY_TASK_LABELS, brand_id=brand_id
+            conn, state.METHODOLOGY_TASK_LABELS, brand_id=brand_id
         )
         params_text = _plan_params_text(
             platform_label, objective_label, promotion_note, plan_count, product_names
@@ -150,8 +150,8 @@ def schedule_plan(org_id: str, brand_id: str, product_ids: list, platform: str, 
             product_version=None,
         )
         gateway.run_task(
-            conn, PROVIDER, brand_id=brand_id, task_type=routes.TASK_TYPE,
-            prompt_template_id=routes.TASK_TYPE, prompt_template_version="v1",
+            conn, PROVIDER, brand_id=brand_id, task_type=state.TASK_TYPE,
+            prompt_template_id=state.TASK_TYPE, prompt_template_version="v1",
             system=None, messages=[{"role": "user", "content": prompt}], context=context,
             campaign_period_id=campaign_period_id,
             # 網路搜尋暫緩（ADR 0048）：這裡曾傳 tools=[providers.WEB_SEARCH_TOOL]。機制還在，
@@ -182,7 +182,7 @@ def schedule_tree(org_id: str, brand_id: str, plan_index: int, plan_task_id: str
         plans, _failure = plan_mod.build_plans(plan_row.get("rendered_output") or "", daily_budget)
         chosen_plan = plans[plan_index]
 
-        data = routes._load_platform_data()
+        data = state._load_platform_data()
         platform_label = next(
             (p["label"] for p in data["platforms"] if p["id"] == platform), platform
         )
@@ -190,9 +190,9 @@ def schedule_tree(org_id: str, brand_id: str, plan_index: int, plan_task_id: str
         brand_context, knowledge_item_ids, brand_version = _compile_brand_context(
             conn, brand_id, product_ids
         )
-        department_text = routes.TREE_DEPARTMENT_FILE.read_text(encoding="utf-8")
+        department_text = state.TREE_DEPARTMENT_FILE.read_text(encoding="utf-8")
         methodology_result = methodology.compile(
-            conn, routes.METHODOLOGY_TASK_LABELS, brand_id=brand_id
+            conn, state.METHODOLOGY_TASK_LABELS, brand_id=brand_id
         )
         params_text = _tree_params_text(platform_label, plan_index, chosen_plan)
         prompt = "\n\n".join(
@@ -210,8 +210,8 @@ def schedule_tree(org_id: str, brand_id: str, plan_index: int, plan_task_id: str
             product_version=None,
         )
         gateway.run_task(
-            conn, PROVIDER, brand_id=brand_id, task_type=routes.TREE_TASK_TYPE,
-            prompt_template_id=routes.TREE_TASK_TYPE, prompt_template_version="v1",
+            conn, PROVIDER, brand_id=brand_id, task_type=state.TREE_TASK_TYPE,
+            prompt_template_id=state.TREE_TASK_TYPE, prompt_template_version="v1",
             system=None, messages=[{"role": "user", "content": prompt}], context=context,
             options=gateway.TaskOptions(max_tokens=24000, timeout_s=480.0),
             campaign_period_id=campaign_period_id,
@@ -244,13 +244,13 @@ def schedule_creative(org_id: str, brand_id: str, tree_task_id: str,
         brand_context, knowledge_item_ids, brand_version = _compile_brand_context(
             conn, brand_id, product_ids
         )
-        department_text = routes.CREATIVE_DEPARTMENT_FILE.read_text(encoding="utf-8")
+        department_text = state.CREATIVE_DEPARTMENT_FILE.read_text(encoding="utf-8")
         # 票 T1：跟 schedule_plan／schedule_tree 一樣接方法論——這支 job 過去沒有這一段，
         # `creative-matrix.md`（35 個角度）與 `meta-format-specs.md`（5 個變體、字數上限）
         # 都沒有真的貼進 prompt，代理只能自己亂猜。票 T1 站③收尾：改用自己專屬一張清單
-        # （見 routes.CREATIVE_METHODOLOGY_TASK_LABELS 的理由註解），不再跟計畫／活動樹共用。
+        # （見 state.CREATIVE_METHODOLOGY_TASK_LABELS 的理由註解），不再跟計畫／活動樹共用。
         methodology_result = methodology.compile(
-            conn, routes.CREATIVE_METHODOLOGY_TASK_LABELS, brand_id=brand_id
+            conn, state.CREATIVE_METHODOLOGY_TASK_LABELS, brand_id=brand_id
         )
         params_text = _creative_params_text(tree)
         prompt = "\n\n".join(
@@ -268,8 +268,8 @@ def schedule_creative(org_id: str, brand_id: str, tree_task_id: str,
             product_version=None,
         )
         gateway.run_task(
-            conn, PROVIDER, brand_id=brand_id, task_type=routes.CREATIVE_TASK_TYPE,
-            prompt_template_id=routes.CREATIVE_TASK_TYPE, prompt_template_version="v1",
+            conn, PROVIDER, brand_id=brand_id, task_type=state.CREATIVE_TASK_TYPE,
+            prompt_template_id=state.CREATIVE_TASK_TYPE, prompt_template_version="v1",
             system=None, messages=[{"role": "user", "content": prompt}], context=context,
             options=gateway.TaskOptions(max_tokens=24000, timeout_s=480.0),
             campaign_period_id=campaign_period_id,
@@ -277,9 +277,9 @@ def schedule_creative(org_id: str, brand_id: str, tree_task_id: str,
 
 
 _JOBS = {
-    routes.TASK_TYPE: schedule_plan,
-    routes.TREE_TASK_TYPE: schedule_tree,
-    routes.CREATIVE_TASK_TYPE: schedule_creative,
+    state.TASK_TYPE: schedule_plan,
+    state.TREE_TASK_TYPE: schedule_tree,
+    state.CREATIVE_TASK_TYPE: schedule_creative,
 }
 
 

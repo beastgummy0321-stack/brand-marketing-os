@@ -30,10 +30,11 @@ from app.meta import graph as meta_graph
 from app.meta import repository as meta_repo
 from app.schedule import jobs as schedule_jobs
 from app.schedule import routes as schedule_routes
+from app.schedule import state as schedule_state
 
 ACTOR = "測試員"
 
-_DATA = schedule_routes._load_platform_data()  # 平台／目標照資料檔取，不重寫平行資料
+_DATA = schedule_state._load_platform_data()  # 平台／目標照資料檔取，不重寫平行資料
 VALID_PLATFORM = next(p["id"] for p in _DATA["platforms"] if p["enabled"])
 VALID_OBJECTIVE = next(o["value"] for o in _DATA["objectives"] if o["platform"] == VALID_PLATFORM)
 
