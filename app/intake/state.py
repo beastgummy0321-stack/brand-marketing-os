@@ -19,7 +19,7 @@ from app import storage
 from app.core.db import new_id
 from app.intake import repository as ir
 
-REFRESH_SECONDS = 3  # 進度頁 <meta refresh> 秒數，與 DESIGN.md §19.4 範例一致
+REFRESH_SECONDS = 3  # 進度頁 <meta refresh> 秒數（原設計文件 §19.4 範例已刪）
 
 WIZARD_STEPS = [
     (1, "起始輸入"),

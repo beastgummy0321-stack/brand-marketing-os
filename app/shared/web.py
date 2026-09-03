@@ -108,7 +108,7 @@ def pending_product_layer_count(brand_id: str) -> int:
 
 
 def scope_label(brand_id: str, product_id: str | None) -> str:
-    """畫面用語：適用範圍＝整個品牌 / 具體產品名稱（DESIGN.md §12.2）。"""
+    """畫面用語：適用範圍＝整個品牌 / 具體產品名稱（原設計文件 §12.2 已刪）。"""
     if not product_id:
         return "整個品牌"
     product = repo.get_product(conn, brand_id, product_id)

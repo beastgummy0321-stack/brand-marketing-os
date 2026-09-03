@@ -18,7 +18,7 @@ from app.core import cleanup, db
 from app.core import settings as coresettings
 from app.core.audit import write_audit
 
-# intake_item.kind（內部代碼）↔ 畫面中文（DESIGN.md §19.7 對照）
+# intake_item.kind（內部代碼）↔ 畫面中文（原對照表已被 5eca0db 清除，這份 dict 就是權威）
 KIND_TO_HUMAN = {
     "brand_fact": "品牌事實",
     "product_fact": "產品事實",

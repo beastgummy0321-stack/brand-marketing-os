@@ -3,7 +3,7 @@
 全站所有「需要人看」的訊息只剩一個出口：這裡的 enqueue()。各模組只能認領 CATEGORIES
 裡登記好的一個類別，嚴重度由類別反查、呼叫端不得自報數字——避免每個模組都覺得自己最急。
 
-嚴重度分級（單一中央位置，DESIGN.md §20／決策 0026）：金額損失 ＞ 不可逆 ＞ 規則警示 ＞ 資訊性。
+嚴重度分級（單一中央位置，原設計文件已被 5eca0db 清除，決策 0026）：金額損失 ＞ 不可逆 ＞ 規則警示 ＞ 資訊性。
 排序＝嚴重度為主，同級內按行動價值（CATEGORIES 的登記順序，越早登記代表價值越高）。
 
 去重：同一品牌下同一 dedupe_key 二次 enqueue 只留第一筆（INSERT 前用 brand_id ＋ dedupe_key
@@ -19,7 +19,7 @@ from app.core import cleanup
 from app.core.audit import write_audit
 from app.core.db import new_id, now_utc
 
-# 嚴重度分級（決策 0025／0026 定案，DESIGN.md §20 規則 4 的資料層對應）。
+# 嚴重度分級（決策 0025／0026 定案；原設計文件規則 4 的資料層對應，文件已刪）。
 SEVERITY_ORDER = ["money_loss", "irreversible", "rule_warning", "informational"]
 SEVERITY_RANK = {level: i for i, level in enumerate(SEVERITY_ORDER)}
 SEVERITY_LABELS = {
@@ -45,7 +45,7 @@ CATEGORIES = {
 }
 _CATEGORY_RANK = {name: i for i, name in enumerate(CATEGORIES)}
 
-MAX_MESSAGE_LEN = 30  # DESIGN.md §20 規則 4：一卡一句 ≤30 全形字
+MAX_MESSAGE_LEN = 30  # 原設計文件規則 4（已刪）：一卡一句 ≤30 全形字
 STALE_AFTER_DAYS = 14  # 資訊性項目逾期自動降級封存的門檻（比照 0025 期末＋14 天結算節奏）
 
 
@@ -64,7 +64,7 @@ def enqueue(conn, *, org_id: str, category: str, dedupe_key: str, message: str,
         raise ValueError("interrupt.message 為必填")
     if len(message) > MAX_MESSAGE_LEN:
         raise ValueError(
-            f"卡片內文超過 {MAX_MESSAGE_LEN} 全形字上限（DESIGN.md §20 規則 4）：{message}"
+            f"卡片內文超過 {MAX_MESSAGE_LEN} 全形字上限（原設計文件規則 4，已刪）：{message}"
         )
 
     # 去重比對要連 brand_id 一起看（票 M6）：SQLite 的 IS 運算子對 NULL 也能正確比對，

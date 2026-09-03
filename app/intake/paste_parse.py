@@ -1,4 +1,4 @@
-"""app/intake/paste_parse.py — 貼回頁的免費規則驗證（DESIGN.md §19.7）。
+"""app/intake/paste_parse.py — 貼回頁的免費規則驗證（原設計文件 §19.7 已被 5eca0db 清除）。
 
 零花費、零 LLM。只檢查五件事，不判斷內容對不對——那是人工逐條確認的工作（R5、R10）。
 """

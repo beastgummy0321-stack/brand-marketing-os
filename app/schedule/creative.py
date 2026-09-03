@@ -104,7 +104,7 @@ def _valid_creative_fields(raw_fields) -> list[dict] | None:
             return None
         if isinstance(value, str):
             values = [value]
-        elif isinstance(value, list) and all(isinstance(v, str) for v in value):
+        elif isinstance(value, list) and value and all(isinstance(v, str) and v for v in value):
             values = value
         else:
             return None

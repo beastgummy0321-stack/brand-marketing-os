@@ -10,7 +10,7 @@
    knowledge_version + 1（rule/claim 依 product_id 是否為空決定影響品牌還是產品聚合）。
 4. 事實確認流程：pending → confirmed 時記錄 confirmed_by / confirmed_at。
 5. 人工編輯直接生效、不退回 pending；編輯者成為最新確認人（決策 0013 用戶優先，
-   取代原 DESIGN.md §17 決策 3）。
+   取代原設計文件 §17 決策 3，該文件已被 5eca0db 清除）。
 6. 產品以封存為預設；已封存的產品可再進一步硬刪除（delete_product），一併清掉本模組
    掛在該產品下的資料，audit_log 留下 before 全文與各表筆數（決策 0020，比照品牌 0015）。
    事實／規則／宣稱單筆硬刪除同樣適用（before 全文記 audit_log，決策 0013）。

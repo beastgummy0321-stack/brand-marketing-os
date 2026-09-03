@@ -1,12 +1,12 @@
-"""app/tools/capacity_check.py — 版面守恆憲法容量驗收腳本（決策 0026、DESIGN.md §20.2、
-GitHub issue #43；修憲落地 V2 依 §20.1 規則 1 加入 kind 分流）。
+"""app/tools/capacity_check.py — 版面守恆憲法容量驗收腳本（決策 0026、原設計文件已被
+5eca0db 清除、GitHub issue #43；修憲落地 V2 依規則 1 加入 kind 分流）。
 
-腳本只掃「本次票改動涉及的頁面」——呼叫端自己列頁面清單餵進來，不是全站掃描（§20.2：
+腳本只掃「本次票改動涉及的頁面」——呼叫端自己列頁面清單餵進來，不是全站掃描（原文件：
 「未動到的舊頁不報違憲，增量收斂的可執行定義」）。輸出四項數字，任一超標就非 0 退出碼：
 
-1. 卡片數（依 `_components/card.html` 的 `kind` 分流）——§20.1 規則 1，主欄容量 ≤ 5。
+1. 卡片數（依 `_components/card.html` 的 `kind` 分流）——規則 1，主欄容量 ≤ 5。
    只有明講 `kind=content`（class 含 "card-content"）才不計入——2026-08-03 依決策 0033，
-   內容卡／清單卡不受這條上限約束（DESIGN.md §20.1 規則 1）。`kind=entry`（class 含
+   內容卡／清單卡不受這條上限約束（原設計文件規則 1，已刪）。`kind=entry`（class 含
    "menu-card"）、`kind=notice`（class 含 "card-notice"）與沒有指定 kind 的裸 "card"
    （既有呼叫端與尚未經 macro 的手寫卡片，例如 ads_home.html「進行中檔期」）一律計入——
    分流只對明講 kind 的呼叫端生效，避免既有頁面已驗收過的卡片數無聲跳動（見 `_card_kind`
@@ -19,7 +19,7 @@ GitHub issue #43；修憲落地 V2 依 §20.1 規則 1 加入 kind 分流）。
    `check_nav_limit=True`，CLI 用 `--check-nav-limit <頁面路徑>` 指定。
 3. 非法展開元件數（<details> 的 class 不在既有登記清單內）——§20.1 規則 3，全站唯一展開
    元件；既有登記清單＝目前 app.css 已有樣式的 6 個 <details> 變體（field-details 是
-   本批新詳情 macro 的輸出，其餘 5 個是既有元件，見 DESIGN.md §10.8）。
+   本批新詳情 macro 的輸出，其餘 5 個是既有元件（原對應文件 §10.8 已刪，清單見下方）。
 4. 單卡內文字數（每張卡片內的全形字數，不含卡片裡巢狀 <details> 展開後才看得到的內文——
    §20.1 規則 4 明文「詳情展開後的內文不受 30 字限」——也不含 <select> 裡的 <option>
    文字，修憲落地 V7 全站容量掃描發現：模型／思考等級下拉選單的選項文字會被算進卡片字數，
@@ -40,7 +40,7 @@ CARD_LIMIT = 5
 NAV_LINK_LIMIT = 4
 CARD_TEXT_LIMIT = 30
 
-# 既有已登記、有專屬樣式的 <details> 變體（DESIGN.md §10.8）。field-details 是本批
+# 既有已登記、有專屬樣式的 <details> 變體（原設計文件 §10.8，已刪）。field-details 是本批
 # 新增的「詳情」macro 輸出；其餘 5 個是這批之前就存在、各自有專屬 CSS 的既有元件。
 # 不在這份清單內的 <details> class＝新造的第二套展開元件，判定違憲。
 LEGAL_DETAIL_CLASSES = {
@@ -64,14 +64,14 @@ def _wide_char_count(text: str) -> int:
 def _card_kind(classes: list) -> str | None:
     """回傳這個元素的卡片種類：None＝不是卡片。是卡片時回傳 'entry'／'notice'／'content'
     三擇一，依 `_components/card.html` 的 kind 參數輸出的 class 信號判斷（修憲落地 V2，
-    DESIGN.md §20.1 規則 1）：
+    原設計文件規則 1，已刪）：
     - 'menu-card' → entry（功能入口卡）
     - 'card-notice' → notice（頁面自建的提醒卡）
     - 'card-content' → content（內容卡／清單卡，明講 kind='content' 才會掛這個信號）
     - 都沒有（只有裸的 "card"）→ 沿用舊版無分流時代的認定，一律當 entry 計入主欄 ≤5。
       這條刻意保守：既有頁面有未經 card.html macro 的手寫 <div class="card">
       （例如 ads_home.html「進行中檔期」）與尚未指定 kind 的既有 card_block() 呼叫
-      （例如 ads_learnings.html），這批已經是 DESIGN.md §20.1 驗收過的既有頁面容量
+      （例如 ads_learnings.html），這批已經是原設計文件（已刪）§20.1 驗收過的既有頁面容量
       數字（首次紙上驗收，issue #50），本票不改頁面模板，沒有機會幫它們補 kind——
       分流只對「明講 kind」的呼叫端生效，沒講就維持舊行為，不會讓既有頁面的卡片數
       無聲跳動。
@@ -248,7 +248,7 @@ def main(argv: list | None = None) -> int:
               f"非法展開 {counts['illegal_detail_count']}／單卡文字數 {counts['card_text_counts']}")
         all_problems.extend(problems)
     if all_problems:
-        print("違憲（超出 DESIGN.md §20.1 容量上限）：")
+        print("違憲（超出容量上限，規則見本檔開頭 docstring）：")
         for msg in all_problems:
             print(f"  - {msg}")
         return 1

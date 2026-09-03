@@ -1,4 +1,4 @@
-"""app/intake — 建檔精靈（引導式建檔）。見 DESIGN.md §19。
+"""app/intake — 建檔精靈（引導式建檔）。原設計文件 §19 已被 5eca0db 清除。
 
 Mock —— 接真 API 輪改存 intake_draft 資料表。
 

@@ -1026,7 +1026,12 @@ class FileLineCapTest(unittest.TestCase):
 # `ModuleSizeRatchetTest` 同一種架構閘門，不是業務邏輯測試，全域 CLAUDE.md
 # 「限制要有機器閘門」直接對應這一條）。先弄紅一次才算數：加一個假模組資料夾
 # （無契約頁、不在豁免清單）驗證兩支斷言都紅，刪掉假資料夾後復原成綠。
-TEST_LINES_CEILING = 18568
+#
+# 小債清空（2026-09-04）：18568 → 18598（含本段理由註解自己佔的行）。新增
+# `app/tests/test_schedule_creative.py`（`_valid_creative_fields` 對 `value: []`／
+# `value: ["", ""]` 兩種空值誤放行——T1 收尾時記下、不擋合併的舊債，這裡收掉，
+# 守的是資料正確性）。先證過紅：兩支斷言在改 creative.py 之前先跑過一次紅。
+TEST_LINES_CEILING = 18598
 
 
 def _line_totals() -> tuple:

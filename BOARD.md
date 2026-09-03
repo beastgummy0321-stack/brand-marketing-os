@@ -348,14 +348,15 @@ Dependabot #1（`nanoid`，修補版 3.3.18）：**`saas` 這邊已經是 3.3.18
 但 GitHub 掃的是預設分支 `master`，那邊還凍在 `v0.1-desktop` 的 3.3.17。警示會亮到 `saas` 併回
 `master` 為止——**不是還沒修，是修在另一條線上**。不為了關掉警示單獨去動凍結的 master。
 
-- [ ] **`DESIGN.md` 裸引用（2026-09-04 收②④兩張票時順手發現，新開，範圍外未動）**：跟已修好的
-      `docs/design/*`／`architecture-rules.md`／`rule-checks.md`／`docs/decisions/0003` 同一種病
-      （5eca0db 清掉的舊文件），但這批是另一種寫法——直接寫根目錄的 `DESIGN.md`（也已不存在），
-      至少再命中 `app/core/interrupts.py`、`app/intake/`（`paste_parse.py`／`repository.py`／
-      `script.py`／`state.py`／`__init__.py`）、`app/shared/web.py`、`app/tools/capacity_check.py`、
-      `app/tests/test_core_interrupts.py` 共 8 個檔、17+ 處，沒有窮舉到全部。逐檔判斷，
-      跟 ④ 同一個做法：`capacity_check.py` 那幾處尤其密集（§10.8／§20.1／§20.2），可能得先看
-      `app/tools/capacity_check.py` 現有的 docstring／常數本身能不能直接扛起這個角色
+- [x] ~~`DESIGN.md` 裸引用~~ **2026-09-04 完成**：9 個檔（`app/brand_intelligence/repository.py`
+      多一處、`app/core/interrupts.py`、`app/intake/` 五檔、`app/shared/web.py`、
+      `app/tools/capacity_check.py`、`app/tests/test_core_interrupts.py`）、19 處，逐一改成
+      「原文件已被 5eca0db 清除」或指向現有權威（本檔常數／清單本身）。`app/tools/capacity_check.py`
+      密度最高（7 處），順手發現它可能是**整支死碼**：全站找不到任何 `card.html`／`base.html`
+      模板或呼叫端（唯一引用者是它自己的測試，且測試全用合成字串，不碰真模板）——這支「版面
+      守恆」腳本服務的是被刪掉的 Jinja／`app/ads/` 舊 UI 世代，React 前端接手後沒人再呼叫它。
+      **這是新發現、沒有刪它**：刪一整支工具＋測試是產品範圍決定，不是文件清理，留給你判斷
+      要不要開票查證後刪除
 - [ ] **上線前必刪（2026-09-02 建，使用者要求）** `supabase/seed.sql` 尾巴那段排查用帳號：
       `123@example.com` ／ `123456`，固定 UUID、固定組織 `org_bughunt`、固定品牌 `brd_bughunt`。
       每次 `supabase db reset` 自動重建，這正是它存在的理由——重置資料庫來查 bug，不會連查 bug
@@ -400,34 +401,43 @@ Dependabot #1（`nanoid`，修補版 3.3.18）：**`saas` 這邊已經是 3.3.18
       ADR 0047 只處理圖片提示詞那一項。**2026-09-01 裁決：這批不收**——0047 已經拿掉約六成輸出，
   「太長會被截斷」的痛小很多，而且實跑從沒真的被截斷過。T1b 的閘門只擋圖片欄位，不做全域字串禁令。
   真的被截斷一次再回頭收
-- [ ] T1 收尾時記下、不擋合併的四條（票已刪，留在這裡）：`creative.py:77` 的 `all([])` 是 True，
-      所以 `value: []` 與 `value: ["", ""]` 會過關、畫面出現空欄位；七個維度名住三個地方
-      （`COORDINATE_KEYS`、TS 介面、前端中文標籤）沒有同步閘門；
-      `test_creative_task_gets_methodology` 斷言方法論檔的行文，上游改標題就無故變紅
-      （改斷言 `【方法論：creative-matrix.md】` 這個穩定標記就不脆）。
+- [x] ~~T1 收尾時記下、不擋合併的四條~~ **兩條 2026-09-04 修掉、一條仍是決定、一條早已結案**：
+      `creative.py` 的 `_valid_creative_fields` 空值驗證漏洞已修（`value: []`／`value: ["", ""]`
+      現在會整批退回，不再讓空欄位混進畫面），先證過紅再修，新增
+      `test_schedule_creative.py` 守住（資料正確性）；`test_creative_task_gets_methodology`
+      的斷言已經改成穩定標記 `【方法論：creative-matrix.md】`／`【方法論：meta-format-specs.md】`，
+      不再依賴文件標題行文。**七個維度名住三個地方沒有同步閘門——這條沒動**，
+      裝不裝閘門是決定不是修法，跟 ⑤ 同一種性質，留給你判斷值不值得裝。
       第四條（`ad_creative.md` 掉了「誠實優先於好看」）**2026-09-01 查證為誤報，那句還在
       `app/departments/creative/ad_creative.md:35-36`**，已結案
 - [ ] `assets` bucket 沒設 `file_size_limit`（`supabase/migrations/20260830000002_core_storage_assets_bucket.sql`
       的 insert 只給 id／name／public）。**上傳端已經擋兩道 50MB**（`app/brand_web/routes_library.py:57`／`:79`／`:273`），
-      所以這是第二道防線不是沒有防線——架構圖說「上傳無大小上限」是錯的。順手補一行
+      所以這是第二道防線不是沒有防線——架構圖說「上傳無大小上限」是錯的。順手補一行——
+      **2026-09-04 沒動手**：這一行要開新 migration 檔（已套用的檔不改），照憲法第 9 條
+      「動 schema 先提計畫等批准」，不算「順手」範圍
 - [ ] **同名的最深層節點，哪份內容配哪個位置是任意的（2026-09-03 T3d，使用者裁決「先不根治」）**：
       代理的回覆只帶節點**名稱**、不帶編號，所以同一份方案裡兩個廣告取了一模一樣的名字時，
       「先出現的那段配第一個節點」——穩定，但無法證明是對的（審查原話：構造上無法證偽）。
       規則寫在 `docs/contracts/schedule.md`。**根治法是讓代理把 `node_key` 一起回傳**
       （要改部門提示詞檔＋解析＋測試，動到 ADR 0047 的地盤）。今天一次都沒咬到人，
       真的咬到再開票
-- [ ] **租戶防線不對稱（2026-09-03 T3c 審查發現，已查證今天咬不到人）**：
+- [ ] **租戶防線不對稱（2026-09-03 T3c 審查發現，已查證今天咬不到人；
+      2026-09-04 查證：補法比原描述貴，沒動手）**：
       `ad_set_ids_by_exact_name`（`app/meta/repository.py`）只拿 `org_id` 去取權杖，呼叫端給的
-      `campaign_id` 原封不動送去 Meta，函式自己不驗證那顆活動是不是這個組織的。它的姊妹函式
-      `campaign_ids_by_exact_name` 有驗（先 `SELECT ... FROM meta_ad_account WHERE org_id = %s`）。
-      擋住跨組織的是**呼叫端的形狀**（唯一呼叫點只可能傳自己組織的活動 id），不是函式本身——
-      審查逐條追過整條路徑，**沒有任何請求構造得出跨組織的輸入**，所以是欠帳不是漏洞。
-      補法：在函式裡加一道「這顆活動屬於這個組織」的檢查，一次查詢。`docs/contracts/meta.md`
-      已經逐字記下這個不對稱，不再宣稱「每支都篩 org_id」
+      `campaign_id` 原封不動送去 Meta，函式自己不驗證那顆活動是不是這個組織的；
+      `ad_ids_by_exact_name` 同一個洞深一層（`adset_id` 同樣不篩，docstring 裡自己寫明）。
+      它們的姊妹函式 `campaign_ids_by_exact_name` 有驗（先
+      `SELECT ... FROM meta_ad_account WHERE org_id = %s`）。擋住跨組織的是**呼叫端的形狀**
+      （唯一呼叫點只可能傳自己組織的活動／組合 id），不是函式本身——審查逐條追過整條路徑，
+      **沒有任何請求構造得出跨組織的輸入**，所以是欠帳不是漏洞。**原本寫的補法「一次查詢」
+      低估了成本**：`campaign_id`／`adset_id` 是 Meta 端的 id，這個資料庫裡沒有一張表存著
+      「這個 campaign_id 屬於哪個組織」可以直接查——要嘛多打一次 Meta API 去問（延遲＋新的
+      graph.py 呼叫，要先照規範查官方文件核對回傳形狀，不能自創），要嘛改呼叫鏈把
+      `binding.py` 已經驗過的結果往下傳（改函式簽章，影響唯一呼叫端）。兩條路都不是「補一行」，
+      是要先決定要不要付這個代價的設計題，留給你判斷。`docs/contracts/meta.md` 已經逐字記下
+      這個不對稱，不再宣稱「每支都篩 org_id」
 - [ ] `frontend/src/components/layout/FluidCard.tsx` 現在只剩 Storybook 在用。要留當設計素材還是刪，
-      下一輪順手決定
-- [ ] `frontend/src/lib/auth.ts` 的 depcruise 註解已改成「規則還沒建」並指向 07-1——
-      真正把規則建起來還是 07-1 的工作
+      下一輪順手決定（美術／產品判斷，不是我能替你決定的事）
 
 ## 使用者待辦（不是程式債，做的人是你；我做不了）
 

@@ -1720,8 +1720,8 @@ class CreativeApiContractTest(_ScheduleApiTestBase):
 
         self.assertEqual(len(fake.calls), 1)
         prompt_text = fake.calls[0]["messages"][0]["content"]
-        self.assertIn("創意矩陣（35 個角度）", prompt_text)  # creative-matrix.md
-        self.assertIn("5 個，125 字", prompt_text)  # meta-format-specs.md
+        self.assertIn("【方法論：creative-matrix.md】", prompt_text)
+        self.assertIn("【方法論：meta-format-specs.md】", prompt_text)
 
     def test_get_after_post_returns_identical_creative(self):
         self._succeed_plan_and_tree()
