@@ -296,48 +296,17 @@ T2 三張票逐字寫明不碰它，審查也逐字驗過 diff 裡沒有 `max_da
 **這些都不擋 T4。** 每一條都是「閘門缺一道」或「文件指向死路」，沒有一條會讓 T4 寫出錯的 schema。
 排序依據是「每張票省下多少」，不是嚴重度。
 
-- [x] ~~① CI 補上 e2e~~ **2026-09-04 完成**：`.github/workflows/ci.yml` backend job 加了
-      Supabase client 環境變數匯出（`VITE_SUPABASE_URL`／`VITE_SUPABASE_ANON_KEY`，取自
-      `supabase status -o json`）＋`npx playwright install --with-deps chromium`＋
-      `npm run e2e`。本機驗過整條路徑真的會跑（不只是語法對）：`npm run e2e` 在本機用同樣的
-      環境變數組合真的跑過、1 個測試通過。CI 本身要等下一次 push 才看得到紅綠，本機這輪先驗證
-      的是「這組指令碰得到 Supabase、backend 真的起得來、Playwright 真的能登入」
-- [x] ~~② 契約頁閘門~~ **2026-09-04 完成**：`test_architecture_boundaries.py` 新增
-      `ContractPageRatchetTest`（`MODULES_WITHOUT_CONTRACT` 凍結清單，只准變短）。16 個模組
-      現在 6 份頁、10 個在豁免清單（`app/departments`／`app/methodology` 沒有一行 .py 但仍算
-      模組）。**已弄紅一次**：加一個假模組資料夾（無契約頁、不在豁免清單）驗證兩支斷言都紅，
-      刪掉後復原成綠。`TEST_LINES_CEILING` 跟著從 18504 調到 18568（理由寫在該常數正上方）
-- [x] ~~③ 前端行數閘門~~ **2026-09-04 完成**：`frontend/src/architectureBoundaries.test.ts`
-      鏡射後端 `FileLineCapTest` 的形狀（`FILE_LINE_CAP = 800`，`KNOWN_OVERSIZED_FILES` 凍結
-      `SchedulePage.tsx` 現在的 851 行，只准變小）。**已弄紅一次**：塞一個 801 行的假檔案看它紅，
-      刪掉後復原成綠
-- [x] ~~④ 31 處引用 `5eca0db` 刪掉的設計文件~~ **2026-09-04 完成**：`docs/design/*`、
-      `architecture-rules.md`、`rule-checks.md`、`docs/decisions/0003` 這四種指標，19 個檔、
-      30 處逐一改成「已被 5eca0db 清除，權威在 XXX」（migration 檔／該支檔案本身），不用 sed
-      批次處理。**順手發現一批範圍外的新債，見下面〈其餘小債〉「DESIGN.md 裸引用」那條**——
-      沒有動它，範圍只到票面點名的四種指標
-- [x] ~~⑤ `ImportCycleScanTest` 看不到套件內部的環~~ **2026-09-04 已量，不裝**：見上方排序清單
-      第 11 項，違規數 0，裝不裝是留給使用者的決定不是技術欠帳，這裡先劃掉「先量」那一半
 - [ ] **⑥ `app/identity/` 沒有任何 ADR 管**（`adr-index.mjs` 對它零列）。認證、組織解析、
       兩個開發後門都在裡面，一條決策紀錄都沒有。已寫進 `docs/contracts/identity.md` 當事實記著。
       不是「現在補一份」——是**下一個碰到 identity 的 route C 問題順手寫第一份**
-- [x] ~~⑦ 殘留 worktree~~ **2026-09-04 完成**：`C:/Users/User/orca/workspaces/marketing/t3-frontend`
-      移除前先查過——分支本身（`beastgummy0321-stack/t3-frontend`）在 `saas..分支` 是 0 個
-      commit，確認完全併入；但 worktree 裡另外躺著一批**沒有 commit 過**的舊草稿（另一套
-      更早、跟現在資料夾結構對不上的 dependency-cruiser 規則，`src/components/campaigns/`
-      `warroom/` 等現在都不存在的舊 feature 名稱），順手看過確認是被放棄的探索、不是遺漏的工作，
-      才 `git worktree remove --force`（分支本身沒刪）
 
 ### 不是票，是量到的事實（開票時要記得，不必修）
 
-- **棘輪餘裕（2026-09-04 更新，本節原本寫的 17877 是 2026-09-03 當天更早的舊值，
-  T5 那天稍後已經先漲到 18504，這一行沒跟著更新過——踩到的正是體檢自己點名的病(a)）**：
-  `TEST_LINES_CEILING` 現在是 18568（②契約頁閘門那張票 2026-09-04 從 18504 漲上來的，
-  理由寫在該常數正上方），餘裕仍是 **0**。`app/core` 1613／1613、`app/identity` 539／539、
-  `app/storage`／`app/tools` 也都是 **0**，`app/llm` 剩 2 行（未動）。`app/meta` 214、
-  `app/schedule` 773（皆未動）。ADR 0041 允許「寫理由調高」所以不是死結，但**任何要加測試的票
-  都得動那一行**——票裡先寫明授權，否則實作者會（正確地）停下來回報 blocked-upstream，白繞一輪。
-  測試／production 比值 **0.964**
+- **棘輪餘裕（2026-09-04 更新）**：`TEST_LINES_CEILING` 現在是 18598，餘裕仍是 **0**。
+  `app/core` 1613／1613、`app/identity` 539／539、`app/storage`／`app/tools` 也都是 **0**，
+  `app/llm` 剩 2 行（未動）。`app/meta` 214、`app/schedule` 773（皆未動）。ADR 0041 允許
+  「寫理由調高」所以不是死結，但**任何要加測試的票都得動那一行**——票裡先寫明授權，
+  否則實作者會（正確地）停下來回報 blocked-upstream，白繞一輪。測試／production 比值 **0.966**
 - **`決策 NNNN` 那 84 處已緩解，不必逐條改**：`CONTEXT.md` 有一段說明它不是 ADR id、來源已銷毀、
   規則本身都寫在同一句話裡。剩 `report.py:1`／`repository.py:1244` 兩處寫「決策 0017」，
   由那段涵蓋，不動
@@ -348,15 +317,11 @@ Dependabot #1（`nanoid`，修補版 3.3.18）：**`saas` 這邊已經是 3.3.18
 但 GitHub 掃的是預設分支 `master`，那邊還凍在 `v0.1-desktop` 的 3.3.17。警示會亮到 `saas` 併回
 `master` 為止——**不是還沒修，是修在另一條線上**。不為了關掉警示單獨去動凍結的 master。
 
-- [x] ~~`DESIGN.md` 裸引用~~ **2026-09-04 完成**：9 個檔（`app/brand_intelligence/repository.py`
-      多一處、`app/core/interrupts.py`、`app/intake/` 五檔、`app/shared/web.py`、
-      `app/tools/capacity_check.py`、`app/tests/test_core_interrupts.py`）、19 處，逐一改成
-      「原文件已被 5eca0db 清除」或指向現有權威（本檔常數／清單本身）。`app/tools/capacity_check.py`
-      密度最高（7 處），順手發現它可能是**整支死碼**：全站找不到任何 `card.html`／`base.html`
-      模板或呼叫端（唯一引用者是它自己的測試，且測試全用合成字串，不碰真模板）——這支「版面
-      守恆」腳本服務的是被刪掉的 Jinja／`app/ads/` 舊 UI 世代，React 前端接手後沒人再呼叫它。
-      **這是新發現、沒有刪它**：刪一整支工具＋測試是產品範圍決定，不是文件清理，留給你判斷
-      要不要開票查證後刪除
+- [ ] **`app/tools/capacity_check.py` 可能是整支死碼（2026-09-04 修 `DESIGN.md` 裸引用時順手發現）**：
+      全站找不到任何 `card.html`／`base.html` 模板或呼叫端（唯一引用者是它自己的測試，且測試
+      全用合成字串，不碰真模板）——這支「版面守恆」腳本服務的是被刪掉的 Jinja／`app/ads/`
+      舊 UI 世代，React 前端接手後沒人再呼叫它。刪一整支工具＋測試是產品範圍決定，
+      不是文件清理，留給你判斷要不要開票查證後刪除
 - [ ] **上線前必刪（2026-09-02 建，使用者要求）** `supabase/seed.sql` 尾巴那段排查用帳號：
       `123@example.com` ／ `123456`，固定 UUID、固定組織 `org_bughunt`、固定品牌 `brd_bughunt`。
       每次 `supabase db reset` 自動重建，這正是它存在的理由——重置資料庫來查 bug，不會連查 bug
@@ -401,15 +366,10 @@ Dependabot #1（`nanoid`，修補版 3.3.18）：**`saas` 這邊已經是 3.3.18
       ADR 0047 只處理圖片提示詞那一項。**2026-09-01 裁決：這批不收**——0047 已經拿掉約六成輸出，
   「太長會被截斷」的痛小很多，而且實跑從沒真的被截斷過。T1b 的閘門只擋圖片欄位，不做全域字串禁令。
   真的被截斷一次再回頭收
-- [x] ~~T1 收尾時記下、不擋合併的四條~~ **兩條 2026-09-04 修掉、一條仍是決定、一條早已結案**：
-      `creative.py` 的 `_valid_creative_fields` 空值驗證漏洞已修（`value: []`／`value: ["", ""]`
-      現在會整批退回，不再讓空欄位混進畫面），先證過紅再修，新增
-      `test_schedule_creative.py` 守住（資料正確性）；`test_creative_task_gets_methodology`
-      的斷言已經改成穩定標記 `【方法論：creative-matrix.md】`／`【方法論：meta-format-specs.md】`，
-      不再依賴文件標題行文。**七個維度名住三個地方沒有同步閘門——這條沒動**，
-      裝不裝閘門是決定不是修法，跟 ⑤ 同一種性質，留給你判斷值不值得裝。
-      第四條（`ad_creative.md` 掉了「誠實優先於好看」）**2026-09-01 查證為誤報，那句還在
-      `app/departments/creative/ad_creative.md:35-36`**，已結案
+- [ ] 七個維度名住三個地方（`COORDINATE_KEYS`、TS 介面、前端中文標籤）沒有同步閘門——
+      改一處、另外兩處不會有人提醒。裝不裝閘門是決定不是修法，留給你判斷值不值得裝
+      （T1 收尾時記下的舊債，其餘三條 2026-09-04 已收：空值驗證漏洞修掉、方法論斷言
+      改用穩定標記、第四條 2026-09-01 查證為誤報）
 - [ ] `assets` bucket 沒設 `file_size_limit`（`supabase/migrations/20260830000002_core_storage_assets_bucket.sql`
       的 insert 只給 id／name／public）。**上傳端已經擋兩道 50MB**（`app/brand_web/routes_library.py:57`／`:79`／`:273`），
       所以這是第二道防線不是沒有防線——架構圖說「上傳無大小上限」是錯的。順手補一行——
