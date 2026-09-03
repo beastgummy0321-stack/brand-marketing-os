@@ -1,6 +1,6 @@
 """app/brand_intelligence/repository.py — Brand Intelligence 存取層。
 
-見 docs/design/03-data-model.md §3.2、§7；DESIGN.md §17 決策 3。
+兩份原始文件皆已被 5eca0db 清除；欄位權威見 supabase/migrations/ 本身。
 
 硬性規則（呼叫端請勿繞過）：
 1. 所有品牌範圍查詢一律以 brand_id 過濾，沒有「查全部品牌資料」的無過濾入口。

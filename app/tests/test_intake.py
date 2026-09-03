@@ -1,6 +1,6 @@
 """app/tests/test_intake.py — 建檔精靈接真：草稿持久化、LLM 串接、花費、R10 出口。
 
-見 docs/design/07-settings-and-intake-contract.md §4、docs/design/03-data-model.md §3A。
+兩份原始文件皆已被 5eca0db 清除；欄位權威見 supabase/migrations/ 本身。
 全程用 FakeProvider（跟 test_llm_gateway 同風格），不發任何真實網路請求；
 「無金鑰人話錯誤」那條用真的 AnthropicProvider——它在打出網路請求之前就會擋下。
 """

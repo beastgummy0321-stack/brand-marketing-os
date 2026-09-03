@@ -1,13 +1,13 @@
 """app/tests/test_architecture_boundaries.py — A1 三層地界的機器檢查（修憲落地 A2）。
 
-見 docs/architecture-rules.md A1。地界靠讀文件、沒有機器檢查是體檢（19-constitution-audit.md
-第七節）點名的致命發現，這裡補上兩道掃描：
+A1 三層地界：原文件 docs/architecture-rules.md 已被 5eca0db 清除，權威現在是這支檔案本身
+（見下方 LAYER_ORDER）。地界靠讀文件、沒有機器檢查曾是致命發現，這裡補上兩道掃描：
 
 1. **import 掃描**：除排除清單外，任何模組不得 import 分支專屬層。
 2. **跨層原生 SQL 掃描**：任何模組不得直接對「品牌永久層」（`app.brand_intelligence`）
    或「分支專屬層」的資料表下原生 SQL，必須走該層的公開函式（A1、鐵則 7）。
-   實測原有三處偷讀（見 docs/design/19-constitution-audit.md 第七節），先列進
-   KNOWN_SQL_VIOLATIONS 讓測試通過——這是明文記錄的欠帳（見 docs/rule-checks.md）。
+   實測原有三處偷讀（合憲審查發現，原文件已被 5eca0db 清除），先列進
+   KNOWN_SQL_VIOLATIONS 讓測試通過——這是明文記錄的欠帳（狀態就寫在這份清單旁邊）。
    修憲落地 A3（`learning_ledger` 遷出 `app/ads` 進品牌永久層）已修好其中一處
    （`app/llm/context_compiler.py`，改走 `repo.list_learnings_for_prompt()`），
    從清單劃掉；`app/ads/interview.py`／`app/intake/ai.py`／`app/intake/state.py`
@@ -43,7 +43,7 @@ BRANCH_TABLES: set = set()
 
 # 品牌永久層的資料表清單（來自 app/brand_intelligence/migrations 的 CREATE TABLE）。
 # learning_ledger 修憲落地 A3（決策 0037）從 app/ads 遷入——它是品牌長期資產，不是廣告
-# 分支專屬的東西，見 architecture-rules.md A1。
+# 分支專屬的東西（原文件 architecture-rules.md A1 已被 5eca0db 清除）。
 BRAND_PERMANENT_TABLES = {
     "brand", "brand_fact", "brand_performance_baseline", "brand_report", "claim",
     "customer_voice", "learning_ledger", "official_asset", "owned_channel", "persona", "product",
@@ -52,7 +52,7 @@ BRAND_PERMANENT_TABLES = {
 
 _SQL_TABLE_REF = re.compile(r"(?:FROM|INTO|UPDATE|JOIN)\s+([a-zA-Z_][a-zA-Z0-9_]*)", re.IGNORECASE)
 
-# 已知違例（三處偷讀，體檢 19-constitution-audit.md 第七節；狀態見 docs/rule-checks.md）。
+# 已知違例（三處偷讀，合憲審查發現，原體檢文件已被 5eca0db 清除；狀態見下方清單）。
 # 這份清單本身有 test_known_violations_list_is_not_stale 把關，修好了要記得同步刪除兩邊。
 KNOWN_SQL_VIOLATIONS = {
     "app/intake/ai.py": {"brand"},
@@ -197,7 +197,7 @@ class ImportBoundaryScanTest(unittest.TestCase):
                         violations.append(f"{rel} 竟然 import 了 {name}")
         self.assertEqual(
             violations, [],
-            "以下模組 import 了分支專屬層，違反 A1 三層地界（排除清單見 architecture-rules.md）：\n"
+            "以下模組 import 了分支專屬層，違反 A1 三層地界（排除清單見 _is_allowed_branch_importer）：\n"
             + "\n".join(violations),
         )
 
@@ -232,7 +232,7 @@ class CrossLayerRawSqlScanTest(unittest.TestCase):
         self.assertEqual(
             violations, [],
             "以下模組偷讀了別層的資料表，違反 A1／鐵則 7"
-            "（若是刻意的新豁免，先確認過再加進 KNOWN_SQL_VIOLATIONS 並同步 docs/rule-checks.md）：\n"
+            "（若是刻意的新豁免，先確認過再加進 KNOWN_SQL_VIOLATIONS，這份清單就是唯一權威）：\n"
             + "\n".join(violations),
         )
 
@@ -250,7 +250,7 @@ class CrossLayerRawSqlScanTest(unittest.TestCase):
                 self.assertIn(
                     table, tables_hit,
                     f"{rel} 已經不再對 {table} 下 SQL，KNOWN_SQL_VIOLATIONS 該清掉這項了"
-                    "（順手修好了記得同步更新 docs/rule-checks.md）",
+                    "（這份清單就是唯一權威，不必再同步別的文件）",
                 )
 
 
@@ -1020,7 +1020,13 @@ class FileLineCapTest(unittest.TestCase):
 #      contract：`graph.list_ads` 的翻頁／轉型規則逐字比照既有 `ListAdSetsTest`；
 #      `ad_ids_by_exact_name` 連不上 Meta 時的錯誤形狀逐字比照既有 `AdSetMatchUnreachableTest`
 #      （票面「這是同一套規矩，只深一層」——沒有第三種行為需要驗）。
-TEST_LINES_CEILING = 18504
+#
+# 掃障礙清單②（2026-09-04）：18504 → 18568（含本段理由註解自己佔的行）。新增
+# `ContractPageRatchetTest`（MODULES_WITHOUT_CONTRACT 棘輪，跟 `FileLineCapTest`／
+# `ModuleSizeRatchetTest` 同一種架構閘門，不是業務邏輯測試，全域 CLAUDE.md
+# 「限制要有機器閘門」直接對應這一條）。先弄紅一次才算數：加一個假模組資料夾
+# （無契約頁、不在豁免清單）驗證兩支斷言都紅，刪掉假資料夾後復原成綠。
+TEST_LINES_CEILING = 18568
 
 
 def _line_totals() -> tuple:
@@ -1543,6 +1549,64 @@ class ModuleSizeRatchetTest(unittest.TestCase):
         self.assertEqual(
             sorted(frozen - actual), [],
             "以下套件已經不存在，請從 KNOWN_MODULE_SIZES 劃掉（清單不留死名單）。",
+        )
+
+
+# ---------------------------------------------------------------------------
+# 契約頁閘門（2026-09-04，BOARD.md ②）：`docs/contracts/<module>.md` 棘輪。
+#
+# 16 個 app/ 模組裡今天有 10 個沒有契約頁。跟 KNOWN_OVERSIZED_FILES 同一種棘輪：
+# 開票當天這份豁免清單＝現況所以是綠的，新模組沒有頁會紅（不在清單裡＝沒有豁免），
+# 補完一份契約頁就把那一行從清單劃掉。`app/departments`／`app/methodology` 是純
+# prompt 素材、沒有一行 .py，所以不在 KNOWN_MODULE_SIZES 裡，但仍然算模組——契約頁
+# 描述的是模組邊界與進入點，跟裡面是不是 Python 無關。
+# ---------------------------------------------------------------------------
+
+ALL_MODULE_DIRS = {
+    p.name for p in APP_DIR.iterdir()
+    if p.is_dir() and p.name not in {"tests", "__pycache__"}
+}
+
+MODULES_WITHOUT_CONTRACT = {
+    "background", "dashboard", "departments", "intake", "llm",
+    "methodology", "orders", "shared", "storage", "tools",
+}
+
+CONTRACTS_DIR = REPO_ROOT / "docs" / "contracts"
+
+
+class ContractPageRatchetTest(unittest.TestCase):
+    """②契約頁閘門：MODULES_WITHOUT_CONTRACT 只准變短，不准變長。"""
+
+    def test_module_without_contract_is_either_frozen_or_has_a_page(self):
+        missing = [
+            module for module in sorted(ALL_MODULE_DIRS - MODULES_WITHOUT_CONTRACT)
+            if not (CONTRACTS_DIR / f"{module}.md").exists()
+        ]
+        self.assertEqual(
+            missing, [],
+            "以下模組沒有 docs/contracts/<module>.md，也不在 MODULES_WITHOUT_CONTRACT 的豁免"
+            "清單裡（新模組要嘛補頁、要嘛說得出理由才准加進豁免清單，不得默默略過）：\n"
+            + "\n".join(f"  {m}" for m in missing),
+        )
+
+    def test_frozen_list_is_not_stale(self):
+        done = sorted(
+            m for m in MODULES_WITHOUT_CONTRACT
+            if (CONTRACTS_DIR / f"{m}.md").exists()
+        )
+        self.assertEqual(
+            done, [],
+            "以下模組已經補了契約頁，請從 MODULES_WITHOUT_CONTRACT 劃掉（清單只准變短）：\n"
+            + "\n".join(f"  {m}" for m in done),
+        )
+
+    def test_frozen_list_matches_reality(self):
+        stale_dirs = sorted(MODULES_WITHOUT_CONTRACT - ALL_MODULE_DIRS)
+        self.assertEqual(
+            stale_dirs, [],
+            "以下模組已經不存在，請從 MODULES_WITHOUT_CONTRACT 劃掉（清單不留死名單）：\n"
+            + "\n".join(f"  {m}" for m in stale_dirs),
         )
 
 

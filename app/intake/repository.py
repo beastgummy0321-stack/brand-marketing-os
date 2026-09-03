@@ -1,7 +1,7 @@
 """app/intake/repository.py — intake_draft / intake_item 兩張表的存取層。
 
-介面契約見 docs/design/07-settings-and-intake-contract.md §4；欄位權威見
-docs/design/03-data-model.md §3A。一律 conn 開頭、一律帶 brand_id 過濾
+介面契約與欄位權威原文件皆已被 5eca0db 清除；欄位權威現在是
+supabase/migrations/ 本身。一律 conn 開頭、一律帶 brand_id 過濾
 （§3A.4 第 5 點：本模組不開無 brand 過濾的入口）。
 
 resolve_item 是唯一改 outcome 的入口：套用人工修改（edits）、寫目標表（Brand

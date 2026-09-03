@@ -1,6 +1,6 @@
 """app/tests/test_versioning.py — 版本遞增、確認流、編輯退回待確認。
 
-見 docs/design/03-data-model.md §2、DESIGN.md §17 決策 3。
+兩份原始文件皆已被 5eca0db 清除；欄位權威見 supabase/migrations/ 本身。
 """
 
 import unittest

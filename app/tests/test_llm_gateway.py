@@ -1,7 +1,7 @@
 """app/tests/test_llm_gateway.py — LLM Gateway 骨架、Context Compiler。
 
-見 docs/design/06-llm-gateway.md、docs/design/04-context-scope.md、docs/design/03-data-model.md
-§3.1 llm_task。全程只用 FakeProvider，不發出任何真實網路請求。
+三份原始文件皆已被 5eca0db 清除；llm_task 欄位權威見 supabase/migrations/ 本身。
+全程只用 FakeProvider，不發出任何真實網路請求。
 """
 
 import unittest

@@ -43,27 +43,23 @@
 
 ### 第 4 級：裝一次就永久自動執行的閘門（做完就不再是待辦）
 
-11. **① CI 補 e2e**（`.github/workflows/ci.yml` 約 4 行）。現在規範把 e2e 當「整合 bug 唯一現形處」，
-    而它只活在開發機上——**CI 全綠不代表 server 起得來**。最划算的一條
-12. **③ 前端行數閘門**（`FileLineCapTest` 只掃 `app/**.py`）。`SchedulePage.tsx` 851 行早已超標，
-    T5 又讓 `CockpitPage.tsx` 長了 173 行
-13. **② 契約頁閘門**（`MODULES_WITHOUT_CONTRACT` 凍結清單，只准變短）。現在 16 個模組、7 份頁
-14. **⑤ `ImportCycleScanTest` 看不到套件內部的環**——要不要降到模組層**先量違規數再判**
+11. **⑤ `ImportCycleScanTest` 看不到套件內部的環**——**2026-09-04 已量**：把掃描降到檔案層級
+    重新跑過整個 `app/`（含 `app/schedule/state.py` ⇄ `routes.py` 那個曾被點名的路徑），
+    **今天違規數是 0**——T5 把 `routes.py` 拆成 `state.py`／`tree_approval.py` 時已經連帶解掉。
+    要不要仍然裝這道閘門是決定（0 違規也可能是「以後再犯也擋得住」的保險，不是白做），
+    不是量測問題本身，留給使用者判斷
 
 ### 第 5 級：介面與一致性
 
-15. **U2 前端版面規範落地**（ADR 0051：1920 流動、`auto-fit`、scrollWidth 閘門，先弄紅一次）
-16. **07-3 統一 404 信封**（`require_brand` 吐 `detail`、identity 吐 `error.code`，前端三處要跟著改）——
+12. **U2 前端版面規範落地**（ADR 0051：1920 流動、`auto-fit`、scrollWidth 閘門，先弄紅一次）
+13. **07-3 統一 404 信封**（`require_brand` 吐 `detail`、identity 吐 `error.code`，前端三處要跟著改）——
     T5 的拔根測試順手看到它：模組被拔掉時畫面顯示「找不到這個品牌」，其實是路由不存在
-17. **07-1 前端 depcruise 擋 supabase-js 只在登入模組**（Playwright 那一半已完成）
-18. **07-4 GitHub 四個安全開關**——需付費或公開 repo，本機單人階段先不付
+14. **07-4 GitHub 四個安全開關**——需付費或公開 repo，本機單人階段先不付
 
 ### 第 6 級：一次性清理，掛在會碰到那個檔的票上順手做
 
-19. **④ 31 處引用 `5eca0db` 刪掉的設計文件**（20 個檔，沒有現成替代出處，要逐檔判斷）
-20. **⑥ `app/identity/` 沒有任何 ADR 管**——下一個碰 identity 的 route C 問題順手寫第一份
-21. **⑦ 殘留 worktree** `C:/Users/User/orca/workspaces/marketing/t3-frontend`（已確認完全併進 `saas`）
-22. **其餘小債**見〈小債〉那節
+15. **⑥ `app/identity/` 沒有任何 ADR 管**——下一個碰 identity 的 route C 問題順手寫第一份
+16. **其餘小債**見〈小債〉那節
 
 〈使用者待辦〉那節不進這份排序——做的人是你，不是 agent。
 
@@ -300,43 +296,48 @@ T2 三張票逐字寫明不碰它，審查也逐字驗過 diff 裡沒有 `max_da
 **這些都不擋 T4。** 每一條都是「閘門缺一道」或「文件指向死路」，沒有一條會讓 T4 寫出錯的 schema。
 排序依據是「每張票省下多少」，不是嚴重度。
 
-- [ ] **① CI 補上 e2e（最划算，`.github/workflows/ci.yml` 加約 4 行）**。backend job 已經
-      裝好 uv、node、build 前端、`supabase start`——只差
-      `npx playwright install --with-deps chromium` ＋ `npm run e2e`。
-      現在 `CLAUDE.md` 與工作流規範都把 e2e 當「整合 bug 唯一現形處」，而它**只活在開發機上**：
-      CI 全綠不代表 server 起得來。做完就是每一張後續的票都自動多一道。
-      驗收：故意讓 server 起不來，看 CI 紅一次，還原
-- [ ] **② 契約頁閘門**：`test_architecture_boundaries.py` 加一份 `MODULES_WITHOUT_CONTRACT`
-      凍結清單，**只准變短**。現在 16 個模組、6 份頁（brand_intelligence／brand_web／core／
-      identity／meta／schedule），缺 10 份。開票當天清單＝現況所以是綠的；新模組沒頁會紅；
-      補完一份劃掉一行。**要先弄紅一次才算數**（加一個假模組資料夾看它紅）。
-      規則已寫進 `CLAUDE.md`，閘門沒建之前那句話仍是「散文裡的限制」
-- [ ] **③ 前端行數閘門**：`FileLineCapTest` 只掃 `app/**.py`，前端一條都沒有。
-      `frontend/src/components/schedule/SchedulePage.tsx` 已 **851 行**、超過同一個 800 上限，
-      而 U2 還要再動它。做法照後端那份：凍結現況、只准變小
-- [ ] **④ 31 處引用 `5eca0db` 刪掉的設計文件**（20 個檔）：`docs/design/*`、
-      `architecture-rules.md`、`rule-checks.md`、`docs/decisions/0003`。
-      跟已修好的 `workflow-diet.md` 那 13 處同一類，但這批**沒有現成的替代出處**——
-      `docs/design/03-data-model.md §3.2` 這種指的是欄位權威，現在的權威是 migration 檔本身。
-      逐檔判斷，不能 sed 一次掃掉。可以跟任何一張碰到該檔的票順手做
-- [ ] **⑤ `ImportCycleScanTest` 看不到套件內部的環**：它只記錄頂層套件之間的邊，所以
-      `app/schedule/state.py` ⇄ `routes.py` 那個雙向 import 全程綠燈，是靠票面文字擋掉的。
-      要不要把掃描器降到模組層是個決定（降下去會不會一開就紅 N 條，**先量再裝**）
+- [x] ~~① CI 補上 e2e~~ **2026-09-04 完成**：`.github/workflows/ci.yml` backend job 加了
+      Supabase client 環境變數匯出（`VITE_SUPABASE_URL`／`VITE_SUPABASE_ANON_KEY`，取自
+      `supabase status -o json`）＋`npx playwright install --with-deps chromium`＋
+      `npm run e2e`。本機驗過整條路徑真的會跑（不只是語法對）：`npm run e2e` 在本機用同樣的
+      環境變數組合真的跑過、1 個測試通過。CI 本身要等下一次 push 才看得到紅綠，本機這輪先驗證
+      的是「這組指令碰得到 Supabase、backend 真的起得來、Playwright 真的能登入」
+- [x] ~~② 契約頁閘門~~ **2026-09-04 完成**：`test_architecture_boundaries.py` 新增
+      `ContractPageRatchetTest`（`MODULES_WITHOUT_CONTRACT` 凍結清單，只准變短）。16 個模組
+      現在 6 份頁、10 個在豁免清單（`app/departments`／`app/methodology` 沒有一行 .py 但仍算
+      模組）。**已弄紅一次**：加一個假模組資料夾（無契約頁、不在豁免清單）驗證兩支斷言都紅，
+      刪掉後復原成綠。`TEST_LINES_CEILING` 跟著從 18504 調到 18568（理由寫在該常數正上方）
+- [x] ~~③ 前端行數閘門~~ **2026-09-04 完成**：`frontend/src/architectureBoundaries.test.ts`
+      鏡射後端 `FileLineCapTest` 的形狀（`FILE_LINE_CAP = 800`，`KNOWN_OVERSIZED_FILES` 凍結
+      `SchedulePage.tsx` 現在的 851 行，只准變小）。**已弄紅一次**：塞一個 801 行的假檔案看它紅，
+      刪掉後復原成綠
+- [x] ~~④ 31 處引用 `5eca0db` 刪掉的設計文件~~ **2026-09-04 完成**：`docs/design/*`、
+      `architecture-rules.md`、`rule-checks.md`、`docs/decisions/0003` 這四種指標，19 個檔、
+      30 處逐一改成「已被 5eca0db 清除，權威在 XXX」（migration 檔／該支檔案本身），不用 sed
+      批次處理。**順手發現一批範圍外的新債，見下面〈其餘小債〉「DESIGN.md 裸引用」那條**——
+      沒有動它，範圍只到票面點名的四種指標
+- [x] ~~⑤ `ImportCycleScanTest` 看不到套件內部的環~~ **2026-09-04 已量，不裝**：見上方排序清單
+      第 11 項，違規數 0，裝不裝是留給使用者的決定不是技術欠帳，這裡先劃掉「先量」那一半
 - [ ] **⑥ `app/identity/` 沒有任何 ADR 管**（`adr-index.mjs` 對它零列）。認證、組織解析、
       兩個開發後門都在裡面，一條決策紀錄都沒有。已寫進 `docs/contracts/identity.md` 當事實記著。
       不是「現在補一份」——是**下一個碰到 identity 的 route C 問題順手寫第一份**
-- [ ] **⑦ 殘留 worktree**：`C:/Users/User/orca/workspaces/marketing/t3-frontend`（分支
-      `beastgummy0321-stack/t3-frontend`）。**已確認完全併進 `saas`，沒有未合併的工作**，
-      `git worktree remove` 即可
+- [x] ~~⑦ 殘留 worktree~~ **2026-09-04 完成**：`C:/Users/User/orca/workspaces/marketing/t3-frontend`
+      移除前先查過——分支本身（`beastgummy0321-stack/t3-frontend`）在 `saas..分支` 是 0 個
+      commit，確認完全併入；但 worktree 裡另外躺著一批**沒有 commit 過**的舊草稿（另一套
+      更早、跟現在資料夾結構對不上的 dependency-cruiser 規則，`src/components/campaigns/`
+      `warroom/` 等現在都不存在的舊 feature 名稱），順手看過確認是被放棄的探索、不是遺漏的工作，
+      才 `git worktree remove --force`（分支本身沒刪）
 
 ### 不是票，是量到的事實（開票時要記得，不必修）
 
-- **棘輪餘裕（2026-09-03 實測）**：`TEST_LINES_CEILING` 17877／實測 17877＝**0**；
-  `app/core` 1613／1613、`app/identity` 539／539、`app/storage`／`app/tools` 也都是 **0**，
-  `app/llm` 剩 2 行。`app/meta` 214、`app/schedule` 773。
-  ADR 0041 允許「寫理由調高」所以不是死結，但**任何要加測試的票都得動那一行**——
-  票裡先寫明授權，否則實作者會（正確地）停下來回報 blocked-upstream，白繞一輪。
-  測試／production 比值 **0.949**
+- **棘輪餘裕（2026-09-04 更新，本節原本寫的 17877 是 2026-09-03 當天更早的舊值，
+  T5 那天稍後已經先漲到 18504，這一行沒跟著更新過——踩到的正是體檢自己點名的病(a)）**：
+  `TEST_LINES_CEILING` 現在是 18568（②契約頁閘門那張票 2026-09-04 從 18504 漲上來的，
+  理由寫在該常數正上方），餘裕仍是 **0**。`app/core` 1613／1613、`app/identity` 539／539、
+  `app/storage`／`app/tools` 也都是 **0**，`app/llm` 剩 2 行（未動）。`app/meta` 214、
+  `app/schedule` 773（皆未動）。ADR 0041 允許「寫理由調高」所以不是死結，但**任何要加測試的票
+  都得動那一行**——票裡先寫明授權，否則實作者會（正確地）停下來回報 blocked-upstream，白繞一輪。
+  測試／production 比值 **0.964**
 - **`決策 NNNN` 那 84 處已緩解，不必逐條改**：`CONTEXT.md` 有一段說明它不是 ADR id、來源已銷毀、
   規則本身都寫在同一句話裡。剩 `report.py:1`／`repository.py:1244` 兩處寫「決策 0017」，
   由那段涵蓋，不動
@@ -347,6 +348,14 @@ Dependabot #1（`nanoid`，修補版 3.3.18）：**`saas` 這邊已經是 3.3.18
 但 GitHub 掃的是預設分支 `master`，那邊還凍在 `v0.1-desktop` 的 3.3.17。警示會亮到 `saas` 併回
 `master` 為止——**不是還沒修，是修在另一條線上**。不為了關掉警示單獨去動凍結的 master。
 
+- [ ] **`DESIGN.md` 裸引用（2026-09-04 收②④兩張票時順手發現，新開，範圍外未動）**：跟已修好的
+      `docs/design/*`／`architecture-rules.md`／`rule-checks.md`／`docs/decisions/0003` 同一種病
+      （5eca0db 清掉的舊文件），但這批是另一種寫法——直接寫根目錄的 `DESIGN.md`（也已不存在），
+      至少再命中 `app/core/interrupts.py`、`app/intake/`（`paste_parse.py`／`repository.py`／
+      `script.py`／`state.py`／`__init__.py`）、`app/shared/web.py`、`app/tools/capacity_check.py`、
+      `app/tests/test_core_interrupts.py` 共 8 個檔、17+ 處，沒有窮舉到全部。逐檔判斷，
+      跟 ④ 同一個做法：`capacity_check.py` 那幾處尤其密集（§10.8／§20.1／§20.2），可能得先看
+      `app/tools/capacity_check.py` 現有的 docstring／常數本身能不能直接扛起這個角色
 - [ ] **上線前必刪（2026-09-02 建，使用者要求）** `supabase/seed.sql` 尾巴那段排查用帳號：
       `123@example.com` ／ `123456`，固定 UUID、固定組織 `org_bughunt`、固定品牌 `brd_bughunt`。
       每次 `supabase db reset` 自動重建，這正是它存在的理由——重置資料庫來查 bug，不會連查 bug

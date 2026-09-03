@@ -1,6 +1,6 @@
 """app/llm/gateway.py — run_task：LLM 任務的唯一入口，寫 llm_task 記錄、算成本、處理重試。
 
-見 docs/design/06-llm-gateway.md §9–14、docs/design/03-data-model.md §3.1 llm_task。
+兩份原始文件皆已被 5eca0db 清除；llm_task 欄位權威見 supabase/migrations/ 本身。
 
 職責（本輪 skeleton，非完整 8 個統一函式——那些是下一輪精靈的消費者，見任務指示）：
 1. 建 llm_task 列（status=running），記 brand_id、task_type、context_scope_json、

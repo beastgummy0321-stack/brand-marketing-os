@@ -1,6 +1,6 @@
 """app/llm/context_compiler.py — 把「最小必要上下文」組成 Prompt 文字，供 gateway 使用。
 
-見 docs/design/04-context-scope.md、docs/design/06-llm-gateway.md §7。
+兩份原始文件皆已被 5eca0db 清除；權威現在是這支檔案的硬性規則本身。
 
 硬性規則：
 1. 只取狀態 confirmed 的 Brand/Product Fact；pending 絕不進入（04 §2、§6）。

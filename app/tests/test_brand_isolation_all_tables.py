@@ -1,8 +1,8 @@
 """app/tests/test_brand_isolation_all_tables.py — 品牌隔離全站測試（修憲落地 A2）。
 
-見 docs/architecture-rules.md A1、鐵則 5（使用者紅線）、決策 0037 第四節第 17 點。
+A1（原文件已被 5eca0db 清除）、鐵則 5（使用者紅線）、決策 0037 第四節第 17 點。
 
-體檢（19-constitution-audit.md 第七節）發現：`03-data-model.md` 宣稱的「共用 repository
+合憲審查（原體檢文件已被 5eca0db 清除）發現：舊設計文件宣稱的「共用 repository
 基底」不存在，71 處手寫 SELECT，唯一防線是住在廣告專屬測試檔（test_ads_schema.py）裡
 一份手寫 38 表白名單——只涵蓋廣告模組，其他 33 張表完全沒被這份白名單看過一眼。
 

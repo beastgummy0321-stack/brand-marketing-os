@@ -1,6 +1,6 @@
 """app/llm/pricing.py — 模型費率表（供應商原生計價幣別 USD，美元／百萬 token）。
 
-見 docs/design/06-llm-gateway.md §12（PriceBook）。刻意只有一個 dict，不散落他處
+原設計文件已被 5eca0db 清除；PriceBook 刻意只有一個 dict，不散落他處
 （本輪任務指示）；之後如供應商調整報價，直接改這個 dict 並在下方註明來源日期。
 """
 

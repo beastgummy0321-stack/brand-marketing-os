@@ -1,9 +1,9 @@
-"""app/core/retention.py — llm_task 保留策略（修憲落地 A5，architecture-rules.md A5）。
+"""app/core/retention.py — llm_task 保留策略（修憲落地 A5；原文件已被 5eca0db 清除）。
 
 問題：llm_task 內嵌完整模型輸出（structured_output_json／rendered_output／
 validation_result_json）、只增不減，× 每日整檔備份 30 份（app/core/backup.py）——位元組會先爆。
 
-鐵則 6「一切可追溯」不等於永不刪（architecture-rules.md A5 明文）：清理只清「模型產出內容」，
+鐵則 6「一切可追溯」不等於永不刪（原文件已刪，規則現在就活在這支檔案）：清理只清「模型產出內容」，
 usage_json／cost／input_context_hash／provider／model／status／時間戳等對帳用欄位永遠保留，
 所以清理後仍查得到「哪個品牌、什麼任務、花多少錢、對得上哪次輸入」，只是看不到逐字內容。
 

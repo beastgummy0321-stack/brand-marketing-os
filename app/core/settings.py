@@ -3,7 +3,7 @@
 只做兩件事：讀一個鍵、寫一個鍵；外加三個語意函式（金鑰、模型、精靈花費上限），
 把「DB 設定 > 環境變數 > 程式預設」這條優先順序寫在一個地方，呼叫端不各自實作。
 
-介面契約見 docs/design/07-settings-and-intake-contract.md。
+介面契約原文件已被 5eca0db 清除；權威現在是這三個函式本身的簽章與行為。
 """
 
 from __future__ import annotations

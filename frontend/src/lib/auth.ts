@@ -2,10 +2,10 @@
  *
  * 為什麼是這支檔案而不是 `03-plan.md` 講的 `src/features/auth/`：這個 repo 沒有
  * `src/features/`——畫面放 `src/components/<feature>/`，資料存取放 `src/lib/*`。跟著
- * repo 現狀走比跟著計畫書的資料夾名字重要；單一檔案也比一整個資料夾更容易被將來的
+ * repo 現狀走比跟著計畫書的資料夾名字重要；單一檔案也比一整個資料夾更容易被
  * dependency-cruiser 規則盯住「全站只有這支檔案准 import @supabase/supabase-js」——
- * 但那條規則現在還沒接（沒有 dependency-cruiser 設定、沒有對應 npm script），這句只是
- * 給將來鋪路，不是現有的限制（看板 07-1）。
+ * 2026-09-04 這條規則已經接上（`frontend/.dependency-cruiser.cjs`、`npm run depcruise`、
+ * CI frontend job），不再只是鋪路（看板 07-1）。
  *
  * session（access token）的持久化交給 supabase-js 自己（它自己在 localStorage 管
  * 一組 key），這裡不重刻 token 儲存。這支檔案自己存的東西只有一樣：目前選的組織

@@ -1,6 +1,6 @@
 """app/tests/test_audit.py — audit_log 只增不改，每次異動留一筆稽核紀錄。
 
-見 docs/design/03-data-model.md §3.1、§8.5。
+原始文件已被 5eca0db 清除；欄位權威見 supabase/migrations/ 本身。
 """
 
 import unittest

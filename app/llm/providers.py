@@ -1,6 +1,6 @@
 """app/llm/providers.py — Provider 介面（供應商中立）＋兩個實作。
 
-見 docs/design/06-llm-gateway.md §5–6、docs/decisions/0003。
+原始文件已被 5eca0db 清除；權威現在是這支檔案的 Provider 介面本身。
 
 Provider.complete() 只做「供應商 SDK 呼叫 → 統一回傳物件」的轉換，不改寫模型輸出內容
 （薄殼原則，principles 第 2 條）。上層 gateway 永不接觸供應商原生型別，只認識這裡的
@@ -330,7 +330,7 @@ class SpendCapExceededError(ProviderError):
 
 @dataclass
 class Usage:
-    """對齊 docs/design/06-llm-gateway.md 的 TokenUsage 形狀。"""
+    """token 用量的統一形狀（原對齊文件已被 5eca0db 清除）。"""
 
     input_tokens: int
     output_tokens: int
