@@ -5,8 +5,10 @@ the creative-loop tables (ticket T1b, ADR 0050). Private to app/schedule (contai
 Five tables (supabase/migrations/20260901000002_schedule_creative_coordinates.sql):
     brand_coordinate        — the seven-dimension vocabulary (constitution rule 5), one row
                                per (brand, dimension, key); the 35 angle seeds are
-                               transcribed from app/methodology/creative-matrix.md and never
-                               change key once minted (T5 groups performance by it).
+                               transcribed from app/methodology/creative-matrix.md, and the
+                               33 seeds across the other six dimensions (ticket T8a) from
+                               that ticket's own vocabulary tables — never change key once
+                               minted (T5 groups performance by it).
     creative_slot            — one row per ad node × source tree: "what this slot wants now".
     creative_candidate       — the Nth attempt at filling a slot; freezes the seven
                                dimensions AGAIN (constitution rule 7) as *_key columns plus a
@@ -110,25 +112,98 @@ _SEED_ANGLES: tuple = (
      "末端猶豫受眾、常見疑慮明確可條列", "損失規避", "可", "末端"),
 )
 
+# 票 T8a：另外六個維度共 33 個種子，逐字對照
+# docs/issues/t8a-six-dimension-vocabulary/ticket.md 的六張表（hook 那張本身逐字對照
+# app/methodology/copywriting.md:35-43，format 那張逐字對照
+# app/methodology/meta-format-specs.md:16,34,49）。跟 `_SEED_ANGLES` 一樣，SQL migration 版
+# 活在 supabase/migrations/20260904000002_schedule_brand_coordinate_six_dimensions.sql，兩邊
+# 手動同步（SQL migration 叫不到這支 Python 模組）。
+# 每個維度一個 tuple，裡面每列一個 4-tuple：(key, category, label, situation)——`category`
+# 整個維度只有一個值仍逐列重複，跟 `_SEED_ANGLES` 同一種形狀，`ensure_coordinates_seeded`
+# 才能用同一套解構寫法。`attributes_json` 只有 `situation`——`lever`／`person_on_camera`／
+# `funnel_stage` 是角度專屬欄位，這裡不寫（`CoordinateAttributes` 每個欄位本來就是選填）。
+_SEED_COORDINATES: dict = {
+    "audience": (
+        ("cold_unaware", "漏斗關係", "陌生・不知有問題", "連自己有這個困擾都還沒意識到"),
+        ("cold_problem_aware", "漏斗關係", "陌生・知道問題", "知道自己痛，不知道有解法"),
+        ("warm_engaged", "漏斗關係", "互動過・沒買", "看過、點過、加過購物車"),
+        ("customer_repeat", "漏斗關係", "已購・回購", "買過，這則是要他再買"),
+        ("lapsed", "漏斗關係", "流失・喚回", "買過但久沒回來"),
+    ),
+    "pain": (
+        ("cost", "痛苦類型", "太貴", "花太多錢，或覺得不值這個價"),
+        ("effort", "痛苦類型", "太麻煩", "花太多時間、步驟太多、要學"),
+        ("uncertainty", "痛苦類型", "怕買錯", "不知道有沒有效、不知道適不適合自己"),
+        ("availability", "痛苦類型", "買不到", "缺貨、通路不便、取得困難"),
+        ("experience", "痛苦類型", "用起來不舒服", "現有方案能用但體驗差"),
+        ("identity", "痛苦類型", "不像我", "面子、不符合我想成為的樣子"),
+    ),
+    "hook": (
+        ("pain_question", "標題公式", "痛點提問", "還在為{痛點}{受影響的行為}？"),
+        ("outcome_led", "標題公式", "結果導向", "達成{渴望}不必{代價}"),
+        ("never_again", "標題公式", "永不再犯", "再也不用{討厭的事}"),
+        ("contrast_flip", "標題公式", "反差對比", "你以為是{貴／麻煩}？其實{便宜／簡單}"),
+        ("proof_led", "標題公式", "證明導向", "{數字}{人}用{產品}達到{結果}"),
+    ),
+    "proof": (
+        ("customer_review", "證據來源", "顧客評論原話",
+         "評論卡、見證疊層、前後對比——原文照搬，不改寫"),
+        ("expert_endorsement", "證據來源", "專家背書", "真實醫師／營養師／教練現身"),
+        ("lab_report", "證據來源", "檢驗報告／認證", "檢驗數據、專利、獎項"),
+        ("sales_numbers", "證據來源", "銷售數據", "銷量、好評率、回購率——絕不捏造"),
+        ("media_coverage", "證據來源", "媒體報導", "只能用真的報導過你的媒體"),
+        ("founder_voice", "證據來源", "創辦人第一手", "創辦初衷、起源故事——捏造會整個垮掉"),
+        ("none", "證據來源", "無證明", "純訴求，這一則不帶任何外部證據"),
+    ),
+    "offer": (
+        ("none", "誘因類型", "無優惠", "只講價值，不給誘因"),
+        ("discount", "誘因類型", "折扣特價", "錨定效應、尾數定價"),
+        ("bundle", "誘因類型", "組合加贈", "心理帳戶、免費效應"),
+        ("free_shipping", "誘因類型", "免運", "免費效應——拉首購比等額折扣有感"),
+        ("trial_sample", "誘因類型", "試用體驗", "互惠原則、承諾與一致性"),
+        ("guarantee", "誘因類型", "保證退換", "後悔規避"),
+        ("limited_time", "誘因類型", "限時限量",
+         "稀缺與急迫——只在真的限時限量時用，捏造見禁用手法"),
+    ),
+    "format": (
+        ("single_image", "Meta 版位", "單圖", "4:5，1080×1350（查證日 2026-08-07）"),
+        ("carousel", "Meta 版位", "輪播", "多卡，每卡連結由組裝時帶入"),
+        ("video", "Meta 版位", "影片", "每主題媒體上限 1（主題＝腳本）"),
+    ),
+}
+
 
 def ensure_coordinates_seeded(conn: _AnyConn, org_id: str, brand_id: str) -> None:
-    """讀座標之前先確認種子已經下過——只在這個品牌一列 `dimension='angle'` 都沒有時才寫，
-    讀第二次不會多寫 35 列（票 T1b done-check：讀兩次不是 70 列）。"""
-    existing = conn.execute(
-        "SELECT 1 FROM brand_coordinate WHERE brand_id = %s AND dimension = 'angle' LIMIT 1",
-        (brand_id,),
-    ).fetchone()
-    if existing is not None:
-        return
-    for key, category, label, situation, lever, person_on_camera, funnel_stage in _SEED_ANGLES:
-        conn.execute(
-            "INSERT INTO brand_coordinate (id, org_id, brand_id, dimension, key, label,"
-            " category, attributes_json) VALUES (%s, %s, %s, 'angle', %s, %s, %s, %s)"
-            " ON CONFLICT (brand_id, dimension, key) DO NOTHING",
-            (new_id("crd"), org_id, brand_id, key, label, category,
-             jsonb({"situation": situation, "lever": lever,
-                    "person_on_camera": person_on_camera, "funnel_stage": funnel_stage})),
-        )
+    """讀座標之前先確認七個維度的種子都下過——逐維度探測，不是只認 `dimension='angle'`
+    （票 T8a：只認 angle 會讓這張票之前就種過的品牌，另外六個維度永遠種不進去）。讀第二次
+    不會多寫（探測擋住重複呼叫，`ON CONFLICT (brand_id, dimension, key) DO NOTHING` 兜底，
+    票 T8a done-check：讀兩次不是 136〔68×2〕列）。"""
+    existing_dims = {
+        row["dimension"] for row in conn.execute(
+            "SELECT DISTINCT dimension FROM brand_coordinate WHERE brand_id = %s", (brand_id,)
+        ).fetchall()
+    }
+    if "angle" not in existing_dims:
+        for key, category, label, situation, lever, person_on_camera, funnel_stage in _SEED_ANGLES:
+            conn.execute(
+                "INSERT INTO brand_coordinate (id, org_id, brand_id, dimension, key, label,"
+                " category, attributes_json) VALUES (%s, %s, %s, 'angle', %s, %s, %s, %s)"
+                " ON CONFLICT (brand_id, dimension, key) DO NOTHING",
+                (new_id("crd"), org_id, brand_id, key, label, category,
+                 jsonb({"situation": situation, "lever": lever,
+                        "person_on_camera": person_on_camera, "funnel_stage": funnel_stage})),
+            )
+    for dimension, rows in _SEED_COORDINATES.items():
+        if dimension in existing_dims:
+            continue
+        for key, category, label, situation in rows:
+            conn.execute(
+                "INSERT INTO brand_coordinate (id, org_id, brand_id, dimension, key, label,"
+                " category, attributes_json) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)"
+                " ON CONFLICT (brand_id, dimension, key) DO NOTHING",
+                (new_id("crd"), org_id, brand_id, dimension, key, label, category,
+                 jsonb({"situation": situation})),
+            )
     conn.commit()
 
 

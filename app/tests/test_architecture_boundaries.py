@@ -596,6 +596,64 @@ class FileLineCapTest(unittest.TestCase):
         )
 
 
+# ---- 票 T8a：七維座標詞彙同步閘門 ----
+# 七個維度名稱（CONSTITUTION.md 規則 5）活在三個地方——`app/schedule/creative.py` 的
+# `COORDINATE_KEYS`（唯一權威）、`frontend/src/lib/coordinatesApi.ts` 的
+# `COORDINATE_DIMENSIONS`、`frontend/src/components/schedule/CampaignTree.tsx` 的
+# `COORDINATE_LABELS`——過去沒有任何機器比對過三邊是否一致。跟 `_tenant_tables()`／
+# `AiKeySourceSingleSourceOfTruthTest` 同一種既有天花板：純文字 regex 掃描，不接 TS
+# parser（`app/tests` 不能 import 前端，repo 裡也沒有能解析 TypeScript 的依賴——
+# ponytail：正則字面比對，真的需要更嚴謹時再升級）。
+
+_PY_COORDINATE_KEYS = re.compile(r"COORDINATE_KEYS\s*=\s*\(([^)]*)\)")
+_TS_COORDINATE_DIMENSIONS_BLOCK = re.compile(
+    r"COORDINATE_DIMENSIONS\s*:[^=]*=\s*\[(.*?)\n\];", re.DOTALL
+)
+_TS_COORDINATE_LABELS_BLOCK = re.compile(
+    r"COORDINATE_LABELS\s*:[^=]*=\s*\[(.*?)\n\];", re.DOTALL
+)
+_TS_TUPLE_FIRST_KEY = re.compile(r'\["([a-z_]+)",')
+
+
+class CoordinateDimensionSyncTest(unittest.TestCase):
+    """票 T8a：三邊的七個維度鍵名跟順序要一致。全部當純文字讀，不執行、不 import
+    （TS 那兩份是前端程式碼，這支測試檔跑在 Python 這邊）。"""
+
+    def _python_keys(self) -> list:
+        path = APP_DIR / "schedule" / "creative.py"
+        match = _PY_COORDINATE_KEYS.search(path.read_text(encoding="utf-8"))
+        self.assertIsNotNone(match, "app/schedule/creative.py 找不到 COORDINATE_KEYS")
+        return re.findall(r'"([a-z_]+)"', match.group(1))
+
+    def _ts_keys(self, rel: str, block_pattern: re.Pattern, const_name: str) -> list:
+        path = REPO_ROOT / rel
+        match = block_pattern.search(path.read_text(encoding="utf-8"))
+        self.assertIsNotNone(match, f"{rel} 找不到 {const_name}")
+        return _TS_TUPLE_FIRST_KEY.findall(match.group(1))
+
+    def test_seven_dimension_keys_agree_python_and_typescript(self):
+        python_keys = self._python_keys()
+        coordinates_api_keys = self._ts_keys(
+            "frontend/src/lib/coordinatesApi.ts",
+            _TS_COORDINATE_DIMENSIONS_BLOCK, "COORDINATE_DIMENSIONS",
+        )
+        campaign_tree_keys = self._ts_keys(
+            "frontend/src/components/schedule/CampaignTree.tsx",
+            _TS_COORDINATE_LABELS_BLOCK, "COORDINATE_LABELS",
+        )
+        self.assertEqual(
+            python_keys, coordinates_api_keys,
+            "COORDINATE_KEYS（app/schedule/creative.py）跟 COORDINATE_DIMENSIONS"
+            "（frontend/src/lib/coordinatesApi.ts）的七個鍵名或順序對不上：\n"
+            f"  python: {python_keys}\n  coordinatesApi.ts: {coordinates_api_keys}",
+        )
+        self.assertEqual(
+            python_keys, campaign_tree_keys,
+            "COORDINATE_KEYS（app/schedule/creative.py）跟 COORDINATE_LABELS"
+            "（frontend/src/components/schedule/CampaignTree.tsx）的七個鍵名或順序對不上：\n"
+            f"  python: {python_keys}\n  CampaignTree.tsx: {campaign_tree_keys}",
+        )
+
 
 # ---------------------------------------------------------------------------
 # A1 檢查⑥⑦：量。票 shell-06（HANDOFF-shell-slice.md §4）。
@@ -1062,7 +1120,21 @@ class FileLineCapTest(unittest.TestCase):
 #   3. `SaveShopeeRowsTest` 新斷言（同一個測試方法內，不是新開測試）——**data correctness**：
 #      蝦皮匯入寫的列，新欄位 `source_row_hash` 要是 NULL，不然兩筆金額剛好相同的不同蝦皮
 #      訂單會被新的 partial unique index 誤判成重複，去重修好反而變成漏記營收。
-TEST_LINES_CEILING = 18515
+#
+# 票 T8a（七維座標詞彙）：18515 → 18601（含本段理由註解自己佔的行）。使用者已在票面
+# 「Line-budget authorisations」段授權調高，終值照票上的規矩——量到的數字，不留餘裕。
+# 兩處新增：
+#   1. `test_architecture_boundaries.py::CoordinateDimensionSyncTest`（NEW，+72 行，含本段
+#      理由本身）——**API 契約**：七個維度鍵名（`CONSTITUTION.md` 規則 5）活在三個地方
+#      （`app/schedule/creative.py` 的 `COORDINATE_KEYS`、`coordinatesApi.ts` 的
+#      `COORDINATE_DIMENSIONS`、`CampaignTree.tsx` 的 `COORDINATE_LABELS`），過去沒有機器
+#      比對過。證過紅：把 `coordinatesApi.ts` 的 `"audience"` 改成 `"audiences"`，這支測試
+#      立刻紅在 `['audience', ...] != ['audiences', ...]`，改回去綠（票面驗收報告有兩次
+#      pytest 輸出）。
+#   2. `test_schedule.py::CoordinateSeedTest`（擴充既有測試，+14 行）——**data
+#      correctness**：新增斷言確認第一次讀完七個維度都有座標、六個新維度加總 33 個，讀
+#      第二次仍是 33 個（不是 66）——這正是本票 done-check 1 的字面內容，不是新開測試。
+TEST_LINES_CEILING = 18601
 
 
 def _line_totals() -> tuple:
