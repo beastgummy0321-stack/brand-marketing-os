@@ -112,13 +112,7 @@ CASCADE 今早已修、上傳有 50MB 上限、產品照那條查無此事）。
 166 列花費、9 則廣告、28,237 元是 9/3 量的，**今天一筆都不在**。四象限泡泡圖沒有東西可以畫，
 硬做就是交出一個誰都無法評估的空畫面。
 
-- [ ] **T6a（route C，票已寫好：`docs/issues/t6a-open-the-doors-before-the-data-arrives/ticket.md`）**
-      只開門不做圖，兩支 migration、零應用程式碼：`order_record.utm_json jsonb`（ADR 0050 原話：
-      「不加它，真實毛利永遠接不到廣告，而且晚加就要重匯每一筆歷史訂單」）＋`decision` 補七欄
-      （`entity_type`／`entity_id`／`campaign_period_id`／`acted_at`／`acted_by`／`revert_of`／
-      `expires_at`；該表實測 14 欄 0 列、應用層零引用，所以加欄位免費）。憲法第 3 條：
-      門現在開好，之後打開功能是撥開關不是 migration。**既有測試綠就是它的證明**
-- [ ] **T6b（route C，等資料）** 四象限泡泡看板本體 ＋ 三個 agent 的診斷（程式先壓縮、AI 只判斷、
+- [ ] **T6b（route C，等資料；T6a 已於 2026-09-04 完成合併）** 四象限泡泡看板本體 ＋ 三個 agent 的診斷（程式先壓縮、AI 只判斷、
       程式排序取前 5，ADR 0057 §6）。**前提有兩個，都不在 agent 手上**：使用者重綁 Meta 廣告帳戶
       （見〈使用者待辦〉），以及 T8b 讓座標真的填得出六維。
       **開工時要逐條有解的讀數陷阱**：`spend_summary` 的 `bool_and(roas IS NOT NULL)`
@@ -297,6 +291,17 @@ Dependabot #1（`nanoid`，修補版 3.3.18）：**`saas` 這邊已經是 3.3.18
 但 GitHub 掃的是預設分支 `master`，那邊還凍在 `v0.1-desktop` 的 3.3.17。警示會亮到 `saas` 併回
 `master` 為止——**不是還沒修，是修在另一條線上**。不為了關掉警示單獨去動凍結的 master。
 
+- [ ] **這個 repo 有兩套 FK 租戶模式，安全的那套只用在一個地方（2026-09-04 T6a 審查量出來的）**：
+      `channel_entity_map`／`period_node_membership`／`channel_credential` 三張表用
+      `FOREIGN KEY (channel_id, org_id) REFERENCES ad_channel(id, org_id)` 的**複合鍵**，
+      資料庫層直接擋掉跨組織指向。但**指向 `campaign_period` 的八條 FK 全部是單欄純 FK**
+      （`decision`／`interrupt`／`llm_task`／`feedback`／`period_node_membership`／
+      `campaign_period_budget_version`／`channel_revenue`＋`campaign_period` 自己的
+      `source_period_id`），六條自參照 FK 也全是單欄。**所以 schema 知道怎麼做安全的那一套，
+      只是對 campaign_period 這條關係從來沒用過。** 今天靠查詢層擋（`require_brand` ＋
+      呼叫端顯式帶 `org_id` ＋ `UnscopedTenantReadScanTest`），ADR 0052 自己也說 RLS 是第二道鎖。
+      **要不要把 `campaign_period` 也升成 `(id, org_id)` 唯一鍵＋八條複合 FK，是一張獨立的
+      route C 票**：八條 FK 全部要重建，不是順手做的事，而且今天沒有任何請求構造得出跨組織輸入
 - [ ] **U3 配色與字體（ADR 0051 規則 13 明文另開的那一張，2026-09-04 由設計閘門再次點名）**：
       `frontend/src/styles/tokens.css:10` 用的是 **Inter**。impeccable 設計閘門的原話：Inter／
       Roboto／Fraunces／Geist／Plus Jakarta Sans／Space Grotesk「被太多網站用到已經沒有辨識度，
