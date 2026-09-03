@@ -994,7 +994,33 @@ class FileLineCapTest(unittest.TestCase):
 # **「新增的行數是那張票的交付物本身，還是為了繞過閘門塞進來的？」** T4 是 route C 的
 # schema／權限票，三條 done-check 各自要一支測試，這 156 行測試＋25 行本註解就是交付物。調到量到的數字，
 # 不留餘裕——這正是那次裁決的原話。實作者拒絕自己調、把它送回主對話台，是對的。
-TEST_LINES_CEILING = 18058
+#
+# 票 T5（ADR 0057）：18058 → 18504（2026-09-03 實測，含本段理由註解自己佔的行）。授權寫在
+# 票面「Line-budget authorisations」段——票上明講 TEST_LINES_CEILING 在票開出當天是 18058、
+# 零餘裕，實作者被授權「調到量出來的後值，理由寫進這裡，不准為了留餘裕多調」。新增測試
+# 全部對應票面 done-check，每一支都證過紅（不是「湊數」）：
+#   1. `test_schedule_performance.py`（NEW，四支）——這張票存在的理由，money：
+#      `MoneyInvariantTest`（done-check 1／2）證明 `untagged.spend + Σvalues[].spend ==
+#      total_spend` 逐維度逐幣別都成立、兩個幣別互不相加；`RoasHonestyTest`
+#      （done-check 3）證明 15 列裡只追蹤到 2 列時，`revenue`／`roas` 只用那 2 列、
+#      `roas_coverage` 誠實回 2/15；`RenamedNodeUntaggedTest`（done-check 5）證明改名後
+#      舊候選的座標不再悄悄接走這筆錢。done-check 1 的「證過紅」不是說說——`_currency_view`
+#      裡 `dim_untagged_rows = buckets.pop(None, [])` 暫時改成 `= []`，
+#      `MoneyInvariantTest` 立刻紅在 `untagged + values == total_spend` 那一行（0 != 1000），
+#      改回來又綠，證據見本票 T5 實作報告。
+#   2. `test_schedule.py`（`BindTreeApiContractTest`，擴充既有測試，不是新開）——深度 3
+#      綁定本身（done-check 4）：既有的
+#      `test_depth_two_node_binds_inside_its_parent_campaign_and_shows_on_the_tree` 擴成
+#      `test_depth_two_and_three_nodes_bind_inside_their_parents_and_show_on_the_tree`，
+#      多驗深度 3 綁定、`source_tree_task_id` 落地、`period_node_membership` 仍然只在深度 2
+#      各一列（不是一個 ad 一列）；另外七支既有的深度二測試因為深度二綁定成功會連動觸發
+#      深度三比對，多掛一次 `_platform_ads()`（新增的 mock helper）才不會在測試裡打真的
+#      Meta 網路——這部分是既有測試因為深度三開通而必須跟著改的行數，不是新查核點。
+#   3. `test_meta_daily_spend.py`（`ListAdsTest`／`AdMatchUnreachableTest`，兩支）—— API
+#      contract：`graph.list_ads` 的翻頁／轉型規則逐字比照既有 `ListAdSetsTest`；
+#      `ad_ids_by_exact_name` 連不上 Meta 時的錯誤形狀逐字比照既有 `AdSetMatchUnreachableTest`
+#      （票面「這是同一套規矩，只深一層」——沒有第三種行為需要驗）。
+TEST_LINES_CEILING = 18504
 
 
 def _line_totals() -> tuple:

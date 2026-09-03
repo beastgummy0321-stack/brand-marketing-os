@@ -249,27 +249,36 @@ def upsert_entity_spend(
     實測，廣告層 35 個實體 x 91 天有 81% 的組合根本沒有列（GRILL.md §1(d)）。「沒投遞」跟
     「投了沒成效」是兩件事，補一列 0 會把前者變成後者。逐列 `conn.execute`（不是
     `executemany`）比照這個模組既有的 `upsert_accounts` 寫法——沒量過真的多帳號多層級
-    backfill 的耗時，不先為了一個沒量過的效能數字換寫法。"""
+    backfill 的耗時，不先為了一個沒量過的效能數字換寫法。
+
+    `currency`（票 T5，ADR 0057 §4）：現在是 `meta_entity_spend` 的 NOT NULL 欄位，值來自
+    純量子查詢 `(SELECT currency FROM meta_ad_account WHERE id = %s)`，`ad_account_id`
+    在參數列尾端再傳一次——簽章跟呼叫端一個字都不用改（`daily_pull.py` 兩個呼叫點原封不
+    動），也不接受呼叫端自己帶一個 `currency` 參數：能傳的呼叫端就是能傳錯的呼叫端，這一
+    欄唯一的事實來源是 `meta_ad_account.currency`，寫入當下就凍住，不是讀取時才跟帳戶現在
+    的設定重新對答案（憲法規則 7）。"""
     pulled_at = now_utc()  # 同一次拉取共用一個時間戳：它記的是「這批數字多新」，不是逐列時刻
     for row in rows:
         conn.execute(
             "INSERT INTO meta_entity_spend"
             " (id, org_id, ad_account_id, level, entity_id, entity_name, campaign_id,"
             "  adset_id, ad_id, spend_date, spend, impressions, clicks, roas, actions,"
-            "  action_values, attribution_window, pulled_at)"
-            " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
+            "  action_values, attribution_window, pulled_at, currency)"
+            " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,"
+            "  (SELECT currency FROM meta_ad_account WHERE id = %s))"
             " ON CONFLICT (ad_account_id, level, entity_id, spend_date) DO UPDATE SET"
             "  entity_name = excluded.entity_name, campaign_id = excluded.campaign_id,"
             "  adset_id = excluded.adset_id, ad_id = excluded.ad_id, spend = excluded.spend,"
             "  impressions = excluded.impressions, clicks = excluded.clicks,"
             "  roas = excluded.roas, actions = excluded.actions,"
             "  action_values = excluded.action_values,"
-            "  attribution_window = excluded.attribution_window, pulled_at = excluded.pulled_at",
+            "  attribution_window = excluded.attribution_window, pulled_at = excluded.pulled_at,"
+            "  currency = excluded.currency",
             (new_id("mes"), org_id, ad_account_id, row["level"], row["entity_id"],
              row["entity_name"], row["campaign_id"], row["adset_id"], row["ad_id"],
              row["spend_date"], row["spend"], row["impressions"], row["clicks"], row["roas"],
              _jsonb_or_null(row["actions"]), _jsonb_or_null(row["action_values"]),
-             row["attribution_window"], pulled_at),
+             row["attribution_window"], pulled_at, ad_account_id),
         )
 
 
@@ -341,6 +350,35 @@ def ad_set_ids_by_exact_name(
         ) from exc
     matched = {a["adset_id"]: a["external_status"] for a in ad_sets if a["name"] == name}
     return [{"adset_id": aid, "external_status": status}
+            for aid, status in sorted(matched.items())]
+
+
+def ad_ids_by_exact_name(
+    conn: _AnyConn, org_id: str, adset_id: str, name: str,
+) -> list:
+    """票 T5（ADR 0055 §7 留給這張票開；ADR 0057）：這個廣告組合底下，廣告名稱逐字（區分
+    大小寫、不 trim、不正規化）等於 `name` 的 `[{"ad_id", "external_status"}]`——比對只在
+    傳進來的這一個廣告組合內部找，不是這批帳號全部，`org_id` 是租戶界線（權杖只認自己
+    組織）。跟 `ad_set_ids_by_exact_name` 完全同一套規矩，僅深一層：同樣不篩
+    `caller` 傳進來的 `adset_id` 是不是這個組織的（那道界線在呼叫端——見
+    `docs/contracts/meta.md`「`ad_set_ids_by_exact_name` 不篩」那段，這支函式繼承同一個
+    寫法與同一份文件記錄的界線）。
+
+    資料來源是**平台上的廣告清單**（`graph.list_ads`），不是 `meta_entity_spend`，理由同
+    `ad_set_ids_by_exact_name`（手動建好、還沒開跑的廣告沒有任何 insights 列）；連不上
+    Meta 時同樣把 `graph.GraphError` 轉成人話 `web.ApiError(502, "meta_unreachable", …)`。
+    """
+    token = get_token(conn, org_id)
+    if token is None:
+        return []  # 這個組織還沒接權杖：沒有可比對的清單，交給呼叫端當「配對失敗」處理
+    try:
+        ads = graph.list_ads(token, adset_id)
+    except graph.GraphError as exc:
+        raise web.ApiError(
+            502, "meta_unreachable", f"連不上 Meta，沒辦法比對名稱：{exc.message}"
+        ) from exc
+    matched = {a["ad_id"]: a["external_status"] for a in ads if a["name"] == name}
+    return [{"ad_id": aid, "external_status": status}
             for aid, status in sorted(matched.items())]
 
 
@@ -567,21 +605,37 @@ def daily_entity_spend(
     （票 T3e，ADR 0055 §11）要逐日判斷一個實體那天算誰的檔期。
 
     `level` 必填、只能用關鍵字傳、沒有預設值——理由跟 `spend_summary()` 一樣：campaign／
-    adset／ad 三層的列躺在同一張表，漏掉這個篩選就是把同一筆錢算三遍。這裡只回花費，
-    不算 ROAS／CTR／CPA 等比率指標（票 T3e 明講：這不是第二支 `spend_summary`，也不准長成
-    那樣）。`org_id` 篩選加呼叫端傳進來的 `ad_account_ids` 是租戶界線。"""
+    adset／ad 三層的列躺在同一張表，漏掉這個篩選就是把同一筆錢算三遍。`org_id` 篩選加
+    呼叫端傳進來的 `ad_account_ids` 是租戶界線。
+
+    票 T5（ADR 0057 §1／§7）：多回 `impressions`／`clicks`／`roas`／`currency` 四欄——
+    這不是違反票 T3e 那句「不准長成 `spend_summary`」：那句話擋的是把
+    `spend_summary()` 逐實體整段月份的**誠實加總**（`bool_and(roas IS NOT NULL)` 那條
+    規則，任一天沒追蹤就讓整個月的 ROAS 回 None）搬進這裡；這裡的 GROUP BY 仍然是
+    `(spend_date, entity_id)`，跟原本一樣是逐日逐實體，SQL 端沒有一行做「跨天」的誠實
+    判斷——`bool_and` 在這裡只在**同一天同一個實體**的範圍內生效（唯一索引已經保證那通常
+    就是一整個群組一列，等於原樣傳遞那一列的 `roas`），真正跨天、跨廣告的誠實加總（T5
+    要的 `roas_coverage`）留給呼叫端 `app/schedule/performance.py` 用 Python 做，正是
+    ADR 0057 §1 要求的「join 在 Python 做，不是一支跨模組的 SQL」。`currency`
+    （ADR 0057 §4）直接讀這一列自己凍住的欄位，不用另外 JOIN `meta_ad_account`。"""
     if level not in LEVELS:
         raise ValueError(f"level 只能是 {'/'.join(LEVELS)} 其中之一")
     if not ad_account_ids:
         return []
     rows = conn.execute(
-        "SELECT spend_date, entity_id, SUM(spend) AS spend FROM meta_entity_spend mes"
+        "SELECT spend_date, entity_id, currency, SUM(spend) AS spend,"
+        " SUM(impressions) AS impressions, SUM(clicks) AS clicks,"
+        " CASE WHEN bool_and(roas IS NOT NULL)"
+        "      THEN SUM(spend * roas) / NULLIF(SUM(spend), 0) ELSE NULL END AS roas"
+        " FROM meta_entity_spend mes"
         + _SPEND_WHERE
-        + " GROUP BY spend_date, entity_id ORDER BY spend_date, entity_id",
+        + " GROUP BY spend_date, entity_id, currency ORDER BY spend_date, entity_id",
         (org_id, ad_account_ids, level, start, end),
     ).fetchall()
     return [
-        {"spend_date": r["spend_date"], "entity_id": r["entity_id"], "spend": float(r["spend"])}
+        {"spend_date": r["spend_date"], "entity_id": r["entity_id"], "currency": r["currency"],
+         "spend": float(r["spend"]), "impressions": int(r["impressions"]),
+         "clicks": int(r["clicks"]), "roas": _float_or_none(r["roas"])}
         for r in rows
     ]
 

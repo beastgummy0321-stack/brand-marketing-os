@@ -35,19 +35,31 @@ CASCADE 今早已修、上傳有 50MB 上限、產品照那條查無此事）。
 表的形狀一律看 ADR 0050 的表清單；migration 檔名前綴一律看 ADR 0049（前綴＝擁有那張表的模組，
 不是要它的那張票，所以一張票可以有好幾個不同前綴的 migration 檔）。
 
-- [ ] **T5（route C）** 成效回流接座標——**第 3 層（廣告）的綁定是這張票的**（ADR 0055 §7：
-      schema 位置 T3a 已留好，開它是多幾列不是 migration），同時決定
-      `creative_candidate.published_ad_external_id` 是留成便利欄位還是刪掉
-      ＋ 診斷（程式先壓縮、三個 agent、程式排序取前 5）
-      ＋ `meta_entity_spend` 補 `currency` 與 `(adset_id, spend_date)` 索引 ＋ `channel_revenue` 補 spend／檔期／幣別／
-      通路／來源雜湊與唯一鍵（現在手填列完全不去重）＋ `learning_ledger` 趁 0 列一次補齊
-      ＋ 破除 `_latest_task_row`（**2026-09-03 已搬到 `app/schedule/state.py`**）的「最新一列即真相」。**閉環在這裡合攏**
+- [>] **T5（route C）站②實作中** 成效回流接座標——**決定與範圍全部收在 ADR 0057**，
+      schema 已凍結並 commit（`a363b72`）。做三件：第 3 層（廣告）綁定（ADR 0055 §7 留給這張票）
+      ＋ 座標成效讀取（程式壓縮，`app/schedule/performance.py`）＋ 駕駛艙一張表。
+      **2026-09-03 消融實驗砍掉四件**（理由逐條在 ADR 0057 §9，不是「以後再說」）：
+      `(adset_id, spend_date)` 索引（**全 repo 沒有任何查詢用 `adset_id` 篩選**，它是為 ADR 0055 §6
+      換掉的舊查詢量的）、`learning_ledger` 補欄位（空表零讀者零寫者，之後加一樣便宜＝門沒關）、
+      舊廣告補座標（使用者 2026-08-31 已裁決）、診斷三 agent 與前 5 排序 → 併進 T6。
+      `creative_candidate.published_ad_external_id` **已刪**（實測 6 列全空、零程式引用）；
+      `meta_entity_spend.currency` **已加並回填**（憲法第 7 條＋一品牌可綁多幣別帳戶）。
+      「破除 `_latest_task_row`」縮成一欄 `channel_entity_map.source_tree_task_id`（綁定當下凍結
+      是哪棵樹），**整體那條仍留在看板**。**閉環改在 T6 合攏**（診斷搬過去了）
 - [ ] **T6（route C）** 四象限泡泡看板 ＋ 建議落 `decision`（補六欄，不新開表；該表 0 列、程式零引用）
       ＋ `order_record.utm_json`。**現在畫不出來的五個理由，票裡要逐條有解**：`spend_summary` 的
       `bool_and(roas IS NOT NULL)`（`app/meta/repository.py:424,437`）讓整支回 None；`roas = 0` 的列一列都沒有，
       賠錢象限畫不出來；真實毛利接不到廣告（就是 utm_json 那條）；~~`daily_pull` 只拉今天但歸因窗是 7d_click~~
       ——**2026-09-02 查證為誤報**，`app/meta/daily_pull.py:89` 拉的是 `[今天-7, 今天]`，理由就寫在 `:54`；
       `frontend/src/lib/echarts.ts:11` 沒註冊 ScatterChart——**沒註冊的圖種靜默不畫也不報錯，閘門會是綠的**
+      ＋ **三個 agent 的診斷（程式先壓縮、AI 只判斷、程式排序取前 5）從 T5 搬來這裡**，
+      因為它讀的就是這張看板的數字（ADR 0057 §6）。讀數陷阱先記著：廣告層 `effective_status`
+      有 12 個值，`DISAPPROVED`／`PENDING_REVIEW` 的廣告花費是 0，**在座標表上長得跟「這個角度沒人要」一模一樣**
+- [ ] **T7（route C，從 T5 切出來）** `channel_revenue` 去重與補欄位：補 `spend`／`campaign_period_id`／
+      `currency`／`ad_channel_id`／`source_row_hash` ＋唯一鍵。**現在手填與無單號的列完全不去重**
+      （唯一索引只開在 `WHERE external_id IS NOT NULL`），同一份 CSV 匯兩次＝營收翻倍，**每個租戶都會中**。
+      不在 T5 是因為它在收入匯入那條路上，不在「座標接成效」那條（ADR 0057 §9）；ADR 0055 §11
+      本輪維持收入走品牌層
 
 ## 仍然成立的事實（不是票，是量到的東西）
 

@@ -31,19 +31,22 @@ Read functions `app.schedule` is allowed to call, listed by their tenant boundar
 their signature, because the boundary is the part of the shape that matters:
 
 - Filter on `org_id` in SQL before they reach the platform: `get_token`, `list_accounts`,
-  `bound_account_ids_for_brand`, `spend_summary`, `daily_entity_spend` (T3e — the same
-  `org_id`/`ad_account_ids`/`level` boundary as `spend_summary`, spend only, one row per day
-  per entity instead of one aggregate per entity), `last_pull_at`, and
-  `campaign_ids_by_exact_name` (which re-checks the caller's `ad_account_ids` against
-  `meta_ad_account WHERE org_id = …` before asking Meta anything).
-- **`ad_set_ids_by_exact_name` does not**, and this is written down rather than smoothed over.
-  It uses `org_id` only to fetch the token, and passes the caller's `campaign_id` straight to
-  Meta. What keeps it inside one tenant today is the call site, not the function: its only
-  caller (`app/schedule/binding.py`) can only ever hand it a campaign id that either
-  `campaign_ids_by_exact_name` just returned from this org's own ad accounts, or that
-  `bindings_by_node_key` read back under `org_id = … AND brand_id = …`. Found at T3c review;
-  there is no reachable request that breaks it, and there is also no second line of defence.
-  `BOARD.md` carries the debt.
+  `bound_account_ids_for_brand`, `spend_summary`, `daily_entity_spend` (T3e, widened at T5 —
+  the same `org_id`/`ad_account_ids`/`level` boundary as `spend_summary`, one row per day per
+  entity instead of one aggregate per entity; carries `impressions`/`clicks`/`roas`/`currency`
+  alongside `spend` now, still no cross-day honesty logic — that stays Python-side in
+  `app/schedule/performance.py`, ADR 0057 §1), `last_pull_at`, and `campaign_ids_by_exact_name`
+  (which re-checks the caller's `ad_account_ids` against `meta_ad_account WHERE org_id = …`
+  before asking Meta anything).
+- **`ad_set_ids_by_exact_name` and `ad_ids_by_exact_name` (T5, the exact same shape one level
+  deeper) do not**, and this is written down rather than smoothed over. They use `org_id` only
+  to fetch the token, and pass the caller's `campaign_id`/`adset_id` straight to Meta. What
+  keeps it inside one tenant today is the call site, not the function: their only caller
+  (`app/schedule/binding.py`) can only ever hand them an id that either
+  `campaign_ids_by_exact_name`/`ad_set_ids_by_exact_name` just returned from this org's own ad
+  accounts, or that `bindings_by_node_key` read back under `org_id = … AND brand_id = …`. Found
+  at T3c review; there is no reachable request that breaks it, and there is also no second line
+  of defence. `BOARD.md` carries the debt.
 
 Tables this module owns: `meta_ad_account`, `brand_meta_ad_account`, `meta_entity_spend`.
 Account tables stay one per channel — there is no generic account table, by decision
@@ -80,3 +83,5 @@ writes it stays in `app/meta/` regardless, because there is still only one chann
 - ADR 0052 — a logged-in request runs as `authenticated` with an `app.org_id` claim.
 - ADR 0055 — a node is identified by a path key and a channel; what stays Meta-specific and why.
 - ADR 0056 — a channel catalogue is a file; its per-org state is a table.
+- ADR 0057 — ad-level spend meets the coordinate through the depth-3 binding, which freezes the
+  tree that produced it.

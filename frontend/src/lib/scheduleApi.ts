@@ -3,6 +3,7 @@
  * 這支端點不用 `{data, generated_at}` 信封（見 `lib/api.ts` 的 `Envelope<T>`）——
  * 票 07 settled 段「API — 字面契約」直接寫死回應形狀，這裡逐欄對照，不套用別支
  * feature 的信封慣例。 */
+import type { CoordinateDimension } from "./coordinatesApi";
 import { apiFetch, errorMessageFrom } from "./http";
 
 export interface ScheduleSplit {
@@ -417,4 +418,48 @@ export async function rejectSchedulePlans(
     throw new Error(message);
   }
   return (await res.json()) as ScheduleState;
+}
+
+/** 票 T5（ADR 0057）：本月每個座標維度的花費／成效——沒有查詢參數，窗口固定是這個日曆月
+ * （跟 `metaApi.ts` 的 `fetchMetaSpend` 同一個窗口）。`untagged` 是桶子不是破洞：一支花費
+ * 列碰不到某個維度的座標就落在那個維度自己的 `untagged` 裡，`values[]` 加上
+ * `untagged.spend` 等於 `total_spend`，逐維度、逐幣別都成立。`revenue`／`roas` 是 `null`
+ * 代表未追蹤，不是 0（跟 `formatMetaRoas` 既有規則一樣）。 */
+export interface CreativePerformanceUntagged {
+  spend: number;
+  ad_count: number;
+}
+
+export interface CreativePerformanceValue {
+  key: string;
+  label: string;
+  spend: number;
+  impressions: number;
+  clicks: number;
+  revenue: number | null;
+  roas: number | null;
+  roas_coverage: number;
+  ad_count: number;
+}
+
+export interface CreativePerformanceDimension {
+  dimension: CoordinateDimension;
+  untagged: CreativePerformanceUntagged;
+  values: CreativePerformanceValue[];
+}
+
+export interface CreativePerformanceCurrency {
+  currency: string;
+  total_spend: number;
+  untagged: CreativePerformanceUntagged;
+  dimensions: CreativePerformanceDimension[];
+}
+
+export interface CreativePerformance {
+  window: { start_date: string; end_date: string };
+  currencies: CreativePerformanceCurrency[];
+}
+
+export function fetchCreativePerformance(brandId: string): Promise<CreativePerformance> {
+  return getJson(`/api/schedule/brands/${encodeURIComponent(brandId)}/creative-performance`);
 }

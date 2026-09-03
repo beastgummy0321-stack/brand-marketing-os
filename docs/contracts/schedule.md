@@ -6,8 +6,8 @@ it is not repeated here, because a second copy goes stale.
 ## Entry path
 
 `app/schedule/__init__.py`. Everything else in the package (`plan.py`, `tree.py`, `creative.py`,
-`period.py`, `binding.py`, `state.py`, `tree_approval.py`, `repository.py`, `routes.py`,
-`jobs.py`) is private and imported by nothing outside it.
+`period.py`, `binding.py`, `state.py`, `tree_approval.py`, `performance.py`, `repository.py`,
+`routes.py`, `jobs.py`) is private and imported by nothing outside it.
 
 The split inside the package is by job, not by size: `routes.py` takes HTTP requests, and the
 others do the work. Three files were carved out of `routes.py` on 2026-09-03 (user-approved) on
@@ -73,6 +73,8 @@ cycle, and `app.dashboard` already depends on it the same way.
 - ADR 0042 — work the user waits for runs on the queue.
 - ADR 0040 — approval is the money brake.
 - ADR 0056 — a channel catalogue is a file; its per-org state is a table.
+- ADR 0057 — ad-level spend meets the coordinate through the depth-3 binding, which freezes the
+  tree that produced it.
 
 Module-local and reversible, decided here rather than in an ADR:
 

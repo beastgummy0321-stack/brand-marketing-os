@@ -1005,6 +1005,59 @@ class AdSetMatchUnreachableTest(_MetaDailySpendTestBase):
         self.assertEqual(caught.exception.code, "meta_unreachable")
 
 
+# -- 13. 票 T5（ADR 0057 §1）：第三層（廣告）綁定要的兩支新讀取 -------------------------
+
+class ListAdsTest(unittest.TestCase):
+    """`list_ads` 比照 `list_campaigns`／`list_ad_sets` 走同一套翻頁骨架
+    （`_fetch_all_pages`，`PagingNeverTruncatesSilentlyTest` 已經測過那一層，這裡不
+    重測），只驗 `_to_ad` 自己的轉型規則：翻頁真的跟到下一頁、缺 id 的項目整筆跳過、
+    缺名稱補空字串——跟 `ListAdSetsTest` 逐字同一套斷言，僅深一層。"""
+
+    def setUp(self):
+        self._orig_fetch_page = graph.fetch_page
+
+    def tearDown(self):
+        graph.fetch_page = self._orig_fetch_page
+
+    def test_pagination_followed_no_id_dropped_missing_name_blank(self):
+        pages = [
+            {"data": [
+                {"id": "ad-1", "name": "單元1", "effective_status": "ACTIVE"},
+                {"name": "沒有 id，應該整筆被丟掉"},
+            ], "paging": {"next": "https://example/ads/2"}},
+            {"data": [{"id": "ad-2", "effective_status": "PENDING_REVIEW"}], "paging": {}},
+        ]
+        calls = iter(pages)
+        graph.fetch_page = lambda url, *, params, headers: next(calls)
+
+        result = graph.list_ads("tok", "as-1")
+        self.assertEqual(result, [
+            {"ad_id": "ad-1", "name": "單元1", "external_status": "ACTIVE"},
+            {"ad_id": "ad-2", "name": "", "external_status": "PENDING_REVIEW"},
+        ])
+
+
+class AdMatchUnreachableTest(_MetaDailySpendTestBase):
+    """`ad_ids_by_exact_name` 連不上 Meta 時的錯誤形狀，比照 `AdSetMatchUnreachableTest`：
+    `graph.GraphError` 轉成人話 `web.ApiError(502, "meta_unreachable", …)`。"""
+
+    def test_graph_error_surfaces_as_meta_unreachable(self):
+        import httpx
+
+        org_id, _ = self._make_org("ad_unreachable")
+        meta_repo.save_token(web.conn, org_id, TOKEN)
+        web.conn.commit()
+
+        def fail(url, *, params, headers):
+            raise httpx.ConnectError("boom")
+
+        graph.fetch_page = fail
+
+        with self.assertRaises(web.ApiError) as caught:
+            meta_repo.ad_ids_by_exact_name(web.conn, org_id, "as-1", "單元1")
+        self.assertEqual(caught.exception.code, "meta_unreachable")
+
+
 # -- 4. FK 保護：有花費紀錄的帳號不能被刪（T-fk） -------------------------------------
 
 class SpendHistoryOutlivesTheAccountTest(_MetaDailySpendTestBase):

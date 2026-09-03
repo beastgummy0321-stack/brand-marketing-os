@@ -45,19 +45,22 @@ def tree_with_bindings(conn, tree_row: dict, org_id: str, brand_id: str) -> dict
 
 
 def bind_tree(conn, tree_row: dict, org_id: str, brand_id: str) -> bool:
-    """票 11／T3b／T3c：用名稱精準比對（區分大小寫、不 trim）把活動綁回第一層節點，
+    """票 11／T3b／T3c／T5：用名稱精準比對（區分大小寫、不 trim）把活動綁回第一層節點，
     已綁定的跳過；零筆或兩筆以上是失敗，不猜。第一層綁定成功（不論是這次剛綁的、還是
     先前就綁著）之後，才在它底下比對第二層——用它的 `bound_external_id`（活動 id）當
     父層範圍，只在這個活動內部找廣告組合；第一層沒綁成的，底下的第二層整批不比對，
-    不猜整個帳號（ADR 0055 §7）。回傳「這一批有沒有任何一個節點配對失敗」，訊息由
-    呼叫端貼（整批同一句，不逐節點分開講，ADR 0055 §4）。"""
+    不猜整個帳號（ADR 0055 §7）。第二層（廣告組合）綁定成功之後，同一條規則再套一次
+    深一層：第三層（廣告，ADR 0055 §7 留給這張票開）在它底下比對，只在這個廣告組合
+    內部找廣告；第二層沒綁成的，底下的第三層整批不比對。回傳「這一批有沒有任何一個節點
+    配對失敗」，訊息由呼叫端貼（整批同一句，不逐節點分開講，ADR 0055 §4）。"""
     tree = tree_with_bindings(conn, tree_row, org_id, brand_id)
     account_ids = meta_repo.bound_account_ids_for_brand(conn, org_id, brand_id)
     # 票 T3e（ADR 0055 §11）：深度 2（扛預算）節點綁定成功時，順手記一列
     # `period_node_membership`——「品牌當下的檔期」用模組既有的同一條讀
     # （`schedule_repo.get_latest_period`），不是另開一條。沒有檔期（這個品牌從沒出過
     # 方案就直接綁定，理論上不會發生，但不是不可能）就不寫、也不算失敗——寫在這裡，不是
-    # 悄悄跳過沒人知道。
+    # 悄悄跳過沒人知道。深度 3（廣告）不寫 membership——那張表只認扛預算的那一層
+    # （ADR 0055 §6），第三層再寫一列會讓 node_level_spend() 在兩層都算到同一筆錢。
     period = schedule_repo.get_latest_period(conn, org_id, brand_id)
     channel_id, any_failure, newly_bound = None, False, False
 
@@ -75,34 +78,55 @@ def bind_tree(conn, tree_row: dict, org_id: str, brand_id: str) -> bool:
                 node_key=node["node_key"], node_name_at_bind=node["name"],
                 external_id=matches[0]["campaign_id"],
                 external_status=matches[0]["external_status"],
+                source_tree_task_id=tree_row["id"],
             )
             newly_bound = True
             node["bound_external_id"] = matches[0]["campaign_id"]
 
         for child in node["children"]:
-            if child["bound_external_id"] is not None:
-                continue
-            matches = meta_repo.ad_set_ids_by_exact_name(
-                conn, org_id, node["bound_external_id"], child["name"]
-            )
-            if len(matches) != 1:
-                any_failure = True
-                continue
-            channel_id = channel_id or schedule_repo.ensure_meta_channel(conn, org_id)
-            schedule_repo.upsert_binding(
-                conn, org_id=org_id, brand_id=brand_id, channel_id=channel_id,
-                node_key=child["node_key"], node_name_at_bind=child["name"],
-                external_id=matches[0]["adset_id"],
-                external_status=matches[0]["external_status"],
-            )
-            if period is not None:
-                schedule_repo.insert_period_node_membership(
-                    conn, org_id=org_id, brand_id=brand_id,
-                    campaign_period_id=period["id"], channel_id=channel_id,
-                    node_key=child["node_key"],
-                    from_date=period["start_date"], to_date=period["end_date"],
+            if child["bound_external_id"] is None:
+                matches = meta_repo.ad_set_ids_by_exact_name(
+                    conn, org_id, node["bound_external_id"], child["name"]
                 )
-            newly_bound = True
+                if len(matches) != 1:
+                    any_failure = True
+                    continue  # 沒有廣告組合可以當第三層的父層範圍，孫節點整批不比對
+                channel_id = channel_id or schedule_repo.ensure_meta_channel(conn, org_id)
+                schedule_repo.upsert_binding(
+                    conn, org_id=org_id, brand_id=brand_id, channel_id=channel_id,
+                    node_key=child["node_key"], node_name_at_bind=child["name"],
+                    external_id=matches[0]["adset_id"],
+                    external_status=matches[0]["external_status"],
+                    source_tree_task_id=tree_row["id"],
+                )
+                if period is not None:
+                    schedule_repo.insert_period_node_membership(
+                        conn, org_id=org_id, brand_id=brand_id,
+                        campaign_period_id=period["id"], channel_id=channel_id,
+                        node_key=child["node_key"],
+                        from_date=period["start_date"], to_date=period["end_date"],
+                    )
+                newly_bound = True
+                child["bound_external_id"] = matches[0]["adset_id"]
+
+            for grandchild in child["children"]:
+                if grandchild["bound_external_id"] is not None:
+                    continue
+                matches = meta_repo.ad_ids_by_exact_name(
+                    conn, org_id, child["bound_external_id"], grandchild["name"]
+                )
+                if len(matches) != 1:
+                    any_failure = True
+                    continue
+                channel_id = channel_id or schedule_repo.ensure_meta_channel(conn, org_id)
+                schedule_repo.upsert_binding(
+                    conn, org_id=org_id, brand_id=brand_id, channel_id=channel_id,
+                    node_key=grandchild["node_key"], node_name_at_bind=grandchild["name"],
+                    external_id=matches[0]["ad_id"],
+                    external_status=matches[0]["external_status"],
+                    source_tree_task_id=tree_row["id"],
+                )
+                newly_bound = True
 
     if newly_bound:
         conn.commit()

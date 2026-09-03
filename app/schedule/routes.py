@@ -56,6 +56,7 @@ from app.core import rule_cards
 from app.llm import gateway
 from app.schedule import binding as binding_mod
 from app.schedule import creative as creative_mod
+from app.schedule import performance as performance_mod
 from app.schedule import period as period_mod
 from app.schedule import plan as plan_mod
 from app.schedule import repository as schedule_repo
@@ -457,6 +458,15 @@ def settle_period(request: Request, brand_id: str, period_id: str):
     actor = web.require_actor(request)
     web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
     return _run_settle(web.conn, brand_id, actor.org_id, period_id, str(actor.user_id))
+
+
+@router.get("/brands/{brand_id}/creative-performance")
+def get_creative_performance(request: Request, brand_id: str):
+    """票 T5（ADR 0057）：本月每個座標維度的花費／成效——沒有查詢參數，窗口固定是組織
+    自己時區的這個日曆月（`performance_mod.brand_creative_performance` 檔頭有完整說明）。"""
+    actor = web.require_actor(request)
+    web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
+    return performance_mod.brand_creative_performance(web.conn, actor.org_id, brand_id)
 
 
 # ---------------------------------------------------------------------------

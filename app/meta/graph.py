@@ -229,6 +229,40 @@ def list_ad_sets(token: str, campaign_id: str) -> list[dict]:
     return [r for r in (_to_ad_set(item) for item in items) if r is not None]
 
 
+def _to_ad(item: dict) -> dict | None:
+    """一個廣告條目 → 我們要的三個欄位；缺 id 這一筆不能用（跳過，比照 `_to_ad_set`）。
+    名稱缺席補空字串；`effective_status` 原樣存、不缺席時補 None，同 `_to_ad_set`。
+
+    廣告層的 `effective_status` 有十二個值——比活動層（ADR 0055 §4）多六個：
+    `PENDING_REVIEW`／`DISAPPROVED`／`PREAPPROVED`／`PENDING_BILLING_INFO`／`ADSET_PAUSED`／
+    `IN_PROCESS`／`WITH_ISSUES`（連同活動層本來就有的 `ACTIVE`／`PAUSED`／`DELETED`／
+    `CAMPAIGN_PAUSED`／`ARCHIVED`）。逐字存、不比對、不縮寫，`external_status` 沒有
+    CHECK，票 T5 也不加一個（ADR 0057 §8）。"""
+    ad_id = item.get("id")
+    if not ad_id:
+        return None
+    return {
+        "ad_id": ad_id, "name": item.get("name") or "",
+        "external_status": item.get("effective_status"),
+    }
+
+
+def list_ads(token: str, adset_id: str) -> list[dict]:
+    """這個廣告組合目前所有廣告的 [{"ad_id","name","external_status"}]，**包含還沒開跑
+    的**——跟 `list_campaigns`／`list_ad_sets` 同一個理由：問的是「平台上存不存在」，不是
+    「它花過錢」（票 T5，ADR 0057 §1：手動建好、維持關閉的廣告在 insights 查不到）。
+
+    `adset_id` 是這個節點的父層節點已經綁定的 `channel_entity_map.external_id`；比對只在
+    這個廣告組合內部找，不跨廣告組合——呼叫端（`app.schedule.binding`）負責只在父層
+    （廣告組合）綁定成功之後才呼叫這裡。廣告 id 不像帳號 id 需要 `act_` 前綴，也不像活動
+    id 需要任何前綴。"""
+    headers = {"Authorization": f"Bearer {token}"}
+    url = f"{GRAPH_BASE_URL}/{adset_id}/ads"
+    params: dict | None = {"fields": "id,name,effective_status", "limit": 200}
+    items = _fetch_all_pages(url, params, headers)
+    return [r for r in (_to_ad(item) for item in items) if r is not None]
+
+
 # 三個層級要的度量欄位完全一樣，只寫一次——三份幾乎相同的字串各自漂移是這種表格最典型的
 # 壞法。
 #

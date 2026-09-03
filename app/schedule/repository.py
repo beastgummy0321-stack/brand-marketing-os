@@ -466,23 +466,67 @@ def ensure_meta_channel(conn: _AnyConn, org_id: str) -> str:
 
 def upsert_binding(conn: _AnyConn, *, org_id: str, brand_id: str, channel_id: str,
                     node_key: str, node_name_at_bind: str, external_id: str,
-                    external_status: str | None) -> None:
+                    external_status: str | None, source_tree_task_id: str | None) -> None:
     """綁定一個節點。`ON CONFLICT` 的鍵就是節點的身分 `(org_id, brand_id, channel_id,
     node_key)`——改名之後重綁是覆寫同一列，不是撞唯一鍵（ADR 0055 §2／§4：位置是身分，
-    重綁覆寫、不留歷史）。呼叫端批次呼叫，這裡不 commit。"""
+    重綁覆寫、不留歷史）。呼叫端批次呼叫，這裡不 commit。
+
+    `source_tree_task_id`（票 T5，ADR 0057 §2）：這次 `bind_tree()` 執行當下那一列
+    `schedule_tree` 的 id，三個深度都傳同一個值——**這一欄長在列上，不是只長在某個
+    深度**，`binding.py` 三段迴圈共用同一個 `tree_row["id"]`。只有深度 3 的值真的有讀者
+    （T5 拿它去找回綁定當下那棵樹的 `creative_slot`），深度 1／2 目前沒有創意、也永遠不
+    會有（migration 註解原話），但欄位不分深度特例，函式簽章也不分。重綁覆寫整列時這一
+    欄跟著被覆寫，不留歷史（ADR 0055 §4 既有規則，這裡沒有另開一條）。"""
     conn.execute(
         "INSERT INTO channel_entity_map (id, org_id, brand_id, channel_id, node_key,"
-        " node_name_at_bind, external_id, external_status, external_status_at, local_state)"
-        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, now(), 'mapped')"
+        " node_name_at_bind, external_id, external_status, external_status_at, local_state,"
+        " source_tree_task_id)"
+        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, now(), 'mapped', %s)"
         " ON CONFLICT (org_id, brand_id, channel_id, node_key) DO UPDATE SET"
         " external_id = excluded.external_id,"
         " node_name_at_bind = excluded.node_name_at_bind,"
         " external_status = excluded.external_status,"
         " external_status_at = excluded.external_status_at,"
-        " local_state = 'mapped', updated_at = now()",
+        " local_state = 'mapped', source_tree_task_id = excluded.source_tree_task_id,"
+        " updated_at = now()",
         (new_id("cem"), org_id, brand_id, channel_id, node_key, node_name_at_bind,
-         external_id, external_status),
+         external_id, external_status, source_tree_task_id),
     )
+
+
+def depth_three_bindings(conn: _AnyConn, org_id: str, brand_id: str, channel_key: str) -> dict:
+    """票 T5（ADR 0057 §1／§2）：這個品牌在這個通路上，深度 3（廣告）的
+    `node_key → {external_id, node_name_at_bind, source_tree_task_id}`——`bindings_by_node_key`
+    的深度 3 切片，多帶 `source_tree_task_id`（那支只給 `binding.tree_with_bindings()` 疊圖
+    用，不需要這一欄；T5 要用它找回綁定當下那棵樹，凍結列表的鍵，見 ADR 0057 §2：絕不能
+    用「現在最新的樹」代替）。同樣只挑 `local_state = 'mapped'`，讀從不寫。"""
+    rows = conn.execute(
+        "SELECT cem.node_key, cem.external_id, cem.node_name_at_bind, cem.source_tree_task_id"
+        " FROM channel_entity_map cem JOIN ad_channel ch"
+        " ON ch.id = cem.channel_id AND ch.org_id = cem.org_id"
+        " WHERE cem.org_id = %s AND cem.brand_id = %s AND ch.channel_key = %s"
+        " AND cem.local_state = 'mapped' AND cem.depth = 3",
+        (org_id, brand_id, channel_key),
+    ).fetchall()
+    return {r["node_key"]: dict(r) for r in rows}
+
+
+def creative_candidates_for_brand(conn: _AnyConn, org_id: str, brand_id: str) -> dict:
+    """票 T5（ADR 0057 §1／§2）：這個品牌每個 `(node_key, source_tree_task_id)` 位置最新一輪
+    候選的七個 `*_key` 欄位——「最新」是同一個 slot 裡最大的 `generation_round`（**絕不是
+    「最新的樹」**——那是另一個軸，slot 本身已經凍住是哪棵樹，ADR 0057 §2 的核心規則）。
+    `DISTINCT ON` 一次撈完整個品牌，`app/schedule/performance.py` 拿它當查表用，不逐一 ad
+    各查一次（ADR 0057 §1：join 在 Python 做，不是逐列打 DB）。"""
+    rows = conn.execute(
+        "SELECT DISTINCT ON (cs.node_key, cs.source_tree_task_id)"
+        " cs.node_key, cs.source_tree_task_id, cc.audience_key, cc.pain_key, cc.angle_key,"
+        " cc.hook_key, cc.proof_key, cc.offer_key, cc.format_key"
+        " FROM creative_slot cs JOIN creative_candidate cc ON cc.slot_id = cs.id"
+        " WHERE cs.org_id = %s AND cs.brand_id = %s"
+        " ORDER BY cs.node_key, cs.source_tree_task_id, cc.generation_round DESC",
+        (org_id, brand_id),
+    ).fetchall()
+    return {(r["node_key"], r["source_tree_task_id"]): dict(r) for r in rows}
 
 
 # ---- 票 T3e（ADR 0055 §11）：period_node_membership，深度 2 節點綁定時記一列 -------------
