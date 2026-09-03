@@ -129,10 +129,16 @@ class ApprovalApiContractTest(unittest.TestCase):
             hit = [{"campaign_id": campaign_id, "name": node_name, "effective_status": "ACTIVE"}]
             return hit if acc_id == external_id else []
 
-        with mock.patch.object(meta_graph, "list_campaigns", fake_list_campaigns):
+        # 票 T3c：綁定現在也會往下比對第二層（廣告組合）——這支測試守的是核准／花費／
+        # content_hash 那條路，不是第二層配對，平台上沒有任何廣告組合（`list_ad_sets`
+        # 一律回空清單）本來就會讓第二層配不到，`bind_failure` 因此非 null，不影響這裡
+        # 只在乎的第一層（root）綁定結果。
+        with mock.patch.object(meta_graph, "list_campaigns", fake_list_campaigns), \
+                mock.patch.object(meta_graph, "list_ad_sets", lambda _token, _cid: []):
             resp = self.client.post(f"/api/schedule/brands/{self.brand['id']}/tree/bind")
         self.assertEqual(
-            (resp.status_code, resp.json()["tree"]["bind_failure"]), (200, None), resp.text
+            (resp.status_code, resp.json()["tree"]["nodes"][0]["bound_external_id"]),
+            (200, campaign_id), resp.text,
         )
         return account_id
 

@@ -910,7 +910,20 @@ class FileLineCapTest(unittest.TestCase):
 # （位置優先、名字只當否決票，兩邊都不繼承對方）、改名後第二次 bind 是覆寫同一列
 # （`(org_id, brand_id, channel_id, node_key)` 這把 upsert 鍵本來要防的事）、以及讀這條疊圖
 # 的 SQL 本身也要過租戶隔離。17074 → 17263（含本段理由註解自己佔的行）。
-TEST_LINES_CEILING = 17263
+#
+# 票 T3c（ADR 0055 §7）：第二層（扛預算的廣告組合）也綁。守的是**資料正確性**：
+# `app/meta/graph.py` 的 `list_ad_sets`／`_to_ad_set`（翻頁跟到下一頁、缺 id 整筆跳過、
+# 缺名稱補空字串——比照既有 `list_campaigns` 那組規則，`test_meta_daily_spend.py`
+# `ListAdSetsTest`）；`app/meta/repository.py` 的 `ad_set_ids_by_exact_name` 連不上 Meta
+# 時把 `GraphError` 轉成人話 `meta_unreachable`（同檔 `AdSetMatchUnreachableTest`，比照
+# 既有 `campaign_ids_by_exact_name` 的錯誤形狀）；`app/schedule/binding.py` 的
+# `bind_tree`／`tree_with_bindings` 遞迴到第二層（`test_schedule.py`
+# `BindTreeApiContractTest` 五支新測試：第二層在父層活動範圍內配對且出現在 API 回的樹
+# 上、同名廣告組合出現在別的活動底下不算數、父層沒綁成子節點整批不比對、平台端兩個廣告
+# 組合剛好同名兩邊都不猜、改名後跟第一層一樣顯示未綁定）。多出來的行數也含既有六支
+# 測試补上 `_platform_ad_sets` 這道新配對步驟必要的 mock（第二層現在一定會被嘗試，不
+# mock 就真的打網路），以及本段理由註解自己佔的行。17263 → 17504。
+TEST_LINES_CEILING = 17504
 
 
 def _line_totals() -> tuple:

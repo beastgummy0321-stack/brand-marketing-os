@@ -189,6 +189,34 @@ def list_campaigns(token: str, account_id: str) -> list[dict]:
     return [r for r in (_to_campaign(item) for item in items) if r is not None]
 
 
+def _to_ad_set(item: dict) -> dict | None:
+    """一個廣告組合條目 → 我們要的三個欄位；缺 id 這一筆不能用（跳過，比照
+    `_to_campaign`）。名稱缺席補空字串——精準比對永遠不會等於空字串，所以缺名稱＝配不到，
+    不是配到別人。`effective_status` 原樣存、不缺席時補 None，同 `_to_campaign`。"""
+    adset_id = item.get("id")
+    if not adset_id:
+        return None
+    return {
+        "adset_id": adset_id, "name": item.get("name") or "",
+        "external_status": item.get("effective_status"),
+    }
+
+
+def list_ad_sets(token: str, campaign_id: str) -> list[dict]:
+    """這個活動目前所有廣告組合的 [{"adset_id","name","external_status"}]，**包含還沒
+    開跑的**——跟 `list_campaigns` 同一個理由：問的是「平台上存不存在」，不是「它花過
+    錢」，手動建好但維持關閉的廣告組合在 insights 查不到（票 T3c，ADR 0055 §7）。
+
+    `campaign_id` 是這個節點的父層節點已經綁定的 `channel_entity_map.external_id`；
+    比對只在這個活動內部找，不跨活動——呼叫端（`app.schedule.binding`）負責只在父層
+    綁定成功之後才呼叫這裡。活動 id 不像帳號 id 需要 `act_` 前綴。"""
+    headers = {"Authorization": f"Bearer {token}"}
+    url = f"{GRAPH_BASE_URL}/{campaign_id}/adsets"
+    params: dict | None = {"fields": "id,name,effective_status", "limit": 200}
+    items = _fetch_all_pages(url, params, headers)
+    return [r for r in (_to_ad_set(item) for item in items) if r is not None]
+
+
 # 三個層級要的度量欄位完全一樣，只寫一次——三份幾乎相同的字串各自漂移是這種表格最典型的
 # 壞法。
 #

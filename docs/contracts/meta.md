@@ -27,10 +27,21 @@ register_task() -> None             # idempotently registers the daily spend-pul
 Callers: `app/main.py`'s register loop (both), and `app/tests/test_meta_daily_spend.py`, which
 calls `register_task()` again after building its own test `background.app()`.
 
-Read functions `app.schedule` is allowed to call, by their tenant boundary rather than their
-signature — each takes `org_id` and filters on it, and that is the part of the shape that
-matters: `get_token`, `list_accounts`, `bound_account_ids_for_brand`, `campaign_ids_by_exact_name`,
-`spend_summary`, `last_pull_at`.
+Read functions `app.schedule` is allowed to call, listed by their tenant boundary rather than
+their signature, because the boundary is the part of the shape that matters:
+
+- Filter on `org_id` in SQL before they reach the platform: `get_token`, `list_accounts`,
+  `bound_account_ids_for_brand`, `spend_summary`, `last_pull_at`, and
+  `campaign_ids_by_exact_name` (which re-checks the caller's `ad_account_ids` against
+  `meta_ad_account WHERE org_id = …` before asking Meta anything).
+- **`ad_set_ids_by_exact_name` does not**, and this is written down rather than smoothed over.
+  It uses `org_id` only to fetch the token, and passes the caller's `campaign_id` straight to
+  Meta. What keeps it inside one tenant today is the call site, not the function: its only
+  caller (`app/schedule/binding.py`) can only ever hand it a campaign id that either
+  `campaign_ids_by_exact_name` just returned from this org's own ad accounts, or that
+  `bindings_by_node_key` read back under `org_id = … AND brand_id = …`. Found at T3c review;
+  there is no reachable request that breaks it, and there is also no second line of defence.
+  `BOARD.md` carries the debt.
 
 Tables this module owns: `meta_credential`, `meta_ad_account`, `brand_meta_ad_account`,
 `meta_entity_spend`. Account tables stay one per channel — there is no generic account table,

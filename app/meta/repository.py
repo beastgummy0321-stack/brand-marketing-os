@@ -268,6 +268,32 @@ def campaign_ids_by_exact_name(
             for cid, status in sorted(matched.items())]
 
 
+def ad_set_ids_by_exact_name(
+    conn: _AnyConn, org_id: str, campaign_id: str, name: str,
+) -> list:
+    """票 T3c（ADR 0055 §7）：這個活動底下，廣告組合名稱逐字（區分大小寫、不 trim、
+    不正規化）等於 `name` 的 `[{"adset_id", "external_status"}]`——比對只在傳進來的這一個
+    活動內部找，不是這批帳號全部，`org_id` 是租戶界線（權杖只認自己組織）。
+
+    跟 `campaign_ids_by_exact_name` 同一套規矩：資料來源是**平台上的廣告組合清單**
+    （`graph.list_ad_sets`），不是 `meta_entity_spend`，理由同上（手動建好、還沒開跑的
+    廣告組合沒有任何 insights 列）；連不上 Meta 時同樣把 `graph.GraphError` 轉成人話
+    `web.ApiError(502, "meta_unreachable", …)`，不是兩種錯誤形狀混在一起。
+    """
+    token = get_token(conn, org_id)
+    if token is None:
+        return []  # 這個組織還沒接權杖：沒有可比對的清單，交給呼叫端當「配對失敗」處理
+    try:
+        ad_sets = graph.list_ad_sets(token, campaign_id)
+    except graph.GraphError as exc:
+        raise web.ApiError(
+            502, "meta_unreachable", f"連不上 Meta，沒辦法比對名稱：{exc.message}"
+        ) from exc
+    matched = {a["adset_id"]: a["external_status"] for a in ad_sets if a["name"] == name}
+    return [{"adset_id": aid, "external_status": status}
+            for aid, status in sorted(matched.items())]
+
+
 def last_pull_at(conn: _AnyConn, org_id: str, ad_account_ids: list):
     """這批帳號裡『最早的』上次成功拉取時間——品牌可能綁了不只一個帳號，畫面要誠實
     反映「最舊鮮度」，不是挑一個看起來最新的帳號蓋過去（票 05：失敗要讓使用者看得出

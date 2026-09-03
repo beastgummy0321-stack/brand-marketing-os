@@ -200,6 +200,14 @@ Dependabot #1（`nanoid`，修補版 3.3.18）：**`saas` 這邊已經是 3.3.18
 - [ ] `assets` bucket 沒設 `file_size_limit`（`supabase/migrations/20260830000002_core_storage_assets_bucket.sql`
       的 insert 只給 id／name／public）。**上傳端已經擋兩道 50MB**（`app/brand_web/routes_library.py:57`／`:79`／`:273`），
       所以這是第二道防線不是沒有防線——架構圖說「上傳無大小上限」是錯的。順手補一行
+- [ ] **租戶防線不對稱（2026-09-03 T3c 審查發現，已查證今天咬不到人）**：
+      `ad_set_ids_by_exact_name`（`app/meta/repository.py`）只拿 `org_id` 去取權杖，呼叫端給的
+      `campaign_id` 原封不動送去 Meta，函式自己不驗證那顆活動是不是這個組織的。它的姊妹函式
+      `campaign_ids_by_exact_name` 有驗（先 `SELECT ... FROM meta_ad_account WHERE org_id = %s`）。
+      擋住跨組織的是**呼叫端的形狀**（唯一呼叫點只可能傳自己組織的活動 id），不是函式本身——
+      審查逐條追過整條路徑，**沒有任何請求構造得出跨組織的輸入**，所以是欠帳不是漏洞。
+      補法：在函式裡加一道「這顆活動屬於這個組織」的檢查，一次查詢。`docs/contracts/meta.md`
+      已經逐字記下這個不對稱，不再宣稱「每支都篩 org_id」
 - [ ] `frontend/src/components/layout/FluidCard.tsx` 現在只剩 Storybook 在用。要留當設計素材還是刪，
       下一輪順手決定
 - [ ] `frontend/src/lib/auth.ts` 的 depcruise 註解已改成「規則還沒建」並指向 07-1——

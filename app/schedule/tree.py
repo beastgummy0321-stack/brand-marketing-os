@@ -110,9 +110,10 @@ def _collect_nodes(
         node = {
             "name": name, "node_key": node_key, "fields": fields, "share": share,
             "daily_amount": None, "warnings": warnings, "children": children,
-            # tree.py 不碰 DB，一律留白；只有第一層節點會被 routes.py 的
-            # binding.tree_with_bindings() 疊上 bound_external_id（第一層以下永遠是
-            # null——T3b 只綁第一層，ADR 0055 §7），spend／roas 只有綁定的節點才補上。
+            # tree.py 不碰 DB，一律留白；binding.tree_with_bindings() 疊上
+            # bound_external_id 時遞迴每一層（票 T3c 起，ADR 0055 §7：第一、二層目前
+            # 有寫入路徑，第三層留給 T5），spend／roas 仍然只在第一層、且只有綁定的
+            # 節點才補上（routes.py 的 _fill_node_spend，這張票沒有動它）。
             "bound_external_id": None, "spend": None, "roas": None,
         }
         if depth == budget_level:

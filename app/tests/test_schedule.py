@@ -87,9 +87,14 @@ def _tree_fenced(nodes: list, levels: list | None = None, budget_level: int = 2)
     return f"這是一段給老闆看的說明文字。\n\n```json\n{body}\n```"
 
 
-def _one_tree_nodes(shares: tuple = (0.7, 0.3), name: str = "活動一") -> list:
+def _one_tree_nodes(
+    shares: tuple = (0.7, 0.3), name: str = "活動一",
+    child_names: tuple = ("組合1", "組合2"),
+) -> list:
     """三層節點，扛預算的是第二層（比照 Meta：行銷活動／廣告組合／廣告，預算在第 2 層）。
-    `name`：票 T3b 的重綁測試需要重新展開之後第一層節點換一個名字。"""
+    `name`：票 T3b 的重綁測試需要重新展開之後第一層節點換一個名字。`child_names`：票
+    T3c 的第二層測試需要換第二層節點的名字（改名顯示未綁定、兩個同名手足）——預設值跟
+    原本的 f"組合{i+1}" 一樣，既有呼叫端不用改。"""
     return [
         {
             "name": name,
@@ -98,7 +103,7 @@ def _one_tree_nodes(shares: tuple = (0.7, 0.3), name: str = "活動一") -> list
             "warnings": [],
             "children": [
                 {
-                    "name": f"組合{i + 1}",
+                    "name": child_names[i],
                     "fields": [{"label": "受眾", "value": "既有客"}],
                     "share": share,
                     "warnings": [] if i == 0 else ["只投一個版位，沒有勾其他版位"],
@@ -885,6 +890,20 @@ class BindTreeApiContractTest(_ScheduleApiTestBase):
 
         return mock.patch.object(meta_graph, "list_campaigns", fake_list_campaigns)
 
+    def _platform_ad_sets(self, by_campaign: dict):
+        """換掉平台上的廣告組合清單（不打網路，票 T3c）：`by_campaign` 是
+        {campaign_id: [(adset_id, 廣告組合名稱), …]}——比對只在傳進來的那一個活動
+        內部找，不是這個帳號全部（`app/meta/graph.py` `list_ad_sets` 的簽名本身就只收
+        一個 `campaign_id`，不是帳號清單）。"""
+
+        def fake_list_ad_sets(_token: str, campaign_id: str) -> list[dict]:
+            return [
+                {"adset_id": adset_id, "name": name, "external_status": "ACTIVE"}
+                for adset_id, name in by_campaign.get(campaign_id, [])
+            ]
+
+        return mock.patch.object(meta_graph, "list_ad_sets", fake_list_ad_sets)
+
     def _seed_campaign(self, org_id: str, account_id: str, campaign_id: str, campaign_name: str,
                         *, spend: float = 1000.0, roas: float | None = 2.0) -> None:
         meta_repo.upsert_entity_spend(web.conn, org_id, account_id, [
@@ -927,7 +946,8 @@ class BindTreeApiContractTest(_ScheduleApiTestBase):
         self._succeed_plan_and_tree()
         self._seed_campaign(coredb.DEV_ORG_ID, self.account_id, "camp-1", "活動一")
 
-        with self._platform_campaigns({self.account_id: [("camp-1", "活動一")]}):
+        with self._platform_campaigns({self.account_id: [("camp-1", "活動一")]}), \
+                self._platform_ad_sets({"camp-1": [("as-1", "組合1"), ("as-2", "組合2")]}):
             resp = self._bind()
         self.assertEqual(resp.status_code, 200, resp.text)
         tree = resp.json()["tree"]
@@ -957,7 +977,8 @@ class BindTreeApiContractTest(_ScheduleApiTestBase):
         建了一個 PAUSED 活動，拉完當天花費，那個活動不在花費表裡）。"""
         self._succeed_plan_and_tree()
 
-        with self._platform_campaigns({self.account_id: [("camp-paused", "活動一")]}):
+        with self._platform_campaigns({self.account_id: [("camp-paused", "活動一")]}), \
+                self._platform_ad_sets({"camp-paused": [("as-1", "組合1"), ("as-2", "組合2")]}):
             resp = self._bind()
 
         self.assertEqual(resp.status_code, 200, resp.text)
@@ -1018,7 +1039,10 @@ class BindTreeApiContractTest(_ScheduleApiTestBase):
         """票 T3b（ADR 0055 §1）：舊版拿節點名稱當 dict key，兩個「活動一」會撞成同一格；
         新版鍵是 node_key，各自綁到不同的活動——這是舊版表達不出來的狀態。"""
         self._succeed_plan_and_tree()  # 第一次展開：第一層只有一個「活動一」（node_key "1"）
-        with self._platform_campaigns({self.account_id: [("camp-1", "活動一")]}):
+        # 平台上這一輪還沒有任何廣告組合（票 T3c：第二層配不到，不影響這裡要看的第一層
+        # 結果，`_platform_ad_sets({})` 對任何活動都回空清單）。
+        with self._platform_campaigns({self.account_id: [("camp-1", "活動一")]}), \
+                self._platform_ad_sets({}):
             resp = self._bind()
         self.assertEqual(resp.json()["tree"]["nodes"][0]["bound_external_id"], "camp-1")
 
@@ -1031,18 +1055,26 @@ class BindTreeApiContractTest(_ScheduleApiTestBase):
         self.assertEqual(resp.status_code, 200, resp.text)
         self._run_worker()
 
-        # 平台上這時只有另一個叫「活動一」的活動（使用者照樹又手動建了第二個）。
-        with self._platform_campaigns({self.account_id: [("camp-2", "活動一")]}):
+        # 平台上這時只有另一個叫「活動一」的活動（使用者照樹又手動建了第二個），底下
+        # 各自也建好了一個廣告組合「組合」（票 T3c：第二層也要各自綁到各自活動內部）。
+        with self._platform_campaigns({self.account_id: [("camp-2", "活動一")]}), \
+                self._platform_ad_sets(
+                    {"camp-1": [("as-1x", "組合")], "camp-2": [("as-2x", "組合")]}
+                ):
             resp = self._bind()
         self.assertEqual(resp.status_code, 200, resp.text)
         tree = resp.json()["tree"]
         self.assertIsNone(tree["bind_failure"])
         self.assertEqual(tree["nodes"][0]["bound_external_id"], "camp-1")  # 沒被動過
         self.assertEqual(tree["nodes"][1]["bound_external_id"], "camp-2")  # 各自綁到不同活動
+        self.assertEqual(tree["nodes"][0]["children"][0]["bound_external_id"], "as-1x")
+        self.assertEqual(tree["nodes"][1]["children"][0]["bound_external_id"], "as-2x")
         self.assertEqual(
             self._channel_entity_map_rows(),
             [{"node_key": "1", "external_id": "camp-1"},
-             {"node_key": "2", "external_id": "camp-2"}],
+             {"node_key": "1.1", "external_id": "as-1x"},
+             {"node_key": "2", "external_id": "camp-2"},
+             {"node_key": "2.1", "external_id": "as-2x"}],
         )
 
     # -- 資料正確性：位置配對，名字只當否決票 --------------------------------------------
@@ -1050,7 +1082,9 @@ class BindTreeApiContractTest(_ScheduleApiTestBase):
     def test_re_expand_keeps_binding_when_name_unchanged_shows_unbound_when_renamed(self):
         """ADR 0055 §4：同位置、同名字——綁定留著；同位置、換了名字——顯示未綁定。"""
         self._succeed_plan_and_tree()
-        with self._platform_campaigns({self.account_id: [("camp-1", "活動一")]}):
+        # 這支測試只看第一層，第二層有沒有配到不影響這裡的斷言。
+        with self._platform_campaigns({self.account_id: [("camp-1", "活動一")]}), \
+                self._platform_ad_sets({}):
             resp = self._bind()
         self.assertEqual(resp.json()["tree"]["nodes"][0]["bound_external_id"], "camp-1")
 
@@ -1090,9 +1124,10 @@ class BindTreeApiContractTest(_ScheduleApiTestBase):
         )
         self.assertEqual(resp.status_code, 200, resp.text)
         self._run_worker()
+        # 這支測試只看第一層互換名字的行為，第二層有沒有配到不影響這裡的斷言。
         with self._platform_campaigns(
             {self.account_id: [("camp-a", "活動A"), ("camp-b", "活動B")]}
-        ):
+        ), self._platform_ad_sets({}):
             resp = self._bind()
         self.assertEqual(resp.status_code, 200, resp.text)
         tree = resp.json()["tree"]
@@ -1115,7 +1150,10 @@ class BindTreeApiContractTest(_ScheduleApiTestBase):
 
     def test_second_bind_after_rename_updates_the_row_not_a_unique_violation(self):
         self._succeed_plan_and_tree()
-        with self._platform_campaigns({self.account_id: [("camp-1", "活動一")]}):
+        # 這支測試守的是第一層 upsert 鍵的行為，第二層有沒有配到不影響——兩次都給空的
+        # 廣告組合清單（`_platform_ad_sets({})`），兩層各自的失敗互不牽連。
+        with self._platform_campaigns({self.account_id: [("camp-1", "活動一")]}), \
+                self._platform_ad_sets({}):
             resp = self._bind()
         self.assertEqual(resp.json()["tree"]["nodes"][0]["bound_external_id"], "camp-1")
 
@@ -1127,12 +1165,15 @@ class BindTreeApiContractTest(_ScheduleApiTestBase):
         self._run_worker()
 
         # 第二次 bind：平台上是新名字的活動——upsert 蓋掉同一個 node_key 的舊列，不是
-        # 撞 `(org_id, brand_id, channel_id, node_key)` 唯一鍵報錯。
-        with self._platform_campaigns({self.account_id: [("camp-2", "活動一（新版）")]}):
+        # 撞 `(org_id, brand_id, channel_id, node_key)` 唯一鍵報錯。平台上一樣沒有廣告
+        # 組合，所以第二層兩個子節點都配不到——`bind_failure` 因此非 null，這是第二層
+        # 自己的失敗，不影響這支測試要證的事：第一層同一個 node_key 只有一列。
+        with self._platform_campaigns({self.account_id: [("camp-2", "活動一（新版）")]}), \
+                self._platform_ad_sets({}):
             resp = self._bind()
         self.assertEqual(resp.status_code, 200, resp.text)
         tree = resp.json()["tree"]
-        self.assertIsNone(tree["bind_failure"])
+        self.assertEqual(tree["bind_failure"], "配對失敗，請檢查名稱是否完全相符")
         self.assertEqual(tree["nodes"][0]["bound_external_id"], "camp-2")
         self.assertEqual(  # 同一個 node_key 只有一列，覆寫不是新增
             self._channel_entity_map_rows(), [{"node_key": "1", "external_id": "camp-2"}]
@@ -1142,7 +1183,9 @@ class BindTreeApiContractTest(_ScheduleApiTestBase):
 
     def test_another_orgs_binding_is_not_visible_through_the_tree_endpoint(self):
         self._succeed_plan_and_tree()
-        with self._platform_campaigns({self.account_id: [("camp-1", "活動一")]}):
+        # 這支測試只看第一層的租戶隔離，第二層有沒有配到不影響這裡的斷言。
+        with self._platform_campaigns({self.account_id: [("camp-1", "活動一")]}), \
+                self._platform_ad_sets({}):
             resp = self._bind()
         self.assertEqual(resp.json()["tree"]["nodes"][0]["bound_external_id"], "camp-1")
 
@@ -1178,6 +1221,132 @@ class BindTreeApiContractTest(_ScheduleApiTestBase):
 
         get_resp = self.client.get(f"/api/schedule/brands/{brand_b['id']}", headers=headers)
         self.assertIsNone(get_resp.json()["tree"]["nodes"][0]["bound_external_id"])
+
+    # -- 票 T3c（ADR 0055 §7）：第二層（扛預算的廣告組合）也綁 --------------------------
+
+    def test_depth_two_node_binds_inside_its_parent_campaign_and_shows_on_the_tree(self):
+        """第一層綁定成功之後，第二層在它底下的活動範圍內比對；綁到的 id 要出現在
+        API 回的樹上（不是只寫進 `channel_entity_map`），第三層照樣是 null（T5 才綁）。"""
+        self._succeed_plan_and_tree()  # 活動一 -> 組合1（share .7）／組合2（share .3）
+        with self._platform_campaigns({self.account_id: [("camp-1", "活動一")]}), \
+                self._platform_ad_sets({"camp-1": [("as-1", "組合1"), ("as-2", "組合2")]}):
+            resp = self._bind()
+        self.assertEqual(resp.status_code, 200, resp.text)
+        tree = resp.json()["tree"]
+        self.assertIsNone(tree["bind_failure"])
+        parent = tree["nodes"][0]
+        self.assertEqual(parent["bound_external_id"], "camp-1")
+        self.assertEqual(parent["children"][0]["bound_external_id"], "as-1")
+        self.assertEqual(parent["children"][1]["bound_external_id"], "as-2")
+        self.assertIsNone(parent["children"][0]["children"][0]["bound_external_id"])  # 第三層
+        self.assertEqual(
+            {(r["node_key"], r["external_id"]) for r in self._channel_entity_map_rows()},
+            {("1", "camp-1"), ("1.1", "as-1"), ("1.2", "as-2")},
+        )
+
+    def test_depth_two_match_in_another_campaign_does_not_bind_it(self):
+        """ticket 矛盾檢查段第一點：兩個活動都綁定了，各自底下有一個同名的廣告組合
+        「組合」——比對只在各自的活動範圍內找，讀全帳號會看到兩筆、兩邊都綁不了；
+        讀各自活動內部各只有一筆，兩邊都該綁上。"""
+        schedule_jobs.PROVIDER = _fake(_fenced_plans([_one_plan()]))
+        resp = self._post(plan_count=1)
+        self.assertEqual(resp.status_code, 200, resp.text)
+        self._run_worker()
+        schedule_jobs.PROVIDER = _fake(_tree_fenced(_two_top_nodes("活動A", "活動B")))
+        resp = self.client.post(
+            f"/api/schedule/brands/{self.brand['id']}/tree", json={"plan_index": 0}
+        )
+        self.assertEqual(resp.status_code, 200, resp.text)
+        self._run_worker()
+
+        with self._platform_campaigns(
+            {self.account_id: [("camp-a", "活動A"), ("camp-b", "活動B")]}
+        ), self._platform_ad_sets(
+            {"camp-a": [("as-a", "組合")], "camp-b": [("as-b", "組合")]}
+        ):
+            resp = self._bind()
+        self.assertEqual(resp.status_code, 200, resp.text)
+        tree = resp.json()["tree"]
+        self.assertIsNone(tree["bind_failure"])
+        self.assertEqual(tree["nodes"][0]["children"][0]["bound_external_id"], "as-a")
+        self.assertEqual(tree["nodes"][1]["children"][0]["bound_external_id"], "as-b")
+
+    def test_depth_two_node_under_unbound_parent_is_not_attempted(self):
+        """第一層沒配對到活動，底下的第二層完全不查——猜整個帳號等於綁到陌生人的
+        廣告組合（ticket 說明第 3 點）。用呼叫紀錄證明真的沒打這支查詢，不只是結果
+        剛好是 None。"""
+        self._succeed_plan_and_tree()  # 帳號裡沒有叫「活動一」的活動
+        calls: list = []
+
+        def fake_list_ad_sets(_token: str, campaign_id: str) -> list[dict]:
+            calls.append(campaign_id)
+            return []
+
+        with self._platform_campaigns({self.account_id: []}), \
+                mock.patch.object(meta_graph, "list_ad_sets", fake_list_ad_sets):
+            resp = self._bind()
+        self.assertEqual(resp.status_code, 200, resp.text)
+        tree = resp.json()["tree"]
+        self.assertEqual(tree["bind_failure"], "配對失敗，請檢查名稱是否完全相符")
+        self.assertIsNone(tree["nodes"][0]["bound_external_id"])
+        self.assertIsNone(tree["nodes"][0]["children"][0]["bound_external_id"])
+        self.assertEqual(calls, [])
+
+    def test_two_depth_two_siblings_same_name_both_stay_unbound(self):
+        """ticket 矛盾檢查段第二點：跟第一層「兩個同名手足各自綁到不同活動」不是同一件
+        事——這裡的歧義在平台端（同一個活動底下兩個廣告組合剛好同名），沒有任何資訊能
+        分辨誰是誰，兩邊都不猜；第一層照樣維持綁定。"""
+        schedule_jobs.PROVIDER = _fake(_fenced_plans([_one_plan()]))
+        resp = self._post(plan_count=1)
+        self.assertEqual(resp.status_code, 200, resp.text)
+        self._run_worker()
+        schedule_jobs.PROVIDER = _fake(
+            _tree_fenced(_one_tree_nodes(child_names=("組合", "組合")))
+        )
+        resp = self.client.post(
+            f"/api/schedule/brands/{self.brand['id']}/tree", json={"plan_index": 0}
+        )
+        self.assertEqual(resp.status_code, 200, resp.text)
+        self._run_worker()
+
+        with self._platform_campaigns({self.account_id: [("camp-1", "活動一")]}), \
+                self._platform_ad_sets({"camp-1": [("as-1", "組合"), ("as-2", "組合")]}):
+            resp = self._bind()
+        self.assertEqual(resp.status_code, 200, resp.text)
+        tree = resp.json()["tree"]
+        self.assertEqual(tree["bind_failure"], "配對失敗，請檢查名稱是否完全相符")
+        self.assertEqual(tree["nodes"][0]["bound_external_id"], "camp-1")  # 第一層照樣綁定
+        self.assertIsNone(tree["nodes"][0]["children"][0]["bound_external_id"])
+        self.assertIsNone(tree["nodes"][0]["children"][1]["bound_external_id"])
+        self.assertEqual(
+            self._channel_entity_map_rows(), [{"node_key": "1", "external_id": "camp-1"}]
+        )
+
+    def test_depth_two_node_renamed_after_binding_shows_unbound(self):
+        """ADR 0055 §4：位置配對、名字只當否決票——第二層跟第一層適用同一條規則
+        （比照 test_re_expand_keeps_binding_when_name_unchanged_shows_unbound_when_renamed）。
+        重新展開只換第二層第一個子節點的名字，第一層與第二層第二個子節點都沒動。"""
+        self._succeed_plan_and_tree()
+        with self._platform_campaigns({self.account_id: [("camp-1", "活動一")]}), \
+                self._platform_ad_sets({"camp-1": [("as-1", "組合1"), ("as-2", "組合2")]}):
+            resp = self._bind()
+        tree = resp.json()["tree"]
+        self.assertEqual(tree["nodes"][0]["children"][0]["bound_external_id"], "as-1")
+        self.assertEqual(tree["nodes"][0]["children"][1]["bound_external_id"], "as-2")
+
+        schedule_jobs.PROVIDER = _fake(
+            _tree_fenced(_one_tree_nodes(child_names=("組合1（改版）", "組合2")))
+        )
+        resp = self.client.post(
+            f"/api/schedule/brands/{self.brand['id']}/tree", json={"plan_index": 0}
+        )
+        self.assertEqual(resp.status_code, 200, resp.text)
+        self._run_worker()
+        get_resp = self.client.get(f"/api/schedule/brands/{self.brand['id']}")
+        tree = get_resp.json()["tree"]
+        self.assertEqual(tree["nodes"][0]["bound_external_id"], "camp-1")  # 第一層沒動過
+        self.assertIsNone(tree["nodes"][0]["children"][0]["bound_external_id"])  # 改名了
+        self.assertEqual(tree["nodes"][0]["children"][1]["bound_external_id"], "as-2")  # 沒改名
 
 
 class CreativeApiContractTest(_ScheduleApiTestBase):
