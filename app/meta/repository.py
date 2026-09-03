@@ -11,11 +11,21 @@ live campaign list through `graph.py`, because a campaign built by hand and left
 exists on the platform but has no rows in any of our tables. Its docstring carries the
 reason; everything else below is Postgres only.
 
-Four tables (see supabase/migrations/20260829000002_meta_baseline.sql and
-20260830000004_meta_entity_spend.sql):
-    meta_credential        — one row per org, points at the Vault secret (never the token)
+Tables (see supabase/migrations/20260829000002_meta_baseline.sql,
+20260830000004_meta_entity_spend.sql and 20260903000012_schedule_channel_credential.sql):
+    channel_credential      — this module's earlier one-row-per-org credential table is gone
+                              (ticket T4, ADR 0056 §4 — see that migration's own header for
+                              the table it replaced). Owned by the schedule module (ADR 0050),
+                              not this one — but the code
+                              that reads and writes it stays here, because there is still
+                              only one channel and ADR 0056 §4 says so explicitly. Keyed
+                              (org_id, channel_id, account_scope); v1 writes only
+                              account_scope='*', so today's behaviour — one token per org —
+                              is unchanged. Points at the Vault secret, never the token.
     meta_ad_account        — accounts a token has revealed, org-scoped; also carries
-                              last_pull_at (ticket 05 — set only on a *successful* pull)
+                              last_pull_at (ticket 05 — set only on a *successful* pull) and
+                              timezone_name (ticket T4 — the AdAccount's own IANA zone,
+                              nullable: accounts connected before T4 have none)
     brand_meta_ad_account  — which brand(s) use which account(s), the m:n mapping
     meta_entity_spend      — per account, per level (campaign/adset/ad), per entity, per day
                               (ticket S1, replaces meta_campaign_spend); org+account scoped,
@@ -24,11 +34,11 @@ Four tables (see supabase/migrations/20260829000002_meta_baseline.sql and
                               with no default on purpose — a WHERE clause can be forgotten,
                               a NOT NULL column cannot, and the three levels share one table.
 
-The token itself never touches meta_credential (or any other table, audit_log, or a log
+The token itself never touches channel_credential (or any other table, audit_log, or a log
 line) — it lives in Supabase Vault. `save_token` does not give the secret a name:
 `vault.secrets` has a unique index on `name` in one global schema, while
 app/tests/conftest.py gives every test module its own Postgres schema — a named secret
-would collide across test modules and across organisations. `meta_credential.secret_id`
+would collide across test modules and across organisations. `channel_credential.secret_id`
 is the index instead.
 """
 
@@ -56,12 +66,27 @@ def _vault_update_secret(conn: _AnyConn, secret_id: str, token: str) -> None:
     conn.execute("SELECT core_vault_save_secret(%s, %s)", (secret_id, token))  # 票 R3b
 
 
-# ---- meta_credential --------------------------------------------------------------
+# ---- channel_credential (ticket T4, ADR 0056 §4) ----------------------------------
+
+# The one channel this module knows about, and the one account_scope v1 ever writes.
+# channel_credential is keyed (org_id, channel_id, account_scope) so a second scope is a
+# new row later, not a migration (constitution rule 3).
+_META_CHANNEL_KEY = "meta"
+_ACCOUNT_SCOPE_ALL = "*"
+
 
 def get_credential(conn: _AnyConn, org_id: str) -> dict | None:
+    """This org's Meta credential row, joined from channel_credential to ad_channel so the
+    caller never needs a channel id of its own. The join resolves channel_id by
+    channel_key='meta' rather than calling app.schedule.repository.ensure_meta_channel:
+    schedule -> meta is the established import direction (app/schedule/binding.py etc.), so
+    the reverse call would close a package cycle ImportCycleScanTest records."""
     return conn.execute(
-        "SELECT org_id, secret_id, token_tail, updated_at FROM meta_credential WHERE org_id = %s",
-        (org_id,),
+        "SELECT cc.org_id, cc.channel_id, cc.secret_id, cc.token_tail, cc.updated_at"
+        " FROM channel_credential cc JOIN ad_channel ac"
+        "   ON ac.id = cc.channel_id AND ac.org_id = cc.org_id"
+        " WHERE cc.org_id = %s AND ac.channel_key = %s AND cc.account_scope = %s",
+        (org_id, _META_CHANNEL_KEY, _ACCOUNT_SCOPE_ALL),
     ).fetchone()
 
 
@@ -74,15 +99,31 @@ def save_token(conn: _AnyConn, org_id: str, token: str) -> str:
     if existing:
         _vault_update_secret(conn, existing["secret_id"], token)
         conn.execute(
-            "UPDATE meta_credential SET token_tail = %s, updated_at = %s WHERE org_id = %s",
-            (tail, now_utc(), org_id),
+            "UPDATE channel_credential SET token_tail = %s, updated_at = %s"
+            " WHERE org_id = %s AND channel_id = %s AND account_scope = %s",
+            (tail, now_utc(), org_id, existing["channel_id"], _ACCOUNT_SCOPE_ALL),
         )
     else:
         secret_id = _vault_create_secret(conn, token)
+        # ponytail: second copy of schedule.repository.ensure_meta_channel; the import
+        # direction is schedule -> meta so it cannot be called from here. Third caller
+        # extracts it to a shared accessor (container contract §5; ADR 0056 §4).
         conn.execute(
-            "INSERT INTO meta_credential (org_id, secret_id, token_tail, updated_at)"
-            " VALUES (%s, %s, %s, %s)",
-            (org_id, secret_id, tail, now_utc()),
+            "INSERT INTO ad_channel (id, org_id, channel_key, enabled)"
+            " VALUES (%s, %s, %s, true) ON CONFLICT (org_id, channel_key) DO NOTHING",
+            (new_id("adch"), org_id, _META_CHANNEL_KEY),
+        )
+        channel_row = conn.execute(
+            "SELECT id FROM ad_channel WHERE org_id = %s AND channel_key = %s",
+            (org_id, _META_CHANNEL_KEY),
+        ).fetchone()
+        assert channel_row is not None  # 上面剛 INSERT／DO NOTHING 過，這一列必然存在
+        conn.execute(
+            "INSERT INTO channel_credential"
+            " (id, org_id, channel_id, account_scope, secret_id, token_tail, updated_at)"
+            " VALUES (%s, %s, %s, %s, %s, %s, %s)",
+            (new_id("chcr"), org_id, channel_row["id"], _ACCOUNT_SCOPE_ALL, secret_id, tail,
+             now_utc()),
         )
     return tail
 
@@ -108,14 +149,21 @@ def get_token(conn: _AnyConn, org_id: str) -> str | None:
 
 def upsert_accounts(conn: _AnyConn, org_id: str, accounts: list[dict]) -> None:
     """Upsert，絕不刪除——一個權杖的可見範圍縮小了，不該連鎖刪掉使用者已經做好的品牌
-    綁定（brand_meta_ad_account 外鍵 ON DELETE CASCADE 會跟著清掉，見設計檔）。"""
+    綁定（brand_meta_ad_account 外鍵 ON DELETE CASCADE 會跟著清掉，見設計檔）。
+
+    `timezone_name`（票 T4）：Meta 沒回這個欄位就存 NULL，不是猜一個——`graph._to_account`
+    只在 Meta 真的回了這個欄位時才放進字典，`.get()` 在缺席時回 None，跟 name／currency
+    永遠有預設值不同（`daily_pull.py` 讀到 NULL 會退回組織時區）。"""
     for acc in accounts:
         conn.execute(
-            "INSERT INTO meta_ad_account (id, org_id, account_id, name, currency, connected_at)"
-            " VALUES (%s, %s, %s, %s, %s, %s)"
+            "INSERT INTO meta_ad_account"
+            " (id, org_id, account_id, name, currency, timezone_name, connected_at)"
+            " VALUES (%s, %s, %s, %s, %s, %s, %s)"
             " ON CONFLICT (org_id, account_id)"
-            " DO UPDATE SET name = excluded.name, currency = excluded.currency",
-            (new_id("mad"), org_id, acc["account_id"], acc["name"], acc["currency"], now_utc()),
+            " DO UPDATE SET name = excluded.name, currency = excluded.currency,"
+            "   timezone_name = excluded.timezone_name",
+            (new_id("mad"), org_id, acc["account_id"], acc["name"], acc["currency"],
+             acc.get("timezone_name"), now_utc()),
         )
 
 
@@ -137,10 +185,12 @@ def get_account(conn: _AnyConn, org_id: str, ad_account_id: str) -> dict | None:
 
 
 def list_bound_accounts(conn: _AnyConn, org_id: str) -> list:
-    """這個組織『至少綁了一個品牌』的帳號（[{"id","account_id"}]）——票 05 的每日拉取
-    只打這些帳號：連了帳號但還沒綁任何品牌的，還沒有人真的在用它。"""
+    """這個組織『至少綁了一個品牌』的帳號
+    （[{"id","account_id","timezone_name"}]）——票 05 的每日拉取只打這些帳號：連了帳號但
+    還沒綁任何品牌的，還沒有人真的在用它。`timezone_name`（票 T4）給
+    `daily_pull._pull_one_account` 決定拉哪一天，NULL 就是這個帳號 T4 之前就連了。"""
     return list(conn.execute(
-        "SELECT DISTINCT maa.id, maa.account_id FROM meta_ad_account maa"
+        "SELECT DISTINCT maa.id, maa.account_id, maa.timezone_name FROM meta_ad_account maa"
         " JOIN brand_meta_ad_account bmaa ON bmaa.ad_account_id = maa.id"
         " WHERE maa.org_id = %s ORDER BY maa.id",
         (org_id,),

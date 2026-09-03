@@ -12,6 +12,10 @@ around it and are exercised for real; only the network edge is faked.
 Verified live against the real host, 2026-08-29 (04-design-approved.md): v26.0 is the
 current Graph API version. Success shape: {"data": [{"account_id","name","currency",
 "id"}], "paging": {...}}. Error shape: {"error": {"message","type","code","fbtrace_id"}}.
+Ticket T4 (2026-09-03): `timezone_name` is also requested — documented on the AdAccount node
+(https://developers.facebook.com/docs/marketing-api/reference/ad-account/) — and, like
+name/currency, is only ever missing when Meta genuinely omits it; `_to_account` below carries
+it through when present and leaves it out when not (never a guessed value).
 Use the Graph API directly, not this session's Meta connector (it returns money as
 formatted strings and cannot see two of the user's four accounts — see
 HANDOFF-schedule-module.md §2).
@@ -80,16 +84,24 @@ def fetch_page(url: str, *, params: dict | None, headers: dict) -> dict:
 
 
 def _to_account(item: dict) -> dict | None:
-    """一個帳號條目 → 我們要的三個欄位，缺 account_id 就整筆不能用（跳過）；缺 name／
-    currency 不是致命傷，補一個看得懂的預設值，不因為一個欄位缺席就整包帳號清單報廢。"""
+    """一個帳號條目 → 我們要的欄位，缺 account_id 就整筆不能用（跳過）；缺 name／
+    currency 不是致命傷，補一個看得懂的預設值，不因為一個欄位缺席就整包帳號清單報廢。
+
+    `timezone_name`（票 T4）不比照 name／currency 補預設值——缺席就整個 key 不放進字典
+    （不是塞一個猜的時區），upsert_accounts 那端 `.get("timezone_name")` 讀到 None 存成
+    NULL，daily_pull 讀到 NULL 退回組織時區。這裡刻意跟既有測試（GraphClientTest）的既有
+    斷言相容：舊 fixture 沒有這個欄位，回傳字典就不該多一個 key。"""
     account_id = item.get("account_id")
     if not account_id:
         return None
-    return {
+    account = {
         "account_id": account_id,
         "name": item.get("name") or account_id,
         "currency": item.get("currency") or "",
     }
+    if item.get("timezone_name"):
+        account["timezone_name"] = item["timezone_name"]
+    return account
 
 
 def _fetch_all_pages(url: str, params: dict | None, headers: dict) -> list[dict]:
@@ -129,7 +141,7 @@ def list_ad_accounts(token: str) -> list[dict]:
     （04-design-approved.md：一個連帳號都列不出來的權杖，什麼都不寫）。"""
     headers = {"Authorization": f"Bearer {token}"}
     url = f"{GRAPH_BASE_URL}/me/adaccounts"
-    params: dict | None = {"fields": "account_id,name,currency", "limit": 100}
+    params: dict | None = {"fields": "account_id,name,currency,timezone_name", "limit": 100}
     items = _fetch_all_pages(url, params, headers)
     return [a for a in (_to_account(item) for item in items) if a is not None]
 

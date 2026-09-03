@@ -31,7 +31,8 @@ works exactly as before, consistent with 手動路徑永遠一級公民.
 """
 
 import calendar
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from app.background import app as background_app
 from app.core import settings as coresettings
@@ -81,11 +82,17 @@ def _pull_one_account(conn, org_id: str, token: str, account: dict) -> None:
     三層都拉到的時刻，畫面照實顯示資料舊了。一個帳號失敗不影響其他帳號：迴圈由呼叫端做，
     這裡只管一個帳號（票 05 done-check 不變）。
 
-    「今天」是這個組織所在時區的今天（票 04-1b），不是伺服器的今天——這個日期同時是跟
+    「今天」是這個廣告帳戶自己所在時區的今天（票 T4，修正前的 bug：錯用了組織的時區）。
+    Meta 回的 `date_start` 是廣告帳戶所在時區的日期，不是組織的——一個台北的組織接一個美國
+    西岸的帳號，兩邊的「今天」常常不一樣，蓋成組織時區就會把這個帳號的花費標到錯的一天。
+    `account["timezone_name"]` 是 NULL（T4 之前接的舊帳號，這欄位還沒有值）才退回組織時區
+    （票 04-1b 的 `today_for_org`）——退回不是常態規則，是給舊帳號留的路。這個日期同時是跟
     Meta 要哪一天的 insights、以及那筆花費記在哪一天，兩邊都不能跟著機器搬家。但
     `spend_date` 不是從這裡的 today 寫進資料庫：每一列用 Meta 自己回的 `date_start`（票 S1
     D7）。今天的拉取兩者相同，補拉時一次回應橫跨好幾天，只有 `date_start` 是對的。"""
-    today = coresettings.today_for_org(conn, org_id=org_id)
+    timezone_name = account.get("timezone_name")
+    today = (datetime.now(ZoneInfo(timezone_name)).date() if timezone_name
+             else coresettings.today_for_org(conn, org_id=org_id))
     # 拉的是 [今天-7, 今天]，不是只有今天。歸因窗是 `7d_click`（graph.py `_ATTRIBUTION_WINDOWS`）
     # ——一天的 roas 在那天之後還會被歸因進來的轉換改變七天。只拉當天，等於把每一天的數字
     # 永遠凍在第 0 天，最近一週會系統性偏低，而且看起來像「新廣告都在賠」。

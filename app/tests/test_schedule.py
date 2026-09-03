@@ -47,7 +47,7 @@ from .identity_test_helpers import mint_hs256
 
 ACTOR = "測試員"
 
-# 有效的平台／目標——照 app/schedule/platform_objectives.json 的內容取，測試不重寫一份
+# 有效的平台／目標——照 app/schedule/channel_catalogue.json 的內容取，測試不重寫一份
 # 平行的資料（改資料檔不用跟著改這裡）。
 _DATA = schedule_state._load_platform_data()
 VALID_PLATFORM = next(p["id"] for p in _DATA["platforms"] if p["enabled"])

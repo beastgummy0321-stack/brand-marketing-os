@@ -72,6 +72,7 @@ cycle, and `app.dashboard` already depends on it the same way.
 - ADR 0055 — a tree node is identified by a path-style `node_key` plus its channel.
 - ADR 0042 — work the user waits for runs on the queue.
 - ADR 0040 — approval is the money brake.
+- ADR 0056 — a channel catalogue is a file; its per-org state is a table.
 
 Module-local and reversible, decided here rather than in an ADR:
 

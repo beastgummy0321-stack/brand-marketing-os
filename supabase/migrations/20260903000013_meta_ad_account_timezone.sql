@@ -1,0 +1,17 @@
+-- supabase/migrations/20260903000013_meta_ad_account_timezone.sql
+-- Module: meta (already owns meta_ad_account, created in 20260829000002_meta_baseline.sql --
+-- altering your own module's existing table is not a new CREATE and is not subject to the
+-- ownership registry, same note as 20260829000004_meta_daily_spend.sql).
+-- Ticket: T4.
+--
+-- Meta's Graph API returns an insights row's `date_start` in the AD ACCOUNT's own timezone,
+-- not the organisation's -- an org in Asia/Taipei with a US ad account was labelling spend on
+-- the wrong day (app/meta/daily_pull.py:_pull_one_account, fixed in this ticket).
+-- `timezone_name` is the AdAccount node's own documented field
+-- (https://developers.facebook.com/docs/marketing-api/reference/ad-account/, verified
+-- 2026-09-03): an IANA name such as "America/Los_Angeles".
+--
+-- Nullable: accounts connected before this ticket have no value, and a wrong guess is worse
+-- than a null -- app/meta/daily_pull.py falls back to the organisation's timezone
+-- (app/core/settings.py:today_for_org) when this column is unset.
+ALTER TABLE meta_ad_account ADD COLUMN timezone_name text;

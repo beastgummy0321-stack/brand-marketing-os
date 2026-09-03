@@ -45,9 +45,12 @@ their signature, because the boundary is the part of the shape that matters:
   there is no reachable request that breaks it, and there is also no second line of defence.
   `BOARD.md` carries the debt.
 
-Tables this module owns: `meta_credential`, `meta_ad_account`, `brand_meta_ad_account`,
-`meta_entity_spend`. Account tables stay one per channel — there is no generic account table,
-by decision (ADR 0055 §8).
+Tables this module owns: `meta_ad_account`, `brand_meta_ad_account`, `meta_entity_spend`.
+Account tables stay one per channel — there is no generic account table, by decision
+(ADR 0055 §8). `channel_credential` (T4 — this module's earlier one-row-per-org credential
+table is gone) belongs to `schedule` (ADR 0050), not this module — the code that reads and
+writes it stays in `app/meta/` regardless, because there is still only one channel
+(ADR 0056 §4).
 
 ## Error shapes
 
@@ -76,3 +79,4 @@ by decision (ADR 0055 §8).
 - ADR 0050 — the ad-loop data model of record: this module's table changes and their tickets.
 - ADR 0052 — a logged-in request runs as `authenticated` with an `app.org_id` claim.
 - ADR 0055 — a node is identified by a path key and a channel; what stays Meta-specific and why.
+- ADR 0056 — a channel catalogue is a file; its per-org state is a table.

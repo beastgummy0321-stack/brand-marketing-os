@@ -35,17 +35,15 @@ CASCADE 今早已修、上傳有 50MB 上限、產品照那條查無此事）。
 表的形狀一律看 ADR 0050 的表清單；migration 檔名前綴一律看 ADR 0049（前綴＝擁有那張表的模組，
 不是要它的那張票，所以一張票可以有好幾個不同前綴的 migration 檔）。
 
-- [>] **T4（route C）站①完成** 通路變成資料。票 `docs/issues/t4-channel-catalogue/ticket.md`，
-      決定紀錄 **ADR 0056**（2026-09-03 四題全簽）。**範圍比原本這行小很多，縮的理由全在 0056 裡**：
-      `platform_objectives.json` → `channel_catalogue.json`（平台的規矩住檔案，組織的狀態住資料表，
-      檔案永遠贏）＋ `ad_channel` **拿掉** `label`（不加任何欄位）＋ `channel_credential` 取代
-      `meta_credential`（`account_scope` 欄位留好、v1 只寫 `*`）＋ `meta_ad_account` 補
-      `timezone_name` **並且 `daily_pull` 真的改用它**——那是這張票唯一現在就會算錯的洞。
-      **刻意不做**（0056 §3、§5 各自寫了什麼時候要回來做）：`ad_channel_format_spec` 不建
-      （規格已在 `app/methodology/meta-format-specs.md`，帶官方出處）、`last_data_at` 不加
-      （`meta_ad_account.last_pull_at` 已經有）、`data_lag_days` 不加（Meta 的它就是歸因窗，
-      抽出去會拆掉 `daily_pull.py:57` 刻意寫下的耦合）、`spec` 不加（平台常數屬目錄檔）。
-      「五個能力旗標」全 repo 從來沒有定義過，0056 §2 改成由閉環的四個動作推導、住目錄檔。
+- [>] **T4（route C）站②實作完成，未收工。** 決定紀錄 **ADR 0056**。
+      **看板行由子代理刪掉過，主對話台補回來——刪行是第③站收工動作，不是實作者的權限。**
+      待辦：獨立審查一輪 → 第③站（拔根測試、驗工單、使用者實玩）→ 才刪行。
+      實作內容：`platform_objectives.json` → `channel_catalogue.json`（四個能力旗標帶官方出處）
+      ＋ `ad_channel` 拿掉 `label` ＋ `channel_credential` 取代 `meta_credential`
+      ＋ `meta_ad_account` 補 `timezone_name` 且 `daily_pull` 真的改用它
+      ＋ **Vault 三支門的擁有權檢查改認新表**（`20260903000014_core_vault_channel_credential.sql`，
+      使用者 2026-09-03 批准的權限路徑變更；那條分支在此之前從來沒有測試）。
+      `TEST_LINES_CEILING` 17877 → 18058，理由與判準寫在 `test_architecture_boundaries.py` 常數上方。
 - [ ] **T5（route C）** 成效回流接座標——**第 3 層（廣告）的綁定是這張票的**（ADR 0055 §7：
       schema 位置 T3a 已留好，開它是多幾列不是 migration），同時決定
       `creative_candidate.published_ad_external_id` 是留成便利欄位還是刪掉

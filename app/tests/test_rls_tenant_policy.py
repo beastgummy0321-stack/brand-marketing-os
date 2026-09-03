@@ -39,6 +39,7 @@ from psycopg_pool import ConnectionPool
 import app.main as main
 from app.core import db, settings
 from app.core.db import Conn
+from app.meta import repository as meta_repo
 
 from .identity_test_helpers import mint_hs256
 
@@ -322,6 +323,52 @@ class VaultOrgScopedAccessTest(unittest.TestCase):
             # the session, but the pooled connection outlives this test.
             conn.rollback()
             conn.execute("DROP TABLE IF EXISTS pg_temp.app_setting")
+            conn.execute("RESET ROLE")  # pooled connection must not go back poisoned
+
+    def test_read_secret_through_channel_credential_is_scoped_to_the_claimed_org(self):
+        """Ticket T4 (ADR 0056 §4): the ownership check's second branch used to read the
+        module's earlier one-row-per-org credential table; the migration that drops that
+        table (`20260903000012_schedule_channel_credential.sql`) repoints it to
+        `channel_credential` in the same commit
+        (`20260903000014_core_vault_channel_credential.sql`). That branch had never been
+        tested before this ticket — `VaultOrgScopedAccessTest` above only ever exercises the
+        `app_setting` branch (`settings.save_api_key`) — so this is the first time it is
+        load-bearing under a table that can change."""
+        conn = db.current()
+
+        org_a = db.new_id("org")
+        org_b = db.new_id("org")
+
+        # As postgres (bypasses RLS): seed two orgs, org A saves a Meta token through the
+        # app's own path (meta_repo.save_token -> core_vault_save_secret), not by writing
+        # vault.secrets directly.
+        conn.execute(
+            "INSERT INTO organisation (id, name, kind) VALUES (%s, %s, 'company')",
+            (org_a, "T4 vault tracer org A"),
+        )
+        conn.execute(
+            "INSERT INTO organisation (id, name, kind) VALUES (%s, %s, 'company')",
+            (org_b, "T4 vault tracer org B"),
+        )
+        meta_repo.save_token(conn, org_a, "EAAt4-vault-tracer-token")
+        secret_a = meta_repo.get_credential(conn, org_a)["secret_id"]
+
+        conn.execute("SET ROLE authenticated")
+        try:
+            conn.execute("SELECT set_config('app.org_id', %s, false)", (org_a,))
+            row = conn.execute(
+                "SELECT core_vault_read_secret(%s) AS v", (secret_a,)
+            ).fetchone()
+            self.assertEqual(
+                row["v"], "EAAt4-vault-tracer-token",
+                "org A's claim must read its own channel_credential-backed secret",
+            )
+
+            conn.execute("SELECT set_config('app.org_id', %s, false)", (org_b,))
+            with self.assertRaises(psycopg.errors.InsufficientPrivilege):
+                conn.execute("SELECT core_vault_read_secret(%s) AS v", (secret_a,))
+        finally:
+            conn.rollback()
             conn.execute("RESET ROLE")  # pooled connection must not go back poisoned
 
 

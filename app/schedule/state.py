@@ -45,9 +45,9 @@ TREE_DEPARTMENT_FILE = APP_DIR / "departments" / "ads" / "campaign_tree.md"
 # 票 01 frozen decision 2：這是創意部門的第一個任務檔，`app/departments/` 底下新增一個
 # 資料夾，程式一行不改（ADR 0028）——這裡只是讀檔路徑，不是新的 Python 套件。
 CREATIVE_DEPARTMENT_FILE = APP_DIR / "departments" / "creative" / "ad_creative.md"
-# 平台／行銷目標資料檔（票 08 §3）：改這個檔案不必重新部署程式；每次讀都重新讀檔
-# （不快取到模組層），比照 DEPARTMENT_FILE 既有的讀法。
-PLATFORM_DATA_FILE = APP_DIR / "schedule" / "platform_objectives.json"
+# 通路目錄資料檔（票 08 §3；票 T4／ADR 0056 改名並加上通路能力旗標）：改這個檔案不必
+# 重新部署程式；每次讀都重新讀檔（不快取到模組層），比照 DEPARTMENT_FILE 既有的讀法。
+PLATFORM_DATA_FILE = APP_DIR / "schedule" / "channel_catalogue.json"
 
 
 def _load_platform_data() -> dict:

@@ -38,7 +38,7 @@ export interface SchedulePlan {
   running: boolean;
 }
 
-/** 平台／行銷目標選項——內容全部來自 `app/schedule/platform_objectives.json`，前端只轉譯
+/** 平台／行銷目標選項——內容全部來自 `app/schedule/channel_catalogue.json`，前端只轉譯
  * 成畫面，不自己寫死任何平台或目標的中文字（票 08：CONTEXT.md 的三詞界線）。 */
 export interface SchedulePlatformOption {
   id: string;

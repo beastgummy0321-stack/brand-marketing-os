@@ -1,21 +1,27 @@
-"""app/tests/test_meta_credentials.py — 票 04：連接 Meta 廣告帳戶。
+"""app/tests/test_meta_credentials.py — 票 04：連接 Meta 廣告帳戶。票 T4（ADR 0056 §4）
+加了第五件：channel_credential 取代原本一人一列的組織層憑證表之後，account_scope 真的
+是唯一鍵的一部分，不是裝飾用的欄位。
 
-四件事，只寫這四件（全域 CLAUDE.md 測試四類：金額、租戶隔離、API 契約、資料
+五件事，只寫這五件（全域 CLAUDE.md 測試四類：金額、租戶隔離、API 契約、資料
 正確性；畫面行為不寫單元測試，見 04-design-approved.md「Tests」節）：
 
-1. 貼上的權杖經過 Vault 存好；`app_setting` 完全沒被動到，`meta_credential` 沒有任何
+1. 貼上的權杖經過 Vault 存好；`app_setting` 完全沒被動到，`channel_credential` 沒有任何
    欄位出現過權杖原文。
 2. 一個組織連接並綁定的帳號，另一個組織在 GET /api/meta/accounts、bind、unbind 三條
    路由上都看不到／碰不到。
 3. 綁定、解除各寫一筆 audit_log。
 4. Graph 客戶端解析真的成功／錯誤形狀，把錯誤形狀轉成人話——換掉 `graph.fetch_page`
    （同 app/core/net.py fetch_url 在 test_intake.py 的替換慣例），測試不打真正的網路。
+5. `channel_credential` 的唯一鍵是 (org_id, channel_id, account_scope)，不是舊表那個
+   單一 org_id：同一個組織、同一個通路，兩個不同的 account_scope 要能並存；同一個
+   account_scope 第二次寫入要撞唯一鍵（票 T4 done-check 3，資料正確性）。
 """
 
 import json
 import unittest
 from uuid import uuid4
 
+import psycopg
 from fastapi.testclient import TestClient
 
 import app.main as main
@@ -87,7 +93,7 @@ class _MetaHttpTestBase(unittest.TestCase):
         return {"Authorization": f"Bearer {token}", "X-Org-Id": org_id}
 
 
-# -- 1. Vault 落地；app_setting 不動、meta_credential 不存權杖原文 --------------------
+# -- 1. Vault 落地；app_setting 不動、channel_credential 不存權杖原文 -----------------
 
 class TokenVaultRoundTripTest(_MetaHttpTestBase):
     def test_token_goes_to_vault_not_app_setting(self):
@@ -104,11 +110,11 @@ class TokenVaultRoundTripTest(_MetaHttpTestBase):
         self.assertEqual(before, after, "app_setting 不該被這條路由動到")
 
         row = web.conn.execute(
-            "SELECT * FROM meta_credential WHERE org_id = %s", (coredb.DEV_ORG_ID,)
+            "SELECT * FROM channel_credential WHERE org_id = %s", (coredb.DEV_ORG_ID,)
         ).fetchone()
         self.assertIsNotNone(row)
         for value in row.values():
-            self.assertNotIn(TOKEN, str(value), "meta_credential 任何欄位都不該出現權杖原文")
+            self.assertNotIn(TOKEN, str(value), "channel_credential 任何欄位都不該出現權杖原文")
 
         # 真正的權杖確實躺在 Vault 裡，不是憑空消失。
         credential = meta_repo.get_credential(web.conn, coredb.DEV_ORG_ID)
@@ -266,6 +272,51 @@ class GraphClientTest(unittest.TestCase):
         graph.fetch_page = fake
         accounts = graph.list_ad_accounts(TOKEN)
         self.assertEqual([a["account_id"] for a in accounts], ["1", "2"])
+
+
+# -- 5. channel_credential 的唯一鍵真的是 (org_id, channel_id, account_scope) ----------
+
+class AccountScopeUniquenessTest(_MetaHttpTestBase):
+    """票 T4（ADR 0056 §4）：舊表的主鍵只有 `org_id`——一個組織永遠只有一個
+    Meta 權杖。`channel_credential` 換成 `unique(org_id, channel_id, account_scope)`，v1
+    只寫 `account_scope='*'`，但欄位跟唯一鍵今天就要撐得住兩個不同的 account_scope 共存
+    ——這是憲法規則 3 要求的「開關」，不是這張票要用到的功能，只驗證欄位真的在那裡。"""
+
+    def test_two_account_scopes_coexist_a_third_duplicate_violates_the_unique_key(self):
+        meta_repo.save_token(web.conn, coredb.DEV_ORG_ID, TOKEN)
+        web.conn.commit()
+        channel_id = web.conn.execute(
+            "SELECT channel_id FROM channel_credential WHERE org_id = %s", (coredb.DEV_ORG_ID,)
+        ).fetchone()["channel_id"]
+
+        def _insert(scope: str) -> None:
+            # id 每次呼叫都不同（uuid4，不是從 scope 衍生）——要撞的是
+            # unique(org_id, channel_id, account_scope)，不能讓 id 這個獨立的 PRIMARY KEY
+            # 意外先擋下重複，那樣驗到的就是另一個約束，不是這支測試要證的那一個。
+            web.conn.execute(
+                "INSERT INTO channel_credential"
+                " (id, org_id, channel_id, account_scope, secret_id, token_tail, updated_at)"
+                " VALUES (%s, %s, %s, %s, %s, %s, now())",
+                (f"chcr_{uuid4().hex[:12]}", coredb.DEV_ORG_ID, channel_id, scope, uuid4(),
+                 "test"),
+            )
+
+        _insert("act_111")
+        _insert("act_222")
+        web.conn.commit()
+        rows = web.conn.execute(
+            "SELECT account_scope FROM channel_credential"
+            " WHERE org_id = %s ORDER BY account_scope",
+            (coredb.DEV_ORG_ID,),
+        ).fetchall()
+        self.assertEqual(
+            [r["account_scope"] for r in rows], ["*", "act_111", "act_222"],
+            "兩個不同 account_scope 的憑證必須都留著，不是互相覆蓋掉",
+        )
+
+        with self.assertRaises(psycopg.errors.UniqueViolation):
+            _insert("act_111")
+        web.conn.rollback()
 
 
 if __name__ == "__main__":

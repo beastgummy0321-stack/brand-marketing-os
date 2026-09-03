@@ -1,9 +1,21 @@
 {
-  "_comment": "app/schedule/platform_objectives.json — 平台與行銷目標的資料檔（票 08）。改這裡不必重新部署程式；平台改名或新增目標，改這個檔案就好。每筆 objective 都附 source_url／verified_date，方便日後查證是不是又改名了。",
+  "_comment": "app/schedule/channel_catalogue.json — ADR 0056: a channel's platform facts live here, its per-org state lives in ad_channel. Editing this file needs no redeploy.",
   "platforms": [
-    {"id": "meta", "label": "Meta", "enabled": true},
-    {"id": "google", "label": "Google", "enabled": false},
-    {"id": "tiktok", "label": "TikTok", "enabled": false}
+    {
+      "id": "meta",
+      "label": "Meta",
+      "enabled": true,
+      "level_count": 3,
+      "budget_level": 2,
+      "capabilities": {
+        "pull_performance": {"value": true, "source_url": "https://developers.facebook.com/docs/marketing-api/insights/", "verified_date": "2026-09-03"},
+        "create_entities": {"value": true, "source_url": "https://developers.facebook.com/docs/marketing-api/reference/ad-campaign-group/", "verified_date": "2026-09-03"},
+        "upload_creative": {"value": true, "source_url": "https://developers.facebook.com/docs/marketing-api/reference/ad-image/", "verified_date": "2026-09-03"},
+        "match_by_name": {"value": true, "source_url": "https://developers.facebook.com/docs/marketing-api/reference/ad-campaign-group/", "verified_date": "2026-09-03"}
+      }
+    },
+    {"id": "google", "label": "Google", "enabled": false, "capabilities": {}},
+    {"id": "tiktok", "label": "TikTok", "enabled": false, "capabilities": {}}
   ],
   "objectives": [
     {

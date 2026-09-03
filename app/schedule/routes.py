@@ -15,7 +15,8 @@ ADR 0028／0029／0032／0033：部門是 repo 裡的一個資料夾
 ——外殼一樣不解析這份任務檔，也不認得任何一個具體欄位名稱（見 `app/schedule/creative.py`）。
 
 平台／行銷目標不是外殼的業務詞（CONTEXT.md：外殼只認得檔期／核准／預算上限），一律從
-`platform_objectives.json` 這份資料檔讀出來，不寫死成 Python 常數或畫面 label（票 08）。
+`channel_catalogue.json` 這份資料檔讀出來，不寫死成 Python 常數或畫面 label（票 08；
+票 T4／ADR 0056：這份資料檔改名，並多負責通路能力旗標）。
 
 票 01（`.scratch/approval-slice/issues/01-approval-is-the-money-brake.md`，ADR 0040）：
 「核准」＝花錢煞車，POST .../tree/approve 與 .../tree/approve/revoke 兩支端點，資料落在

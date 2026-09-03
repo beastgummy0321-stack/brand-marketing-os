@@ -92,6 +92,9 @@ to keep the credentials path outside the lock: three `SECURITY DEFINER` function
 secret only if it belongs to the caller's own org. They check ownership against the only two
 places a secret id is stored, `app_setting` and `meta_credential`, and they skip the check when
 no claim is set, so every path that still runs as `postgres` behaves exactly as before.
+(Amended by ADR 0056 §4: `meta_credential` is replaced by `channel_credential`, and the
+ownership check's second branch is repointed there in the same migration that drops the old
+table — this pair, not this paragraph's prose, is what changed.)
 
 **`SET search_path = <schema>, vault` on a `SECURITY DEFINER` function is not enough, and the
 gap is invisible until someone attacks it.** PostgreSQL searches the temporary schema *first*

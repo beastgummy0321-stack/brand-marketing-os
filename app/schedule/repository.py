@@ -448,10 +448,13 @@ def bindings_by_node_key(conn: _AnyConn, org_id: str, brand_id: str, channel_key
 
 def ensure_meta_channel(conn: _AnyConn, org_id: str) -> str:
     """這個組織的 'meta' `ad_channel` id，第一次用時現生（ADR 0055 §5）——只有寫入路徑
-    （`_run_bind`）呼叫這支，讀樹的疊圖永遠不建這一列。"""
+    （`_run_bind`）呼叫這支，讀樹的疊圖永遠不建這一列。
+
+    票 T4／ADR 0056 §1：`ad_channel` 不再有 `label`——顯示名稱一律從
+    `channel_catalogue.json` 用 `channel_key` 查，不存進這張表。"""
     conn.execute(
-        "INSERT INTO ad_channel (id, org_id, channel_key, label, enabled)"
-        " VALUES (%s, %s, 'meta', 'Meta', true) ON CONFLICT (org_id, channel_key) DO NOTHING",
+        "INSERT INTO ad_channel (id, org_id, channel_key, enabled)"
+        " VALUES (%s, %s, 'meta', true) ON CONFLICT (org_id, channel_key) DO NOTHING",
         (new_id("adch"), org_id),
     )
     row = conn.execute(

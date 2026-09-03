@@ -1,0 +1,18 @@
+-- supabase/migrations/20260903000011_schedule_ad_channel_drop_label.sql
+-- Module: schedule (ADR 0049 -- ad_channel is this module's own table, created in
+-- 20260903000006_schedule_channel_entity_map.sql; altering your own module's existing table
+-- is not a new CREATE and is not subject to the ownership registry).
+-- Ticket: T4. Decision of record: ADR 0056 §1.
+--
+-- ad_channel.label held the platform's display name -- an organisation's opinion of nothing,
+-- since every org would show the same name. ADR 0056 moves it to
+-- app/schedule/channel_catalogue.json, read by channel_key; ad_channel is left holding only
+-- per-org state (id / org_id / channel_key / enabled / created_at).
+--
+-- Dropped while the table still has 0 rows (verified on the live local DB before writing this
+-- file); the ticket's done-check 1 re-verifies on a fresh `supabase db reset`.
+--
+-- The one writer, app/schedule/repository.py:ensure_meta_channel, is edited in the same
+-- commit as this migration to stop naming the column in its INSERT -- otherwise every
+-- /api/schedule/brands/{id}/tree/bind call raises UndefinedColumn on every node match.
+ALTER TABLE ad_channel DROP COLUMN label;

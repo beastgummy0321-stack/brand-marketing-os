@@ -969,7 +969,32 @@ class FileLineCapTest(unittest.TestCase):
 # 只授權他在 `KNOWN_MODULE_SIZES` 真的變紅時調那一個尺，沒有延伸到這裡。裁決在主對話台，
 # 判準用 `docs/tech-debt.md` §六那一句——「新增的行數是那張票的交付物本身，還是為了繞過閘門
 # 塞進來的？」搬家要求的 import 是前者。
-TEST_LINES_CEILING = 17877
+#
+# 票 T4（ADR 0056）：17877 → 18058（含本段理由註解自己佔的行）。三支新測試，**每一支都由
+# 票上一條 done-check 逐字指名，每一支都證過紅**，沒有第四支：
+#   1. `test_meta_credentials.AccountScopeUniquenessTest`（租戶隔離／API 契約）——證明
+#      `channel_credential` 的 `unique(org_id, channel_id, account_scope)` 真的擋得住重複，
+#      也真的允許同組織第二組 token。這是 T4 換掉 `meta_credential`（主鍵 org_id＝一個組織
+#      只能一個 token）的**唯一**證據；紅法：拿掉那道 unique，第二次 INSERT 不再拋
+#      `UniqueViolation`。
+#   2. `test_meta_daily_spend.SpendDateFollowsTheAdAccountTimezoneTest`（資料正確性）——
+#      `spend_date` 跟廣告帳戶自己的時區，NULL 退回組織時區。守的是**錢記在哪一天**。
+#      紅法：`daily_pull._pull_one_account` 改回只用 `today_for_org`，日期差一天。
+#      實作者把票上舉例的 Asia/Taipei／America/Los_Angeles 換成相差 26 小時的
+#      Pacific/Kiritimati／Etc/GMT+12，理由寫在測試 docstring 裡：前者一天裡有大半時間
+#      兩邊日期剛好相同，紅法會碰運氣過——那不是證據。
+#   3. `test_rls_tenant_policy.VaultOrgScopedAccessTest.test_read_secret_through_channel_
+#      credential_is_scoped_to_the_claimed_org`（租戶隔離）——Vault 那三支 SECURITY DEFINER
+#      門的擁有權檢查改認 `channel_credential` 之後，組織 B 仍然開不了組織 A 的鑰匙。
+#      **這條分支在 T4 之前從來沒有測試**：既有的 vault 測試全部走 `app_setting` 那一支
+#      （`test_rls_tenant_policy.py:209`）。紅法：把 `channel_credential` 那個 EXISTS 註解掉，
+#      組織 A 讀自己的也被擋。
+#
+# 為什麼調高而不是退件：`docs/tech-debt.md` §六（2026-09-02 使用者裁決）的判準是
+# **「新增的行數是那張票的交付物本身，還是為了繞過閘門塞進來的？」** T4 是 route C 的
+# schema／權限票，三條 done-check 各自要一支測試，這 156 行測試＋25 行本註解就是交付物。調到量到的數字，
+# 不留餘裕——這正是那次裁決的原話。實作者拒絕自己調、把它送回主對話台，是對的。
+TEST_LINES_CEILING = 18058
 
 
 def _line_totals() -> tuple:

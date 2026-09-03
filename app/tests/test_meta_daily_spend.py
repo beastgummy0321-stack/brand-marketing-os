@@ -484,6 +484,63 @@ class SpendDateFollowsOrgTimezoneTest(_MetaDailySpendTestBase):
         self.assertNotEqual(east, west, "相差 26 小時的兩個組織不可能把同一次拉取記在同一天")
 
 
+class SpendDateFollowsTheAdAccountTimezoneTest(_MetaDailySpendTestBase):
+    """票 T4：`spend_date` 改跟廣告帳戶自己的時區，不是組織的——同一個組織可能同時連著
+    美國西岸的帳號，組織自己在台北，兩者的「今天」常常不一樣。`timezone_name` 是 NULL
+    的帳號（T4 之前接的舊帳號）退回組織時區，不是另一套規則，是同一套規則的預設值
+    （上面的 `SpendDateFollowsOrgTimezoneTest` 驗的正是這條退回路徑——那批帳號從沒填過
+    `timezone_name`）。
+
+    時區選 `Pacific/Kiritimati`／`Etc/GMT+12`——跟上面 `SpendDateFollowsOrgTimezoneTest`
+    同一組，相差 26 小時：兩地的日期在任何時刻都不可能相同（`Asia/Taipei`／
+    `America/Los_Angeles` 只差 15～16 小時，一天裡有大半時間兩邊日期剛好一樣，斷言會
+    看時間點碰運氣過，不是真的證明帳戶時區真的生效）。"""
+
+    def test_account_with_its_own_timezone_overrides_the_orgs(self):
+        org_id, _ = self._make_org("acct_tz")
+        coresettings.set_setting(
+            web.conn, coresettings.ORG_TIMEZONE_SETTING, "Pacific/Kiritimati", org_id=org_id)
+        brand_id = bi_repo.create_brand(
+            web.conn, org_id=org_id, name="帳戶時區測試品牌", client_name=None, actor="test"
+        )["id"]
+
+        overridden_id = self._connect_account(org_id, BP_ACCOUNT_ID, "自己有時區的帳號")
+        web.conn.execute(
+            "UPDATE meta_ad_account SET timezone_name = %s WHERE id = %s",
+            ("Etc/GMT+12", overridden_id),
+        )
+        legacy_id = self._connect_account(org_id, SD_ACCOUNT_ID, "沒填時區的舊帳號")
+        web.conn.commit()
+        self._bind(org_id, brand_id, overridden_id)
+        self._bind(org_id, brand_id, legacy_id)
+
+        graph.fetch_page = _dispatch_insights(
+            {BP_ACCOUNT_ID: BP_INSIGHTS_PAGE, SD_ACCOUNT_ID: SD_INSIGHTS_PAGE})
+        daily_pull.run_daily_pull(org_id)
+
+        overridden_date = web.conn.execute(
+            "SELECT DISTINCT spend_date FROM meta_entity_spend"
+            " WHERE ad_account_id = %s AND level = 'campaign'", (overridden_id,)
+        ).fetchone()["spend_date"]
+        legacy_date = web.conn.execute(
+            "SELECT DISTINCT spend_date FROM meta_entity_spend"
+            " WHERE ad_account_id = %s AND level = 'campaign'", (legacy_id,)
+        ).fetchone()["spend_date"]
+
+        self.assertEqual(
+            overridden_date, datetime.now(ZoneInfo("Etc/GMT+12")).date(),
+            "填了 timezone_name 的帳號要用它自己的今天，不是組織的",
+        )
+        self.assertEqual(
+            legacy_date, datetime.now(ZoneInfo("Pacific/Kiritimati")).date(),
+            "timezone_name 是 NULL 的帳號要退回組織時區",
+        )
+        self.assertNotEqual(
+            overridden_date, legacy_date,
+            "相差 26 小時的兩個時區不可能在同一瞬間算出同一個日期",
+        )
+
+
 # -- 5. 真的透過 procrastinate 排程跑一次（證明 register_task() 掛對名字、defer 得到）--
 
 class QueueWiringTest(_MetaDailySpendTestBase):

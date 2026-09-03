@@ -52,7 +52,9 @@ intake 模組的正名。它是「建立品牌檔案的引導流程」，跟訂�
 _Avoid_: 進單建檔、進單、intake
 
 **廣告管道**：
-廣告投放的去處（Meta、Google、TikTok、LINE…）。資料上是 `ad_channel` 的一列，能力旗標與格式規格各自宣告（ADR 0050）。**廣告屬於管道，檔期只是篩選條件**（憲法第 6 條）。
+廣告投放的去處（Meta、Google、TikTok、LINE…）。平台的公版事實（能力旗標、層級數、扛預算的層）住在
+`app/schedule/channel_catalogue.json` 這份資料檔；組織自己的狀態（開了沒、綁了什麼）才是
+`ad_channel` 的一列（ADR 0056）。**廣告屬於管道，檔期只是篩選條件**（憲法第 6 條）。
 _Avoid_: 平台插槽（`app/ads/` 時代的說法，已作廢）、串接、整合、管道（單講會跟銷售管道 `owned_channel`／`channel_revenue.channel` 撞名，一律講「廣告管道」）
 
 ## 規則與設定（ADR 0012／0013）
