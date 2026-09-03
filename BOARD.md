@@ -47,7 +47,7 @@ CASCADE 今早已修、上傳有 50MB 上限、產品照那條查無此事）。
       ＋ 診斷（程式先壓縮、三個 agent、程式排序取前 5）
       ＋ `meta_entity_spend` 補 `currency` 與 `(adset_id, spend_date)` 索引 ＋ `channel_revenue` 補 spend／檔期／幣別／
       通路／來源雜湊與唯一鍵（現在手填列完全不去重）＋ `learning_ledger` 趁 0 列一次補齊
-      ＋ 破除 `_latest_task_row`（`app/schedule/routes.py:133-139`）的「最新一列即真相」。**閉環在這裡合攏**
+      ＋ 破除 `_latest_task_row`（**2026-09-03 已搬到 `app/schedule/state.py`**）的「最新一列即真相」。**閉環在這裡合攏**
 - [ ] **T6（route C）** 四象限泡泡看板 ＋ 建議落 `decision`（補六欄，不新開表；該表 0 列、程式零引用）
       ＋ `order_record.utm_json`。**現在畫不出來的五個理由，票裡要逐條有解**：`spend_summary` 的
       `bool_and(roas IS NOT NULL)`（`app/meta/repository.py:424,437`）讓整支回 None；`roas = 0` 的列一列都沒有，
@@ -100,7 +100,7 @@ CASCADE 今早已修、上傳有 50MB 上限、產品照那條查無此事）。
 
 ## 需批准（金流路徑）：核准的到底是「上限」還是「當時那個數字」——T2 已刻意跳過它
 
-`_tree_signature`（`app/schedule/routes.py:213-224`）把每個節點的 `daily_amount` 算進 `content_hash`，
+`_tree_signature`（**2026-09-03 已搬到 `app/schedule/tree_approval.py`**）把每個節點的 `daily_amount` 算進 `content_hash`，
 所以預算一動，已簽過的核准就失效。**今天咬不到人**——repo 裡沒有任何程式會自己改 `daily_amount`
 （grep 零命中），所以架構圖說它「現在就壞」是未來式。**2026-09-02 更新**：T2a 已經把
 `campaign_period_budget_version` 這張表建起來了（含 `change_type = auto_decrease` 這個值），
@@ -113,7 +113,7 @@ T2 三張票逐字寫明不碰它，審查也逐字驗過 diff 裡沒有 `max_da
 
 ## 需批准（金流路徑）：核准超支的「過了幾天」把 UTC 跟組織時區混著減
 
-`_approval_overspend()`（`app/schedule/routes.py:243`）拿 `approval.approved_at`（存 UTC）換算出來的
+`_approval_overspend()`（**2026-09-03 已搬到 `app/schedule/tree_approval.py:60-92`**）拿 `approval.approved_at`（存 UTC）換算出來的
 日期，去減 `today_for_org()`（組織時區的今天）——**台北時間每天 00:00–08:00 這段，UTC 還停在前一天**，
 兩個日期差一天，`days_elapsed` 多算一天。兩次實測釘死：UTC `2026-08-30 17:25`／組織今天 `08-31` 時紅
 （`AssertionError: 2 != 1`），跨過 UTC 午夜後連跑三次全綠。
@@ -130,7 +130,7 @@ T2 三張票逐字寫明不碰它，審查也逐字驗過 diff 裡沒有 `max_da
 看板／憲法／55 份 ADR／5 份契約／機器閘門常數／plugin 5.7.0 三個 hook 全部對過**實測值**，
 不是照文件抄。已裁決的四條與當下狀態：
 
-- [x] ~~**`.env.example` 的 HS256 後門**~~ **2026-09-03 完成，route C 審查 `ship`（尚未 commit）**。
+- [x] ~~**`.env.example` 的 HS256 後門**~~ **2026-09-03 完成並 commit（`d9c75d9`），route C 審查 `ship`**。
       原狀：範本第 15-16 行同時附上 `IDENTITY_ALLOW_HS256=1` 與 Supabase 公開示範密鑰，
       照範本複製上雲＝任何人能自簽任意 `org_id` 的權杖讀全部租戶。修法不是新決定——
       `IDENTITY_DEV_TOKEN` 早就有同一道開機守衛，這張票把**已經存在的裁決**套到漏掉的第二個後門。
@@ -180,45 +180,55 @@ T2 三張票逐字寫明不碰它，審查也逐字驗過 diff 裡沒有 `max_da
       其實是背景工作連不上資料庫的下游效應——**這正是它危險的地方**：紅得像程式壞了。
       `CLAUDE.md` 的合併指令已改成 `-n 8` 並寫上理由
 
-### 查到但還沒裁決（都已查證是真的，不是文件上的說法）
+### 掃障礙清單（2026-09-03 體檢後剩下的，依「先做哪個」排序）
 
-- [ ] **CI 從來不跑 e2e smoke**。`.github/workflows/ci.yml` 只有 ruff／pyright／pytest／前端
-      lint-typecheck-test-build。而 `CLAUDE.md` 與工作流規範都把 e2e 當「整合 bug 唯一現形處」
-      ——**這個系統最吃重的閘門只活在開發機上**，CI 綠不代表 server 起得來
-- [ ] **`決策 NNNN` 是一套死掉的平行編號，全庫 84 處引用它**（2026-09-03 查證；本行原本寫成
-      「引用已退休的 ADR」是**錯的**，實情更糟）。它不是 ADR：`決策 0013` 講硬刪除要記
-      audit_log，ADR 0013 講設定頁重用規則卡；`決策 0015` 講品牌連鎖刪除，ADR 0015 講檔期跳過。
-      **兩套編號互相撞號，指向完全不同的東西。** 來源文件在 `5eca0db`
-      「乾淨重啟：保留程式與資料，清除所有流程紀錄與規範文件」被刪，而那個 commit 就是可見歷史的
-      **根**——`docs/decisions/` 在整個 git 歷史裡零命中，**救不回來了**。
-      分布：84 處、36 個檔，含 production、測試、前端（`tokens.css`、`AppShell.tsx`、`useEchart.ts`）。
-      adr-sweep 只掃 `.md`，所以這些永遠不會紅。
-      **最省事也最誠實的補法**：在 `CONTEXT.md` 加一行說「`決策 NNNN` ＝ 已銷毀的舊決策紀錄編號，
-      解析不到任何東西，**不是 ADR id**」——因為那些註解大多**本來就把規則寫在句子裡了**
-      （「硬刪除…before 全文記 audit_log，決策 0015」），死掉的只是footnote。
-      另外約 5 處寫的是「**ADR** 0017」而不是「決策 0017」（`brand_web/routes_products.py:18,173`、
-      `brand_intelligence/report.py:1`、`repository.py:1244`），那幾處會真的把人帶去讀錯的檔，要逐條改
-- [ ] **十幾個檔引用 `5eca0db` 刪掉的文件**：`docs/design/*`、`architecture-rules.md`、
-      `rule-checks.md`、`workflow-diet.md`。最糟的一處是
-      `test_architecture_boundaries.py:988`——**最常紅的那道閘門，錯誤訊息叫人去讀不存在的
-      `docs/workflow-diet.md`，還印出「目標 0.7」，而 ADR 0041 明文寫「沒有任何文件再訂這個數字」**
-- [ ] **`docs/tech-debt.md` 四筆事實已錯**（它是 `CLAUDE.md` 指定「動超標檔前先讀」的檔）：
-      `TEST_LINES_CEILING` 寫 14,305（實際 **17,823**）；`brand_intelligence/repository.py`
-      寫 1667 行（實際 **1387**）；§〇 那兩筆「沒有閘門守的欠帳」——`cycle_shopee_code` 已在
-      `20260829000005` DROP、`app/dashboard/campaign_calendar.py` 整支已刪，兩個都不存在了
-- [ ] **前端完全沒有行數閘門**：`FileLineCapTest` 只掃 `app/**.py`。
-      `frontend/src/components/schedule/SchedulePage.tsx` 已 851 行、超過 800，而 U2 還要再動它
-- [ ] **棘輪餘裕實測（2026-09-03）**：`TEST_LINES_CEILING` 17823／實測 17823＝**0**；
-      `app/core`／`app/identity`／`app/background`／`app/storage`／`app/tools` 五個模組也是 **0**，
-      `app/llm` 剩 2 行。ADR 0041 允許「寫理由調高」所以不是死結，但 **T4～T6 每一張票都得動閘門
-      常數行**，每次都要重打一次「這算不算放寬容忍清單」的官司。測試／production 比值 **0.949**
-- [ ] **`app/identity/` 沒有任何 ADR 管**（`adr-index.mjs` 對它零列）。認證、組織解析、兩個開發
-      後門都在裡面，一條決策紀錄都沒有。已寫進 `docs/contracts/identity.md` 當事實記著
-- [ ] 記憶 `model-assignment-preference`（「Opus 只協調與審查」）**已與 hook 對撞**：
-      `ticket-fields.mjs:88` 擋掉任何帶票路徑的 opus 派工，route C 審查者是 **sonnet**。要更新記憶
-- [ ] 殘留 worktree：`C:/Users/User/orca/workspaces/marketing/t3-frontend`（分支
+**這一節就是交接。不另外寫 `HANDOFF-*.md`**——`CLAUDE.md` 開場那條規則明講「現在做到哪」
+只活在 `BOARD.md`，寫第二份必漂移。2026-09-02 那份 `docs/issues/doc-architecture-handoff/HANDOFF.md`
+就是活證據：它列的三條「BLOCKING」在被讀到之前就已經全部修好了，檔案卻還躺著宣稱它們擋著。
+
+**這些都不擋 T4。** 每一條都是「閘門缺一道」或「文件指向死路」，沒有一條會讓 T4 寫出錯的 schema。
+排序依據是「每張票省下多少」，不是嚴重度。
+
+- [ ] **① CI 補上 e2e（最划算，`.github/workflows/ci.yml` 加約 4 行）**。backend job 已經
+      裝好 uv、node、build 前端、`supabase start`——只差
+      `npx playwright install --with-deps chromium` ＋ `npm run e2e`。
+      現在 `CLAUDE.md` 與工作流規範都把 e2e 當「整合 bug 唯一現形處」，而它**只活在開發機上**：
+      CI 全綠不代表 server 起得來。做完就是每一張後續的票都自動多一道。
+      驗收：故意讓 server 起不來，看 CI 紅一次，還原
+- [ ] **② 契約頁閘門**：`test_architecture_boundaries.py` 加一份 `MODULES_WITHOUT_CONTRACT`
+      凍結清單，**只准變短**。現在 16 個模組、6 份頁（brand_intelligence／brand_web／core／
+      identity／meta／schedule），缺 10 份。開票當天清單＝現況所以是綠的；新模組沒頁會紅；
+      補完一份劃掉一行。**要先弄紅一次才算數**（加一個假模組資料夾看它紅）。
+      規則已寫進 `CLAUDE.md`，閘門沒建之前那句話仍是「散文裡的限制」
+- [ ] **③ 前端行數閘門**：`FileLineCapTest` 只掃 `app/**.py`，前端一條都沒有。
+      `frontend/src/components/schedule/SchedulePage.tsx` 已 **851 行**、超過同一個 800 上限，
+      而 U2 還要再動它。做法照後端那份：凍結現況、只准變小
+- [ ] **④ 31 處引用 `5eca0db` 刪掉的設計文件**（20 個檔）：`docs/design/*`、
+      `architecture-rules.md`、`rule-checks.md`、`docs/decisions/0003`。
+      跟已修好的 `workflow-diet.md` 那 13 處同一類，但這批**沒有現成的替代出處**——
+      `docs/design/03-data-model.md §3.2` 這種指的是欄位權威，現在的權威是 migration 檔本身。
+      逐檔判斷，不能 sed 一次掃掉。可以跟任何一張碰到該檔的票順手做
+- [ ] **⑤ `ImportCycleScanTest` 看不到套件內部的環**：它只記錄頂層套件之間的邊，所以
+      `app/schedule/state.py` ⇄ `routes.py` 那個雙向 import 全程綠燈，是靠票面文字擋掉的。
+      要不要把掃描器降到模組層是個決定（降下去會不會一開就紅 N 條，**先量再裝**）
+- [ ] **⑥ `app/identity/` 沒有任何 ADR 管**（`adr-index.mjs` 對它零列）。認證、組織解析、
+      兩個開發後門都在裡面，一條決策紀錄都沒有。已寫進 `docs/contracts/identity.md` 當事實記著。
+      不是「現在補一份」——是**下一個碰到 identity 的 route C 問題順手寫第一份**
+- [ ] **⑦ 殘留 worktree**：`C:/Users/User/orca/workspaces/marketing/t3-frontend`（分支
       `beastgummy0321-stack/t3-frontend`）。**已確認完全併進 `saas`，沒有未合併的工作**，
       `git worktree remove` 即可
+
+### 不是票，是量到的事實（開票時要記得，不必修）
+
+- **棘輪餘裕（2026-09-03 實測）**：`TEST_LINES_CEILING` 17877／實測 17877＝**0**；
+  `app/core` 1613／1613、`app/identity` 539／539、`app/storage`／`app/tools` 也都是 **0**，
+  `app/llm` 剩 2 行。`app/meta` 214、`app/schedule` 773。
+  ADR 0041 允許「寫理由調高」所以不是死結，但**任何要加測試的票都得動那一行**——
+  票裡先寫明授權，否則實作者會（正確地）停下來回報 blocked-upstream，白繞一輪。
+  測試／production 比值 **0.949**
+- **`決策 NNNN` 那 84 處已緩解，不必逐條改**：`CONTEXT.md` 有一段說明它不是 ADR id、來源已銷毀、
+  規則本身都寫在同一句話裡。剩 `report.py:1`／`repository.py:1244` 兩處寫「決策 0017」，
+  由那段涵蓋，不動
 
 ## 小債（順手做，不排優先）
 
