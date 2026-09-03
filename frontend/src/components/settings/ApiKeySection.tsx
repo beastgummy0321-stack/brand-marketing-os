@@ -98,7 +98,9 @@ export function ApiKeySection({ data, onSaved }: { data: SettingsData; onSaved: 
         <p className="font-medium text-foreground">
           {data.ai_key_source === "own" ? "這個組織用自己的金鑰付費" : "AI 費用目前由平台付費"}
         </p>
-        <p className="mt-1 text-muted-foreground">
+        {/* 票 U2 §6：跟 `SectionCard` 的 description 同一條規則。走查抓到這一段沒套上限時
+            是 1548px 單行，緊貼在剛折成兩行的 description 下面，一眼看得出不一致。 */}
+        <p className="mt-1 max-w-[var(--width-prose)] text-muted-foreground">
           這個月整個組織（不分品牌）已花 US$ {data.ai_monthly_spend.toFixed(2)}，上限 US${" "}
           {data.ai_monthly_cost_limit.toFixed(2)}
           {data.ai_cap_applies

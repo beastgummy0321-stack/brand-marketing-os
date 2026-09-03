@@ -157,7 +157,7 @@ export function ScanStep({
           這次沒有讀到可用的內容。你給的網址都讀不到，或內容太少。可以直接跳過初掃，用問答把重點講給我聽。
         </div>
       ) : (
-        <div className="grid gap-3 sm:grid-cols-2">
+        <div className="grid grid-cols-[repeat(auto-fit,minmax(360px,400px))] gap-3">
           {impressions.map((imp, i) => (
             <div key={i} className="flex flex-col gap-1 rounded-md border border-border p-3 text-sm">
               <Badge>看起來像 {imp.looks_like}</Badge>

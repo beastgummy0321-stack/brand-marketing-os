@@ -50,13 +50,12 @@
 
 ### 第 5 級：介面與一致性
 
-10. **U2 前端版面規範落地**（ADR 0051：1920 流動、`auto-fit`、scrollWidth 閘門，先弄紅一次）
-11. **07-4 GitHub 四個安全開關**——需付費或公開 repo，本機單人階段先不付
+10. **07-4 GitHub 四個安全開關**——需付費或公開 repo，本機單人階段先不付
 
 ### 第 6 級：一次性清理，掛在會碰到那個檔的票上順手做
 
-12. **⑥ `app/identity/` 沒有任何 ADR 管**——下一個碰 identity 的 route C 問題順手寫第一份
-13. **其餘小債**見〈小債〉那節
+11. **⑥ `app/identity/` 沒有任何 ADR 管**——下一個碰 identity 的 route C 問題順手寫第一份
+12. **其餘小債**見〈小債〉那節
 
 〈使用者待辦〉那節不進這份排序——做的人是你，不是 agent。
 
@@ -107,15 +106,29 @@ CASCADE 今早已修、上傳有 50MB 上限、產品照那條查無此事）。
       **這半段沒有機器閘門**（LLM 的行為不是單元測試測得出來的），驗收要真跑一次素材生成、
       使用者自己看填出來的六格對不對，會花錢。所以跟 T8a 分開兩張票，紅起來的樣子完全不同
 
-- [ ] **T6（route C）** 四象限泡泡看板 ＋ 建議落 `decision`（補六欄，不新開表；該表 0 列、程式零引用）
-      ＋ `order_record.utm_json`。**現在畫不出來的五個理由，票裡要逐條有解**：`spend_summary` 的
-      `bool_and(roas IS NOT NULL)`（`app/meta/repository.py:424,437`）讓整支回 None；`roas = 0` 的列一列都沒有，
-      賠錢象限畫不出來；真實毛利接不到廣告（就是 utm_json 那條）；~~`daily_pull` 只拉今天但歸因窗是 7d_click~~
-      ——**2026-09-02 查證為誤報**，`app/meta/daily_pull.py:89` 拉的是 `[今天-7, 今天]`，理由就寫在 `:54`；
-      `frontend/src/lib/echarts.ts:11` 沒註冊 ScatterChart——**沒註冊的圖種靜默不畫也不報錯，閘門會是綠的**
-      ＋ **三個 agent 的診斷（程式先壓縮、AI 只判斷、程式排序取前 5）從 T5 搬來這裡**，
-      因為它讀的就是這張看板的數字（ADR 0057 §6）。讀數陷阱先記著：廣告層 `effective_status`
-      有 12 個值，`DISAPPROVED`／`PENDING_REVIEW` 的廣告花費是 0，**在座標表上長得跟「這個角度沒人要」一模一樣**
+**T6 切成兩張（2026-09-04）。切的理由是量出來的，不是規劃**：這個 session 跑過兩次
+`supabase db reset`，`creative_candidate`／`meta_entity_spend`／`channel_entity_map`／
+`meta_ad_account`／`brand_meta_ad_account` **現在全部 0 列**。上面「仍然成立的事實」那節寫的
+166 列花費、9 則廣告、28,237 元是 9/3 量的，**今天一筆都不在**。四象限泡泡圖沒有東西可以畫，
+硬做就是交出一個誰都無法評估的空畫面。
+
+- [ ] **T6a（route C，票已寫好：`docs/issues/t6a-open-the-doors-before-the-data-arrives/ticket.md`）**
+      只開門不做圖，兩支 migration、零應用程式碼：`order_record.utm_json jsonb`（ADR 0050 原話：
+      「不加它，真實毛利永遠接不到廣告，而且晚加就要重匯每一筆歷史訂單」）＋`decision` 補七欄
+      （`entity_type`／`entity_id`／`campaign_period_id`／`acted_at`／`acted_by`／`revert_of`／
+      `expires_at`；該表實測 14 欄 0 列、應用層零引用，所以加欄位免費）。憲法第 3 條：
+      門現在開好，之後打開功能是撥開關不是 migration。**既有測試綠就是它的證明**
+- [ ] **T6b（route C，等資料）** 四象限泡泡看板本體 ＋ 三個 agent 的診斷（程式先壓縮、AI 只判斷、
+      程式排序取前 5，ADR 0057 §6）。**前提有兩個，都不在 agent 手上**：使用者重綁 Meta 廣告帳戶
+      （見〈使用者待辦〉），以及 T8b 讓座標真的填得出六維。
+      **開工時要逐條有解的讀數陷阱**：`spend_summary` 的 `bool_and(roas IS NOT NULL)`
+      （**實際在 `app/meta/repository.py:490 / 548 / 561 / 628`——看板原本寫的 `:424,437` 是過期行號**）
+      讓整支回 None；`roas = 0` 的列一列都沒有，賠錢象限畫不出來；
+      `frontend/src/lib/echarts.ts:11` **沒註冊 `ScatterChart`——沒註冊的圖種靜默不畫也不報錯，
+      閘門會是綠的**（那個檔自己的註解就寫著這個陷阱）；廣告層 `effective_status` 有 12 個值，
+      `DISAPPROVED`／`PENDING_REVIEW` 的廣告花費是 0，**在座標表上長得跟「這個角度沒人要」一模一樣**。
+      ~~`daily_pull` 只拉今天但歸因窗是 7d_click~~ 2026-09-02 查證為誤報（`daily_pull.py:89` 拉
+      `[今天-7, 今天]`，理由寫在 `:54`）
 
 ## 仍然成立的事實（不是票，是量到的東西）
 
@@ -149,14 +162,6 @@ CASCADE 今早已修、上傳有 50MB 上限、產品照那條查無此事）。
       某個功能莫名不動、查半天發現少一個變數
       ＋**部署映像檔要有 IANA 時區資料庫**（`today_for_org()` 靠 `zoneinfo`；Debian 系內建，
       Alpine 沒有——沒有就開機第一次算日期時大聲炸掉，這是刻意的，不要安靜退回 UTC）
-- [x] ~~07-3 統一 404 信封~~ **2026-09-04 讀完程式後大幅改判並完成**。原本這行寫「兩種信封要
-      統一、前端三處讀 `.detail` 要跟著改」——**實查後三處裡只有兩處是問題，而且病因不是信封**。
-      `http.ts` 的 `errorMessageFrom()` 早就三種外殼全吃（字串 `error`、物件 `error.code/message`、
-      `detail`），2026-08-29 修 `[object Object]` 那次就做好了。真正的缺陷是
-      `brandReportApi.ts` 與 `ordersApi.ts` **各自繞過它手刻了一份只認 `detail` 的版本**——
-      碰到 identity 路由的 401 會顯示「操作失敗（狀態碼 401）」而不是「請先登入」。
-      修法是刪掉那兩份、改走共用函式（route B，不是 API 契約改動）。
-      **「加機器可讀的代碼」那半段沒做，理由寫在下面小債那條。**
 - [ ] 07-4 GitHub 四個安全開關（secret scanning／push protection／CodeQL／branch protection）：
       需 GitHub Pro 或公開 repo。**本機單人階段先不付費**（2026-08-30 裁決），跟 Sentry／staging／CD
       同一批再決定；在那之前 CI 綠不擋合併，靠人工
@@ -292,6 +297,13 @@ Dependabot #1（`nanoid`，修補版 3.3.18）：**`saas` 這邊已經是 3.3.18
 但 GitHub 掃的是預設分支 `master`，那邊還凍在 `v0.1-desktop` 的 3.3.17。警示會亮到 `saas` 併回
 `master` 為止——**不是還沒修，是修在另一條線上**。不為了關掉警示單獨去動凍結的 master。
 
+- [ ] **U3 配色與字體（ADR 0051 規則 13 明文另開的那一張，2026-09-04 由設計閘門再次點名）**：
+      `frontend/src/styles/tokens.css:10` 用的是 **Inter**。impeccable 設計閘門的原話：Inter／
+      Roboto／Fraunces／Geist／Plus Jakarta Sans／Space Grotesk「被太多網站用到已經沒有辨識度，
+      每一波 AI 生成的介面都收斂到同樣這幾個字體」。**這跟〈不是辦公室軟體〉那條是同一種病**：
+      沒有人決定過要長這樣，它就是這樣長出來的。**換全站字體是產品外觀決定，要使用者點頭**，
+      不是順手改得的，也不准用 ignore 指令消音（那是把真的發現藏起來）。
+      這張票該一起收的還有 U1 的禁用詞閘門（ADR 0051 規則 9–11：擋口語問句式的按鈕文案）
 - [ ] **404 沒有機器可讀的代碼，所以「功能不存在」跟「品牌不存在」分不出來（07-3 剩下的那半，
       2026-09-04 判「現在不做」）**：`NotFoundKind`（`app/shared/web.py:188-192`）只帶一個中文
       名詞。實測 `curl http://localhost:8710/api/health` → `{"detail":"找不到頁面"}`，而找不到
@@ -321,17 +333,6 @@ Dependabot #1（`nanoid`，修補版 3.3.18）：**`saas` 這邊已經是 3.3.18
       每次 `supabase db reset` 自動重建，這正是它存在的理由——重置資料庫來查 bug，不會連查 bug
       的工具一起炸掉。**`supabase db push` 不會跑 seed 檔**，所以它到不了雲端，但它仍然是一組
       進了版控的已知帳密：**任何一次真的部署之前，這整段連同這一行一起刪掉**
-- [ ] **U2（route C）前端版面規範落地**——決策已簽：`docs/adr/0051`（2026-09-02 訪談口述，
-      13 條規則＋量到的數字＋沒量到的但書都在裡面）。這張票做四件事：
-      1. `AppShell.tsx:10` `w-[var(--width-shell)]` → `w-full max-w-[var(--width-shell)]`，
-         `tokens.css:66` `--width-shell` 1440px → 1920px，寫死欄數的 17 處格線改 `auto-fit`；
-         順手清掉 `AppShell.tsx:6`、`useEchart.ts:5`、`tokens.css:65` 對死掉的「決策 0038」的引用。
-      2. 灌測試資料進 `orders`／`products`，補測 ADR 0051 那條但書（塞滿的表格擠進 1024）。
-      3. 閘門：15 條路由在 1280 下驗 `document.documentElement.scrollWidth <= window.innerWidth`
-         ——**先弄紅一次才算數**。沒有閘門它會漂回去。
-      4. 1920 目前**在 1440 以上完全沒量過**，這張票要補一輪。
-      **配色與字體不在本票**（ADR 0051 規則 13，另開一張）。
-      驗證要開乾淨的瀏覽器 session——快取住舊 bundle 會量到跟沒改一樣的數字。
 - [ ] **上雲前必還（ADR 0039）** 每日 Meta 花費拉取的 worker 跑在網站行程裡：網站沒開就不拉，
       那天沒有數字（手動補：`uv run python -m app.meta.daily_pull`）；cron `0 3 * * *` 觸發的**時刻**
       仍是機器本地時間。上雲時 worker 要拆成自己的行程

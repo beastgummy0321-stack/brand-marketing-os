@@ -15,7 +15,9 @@ export function SectionCard({
     <section className="flex flex-col gap-4 rounded-lg border border-border bg-card p-5 shadow-[var(--shadow-card)]">
       <div className="flex flex-col gap-1">
         <h2 className="font-display text-base text-foreground">{title}</h2>
-        {description && <p className="text-sm text-muted-foreground">{description}</p>}
+        {description && (
+          <p className="max-w-[var(--width-prose)] text-sm text-muted-foreground">{description}</p>
+        )}
       </div>
       {children}
     </section>

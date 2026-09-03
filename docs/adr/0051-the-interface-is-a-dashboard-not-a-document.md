@@ -90,6 +90,15 @@ passed. Seed those tables before calling rule 4 verified.
 
 1920 is untested at any width above 1440.
 
+**Both blind spots closed, 2026-09-04, ticket U2.** 35 seeded `order_record` rows (plus items,
+SKUs and customers) rendered at 1024×768 on `/brands/:brandId/orders`: `scrollWidth` 1024,
+`innerWidth` 1024 — **zero overflow**, and the tables did not even need their own horizontal
+scrollbar (`contentScrollWidth` 718 inside a 720 container). At 1920, six of the fourteen
+hardcoded grids were measured to have room for another column and were changed to `auto-fit`;
+the other eight are fixed-count by design (a four-tile KPI row, a five-tile order summary, a
+two-field cost form, a `dt`/`dd` definition list) and stretching them would have been a
+regression. The card widths that decided each one are in that ticket's report.
+
 ## Consequences
 
 - ADR 0003's consequence "決策 0038（純桌機 1440px）繼續有效，React 版不做響應式" no longer
@@ -98,8 +107,24 @@ passed. Seed those tables before calling rule 4 verified.
   `AppShell.tsx:6`, `lib/useEchart.ts:5`, `styles/tokens.css:65`.
 - `BOARD.md`'s U1 row cites the deleted `ui-migration-contract.md` ("契約鐵則 11–12 驗收") and
   cannot be executed as written; it is re-pointed here.
-- Rules 1-4 need a machine gate or they drift back. The gate: across the 15 routes at 1280,
-  `document.documentElement.scrollWidth <= window.innerWidth`. It must be proven red once.
+- Rules 1-4 need a machine gate or they drift back. The gate: across the routes at 1280,
+  the shell must not be wider than the window. It must be proven red once.
+
+  **Correction, 2026-09-04, ticket U2 — the formula this line originally prescribed cannot go
+  red in this app, and was measured so.** It said
+  `document.documentElement.scrollWidth <= window.innerWidth`. But `tokens.css` sets
+  `overflow: hidden` on `html`, `body` **and** `#root` — the very setting §背景 point 2 of this
+  ADR criticises. `body`'s `overflow-x: hidden` swallows a child's overflow before it ever
+  reaches `<html>`, so with the shell forced to `w-[2000px]` inside a 1280 window,
+  `document.documentElement.scrollWidth` still measured **1280**, not 2000. Copied literally,
+  this line produces a gate that is green no matter how badly the shell overflows.
+
+  The gate that does go red measures the shell's own element:
+  `document.getElementById('root').scrollWidth <= window.innerWidth` — `#root`'s own
+  `overflow: hidden` stops the *user* scrolling but does not change what `scrollWidth` reports
+  about `#root` itself. Forced to 2000 in a 1280 window it reports 2000 and the gate names the
+  route. Built as `frontend/e2e/width-overflow.spec.ts`, 14 routes (all but `/accept-invite`,
+  which needs a second actor to send an invitation).
 - Verifying any of this in a browser requires a fresh browser session — a cached JS bundle made
   the probe's first measurement identical to the unmodified build. This is the browser-side
   twin of the "restart the backend or you verify old code" rule in CLAUDE.md.

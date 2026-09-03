@@ -103,7 +103,7 @@ export function RuleCardsSection() {
           </label>
 
           {cardsState.status === "loading" && (
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-[repeat(auto-fit,minmax(420px,500px))] gap-4">
               {Array.from({ length: 6 }, (_, i) => (
                 <Skeleton key={i} className="h-48" />
               ))}
@@ -118,7 +118,7 @@ export function RuleCardsSection() {
             />
           )}
           {cardsState.status === "ready" && (
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-[repeat(auto-fit,minmax(420px,500px))] gap-4">
               {cardsState.cards.map((card) => (
                 <RuleCardItem key={card.key} brandId={brandId} card={card} onUpdated={handleCardUpdated} />
               ))}

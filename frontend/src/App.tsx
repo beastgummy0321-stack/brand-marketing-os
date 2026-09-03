@@ -262,7 +262,7 @@ function Overview() {
     );
   } else {
     content = (
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-[repeat(auto-fit,minmax(280px,380px))] gap-4">
         {state.cards.map((card) => (
           <BrandCard key={card.brand_id} card={card} />
         ))}

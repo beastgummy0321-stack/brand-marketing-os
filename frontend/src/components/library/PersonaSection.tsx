@@ -107,7 +107,7 @@ export function PersonaSection({ brandId }: { brandId: string }) {
       {!running && !failed && empty && <p className="rounded-md border border-dashed border-border p-3 text-sm text-muted-foreground">還沒有人物誌；建檔完成後會自動產生，也可以現在按產生人物誌。</p>}
 
       {data.personas.length > 0 && (
-        <div className="grid gap-3 lg:grid-cols-2">
+        <div className="grid grid-cols-[repeat(auto-fit,minmax(320px,460px))] gap-3">
           {data.personas.map((persona) => (
             <article key={persona.id} className="flex flex-col gap-2 rounded-md border border-border p-4 text-sm">
               <div className="flex items-start justify-between gap-3">

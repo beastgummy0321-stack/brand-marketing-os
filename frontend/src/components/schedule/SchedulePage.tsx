@@ -322,7 +322,7 @@ export function SchedulePage({ brandId }: { brandId: string }) {
             onSettle={handleSettle}
           />
         )}
-        <div className="rounded-md border border-border bg-card p-4 shadow-[var(--shadow-card)]">
+        <div className="w-full max-w-[calc(var(--width-form)+2rem)] rounded-md border border-border bg-card p-4 shadow-[var(--shadow-card)]">
           <h2 className="mb-1 font-display text-lg text-foreground">這期要投放哪些產品</h2>
           <p className="mb-3 text-sm text-muted-foreground">
             本期每日預算：{formatCurrency(schedule.daily_budget)}
@@ -377,7 +377,7 @@ export function SchedulePage({ brandId }: { brandId: string }) {
               <select
                 value={objective}
                 onChange={(e) => setObjective(e.target.value)}
-                className="rounded-md border border-border bg-background px-2 py-1.5 text-sm"
+                className="max-w-[var(--width-form)] rounded-md border border-border bg-background px-2 py-1.5 text-sm"
               >
                 {objectivesForPlatform.map((o) => (
                   <option key={o.value} value={o.value}>
@@ -393,7 +393,7 @@ export function SchedulePage({ brandId }: { brandId: string }) {
                 value={promotionNote}
                 onChange={(e) => setPromotionNote(e.target.value)}
                 rows={2}
-                className="rounded-md border border-border bg-background px-2 py-1.5 text-sm"
+                className="max-w-[var(--width-form)] rounded-md border border-border bg-background px-2 py-1.5 text-sm"
                 placeholder="例如：這期主打新品上市"
               />
             </label>
@@ -743,8 +743,8 @@ function PlanCard({
           {expanding ? "展開中…" : "用這個方案展開"}
         </button>
       </div>
-      <p className="mb-2 whitespace-pre-wrap text-sm text-foreground">{plan.summary}</p>
-      <p className="mb-3 whitespace-pre-wrap text-sm text-muted-foreground">{plan.reasoning}</p>
+      <p className="mb-2 max-w-[var(--width-prose)] whitespace-pre-wrap text-sm text-foreground">{plan.summary}</p>
+      <p className="mb-3 max-w-[var(--width-prose)] whitespace-pre-wrap text-sm text-muted-foreground">{plan.reasoning}</p>
       {plan.splits.length > 0 && (
         <div className="overflow-x-auto rounded-md border border-border">
           <table className="w-full text-left text-sm">

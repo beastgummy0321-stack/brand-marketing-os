@@ -62,10 +62,18 @@
   /* FluidCard 深度：hover／展開時陰影加深，視覺參考 v3-fluid-cards.html 的 --shadow-card-hover。 */
   --shadow-card-hover: 0 2px 4px 0 rgb(15 23 42 / 0.06), 0 12px 28px 0 rgb(15 23 42 / 0.10);
 
-  /* 版面：純桌機固定寬度（決策 0038／ADR 0003，不做響應式） */
-  --width-shell: 1440px;
+  /* 版面：流體殼，寬到 1920px 為止，1024px 以上都堪用（ADR 0051） */
+  --width-shell: 1920px;
   --width-sidebar: 15rem;
   --height-topbar: 3.75rem;
+
+  /* 版面：殼的寬度不是內容的寬度。單欄內容超過這個寬度就變成「文件」而不是「儀表板」
+     （憲法 12／ADR 0051 規則 4，票 u2-fluid-shell-to-1920 §6）。 */
+  --width-prose: 68ch;    /* 連續閱讀的段落 */
+  --width-form:  42rem;   /* 單欄表單欄位 */
+  /* 包住單欄表單的卡片寫 `max-w-[calc(var(--width-form)+2rem)]`——欄位上限＋左右各 1rem 的
+     `p-4`，是算出來的不是猜的。只夾欄位、不夾卡片，卡片會留在原寬度，右邊空出一大片白
+     （走查在排程頁量到卡片 1616px、右側 927px 純白，因此擋下第二輪）。 */
 }
 
 :root {

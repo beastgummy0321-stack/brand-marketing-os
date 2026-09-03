@@ -45,7 +45,7 @@ export function AssetsTab({
         />
       ) : (
         <div ref={topRef} className="flex flex-col gap-3">
-          <div className="grid grid-cols-4 gap-4">
+          <div className="grid grid-cols-[repeat(auto-fit,minmax(240px,310px))] gap-4">
             {pageItems.map((asset) => (
               <AssetCard
                 key={asset.id}

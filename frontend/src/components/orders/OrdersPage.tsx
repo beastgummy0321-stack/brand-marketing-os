@@ -89,7 +89,7 @@ export function OrdersPage({ brandId }: { brandId: string }) {
       </div>
       {successMessage && <p role="status" className="rounded-md border border-success/40 bg-success/10 px-3 py-2 text-sm text-foreground">{successMessage}</p>}
       {noData ? <EmptyState title="還沒有訂單資料" description="把 EasyStore 訂單匯出檔拖進來，這頁就會出現營收、毛利與回購率。" /> : <>
-        <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
+        <div className="grid w-fit grid-cols-2 gap-3 md:grid-cols-5">
           <StatBig value={formatCurrency(summary.net_revenue)} label="實收營收" />
           <StatBig value={displayNumber(summary.order_count)} label="訂單數" />
           <StatBig value={formatCurrency(summary.average_order_value)} label="平均客單價" />
