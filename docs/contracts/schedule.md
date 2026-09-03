@@ -60,7 +60,7 @@ Module-local and reversible, decided here rather than in an ADR:
 
 - The module now registers an `app.core.cleanup` function (ticket T1b): `app/schedule/repository.py`
   registers 「創意座標與素材候選」, covering the five tables this ticket added.
-- **How a creative reply is matched to a tree node** (T3d, 2026-09-03, user-approved): the agent
+- **How a creative reply is matched to a tree node** — ticket T3d, settled by the user: the agent
   answers per node **name**, and names locate their nodes on their own — different names may
   arrive in any order and are reordered back to document order, which is behaviour this module
   has had and tested since ticket 09. Position is used **only inside a group of identically

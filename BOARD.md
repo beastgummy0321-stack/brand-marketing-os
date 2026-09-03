@@ -35,30 +35,6 @@ CASCADE 今早已修、上傳有 50MB 上限、產品照那條查無此事）。
 表的形狀一律看 ADR 0050 的表清單；migration 檔名前綴一律看 ADR 0049（前綴＝擁有那張表的模組，
 不是要它的那張票，所以一張票可以有好幾個不同前綴的 migration 檔）。
 
-- [>] **T3（route C）節點身分：一個節點只有一個身分，而且帶通路**——決策已簽：`docs/adr/0055`
-      （2026-09-03 站① 凍結，同時更正 ADR 0050 三處 Meta 專屬寫法）。站②，四張票已開、循序做，
-      第五張（T3e，金流）等使用者回答一個問題才開：
-      - **T3a 表（全部休眠，零寫入端）**：`ad_channel`（最小、每組織一組、用到才建列，
-        讓外鍵第一天就是真的）＋ `channel_entity_map`
-        （`unique(org_id, brand_id, channel_id, node_key)`＝冪等鍵；`depth` 是 GENERATED 欄位，
-        **不准出現 campaign／adset／ad 這三個 Meta 字**）＋ `ad_set_period_membership` 改名
-        `period_node_membership`、`ad_set_external_id` 換成 `channel_id`＋`node_key`
-        ＋ `brand_meta_ad_account.allocation_weight`。既有測試全綠就是它的證明
-      - **T3b 綁定改吃節點鍵**：`node_key` 從樹的文件順序算出來，綁定寫進 `channel_entity_map`
-        （第 1 層；`external_status` 存 Meta 的 `effective_status` 原話），讀樹改讀表。
-        重展樹時同位置沿用、但節點名字要對得上，對不上轉 `orphaned` 並在畫面顯示未綁定。
-        **前端 diff 必須為零**
-      - **T3c 第 2 層（扛預算的那一層）**：新增 `graph.list_ad_sets`
-        （`GET /{campaign_id}/adsets`，官方頁面 2026-09-03 查證），把廣告組合綁進
-        `channel_entity_map`，只在自己父活動底下比對
-      - **T3e 檔期分帳細到節點（金流路徑）**：`period_node_membership` 在綁定時寫列、結算時
-        讀列，`period.py:125 compute_money()` 的主詞從「整個品牌那天的花費」細到「這個節點
-        那天的花費」（ADR 0053 §4 的規則本身不變）。沒登記在任何檔期底下的廣告，那天的花費
-        照舊算給「那天歸誰」的檔期——2026-09-03 使用者裁決，記在 ADR 0055 §11。營收不分節點
-      - **T3d `creative_slot` 改吃節點鍵**：`ad_node_name` → `node_key`＋`channel_id`。
-        今天兩個同名的葉節點會被 `creative.py:138` 的 `set()` 壓成同一格
-      第 3 層（廣告）**這輪不綁**：它唯一的用途是接七維座標，那是 T5，而且沒有真實成效數字驗不了。
-      schema 位置已留好，開它是多幾列、不是 migration
 - [ ] **T4（route C）** `ad_channel` 補完（T3a 已建最小版：id／org_id／channel_key／label／enabled，
       這裡補五個能力旗標＋`last_data_at`／`data_lag_days`／`spec`，並決定它和
       `platform_objectives.json` 誰是「有哪些平台」的真相——T3 刻意不搬那個檔）
@@ -92,6 +68,7 @@ CASCADE 今早已修、上傳有 50MB 上限、產品照那條查無此事）。
   `daily_entity_spend(level="adset")`——membership 認的是廣告組合，用不同層算會兜不起來。
   **Meta 的活動層跟廣告組合層加總理論上該一致，這件事至今沒有拿真帳號量過**：
   2026-09-03 `meta_entity_spend` 是 0 列。等真帳號重新走一次通路那天再驗，不先加容錯。
+
 ## 第 ⑦ 片：收尾
 
 - [ ] 07-1 閘門收尾：前端 depcruise 擋 supabase-js 只在登入模組（**Playwright 那一半已完成**，
