@@ -182,7 +182,7 @@ it is re-proposed next month.
 | `learning_ledger` filled in "while it is still empty" | 0 rows, 0 readers, 0 writers, its read side deleted at `app/llm/context_compiler.py:17`. Columns on an empty unread table cost the same to add later as now, so **no door closes** (rule 3's test, applied literally). The published diagram's own conclusion was "treat it as a new table, or do not use it". |
 | the three diagnosis agents and the top-5 ranking | §6. |
 | coordinate-tagging the 9 hand-built ads | The user's own 2026-08-31 decision: legacy ads get coordinates later, and rule 3 is already satisfied — the seven keys are nullable with `coordinates_status`, so batch tagging is **inserting data**, not a migration. |
-| `approval.max_daily_amount`, the `_approval_overspend()` UTC-vs-org-timezone bug | Money path, both explicitly awaiting a plan and approval. Not touched, not "quietly fixed". |
+| `approval.max_daily_amount`, the `_approval_overspend()` UTC-vs-org-timezone bug | Money path, both explicitly awaiting a plan and approval. Not touched by T5, not "quietly fixed". **The timezone half is no longer deferred: it was approved and closed on 2026-09-04 by ticket M1, ruling recorded in ADR 0058.** `approval.max_daily_amount` is still deferred and still awaits its own plan. |
 
 ## 10. What we looked at (reuse-first §2)
 

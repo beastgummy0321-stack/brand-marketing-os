@@ -1031,7 +1031,18 @@ class FileLineCapTest(unittest.TestCase):
 # `app/tests/test_schedule_creative.py`（`_valid_creative_fields` 對 `value: []`／
 # `value: ["", ""]` 兩種空值誤放行——T1 收尾時記下、不擋合併的舊債，這裡收掉，
 # 守的是資料正確性）。先證過紅：兩支斷言在改 creative.py 之前先跑過一次紅。
-TEST_LINES_CEILING = 18598
+#
+# 票 M1（ADR 0058）：18598 → 18635（含本段理由註解自己佔的行）。`test_approval.py` 新增
+# `test_overspend_window_counts_days_on_the_orgs_calendar_not_utc`（money：approved_at
+# 存 UTC、today 問組織時區，兩者要落在同一個時區才能相減，否則台北每天有 8 小時
+# `days_elapsed`／`expected_to_date` 會多算一天——ADR 0058）——`astimezone(...)` 拿掉時
+# 這支測試斷言 `2 != 1` 紅，補回去綠，證據見本票完成報告。順手把
+# `test_binding_and_spend_survive_hash_but_reexpanding_does_not` 原本用
+# `datetime.now(UTC).date()` 算「今天」改成跟生產碼同一個 `today_for_org()`——這張票
+# 修好之後兩者不再是同一天，2026-09-04 台北 01 時這個時段親眼撞到它紅在
+# `spend_to_date` 0.0 != 500.0（同一個 bug 的第二個現場，不是新查核點，是讓既有測試
+# 繼續量對它原本要量的東西）。
+TEST_LINES_CEILING = 18635
 
 
 def _line_totals() -> tuple:
@@ -1104,7 +1115,11 @@ KNOWN_MODULE_SIZES = {
                                       # 不是新增了 574 行。
     "app/brand_web": 2091,  # 2026-08-30 刪失效規則卡（小債）：autonomy 那張卡的兩處專屬
                              # 驗證跟著走。前一次是 2155
-    "app/core": 1613,  # 票 R3c（ADR 0052）：db.py 補 `set_tenant_scope()`（SET ROLE +
+    "app/core": 1622,  # 票 M1（ADR 0058）：settings.py 從 `today_for_org()` 抽出姊妹函式
+                        # `org_timezone()`（時區容錯只留一份），`_approval_overspend()`
+                        # 比對 approved_at／today 之前先讓兩者落在同一個時區——
+                        # 1613 → 1622（+9 行）。量到的數字，不留餘裕。前一次是 1613——
+                        # 票 R3c（ADR 0052）：db.py 補 `set_tenant_scope()`（SET ROLE +
                         # set_config + commit）、`_reset_pooled_connection()`（pool() 的
                         # reset= callback，票裡點名「全票最重要的一行」）、`Conn.rollback()`
                         # 補上兩個沉默失敗防線的理由註解與重放邏輯、`Conn.__slots__` 多一個

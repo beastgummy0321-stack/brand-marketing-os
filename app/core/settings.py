@@ -270,6 +270,26 @@ def get_llm_model(conn: db.Conn | None = None, *, org_id: str) -> str:
     )
 
 
+def org_timezone(conn: db.Conn | db.ConnProxy | None, *, org_id: str) -> ZoneInfo:
+    """這個組織的時區物件。`today_for_org()` 的姊妹函式，兩者共用同一套容錯（票 M1，
+    ADR 0058）：核准超支比對要把 `approved_at`（存 UTC 的 timestamptz）換到跟
+    `today_for_org()` 同一個時區才能相減，退路因此收在這裡一份，`today_for_org()`
+    不再自己重複一份、也不會漏掉。
+
+    壞值（打錯的時區名、空字串）當作沒設定，回預設值——比照
+    `get_ai_monthly_cost_limit()` 同一套容錯，設定頁壞一格不該讓每日花費拉取整個停擺。
+    但預設值本身載不起來（部署環境沒有 IANA 時區資料庫）就讓它炸：那不是設定壞了，是
+    機器缺東西，安靜地退回 UTC 等於把 M1 要修的 bug 藏起來。
+    """
+    name = get_setting(conn, ORG_TIMEZONE_SETTING, org_id=org_id) or DEFAULT_ORG_TIMEZONE
+    try:
+        return ZoneInfo(name)
+    except (ZoneInfoNotFoundError, ValueError):
+        logger.warning("組織 %s 的時區設定 %r 不是合法的 IANA 名稱，改用 %s",
+                       org_id, name, DEFAULT_ORG_TIMEZONE)
+        return ZoneInfo(DEFAULT_ORG_TIMEZONE)
+
+
 def today_for_org(conn: db.Conn | db.ConnProxy | None, *, org_id: str) -> date:
     """這個組織所在時區的「今天」（票 04-1b）。
 
@@ -280,21 +300,10 @@ def today_for_org(conn: db.Conn | db.ConnProxy | None, *, org_id: str) -> date:
     8 小時」變成常態。改成問組織自己的時區，答案就跟伺服器擺在哪一國無關。
 
     範圍只有排程面問「今天幾號」的地方（票 04-1b）：稽核時間戳、`started_at` 這類
-    事件發生時刻一律維持 UTC，不走這裡。
-
-    壞值（打錯的時區名、空字串）當作沒設定，回預設值——比照
-    `get_ai_monthly_cost_limit()` 同一套容錯，設定頁壞一格不該讓每日花費拉取整個停擺。
-    但預設值本身載不起來（部署環境沒有 IANA 時區資料庫）就讓它炸：那不是設定壞了，是
-    機器缺東西，安靜地退回 UTC 等於把本票要修的 bug 藏起來。
+    事件發生時刻一律維持 UTC，不走這裡。容錯規則見 `org_timezone()`（票 M1 從這裡
+    抽出的姊妹函式）——這裡只是把它給的時區換成日期。
     """
-    name = get_setting(conn, ORG_TIMEZONE_SETTING, org_id=org_id) or DEFAULT_ORG_TIMEZONE
-    try:
-        tz = ZoneInfo(name)
-    except (ZoneInfoNotFoundError, ValueError):
-        logger.warning("組織 %s 的時區設定 %r 不是合法的 IANA 名稱，改用 %s",
-                       org_id, name, DEFAULT_ORG_TIMEZONE)
-        tz = ZoneInfo(DEFAULT_ORG_TIMEZONE)
-    return datetime.now(tz).date()
+    return datetime.now(org_timezone(conn, org_id=org_id)).date()
 
 
 def get_intake_budget_limit(conn: db.Conn | None = None, *, org_id: str) -> float:

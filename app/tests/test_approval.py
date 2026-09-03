@@ -12,7 +12,7 @@
 import json
 import unittest
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from unittest import mock
 
 from fastapi.testclient import TestClient
@@ -25,6 +25,7 @@ from app.brand_intelligence import repository as bi_repo
 from app.core import approval as approval_mod
 from app.core import db as coredb
 from app.core import rule_cards
+from app.core import settings as coresettings
 from app.llm import providers
 from app.meta import graph as meta_graph
 from app.meta import repository as meta_repo
@@ -186,11 +187,32 @@ class ApprovalApiContractTest(unittest.TestCase):
         # scope_ref 記的是「簽的是哪一棵」，不是品牌自己——事後查得回去的那一欄
         self.assertEqual(row["scope_ref"], self._get().json()["tree"]["task_id"])
 
+    def test_overspend_window_counts_days_on_the_orgs_calendar_not_utc(self):
+        """票 M1（ADR 0058）：approved_at 存 UTC，org 的今天要問組織時區——兩者不是同一個
+        日曆。這裡不等時鐘走到 UTC 跨日前的那八小時才會紅（ADR 0058「how this can be
+        seen red again」），把兩個日期都釘死：approved_at 是 UTC 17:00（台北隔天
+        01:00），today_for_org 釘成台北那一天，兩者同一天，days_elapsed 該是 1。"""
+        self._succeed_plan_and_tree()
+        approval = self._approve().json()["tree"]["approval"]
+        web.conn.execute(
+            "UPDATE approval SET approved_at = %s WHERE id = %s",
+            (datetime(2026, 1, 15, 17, 0, 0, tzinfo=UTC), approval["id"]),
+        )
+        web.conn.commit()
+        with mock.patch.object(coresettings, "today_for_org", return_value=date(2026, 1, 16)):
+            approval = self._get().json()["tree"]["approval"]
+        self.assertEqual(approval["days_elapsed"], 1)
+        self.assertEqual(approval["expected_to_date"], 1000.0)
+        self.assertIsNone(approval["spend_to_date"])
+
     def test_binding_and_spend_survive_hash_but_reexpanding_does_not(self):
         """item 4/5/9：核准之後綁定活動、花費進來都不翻臉（`content_hash` 排除清單真的
         擋住這兩件事），超支只算核准日之後；同一個方案重展開才真的翻臉——不同的第一層
         節點名字，是真的不同的 content_hash，舊列不被改寫。"""
-        today = datetime.now(UTC).date()
+        # 票 M1：核准超支現在問組織時區的今天（ADR 0058），這裡跟著用同一個來源，不再用
+        # datetime.now(UTC).date()——兩者在台北每天有 8 小時不是同一天，UTC 版本會把
+        # 下面種的「核准當天」那筆花費種到 org 的窗口之外，spend_to_date 平白少算。
+        today = coresettings.today_for_org(web.conn, org_id=coredb.DEV_ORG_ID)
         if today.day == 1:
             self.skipTest("今天是每月 1 號，核准日跟月初重疊，測不出時間窗切齊")
         month_start = today.replace(day=1)

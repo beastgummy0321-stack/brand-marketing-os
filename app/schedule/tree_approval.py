@@ -63,7 +63,13 @@ def _approval_overspend(conn, org_id: str, brand_id: str, tree: dict, approval_r
     沒有任何節點綁定時 `spend_to_date` 是 None（沒在追蹤），不是 0（0 跟「不知道」是
     兩件事，印 0 會被讀成「還沒花錢」）。不設門檻：兩個數字都給，讓使用者自己判斷。"""
     approved_at = approval_row["approved_at"]
-    approval_date = approved_at.date() if isinstance(approved_at, datetime) else approved_at
+    # 票 M1（ADR 0058）：approved_at 是 timestamptz，psycopg 回傳的是 UTC 時刻；
+    # today 問的是組織時區的今天，兩個日期要先落在同一個時區才能相減，否則台北每天
+    # 有 8 小時（UTC 還沒跨到下一天）會把 days_elapsed／expected_to_date 多算一天。
+    approval_date = (
+        approved_at.astimezone(coresettings.org_timezone(conn, org_id=org_id)).date()
+        if isinstance(approved_at, datetime) else approved_at
+    )
     today = coresettings.today_for_org(conn, org_id=org_id)  # 組織時區的今天（票 04-1b）
     month_start = today.replace(day=1)
     window_start = max(month_start, approval_date)
