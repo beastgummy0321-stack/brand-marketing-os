@@ -55,17 +55,22 @@ def _valid_warnings(raw_warnings) -> list[str] | None:
 
 
 def _collect_nodes(
-    raw_nodes, depth: int, budget_level: int, share_bucket: list
+    raw_nodes, depth: int, budget_level: int, share_bucket: list, parent_key: str
 ) -> list[dict] | None:
     """驗一層節點，遞迴驗子節點；扛 `share` 的節點依文件（深度優先、前序）順序塞進
     `share_bucket`，供 `build_tree` 統一算錢——票 09 settled 段第 5 點「照文件順序蒐集」。
     `depth` 從 1 開始對齊 `budget_level` 的 1-based 編號；第三層不得再有子節點（剛好三層深）。
+
+    `node_key`（票 T3b，ADR 0055 §1）是同一個深度優先前序順序算出來的路徑：1-based、
+    點分隔，`parent_key` 是上一層算好的前綴（根層是空字串）。這是節點在整棵樹的唯一
+    識別，`channel_entity_map` 拿它當鍵；同輸入同輸出，不落地、每次讀都重算。
     """
     if not isinstance(raw_nodes, list) or not raw_nodes:
         return None
 
     nodes = []
-    for raw in raw_nodes:
+    for index, raw in enumerate(raw_nodes, start=1):
+        node_key = f"{parent_key}.{index}" if parent_key else str(index)
         if not isinstance(raw, dict):
             return None
         name = raw.get("name")
@@ -95,17 +100,19 @@ def _collect_nodes(
                 return None
             children = []
         else:
-            deeper = _collect_nodes(raw.get("children"), depth + 1, budget_level, share_bucket)
+            deeper = _collect_nodes(
+                raw.get("children"), depth + 1, budget_level, share_bucket, node_key
+            )
             if deeper is None:
                 return None
             children = deeper
 
         node = {
-            "name": name, "fields": fields, "share": share,
+            "name": name, "node_key": node_key, "fields": fields, "share": share,
             "daily_amount": None, "warnings": warnings, "children": children,
-            # 票 11：綁定＋花費／ROAS 欄位。tree.py 不碰 DB，一律留白；只有第一層節點會被
-            # routes.py 填 bound_external_id（第一層以下永遠是 null，settled 段第 6 點），
-            # spend／roas 只有綁定的節點才由 routes.py 補上。
+            # tree.py 不碰 DB，一律留白；只有第一層節點會被 routes.py 的
+            # _tree_with_bindings() 疊上 bound_external_id（第一層以下永遠是
+            # null——T3b 只綁第一層，ADR 0055 §7），spend／roas 只有綁定的節點才補上。
             "bound_external_id": None, "spend": None, "roas": None,
         }
         if depth == budget_level:
@@ -133,7 +140,7 @@ def build_tree(rendered_output: str, daily_budget: float) -> tuple[dict, str | N
     budget_level = int(budget_level)
 
     share_bucket: list[dict] = []
-    nodes = _collect_nodes(data.get("nodes"), 1, budget_level, share_bucket)
+    nodes = _collect_nodes(data.get("nodes"), 1, budget_level, share_bucket, "")
     if nodes is None or not share_bucket:
         return {}, NO_TREE_MESSAGE
 
@@ -172,13 +179,9 @@ def tree_from_task_row(row: dict) -> dict:
     else:
         body, failure = build_tree(rendered_output, daily_budget)
 
-    # 票 11 settled 段第 5 點：綁定的映射存在這列 llm_task 自己的
-    # context_scope_json["bound_external_ids"]（{節點名稱: campaign_id}），只吃第一層節點——
-    # 深一層的節點永遠是 null（settled 段第 6 點），這裡不遞迴進 children。
-    bound_external_ids = scope.get("bound_external_ids") or {}
-    for node in body.get("nodes", []):
-        node["bound_external_id"] = bound_external_ids.get(node["name"])
-
+    # 票 T3b（ADR 0055 §4）：綁定不再從這一列自己的 context_scope_json 讀——這是純函數，
+    # 沒有連線，讀不到 channel_entity_map。bound_external_id 一律是 null；填值是呼叫端
+    # `routes._tree_with_bindings()` 的事。
     return {
         "task_id": row["id"],
         "created_at": row["started_at"],

@@ -126,7 +126,7 @@ class ApprovalApiContractTest(unittest.TestCase):
         web.conn.commit()
 
         def fake_list_campaigns(_token: str, acc_id: str) -> list[dict]:
-            hit = [{"campaign_id": campaign_id, "name": node_name}]
+            hit = [{"campaign_id": campaign_id, "name": node_name, "effective_status": "ACTIVE"}]
             return hit if acc_id == external_id else []
 
         with mock.patch.object(meta_graph, "list_campaigns", fake_list_campaigns):

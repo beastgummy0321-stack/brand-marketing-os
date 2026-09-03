@@ -428,6 +428,60 @@ def write_settlement(conn: _AnyConn, *, org_id: str, period_id: str, spend: floa
     conn.commit()
 
 
+# ---- 票 T3b（ADR 0055）：節點綁定，channel_entity_map ------------------------------------
+
+def bindings_by_node_key(conn: _AnyConn, org_id: str, brand_id: str, channel_key: str) -> dict:
+    """這個品牌在這個通路上，`node_key → {external_id, node_name_at_bind}`（只挑
+    `local_state = 'mapped'` 的列——`routes._tree_with_bindings()` 疊圖用）。跟
+    `ad_channel` JOIN 是為了用 `channel_key`（'meta'）而不是內部 id 篩——沒有那一列，
+    JOIN 自然是空集合，讀從不建它（ADR 0055 §4／§5：讀永遠不寫）。"""
+    rows = conn.execute(
+        "SELECT cem.node_key, cem.external_id, cem.node_name_at_bind"
+        " FROM channel_entity_map cem JOIN ad_channel ch"
+        " ON ch.id = cem.channel_id AND ch.org_id = cem.org_id"
+        " WHERE cem.org_id = %s AND cem.brand_id = %s AND ch.channel_key = %s"
+        " AND cem.local_state = 'mapped'",
+        (org_id, brand_id, channel_key),
+    ).fetchall()
+    return {r["node_key"]: dict(r) for r in rows}
+
+
+def ensure_meta_channel(conn: _AnyConn, org_id: str) -> str:
+    """這個組織的 'meta' `ad_channel` id，第一次用時現生（ADR 0055 §5）——只有寫入路徑
+    （`_run_bind`）呼叫這支，讀樹的疊圖永遠不建這一列。"""
+    conn.execute(
+        "INSERT INTO ad_channel (id, org_id, channel_key, label, enabled)"
+        " VALUES (%s, %s, 'meta', 'Meta', true) ON CONFLICT (org_id, channel_key) DO NOTHING",
+        (new_id("adch"), org_id),
+    )
+    row = conn.execute(
+        "SELECT id FROM ad_channel WHERE org_id = %s AND channel_key = 'meta'", (org_id,),
+    ).fetchone()
+    assert row is not None  # 上面剛 INSERT／DO NOTHING 過，這一列必然存在
+    return row["id"]
+
+
+def upsert_binding(conn: _AnyConn, *, org_id: str, brand_id: str, channel_id: str,
+                    node_key: str, node_name_at_bind: str, external_id: str,
+                    external_status: str | None) -> None:
+    """綁定一個節點。`ON CONFLICT` 的鍵就是節點的身分 `(org_id, brand_id, channel_id,
+    node_key)`——改名之後重綁是覆寫同一列，不是撞唯一鍵（ADR 0055 §2／§4：位置是身分，
+    重綁覆寫、不留歷史）。呼叫端批次呼叫，這裡不 commit。"""
+    conn.execute(
+        "INSERT INTO channel_entity_map (id, org_id, brand_id, channel_id, node_key,"
+        " node_name_at_bind, external_id, external_status, external_status_at, local_state)"
+        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, now(), 'mapped')"
+        " ON CONFLICT (org_id, brand_id, channel_id, node_key) DO UPDATE SET"
+        " external_id = excluded.external_id,"
+        " node_name_at_bind = excluded.node_name_at_bind,"
+        " external_status = excluded.external_status,"
+        " external_status_at = excluded.external_status_at,"
+        " local_state = 'mapped', updated_at = now()",
+        (new_id("cem"), org_id, brand_id, channel_id, node_key, node_name_at_bind,
+         external_id, external_status),
+    )
+
+
 # ---- 品牌刪除清理登記（app/core/cleanup.py；pattern: app/meta/repository.py:526）---------
 
 _CHILD_TABLES = (

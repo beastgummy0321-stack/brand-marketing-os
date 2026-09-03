@@ -234,8 +234,10 @@ def bound_account_ids_for_brand(conn: _AnyConn, org_id: str, brand_id: str) -> l
 def campaign_ids_by_exact_name(
     conn: _AnyConn, org_id: str, ad_account_ids: list, name: str,
 ) -> list:
-    """票 11：這批帳號裡，活動名稱逐字（區分大小寫、不 trim、不正規化）等於 `name` 的
-    campaign_id——外殼精準比對的唯一資料來源，`org_id` 是租戶界線。
+    """票 11／T3b：這批帳號裡，活動名稱逐字（區分大小寫、不 trim、不正規化）等於 `name`
+    的 `[{"campaign_id", "external_status"}]`——外殼精準比對的唯一資料來源，`org_id`
+    是租戶界線。`external_status` 是平台當下的 `effective_status`，原樣帶出去，呼叫端
+    （`app.schedule._run_bind`）綁定時原樣存進 `channel_entity_map`（ADR 0055 §4）。
 
     資料來源是**平台上的活動清單**（`graph.list_campaigns`），不是 `meta_entity_spend`。
     2026-08-29 實測發現的缺陷：手動建好、維持關閉的活動沒有任何 insights 列，靠花費表比對
@@ -251,7 +253,7 @@ def campaign_ids_by_exact_name(
         "SELECT account_id FROM meta_ad_account WHERE org_id = %s AND id = ANY(%s)",
         (org_id, ad_account_ids),
     )
-    matched: list = []
+    matched: dict = {}  # campaign_id -> effective_status，去重（見底下說明）
     for row in rows:
         try:
             campaigns = graph.list_campaigns(token, row["account_id"])
@@ -259,8 +261,11 @@ def campaign_ids_by_exact_name(
             raise web.ApiError(
                 502, "meta_unreachable", f"連不上 Meta，沒辦法比對名稱：{exc.message}"
             ) from exc
-        matched.extend(c["campaign_id"] for c in campaigns if c["name"] == name)
-    return sorted(set(matched))
+        for c in campaigns:
+            if c["name"] == name:
+                matched[c["campaign_id"]] = c["effective_status"]
+    return [{"campaign_id": cid, "external_status": status}
+            for cid, status in sorted(matched.items())]
 
 
 def last_pull_at(conn: _AnyConn, org_id: str, ad_account_ids: list):

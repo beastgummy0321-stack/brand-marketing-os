@@ -55,7 +55,7 @@ from app.brand_intelligence import repository as bi_repo
 from app.core import approval as approval_mod
 from app.core import rule_cards
 from app.core import settings as coresettings
-from app.core.db import APP_DIR, jsonb
+from app.core.db import APP_DIR
 from app.llm import gateway
 from app.meta import repository as meta_repo
 from app.schedule import creative as creative_mod
@@ -324,18 +324,27 @@ def _leaf_ad_node_names(nodes: list) -> list[str]:
     return names
 
 
-def _creative_ad_node_names(conn, creative_row: dict) -> list[str]:
-    """從這一列內容任務凍結的 `source_tree_task_id` 找回當時的那棵樹，重算最深層節點名稱
-    ——frozen decision 5：核對用的永遠是產出當下的那棵樹，使用者之後重新展開樹不會悄悄
-    改寫已經產出的內容，所以這裡不能讀「最新一次的樹」，只能讀凍結住的那一列。"""
-    scope = creative_row.get("context_scope_json") or {}
-    source_tree_task_id = scope.get("source_tree_task_id")
+def _tree_with_bindings(conn, tree_row: dict, org_id: str, brand_id: str) -> dict:
+    """票 T3b（ADR 0055 §4）：疊上 `channel_entity_map` 的綁定，只疊第一層節點——
+    位置（`node_key`）配對，名字不符就顯示未綁定。讀從不寫。"""
+    tree = tree_mod.tree_from_task_row(tree_row)
+    bindings = schedule_repo.bindings_by_node_key(conn, org_id, brand_id, "meta")
+    for node in tree["nodes"]:
+        if (b := bindings.get(node["node_key"])) and b["node_name_at_bind"] == node["name"]:
+            node["bound_external_id"] = b["external_id"]
+    return tree
+
+
+def _creative_ad_node_names(conn, creative_row: dict, org_id: str, brand_id: str) -> list[str]:
+    """從這一列內容任務凍結的 `source_tree_task_id` 找回當時的那棵樹，重算最深層節點名稱——
+    frozen decision 5：只能讀凍結住的那一列，不能讀「最新一次的樹」。"""
+    source_tree_task_id = (creative_row.get("context_scope_json") or {}).get("source_tree_task_id")
     if not source_tree_task_id:
         return []
     tree_row = gateway.get_task(conn, source_tree_task_id)
     if tree_row is None:
         return []
-    tree = tree_mod.tree_from_task_row(tree_row)
+    tree = _tree_with_bindings(conn, tree_row, org_id, brand_id)
     return _leaf_ad_node_names(tree["nodes"])
 
 
@@ -348,7 +357,7 @@ def _brand_response(conn, brand_id: str, org_id: str) -> dict:
     if plan is not None and plan_running:
         plan["running"] = True
     tree_row, tree_running = _display_task_row(conn, brand_id, TREE_TASK_TYPE)
-    tree = tree_mod.tree_from_task_row(tree_row) if tree_row is not None else None
+    tree = _tree_with_bindings(conn, tree_row, org_id, brand_id) if tree_row is not None else None
     if tree is not None and tree_running:
         tree["running"] = True
     if tree is not None:
@@ -357,7 +366,7 @@ def _brand_response(conn, brand_id: str, org_id: str) -> dict:
     creative_row, creative_running = _display_task_row(conn, brand_id, CREATIVE_TASK_TYPE)
     creative = None
     if creative_row is not None:
-        ad_node_names = _creative_ad_node_names(conn, creative_row)
+        ad_node_names = _creative_ad_node_names(conn, creative_row, org_id, brand_id)
         creative = creative_mod.creative_from_task_row(creative_row, ad_node_names)
         if creative_running:
             creative["running"] = True
@@ -466,7 +475,7 @@ def _run_creative(conn, brand_id: str, org_id: str) -> dict:
     tree_row = _latest_task_row(conn, brand_id, TREE_TASK_TYPE)
     if tree_row is None or tree_row["status"] != "succeeded":
         raise web.ApiError(400, "no_tree", NO_TREE_TO_GENERATE_CREATIVE_MESSAGE)
-    tree = tree_mod.tree_from_task_row(tree_row)
+    tree = _tree_with_bindings(conn, tree_row, org_id, brand_id)
     ad_node_names = _leaf_ad_node_names(tree["nodes"]) if tree["failure"] is None else []
     if not ad_node_names:
         raise web.ApiError(400, "no_tree", NO_TREE_TO_GENERATE_CREATIVE_MESSAGE)
@@ -599,44 +608,35 @@ BIND_FAILURE_MESSAGE = "配對失敗，請檢查名稱是否完全相符"
 
 
 def _run_bind(conn, brand_id: str, org_id: str) -> dict:
-    """票 11：把手動在平台上發布的活動用名稱精準比對回這棵樹的第一層節點——SQL '=' 比對，
-    區分大小寫、不 trim（settled 段第 2 點）。名稱只用一次：已經有 bound_external_id 的
-    節點跳過不重比對，之後一律靠存下來的 id 找資料（settled 段第 3 點，改名不斷線）。
-    零筆或兩筆以上都是失敗，不猜——整批回同一句訊息，不逐節點分開講（settled 段第 4 點）。
-    還沒有成功展開過的活動樹，先擋在比對之前（比照 `_run_tree` 的「先驗證、後動作」次序）。
-    """
+    """票 11／T3b：用名稱精準比對（區分大小寫、不 trim）把活動綁回第一層節點，已綁定的
+    跳過；零筆或兩筆以上是失敗，不猜，整批回同一句訊息（ADR 0055 §4）。"""
     tree_row = _latest_task_row(conn, brand_id, TREE_TASK_TYPE)
     if tree_row is None or tree_row["status"] != "succeeded":
         raise web.ApiError(400, "no_tree", NO_TREE_TO_BIND_MESSAGE)
 
-    scope = tree_row.get("context_scope_json") or {}
-    bound_external_ids = dict(scope.get("bound_external_ids") or {})
-    tree = tree_mod.tree_from_task_row(tree_row)
-
+    tree = _tree_with_bindings(conn, tree_row, org_id, brand_id)
     account_ids = meta_repo.bound_account_ids_for_brand(conn, org_id, brand_id)
-    any_failure = False
-    newly_bound = False
+    channel_id, any_failure, newly_bound = None, False, False
     for node in tree["nodes"]:
         if node["bound_external_id"] is not None:
             continue
         matches = meta_repo.campaign_ids_by_exact_name(conn, org_id, account_ids, node["name"])
-        if len(matches) == 1:
-            bound_external_ids[node["name"]] = matches[0]
-            newly_bound = True
-        else:
+        if len(matches) != 1:
             any_failure = True
+            continue
+        channel_id = channel_id or schedule_repo.ensure_meta_channel(conn, org_id)
+        schedule_repo.upsert_binding(
+            conn, org_id=org_id, brand_id=brand_id, channel_id=channel_id,
+            node_key=node["node_key"], node_name_at_bind=node["name"],
+            external_id=matches[0]["campaign_id"], external_status=matches[0]["external_status"],
+        )
+        newly_bound = True
 
     if newly_bound:
-        conn.execute(
-            "UPDATE llm_task SET context_scope_json = %s WHERE id = %s",
-            (jsonb({**scope, "bound_external_ids": bound_external_ids}), tree_row["id"]),
-        )
         conn.commit()
 
     response = _brand_response(conn, brand_id, org_id)
-    # settled 段第 7 點：這個欄位只在這支路由的回應裡非空，且從不落地——重讀
-    # tree_from_task_row() 之後才蓋上，GET／plan／tree／reject 走的都是同一個
-    # tree_from_task_row()，一律留 null。
+    # settled 段第 7 點：這個欄位只在這支路由的回應裡非空、從不落地，其餘讀取路徑一律 null。
     response["tree"]["bind_failure"] = BIND_FAILURE_MESSAGE if any_failure else None
     return response
 
@@ -649,7 +649,7 @@ def _run_approve(conn, brand_id: str, org_id: str, actor: str) -> dict:
     tree_row = _latest_task_row(conn, brand_id, TREE_TASK_TYPE)
     if tree_row is None or tree_row["status"] != "succeeded":
         raise web.ApiError(400, "no_tree", NO_TREE_TO_APPROVE_MESSAGE)
-    tree = tree_mod.tree_from_task_row(tree_row)
+    tree = _tree_with_bindings(conn, tree_row, org_id, brand_id)
     if tree["failure"] is not None:
         raise web.ApiError(400, "no_tree", NO_TREE_TO_APPROVE_MESSAGE)
 

@@ -158,16 +158,22 @@ def _extract_roas(action_stats) -> Decimal | None:
 
 
 def _to_campaign(item: dict) -> dict | None:
-    """帳號活動清單的一筆 → 我們要的兩個欄位；缺 id 這一筆不能用（跳過，比照 _to_account）。
-    名稱缺席補空字串——精準比對永遠不會等於空字串，所以缺名稱＝配不到，不是配到別人。"""
+    """帳號活動清單的一筆 → 我們要的三個欄位；缺 id 這一筆不能用（跳過，比照 _to_account）。
+    名稱缺席補空字串——精準比對永遠不會等於空字串，所以缺名稱＝配不到，不是配到別人。
+    `effective_status` 是平台自己的字，原樣存、不缺席時補 None（票 T3b，ADR 0055 §4：
+    我們不把它翻譯成自己的詞彙）。"""
     campaign_id = item.get("id")
     if not campaign_id:
         return None
-    return {"campaign_id": campaign_id, "name": item.get("name") or ""}
+    return {
+        "campaign_id": campaign_id, "name": item.get("name") or "",
+        "effective_status": item.get("effective_status"),
+    }
 
 
 def list_campaigns(token: str, account_id: str) -> list[dict]:
-    """這個帳號目前所有活動的 [{"campaign_id","name"}]，**包含還沒開跑的**。
+    """這個帳號目前所有活動的 [{"campaign_id","name","effective_status"}]，**包含還沒
+    開跑的**。
 
     名稱比對要問的是「平台上存不存在這個活動」，不是「它花過錢」。insights 端點只回有
     投遞的活動：手動建好但維持關閉（PAUSED）的活動在那裡查不到，所以名稱比對不能建在
@@ -178,7 +184,7 @@ def list_campaigns(token: str, account_id: str) -> list[dict]:
     act_ 前綴在這裡補。"""
     headers = {"Authorization": f"Bearer {token}"}
     url = f"{GRAPH_BASE_URL}/act_{account_id}/campaigns"
-    params: dict | None = {"fields": "id,name", "limit": 200}
+    params: dict | None = {"fields": "id,name,effective_status", "limit": 200}
     items = _fetch_all_pages(url, params, headers)
     return [r for r in (_to_campaign(item) for item in items) if r is not None]
 

@@ -81,9 +81,17 @@ bound** — a three-level cap belongs to `tree.py`'s validation, not to the sche
 ## 4. Re-expanding the tree: the position keeps its binding only if the name still matches
 
 A binding row stores `node_name_at_bind`. When a tree is re-expanded and a node at the same
-`node_key` has a different name, the row is not reused: it moves to `local_state = 'orphaned'`
-and the screen shows that node as unbound. Same position **and** same name → the binding is
-kept, which is what makes "look at another version of the plan" cheap.
+`node_key` has a different name, the row is not reused and the screen shows that node as
+unbound. Same position **and** same name → the binding is kept, which is what makes "look at
+another version of the plan" cheap.
+
+**The veto is a comparison at read time, not a state change**, and the row stays `mapped` with
+its stale name. An earlier draft of this section said the row "moves to `local_state =
+'orphaned'`"; T3b's review found that nothing writes that value, and the honest description is
+this one — the only reader of a `mapped` row is the same name-checked overlay, so a stale name
+can never surface as a binding. `orphaned` therefore stays a **defined but unwritten** value.
+Constitution rule 3 is why it is defined now: the day a screen needs to list "bindings that came
+loose", writing it is an UPDATE, not a migration.
 
 `local_state` carries all three values from day one: `mapped` · `orphaned` · `retired`.
 It is ours. `external_status` is the platform's own word, stored verbatim — for Meta that is

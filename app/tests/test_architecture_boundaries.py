@@ -902,7 +902,15 @@ class FileLineCapTest(unittest.TestCase):
 # 第二次 POST 回的 read_id 跟第一次一模一樣）。不重複既有斷言：既有測試從沒對 POST 自己的
 # 回應斷言過任何東西，只驗過之後 GET 回來的內容，所以綠燈一路放過這個 bug。
 # 另一個 bug（畫面每 2 秒閃一次）在 `frontend/`，那一層照 CLAUDE.md 只收 e2e smoke，不寫單元測試。
-TEST_LINES_CEILING = 17074
+#
+# 票 T3b（ADR 0055）：綁定改鍵 node_key，不再落在 llm_task.context_scope_json。守的是
+# **資料正確性**——舊版拿節點名稱當 dict key，兩個同名節點會撞成一格；新測試證明新版不會：
+# 兩個同名第一層節點各自綁到不同活動且保持獨立（舊版表達不出來的狀態）、重新展開後同名同
+# 位置留住綁定、換了名字顯示未綁定、ticket 矛盾檢查段那個「兩個鄰居互換名字」的第三案例
+# （位置優先、名字只當否決票，兩邊都不繼承對方）、改名後第二次 bind 是覆寫同一列
+# （`(org_id, brand_id, channel_id, node_key)` 這把 upsert 鍵本來要防的事）、以及讀這條疊圖
+# 的 SQL 本身也要過租戶隔離。17074 → 17263（含本段理由註解自己佔的行）。
+TEST_LINES_CEILING = 17263
 
 
 def _line_totals() -> tuple:
