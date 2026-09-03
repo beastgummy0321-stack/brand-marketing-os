@@ -143,7 +143,8 @@ plugin 的 SessionStart hook 每次注入；`~/.claude/workflow.md` 這個路徑
 psycopg.errors.DuplicateObject: type "procrastinate_job_status" already exists
 ```
 
-被打到的模組隨機（實測四次分別是 `test_methodology.py`／`test_capacity_check.py`／
+被打到的模組隨機（實測四次分別是 `test_methodology.py`／`test_capacity_check.py`（2026-09-04 已隨
+死碼 `app/tools/capacity_check.py` 一起刪除，此處保留只為忠實記錄當時實測）／
 `test_main_dotenv.py`／`test_inbox_api.py`＋`test_brand_delete_routes.py`），**單獨跑一定綠**，
 再跑一次整套也可能整套綠。已驗證不是哪一張票帶進來的：在停在 `4777392` 的乾淨 worktree
 上跑同一條指令，一樣紅。

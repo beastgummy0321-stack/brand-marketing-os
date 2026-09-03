@@ -1042,7 +1042,14 @@ class FileLineCapTest(unittest.TestCase):
 # 修好之後兩者不再是同一天，2026-09-04 台北 01 時這個時段親眼撞到它紅在
 # `spend_to_date` 0.0 != 500.0（同一個 bug 的第二個現場，不是新查核點，是讓既有測試
 # 繼續量對它原本要量的東西）。
-TEST_LINES_CEILING = 18635
+#
+# 小債清空（2026-09-04，使用者裁決刪除死碼）：18635 → 18467。這次是**往下**調，不需要授權——
+# 棘輪本來就只准往下。刪掉 `app/tools/capacity_check.py`（260 行）與
+# `app/tests/test_capacity_check.py`（176 行）：全 repo 找不到任何 `card.html`／`base.html`
+# 模板或呼叫端（`git grep` 四個命中全是它自己、它自己的測試、`BOARD.md`、`docs/tech-debt.md`），
+# 這支「版面守恆」腳本服務的是已刪除的 Jinja／`app/ads/` 舊 UI 世代，React 前端接手後
+# 零呼叫端。`KNOWN_MODULE_SIZES["app/tools"]` 同步 318 → 58。
+TEST_LINES_CEILING = 18467
 
 
 def _line_totals() -> tuple:
@@ -1519,7 +1526,8 @@ KNOWN_MODULE_SIZES = {
                           # 10）：第二頁不帶上一頁的 `nextCursor` 當 `cursor`，API 會原地回
                           # 同一頁，不會往前走——單靠「hasNext 為真就重打同一個 body」會
                           # 卡死或漏物件。前一次是 154。
-    "app/tools": 318,
+    "app/tools": 58,  # 2026-09-04：刪掉死碼 capacity_check.py（260 行，零呼叫端，服務的是
+                       # 已刪除的 Jinja／app/ads 舊 UI 世代）。前一次是 318
 }
 
 

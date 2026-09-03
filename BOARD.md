@@ -316,11 +316,6 @@ Dependabot #1（`nanoid`，修補版 3.3.18）：**`saas` 這邊已經是 3.3.18
 但 GitHub 掃的是預設分支 `master`，那邊還凍在 `v0.1-desktop` 的 3.3.17。警示會亮到 `saas` 併回
 `master` 為止——**不是還沒修，是修在另一條線上**。不為了關掉警示單獨去動凍結的 master。
 
-- [ ] **`app/tools/capacity_check.py` 可能是整支死碼（2026-09-04 修 `DESIGN.md` 裸引用時順手發現）**：
-      全站找不到任何 `card.html`／`base.html` 模板或呼叫端（唯一引用者是它自己的測試，且測試
-      全用合成字串，不碰真模板）——這支「版面守恆」腳本服務的是被刪掉的 Jinja／`app/ads/`
-      舊 UI 世代，React 前端接手後沒人再呼叫它。刪一整支工具＋測試是產品範圍決定，
-      不是文件清理，留給你判斷要不要開票查證後刪除
 - [ ] **上線前必刪（2026-09-02 建，使用者要求）** `supabase/seed.sql` 尾巴那段排查用帳號：
       `123@example.com` ／ `123456`，固定 UUID、固定組織 `org_bughunt`、固定品牌 `brd_bughunt`。
       每次 `supabase db reset` 自動重建，這正是它存在的理由——重置資料庫來查 bug，不會連查 bug
