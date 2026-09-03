@@ -111,6 +111,15 @@ organisation, written into the schema. The replacement is keyed
 Holding two tokens later is writing a different value into a column that already exists — the
 switch constitution rule 3 requires, not the migration it forbids.
 
+**The table belongs to schedule and the code that uses it stays in `app/meta/`, and that seam is
+one-way.** The established import direction is schedule → meta (`app/schedule/binding.py:16`,
+`period.py:17-18`, `state.py:19`, `tree_approval.py:13`), so `app/meta/` calling
+`app/schedule/repository.ensure_meta_channel` would close a package cycle that
+`ImportCycleScanTest` records. The meta module therefore carries its own copy of the three-line
+lazy insert — container contract §5 permits duplication until the third caller, and this is the
+second. The third caller extracts it to a shared accessor; that is the trigger, written down so
+the copy is a decision rather than an oversight.
+
 The old table is dropped, not migrated. The project has not shipped; `CLAUDE.md` records every
 row as test data, and the previous real Meta binding was already lost to a `supabase db reset`
 (0 rows, verified 2026-09-02). A backfill would carry nothing.
