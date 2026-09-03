@@ -35,15 +35,6 @@ CASCADE 今早已修、上傳有 50MB 上限、產品照那條查無此事）。
 表的形狀一律看 ADR 0050 的表清單；migration 檔名前綴一律看 ADR 0049（前綴＝擁有那張表的模組，
 不是要它的那張票，所以一張票可以有好幾個不同前綴的 migration 檔）。
 
-- [>] **T4（route C）站②實作完成，未收工。** 決定紀錄 **ADR 0056**。
-      **看板行由子代理刪掉過，主對話台補回來——刪行是第③站收工動作，不是實作者的權限。**
-      待辦：獨立審查一輪 → 第③站（拔根測試、驗工單、使用者實玩）→ 才刪行。
-      實作內容：`platform_objectives.json` → `channel_catalogue.json`（四個能力旗標帶官方出處）
-      ＋ `ad_channel` 拿掉 `label` ＋ `channel_credential` 取代 `meta_credential`
-      ＋ `meta_ad_account` 補 `timezone_name` 且 `daily_pull` 真的改用它
-      ＋ **Vault 三支門的擁有權檢查改認新表**（`20260903000014_core_vault_channel_credential.sql`，
-      使用者 2026-09-03 批准的權限路徑變更；那條分支在此之前從來沒有測試）。
-      `TEST_LINES_CEILING` 17877 → 18058，理由與判準寫在 `test_architecture_boundaries.py` 常數上方。
 - [ ] **T5（route C）** 成效回流接座標——**第 3 層（廣告）的綁定是這張票的**（ADR 0055 §7：
       schema 位置 T3a 已留好，開它是多幾列不是 migration），同時決定
       `creative_candidate.published_ad_external_id` 是留成便利欄位還是刪掉
