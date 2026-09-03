@@ -64,11 +64,16 @@
   `uv run pytest app/tests/test_org_isolation_all_tables.py app/tests/test_brand_isolation_all_tables.py app/tests/test_architecture_boundaries.py -q`
   ——每張表有 NOT NULL `org_id`＋FK、每張表有 NOT NULL `brand_id`（除具名豁免）、
   以及讀租戶表的函式有沒有帶租戶欄位（`UnscopedTenantReadScanTest`，2026-09-02 加，凍結四處既有欠帳）
-- 合併進主線：`uv run pytest app/tests -q -n auto --dist loadfile`
+- 合併進主線：`uv run pytest app/tests -q -n 8 --dist loadfile`
   （`--dist loadfile` 必要——`conftest.py` 給每個測試模組自己的 DB／schema）。
-  **跑之前先關掉多餘的後端**：同時開著兩個後端（8710＋另一個）再跑 `-n auto`，本機 Postgres
-  的連線槽會被吃光，測試整片紅在 `remaining connection slots are reserved`——那不是程式壞了
-  （2026-08-29 踩到）。
+  **`-n 8` 不是 `-n auto`，這是 2026-09-03 量出來的**：這台機器 20 核，`-n auto` 就開 20 個
+  worker，每個各自帶連線池＋procrastinate 的 worker 與 listener 連線，加上 Supabase 自己常駐的
+  約 30 條，直接頂穿 Postgres 的 `max_connections=100`，於是**同一份程式碼同一條指令，跑起來時綠
+  時紅**——紅的時候是 28 個 error 全是 `remaining connection slots are reserved`（連帶讓
+  `test_meta_daily_spend.py` 冒出看起來像真的斷言失敗，其實是背景工作連不上資料庫的下游效應）。
+  實測：同一份碼 `-n auto` 717 passed／28 errors，`-n 8` **745 passed**，而且**沒有變慢**
+  （41 秒 vs 45 秒）。本節原本把成因寫成「同時開著兩個後端」——那是 2026-08-29 的另一件事，
+  這次一個多餘後端都沒有照樣紅。**跑之前仍然先關掉多餘的後端**，但那不是唯一成因。
 - **實機驗收要在重啟過的後端上做。** 閘門永遠看不到「跑的是舊程式」這件事——`npm run e2e`
   自己起一個新後端（8720）跑完就收，所以它測的一定是新碼；你手邊 8710 那個行程是你上次
   啟動時的程式，改完不重啟就還是舊的。2026-08-30 踩到：金鑰進 Vault 那張票，在 8710 上用

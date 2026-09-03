@@ -10,7 +10,7 @@
 | `FileLineCapTest` | 超標檔只准變小，不准有新的超標檔 | `KNOWN_OVERSIZED_FILES` |
 | `LayerDirectionTest` | 只准依賴排在自己前面的層 | `LAYER_ORDER`／`KNOWN_LAYER_VIOLATIONS` |
 | `ImportCycleScanTest` | 不得新增 import 環 | `KNOWN_IMPORT_CYCLES` |
-| `TestRatioTest` | 測試**絕對行數**只准往下（ADR 0041） | `TEST_LINES_CEILING`（14,305）。2026-08-30 從比值改成絕對行數：比值版在同一天被刪碼逼著調高兩次（0.858→0.862→0.865），因為刪 production 會讓分母變小、比值被動漲——等於懲罰刪死碼，而唯一能變綠的動作是調鬆閘門自己。改成絕對行數後，刪碼不會紅、加測試才會紅。比值降級成參考值，目標 0.7 不變 |
+| `TestRatioTest` | 測試**絕對行數**只准往下（ADR 0041） | `TEST_LINES_CEILING`。2026-08-30 從比值改成絕對行數：比值版在同一天被刪碼逼著調高兩次（0.858→0.862→0.865），因為刪 production 會讓分母變小、比值被動漲——等於懲罰刪死碼，而唯一能變綠的動作是調鬆閘門自己。改成絕對行數後，刪碼不會紅、加測試才會紅。**數字不寫在這裡**——它每張真的需要測試的票都會動一次，抄一份到文件就是保證過期（2026-09-03 查證：本欄原本寫 14,305，實際已經是 17,867）。當下值一律看那一行。**比值只是印出來的讀數，不是目標**：ADR 0041 明文「沒有任何文件再訂那個數字」，`docs/workflow-diet.md` 已刪除 |
 | `ModuleSizeRatchetTest` | 每個套件的行數凍在現況，調高要改明表 | `KNOWN_MODULE_SIZES` |
 
 後兩道是票 shell-06 補的。**誠實的天花板**：它們抓不到真正的病因——為一個還沒有人跑過的
@@ -27,10 +27,13 @@
 `ad_creative_fatigue`／`pacing`／`health_lights`／`autonomy` 六張卡連同前端投放自動度
 區塊一起刪除，設定頁不再顯示調了不影響任何東西的門檻。
 
-| 是什麼 | 現況 | 為什麼沒順手刪 |
+**2026-09-03 查證：這兩筆都已經不存在了，這一節結案。** 本節從 2026-08-29 起就沒有人回來看過，
+而它正是「沒有機器閘門、靠這份清單記得」的那種欠帳——所以它腐爛得最快，這一節自己就是證據。
+
+| 是什麼 | 當時的現況 | 後來怎麼了 |
 |---|---|---|
-| `cycle_shopee_code` 資料表與 `app/orders/channel.py` 的 `set_shopee_code`／`get_shopee_code` | 零呼叫端；欄位 `campaign_cycle_id` 指向已刪除的概念 | 它是 orders 模組的表，票 3 的 migration 伸手去刪別的模組的表會違反模組邊界（`CLAUDE.md` #7） |
-| `app/dashboard/campaign_calendar.py` 的 `current_campaign_stage()` | 零呼叫端（原本只有駕駛艙在用） | 節日日曆本身活著，這支純函數之後的儀表板可能會用；有自己的單元測試 |
+| `cycle_shopee_code` 資料表與 `app/orders/channel.py` 的 `set_shopee_code`／`get_shopee_code` | 零呼叫端；欄位 `campaign_cycle_id` 指向已刪除的概念 | **已刪**：表在 `supabase/migrations/20260829000005_orders_channel_revenue.sql:69` 被 `DROP TABLE`（票 12／ADR 0035，連同 `shopee_report_row`／`pharmacy_batch`），程式那兩支也沒了。全庫現在只剩 `app/orders/repository.py:467` 一行說明它為什麼消失，以及 `app/tests/test_orders_core_brand_cleanup.py:137` 一支確認它真的不在的測試 |
+| `app/dashboard/campaign_calendar.py` 的 `current_campaign_stage()` | 零呼叫端（原本只有駕駛艙在用） | **整支檔案已刪**：`grep -rn "current_campaign_stage" app/` 零命中 |
 
 另有一道空轉的閘門：`ImportBoundaryScanTest` 的 `BRANCH_PACKAGES` 現在是空的（唯一的分支
 專屬層就是廣告）。掃描器留著等下一個分支層，或直接刪掉——兩種都行，但別假裝它在守東西。
@@ -51,7 +54,12 @@ HTTP 打不到。使用者 2026-08-30 裁決不補——那是開發者自己在
 
 | 檔案 | 行數 | 倍數 | 先拆什麼 |
 |---|---|---|---|
-| `app/brand_intelligence/repository.py` | 1667 | 2.08× | 依表分檔（brand／product／rule／claim） |
+| `app/brand_intelligence/repository.py` | **1387**（凍結值仍是 1667） | 1.73× | 依表分檔（brand／product／rule／claim） |
+
+2026-09-03 查證：這個檔已經從 1667 縮到 **1387**，本表原本寫的 1667 是凍結值不是現況。
+`KNOWN_OVERSIZED_FILES` 只鎖「不得超過凍結值」，縮小之後沒有人回頭調低數字，這是刻意的
+（見 `FileLineCapTest` 上方的 `ponytail:` 註解：每次縮都要改常數是白工）。所以**這一欄的
+數字永遠只能當歷史讀，現況一律用 `wc -l` 量**。全庫現在仍只有這一個超標檔。
 
 2026-08-29（外殼切片）：`app/ads/repository.py`（856 行）隨整個 `app/ads/` 刪除，
 退出超標清單。全庫現在只剩上面這一個超標檔。
@@ -102,7 +110,8 @@ HTTP 打不到。使用者 2026-08-30 裁決不補——那是開發者自己在
 
 拆掉這三條邊，五組環一起消失（已用圖驗算：`brand_intelligence` 只剩指向 `app.core`）。
 代價：動 `routes.py` 1854 行 ＋ 三個檔的 `PROVIDER` 模組層變數與其 monkeypatch 測試。
-屬跨模組重構，開工前先提計畫等批准（`~/.claude/workflow.md` 第三節例外清單）。
+屬跨模組重構，開工前先提計畫等批准（route C 四類之一：模組邊界。規則由 skeleton-slice-pencil
+plugin 的 SessionStart hook 每次注入；`~/.claude/workflow.md` 這個路徑 2026-09-03 查證已不存在）。
 
 2026-08-15 修訂：`background_job.py` 對 `app.shared` 的邊是在 8/7 盤點後才長出來；本票以
 `notify(conn, ...)` 連線注入解掉，不搬進 `app/brand_web`，避免 intake 與 brand_web 形成新環。

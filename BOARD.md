@@ -160,15 +160,34 @@ T2 三張票逐字寫明不碰它，審查也逐字驗過 diff 裡沒有 `max_da
       **只准變短**——開票當天清單＝現況所以是綠的，新模組沒有頁會紅，補完一份劃掉一行。
       跟 `KNOWN_OVERSIZED_FILES` 同一種棘輪。**要先弄紅一次才算數**（加一個假模組資料夾看它紅）
 
+- [x] ~~**合併閘門會隨機紅，而 `CLAUDE.md` 把成因寫錯了**~~ **2026-09-03 量出來並修好**：
+      這台機器 20 核，`-n auto` 就開 20 個 worker，每個帶連線池＋procrastinate 的 worker 與
+      listener 連線，加上 Supabase 常駐的約 30 條，直接頂穿 `max_connections=100`。
+      同一份程式碼同一條指令，**`-n auto` 是 717 passed／28 errors，`-n 8` 是 745 passed，
+      而且沒有變慢**（41 秒 vs 45 秒）。原本寫的成因是「同時開著兩個後端」——這次一個多餘後端
+      都沒有（實測 `Get-NetTCPConnection` 8710／8720 皆空、`Get-Process python` 零筆）照樣紅。
+      28 個 error 之外還會冒出一個看起來像真斷言失敗的 `test_meta_daily_spend.py:548`，
+      其實是背景工作連不上資料庫的下游效應——**這正是它危險的地方**：紅得像程式壞了。
+      `CLAUDE.md` 的合併指令已改成 `-n 8` 並寫上理由
+
 ### 查到但還沒裁決（都已查證是真的，不是文件上的說法）
 
 - [ ] **CI 從來不跑 e2e smoke**。`.github/workflows/ci.yml` 只有 ruff／pyright／pytest／前端
       lint-typecheck-test-build。而 `CLAUDE.md` 與工作流規範都把 e2e 當「整合 bug 唯一現形處」
       ——**這個系統最吃重的閘門只活在開發機上**，CI 綠不代表 server 起得來
-- [ ] **十處 production 程式用現在式引用已退休的 ADR**：`決策 0015`
-      （`brand_intelligence/repository.py:18,255,288`、`intake/repository.py:56`）、
-      `ADR 0017`（`brand_web/routes_products.py:18,173`、`brand_intelligence/report.py:1`、
-      `repository.py:1244`）。adr-sweep **只掃 `.md`**，所以這些永遠不會紅
+- [ ] **`決策 NNNN` 是一套死掉的平行編號，全庫 84 處引用它**（2026-09-03 查證；本行原本寫成
+      「引用已退休的 ADR」是**錯的**，實情更糟）。它不是 ADR：`決策 0013` 講硬刪除要記
+      audit_log，ADR 0013 講設定頁重用規則卡；`決策 0015` 講品牌連鎖刪除，ADR 0015 講檔期跳過。
+      **兩套編號互相撞號，指向完全不同的東西。** 來源文件在 `5eca0db`
+      「乾淨重啟：保留程式與資料，清除所有流程紀錄與規範文件」被刪，而那個 commit 就是可見歷史的
+      **根**——`docs/decisions/` 在整個 git 歷史裡零命中，**救不回來了**。
+      分布：84 處、36 個檔，含 production、測試、前端（`tokens.css`、`AppShell.tsx`、`useEchart.ts`）。
+      adr-sweep 只掃 `.md`，所以這些永遠不會紅。
+      **最省事也最誠實的補法**：在 `CONTEXT.md` 加一行說「`決策 NNNN` ＝ 已銷毀的舊決策紀錄編號，
+      解析不到任何東西，**不是 ADR id**」——因為那些註解大多**本來就把規則寫在句子裡了**
+      （「硬刪除…before 全文記 audit_log，決策 0015」），死掉的只是footnote。
+      另外約 5 處寫的是「**ADR** 0017」而不是「決策 0017」（`brand_web/routes_products.py:18,173`、
+      `brand_intelligence/report.py:1`、`repository.py:1244`），那幾處會真的把人帶去讀錯的檔，要逐條改
 - [ ] **十幾個檔引用 `5eca0db` 刪掉的文件**：`docs/design/*`、`architecture-rules.md`、
       `rule-checks.md`、`workflow-diet.md`。最糟的一處是
       `test_architecture_boundaries.py:988`——**最常紅的那道閘門，錯誤訊息叫人去讀不存在的
