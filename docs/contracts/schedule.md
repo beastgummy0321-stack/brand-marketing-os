@@ -6,12 +6,29 @@ it is not repeated here, because a second copy goes stale.
 ## Entry path
 
 `app/schedule/__init__.py`. Everything else in the package (`plan.py`, `tree.py`, `creative.py`,
-`period.py`, `binding.py`, `repository.py`, `routes.py`, `jobs.py`) is private and imported by
-nothing outside it.
+`period.py`, `binding.py`, `state.py`, `tree_approval.py`, `repository.py`, `routes.py`,
+`jobs.py`) is private and imported by nothing outside it.
 
 The split inside the package is by job, not by size: `routes.py` takes HTTP requests, and the
-others do the work. `binding.py` was carved out of `routes.py` on 2026-09-03 (user-approved) on
-exactly that line — matching a tree node to a live platform entity is work, not routing.
+others do the work. Three files were carved out of `routes.py` on 2026-09-03 (user-approved) on
+exactly that line, taking it from 768 lines to 502:
+
+- `binding.py` — matching a tree node to a live platform entity is work, not routing.
+- `state.py` — reading the `llm_task` rows and assembling the brand's screen shape.
+- `tree_approval.py` — the money. Container contract §7: a function that computes money or an
+  approval amount never lives in a routes file. `_tree_signature`, `_tree_content_hash`,
+  `_sum_daily_amounts`, `_approval_overspend`, `_fill_approval`, `APPROVAL_SCOPE_TYPE`.
+
+The rule those three share, and the one to apply next time: **a symbol earns a line in `routes.py`
+only if it would have no reason to exist outside an HTTP endpoint.** A `@router` function, its
+request shape, or a constant whose whole content is HTTP-facing wording. Anything that would still
+be needed if this package were driven by a CLI is work.
+
+Import direction inside the package is one-way into `routes.py`: `routes` imports `state` and
+`tree_approval`, `state` imports `tree_approval`, and neither of those imports `routes`. `state.py`
+did import `routes` for one line between those two tickets; that cycle is closed and must not come
+back. Note that `ImportCycleScanTest` only records edges between top-level packages, so a cycle
+*inside* `app/schedule/` is invisible to it — this paragraph is the only thing guarding it.
 
 ## Exported shapes
 

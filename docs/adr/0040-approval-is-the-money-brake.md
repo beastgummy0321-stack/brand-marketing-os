@@ -1,7 +1,7 @@
 ---
 id: 0040
 decision: Approval is the money brake: it is recorded in its own table at the gate, not yet wired to any spending.
-applies-to: [app/core/approval.py, app/schedule/routes.py]
+applies-to: [app/core/approval.py, app/schedule/tree_approval.py]
 supersedes: none
 status: in-force
 ---

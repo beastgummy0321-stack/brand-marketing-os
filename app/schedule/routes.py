@@ -19,8 +19,10 @@ ADR 0028／0029／0032／0033：部門是 repo 裡的一個資料夾
 
 票 01（`.scratch/approval-slice/issues/01-approval-is-the-money-brake.md`，ADR 0040）：
 「核准」＝花錢煞車，POST .../tree/approve 與 .../tree/approve/revoke 兩支端點，資料落在
-`app.core.approval`（外殼自己的字，不是排程模組的資料）。核准金額由這裡算（`_sum_daily_amounts`），
-絕不採信呼叫端傳的數字；`content_hash` 由這裡算（`_tree_content_hash`），刻意排除
+`app.core.approval`（外殼自己的字，不是排程模組的資料）。**算錢的部分 2026-09-03 已經搬去
+`app/schedule/tree_approval.py`**（集裝箱憲章 §7：算錢或算核准金額的函式不住在 routes 檔），
+本檔只剩兩支端點呼叫它：核准金額 `tree_approval._sum_daily_amounts()` 絕不採信呼叫端傳的
+數字；`content_hash` 是 `tree_approval._tree_content_hash()`，刻意排除
 `bound_external_id`／`spend`／`roas` 三個綁定之後才補上的欄位——見該函式的說明。
 
 `conn` 在下面的私有函式一律不標型別：`web.conn` 是 `ConnProxy`、

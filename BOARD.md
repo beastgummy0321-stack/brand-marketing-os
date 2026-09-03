@@ -144,9 +144,19 @@ T2 三張票逐字寫明不碰它，審查也逐字驗過 diff 裡沒有 `max_da
       「這是不是正式環境」的變數——**那顆空白屬於 07-2，不在任何單張票的權限裡**。
       順帶：沒有 scheme 的 `SUPABASE_URL`（`localhost:54321`）`urlparse` 回 `hostname=None`，
       會讓開發者開機失敗；不影響安全，但會浪費一個下午
-- [>] **`app/schedule/routes.py` 768／上限 800**：T5（成效回流＋第 3 層綁定＋拆 `_latest_task_row`）
-      必破。已派 READ-ONLY 盤點（工作流規範「A boundary escalation is not a menu」的做法），
-      結果轉成一張 route C 模組邊界票，**排在 T4 前面**
+- [x] ~~**`app/schedule/routes.py` 768／上限 800**~~ **2026-09-03 完成，768 → 502**。
+      做法照工作流規範「A boundary escalation is not a menu」：先派一支 READ-ONLY 問「這個檔該裝
+      什麼、每個函式去哪、哪些碰錢」，把它的表變成兩張票——`state.py`（route B，畫面組裝）
+      與 `tree_approval.py`（route C，錢，獨立審查 `ship`）。**判準寫進 `docs/contracts/schedule.md`**：
+      一個符號只有在「離開 HTTP 端點就沒有存在理由」時才配留在 routes.py。
+      金流審查的關鍵一步是**機器逐字元比對**六段搬過去的程式碼（六次 diff、六次空輸出），
+      不是用眼睛讀——`_tree_signature` 的排除欄位清單增減一個鍵，會默默改變所有已簽核准的
+      `content_hash`，任何測試都不一定抓得到。時區 bug 與 `max_daily_amount` 兩條逐字禁止順手動，
+      **偷偷修好也算未經批准的金流變更**。T5 現在有約 300 行餘裕可落地
+- [ ] **`ImportCycleScanTest` 看不到套件內部的環**（2026-09-03 實作時發現）：它只記錄頂層套件
+      之間的邊，所以 `app/schedule/state.py` ⇄ `app/schedule/routes.py` 那個雙向 import 全程綠燈。
+      這次靠票面明文與人工檢查關掉，**下一個在同一個套件裡拆檔的人不會自動被擋**。
+      已寫進 `docs/contracts/schedule.md` 當唯一的守門文字。要不要把掃描器降到模組層是個決定
 - [x] ~~`AGENTS.md`~~ **已刪（使用者裁決）**：它第 1 行寫「SQLite、單機單人使用」，正是
       `CONSTITUTION.md` 第 1 條禁止的前提，而且它不在 adr-sweep 的掃描樹、也不在
       「CONSTITUTION > ADR > 契約 > 票」的優先序裡——沒有任何機制守它。ADR 0031:55 本來就寫

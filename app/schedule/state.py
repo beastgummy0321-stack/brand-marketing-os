@@ -3,6 +3,10 @@
 從 routes.py 搬出來（2026-09-03 邊界盤點），一行邏輯都沒改。留在 routes.py 的判準：
 一個符號只有在「離開 HTTP 端點就沒有存在理由」時才配留在那裡。這裡的每一支就算改用
 CLI 驅動也照樣需要，所以它們是工作，不是端點。
+
+`_brand_response()` 把核准那一塊交給 `tree_approval._fill_approval()`——本檔不算任何錢。
+本檔曾經 import `routes` 只為了那一行，跟 `routes` import 本檔形成雙向環，同一天的第二張票
+（`tree_approval.py`）把它關掉了：**本檔不得再 import `app.schedule.routes`**。
 """
 
 import json
