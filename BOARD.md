@@ -51,19 +51,12 @@
 ### 第 5 級：介面與一致性
 
 10. **U2 前端版面規範落地**（ADR 0051：1920 流動、`auto-fit`、scrollWidth 閘門，先弄紅一次）
-11. **07-3 統一 404 信封**——**2026-09-04 重讀後改寫**：本行原本寫「統一信封形狀」，但真正的
-    病不是形狀。`NotFoundKind`（`app/shared/web.py:188-192`）只吐一個中文名詞、**沒有機器可讀的
-    代碼**，所以「這個品牌不存在」跟 FastAPI 自己對不存在路由吐的 404 在前端**長得一模一樣**
-    ——這正是 T5 拔根測試看到的現象（模組被拔掉，畫面說「找不到這個品牌」）。
-    `ApiError`／`handle_api_error` 那套 `{"error":{"code","message"}}`（票 03-1 附錄 A）已經有代碼。
-    所以這張票的價值在**加代碼**，前端三處（`brandReportApi.ts:36`、`http.ts:134`、
-    `ordersApi.ts:92`）跟著改。這是 API 契約改動
-12. **07-4 GitHub 四個安全開關**——需付費或公開 repo，本機單人階段先不付
+11. **07-4 GitHub 四個安全開關**——需付費或公開 repo，本機單人階段先不付
 
 ### 第 6 級：一次性清理，掛在會碰到那個檔的票上順手做
 
-13. **⑥ `app/identity/` 沒有任何 ADR 管**——下一個碰 identity 的 route C 問題順手寫第一份
-14. **其餘小債**見〈小債〉那節
+12. **⑥ `app/identity/` 沒有任何 ADR 管**——下一個碰 identity 的 route C 問題順手寫第一份
+13. **其餘小債**見〈小債〉那節
 
 〈使用者待辦〉那節不進這份排序——做的人是你，不是 agent。
 
@@ -156,9 +149,14 @@ CASCADE 今早已修、上傳有 50MB 上限、產品照那條查無此事）。
       某個功能莫名不動、查半天發現少一個變數
       ＋**部署映像檔要有 IANA 時區資料庫**（`today_for_org()` 靠 `zoneinfo`；Debian 系內建，
       Alpine 沒有——沒有就開機第一次算日期時大聲炸掉，這是刻意的，不要安靜退回 UTC）
-- [ ] 07-3 統一 404 信封：`require_brand` 走 `NotFoundKind` 吐 `{"detail": …}`，identity 路由走
-      `handle_api_error` 吐 `{"error": {"code","message"}}`；前端三處讀 `.detail`
-      （`brandReportApi.ts:36`、`http.ts:116`、`ordersApi.ts:93`）要跟著改。這是 API 契約改動
+- [x] ~~07-3 統一 404 信封~~ **2026-09-04 讀完程式後大幅改判並完成**。原本這行寫「兩種信封要
+      統一、前端三處讀 `.detail` 要跟著改」——**實查後三處裡只有兩處是問題，而且病因不是信封**。
+      `http.ts` 的 `errorMessageFrom()` 早就三種外殼全吃（字串 `error`、物件 `error.code/message`、
+      `detail`），2026-08-29 修 `[object Object]` 那次就做好了。真正的缺陷是
+      `brandReportApi.ts` 與 `ordersApi.ts` **各自繞過它手刻了一份只認 `detail` 的版本**——
+      碰到 identity 路由的 401 會顯示「操作失敗（狀態碼 401）」而不是「請先登入」。
+      修法是刪掉那兩份、改走共用函式（route B，不是 API 契約改動）。
+      **「加機器可讀的代碼」那半段沒做，理由寫在下面小債那條。**
 - [ ] 07-4 GitHub 四個安全開關（secret scanning／push protection／CodeQL／branch protection）：
       需 GitHub Pro 或公開 repo。**本機單人階段先不付費**（2026-08-30 裁決），跟 Sentry／staging／CD
       同一批再決定；在那之前 CI 綠不擋合併，靠人工
@@ -294,6 +292,13 @@ Dependabot #1（`nanoid`，修補版 3.3.18）：**`saas` 這邊已經是 3.3.18
 但 GitHub 掃的是預設分支 `master`，那邊還凍在 `v0.1-desktop` 的 3.3.17。警示會亮到 `saas` 併回
 `master` 為止——**不是還沒修，是修在另一條線上**。不為了關掉警示單獨去動凍結的 master。
 
+- [ ] **404 沒有機器可讀的代碼，所以「功能不存在」跟「品牌不存在」分不出來（07-3 剩下的那半，
+      2026-09-04 判「現在不做」）**：`NotFoundKind`（`app/shared/web.py:188-192`）只帶一個中文
+      名詞。實測 `curl http://localhost:8710/api/health` → `{"detail":"找不到頁面"}`，而找不到
+      品牌是 `{"detail":"找不到這個品牌"}`——**今天靠字串分辨得出來，但那很脆弱**。
+      加 `code` 的**成本很低，價值是零**：今天沒有任何畫面會分辨這兩件事，模組被拔掉只發生在
+      拔根測試裡，不是使用者路徑。**真的有畫面需要分岔時再開票**——憑空加一個沒人讀的代碼，
+      就是替沒人跑過的系統猜門檻
 - [ ] **七維同步閘門的天花板：它是 regex，騙得過（2026-09-04 T8a 審查實際騙成功）**：
       `CoordinateDimensionSyncTest`（`app/tests/test_architecture_boundaries.py:606-650`）把兩份
       TypeScript 當純文字讀，用 `.search()`（找第一個命中）＋非貪婪 `\n];` 收尾。審查在真正的

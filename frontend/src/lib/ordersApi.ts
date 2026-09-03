@@ -1,6 +1,6 @@
 /** 訂單總覽 API（票 01-orders-page-read／02-orders-page-actions）。 */
 
-import { apiFetch } from "./http";
+import { apiFetch, errorMessageFrom } from "./http";
 
 export interface SkuMargin {
   sku: string;
@@ -88,8 +88,11 @@ export async function fetchOrders(brandId: string, page = 1): Promise<OrdersPage
 
 async function postOrderAction(path: string, body: BodyInit, headers?: HeadersInit): Promise<string> {
   const res = await apiFetch(path, { method: "POST", body, headers });
-  const payload = (await res.json()) as { message?: string; detail?: string };
-  if (!res.ok) throw new Error(payload.detail ?? `送出失敗（狀態碼 ${res.status}）`);
+  // 票 07-3：錯誤外殼交給 `http.ts` 那支共用解析（三種外殼都吃）。原本只認 `detail`，
+  // 碰到 `web.ApiError` 的 `{"error": {"code","message"}}` 就退回 fallback，使用者看到
+  // 「送出失敗（狀態碼 401）」而不是「請先登入」。成功時的 `message` 仍然自己讀。
+  const payload = (await res.json()) as { message?: string };
+  if (!res.ok) throw new Error(errorMessageFrom(payload, `送出失敗（狀態碼 ${res.status}）`));
   return payload.message ?? "已儲存。";
 }
 
