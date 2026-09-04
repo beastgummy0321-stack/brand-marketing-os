@@ -5,7 +5,9 @@
  * repo 現狀走比跟著計畫書的資料夾名字重要；單一檔案也比一整個資料夾更容易被
  * dependency-cruiser 規則盯住「全站只有這支檔案准 import @supabase/supabase-js」——
  * 2026-09-04 這條規則已經接上（`frontend/.dependency-cruiser.cjs`、`npm run depcruise`、
- * CI frontend job），不再只是鋪路（看板 07-1）。
+ * CI frontend job），不再只是鋪路（看板 07-1）。同日證紅三種打法都紅：在 `src/lib/` 裡
+ * import、在畫面元件裡 import、**只 import 型別**（`import type { Session }`）。第三種
+ * 比規則字面更嚴，是刻意留著的：型別也只能從這支檔案借，出入口才真的只有一個。
  *
  * session（access token）的持久化交給 supabase-js 自己（它自己在 localStorage 管
  * 一組 key），這裡不重刻 token 儲存。這支檔案自己存的東西只有一樣：目前選的組織
