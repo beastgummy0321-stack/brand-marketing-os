@@ -37,8 +37,7 @@ Status: 進行中——①～⑦ 已走完（2026-09-04），只剩 ⑧⑨；卡
 **之後又冒出會靜靜算錯錢的東西，一律插回最前面。**
 
 1. `issue-t6c-three-agent-diagnosis.md` — 閉環現在就是斷的；開票條件是資料不是程式。
-2. `issue-prompt-contradicts-itself-on-coordinates.md` — 一行 diff，卡在「提示詞零件刪改先問」。
-3. `issue-variance-probe.md` — 探針要使用者自己跑一次，跑出數字才回頭重判。
+2. `issue-variance-probe.md` — 探針要使用者自己跑一次，跑出數字才回頭重判。
 
 （`issue-same-name-leaf-node-key.md` 2026-09-04 做掉、刪檔；`issue-image-on-ad-node.md` 同日
 重判完畢，判不做，檔案留著記結論，不要再問第三次。）
