@@ -90,7 +90,14 @@ export function CampaignTree({
           >
             {binding ? "配對中…" : "配對"}
           </button>
-          {(tree.approval === null || !tree.approval.matches_current_tree) && (
+          {/* 超過核准當時的每日上限也要出得來這顆鈕：`within_approved_ceiling` 為 false 時
+              下面的 ApprovalStatus 已經寫著「需要重新核准」，但「總額調高、結構沒變」正好
+              `matches_current_tree` 還是 true，鈕就不出現，使用者只剩「先撤回再核准」這條
+              猜不到的路。這裡只是多一個 OR，M2 禁止動的結構閘門本身一個字都沒改；後端
+              `_run_approve` 本來就接受重複核准（每次一列新的，上限＝當下總額）。 */}
+          {(tree.approval === null
+            || !tree.approval.matches_current_tree
+            || !tree.approval.within_approved_ceiling) && (
             <button
               type="button"
               onClick={onApprove}
