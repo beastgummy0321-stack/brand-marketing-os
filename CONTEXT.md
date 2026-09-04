@@ -236,3 +236,21 @@ audience·pain·angle·hook·proof·offer·format（`COORDINATE_KEYS`，`app/sch
 `TO authenticated` 的 policy；RLS 仍是第二道防線，主要門禁是 `require_brand` 與查詢層 `org_id` 篩選。
 新表照三條棘輪走（每張表開 RLS、有 `org_id` 的表要有 policy、讀租戶表的函式要帶租戶欄位），
 檔名在 `CLAUDE.md` Tests 節。
+
+### 從 CLAUDE.md 搬來的三條（2026-09-04；CLAUDE.md 只留結論，理由在這）
+
+- **`pytest -n 8` 不是 `-n auto`（2026-09-03 量出）**：這台機器 20 核，`-n auto` 開 20 個 worker，每個各自帶
+  連線池＋procrastinate 的 worker 與 listener 連線，加上 Supabase 常駐約 30 條，頂穿 Postgres
+  `max_connections=100`——同一份碼同一條指令時綠時紅，紅的時候 28 個 error 全是
+  `remaining connection slots are reserved`（連帶讓 `test_meta_daily_spend.py` 冒出像真的斷言失敗）。
+  實測 `-n auto` 717 passed／28 errors，`-n 8` 745 passed 且沒變慢（41 秒 vs 45 秒）。
+  成因不是「同時開著兩個後端」（那是 2026-08-29 另一件事），但跑之前仍先關掉多餘後端。
+  `--dist loadfile` 必要：`conftest.py` 給每個測試模組自己的 DB／schema。
+- **實機驗收要在重啟過的後端上做**：`npm run e2e` 自己起新後端（8720）所以測的一定是新碼；
+  手邊 8710 那個行程是上次啟動時的程式。2026-08-30 踩到：金鑰進 Vault 那張票在 8710 用瀏覽器驗出
+  「還是明文」，其實程式是對的，是行程沒換。
+- **`supabase db reset` 洗掉 seed 以外的一切，包含帳號本身**（2026-09-02 查證：舊的 `123@gmail.com`／
+  `org_01M1AKNVS9YAD3BDMTB1257YZ6`／品牌「Beast Prime 野獸至尊」／Meta 廣告帳戶各 0 筆）。
+  「洗掉後重設密碼就好」是錯的——那個使用者列根本不會留下來；真實資料要重建就是重新註冊、重新建檔、重新綁 Meta。
+  RLS 相關的票幾乎一定會 reset。端到端 smoke 為什麼每張票都跑：server 起不來、畫面吐 `[object Object]`、
+  排程凍住全站這類整合 bug 只在這裡現形（2026-08-29 那七個 `fix:`）。

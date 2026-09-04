@@ -1,104 +1,58 @@
-# CLAUDE.md
+# CLAUDE.md — Brand Marketing OS
 
-## 憲法摘要（給人讀的 10 行；細節 ADR 0027）
-
-1. 目標＝**多租戶雲端 SaaS**。單機是現在的部署形態，不是設計前提；不得以「單機單人」為由簡化。
-2. 資料模型三層：**組織 → 使用者 → 品牌**。每張表必有 `org_id`。
-3. 平台：Supabase（Postgres／Auth／Storage／Vault）；前端只跟 FastAPI 講話。
-4. 原生 SQL、不用 ORM；migration 由 Supabase CLI 管，集中 `supabase/migrations/`。
-5. 背景工作走 procrastinate，handler 可重跑、只碰自己組織。
-6. 手動路徑永遠一級公民；自動化是加法。
-7. 新模組＝新資料夾＋自己的 migrations＋前端 feature 資料夾，不碰別人的表。
-8. 先找現成、驗證過的套件，回報 ≤3 個候選再問；不自建連線池、佇列、migration runner。
-9. 動 schema、金流、權限、模組邊界：先提計畫等批准。
-10. 順序：憲法 → 資料層一次翻 → 身分 → 設定憑證 → 背景工作 → 素材 → 閘門收尾。看板舊票排其後。
+憲法 `CONSTITUTION.md`（20 行，唯一入口）→ 看板 `BOARD.md` ＋ `docs/`（語彙 `CONTEXT.md`、決策 `adr/`、
+模組契約 `contracts/`、議題 `issues/<目標>/`、技術債 `tech-debt.md`）。規則不在這裡重抄；這裡只放地標、指令、鐵律。
 
 ## 資料狀態（正式發布時刪除本節）
 
-系統**未發布**。`data/`、`backups/`、資料庫內容、`.scratch/` 演練紀錄**全為測試資料**，可直接刪除重建，
-不需備份、不需確認、不需保留相容。「動真實資料需批准」的規則在發布前不適用。
+系統**未發布**。`data/`、`backups/`、資料庫內容、`.scratch/` 全為測試資料，可直接刪除重建，
+不需備份、不需確認。「動真實資料需批准」的規則在發布前不適用。
 
-## 專案
+## 開場（每次 session）
 
-品牌行銷作業系統：Python + FastAPI + Postgres（Supabase）。
-前端 React＋Vite（`frontend/`，`npm run build` 後掛載於 `/app`）；後端只出 `/api` JSON。
-（過渡期：`saas` 分支完成前，`master` 仍是 SQLite 單機版 `v0.1-desktop`。）
+1. 讀 `BOARD.md`：一行一個目標，細節全在 `docs/issues/<目標>/`（`spec.md`／`NN-*.md` 票／`issue-*.md`）。
+   有 `[>]` 的目標行 → 讀它的資料夾，主動報「哪張票、進度、卡在哪」。
+2. 任何功能／修改需求 → 走 /slice 入口分流，不得跳過。
+3. 做票途中發現、這張票不修的事 → `issue-<名>.md`；沒有目標認領的模組欠帳 → `docs/tech-debt.md` §七。
+   看板本身不寫細節（plugin `board-shape` 閘門擋）；票做完刪票檔，資料夾空了才刪行。
+4. `HANDOFF-*.md` 讀完即轉成 issue 檔或票，同一 session 內刪除。
 
-- 繁體中文；使用者非工程背景，回報用白話，術語第一次出現附一句說明
-- 不確定就問，不要猜
-- 對外發布、花錢：先說後果，等確認
+## 地標
 
-## 開場
+- 技術棧：Python＋FastAPI＋Postgres（Supabase：Postgres／Auth／Storage／Vault）；原生 SQL 不用 ORM；
+  背景工作走 procrastinate（handler 可重跑、只碰自己組織）；前端 React＋Vite（`frontend/`，build 後掛 `/app`），
+  後端只出 `/api` JSON，前端只跟 FastAPI 講話。過渡期 `master` 仍是 SQLite 單機版 `v0.1-desktop`，開發在 `saas`。
+- 模組：`app/<模組>/`＝新資料夾＋自己的 migrations＋`frontend/src/features/<模組>/`，不碰別人的表。
+  契約頁 `docs/contracts/<模組>.md`，16 個模組現有 6 份；`ContractPageRatchetTest` 只准缺頁清單變短——
+  動到某模組的 route C 票先補那個模組的頁（格式 `container-contract.md` §8）。
+- `app/methodology/` 是 prompt 零件不是文件，刪改先問。
+- 工作流 plugin 原始碼 `D:\0UserProfile\Desktop\Default\skeleton-slice-pen`（不是 `skeleton-slice`）；
+  改完要 commit＋push＋`claude plugin update`。
 
-讀 `BOARD.md`；有 `[>]` 的目標行，讀它的 `docs/issues/<目標>/` 資料夾，主動報「哪張票、進度、卡在哪」。
-看板一行一個目標，細節全在資料夾裡（`spec.md`／`NN-*.md` 票／`issue-*.md`）；票做完刪票檔，資料夾空了才刪行。
-做票途中發現、這張票不修的事 → `issue-<名>.md`，不上看板；沒有目標認領的模組欠帳 → `docs/tech-debt.md` §七。
-看板寫入與派工都過 plugin 的 `board-shape` 閘門，節標題、段落、續行一律紅。
-`HANDOFF-*.md` 讀完即轉成看板行或票，同一 session 內刪除；「現在做到哪」只活在 `BOARD.md`，寫第二份必漂移。
+## 指令
 
-## 快速事實
-
-- 啟動：`啟動行銷系統.bat` → http://localhost:8710/（過渡期）；本機開發 `supabase start`
-- 裝依賴：`uv sync --frozen`（不用 pip／requirements.txt，套件與版本鎖在 `pyproject.toml`／`uv.lock`）
-- 金鑰 `.env`（不進版控）；`BRAND_OS_LLM_PROVIDER=codex_cli` 開著＝所有 LLM 呼叫走本機 codex CLI，不產生 API 帳單
-- bash 裡跑 docker／supabase 前先：`export PATH="/c/Users/User/AppData/Local/Programs/DockerDesktop/resources/bin:/c/Users/User/scoop/shims:$PATH"`
-- 工作流 plugin 的原始碼在 `D:\0UserProfile\Desktop\Default\skeleton-slice-pen`（**不是**
-  `skeleton-slice`，那個停在 v3.1.0）；本機 cache 在
-  `C:\Users\User\.claude\plugins\cache\skeleton-slice-pencil\skeleton-slice-pencil\<版本>\`。
-  換機器或重裝之後要跑 `claude plugin update` 才拿得到新版
-- 本機測試帳號：`123@example.com` / `123456`（在 `supabase/seed.sql`，每次 `supabase db reset`
-  自動重建，組織 `org_bughunt`、品牌 `brd_bughunt`）。**這是唯一活得過 db reset 的帳號。**
-  信箱驗證本機關著，所以在畫面上直接註冊一個新帳號也隨時可以（`frontend/e2e/smoke.spec.ts:24-32`
-  就是這樣做）。要用 HTTP 直接測 API 仍可自簽 HS256 JWT
-  （`.env` 已開 `IDENTITY_ALLOW_HS256=1`，密鑰＝`SUPABASE_JWT_SECRET`）
-- **`supabase db reset` 會洗掉 seed 檔以外的所有東西，包含帳號本身。** 2026-09-02 查證：舊的
-  `123@gmail.com`／`org_01M1AKNVS9YAD3BDMTB1257YZ6`／品牌「Beast Prime 野獸至尊」／Meta 廣告帳戶
-  在資料庫裡各 0 筆。本節原本寫「洗掉後重設密碼就好」是錯的——那個使用者列根本不會留下來。
-  真實資料要重建就是重新註冊、重新建檔、重新綁 Meta。RLS 相關的票幾乎一定會 reset 資料庫。
-- 語彙 `CONTEXT.md`；決策 `docs/adr/`；技術債與機器閘門 `docs/tech-debt.md`（動超標檔前先讀）
-- 測試只寫四類（金額／租戶隔離／API 契約／資料正確性）——規則在全域 CLAUDE.md 與 skeleton-slice-pencil 工作流，`docs/workflow-diet.md` 已刪除
-- `app/methodology/` 是 prompt 零件不是文件，刪改先問
-- 議題：`docs/issues/<目標>/`（進版控；一個看板行一個資料夾，票死即刪票檔，歷史在 git log）；規則見 skeleton-slice-pencil 工作流
-
-## Tests
-
-- 每張票：閘門＝`uv run ruff check app` ＋ `uv run pyright` ＋受影響的測試檔＋typecheck＋build
-  ＋**端到端 smoke**（`cd frontend && npm run e2e`——它自己 build 前端、起一個測試專用後端在 8720、跑完收掉；
-  唯一前提是 `supabase start` 已起。你自己開著 8710 的系統不影響它）。
-  後端票也要跑——server 起不來、畫面吐 `[object Object]`、排程凍住全站，這類整合 bug 只在這裡現形（2026-08-29 那七個 `fix:`）。
-- **動 schema／migration 的票，閘門一律再加這三個檔**（它們守的是全站不變量，不是「受影響的測試」，
-  只跑受影響的檔會漏掉，要等合併跑全套才紅）：
+- 啟動：`啟動行銷系統.bat` → http://localhost:8710/ ；本機開發先 `supabase start`。
+- 裝依賴：`uv sync --frozen`（不用 pip）。金鑰在 `.env`；`BRAND_OS_LLM_PROVIDER=codex_cli`＝LLM 走本機 codex，不產生帳單。
+- bash 跑 docker／supabase 前：`export PATH="/c/Users/User/AppData/Local/Programs/DockerDesktop/resources/bin:/c/Users/User/scoop/shims:$PATH"`
+- 測試帳號 `123@example.com`／`123456`（`supabase/seed.sql`，組織 `org_bughunt`、品牌 `brd_bughunt`）——
+  **唯一活得過 `supabase db reset` 的帳號**；reset 洗掉 seed 以外的一切，含帳號、品牌、Meta 綁定。
+  信箱驗證本機關著，畫面直接註冊也行；直接打 API 可自簽 HS256 JWT（`IDENTITY_ALLOW_HS256=1`，密鑰＝`SUPABASE_JWT_SECRET`）。
+- 每張票的閘門：`uv run ruff check app`＋`uv run pyright`＋受影響的測試檔＋前端 typecheck／build
+  ＋`cd frontend && npm run e2e`（自己起 8720 後端跑完收掉，前提 `supabase start`；後端票也要跑）。
+- 動 schema／migration 的票再加：
   `uv run pytest app/tests/test_org_isolation_all_tables.py app/tests/test_brand_isolation_all_tables.py app/tests/test_architecture_boundaries.py -q`
-  ——每張表有 NOT NULL `org_id`＋FK、每張表有 NOT NULL `brand_id`（除具名豁免）、
-  以及讀租戶表的函式有沒有帶租戶欄位（`UnscopedTenantReadScanTest`，2026-09-02 加，凍結四處既有欠帳）
-- 合併進主線：`uv run pytest app/tests -q -n 8 --dist loadfile`
-  （`--dist loadfile` 必要——`conftest.py` 給每個測試模組自己的 DB／schema）。
-  **`-n 8` 不是 `-n auto`，這是 2026-09-03 量出來的**：這台機器 20 核，`-n auto` 就開 20 個
-  worker，每個各自帶連線池＋procrastinate 的 worker 與 listener 連線，加上 Supabase 自己常駐的
-  約 30 條，直接頂穿 Postgres 的 `max_connections=100`，於是**同一份程式碼同一條指令，跑起來時綠
-  時紅**——紅的時候是 28 個 error 全是 `remaining connection slots are reserved`（連帶讓
-  `test_meta_daily_spend.py` 冒出看起來像真的斷言失敗，其實是背景工作連不上資料庫的下游效應）。
-  實測：同一份碼 `-n auto` 717 passed／28 errors，`-n 8` **745 passed**，而且**沒有變慢**
-  （41 秒 vs 45 秒）。本節原本把成因寫成「同時開著兩個後端」——那是 2026-08-29 的另一件事，
-  這次一個多餘後端都沒有照樣紅。**跑之前仍然先關掉多餘的後端**，但那不是唯一成因。
-- **實機驗收要在重啟過的後端上做。** 閘門永遠看不到「跑的是舊程式」這件事——`npm run e2e`
-  自己起一個新後端（8720）跑完就收，所以它測的一定是新碼；你手邊 8710 那個行程是你上次
-  啟動時的程式，改完不重啟就還是舊的。2026-08-30 踩到：金鑰進 Vault 那張票，在 8710 上用
-  瀏覽器驗出「還是明文」，其實程式是對的，是行程沒換。要嘛先重啟 8710，要嘛另起一個後端驗。
-- 800 行上限不適用於 `app/tests/`。
-- 分流：不動 schema／模組進入點／花錢／權限路徑的行為修改＝route B（機器閘門綠即完成）；
-  route C 只留 schema、模組邊界、金流、權限。
-- **契約頁隨票補**：`app/` 有 16 個模組，`docs/contracts/` 現有 6 份（brand_intelligence／
-  brand_web／core／identity／meta／schedule），缺 10 份。動到某個模組的 route C 票，先照
-  `container-contract.md` §8 的五項格式把那個模組的 `docs/contracts/<module>.md` 寫出來，再開始改。
-  **閘門已建**：`ContractPageRatchetTest`＋`MODULES_WITHOUT_CONTRACT`（`test_architecture_boundaries.py:1706`），
-  只准變短——新模組沒有頁會紅，補完一份就從清單劃掉一行。`app/identity/` 還沒有任何 ADR 管，
-  下一個碰 identity 的 route C 問題順手寫第一份。
-- CI：`.github/workflows/ci.yml`（GitHub Actions），push/PR 到 `saas`／`master` 都跑；
-  backend job 開 `supabase start` 給 Postgres／anon role，frontend job 跑 lint／typecheck／test／build。
+- 合併進主線：`uv run pytest app/tests -q -n 8 --dist loadfile`（`-n 8` 不是 `auto`、`loadfile` 必要，理由在 `CONTEXT.md` 量到的教訓）。
+- CI：`.github/workflows/ci.yml`，push／PR 到 `saas`／`master` 都跑。
 
-## Migrations
+## 鐵律
 
-- `supabase/migrations/<timestamp>_<module>_<desc>.sql`；migration 只能 CREATE 自己模組前綴的表。
-- 已套用的檔不改；修正開新檔。
-- 重指向一張表前 `grep -rn "REFERENCES <table>" supabase/migrations/`。
+- 動 schema、金流、權限、模組邊界：先提計畫等批准。對外發布、花錢：先說後果等確認。
+- 測試只寫四類（金額／租戶隔離／API 契約／資料正確性）；800 行上限不適用 `app/tests/`。
+- 實機驗收要在**重啟過的後端**上做——閘門看不到「跑的是舊程式」。
+- Migration：`supabase/migrations/<timestamp>_<模組>_<desc>.sql`，只能 CREATE 自己模組前綴的表；已套用的檔不改，修正開新檔；
+  重指向一張表前 `grep -rn "REFERENCES <table>" supabase/migrations/`。
+- 不確定就問，不要猜。
+
+## 對使用者說話
+
+繁體中文、白話；使用者非工程背景，術語第一次出現附一句比喻；一次一題、給選項標推薦；時間講具體。
