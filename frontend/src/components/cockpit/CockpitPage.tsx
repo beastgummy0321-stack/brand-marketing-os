@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
+import { CoordinateQuadrantChart } from "@/components/cockpit/CoordinateQuadrantChart";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { EmptyState } from "@/components/layout/EmptyState";
 import { fetchBrandMonth, fetchOverview, type BrandMonthMoney } from "@/lib/api";
@@ -437,6 +438,10 @@ function CurrencyPerformance({
           description="這個品牌本月的廣告都不是系統生成的，所以還沒有座標可以對。"
         />
       ) : (
+        <>
+        {/* 票 T6b：同一份數字先看圖再看表——圖回答「哪個座標在賺、哪個在賠」，表回答
+            「確切是多少」。兩邊讀同一個 `active`，不另外抓一次資料。 */}
+        <CoordinateQuadrantChart values={values} untagged={untagged} />
         <div className="overflow-x-auto rounded-md border border-border">
           <table className="w-full text-left text-sm">
             <thead className="bg-muted text-muted-foreground">
@@ -459,6 +464,7 @@ function CurrencyPerformance({
             </tbody>
           </table>
         </div>
+        </>
       )}
     </div>
   );
