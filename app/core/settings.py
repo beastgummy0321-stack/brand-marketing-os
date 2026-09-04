@@ -9,22 +9,19 @@
 from __future__ import annotations
 
 import logging
-import os
 from dataclasses import dataclass
 from datetime import date, datetime
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import psycopg
 
-from app.core import db
+from app.core import config, db
 
 logger = logging.getLogger(__name__)
 
 API_KEY_SETTING = "anthropic_api_key"  # 舊世界的明文鍵：只用來認得、刪掉遺留資料，不再當金鑰讀
 API_KEY_SECRET_ID_SETTING = "anthropic_api_key_secret_id"  # 指標，值是 vault.secrets.id
-API_KEY_ENV_VAR = "ANTHROPIC_API_KEY"
 LLM_MODEL_SETTING = "llm_model"
-LLM_MODEL_ENV_VAR = "BRAND_OS_LLM_MODEL"
 DEFAULT_LLM_MODEL = "claude-opus-5"
 INTAKE_BUDGET_SETTING = "intake_budget_limit"
 
@@ -177,7 +174,7 @@ def resolve_ai_credentials(conn: db.Conn | None, *, org_id: str) -> AiCredential
         api_key = _read_vault_api_key(conn, org_id=org_id)
         return AiCredentials(api_key=api_key, source="own", cap_applies=False)
 
-    api_key = os.environ.get(API_KEY_ENV_VAR) or _read_vault_api_key(conn, org_id=org_id)
+    api_key = config.settings().anthropic_api_key or _read_vault_api_key(conn, org_id=org_id)
     return AiCredentials(api_key=api_key, source="platform", cap_applies=True)
 
 
@@ -206,7 +203,7 @@ def api_key_source(conn: db.Conn | None = None, *, org_id: str) -> str | None:
         return None
     if creds.source == "own":
         return "db"
-    return "env" if os.environ.get(API_KEY_ENV_VAR) else "db"
+    return "env" if config.settings().anthropic_api_key else "db"
 
 
 def get_ai_monthly_cost_limit(conn: db.Conn | None = None, *, org_id: str) -> float:
@@ -265,7 +262,7 @@ def get_llm_model(conn: db.Conn | None = None, *, org_id: str) -> str:
     """使用的模型：DB 設定 > 環境變數 BRAND_OS_LLM_MODEL > 預設 claude-opus-5。"""
     return (
         get_setting(conn, LLM_MODEL_SETTING, org_id=org_id)
-        or os.environ.get(LLM_MODEL_ENV_VAR)
+        or config.settings().brand_os_llm_model
         or DEFAULT_LLM_MODEL
     )
 

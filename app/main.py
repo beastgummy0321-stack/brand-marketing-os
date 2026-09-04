@@ -85,6 +85,11 @@ def _load_dotenv() -> int:
 
 _load_dotenv()
 
+from app.core import config as core_config
+
+core_config.settings()  # ADR 0062：環境變數在這裡驗一次、開機就炸給你看，不留到第一個
+# 打進來的 request 才發現設定錯了。
+
 from app import background as background_module
 from app.core import db as coredb
 from app.core import retention as core_retention
@@ -442,9 +447,11 @@ from app import orders as orders_module  # noqa: E402
 from app import schedule as schedule_module  # noqa: E402
 
 # 票 03-1：每個模組的路由掛載交給它自己的 register(app)（機械式：路由本身不變，
-# 只是把 main.py 逐條 include_router 收斂成一個迴圈）。identity 排最後——它的
-# register() 會在 IDENTITY_DEV_TOKEN 設定錯誤時 raise，讓這種設定錯誤盡早炸在啟動
-# 階段，而不是等到第一個請求才發現。
+# 只是把 main.py 逐條 include_router 收斂成一個迴圈）。identity 排最後是沿用舊順序，
+# 不是為了設定檢查：`register()` 曾經會在 IDENTITY_DEV_TOKEN 設定錯誤時 raise，
+# 那道檢查票 02-env-flag-and-settings（ADR 0062）搬進 `core_config.settings()`
+# 了——在這個迴圈之前、`_load_dotenv()` 後面就先跑過一次（見上面），不管 identity
+# 排在這個 tuple 第幾個都一樣早炸。
 for _module in (brand_web_module, intake_module, meta_module, orders_module,
                  schedule_module, dashboard_module, identity_module):
     _module.register(app)

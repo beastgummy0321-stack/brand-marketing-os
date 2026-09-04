@@ -14,10 +14,10 @@ reading `alg` from the token header first and only accepting it if it is in the 
 below (never trust the caller to pick HS256 against an RS256/ES256-configured project).
 """
 
-import os
-
 import jwt
 from jwt import PyJWKClient
+
+from app.core.config import settings
 
 _ALLOWED_ALGORITHMS = ("RS256", "ES256", "HS256")
 _AUDIENCE = "authenticated"
@@ -27,7 +27,7 @@ _jwks_client: PyJWKClient | None = None
 
 
 def _jwks_url() -> str:
-    base = os.environ.get("SUPABASE_URL", "http://127.0.0.1:54321").rstrip("/")
+    base = settings().supabase_url.rstrip("/")
     return f"{base}/auth/v1/.well-known/jwks.json"
 
 
@@ -49,11 +49,11 @@ def decode(token: str) -> dict:
         raise jwt.InvalidAlgorithmError(f"unsupported alg: {alg}")
 
     if alg == "HS256":
-        if os.environ.get("IDENTITY_ALLOW_HS256") != "1":
+        if not settings().identity_allow_hs256:
             raise jwt.InvalidAlgorithmError(
                 "HS256 disabled (set IDENTITY_ALLOW_HS256=1 for local dev)"
             )
-        secret = os.environ.get("SUPABASE_JWT_SECRET")
+        secret = settings().supabase_jwt_secret
         if not secret:
             raise jwt.InvalidKeyError("SUPABASE_JWT_SECRET not set")
         return jwt.decode(token, secret, algorithms=["HS256"], audience=_AUDIENCE)

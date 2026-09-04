@@ -1283,7 +1283,37 @@ class CoordinateDimensionSyncTest(unittest.TestCase):
 # 排隊／答錯退回名稱排隊）。守的是資料正確性——兩個最深層節點同名時，名稱帶不出任何資訊，
 # 這是這條 bug 唯一能被證偽的地方（審查原話：構造上無法證偽）。已證紅：把 `creative.py`
 # 的編號配對分支關掉，只有「照編號配」那個情境紅，兩條退路維持綠。
-TEST_LINES_CEILING = 18919
+#
+# 票 02-env-flag-and-settings（ADR 0062）：18919 → 19052（含本段理由註解自己佔的行）。
+#
+# 這道棘輪在這張票落地前就已經在漏，不是這張票撞出來的：main chat 在 `HEAD`＝`227db09`
+# （這張票、ADR 0062、契約頁都在，程式碼還沒動）上量過，`app/tests/` 當時已經是 18948
+# 行，比凍結值 18919 多 29 行——閘門紅著被人合併進主線，沒有人跑過它。這裡調高的數字是
+# 「29 行舊債＋這張票自己新增的行」疊出來的，不是假裝棘輪從 18919 乾淨地長起
+# （`docs/tech-debt.md` §六判準：新增的行數是不是這張票的交付物本身）——29 行是被這次
+# 一起吸收，寫在這裡讓六個月後的人看得到「被吸收」而不是被誤讀成「都是這張票寫的」。
+#
+# 四處貢獻：
+#   1. `test_identity_auth.py`——`Hs256StartupGuardTest` 改對 `app.core.config.settings()`
+#      斷言（原本測 `register()`），加一條 `.env.example` 不該帶生效的 `BRAND_OS_ENV=local`
+#      的斷言；新增 `BootCheckReportsAllViolationsTest`（本票 §6 點名的唯一一支新測試——
+#      §3「開機檢查一次列出全部違規，不是抓到第一條就停」，這是唯一沒有既有測試覆蓋的
+#      性質，故意不逐變數各開一支）。
+#   2. `conftest.py`——`BRAND_OS_ENV=local` 的 setdefault（票面 §6 點名）；新增
+#      `_fresh_settings` fixture：`app.core.config.settings()` 是行程層快取單例
+#      （ADR 0062），但既有測試靠切換 os.environ（`ANTHROPIC_API_KEY`／`BRAND_OS_TODAY`……）
+#      在同一個 worker process 看到不同結果——這支 fixture 是 `test_settings_api.py`／
+#      `test_dashboard_overview.py`／`test_core_db_pool.py`（三個都在本票 done-check 1 的
+#      名單裡）繼續綠的必要條件，是交付物本身，不是為了繞過閘門塞進來的行（`docs/tech-debt.md`
+#      §六那句判準）。round 2 補一句：`DATABASE_URL` 不靠這支快取——`coredb.dsn()` 是
+#      §5a 的 `config.database_url()`，每次呼叫都直接讀 `os.environ`——`_bound_connection`
+#      因此不用再依賴 `_fresh_settings` 的執行順序，round 1 那個相依關係跟著拿掉。
+#   3. 本表（`KNOWN_MODULE_SIZES`）兩筆棘輪調整（`app`／`app/core`）各自的理由註解——
+#      票面 done-check 5 點名「量到的數字，不留餘裕，一行理由」；`app/identity` round 1
+#      量對了，round 2 沒有再動這一筆。
+#   4. 本段理由註解自己（含上面「這道棘輪在落地前就已經在漏」那一段，done-check 5 點名的
+#      新要求）。
+TEST_LINES_CEILING = 19052
 
 
 def _line_totals() -> tuple:
@@ -1329,7 +1359,14 @@ class TestRatioTest(unittest.TestCase):
 # 是頂層的 .py（`main.py` 組裝根等）。**允許調高，但必須改這張表**——重點不是禁止成長，
 # 是讓成長出現在 diff 裡有人看得到。廣告模組會在約 2,000 行撞上它，而不是 21,595 行。
 KNOWN_MODULE_SIZES = {
-    "app": 553,  # 2026-08-30 補上設定頁「測試連線」的月費上限（小債）：那顆按鈕真的會打一次
+    "app": 526,  # 票 02-env-flag-and-settings（ADR 0062）：`app/main.py` 在 `_load_dotenv()`
+                  # 後加一次 `core_config.settings()` 開機檢查呼叫（import＋呼叫＋理由註解，
+                  # +5 行）；round 2 順手修正「identity 排最後」那段理由註解——它原本說
+                  # register() 會在 IDENTITY_DEV_TOKEN 設定錯誤時 raise，這道檢查已經搬進
+                  # settings()，comment 沒跟著改就變成一句假話（+2 行，理由改寫更長）。這張票
+                  # 明講 app 這一項應該縮小：調到量到的數字，不留餘裕——上一個凍結值 553 本來就
+                  # 比量到的基準寬，這裡拉緊。前一次是 553——
+                  # 2026-08-30 補上設定頁「測試連線」的月費上限（小債）：那顆按鈕真的會打一次
                   # provider，原本不經 run_task() 所以完全繞過上限。7 行＝import gateway ＋
                   # 打 provider 前先問 check_spend_cap()。前一次是本機 codex CLI 線路
                   # （c47bc36）的 546：main.py 依環境變數換供應商
@@ -1356,7 +1393,17 @@ KNOWN_MODULE_SIZES = {
                                       # 不是新增了 574 行。
     "app/brand_web": 2091,  # 2026-08-30 刪失效規則卡（小債）：autonomy 那張卡的兩處專屬
                              # 驗證跟著走。前一次是 2155
-    "app/core": 1630,  # 票 M2（ADR 0059）：`approval.py` 的 `approve()` 加一個必填參數
+    "app/core": 1766,  # 票 02-env-flag-and-settings（ADR 0062）：新增 `app/core/config.py`
+                        # （136 行，pydantic-settings 集中讀取 10 個環境變數＋開機驗證一次＋
+                        # §5a 的 `database_url()` 例外——DATABASE_URL 不進快取，理由跟
+                        # `app/background.app()` 的比對機制寫在函式自己的 docstring 裡）；
+                        # `db.py` 的 `dsn()` 改叫 `config.database_url()`，不是
+                        # `config.settings().database_url`（+2 行，含理由）；`settings.py`
+                        # 刪掉 `API_KEY_ENV_VAR`／`LLM_MODEL_ENV_VAR`（改讀 settings() 之後
+                        # 沒有呼叫端了）與 `import os`（-3 行）。1630 → 1766（+136 行）。
+                        # round 1 量成 1740，round 2 補 §5a 的 `database_url()` 例外後重量。
+                        # 量到的數字，不留餘裕。前一次是 1630——
+                        # 票 M2（ADR 0059）：`approval.py` 的 `approve()` 加一個必填參數
                         # `max_daily_amount`（沒有預設值，理由寫在函式自己的 docstring 裡）、
                         # INSERT／`write_audit` 各多帶一欄——1622 → 1630（+8 行）。量到的
                         # 數字，不留餘裕。前一次是 1622——
@@ -1387,7 +1434,14 @@ KNOWN_MODULE_SIZES = {
                         # 連 fatigue_level()／sample_size_verdict() 兩支零呼叫端純函數一起刪。
                         # 前一次是 2148
     "app/dashboard": 645,
-    "app/identity": 539,  # 票 identity-hs256-startup-guard：`_is_local()` 從 routes.py 搬進
+    "app/identity": 529,  # 票 02-env-flag-and-settings（ADR 0062）：舊的「用 urlparse 判斷
+                          # SUPABASE_URL 主機名」那支私有函式整支刪掉（判斷邏輯搬進
+                          # app.core.config，這裡不再需要）；`register()` 的兩段 RuntimeError
+                          # 啟動檢查搬進 `app.core.config.settings()`，只剩掛路由；
+                          # `authenticate()` 的 dev_token 比對、`create_invite()` 的 `local`
+                          # 旗標改讀 `settings()`（各加一行 import 抵銷一部分）。淨減。量到的
+                          # 數字，不留餘裕。前一次是 539——
+                          # 票 identity-hs256-startup-guard：`_is_local()` 從 routes.py 搬進
                           # __init__.py（兩個呼叫端共用同一份定義，不留第二份），register()
                           # 新增 IDENTITY_ALLOW_HS256 的啟動檢查，跟既有 IDENTITY_DEV_TOKEN
                           # 那道同形狀。前一次是 537（外殼切片凍結值）。

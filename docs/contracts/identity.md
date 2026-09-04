@@ -18,9 +18,9 @@ only through `register()`.
 ```
 ActorContext(user_id: UUID, org_id: str, role: str, email: str)          # frozen dataclass
                                           # email is `""` when the JWT carries no email claim
-                                          # (`app/identity/__init__.py:113`), never None
+                                          # (`app/identity/__init__.py:107`), never None
 authenticate(request) -> ActorContext
-register(app: FastAPI) -> None            # mounts /api/identity/*; raises at startup, see below
+register(app: FastAPI) -> None            # mounts /api/identity/*
 Unauthenticated, Forbidden                # re-exported app.shared.web.ApiError subclasses
 ```
 
@@ -28,24 +28,23 @@ Callers, both of them:
 
 - `app/shared/web.py:258` (`require_actor`) — **lazy import**, because `app.identity` imports
   `app.shared.web` at module level. Moving that import to the top of the file re-forms the cycle.
-- `app/main.py:438` (`register`).
+- `app/main.py:443` (`register`).
 
-`register()` is also a **startup gate**, not only a mount: it raises `RuntimeError` when a
-development backdoor is enabled outside the local environment — `IDENTITY_DEV_TOKEN`
-(`app/identity/__init__.py:131-136`) and `IDENTITY_ALLOW_HS256` (`:137-141`). A misconfigured
-deploy is meant to die at boot, loudly, rather than serve.
-
-**Both of those move out of this module** (ADR 0062): the environment is named by `BRAND_OS_ENV`
-rather than sniffed from the `SUPABASE_URL` hostname, and every environment rule is checked once
-in `app/core/config.py` so one boot failure names every violation instead of the first.
-`register()` then only mounts. Ticket `docs/issues/deploy/02-env-flag-and-settings.md` is the
-slice that does it; until it lands, the two paragraphs above describe the code and this one
-describes where it is going — the one place in this file that is ahead of `app/`.
+`register()` only mounts (`app/identity/__init__.py:122-127`) — it used to also be a
+**startup gate**, raising `RuntimeError` when a development backdoor was enabled outside the
+local environment. That check moved out (ADR 0062, ticket
+`docs/issues/deploy/02-env-flag-and-settings.md`): the environment is named by `BRAND_OS_ENV`
+rather than sniffed from the `SUPABASE_URL` hostname, and every environment rule — not just this
+module's two backdoors — is checked once in `app/core/config.py`'s `settings()`
+(`app/core/config.py:120`) so one boot failure names every violation instead of the first.
+`app/main.py` calls `settings()` once at import time (`app/main.py:90`), immediately after
+`_load_dotenv()`, so a misconfigured deploy still dies at boot, loudly, rather than serve — the
+check just doesn't live inside this module anymore.
 
 ## Error shapes
 
 Everything leaves as an `app.shared.web.ApiError` subclass — `Unauthenticated` (401),
-`Forbidden` (403), `NotFound` (404) — rendered by `app/main.py:487`'s envelope as
+`Forbidden` (403), `NotFound` (404) — rendered by `app/main.py:492`'s envelope as
 `{"error": {"code", "message"}}`. Two named codes other modules and the frontend depend on:
 `forbidden_org` (the `X-Org-Id` header names an org this user has no membership in, or the user
 has zero memberships) and the 401 family from `jwt.decode`, which turns every `PyJWTError`
@@ -64,7 +63,7 @@ owns unifying them; it is an API-contract change, so it does not happen inside a
 - `app.shared.web` must not import `app.identity` at module level (see the cycle note above).
 
 Identity's own queries are the one place tenant scoping is **absent on purpose** — it is the code
-that decides which org you are, so it cannot filter by one. `app/core/db.py:238` names this
+that decides which org you are, so it cannot filter by one. `app/core/db.py:241` names this
 exemption; `UnscopedTenantReadScanTest` in `app/tests/test_architecture_boundaries.py` freezes it.
 An unscoped read anywhere else is a defect.
 

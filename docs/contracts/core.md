@@ -17,6 +17,7 @@ inventing a facade; that would be a module-boundary change and needs its own dec
 | file | what it is the door to |
 |---|---|
 | `db.py` | the Postgres connection pool, the per-request/per-job bound connection, id generation, JSON encoding |
+| `config.py` | every environment variable the backend reads, one settings object, built lazily and cached (ADR 0062) |
 | `audit.py` | append-only `audit_log` writes |
 | `approval.py` | the money brake (ADR 0040) |
 | `interrupts.py` | the single outbox for anything a human must see |
@@ -38,6 +39,22 @@ db.current() -> Conn                     # the connection bound to this request/
 db.ConnProxy                             # a Conn-shaped handle that resolves current() per call
 db.new_id(prefix) -> str                 # sortable, type-tagged id
 db.jsonb(value) / db.now_utc() / db.now_iso()
+```
+
+`config.py` (ADR 0062):
+
+```
+config.settings() -> Settings            # cached; the FIRST call validates and may raise RuntimeError
+config.settings().brand_os_env           # "local" | "staging" | "production"
+config.settings().is_local               # brand_os_env == "local"
+config.database_url() -> str             # NOT cached — the live DATABASE_URL, local default
+                                          # applied only when the environment is local (§5a,
+                                          # ADR 0062's tenant-isolation exception); db.dsn() calls
+                                          # this, never settings().database_url
+# one attribute per variable, named after it in lower case: database_url, supabase_url,
+# supabase_service_role_key, supabase_jwt_secret, identity_dev_token,
+# identity_allow_hs256 (bool), brand_os_today, anthropic_api_key, brand_os_llm_model,
+# brand_os_llm_provider — unset optional ones are "" (never None)
 ```
 
 `Conn` exposes exactly `execute`, `executemany`, `commit`, `rollback`, `close` — the surface the
@@ -70,6 +87,9 @@ is `app/shared/web.py`'s job. `db.current()` outside a `db.connection()` block r
 - ADR 0052 — a logged-in request runs as role `authenticated` with an `app.org_id` claim.
 - ADR 0053 — an `interrupt` raised for a campaign period carries the period id in its
   `dedupe_key`; `campaign_cycle_id` becomes `campaign_period_id`.
+- ADR 0062 — `BRAND_OS_ENV` names the environment and unset means production; every environment
+  variable the backend reads goes through `config.py`'s `settings()`, read once and cached, with
+  one tenant-isolation exception (`database_url()`, not cached — see "Exported shapes").
 
 Module-local and reversible, decided here rather than in an ADR:
 

@@ -28,10 +28,12 @@ from pathlib import Path
 import psycopg
 import pytest
 
-# 票 03-1：測試預設走 dev token（本機 Supabase 一定是 localhost，app.identity.register()
-# 才不會 RuntimeError）。放在任何 app.* import 之前——app.main 組裝時 register() 會
-# 立刻讀這兩個環境變數。IDENTITY_ALLOW_HS256／SUPABASE_JWT_SECRET 是另一條測試路徑
+# 票 03-1：測試預設走 dev token（BRAND_OS_ENV=local，app.core.config.settings() 開機
+# 檢查才不會 RuntimeError——ADR 0062，這道檢查原本住在 app.identity.register()，票
+# 02-env-flag-and-settings 搬過去的）。放在任何 app.* import 之前——app.main 組裝時
+# 就會呼叫一次 settings()。IDENTITY_ALLOW_HS256／SUPABASE_JWT_SECRET 是另一條測試路徑
 # （手動 mint HS256 token 驗 JWKS 以外的驗簽路徑），見 test_identity_auth.py。
+os.environ.setdefault("BRAND_OS_ENV", "local")
 os.environ.setdefault("SUPABASE_URL", "http://127.0.0.1:54321")
 os.environ.setdefault("IDENTITY_DEV_TOKEN", "test-dev-token")
 os.environ.setdefault("IDENTITY_ALLOW_HS256", "1")
@@ -169,6 +171,25 @@ def _module_schema(request):
             f'DROP SCHEMA IF EXISTS "{schema}" CASCADE;'
             f' DROP SCHEMA IF EXISTS "{schema}{_QUEUE_SUFFIX}" CASCADE;'
         ))
+
+
+@pytest.fixture(autouse=True)
+def _fresh_settings():
+    """票 02-env-flag-and-settings：`app.core.config.settings()` 是行程層快取的單例
+    （ADR 0062——正式環境「開機驗一次」才有意義），但這裡一堆既有測試靠切換
+    `os.environ`（`ANTHROPIC_API_KEY`／`BRAND_OS_TODAY`……）在同一個 worker process
+    裡看到不同結果（例：`test_settings_api.py` 逐個測試方法切換 `ANTHROPIC_API_KEY`）。
+    每個測試開始前清一次快取，等於幫測試恢復「每次呼叫都讀最新 os.environ」的舊行為；
+    正式環境只有 `app.main` import 時碰一次，不受影響——只有這支測試 fixture 會呼叫
+    `cache_clear()`。`DATABASE_URL` 不靠這支：`coredb.dsn()` 是 `config.database_url()`
+    （ADR 0062 §5a），每次呼叫都直接讀 `os.environ`，不經過這顆快取，所以跟
+    `_bound_connection` 誰先跑無關（也因此不塞進同一支）。獨立於 `_bound_connection` 之外
+    還有第二個理由：`test_core_db_pool.py` 會整支蓋掉 `_bound_connection`，這支不能跟著
+    被蓋掉。"""
+    from app.core.config import settings
+
+    settings.cache_clear()
+    yield
 
 
 @pytest.fixture(autouse=True)

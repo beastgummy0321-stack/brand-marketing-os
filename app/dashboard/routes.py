@@ -8,12 +8,12 @@
 ROAS 併桌：`/brands/{brand_id}/month`。
 """
 
-import os
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Request
 
 import app.shared.web as main_mod
+from app.core.config import settings
 from app.dashboard import repository as dashboard_repo
 
 router = APIRouter(prefix="/api/dashboard")
@@ -21,7 +21,7 @@ router = APIRouter(prefix="/api/dashboard")
 
 def _today_override():
     """測試接縫：BRAND_OS_TODAY 凍結「今天」，未設用真實日期。"""
-    return os.environ.get("BRAND_OS_TODAY") or None
+    return settings().brand_os_today or None
 
 
 @router.get("/overview")

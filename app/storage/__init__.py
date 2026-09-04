@@ -15,7 +15,7 @@
    的測試檔是唯一呼叫端。
 4. 不碰什麼：不 import 任何租戶模組（`app.brand_intelligence`／`app.intake`／`app.brand_web`
    等）；本模組是基礎設施，比照 `app.background`（ADR 0038 的先例），只依賴 stdlib／httpx／
-   環境變數。不對外暴露 httpx 物件、不暴露 Storage 回應的原始 JSON。
+   `app.core.config`（ADR 0062）。不對外暴露 httpx 物件、不暴露 Storage 回應的原始 JSON。
 
 租戶邊界（SPEC D4）：四個函式都先檢查 key／prefix 的第一段是不是呼叫者傳入的 org_id，檢查
 在任何 HTTP 呼叫之前做，失敗丟 `ValueError`。這就是隔離檢查本身，不是防禦性寫法。
@@ -32,9 +32,9 @@ Storage 打不通、任何非預期的 body，一律往外丟，沒有「回報�
 <bucket>` 不遞迴，回傳的是虛擬資料夾層，這裡不用。
 """
 
-import os
-
 import httpx
+
+from app.core.config import settings
 
 _BUCKET = "assets"
 
@@ -48,14 +48,14 @@ class NotFound(StorageError):
 
 
 def _base_url() -> str:
-    base = os.environ.get("SUPABASE_URL", "").rstrip("/")
+    base = settings().supabase_url.rstrip("/")
     if not base:
         raise StorageError("SUPABASE_URL 未設定，無法呼叫 Storage")
     return base
 
 
 def _headers() -> dict:
-    key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+    key = settings().supabase_service_role_key
     if not key:
         raise StorageError("SUPABASE_SERVICE_ROLE_KEY 未設定，無法呼叫 Storage")
     return {"Authorization": f"Bearer {key}"}

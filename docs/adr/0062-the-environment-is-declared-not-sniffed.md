@@ -65,6 +65,25 @@ would cost the eight assertions in `app/tests/test_main_dotenv.py` for no change
 `app/main.py` reads the settings once at startup so the check below fires there, not at
 whichever request happens to touch configuration first.
 
+**One exception, and it is a tenant-isolation one: `DATABASE_URL` is resolved per call.**
+Caching it froze the DSN for the life of the process, and `app/background.app()` compares
+`db.dsn()` between calls precisely to notice that it changed — that comparison is how a
+background worker stops talking to the previous schema's queue when the connection string moves
+(`app/background/__init__.py`'s own header, and `app/tests/test_background.py:31-33`, whose
+docstring calls it "the cross-schema/cross-tenant hazard"; `app/tests/conftest.py:161` rewrites
+`DATABASE_URL` per test module, which is what exercises it). Found by the first implementation
+round on 2026-09-05, which stopped rather than working around it — correctly, because every way
+past it is on the forbidden list: a per-call `Settings()` rebuild moves validation off the boot
+path, and a global `cache_clear()` from inside `app/background` reaches into every other
+caller's configuration.
+
+So `app/core/config.py` exposes `database_url()` beside `settings()`: the live value, with the
+local default applied only when the environment is `local`. `settings().database_url` keeps
+existing for the boot check, which still requires it outside `local`. This is the one live read
+in the codebase, and it is inside the module that is the registry of environment variables —
+the ADR's "read once in `app/core/config.py`" holds. Caching a value was never the ruling; the
+ruling is one place and one boot failure.
+
 **Boot fails loudly, once, naming everything.** Building the settings object checks the whole
 required/forbidden table for the declared environment and raises a single `RuntimeError` listing
 **every** violation, not the first — a deploy day where each restart reveals one more missing

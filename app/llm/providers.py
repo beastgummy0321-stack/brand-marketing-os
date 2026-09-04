@@ -12,7 +12,6 @@ from __future__ import annotations
 import base64
 import contextvars
 import json
-import os
 import subprocess
 import sys
 import tempfile
@@ -21,7 +20,7 @@ from pathlib import Path
 from typing import Protocol
 
 from app.brand_intelligence import repository as bi_repo
-from app.core import settings
+from app.core import config, settings
 from app.llm import pricing
 
 # 缺金鑰的人話訊息：不出現環境變數名（使用者看不懂），一律指向設定頁（07 §3 規則 3）。
@@ -34,13 +33,11 @@ MISSING_KEY_MESSAGE = "尚未設定 AI 金鑰，請到「設定」頁填入後�
 # app/shared/web.py 的 MODEL_CHOICES（正式版選單不該看得到它）。
 # ---------------------------------------------------------------------------
 CODEX_CLI_MODEL = "gpt-5.6-luna"
-_CODEX_CLI_ENV_VAR = "BRAND_OS_LLM_PROVIDER"
-_CODEX_CLI_ENV_VALUE = "codex_cli"
 
 
 def codex_cli_enabled() -> bool:
     """環境變數開著＝這次呼叫要換走本機 Codex CLI 線路，不用猜也不用查其他旗標。"""
-    return os.environ.get(_CODEX_CLI_ENV_VAR) == _CODEX_CLI_ENV_VALUE
+    return config.settings().brand_os_llm_provider == "codex_cli"
 
 
 def select_provider(provider: Provider) -> Provider:

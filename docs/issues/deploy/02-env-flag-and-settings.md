@@ -32,6 +32,9 @@ settings()                    # cached; the FIRST call validates and may raise R
 settings().brand_os_env       # "local" | "staging" | "production"
 settings().is_local           # brand_os_env == "local"
 
+database_url() -> str         # NOT cached: the live DATABASE_URL, with the local default
+                              # applied only when the environment is `local`. See §5a.
+
 # one attribute per variable, named after it in lower case, all `str` except where noted:
 #   brand_os_env, database_url, supabase_url, supabase_service_role_key, supabase_jwt_secret,
 #   identity_dev_token, identity_allow_hs256 (bool), brand_os_today,
@@ -126,7 +129,32 @@ writer — it stays). The constants `API_KEY_ENV_VAR`, `LLM_MODEL_ENV_VAR`
 (`app/llm/providers.py:37-38`) lose their reason to exist once the names live in `config.py`;
 delete the ones that end up with no caller, and leave any that still have one.
 
-After this ticket, `os.environ` appears in `app/` only inside `app/main.py`'s dotenv loader.
+After this ticket, `os.environ` appears in `app/` only inside `app/main.py`'s dotenv loader and
+inside `app/core/config.py`'s `database_url()` (§5a).
+
+### 5a. `DATABASE_URL` is the one value that is **not** frozen in the cache
+
+**Amended 2026-09-05 after round 1 reported `blocked-upstream`; ADR 0062 carries the reasoning
+and the evidence.** `app/core/db.py:dsn()` returns `config.database_url()`, which reads the live
+environment on every call and applies the local default only when the environment is `local`.
+
+Why it may not be cached: `app/background.app()` compares `db.dsn()` between calls to notice the
+connection string changed, and rebuilds the whole `procrastinate.App` when it has. That
+comparison is what stops a background worker from talking to the previous schema's queue —
+`app/tests/test_background.py:31-33` calls it "the cross-schema/cross-tenant hazard", and
+`app/tests/conftest.py:161` rewrites `DATABASE_URL` per test module, which is what exercises it.
+A cached DSN makes that test fail, and the failure is real, not a fixture artefact.
+
+`Settings.database_url` still exists and the boot check still requires it outside `local` — the
+boot check reads the settings object, the running code reads `database_url()`.
+
+Three shapes that look like fixes and are not, all three already ruled out in round 1: rebuilding
+`Settings()` per call (moves validation off the boot path, which is the point of the ADR),
+calling `cache_clear()` from inside `app/background` (a global reach into every other caller's
+configuration), and leaving the raw `os.environ` read in `app/core/db.py` (contradicts §5 and the
+ADR's "read once in `app/core/config.py`"). `app/background/__init__.py` and
+`app/tests/test_background.py` are **not edited by this ticket** — the point of the amendment is
+that they keep passing untouched.
 
 ### 6. Templates, CI, tests
 
@@ -174,9 +202,10 @@ Every number below is produced by a command, never typed.
    - `cd frontend && npx tsc -b --noEmit && npm run build`
    - `cd frontend && npm run e2e` — the one end-to-end smoke, required on this ticket, with
      `supabase start` already up. It is the only check that proves the server still boots.
-2. **`os.environ` is gone from `app/` except the dotenv loader.**
+2. **`os.environ` is gone from `app/` except the dotenv loader and `config.database_url()`.**
    `git ls-files 'app/*.py' | grep -v '^app/tests/' | xargs grep -n "os\.environ\|os\.getenv"`
-   returns only `app/main.py:80-81` (line numbers may shift). Paste the output.
+   returns only `app/main.py:80-81` (the dotenv loader) and the single live read inside
+   `app/core/config.py`'s `database_url()` (§5a). Line numbers may shift. Paste the output.
 3. **`_is_local` has no callers left.** `git ls-files | xargs grep -n "_is_local"` returns no
    hit under `app/` — docs and this ticket may still name it. Paste the output.
 4. **The boot check is proven red once, both directions** (global rule: a new check counts only
@@ -197,6 +226,11 @@ Every number below is produced by a command, never typed.
      `app/identity` 539, `app/dashboard` 645.
    - `TEST_LINES_CEILING` (`:1286`, today `18919`): only if the one new test of §6 plus the
      re-pointing actually pushes it over. Measured number, no slack, reason above the line.
+     **The reason must also record that this ratchet was already leaking before this ticket**:
+     measured on `HEAD` = `227db09` by main chat, `app/tests/` totals **18948** lines against a
+     frozen `18919`, so the gate was 29 lines red on arrival and someone merged without running
+     it. Raising to the new measured number absorbs that drift; a reader six months from now
+     must be able to see that it was absorbed rather than accounted for.
    - Any **other** gate that goes red is `blocked-upstream`, not a dial to turn. This ticket
      authorises these two rows and nothing else — the `schedule-extract-state` precedent
      (`app/tests/test_architecture_boundaries.py:1120-1128`) is the standard here.
@@ -328,3 +362,26 @@ the exception; if it still reads as ambiguous, that is `blocked-upstream`, not a
 **Not a contradiction, stated so it is not mistaken for one**: `.env.example` must *not* declare
 `BRAND_OS_ENV=local` (§6) while the developer's own `.env` *must* (§3's error message). The
 template is copied to servers; the untracked local file is not.
+
+## Blocked
+
+**Round 1, 2026-09-05 — `blocked-upstream`, and it was right.** Reported by the implementer,
+verified independently by main chat before amending anything (the test really fails, and the
+frozen number really was already over).
+
+The ticket as written required `app/core/db.py:dsn()` to read a **cached** settings object.
+That freezes the DSN for the life of the process, and `app/background.app()` compares
+`db.dsn()` between calls specifically to notice it changed — the mechanism that keeps a
+background worker off the previous schema's queue. Reproduced by main chat:
+`uv run pytest app/tests/test_background.py -q` → `1 failed, 4 passed`,
+`BackgroundAppTest::test_dsn_resolves_late_not_at_import`,
+`AssertionError: unexpectedly identical … app() must rebuild when DATABASE_URL changes`.
+
+Fixed upstream, not in the ticket's code: ADR 0062 gained the `database_url()` exception and
+this ticket gained §5a plus the amended done-check 2. Round 1's other work stands — the
+`blocked-upstream` was raised at the end, with everything else green.
+
+Also surfaced by round 1 and confirmed by main chat: `TEST_LINES_CEILING` was already 29 lines
+red at `227db09` (18948 measured against 18919 frozen), i.e. before this ticket touched
+anything. Not this ticket's defect to fix, but done-check 5 now requires it to be named where
+the number is raised, so it is absorbed in the open rather than in silence.

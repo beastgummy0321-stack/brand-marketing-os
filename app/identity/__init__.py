@@ -21,29 +21,23 @@ user out; else 403 `forbidden_org`, which only fires for a user with zero member
 
 Dev bypass: `IDENTITY_DEV_TOKEN` — when the bearer token equals it, the actor is the seed dev
 user (`00000000-0000-0000-0000-000000000001`) in `org_dev` as owner, no JWT involved.
-`register()` refuses to start (`RuntimeError`) if this env var, or `IDENTITY_ALLOW_HS256`, is
-set while `SUPABASE_URL` is not a localhost/127.0.0.1 URL.
+Whether this env var, or `IDENTITY_ALLOW_HS256`, is allowed to be set at all is decided once,
+at boot, by `app.core.config.settings()` (`BRAND_OS_ENV`, ADR 0062) — not by this module.
 """
 
-import os
 from dataclasses import dataclass
-from urllib.parse import urlparse
 from uuid import UUID
 
 from fastapi import FastAPI, Request
 
 import app.shared.web as web
+from app.core.config import settings
 from app.identity import jwt as identity_jwt
 from app.identity import repository as repo
 from app.shared.web import ApiError, Forbidden, NotFound, Unauthenticated  # noqa: F401 — re-export
 
 _DEV_USER_ID = UUID("00000000-0000-0000-0000-000000000001")
 _SEED_ORG_ID = "org_dev"
-
-
-def _is_local() -> bool:
-    host = urlparse(os.environ.get("SUPABASE_URL", "")).hostname or ""
-    return host in ("localhost", "127.0.0.1")
 
 
 @dataclass(frozen=True)
@@ -95,7 +89,7 @@ def authenticate(request: Request) -> ActorContext:
     if not token:
         raise Unauthenticated()
 
-    dev_token = os.environ.get("IDENTITY_DEV_TOKEN")
+    dev_token = settings().identity_dev_token
     if dev_token and token == dev_token:
         return _dev_actor()
 
@@ -126,19 +120,10 @@ def authenticate(request: Request) -> ActorContext:
 
 
 def register(app: FastAPI) -> None:
-    """掛 /api/identity/* 路由。啟動檢查：`IDENTITY_DEV_TOKEN`／`IDENTITY_ALLOW_HS256` 都只能
-    在本機（`SUPABASE_URL` 是 localhost/127.0.0.1）設定，避免正式環境不小心留著開發後門。"""
-    dev_token = os.environ.get("IDENTITY_DEV_TOKEN")
-    if dev_token and not _is_local():
-        raise RuntimeError(
-            "IDENTITY_DEV_TOKEN 只能在本機開發環境使用"
-            "（SUPABASE_URL 必須是 localhost 或 127.0.0.1，目前不是）"
-        )
-    if os.environ.get("IDENTITY_ALLOW_HS256") == "1" and not _is_local():
-        raise RuntimeError(
-            "IDENTITY_ALLOW_HS256 只能在本機開發環境使用"
-            "（SUPABASE_URL 必須是 localhost 或 127.0.0.1，目前不是）"
-        )
+    """掛 /api/identity/* 路由。`IDENTITY_DEV_TOKEN`／`IDENTITY_ALLOW_HS256` 只能在
+    `BRAND_OS_ENV=local` 使用這條檢查，已經搬進 `app.core.config.settings()`（ADR 0062）——
+    `app.main` 在 import 期就呼叫過一次 `settings()`，設定錯誤在那裡就炸了，這裡不重複檢查，
+    只剩掛路由。"""
     from app.identity import routes as identity_routes  # 延遲 import：見檔頭「Internals」
 
     app.include_router(identity_routes.router)

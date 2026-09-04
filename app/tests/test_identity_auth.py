@@ -13,12 +13,11 @@ from pathlib import Path
 from unittest import mock
 from uuid import UUID, uuid4
 
-from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import app.main as main
 import app.shared.web as web
-from app import identity as identity_module
+from app.core import config
 from app.identity import repository as identity_repo
 
 from .identity_test_helpers import flatten_routes, mint_hs256
@@ -261,21 +260,22 @@ class ConcurrentFirstLoginTest(unittest.TestCase):
 
 
 class Hs256StartupGuardTest(unittest.TestCase):
-    """票 identity-hs256-startup-guard done-check 2：兩半都要證——`register()` 真的會在
-    非本機 + HS256 開著時炸掉（跑進閘門的東西），`.env.example` 出廠真的沒有把後門打開
+    """票 02-env-flag-and-settings done-check 6：兩半都要證——`app.core.config.settings()`
+    真的會在非本機 + HS256 開著時炸掉（ADR 0062：這道檢查原本住在 `register()`，這張票
+    搬進 settings() 的開機檢查——跑進閘門的東西），`.env.example` 出廠真的沒有把後門打開
     （擋回歸的模板）。單一測試同時證兩件事，不多開第二支。"""
 
-    def test_register_refuses_non_local_hs256_and_env_example_ships_it_closed(self):
+    def test_settings_refuses_non_local_hs256_and_env_example_ships_it_closed(self):
         with mock.patch.dict(
             os.environ,
             {
-                "SUPABASE_URL": "https://example.supabase.co",
+                "BRAND_OS_ENV": "production",
                 "IDENTITY_ALLOW_HS256": "1",
                 "IDENTITY_DEV_TOKEN": "",  # 只想測 HS256 這一半，先關掉 dev-token 那一半的檢查
             },
         ):
             with self.assertRaises(RuntimeError):
-                identity_module.register(FastAPI())
+                config.settings()
 
         env_example = (_REPO_ROOT / ".env.example").read_text(encoding="utf-8")
         self.assertNotIn(
@@ -285,6 +285,35 @@ class Hs256StartupGuardTest(unittest.TestCase):
             "super-secret-jwt-token-with-at-least-32-characters-long", env_example,
             ".env.example 出廠不該帶 Supabase 本機示範密鑰",
         )
+        self.assertNotIn(
+            "\nBRAND_OS_ENV=local", env_example,
+            ".env.example 出廠不該把 BRAND_OS_ENV 設成 local——這個範本檔會被複製到雲端",
+        )
+
+
+class BootCheckReportsAllViolationsTest(unittest.TestCase):
+    """票 02-env-flag-and-settings done-check 3／ADR 0062「一次列出全部違規，不是抓到
+    第一條就停」——這是舊版兩段各自獨立的 RuntimeError 拿掉之後，唯一沒有既有測試覆蓋
+    的行為，也是最容易被後續「簡化」悄悄弄丟的地方。三種違規（兩個必填缺漏＋一個禁止
+    後門有值）混在一起餵，斷言三個變數名同時出現在同一個 RuntimeError 訊息裡——只抓到
+    第一條的話，這裡會斷在少了另外兩個。"""
+
+    def test_three_violations_all_named_in_one_message(self):
+        with mock.patch.dict(
+            os.environ,
+            {
+                "BRAND_OS_ENV": "production",
+                "DATABASE_URL": "",
+                "SUPABASE_URL": "",
+                "IDENTITY_DEV_TOKEN": "x",
+            },
+        ):
+            with self.assertRaises(RuntimeError) as cm:
+                config.settings()
+        message = str(cm.exception)
+        self.assertIn("DATABASE_URL", message)
+        self.assertIn("SUPABASE_URL", message)
+        self.assertIn("IDENTITY_DEV_TOKEN", message)
 
 
 if __name__ == "__main__":

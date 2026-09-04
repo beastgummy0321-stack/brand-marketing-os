@@ -31,6 +31,8 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool
 
+from app.core import config
+
 logger = logging.getLogger(__name__)
 
 # 不在票 02-1 的刪除清單裡：好幾個模組（app/ads/meta_mcp.py、app/intake/state.py、
@@ -89,10 +91,11 @@ def new_id(prefix: str) -> str:
 
 
 def dsn() -> str:
-    """Postgres 連線字串：`DATABASE_URL`，預設本機 Supabase（`supabase start` 開的那個）。"""
-    return os.environ.get(
-        "DATABASE_URL", "postgresql://postgres:postgres@127.0.0.1:54322/postgres"
-    )
+    """Postgres 連線字串：`app.core.config.database_url()`（ADR 0062 §5a）——本機有 Supabase
+    預設值，staging／production 一律要求明講，不在這裡退回任何預設值。不叫
+    `config.settings().database_url`：那顆是行程層快取的單例，`app/background.app()` 要靠
+    這個值一改就變才知道要重建，不能被凍結。"""
+    return config.database_url()
 
 
 class _Rows:
