@@ -157,6 +157,11 @@ def accept_invite(request: Request, token: str):
         raise NotFound("找不到這張邀請。")
     if invite["accepted_at"] is not None or invite["expires_at"] < now_utc():
         raise ApiError(410, "invite_gone", "這張邀請已經用過或過期了。")
+    if actor.email.strip().lower() != invite["email"].strip().lower():
+        raise Forbidden(
+            "這張邀請不是發給你現在登入的帳號的。請用收到邀請信的那個信箱登入，再點一次連結。",
+            code="invite_not_yours",
+        )
     repo.accept_invite(web.conn, invite["id"], actor.user_id, invite["org_id"], invite["role"])
     web.conn.commit()
     org = repo.get_organisation(web.conn, invite["org_id"])

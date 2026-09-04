@@ -5,4 +5,4 @@
 
 - [>] 廣告閉環 ⑧⑨ ｜ docs/issues/ad-loop/ ｜ 卡在你：把廣告02／03 貼進 Meta 並打開，兩個座標花到錢才開 T6c
 - [ ] 介面收尾 U1／U3 ｜ docs/issues/ui/ ｜ 等你點頭換字體
-- [>] 上線／上雲前必還 ｜ docs/issues/deploy/ ｜ 票 01 邀請信箱比對：站①開票完，等派工做站②
+- [ ] 上線／上雲前必還 ｜ docs/issues/deploy/ ｜ 邀請連結已還；剩兩張不用等平台（環境變數、worker 拆行程），三張等你選平台

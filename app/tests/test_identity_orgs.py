@@ -117,9 +117,7 @@ class OrgManagementTest(unittest.TestCase):
         token_str = body["accept_url"].split("token=")[1]
 
         invitee_id = uuid4()
-        invitee_token = mint_hs256(
-            sub=str(invitee_id), email=f"invitee-{invitee_id.hex[:8]}@example.com"
-        )
+        invitee_token = mint_hs256(sub=str(invitee_id), email="invitee@example.com")
         accept_resp = self.client.post(
             f"/api/identity/invites/{token_str}/accept", headers=self._auth(invitee_token)
         )
@@ -130,6 +128,41 @@ class OrgManagementTest(unittest.TestCase):
         self.assertIsNotNone(membership)
         self.assertEqual(membership["role"], "member")
 
+    def test_invite_accepted_by_wrong_email_is_403(self):
+        owner_token, org_id = self._new_owner()
+        create_resp = self.client.post(
+            "/api/identity/invites",
+            json={"email": "invitee@example.com", "role": "member"},
+            headers=self._auth(owner_token),
+        )
+        token_str = create_resp.json()["accept_url"].split("token=")[1]
+
+        stranger_id = uuid4()
+        stranger_token = mint_hs256(sub=str(stranger_id), email="stranger@example.com")
+        accept_resp = self.client.post(
+            f"/api/identity/invites/{token_str}/accept", headers=self._auth(stranger_token)
+        )
+        self.assertEqual(accept_resp.status_code, 403, accept_resp.text)
+        self.assertEqual(accept_resp.json()["error"]["code"], "invite_not_yours")
+        self.assertIsNone(identity_repo.get_membership(web.conn, org_id, stranger_id))
+
+    def test_invite_accepted_with_different_case_email_is_200(self):
+        owner_token, org_id = self._new_owner()
+        create_resp = self.client.post(
+            "/api/identity/invites",
+            json={"email": "Invitee@Example.com", "role": "member"},
+            headers=self._auth(owner_token),
+        )
+        token_str = create_resp.json()["accept_url"].split("token=")[1]
+
+        invitee_id = uuid4()
+        invitee_token = mint_hs256(sub=str(invitee_id), email="invitee@example.com")
+        accept_resp = self.client.post(
+            f"/api/identity/invites/{token_str}/accept", headers=self._auth(invitee_token)
+        )
+        self.assertEqual(accept_resp.status_code, 200, accept_resp.text)
+        self.assertIsNotNone(identity_repo.get_membership(web.conn, org_id, invitee_id))
+
     def test_invite_accept_twice_is_410(self):
         owner_token, org_id = self._new_owner()
         create_resp = self.client.post(
@@ -139,18 +172,14 @@ class OrgManagementTest(unittest.TestCase):
         )
         token_str = create_resp.json()["accept_url"].split("token=")[1]
         invitee_id = uuid4()
-        invitee_token = mint_hs256(
-            sub=str(invitee_id), email=f"twice-{invitee_id.hex[:8]}@example.com"
-        )
+        invitee_token = mint_hs256(sub=str(invitee_id), email="twice@example.com")
         first = self.client.post(
             f"/api/identity/invites/{token_str}/accept", headers=self._auth(invitee_token)
         )
         self.assertEqual(first.status_code, 200)
 
         second_id = uuid4()
-        second_token = mint_hs256(
-            sub=str(second_id), email=f"twice2-{second_id.hex[:8]}@example.com"
-        )
+        second_token = mint_hs256(sub=str(second_id), email="twice@example.com")
         second = self.client.post(
             f"/api/identity/invites/{token_str}/accept", headers=self._auth(second_token)
         )
