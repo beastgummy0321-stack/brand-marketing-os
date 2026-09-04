@@ -12,16 +12,20 @@ Status: 卡點——**還沒選部署平台**。2026-09-04 使用者裁決「不
 
 1. ~~邀請連結持有即可用~~ — 2026-09-04 已還（ADR 0061，commit `slice-01 done`）。前端確認步驟
    當天由使用者砍掉：email 綁定之後，誤點只有本人做得到，確認頁是之後的 UI 票不是安全票。
-2. `issue-07-2-settings-sentry-staging-cd.md` 的前半 — route B：pydantic-settings 收 19 處環境變數，缺了開機就炸；
-   同一張順手收 `issue-is-local-env-flag.md`（那顆「是不是正式環境」的變數就在這裡出生）。
+2. **已開票** `02-env-flag-and-settings.md`（2026-09-05）— route **C**，不是原本寫的 route B：
+   `_is_local()` 的三個呼叫端全是權限判斷（兩道開發後門＋邀請連結要不要放進 API 回應），
+   所以要 ADR（0062）與獨立審查。pydantic-settings 收 19 處環境變數（**10 個鍵，不是原本寫的 8 個**），
+   `issue-is-local-env-flag.md` 已被它收走並刪除。
 3. `issue-daily-pull-worker-own-process.md` — route C（模組邊界，要寫 ADR 取代 0039）：worker 拆成自己的進入點，
    本機仍可用同一行指令起兩個行程。
 4. `issue-delete-seed-debug-account.md` — 最後一張，部署前一天做：刪了之後本機就沒有活得過 reset 的帳號。
 
 **B. 要先選平台**
 
-5. `issue-07-2-settings-sentry-staging-cd.md` 的後半 — Sentry／staging／CD（`supabase db push` 單一 job）＋映像檔帶 IANA 時區。
+5. `issue-07-2-settings-sentry-staging-cd.md`（現在整張都是後半）— Sentry／staging／CD
+   （`supabase db push` 單一 job）＋映像檔帶 IANA 時區。
 6. `issue-07-4-github-security-switches.md` — 要付 GitHub Pro 或把 repo 公開，是錢的決定。
 7. `issue-ai-cost-reconciliation.md` — 要 Anthropic Admin API key；開始收費前對一次帳即可。
 
 `issue-key-source-switch.md` 不是上雲債，是里程碑之後的產品功能；留在這裡只因為它跟「自帶金鑰」同一組。
+`issue-codex-cli-provider-in-production.md`（2026-09-05 開票 02 時發現）跟著票 02 的環境表走，02 落地後補一條規則即可。

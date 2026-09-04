@@ -31,10 +31,16 @@ Callers, both of them:
 - `app/main.py:438` (`register`).
 
 `register()` is also a **startup gate**, not only a mount: it raises `RuntimeError` when a
-development backdoor is enabled while `SUPABASE_URL` is not `localhost`/`127.0.0.1`. Today that
-covers `IDENTITY_DEV_TOKEN` (`app/identity/__init__.py:126-134`); the
-`identity-hs256-startup-guard` slice adds `IDENTITY_ALLOW_HS256` to the same gate. A misconfigured
+development backdoor is enabled outside the local environment — `IDENTITY_DEV_TOKEN`
+(`app/identity/__init__.py:131-136`) and `IDENTITY_ALLOW_HS256` (`:137-141`). A misconfigured
 deploy is meant to die at boot, loudly, rather than serve.
+
+**Both of those move out of this module** (ADR 0062): the environment is named by `BRAND_OS_ENV`
+rather than sniffed from the `SUPABASE_URL` hostname, and every environment rule is checked once
+in `app/core/config.py` so one boot failure names every violation instead of the first.
+`register()` then only mounts. Ticket `docs/issues/deploy/02-env-flag-and-settings.md` is the
+slice that does it; until it lands, the two paragraphs above describe the code and this one
+describes where it is going — the one place in this file that is ahead of `app/`.
 
 ## Error shapes
 
@@ -53,7 +59,8 @@ owns unifying them; it is an API-contract change, so it does not happen inside a
 
 - Nothing from `app.brand_intelligence`, `app.schedule`, `app.meta`, `app.orders`, `app.intake`,
   `app.brand_web`, `app.llm` — identity sits under all of them and knows about none.
-- Only `app.core.db` (`Conn`, `ConnProxy`, `new_id`, `now_utc`) and `app.shared.web`.
+- Only `app.core.db` (`Conn`, `ConnProxy`, `new_id`, `now_utc`), `app.core.config` (the settings
+  object, ADR 0062) and `app.shared.web`.
 - `app.shared.web` must not import `app.identity` at module level (see the cycle note above).
 
 Identity's own queries are the one place tenant scoping is **absent on purpose** — it is the code
@@ -65,8 +72,10 @@ An unscoped read anywhere else is a defect.
 
 - ADR 0061 — an org invite is accepted only by a signed-in user whose email equals the invited
   email, compared case-insensitively; `gone` is answered before identity.
+- ADR 0062 — `BRAND_OS_ENV` names the environment and unset means production; only `local` may
+  enable `IDENTITY_DEV_TOKEN`, `IDENTITY_ALLOW_HS256`, or hand an invite's `accept_url` back in
+  the API response. This module no longer decides that question from a hostname.
 
-The rest of the module still holds authentication, org resolution and two development backdoors
-with no decision record behind them. The next route C question to reach one of them — a second
-org-selection rule, a change to first-login provisioning, an environment-name variable — writes
-its own ADR rather than leaning on this one.
+The rest of the module still holds authentication and org resolution with no decision record
+behind them. The next route C question to reach one of them — a second org-selection rule, a
+change to first-login provisioning — writes its own ADR rather than leaning on these.
