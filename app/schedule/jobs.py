@@ -134,14 +134,16 @@ def _coordinate_vocabulary_text(coordinates: list[dict]) -> str:
     ]
     if not sections:
         return ""
-    # 這一節只給清單，不重述怎麼挑——挑的規則活在部門任務檔的 `coordinates` 那一條。
-    # 票 T8b 實機驗收（2026-09-04）：這裡原本重複了一次「挑不到就給 null」，跟任務檔那句
-    # 加起來變成兩次鼓勵放棄，而實跑的兩批對照顯示 `format` 在這一句加進來之後從「單圖」
-    # 退回 null。同一個規則不在兩個地方各寫一次。
+    # 這一節排在整份 prompt 的**最後**，而且自己帶一句短提醒——不是為了好看，是量出來的
+    # （票 T8b 實機驗收，2026-09-04）：同一顆模型、同一份詞彙表，2,210 字的小 prompt 七格
+    # 全填對；21,679 字的正式 prompt 只填得出 `angle`。差別不在措辭（「七個都要填」加了、
+    # 拿掉、換成長解釋各試過一輪，都是 1/7），在於座標指令被 8,300 字方法論與 8,600 字
+    # 活動樹推到兩萬字之前。**改這裡的順序前先讀這段**：把它搬回中間就會退回 1/7。
     return "\n\n".join([
         "## 這個品牌的座標詞彙表",
-        "`coordinates` 七個維度的值就是下面各段列出的 label 原文"
-        "（破折號後面是這個值什麼時候用，是說明、不是值的一部分）。",
+        "上面每一則內容的 `coordinates` 七個鍵**都要填**，值就是下面各段列出的 label 原文"
+        "（破折號後面是這個值什麼時候用，是說明、不是值的一部分）。"
+        "沒放證明填「無證明」、沒給優惠填「無優惠」——那是值，不是 `null`。",
         *sections,
     ])
 
@@ -289,16 +291,17 @@ def schedule_creative(org_id: str, brand_id: str, tree_task_id: str,
         methodology_result = methodology.compile(
             conn, state.CREATIVE_METHODOLOGY_TASK_LABELS, brand_id=brand_id
         )
-        # 票 T8b：座標詞彙表接在方法論後面、活動結構前面——`creative-matrix.md` 解釋角度是
-        # 什麼，這一節給的是落地時真的拿去比對的那些字串本身。
+        # 票 T8b：座標詞彙表放**最後**一段，理由與量到的數字見 `_coordinate_vocabulary_text()`
+        # 的檔頭註解——它是這份 prompt 裡唯一「寫完文案之後才要回答」的東西，排在兩萬字
+        # 之前就會被淹掉。
         coordinate_text = _coordinate_vocabulary_text(
             repository.list_coordinates(conn, org_id, brand_id)
         )
         params_text = _creative_params_text(tree)
         prompt = "\n\n".join(
             section for section in
-            (department_text, methodology_result.text, coordinate_text, params_text,
-             brand_context) if section
+            (department_text, methodology_result.text, params_text, brand_context,
+             coordinate_text) if section
         )
 
         context = gateway.TaskContext(
