@@ -1277,7 +1277,13 @@ class CoordinateDimensionSyncTest(unittest.TestCase):
 # `_one_declaration()`（同名宣告只准一份，擋掉審查用假宣告騙過閘門那一招）與
 # `test_all_three_equal_the_constitution`（三份都要等於憲法規則 5，擋掉三份同時錯還全綠）。
 # 守的是資料正確性——七個維度鍵名對不上，回來的廣告成效數字就掛錯座標。
-TEST_LINES_CEILING = 18892
+# 同名最深層節點的 `node_key` 配對（2026-09-04，看板「廣告閉環」目標，
+# `docs/issues/ad-loop/issue-same-name-leaf-node-key.md`）：18892 → 18919，含本段註解自己
+# 佔的行。新增的是 `BuildCreativeTest` 一支測試（21 行、三個情境：照編號配／漏答退回名稱
+# 排隊／答錯退回名稱排隊）。守的是資料正確性——兩個最深層節點同名時，名稱帶不出任何資訊，
+# 這是這條 bug 唯一能被證偽的地方（審查原話：構造上無法證偽）。已證紅：把 `creative.py`
+# 的編號配對分支關掉，只有「照編號配」那個情境紅，兩條退路維持綠。
+TEST_LINES_CEILING = 18919
 
 
 def _line_totals() -> tuple:

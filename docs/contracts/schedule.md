@@ -84,13 +84,23 @@ Module-local and reversible, decided here rather than in an ADR:
 
 - The module now registers an `app.core.cleanup` function (ticket T1b): `app/schedule/repository.py`
   registers 「創意座標與素材候選」, covering the five tables this ticket added.
-- **How a creative reply is matched to a tree node** — ticket T3d, settled by the user: the agent
-  answers per node **name**, and names locate their nodes on their own — different names may
-  arrive in any order and are reordered back to document order, which is behaviour this module
-  has had and tested since ticket 09. Position is used **only inside a group of identically
-  named leaves**: the Kth reply block carrying a name goes to the Kth leaf carrying that name, in
-  document order. A count mismatch per name is the same failure it has always been, with the same
-  message. T3d's ticket demanded a global positional zip instead, which is not implementable
+- **How a creative reply is matched to a tree node** — ticket T3d, settled by the user; **amended
+  2026-09-04, again by the user** (`docs/issues/ad-loop/issue-same-name-leaf-node-key.md`,
+  overturning their own 2026-09-03 "leave it until it bites"). The agent now also echoes
+  **`node_key`**, and when the reply's multiset of `node_key`s equals the tree's leaf `node_key`s
+  the match is made by key. T3d's stated reason for not asking — "the agent does not know the
+  shell's internal position code" — was false: `jobs._creative_params_text()` `json.dumps`es the
+  whole tree into the prompt and every node carries `node_key` (`tree.py:111`), so the agent is
+  copying back a field it was already shown, not learning shell vocabulary. `node_key` stays
+  **optional**: a missing or wrong key falls back, unchanged, to the name rule below — a paid
+  agent call is not re-run over a field the model dropped.
+  The name rule, still in force as the fallback: the agent answers per node **name**, and names
+  locate their nodes on their own — different names may arrive in any order and are reordered back
+  to document order, which is behaviour this module has had and tested since ticket 09. Position is
+  used **only inside a group of identically named leaves**: the Kth reply block carrying a name goes
+  to the Kth leaf carrying that name, in document order. A count mismatch per name is the same
+  failure it has always been, with the same message, and that name check still runs **first**.
+  T3d's ticket demanded a global positional zip instead, which is not implementable
   against this module's own reordering test; the reviewer returned `blocked-upstream` and this
   line is the corrected rule.
 

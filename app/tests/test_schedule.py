@@ -489,6 +489,29 @@ class BuildCreativeTest(unittest.TestCase):
         self.assertNotIn("not_a_real_key", ads[0]["coordinates"])
         self.assertEqual(set(ads[0]["coordinates"]), set(creative_mod.COORDINATE_KEYS))
 
+    def test_node_key_decides_which_same_name_node_gets_which_copy(self):
+        """資料正確性，`docs/issues/ad-loop/issue-same-name-leaf-node-key.md`（2026-09-04
+        根治）：兩個最深層節點同名時名稱帶不出任何資訊，`node_key` 是唯一分得出來的依據。
+        代理倒著答（先 "2" 後 "1"）→ 照編號配（舊版照回覆順序排隊會拿到「第一段」，所以
+        這支分得出兩種行為）；漏答、或答了樹上沒有的編號 → 退回既有的名稱排隊，不整批重產
+        （那一次呼叫已經花過錢）。"""
+        def first_node_copy(*keys: str | None) -> list:
+            creatives = [
+                _one_creative("單元", fields=[{"label": "主要文字", "value": marker}])
+                | ({"node_key": key} if key else {})
+                for marker, key in zip(("第一段", "第二段"), keys, strict=True)
+            ]
+            ads, failure = creative_mod.build_creative(
+                _creative_fenced(creatives), _nodes("單元", "單元")
+            )
+            self.assertIsNone(failure)
+            self.assertEqual([a["node_key"] for a in ads], ["1", "2"])
+            return ads[0]["fields"][0]["value"]
+
+        self.assertEqual(first_node_copy("2", "1"), ["第二段"])      # 照編號配
+        self.assertEqual(first_node_copy(None, None), ["第一段"])    # 漏答 → 名稱排隊
+        self.assertEqual(first_node_copy("9.9.9", "1"), ["第一段"])  # 答錯 → 名稱排隊
+
 
 # -- 2d. 票 09 settled 段第 8 點：活動樹元件不得寫死通路詞彙 ---------------------------
 

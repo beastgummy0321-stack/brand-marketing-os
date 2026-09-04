@@ -25,6 +25,11 @@ Status: 進行中——①～⑦ 已走完（2026-09-04），只剩 ⑧⑨；卡
 - **有座標的花費今天是 0 元**：唯一綁上的深度 3 節點 `1.1.1 → 120251641305860671` 在
   `meta_entity_spend` 是 0 列；本月廣告層 32 列、6,458 元、8 則廣告全部落在「未標座標」桶子。
   任何需要「有座標的花費」的東西今天都畫不出來，不是程式壞了。
+  （2026-09-04 傍晚重驗一次，數字一模一樣：直接叫
+  `performance.brand_creative_performance(conn, "org_bughunt", "brd_bughunt")`，
+  七個維度的 `values` 全是空陣列，`untagged` 每維都是 6,458／8 則。）
+- **同名最深層節點配錯**已根治（2026-09-04，route B）：代理現在也回 `node_key`，答得出來就
+  照編號配、漏答或答錯退回原本的名稱排隊。決定改在 `docs/contracts/schedule.md` 的 T3d 那條。
 
 ## 排序（離閉環多遠，2026-09-04 使用者裁決）
 
@@ -32,8 +37,11 @@ Status: 進行中——①～⑦ 已走完（2026-09-04），只剩 ⑧⑨；卡
 **之後又冒出會靜靜算錯錢的東西，一律插回最前面。**
 
 1. `issue-t6c-three-agent-diagnosis.md` — 閉環現在就是斷的；開票條件是資料不是程式。
-2. `issue-same-name-leaf-node-key.md` — 程式在，真跑那一輪最可能現形。
-3. `issue-image-on-ad-node.md`、`issue-variance-probe.md` — 閉環跑完一輪之後再判。
+2. `issue-prompt-contradicts-itself-on-coordinates.md` — 一行 diff，卡在「提示詞零件刪改先問」。
+3. `issue-variance-probe.md` — 探針要使用者自己跑一次，跑出數字才回頭重判。
+
+（`issue-same-name-leaf-node-key.md` 2026-09-04 做掉、刪檔；`issue-image-on-ad-node.md` 同日
+重判完畢，判不做，檔案留著記結論，不要再問第三次。）
 
 每日拉取 worker 跑在網站行程裡（ADR 0039）不擋這一輪：手動補 `uv run python -m app.meta.daily_pull`。
 上雲時要拆，票在 `docs/issues/deploy/`。
@@ -46,8 +54,8 @@ Status: 進行中——①～⑦ 已走完（2026-09-04），只剩 ⑧⑨；卡
 - **建檔精靈**：`brd_bughunt` 的品牌事實仍是空的（已確認事實、顧客原話、規則卡都空）。不擋閉環，
   但方案品質差一階——代理只能靠通用方法論寫。這是設計上允許的（憲法「資料狀態」）。
 - **晨光咖啡要重建**：2026-08-30 `supabase db reset` 後 8/29 那次資料全部消失。
-- **下一個 session 第一題**：那則手動建的廣告，圖是自己生的、還是選現有貼文？答案決定
-  `issue-image-on-ad-node.md` 要不要重判。
+- **那則手動建的廣告，圖從哪來**——2026-09-04 問完了：使用者自己照提示詞生圖、手動上傳。
+  重判結果與理由寫在 `issue-image-on-ad-node.md`，判不做。這一題不要再問第三次。
 
 ## 里程碑
 

@@ -37,14 +37,22 @@ Private to app/schedule/（集裝箱憲章第一節）：只有 app/schedule/rou
 `_valid_coordinates` 一樣：`creative_candidate.visual_tone` 有 `CHECK` 只收那兩個字串，寫壞值
 會讓整筆 INSERT 失敗——座標是診斷用中繼資料不是交付物，這條規則對這兩個新鍵一樣適用。
 
+2026-09-04（`docs/issues/ad-loop/issue-same-name-leaf-node-key.md`，使用者裁決推翻自己
+2026-09-03 的「先不根治」）：代理現在**也答 `node_key`**，答得出來就照編號配對。T3d 當時
+寫「代理不認得 `node_key`」的理由是「殼層內部的位置編碼代理不懂」——那句話今天不成立：
+`jobs._creative_params_text()` 是把整棵樹 `json.dumps` 貼進 prompt 的，而每個節點都帶
+`node_key`（`tree.py:111`），編號本來就印在代理讀的那份 JSON 裡。所以這不是教代理新詞彙，
+是叫它把已經看到的欄位抄回來。`node_key` 是**選配**：整批的編號多重集合跟樹的最深層節點
+編號完全相同才走這條，否則原封不動退回下面的名稱排隊——代理漏答或答錯不該讓整批重產
+（那是花過錢的一次呼叫）。名稱多重集合的檢查仍然先跑，失敗訊息一個字沒變。
+
 票 T3d（ADR 0055 §1）：`build_creative(rendered_output, ad_nodes)` 的第二個參數從純名稱清單
-換成 `[{"node_key", "name"}, ...]`（樹的文件順序）。代理的回覆契約沒有變——它仍然只答
-`node`（節點名稱），不認得 `node_key`（frozen decision 3：外殼不懂通路或部門自己的詞彙，
-代理當然也不懂殼層內部的位置編碼）。但同名的兩個最深層節點今天分不出彼此（`creative_slot`
-過去拿名稱當鍵），所以比對這一步改成「同名字各自排隊」：回覆裡第 K 個某名字的區塊，配給
-樹裡文件順序第 K 個同名字的節點；不同名字之間彼此順序不受限——代理不保證照樹的順序回覆
-（票 01 既有規則，這裡不收窄）。整批合法性看「回覆的名稱多重集合」跟「樹葉節點的名稱多重
-集合」是否相同，不是 `set()`（`set` 會把兩個同名節點吃成一個，這正是這張票要關掉的洞）。
+換成 `[{"node_key", "name"}, ...]`（樹的文件順序）。同名的兩個最深層節點分不出彼此
+（`creative_slot` 過去拿名稱當鍵），所以比對這一步改成「同名字各自排隊」：回覆裡第 K 個
+某名字的區塊，配給樹裡文件順序第 K 個同名字的節點；不同名字之間彼此順序不受限——代理不
+保證照樹的順序回覆（票 01 既有規則，這裡不收窄）。整批合法性看「回覆的名稱多重集合」跟
+「樹葉節點的名稱多重集合」是否相同，不是 `set()`（`set` 會把兩個同名節點吃成一個，這正是
+這張票要關掉的洞）。
 """
 
 from collections import Counter
@@ -126,12 +134,15 @@ def build_creative(rendered_output: str, ad_nodes: list[dict]) -> tuple[list[dic
         return [], NO_CREATIVE_MESSAGE
 
     parsed = []
+    reply_keys: list[str | None] = []   # 與 `parsed` 同索引；代理沒答就是 None
     for item in raw_creatives:
         if not isinstance(item, dict):
             return [], NO_CREATIVE_MESSAGE
         node = item.get("node")
         if not isinstance(node, str) or not node:
             return [], NO_CREATIVE_MESSAGE
+        reply_key = item.get("node_key")
+        reply_keys.append(reply_key if isinstance(reply_key, str) and reply_key else None)
         coordinates = _valid_coordinates(item.get("coordinates"))
         visual_tone = _valid_visual_tone(item.get("visual_tone"))
         visual_concept = _valid_visual_concept(item.get("visual_concept"))
@@ -148,6 +159,12 @@ def build_creative(rendered_output: str, ad_nodes: list[dict]) -> tuple[list[dic
 
     if Counter(item["node"] for item in parsed) != Counter(n["name"] for n in ad_nodes):
         return [], NODE_MISMATCH_MESSAGE  # 少一個、多一個、或名稱對不上樹
+
+    # 代理答得出 `node_key` 就照編號配對（見檔頭 2026-09-04 段）：整批的編號多重集合跟樹的
+    # 最深層節點編號完全相同才算數，少一個、多一個、答錯一個都退回下面那條名稱排隊。
+    if Counter(reply_keys) == Counter(n["node_key"] for n in ad_nodes):
+        by_key = dict(zip(reply_keys, parsed, strict=True))
+        return [{**by_key[n["node_key"]], "node_key": n["node_key"]} for n in ad_nodes], None
 
     # 同名字各自排隊、依序配對（見檔頭票 T3d 段）：不同名字之間彼此順序不受限。
     queues: dict[str, list[dict]] = {}
