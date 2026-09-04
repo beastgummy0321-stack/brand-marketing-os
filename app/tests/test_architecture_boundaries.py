@@ -93,6 +93,10 @@ def _import_time_modules(node) -> list:
     只有 import 期執行的 import 會形成硬環——函式／方法內的延遲 import 正是解環的標準手法
     （例：`app/core/settings.py:108` 就刻意這樣寫並留了註解），把它算成硬邊是誤判。
     class 主體會在 import 期執行，所以要進去看；def／async def 不進去。
+
+    `from X import Y` 回傳 `X.Y` 而不是 `X`，由 `_module_of()` 切。2026-09-04 量到：只回 `X`
+    會讓 `from app import storage` 整條邊消失（`X`＝`app`，`_layer_of()` 判 None），
+    `app/intake/` 三個檔對 `app.storage` 的依賴在依賴方向與環兩道掃描裡因此都是隱形的。
     """
     found = []
     for child in ast.iter_child_nodes(node):
@@ -100,24 +104,61 @@ def _import_time_modules(node) -> list:
             continue
         if isinstance(child, ast.Import):
             found.extend(alias.name for alias in child.names)
-        elif isinstance(child, ast.ImportFrom) and child.module:
-            found.append(child.module)
+        elif isinstance(child, ast.ImportFrom) and child.module and child.level == 0:
+            found.extend(f"{child.module}.{alias.name}" for alias in child.names)
         else:
             found.extend(_import_time_modules(child))  # if／try／with／class 主體照樣執行
     return found
 
 
-def _layer_import_graph() -> dict:
-    graph: dict = {}
+def _app_modules() -> dict:
+    """{'app.llm.gateway': 'app/llm/gateway.py'}。只收層底下的檔，範圍與 `_layer_of()` 一致。"""
+    modules = {}
     for path in _iter_py_files():
-        src = _layer_of(_rel(path))
-        if src is None:
+        rel = _rel(path)
+        if _layer_of(rel) is None:
             continue
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=_rel(path))
+        dotted = rel[: -len(".py")].replace("/", ".")
+        if dotted.endswith(".__init__"):
+            dotted = dotted[: -len(".__init__")]
+        modules[dotted] = rel
+    return modules
+
+
+def _module_of(name: str, modules: dict) -> "str | None":
+    """import 目標名 → 它實際落在哪一個檔＝檔案系統上真的存在的最長前綴。
+    `app.core.db.conn` 的 `conn` 是函式，`app.storage` 的 `storage` 是模組，靜態上分不出來，
+    只能這樣切。都不存在（第三方套件、stdlib）就回 None。"""
+    while name:
+        if name in modules:
+            return name
+        name = name.rpartition(".")[0]
+    return None
+
+
+def _file_import_graph() -> dict:
+    """檔案層 import 圖：節點是單一 .py 檔，不是套件。"""
+    modules = _app_modules()
+    graph: dict = {}
+    for dotted, rel in modules.items():
+        tree = ast.parse((REPO_ROOT / rel).read_text(encoding="utf-8"), filename=rel)
         for name in _import_time_modules(tree):
-            dst = _layer_of(name)
-            if dst is not None and dst != src:
-                graph.setdefault(src, set()).add(dst)
+            dst = _module_of(name, modules)
+            if dst is not None and dst != dotted:
+                graph.setdefault(dotted, set()).add(dst)
+    return graph
+
+
+def _layer_import_graph() -> dict:
+    """套件層 import 圖＝把檔案層那張圖收合到套件。收合而不是各掃一次：同一份解析結果，
+    兩張圖必然一致，不會出現「檔案層看得到、套件層看不到」的漂移。"""
+    graph: dict = {}
+    for src, dsts in _file_import_graph().items():
+        src_layer = _layer_of(src)
+        for dst in dsts:
+            dst_layer = _layer_of(dst)
+            if src_layer is not None and dst_layer is not None and dst_layer != src_layer:
+                graph.setdefault(src_layer, set()).add(dst_layer)
     return graph
 
 
@@ -135,7 +176,7 @@ def _reaches(graph: dict, start: str, target: str) -> bool:
 
 
 def _cyclic_pairs(graph: dict) -> set:
-    """所有「a import b，而 b 又繞得回 a」的套件對（排序後去重）。"""
+    """所有「a import b，而 b 又繞得回 a」的節點對（排序後去重）。套件層與檔案層共用。"""
     return {
         tuple(sorted((src, dst)))
         for src, dsts in graph.items()
@@ -413,6 +454,24 @@ class ImportCycleScanTest(unittest.TestCase):
             stale, [],
             "以下環已經不存在，請從 KNOWN_IMPORT_CYCLES 劃掉（並更新 docs/tech-debt.md）：\n"
             + "\n".join(f"  {a} ⇄ {b}" for a, b in stale),
+        )
+
+
+class FileImportCycleScanTest(unittest.TestCase):
+    """同一件事降到檔案層：`app/x/a.py` 與 `app/x/b.py` 互相 import 是環，但兩個檔在同一個
+    套件裡，收合成套件之後那條環會消失——上面那道掃描永遠看不到它。
+
+    2026-09-04 量過：整個 `app/` 檔案層違規數是 0（T5 拆 `routes.py` 時連帶解掉了），
+    所以這裡不開欠帳清單——沒有債要凍，先開一個空 set 只會變成下次有人偷渡的入口。
+    """
+
+    def test_no_import_cycles_between_files(self):
+        found = sorted(_cyclic_pairs(_file_import_graph()))
+        self.assertEqual(
+            found, [],
+            "以下檔案之間形成了 import 環（a 依賴 b、b 又繞得回 a）。\n"
+            "不得自行改依賴方向解環——停下回報：\n"
+            + "\n".join(f"  {a} ⇄ {b}" for a, b in found),
         )
 
 
@@ -1168,7 +1227,13 @@ class CoordinateDimensionSyncTest(unittest.TestCase):
 # 哪一種失敗」（找不到 vs 有兩個同名的），外加一條 `assertNotIn("組合")` 證明沒去比對的
 # 那一層不會被假裝成失敗、一條 `count(...) == 1` 證明同名手足的原因只講一次。
 # 斷言變強不變弱，多出來的行是那六處的理由註解。
-TEST_LINES_CEILING = 18782
+# 檔案層 import 環掃描（2026-09-04 晚，看板「閘門」目標）：18782 → 18840。新增的是
+# `FileImportCycleScanTest` 一支測試（14 行）＋ `_app_modules()`／`_module_of()`／
+# `_file_import_graph()` 三個掃描零件，其餘是收合套件層圖之後改寫的 `_layer_import_graph()`。
+# 守的是模組邊界（測試四類之外的第五類，本檔整支都是），不是畫面行為。
+# 順手修掉一個盲點：`from app import storage` 這種寫法原本被 `_layer_of()` 判成 None，
+# 三條 app.intake → app.storage 的依賴在舊的兩道掃描裡是隱形的。
+TEST_LINES_CEILING = 18846
 
 
 def _line_totals() -> tuple:

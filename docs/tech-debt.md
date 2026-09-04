@@ -9,7 +9,8 @@
 |---|---|---|
 | `FileLineCapTest` | 超標檔只准變小，不准有新的超標檔 | `KNOWN_OVERSIZED_FILES` |
 | `LayerDirectionTest` | 只准依賴排在自己前面的層 | `LAYER_ORDER`／`KNOWN_LAYER_VIOLATIONS` |
-| `ImportCycleScanTest` | 不得新增 import 環 | `KNOWN_IMPORT_CYCLES` |
+| `ImportCycleScanTest` | 不得新增**套件之間**的 import 環 | `KNOWN_IMPORT_CYCLES` |
+| `FileImportCycleScanTest` | 不得有**檔案之間**的 import 環（含同一套件內部） | 無欠帳清單——2026-09-04 量到違規數 0，沒有債要凍 |
 | `TestRatioTest` | 測試**絕對行數**只准往下（ADR 0041） | `TEST_LINES_CEILING`。2026-08-30 從比值改成絕對行數：比值版在同一天被刪碼逼著調高兩次（0.858→0.862→0.865），因為刪 production 會讓分母變小、比值被動漲——等於懲罰刪死碼，而唯一能變綠的動作是調鬆閘門自己。改成絕對行數後，刪碼不會紅、加測試才會紅。**數字不寫在這裡**——它每張真的需要測試的票都會動一次，抄一份到文件就是保證過期（2026-09-03 查證：本欄原本寫 14,305，實際已經是 17,867）。當下值一律看那一行。**比值只是印出來的讀數，不是目標**：ADR 0041 明文「沒有任何文件再訂那個數字」，`docs/workflow-diet.md` 已刪除 |
 | `ModuleSizeRatchetTest` | 每個套件的行數凍在現況，調高要改明表 | `KNOWN_MODULE_SIZES` |
 
@@ -93,6 +94,13 @@ HTTP 打不到。使用者 2026-08-30 裁決不補——那是開發者自己在
 > 判準以測試為準（見本檔開頭）。這筆不是外殼切片造成的，切片只是順手發現。
 掃描只算 import 期會執行的 import；函式內的延遲 import（例：`app/core/settings.py:108`）
 是解環的標準手法，不算硬邊。
+
+> 2026-09-04 加了 `FileImportCycleScanTest`：同一件事降到檔案層。套件層的圖是收合出來的，
+> 所以 `app/x/a.py ⇄ app/x/b.py` 這種同套件內部的環在套件層必然消失——實測過（`app/core`
+> 內兩個檔互 import：套件層兩支全綠，檔案層紅）。同一輪順手修掉一個盲點：`from app import
+> storage` 這種寫法原本被判成「不是層」而整條邊消失，三條 `app.intake → app.storage` 的依賴
+> 在依賴方向與環兩道掃描裡都是隱形的；現在看得到了（以 `from app import schedule` 寫在
+> `app/core/` 裡實測：舊碼全綠，新碼紅）。
 
     app.brand_intelligence ⇄ app.intake
     app.brand_intelligence ⇄ app.llm

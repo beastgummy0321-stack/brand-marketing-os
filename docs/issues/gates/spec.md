@@ -1,6 +1,7 @@
 # 目標：裝一次就永久自動執行的閘門
 
-Status: 待做——三份 issue，其中檔案層 import 環掃描使用者 2026-09-04 已批准，只差開票。
+Status: 待做——剩兩份 issue（前端 depcruise、七維 regex 天花板）。檔案層 import 環掃描
+2026-09-04 走 route B 做完（`FileImportCycleScanTest`），票檔已刪，歷史在 git log。
 全文出處：`BOARD.md` @ commit `6574191`。
 
 規矩（不是票，掛在未來每一張票上）：
