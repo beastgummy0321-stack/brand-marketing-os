@@ -1149,7 +1149,7 @@ class BindTreeApiContractTest(_ScheduleApiTestBase):
     def test_a_paused_campaign_with_no_spend_still_binds(self):
         """手動路徑的順序是「照樹建成關閉 → 配對確認 → 才開跑」，所以配對時活動一定還沒
         花過錢，一列 insights 都沒有。名稱比對若建在 `meta_entity_spend` 上，這一步永遠
-        是「配對失敗，請檢查名稱是否完全相符」——名字明明一字不差（2026-08-29 對真帳號實測：
+        是「在 Meta 上找不到」——名字明明一字不差（2026-08-29 對真帳號實測：
         建了一個 PAUSED 活動，拉完當天花費，那個活動不在花費表裡）。"""
         self._succeed_plan_and_tree()
 
@@ -1177,7 +1177,9 @@ class BindTreeApiContractTest(_ScheduleApiTestBase):
             resp = self._bind()
         self.assertEqual(resp.status_code, 200, resp.text)
         tree = resp.json()["tree"]
-        self.assertEqual(tree["bind_failure"], "配對失敗，請檢查名稱是否完全相符")
+        # 2026-09-04 實機驗收：訊息要指名是哪一個節點、以及哪一種失敗（找不到 vs 有兩個
+        # 同名的）——兩者要做的事相反。整批仍然只講一句（ADR 0055 §4）。
+        self.assertIn("「活動一」在 Meta 上找不到", tree["bind_failure"])
         self.assertIsNone(tree["nodes"][0]["bound_external_id"])
         self.assertEqual(self._channel_entity_map_rows(), [])
 
@@ -1192,7 +1194,7 @@ class BindTreeApiContractTest(_ScheduleApiTestBase):
             resp = self._bind()
         self.assertEqual(resp.status_code, 200, resp.text)
         tree = resp.json()["tree"]
-        self.assertEqual(tree["bind_failure"], "配對失敗，請檢查名稱是否完全相符")
+        self.assertIn("「活動一」在 Meta 上有 2 個同名的", tree["bind_failure"])
         self.assertIsNone(tree["nodes"][0]["bound_external_id"])
         self.assertEqual(self._channel_entity_map_rows(), [])
 
@@ -1208,7 +1210,8 @@ class BindTreeApiContractTest(_ScheduleApiTestBase):
             resp = self._bind()
         self.assertEqual(resp.status_code, 200, resp.text)
         tree = resp.json()["tree"]
-        self.assertEqual(tree["bind_failure"], "配對失敗，請檢查名稱是否完全相符")
+        # 另一個組織的帳號裡有同名活動，但這個組織讀不到 → 對這裡就是「找不到」。
+        self.assertIn("「活動一」在 Meta 上找不到", tree["bind_failure"])
         self.assertIsNone(tree["nodes"][0]["bound_external_id"])
         self.assertEqual(self._channel_entity_map_rows(), [])
 
@@ -1364,7 +1367,7 @@ class BindTreeApiContractTest(_ScheduleApiTestBase):
             resp = self._bind()
         self.assertEqual(resp.status_code, 200, resp.text)
         tree = resp.json()["tree"]
-        self.assertEqual(tree["bind_failure"], "配對失敗，請檢查名稱是否完全相符")
+        self.assertIn("「組合1」在 Meta 上找不到", tree["bind_failure"])
         self.assertEqual(tree["nodes"][0]["bound_external_id"], "camp-2")
         self.assertEqual(  # 同一個 node_key 只有一列，覆寫不是新增
             self._channel_entity_map_rows(), [{"node_key": "1", "external_id": "camp-2"}]
@@ -1505,7 +1508,10 @@ class BindTreeApiContractTest(_ScheduleApiTestBase):
             resp = self._bind()
         self.assertEqual(resp.status_code, 200, resp.text)
         tree = resp.json()["tree"]
-        self.assertEqual(tree["bind_failure"], "配對失敗，請檢查名稱是否完全相符")
+        # 只講第一層那個節點——第二層根本沒去比對，訊息不該假裝它也失敗了；
+        # 「上一層沒配對成功時底下不會比對」那句話由 `bind_failure_message()` 固定附上。
+        self.assertIn("「活動一」在 Meta 上找不到", tree["bind_failure"])
+        self.assertNotIn("組合", tree["bind_failure"])
         self.assertIsNone(tree["nodes"][0]["bound_external_id"])
         self.assertIsNone(tree["nodes"][0]["children"][0]["bound_external_id"])
         self.assertEqual(calls, [])
@@ -1532,7 +1538,10 @@ class BindTreeApiContractTest(_ScheduleApiTestBase):
             resp = self._bind()
         self.assertEqual(resp.status_code, 200, resp.text)
         tree = resp.json()["tree"]
-        self.assertEqual(tree["bind_failure"], "配對失敗，請檢查名稱是否完全相符")
+        # 兩個同名手足產生兩句一模一樣的原因，訊息去重只講一次（兩邊都沒綁上不變）。
+        self.assertEqual(
+            tree["bind_failure"].count("「組合」在 Meta 上有 2 個同名的"), 1
+        )
         self.assertEqual(tree["nodes"][0]["bound_external_id"], "camp-1")  # 第一層照樣綁定
         self.assertIsNone(tree["nodes"][0]["children"][0]["bound_external_id"])
         self.assertIsNone(tree["nodes"][0]["children"][1]["bound_external_id"])

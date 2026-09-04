@@ -18,7 +18,26 @@ from app.schedule import repository as schedule_repo
 from app.schedule import tree as tree_mod
 
 NO_TREE_TO_BIND_MESSAGE = "還沒有成功產生的活動樹可以綁定，請先展開活動樹。"
-BIND_FAILURE_MESSAGE = "配對失敗，請檢查名稱是否完全相符"
+
+
+def bind_failure_message(failures: list[str]) -> str:
+    """把逐節點的失敗原因組成一句話。
+
+    2026-09-04 實機驗收：原本整批共用一句「配對失敗，請檢查名稱是否完全相符」（ADR 0055 §4
+    的「不逐節點分開講」），在真的失敗當下沒有下一步——它沒說是哪一個名稱對不上，也沒說
+    Meta 那邊是找不到、還是找到兩個同名的。這兩種要做的事完全相反：找不到是去 Meta 建、
+    或把名字改成一字不差；找到兩個是去 Meta 把重複的改名。**只講「有失敗」等於沒講。**
+
+    仍然保留「一次講完整批」這件事（不是每個節點各跳一個錯誤），ADR 0055 §4 要的是這個。"""
+    # 去重保序：同一份方案裡兩個節點可以取一樣的名字，那會產生兩句一模一樣的原因
+    # （`test_two_depth_two_siblings_same_name_both_stay_unbound` 就是這個形狀）。
+    # 兩個節點都沒綁上這件事不因為訊息合併而改變，重複講一次只是雜訊。
+    return (
+        "配對失敗："
+        + "、".join(dict.fromkeys(failures))
+        + "。名稱要一字不差（區分大小寫，前後空白也算）。"
+        "上一層沒有配對成功時，它底下的節點這次不會比對。"
+    )
 
 # 這個模組目前只認得 Meta 一個通路。通路轉接層是 T4 的事（ADR 0055 §8：綁定的「動作」是
 # 平台專屬的，通用的是 `channel_entity_map` 那張表，不是這段程式）。
@@ -44,15 +63,23 @@ def tree_with_bindings(conn, tree_row: dict, org_id: str, brand_id: str) -> dict
     return tree
 
 
-def bind_tree(conn, tree_row: dict, org_id: str, brand_id: str) -> bool:
+def _failure_reason(name: str, matches: list) -> str:
+    """0 筆與 2 筆以上要分開講——使用者要做的事相反（去建／去改名 vs 去把重複的改名）。"""
+    if not matches:
+        return f"「{name}」在 Meta 上找不到"
+    return f"「{name}」在 Meta 上有 {len(matches)} 個同名的"
+
+
+def bind_tree(conn, tree_row: dict, org_id: str, brand_id: str) -> list[str]:
     """票 11／T3b／T3c／T5：用名稱精準比對（區分大小寫、不 trim）把活動綁回第一層節點，
     已綁定的跳過；零筆或兩筆以上是失敗，不猜。第一層綁定成功（不論是這次剛綁的、還是
     先前就綁著）之後，才在它底下比對第二層——用它的 `bound_external_id`（活動 id）當
     父層範圍，只在這個活動內部找廣告組合；第一層沒綁成的，底下的第二層整批不比對，
     不猜整個帳號（ADR 0055 §7）。第二層（廣告組合）綁定成功之後，同一條規則再套一次
     深一層：第三層（廣告，ADR 0055 §7 留給這張票開）在它底下比對，只在這個廣告組合
-    內部找廣告；第二層沒綁成的，底下的第三層整批不比對。回傳「這一批有沒有任何一個節點
-    配對失敗」，訊息由呼叫端貼（整批同一句，不逐節點分開講，ADR 0055 §4）。"""
+    內部找廣告；第二層沒綁成的，底下的第三層整批不比對。回傳「這一批有哪些節點配對失敗、
+    各自是哪一種失敗」，空清單＝整批成功；組句子的是呼叫端（`bind_failure_message()`，
+    仍然一次講完整批，ADR 0055 §4）。"""
     tree = tree_with_bindings(conn, tree_row, org_id, brand_id)
     account_ids = meta_repo.bound_account_ids_for_brand(conn, org_id, brand_id)
     # 票 T3e（ADR 0055 §11）：深度 2（扛預算）節點綁定成功時，順手記一列
@@ -62,7 +89,8 @@ def bind_tree(conn, tree_row: dict, org_id: str, brand_id: str) -> bool:
     # 悄悄跳過沒人知道。深度 3（廣告）不寫 membership——那張表只認扛預算的那一層
     # （ADR 0055 §6），第三層再寫一列會讓 node_level_spend() 在兩層都算到同一筆錢。
     period = schedule_repo.get_latest_period(conn, org_id, brand_id)
-    channel_id, any_failure, newly_bound = None, False, False
+    channel_id, newly_bound = None, False
+    failures: list[str] = []
 
     for node in tree["nodes"]:
         if node["bound_external_id"] is None:
@@ -70,7 +98,7 @@ def bind_tree(conn, tree_row: dict, org_id: str, brand_id: str) -> bool:
                 conn, org_id, account_ids, node["name"]
             )
             if len(matches) != 1:
-                any_failure = True
+                failures.append(_failure_reason(node["name"], matches))
                 continue  # 沒有活動可以當第二層的父層範圍，子節點整批不比對
             channel_id = channel_id or schedule_repo.ensure_meta_channel(conn, org_id)
             schedule_repo.upsert_binding(
@@ -89,7 +117,7 @@ def bind_tree(conn, tree_row: dict, org_id: str, brand_id: str) -> bool:
                     conn, org_id, node["bound_external_id"], child["name"]
                 )
                 if len(matches) != 1:
-                    any_failure = True
+                    failures.append(_failure_reason(child["name"], matches))
                     continue  # 沒有廣告組合可以當第三層的父層範圍，孫節點整批不比對
                 channel_id = channel_id or schedule_repo.ensure_meta_channel(conn, org_id)
                 schedule_repo.upsert_binding(
@@ -116,7 +144,7 @@ def bind_tree(conn, tree_row: dict, org_id: str, brand_id: str) -> bool:
                     conn, org_id, child["bound_external_id"], grandchild["name"]
                 )
                 if len(matches) != 1:
-                    any_failure = True
+                    failures.append(_failure_reason(grandchild["name"], matches))
                     continue
                 channel_id = channel_id or schedule_repo.ensure_meta_channel(conn, org_id)
                 schedule_repo.upsert_binding(
@@ -130,4 +158,4 @@ def bind_tree(conn, tree_row: dict, org_id: str, brand_id: str) -> bool:
 
     if newly_bound:
         conn.commit()
-    return any_failure
+    return failures

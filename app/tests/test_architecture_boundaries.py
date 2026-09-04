@@ -1163,7 +1163,12 @@ class CoordinateDimensionSyncTest(unittest.TestCase):
 # 兩種紅法都實證過（不只一種）：（a）把 `coordinate_text` 從 `jobs.py` prompt 的 join 裡拿掉
 # → `AssertionError: '## 這個品牌的座標詞彙表' not found`；（b）把停用／否決的過濾條件改成
 # `if False:` → 停用掉的那個 offer 值又出現在 prompt 裡，斷在 `assertNotIn`。
-TEST_LINES_CEILING = 18767
+# 票 T8b 實機驗收回收（2026-09-04 稍晚）：18767 → 18782。這一次**沒有新增測試**——
+# 六處改的都是既有斷言：`bind_failure` 從比對一句籠統的整批訊息，改成比對「哪一個節點、
+# 哪一種失敗」（找不到 vs 有兩個同名的），外加一條 `assertNotIn("組合")` 證明沒去比對的
+# 那一層不會被假裝成失敗、一條 `count(...) == 1` 證明同名手足的原因只講一次。
+# 斷言變強不變弱，多出來的行是那六處的理由註解。
+TEST_LINES_CEILING = 18782
 
 
 def _line_totals() -> tuple:

@@ -340,10 +340,12 @@ def _run_bind(conn, brand_id: str, org_id: str) -> dict:
     if tree_row is None or tree_row["status"] != "succeeded":
         raise web.ApiError(400, "no_tree", binding_mod.NO_TREE_TO_BIND_MESSAGE)
 
-    any_failure = binding_mod.bind_tree(conn, tree_row, org_id, brand_id)
+    failures = binding_mod.bind_tree(conn, tree_row, org_id, brand_id)
     response = state._brand_response(conn, brand_id, org_id)
     # settled 段第 7 點：這個欄位只在這支路由的回應裡非空、從不落地，其餘讀取路徑一律 null。
-    response["tree"]["bind_failure"] = binding_mod.BIND_FAILURE_MESSAGE if any_failure else None
+    response["tree"]["bind_failure"] = (
+        binding_mod.bind_failure_message(failures) if failures else None
+    )
     return response
 
 
