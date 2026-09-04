@@ -30,7 +30,10 @@
 
 ## 開場
 
-讀 `BOARD.md`；有 `[>]` 的票，主動報「哪張、進度、卡在哪」。看板只放未完成，完成即刪行。
+讀 `BOARD.md`；有 `[>]` 的目標行，讀它的 `docs/issues/<目標>/` 資料夾，主動報「哪張票、進度、卡在哪」。
+看板一行一個目標，細節全在資料夾裡（`spec.md`／`NN-*.md` 票／`issue-*.md`）；票做完刪票檔，資料夾空了才刪行。
+做票途中發現、這張票不修的事 → `issue-<名>.md`，不上看板；沒有目標認領的模組欠帳 → `docs/tech-debt.md` §七。
+看板寫入與派工都過 plugin 的 `board-shape` 閘門，節標題、段落、續行一律紅。
 `HANDOFF-*.md` 讀完即轉成看板行或票，同一 session 內刪除；「現在做到哪」只活在 `BOARD.md`，寫第二份必漂移。
 
 ## 快速事實
@@ -55,7 +58,7 @@
 - 語彙 `CONTEXT.md`；決策 `docs/adr/`；技術債與機器閘門 `docs/tech-debt.md`（動超標檔前先讀）
 - 測試只寫四類（金額／租戶隔離／API 契約／資料正確性）——規則在全域 CLAUDE.md 與 skeleton-slice-pencil 工作流，`docs/workflow-diet.md` 已刪除
 - `app/methodology/` 是 prompt 零件不是文件，刪改先問
-- 議題：`docs/issues/<slug>/`（gitignore，票死即刪）；規則見 skeleton-slice-pencil 工作流
+- 議題：`docs/issues/<目標>/`（gitignore；一個看板行一個資料夾，票死即刪票檔）；規則見 skeleton-slice-pencil 工作流
 
 ## Tests
 
@@ -88,9 +91,9 @@
 - **契約頁隨票補**：`app/` 有 16 個模組，`docs/contracts/` 現有 6 份（brand_intelligence／
   brand_web／core／identity／meta／schedule），缺 10 份。動到某個模組的 route C 票，先照
   `container-contract.md` §8 的五項格式把那個模組的 `docs/contracts/<module>.md` 寫出來，再開始改。
-  **閘門形狀（2026-09-03 裁決，尚未建，見 BOARD.md）**：一份「還沒有契約頁的模組」凍結清單，
-  **只准變短**——開票當天不會紅（清單就是現況），新模組沒有頁會紅，補完一份就從清單劃掉一行。
-  跟 `KNOWN_OVERSIZED_FILES` 同一種棘輪，不是「全站 10 個一起紅」那種一開就會被繞過的閘門。
+  **閘門已建**：`ContractPageRatchetTest`＋`MODULES_WITHOUT_CONTRACT`（`test_architecture_boundaries.py:1706`），
+  只准變短——新模組沒有頁會紅，補完一份就從清單劃掉一行。`app/identity/` 還沒有任何 ADR 管，
+  下一個碰 identity 的 route C 問題順手寫第一份。
 - CI：`.github/workflows/ci.yml`（GitHub Actions），push/PR 到 `saas`／`master` 都跑；
   backend job 開 `supabase start` 給 Postgres／anon role，frontend job 跑 lint／typecheck／test／build。
 

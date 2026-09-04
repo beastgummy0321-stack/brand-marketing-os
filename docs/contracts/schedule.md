@@ -93,3 +93,32 @@ Module-local and reversible, decided here rather than in an ADR:
   message. T3d's ticket demanded a global positional zip instead, which is not implementable
   against this module's own reordering test; the reviewer returned `blocked-upstream` and this
   line is the corrected rule.
+
+## Measured (facts this module's next ticket must not re-discover)
+
+Moved here from `BOARD.md` on 2026-09-04 (full text: `BOARD.md` @ `6574191`).
+
+- **Position in the prompt decides whether an instruction runs; wording does not** (T8b acceptance,
+  2026-09-04). Same model (`gpt-5.6-luna` via local codex), same seven-dimension vocabulary: a
+  2,210-char prompt filled all seven; the 21,679-char production prompt filled only `angle`. Three
+  rounds of rewording changed nothing. Moving the vocabulary section from the middle to the **last**
+  paragraph (`jobs.py`'s join order) made all six creatives 7/7. Rule: an instruction of the kind
+  "answer this after you have written" goes last, never before 8k chars of methodology plus 8k of
+  tree. The next person who finds the agent skipping a step looks at where the instruction sits
+  before touching its wording.
+- **One coordinate has two ROAS values that are both true; drawing one is picking a lie**
+  (2026-09-04 probe). The backend `roas` denominator is spend on the days that tracked a conversion,
+  not all spend (ADR 0057 §7, deliberately). Real ad, four days: spend 3,570, tracked revenue
+  2,737.8, coverage 75% → conservative ROAS 0.767 (losing), optimistic 1.029 (winning). The chart
+  draws a segment from conservative to optimistic; crossing the break-even line means "not enough
+  data". Arithmetic in `frontend/src/lib/quadrant.ts`, test `quadrant.test.ts` uses these numbers.
+  **The next place that shows a ROAS asks which denominator first.**
+- `compute_money()` (T3e, ADR 0055 §11) takes spend from `daily_entity_spend(level="adset")`, not
+  `spend_summary(level="campaign")`: membership is per ad set, and a different level does not add up.
+- `app/methodology/README.md` rows 「成效判讀／下期草案」 and 「期中檢查點」 have **zero callers**;
+  `providers.py:154`'s `performance_reading` label is empty. The review methodology is already
+  written; the step ⑨ ticket wires it, it does not write it.
+- Mind-map C (diagnosis), D (market), E (audience), P (weekly/monthly report): summaries kept, no
+  tickets until the loop has run.
+- Milestone stage one was walked end to end on a real account on 2026-08-29 (晨光咖啡 + BP AD) and
+  again on 2026-09-04 (Beast Prime + BP AD). This round stands on that, it does not replace it.

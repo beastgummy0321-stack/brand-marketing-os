@@ -230,3 +230,40 @@ FastAPI 的規則：`def` 會被丟進執行緒池，`async def` 跑在 uvicorn 
 
 判斷下一次是不是同一種情況，一句話：**新增的行數是那張票的交付物本身**（票要求的功能就是
 需要這些行），還是**為了繞過閘門而塞進來的**？前者調高並寫理由；後者不准。
+
+## 七、模組欠帳（2026-09-04 從看板搬來；沒有目標認領的 issue 住這裡，被目標認領時搬進 `docs/issues/<目標>/`）
+
+全文出處 `BOARD.md` @ `6574191`。每條都已查證**今天咬不到人**，所以是欠帳不是漏洞；動到那個模組的
+route C 票先讀這一節。
+
+- **`campaign_period` 的 FK 沒用複合鍵（T6a 審查量出）**：`channel_entity_map`／`period_node_membership`／
+  `channel_credential` 用 `FOREIGN KEY (channel_id, org_id) REFERENCES ad_channel(id, org_id)` 在資料庫層擋跨組織；
+  但指向 `campaign_period` 的八條 FK（`decision`／`interrupt`／`llm_task`／`feedback`／`period_node_membership`／
+  `campaign_period_budget_version`／`channel_revenue`＋自己的 `source_period_id`）與六條自參照全是單欄。
+  升成 `(id, org_id)` 唯一鍵＋八條複合 FK 是一張獨立 route C 票，不是順手做的事。
+- **`_row_hash()` 對 int／float 不穩定（T7 審查活體證出）**：`app/orders/channel.py` 把 `revenue`／`quantity`
+  直接餵 `json.dumps`，`hash(5000, 3)` ≠ `hash(5000.0, 3.0)`。今天唯一呼叫端 `app/orders/routes_api.py:161,164`
+  先過 `parse_number()`（`app/shared/web.py:291-298`，永遠回 `float | None`）所以壓成同一個雜湊。
+  防線是隱性的：第二個呼叫端（補登腳本、後台工具）一出現，去重靜靜失效，營收翻倍那顆 bug 回來。
+  根治兩行（`float()` 統一），但是金流路徑，走 route C。
+- **租戶防線不對稱（T3c 審查發現）**：`ad_set_ids_by_exact_name`／`ad_ids_by_exact_name`
+  （`app/meta/repository.py`）只拿 `org_id` 取權杖，`campaign_id`／`adset_id` 原封不動送 Meta、不驗屬於哪個組織；
+  姊妹函式 `campaign_ids_by_exact_name` 有驗。擋住跨組織的是呼叫端的形狀，審查逐條追過沒有任何請求構造得出
+  跨組織輸入。補法比「一次查詢」貴：這個資料庫沒有一張表存「campaign_id 屬於哪個組織」，要嘛多打一次
+  Meta API（先查官方文件核對回傳形狀），要嘛改呼叫鏈把 `binding.py` 驗過的結果往下傳（改簽章）。
+  是要不要付代價的設計題，留給使用者。`docs/contracts/meta.md` 已逐字記下這個不對稱。
+- **404 沒有機器可讀的代碼**（07-3 剩下的那半，2026-09-04 判不做）：`NotFoundKind`（`app/shared/web.py:188-192`）
+  只帶中文名詞；`/api/health` 回「找不到頁面」、找不到品牌回「找不到這個品牌」，靠字串分辨。加 `code` 成本低、
+  價值零——今天沒有畫面分辨這兩件事。真的有畫面需要分岔時再開票。
+- **五個記憶體背景工作**（品牌智庫抽原話、產品調研、顧問報告、建檔精靈初掃與出題）還是「一張 dict＋一條執行緒」，
+  重開後端就消失。排程那三支已搬上佇列（ADR 0042）；這五支沒量到痛過。真的痛了照 ADR 0042 同一個做法搬。
+- **需批准（schema）四個沒人用的欄位**：`order_record.attribution_override`、`interrupt.kind`／`visible_from`／
+  `campaign_cycle_id`；欄位還在所以 `enqueue()` 那三個沒有生產呼叫端的參數也還留著。`decision` 表 2026-09-01
+  改判不刪（要當「建議落表」，形狀剛好）。
+- **`meta-format-specs.md:52-53` 的 `script`／`hook_pool` 沒有字數預算**（實跑佔 18.1%／7.3%）。2026-09-01 裁決不收：
+  ADR 0047 已拿掉約六成輸出，實跑從沒真的被截斷過；T1b 閘門只擋圖片欄位。真的被截斷一次再回頭收。
+- **`assets` bucket 沒設 `file_size_limit`**（`supabase/migrations/20260830000002_core_storage_assets_bucket.sql`）：
+  上傳端已擋兩道 50MB（`app/brand_web/routes_library.py:57`／`:79`／`:273`），這是第二道防線不是沒有防線。
+  補一行要開新 migration 檔，照憲法第 9 條先提計畫等批准，不算順手。
+- **`決策 NNNN` 那 84 處已緩解**：`CONTEXT.md` 有一節說明。剩 `report.py:1`／`repository.py:1244` 兩處寫
+  「決策 0017」，由那節涵蓋，不動。

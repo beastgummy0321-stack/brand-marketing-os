@@ -85,3 +85,27 @@ writes it stays in `app/meta/` regardless, because there is still only one chann
 - ADR 0056 — a channel catalogue is a file; its per-org state is a table.
 - ADR 0057 — ad-level spend meets the coordinate through the depth-3 binding, which freezes the
   tree that produced it.
+
+## Measured (facts about the real account; re-measure before a ticket leans on one)
+
+Moved here from `BOARD.md` on 2026-09-04 (full text: `BOARD.md` @ `6574191`).
+
+- **The three levels of spend agree exactly.** `uv run python -m app.meta.daily_pull --since 2026-08-01`
+  brought in 349 rows (ad 254 / 13 ads, adset 60 / 2 sets, campaign 35 / 1 campaign), each level
+  summing to 63,464 TWD, day by day, impressions and clicks alike. Measured twice (2026-09-03 with
+  166 rows, 2026-09-04 with 349). No tolerance needed. Rows with a `roas`: ad 93/254 (37%).
+- **Exact-name binding is verified three levels deep on the real account** (2026-09-04, commit
+  `5dfe8d8`): the full-width `｜` separator is fine; `PAUSED` / `IN_PROCESS` entities bind (the match
+  asks whether it exists, not whether it runs — `graph.py:187-193`); a partial success stays — the
+  campaign binds first, adset and ad on the next press, and the failed press does not clear bound
+  rows. **Meta easily grows two identically named ad sets** (the creation flow leaves an empty one);
+  that was the first real trap hit.
+- `channel_entity_map`'s three rows are real name-matched bindings now; the hand-inserted row is gone.
+  Never "verify" binding with a hand-inserted row again.
+- `graph.fetch_page`'s `timeout=10.0` has never been measured. When it is really short, the official
+  next step is a smaller date window, not a longer timeout.
+- worker `concurrency` is procrastinate 3.9.0's default 1 (`app/background` sets nothing): N jobs
+  still run one at a time. Running N agents at once is spending N budgets at once — measure one
+  real run's duration before changing it.
+- `daily_pull.py:89` pulls `[today-7, today]` (reason at `:54`); the 7d_click attribution window has
+  no hole (checked 2026-09-02).

@@ -204,3 +204,35 @@ _Avoid_: 提示詞、prompt 模板、指令
 audience·pain·angle·hook·proof·offer·format（`COORDINATE_KEYS`，`app/schedule/creative.py:42`——
 外殼只認名字，不認值的意思）。`切角`、`主題`、`素材檔`、`創意簡報`、`一條學習` 全部下放給代理，
 住在部門資料夾的方法論檔裡。**這些詞出現在外殼的程式碼裡，就是邊界破了。**
+
+## 量到的教訓（跨模組；單一模組的量測在該模組契約頁的 Measured 節）
+
+2026-09-04 從 `BOARD.md` 搬來（全文：`BOARD.md` @ `6574191`）。看板從此只放目標行。
+
+**下一輪全面體檢的觸發點**：不是排程，是可觀察的事件，先到者為準——T6c 收尾（閉環合攏），
+或任何人再一次抓到一份文件在說謊。要找的四種病都有具體形狀，2026-09-04 那一輪四種全部又中：
+
+- **（a）文件用現在式描述已經不存在的東西。** 那輪中了三次：看板寫 T7 的成因是「CSV 匯兩次營收翻倍」
+  （實際兩條 CSV 路徑都去重）、寫「六維沒有現成清單」（`hook`／`format` repo 裡本來就有：
+  `copywriting.md:35-43` 五個公式、`meta-format-specs.md:16/34/49` 三個）、寫 `brand_coordinate` 105 列
+  （實際 140）。**開票前每條文件宣稱都要重量一次。**
+- **（b）棘輪餘裕歸零**，逼得每張票都要打一次「這算不算放寬容忍清單」的官司。
+  **開票時把餘裕一起量進去**：`TEST_LINES_CEILING` 跟 `KNOWN_MODULE_SIZES` 都要量
+  （`_line_totals()`／`_module_sizes()` 印當下值；數字不抄進文件，抄了就過期），M1 中途撞到 `app/core` 0 餘裕。
+  前端不吃這兩個棘輪（只數 `app/` 的 Python）。要加測試的票先在票裡寫明授權調高，否則實作者會
+  （正確地）停下來回報 blocked-upstream。**不要為了塞一段註解去調棘輪**——把註解壓短或搬去 `tokens.css`。
+  裁決本文在 `docs/tech-debt.md` §六。
+- **（c）閘門靠運氣過，或根本不會紅。** ADR 0051 的 `document.documentElement.scrollWidth` 公式因為
+  三層 `overflow:hidden` 永遠量不到溢出；七維同步閘門的 regex 被一段對抗性 TypeScript 騙過
+  （`docs/issues/gates/issue-coordinate-sync-regex-ceiling.md`）。**新閘門一定要證紅，而且不只證一種紅法。**
+- **（d）規則寫在散文裡卻沒有對應的機器閘門。** 看板那句「只放未開始＋進行中」就是最新一例——
+  現在由 plugin 的 `board-shape` 閘門守。
+
+**Playwright 的方法論結論**：它仍然是預設工具，弱的不是它是斷言——它只回答你寫下來的問題。
+2026-09-04 多抓到的三件事，靠的是在一個沒有人寫過斷言的畫面上、看著真資料。既有的寬度測試那天是綠的，
+而它問的是「有沒有橫向溢出」，不是「這頁好不好用」。**先看 CSS 再喊版面 bug**（`--width-form` 那次）。
+
+**租戶隔離與 RLS（2026-09-02 R1～R4 全清）**：決策與量到的數字在 ADR 0052。`public` 47 張表每張都有
+`TO authenticated` 的 policy；RLS 仍是第二道防線，主要門禁是 `require_brand` 與查詢層 `org_id` 篩選。
+新表照三條棘輪走（每張表開 RLS、有 `org_id` 的表要有 policy、讀租戶表的函式要帶租戶欄位），
+檔名在 `CLAUDE.md` Tests 節。
