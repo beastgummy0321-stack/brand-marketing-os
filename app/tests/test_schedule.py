@@ -1723,6 +1723,42 @@ class CreativeApiContractTest(_ScheduleApiTestBase):
         self.assertIn("【方法論：creative-matrix.md】", prompt_text)
         self.assertIn("【方法論：meta-format-specs.md】", prompt_text)
 
+    def test_creative_prompt_carries_the_brand_coordinate_vocabulary(self):
+        """票 T8b：七維座標的詞彙表要真的進 prompt。落地時
+        `repository._resolve_coordinates()` 拿代理回的字串比對 `brand_coordinate.label`，
+        比對不到就寫 NULL——所以少了這一節，代理只會造詞，六維照樣全空，而且外面看起來像
+        功能已經動了。停用掉的詞不給代理挑（使用者在畫面上劃掉的值不該再被填回來）。
+        紅法：把 `jobs.schedule_creative()` 那行 `coordinate_text` 從 prompt 的 join 裡拿掉。"""
+        self._succeed_plan_and_tree()
+        brand_id = self.brand["id"]
+        listed = self.client.get(f"/api/schedule/brands/{brand_id}/coordinates")
+        self.assertEqual(listed.status_code, 200, listed.text)
+        disabled = next(
+            c for c in listed.json()["coordinates"] if c["dimension"] == "offer"
+        )
+        off = self.client.post(
+            f"/api/schedule/brands/{brand_id}/coordinates/{disabled['id']}/disable",
+            json={"disabled": True},
+        )
+        self.assertEqual(off.status_code, 200, off.text)
+        fake = _fake(_creative_fenced([_one_creative(name) for name in self._LEAF_NODE_NAMES]))
+        schedule_jobs.PROVIDER = fake
+
+        resp = self._generate()
+        self.assertEqual(resp.status_code, 200, resp.text)
+        self._run_worker()
+
+        self.assertEqual(len(fake.calls), 1)
+        prompt_text = fake.calls[0]["messages"][0]["content"]
+        self.assertIn("## 這個品牌的座標詞彙表", prompt_text)
+        # 七個維度各自一段，順序照 COORDINATE_KEYS。
+        for dimension in creative_mod.COORDINATE_KEYS:
+            self.assertIn(f"### {dimension}", prompt_text)
+        # 「無證明」是 proof 維度真的有的值（票 T8a 裁決③：沒放證明也要有 key）。
+        self.assertIn("無證明", prompt_text)
+        # 停用掉的那個值不出現——代理挑不到使用者已經劃掉的詞。
+        self.assertNotIn(disabled["label"], prompt_text)
+
     def test_get_after_post_returns_identical_creative(self):
         self._succeed_plan_and_tree()
         schedule_jobs.PROVIDER = _fake(_creative_fenced(

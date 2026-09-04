@@ -1153,7 +1153,17 @@ class CoordinateDimensionSyncTest(unittest.TestCase):
 #      都會變成互相矛盾）。
 #   3. `test_above_the_ceiling_is_caught`（done-check 3）——把總額拉到核准當時的每日上限
 #      之上，`within_approved_ceiling` 要變 false。
-TEST_LINES_CEILING = 18721
+# 票 T8b：18721 → 18767（2026-09-04 實測，含本段理由註解自己佔的行）。開票當天餘裕是 0，
+# 授權寫在這裡：新增的 36 行是一支測試
+# （`test_schedule.py::CreativeApiContractTest::test_creative_prompt_carries_the_brand_coordinate_vocabulary`），
+# 它守的是 API 契約——`schedule_creative` 的 prompt 有沒有帶著這個品牌的 `brand_coordinate`
+# 詞彙表。沒有這一節，代理只能自己造詞，落地時 `repository._resolve_coordinates()` 比對
+# `brand_coordinate.label` 全部落空、七維寫回 NULL，而畫面與閘門都是綠的——這正是
+# BOARD.md「要找的四種病」第 (c) 種（功能靠運氣過，或根本不會紅）。
+# 兩種紅法都實證過（不只一種）：（a）把 `coordinate_text` 從 `jobs.py` prompt 的 join 裡拿掉
+# → `AssertionError: '## 這個品牌的座標詞彙表' not found`；（b）把停用／否決的過濾條件改成
+# `if False:` → 停用掉的那個 offer 值又出現在 prompt 裡，斷在 `assertNotIn`。
+TEST_LINES_CEILING = 18767
 
 
 def _line_totals() -> tuple:

@@ -43,7 +43,7 @@ from app.core.db import connection
 from app.llm import context_compiler, gateway, methodology, providers
 from app.schedule import binding as binding_mod
 from app.schedule import plan as plan_mod
-from app.schedule import routes, state
+from app.schedule import repository, routes, state
 
 # 唯一的供應商實例：這三支 task body 現在是全站唯一真的打代理的地方（routes.py 的三支 POST
 # 端點自己不再打），比照 routes.py 搬過來之前的既有寫法——測試用
@@ -106,6 +106,40 @@ def _creative_params_text(tree: dict) -> str:
     return "\n".join([
         "## 這次要產文案的活動結構",
         json.dumps(body, ensure_ascii=False, indent=2),
+    ])
+
+
+def _coordinate_vocabulary_text(coordinates: list[dict]) -> str:
+    """票 T8b：把這個品牌的座標詞彙表變成 prompt 的一節。
+
+    為什麼非有這一節不可：落地時 `repository._resolve_coordinates()` 拿代理回的字串去比對
+    `brand_coordinate.label`，比對不到就寫 `NULL`。所以只在部門任務檔改一句「七維都要填」而
+    不附這份清單，代理會自己造詞、七格照樣全是 NULL——畫面上卻長得像功能已經動了。
+
+    清單從資料庫讀、不是從 `repository._SEED_COORDINATES` 讀：使用者在「創意座標」分頁停用
+    掉的詞（`routes.disable_brand_coordinate`）與自己加的詞（`create_brand_coordinate`）都要
+    算數，代理不該挑一個使用者已經劃掉的值。被 `feedback` 否決過的（`rejected`）同樣不給。
+    維度順序照 `COORDINATE_KEYS`，跟部門任務檔列的七個鍵同一個順序。"""
+    by_dimension: dict[str, list[str]] = {}
+    for row in coordinates:
+        if row["disabled_at"] is not None or row["rejected"]:
+            continue
+        situation = (row["attributes"] or {}).get("situation") or ""
+        by_dimension.setdefault(row["dimension"], []).append(
+            f"- {row['label']}" + (f"——{situation}" if situation else "")
+        )
+    sections = [
+        f"### {dimension}\n" + "\n".join(by_dimension[dimension])
+        for dimension in repository.COORDINATE_KEYS if by_dimension.get(dimension)
+    ]
+    if not sections:
+        return ""
+    return "\n\n".join([
+        "## 這個品牌的座標詞彙表",
+        "`coordinates` 七個維度的值只能從下面各自那一段裡挑，填 **label 原文、一字不差**"
+        "（破折號後面是這個值什麼時候用，是說明、不是值的一部分）。挑不到貼切的就給 `null`，"
+        "不要自己造一個新詞——造出來的詞落地時比對不到，那一維會變成空的。",
+        *sections,
     ])
 
 
@@ -252,10 +286,16 @@ def schedule_creative(org_id: str, brand_id: str, tree_task_id: str,
         methodology_result = methodology.compile(
             conn, state.CREATIVE_METHODOLOGY_TASK_LABELS, brand_id=brand_id
         )
+        # 票 T8b：座標詞彙表接在方法論後面、活動結構前面——`creative-matrix.md` 解釋角度是
+        # 什麼，這一節給的是落地時真的拿去比對的那些字串本身。
+        coordinate_text = _coordinate_vocabulary_text(
+            repository.list_coordinates(conn, org_id, brand_id)
+        )
         params_text = _creative_params_text(tree)
         prompt = "\n\n".join(
             section for section in
-            (department_text, methodology_result.text, params_text, brand_context) if section
+            (department_text, methodology_result.text, coordinate_text, params_text,
+             brand_context) if section
         )
 
         context = gateway.TaskContext(
