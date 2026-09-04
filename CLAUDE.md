@@ -58,7 +58,7 @@
 - 語彙 `CONTEXT.md`；決策 `docs/adr/`；技術債與機器閘門 `docs/tech-debt.md`（動超標檔前先讀）
 - 測試只寫四類（金額／租戶隔離／API 契約／資料正確性）——規則在全域 CLAUDE.md 與 skeleton-slice-pencil 工作流，`docs/workflow-diet.md` 已刪除
 - `app/methodology/` 是 prompt 零件不是文件，刪改先問
-- 議題：`docs/issues/<目標>/`（gitignore；一個看板行一個資料夾，票死即刪票檔）；規則見 skeleton-slice-pencil 工作流
+- 議題：`docs/issues/<目標>/`（進版控；一個看板行一個資料夾，票死即刪票檔，歷史在 git log）；規則見 skeleton-slice-pencil 工作流
 
 ## Tests
 
