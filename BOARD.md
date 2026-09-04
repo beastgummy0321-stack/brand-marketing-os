@@ -4,6 +4,5 @@
 > 順序＝離閉環多遠（2026-09-04 裁決）；會靜靜算錯錢的東西一律插回最前面。改看板前先讀該目標的 spec.md。
 
 - [>] 廣告閉環 ⑧⑨ ｜ docs/issues/ad-loop/ ｜ 卡在你：把廣告02／03 貼進 Meta 並打開，兩個座標花到錢才開 T6c
-- [ ] 閘門 ｜ docs/issues/gates/ ｜ 檔案層環掃描已裝完，剩前端 depcruise 與七維 regex 天花板
 - [ ] 介面收尾 U1／U3 ｜ docs/issues/ui/ ｜ 等你點頭換字體
 - [ ] 上線／上雲前必還 ｜ docs/issues/deploy/ ｜ 卡在還沒選部署平台

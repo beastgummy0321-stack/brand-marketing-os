@@ -673,22 +673,62 @@ _TS_COORDINATE_LABELS_BLOCK = re.compile(
 )
 _TS_TUPLE_FIRST_KEY = re.compile(r'\["([a-z_]+)",')
 
+# 憲法規則 5 逐字抄下來的那七個，順序照抄。這是權威，不是「其中一份原始碼」——
+# 2026-09-04 補：原本三份只互相比對，於是三份同時清空也會全綠（空清單彼此相等）。
+# 拿一份文件當基準才有底線可言，而這七個字在 CONSTITUTION.md 有明文出處，不是這裡編的。
+CONSTITUTION_COORDINATE_KEYS = [
+    "audience", "pain", "angle", "hook", "proof", "offer", "format",
+]
+
 
 class CoordinateDimensionSyncTest(unittest.TestCase):
-    """票 T8a：三邊的七個維度鍵名跟順序要一致。全部當純文字讀，不執行、不 import
-    （TS 那兩份是前端程式碼，這支測試檔跑在 Python 這邊）。"""
+    """票 T8a：三邊的七個維度鍵名跟順序要一致，而且都等於憲法規則 5 那七個。
+    全部當純文字讀，不執行、不 import（TS 那兩份是前端程式碼，這支測試檔跑在 Python 這邊）。
+
+    2026-09-04 補強：本測試原本只找「第一個同名宣告」，T8a 的審查因此騙過它——在真正的
+    `export const COORDINATE_DIMENSIONS` 前面插一個同名、七鍵正確的假宣告（合法 TS，不同
+    作用域），再把真的那份弄壞，閘門全綠。現在改成「同名宣告只准有一個」，那一招當場紅。
+    這仍然不是 TS parser（票面禁裝，也沒有這個依賴），但它擋掉的不再只是手滑。
+    """
+
+    def _one_declaration(self, text: str, pattern: re.Pattern, rel: str, const_name: str):
+        """整份檔案裡這個名字只准宣告一次。多一個＝有人放了誘餌，少一個＝名字被改掉了。"""
+        matches = list(pattern.finditer(text))
+        self.assertEqual(
+            len(matches), 1,
+            f"{rel} 裡 {const_name} 的宣告有 {len(matches)} 份，只准有 1 份。\n"
+            "兩份以上：純文字掃描只會讀到第一份，第二份改壞了也不會紅——這正是 2026-09-04 "
+            "審查騙過這道閘門的手法。零份：名字被改掉或刪掉了。",
+        )
+        return matches[0]
 
     def _python_keys(self) -> list:
-        path = APP_DIR / "schedule" / "creative.py"
-        match = _PY_COORDINATE_KEYS.search(path.read_text(encoding="utf-8"))
-        self.assertIsNotNone(match, "app/schedule/creative.py 找不到 COORDINATE_KEYS")
+        rel = "app/schedule/creative.py"
+        text = (APP_DIR / "schedule" / "creative.py").read_text(encoding="utf-8")
+        match = self._one_declaration(text, _PY_COORDINATE_KEYS, rel, "COORDINATE_KEYS")
         return re.findall(r'"([a-z_]+)"', match.group(1))
 
     def _ts_keys(self, rel: str, block_pattern: re.Pattern, const_name: str) -> list:
-        path = REPO_ROOT / rel
-        match = block_pattern.search(path.read_text(encoding="utf-8"))
-        self.assertIsNotNone(match, f"{rel} 找不到 {const_name}")
+        text = (REPO_ROOT / rel).read_text(encoding="utf-8")
+        match = self._one_declaration(text, block_pattern, rel, const_name)
         return _TS_TUPLE_FIRST_KEY.findall(match.group(1))
+
+    def test_all_three_equal_the_constitution(self):
+        """三份都要等於憲法那七個。少了這條，三份同時被清空或同時被改錯也會全綠。"""
+        for label, keys in (
+            ("app/schedule/creative.py COORDINATE_KEYS", self._python_keys()),
+            ("frontend/src/lib/coordinatesApi.ts COORDINATE_DIMENSIONS", self._ts_keys(
+                "frontend/src/lib/coordinatesApi.ts",
+                _TS_COORDINATE_DIMENSIONS_BLOCK, "COORDINATE_DIMENSIONS")),
+            ("frontend/src/components/schedule/CampaignTree.tsx COORDINATE_LABELS",
+             self._ts_keys("frontend/src/components/schedule/CampaignTree.tsx",
+                           _TS_COORDINATE_LABELS_BLOCK, "COORDINATE_LABELS")),
+        ):
+            self.assertEqual(
+                keys, CONSTITUTION_COORDINATE_KEYS,
+                f"{label} 跟 CONSTITUTION.md 規則 5 的七維對不上（鍵名或順序）：\n"
+                f"  這裡: {keys}\n  憲法: {CONSTITUTION_COORDINATE_KEYS}",
+            )
 
     def test_seven_dimension_keys_agree_python_and_typescript(self):
         python_keys = self._python_keys()
@@ -1233,7 +1273,11 @@ class CoordinateDimensionSyncTest(unittest.TestCase):
 # 守的是模組邊界（測試四類之外的第五類，本檔整支都是），不是畫面行為。
 # 順手修掉一個盲點：`from app import storage` 這種寫法原本被 `_layer_of()` 判成 None，
 # 三條 app.intake → app.storage 的依賴在舊的兩道掃描裡是隱形的。
-TEST_LINES_CEILING = 18846
+# 七維同步閘門補強（2026-09-04 晚，看板「閘門」目標）：18846 → 18892。兩件事：
+# `_one_declaration()`（同名宣告只准一份，擋掉審查用假宣告騙過閘門那一招）與
+# `test_all_three_equal_the_constitution`（三份都要等於憲法規則 5，擋掉三份同時錯還全綠）。
+# 守的是資料正確性——七個維度鍵名對不上，回來的廣告成效數字就掛錯座標。
+TEST_LINES_CEILING = 18892
 
 
 def _line_totals() -> tuple:

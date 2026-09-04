@@ -11,6 +11,8 @@
 | `LayerDirectionTest` | 只准依賴排在自己前面的層 | `LAYER_ORDER`／`KNOWN_LAYER_VIOLATIONS` |
 | `ImportCycleScanTest` | 不得新增**套件之間**的 import 環 | `KNOWN_IMPORT_CYCLES` |
 | `FileImportCycleScanTest` | 不得有**檔案之間**的 import 環（含同一套件內部） | 無欠帳清單——2026-09-04 量到違規數 0，沒有債要凍 |
+| `CoordinateDimensionSyncTest` | 三份七維鍵名都要等於憲法規則 5，且同名宣告只准一份 | `CONSTITUTION_COORDINATE_KEYS`（抄自 `CONSTITUTION.md` 規則 5） |
+| 前端 `feature-internals-are-private` 等三條 | 功能資料夾之間只准走 `index.ts`；`layout` 是共用櫃；只有 `App.tsx` 認得全部功能、且只有 `main.tsx` 准 import 它 | `frontend/.dependency-cruiser.cjs`（ADR 0060）；`npm run depcruise`，CI 每次 push 跑 |
 | `TestRatioTest` | 測試**絕對行數**只准往下（ADR 0041） | `TEST_LINES_CEILING`。2026-08-30 從比值改成絕對行數：比值版在同一天被刪碼逼著調高兩次（0.858→0.862→0.865），因為刪 production 會讓分母變小、比值被動漲——等於懲罰刪死碼，而唯一能變綠的動作是調鬆閘門自己。改成絕對行數後，刪碼不會紅、加測試才會紅。**數字不寫在這裡**——它每張真的需要測試的票都會動一次，抄一份到文件就是保證過期（2026-09-03 查證：本欄原本寫 14,305，實際已經是 17,867）。當下值一律看那一行。**比值只是印出來的讀數，不是目標**：ADR 0041 明文「沒有任何文件再訂那個數字」，`docs/workflow-diet.md` 已刪除 |
 | `ModuleSizeRatchetTest` | 每個套件的行數凍在現況，調高要改明表 | `KNOWN_MODULE_SIZES` |
 

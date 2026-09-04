@@ -16,7 +16,7 @@ import { Badge } from "../shared/Badge";
 import { IntakeJobRow } from "../shared/IntakeJobRow";
 import { LimitCard } from "../shared/LimitCard";
 import { useIntakeJob } from "../useIntakeJob";
-import { ProductNewPanel } from "../../products/panels/ProductNewPanel";
+import { ProductNewPanel } from "@/components/products";
 
 /** 初掃＋初掃結果（契約 S4.14–S4.24）：進入這一步且草稿還沒掃過就自動開始背景工作。 */
 export function ScanStep({

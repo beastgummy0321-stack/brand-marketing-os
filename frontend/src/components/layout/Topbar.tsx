@@ -1,6 +1,6 @@
 import { ActiveJobsBell } from "./ActiveJobsBell";
 import { Link } from "react-router-dom";
-import { OrgMenu } from "@/components/auth/OrgMenu";
+import { OrgMenu } from "@/components/auth";
 
 export function Topbar() {
   return (

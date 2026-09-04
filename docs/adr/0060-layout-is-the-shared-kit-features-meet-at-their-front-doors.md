@@ -41,8 +41,10 @@ false alarms on the day it ships gets loosened within the month.
    Anyone may import any file in it directly. Barrel-free on purpose: `@/components/layout/Pager`
    tree-shakes and an `index.ts` re-exporting twenty-three modules does not.
 2. Every other folder directly under `frontend/src/components/` is a **feature**. A feature's
-   files are private to it. Another feature may import it **only** through
-   `frontend/src/components/<feature>/index.ts`.
+   files are private to it. **Anything** may import it **only** through
+   `frontend/src/components/<feature>/index.ts` — another feature, `src/lib/`, a test, a
+   directory that does not exist yet. "Private" that only holds against files in one directory
+   is not private; see the amendment below for what it cost to learn that.
 3. A feature gets an `index.ts` **only when something outside it actually imports it**. Eleven
    of the twelve folders need none today; writing them anyway is scaffolding for later.
 4. The shell may compose features (`layout/Topbar.tsx` renders `auth`'s org menu). That makes
@@ -50,9 +52,85 @@ false alarms on the day it ships gets loosened within the month.
    and the alternative — threading the org menu as a prop through every `AppShell` caller — buys
    nothing. Recorded here so the next reader does not mistake it for an oversight.
 
-Held by `feature-internals-are-private` in `frontend/.dependency-cruiser.cjs`, which CI runs on
-every push (`.github/workflows/ci.yml:88`). The rule is a wildcard match, not a list of folder
-names: a folder added next month is governed the day it appears, with no edit to the config.
+5. **`frontend/src/App.tsx` is the composition root** — the one file entitled to know every
+   feature by name, because routing is exactly that job (thirteen such imports today, all in
+   that file). Nothing else outside `src/components/` may reach a feature's internals, and
+   **only `src/main.tsx` may import `App.tsx`**, so the exception cannot itself be used as a way
+   in. One privileged file, and it is a dead end.
+
+Held by three rules in `frontend/.dependency-cruiser.cjs`, which CI runs on every push
+(`.github/workflows/ci.yml:88`): `feature-internals-are-private`,
+`outsiders-use-the-front-door-too`, `only-main-imports-the-app-shell`. All three are wildcard
+matches, not lists of folder names: a folder added next month is governed the day it appears,
+with no edit to the config.
+
+## Amendment, 2026-09-04, same day: the first version of this ADR overclaimed
+
+Point 5 and the second and third rules were not in the signed version. The independent review of
+ticket 01 attacked the gate the ADR had just been written to describe, and got through:
+
+    frontend/src/lib/_launder.ts              export { ApiKeySection } from "@/components/settings/ApiKeySection";
+    frontend/src/components/cockpit/_use.tsx  import { ApiKeySection } from "@/lib/_launder";
+
+    ✔ no dependency violations found (153 modules, 566 dependencies cruised)
+
+`settings/` had no front door, `ApiKeySection.tsx` was internal, `cockpit` read it anyway, and
+the command CI runs reported nothing. The cause was structural, not a typo: the first rule
+anchors **both** its `from` and its `to` to `^src/components/`, so any file outside that prefix
+is invisible to it and one line of re-export launders the whole boundary.
+
+The first fix was itself too narrow, twice. Main chat then found the same laundering working from
+`src/components/_bare.ts` (a file directly under `components/`, in neither rule's `from`), and
+again from `_side/_launder.ts` (a file outside `src/` entirely). Three instances of one shape.
+
+**The root cause is the shape of `from`, not the list of places it forgot.** A boundary rule whose
+`from` is a prefix protects only against files that happen to live under that prefix, and a
+laundering hop can live anywhere. The `from` of both rules is therefore **unanchored** — every
+module is a potential source — with the privileged sources spelled out as an explicit `pathNot`
+exception list: `src/components/<feature>/` (governed by the first rule instead), `src/App.tsx`
+(the composition root), and `node_modules/` (not ours). Privilege is enumerated; everything else
+is suspect. Measured with that shape: zero violations in the repo, and all three laundering
+routes red.
+
+Three lessons, in the order they matter:
+
+1. **A gate's claim is worth what someone tried to break.** This rule had been proved red two
+   ways before it shipped — a real violation, and a folder that did not exist when the rule was
+   written. Both proofs were about the rule *firing*; neither was about the rule being *evaded*.
+   Proving red and proving unbypassable are different exercises, and only the second one is what
+   the word "private" in this ADR was promising.
+2. **Fixing the instance is not fixing the hole.** The first patch closed `src/lib/`; the same
+   attack then worked from one directory up, and again from outside `src/`. Each patch passed its
+   own proof-red and left the boundary open. A gate patched per-instance is a gate that will be
+   patched again.
+3. **None of it cost anything.** Measured before asking: zero violations in the repo as it
+   stands, zero source files changed, gate red on every attack. The expensive part was never the
+   fix; it was that the ADR asserted the protection before anyone had tried to walk around it.
+
+The user signed this amendment on 2026-09-04, the same day as the original.
+
+## Two measured facts about the finished gate
+
+**What it does not cover, on purpose.** The final review reached a feature's internals by hand-
+planting a package under `frontend/node_modules/` that re-exports them, and both `npm run
+depcruise` and `npm run build` stayed green — `options.doNotFollow: { path: "node_modules" }`
+stops the crawl before that edge is built. It is not a shippable route: `node_modules/` is
+gitignored, so it appears in no diff and no review, and `npm ci` does not recreate a hand-placed
+folder on anyone else's machine or in CI. Recorded because it is the honest edge of this gate, and
+because a future supply-chain concern would start exactly here. Every other route the review tried
+— dynamic `import()`, `require()` from `.cjs`, type-only import, a `.d.ts` / `.stories.tsx` /
+`e2e/` hop, a hop through `layout/`, a hop through another feature's own `index.ts`, and a
+`tsconfig` path alias pointing straight at an internal file — is red. A vite-only alias blinds
+depcruise alone but fails `tsc`, so it cannot pass the full gate either.
+
+**Pull-out test, 2026-09-04.** Deleting `src/components/report/` plus its registration in
+`App.tsx` leaves `npm run build` green and both e2e specs passing — no hidden coupling. Deleting
+`src/components/products/` does **not** build, for one reason and it is a declared one:
+`intake/steps/ScanStep.tsx` imports `@/components/products`. That is the dependency this ADR's
+"considered and rejected" section is about; the front door makes it visible in the dependency
+graph rather than hiding it, which is the whole point. A declared cross-feature dependency
+failing a pull-out is not the hidden coupling that test hunts for, and it is not "fixed" by
+deleting the sharing.
 
 ## What we looked at
 
