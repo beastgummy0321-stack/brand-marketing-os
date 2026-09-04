@@ -85,8 +85,9 @@ Module-local and reversible, decided here rather than in an ADR:
 - The module now registers an `app.core.cleanup` function (ticket T1b): `app/schedule/repository.py`
   registers 「創意座標與素材候選」, covering the five tables this ticket added.
 - **How a creative reply is matched to a tree node** — ticket T3d, settled by the user; **amended
-  2026-09-04, again by the user** (`docs/issues/ad-loop/issue-same-name-leaf-node-key.md`,
-  overturning their own 2026-09-03 "leave it until it bites"). The agent now also echoes
+  once since, again by the user** (`docs/issues/ad-loop/issue-same-name-leaf-node-key.md`,
+  overturning their own earlier "leave it until it bites"; dates are in git log). The agent now
+  also echoes
   **`node_key`**, and when the reply's multiset of `node_key`s equals the tree's leaf `node_key`s
   the match is made by key. T3d's stated reason for not asking — "the agent does not know the
   shell's internal position code" — was false: `jobs._creative_params_text()` `json.dumps`es the

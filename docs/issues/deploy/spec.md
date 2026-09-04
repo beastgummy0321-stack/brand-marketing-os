@@ -10,7 +10,8 @@ Status: 卡點——**還沒選部署平台**。2026-09-04 使用者裁決「不
 
 **A. 現在就能做，跟平台無關（一張一個 /slice session）**
 
-1. `issue-invite-link-bearer.md` — route C（權限）：accept_invite 比對 email＋前端加確認步驟。
+1. `01-invite-email-match.md`（已升票 2026-09-04）— route C（權限）：accept_invite 比對 email。前端確認步驟
+   當天由使用者砍掉：email 綁定之後，誤點只有本人做得到，確認頁是之後的 UI 票不是安全票。
 2. `issue-07-2-settings-sentry-staging-cd.md` 的前半 — route B：pydantic-settings 收 19 處環境變數，缺了開機就炸；
    同一張順手收 `issue-is-local-env-flag.md`（那顆「是不是正式環境」的變數就在這裡出生）。
 3. `issue-daily-pull-worker-own-process.md` — route C（模組邊界，要寫 ADR 取代 0039）：worker 拆成自己的進入點，

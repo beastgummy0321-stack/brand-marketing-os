@@ -16,7 +16,9 @@ only through `register()`.
 ## Exported shapes
 
 ```
-ActorContext(user_id: UUID, org_id: str, role: str, email: str | None)   # frozen dataclass
+ActorContext(user_id: UUID, org_id: str, role: str, email: str)          # frozen dataclass
+                                          # email is `""` when the JWT carries no email claim
+                                          # (`app/identity/__init__.py:113`), never None
 authenticate(request) -> ActorContext
 register(app: FastAPI) -> None            # mounts /api/identity/*; raises at startup, see below
 Unauthenticated, Forbidden                # re-exported app.shared.web.ApiError subclasses
@@ -61,8 +63,10 @@ An unscoped read anywhere else is a defect.
 
 ## Decisions in force
 
-**None.** No ADR currently governs `app/identity/` — `node hooks/adr-index.mjs app/identity/…`
-returns no row for it. That is recorded here as a fact, not endorsed: the module holds
-authentication, org resolution and two development backdoors, and none of it has ever been
-settled in a decision record. The first route C question that reaches it — a second org-selection
-rule, a change to first-login provisioning, an environment-name variable — writes the first one.
+- ADR 0061 — an org invite is accepted only by a signed-in user whose email equals the invited
+  email, compared case-insensitively; `gone` is answered before identity.
+
+The rest of the module still holds authentication, org resolution and two development backdoors
+with no decision record behind them. The next route C question to reach one of them — a second
+org-selection rule, a change to first-login provisioning, an environment-name variable — writes
+its own ADR rather than leaning on this one.
