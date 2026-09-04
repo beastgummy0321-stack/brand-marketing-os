@@ -39,6 +39,10 @@
 - 裝依賴：`uv sync --frozen`（不用 pip／requirements.txt，套件與版本鎖在 `pyproject.toml`／`uv.lock`）
 - 金鑰 `.env`（不進版控）；`BRAND_OS_LLM_PROVIDER=codex_cli` 開著＝所有 LLM 呼叫走本機 codex CLI，不產生 API 帳單
 - bash 裡跑 docker／supabase 前先：`export PATH="/c/Users/User/AppData/Local/Programs/DockerDesktop/resources/bin:/c/Users/User/scoop/shims:$PATH"`
+- 工作流 plugin 的原始碼在 `D:\0UserProfile\Desktop\Default\skeleton-slice-pen`（**不是**
+  `skeleton-slice`，那個停在 v3.1.0）；本機 cache 在
+  `C:\Users\User\.claude\plugins\cache\skeleton-slice-pencil\skeleton-slice-pencil\<版本>\`。
+  換機器或重裝之後要跑 `claude plugin update` 才拿得到新版
 - 本機測試帳號：`123@example.com` / `123456`（在 `supabase/seed.sql`，每次 `supabase db reset`
   自動重建，組織 `org_bughunt`、品牌 `brd_bughunt`）。**這是唯一活得過 db reset 的帳號。**
   信箱驗證本機關著，所以在畫面上直接註冊一個新帳號也隨時可以（`frontend/e2e/smoke.spec.ts:24-32`

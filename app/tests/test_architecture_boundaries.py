@@ -580,7 +580,7 @@ class FileLineCapTest(unittest.TestCase):
                 continue
             frozen = KNOWN_OVERSIZED_FILES.get(rel)
             if frozen is None:
-                problems.append(f"  {rel}：{count} 行，新超過 {FILE_LINE_CAP} 行上限——先拆再加")
+                problems.append(f"  {rel}：{count} 行，超過 {FILE_LINE_CAP} 行上限——這是警報不是命令：先問這個檔該裝什麼、每個函式去哪、哪些碰錢，答案是一張模組邊界票，不是搬走最小的那個函式")
             elif count > frozen:
                 problems.append(f"  {rel}：{count} 行，比凍結值 {frozen} 大——只准變小")
         self.assertEqual(problems, [], "單檔行數違規：\n" + "\n".join(problems))
