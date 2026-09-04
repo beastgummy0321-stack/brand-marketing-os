@@ -59,9 +59,11 @@ variable the app uses, as one typed settings object, built **lazily and cached**
 calls `os.environ` for configuration. Lazy, not at import: `.env` is loaded by
 `app/main.py:86` (`_load_dotenv`, which deliberately does nothing under pytest), and that line
 runs before `app.main` imports anything else, so a settings object that is built on first read
-is always built after `.env` has been applied. Moving the loader would buy nothing today —
-ADR 0039 keeps the worker inside the web process, so `app.main` is the only entry point — and
-would cost the eight assertions in `app/tests/test_main_dotenv.py` for no change in behaviour.
+is always built after `.env` has been applied. Moving the loader would buy nothing and would
+cost the eight assertions in `app/tests/test_main_dotenv.py` for no change in behaviour. ADR 0063
+added a second entry point, `app/worker.py`, and it reaches `.env` the same way
+`app/meta/daily_pull.py`'s `__main__` block already did — by importing `app.main` — so the
+loader still has exactly one home.
 `app/main.py` reads the settings once at startup so the check below fires there, not at
 whichever request happens to touch configuration first.
 

@@ -17,8 +17,10 @@ Status: 卡點——**還沒選部署平台**。2026-09-04 使用者裁決「不
    （兩道開發後門＋邀請連結要不要放進 API 回應），所以走了 route C。原本寫的「8 個鍵」也是錯的，
    實測 10 個。`issue-is-local-env-flag.md` 被它收走並刪除；`DATABASE_URL` 是唯一不快取的一顆
    （ADR 0062 §5a，背景工作靠它偵測 schema 換了沒）。
-3. `issue-daily-pull-worker-own-process.md` — route C（模組邊界，要寫 ADR 取代 0039）：worker 拆成自己的進入點，
-   本機仍可用同一行指令起兩個行程。
+3. 升成票 `03-worker-own-process.md`（2026-09-05）— route C，ADR 0063 已寫、取代 0039：worker 變成獨立行程
+   `python -m app.worker`，本機也一樣，`啟動行銷系統.bat` 與開機自動啟動各自幫使用者開起來。
+   順手抓到的隱形 bug：`fail_interrupted_tasks()` 掛在網站啟動時跑，worker 分家後網站重開會把
+   worker 正在跑的活工作誤標成失敗——跟著搬到 worker 進入點。
 4. `issue-delete-seed-debug-account.md` — 最後一張，部署前一天做：刪了之後本機就沒有活得過 reset 的帳號。
 
 **B. 要先選平台**

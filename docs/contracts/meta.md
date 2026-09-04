@@ -76,7 +76,8 @@ writes it stays in `app/meta/` regardless, because there is still only one chann
 
 ## Decisions in force
 
-- ADR 0039 — the daily-pull worker rides inside the web process (owed back before cloud).
+- ADR 0063 — the daily-pull worker is its own process (`python -m app.worker`) on every
+  environment; supersedes ADR 0039, which kept it inside the web process.
 - ADR 0043 — one bucket, and the org id is the first folder (Vault/storage shape this module
   follows for its token).
 - ADR 0050 — the ad-loop data model of record: this module's table changes and their tickets.

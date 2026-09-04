@@ -5,4 +5,4 @@
 
 - [>] 廣告閉環 ⑧⑨ ｜ docs/issues/ad-loop/ ｜ 卡在你：把廣告02／03 貼進 Meta 並打開，兩個座標花到錢才開 T6c
 - [ ] 介面收尾 U1／U3 ｜ docs/issues/ui/ ｜ 等你點頭換字體
-- [ ] 上線／上雲前必還 ｜ docs/issues/deploy/ ｜ 邀請連結、環境變數已還；下一張是 worker 拆行程（不用等平台），其餘等你選平台或里程碑
+- [>] 上線／上雲前必還 ｜ docs/issues/deploy/ ｜ 票 03 worker 拆行程：第②站 做後端；其餘等你選平台或里程碑

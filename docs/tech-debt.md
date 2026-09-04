@@ -203,8 +203,9 @@ FastAPI 的規則：`def` 會被丟進執行緒池，`async def` 跑在 uvicorn 
 不是只有按下按鈕的那個人在等。多租戶下這代表 A 組織的一次排程會凍住 B 組織的每一個請求。
 
 搬進執行緒池不影響連線綁定：`app/core/db.py:160` 的 `_current` 是 ContextVar，Starlette 的
-執行緒池會複製 context。真正被 await 的東西（lifespan 的 `start_worker`／`stop_worker`、
-`@app.exception_handler` 註冊的處理器）沒有路由裝飾器，本來就不在這條規則範圍內。
+執行緒池會複製 context。真正被 await 的東西（`@app.exception_handler` 註冊的處理器）沒有
+路由裝飾器，本來就不在這條規則範圍內。（原本這裡還舉了 lifespan 的 `start_worker`／
+`stop_worker`——ADR 0063 之後 worker 是獨立行程，`app/main.py` 連 lifespan 都沒有了。）
 
 **為什麼這條沒有機器閘門**——寫了，然後刪掉了，兩個獨立的理由：
 

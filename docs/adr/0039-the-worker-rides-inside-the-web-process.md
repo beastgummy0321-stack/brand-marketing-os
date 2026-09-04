@@ -3,10 +3,17 @@ id: 0039
 decision: The procrastinate worker is an asyncio task inside the uvicorn process, until a second machine exists.
 applies-to: [app/main.py, app/background/]
 supersedes: none
-status: in-force
+status: superseded-by: 0063
 ---
 
 # The worker rides inside the web process, until a second machine exists
+
+> **Superseded by ADR 0063 (2026-09-05).** The expiry this page set for itself — "the point at
+> which `start_worker()` / `stop_worker()` stop being called from `lifespan` and become their
+> own entry point" — was taken. `python -m app.worker` is now the worker on every environment,
+> and nothing below describes the code as it stands. Kept for the two things it measured: why
+> the worker may not ride uvicorn's loop on Windows, and why a worker failure must never reach
+> the site.
 
 Ticket 05 needed a daily Meta spend pull that runs unattended. Procrastinate was already
 installed (ticket 01, ADR 0038) and its tables already live in their own schema, but nothing in

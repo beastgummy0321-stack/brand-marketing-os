@@ -76,9 +76,11 @@ creative run already used one level down (`context_scope_json.source_plan_task_i
 ## The ceiling, and when this expires
 
 The startup sweep marks **every** `running` row failed, which assumes one process owns all of
-them. That is exactly where ADR 0039 stands today ("the worker rides inside the web process,
-until a second machine exists"). When the worker becomes its own process, the sweep must become
-heartbeat- or age-based — the same day `start_worker()` leaves `lifespan`, not a separate one.
+them. That was ADR 0039's world (web and worker in one process); **ADR 0063 superseded it** and
+the sweep moved with the assumption rather than being weakened: it now runs at the start of
+`app/worker.py`, the one process that owns every `running` row, and the web process no longer
+touches it. The sweep must become heartbeat- or age-based the day there is more than one worker
+process, which is a cloud-autoscale day, not the day the worker left `lifespan`.
 
 Stale procrastinate jobs left `doing` by a crash are not touched: procrastinate never re-runs
 them on its own, they hold no `queueing_lock`, and at this volume they cost nothing.
@@ -95,7 +97,8 @@ be used to defer from a request thread.** Its async pool is opened on the worker
 loop, `get_sync_connector()` returns that same async connector while the pool is open, and every
 sync call then routes through `async_to_sync`, which drives the coroutine on a brand-new event
 loop. Deferring uses a second, module-private `App` on a `SyncPsycopgConnector`. This is the same
-family of mistake as ADR 0039's Windows loop bug, and it was avoided by reading the library, not
+family of mistake as ADR 0039's Windows loop bug (that ADR is superseded by 0063; the loop
+lesson it recorded is not), and it was avoided by reading the library, not
 by testing until it worked.
 
 ## Consequences

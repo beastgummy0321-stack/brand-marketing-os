@@ -42,8 +42,8 @@ Status: 進行中——①～⑦ 已走完（2026-09-04），只剩 ⑧⑨；卡
 （`issue-same-name-leaf-node-key.md` 2026-09-04 做掉、刪檔；`issue-image-on-ad-node.md` 同日
 重判完畢，判不做，檔案留著記結論，不要再問第三次。）
 
-每日拉取 worker 跑在網站行程裡（ADR 0039）不擋這一輪：手動補 `uv run python -m app.meta.daily_pull`。
-上雲時要拆，票在 `docs/issues/deploy/`。
+每日拉取 worker 是獨立行程（ADR 0063，`啟動行銷系統.bat` 會順便開起來）；worker 沒開或
+機器關著的日子照樣沒人拉，手動補 `uv run python -m app.meta.daily_pull`。
 
 ## 你要做的（agent 做不了）
 
