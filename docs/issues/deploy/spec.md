@@ -12,10 +12,11 @@ Status: 卡點——**還沒選部署平台**。2026-09-04 使用者裁決「不
 
 1. ~~邀請連結持有即可用~~ — 2026-09-04 已還（ADR 0061，commit `slice-01 done`）。前端確認步驟
    當天由使用者砍掉：email 綁定之後，誤點只有本人做得到，確認頁是之後的 UI 票不是安全票。
-2. **已開票** `02-env-flag-and-settings.md`（2026-09-05）— route **C**，不是原本寫的 route B：
-   `_is_local()` 的三個呼叫端全是權限判斷（兩道開發後門＋邀請連結要不要放進 API 回應），
-   所以要 ADR（0062）與獨立審查。pydantic-settings 收 19 處環境變數（**10 個鍵，不是原本寫的 8 個**），
-   `issue-is-local-env-flag.md` 已被它收走並刪除。
+2. ~~環境變數收進一個地方＋「是不是正式環境」的旗標~~ — 2026-09-05 已還（ADR 0062，
+   commit `slice-02 done`）。原本判成 route B 是錯的：`_is_local()` 的三個呼叫端全是權限判斷
+   （兩道開發後門＋邀請連結要不要放進 API 回應），所以走了 route C。原本寫的「8 個鍵」也是錯的，
+   實測 10 個。`issue-is-local-env-flag.md` 被它收走並刪除；`DATABASE_URL` 是唯一不快取的一顆
+   （ADR 0062 §5a，背景工作靠它偵測 schema 換了沒）。
 3. `issue-daily-pull-worker-own-process.md` — route C（模組邊界，要寫 ADR 取代 0039）：worker 拆成自己的進入點，
    本機仍可用同一行指令起兩個行程。
 4. `issue-delete-seed-debug-account.md` — 最後一張，部署前一天做：刪了之後本機就沒有活得過 reset 的帳號。
