@@ -1313,7 +1313,11 @@ class CoordinateDimensionSyncTest(unittest.TestCase):
 #      量對了，round 2 沒有再動這一筆。
 #   4. 本段理由註解自己（含上面「這道棘輪在落地前就已經在漏」那一段，done-check 5 點名的
 #      新要求）。
-TEST_LINES_CEILING = 19684  # 票 08-standalone-jobs-on-the-queue round 2：獨立審查抓到的
+TEST_LINES_CEILING = 19690  # 票 09 前置（零新測試）：`MODULES_WITHOUT_CONTRACT` 少一項
+# （intake 補上 `docs/contracts/intake.md`），多的行數全是那筆理由註解與本段自己佔的行。
+# 這道棘輪量的是 `app/**` 底下所有測試碼的行數，而這張表住在測試檔裡，所以連「刪一個
+# 模組名字、加三行理由」都會動到它——照實記，不藏。
+# 前一次是 19684——票 08-standalone-jobs-on-the-queue round 2：獨立審查抓到的
 # money-class 缺陷（worker 撿走 job 到真正打 provider 之間那段窗口，llm_task 看不到，第二次
 # 按下去沒被擋，兩邊都真的付了錢）。四支新測試：`IsActiveTest`
 # （test_background.py，兩個邊界都要驗：`todo`／`doing` 都要讀成 active，`succeeded` 之後要
@@ -1962,7 +1966,9 @@ ALL_MODULE_DIRS = {
 }
 
 MODULES_WITHOUT_CONTRACT = {
-    "dashboard", "departments", "intake", "llm",
+    # 票 09 前置：intake 出列（docs/contracts/intake.md，2026-09-05）——動到某模組的
+    # route C 票先補那個模組的頁。這張清單只准變短。
+    "dashboard", "departments", "llm",
     "methodology", "orders", "shared", "storage", "tools",
 }
 
