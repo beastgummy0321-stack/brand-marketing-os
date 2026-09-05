@@ -24,16 +24,32 @@ Status: 進行中——2026-09-05 使用者裁決：上雲前全清、不再留�
    等於拿掉了「一次只有一個行程」的唯一保證（8710 那個 port），第二個 worker 會誤殺活著的付費工作、
    讓畫面放行使用者再按一次＝真的再花一次錢（改用 Postgres session advisory lock，按 schema 分鑰匙）。
    **教訓**：把一個行程拆成兩個，要先問「原本是誰在保證只有一個」。
-4. `issue-codex-cli-provider-in-production.md` — route B，一行：`codex_cli` 只准在 `local`。
-5. `issue-row-hash-numeric-normalisation.md` — route C（金流），兩行＋一個測試。
-6. `issue-assets-bucket-size-limit.md` — route C（schema），一個 migration 檔。
-7. `issue-drop-unused-columns.md` — route C（schema，需批准）；上雲前刪最便宜，之後是對真資料跑 migration。
-8. `issue-campaign-period-composite-fk.md` — route C（schema＋租戶隔離），八條 FK 重建。
-9. `issue-meta-name-lookup-tenant-asymmetry.md` — route C（租戶隔離）；站① 先裁決：多打一次 Meta API，還是改呼叫鏈往下傳。
-10. `issue-in-memory-background-jobs.md` — route C（模組邊界）；雲端重啟／多實例會把 dict 裡的狀態弄丟，照 ADR 0042 搬上佇列。
+4. ~~`codex_cli` 在正式環境是合法的~~ — 2026-09-05 已還（route B，無 ADR）。`app/core/config.py`
+   多一張「只有某個值違規」的表（既有兩張是「有值就違規」，形狀塞不下），`codex_cli` 只准 `local`。
+5. `04-row-hash-numeric-normalisation.md` — route C（金流）。`_row_hash()` 內部統一成 float。
+6. `05-assets-bucket-size-limit.md` — route C（schema，2026-09-05 已批准）。50 MiB 的出處是
+   `supabase/config.toml:118`，不是這張票挑的數字。
+7. ~~刪四個沒人用的欄位~~ — 2026-09-05 裁決**整條不做**。查證後只有 `order_record.attribution_override`
+   真的零引用；`interrupt.visible_from` 是排序與過期邏輯的骨幹（`interrupts.py:103-115,127,148`）
+   還有專屬測試，`interrupt.kind` 的名字寫死在 `interrupts.py:116` 的 SQL 字串裡，`campaign_cycle_id`
+   兩天前就已改名成 `campaign_period_id`（`20260903000002_core_interrupt_period.sql:8`）。憲法第 3 條
+   位階高於票：不做的功能，欄位現在就要留好。裁決記在 `docs/contracts/core.md`。
+8. `07-campaign-period-composite-fk.md` — route C（schema＋租戶隔離，2026-09-05 已批准）。
+   實際是 **8 條 FK**（其中自參照只有 1 條），不是票原本寫的「8＋6」；且要先補
+   `campaign_period` 的 `(id, org_id)` 唯一鍵，八條才掛得上。
+9. `06-meta-name-lookup-tenant-symmetry.md` — route C（租戶隔離）。2026-09-05 裁決：**改呼叫鏈**，
+   不多打 Meta API（唯一相近的 insights 端點會漏掉沒花錢的實體，正是當初改掉它的原因）。
+10. `08-standalone-jobs-on-the-queue.md` ＋ `09-intake-and-persona-jobs-on-the-queue.md` — route C
+   （模組邊界，照 ADR 0042）。實際是 **7 種** job 不是 5 種（ADR 0042 自己當天就數錯）；
+   **不用開新表**，七種全都已經在寫 `llm_task`，只是沒人拿它當狀態來源。2026-09-05 裁決：
+   初掃的逐張進度放棄，不為它加欄位（`issue-intake-scan-per-photo-progress.md`）。
+   拆兩張是因為一份 7 支 job 的 diff 沒人審得動：08 先在三支獨立的證明模板，09 收掉 intake 四支、
+   刪掉最後一張 dict、順手修好右上角鈴鐺（今天只聚合 7 種裡的 4 種，人物誌完全看不到）。
 11. `issue-delete-seed-debug-account.md` — 最後一張，部署前一天做：刪了之後本機就沒有活得過 reset 的帳號。
 
-（5～10 是 2026-09-05 從 `docs/tech-debt.md` §七認領進來的：使用者裁決上雲前全清、不再留負債。）
+（5～10 是 2026-09-05 從 `docs/tech-debt.md` §七認領進來的：使用者裁決上雲前全清、不再留負債。
+同日一次問完一次派工：七條 issue 全部處理完畢——一條當場做掉、一條裁決不做、五條升成六張票。
+升票前每一條都重新實測過，其中三條的數字是錯的，已在票裡標明原本錯在哪。）
 
 **B. 要先選平台**
 

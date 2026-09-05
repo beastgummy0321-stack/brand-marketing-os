@@ -59,8 +59,7 @@ not this module's — the `queueing_lock` unique index only covers `status = 'to
 - ADR 0042 — work the user waits for runs on the queue.
 - ADR 0062 — `DATABASE_URL` is the one environment variable read live rather than cached,
   because `app()` needs to see it change.
-- ADR 0063 — the worker is its own process (`python -m app.worker`) on every environment;
-  supersedes ADR 0039.
+- ADR 0063 — the worker is its own process (`python -m app.worker`) on every environment.
 
 Module-local and reversible, decided here rather than in an ADR:
 

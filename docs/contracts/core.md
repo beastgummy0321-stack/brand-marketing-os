@@ -93,6 +93,13 @@ is `app/shared/web.py`'s job. `db.current()` outside a `db.connection()` block r
 
 Module-local and reversible, decided here rather than in an ADR:
 
+- `interrupt.kind` and `interrupt.visible_from` stay, dormant, and are not dropped. They were
+  proposed for deletion on 2026-09-05 as "nobody uses them"; the measurement said otherwise
+  (`interrupts.py:96,103-115,116,127,148` read both, and `test_core_interrupts.py:132-139`
+  covers `visible_from`), and constitution rule 3 settles the general case: a column for a
+  feature that is not built yet is a door held open, not a debt. Same ruling for
+  `order_record.attribution_override`, which genuinely has no reader.
+
 - The pool is a lazily-built module singleton keyed on `dsn()`; the test harness swaps the DSN
   and rebuilds it per test module rather than sharing one pool with a `configure=` hook
   (`app/tests/conftest.py` header explains why).
