@@ -316,5 +316,31 @@ class BootCheckReportsAllViolationsTest(unittest.TestCase):
         self.assertIn("IDENTITY_DEV_TOKEN", message)
 
 
+class CodexCliProviderIsLocalOnlyTest(unittest.TestCase):
+    """`BRAND_OS_LLM_PROVIDER=codex_cli` 指的是本機那支 codex CLI（ADR 0032），雲端主機上
+    沒有這支程式，設下去每一次 AI 呼叫都會安靜失敗。禁的是**這一個值**，不是這個變數——
+    所以兩半都要證：codex_cli 在 production 會炸，別的供應商值不會被誤傷。"""
+
+    def test_codex_cli_forbidden_outside_local_but_other_providers_pass(self):
+        base = {
+            "BRAND_OS_ENV": "production",
+            "DATABASE_URL": "postgresql://x/y",
+            "SUPABASE_URL": "https://x",
+            "SUPABASE_SERVICE_ROLE_KEY": "k",
+            "IDENTITY_DEV_TOKEN": "",
+            "IDENTITY_ALLOW_HS256": "",
+            "BRAND_OS_TODAY": "",
+        }
+        with mock.patch.dict(os.environ, {**base, "BRAND_OS_LLM_PROVIDER": "codex_cli"}):
+            config.settings.cache_clear()
+            with self.assertRaises(RuntimeError) as cm:
+                config.settings()
+        self.assertIn("BRAND_OS_LLM_PROVIDER", str(cm.exception))
+
+        with mock.patch.dict(os.environ, {**base, "BRAND_OS_LLM_PROVIDER": "anthropic"}):
+            config.settings.cache_clear()
+            self.assertEqual(config.settings().brand_os_llm_provider, "anthropic")
+
+
 if __name__ == "__main__":
     unittest.main()

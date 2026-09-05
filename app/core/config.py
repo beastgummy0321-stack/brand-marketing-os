@@ -51,6 +51,12 @@ _FORBIDDEN_OUTSIDE_LOCAL = (
     ("identity_allow_hs256", "IDENTITY_ALLOW_HS256", _LOCAL_ONLY),
     ("brand_os_today", "BRAND_OS_TODAY", "這是測試用的『今天』凍結旗標，只能在 local 使用"),
 )
+# 上面那張表是「有值就違規」；這張是「只有某一個值違規，其他值合法」。
+_FORBIDDEN_VALUES_OUTSIDE_LOCAL = (
+    ("brand_os_llm_provider", "BRAND_OS_LLM_PROVIDER", "codex_cli",
+     "codex_cli 是本機那支 CLI（ADR 0032），雲端主機上沒有這支程式，"
+     "設下去每一次 AI 呼叫都會安靜失敗"),
+)
 
 
 class Settings(BaseSettings):
@@ -105,6 +111,9 @@ class Settings(BaseSettings):
         for attr, var_name, reason in _FORBIDDEN_OUTSIDE_LOCAL:
             if getattr(self, attr):
                 violations.append(f"  - {var_name} 有值：{reason}")
+        for attr, var_name, bad_value, reason in _FORBIDDEN_VALUES_OUTSIDE_LOCAL:
+            if getattr(self, attr) == bad_value:
+                violations.append(f"  - {var_name}={bad_value}：{reason}")
 
         if violations:
             raise RuntimeError(
