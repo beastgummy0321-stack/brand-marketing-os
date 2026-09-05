@@ -38,10 +38,13 @@ have changed the picture out from under it before the worker gets to it.
 import json
 
 from app.background import app as background_app
+from app.brand_intelligence import repository as bi_repo
 from app.core import rule_cards
-from app.core.db import connection
+from app.core.db import connection, jsonb, new_id
 from app.llm import context_compiler, gateway, methodology, providers
 from app.schedule import binding as binding_mod
+from app.schedule import diagnosis as diagnosis_mod
+from app.schedule import performance as performance_mod
 from app.schedule import plan as plan_mod
 from app.schedule import repository, routes, state
 
@@ -322,10 +325,69 @@ def schedule_creative(org_id: str, brand_id: str, tree_task_id: str,
         )
 
 
+def schedule_diagnosis(org_id: str, brand_id: str) -> None:
+    """procrastinate task body（`background.performance_reading`）——票 01（T6c）：程式壓縮
+    （`diagnosis.compress()`）→ 三次 `gateway.run_task()`（素材／受眾／錢，固定分工，決定 3）
+    → 程式收斂（`diagnosis.converge()`，決定 2／ADR 0057 §6）→ 寫回同一輪第三列（budget）
+    `structured_output_json`（決定 8，零 migration，`llm_task.rendered_output` 三個 lens 各自
+    的原文原封不動留在各自那一列）。跟另外三支不一樣：這裡不需要凍結任何上一輪的 row id
+    ——每次都是重新從目前的花費／綁定/座標現況算，沒有「插隊」問題。"""
+    with connection() as conn:
+        performance = performance_mod.brand_creative_performance(conn, org_id, brand_id)
+        breakeven = diagnosis_mod.breakeven_roas(conn, org_id, brand_id)
+        compressed = diagnosis_mod.compress(performance, breakeven)
+
+        coordinates = repository.list_coordinates(conn, org_id, brand_id)
+        label_to_key = {(c["dimension"], c["label"]): c["key"] for c in coordinates}
+
+        methodology_result = methodology.compile(
+            conn, state.DIAGNOSIS_METHODOLOGY_TASK_LABELS, brand_id=brand_id
+        )
+        brand = bi_repo.get_brand(conn, brand_id)
+        brand_version = brand["knowledge_version"] if brand else 1
+
+        round_id = new_id("dgr")
+        raw_outputs: list[dict] = []
+        row = None
+        for lens in diagnosis_mod.LENSES:
+            prompt = "\n\n".join(
+                section for section in
+                (methodology_result.text, compressed, diagnosis_mod.role_text(lens)) if section
+            )
+            context = gateway.TaskContext(
+                context_scope={"brand_id": brand_id, "round_id": round_id, "lens": lens},
+                knowledge_item_ids=[], brand_version=brand_version, product_version=None,
+            )
+            row = gateway.run_task(
+                conn, PROVIDER, brand_id=brand_id, task_type=state.DIAGNOSIS_TASK_TYPE,
+                prompt_template_id=state.DIAGNOSIS_TASK_TYPE, prompt_template_version="v1",
+                system=None, messages=[{"role": "user", "content": prompt}], context=context,
+            )
+            parsed = plan_mod._extract_last_json_block(row.get("rendered_output") or "")
+            raw = (parsed or {}).get("suggestions") if isinstance(parsed, dict) else None
+            valid = diagnosis_mod._valid_suggestions(
+                raw if isinstance(raw, list) else [], label_to_key
+            )
+            for item in valid:
+                item["lens"] = lens
+            raw_outputs.extend(valid)
+
+        assert row is not None  # diagnosis_mod.LENSES 非空，迴圈至少跑過一次，這裡必然有值
+        converged = diagnosis_mod.converge(raw_outputs)
+        # 決定 8：收斂後的前 5 條寫回**同一輪第三列**（budget，三個 lens 固定跑的最後一個）
+        # 的 structured_output_json——不另建表，`round_id` 相同即可認親。
+        conn.execute(
+            "UPDATE llm_task SET structured_output_json = %s WHERE id = %s",
+            (jsonb(converged), row["id"]),
+        )
+        conn.commit()
+
+
 _JOBS = {
     state.TASK_TYPE: schedule_plan,
     state.TREE_TASK_TYPE: schedule_tree,
     state.CREATIVE_TASK_TYPE: schedule_creative,
+    state.DIAGNOSIS_TASK_TYPE: schedule_diagnosis,
 }
 
 

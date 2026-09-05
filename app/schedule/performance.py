@@ -84,25 +84,35 @@ def _coordinate_labels(conn, org_id: str, brand_id: str) -> dict:
 
 
 def _bucket(rows: list) -> dict:
-    """一組花費列（一個座標值，或 `未標座標`）→ 畫面要的六個聚合數字，外加 `ad_count`。
+    """一組花費列（一個座標值，或 `未標座標`）→ 畫面要的七個聚合數字，外加 `ad_count`。
     `revenue`／`roas` 只用有追蹤到 `roas` 的那些列（ADR 0057 §7），`roas_coverage` 用**這
-    整組**列數當分母——一列是一個實體一天，不是一個廣告。"""
+    整組**列數當分母——一列是一個實體一天，不是一個廣告。
+
+    票 01（T6c 決定 11，`docs/contracts/schedule.md`「One coordinate has two ROAS values」）：
+    `roas`（既有欄位，更名意義不變）是**樂觀值**——分母只算有追蹤到的花費；`roas_conservative`
+    是**保守值**——同一份 `revenue`，分母換成這組**全部**花費（含沒追蹤到的）。兩個值都是真
+    的，畫哪一個都是在說謊的另一半，所以兩個都給，不畫單一數字。不重寫 `quadrant.ts` 那份
+    算術——這裡只是多除一次，前端仍是唯一畫圖的地方。"""
     spend = sum(r["spend"] for r in rows)
     with_roas = [r for r in rows if r["roas"] is not None]
     revenue: float | None = None
     roas: float | None = None
+    roas_conservative: float | None = None
     if with_roas:
         spend_with_roas = sum(r["spend"] for r in with_roas)
         revenue = sum(r["spend"] * r["roas"] for r in with_roas)
         roas = (revenue / spend_with_roas) if spend_with_roas else None
+        roas_conservative = (revenue / spend) if spend else None
     return {
         "spend": round(spend, 2),
         "impressions": sum(r["impressions"] for r in rows),
         "clicks": sum(r["clicks"] for r in rows),
         "revenue": round(revenue, 2) if revenue is not None else None,
-        # roas／roas_coverage 是比率，不是錢——比照 spend_summary 既有慣例（ctr／cpc／cpm
-        # 也不在 Python 端 round()），原始精度直接穿出去，畫面自己決定顯示幾位。
+        # roas／roas_conservative／roas_coverage 是比率，不是錢——比照 spend_summary 既有
+        # 慣例（ctr／cpc／cpm 也不在 Python 端 round()），原始精度直接穿出去，畫面自己決定
+        # 顯示幾位。
         "roas": roas,
+        "roas_conservative": roas_conservative,
         "roas_coverage": (len(with_roas) / len(rows)) if rows else 0.0,
         "ad_count": len({r["entity_id"] for r in rows}),
     }

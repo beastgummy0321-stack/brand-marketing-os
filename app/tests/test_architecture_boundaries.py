@@ -1313,10 +1313,22 @@ class CoordinateDimensionSyncTest(unittest.TestCase):
 #      量對了，round 2 沒有再動這一筆。
 #   4. 本段理由註解自己（含上面「這道棘輪在落地前就已經在漏」那一段，done-check 5 點名的
 #      新要求）。
-TEST_LINES_CEILING = 19690  # 票 09 前置（零新測試）：`MODULES_WITHOUT_CONTRACT` 少一項
+TEST_LINES_CEILING = 19883  # 票 09 前置（零新測試）：`MODULES_WITHOUT_CONTRACT` 少一項
 # （intake 補上 `docs/contracts/intake.md`），多的行數全是那筆理由註解與本段自己佔的行。
 # 這道棘輪量的是 `app/**` 底下所有測試碼的行數，而這張表住在測試檔裡，所以連「刪一個
 # 模組名字、加三行理由」都會動到它——照實記，不藏。
+# 票 01（T6c 成效判讀）：19690 → 19883（實測值，含本行理由、`KNOWN_MODULE_SIZES` 三筆
+# 調整、`test_rule_cards.py`／`test_rule_cards_api.py` 兩支既有測試的 `len(cards)` 斷言
+# （3 → 4，新卡加進去這兩支既有測試必然要跟著改，票的 Shared files touched 清單漏列了
+# 這兩個檔案，這裡補上）、以及這筆理由自己佔的行）。
+# 新檔 `test_schedule_diagnosis.py`（三支，票面明講只准三支）：
+# `CompressionConservesMoneyTest`（**資料正確性**：`compress()` 印出來的每個維度，逐列花費
+# ＋未標座標那列＝`total_spend`——不是驗輸入資料本身守恆，是驗印出去給 agent 看的文字也
+# 守恆，防「表格印漏一列」這種只改顯示就出事的錯）、`ConvergeDedupesTest`（**資料正確性**：
+# 兩個 lens 給同一個 `(dimension, coordinate_key, direction)`，`converge()` 只留一條、
+# `agreed_by` 兩個名字、`impact_spend` 取大的那條的內文）、`BreakevenFallbackTest`
+# （**資料正確性**：三層 fallback 依序驗——有實際毛利率用實際、沒有但有規則卡用規則卡、
+# 兩者皆無回 `None` 絕不回 1.0，三個品牌各自代表一層，一支測試方法裡驗完不拆三支）。
 # 前一次是 19684——票 08-standalone-jobs-on-the-queue round 2：獨立審查抓到的
 # money-class 缺陷（worker 撿走 job 到真正打 provider 之間那段窗口，llm_task 看不到，第二次
 # 按下去沒被擋，兩邊都真的付了錢）。四支新測試：`IsActiveTest`
@@ -1467,7 +1479,10 @@ KNOWN_MODULE_SIZES = {
                              # `llm_task` 讀狀態的函式；`__init__.py` 的 register() 多註冊三支
                              # 任務。刪的比加的少，淨增。前一次是 2091——2026-08-30 刪失效規則卡
                              # （小債）：autonomy 那張卡的兩處專屬驗證跟著走
-    "app/core": 1775,  # 上雲債 route B（codex_cli 只准 local）：`config.py` 多一張
+    "app/core": 1791,  # 票 01（T6c 成效判讀）：`rule_cards.py` 的 `CARDS` 加一筆
+                        # `gross_margin`（決定 1b：打平線用的毛利率，default 0.70，不必
+                        # migration）。量到的數字，不留餘裕。前一次是 1775——
+                        # 上雲債 route B（codex_cli 只准 local）：`config.py` 多一張
                         # `_FORBIDDEN_VALUES_OUTSIDE_LOCAL`——既有兩張表是「有值就違規」，
                         # 這條需求是「只有 codex_cli 這個值違規、其他供應商合法」，形狀塞不下，
                         # 所以是第三張表＋三行迴圈（+9 行）。量到的數字，不留餘裕。
@@ -1614,7 +1629,12 @@ KNOWN_MODULE_SIZES = {
     "app/orders": 1423,  # 票 12：channel_revenue 一張表取代三張（刪掉藥局專屬那一整組
                           # 之後仍淨增）——官網帳本寫入路徑、channel_revenue_summary()、
                           # 通用手動登錄（含「官網不能手動登錄」那道錢的守門）
-    "app/schedule": 3489,  # 真瀏覽器驗收兩個 bug（2026-08-31）：3461 → 3489。POST 建立讀取
+    "app/schedule": 3628,  # 審查跟進 3617 → 3628：`brand_diagnosis_response()` 真的接上 `has_any_tagged_spend()`（審查抓到它是死碼、routes.py 的 docstring 卻宣稱它在把關），回應多一個 `no_tagged_spend` 分辨「沒有座標可談」與「有座標但這輪沒建議」——票 01 矛盾檢查段本來就裁決過這兩種空要說不同的話。票 01（T6c 成效判讀）：3489 → 3617。新檔 `diagnosis.py`
+                            # （壓縮／打平線三層 fallback／收斂／GET 回應組裝）＋
+                            # `jobs.schedule_diagnosis()`＋`routes.py` 兩支新端點
+                            # （POST／GET .../diagnosis）＋`performance.py` `_bucket()`
+                            # 多一個 `roas_conservative` 欄位。量到的數字，不留餘裕。
+                            # 前一次是 3489——真瀏覽器驗收兩個 bug（2026-08-31）：3461 → 3489。POST 建立讀取
                            # 之後，回應必須是**這一次**剛派出去的讀取——原本結尾
                            # `return brand_response(...)` 是去資料庫查「最新讀取」，而那幾列
                            # 要等 worker 跑起來才寫得進去，所以按下「重新開始讀取」當下回的
@@ -1896,7 +1916,12 @@ KNOWN_MODULE_SIZES = {
                           # 10）：第二頁不帶上一頁的 `nextCursor` 當 `cursor`，API 會原地回
                           # 同一頁，不會往前走——單靠「hasNext 為真就重打同一個 body」會
                           # 卡死或漏物件。前一次是 154。
-    "app/tools": 70,  # 票 03（ADR 0063）：spawn worker，58→70。2026-09-04 刪死碼 capacity_check.py（260
+    "app/tools": 355,  # 票 01（T6c 成效判讀）：70 → 355。新檔
+                       # `simulate_meta_spend.py`（假 Meta 網路回應＋灌帳號綁定／三層花費／
+                       # 活動樹／深度 3 綁定／七維座標，只准 `BRAND_OS_ENV != production` 跑）
+                       # ——把這個 session 驗證用的暫存腳本收進 repo，日後開發成效判讀不必
+                       # 等真廣告花到錢。量到的數字，不留餘裕。前一次是 70——
+                       # 票 03（ADR 0063）：spawn worker，58→70。2026-09-04 刪死碼 capacity_check.py（260
                        # 行，零呼叫端，服務已刪除的 Jinja／app/ads 舊 UI）。前一次是 318
 }
 

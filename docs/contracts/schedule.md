@@ -6,8 +6,8 @@ it is not repeated here, because a second copy goes stale.
 ## Entry path
 
 `app/schedule/__init__.py`. Everything else in the package (`plan.py`, `tree.py`, `creative.py`,
-`period.py`, `binding.py`, `state.py`, `tree_approval.py`, `performance.py`, `repository.py`,
-`routes.py`, `jobs.py`) is private and imported by nothing outside it.
+`period.py`, `binding.py`, `state.py`, `tree_approval.py`, `performance.py`, `diagnosis.py`,
+`repository.py`, `routes.py`, `jobs.py`) is private and imported by nothing outside it.
 
 The split inside the package is by job, not by size: `routes.py` takes HTTP requests, and the
 others do the work. Three files were carved out of `routes.py` on 2026-09-03 (user-approved) on
@@ -59,7 +59,10 @@ Allowed dependencies: `app.core`, `app.llm`, `app.shared.web`,
 `app.brand_intelligence.repository`, `app.meta`, `app.background`, and — added 2026-09-02 at T2
 station ① — `app.orders.repository`, read-only, for `channel_revenue_summary()` when settling a
 period. `app.orders` imports only `brand_intelligence`, `core` and `shared`, so this closes no
-cycle, and `app.dashboard` already depends on it the same way.
+cycle, and `app.dashboard` already depends on it the same way. Ticket 01 (T6c) reads a second
+function off the same already-allowed module, `sku_margins()`, to compute this month's actual
+gross margin rate for the diagnosis break-even line (`app/schedule/diagnosis.py`) — same
+read-only direction, no new edge in the layer graph.
 
 ## Decisions in force
 
@@ -125,9 +128,10 @@ Moved here from `BOARD.md` on 2026-09-04 (full text: `BOARD.md` @ `6574191`).
   **The next place that shows a ROAS asks which denominator first.**
 - `compute_money()` (T3e, ADR 0055 §11) takes spend from `daily_entity_spend(level="adset")`, not
   `spend_summary(level="campaign")`: membership is per ad set, and a different level does not add up.
-- `app/methodology/README.md` rows 「成效判讀／下期草案」 and 「期中檢查點」 have **zero callers**;
-  `providers.py:154`'s `performance_reading` label is empty. The review methodology is already
-  written; the step ⑨ ticket wires it, it does not write it.
+- `app/methodology/README.md` row 「期中檢查點」 still has **zero callers**. 「成效判讀／下期草案」
+  and `providers.py:151`'s `performance_reading` task_type got their first caller from ticket 01
+  (T6c, `app/schedule/diagnosis.py` / `jobs.schedule_diagnosis()`) — the review methodology was
+  already written before that ticket; it wired it, it did not write it.
 - Mind-map C (diagnosis), D (market), E (audience), P (weekly/monthly report): summaries kept, no
   tickets until the loop has run.
 - Milestone stage one was walked end to end on a real account on 2026-08-29 (晨光咖啡 + BP AD) and

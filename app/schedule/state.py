@@ -36,6 +36,12 @@ CREATIVE_TASK_TYPE = "schedule_creative"
 # 平台知識（帳戶結構、AB 測試分流）跟出方案是同一批，沒有真的用到才新增專屬列（維護規則
 # 「只按消費拉動萃取」）。
 METHODOLOGY_TASK_LABELS = ["檔期計畫生成"]
+# 票 01（T6c）：成效判讀，第四個 task_type——決定 7，用既有的 `performance_reading`
+# （`app/llm/providers.py` 已註冊、原本零呼叫者）。方法論走既有對照表「成效判讀／下期草案」
+# 那一列（`ab-testing.md`＋`ads-core.md`＋`ads-commerce.md`），這張票是接線不是寫方法論
+# ——不新增部門任務檔，prompt 組法見 `app/schedule/diagnosis.py`。
+DIAGNOSIS_TASK_TYPE = "performance_reading"
+DIAGNOSIS_METHODOLOGY_TASK_LABELS = ["成效判讀／下期草案"]
 # 票 T1 站③收尾：曾經跟上面共用一張清單餵給三支 job，副作用是計畫／活動樹的方法論區塊
 # 平白多讀到創意矩陣、Meta 版位格式規格這兩份不相干的檔案（21,432 → 38,074 字，＋78%）。
 # 改成 schedule_creative 專屬一張清單，計畫／活動樹維持只吃「檔期計畫生成」。

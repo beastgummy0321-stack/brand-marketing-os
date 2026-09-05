@@ -56,6 +56,7 @@ from app.core import rule_cards
 from app.llm import gateway
 from app.schedule import binding as binding_mod
 from app.schedule import creative as creative_mod
+from app.schedule import diagnosis as diagnosis_mod
 from app.schedule import performance as performance_mod
 from app.schedule import period as period_mod
 from app.schedule import plan as plan_mod
@@ -472,6 +473,40 @@ def get_creative_performance(request: Request, brand_id: str):
     actor = web.require_actor(request)
     web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
     return performance_mod.brand_creative_performance(web.conn, actor.org_id, brand_id)
+
+
+def _run_diagnosis(conn, brand_id: str, org_id: str) -> dict:
+    """票 01（T6c）：跑一次成效判讀。比照既有 `_run_creative` 的形狀——這裡只做「還有沒有
+    在跑」的檢查＋`gateway.check_spend_cap()`＋enqueue，真正壓縮資料、打三次代理、收斂在
+    `app/schedule/jobs.py` 的 `schedule_diagnosis()`（worker 執行）。沒有「有沒有東西可以
+    診斷」這道前置驗證：花費為零、七維全部沒有座標可對，都是誠實的判讀結果之一，不是擋在
+    按鈕前的錯誤——回應的 `no_tagged_spend` 分辨得出「沒有座標可談」與「有座標但這輪沒建議」，
+    畫面照那一欄說不同的話（`diagnosis.brand_diagnosis_response`）。"""
+    gateway.check_spend_cap(conn, org_id=org_id)
+    if state._display_task_row(conn, brand_id, state.DIAGNOSIS_TASK_TYPE)[1]:
+        raise _already_running_error()
+    if not background_enqueue(
+        f"background.{state.DIAGNOSIS_TASK_TYPE}", org_id=org_id,
+        lock=f"{state.DIAGNOSIS_TASK_TYPE}:{brand_id}", brand_id=brand_id,
+    ):
+        raise _already_running_error()
+    return diagnosis_mod.brand_diagnosis_response(conn, org_id, brand_id)
+
+
+@router.post("/brands/{brand_id}/diagnosis")
+def create_diagnosis(request: Request, brand_id: str):
+    actor = web.require_actor(request)
+    web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
+    return _run_diagnosis(web.conn, brand_id, actor.org_id)
+
+
+@router.get("/brands/{brand_id}/diagnosis")
+def get_diagnosis(request: Request, brand_id: str):
+    """最新一輪：狀態、窗口日期、打平線與來源、前 5 條建議、三個 lens 各自的原文
+    （`diagnosis.brand_diagnosis_response` 檔頭有完整說明）。從沒跑過就是 `status: null`。"""
+    actor = web.require_actor(request)
+    web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
+    return diagnosis_mod.brand_diagnosis_response(web.conn, actor.org_id, brand_id)
 
 
 # ---------------------------------------------------------------------------

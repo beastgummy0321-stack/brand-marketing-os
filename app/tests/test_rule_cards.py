@@ -65,8 +65,9 @@ class RuleCardValueTest(unittest.TestCase):
     def test_list_cards_includes_human_readable_metadata(self):
         cards = rule_cards.list_cards(self.conn, BID_A)
         # 2026-08-29 刪掉六張沒有消費端的卡剩四張；dead-code-sweep 票 04（2026-08-30）
-        # 再刪 rule_expiry（規則不再過期），剩三張。
-        self.assertEqual(len(cards), 3)
+        # 再刪 rule_expiry（規則不再過期），剩三張。票 01（T6c 成效判讀）加回第四張
+        # `gross_margin`（打平線用的毛利率，決定 1b）。
+        self.assertEqual(len(cards), 4)
         by_key = {c["key"]: c for c in cards}
         self.assertIn("規則", by_key["rule_prompt_cap"]["title"])
         for c in cards:
