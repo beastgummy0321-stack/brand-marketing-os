@@ -2,31 +2,22 @@
 票 05-1 補 `enqueue()`)。
 
 集裝箱憲章 §1 邊界定案：
-1. 對外進入點：本檔（`app/background/__init__.py`）。
+1. 對外進入點：本檔（`app/background/__init__.py`）。`app/worker.py`——worker 本身跑的那個
+   process（ADR 0063）——不是本模組的一部分：它掛在組裝根旁邊，因為起 worker 需要組裝根
+   的 task registration，而 `app/background` 永遠不可以往上 import。
 2. 進出形狀：`app() -> procrastinate.App`（無參數，回傳可用來
    `.configure_task(name).defer(org_id=..., ...)` 或 `.run_worker(...)` 的 procrastinate App
-   物件），加上票 05 fix round 補的 `start_worker()`／`stop_worker()`（都是 async、無參數，
-   見下方函式檔頭），加上票 05-1 補的
+   物件），加上票 05-1 補的
    `enqueue(task_name, *, org_id, lock, **kwargs) -> bool`（見下方函式檔頭：defer 一個 job，
    同一個 `lock` 已經有一個在 `todo` 狀態排隊時回 False，不拋例外）。其餘一律私有。
-3. 呼叫端：`app()` 目前是本模組自己的測試檔、app/meta（掛 task）、app/schedule（票 05-1：
-   `register_tasks()` 掛三個生成 task）與手動 done-check；`start_worker()`／`stop_worker()`
-   目前只有 app/main.py 的 FastAPI lifespan（啟動／關閉各呼叫一次）與本模組自己的測試檔；
+3. 呼叫端：`app()` 目前是本模組自己的測試檔、app/meta（掛 task）、app/schedule（
+   `register_tasks()` 掛三個生成 task）與 `app/worker.py`（起 worker 前先建，ADR 0063）；
    `enqueue()` 目前是 app/schedule/routes.py（三支 POST 端點）與本模組自己的測試檔。
 4. 不碰什麼：procrastinate 套件內部（`procrastinate.schema`／`procrastinate.cli` 等）——本檔
    ／本模組永遠不呼叫 `procrastinate schema --apply`；schema 已經 vendor 進
    `supabase/migrations/20260829000001_background_baseline.sql`，由 Supabase CLI 管，跟全站
    其他模組一樣，但落在自己的 `<current_schema()>__queue` 命名空間裡（ADR 0038），不是這個
    process 平常讀寫資料的 schema。
-
-票 05 fix round：review 打回「排程不能只靠人手動跑」（done-check「A scheduled pull runs
-unattended」）。原本的判斷是「加一個常駐 worker process 是部署形態決定，CLAUDE.md 規則 9
-要先提案批准」——但這不必是「加一個新 process」：`啟動行銷系統.bat` 起的 uvicorn 本來就是
-唯一持續運行的東西，procrastinate 官方文件本身就替「把 worker 掛進一個更大的既有應用程式
-裡跑」這個用法點名了 `install_signal_handlers=False` 這個參數（見 `start_worker()`
-docstring）。讓這個既有 process 多做一件事，不是新開一個部署形態，是加法，符合規則 6
-「手動路徑永遠一級公民；自動化是加法」——`python -m app.meta.daily_pull` 手動觸發路徑原封
-不動留著。
 
 ADR 0038（round 2 補丁）：procrastinate 的四張表沒有 `org_id`，也不會加——加了也沒有任何
 程式碼會填它、會拿它篩選，是看起來像隔離、其實不是隔離的裝飾欄位（見 ADR 全文）。它們活在
@@ -55,24 +46,16 @@ Windows 專屬修正：procrastinate 的 worker 走 psycopg 的 async 連線（`
 點名的已知限制。修法是 import 這個模組時就把行程的 event loop policy 換成
 `WindowsSelectorEventLoopPolicy`（`sys.platform` 判斷，非 Windows 平台不動）。
 
-**但光是換 policy 不夠，2026-08-29 實測整個網站因此起不來**（`PoolTimeout` 從 FastAPI
-lifespan 竄出去，`Application startup failed. Exiting.`，exit code 3）：uvicorn 建 loop 時
-傳的是**寫死的** `loop_factory`（`uvicorn/server.py` 的 `Server.run` 把
-`config.get_loop_factory()` 交給 `asyncio_run`，而 `uvicorn/loops/asyncio.py` 的
-`asyncio_loop_factory` 在 win32 直接回 `ProactorEventLoop`），**根本不看 policy**。worker 掛在
-uvicorn 自己的 loop 上，就一定是 Proactor。
-
-所以 worker 改成跑在**自己的執行緒、自己的 loop** 上（`_worker_thread_body`）：`asyncio.run()`
-是照 policy 建 loop 的，policy 這時才真的生效。附帶好處是 worker 的 loop 跟 web 的 loop
-互不干擾。
-
-同一輪的第二個修正：**worker 起不來不准把網站一起弄死**。原本 `start_worker()` 的例外直接
-從 lifespan 竄出去，等於「關掉自動排程」的代價是「整個系統打不開」——那不是加法。現在一律
-記錄後吞掉，網站照常起來，手動路徑 `python -m app.meta.daily_pull` 照常可用。
+ADR 0063：worker 現在是自己的 process（`python -m app.worker`），跑在自己的主執行緒、自己
+的 loop 上——`asyncio.run()` 照 policy 建 loop，這裡在 import 時換的 policy 才真的生效。
+worker 起不來也不再需要吞掉例外保護網站：它不是網站的一部分，允許在自己的視窗裡大聲炸掉
+（ADR 0039 那句「worker 起不來不准把網站一起弄死」現在是結構上自動成立，不必再靠這個
+模組吞例外）。
 
 票 05-1：`enqueue()` 為什麼要蓋第二個 App（不是重用 `app()`）——`app()` 是一顆
-`PsycopgConnector`，它的 async pool 是在 worker 執行緒自己的 loop 上開的
-（`_worker_main`）。`PsycopgConnector.get_sync_connector()` 只要那顆 async pool 是開的就回傳
+`PsycopgConnector`，它的 async pool 是 `app/worker.py` 呼叫 `App.run_worker()` 時，在 worker
+process 自己的主 loop 上開的（ADR 0063）。`PsycopgConnector.get_sync_connector()` 只要那顆
+async pool 是開的就回傳
 `self`（`.venv/Lib/site-packages/procrastinate/psycopg_connector.py:110-112`），而在一顆
 async connector 上呼叫任何 sync 方法都會走 `utils.async_to_sync`
 （`connector.py:107-118`）——它會另開一個**新的** event loop 去跑那個 coroutine，等於拿一顆
@@ -96,7 +79,6 @@ ponytail: `queueing_lock` 的唯一索引只擋 `WHERE status = 'todo'`
 import asyncio
 import logging
 import sys
-import threading
 from urllib.parse import quote, urlsplit, urlunsplit
 
 import procrastinate
@@ -113,11 +95,6 @@ _app: procrastinate.App | None = None
 _app_dsn: str | None = None
 _sync_app: procrastinate.App | None = None  # 票 05-1：enqueue() 專用，見模組檔頭
 _sync_app_dsn: str | None = None
-_worker_thread: threading.Thread | None = None
-_worker_loop: asyncio.AbstractEventLoop | None = None  # 由 worker thread 自己填
-_worker_stop: asyncio.Event | None = None              # 建在 worker loop 上，只能 threadsafe 觸發
-_WORKER_READY_TIMEOUT = 15.0
-_WORKER_STOP_TIMEOUT = 10.0
 
 
 def _noop(org_id: str) -> None:
@@ -183,90 +160,3 @@ def enqueue(task_name: str, *, org_id: str, lock: str, **kwargs) -> bool:
     except AlreadyEnqueued:
         return False
     return True
-
-
-async def _worker_main(ready: threading.Event) -> None:
-    """The worker coroutine, running on the worker thread's own loop. Opens the pool, signals
-    `ready` once it can be stopped, runs until `stop_worker()` signals, then closes what it
-    opened.
-
-    `ready` is what makes `stop_worker()` race-free: until this coroutine has published its loop
-    and its stop event, a caller has nothing to signal and would fall through to a join that can
-    only time out. `start_worker()` therefore waits for it rather than returning the moment the
-    thread exists."""
-    global _worker_loop, _worker_stop, _worker_app
-    _worker_loop = asyncio.get_running_loop()
-    _worker_stop = asyncio.Event()
-    worker_app = app()
-    _worker_app = worker_app
-    await worker_app.open_async()  # run_worker_async needs the pool open or it raises AppNotOpen
-    task = asyncio.create_task(worker_app.run_worker_async(install_signal_handlers=False))
-    ready.set()
-    try:
-        await _worker_stop.wait()
-    finally:
-        task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
-        await worker_app.close_async()
-
-
-def _worker_thread_body(ready: threading.Event) -> None:
-    """`asyncio.run()` builds a fresh loop from the process policy — which the win32 branch at
-    the top of this module already switched to `WindowsSelectorEventLoopPolicy`. That policy is
-    why the worker must not ride uvicorn's loop: uvicorn passes an explicit
-    `loop_factory=ProactorEventLoop` (uvicorn/server.py `Server.run`, uvicorn/loops/asyncio.py
-    `asyncio_loop_factory`), so it never consults the policy, and psycopg's async pool cannot
-    connect on a ProactorEventLoop. Owning the loop is what makes the policy take effect."""
-    try:
-        asyncio.run(_worker_main(ready))
-    except Exception:
-        _log.exception("background worker stopped with an error; the site keeps running")
-    finally:
-        ready.set()  # never leave start_worker() waiting out the full timeout on a crash
-
-
-async def start_worker() -> None:
-    """Run this process as a procrastinate worker, on a thread and an event loop of its own.
-
-    **A worker that will not start must never take the web application down with it.** Rule 6
-    makes automation additive and the manual path first-class, so every failure here is logged
-    and swallowed: the site comes up, and `python -m app.meta.daily_pull` still works. Before
-    2026-08-29 this raised out of the FastAPI lifespan and the whole app exited with code 3.
-
-    Idempotent — calling it twice does not start a second worker.
-    """
-    global _worker_thread
-    if _worker_thread is not None and _worker_thread.is_alive():
-        return
-    try:
-        ready = threading.Event()
-        thread = threading.Thread(
-            target=_worker_thread_body, args=(ready,),
-            name="procrastinate-worker", daemon=True)
-        thread.start()
-        _worker_thread = thread
-        if not ready.wait(_WORKER_READY_TIMEOUT):
-            _log.warning("background worker did not report ready in %.0fs; the site keeps running",
-                         _WORKER_READY_TIMEOUT)
-    except Exception:
-        _log.exception("could not start the background worker; the site keeps running")
-        _worker_thread = None
-
-
-async def stop_worker() -> None:
-    """Signal the worker loop to finish and wait for its thread, so shutdown leaves no thread
-    and no open pool behind. Returns immediately when nothing is running."""
-    global _worker_thread, _worker_loop, _worker_stop, _worker_app
-    thread, loop, stop = _worker_thread, _worker_loop, _worker_stop
-    _worker_thread = _worker_loop = _worker_stop = _worker_app = None
-    if thread is None:
-        return
-    if loop is not None and stop is not None and not loop.is_closed():
-        loop.call_soon_threadsafe(stop.set)
-    thread.join(timeout=_WORKER_STOP_TIMEOUT)
-    if thread.is_alive():
-        _log.warning("background worker did not stop within %.0fs; leaving it as a daemon thread",
-                     _WORKER_STOP_TIMEOUT)

@@ -14,8 +14,9 @@ PowerShell 或命令提示字元執行一次即可，不需要每次開機都做
   也不會自動開瀏覽器分頁。
 - 先探測 port 8710 是不是已經有人在聽（例如你自己手動點了 `啟動行銷系統.bat`），
   有的話就直接結束，不會重複啟動第二個 process。
-- process 一起來就會先補跑一次到期檢查（`app/main.py _auto_sync_if_due`），把機器
-  關著這段時間漏掉的 14 天最終結算追回來，不必等滿一小時的輪詢間隔。
+- 也會把 worker（`python -m app.worker`，ADR 0063）當成這個 process 的子行程開起來；
+  `關閉行銷系統.bat` 用 `taskkill /PID … /T` 收掉聽 8710 那個 process 時，`/T` 會連著
+  把 worker 一起收掉，不需要另外處理。worker 自己的訊息寫進 `logs/worker.log`。
 - 執行過程的訊息寫進 `logs/boot_launcher.log`（這支 log 檔不進版控）。
 
 ## 建立排程（貼一次就好）

@@ -19,15 +19,15 @@ pattern app/tests/test_background.py already establishes for the App itself.
 Fix round (review reject on done-check "a scheduled pull runs unattended"): `_dispatch_daily_pull`
 below is a procrastinate `periodic()` task that fires once a day and defers one
 `background.meta_daily_pull` job per org with a bound account — same fan-out the `__main__`
-block below already did by hand. It only *fires* because app/background.start_worker() now
-keeps a worker running inside the same uvicorn process this ticket's earlier round said had
-none (see app/background/__init__.py docstring for why that isn't a new deployment shape).
-The manual path stays first-class either way: `uv run python -m app.meta.daily_pull` still
-works exactly as before, consistent with 手動路徑永遠一級公民.
+block below already did by hand. It only *fires* because `python -m app.worker` is a process
+that runs unattended on every environment (ADR 0063) and picks the job up — this process
+never runs a worker itself. The manual path stays first-class either way: `uv run python -m
+app.meta.daily_pull` still works exactly as before, consistent with 手動路徑永遠一級公民.
 
 票 S1：拉取從「今天、只有 campaign 一層」變成「三層都拉」，並且長出 `backfill()`——一個
-組織＋帳號範圍的日期區間補拉，按日曆月切段、走同一支 upsert。它是 ADR 0039 那個洞（機器
-沒開的日子沒有人補）的修補路徑，也是接手既有帳號的載入路徑（GRILL 決策 9）。
+組織＋帳號範圍的日期區間補拉，按日曆月切段、走同一支 upsert。它是已被 ADR 0063 取代的
+ADR 0039 點名的那個洞（機器沒開的日子沒有人補；ADR 0063 沒有把它關上，也不是它的責任）
+的修補路徑，也是接手既有帳號的載入路徑（GRILL 決策 9）。
 """
 
 import calendar
@@ -191,9 +191,9 @@ def _month_chunks(since: date, until: date) -> list[tuple[date, date]]:
 def backfill(org_id: str, since: date, until: date) -> int:
     """把 [since, until] 這段日子的三層 insights 補回來，回傳寫進去的列數。
 
-    給誰用：ADR 0039 的 worker 跟著網站行程跑，機器關著的那幾天沒有人補——這支就是那個
-    補法；同時也是「接手一個已經投過廣告的帳號」的載入路徑（GRILL 決策 9，P7：先不做
-    畫面，CLI 就是入口）。
+    給誰用：worker 是自己的 process（`python -m app.worker`，ADR 0063），機器關著（或
+    worker 沒開）的那幾天沒有人補——這支就是那個補法；同時也是「接手一個已經投過廣告的
+    帳號」的載入路徑（GRILL 決策 9，P7：先不做畫面，CLI 就是入口）。
 
     `since`／`until` **兩個都必填、沒有預設值**（票 S1 D5），CLI 也強制要 `--since`。
     「要往回讀多久」是偏好不是常數，而且它不能做成 rule card：`app/core/rule_cards.py`

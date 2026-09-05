@@ -94,13 +94,14 @@ def fail_interrupted_tasks(conn: db.Conn) -> int:
     `status = 'running'` 列沒有人會再把它改掉——中斷的工作標記失敗，絕不自動重跑（重跑會
     再花一次錢，做的可能是幾乎跑完的工作）。`app.llm` 是唯一寫 `llm_task` 的模組（一張表
     只有一個模組會寫，見 `app/schedule/routes.py` 檔頭），所以這支掃描函式落在這裡，不是
-    `app/background`——呼叫端是 `app/main.py` 的 `_lifespan`，在 `start_worker()` 之前跑一次。
-    回傳受影響列數。
+    `app/background`——呼叫端是 `app/worker.py`，在 worker 接下第一個 job 之前跑一次
+    （ADR 0063）。回傳受影響列數。
 
-    ponytail: 假設同一時間只有一個 process 擁有全部 `running` 列，正是 ADR 0039 現在站的
-    位置（worker 跟 web 同一個 process，直到出現第二台機器）。worker 真的變成獨立 process
-    那天，這裡要換成心跳／存活時間判斷——跟 ADR 0039 說 `start_worker()` 離開 `lifespan`
-    是同一天。"""
+    ponytail: 假設同一時間只有一個 process 擁有全部 `running` 列。ADR 0063 之後 worker 是
+    自己的 process，這個假設還是成立——一個 worker process 開機時仍然一列都不擁有、跑起來
+    之後仍然擁有全部。真的要換成心跳／存活時間判斷，觸發點是**出現第二個 worker
+    process**（cloud autoscale），不是 worker 離開 `app/main.py`——那天已經是今天了，假設
+    活了下來。"""
     rows = conn.execute(
         "UPDATE llm_task SET status = 'failed', error = %s, finished_at = %s "
         "WHERE status = 'running'",

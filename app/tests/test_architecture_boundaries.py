@@ -1313,7 +1313,15 @@ class CoordinateDimensionSyncTest(unittest.TestCase):
 #      量對了，round 2 沒有再動這一筆。
 #   4. 本段理由註解自己（含上面「這道棘輪在落地前就已經在漏」那一段，done-check 5 點名的
 #      新要求）。
-TEST_LINES_CEILING = 19052
+TEST_LINES_CEILING = 19120  # 票 03-worker-own-process round 3（ADR 0063 amendment「release the
+# lock, so nothing depends on test ordering」）：零新測試（done-check 11 明講不用）——這幾行
+# 全是上面 `KNOWN_MODULE_SIZES["app"]` 那筆理由註解和本段理由註解自己變長多出來的行。量到的
+# 數字，不留餘裕。前一次是 19112——票 03-worker-own-process round 2（ADR 0063 amendment「one
+# worker, and the database says so」）：done-check 8 點名的新測試
+# `WorkerProcessTest.test_second_worker_lock_guard_leaves_a_live_running_row_alone`（money：
+# 第二個 worker 拿不到鎖時不准把第一個 worker 活著、已經付費的 llm_task 列掃成 failed），
+# 連同本段＋下面 `KNOWN_MODULE_SIZES["app"]` 理由註解自己佔的行。前一次是 19051——票 03
+# round 1（ADR 0063）：WorkerLifespanTest 兩支換 WorkerProcessTest 一支
 
 
 def _line_totals() -> tuple:
@@ -1359,7 +1367,18 @@ class TestRatioTest(unittest.TestCase):
 # 是頂層的 .py（`main.py` 組裝根等）。**允許調高，但必須改這張表**——重點不是禁止成長，
 # 是讓成長出現在 diff 裡有人看得到。廣告模組會在約 2,000 行撞上它，而不是 21,595 行。
 KNOWN_MODULE_SIZES = {
-    "app": 526,  # 票 02-env-flag-and-settings（ADR 0062）：`app/main.py` 在 `_load_dotenv()`
+    "app": 624,  # 票 03-worker-own-process round 3（ADR 0063 amendment「release the lock, so
+                  # nothing depends on test ordering」）：worker.py 的 main() 補 try/finally
+                  # 釋放 advisory lock（只有真的拿到鎖的那次呼叫才釋放）＋module docstring
+                  # 補說明段，96→119（+23），main.py 沒動，624 = 505+119。量到的數字，不留
+                  # 餘裕。前一次是 601——票 03-worker-own-process round 2（ADR 0063
+                  # amendment「one worker, and the database says so」）：worker.py 補 session
+                  # advisory lock（借鎖／衍生 key／拿不到就印一行印繁體中文訊息回傳）＋
+                  # __main__ 的 KeyboardInterrupt 收尾，45→96（+51），main.py 沒動，
+                  # 601 = 505+96。前一次是
+                  # 550——票 03-worker-own-process round 1（ADR 0063）：worker 搬進
+                  # app/worker.py，550 = 505+45。前一次是 526——
+                  # 票 02-env-flag-and-settings（ADR 0062）：`app/main.py` 在 `_load_dotenv()`
                   # 後加一次 `core_config.settings()` 開機檢查呼叫（import＋呼叫＋理由註解，
                   # +5 行）；round 2 順手修正「identity 排最後」那段理由註解——它原本說
                   # register() 會在 IDENTITY_DEV_TOKEN 設定錯誤時 raise，這道檢查已經搬進
@@ -1370,13 +1389,14 @@ KNOWN_MODULE_SIZES = {
                   # provider，原本不經 run_task() 所以完全繞過上限。7 行＝import gateway ＋
                   # 打 provider 前先問 check_spend_cap()。前一次是本機 codex CLI 線路
                   # （c47bc36）的 546：main.py 依環境變數換供應商
-    "app/background": 272,  # 票 05-1：新增 enqueue()（defer 一個 job，同一個 lock 已經在
+    "app/background": 162,  # 票 03-worker-own-process（ADR 0063）：搬進 app/worker.py，272→162。前一次是 272——
+                             # 票 05-1：新增 enqueue()（defer 一個 job，同一個 lock 已經在
                              # todo 排隊就回 False）＋模組私有的 `_sync_app_for_defer()`
                              # （接 SyncPsycopgConnector，不能借 app() 那顆 async connector
                              # 的 pool，理由見模組檔頭「enqueue() 為什麼要蓋第二個 App」）。
                              # 前一次是 215——2026-08-29 修 Windows 起不來：worker 移到自己
-                             # 的執行緒／loop＋起不來不得弄死網站（ADR 0039 amended）
-                             # 掛進既有 process，不再只有 app()
+                             # 的執行緒／loop（已被 ADR 0063 取代——worker 現在是自己的
+                             # process，不再是掛進既有 process 的執行緒）
     "app/brand_intelligence": 2060,  # 票 S2（ADR 0044 落地）：復原 learning_ledger 的寫入
                                       # 函式——`create_learning_ledger_entry` 逐字照抄
                                       # `git show 7e0697e^:app/brand_intelligence/repository.py`
@@ -1818,8 +1838,8 @@ KNOWN_MODULE_SIZES = {
                           # 10）：第二頁不帶上一頁的 `nextCursor` 當 `cursor`，API 會原地回
                           # 同一頁，不會往前走——單靠「hasNext 為真就重打同一個 body」會
                           # 卡死或漏物件。前一次是 154。
-    "app/tools": 58,  # 2026-09-04：刪掉死碼 capacity_check.py（260 行，零呼叫端，服務的是
-                       # 已刪除的 Jinja／app/ads 舊 UI 世代）。前一次是 318
+    "app/tools": 70,  # 票 03（ADR 0063）：spawn worker，58→70。2026-09-04 刪死碼 capacity_check.py（260
+                       # 行，零呼叫端，服務已刪除的 Jinja／app/ads 舊 UI）。前一次是 318
 }
 
 
@@ -1888,7 +1908,7 @@ ALL_MODULE_DIRS = {
 }
 
 MODULES_WITHOUT_CONTRACT = {
-    "background", "dashboard", "departments", "intake", "llm",
+    "dashboard", "departments", "intake", "llm",
     "methodology", "orders", "shared", "storage", "tools",
 }
 

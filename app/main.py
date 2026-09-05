@@ -28,7 +28,6 @@ ADR 0027 起：連線不再全程共用一條，改成每個 request／背景工
 import os
 import sys
 import uuid
-from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -90,7 +89,6 @@ from app.core import config as core_config
 core_config.settings()  # ADR 0062：環境變數在這裡驗一次、開機就炸給你看，不留到第一個
 # 打進來的 request 才發現設定錯了。
 
-from app import background as background_module
 from app.core import db as coredb
 from app.core import retention as core_retention
 from app.core import settings as coresettings
@@ -127,26 +125,7 @@ def _purge_expired_llm_task_content_if_new_day() -> None:
 
 app_logging.install()  # 票 03-1 附錄 A：JSON formatter + request_id/user_id/org_id filter
 
-
-@asynccontextmanager
-async def _lifespan(_app: FastAPI):
-    """票 05 fix round：啟動時把這個 process（啟動行銷系統.bat 開的那個 uvicorn）順便掛成
-    procrastinate worker，接手 app/meta 每日花費拉取的排程（見
-    app/background/__init__.py start_worker() 檔頭「為什麼不是新開一個部署形態」）；關閉時
-    收乾淨，不留一個游離的背景 task。
-
-    票 05-1 frozen decision 2：`start_worker()` 之前先把上一個 process 死掉時留下的
-    `llm_task` running 列標記失敗（見 `app/llm/gateway.py` `fail_interrupted_tasks()`
-    檔頭）——順序要緊：worker 一旦開始跑，新任務也是 running，先掃再啟動才不會誤殺
-    這次剛啟動、真的在跑的那些。"""
-    with coredb.connection() as conn:
-        llm_gateway.fail_interrupted_tasks(conn)
-    await background_module.start_worker()
-    yield
-    await background_module.stop_worker()
-
-
-app = FastAPI(title="行銷作業系統（Phase 0 Mock UI）", lifespan=_lifespan)
+app = FastAPI(title="行銷作業系統（Phase 0 Mock UI）")
 
 # 新殼（票 01-react-shell，ADR 0003）：production 掛 frontend/dist 於 /app，
 # 舊 145 條 HTML 路由原封不動。frontend/dist 是建置產物、不進版控，開發期走

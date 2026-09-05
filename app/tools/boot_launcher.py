@@ -2,12 +2,15 @@
 
 Windows 工作排程器（schtasks，trigger onlogon，見 docs/boot-autostart.md）叫的是這支，
 不是「啟動行銷系統.bat」——那支登入當下會開一個 cmd 視窗搶焦點、還會開瀏覽器分頁，
-兩者都不是登入那一刻該發生的事。這支只做兩件事：
+兩者都不是登入那一刻該發生的事。這支做三件事：
 
 1. port 8710 已經有人在聽（例如使用者自己手動點了 .bat）就直接結束，不重複啟動——
    比照既有 .bat 的「netstat 找 LISTENING」邏輯，改用標準庫 `socket` 直接探測那個 port，
    不必解析 netstat 的文字輸出（依系統語系而異，一直是隱性地雷）。
-2. 沒人在聽就地把 uvicorn 跑起來（in-process；不必再開一層 subprocess）。
+2. 把 worker（`python -m app.worker`，ADR 0063）當這個 process 的**子行程**開起來——
+   一定要是子行程，不能是 detached：`關閉行銷系統.bat` 用 `taskkill /PID … /T /F` 收掉
+   聽 8710 那個 process，`/T` 才會連帶收掉它底下的子行程樹，worker 才會跟著死。
+3. 沒人在聽就地把 uvicorn 跑起來（in-process；不必再開一層 subprocess）。
 
 .env 金鑰不必在這裡讀——app.main 自己會讀（`_load_dotenv`，2026-08-23 那次「換個啟動
 方式就悄悄少了金鑰」之後改的：設定該由程式自己讀，不該綁在某一種啟動方式上，見
@@ -21,12 +24,14 @@ app/main.py 內該函式的說明）。
 """
 
 import socket
+import subprocess
 import sys
 from pathlib import Path
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 _PORT = 8710
 _LOG_PATH = _REPO_ROOT / "logs" / "boot_launcher.log"
+_WORKER_LOG_PATH = _REPO_ROOT / "logs" / "worker.log"
 
 
 def _port_is_listening(port: int, host: str = "127.0.0.1") -> bool:
@@ -47,6 +52,13 @@ def main() -> None:
 
     if str(_REPO_ROOT) not in sys.path:
         sys.path.insert(0, str(_REPO_ROOT))  # 讓 "app.main:app" 這個字串能被匯入到，不依賴目前工作目錄
+
+    _WORKER_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    worker_log = open(_WORKER_LOG_PATH, "a", encoding="utf-8", buffering=1)  # noqa: SIM115 — 常駐到子行程結束才關，不適合用 with
+    subprocess.Popen(
+        [sys.executable, "-m", "app.worker"], cwd=_REPO_ROOT,
+        stdout=worker_log, stderr=worker_log,
+    )  # 子行程（見上方檔頭第 2 點）；sys.executable 在這支啟動器底下已經是 pythonw.exe
 
     import uvicorn  # 延遲匯入：先接好 log、把路徑插好，任何匯入期的例外才有地方可以印
 

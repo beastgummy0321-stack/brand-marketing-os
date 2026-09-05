@@ -17,10 +17,13 @@ Status: 卡點——**還沒選部署平台**。2026-09-04 使用者裁決「不
    （兩道開發後門＋邀請連結要不要放進 API 回應），所以走了 route C。原本寫的「8 個鍵」也是錯的，
    實測 10 個。`issue-is-local-env-flag.md` 被它收走並刪除；`DATABASE_URL` 是唯一不快取的一顆
    （ADR 0062 §5a，背景工作靠它偵測 schema 換了沒）。
-3. 升成票 `03-worker-own-process.md`（2026-09-05）— route C，ADR 0063 已寫、取代 0039：worker 變成獨立行程
-   `python -m app.worker`，本機也一樣，`啟動行銷系統.bat` 與開機自動啟動各自幫使用者開起來。
-   順手抓到的隱形 bug：`fail_interrupted_tasks()` 掛在網站啟動時跑，worker 分家後網站重開會把
-   worker 正在跑的活工作誤標成失敗——跟著搬到 worker 進入點。
+3. ~~worker 拆成自己的行程~~ — 2026-09-05 已還（ADR 0063 取代 0039，commit `slice-03 done`）。
+   `python -m app.worker` 是唯一跑背景工作的東西，本機也一樣；兩支 .bat 與開機自動啟動各自幫使用者
+   開起來與收掉。過程中修掉兩個票面原本沒看到的洞：`fail_interrupted_tasks()` 留在網站啟動時跑，
+   worker 分家後網站重開會把 worker 正在跑的活工作誤標成失敗（搬到 worker 進入點）；以及拆行程
+   等於拿掉了「一次只有一個行程」的唯一保證（8710 那個 port），第二個 worker 會誤殺活著的付費工作、
+   讓畫面放行使用者再按一次＝真的再花一次錢（改用 Postgres session advisory lock，按 schema 分鑰匙）。
+   **教訓**：把一個行程拆成兩個，要先問「原本是誰在保證只有一個」。
 4. `issue-delete-seed-debug-account.md` — 最後一張，部署前一天做：刪了之後本機就沒有活得過 reset 的帳號。
 
 **B. 要先選平台**
