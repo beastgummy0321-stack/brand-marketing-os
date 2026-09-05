@@ -53,6 +53,18 @@ changed, and that is `blocked-upstream`.
 Delete, in this ticket, the three `JobRegistry` dicts these three jobs used, and any helper left
 with no caller. A dict that survives "for safety" is the bug this ticket exists to remove.
 
+Literal example — the status payload each of the three endpoints returns must keep the keys and
+types it has today; only where the value is read from changes:
+
+```json
+{"endpoint": "GET /api/brands/{brand_id}/report",
+ "before": {"source": "process-local dict", "after a backend restart": "idle default, as if nothing ever ran"},
+ "after":  {"source": "the llm_task row", "after a backend restart": "the same run, still reported"}}
+```
+
+Capture the real JSON body of each of the three endpoints on `main` before you start, and diff it
+against yours at the end. Same keys, same types.
+
 Out of scope: the four intake/persona kinds (ticket 09), `app/dashboard/routes_jobs_api.py`
 (ticket 09), any column added to `llm_task`, any change to `app/llm/gateway.py`.
 

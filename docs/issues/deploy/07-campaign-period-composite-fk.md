@@ -59,6 +59,18 @@ Work, in one new migration file
    (for row #1: `(source_period_id, org_id)`).
 3. Applied migration files are never edited. Everything lands in the new file.
 
+Literal example — the insert that must start failing. Org A owns period `cp_A`; org B is a
+different tenant:
+
+```json
+{"table": "decision", "row": {"id": "dec_1", "org_id": "org_B", "campaign_period_id": "cp_A"},
+ "before this ticket": "inserts successfully — one org's decision hangs off another org's period",
+ "after this ticket":  "rejected by the database: foreign key (campaign_period_id, org_id) has no match in campaign_period(id, org_id)"}
+```
+
+The same row with `"org_id": "org_A"` must still insert. That is the pair every done-check is
+measured against.
+
 Out of scope: adding `org_id` anywhere, changing nullability, adding delete behaviour, touching
 `ad_channel`, touching any application code. If application code has to change for the migration
 to apply, that is `blocked-upstream`, not a fix to make quietly.

@@ -45,6 +45,17 @@ Three things specific to this half:
    `grep -rn "threading.Thread" app/` returns nothing under `app/` outside the test tree. A dict
    kept "just in case" is the bug.
 
+Literal example — the one deliberate behaviour change, and the one bug fixed:
+
+```json
+{"intake scan status, before": {"state": "running", "stage": "正在看照片（第 3／12 張）"},
+ "intake scan status, after":  {"state": "running", "stage": "處理中"},
+ "GET /api/jobs/active, before": "four kinds; a running persona generation is invisible",
+ "GET /api/jobs/active, after":  "all seven kinds, including persona generation"}
+```
+
+Every other status payload keeps the keys and types it has today.
+
 Out of scope, and each gets its own issue file instead: `app/intake/state.py:359`
 `PENDING_PHOTOS` (a second module-level dict — it holds token→metadata only, the bytes are
 already in Storage at `:388`, so it is a different problem in the same file), and restoring
