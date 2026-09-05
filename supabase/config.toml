@@ -125,9 +125,12 @@ file_size_limit = "50MiB"
 # objects_path = "./images"
 
 # storage-slice ticket 01 / ADR 0043: one private bucket, org_id is the first key segment.
-# No file_size_limit / allowed_mime_types here — callers already validate in Chinese (SPEC D8).
+# allowed_mime_types is left unset — callers already validate extensions in Chinese (SPEC D8).
+# file_size_limit matches app/brand_web/routes_library.py's _MAX_ASSET_BYTES (50 * 1024 * 1024)
+# and the cloud-project path in 20260905000001_core_storage_assets_bucket_size_limit.sql.
 [storage.buckets.assets]
 public = false
+file_size_limit = "50MiB"
 
 # Allow connections via S3 compatible clients
 [storage.s3_protocol]
