@@ -6,12 +6,13 @@
 """
 
 import json
-import time
 import unittest
 from unittest import mock
 
 from fastapi.testclient import TestClient
 
+import app.background as background_module
+import app.brand_web as brand_web_module
 import app.main as main
 import app.shared.web as web
 from app.brand_intelligence import repository as repo
@@ -134,20 +135,18 @@ class CustomerVoiceHttpTest(unittest.TestCase):
 
     def setUp(self):
         self.client = TestClient(main.app)
+        # 票 08：這個測試模組自己有一份 schema（見 conftest.py），要重新掛一次
+        # `background.customer_voice_extraction`——DSN 換了 App 整顆重建，跟
+        # `test_schedule.py` `schedule_module.register_tasks()` 同一個理由。
+        brand_web_module.register(main.app)
 
     def _new_brand(self, name):
         b = repo.create_brand(web.conn, name=name, client_name=None, actor=ACTOR, org_id=DEV_ORG_ID)
         return b["id"]
 
-    def _poll(self, bid, job_key):
-        deadline = time.time() + 5
-        while time.time() < deadline:
-            response = self.client.get(f"/api/library/brands/{bid}/customer-voice/jobs/{job_key}")
-            body = response.json()
-            if body["status"] != "running":
-                return body
-            time.sleep(0.02)
-        self.fail("顧客原話背景任務逾時")
+    def _run_worker(self) -> None:
+        web.conn.commit()
+        background_module.app().run_worker(wait=False)
 
     def test_new_page_200(self):
         bid = self._new_brand("山嵐選物-新增頁")
@@ -170,7 +169,10 @@ class CustomerVoiceHttpTest(unittest.TestCase):
                 "source_channel": "dcard", "source_detail": "推薦文",
                 "raw_text": "連續熬夜三天，吃了兩天終於消下去，鬆了一口氣",
             })
-            status = self._poll(bid, resp.json()["job_key"])
+            self._run_worker()
+            status = self.client.get(
+                f"/api/library/brands/{bid}/customer-voice/jobs/{resp.json()['job_key']}"
+            ).json()
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(status["status"], "done")
         voices = self.client.get(f"/api/library/brands/{bid}").json()["data"]["customer_voices"]

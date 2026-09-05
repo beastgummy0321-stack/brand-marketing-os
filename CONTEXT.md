@@ -207,6 +207,11 @@ audience·pain·angle·hook·proof·offer·format（`COORDINATE_KEYS`，`app/sch
 
 ## 量到的教訓（跨模組；單一模組的量測在該模組契約頁的 Measured 節）
 
+- **`BRAND_OS_LLM_PROVIDER=codex_cli` 留在 shell 裡會蓋掉測試自己的假供應商**（2026-09-05，票 08
+  round 2 審查實測）。`app/llm/providers.py` 的 `select_provider()` 只要看到這顆變數就換掉供應商，
+  連測試注入的 `FakeProvider` 也照換——審查員為了跑真 worker 而 export 了它，接著 25 支不相干的
+  測試一起紅，追了很久才發現不是程式壞了。跑 pytest 前把它 unset；反過來，要跑真 worker 才 export。
+
 2026-09-04 從 `BOARD.md` 搬來（全文：`BOARD.md` @ `6574191`）。看板從此只放目標行。
 
 **下一輪全面體檢的觸發點**：不是排程，是可觀察的事件，先到者為準——T6c 收尾（閉環合攏），

@@ -193,39 +193,43 @@ class BrandReportHttpTest(unittest.TestCase):
 
 
 class ReportBackgroundJobTest(unittest.TestCase):
-    """票 dead-code-sweep 02：`brand_report_done` 沒登記在 CATEGORIES 時，`_notify()` 會在
-    try 區塊外炸 ValueError，執行緒死掉、job 狀態永遠卡在 running（GET 一直顯示「正在整理
-    五章」、POST 一直擋 400）。這裡直接呼叫 `_run_report`（不經執行緒，同步跑，斷言才不會
-    flaky），驗證成功／失敗都能把 job 狀態帶出 running。"""
+    """票 dead-code-sweep 02：`brand_report_done` 沒登記在 CATEGORIES 時，`_notify()` 會炸
+    ValueError。舊版行程內字典要等 notify 跑完才更新 job 狀態，執行緒因此死在 notify 那
+    一行、job 永遠卡在 running（GET 一直顯示「正在整理五章」、POST 一直擋 400）——票 08
+    之後這個臭蟲結構性消失了：job 狀態現在直接讀 `llm_task`，那一列在呼叫 `_notify()`
+    之前就已經被 `report_service.generate()` 寫定（succeeded／failed），notify 再炸也
+    不會讓狀態卡住。這裡改成直接呼叫 `background_brand_report()`（不經佇列，同步跑，
+    斷言才不會 flaky），驗證這件事仍然成立。"""
 
     def setUp(self):
         self.brand = repo.create_brand(web.conn, name="晨露茶飲-背景工作", client_name=None,
                                         actor=ACTOR, org_id=DEV_ORG_ID)
-        report_api._report_jobs.clear()
-
-    def tearDown(self):
-        report_api._report_jobs.clear()
 
     def test_success_reaches_done(self):
-        with mock.patch.object(report_service, "generate", return_value=(True, None)):
-            report_api._run_report(self.brand["id"], ACTOR)
-        state = report_api._report_jobs.get(self.brand["id"], {})
-        self.assertEqual(state.get("status"), "done")
+        # `mock.patch.object(report_service, "generate", ...)` 現在不再夠格：job 狀態改讀
+        # llm_task，那一列要靠 generate() 真的跑過才會存在——mock 掉整個函式會讓底下沒有
+        # 任何一列可查，_job_shape() 只能回預設值，測不出真的東西。改成真的跑一次（假
+        # Provider），才會有一列 succeeded 的 llm_task 可以讀。
+        with mock.patch.object(report_service, "PROVIDER", _fake(_sections("晨露茶飲"))):
+            report_api.background_brand_report(DEV_ORG_ID, self.brand["id"], ACTOR)
+        self.assertEqual(report_api._job_shape(self.brand["id"])["status"], "idle")
 
     def test_failure_reaches_failed_with_message(self):
-        with mock.patch.object(report_service, "generate", return_value=(False, "provider 逾時")):
-            report_api._run_report(self.brand["id"], ACTOR)
-        state = report_api._report_jobs.get(self.brand["id"], {})
-        self.assertEqual(state.get("status"), "failed")
-        self.assertIn("provider 逾時", state.get("message", ""))
+        failing = providers.FakeProvider(exception=providers.ProviderError("provider 逾時"))
+        with mock.patch.object(report_service, "PROVIDER", failing):
+            report_api.background_brand_report(DEV_ORG_ID, self.brand["id"], ACTOR)
+        state = report_api._job_shape(self.brand["id"])
+        self.assertEqual(state["status"], "failed")
+        self.assertIn("provider 逾時", state["message"])
 
     def test_long_failure_message_does_not_raise_on_notify(self):
         """background_job.notify 截斷到 MAX_MESSAGE_LEN，長失敗訊息不該讓 enqueue 的長度檢查炸開。"""
         long_message = "發生錯誤" * 30
-        with mock.patch.object(report_service, "generate", return_value=(False, long_message)):
-            report_api._run_report(self.brand["id"], ACTOR)  # 不該 raise
-        state = report_api._report_jobs.get(self.brand["id"], {})
-        self.assertEqual(state.get("status"), "failed")
+        failing = providers.FakeProvider(exception=providers.ProviderError(long_message))
+        with mock.patch.object(report_service, "PROVIDER", failing):
+            report_api.background_brand_report(DEV_ORG_ID, self.brand["id"], ACTOR)  # 不該 raise
+        state = report_api._job_shape(self.brand["id"])
+        self.assertEqual(state["status"], "failed")
 
 
 if __name__ == "__main__":

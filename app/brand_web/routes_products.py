@@ -12,10 +12,10 @@
    失敗留空產品可手動刪），背景跑調研。
 4. `GET /api/products/brands/{brand_id}/products/{product_id}`：詳情整包（四分頁一次帶回，
    跟 S5 品牌智庫同一個「整包讀」決定，見 `libraryApi.ts` 檔頭）。
-5. 背景調研狀態機（S6.29–S6.31）：跟 `routes_library.py` 的顧客原話抽取是同一種模式
-   （模組層 dict＋`threading.Thread`），差別是這裡的 key＝`product_id`、且新建與再次調研
-   共用同一套（冪等：同一個 key 已經在跑就不重新啟動），仿 `app/ads/routes.py` 的
-   `_progress_state` 形狀，但各自一份、不跨模組共用（集裝箱憲章 §5：不抽共用）。
+5. 背景調研狀態機（S6.29–S6.31；票 08：從行程內 dict＋`threading.Thread` 搬上
+   `app.background` 佇列，見 `docs/contracts/background.md`）——新建與再次調研共用
+   同一套：key＝`product_id`，procrastinate 的 `queueing_lock` 擋還在 `todo` 階段的
+   重複按，`llm_task` 的 `running` 列擋 worker 已經在處理那一次的重複按。
 6. 產品事實／經濟數字／規則／宣稱／交接包／永久刪除，一律重用既有的私有工具函式與
    `repository.py` 既有的 CRUD 函式——不重寫第二份業務邏輯，這裡只負責重新包一層 JSON 殼。
    `_create_source_ref` 仍在 `app/brand_web/routes.py`（那裡的品牌事實／規則／宣稱舊表單
@@ -32,6 +32,8 @@ from datetime import UTC, datetime
 from fastapi import APIRouter, Request
 from fastapi.responses import Response
 
+from app.background import enqueue as background_enqueue
+from app.background import is_active as background_is_active
 from app.brand_intelligence import background_job, product_ai
 from app.brand_intelligence import repository as repo
 from app.brand_web import product_ai_calls
@@ -39,7 +41,9 @@ from app.brand_web import routes as legacy_routes
 from app.brand_web import routes_product_helpers as product_helpers
 from app.core import cleanup
 from app.core import vocab as md
+from app.core.db import connection as core_db_connection
 from app.core.db import new_id
+from app.llm import gateway
 from app.shared import web
 from app.shared.web import (
     JSONResponse,
@@ -168,97 +172,87 @@ async def product_create(request: Request, brand_id: str):
 
 
 # ---------------------------------------------------------------------------
-# AI 調研新增與再次調研（背景工作，S6.10–S6.11／S6.17／S6.29–S6.31）：兩個入口共用同一套
-# 背景機制，key＝product_id（一個產品同時只會有一份調研在跑，不需要再併 brand_id）。
-# _progress_state 形狀在幾個模組各自一份，刻意不抽共用（集裝箱憲章 §5：不抽共用）。
+# AI 調研新增與再次調研（`background.product_scan` 佇列工作，S6.10–S6.11／S6.17／
+# S6.29–S6.31；票 08：從行程內 dict＋thread 搬上 app.background 佇列，見
+# docs/contracts/background.md）。兩個入口共用同一套：key＝product_id。round 1 上線後
+# 用 llm_task 的 running 列擋「worker 已經在處理那一次」被獨立審查抓到會漏——worker 撿走
+# 到真的打 provider 之間那一段，llm_task 完全沒有列可以讀，第二次按下去會被誤判成「沒在
+# 跑」而放行，兩邊都真的付了錢（票 08「Blocked」節）。round 2 改問
+# `app/background.is_active(lock)`：它直接讀 procrastinate 自己的佇列表，這個 lock 名下
+# 只要還有列卡在 `todo` 或 `doing` 就算在跑，覆蓋 llm_task 看不到的那一段窗口；
+# `background_enqueue()` 的 `queueing_lock` 唯一索引仍然是第二層防線（擋 `is_active()`
+# 讀取之後、`enqueue()` 真正寫入之前那一瞬間的競態）。
+#
+# 超預算檢查（`_scan_budget_error`）搬到 POST 端點同步做，不再放進背景工作裡：
+# 佇列讀寫只認 llm_task，而「還沒排進去就先擋下」的失敗天生不會有那一列可以讀
+# （`gateway.run_task()` 命中花費上限時故意不寫任何列，見該函式檔頭），沒有第二個
+# 地方能誠實回報這個原因，所以檢查提前到 enqueue 之前——跟 `app/schedule/routes.py`
+# `_run_plan()`／customer_voice_submit() 同一個次序。
 # ---------------------------------------------------------------------------
 
-_research_jobs = background_job.JobRegistry()
 _RESEARCH_USUAL_RANGE = "30 到 60 秒"
+ALREADY_RESEARCHING_MESSAGE = "上一次還在跑，請等它跑完再按。"
 
 
-def active_jobs() -> list[dict]:
-    """回傳進行中的產品調研工作，供 dashboard 聚合；不洩漏 registry 狀態。"""
-    return [
-        {
-            "brand_id": state["brand_id"],
-            "kind": "product_research",
-            "status": state["status"],
-            "stage": state.get("stage") or "",
-            "started_at": state.get("started_at") or "",
-        "action_url": f"/app/brands/{state['brand_id']}/products/{product_id}",
-        }
-        for product_id, state in _research_jobs.items()
-        if state.get("status") in ("running", "waiting") and state.get("brand_id")
-    ]
+def _research_state(conn, brand_id: str, product_id: str) -> dict:
+    """讀 llm_task 取代讀行程內 dict（票 08）：`product_id` 存在
+    `context_scope_json` 裡（見 `background_product_scan()`），這裡反查最新一列。
+    逐步進度（讀取網址中→整理事實中→完成）比照票面決定放棄，running／failed 一律
+    回固定字串；`added_count`／`price_created` 這兩個彙總數字沒有地方可以在執行
+    結束後還讀得到（不是 llm_task 欄位，也不新增 schema），保留鍵與型別、值固定回
+    None／False——前端 `ProductDetailPage.tsx` 的 `done` 分支本來就不讀這兩個值
+    （轉成功就整包重新 `load()`），這裡是有回報過的簡化，不是悄悄近似。"""
+    row = conn.execute(
+        "SELECT * FROM llm_task WHERE brand_id = %s AND task_type = 'product_scan' "
+        "AND context_scope_json->>'product_id' = %s ORDER BY started_at DESC LIMIT 1",
+        (brand_id, product_id),
+    ).fetchone()
+    if row is None:
+        return {"status": "done", "stage": "", "started_at": datetime.now(UTC).isoformat(),
+                "usual_range_text": "", "error": None, "added_count": None, "price_created": False}
+    if row["status"] == "running":
+        return {"status": "running", "stage": "讀取網址中", "started_at": row["started_at"],
+                "usual_range_text": _RESEARCH_USUAL_RANGE, "error": None, "added_count": None,
+                "price_created": False}
+    if row["status"] == "succeeded":
+        result = product_ai._validate_scan_reply(gateway.parse_json_reply(row["rendered_output"]))
+        if result is not None:
+            return {"status": "done", "stage": "完成", "started_at": row["started_at"],
+                    "usual_range_text": _RESEARCH_USUAL_RANGE, "error": None, "added_count": None,
+                    "price_created": False}
+        error = product_ai_calls.PARSE_FAIL_MESSAGE  # llm_task 成功但抽取結果驗證失敗
+    else:
+        error = row["error"]
+    return {"status": "failed", "stage": "整理事實中", "started_at": row["started_at"],
+            "usual_range_text": _RESEARCH_USUAL_RANGE, "error": error, "added_count": None,
+            "price_created": False}
 
 
-def _research_state(product_id: str) -> dict:
-    return _research_jobs.get(product_id, {
-        "status": "done", "stage": "", "started_at": datetime.now(UTC).isoformat(),
-        "usual_range_text": "", "error": None, "added_count": None, "price_created": False,
-    })
-
-
-def _research_start(product_id: str, brand_id: str, actor: str, product_name: str, url: str) -> None:
-    started_at = datetime.now(UTC).isoformat()
-    running_state = {
-        "status": "running", "stage": "讀取網址中", "started_at": started_at,
-        "usual_range_text": _RESEARCH_USUAL_RANGE,
-        "error": None, "added_count": None, "price_created": False,
-        # brand_id：全站生成進度單一出口（票 B4-warroom）聚合端點列舉用，業務邏輯不讀這個鍵。
-        "brand_id": brand_id,
-    }
-    _research_jobs.start(product_id, running_state, _research_run,
-                          (product_id, brand_id, actor, product_name, url), idempotent=True)
-
-
-def _research_notify(brand_id: str, product_id: str, message: str) -> None:
+def _research_notify(conn, brand_id: str, product_id: str, message: str) -> None:
     background_job.notify(
-        web.conn, brand_id, category="product_research_done", dedupe_key=new_id("prsjob"),
+        conn, brand_id, category="product_research_done", dedupe_key=new_id("prsjob"),
         message=message, action_url=f"/app/brands/{brand_id}/products/{product_id}",
     )
 
 
-def _research_fail(product_id: str, brand_id: str, product_name: str, message: str) -> None:
-    started_at = _research_jobs.get(product_id, {}).get("started_at",
-                                                          datetime.now(UTC).isoformat())
-    _research_jobs.set(product_id, {
-        "status": "failed", "stage": "整理事實中", "started_at": started_at,
-        "usual_range_text": _RESEARCH_USUAL_RANGE,
-        "error": message, "added_count": None, "price_created": False,
-    })
-    _research_notify(brand_id, product_id, f"「{product_name}」調研失敗，可以重試")
-
-
-def _research_run(product_id: str, brand_id: str, actor: str, product_name: str, url: str) -> None:
-    """背景執行緒：budget 檢查搬進這裡（不是 POST 當下）——「先建產品、失敗留空產品」
-    的設計本來就是把整次調研（含超預算）當成一種背景結果，兩個入口（新建／再次調研）共用
-    同一段，不分岔成兩條路徑（workflow.md 第五節）。"""
-    try:
-        budget_err = product_helpers._scan_budget_error(brand_id)
-        if budget_err:
-            _research_fail(product_id, brand_id, product_name, budget_err)
-            return
-        brand_facts = repo.list_brand_facts(web.conn, brand_id, status="confirmed")
-        ok, result = product_ai_calls.run_product_scan(
-            web.conn, brand_id, product_name, url, brand_facts)
+def background_product_scan(org_id: str, brand_id: str, product_id: str, actor: str,
+                             product_name: str, url: str) -> None:
+    """procrastinate task body（`background.product_scan`）——worker 執行，自己開一條
+    連線（worker 不繼承 request 的連線）。超預算已經在 POST 端點同步擋過，這裡不重查。"""
+    with core_db_connection() as conn:
+        try:
+            brand_facts = repo.list_brand_facts(conn, brand_id, status="confirmed")
+            ok, result = product_ai_calls.run_product_scan(
+                conn, brand_id, product_id, product_name, url, brand_facts)
+        except Exception as exc:  # noqa: BLE001 — worker 最後一道防線，不能讓例外憑空消失
+            ok, result = False, f"背景執行發生未預期錯誤：{exc}"
         if not ok:
-            _research_fail(product_id, brand_id, product_name, result)
+            _research_notify(conn, brand_id, product_id, f"「{product_name}」調研失敗，可以重試")
             return
         src_id = legacy_routes._create_source_ref(brand_id, actor, url)
-        added, _skipped, price_created = product_helpers._apply_product_scan_result(
+        added, _skipped, _price_created = product_helpers._apply_product_scan_result(
             brand_id, product_id, actor, src_id, result)
-        started_at = _research_jobs.get(product_id, {}).get("started_at",
-                                                              datetime.now(UTC).isoformat())
-        _research_jobs.set(product_id, {
-            "status": "done", "stage": "完成", "started_at": started_at,
-            "usual_range_text": _RESEARCH_USUAL_RANGE,
-            "error": None, "added_count": added, "price_created": price_created,
-        })
-        _research_notify(brand_id, product_id, f"「{product_name}」調研完成，新增 {added} 條待確認")
-    except Exception as exc:  # noqa: BLE001 — 背景執行緒最後一道防線，不能讓例外憑空消失
-        _research_fail(product_id, brand_id, product_name, f"背景執行發生未預期錯誤：{exc}")
+        _research_notify(conn, brand_id, product_id, f"「{product_name}」調研完成，新增 {added} 條待確認")
 
 
 _URL_FORMAT_ERROR = "這個網址看起來不完整，記得從 https:// 開始，例如「https://example.com/products/xxx」。"
@@ -282,7 +276,14 @@ async def product_research_start(request: Request, brand_id: str):
     if not _valid_url(url_c):
         return _error(400, _URL_FORMAT_ERROR)
     product = repo.create_product(web.conn, brand_id, name=name_c, actor=str(actor.user_id))
-    _research_start(product["id"], brand_id, str(actor.user_id), name_c, url_c)
+    budget_err = product_helpers._scan_budget_error(brand_id)
+    if budget_err:
+        return _error(422, budget_err)
+    background_enqueue(
+        "background.product_scan", org_id=actor.org_id, lock=f"product_scan:{product['id']}",
+        brand_id=brand_id, product_id=product["id"], actor=str(actor.user_id),
+        product_name=name_c, url=url_c,
+    )
     return JSONResponse({"product_id": product["id"]}, status_code=202)
 
 
@@ -297,7 +298,18 @@ async def product_rescan_start(request: Request, brand_id: str, product_id: str)
         return _error(400, "請填寫網址，才能請 AI 再次調研。")
     if not _valid_url(url_c):
         return _error(400, _URL_FORMAT_ERROR)
-    _research_start(product_id, brand_id, str(actor.user_id), product["name"], url_c)
+    budget_err = product_helpers._scan_budget_error(brand_id)
+    if budget_err:
+        return _error(422, budget_err)
+    lock = f"product_scan:{product_id}"
+    if background_is_active(lock):
+        return _error(409, ALREADY_RESEARCHING_MESSAGE)
+    if not background_enqueue(
+        "background.product_scan", org_id=actor.org_id, lock=lock,
+        brand_id=brand_id, product_id=product_id, actor=str(actor.user_id),
+        product_name=product["name"], url=url_c,
+    ):
+        return _error(409, ALREADY_RESEARCHING_MESSAGE)
     return JSONResponse({}, status_code=202)
 
 
@@ -306,7 +318,7 @@ def product_research_status(request: Request, brand_id: str, product_id: str):
     actor = require_actor(request)
     brand = require_brand(brand_id, actor)
     require_product(brand, product_id)
-    return _envelope(_research_state(product_id))
+    return _envelope(_research_state(web.conn, brand_id, product_id))
 
 
 # ---------------------------------------------------------------------------

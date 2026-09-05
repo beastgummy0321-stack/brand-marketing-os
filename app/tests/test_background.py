@@ -169,6 +169,57 @@ class WorkerProcessTest(unittest.TestCase):
             lock_conn.commit()
 
 
+class IsActiveTest(unittest.TestCase):
+    """Round 2 (ticket 08-standalone-jobs-on-the-queue "Blocked"): `is_active()` is the
+    409/400 gate a caller uses to refuse a second press while a job is claimed but not
+    finished — the window `llm_task` cannot see, because `app/llm/gateway.py` only writes the
+    `running` row immediately before the provider call, not when the worker claims the job.
+
+    Done-check 10: both edges matter. A lock that reads "active" forever after the job
+    succeeded would lock a user out of their own feature permanently — worse than the bug
+    this round fixes. The 'doing' row below is written directly (not produced by actually
+    running the worker on a real task, which finishes a trivial `background.noop` job too
+    fast in-process to observe mid-flight) — this is the same style
+    `test_worker_runs_one_deferred_job` above already uses to reach into
+    `<schema>__queue.procrastinate_jobs` directly."""
+
+    def test_true_for_todo_and_doing_false_after_terminal(self):
+        lock = f"is_active_test:{db.new_id('lock')}"
+        a = background_module.app()
+        with a.open():
+            job_id = a.configure_task("background.noop", queueing_lock=lock).defer(
+                org_id=db.DEV_ORG_ID
+            )
+        self.assertTrue(background_module.is_active(lock), "a 'todo' job must read as active")
+
+        # A plain fully-qualified UPDATE isn't enough here (unlike the read-only assertion in
+        # `test_worker_runs_one_deferred_job` above): the queue schema's own
+        # `procrastinate_trigger_function_status_events_update_v1()` casts to
+        # `procrastinate_job_status` unqualified, so it only resolves under a search_path that
+        # includes that schema — `SET LOCAL` scopes that to this one transaction.
+        schema = db.current().execute("SELECT current_schema() AS s").fetchone()["s"]
+        db.current().execute(f'SET LOCAL search_path TO "{schema}__queue"')
+        db.current().execute(
+            "UPDATE procrastinate_jobs SET status = 'doing' WHERE id = %s", (job_id,),
+        )
+        db.current().commit()
+        self.assertTrue(
+            background_module.is_active(lock),
+            "'doing' (claimed by a worker, not yet finished) must read as active — this is "
+            "exactly the window llm_task cannot see",
+        )
+
+        db.current().execute(f'SET LOCAL search_path TO "{schema}__queue"')
+        db.current().execute(
+            "UPDATE procrastinate_jobs SET status = 'succeeded' WHERE id = %s", (job_id,),
+        )
+        db.current().commit()
+        self.assertFalse(
+            background_module.is_active(lock),
+            "a finished job must not block a user from re-running their own feature",
+        )
+
+
 class TaskSignatureOrgIdGateTest(unittest.TestCase):
     """ADR 0038 "the gate this ADR owes": every task this module registers with procrastinate
     must declare a required `org_id` parameter (no default). Scoped to `background.`-named

@@ -1333,6 +1333,17 @@ def get_customer_voice(conn: Conn, brand_id: str, cv_id: str) -> dict | None:
     ).fetchone()))
 
 
+def get_customer_voice_by_llm_task_id(conn: Conn, brand_id: str, llm_task_id: str) -> dict | None:
+    """票 08：品牌智庫抽原話搬上佇列後，狀態端點靠這個查回「這個 llm_task 列真的
+    落庫了嗎」——`create_customer_voice()` 一律記下自己的 `llm_task_id`（見上方），
+    這裡只是反過來查。找不到＝那一次呼叫解析失敗（誠實失敗，沒有入庫），不是還沒跑完
+    ——呼叫端已經先確認過 `llm_task.status == 'succeeded'` 才會查到這裡。"""
+    return _with_extraction(_row(conn.execute(
+        "SELECT * FROM customer_voice WHERE brand_id = %s AND llm_task_id = %s",
+        (brand_id, llm_task_id),
+    ).fetchone()))
+
+
 def list_customer_voices(conn: Conn, brand_id: str,
                           status: str | None = None) -> list:
     if status:

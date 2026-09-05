@@ -6,17 +6,17 @@
 
 import json
 import os
-import threading
 import time
 import unittest
 
 from fastapi.testclient import TestClient
 
+import app.background as background_module
+import app.brand_web as brand_web_module
 import app.main as main
 import app.shared.web as web
 from app.brand_intelligence import repository as repo
 from app.brand_web import product_ai_calls as product_ai
-from app.brand_web import routes_products as rp
 from app.core import interrupts as core_interrupts
 from app.core import settings as coresettings
 from app.core.db import DEV_ORG_ID  # noqa: E402
@@ -46,7 +46,10 @@ class _BaseProductsApiTest(unittest.TestCase):
         self.client = TestClient(main.app)
         web.conn.execute("DELETE FROM app_setting")
         web.conn.commit()
-        rp._research_jobs.clear()
+        # 票 08：這個測試模組自己有一份 schema（見 conftest.py），要重新掛一次
+        # `background.product_scan`——DSN 換了 App 整顆重建，跟 `test_schedule.py`
+        # `schedule_module.register_tasks()` 同一個理由。
+        brand_web_module.register(main.app)
         self._orig_provider = product_ai.PROVIDER
         self._orig_fetch = product_ai.fetch_url
         product_ai.fetch_url = lambda url: (True, "假抓到的產品頁文字節錄。")
@@ -57,12 +60,18 @@ class _BaseProductsApiTest(unittest.TestCase):
     def tearDown(self):
         product_ai.PROVIDER = self._orig_provider
         product_ai.fetch_url = self._orig_fetch
-        rp._research_jobs.clear()
 
     def _create_product(self, name="虛構回甘烏龍"):
         resp = self.client.post(f"/api/products/brands/{self.bid}", json={"name": name, "source_url": ""})
         self.assertEqual(resp.status_code, 200)
         return resp.json()["id"]
+
+    def _run_worker(self) -> None:
+        """票 08：POST 現在只 enqueue，真正打代理在 worker 裡——先 commit 這個 request
+        留下的異動，worker 自己開一條新連線，看不到還沒 commit 的交易（比照
+        `test_schedule.py` `_run_worker()`）。"""
+        web.conn.commit()
+        background_module.app().run_worker(wait=False)
 
 
 class ProductListTest(_BaseProductsApiTest):
@@ -160,19 +169,9 @@ class ArchiveTest(_BaseProductsApiTest):
 
 
 class ResearchBackgroundTest(_BaseProductsApiTest):
-    """S6.10–S6.11／S6.17／S6.29–S6.31：AI 調研背景工作狀態機（啟動→輪詢→完成落庫，
-    或失敗留空產品）。"""
-
-    def _poll(self, pid: str, timeout: float = 5.0) -> dict:
-        deadline = time.time() + timeout
-        while time.time() < deadline:
-            status = self.client.get(
-                f"/api/products/brands/{self.bid}/products/{pid}/research-status"
-            ).json()["data"]
-            if status["status"] != "running":
-                return status
-            time.sleep(0.05)
-        self.fail("背景任務逾時仍未完成，可能是執行緒沒有真的跑")
+    """S6.10–S6.11／S6.17／S6.29–S6.31：AI 調研佇列工作狀態機（票 08：從行程內
+    dict＋thread 搬上 `app.background` 佇列，啟動→跑 worker→GET 讀最終狀態，或失敗
+    留空產品）。"""
 
     def test_start_returns_immediately_and_creates_product_before_research_finishes(self):
         product_ai.PROVIDER = FakeProvider(response=_fake_response(_GOOD_FACTS))
@@ -185,11 +184,13 @@ class ResearchBackgroundTest(_BaseProductsApiTest):
         self.assertEqual(resp.status_code, 202)
         self.assertLess(elapsed, 1.0, "POST 不該等 AI 調研跑完才回應")
         pid = resp.json()["product_id"]
-        # 產品已經同步建好（見「拿不準的點 1」方案 A），不用等背景跑完。
+        # 產品已經同步建好（見「拿不準的點 1」方案 A），不用等 worker 跑完。
         self.assertIsNotNone(repo.get_product(web.conn, self.bid, pid))
-        status = self._poll(pid)
+        self._run_worker()
+        status = self.client.get(
+            f"/api/products/brands/{self.bid}/products/{pid}/research-status"
+        ).json()["data"]
         self.assertEqual(status["status"], "done")
-        self.assertEqual(status["added_count"], 2)
 
     def test_success_stores_pending_facts_and_notifies(self):
         product_ai.PROVIDER = FakeProvider(response=_fake_response(_GOOD_FACTS))
@@ -198,7 +199,7 @@ class ResearchBackgroundTest(_BaseProductsApiTest):
             json={"name": "虛構回甘烏龍二號", "source_url": "https://example.com/products/oolong2"},
         )
         pid = resp.json()["product_id"]
-        self._poll(pid)
+        self._run_worker()
         facts = repo.list_product_facts(web.conn, self.bid, pid)
         self.assertEqual(len(facts), 2)
         for f in facts:
@@ -208,27 +209,33 @@ class ResearchBackgroundTest(_BaseProductsApiTest):
         self.assertEqual(len(matches), 1)
         self.assertLessEqual(len(matches[0]["message"]), core_interrupts.MAX_MESSAGE_LEN)
 
-    def test_over_budget_leaves_empty_product_not_deleted(self):
-        """拿不準的點 1，方案 A：調研失敗時系統留下一個空產品，不像舊版「失敗就什麼都沒發生」。"""
+    def test_over_budget_rejected_synchronously_leaves_empty_product_not_deleted(self):
+        """拿不準的點 1，方案 A：調研失敗時系統留下一個空產品，不像舊版「失敗就什麼都沒發生」。
+
+        票 08：超預算檢查從背景工作搬到 POST 端點同步做（見 `routes_products.py`
+        `product_research_start()` 檔頭）——`gateway.run_task()` 命中花費上限時故意不寫
+        任何 llm_task 列，佇列讀法沒有第二個地方能誠實回報這個失敗原因，所以提前到
+        enqueue 之前，跟 `customer_voice_submit()`／`app/schedule/routes.py` 的
+        `check_spend_cap()` 同一個次序。"""
         coresettings.set_setting(web.conn, coresettings.INTAKE_BUDGET_SETTING, "0.1", org_id=DEV_ORG_ID)
         product_ai.PROVIDER = FakeProvider(response=_fake_response("不該被呼叫"))
         resp = self.client.post(
             f"/api/products/brands/{self.bid}/research",
             json={"name": "虛構會失敗的產品", "source_url": "https://example.com/products/x"},
         )
-        self.assertEqual(resp.status_code, 202)
-        pid = resp.json()["product_id"]
-        # 產品已經建立（同步階段），不因背景調研失敗而消失。
-        product = repo.get_product(web.conn, self.bid, pid)
-        self.assertIsNotNone(product)
-        status = self._poll(pid)
-        self.assertEqual(status["status"], "failed")
-        self.assertIn("花費上限", status["error"])
+        self.assertEqual(resp.status_code, 422)
+        self.assertIn("US$", resp.json()["error"])
+        # 產品已經建立（同步階段），不因超預算而消失——422 的回應本身不帶 product_id
+        # （這不是票要保留形狀的三支狀態端點之一），從清單反查剛建立的那一個。
+        products = repo.list_products(web.conn, self.bid)
+        self.assertEqual(len(products), 1)
+        pid = products[0]["id"]
         self.assertEqual(repo.list_product_facts(web.conn, self.bid, pid), [])
         self.assertEqual(product_ai.PROVIDER.calls, [])  # 花費檢查擋在呼叫 AI 之前
-        open_items = core_interrupts.list_open(web.conn, brand_id=self.bid)
-        matches = [r for r in open_items if r["category"] == "product_research_done"]
-        self.assertEqual(len(matches), 1)
+        status = self.client.get(
+            f"/api/products/brands/{self.bid}/products/{pid}/research-status"
+        ).json()["data"]
+        self.assertEqual(status["status"], "done")  # 從沒排進佇列，穩態預設
 
     def test_bad_url_format_rejected_before_creating_product(self):
         resp = self.client.post(
@@ -238,41 +245,32 @@ class ResearchBackgroundTest(_BaseProductsApiTest):
         self.assertEqual(resp.status_code, 400)
         self.assertEqual(repo.list_products(web.conn, self.bid), [])
 
-    def test_rescan_idempotent_same_key_not_restarted_while_running(self):
+    def test_rescan_blocked_with_409_while_a_scan_is_already_queued(self):
+        """票 08：procrastinate 的 `queueing_lock`（`product_scan:{product_id}`）擋
+        第二次按下去——不再需要 Event 卡住背景執行緒才能驗證這件事：第一個請求
+        enqueue 成功、還沒被 worker 撿走（todo）的當下，第二個請求的 `enqueue()`
+        直接回 False，跟 `app/schedule/routes.py` 三支端點同一個 409 語意。"""
         pid = self._create_product()
         product_ai.PROVIDER = FakeProvider(response=_fake_response(_GOOD_FACTS))
-        # 用 Event 卡住背景執行緒，保證第二次 POST 送達時第一個 job 一定還是 running——
-        # 不能靠「兩次 POST 之間隔多快」這種計時賭運氣（FakeProvider 幾乎瞬間跑完，
-        # 背景 job 可能在第二次 POST 送達前就已經轉成 done，那樣「再開一個新 job」其實
-        # 是合法行為，不算冪等閘失效，測試會偶發假紅）。
-        release = threading.Event()
-        orig_fetch = product_ai.fetch_url
+        resp1 = self.client.post(
+            f"/api/products/brands/{self.bid}/products/{pid}/rescan",
+            json={"source_url": "https://example.com/products/oolong"},
+        )
+        self.assertEqual(resp1.status_code, 202)
+        resp2 = self.client.post(
+            f"/api/products/brands/{self.bid}/products/{pid}/rescan",
+            json={"source_url": "https://example.com/products/oolong"},
+        )
+        self.assertEqual(resp2.status_code, 409)
 
-        def _blocking_fetch(url):
-            release.wait(timeout=5)
-            return orig_fetch(url)
-
-        product_ai.fetch_url = _blocking_fetch
-        try:
-            resp1 = self.client.post(
-                f"/api/products/brands/{self.bid}/products/{pid}/rescan",
-                json={"source_url": "https://example.com/products/oolong"},
-            )
-            self.assertEqual(resp1.status_code, 202)
-            # 立刻再打一次：同一個 key 已經在跑（卡在 fetch_url 裡），不該重新啟動第二條背景執行緒。
-            resp2 = self.client.post(
-                f"/api/products/brands/{self.bid}/products/{pid}/rescan",
-                json={"source_url": "https://example.com/products/oolong"},
-            )
-            self.assertEqual(resp2.status_code, 202)
-        finally:
-            release.set()
-        status = self._poll(pid)
+        self._run_worker()
+        status = self.client.get(
+            f"/api/products/brands/{self.bid}/products/{pid}/research-status"
+        ).json()["data"]
         self.assertEqual(status["status"], "done")
         # 只跑成功一次的結果：2 條事實，不是被重複觸發後的 4 條。
         facts = repo.list_product_facts(web.conn, self.bid, pid)
         self.assertEqual(len(facts), 2)
-        # 冪等閘真正要擋的是「重複打付費 API」——label 去重只是副作用，不能拿來當唯一證據。
         self.assertEqual(len(product_ai.PROVIDER.calls), 1)
 
     def test_unknown_key_reports_done_steady_state(self):

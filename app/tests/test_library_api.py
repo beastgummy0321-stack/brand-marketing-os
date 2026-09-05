@@ -13,6 +13,8 @@ from unittest import mock
 
 from fastapi.testclient import TestClient
 
+import app.background as background_module
+import app.brand_web as brand_web_module
 import app.main as main
 import app.shared.web as web
 from app.brand_intelligence import repository as repo
@@ -180,31 +182,32 @@ class ChannelEditDeleteTest(unittest.TestCase):
 
 
 class CustomerVoiceBackgroundTest(unittest.TestCase):
-    """顧客原話貼入＋AI 抽取背景執行（S5.40–S5.42）。"""
+    """顧客原話貼入＋AI 抽取（S5.40–S5.42；票 08：從行程內執行緒搬上
+    `app.background` 佇列）。"""
 
     def setUp(self):
         self.client = TestClient(main.app)
+        # 票 08：這個測試模組自己有一份 schema（見 conftest.py），要重新掛一次
+        # `background.customer_voice_extraction` 這三個 task——DSN 換了 App 整顆重建，
+        # 跟 `test_schedule.py` `schedule_module.register_tasks()` 同一個理由。
+        brand_web_module.register(main.app)
         self.brand = repo.create_brand(web.conn, name="晨露茶飲－背景抽取", client_name=None,
                                         actor=ACTOR, org_id=coredb.DEV_ORG_ID)
         self.bid = self.brand["id"]
 
-    def _poll(self, job_key: str, timeout: float = 5.0) -> dict:
-        deadline = time.time() + timeout
-        while time.time() < deadline:
-            status = self.client.get(
-                f"/api/library/brands/{self.bid}/customer-voice/jobs/{job_key}"
-            ).json()
-            if status["status"] != "running":
-                return status
-            time.sleep(0.05)
-        self.fail("背景任務逾時仍未完成，可能是執行緒沒有真的跑")
+    def _run_worker(self) -> None:
+        """票 08：POST 現在只 enqueue，真正打代理在 worker 裡——先 commit 這個 request
+        留下的異動，worker 自己開一條新連線，看不到還沒 commit 的交易（比照
+        `test_schedule.py` `_run_worker()`）。"""
+        web.conn.commit()
+        background_module.app().run_worker(wait=False)
 
     def test_submit_returns_immediately_with_job_key(self):
         """不能同步擋住 request：POST 本身要在很短時間內回應（不等 AI 跑完）。
 
-        背景執行緒讀 customer_voice.PROVIDER 是模組層即時查值，`mock.patch.object` 一還原
-        它就會改回真的 AnthropicProvider——所以這裡要等背景任務真的跑完才能離開 `with`
-        區塊，不然背景執行緒可能讀到還原後的真 PROVIDER，變成一次真實網路請求
+        worker 讀 customer_voice.PROVIDER 是模組層即時查值，`mock.patch.object` 一還原
+        它就會改回真的 AnthropicProvider——所以這裡要等 worker 真的跑完才能離開 `with`
+        區塊，不然 worker 可能讀到還原後的真 PROVIDER，變成一次真實網路請求
         （安全規則：測試禁止真實網路請求）。"""
         fake = _fake([{"task_layer": "functional", "quote": "測試引言",
                         "insight": "測試重點", "signal": "unprompted"}])
@@ -217,7 +220,7 @@ class CustomerVoiceBackgroundTest(unittest.TestCase):
             self.assertEqual(resp.status_code, 200)
             self.assertIn("job_key", resp.json())
             self.assertLess(elapsed, 1.0, "POST 不該等 AI 抽取跑完才回應")
-            self._poll(resp.json()["job_key"])  # 背景任務真的跑完才放行 mock 還原
+            self._run_worker()  # worker 真的跑完才放行 mock 還原
 
     def test_job_completes_stores_row_and_enqueues_notification(self):
         fake = _fake([{"task_layer": "functional", "quote": "喝了三天真的有感",
@@ -227,7 +230,10 @@ class CustomerVoiceBackgroundTest(unittest.TestCase):
                 f"/api/library/brands/{self.bid}/customer-voice",
                 json={"source_channel": "dcard", "raw_text": "喝了三天真的有感"},
             ).json()["job_key"]
-            status = self._poll(job_key)
+            self._run_worker()
+            status = self.client.get(
+                f"/api/library/brands/{self.bid}/customer-voice/jobs/{job_key}"
+            ).json()
 
         self.assertEqual(status["status"], "done")
         self.assertEqual(len(status["result"]["extraction"]), 1)
@@ -250,7 +256,10 @@ class CustomerVoiceBackgroundTest(unittest.TestCase):
                 f"/api/library/brands/{self.bid}/customer-voice",
                 json={"source_channel": "ptt", "raw_text": "會抽取失敗的原文"},
             ).json()["job_key"]
-            status = self._poll(job_key)
+            self._run_worker()
+            status = self.client.get(
+                f"/api/library/brands/{self.bid}/customer-voice/jobs/{job_key}"
+            ).json()
 
         self.assertEqual(status["status"], "failed")
         self.assertTrue(status["message"])

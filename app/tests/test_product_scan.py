@@ -7,12 +7,13 @@ run_product_scan。全程用 FakeProvider＋假抓取（monkeypatch product_ai.f
 
 import json
 import os
-import time
 import unittest
 from unittest import mock
 
 from fastapi.testclient import TestClient
 
+import app.background as background_module
+import app.brand_web as brand_web_module
 import app.main as main
 import app.shared.web as web
 from app.brand_intelligence import repository as bi_repo
@@ -62,6 +63,10 @@ class _BaseProductScanTest(unittest.TestCase):
         self.client = TestClient(main.app)
         web.conn.execute("DELETE FROM app_setting")
         web.conn.commit()
+        # 票 08：這個測試模組自己有一份 schema（見 conftest.py），要重新掛一次
+        # `background.product_scan`——DSN 換了 App 整顆重建，跟 `test_schedule.py`
+        # `schedule_module.register_tasks()` 同一個理由。
+        brand_web_module.register(main.app)
         self._envpatch = mock.patch.dict(os.environ, {}, clear=False)
         self._envpatch.start()
         os.environ.pop("ANTHROPIC_API_KEY", None)
@@ -76,6 +81,10 @@ class _BaseProductScanTest(unittest.TestCase):
         product_ai.fetch_url = self._orig_fetch
         self._envpatch.stop()
 
+    def _run_worker(self) -> None:
+        web.conn.commit()
+        background_module.app().run_worker(wait=False)
+
     def _post(self, name="虛構回甘烏龍", url="https://example.com/products/oolong"):
         response = self.client.post(
             f"/api/products/brands/{self.brand['id']}/research",
@@ -83,19 +92,14 @@ class _BaseProductScanTest(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 202)
         product_id = response.json()["product_id"]
-        return product_id, self._wait_for_research(product_id)
+        self._run_worker()
+        return product_id, self._research_status(product_id)
 
-    def _wait_for_research(self, product_id):
-        deadline = time.time() + 5
-        while time.time() < deadline:
-            response = self.client.get(
-                f"/api/products/brands/{self.brand['id']}/products/{product_id}/research-status"
-            )
-            state = response.json()["data"]
-            if state["status"] != "running":
-                return state
-            time.sleep(0.02)
-        self.fail("產品調研背景任務逾時")
+    def _research_status(self, product_id):
+        response = self.client.get(
+            f"/api/products/brands/{self.brand['id']}/products/{product_id}/research-status"
+        )
+        return response.json()["data"]
 
 
 class ProductScanTest(_BaseProductScanTest):
@@ -128,12 +132,18 @@ class ProductScanTest(_BaseProductScanTest):
         self.assertEqual(state["status"], "failed")
         self.assertIn(product_ai.PARSE_FAIL_MESSAGE, state["error"])
 
-    def test_over_budget_blocks_before_any_llm_call(self):
+    def test_over_budget_rejected_synchronously_before_any_llm_call(self):
+        """票 08：超預算檢查搬到 POST 端點同步做（見 `routes_products.py`
+        `product_research_start()` 檔頭）——不能沿用 `_post()` 那個「always 202」的
+        共用小工具，這裡直接打 POST。"""
         coresettings.set_setting(web.conn, coresettings.INTAKE_BUDGET_SETTING, "0.1", org_id=DEV_ORG_ID)
         product_ai.PROVIDER = FakeProvider(response=_fake_response("不該被呼叫"))
-        _product_id, state = self._post()
-        self.assertEqual(state["status"], "failed")
-        self.assertIn("花費上限", state["error"])
+        resp = self.client.post(
+            f"/api/products/brands/{self.brand['id']}/research",
+            json={"name": "虛構回甘烏龍", "source_url": "https://example.com/products/oolong"},
+        )
+        self.assertEqual(resp.status_code, 422)
+        self.assertIn("花費上限", resp.json()["error"])
         self.assertEqual(product_ai.PROVIDER.calls, [])
 
     def test_blank_url_manual_create_untouched(self):
@@ -159,7 +169,8 @@ class ProductRescanTest(_BaseProductScanTest):
             json={"source_url": url},
         )
         self.assertEqual(response.status_code, 202)
-        return self._wait_for_research(product_id)
+        self._run_worker()
+        return self._research_status(product_id)
 
     def test_url_prefilled_from_latest_product_source_reference(self):
         product_ai.PROVIDER = FakeProvider(response=_fake_response(_GOOD_FACTS))
@@ -192,13 +203,18 @@ class ProductRescanTest(_BaseProductScanTest):
         self.assertIn(MISSING_KEY_MESSAGE, state["error"])
         self.assertEqual(bi_repo.list_product_facts(web.conn, self.brand["id"], product_id), [])
 
-    def test_rescan_over_budget_blocks_before_any_llm_call(self):
+    def test_rescan_over_budget_rejected_synchronously_before_any_llm_call(self):
+        """票 08：跟新建調研同一個次序，見上面
+        `ProductScanTest.test_over_budget_rejected_synchronously_before_any_llm_call`。"""
         product_id = self._create_product()
         coresettings.set_setting(web.conn, coresettings.INTAKE_BUDGET_SETTING, "0.1", org_id=DEV_ORG_ID)
         product_ai.PROVIDER = FakeProvider(response=_fake_response("不該被呼叫"))
-        state = self._rescan(product_id)
-        self.assertEqual(state["status"], "failed")
-        self.assertIn("花費上限", state["error"])
+        resp = self.client.post(
+            f"/api/products/brands/{self.brand['id']}/products/{product_id}/rescan",
+            json={"source_url": "https://example.com/products/oolong-v2"},
+        )
+        self.assertEqual(resp.status_code, 422)
+        self.assertIn("花費上限", resp.json()["error"])
         self.assertEqual(bi_repo.list_product_facts(web.conn, self.brand["id"], product_id), [])
         self.assertEqual(product_ai.PROVIDER.calls, [])
 
@@ -252,6 +268,63 @@ class ProductRescanTest(_BaseProductScanTest):
         economics = bi_repo.get_product_economics(web.conn, self.brand["id"], product_id)
         self.assertEqual(economics["status"], "confirmed")
         self.assertEqual(economics["confirmed_by"], DEV_USER_ID)
+
+    def test_second_rescan_while_first_is_claimed_but_not_yet_calling_provider_is_refused(self):
+        """票 08 round 2 done-check 9 — the exact reproduction from the ticket's "Blocked"
+        section, now refused: a worker has claimed the job (procrastinate moved it
+        `todo` -> `doing`) but `fetch_url` — everything `run_product_scan` does before the
+        paid provider call — has not returned yet. Round 1's code read `llm_task` for the
+        409 check, whose `running` row does not exist yet in this window, so the second press
+        was wrongly accepted and the provider was called twice. Proven red once against
+        round 1's code (reverting `routes_products.py`'s gate back to the `llm_task` read):
+        this test saw 2 rows / 2 provider calls; restored after."""
+        import threading
+
+        product_id = self._create_product()
+        product_ai.PROVIDER = FakeProvider(response=_fake_response(_GOOD_FACTS))
+        started = threading.Event()
+        release = threading.Event()
+        orig_fetch = product_ai.fetch_url
+
+        def _blocking_fetch(url):
+            started.set()
+            release.wait(timeout=5)
+            return orig_fetch(url)
+
+        product_ai.fetch_url = _blocking_fetch
+        worker_thread = None
+        try:
+            resp1 = self.client.post(
+                f"/api/products/brands/{self.brand['id']}/products/{product_id}/rescan",
+                json={"source_url": "https://example.com/products/oolong"},
+            )
+            self.assertEqual(resp1.status_code, 202)
+            web.conn.commit()
+
+            worker_thread = threading.Thread(
+                target=lambda: background_module.app().run_worker(wait=False)
+            )
+            worker_thread.start()
+            self.assertTrue(started.wait(timeout=5), "worker never claimed the job")
+
+            resp2 = self.client.post(
+                f"/api/products/brands/{self.brand['id']}/products/{product_id}/rescan",
+                json={"source_url": "https://example.com/products/oolong"},
+            )
+            self.assertEqual(resp2.status_code, 409)
+        finally:
+            release.set()
+            if worker_thread is not None:
+                worker_thread.join(timeout=5)
+            product_ai.fetch_url = orig_fetch
+
+        rows = web.conn.execute(
+            "SELECT COUNT(*) AS c FROM llm_task WHERE brand_id = %s AND task_type = 'product_scan'"
+            " AND context_scope_json->>'product_id' = %s",
+            (self.brand["id"], product_id),
+        ).fetchone()
+        self.assertEqual(rows["c"], 1)
+        self.assertEqual(len(product_ai.PROVIDER.calls), 1)
 
 
 if __name__ == "__main__":

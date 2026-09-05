@@ -1313,7 +1313,24 @@ class CoordinateDimensionSyncTest(unittest.TestCase):
 #      量對了，round 2 沒有再動這一筆。
 #   4. 本段理由註解自己（含上面「這道棘輪在落地前就已經在漏」那一段，done-check 5 點名的
 #      新要求）。
-TEST_LINES_CEILING = 19402  # 票 07-campaign-period-composite-fk：`test_org_isolation_all_tables.py`
+TEST_LINES_CEILING = 19684  # 票 08-standalone-jobs-on-the-queue round 2：獨立審查抓到的
+# money-class 缺陷（worker 撿走 job 到真正打 provider 之間那段窗口，llm_task 看不到，第二次
+# 按下去沒被擋，兩邊都真的付了錢）。四支新測試：`IsActiveTest`
+# （test_background.py，兩個邊界都要驗：`todo`／`doing` 都要讀成 active，`succeeded` 之後要
+# 讀回不 active，不然使用者被自己的功能永久卡死）、
+# `test_second_rescan_while_first_is_claimed_but_not_yet_calling_provider_is_refused`
+# （test_product_scan.py）與同名的報告版本（test_brand_report_api.py）——各自先證過紅：
+# 暫時把守門邏輯指回 round 1 的 `llm_task` 讀法，看到第二次真的送出、provider 真的被打
+# 兩次，才改回來；以及 `test_dashboard_jobs_boundary.py` 補上 `brand_report` 那個漏掉的
+# kind（done-check 4：三個搬上佇列的 kind 全部點名斷言，不是只看「有東西回來」）。這幾行
+# 還含本段理由註解自己佔的行。量到的數字，不留餘裕。前一次是 19493——票
+# 08-standalone-jobs-on-the-queue：三支獨立背景工作搬上佇列，
+# 測試改寫多過新增（`test_library_api.py`／`test_products_api.py`／`test_product_scan.py`／
+# `test_brand_report*.py`／`test_customer_voice.py`／`test_dashboard_jobs_boundary.py`）。
+# 唯一真的新增的是「後端重開之後狀態還在」與「鈴鐺在半搬遷狀態仍看得到七種」兩條——
+# 屬資料正確性：dict 版重開後畫面會退回預設值，看起來像那件事從沒發生過。
+# 這幾行還含本段理由註解自己佔的行。量到的數字，不留餘裕。
+# 前一次是 19402——票 07-campaign-period-composite-fk：`test_org_isolation_all_tables.py`
 # 的 `CampaignPeriodCompositeFKTenantIsolationTest` 兩支——屬租戶隔離：`decision`（可空）與
 # `period_node_membership`（NOT NULL）兩種欄位類別各一支，斷言「org A 的列指向 org B 的
 # campaign_period」會被資料庫的複合 FK 擋成 ForeignKeyViolation。兩種類別要分開測，因為
@@ -1413,7 +1430,12 @@ KNOWN_MODULE_SIZES = {
                   # provider，原本不經 run_task() 所以完全繞過上限。7 行＝import gateway ＋
                   # 打 provider 前先問 check_spend_cap()。前一次是本機 codex CLI 線路
                   # （c47bc36）的 546：main.py 依環境變數換供應商
-    "app/background": 162,  # 票 03-worker-own-process（ADR 0063）：搬進 app/worker.py，272→162。前一次是 272——
+    "app/background": 197,  # 票 08-standalone-jobs-on-the-queue round 2：模組表面多一支
+                             # `is_active(lock)`——「這把鎖還在 todo 或 doing 嗎」。獨立審查
+                             # 實測 llm_task 答不了這一題（running 列要等 provider 呼叫前才寫，
+                             # 中間那段窗口按第二次會真的多付一次錢），使用者裁決改問佇列本人。
+                             # 162→197。前一次是 162——票 03-worker-own-process（ADR 0063）：
+                             # 搬進 app/worker.py，272→162。再前一次是 272——
                              # 票 05-1：新增 enqueue()（defer 一個 job，同一個 lock 已經在
                              # todo 排隊就回 False）＋模組私有的 `_sync_app_for_defer()`
                              # （接 SyncPsycopgConnector，不能借 app() 那顆 async connector
@@ -1435,8 +1457,12 @@ KNOWN_MODULE_SIZES = {
                                       # ponytail：FileLineCapTest 上方「縮小後不強制回來
                                       # 調低數字」）。這裡照票 S2 的要求把表格對齊實測值，
                                       # 不是新增了 574 行。
-    "app/brand_web": 2091,  # 2026-08-30 刪失效規則卡（小債）：autonomy 那張卡的兩處專屬
-                             # 驗證跟著走。前一次是 2155
+    "app/brand_web": 2121,  # 票 08-standalone-jobs-on-the-queue：三個 JobRegistry dict 與其
+                             # （round 2：兩個端點改問 background.is_active，2112→2121）
+                             # thread 執行函式刪掉，換成三支 procrastinate handler ＋ 從
+                             # `llm_task` 讀狀態的函式；`__init__.py` 的 register() 多註冊三支
+                             # 任務。刪的比加的少，淨增。前一次是 2091——2026-08-30 刪失效規則卡
+                             # （小債）：autonomy 那張卡的兩處專屬驗證跟著走
     "app/core": 1775,  # 上雲債 route B（codex_cli 只准 local）：`config.py` 多一張
                         # `_FORBIDDEN_VALUES_OUTSIDE_LOCAL`——既有兩張表是「有值就違規」，
                         # 這條需求是「只有 codex_cli 這個值違規、其他供應商合法」，形狀塞不下，

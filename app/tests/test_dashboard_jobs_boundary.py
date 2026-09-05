@@ -1,4 +1,6 @@
-"""全站進行中工作只經由各模組公開 active_jobs() 匯入 dashboard。"""
+"""全站進行中工作經由各模組公開 active_jobs() 匯入 dashboard（intake，票 09 的範圍）
+或由 dashboard 直接讀佇列（品牌智庫抽原話／產品調研／顧問報告，票 08：這三個 kind
+搬上 `app.background` 佇列後不再有行程內字典，狀態改讀 `llm_task`）。"""
 
 import unittest
 from uuid import uuid4
@@ -7,23 +9,38 @@ from fastapi.testclient import TestClient
 
 import app.main as main
 from app.brand_intelligence import repository as bi_repo
-from app.brand_web import routes_library, routes_products
+from app.core import db as coredb
 from app.core.db import DEV_ORG_ID  # noqa: E402
 from app.intake import routes_api
 
 from .identity_test_helpers import mint_hs256
 
 
+def _seed_running_queue_job(org_id: str, brand_id: str, task_type: str, context_scope: dict) -> None:
+    """直接插一列 `status = 'running'` 的 llm_task，比照 `app/tests/test_background.py`
+    既有的手動 INSERT 寫法——這三個 kind 搬上佇列後，dashboard 的聚合端點直接讀這張表
+    （見 `app/dashboard/routes_jobs_api.py::_queue_active_jobs`），不再有字典可以 `.set()`。"""
+    main.conn.execute(
+        "INSERT INTO llm_task (id, org_id, brand_id, task_type, context_scope_json,"
+        " input_context_ids_json, input_context_hash, knowledge_item_ids_json,"
+        " brand_version, prompt_template_id, prompt_template_version, provider, model,"
+        " status, attempt_no, started_at)"
+        " VALUES (%s, %s, %s, %s, %s, '[]', '', '[]', 1, 'p', 'v1', 'seed', 'seed',"
+        " 'running', 1, %s)",
+        (coredb.new_id("llm"), org_id, brand_id, task_type, coredb.jsonb(context_scope),
+         coredb.now_utc()),
+    )
+    main.conn.commit()
+
+
 class DashboardJobsBoundaryTest(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(main.app)
         self.brand = bi_repo.create_brand(main.conn, name="進行中工作測試品牌", client_name=None, actor="測試員", org_id=DEV_ORG_ID)
-        for registry in (routes_api._JOBS, routes_products._research_jobs, routes_library._cv_jobs):
-            registry.clear()
+        routes_api._JOBS.clear()
 
     def tearDown(self):
-        for registry in (routes_api._JOBS, routes_products._research_jobs, routes_library._cv_jobs):
-            registry.clear()
+        routes_api._JOBS.clear()
 
     def test_active_jobs_are_normalized_by_owning_modules(self):
         brand_id = self.brand["id"]
@@ -31,13 +48,9 @@ class DashboardJobsBoundaryTest(unittest.TestCase):
             "kind": "scan", "status": "running", "stage": "讀取網址中",
             "started_at": "2026-08-20T04:11:02+00:00",
         })
-        routes_products._research_jobs.set("product_test", {
-            "brand_id": brand_id, "status": "waiting", "stage": None,
-            "started_at": "2026-08-20T04:12:02+00:00",
-        })
-        routes_library._cv_jobs.set("cvjob_test", {
-            "brand_id": brand_id, "status": "running", "started_at": None,
-        })
+        _seed_running_queue_job(DEV_ORG_ID, brand_id, "product_scan", {"product_id": "prd_test"})
+        _seed_running_queue_job(DEV_ORG_ID, brand_id, "customer_voice_extraction", {"job_key": "cvjob_test"})
+        _seed_running_queue_job(DEV_ORG_ID, brand_id, "brand_report", {})
         routes_api._JOBS.set("terminal_job", {
             "kind": "scan", "status": "done", "stage": "完成", "started_at": "2026-08-20T04:13:02+00:00",
         })
@@ -46,27 +59,39 @@ class DashboardJobsBoundaryTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         jobs = response.json()["data"]
-        self.assertEqual({job["kind"] for job in jobs}, {"scan", "product_research", "library_convert"})
+        # 票 08 round 2 done-check 4：三個搬上佇列的 kind 都要點名斷言——半調的聚合悄悄漏掉
+        # 一個 kind 是這張票最容易犯的錯，光看「有東西回來」看不出來哪個 kind 不見了。
+        self.assertEqual(
+            {job["kind"] for job in jobs},
+            {"scan", "product_research", "library_convert", "brand_report"},
+        )
         self.assertTrue(all(job["status"] in {"running", "waiting"} for job in jobs))
         self.assertTrue(all(job["brand_name"] == "進行中工作測試品牌" for job in jobs))
         self.assertEqual(
             {job["action_url"] for job in jobs},
-            {f"/app/brands/{brand_id}/intake", f"/app/brands/{brand_id}/products/product_test", f"/app/brands/{brand_id}/library"},
+            {
+                f"/app/brands/{brand_id}/intake",
+                f"/app/brands/{brand_id}/products/prd_test",
+                f"/app/brands/{brand_id}/library",
+                f"/app/brands/{brand_id}/report",
+            },
         )
         expected_keys = {"brand_id", "brand_name", "kind", "status", "stage", "started_at", "action_url"}
         self.assertTrue(all(set(job) == expected_keys for job in jobs))
-        self.assertEqual(next(job for job in jobs if job["kind"] == "product_research")["stage"], "")
-        self.assertEqual(next(job for job in jobs if job["kind"] == "library_convert")["started_at"], "")
+        # 逐步進度（票 08 明文放棄）：running 一律回固定字串，不是 seed 進去的值。
+        self.assertEqual(next(job for job in jobs if job["kind"] == "product_research")["stage"], "讀取網址中")
+        self.assertTrue(next(job for job in jobs if job["kind"] == "library_convert")["started_at"])
+        self.assertEqual(next(job for job in jobs if job["kind"] == "brand_report")["stage"], "正在整理五章")
 
 
 class DashboardJobsTenantIsolationTest(unittest.TestCase):
-    """票 03-1 r1 defect 2：五個記憶體 registry 沒有 org_id 概念，過濾改在聚合端點做——
-    org A 的 token 看不到 org B 品牌底下的進行中工作。"""
+    """票 03-1 r1 defect 2：intake 的行程內 registry 沒有 org_id 概念，過濾改在聚合端點做
+    ——org A 的 token 看不到 org B 品牌底下的進行中工作；票 08 起，其餘三個 kind 改讀
+    `llm_task`（本身就有 org_id 欄位），走同一條過濾迴圈。"""
 
     def setUp(self):
         self.client = TestClient(main.app)
-        for registry in (routes_api._JOBS, routes_products._research_jobs, routes_library._cv_jobs):
-            registry.clear()
+        routes_api._JOBS.clear()
 
         a_user = uuid4()
         self.a_token = mint_hs256(sub=str(a_user), email=f"jobs-orga-{a_user.hex[:8]}@example.com")
@@ -86,14 +111,10 @@ class DashboardJobsTenantIsolationTest(unittest.TestCase):
             main.conn, org_id=self.org_b, name="組織B的品牌", client_name=None, actor="測試"
         )["id"]
         main.conn.commit()
-        routes_products._research_jobs.set("product_test_b", {
-            "brand_id": self.brand_b, "status": "running", "stage": None,
-            "started_at": "2026-08-20T04:12:02+00:00",
-        })
+        _seed_running_queue_job(self.org_b, self.brand_b, "product_scan", {"product_id": "product_test_b"})
 
     def tearDown(self):
-        for registry in (routes_api._JOBS, routes_products._research_jobs, routes_library._cv_jobs):
-            registry.clear()
+        routes_api._JOBS.clear()
 
     def test_org_a_does_not_see_org_b_jobs(self):
         resp = self.client.get(

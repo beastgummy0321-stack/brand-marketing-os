@@ -19,10 +19,14 @@ The seven route files (`routes.py`, `routes_brand_settings.py`, `routes_inbox.py
 plus their helpers (`routes_product_helpers.py`, `product_ai_calls.py`, `report_service.py`) are
 private and imported by nothing outside the package.
 
-**One live breach, recorded rather than hidden**: `app/dashboard/routes_jobs_api.py:16-18`
-imports `active_jobs` out of three route files directly, bypassing `register()`. That is the
-in-memory job dict named in BOARD.md as debt; a ticket that touches those three files fixes the
-import direction or leaves it exactly as it is — it does not add a fourth.
+The breach recorded here until 2026-09-05 is gone: `app/dashboard/routes_jobs_api.py` no longer
+imports `active_jobs` out of this module's route files. Ticket 08 moved customer-voice extraction,
+product research and brand report onto the queue, deleted their three dicts, and the aggregate
+now reads job state itself. `app/intake`'s own dicts are the last ones left; ticket 09 removes
+them. **Do not add a fourth direct import from another module into these route files.**
+
+`register(app)` now also registers this module's three `background.*` tasks, idempotently — the
+worker process needs them, and `register()` stays the module's only export.
 
 ## Exported shapes
 
@@ -45,7 +49,8 @@ Chinese `message`, rendered by `app/shared/web.py`. Tenant boundary errors come 
 - `procrastinate_*` internals. `app.background` is the only door.
 
 Allowed dependencies: `app.brand_intelligence`, `app.core`, `app.llm`, `app.shared.web`,
-`app.storage`.
+`app.storage`, and — added 2026-09-05, ticket 08 — `app.background`, for `enqueue()` and
+`is_active()`. `procrastinate_*` is still reached through that module and nowhere else.
 
 ## Decisions in force
 
@@ -54,3 +59,5 @@ Allowed dependencies: `app.brand_intelligence`, `app.core`, `app.llm`, `app.shar
 - ADR 0043 — one bucket, and the `org_id` is the first folder.
 - ADR 0052 — a logged-in request runs as role `authenticated` with an `app.org_id` claim.
 - ADR 0053 — the product economics screen saves a version from today; the 「生效日」 input goes.
+- ADR 0042 — work the user waits for runs on the queue.
+- ADR 0063 — the worker is its own process; these three jobs run there, not in the web process.

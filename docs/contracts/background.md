@@ -27,7 +27,18 @@ app() -> procrastinate.App
 enqueue(task_name: str, *, org_id: str, lock: str, **kwargs) -> bool
     # Defer one job. False (never an exception) when a job with this queueing_lock is already
     # sitting in `todo`. org_id travels as a task argument, not as a queue column (ADR 0038).
-    # Callers: app/schedule/routes.py's three POST endpoints, this module's own tests.
+    # Callers: app/schedule/routes.py's three POST endpoints, app/brand_web's three
+    # (customer voice, product research, brand report), this module's own tests.
+
+is_active(lock: str) -> bool
+    # True while a job carrying this queueing_lock is still `todo` or `doing`. The signal a
+    # caller needs to refuse a second press: `llm_task` cannot answer it, because its running
+    # row is written just before the provider call, not when the job is claimed — measured
+    # 2026-09-05, ticket 08, where that window let a paid call run twice. Reads through
+    # procrastinate 3.9.0's own `JobManager.list_jobs(queueing_lock=…, status=…)`; the
+    # `queueing_lock` column is never cleared on finish (`procrastinate_finish_job_v1` touches
+    # only status/abort_requested/attempts), so a finished lock reads False.
+    # Callers: app/brand_web/routes_products.py, app/brand_web/routes_report_api.py.
 ```
 
 Every registered task takes `org_id` as a parameter — held by
@@ -38,8 +49,10 @@ Every registered task takes `org_id` as a parameter — held by
 `app()` propagates psycopg and procrastinate errors unwrapped; a caller that cannot reach
 Postgres has nothing this module can usefully say about it. `enqueue()` is the one place that
 converts an exception into a value: `procrastinate.exceptions.AlreadyEnqueued` becomes `False`.
-Whether a *running* job blocks a second press is the caller's 409 check against its own table,
-not this module's — the `queueing_lock` unique index only covers `status = 'todo'`.
+Blocking a second press while a job is *running* is `is_active()`'s job, not `enqueue()`'s: the
+`queueing_lock` unique index only covers `status = 'todo'`, so `enqueue()` alone leaves a window
+between the worker claiming a job and the provider call starting. Ticket 08 measured that window
+letting a paid LLM call run twice. `is_active()` returns a value, never raises.
 
 ## Must not import or touch
 

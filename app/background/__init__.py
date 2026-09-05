@@ -9,10 +9,14 @@
    `.configure_task(name).defer(org_id=..., ...)` 或 `.run_worker(...)` 的 procrastinate App
    物件），加上票 05-1 補的
    `enqueue(task_name, *, org_id, lock, **kwargs) -> bool`（見下方函式檔頭：defer 一個 job，
-   同一個 `lock` 已經有一個在 `todo` 狀態排隊時回 False，不拋例外）。其餘一律私有。
+   同一個 `lock` 已經有一個在 `todo` 狀態排隊時回 False，不拋例外），再加上票
+   08-standalone-jobs-on-the-queue round 2 補的 `is_active(lock: str) -> bool`（見下方函式
+   檔頭：這個 `queueing_lock` 名下還有列在 `todo` 或 `doing`）。其餘一律私有。
 3. 呼叫端：`app()` 目前是本模組自己的測試檔、app/meta（掛 task）、app/schedule（
    `register_tasks()` 掛三個生成 task）與 `app/worker.py`（起 worker 前先建，ADR 0063）；
-   `enqueue()` 目前是 app/schedule/routes.py（三支 POST 端點）與本模組自己的測試檔。
+   `enqueue()` 目前是 app/schedule/routes.py（三支 POST 端點）與本模組自己的測試檔；
+   `is_active()` 目前是 `app/brand_web/routes_products.py`（再次調研）、
+   `app/brand_web/routes_report_api.py`（報告生成）與本模組自己的測試檔。
 4. 不碰什麼：procrastinate 套件內部（`procrastinate.schema`／`procrastinate.cli` 等）——本檔
    ／本模組永遠不呼叫 `procrastinate schema --apply`；schema 已經 vendor 進
    `supabase/migrations/20260829000001_background_baseline.sql`，由 Supabase CLI 管，跟全站
@@ -69,11 +73,18 @@ async connector 上呼叫任何 sync 方法都會走 `utils.async_to_sync`
 得出去；真正的 task body 只在 `app()`（worker 用的那顆）上註冊，見 `app/schedule/jobs.py`
 `register_tasks()`。
 
-ponytail: `queueing_lock` 的唯一索引只擋 `WHERE status = 'todo'`
+`queueing_lock` 的唯一索引只擋 `WHERE status = 'todo'`
 （`supabase/migrations/20260829000001_background_baseline.sql:148`），`enqueue()` 因此只
-擋得住「連按兩次、worker 都還沒撿走第一個」這個窗口；一個任務真的在跑（`llm_task` 那一列
-`status = 'running'`）之後，擋第二次按下去是呼叫端自己查 `llm_task` 的責任——見
-`app/schedule/routes.py` 每支 POST 端點的 409 檢查，不是這裡的事。
+擋得住「連按兩次、worker 都還沒撿走第一個」這個窗口。一個任務已經被 worker 撿走
+（procrastinate 的 `status = 'doing'`）之後、到它自己的 handler 真正打錢之前，還有一段
+`llm_task` 完全看不見的窗口——`app/llm/gateway.py` 的 `running` 列要等 provider 呼叫前一刻
+才寫（round 1 上線後被獨立審查抓到：第二次按下去落在這個窗口，兩邊都真的付了錢，見票
+08-standalone-jobs-on-the-queue「Blocked」節）。`is_active()`（round 2）補的就是這一段：
+直接問 procrastinate 自己的 `procrastinate_jobs`（`job_manager.list_jobs()`，跟它自己的
+shell `list_jobs`／`list_locks` 指令同一個公開 API，不是繞過它自建 SQL），這個
+`queueing_lock` 名下還有列卡在 `todo` 或 `doing`，就代表這件事還沒結束——擋不擋、擋完
+回什麼狀態碼，仍然是呼叫端的事（`app/schedule/routes.py`／`app/brand_web/routes_products.py`
+／`app/brand_web/routes_report_api.py` 各自的 409／400），這裡只負責回答問題。
 """
 
 import asyncio
@@ -160,3 +171,27 @@ def enqueue(task_name: str, *, org_id: str, lock: str, **kwargs) -> bool:
     except AlreadyEnqueued:
         return False
     return True
+
+
+def is_active(lock: str) -> bool:
+    """True while a job carrying this `queueing_lock` is still `todo` or being processed
+    (`doing`) — the 409/400 signal a caller needs and `llm_task` cannot give, because its
+    `running` row is written by `app/llm/gateway.py` just before the provider call, not when
+    the worker claims the job (round 2, ticket 08-standalone-jobs-on-the-queue "Blocked").
+
+    Status values and `queueing_lock`'s lifetime verified against the installed
+    procrastinate==3.9.0's own vendored schema
+    (`supabase/migrations/20260829000001_background_baseline.sql:71-79,148`, copied verbatim
+    from `.venv/Lib/site-packages/procrastinate/sql/schema.sql`) and its `jobs.Status` enum
+    (`.venv/Lib/site-packages/procrastinate/jobs.py`): `todo`/`doing`/`succeeded`/`failed`/
+    `cancelled`/`aborting`/`aborted`, and `queueing_lock` is a plain column procrastinate never
+    clears on completion — it stays readable on the row after the job finishes, which is what
+    lets this function tell "never ran" apart from "ran and is done".
+
+    Goes through `job_manager.list_jobs(queueing_lock=..., status=...)` — procrastinate's own
+    public query surface (its `shell` CLI's `list_jobs`/`list_locks` commands take the same
+    `status=` string), not a hand-rolled SQL query against `procrastinate_jobs`."""
+    job_manager = _sync_app_for_defer().job_manager
+    return bool(job_manager.list_jobs(queueing_lock=lock, status="todo")) or bool(
+        job_manager.list_jobs(queueing_lock=lock, status="doing")
+    )

@@ -26,12 +26,14 @@ from fastapi import APIRouter, File, Form, Request, UploadFile
 from fastapi.responses import Response
 
 import app.storage as storage
+from app.background import enqueue as background_enqueue
 from app.brand_intelligence import background_job
 from app.brand_intelligence import customer_voice as cv_mod
 from app.brand_intelligence import repository as repo
 from app.core import cleanup
 from app.core import settings as core_settings
 from app.core import vocab as md
+from app.core.db import connection as core_db_connection
 from app.core.db import new_id
 from app.llm import gateway, providers
 from app.shared import web
@@ -97,16 +99,21 @@ def save_official_asset(brand_id: str, *, org_id: str, actor: str, asset_kind: s
 
 
 def extract(conn, brand_id: str, *, actor: str, raw_text: str, source_channel: str,
-            source_detail: str | None = None, source_type: str = "manual") -> tuple:
-    """抽取一筆顧客原話並入庫。成功回 (True, row)；失敗回 (False, 人話錯誤)，不入庫。"""
+            source_detail: str | None = None, source_type: str = "manual",
+            job_key: str | None = None) -> tuple:
+    """抽取一筆顧客原話並入庫。成功回 (True, row)；失敗回 (False, 人話錯誤)，不入庫。
+
+    `job_key`（票 08）：背景 task 呼叫時帶進來，寫進 `context_scope_json`，只給狀態
+    端點事後用 `context_scope_json->>'job_key'` 反查這一列 llm_task（見
+    `_cv_job_status()`）；直接呼叫本函式的既有呼叫端（測試、其他工具）不必填。"""
     brand = repo.get_brand(conn, brand_id)
     if brand is None:
         raise ValueError(f"找不到品牌：{brand_id}")
 
     user_text = cv_mod._build_user_text(raw_text, source_channel, source_detail)
     context = gateway.TaskContext(
-        context_scope={"brand_id": brand_id}, knowledge_item_ids=[],
-        brand_version=brand["knowledge_version"],
+        context_scope={"brand_id": brand_id, **({"job_key": job_key} if job_key else {})},
+        knowledge_item_ids=[], brand_version=brand["knowledge_version"],
     )
     task = gateway.run_task(
         conn, PROVIDER, brand_id=brand_id, task_type="customer_voice_extraction",
@@ -322,63 +329,61 @@ def channel_delete_api(request: Request, brand_id: str, channel_id: str):
 
 
 # ---------------------------------------------------------------------------
-# 顧客原話貼入＋AI 抽取：背景執行＋JSON 輪詢（S5.40–S5.42，五鐵則③生成不擋路）。
+# 顧客原話貼入＋AI 抽取：background.customer_voice_extraction 佇列工作＋JSON 輪詢
+# （S5.40–S5.42，五鐵則③生成不擋路；票 08：從行程內 thread＋dict 搬上
+# `app.background` 佇列，見 docs/contracts/background.md）。
 #
-# 跟 app/ads/routes.py 的等待頁背景引擎（_progress_state 等）不同的地方：那套是給
-# 「同一個 key（brand+cycle）F5 重整也不該重複觸發」的冪等閘 + meta-refresh 等待頁；
-# 這裡每次貼入都是一筆新內容、天生不重複，job_key 用 new_id() 現生一個就夠，
-# 不需要冪等閘與逾時清除那一整套，前端也是輪詢 JSON 而不是等待頁。
-# （票要求：在 brand_intelligence 內重實作，不跨層依賴廣告分支）。
+# 每次貼入都是一筆新內容、天生不重複，`job_key` 用 new_id() 現生一個就夠，本身不需要
+# 「同一個 key 已經在跑就不重新啟動」那道冪等閘——`enqueue()` 的 `lock` 用 job_key
+# 組成，保證獨一無二，不會擋到任何一次合法送出。
 # ---------------------------------------------------------------------------
 
-_cv_jobs = background_job.JobRegistry()
 
+def background_customer_voice_extraction(org_id: str, brand_id: str, job_key: str, actor: str,
+                                          raw_text: str, source_channel: str,
+                                          source_detail: str | None) -> None:
+    """procrastinate task body（`background.customer_voice_extraction`）——worker 執行，
+    自己開一條連線（worker 不繼承 request 的連線）。"""
+    with core_db_connection() as conn:
+        try:
+            ok, result = extract(
+                conn, brand_id, actor=actor, raw_text=raw_text, source_channel=source_channel,
+                source_detail=source_detail, job_key=job_key,
+            )
+        except Exception as exc:  # noqa: BLE001 — worker 最後一道防線，不能讓例外憑空消失
+            ok, result = False, f"背景執行發生未預期錯誤：{exc}"
 
-def active_jobs() -> list[dict]:
-    """回傳進行中的原話轉換工作，供 dashboard 聚合；不洩漏 registry 狀態。"""
-    return [
-        {
-            "brand_id": state["brand_id"],
-            "kind": "library_convert",
-            "status": state["status"],
-            "stage": "分析原話中",
-            "started_at": state.get("started_at") or "",
-        "action_url": f"/app/brands/{state['brand_id']}/library",
-        }
-        for _job_key, state in _cv_jobs.items()
-        if state.get("status") in ("running", "waiting") and state.get("brand_id")
-    ]
-
-
-def _cv_notify(brand_id: str, job_key: str, message: str) -> None:
-    background_job.notify(
-        web.conn, brand_id, category="customer_voice_extraction_done", dedupe_key=job_key,
-        message=message, action_url=f"/app/brands/{brand_id}/library",
-    )
-
-
-def _run_customer_voice_job(job_key: str, brand_id: str, actor: str, raw_text: str,
-                             source_channel: str, source_detail: str | None) -> None:
-    try:
-        ok, result = extract(
-            web.conn, brand_id, actor=actor, raw_text=raw_text,
-            source_channel=source_channel, source_detail=source_detail,
+        channel_label = md.customer_voice_channel_label(source_channel)
+        if ok:
+            n = len(result["extraction"])
+            message = f"「{channel_label}」原話分析完成，{f'找到 {n} 條重點' if n else '沒有找到重點'}"
+        else:
+            message = f"「{channel_label}」原話分析失敗，可以重試"
+        background_job.notify(
+            conn, brand_id, category="customer_voice_extraction_done", dedupe_key=job_key,
+            message=message, action_url=f"/app/brands/{brand_id}/library",
         )
-    except Exception as exc:  # noqa: BLE001 — 背景執行緒最後一道防線，不能讓例外憑空消失
-        ok, result = False, f"背景執行發生未預期錯誤：{exc}"
 
-    # 先寫收件匣通知、確定 commit 完成，才把 job 狀態翻成 done／failed——順序反過來的話，
-    # 輪詢端會有機會在通知還沒進 DB 前就看到「完成」，是一個真的會偶發的競態，不是理論上的。
-    channel_label = md.customer_voice_channel_label(source_channel)
-    if ok:
-        shape = _customer_voice_shape(result)
-        n = len(shape["extraction"])
-        _cv_notify(brand_id, job_key,
-                   f"「{channel_label}」原話分析完成，{f'找到 {n} 條重點' if n else '沒有找到重點'}")
-        _cv_jobs.set(job_key, {"status": "done", "result": shape})
-    else:
-        _cv_notify(brand_id, job_key, f"「{channel_label}」原話分析失敗，可以重試")
-        _cv_jobs.set(job_key, {"status": "failed", "message": result})
+
+def _cv_job_status(conn, brand_id: str, job_key: str) -> dict:
+    """讀 llm_task 取代讀行程內 dict（票 08）：`job_key` 存在 `context_scope_json`
+    裡（見 `extract()`），這裡反查最新一列。查不到＝還沒排到或還沒寫列，跟原本
+    「查不到的 job_key 回 running」是同一個誠實預設（避免第一次輪詢跟背景工作真正
+    寫入之間的極短暫競態被前端誤判成錯誤）。"""
+    row = conn.execute(
+        "SELECT * FROM llm_task WHERE brand_id = %s AND task_type = 'customer_voice_extraction' "
+        "AND context_scope_json->>'job_key' = %s ORDER BY started_at DESC LIMIT 1",
+        (brand_id, job_key),
+    ).fetchone()
+    if row is None or row["status"] == "running":
+        return {"status": "running"}
+    if row["status"] != "succeeded":
+        return {"status": "failed", "message": row["error"] or "背景任務失敗，可以重試。"}
+    cv = repo.get_customer_voice_by_llm_task_id(conn, brand_id, row["id"])
+    if cv is None:
+        # llm_task 成功但抽取結果解析／驗證失敗（誠實失敗，沒有入庫）——見 extract()。
+        return {"status": "failed", "message": PARSE_FAIL_MESSAGE}
+    return {"status": "done", "result": _customer_voice_shape(cv)}
 
 
 @router.post("/api/library/brands/{brand_id}/customer-voice")
@@ -408,12 +413,12 @@ async def customer_voice_submit(request: Request, brand_id: str):
         return JSONResponse({"error": budget_err}, status_code=422)
 
     job_key = new_id("cvjob")
-    # brand_id／started_at：全站生成進度單一出口（票 B4-warroom）聚合端點列舉用，本身
-    # 業務邏輯不讀這兩個鍵。
-    _cv_jobs.start(job_key, {"status": "running", "brand_id": brand_id,
-                             "started_at": datetime.now(UTC).isoformat()},
-                   _run_customer_voice_job,
-                   (job_key, brand_id, str(actor.user_id), raw_text, source_channel, source_detail))
+    background_enqueue(
+        "background.customer_voice_extraction", org_id=actor.org_id,
+        lock=f"customer_voice_extraction:{job_key}", brand_id=brand_id, job_key=job_key,
+        actor=str(actor.user_id), raw_text=raw_text, source_channel=source_channel,
+        source_detail=source_detail,
+    )
     return {"job_key": job_key}
 
 
@@ -421,4 +426,4 @@ async def customer_voice_submit(request: Request, brand_id: str):
 def customer_voice_job_status(request: Request, brand_id: str, job_key: str):
     actor = require_actor(request)
     require_brand(brand_id, actor)
-    return _cv_jobs.get(job_key, {"status": "running"})
+    return _cv_job_status(web.conn, brand_id, job_key)

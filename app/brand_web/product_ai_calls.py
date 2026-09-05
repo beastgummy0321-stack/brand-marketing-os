@@ -18,8 +18,13 @@ PRODUCT_SCAN_FACT_TYPES = product_ai.PRODUCT_SCAN_FACT_TYPES
 _parse_json_reply = gateway.parse_json_reply
 
 
-def run_product_scan(conn, brand_id: str, product_name: str, url: str, brand_facts: list) -> tuple:
-    """讀產品頁網址內容＋已確認的品牌事實，請 AI 整理產品事實，並選填抽出售價。"""
+def run_product_scan(conn, brand_id: str, product_id: str, product_name: str, url: str,
+                      brand_facts: list) -> tuple:
+    """讀產品頁網址內容＋已確認的品牌事實，請 AI 整理產品事實，並選填抽出售價。
+
+    `product_id`（票 08）：寫進 `context_scope_json`，只給
+    `routes_products.py::_research_state()` 事後用
+    `context_scope_json->>'product_id'` 反查這一列 llm_task，跟業務邏輯無關。"""
     ok, text = fetch_url(url)
     parts = [f"產品名稱：{product_name}", f"產品頁網址：{url}"]
     if brand_facts:
@@ -40,8 +45,8 @@ def run_product_scan(conn, brand_id: str, product_name: str, url: str, brand_fac
     # 跨層禁止裸 SQL（CrossLayerRawSqlScanTest），走 repository 公開進入點
     row = repo.get_brand(conn, brand_id)
     context = gateway.TaskContext(
-        context_scope={"brand_id": brand_id, "product_scan_url": url}, knowledge_item_ids=[],
-        brand_version=row["knowledge_version"] if row else 1,
+        context_scope={"brand_id": brand_id, "product_id": product_id, "product_scan_url": url},
+        knowledge_item_ids=[], brand_version=row["knowledge_version"] if row else 1,
     )
     task = gateway.run_task(
         conn, PROVIDER, brand_id=brand_id, task_type="product_scan",
