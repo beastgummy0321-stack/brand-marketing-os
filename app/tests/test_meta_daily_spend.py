@@ -36,6 +36,7 @@ procrastinate 的實際排程／worker 機制（defer → run_worker → 真的�
 import json
 import unittest
 from datetime import datetime, timedelta
+from unittest import mock
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
@@ -51,6 +52,7 @@ from app.core import settings as coresettings
 from app.identity import repository as identity_repo
 from app.meta import graph
 from app.meta import repository as meta_repo
+from app.schedule import repository as schedule_repo
 
 from .identity_test_helpers import mint_hs256
 
@@ -1056,6 +1058,72 @@ class AdMatchUnreachableTest(_MetaDailySpendTestBase):
         with self.assertRaises(web.ApiError) as caught:
             meta_repo.ad_ids_by_exact_name(web.conn, org_id, "as-1", "單元1")
         self.assertEqual(caught.exception.code, "meta_unreachable")
+
+
+# -- 14. 票 06：這兩支函式現在自己驗 parent id 的租戶界線，不是只靠呼叫端自律 -------------
+
+class _CrossOrgBindingFixture(_MetaDailySpendTestBase):
+    """兩個組織：org_a 有權杖但沒有任何綁定；org_b 有一個真的綁定紀錄（`channel_entity_map`
+    一列），external_id 是 org_a 接下來會拿去呼叫的那個 id——org_a 從沒見過它、也沒有任何
+    ad_account 曾經配對出它，唯一「知道」它的地方是別的組織的綁定紀錄。"""
+
+    def _bind_for_other_org(self, org_id: str, node_key: str, external_id: str) -> None:
+        brand_id = f"brd_{uuid4().hex[:10]}"
+        web.conn.execute(
+            "INSERT INTO brand (id, org_id, name, status) VALUES (%s, %s, %s, 'active')",
+            (brand_id, org_id, "別的組織的品牌"),
+        )
+        channel_id = schedule_repo.ensure_meta_channel(web.conn, org_id)
+        schedule_repo.upsert_binding(
+            web.conn, org_id=org_id, brand_id=brand_id, channel_id=channel_id,
+            node_key=node_key, node_name_at_bind="別的組織的節點",
+            external_id=external_id, external_status="ACTIVE", source_tree_task_id=None,
+        )
+        web.conn.commit()
+
+
+class AdSetParentCrossOrgRefusedTest(_CrossOrgBindingFixture):
+    """org_b 綁過的活動 id，org_a 直接拿去呼叫 `ad_set_ids_by_exact_name`——refused 在任何
+    Meta 呼叫之前：`graph.list_ad_sets` 完全沒被呼叫，不是讓請求出去、指望 Meta 那邊回權限
+    錯誤（那樣等於這支函式仍然沒有第二行防線，`docs/contracts/meta.md` 收這張票之前記錄
+    的正是這個洞）。"""
+
+    def test_refused_before_any_meta_call(self):
+        org_a, _ = self._make_org("cross_org_adset_a")
+        org_b, _ = self._make_org("cross_org_adset_b")
+        meta_repo.save_token(web.conn, org_a, TOKEN)
+        web.conn.commit()
+        self._bind_for_other_org(org_b, "1", "camp-owned-by-org-b")
+
+        with mock.patch.object(graph, "list_ad_sets") as fake_list_ad_sets:
+            with self.assertRaises(web.ApiError) as caught:
+                meta_repo.ad_set_ids_by_exact_name(
+                    web.conn, org_a, "camp-owned-by-org-b", "隨便什麼名字"
+                )
+            self.assertEqual(fake_list_ad_sets.call_count, 0)
+        self.assertEqual(caught.exception.status, 403)
+        self.assertEqual(caught.exception.code, "campaign_not_owned")
+
+
+class AdParentCrossOrgRefusedTest(_CrossOrgBindingFixture):
+    """跟 `AdSetParentCrossOrgRefusedTest` 同一套規矩，深一層：org_b 綁過的廣告組合 id，
+    org_a 直接拿去呼叫 `ad_ids_by_exact_name`，一樣要在任何 Meta 呼叫之前被拒絕。"""
+
+    def test_refused_before_any_meta_call(self):
+        org_a, _ = self._make_org("cross_org_ad_a")
+        org_b, _ = self._make_org("cross_org_ad_b")
+        meta_repo.save_token(web.conn, org_a, TOKEN)
+        web.conn.commit()
+        self._bind_for_other_org(org_b, "1.1", "adset-owned-by-org-b")
+
+        with mock.patch.object(graph, "list_ads") as fake_list_ads:
+            with self.assertRaises(web.ApiError) as caught:
+                meta_repo.ad_ids_by_exact_name(
+                    web.conn, org_a, "adset-owned-by-org-b", "隨便什麼名字"
+                )
+            self.assertEqual(fake_list_ads.call_count, 0)
+        self.assertEqual(caught.exception.status, 403)
+        self.assertEqual(caught.exception.code, "adset_not_owned")
 
 
 # -- 4. FK 保護：有花費紀錄的帳號不能被刪（T-fk） -------------------------------------

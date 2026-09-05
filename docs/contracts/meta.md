@@ -38,15 +38,20 @@ their signature, because the boundary is the part of the shape that matters:
   `app/schedule/performance.py`, ADR 0057 §1), `last_pull_at`, and `campaign_ids_by_exact_name`
   (which re-checks the caller's `ad_account_ids` against `meta_ad_account WHERE org_id = …`
   before asking Meta anything).
-- **`ad_set_ids_by_exact_name` and `ad_ids_by_exact_name` (T5, the exact same shape one level
-  deeper) do not**, and this is written down rather than smoothed over. They use `org_id` only
-  to fetch the token, and pass the caller's `campaign_id`/`adset_id` straight to Meta. What
-  keeps it inside one tenant today is the call site, not the function: their only caller
-  (`app/schedule/binding.py`) can only ever hand them an id that either
-  `campaign_ids_by_exact_name`/`ad_set_ids_by_exact_name` just returned from this org's own ad
-  accounts, or that `bindings_by_node_key` read back under `org_id = … AND brand_id = …`. Found
-  at T3c review; there is no reachable request that breaks it, and there is also no second line
-  of defence. `BOARD.md` carries the debt.
+- **`ad_set_ids_by_exact_name` and `ad_ids_by_exact_name` refuse a parent id that is on record
+  as another organisation's** (ticket 06, 2026-09-05). Before fetching the token and before any
+  Meta call they read `channel_entity_map` for `external_id = <the parent id> AND org_id != <this
+  org>`; a hit raises `web.ApiError(403, "campaign_not_owned" | "adset_not_owned", …)`. The table
+  belongs to `schedule`; reading it from here follows the same precedent as `channel_credential`
+  (ADR 0056 §4). `campaign_ids_by_exact_name` keeps its own, stricter check against
+  `meta_ad_account WHERE org_id = …`, because at that level an owning table exists.
+  **Known residual, deliberate: the check is fail-closed on conflict, fail-open on unknown.** An
+  id no organisation has ever bound still reaches Meta on this org's token. Closing that would
+  need either a table mapping every Meta id to an org (none exists) or a per-node Graph read the
+  ticket ruled out; and `AdSetMatchUnreachableTest` / `AdMatchUnreachableTest` require an
+  unbound id to reach Meta. `bind_tree` writes each binding row before recursing into that
+  node's children, so the open branch is unreachable from the only caller that exists today.
+  `docs/issues/deploy/issue-meta-unknown-parent-id-fail-open.md` carries it.
 
 Tables this module owns: `meta_ad_account`, `brand_meta_ad_account`, `meta_entity_spend`.
 Account tables stay one per channel — there is no generic account table, by decision

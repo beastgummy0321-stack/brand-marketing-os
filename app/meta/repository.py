@@ -33,6 +33,11 @@ Tables (see supabase/migrations/20260829000002_meta_baseline.sql,
                               account can serve more than one brand). `level` is NOT NULL
                               with no default on purpose — a WHERE clause can be forgotten,
                               a NOT NULL column cannot, and the three levels share one table.
+    channel_entity_map     — owned by the schedule module (ADR 0055 §1), not this one.
+                              `_refuse_if_parent_owned_by_another_org` (ticket 06) reads it
+                              read-only, same precedent as channel_credential above: the table
+                              belongs elsewhere, the one place that needs to touch it from here
+                              stays here. It never writes this table.
 
 The token itself never touches channel_credential (or any other table, audit_log, or a log
 line) — it lives in Supabase Vault. `save_token` does not give the secret a name:
@@ -327,18 +332,46 @@ def campaign_ids_by_exact_name(
             for cid, status in sorted(matched.items())]
 
 
+def _refuse_if_parent_owned_by_another_org(conn: _AnyConn, org_id: str, parent_id: str,
+                                            *, noun: str, code: str) -> None:
+    """票 06（`docs/issues/deploy/06-meta-name-lookup-tenant-symmetry.md`）：`campaign_id`／
+    `adset_id` 究竟屬不屬於 `org_id`，這兩支函式自己以前不驗——呼叫端（`app.schedule.
+    binding.bind_tree`）今天剛好只餵得進自己組織的 id，但那是呼叫端自律，不是這裡的規則。
+
+    這裡補的第二行防線：`channel_entity_map`（schedule 模組的表，這裡只讀不寫——ADR 0056
+    §4 那種「表歸誰、程式碼可以在哪」的既有先例，`get_credential`/`save_token` 讀寫
+    `channel_credential` 就是同一個道理）有沒有把這個 id 記成屬於**別的**組織
+    （`org_id != %s`）。同一個組織自己的紀錄，或者根本沒有任何紀錄的 id（還沒綁過任何
+    人；或者這次呼叫鏈裡剛比對完、`binding.py` 一綁完就先 upsert 才遞迴下一層，所以真的
+    走到這裡時該有的那一列早就寫好了），都不算，照舊放行——`AdSetMatchUnreachableTest`／
+    `AdMatchUnreachableTest` 那種「org 有權杖、id 沒有任何綁定紀錄」的情境因此不受影響，
+    照舊一路走到 Meta、連不上就變成 `meta_unreachable`。只有一個通路（ADR 0056 §4），
+    不必再 JOIN `ad_channel` 篩 `channel_key`。"""
+    row = conn.execute(
+        "SELECT 1 FROM channel_entity_map WHERE external_id = %s AND org_id != %s LIMIT 1",
+        (parent_id, org_id),
+    ).fetchone()
+    if row is not None:
+        raise web.ApiError(403, code, f"這個{noun}不屬於這個組織，已拒絕比對。")
+
+
 def ad_set_ids_by_exact_name(
     conn: _AnyConn, org_id: str, campaign_id: str, name: str,
 ) -> list:
     """票 T3c（ADR 0055 §7）：這個活動底下，廣告組合名稱逐字（區分大小寫、不 trim、
     不正規化）等於 `name` 的 `[{"adset_id", "external_status"}]`——比對只在傳進來的這一個
-    活動內部找，不是這批帳號全部，`org_id` 是租戶界線（權杖只認自己組織）。
+    活動內部找，不是這批帳號全部，`org_id` 是租戶界線：先用
+    `_refuse_if_parent_owned_by_another_org`（票 06）擋掉一個已知記錄成別組織的
+    `campaign_id`，權杖也只認自己組織。
 
     跟 `campaign_ids_by_exact_name` 同一套規矩：資料來源是**平台上的廣告組合清單**
     （`graph.list_ad_sets`），不是 `meta_entity_spend`，理由同上（手動建好、還沒開跑的
     廣告組合沒有任何 insights 列）；連不上 Meta 時同樣把 `graph.GraphError` 轉成人話
     `web.ApiError(502, "meta_unreachable", …)`，不是兩種錯誤形狀混在一起。
     """
+    _refuse_if_parent_owned_by_another_org(
+        conn, org_id, campaign_id, noun="活動", code="campaign_not_owned",
+    )
     token = get_token(conn, org_id)
     if token is None:
         return []  # 這個組織還沒接權杖：沒有可比對的清單，交給呼叫端當「配對失敗」處理
@@ -358,16 +391,19 @@ def ad_ids_by_exact_name(
 ) -> list:
     """票 T5（ADR 0055 §7 留給這張票開；ADR 0057）：這個廣告組合底下，廣告名稱逐字（區分
     大小寫、不 trim、不正規化）等於 `name` 的 `[{"ad_id", "external_status"}]`——比對只在
-    傳進來的這一個廣告組合內部找，不是這批帳號全部，`org_id` 是租戶界線（權杖只認自己
-    組織）。跟 `ad_set_ids_by_exact_name` 完全同一套規矩，僅深一層：同樣不篩
-    `caller` 傳進來的 `adset_id` 是不是這個組織的（那道界線在呼叫端——見
-    `docs/contracts/meta.md`「`ad_set_ids_by_exact_name` 不篩」那段，這支函式繼承同一個
-    寫法與同一份文件記錄的界線）。
+    傳進來的這一個廣告組合內部找，不是這批帳號全部，`org_id` 是租戶界線：跟
+    `ad_set_ids_by_exact_name` 完全同一套規矩，僅深一層，一樣先用
+    `_refuse_if_parent_owned_by_another_org`（票 06）擋掉一個已知記錄成別組織的
+    `adset_id`——這支函式以前繼承的是「呼叫端自律、這裡不驗」那個寫法（見
+    `docs/contracts/meta.md` 收這張票之前那份記錄），票 06 把這句改成不再成立。
 
     資料來源是**平台上的廣告清單**（`graph.list_ads`），不是 `meta_entity_spend`，理由同
     `ad_set_ids_by_exact_name`（手動建好、還沒開跑的廣告沒有任何 insights 列）；連不上
     Meta 時同樣把 `graph.GraphError` 轉成人話 `web.ApiError(502, "meta_unreachable", …)`。
     """
+    _refuse_if_parent_owned_by_another_org(
+        conn, org_id, adset_id, noun="廣告組合", code="adset_not_owned",
+    )
     token = get_token(conn, org_id)
     if token is None:
         return []  # 這個組織還沒接權杖：沒有可比對的清單，交給呼叫端當「配對失敗」處理

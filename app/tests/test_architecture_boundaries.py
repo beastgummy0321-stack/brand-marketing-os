@@ -1313,7 +1313,14 @@ class CoordinateDimensionSyncTest(unittest.TestCase):
 #      量對了，round 2 沒有再動這一筆。
 #   4. 本段理由註解自己（含上面「這道棘輪在落地前就已經在漏」那一段，done-check 5 點名的
 #      新要求）。
-TEST_LINES_CEILING = 19208  # 上雲債兩張一起落地。兩筆新測試都在全域 CLAUDE.md 允許的四類裡：
+TEST_LINES_CEILING = 19283  # 票 06-meta-name-lookup-tenant-symmetry：兩支新測試
+# （`test_meta_daily_spend.py` `AdSetParentCrossOrgRefusedTest`／`AdParentCrossOrgRefusedTest`
+# ＋共用 fixture）——屬租戶隔離：`ad_set_ids_by_exact_name`／`ad_ids_by_exact_name` 拿到別的
+# 組織已綁定的 campaign／adset id 時，必須在碰 Meta 之前就拒絕（斷言 403，且 patch 掉的
+# `graph.list_ad_sets`／`graph.list_ads` 的 call_count 為 0——只斷言拒絕不足以證明「沒有拿
+# 這個組織的權杖去打別人的 id」）。先證過紅：把兩個呼叫點換成 `pass`，兩支同時紅在
+# 「ApiError not raised」。這幾行還含本段理由註解自己佔的行。量到的數字，不留餘裕。
+# 前一次是 19208——上雲債兩張一起落地。兩筆新測試都在全域 CLAUDE.md 允許的四類裡：
 # (1) route B「codex_cli 只准 local」的守門測試（`test_identity_auth.py`
 # `CodexCliProviderIsLocalOnlyTest`，+26 行）——屬金額：`.env` 帶著這一行部署上雲，每一次 AI
 # 呼叫都會去執行一支不存在的指令，功能安靜壞掉而帳面看起來「沒有花錢」。兩半都證：codex_cli
