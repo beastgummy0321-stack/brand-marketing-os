@@ -1313,7 +1313,13 @@ class CoordinateDimensionSyncTest(unittest.TestCase):
 #      量對了，round 2 沒有再動這一筆。
 #   4. 本段理由註解自己（含上面「這道棘輪在落地前就已經在漏」那一段，done-check 5 點名的
 #      新要求）。
-TEST_LINES_CEILING = 19283  # 票 06-meta-name-lookup-tenant-symmetry：兩支新測試
+TEST_LINES_CEILING = 19402  # 票 07-campaign-period-composite-fk：`test_org_isolation_all_tables.py`
+# 的 `CampaignPeriodCompositeFKTenantIsolationTest` 兩支——屬租戶隔離：`decision`（可空）與
+# `period_node_membership`（NOT NULL）兩種欄位類別各一支，斷言「org A 的列指向 org B 的
+# campaign_period」會被資料庫的複合 FK 擋成 ForeignKeyViolation。兩種類別要分開測，因為
+# 可空與非空在複合 FK 底下的失敗方式不一樣。先證過紅：把 decision 那條 FK 改回單欄，
+# 立刻紅在「ForeignKeyViolation not raised」。這幾行還含本段理由註解自己佔的行。
+# 量到的數字，不留餘裕。前一次是 19283——票 06-meta-name-lookup-tenant-symmetry：兩支新測試
 # （`test_meta_daily_spend.py` `AdSetParentCrossOrgRefusedTest`／`AdParentCrossOrgRefusedTest`
 # ＋共用 fixture）——屬租戶隔離：`ad_set_ids_by_exact_name`／`ad_ids_by_exact_name` 拿到別的
 # 組織已綁定的 campaign／adset id 時，必須在碰 Meta 之前就拒絕（斷言 403，且 patch 掉的
