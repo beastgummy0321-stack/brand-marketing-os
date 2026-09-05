@@ -277,6 +277,45 @@ def _round_rows(conn, brand_id: str) -> list[dict]:
     return [r for r in rows if (r.get("context_scope_json") or {}).get("round_id") == round_id]
 
 
+def _round_result(rows: list[dict]) -> tuple[str | None, list[dict]]:
+    """`rows`（`_round_rows()` 的輸出，同一輪三個 lens）→ (那一輪的日期, 收斂後前 5 條建議)。
+    只有整輪三個 lens 都成功才有東西可讀——GET 回應（`brand_diagnosis_response`）與「採用」
+    路由（`routes.py` 的 `_run_diagnosis_adopt`）共用這份讀法，不重複寫一次「找 budget lens
+    那列、解析 structured_output_json」的邏輯（兩邊的建議清單、索引順序才保證對得上號）。
+    還沒判讀過、或這一輪還沒跑完，回 `(None, [])`。"""
+    if not rows or any(r["status"] != "succeeded" for r in rows):
+        return None, []
+    budget_row = next(
+        (r for r in rows if (r.get("context_scope_json") or {}).get("lens") == "budget"), None
+    )
+    if budget_row is None:
+        return None, []
+    suggestions = [
+        {**entry, "rule_type": rule_type_for_dimension(entry["dimension"])}
+        for entry in budget_row.get("structured_output_json") or []
+    ]
+    return budget_row["started_at"].date().isoformat(), suggestions
+
+
+def latest_round(conn, brand_id: str) -> tuple[str | None, list[dict]]:
+    """`_round_result()` 的獨立呼叫版——「採用」路由自己呼叫這支，不必重新寫一次
+    `_round_rows()` 那段「找最新一輪」。"""
+    return _round_result(_round_rows(conn, brand_id))
+
+
+def adopt_content(suggestion: dict, round_date: str) -> str:
+    """「採用」把一條建議寫成規則卡的內文（決定 8）：`source_reference_id` 不能用——那一欄
+    FK 指向 `source_reference`，塞 `llm_task.id` 會違反約束（plan review 實跑 SQL 證明）。
+    來源改寫進這段文字，沿用 `DIRECTIONAL_ONLY_NOTE`（決定 4，`ab-testing.md:75` 原文）而不是
+    另外寫一句意思一樣的話——兩份說同一件事的文字，其中一份遲早會跟另一份對不上。"""
+    headline = suggestion["headline"].strip()
+    evidence = suggestion["evidence"].strip()
+    body = f"{headline}，{evidence}" if evidence else headline
+    if not body.endswith(("。", "！", "？")):
+        body += "。"
+    return f"{body}\n（本條來自 {round_date} 的成效判讀，{DIRECTIONAL_ONLY_NOTE}）"
+
+
 def brand_diagnosis_response(conn, org_id: str, brand_id: str) -> dict:
     """`GET /api/schedule/brands/{brand_id}/diagnosis` 的本體，`POST` 剛 enqueue 完也回這個
     形狀（比照既有三支生成端點的既有慣例）。`window`／`breakeven` 每次都現查（決定 8：
@@ -312,11 +351,10 @@ def brand_diagnosis_response(conn, org_id: str, brand_id: str) -> dict:
     else:
         status = "failed"
 
-    suggestions: list[dict] = []
-    budget_row = by_lens.get("budget")
-    if status == "succeeded" and budget_row is not None:
-        for entry in budget_row.get("structured_output_json") or []:
-            suggestions.append({**entry, "rule_type": rule_type_for_dimension(entry["dimension"])})
+    # `_round_result()` 自己會判斷「整輪是否都成功」，這裡不再重複那個判斷；`status` 是
+    # 給畫面看的字（running／succeeded／failed），跟 `_round_result()` 內部的守門條件是
+    # 同一件事的兩種寫法（都成功 ⇔ status == "succeeded"）。
+    _round_date, suggestions = _round_result(rows)
 
     lenses = {lens: (row.get("rendered_output") or "") for lens, row in by_lens.items() if lens}
 

@@ -30,9 +30,11 @@ function symbolSize(impressions: number): number {
   return Math.max(8, Math.min(44, Math.sqrt(impressions) / 11));
 }
 
-function buildOption(points: QuadrantPoint[]): EChartsOption {
+function buildOption(points: QuadrantPoint[], breakeven: number | null): EChartsOption {
   // 上緣進位到 0.5 的倍數：直接用 `max(...)*1.15` 會讓刻度印出 2.415 這種算出來的數字。
-  const maxY = Math.ceil(Math.max(1.4, ...points.map((p) => p.high * 1.15)) * 2) / 2;
+  // 打平線本身也要進得了畫面——毛利 40% 的品牌打平線在 2.5x，比 1.4 高得多。
+  const maxY =
+    Math.ceil(Math.max(1.4, (breakeven ?? 0) * 1.15, ...points.map((p) => p.high * 1.15)) * 2) / 2;
   return {
     grid: { left: 56, right: 72, top: 24, bottom: 44 },
     xAxis: {
@@ -86,7 +88,9 @@ function buildOption(points: QuadrantPoint[]): EChartsOption {
       lineStyle: { width: 2, color: CHART_COLOR_SPEND, opacity: 0.55 },
       itemStyle: { color: CHART_COLOR_SPEND, opacity: 0.75, borderColor: "#f8fafc", borderWidth: 2 },
       // 打平線與賠錢區塊只掛在第一個系列上——每個系列各掛一份會疊出七層一樣的色塊。
-      ...(index === 0
+      // `breakeven` 是 null（算不出毛利率）就整個不畫：畫在 1.0x 等於宣稱這個品牌毛利
+      // 100%，會把其實在賠錢的座標畫成綠色贏家（`ads-commerce.md:13`：打平 ROAS = 1 ÷ 毛利率）。
+      ...(index === 0 && breakeven !== null
         ? {
             markArea: {
               silent: true,
@@ -98,14 +102,18 @@ function buildOption(points: QuadrantPoint[]): EChartsOption {
                 color: "#64748b",
                 fontSize: 12,
               },
-              data: [[{ yAxis: 0 }, { yAxis: 1 }]],
+              data: [[{ yAxis: 0 }, { yAxis: breakeven }]],
             },
             markLine: {
               silent: true,
               symbol: "none" as const,
               lineStyle: { color: CHART_COLOR_LOSS_ZONE, type: "dashed" as const, width: 1.5 },
-              label: { formatter: "打平 1.0x", color: "#64748b", position: "end" as const },
-              data: [{ yAxis: 1 }],
+              label: {
+                formatter: `打平 ${breakeven.toFixed(2)}x`,
+                color: "#64748b",
+                position: "end" as const,
+              },
+              data: [{ yAxis: breakeven }],
             },
           }
         : {}),
@@ -114,13 +122,16 @@ function buildOption(points: QuadrantPoint[]): EChartsOption {
 }
 
 export function CoordinateQuadrantChart({
-  values, untagged,
+  values, untagged, breakeven,
 }: {
   values: CreativePerformanceValue[];
   untagged: CreativePerformanceUntagged;
+  /** 打平線＝1 ÷ 毛利率，來自 `GET .../diagnosis` 的 `breakeven.roas`；算不出毛利率時是
+   * `null`，那就不畫線（畫面另外有一句話交代，見 `DiagnosisPanel`）。 */
+  breakeven: number | null;
 }) {
   const { points, noSpend, noRevenue } = useMemo(() => splitPlottable(values), [values]);
-  const option = useMemo(() => buildOption(points), [points]);
+  const option = useMemo(() => buildOption(points, breakeven), [points, breakeven]);
   const ref = useEchart(option);
 
   if (points.length === 0) {

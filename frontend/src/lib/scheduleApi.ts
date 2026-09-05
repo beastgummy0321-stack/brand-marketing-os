@@ -470,3 +470,98 @@ export interface CreativePerformance {
 export function fetchCreativePerformance(brandId: string): Promise<CreativePerformance> {
   return getJson(`/api/schedule/brands/${encodeURIComponent(brandId)}/creative-performance`);
 }
+
+/** 票 02（T6c）：成效判讀——`app/schedule/diagnosis.py` `brand_diagnosis_response()` 的形狀
+ * 逐欄對照，不套用 `Envelope<T>` 信封（跟這支檔案其他端點同一個既有理由）。`status: null`
+ * 代表這個品牌從沒跑過判讀；`running` 沿用既有 `llm_task` 輪詢慣例。`agreed_by` 是說過這件
+ * 事的 lens 名字清單，長度 ≥2 代表兩個以上判讀器都這麼說。`no_tagged_spend` 只在
+ * `suggestions` 是空陣列時才有意義，分辨「這個月全部沒座標可談」與「有座標但這輪沒建議」
+ * 兩種完全不同的原因（票面「四個狀態」第 4 點）。 */
+export interface DiagnosisSuggestion {
+  dimension: CoordinateDimension;
+  coordinate_key: string;
+  coordinate_label: string;
+  direction: "scale_up" | "scale_down" | "keep" | "test";
+  impact_spend: number;
+  headline: string;
+  evidence: string;
+  agreed_by: string[];
+  rule_type: "angle" | "audience" | "budget_split";
+}
+
+export interface DiagnosisWindow {
+  start_date: string;
+  end_date: string;
+  days_with_data: number;
+}
+
+export interface DiagnosisBreakeven {
+  roas: number | null;
+  source: string;
+}
+
+export interface Diagnosis {
+  status: "running" | "succeeded" | "failed" | null;
+  window: DiagnosisWindow;
+  breakeven: DiagnosisBreakeven;
+  directional_only: boolean;
+  suggestions: DiagnosisSuggestion[];
+  lenses: Record<string, string>;
+  no_tagged_spend: boolean;
+}
+
+export function fetchDiagnosis(brandId: string): Promise<Diagnosis> {
+  return getJson(`/api/schedule/brands/${encodeURIComponent(brandId)}/diagnosis`);
+}
+
+export async function runDiagnosis(brandId: string): Promise<Diagnosis> {
+  const res = await apiFetch(`/api/schedule/brands/${encodeURIComponent(brandId)}/diagnosis`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({}),
+  });
+  if (!res.ok) {
+    let message = `判讀失敗（狀態碼 ${res.status}）`;
+    try {
+      const data = (await res.json()) as { error?: { message?: string } };
+      message = errorMessageFrom(data, message);
+    } catch {
+      // 回應不是 JSON，用預設訊息。
+    }
+    throw new Error(message);
+  }
+  return (await res.json()) as Diagnosis;
+}
+
+/** 票 02：「採用」一條建議 → 品牌規則卡（`app/schedule/routes.py` `_run_diagnosis_adopt`）。
+ * 回傳新規則列的 `id`／`content`，不是整份 `ScheduleState`（`adopt` 不動 `plan`／`tree`／
+ * `creative`——矛盾檢查段第二組裁決：採用不重跑方案）。 */
+export interface DiagnosisAdoptResult {
+  id: string;
+  content: string;
+}
+
+export async function adoptSuggestion(
+  brandId: string,
+  suggestionIndex: number,
+): Promise<DiagnosisAdoptResult> {
+  const res = await apiFetch(
+    `/api/schedule/brands/${encodeURIComponent(brandId)}/diagnosis/adopt`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ suggestion_index: suggestionIndex }),
+    },
+  );
+  if (!res.ok) {
+    let message = `採用失敗（狀態碼 ${res.status}）`;
+    try {
+      const data = (await res.json()) as { error?: { message?: string } };
+      message = errorMessageFrom(data, message);
+    } catch {
+      // 回應不是 JSON，用預設訊息。
+    }
+    throw new Error(message);
+  }
+  return (await res.json()) as DiagnosisAdoptResult;
+}

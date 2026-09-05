@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { CoordinateQuadrantChart } from "@/components/cockpit/CoordinateQuadrantChart";
+import { DiagnosisResult, DiagnosisRunButton, useDiagnosisPanel } from "@/components/cockpit/DiagnosisPanel";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { EmptyState } from "@/components/layout/EmptyState";
 import { fetchBrandMonth, fetchOverview, type BrandMonthMoney } from "@/lib/api";
@@ -346,6 +347,9 @@ type PerformanceState =
 function CreativePerformanceSection({ brandId }: { brandId: string }) {
   const [state, setState] = useState<PerformanceState>({ status: "loading" });
   const [dimension, setDimension] = useState<CoordinateDimension>(COORDINATE_DIMENSIONS[0][0]);
+  // 票 02（T6c）：成效判讀——按鈕擺標題列、結果擺標題下方，狀態全部留在這個 hook
+  // （見 `DiagnosisPanel.tsx` 檔頭說明），不在這裡多長業務邏輯。
+  const diagnosisPanel = useDiagnosisPanel(brandId);
 
   useEffect(() => {
     let cancelled = false;
@@ -376,7 +380,11 @@ function CreativePerformanceSection({ brandId }: { brandId: string }) {
 
   return (
     <section className="flex flex-col gap-3">
-      <h2 className="font-display text-xl text-foreground">素材座標成效</h2>
+      <div className="flex items-center justify-between gap-3">
+        <h2 className="font-display text-xl text-foreground">素材座標成效</h2>
+        <DiagnosisRunButton panel={diagnosisPanel} />
+      </div>
+      <DiagnosisResult panel={diagnosisPanel} />
       {state.currencies.length === 0 ? (
         <EmptyState
           title="這個月還沒有 Meta 花費資料"
@@ -390,6 +398,13 @@ function CreativePerformanceSection({ brandId }: { brandId: string }) {
             showCurrencyLabel={state.currencies.length > 1}
             dimension={dimension}
             onDimensionChange={setDimension}
+            // 圖上的打平線跟判讀卡片必須是同一條線——一頁兩個賺賠標準，圖會把其實在賠錢的
+            // 座標畫成贏家（`ads-commerce.md:13`）。判讀還沒讀回來（或算不出毛利率）就不畫。
+            breakeven={
+              diagnosisPanel.state.status === "ready"
+                ? diagnosisPanel.state.diagnosis.breakeven.roas
+                : null
+            }
           />
         ))
       )}
@@ -398,12 +413,13 @@ function CreativePerformanceSection({ brandId }: { brandId: string }) {
 }
 
 function CurrencyPerformance({
-  data, showCurrencyLabel, dimension, onDimensionChange,
+  data, showCurrencyLabel, dimension, onDimensionChange, breakeven,
 }: {
   data: CreativePerformanceCurrency;
   showCurrencyLabel: boolean;
   dimension: CoordinateDimension;
   onDimensionChange: (d: CoordinateDimension) => void;
+  breakeven: number | null;
 }) {
   const active = data.dimensions.find((d) => d.dimension === dimension);
   const values = active ? active.values : [];
@@ -441,7 +457,7 @@ function CurrencyPerformance({
         <>
         {/* 票 T6b：同一份數字先看圖再看表——圖回答「哪個座標在賺、哪個在賠」，表回答
             「確切是多少」。兩邊讀同一個 `active`，不另外抓一次資料。 */}
-        <CoordinateQuadrantChart values={values} untagged={untagged} />
+        <CoordinateQuadrantChart values={values} untagged={untagged} breakeven={breakeven} />
         <div className="overflow-x-auto rounded-md border border-border">
           <table className="w-full text-left text-sm">
             <thead className="bg-muted text-muted-foreground">

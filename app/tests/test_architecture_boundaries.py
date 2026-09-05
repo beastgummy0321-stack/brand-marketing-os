@@ -1313,7 +1313,14 @@ class CoordinateDimensionSyncTest(unittest.TestCase):
 #      量對了，round 2 沒有再動這一筆。
 #   4. 本段理由註解自己（含上面「這道棘輪在落地前就已經在漏」那一段，done-check 5 點名的
 #      新要求）。
-TEST_LINES_CEILING = 19883  # 票 09 前置（零新測試）：`MODULES_WITHOUT_CONTRACT` 少一項
+TEST_LINES_CEILING = 19980  # 票 02（T6c 成效判讀上畫面）：
+# `test_schedule_diagnosis.py` 加一支（票面 done-check 5 明文，只准一支）：
+# `AdoptSuggestionTest`（**API 契約／資料正確性**：呼叫「採用」路由兩次，寫出來的那列
+# `rule`——`rule_type` 落在 `SOFT_REJECT_RULE_TYPES`、`severity == "soft"`、
+# `source_reference_id IS NULL`（決定 8：FK 會炸，來源改寫進 `content`）、`content` 含來源
+# 日期那句、同一條採用兩次只有一列）。含 `KNOWN_MODULE_SIZES["app/schedule"]` 那筆調整、
+# 本段理由註解自己佔的行。量到的數字，不留餘裕。
+# 前一次是 19883——票 09 前置（零新測試）：`MODULES_WITHOUT_CONTRACT` 少一項
 # （intake 補上 `docs/contracts/intake.md`），多的行數全是那筆理由註解與本段自己佔的行。
 # 這道棘輪量的是 `app/**` 底下所有測試碼的行數，而這張表住在測試檔裡，所以連「刪一個
 # 模組名字、加三行理由」都會動到它——照實記，不藏。
@@ -1629,7 +1636,15 @@ KNOWN_MODULE_SIZES = {
     "app/orders": 1423,  # 票 12：channel_revenue 一張表取代三張（刪掉藥局專屬那一整組
                           # 之後仍淨增）——官網帳本寫入路徑、channel_revenue_summary()、
                           # 通用手動登錄（含「官網不能手動登錄」那道錢的守門）
-    "app/schedule": 3628,  # 審查跟進 3617 → 3628：`brand_diagnosis_response()` 真的接上 `has_any_tagged_spend()`（審查抓到它是死碼、routes.py 的 docstring 卻宣稱它在把關），回應多一個 `no_tagged_spend` 分辨「沒有座標可談」與「有座標但這輪沒建議」——票 01 矛盾檢查段本來就裁決過這兩種空要說不同的話。票 01（T6c 成效判讀）：3489 → 3617。新檔 `diagnosis.py`
+    "app/schedule": 3709,  # 票 02（T6c 成效判讀上畫面）：`diagnosis.py`
+                            # 加 `_round_result()`／`latest_round()`／`adopt_content()` 三支——GET
+                            # 回應與「採用」路由共用同一份「找最新一輪、抓 budget lens 那列」的
+                            # 讀法，不重複寫一次；`routes.py` 加 `AdoptRequest`／
+                            # `_run_diagnosis_adopt()`／`POST .../diagnosis/adopt` 一支新端點
+                            # （決定 8：`source_reference_id` 固定 `None`，來源改寫進
+                            # `adopt_content()` 組出的文字；同一輪同一條重複採用先查再寫，
+                            # 查詢鍵是 `rule_type`＋內文本身）。量到的數字，不留餘裕。
+                            # 前一次是 3628——審查跟進 3617 → 3628：`brand_diagnosis_response()` 真的接上 `has_any_tagged_spend()`（審查抓到它是死碼、routes.py 的 docstring 卻宣稱它在把關），回應多一個 `no_tagged_spend` 分辨「沒有座標可談」與「有座標但這輪沒建議」——票 01 矛盾檢查段本來就裁決過這兩種空要說不同的話。票 01（T6c 成效判讀）：3489 → 3617。新檔 `diagnosis.py`
                             # （壓縮／打平線三層 fallback／收斂／GET 回應組裝）＋
                             # `jobs.schedule_diagnosis()`＋`routes.py` 兩支新端點
                             # （POST／GET .../diagnosis）＋`performance.py` `_bucket()`

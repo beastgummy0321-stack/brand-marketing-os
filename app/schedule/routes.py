@@ -105,6 +105,12 @@ class RejectRequest(BaseModel):
     entries: list[RejectEntry] = []
 
 
+class AdoptRequest(BaseModel):
+    # 票 02（T6c）：「採用」一條成效判讀建議——租戶界線先於欄位驗證（同上），真正的驗證
+    # 在 `_run_diagnosis_adopt()`。-1 不是任何合法索引，直接落進「找不到這條建議」那支錯誤。
+    suggestion_index: int = -1
+
+
 class CreateCoordinateRequest(BaseModel):
     # 票 T1b：新增一個座標——租戶界線先於欄位驗證（同上），真正的驗證在
     # `create_coordinate()` 這支路由函式裡。
@@ -507,6 +513,43 @@ def get_diagnosis(request: Request, brand_id: str):
     actor = web.require_actor(request)
     web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
     return diagnosis_mod.brand_diagnosis_response(web.conn, actor.org_id, brand_id)
+
+
+SUGGESTION_NOT_FOUND_MESSAGE = "找不到這條建議，請重新整理後再試一次。"
+
+
+def _run_diagnosis_adopt(conn, brand_id: str, actor, body: "AdoptRequest") -> dict:
+    """票 02（T6c）：「採用」一條成效判讀建議 → 品牌規則卡（決定 8／9）。**不走** `_run_reject`
+    那條路——那支會用凍結參數重新排程，採用一條判讀不等於現在就要重出方案（票 02 矛盾檢查段
+    第二組裁決）。`source_reference_id` 固定傳 `None`：那一欄的 FK 指向 `source_reference`，
+    `llm_task.id` 會違反約束（plan review 實跑 SQL 證明），來源改寫進 `diagnosis.adopt_content()`
+    組出的文字。同一輪同一條重複採用只回既有那列（先查再寫，比照既有 accept 類端點的冪等寫法）
+    ——查詢鍵是 `rule_type` ＋ 這段內文本身，兩者都由同一條建議、同一個 `round_date` 決定性算出，
+    同一條建議不會算出兩種不同的內文。"""
+    round_date, suggestions = diagnosis_mod.latest_round(conn, brand_id)
+    if round_date is None or not (0 <= body.suggestion_index < len(suggestions)):
+        raise web.ApiError(400, "suggestion_not_found", SUGGESTION_NOT_FOUND_MESSAGE)
+    suggestion = suggestions[body.suggestion_index]
+    rule_type = suggestion["rule_type"]
+    content = diagnosis_mod.adopt_content(suggestion, round_date)
+
+    existing = next(
+        (r for r in bi_repo.list_rules_for_brand(conn, brand_id)
+         if r["product_id"] is None and r["rule_type"] == rule_type and r["content"] == content),
+        None,
+    )
+    row = existing or bi_repo.create_rule(
+        conn, brand_id, actor=str(actor.user_id), rule_type=rule_type,
+        content=content, severity="soft", source_reference_id=None,
+    )
+    return {"id": row["id"], "content": row["content"]}
+
+
+@router.post("/brands/{brand_id}/diagnosis/adopt")
+def adopt_diagnosis_suggestion(request: Request, brand_id: str, body: AdoptRequest):
+    actor = web.require_actor(request)
+    web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
+    return _run_diagnosis_adopt(web.conn, brand_id, actor, body)
 
 
 # ---------------------------------------------------------------------------

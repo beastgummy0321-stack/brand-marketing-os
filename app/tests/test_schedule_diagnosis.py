@@ -8,19 +8,30 @@
    `converge()` 只留一條、`agreed_by` 有兩個名字、`impact_spend` 取大的那個。
 3. `BreakevenFallbackTest`：三層順序——有實際毛利率用實際；沒有但有規則卡用規則卡；
    兩者皆無回 `None`（絕不回 1.0）。
+
+票 02（T6c，02-diagnosis-on-cockpit.md）加一支（done-check 5 明文，只測這一支）：
+
+4. `AdoptSuggestionTest`：「採用」寫出來的那列 `rule` 形狀對——`rule_type` 落在
+   `SOFT_REJECT_RULE_TYPES`、`severity == "soft"`、`source_reference_id IS NULL`
+   （決定 8：FK 會炸，來源改寫進 `content`）、`content` 含來源日期那句、同一條採用兩次
+   只有一列（API 契約／資料正確性）。
 """
 
 import re
 import unittest
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import app.shared.web as web
 from app.brand_intelligence import repository as bi_repo
+from app.core import db as coredb
 from app.core import rule_cards
 from app.core import settings as coresettings
+from app.identity import ActorContext
 from app.orders import repository as orders_repo
 from app.schedule import creative as creative_mod
 from app.schedule import diagnosis
+from app.schedule import routes as schedule_routes
+from app.schedule import state as schedule_state
 
 _SPEND_CELL_RE = re.compile(r"^\|[^|]*\|\s*([\d,]+)\s*\|")
 
@@ -160,6 +171,77 @@ class BreakevenFallbackTest(unittest.TestCase):
         roas_3, _source_3 = diagnosis.breakeven_roas(web.conn, org_3, brand_3)
         self.assertIsNone(roas_3)
         self.assertNotEqual(roas_3, 1.0)
+
+
+class AdoptSuggestionTest(unittest.TestCase):
+    """票 02 done-check 5：呼叫 `_run_diagnosis_adopt()`（`routes.py`）兩次，寫出來的那列
+    `rule` 形狀對，且第二次不多寫一列。直接呼叫路由的私有函式，不經 HTTP 層——跟本檔其他
+    三支一樣直接測 `diagnosis.py`／`routes.py` 的函式，不新增第二套測試慣例。"""
+
+    def _new_brand(self) -> tuple[str, str]:
+        org_id = f"org_diag_adopt_{uuid4().hex[:8]}"
+        web.conn.execute(
+            "INSERT INTO organisation (id, name, kind) VALUES (%s, %s, 'personal')"
+            " ON CONFLICT (id) DO NOTHING",
+            (org_id, org_id),
+        )
+        web.conn.commit()
+        brand_id = bi_repo.create_brand(
+            web.conn, org_id=org_id, name=f"測試品牌{uuid4().hex[:6]}",
+            client_name=None, actor="測試員",
+        )["id"]
+        return org_id, brand_id
+
+    def _insert_succeeded_lens_row(self, org_id: str, brand_id: str, round_id: str, lens: str,
+                                    *, started_at, structured=None) -> None:
+        """比照 `test_schedule.py` `QueuedGenerationTest._insert_running_row` 既有的直接下
+        SQL 寫法（那支造 running 列，這裡造 succeeded 列）——`app.llm` 沒有另開一支「測試專用
+        造列」的寫入端，不重造第二份。"""
+        web.conn.execute(
+            "INSERT INTO llm_task (id, org_id, brand_id, task_type, context_scope_json,"
+            " input_context_ids_json, input_context_hash, knowledge_item_ids_json,"
+            " brand_version, prompt_template_id, prompt_template_version, provider, model,"
+            " status, attempt_no, started_at, structured_output_json)"
+            " VALUES (%s, %s, %s, %s, %s, '[]', '', '[]', 1, 'p', 'v1', 'seed', 'seed',"
+            " 'succeeded', 1, %s, %s)",
+            (coredb.new_id("llm"), org_id, brand_id, schedule_state.DIAGNOSIS_TASK_TYPE,
+             coredb.jsonb({"brand_id": brand_id, "round_id": round_id, "lens": lens}),
+             started_at, coredb.jsonb(structured) if structured is not None else None),
+        )
+        web.conn.commit()
+
+    def test_adopt_writes_a_soft_rule_with_no_source_reference_id_and_is_idempotent(self):
+        org_id, brand_id = self._new_brand()
+        started_at = coredb.now_utc()
+        round_id = coredb.new_id("dgr")
+        suggestion = {
+            "dimension": "audience", "coordinate_key": "cold_problem_aware",
+            "coordinate_label": "陌生・知道問題", "direction": "scale_up",
+            "impact_spend": 500.0, "headline": "下一輪把預算往「陌生・知道問題」加碼",
+            "evidence": "這群人保守 ROAS 2.58x／樂觀 3.17x、覆蓋率 75%", "agreed_by": ["budget"],
+        }
+        for lens in diagnosis.LENSES:
+            self._insert_succeeded_lens_row(
+                org_id, brand_id, round_id, lens, started_at=started_at,
+                structured=[suggestion] if lens == "budget" else None,
+            )
+
+        actor = ActorContext(
+            user_id=UUID(int=0), org_id=org_id, role="owner", email="t@example.com",
+        )
+        body = schedule_routes.AdoptRequest(suggestion_index=0)
+        result1 = schedule_routes._run_diagnosis_adopt(web.conn, brand_id, actor, body)
+        result2 = schedule_routes._run_diagnosis_adopt(web.conn, brand_id, actor, body)
+
+        self.assertEqual(result1["id"], result2["id"])  # 同一條採用兩次只回既有那列
+
+        rows = bi_repo.list_rules_for_brand(web.conn, brand_id)
+        self.assertEqual(len(rows), 1, "同一條採用兩次只該有一列")
+        rule = rows[0]
+        self.assertIn(rule["rule_type"], schedule_routes.SOFT_REJECT_RULE_TYPES)
+        self.assertEqual(rule["severity"], "soft")
+        self.assertIsNone(rule["source_reference_id"])
+        self.assertIn(started_at.date().isoformat(), rule["content"])  # 來源日期那句
 
 
 if __name__ == "__main__":
