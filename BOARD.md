@@ -5,4 +5,4 @@
 
 - [>] 廣告閉環 ⑧⑨ ｜ docs/issues/ad-loop/ ｜ 卡在你：把廣告02／03 貼進 Meta 並打開，兩個座標花到錢才開 T6c
 - [ ] 介面收尾 U1／U3 ｜ docs/issues/ui/ ｜ 等你點頭換字體
-- [>] 上線／上雲前必還 ｜ docs/issues/deploy/ ｜ 站②：04／05 已收，現在 06 Meta 改呼叫鏈；B 組 3 張等你選平台
+- [>] 上線／上雲前必還 ｜ docs/issues/deploy/ ｜ 站②：04／05／06 已收，現在 07 八條 FK 升複合鍵；B 組 3 張等你選平台
