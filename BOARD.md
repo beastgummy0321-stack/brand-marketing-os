@@ -5,4 +5,4 @@
 
 - [>] 廣告閉環 ⑧⑨ ｜ docs/issues/ad-loop/ ｜ 卡在你：把廣告02／03 貼進 Meta 並打開，兩個座標花到錢才開 T6c
 - [ ] 介面收尾 U1／U3 ｜ docs/issues/ui/ ｜ 等你點頭換字體
-- [ ] 上線／上雲前必還 ｜ docs/issues/deploy/ ｜ worker 已拆行程；剩下的等你選平台，或部署前一天才做
+- [ ] 上線／上雲前必還 ｜ docs/issues/deploy/ ｜ A 組還剩 7 張不用等平台，先做 codex 供應商那張；B 組 3 張等你選平台

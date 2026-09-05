@@ -1,6 +1,6 @@
 # 目標：上線／上雲前必還的帳
 
-Status: 卡點——**還沒選部署平台**。2026-09-04 使用者裁決「不用上雲沒關係」，這一輪不做。
+Status: 進行中——2026-09-05 使用者裁決：上雲前全清、不再留負債。A 組七張不用等平台；B 組三張等選平台。
 全文出處：`BOARD.md` @ commit `6574191`。
 
 這些不擋本機閉環，但**第一次真的部署當天每一條都會咬人**，所以留著不刪。選定平台那天，
@@ -24,14 +24,22 @@ Status: 卡點——**還沒選部署平台**。2026-09-04 使用者裁決「不
    等於拿掉了「一次只有一個行程」的唯一保證（8710 那個 port），第二個 worker 會誤殺活著的付費工作、
    讓畫面放行使用者再按一次＝真的再花一次錢（改用 Postgres session advisory lock，按 schema 分鑰匙）。
    **教訓**：把一個行程拆成兩個，要先問「原本是誰在保證只有一個」。
-4. `issue-delete-seed-debug-account.md` — 最後一張，部署前一天做：刪了之後本機就沒有活得過 reset 的帳號。
+4. `issue-codex-cli-provider-in-production.md` — route B，一行：`codex_cli` 只准在 `local`。
+5. `issue-row-hash-numeric-normalisation.md` — route C（金流），兩行＋一個測試。
+6. `issue-assets-bucket-size-limit.md` — route C（schema），一個 migration 檔。
+7. `issue-drop-unused-columns.md` — route C（schema，需批准）；上雲前刪最便宜，之後是對真資料跑 migration。
+8. `issue-campaign-period-composite-fk.md` — route C（schema＋租戶隔離），八條 FK 重建。
+9. `issue-meta-name-lookup-tenant-asymmetry.md` — route C（租戶隔離）；站① 先裁決：多打一次 Meta API，還是改呼叫鏈往下傳。
+10. `issue-in-memory-background-jobs.md` — route C（模組邊界）；雲端重啟／多實例會把 dict 裡的狀態弄丟，照 ADR 0042 搬上佇列。
+11. `issue-delete-seed-debug-account.md` — 最後一張，部署前一天做：刪了之後本機就沒有活得過 reset 的帳號。
+
+（5～10 是 2026-09-05 從 `docs/tech-debt.md` §七認領進來的：使用者裁決上雲前全清、不再留負債。）
 
 **B. 要先選平台**
 
-5. `issue-07-2-settings-sentry-staging-cd.md`（現在整張都是後半）— Sentry／staging／CD
+12. `issue-07-2-settings-sentry-staging-cd.md`（現在整張都是後半）— Sentry／staging／CD
    （`supabase db push` 單一 job）＋映像檔帶 IANA 時區。
-6. `issue-07-4-github-security-switches.md` — 要付 GitHub Pro 或把 repo 公開，是錢的決定。
-7. `issue-ai-cost-reconciliation.md` — 要 Anthropic Admin API key；開始收費前對一次帳即可。
+13. `issue-07-4-github-security-switches.md` — 要付 GitHub Pro 或把 repo 公開，是錢的決定。
+14. `issue-ai-cost-reconciliation.md` — 要 Anthropic Admin API key；開始收費前對一次帳即可。
 
 `issue-key-source-switch.md` 不是上雲債，是里程碑之後的產品功能；留在這裡只因為它跟「自帶金鑰」同一組。
-`issue-codex-cli-provider-in-production.md`（2026-09-05 開票 02 時發現）跟著票 02 的環境表走，02 落地後補一條規則即可。
