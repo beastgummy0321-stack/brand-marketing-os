@@ -1313,7 +1313,18 @@ class CoordinateDimensionSyncTest(unittest.TestCase):
 #      量對了，round 2 沒有再動這一筆。
 #   4. 本段理由註解自己（含上面「這道棘輪在落地前就已經在漏」那一段，done-check 5 點名的
 #      新要求）。
-TEST_LINES_CEILING = 19120  # 票 03-worker-own-process round 3（ADR 0063 amendment「release the
+TEST_LINES_CEILING = 19208  # 上雲債兩張一起落地。兩筆新測試都在全域 CLAUDE.md 允許的四類裡：
+# (1) route B「codex_cli 只准 local」的守門測試（`test_identity_auth.py`
+# `CodexCliProviderIsLocalOnlyTest`，+26 行）——屬金額：`.env` 帶著這一行部署上雲，每一次 AI
+# 呼叫都會去執行一支不存在的指令，功能安靜壞掉而帳面看起來「沒有花錢」。兩半都證：codex_cli
+# 在 production 炸、別的供應商值不被誤傷（禁的是值不是變數）。先證過紅：把新那張表換成空
+# tuple，測試立刻紅。
+# (2) 票 04 `RowHashNumericNormalisationTest`（`test_orders_channel.py`，+40 行）——屬金額：
+# `_row_hash()` 對 int／float 不穩定，第二個非-float 呼叫端一出現去重就靜靜失效，同一天的
+# 營收落兩列＝翻倍。三支斷言（雜湊穩定／真的只落一列／只有 note 不同時仍落兩列，最後一支
+# 擋掉「把雜湊改成回傳常數」的假解法）。先證過紅：拿掉兩行 float() 正規化，立刻紅。
+# 這幾行還含本段理由註解與上面 `KNOWN_MODULE_SIZES["app/core"]` 那筆理由註解自己佔的行。
+# 量到的數字，不留餘裕。前一次是 19120——票 03-worker-own-process round 3（ADR 0063 amendment「release the
 # lock, so nothing depends on test ordering」）：零新測試（done-check 11 明講不用）——這幾行
 # 全是上面 `KNOWN_MODULE_SIZES["app"]` 那筆理由註解和本段理由註解自己變長多出來的行。量到的
 # 數字，不留餘裕。前一次是 19112——票 03-worker-own-process round 2（ADR 0063 amendment「one
@@ -1413,7 +1424,11 @@ KNOWN_MODULE_SIZES = {
                                       # 不是新增了 574 行。
     "app/brand_web": 2091,  # 2026-08-30 刪失效規則卡（小債）：autonomy 那張卡的兩處專屬
                              # 驗證跟著走。前一次是 2155
-    "app/core": 1766,  # 票 02-env-flag-and-settings（ADR 0062）：新增 `app/core/config.py`
+    "app/core": 1775,  # 上雲債 route B（codex_cli 只准 local）：`config.py` 多一張
+                        # `_FORBIDDEN_VALUES_OUTSIDE_LOCAL`——既有兩張表是「有值就違規」，
+                        # 這條需求是「只有 codex_cli 這個值違規、其他供應商合法」，形狀塞不下，
+                        # 所以是第三張表＋三行迴圈（+9 行）。量到的數字，不留餘裕。
+                        # 前一次是 1766——票 02-env-flag-and-settings（ADR 0062）：新增 `app/core/config.py`
                         # （136 行，pydantic-settings 集中讀取 10 個環境變數＋開機驗證一次＋
                         # §5a 的 `database_url()` 例外——DATABASE_URL 不進快取，理由跟
                         # `app/background.app()` 的比對機制寫在函式自己的 docstring 裡）；

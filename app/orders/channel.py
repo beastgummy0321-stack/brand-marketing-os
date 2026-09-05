@@ -175,6 +175,11 @@ _ROW_HASH_FIELDS = ("channel", "entry_date", "revenue", "quantity", "note")
 
 
 def _row_hash(channel: str, entry_date: str, revenue, quantity, note: str | None) -> str:
+    # 票 04：revenue/quantity 正規化到 float 再雜湊——json.dumps(5000) 跟 json.dumps(5000.0)
+    # 是兩個不同字串，同一筆錢因為呼叫端傳的是 int 還是 float 就雜湊出兩把鑰匙，partial
+    # unique index 去不了重，變成手動登記翻倍記帳。None 保持 None（不知道不是 0）。
+    revenue = None if revenue is None else float(revenue)
+    quantity = None if quantity is None else float(quantity)
     body = json.dumps(
         {"channel": channel, "entry_date": entry_date, "revenue": revenue,
          "quantity": quantity, "note": note},

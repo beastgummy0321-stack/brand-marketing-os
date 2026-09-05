@@ -207,5 +207,52 @@ class ManualChannelEntryDedupeTest(_BaseChannelTest):
         self.assertEqual(count, 2, "只有備註不同的第二筆手動登記被誤判成重複，沒有落地")
 
 
+class RowHashNumericNormalisationTest(_BaseChannelTest):
+    """票 04：`_row_hash()` 正規化 revenue／quantity 到 float 才雜湊——int 5000 跟 float
+    5000.0 是同一筆錢，雜湊出兩把不同的鑰匙就繞過 partial unique index，翻倍記帳；None
+    （不知道）不能正規化成 0。三支斷言故意放在同一個測試裡（票面 Contradiction check）：
+    只驗雜湊相等擋不住「把 _row_hash 改成回傳常數」這種假解法，只有第三支（只有 note
+    不同仍要落地兩列）才擋得住。"""
+
+    def test_numeric_types_hash_identically_and_dedupe_but_note_still_splits_rows(self):
+        # 斷言 1（done-check 3）：int／float／數字字串三種型別、同一個邏輯數字，雜湊要
+        # 一致；None（不知道）不能跟「有值」撞成同一把鑰匙。
+        digest_int = orders_channel._row_hash("pharmacy", "2026-09-05", 5000, 3, None)
+        digest_float = orders_channel._row_hash("pharmacy", "2026-09-05", 5000.0, 3.0, None)
+        digest_str = orders_channel._row_hash("pharmacy", "2026-09-05", "5000.0", "3", None)
+        digest_none = orders_channel._row_hash("pharmacy", "2026-09-05", None, None, None)
+        self.assertEqual(digest_int, digest_float,
+                          "int 5000 跟 float 5000.0 雜湊不同，型別成了去重的鑰匙")
+        self.assertEqual(digest_int, digest_str,
+                          "數字字串跟數字雜湊不同，型別成了去重的鑰匙")
+        self.assertNotEqual(digest_int, digest_none,
+                             "revenue=None（不知道）被雜湊成跟 revenue=5000 一樣的鑰匙")
+
+        # 斷言 2（done-check 4）：錢本身——呼叫端一次傳 int 一次傳 float，同一筆帳只能
+        # 落一列，不是兩列。雜湊斷言單獨過不了這一關（雜湊改對了、SQL 沒接對照樣兩列）。
+        orders_channel.record_channel_entry(
+            web.conn, self.bid, channel="physical_store", entry_date="2026-06-01",
+            revenue=5000, quantity=3, note="到貨", actor=ACTOR)
+        orders_channel.record_channel_entry(
+            web.conn, self.bid, channel="physical_store", entry_date="2026-06-01",
+            revenue=5000.0, quantity=3.0, note="到貨", actor=ACTOR)
+        count = web.conn.execute(
+            "SELECT COUNT(*) c FROM channel_revenue"
+            " WHERE brand_id = %s AND channel = 'physical_store'", (self.bid,)).fetchone()["c"]
+        self.assertEqual(count, 1,
+                          "同一筆錢因為呼叫端傳 int 還是 float，雜湊不同繞過去重，翻倍記帳")
+
+        # 斷言 3（Contradiction check）：只有 note 不同的第三筆仍要落地成第二列——擋掉
+        # 「把 _row_hash 改成回傳常數」這種讓斷言 1／2 都綠、卻毀掉去重本身的假解法。
+        orders_channel.record_channel_entry(
+            web.conn, self.bid, channel="physical_store", entry_date="2026-06-01",
+            revenue=5000, quantity=3, note="到貨（補開一趟車，不是同一筆）", actor=ACTOR)
+        count_after_third = web.conn.execute(
+            "SELECT COUNT(*) c FROM channel_revenue"
+            " WHERE brand_id = %s AND channel = 'physical_store'", (self.bid,)).fetchone()["c"]
+        self.assertEqual(count_after_third, 2,
+                          "只有備註不同的第三筆手動登記被誤判成重複，沒有落地")
+
+
 if __name__ == "__main__":
     unittest.main()
