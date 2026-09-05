@@ -1,72 +1,20 @@
-"""app/brand_intelligence/background_job.py — 背景工作基建（純搬家，來源：
+"""app/brand_intelligence/background_job.py — 背景工作通知（純搬家，來源：
 `routes_library.py` 的 `_cv_jobs` 與 `routes_products.py` 的 `_research_jobs`，
-兩邊原本各自寫了一份「job 狀態 dict＋鎖＋冪等閘＋thread 啟動」與「先通知後 commit」，
-這裡抽成共用。業務內容（job 內容形狀、成功／失敗判斷、通知順序）留在呼叫端，
-這裡只管機制。
+兩邊原本各自寫了一份「先通知後 commit」，這裡抽成共用）。業務內容（job 內容形狀、
+成功／失敗判斷）留在呼叫端，這裡只管通知。
 
-對外進入點：`JobRegistry` 類別、`notify()` 函式。
-誰依賴它：`routes_library.py`、`routes_products.py`（單向：routes → helper，
-本檔不 import routes_*）。
+行程內工作狀態表＋背景執行緒那個共用類別，曾經跟這裡共用一份。票 08／09 把最後兩個
+呼叫端（`app/intake/routes_api.py` 的 `_JOBS`、`app/intake/persona_generation.py` 的
+`JOBS`）搬上 `app.background` 佇列後，全站再也沒有任何呼叫端建構它，這裡跟著把類別本身
+刪掉——沒有呼叫端的類別是死代碼，不是「以防萬一」。
+
+對外進入點：`notify()` 函式。
+誰依賴它：`app/brand_web/routes_library.py`、`routes_products.py`、`routes_report_api.py`、
+`app/intake/routes_api.py`、`app/intake/persona_generation.py`。
 """
 
-import threading
-from collections.abc import Callable
-
 from app.brand_intelligence import repository as bi_repo
-from app.core import db as core_db
 from app.core import interrupts as core_interrupts
-
-
-class JobRegistry:
-    """記憶體內的背景工作狀態表：job_key -> 狀態 dict。
-
-    ponytail: 跑完的 job 不會被清掉——單機單人、生成頻率低，這點記憶體量可接受；
-    長時間高頻使用真的變成問題再加 TTL 清除。
-    """
-
-    def __init__(self) -> None:
-        self._jobs: dict = {}
-        self._lock = threading.Lock()
-
-    def get(self, key: str, default: dict) -> dict:
-        return self._jobs.get(key, default)
-
-    def set(self, key: str, state: dict) -> None:
-        self._jobs[key] = state
-
-    def clear(self) -> None:
-        """測試用：重置狀態表（比照原本 `_research_jobs: dict = {}` 直接 `.clear()`）。"""
-        self._jobs.clear()
-
-    def items(self) -> list:
-        """全站生成進度單一出口（票 B4-warroom）唯一的列舉入口：回傳 `[(key, state), ...]`
-        快照。不改 get／set／start 既有形狀，這是額外新增的公開方法，供聚合端點列舉目前
-        全部工作，不必讓呼叫端直接碰 `_jobs` 這個私有字典（模組邊界：只走公開進入點）。"""
-        return list(self._jobs.items())
-
-    def start(self, key: str, running_state: dict, target: Callable, args: tuple,
-              *, idempotent: bool = False) -> None:
-        """寫入 running 狀態並啟動背景執行緒。
-
-        idempotent=True 時，同一個 key 已經在跑（status=="running"）就不重新啟動
-        （用鎖保護，避免併發請求同時通過檢查後都各自起了一個 thread）。
-        """
-        with self._lock:
-            if idempotent:
-                entry = self._jobs.get(key)
-                if entry is not None and entry.get("status") == "running":
-                    return
-            self._jobs[key] = running_state
-
-        # BUG 修復（route=C 02-3c）：contextvar 不會被原生 threading.Thread 繼承，target()
-        # 裡任何一次 web.conn／db 呼叫都會炸 RuntimeError: no connection bound。這裡是唯一
-        # 啟動背景執行緒的進入點，所以在這裡包一層 with core_db.connection()，而不是要求
-        # 每個呼叫端的 target 自己記得包（02-1 起的慣例；原參考實作已隨 app/ads/ 刪除）。
-        def _run() -> None:
-            with core_db.connection():
-                target(*args)
-
-        threading.Thread(target=_run, daemon=True).start()
 
 
 def notify(conn, brand_id: str, *, category: str, dedupe_key: str, message: str, action_url: str) -> None:

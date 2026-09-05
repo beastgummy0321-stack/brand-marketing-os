@@ -140,12 +140,9 @@ def _read_photo_product(conn, draft: dict, photo: dict, purpose: str) -> dict:
         return _photo_card(photo, status="failed", message=str(exc))
 
 
-def _read_photo_products(conn, draft: dict, on_photo_progress=None) -> list:
+def _read_photo_products(conn, draft: dict) -> list:
     cards = []
-    total = len(draft["photos"])
     for index, photo in enumerate(draft["photos"], start=1):
-        if on_photo_progress:
-            on_photo_progress(index, total)
         card = _read_photo_product(conn, draft, photo, f"讀取第 {index} 張照片")
         cards.append(card)
         draft["product_card_drafts"] = list(cards)
@@ -173,7 +170,15 @@ def retry_photo_product(conn, draft: dict, source_photo_token: str) -> dict:
     return card
 
 
-def run_scan(conn, draft: dict, on_photo_progress=None) -> tuple:
+def parse_scan_reply(rendered_output: str) -> dict | None:  # 格式不符回 None；佇列狀態端點重驗用
+    data = _parse_json_reply(rendered_output)
+    impressions = (data or {}).get("impressions") if isinstance(data, dict) else None
+    valid = isinstance(impressions, list) and all(
+        isinstance(i, dict) and i.get("title") for i in impressions)
+    return {"impressions": impressions, "products": (data or {}).get("products") or []} if valid else None
+
+
+def run_scan(conn, draft: dict) -> tuple:
     """讀網址＋整理初步印象。成功回 (True, None) 並更新草稿；失敗回 (False, 人話錯誤)。"""
     url_results = []
     excerpts = []
@@ -202,26 +207,23 @@ def run_scan(conn, draft: dict, on_photo_progress=None) -> tuple:
                 system=_SCAN_SYSTEM, user_text="\n\n".join(parts))
     if task["status"] != "succeeded":
         return False, task["error"]
-    data = _parse_json_reply(task["rendered_output"])
-    impressions = (data or {}).get("impressions") if isinstance(data, dict) else None
-    if not isinstance(impressions, list) or not all(
-        isinstance(i, dict) and i.get("title") for i in impressions
-    ):
+    parsed = parse_scan_reply(task["rendered_output"])
+    if parsed is None:
         return False, PARSE_FAIL_MESSAGE
     draft["scan_done"] = True
     draft["scan_impressions"] = [
         {"looks_like": i.get("looks_like") or "整體", "title": i.get("title"),
          "content": i.get("content") or "", "basis": i.get("basis") or ""}
-        for i in impressions
+        for i in parsed["impressions"]
     ]
     draft["url_results"] = url_results
-    products = [str(p).strip() for p in ((data or {}).get("products") or [])
+    products = [str(p).strip() for p in parsed["products"]
                 if isinstance(p, str) and str(p).strip()][:20]
     draft["scan_products"] = list(dict.fromkeys(products))
     draft["product_card_drafts"] = []
     state.save(draft, conn)
     ir.update_draft(conn, draft["brand_id"], draft["id"], scan_llm_task_id=task["id"])
-    _read_photo_products(conn, draft, on_photo_progress=on_photo_progress)
+    _read_photo_products(conn, draft)
     return True, None
 
 
@@ -262,6 +264,29 @@ _QUESTION_TOOL = {
 }
 
 
+def question_coverage(draft: dict) -> tuple[list, list]:  # 出題與佇列狀態端點共用同一份
+    covered = [aspect for aspect in QUESTION_ASPECTS if any(
+        isinstance(entry, dict) and entry.get("aspect") == aspect
+        for entry in draft.get("qa") or []
+    )]
+    missing = [aspect for aspect in QUESTION_ASPECTS if aspect not in covered]
+    return covered, missing
+
+
+def validate_question_reply(data, missing: list) -> tuple[bool, str | None]:  # missing 由呼叫端傳入
+    if not isinstance(data, dict):
+        return False, PARSE_FAIL_MESSAGE
+    if data.get("done"):
+        if missing:
+            return False, (f"還有 {len(missing)} 個面向沒問到：{'、'.join(missing)}。"
+                           "請繼續出題。")
+        return True, None
+    if (data.get("aspect") not in QUESTION_ASPECTS or not data.get("question")
+            or not isinstance(data.get("suggested"), dict)):
+        return False, PARSE_FAIL_MESSAGE
+    return True, None
+
+
 def run_next_question(conn, draft: dict) -> tuple:
     """請 AI 出下一題（含建議選項與分支）。AI 認為問夠了就標記問答結束。"""
     asked = state.question_count(draft)
@@ -269,11 +294,7 @@ def run_next_question(conn, draft: dict) -> tuple:
         state.mark_qa_done(draft)
         state.save(draft, conn)
         return True, None
-    covered = [aspect for aspect in QUESTION_ASPECTS if any(
-        isinstance(entry, dict) and entry.get("aspect") == aspect
-        for entry in draft.get("qa") or []
-    )]
-    missing = [aspect for aspect in QUESTION_ASPECTS if aspect not in covered]
+    covered, missing = question_coverage(draft)
     lines = [f"品牌名稱：{draft['brand_name']}", f"業主描述：{draft['description']}"]
     for imp in draft["scan_impressions"]:
         lines.append(f"初步印象（{imp['looks_like']}）{imp['title']}：{imp['content']}")
@@ -306,18 +327,13 @@ def run_next_question(conn, draft: dict) -> tuple:
     if task["status"] != "succeeded":
         return False, task["error"]
     data = task["structured_output_json"]
-    if not isinstance(data, dict):
-        return False, PARSE_FAIL_MESSAGE
+    ok, err = validate_question_reply(data, missing)
+    if not ok:
+        return False, err
     if data.get("done"):
-        if missing:
-            return False, (f"還有 {len(missing)} 個面向沒問到：{'、'.join(missing)}。"
-                           "請繼續出題。")
         state.mark_qa_done(draft)
         state.save(draft, conn)
         return True, None
-    if (data.get("aspect") not in QUESTION_ASPECTS or not data.get("question")
-            or not isinstance(data.get("suggested"), dict)):
-        return False, PARSE_FAIL_MESSAGE
     state.append_question(
         draft, data["question"], data["suggested"],
         [b for b in (data.get("branches") or []) if isinstance(b, dict) and b.get("label")],

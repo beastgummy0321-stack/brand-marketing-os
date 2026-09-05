@@ -6,7 +6,7 @@
 
 import { apiFetch } from "./http";
 
-export type ActiveJobKind = "scan" | "question" | "paste_fix" | "product_research" | "library_convert" | "brand_report";
+export type ActiveJobKind = "scan" | "question" | "paste_fix" | "persona" | "product_research" | "library_convert" | "brand_report";
 export type ActiveJobStatus = "waiting" | "running" | "done" | "failed";
 
 export interface ActiveJob {
@@ -23,6 +23,7 @@ export const ACTIVE_JOB_KIND_LABELS: Record<ActiveJobKind, string> = {
   scan: "建檔初掃",
   question: "建檔問答",
   paste_fix: "建檔貼回修格式",
+  persona: "人物誌生成",
   product_research: "產品調研",
   library_convert: "智庫轉換",
   brand_report: "顧問分析報告",

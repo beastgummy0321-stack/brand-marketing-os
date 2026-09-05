@@ -9,11 +9,9 @@
 照片驗證、問答選項、產品建立）已抽到 `app/intake/state.py`，HTML 表單路由與這裡的 JSON
 路由共用同一份，不寫兩次（CLAUDE.md 第五節）。
 
-背景工作（初掃／出下一題）沿用 `app/brand_intelligence/background_job.py` 的
-`JobRegistry`＋`notify()`（不新造第二套機制），寫法比照 `routes_products.py` 的調研背景工作：
-key 用 brand_id——同一時間一個品牌只有一份進行中草稿，三種 kind（本檔只做前兩種）不會
-併發搶同一個 key（GRILL「背景工作機制」節）。`ai.run_scan`／`ai.run_next_question`
-業務邏輯原樣搬進背景執行緒呼叫，一行不改。
+背景工作（初掃／出下一題／貼回修格式）票 09 起搬上 `app.background` 佇列（範本
+`app/brand_web/routes_products.py`），取代原本行程內工作狀態表＋背景執行緒；狀態端點讀
+`llm_task`。逐步進度（初掃「正在看照片（第 N／M 張）」）票 09 明文放棄，running 回「處理中」。
 
 對外進入點：本檔的 `router`（`app/main.py` 直接 `include_router`）。誰依賴它：只有
 `app/main.py`。
@@ -25,8 +23,11 @@ from datetime import UTC, datetime
 from fastapi import APIRouter, File, Request, UploadFile
 from fastapi.responses import Response
 
+from app.background import enqueue as background_enqueue
+from app.background import is_active as background_is_active
 from app.brand_intelligence import background_job
 from app.brand_intelligence import repository as repo
+from app.core.db import connection as core_db_connection
 from app.core.db import new_id, now_iso, now_utc
 from app.intake import ai, paste_parse, script, state
 from app.intake import repository as ir
@@ -203,42 +204,59 @@ def research_report_get(request: Request, brand_id: str, draft_id: str):
 
 
 # ---------------------------------------------------------------------------
-# 背景工作機制（初掃／出下一題共用，GRILL「背景工作機制」節；貼回修格式留給下一段）
+# 背景工作機制（初掃／出下一題／貼回修格式共用；票 09：搬上 app.background 佇列）
 # ---------------------------------------------------------------------------
-
-_JOBS = background_job.JobRegistry()
 
 _USUAL_RANGE = {"scan": "20 到 40 秒", "question": "10 到 20 秒", "paste_fix": "10 到 20 秒"}
 _STAGE_START = {"scan": "讀取網址中", "question": "正在準備下一題", "paste_fix": "正在請 AI 整理格式"}
+_STAGE_RUNNING = {"scan": "處理中", "question": _STAGE_START["question"], "paste_fix": _STAGE_START["paste_fix"]}
 _ESTIMATE = {"scan": script.COST_SCAN, "question": script.COST_QUESTION, "paste_fix": script.COST_PASTE_FIX}
-
-
-def active_jobs() -> list[dict]:
-    """回傳進行中的建檔工作，供 dashboard 聚合；不洩漏 registry 狀態。"""
-    return [
-        {
-            "brand_id": brand_id,
-            "kind": state.get("kind", "scan"),
-            "status": state["status"],
-            "stage": state.get("stage") or "",
-            "started_at": state.get("started_at") or "",
-            "action_url": f"/app/brands/{brand_id}/intake",
-        }
-        for brand_id, state in _JOBS.items()
-        if state.get("status") in ("running", "waiting")
-    ]
+_TASK_TYPE = {"scan": "intake_scan", "question": "intake_question", "paste_fix": "intake_paste_fix"}
 
 
 def _idle_job() -> dict:
     return {"status": "done", "stage": "", "started_at": now_iso(), "usual_range_text": "", "error": None}
 
 
-def _job_state(brand_id: str, kind: str) -> dict:
-    entry = _JOBS.get(brand_id, None)
-    if not entry or entry.get("kind") != kind:
-        return _idle_job()
-    return {"status": entry["status"], "stage": entry["stage"], "started_at": entry["started_at"],
-            "usual_range_text": entry["usual_range_text"], "error": entry["error"]}
+def _job(status: str, kind: str, started_at: str, error: str | None = None) -> dict:
+    stage = {"running": _STAGE_RUNNING[kind], "done": "完成", "failed": _STAGE_START[kind]}[status]
+    return {"status": status, "stage": stage, "started_at": started_at,
+            "usual_range_text": _USUAL_RANGE[kind], "error": error}
+
+
+def _latest_task_row(brand_id: str, kind: str) -> dict | None:
+    row = web.conn.execute(
+        "SELECT * FROM llm_task WHERE brand_id = %s AND task_type = %s "
+        "ORDER BY started_at DESC LIMIT 1",
+        (brand_id, _TASK_TYPE[kind]),
+    ).fetchone()
+    return dict(row) if row is not None else None
+
+
+def _job_state(draft: dict, kind: str) -> dict:
+    """讀 llm_task 取代讀行程內 dict；succeeded 列重驗（比照 `_research_state()`）。"""
+    brand_id = draft["brand_id"]
+    lock = f"intake_{kind}:{brand_id}"
+    row = _latest_task_row(brand_id, kind)
+    if row is None:
+        return _job("running", kind, now_iso()) if background_is_active(lock) else _idle_job()
+    started_at = row["started_at"].isoformat() if row["started_at"] else now_iso()
+    if row["status"] == "running":
+        return _job("running", kind, started_at)
+    if row["status"] != "succeeded":
+        return _job("failed", kind, started_at, row["error"] or "背景工作失敗，可以再試一次。")
+    if kind == "scan":
+        ok = ai.parse_scan_reply(row["rendered_output"]) is not None
+        err = ai.PARSE_FAIL_MESSAGE
+    elif kind == "question":
+        ok, err = ai.validate_question_reply(row["structured_output_json"], ai.question_coverage(draft)[1])
+    else:
+        ok, err = True, None
+    if not ok:
+        return _job("failed", kind, started_at, err)
+    if background_is_active(lock):
+        return _job("running", kind, started_at)  # 主呼叫已成功，仍在做後續處理（例如讀照片）
+    return _job("done", kind, started_at)
 
 
 def _limit_block(draft: dict, kind: str) -> dict:
@@ -246,108 +264,61 @@ def _limit_block(draft: dict, kind: str) -> dict:
             "budget_limit": draft["budget_limit"], "suggested_limit": round(draft["budget_limit"] + 30, 2)}
 
 
-def _notify_scan_done(brand_id: str, brand_name: str, ok: bool) -> None:
-    # S4.15／S4.16：初掃完成或失敗都進收件匣；出下一題不進（本輪 grill 裁決，見 GRILL 檔）。
-    verb = "初掃完成，可以回去看初步印象" if ok else "初掃失敗，可以回去重試"
+def _notify_step_done(conn, brand_id: str, brand_name: str, ok: bool, *, verbs: tuple) -> None:
     background_job.notify(
-        web.conn, brand_id, category="intake_ai_step_done", dedupe_key=new_id("itkjob"),
-        message=f"「{brand_name}」{verb}", action_url=f"/app/brands/{brand_id}/intake",
+        conn, brand_id, category="intake_ai_step_done", dedupe_key=new_id("itkjob"),
+        message=f"「{brand_name}」{verbs[0] if ok else verbs[1]}", action_url=f"/app/brands/{brand_id}/intake",
     )
 
 
-def _run_scan_job(brand_id: str) -> None:
-    started_at = now_iso()
-    brand = repo.get_brand(web.conn, brand_id)
-    brand_name = brand["name"] if brand else brand_id
-    try:
-        draft = state.require_draft(brand_id, conn=web.conn)
-        def on_photo_progress(current: int, total: int) -> None:
-            _JOBS.set(brand_id, {
-                "kind": "scan", "status": "running",
-                "stage": f"正在看照片（第 {current}／{total} 張）", "started_at": started_at,
-                "usual_range_text": _USUAL_RANGE["scan"], "error": None,
-            })
-        ok, err = ai.run_scan(web.conn, draft, on_photo_progress=on_photo_progress)
-    except Exception as exc:  # noqa: BLE001 — 背景執行緒最後一道防線，不能讓例外憑空消失
-        ok, err = False, f"背景執行發生未預期錯誤：{exc}"
-    if ok:
-        _JOBS.set(brand_id, {"kind": "scan", "status": "done", "stage": "完成", "started_at": started_at,
-                             "usual_range_text": _USUAL_RANGE["scan"], "error": None})
-    else:
-        _JOBS.set(brand_id, {"kind": "scan", "status": "failed", "stage": _STAGE_START["scan"],
-                             "started_at": started_at, "usual_range_text": _USUAL_RANGE["scan"], "error": err})
-    _notify_scan_done(brand_id, brand_name, ok)
+def background_intake_scan(org_id: str, brand_id: str) -> None:
+    with core_db_connection() as conn:
+        brand = repo.get_brand(conn, brand_id)
+        brand_name = brand["name"] if brand else brand_id
+        try:
+            draft = state.require_draft(brand_id, conn=conn)
+            ok, _err = ai.run_scan(conn, draft)
+        except Exception:  # noqa: BLE001 — worker 最後一道防線，不能讓例外憑空消失
+            ok = False
+        _notify_step_done(conn, brand_id, brand_name, ok,
+                          verbs=("初掃完成，可以回去看初步印象", "初掃失敗，可以回去重試"))
 
 
-def _start_scan(brand_id: str) -> None:
-    running = {"kind": "scan", "status": "running", "stage": _STAGE_START["scan"], "started_at": now_iso(),
-              "usual_range_text": _USUAL_RANGE["scan"], "error": None}
-    _JOBS.start(brand_id, running, _run_scan_job, (brand_id,), idempotent=True)
+def background_intake_question(org_id: str, brand_id: str) -> None:
+    with core_db_connection() as conn:
+        try:
+            draft = state.require_draft(brand_id, conn=conn)
+            ai.run_next_question(conn, draft)  # 出下一題不進收件匣（GRILL 決策：洗版）
+        except Exception:  # noqa: BLE001
+            pass
 
 
-def _run_question_job(brand_id: str) -> None:
-    started_at = now_iso()
-    try:
-        draft = state.require_draft(brand_id, conn=web.conn)
-        ok, err = ai.run_next_question(web.conn, draft)
-    except Exception as exc:  # noqa: BLE001
-        ok, err = False, f"背景執行發生未預期錯誤：{exc}"
-    if ok:
-        _JOBS.set(brand_id, {"kind": "question", "status": "done", "stage": "完成", "started_at": started_at,
-                             "usual_range_text": _USUAL_RANGE["question"], "error": None})
-    else:
-        _JOBS.set(brand_id, {"kind": "question", "status": "failed", "stage": _STAGE_START["question"],
-                             "started_at": started_at, "usual_range_text": _USUAL_RANGE["question"], "error": err})
-    # 出下一題不進收件匣通知（GRILL 決策：一輪最多 8 次背景呼叫，每次通知會洗版收件匣）。
+def background_intake_paste_fix(org_id: str, brand_id: str) -> None:
+    with core_db_connection() as conn:
+        brand = repo.get_brand(conn, brand_id)
+        brand_name = brand["name"] if brand else brand_id
+        ok = False
+        try:
+            draft = state.require_draft(brand_id, conn=conn)
+            ok, result = ai.run_paste_fix(conn, draft)
+            if ok:
+                # 修好的文字重新驗證：成功就併入步驟 5（AI 帶回的內容），失敗把修過的文字
+                # 留在草稿讓使用者手改（S4.54）——這裡的 ok 只代表 AI 呼叫本身有沒有成功。
+                n = state.apply_paste(draft, result, conn=conn)
+                draft = state.require_draft(brand_id, conn=conn)
+                if n is not None and draft["step"] < 5:
+                    state.touch(draft, f"/brands/{brand_id}/intake/paste", 5, conn=conn)
+        except Exception:  # noqa: BLE001 — worker 最後一道防線，不能讓例外憑空消失
+            ok = False
+        _notify_step_done(conn, brand_id, brand_name, ok,
+                          verbs=("貼回格式已修好，可以回去看", "貼回修格式失敗，可以回去重試"))
 
 
-def _start_question(brand_id: str) -> None:
-    running = {"kind": "question", "status": "running", "stage": _STAGE_START["question"], "started_at": now_iso(),
-              "usual_range_text": _USUAL_RANGE["question"], "error": None}
-    _JOBS.start(brand_id, running, _run_question_job, (brand_id,), idempotent=True)
-
-
-def _notify_paste_fix_done(brand_id: str, brand_name: str, ok: bool) -> None:
-    # S4.54：貼回修格式完成或失敗都進收件匣（跟初掃同待遇，不同於出下一題）。
-    verb = "貼回格式已修好，可以回去看" if ok else "貼回修格式失敗，可以回去重試"
-    background_job.notify(
-        web.conn, brand_id, category="intake_ai_step_done", dedupe_key=new_id("itkjob"),
-        message=f"「{brand_name}」{verb}", action_url=f"/app/brands/{brand_id}/intake",
-    )
-
-
-def _run_paste_fix_job(brand_id: str) -> None:
-    started_at = now_iso()
-    brand = repo.get_brand(web.conn, brand_id)
-    brand_name = brand["name"] if brand else brand_id
-    try:
-        draft = state.require_draft(brand_id, conn=web.conn)
-        ok, result = ai.run_paste_fix(web.conn, draft)
-        err = None
-        if ok:
-            # 修好的文字重新驗證：成功就併入步驟 5（AI 帶回的內容），失敗把修過的文字
-            # 留在草稿讓使用者手改（S4.54）——這裡的 ok 只代表 AI 呼叫本身有沒有成功。
-            n = state.apply_paste(draft, result, conn=web.conn)
-            draft = state.require_draft(brand_id, conn=web.conn)
-            if n is not None and draft["step"] < 5:
-                state.touch(draft, f"/brands/{brand_id}/intake/paste", 5)
-        else:
-            err = result
-    except Exception as exc:  # noqa: BLE001 — 背景執行緒最後一道防線，不能讓例外憑空消失
-        ok, err = False, f"背景執行發生未預期錯誤：{exc}"
-    if ok:
-        _JOBS.set(brand_id, {"kind": "paste_fix", "status": "done", "stage": "完成", "started_at": started_at,
-                             "usual_range_text": _USUAL_RANGE["paste_fix"], "error": None})
-    else:
-        _JOBS.set(brand_id, {"kind": "paste_fix", "status": "failed", "stage": _STAGE_START["paste_fix"],
-                             "started_at": started_at, "usual_range_text": _USUAL_RANGE["paste_fix"], "error": err})
-    _notify_paste_fix_done(brand_id, brand_name, ok)
-
-
-def _start_paste_fix(brand_id: str) -> None:
-    running = {"kind": "paste_fix", "status": "running", "stage": _STAGE_START["paste_fix"], "started_at": now_iso(),
-              "usual_range_text": _USUAL_RANGE["paste_fix"], "error": None}
-    _JOBS.start(brand_id, running, _run_paste_fix_job, (brand_id,), idempotent=True)
+def _start(kind: str, brand_id: str, org_id: str) -> None:
+    lock = f"intake_{kind}:{brand_id}"
+    if background_is_active(lock):
+        return  # 已經在跑，no-op（原本行程內狀態表的 idempotent=True 同一個行為）
+    background_enqueue(f"background.{_TASK_TYPE[kind]}", org_id=org_id, lock=lock, brand_id=brand_id)
 
 
 # ---------------------------------------------------------------------------
@@ -363,7 +334,7 @@ def scan_start(request: Request, brand_id: str):
         return {"limit_block": None}
     if state.would_exceed(draft, script.COST_SCAN):
         return {"limit_block": _limit_block(draft, "scan")}
-    _start_scan(brand_id)
+    _start("scan", brand_id, actor.org_id)
     return {"limit_block": None}
 
 
@@ -371,8 +342,8 @@ def scan_start(request: Request, brand_id: str):
 def scan_status(request: Request, brand_id: str):
     actor = require_actor(request)
     require_brand(brand_id, actor)
-    state.require_draft(brand_id)
-    return _envelope(_job_state(brand_id, "scan"))
+    draft = state.require_draft(brand_id)
+    return _envelope(_job_state(draft, "scan"))
 
 
 @router.post("/api/intake/brands/{brand_id}/scan/skip")
@@ -386,7 +357,6 @@ def scan_skip(request: Request, brand_id: str):
     draft["product_card_drafts"] = []
     draft["url_results"] = []
     state.save(draft)
-    _JOBS.set(brand_id, _idle_job())
     return Response(status_code=204)
 
 
@@ -424,7 +394,7 @@ def question_start(request: Request, brand_id: str):
         return {"limit_block": None}
     if state.would_exceed(draft, script.COST_QUESTION):
         return {"limit_block": _limit_block(draft, "question")}
-    _start_question(brand_id)
+    _start("question", brand_id, actor.org_id)
     return {"limit_block": None}
 
 
@@ -432,8 +402,8 @@ def question_start(request: Request, brand_id: str):
 def question_status(request: Request, brand_id: str):
     actor = require_actor(request)
     require_brand(brand_id, actor)
-    state.require_draft(brand_id)
-    return _envelope(_job_state(brand_id, "question"))
+    draft = state.require_draft(brand_id)
+    return _envelope(_job_state(draft, "question"))
 
 
 @router.post("/api/intake/brands/{brand_id}/question/answer")
@@ -452,7 +422,6 @@ async def question_answer(request: Request, brand_id: str):
     if choice == "skip":
         entry["skipped"] = True
         state.save(draft)
-        _JOBS.set(brand_id, _idle_job())
         return Response(status_code=204)
 
     choice_map = dict(state.question_options(q))
@@ -464,7 +433,6 @@ async def question_answer(request: Request, brand_id: str):
     entry["answer_key"] = choice
     entry["answer_text"] = note
     state.save(draft)
-    _JOBS.set(brand_id, _idle_job())
     return Response(status_code=204)
 
 
@@ -475,7 +443,6 @@ def question_skip_remaining(request: Request, brand_id: str):
     draft = state.require_draft(brand_id)
     state.mark_qa_done(draft)
     state.save(draft)
-    _JOBS.set(brand_id, _idle_job())
     return Response(status_code=204)
 
 
@@ -512,12 +479,12 @@ async def budget_raise(request: Request, brand_id: str):
     draft["budget_limit"] = round(draft["budget_limit"] + 30, 2)
     state.save(draft)
     if kind == "scan" and not draft["scan_done"]:
-        _start_scan(brand_id)
+        _start("scan", brand_id, actor.org_id)
     elif kind == "question" and not draft["qa_done"] and draft["current_q"] is None:
-        _start_question(brand_id)
+        _start("question", brand_id, actor.org_id)
     elif kind == "paste_fix":
-        _start_paste_fix(brand_id)
-    return {"job": _job_state(brand_id, kind)}
+        _start("paste_fix", brand_id, actor.org_id)
+    return {"job": _job_state(draft, kind)}
 
 
 @router.post("/api/intake/brands/{brand_id}/skip-remaining-ai")
@@ -534,7 +501,6 @@ def skip_remaining_ai(request: Request, brand_id: str):
     state.mark_qa_done(draft)
     draft["step"] = 4
     state.save(draft)
-    _JOBS.set(brand_id, _idle_job())
     return Response(status_code=204)
 
 
@@ -622,7 +588,7 @@ def paste_fix_start(request: Request, brand_id: str):
     draft = state.require_draft(brand_id)
     if state.would_exceed(draft, script.COST_PASTE_FIX):
         return {"limit_block": _limit_block(draft, "paste_fix")}
-    _start_paste_fix(brand_id)
+    _start("paste_fix", brand_id, actor.org_id)
     return {"limit_block": None}
 
 
@@ -630,8 +596,8 @@ def paste_fix_start(request: Request, brand_id: str):
 def paste_fix_status(request: Request, brand_id: str):
     actor = require_actor(request)
     require_brand(brand_id, actor)
-    state.require_draft(brand_id)
-    return _envelope(_job_state(brand_id, "paste_fix"))
+    draft = state.require_draft(brand_id)
+    return _envelope(_job_state(draft, "paste_fix"))
 
 
 # ---------------------------------------------------------------------------

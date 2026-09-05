@@ -13,8 +13,9 @@ const STATUS_LABELS: Record<ActiveJob["status"], string> = {
 };
 
 /** 全站生成進度鈴鐺（票 B4-warroom，模組邊界定案節「對外進入點」）：掛在全站殼層
- * Topbar，輪詢 `GET /api/jobs/active` 聚合端點——聚合對象是既有三個 `JobRegistry`
- * （建檔初掃／問答／貼回、產品調研、智庫轉換），不含廣告分支（該節「不碰什麼」）。
+ * Topbar，輪詢 `GET /api/jobs/active` 聚合端點——票 09 起七個 kind（建檔初掃／問答／
+ * 貼回、人物誌生成、產品調研、智庫轉換、顧問分析報告）全部經 `app.background` 佇列讀
+ * `llm_task`，沒有第二個機制，不含廣告分支（該節「不碰什麼」）。
  * 只讀不寫：沒有取消功能，點項目只是連去該筆工作所在的畫面。 */
 export function ActiveJobsBell() {
   const [jobs, setJobs] = useState<ActiveJob[]>([]);

@@ -7,7 +7,6 @@
 
 import json
 import os
-import time
 import unittest
 from unittest import mock
 
@@ -15,12 +14,13 @@ os.environ.setdefault("ANTHROPIC_API_KEY", "sk-ant-fake-intake-api-test")
 
 from fastapi.testclient import TestClient  # noqa: E402
 
+import app.background as background_module  # noqa: E402
+import app.intake as intake_module  # noqa: E402
 import app.main as main  # noqa: E402
 import app.shared.web as web  # noqa: E402
 from app.brand_intelligence import repository as bi_repo  # noqa: E402
 from app.core import interrupts as core_interrupts  # noqa: E402
 from app.intake import ai as intake_ai  # noqa: E402
-from app.intake import routes_api as api  # noqa: E402
 from app.intake import script, state  # noqa: E402
 from app.llm.providers import FakeProvider, ProviderResponse, Usage  # noqa: E402
 
@@ -45,7 +45,7 @@ class _Base(unittest.TestCase):
         self.client = TestClient(main.app)
         web.conn.execute("DELETE FROM app_setting")
         web.conn.commit()
-        api._JOBS.clear()
+        intake_module.register(main.app)  # 這個模組自己有一份 schema，要重新掛一次背景 task
         # 隔離環境變數：金鑰只看 DB 設定（沒設＝沒金鑰，跟 test_intake.py 同風格）
         self._envpatch = mock.patch.dict(os.environ, {}, clear=False)
         self._envpatch.start()
@@ -57,7 +57,6 @@ class _Base(unittest.TestCase):
     def tearDown(self):
         intake_ai.PROVIDER = self._orig_provider
         intake_ai.fetch_url = self._orig_fetch
-        api._JOBS.clear()
         self._envpatch.stop()
 
     def _brand_name(self) -> str:
@@ -74,28 +73,24 @@ class _Base(unittest.TestCase):
         self.assertFalse(body["quick"])
         return body["brand_id"]
 
-    def _poll(self, brand_id: str, kind: str, timeout: float = 1.0) -> dict:
-        # paste_fix 的 URL 是 .../paste/fix/status（跟 job kind 字串 "paste_fix" 不同，
-        # 不能直接拼 kind 進路徑）；scan／question 的 URL 段跟 kind 字串本來就一樣。
+    def _poll(self, brand_id: str, kind: str) -> dict:
+        """票 09：背景工作搬上佇列後，`run_worker(wait=False)` 會把目前排進去的工作跑到
+        底才回來——不必再像行程內執行緒年代那樣輪詢等它結束（比照
+        `app/tests/test_product_scan.py` `_run_worker()`）。paste_fix 的 URL 是
+        `.../paste/fix/status`（跟 job kind 字串 "paste_fix" 不同，不能直接拼 kind 進
+        路徑）；scan／question 的 URL 段跟 kind 字串本來就一樣。"""
         path_segment = "paste/fix" if kind == "paste_fix" else kind
-        deadline = time.time() + timeout
-        while time.time() < deadline:
-            status = self.client.get(f"/api/intake/brands/{brand_id}/{path_segment}/status").json()["data"]
-            if status["status"] != "running":
-                return status
-            time.sleep(0.05)
-        self.fail("背景任務逾時仍未完成，可能是執行緒沒有真的跑")
+        web.conn.commit()
+        background_module.app().run_worker(wait=False)
+        return self.client.get(f"/api/intake/brands/{brand_id}/{path_segment}/status").json()["data"]
 
-    def _wait_for_notice(self, brand_id: str, needle: str, timeout: float = 2.0) -> None:
-        """等收件匣出現這則通知。不能只查一次：`_run_paste_fix_job()` 先翻 status、後寫
-        通知，`_poll()` 在翻 status 當下就回來了（CI run 33215616255 輸過這場競速）。"""
-        deadline = time.time() + timeout
-        while time.time() < deadline:
-            if any(needle in r["message"] for r in core_interrupts.list_open(web.conn, brand_id=brand_id)
-                   if r["category"] == "intake_ai_step_done"):
-                return
-            time.sleep(0.05)
-        self.fail(f"逾時仍未在收件匣看到「{needle}」通知")
+    def _assert_notice(self, brand_id: str, needle: str) -> None:
+        """`run_worker(wait=False)` 跑到底才回來（見 `_poll()`），通知在同一次呼叫裡已經
+        寫完，不必再像行程內執行緒年代那樣等一段時間才翻得到（原本的競速見 CI run
+        33215616255）。"""
+        found = any(needle in r["message"] for r in core_interrupts.list_open(web.conn, brand_id=brand_id)
+                    if r["category"] == "intake_ai_step_done")
+        self.assertTrue(found, f"沒有在收件匣看到「{needle}」通知")
 
 
 # ---------------------------------------------------------------------------
@@ -262,7 +257,7 @@ class PasteFixBackgroundTest(_Base):
         self.assertEqual(draft["pending_item_count"], 23)
         self.assertEqual(draft["step"], 5)
 
-        self._wait_for_notice(bid, "貼回格式已修好")
+        self._assert_notice(bid, "貼回格式已修好")
 
     def test_failure_notifies_with_human_error(self):
         from app.llm.providers import MISSING_KEY_MESSAGE, AnthropicProvider
@@ -275,7 +270,7 @@ class PasteFixBackgroundTest(_Base):
         status = self._poll(bid, "paste_fix")
         self.assertEqual(status["status"], "failed")
         self.assertEqual(status["error"], MISSING_KEY_MESSAGE)
-        self._wait_for_notice(bid, "貼回修格式失敗")
+        self._assert_notice(bid, "貼回修格式失敗")
 
     def test_over_budget_blocks_before_calling_ai(self):
         bid = self._create_full()

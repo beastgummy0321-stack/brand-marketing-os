@@ -20,13 +20,13 @@ The eleven other files (`ai.py`, `card_test.py`, `paste_parse.py`, `persona_gene
 `repository.py`, `routes.py`, `routes_api.py`, `routes_t2_api.py`, `script.py`, `state.py`,
 `truth_card.py`) are private.
 
-**Three reaches past `register()`, all measured, none of them new:**
+**Two reaches past `register()`, both measured, neither of them new:**
 
 - `app/dashboard/repository.py:19` — `from app.intake import state as intake_state`, used at
-  `:116` for `intake_state.get_draft(...)`. Reaches a private file.
-- `app/dashboard/routes_jobs_api.py:19` — `from app.intake.routes_api import active_jobs`.
-  Reaches a private file. This is the last survivor of the breach `docs/contracts/brand_web.md`
-  recorded; ticket 08 removed the three brand_web ones, ticket 09 removes this one.
+  `:116` for `intake_state.get_draft(...)`. Reaches a private file. **This is now the only one of
+  its kind left in the repo**: ticket 08 removed the three into `app/brand_web`, ticket 09 removed
+  `app/dashboard/routes_jobs_api.py`'s `from app.intake.routes_api import active_jobs`, and the
+  breach paragraph `docs/contracts/brand_web.md` used to carry is gone with them.
 - `app/core/settings.py:315` — `from app.intake import script` **inside a function**, for
   `script.DEFAULT_BUDGET` only. A deferred import is invisible to
   `test_architecture_boundaries.py::_import_time_modules` by design, so this is a deliberate way
@@ -57,13 +57,16 @@ client meets three different error bodies depending on which endpoint it called:
 That divergence is recorded, not endorsed:
 `docs/issues/deploy/issue-intake-error-shape-diverges.md`.
 
-Background job failures are **recorded, never swallowed and never left to escape**: each job
-runner wraps its body in `try/except Exception`, writes `status="failed"` plus `error=str(exc)`
-into its registry and calls `notify()` (`persona_generation.py:131-146`;
-`routes_api.py:262-284`, `:290-307`, `:323-342`). `JobRegistry.start()`
-(`app/brand_intelligence/background_job.py:47-62`) has no `try/except` of its own, so that safety
-net exists only because each caller builds it — `routes_api.py:271` calls itself "the last line of
-defence for a background thread; an exception must not vanish into thin air".
+Background job failures are **recorded, never swallowed and never left to escape**: each
+`background.intake_*` handler wraps its body in `try/except Exception`, marks the run failed and
+calls `notify()`. Since ticket 09 the durable record is the `llm_task` row, not a process-local
+dict, so a restart no longer erases a failure.
+
+One narrow honesty gap, inherited from ticket 08's template rather than introduced here: if the
+**post-processing** after a successful LLM call throws (saving the scan result, replacing
+personas, applying a paste), the handler still returns normally, so the next status poll reads
+`done` even though a failure notification was already sent.
+`docs/issues/deploy/issue-post-processing-failure-reads-as-done.md` carries it for both modules.
 
 ## Must not import or touch
 
@@ -75,14 +78,16 @@ defence for a background thread; an exception must not vanish into thin air".
   instead of going through `brand_intelligence.repository`. It also reads `llm_task`
   (`repository.py:186`), which `app.core` owns; that table has no single owner in practice and
   `app/schedule/state.py` and `app/brand_web` read it the same way.
-- `procrastinate_*` internals. `app.background` is the only door — and today this module does not
-  use it at all: a grep for `procrastinate` in `app/intake/` returns nothing, because its four
-  background kinds still run on threads. Ticket 09 changes that.
+- `procrastinate_*` internals. `app.background` is the only door, and since ticket 09 this module
+  uses it: all four background kinds (initial scan, next question, paste-fix, persona generation)
+  are `background.intake_*` tasks registered by `register()`, enqueued with `enqueue()` and gated
+  with `is_active()`. Nothing here touches a `procrastinate_*` table directly.
 
 Allowed dependencies, from real import statements rather than intent: `app.core` (`net`, `db`,
 `settings`, `cleanup`, `audit`, `vocab`), `app.brand_intelligence` (`customer_voice`,
-`repository`, `personas`, `background_job`), `app.llm` (`gateway`, `providers`,
-`context_compiler`), `app.shared.web`, `app.storage`.
+`repository`, `personas`, `background_job` — now only `notify()`; the `JobRegistry` class went
+with ticket 09), `app.llm` (`gateway`, `providers`, `context_compiler`), `app.shared.web`,
+`app.storage`, `app.background`.
 
 ## Decisions in force
 
@@ -103,22 +108,34 @@ Module-local and reversible, decided here rather than in an ADR:
 - **A draft that is abandoned mid-flight leaves orphan Storage objects.** `discard_pending_photos`
   (`state.py:392-395`) deliberately does not delete them; declared out of scope by ticket
   storage-03 and unchanged since.
-- **Two separate `JobRegistry` instances, and no written reason for two.** `_JOBS`
-  (`routes_api.py:209`) carries `scan` / `question` / `paste_fix`; `JOBS`
-  (`persona_generation.py:11`) carries persona generation. Both are `{brand_id: {status, stage,
-  started_at, error, …}}`, purely in memory, empty after a restart, and their key spaces do not
-  meet. `JobRegistry` also never evicts a finished job — its docstring
-  (`app/brand_intelligence/background_job.py:21-24`) marks that a deliberate shortcut with a
-  `ponytail:` note: single machine, one person, low generation rate, add a TTL when high-frequency
-  use makes it real.
+- **The queueing lock is per kind, not per brand.** Ticket 09 replaced the two in-memory
+  `JobRegistry` instances with `background.enqueue(..., lock=f"intake_{kind}:{brand_id}")`. The old
+  registry keyed on `brand_id` alone, so starting a scan blocked a question for the same brand;
+  the new lock does not. Measured at review: the wizard's own step preconditions
+  (`routes_api.py:479-486`, `draft["scan_done"]` / `draft["qa_done"]`) mean no real request
+  sequence starts two kinds at once for one draft, so nothing observable changed — but a future
+  caller that ignores those preconditions would get concurrency the old shape refused.
+- **Pressing the same kind twice is refused by `background.is_active(lock)`,** not by reading
+  `llm_task`. Ticket 08 measured why: the `running` row is written just before the provider call,
+  so a check against `llm_task` is blind in the window after the worker claims a job, and a paid
+  call ran twice there. All four kinds are gated; a kind that minted a fresh key per press would
+  not need one, and none of these four does.
 
 ## Measured (facts this module's next ticket must not re-discover)
 
-- `app/intake/*.py` is **3,545 lines**. The three largest files: `routes_api.py` **750**,
-  `repository.py` **701**, `state.py` **517**. The project's per-file cap is 800, so
-  `routes_api.py` sits at 94% of it with about 50 lines of headroom. A ticket that would push it
-  over stops and reports rather than carving out the smallest function or registering the file as
+- `app/intake/*.py` is **3,571 lines** after ticket 09 (3,545 before). `routes_api.py` went from
+  **750** to **716**; `repository.py` 701 and `state.py` 517 are unchanged. The project's per-file
+  cap is 800, so `routes_api.py` still sits at 90% of it. A ticket that would push it over stops
+  and reports rather than carving out the smallest function or registering the file as
   known-oversized (`workflow.md`, "A boundary escalation is not a menu").
+- **Ticket 09 was written under ratchet pressure and it shows in the shape.** Both
+  `KNOWN_MODULE_SIZES["app/intake"]` and `TEST_LINES_CEILING` went red mid-implementation, and the
+  implementer — correctly forbidden from raising either — compressed its own diff instead: three
+  `_start_*` functions merged into one `_start(kind, …)`, three `_notify_*_done` into one, three
+  status builders into `_job()`. The review checked each merge against the pre-image and found the
+  per-kind stage text, notification wording, status keys and error paths preserved. Recorded
+  because the next reader will find parameterised functions where per-kind ones used to be, and
+  should know that shape came from a number, not from a design.
 - `__init__.py:8` claimed drafts live in a `state.py` dict called `DRAFTS` and vanish on restart.
   No such name exists any more: `state.py:1-7` says every read and write goes through
   `repository.py` into the `intake_draft` table and a restart resumes. The stale line was

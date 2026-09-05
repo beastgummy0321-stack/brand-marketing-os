@@ -14,13 +14,14 @@ os.environ.setdefault("ANTHROPIC_API_KEY", "sk-ant-fake-intake-api-test")
 
 from fastapi.testclient import TestClient  # noqa: E402
 
+import app.background as background_module  # noqa: E402
+import app.intake as intake_module  # noqa: E402
 import app.main as main  # noqa: E402
 import app.shared.web as web  # noqa: E402
 from app import storage  # noqa: E402
 from app.core import interrupts as core_interrupts  # noqa: E402
 from app.core.db import DEV_ORG_ID  # noqa: E402
 from app.intake import ai as intake_ai  # noqa: E402
-from app.intake import routes_api as api  # noqa: E402
 from app.intake import script, state  # noqa: E402
 from app.llm.providers import FakeProvider, ProviderResponse, Usage  # noqa: E402
 
@@ -53,12 +54,27 @@ def _question_response(payload: dict) -> ProviderResponse:
                             usage=Usage(input_tokens=10, output_tokens=10), stop_reason="end_turn")
 
 
+def _seed_llm_task(conn, brand_id: str, *, status: str, rendered_output=None, error=None) -> None:
+    # 比照既有手動 INSERT 寫法，模擬「worker 跑到某個狀態、process 剛重開」（票 09 done-check 3）。
+    from app.core import db as coredb
+    conn.execute(
+        "INSERT INTO llm_task (id, org_id, brand_id, task_type, context_scope_json,"
+        " input_context_ids_json, input_context_hash, knowledge_item_ids_json,"
+        " brand_version, prompt_template_id, prompt_template_version, provider, model,"
+        " status, attempt_no, rendered_output, started_at, error)"
+        " VALUES (%s, %s, %s, 'intake_scan', '{}', '[]', '', '[]', 1, 'p', 'v1', 'seed', 'seed',"
+        " %s, 1, %s, %s, %s)",
+        (coredb.new_id("llm"), DEV_ORG_ID, brand_id, status, rendered_output, coredb.now_utc(), error),
+    )
+    conn.commit()
+
+
 class _Base(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(main.app)
         web.conn.execute("DELETE FROM app_setting")
         web.conn.commit()
-        api._JOBS.clear()
+        intake_module.register(main.app)  # 這個模組自己有一份 schema，要重新掛一次背景 task
         # 隔離環境變數：金鑰只看 DB 設定（沒設＝沒金鑰，跟 test_intake.py 同風格）
         self._envpatch = mock.patch.dict(os.environ, {}, clear=False)
         self._envpatch.start()
@@ -70,7 +86,6 @@ class _Base(unittest.TestCase):
     def tearDown(self):
         intake_ai.PROVIDER = self._orig_provider
         intake_ai.fetch_url = self._orig_fetch
-        api._JOBS.clear()
         self._envpatch.stop()
 
     def _brand_name(self) -> str:
@@ -87,17 +102,12 @@ class _Base(unittest.TestCase):
         self.assertFalse(body["quick"])
         return body["brand_id"]
 
-    def _poll(self, brand_id: str, kind: str, timeout: float = 1.0) -> dict:
-        # paste_fix 的 URL 是 .../paste/fix/status（跟 job kind 字串 "paste_fix" 不同，
-        # 不能直接拼 kind 進路徑）；scan／question 的 URL 段跟 kind 字串本來就一樣。
+    def _poll(self, brand_id: str, kind: str) -> dict:
+        # run_worker(wait=False) 跑到底才回來，不必再輪詢（比照 test_product_scan.py）。
         path_segment = "paste/fix" if kind == "paste_fix" else kind
-        deadline = time.time() + timeout
-        while time.time() < deadline:
-            status = self.client.get(f"/api/intake/brands/{brand_id}/{path_segment}/status").json()["data"]
-            if status["status"] != "running":
-                return status
-            time.sleep(0.05)
-        self.fail("背景任務逾時仍未完成，可能是執行緒沒有真的跑")
+        web.conn.commit()
+        background_module.app().run_worker(wait=False)
+        return self.client.get(f"/api/intake/brands/{brand_id}/{path_segment}/status").json()["data"]
 
 
 # ---------------------------------------------------------------------------
@@ -282,34 +292,18 @@ class ScanBackgroundTest(_Base):
         self.assertIn("初掃失敗", matches[0]["message"])
 
     def test_idempotent_second_start_does_not_restart(self):
-        import threading
+        """票 09：第二次按下去在 worker 撿走第一個工作之前就被 `is_active(lock)` 擋掉
+        （procrastinate 的 `queueing_lock` 這時還在 `todo`），不必再靠假 provider 卡住
+        第一個背景執行緒來製造時序——佇列本身的鎖就是這裡要測的東西。"""
         bid = self._create_full()
-        release = threading.Event()
-
-        class _BlockingProvider(FakeProvider):
-            """卡住第一個背景工作，直到兩個請求都送完。
-
-            原本是卡 `intake_ai.fetch_url`，但 `_create_full()` 的草稿沒有網址，
-            `ai.run_scan` 的抓網址迴圈一次都不會跑（app/intake/ai.py:187），等於完全沒卡到：
-            第一個工作往往在第二個請求送出前就結束，第二個請求就合法地再起一條執行緒，
-            斷言時好時壞。改卡 provider——初掃一定會呼叫它，時序才是確定的。
-            """
-
-            def complete(self, **kwargs):
-                release.wait(timeout=5)
-                return super().complete(**kwargs)
-
-        intake_ai.PROVIDER = _BlockingProvider(response=_fake_response(_SCAN_OK))
-        try:
-            r1 = self.client.post(f"/api/intake/brands/{bid}/scan/start")
-            r2 = self.client.post(f"/api/intake/brands/{bid}/scan/start")
-            self.assertEqual(r1.status_code, 200)
-            self.assertEqual(r2.status_code, 200)
-        finally:
-            release.set()
+        intake_ai.PROVIDER = FakeProvider(response=_fake_response(_SCAN_OK))
+        r1 = self.client.post(f"/api/intake/brands/{bid}/scan/start")
+        r2 = self.client.post(f"/api/intake/brands/{bid}/scan/start")
+        self.assertEqual(r1.status_code, 200)
+        self.assertEqual(r2.status_code, 200)
         status = self._poll(bid, "scan")
         self.assertEqual(status["status"], "done")
-        self.assertEqual(len(intake_ai.PROVIDER.calls), 1)  # 沒有跑出第二個背景執行緒
+        self.assertEqual(len(intake_ai.PROVIDER.calls), 1)  # 沒有排出第二個佇列工作
 
     def test_already_done_is_noop(self):
         bid = self._create_full()
@@ -365,6 +359,27 @@ class ScanBackgroundTest(_Base):
         resp2 = self.client.post(f"/api/intake/brands/{bid}/scan/products",
                                  json={"names": ["虛構回甘烏龍"]})
         self.assertEqual(resp2.json()["created_count"], 0)
+
+    def test_status_survives_a_restart_and_reports_terminal_states_honestly(self):
+        # 票 09 done-check 3：狀態讀 llm_task，不是行程內 dict；矛盾檢查：不能因為「有列
+        # 就是還在跑」永遠回 running——running／done／failed 都要誠實回報。
+        bid = self._create_full()
+
+        def status() -> dict:
+            return self.client.get(f"/api/intake/brands/{bid}/scan/status").json()["data"]
+
+        def reseed(**kwargs):
+            web.conn.execute("DELETE FROM llm_task WHERE brand_id = %s", (bid,))
+            web.conn.commit()
+            _seed_llm_task(web.conn, bid, **kwargs)
+
+        reseed(status="running")
+        self.assertEqual(status()["status"], "running")
+        reseed(status="succeeded", rendered_output=_SCAN_OK)
+        self.assertEqual(status()["status"], "done")
+        reseed(status="failed", error="模擬失敗")
+        self.assertEqual(status()["status"], "failed")
+        self.assertEqual(status()["error"], "模擬失敗")
 
 
 # ---------------------------------------------------------------------------

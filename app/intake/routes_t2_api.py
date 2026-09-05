@@ -142,7 +142,7 @@ async def truth_card_confirm(request: Request, brand_id: str):
 
     if not ir.list_pending_items(web.conn, brand_id, draft["id"]):
         state.complete_draft(draft)
-        persona_generation.start_generation(web.conn, brand_id)
+        persona_generation.start_generation(actor.org_id, brand_id)
     return Response(status_code=204)
 
 
@@ -173,7 +173,7 @@ async def persona_update(request: Request, brand_id: str, persona_id: str):
 def persona_regenerate(request: Request, brand_id: str):
     actor = require_actor(request)
     require_brand(brand_id, actor)
-    persona_generation.start_generation(web.conn, brand_id)
+    persona_generation.start_generation(actor.org_id, brand_id)
     return JSONResponse(
         {"generation": persona_generation.generation_state(brand_id)}, status_code=202,
     )

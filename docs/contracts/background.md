@@ -28,7 +28,8 @@ enqueue(task_name: str, *, org_id: str, lock: str, **kwargs) -> bool
     # Defer one job. False (never an exception) when a job with this queueing_lock is already
     # sitting in `todo`. org_id travels as a task argument, not as a queue column (ADR 0038).
     # Callers: app/schedule/routes.py's three POST endpoints, app/brand_web's three
-    # (customer voice, product research, brand report), this module's own tests.
+    # (customer voice, product research, brand report), app/intake's four (scan, question,
+    # paste-fix, persona), this module's own tests.
 
 is_active(lock: str) -> bool
     # True while a job carrying this queueing_lock is still `todo` or `doing`. The signal a
@@ -38,7 +39,8 @@ is_active(lock: str) -> bool
     # procrastinate 3.9.0's own `JobManager.list_jobs(queueing_lock=…, status=…)`; the
     # `queueing_lock` column is never cleared on finish (`procrastinate_finish_job_v1` touches
     # only status/abort_requested/attempts), so a finished lock reads False.
-    # Callers: app/brand_web/routes_products.py, app/brand_web/routes_report_api.py.
+    # Callers: app/brand_web/routes_products.py, app/brand_web/routes_report_api.py,
+    # app/intake/routes_api.py, app/intake/persona_generation.py.
 ```
 
 Every registered task takes `org_id` as a parameter — held by

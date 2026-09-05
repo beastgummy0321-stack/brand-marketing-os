@@ -9,13 +9,35 @@ state.py 的 DRAFTS dict 裡重啟即消失。三句都已經不成立，寫契�
   output_contract_block、build_prompt）以及 card_test.py 的取樣資料；它自己的檔頭也還沒更新。
 - 草稿每次讀寫都經 repository.py 落地 intake_draft 表，重啟可續接（state.py:1-7）。DRAFTS
   這個名字已經不存在。
+
+票 09：四種背景工作搬上 `app.background` 佇列；`register()` 比照 `app/brand_web/__init__.py`。
 """
 
+_routes_mounted = False
 
-def register(app) -> None:
-    """掛本模組所有路由（票 03-1，機械式搬移自 app/main.py）。"""
-    from app.intake.routes import router as intake_router
-    from app.intake.routes_api import router as intake_api_router
 
-    app.include_router(intake_router)
-    app.include_router(intake_api_router)
+def register(app) -> None:  # 掛路由（票 03-1）＋掛四個背景 task（票 09）
+    global _routes_mounted
+    if not _routes_mounted:
+        from app.intake.routes import router as intake_router
+        from app.intake.routes_api import router as intake_api_router
+
+        app.include_router(intake_router)
+        app.include_router(intake_api_router)
+        _routes_mounted = True
+
+    from app.background import app as background_app
+    from app.intake.persona_generation import background_intake_persona
+    from app.intake.routes_api import (
+        background_intake_paste_fix,
+        background_intake_question,
+        background_intake_scan,
+    )
+
+    a = background_app()  # 四支簽章相同，可以迴圈註冊（跟 brand_web 三支簽章互異、逐支手寫不同）
+    for name, func in (("background.intake_scan", background_intake_scan),
+                       ("background.intake_question", background_intake_question),
+                       ("background.intake_paste_fix", background_intake_paste_fix),
+                       ("background.intake_persona", background_intake_persona)):
+        if name not in a.tasks:
+            a.task(name=name)(func)

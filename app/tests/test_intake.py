@@ -8,12 +8,13 @@
 import io
 import json
 import os
-import time
 import unittest
 from unittest import mock
 
 from fastapi.testclient import TestClient
 
+import app.background as background_module
+import app.intake as intake_module
 import app.main as main
 import app.shared.web as web
 from app import storage
@@ -42,6 +43,7 @@ class IntakeWizardTest(unittest.TestCase):
         self.client = TestClient(main.app)
         web.conn.execute("DELETE FROM app_setting")
         web.conn.commit()
+        intake_module.register(main.app)  # 這個模組自己有一份 schema，要重新掛一次背景 task
         # 隔離環境變數：金鑰／模型只看 DB 設定（沒設＝沒金鑰、預設模型 opus）
         self._envpatch = mock.patch.dict(os.environ, {}, clear=False)
         self._envpatch.start()
@@ -75,17 +77,16 @@ class IntakeWizardTest(unittest.TestCase):
         return resp.json()["brand_id"]
 
     def _run_scan(self, brand_id: str, in_tok: int = 100, out_tok: int = 50):
+        # 票 09：初掃搬上 app.background 佇列，run_worker(wait=False) 跑到底才回來，
+        # 不必再輪詢等行程內背景執行緒（比照 test_intake_api.py／test_product_scan.py）。
         intake_ai.PROVIDER = FakeProvider(response=_fake_response(
             json.dumps({"impressions": script.SCAN_IMPRESSIONS}, ensure_ascii=False),
             in_tok=in_tok, out_tok=out_tok))
         resp = self.client.post(f"/api/intake/brands/{brand_id}/scan/start")
         assert resp.status_code == 200
-        for _ in range(100):
-            status = self.client.get(f"/api/intake/brands/{brand_id}/scan/status")
-            if status.json()["data"]["status"] != "running":
-                return status
-            time.sleep(0.05)
-        self.fail("初掃背景任務逾時")
+        web.conn.commit()
+        background_module.app().run_worker(wait=False)
+        return self.client.get(f"/api/intake/brands/{brand_id}/scan/status")
 
     # -- 草稿持久化 ----------------------------------------------------------
 

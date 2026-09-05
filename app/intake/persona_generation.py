@@ -1,16 +1,21 @@
-"""真相卡確認後的人物誌生成；資料存取留在 brand_intelligence.personas。"""
+"""真相卡確認後的人物誌生成；資料存取留在 brand_intelligence.personas。
 
-from datetime import UTC, datetime
+票 09：搬離行程內狀態表＋背景執行緒，改走 `app.background` 佇列（範本同 routes_report_api.py）。
+"""
 
+from app.background import enqueue as background_enqueue
+from app.background import is_active as background_is_active
 from app.brand_intelligence import background_job, personas
 from app.brand_intelligence import repository as repo
+from app.core.db import connection as core_db_connection
 from app.core.db import new_id
 from app.llm import context_compiler, gateway, providers
+from app.shared import web
 
 PROVIDER = providers.AnthropicProvider()
-JOBS = background_job.JobRegistry()
 _USUAL_RANGE = "30 到 60 秒"
 _PARSE_FAIL = "AI 有回覆，但人物誌格式不完整，可以再試一次。"
+_TASK_TYPE = "intake_persona"
 
 _SYSTEM = (
     "你是品牌研究員。依已確認的品牌資料與顧客原話，整理最值得優先接觸的典型客人。"
@@ -114,11 +119,36 @@ def generate(conn, brand_id: str) -> tuple:
     return True, personas.replace_personas(conn, brand_id, normalized, org_id=brand["org_id"])
 
 
-def generation_state(brand_id: str) -> dict:
-    return JOBS.get(brand_id, {
-        "status": "idle", "stage": "", "started_at": None,
-        "usual_range_text": "", "error": None,
-    })
+def _latest_task_row(brand_id: str) -> dict | None:
+    row = web.conn.execute(
+        "SELECT * FROM llm_task WHERE brand_id = %s AND task_type = %s "
+        "ORDER BY started_at DESC LIMIT 1",
+        (brand_id, _TASK_TYPE),
+    ).fetchone()
+    return dict(row) if row is not None else None
+
+
+def _state(status: str, started_at, error: str | None = None) -> dict:
+    stage = {"running": "整理人物誌", "done": "完成", "failed": "整理人物誌"}.get(status, "")
+    return {"status": status, "stage": stage, "started_at": started_at,
+            "usual_range_text": _USUAL_RANGE if status != "idle" else "", "error": error}
+
+
+def generation_state(brand_id: str) -> dict:  # 讀 llm_task 取代 JOBS dict；succeeded 列重驗
+    lock = f"intake_persona:{brand_id}"
+    row = _latest_task_row(brand_id)
+    if row is None:
+        return _state("running", None) if background_is_active(lock) else _state("idle", None)
+    started_at = row["started_at"].isoformat() if row["started_at"] else None
+    if row["status"] == "running":
+        return _state("running", started_at)
+    if row["status"] == "succeeded":
+        if _normalize(row["structured_output_json"]) is not None:
+            if background_is_active(lock):
+                return _state("running", started_at)
+            return _state("done", started_at)
+        return _state("failed", started_at, _PARSE_FAIL)
+    return _state("failed", started_at, row["error"])
 
 
 def _notify(conn, brand_id: str, message: str) -> None:
@@ -128,36 +158,25 @@ def _notify(conn, brand_id: str, message: str) -> None:
     )
 
 
-def _run_job(conn, brand_id: str, brand_name: str) -> None:
-    try:
-        ok, result = generate(conn, brand_id)
-    except Exception as exc:  # noqa: BLE001 - 背景執行緒最後一道誠實狀態防線
-        ok, result = False, f"背景執行發生未預期錯誤：{exc}"
-    started_at = generation_state(brand_id).get("started_at")
-    if ok:
-        _notify(conn, brand_id, f"「{brand_name}」人物誌好了")
-        JOBS.set(brand_id, {
-            "status": "done", "stage": "完成", "started_at": started_at,
-            "usual_range_text": _USUAL_RANGE, "error": None,
-        })
-    else:
-        _notify(conn, brand_id, f"「{brand_name}」人物誌失敗，可重試")
-        JOBS.set(brand_id, {
-            "status": "failed", "stage": "整理人物誌", "started_at": started_at,
-            "usual_range_text": _USUAL_RANGE, "error": str(result),
-        })
+def background_intake_persona(org_id: str, brand_id: str) -> None:
+    with core_db_connection() as conn:
+        brand = repo.get_brand(conn, brand_id)
+        brand_name = brand["name"] if brand else brand_id
+        try:
+            ok, _result = generate(conn, brand_id)
+        except Exception:  # noqa: BLE001 — worker 最後一道防線，不能讓例外憑空消失
+            ok = False
+        if ok:
+            _notify(conn, brand_id, f"「{brand_name}」人物誌好了")
+        else:
+            _notify(conn, brand_id, f"「{brand_name}」人物誌失敗，可重試")
 
 
-def start_generation(conn, brand_id: str) -> None:
-    brand = repo.get_brand(conn, brand_id)
+def start_generation(org_id: str, brand_id: str) -> None:
+    brand = repo.get_brand(web.conn, brand_id)
     if brand is None:
         raise ValueError(f"找不到品牌：{brand_id}")
-    JOBS.start(
-        brand_id,
-        {
-            "status": "running", "stage": "整理人物誌",
-            "started_at": datetime.now(UTC).isoformat(),
-            "usual_range_text": _USUAL_RANGE, "error": None, "brand_id": brand_id,
-        },
-        _run_job, (conn, brand_id, brand["name"]), idempotent=True,
-    )
+    lock = f"intake_persona:{brand_id}"
+    if background_is_active(lock):
+        return  # 已經在跑，第二次按下去是 no-op（原本行程內狀態表的 idempotent=True 同一個行為）
+    background_enqueue("background.intake_persona", org_id=org_id, lock=lock, brand_id=brand_id)
