@@ -129,6 +129,16 @@ _Avoid_: 綁定表、mapping、`bound_external_ids`（那是 T3 之前住在 JSO
 給開發者與 AI，不對使用者顯示。（曾有一份給使用者看的白話版 `app/dashboard/glossary.py`，
 已刪除；畫面上的用字規則現在由 ADR 0051 第 9–11 條管。）
 
+## 可用性演練（drill）：陌生人走完整條迴圈
+
+方法與紀錄在 `docs/drills/README.md`——一個角色一個 subagent，只准開瀏覽器看畫面，不准讀
+原始碼、不准查資料庫、不准問人；根因是操作者的事，角色只報症狀。跑起來要用
+`scripts/drill/`：`fake_meta.py` 是 Meta 的替身（只換掉最外層那道網路呼叫，一個角色一個
+廣告帳戶、靠貼進去的權杖分身分），`serve.py` 用它啟動真的後端，狀態檔寫在 `.scratch/drill/`。
+2026-09-06 那一輪三個角色的產出，就是這一輪修掉的五條 issue。
+與 `app/tools/simulate_meta_spend.py` 的分工：那支是給開發者自己種花費資料的最短路徑，
+演練這一套是給「不知道按鈕在哪的人」用的完整環境。
+
 ## 「決策 NNNN」不是 ADR，而且已經查不到了（2026-09-03 查證）
 
 程式註解裡有 **84 處**寫「決策 NNNN」（36 個檔，含 production、測試與前端
