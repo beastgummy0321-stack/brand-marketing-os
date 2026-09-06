@@ -4,8 +4,10 @@ import {
   fetchDiagnosis,
   runDiagnosis,
   type Diagnosis,
+  type DiagnosisCheckableNumbers,
   type DiagnosisSuggestion,
 } from "@/lib/scheduleApi";
+import { formatCurrency } from "@/lib/format";
 
 /** 票 02（T6c，02-diagnosis-on-cockpit.md）：成效判讀——長在既有「素材座標成效」區塊裡，
  * 不另開第三個長區塊（前端紅線 ADR 0051／U3）。票面原文：「標題列右側加一顆『跑一次判讀』，
@@ -192,6 +194,13 @@ function DiagnosisReadout({ diagnosis, panel }: { diagnosis: Diagnosis; panel: D
   );
 }
 
+/** issue diagnosis-lacks-checkable-numbers：一條建議底下那行可核對的數字。保守 ROAS 是
+ * 分母含未追蹤花費的那一個（`roas_conservative`），跟座標成效表同一欄，兩邊對得起來。 */
+function formatCheckable(n: DiagnosisCheckableNumbers): string {
+  const roas = n.roas_conservative === null ? "ROAS 未追蹤" : `保守 ROAS ${n.roas_conservative.toFixed(2)}x`;
+  return `${formatCurrency(n.spend)}・${n.ad_count} 則廣告・${roas}（追蹤覆蓋 ${Math.round(n.roas_coverage * 100)}%）`;
+}
+
 function SuggestionCard({
   suggestion, adopted, adopting, onAdopt,
 }: {
@@ -204,6 +213,18 @@ function SuggestionCard({
     <div className="flex flex-col gap-2 rounded-md border border-border bg-card p-3">
       <p className="text-sm font-medium text-foreground">{suggestion.headline}</p>
       <p className="text-xs text-muted-foreground">{suggestion.evidence}</p>
+      {suggestion.numbers && (
+        <p className="text-xs text-muted-foreground">
+          這一組：{formatCheckable(suggestion.numbers)}
+        </p>
+      )}
+      {(suggestion.compared_with ?? []).length > 0 && (
+        <p className="text-xs text-muted-foreground">
+          對照：{(suggestion.compared_with ?? [])
+            .map((peer) => `${peer.label} ${formatCheckable(peer)}`)
+            .join("｜")}
+        </p>
+      )}
       {suggestion.agreed_by.length >= 2 && (
         <span className="w-fit rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
           兩個判讀器都這麼說

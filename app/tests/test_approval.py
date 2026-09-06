@@ -334,6 +334,20 @@ class ApprovalApiContractTest(unittest.TestCase):
         self.assertEqual(approval_after["approved_at"], approval_before["approved_at"])
         self.assertEqual(approval_after["approved_amount"], approval_before["approved_amount"])
 
+    def test_spend_to_date_counts_only_the_campaigns_this_tree_is_bound_to(self):
+        """金額：實際花費是「這棵樹的」，不是「這個廣告帳戶的」（issue
+        approval-spend-counts-other-campaigns，2026-09-06 演練在兩個組織各自重現）。
+        同一個帳戶裡另一條活動（上一期的、或手動建的）當天花的錢，一毛都不准進
+        `spend_to_date`——那個數字是 ADR 0040 煞車的比較對象，多算就是假超支。"""
+        today = coresettings.today_for_org(web.conn, org_id=coredb.DEV_ORG_ID)
+        self._succeed_plan_and_tree()
+        self._approve()
+        account_id = self._bind_one_campaign("活動一")
+        self._seed_spend(account_id, "camp-1", today, spend=500.0)  # 這棵樹綁到的
+        self._seed_spend(account_id, "camp-previous-period", today, spend=1000.0)  # 別人的
+        approval = self._get().json()["tree"]["approval"]
+        self.assertEqual(approval["spend_to_date"], 500.0)
+
     def test_revoke_survives_and_respects_the_tenant_boundary(self):
         """item 6/7：撤回之後 null、列留著（`revoked_at`），另一個組織不能撤回這一列。"""
         self._succeed_plan_and_tree()

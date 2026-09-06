@@ -44,6 +44,11 @@ class DashboardJobsBoundaryTest(unittest.TestCase):
         _seed_running_queue_job(DEV_ORG_ID, brand_id, "customer_voice_extraction", {"job_key": "cvjob_test"})
         _seed_running_queue_job(DEV_ORG_ID, brand_id, "brand_report", {})
         _seed_running_queue_job(DEV_ORG_ID, brand_id, "intake_persona", {"brand_id": brand_id})
+        # issue jobs-bell-blind-to-schedule-jobs：產品裡最慢的三個工作，2026-09-06 演練前
+        # 一個都不在這份聚合裡——按下「產素材」的同時鈴鐺寫「目前沒有進行中的背景工作」。
+        _seed_running_queue_job(DEV_ORG_ID, brand_id, "schedule_plan", {"brand_id": brand_id})
+        _seed_running_queue_job(DEV_ORG_ID, brand_id, "schedule_tree", {"brand_id": brand_id})
+        _seed_running_queue_job(DEV_ORG_ID, brand_id, "schedule_creative", {"brand_id": brand_id})
 
         response = self.client.get("/api/jobs/active")
 
@@ -54,7 +59,8 @@ class DashboardJobsBoundaryTest(unittest.TestCase):
         # 回來」看不出來哪個 kind 不見了。
         self.assertEqual(
             {job["kind"] for job in jobs},
-            {"scan", "product_research", "library_convert", "brand_report", "persona"},
+            {"scan", "product_research", "library_convert", "brand_report", "persona",
+             "schedule_plan", "schedule_tree", "schedule_creative"},
         )
         self.assertTrue(all(job["status"] in {"running", "waiting"} for job in jobs))
         self.assertTrue(all(job["brand_name"] == "進行中工作測試品牌" for job in jobs))
@@ -65,6 +71,7 @@ class DashboardJobsBoundaryTest(unittest.TestCase):
                 f"/app/brands/{brand_id}/products/prd_test",
                 f"/app/brands/{brand_id}/library",
                 f"/app/brands/{brand_id}/report",
+                f"/app/brands/{brand_id}/schedule",
             },
         )
         expected_keys = {"brand_id", "brand_name", "kind", "status", "stage", "started_at", "action_url"}
@@ -75,6 +82,8 @@ class DashboardJobsBoundaryTest(unittest.TestCase):
         self.assertTrue(next(job for job in jobs if job["kind"] == "library_convert")["started_at"])
         self.assertEqual(next(job for job in jobs if job["kind"] == "brand_report")["stage"], "正在整理五章")
         self.assertEqual(next(job for job in jobs if job["kind"] == "persona")["stage"], "整理人物誌")
+        self.assertEqual(
+            next(job for job in jobs if job["kind"] == "schedule_creative")["stage"], "產素材中")
 
 
 class DashboardJobsTenantIsolationTest(unittest.TestCase):

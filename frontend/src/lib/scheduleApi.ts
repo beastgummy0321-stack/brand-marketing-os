@@ -486,7 +486,21 @@ export interface DiagnosisSuggestion {
   headline: string;
   evidence: string;
   agreed_by: string[];
-  rule_type: "angle" | "audience" | "budget_split";
+  /** issue diagnosis-lacks-checkable-numbers：程式從同一份壓縮輸入抄過來的可核對數字
+   * （不是 AI 講的）。`numbers` 是這條建議自己那一組，`compared_with` 是同一維度花費前三
+   * 名的對照組。2026-09-06 之前跑的舊判讀沒有這兩個欄位，畫面要容得下 undefined。 */
+  currency: string | null;
+  numbers: DiagnosisCheckableNumbers | null;
+  compared_with: DiagnosisCheckableNumbers[];
+}
+
+export interface DiagnosisCheckableNumbers {
+  label: string;
+  spend: number;
+  ad_count: number;
+  roas: number | null;
+  roas_conservative: number | null;
+  roas_coverage: number;
 }
 
 export interface DiagnosisWindow {

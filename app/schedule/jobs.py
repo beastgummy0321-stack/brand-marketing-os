@@ -336,6 +336,9 @@ def schedule_diagnosis(org_id: str, brand_id: str) -> None:
         performance = performance_mod.brand_creative_performance(conn, org_id, brand_id)
         breakeven = diagnosis_mod.breakeven_roas(conn, org_id, brand_id)
         compressed = diagnosis_mod.compress(performance, breakeven)
+        # issue diagnosis-lacks-checkable-numbers：核准活動樹那一步講過的提醒，判讀這一步也
+        # 要看得到——否則系統會一邊提醒「不以點擊率單獨判斷」，一邊推薦一條只看 ROAS 的建議。
+        reminders = diagnosis_mod.reminders_text(diagnosis_mod.tree_reminders(conn, brand_id))
 
         coordinates = repository.list_coordinates(conn, org_id, brand_id)
         label_to_key = {(c["dimension"], c["label"]): c["key"] for c in coordinates}
@@ -352,7 +355,8 @@ def schedule_diagnosis(org_id: str, brand_id: str) -> None:
         for lens in diagnosis_mod.LENSES:
             prompt = "\n\n".join(
                 section for section in
-                (methodology_result.text, compressed, diagnosis_mod.role_text(lens)) if section
+                (methodology_result.text, compressed, reminders,
+                 diagnosis_mod.role_text(lens)) if section
             )
             context = gateway.TaskContext(
                 context_scope={"brand_id": brand_id, "round_id": round_id, "lens": lens},
@@ -373,7 +377,13 @@ def schedule_diagnosis(org_id: str, brand_id: str) -> None:
             raw_outputs.extend(valid)
 
         assert row is not None  # diagnosis_mod.LENSES 非空，迴圈至少跑過一次，這裡必然有值
-        converged = diagnosis_mod.converge(raw_outputs)
+        # issue diagnosis-lacks-checkable-numbers：收斂完由程式補上可核對的數字（這一組的
+        # 花費／廣告數／ROAS＋同維度前三名對照組），在寫進 structured_output_json 之前補，
+        # 讓那一輪的數字跟那一輪的建議凍在一起——之後月份一換，讀回來的數字才不會偷偷變成
+        # 另一個月的（「追溯改寫歷史」那一族）。
+        converged = diagnosis_mod.attach_checkable_numbers(
+            diagnosis_mod.converge(raw_outputs), performance
+        )
         # 決定 8：收斂後的前 5 條寫回**同一輪第三列**（budget，三個 lens 固定跑的最後一個）
         # 的 structured_output_json——不另建表，`round_id` 相同即可認親。
         conn.execute(

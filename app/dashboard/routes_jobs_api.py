@@ -20,7 +20,7 @@ from app.shared.web import require_actor
 
 router = APIRouter()
 
-# task_type -> (kind, 固定顯示的 stage 文字)。七個 kind 逐步進度全部放棄（票 08／09 明文
+# task_type -> (kind, 固定顯示的 stage 文字)。逐步進度全部放棄（票 08／09 明文
 # 決定），running 一律回同一句固定字串，跟各自 POST 端點剛送出時的初始 stage 文字一致，
 # 不是隨便挑的佔位字。
 _QUEUE_JOB_KINDS = {
@@ -31,11 +31,18 @@ _QUEUE_JOB_KINDS = {
     "intake_question": ("question", "正在準備下一題"),
     "intake_paste_fix": ("paste_fix", "正在請 AI 整理格式"),
     "intake_persona": ("persona", "整理人物誌"),
+    # issue jobs-bell-blind-to-schedule-jobs（2026-09-06 演練）：產品裡最慢的三個工作
+    # （實測出方案 43–53 秒、展開 46–59 秒、產素材 73–110 秒）本來一個都不在這份對照表裡，
+    # 排程頁自己有行內進度，全站這顆鈴鐺對它們是瞎的——按下「產素材」的同時，右上角寫著
+    # 「目前沒有進行中的背景工作」。stage 文字跟排程頁自己那句等待字對齊，不另編一句。
+    "schedule_plan": ("schedule_plan", "出方案中"),
+    "schedule_tree": ("schedule_tree", "展開活動樹中"),
+    "schedule_creative": ("schedule_creative", "產素材中"),
 }
 
 
 def _queue_active_jobs(conn) -> list[dict]:
-    """回傳七個 kind 目前 running 的工作，直接讀 `llm_task`（票 08／09）——
+    """回傳這十個 kind 目前 running 的工作，直接讀 `llm_task`（票 08／09）——
     `docs/contracts/background.md`：這張表沒有專屬模組，任何模組都能讀（已有
     `app/schedule/state.py`／`app/brand_web/routes_report_api.py` 先例）。"""
     rows = conn.execute(
@@ -54,6 +61,8 @@ def _queue_active_jobs(conn) -> list[dict]:
             action_url = f"/app/brands/{brand_id}/library"
         elif kind in ("scan", "question", "paste_fix"):
             action_url = f"/app/brands/{brand_id}/intake"
+        elif kind in ("schedule_plan", "schedule_tree", "schedule_creative"):
+            action_url = f"/app/brands/{brand_id}/schedule"
         else:
             action_url = f"/app/brands/{brand_id}/report"
         jobs.append({

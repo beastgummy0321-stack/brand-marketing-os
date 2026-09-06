@@ -1313,7 +1313,14 @@ class CoordinateDimensionSyncTest(unittest.TestCase):
 #      量對了，round 2 沒有再動這一筆。
 #   4. 本段理由註解自己（含上面「這道棘輪在落地前就已經在漏」那一段，done-check 5 點名的
 #      新要求）。
-TEST_LINES_CEILING = 19980  # 票 02（T6c 成效判讀上畫面）：
+TEST_LINES_CEILING = 20101  # 2026-09-06 演練四條 issue（route B，一次收）：
+# `test_approval.py` 一支（**金額**：實際花費只算這棵樹綁到的活動，同帳戶別條活動的錢不進
+# `spend_to_date`）、`test_dashboard_jobs_boundary.py` 既有那支多驗三個排程 kind（**API 契約**）、
+# `test_llm_gateway.py` 既有 compile 那支多驗【本期要測的】自己一段（**資料正確性**：行動
+# 不准混進【限制】）、`test_schedule_diagnosis.py` 新增 `CheckableNumbersTest` 一支
+# （**資料正確性**：可核對數字與對照組同幣別）＋既有 `BreakevenFallbackTest` 多驗第②層
+# （產品經濟數字）。19980 → 20088，量到的數字，不留餘裕。
+# 前一次是 19980——票 02（T6c 成效判讀上畫面）：
 # `test_schedule_diagnosis.py` 加一支（票面 done-check 5 明文，只准一支）：
 # `AdoptSuggestionTest`（**API 契約／資料正確性**：呼叫「採用」路由兩次，寫出來的那列
 # `rule`——`rule_type` 落在 `SOFT_REJECT_RULE_TYPES`、`severity == "soft"`、
@@ -1486,7 +1493,9 @@ KNOWN_MODULE_SIZES = {
                              # `llm_task` 讀狀態的函式；`__init__.py` 的 register() 多註冊三支
                              # 任務。刪的比加的少，淨增。前一次是 2091——2026-08-30 刪失效規則卡
                              # （小債）：autonomy 那張卡的兩處專屬驗證跟著走
-    "app/core": 1791,  # 票 01（T6c 成效判讀）：`rule_cards.py` 的 `CARDS` 加一筆
+    "app/core": 1800,  # 2026-09-06 issue adopted-advice-can-invert：`vocab.py` 多一個 rule_type（`experiment`
+                  # ＝採用一條成效判讀寫出來的那一列，行動不是限制）＋`EXPERIMENT_RULE_TYPE`
+                  # 常數與理由註解，1791→1800。量到的數字，不留餘裕。前一次是 1791——票 01（T6c 成效判讀）：`rule_cards.py` 的 `CARDS` 加一筆
                         # `gross_margin`（決定 1b：打平線用的毛利率，default 0.70，不必
                         # migration）。量到的數字，不留餘裕。前一次是 1775——
                         # 上雲債 route B（codex_cli 只准 local）：`config.py` 多一張
@@ -1550,7 +1559,9 @@ KNOWN_MODULE_SIZES = {
                           # 缺陷 1：intake_question 改走強制工具結構化輸出，新增
                           # _QUESTION_TOOL／_CHOICE_SCHEMA schema（散文裡的 JSON 格式
                           # 說明同時刪掉，仍淨增）。前一次是 3548
-    "app/llm": 1482,  # 票 S2：providers.py 的 TASK_TYPE_LABELS／TASK_DEFAULTS 各補一行
+    "app/llm": 1498,  # 2026-09-06 issue adopted-advice-can-invert：`context_compiler.py` 把規則
+                  # 拆成【限制】與【本期要測的】兩段（含理由註解），1482→1498。量到的數字，
+                  # 不留餘裕。前一次是 1482——票 S2：providers.py 的 TASK_TYPE_LABELS／TASK_DEFAULTS 各補一行
                        # "onboarding_read"（跟既有三個排程任務同一組 thinking="high"，理由見
                        # `app/llm/providers.py` 該行註解），淨增 6 行。前一次的凍結值 1619
                        # 早在這張票之前就已經高過真實行數——2026-08-30 票 04（commit
@@ -1636,7 +1647,9 @@ KNOWN_MODULE_SIZES = {
     "app/orders": 1423,  # 票 12：channel_revenue 一張表取代三張（刪掉藥局專屬那一整組
                           # 之後仍淨增）——官網帳本寫入路徑、channel_revenue_summary()、
                           # 通用手動登錄（含「官網不能手動登錄」那道錢的守門）
-    "app/schedule": 3709,  # 票 02（T6c 成效判讀上畫面）：`diagnosis.py`
+    "app/schedule": 3853,  # 2026-09-06 演練三條 issue：`tree_approval.py` 實際花費逐實體篩選、
+                  # `diagnosis.py` 打平線第②層＋可核對數字＋活動樹提醒進 prompt、`jobs.py`
+                  # 接線，3709→3853。量到的數字，不留餘裕。前一次是 3709——票 02（T6c 成效判讀上畫面）：`diagnosis.py`
                             # 加 `_round_result()`／`latest_round()`／`adopt_content()` 三支——GET
                             # 回應與「採用」路由共用同一份「找最新一輪、抓 budget lens 那列」的
                             # 讀法，不重複寫一次；`routes.py` 加 `AdoptRequest`／

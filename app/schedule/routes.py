@@ -52,7 +52,7 @@ import app.shared.web as web
 from app.background import enqueue as background_enqueue
 from app.brand_intelligence import repository as bi_repo
 from app.core import approval as approval_mod
-from app.core import rule_cards
+from app.core import rule_cards, vocab
 from app.llm import gateway
 from app.schedule import binding as binding_mod
 from app.schedule import creative as creative_mod
@@ -524,13 +524,16 @@ def _run_diagnosis_adopt(conn, brand_id: str, actor, body: "AdoptRequest") -> di
     第二組裁決）。`source_reference_id` 固定傳 `None`：那一欄的 FK 指向 `source_reference`，
     `llm_task.id` 會違反約束（plan review 實跑 SQL 證明），來源改寫進 `diagnosis.adopt_content()`
     組出的文字。同一輪同一條重複採用只回既有那列（先查再寫，比照既有 accept 類端點的冪等寫法）
-    ——查詢鍵是 `rule_type` ＋ 這段內文本身，兩者都由同一條建議、同一個 `round_date` 決定性算出，
+    ——查詢鍵是 `rule_type` ＋ 這段內文本身，內文由同一條建議、同一個 `round_date` 決定性算出，
     同一條建議不會算出兩種不同的內文。"""
     round_date, suggestions = diagnosis_mod.latest_round(conn, brand_id)
     if round_date is None or not (0 <= body.suggestion_index < len(suggestions)):
         raise web.ApiError(400, "suggestion_not_found", SUGGESTION_NOT_FOUND_MESSAGE)
     suggestion = suggestions[body.suggestion_index]
-    rule_type = suggestion["rule_type"]
+    # issue adopted-advice-can-invert（2026-09-06 演練）：採用一條判讀寫出來的是「這一期要
+    # 去做的實驗」，不是「不准做的事」，所以固定寫 EXPERIMENT_RULE_TYPE，不再按維度借用
+    # 角度／受眾的抽屜（原本鉤子的結論會被存成 angle，下一次 prompt 當角度限制讀）。
+    rule_type = vocab.EXPERIMENT_RULE_TYPE
     content = diagnosis_mod.adopt_content(suggestion, round_date)
 
     existing = next(

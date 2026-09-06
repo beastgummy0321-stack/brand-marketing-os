@@ -98,7 +98,16 @@ def _approval_overspend(conn, org_id: str, brand_id: str, tree: dict, approval_r
         summary = meta_repo.spend_summary(
             conn, org_id, account_ids, window_start, window_end, level="campaign",
         )
-        spend_to_date = summary["total"]["spend"]
+        # 只加總「這棵樹綁到的那幾條活動」。`summary["total"]` 是整個廣告帳戶的總計：同一個
+        # 帳戶裡上一期的活動、手動建的活動，全都會被算成這棵樹的實際花費（2026-09-06 演練
+        # 在兩個組織各自重現：第二期核准當天一毛未花，畫面卻寫實際花費 1,000／3,000，那是
+        # 第一期那條活動的錢）。ADR 0040 的煞車比較的就是這個數字，多算＝假超支、少算＝假
+        # 省錢，兩個方向都錯。篩層級（下面那段 level）擋的是「同一筆錢算三遍」，篩實體擋的
+        # 是「別人的錢算成我的」，兩件事都要做。逐實體加總不另外打一次 DB：`entities` 就是
+        # 同一次查詢已經按 entity_id 分好組的結果。
+        spend_to_date = round(
+            sum(e["spend"] for e in summary["entities"] if e["entity_id"] in bound_ids), 2
+        )
 
     return {
         "max_daily_amount": max_daily_amount,

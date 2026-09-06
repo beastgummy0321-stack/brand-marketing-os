@@ -12,7 +12,7 @@ from unittest import mock
 import anthropic
 
 from app.brand_intelligence import repository as repo
-from app.core import db, rule_cards
+from app.core import db, rule_cards, vocab
 from app.core import settings as coresettings
 from app.llm import context_compiler, gateway, pricing, providers
 from app.llm.providers import (
@@ -400,6 +400,11 @@ class ContextCompilerTest(unittest.TestCase):
             self.conn, brand_b["id"], claim_text="B牌獨有機密宣稱", claim_type="approved", actor="小陳",
         )
 
+        repo.create_rule(
+            self.conn, brand_a["id"], rule_type=vocab.EXPERIMENT_RULE_TYPE,
+            content="A牌要測的實驗內容", severity="soft", actor="小陳",
+        )
+
         text, knowledge_item_ids, brand_version, product_version = context_compiler.compile(
             self.conn, brand_a["id"]
         )
@@ -419,6 +424,12 @@ class ContextCompilerTest(unittest.TestCase):
 
         # dead-code-sweep 票 04 刪了學習／猜想兩段之後，其餘段落標題不變（回歸鐵條）。
         self.assertIn("【限制】規則", text)
+        # issue adopted-advice-can-invert：採用一條成效判讀寫出來的規則是「這一期要去做的
+        # 事」，必須自己一段，不准混進【限制】——混在一起時模型會把「去測試 X」讀成「先不
+        # 要用 X」（2026-09-06 演練，三個角色反了一個）。
+        self.assertIn("【本期要測的】", text)
+        self.assertIn("A牌要測的實驗內容", text)
+        self.assertNotIn("A牌要測的實驗內容", text.split("【本期要測的】")[0])
         self.assertIn("【可以講】宣稱", text)
         self.assertIn("【事實】品牌事實", text)
         self.assertNotIn("已驗證的學習", text)

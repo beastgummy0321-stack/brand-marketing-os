@@ -10,22 +10,27 @@ ADR 0057 §6）→ 存回同一輪第三列 `llm_task.structured_output_json`（
 `brand_diagnosis_response()` 讀回來。收斂只信程式算的錢，AI 只負責判斷方向——這條界線是
 2026-08-31「24-agent／130 條建議」失敗教訓定案的，這個檔案是它的落地。
 
-打平線＝1÷毛利率（決定 1），三層 fallback，絕不回 1.0（那等於宣稱毛利 100%，會把賠錢的
+打平線＝1÷毛利率（決定 1），四層 fallback，絕不回 1.0（那等於宣稱毛利 100%，會把賠錢的
 座標畫成贏家）：
   ①這個月官網訂單算出來的實際毛利率（`app/orders.repository.sku_margins`，已登記成本的
     SKU 才算數；一個都沒登記＝已知營收為 0＝往下一層）
-  ②規則卡 `gross_margin`（決定 1b，`app/core/rule_cards.py` 新增一筆，default 0.70）
-  ③兩層都沒有算出一個 >0 的毛利率＝回 (None, 人話原因)，畫面明說算不出來。
+  ②這一期方案選的產品，自己填的售價與單位變動成本（`product_economics`）——issue
+    diagnosis-lacks-checkable-numbers：使用者兩個產品的數字都填好了（1880／520、990／240，
+    毛利 72%／76%），中間卻沒有這一層，打平線用的是預設 0.70。填了資料就要被用到。
+  ③規則卡 `gross_margin`（決定 1b，`app/core/rule_cards.py` 新增一筆，default 0.70）
+  ④三層都沒有算出一個 >0 的毛利率＝回 (None, 人話原因)，畫面明說算不出來。
 """
 
 from __future__ import annotations
 
 from datetime import timedelta
 
+from app.brand_intelligence import repository as bi_repo
 from app.core import rule_cards
 from app.core import settings as coresettings
 from app.orders import repository as orders_repo
 from app.schedule import performance, state
+from app.schedule import tree as tree_mod
 
 # 七個維度的中文標籤，跟 `app/schedule/creative.py` 的 `COORDINATE_KEYS` 同一個順序來源
 # （不另開一份清單）——`performance._coordinate_labels()` 給的是座標**值**的 label，這裡是
@@ -76,11 +81,140 @@ def breakeven_roas(conn, org_id: str, brand_id: str) -> tuple[float | None, str]
         if margin_rate > 0:
             return round(1 / margin_rate, 2), f"這個月官網訂單實際毛利率 {margin_rate:.0%}"
 
+    plan_margin = _plan_products_margin_rate(conn, brand_id)
+    if plan_margin is not None:
+        return round(1 / plan_margin, 2), f"這一期產品填的售價與成本，毛利率 {plan_margin:.0%}"
+
     card_margin_rate = rule_cards.get_value(conn, brand_id, "gross_margin", "gross_margin_rate")
     if card_margin_rate and card_margin_rate > 0:
         return round(1 / card_margin_rate, 2), f"規則卡毛利率 {card_margin_rate:.0%}"
 
     return None, "還沒有毛利率"
+
+
+def _plan_products_margin_rate(conn, brand_id: str) -> float | None:
+    """打平線第②層（issue diagnosis-lacks-checkable-numbers）：這一期方案選的產品，自己填
+    的售價與單位變動成本算出來的毛利率。兩者都填齊、售價 > 0 的產品才算數；一個都沒有就回
+    None，往下一層（規則卡）走。
+
+    「哪些產品算在這一期裡」＝最新那一列 `schedule_plan` 的 `context_scope_json.product_ids`
+    ——出方案時使用者自己勾的那幾個，不是品牌全部的產品（使用者裁決 2026-09-06）。
+    加權方式：Σ(售價−成本) ÷ Σ售價，等於「每個產品各賣一單位」的毛利率——逐產品銷量要等
+    訂單資料，那正是第①層在做的事，這一層是第①層還沒有資料時的替代品。
+    """
+    plan_row, _running = state._display_task_row(conn, brand_id, state.TASK_TYPE)
+    product_ids = ((plan_row or {}).get("context_scope_json") or {}).get("product_ids") or []
+    price_total = 0.0
+    margin_total = 0.0
+    for product_id in product_ids:
+        row = bi_repo.get_product_economics(conn, brand_id, product_id)
+        if row is None or row["unit_variable_cost"] is None:
+            continue
+        price = float(row["selling_price"])
+        cost = float(row["unit_variable_cost"])
+        if price <= 0:
+            continue
+        price_total += price
+        margin_total += price - cost
+    if price_total <= 0 or margin_total <= 0:
+        return None
+    return margin_total / price_total
+
+
+def tree_reminders(conn, brand_id: str) -> list[str]:
+    """目前這棵活動樹上還掛著的提醒（節點 `warnings`，去重保序）。
+
+    issue diagnosis-lacks-checkable-numbers 的第二個根因：提醒與判讀是兩套規則、互不引用
+    ——核准活動樹那一步系統提醒過「要觀察毛利、購買成本與客單價，不以點擊率單獨判斷」，
+    判讀卻推薦了一條只看 ROAS 的折扣建議，等於系統自己打自己臉。這支把提醒撈出來給判讀的
+    prompt 看；沒有「解除」這個狀態可以問（樹上就只有這一份），所以是「目前這棵樹上的」，
+    不是「還沒解除的」。"""
+    row, _running = state._display_task_row(conn, brand_id, state.TREE_TASK_TYPE)
+    if row is None:
+        return []
+    tree = tree_mod.tree_from_task_row(row)
+    seen: list[str] = []
+
+    def walk(nodes: list) -> None:
+        for node in nodes:
+            for warning in node["warnings"] or []:
+                if warning not in seen:
+                    seen.append(warning)
+            walk(node["children"])
+
+    walk(tree["nodes"])
+    return seen
+
+
+def reminders_text(reminders: list[str]) -> str:
+    """`tree_reminders()` → prompt 的一段；沒有提醒就回空字串（呼叫端會把空段落濾掉）。"""
+    if not reminders:
+        return ""
+    return "\n".join(
+        ["## 這個品牌的活動樹上還掛著這些提醒",
+         "下面每一條都是這套系統自己在核准那一步講過的話。你的建議不可以跟它們互相矛盾；"
+         "真的要建議相反的方向，就在 `evidence` 裡明講為什麼這一次不適用。"]
+        + [f"- {r}" for r in reminders]
+    )
+
+
+def _checkable(value: dict) -> dict:
+    """一個座標值 → 使用者可以自己核對的那幾個數字（`_bucket()` 的既有欄位，不重算）。"""
+    return {
+        "label": value["label"], "spend": value["spend"], "ad_count": value["ad_count"],
+        "roas": value["roas"], "roas_conservative": value["roas_conservative"],
+        "roas_coverage": value["roas_coverage"],
+    }
+
+
+def attach_checkable_numbers(suggestions: list, performance: dict) -> list:
+    """每條建議補上「這一組的花費／廣告數／ROAS」與同一維度其他座標值的對照數字。純函數。
+
+    issue diagnosis-lacks-checkable-numbers：有三年經驗的使用者逐條檢查後，只採用「有寫
+    花費」的那幾條——「折扣特價優惠優於無優惠，ROAS 2.50x 高於無優惠的 2.01x」被她拒絕，
+    因為沒有兩邊各自的花費與樣本數可以核對。那些數字本來就在同一份壓縮輸入裡（座標成效表
+    逐值都有），只是組句子時沒印出來。這裡由程式從 `performance` 直接抄，不叫 AI 再講一次
+    ——收斂只信程式算的錢（檔頭那條界線）。
+
+    `compared_with` 按花費由大到小取前 3：對照組是給人核對用的，不是把整張表再貼一次。
+    """
+    out = []
+    for suggestion in suggestions:
+        values, currency = _dimension_values(performance, suggestion)
+        mine = next((v for v in values if v["key"] == suggestion["coordinate_key"]), None)
+        peers = sorted(
+            (v for v in values if v["key"] != suggestion["coordinate_key"]),
+            key=lambda v: -v["spend"],
+        )[:3]
+        out.append({
+            **suggestion,
+            "currency": currency,
+            "numbers": _checkable(mine) if mine is not None else None,
+            "compared_with": [_checkable(v) for v in peers],
+        })
+    return out
+
+
+def _dimension_values(performance: dict, suggestion: dict) -> tuple[list, str | None]:
+    """這條建議那個維度的座標值清單，以及它們屬於哪個幣別。
+
+    ponytail: 同一個座標值出現在兩個幣別時，取「這條建議的座標值花費比較大」的那一個幣別，
+    整組對照數字都從同一個幣別來——絕不跨幣別相加（ADR 0057 §4）。升級路徑：真的有品牌同時
+    跑兩個幣別時，改成逐幣別各給一組數字，畫面也要跟著分兩行。"""
+    best: tuple[list, str | None] = ([], None)
+    best_spend = -1.0
+    for cur in performance["currencies"]:
+        for dim in cur["dimensions"]:
+            if dim["dimension"] != suggestion["dimension"]:
+                continue
+            mine = next(
+                (v for v in dim["values"] if v["key"] == suggestion["coordinate_key"]), None
+            )
+            spend = mine["spend"] if mine is not None else -0.5
+            if spend > best_spend:
+                best_spend = spend
+                best = (dim["values"], cur["currency"])
+    return best
 
 
 def has_any_tagged_spend(performance: dict) -> bool:
@@ -245,20 +379,11 @@ def converge(outputs: list[dict]) -> list[dict]:
     return ranked[:5]
 
 
-# 決定 9：`rule_type` 由 `dimension` 決定，只用既有三個值。前兩條涵蓋現行七個維度
-# （COORDINATE_KEYS）；第三條（budget_split）現在留好、合法輸入碰不到——跟 `direction`
-# 四選項現在只用得到前三個是同一個道理（ticket 原文：枚舉現在就留好，日後開啟是打開開關，
-# 不是改結構）。
-_AUDIENCE_DIMENSIONS = frozenset({"audience", "pain"})
-_ANGLE_DIMENSIONS = frozenset({"angle", "hook", "proof", "offer", "format"})
-
-
-def rule_type_for_dimension(dimension: str) -> str:
-    if dimension in _AUDIENCE_DIMENSIONS:
-        return "audience"
-    if dimension in _ANGLE_DIMENSIONS:
-        return "angle"
-    return "budget_split"
+# 決定 9（`rule_type` 由 `dimension` 決定，只用 angle／audience／budget_split 三個值）已由
+# issue adopted-advice-can-invert 撤銷：七維座標有七個維度、規則型別只有三個，鉤子的結論
+# 會被塞進角度的抽屜，下一次 prompt 就把它當角度限制讀。採用現在一律寫
+# `vocab.EXPERIMENT_RULE_TYPE`（見 `app/schedule/routes.py::_run_diagnosis_adopt`），維度
+# 留在句子裡，不再借別的抽屜；這裡因此不再有「維度換型別」這支函式。
 
 
 def _round_rows(conn, brand_id: str) -> list[dict]:
@@ -290,10 +415,7 @@ def _round_result(rows: list[dict]) -> tuple[str | None, list[dict]]:
     )
     if budget_row is None:
         return None, []
-    suggestions = [
-        {**entry, "rule_type": rule_type_for_dimension(entry["dimension"])}
-        for entry in budget_row.get("structured_output_json") or []
-    ]
+    suggestions = list(budget_row.get("structured_output_json") or [])
     return budget_row["started_at"].date().isoformat(), suggestions
 
 

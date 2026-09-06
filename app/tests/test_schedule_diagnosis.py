@@ -24,7 +24,7 @@ from uuid import UUID, uuid4
 import app.shared.web as web
 from app.brand_intelligence import repository as bi_repo
 from app.core import db as coredb
-from app.core import rule_cards
+from app.core import rule_cards, vocab
 from app.core import settings as coresettings
 from app.identity import ActorContext
 from app.orders import repository as orders_repo
@@ -116,9 +116,10 @@ class ConvergeDedupesTest(unittest.TestCase):
 
 
 class BreakevenFallbackTest(unittest.TestCase):
-    """三層順序——有實際毛利率用實際；沒有但有規則卡用規則卡；兩者皆無回 `None`
-    （絕不回 1.0：1.0 等於宣稱毛利 100%，會把賠錢的座標畫成贏家）。三個品牌各自代表一層，
-    互不干擾（一個 test 方法裡驗完三層，不拆成三支——ticket 明講只准三支測試）。"""
+    """四層順序——有實際毛利率用實際；沒有就用這一期產品自己填的售價與成本（issue
+    diagnosis-lacks-checkable-numbers 補的第②層）；再沒有用規則卡；全都沒有回 `None`
+    （絕不回 1.0：1.0 等於宣稱毛利 100%，會把賠錢的座標畫成贏家）。四個品牌各自代表一層，
+    互不干擾（一個 test 方法裡驗完四層，不拆成四支——ticket 明講只准三支測試）。"""
 
     def _new_brand(self, suffix: str) -> tuple[str, str]:
         org_id = f"org_diag_test_{suffix}_{uuid4().hex[:8]}"
@@ -134,7 +135,7 @@ class BreakevenFallbackTest(unittest.TestCase):
         )["id"]
         return org_id, brand_id
 
-    def test_breakeven_roas_falls_through_the_three_layers_in_order(self):
+    def test_breakeven_roas_falls_through_the_four_layers_in_order(self):
         # 層 2：沒有任何訂單、沒有登記任何 SKU 成本——規則卡尚未被使用者改過，用 CARDS 預設
         # 值 0.70（打平線 1÷0.70 ≈ 1.43）。
         org_2, brand_2 = self._new_brand("card_default")
@@ -161,7 +162,26 @@ class BreakevenFallbackTest(unittest.TestCase):
         self.assertAlmostEqual(roas_1, round(1 / 0.6, 2), places=2)
         self.assertIn("官網訂單", source_1)
 
-        # 層 3：兩層都算不出一個 >0 的毛利率（規則卡被使用者自己設成 0，沒有訂單）——絕不回
+        # 層 2：沒有訂單，但這一期方案選的產品自己填了售價與單位變動成本——1880／520 與
+        # 990／240，加權（各一單位）毛利率 (1360+750)÷(1880+990) ≈ 73.5%，打平線 1.36。
+        # 填了資料就要被用到，不准掉回規則卡的 0.70（issue diagnosis-lacks-checkable-numbers）。
+        org_pe, brand_pe = self._new_brand("product_economics")
+        product_ids = []
+        for price, cost in ((1880, 520), (990, 240)):
+            product_id = bi_repo.create_product(
+                web.conn, brand_pe, name=f"產品{price}", actor="測試員",
+            )["id"]
+            bi_repo.save_product_economics(
+                web.conn, brand_pe, product_id, actor="測試員", selling_price=price,
+                currency="TWD", confirmed_by="測試員", unit_variable_cost=cost,
+            )
+            product_ids.append(product_id)
+        _seed_plan_row(org_pe, brand_pe, product_ids)
+        roas_pe, source_pe = diagnosis.breakeven_roas(web.conn, org_pe, brand_pe)
+        self.assertEqual(roas_pe, 1.36)
+        self.assertIn("這一期產品", source_pe)
+
+        # 層 4：三層都算不出一個 >0 的毛利率（規則卡被使用者自己設成 0，沒有訂單）——絕不回
         # 1.0 頂著，誠實回 None。
         org_3, brand_3 = self._new_brand("nothing_usable")
         rule_cards.set_value(
@@ -171,6 +191,58 @@ class BreakevenFallbackTest(unittest.TestCase):
         roas_3, _source_3 = diagnosis.breakeven_roas(web.conn, org_3, brand_3)
         self.assertIsNone(roas_3)
         self.assertNotEqual(roas_3, 1.0)
+
+
+def _seed_plan_row(org_id: str, brand_id: str, product_ids: list) -> None:
+    """一列成功的 `schedule_plan`——打平線第②層要問「這一期方案選了哪些產品」，答案就存在
+    這一列的 `context_scope_json.product_ids`（`app/schedule/jobs.py::schedule_plan` 寫的）。"""
+    web.conn.execute(
+        "INSERT INTO llm_task (id, org_id, brand_id, task_type, context_scope_json,"
+        " input_context_ids_json, input_context_hash, knowledge_item_ids_json, brand_version,"
+        " prompt_template_id, prompt_template_version, provider, model, status, attempt_no,"
+        " started_at) VALUES (%s, %s, %s, %s, %s, '[]', '', '[]', 1, 'p', 'v1', 'seed', 'seed',"
+        " 'succeeded', 1, now())",
+        (coredb.new_id("llm"), org_id, brand_id, schedule_state.TASK_TYPE,
+         coredb.jsonb({"brand_id": brand_id, "product_ids": product_ids})),
+    )
+    web.conn.commit()
+
+
+class CheckableNumbersTest(unittest.TestCase):
+    """**資料正確性**：`attach_checkable_numbers()` 把「這一組」與「對照組」的花費／廣告數
+    照抄過來，不重算、不跨幣別（ADR 0057 §4）。issue diagnosis-lacks-checkable-numbers：
+    有經驗的使用者拒絕採用一條沒有花費與樣本數的建議——數字本來就在同一份輸入裡。"""
+
+    def test_numbers_and_peers_come_from_the_same_currency_block(self):
+        def value(key, label, spend, ad_count):
+            return {"key": key, "label": label, "spend": spend, "ad_count": ad_count,
+                    "impressions": 0, "clicks": 0, "revenue": None, "roas": None,
+                    "roas_conservative": 2.5, "roas_coverage": 0.5}
+
+        performance = {"currencies": [
+            {"currency": "TWD", "total_spend": 3000, "untagged": {"spend": 0, "ad_count": 0},
+             "dimensions": [{"dimension": "offer", "untagged": {"spend": 0, "ad_count": 0},
+                             "values": [value("discount", "折扣", 2000, 5),
+                                        value("none", "無優惠", 1000, 3)]}]},
+            {"currency": "USD", "total_spend": 7, "untagged": {"spend": 0, "ad_count": 0},
+             "dimensions": [{"dimension": "offer", "untagged": {"spend": 0, "ad_count": 0},
+                             "values": [value("discount", "折扣", 5, 1),
+                                        value("none", "無優惠", 2, 1)]}]},
+        ]}
+        suggestion = {"dimension": "offer", "coordinate_key": "discount",
+                      "coordinate_label": "折扣", "direction": "scale_up",
+                      "impact_spend": 2000.0, "headline": "h", "evidence": "e",
+                      "agreed_by": ["budget"]}
+
+        out = diagnosis.attach_checkable_numbers([suggestion], performance)
+
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0]["currency"], "TWD")  # 花費大的那個幣別，不跨幣別相加
+        self.assertEqual(out[0]["numbers"]["spend"], 2000)
+        self.assertEqual(out[0]["numbers"]["ad_count"], 5)
+        self.assertEqual([p["label"] for p in out[0]["compared_with"]], ["無優惠"])
+        self.assertEqual(out[0]["compared_with"][0]["spend"], 1000)  # 對照組同一個幣別
+        self.assertEqual(out[0]["headline"], "h")  # 原本的欄位一個都沒掉
 
 
 class AdoptSuggestionTest(unittest.TestCase):
@@ -238,7 +310,9 @@ class AdoptSuggestionTest(unittest.TestCase):
         rows = bi_repo.list_rules_for_brand(web.conn, brand_id)
         self.assertEqual(len(rows), 1, "同一條採用兩次只該有一列")
         rule = rows[0]
-        self.assertIn(rule["rule_type"], schedule_routes.SOFT_REJECT_RULE_TYPES)
+        # issue adopted-advice-can-invert：採用一條判讀寫的是「這一期要去做的實驗」，固定
+        # 落在 EXPERIMENT_RULE_TYPE，不再按維度借用角度／受眾的抽屜（決定 9 已撤銷）。
+        self.assertEqual(rule["rule_type"], vocab.EXPERIMENT_RULE_TYPE)
         self.assertEqual(rule["severity"], "soft")
         self.assertIsNone(rule["source_reference_id"])
         self.assertIn(started_at.date().isoformat(), rule["content"])  # 來源日期那句

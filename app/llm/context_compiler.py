@@ -26,6 +26,7 @@ from app.brand_intelligence import personas
 from app.brand_intelligence import repository as repo
 from app.core import rule_cards
 from app.core.db import Conn
+from app.core.vocab import EXPERIMENT_RULE_TYPE
 
 PERSONA_PROMPT_CAP = 4
 PERSONA_FIELD_CHAR_CAP = 80
@@ -129,9 +130,18 @@ def compile(conn: Conn, brand_id: str, product_id: str | None = None, *,
         + [p["id"] for p in persona_rows]
     )
 
+    # issue adopted-advice-can-invert（2026-09-06 演練）：行動與限制分兩個抽屜。採用一條成效
+    # 判讀寫出來的規則（`EXPERIMENT_RULE_TYPE`）講的是「這一期要去做的實驗」；跟「不准做的
+    # 事」放同一段，模型會抓住句子前半的現況陳述、把「去測試 X」讀成「先不要用 X」——三個
+    # 角色各採用一條，反了一條，反的那條正是「去測一件從沒測過的事」。
+    constraint_rules = [r for r in rules if r["rule_type"] != EXPERIMENT_RULE_TYPE]
+    experiment_rules = [r for r in rules if r["rule_type"] == EXPERIMENT_RULE_TYPE]
+
     sections = []
-    if rules:
-        sections.append("【限制】規則\n" + "\n".join(f"- {r['content']}" for r in rules))
+    if constraint_rules:
+        sections.append(
+            "【限制】規則\n" + "\n".join(f"- {r['content']}" for r in constraint_rules)
+        )
     sections.extend(format_claims(claims))
     if brand_facts:
         sections.append(
@@ -149,6 +159,16 @@ def compile(conn: Conn, brand_id: str, product_id: str | None = None, *,
                 f"｜去哪找他：{_persona_text(p['where_to_find'])}"
                 for p in persona_rows
             )
+        )
+
+    if experiment_rules:
+        # 擺在所有段落的最後（`docs/contracts/schedule.md`「Position in the prompt decides
+        # whether an instruction runs」，T8b 實機驗收量到的：同一句指令放中間會被前面幾千字
+        # 蓋過去）——這一段是要被執行的動作，不是背景資料。
+        sections.append(
+            "【本期要測的】\n"
+            "這一段是這一期要主動去做的事，不是禁止事項；每一條都要在這一期的方案裡排到。\n"
+            + "\n".join(f"- {r['content']}" for r in experiment_rules)
         )
 
     text = "\n\n".join(sections)

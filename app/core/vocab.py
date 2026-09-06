@@ -43,7 +43,16 @@ RULE_TYPES = [
     ("product_pick", "商品選擇"),
     ("budget_split", "預算分配"),
     ("other", "其他"),
+    # issue adopted-advice-can-invert（2026-09-06 演練）：採用一條成效判讀寫出來的那一列。
+    # 它是「這一期要去做的事」，不是「不准做的事」——三個角色各採用一條，其中一條被下一期
+    # 的方案讀成相反的意思（建議「測試加入證明內容」，方案寫成「不加入未被證實的見證」），
+    # 因為 `context_compiler` 把所有規則都放進【限制】那一段。行動與限制從此分兩個抽屜。
+    ("experiment", "本期要測的"),
 ]
+
+# 採用成效判讀寫出來的規則型別。`app/schedule/routes.py` 寫、`app/llm/context_compiler.py`
+# 讀，兩邊都指這一個名字，不各自寫一次字串。
+EXPERIMENT_RULE_TYPE = "experiment"
 
 CLAIM_TYPES = [
     ("approved", "可用"),
