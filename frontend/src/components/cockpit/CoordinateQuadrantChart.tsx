@@ -150,7 +150,7 @@ export function CoordinateQuadrantChart({
         {untagged.ad_count > 0 && (
           <li>
             另有未標座標 {formatCurrency(untagged.spend)}（{untagged.ad_count} 則廣告）沒有畫在圖上——
-            那是手動建的廣告，沒有座標可以對。
+            這筆花費目前對不到任何座標。
           </li>
         )}
         {noSpend.length > 0 && (

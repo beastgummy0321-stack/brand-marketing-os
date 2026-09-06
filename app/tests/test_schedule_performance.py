@@ -134,6 +134,19 @@ class _PerformanceTestBase(unittest.TestCase):
         )
         web.conn.commit()
 
+    def _set_binding_created_at(self, org_id: str, brand_id: str, node_key: str,
+                                 source_tree_task_id: str, day: date) -> None:
+        """票 10（ADR 0064 §2）：日期歸屬看的是 `channel_entity_map.created_at`，
+        `upsert_binding()` 自己不收這個參數（一律 `now()`）——測試要控制「這次綁定是哪一天
+        生效的」，只能像這樣直接改那一列，不是呼叫端該有的介面。"""
+        web.conn.execute(
+            "UPDATE channel_entity_map SET created_at = %s"
+            " WHERE org_id = %s AND brand_id = %s AND node_key = %s"
+            " AND source_tree_task_id = %s",
+            (day, org_id, brand_id, node_key, source_tree_task_id),
+        )
+        web.conn.commit()
+
     def _tag_ad(self, org_id: str, brand_id: str, source_tree_task_id: str, node_key: str,
                 coordinates: dict) -> None:
         """跟 `binding._bind_ad` 對應的那個廣告位置，寫一輪候選——七個維度缺席的一律
@@ -256,43 +269,95 @@ class RoasHonestyTest(_PerformanceTestBase):
         self.assertAlmostEqual(value["spend"], 1500.0, places=2)  # 15 天全部的花費，不是只算 2 天
 
 
-class RenamedNodeUntaggedTest(_PerformanceTestBase):
-    """done-check 5：綁定當下的節點名字跟現在這棵樹的名字對不上，這筆錢落進 untagged，
-    不再掛在舊候選的座標下面（ADR 0055 §4 讀時否決票，`binding.tree_with_bindings()`
-    既有的規則，這裡驗它真的接到這支新讀取上）。"""
+class PreviousTreeKeepsItsCoordinatesTest(_PerformanceTestBase):
+    """done-check 1（ADR 0064 §1，取代 `RenamedNodeUntaggedTest`）：這支測試以前守的規則
+    正是這張票要關掉的洞——綁定當下的節點名字跟現在這棵樹的名字對不上，就把舊候選的錢
+    打進 untagged。實測（drill，3/3 組織）：規劃下一期之後，上一期花的錢永久失去座標。
+    新規則：一列 `channel_entity_map` 自己名著它是哪一棵樹綁的，不再問「還跟現在最新那
+    棵樹的名字對得上嗎」，所以重新展開、綁一個新的廣告在同一個位置，並不會讓上一棵樹
+    綁的那支廣告的座標消失。`git stash` 掉這張票的原始碼改動，這支測試要紅（drill 的
+    3/3 失敗）。"""
 
-    def test_rename_after_bind_moves_the_spend_to_untagged(self):
-        org_id = self._make_org("renamed")
+    def test_previous_tree_keeps_its_coordinates_after_the_next_tree_is_bound(self):
+        org_id = self._make_org("prev_tree")
         brand_id = self._make_brand(org_id)
         account_id = self._connect_and_bind_account(org_id, brand_id, "act-1")
         day = self._month_start(org_id)
 
-        tree_task_id = self._insert_succeeded_tree_row(
+        tree_a = self._insert_succeeded_tree_row(
             org_id, brand_id, _two_path_tree(leaf_a="單元1")
         )
         schedule_repo.create_coordinate(web.conn, org_id, brand_id, "pain", "怕買到假貨", None)
-        self._bind_ad(org_id, brand_id, "1.1.1", "單元1", "ad-1", tree_task_id)
-        self._tag_ad(org_id, brand_id, tree_task_id, "1.1.1", {"pain": "怕買到假貨"})
+        schedule_repo.create_coordinate(web.conn, org_id, brand_id, "pain", "怕太貴", None)
+        self._bind_ad(org_id, brand_id, "1.1.1", "單元1", "ad-1", tree_a)
+        self._tag_ad(org_id, brand_id, tree_a, "1.1.1", {"pain": "怕買到假貨"})
         self._seed_ad_spend(org_id, account_id, "ad-1", day, spend=500.0)
 
-        before = performance.brand_creative_performance(web.conn, org_id, brand_id)
-        pain_before = next(
-            d for d in before["currencies"][0]["dimensions"] if d["dimension"] == "pain"
+        # 重新展開：同一個位置（node_key "1.1.1"）改名，這是新一期的樹；照樹綁一支新的
+        # 廣告 ad-2，一樣在 1.1.1，標上不同的 pain 座標。
+        tree_b = self._insert_succeeded_tree_row(
+            org_id, brand_id, _two_path_tree(leaf_a="單元1（改版）")
         )
-        self.assertEqual(len(pain_before["values"]), 1)
-        self.assertAlmostEqual(pain_before["values"][0]["spend"], 500.0, places=2)
+        self._bind_ad(org_id, brand_id, "1.1.1", "單元1（改版）", "ad-2", tree_b)
+        self._tag_ad(org_id, brand_id, tree_b, "1.1.1", {"pain": "怕太貴"})
+        self._seed_ad_spend(org_id, account_id, "ad-2", day, spend=300.0)
 
-        # 重新展開：同一個位置（node_key "1.1.1"）名字換了，channel_entity_map 的
-        # node_name_at_bind（"單元1"）跟裡不再對得上——這是新一列 llm_task，`_display_task_row`
-        # 讀「最新一次成功」自然接到這一列，不必動 channel_entity_map。
-        self._insert_succeeded_tree_row(org_id, brand_id, _two_path_tree(leaf_a="單元1（改版）"))
+        result = performance.brand_creative_performance(web.conn, org_id, brand_id)
+        currency = result["currencies"][0]
+        self.assertAlmostEqual(currency["untagged"]["spend"], 0.0, places=2)
+        pain = next(d for d in currency["dimensions"] if d["dimension"] == "pain")
+        self.assertAlmostEqual(pain["untagged"]["spend"], 0.0, places=2)
+        values_by_label = {v["label"]: v["spend"] for v in pain["values"]}
+        self.assertEqual(len(pain["values"]), 2)
+        self.assertAlmostEqual(values_by_label["怕買到假貨"], 500.0, places=2)
+        self.assertAlmostEqual(values_by_label["怕太貴"], 300.0, places=2)
 
-        after = performance.brand_creative_performance(web.conn, org_id, brand_id)
-        currency_after = after["currencies"][0]
-        self.assertAlmostEqual(currency_after["total_spend"], 500.0, places=2)
-        self.assertAlmostEqual(currency_after["untagged"]["spend"], 500.0, places=2)
-        pain_after = next(
-            d for d in currency_after["dimensions"] if d["dimension"] == "pain"
+
+class SpendMeetsTheBindingLiveOnItsDateTest(_PerformanceTestBase):
+    """done-check 2（ADR 0064 §2，money）：一個平台實體被兩棵樹各綁過一次（同一支活動
+    被下一期重新沿用），花費要按日期分派給那天已經生效的最新一次綁定——不能因為同一個
+    `entity_id` 出現兩次綁定就整批算給某一邊，也不能兩邊都算（雙重計算）。"""
+
+    def test_spend_before_and_after_the_second_binding_splits_by_date(self):
+        org_id = self._make_org("date_split")
+        brand_id = self._make_brand(org_id)
+        account_id = self._connect_and_bind_account(org_id, brand_id, "act-1")
+        month_start = self._month_start(org_id)
+        day2 = month_start + timedelta(days=1)
+        day12 = month_start + timedelta(days=11)
+
+        schedule_repo.create_coordinate(web.conn, org_id, brand_id, "pain", "怕買到假貨", None)
+        schedule_repo.create_coordinate(web.conn, org_id, brand_id, "pain", "怕太貴", None)
+
+        # 綁定一：第 1 天綁的（tree A），標 pain=怕買到假貨。
+        tree_a = self._insert_succeeded_tree_row(org_id, brand_id, _two_path_tree())
+        self._bind_ad(org_id, brand_id, "1.1.1", "單元1", "ad-1", tree_a)
+        self._set_binding_created_at(org_id, brand_id, "1.1.1", tree_a, month_start)
+        self._tag_ad(org_id, brand_id, tree_a, "1.1.1", {"pain": "怕買到假貨"})
+
+        # 綁定二：第 10 天綁的（tree B，同一個平台實體 ad-1 被下一期重新沿用），標
+        # pain=怕太貴。
+        tree_b = self._insert_succeeded_tree_row(org_id, brand_id, _two_path_tree())
+        self._bind_ad(org_id, brand_id, "1.1.1", "單元1", "ad-1", tree_b)
+        self._set_binding_created_at(
+            org_id, brand_id, "1.1.1", tree_b, month_start + timedelta(days=9),
         )
-        self.assertEqual(pain_after["values"], [])  # 舊候選的座標底下不再看得到這筆錢
-        self.assertAlmostEqual(pain_after["untagged"]["spend"], 500.0, places=2)
+        self._tag_ad(org_id, brand_id, tree_b, "1.1.1", {"pain": "怕太貴"})
+
+        # 第 2 天花的錢在綁定二生效之前，屬於綁定一；第 12 天在綁定二生效之後，屬於它。
+        self._seed_ad_spend(org_id, account_id, "ad-1", day2, spend=200.0)
+        self._seed_ad_spend(org_id, account_id, "ad-1", day12, spend=300.0)
+
+        result = performance.brand_creative_performance(web.conn, org_id, brand_id)
+        currency = result["currencies"][0]
+        self.assertAlmostEqual(currency["total_spend"], 500.0, places=2)
+        self.assertAlmostEqual(currency["untagged"]["spend"], 0.0, places=2)
+        pain = next(d for d in currency["dimensions"] if d["dimension"] == "pain")
+        values_by_label = {v["label"]: v["spend"] for v in pain["values"]}
+        self.assertAlmostEqual(values_by_label["怕買到假貨"], 200.0, places=2)
+        self.assertAlmostEqual(values_by_label["怕太貴"], 300.0, places=2)
+        # 沒有算兩次：兩個座標值加上 untagged 剛好等於 total_spend。
+        self.assertAlmostEqual(
+            pain["untagged"]["spend"] + sum(values_by_label.values()),
+            currency["total_spend"], places=2,
+        )

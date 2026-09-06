@@ -72,7 +72,10 @@ attribution is closed by a frozen column instead of by a convention.
 
 A rebinding overwrites this column with the rest of the row, per ADR 0055 §4's "no history is
 kept, and here is the named consumer test". The consumer test is unchanged: nothing reads "which
-entity was this node bound to last month".
+entity was this node bound to last month". **Amended by ADR 0064 §1/§2**: only a rebind of the
+*same* tree overwrites the row; binding the same node in a *different* tree gets its own row, and
+"which tree answers whose creative is this ad" now also decides "which binding this spend's own
+date meets".
 
 ## 3. `creative_candidate.published_ad_external_id` is dropped
 

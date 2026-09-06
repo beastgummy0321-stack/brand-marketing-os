@@ -63,7 +63,10 @@ def _collect_nodes(
 
     `node_key`（票 T3b，ADR 0055 §1）是同一個深度優先前序順序算出來的路徑：1-based、
     點分隔，`parent_key` 是上一層算好的前綴（根層是空字串）。這是節點在整棵樹的唯一
-    識別，`channel_entity_map` 拿它當鍵；同輸入同輸出，不落地、每次讀都重算。
+    識別；`channel_entity_map` 拿它當鍵的一部分——票 10（ADR 0064 §1）之後，一列綁定的
+    完整鍵還多帶 `source_tree_task_id`：`node_key` 認的是「這棵樹的哪個位置」，不是
+    「這個位置只准一列」，同一個位置換一棵樹綁是另一個事實、另一列。`node_key` 本身
+    同輸入同輸出，不落地、每次讀都重算，這件事沒有變。
     """
     if not isinstance(raw_nodes, list) or not raw_nodes:
         return None

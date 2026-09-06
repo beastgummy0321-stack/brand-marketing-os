@@ -106,7 +106,10 @@ that key is for.
 
 **A rebinding overwrites, and no history is kept.** Constitution rule 7 forbids answering "what
 was true then" with a current-state column, so this is a deliberate exception with a named
-consumer test: nothing today reads "which entity was this node bound to last month". Spend is
+consumer test: nothing today reads "which entity was this node bound to last month". **Amended
+by ADR 0064 §1**: that sentence now means the same node of the *same* tree; the same position in
+a *different* tree is a different fact and gets its own row, because a binding is a fact about
+the tree that made it. Spend is
 read by the external id we currently hold. The day something needs the history — a node rebound
 in the middle of a settled period, whose old entity's spend then belongs to nobody — the answer
 is a `channel_entity_map_version` table shaped like `campaign_period_budget_version`, not a

@@ -509,14 +509,40 @@ def bindings_by_node_key(conn: _AnyConn, org_id: str, brand_id: str, channel_key
     """這個品牌在這個通路上，`node_key → {external_id, node_name_at_bind}`（只挑
     `local_state = 'mapped'` 的列——`binding.tree_with_bindings()` 疊圖用）。跟
     `ad_channel` JOIN 是為了用 `channel_key`（'meta'）而不是內部 id 篩——沒有那一列，
-    JOIN 自然是空集合，讀從不建它（ADR 0055 §4／§5：讀永遠不寫）。"""
+    JOIN 自然是空集合，讀從不建它（ADR 0055 §4／§5：讀永遠不寫）。
+
+    ADR 0064 §1／§3：一個 `node_key` 現在可能同時有好幾棵樹各自的一列——`ORDER BY
+    ... created_at ASC` 讓字典推導式依序覆寫，同一個 `node_key` 最後留下的是 `created_at`
+    最新的那一列，畫面疊圖只看得到「現在這棵樹」該看到的那一個（ADR 0064 §3：這支仍然
+    回答「這個位置顯示成綁定了嗎」，不是「這棵樹綁了嗎」——後者是 `bindings_for_tree()`
+    的事）。"""
     rows = conn.execute(
         "SELECT cem.node_key, cem.external_id, cem.node_name_at_bind"
         " FROM channel_entity_map cem JOIN ad_channel ch"
         " ON ch.id = cem.channel_id AND ch.org_id = cem.org_id"
         " WHERE cem.org_id = %s AND cem.brand_id = %s AND ch.channel_key = %s"
-        " AND cem.local_state = 'mapped'",
+        " AND cem.local_state = 'mapped' ORDER BY cem.node_key, cem.created_at ASC",
         (org_id, brand_id, channel_key),
+    ).fetchall()
+    return {r["node_key"]: dict(r) for r in rows}
+
+
+def bindings_for_tree(conn: _AnyConn, org_id: str, brand_id: str, channel_key: str,
+                       source_tree_task_id: str) -> dict:
+    """票 10（ADR 0064 §3）：這個品牌在這個通路上，**這一棵樹自己**綁定的
+    `node_key → {external_id, node_name_at_bind}`——`bind_tree()` 拿它決定「這一棵樹有沒有
+    這個節點的綁定列」，不是疊圖用的 `bindings_by_node_key()`（那支回答的是「這個位置現在
+    顯示成綁定了嗎」，會被上一棵樹留下的列騙到）。少了這個切分，一個位置因為上一棵樹的
+    列而顯示成已綁定，`bind_tree()` 就會跳過它、這一棵樹自己永遠拿不到屬於自己的綁定列
+    ——ticket 從另一邊重新引進的那個 bug。同一個 `local_state = 'mapped'` 篩選、同一個
+    `ad_channel` JOIN，不放寬。"""
+    rows = conn.execute(
+        "SELECT cem.node_key, cem.external_id, cem.node_name_at_bind"
+        " FROM channel_entity_map cem JOIN ad_channel ch"
+        " ON ch.id = cem.channel_id AND ch.org_id = cem.org_id"
+        " WHERE cem.org_id = %s AND cem.brand_id = %s AND ch.channel_key = %s"
+        " AND cem.local_state = 'mapped' AND cem.source_tree_task_id = %s",
+        (org_id, brand_id, channel_key, source_tree_task_id),
     ).fetchall()
     return {r["node_key"]: dict(r) for r in rows}
 
@@ -542,48 +568,53 @@ def ensure_meta_channel(conn: _AnyConn, org_id: str) -> str:
 def upsert_binding(conn: _AnyConn, *, org_id: str, brand_id: str, channel_id: str,
                     node_key: str, node_name_at_bind: str, external_id: str,
                     external_status: str | None, source_tree_task_id: str | None) -> None:
-    """綁定一個節點。`ON CONFLICT` 的鍵就是節點的身分 `(org_id, brand_id, channel_id,
-    node_key)`——改名之後重綁是覆寫同一列，不是撞唯一鍵（ADR 0055 §2／§4：位置是身分，
-    重綁覆寫、不留歷史）。呼叫端批次呼叫，這裡不 commit。
+    """綁定一個節點。`ON CONFLICT` 的鍵是 `(org_id, brand_id, channel_id, node_key,
+    source_tree_task_id)`（票 10，ADR 0064 §1，amends ADR 0055 §2／§4）——綁定是「一棵樹的
+    事實」：同一棵樹重綁同一個位置（按鈕按第二次、或改名後在同一棵樹裡重綁）是覆寫同一列；
+    綁同一個位置但是**另一棵樹**，是另一個事實，蓋不到前一棵樹的列，各自留著自己的
+    `external_id`／`source_tree_task_id`。呼叫端批次呼叫，這裡不 commit。
 
-    `source_tree_task_id`（票 T5，ADR 0057 §2）：這次 `bind_tree()` 執行當下那一列
-    `schedule_tree` 的 id，三個深度都傳同一個值——**這一欄長在列上，不是只長在某個
-    深度**，`binding.py` 三段迴圈共用同一個 `tree_row["id"]`。只有深度 3 的值真的有讀者
-    （T5 拿它去找回綁定當下那棵樹的 `creative_slot`），深度 1／2 目前沒有創意、也永遠不
-    會有（migration 註解原話），但欄位不分深度特例，函式簽章也不分。重綁覆寫整列時這一
-    欄跟著被覆寫，不留歷史（ADR 0055 §4 既有規則，這裡沒有另開一條）。"""
+    `source_tree_task_id`（票 T5，ADR 0057 §2；鍵的一部分見票 10）：這次 `bind_tree()`
+    執行當下那一列 `schedule_tree` 的 id，三個深度都傳同一個值——**這一欄長在列上，不是
+    只長在某個深度**，`binding.py` 三段迴圈共用同一個 `tree_row["id"]`。只有深度 3 的值
+    真的有讀者（T5 拿它去找回綁定當下那棵樹的 `creative_slot`），深度 1／2 目前沒有創意、
+    也永遠不會有（migration 註解原話），但欄位不分深度特例，函式簽章也不分。`source_tree_
+    task_id` 現在是唯一鍵的一部分，`ON CONFLICT` 撞上時它必然等於 `excluded` 那一份，不必
+    再在 `DO UPDATE SET` 裡覆寫一次。"""
     conn.execute(
         "INSERT INTO channel_entity_map (id, org_id, brand_id, channel_id, node_key,"
         " node_name_at_bind, external_id, external_status, external_status_at, local_state,"
         " source_tree_task_id)"
         " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, now(), 'mapped', %s)"
-        " ON CONFLICT (org_id, brand_id, channel_id, node_key) DO UPDATE SET"
+        " ON CONFLICT (org_id, brand_id, channel_id, node_key, source_tree_task_id)"
+        " DO UPDATE SET"
         " external_id = excluded.external_id,"
         " node_name_at_bind = excluded.node_name_at_bind,"
         " external_status = excluded.external_status,"
         " external_status_at = excluded.external_status_at,"
-        " local_state = 'mapped', source_tree_task_id = excluded.source_tree_task_id,"
-        " updated_at = now()",
+        " local_state = 'mapped', updated_at = now()",
         (new_id("cem"), org_id, brand_id, channel_id, node_key, node_name_at_bind,
          external_id, external_status, source_tree_task_id),
     )
 
 
 def depth_three_bindings(conn: _AnyConn, org_id: str, brand_id: str, channel_key: str) -> dict:
-    """票 T5（ADR 0057 §1／§2）：這個品牌在這個通路上，深度 3（廣告）的
-    `node_key → {external_id, node_name_at_bind, source_tree_task_id}`——`bindings_by_node_key`
-    的深度 3 切片，多帶 `source_tree_task_id`（那支只給 `binding.tree_with_bindings()` 疊圖
-    用，不需要這一欄；T5 要用它找回綁定當下那棵樹，凍結列表的鍵，見 ADR 0057 §2：絕不能
-    用「現在最新的樹」代替）。同樣只挑 `local_state = 'mapped'`，讀從不寫。"""
+    """票 10（ADR 0064 §1；原票 T5，ADR 0057 §1／§2）：這個品牌在這個通路上，**每一列**
+    深度 3（廣告）的 mapped 綁定，鍵是 `(node_key, source_tree_task_id)`——不再只用
+    `node_key`：同一個位置現在可能有好幾棵樹各自的一列（一個實體被兩棵樹各綁過一次），
+    只用 `node_key` 當鍵會讓後綁的那一列悄悄蓋掉先綁的那一列，這正是 ticket 要關的洞。
+    多帶 `created_at`，供呼叫端（`app/schedule/performance.py`）按「這筆花費那一天，哪一次
+    綁定當時已經生效」分派（ADR 0064 §2）。同樣只挑 `local_state = 'mapped'`，讀從不寫。"""
     rows = conn.execute(
-        "SELECT cem.node_key, cem.external_id, cem.node_name_at_bind, cem.source_tree_task_id"
+        "SELECT cem.node_key, cem.external_id, cem.node_name_at_bind,"
+        " cem.source_tree_task_id, cem.created_at"
         " FROM channel_entity_map cem JOIN ad_channel ch"
         " ON ch.id = cem.channel_id AND ch.org_id = cem.org_id"
         " WHERE cem.org_id = %s AND cem.brand_id = %s AND ch.channel_key = %s"
         " AND cem.local_state = 'mapped' AND cem.depth = 3",
         (org_id, brand_id, channel_key),
     ).fetchall()
-    return {r["node_key"]: dict(r) for r in rows}
+    return {(r["node_key"], r["source_tree_task_id"]): dict(r) for r in rows}
 
 
 def creative_candidates_for_brand(conn: _AnyConn, org_id: str, brand_id: str) -> dict:
@@ -608,20 +639,27 @@ def creative_candidates_for_brand(conn: _AnyConn, org_id: str, brand_id: str) ->
 
 def insert_period_node_membership(conn: _AnyConn, *, org_id: str, brand_id: str,
                                    campaign_period_id: str, channel_id: str, node_key: str,
-                                   from_date, to_date, allocation_weight: float = 1.0) -> None:
+                                   from_date, to_date, source_tree_task_id: str | None,
+                                   allocation_weight: float = 1.0) -> None:
     """一個深度 2 節點綁定成功、且品牌當下有檔期時記一列（ticket §1）——`from_date`／
     `to_date` 是檔期自己的 `start_date`／`end_date`，記的是「規劃上屬於哪一期」，不是
-    「哪幾天真的有花費」。`ON CONFLICT DO NOTHING` 對的是 migration 那條唯一鍵
-    `(org_id, brand_id, campaign_period_id, channel_id, node_key)`——同一個節點在同一期
-    按第二次綁定鈕不會多寫一列（ticket done-check 3：雙寫在結構上不可能）。呼叫端批次
-    呼叫，這裡不 commit（跟 `upsert_binding` 同一個既有慣例）。"""
+    「哪幾天真的有花費」。`ON CONFLICT` 對的是 migration 那條唯一鍵 `(org_id, brand_id,
+    campaign_period_id, channel_id, node_key)`——**不含** `source_tree_task_id`：同一個節點
+    在同一期只留一列是這張表自己的規則（ADR 0055 §6），不因為改綁到另一棵樹而多一列。
+
+    `source_tree_task_id`（票 10，ADR 0064 §4）：改成 `DO UPDATE`（原本 `DO NOTHING`）——
+    同一個節點在同一期改綁到另一棵樹時，這一欄要跟著換成新樹的 id，不然
+    `period_node_memberships_for_brand()` 拿舊樹的 id 去對 `channel_entity_map`（那張表已經
+    是新樹的列在生效）會對不上，membership 變成孤兒。呼叫端批次呼叫，這裡不 commit（跟
+    `upsert_binding` 同一個既有慣例）。"""
     conn.execute(
         "INSERT INTO period_node_membership (id, org_id, brand_id, campaign_period_id,"
-        " channel_id, node_key, from_date, to_date, allocation_weight)"
-        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)"
-        " ON CONFLICT (org_id, brand_id, campaign_period_id, channel_id, node_key) DO NOTHING",
+        " channel_id, node_key, from_date, to_date, allocation_weight, source_tree_task_id)"
+        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
+        " ON CONFLICT (org_id, brand_id, campaign_period_id, channel_id, node_key)"
+        " DO UPDATE SET source_tree_task_id = excluded.source_tree_task_id",
         (new_id("pnm"), org_id, brand_id, campaign_period_id, channel_id, node_key,
-         from_date, to_date, allocation_weight),
+         from_date, to_date, allocation_weight, source_tree_task_id),
     )
 
 
@@ -629,13 +667,20 @@ def period_node_memberships_for_brand(conn: _AnyConn, org_id: str, brand_id: str
     """這個品牌全部的 `period_node_membership`，JOIN 上 `channel_entity_map` 換出
     `entity_id`——ticket §4 講的「這個品牌的 memberships 跟指名它們實體的綁定」：
     membership 本身只存 `node_key`，`period.node_level_spend()` 要拿
-    `meta_repo.daily_entity_spend()` 回來的 `entity_id` 去對，兩邊得先接在一起。"""
+    `meta_repo.daily_entity_spend()` 回來的 `entity_id` 去對，兩邊得先接在一起。
+
+    票 10（ADR 0064 §4）：JOIN 多帶 `cem.source_tree_task_id IS NOT DISTINCT FROM
+    pnm.source_tree_task_id`（雙邊都可能是 NULL——這張票以前寫的列沒有這一欄，`IS NOT
+    DISTINCT FROM` 讓 NULL 跟 NULL 照樣算相等，不用 `=` 那種會把它們判定為不相等的比較）。
+    少了這一條，`channel_entity_map` 同一個 `node_key` 現在可能有好幾棵樹的列，JOIN 會
+    fan-out，一個節點的花費被 `period.node_level_spend()` 按樹的數量重複算好幾次。"""
     rows = conn.execute(
         "SELECT pnm.campaign_period_id, pnm.from_date, pnm.to_date, pnm.allocation_weight,"
         " cem.external_id AS entity_id"
         " FROM period_node_membership pnm JOIN channel_entity_map cem"
         " ON cem.org_id = pnm.org_id AND cem.brand_id = pnm.brand_id"
         " AND cem.channel_id = pnm.channel_id AND cem.node_key = pnm.node_key"
+        " AND cem.source_tree_task_id IS NOT DISTINCT FROM pnm.source_tree_task_id"
         " WHERE pnm.org_id = %s AND pnm.brand_id = %s",
         (org_id, brand_id),
     ).fetchall()

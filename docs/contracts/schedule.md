@@ -82,6 +82,7 @@ read-only direction, no new edge in the layer graph.
   comparison against `today_for_org()`.
 - ADR 0059 — an approval signs the tree's shape plus a daily ceiling; a total that only shrinks
   under that ceiling keeps it valid.
+- ADR 0064 — a binding belongs to the tree that made it; amends ADR 0055 §1/§4 and ADR 0057 §2.
 
 Module-local and reversible, decided here rather than in an ADR:
 

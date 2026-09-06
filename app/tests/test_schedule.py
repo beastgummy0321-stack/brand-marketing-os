@@ -40,6 +40,7 @@ from app.schedule import creative as creative_mod
 from app.schedule import jobs as schedule_jobs
 from app.schedule import period as period_mod
 from app.schedule import plan as plan_mod
+from app.schedule import repository as schedule_repo
 from app.schedule import state as schedule_state
 from app.schedule import tree as tree_mod
 
@@ -1240,9 +1241,18 @@ class BindTreeApiContractTest(_ScheduleApiTestBase):
 
     # -- 資料正確性：綁定鍵是 node_key，兩個同名節點各自綁到不同活動、互不干擾 -----------
 
-    def test_two_same_name_siblings_bind_to_different_campaigns_and_stay_distinct(self):
-        """票 T3b（ADR 0055 §1）：舊版拿節點名稱當 dict key，兩個「活動一」會撞成同一格；
-        新版鍵是 node_key，各自綁到不同的活動——這是舊版表達不出來的狀態。"""
+    def test_two_top_level_siblings_rebind_independently_after_re_expansion(self):
+        """票 T3b（ADR 0055 §1）：舊版拿節點名稱當 dict key，兩個節點會撞成同一格；新版
+        鍵是 node_key，各自綁到各自的活動——這是舊版表達不出來的狀態。
+
+        票 10（ADR 0064 §3）修正這支測試原本的手法：`bind_tree()` 以前問「畫面現在顯示
+        成綁定了嗎」，這支測試利用「已顯示綁定的節點不會重新查詢」讓兩個**同名**節點各自
+        對到 Meta 上不同時間點才看得到的活動；現在 `bind_tree()` 問的是「這一棵樹自己有
+        沒有這個節點的列」，同一棵樹裡兩個同名節點會問出一模一樣的 Meta 查詢結果，兩者
+        無法用名稱互相分辨——這正是 ADR 0064 關掉的洞的另一面：不能再假裝「兩個同名位置
+        查得出兩個不同答案」。這裡改用兩個**不同名**的頂層節點，改用它們驗證同一件更基本
+        的事：`channel_entity_map` 用 `node_key` 分格，兩個位置的列各自獨立、互不覆寫，
+        重新展開後舊位置也要拿到屬於這一棵新樹自己的列（不是繼續沿用舊樹的列）。"""
         self._succeed_plan_and_tree()  # 第一次展開：第一層只有一個「活動一」（node_key "1"）
         # 平台上這一輪還沒有任何廣告組合（票 T3c：第二層配不到，不影響這裡要看的第一層
         # 結果，`_platform_ad_sets({})` 對任何活動都回空清單）。
@@ -1250,48 +1260,57 @@ class BindTreeApiContractTest(_ScheduleApiTestBase):
                 self._platform_ad_sets({}):
             resp = self._bind()
         self.assertEqual(resp.json()["tree"]["nodes"][0]["bound_external_id"], "camp-1")
+        first_tree_id = resp.json()["tree"]["task_id"]
 
-        # 重新展開：這次代理回了兩個第一層節點，都叫「活動一」——node_key "1" 名字沒變，
-        # 綁定跟著位置留下來；"2" 是新位置，還沒綁。
-        schedule_jobs.PROVIDER = _fake(_tree_fenced(_two_top_nodes("活動一", "活動一")))
+        # 重新展開：這次代理回了兩個第一層節點——"1" 名字沒變（活動一），"2" 是新位置
+        # （活動二）。ADR 0064 之後，這一棵新樹自己還沒有任何一列，兩個節點都要重新比對。
+        schedule_jobs.PROVIDER = _fake(_tree_fenced(_two_top_nodes("活動一", "活動二")))
         resp = self.client.post(
             f"/api/schedule/brands/{self.brand['id']}/tree", json={"plan_index": 0}
         )
         self.assertEqual(resp.status_code, 200, resp.text)
         self._run_worker()
 
-        # 平台上這時只有另一個叫「活動一」的活動（使用者照樹又手動建了第二個），底下
-        # 各自也建好了一個廣告組合「組合」（票 T3c：第二層也要各自綁到各自活動內部）。
-        with self._platform_campaigns({self.account_id: [("camp-2", "活動一")]}), \
-                self._platform_ad_sets(
-                    {"camp-1": [("as-1x", "組合")], "camp-2": [("as-2x", "組合")]}
-                ), \
-                self._platform_ads(
-                    {"as-1x": [("ad-1x", "單元")], "as-2x": [("ad-2x", "單元")]}
-                ):
+        # 平台上「活動一」還是原來那個 camp-1（使用者沒動它），「活動二」是照新樹手動建的
+        # camp-2；底下各自也建好了一個廣告組合「組合」（票 T3c：第二層也要各自綁到各自
+        # 活動內部）。
+        with self._platform_campaigns(
+            {self.account_id: [("camp-1", "活動一"), ("camp-2", "活動二")]}
+        ), self._platform_ad_sets(
+            {"camp-1": [("as-1x", "組合")], "camp-2": [("as-2x", "組合")]}
+        ), self._platform_ads(
+            {"as-1x": [("ad-1x", "單元")], "as-2x": [("ad-2x", "單元")]}
+        ):
             resp = self._bind()
         self.assertEqual(resp.status_code, 200, resp.text)
         tree = resp.json()["tree"]
         self.assertIsNone(tree["bind_failure"])
-        self.assertEqual(tree["nodes"][0]["bound_external_id"], "camp-1")  # 沒被動過
+        second_tree_id = tree["task_id"]
+        self.assertNotEqual(first_tree_id, second_tree_id)
+        self.assertEqual(tree["nodes"][0]["bound_external_id"], "camp-1")
         self.assertEqual(tree["nodes"][1]["bound_external_id"], "camp-2")  # 各自綁到不同活動
         self.assertEqual(tree["nodes"][0]["children"][0]["bound_external_id"], "as-1x")
         self.assertEqual(tree["nodes"][1]["children"][0]["bound_external_id"], "as-2x")
-        # 票 T5：第三層現在也綁——同一支測試守的「同名手足各自綁到不同活動」延伸一層。
+        # 票 T5：第三層現在也綁——同一支測試守的「兩個位置各自綁到不同活動」延伸一層。
         self.assertEqual(
             tree["nodes"][0]["children"][0]["children"][0]["bound_external_id"], "ad-1x"
         )
         self.assertEqual(
             tree["nodes"][1]["children"][0]["children"][0]["bound_external_id"], "ad-2x"
         )
+        # 票 10（ADR 0064 §1）：node_key "1" 現在有兩列——tree1 綁的那一列，跟這次重新
+        # 展開後、這一棵新樹自己重新查詢寫下的那一列（外部 id 剛好還是同一個 camp-1，
+        # 但物理上是不同的兩列）；node_key "2" 是全新的位置，只有一列。兩個 node_key
+        # 各自的列互不干擾，正是這支測試原本要證的事。
         self.assertEqual(
-            self._channel_entity_map_rows(),
-            [{"node_key": "1", "external_id": "camp-1"},
-             {"node_key": "1.1", "external_id": "as-1x"},
-             {"node_key": "1.1.1", "external_id": "ad-1x"},
-             {"node_key": "2", "external_id": "camp-2"},
-             {"node_key": "2.1", "external_id": "as-2x"},
-             {"node_key": "2.1.1", "external_id": "ad-2x"}],
+            sorted(
+                (r["node_key"], r["external_id"]) for r in self._channel_entity_map_rows()
+            ),
+            sorted([
+                ("1", "camp-1"), ("1", "camp-1"),
+                ("1.1", "as-1x"), ("1.1.1", "ad-1x"),
+                ("2", "camp-2"), ("2.1", "as-2x"), ("2.1.1", "ad-2x"),
+            ]),
         )
 
     # -- 資料正確性：位置配對，名字只當否決票 --------------------------------------------
@@ -1363,9 +1382,14 @@ class BindTreeApiContractTest(_ScheduleApiTestBase):
         self.assertIsNone(tree["nodes"][0]["bound_external_id"])
         self.assertIsNone(tree["nodes"][1]["bound_external_id"])
 
-    # -- 資料正確性：改名後第二次 bind 是覆寫同一列，不是撞唯一鍵 -----------------------
+    # -- 資料正確性：改名後第二次 bind 是新樹自己的一列，不是撞唯一鍵、也不是覆寫 --------
 
-    def test_second_bind_after_rename_updates_the_row_not_a_unique_violation(self):
+    def test_second_bind_after_rename_inserts_a_new_row_for_the_new_tree(self):
+        """票 10（ADR 0064 §1）：這支測試原本叫 `..._updates_the_row_not_a_unique_
+        violation`，證的是「改名後重綁是覆寫同一列」——那正是 ADR 0064 要關掉的洞（換一棵
+        樹綁同一個位置，蓋掉上一棵樹的列，上一期的廣告從資料庫裡永久消失）。改名逼出的
+        重新查詢現在寫進**一列新的**，第一棵樹自己的那一列（`external_id`／
+        `source_tree_task_id` 都是）原封不動留著——這才是這支測試現在該證的事。"""
         self._succeed_plan_and_tree()
         # 這支測試守的是第一層 upsert 鍵的行為，第二層有沒有配到不影響——兩次都給空的
         # 廣告組合清單（`_platform_ad_sets({})`），兩層各自的失敗互不牽連。
@@ -1373,6 +1397,7 @@ class BindTreeApiContractTest(_ScheduleApiTestBase):
                 self._platform_ad_sets({}):
             resp = self._bind()
         self.assertEqual(resp.json()["tree"]["nodes"][0]["bound_external_id"], "camp-1")
+        first_tree_id = resp.json()["tree"]["task_id"]
 
         schedule_jobs.PROVIDER = _fake(_tree_fenced(_one_tree_nodes(name="活動一（新版）")))
         resp = self.client.post(
@@ -1381,19 +1406,35 @@ class BindTreeApiContractTest(_ScheduleApiTestBase):
         self.assertEqual(resp.status_code, 200, resp.text)
         self._run_worker()
 
-        # 第二次 bind：平台上是新名字的活動——upsert 蓋掉同一個 node_key 的舊列，不是
-        # 撞 `(org_id, brand_id, channel_id, node_key)` 唯一鍵報錯。平台上一樣沒有廣告
-        # 組合，所以第二層兩個子節點都配不到——`bind_failure` 因此非 null，這是第二層
-        # 自己的失敗，不影響這支測試要證的事：第一層同一個 node_key 只有一列。
+        # 第二次 bind：平台上是新名字的活動——這一棵新樹自己還沒有任何一列，所以照樣
+        # 重新查詢、寫下屬於自己的一列，不是撞 `(org_id, brand_id, channel_id, node_key,
+        # source_tree_task_id)` 唯一鍵報錯（兩邊的 `source_tree_task_id` 本來就不同，
+        # 不會撞）。平台上一樣沒有廣告組合，所以第二層兩個子節點都配不到——`bind_failure`
+        # 因此非 null，這是第二層自己的失敗，不影響這支測試要證的事。
         with self._platform_campaigns({self.account_id: [("camp-2", "活動一（新版）")]}), \
                 self._platform_ad_sets({}):
             resp = self._bind()
         self.assertEqual(resp.status_code, 200, resp.text)
         tree = resp.json()["tree"]
+        second_tree_id = tree["task_id"]
+        self.assertNotEqual(first_tree_id, second_tree_id)
         self.assertIn("「組合1」在 Meta 上找不到", tree["bind_failure"])
         self.assertEqual(tree["nodes"][0]["bound_external_id"], "camp-2")
-        self.assertEqual(  # 同一個 node_key 只有一列，覆寫不是新增
-            self._channel_entity_map_rows(), [{"node_key": "1", "external_id": "camp-2"}]
+        self.assertEqual(  # 新樹自己一列，舊樹的列還在——兩列，不是覆寫成一列
+            sorted(
+                (r["node_key"], r["external_id"]) for r in self._channel_entity_map_rows()
+            ),
+            [("1", "camp-1"), ("1", "camp-2")],
+        )
+        first_tree_row = web.conn.execute(
+            "SELECT external_id, source_tree_task_id FROM channel_entity_map"
+            " WHERE org_id = %s AND brand_id = %s AND node_key = '1' AND external_id = 'camp-1'",
+            (coredb.DEV_ORG_ID, self.brand["id"]),
+        ).fetchone()
+        self.assertEqual(  # done-check 3：第一棵樹的列原封不動——external_id 跟
+                           # source_tree_task_id 都還是它自己的
+            dict(first_tree_row),
+            {"external_id": "camp-1", "source_tree_task_id": first_tree_id},
         )
 
     # -- 租戶隔離：疊圖的 SQL 用 org_id／brand_id 篩，另一個組織的綁定看不到 --------------
@@ -1653,7 +1694,8 @@ class BindTreeApiContractTest(_ScheduleApiTestBase):
         """ticket done-check 3：雙寫在結構上不可能。改名逼出真的第二次 `upsert_binding`
         （跟上面第一層 `test_second_bind_after_rename_updates_the_row_not_a_unique_violation`
         同一個手法）——同一期、同一個 `node_key`，migration 那把唯一鍵讓第二次 INSERT
-        變成 `ON CONFLICT DO NOTHING`，不是應用層自己記得寫過。"""
+        變成 `ON CONFLICT DO UPDATE`（票 10，ADR 0064 §4：改綁到新樹時 `source_tree_task_id`
+        要跟著換），不是應用層自己記得寫過。"""
         self._succeed_plan_and_tree()
         with self._platform_campaigns({self.account_id: [("camp-1", "活動一")]}), \
                 self._platform_ad_sets({"camp-1": [("as-1", "組合1"), ("as-2", "組合2")]}), \
@@ -1681,6 +1723,14 @@ class BindTreeApiContractTest(_ScheduleApiTestBase):
         self.assertEqual(resp.status_code, 200, resp.text)
         rows = self._period_node_membership_rows()
         self.assertEqual(sorted(r["node_key"] for r in rows), ["1.1", "1.2"])
+        # ticket done-check 3（money）：第二棵樹綁完之後，channel_entity_map 對每個
+        # node_key 都有兩棵樹各自的一列，但 period_node_memberships_for_brand() 的 JOIN
+        # 多帶了 source_tree_task_id 才不會 fan-out——回傳列數要跟 membership 本身的列數
+        # 一樣多，不是列數乘上樹的數量。
+        memberships = schedule_repo.period_node_memberships_for_brand(
+            web.conn, coredb.DEV_ORG_ID, self.brand["id"]
+        )
+        self.assertEqual(len(memberships), len(rows))
 
 
 class CreativeApiContractTest(_ScheduleApiTestBase):

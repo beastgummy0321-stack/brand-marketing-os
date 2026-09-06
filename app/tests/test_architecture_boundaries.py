@@ -1313,7 +1313,18 @@ class CoordinateDimensionSyncTest(unittest.TestCase):
 #      量對了，round 2 沒有再動這一筆。
 #   4. 本段理由註解自己（含上面「這道棘輪在落地前就已經在漏」那一段，done-check 5 點名的
 #      新要求）。
-TEST_LINES_CEILING = 20101  # 2026-09-06 演練四條 issue（route B，一次收）：
+TEST_LINES_CEILING = 20236  # 票 10 round 2（review 打回的缺口）：`test_schedule.py` 補
+# `schedule_repo.period_node_memberships_for_brand(...)` 那一條 done-check 3 點名、round 1
+# 沒寫的 money 斷言（第二棵樹綁完之後回傳列數要跟 membership 本身一樣多，不因為 JOIN
+# fan-out 而變多），量到的數字，不留餘裕。前一次是 20222——票 10（ADR 0064）：
+# `test_schedule_performance.py` 新兩支
+# （`PreviousTreeKeepsItsCoordinatesTest` 取代 `RenamedNodeUntaggedTest`——同一位置被兩棵樹
+# 各綁一次，兩邊座標都要留著，不是其中一邊落進 untagged；`SpendMeetsTheBindingLiveOnItsDateTest`
+# ——同一個平台實體被兩棵樹各綁一次，花費照日期分派給那天生效的那一次，不重複計算）、
+# `test_schedule.py` 兩支既有測試改寫（`BindTreeApiContractTest`：重新展開後第二次 bind
+# 寫進新樹自己的一列，不是覆寫舊樹的列；兩個不同名的頂層節點各自重新綁定）＋新增
+# `KNOWN_MODULE_SIZES["app/schedule"]` 那筆理由註解、本段理由註解自己佔的行。
+# 20101→20222，量到的數字，不留餘裕。前一次是 20101——2026-09-06 演練四條 issue（route B，一次收）：
 # `test_approval.py` 一支（**金額**：實際花費只算這棵樹綁到的活動，同帳戶別條活動的錢不進
 # `spend_to_date`）、`test_dashboard_jobs_boundary.py` 既有那支多驗三個排程 kind（**API 契約**）、
 # `test_llm_gateway.py` 既有 compile 那支多驗【本期要測的】自己一段（**資料正確性**：行動
@@ -1647,7 +1658,16 @@ KNOWN_MODULE_SIZES = {
     "app/orders": 1423,  # 票 12：channel_revenue 一張表取代三張（刪掉藥局專屬那一整組
                           # 之後仍淨增）——官網帳本寫入路徑、channel_revenue_summary()、
                           # 通用手動登錄（含「官網不能手動登錄」那道錢的守門）
-    "app/schedule": 3853,  # 2026-09-06 演練三條 issue：`tree_approval.py` 實際花費逐實體篩選、
+    "app/schedule": 3955,  # 票 10（ADR 0064：一個綁定屬於做出它的那棵樹）：
+                  # `binding.py` 的 `bind_tree()` 改問 `bindings_for_tree()`（這一棵樹自己有
+                  # 沒有這個節點的列），不再問畫面疊圖；`repository.py` 新增
+                  # `bindings_for_tree()`，`upsert_binding()`／`depth_three_bindings()`／
+                  # `insert_period_node_membership()`／`period_node_memberships_for_brand()`
+                  # 四支跟著換鍵；`performance.py` 改寫花費按「那天已經生效的最新一次綁定」
+                  # 歸屬（ADR 0064 §2），刪掉不再需要的讀時否決票；`tree.py` 的 `node_key`
+                  # 註解跟著更新一句。3853→3955，量到的數字，不留餘裕。前一次是 3853——
+                  # 2026-09-06 演練三條 issue：`tree_approval.py`
+                  # 實際花費逐實體篩選、
                   # `diagnosis.py` 打平線第②層＋可核對數字＋活動樹提醒進 prompt、`jobs.py`
                   # 接線，3709→3853。量到的數字，不留餘裕。前一次是 3709——票 02（T6c 成效判讀上畫面）：`diagnosis.py`
                             # 加 `_round_result()`／`latest_round()`／`adopt_content()` 三支——GET

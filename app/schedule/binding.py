@@ -71,7 +71,7 @@ def _failure_reason(name: str, matches: list) -> str:
 
 
 def bind_tree(conn, tree_row: dict, org_id: str, brand_id: str) -> list[str]:
-    """票 11／T3b／T3c／T5：用名稱精準比對（區分大小寫、不 trim）把活動綁回第一層節點，
+    """票 11／T3b／T3c／T5／10：用名稱精準比對（區分大小寫、不 trim）把活動綁回第一層節點，
     已綁定的跳過；零筆或兩筆以上是失敗，不猜。第一層綁定成功（不論是這次剛綁的、還是
     先前就綁著）之後，才在它底下比對第二層——用它的 `bound_external_id`（活動 id）當
     父層範圍，只在這個活動內部找廣告組合；第一層沒綁成的，底下的第二層整批不比對，
@@ -79,8 +79,20 @@ def bind_tree(conn, tree_row: dict, org_id: str, brand_id: str) -> list[str]:
     深一層：第三層（廣告，ADR 0055 §7 留給這張票開）在它底下比對，只在這個廣告組合
     內部找廣告；第二層沒綁成的，底下的第三層整批不比對。回傳「這一批有哪些節點配對失敗、
     各自是哪一種失敗」，空清單＝整批成功；組句子的是呼叫端（`bind_failure_message()`，
-    仍然一次講完整批，ADR 0055 §4）。"""
-    tree = tree_with_bindings(conn, tree_row, org_id, brand_id)
+    仍然一次講完整批，ADR 0055 §4）。
+
+    票 10（ADR 0064 §3）：「這個節點已經綁了嗎」問的是 `bindings_for_tree(...,
+    tree_row["id"])`——**這一棵樹自己**有沒有這個節點的列，不是疊圖用的
+    `tree_with_bindings()`（那支回答「這個位置現在顯示成綁定了嗎」，會被上一棵樹留下的
+    列騙到：同位置、同名字，疊圖照樣顯示綁定，但那一列的 `source_tree_task_id` 是上一棵
+    樹的，不是這一棵）。用這個顯示疊圖判斷會不會去重綁，這一棵樹的廣告就永遠拿不到屬於
+    自己的綁定列——ticket 從另一邊重新引進的那個 bug。這裡因此不重用 `tree_with_bindings()`
+    的輸出，改用 `tree_mod.tree_from_task_row()` 純取樹形，`bound_external_id` 一律從本地
+    的 `bound` 字典查（先看這一棵樹是不是已經綁過，沒有才去 Meta 配對）。"""
+    tree = tree_mod.tree_from_task_row(tree_row)
+    bound = schedule_repo.bindings_for_tree(
+        conn, org_id, brand_id, CHANNEL_KEY, tree_row["id"]
+    )
     account_ids = meta_repo.bound_account_ids_for_brand(conn, org_id, brand_id)
     # 票 T3e（ADR 0055 §11）：深度 2（扛預算）節點綁定成功時，順手記一列
     # `period_node_membership`——「品牌當下的檔期」用模組既有的同一條讀
@@ -93,7 +105,9 @@ def bind_tree(conn, tree_row: dict, org_id: str, brand_id: str) -> list[str]:
     failures: list[str] = []
 
     for node in tree["nodes"]:
-        if node["bound_external_id"] is None:
+        existing = bound.get(node["node_key"])
+        node_bound_id = existing["external_id"] if existing else None
+        if node_bound_id is None:
             matches = meta_repo.campaign_ids_by_exact_name(
                 conn, org_id, account_ids, node["name"]
             )
@@ -109,12 +123,14 @@ def bind_tree(conn, tree_row: dict, org_id: str, brand_id: str) -> list[str]:
                 source_tree_task_id=tree_row["id"],
             )
             newly_bound = True
-            node["bound_external_id"] = matches[0]["campaign_id"]
+            node_bound_id = matches[0]["campaign_id"]
 
         for child in node["children"]:
-            if child["bound_external_id"] is None:
+            existing_child = bound.get(child["node_key"])
+            child_bound_id = existing_child["external_id"] if existing_child else None
+            if child_bound_id is None:
                 matches = meta_repo.ad_set_ids_by_exact_name(
-                    conn, org_id, node["bound_external_id"], child["name"]
+                    conn, org_id, node_bound_id, child["name"]
                 )
                 if len(matches) != 1:
                     failures.append(_failure_reason(child["name"], matches))
@@ -133,15 +149,16 @@ def bind_tree(conn, tree_row: dict, org_id: str, brand_id: str) -> list[str]:
                         campaign_period_id=period["id"], channel_id=channel_id,
                         node_key=child["node_key"],
                         from_date=period["start_date"], to_date=period["end_date"],
+                        source_tree_task_id=tree_row["id"],
                     )
                 newly_bound = True
-                child["bound_external_id"] = matches[0]["adset_id"]
+                child_bound_id = matches[0]["adset_id"]
 
             for grandchild in child["children"]:
-                if grandchild["bound_external_id"] is not None:
+                if bound.get(grandchild["node_key"]) is not None:
                     continue
                 matches = meta_repo.ad_ids_by_exact_name(
-                    conn, org_id, child["bound_external_id"], grandchild["name"]
+                    conn, org_id, child_bound_id, grandchild["name"]
                 )
                 if len(matches) != 1:
                     failures.append(_failure_reason(grandchild["name"], matches))

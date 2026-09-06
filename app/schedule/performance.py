@@ -10,11 +10,13 @@ join 的路徑（ADR 0057 §1），完全比照 `period.compute_money()` 既有�
 `channel_entity_map` 屬於 `app/schedule`——跨模組 SQL join 會把 `app/schedule` 建進另一個
 模組的表裡（集裝箱憲章第一節）。
 
-哪一支綁定算數：`channel_entity_map` 深度 3 的列，且 `node_name_at_bind` 仍然跟目前那棵樹
-同一個 `node_key` 的名字相符（ADR 0055 §4 的讀時否決票，跟 `binding.tree_with_bindings()`
-套用在每一層的規則完全一樣——這裡重用那支函式本身，不是另外重寫一份否決邏輯）。哪一份
-候選算數：那個位置 `(node_key, source_tree_task_id)` 最新一輪的 `creative_candidate`
-（ADR 0057 §2：绝不是「最新的樹」）。
+哪一支綁定算數（票 10，ADR 0064 §1）：`channel_entity_map` 深度 3、`source_tree_task_id`
+不是 NULL 的每一列——一列自己就名著它是哪一棵樹綁的，且那一棵樹永遠不會被別的樹改寫，
+所以不必再問「還跟現在最新那棵樹的名字對得上嗎」（那張否決票只守著畫面的
+`binding.tree_with_bindings()`，這裡不重用）。一個平台實體可能被兩棵樹各綁過一次，這裡
+按 ADR 0064 §2 用花費那一天配對「那天已經生效的最新一次綁定」。哪一份候選算數：那個
+位置 `(node_key, source_tree_task_id)` 最新一輪的 `creative_candidate`（ADR 0057 §2：
+绝不是「最新的樹」）。
 
 `未標座標`永遠是桶子，不是破洞（ADR 0057 §5）：一支花費列碰不到任何一個維度的座標，就落
 進那個維度自己的 `untagged`；碰不到任何一個維度（沒綁定、綁定沒過否決票、候選還沒有任何
@@ -28,8 +30,9 @@ join 的路徑（ADR 0057 §1），完全比照 `period.compute_money()` 既有�
 `revenue` 只加總「有追蹤到 roas」的那些列，`roas_coverage` 誠實地回「幾列裡有幾列有追蹤」。
 """
 
-from datetime import timedelta
+from datetime import date, datetime, timedelta
 
+from app.core import settings as coresettings
 from app.meta import repository as meta_repo
 from app.schedule import binding as binding_mod
 from app.schedule import repository as schedule_repo
@@ -37,41 +40,61 @@ from app.schedule import state
 from app.schedule.creative import COORDINATE_KEYS
 
 
-def _leaf_bound_ids(nodes: list) -> dict:
-    """活動樹最深層（沒有 `children` 的）節點裡，已經通過名字否決票、真的綁定的
-    `node_key → bound_external_id`——`state._leaf_ad_nodes()` 也走同一個遞迴形狀，但那支
-    給創意產生流程用，特意不帶 `bound_external_id`（呼叫端只比對名字）；這裡要的正是
-    那一欄，所以另外寫這支小一號的，不去動 `state.py` 那支既有函式的回傳形狀。"""
-    result: dict = {}
-    for node in nodes:
-        if node["children"]:
-            result.update(_leaf_bound_ids(node["children"]))
-        elif node["bound_external_id"] is not None:
-            result[node["node_key"]] = node["bound_external_id"]
-    return result
-
-
 def _vetted_depth_three_bindings(conn, org_id: str, brand_id: str) -> dict:
-    """`node_key → {"external_id", "source_tree_task_id"}`，只留下：(1) 深度 3、
-    `local_state='mapped'` 的綁定，(2) `node_name_at_bind` 還跟目前那棵樹同一個 `node_key`
-    的名字相符（`binding.tree_with_bindings()` 對每一層都套用的同一條讀時否決票，這裡
-    重用它，不重寫），(3) `source_tree_task_id` 不是 NULL（ADR 0057 §2：這一票之前綁的
-    列沒有這一欄，找不到候選，落進 `untagged`，不是特例）。"""
-    raw = schedule_repo.depth_three_bindings(conn, org_id, brand_id, binding_mod.CHANNEL_KEY)
-    if not raw:
-        return {}
-    tree_row, _running = state._display_task_row(conn, brand_id, state.TREE_TASK_TYPE)
-    if tree_row is None:
-        return {}
-    tree = binding_mod.tree_with_bindings(conn, tree_row, org_id, brand_id)
-    vetted_external_ids = _leaf_bound_ids(tree["nodes"])
+    """票 10（ADR 0064 §1）：`(node_key, source_tree_task_id) → {"external_id",
+    "created_at"}` for every mapped depth-3 binding whose `source_tree_task_id` is not NULL
+    (rows bound before that column existed have no tree to find a candidate against — they
+    fall into `untagged`, not a special case).
+
+    不再讀 `state._display_task_row()` 也不再重用 `binding.tree_with_bindings()` 的名字
+    否決票：一列現在自己就名著它是哪一棵樹綁的，而那一棵樹永遠不會被別的樹改寫
+    （`upsert_binding()` 的唯一鍵已經把 `source_tree_task_id` 算進去），所以「還跟現在
+    最新的那棵樹的名字對得上嗎」這張否決票已經沒有東西可以否決——它以前正是把上一期
+    的綁定打成 `untagged` 的那一半成因（ADR 0064「問題」段）。那張否決票依然守著畫面
+    （`binding.tree_with_bindings()` 本身沒有改）。"""
     return {
-        node_key: {"external_id": row["external_id"],
-                    "source_tree_task_id": row["source_tree_task_id"]}
-        for node_key, row in raw.items()
-        if row["source_tree_task_id"] is not None
-        and vetted_external_ids.get(node_key) == row["external_id"]
+        slot: {"external_id": row["external_id"], "created_at": row["created_at"]}
+        for slot, row in schedule_repo.depth_three_bindings(
+            conn, org_id, brand_id, binding_mod.CHANNEL_KEY,
+        ).items()
+        if slot[1] is not None
     }
+
+
+def _binding_date(conn, org_id: str, created_at) -> date:
+    """一列綁定的 `created_at` 是 timestamptz（psycopg 回傳 UTC 時刻）；花費的 `spend_date`
+    是組織時區的日曆日——兩邊要先落在同一個時區才能比較，否則台北在 UTC 還沒跨到下一天
+    的那 8 小時裡，今天綁的東西會被判成「明天才生效」（同 `tree_approval._approval_
+    overspend()` 對 `approved_at` 的既有處理）。"""
+    if isinstance(created_at, datetime):
+        return created_at.astimezone(coresettings.org_timezone(conn, org_id=org_id)).date()
+    return created_at
+
+
+def _bindings_by_entity(conn, org_id: str, vetted: dict) -> dict:
+    """`external_id → [(binding_date, slot), ...]`，依 `binding_date`（組織時區的日曆日）
+    由舊到新排序——同一個平台實體可能被兩棵樹各綁過一次（ADR 0064 §2：期與期之間重複
+    使用同一支活動／組合／廣告），呼叫端按花費那一天落在哪一次綁定之後決定歸屬。"""
+    by_entity: dict = {}
+    for slot, row in vetted.items():
+        binding_date = _binding_date(conn, org_id, row["created_at"])
+        by_entity.setdefault(row["external_id"], []).append((binding_date, slot))
+    for bindings in by_entity.values():
+        bindings.sort(key=lambda item: item[0])
+    return by_entity
+
+
+def _slot_for_spend(bindings: list, spend_date) -> tuple | None:
+    """ADR 0064 §2：花費那一天屬於「`created_at` 那一天 <= 花費那一天」裡最新的一次綁定；
+    比所有綁定都早的花費歸最早的那一次。`bindings` 已經照 `created_at` 由舊到新排序，所以
+    由頭到尾走一遍、留下最後一個符合的就是答案；一個都不符合就是最早那一個。"""
+    if not bindings:
+        return None
+    chosen = bindings[0][1]
+    for binding_date, slot in bindings:
+        if binding_date <= spend_date:
+            chosen = slot
+    return chosen
 
 
 def _coordinate_labels(conn, org_id: str, brand_id: str) -> dict:
@@ -127,20 +150,26 @@ def _untagged_bucket(rows: list) -> dict:
     }
 
 
-def _currency_view(currency: str, rows: list, entity_candidate: dict, labels: dict) -> dict:
+def _reaches_any(candidate: dict | None) -> bool:
+    return bool(candidate and any(candidate.get(f"{d}_key") for d in COORDINATE_KEYS))
+
+
+def _currency_view(currency: str, rows: list, row_candidate: dict, labels: dict) -> dict:
+    """票 10（ADR 0064 §2）：`row_candidate` 現在是 `(entity_id, spend_date) → candidate`
+    ——同一個 `entity_id` 在不同的日子可能落在不同一次綁定（因此不同一份候選），不再是
+    `entity_id → candidate` 那種整個月只有一份答案的形狀。"""
     total_spend = round(sum(r["spend"] for r in rows), 2)
-    reaches_any = {
-        entity_id: bool(candidate and any(candidate.get(f"{d}_key") for d in COORDINATE_KEYS))
-        for entity_id, candidate in entity_candidate.items()
-    }
-    currency_untagged_rows = [r for r in rows if not reaches_any.get(r["entity_id"], False)]
+    currency_untagged_rows = [
+        r for r in rows
+        if not _reaches_any(row_candidate.get((r["entity_id"], r["spend_date"])))
+    ]
 
     dimensions = []
     for dimension in COORDINATE_KEYS:
         column = f"{dimension}_key"
         buckets: dict = {}
         for row in rows:
-            candidate = entity_candidate.get(row["entity_id"])
+            candidate = row_candidate.get((row["entity_id"], row["spend_date"]))
             key = candidate.get(column) if candidate else None
             buckets.setdefault(key, []).append(row)
         dim_untagged_rows = buckets.pop(None, [])
@@ -174,20 +203,28 @@ def brand_creative_performance(conn, org_id: str, brand_id: str) -> dict:
     )
 
     vetted = _vetted_depth_three_bindings(conn, org_id, brand_id)
-    entity_to_slot = {b["external_id"]: (node_key, b["source_tree_task_id"])
-                       for node_key, b in vetted.items()}
+    bindings_by_entity = _bindings_by_entity(conn, org_id, vetted)
     candidates = schedule_repo.creative_candidates_for_brand(conn, org_id, brand_id)
-    entity_candidate = {
-        entity_id: candidates.get(slot) for entity_id, slot in entity_to_slot.items()
-    }
     labels = _coordinate_labels(conn, org_id, brand_id)
+
+    # 票 10（ADR 0064 §2）：一個 `entity_id` 可能落在兩次綁定之間，所以候選要按
+    # `(entity_id, spend_date)` 逐列查，不是整個月只查一次——同一個 `entity_id` 在不同的
+    # 花費日可能屬於不同一次綁定（因此不同一個座標）。`row_candidate` 每個
+    # `(entity_id, spend_date)` 只算一次，rows 裡同一組合最多重複出現在同一個幣別的清單
+    # 裡一次（`daily_entity_spend()` 的 `GROUP BY (spend_date, entity_id, currency)`）。
+    row_candidate = {
+        (row["entity_id"], row["spend_date"]): candidates.get(
+            _slot_for_spend(bindings_by_entity.get(row["entity_id"], []), row["spend_date"])
+        )
+        for row in daily_rows
+    }
 
     rows_by_currency: dict = {}
     for row in daily_rows:
         rows_by_currency.setdefault(row["currency"], []).append(row)
 
     currencies = [
-        _currency_view(currency, rows, entity_candidate, labels)
+        _currency_view(currency, rows, row_candidate, labels)
         for currency, rows in sorted(rows_by_currency.items())
     ]
 

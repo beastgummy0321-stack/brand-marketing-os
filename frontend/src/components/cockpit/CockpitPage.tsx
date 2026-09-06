@@ -451,7 +451,7 @@ function CurrencyPerformance({
       {onlyUntagged ? (
         <EmptyState
           title="還沒有座標可以對"
-          description="這個品牌本月的廣告都不是系統生成的，所以還沒有座標可以對。"
+          description="這個品牌本月的花費目前都對不到任何座標。"
         />
       ) : (
         <>
