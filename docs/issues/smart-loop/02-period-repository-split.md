@@ -9,6 +9,10 @@ make room"; the two groups that move are the two that handle money-adjacent rows
 
 ## What
 
+Literal example: N/A — a pure move; every function keeps its signature and return shape, so the contract's literal
+shapes are the ones already in the docstrings of the moved functions (e.g. `period_node_results()` still returns the
+list of dicts ticket 01 documented). Only the module path of eleven names changes.
+
 New file `app/schedule/period_repository.py`, private to the package, imports only `app.core.db` (`Conn`,
 `ConnProxy`, `jsonb`, `new_id`, `now_utc` as needed) — **no `from app.schedule …` import at all** (the moved code
 uses none today; verified by the inventory: `repository.py`'s only in-package import is `creative.COORDINATE_KEYS`,
