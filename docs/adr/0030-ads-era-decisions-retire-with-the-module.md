@@ -25,7 +25,7 @@ is the vaccine.
 | 0008 | 圖片不進系統、歸因收在主題層 (`app/ads/creative.py`) |
 | 0010 | 排期曲線接受學習期重置 |
 | 0011 | 下期建議最小樣本數＋檔期情境加權 (`app/ads/nextcycle.py`) |
-| 0012 | 規則有效期與 prompt 上限 |
+| 0012 | 規則有效期（**只有這半**——prompt 上限那半仍在force，見下方註） |
 | 0014 | 節日相關性業種比對 |
 | 0015 | 「這期跳過」只留脈絡 |
 | 0016 | QA 五項自行確認、不擋人 (`app/ads/meta_api.py`) |
@@ -38,8 +38,15 @@ department's task files, where the user can read a threshold, disagree with it, 
 in five seconds instead of editing code and waiting for review. That relocation is the whole
 argument of ADR 0028.
 
-Two other ADRs are marked but **not** retired:
+Three other ADRs are marked but **not** retired:
 
+- **0012** (rule expiry + prompt cap) — _added 2026-09-07, after the row above was read as a full
+  retirement._ Only the expiry half went with the module: `app/brand_intelligence/rule_lifecycle.py`
+  and the `rule_expiry` card no longer exist, and nothing sweeps a rule back to 待確認. **The prompt
+  cap is live** — `app/llm/context_compiler.py:_select_rules_for_prompt` still reads the
+  `rule_prompt_cap.max_active_rules` card. ADR 0012 stays in `docs/adr/` with `status: in-force`
+  and carries its own 2026-09-02 half-live/half-gone note; do not delete `_select_rules_for_prompt`
+  on the strength of this table's row.
 - **0004** (drop named authorization) — its stated premise is "系統是單機單人，永遠只有當事人
   操作". ADR 0027 and `CLAUDE.md` #1 overturned that premise. `authorized_by` auto-filled with
   a fixed value is an audit gap under multi-tenancy. Unresolved; not caused by this slice.

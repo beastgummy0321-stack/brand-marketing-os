@@ -46,3 +46,6 @@ supabase/snippets/
 
 # 退役的 ADR：留在硬碟與 git 歷史，但不在讀取路徑上（ADR 0046）
 docs/adr/retired/
+
+# graphify 產出的知識圖（graph.json 7 MB＋，每次重建都變）：本機工具的輸出，不是專案內容
+graphify-out/

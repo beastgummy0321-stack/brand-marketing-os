@@ -6,8 +6,8 @@ Status: 2026-09-06 可用性演練量到（`docs/drills/`）。**三個角色全
 成因：排程頁在日預算為 0 時印一句純文字提示，**沒有任何連過去的元素**：
 
 ```tsx
-本期每日預算：{formatCurrency(schedule.daily_budget)}
-{schedule.daily_budget <= 0 && "（尚未設定，請先到設定頁填「檔期日預算」）"}
+<p className="mt-2 text-2xl font-semibold numeric">{formatCurrency(schedule.daily_budget)}</p>
+{schedule.daily_budget <= 0 && <p className="mt-2 text-xs leading-5 text-warning">尚未設定，請到設定頁的品牌規則參數填入「檔期日預算」。</p>}
 ```
 
 而到了設定頁還有第二道：Vivian 在設定頁**搜不到「檔期日預算」四個字**——那是一張規則卡的欄位，
@@ -19,11 +19,22 @@ Status: 2026-09-06 可用性演練量到（`docs/drills/`）。**三個角色全
 - 小杰：「『確認』是灰的，只用小字提示要去別的兩個頁面填東西，沒有直接連過去的按鈕，
   自己在選單找。」
 
-同一頁還有第二個同型的：沒有產品時印「這個品牌底下還沒有產品，請先去產品頁新增」——一樣沒有連結。
-小杰要在兩個不同頁面之間來回兩次才走得到「確認」。
+演練當下同一頁還有第二個同型的：沒有產品時印「這個品牌底下還沒有產品，請先去產品頁新增」——
+一樣沒有連結。小杰要在兩個不同頁面之間來回兩次才走得到「確認」。
 
-`file:line`：`frontend/src/components/schedule/SchedulePage.tsx:326-332`。
+`file:line`（2026-09-07 重新查證，桌面版重設計 `a60437b` 之後）：
+`frontend/src/components/schedule/ScheduleSetup.tsx:73`。
+票原本寫 `SchedulePage.tsx:326-332`，該檔重設計時拆成 `SchedulePage` ＋ `ScheduleSetup`，
+現在只有 315 行，那個行號早就不存在——舊座標留在這裡沒有用，已改掉。
 
-做法（未裁決，但空間很小）：那兩句提示各掛一個 `Link`，帶著 brandId 直接到位
-（設定頁那條要能直接把品牌選好、捲到那張卡）。route A／B 邊界，半天以內。
+重新查證改變了什麼、沒改變什麼：
+
+- **沒修**：主缺陷還在。文案從「請先到設定頁填『檔期日預算』」改成「尚未設定，請到設定頁的
+  品牌規則參數填入『檔期日預算』」——多講了「品牌規則參數」這個線索（Vivian 搜不到字的那一半
+  好一點了），但**還是純文字、還是沒有連結**，也還是沒講「要先選品牌欄位才會出現」。
+- **已修**：第二句已經不在排程頁。產品空狀態搬到 `frontend/src/components/products/ProductListPage.tsx:63`，
+  改用 `EmptyState` 元件帶「新增產品」按鈕——有動作可按了。所以剩一句要修，不是兩句。
+
+做法（未裁決，但空間很小）：那句提示掛一個 `Link`，帶著 brandId 直接到位
+（要能直接把品牌選好、捲到那張卡）。route A／B 邊界，半天以內。
 三個角色 3/3、每個人都在這裡停下來——這是投報率最高的一條。
