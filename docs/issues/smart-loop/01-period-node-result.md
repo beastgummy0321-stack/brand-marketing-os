@@ -54,7 +54,14 @@ CREATE TABLE period_node_result (
 );
 CREATE INDEX period_node_result_org_id_idx ON period_node_result(org_id);
 CREATE INDEX period_node_result_brand_period_idx ON period_node_result(brand_id, campaign_period_id);
+-- RLS block: copy lines 82-88 of 20260903000001_schedule_campaign_period.sql verbatim with the table and
+-- policy name swapped (ENABLE ROW LEVEL SECURITY; GRANT SELECT, INSERT, UPDATE, DELETE TO authenticated;
+-- DROP POLICY IF EXISTS …_org_isolation; CREATE POLICY …_org_isolation keyed on the app.org_id GUC). ADR 0052.
 ```
+
+Apply locally with `supabase migration up --local` (PATH prefix `/c/Users/User/scoop/shims` in bash; the tests
+bootstrap their own schema from `supabase/migrations/` via `app/tests/conftest.py`, so the local apply is for the
+acceptance step and the schema-drift test, not for pytest).
 
 The composite FK mirrors `20260905000002_schedule_campaign_period_composite_fk.sql`. `grep -rn "REFERENCES
 period_node_result" supabase/migrations/` → nothing (new table). Before writing: `grep -rn "REFERENCES campaign_period"
@@ -169,7 +176,9 @@ you used.
 4. `PeriodApiContractTest.test_get_returns_null_then_the_literal_key_set_once_settled` (line 250): key set gains
    `node_results` and nothing else.
 5. Migration gate, verbatim:
-   `uv run pytest app/tests/test_org_isolation_all_tables.py app/tests/test_brand_isolation_all_tables.py app/tests/test_architecture_boundaries.py app/tests/test_migration_ownership.py -q`
+   `uv run pytest app/tests/test_org_isolation_all_tables.py app/tests/test_brand_isolation_all_tables.py app/tests/test_architecture_boundaries.py app/tests/test_migration_ownership.py app/tests/test_rls_tenant_policy.py app/tests/test_real_db_schema_drift.py -q`
+   (the last two hold ADR 0052's policy-on-every-org-table rule and the local-DB-vs-fresh-migrate drift; the drift
+   test needs the local apply above).
 6. Machine gate, verbatim:
    `uv run ruff check app && uv run pyright && uv run pytest app/tests/test_schedule_period.py app/tests/test_schedule.py app/tests/test_brand_delete.py -q`
    then `cd frontend && npm run typecheck && npm run build && npm run e2e` (8720 backend per `CLAUDE.md`).
@@ -183,8 +192,8 @@ you used.
    settled numbers **and** the node table with 10 rows (3 ad sets + 7 ads bound on 2026-09-07), every row
    `actual_spend 0` and 看不出, the sentence 這期綁定的 Meta 物件沒有花費紀錄 above it, and the break-even line
    showing 1.00x with its source; the DB has the same 10 rows (`select count(*) from period_node_result where
-   campaign_period_id='cpd_01M1Y012CPJJW2F07KV8TJAC8J'`). A real 賺／賠 needs the bound campaign to run — the
-   user's call, not this ticket's.
+   campaign_period_id='cpd_01M1Y012CPJJW2F07KV8TJAC8J'`). The three verdict values are proven by check 1 on
+   seeded data; the real account's state is recorded as a fact, never as a step for the user.
 
 ## Shared files touched
 
