@@ -47,8 +47,6 @@ supabase/snippets/
 # 退役的 ADR：留在硬碟與 git 歷史，但不在讀取路徑上（ADR 0046）
 docs/adr/retired/
 
-# 封存的目標（2026-09-07 使用者裁決）：留在硬碟與 git 歷史，退出看板與讀取路徑；要撿回來就 git add 回去
-docs/issues/smart-loop/
 
 # graphify 產出的知識圖（graph.json 7 MB＋，每次重建都變）：本機工具的輸出，不是專案內容
 graphify-out/
