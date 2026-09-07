@@ -632,6 +632,8 @@ class PlanApiContractTest(_ScheduleApiTestBase):
         self.assertEqual(body["daily_budget"], 3000.0)
         self.assertIsNone(body["plan"])
         self.assertIsNone(body["tree"])  # 票 09：還沒展開過，tree 是 null
+        # 票 smart-loop 05：還沒結算過任何一期，下一期建議是 null。
+        self.assertIsNone(body["next_period_suggestion"])
         # 方案數上下限來自規則卡 schedule_plan_count，預設 1～5（票 08）。
         self.assertEqual(body["plan_count_min"], 1)
         self.assertEqual(body["plan_count_max"], 5)

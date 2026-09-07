@@ -36,6 +36,8 @@ from app.core import db as coredb
 from app.core import rule_cards
 from app.identity import repository as identity_repo
 from app.meta import repository as meta_repo
+from app.schedule import period as period_mod
+from app.schedule import period_repository as period_repo
 from app.schedule import repository as schedule_repo
 
 from .identity_test_helpers import mint_hs256
@@ -222,6 +224,40 @@ class _PeriodTestBase(unittest.TestCase):
         account_id = self._bind_account(org_id, brand_id)
         period_id = self._insert_period(org_id=org_id, brand_id=brand_id, start=start, end=end)
         return account_id, period_id
+
+    def _insert_settled_period(self, *, org_id: str, brand_id: str, start: date, end: date,
+                                daily_budget: float) -> str:
+        """Ticket smart-loop 05 fixture: a `status='settled'` row `next_period_suggestion()`
+        reads directly (`period_repo.latest_settled_period()`), same direct-table style as
+        `_insert_period()` above rather than running the whole settle() pipeline."""
+        period_id = coredb.new_id("cpd")
+        web.conn.execute(
+            "INSERT INTO campaign_period (id, org_id, brand_id, name, start_date, end_date,"
+            " status, daily_budget, currency, settled_spend, settled_revenue, settled_at)"
+            " VALUES (%s, %s, %s, %s, %s, %s, 'settled', %s, 'TWD', 0, 0, now())",
+            (period_id, org_id, brand_id, f"{start.isoformat()} ~ {end.isoformat()}",
+             start, end, daily_budget),
+        )
+        web.conn.commit()
+        return period_id
+
+    def _write_depth2_result(self, *, org_id: str, brand_id: str, period_id: str,
+                              channel_id: str, spend: float, revenue_tracked: float | None,
+                              roas_optimistic: float | None, breakeven: float | None) -> None:
+        """One depth-2 `period_node_result` row, replacing whatever this period had --
+        `period_repo.replace_period_node_results()` is DELETE+INSERT, so calling this again
+        is literally the ticket's "rows replaced by one X row". Fields the suggestion's own
+        arithmetic never reads (`approved_share`, `roas_coverage`, `breakeven_source`,
+        `verdict`) get fixed placeholder values -- only NOT NULL, not meaningful here."""
+        period_repo.replace_period_node_results(web.conn, org_id, brand_id, period_id, [{
+            "source_tree_task_id": coredb.new_id("llm"), "channel_id": channel_id,
+            "node_key": "1.1", "depth": 2, "node_name": "組合一", "external_id": "adset-1",
+            "approved_share": 1.0, "approved_daily_amount": 100.0, "actual_spend": spend,
+            "revenue_tracked": revenue_tracked, "roas_conservative": None,
+            "roas_optimistic": roas_optimistic, "roas_coverage": 1.0,
+            "breakeven_roas": breakeven, "breakeven_source": "rule_card", "verdict": "win",
+            "coordinates_json": None, "settled_at": coredb.now_iso(),
+        }])
 
 
 class SettlementOwnershipSumTest(_PeriodTestBase):
@@ -546,6 +582,99 @@ class PeriodApiContractTest(_PeriodTestBase):
         self.assertEqual(settled["late_revenue_since"], 0)
         # No tree/binding was ever set up for this period, so scoring writes zero rows.
         self.assertEqual(settled_period["node_results"], [])
+
+
+class NextPeriodSuggestionTest(_PeriodTestBase):
+    """Ticket smart-loop 05: `period.next_period_suggestion()` -- data correctness (spend-
+    weighted direction, budget arithmetic, rolled dates) and API contract (`None` before any
+    settled period).
+
+    Red proof: `next_period_suggestion()` returning `None` unconditionally passes
+    `test_none_when_no_settled_period` but fails every assertion in
+    `test_direction_budget_dates_and_step_rate` starting at case (a) -- verified red before
+    the real arithmetic was written."""
+
+    def test_direction_budget_dates_and_step_rate(self):
+        org_id = coredb.DEV_ORG_ID
+        brand_id = self.brand["id"]
+        channel_id = schedule_repo.ensure_meta_channel(web.conn, org_id)
+        start, end = date(2026, 9, 1), date(2026, 9, 7)
+        period_id = self._insert_settled_period(
+            org_id=org_id, brand_id=brand_id, start=start, end=end, daily_budget=2000.0)
+
+        # (a) one win row: spend 100, revenue 300, optimistic 3.0, breakeven 1.0 -> up, 2400,
+        # dates roll to the day after `end` for the same number of days.
+        self._write_depth2_result(org_id=org_id, brand_id=brand_id, period_id=period_id,
+                                   channel_id=channel_id, spend=100.0, revenue_tracked=300.0,
+                                   roas_optimistic=3.0, breakeven=1.0)
+        suggestion = period_mod.next_period_suggestion(web.conn, org_id, brand_id)
+        self.assertIsNotNone(suggestion)
+        self.assertEqual(suggestion["based_on_period_id"], period_id)
+        self.assertEqual(suggestion["direction"], "up")
+        self.assertEqual(suggestion["daily_budget"], 2400.0)
+        self.assertEqual(suggestion["start_date"], "2026-09-08")
+        self.assertEqual(suggestion["end_date"], "2026-09-14")
+
+        # (b) rows replaced by one lose row: spend 100, revenue 50, optimistic 0.5 -> down, 1600.
+        self._write_depth2_result(org_id=org_id, brand_id=brand_id, period_id=period_id,
+                                   channel_id=channel_id, spend=100.0, revenue_tracked=50.0,
+                                   roas_optimistic=0.5, breakeven=1.0)
+        suggestion = period_mod.next_period_suggestion(web.conn, org_id, brand_id)
+        self.assertEqual(suggestion["direction"], "down")
+        self.assertEqual(suggestion["daily_budget"], 1600.0)
+
+        # (c) rows replaced by an untracked (actual_spend 0) row -> hold, unchanged, and the
+        # "why" sentence names 看不出 (no verdict was computable, not merely "not adopted").
+        self._write_depth2_result(org_id=org_id, brand_id=brand_id, period_id=period_id,
+                                   channel_id=channel_id, spend=0.0, revenue_tracked=None,
+                                   roas_optimistic=None, breakeven=1.0)
+        suggestion = period_mod.next_period_suggestion(web.conn, org_id, brand_id)
+        self.assertEqual(suggestion["direction"], "hold")
+        self.assertEqual(suggestion["daily_budget"], 2000.0)
+        self.assertIn("看不出", suggestion["why"])
+
+        # (e) restore (a)'s win row, then set step_rate to 10 -> the same win now gives 2200
+        # (catches rounding the percentage as a fraction: 20 -> x21 would give 2420, not read
+        # 2200 either way, so this specifically pins the /100 conversion).
+        self._write_depth2_result(org_id=org_id, brand_id=brand_id, period_id=period_id,
+                                   channel_id=channel_id, spend=100.0, revenue_tracked=300.0,
+                                   roas_optimistic=3.0, breakeven=1.0)
+        rule_cards.set_value(web.conn, brand_id, "schedule_budget", "step_rate", 10.0,
+                              actor=ACTOR, org_id=org_id)
+        suggestion = period_mod.next_period_suggestion(web.conn, org_id, brand_id)
+        self.assertEqual(suggestion["direction"], "up")
+        self.assertEqual(suggestion["daily_budget"], 2200.0)
+
+    def test_none_when_no_settled_period(self):
+        org_id = coredb.DEV_ORG_ID
+        brand_id = self.brand["id"]
+        self.assertIsNone(period_mod.next_period_suggestion(web.conn, org_id, brand_id))
+
+
+class NextPeriodSuggestionOverlapTest(_PeriodTestBase):
+    """Ticket smart-loop 05 check 2: a non-settled period covering part of the suggested
+    window is reported, not hidden -- the suggestion is still made (dates are the rule per
+    the ticket's contradiction check), the collision is only ever a warning."""
+
+    def test_overlap_with_a_planning_period_is_named_absence_is_empty(self):
+        org_id = coredb.DEV_ORG_ID
+        brand_id = self.brand["id"]
+        channel_id = schedule_repo.ensure_meta_channel(web.conn, org_id)
+        start, end = date(2026, 9, 1), date(2026, 9, 7)
+        period_id = self._insert_settled_period(
+            org_id=org_id, brand_id=brand_id, start=start, end=end, daily_budget=2000.0)
+        self._write_depth2_result(org_id=org_id, brand_id=brand_id, period_id=period_id,
+                                   channel_id=channel_id, spend=100.0, revenue_tracked=300.0,
+                                   roas_optimistic=3.0, breakeven=1.0)
+
+        suggestion = period_mod.next_period_suggestion(web.conn, org_id, brand_id)
+        self.assertEqual(suggestion["overlaps"], [])  # nothing else exists yet
+
+        # 09-10 ~ 09-12 sits inside the suggested 09-08 ~ 09-14 window.
+        self._insert_period(org_id=org_id, brand_id=brand_id, start=date(2026, 9, 10),
+                             end=date(2026, 9, 12), status="planning")
+        suggestion = period_mod.next_period_suggestion(web.conn, org_id, brand_id)
+        self.assertIn("2026-09-10 ~ 2026-09-12", suggestion["overlaps"])
 
 
 if __name__ == "__main__":

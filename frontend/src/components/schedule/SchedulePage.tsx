@@ -7,6 +7,7 @@ import { EmptyState } from "@/components/layout/EmptyState";
 import { Skeleton } from "@/components/layout/Skeleton";
 import { Button } from "@/components/layout/ui/button";
 import { fetchProductList, type ProductListItem } from "@/lib/productsApi";
+import { saveRuleCard } from "@/lib/settingsApi";
 import {
   approveScheduleTree, bindScheduleTree, createSchedulePlan, expandPlanIntoTree, fetchSchedule,
   generateCreative, rejectSchedulePlans, revokeScheduleApproval, SCHEDULE_REJECT_CATEGORIES,
@@ -57,6 +58,8 @@ export function SchedulePage({ brandId }: { brandId: string }) {
   const [revokeError, setRevokeError] = useState<string | null>(null);
   const [generatingCreative, setGeneratingCreative] = useState(false);
   const [creativeError, setCreativeError] = useState<string | null>(null);
+  const [adoptingBudget, setAdoptingBudget] = useState(false);
+  const [adoptBudgetError, setAdoptBudgetError] = useState<string | null>(null);
   const [feedbackByPlan, setFeedbackByPlan] = useState<Record<number, FeedbackEntry[]>>({});
   const [rejecting, setRejecting] = useState(false);
   const [rejectError, setRejectError] = useState<string | null>(null);
@@ -137,8 +140,11 @@ export function SchedulePage({ brandId }: { brandId: string }) {
         setObjective(validLast ? last.objective : schedule.objectives.find((item) => item.platform === initialPlatform)?.value ?? "");
         setPlanCount(Math.min(Math.max(3, schedule.plan_count_min), schedule.plan_count_max));
         const planning = schedule.period?.status === "planning";
-        setStartDate(planning ? schedule.period!.start_date : "");
-        setEndDate(planning ? schedule.period!.end_date : "");
+        // 票 smart-loop 05：沒有草稿檔期時，第一次讀到「建議下一期」就先帶入日期
+        // （只有這裡跑一次，之後使用者輸入的內容不會被蓋掉）。
+        const suggestion = schedule.next_period_suggestion;
+        setStartDate(planning ? schedule.period!.start_date : suggestion?.start_date ?? "");
+        setEndDate(planning ? schedule.period!.end_date : suggestion?.end_date ?? "");
         setSelectedIds(planning ? (last?.product_ids ?? []).filter((selectedId) => products?.some((product) => product.id === selectedId && product.status === "active")) : []);
         setPromotionNote(planning ? last?.promotion_note ?? "" : "");
       }
@@ -265,6 +271,23 @@ export function SchedulePage({ brandId }: { brandId: string }) {
     }
   }
 
+  async function handleAdoptBudget() {
+    const suggestion = state.status === "ready" ? state.schedule.next_period_suggestion : null;
+    if (!suggestion) return;
+    setAdoptingBudget(true);
+    setAdoptBudgetError(null);
+    try {
+      await trackAction(() => saveRuleCard(brandId, "schedule_budget", {
+        daily_budget: suggestion.daily_budget, step_rate: suggestion.step_rate,
+      }));
+      await load();
+    } catch (err) {
+      setAdoptBudgetError(err instanceof Error ? err.message : "採用失敗，請稍後再試。");
+    } finally {
+      setAdoptingBudget(false);
+    }
+  }
+
   async function handleSettle(periodId: string) {
     setSettling(true);
     setSettleError(null);
@@ -303,7 +326,7 @@ export function SchedulePage({ brandId }: { brandId: string }) {
       {(planRunning || treeRunning || creativeRunning) && <div role="status" className="flex items-start gap-3 rounded-lg border border-primary/15 bg-accent/60 px-4 py-3">
         <LoaderCircle className="mt-0.5 size-4 animate-spin text-primary" aria-hidden="true" /><div><p className="text-sm font-medium">{planRunning ? "出方案中…" : treeRunning ? "展開中…" : "素材產出中…"}</p><p className="mt-1 text-xs leading-5 text-muted-foreground">這一步可能需要幾分鐘；可以先離開，回來後會接續顯示。背景更新會保留目前的表單與意見。</p></div>
       </div>}
-      <div hidden={tab !== "setup"}><ScheduleSetup brandId={brandId} schedule={schedule} products={state.products} draft={{ selectedIds, platform, objective, promotionNote, planCount, startDate, endDate }} onChange={updateDraft} confirming={confirming} onConfirm={setConfirming} submitting={submitting} submitError={submitError} onStart={handleStart} busy={planRunning || treeRunning || creativeRunning} /></div>
+      <div hidden={tab !== "setup"}><ScheduleSetup brandId={brandId} schedule={schedule} products={state.products} draft={{ selectedIds, platform, objective, promotionNote, planCount, startDate, endDate }} onChange={updateDraft} confirming={confirming} onConfirm={setConfirming} submitting={submitting} submitError={submitError} onStart={handleStart} busy={planRunning || treeRunning || creativeRunning} onAdoptBudget={handleAdoptBudget} adoptingBudget={adoptingBudget} adoptBudgetError={adoptBudgetError} /></div>
       <div hidden={tab !== "plans"}>
         {schedule.plan ? <PlanComparison key={schedule.plan.task_id} plan={schedule.plan} expandingIndex={expandingIndex} expandError={expandError} onExpand={handleExpand} feedbackByPlan={feedbackByPlan} onAddFeedback={addFeedbackEntry} onUpdateFeedback={updateFeedbackEntry} onRemoveFeedback={removeFeedbackEntry} onReject={handleReject} rejecting={rejecting} rejectError={rejectError} busy={planRunning || treeRunning || creativeRunning} /> : <div className="surface"><EmptyState title="先建立本期方案" description="選擇產品、目標與檔期後，開始排程即可在這裡比較方案。" actionLabel="前往設定檔期" onAction={() => changeTab("setup")} /></div>}
       </div>

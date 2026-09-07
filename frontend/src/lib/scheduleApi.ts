@@ -203,6 +203,27 @@ export interface SchedulePeriod {
   node_results: SchedulePeriodNodeResult[];
 }
 
+/** Ticket smart-loop 05: read-time, nothing stored -- `null` before the brand has any settled
+ * period (first period, the screen says so). `direction`/`verdict` follow the same
+ * `win`/`lose`/`unclear` -> `up`/`down`/`hold` mapping as the node-result verdict (ADR 0066
+ * rule 4), computed spend-weighted across the last settled period's depth-2 rows. */
+export interface NextPeriodSuggestion {
+  based_on_period_id: string;
+  based_on_name: string;
+  start_date: string;
+  end_date: string;
+  baseline_daily_budget: number;
+  daily_budget: number;
+  direction: "up" | "down" | "hold";
+  step_rate: number;
+  verdict: "win" | "lose" | "unclear";
+  roas_conservative: number | null;
+  roas_optimistic: number | null;
+  breakeven_roas: number | null;
+  why: string;
+  overlaps: string[];
+}
+
 export interface ScheduleState {
   daily_budget: number;
   plan_count_min: number;
@@ -213,6 +234,7 @@ export interface ScheduleState {
   tree: CampaignTreeResult | null;
   creative: CreativeResult | null;
   period: SchedulePeriod | null;
+  next_period_suggestion: NextPeriodSuggestion | null;
 }
 
 export interface CreateSchedulePlanInput {

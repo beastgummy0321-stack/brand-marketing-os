@@ -112,6 +112,14 @@ Module-local and reversible, decided here rather than in an ADR:
   the latest settled period — read-time, not stored, and independent of verdict (the overlay is
   name/depth matching only; which names *should* be kept is the prompt's job, not this
   overlay's).
+- **Next-period suggestion is read-time** (ticket smart-loop 05): `period.next_period_suggestion()`
+  — nothing stored, nothing new to migrate. Baseline is the settled period's own `daily_budget`
+  (frozen at creation, ADR 0053), not the rule card's current value and not `approval.latest()`
+  (per brand, not per period, and not joinable back to that settled tree without a join this
+  module does not have). Direction is the depth-2 rows' spend-weighted verdict (ADR 0066 rule 4,
+  reimplemented locally in `period.py` — not imported from `scoring.py`/`diagnosis.py`, which
+  would close a cycle through `state.py`). Step is rule card `schedule_budget.step_rate` (default
+  20, no official Meta figure — source: user ruling 2026-09-08, spec decision 3).
 - **How a creative reply is matched to a tree node** — ticket T3d, settled by the user; **amended
   2026-09-04, again by the user** (overturning their own 2026-09-03 "leave it until it
   bites"; the ticket is gone, this line is the rule). The agent now also echoes

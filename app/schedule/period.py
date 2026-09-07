@@ -11,6 +11,7 @@ Private to `app/schedule`（container contract §1）：只有 `routes.py` 呼�
 
 from datetime import date, timedelta
 
+from app.core import rule_cards
 from app.core import settings as coresettings
 from app.core.audit import write_audit
 from app.core.db import now_utc
@@ -294,6 +295,110 @@ def brand_period_response(conn, org_id: str, brand_id: str) -> dict | None:
         "settle_advice_date": advice_date.isoformat(),
         "settled": settled,
         "node_results": period_repo.period_node_results(conn, org_id, brand_id, period["id"]),
+    }
+
+
+def _verdict(roas_conservative: float | None, roas_optimistic: float | None,
+             breakeven: float | None) -> str:
+    """ADR 0066 rule 4's three-line comparison, copied from `scoring.verdict()` rather than
+    imported: `scoring` imports `diagnosis` imports `state` imports `period`
+    (docs/contracts/schedule.md's import-direction paragraph), so `period.py` importing
+    `scoring` (or `diagnosis`, whose `_roas_text()` below is also duplicated for the same
+    reason) would close that chain into a cycle `ImportCycleScanTest` cannot see (it only
+    records edges between top-level packages)."""
+    if breakeven is None or roas_conservative is None:
+        return "unclear"
+    if roas_conservative >= breakeven:
+        return "win"
+    if roas_optimistic is not None and roas_optimistic < breakeven:
+        return "lose"
+    return "unclear"
+
+
+def _roas_text(value: float | None) -> str:
+    """Same one-line convention as `diagnosis._roas_text()` -- not imported, see `_verdict()`
+    above."""
+    return f"{value:.2f}x" if value is not None else "未追蹤"
+
+
+def _next_period_why(direction: str, conservative: float | None, optimistic: float | None,
+                      breakeven: float | None, step_pct: float) -> str:
+    step_text = f"{step_pct:.0f}%"
+    if direction == "up":
+        return (f"上一期保守 ROAS {_roas_text(conservative)} 高於打平線 {_roas_text(breakeven)}，"
+                f"判決「賺」，建議加 {step_text}。")
+    if direction == "down":
+        return (f"上一期樂觀 ROAS {_roas_text(optimistic)} 低於打平線 {_roas_text(breakeven)}，"
+                f"判決「賠」，建議減 {step_text}。")
+    if conservative is None:
+        return "上一期綁定的節點沒有追蹤到的營收，判決「看不出」，日預算先不動。"
+    return (f"上一期保守 ROAS {_roas_text(conservative)}、樂觀 ROAS {_roas_text(optimistic)}，"
+            f"跟打平線 {_roas_text(breakeven)} 卡在中間，判決「看不出」，日預算先不動。")
+
+
+def next_period_suggestion(conn, org_id: str, brand_id: str) -> dict | None:
+    """票 smart-loop 05：讀時現算，什麼都不落地——跟 `_advance_if_ended()` 同一個既有慣例。
+    `None` 代表這個品牌還沒有結算過任何一期（第一期，畫面自己講）。
+
+    方向只看 depth 2（廣告組合，扛預算的那一層，ADR 0066 rule 2）的列，花費加權：
+    `conservative`／`optimistic` 是這一批列自己重新加總算出來的兩個 ROAS（不是任何一列
+    自己存的 `roas_conservative`——那是單一節點的，不是這一期的）。"""
+    last = period_repo.latest_settled_period(conn, org_id, brand_id)
+    if last is None:
+        return None
+
+    start_date = last["end_date"] + timedelta(days=1)
+    end_date = start_date + (last["end_date"] - last["start_date"])
+
+    rows = [r for r in period_repo.period_node_results(conn, org_id, brand_id, last["id"])
+            if r["depth"] == 2]
+    spend = sum(r["actual_spend"] for r in rows)
+    revenue = sum(r["revenue_tracked"] or 0.0 for r in rows)
+    tracked_spend = sum(
+        r["revenue_tracked"] / r["roas_optimistic"] for r in rows
+        if r["revenue_tracked"] is not None and r["roas_optimistic"]
+    )
+    breakeven = rows[0]["breakeven_roas"] if rows else None
+
+    conservative = (revenue / spend) if spend else None
+    optimistic = (revenue / tracked_spend) if tracked_spend else None
+    verdict = _verdict(conservative, optimistic, breakeven)
+    direction = {"win": "up", "lose": "down", "unclear": "hold"}[verdict]
+
+    baseline = float(last["daily_budget"]) if last["daily_budget"] is not None else 0.0
+    step_pct = rule_cards.get_value(conn, brand_id, "schedule_budget", "step_rate")
+    step = step_pct / 100
+    if direction == "up":
+        daily_budget = max(0.0, float(round(baseline * (1 + step))))
+    elif direction == "down":
+        daily_budget = max(0.0, float(round(baseline * (1 - step))))
+    else:
+        daily_budget = baseline
+
+    competitors = period_repo.list_non_draft_periods(conn, org_id, brand_id)
+    draft = period_repo.get_latest_period(conn, org_id, brand_id)
+    if draft is not None and draft["status"] == "planning":
+        competitors = competitors + [draft]
+    overlaps = [
+        p["name"] for p in competitors
+        if p["status"] != "settled" and p["start_date"] <= end_date and p["end_date"] >= start_date
+    ]
+
+    return {
+        "based_on_period_id": last["id"],
+        "based_on_name": last["name"],
+        "start_date": start_date.isoformat(),
+        "end_date": end_date.isoformat(),
+        "baseline_daily_budget": baseline,
+        "daily_budget": daily_budget,
+        "direction": direction,
+        "step_rate": step_pct,
+        "verdict": verdict,
+        "roas_conservative": conservative,
+        "roas_optimistic": optimistic,
+        "breakeven_roas": breakeven,
+        "why": _next_period_why(direction, conservative, optimistic, breakeven, step_pct),
+        "overlaps": overlaps,
     }
 
 

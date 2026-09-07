@@ -1313,7 +1313,15 @@ class CoordinateDimensionSyncTest(unittest.TestCase):
 #      量對了，round 2 沒有再動這一筆。
 #   4. 本段理由註解自己（含上面「這道棘輪在落地前就已經在漏」那一段，done-check 5 點名的
 #      新要求）。
-TEST_LINES_CEILING = 20961  # Ticket smart-loop 04 amendment 2026-09-08 (winners keep their
+TEST_LINES_CEILING = 21110  # Ticket smart-loop 05 (next-period suggestion): `test_schedule_period.py`
+# gains `NextPeriodSuggestionTest` (data correctness: spend-weighted direction/verdict, budget
+# arithmetic including the step-rate percentage conversion, rolled dates) and
+# `NextPeriodSuggestionOverlapTest` (a non-settled period colliding with the suggested window is
+# named, not hidden), plus one presence assertion on `test_schedule.py`'s existing GET contract
+# test. Includes this reason comment's and the `KNOWN_MODULE_SIZES["app/core"]`/
+# `KNOWN_MODULE_SIZES["app/schedule"]` reason comments' own lines. 20961->21110, measured
+# (`uv run pytest app/tests/test_architecture_boundaries.py -q`), no slack. Previous was
+# 20961 -- Ticket smart-loop 04 amendment 2026-09-08 (winners keep their
 # names, round 2): `test_continuity_section_lists_keep_and_replace_blocks_separately` gains a
 # depth-1 binding row named K (`schedule_repo.upsert_binding`, same `source_tree_task_id` as the
 # scored rows) plus the `- 活動：K` assertions (in the keep block, not the replace block) --
@@ -1534,7 +1542,10 @@ KNOWN_MODULE_SIZES = {
                              # `llm_task` 讀狀態的函式；`__init__.py` 的 register() 多註冊三支
                              # 任務。刪的比加的少，淨增。前一次是 2091——2026-08-30 刪失效規則卡
                              # （小債）：autonomy 那張卡的兩處專屬驗證跟著走
-    "app/core": 1800,  # 2026-09-06 issue adopted-advice-can-invert：`vocab.py` 多一個 rule_type（`experiment`
+    "app/core": 1805,  # 票 smart-loop 05（下一期建議）：`rule_cards.py` 的 `CARDS["schedule_budget"]`
+                  # 加一個欄位 `step_rate`（每期調幅，預設 20%，決定 1b：不用 migration）。
+                  # 1800→1805，量到的數字（`uv run pytest app/tests/test_architecture_boundaries.py -q`），不留餘裕。前一次是 1800——
+                  # 2026-09-06 issue adopted-advice-can-invert：`vocab.py` 多一個 rule_type（`experiment`
                   # ＝採用一條成效判讀寫出來的那一列，行動不是限制）＋`EXPERIMENT_RULE_TYPE`
                   # 常數與理由註解，1791→1800。量到的數字，不留餘裕。前一次是 1791——票 01（T6c 成效判讀）：`rule_cards.py` 的 `CARDS` 加一筆
                         # `gross_margin`（決定 1b：打平線用的毛利率，default 0.70，不必
@@ -1688,7 +1699,14 @@ KNOWN_MODULE_SIZES = {
     "app/orders": 1423,  # 票 12：channel_revenue 一張表取代三張（刪掉藥局專屬那一整組
                           # 之後仍淨增）——官網帳本寫入路徑、channel_revenue_summary()、
                           # 通用手動登錄（含「官網不能手動登錄」那道錢的守門）
-    "app/schedule": 4516,  # Ticket smart-loop 04 amendment 2026-09-08 (winners keep their
+    "app/schedule": 4622,  # Ticket smart-loop 05 (next-period suggestion): `period.py` gains
+                  # `next_period_suggestion()` plus its three private helpers (`_verdict()`,
+                  # `_roas_text()`, `_next_period_why()` -- ADR 0066 rule 4's comparison and
+                  # diagnosis.py's ROAS-text convention duplicated rather than imported, to
+                  # avoid closing the scoring->diagnosis->state->period cycle) and one new key
+                  # in `state.py`'s `_brand_response()`. 4516->4622, measured (`uv run pytest
+                  # app/tests/test_architecture_boundaries.py -q`), no slack. Previous was
+                  # 4516 -- Ticket smart-loop 04 amendment 2026-09-08 (winners keep their
                   # names, round 2, acceptance-walk fix): depth 1 is never scored, so the
                   # 【延續】 keep block's campaign names come from the settled tree's own
                   # bindings, not `period_node_result` -- `jobs._continuity_campaign_names()`

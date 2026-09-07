@@ -195,4 +195,5 @@ def _brand_response(conn, brand_id: str, org_id: str) -> dict:
         "tree": tree,
         "creative": creative,
         "period": period_mod.brand_period_response(conn, org_id, brand_id),
+        "next_period_suggestion": period_mod.next_period_suggestion(conn, org_id, brand_id),
     }

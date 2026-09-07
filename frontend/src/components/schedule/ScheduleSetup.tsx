@@ -5,7 +5,7 @@ import { Input } from "@/components/layout/ui/input";
 import { Textarea } from "@/components/layout/ui/textarea";
 import { formatCurrency } from "@/lib/format";
 import type { ProductListItem } from "@/lib/productsApi";
-import type { ScheduleState } from "@/lib/scheduleApi";
+import type { NextPeriodSuggestion, ScheduleState } from "@/lib/scheduleApi";
 
 export interface ScheduleDraft {
   selectedIds: string[];
@@ -17,7 +17,7 @@ export interface ScheduleDraft {
   endDate: string;
 }
 
-export function ScheduleSetup({ brandId, schedule, products, draft, onChange, confirming, onConfirm, submitting, submitError, onStart, busy }: {
+export function ScheduleSetup({ brandId, schedule, products, draft, onChange, confirming, onConfirm, submitting, submitError, onStart, busy, onAdoptBudget, adoptingBudget, adoptBudgetError }: {
   brandId: string;
   schedule: ScheduleState;
   products: ProductListItem[];
@@ -29,6 +29,9 @@ export function ScheduleSetup({ brandId, schedule, products, draft, onChange, co
   submitError: string | null;
   onStart: () => void;
   busy: boolean;
+  onAdoptBudget: () => void;
+  adoptingBudget: boolean;
+  adoptBudgetError: string | null;
 }) {
   const activeProducts = products.filter((product) => product.status === "active");
   const selectedNames = activeProducts.filter((product) => draft.selectedIds.includes(product.id)).map((product) => product.name);
@@ -39,7 +42,9 @@ export function ScheduleSetup({ brandId, schedule, products, draft, onChange, co
   const validDates = draft.startDate !== "" && draft.endDate !== "" && draft.endDate >= draft.startDate;
   const canConfirm = draft.selectedIds.length > 0 && draft.platform !== "" && draft.objective !== "" && validDates && !busy;
 
-  return <div className="grid grid-cols-[minmax(0,1fr)_280px] items-start gap-5">
+  return <div className="flex flex-col gap-5">
+    <NextPeriodSuggestionCard suggestion={schedule.next_period_suggestion} currentDailyBudget={schedule.daily_budget} onAdopt={onAdoptBudget} adopting={adoptingBudget} adoptError={adoptBudgetError} />
+    <div className="grid grid-cols-[minmax(0,1fr)_280px] items-start gap-5">
     <section className="surface">
       <div className="surface-header"><h2>這期要投放哪些產品</h2><span className="text-xs text-muted-foreground">已選 {selectedNames.length} 項</span></div>
       <div className="surface-body flex flex-col gap-6">
@@ -88,9 +93,42 @@ export function ScheduleSetup({ brandId, schedule, products, draft, onChange, co
         </div>}
       </div>
     </aside>
+    </div>
   </div>;
 }
 
 function Summary({ label, value }: { label: string; value: string }) {
   return <div><dt className="mb-1 text-xs text-muted-foreground">{label}</dt><dd className="break-words leading-6">{value}</dd></div>;
+}
+
+/** 票 smart-loop 05：讀時現算的下一期建議（`period.next_period_suggestion()`）——沒有上一期
+ * 結算過就是 `null`，畫面只講一句話、不給按鈕。 */
+function NextPeriodSuggestionCard({ suggestion, currentDailyBudget, onAdopt, adopting, adoptError }: {
+  suggestion: NextPeriodSuggestion | null;
+  currentDailyBudget: number;
+  onAdopt: () => void;
+  adopting: boolean;
+  adoptError: string | null;
+}) {
+  return <section className="surface">
+    <div className="surface-header"><h2>建議下一期</h2></div>
+    <div className="surface-body flex flex-col gap-3">
+      {suggestion === null
+        ? <p className="text-sm text-muted-foreground">這是第一期，還沒有上一期可以參考。</p>
+        : <>
+          <p className="text-sm">{suggestion.start_date} ～ {suggestion.end_date}</p>
+          <p className="text-sm">
+            建議日預算 {formatCurrency(suggestion.daily_budget)}（目前 {formatCurrency(currentDailyBudget)}）
+          </p>
+          <p className="text-sm leading-6 text-muted-foreground">{suggestion.why}</p>
+          {suggestion.overlaps.length > 0 && (
+            <p className="text-sm text-warning">跟現有檔期重疊：{suggestion.overlaps.join("、")}</p>
+          )}
+          {adoptError && <p role="alert" className="text-sm text-danger">{adoptError}</p>}
+          <Button type="button" variant="outline" className="self-start" onClick={onAdopt} disabled={adopting}>
+            {adopting ? "採用中…" : "採用這個預算"}
+          </Button>
+        </>}
+    </div>
+  </section>;
 }
