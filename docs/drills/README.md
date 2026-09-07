@@ -93,7 +93,7 @@ report. A persona's report is a symptom; the cause is never theirs to name.
 
 Three personas, two full cycles each, three separate orgs. No malignant stop condition was hit.
 Two money-correctness defects, both reproduced independently in more than one org, are in
-`docs/issues/ad-loop/`; the screen-level findings are in `docs/issues/ui/`.
+`docs/issues/plan-quality/`; the screen-level findings are in `docs/issues/ui/`.
 
 What the drill could not answer, and no drill can: whether the judgement is any good. The
 stand-in's ROAS numbers are invented. Only real spend answers that.

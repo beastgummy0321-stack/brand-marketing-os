@@ -14,7 +14,7 @@ Status: 2026-09-06 可用性演練量到（`docs/drills/`）。Vivian 給 **3 �
 使用者看到的（Vivian）：
 > 「要帶去給老闆看，目前只能自己截圖或用瀏覽器硬印這一頁。」
 
-她的另一句更關鍵，因為它連到 `docs/issues/ad-loop/issue-coordinates-lost-when-next-period-planned.md`：
+她的另一句更關鍵，因為它連到「排了下一期，上一期的座標接不回來」（`docs/issues/smart-loop/`）：
 排了下一期之後，上一期的方案與判讀從畫面消失，**而她連截圖以外的方式都沒有留過底**。
 沒有匯出＋沒有歷史，等於每一期的決策依據只活在那一期。
 
@@ -22,5 +22,5 @@ Status: 2026-09-06 可用性演練量到（`docs/drills/`）。Vivian 給 **3 �
 - 最小一刀：成效表與判讀區各一顆「複製成表格」（貼進試算表就成形），不做檔案下載。
   route A，一兩小時。
 - 要裁決的：要不要做真正的 CSV 下載與「複製整棵樹的文案」。前者牽涉到「匯出的數字用哪個定義」
-  （見 `docs/issues/ad-loop/issue-diagnosis-lacks-checkable-numbers.md` 的 ROAS 定義問題），
+  （ROAS 一律保守／樂觀兩個值＋覆蓋率，見 `docs/contracts/schedule.md`「Diagnosis (T6c)」決定 5／11），
   匯出一份沒寫清楚定義的數字，比不匯出更危險。

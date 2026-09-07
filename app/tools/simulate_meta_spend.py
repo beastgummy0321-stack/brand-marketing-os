@@ -4,9 +4,8 @@ repo，讓成效判讀（與日後任何人）不必等真廣告花到錢才能�
 假的**只有最外層那道網路呼叫**（`app.meta.graph.fetch_page`）：底下解析／寫庫
 （`app.meta.daily_pull.run_daily_pull`）、綁定（`app.schedule.binding.bind_tree`，真名稱
 比對）、座標落地（`app.schedule.repository.persist_creative_result`）跑的都是真程式，不是
-這支工具自己重寫的簡化版。假回應的形狀照 `app.meta.graph` 的欄位清單，稀疏度／覆蓋率照
-`.scratch/adloop/GRILL.md` 對真帳號量到的比例：81% 的「廣告×日」沒有列、約六成的列帶
-roas（`omni_purchase`），roas 落在 0.42–5。
+這支工具自己重寫的簡化版。假回應形狀照 `app.meta.graph` 欄位清單，稀疏度照 2026-08-30 量到
+的真帳號比例：81% 的「廣告×日」沒有列、約六成帶 roas（`omni_purchase`），roas 落在 0.42–5。
 
 活動樹只放 3 個最深層節點（廣告01／02／03），第 4 則廣告（廣告04）只存在於平台端，故意不
 進樹——`bind_tree()` 只比對樹上有的名字，廣告04 因此永遠綁不上，它的花費落進
@@ -29,10 +28,7 @@ from app.schedule import repository as schedule_repo
 
 random.seed(20260906)
 
-# 刻意不是真帳號 `368741390835357`：`meta_entity_spend` 的唯一鍵是 (ad_account_id, level,
-# entity_id, spend_date)，共用同一個 ad_account_id 就等於把假花費灌進真帳號的桶子裡，而這支
-# 工具沒有反向清除。用一個 Meta 不可能發出的 id，真假兩份資料在同一個資料庫裡永遠分得開。
-ACCOUNT_ID = "000000000000001"
+ACCOUNT_ID = "000000000000001"  # 真帳號 id 會讓假花費跟真花費落進同一個桶子，且無法反向清除
 CURRENCY = "TWD"
 TIMEZONE = "Asia/Taipei"
 
@@ -220,10 +216,7 @@ def run(org_id: str, brand_id: str) -> None:
 
     with connection() as conn:
         # 1. 帳號綁定
-        # 只在這個組織還沒有權杖時才寫：`save_token()` 是覆寫語意（repository.py:98-110），
-        # 直接呼叫會把使用者貼過的真權杖蓋掉，之後真的每日拉取就認證失敗。假的 Graph 回應
-        # 由 `_fake_fetch_page` 供應，權杖是什麼值這裡從來用不到。
-        if meta_repo.get_credential(conn, org_id) is None:
+        if meta_repo.get_credential(conn, org_id) is None:  # save_token() 會覆寫真權杖
             meta_repo.save_token(conn, org_id, "SIMULATED-TOKEN")
         meta_repo.upsert_accounts(conn, org_id, [{
             "account_id": ACCOUNT_ID, "name": "模擬帳號（不是真的 BP AD）", "currency": CURRENCY,

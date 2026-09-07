@@ -1,4 +1,4 @@
-"""app/schedule/diagnosis.py — 票 01（T6c，`docs/issues/ad-loop/spec.md` 「T6c 規格」節）：
+"""app/schedule/diagnosis.py — 票 01（T6c 凍結形狀見 `docs/contracts/schedule.md`）：
 成效判讀（後端）。
 
 Private to app/schedule/（集裝箱憲章第一節）：只有 `app/schedule/routes.py`／`jobs.py` 匯入

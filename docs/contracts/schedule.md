@@ -89,8 +89,8 @@ Module-local and reversible, decided here rather than in an ADR:
 - The module now registers an `app.core.cleanup` function (ticket T1b): `app/schedule/repository.py`
   registers 「創意座標與素材候選」, covering the five tables this ticket added.
 - **How a creative reply is matched to a tree node** — ticket T3d, settled by the user; **amended
-  2026-09-04, again by the user** (`docs/issues/ad-loop/issue-same-name-leaf-node-key.md`,
-  overturning their own 2026-09-03 "leave it until it bites"). The agent now also echoes
+  2026-09-04, again by the user** (overturning their own 2026-09-03 "leave it until it
+  bites"; the ticket is gone, this line is the rule). The agent now also echoes
   **`node_key`**, and when the reply's multiset of `node_key`s equals the tree's leaf `node_key`s
   the match is made by key. T3d's stated reason for not asking — "the agent does not know the
   shell's internal position code" — was false: `jobs._creative_params_text()` `json.dumps`es the
@@ -107,6 +107,44 @@ Module-local and reversible, decided here rather than in an ADR:
   T3d's ticket demanded a global positional zip instead, which is not implementable
   against this module's own reordering test; the reviewer returned `blocked-upstream` and this
   line is the corrected rule.
+
+## Diagnosis (T6c) — frozen shape
+
+Settled 2026-09-06 at /slice station ①; tickets 01/02 shipped against it. Moved here 2026-09-07
+when `docs/issues/ad-loop/` was retired, because the next ticket that touches diagnosis must follow
+it and a ticket is not a place a rule survives.
+
+Delivery shape: **show the readings, one "adopt" button per suggestion**, which turns that
+suggestion into a brand rule card (reusing the existing "I don't like this plan" path). No new
+table, no migration, nothing counts until the user presses it. Fully automatic feedback was
+rejected: a wrong AI conclusion fed into the next round unintercepted cannot be traced back.
+
+```
+screen "run a diagnosis" -> program compresses (pure arithmetic) -> three LLM calls
+(creative / audience / money) -> program converges (dedupe + rank by impact spend, top 5)
+-> screen shows -> "adopt" per row -> one `rule` row -> next plan's prompt eats it
+```
+
+| # | decision | source |
+|---|---|---|
+| 1 | **Break-even line = 1 ÷ gross margin**, never a fixed 1.0. Gross margin in three tiers: (1) actual margin from this month's own-site orders -> (2) rule card `gross_margin` (default 0.70, editable in settings) -> (3) neither, so **draw no line** and say so on screen | `ads-commerce.md:13`, `ab-testing.md:72`; the tier order is the user's ruling |
+| 1b | A new rule card is one more entry in `app/core/rule_cards.py`'s `CARDS`, not a migration | `rule_cards.py:1-18` |
+| 1c | Per-product break-even is **not built this round but not closed off**: what is missing is "which SKU did this ad sell". Keep the columns and the fallback order | `orders/repository.py:204-241`, `schedule/period.py:202-241` |
+| 2 | Convergence is the program's job, not an agent's: rank by impact spend, **take the top 5** | ADR 0057 §6 |
+| 3 | **Three fixed agents split by judgement dimension** (creative / audience / money), never fanned out per ad | user's ruling 2026-08-31 (the 24-agent / 130-suggestion failure) |
+| 4 | "Not enough sample" is never a threshold constant; the screen always says "a directional reading, not a statistically significant conclusion" | `ab-testing.md:73`, `:75` |
+| 5/11 | ROAS reaching an agent or the screen is always **two values plus coverage**: conservative = revenue / all spend, optimistic = revenue / tracked spend. A single number is forbidden | "Both ROAS numbers are true", this page |
+| 6 | Methodology uses the existing "performance reading / next-period draft" pairing; the wiring carries no methodology of its own | `app/methodology/README.md:36` |
+| 7 | `task_type` reuses the existing `performance_reading` | `app/llm/providers.py:151` |
+| 8 | Zero migration: the diagnosis result lives in `llm_task.rendered_output`; adopting writes the existing `rule` table with **`source_reference_id` left NULL** (an `llm_task.id` there violates the FK — proven by a plan review that ran it), and the provenance goes into `content` as text | `20260826000001_core_baseline.sql:49` |
+| 9 | An adopted rule is always `severity='soft'`; `rule_type` only ever the existing `angle` / `audience` / `budget_split` | `app/schedule/routes.py` `SOFT_REJECT_RULE_TYPES` |
+| 10 | The trigger is the user pressing a button, never automatic; the "this month" window is not re-opened — the AI must see the same numbers as the chart on screen | all three existing `llm_task`s are buttons |
+
+Two rules the variance probe forced, both already implemented: **collinearity is flagged by the
+program** (when every coordinate value under a dimension carries exactly one ad, and several
+dimensions group identically, the compression layer must say "these dimensions cannot be told
+apart"); and the **dedupe key is (dimension, coordinate value, direction)** — one row per key,
+recording how many judges said it.
 
 ## Measured (facts this module's next ticket must not re-discover)
 

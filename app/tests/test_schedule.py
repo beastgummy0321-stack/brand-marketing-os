@@ -491,7 +491,7 @@ class BuildCreativeTest(unittest.TestCase):
         self.assertEqual(set(ads[0]["coordinates"]), set(creative_mod.COORDINATE_KEYS))
 
     def test_node_key_decides_which_same_name_node_gets_which_copy(self):
-        """資料正確性，`docs/issues/ad-loop/issue-same-name-leaf-node-key.md`（2026-09-04
+        """資料正確性，規則見 `docs/contracts/schedule.md`「Decisions in force」（2026-09-04
         根治）：兩個最深層節點同名時名稱帶不出任何資訊，`node_key` 是唯一分得出來的依據。
         代理倒著答（先 "2" 後 "1"）→ 照編號配（舊版照回覆順序排隊會拿到「第一段」，所以
         這支分得出兩種行為）；漏答、或答了樹上沒有的編號 → 退回既有的名稱排隊，不整批重產

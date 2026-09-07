@@ -37,7 +37,7 @@ Private to app/schedule/（集裝箱憲章第一節）：只有 app/schedule/rou
 `_valid_coordinates` 一樣：`creative_candidate.visual_tone` 有 `CHECK` 只收那兩個字串，寫壞值
 會讓整筆 INSERT 失敗——座標是診斷用中繼資料不是交付物，這條規則對這兩個新鍵一樣適用。
 
-2026-09-04（`docs/issues/ad-loop/issue-same-name-leaf-node-key.md`，使用者裁決推翻自己
+2026-09-04（規則見 `docs/contracts/schedule.md`「Decisions in force」，使用者裁決推翻自己
 2026-09-03 的「先不根治」）：代理現在**也答 `node_key`**，答得出來就照編號配對。T3d 當時
 寫「代理不認得 `node_key`」的理由是「殼層內部的位置編碼代理不懂」——那句話今天不成立：
 `jobs._creative_params_text()` 是把整棵樹 `json.dumps` 貼進 prompt 的，而每個節點都帶
