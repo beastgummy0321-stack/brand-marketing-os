@@ -1313,7 +1313,22 @@ class CoordinateDimensionSyncTest(unittest.TestCase):
 #      量對了，round 2 沒有再動這一筆。
 #   4. 本段理由註解自己（含上面「這道棘輪在落地前就已經在漏」那一段，done-check 5 點名的
 #      新要求）。
-TEST_LINES_CEILING = 20768  # Ticket smart-loop 03: `test_schedule.py` gains
+TEST_LINES_CEILING = 20961  # Ticket smart-loop 04 amendment 2026-09-08 (winners keep their
+# names, round 2): `test_continuity_section_lists_keep_and_replace_blocks_separately` gains a
+# depth-1 binding row named K (`schedule_repo.upsert_binding`, same `source_tree_task_id` as the
+# scored rows) plus the `- 活動：K` assertions (in the keep block, not the replace block) --
+# check 1's red proof for the amendment: dropping the `campaign_names` argument fails that
+# assertion. Includes this reason comment's and the `KNOWN_MODULE_SIZES["app/schedule"]` reason
+# comment's own lines. 20932->20961, measured, no slack. Previous was 20932 -- Ticket
+# smart-loop 04 (winners keep their names):
+# `test_schedule.py` gains `BindTreeApiContractTest`'s three continuity tests (done-checks 1-3:
+# the tree prompt's 【延續】 section lists `win`/`unclear` names to keep and `lose` names to
+# replace, block-scoped not substring-scoped; the read-time overlay matches `(depth, name)` not
+# `node_key`, proven with a name that differs only by a trailing space and a right-name-wrong-
+# depth node; the overlay key is present and `None` for every node when nothing is settled).
+# Includes this reason comment's and the `KNOWN_MODULE_SIZES["app/schedule"]` reason comment's
+# own lines. 20768->20932, measured, no slack. Previous was 20768 -- Ticket smart-loop 03:
+# `test_schedule.py` gains
 # `BindTreeApiContractTest`'s last-period prompt-contract tests (checks 1-3: both prompts carry
 # the last settled period's node results as their last section; absence when nothing settled or
 # no scored nodes; per-depth spend share). Includes this reason comment's and the
@@ -1673,7 +1688,22 @@ KNOWN_MODULE_SIZES = {
     "app/orders": 1423,  # 票 12：channel_revenue 一張表取代三張（刪掉藥局專屬那一整組
                           # 之後仍淨增）——官網帳本寫入路徑、channel_revenue_summary()、
                           # 通用手動登錄（含「官網不能手動登錄」那道錢的守門）
-    "app/schedule": 4391,  # Ticket smart-loop 03: one read (`period_repository.latest_settled_period()`)
+    "app/schedule": 4516,  # Ticket smart-loop 04 amendment 2026-09-08 (winners keep their
+                  # names, round 2, acceptance-walk fix): depth 1 is never scored, so the
+                  # 【延續】 keep block's campaign names come from the settled tree's own
+                  # bindings, not `period_node_result` -- `jobs._continuity_campaign_names()`
+                  # (new) calls `repository.bindings_for_tree()`; `period_repository.
+                  # period_node_results()` SELECTs one more column, `source_tree_task_id`, so
+                  # the rows carry which tree to look the bindings up on. 4479->4516, measured,
+                  # no slack. Previous was 4479 -- Ticket smart-loop 04 (winners keep their
+                  # names): `jobs.py` splits
+                  # `_last_period_text()` into a loader (`_last_period()`) and a renderer that
+                  # takes the pair, plus a new `_continuity_text()` renderer for the tree
+                  # prompt's 【延續】 section; `binding.py` gains a read-time overlay
+                  # (`_continuity_map()`/`_apply_continuity()`) that stamps
+                  # `continued_from_node_key` onto `tree_with_bindings()`'s output;
+                  # `tree.py` gains the same key (always `None`) in the node dict it builds.
+                  # 4391->4479, measured, no slack. Previous was 4391 -- Ticket smart-loop 03: one read (`period_repository.latest_settled_period()`)
                   # plus one renderer (`jobs._last_period_text()`, `jobs._coordinate_cell()`) and
                   # one dict (`scoring.VERDICT_LABELS`) for the plan/tree prompts' last section.
                   # 4295->4391, measured, no slack. Previous was 4295 -- Ticket smart-loop 02: file split, header lines. 4278->4295, measured, no slack. Previous was 4278 -- Ticket smart-loop 01 (ADR 0066): new `scoring.py`

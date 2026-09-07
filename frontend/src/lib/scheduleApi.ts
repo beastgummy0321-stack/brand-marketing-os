@@ -73,6 +73,9 @@ export interface CampaignTreeNode {
   bound_external_id: string | null;
   spend: number | null;
   roas: number | null;
+  /** 票 04：讀時 overlay，名字＋層跟上一個已結算檔期的某個記分節點對上時是那一列的
+   * node_key，否則 null（第一層一律 null，從沒被記過分）。 */
+  continued_from_node_key: string | null;
 }
 
 /** 票 01（ADR 0040）：核准——花錢煞車。`spend_to_date` 是 null 代表這棵樹還沒有任何節點

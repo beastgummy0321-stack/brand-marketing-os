@@ -234,17 +234,30 @@ def _coordinate_cell(node_result: dict, labels: dict) -> str:
     return "／".join(parts)
 
 
-def _last_period_text(conn, org_id: str, brand_id: str) -> str:
-    """票 smart-loop 03：`schedule_plan()`／`schedule_tree()` prompt 的最後一段——上一個
-    已結算檔期的逐節點判決，讓代理在畫這一期之前先看到上一期誰賺誰賠。`""`：沒有已結算的
-    檔期，或那個檔期結算時零個節點被記分（品牌層數字不算「決策的記憶」，見這支函式的呼叫端
+def _last_period(conn, org_id: str, brand_id: str) -> tuple[dict, list] | None:
+    """票 04：`_last_period_text()`／`_continuity_text()` 共用的讀——最近一個已結算檔期
+    連同它的逐節點記分列，只查一次（ticket §1「Do not query the rows twice」）；
+    `schedule_tree()` 兩段 prompt 都要同一份 `results`。`None`：沒有已結算的檔期，或那個
+    檔期結算時零個節點被記分（品牌層數字不算「決策的記憶」，見 `_last_period_text()` 呼叫端
     docstring）。"""
     period = period_repo.latest_settled_period(conn, org_id, brand_id)
     if period is None:
-        return ""
+        return None
     results = period_repo.period_node_results(conn, org_id, brand_id, period["id"])
     if not results:
+        return None
+    return period, results
+
+
+def _last_period_text(
+    last_period: tuple[dict, list] | None, conn, org_id: str, brand_id: str
+) -> str:
+    """票 smart-loop 03：`schedule_plan()`／`schedule_tree()` prompt 的最後一段——上一個
+    已結算檔期的逐節點判決，讓代理在畫這一期之前先看到上一期誰賺誰賠。`""`：`last_period`
+    是 `None`（`_last_period()` 已經判過的兩種「沒有」）。"""
+    if last_period is None:
         return ""
+    period, results = last_period
 
     labels = performance_mod._coordinate_labels(conn, org_id, brand_id)
     depth_totals: dict[int, float] = {}
@@ -286,6 +299,74 @@ def _last_period_text(conn, org_id: str, brand_id: str) -> str:
     return "\n".join(out)
 
 
+_CONTINUITY_KEEP_HEADER = (
+    "上一期判決「賺」或「看不出」的節點，這一期**名字一字不改**地沿用"
+    "（系統靠名稱把它接回同一個 Meta 物件，改一個字就接不回去）："
+)
+_CONTINUITY_REPLACE_HEADER = (
+    "上一期判決「賠」的節點不要沿用：換座標、換名字，並在該節點的 warnings 寫一句"
+    "「取代上一期的 <舊名>」："
+)
+_CONTINUITY_CLOSING_LINE = "沿用的節點可以改 share、fields、children；只有 name 不能動。"
+
+
+def _continuity_campaign_names(
+    conn, org_id: str, brand_id: str, node_results: list[dict]
+) -> list[str]:
+    """票 04 Amendment 2026-09-08（第一輪驗收撞牆）：depth 1（活動）從沒被記分過
+    （ADR 0066 rule 2），不在 `node_results` 裡，但 `binding.bind_tree()` 由上而下比對——
+    第一層這一期改了名字就對不上，底下所有節點這次整批不比對
+    （`bind_failure_message()`：「上一層沒有配對成功時，它底下的節點這次不會比對」）。名字
+    只能從**上一棵樹自己的**綁定列找（ADR 0064：一個綁定屬於做出它的那棵樹），不是疊圖用
+    的 `bindings_by_node_key()`——`node_results` 每一列的 `source_tree_task_id` 是那棵樹的
+    id，同一期全部同一個值。`node_results` 是空清單（沒有已結算檔期，或那個檔期零個節點
+    被記分）→ `[]`，不查。"""
+    if not node_results:
+        return []
+    source_tree_task_id = node_results[0]["source_tree_task_id"]
+    bindings = repository.bindings_for_tree(
+        conn, org_id, brand_id, binding_mod.CHANNEL_KEY, source_tree_task_id
+    )
+    return [
+        b["node_name_at_bind"] for node_key, b in sorted(bindings.items()) if "." not in node_key
+    ]
+
+
+def _continuity_text(node_results: list[dict], campaign_names: list[str]) -> str:
+    """票 04：tree prompt 的最後一段，緊接在【上一期】後面——是對那一段動手的指令
+    （`docs/contracts/schedule.md`「Position in the prompt decides whether an instruction
+    runs」），只有 `schedule_tree()` 呼叫（`schedule_plan()` 那一階段還沒有節點名字）。
+    `win`／`unclear` 判決的節點名字原字沿用——綁定靠精準比對名稱（`binding.py`
+    `campaign_ids_by_exact_name`），改名字就接不回同一個 Meta 物件；`lose` 判決的節點要
+    換名字。哪一塊有列才印哪一塊。`node_results` 是空清單（`schedule_tree()` 在
+    `_last_period()` 回 `None` 時傳空清單）→ `""`。
+
+    票 04 Amendment：`campaign_names`（`_continuity_campaign_names()` 算好的第一層名字，
+    caller 傳進來，這裡不查表）先印在沿用區最前面、標籤是「活動」——depth 1 從沒有判決，
+    不是 `keep_rows` 的一部分，但它決定沿用區這個標題底下要不要印、不是只搭 `keep_rows`
+    的便車：`campaign_names` 有值但這一期剛好沒有 `win`／`unclear` 節點時，沿用區照樣印
+    （只有活動那幾行）——不然新樹的活動就沒有沿用指令，跟 depth 2／3 的沿用邏輯脫節。"""
+    keep_rows = [r for r in node_results if r["verdict"] in ("win", "unclear")]
+    lose_rows = [r for r in node_results if r["verdict"] == "lose"]
+    if not keep_rows and not lose_rows and not campaign_names:
+        return ""
+
+    out = ["【延續】"]
+    if keep_rows or campaign_names:
+        out.append(_CONTINUITY_KEEP_HEADER)
+        out.extend(f"- 活動：{name}" for name in campaign_names)
+        out.extend(
+            f"- {_LAST_PERIOD_DEPTH_LABELS[r['depth']]}：{r['node_name']}" for r in keep_rows
+        )
+    if lose_rows:
+        out.append(_CONTINUITY_REPLACE_HEADER)
+        out.extend(
+            f"- {_LAST_PERIOD_DEPTH_LABELS[r['depth']]}：{r['node_name']}" for r in lose_rows
+        )
+    out.append(_CONTINUITY_CLOSING_LINE)
+    return "\n".join(out)
+
+
 def schedule_plan(org_id: str, brand_id: str, product_ids: list, platform: str, objective: str,
                    promotion_note: str, plan_count: int,
                    campaign_period_id: str | None = None) -> None:
@@ -314,7 +395,9 @@ def schedule_plan(org_id: str, brand_id: str, product_ids: list, platform: str, 
         performance = performance_mod.ad_performance(conn, org_id, brand_id)
         breakeven = diagnosis_mod.breakeven_roas(conn, org_id, brand_id)
         performance_text = _account_performance_text(performance, breakeven)
-        last_period_text = _last_period_text(conn, org_id, brand_id)
+        last_period_text = _last_period_text(
+            _last_period(conn, org_id, brand_id), conn, org_id, brand_id
+        )
         prompt = "\n\n".join(
             section for section in
             (department_text, methodology_result.text, params_text, brand_context,
@@ -377,11 +460,15 @@ def schedule_tree(org_id: str, brand_id: str, plan_index: int, plan_task_id: str
             conn, state.METHODOLOGY_TASK_LABELS, brand_id=brand_id
         )
         params_text = _tree_params_text(platform_label, plan_index, chosen_plan)
-        last_period_text = _last_period_text(conn, org_id, brand_id)
+        last_period = _last_period(conn, org_id, brand_id)
+        last_period_text = _last_period_text(last_period, conn, org_id, brand_id)
+        node_results = last_period[1] if last_period else []
+        campaign_names = _continuity_campaign_names(conn, org_id, brand_id, node_results)
+        continuity_text = _continuity_text(node_results, campaign_names)
         prompt = "\n\n".join(
             section for section in
             (department_text, methodology_result.text, params_text, brand_context,
-             last_period_text) if section
+             last_period_text, continuity_text) if section
         )
 
         context = gateway.TaskContext(

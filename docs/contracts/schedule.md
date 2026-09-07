@@ -101,6 +101,17 @@ Module-local and reversible, decided here rather than in an ADR:
 - **Both generation prompts carry the latest settled period's node results as their last
   section** (ticket smart-loop 03): `period_repository.latest_settled_period()` →
   `jobs._last_period_text()`; absent when there is no settled period or it scored no nodes.
+- **The tree prompt ends with 【延續】, naming last period's `win`/`unclear` nodes to keep
+  verbatim and its `lose` nodes to replace** (ticket smart-loop 04): `jobs._continuity_text()`,
+  appended after the 【上一期】 section. The keep block also names the settled tree's depth-1
+  campaign(s), read from their bindings (`jobs._continuity_campaign_names()` →
+  `repository.bindings_for_tree()`, ADR 0064) rather than `period_node_result` — depth 1 is
+  never scored (ADR 0066 rule 2), and `binding.bind_tree()` matches top-down, so a renamed
+  campaign strands every node under it (Amendment 2026-09-08). `binding.tree_with_bindings()`
+  marks a tree node `continued_from_node_key` when its name and depth equal a scored node of
+  the latest settled period — read-time, not stored, and independent of verdict (the overlay is
+  name/depth matching only; which names *should* be kept is the prompt's job, not this
+  overlay's).
 - **How a creative reply is matched to a tree node** — ticket T3d, settled by the user; **amended
   2026-09-04, again by the user** (overturning their own 2026-09-03 "leave it until it
   bites"; the ticket is gone, this line is the rule). The agent now also echoes

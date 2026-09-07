@@ -184,9 +184,15 @@ _NODE_RESULT_NUMERIC_COLS = ("approved_share", "approved_daily_amount", "actual_
 
 def period_node_results(conn: _AnyConn, org_id: str, brand_id: str, period_id: str) -> list[dict]:
     """This period's scored nodes for the API/prompt: Decimal columns cast to float (same
-    convention as `period.brand_period_response()`), ordered by depth then node_key."""
+    convention as `period.brand_period_response()`), ordered by depth then node_key.
+
+    `source_tree_task_id`（票 04 Amendment 2026-09-08）：一期所有列同一個值（`scoring.
+    score_period()` 寫入時就是這樣，取自那一批 `period_node_membership` 裡最新一列）——
+    `jobs._continuity_campaign_names()` 拿它去找**那一棵樹自己**的第一層（活動）綁定列
+    （`repository.bindings_for_tree()`，ADR 0064：綁定屬於做出它的那棵樹），depth 1 從沒
+    被記分，不會自己出現在這張表裡。"""
     rows = conn.execute(
-        "SELECT node_key, depth, node_name, external_id, approved_share,"
+        "SELECT source_tree_task_id, node_key, depth, node_name, external_id, approved_share,"
         " approved_daily_amount, actual_spend, revenue_tracked, roas_conservative,"
         " roas_optimistic, roas_coverage, breakeven_roas, breakeven_source, verdict,"
         " coordinates_json FROM period_node_result"

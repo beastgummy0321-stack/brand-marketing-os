@@ -92,7 +92,7 @@ function NodeDetail({ entry, levels, ad, onSelectChild }: { entry: NodeEntry; le
   const { node, depth } = entry;
   const [coordinatesOpen, setCoordinatesOpen] = useState(false);
   return <section aria-label="節點詳情" className="flex flex-col gap-6 p-6">
-    <div><Badge variant="secondary">{levels[depth] ?? `第 ${depth + 1} 層`}</Badge><h2 className="mt-3 text-lg leading-7">{node.name}</h2></div>
+    <div><Badge variant="secondary">{levels[depth] ?? `第 ${depth + 1} 層`}</Badge>{node.continued_from_node_key !== null && <Badge variant="outline">延續上一期</Badge>}<h2 className="mt-3 text-lg leading-7">{node.name}</h2></div>
     {(node.share !== null || (depth === 0 && node.bound_external_id !== null)) && <dl className="grid grid-cols-2 gap-x-5 gap-y-4 border-y border-border py-4">
       {node.share !== null && <div><dt className="text-xs text-muted-foreground">預算比例</dt><dd className="mt-1 text-xl font-semibold numeric">{(node.share * 100).toFixed(0)}%</dd></div>}
       {node.share !== null && node.daily_amount !== null && <div><dt className="text-xs text-muted-foreground">每日金額</dt><dd className="mt-1 text-xl font-semibold numeric">{formatCurrency(node.daily_amount)}</dd></div>}

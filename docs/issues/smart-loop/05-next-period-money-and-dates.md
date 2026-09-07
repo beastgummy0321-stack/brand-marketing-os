@@ -79,8 +79,8 @@ revenue, step 20):
 ### 3. Response — `app/schedule/state.py`
 
 `_brand_response()` gains `"next_period_suggestion": period_mod.next_period_suggestion(conn, org_id, brand_id)`.
-Check the existing tests that assert the top-level key set of `GET /api/schedule/brands/{id}` (grep
-`plan_count_min` in `app/tests/test_schedule.py`) and extend them by exactly this key.
+There is no existing key-set assertion on that response (verified 2026-09-08: `plan_count_min` appears only as a
+value check at `app/tests/test_schedule.py:636`); check 3 adds a presence assertion for the new key.
 
 ### 4. Screen — `frontend/src/components/schedule/SchedulePage.tsx`, `ScheduleSetup.tsx`, `frontend/src/lib/scheduleApi.ts`
 
@@ -112,8 +112,8 @@ Run with `BRAND_OS_LLM_PROVIDER` unset.
    `why` contains 看不出; (d) no settled period → `None`. (e) set `step_rate` to 10 via `rule_cards.set_value` →
    case (a) gives `2200`. Red proof: return `None` unconditionally → (a) fails.
 2. Same file: a `planning` period 09-10 ~ 09-12 exists → `overlaps` contains its name; none → `[]`.
-3. `app/tests/test_schedule.py`: `GET /api/schedule/brands/{id}` carries `next_period_suggestion` (`None` before
-   any settled period); the existing key-set assertion is extended by exactly this key.
+3. `app/tests/test_schedule.py`: `GET /api/schedule/brands/{id}` carries the key `next_period_suggestion`, `None`
+   before any settled period (one assertion added to the existing GET test around line 626-640).
 4. Gate, verbatim: `uv run ruff check app && uv run pyright && uv run pytest app/tests/test_schedule_period.py app/tests/test_schedule.py app/tests/test_rule_cards.py app/tests/test_rule_cards_api.py app/tests/test_architecture_boundaries.py -q`
    then `cd frontend && npm run build && npm run e2e`.
 5. Ratchets: measure before and after; **this ticket authorizes raising both to the measured value** with a
@@ -135,10 +135,13 @@ Names whose meaning changes — scanned 2026-09-08:
 ```
 ### git grep -n '"schedule_budget"' -- 'app/*.py' 'frontend/src/*'
 app/core/rule_cards.py:49:    "schedule_budget": {
-app/schedule/routes.py:247:    daily_budget = rule_cards.get_value(conn, brand_id, "schedule_budget", "daily_budget")
+app/schedule/routes.py:249:    daily_budget = rule_cards.get_value(conn, brand_id, "schedule_budget", "daily_budget")
 app/schedule/state.py:157:    current_daily_budget = rule_cards.get_value(conn, brand_id, "schedule_budget", "daily_budget")
-app/schedule/jobs.py:~220:    daily_budget = rule_cards.get_value(conn, brand_id, "schedule_budget", "daily_budget")
-(plus app/tests/test_rule_cards*.py and test_schedule.py fixtures that set daily_budget — unchanged; refresh with the grep)
+app/schedule/jobs.py:349:        daily_budget = rule_cards.get_value(conn, brand_id, "schedule_budget", "daily_budget")
+(tests naming the card: app/tests/test_approval.py ×1, app/tests/test_schedule.py ×3 — they set daily_budget; unchanged)
+### git grep -n "step_rate" — no hits outside this ticket (new name)
+### rule card POST endpoint: app/brand_web/routes_brand_settings.py:71  @router.post("/api/settings/rule-cards/brands/{brand_id}/{card_key}")
+(read it before choosing how the new field is validated — the endpoint decides which field keys it accepts)
 ### git grep -n "_brand_response(" -- 'app/*.py'
 app/schedule/state.py:156:def _brand_response(conn, brand_id: str, org_id: str) -> dict:
 app/schedule/routes.py  (every endpoint returns it — unchanged callers)

@@ -55,12 +55,41 @@ def _apply_bindings(nodes: list, bindings: dict) -> None:
         _apply_bindings(node["children"], bindings)
 
 
+def _continuity_map(conn, org_id: str, brand_id: str) -> dict:
+    """票 04：最近一次已結算檔期的逐節點記分列，轉成 `(depth, node_name) -> node_key`——
+    `tree_with_bindings()` 疊 `continued_from_node_key` 用的查表。跟判決無關（`win`／`lose`／
+    `unclear` 都在表裡；哪些名字「該」沿用是 `jobs._continuity_text()` 那段 prompt 的事，
+    這裡純粹是「這一期的名字，對不對得上上一期記過分的某個節點」）。沒有已結算檔期或零筆
+    記分列 → 空字典（每個節點都疊 `None`）。只查一次（ticket §2「Read the results once per
+    call」）。"""
+    period = period_repo.latest_settled_period(conn, org_id, brand_id)
+    if period is None:
+        return {}
+    results = period_repo.period_node_results(conn, org_id, brand_id, period["id"])
+    return {(r["depth"], r["node_name"]): r["node_key"] for r in results}
+
+
+def _apply_continuity(nodes: list, depth: int, continuity: dict) -> None:
+    """遞迴每一層疊 `continued_from_node_key`——第一層（`depth == 1`）從來沒被記過分，
+    一律 `None`；第二、三層照 `(depth, name)` 查表，查不到一樣是 `None`。"""
+    for node in nodes:
+        node["continued_from_node_key"] = (
+            None if depth == 1 else continuity.get((depth, node["name"]))
+        )
+        _apply_continuity(node["children"], depth + 1, continuity)
+
+
 def tree_with_bindings(conn, tree_row: dict, org_id: str, brand_id: str) -> dict:
     """票 T3b／T3c（ADR 0055 §4）：疊上 `channel_entity_map` 的綁定，每一層都疊——
-    位置（`node_key`）配對，名字不符就顯示未綁定。讀從不寫。"""
+    位置（`node_key`）配對，名字不符就顯示未綁定。票 04：再疊一層讀時 overlay——
+    `continued_from_node_key`，跟綁定完全獨立的另一件事（綁定認 `node_key`，這個認
+    `(depth, name)`；一個節點可以「延續」但因為換了位置還沒綁定，反之亦然，ADR 0064）。
+    讀從不寫。"""
     tree = tree_mod.tree_from_task_row(tree_row)
     bindings = schedule_repo.bindings_by_node_key(conn, org_id, brand_id, CHANNEL_KEY)
     _apply_bindings(tree["nodes"], bindings)
+    continuity = _continuity_map(conn, org_id, brand_id)
+    _apply_continuity(tree["nodes"], 1, continuity)
     return tree
 
 

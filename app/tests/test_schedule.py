@@ -1934,6 +1934,169 @@ class BindTreeApiContractTest(_ScheduleApiTestBase):
         )
         _assert_no_section()  # 子案二：結算過，但那個檔期零個節點被記分
 
+    # -- 票 04：winners keep their names ---------------------------------------------------
+
+    def test_continuity_section_lists_keep_and_replace_blocks_separately(self):
+        """done-check 1／3：tree prompt 的最後一段是【延續】，緊接在【上一期】後面——
+        `win`（A）／`unclear`（C）進沿用區，`lose`（B）進換掉區，兩區不能混。不只斷言
+        子字串出現，要斷言在正確的標題底下（ticket「Cheapest wrong implementation」(c)：
+        把 `lose` 節點塞進沿用區，只斷言子字串出現的測試逮不到）。
+        Red proof：把 `schedule_tree()` 的 tree tuple裡 `continuity_text` 拿掉 →
+        `【延續】` 那個 assertIn 先紅（本檔紅過一次，見票面 done-check 1）。
+
+        Amendment 2026-09-08（第一輪驗收撞牆）：depth 1（活動）從沒被記分，`node_rows`
+        裡沒有它——第一層的沿用名字要從**這一棵樹自己**的綁定列（K，`node_key` 不含
+        `.`，同一個 `source_tree_task_id`）找。Red proof：拿掉 `_continuity_text()` 的
+        `campaign_names` 引數（改傳 `[]`）→ `- 活動：K` 那個 assertIn 先紅。"""
+        channel_id = schedule_repo.ensure_meta_channel(web.conn, coredb.DEV_ORG_ID)
+        node_rows = [
+            {
+                "source_tree_task_id": "tsk_continuity_seed", "channel_id": channel_id,
+                "node_key": "1.1", "depth": 2, "node_name": "A",
+                "external_id": "as-a", "approved_share": 0.5, "approved_daily_amount": 500.0,
+                "actual_spend": 500.0, "revenue_tracked": 1000.0, "roas_conservative": 1.5,
+                "roas_optimistic": 2.0, "roas_coverage": 1.0, "breakeven_roas": 1.0,
+                "breakeven_source": "測試打平線", "verdict": "win", "coordinates_json": None,
+                "settled_at": datetime.now(UTC),
+            },
+            {
+                "source_tree_task_id": "tsk_continuity_seed", "channel_id": channel_id,
+                "node_key": "1.2", "depth": 2, "node_name": "C",
+                "external_id": "as-c", "approved_share": 0.5, "approved_daily_amount": 500.0,
+                "actual_spend": 10.0, "revenue_tracked": 0.0, "roas_conservative": 0.0,
+                "roas_optimistic": 0.0, "roas_coverage": 0.02, "breakeven_roas": 1.0,
+                "breakeven_source": "測試打平線", "verdict": "unclear", "coordinates_json": None,
+                "settled_at": datetime.now(UTC),
+            },
+            {
+                "source_tree_task_id": "tsk_continuity_seed", "channel_id": channel_id,
+                "node_key": "1.1.1", "depth": 3, "node_name": "B",
+                "external_id": "ad-b", "approved_share": None, "approved_daily_amount": None,
+                "actual_spend": 400.0, "revenue_tracked": 100.0, "roas_conservative": 0.2,
+                "roas_optimistic": 0.3, "roas_coverage": 1.0, "breakeven_roas": 1.0,
+                "breakeven_source": "測試打平線", "verdict": "lose", "coordinates_json": None,
+                "settled_at": datetime.now(UTC),
+            },
+        ]
+        self._write_scored_period(
+            start=date(2026, 7, 1), end=date(2026, 7, 14), daily_budget=2000.0,
+            settled_spend=910.0, settled_revenue=1100.0, node_rows=node_rows,
+        )
+        schedule_repo.upsert_binding(
+            web.conn, org_id=coredb.DEV_ORG_ID, brand_id=self.brand["id"],
+            channel_id=channel_id, node_key="1", node_name_at_bind="K",
+            external_id="camp-k", external_status=None,
+            source_tree_task_id="tsk_continuity_seed",
+        )
+        web.conn.commit()
+
+        schedule_jobs.PROVIDER = _fake(_fenced_plans([_one_plan()]))
+        resp = self._post(plan_count=1)
+        self.assertEqual(resp.status_code, 200, resp.text)
+        self._run_worker()
+
+        tree_fake = _fake(_tree_fenced(_one_tree_nodes()))
+        schedule_jobs.PROVIDER = tree_fake
+        resp = self.client.post(
+            f"/api/schedule/brands/{self.brand['id']}/tree", json={"plan_index": 0}
+        )
+        self.assertEqual(resp.status_code, 200, resp.text)
+        self._run_worker()
+
+        tree_prompt = tree_fake.calls[0]["messages"][0]["content"]
+        self.assertIn("【延續】", tree_prompt)
+        self.assertGreater(tree_prompt.index("【延續】"), tree_prompt.index("【上一期】"))
+
+        continuity_text = tree_prompt[tree_prompt.index("【延續】"):]
+        keep_idx = continuity_text.index(schedule_jobs._CONTINUITY_KEEP_HEADER)
+        replace_idx = continuity_text.index(schedule_jobs._CONTINUITY_REPLACE_HEADER)
+        self.assertLess(keep_idx, replace_idx)
+        keep_section = continuity_text[keep_idx:replace_idx]
+        replace_section = continuity_text[replace_idx:]
+        self.assertIn("- 活動：K", keep_section)
+        self.assertIn("- 組合：A", keep_section)
+        self.assertIn("- 組合：C", keep_section)
+        self.assertNotIn("- 廣告：B", keep_section)
+        self.assertIn("- 廣告：B", replace_section)
+        self.assertNotIn("- 活動：K", replace_section)
+        self.assertNotIn("- 組合：A", replace_section)
+        self.assertNotIn("- 組合：C", replace_section)
+
+    def test_continuity_overlay_matches_by_depth_and_name_not_position(self):
+        """done-check 2：overlay 只認 `(depth, name)`，不認 `node_key`——沿用節點在新樹裡
+        的 node_key（"1.1"）跟上一期記分列的 node_key（刻意設成不同的 "9.9"）不一樣，照樣
+        要接上（矛盾檢查 check 2：延續認名字，綁定才認位置）。名字多一個尾端空白、或名字
+        對但層不對，都要是 None（「Cheapest wrong implementation」(a)：只認名字不認深度，
+        會被這裡深度 3 的 "A" 逮到）。"""
+        channel_id = schedule_repo.ensure_meta_channel(web.conn, coredb.DEV_ORG_ID)
+        node_rows = [{
+            "source_tree_task_id": "tsk_continuity_overlay", "channel_id": channel_id,
+            "node_key": "9.9", "depth": 2, "node_name": "A",
+            "external_id": "as-a", "approved_share": 0.5, "approved_daily_amount": 500.0,
+            "actual_spend": 500.0, "revenue_tracked": 1000.0, "roas_conservative": 1.5,
+            "roas_optimistic": 2.0, "roas_coverage": 1.0, "breakeven_roas": 1.0,
+            "breakeven_source": "測試打平線", "verdict": "win", "coordinates_json": None,
+            "settled_at": datetime.now(UTC),
+        }]
+        self._write_scored_period(
+            start=date(2026, 7, 1), end=date(2026, 7, 14), daily_budget=2000.0,
+            settled_spend=500.0, settled_revenue=1000.0, node_rows=node_rows,
+        )
+
+        schedule_jobs.PROVIDER = _fake(_fenced_plans([_one_plan()]))
+        resp = self._post(plan_count=1)
+        self.assertEqual(resp.status_code, 200, resp.text)
+        self._run_worker()
+
+        custom_nodes = [{
+            "name": "根", "fields": [], "share": None, "warnings": [],
+            "children": [
+                {"name": "A", "fields": [], "share": 0.5, "warnings": [],
+                 "children": [{"name": "Z1", "fields": [], "share": None, "warnings": [],
+                               "children": []}]},
+                {"name": "A ", "fields": [], "share": 0.5, "warnings": [],
+                 "children": [{"name": "A", "fields": [], "share": None, "warnings": [],
+                               "children": []}]},
+            ],
+        }]
+        schedule_jobs.PROVIDER = _fake(_tree_fenced(custom_nodes))
+        resp = self.client.post(
+            f"/api/schedule/brands/{self.brand['id']}/tree", json={"plan_index": 0}
+        )
+        self.assertEqual(resp.status_code, 200, resp.text)
+        self._run_worker()
+
+        get_resp = self.client.get(f"/api/schedule/brands/{self.brand['id']}")
+        self.assertEqual(get_resp.status_code, 200, get_resp.text)
+        root = get_resp.json()["tree"]["nodes"][0]
+        self.assertIsNone(root["continued_from_node_key"])  # 第一層一律 None
+
+        node_a, node_a_space = root["children"]
+        self.assertEqual(node_a["name"], "A")
+        self.assertEqual(node_a["continued_from_node_key"], "9.9")  # 上一期那一列的 node_key
+        self.assertEqual(node_a_space["name"], "A ")
+        self.assertIsNone(node_a_space["continued_from_node_key"])  # 尾端空白，名字不算相符
+
+        depth3_a = node_a_space["children"][0]
+        self.assertEqual(depth3_a["name"], "A")
+        self.assertIsNone(depth3_a["continued_from_node_key"])  # 名字對，深度不對
+
+    def test_continuity_overlay_is_none_for_every_node_when_nothing_settled(self):
+        """done-check 2 子案：這個品牌從沒結算過任何檔期 → 每個節點都是 None，但鍵要在
+        （ticket §2：不管有沒有疊圖，形狀都一樣）。"""
+        self._succeed_plan_and_tree()
+        get_resp = self.client.get(f"/api/schedule/brands/{self.brand['id']}")
+        self.assertEqual(get_resp.status_code, 200, get_resp.text)
+        nodes = get_resp.json()["tree"]["nodes"]
+
+        def _walk(entries: list) -> None:
+            for entry in entries:
+                self.assertIn("continued_from_node_key", entry)
+                self.assertIsNone(entry["continued_from_node_key"])
+                _walk(entry["children"])
+
+        _walk(nodes)
+
 
 class CreativeApiContractTest(_ScheduleApiTestBase):
     """票 01（`.scratch/creative-slice/issues/01-ad-creative-per-ad-node.md`）：POST

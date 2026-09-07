@@ -116,8 +116,11 @@ def _collect_nodes(
             # tree.py 不碰 DB，一律留白；binding.tree_with_bindings() 疊上
             # bound_external_id 時遞迴每一層（票 T3c 起，ADR 0055 §7：第一、二層目前
             # 有寫入路徑，第三層留給 T5），spend／roas 仍然只在第一層、且只有綁定的
-            # 節點才補上（routes.py 的 _fill_node_spend，這張票沒有動它）。
+            # 節點才補上（routes.py 的 _fill_node_spend，這張票沒有動它）。票 04：
+            # continued_from_node_key 同一個道理留白，binding.tree_with_bindings() 的
+            # 讀時 overlay 疊上——形狀不因為有沒有疊圖而變。
             "bound_external_id": None, "spend": None, "roas": None,
+            "continued_from_node_key": None,
         }
         if depth == budget_level:
             share_bucket.append(node)
