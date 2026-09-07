@@ -33,7 +33,7 @@ back. Note that `ImportCycleScanTest` only records edges between top-level packa
 `scoring` is called from `routes` only; `period`/`state` never import it (ADR 0066 rule 6).
 `period_repository` imports nothing from the package and is imported by `period`, `routes`,
 `binding`, `scoring` (ticket smart-loop 02 — split out of `repository.py` to hold the 800-line
-cap; no behaviour change).
+cap; no behaviour change) and, since ticket smart-loop 03, `jobs` (`latest_settled_period()`).
 
 ## Exported shapes
 
@@ -98,6 +98,9 @@ Module-local and reversible, decided here rather than in an ADR:
 - **The plan prompt carries this month's ad-level performance as its last section** (ticket 01,
   `docs/issues/plan-quality/`): `performance.ad_performance()` → `jobs._account_performance_text()`,
   same window as the brand page and the diagnosis (`state._current_month_window`).
+- **Both generation prompts carry the latest settled period's node results as their last
+  section** (ticket smart-loop 03): `period_repository.latest_settled_period()` →
+  `jobs._last_period_text()`; absent when there is no settled period or it scored no nodes.
 - **How a creative reply is matched to a tree node** — ticket T3d, settled by the user; **amended
   2026-09-04, again by the user** (overturning their own 2026-09-03 "leave it until it
   bites"; the ticket is gone, this line is the rule). The agent now also echoes

@@ -45,8 +45,10 @@ from app.llm import context_compiler, gateway, methodology, providers
 from app.schedule import binding as binding_mod
 from app.schedule import diagnosis as diagnosis_mod
 from app.schedule import performance as performance_mod
+from app.schedule import period_repository as period_repo
 from app.schedule import plan as plan_mod
 from app.schedule import repository, routes, state
+from app.schedule import scoring as scoring_mod
 
 # 唯一的供應商實例：這三支 task body 現在是全站唯一真的打代理的地方（routes.py 的三支 POST
 # 端點自己不再打），比照 routes.py 搬過來之前的既有寫法——測試用
@@ -210,6 +212,80 @@ def _account_performance_text(perf: dict, breakeven: tuple[float | None, str]) -
     return "\n".join(out)
 
 
+_LAST_PERIOD_DEPTH_LABELS = {2: "組合", 3: "廣告"}  # same two labels as
+# frontend/src/lib/scheduleApi.ts's NODE_RESULT_DEPTH_LABELS -- one source of Chinese wording
+# per screen; this one is prompt text, not the screen, so it is not imported from there.
+
+_LAST_PERIOD_CLOSING_LINE = (
+    "上一期的判決是這一期的起點：說明哪些節點要延續、哪些要換、為什麼；"
+    "「看不出」不是失敗，是樣本不夠。"
+)
+
+
+def _coordinate_cell(node_result: dict, labels: dict) -> str:
+    """票 smart-loop 03：depth-3 node 的座標欄——七個 `*_key` 值各自轉成 label（查不到就印
+    key 本身，`performance_mod._coordinate_labels()` 既有的 fallback 慣例），用「／」接起來；
+    一個維度沒填（`None`）印 `—`（跟這一列其他缺值欄位同一個記號）。"""
+    coordinates = node_result["coordinates_json"] or {}
+    parts = []
+    for dimension in repository.COORDINATE_KEYS:
+        key = coordinates.get(f"{dimension}_key")
+        parts.append("—" if key is None else labels.get((dimension, key), key))
+    return "／".join(parts)
+
+
+def _last_period_text(conn, org_id: str, brand_id: str) -> str:
+    """票 smart-loop 03：`schedule_plan()`／`schedule_tree()` prompt 的最後一段——上一個
+    已結算檔期的逐節點判決，讓代理在畫這一期之前先看到上一期誰賺誰賠。`""`：沒有已結算的
+    檔期，或那個檔期結算時零個節點被記分（品牌層數字不算「決策的記憶」，見這支函式的呼叫端
+    docstring）。"""
+    period = period_repo.latest_settled_period(conn, org_id, brand_id)
+    if period is None:
+        return ""
+    results = period_repo.period_node_results(conn, org_id, brand_id, period["id"])
+    if not results:
+        return ""
+
+    labels = performance_mod._coordinate_labels(conn, org_id, brand_id)
+    depth_totals: dict[int, float] = {}
+    depth_counts: dict[int, int] = {2: 0, 3: 0}
+    verdict_counts = {"win": 0, "lose": 0, "unclear": 0}
+    for r in results:
+        depth_totals[r["depth"]] = depth_totals.get(r["depth"], 0.0) + r["actual_spend"]
+        depth_counts[r["depth"]] += 1
+        verdict_counts[r["verdict"]] += 1
+
+    breakeven = results[0]["breakeven_roas"]  # ticket §2：這一期所有列同一個值
+    breakeven_text = f"{breakeven:.2f}x" if breakeven is not None else "算不出"
+    out = [
+        f"【上一期】{period['start_date'].isoformat()} ~ {period['end_date'].isoformat()}｜"
+        f"日預算 {float(period['daily_budget']):,.0f}｜"
+        f"結算花費 {float(period['settled_spend']):,.0f}｜"
+        f"這期間全通路營收 {float(period['settled_revenue']):,.0f}｜"
+        f"打平線 {breakeven_text}",
+        f"判決：{scoring_mod.VERDICT_LABELS['win']} {verdict_counts['win']}、"
+        f"{scoring_mod.VERDICT_LABELS['lose']} {verdict_counts['lose']}、"
+        f"{scoring_mod.VERDICT_LABELS['unclear']} {verdict_counts['unclear']}"
+        f"（組合 {depth_counts[2]}、廣告 {depth_counts[3]}）",
+        "| 節點 | 層 | 座標 | 核准比例 | 實花 | 實花佔比 | 保守 ROAS | 樂觀 ROAS | 判決 |",
+        "|---|---|---|---|---|---|---|---|---|",
+    ]
+    for r in results:
+        share = r["approved_share"]
+        share_cell = "—" if share is None else f"{share * 100:.0f}%"
+        coord_cell = _coordinate_cell(r, labels) if r["depth"] == 3 else "—"
+        out.append(
+            f"| {r['node_name']} | {_LAST_PERIOD_DEPTH_LABELS[r['depth']]} | {coord_cell} |"
+            f" {share_cell} | {r['actual_spend']:,.0f} |"
+            f" {diagnosis_mod._pct(r['actual_spend'], depth_totals[r['depth']])} |"
+            f" {diagnosis_mod._roas_text(r['roas_conservative'])} |"
+            f" {diagnosis_mod._roas_text(r['roas_optimistic'])} |"
+            f" {scoring_mod.VERDICT_LABELS[r['verdict']]} |"
+        )
+    out.append(_LAST_PERIOD_CLOSING_LINE)
+    return "\n".join(out)
+
+
 def schedule_plan(org_id: str, brand_id: str, product_ids: list, platform: str, objective: str,
                    promotion_note: str, plan_count: int,
                    campaign_period_id: str | None = None) -> None:
@@ -238,10 +314,11 @@ def schedule_plan(org_id: str, brand_id: str, product_ids: list, platform: str, 
         performance = performance_mod.ad_performance(conn, org_id, brand_id)
         breakeven = diagnosis_mod.breakeven_roas(conn, org_id, brand_id)
         performance_text = _account_performance_text(performance, breakeven)
+        last_period_text = _last_period_text(conn, org_id, brand_id)
         prompt = "\n\n".join(
             section for section in
             (department_text, methodology_result.text, params_text, brand_context,
-             performance_text) if section
+             performance_text, last_period_text) if section
         )
 
         context = gateway.TaskContext(
@@ -300,9 +377,11 @@ def schedule_tree(org_id: str, brand_id: str, plan_index: int, plan_task_id: str
             conn, state.METHODOLOGY_TASK_LABELS, brand_id=brand_id
         )
         params_text = _tree_params_text(platform_label, plan_index, chosen_plan)
+        last_period_text = _last_period_text(conn, org_id, brand_id)
         prompt = "\n\n".join(
             section for section in
-            (department_text, methodology_result.text, params_text, brand_context) if section
+            (department_text, methodology_result.text, params_text, brand_context,
+             last_period_text) if section
         )
 
         context = gateway.TaskContext(

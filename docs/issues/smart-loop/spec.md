@@ -79,7 +79,10 @@ Status: 2026-09-08 使用者裁決撿回（同日早上曾封存），並把骨�
 2. ~~`02-period-repository-split.md`~~ — 邊界票（C），2026-09-08 插入並**同日出貨**：`repository.py` 800 → 625 行，
    「檔期」與「記分」兩組 SQL 搬到 `period_repository.py`（188 行，不 import 套件內任何檔）。審查一次判 blocked-upstream
    （票裡兩條驗收互撞在一個測試檔的註解字串上），主聊天裁決「測試的斷言與資料不動、註解可改一字」後出貨。
-3. `03-last-period-in-prompts.md` — 第 2 刀（B）。前身 `issue-next-period-does-not-know-the-last-one.md`。
+3. ~~`03-last-period-in-prompts.md`~~ — 第 2 刀（B），**2026-09-08 出貨**：兩個 prompt 末段多【上一期】（逐節點判決表＋收斂指令），
+   面板多一句「花費是品牌層口徑」。真跑：方案文字引用「上一期」9 次、「看不出」4 次、結算花費 1,068 兩次；活動樹 20 個節點裡
+   13 處寫「延續」、「承接 02A 假說」，但**名字一字不差沿用的是 0／10**——這正是第 3 刀（票 04）要補的。
+   前身 `issue-next-period-does-not-know-the-last-one.md` 隨這張票刪除。
 4. `04-winners-keep-their-names.md` — 第 3 刀（B）。
 5. `05-next-period-money-and-dates.md` — 第 4 刀（B）。前身 `issue-budget-and-dates-are-hand-typed.md`。
 

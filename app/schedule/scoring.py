@@ -39,6 +39,10 @@ _SCORED_DEPTHS = {2: "adset", 3: "ad"}
 _COORDINATE_FIELDS = ("audience_key", "pain_key", "angle_key", "hook_key", "proof_key",
                       "offer_key", "format_key")
 
+# Ticket smart-loop 03: the labels the plan/tree prompts print for a verdict this module wrote.
+# Lives next to verdict()'s three string values instead of being duplicated in jobs.py.
+VERDICT_LABELS = {"win": "賺", "lose": "賠", "unclear": "看不出"}
+
 
 def verdict(roas_conservative: float | None, roas_optimistic: float | None,
             breakeven: float | None) -> str:

@@ -40,6 +40,7 @@ from app.meta import repository as meta_repo
 from app.schedule import creative as creative_mod
 from app.schedule import jobs as schedule_jobs
 from app.schedule import period as period_mod
+from app.schedule import period_repository as period_repo
 from app.schedule import plan as plan_mod
 from app.schedule import repository as schedule_repo
 from app.schedule import state as schedule_state
@@ -1797,6 +1798,141 @@ class BindTreeApiContractTest(_ScheduleApiTestBase):
             f"（{month_start.isoformat()} ~ {inclusive_end.isoformat()}）", prompt_text
         )
         self.assertNotIn(month_end.isoformat(), prompt_text)  # 半開區間的下月初不准漏出來
+
+    # -- 票 smart-loop 03：plan／tree prompt 帶上一期的判決 -------------------------------
+
+    def _write_scored_period(self, *, start: date, end: date, daily_budget: float,
+                              settled_spend: float, settled_revenue: float,
+                              node_rows: list[dict]) -> str:
+        """直接寫表造一個已結算檔期＋它的節點記分列——不走真的「規劃→展開→綁定→結算」
+        整條鏈（那條鏈已經在 test_schedule_period.py／本檔別的測試測過），這裡只測
+        `jobs._last_period_text()` 讀出來、印出來的樣子。"""
+        org_id, brand_id = coredb.DEV_ORG_ID, self.brand["id"]
+        period_id = period_repo.upsert_draft_period(
+            web.conn, org_id, brand_id, name=f"上一期 {start.isoformat()}",
+            start_date=start, end_date=end, daily_budget=daily_budget, currency="TWD",
+        )
+        period_repo.write_settlement(
+            web.conn, org_id=org_id, period_id=period_id, spend=settled_spend,
+            revenue=settled_revenue, settled_at=datetime.now(UTC), force_early=False,
+        )
+        period_repo.replace_period_node_results(web.conn, org_id, brand_id, period_id, node_rows)
+        web.conn.commit()
+        return period_id
+
+    def test_last_period_section_is_the_last_element_in_both_prompts(self):
+        """done-check 1／3：red proof——拿掉 jobs.py 兩個 prompt tuple 裡的
+        `last_period_text` 元素，兩組 index 斷言（各自比對 `【上一期】` 跟前一段的先後）就會
+        變紅；`_coordinate_cell` 若印 key 不印 label，`陌生・不知有問題` 那個 assertIn 會紅；
+        `實花佔比` 若跨深度合計而不是各自的深度，`100%` 那個子字串斷言會紅（done-check 3）。
+        `self._post()` 用預設 `start_date`／`end_date`（2026-09-10 ~ 2026-09-24）另開一個
+        `planning` 草稿檔期，created_at 比這裡先造的已結算檔期新——藉此順便關住矛盾檢查段
+        「check 1 vs. check 2」點名的那個陷阱：拿 `get_latest_period()` 配 `status=='settled'`
+        判斷的錯誤實作，會被這個更新的草稿檔期擋下，讀不到已結算的那個。"""
+        start, end = date(2026, 8, 1), date(2026, 8, 14)
+        channel_id = schedule_repo.ensure_meta_channel(web.conn, coredb.DEV_ORG_ID)
+        node_rows = [
+            {
+                "source_tree_task_id": "tsk_fake_last_period", "channel_id": channel_id,
+                "node_key": "1.1", "depth": 2, "node_name": "上一期組合節點",
+                "external_id": "as-scored", "approved_share": 0.55,
+                "approved_daily_amount": 1100.0, "actual_spend": 600.0,
+                "revenue_tracked": 900.0, "roas_conservative": 1.5, "roas_optimistic": 3.0,
+                "roas_coverage": 0.5, "breakeven_roas": 1.0, "breakeven_source": "測試打平線",
+                "verdict": "win", "coordinates_json": None, "settled_at": datetime.now(UTC),
+            },
+            {
+                "source_tree_task_id": "tsk_fake_last_period", "channel_id": channel_id,
+                "node_key": "1.1.1", "depth": 3, "node_name": "上一期廣告節點",
+                "external_id": "ad-scored", "approved_share": None,
+                "approved_daily_amount": None, "actual_spend": 500.0,
+                "revenue_tracked": 150.0, "roas_conservative": 0.3, "roas_optimistic": 0.6,
+                "roas_coverage": 1.0, "breakeven_roas": 1.0, "breakeven_source": "測試打平線",
+                "verdict": "lose",
+                # 只填 audience 一個維度：拿現有 brand_coordinate 種子的一個 key（見
+                # `app/schedule/repository.py` `_SEED_COORDINATES["audience"][0]`），其餘六個
+                # 留 None——順便驗證「沒填的維度印 —，不是印 None／key」這條沒有明講的規則。
+                "coordinates_json": {
+                    "audience_key": "cold_unaware", "pain_key": None, "angle_key": None,
+                    "hook_key": None, "proof_key": None, "offer_key": None, "format_key": None,
+                },
+                "settled_at": datetime.now(UTC),
+            },
+        ]
+        self._write_scored_period(
+            start=start, end=end, daily_budget=2000.0, settled_spend=1068.0,
+            settled_revenue=0.0, node_rows=node_rows,
+        )
+
+        fake = _fake(_fenced_plans([_one_plan()]))
+        schedule_jobs.PROVIDER = fake
+        resp = self._post(plan_count=1)
+        self.assertEqual(resp.status_code, 200, resp.text)
+        self._run_worker()
+
+        self.assertEqual(len(fake.calls), 1)
+        plan_prompt = fake.calls[0]["messages"][0]["content"]
+        self.assertIn("【上一期】", plan_prompt)
+        self.assertIn(f"{start.isoformat()} ~ {end.isoformat()}", plan_prompt)
+        self.assertIn("上一期組合節點", plan_prompt)
+        self.assertIn("賺", plan_prompt)
+        self.assertIn("賠", plan_prompt)
+        self.assertIn("55%", plan_prompt)
+        self.assertIn("1.50x", plan_prompt)
+        self.assertIn("陌生・不知有問題", plan_prompt)  # label，不是 key `cold_unaware`
+        self.assertNotIn("cold_unaware", plan_prompt)
+        # done-check 3：兩列各自是自己那個深度唯一的一列，實花佔比各自 100%，不是合併成 50%
+        # （只在 `【上一期】` 這一段裡找 `50%`——`50%` 這個子字串本身在方法論文字裡另有
+        # 不相干的出現，例如 `ads-commerce.md` 的毛利率例子，不能拿整份 prompt 當範圍）。
+        last_period_text = plan_prompt[plan_prompt.index("【上一期】"):]
+        self.assertIn("| 55% | 600 | 100% | 1.50x | 3.00x | 賺 |", last_period_text)
+        self.assertNotIn("50%", last_period_text)
+        self.assertGreater(
+            plan_prompt.index("【上一期】"), plan_prompt.index("【這個帳戶目前的成效】")
+        )
+
+        tree_fake = _fake(_tree_fenced(_one_tree_nodes()))
+        schedule_jobs.PROVIDER = tree_fake
+        resp = self.client.post(
+            f"/api/schedule/brands/{self.brand['id']}/tree", json={"plan_index": 0}
+        )
+        self.assertEqual(resp.status_code, 200, resp.text)
+        self._run_worker()
+
+        self.assertEqual(len(tree_fake.calls), 1)
+        tree_prompt = tree_fake.calls[0]["messages"][0]["content"]
+        self.assertIn("【上一期】", tree_prompt)
+        self.assertIn("上一期組合節點", tree_prompt)
+        self.assertGreater(
+            tree_prompt.index("【上一期】"), tree_prompt.index("CAMPAIGN-TREE-TASK-V1")
+        )
+
+    def test_no_last_period_section_when_nothing_settled_or_no_scored_nodes(self):
+        """done-check 2：兩個子案都要「兩個 prompt 都沒有」。"""
+        def _assert_no_section():
+            fake = _fake(_fenced_plans([_one_plan()]))
+            schedule_jobs.PROVIDER = fake
+            resp = self._post(plan_count=1)
+            self.assertEqual(resp.status_code, 200, resp.text)
+            self._run_worker()
+            self.assertNotIn("【上一期】", fake.calls[0]["messages"][0]["content"])
+
+            tree_fake = _fake(_tree_fenced(_one_tree_nodes()))
+            schedule_jobs.PROVIDER = tree_fake
+            resp = self.client.post(
+                f"/api/schedule/brands/{self.brand['id']}/tree", json={"plan_index": 0}
+            )
+            self.assertEqual(resp.status_code, 200, resp.text)
+            self._run_worker()
+            self.assertNotIn("【上一期】", tree_fake.calls[0]["messages"][0]["content"])
+
+        _assert_no_section()  # 子案一：這個品牌從沒結算過任何檔期
+
+        self._write_scored_period(
+            start=date(2026, 7, 1), end=date(2026, 7, 14), daily_budget=2000.0,
+            settled_spend=1000.0, settled_revenue=500.0, node_rows=[],
+        )
+        _assert_no_section()  # 子案二：結算過，但那個檔期零個節點被記分
 
 
 class CreativeApiContractTest(_ScheduleApiTestBase):

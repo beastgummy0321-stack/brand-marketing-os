@@ -92,12 +92,18 @@ export function PeriodPanel({
 }
 
 /** 票 smart-loop 01（ADR 0066）：結算之後，每個綁定節點對打平線的判決。全部零花費是
- * 「這期綁定的物件還沒有花費紀錄」，不是判讀壞了——句子講在表格之前（ticket §5）。 */
+ * 「這期綁定的物件還沒有花費紀錄」，不是判讀壞了——句子講在表格之前（ticket §5）。
+ * 票 smart-loop 03：加一句提醒花費的口徑差——結算上面的花費是品牌層（含這期沒綁定、
+ * 未登記的廣告），這張表只算綁定到節點的那一份，兩個數字本來就不會相等（ADR 0055 §11；
+ * 票 01 走查的實機驗收看到 1,068 對零花費的表格，當場問了）。 */
 function NodeResultTable({ results }: { results: SchedulePeriod["node_results"] }) {
   const allZeroSpend = results.every((row) => row.actual_spend === 0);
   const breakeven = results[0];
   return (
     <div className="mt-3 flex flex-col gap-2">
+      <p className="text-sm text-muted-foreground">
+        花費是品牌層的數字（含未登記的廣告）；下表只算這期綁定的節點。
+      </p>
       {allZeroSpend && (
         <p className="text-sm text-muted-foreground">
           這期綁定的 Meta 物件沒有花費紀錄，判決全部是「看不出」。

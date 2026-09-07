@@ -4,7 +4,8 @@ that file under the 800-line cap (`FileLineCapTest`). No behaviour change — sa
 same signatures, same bodies.
 
 Private to app/schedule (container contract §1): imported by `period.py`, `routes.py`,
-`binding.py` and `scoring.py`. Imports nothing from elsewhere in `app.schedule`
+`binding.py`, `scoring.py` and `jobs.py` (ticket smart-loop 03: `latest_settled_period()`, for
+the plan/tree prompts' last section). Imports nothing from elsewhere in `app.schedule`
 (docs/contracts/schedule.md).
 """
 
@@ -47,6 +48,18 @@ def get_latest_period(conn: _AnyConn, org_id: str, brand_id: str) -> dict | None
     row = conn.execute(
         "SELECT * FROM campaign_period WHERE org_id = %s AND brand_id = %s"
         " ORDER BY created_at DESC LIMIT 1",
+        (org_id, brand_id),
+    ).fetchone()
+    return dict(row) if row is not None else None
+
+
+def latest_settled_period(conn: _AnyConn, org_id: str, brand_id: str) -> dict | None:
+    """Ticket smart-loop 03: the prompts' "last period" — the most recently *settled* one, by
+    `settled_at`, not by `created_at`. A newer `planning`/`running` period never shadows it
+    (that is a different period the user has not yet closed out)."""
+    row = conn.execute(
+        "SELECT * FROM campaign_period WHERE org_id = %s AND brand_id = %s AND status = 'settled'"
+        " ORDER BY settled_at DESC LIMIT 1",
         (org_id, brand_id),
     ).fetchone()
     return dict(row) if row is not None else None

@@ -21,8 +21,11 @@ the next-period budget/date suggestion (05); the copy-name button (`docs/issues/
 ```
 _continuity_text(node_results: list[dict]) -> str        # "" when node_results is empty
 ```
-Called in `schedule_tree()` only, with the same `period_node_results` rows `_last_period_text()` reads (read once,
-pass the list to both; do not query twice). Appended as the **last** element of the tree tuple, after the
+Called in `schedule_tree()` only, with the same `period_node_results` rows `_last_period_text()` reads. Today
+`_last_period_text(conn, org_id, brand_id)` (`jobs.py:237`) loads the period and its rows itself; split it into a
+loader (`_last_period(conn, org_id, brand_id) -> tuple[dict, list] | None`) and a renderer that takes the pair, so
+`schedule_tree()` loads once and hands the rows to both renderers; `schedule_plan()` keeps working through the same
+two functions. Do not query the rows twice. Appended as the **last** element of the tree tuple, after the
 【上一期】 section (it is the instruction that acts on that section; contract "Position in the prompt decides
 whether an instruction runs"). Literal:
 
@@ -99,17 +102,28 @@ Files edited: `app/schedule/jobs.py` (`_continuity_text`, tree tuple), `app/sche
 `frontend/src/components/schedule/CampaignTree.tsx`, `app/tests/test_schedule.py`,
 `app/tests/test_architecture_boundaries.py` (two constants), `docs/contracts/schedule.md`.
 
-Names whose meaning changes — scanned 2026-09-08 (before ticket 03 ships; refresh `jobs.py` lines after it):
+Names whose meaning changes — scanned 2026-09-08 after ticket 03's diff landed in the working tree:
 
 ```
 ### git grep -n "def tree_with_bindings\|tree_with_bindings("
 app/schedule/binding.py:58:def tree_with_bindings(conn, tree_row: dict, org_id: str, brand_id: str) -> dict:
 app/schedule/state.py:165:    tree = (binding_mod.tree_with_bindings(conn, tree_row, org_id, brand_id)
 (plus test_schedule.py callers around lines 1157-1208, which assert bound_external_id and keep passing)
-### git grep -n "\"bound_external_id\": None" app/schedule/tree.py
-app/schedule/tree.py:~120:            "bound_external_id": None, "spend": None, "roas": None,
+### grep -n "\"bound_external_id\": None" app/schedule/tree.py   (2026-09-08 after ticket 03)
+app/schedule/tree.py:120:            "bound_external_id": None, "spend": None, "roas": None,
 ### grep -n "^from app.schedule" app/schedule/binding.py
-app/schedule/binding.py:  repository as schedule_repo; tree as tree_mod; period_repository as period_repo (added by ticket 02)
+app/schedule/binding.py:17:from app.schedule import period_repository as period_repo
+app/schedule/binding.py:18:from app.schedule import repository as schedule_repo
+app/schedule/binding.py:19:from app.schedule import tree as tree_mod
+### grep -n "last_period_text\|brand_context,$" app/schedule/jobs.py   (after ticket 03)
+app/schedule/jobs.py:237:def _last_period_text(conn, org_id: str, brand_id: str) -> str:
+app/schedule/jobs.py:317:        last_period_text = _last_period_text(conn, org_id, brand_id)      # schedule_plan()
+app/schedule/jobs.py:320-321:  plan tuple ends with `performance_text, last_period_text`
+app/schedule/jobs.py:380:        last_period_text = _last_period_text(conn, org_id, brand_id)      # schedule_tree()
+app/schedule/jobs.py:383-384:  tree tuple ends with `brand_context, last_period_text`  ← continuity_text goes after it
+app/schedule/jobs.py:448:  creative tuple — untouched
+### grep -n "VERDICT_LABELS" app/schedule/scoring.py
+app/schedule/scoring.py:44:VERDICT_LABELS = {"win": "賺", "lose": "賠", "unclear": "看不出"}
 ### grep -n "bound_external_id" frontend/src/lib/scheduleApi.ts frontend/src/components/schedule/CampaignTree.tsx
 frontend/src/lib/scheduleApi.ts:73:  bound_external_id: string | null;      (inside `export interface CampaignTreeNode`, line 65)
 frontend/src/components/schedule/CampaignTree.tsx:95-99  (NodeDetail: level Badge, share/daily_amount, spend/roas)

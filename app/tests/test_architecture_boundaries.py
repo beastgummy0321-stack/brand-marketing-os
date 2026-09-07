@@ -1313,7 +1313,12 @@ class CoordinateDimensionSyncTest(unittest.TestCase):
 #      量對了，round 2 沒有再動這一筆。
 #   4. 本段理由註解自己（含上面「這道棘輪在落地前就已經在漏」那一段，done-check 5 點名的
 #      新要求）。
-TEST_LINES_CEILING = 20624  # Ticket smart-loop 01 (ADR 0066): `test_schedule_period.py`
+TEST_LINES_CEILING = 20768  # Ticket smart-loop 03: `test_schedule.py` gains
+# `BindTreeApiContractTest`'s last-period prompt-contract tests (checks 1-3: both prompts carry
+# the last settled period's node results as their last section; absence when nothing settled or
+# no scored nodes; per-depth spend share). Includes this reason comment's and the
+# `KNOWN_MODULE_SIZES["app/schedule"]` reason comment's own lines. 20624->20768, measured, no
+# slack. Previous was 20624 -- Ticket smart-loop 01 (ADR 0066): `test_schedule_period.py`
 # gains `SettleScoresNodesTest` (money/data correctness: ROAS split, verdict thresholds,
 # depth-1 skipped, resettle keeps naming the period's own tree) and one tenant-isolation
 # method on `SettleTenantIsolationTest` (a shared external_id across two orgs must not leak
@@ -1668,7 +1673,10 @@ KNOWN_MODULE_SIZES = {
     "app/orders": 1423,  # 票 12：channel_revenue 一張表取代三張（刪掉藥局專屬那一整組
                           # 之後仍淨增）——官網帳本寫入路徑、channel_revenue_summary()、
                           # 通用手動登錄（含「官網不能手動登錄」那道錢的守門）
-    "app/schedule": 4295,  # Ticket smart-loop 02: file split, header lines. 4278->4295, measured, no slack. Previous was 4278 -- Ticket smart-loop 01 (ADR 0066): new `scoring.py`
+    "app/schedule": 4391,  # Ticket smart-loop 03: one read (`period_repository.latest_settled_period()`)
+                  # plus one renderer (`jobs._last_period_text()`, `jobs._coordinate_cell()`) and
+                  # one dict (`scoring.VERDICT_LABELS`) for the plan/tree prompts' last section.
+                  # 4295->4391, measured, no slack. Previous was 4295 -- Ticket smart-loop 02: file split, header lines. 4278->4295, measured, no slack. Previous was 4278 -- Ticket smart-loop 01 (ADR 0066): new `scoring.py`
                   # (score_period() arithmetic and a write path for money-adjacent per-node data)
                   # plus three small functions on `repository.py` and one key on `period.py`'s
                   # response. 4080->4278, measured, no slack. Previous was 4080 -- 票 01（plan-quality，出方案 prompt 帶這個帳戶的成效）：
