@@ -151,6 +151,65 @@ def _coordinate_vocabulary_text(coordinates: list[dict]) -> str:
     ])
 
 
+def _cpa_cell(cpa: float | None, conversion_goal: str | None) -> str:
+    """票 01：CPA 那一格——有數字就印數字；沒有數字時，區分「有設轉換目標但沒追蹤到」
+    跟「根本沒設轉換目標」，兩句話意義不同，不能都印同一個「未追蹤」。"""
+    if cpa is not None:
+        return f"{cpa:,.0f}"
+    return "未追蹤" if conversion_goal else "未設定轉換目標"
+
+
+def _account_performance_text(perf: dict, breakeven: tuple[float | None, str]) -> str:
+    """票 01（`docs/issues/plan-quality/`）：`performance.ad_performance()` 的輸出 → 這一節
+    prompt 文字。逐幣別一段（頭行、打平線、方向性提示、逐廣告表），最後一次性附收斂指令。
+
+    打平線那一行、`DIRECTIONAL_ONLY_NOTE`、`_pct`／`_roas_text` 都是重用
+    `diagnosis_mod`（同一個套件 `app/schedule/` 內，私有符號可以跨檔案叫，見
+    `docs/contracts/schedule.md` 對 `routes.py`／`jobs.py` 既有的說法）；打平線的措辭字面
+    照抄 `diagnosis_mod.compress()` 那兩行，`compress()` 本身沒有把它拆成一支可以共用的
+    函式，這裡不為了兩個呼叫端去改一支矛盾檢查段沒有點名要動的既有函式（ceiling）。"""
+    window = perf["window"]
+    currencies = perf["currencies"]
+    if not currencies:
+        return (
+            "【這個帳戶目前的成效】\n"
+            f"這個月（{window['start_date']} ~ {window['end_date']}）還沒有任何 Meta 花費資料。"
+        )
+
+    roas, source = breakeven
+    breakeven_line = (
+        f"打平線 {roas:.2f}x，來自{source}" if roas is not None else f"算不出打平線：{source}"
+    )
+    conversion_goal = perf["conversion_goal"]
+
+    out = [f"【這個帳戶目前的成效】（Meta 廣告層，{window['start_date']} ~ {window['end_date']}）"]
+    for cur in currencies:
+        total = cur["total"]
+        out.append(
+            f"# 幣別 {cur['currency']}｜本月總花費 {total['spend']:,.0f}｜"
+            f"保守 ROAS {diagnosis_mod._roas_text(total['roas_conservative'])}｜"
+            f"樂觀 ROAS {diagnosis_mod._roas_text(total['roas'])}｜"
+            f"追蹤覆蓋率 {total['roas_coverage']:.0%}｜{total['ad_count']} 則廣告"
+        )
+        out.append(breakeven_line)
+        out.append(diagnosis_mod.DIRECTIONAL_ONLY_NOTE)
+        out.append("| 廣告 | 花費 | 佔比 | 保守 ROAS | 樂觀 ROAS | 追蹤覆蓋率 | CPA |")
+        out.append("|---|---|---|---|---|---|---|")
+        for ad in cur["ads"]:
+            out.append(
+                f"| {ad['entity_name']} | {ad['spend']:,.0f} |"
+                f" {diagnosis_mod._pct(ad['spend'], total['spend'])} |"
+                f" {diagnosis_mod._roas_text(ad['roas_conservative'])} |"
+                f" {diagnosis_mod._roas_text(ad['roas'])} |"
+                f" {ad['roas_coverage']:.0%} | {_cpa_cell(ad['cpa'], conversion_goal)} |"
+            )
+    out.append(
+        "方案的 summary 與 reasoning 要引用上面的數字：指名哪一則廣告、哪個數字、這一期要"
+        "把它推到多少。"
+    )
+    return "\n".join(out)
+
+
 def schedule_plan(org_id: str, brand_id: str, product_ids: list, platform: str, objective: str,
                    promotion_note: str, plan_count: int,
                    campaign_period_id: str | None = None) -> None:
@@ -176,9 +235,13 @@ def schedule_plan(org_id: str, brand_id: str, product_ids: list, platform: str, 
         params_text = _plan_params_text(
             platform_label, objective_label, promotion_note, plan_count, product_names
         )
+        performance = performance_mod.ad_performance(conn, org_id, brand_id)
+        breakeven = diagnosis_mod.breakeven_roas(conn, org_id, brand_id)
+        performance_text = _account_performance_text(performance, breakeven)
         prompt = "\n\n".join(
             section for section in
-            (department_text, methodology_result.text, params_text, brand_context) if section
+            (department_text, methodology_result.text, params_text, brand_context,
+             performance_text) if section
         )
 
         context = gateway.TaskContext(

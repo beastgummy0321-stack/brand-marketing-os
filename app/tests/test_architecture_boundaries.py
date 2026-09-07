@@ -1313,7 +1313,12 @@ class CoordinateDimensionSyncTest(unittest.TestCase):
 #      量對了，round 2 沒有再動這一筆。
 #   4. 本段理由註解自己（含上面「這道棘輪在落地前就已經在漏」那一段，done-check 5 點名的
 #      新要求）。
-TEST_LINES_CEILING = 20236  # 票 10 round 2（review 打回的缺口）：`test_schedule.py` 補
+TEST_LINES_CEILING = 20346  # 票 01（plan-quality，出方案 prompt 帶這個帳戶的成效）：
+# `test_schedule.py` 兩支新測試（`test_account_performance_is_the_last_prompt_section`／
+# `test_no_spend_in_window_shows_the_literal_inclusive_window`，done-check 1／2：prompt
+# 契約＋半開區間必須被拒）＋ `test_schedule_performance.py` 一支新測試
+# （`AdPerformanceTest`，done-check 3：逐幣別、按花費排序、名稱來自 `spend_summary`）。
+# 量到的數字，不留餘裕。前一次是 20236——票 10 round 2（review 打回的缺口）：`test_schedule.py` 補
 # `schedule_repo.period_node_memberships_for_brand(...)` 那一條 done-check 3 點名、round 1
 # 沒寫的 money 斷言（第二棵樹綁完之後回傳列數要跟 membership 本身一樣多，不因為 JOIN
 # fan-out 而變多），量到的數字，不留餘裕。前一次是 20222——票 10（ADR 0064）：
@@ -1658,7 +1663,11 @@ KNOWN_MODULE_SIZES = {
     "app/orders": 1423,  # 票 12：channel_revenue 一張表取代三張（刪掉藥局專屬那一整組
                           # 之後仍淨增）——官網帳本寫入路徑、channel_revenue_summary()、
                           # 通用手動登錄（含「官網不能手動登錄」那道錢的守門）
-    "app/schedule": 3955,  # 票 10（ADR 0064：一個綁定屬於做出它的那棵樹）：
+    "app/schedule": 4080,  # 票 01（plan-quality，出方案 prompt 帶這個帳戶的成效）：
+                  # `performance.py` 新增 `ad_performance()`（逐幣別、逐廣告花費／ROAS，
+                  # 不接座標）；`jobs.py` 新增 `_account_performance_text()`／
+                  # `_cpa_cell()`，`schedule_plan()` 接線成 prompt 最後一段。3955→4080，
+                  # 量到的數字，不留餘裕。前一次是 3955——票 10（ADR 0064：一個綁定屬於做出它的那棵樹）：
                   # `binding.py` 的 `bind_tree()` 改問 `bindings_for_tree()`（這一棵樹自己有
                   # 沒有這個節點的列），不再問畫面疊圖；`repository.py` 新增
                   # `bindings_for_tree()`，`upsert_binding()`／`depth_three_bindings()`／

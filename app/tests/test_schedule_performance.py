@@ -361,3 +361,38 @@ class SpendMeetsTheBindingLiveOnItsDateTest(_PerformanceTestBase):
             pain["untagged"]["spend"] + sum(values_by_label.values()),
             currency["total_spend"], places=2,
         )
+
+
+class AdPerformanceTest(_PerformanceTestBase):
+    """票 01（`docs/issues/plan-quality/`）done-check 3：`ad_performance()`——這個帳戶
+    本月逐廣告的花費／ROAS，不接座標，直接供 `jobs._account_performance_text()` 組進出
+    方案的 prompt；一個幣別一個區塊，絕不跨幣別相加（ADR 0057 §4，同
+    `brand_creative_performance()`）。"""
+
+    def test_splits_by_currency_sorts_by_spend_desc_and_fills_names_from_spend_summary(self):
+        org_id = self._make_org("ad_perf")
+        brand_id = self._make_brand(org_id)
+        twd_account = self._connect_and_bind_account(org_id, brand_id, "act-twd", currency="TWD")
+        usd_account = self._connect_and_bind_account(org_id, brand_id, "act-usd", currency="USD")
+        day = self._month_start(org_id)
+        self._seed_ad_spend(org_id, twd_account, "ad-small", day, spend=300.0)
+        self._seed_ad_spend(org_id, twd_account, "ad-big", day, spend=700.0)
+        self._seed_ad_spend(org_id, usd_account, "ad-usd", day, spend=50.0)
+
+        result = performance.ad_performance(web.conn, org_id, brand_id)
+        self.assertEqual(len(result["currencies"]), 2)
+        by_currency = {c["currency"]: c for c in result["currencies"]}
+        self.assertEqual(set(by_currency), {"TWD", "USD"})
+        # 沒有跨幣別相加：TWD 的 total 只算兩支 TWD 廣告，不含 USD 那支。
+        self.assertAlmostEqual(by_currency["TWD"]["total"]["spend"], 1000.0, places=2)
+        self.assertAlmostEqual(by_currency["USD"]["total"]["spend"], 50.0, places=2)
+        twd_ads = by_currency["TWD"]["ads"]
+        self.assertEqual([a["entity_id"] for a in twd_ads], ["ad-big", "ad-small"])  # spend desc
+        self.assertEqual(twd_ads[0]["entity_name"], "ad-big")  # 名稱來自 spend_summary
+        self.assertEqual(twd_ads[1]["entity_name"], "ad-small")
+
+        # 沒有綁定帳號 → currencies 是空陣列，不是報錯或 KeyError。
+        empty_org = self._make_org("ad_perf_no_account")
+        empty_brand = self._make_brand(empty_org)
+        empty_result = performance.ad_performance(web.conn, empty_org, empty_brand)
+        self.assertEqual(empty_result["currencies"], [])

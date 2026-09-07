@@ -1,7 +1,8 @@
 """app/schedule/performance.py — 票 T5（ADR 0057）：花費透過深度 3 綁定接上七維座標。
 
 Private to app/schedule/（集裝箱憲章第一節）：只有 `routes.py` 呼叫這裡的
-`brand_creative_performance()`，外面任何模組都不 import 這個檔案。
+`brand_creative_performance()`；`jobs.py`（票 01，同一個套件內）呼叫 `ad_performance()`——
+兩支呼叫端都在 `app/schedule/` 套件內部，外面任何模組都不 import 這個檔案。
 
 join 的路徑（ADR 0057 §1），完全比照 `period.compute_money()` 既有的形狀——不是一支跨模組
 的 SQL：`meta_repo.daily_entity_spend(level="ad")` 讀花費原始數字，`schedule_repo` 的兩支
@@ -32,6 +33,7 @@ join 的路徑（ADR 0057 §1），完全比照 `period.compute_money()` 既有�
 
 from datetime import date, datetime, timedelta
 
+from app.brand_intelligence import repository as bi_repo
 from app.core import settings as coresettings
 from app.meta import repository as meta_repo
 from app.schedule import binding as binding_mod
@@ -235,3 +237,63 @@ def brand_creative_performance(conn, org_id: str, brand_id: str) -> dict:
         },
         "currencies": currencies,
     }
+
+
+def ad_performance(conn, org_id: str, brand_id: str) -> dict:
+    """票 01（`docs/issues/plan-quality/`）：這個帳戶本月逐廣告的花費／ROAS，供
+    `jobs._account_performance_text()` 組進出方案的 prompt——跟 `brand_creative_performance()`
+    同一個窗口（`state._current_month_window`），但不接座標，直接照 `spend`
+    由大到小逐廣告列出，讓 prompt 能指名「哪一則廣告」。
+
+    `conversion_goal` 讀 `brand.conversion_goal`（哪個 action_type 算轉換是使用者在設定頁
+    填的，這裡只是原樣讀出來傳給 `spend_summary()`，不重新判斷——集裝箱憲章：不碰別人的表，
+    這裡是透過 `app.brand_intelligence.repository` 這支既有讀取碰，不是直接查 `brand` 表）。
+
+    `total`／每一則廣告都用既有的 `_bucket()`（保守／樂觀 ROAS 兩個值都給，ADR 0057 §7）；
+    `entity_name`／`cpa` 來自 `spend_summary()`（同一批 `daily_entity_spend()` 列聚合出的
+    另一份既有讀取，不是另開一支查詢）。**一個幣別一個區塊，絕不跨幣別相加**（ADR 0057
+    §4，同 `brand_creative_performance()`）。沒有綁定帳號或這個月沒有任何花費列 →
+    `currencies` 是空陣列，`conversion_goal` 依然照填（畫面／prompt 兩邊都要知道「有沒有
+    設定轉換目標」跟「有沒有資料」是兩件事）。"""
+    month_start, month_end = state._current_month_window(conn, org_id)
+    window = {
+        "start_date": month_start.isoformat(),
+        "end_date": (month_end - timedelta(days=1)).isoformat(),
+    }
+    conversion_goal = (bi_repo.get_brand(conn, brand_id) or {}).get("conversion_goal")
+
+    account_ids = meta_repo.bound_account_ids_for_brand(conn, org_id, brand_id)
+    daily_rows = meta_repo.daily_entity_spend(
+        conn, org_id, account_ids, month_start, month_end, level="ad",
+    )
+    if not daily_rows:
+        return {"window": window, "conversion_goal": conversion_goal, "currencies": []}
+
+    summary = meta_repo.spend_summary(
+        conn, org_id, account_ids, month_start, month_end, level="ad",
+        conversion_goal=conversion_goal,
+    )
+    name_and_cpa = {e["entity_id"]: (e["entity_name"], e["cpa"]) for e in summary["entities"]}
+
+    rows_by_currency: dict = {}
+    for row in daily_rows:
+        rows_by_currency.setdefault(row["currency"], []).append(row)
+
+    currencies = []
+    for currency, rows in sorted(rows_by_currency.items()):
+        rows_by_ad: dict = {}
+        for row in rows:
+            rows_by_ad.setdefault(row["entity_id"], []).append(row)
+        ads = [
+            {
+                "entity_id": entity_id,
+                "entity_name": name_and_cpa.get(entity_id, (entity_id, None))[0],
+                "cpa": name_and_cpa.get(entity_id, (entity_id, None))[1],
+                **_bucket(ad_rows),
+            }
+            for entity_id, ad_rows in rows_by_ad.items()
+        ]
+        ads.sort(key=lambda a: -a["spend"])
+        currencies.append({"currency": currency, "total": _bucket(rows), "ads": ads})
+
+    return {"window": window, "conversion_goal": conversion_goal, "currencies": currencies}

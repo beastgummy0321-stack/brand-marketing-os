@@ -88,6 +88,9 @@ Module-local and reversible, decided here rather than in an ADR:
 
 - The module now registers an `app.core.cleanup` function (ticket T1b): `app/schedule/repository.py`
   registers 「創意座標與素材候選」, covering the five tables this ticket added.
+- **The plan prompt carries this month's ad-level performance as its last section** (ticket 01,
+  `docs/issues/plan-quality/`): `performance.ad_performance()` → `jobs._account_performance_text()`,
+  same window as the brand page and the diagnosis (`state._current_month_window`).
 - **How a creative reply is matched to a tree node** — ticket T3d, settled by the user; **amended
   2026-09-04, again by the user** (overturning their own 2026-09-03 "leave it until it
   bites"; the ticket is gone, this line is the rule). The agent now also echoes

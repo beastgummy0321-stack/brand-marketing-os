@@ -19,7 +19,7 @@ GET），跟 `app/tests/test_meta_daily_spend.py:351-363` 已經在用的 QueueW
 
 import json
 import unittest
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from unittest import mock
 
@@ -32,6 +32,7 @@ import app.shared.web as web
 from app.brand_intelligence import repository as bi_repo
 from app.core import db as coredb
 from app.core import rule_cards
+from app.core import settings as coresettings
 from app.identity import repository as identity_repo
 from app.llm import providers
 from app.meta import graph as meta_graph
@@ -1731,6 +1732,71 @@ class BindTreeApiContractTest(_ScheduleApiTestBase):
             web.conn, coredb.DEV_ORG_ID, self.brand["id"]
         )
         self.assertEqual(len(memberships), len(rows))
+
+    # -- 票 01（docs/issues/plan-quality/）：出方案的 prompt 要看得到這個帳戶的成效 --------
+
+    def test_account_performance_is_the_last_prompt_section(self):
+        """red proof（票面 done-check 1）：`schedule_plan()` prompt tuple 拿掉
+        `performance_text` 那個元素就會紅——`assertGreater` 的兩個 index 斷言拿不到值。"""
+        meta_repo.upsert_entity_spend(web.conn, coredb.DEV_ORG_ID, self.account_id, [
+            {"level": "ad", "entity_id": "ad-1", "entity_name": "測試廣告A",
+             "campaign_id": "camp-1", "adset_id": "as-1", "ad_id": "ad-1",
+             "spend_date": self.today, "spend": 100.0, "impressions": 100, "clicks": 10,
+             "roas": 3.0, "actions": None, "action_values": None,
+             "attribution_window": "7d_click,1d_view"},
+            {"level": "ad", "entity_id": "ad-1", "entity_name": "測試廣告A",
+             "campaign_id": "camp-1", "adset_id": "as-1", "ad_id": "ad-1",
+             "spend_date": self.today + timedelta(days=1), "spend": 100.0,
+             "impressions": 100, "clicks": 10, "roas": None, "actions": None,
+             "action_values": None, "attribution_window": "7d_click,1d_view"},
+        ])
+        web.conn.commit()
+        # 品牌事實非空，`brand_context` 才會印出 `【事實】品牌事實` 那一段，才有東西可以
+        # 拿來跟 `【這個帳戶目前的成效】` 比 index 先後。
+        bi_repo.create_brand_fact(
+            web.conn, self.brand["id"], actor=ACTOR, fact_type="positioning", label="定位",
+            value="平價日常茶飲", status="confirmed", confirmed_by=ACTOR,
+        )
+        web.conn.commit()
+
+        fake = _fake(_fenced_plans([_one_plan()]))
+        schedule_jobs.PROVIDER = fake
+        resp = self._post(plan_count=1)
+        self.assertEqual(resp.status_code, 200, resp.text)
+        self._run_worker()
+
+        self.assertEqual(len(fake.calls), 1)
+        prompt_text = fake.calls[0]["messages"][0]["content"]
+        self.assertIn("【這個帳戶目前的成效】", prompt_text)
+        self.assertIn("測試廣告A", prompt_text)
+        self.assertIn("保守 ROAS 1.50x", prompt_text)
+        self.assertIn("樂觀 ROAS 3.00x", prompt_text)
+        self.assertIn("50%", prompt_text)
+        self.assertIn("未設定轉換目標", prompt_text)  # 測試品牌沒設定 conversion_goal
+        performance_index = prompt_text.index("【這個帳戶目前的成效】")
+        self.assertGreater(performance_index, prompt_text.index("SCHEDULE-PLAN-TASK-V1"))
+        self.assertGreater(performance_index, prompt_text.index("【事實】品牌事實"))
+
+    def test_no_spend_in_window_shows_the_literal_inclusive_window(self):
+        """done-check 2：沒有任何花費列 → 印「還沒有任何 Meta 花費資料」＋這一期真正的
+        起訖日（含首尾，不是 `_current_month_window()` 半開區間那個下月初）。"""
+        today = coresettings.today_for_org(web.conn, org_id=coredb.DEV_ORG_ID)
+        month_start = today.replace(day=1)
+        month_end = (month_start + timedelta(days=32)).replace(day=1)
+        inclusive_end = month_end - timedelta(days=1)
+
+        fake = _fake(_fenced_plans([_one_plan()]))
+        schedule_jobs.PROVIDER = fake
+        resp = self._post(plan_count=1)
+        self.assertEqual(resp.status_code, 200, resp.text)
+        self._run_worker()
+
+        prompt_text = fake.calls[0]["messages"][0]["content"]
+        self.assertIn("還沒有任何 Meta 花費資料", prompt_text)
+        self.assertIn(
+            f"（{month_start.isoformat()} ~ {inclusive_end.isoformat()}）", prompt_text
+        )
+        self.assertNotIn(month_end.isoformat(), prompt_text)  # 半開區間的下月初不准漏出來
 
 
 class CreativeApiContractTest(_ScheduleApiTestBase):
