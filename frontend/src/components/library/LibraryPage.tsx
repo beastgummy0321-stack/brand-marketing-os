@@ -1,6 +1,8 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { useSearchParams } from "react-router-dom";
-import { Breadcrumb } from "@/components/layout/Breadcrumb";
+import { useWorkspace } from "@/components/layout/WorkspaceContext";
+import { PageHeader } from "@/components/layout/PageHeader";
+import { Button } from "@/components/layout/ui/button";
 import { EmptyState } from "@/components/layout/EmptyState";
 import { Skeleton } from "@/components/layout/Skeleton";
 import { fetchLibrary, type LibraryData } from "@/lib/libraryApi";
@@ -44,6 +46,7 @@ type LoadState =
  * `hub_*.html` 子頁）成一個頁面、七個分頁籤、側板做所有寫入動作。一次整包讀（比照
  * `fetchCockpit()`），分頁切換不重新打 API——契約「要新增的 API」節明講的設計。 */
 export function LibraryPage({ brandId }: { brandId: string }) {
+  const { refreshBrands } = useWorkspace();
   const [state, setState] = useState<LoadState>({ status: "loading" });
   const [searchParams, setSearchParams] = useSearchParams();
   const [profileOpen, setProfileOpen] = useState(false);
@@ -93,20 +96,14 @@ export function LibraryPage({ brandId }: { brandId: string }) {
   } else {
     const { data } = state;
     content = (
-      <div className="flex flex-col gap-5">
-        <div className="flex items-center justify-between gap-3 border-b border-border pb-2">
-          <div className="flex flex-wrap gap-1.5">
+      <div className="workspace-split">
+        <nav className="workspace-subnav" aria-label="智庫分類">
             {TABS.map((t) => (
               <button
                 key={t.key}
                 type="button"
                 onClick={() => setTab(t.key)}
-                className={
-                  "flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors " +
-                  (activeTab === t.key
-                    ? "bg-primary text-primary-foreground"
-                    : "text-muted-foreground hover:bg-muted hover:text-foreground")
-                }
+                aria-pressed={activeTab === t.key}
               >
                 {t.label}
                 {t.count && (
@@ -121,15 +118,8 @@ export function LibraryPage({ brandId }: { brandId: string }) {
                 )}
               </button>
             ))}
-          </div>
-          <button
-            type="button"
-            onClick={() => setProfileOpen(true)}
-            className="shrink-0 rounded-md border border-border px-3 py-1.5 text-sm font-medium text-foreground hover:border-primary hover:text-primary"
-          >
-            品牌資料
-          </button>
-        </div>
+        </nav>
+        <div className="workspace-content surface p-5">
 
         {activeTab === "facts" && <FactsTab brandId={brandId} facts={data.facts} onChanged={load} />}
         {activeTab === "rules" && (
@@ -150,6 +140,7 @@ export function LibraryPage({ brandId }: { brandId: string }) {
         {activeTab === "research-reports" && <ResearchReportsTab brandId={brandId} />}
         {activeTab === "coordinates" && <CoordinatesTab brandId={brandId} />}
 
+        </div>
         {profileOpen && (
           <BrandProfilePanel
             brandId={brandId}
@@ -157,6 +148,7 @@ export function LibraryPage({ brandId }: { brandId: string }) {
             onClose={() => setProfileOpen(false)}
             onSaved={() => {
               setProfileOpen(false);
+              refreshBrands();
               load();
             }}
             onDeleted={() => {
@@ -170,11 +162,7 @@ export function LibraryPage({ brandId }: { brandId: string }) {
 
   return (
     <div className="flex flex-col gap-4">
-      <Breadcrumb items={[{ label: "跨品牌總覽", href: "/" }, { label: "品牌智庫" }]} />
-      <div>
-        <h1 className="font-display text-2xl text-foreground">品牌智庫</h1>
-        {state.status === "ready" && <p className="text-sm text-muted-foreground">{state.data.brand.name}</p>}
-      </div>
+      <PageHeader title="品牌智庫" description={state.status === "ready" ? `${state.data.brand.name} · 品牌事實、素材與累積的經營知識` : "管理品牌知識與素材"} actions={<Button variant="outline" onClick={() => setProfileOpen(true)} disabled={state.status !== "ready"}>品牌資料</Button>}/>
       {content}
     </div>
   );

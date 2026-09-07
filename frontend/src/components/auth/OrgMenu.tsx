@@ -40,7 +40,7 @@ type Panel = null | "rename" | "invite";
  * 掛一份（`App.tsx` 每個 `*Route` 函式各自 `<AppShell>`），所以嚴格說是「每次換頁重新
  * 掛載都打一次」，不是整個 session 只打一次；這跟 `ActiveJobsBell` 現有的做法一致
  * （沒有全站狀態快取層），本票不額外造一個 context／全域快取只為了這裡。 */
-export function OrgMenu() {
+export function OrgMenu({ identity, onIdentityChanged }: { identity?: MeResponse; onIdentityChanged?: () => void } = {}) {
   const [me, setMe] = useState<MeResponse | "loading" | "error">("loading");
   const [panel, setPanel] = useState<Panel>(null);
   const [companyName, setCompanyName] = useState("");
@@ -48,6 +48,7 @@ export function OrgMenu() {
   const [inviteResult, setInviteResult] = useState<CreateInviteResponse | null>(null);
 
   useEffect(() => {
+    if (identity) { setMe(identity); return; }
     let cancelled = false;
     apiFetch("/api/identity/me")
       .then(async (res) => {
@@ -69,7 +70,7 @@ export function OrgMenu() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [identity]);
 
   const renameForm = useFormSubmit(async () => {
     const res = await apiFetch("/api/identity/orgs/current/rename", {
@@ -80,6 +81,7 @@ export function OrgMenu() {
     if (!res.ok) throw new Error(`改名失敗（狀態碼 ${res.status}）`);
     const org = (await res.json()) as OrgOut;
     setMe((prev) => (prev === "loading" || prev === "error" ? prev : { ...prev, org, orgs: prev.orgs.map((o) => (o.id === org.id ? org : o)) }));
+    onIdentityChanged?.();
     setPanel("invite");
   });
 

@@ -1,80 +1,64 @@
+import { ArrowUpRight, CheckCheck } from "lucide-react";
+import { Link } from "react-router-dom";
+import { Badge } from "@/components/layout/ui/badge";
+import { Button } from "@/components/layout/ui/button";
 import type { InboxItem } from "@/lib/inboxApi";
+import { internalHref } from "@/lib/internalHref";
 import { SEVERITY_DOT_CLASS, SEVERITY_LABEL } from "@/lib/severity";
 import { cn } from "@/lib/utils";
 
-/** 相對時間（S2.12「結案於 X」）：只有這一個呼叫端，不抽成 lib 工具函式。 */
-function relativeDays(iso: string): string {
-  const days = Math.floor((Date.now() - new Date(iso).getTime()) / (1000 * 60 * 60 * 24));
-  if (days <= 0) return "今天";
-  if (days === 1) return "1 天前";
-  return `${days} 天前`;
+function resolvedDate(iso: string): string {
+  const date = new Date(iso);
+  return Number.isNaN(date.getTime()) ? iso : date.toLocaleString("zh-TW", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
 }
 
-/** 收件匣單一卡片（票 B1-inbox）：待辦／已結共用同一顆，`variant` 決定要不要「知道了」
- * 按鈕（S2.8，已結清單沒有）與是否顯示結案時間（S2.12）。 */
-export function InboxItemCard({
-  item,
-  variant,
-  resolving = false,
-  error,
-  onResolve,
-}: {
+/** 緊湊清單列：全文與操作集中在右侧詳情，避免一長串重複按鈕。 */
+export function InboxItemCard({ item, selected, onSelect }: { item: InboxItem; selected: boolean; onSelect: () => void }) {
+  return <li className="border-b border-border last:border-b-0">
+    <button type="button" onClick={onSelect} aria-pressed={selected} className={cn("flex w-full flex-col gap-2 px-5 py-4 text-left hover:bg-muted/60", selected && "bg-accent/65")}>
+      <span className="flex w-full items-center justify-between gap-3 text-xs">
+        <span className="truncate font-medium text-foreground">{item.brand_name ?? "全站"}</span>
+        <Severity item={item} />
+      </span>
+      <span className="line-clamp-2 text-sm leading-6 text-foreground">{item.message}</span>
+      <span className="text-xs text-muted-foreground">{item.category_label}</span>
+    </button>
+  </li>;
+}
+
+function Severity({ item }: { item: InboxItem }) {
+  return <span className="inline-flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
+    <span className={cn("size-1.5 rounded-full", SEVERITY_DOT_CLASS[item.severity])} aria-hidden="true" />
+    {SEVERITY_LABEL[item.severity]}
+  </span>;
+}
+
+export function InboxItemDetail({ item, variant, resolving, busy, error, onResolve }: {
   item: InboxItem;
   variant: "open" | "done";
-  resolving?: boolean;
+  resolving: boolean;
+  busy: boolean;
   error?: string;
-  onResolve?: (id: string) => void;
+  onResolve: (id: string) => void;
 }) {
-  return (
-    <li className="flex flex-col gap-2 rounded-md border border-border bg-card p-4 shadow-[var(--shadow-card)]">
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex min-w-0 flex-wrap items-center gap-2 text-xs">
-          <span
-            className="max-w-[16rem] truncate rounded-full bg-muted px-2 py-0.5 font-medium text-foreground"
-            title={item.brand_name ?? "全站"}
-          >
-            {item.brand_name ?? "全站"}
-          </span>
-          <span className="flex items-center gap-1.5 text-muted-foreground">
-            <span
-              className={cn("h-2 w-2 shrink-0 rounded-full", SEVERITY_DOT_CLASS[item.severity])}
-              aria-hidden="true"
-            />
-            {SEVERITY_LABEL[item.severity]}
-          </span>
-          <span className="text-muted-foreground">{item.category_label}</span>
-        </div>
-        {item.action_url && (
-          <a
-            href={item.action_url}
-            className="shrink-0 text-sm text-primary underline-offset-4 hover:underline"
-          >
-            詳情
-          </a>
-        )}
-      </div>
-
-      <p className="text-sm text-foreground">{item.message}</p>
-
-      {variant === "done" && item.resolved_at && (
-        <p className="text-xs text-muted-foreground">結案於 {relativeDays(item.resolved_at)}</p>
-      )}
-
-      {variant === "open" && (
-        <div className="flex items-center justify-between gap-3">
-          {error ? <p className="text-xs text-danger">{error}</p> : <span />}
-          {(
-            <button
-              type="button"
-              onClick={() => onResolve?.(item.id)}
-              disabled={resolving}
-              className="shrink-0 rounded-md border border-border px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:border-primary hover:text-primary disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {resolving ? "處理中…" : "知道了"}
-            </button>
-          )}
-        </div>
-      )}
-    </li>
-  );
+  return <section aria-label="事項詳情" className="flex min-w-0 flex-col gap-6 p-6">
+    <div className="flex flex-wrap items-center gap-2">
+      <Badge variant="secondary">{item.brand_name ?? "全站"}</Badge>
+      <Badge variant="outline">{item.category_label}</Badge>
+      <Severity item={item} />
+    </div>
+    <div className="flex flex-col gap-3">
+      <h2 className="text-lg font-semibold">事項詳情</h2>
+      <p className="whitespace-pre-wrap text-sm leading-7 text-foreground">{item.message}</p>
+    </div>
+    {variant === "done" && <div className="flex items-center gap-2 rounded-lg bg-muted/60 p-3 text-sm text-muted-foreground">
+      <CheckCheck className="size-4" aria-hidden="true" />
+      {item.resolved_at ? `結案於 ${resolvedDate(item.resolved_at)}` : "已處理"}
+    </div>}
+    {error && <p role="alert" className="text-sm text-danger">{error}</p>}
+    <div className="flex flex-wrap items-center gap-3 border-t border-border pt-5">
+      {item.action_url && <Button variant="outline" asChild><Link to={internalHref(item.action_url)}>前往詳情<ArrowUpRight className="size-4" aria-hidden="true" /></Link></Button>}
+      {variant === "open" && <Button type="button" onClick={() => onResolve(item.id)} disabled={busy}>{resolving ? "處理中…" : "知道了"}</Button>}
+    </div>
+  </section>;
 }

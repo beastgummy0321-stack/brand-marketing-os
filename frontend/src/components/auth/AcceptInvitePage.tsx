@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
+import { Logo } from "@/components/layout/Logo";
 import { apiFetch } from "@/lib/http";
 import { setOrgId } from "@/lib/auth";
 
@@ -27,15 +28,22 @@ export function AcceptInvitePage() {
 
   useEffect(() => {
     if (!token) {
-      setState({ status: "error", message: "這個邀請連結少了 token，請跟邀請你的人要一份新的連結。" });
+      setState({
+        status: "error",
+        message: "這個邀請連結少了 token，請跟邀請你的人要一份新的連結。",
+      });
       return;
     }
     let cancelled = false;
-    apiFetch(`/api/identity/invites/${encodeURIComponent(token)}/accept`, { method: "POST" })
+    apiFetch(`/api/identity/invites/${encodeURIComponent(token)}/accept`, {
+      method: "POST",
+    })
       .then(async (res) => {
         if (cancelled) return;
         if (!res.ok) {
-          const body = (await res.json().catch(() => null)) as ErrorEnvelope | null;
+          const body = (await res
+            .json()
+            .catch(() => null)) as ErrorEnvelope | null;
           setState({
             status: "error",
             message: body?.error.message ?? `加入失敗（狀態碼 ${res.status}）`,
@@ -49,7 +57,8 @@ export function AcceptInvitePage() {
         setState({ status: "done", orgName: body.org.name });
       })
       .catch(() => {
-        if (!cancelled) setState({ status: "error", message: "加入失敗，請稍後再試。" });
+        if (!cancelled)
+          setState({ status: "error", message: "加入失敗，請稍後再試。" });
       });
     return () => {
       cancelled = true;
@@ -57,20 +66,31 @@ export function AcceptInvitePage() {
   }, [token]);
 
   return (
-    <div className="flex h-full items-center justify-center bg-background">
+    <div className="flex min-h-dvh items-center justify-center bg-background p-8">
       <div className="w-full max-w-sm rounded-[var(--radius-xl)] border border-border bg-card p-8 text-center shadow-[var(--shadow-card)]">
-        {state.status === "loading" && <p className="text-sm text-muted-foreground">處理邀請中…</p>}
+        <div className="mb-8 flex justify-center">
+          <Logo />
+        </div>
+        <h1 className="mb-5 text-2xl">加入品牌工作區</h1>
+        {state.status === "loading" && (
+          <p className="text-sm text-muted-foreground">處理邀請中…</p>
+        )}
         {state.status === "error" && (
           <>
             <p className="text-sm text-danger">{state.message}</p>
-            <Link to="/" className="mt-4 inline-block text-sm text-primary hover:underline">
+            <Link
+              to="/"
+              className="mt-4 inline-block text-sm text-primary hover:underline"
+            >
               回到首頁
             </Link>
           </>
         )}
         {state.status === "done" && (
           <>
-            <p className="text-sm text-foreground">已經加入「{state.orgName}」。</p>
+            <p className="text-sm text-foreground">
+              已經加入「{state.orgName}」。
+            </p>
             <Link
               to="/"
               className="mt-4 inline-block rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90"

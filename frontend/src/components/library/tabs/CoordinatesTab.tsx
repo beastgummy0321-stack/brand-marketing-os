@@ -147,6 +147,7 @@ function CoordinateGroups({
   coordinates: Coordinate[];
   onChanged: () => void;
 }) {
+  const [selectedCategory, setSelectedCategory] = useState("");
   const groups = new Map<string, Coordinate[]>();
   for (const c of coordinates) {
     const key = c.category ?? "未分類";
@@ -155,14 +156,11 @@ function CoordinateGroups({
     else groups.set(key, [c]);
   }
 
+  const category = groups.has(selectedCategory) ? selectedCategory : [...groups.keys()][0];
+  const items = groups.get(category) ?? [];
   return (
     <div className="flex flex-col gap-3">
-      {[...groups.entries()].map(([category, items]) => (
-        <details key={category} open className="rounded-lg border border-border bg-card">
-          <summary className="cursor-pointer px-4 py-3 font-display text-base text-foreground">
-            {category}
-            <span className="ml-2 text-sm font-normal text-muted-foreground">（{items.length}）</span>
-          </summary>
+      <label className="flex items-center gap-3 text-sm text-muted-foreground">分類<select value={category} onChange={e => setSelectedCategory(e.target.value)}>{[...groups].map(([key,rows]) => <option key={key} value={key}>{key}（{rows.length}）</option>)}</select></label>
           <div className="overflow-x-auto border-t border-border">
             <table className="text-left text-sm">
               <thead className="bg-muted text-muted-foreground">
@@ -191,8 +189,6 @@ function CoordinateGroups({
               </tbody>
             </table>
           </div>
-        </details>
-      ))}
     </div>
   );
 }

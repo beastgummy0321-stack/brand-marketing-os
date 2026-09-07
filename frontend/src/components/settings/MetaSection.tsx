@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { EmptyState } from "@/components/layout/EmptyState";
 import { Skeleton } from "@/components/layout/Skeleton";
+import { Pager } from "@/components/layout/Pager";
+import { usePagination } from "@/lib/usePagination";
 import type { BrandOption } from "@/lib/settingsApi";
 import { fetchBrandOptions } from "@/lib/settingsApi";
 import type { MetaAccount, MetaAccountsData } from "@/lib/metaApi";
@@ -25,6 +27,7 @@ export function MetaSection() {
   const [accountsState, setAccountsState] = useState<AccountsState>({ status: "loading" });
   const [brandsState, setBrandsState] = useState<BrandsState>({ status: "loading" });
   const [token, setToken] = useState("");
+  const accountsPage = usePagination(accountsState.status === "ready" ? accountsState.data.accounts : [], 6);
 
   function loadAccounts() {
     setAccountsState({ status: "loading" });
@@ -110,8 +113,8 @@ export function MetaSection() {
         <p className="text-sm text-muted-foreground">還沒有連接任何廣告帳戶。</p>
       )}
       {accountsState.status === "ready" && accountsState.data.accounts.length > 0 && (
-        <div className="flex flex-col gap-3">
-          {accountsState.data.accounts.map((account) => (
+        <div ref={accountsPage.topRef} className="flex flex-col gap-3">
+          {accountsPage.pageItems.map((account) => (
             <AccountRow
               key={account.id}
               account={account}
@@ -120,6 +123,7 @@ export function MetaSection() {
               onChanged={loadAccounts}
             />
           ))}
+          <Pager page={accountsPage.page} pageCount={accountsPage.pageCount} totalCount={accountsPage.totalCount} onChange={accountsPage.goToPage} />
         </div>
       )}
     </SectionCard>
@@ -167,7 +171,7 @@ function AccountRow({
         <p className="text-xs text-muted-foreground">還沒有任何品牌，先建立品牌才能綁定。</p>
       )}
       {brandsState.status === "ready" && brandsState.brands.length > 0 && (
-        <fieldset className="flex flex-col gap-1">
+        <fieldset className="flex max-h-60 flex-col gap-2 overflow-y-auto">
           <legend className="text-xs font-medium text-foreground">這個帳號要給哪個品牌用</legend>
           {brandsState.brands.map((brand) => {
             const bound = account.bound_brand_ids.includes(brand.brand_id);

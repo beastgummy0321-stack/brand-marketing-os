@@ -29,8 +29,8 @@ export function EmptyState({
   onAction?: () => void;
 }) {
   return (
-    <div className="flex h-full flex-col items-center justify-center gap-3 rounded-lg border border-dashed border-border bg-card p-12 text-center shadow-[var(--shadow-card)]">
-      <h1 className="font-display text-2xl text-foreground">{title}</h1>
+    <div className="empty-state surface gap-3">
+      <h2 className="text-lg text-foreground">{title}</h2>
       <p className="max-w-md text-sm text-muted-foreground">{description}</p>
       {actionLabel && onAction ? (
         <button

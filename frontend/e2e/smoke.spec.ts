@@ -40,7 +40,8 @@ test("走完切片後活下來的主要畫面", async ({ page }) => {
 
   // --- 品牌頁：外殼切片後是品牌標題，右上角是進檔期的入口（缺陷 3）-------------
   await expect(page).toHaveURL(/\/app\/brands\/brd_/);
-  await expect(page.getByRole("heading", { name: brandName })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "經營概況", exact: true })).toBeVisible();
+  await expect(page.getByText(brandName, {exact:true}).first()).toBeVisible();
   await expect(page.getByRole("link", { name: "排這期的檔期" })).toBeVisible();
 
   const brandId = new URL(page.url()).pathname.split("/")[3];
@@ -48,7 +49,7 @@ test("走完切片後活下來的主要畫面", async ({ page }) => {
   // --- 檔期：缺陷 3 —— 品牌頁要有真的入口，不是只能手打網址 -------------------
   await page.getByRole("link", { name: "排這期的檔期" }).click();
   await expect(page).toHaveURL(new RegExp(`/app/brands/${brandId}/schedule$`));
-  await expect(page.getByRole("heading", { name: "檔期", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "檔期規劃", exact: true })).toBeVisible();
 
   // --- 產品 -----------------------------------------------------------------
   await page.goto(`/app/brands/${brandId}/products`);

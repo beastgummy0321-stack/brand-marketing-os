@@ -1,6 +1,8 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
-import { Breadcrumb } from "@/components/layout/Breadcrumb";
+import { PageHeader } from "@/components/layout/PageHeader";
+import { Button } from "@/components/layout/ui/button";
+import { Input } from "@/components/layout/ui/input";
 import { EmptyState } from "@/components/layout/EmptyState";
 import { Pager } from "@/components/layout/Pager";
 import { Skeleton } from "@/components/layout/Skeleton";
@@ -26,7 +28,8 @@ export function ProductListPage({ brandId }: { brandId: string }) {
   const [state, setState] = useState<LoadState>({ status: "loading" });
   const [newPanelOpen, setNewPanelOpen] = useState(false);
   const navigate = useNavigate();
-  const items = state.status === "ready" ? state.items : [];
+  const [search, setSearch] = useState("");
+  const items = state.status === "ready" ? state.items.filter(item => item.name.toLowerCase().includes(search.toLowerCase())) : [];
   const { page, pageCount, totalCount, pageItems, goToPage, topRef } = usePagination(items);
 
   function load() {
@@ -66,7 +69,7 @@ export function ProductListPage({ brandId }: { brandId: string }) {
   } else {
     content = (
       <div ref={topRef} className="flex flex-col gap-3">
-        <div className="overflow-x-auto rounded-md border border-border">
+        <div className="table-surface">
           <table className="w-full text-left text-sm">
             <thead className="bg-muted text-muted-foreground">
               <tr>
@@ -123,17 +126,8 @@ export function ProductListPage({ brandId }: { brandId: string }) {
 
   return (
     <div className="flex flex-col gap-4">
-      <Breadcrumb items={[{ label: "跨品牌總覽", href: "/" }, { label: "產品" }]} />
-      <div className="flex items-center justify-between">
-        <h1 className="font-display text-2xl text-foreground">產品</h1>
-        <button
-          type="button"
-          onClick={() => setNewPanelOpen(true)}
-          className="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:opacity-90"
-        >
-          新增產品
-        </button>
-      </div>
+      <PageHeader title="產品" description="管理品牌品項，補齊產品知識與成本資料。" actions={<Button onClick={() => setNewPanelOpen(true)}>新增產品</Button>}/>
+      <Input aria-label="搜尋產品" placeholder="搜尋產品名稱…" className="max-w-sm" value={search} onChange={e => setSearch(e.target.value)}/>
       {content}
 
       {newPanelOpen && (

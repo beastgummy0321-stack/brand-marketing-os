@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 
-/** 清單分頁（互動鐵則⑥，docs/ui-migration-contract.md 第二節）：純前端切片，頁大小預設
+/** 清單分頁（docs/design-system.md §6 Pager）：純前端切片，頁大小預設
  * 12，不打 API、不改資料形狀。`topRef` 掛在清單容器上，翻頁後捲回那裡，不必使用者自己
  * 往上滑（使用者原話：「一路從最上滾動到下沒有耐心看完」）。 */
 export function usePagination<T>(items: T[], pageSize = 12) {

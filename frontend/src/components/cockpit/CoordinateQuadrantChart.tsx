@@ -1,10 +1,18 @@
 import { useMemo } from "react";
 import type { EChartsOption } from "echarts";
-import { CHART_COLOR_LOSS_ZONE, CHART_COLOR_SPEND } from "@/lib/chartColors";
-import { formatCurrency } from "@/lib/format";
+import {
+  CHART_COLOR_AXIS_TEXT,
+  CHART_COLOR_GROUND,
+  CHART_COLOR_LABEL,
+  CHART_COLOR_LOSS_ZONE,
+  CHART_COLOR_SPEND,
+} from "@/lib/chartColors";
 import { splitPlottable, type QuadrantPoint } from "@/lib/quadrant";
 import { useEchart } from "@/lib/useEchart";
-import type { CreativePerformanceUntagged, CreativePerformanceValue } from "@/lib/scheduleApi";
+import type {
+  CreativePerformanceUntagged,
+  CreativePerformanceValue,
+} from "@/lib/scheduleApi";
 
 /** 票 T6b（ADR 0057 §5–§8）：一個維度的座標賺賠圖。零行後端改動——`spend`／`revenue`／
  * `roas` 三個數字 T5 就已經回了，這裡只是把它們擺到位置上。
@@ -30,11 +38,21 @@ function symbolSize(impressions: number): number {
   return Math.max(8, Math.min(44, Math.sqrt(impressions) / 11));
 }
 
-function buildOption(points: QuadrantPoint[], breakeven: number | null): EChartsOption {
+function buildOption(
+  points: QuadrantPoint[],
+  breakeven: number | null,
+  currency: string,
+): EChartsOption {
   // 上緣進位到 0.5 的倍數：直接用 `max(...)*1.15` 會讓刻度印出 2.415 這種算出來的數字。
   // 打平線本身也要進得了畫面——毛利 40% 的品牌打平線在 2.5x，比 1.4 高得多。
   const maxY =
-    Math.ceil(Math.max(1.4, (breakeven ?? 0) * 1.15, ...points.map((p) => p.high * 1.15)) * 2) / 2;
+    Math.ceil(
+      Math.max(
+        1.4,
+        (breakeven ?? 0) * 1.15,
+        ...points.map((p) => p.high * 1.15),
+      ) * 2,
+    ) / 2;
   return {
     grid: { left: 56, right: 72, top: 24, bottom: 44 },
     xAxis: {
@@ -43,7 +61,9 @@ function buildOption(points: QuadrantPoint[], breakeven: number | null): ECharts
       nameLocation: "middle",
       nameGap: 26,
       min: 0,
-      axisLabel: { formatter: (v: number) => `${Math.round(v).toLocaleString("zh-TW")}` },
+      axisLabel: {
+        formatter: (v: number) => `${Math.round(v).toLocaleString("zh-TW")}`,
+      },
       splitLine: { lineStyle: { opacity: 0.35 } },
     },
     yAxis: {
@@ -58,8 +78,8 @@ function buildOption(points: QuadrantPoint[], breakeven: number | null): ECharts
       formatter: (params: unknown) => {
         const p = (params as { data: { point: QuadrantPoint } }).data.point;
         return [
-          `<b>${p.label}</b>`,
-          `花費 ${formatCurrency(p.spend)}　營收 ${formatCurrency(p.revenue)}`,
+          `<b>${p.label.replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char] ?? char)}</b>`,
+          `花費 ${p.spend.toLocaleString("zh-TW")} ${currency}　營收 ${p.revenue.toLocaleString("zh-TW")} ${currency}`,
           `ROAS ${p.low.toFixed(2)}x（保守）～ ${p.high.toFixed(2)}x（樂觀）`,
           `資料覆蓋率 ${(p.coverage * 100).toFixed(0)}%　廣告 ${p.adCount} 則`,
           `曝光 ${p.impressions.toLocaleString("zh-TW")}　點擊 ${p.clicks.toLocaleString("zh-TW")}`,
@@ -70,7 +90,11 @@ function buildOption(points: QuadrantPoint[], breakeven: number | null): ECharts
       type: "line" as const,
       name: p.label,
       data: [
-        { value: [p.spend, p.low], point: p, symbolSize: symbolSize(p.impressions) },
+        {
+          value: [p.spend, p.low],
+          point: p,
+          symbolSize: symbolSize(p.impressions),
+        },
         {
           value: [p.spend, p.high],
           point: p,
@@ -79,14 +103,19 @@ function buildOption(points: QuadrantPoint[], breakeven: number | null): ECharts
             show: true,
             position: "top" as const,
             formatter: p.label,
-            color: "#334155",
+            color: CHART_COLOR_LABEL,
             fontSize: 12,
           },
         },
       ],
       symbol: "circle",
       lineStyle: { width: 2, color: CHART_COLOR_SPEND, opacity: 0.55 },
-      itemStyle: { color: CHART_COLOR_SPEND, opacity: 0.75, borderColor: "#f8fafc", borderWidth: 2 },
+      itemStyle: {
+        color: CHART_COLOR_SPEND,
+        opacity: 0.75,
+        borderColor: CHART_COLOR_GROUND,
+        borderWidth: 2,
+      },
       // 打平線與賠錢區塊只掛在第一個系列上——每個系列各掛一份會疊出七層一樣的色塊。
       // `breakeven` 是 null（算不出毛利率）就整個不畫：畫在 1.0x 等於宣稱這個品牌毛利
       // 100%，會把其實在賠錢的座標畫成綠色贏家（`ads-commerce.md:13`：打平 ROAS = 1 ÷ 毛利率）。
@@ -99,7 +128,7 @@ function buildOption(points: QuadrantPoint[], breakeven: number | null): ECharts
                 show: true,
                 position: "insideBottomLeft" as const,
                 formatter: "打平線以下＝賠錢",
-                color: "#64748b",
+                color: CHART_COLOR_AXIS_TEXT,
                 fontSize: 12,
               },
               data: [[{ yAxis: 0 }, { yAxis: breakeven }]],
@@ -107,10 +136,14 @@ function buildOption(points: QuadrantPoint[], breakeven: number | null): ECharts
             markLine: {
               silent: true,
               symbol: "none" as const,
-              lineStyle: { color: CHART_COLOR_LOSS_ZONE, type: "dashed" as const, width: 1.5 },
+              lineStyle: {
+                color: CHART_COLOR_LOSS_ZONE,
+                type: "dashed" as const,
+                width: 1.5,
+              },
               label: {
                 formatter: `打平 ${breakeven.toFixed(2)}x`,
-                color: "#64748b",
+                color: CHART_COLOR_AXIS_TEXT,
                 position: "end" as const,
               },
               data: [{ yAxis: breakeven }],
@@ -122,16 +155,26 @@ function buildOption(points: QuadrantPoint[], breakeven: number | null): ECharts
 }
 
 export function CoordinateQuadrantChart({
-  values, untagged, breakeven,
+  values,
+  untagged,
+  breakeven,
+  currency = "TWD",
 }: {
   values: CreativePerformanceValue[];
+  currency?: string;
   untagged: CreativePerformanceUntagged;
   /** 打平線＝1 ÷ 毛利率，來自 `GET .../diagnosis` 的 `breakeven.roas`；算不出毛利率時是
    * `null`，那就不畫線（畫面另外有一句話交代，見 `DiagnosisPanel`）。 */
   breakeven: number | null;
 }) {
-  const { points, noSpend, noRevenue } = useMemo(() => splitPlottable(values), [values]);
-  const option = useMemo(() => buildOption(points, breakeven), [points, breakeven]);
+  const { points, noSpend, noRevenue } = useMemo(
+    () => splitPlottable(values),
+    [values],
+  );
+  const option = useMemo(
+    () => buildOption(points, breakeven, currency),
+    [points, breakeven, currency],
+  );
   const ref = useEchart(option);
 
   if (points.length === 0) {
@@ -146,22 +189,28 @@ export function CoordinateQuadrantChart({
     <div className="flex flex-col gap-2">
       <div ref={ref} className="h-72 w-full" />
       <ul className="flex flex-col gap-0.5 text-xs text-muted-foreground">
-        <li>泡泡愈大＝曝光愈多。一段線＝這個座標的 ROAS 可能落在哪，線愈長代表追蹤到的天數愈少。</li>
+        <li>
+          泡泡愈大＝曝光愈多。一段線＝這個座標的 ROAS
+          可能落在哪，線愈長代表追蹤到的天數愈少。
+        </li>
         {untagged.ad_count > 0 && (
           <li>
-            另有未標座標 {formatCurrency(untagged.spend)}（{untagged.ad_count} 則廣告）沒有畫在圖上——
+            另有未標座標 {untagged.spend.toLocaleString("zh-TW")} {currency}（
+            {untagged.ad_count} 則廣告）沒有畫在圖上——
             這筆花費目前對不到任何座標。
           </li>
         )}
         {noSpend.length > 0 && (
           <li>
-            這個月還沒花到錢，所以沒上圖：{noSpend.map((v) => v.label).join("、")}
+            這個月還沒花到錢，所以沒上圖：
+            {noSpend.map((v) => v.label).join("、")}
             （廣告可能還在審核或被退，不代表這個角度沒人要）。
           </li>
         )}
         {noRevenue.length > 0 && (
           <li>
-            有花費但一天都沒追蹤到轉換，畫不出 ROAS：{noRevenue.map((v) => v.label).join("、")}。
+            有花費但一天都沒追蹤到轉換，畫不出 ROAS：
+            {noRevenue.map((v) => v.label).join("、")}。
           </li>
         )}
       </ul>

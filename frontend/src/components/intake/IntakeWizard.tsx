@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { useWorkspace } from "@/components/layout/WorkspaceContext";
 import { EmptyState } from "@/components/layout/EmptyState";
 import { TaskFlowShell } from "@/components/layout/TaskFlowShell";
 import type { IntakeDraft } from "@/lib/intakeApi";
@@ -23,6 +24,7 @@ type LoadState = { status: "loading" } | { status: "error"; message: string } | 
  * 產品頁「整包讀」同一個決定，不切成逐步驟各自的 GET）。 */
 export function IntakeWizard({ brandId }: { brandId: string | null }) {
   const navigate = useNavigate();
+  const { refreshBrands } = useWorkspace();
   const [state, setState] = useState<LoadState>(brandId ? { status: "loading" } : { status: "ready", draft: null as unknown as IntakeDraft });
   const [viewStep, setViewStep] = useState(1);
   const [budgetOpen, setBudgetOpen] = useState(false);
@@ -48,7 +50,7 @@ export function IntakeWizard({ brandId }: { brandId: string | null }) {
   if (!brandId) {
     return (
       <TaskFlowShell steps={STEP_LABELS} current={1} onSelect={() => {}} rightRail={<CostGauge draft={null} onAdjust={() => {}} />}>
-        <StartStep brandId={null} onSubmitted={(res) => navigate(res.quick ? `/brands/${res.brand_id}` : `/brands/${res.brand_id}/intake`)} />
+        <StartStep brandId={null} onSubmitted={(res) => { refreshBrands(); navigate(res.quick ? `/brands/${res.brand_id}` : `/brands/${res.brand_id}/intake`); }} />
       </TaskFlowShell>
     );
   }
@@ -73,7 +75,8 @@ export function IntakeWizard({ brandId }: { brandId: string | null }) {
     <>
       <TaskFlowShell
         steps={STEP_LABELS}
-        current={Math.max(viewStep, draft.step)}
+        current={viewStep}
+        reachableThrough={Math.max(viewStep, draft.step)}
         onSelect={(step) => step <= Math.max(viewStep, draft.step) && setViewStep(step)}
         rightRail={<CostGauge draft={draft} onAdjust={() => setBudgetOpen(true)} />}
       >

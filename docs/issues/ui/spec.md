@@ -1,13 +1,11 @@
-# 目標：介面收尾（U1 文案閘門＋U3 配色字體＋排程頁結構）
+# 目標：介面收尾（U1 文案閘門＋演練待裁決）
 
-Status: 待使用者點頭——換全站字體是產品外觀決定，不是順手改得的。
-全文出處：`BOARD.md` @ commit `6574191`。依據：ADR 0051（介面是儀表板不是文件）。
+Status: 設計系統已定（2026-09-07，`docs/design-system.md`，ADR 0065）；U3 配色字體結案。
+依據：`docs/design-system.md` 是唯一前端規則；票裡不得另寫外觀規則，只引它的章節。
 
-- `issue-u3-font-and-palette.md` — ADR 0051 規則 13 明文另開的那一張。
-- `issue-u1-banned-words-gate.md` — 規則 9–11 的機器閘門，跟 U3 同一張收。
-- `issue-schedule-page-long-scroll.md` — 撞到〈不做一路下滑〉那條紅線，掛在 U3 底下。
-- `issue-fluidcard-keep-or-delete.md` — 美術／產品判斷。
+- `issue-u1-banned-words-gate.md` — 設計系統 §8 的機器閘門，仍是 backlog。
+- `issue-schedule-page-long-scroll.md` — §1 第 1 條；GPT 2026-09-07 重整已拆成 ScheduleSetup／PeriodPanel／PlanComparison，待真瀏覽器驗收後刪。
+- 其餘 `issue-*.md` — 2026-09-06 演練的待裁決票。
 
-**已查證不是 bug，不要再開票**：「1833 寬的視窗、內容擠在約 700 寬、右邊一片空白」——700 寬的是
-表單卡片（`--width-form: 42rem`），段落另有 `--width-prose: 68ch`，兩個都是刻意的可讀性上限，
-方案卡片本身有用滿寬度。先看 CSS 再喊版面 bug。
+**已查證不是 bug，不要再開票**：「1833 寬的視窗、內容擠在約 700 寬、右邊一片空白」——寬度上限
+（`--width-form`、`--width-prose`）是刻意的可讀性上限，見設計系統 §5 末段。先看 CSS 再喊版面 bug。

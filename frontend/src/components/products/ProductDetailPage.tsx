@@ -2,6 +2,8 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useSearchParams } from "react-router-dom";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { EmptyState } from "@/components/layout/EmptyState";
+import { PageHeader } from "@/components/layout/PageHeader";
+import { PageTabs } from "@/components/layout/PageTabs";
 import { Skeleton } from "@/components/layout/Skeleton";
 import {
   archiveProduct,
@@ -204,13 +206,14 @@ export function ProductDetailPage({ brandId, productId }: { brandId: string; pro
             </div>
           )}
 
-          <div className="flex flex-col gap-2 border-t border-border pt-3">
-            <span className="text-sm font-medium text-foreground">AI 再次調研</span>
+          <details className="border-t border-border pt-2">
+            <summary className="text-sm font-medium text-primary">調研工具 · 再次調研與深入調研</summary>
             <div className="flex flex-wrap items-center gap-2">
               <input
                 type="text"
                 value={rescanUrl}
                 onChange={(e) => setRescanUrl(e.target.value)}
+                aria-label="再次調研網址"
                 placeholder="https://example.com/products/xxx"
                 className="min-w-[16rem] flex-1 rounded-md border border-border px-3 py-1.5 text-sm text-foreground"
               />
@@ -233,28 +236,10 @@ export function ProductDetailPage({ brandId, productId }: { brandId: string; pro
               </button>
             </div>
             {rescanError && <p className="text-sm text-danger">{rescanError}</p>}
-          </div>
+          </details>
         </div>
 
-        <div className="grid grid-cols-4 gap-3">
-          {data.cards.map((card) => (
-            <button
-              key={card.key}
-              type="button"
-              onClick={() => setTab(card.key)}
-              className={
-                "flex flex-col items-start gap-1 rounded-md border p-3 text-left transition-colors " +
-                (activeTab === card.key ? "border-primary bg-primary/5" : "border-border bg-card hover:border-primary/50")
-              }
-            >
-              <span className="text-sm font-medium text-foreground">{card.title}</span>
-              <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                共 {card.count} 筆
-                {card.pending > 0 && <Badge tone="warning">待確認 {card.pending}</Badge>}
-              </span>
-            </button>
-          ))}
-        </div>
+        <PageTabs value={activeTab} onChange={setTab} items={data.cards.map(card => ({value:card.key,label:card.pending > 0 ? `${card.title} · 待確認 ${card.pending}` : card.title,count:card.count}))}/>
 
         {activeTab === "facts" && (
           <FactsTab
@@ -324,6 +309,7 @@ export function ProductDetailPage({ brandId, productId }: { brandId: string; pro
           { label: state.status === "ready" ? state.data.name : "產品詳情" },
         ]}
       />
+      <PageHeader title={state.status === "ready" ? state.data.name : "產品詳情"} description="產品知識、經濟數字與宣稱依據"/>
       {content}
     </div>
   );

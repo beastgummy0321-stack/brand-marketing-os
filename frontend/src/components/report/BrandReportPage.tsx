@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { EmptyState } from "@/components/layout/EmptyState";
 import {
@@ -28,6 +29,12 @@ function costLabel(cost: number | null): string | null {
 
 export function BrandReportPage({ brandId }: { brandId: string }) {
   const [state, setState] = useState<PageState>({ status: "loading" });
+  const [params, setParams] = useSearchParams();
+  const requestedChapter = Number(params.get("chapter") ?? "1") - 1;
+  const sectionCount = state.status === "ready" ? state.data.report?.sections.length ?? 0 : 0;
+  const chapter = Number.isInteger(requestedChapter) && requestedChapter >= 0 && requestedChapter < sectionCount ? requestedChapter : 0;
+  function setChapter(index: number) { setParams(previous => {const next = new URLSearchParams(previous);next.set("chapter",String(index+1));return next;}); }
+
   const [creating, setCreating] = useState(false);
 
   const load = useCallback(() => {
@@ -67,7 +74,7 @@ export function BrandReportPage({ brandId }: { brandId: string }) {
 
   return (
     <div className="flex flex-col gap-4">
-      <style>{`@media print { .report-print-hidden { display: none !important; } .report-print-page { max-width: none !important; } }`}</style>
+      <style>{`@media print { .report-print-hidden { display: none !important; } .report-print-page { max-width: none !important; } .report-chapter[hidden] { display: block !important; } .report-reader { display: block !important; } }`}</style>
       <div className="report-print-hidden">
         <Breadcrumb items={[{ label: "品牌總覽", href: "/" }, { label: "顧問分析報告" }]} />
       </div>
@@ -130,8 +137,9 @@ export function BrandReportPage({ brandId }: { brandId: string }) {
                 資料尚少，這份報告多半是推論，建議先補充品牌事實再重新生成。
               </p>
             )}
-            {report.sections.map((section) => (
-              <section key={section.label} className="rounded-[var(--radius-xl)] border border-border bg-card p-5 shadow-[var(--shadow-card)]">
+            <div className="workspace-split report-reader"><nav className="workspace-subnav report-print-hidden" aria-label="報告章節">{report.sections.map((section,index) => <button key={section.label} aria-pressed={chapter===index} onClick={() => setChapter(index)}><span className="text-xs text-muted-foreground">{String(index+1).padStart(2,"0")}</span>{section.label}</button>)}</nav><div className="min-w-0">
+            {report.sections.map((section,index) => (
+              <section key={section.label} hidden={chapter!==index} className="report-chapter rounded-[var(--radius-xl)] border border-border bg-card p-5 shadow-[var(--shadow-card)]">
                 <h2 className="font-display text-xl text-foreground">{section.label}</h2>
                 <p className="mt-3 leading-7 text-foreground">{section.summary}</p>
                 {section.points.length > 0 && (
@@ -141,6 +149,7 @@ export function BrandReportPage({ brandId }: { brandId: string }) {
                 )}
               </section>
             ))}
+            </div></div>
           </article>
         )}
       </div>

@@ -1,5 +1,12 @@
 import { useState } from "react";
-import { signInWithMagicLink, signInWithPassword, signUpWithPassword } from "@/lib/auth";
+import { Logo } from "@/components/layout/Logo";
+import { Button } from "@/components/layout/ui/button";
+import { Input } from "@/components/layout/ui/input";
+import {
+  signInWithMagicLink,
+  signInWithPassword,
+  signUpWithPassword,
+} from "@/lib/auth";
 import { useFormSubmit } from "@/lib/useFormSubmit";
 
 type Mode = "signin" | "signup" | "magiclink";
@@ -30,87 +37,144 @@ export function LoginPage() {
   });
 
   return (
-    <div className="flex h-full items-center justify-center bg-background">
-      <div className="w-full max-w-sm rounded-[var(--radius-xl)] border border-border bg-card p-8 shadow-[var(--shadow-card)]">
-        <h1 className="font-display text-2xl text-foreground">行銷駕駛艙</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          {mode === "signup" ? "註冊新帳號" : mode === "magiclink" ? "用郵件連結登入" : "登入"}
+    <div className="auth-layout">
+      <aside className="auth-aside">
+        <Logo />
+        <div className="max-w-lg">
+          <p className="mb-6 text-sm font-medium text-primary">
+            品牌經營，從掌握全貌開始。
+          </p>
+          <h2 className="text-4xl font-semibold leading-snug tracking-tight">
+            每個品牌的下一步，
+            <br />
+            都在同一個工作區。
+          </h2>
+          <p className="mt-6 max-w-sm leading-7 text-muted-foreground">
+            整合廣告成效、產品知識與檔期規劃，讓經營判斷有資料可以依據。
+          </p>
+          <div className="mt-10 flex flex-wrap gap-3 text-xs text-primary">
+            <span className="rounded-lg border border-primary/15 px-4 py-3">
+              品牌工作區
+            </span>
+            <span className="rounded-lg border border-primary/15 px-4 py-3">
+              廣告成效看板
+            </span>
+            <span className="rounded-lg border border-primary/15 px-4 py-3">
+              團隊協作
+            </span>
+          </div>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          行銷駕駛艙 · Brand workspace
         </p>
+      </aside>
+      <main className="flex items-center justify-center p-12">
+        <div className="w-full max-w-sm">
+          <h1 className="text-3xl font-semibold">
+            {mode === "signup" ? "建立你的工作區" : "歡迎回來"}
+          </h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            {mode === "signup"
+              ? "註冊新帳號"
+              : mode === "magiclink"
+                ? "用郵件連結登入"
+                : "登入"}
+          </p>
 
-        <form
-          className="mt-6 flex flex-col gap-4"
-          onSubmit={(e) => {
-            e.preventDefault();
-            void form.submit();
-          }}
-        >
-          <label className="flex flex-col gap-1 text-sm">
-            <span className="font-medium text-foreground">Email</span>
-            {/* 內部測試用：帳號改成不是信箱格式的短字串（例如 123），type="email" 會被
+          <form
+            className="mt-6 flex flex-col gap-4"
+            onSubmit={(e) => {
+              e.preventDefault();
+              void form.submit();
+            }}
+          >
+            <label className="flex flex-col gap-1 text-sm">
+              <span className="font-medium text-foreground">Email</span>
+              {/* 內部測試用：帳號改成不是信箱格式的短字串（例如 123），type="email" 會被
                 瀏覽器自己擋在送出之前。Supabase Auth 本身收非信箱的帳號，擋人的是這一行。
                 正式發布前改回 type="email"。 */}
-            <input
-              type="text"
-              required
-              autoComplete="username"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              className="rounded-md border border-border px-3 py-2 text-sm text-foreground"
-            />
-          </label>
-
-          {mode !== "magiclink" && (
-            <label className="flex flex-col gap-1 text-sm">
-              <span className="font-medium text-foreground">密碼</span>
-              <input
-                type="password"
+              <Input
+                type="text"
                 required
-                autoComplete={mode === "signup" ? "new-password" : "current-password"}
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
+                autoComplete="username"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
                 className="rounded-md border border-border px-3 py-2 text-sm text-foreground"
               />
             </label>
-          )}
 
-          {form.error && <p className="text-sm text-danger">{form.error}</p>}
-          {magicLinkSent && (
-            <p className="text-sm text-success">連結已經寄出，去信箱收信點連結登入。</p>
-          )}
+            {mode !== "magiclink" && (
+              <label className="flex flex-col gap-1 text-sm">
+                <span className="font-medium text-foreground">密碼</span>
+                <Input
+                  type="password"
+                  required
+                  autoComplete={
+                    mode === "signup" ? "new-password" : "current-password"
+                  }
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  className="rounded-md border border-border px-3 py-2 text-sm text-foreground"
+                />
+              </label>
+            )}
 
-          <button
-            type="submit"
-            disabled={form.saving}
-            className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {form.saving
-              ? "處理中…"
-              : mode === "signup"
-                ? "註冊"
-                : mode === "magiclink"
-                  ? "寄送登入連結"
-                  : "登入"}
-          </button>
-        </form>
+            {form.error && <p className="text-sm text-danger">{form.error}</p>}
+            {magicLinkSent && (
+              <p className="text-sm text-success">
+                連結已經寄出，去信箱收信點連結登入。
+              </p>
+            )}
 
-        <div className="mt-4 flex flex-col gap-1 text-sm text-muted-foreground">
-          {mode !== "signin" && (
-            <button type="button" onClick={() => setMode("signin")} className="text-left text-primary hover:underline">
-              改用 Email／密碼登入
-            </button>
-          )}
-          {mode !== "signup" && (
-            <button type="button" onClick={() => setMode("signup")} className="text-left text-primary hover:underline">
-              還沒有帳號？註冊新帳號
-            </button>
-          )}
-          {mode !== "magiclink" && (
-            <button type="button" onClick={() => setMode("magiclink")} className="text-left text-primary hover:underline">
-              改用郵件連結登入（不用密碼）
-            </button>
-          )}
+            <Button
+              type="submit"
+              disabled={form.saving}
+              className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {form.saving
+                ? "處理中…"
+                : mode === "signup"
+                  ? "註冊"
+                  : mode === "magiclink"
+                    ? "寄送登入連結"
+                    : "登入"}
+            </Button>
+          </form>
+
+          <div className="mt-4 flex flex-col gap-1 text-sm text-muted-foreground">
+            {mode !== "signin" && (
+              <Button
+                variant="link"
+                type="button"
+                onClick={() => setMode("signin")}
+                className="text-left text-primary hover:underline"
+              >
+                改用 Email／密碼登入
+              </Button>
+            )}
+            {mode !== "signup" && (
+              <Button
+                variant="link"
+                type="button"
+                onClick={() => setMode("signup")}
+                className="text-left text-primary hover:underline"
+              >
+                還沒有帳號？註冊新帳號
+              </Button>
+            )}
+            {mode !== "magiclink" && (
+              <Button
+                variant="link"
+                type="button"
+                onClick={() => setMode("magiclink")}
+                className="text-left text-primary hover:underline"
+              >
+                改用郵件連結登入（不用密碼）
+              </Button>
+            )}
+          </div>
         </div>
-      </div>
+      </main>
     </div>
   );
 }

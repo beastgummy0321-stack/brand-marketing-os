@@ -190,7 +190,7 @@ export function ApiKeySection({ data, onSaved }: { data: SettingsData; onSaved: 
       )}
 
       <TestConnectionButton
-        description="按下後會用目前的金鑰與模型，向 AI 服務發出一次極小的真實請求，回報金鑰是否可用。會微量扣款（約不到台幣一角）。"
+        description="連線檢測尚未提供。目前可以儲存金鑰，並在實際使用 AI 功能時查看執行結果。"
         successMessage="連線成功，金鑰可用。"
         errorMessage="連線失敗，請確認金鑰是否正確。"
       />

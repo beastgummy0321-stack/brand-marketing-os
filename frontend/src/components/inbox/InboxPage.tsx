@@ -1,167 +1,83 @@
-import { useEffect, useState, type ReactNode } from "react";
-import { Breadcrumb } from "@/components/layout/Breadcrumb";
+import { useEffect, useRef, useState } from "react";
+import { useSearchParams } from "react-router-dom";
+import { Inbox, ListFilter, RefreshCw } from "lucide-react";
+import { PageHeader } from "@/components/layout/PageHeader";
+import { PageTabs } from "@/components/layout/PageTabs";
 import { EmptyState } from "@/components/layout/EmptyState";
 import { Pager } from "@/components/layout/Pager";
 import { Skeleton } from "@/components/layout/Skeleton";
+import { Button } from "@/components/layout/ui/button";
 import { resolveAlert } from "@/lib/api";
-import { fetchInbox, type InboxData } from "@/lib/inboxApi";
+import { fetchInbox, type InboxData, type InboxSeverity } from "@/lib/inboxApi";
+import { SEVERITY_LABEL } from "@/lib/severity";
 import { usePagination } from "@/lib/usePagination";
-import { InboxItemCard } from "./InboxItemCard";
+import { InboxItemCard, InboxItemDetail } from "./InboxItemCard";
 
 type LoadState =
   | { status: "loading" }
   | { status: "error"; message: string }
   | { status: "ready"; data: InboxData };
 
-/** 收件匣（S2，票 B1-inbox）：全站跨品牌待辦清單，合併舊 inbox.html／prototype_phase.html
- * （側板化）。「知道了」沿用既有全站打斷佇列 resolve 端點（見 `lib/api.ts` resolveAlert
- * 註解），成功後整頁重讀一次（同 AlertsPanel／CockpitPage 既有慣例）。待辦／已結兩段各自
- * 超過 12 筆分頁（互動鐵則⑥）。 */
 export function InboxPage() {
   const [state, setState] = useState<LoadState>({ status: "loading" });
+  const [params, setParams] = useSearchParams();
+  const tab = params.get("tab") === "done" ? "done" : "open";
+  const [brand, setBrand] = useState("all");
+  const [severity, setSeverity] = useState<InboxSeverity | "all">("all");
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [resolvingId, setResolvingId] = useState<string | null>(null);
   const [errors, setErrors] = useState<Record<string, string>>({});
-  const openItems = state.status === "ready" ? state.data.open : [];
-  const doneItems = state.status === "ready" ? state.data.done : [];
-  const openPage = usePagination(openItems);
-  const donePage = usePagination(doneItems);
+  const requestId = useRef(0);
+  const items = state.status === "ready" ? state.data[tab] : [];
+  const allItems = state.status === "ready" ? [...state.data.open, ...state.data.done] : [];
+  const brands = [...new Map(allItems.map((item) => [item.brand_id ?? "global", item.brand_name ?? "全站"])).entries()];
+  const filtered = items.filter((item) => (brand === "all" || (item.brand_id ?? "global") === brand) && (severity === "all" || item.severity === severity));
+  const pagination = usePagination(filtered, 8);
+  const selected = pagination.pageItems.find((item) => item.id === selectedId) ?? pagination.pageItems[0];
 
   function load() {
+    const id = ++requestId.current;
     setState({ status: "loading" });
     fetchInbox()
-      .then((data) => setState({ status: "ready", data }))
-      .catch((err: unknown) =>
-        setState({
-          status: "error",
-          message: err instanceof Error ? err.message : "讀取失敗，請稍後再試。",
-        }),
-      );
+      .then((data) => { if (id === requestId.current) setState({ status: "ready", data }); })
+      .catch((err: unknown) => { if (id === requestId.current) setState({ status: "error", message: err instanceof Error ? err.message : "讀取失敗，請稍後再試。" }); });
   }
-
-  useEffect(load, []);
+  useEffect(() => { load(); return () => { requestId.current += 1; }; }, []);
 
   function handleResolve(id: string) {
-    setErrors((prev) => {
-      if (!(id in prev)) return prev;
-      const next = { ...prev };
-      delete next[id];
-      return next;
-    });
+    if (resolvingId) return;
+    setErrors((previous) => { const next = { ...previous }; delete next[id]; return next; });
     setResolvingId(id);
     resolveAlert(id)
-      .then(() => {
-        setResolvingId(null);
-        load();
-      })
+      .then(() => { setResolvingId(null); load(); })
       .catch((err: unknown) => {
         setResolvingId(null);
-        setErrors((prev) => ({
-          ...prev,
-          [id]: err instanceof Error ? err.message : "「知道了」失敗，請稍後再試。",
-        }));
+        setErrors((previous) => ({ ...previous, [id]: err instanceof Error ? err.message : "「知道了」失敗，請稍後再試。" }));
       });
   }
 
-  let content: ReactNode;
-  if (state.status === "loading") {
-    content = (
-      <div className="flex flex-col gap-6">
-        <div className="flex flex-col gap-3">
-          <Skeleton className="h-5 w-24" />
-          {Array.from({ length: 3 }, (_, i) => (
-            <Skeleton key={`open-${i}`} className="h-20" />
-          ))}
-        </div>
-        <div className="flex flex-col gap-3">
-          <Skeleton className="h-5 w-24" />
-          {Array.from({ length: 3 }, (_, i) => (
-            <Skeleton key={`done-${i}`} className="h-20" />
-          ))}
-        </div>
+  return <div className="flex flex-col gap-5">
+    <PageHeader title="收件匣" description="集中查看跨品牌待辦，依品牌與嚴重度安排處理順序。" actions={<Button variant="outline" onClick={load} disabled={state.status === "loading" || resolvingId !== null}><RefreshCw className="size-4" aria-hidden="true" />重新整理</Button>} />
+    <PageTabs value={tab} onChange={(value) => { setParams((previous) => { const next = new URLSearchParams(previous); next.set("tab", value); return next; }); setSelectedId(null); pagination.resetPage(); }} items={[
+      { value: "open", label: "待處理", count: state.status === "ready" ? state.data.open.length : undefined },
+      { value: "done", label: "已處理", count: state.status === "ready" ? state.data.done.length : undefined },
+    ]} />
+    {state.status === "loading" && <div aria-label="收件匣載入中" className="grid grid-cols-2 gap-5"><Skeleton className="h-[440px]" /><Skeleton className="h-[440px]" /></div>}
+    {state.status === "error" && <div className="surface"><EmptyState title="讀取失敗" description={state.message} onAction={load} actionLabel="重新載入" /></div>}
+    {state.status === "ready" && <div className="surface overflow-hidden">
+      <div className="flex flex-wrap items-center gap-4 border-b border-border px-5 py-4">
+        <ListFilter className="size-4 text-muted-foreground" aria-hidden="true" />
+        <label className="flex items-center gap-2 text-sm"><span className="text-muted-foreground">品牌</span><select value={brand} onChange={(event) => { setBrand(event.target.value); setSelectedId(null); pagination.resetPage(); }} className="max-w-56"><option value="all">全部品牌</option>{brands.map(([id, name]) => <option key={id} value={id}>{name}</option>)}</select></label>
+        <label className="flex items-center gap-2 text-sm"><span className="text-muted-foreground">嚴重度</span><select value={severity} onChange={(event) => { setSeverity(event.target.value as InboxSeverity | "all"); setSelectedId(null); pagination.resetPage(); }}><option value="all">全部嚴重度</option>{Object.entries(SEVERITY_LABEL).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+        <span className="ml-auto text-xs text-muted-foreground">符合 {filtered.length} 筆</span>
       </div>
-    );
-  } else if (state.status === "error") {
-    content = (
-      <EmptyState
-        title="讀取失敗"
-        description={state.message}
-        onAction={load}
-        actionLabel="重新載入"
-      />
-    );
-  } else {
-    const { data } = state;
-    content = (
-      <div className="flex flex-col gap-6">
-        <section ref={openPage.topRef} className="flex flex-col gap-3">
-          <h2 className="font-display text-base text-foreground">待辦（{data.open.length}）</h2>
-          {data.open.length === 0 ? (
-            <p className="rounded-md border border-dashed border-border p-6 text-center text-sm text-muted-foreground">
-              目前沒有待處理的事項。系統會在需要你注意時把事情送進這裡。
-            </p>
-          ) : (
-            <>
-              <ul className="flex flex-col gap-2">
-                {openPage.pageItems.map((item) => (
-                  <InboxItemCard
-                    key={item.id}
-                    item={item}
-                    variant="open"
-                    resolving={resolvingId === item.id}
-                    error={errors[item.id]}
-                    onResolve={handleResolve}
-                  />
-                ))}
-              </ul>
-              <Pager
-                page={openPage.page}
-                pageCount={openPage.pageCount}
-                totalCount={openPage.totalCount}
-                onChange={openPage.goToPage}
-              />
-            </>
-          )}
-        </section>
-
-        <details className="flex flex-col gap-3">
-          <summary className="cursor-pointer font-display text-base text-foreground">
-            已結（{data.done.length}）
-          </summary>
-          <div ref={donePage.topRef} className="mt-3 flex flex-col gap-3">
-            {data.done.length === 0 ? (
-              <p className="rounded-md border border-dashed border-border p-6 text-center text-sm text-muted-foreground">
-                目前沒有已結案的項目。
-              </p>
-            ) : (
-              <>
-                <ul className="flex flex-col gap-2">
-                  {donePage.pageItems.map((item) => (
-                    <InboxItemCard
-                      key={item.id}
-                      item={item}
-                      variant="done"
-                    />
-                  ))}
-                </ul>
-                <Pager
-                  page={donePage.page}
-                  pageCount={donePage.pageCount}
-                  totalCount={donePage.totalCount}
-                  onChange={donePage.goToPage}
-                />
-              </>
-            )}
-          </div>
-        </details>
-      </div>
-    );
-  }
-
-  return (
-    <div className="flex flex-col gap-4">
-      <Breadcrumb items={[{ label: "跨品牌總覽", href: "/" }, { label: "收件匣" }]} />
-      <h1 className="font-display text-2xl text-foreground">收件匣</h1>
-      {content}
-    </div>
-  );
+      {filtered.length === 0 ? <div className="flex flex-col items-center py-8"><Inbox className="size-7 text-muted-foreground" aria-hidden="true" /><EmptyState title={items.length === 0 ? tab === "open" ? "目前沒有待處理事項" : "目前沒有已處理事項" : "沒有符合條件的事項"} description={items.length === 0 ? "系統會在需要你注意時，把相關事項送進收件匣。" : "試試其他品牌或嚴重度，查看相關事項。"} actionLabel={items.length > 0 ? "清除篩選" : undefined} onAction={items.length > 0 ? () => { setBrand("all"); setSeverity("all"); pagination.resetPage(); } : undefined} /></div> : <div className="grid min-h-[440px] grid-cols-[minmax(280px,0.95fr)_minmax(320px,1.05fr)]">
+        <div ref={pagination.topRef} className="min-w-0 border-r border-border">
+          <ul aria-label={tab === "open" ? "待處理事項" : "已處理事項"}>{pagination.pageItems.map((item) => <InboxItemCard key={item.id} item={item} selected={selected?.id === item.id} onSelect={() => setSelectedId(item.id)} />)}</ul>
+          {pagination.pageCount > 1 && <div className="px-5 pb-4"><Pager page={pagination.page} pageCount={pagination.pageCount} totalCount={pagination.totalCount} onChange={(page) => { setSelectedId(null); pagination.goToPage(page); }} /></div>}
+        </div>
+        <div className="min-w-0">{selected && <InboxItemDetail item={selected} variant={tab} resolving={resolvingId === selected.id} busy={resolvingId !== null} error={errors[selected.id]} onResolve={handleResolve} />}</div>
+      </div>}
+    </div>}
+  </div>;
 }

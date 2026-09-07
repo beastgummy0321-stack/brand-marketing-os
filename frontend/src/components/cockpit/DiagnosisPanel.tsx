@@ -10,7 +10,7 @@ import {
 import { formatCurrency } from "@/lib/format";
 
 /** 票 02（T6c，02-diagnosis-on-cockpit.md）：成效判讀——長在既有「素材座標成效」區塊裡，
- * 不另開第三個長區塊（前端紅線 ADR 0051／U3）。票面原文：「標題列右側加一顆『跑一次判讀』，
+ * 不另開第三個長區塊（docs/design-system.md §1）。票面原文：「標題列右側加一顆『跑一次判讀』，
  * 結果顯示在標題下方、七維分頁與圖表上方」——按鈕跟既有的「素材座標成效」標題同一列，
  * 不是另起一顆子標題。狀態（載入／輪詢／採用）集中在這支 `useDiagnosisPanel()`，
  * `CockpitPage.tsx`（已 502 行，`CreativePerformanceSection` 的標題列）只呼叫一次這個 hook，

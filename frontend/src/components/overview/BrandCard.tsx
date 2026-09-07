@@ -1,6 +1,8 @@
 import { Link } from "react-router-dom";
 import type { DashboardBrandCard } from "@/lib/api";
 import { formatCurrency, formatMomPct } from "@/lib/format";
+import { ArrowUpRight } from "lucide-react";
+import { internalHref } from "@/lib/internalHref";
 import { cn } from "@/lib/utils";
 
 /** 品牌卡片（票 02-overview-cards）：健康度燈號＋本月營收環比＋檔期狀態＋
@@ -27,12 +29,9 @@ const HEALTH_DOT_CLASS: Record<DashboardBrandCard["health"], string> = {
 
 export function BrandCard({ card }: { card: DashboardBrandCard }) {
   return (
-    <Link
-      to={`/brands/${encodeURIComponent(card.brand_id)}`}
-      className="flex flex-col gap-3 rounded-lg border border-border bg-card p-5 shadow-[var(--shadow-card)] transition-shadow hover:shadow-md"
-    >
+    <article className="surface flex flex-col gap-5 p-6 transition-colors hover:border-primary/40">
       <div className="flex items-center justify-between gap-2">
-        <h2 className="font-display text-lg text-foreground">{card.brand_name}</h2>
+        <h2 className="text-lg"><Link className="hover:text-primary" to={`/brands/${encodeURIComponent(card.brand_id)}`}>{card.brand_name}</Link></h2>
         <span className="flex shrink-0 items-center gap-1.5 text-xs font-medium text-muted-foreground">
           <span
             className={cn("h-2.5 w-2.5 rounded-full", HEALTH_DOT_CLASS[card.health])}
@@ -52,27 +51,13 @@ export function BrandCard({ card }: { card: DashboardBrandCard }) {
       </div>
 
       {card.next_step ? (
-        <span
-          role="link"
-          tabIndex={0}
-          onClick={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            window.location.href = card.next_step!.action_url;
-          }}
-          onKeyDown={(e) => {
-            if (e.key !== "Enter") return;
-            e.preventDefault();
-            e.stopPropagation();
-            window.location.href = card.next_step!.action_url;
-          }}
-          className="text-sm font-medium text-primary underline-offset-4 hover:underline"
-        >
+        <Link to={internalHref(card.next_step.action_url)} className="border-t border-border pt-4 text-sm text-primary hover:underline">
           {card.next_step.title} →
-        </span>
+        </Link>
       ) : (
         <p className="text-sm text-muted-foreground">一切正常</p>
       )}
-    </Link>
+      <Link className="flex items-center justify-between text-xs text-muted-foreground hover:text-primary" to={`/brands/${encodeURIComponent(card.brand_id)}`}>進入品牌工作區<ArrowUpRight size={15}/></Link>
+    </article>
   );
 }

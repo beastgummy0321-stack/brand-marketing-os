@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { EmptyState } from "@/components/layout/EmptyState";
 import { Skeleton } from "@/components/layout/Skeleton";
 import type { BrandOption, RuleCard } from "@/lib/settingsApi";
@@ -24,6 +24,8 @@ export function RuleCardsSection() {
   const [brandsState, setBrandsState] = useState<BrandsState>({ status: "loading" });
   const [brandId, setBrandId] = useState("");
   const [cardsState, setCardsState] = useState<CardsState>({ status: "idle" });
+  const [selectedCard, setSelectedCard] = useState("");
+  const cardRequest = useRef(0);
 
   function loadBrands() {
     setBrandsState({ status: "loading" });
@@ -40,10 +42,12 @@ export function RuleCardsSection() {
   useEffect(loadBrands, []);
 
   function loadCards(id: string) {
+    const request = ++cardRequest.current;
     setCardsState({ status: "loading" });
     fetchRuleCards(id)
-      .then((data) => setCardsState({ status: "ready", cards: data.cards }))
+      .then((data) => { if (request === cardRequest.current) setCardsState({ status: "ready", cards: data.cards }); })
       .catch((err: unknown) =>
+        request === cardRequest.current &&
         setCardsState({
           status: "error",
           message: err instanceof Error ? err.message : "規則卡讀取失敗，請稍後再試。",
@@ -52,8 +56,10 @@ export function RuleCardsSection() {
   }
 
   useEffect(() => {
+    setSelectedCard("");
     if (brandId) loadCards(brandId);
     else setCardsState({ status: "idle" });
+    return () => { cardRequest.current += 1; };
   }, [brandId]);
 
   function handleCardUpdated(updated: RuleCard) {
@@ -103,8 +109,8 @@ export function RuleCardsSection() {
           </label>
 
           {cardsState.status === "loading" && (
-            <div className="grid grid-cols-[repeat(auto-fit,minmax(420px,500px))] gap-4">
-              {Array.from({ length: 6 }, (_, i) => (
+            <div className="flex flex-col gap-4">
+              {Array.from({ length: 2 }, (_, i) => (
                 <Skeleton key={i} className="h-48" />
               ))}
             </div>
@@ -118,10 +124,20 @@ export function RuleCardsSection() {
             />
           )}
           {cardsState.status === "ready" && (
-            <div className="grid grid-cols-[repeat(auto-fit,minmax(420px,500px))] gap-4">
-              {cardsState.cards.map((card) => (
-                <RuleCardItem key={card.key} brandId={brandId} card={card} onUpdated={handleCardUpdated} />
-              ))}
+            <div className="flex flex-col gap-4">
+              {cardsState.cards.length === 0 ? <EmptyState title="目前沒有規則卡" description="這個品牌還沒有可調整的規則參數。" /> : <>
+                <label className="flex max-w-sm flex-col gap-1.5 text-sm">
+                  <span className="font-medium">選擇規則卡</span>
+                  <select value={cardsState.cards.some((card) => card.key === selectedCard) ? selectedCard : cardsState.cards[0].key} onChange={(event) => setSelectedCard(event.target.value)}>
+                    {cardsState.cards.map((card) => <option key={card.key} value={card.key}>{card.title}</option>)}
+                  </select>
+                </label>
+                {cardsState.cards.map((card) => (
+                  <div key={card.key} hidden={card.key !== (cardsState.cards.some((candidate) => candidate.key === selectedCard) ? selectedCard : cardsState.cards[0].key)}>
+                    <RuleCardItem brandId={brandId} card={card} onUpdated={handleCardUpdated} />
+                  </div>
+                ))}
+              </>}
             </div>
           )}
         </>
@@ -163,7 +179,7 @@ function RuleCardItem({
   }
 
   return (
-    <div className="flex flex-col gap-3 rounded-md border border-border p-4">
+    <div className="flex max-w-[var(--width-form)] flex-col gap-4 border-t border-border pt-5">
       <div>
         <h3 className="text-sm font-semibold text-foreground">{card.title}</h3>
         <p className="mt-1 text-xs text-muted-foreground">{card.description}</p>

@@ -1,92 +1,138 @@
-/* 設計 token（票 01-react-shell）
-   來源：ui-ux-pro-max 技能包 --design-system（查詢：marketing operations dashboard
-   cockpit professional light b2b saas），色彩與字體維持工具產出的專業淡色配色，
-   效果改採 shadcn/ui 慣用的「卡片＋細邊框」扁平風格，取代工具原建議的玻璃擬態
-   （與規格「淡色專業風」「不用...精確比較」的簡潔要求較合）。
-
-   這是唯一的 token 來源檔：後續票（02～09）沿用這裡的顏色／字體／圓角變數，
-   不得在元件裡各自重寫 hex 色碼。*/
-
-@import url("https://fonts.googleapis.com/css2?family=Calistoga&family=Inter:wght@400;500;600;700&display=swap");
+/* Approved desktop dashboard, 2026-09-07. Central visual tokens. */
+@import "@fontsource-variable/inter";
+@import "@fontsource-variable/noto-sans-tc";
 @import "tailwindcss";
-
 @theme {
-  /* 色彩：專業 navy + 藍色 CTA，中性淡色背景 */
-  --color-background: #f8fafc;
-  --color-foreground: #0f172a;
+  --color-background: #f6f7fb;
+  --color-foreground: #202237;
   --color-card: #ffffff;
-  --color-card-foreground: #0f172a;
-  --color-primary: #0369a1;
+  --color-card-foreground: #202237;
+  --color-popover: #ffffff;
+  --color-popover-foreground: #202237;
+  --color-primary: #7055d8;
   --color-primary-foreground: #ffffff;
-  --color-secondary: #334155;
-  --color-secondary-foreground: #ffffff;
-  --color-muted: #e8ecf1;
-  --color-muted-foreground: #64748b;
-  --color-accent: #0369a1;
-  --color-accent-foreground: #ffffff;
-  --color-border: #e2e8f0;
-  --color-ring: #0f172a;
-  --color-destructive: #dc2626;
+  --color-secondary: #f0edf9;
+  --color-secondary-foreground: #5945aa;
+  --color-muted: #f0f2f7;
+  --color-muted-foreground: #626b80;
+  --color-accent: #f1edfc;
+  --color-accent-foreground: #6348c5;
+  --color-border: #e3e6ef;
+  --color-input: #dce0ea;
+  --color-ring: #7055d8;
+  --color-destructive: #c53945;
   --color-destructive-foreground: #ffffff;
-
-  /* 健康度燈號（駕駛艙票 02 起沿用）：純規則判定，紅／黃／綠三態 */
-  --color-success: #16a34a;
-  --color-warning: #d97706;
-  --color-danger: #dc2626;
-
-  /* 異常警示區嚴重度（票 05-alerts-fuel-pipeline）：money_loss 用 --color-danger、
-   * rule_warning 用 --color-warning、informational 用 --color-muted-foreground——
-   * 只多補 irreversible 專用的橙色，其餘三色沿用既有 token，不重複定義。 */
-  --color-alert-irreversible: #ea580c;
-
-  /* 圖表分類色（票 03-cockpit-kpi-chart）：只分類（哪條線是哪個指標），不表數值
-   * 大小（規格圖表鐵則）。經 dataviz 技能包 validate_palette.js 驗證（light 模式，
-   * 對 --color-card 卡片底色）：CVD 相鄰對 ΔE、正常視力門檻、對比皆過。 */
-  --color-chart-revenue: var(--color-primary);
-  --color-chart-spend: #b45309;
-
-  /* 字體：Calistoga 做大標題、Inter 做內文與介面文字 */
-  --font-display: "Calistoga", "Inter", ui-sans-serif, system-ui, sans-serif;
-  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
-
-  /* 圓角 */
-  --radius-sm: 0.375rem;
-  --radius-md: 0.5rem;
-  --radius-lg: 0.75rem;
-  /* V3 流體卡片語彙（GRILL-B4R-performance.md R1-3，票 v3-fluid-cards）：卡片殼比既有
-   * --radius-lg 更圓，只給 FluidCard 用，既有卡片維持 --radius-lg 不受影響。 */
-  --radius-xl: 1.25rem;
-
-  /* 陰影：卡片用極淺陰影，不做玻璃模糊 */
-  --shadow-card: 0 1px 2px 0 rgb(15 23 42 / 0.04), 0 1px 3px 0 rgb(15 23 42 / 0.06);
-  /* FluidCard 深度：hover／展開時陰影加深，視覺參考 v3-fluid-cards.html 的 --shadow-card-hover。 */
-  --shadow-card-hover: 0 2px 4px 0 rgb(15 23 42 / 0.06), 0 12px 28px 0 rgb(15 23 42 / 0.10);
-
-  /* 版面：流體殼，寬到 1920px 為止，1024px 以上都堪用（ADR 0051） */
+  --color-success: #238169;
+  --color-warning: #a96711;
+  --color-danger: #c53945;
+  --color-alert-irreversible: #ba591c;
+  --color-chart-revenue: #7055d8;
+  --color-chart-spend: #397cda;
+  --color-chart-aqua: #2ea7af;
+  --color-chart-soft: #a397e9;
+  --color-chart-rest: #8892a8;
+  --font-display: "Inter Variable", "Noto Sans TC Variable", "Microsoft JhengHei", sans-serif;
+  --font-sans: "Inter Variable", "Noto Sans TC Variable", "Microsoft JhengHei", sans-serif;
+  --radius-sm: .375rem;
+  --radius-md: .5rem;
+  --radius-lg: .75rem;
+  --radius-xl: .875rem;
+  --shadow-card: 0 2px 6px rgb(32 34 55 / .025);
+  --shadow-card-hover: 0 6px 20px rgb(32 34 55 / .06);
   --width-shell: 1920px;
-  --width-sidebar: 15rem;
-  --height-topbar: 3.75rem;
-
-  /* 版面：殼的寬度不是內容的寬度。單欄內容超過這個寬度就變成「文件」而不是「儀表板」
-     （憲法 12／ADR 0051 規則 4，票 u2-fluid-shell-to-1920 §6）。 */
-  --width-prose: 68ch;    /* 連續閱讀的段落 */
-  --width-form:  42rem;   /* 單欄表單欄位 */
-  /* 包住單欄表單的卡片寫 `max-w-[calc(var(--width-form)+2rem)]`——欄位上限＋左右各 1rem 的
-     `p-4`，是算出來的不是猜的。只夾欄位、不夾卡片，卡片會留在原寬度，右邊空出一大片白
-     （走查在排程頁量到卡片 1616px、右側 927px 純白，因此擋下第二輪）。 */
+  --width-sidebar: 232px;
+  --height-topbar: 64px;
+  --width-prose: 68ch;
+  --width-form: 42rem;
 }
-
-:root {
-  color-scheme: light;
+:root { color-scheme: light; --radius: .75rem; }
+html, body, #root { min-height: 100%; height: 100%; }
+body { margin: 0; background: var(--color-background); color: var(--color-foreground); font-family: var(--font-sans); font-size: 14px; -webkit-font-smoothing: antialiased; }
+::selection { background: #e5defb; color: var(--color-foreground); }
+button, a, input, textarea, select { -webkit-tap-highlight-color: transparent; }
+button:not(:disabled), select, summary { cursor: pointer; }
+input, textarea { caret-color: var(--color-primary); }
+:focus-visible { outline: 2px solid var(--color-ring); outline-offset: 3px; }
+button, a, input, select, textarea { transition: background-color 150ms, color 150ms, border-color 150ms, box-shadow 150ms; }
+button:disabled { cursor: not-allowed; }
+h1, h2, h3, p { overflow-wrap: anywhere; }
+h1 { font-weight: 650; letter-spacing: -.025em; }
+h2, h3 { font-weight: 600; }
+svg { flex-shrink: 0; }
+@layer base {
+  * { border-color: var(--color-border); }
+  select { border: 1px solid var(--color-input); border-radius: var(--radius-md); padding: .5rem .75rem; background-color: var(--color-card); min-height: 36px; max-width: 100%; }
+  input:not([type="checkbox"]):not([type="radio"]):not([type="file"]), textarea { border-color: var(--color-input); background-color: var(--color-card); }
+  input[type="checkbox"], input[type="radio"] { accent-color: var(--color-primary); width: 15px; height: 15px; }
+  table { width: 100%; font-variant-numeric: tabular-nums; }
+  th { font-size: 12px; font-weight: 500; background: var(--color-background); color: var(--color-muted-foreground); }
+  th, td { padding: 13px 16px; }
+  tbody tr { transition: background-color 150ms; }
+  tbody tr:hover { background: #f9f8fd; }
+  summary { list-style-position: inside; padding: .5rem 0; }
 }
-
-html,
-body,
-#root {
-  height: 100%;
-  overflow: hidden;
+.app-shell { max-width: var(--width-shell); min-height: 100dvh; margin: 0 auto; display: flex; }
+.app-sidebar { width: var(--width-sidebar); flex-shrink: 0; background: var(--color-card); border-right: 1px solid var(--color-border); height: 100dvh; position: sticky; top: 0; display: flex; flex-direction: column; padding: 24px 16px 16px; }
+.app-sidebar.is-collapsed { width: 76px; padding-inline: 12px; }
+.app-workspace { flex: 1; min-width: 0; }
+.app-topbar { height: var(--height-topbar); padding: 0 28px; display: flex; align-items: center; justify-content: space-between; gap: 16px; background: var(--color-card); border-bottom: 1px solid var(--color-border); position: sticky; top: 0; z-index: 20; }
+.app-main { padding: 28px; min-width: 0; }
+.app-main > div > nav[aria-label="麵包屑"] { display: none; }
+.nav-item { display: flex; align-items: center; gap: 12px; min-height: 42px; padding: 10px 12px; border-radius: 7px; color: #434a5e; font-size: 14px; font-weight: 500; }
+.nav-item:hover { background: var(--color-muted); }
+.nav-item[aria-current="page"] { background: var(--color-accent); color: var(--color-accent-foreground); }
+.nav-item svg { width: 19px; height: 19px; stroke-width: 1.7; }
+.nav-group-label { font-size: 11px; font-weight: 500; color: var(--color-muted-foreground); padding: 0 12px; margin: 24px 0 9px; }
+.page-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-bottom: 4px; }
+.page-heading h1 { font-size: 26px; line-height: 1.4; }
+.surface { background: var(--color-card); border: 1px solid var(--color-border); border-radius: 12px; min-width: 0; }
+.surface-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 20px 22px 14px; }
+.surface-header h2 { font-size: 15px; font-weight: 600; }
+.surface-body { padding: 0 22px 20px; }
+.page-tabs { display: flex; align-items: center; gap: 4px; padding: 4px; width: fit-content; max-width: 100%; border: 1px solid var(--color-border); border-radius: 8px; background: #eef0f6; flex-wrap: wrap; }
+.page-tab { display: inline-flex; gap: 8px; align-items: center; padding: 7px 14px; border-radius: 5px; font-size: 13px; font-weight: 500; color: var(--color-muted-foreground); white-space: nowrap; }
+.page-tab[aria-pressed="true"] { background: white; color: var(--color-primary); box-shadow: 0 1px 3px #2022370a; }
+.page-tab:hover { color: var(--color-foreground); }
+.workspace-split { display: grid; grid-template-columns: 188px minmax(0, 1fr); gap: 24px; align-items: start; }
+.workspace-subnav { display: flex; flex-direction: column; gap: 4px; padding: 8px; background: white; border: 1px solid var(--color-border); border-radius: 10px; position: sticky; top: 88px; }
+.workspace-subnav button { padding: 10px 12px; border-radius: 6px; text-align: left; display: flex; gap: 8px; align-items: center; font-weight: 500; font-size: 13px; }
+.workspace-subnav button[aria-pressed="true"] { color: var(--color-primary); background: var(--color-accent); }
+.workspace-content, .workspace-content > section { min-width: 0; }
+.table-surface { overflow-x: auto; background: white; border: 1px solid var(--color-border); border-radius: 10px; }
+.empty-state { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 200px; padding: 32px 24px; text-align: center; }
+.empty-state p { max-width: 48ch; }
+.metric-number { font-size: clamp(22px, 1.8vw, 32px); letter-spacing: -.035em; font-weight: 600; line-height: 1.25; font-variant-numeric: tabular-nums; }
+.dashboard-metrics { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 16px; }
+.dashboard-grid { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 20px; align-items: stretch; }
+.dashboard-widget { position: relative; grid-column: span 6; min-width: 0; }
+.dashboard-widget .surface-header { padding-right: 42px; }
+.dashboard-widget[data-width="wide"] { grid-column: span 8; }
+.dashboard-widget[data-width="narrow"] { grid-column: span 4; }
+.dashboard-widget[data-width="full"] { grid-column: 1 / -1; }
+.widget-dragging { opacity: .5; }
+.chart-bar { height: 9px; border-radius: 3px; }
+.numeric { font-variant-numeric: tabular-nums; }
+.form-section { max-width: 760px; }
+.intake-workspace { width: 100%; max-width: 1240px; margin: 0 auto; }
+.auth-layout { min-height: 100dvh; display: grid; grid-template-columns: 1fr 1fr; background: white; }
+.auth-aside { background: #f0edf9; padding: 64px; display: flex; flex-direction: column; justify-content: space-between; }
+@media (max-width: 1279px) {
+  :root { --width-sidebar: 208px; }
+  .app-main { padding: 22px; }
+  .app-topbar { padding-inline: 22px; }
+  .dashboard-metrics { gap: 10px; }
+  .dashboard-grid { gap: 16px; }
+  .workspace-split { grid-template-columns: 160px minmax(0, 1fr); gap: 16px; }
+  .surface-header { padding: 16px 16px 12px; }
+  .surface-body { padding: 0 16px 16px; }
 }
-
-body {
-  @apply bg-background text-foreground font-sans antialiased;
+@media (max-width: 1100px) {
+  .dashboard-metrics { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+  .dashboard-metrics article { padding: 16px 12px; }
+  .dashboard-metrics .metric-number { font-size: 22px; }
+  .dashboard-widget[data-width="narrow"], .dashboard-widget[data-width="wide"] { grid-column: span 6; }
+  .auth-aside { padding: 36px; }
 }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; scroll-behavior: auto !important; } }
+@media print { .app-sidebar, .app-topbar, .print-hidden { display: none !important; } .app-main { padding: 0; } .app-shell { display: block; } body { background: white; } }
+

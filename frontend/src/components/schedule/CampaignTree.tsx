@@ -1,157 +1,114 @@
 import { useState } from "react";
+import { ChevronRight, Layers3 } from "lucide-react";
 import { CopyIconButton } from "@/components/layout/CopyIconButton";
+import { EmptyState } from "@/components/layout/EmptyState";
+import { Button } from "@/components/layout/ui/button";
+import { Badge } from "@/components/layout/ui/badge";
 import { formatCurrency } from "@/lib/format";
-import type {
-  CampaignTreeNode,
-  CampaignTreeResult,
-  CreativeAd,
-  CreativeCoordinates,
-  CreativeResult,
-  ScheduleApproval,
-} from "@/lib/scheduleApi";
+import type { CampaignTreeNode, CampaignTreeResult, CreativeAd, CreativeCoordinates, CreativeResult, ScheduleApproval } from "@/lib/scheduleApi";
 
-/** 票 T1：座標七個鍵的顯示順序與中文標籤——外殼不懂詞彙表裡的「值」合不合法，這裡只是
- * 把 `CONSTITUTION.md` 規則 5 的七個英文鍵名翻成使用者看得懂的字，不是業務判斷。 */
 const COORDINATE_LABELS: [keyof CreativeCoordinates, string][] = [
-  ["audience", "受眾"],
-  ["pain", "痛點"],
-  ["angle", "角度"],
-  ["hook", "鉤子"],
-  ["proof", "證明"],
-  ["offer", "優惠"],
-  ["format", "格式"],
+  ["audience", "受眾"], ["pain", "痛點"], ["angle", "角度"], ["hook", "鉤子"],
+  ["proof", "證明"], ["offer", "優惠"], ["format", "格式"],
 ];
 
-/** 票 09：把選定的方案展開成使用者接下來要打造的結構。這支元件不知道任何投放通路的
- * 詞彙——有幾層、每層叫什麼、扛預算的是哪一層，全部來自代理回覆的 `levels`／`share`，
- * 不是這裡寫死的（機器閘門：`app/tests/test_schedule.py` 會逐字掃這個檔案，出現任何
- * 通路詞彙就紅）。之後要多支援一個通路＝加一個部門任務檔，不是改這支元件。
- * 票 11：加一顆「配對」按鈕，把手動發布出去的第一層節點跟通路那邊的實際成果接起來
- * ——名字對不上（零筆或兩筆以上都算）就顯示後端給的那句失敗訊息，不提供挑選、不猜。
- * 票 01：加一顆「產素材」按鈕，把每個最深層節點各配一份內容——這支元件一樣不知道那份
- * 內容裡有哪些欄位（`label` 由部門任務檔決定），只按 `node` 名稱對回樹上的節點、把
- * `fields` 原樣列出來，機器閘門的字面比對同樣蓋到這個檔案。
- * 票 01（`.scratch/approval-slice/issues/01-approval-is-the-money-brake.md`，ADR 0040）：
- * 加一顆「核准」／「重新核准」按鈕跟一顆「撤回」——這是花錢煞車，但這支元件不假裝它擋
- * 得住什麼：今天沒有任何一步是因為核准而被擋下來的，因為系統還不會自己發布，畫面只說
- * 「已核准」，不說「已解鎖」／「可以投放了」。 */
-export function CampaignTree({
-  tree,
-  binding,
-  bindError,
-  onBind,
-  approving,
-  approveError,
-  onApprove,
-  revoking,
-  revokeError,
-  onRevoke,
-  creative,
-  generatingCreative,
-  creativeError,
-  onGenerateCreative,
-}: {
-  tree: CampaignTreeResult;
-  binding: boolean;
-  bindError: string | null;
-  onBind: () => void;
-  approving: boolean;
-  approveError: string | null;
-  onApprove: () => void;
-  revoking: boolean;
-  revokeError: string | null;
-  onRevoke: () => void;
-  creative: CreativeResult | null;
-  generatingCreative: boolean;
-  creativeError: string | null;
-  onGenerateCreative: () => void;
-}) {
-  if (tree.failure) {
-    return (
-      <div className="rounded-md border border-danger/40 bg-card p-4 shadow-[var(--shadow-card)]">
-        <h2 className="mb-1 font-display text-lg text-foreground">展開結果</h2>
-        <p className="text-sm text-danger">{tree.failure}</p>
-      </div>
-    );
-  }
-
-  const adsByNode = new Map<string, CreativeAd>((creative?.ads ?? []).map((ad) => [ad.node, ad]));
-
-  return (
-    <div className="rounded-md border border-border bg-card p-4 shadow-[var(--shadow-card)]">
-      <div className="mb-3 flex items-center justify-between gap-2">
-        <h2 className="font-display text-lg text-foreground">展開結果</h2>
-        <div className="flex items-center gap-3">
-          <button
-            type="button"
-            onClick={onBind}
-            disabled={binding}
-            className="rounded-md border border-primary px-2.5 py-1 text-sm font-medium text-primary hover:bg-primary/10 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {binding ? "配對中…" : "配對"}
-          </button>
-          {/* 超過核准當時的每日上限也要出得來這顆鈕：`within_approved_ceiling` 為 false 時
-              下面的 ApprovalStatus 已經寫著「需要重新核准」，但「總額調高、結構沒變」正好
-              `matches_current_tree` 還是 true，鈕就不出現，使用者只剩「先撤回再核准」這條
-              猜不到的路。這裡只是多一個 OR，M2 禁止動的結構閘門本身一個字都沒改；後端
-              `_run_approve` 本來就接受重複核准（每次一列新的，上限＝當下總額）。 */}
-          {(tree.approval === null
-            || !tree.approval.matches_current_tree
-            || !tree.approval.within_approved_ceiling) && (
-            <button
-              type="button"
-              onClick={onApprove}
-              disabled={approving}
-              className="rounded-md border border-primary px-2.5 py-1 text-sm font-medium text-primary hover:bg-primary/10 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {approving ? "核准中…" : tree.approval === null ? "核准" : "重新核准"}
-            </button>
-          )}
-          <button
-            type="button"
-            onClick={onGenerateCreative}
-            disabled={generatingCreative || Boolean(creative?.running)}
-            className="rounded-md border border-primary px-2.5 py-1 text-sm font-medium text-primary hover:bg-primary/10 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {generatingCreative || creative?.running ? "產出中…" : "產素材"}
-          </button>
-          <label
-            title="尚未開放：確認送出結構之前一律由人工操作"
-            className="flex cursor-not-allowed items-center gap-1.5 text-sm text-muted-foreground opacity-60"
-          >
-            <input type="checkbox" disabled />
-            自動送出
-          </label>
-        </div>
-      </div>
-      {(bindError ?? tree.bind_failure) && (
-        <p className="mb-3 text-sm text-danger">{bindError ?? tree.bind_failure}</p>
-      )}
-      {approveError && <p className="mb-3 text-sm text-danger">{approveError}</p>}
-      {revokeError && <p className="mb-3 text-sm text-danger">{revokeError}</p>}
-      {tree.approval && (
-        <ApprovalStatus approval={tree.approval} revoking={revoking} onRevoke={onRevoke} />
-      )}
-      <p className="mb-3 text-xs text-muted-foreground">
-        核准不會自動發布——今天沒有任何一步會因為核准而被擋下來，投放仍由人工在通路自己的後台操作。
-      </p>
-      {(creativeError ?? creative?.failure) && (
-        <p className="mb-3 text-sm text-danger">{creativeError ?? creative?.failure}</p>
-      )}
-      {creative?.running && (
-        <p className="mb-3 rounded-md border border-dashed border-border bg-muted/40 p-2 text-xs text-muted-foreground">
-          產出中…這一步可能要幾分鐘，可以先離開這一頁，回來會自己接上。
-        </p>
-      )}
-      <div className="flex flex-col gap-2">
-        {tree.nodes.map((node, i) => (
-          <TreeNode key={i} node={node} depth={0} levels={tree.levels} adsByNode={adsByNode} />
-        ))}
-      </div>
-    </div>
-  );
+interface NodeEntry { node: CampaignTreeNode; path: string; depth: number }
+function flattenNodes(nodes: CampaignTreeNode[], parent = "", depth = 0): NodeEntry[] {
+  return nodes.flatMap((node, index) => {
+    const path = parent ? `${parent}.${index}` : String(index);
+    return [{ node, path, depth }, ...flattenNodes(node.children, path, depth + 1)];
+  });
 }
 
+/** 層級與欄位名稱完全由服務提供；只以節點路徑管理選取與收合。 */
+export function CampaignTree({ tree, binding, bindError, onBind, approving, approveError, onApprove, revoking, revokeError, onRevoke, creative, generatingCreative, creativeError, onGenerateCreative }: {
+  tree: CampaignTreeResult;
+  binding: boolean; bindError: string | null; onBind: () => void;
+  approving: boolean; approveError: string | null; onApprove: () => void;
+  revoking: boolean; revokeError: string | null; onRevoke: () => void;
+  creative: CreativeResult | null; generatingCreative: boolean; creativeError: string | null; onGenerateCreative: () => void;
+}) {
+  const [selectedPath, setSelectedPath] = useState("0");
+  const entries = flattenNodes(tree.nodes);
+  const selected = entries.find((entry) => entry.path === selectedPath) ?? entries[0];
+  // 前一棵樹的內容不能僅因為節點同名就套到新樹。
+  const matchingCreative = creative?.source_tree_task_id === tree.task_id ? creative : null;
+  const adsByNode = new Map<string, CreativeAd>((matchingCreative?.ads ?? []).map((item) => [item.node, item]));
+  const busy = binding || approving || revoking;
+
+  if (tree.failure) return <div role="alert" className="surface p-5"><h2 className="mb-2 text-base">展開結果</h2><p className="text-sm text-danger">{tree.failure}</p><p className="mt-3 text-sm text-muted-foreground">回到方案比較，可重新選擇方案並展開。</p></div>;
+
+  return <div className="flex flex-col gap-5">
+    <section className="surface">
+      <div className="surface-header flex-wrap">
+        <h2>展開結果</h2>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button type="button" variant="outline" onClick={onBind} disabled={busy}>{binding ? "配對中…" : "配對"}</Button>
+          {(tree.approval === null || !tree.approval.matches_current_tree || !tree.approval.within_approved_ceiling) && <Button type="button" variant="outline" onClick={onApprove} disabled={busy}>{approving ? "核准中…" : tree.approval === null ? "核准" : "重新核准"}</Button>}
+          <Button type="button" onClick={onGenerateCreative} disabled={busy || generatingCreative || Boolean(creative?.running)}>{generatingCreative || creative?.running ? "產出中…" : "產素材"}</Button>
+          <label title="尚未開放：確認送出結構之前一律由人工操作" className="ml-2 flex items-center gap-2 text-xs text-muted-foreground"><input type="checkbox" disabled />自動送出尚未開放</label>
+        </div>
+      </div>
+      <div className="surface-body flex flex-col gap-3">
+        {(bindError ?? tree.bind_failure) && <p role="alert" className="text-sm text-danger">{bindError ?? tree.bind_failure}</p>}
+        {approveError && <p role="alert" className="text-sm text-danger">{approveError}</p>}
+        {revokeError && <p role="alert" className="text-sm text-danger">{revokeError}</p>}
+        {tree.approval && <ApprovalStatus approval={tree.approval} revoking={revoking} onRevoke={onRevoke} />}
+        <p className="text-xs leading-6 text-muted-foreground">核准不會自動發布；投放仍由人工在通路自己的後台操作。</p>
+        {(creativeError ?? matchingCreative?.failure) && <p role="alert" className="text-sm text-danger">{creativeError ?? matchingCreative?.failure}</p>}
+        {creative && !matchingCreative && <p className="text-xs leading-6 text-warning">既有素材屬於先前的投放結構，請為目前結構重新產素材。</p>}
+        {matchingCreative?.running && <p role="status" className="text-xs text-muted-foreground">素材產出中，可以先離開，回來會接續顯示。</p>}
+      </div>
+    </section>
+    {entries.length === 0 ? <div className="surface"><EmptyState title="目前沒有可檢視的節點" description="回到方案比較，選擇方案並重新展開。" /></div> : <div className="surface grid grid-cols-[minmax(220px,0.7fr)_minmax(0,1.3fr)] overflow-hidden">
+      <nav aria-label="投放結構節點" className="min-w-0 border-r border-border">
+        <div className="flex items-center justify-between gap-2 border-b border-border px-5 py-4"><span className="text-sm font-semibold">結構節點</span><span className="text-xs text-muted-foreground">{entries.length} 個</span></div>
+        <ul className="max-h-[65vh] overflow-auto py-2">{tree.nodes.map((node, index) => <NodeBranch key={index} node={node} path={String(index)} depth={0} levels={tree.levels} selectedPath={selected?.path ?? ""} onSelect={setSelectedPath} />)}</ul>
+      </nav>
+      <div className="min-w-0">{selected && <NodeDetail key={selected.path} entry={selected} levels={tree.levels} ad={selected.node.children.length === 0 ? adsByNode.get(selected.node.name) : undefined} onSelectChild={(index) => setSelectedPath(`${selected.path}.${index}`)} />}</div>
+    </div>}
+  </div>;
+}
+
+function NodeBranch({ node, path, depth, levels, selectedPath, onSelect }: {
+  node: CampaignTreeNode; path: string; depth: number; levels: string[]; selectedPath: string; onSelect: (path: string) => void;
+}) {
+  const [expanded, setExpanded] = useState(true);
+  const hasChildren = node.children.length > 0;
+  return <li>
+    <div className={`flex items-start gap-1 pr-3 ${selectedPath === path ? "bg-accent/65" : ""}`} style={{ paddingLeft: 8 + Math.min(depth, 8) * 12 }}>
+      {hasChildren ? <button type="button" className="mt-2.5 rounded p-1 text-muted-foreground hover:bg-muted" aria-label={`${expanded ? "收合" : "展開"} ${node.name}`} aria-expanded={expanded} onClick={() => setExpanded(!expanded)}><ChevronRight className={`size-3.5 ${expanded ? "rotate-90" : ""}`} aria-hidden="true" /></button> : <span className="w-[22px] shrink-0" />}
+      <button type="button" aria-pressed={selectedPath === path} onClick={() => onSelect(path)} className="flex min-w-0 flex-1 flex-col gap-1 py-3 text-left">
+        <span className="text-xs text-muted-foreground">{levels[depth] ?? `第 ${depth + 1} 層`}</span>
+        <span className="break-words text-sm font-medium leading-5">{node.name}</span>
+        {node.warnings.length > 0 && <span className="text-xs text-warning">提醒 {node.warnings.length}</span>}
+      </button>
+    </div>
+    {hasChildren && expanded && <ul>{node.children.map((child, index) => <NodeBranch key={index} node={child} path={`${path}.${index}`} depth={depth + 1} levels={levels} selectedPath={selectedPath} onSelect={onSelect} />)}</ul>}
+  </li>;
+}
+
+function NodeDetail({ entry, levels, ad, onSelectChild }: { entry: NodeEntry; levels: string[]; ad?: CreativeAd; onSelectChild: (index: number) => void }) {
+  const { node, depth } = entry;
+  const [coordinatesOpen, setCoordinatesOpen] = useState(false);
+  return <section aria-label="節點詳情" className="flex flex-col gap-6 p-6">
+    <div><Badge variant="secondary">{levels[depth] ?? `第 ${depth + 1} 層`}</Badge><h2 className="mt-3 text-lg leading-7">{node.name}</h2></div>
+    {(node.share !== null || (depth === 0 && node.bound_external_id !== null)) && <dl className="grid grid-cols-2 gap-x-5 gap-y-4 border-y border-border py-4">
+      {node.share !== null && <div><dt className="text-xs text-muted-foreground">預算比例</dt><dd className="mt-1 text-xl font-semibold numeric">{(node.share * 100).toFixed(0)}%</dd></div>}
+      {node.share !== null && node.daily_amount !== null && <div><dt className="text-xs text-muted-foreground">每日金額</dt><dd className="mt-1 text-xl font-semibold numeric">{formatCurrency(node.daily_amount)}</dd></div>}
+      {depth === 0 && node.bound_external_id !== null && <><div><dt className="text-xs text-muted-foreground">花費</dt><dd className="mt-1 text-xl font-semibold numeric">{formatCurrency(node.spend)}</dd></div><div><dt className="text-xs text-muted-foreground">ROAS</dt><dd className="mt-1 text-xl font-semibold numeric">{node.roas === null ? "未追蹤" : `${node.roas.toFixed(2)}x`}</dd></div></>}
+    </dl>}
+    {node.fields.length > 0 && <dl className="flex flex-col gap-4">{node.fields.map((field, index) => <div key={index}><dt className="mb-1 text-xs text-muted-foreground">{field.label}</dt><dd className="whitespace-pre-wrap text-sm leading-7">{field.value}</dd></div>)}</dl>}
+    {node.warnings.length > 0 && <div className="rounded-lg bg-warning/5 p-4"><h3 className="mb-2 text-sm text-warning">節點提醒</h3><ul className="list-disc space-y-2 pl-4 text-sm leading-6 text-warning">{node.warnings.map((warning, index) => <li key={index}>{warning}</li>)}</ul></div>}
+    {node.children.length > 0 && <div className="border-t border-border pt-5"><h3 className="mb-3 text-sm">下層節點</h3><div className="flex flex-col gap-2">{node.children.map((child, index) => <Button key={index} type="button" variant="outline" className="h-auto justify-between whitespace-normal py-3 text-left" onClick={() => onSelectChild(index)}><span>{child.name}</span><ChevronRight className="size-4" aria-hidden="true" /></Button>)}</div></div>}
+    {ad && <div className="flex flex-col gap-5 border-t border-border pt-5">
+      <div className="flex flex-wrap items-center justify-between gap-3"><h3 className="flex items-center gap-2 text-sm"><Layers3 className="size-4" aria-hidden="true" />節點內容</h3><Button type="button" variant="ghost" size="sm" onClick={() => setCoordinatesOpen(!coordinatesOpen)} aria-expanded={coordinatesOpen}>{coordinatesOpen ? "收起座標" : "這則內容打的座標"}</Button></div>
+      {coordinatesOpen && <dl className="grid grid-cols-2 gap-3 rounded-lg bg-muted/50 p-4">{COORDINATE_LABELS.map(([key, label]) => <div key={key}><dt className="text-xs text-muted-foreground">{label}</dt><dd className="mt-1 text-sm">{ad.coordinates[key] ?? "—"}</dd></div>)}</dl>}
+      {ad.fields.map((field, index) => <div key={index} className="flex flex-col gap-2"><h4 className="text-xs text-muted-foreground">{field.label}</h4>{field.value.map((variant, variantIndex) => <div key={variantIndex} className="flex items-start gap-3 border-b border-border pb-3 last:border-b-0"><p className="min-w-0 flex-1 whitespace-pre-wrap text-sm leading-7">{variant}</p><CopyIconButton getText={() => variant} ariaLabel={`複製${field.label}第${variantIndex + 1}個變體`} /></div>)}</div>)}
+      {ad.warnings.length > 0 && <ul className="list-disc space-y-2 rounded-lg bg-warning/5 py-3 pl-8 pr-4 text-sm leading-6 text-warning">{ad.warnings.map((warning, index) => <li key={index}>{warning}</li>)}</ul>}
+    </div>}
+  </section>;
+}
 function formatApprovedDate(iso: string): string {
   const d = new Date(iso);
   return `${d.getMonth() + 1} 月 ${d.getDate()} 日`;
@@ -217,120 +174,4 @@ function ApprovalStatus({
   );
 }
 
-function TreeNode({
-  node,
-  depth,
-  levels,
-  adsByNode,
-}: {
-  node: CampaignTreeNode;
-  depth: number;
-  levels: string[];
-  adsByNode: Map<string, CreativeAd>;
-}) {
-  const ad = node.children.length === 0 ? adsByNode.get(node.name) : undefined;
-  const [warningsOpen, setWarningsOpen] = useState(false);
-  const [coordinatesOpen, setCoordinatesOpen] = useState(false);
-  const levelLabel = levels[depth] ?? `第 ${depth + 1} 層`;
 
-  return (
-    <div className="rounded-md border border-border p-3" style={{ marginLeft: depth * 20 }}>
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="rounded bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">{levelLabel}</span>
-        <span className="text-sm font-medium text-foreground">{node.name}</span>
-        {node.share !== null && (
-          <span className="text-sm text-foreground">
-            {(node.share * 100).toFixed(0)}%
-            {node.daily_amount !== null && `・每日 ${formatCurrency(node.daily_amount)}`}
-          </span>
-        )}
-        {depth === 0 && node.bound_external_id !== null && (
-          <span className="text-sm text-foreground">
-            花費 {formatCurrency(node.spend)}・ROAS {node.roas === null ? "未追蹤" : `${node.roas.toFixed(2)}x`}
-          </span>
-        )}
-        {node.warnings.length > 0 && (
-          <button
-            type="button"
-            onClick={() => setWarningsOpen((open) => !open)}
-            className="rounded-full bg-warning/15 px-2 py-0.5 text-xs font-medium text-warning hover:bg-warning/25"
-          >
-            提醒 {node.warnings.length}
-          </button>
-        )}
-      </div>
-
-      {node.fields.length > 0 && (
-        <dl className="mt-1.5 flex flex-wrap gap-x-4 gap-y-0.5 text-xs text-muted-foreground">
-          {node.fields.map((field, i) => (
-            <div key={i} className="flex gap-1">
-              <dt>{field.label}：</dt>
-              <dd className="text-foreground">{field.value}</dd>
-            </div>
-          ))}
-        </dl>
-      )}
-
-      {ad && (
-        <div className="mt-2 flex flex-col gap-1.5 border-t border-dashed border-border pt-2">
-          <button
-            type="button"
-            onClick={() => setCoordinatesOpen((open) => !open)}
-            className="self-start rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground hover:bg-muted/70"
-          >
-            {coordinatesOpen ? "收起座標" : "這則內容打的座標"}
-          </button>
-          {coordinatesOpen && (
-            <dl className="flex flex-wrap gap-x-4 gap-y-0.5 text-xs text-muted-foreground">
-              {COORDINATE_LABELS.map(([key, label]) => (
-                <div key={key} className="flex gap-1">
-                  <dt>{label}：</dt>
-                  <dd className="text-foreground">{ad.coordinates[key] ?? "—"}</dd>
-                </div>
-              ))}
-            </dl>
-          )}
-          {ad.fields.map((field, i) => (
-            <div key={i} className="flex items-start gap-2">
-              <span className="w-20 shrink-0 pt-0.5 text-xs text-muted-foreground">{field.label}</span>
-              <div className="flex flex-1 flex-col gap-1">
-                {field.value.map((variant, j) => (
-                  <div key={j} className="flex items-center gap-2">
-                    <span className="flex-1 text-sm text-foreground">{variant}</span>
-                    <CopyIconButton
-                      getText={() => variant}
-                      ariaLabel={`複製${field.label}第${j + 1}個變體`}
-                    />
-                  </div>
-                ))}
-              </div>
-            </div>
-          ))}
-          {ad.warnings.length > 0 && (
-            <ul className="flex flex-col gap-0.5 rounded-md bg-warning/10 px-2 py-1.5 text-xs text-warning">
-              {ad.warnings.map((warning, i) => (
-                <li key={i}>・{warning}</li>
-              ))}
-            </ul>
-          )}
-        </div>
-      )}
-
-      {warningsOpen && node.warnings.length > 0 && (
-        <ul className="mt-2 flex flex-col gap-0.5 rounded-md bg-warning/10 px-2 py-1.5 text-xs text-warning">
-          {node.warnings.map((warning, i) => (
-            <li key={i}>・{warning}</li>
-          ))}
-        </ul>
-      )}
-
-      {node.children.length > 0 && (
-        <div className="mt-2 flex flex-col gap-2">
-          {node.children.map((child, i) => (
-            <TreeNode key={i} node={child} depth={depth + 1} levels={levels} adsByNode={adsByNode} />
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}

@@ -12,14 +12,14 @@ export function SectionCard({
   children: ReactNode;
 }) {
   return (
-    <section className="flex flex-col gap-4 rounded-lg border border-border bg-card p-5 shadow-[var(--shadow-card)]">
-      <div className="flex flex-col gap-1">
-        <h2 className="font-display text-base text-foreground">{title}</h2>
+    <section className="surface">
+      <div className="surface-header !block border-b border-border !pb-5">
+        <h2 className="text-base text-foreground">{title}</h2>
         {description && (
-          <p className="max-w-[var(--width-prose)] text-sm text-muted-foreground">{description}</p>
+          <p className="mt-2 max-w-[var(--width-prose)] text-sm leading-6 text-muted-foreground">{description}</p>
         )}
       </div>
-      {children}
+      <div className="surface-body flex flex-col gap-5 !pt-5">{children}</div>
     </section>
   );
 }

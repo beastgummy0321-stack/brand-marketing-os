@@ -10,9 +10,7 @@ const SRC_DIR = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(SRC_DIR, "..", "..");
 
 const FILE_LINE_CAP = 800;
-const KNOWN_OVERSIZED_FILES: Record<string, number> = {
-  "frontend/src/components/schedule/SchedulePage.tsx": 851,
-};
+const KNOWN_OVERSIZED_FILES: Record<string, number> = {};
 
 function listSourceFiles(dir: string): string[] {
   const out: string[] = [];

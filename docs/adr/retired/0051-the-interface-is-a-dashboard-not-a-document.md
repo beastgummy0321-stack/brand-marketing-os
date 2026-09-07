@@ -3,10 +3,12 @@ id: 0051
 decision: The interface is a dashboard read at a glance, not a document read top to bottom; the shell is fluid up to 1920px.
 applies-to: [frontend/]
 supersedes: none
-status: in-force
+status: superseded-by: 0065
 ---
 
 # The interface is a dashboard, not a document
+
+_Status: retired 2026-09-07 by ADR 0065 — every rule below now lives in `docs/design-system.md`; the measurements stay here as history._
 
 **Supersedes, in prose because it has no ADR file:** 「決策 0038 純桌機 1440px」. It was never
 written down as an ADR — it was cited by ADR 0003 and three code comments and nothing else.

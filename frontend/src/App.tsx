@@ -1,7 +1,14 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { Link, Navigate, Outlet, Route, Routes, useParams, useSearchParams } from "react-router-dom";
+import {
+  Link,
+  Navigate,
+  Outlet,
+  Route,
+  Routes,
+  useParams,
+  useSearchParams,
+} from "react-router-dom";
 import { AppShell } from "@/components/layout/AppShell";
-import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { EmptyState } from "@/components/layout/EmptyState";
 import { AcceptInvitePage } from "@/components/auth/AcceptInvitePage";
 import { LoginPage } from "@/components/auth/LoginPage";
@@ -16,7 +23,12 @@ import { BrandReportPage } from "@/components/report/BrandReportPage";
 import { OrdersPage } from "@/components/orders/OrdersPage";
 import { SchedulePage } from "@/components/schedule/SchedulePage";
 import { SettingsPage } from "@/components/settings/SettingsPage";
-import { fetchOverview, type DashboardBrandCard } from "@/lib/api";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+  WorkspaceProvider,
+  useWorkspace,
+} from "@/components/layout/WorkspaceContext";
+import { PageHeader } from "@/components/layout/PageHeader";
 import { useSession } from "@/lib/auth";
 import { takePendingPath } from "@/lib/http";
 
@@ -45,8 +57,14 @@ function App() {
         <Route path="/brands/:brandId" element={<BrandRoute />} />
         <Route path="/brands/:brandId/intake" element={<IntakeRoute />} />
         <Route path="/brands/:brandId/library" element={<LibraryRoute />} />
-        <Route path="/brands/:brandId/products" element={<ProductListRoute />} />
-        <Route path="/brands/:brandId/products/:productId" element={<ProductDetailRoute />} />
+        <Route
+          path="/brands/:brandId/products"
+          element={<ProductListRoute />}
+        />
+        <Route
+          path="/brands/:brandId/products/:productId"
+          element={<ProductDetailRoute />}
+        />
         <Route path="/brands/:brandId/orders" element={<OrdersRoute />} />
         <Route path="/brands/:brandId/report" element={<BrandReportRoute />} />
         <Route path="/brands/:brandId/schedule" element={<ScheduleRoute />} />
@@ -67,7 +85,25 @@ function RequireSession() {
   if (!session) {
     return <Navigate to="/login" replace />;
   }
-  return <Outlet />;
+  return <AuthenticatedWorkspace key={session.user.id} />;
+}
+
+function AuthenticatedWorkspace() {
+  const [client] = useState(
+    () =>
+      new QueryClient({
+        defaultOptions: { queries: { retry: 1, staleTime: 30000 } },
+      }),
+  );
+  return (
+    <QueryClientProvider client={client}>
+      <WorkspaceProvider>
+        <AppShell>
+          <Outlet />
+        </AppShell>
+      </WorkspaceProvider>
+    </QueryClientProvider>
+  );
 }
 
 /** `/login`：已經登入的人不該停留在登入頁，轉去首頁（`useSession()` 收到
@@ -96,39 +132,41 @@ function RootRoute() {
   const [params] = useSearchParams();
   const legacyBrandId = params.get("brand");
   if (legacyBrandId) {
-    return <Navigate to={`/brands/${encodeURIComponent(legacyBrandId)}`} replace />;
+    return (
+      <Navigate to={`/brands/${encodeURIComponent(legacyBrandId)}`} replace />
+    );
   }
   return (
-    <AppShell brandId={null}>
+    <>
       <Overview />
-    </AppShell>
+    </>
   );
 }
 
 /** 收件匣（S2，票 B1-inbox）：跨品牌，不掛在 `/brands/:brandId` 之下。 */
 function InboxRoute() {
   return (
-    <AppShell brandId={null}>
+    <>
       <InboxPage />
-    </AppShell>
+    </>
   );
 }
 
 /** 設定（S15，票 B1-settings）：跨品牌，不掛在 `/brands/:brandId` 之下。 */
 function SettingsRoute() {
   return (
-    <AppShell brandId={null}>
+    <>
       <SettingsPage />
-    </AppShell>
+    </>
   );
 }
 
 function BrandRoute() {
   const { brandId } = useParams<{ brandId: string }>();
   return (
-    <AppShell brandId={brandId ?? null}>
+    <>
       <CockpitPage brandId={brandId ?? ""} />
-    </AppShell>
+    </>
   );
 }
 
@@ -136,24 +174,30 @@ function BrandRoute() {
  * 同一個精靈容器，差別只在 `brandId` 有沒有值。 */
 function IntakeNewRoute() {
   return (
-    <AppShell brandId={null}>
+    <>
       <div className="flex flex-col gap-4">
-        <Breadcrumb items={[{ label: "跨品牌總覽", href: "/" }, { label: "新增品牌" }]} />
+        <PageHeader
+          title="新增品牌"
+          description="建立品牌資料，讓後續的分析與規劃有據可循。"
+        />
         <IntakeWizard brandId={null} />
       </div>
-    </AppShell>
+    </>
   );
 }
 
 function IntakeRoute() {
   const { brandId } = useParams<{ brandId: string }>();
   return (
-    <AppShell brandId={brandId ?? null}>
+    <>
       <div className="flex flex-col gap-4">
-        <Breadcrumb items={[{ label: "跨品牌總覽", href: "/" }, { label: "建檔精靈" }]} />
+        <PageHeader
+          title="品牌建檔"
+          description="逐步補齊品牌資料與研究成果。"
+        />
         <IntakeWizard brandId={brandId ?? ""} />
       </div>
-    </AppShell>
+    </>
   );
 }
 
@@ -161,9 +205,9 @@ function IntakeRoute() {
 function LibraryRoute() {
   const { brandId } = useParams<{ brandId: string }>();
   return (
-    <AppShell brandId={brandId ?? null}>
+    <>
       <LibraryPage brandId={brandId ?? ""} />
-    </AppShell>
+    </>
   );
 }
 
@@ -171,28 +215,31 @@ function LibraryRoute() {
 function ProductListRoute() {
   const { brandId } = useParams<{ brandId: string }>();
   return (
-    <AppShell brandId={brandId ?? null}>
+    <>
       <ProductListPage brandId={brandId ?? ""} />
-    </AppShell>
+    </>
   );
 }
 
 /** 產品詳情（S6，票 B2-products）。 */
 function ProductDetailRoute() {
-  const { brandId, productId } = useParams<{ brandId: string; productId: string }>();
+  const { brandId, productId } = useParams<{
+    brandId: string;
+    productId: string;
+  }>();
   return (
-    <AppShell brandId={brandId ?? null}>
+    <>
       <ProductDetailPage brandId={brandId ?? ""} productId={productId ?? ""} />
-    </AppShell>
+    </>
   );
 }
 
 function OrdersRoute() {
   const { brandId } = useParams<{ brandId: string }>();
   return (
-    <AppShell brandId={brandId ?? null}>
+    <>
       <OrdersPage brandId={brandId ?? ""} />
-    </AppShell>
+    </>
   );
 }
 
@@ -200,9 +247,9 @@ function OrdersRoute() {
 function ScheduleRoute() {
   const { brandId } = useParams<{ brandId: string }>();
   return (
-    <AppShell brandId={brandId ?? null}>
+    <>
       <SchedulePage brandId={brandId ?? ""} />
-    </AppShell>
+    </>
   );
 }
 
@@ -210,47 +257,29 @@ function ScheduleRoute() {
 function BrandReportRoute() {
   const { brandId } = useParams<{ brandId: string }>();
   return (
-    <AppShell brandId={brandId ?? null}>
+    <>
       <BrandReportPage brandId={brandId ?? ""} />
-    </AppShell>
+    </>
   );
 }
 
 /** 跨品牌總覽首頁（票 02-overview-cards）：打儀表板 API，每個品牌一張卡。
  * 點卡進該品牌駕駛艙（票 03）。 */
-type LoadState =
-  | { status: "loading" }
-  | { status: "error"; message: string }
-  | { status: "ready"; cards: DashboardBrandCard[] };
-
 function Overview() {
-  const [state, setState] = useState<LoadState>({ status: "loading" });
-
-  useEffect(() => {
-    let cancelled = false;
-    fetchOverview()
-      .then((cards) => {
-        if (!cancelled) setState({ status: "ready", cards });
-      })
-      .catch((err: unknown) => {
-        if (!cancelled) {
-          setState({
-            status: "error",
-            message: err instanceof Error ? err.message : "讀取失敗，請稍後再試。",
-          });
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
+  const { brands, brandsLoading, brandsError, refreshBrands } = useWorkspace();
   let content: ReactNode;
-  if (state.status === "loading") {
+  if (brandsLoading) {
     content = <EmptyState title="讀取中…" description="正在載入各品牌總覽。" />;
-  } else if (state.status === "error") {
-    content = <EmptyState title="讀取失敗" description={state.message} />;
-  } else if (state.cards.length === 0) {
+  } else if (brandsError) {
+    content = (
+      <EmptyState
+        title="讀取失敗"
+        description={brandsError ?? "請稍後重試"}
+        onAction={refreshBrands}
+        actionLabel="重新載入"
+      />
+    );
+  } else if (brands.length === 0) {
     content = (
       <EmptyState
         title="還沒有任何品牌"
@@ -262,8 +291,8 @@ function Overview() {
     );
   } else {
     content = (
-      <div className="grid grid-cols-[repeat(auto-fit,minmax(280px,380px))] gap-4">
-        {state.cards.map((card) => (
+      <div className="grid grid-cols-2 xl:grid-cols-3 gap-5">
+        {brands.map((card) => (
           <BrandCard key={card.brand_id} card={card} />
         ))}
       </div>
@@ -273,7 +302,10 @@ function Overview() {
   return (
     <div className="flex flex-col gap-4">
       <div className="flex items-center justify-between">
-        <Breadcrumb items={[{ label: "跨品牌總覽" }]} />
+        <PageHeader
+          title="品牌總覽"
+          description="掌握每個品牌的近況，從這裡進入工作區。"
+        />
         <Link
           to="/intake/new"
           className="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:opacity-90"
