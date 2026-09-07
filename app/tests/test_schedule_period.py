@@ -21,6 +21,7 @@ test_approval.py 測過；這裡直接寫 `campaign_period`／`meta_entity_spend
 都各自「多動了一個 ticket 沒列的檔案」同一個模式（見 T3b 的 commit message）。
 """
 
+import json
 import unittest
 import uuid
 from datetime import date, timedelta
@@ -32,7 +33,12 @@ import app.schedule as schedule_module
 import app.shared.web as web
 from app.brand_intelligence import repository as bi_repo
 from app.core import db as coredb
+from app.core import rule_cards
+from app.identity import repository as identity_repo
 from app.meta import repository as meta_repo
+from app.schedule import repository as schedule_repo
+
+from .identity_test_helpers import mint_hs256
 
 ACTOR = "測試員"
 
@@ -104,10 +110,118 @@ class _PeriodTestBase(unittest.TestCase):
         web.conn.commit()
         return org_id
 
-    def _settle(self, brand_id: str, period_id: str):
+    def _settle(self, brand_id: str, period_id: str, headers: dict | None = None):
         return self.client.post(
-            f"/api/schedule/brands/{brand_id}/periods/{period_id}/settle", json={}
+            f"/api/schedule/brands/{brand_id}/periods/{period_id}/settle", json={},
+            headers=headers,
         )
+
+    def _make_org_with_token(self, suffix: str) -> tuple:
+        """A genuinely separate org this client can authenticate AS (not just an org_id
+        planted on a crafted row) -- same pattern as test_schedule.py's
+        `_ScheduleApiTestBase._make_org()`, needed because `self.client`'s dev token is
+        fixed to `coredb.DEV_ORG_ID` otherwise."""
+        org_id = self._make_org(suffix)
+        user_id = uuid.uuid4()
+        email = f"period-test-{suffix}-{user_id.hex[:8]}@example.com"
+        identity_repo.create_user(web.conn, user_id, email)
+        identity_repo.create_membership(web.conn, org_id, user_id, "owner")
+        web.conn.commit()
+        return org_id, mint_hs256(sub=str(user_id), email=email)
+
+    @staticmethod
+    def _headers(token: str, org_id: str) -> dict:
+        return {"Authorization": f"Bearer {token}", "X-Org-Id": org_id}
+
+    def _seed_adset_spend(self, org_id: str, account_id: str, entity_id: str, day: date,
+                           spend: float, roas: float | None) -> None:
+        """Ticket smart-loop 01: same shape as `_seed_spend()` but a caller-chosen
+        `entity_id` and `roas`, so scoring's conservative/optimistic ROAS split has a day
+        with a tracked ROAS and a day without."""
+        meta_repo.upsert_entity_spend(web.conn, org_id, account_id, [
+            {"level": "adset", "entity_id": entity_id, "entity_name": "廣告組合一",
+             "campaign_id": entity_id, "adset_id": entity_id, "ad_id": None,
+             "spend_date": day, "spend": spend, "impressions": 10, "clicks": 1, "roas": roas,
+             "actions": None, "action_values": None,
+             "attribution_window": "7d_click,1d_view"},
+        ])
+        web.conn.commit()
+
+    def _bind_scored_tree(self, org_id: str, brand_id: str, period_id: str, start: date,
+                           end: date, *, share: float = 1.0,
+                           external_id: str = "adset-scored") -> str:
+        """Direct-table equivalent of a succeeded schedule_tree llm_task row plus
+        binding.bind_tree() (this file's own '寫表不打真實網路' style; no such tree/bind
+        helper existed in this file before this ticket): a bound depth-1 campaign (gets no
+        period_node_result row), a bound depth-2 ad set at `external_id` (the node scoring
+        actually scores), and the period membership
+        bind_tree() would have written. Returns the tree's llm_task id."""
+        tree_id = coredb.new_id("llm")
+        nodes = [{
+            "name": "活動一", "fields": [], "share": None, "warnings": [],
+            "children": [{
+                "name": "組合一", "fields": [], "share": share, "warnings": [],
+                "children": [{"name": "單元一", "fields": [], "share": None, "warnings": [],
+                              "children": []}],
+            }],
+        }]
+        payload = {"levels": ["行銷活動", "廣告組合", "廣告"], "budget_level": 2, "nodes": nodes}
+        rendered = "說明文字。\n\n```json\n" + json.dumps(payload, ensure_ascii=False) + "\n```"
+        web.conn.execute(
+            "INSERT INTO llm_task (id, org_id, brand_id, task_type, context_scope_json,"
+            " input_context_ids_json, input_context_hash, knowledge_item_ids_json,"
+            " brand_version, prompt_template_id, prompt_template_version, provider, model,"
+            " status, attempt_no, started_at, rendered_output)"
+            " VALUES (%s, %s, %s, 'schedule_tree', %s, '[]', '', '[]', 1, 'p', 'v1', 'seed',"
+            " 'seed', 'succeeded', 1, %s, %s)",
+            (tree_id, org_id, brand_id,
+             coredb.jsonb({"daily_budget": 1000.0, "plan_index": 0}),
+             coredb.now_iso(), rendered),
+        )
+        channel_id = schedule_repo.ensure_meta_channel(web.conn, org_id)
+        schedule_repo.upsert_binding(
+            web.conn, org_id=org_id, brand_id=brand_id, channel_id=channel_id, node_key="1",
+            node_name_at_bind="活動一", external_id="camp-scored", external_status="ACTIVE",
+            source_tree_task_id=tree_id,
+        )
+        schedule_repo.upsert_binding(
+            web.conn, org_id=org_id, brand_id=brand_id, channel_id=channel_id,
+            node_key="1.1", node_name_at_bind="組合一", external_id=external_id,
+            external_status="ACTIVE", source_tree_task_id=tree_id,
+        )
+        schedule_repo.insert_period_node_membership(
+            web.conn, org_id=org_id, brand_id=brand_id, campaign_period_id=period_id,
+            channel_id=channel_id, node_key="1.1", from_date=start, to_date=end,
+            source_tree_task_id=tree_id,
+        )
+        web.conn.commit()
+        return tree_id
+
+    def _rebind_node_under_new_tree(self, org_id: str, brand_id: str, node_key: str,
+                                     node_name: str, external_id: str) -> None:
+        """Only a channel_entity_map row for a SECOND tree at the same node_key -- no
+        period_node_membership write, simulating a bind that happened while a different
+        period was 'latest' (schedule_repo.get_latest_period()). Fixture for the ticket's
+        contradiction-check trap: bindings_by_node_key()'s overlay would show this row;
+        bindings_for_tree(first_tree_id) must not."""
+        channel_id = schedule_repo.ensure_meta_channel(web.conn, org_id)
+        schedule_repo.upsert_binding(
+            web.conn, org_id=org_id, brand_id=brand_id, channel_id=channel_id,
+            node_key=node_key, node_name_at_bind=node_name, external_id=external_id,
+            external_status="ACTIVE", source_tree_task_id=coredb.new_id("llm"),
+        )
+        web.conn.commit()
+
+    def _prepare_scored_period(self, org_id: str, brand_id: str, start: date,
+                                end: date) -> tuple:
+        """Break-even 1.0 (a 100% margin -- the file's fixture path via the `gross_margin`
+        rule card, same shortcut the ticket's own plan review flagged for production data),
+        a bound Meta account, and one running period covering [start, end]."""
+        rule_cards.set_value(web.conn, brand_id, "gross_margin", "gross_margin_rate", 1.0,
+                              actor=ACTOR, org_id=org_id)
+        account_id = self._bind_account(org_id, brand_id)
+        period_id = self._insert_period(org_id=org_id, brand_id=brand_id, start=start, end=end)
+        return account_id, period_id
 
 
 class SettlementOwnershipSumTest(_PeriodTestBase):
@@ -218,6 +332,105 @@ class ResettlementAuditTest(_PeriodTestBase):
         self.assertAlmostEqual(float(audit_rows[0]["before_json"]["settled_spend"]), first_spend)
 
 
+class SettleScoresNodesTest(_PeriodTestBase):
+    """data correctness / money (ticket smart-loop 01, ADR 0066): settling a period scores
+    every bound depth-2/3 node against the break-even line; a depth-1 binding gets no row.
+
+    Red proof: comment out the `scoring_mod.score_period(...)` call in
+    `app/schedule/routes.py`'s `_run_settle()` -> `period_node_result` stays at zero rows ->
+    every assertion below that reads that table fails. Verified red before scoring.py was
+    wired into `_run_settle()`."""
+
+    def test_settle_scores_bound_node_and_skips_depth_one(self):
+        org_id = coredb.DEV_ORG_ID
+        brand_id = self.brand["id"]
+        start, end = date(2026, 8, 1), date(2026, 8, 5)
+        account_id, period_id = self._prepare_scored_period(org_id, brand_id, start, end)
+        self._bind_scored_tree(org_id, brand_id, period_id, start, end)
+        day_a, day_b = start, start + timedelta(days=1)
+
+        def _settled_row():
+            return web.conn.execute(
+                "SELECT * FROM period_node_result WHERE campaign_period_id = %s"
+                " AND node_key = '1.1'", (period_id,),
+            ).fetchone()
+
+        # day A spend 100 roas 3.0, day B spend 100 roas None -> conservative 1.5, optimistic
+        # 3.0, coverage 0.5 -> win against break-even 1.0.
+        self._seed_adset_spend(org_id, account_id, "adset-scored", day_a, 100.0, 3.0)
+        self._seed_adset_spend(org_id, account_id, "adset-scored", day_b, 100.0, None)
+        resp = self._settle(brand_id, period_id)
+        self.assertEqual(resp.status_code, 200, resp.text)
+
+        rows = list(web.conn.execute(
+            "SELECT node_key, depth FROM period_node_result WHERE campaign_period_id = %s",
+            (period_id,),
+        ))
+        self.assertEqual(rows, [{"node_key": "1.1", "depth": 2}])  # the depth-1 bind gets none
+        row = _settled_row()
+        self.assertAlmostEqual(float(row["actual_spend"]), 200.0, places=2)
+        self.assertAlmostEqual(float(row["roas_conservative"]), 1.5, places=4)
+        self.assertAlmostEqual(float(row["roas_optimistic"]), 3.0, places=4)
+        self.assertAlmostEqual(float(row["roas_coverage"]), 0.5, places=4)
+        self.assertEqual(row["verdict"], "win")
+
+        # day A roas 0.5 -> conservative 0.25, optimistic 0.5 < 1.0 -> lose.
+        self._seed_adset_spend(org_id, account_id, "adset-scored", day_a, 100.0, 0.5)
+        self.assertEqual(self._settle(brand_id, period_id).status_code, 200)
+        self.assertEqual(_settled_row()["verdict"], "lose")
+
+        # day A roas 1.2 -> conservative 0.6, optimistic 1.2 -> unclear. Catches a verdict
+        # computed from optimistic ROAS alone (cheapest-wrong-implementation trap (b)),
+        # which would call this a win.
+        self._seed_adset_spend(org_id, account_id, "adset-scored", day_a, 100.0, 1.2)
+        self.assertEqual(self._settle(brand_id, period_id).status_code, 200)
+        self.assertEqual(_settled_row()["verdict"], "unclear")
+
+        # remove both days -> actual_spend 0, verdict unclear, row still written.
+        web.conn.execute(
+            "DELETE FROM meta_entity_spend WHERE ad_account_id = %s AND entity_id = %s",
+            (account_id, "adset-scored"),
+        )
+        web.conn.commit()
+        self.assertEqual(self._settle(brand_id, period_id).status_code, 200)
+        row = _settled_row()
+        self.assertEqual(float(row["actual_spend"]), 0.0)
+        self.assertEqual(row["verdict"], "unclear")
+
+    def test_resettle_rewrites_one_row_and_keeps_naming_the_periods_own_tree(self):
+        org_id = coredb.DEV_ORG_ID
+        brand_id = self.brand["id"]
+        start, end = date(2026, 7, 1), date(2026, 7, 5)
+        account_id, period_id = self._prepare_scored_period(org_id, brand_id, start, end)
+        first_tree_id = self._bind_scored_tree(org_id, brand_id, period_id, start, end)
+        self._seed_adset_spend(org_id, account_id, "adset-scored", start, 100.0, 2.0)
+
+        resp = self._settle(brand_id, period_id)
+        self.assertEqual(resp.status_code, 200, resp.text)
+        first_settled_at = web.conn.execute(
+            "SELECT settled_at FROM period_node_result WHERE campaign_period_id = %s"
+            " AND node_key = '1.1'", (period_id,),
+        ).fetchone()["settled_at"]
+
+        # Cheapest-wrong-implementation trap (a): a second tree also binds "1.1", to a
+        # DIFFERENT external id, with a later created_at -- bindings_by_node_key()'s overlay
+        # would show this row; scoring must keep reading bindings_for_tree(first_tree_id),
+        # since this period's own membership was never rebound to the second tree.
+        self._rebind_node_under_new_tree(org_id, brand_id, "1.1", "組合一",
+                                          "adset-scored-from-a-later-tree")
+
+        resp = self._settle(brand_id, period_id)
+        self.assertEqual(resp.status_code, 200, resp.text)
+        rows = list(web.conn.execute(
+            "SELECT external_id, source_tree_task_id, settled_at FROM period_node_result"
+            " WHERE campaign_period_id = %s", (period_id,),
+        ))
+        self.assertEqual(len(rows), 1)  # still exactly one row per node
+        self.assertEqual(rows[0]["external_id"], "adset-scored")
+        self.assertEqual(rows[0]["source_tree_task_id"], first_tree_id)
+        self.assertNotEqual(rows[0]["settled_at"], first_settled_at)  # settled_at updated
+
+
 class SettleTenantIsolationTest(_PeriodTestBase):
     """tenant isolation：`brand_id` 是呼叫端自己組織的品牌（`require_brand` 過得了），
     但 `period_id` 是另一個組織的檔期——結算端點自己的 WHERE 必須擋下來，一律 404，
@@ -241,6 +454,59 @@ class SettleTenantIsolationTest(_PeriodTestBase):
             "SELECT * FROM audit_log WHERE entity_type = 'campaign_period' AND entity_id = %s",
             (period_id,),
         )), [])
+        # Ticket smart-loop 01 done-check 3: a 404'd settle scores nothing either.
+        self.assertEqual(list(web.conn.execute(
+            "SELECT * FROM period_node_result WHERE campaign_period_id = %s", (period_id,),
+        )), [])
+
+    def test_settling_org_bs_period_leaves_org_as_shared_external_id_node_unscored(self):
+        """Ticket smart-loop 01 done-check 3, contradiction check #1: Meta ids are global,
+        so two orgs' nodes can legitimately bind to the same literal external_id. Settling
+        org B's own period must not write a row for org A's node, and reading org A's own
+        period must return none of org B's spend -- seeding two DIFFERENT external ids would
+        leave this test unable to tell a real fix from a coincidence."""
+        org_a = coredb.DEV_ORG_ID
+        brand_a = self.brand["id"]
+        start, end = date(2026, 6, 1), date(2026, 6, 5)
+        shared_external_id = "shared-ext-id"
+        _account_a, period_a = self._prepare_scored_period(org_a, brand_a, start, end)
+        self._bind_scored_tree(org_a, brand_a, period_a, start, end,
+                                external_id=shared_external_id)
+
+        org_b, token_b = self._make_org_with_token("shared-ext-id-b")
+        brand_b = bi_repo.create_brand(
+            web.conn, org_id=org_b, name="測試品牌：跨組織同 external_id", client_name=None,
+            actor=ACTOR,
+        )["id"]
+        web.conn.commit()
+        account_b, period_b = self._prepare_scored_period(org_b, brand_b, start, end)
+        self._bind_scored_tree(org_b, brand_b, period_b, start, end,
+                                external_id=shared_external_id)
+        self._seed_adset_spend(org_b, account_b, shared_external_id, start, 999.0, 5.0)
+
+        # Org B settles its OWN period, genuinely authenticated as org B (self.client's
+        # fixed dev token is org A/DEV_ORG_ID) -- this succeeds, unlike the 404 test above.
+        resp_b = self._settle(brand_b, period_b, headers=self._headers(token_b, org_b))
+        self.assertEqual(resp_b.status_code, 200, resp_b.text)
+        b_row = web.conn.execute(
+            "SELECT actual_spend FROM period_node_result WHERE campaign_period_id = %s"
+            " AND node_key = '1.1'", (period_b,),
+        ).fetchone()
+        self.assertAlmostEqual(float(b_row["actual_spend"]), 999.0, places=2)
+
+        # Org A settles its own (still spend-less) period next -- org B's settle wrote
+        # nothing under org A's period_id, and org A's own read shows the real zero, not
+        # org B's 999.
+        self.assertEqual(list(web.conn.execute(
+            "SELECT * FROM period_node_result WHERE campaign_period_id = %s", (period_a,),
+        )), [])
+        resp_a = self._settle(brand_a, period_a)
+        self.assertEqual(resp_a.status_code, 200, resp_a.text)
+        a_row = web.conn.execute(
+            "SELECT actual_spend FROM period_node_result WHERE campaign_period_id = %s"
+            " AND node_key = '1.1'", (period_a,),
+        ).fetchone()
+        self.assertEqual(float(a_row["actual_spend"]), 0.0)
 
 
 class PeriodApiContractTest(_PeriodTestBase):
@@ -263,19 +529,23 @@ class PeriodApiContractTest(_PeriodTestBase):
         self.assertEqual(
             set(period.keys()),
             {"id", "name", "status", "start_date", "end_date", "daily_budget", "currency",
-             "settle_advice_date", "settled"},
+             "settle_advice_date", "settled", "node_results"},
         )
         self.assertIsNone(period["settled"])
+        self.assertEqual(period["node_results"], [])
 
         resp = self._settle(self.brand["id"], period_id)
         self.assertEqual(resp.status_code, 200, resp.text)
-        settled = resp.json()["period"]["settled"]
+        settled_period = resp.json()["period"]
+        settled = settled_period["settled"]
         self.assertEqual(
             set(settled.keys()),
             {"spend", "revenue", "settled_at", "late_spend_since", "late_revenue_since"},
         )
         self.assertEqual(settled["late_spend_since"], 0)
         self.assertEqual(settled["late_revenue_since"], 0)
+        # No tree/binding was ever set up for this period, so scoring writes zero rows.
+        self.assertEqual(settled_period["node_results"], [])
 
 
 if __name__ == "__main__":

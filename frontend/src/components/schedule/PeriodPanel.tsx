@@ -1,5 +1,10 @@
-import { formatCurrency } from "@/lib/format";
-import { PERIOD_STATUS_LABELS, type SchedulePeriod } from "@/lib/scheduleApi";
+import { formatCurrency, formatMetaRoas } from "@/lib/format";
+import {
+  NODE_RESULT_DEPTH_LABELS,
+  NODE_RESULT_VERDICT_LABELS,
+  PERIOD_STATUS_LABELS,
+  type SchedulePeriod,
+} from "@/lib/scheduleApi";
 export function PeriodPanel({
   period,
   settling,
@@ -80,6 +85,59 @@ export function PeriodPanel({
           )}
         </div>
       )}
+
+      {period.node_results.length > 0 && <NodeResultTable results={period.node_results} />}
+    </div>
+  );
+}
+
+/** 票 smart-loop 01（ADR 0066）：結算之後，每個綁定節點對打平線的判決。全部零花費是
+ * 「這期綁定的物件還沒有花費紀錄」，不是判讀壞了——句子講在表格之前（ticket §5）。 */
+function NodeResultTable({ results }: { results: SchedulePeriod["node_results"] }) {
+  const allZeroSpend = results.every((row) => row.actual_spend === 0);
+  const breakeven = results[0];
+  return (
+    <div className="mt-3 flex flex-col gap-2">
+      {allZeroSpend && (
+        <p className="text-sm text-muted-foreground">
+          這期綁定的 Meta 物件沒有花費紀錄，判決全部是「看不出」。
+        </p>
+      )}
+      <div className="table-surface">
+        <table className="w-full text-left text-sm">
+          <thead className="bg-muted text-muted-foreground">
+            <tr>
+              <th>節點</th>
+              <th>層</th>
+              <th>核准比例</th>
+              <th>實花</th>
+              <th>保守 ROAS</th>
+              <th>樂觀 ROAS</th>
+              <th>判決</th>
+            </tr>
+          </thead>
+          <tbody>
+            {results.map((row) => (
+              <tr key={row.node_key} className="border-t border-border">
+                <td>{row.node_name}</td>
+                <td>{NODE_RESULT_DEPTH_LABELS[row.depth]}</td>
+                <td className="numeric">
+                  {row.approved_share === null ? "—" : `${(row.approved_share * 100).toFixed(0)}%`}
+                </td>
+                <td className="numeric">{formatCurrency(row.actual_spend)}</td>
+                <td className="numeric">{formatMetaRoas(row.roas_conservative)}</td>
+                <td className="numeric">{formatMetaRoas(row.roas_optimistic)}</td>
+                <td>{NODE_RESULT_VERDICT_LABELS[row.verdict]}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p className="text-sm text-muted-foreground">
+        {breakeven.breakeven_roas === null
+          ? `算不出打平線：${breakeven.breakeven_source}`
+          : `打平線 ${breakeven.breakeven_roas.toFixed(2)}x，來自${breakeven.breakeven_source}`}
+      </p>
     </div>
   );
 }

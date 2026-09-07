@@ -292,6 +292,7 @@ def brand_period_response(conn, org_id: str, brand_id: str) -> dict | None:
         "currency": period["currency"],
         "settle_advice_date": advice_date.isoformat(),
         "settled": settled,
+        "node_results": schedule_repo.period_node_results(conn, org_id, brand_id, period["id"]),
     }
 
 

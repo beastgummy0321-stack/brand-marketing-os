@@ -7,7 +7,8 @@ it is not repeated here, because a second copy goes stale.
 
 `app/schedule/__init__.py`. Everything else in the package (`plan.py`, `tree.py`, `creative.py`,
 `period.py`, `binding.py`, `state.py`, `tree_approval.py`, `performance.py`, `diagnosis.py`,
-`repository.py`, `routes.py`, `jobs.py`) is private and imported by nothing outside it.
+`scoring.py`, `repository.py`, `routes.py`, `jobs.py`) is private and imported by nothing outside
+it.
 
 The split inside the package is by job, not by size: `routes.py` takes HTTP requests, and the
 others do the work. Three files were carved out of `routes.py` on 2026-09-03 (user-approved) on
@@ -29,6 +30,7 @@ Import direction inside the package is one-way into `routes.py`: `routes` import
 did import `routes` for one line between those two tickets; that cycle is closed and must not come
 back. Note that `ImportCycleScanTest` only records edges between top-level packages, so a cycle
 *inside* `app/schedule/` is invisible to it — this paragraph is the only thing guarding it.
+`scoring` is called from `routes` only; `period`/`state` never import it (ADR 0066 rule 6).
 
 ## Exported shapes
 
@@ -83,6 +85,8 @@ read-only direction, no new edge in the layer graph.
 - ADR 0059 — an approval signs the tree's shape plus a daily ceiling; a total that only shrinks
   under that ceiling keeps it valid.
 - ADR 0064 — a binding belongs to the tree that made it; amends ADR 0055 §1/§4 and ADR 0057 §2.
+- ADR 0066 — settling a period scores every bound ad-set and ad node against the break-even
+  line; only a resettle changes a score.
 
 Module-local and reversible, decided here rather than in an ADR:
 

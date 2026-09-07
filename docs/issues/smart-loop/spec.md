@@ -72,10 +72,15 @@ Status: 2026-09-08 使用者裁決撿回（同日早上曾封存），並把骨�
 
 ## 排序（票）
 
-1. `01-period-node-result.md` — 第 1 刀（C）。前身 `issue-adopted-suggestion-drops-its-coordinate.md`。
-2. `02-last-period-in-prompts.md` — 第 2 刀（B）。前身 `issue-next-period-does-not-know-the-last-one.md`。
-3. `03-winners-keep-their-names.md` — 第 3 刀（B）。
-4. `04-next-period-money-and-dates.md` — 第 4 刀（B）。前身 `issue-budget-and-dates-are-hand-typed.md`。
+1. ~~`01-period-node-result.md`~~ — 第 1 刀（C），**2026-09-08 出貨**（ADR 0066；新表 `period_node_result`，結算即記分，
+   畫面有判決表）。真資料驗收：09-07 那期結算後 10 列全「看不出」（綁定物件零花費，事實）。
+   順帶量到：面板的「花費 NT$ 1,068」是品牌層數字（含未登記的手建廣告花費，ADR 0055 §11），
+   記分列只算綁定物件——兩個數字本來就不同口徑，畫面之後可加一句說明（第 2 刀順手）。
+2. `02-period-repository-split.md` — **邊界票（C）**，2026-09-08 插入：`repository.py` 剛好 800 行到頂，
+   偵察盤點後把「檔期」與「記分」兩組 SQL 搬到 `period_repository.py`。第 2 刀要的新讀取才有地方放。
+3. `03-last-period-in-prompts.md` — 第 2 刀（B）。前身 `issue-next-period-does-not-know-the-last-one.md`。
+4. `04-winners-keep-their-names.md` — 第 3 刀（B）。
+5. `05-next-period-money-and-dates.md` — 第 4 刀（B）。前身 `issue-budget-and-dates-are-hand-typed.md`。
 
 驗收（整條）：在重啟過的後端上，把 09-07～09-14 那期提前結算 → 記分表有列、畫面看得到判決 → 出方案＋展開活動樹 →
 方案與樹的文字引用上一期節點與數字、贏家名字原樣出現 → 綁定自動接回 → 排程頁預填了日期與建議預算。

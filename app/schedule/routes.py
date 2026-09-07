@@ -61,6 +61,7 @@ from app.schedule import performance as performance_mod
 from app.schedule import period as period_mod
 from app.schedule import plan as plan_mod
 from app.schedule import repository as schedule_repo
+from app.schedule import scoring as scoring_mod
 from app.schedule import state, tree_approval
 
 router = APIRouter(prefix="/api/schedule")
@@ -399,13 +400,18 @@ def _run_settle(conn, brand_id: str, org_id: str, period_id: str, actor: str) ->
     """票 T2b（ADR 0053 §3／§4）：結算——算法／落地都在 `period.settle()`（租戶界線在
     `schedule_repo.get_period()` 的 WHERE 裡，不是靠 `require_brand` 就夠——`brand_id`
     對了不代表 `period_id` 也是這個組織的，ticket 矛盾檢查段第三點），這裡只管把失敗代碼
-    翻成 HTTP 錯誤。"""
+    翻成 HTTP 錯誤。ADR 0066: on success, also score every bound node for this same press
+    (scoring.py, never imported by period.py/state.py -- see docs/contracts/schedule.md)."""
     error = period_mod.settle(conn, org_id=org_id, brand_id=brand_id, period_id=period_id,
                                actor=actor)
     if error == "not_found":
         raise web.NotFoundKind("檔期")
     if error == "not_started":
         raise web.ApiError(400, "not_started", period_mod.NOT_STARTED_MESSAGE)
+    settled_period = schedule_repo.get_period(conn, org_id, brand_id, period_id)
+    assert settled_period is not None  # settle() just returned None (success) for this row
+    scoring_mod.score_period(conn, org_id, brand_id, period_id,
+                              settled_at=settled_period["settled_at"])
     return state._brand_response(conn, brand_id, org_id)
 
 

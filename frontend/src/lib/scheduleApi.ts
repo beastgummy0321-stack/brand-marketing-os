@@ -164,6 +164,29 @@ export interface SchedulePeriodSettled {
   late_revenue_since: number;
 }
 
+/** Ticket smart-loop 01 (ADR 0066): one bound node's score for this period, written when the
+ * period settles. `depth` is 2 (ad set, carries the approved share) or 3 (ad, carries
+ * `coordinates_json`) -- depth 1 is never scored. `roas_conservative`/`roas_optimistic` are
+ * both true (docs/contracts/schedule.md "One coordinate has two ROAS values"); `verdict` is
+ * derived from both against `breakeven_roas`. */
+export interface SchedulePeriodNodeResult {
+  node_key: string;
+  depth: 2 | 3;
+  node_name: string;
+  external_id: string;
+  approved_share: number | null;
+  approved_daily_amount: number | null;
+  actual_spend: number;
+  revenue_tracked: number | null;
+  roas_conservative: number | null;
+  roas_optimistic: number | null;
+  roas_coverage: number;
+  breakeven_roas: number | null;
+  breakeven_source: string;
+  verdict: "win" | "lose" | "unclear";
+  coordinates_json: Record<string, string | null> | null;
+}
+
 export interface SchedulePeriod {
   id: string;
   name: string;
@@ -174,6 +197,7 @@ export interface SchedulePeriod {
   currency: string;
   settle_advice_date: string;
   settled: SchedulePeriodSettled | null;
+  node_results: SchedulePeriodNodeResult[];
 }
 
 export interface ScheduleState {
@@ -204,6 +228,17 @@ export const PERIOD_STATUS_LABELS: Record<SchedulePeriod["status"], string> = {
   running: "進行中",
   awaiting_data: "已結束，需人工確認",
   settled: "已結算",
+};
+
+/** 票 smart-loop 01（ADR 0066）：節點記分表格文字，畫面元件照抄。 */
+export const NODE_RESULT_DEPTH_LABELS: Record<SchedulePeriodNodeResult["depth"], string> = {
+  2: "組合",
+  3: "廣告",
+};
+export const NODE_RESULT_VERDICT_LABELS: Record<SchedulePeriodNodeResult["verdict"], string> = {
+  win: "賺",
+  lose: "賠",
+  unclear: "看不出",
 };
 
 /** 票 10-feedback-entries（ADR 0037）：拒絕一批方案的回饋條目——嚴重程度只問「紅線／

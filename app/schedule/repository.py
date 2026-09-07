@@ -687,9 +687,78 @@ def period_node_memberships_for_brand(conn: _AnyConn, org_id: str, brand_id: str
     return [dict(r) for r in rows]
 
 
+# ---- Ticket smart-loop 01 (ADR 0066): period_node_result, scored at settle -------------
+
+def period_node_memberships_for_period(conn: _AnyConn, org_id: str, brand_id: str,
+                                        period_id: str) -> list[dict]:
+    """This period's own `period_node_membership` rows: just the columns
+    score_period() needs (`channel_id`/`node_key`/`source_tree_task_id`/`created_at`)."""
+    rows = conn.execute(
+        "SELECT channel_id, node_key, source_tree_task_id, created_at"
+        " FROM period_node_membership"
+        " WHERE org_id = %s AND brand_id = %s AND campaign_period_id = %s",
+        (org_id, brand_id, period_id),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def replace_period_node_results(conn: _AnyConn, org_id: str, brand_id: str, period_id: str,
+                                 rows: list[dict]) -> int:
+    """One settle replaces this period's period_node_result rows: DELETE, INSERT, commit."""
+    conn.execute(
+        "DELETE FROM period_node_result"
+        " WHERE org_id = %s AND brand_id = %s AND campaign_period_id = %s",
+        (org_id, brand_id, period_id),
+    )
+    for r in rows:
+        conn.execute(
+            "INSERT INTO period_node_result (id, org_id, brand_id, campaign_period_id,"
+            " source_tree_task_id, channel_id, node_key, depth, node_name, external_id,"
+            " approved_share, approved_daily_amount, actual_spend, revenue_tracked,"
+            " roas_conservative, roas_optimistic, roas_coverage, breakeven_roas,"
+            " breakeven_source, verdict, coordinates_json, settled_at)"
+            " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,"
+            " %s, %s, %s, %s, %s)",
+            (new_id("pnr"), org_id, brand_id, period_id, r["source_tree_task_id"],
+             r["channel_id"], r["node_key"], r["depth"], r["node_name"], r["external_id"],
+             r["approved_share"], r["approved_daily_amount"], r["actual_spend"],
+             r["revenue_tracked"], r["roas_conservative"], r["roas_optimistic"],
+             r["roas_coverage"], r["breakeven_roas"], r["breakeven_source"], r["verdict"],
+             jsonb(r["coordinates_json"]) if r["coordinates_json"] is not None else None,
+             r["settled_at"]),
+        )
+    conn.commit()
+    return len(rows)
+
+
+_NODE_RESULT_NUMERIC_COLS = ("approved_share", "approved_daily_amount", "actual_spend",
+                             "revenue_tracked", "roas_conservative", "roas_optimistic",
+                             "roas_coverage", "breakeven_roas")
+
+
+def period_node_results(conn: _AnyConn, org_id: str, brand_id: str, period_id: str) -> list[dict]:
+    """This period's scored nodes for the API/prompt: Decimal columns cast to float (same
+    convention as `period.brand_period_response()`), ordered by depth then node_key."""
+    rows = conn.execute(
+        "SELECT node_key, depth, node_name, external_id, approved_share,"
+        " approved_daily_amount, actual_spend, revenue_tracked, roas_conservative,"
+        " roas_optimistic, roas_coverage, breakeven_roas, breakeven_source, verdict,"
+        " coordinates_json FROM period_node_result"
+        " WHERE org_id = %s AND brand_id = %s AND campaign_period_id = %s"
+        " ORDER BY depth, node_key",
+        (org_id, brand_id, period_id),
+    ).fetchall()
+    for r in rows:
+        for c in _NODE_RESULT_NUMERIC_COLS:
+            if r[c] is not None:
+                r[c] = float(r[c])
+    return [dict(r) for r in rows]
+
+
 # ---- 品牌刪除清理登記（app/core/cleanup.py；pattern: app/meta/repository.py:526）---------
 
 _CHILD_TABLES = (
+    ("period_node_result", "檔期節點記分"),
     ("feedback", "回饋"),
     # creative_candidate_item 也會被 creative_candidate 的 ON DELETE CASCADE 帶走，這裡仍
     # 明寫一次 DELETE（先於 candidate），跟其餘子表統一走同一套清理路徑、同一套清點方式。
@@ -723,7 +792,7 @@ cleanup.register(
     delete_brand=_delete_brand,
     brand_tables=frozenset({
         "brand_coordinate", "creative_slot", "creative_candidate",
-        "creative_candidate_item", "feedback",
+        "creative_candidate_item", "feedback", "period_node_result",
     }),
     count_product=None,
     delete_product=None,
