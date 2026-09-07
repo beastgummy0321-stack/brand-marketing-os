@@ -7,8 +7,8 @@ it is not repeated here, because a second copy goes stale.
 
 `app/schedule/__init__.py`. Everything else in the package (`plan.py`, `tree.py`, `creative.py`,
 `period.py`, `binding.py`, `state.py`, `tree_approval.py`, `performance.py`, `diagnosis.py`,
-`scoring.py`, `repository.py`, `routes.py`, `jobs.py`) is private and imported by nothing outside
-it.
+`scoring.py`, `repository.py`, `period_repository.py`, `routes.py`, `jobs.py`) is private and
+imported by nothing outside it.
 
 The split inside the package is by job, not by size: `routes.py` takes HTTP requests, and the
 others do the work. Three files were carved out of `routes.py` on 2026-09-03 (user-approved) on
@@ -31,6 +31,9 @@ did import `routes` for one line between those two tickets; that cycle is closed
 back. Note that `ImportCycleScanTest` only records edges between top-level packages, so a cycle
 *inside* `app/schedule/` is invisible to it — this paragraph is the only thing guarding it.
 `scoring` is called from `routes` only; `period`/`state` never import it (ADR 0066 rule 6).
+`period_repository` imports nothing from the package and is imported by `period`, `routes`,
+`binding`, `scoring` (ticket smart-loop 02 — split out of `repository.py` to hold the 800-line
+cap; no behaviour change).
 
 ## Exported shapes
 

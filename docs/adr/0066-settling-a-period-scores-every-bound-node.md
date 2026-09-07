@@ -38,7 +38,7 @@ numbers at settle; this ADR adds the per-node reading beside them.
    optimiser or the user moved the money (the CBO question, `docs/issues/plan-quality/issue-budget-level-mismatch-is-never-checked.md`)
    is visible in the gap and is not decided here.
 6. **Who owns it.** The `schedule` module (ADR 0049); the table is one of its brand-delete child tables. Reads
-   for prompts and screens go through `schedule_repo.period_node_results()`; the scoring code lives in
+   for prompts and screens go through `period_repo.period_node_results()`; the scoring code lives in
    `app/schedule/scoring.py`, called from `routes.py` after `period.settle()` and imported by neither `period.py`
    nor `state.py` (the in-package import direction on the contract page).
 

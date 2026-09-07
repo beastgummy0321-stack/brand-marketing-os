@@ -201,7 +201,7 @@ class _PeriodTestBase(unittest.TestCase):
                                      node_name: str, external_id: str) -> None:
         """Only a channel_entity_map row for a SECOND tree at the same node_key -- no
         period_node_membership write, simulating a bind that happened while a different
-        period was 'latest' (schedule_repo.get_latest_period()). Fixture for the ticket's
+        period was 'latest' (period_repo.get_latest_period()). Fixture for the ticket's
         contradiction-check trap: bindings_by_node_key()'s overlay would show this row;
         bindings_for_tree(first_tree_id) must not."""
         channel_id = schedule_repo.ensure_meta_channel(web.conn, org_id)

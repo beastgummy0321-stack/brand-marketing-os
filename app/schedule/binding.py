@@ -14,6 +14,7 @@ T3c 一行都加不進去，但**行數只是叫醒鈴，不是理由**——工
 """
 
 from app.meta import repository as meta_repo
+from app.schedule import period_repository as period_repo
 from app.schedule import repository as schedule_repo
 from app.schedule import tree as tree_mod
 
@@ -96,11 +97,11 @@ def bind_tree(conn, tree_row: dict, org_id: str, brand_id: str) -> list[str]:
     account_ids = meta_repo.bound_account_ids_for_brand(conn, org_id, brand_id)
     # 票 T3e（ADR 0055 §11）：深度 2（扛預算）節點綁定成功時，順手記一列
     # `period_node_membership`——「品牌當下的檔期」用模組既有的同一條讀
-    # （`schedule_repo.get_latest_period`），不是另開一條。沒有檔期（這個品牌從沒出過
+    # （`period_repo.get_latest_period`），不是另開一條。沒有檔期（這個品牌從沒出過
     # 方案就直接綁定，理論上不會發生，但不是不可能）就不寫、也不算失敗——寫在這裡，不是
     # 悄悄跳過沒人知道。深度 3（廣告）不寫 membership——那張表只認扛預算的那一層
     # （ADR 0055 §6），第三層再寫一列會讓 node_level_spend() 在兩層都算到同一筆錢。
-    period = schedule_repo.get_latest_period(conn, org_id, brand_id)
+    period = period_repo.get_latest_period(conn, org_id, brand_id)
     channel_id, newly_bound = None, False
     failures: list[str] = []
 

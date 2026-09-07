@@ -1668,10 +1668,10 @@ KNOWN_MODULE_SIZES = {
     "app/orders": 1423,  # 票 12：channel_revenue 一張表取代三張（刪掉藥局專屬那一整組
                           # 之後仍淨增）——官網帳本寫入路徑、channel_revenue_summary()、
                           # 通用手動登錄（含「官網不能手動登錄」那道錢的守門）
-    "app/schedule": 4278,  # Ticket smart-loop 01 (ADR 0066): new `scoring.py` (score_period()
-                  # arithmetic and a write path for money-adjacent per-node data) plus three
-                  # small functions on `repository.py` and one key on `period.py`'s response.
-                  # 4080->4278, measured, no slack. Previous was 4080 -- 票 01（plan-quality，出方案 prompt 帶這個帳戶的成效）：
+    "app/schedule": 4295,  # Ticket smart-loop 02: file split, header lines. 4278->4295, measured, no slack. Previous was 4278 -- Ticket smart-loop 01 (ADR 0066): new `scoring.py`
+                  # (score_period() arithmetic and a write path for money-adjacent per-node data)
+                  # plus three small functions on `repository.py` and one key on `period.py`'s
+                  # response. 4080->4278, measured, no slack. Previous was 4080 -- 票 01（plan-quality，出方案 prompt 帶這個帳戶的成效）：
                   # `performance.py` 新增 `ad_performance()`（逐幣別、逐廣告花費／ROAS，
                   # 不接座標）；`jobs.py` 新增 `_account_performance_text()`／
                   # `_cpa_cell()`，`schedule_plan()` 接線成 prompt 最後一段。3955→4080，

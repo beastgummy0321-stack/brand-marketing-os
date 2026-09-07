@@ -29,6 +29,7 @@ from app.llm import gateway
 from app.meta import repository as meta_repo
 from app.schedule import diagnosis as diagnosis_mod
 from app.schedule import performance as performance_mod
+from app.schedule import period_repository as period_repo
 from app.schedule import repository as schedule_repo
 from app.schedule import tree as tree_mod
 
@@ -62,11 +63,11 @@ def _flatten(nodes: list, depth: int = 1):
 
 def score_period(conn, org_id: str, brand_id: str, period_id: str, settled_at) -> int:
     """Writes/replaces this period's period_node_result rows; returns the row count."""
-    period = schedule_repo.get_period(conn, org_id, brand_id, period_id)
+    period = period_repo.get_period(conn, org_id, brand_id, period_id)
     if period is None:
         return 0
-    memberships = schedule_repo.period_node_memberships_for_period(conn, org_id, brand_id,
-                                                                     period_id)
+    memberships = period_repo.period_node_memberships_for_period(conn, org_id, brand_id,
+                                                                   period_id)
     if not memberships:
         return 0
     newest = max(memberships, key=lambda m: m["created_at"])
@@ -119,4 +120,4 @@ def score_period(conn, org_id: str, brand_id: str, period_id: str, settled_at) -
                 "coordinates_json": coordinates_json, "settled_at": settled_at,
             })
 
-    return schedule_repo.replace_period_node_results(conn, org_id, brand_id, period_id, rows)
+    return period_repo.replace_period_node_results(conn, org_id, brand_id, period_id, rows)

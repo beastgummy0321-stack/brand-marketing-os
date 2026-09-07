@@ -59,6 +59,7 @@ from app.schedule import creative as creative_mod
 from app.schedule import diagnosis as diagnosis_mod
 from app.schedule import performance as performance_mod
 from app.schedule import period as period_mod
+from app.schedule import period_repository as period_repo
 from app.schedule import plan as plan_mod
 from app.schedule import repository as schedule_repo
 from app.schedule import scoring as scoring_mod
@@ -190,7 +191,7 @@ def _run_tree(conn, brand_id: str, org_id: str, body: "TreeRequest") -> dict:
     gateway.check_spend_cap(conn, org_id=org_id)
     if state._display_task_row(conn, brand_id, state.TREE_TASK_TYPE)[1]:
         raise _already_running_error()
-    period = schedule_repo.get_latest_period(conn, org_id, brand_id)
+    period = period_repo.get_latest_period(conn, org_id, brand_id)
     if not background_enqueue(
         f"background.{state.TREE_TASK_TYPE}", org_id=org_id,
         lock=f"{state.TREE_TASK_TYPE}:{brand_id}",
@@ -219,7 +220,7 @@ def _run_creative(conn, brand_id: str, org_id: str) -> dict:
     gateway.check_spend_cap(conn, org_id=org_id)
     if state._display_task_row(conn, brand_id, state.CREATIVE_TASK_TYPE)[1]:
         raise _already_running_error()
-    current_period = schedule_repo.get_latest_period(conn, org_id, brand_id)
+    current_period = period_repo.get_latest_period(conn, org_id, brand_id)
     if not background_enqueue(
         f"background.{state.CREATIVE_TASK_TYPE}", org_id=org_id,
         lock=f"{state.CREATIVE_TASK_TYPE}:{brand_id}", brand_id=brand_id,
@@ -252,7 +253,7 @@ def _run_plan(conn, brand_id: str, org_id: str, body: "PlanRequest") -> dict:
     # ADR 0053 決策 1：這期誕生在這裡（出方案成功的當下），不是等到核准——同一個品牌
     # 最多一個草稿，第二次以後改的是同一列的日期／預算（票 T2b「on success, before the
     # enqueue」）。
-    period_id = schedule_repo.upsert_draft_period(
+    period_id = period_repo.upsert_draft_period(
         conn, org_id, brand_id,
         name=f"{start_date.isoformat()} ~ {end_date.isoformat()}",
         start_date=start_date, end_date=end_date, daily_budget=daily_budget,
@@ -327,7 +328,7 @@ def _run_reject(conn, brand_id: str, actor, body: "RejectRequest") -> dict:
 
     # 票 T2b：檔期日期不是 `schedule_plan` 凍結參數的一部分（那是檔期自己的欄位）——
     # 重新排程沿用同一個檔期，從品牌目前的檔期讀日期，不必使用者重填。
-    current_period = schedule_repo.get_latest_period(conn, actor.org_id, brand_id)
+    current_period = period_repo.get_latest_period(conn, actor.org_id, brand_id)
     rerun_body = PlanRequest(
         product_ids=scope.get("product_ids", []),
         platform=scope.get("platform", ""),
@@ -380,7 +381,7 @@ def _run_approve(conn, brand_id: str, org_id: str, actor: str) -> dict:
     # ADR 0053 決策 1：核准這一press＝「這期真的要投」，草稿在這裡變 running。找不到草稿
     # （例如已經核准過一次）就什麼都不做——approval.py 自己已經 commit 過，這裡是同一個
     # 請求裡緊接著的下一個落地動作，不是另開一支路由。
-    schedule_repo.approve_draft_period(conn, org_id, brand_id)
+    period_repo.approve_draft_period(conn, org_id, brand_id)
     return state._brand_response(conn, brand_id, org_id)
 
 
@@ -398,7 +399,7 @@ def _run_approve_revoke(conn, brand_id: str, org_id: str, actor: str) -> dict:
 
 def _run_settle(conn, brand_id: str, org_id: str, period_id: str, actor: str) -> dict:
     """票 T2b（ADR 0053 §3／§4）：結算——算法／落地都在 `period.settle()`（租戶界線在
-    `schedule_repo.get_period()` 的 WHERE 裡，不是靠 `require_brand` 就夠——`brand_id`
+    `period_repo.get_period()` 的 WHERE 裡，不是靠 `require_brand` 就夠——`brand_id`
     對了不代表 `period_id` 也是這個組織的，ticket 矛盾檢查段第三點），這裡只管把失敗代碼
     翻成 HTTP 錯誤。ADR 0066: on success, also score every bound node for this same press
     (scoring.py, never imported by period.py/state.py -- see docs/contracts/schedule.md)."""
@@ -408,7 +409,7 @@ def _run_settle(conn, brand_id: str, org_id: str, period_id: str, actor: str) ->
         raise web.NotFoundKind("檔期")
     if error == "not_started":
         raise web.ApiError(400, "not_started", period_mod.NOT_STARTED_MESSAGE)
-    settled_period = schedule_repo.get_period(conn, org_id, brand_id, period_id)
+    settled_period = period_repo.get_period(conn, org_id, brand_id, period_id)
     assert settled_period is not None  # settle() just returned None (success) for this row
     scoring_mod.score_period(conn, org_id, brand_id, period_id,
                               settled_at=settled_period["settled_at"])

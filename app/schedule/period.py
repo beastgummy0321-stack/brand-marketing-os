@@ -4,7 +4,7 @@
 只管驗證與 HTTP 邊界（要不要拋 `web.ApiError`、拋哪個 code），這裡的函數一律回
 `(結果, 失敗說明)` 或直接回結果，不 import `app.shared.web`、不自己拋 `ApiError`——
 跟 `plan.build_plans()`／`tree.build_tree()` 同一個既有慣例。落地（INSERT／UPDATE）留在
-`schedule_repo`；本檔只讀（`schedule_repo.get_latest_period()` 等）＋算。
+`period_repo`／`schedule_repo`；本檔只讀（`period_repo.get_latest_period()` 等）＋算。
 
 Private to `app/schedule`（container contract §1）：只有 `routes.py` 呼叫這裡。
 """
@@ -17,6 +17,7 @@ from app.core.db import now_utc
 from app.meta import graph as meta_graph
 from app.meta import repository as meta_repo
 from app.orders import repository as orders_repo
+from app.schedule import period_repository as period_repo
 from app.schedule import repository as schedule_repo
 from app.schedule.plan import largest_remainder_allocation
 
@@ -249,7 +250,7 @@ def _advance_if_ended(conn, org_id: str, period: dict) -> dict:
     today = coresettings.today_for_org(conn, org_id=org_id)
     if today <= period["end_date"]:
         return period
-    schedule_repo.advance_period_to_awaiting_data(conn, org_id, period["id"])
+    period_repo.advance_period_to_awaiting_data(conn, org_id, period["id"])
     period = dict(period)
     period["status"] = "awaiting_data"
     return period
@@ -257,9 +258,9 @@ def _advance_if_ended(conn, org_id: str, period: dict) -> dict:
 
 def brand_period_response(conn, org_id: str, brand_id: str) -> dict | None:
     """`routes._brand_response()` 的 `period` 鍵——這個品牌目前顯示的那一個檔期（最新
-    一列，見 `schedule_repo.get_latest_period()` 的說明），`None` 代表這個品牌從沒出過
+    一列，見 `period_repo.get_latest_period()` 的說明），`None` 代表這個品牌從沒出過
     方案。"""
-    period = schedule_repo.get_latest_period(conn, org_id, brand_id)
+    period = period_repo.get_latest_period(conn, org_id, brand_id)
     if period is None:
         return None
     period = _advance_if_ended(conn, org_id, period)
@@ -270,7 +271,7 @@ def brand_period_response(conn, org_id: str, brand_id: str) -> dict | None:
         # late_*_since 是「現在」跟凍結快照的差——用「現在存在」的檔期集合重算一次，不是
         # 結算當下那份（那份沒有存，也不該存：凍結的只有 settled_spend／settled_revenue／
         # settled_at 這三個數字，見 ADR 0053 §3 與 ticket 的矛盾檢查段）。
-        competitors = schedule_repo.list_non_draft_periods(conn, org_id, brand_id)
+        competitors = period_repo.list_non_draft_periods(conn, org_id, brand_id)
         current_spend, current_revenue = compute_money(conn, org_id, brand_id, period, competitors)
         settled = {
             "spend": float(period["settled_spend"]),
@@ -292,7 +293,7 @@ def brand_period_response(conn, org_id: str, brand_id: str) -> dict | None:
         "currency": period["currency"],
         "settle_advice_date": advice_date.isoformat(),
         "settled": settled,
-        "node_results": schedule_repo.period_node_results(conn, org_id, brand_id, period["id"]),
+        "node_results": period_repo.period_node_results(conn, org_id, brand_id, period["id"]),
     }
 
 
@@ -301,16 +302,16 @@ def settle(conn, *, org_id: str, brand_id: str, period_id: str, actor: str) -> s
     多少。回傳失敗代碼（`"not_found"`／`"not_started"`）或 `None`（成功）——`routes.py`
     負責把代碼翻成 HTTP 錯誤（跟這個模組一樣不 import `app.shared.web`）。
 
-    租戶界線在 `schedule_repo.get_period()` 的 WHERE 裡（`org_id`／`brand_id` 都要對得上，
+    租戶界線在 `period_repo.get_period()` 的 WHERE 裡（`org_id`／`brand_id` 都要對得上，
     `period_id` 是使用者給的，不能只信主鍵）——`brand_id` 對了不代表 `period_id` 也是這個
     組織的（ticket 矛盾檢查段第三點）。"""
-    period = schedule_repo.get_period(conn, org_id, brand_id, period_id)
+    period = period_repo.get_period(conn, org_id, brand_id, period_id)
     if period is None:
         return "not_found"
     if period["status"] == "planning":
         return "not_started"
 
-    competitors = schedule_repo.list_non_draft_periods(conn, org_id, brand_id)
+    competitors = period_repo.list_non_draft_periods(conn, org_id, brand_id)
     spend, revenue = compute_money(conn, org_id, brand_id, period, competitors)
     settled_at = now_utc()
     today = coresettings.today_for_org(conn, org_id=org_id)
@@ -332,7 +333,7 @@ def settle(conn, *, org_id: str, brand_id: str, period_id: str, actor: str) -> s
                    "settled_at": settled_at.isoformat()},
         )
 
-    schedule_repo.write_settlement(
+    period_repo.write_settlement(
         conn, org_id=org_id, period_id=period_id, spend=spend, revenue=revenue,
         settled_at=settled_at, force_early=is_early,
     )

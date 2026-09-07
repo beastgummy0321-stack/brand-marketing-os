@@ -76,8 +76,9 @@ Status: 2026-09-08 使用者裁決撿回（同日早上曾封存），並把骨�
    畫面有判決表）。真資料驗收：09-07 那期結算後 10 列全「看不出」（綁定物件零花費，事實）。
    順帶量到：面板的「花費 NT$ 1,068」是品牌層數字（含未登記的手建廣告花費，ADR 0055 §11），
    記分列只算綁定物件——兩個數字本來就不同口徑，畫面之後可加一句說明（第 2 刀順手）。
-2. `02-period-repository-split.md` — **邊界票（C）**，2026-09-08 插入：`repository.py` 剛好 800 行到頂，
-   偵察盤點後把「檔期」與「記分」兩組 SQL 搬到 `period_repository.py`。第 2 刀要的新讀取才有地方放。
+2. ~~`02-period-repository-split.md`~~ — 邊界票（C），2026-09-08 插入並**同日出貨**：`repository.py` 800 → 625 行，
+   「檔期」與「記分」兩組 SQL 搬到 `period_repository.py`（188 行，不 import 套件內任何檔）。審查一次判 blocked-upstream
+   （票裡兩條驗收互撞在一個測試檔的註解字串上），主聊天裁決「測試的斷言與資料不動、註解可改一字」後出貨。
 3. `03-last-period-in-prompts.md` — 第 2 刀（B）。前身 `issue-next-period-does-not-know-the-last-one.md`。
 4. `04-winners-keep-their-names.md` — 第 3 刀（B）。
 5. `05-next-period-money-and-dates.md` — 第 4 刀（B）。前身 `issue-budget-and-dates-are-hand-typed.md`。
