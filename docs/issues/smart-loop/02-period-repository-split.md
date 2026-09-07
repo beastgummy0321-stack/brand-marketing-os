@@ -9,9 +9,18 @@ make room"; the two groups that move are the two that handle money-adjacent rows
 
 ## What
 
-Literal example: N/A — a pure move; every function keeps its signature and return shape, so the contract's literal
-shapes are the ones already in the docstrings of the moved functions (e.g. `period_node_results()` still returns the
-list of dicts ticket 01 documented). Only the module path of eleven names changes.
+N/A for a data shape — a pure move; every function keeps its signature and return shape. The literal change is the
+import and call site, one example:
+
+```python
+# app/schedule/period.py — before
+from app.schedule import repository as schedule_repo
+period = schedule_repo.get_latest_period(conn, org_id, brand_id)
+# after
+from app.schedule import period_repository as period_repo
+from app.schedule import repository as schedule_repo   # still used for memberships
+period = period_repo.get_latest_period(conn, org_id, brand_id)
+```
 
 New file `app/schedule/period_repository.py`, private to the package, imports only `app.core.db` (`Conn`,
 `ConnProxy`, `jsonb`, `new_id`, `now_utc` as needed) — **no `from app.schedule …` import at all** (the moved code
