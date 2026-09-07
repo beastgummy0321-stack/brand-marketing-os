@@ -29,7 +29,10 @@ from app.schedule import repository as schedule_repo
 
 random.seed(20260906)
 
-ACCOUNT_ID = "368741390835357"
+# 刻意不是真帳號 `368741390835357`：`meta_entity_spend` 的唯一鍵是 (ad_account_id, level,
+# entity_id, spend_date)，共用同一個 ad_account_id 就等於把假花費灌進真帳號的桶子裡，而這支
+# 工具沒有反向清除。用一個 Meta 不可能發出的 id，真假兩份資料在同一個資料庫裡永遠分得開。
+ACCOUNT_ID = "000000000000001"
 CURRENCY = "TWD"
 TIMEZONE = "Asia/Taipei"
 
@@ -217,9 +220,13 @@ def run(org_id: str, brand_id: str) -> None:
 
     with connection() as conn:
         # 1. 帳號綁定
-        meta_repo.save_token(conn, org_id, "SIMULATED-TOKEN")
+        # 只在這個組織還沒有權杖時才寫：`save_token()` 是覆寫語意（repository.py:98-110），
+        # 直接呼叫會把使用者貼過的真權杖蓋掉，之後真的每日拉取就認證失敗。假的 Graph 回應
+        # 由 `_fake_fetch_page` 供應，權杖是什麼值這裡從來用不到。
+        if meta_repo.get_credential(conn, org_id) is None:
+            meta_repo.save_token(conn, org_id, "SIMULATED-TOKEN")
         meta_repo.upsert_accounts(conn, org_id, [{
-            "account_id": ACCOUNT_ID, "name": "BP AD", "currency": CURRENCY,
+            "account_id": ACCOUNT_ID, "name": "模擬帳號（不是真的 BP AD）", "currency": CURRENCY,
             "timezone_name": TIMEZONE,
         }])
         conn.commit()
