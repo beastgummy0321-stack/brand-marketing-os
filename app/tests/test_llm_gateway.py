@@ -297,7 +297,7 @@ class TaskModelThinkingDefaultsTest(unittest.TestCase):
 
     def test_resolve_thinking_uses_task_default(self):
         self.assertEqual(providers.resolve_thinking(task_type="schedule_plan"), "high")
-        self.assertEqual(providers.resolve_thinking(task_type="creative_batch"), "medium")
+        self.assertEqual(providers.resolve_thinking(task_type="workbench_image_prompt"), "medium")
         self.assertEqual(providers.resolve_thinking(task_type="intake_scan"), "low")
 
     def test_resolve_thinking_unknown_task_falls_back_to_medium(self):
@@ -316,11 +316,11 @@ class TaskModelThinkingDefaultsTest(unittest.TestCase):
 
     def test_request_override_thinking_affects_only_one_call_then_reverts(self):
         with providers.request_overrides(thinking="max"):
-            _row, provider = self._run("creative_batch")
+            _row, provider = self._run("workbench_image_prompt")
         self.assertEqual(provider.calls[0]["effort"], "max")
 
         # 離開 with 區塊後，下一次呼叫回到任務預設（中）——覆寫值不落地
-        _row2, provider2 = self._run("creative_batch")
+        _row2, provider2 = self._run("workbench_image_prompt")
         self.assertEqual(provider2.calls[0]["effort"], "medium")
 
     def test_request_override_model_affects_only_one_call_then_reverts(self):
@@ -334,7 +334,7 @@ class TaskModelThinkingDefaultsTest(unittest.TestCase):
 
     def test_request_override_invalid_thinking_ignored_not_raised(self):
         with providers.request_overrides(thinking="不是五檔之一"):
-            _row, provider = self._run("creative_batch")
+            _row, provider = self._run("workbench_image_prompt")
         self.assertEqual(provider.calls[0]["effort"], "medium")
 
     # 破壞者情境補洞：手改網址塞不存在的 model（例如 model=hacked-model-xyz），要退回

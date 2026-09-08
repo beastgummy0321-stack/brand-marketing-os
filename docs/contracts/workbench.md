@@ -4,8 +4,8 @@ Five things and nothing else (container contract §7). Reasoning lives in the AD
 it is not repeated here, because a second copy goes stale.
 
 Written 2026-09-09 at Gate A (ADR 0068), before the module exists: a module is registered before
-it is built. Until ticket 02 lands `app/workbench/`, every shape below is the contract the tickets
-are cut against, not a description of code.
+it is built. Ticket 02 landed `app/workbench/` on 2026-09-09; every shape below is now a
+description of code, not only the contract tickets are cut against.
 
 ## Entry path
 

@@ -424,6 +424,7 @@ from app import intake as intake_module  # noqa: E402
 from app import meta as meta_module  # noqa: E402
 from app import orders as orders_module  # noqa: E402
 from app import schedule as schedule_module  # noqa: E402
+from app import workbench as workbench_module  # noqa: E402
 
 # 票 03-1：每個模組的路由掛載交給它自己的 register(app)（機械式：路由本身不變，
 # 只是把 main.py 逐條 include_router 收斂成一個迴圈）。identity 排最後是沿用舊順序，
@@ -432,7 +433,7 @@ from app import schedule as schedule_module  # noqa: E402
 # 了——在這個迴圈之前、`_load_dotenv()` 後面就先跑過一次（見上面），不管 identity
 # 排在這個 tuple 第幾個都一樣早炸。
 for _module in (brand_web_module, intake_module, meta_module, orders_module,
-                 schedule_module, dashboard_module, identity_module):
+                 schedule_module, workbench_module, dashboard_module, identity_module):
     _module.register(app)
 
 # 票 05：掛每日 Meta 花費拉取的 procrastinate task（冪等，見 app/meta/daily_pull.py
@@ -444,11 +445,15 @@ meta_module.register_task()
 # 理由，見 app/schedule/jobs.py register_tasks() 檔頭。
 schedule_module.register_tasks()
 
+# 票 workbench/02：掛一個生成 task（素材工作檯），同一個「DSN 換了要重掛」的理由，見
+# app/workbench/jobs.py register_tasks() 檔頭。
+workbench_module.register_tasks()
+
 # 啟動斷言（第 2 刀「清理登記處」）：確認刪品牌時該連鎖清資料的模組都有登記進
 # app.core.cleanup，少一個就不讓服務起來，避免又漏掉誰。
 from app.core import cleanup as core_cleanup  # noqa: E402
 
-_REQUIRED_CLEANUP_MODULES = ("品牌智庫", "建檔精靈", "訂單", "中斷提醒")
+_REQUIRED_CLEANUP_MODULES = ("品牌智庫", "建檔精靈", "訂單", "中斷提醒", "素材工作檯")
 _missing_cleanup = [n for n in _REQUIRED_CLEANUP_MODULES if n not in core_cleanup.registered_names()]
 if _missing_cleanup:
     raise RuntimeError(f"清理登記處少登記了：{_missing_cleanup}")

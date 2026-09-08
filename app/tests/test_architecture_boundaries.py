@@ -498,6 +498,8 @@ LAYER_ORDER = [
     "app.orders",              # 訂單，只依賴 app.brand_intelligence／app.core／app.shared
                                 # （docs/contracts/schedule.md）——挪到這裡，讓它排在
                                 # app.schedule 前面
+    "app.workbench",           # 票 workbench/02（ADR 0068 §2）：只依賴上面幾層，排在
+                                # app.schedule 前面——契約單向 schedule -> workbench。
     "app.schedule",            # 票 07：檔期規劃最薄路徑，依賴 app.core／app.llm／app.shared／
                                 # app.brand_intelligence／app.meta；票 T2b（ADR 0053，
                                 # docs/contracts/schedule.md 2026-09-02）起也依賴
@@ -1315,9 +1317,19 @@ class CoordinateDimensionSyncTest(unittest.TestCase):
 #      量對了，round 2 沒有再動這一筆。
 #   4. 本段理由註解自己（含上面「這道棘輪在落地前就已經在漏」那一段，done-check 5 點名的
 #      新要求）。
+# ticket workbench/02 round 2 (## Blocked amendment, 2026-09-09): `submit_brief` gains the
+# product-ownership check and test_workbench.py gains case 6 (cross-org product_id rejected
+# before INSERT) — file grows 338 -> 371 lines (+33) plus this reason comment's and the
+# `KNOWN_MODULE_SIZES["app/workbench"]` reason comment's own line-count deltas — measured
+# (`_line_totals()`), no slack.
+TEST_LINES_CEILING = 23265  # Previous: 23222 --
+# ticket workbench/02 round 1: test_workbench.py 338 lines (new file, done-check 2's five
+# cases) plus this table's own required edits (LAYER_ORDER entry, KNOWN_MODULE_SIZES
+# app/workbench row and the app row's reason-comment update) — measured (`_line_totals()`),
+# no slack. Previous was 22875 --
 # past-ads/08 follow-up (2026-09-09, main chat): 22871 -> 22875, CoordinateDimensionSyncTest now
 # asserts CampaignTree.tsx has no COORDINATE_LABELS of its own and imports COORDINATE_DIMENSIONS.
-TEST_LINES_CEILING = 22875  # Previous: ticket past-ads/09 (docs/issues/past-ads/09-creative-retry.md,
+# Previous: ticket past-ads/09 (docs/issues/past-ads/09-creative-retry.md,
 # 2026-09-09): 22735 -> 22871 (+136), measured (`_line_totals()`), no slack. `CreativeCacheTest`
 # gains four tests (done-check 1: stale-none/fresh-none/stale-good 24h retry; done-check 2: the
 # refetch button clears cache scoped by brand/org, tenant boundary 404, and the 31-id 400) plus
@@ -1604,7 +1616,9 @@ class TestRatioTest(unittest.TestCase):
 # 是頂層的 .py（`main.py` 組裝根等）。**允許調高，但必須改這張表**——重點不是禁止成長，
 # 是讓成長出現在 diff 裡有人看得到。廣告模組會在約 2,000 行撞上它，而不是 21,595 行。
 KNOWN_MODULE_SIZES = {
-    "app": 624,  # 票 03-worker-own-process round 3（ADR 0063 amendment「release the lock, so
+    "app": 629,  # 票 workbench/02（ADR 0068）：main.py 掛上 workbench 模組。629 = 510+119。
+                  # 量到的數字，不留餘裕。前一次是 624——
+                  # 票 03-worker-own-process round 3（ADR 0063 amendment「release the lock, so
                   # nothing depends on test ordering」）：worker.py 的 main() 補 try/finally
                   # 釋放 advisory lock（只有真的拿到鎖的那次呼叫才釋放）＋module docstring
                   # 補說明段，96→119（+23），main.py 沒動，624 = 505+119。量到的數字，不留
@@ -2227,6 +2241,11 @@ KNOWN_MODULE_SIZES = {
                           # 讀數字）＋_fill_node_spend()／_current_month_window()（把票 05
                           # 的當月花費補到綁定節點上）＋tree.py 三個新欄位。前一次是票
                           # 10-feedback-entries 的 POST .../reject（784）
+    "app/workbench": 856,  # 票 workbench/02 round 2（## Blocked amendment）：`repository.py`
+                            # 補 product_id 跨品牌擁有權檢查＋一段型別註解（conn 留白吃
+                            # ConnProxy，同 schedule/routes.py 慣例），844→856（+12）。量到
+                            # 的數字，不留餘裕。前一次是票 workbench/02 round 1（ADR 0068）：
+                            # 新套件，量到的數字，不留餘裕。
     "app/shared": 450,
     "app/storage": 163,  # 票 storage-01：新模組——put／get／delete／delete_prefix 四函式，
                           # 對 Supabase Storage 的 assets bucket（ADR 0043）。

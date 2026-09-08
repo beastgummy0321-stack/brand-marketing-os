@@ -1,7 +1,7 @@
 ---
 id: 0068
 decision: The workbench module owns briefs and outputs; schedule submits briefs and reads adopted outputs, never the reverse.
-applies-to: [app/schedule/, supabase/migrations/, frontend/src/components/schedule/, app/methodology/, app/departments/]
+applies-to: [app/schedule/, supabase/migrations/, frontend/src/components/schedule/, app/methodology/, app/departments/, app/workbench/, app/departments/workbench/]
 supersedes: none
 status: in-force
 ---
@@ -43,11 +43,15 @@ generating an image; the image-generation seat stays reserved (see "What we look
    to it, a brief with a `source_ref` it stores and never interprets.
 3. **`creative_slot` / `creative_candidate` / `creative_candidate_item` stay with schedule.**
    They are the loop's memory (ADR 0050, 0057, 0064): which fingerprint each tree node ran with.
-   `creative_slot` gains one nullable column `brief_id` (schedule migration). When schedule reads a
-   node whose brief has an adopted `copy` output, it upserts the `creative_candidate` row from it,
-   idempotent on `(slot_id, output_id)` — a read that seeds its own cache, the precedent being
-   `GET .../history` (schedule contract, decisions in force). The workbench never writes a
-   schedule table.
+   ~~`creative_slot` gains one nullable column `brief_id`~~ — **amended 2026-09-09 before ticket
+   05**: not needed and not added. The slot is already located by `(node_key,
+   source_tree_task_id)` and the brief's `source_ref` carries exactly those two keys, so the join
+   is data the two modules already share; a column would be a second copy (rule 7). When schedule
+   reads a node whose brief has an adopted `copy` output, it upserts the `creative_candidate` row
+   from it, idempotent on the output's `llm_task_id` (the column `creative_candidate.llm_task_id`
+   already exists and `persist_creative_result` already keys on it) — a read that seeds its own
+   cache, the precedent being `GET .../history` (schedule contract, decisions in force). The
+   workbench never writes a schedule table.
 4. **Copy is made in the workbench and taken from the schedule page.** The 素材準備 stage of
    檔期規劃 (`docs/design-system.md` §5.1, already assigned "creative list · content, coordinates,
    copy actions") shows every deepest node's 投放包 — the adopted copy with a copy button per
@@ -59,6 +63,16 @@ generating an image; the image-generation seat stays reserved (see "What we look
    (`COORDINATE_KEYS` and the coordinate validators stay — history and the vocabulary route use
    them). Image prompts are **not** produced automatically: the user sets the count on the brief
    (decision 7), so the first request for prompts is the user's press.
+   **Where the visual direction comes from once `schedule_creative` retires (amended 2026-09-09,
+   before ticket 05):** the workbench copy call returns `visual_tone` and `visual_concept` beside
+   the copy — the writer who chose the angle names the picture — and the job writes them onto the
+   brief; the sync of decision 3 mirrors them into `creative_candidate`. Still exactly one
+   direction per node, still one to two sentences, still never a finished prompt outside the
+   workbench: ADR 0047's rule survives with its producer moved, and its `decision` line is
+   reworded in ticket 05 to say so (the gate test `Adr0047VisualDirectionGateTest` keeps its
+   scan; its tail assertions on `ad_creative.md` go with that file). A schedule-node brief takes
+   `product_id` = the plan's first product and `request.product_ids` = all of them; brand context
+   is compiled per listed product, as the retiring job did.
 6. **One brief = one procrastinate job = one LLM call per part, JSON-only reply.** The copy call
    carries: the workbench copy task file, the methodology rows for the new task labels (below),
    the brief, the product's compiled brand context (one product, not one per tree product), the
