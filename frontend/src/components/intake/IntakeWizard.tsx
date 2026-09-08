@@ -59,7 +59,11 @@ export function IntakeWizard({ brandId }: { brandId: string | null }) {
     return <div className="rounded-lg border border-border bg-card p-6 text-sm text-muted-foreground">讀取中…</div>;
   }
   if (state.status === "notfound") {
-    return <EmptyState title="找不到建檔進度" description="這個品牌目前沒有進行中或已完成的建檔草稿。" actionHref="/" actionLabel="回到跨品牌總覽" actionInternal />;
+    return (
+      <TaskFlowShell steps={STEP_LABELS} current={1} onSelect={() => {}} rightRail={<CostGauge draft={null} onAdjust={() => {}} />}>
+        <StartStep brandId={brandId} onSubmitted={refresh} />
+      </TaskFlowShell>
+    );
   }
   if (state.status === "error") {
     return <EmptyState title="讀取失敗" description={state.message} onAction={refresh} actionLabel="重新載入" />;
@@ -68,7 +72,7 @@ export function IntakeWizard({ brandId }: { brandId: string | null }) {
   const { draft } = state;
 
   if (draft.completed) {
-    return <IntakeCompletedPage brandId={brandId} />;
+    return <IntakeCompletedPage brandId={brandId} onRestart={() => setState({ status: "notfound" })} />;
   }
 
   return (

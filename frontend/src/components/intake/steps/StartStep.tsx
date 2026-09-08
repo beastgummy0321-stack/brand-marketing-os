@@ -87,7 +87,7 @@ export function StartStep({
     <div className="flex flex-col gap-5 rounded-lg border border-border bg-card p-6 shadow-[var(--shadow-card)]">
       <div>
         <h1 className="font-display text-xl text-foreground">
-          {isRestart ? `重新調研：${prevBrandName ?? "…"}` : "智能引導建立品牌"}
+          {isRestart ? (prevBrandName === null ? "品牌調研" : `重新調研：${prevBrandName}`) : "智能引導建立品牌"}
         </h1>
       </div>
 

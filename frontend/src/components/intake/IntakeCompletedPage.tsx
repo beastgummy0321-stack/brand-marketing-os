@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
+import { Button } from "@/components/layout/ui/button";
 import { Skeleton } from "@/components/layout/Skeleton";
 import { fetchPersonas, fetchTruthCard, type PersonaBundle, type TruthCard } from "@/lib/intakeT2Api";
 
@@ -13,7 +14,7 @@ type OptionalState<T> =
   | { status: "error"; message: string }
   | { status: "ready"; data: T };
 
-export function IntakeCompletedPage({ brandId }: { brandId: string }) {
+export function IntakeCompletedPage({ brandId, onRestart }: { brandId: string; onRestart: () => void }) {
   const [truth, setTruth] = useState<TruthState>({ status: "loading" });
   const [personas, setPersonas] = useState<OptionalState<PersonaBundle>>({ status: "loading" });
 
@@ -51,7 +52,10 @@ export function IntakeCompletedPage({ brandId }: { brandId: string }) {
         <p className="mt-2 text-sm text-muted-foreground">{count === 0 ? "這次沒有新增資料，但建檔流程已完成。" : "品牌資料 " + count + " 條已生效。"}</p>
       </div>
       <PersonaProgress state={personas} />
-      <div><Link to={"/brands/" + encodeURIComponent(brandId)} className="inline-flex rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90">前往品牌頁</Link></div>
+      <div className="flex gap-3">
+        <Link to={"/brands/" + encodeURIComponent(brandId)} className="inline-flex rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90">前往品牌頁</Link>
+        <Button type="button" variant="outline" onClick={onRestart}>再跑一次調研</Button>
+      </div>
     </div>
   );
 }
