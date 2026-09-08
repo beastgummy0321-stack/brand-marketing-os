@@ -15,6 +15,14 @@
    `SOFT_REJECT_RULE_TYPES`、`severity == "soft"`、`source_reference_id IS NULL`
    （決定 8：FK 會炸，來源改寫進 `content`）、`content` 含來源日期那句、同一條採用兩次
    只有一列（API 契約／資料正確性）。
+
+`docs/issues/plan-quality/02-diagnosis-label-map-from-this-round.md` 加一支（done-check 1／2
+明文，只測這一支）：
+
+5. `LabelMapFromPerformanceTest`：`label_map_from_performance()` 只從這一輪壓縮表（`values`
+   清單）建圖，不是品牌整個座標庫——`untagged`-only 的維度不貢獻任何鍵；一個這一輪零花費的
+   舊座標值因此不在圖裡，`_valid_suggestions()` 就把引用它的建議丟掉，即使那個座標值真的
+   登記在這個品牌名下（資料正確性）。
 """
 
 import re
@@ -113,6 +121,50 @@ class ConvergeDedupesTest(unittest.TestCase):
         self.assertEqual(result[0]["impact_spend"], 800.0)
         self.assertEqual(result[0]["headline"], "預算角度的說法")  # 較大 impact_spend 那條的內文
         self.assertEqual(set(result[0]["agreed_by"]), {"audience", "budget"})
+
+
+class LabelMapFromPerformanceTest(unittest.TestCase):
+    """Ticket `02-diagnosis-label-map-from-this-round.md`：guard map keys off this round's
+    compressed table (`performance["currencies"][*]["dimensions"][*]["values"]`), not the
+    brand's whole registered-coordinate library — a coordinate with zero spend this round must
+    be absent from the map even though it is a real, registered coordinate."""
+
+    def test_literal_example_maps_only_the_tagged_value_and_skips_untagged(self):
+        performance = {"currencies": [{
+            "currency": "TWD", "total_spend": 300.0, "untagged": {"spend": 0.0},
+            "dimensions": [
+                {"dimension": "angle", "untagged": {"spend": 0.0},
+                 "values": [{"key": "angle_value", "label": "價值感", "spend": 300.0}]},
+                {"dimension": "hook", "untagged": {"spend": 300.0}, "values": []},
+            ],
+        }]}
+        self.assertEqual(
+            diagnosis.label_map_from_performance(performance),
+            {("angle", "價值感"): "angle_value"},
+        )
+
+    def test_valid_suggestions_drops_a_label_absent_from_this_rounds_table(self):
+        # Only one coordinate value carries a spend row this round; a suggestion citing a real
+        # but zero-spend label ("CP值") must fall out here, not survive on the strength of being
+        # registered in the brand's coordinate library (that would be the pre-fix behaviour this
+        # ticket removes: `list_coordinates()` would carry both labels regardless of spend).
+        performance = {"currencies": [{
+            "currency": "TWD", "total_spend": 300.0, "untagged": {"spend": 0.0},
+            "dimensions": [
+                {"dimension": "angle", "untagged": {"spend": 0.0},
+                 "values": [{"key": "angle_value", "label": "價值感", "spend": 300.0}]},
+            ],
+        }]}
+        label_to_key = diagnosis.label_map_from_performance(performance)
+        raw = [
+            {"dimension": "angle", "coordinate_label": "價值感", "direction": "scale_up",
+             "impact_spend": 300.0, "headline": "h1", "evidence": "e1"},
+            {"dimension": "angle", "coordinate_label": "CP值", "direction": "scale_up",
+             "impact_spend": 0.0, "headline": "h2", "evidence": "e2"},
+        ]
+        out = diagnosis._valid_suggestions(raw, label_to_key)
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0]["coordinate_key"], "angle_value")
 
 
 class BreakevenFallbackTest(unittest.TestCase):

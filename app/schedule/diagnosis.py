@@ -300,6 +300,25 @@ def compress(performance: dict, breakeven: tuple[float | None, str]) -> str:
     return "\n".join(out)
 
 
+def label_map_from_performance(performance: dict) -> dict[tuple[str, str], str]:
+    """`(dimension, label) → key` built from **this round's compressed table**, not the brand's
+    whole registered-coordinate library (`schedule_repo.list_coordinates()`). plan-quality ticket 02
+    (2026-09-08): a coordinate with zero spend this
+    round is absent from `performance["currencies"][*]["dimensions"][*]["values"]` — the same
+    `values` list `compress()` prints — so it is absent here too, and an agent citing it is
+    dropped by `_valid_suggestions()`. This is "coordinates that have a spend row this round",
+    not "coordinates with spend > 0": `_currency_view()` buckets every row regardless of amount,
+    and this function does not add an amount filter — the map must match what the table showed.
+    `untagged` buckets are not coordinates and are skipped. Two currencies naming the same
+    `(dimension, label)` collapse to one entry (last one wins; they are identical)."""
+    return {
+        (dim["dimension"], value["label"]): value["key"]
+        for currency in performance["currencies"]
+        for dim in currency["dimensions"]
+        for value in dim["values"]
+    }
+
+
 def role_text(lens: str) -> str:
     """這個 lens 的角色與輸出格式段——**位置固定擺在 prompt 最後一段**
     （`docs/contracts/schedule.md`「Position in the prompt decides whether an instruction
@@ -327,9 +346,11 @@ def role_text(lens: str) -> str:
 def _valid_suggestions(raw: list, label_to_key: dict[tuple[str, str], str]) -> list[dict]:
     """代理原始 `suggestions` → 過濾＋補上 `coordinate_key`。代理只看得到座標值的中文
     label（`compress()` 表格），不知道內部 key，所以這裡用 `(dimension, label) → key`
-    （`schedule_repo.list_coordinates()` 現有資料）把它解回真正的 key——跟
-    `repository._resolve_coordinates()` 同一個既有手法（比對不到就丟掉這一條，不整批作廢）。
-    `coordinate_key` 對不上這個品牌現有座標的那一條整條丟掉：代理捏造的座標值不進收斂。"""
+    （`label_map_from_performance()`——這一輪壓縮表裡實際出現的座標值，不是品牌整個座標
+    庫）把它解回真正的 key——跟 `repository._resolve_coordinates()` 同一個既有手法（比對不到
+    就丟掉這一條，不整批作廢）。`coordinate_key` 對不上這一輪表格裡座標值的那一條整條丟掉：
+    代理捏造的座標值、或引用一個這一輪零花費的舊座標值，都不進收斂
+    （plan-quality 票 02，2026-09-08）。"""
     out = []
     for item in raw:
         if not isinstance(item, dict):

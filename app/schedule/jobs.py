@@ -569,8 +569,7 @@ def schedule_diagnosis(org_id: str, brand_id: str) -> None:
         # 要看得到——否則系統會一邊提醒「不以點擊率單獨判斷」，一邊推薦一條只看 ROAS 的建議。
         reminders = diagnosis_mod.reminders_text(diagnosis_mod.tree_reminders(conn, brand_id))
 
-        coordinates = repository.list_coordinates(conn, org_id, brand_id)
-        label_to_key = {(c["dimension"], c["label"]): c["key"] for c in coordinates}
+        label_to_key = diagnosis_mod.label_map_from_performance(performance)
 
         methodology_result = methodology.compile(
             conn, state.DIAGNOSIS_METHODOLOGY_TASK_LABELS, brand_id=brand_id
