@@ -5,7 +5,7 @@ import { Textarea } from "@/components/layout/ui/textarea";
 import { EmptyState } from "@/components/layout/EmptyState";
 import { Skeleton } from "@/components/layout/Skeleton";
 import { COORDINATE_DIMENSIONS, type Coordinate } from "@/lib/coordinatesApi";
-import { formatCurrency, formatMetaRoas, formatPercent, formatSyncTime } from "@/lib/format";
+import { formatMetaRoas, formatMoney, formatPercent, formatSyncTime } from "@/lib/format";
 import { fetchMetaBackfillStatus, startMetaBackfill } from "@/lib/metaApi";
 import {
   fetchHistory,
@@ -169,6 +169,7 @@ export function HistoryPage({ brandId }: { brandId: string }) {
                   key={card.external_id}
                   brandId={brandId}
                   card={card}
+                  currency={currency.currency}
                   coordinates={data.coordinates}
                   onSkip={() =>
                     setSkipped((prev) => {
@@ -189,11 +190,13 @@ export function HistoryPage({ brandId }: { brandId: string }) {
 function HistoryCardItem({
   brandId,
   card,
+  currency,
   coordinates,
   onSkip,
 }: {
   brandId: string;
   card: HistoryCard;
+  currency: string;
   coordinates: Coordinate[];
   onSkip: () => void;
 }) {
@@ -242,11 +245,11 @@ function HistoryCardItem({
           <dl className="grid grid-cols-2 gap-x-4 gap-y-3 text-sm">
             <div>
               <dt className="text-xs text-muted-foreground">花費</dt>
-              <dd className="numeric text-foreground">{formatCurrency(card.spend)}</dd>
+              <dd className="numeric text-foreground">{formatMoney(card.spend, currency)}</dd>
             </div>
             <div>
               <dt className="text-xs text-muted-foreground">CPA</dt>
-              <dd className="numeric text-foreground">{formatCurrency(card.cpa)}</dd>
+              <dd className="numeric text-foreground">{formatMoney(card.cpa, currency)}</dd>
             </div>
             <div>
               <dt className="text-xs text-muted-foreground">ROAS（保守）</dt>

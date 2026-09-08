@@ -7,7 +7,7 @@ import {
   type DiagnosisCheckableNumbers,
   type DiagnosisSuggestion,
 } from "@/lib/scheduleApi";
-import { formatCurrency } from "@/lib/format";
+import { formatMoney } from "@/lib/format";
 
 /** 票 02（T6c，02-diagnosis-on-cockpit.md）：成效判讀——長在既有「素材座標成效」區塊裡，
  * 不另開第三個長區塊（docs/design-system.md §1）。票面原文：「標題列右側加一顆『跑一次判讀』，
@@ -196,9 +196,9 @@ function DiagnosisReadout({ diagnosis, panel }: { diagnosis: Diagnosis; panel: D
 
 /** issue diagnosis-lacks-checkable-numbers：一條建議底下那行可核對的數字。保守 ROAS 是
  * 分母含未追蹤花費的那一個（`roas_conservative`），跟座標成效表同一欄，兩邊對得起來。 */
-function formatCheckable(n: DiagnosisCheckableNumbers): string {
+function formatCheckable(n: DiagnosisCheckableNumbers, currency: string): string {
   const roas = n.roas_conservative === null ? "ROAS 未追蹤" : `保守 ROAS ${n.roas_conservative.toFixed(2)}x`;
-  return `${formatCurrency(n.spend)}・${n.ad_count} 則廣告・${roas}（追蹤覆蓋 ${Math.round(n.roas_coverage * 100)}%）`;
+  return `${formatMoney(n.spend, currency)}・${n.ad_count} 則廣告・${roas}（追蹤覆蓋 ${Math.round(n.roas_coverage * 100)}%）`;
 }
 
 function SuggestionCard({
@@ -209,19 +209,25 @@ function SuggestionCard({
   adopting: boolean;
   onAdopt: () => void;
 }) {
+  // 票 past-ads-07：可核對數字的花費跟著 suggestion 自己的 currency 走，不是系統 TWD——
+  // 後端 attach_checkable_numbers()／_dimension_values() 讓 currency 跟 numbers／
+  // compared_with 同源（找不到幣別就兩者都是空），所以這裡有 numbers／compared_with 時
+  // currency 必定非 null；用區域變數讓窄化能穿過下面 .map() 的 closure。
+  const currency = suggestion.currency;
+
   return (
     <div className="flex flex-col gap-2 rounded-md border border-border bg-card p-3">
       <p className="text-sm font-medium text-foreground">{suggestion.headline}</p>
       <p className="text-xs text-muted-foreground">{suggestion.evidence}</p>
-      {suggestion.numbers && (
+      {suggestion.numbers && currency && (
         <p className="text-xs text-muted-foreground">
-          這一組：{formatCheckable(suggestion.numbers)}
+          這一組：{formatCheckable(suggestion.numbers, currency)}
         </p>
       )}
-      {(suggestion.compared_with ?? []).length > 0 && (
+      {(suggestion.compared_with ?? []).length > 0 && currency && (
         <p className="text-xs text-muted-foreground">
           對照：{(suggestion.compared_with ?? [])
-            .map((peer) => `${peer.label} ${formatCheckable(peer)}`)
+            .map((peer) => `${peer.label} ${formatCheckable(peer, currency)}`)
             .join("｜")}
         </p>
       )}

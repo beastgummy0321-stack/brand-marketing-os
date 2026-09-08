@@ -11,7 +11,7 @@ import {
   COORDINATE_DIMENSIONS,
   type CoordinateDimension,
 } from "@/lib/coordinatesApi";
-import { formatCurrency, formatMetaRoas, formatRoas } from "@/lib/format";
+import { formatCurrency, formatMetaRoas, formatMoney, formatRoas } from "@/lib/format";
 import {
   fetchCreativePerformance,
   type CreativePerformanceCurrency,
@@ -319,13 +319,13 @@ function CoordinateValueRow({
   return (
     <tr className="border-t border-border">
       <SpendCell>{value.label}</SpendCell>
-      <SpendCell>{`${value.spend.toLocaleString("zh-TW")} ${currency}`}</SpendCell>
+      <SpendCell>{formatMoney(value.spend, currency)}</SpendCell>
       <SpendCell>{value.impressions.toLocaleString("zh-TW")}</SpendCell>
       <SpendCell>{value.clicks.toLocaleString("zh-TW")}</SpendCell>
       <SpendCell>
         {value.revenue === null
           ? "未追蹤"
-          : `${value.revenue.toLocaleString("zh-TW")} ${currency}`}
+          : formatMoney(value.revenue, currency)}
       </SpendCell>
       <SpendCell>{formatMetaRoas(value.roas)}</SpendCell>
       <SpendCell>{(value.roas_coverage * 100).toFixed(0)}%</SpendCell>
@@ -345,7 +345,7 @@ function UntaggedRow({
   return (
     <tr className="border-t border-border bg-muted/40 font-medium text-foreground">
       <SpendCell>未標座標</SpendCell>
-      <SpendCell>{`${untagged.spend.toLocaleString("zh-TW")} ${currency}`}</SpendCell>
+      <SpendCell>{formatMoney(untagged.spend, currency)}</SpendCell>
       <SpendCell>—</SpendCell>
       <SpendCell>—</SpendCell>
       <SpendCell>—</SpendCell>

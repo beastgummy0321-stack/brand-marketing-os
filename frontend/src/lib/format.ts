@@ -6,6 +6,14 @@ export function formatCurrency(value: number | null): string {
   return `NT$ ${Math.round(value).toLocaleString("zh-TW")}`;
 }
 
+/** 票 past-ads-07：來自平台某一列（Meta 廣告帳戶、投放史卡片）的錢，跟著那一列自己的
+ * 幣別走——不是系統自己的 TWD（那用 formatCurrency）。一個品牌可能同時綁 TWD 與 USD
+ * 帳戶（ADR 0057 §4），這種列印 NT$ 是錯的標籤。 */
+export function formatMoney(value: number | null, currency: string): string {
+  if (value === null) return "累積中";
+  return `${Math.round(value).toLocaleString("zh-TW")} ${currency}`;
+}
+
 export function formatCount(value: number | null): string {
   if (value === null) return "累積中";
   return value.toLocaleString("zh-TW");

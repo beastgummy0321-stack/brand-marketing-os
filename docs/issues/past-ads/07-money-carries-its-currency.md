@@ -74,3 +74,11 @@ frontend/src/components/cockpit/DiagnosisPanel.tsx
   report.
 - **Cheapest wrong implementation that leaves every check green**: `formatMoney` ignoring `currency` and
   printing `TWD` always — the vitest `USD` case is what catches it; keep it.
+
+## Blocked
+
+2026-09-08, implementer round 1: `PerformanceDetails.tsx`'s `MonthMoneySection` (`:80,85,101`) prints
+`revenue`/`margin` (own-site orders, `BrandMonthMoney` has no `currency` — §7's own carve-out) and one
+Meta `spend` total the endpoint returns without a currency (a backend change this ticket forbids). Ruling
+(main chat): those three lines keep `formatCurrency`; done-check 2's grep on that file is narrowed to
+"nothing but lines 80/85/101". The per-currency spend total on the cockpit is a separate wish, not opened.
