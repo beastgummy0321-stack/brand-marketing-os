@@ -22,6 +22,8 @@ from app.schedule.creative import COORDINATE_KEYS
 
 _TOP_N = 5
 _MAX_CARDS_PER_CURRENCY = 15
+CREATIVE_RETRY_AFTER = timedelta(hours=24)  # ADR 0067 §1.9 amendment 2026-09-08 (ticket
+# past-ads/09): the only place this number lives — never re-stated in routes.py.
 
 
 def _rank_cards(rows_by_ad: dict, names_and_cpa: dict) -> list[dict]:
@@ -87,9 +89,18 @@ def _coordinates_from_row(row: dict | None) -> dict:
     return {dimension: row[f"{dimension}_key"] for dimension in COORDINATE_KEYS}
 
 
-def _needs_creative_fetch(existing_by_id: dict, external_id: str) -> bool:
+def _needs_creative_fetch(existing_by_id: dict, external_id: str, now) -> bool:
+    """ADR 0067 §1.9 amendment 2026-09-08（票 past-ads/09）：一個 `None` 答案不是「永遠問過
+    了」——沒有列、或 `creative_fetched_at` 還是 NULL 一律要問；有列但兩個內容欄位
+    （`creative_body`／`creative_image_url`）都是 NULL，滿 `CREATIVE_RETRY_AFTER` 才重問一次
+    （第一次真的看畫面撞到暫時性失敗，不該被凍結成「永遠」；被刪掉的廣告會再答一次 None，
+    不是問題）。已經有內容的列（一個好答案）從不重問，跟時間無關。"""
     row = existing_by_id.get(external_id)
-    return row is None or row["creative_fetched_at"] is None
+    if row is None or row["creative_fetched_at"] is None:
+        return True
+    if row["creative_body"] is None and row["creative_image_url"] is None:
+        return row["creative_fetched_at"] < now - CREATIVE_RETRY_AFTER
+    return False
 
 
 def _attach_creative(conn, org_id: str, brand_id: str, cards: list[dict],
@@ -101,7 +112,10 @@ def _attach_creative(conn, org_id: str, brand_id: str, cards: list[dict],
     失敗就是零列，不能半套）。成功則每一個 id（含 Meta 答 `None` 的那個）都落地一列，
     `creative_fetched_at` 蓋起來，下一次 GET 就不會再問——`None` 本身就是「Meta 現在回不出
     這則的素材」那個狀態，不是還沒查過。"""
-    needs_fetch = [c for c in cards if _needs_creative_fetch(existing_by_id, c["external_id"])]
+    now = now_utc()
+    needs_fetch = [
+        c for c in cards if _needs_creative_fetch(existing_by_id, c["external_id"], now)
+    ]
     error_message: str | None = None
     if needs_fetch:
         token = meta_repo.get_token(conn, org_id)
@@ -124,7 +138,7 @@ def _attach_creative(conn, org_id: str, brand_id: str, cards: list[dict],
                         first_seen_date=card["first_seen_date"],
                         last_seen_date=card["last_seen_date"],
                         creative_body=answer.get("body"), creative_title=answer.get("title"),
-                        creative_image_url=answer.get("image_url"), creative_fetched_at=now_utc(),
+                        creative_image_url=answer.get("image_url"), creative_fetched_at=now,
                         coordinates_status="pending",
                     )
                     existing_by_id[card["external_id"]] = row
@@ -239,6 +253,15 @@ def history_cards(conn, org_id: str, brand_id: str) -> dict:
         "connected": True, "backfill": backfill, "breakeven": breakeven,
         "currencies": currencies, "coordinates": coordinates,
     }
+
+
+def clear_creative_cache(conn, org_id: str, brand_id: str, external_ids: list[str]) -> int:
+    """票 past-ads/09（ADR 0067 §1.9 amendment 2026-09-08）：owner 按「重新抓素材」——清掉
+    這批廣告的素材快取，讓下一次 GET 的 `_attach_creative`／`_needs_creative_fetch` 把它們
+    當「還沒查過」重新問一次 Meta（不管原本是不是還沒滿 24 小時、不管原本是不是已經有
+    好答案——按鈕是使用者自己選的一批 id，不是這支函式篩出來的）。SQL 落在
+    `repository.reset_imported_ad_creatives()`，這裡只轉呼叫。"""
+    return schedule_repo.reset_imported_ad_creatives(conn, org_id, brand_id, external_ids)
 
 
 def tag_imported_ad(conn, org_id: str, brand_id: str, external_id: str, *,

@@ -634,6 +634,23 @@ def update_imported_ad_tags(conn: _AnyConn, org_id: str, brand_id: str, external
     return imported_ads_for_brand(conn, org_id, brand_id)[external_id]
 
 
+def reset_imported_ad_creatives(conn: _AnyConn, org_id: str, brand_id: str,
+                                 external_ids: list[str]) -> int:
+    """票 past-ads/09（ADR 0067 §1.9 amendment 2026-09-08）：owner 按「重新抓素材」——清掉
+    素材快取的三個 `creative_*` 欄位＋`creative_fetched_at`（不動七個 `*_key`／`owner_note`
+    ／`coordinates_status`，那是 owner 標的座標，不是平台快取，`update_imported_ad_tags()`
+    專管）。回傳實際改到的列數——不屬於這個品牌／組織的 id 不計入，回 0（呼叫端不必先查
+    一次存不存在）。"""
+    result = conn.execute(
+        "UPDATE imported_ad SET creative_body = NULL, creative_title = NULL,"
+        " creative_image_url = NULL, creative_fetched_at = NULL, updated_at = %s"
+        " WHERE org_id = %s AND brand_id = %s AND external_id = ANY(%s)",
+        (now_utc(), org_id, brand_id, external_ids),
+    )
+    conn.commit()
+    return result.rowcount
+
+
 def count_imported_ads(conn: _AnyConn, org_id: str, brand_id: str) -> int:
     row = conn.execute(
         "SELECT count(*) AS n FROM imported_ad WHERE org_id = %s AND brand_id = %s",

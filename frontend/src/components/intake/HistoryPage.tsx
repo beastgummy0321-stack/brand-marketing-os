@@ -9,6 +9,7 @@ import { formatMetaRoas, formatMoney, formatPercent, formatSyncTime } from "@/li
 import { fetchMetaBackfillStatus, startMetaBackfill } from "@/lib/metaApi";
 import {
   fetchHistory,
+  refetchHistoryCreatives,
   tagHistoryAd,
   type History,
   type HistoryCard,
@@ -96,6 +97,20 @@ export function HistoryPage({ brandId }: { brandId: string }) {
     setRunning(res.running);
   });
 
+  // 票 past-ads/09（ADR 0067 §1.9 amendment）：owner 按「重新抓素材」——只送目前畫面上
+  // （沒被「略過」隱藏）素材是 null 的那些 id；後端不限制只能送這些（票面矛盾檢查段），
+  // 這裡送窄的那份是前端自己的選擇，不是後端逼的。
+  const refetchForm = useFormSubmit(async () => {
+    if (state.status !== "ready") return;
+    const nullCreativeIds = state.data.currencies
+      .flatMap((currency) => currency.cards)
+      .filter((card) => !skipped.has(card.external_id) && card.creative === null)
+      .map((card) => card.external_id);
+    if (nullCreativeIds.length === 0) return;
+    await refetchHistoryCreatives(brandId, nullCreativeIds);
+    load();
+  });
+
   if (state.status === "loading") {
     return (
       <div className="flex flex-col gap-4">
@@ -148,11 +163,29 @@ export function HistoryPage({ brandId }: { brandId: string }) {
     );
   }
 
+  const visibleCards = data.currencies
+    .flatMap((currency) => currency.cards)
+    .filter((card) => !skipped.has(card.external_id));
+  const hasNullCreative = visibleCards.some((card) => card.creative === null);
+
   return (
     <div className="flex flex-col gap-6">
       <p className="text-sm text-muted-foreground">
         這些是 Meta 現在還回得出的廣告，不一定是你投過的全部。
       </p>
+      {hasNullCreative && (
+        <div className="flex flex-col items-start gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            disabled={refetchForm.saving}
+            onClick={() => void refetchForm.submit()}
+          >
+            {refetchForm.saving ? "重新抓取中…" : "重新抓素材"}
+          </Button>
+          {refetchForm.error && <p className="text-sm text-danger">{refetchForm.error}</p>}
+        </div>
+      )}
       {data.breakeven && data.breakeven.roas === null && (
         <p className="text-sm text-muted-foreground">
           算不出打平線（{data.breakeven.source}），所以只排序、不判贏輸。

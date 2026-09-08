@@ -720,9 +720,6 @@ class CoordinateDimensionSyncTest(unittest.TestCase):
             ("frontend/src/lib/coordinatesApi.ts COORDINATE_DIMENSIONS", self._ts_keys(
                 "frontend/src/lib/coordinatesApi.ts",
                 _TS_COORDINATE_DIMENSIONS_BLOCK, "COORDINATE_DIMENSIONS")),
-            ("frontend/src/components/schedule/CampaignTree.tsx COORDINATE_LABELS",
-             self._ts_keys("frontend/src/components/schedule/CampaignTree.tsx",
-                           _TS_COORDINATE_LABELS_BLOCK, "COORDINATE_LABELS")),
         ):
             self.assertEqual(
                 keys, CONSTITUTION_COORDINATE_KEYS,
@@ -736,21 +733,26 @@ class CoordinateDimensionSyncTest(unittest.TestCase):
             "frontend/src/lib/coordinatesApi.ts",
             _TS_COORDINATE_DIMENSIONS_BLOCK, "COORDINATE_DIMENSIONS",
         )
-        campaign_tree_keys = self._ts_keys(
-            "frontend/src/components/schedule/CampaignTree.tsx",
-            _TS_COORDINATE_LABELS_BLOCK, "COORDINATE_LABELS",
-        )
         self.assertEqual(
             python_keys, coordinates_api_keys,
             "COORDINATE_KEYS（app/schedule/creative.py）跟 COORDINATE_DIMENSIONS"
             "（frontend/src/lib/coordinatesApi.ts）的七個鍵名或順序對不上：\n"
             f"  python: {python_keys}\n  coordinatesApi.ts: {coordinates_api_keys}",
         )
+        # 票 past-ads/08（2026-09-09，主對話台裁決）：CampaignTree.tsx 不再有自己那份
+        # COORDINATE_LABELS——它從 coordinatesApi 讀 COORDINATE_DIMENSIONS（外殼不擁有創意
+        # 詞彙，只顯示資料層給的字；`CampaignTreeVocabularyGateTest` 掃的是這個元件自己的文字）。
+        # 三份變兩份，這道閘門守的東西沒變：第三份不准悄悄長回來，而且來源必須是那個 import。
+        tree_text = (REPO_ROOT / "frontend/src/components/schedule/CampaignTree.tsx").read_text(
+            encoding="utf-8")
         self.assertEqual(
-            python_keys, campaign_tree_keys,
-            "COORDINATE_KEYS（app/schedule/creative.py）跟 COORDINATE_LABELS"
-            "（frontend/src/components/schedule/CampaignTree.tsx）的七個鍵名或順序對不上：\n"
-            f"  python: {python_keys}\n  CampaignTree.tsx: {campaign_tree_keys}",
+            len(list(_TS_COORDINATE_LABELS_BLOCK.finditer(tree_text))), 0,
+            "CampaignTree.tsx 又長出自己的 COORDINATE_LABELS——七維標籤只准有一個前端來源"
+            "（coordinatesApi.ts 的 COORDINATE_DIMENSIONS，票 past-ads/08）。",
+        )
+        self.assertIn(
+            'import { COORDINATE_DIMENSIONS } from "@/lib/coordinatesApi"', tree_text,
+            "CampaignTree.tsx 必須從 @/lib/coordinatesApi 讀 COORDINATE_DIMENSIONS（票 past-ads/08）。",
         )
 
 
@@ -1313,7 +1315,15 @@ class CoordinateDimensionSyncTest(unittest.TestCase):
 #      量對了，round 2 沒有再動這一筆。
 #   4. 本段理由註解自己（含上面「這道棘輪在落地前就已經在漏」那一段，done-check 5 點名的
 #      新要求）。
-TEST_LINES_CEILING = 22735  # past-ads 05 review note (2026-09-08): 22726 -> 22735 — one assertIn
+# past-ads/08 follow-up (2026-09-09, main chat): 22871 -> 22875, CoordinateDimensionSyncTest now
+# asserts CampaignTree.tsx has no COORDINATE_LABELS of its own and imports COORDINATE_DIMENSIONS.
+TEST_LINES_CEILING = 22875  # Previous: ticket past-ads/09 (docs/issues/past-ads/09-creative-retry.md,
+# 2026-09-09): 22735 -> 22871 (+136), measured (`_line_totals()`), no slack. `CreativeCacheTest`
+# gains four tests (done-check 1: stale-none/fresh-none/stale-good 24h retry; done-check 2: the
+# refetch button clears cache scoped by brand/org, tenant boundary 404, and the 31-id 400) plus
+# `_refetch()`/`_set_creative_fetched_at()` helpers on `_HistoryTestBase`; plus this reason
+# comment's and the `KNOWN_MODULE_SIZES["app/schedule"]` reason comment's own lines. Previous was
+# 22735 -- past-ads 05 review note (2026-09-08): 22726 -> 22735 — one assertIn
 # in test_schedule.py (the prompt must carry the spend figure, so a wrong window goes red) plus
 # the two reason comments. Previous was 22726 --
 # Ticket past-ads 05 (docs/issues/past-ads/05-second-entrance-and-
@@ -1832,7 +1842,14 @@ KNOWN_MODULE_SIZES = {
     "app/orders": 1423,  # 票 12：channel_revenue 一張表取代三張（刪掉藥局專屬那一整組
                           # 之後仍淨增）——官網帳本寫入路徑、channel_revenue_summary()、
                           # 通用手動登錄（含「官網不能手動登錄」那道錢的守門）
-    "app/schedule": 5285,  # past-ads 05 review note (2026-09-08): 5281 -> 5285, `history.py`
+    "app/schedule": 5348,  # ticket past-ads/09 (docs/issues/past-ads/09-creative-retry.md,
+                           # 2026-09-09): 5285 -> 5348 (+63), measured. `history.py`:
+                           # `CREATIVE_RETRY_AFTER` constant, `_needs_creative_fetch()` gains the
+                           # 24h-stale-and-both-columns-null retry read, `clear_creative_cache()`.
+                           # `repository.py`: `reset_imported_ad_creatives()`. `routes.py`:
+                           # `RefetchHistoryCreativesRequest` + the POST .../creatives/refetch
+                           # route + its message constant. Previous was 5285 --
+                           # past-ads 05 review note (2026-09-08): 5281 -> 5285, `history.py`
                            # `tagged_history` skips a tagged ad with no spend rows (currency None
                            # crashed the prompt's sort). Previous was 5281 --
                            # Ticket past-ads 05 (docs/issues/past-ads/05-second-entrance-and-

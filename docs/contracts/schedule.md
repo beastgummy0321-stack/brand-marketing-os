@@ -51,13 +51,16 @@ Callers: `app/main.py`'s register loop (both), and `app/tests` (which call `regi
 again after building their own test `background.app()`). `imported_ad_count` — `app.dashboard`
 (ticket 04).
 
-`register()` also mounts two routes for the past-ads history screen (ticket past-ads/03,
+`register()` also mounts three routes for the past-ads history screen (ticket past-ads/03,
 ADR 0067): `GET /api/schedule/brands/{brand_id}/history` (`history.history_cards()` — connection
 state, backfill progress, break-even, the per-currency ranked ad cards, and the brand's
-coordinate vocabulary) and `PUT /api/schedule/brands/{brand_id}/history/{external_id}` (body
+coordinate vocabulary), `PUT /api/schedule/brands/{brand_id}/history/{external_id}` (body
 `{"coordinates": {…the seven dimensions…}, "owner_note": string | null}` →
 `history.tag_imported_ad()`; `ValueError("coordinate_unknown:<dimension>")` → 400
-`coordinate_unknown`, `ValueError("imported_ad_unknown")` → 404 `imported_ad_unknown`).
+`coordinate_unknown`, `ValueError("imported_ad_unknown")` → 404 `imported_ad_unknown`), and —
+added ticket past-ads/09, ADR 0067 §1.9 amendment — `POST
+/api/schedule/brands/{brand_id}/history/creatives/refetch` (body `{"external_ids": [...]}`,
+1-30 ids, else 400 `too_many_ids` → `history.clear_creative_cache()` → `{"cleared": <int>}`).
 
 ## Error shapes
 
@@ -117,6 +120,18 @@ Module-local and reversible, decided here rather than in an ADR:
   fields, never the owner's seven `*_key` columns or `owner_note` — those are `PUT`'s alone,
   ADR 0067 rule 2). A `GraphError` from `fetch_ad_creatives` leaves that batch's cards
   `creative: null` with the error message and writes nothing.
+
+- **A `None` creative answer is retried, never frozen forever** (ticket past-ads/09, ADR 0067
+  §1.9 amendment 2026-09-08). `history.CREATIVE_RETRY_AFTER` (`timedelta(hours=24)`, stated once
+  as a module constant with the ADR reference in its comment) is the only place the 24-hour
+  number lives — `_needs_creative_fetch()` re-asks Meta once a row with both `creative_body` and
+  `creative_image_url` NULL is that old; a row that already carries a body or an image is never
+  re-asked, no matter its age. `POST .../history/creatives/refetch` clears the four
+  creative-cache columns (`repository.reset_imported_ad_creatives()`) for the ids the caller
+  names, so the next GET treats them as never-fetched; the route does not restrict the ids to
+  ones whose `creative` is currently null — the frontend only ever sends those, but pressing the
+  button against an ad that already has a good creative refetches it once and it comes back
+  (ticket's own contradiction-check line).
 
 - The module now registers an `app.core.cleanup` function (ticket T1b): `app/schedule/repository.py`
   registers 「創意座標與素材候選」, covering the five tables this ticket added.

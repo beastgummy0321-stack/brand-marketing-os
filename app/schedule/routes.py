@@ -133,6 +133,12 @@ class TagImportedAdRequest(BaseModel):
     owner_note: str | None = None
 
 
+class RefetchHistoryCreativesRequest(BaseModel):
+    # 票 past-ads/09（ADR 0067 §1.9 amendment）：owner 按「重新抓素材」——租戶界線先於
+    # 欄位驗證（同上），真正的 1–30 筆驗證在 `refetch_history_creatives()` 路由函式裡。
+    external_ids: list[str] = []
+
+
 NO_TREE_TO_APPROVE_MESSAGE = "還沒有成功展開的活動樹可以核准，請先展開活動樹。"
 
 
@@ -627,6 +633,7 @@ def disable_brand_coordinate(
 # ---------------------------------------------------------------------------
 COORDINATE_UNKNOWN_MESSAGE = "這個座標不存在，或跟這個維度對不上。"
 IMPORTED_AD_UNKNOWN_MESSAGE = "找不到這則廣告，請先重新整理投放史頁面。"
+TOO_MANY_IDS_MESSAGE = "一次只能重新抓 1 到 30 則廣告的素材，請分批送出。"
 
 
 @router.get("/brands/{brand_id}/history")
@@ -634,6 +641,22 @@ def get_history(request: Request, brand_id: str):
     actor = web.require_actor(request)
     web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
     return history_mod.history_cards(web.conn, actor.org_id, brand_id)
+
+
+@router.post("/brands/{brand_id}/history/creatives/refetch")
+def refetch_history_creatives(
+    request: Request, brand_id: str, body: RefetchHistoryCreativesRequest,
+):
+    # 票 past-ads/09（ADR 0067 §1.9 amendment）：owner 按「重新抓素材」——1-30 筆之外
+    # （含 0 筆）一律 400，跟票面「1–30 ids」同一個邊界，不另開一個「太少」的錯誤代碼。
+    actor = web.require_actor(request)
+    web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
+    if not 1 <= len(body.external_ids) <= 30:
+        raise web.ApiError(400, "too_many_ids", TOO_MANY_IDS_MESSAGE)
+    cleared = history_mod.clear_creative_cache(
+        web.conn, actor.org_id, brand_id, body.external_ids,
+    )
+    return {"cleared": cleared}
 
 
 @router.put("/brands/{brand_id}/history/{external_id}")

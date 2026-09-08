@@ -26,7 +26,7 @@
 """
 
 import unittest
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from uuid import uuid4
 
@@ -35,7 +35,7 @@ from fastapi.testclient import TestClient
 import app.main as main
 import app.shared.web as web
 from app.brand_intelligence import repository as bi_repo
-from app.core.db import new_id
+from app.core.db import new_id, now_utc
 from app.identity import repository as identity_repo
 from app.meta import graph
 from app.meta import repository as meta_repo
@@ -126,6 +126,21 @@ class _HistoryTestBase(unittest.TestCase):
             f"/api/schedule/brands/{brand_id}/history/{external_id}",
             headers=self._headers(token, org_id), json=body,
         )
+
+    def _refetch(self, brand_id: str, token: str, org_id: str, external_ids: list):
+        return self.client.post(
+            f"/api/schedule/brands/{brand_id}/history/creatives/refetch",
+            headers=self._headers(token, org_id), json={"external_ids": external_ids},
+        )
+
+    @staticmethod
+    def _set_creative_fetched_at(org_id: str, brand_id: str, external_id: str, when) -> None:
+        web.conn.execute(
+            "UPDATE imported_ad SET creative_fetched_at = %s"
+            " WHERE org_id = %s AND brand_id = %s AND external_id = %s",
+            (when, org_id, brand_id, external_id),
+        )
+        web.conn.commit()
 
     @staticmethod
     def _empty_keys() -> dict:
@@ -314,6 +329,114 @@ class CreativeCacheTest(_HistoryTestBase):
             self.assertIsNone(card["creative"])
             self.assertIsNotNone(card["creative_error"])
         self.assertEqual(schedule_repo.imported_ads_for_brand(web.conn, org_id, brand_id), {})
+
+    # -- 票 past-ads/09（ADR 0067 §1.9 amendment）：24 小時重試 -----------------------------
+
+    def test_stale_none_answer_is_retried_after_24_hours_good_answer_never_is(self):
+        org_id, token = self._make_org("creative_retry")
+        brand_id = self._make_brand(org_id)
+        account = self._connect_and_bind_account(org_id, brand_id, ACCOUNT_ID)
+        day = date(2026, 6, 1)
+        self._seed_ad_spend(org_id, account, "stale-none", day, spend=1000.0, roas=2.0)
+        self._seed_ad_spend(org_id, account, "fresh-none", day, spend=900.0, roas=2.0)
+        self._seed_ad_spend(org_id, account, "stale-good", day, spend=800.0, roas=2.0)
+
+        def none_answer(url, *, params, headers):
+            return {"error": {"message": "Unsupported get request."}}
+
+        graph.fetch_page = none_answer
+        resp = self._get_history(brand_id, token, org_id)
+        self.assertEqual(resp.status_code, 200)
+
+        # `stale-good` needs a real body so it counts as "a good answer" for done-check 1's
+        # third case; re-tag it directly since the shared fixture answers None for everyone.
+        ad_channel_id = schedule_repo.ensure_meta_channel(web.conn, org_id)
+        schedule_repo.upsert_imported_ad(
+            web.conn, org_id=org_id, brand_id=brand_id, ad_channel_id=ad_channel_id,
+            external_id="stale-good", external_name="stale-good", first_seen_date=day,
+            last_seen_date=day, creative_body="舊文案", creative_title=None,
+            creative_image_url=None, creative_fetched_at=now_utc(), coordinates_status="pending",
+        )
+        web.conn.commit()
+
+        now = now_utc()
+        self._set_creative_fetched_at(org_id, brand_id, "stale-none", now - timedelta(hours=25))
+        self._set_creative_fetched_at(org_id, brand_id, "fresh-none", now - timedelta(hours=1))
+        self._set_creative_fetched_at(org_id, brand_id, "stale-good", now - timedelta(hours=25))
+
+        calls = []
+
+        def only_stale_none(url, *, params, headers):
+            calls.append(url)
+            if url.endswith("/stale-none"):
+                return {"error": {"message": "Unsupported get request."}}
+            raise AssertionError(f"不該打到：{url}")
+
+        graph.fetch_page = only_stale_none
+        resp2 = self._get_history(brand_id, token, org_id)
+        self.assertEqual(resp2.status_code, 200)
+        self.assertEqual(len(calls), 1, "25 小時前、兩個內容欄位都 NULL 的那個才該被重問")
+        self.assertTrue(calls[0].endswith("/stale-none"))
+
+    # -- 票 past-ads/09：按鈕的路由 ----------------------------------------------------------
+
+    def test_refetch_button_clears_cache_scoped_by_brand_and_org(self):
+        org_id, token = self._make_org("refetch")
+        brand_id = self._make_brand(org_id)
+        other_brand_id = self._make_brand(org_id)
+        account = self._connect_and_bind_account(org_id, brand_id, ACCOUNT_ID)
+        other_account = self._connect_and_bind_account(org_id, other_brand_id, OTHER_ACCOUNT_ID)
+        day = date(2026, 6, 1)
+        self._seed_ad_spend(org_id, account, "ad-1", day, spend=1000.0, roas=2.0)
+        self._seed_ad_spend(org_id, account, "ad-2", day, spend=900.0, roas=2.0)
+        self._seed_ad_spend(org_id, other_account, "other-ad", day, spend=800.0, roas=2.0)
+
+        self._get_history(brand_id, token, org_id)
+        self._get_history(other_brand_id, token, org_id)
+
+        resp = self._refetch(brand_id, token, org_id, ["ad-1", "ad-2"])
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json(), {"cleared": 2})
+        rows = schedule_repo.imported_ads_for_brand(web.conn, org_id, brand_id)
+        self.assertIsNone(rows["ad-1"]["creative_fetched_at"])
+        self.assertIsNone(rows["ad-2"]["creative_fetched_at"])
+        self.assertIsNone(rows["ad-1"]["creative_body"])
+
+        calls = []
+
+        def fake(url, *, params, headers):
+            calls.append(url)
+            return {"name": "廣告", "created_time": "2026-01-01T00:00:00+0000",
+                    "effective_status": "ACTIVE",
+                    "creative": {"body": "新文案", "title": None, "image_url": None}}
+
+        graph.fetch_page = fake
+        resp2 = self._get_history(brand_id, token, org_id)
+        self.assertEqual(resp2.status_code, 200)
+        self.assertEqual(len(calls), 2, "下一次 GET 剛好只重問這兩個 id")
+        self.assertEqual({c.rsplit("/", 1)[-1] for c in calls}, {"ad-1", "ad-2"})
+
+        # 另一個品牌的 id（同一個組織）——cleared 0，那個品牌的列不受影響。
+        resp3 = self._refetch(brand_id, token, org_id, ["other-ad"])
+        self.assertEqual(resp3.status_code, 200)
+        self.assertEqual(resp3.json(), {"cleared": 0})
+        other_rows = schedule_repo.imported_ads_for_brand(web.conn, org_id, other_brand_id)
+        self.assertIsNotNone(other_rows["other-ad"]["creative_fetched_at"])
+
+    def test_refetch_route_tenant_boundary_and_id_count_bounds(self):
+        org_a, token_a = self._make_org("refetch_tenant_a")
+        org_b, token_b = self._make_org("refetch_tenant_b")
+        brand_a = self._make_brand(org_a)
+        account = self._connect_and_bind_account(org_a, brand_a, ACCOUNT_ID)
+        self._seed_ad_spend(org_a, account, "ad-1", date(2026, 6, 1), spend=1000.0, roas=2.0)
+        self._get_history(brand_a, token_a, org_a)
+
+        resp = self._refetch(brand_a, token_b, org_b, ["ad-1"])
+        self.assertEqual(resp.status_code, 404)
+
+        resp2 = self._refetch(brand_a, token_a, org_a, [f"id-{i}" for i in range(31)])
+        self.assertEqual(resp2.status_code, 400)
+        self.assertEqual(resp2.json()["error"]["code"], "too_many_ids")
 
 
 # -- 5. 標籤驗證：跨品牌／跨維度重用 key、有效值、全空、未知 external_id ------------------

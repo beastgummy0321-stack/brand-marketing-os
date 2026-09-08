@@ -740,3 +740,34 @@ export async function tagHistoryAd(
   }
   return (await res.json()) as TagHistoryAdResult;
 }
+
+/** 票 past-ads/09（ADR 0067 §1.9 amendment）：owner 按「重新抓素材」——清掉這批 id 的
+ * 素材快取，畫面接著會再呼叫一次 `fetchHistory()` 讓卡片重新出現。 */
+export interface RefetchHistoryCreativesResult {
+  cleared: number;
+}
+
+export async function refetchHistoryCreatives(
+  brandId: string,
+  externalIds: string[],
+): Promise<RefetchHistoryCreativesResult> {
+  const res = await apiFetch(
+    `/api/schedule/brands/${encodeURIComponent(brandId)}/history/creatives/refetch`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ external_ids: externalIds }),
+    },
+  );
+  if (!res.ok) {
+    let message = `重新抓素材失敗（狀態碼 ${res.status}）`;
+    try {
+      const data = (await res.json()) as { error?: { message?: string } };
+      message = errorMessageFrom(data, message);
+    } catch {
+      // 回應不是 JSON，用預設訊息。
+    }
+    throw new Error(message);
+  }
+  return (await res.json()) as RefetchHistoryCreativesResult;
+}
