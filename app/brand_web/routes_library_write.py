@@ -26,6 +26,7 @@ handler 與它們 redirect 落地用的 GET hub 頁整批刪除了（只留 `_cr
 from fastapi import APIRouter, Request
 
 import app.storage as storage
+from app.brand_intelligence import advertising_history
 from app.brand_intelligence import repository as repo
 from app.brand_web import routes as brand_routes
 from app.brand_web.routes_library import (
@@ -396,6 +397,24 @@ async def brand_update_api(request: Request, brand_id: str):
     )
     updated = repo.get_brand(web.conn, brand_id)
     return {"data": _brand_profile_shape(brand_id, updated)}
+
+
+# ---- 票 past-ads/03（ADR 0067 rule 6）：投放過／沒投過的一次性選擇，兩顆按鈕的
+# ui/dialog，不是表單欄位——PUT 是票面明講的動詞，跟本檔其餘端點的 POST 慣例不同。 ----
+
+@router.put("/api/library/brands/{brand_id}/advertising-history")
+async def brand_advertising_history_api(request: Request, brand_id: str):
+    actor = require_actor(request)
+    require_brand(brand_id, actor)
+    body = await _json_body(request)
+    value = _str_field(body, "value")
+    try:
+        updated = advertising_history.set_advertising_history(
+            web.conn, brand_id, value, actor=str(actor.user_id),
+        )
+    except ValueError as exc:
+        return JSONResponse({"errors": {"value": str(exc)}}, status_code=400)
+    return {"data": {"advertising_history": updated["advertising_history"]}}
 
 
 # ---- 顧客原話封存／刪除：舊表單端點（`app/brand_web/routes.py`

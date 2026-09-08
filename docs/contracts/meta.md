@@ -66,8 +66,10 @@ their signature, because the boundary is the part of the shape that matters:
   come back are ever sent to Meta — an id nobody has bound, or bound by another organisation,
   is silently dropped, no error. Stricter than the two entries above (which only refuse a
   known conflict); reading `channel_entity_map` from here is the same precedent (ADR 0056 §4).
-- **`fetch_ad_creatives` and `backfill_status` join this list** (ticket past-ads/02, 2026-09-08;
-  ticket 03 will call both). `fetch_ad_creatives(token, ad_ids)` — no `org_id`, it takes ids the
+- **`fetch_ad_creatives`, `backfill_status` and `backfill_lock` join this list** (ticket past-ads/02,
+  2026-09-08; ticket 03 calls all three — `backfill_lock(org_id)` is the one place the
+  `meta_backfill:<org>` string is spelled, so `history.py` reads it rather than copying it;
+  added to this list at ticket 03's review). `fetch_ad_creatives(token, ad_ids)` — no `org_id`, it takes ids the
   caller already resolved from its own tenant-scoped tables, same shape as `fetch_budgets`.
   `backfill_status(conn, org_id, ad_account_ids)` filters `meta_entity_spend` on `org_id` and
   `ad_account_id = ANY(ad_account_ids)` before reading, same boundary as `spend_summary`. Both

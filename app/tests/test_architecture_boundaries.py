@@ -1313,7 +1313,16 @@ class CoordinateDimensionSyncTest(unittest.TestCase):
 #      量對了，round 2 沒有再動這一筆。
 #   4. 本段理由註解自己（含上面「這道棘輪在落地前就已經在漏」那一段，done-check 5 點名的
 #      新要求）。
-TEST_LINES_CEILING = 21869  # past-ads 02 review note (2026-09-08): 21863 -> 21869, the six
+TEST_LINES_CEILING = 22420  # past-ads 03 review note (2026-09-08): 22416 -> 22420, comment lines
+# only (this line and the `KNOWN_MODULE_SIZES["app/meta"]` note); zero new tests. Previous was --
+# Ticket past-ads 03 (docs/issues/past-ads/03-history-read-and-tag.md,
+# 2026-09-08): 21869 -> 22416, measured (`_line_totals()`), no slack. New
+# `app/tests/test_past_ads_history.py` (the ticket's own done-checks 1-8: ranking union/dedup/
+# cap, `_bucket()` money reuse, currency separation, creative-cache seed-once/GraphError,
+# tagging validation across brand and dimension, tenant boundary, advertising_history PUT,
+# no-LLM/no-rule) plus this reason comment and the two `KNOWN_MODULE_SIZES` reason comments
+# above (`app/schedule`, `app/brand_web`) their own lines. Previous was 21869 --
+# past-ads 02 review note (2026-09-08): 21863 -> 21869, the six
 # lines are this reason comment plus the `KNOWN_MODULE_SIZES["app/meta"]` reason comment above
 # (the `is_active` guard on `start_backfill`); zero new tests. Previous was 21863 --
 # Ticket past-ads 02 (meta backfill task and creative read,
@@ -1607,7 +1616,12 @@ KNOWN_MODULE_SIZES = {
                                       # ponytail：FileLineCapTest 上方「縮小後不強制回來
                                       # 調低數字」）。這裡照票 S2 的要求把表格對齊實測值，
                                       # 不是新增了 574 行。
-    "app/brand_web": 2121,  # 票 08-standalone-jobs-on-the-queue：三個 JobRegistry dict 與其
+    "app/brand_web": 2141,  # 票 past-ads/03（docs/issues/past-ads/03-history-read-and-tag.md，
+                             # 2026-09-08）：2121→2141（+20），量到的數字（`_module_sizes()`），
+                             # 不留餘裕。`routes_library_write.py` 新增一支 PUT
+                             # `/advertising-history` 端點；`routes_library.py` 的
+                             # `_brand_profile_shape` 多一欄。前一次是 2121——
+                             # 票 08-standalone-jobs-on-the-queue：三個 JobRegistry dict 與其
                              # （round 2：兩個端點改問 background.is_active，2112→2121）
                              # thread 執行函式刪掉，換成三支 procrastinate handler ＋ 從
                              # `llm_task` 讀狀態的函式；`__init__.py` 的 register() 多註冊三支
@@ -1708,7 +1722,9 @@ KNOWN_MODULE_SIZES = {
                        # 缺陷 1／2：parse_json_reply 換成 raw_decode 單錨點（含為什麼不能
                        # 退而求其次的理由註解）＋timeout_s 300 秒與 max_retries=0 兩段
                        # 來源註解（實測列號、SDK 常數位置）。前一次是票 09 的 1298
-    "app/meta": 1869,  # 票 past-ads/02 review 備註（2026-09-08）：1864 → 1869，
+    "app/meta": 1870,  # 票 past-ads/03 review 備註（2026-09-08）：1869 → 1870，`graph.py`
+                       # `fetch_ad_creatives` 的 docstring 改成「一個幣別最多 15 個 id」。
+                       # 前一次是票 past-ads/02 review 備註（2026-09-08）：1864 → 1869，
                        # `routes.py` 的 `start_backfill` 先問 `is_active` 再 enqueue，
                        # 把 worker 已抓走（doing）那幾秒的第二支補拉擋掉；主對話台改，路線 B。
                        # 前一次是票 past-ads/02（37 個月補拉的背景工作，讀幾則廣告的素材，
@@ -1789,7 +1805,16 @@ KNOWN_MODULE_SIZES = {
     "app/orders": 1423,  # 票 12：channel_revenue 一張表取代三張（刪掉藥局專屬那一整組
                           # 之後仍淨增）——官網帳本寫入路徑、channel_revenue_summary()、
                           # 通用手動登錄（含「官網不能手動登錄」那道錢的守門）
-    "app/schedule": 4741,  # Ticket past-ads 01 (docs/issues/past-ads/01-schema-imported-ad-
+    "app/schedule": 5135,  # Ticket past-ads 03 (docs/issues/past-ads/03-history-read-and-tag.md,
+                  # 2026-09-08): 4741 -> 5135 (+394), measured (`_module_sizes()`), no slack.
+                  # New `history.py` (the ticket's own work: `history_cards()`/
+                  # `tag_imported_ad()`/`imported_ad_count()`, ranking + creative-cache
+                  # attach, no LLM call) plus `repository.py`'s four `imported_ad` SQL
+                  # functions (`imported_ads_for_brand`/`upsert_imported_ad`/
+                  # `update_imported_ad_tags`/`count_imported_ads`), `routes.py`'s two new
+                  # routes + `TagImportedAdRequest`, and `__init__.py`'s `imported_ad_count`
+                  # export.
+                  # Previous was 4741 -- Ticket past-ads 01 (docs/issues/past-ads/01-schema-imported-ad-
                   # and-advertising-history.md, 2026-09-08): 4740 -> 4741 (+1), measured
                   # (`uv run pytest app/tests/test_architecture_boundaries.py -q`), no slack.
                   # `repository.py` gains one `_CHILD_TABLES` entry for the new past-ads

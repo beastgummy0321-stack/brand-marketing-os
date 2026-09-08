@@ -57,6 +57,7 @@ from app.llm import gateway
 from app.schedule import binding as binding_mod
 from app.schedule import creative as creative_mod
 from app.schedule import diagnosis as diagnosis_mod
+from app.schedule import history as history_mod
 from app.schedule import performance as performance_mod
 from app.schedule import period as period_mod
 from app.schedule import period_repository as period_repo
@@ -123,6 +124,13 @@ class CreateCoordinateRequest(BaseModel):
 
 class DisableCoordinateRequest(BaseModel):
     disabled: bool = True
+
+
+class TagImportedAdRequest(BaseModel):
+    # 票 past-ads/03（ADR 0067）：owner 標一則老廣告的七維座標——租戶界線先於欄位驗證
+    # （同上），真正的驗證在 `history.tag_imported_ad()`。七個鍵沒填到的當 None，不是必填。
+    coordinates: dict[str, str | None] = {}
+    owner_note: str | None = None
 
 
 NO_TREE_TO_APPROVE_MESSAGE = "還沒有成功展開的活動樹可以核准，請先展開活動樹。"
@@ -611,3 +619,36 @@ def disable_brand_coordinate(
     if row is None:
         raise web.ApiError(404, "coordinate_not_found", COORDINATE_NOT_FOUND_MESSAGE)
     return row
+
+
+# ---------------------------------------------------------------------------
+# 票 past-ads/03（ADR 0067）：投放史頁面——讀老廣告的成效排名＋素材快取，owner 自己標
+# 座標。沒有任何一步呼叫 gateway（`grep -n gateway app/schedule/history.py` 印不出東西）。
+# ---------------------------------------------------------------------------
+COORDINATE_UNKNOWN_MESSAGE = "這個座標不存在，或跟這個維度對不上。"
+IMPORTED_AD_UNKNOWN_MESSAGE = "找不到這則廣告，請先重新整理投放史頁面。"
+
+
+@router.get("/brands/{brand_id}/history")
+def get_history(request: Request, brand_id: str):
+    actor = web.require_actor(request)
+    web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
+    return history_mod.history_cards(web.conn, actor.org_id, brand_id)
+
+
+@router.put("/brands/{brand_id}/history/{external_id}")
+def tag_history_ad(request: Request, brand_id: str, external_id: str, body: TagImportedAdRequest):
+    actor = web.require_actor(request)
+    web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
+    try:
+        return history_mod.tag_imported_ad(
+            web.conn, actor.org_id, brand_id, external_id,
+            keys=body.coordinates, owner_note=body.owner_note, actor=str(actor.user_id),
+        )
+    except ValueError as exc:
+        message = str(exc)
+        if message.startswith("coordinate_unknown:"):
+            raise web.ApiError(400, "coordinate_unknown", COORDINATE_UNKNOWN_MESSAGE) from None
+        if message == "imported_ad_unknown":
+            raise web.ApiError(404, "imported_ad_unknown", IMPORTED_AD_UNKNOWN_MESSAGE) from None
+        raise

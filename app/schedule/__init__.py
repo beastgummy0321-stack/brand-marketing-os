@@ -5,6 +5,9 @@ Shapes other modules may use:
     register_tasks() -> None          # idempotently registers the three generation
                                        # procrastinate tasks against the current
                                        # app.background.app() (票 05-1)
+    imported_ad_count(conn, org_id, brand_id) -> int
+                                       # 票 past-ads/03（ADR 0067）：這個品牌標了幾則老廣告，
+                                       # 給 app.dashboard 的引導卡用（ticket 04）
 
 Everything else in this package (`plan.py`, `tree.py`, `creative.py`, `routes.py`,
 `jobs.py`) is private — nothing outside this package imports
@@ -44,3 +47,11 @@ def register_tasks() -> None:
     from app.schedule import jobs as schedule_jobs
 
     schedule_jobs.register_tasks()
+
+
+def imported_ad_count(conn, org_id: str, brand_id: str) -> int:
+    """票 past-ads/03（ADR 0067）：這個品牌已經標了幾則老廣告——延遲 import，比照
+    `register()`。"""
+    from app.schedule import history as schedule_history
+
+    return schedule_history.imported_ad_count(conn, org_id, brand_id)

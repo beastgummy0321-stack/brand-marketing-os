@@ -7,8 +7,8 @@ it is not repeated here, because a second copy goes stale.
 
 `app/schedule/__init__.py`. Everything else in the package (`plan.py`, `tree.py`, `creative.py`,
 `period.py`, `binding.py`, `state.py`, `tree_approval.py`, `performance.py`, `diagnosis.py`,
-`scoring.py`, `repository.py`, `period_repository.py`, `routes.py`, `jobs.py`) is private and
-imported by nothing outside it.
+`scoring.py`, `repository.py`, `period_repository.py`, `routes.py`, `jobs.py`, `history.py`) is
+private and imported by nothing outside it.
 
 The split inside the package is by job, not by size: `routes.py` takes HTTP requests, and the
 others do the work. Three files were carved out of `routes.py` on 2026-09-03 (user-approved) on
@@ -42,10 +42,22 @@ register(app: FastAPI) -> None        # mounts /api/schedule/*
 register_tasks() -> None              # idempotently registers the three generation
                                       # procrastinate tasks against the current
                                       # app.background.app()
+imported_ad_count(conn, org_id, brand_id) -> int
+                                      # ticket past-ads/03 (ADR 0067): how many old ads this
+                                      # brand has tagged, for the cockpit guide card
 ```
 
 Callers: `app/main.py`'s register loop (both), and `app/tests` (which call `register_tasks()`
-again after building their own test `background.app()`).
+again after building their own test `background.app()`). `imported_ad_count` — `app.dashboard`
+(ticket 04).
+
+`register()` also mounts two routes for the past-ads history screen (ticket past-ads/03,
+ADR 0067): `GET /api/schedule/brands/{brand_id}/history` (`history.history_cards()` — connection
+state, backfill progress, break-even, the per-currency ranked ad cards, and the brand's
+coordinate vocabulary) and `PUT /api/schedule/brands/{brand_id}/history/{external_id}` (body
+`{"coordinates": {…the seven dimensions…}, "owner_note": string | null}` →
+`history.tag_imported_ad()`; `ValueError("coordinate_unknown:<dimension>")` → 400
+`coordinate_unknown`, `ValueError("imported_ad_unknown")` → 404 `imported_ad_unknown`).
 
 ## Error shapes
 
@@ -93,10 +105,18 @@ read-only direction, no new edge in the layer graph.
 - ADR 0066 — settling a period scores every bound ad-set and ad node against the break-even
   line; only a resettle changes a score.
 - ADR 0067 — an ad the platform already ran enters coordinates as an `imported_ad` row its
-  owner tags; no model infers why it worked. `imported_ad` (composite FK to `ad_channel`) is
-  dormant as of ticket past-ads 01 — schema and brand-delete cleanup only, no reader/writer yet.
+  owner tags; no model infers why it worked. First reader/writer is ticket past-ads/03
+  (`app/schedule/history.py`): `history_cards()` ranks and reads, `tag_imported_ad()` writes
+  the owner's seven keys and note. No LLM call anywhere in that file.
 
 Module-local and reversible, decided here rather than in an ADR:
+
+- **`GET .../history` writes the creative cache rows (`coordinates_status='pending'`) — a read
+  that seeds its own cache** (ticket past-ads/03, ADR 0067 §1.9). The only write a GET makes is
+  the `imported_ad` upsert for cards whose creative hasn't been fetched yet (name/dates/creative
+  fields, never the owner's seven `*_key` columns or `owner_note` — those are `PUT`'s alone,
+  ADR 0067 rule 2). A `GraphError` from `fetch_ad_creatives` leaves that batch's cards
+  `creative: null` with the error message and writes nothing.
 
 - The module now registers an `app.core.cleanup` function (ticket T1b): `app/schedule/repository.py`
   registers 「創意座標與素材候選」, covering the five tables this ticket added.

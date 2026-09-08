@@ -3,7 +3,7 @@
  * 這支端點不用 `{data, generated_at}` 信封（見 `lib/api.ts` 的 `Envelope<T>`）——
  * 票 07 settled 段「API — 字面契約」直接寫死回應形狀，這裡逐欄對照，不套用別支
  * feature 的信封慣例。 */
-import type { CoordinateDimension } from "./coordinatesApi";
+import type { Coordinate, CoordinateDimension } from "./coordinatesApi";
 import { apiFetch, errorMessageFrom } from "./http";
 
 export interface ScheduleSplit {
@@ -642,4 +642,101 @@ export async function adoptSuggestion(
     throw new Error(message);
   }
   return (await res.json()) as DiagnosisAdoptResult;
+}
+
+// ---- 票 past-ads/03（ADR 0067）：投放史頁面——讀老廣告的成效排名，owner 自己標座標 ----
+
+export type HistoryVerdict = "win" | "lose" | "unclear";
+
+export interface HistoryCreative {
+  body: string | null;
+  title: string | null;
+  image_url: string | null;
+}
+
+export type HistoryCoordinateKeys = Record<CoordinateDimension, string | null>;
+
+export interface HistoryCard {
+  external_id: string;
+  name: string;
+  why: string[];
+  first_seen_date: string;
+  last_seen_date: string;
+  spend: number;
+  impressions: number;
+  clicks: number;
+  revenue: number | null;
+  roas: number | null;
+  roas_conservative: number | null;
+  roas_coverage: number;
+  cpa: number | null;
+  verdict: HistoryVerdict;
+  creative: HistoryCreative | null;
+  creative_error: string | null;
+  coordinates: HistoryCoordinateKeys;
+  coordinates_status: "tagged" | "pending" | "not_applicable";
+  owner_note: string | null;
+}
+
+export interface HistoryCurrency {
+  currency: string;
+  cards: HistoryCard[];
+}
+
+export interface HistoryBackfill {
+  running: boolean;
+  earliest_spend_date: string | null;
+  latest_spend_date: string | null;
+  ad_rows: number;
+}
+
+export interface History {
+  connected: boolean;
+  backfill: HistoryBackfill | null;
+  breakeven: DiagnosisBreakeven | null;
+  currencies: HistoryCurrency[];
+  coordinates: Coordinate[];
+}
+
+export function fetchHistory(brandId: string): Promise<History> {
+  return getJson(`/api/schedule/brands/${encodeURIComponent(brandId)}/history`);
+}
+
+export interface TagHistoryAdBody {
+  coordinates: HistoryCoordinateKeys;
+  owner_note: string | null;
+}
+
+export interface TagHistoryAdResult {
+  external_id: string;
+  coordinates: HistoryCoordinateKeys;
+  coordinates_status: "tagged" | "pending" | "not_applicable";
+  owner_note: string | null;
+  tagged_at: string;
+}
+
+export async function tagHistoryAd(
+  brandId: string,
+  externalId: string,
+  body: TagHistoryAdBody,
+): Promise<TagHistoryAdResult> {
+  const res = await apiFetch(
+    `/api/schedule/brands/${encodeURIComponent(brandId)}/history/${encodeURIComponent(externalId)}`,
+    {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    },
+  );
+  if (!res.ok) {
+    let message = `標記失敗（狀態碼 ${res.status}）`;
+    try {
+      const data = (await res.json()) as { error?: { message?: string } };
+      message = errorMessageFrom(data, message);
+    } catch {
+      // 回應不是 JSON，用預設訊息。
+    }
+    throw new Error(message);
+  }
+  return (await res.json()) as TagHistoryAdResult;
 }

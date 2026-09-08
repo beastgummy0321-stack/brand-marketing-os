@@ -102,6 +102,7 @@ export interface LibraryBrandProfile {
   status: "active" | "archived";
   market_region: string | null;
   conversion_goal: string | null;
+  advertising_history: "has_history" | "none" | null;
   delete_impact: { label: string; count: number }[];
 }
 
@@ -216,15 +217,16 @@ export async function fetchLibrary(brandId: string): Promise<LibraryData> {
   return body.data;
 }
 
-/** Shared JSON POST helper for every write endpoint in this file. Error message is pulled
+/** Shared JSON write helper for every write endpoint in this file. Error message is pulled
  * from whichever shape the backend used: `{error}` (single message, e.g. brand_delete_api),
  * `{errors}` (per-field validation dict, e.g. routes_library_write.py), or `{detail}`
  * (StarletteHTTPException / NotFoundKind's 404 JSON shape) — same convention as
  * `campaignsApi.ts` postJson(). `body` defaults to `{}` for delete/confirm-style calls that
- * carry no fields. */
-async function postJson<T>(path: string, body: unknown = {}): Promise<T> {
+ * carry no fields. `method` defaults to POST (every existing caller); ticket past-ads/03's
+ * advertising-history endpoint is this file's first PUT. */
+async function postJson<T>(path: string, body: unknown = {}, method: string = "POST"): Promise<T> {
   const res = await apiFetch(path, {
-    method: "POST",
+    method,
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
   });
@@ -433,6 +435,21 @@ export async function saveBrandProfile(
   },
 ): Promise<void> {
   await postJson(`/api/library/brands/${encodeURIComponent(brandId)}/edit`, fields);
+}
+
+/** 票 past-ads/03（ADR 0067 rule 6）：投放過／沒投過的一次性選擇（兩顆按鈕的
+ * `ui/dialog`，也能從品牌頁改）。PUT，跟本檔其餘寫入端點的 POST 慣例不同——後端路由本身
+ * 就是 PUT（票面明講）。 */
+export async function setAdvertisingHistory(
+  brandId: string,
+  value: "has_history" | "none",
+): Promise<"has_history" | "none"> {
+  const result = await postJson<{ data: { advertising_history: "has_history" | "none" } }>(
+    `/api/library/brands/${encodeURIComponent(brandId)}/advertising-history`,
+    { value },
+    "PUT",
+  );
+  return result.data.advertising_history;
 }
 
 /** 回傳訊息含備份位置與素材資料夾刪除的 warn，呼叫端刪完導頁前先讓使用者看一眼。 */

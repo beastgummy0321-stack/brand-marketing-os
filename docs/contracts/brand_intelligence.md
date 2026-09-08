@@ -21,6 +21,7 @@ cleanup registers itself when the package loads.
 | `product_ai.py` | prompt assembly for product research (pure; the LLM call is the caller's) |
 | `report.py` | the consultant report document |
 | `background_job.py` | the in-memory job dict + thread the four AI features share, and its `interrupt` write |
+| `advertising_history.py` | the sole writer of `brand.advertising_history` (ticket past-ads/03, ADR 0067 rule 6) |
 
 ## Exported shapes
 
@@ -34,6 +35,7 @@ repository.create_rule(conn, brand_id, *, actor, severity, rule_type, content) -
 repository.brand_facts(...) / confirmed facts, claims, sources        # read by context_compiler
 personas.list_for_brand(conn, brand_id) -> list[dict]
 background_job.start(...) / status(...)                               # dict + thread, not the queue
+advertising_history.set_advertising_history(conn, brand_id, value, *, actor) -> dict
 ```
 
 Callers: `brand_web` (every route file), `intake`, `dashboard`, `llm.context_compiler`,
@@ -65,4 +67,6 @@ Turning either into a response is `app/shared/web.py`'s job at the route layer.
 - ADR 0050 — the ad-loop data model of record.
 - ADR 0053 — product cost is versioned from today, never rewritten backwards.
 - ADR 0067 — `brand.advertising_history` (`has_history`/`none`, NULL = not yet answered) is a
-  column this module owns, dormant as of ticket past-ads 01: nobody reads or writes it yet.
+  column this module owns. First writer is `advertising_history.set_advertising_history()`
+  (ticket past-ads/03), reached from `app/brand_web/routes_library_write.py`'s
+  `PUT /api/library/brands/{brand_id}/advertising-history`.

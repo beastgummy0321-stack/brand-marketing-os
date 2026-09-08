@@ -309,7 +309,8 @@ def _first_non_empty(*values):
 def fetch_ad_creatives(token: str, ad_ids: list[str]) -> dict[str, dict | None]:
     """票 past-ads/02（ADR 0067 §1.9）：每個 id 一次 `GET {GRAPH_BASE_URL}/{ad_id}`（不是
     清單端點，比照 `fetch_budgets`——一個 id 一個物件，沒有分頁），問這則廣告投放時的
-    素材文字／圖片。呼叫端最多一次給 15 個 id（ADR 0067 §1.7）。
+    素材文字／圖片。呼叫端一個幣別最多 15 個 id（ADR 0067 §1.7；多幣別的品牌一次送進來
+    的清單是各幣別的合計，這裡不設上限、不分頁）。
 
     Sources, verified 2026-09-08:
     - Ad node `creative` field —

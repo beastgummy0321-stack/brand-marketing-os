@@ -214,6 +214,7 @@ def _brand_profile_shape(brand_id: str, brand: dict) -> dict:
         "id": brand["id"], "name": brand["name"], "client_name": brand.get("client_name"),
         "status": brand["status"], "market_region": brand.get("market_region"),
         "conversion_goal": brand.get("conversion_goal"),
+        "advertising_history": brand.get("advertising_history"),
         "delete_impact": delete_impact,
     }
 

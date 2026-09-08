@@ -580,6 +580,68 @@ def period_node_memberships_for_brand(conn: _AnyConn, org_id: str, brand_id: str
     return [dict(r) for r in rows]
 
 
+# ---- 票 past-ads/03（ADR 0067）：imported_ad 的 SQL——本檔只管落地，排行／驗證的判斷
+# 全部留在 app/schedule/history.py（那支才是「這張票的工作」，這裡只是它的資料存取）------
+
+def imported_ads_for_brand(conn: _AnyConn, org_id: str, brand_id: str) -> dict:
+    rows = conn.execute(
+        "SELECT * FROM imported_ad WHERE org_id = %s AND brand_id = %s",
+        (org_id, brand_id),
+    ).fetchall()
+    return {r["external_id"]: dict(r) for r in rows}
+
+
+def upsert_imported_ad(conn: _AnyConn, *, org_id: str, brand_id: str, ad_channel_id: str,
+                        external_id: str, **columns) -> dict:
+    """票過的第一個寫入路徑（ADR 0067 §1.9，GET 讀出的同時把素材快取進來）：`columns` 是
+    這次要蓋掉的欄位（`external_name`／`first_seen_date`／`last_seen_date`／三個
+    `creative_*`／`creative_fetched_at`／`coordinates_status`）——七個 `*_key`
+    欄位、`owner_note`、`tagged_at`、`tagged_by` 不在這支的職權內，那是
+    `update_imported_ad_tags()` 專管的另一半（ADR 0067 rule 2：owner 自己標的座標不隨
+    平台快取的每一次刷新被覆寫）。欄位名稱固定是這檔自己傳的（不是使用者輸入），動態組 SQL
+    不是注入面。"""
+    fields = list(columns)
+    set_clause = ", ".join(f"{f} = excluded.{f}" for f in fields)
+    ts = now_utc()
+    conn.execute(
+        f"INSERT INTO imported_ad (id, org_id, brand_id, ad_channel_id, external_id,"
+        f" {', '.join(fields)}, created_at, updated_at)"
+        f" VALUES (%s, %s, %s, %s, %s, {', '.join(['%s'] * len(fields))}, %s, %s)"
+        f" ON CONFLICT (org_id, brand_id, ad_channel_id, external_id) DO UPDATE SET"
+        f" {set_clause}, updated_at = excluded.updated_at",
+        (new_id("iad"), org_id, brand_id, ad_channel_id, external_id,
+         *[columns[f] for f in fields], ts, ts),
+    )
+    return imported_ads_for_brand(conn, org_id, brand_id)[external_id]
+
+
+def update_imported_ad_tags(conn: _AnyConn, org_id: str, brand_id: str, external_id: str, *,
+                             keys: dict, owner_note: str | None, status: str, actor: str) -> dict:
+    """owner 標的七維座標＋一句話——不是版本化的欄位（ADR 0067 rule 2），一次 UPDATE 覆寫。
+    不在這裡 commit／寫 audit：呼叫端 `history.tag_imported_ad()` 要先讀到舊值才能寫
+    `audit_log.before`，兩件事得在同一個交易裡收尾（比照
+    `app/brand_intelligence/repository.py` `update_brand()` 的既有寫法）。"""
+    ts = now_utc()
+    conn.execute(
+        "UPDATE imported_ad SET audience_key = %s, pain_key = %s, angle_key = %s,"
+        " hook_key = %s, proof_key = %s, offer_key = %s, format_key = %s, owner_note = %s,"
+        " coordinates_status = %s, tagged_at = %s, tagged_by = %s, updated_at = %s"
+        " WHERE org_id = %s AND brand_id = %s AND external_id = %s",
+        (keys.get("audience"), keys.get("pain"), keys.get("angle"), keys.get("hook"),
+         keys.get("proof"), keys.get("offer"), keys.get("format"), owner_note, status,
+         ts, actor, ts, org_id, brand_id, external_id),
+    )
+    return imported_ads_for_brand(conn, org_id, brand_id)[external_id]
+
+
+def count_imported_ads(conn: _AnyConn, org_id: str, brand_id: str) -> int:
+    row = conn.execute(
+        "SELECT count(*) AS n FROM imported_ad WHERE org_id = %s AND brand_id = %s",
+        (org_id, brand_id),
+    ).fetchone()
+    return row["n"] if row is not None else 0
+
+
 # ---- 品牌刪除清理登記（app/core/cleanup.py；pattern: app/meta/repository.py:526）---------
 
 _CHILD_TABLES = (
