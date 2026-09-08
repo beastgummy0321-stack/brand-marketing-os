@@ -58,6 +58,19 @@ Status: 2026-09-07 開行。前身是 `docs/issues/ad-loop/`（⑧⑨），那�
 直接的解法是建檔精靈——但這正好連到 `docs/issues/ui/issue-intake-handoff-dead-end.md` 記的那件事：
 建檔精靈本身難用到讓人填不完。**「叫使用者去填」不是解法，是把問題丟回去。**
 
+**2026-09-08 再查（探偵＋本機資料庫），把上面那段修正成三件事實：**
+
+1. 這是資料狀態，不是程式洞。Beast Gummy 所在的品牌 `brd_bughunt` 從沒跑過建檔精靈（沒有任何
+   `intake_draft` 列），只做過一次產品掃描：`product_fact` 5、其餘四類 0。同一個組織的
+   `brd_01M1Y3SJSGWDCJSGV6R27PR09C`（doumygo）2026-09-07 14:19–14:49 跑完精靈（1 個網址、6 題問答、
+   第 4 步交接包走深度），得到 `brand_fact` 12／`persona` 4／`product_fact` 6／`rule` 3／`claim` 2／
+   `customer_voice` 12，它出的唯一一份方案引用了「三款香調」「國家認證、一年保固僅限此 SKU」這種只有它
+   寫得出的事實。資料進去，模型就會用；精靈是走得完的。
+2. 程式真正有的兩個小洞：五類空的時候 `compile()` 整段靜默省略（`context_compiler.py:129-154`），
+   出方案前沒有任何地方說「這個品牌還沒建檔」（票 03）。
+3. 精靈的重跑後端早有（`POST /api/intake/brands/{id}/restart`），但畫面沒有門：沒建過檔的品牌打開
+   建檔頁只看到「找不到建檔進度」，建檔完的只有「前往品牌頁」（票 04）。
+
 ### 二、出方案的時候看不到成效
 
 `compile()` 的五類裡**沒有成效**。同一個帳戶當時已經有：
@@ -73,14 +86,15 @@ Status: 2026-09-07 開行。前身是 `docs/issues/ad-loop/`（⑧⑨），那�
 即使沒有上一期，帳戶裡現成的數字也應該進 prompt。那一行 2026-09-08 改名「越排越好」撿回看板第一順位
 （`docs/issues/smart-loop/`）；`issue-budget-level-mismatch-is-never-checked.md` 留在這裡，不是它的前置（那邊 spec 裁決 5）。
 
-## 資料夾裡的四份
+## 資料夾裡的票（2026-09-08 使用者裁決「全收」，收完這欄就關）
 
-- `issue-coordinate-guard-only-blocks-unknown-labels.md` — 判讀的座標守門擋不住「這輪零花費的座標」，
-  代理可以引用真實存在但沒花過錢的座標並編數字。修法在檔裡，route B。
-- `issue-budget-level-mismatch-is-never-checked.md` — 核准的 55/20/25 沒有在 Meta 上執行，
-  沒有任何一步發現。連帶讓 ⑨ 把 Meta 最佳化器的選擇讀成實驗結果。
-- `issue-image-on-ad-node.md` — judged-no（2026-09-04），檔案留著記結論不要再問第三次。
-  裡面真正還活著的一條是：`visual_tone` 沒進 `performance.brand_creative_performance()` 的七維分組。
+- `02-diagnosis-label-map-from-this-round.md` — 判讀的座標守門改用這一輪表格裡的座標，不用品牌整個座標庫。route B。
+- `03-schedule-form-says-brand-not-profiled.md` — 排程表單一句話點名哪幾類建檔是空的＋前往建檔。route B。
+- `04-intake-door-for-unprofiled-and-completed-brands.md` — 沒建過檔、建完檔的品牌都能從建檔頁開一輪調研。route B（前端）。
+- `05-budget-level-mismatch-shown-and-fed-to-diagnosis.md` — 配對後讀一次預算欄位，畫面講一句、判讀收到同一句
+  （使用者 2026-09-08 裁決：樹照出比例，不存預算）。route C（模組邊界：meta 多一支讀取）。
+- 「把圖掛到廣告節點」2026-09-04 判不做，結論與活著的那一條（`visual_tone` 沒進七維分組）已搬到
+  `docs/contracts/schedule.md`「Measured」，檔案刪除。
 
 ## 廣告閉環（⑧⑨）為什麼可以關
 

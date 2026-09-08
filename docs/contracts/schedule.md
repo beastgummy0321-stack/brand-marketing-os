@@ -205,5 +205,14 @@ Moved here from `BOARD.md` on 2026-09-04 (full text: `BOARD.md` @ `6574191`).
   already written before that ticket; it wired it, it did not write it.
 - Mind-map C (diagnosis), D (market), E (audience), P (weekly/monthly report): summaries kept, no
   tickets until the loop has run.
+- **`visual_tone` is not a grouped dimension.** `brand_creative_performance()` groups by
+  `creative.COORDINATE_KEYS` (`app/schedule/creative.py:68`: audience / pain / angle / hook / proof /
+  offer / format); `creative_candidate.visual_tone` (ADR 0047) is stored per candidate but never
+  bucketed, so "warm vs dark, which earns" cannot be drawn yet. Hanging an image on an ad node was
+  judged **no** on 2026-09-04 (re-judged after the user hand-generated and uploaded one): the
+  diagnosis needs the visual direction, which `visual_tone` + `visual_concept` already carry per
+  candidate; `creative_candidate.provider` / `provider_job_id` / `provider_status` exist (all NULL)
+  for the day generation is wired. The open axis is the grouping, to be judged together with the
+  first round that has spend on tagged coordinates — not before.
 - Milestone stage one was walked end to end on a real account on 2026-08-29 (晨光咖啡 + BP AD) and
   again on 2026-09-04 (Beast Prime + BP AD). This round stands on that, it does not replace it.
