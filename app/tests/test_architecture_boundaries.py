@@ -1313,7 +1313,22 @@ class CoordinateDimensionSyncTest(unittest.TestCase):
 #      量對了，round 2 沒有再動這一筆。
 #   4. 本段理由註解自己（含上面「這道棘輪在落地前就已經在漏」那一段，done-check 5 點名的
 #      新要求）。
-TEST_LINES_CEILING = 21204  # Ticket plan-quality/03 (schedule form shows knowledge gaps): this
+TEST_LINES_CEILING = 21421  # Ticket plan-quality/05 (budget-level-mismatch-shown-and-fed-to-
+# diagnosis, 2026-09-08): 21204 -> 21421 (+217, measured via `git diff --numstat` on the three
+# touched test files: 146 + 39 + 32). `test_schedule.py` (+146): `_platform_budgets()` fixture helper (same replacement
+# style as `_platform_ad_sets`) plus five tests on `BindTreeApiContractTest`, each naming the
+# route C class it guards -- three on `_run_bind()`'s response (money/tenant-adjacent: does the
+# bind response say the truth about where Meta actually holds the budget) and two on
+# `schedule_diagnosis()`'s prompt (position -- the note must sit before `role_text(lens)`, per
+# the "Position in the prompt decides" measurement this file already records). `test_meta_daily_
+# spend.py` (+39): `BudgetsForBoundIdsTenantBoundaryTest`, two tests -- the ticket's own route C
+# class, tenant isolation: an id owned by another org never reaches Meta (positive-list, stricter
+# than the two existing negative-list tests it sits beside), and this org's own bound id reaches
+# Meta with exactly that id, nothing more. `test_architecture_boundaries.py` (net +32): this
+# reason comment plus the `KNOWN_MODULE_SIZES["app/meta"]`/`KNOWN_MODULE_SIZES["app/schedule"]`
+# reason comments above, both counted here since they live under `app/tests/`. Measured
+# (`uv run pytest app/tests/test_architecture_boundaries.py -q`), no slack. Previous was 21204
+# -- Ticket plan-quality/03 (schedule form shows knowledge gaps): this
 # gate was already red on the clean `saas` HEAD before this ticket touched anything -- `git
 # stash` on that HEAD and re-running this file measures `tests` at 21162, 52 over the 21110
 # frozen below; Ticket smart-loop 05 merged with the gate red and nobody ran it first. Those 52
@@ -1650,7 +1665,14 @@ KNOWN_MODULE_SIZES = {
                        # 缺陷 1／2：parse_json_reply 換成 raw_decode 單錨點（含為什麼不能
                        # 退而求其次的理由註解）＋timeout_s 300 秒與 max_retries=0 兩段
                        # 來源註解（實測列號、SDK 常數位置）。前一次是票 09 的 1298
-    "app/meta": 1659,  # 票 S2b B1（2026-08-31）：1646 → 1659。多的 13 行是
+    "app/meta": 1701,  # 票 plan-quality/05（budget-level-mismatch，2026-09-08）：1659 → 1701。
+                       # 多的 42 行是 `graph.py` 的 `fetch_budgets()`（+`_raise_if_error()`
+                       # 從 `_fetch_all_pages()` 抽出來共用，票明文「重用既有錯誤偵測」）
+                       # 與 `repository.py` 的 `budgets_for_bound_ids()`——讀 Meta 這個 id
+                       # 掛沒掛預算，租戶界線用正面表列（只問這個組織自己綁過的 id）。
+                       # 量到的數字（`uv run pytest app/tests/test_architecture_boundaries.py
+                       # -q`），不留餘裕。前一次是 1659——票 S2b B1（2026-08-31）：1646 →
+                       # 1659。多的 13 行是
                        # `conversion_action_types()` 這一支存取子加它的理由註解——B1 的
                        # 「這個桶裡轉換最高的那一天」要用的「轉換」定義，必須跟 CPA 分母
                        # 的 `_CONVERSION_ACTION_PRIORITY` 是同一份。開一支存取子讓
@@ -1712,7 +1734,17 @@ KNOWN_MODULE_SIZES = {
     "app/orders": 1423,  # 票 12：channel_revenue 一張表取代三張（刪掉藥局專屬那一整組
                           # 之後仍淨增）——官網帳本寫入路徑、channel_revenue_summary()、
                           # 通用手動登錄（含「官網不能手動登錄」那道錢的守門）
-    "app/schedule": 4660,  # Ticket plan-quality/03 (schedule form shows knowledge gaps):
+    "app/schedule": 4740,  # Ticket plan-quality/05 (budget-level-mismatch-shown-and-fed-to-
+                  # diagnosis, 2026-09-08): 4660 -> 4740, measured (`uv run pytest
+                  # app/tests/test_architecture_boundaries.py -q`), no slack. `binding.py` gains
+                  # `budget_placement_note()` + `BUDGET_LEVEL_NOTE` (reads Meta's real budget
+                  # placement, never stores it); `tree.py` gains the `budget_note` shell field;
+                  # `routes.py` fills it in `_run_bind()`; `jobs.py` reads the tree diagnosis
+                  # already reads and adds one prompt section when the placement mismatches;
+                  # `tree_approval.py` docstring names the new shell field it keeps ignoring
+                  # (no code change there — the signature hash is an explicit whitelist).
+                  # Previous was 4660 -- Ticket plan-quality/03 (schedule form shows
+                  # knowledge gaps):
                   # `state.py` gains `_knowledge_gaps()` (three empty-category checks reading
                   # `bi_repo.list_brand_facts(status="confirmed")`, `personas.list_personas()`,
                   # `bi_repo.list_claims_for_brand()` -- the same reads `context_compiler.

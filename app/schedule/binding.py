@@ -13,12 +13,21 @@ T3c 一行都加不進去，但**行數只是叫醒鈴，不是理由**——工
 搬家本身不改任何行為：既有測試全綠就是它的證明。
 """
 
+import app.shared.web as web
 from app.meta import repository as meta_repo
 from app.schedule import period_repository as period_repo
 from app.schedule import repository as schedule_repo
 from app.schedule import tree as tree_mod
 
 NO_TREE_TO_BIND_MESSAGE = "還沒有成功產生的活動樹可以綁定，請先展開活動樹。"
+
+# 票 05（plan-quality）：使用者 2026-09-08 裁決——樹一律照 `budget_level` 分配，實際預算
+# 掛在哪一層是讀 Meta 才知道的事，不寫進任何表。兩層都是平台自己叫的名字
+# （`tree["levels"]`），不是我們發明的詞彙。
+BUDGET_LEVEL_NOTE = (
+    "你的預算掛在「{actual}」這一層，這棵樹是照「{expected}」那一層分配的；核准的比例不會"
+    "在 Meta 上生效，這一期每個{expected}花多少由 Meta 自己決定。"
+)
 
 
 def bind_failure_message(failures: list[str]) -> str:
@@ -206,3 +215,49 @@ def bind_tree(conn, tree_row: dict, org_id: str, brand_id: str) -> list[str]:
     if newly_bound:
         conn.commit()
     return failures
+
+
+def budget_placement_note(conn, org_id: str, brand_id: str, tree_row: dict) -> str | None:
+
+    """票 05：這棵樹以為預算在 `budget_level` 那一層，Meta 上實際掛在哪一層——讀兩次都不
+    落地（每次呼叫都重新問 Meta），使用者 2026-09-08 裁決：提示，不擋流程。
+
+    只看深度 1／2 的綁定（Meta 廣告，深度 3，從不扛預算）。沒有樹、樹失敗、或沒有
+    `budget_level`；`expected` 那一層一個綁定都沒有；讀 Meta 失敗（`web.ApiError`，這個
+    提示是錦上添花，不該讓剛成功的綁定被一次無關的讀取拖累）；或兩層都沒讀到預算——
+    一律回 `None`（沒東西可比、或比不出來，就不講）。`expected` 那一層自己就有預算 →
+    位置吻合，也回 `None`；只有「另一層」有預算，才是這則提示要講的事。"""
+    tree = tree_mod.tree_from_task_row(tree_row)
+    expected = tree["budget_level"]
+    if tree["failure"] is not None or expected is None or expected not in (1, 2):
+        return None  # 深度 3（廣告）不扛預算，這裡沒有可比的綁定，比照「沒東西可比」
+
+    bound = schedule_repo.bindings_for_tree(conn, org_id, brand_id, CHANNEL_KEY, tree_row["id"])
+    ids_by_depth: dict[int, list[str]] = {1: [], 2: []}
+    for node_key, row in bound.items():
+        depth = node_key.count(".") + 1
+        if depth in ids_by_depth:
+            ids_by_depth[depth].append(row["external_id"])
+
+    expected_ids = ids_by_depth[expected]
+    if not expected_ids:
+        return None
+    other = 1 if expected == 2 else 2
+    other_ids = ids_by_depth[other]
+
+    try:
+        budgets = meta_repo.budgets_for_bound_ids(conn, org_id, expected_ids + other_ids)
+    except web.ApiError:
+        return None
+
+    def has_budget(external_id: str) -> bool:
+        entry = budgets.get(external_id) or {}
+        return bool(entry.get("daily_budget")) or bool(entry.get("lifetime_budget"))
+
+    if any(has_budget(i) for i in expected_ids):
+        return None  # 位置吻合
+    if any(has_budget(i) for i in other_ids):
+        return BUDGET_LEVEL_NOTE.format(
+            actual=tree["levels"][other - 1], expected=tree["levels"][expected - 1]
+        )
+    return None  # 兩層都沒讀到預算，看不出來，不亂講

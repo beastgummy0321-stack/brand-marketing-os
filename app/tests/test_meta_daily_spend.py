@@ -1126,6 +1126,45 @@ class AdParentCrossOrgRefusedTest(_CrossOrgBindingFixture):
         self.assertEqual(caught.exception.code, "adset_not_owned")
 
 
+# -- 15. 票 05（budget-level-mismatch）：`budgets_for_bound_ids` 的租戶界線是正面表列 ----
+
+class BudgetsForBoundIdsTenantBoundaryTest(_CrossOrgBindingFixture):
+    """跟前面兩支（`AdSetParentCrossOrgRefusedTest`／`AdParentCrossOrgRefusedTest`）不是
+    同一套規則：那兩支是**負面表列**（只擋「記錄成別的組織」，沒人綁過的 id 照樣放行，
+    `docs/contracts/meta.md` 明文的已知殘留缺口）。這裡的 `budgets_for_bound_ids` 是**正面
+    表列**——只有 `channel_entity_map` 記過是這個組織自己綁的 id 才問 Meta，org_a 從沒
+    見過、也沒有任何 ad_account 曾經配對出的 id，即使它完全沒有任何綁定紀錄也不放行
+    （比前兩支更嚴的那一半）。"""
+
+    def test_budgets_for_bound_ids_refuses_an_id_owned_by_another_org(self):
+        org_a, _ = self._make_org("budgets_cross_a")
+        org_b, _ = self._make_org("budgets_cross_b")
+        meta_repo.save_token(web.conn, org_a, TOKEN)
+        web.conn.commit()
+        self._bind_for_other_org(org_b, "1", "camp-owned-by-org-b")
+
+        with mock.patch.object(graph, "fetch_budgets") as fake_fetch_budgets:
+            result = meta_repo.budgets_for_bound_ids(web.conn, org_a, ["camp-owned-by-org-b"])
+            self.assertEqual(fake_fetch_budgets.call_count, 0)
+        self.assertEqual(result, {})
+
+    def test_budgets_for_bound_ids_calls_meta_with_exactly_this_orgs_bound_id(self):
+        org_a, _ = self._make_org("budgets_owned_a")
+        meta_repo.save_token(web.conn, org_a, TOKEN)
+        web.conn.commit()
+        self._bind_for_other_org(org_a, "1", "camp-owned-by-org-a")
+
+        with mock.patch.object(graph, "fetch_budgets") as fake_fetch_budgets:
+            fake_fetch_budgets.return_value = {
+                "camp-owned-by-org-a": {"daily_budget": "500", "lifetime_budget": None}
+            }
+            result = meta_repo.budgets_for_bound_ids(web.conn, org_a, ["camp-owned-by-org-a"])
+        fake_fetch_budgets.assert_called_once_with(TOKEN, ["camp-owned-by-org-a"])
+        self.assertEqual(
+            result, {"camp-owned-by-org-a": {"daily_budget": "500", "lifetime_budget": None}}
+        )
+
+
 # -- 4. FK 保護：有花費紀錄的帳號不能被刪（T-fk） -------------------------------------
 
 class SpendHistoryOutlivesTheAccountTest(_MetaDailySpendTestBase):

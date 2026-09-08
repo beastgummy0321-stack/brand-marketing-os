@@ -418,6 +418,35 @@ def ad_ids_by_exact_name(
             for aid, status in sorted(matched.items())]
 
 
+def budgets_for_bound_ids(conn: _AnyConn, org_id: str, external_ids: list[str]) -> dict[str, dict]:
+    """票 05：讀 Meta 上這些 id（活動或廣告組合）掛的預算欄位——`app.schedule.binding` 拿
+    它判斷「這棵樹以為預算在哪一層，Meta 實際把預算掛在哪一層」。租戶界線是**正面表列**：
+    只有 `channel_entity_map` 記過是這個組織綁定的 id 才會被拿去問 Meta，不在清單裡的 id
+    悄悄丟掉（fail-closed，比 `_refuse_if_parent_owned_by_another_org` 更嚴——那支只擋
+    「記錄成別組織」，這支連「誰都沒綁過」也不放行；讀 schedule 的表沿用同一個先例，
+    ADR 0056 §4）。沒權杖或輸入是空清單都回 `{}`，不打 Meta；連不上 Meta 轉成人話
+    `web.ApiError(502, "meta_unreachable", …)`，同 `repository.py:326`。"""
+    if not external_ids:
+        return {}
+    token = get_token(conn, org_id)
+    if token is None:
+        return {}
+    rows = conn.execute(
+        "SELECT DISTINCT external_id FROM channel_entity_map"
+        " WHERE org_id = %s AND external_id = ANY(%s)",
+        (org_id, external_ids),
+    )
+    owned_ids = [r["external_id"] for r in rows]
+    if not owned_ids:
+        return {}
+    try:
+        return graph.fetch_budgets(token, owned_ids)
+    except graph.GraphError as exc:
+        raise web.ApiError(
+            502, "meta_unreachable", f"連不上 Meta，沒辦法讀預算：{exc.message}"
+        ) from exc
+
+
 def last_pull_at(conn: _AnyConn, org_id: str, ad_account_ids: list):
     """這批帳號裡『最早的』上次成功拉取時間——品牌可能綁了不只一個帳號，畫面要誠實
     反映「最舊鮮度」，不是挑一個看起來最新的帳號蓋過去（票 05：失敗要讓使用者看得出

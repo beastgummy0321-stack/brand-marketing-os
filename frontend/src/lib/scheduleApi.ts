@@ -113,6 +113,9 @@ export interface CampaignTreeResult {
   /** 票 11：只在「配對」這支端點的回應裡會非 null（不落地儲存）——GET／tree／reject
    * 一律是 null。 */
   bind_failure: string | null;
+  /** 票 05：跟 bind_failure 同一條規則——只在「配對」端點的回應裡會非 null，讀 Meta 現算
+   * 現讀、不落地儲存；非 null 代表這棵樹以為預算在哪一層跟 Meta 實際掛預算的層不一致。 */
+  budget_note: string | null;
   /** null＝這棵樹從沒核准過，或最新一次核准已經撤回。 */
   approval: ScheduleApproval | null;
 }

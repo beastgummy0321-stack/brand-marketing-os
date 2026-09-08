@@ -568,6 +568,21 @@ def schedule_diagnosis(org_id: str, brand_id: str) -> None:
         # issue diagnosis-lacks-checkable-numbers：核准活動樹那一步講過的提醒，判讀這一步也
         # 要看得到——否則系統會一邊提醒「不以點擊率單獨判斷」，一邊推薦一條只看 ROAS 的建議。
         reminders = diagnosis_mod.reminders_text(diagnosis_mod.tree_reminders(conn, brand_id))
+        # 票 05：判讀讀的是診斷已經在讀的那棵樹（`diagnosis_mod.tree_reminders` 用的同一支
+        # `state._display_task_row`），跟外殼判斷「這棵樹以為的預算層」是否跟 Meta 實際掛
+        # 預算的層吻合——None 就不加這段，prompt 不變。
+        tree_row_for_budget, _tree_running = state._display_task_row(
+            conn, brand_id, state.TREE_TASK_TYPE
+        )
+        budget_note = (
+            binding_mod.budget_placement_note(conn, org_id, brand_id, tree_row_for_budget)
+            if tree_row_for_budget is not None else None
+        )
+        budget_section = (
+            f"【預算層級】\n{budget_note}\n"
+            "這一期各座標花多少是 Meta 最佳化器分配的結果，不是使用者的實驗設計；花費差異"
+            "不能讀成使用者的選擇，也不能當成對照實驗的結果。"
+        ) if budget_note else None
 
         label_to_key = diagnosis_mod.label_map_from_performance(performance)
 
@@ -583,7 +598,7 @@ def schedule_diagnosis(org_id: str, brand_id: str) -> None:
         for lens in diagnosis_mod.LENSES:
             prompt = "\n\n".join(
                 section for section in
-                (methodology_result.text, compressed, reminders,
+                (methodology_result.text, compressed, reminders, budget_section,
                  diagnosis_mod.role_text(lens)) if section
             )
             context = gateway.TaskContext(

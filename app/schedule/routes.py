@@ -355,6 +355,11 @@ def _run_bind(conn, brand_id: str, org_id: str) -> dict:
     response["tree"]["bind_failure"] = (
         binding_mod.bind_failure_message(failures) if failures else None
     )
+    # 票 05：只有這支路由填值，其餘讀取路徑一律 null，跟 bind_failure 同一條規則
+    # （tree.py 的殼層欄位註解）。
+    response["tree"]["budget_note"] = binding_mod.budget_placement_note(
+        conn, org_id, brand_id, tree_row
+    )
     return response
 
 

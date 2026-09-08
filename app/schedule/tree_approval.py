@@ -28,7 +28,8 @@ def _tree_signature(tree: dict) -> dict:
     `content_hash` 只對這份剝過的資料算雜湊。排除清單（ticket 明文，理由寫在這裡）：
     `bound_external_id`／`spend`／`roas`（配對一顆活動、或花費進來，都是樹核准之後才
     發生的事，不該讓已經簽過的核准悄悄失效）；`task_id`／`created_at`／`narrative`／
-    `failure`／`running`／`bind_failure` 是殼層欄位，不是代理生成的樹本身內容；
+    `failure`／`running`／`bind_failure`／`budget_note`（票 05）是殼層欄位，
+    不是代理生成的樹本身內容；
     `daily_amount`（ADR 0059：`daily_amount` 就是 `share × 總額`，純比例縮放——整棵樹依
     比例縮小是規則 9 允許系統自己做的事，不該讓已經簽過的核准悄悄失效。**`share` 仍留在
     雜湊裡**：把預算在節點之間搬動是另一份計畫，一樣要讓核准失效，這是 check 2 守住的

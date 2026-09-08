@@ -52,6 +52,12 @@ their signature, because the boundary is the part of the shape that matters:
   unbound id to reach Meta. `bind_tree` writes each binding row before recursing into that
   node's children, so the open branch is unreachable from the only caller that exists today.
   `docs/issues/deploy/issue-meta-unknown-parent-id-fail-open.md` carries it.
+- **`budgets_for_bound_ids` filters by a positive list, not a negative one** (ticket
+  plan-quality/05, 2026-09-08). Before fetching the token or calling Meta it reads
+  `channel_entity_map` for `external_id = ANY(<ids>) AND org_id = <this org>`; only ids that
+  come back are ever sent to Meta — an id nobody has bound, or bound by another organisation,
+  is silently dropped, no error. Stricter than the two entries above (which only refuse a
+  known conflict); reading `channel_entity_map` from here is the same precedent (ADR 0056 §4).
 
 Tables this module owns: `meta_ad_account`, `brand_meta_ad_account`, `meta_entity_spend`.
 Account tables stay one per channel — there is no generic account table, by decision

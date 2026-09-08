@@ -51,6 +51,7 @@ export function CampaignTree({ tree, binding, bindError, onBind, approving, appr
       </div>
       <div className="surface-body flex flex-col gap-3">
         {(bindError ?? tree.bind_failure) && <p role="alert" className="text-sm text-danger">{bindError ?? tree.bind_failure}</p>}
+        {tree.budget_note && <p role="status" className="text-xs leading-6 text-warning">{tree.budget_note}</p>}
         {approveError && <p role="alert" className="text-sm text-danger">{approveError}</p>}
         {revokeError && <p role="alert" className="text-sm text-danger">{revokeError}</p>}
         {tree.approval && <ApprovalStatus approval={tree.approval} revoking={revoking} onRevoke={onRevoke} />}

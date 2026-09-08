@@ -122,6 +122,16 @@ Module-local and reversible, decided here rather than in an ADR:
   reimplemented locally in `period.py` — not imported from `scoring.py`/`diagnosis.py`, which
   would close a cycle through `state.py`). Step is rule card `schedule_budget.step_rate` (default
   20, no official Meta figure — source: user ruling 2026-09-08, spec decision 3).
+- **Budget placement is read live, never stored** (ticket plan-quality/05, user ruling
+  2026-09-08). The tree keeps emitting shares for whichever level `budget_level` names; whether
+  Meta actually holds the budget on that level or a different one is read from Meta twice —
+  once in `_run_bind()`'s response (`binding.budget_placement_note()`), once when
+  `schedule_diagnosis()` builds its prompt — no column, no migration, no caching between the two
+  reads. When the levels disagree, the bind response's `tree.budget_note` carries one sentence
+  and the diagnosis prompt carries the same fact plus the framing that this period's per-node
+  spend split was Meta's optimiser choice, not the user's experiment (`ab-testing.md:72-75`);
+  the section sits after `reminders`/`【上一期】` and before `role_text(lens)` — last still wins
+  (the "Position in the prompt decides" measurement below).
 - **How a creative reply is matched to a tree node** — ticket T3d, settled by the user; **amended
   2026-09-04, again by the user** (overturning their own 2026-09-03 "leave it until it
   bites"; the ticket is gone, this line is the rule). The agent now also echoes
@@ -207,6 +217,20 @@ Moved here from `BOARD.md` on 2026-09-04 (full text: `BOARD.md` @ `6574191`).
   already written before that ticket; it wired it, it did not write it.
 - Mind-map C (diagnosis), D (market), E (audience), P (weekly/monthly report): summaries kept, no
   tickets until the loop has run.
+- **The plan-quality noise floor, the ruler for any "the prompt got better" claim** (2026-09-08,
+  moved here when `docs/issues/plan-quality/` closed). Same input (`input_context_hash`), local
+  codex, `jobs.schedule_plan()` called 5 times: shape is stable (3 plans 5/5, first plan 廣泛 0.7 +
+  測試 0.3 5/5), wording is noise (36 direction labels, none repeated across runs; summary opener
+  different every time), and before ticket 01 no number came from the account (0/5). After ticket 01,
+  3/3 runs named live ads and quoted spend / ROAS / coverage against the 1.00x line — but the plan
+  count went 3, 3, 1 on a 3-plan request, which three runs cannot tell apart from noise. **Next
+  measurement**: 3 more `schedule_plan()` calls on the same hash; if a 1 recurs, the account section
+  is displacing the plan-count instruction (position, per the rule above). Never compare wording;
+  count account numbers cited and check the ratio vector against performance.
+- **Cause 一 of watery plans was data, not code** (2026-09-08): `brd_bughunt` (Beast Gummy) had never
+  run the intake wizard (0 `intake_draft`, 0 brand_fact / persona / claim); the doumygo brand that
+  completed it (12 / 4 / 2) got a plan citing brand-specific facts from the same code. Tickets 03/04
+  made the gap visible and opened the door; the profile itself is the user's 30 minutes.
 - **`visual_tone` is not a grouped dimension.** `brand_creative_performance()` groups by
   `creative.COORDINATE_KEYS` (`app/schedule/creative.py:68`: audience / pain / angle / hook / proof /
   offer / format); `creative_candidate.visual_tone` (ADR 0047) is stored per candidate but never

@@ -104,6 +104,14 @@ def _to_account(item: dict) -> dict | None:
     return account
 
 
+def _raise_if_error(body: dict) -> None:
+    """`{"error": {...}}` 形狀 → `GraphError`(人話原因)。`_fetch_all_pages`／`fetch_budgets`
+    共用同一份判斷，不是各自寫各自的錯誤偵測（票 05-budget-level-mismatch 明文）。"""
+    if "error" in body:
+        message = body["error"].get("message") or "Meta 回報了一個沒有說明的錯誤。"
+        raise GraphError(message)
+
+
 def _fetch_all_pages(url: str, params: dict | None, headers: dict) -> list[dict]:
     """共用的翻頁＋錯誤處理骨架（list_ad_accounts／list_entity_insights 都要「打一頁→
     判斷錯誤形狀→收集 data→跟 paging.next」，只有 data 裡每一項怎麼轉型不同，抽出來
@@ -121,9 +129,7 @@ def _fetch_all_pages(url: str, params: dict | None, headers: dict) -> list[dict]
             raise GraphError("連不上 Meta，請稍後再試。") from None
         except json.JSONDecodeError:
             raise GraphError("Meta 回了看不懂的內容，請稍後再試。") from None
-        if "error" in body:
-            message = body["error"].get("message") or "Meta 回報了一個沒有說明的錯誤。"
-            raise GraphError(message)
+        _raise_if_error(body)
         items.extend(body.get("data", []))
         next_url = body.get("paging", {}).get("next")
         if not next_url:
@@ -261,6 +267,34 @@ def list_ads(token: str, adset_id: str) -> list[dict]:
     params: dict | None = {"fields": "id,name,effective_status", "limit": 200}
     items = _fetch_all_pages(url, params, headers)
     return [r for r in (_to_ad(item) for item in items) if r is not None]
+
+
+def fetch_budgets(token: str, external_ids: list[str]) -> dict[str, dict]:
+    """票 05（`docs/issues/plan-quality/`）：每個 id 一次 `GET {GRAPH_BASE_URL}/{id}`
+    （不是清單端點，不走 `_fetch_all_pages` 的翻頁——一個 id 一個物件，沒有分頁），問「這裡
+    設了預算嗎」。回傳 `{external_id: {"daily_budget": str | None, "lifetime_budget": str |
+    None}}`；Meta 兩個欄位都回帳戶最小貨幣單位的**字串**（例："500"），這裡原樣存，**不**
+    解析成數字——這張票只問「這一層有沒有掛預算」，金額大小不是這裡的事。欄位缺席或顯式
+    `null` 都用 `.get()` 收成 `None`，兩者在這裡是同一件事。連不上 Meta／回應看不懂／
+    `{"error": …}` 形狀，一律 `GraphError`，跟本檔其他讀取同一套（`_raise_if_error`）。"""
+    headers = {"Authorization": f"Bearer {token}"}
+    result: dict[str, dict] = {}
+    for external_id in external_ids:
+        try:
+            body = fetch_page(
+                f"{GRAPH_BASE_URL}/{external_id}",
+                params={"fields": "daily_budget,lifetime_budget"}, headers=headers,
+            )
+        except httpx.HTTPError:
+            raise GraphError("連不上 Meta，請稍後再試。") from None
+        except json.JSONDecodeError:
+            raise GraphError("Meta 回了看不懂的內容，請稍後再試。") from None
+        _raise_if_error(body)
+        result[external_id] = {
+            "daily_budget": body.get("daily_budget"),
+            "lifetime_budget": body.get("lifetime_budget"),
+        }
+    return result
 
 
 # 三個層級要的度量欄位完全一樣，只寫一次——三份幾乎相同的字串各自漂移是這種表格最典型的

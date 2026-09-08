@@ -203,4 +203,8 @@ def tree_from_task_row(row: dict) -> dict:
         # plan／tree／reject 一律 null，且從不落地——routes.py 的 bind 路由算完之後才
         # 蓋上這個值。
         "bind_failure": None,
+        # 票 05：跟 `bind_failure` 同一條規則——只有 POST .../tree/bind 填值，其餘一律
+        # null、從不落地；讀 Meta 判斷這棵樹以為的預算層跟 Meta 實際掛預算的層是否吻合
+        # （`binding.budget_placement_note()`）。
+        "budget_note": None,
     }

@@ -37,6 +37,7 @@ from app.identity import repository as identity_repo
 from app.llm import providers
 from app.meta import graph as meta_graph
 from app.meta import repository as meta_repo
+from app.schedule import binding as binding_mod
 from app.schedule import creative as creative_mod
 from app.schedule import jobs as schedule_jobs
 from app.schedule import period as period_mod
@@ -2119,6 +2120,151 @@ class BindTreeApiContractTest(_ScheduleApiTestBase):
                 _walk(entry["children"])
 
         _walk(nodes)
+
+    # -- 票 05：預算層級跟樹以為的不一樣，binding.py 讀 Meta 判斷、回應補一句話 -------------
+
+    def _platform_budgets(self, by_id: dict):
+        """換掉 Meta 回的預算欄位（不打網路，票 05）：`by_id` 是
+        {external_id: {"daily_budget": str | None, "lifetime_budget": str | None}}——跟
+        `_platform_ad_sets` 同一個替換風格；`budgets_for_bound_ids` 問哪些 id 由呼叫端
+        （`channel_entity_map` 篩過的租戶界線）決定，這裡只負責照樣回傳。"""
+
+        def fake_fetch_budgets(_token: str, external_ids: list) -> dict:
+            return {eid: by_id[eid] for eid in external_ids if eid in by_id}
+
+        return mock.patch.object(meta_graph, "fetch_budgets", fake_fetch_budgets)
+
+    def test_budget_note_shows_when_campaign_has_budget_but_tree_expects_adset_level(self):
+        """(a)：預算掛在第一層（行銷活動），樹照第二層（廣告組合，`_one_tree_nodes()`
+        預設扛預算的那一層）分配——兩層不吻合，回應補一句話。紅色證明：把
+        `binding.budget_placement_note()` 改成無條件回 `None`，這支測試就會紅。"""
+        self._succeed_plan_and_tree()
+        with self._platform_campaigns({self.account_id: [("camp-1", "活動一")]}), \
+                self._platform_ad_sets({"camp-1": [("as-1", "組合1"), ("as-2", "組合2")]}), \
+                self._platform_ads(
+                    {"as-1": [("ad-1", "單元1")], "as-2": [("ad-2", "單元2")]}
+                ), \
+                self._platform_budgets({
+                    "camp-1": {"daily_budget": "500", "lifetime_budget": None},
+                    "as-1": {"daily_budget": None, "lifetime_budget": None},
+                    "as-2": {"daily_budget": None, "lifetime_budget": None},
+                }):
+            resp = self._bind()
+        self.assertEqual(resp.status_code, 200, resp.text)
+        self.assertEqual(
+            resp.json()["tree"]["budget_note"],
+            binding_mod.BUDGET_LEVEL_NOTE.format(actual="行銷活動", expected="廣告組合"),
+        )
+
+    def test_budget_note_is_none_when_adset_level_budget_matches_the_tree(self):
+        """(b)：預算掛在第二層（廣告組合）——跟樹的 `budget_level` 吻合，不講話。"""
+        self._succeed_plan_and_tree()
+        with self._platform_campaigns({self.account_id: [("camp-1", "活動一")]}), \
+                self._platform_ad_sets({"camp-1": [("as-1", "組合1"), ("as-2", "組合2")]}), \
+                self._platform_ads(
+                    {"as-1": [("ad-1", "單元1")], "as-2": [("ad-2", "單元2")]}
+                ), \
+                self._platform_budgets({
+                    "camp-1": {"daily_budget": None, "lifetime_budget": None},
+                    "as-1": {"daily_budget": "100", "lifetime_budget": None},
+                    "as-2": {"daily_budget": None, "lifetime_budget": None},
+                }):
+            resp = self._bind()
+        self.assertEqual(resp.status_code, 200, resp.text)
+        self.assertIsNone(resp.json()["tree"]["budget_note"])
+
+    def test_budget_note_is_none_when_meta_is_unreachable_but_bind_stands(self):
+        """(c)：讀預算連不上 Meta——這則提示是錦上添花，不該讓剛成功的綁定被撤銷；回應
+        仍是 200，`budget_note` 是 `None`，`channel_entity_map` 這次綁定寫下的列還在。"""
+        self._succeed_plan_and_tree()
+
+        def fail(_token: str, _external_ids: list) -> dict:
+            raise meta_graph.GraphError("連不上")
+
+        with self._platform_campaigns({self.account_id: [("camp-1", "活動一")]}), \
+                self._platform_ad_sets({"camp-1": [("as-1", "組合1"), ("as-2", "組合2")]}), \
+                self._platform_ads(
+                    {"as-1": [("ad-1", "單元1")], "as-2": [("ad-2", "單元2")]}
+                ), \
+                mock.patch.object(meta_graph, "fetch_budgets", fail):
+            resp = self._bind()
+        self.assertEqual(resp.status_code, 200, resp.text)
+        self.assertIsNone(resp.json()["tree"]["budget_note"])
+        rows = self._channel_entity_map_rows()
+        node_keys = {r["node_key"] for r in rows}
+        self.assertEqual(node_keys, {"1", "1.1", "1.2", "1.1.1", "1.2.1"})  # 綁定沒有被撤銷
+
+    def test_diagnosis_budget_section_appears_before_role_text_when_placement_mismatches(self):
+        """票 05 done-check 3：判讀讀的是綁定已經讀過的同一棵樹，(a) 的預算不吻合時，
+        prompt 多一段【預算層級】，且擺在 `reminders` 之後、`role_text(lens)`（那句
+        「只准對上面表格裡已經出現過的座標值」必須墊底，`docs/contracts/schedule.md`
+        「Position in the prompt decides」）之前。用 (b) 的組合驗證吻合時完全不加這段。"""
+        self._succeed_plan_and_tree()
+        with self._platform_campaigns({self.account_id: [("camp-1", "活動一")]}), \
+                self._platform_ad_sets({"camp-1": [("as-1", "組合1"), ("as-2", "組合2")]}), \
+                self._platform_ads(
+                    {"as-1": [("ad-1", "單元1")], "as-2": [("ad-2", "單元2")]}
+                ), \
+                self._platform_budgets({
+                    "camp-1": {"daily_budget": "500", "lifetime_budget": None},
+                    "as-1": {"daily_budget": None, "lifetime_budget": None},
+                    "as-2": {"daily_budget": None, "lifetime_budget": None},
+                }):
+            resp = self._bind()
+        self.assertEqual(resp.status_code, 200, resp.text)
+
+        fake = _fake("這是一段判讀說明。\n\n```json\n{\"suggestions\": []}\n```")
+        schedule_jobs.PROVIDER = fake
+        with self._platform_budgets({
+            "camp-1": {"daily_budget": "500", "lifetime_budget": None},
+            "as-1": {"daily_budget": None, "lifetime_budget": None},
+            "as-2": {"daily_budget": None, "lifetime_budget": None},
+        }):
+            web.conn.commit()  # job 開自己的連線，先把 bind 交易送出去（比照 _run_worker）
+            schedule_jobs.schedule_diagnosis(coredb.DEV_ORG_ID, self.brand["id"])
+
+        self.assertEqual(len(fake.calls), 3)  # 三個 lens 各打一次
+        prompt = fake.calls[0]["messages"][0]["content"]
+        self.assertIn("【預算層級】", prompt)
+        self.assertIn(
+            binding_mod.BUDGET_LEVEL_NOTE.format(actual="行銷活動", expected="廣告組合"),
+            prompt,
+        )
+        self.assertLess(
+            prompt.index("【預算層級】"),
+            prompt.index("只准對上面表格裡已經出現過的座標值"),
+        )
+
+    def test_diagnosis_budget_section_absent_when_placement_matches(self):
+        """(b) 的組合：預算層級吻合，`budget_placement_note()` 回 `None`，prompt 不該多
+        這段。"""
+        self._succeed_plan_and_tree()
+        with self._platform_campaigns({self.account_id: [("camp-1", "活動一")]}), \
+                self._platform_ad_sets({"camp-1": [("as-1", "組合1"), ("as-2", "組合2")]}), \
+                self._platform_ads(
+                    {"as-1": [("ad-1", "單元1")], "as-2": [("ad-2", "單元2")]}
+                ), \
+                self._platform_budgets({
+                    "camp-1": {"daily_budget": None, "lifetime_budget": None},
+                    "as-1": {"daily_budget": "100", "lifetime_budget": None},
+                    "as-2": {"daily_budget": None, "lifetime_budget": None},
+                }):
+            resp = self._bind()
+        self.assertEqual(resp.status_code, 200, resp.text)
+
+        fake = _fake("這是一段判讀說明。\n\n```json\n{\"suggestions\": []}\n```")
+        schedule_jobs.PROVIDER = fake
+        with self._platform_budgets({
+            "camp-1": {"daily_budget": None, "lifetime_budget": None},
+            "as-1": {"daily_budget": "100", "lifetime_budget": None},
+            "as-2": {"daily_budget": None, "lifetime_budget": None},
+        }):
+            web.conn.commit()
+            schedule_jobs.schedule_diagnosis(coredb.DEV_ORG_ID, self.brand["id"])
+
+        self.assertEqual(len(fake.calls), 3)
+        prompt = fake.calls[0]["messages"][0]["content"]
+        self.assertNotIn("【預算層級】", prompt)
 
 
 class CreativeApiContractTest(_ScheduleApiTestBase):
