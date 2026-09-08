@@ -1313,7 +1313,28 @@ class CoordinateDimensionSyncTest(unittest.TestCase):
 #      量對了，round 2 沒有再動這一筆。
 #   4. 本段理由註解自己（含上面「這道棘輪在落地前就已經在漏」那一段，done-check 5 點名的
 #      新要求）。
-TEST_LINES_CEILING = 21602  # Ticket past-ads 01 round 2
+TEST_LINES_CEILING = 21869  # past-ads 02 review note (2026-09-08): 21863 -> 21869, the six
+# lines are this reason comment plus the `KNOWN_MODULE_SIZES["app/meta"]` reason comment above
+# (the `is_active` guard on `start_backfill`); zero new tests. Previous was 21863 --
+# Ticket past-ads 02 (meta backfill task and creative read,
+# docs/issues/past-ads/02-meta-backfill-task-and-creative-read.md, 2026-09-08): 21602 -> 21863
+# (+261, measured directly off `app/tests/`'s own line total, same method `_line_totals` uses).
+# `test_meta_daily_spend.py` (+234, `git diff --numstat`): the six done-checks the
+# ticket names -- `BackfillQueueWiringTest` (task registered, runs through the real queue, the
+# first insights request's `time_range.since` is `_earliest_pullable(today)` and the last one's
+# `until` is today), `BackfillOneRunningPerOrgTest` (second start replies
+# {"started": false, "running": true}, exactly one job with the lock in `procrastinate_jobs`),
+# `OrgIsolationTest.test_running_backfill_for_org_a_writes_nothing_for_org_b` (extends the
+# existing class, same assertion as `run_daily_pull`'s), `BackfillTenantBoundaryTest` (another
+# org's brand -> 404 on both routes, no bound account -> 409 `no_bound_account` on both),
+# `BackfillStatusTest` (`backfill_status` over one account id returns only that account's
+# min/max/count), `FetchAdCreativesTest` (id A from the top level, id B falls back to
+# `link_data`, id C's `{"error": ...}` body becomes `None` without dropping the key, a
+# transport error raises `GraphError` for the whole call). `test_architecture_boundaries.py`
+# (net +27): this reason comment plus the `KNOWN_MODULE_SIZES["app/meta"]` reason comment above,
+# both counted here since they live under `app/tests/`. Measured
+# (`uv run pytest app/tests/test_architecture_boundaries.py -q`), no slack. Previous was 21602
+# -- Ticket past-ads 01 round 2
 # (docs/issues/past-ads/01-schema-imported-ad-and-advertising-history.md, 2026-09-08 --
 # review round 1 sent done-check 4 back, see the ticket's `## Blocked` section; round 2
 # implements only the brand-delete wipe test the review's ruling rewrote): 21522 -> 21602
@@ -1687,7 +1708,19 @@ KNOWN_MODULE_SIZES = {
                        # 缺陷 1／2：parse_json_reply 換成 raw_decode 單錨點（含為什麼不能
                        # 退而求其次的理由註解）＋timeout_s 300 秒與 max_retries=0 兩段
                        # 來源註解（實測列號、SDK 常數位置）。前一次是票 09 的 1298
-    "app/meta": 1701,  # 票 plan-quality/05（budget-level-mismatch，2026-09-08）：1659 → 1701。
+    "app/meta": 1869,  # 票 past-ads/02 review 備註（2026-09-08）：1864 → 1869，
+                       # `routes.py` 的 `start_backfill` 先問 `is_active` 再 enqueue，
+                       # 把 worker 已抓走（doing）那幾秒的第二支補拉擋掉；主對話台改，路線 B。
+                       # 前一次是票 past-ads/02（37 個月補拉的背景工作，讀幾則廣告的素材，
+                       # 2026-09-08）：1701 → 1864。多的 163 行：`daily_pull.py` +41
+                       # （`run_backfill`／`backfill_lock`／`backfill_status`，`register_task`
+                       # 多掛一個 task）、`graph.py` +74（`fetch_ad_creatives`＋
+                       # `_first_non_empty`，ADR 0067 §1.9 的三個 URL 出處都在函式自己的
+                       # docstring）、`routes.py` +48（兩支路由＋兩個 response model）。這張票
+                       # 不動 `repository.py`（766/800，96% of the cap，票面檔頭要求）。量到的
+                       # 數字（`uv run pytest app/tests/test_architecture_boundaries.py -q`），
+                       # 不留餘裕。前一次是 1701——票 plan-quality/05（budget-level-mismatch，
+                       # 2026-09-08）：1659 → 1701。
                        # 多的 42 行是 `graph.py` 的 `fetch_budgets()`（+`_raise_if_error()`
                        # 從 `_fetch_all_pages()` 抽出來共用，票明文「重用既有錯誤偵測」）
                        # 與 `repository.py` 的 `budgets_for_bound_ids()`——讀 Meta 這個 id

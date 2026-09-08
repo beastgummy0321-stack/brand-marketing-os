@@ -43,6 +43,9 @@ from app.meta import repository as repo
 _TASK_NAME = "background.meta_daily_pull"
 _DISPATCH_TASK_NAME = "meta.daily_pull_dispatch"
 _DISPATCH_PERIODIC_ID = "meta_daily_pull"
+_BACKFILL_TASK_NAME = "background.meta_backfill"  # 票 past-ads/02："background." 前綴才會被
+                                                    # TaskSignatureOrgIdGateTest 掃到（見
+                                                    # run_backfill 的必要 org_id 參數）。
 _DAILY_PULL_CRON = "0 3 * * *"  # 每天觸發一次；伺服器本機時間，未特別做時區換算——單機
                                  # 部署跑在使用者自己機器上，多晚幾小時拉不影響「今天有拉到」。
                                  # 票 04-1b 之後，被拉的「哪一天」已經改用組織時區
@@ -147,7 +150,8 @@ def _dispatch_daily_pull(timestamp: int) -> None:
 
 def register_task() -> None:
     """掛 procrastinate task，冪等（可以呼叫任意次）——見本檔檔頭「為什麼不能只做一次」。
-    連同掛上每日排程的 periodic dispatch task（票 05 fix round）。"""
+    連同掛上每日排程的 periodic dispatch task（票 05 fix round）與 37 個月補拉的背景工作
+    （票 past-ads/02，ADR 0067 §1.8）。"""
     a = background_app()
     if _TASK_NAME not in a.tasks:
         a.task(name=_TASK_NAME)(run_daily_pull)
@@ -155,6 +159,8 @@ def register_task() -> None:
         a.periodic(cron=_DAILY_PULL_CRON, periodic_id=_DISPATCH_PERIODIC_ID)(
             a.task(name=_DISPATCH_TASK_NAME)(_dispatch_daily_pull)
         )
+    if _BACKFILL_TASK_NAME not in a.tasks:
+        a.task(name=_BACKFILL_TASK_NAME)(run_backfill)
 
 
 def _earliest_pullable(today: date) -> date:
@@ -240,6 +246,41 @@ def backfill(org_id: str, since: date, until: date) -> int:
                     conn.commit()  # 一段一存：斷在第九個月，前八個月留著
                     written += len(rows)
         return written
+
+
+def run_backfill(org_id: str) -> None:
+    """procrastinate task body（票 past-ads/02，ADR 0067 §1.8）：把既有的 `backfill()`
+    包成背景工作，不是另一條拉取路徑——`since`／`until` 兩個都在這裡算好，`backfill()`
+    本身不改一個字（票面「Nothing else: no new pull loop, no second upsert path」）。
+    `org_id` 是必要參數，滿足 ADR 0038（`TaskSignatureOrgIdGateTest` 只掃 "background."
+    前綴，這支就是這樣命名的，同 `run_daily_pull` 檔頭）。"""
+    with connection() as conn:
+        today = coresettings.today_for_org(conn, org_id=org_id)
+    since = _earliest_pullable(today)
+    backfill(org_id, since, today)
+
+
+def backfill_lock(org_id: str) -> str:
+    """一支背景工作、一個組織——因為 `backfill()` 本身是組織＋廣告帳戶層（見它的
+    docstring）。一個字串，定義一次，路由（enqueue／is_active）跟這裡自己共用，不做
+    第二份。"""
+    return f"meta_backfill:{org_id}"
+
+
+def backfill_status(conn, org_id: str, ad_account_ids: list) -> dict:
+    """補拉進度，一支 SQL 讀。放在這裡而不是 `repository.py`：`repository.py` 766/800
+    行（96% of the 800-line cap，2026-09-08 `wc -l`），這張票不動它（票面檔頭）。"""
+    row = conn.execute(
+        "SELECT MIN(spend_date) AS earliest, MAX(spend_date) AS latest, COUNT(*) AS n"
+        " FROM meta_entity_spend"
+        " WHERE org_id = %s AND ad_account_id = ANY(%s) AND level = 'ad'",
+        (org_id, ad_account_ids),
+    ).fetchone()
+    return {
+        "earliest_spend_date": row["earliest"],
+        "latest_spend_date": row["latest"],
+        "ad_rows": row["n"],
+    }
 
 
 if __name__ == "__main__":

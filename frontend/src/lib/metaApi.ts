@@ -82,3 +82,29 @@ export async function fetchMetaSpend(brandId: string): Promise<MetaSpendSummary>
   const res = await apiFetch(`/api/meta/brands/${encodeURIComponent(brandId)}/spend`);
   return readOrThrow<MetaSpendSummary>(res, `讀取失敗（狀態碼 ${res.status}）`);
 }
+
+/** 票 past-ads/02：37 個月補拉（ADR 0067 §1.8），一個組織一個背景工作。這裡只出 client——
+ * 沒有元件用它，接的元件在票 04。 */
+export interface MetaBackfillStartResult {
+  started: boolean;
+  running: boolean;
+}
+
+export interface MetaBackfillStatus {
+  running: boolean;
+  earliest_spend_date: string | null;
+  latest_spend_date: string | null;
+  ad_rows: number;
+}
+
+export async function startMetaBackfill(brandId: string): Promise<MetaBackfillStartResult> {
+  const res = await apiFetch(`/api/meta/brands/${encodeURIComponent(brandId)}/backfill`, {
+    method: "POST",
+  });
+  return readOrThrow<MetaBackfillStartResult>(res, `啟動失敗（狀態碼 ${res.status}）`);
+}
+
+export async function fetchMetaBackfillStatus(brandId: string): Promise<MetaBackfillStatus> {
+  const res = await apiFetch(`/api/meta/brands/${encodeURIComponent(brandId)}/backfill`);
+  return readOrThrow<MetaBackfillStatus>(res, `讀取失敗（狀態碼 ${res.status}）`);
+}

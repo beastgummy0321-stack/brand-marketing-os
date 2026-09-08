@@ -27,6 +27,14 @@ register_task() -> None             # idempotently registers the daily spend-pul
 Callers: `app/main.py`'s register loop (both), and `app/tests/test_meta_daily_spend.py`, which
 calls `register_task()` again after building its own test `background.app()`.
 
+`register()` also mounts two routes for the 37-month backfill (ticket past-ads/02, ADR 0067
+§1.8): `POST /api/meta/brands/{brand_id}/backfill` enqueues `background.meta_backfill` for the
+brand's organisation (`{"started": bool, "running": true}`; another organisation's brand → 404;
+no bound account → 409 `no_bound_account`) and `GET /api/meta/brands/{brand_id}/backfill` reads
+its progress (`{"running": bool, "earliest_spend_date", "latest_spend_date", "ad_rows"}` from
+`daily_pull.backfill_status`). One backfill per organisation, not per brand — `daily_pull.backfill()`
+itself is org+account scoped.
+
 Read functions `app.schedule` is allowed to call, listed by their tenant boundary rather than
 their signature, because the boundary is the part of the shape that matters:
 
@@ -58,6 +66,13 @@ their signature, because the boundary is the part of the shape that matters:
   come back are ever sent to Meta — an id nobody has bound, or bound by another organisation,
   is silently dropped, no error. Stricter than the two entries above (which only refuse a
   known conflict); reading `channel_entity_map` from here is the same precedent (ADR 0056 §4).
+- **`fetch_ad_creatives` and `backfill_status` join this list** (ticket past-ads/02, 2026-09-08;
+  ticket 03 will call both). `fetch_ad_creatives(token, ad_ids)` — no `org_id`, it takes ids the
+  caller already resolved from its own tenant-scoped tables, same shape as `fetch_budgets`.
+  `backfill_status(conn, org_id, ad_account_ids)` filters `meta_entity_spend` on `org_id` and
+  `ad_account_id = ANY(ad_account_ids)` before reading, same boundary as `spend_summary`. Both
+  sit in `daily_pull.py`/`graph.py`, not `repository.py`, only because `repository.py` was
+  766/800 lines (96% of the cap, 2026-09-08 `wc -l`) when this ticket landed.
 
 Tables this module owns: `meta_ad_account`, `brand_meta_ad_account`, `meta_entity_spend`.
 Account tables stay one per channel — there is no generic account table, by decision
@@ -97,10 +112,17 @@ writes it stays in `app/meta/` regardless, because there is still only one chann
 - ADR 0056 — a channel catalogue is a file; its per-org state is a table.
 - ADR 0057 — ad-level spend meets the coordinate through the depth-3 binding, which freezes the
   tree that produced it.
+- ADR 0067 — an imported ad enters coordinates as a row its owner tags, never one a model
+  infers; numbers come in by program (backfill, `fetch_ad_creatives`), reasons come from the
+  owner (ticket 03).
 
 ## Measured (facts about the real account; re-measure before a ticket leans on one)
 
 Moved here from `BOARD.md` on 2026-09-04 (full text: `BOARD.md` @ `6574191`).
+
+- **`repository.py` was 766/800 lines (96% of the cap) on 2026-09-08**, `wc -l` — this is why
+  ticket past-ads/02's new reads (`fetch_ad_creatives`, `backfill_status`) live in `graph.py`/
+  `daily_pull.py` instead, per the ticket's own instruction not to touch `repository.py`.
 
 - **The three levels of spend agree exactly.** `uv run python -m app.meta.daily_pull --since 2026-08-01`
   brought in 349 rows (ad 254 / 13 ads, adset 60 / 2 sets, campaign 35 / 1 campaign), each level

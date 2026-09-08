@@ -2,15 +2,17 @@
 (container contract §1); it is only ever loaded via `register()`.
 """
 
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 from fastapi import APIRouter, Request
 from pydantic import BaseModel
 
 import app.shared.web as web
+from app.background import enqueue as background_enqueue
+from app.background import is_active as background_is_active
 from app.core import settings as coresettings
 from app.core.audit import write_audit
-from app.meta import graph
+from app.meta import daily_pull, graph
 from app.meta import repository as repo
 
 router = APIRouter(prefix="/api/meta")
@@ -166,4 +168,55 @@ def brand_spend(request: Request, brand_id: str):
         last_pull_at=repo.last_pull_at(web.conn, actor.org_id, account_ids),
         campaigns=campaigns,
         total=total,
+    )
+
+
+# ---- 票 past-ads/02：37 個月補拉，一個組織一個背景工作（ADR 0067 §1.8）---------------
+
+class BackfillStartResponse(BaseModel):
+    started: bool  # False＝這個組織已經有一個補拉在跑（另一個 lock 相同的 job 還在排隊）
+    running: bool  # 起這支端點的意義：不管是不是剛才才起的，回應當下一定是 true
+
+
+class BackfillStatusResponse(BaseModel):
+    running: bool
+    earliest_spend_date: date | None
+    latest_spend_date: date | None
+    ad_rows: int
+
+
+@router.post("/brands/{brand_id}/backfill", response_model=BackfillStartResponse)
+def start_backfill(request: Request, brand_id: str):
+    """啟動這個組織的 37 個月補拉（ADR 0067 §1.8：一個組織一個背景工作，不是一個品牌
+    一個——`backfill()` 本身是組織＋廣告帳戶層，見 `daily_pull.backfill` 的 docstring）。
+    另一個組織的品牌 → 404，同 `brand_spend`。"""
+    actor = web.require_actor(request)
+    web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
+    if not repo.bound_account_ids_for_brand(web.conn, actor.org_id, brand_id):
+        raise web.ApiError(409, "no_bound_account", "這個品牌還沒綁定 Meta 廣告帳戶。")
+    lock = daily_pull.backfill_lock(actor.org_id)
+    # `enqueue()` 的 queueing_lock 只擋「還在排隊（todo）」那一段；worker 已經抓走（doing）
+    # 的那幾秒再按一次，會多排第二支 37 個月的補拉（結果冪等，只是白跑）。先問 is_active
+    # 把 doing 也擋掉——同 app/schedule/routes.py 的 enqueue 呼叫端（review 備註 2026-09-08）。
+    if background_is_active(lock):
+        return BackfillStartResponse(started=False, running=True)
+    started = background_enqueue(daily_pull._BACKFILL_TASK_NAME, org_id=actor.org_id, lock=lock)
+    write_audit(
+        web.conn, org_id=actor.org_id, brand_id=brand_id, entity_type="meta_backfill",
+        entity_id=brand_id, action="start", actor=str(actor.user_id),
+    )
+    web.conn.commit()
+    return BackfillStartResponse(started=started, running=True)
+
+
+@router.get("/brands/{brand_id}/backfill", response_model=BackfillStatusResponse)
+def get_backfill_status(request: Request, brand_id: str):
+    actor = web.require_actor(request)
+    web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
+    account_ids = repo.bound_account_ids_for_brand(web.conn, actor.org_id, brand_id)
+    if not account_ids:
+        raise web.ApiError(409, "no_bound_account", "這個品牌還沒綁定 Meta 廣告帳戶。")
+    status = daily_pull.backfill_status(web.conn, actor.org_id, account_ids)
+    return BackfillStatusResponse(
+        running=background_is_active(daily_pull.backfill_lock(actor.org_id)), **status,
     )

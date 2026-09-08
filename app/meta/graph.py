@@ -297,6 +297,80 @@ def fetch_budgets(token: str, external_ids: list[str]) -> dict[str, dict]:
     return result
 
 
+def _first_non_empty(*values):
+    """第一個非 None、非空字串的值；全部都空就是 None。三個欄位（body／title／image_url）
+    各自要「頂層欄位優先，退回 link_data」的同一種挑法，只寫一次。"""
+    for value in values:
+        if value:
+            return value
+    return None
+
+
+def fetch_ad_creatives(token: str, ad_ids: list[str]) -> dict[str, dict | None]:
+    """票 past-ads/02（ADR 0067 §1.9）：每個 id 一次 `GET {GRAPH_BASE_URL}/{ad_id}`（不是
+    清單端點，比照 `fetch_budgets`——一個 id 一個物件，沒有分頁），問這則廣告投放時的
+    素材文字／圖片。呼叫端最多一次給 15 個 id（ADR 0067 §1.7）。
+
+    Sources, verified 2026-09-08:
+    - Ad node `creative` field —
+      https://developers.facebook.com/docs/marketing-api/reference/adgroup/
+    - AdCreative `body`（"Not supported for video post creatives"）／`title`／`image_url`／
+      `thumbnail_url`／`object_story_spec` —
+      https://developers.facebook.com/docs/marketing-api/reference/ad-creative/
+    - `object_story_spec.link_data`（"The spec for a link page post or carousel ad"）—
+      https://developers.facebook.com/docs/marketing-api/reference/ad-creative-object-story-spec/
+    - `link_data.message`（"The main body of the post."）／`name`（"Name of the link."）／
+      `picture`（"URL of a picture to use in the post."）—
+      https://developers.facebook.com/docs/marketing-api/reference/ad-creative-link-data/
+    - Nested field expansion is Graph API field expansion —
+      https://developers.facebook.com/docs/graph-api/using-graph-api
+
+    每個 id 的值要嘛是 `None`——Meta 對這個 id 答的是 `{"error": …}`（刪除或讀不到的廣告；
+    ADR 0067 §1.9：「Meta 現在回不出這則的素材」是一個狀態，這個 id 留在字典裡，值是
+    `None`，絕不整筆丟掉）——要嘛是 name／created_time／effective_status 加上 body／title／
+    image_url 三個「第一個非空值」欄位（見 `_first_non_empty`）：一則以連結貼文投放的廣告，
+    文字在 `object_story_spec.link_data`，不在 `creative.body`（AdCreative `body` 欄位說明
+    原文如上）。每個值原樣存，不修剪、不翻譯。
+
+    `{"error": …}` 形狀不是 transport 失敗——`fetch_page` 不呼叫 `raise_for_status()`，
+    Meta 用一般 HTTP 狀態碼＋JSON body 回錯誤，這裡照樣收得到那份 JSON，不會先被
+    httpx 拋掉（同 `_raise_if_error` 檔頭）；所以這裡不能沿用 `_raise_if_error`（那支對
+    這個形狀丟例外，會讓一個讀不到的 id 讓整批呼叫失敗，違反上一段的規矩）。連不上
+    Meta（`httpx.HTTPError`）、或回應解析不出來（`json.JSONDecodeError`），才是真的
+    transport 失敗，讓整支呼叫 `GraphError`，跟 `fetch_budgets` 同一套。"""
+    headers = {"Authorization": f"Bearer {token}"}
+    fields = (
+        "name,created_time,effective_status,"
+        "creative{body,title,image_url,thumbnail_url,object_story_spec}"
+    )
+    result: dict[str, dict | None] = {}
+    for ad_id in ad_ids:
+        try:
+            body = fetch_page(
+                f"{GRAPH_BASE_URL}/{ad_id}", params={"fields": fields}, headers=headers,
+            )
+        except httpx.HTTPError:
+            raise GraphError("連不上 Meta，請稍後再試。") from None
+        except json.JSONDecodeError:
+            raise GraphError("Meta 回了看不懂的內容，請稍後再試。") from None
+        if "error" in body:
+            result[ad_id] = None
+            continue
+        creative = body.get("creative") or {}
+        link_data = (creative.get("object_story_spec") or {}).get("link_data") or {}
+        result[ad_id] = {
+            "name": body.get("name"),
+            "created_time": body.get("created_time"),
+            "effective_status": body.get("effective_status"),
+            "body": _first_non_empty(creative.get("body"), link_data.get("message")),
+            "title": _first_non_empty(creative.get("title"), link_data.get("name")),
+            "image_url": _first_non_empty(
+                creative.get("image_url"), link_data.get("picture"), creative.get("thumbnail_url"),
+            ),
+        }
+    return result
+
+
 # 三個層級要的度量欄位完全一樣，只寫一次——三份幾乎相同的字串各自漂移是這種表格最典型的
 # 壞法。
 #

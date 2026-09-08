@@ -454,6 +454,27 @@ class OrgIsolationTest(_MetaDailySpendTestBase):
         ).fetchone()["last_pull_at"]
         self.assertIsNone(b_last_pull, "org B 的帳號沒被拉過，last_pull_at 該還是 NULL")
 
+    def test_running_backfill_for_org_a_writes_nothing_for_org_b(self):
+        """票 past-ads/02 done-check 3：`run_backfill` 重用既有 `backfill()`，同一條租戶
+        界線適用——跟上面 `run_daily_pull` 那支同一個斷言。"""
+        org_a, _ = self._make_org("backfill_a")
+        org_b, _ = self._make_org("backfill_b")
+        account_a = self._connect_account(org_a, BP_ACCOUNT_ID, "A 的帳號")
+        account_b = self._connect_account(org_b, SD_ACCOUNT_ID, "B 的帳號")
+        brand_a = bi_repo.create_brand(
+            web.conn, org_id=org_a, name="A 的品牌", client_name=None, actor="test")["id"]
+        brand_b = bi_repo.create_brand(
+            web.conn, org_id=org_b, name="B 的品牌", client_name=None, actor="test")["id"]
+        self._bind(org_a, brand_a, account_a)
+        self._bind(org_b, brand_b, account_b)
+        graph.fetch_page = _dispatch_insights(
+            {BP_ACCOUNT_ID: BP_INSIGHTS_PAGE, SD_ACCOUNT_ID: SD_INSIGHTS_PAGE})
+
+        daily_pull.run_backfill(org_a)
+
+        self.assertGreater(len(self._spend_rows(account_a)), 0, "org A 自己應該有拉到資料")
+        self.assertEqual(self._spend_rows(account_b), [], "org A 的補拉不該寫 org B 的列")
+
 
 # -- 4b. 花費記在哪一天＝組織自己的時區的今天（票 04-1b）-------------------------------
 
@@ -606,6 +627,159 @@ class ScheduledDispatchTest(_MetaDailySpendTestBase):
 
         self.assertEqual(len(self._spend_rows(bp_id)), 3,
                           "periodic dispatch 觸發後，綁定的帳號也要真的落地資料")
+
+
+# -- 5c. 票 past-ads/02：37 個月補拉是一個背景工作，真的透過 procrastinate 跑一次 ----------
+
+class BackfillQueueWiringTest(_MetaDailySpendTestBase):
+    def test_deferred_and_run_through_the_real_queue_over_the_full_37_months(self):
+        """done-check 1：task 掛好名字、真的透過 procrastinate defer／跑；第一個 insights
+        請求的 `time_range.since` 等於 `_earliest_pullable(today)`，最後一個請求的 `until`
+        等於今天（組織時區）——證明 `run_backfill` 真的呼叫既有 `backfill(org_id, since,
+        today)`，不是另一條拉取路徑（票面「Nothing else」）。"""
+        from datetime import date
+
+        self.assertIn(daily_pull._BACKFILL_TASK_NAME, background_module.app().tasks)
+
+        org_id, _ = self._make_org("backfill_queue")
+        bp_id = self._connect_account(org_id, BP_ACCOUNT_ID, "BP AD")
+        brand_id = bi_repo.create_brand(
+            web.conn, org_id=org_id, name="補拉排程測試品牌", client_name=None, actor="test",
+        )["id"]
+        self._bind(org_id, brand_id, bp_id)
+        today = coresettings.today_for_org(web.conn, org_id=org_id)
+        calls: list[dict] = []
+
+        def fake(url, *, params, headers):
+            calls.append(dict(params))
+            return {"data": [], "paging": {}}
+
+        graph.fetch_page = fake
+
+        a = background_module.app()
+        with a.open():
+            job_id = a.configure_task(daily_pull._BACKFILL_TASK_NAME).defer(org_id=org_id)
+        a.run_worker(wait=False)
+
+        schema = coredb.current().execute("SELECT current_schema() AS s").fetchone()["s"]
+        row = coredb.current().execute(
+            f'SELECT status FROM "{schema}__queue".procrastinate_jobs WHERE id = %s', (job_id,)
+        ).fetchone()
+        self.assertEqual(row["status"], "succeeded")
+
+        self.assertGreater(len(calls), 0, "至少要打過一次 insights")
+        first_since = date.fromisoformat(json.loads(calls[0]["time_range"])["since"])
+        last_until = date.fromisoformat(json.loads(calls[-1]["time_range"])["until"])
+        self.assertEqual(first_since, daily_pull._earliest_pullable(today))
+        self.assertEqual(last_until, today)
+
+
+# -- 5d. 一個組織一個補拉：第二次按下只回「還在跑」，佇列不長出第二筆 ----------------------
+
+class BackfillOneRunningPerOrgTest(_MetaDailySpendTestBase):
+    def test_second_start_while_one_is_queued_reports_running_not_started(self):
+        """done-check 2：`backfill()` 是組織＋廣告帳戶層，所以鎖也是組織層——同一個組織
+        兩次按下補拉，第二次不該再排一筆 job，佇列裡帶這個 lock 的 job 永遠只有一筆。"""
+        org_id, token = self._make_org("backfill_lock")
+        bp_id = self._connect_account(org_id, BP_ACCOUNT_ID, "BP AD")
+        brand_id = bi_repo.create_brand(
+            web.conn, org_id=org_id, name="補拉鎖測試品牌", client_name=None, actor="test",
+        )["id"]
+        self._bind(org_id, brand_id, bp_id)
+        auth = self._headers(token, org_id)
+        lock = daily_pull.backfill_lock(org_id)
+
+        # 先手動排一筆 job、不跑 worker（停在 todo），模擬「已經有一個補拉在跑」。
+        self.assertTrue(background_module.enqueue(
+            daily_pull._BACKFILL_TASK_NAME, org_id=org_id, lock=lock))
+        self.assertTrue(background_module.is_active(lock))
+
+        resp = self.client.post(f"/api/meta/brands/{brand_id}/backfill", headers=auth)
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json(), {"started": False, "running": True})
+
+        schema = coredb.current().execute("SELECT current_schema() AS s").fetchone()["s"]
+        rows = coredb.current().execute(
+            f'SELECT count(*) AS n FROM "{schema}__queue".procrastinate_jobs'
+            " WHERE queueing_lock = %s", (lock,),
+        ).fetchone()
+        self.assertEqual(rows["n"], 1, "同一個 lock 名下只該有一筆 job，不是兩筆")
+
+
+# -- 5e. 補拉路由：跨組織 404、沒綁帳號 409 --------------------------------------------
+
+class BackfillTenantBoundaryTest(_MetaDailySpendTestBase):
+    def setUp(self):
+        super().setUp()
+        self.org_id, self.token = self._make_org("backfill_tenant")
+        self.account_id = self._connect_account(self.org_id, BP_ACCOUNT_ID, "BP AD")
+        self.brand_id = bi_repo.create_brand(
+            web.conn, org_id=self.org_id, name="補拉租戶測試品牌", client_name=None, actor="test",
+        )["id"]
+        self._bind(self.org_id, self.brand_id, self.account_id)
+        self.auth = self._headers(self.token, self.org_id)
+
+    def test_other_org_cannot_start_or_read_this_brand_backfill(self):
+        """done-check 3：另一個組織的 brand_id → 404，POST／GET 都一樣。"""
+        org_b, token_b = self._make_org("backfill_tenant_b")
+        auth_b = self._headers(token_b, org_b)
+        self.assertEqual(
+            self.client.post(
+                f"/api/meta/brands/{self.brand_id}/backfill", headers=auth_b
+            ).status_code, 404,
+        )
+        self.assertEqual(
+            self.client.get(
+                f"/api/meta/brands/{self.brand_id}/backfill", headers=auth_b
+            ).status_code, 404,
+        )
+
+    def test_brand_with_no_bound_account_gets_409(self):
+        """done-check 3：沒綁帳號的品牌 → 409 no_bound_account，POST／GET 都一樣。"""
+        empty_brand = bi_repo.create_brand(
+            web.conn, org_id=self.org_id, name="沒綁帳號的品牌", client_name=None, actor="test",
+        )["id"]
+        resp_post = self.client.post(
+            f"/api/meta/brands/{empty_brand}/backfill", headers=self.auth)
+        self.assertEqual(resp_post.status_code, 409)
+        self.assertEqual(resp_post.json()["error"]["code"], "no_bound_account")
+        resp_get = self.client.get(
+            f"/api/meta/brands/{empty_brand}/backfill", headers=self.auth)
+        self.assertEqual(resp_get.status_code, 409)
+        self.assertEqual(resp_get.json()["error"]["code"], "no_bound_account")
+
+
+# -- 5f. backfill_status：只讀呼叫端給的那幾個帳號 --------------------------------------
+
+class BackfillStatusTest(_MetaDailySpendTestBase):
+    def test_status_reads_only_the_given_accounts(self):
+        """done-check 4：兩個帳號各有列，只問其中一個帳號拿到的 min／max／count 只算那個
+        帳號的。"""
+        from datetime import date
+
+        org_id, _ = self._make_org("backfill_status")
+        account_1 = self._connect_account(org_id, BP_ACCOUNT_ID, "帳號一")
+        account_2 = self._connect_account(org_id, SD_ACCOUNT_ID, "帳號二")
+
+        def _row(entity_id, day, spend):
+            return {"level": "ad", "entity_id": entity_id, "entity_name": entity_id,
+                    "campaign_id": "c1", "adset_id": "as1", "ad_id": entity_id,
+                    "spend_date": day, "spend": spend, "impressions": 10, "clicks": 1,
+                    "roas": None, "actions": None, "action_values": None,
+                    "attribution_window": "7d_click,1d_view"}
+
+        meta_repo.upsert_entity_spend(web.conn, org_id, account_1, [
+            _row("ad-1a", date(2026, 6, 1), 100), _row("ad-1b", date(2026, 6, 5), 200),
+        ])
+        meta_repo.upsert_entity_spend(web.conn, org_id, account_2, [
+            _row("ad-2a", date(2026, 7, 15), 300),
+        ])
+        web.conn.commit()
+
+        status = daily_pull.backfill_status(web.conn, org_id, [account_1])
+        self.assertEqual(status["earliest_spend_date"], date(2026, 6, 1))
+        self.assertEqual(status["latest_spend_date"], date(2026, 6, 5))
+        self.assertEqual(status["ad_rows"], 2)
 
 
 # -- 6. API 契約：GET /api/meta/brands/{brand_id}/spend -----------------------------
@@ -952,6 +1126,66 @@ class PagingNeverTruncatesSilentlyTest(unittest.TestCase):
         graph.fetch_page = walk
         items = graph._fetch_all_pages("https://example/1", None, {})
         self.assertEqual([i["campaign_id"] for i in items], ["c1", "c2", "c3"])
+
+
+# -- 11b. 票 past-ads/02（ADR 0067 §1.9）：fetch_ad_creatives 讀不到的 id 留著，不丟掉 -----
+
+class FetchAdCreativesTest(unittest.TestCase):
+    """讀不到的 id 是狀態（None），不是被丟掉的資料；頁面貼文廣告的文字／圖片從
+    `object_story_spec.link_data` 退回，不在 `creative.body`/`creative.image_url` 頂層。"""
+
+    def setUp(self):
+        self._orig_fetch_page = graph.fetch_page
+
+    def tearDown(self):
+        graph.fetch_page = self._orig_fetch_page
+
+    def test_top_level_body_link_data_fallback_and_unreadable_id_in_one_call(self):
+        """done-check 5：id A 從頂層取 body／image_url，id B 從 link_data 退回，id C 是
+        `{"error": …}` → None，三個 key 都要在。"""
+
+        def fake(url, *, params, headers):
+            if url.endswith("/ad-a"):
+                return {
+                    "name": "廣告 A", "created_time": "2026-05-01T00:00:00+0000",
+                    "effective_status": "ACTIVE",
+                    "creative": {"body": "頂層文案", "title": "頂層標題",
+                                 "image_url": "https://example/a.jpg"},
+                }
+            if url.endswith("/ad-b"):
+                return {
+                    "name": "廣告 B", "created_time": "2026-05-02T00:00:00+0000",
+                    "effective_status": "PAUSED",
+                    "creative": {"object_story_spec": {"link_data": {
+                        "message": "連結貼文文案", "name": "連結標題",
+                        "picture": "https://example/b.jpg",
+                    }}},
+                }
+            if url.endswith("/ad-c"):
+                return {"error": {"message": "Unsupported get request", "code": 100}}
+            raise AssertionError(f"沒有對應的 fixture：{url}")
+
+        graph.fetch_page = fake
+        result = graph.fetch_ad_creatives("token", ["ad-a", "ad-b", "ad-c"])
+
+        self.assertEqual(set(result), {"ad-a", "ad-b", "ad-c"}, "三個 id 都要留在字典裡")
+        self.assertEqual(result["ad-a"]["body"], "頂層文案")
+        self.assertEqual(result["ad-a"]["title"], "頂層標題")
+        self.assertEqual(result["ad-a"]["image_url"], "https://example/a.jpg")
+        self.assertEqual(result["ad-b"]["body"], "連結貼文文案")
+        self.assertEqual(result["ad-b"]["title"], "連結標題")
+        self.assertEqual(result["ad-b"]["image_url"], "https://example/b.jpg")
+        self.assertIsNone(result["ad-c"], "讀不到的 id 是 None，不是被丟掉")
+
+    def test_transport_error_on_any_id_raises_for_the_whole_call(self):
+        import httpx
+
+        def fake(url, *, params, headers):
+            raise httpx.ConnectError("boom")
+
+        graph.fetch_page = fake
+        with self.assertRaises(graph.GraphError):
+            graph.fetch_ad_creatives("token", ["ad-a"])
 
 
 # -- 12. 票 T3c（ADR 0055 §7）：第二層綁定要的兩支新讀取 -------------------------------
