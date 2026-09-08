@@ -166,7 +166,7 @@ the test client the other route tests use — grep `TestClient` in `app/tests/` 
    `["app/brand_web"]` and `TEST_LINES_CEILING` rise by measured amounts with reasons.
 10. **Machine gate**: `unset BRAND_OS_LLM_PROVIDER`; `uv run ruff check app` · `uv run pyright` ·
     `uv run pytest app/tests/test_past_ads_history.py app/tests/test_brand_delete.py -q` ·
-    `cd frontend && npm run typecheck && npm run build` · `cd frontend && npm run e2e` (own 8720 backend).
+    `cd frontend && npm run build` (no `typecheck` script; `build` is `tsc -b && vite build`) · `cd frontend && npm run e2e` (own 8720 backend).
 
 ## Shared files touched
 

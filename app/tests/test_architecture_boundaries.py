@@ -1313,7 +1313,29 @@ class CoordinateDimensionSyncTest(unittest.TestCase):
 #      量對了，round 2 沒有再動這一筆。
 #   4. 本段理由註解自己（含上面「這道棘輪在落地前就已經在漏」那一段，done-check 5 點名的
 #      新要求）。
-TEST_LINES_CEILING = 21421  # Ticket plan-quality/05 (budget-level-mismatch-shown-and-fed-to-
+TEST_LINES_CEILING = 21602  # Ticket past-ads 01 round 2
+# (docs/issues/past-ads/01-schema-imported-ad-and-advertising-history.md, 2026-09-08 --
+# review round 1 sent done-check 4 back, see the ticket's `## Blocked` section; round 2
+# implements only the brand-delete wipe test the review's ruling rewrote): 21522 -> 21602
+# (+80). The ticket's own test file gains `ImportedAdBrandDeleteCleanupTest` (+68, `wc -l`):
+# the money/tenant-adjacent path the review named -- brand delete wipes the new past-ads table
+# through `app.core.cleanup.delete_all()`, the same path `app.brand_intelligence.repository
+# .delete_brand()` runs (`test_cleanup_registry.py:62-67`), proven by inserting one row for
+# the deleted brand and one for a second brand of the same org and asserting the returned
+# counts carry `("舊廣告", 1)`, the deleted brand's rows are gone, and the second brand's row
+# is untouched. Remaining +12: this reason comment's own net lines over the one it replaces.
+# Measured (`uv run pytest app/tests/test_architecture_boundaries.py -q`), no slack.
+# Previous was 21522 -- Ticket past-ads 01
+# (docs/issues/past-ads/01-schema-imported-ad-and-advertising-history.md, 2026-09-08):
+# 21421 -> 21522 (+101). New test file (+83, `wc -l`): the composite-FK tenant-isolation test
+# named in the ticket's done-check 3, shaped after `test_org_isolation_all_tables.py::
+# CampaignPeriodCompositeFKTenantIsolationTest
+# .test_period_node_membership_cross_org_period_reference_is_rejected` (the NOT NULL class,
+# since the new table's channel-id column cannot be nulled away either). Remaining +18 in
+# this file: the `KNOWN_MODULE_SIZES["app/schedule"]` reason comment above (net +8 over the
+# one line it replaced) plus this reason comment's own net +10 over the one line it replaced.
+# Measured (`uv run pytest app/tests/test_architecture_boundaries.py -q`), no slack.
+# Previous was 21421 -- Ticket plan-quality/05 (budget-level-mismatch-shown-and-fed-to-
 # diagnosis, 2026-09-08): 21204 -> 21421 (+217, measured via `git diff --numstat` on the three
 # touched test files: 146 + 39 + 32). `test_schedule.py` (+146): `_platform_budgets()` fixture helper (same replacement
 # style as `_platform_ad_sets`) plus five tests on `BindTreeApiContractTest`, each naming the
@@ -1734,7 +1756,15 @@ KNOWN_MODULE_SIZES = {
     "app/orders": 1423,  # 票 12：channel_revenue 一張表取代三張（刪掉藥局專屬那一整組
                           # 之後仍淨增）——官網帳本寫入路徑、channel_revenue_summary()、
                           # 通用手動登錄（含「官網不能手動登錄」那道錢的守門）
-    "app/schedule": 4740,  # Ticket plan-quality/05 (budget-level-mismatch-shown-and-fed-to-
+    "app/schedule": 4741,  # Ticket past-ads 01 (docs/issues/past-ads/01-schema-imported-ad-
+                  # and-advertising-history.md, 2026-09-08): 4740 -> 4741 (+1), measured
+                  # (`uv run pytest app/tests/test_architecture_boundaries.py -q`), no slack.
+                  # `repository.py` gains one `_CHILD_TABLES` entry for the new past-ads
+                  # schema row (label 「舊廣告」); the existing `brand_tables` frozenset line
+                  # gained that same table name in place, no new line there. The new table is
+                  # dormant (ADR 0067): schema + brand-delete cleanup registration only, no
+                  # reader or writer yet.
+                  # Previous was 4740 -- Ticket plan-quality/05 (budget-level-mismatch-shown-and-fed-to-
                   # diagnosis, 2026-09-08): 4660 -> 4740, measured (`uv run pytest
                   # app/tests/test_architecture_boundaries.py -q`), no slack. `binding.py` gains
                   # `budget_placement_note()` + `BUDGET_LEVEL_NOTE` (reads Meta's real budget

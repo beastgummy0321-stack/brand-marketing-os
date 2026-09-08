@@ -64,3 +64,5 @@ Turning either into a response is `app/shared/web.py`'s job at the route layer.
 - ADR 0049 — a migration file takes the prefix of the table's owner.
 - ADR 0050 — the ad-loop data model of record.
 - ADR 0053 — product cost is versioned from today, never rewritten backwards.
+- ADR 0067 — `brand.advertising_history` (`has_history`/`none`, NULL = not yet answered) is a
+  column this module owns, dormant as of ticket past-ads 01: nobody reads or writes it yet.

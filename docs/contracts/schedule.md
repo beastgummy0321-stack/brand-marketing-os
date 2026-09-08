@@ -92,6 +92,9 @@ read-only direction, no new edge in the layer graph.
 - ADR 0064 — a binding belongs to the tree that made it; amends ADR 0055 §1/§4 and ADR 0057 §2.
 - ADR 0066 — settling a period scores every bound ad-set and ad node against the break-even
   line; only a resettle changes a score.
+- ADR 0067 — an ad the platform already ran enters coordinates as an `imported_ad` row its
+  owner tags; no model infers why it worked. `imported_ad` (composite FK to `ad_channel`) is
+  dormant as of ticket past-ads 01 — schema and brand-delete cleanup only, no reader/writer yet.
 
 Module-local and reversible, decided here rather than in an ADR:
 

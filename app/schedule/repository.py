@@ -584,6 +584,7 @@ def period_node_memberships_for_brand(conn: _AnyConn, org_id: str, brand_id: str
 
 _CHILD_TABLES = (
     ("period_node_result", "檔期節點記分"),
+    ("imported_ad", "舊廣告"),
     ("feedback", "回饋"),
     # creative_candidate_item 也會被 creative_candidate 的 ON DELETE CASCADE 帶走，這裡仍
     # 明寫一次 DELETE（先於 candidate），跟其餘子表統一走同一套清理路徑、同一套清點方式。
@@ -617,7 +618,7 @@ cleanup.register(
     delete_brand=_delete_brand,
     brand_tables=frozenset({
         "brand_coordinate", "creative_slot", "creative_candidate",
-        "creative_candidate_item", "feedback", "period_node_result",
+        "creative_candidate_item", "feedback", "period_node_result", "imported_ad",
     }),
     count_product=None,
     delete_product=None,

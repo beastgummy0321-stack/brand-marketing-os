@@ -71,7 +71,7 @@ section: nothing new.
 3. **Nothing else moved**: `schedule_tree`'s prompt in the same test file does not contain 「投放史」.
 4. **Machine gate**: `unset BRAND_OS_LLM_PROVIDER`; `uv run ruff check app` · `uv run pyright` ·
    `uv run pytest app/tests/test_schedule_performance.py app/tests/test_schedule.py app/tests/test_schedule_diagnosis.py app/tests/test_past_ads_history.py app/tests/test_architecture_boundaries.py -q`
-   · `cd frontend && npm run typecheck && npm run build` · `cd frontend && npm run e2e` (own 8720 backend).
+   · `cd frontend && npm run build` (no `typecheck` script; `build` is `tsc -b && vite build`) · `cd frontend && npm run e2e` (own 8720 backend).
 5. **Ratchets**: `KNOWN_MODULE_SIZES["app/schedule"]` and `TEST_LINES_CEILING` by measured amounts with reasons.
 
 ## Shared files touched

@@ -76,7 +76,7 @@ pattern as `/brands/:brandId/intake` at `:68-70`); `smoke.spec.ts` visits it onc
 
 ## How we know it's done
 
-1. **Machine gate** (§9): `cd frontend && npm run typecheck && npm run build && npm run lint && npm run depcruise && npm test`
+1. **Machine gate** (§9): `cd frontend && npm run build && npm run lint && npm run depcruise && npm test` (no `typecheck` script; `build` is `tsc -b && vite build`)
    (`designTokens.test.ts` included) · `unset BRAND_OS_LLM_PROVIDER; uv run ruff check app; uv run pyright;
    uv run pytest app/tests/test_dashboard_guide_cards.py app/tests/test_dashboard_guide_cards_wiring.py app/tests/test_dashboard_guide_card_links.py app/tests/test_architecture_boundaries.py -q`
    · `cd frontend && npm run e2e` (own 8720 backend, `supabase start` first, shut it down after).

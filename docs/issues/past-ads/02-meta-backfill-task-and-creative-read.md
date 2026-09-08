@@ -114,7 +114,7 @@ builds this module's own `background.app()` and re-registers the tasks — reuse
 6. **`repository.py` untouched**: `git diff --stat -- app/meta/repository.py` prints nothing.
 7. **Machine gate**: `unset BRAND_OS_LLM_PROVIDER`; `uv run ruff check app` · `uv run pyright` ·
    `uv run pytest app/tests/test_meta_daily_spend.py app/tests/test_background.py app/tests/test_architecture_boundaries.py -q` ·
-   `cd frontend && npm run typecheck && npm run build` · `cd frontend && npm run e2e` (own 8720 backend,
+   `cd frontend && npm run build` (there is no `typecheck` script; `build` is `tsc -b && vite build`) · `cd frontend && npm run e2e` (own 8720 backend,
    `supabase start` first, shut it down after).
 8. **Ratchets**: `KNOWN_MODULE_SIZES["app/meta"]` (1701) and `TEST_LINES_CEILING` rise by measured
    amounts with a reason in the file's chronological style.

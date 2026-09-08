@@ -91,11 +91,16 @@ Literal example of the row this table will hold once ticket 03 writes it (nothin
    an `ad_channel` row for org A and an `imported_ad` row for org B naming that channel → the INSERT raises
    a foreign-key violation. Proven red once by running the assertion against a single-column FK in a
    throwaway edit, then restored — say so in the report.
-4. **Brand delete wipes it.** `uv run pytest app/tests/test_brand_delete.py app/tests/test_cleanup_registry.py -q`
-   green after `imported_ad` is added to `_CHILD_TABLES`; if `test_brand_delete.py::ALL_TABLES` is built
-   from a list that does not include schedule's tables, add `imported_ad` the way `period_node_result` was
-   added (git log for `period_node_result` in that file shows the precedent), never as a special case.
-5. **Machine gate**: `uv run ruff check app` · `uv run pyright` · `cd frontend && npm run typecheck && npm run build` (nothing frontend changes; the command still runs) · `cd frontend && npm run e2e` (own 8720 backend, `supabase start` first, shut it down after).
+4. **Brand delete wipes it — proven in the ticket's own test file, not in `test_brand_delete.py`**
+   (amended after review, see `## Blocked`). In `app/tests/test_imported_ad_schema.py`: create an org,
+   a brand and its Meta channel (`app.schedule.repository.ensure_meta_channel`), insert one `imported_ad`
+   row for that brand and one for a second brand of the same org; call `app.core.cleanup.delete_all(conn,
+   brand_id)` (the path `brand_intelligence.repository.delete_brand()` runs — `test_cleanup_registry.py:62-67`
+   shows the protocol); assert the returned counts carry `("舊廣告", 1)`, `count(*) FROM imported_ad WHERE
+   brand_id = <deleted>` is 0, and the second brand's row is still there. `uv run pytest
+   app/tests/test_brand_delete.py app/tests/test_cleanup_registry.py -q` stays green; **`test_brand_delete.py`
+   is not edited.**
+5. **Machine gate**: `uv run ruff check app` · `uv run pyright` · `cd frontend && npm run build` (no `typecheck` script; `build` is `tsc -b && vite build`; nothing frontend changes, the command still runs) · `cd frontend && npm run e2e` (own 8720 backend, `supabase start` first, shut it down after).
 6. **Dormant is provable**: `grep -rn "imported_ad\|advertising_history" app/ --include=*.py` returns only `app/schedule/repository.py` (the child-table entries) and the new test file. Paste the output.
 7. **Ratchets**: `TEST_LINES_CEILING` in `test_architecture_boundaries.py` rises by exactly the new test file's lines plus the reason comment, in the file's existing chronological style; `KNOWN_MODULE_SIZES["app/schedule"]` (4740) rises by the lines added to `repository.py`, with its reason. Both numbers are measured (`wc -l`), never typed.
 
@@ -138,3 +143,15 @@ docs/contracts/schedule.md, docs/contracts/brand_intelligence.md            (one
 - **Cheapest wrong implementation that leaves every check green:** a single-column
   `REFERENCES ad_channel(id)` — checks 1, 2, 4–7 all pass, and org A's brand can silently reference org
   B's channel. Check 3 exists for exactly that; its red-once proof is the only thing that makes it count.
+
+## Blocked
+
+2026-09-08, review round 1 (Opus): `blocked-upstream`. Done-check 4 (edit `test_brand_delete.py::ALL_TABLES`)
+and done-check 6 (the grep returns only `repository.py` and the new test file) could not both be green, and
+the precedent check 4 cited (`period_node_result` in that file) never existed; with `test_brand_delete.py`
+untouched, nothing in the suite proved brand delete wipes `imported_ad`. The tenant-isolation attacks all
+held (cross-org channel FK, RLS read/insert/update/delete as `authenticated` with the other org's
+`app.org_id`). Ruling (main chat): done-check 4 rewritten above — the wipe is proven through
+`cleanup.delete_all()` inside `test_imported_ad_schema.py`; `test_brand_delete.py` stays untouched. Round 2
+implements only that test. The edits to tickets 02–05 found in the same diff were main chat's, not the
+implementer's.
