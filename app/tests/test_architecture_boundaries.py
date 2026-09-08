@@ -1313,7 +1313,20 @@ class CoordinateDimensionSyncTest(unittest.TestCase):
 #      量對了，round 2 沒有再動這一筆。
 #   4. 本段理由註解自己（含上面「這道棘輪在落地前就已經在漏」那一段，done-check 5 點名的
 #      新要求）。
-TEST_LINES_CEILING = 21110  # Ticket smart-loop 05 (next-period suggestion): `test_schedule_period.py`
+TEST_LINES_CEILING = 21204  # Ticket plan-quality/03 (schedule form shows knowledge gaps): this
+# gate was already red on the clean `saas` HEAD before this ticket touched anything -- `git
+# stash` on that HEAD and re-running this file measures `tests` at 21162, 52 over the 21110
+# frozen below; Ticket smart-loop 05 merged with the gate red and nobody ran it first. Those 52
+# lines are absorbed here, not attributed to this ticket (`docs/tech-debt.md` §6's test: is the
+# new count this ticket's own deliverable). This ticket's own addition is 42 lines: 21 in
+# `test_schedule.py` (`test_knowledge_gaps_lists_every_empty_category_in_order` and
+# `test_knowledge_gaps_drops_category_once_a_confirmed_fact_exists` under the existing
+# `PlanApiContractTest`, no new fixture -- `_ScheduleApiTestBase.setUp()`'s brand already has
+# zero facts/personas/claims -- plus a two-line section header comment) and 21 net lines in this
+# file: this reason comment plus the `KNOWN_MODULE_SIZES["app/schedule"]` reason comment above,
+# both of which are counted here since they live under `app/tests/`.
+# 21162+21+21=21204, measured (`uv run pytest app/tests/test_architecture_boundaries.py -q`), no
+# slack. Previous was 21110 -- Ticket smart-loop 05 (next-period suggestion): `test_schedule_period.py`
 # gains `NextPeriodSuggestionTest` (data correctness: spend-weighted direction/verdict, budget
 # arithmetic including the step-rate percentage conversion, rolled dates) and
 # `NextPeriodSuggestionOverlapTest` (a non-settled period colliding with the suggested window is
@@ -1699,7 +1712,15 @@ KNOWN_MODULE_SIZES = {
     "app/orders": 1423,  # 票 12：channel_revenue 一張表取代三張（刪掉藥局專屬那一整組
                           # 之後仍淨增）——官網帳本寫入路徑、channel_revenue_summary()、
                           # 通用手動登錄（含「官網不能手動登錄」那道錢的守門）
-    "app/schedule": 4622,  # Ticket smart-loop 05 (next-period suggestion): `period.py` gains
+    "app/schedule": 4660,  # Ticket plan-quality/03 (schedule form shows knowledge gaps):
+                  # `state.py` gains `_knowledge_gaps()` (three empty-category checks reading
+                  # `bi_repo.list_brand_facts(status="confirmed")`, `personas.list_personas()`,
+                  # `bi_repo.list_claims_for_brand()` -- the same reads `context_compiler.
+                  # compile()` uses, so the schedule-form notice never disagrees with the plan
+                  # prompt) plus its call site in `_brand_response()` and two new imports.
+                  # 4622->4660, measured (`uv run pytest
+                  # app/tests/test_architecture_boundaries.py -q`), no slack. Previous was
+                  # 4622 -- Ticket smart-loop 05 (next-period suggestion): `period.py` gains
                   # `next_period_suggestion()` plus its three private helpers (`_verdict()`,
                   # `_roas_text()`, `_next_period_why()` -- ADR 0066 rule 4's comparison and
                   # diagnosis.py's ROAS-text convention duplicated rather than imported, to

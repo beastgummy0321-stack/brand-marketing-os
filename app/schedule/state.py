@@ -12,6 +12,8 @@ CLI 驅動也照樣需要，所以它們是工作，不是端點。
 import json
 from datetime import timedelta
 
+from app.brand_intelligence import personas
+from app.brand_intelligence import repository as bi_repo
 from app.core import rule_cards
 from app.core import settings as coresettings
 from app.core.db import APP_DIR
@@ -153,6 +155,21 @@ def _creative_ad_nodes(conn, creative_row: dict, org_id: str, brand_id: str) -> 
     return _leaf_ad_nodes(tree["nodes"])
 
 
+def _knowledge_gaps(conn, brand_id: str) -> list[str]:
+    """票 plan-quality/03：哪些品牌檔案分類是空的——讀跟 `context_compiler.compile()`
+    同一批查詢（品牌事實只算 confirmed、宣稱不分產品），通知才不會跟 plan prompt 的內容
+    互相矛盾。順序固定：品牌事實、典型客人、宣稱；產品事實不在這裡，那是逐產品的事，表單
+    已經處理過品牌沒有產品的情況。"""
+    gaps = []
+    if not bi_repo.list_brand_facts(conn, brand_id, status="confirmed"):
+        gaps.append("品牌事實")
+    if not personas.list_personas(conn, brand_id):
+        gaps.append("典型客人")
+    if not bi_repo.list_claims_for_brand(conn, brand_id):
+        gaps.append("宣稱")
+    return gaps
+
+
 def _brand_response(conn, brand_id: str, org_id: str) -> dict:
     current_daily_budget = rule_cards.get_value(conn, brand_id, "schedule_budget", "daily_budget")
     plan_count_min, plan_count_max = _plan_count_bounds(conn, brand_id)
@@ -189,6 +206,7 @@ def _brand_response(conn, brand_id: str, org_id: str) -> dict:
         "daily_budget": current_daily_budget,
         "plan_count_min": plan_count_min,
         "plan_count_max": plan_count_max,
+        "knowledge_gaps": _knowledge_gaps(conn, brand_id),
         "platforms": data["platforms"],
         "objectives": data["objectives"],
         "plan": plan,

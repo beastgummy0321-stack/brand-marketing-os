@@ -228,6 +228,7 @@ export interface ScheduleState {
   daily_budget: number;
   plan_count_min: number;
   plan_count_max: number;
+  knowledge_gaps: string[];
   platforms: SchedulePlatformOption[];
   objectives: ScheduleObjectiveOption[];
   plan: SchedulePlan | null;

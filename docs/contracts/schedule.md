@@ -61,7 +61,9 @@ raised: they are recorded on the `llm_task` row and read back through the task e
 - `procrastinate_*` internals. `app.background` is the only door.
 
 Allowed dependencies: `app.core`, `app.llm`, `app.shared.web`,
-`app.brand_intelligence.repository`, `app.meta`, `app.background`, and — added 2026-09-02 at T2
+`app.brand_intelligence.repository`, `app.brand_intelligence.personas` (read-only, added 2026-09-08 by
+plan-quality ticket 03 for `state._knowledge_gaps()` — the same read `context_compiler` makes; same
+top-level package, no new layer edge), `app.meta`, `app.background`, and — added 2026-09-02 at T2
 station ① — `app.orders.repository`, read-only, for `channel_revenue_summary()` when settling a
 period. `app.orders` imports only `brand_intelligence`, `core` and `shared`, so this closes no
 cycle, and `app.dashboard` already depends on it the same way. Ticket 01 (T6c) reads a second

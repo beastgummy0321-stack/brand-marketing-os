@@ -642,6 +642,27 @@ class PlanApiContractTest(_ScheduleApiTestBase):
         self.assertEqual(platform_ids, {"meta": True, "google": False, "tiktok": False})
         self.assertTrue(all(o["source_url"] for o in body["objectives"]))
 
+    # -- 票 plan-quality/03：品牌檔案缺口要在排程表單露出來 --------------------------
+
+    def test_knowledge_gaps_lists_every_empty_category_in_order(self):
+        """red proof（票面 done-check 1a）：`setUp` 的測試品牌沒有事實／人物誌／宣稱，
+        回 `[]` 會讓這條紅。"""
+        resp = self.client.get(f"/api/schedule/brands/{self.brand['id']}")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["knowledge_gaps"], ["品牌事實", "典型客人", "宣稱"])
+
+    def test_knowledge_gaps_drops_category_once_a_confirmed_fact_exists(self):
+        """red proof（票面 done-check 1b）：不分狀態就數 `brand_fact`，或永遠回三個名字
+        不分現況，都會讓這條紅。"""
+        bi_repo.create_brand_fact(
+            web.conn, self.brand["id"], actor=ACTOR, fact_type="positioning", label="定位",
+            value="平價日常茶飲", status="confirmed", confirmed_by=ACTOR,
+        )
+        web.conn.commit()
+        resp = self.client.get(f"/api/schedule/brands/{self.brand['id']}")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["knowledge_gaps"], ["典型客人", "宣稱"])
+
     def test_post_returns_n_plan_cards_and_prompt_carries_department_file(self):
         fake = _fake(_fenced_plans([_one_plan(), _one_plan(summary="第二個方案")]))
         schedule_jobs.PROVIDER = fake

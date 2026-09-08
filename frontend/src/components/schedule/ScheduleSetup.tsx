@@ -48,6 +48,7 @@ export function ScheduleSetup({ brandId, schedule, products, draft, onChange, co
     <section className="surface">
       <div className="surface-header"><h2>這期要投放哪些產品</h2><span className="text-xs text-muted-foreground">已選 {selectedNames.length} 項</span></div>
       <div className="surface-body flex flex-col gap-6">
+        {schedule.knowledge_gaps.length > 0 && <div className="rounded-lg bg-muted/60 p-4 text-sm"><p className="mb-3 text-muted-foreground">這個品牌還沒有{schedule.knowledge_gaps.join("、")}，出來的方案會比較空泛。</p><Button variant="outline" asChild><Link to={`/brands/${brandId}/intake`}>前往建檔</Link></Button></div>}
         {activeProducts.length === 0 ? <div className="rounded-lg bg-muted/60 p-4 text-sm"><p className="mb-3 text-muted-foreground">這個品牌底下還沒有可投放的產品，先新增產品再開始規劃。</p><Button variant="outline" asChild><Link to={`/brands/${brandId}/products`}>前往產品頁</Link></Button></div> : <div className="grid max-h-56 grid-cols-1 gap-2 overflow-y-auto">
           {activeProducts.map((product) => <label key={product.id} className="flex cursor-pointer items-center gap-3 rounded-lg border border-border px-3 py-2.5 text-sm has-[:checked]:border-primary/30 has-[:checked]:bg-accent/50">
             <input type="checkbox" checked={draft.selectedIds.includes(product.id)} onChange={() => onChange({ selectedIds: draft.selectedIds.includes(product.id) ? draft.selectedIds.filter((id) => id !== product.id) : [...draft.selectedIds, product.id] })} />{product.name}
