@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { X } from "lucide-react";
+import { Link } from "react-router-dom";
 import { SidePanel } from "@/components/layout/SidePanel";
 import {
   CONVERSION_GOALS,
@@ -7,6 +8,7 @@ import {
   MARKET_REGIONS,
   PERSONA_TYPES,
   saveBrandProfile,
+  setAdvertisingHistory,
   type LibraryBrandProfile,
 } from "@/lib/libraryApi";
 import { useFormSubmit } from "@/lib/useFormSubmit";
@@ -70,6 +72,9 @@ function ProfileView({
   const [persona, setPersona] = useState(""); // 只是填表捷徑，不入庫（S5.46），不必回填
   const [marketRegion, setMarketRegion] = useState(profile.market_region ?? "");
   const [conversionGoal, setConversionGoal] = useState(profile.conversion_goal ?? "");
+  const [historyValue, setHistoryValue] = useState<"" | "has_history" | "none">(
+    profile.advertising_history ?? "",
+  );
 
   const form = useFormSubmit(async () => {
     await saveBrandProfile(brandId, {
@@ -80,6 +85,9 @@ function ProfileView({
       market_region: marketRegion,
       conversion_goal: conversionGoal,
     });
+    if (historyValue !== "" && historyValue !== profile.advertising_history) {
+      await setAdvertisingHistory(brandId, historyValue);
+    }
     onSaved();
   });
 
@@ -212,6 +220,27 @@ function ProfileView({
             ))}
           </select>
         </label>
+
+        <label className="flex flex-col gap-1 text-sm">
+          <span className="font-medium text-foreground">以前投放過廣告嗎？</span>
+          <select
+            value={historyValue}
+            onChange={(e) => setHistoryValue(e.target.value as "" | "has_history" | "none")}
+            className="rounded-md border border-border px-3 py-2 text-sm text-foreground"
+          >
+            <option value="">尚未回答</option>
+            <option value="has_history">投放過廣告</option>
+            <option value="none">完全沒投放過</option>
+          </select>
+        </label>
+        {profile.advertising_history === "has_history" && (
+          <Link
+            to={`/brands/${encodeURIComponent(brandId)}/intake/history`}
+            className="self-start text-sm font-medium text-primary underline-offset-4 hover:underline"
+          >
+            把過去的廣告帶進來 →
+          </Link>
+        )}
 
         {form.error && <p className="text-sm text-danger">{form.error}</p>}
         <div>
