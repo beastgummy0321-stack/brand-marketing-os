@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { useWorkspace } from "@/components/layout/WorkspaceContext";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Button } from "@/components/layout/ui/button";
@@ -162,7 +162,16 @@ export function LibraryPage({ brandId }: { brandId: string }) {
 
   return (
     <div className="flex flex-col gap-4">
-      <PageHeader title="品牌智庫" description={state.status === "ready" ? `${state.data.brand.name} · 品牌事實、素材與累積的經營知識` : "管理品牌知識與素材"} actions={<Button variant="outline" onClick={() => setProfileOpen(true)} disabled={state.status !== "ready"}>品牌資料</Button>}/>
+      <PageHeader title="品牌智庫" description={state.status === "ready" ? `${state.data.brand.name} · 品牌事實、素材與累積的經營知識` : "管理品牌知識與素材"} actions={
+        <>
+          {/* 品牌調研（建檔精靈）想按就按：沒跑過 → 直接是調研表單；跑過 → 「再跑一次調研」；
+              跑到一半 → 接著上次的步驟。一次只開一輪（後端 restart 路由擋第二輪）。 */}
+          <Button asChild variant="outline">
+            <Link to={`/brands/${encodeURIComponent(brandId)}/intake`}>品牌調研</Link>
+          </Button>
+          <Button variant="outline" onClick={() => setProfileOpen(true)} disabled={state.status !== "ready"}>品牌資料</Button>
+        </>
+      }/>
       {content}
     </div>
   );
