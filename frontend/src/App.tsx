@@ -9,10 +9,12 @@ import {
   useSearchParams,
 } from "react-router-dom";
 import { AppShell } from "@/components/layout/AppShell";
+import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { EmptyState } from "@/components/layout/EmptyState";
 import { AcceptInvitePage } from "@/components/auth/AcceptInvitePage";
 import { LoginPage } from "@/components/auth/LoginPage";
 import { CockpitPage } from "@/components/cockpit/CockpitPage";
+import { HistoryPage } from "@/components/intake/HistoryPage";
 import { IntakeWizard } from "@/components/intake/IntakeWizard";
 import { InboxPage } from "@/components/inbox/InboxPage";
 import { LibraryPage } from "@/components/library/LibraryPage";
@@ -56,6 +58,7 @@ function App() {
         <Route path="/intake/new" element={<IntakeNewRoute />} />
         <Route path="/brands/:brandId" element={<BrandRoute />} />
         <Route path="/brands/:brandId/intake" element={<IntakeRoute />} />
+        <Route path="/brands/:brandId/intake/history" element={<HistoryRoute />} />
         <Route path="/brands/:brandId/library" element={<LibraryRoute />} />
         <Route
           path="/brands/:brandId/products"
@@ -198,6 +201,30 @@ function IntakeRoute() {
         <IntakeWizard brandId={brandId ?? ""} />
       </div>
     </>
+  );
+}
+
+/** 把過去的廣告帶進來（S4，票 past-ads/04，ADR 0067）：跟 IntakeRoute 同一種殼——外面
+ * 包麵包屑＋PageHeader，畫面本身在 HistoryPage。 */
+function HistoryRoute() {
+  const { brandId } = useParams<{ brandId: string }>();
+  const { brands } = useWorkspace();
+  const brand = brands.find((b) => b.brand_id === brandId);
+  return (
+    <div className="flex flex-col gap-4">
+      <Breadcrumb
+        items={[
+          { label: "跨品牌總覽", href: "/" },
+          { label: brand ? brand.brand_name : "品牌", href: `/brands/${brandId}` },
+          { label: "把過去的廣告帶進來" },
+        ]}
+      />
+      <PageHeader
+        title="把過去的廣告帶進來"
+        description="數字是 Meta 的，座標和理由是你的；這裡沒有 AI 在猜。"
+      />
+      <HistoryPage brandId={brandId ?? ""} />
+    </div>
   );
 }
 

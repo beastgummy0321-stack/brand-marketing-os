@@ -58,6 +58,8 @@ class GuideCardLinksResolveTest(unittest.TestCase):
             "conversion_goal": "purchase",
             "pending_facts_count": 0,
             "intake_draft": None,
+            "advertising_history": None,
+            "imported_ad_count": 0,
         }
         base.update(overrides)
         return base
@@ -69,6 +71,10 @@ class GuideCardLinksResolveTest(unittest.TestCase):
             "pending_facts": self._facts(pending_facts_count=3),
             "intake_in_progress": self._facts(
                 intake_draft={"step": 2, "resume_path": self.intake_resume_path}),
+            # 票 past-ads/04（ADR 0067）：投放史頁面 `/app/brands/{id}/intake/history`
+            # 是 SPA 路由，這裡打的只是 `/app` 的 catch-all StaticFiles（跟其他三條
+            # 同一個道理），不驗證前端路由表本身有沒有掛這條——那是 e2e 的事。
+            "past_ads_pending": self._facts(advertising_history="has_history", imported_ad_count=0),
         }
 
     def test_every_rule_has_a_link_case(self):

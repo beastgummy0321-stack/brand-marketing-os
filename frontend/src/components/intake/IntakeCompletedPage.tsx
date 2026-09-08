@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { Button } from "@/components/layout/ui/button";
 import { Skeleton } from "@/components/layout/Skeleton";
 import { fetchPersonas, fetchTruthCard, type PersonaBundle, type TruthCard } from "@/lib/intakeT2Api";
+import { fetchLibrary } from "@/lib/libraryApi";
 
 type TruthState =
   | { status: "loading" }
@@ -17,6 +18,9 @@ type OptionalState<T> =
 export function IntakeCompletedPage({ brandId, onRestart }: { brandId: string; onRestart: () => void }) {
   const [truth, setTruth] = useState<TruthState>({ status: "loading" });
   const [personas, setPersonas] = useState<OptionalState<PersonaBundle>>({ status: "loading" });
+  // 票 past-ads/04：按鈕列要不要多一顆「把過去的廣告帶進來」——讀 fetchLibrary() 的品牌
+  // 形狀（票 03 加的 advertising_history 欄位），讀不到就當沒有那顆按鈕，不擋其餘內容。
+  const [advertisingHistory, setAdvertisingHistory] = useState<"has_history" | "none" | null>(null);
 
   function load() {
     setTruth({ status: "loading" });
@@ -27,6 +31,9 @@ export function IntakeCompletedPage({ brandId, onRestart }: { brandId: string; o
     fetchPersonas(brandId)
       .then((data) => setPersonas({ status: "ready", data }))
       .catch((err: unknown) => setPersonas({ status: "error", message: err instanceof Error ? err.message : "讀取人物誌狀態失敗。" }));
+    fetchLibrary(brandId)
+      .then((data) => setAdvertisingHistory(data.brand.advertising_history))
+      .catch(() => setAdvertisingHistory(null));
   }
 
   useEffect(load, [brandId]);
@@ -53,7 +60,18 @@ export function IntakeCompletedPage({ brandId, onRestart }: { brandId: string; o
       </div>
       <PersonaProgress state={personas} />
       <div className="flex gap-3">
-        <Link to={"/brands/" + encodeURIComponent(brandId)} className="inline-flex rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90">前往品牌頁</Link>
+        {advertisingHistory === "has_history" ? (
+          <>
+            <Button asChild>
+              <Link to={`/brands/${encodeURIComponent(brandId)}/intake/history`}>把過去的廣告帶進來</Link>
+            </Button>
+            <Button asChild variant="outline">
+              <Link to={"/brands/" + encodeURIComponent(brandId)}>前往品牌頁</Link>
+            </Button>
+          </>
+        ) : (
+          <Link to={"/brands/" + encodeURIComponent(brandId)} className="inline-flex rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90">前往品牌頁</Link>
+        )}
         <Button type="button" variant="outline" onClick={onRestart}>再跑一次調研</Button>
       </div>
     </div>

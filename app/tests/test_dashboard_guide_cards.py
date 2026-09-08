@@ -24,6 +24,10 @@ def _facts(**overrides) -> dict:
         "conversion_goal": "purchase",
         "pending_facts_count": 0,
         "intake_draft": None,
+        # 預設沒回答過投放史問題，避免每條既有測試都要額外處理票 past-ads/04 新規則；
+        # PastAdsPendingRuleTest 自己覆寫來測觸發。
+        "advertising_history": None,
+        "imported_ad_count": 0,
     }
     base.update(overrides)
     return base
@@ -46,6 +50,41 @@ class ConversionGoalMissingRuleTest(unittest.TestCase):
         """資料正確性前提優先度高於一般提醒，兩條規則同時觸發時排在 pending_facts 之前。"""
         cards = guide_cards.build(_facts(conversion_goal=None, pending_facts_count=2))
         self.assertIn("廣告目標", cards[0]["title"])
+
+
+class PastAdsPendingRuleTest(unittest.TestCase):
+    """票 past-ads/04（ADR 0067）：說過投放過廣告、老廣告一則都沒帶進來標座標時出卡。"""
+
+    def test_triggers_when_has_history_and_zero_imported(self):
+        facts = _facts(advertising_history="has_history", imported_ad_count=0)
+        card = guide_cards.RULES["past_ads_pending"](facts)
+        self.assertIsNotNone(card)
+        self.assertEqual(card["action_url"], f"/app/brands/{BRAND_ID}/intake/history")
+
+    def test_does_not_trigger_when_already_imported(self):
+        facts = _facts(advertising_history="has_history", imported_ad_count=3)
+        self.assertIsNone(guide_cards.RULES["past_ads_pending"](facts))
+
+    def test_does_not_trigger_when_no_history(self):
+        facts = _facts(advertising_history="none", imported_ad_count=0)
+        self.assertIsNone(guide_cards.RULES["past_ads_pending"](facts))
+
+    def test_does_not_trigger_when_history_unanswered(self):
+        facts = _facts(advertising_history=None, imported_ad_count=0)
+        self.assertIsNone(guide_cards.RULES["past_ads_pending"](facts))
+
+    def test_outranks_intake_in_progress_and_conversion_goal_missing(self):
+        """票 04 走查 round 2（## Rejected）：總覽品牌卡只露出 build() 的第一張卡當
+        next_step，一個剛建檔的品牌必定同時缺 conversion_goal、有進行中的建檔草稿——
+        past_ads_pending 排最前面，剛按過「投放過廣告」的人才看得到自己的下一步。"""
+        facts = _facts(
+            conversion_goal=None,
+            advertising_history="has_history",
+            imported_ad_count=0,
+            intake_draft={"step": 2, "resume_path": f"/app/brands/{BRAND_ID}/intake"},
+        )
+        cards = guide_cards.build(facts)
+        self.assertIn("投放過廣告", cards[0]["title"])
 
 
 class PendingFactsRuleTest(unittest.TestCase):

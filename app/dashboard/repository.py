@@ -12,6 +12,7 @@ app.core.interrupts／app.meta），不直接對別層資料表下 SQL、不寫�
 import calendar
 from datetime import date, timedelta
 
+from app import schedule
 from app.brand_intelligence import repository as bi_repo
 from app.core import interrupts as core_interrupts
 from app.dashboard import guide_cards
@@ -128,6 +129,10 @@ def _guide_card_facts(conn, brand_id: str) -> dict:
         "conversion_goal": brand["conversion_goal"] if brand else None,
         "pending_facts_count": len(pending_facts),
         "intake_draft": _intake_draft_fact(conn, brand_id),
+        # 票 past-ads/04（ADR 0067）：guide_cards.past_ads_pending 讀這兩個判斷「投放過但
+        # 老廣告一則都還沒帶進來標座標」。
+        "advertising_history": brand["advertising_history"] if brand else None,
+        "imported_ad_count": schedule.imported_ad_count(conn, brand["org_id"], brand_id) if brand else 0,
     }
 
 

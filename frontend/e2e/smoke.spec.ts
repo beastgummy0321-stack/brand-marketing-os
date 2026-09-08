@@ -38,6 +38,11 @@ test("走完切片後活下來的主要畫面", async ({ page }) => {
   await page.getByLabel("品牌名稱（必填）").fill(brandName);
   await page.getByRole("button", { name: "建立品牌並開始初掃" }).click();
 
+  // --- 投放史分岔（票 past-ads/04，ADR 0067 §1.6）：新品牌送出第一步之後，導頁之前先
+  // 問一次；這裡選「完全沒投放過」，陽春路徑不牽涉背景補拉。--------------------
+  await expect(page.getByRole("heading", { name: "這個品牌以前投放過廣告嗎？" })).toBeVisible();
+  await page.getByRole("button", { name: "完全沒投放過" }).click();
+
   // --- 品牌頁：外殼切片後是品牌標題，右上角是進檔期的入口（缺陷 3）-------------
   await expect(page).toHaveURL(/\/app\/brands\/brd_/);
   await expect(page.getByRole("heading", { name: "經營概況", exact: true })).toBeVisible();
@@ -86,4 +91,8 @@ test("走完切片後活下來的主要畫面", async ({ page }) => {
     .poll(() => thumbnail.evaluate((img) => (img as HTMLImageElement).naturalWidth))
     .toBeGreaterThan(0);
 
+  // --- 把過去的廣告帶進來（票 past-ads/04，ADR 0067）：e2e 帳號沒有 Meta 權杖，這裡只
+  // 證明畫面到得了、空狀態文案對——真的拉 Meta 資料歸驗收，不歸這支煙霧測試 -----------
+  await page.goto(`/app/brands/${brandId}/intake/history`);
+  await expect(page.getByText("還沒接上 Meta 廣告帳戶")).toBeVisible();
 });

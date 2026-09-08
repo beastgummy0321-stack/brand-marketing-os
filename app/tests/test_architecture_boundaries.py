@@ -1313,7 +1313,22 @@ class CoordinateDimensionSyncTest(unittest.TestCase):
 #      量對了，round 2 沒有再動這一筆。
 #   4. 本段理由註解自己（含上面「這道棘輪在落地前就已經在漏」那一段，done-check 5 點名的
 #      新要求）。
-TEST_LINES_CEILING = 22420  # past-ads 03 review note (2026-09-08): 22416 -> 22420, comment lines
+TEST_LINES_CEILING = 22480  # Ticket past-ads 04 round 2 (fork dialog, history screen, guide
+# card, docs/issues/past-ads/04-fork-dialog-and-history-screen.md ## Rejected, 2026-09-08):
+# 22470 -> 22480, measured (`_line_totals()`), no slack. `PastAdsPendingRuleTest`'s ordering
+# case rewritten (`test_intake_in_progress_outranks_it` -> `test_outranks_intake_in_progress_
+# and_conversion_goal_missing`) for the amended done-check 2: `past_ads_pending` is now
+# registered first in `RULES`, so the case asserts it outranks both `intake_in_progress` and
+# `conversion_goal_missing` (+2), plus this reason comment's own lines (+8). Previous was 22470
+# -- Ticket past-ads 04 round 1
+# (fork dialog, history screen, guide card,
+# docs/issues/past-ads/04-fork-dialog-and-history-screen.md, 2026-09-08): 22420 -> 22470,
+# measured (`_line_totals()`), no slack. `test_dashboard_guide_cards.py`'s
+# `PastAdsPendingRuleTest` (done-check 2: has_history + 0 -> the card, has_history + 3 -> no
+# card, none + 0 -> no card, intake_draft also set -> intake card first) plus `_facts()`'s two
+# new default keys, `test_dashboard_guide_card_links.py`'s new `past_ads_pending` case and its
+# two new `_facts()` keys, and this reason comment's own lines. Previous was 22420 --
+# past-ads 03 review note (2026-09-08): 22416 -> 22420, comment lines
 # only (this line and the `KNOWN_MODULE_SIZES["app/meta"]` note); zero new tests. Previous was --
 # Ticket past-ads 03 (docs/issues/past-ads/03-history-read-and-tag.md,
 # 2026-09-08): 21869 -> 22416, measured (`_line_totals()`), no slack. New

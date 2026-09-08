@@ -28,8 +28,10 @@ Otherwise the row is unchanged.
 
 ### 3. The guide card — `app/dashboard/guide_cards.py` + `app/dashboard/repository.py`
 
-Rule `past_ads_pending`, registered right after `intake_in_progress` (a brand-setup precondition, before the
-general reminders): fires when `facts["advertising_history"] == "has_history"` and
+Rule `past_ads_pending`, registered **first in `RULES`** (amended after the walk, see `## Rejected`: the
+overview brand card shows exactly one `next_step`, the first card `build()` returns, and a fresh brand
+always trips `conversion_goal_missing` — the owner who just pressed 「投放過廣告」 sees their own next
+step first, the conversion-goal card the moment ads are in): fires when `facts["advertising_history"] == "has_history"` and
 `facts["imported_ad_count"] == 0`; card `{"title": "你說這個品牌投放過廣告——把過去的廣告帶進來，方案才用得上",
 "action_url": f"/app/brands/{brand_id}/intake/history"}`. Facts: `_guide_card_facts()` adds
 `"advertising_history": brand["advertising_history"]` (already has `brand`) and
@@ -60,7 +62,8 @@ title 「把過去的廣告帶進來」, description 「數字是 Meta 的，座
   right — seven `select`s labelled with `COORDINATE_DIMENSIONS` (`coordinatesApi.ts:12`), options = that
   dimension's coordinates from the reply (`label`, value `key`) plus 「不填」; a `textarea` 「這則為什麼贏／輸？」
   (`ui/textarea`); footer buttons 「儲存」 (primary, `tagHistoryAd`) and 「略過」 (outline, hides the card
-  for this visit — nothing saved). A saved card shows 「已記錄」 with its `tagged_at` and stays editable.
+  for this visit — nothing saved). A saved card shows 「已記錄」 with its `tagged_at` through `formatSyncTime` (`format.ts:54`, §7 — never
+a raw ISO string) and stays editable.
   Cards already `tagged` on load render with their saved values.
 - A card list longer than one screen is still one list (§5: "nothing scrolls past one screen of overview"
   applies to overview pages; this is a task flow — say so in a comment citing §5.1).
@@ -91,15 +94,17 @@ pattern as `/brands/:brandId/intake` at `:68-70`); `smoke.spec.ts` visits it onc
    uv run pytest app/tests/test_dashboard_guide_cards.py app/tests/test_dashboard_guide_cards_wiring.py app/tests/test_dashboard_guide_card_links.py app/tests/test_architecture_boundaries.py -q`
    · `cd frontend && npm run e2e` (own 8720 backend, `supabase start` first, shut it down after).
 2. **Guide card rule is pure and ranked.** In `test_dashboard_guide_cards.py`: facts `has_history` + 0 → the
-   card with that `action_url`; `has_history` + 3 → no card; `none` + 0 → no card; with `intake_draft` also
-   set, the intake card comes first. `test_dashboard_guide_card_links.py` (every `action_url` resolves to a
+   card with that `action_url`; `has_history` + 3 → no card; `none` + 0 → no card; with `intake_draft` **and**
+   a missing `conversion_goal` also set, the past-ads card comes **first** (amended, see `## Rejected`). `test_dashboard_guide_card_links.py` (every `action_url` resolves to a
    mounted route) stays green with the new URL.
 3. **Walk (WALK subagent, playwright-cli, on a restarted 8720 backend, seeded account `123@example.com`/`123456`):**
    1. Open `/app/intake/new`, fill the brand name, submit → the dialog appears with the two buttons and no
       close control; ESC does nothing. Screenshot.
    2. Press 「投放過廣告」 → wizard step ② shows for the new brand. Screenshot.
-   3. Open that brand's cockpit `/app/brands/<id>` → guide card 「你說這個品牌投放過廣告——…」 present, click →
-      lands on `/app/brands/<id>/intake/history`. Screenshot.
+   3. Open the overview `/app` → the new brand's card carries the `next_step` link
+      「你說這個品牌投放過廣告——把過去的廣告帶進來，方案才用得上」 (the overview card is the only place a
+      guide card surfaces, one per brand — amended after the walk); click → lands on
+      `/app/brands/<id>/intake/history`. Screenshot.
    4. On `brd_bughunt` (bound to BP AD, rows present): `/app/brands/brd_bughunt/intake/history` → the TWD
       section, ≥1 card with name, spend, both ROAS captions, seven selects, textarea. Screenshot at 1024 and 1920.
    5. Pick one coordinate in one select, type a note, 「儲存」 → 「已記錄」 with a time; reload → the values
@@ -148,3 +153,17 @@ app/tests/test_architecture_boundaries.py                     (KNOWN_MODULE_SIZE
   local.
 - **Cheapest wrong implementation that leaves every check green:** the guide card fires on `has_history`
   alone (ignoring the count) — check 2's `has_history + 3 → no card` case is what catches it; keep that case.
+
+## Rejected
+
+2026-09-08, walk round 2 (Meta stand-in, `scripts/drill/`): steps 1, 2, 4–8 ✅; **step 3 ❌**. The guide card
+never surfaced: `app/dashboard/repository.py` hands the overview brand card only the first card `build()`
+returns (`next_step`, one slot; the cockpit page renders no guide cards at all), and every fresh brand trips
+`conversion_goal_missing` first, so `past_ads_pending` — registered second — was masked for exactly the brand
+it exists for. The ticket's picture of the cards was wrong, not the implementation. Ruling (main chat):
+`past_ads_pending` is registered first; the walk step reads the overview card. Also caught: 「已記錄・<raw ISO
+string>」 — §7 says every number is formatted; use `formatSyncTime`. Round 2 = those two changes, the
+ordering test in `test_dashboard_guide_cards.py` updated to the new priority (the `intake_draft` case now
+expects the past-ads card first when both fire), then a re-walk of steps 3 and 5. Walk round 1 had run
+against a database `supabase db reset` (ticket 01) had emptied of Meta data — environment, not code; the
+stand-in seed lives in the session scratchpad (`walk04_seed.py`), never in the repo.

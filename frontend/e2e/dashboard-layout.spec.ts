@@ -10,6 +10,11 @@ test("自訂看板可儲存、鍵盤排序，並與其他品牌隔離", async ({
   await page.getByRole("link", { name: "新增品牌" }).first().click();
   await page.getByLabel("品牌名稱（必填）").fill(`版面測試 A ${stamp}`);
   await page.getByRole("button", { name: "建立品牌並開始初掃" }).click();
+  // 票 past-ads/04（ADR 0067 §1.6）：新品牌送出第一步之後、導頁之前先問一次投放史分岔。
+  await expect(
+    page.getByRole("heading", { name: "這個品牌以前投放過廣告嗎？" }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "完全沒投放過" }).click();
   await expect(
     page.getByRole("heading", { name: "經營概況", exact: true }),
   ).toBeVisible();
@@ -43,6 +48,10 @@ test("自訂看板可儲存、鍵盤排序，並與其他品牌隔離", async ({
   await page.goto("/app/intake/new");
   await page.getByLabel("品牌名稱（必填）").fill(`版面測試 B ${stamp}`);
   await page.getByRole("button", { name: "建立品牌並開始初掃" }).click();
+  await expect(
+    page.getByRole("heading", { name: "這個品牌以前投放過廣告嗎？" }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "完全沒投放過" }).click();
   await expect(
     page.getByRole("heading", { name: "經營概況", exact: true }),
   ).toBeVisible();
