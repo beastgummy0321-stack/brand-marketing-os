@@ -1,6 +1,6 @@
 # CONSTITUTION — Ads & Scheduling module
 
-**Scope**: this governs the **ads & scheduling** module only. Brand Marketing OS will also carry brand content, SEO and more; each gets its own contract under `docs/contracts/`. Rules 1–3 and 12 are program-wide and bind every module and every agent working in this repo.
+**Scope**: this governs the **ads & scheduling** module only. Brand Marketing OS will also carry brand content, SEO and more; each gets its own contract under `docs/contracts/`. The second module is the **asset workbench** (素材工作檯, `docs/contracts/workbench.md`, ADR 0068): it makes creative for any customer module, schedule being the first; it never reads the tree. Rules 1–3 and 12 are program-wide and bind every module and every agent working in this repo.
 
 **Status: SIGNED 2026-09-01.** Gate A passed. The seven previously approved ad-loop tickets are retired; this document and the ad-loop diagram are the only source.
 
