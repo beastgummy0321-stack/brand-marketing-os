@@ -44,6 +44,7 @@ from app.core.db import connection, jsonb, new_id
 from app.llm import context_compiler, gateway, methodology, providers
 from app.schedule import binding as binding_mod
 from app.schedule import diagnosis as diagnosis_mod
+from app.schedule import history as history_mod
 from app.schedule import performance as performance_mod
 from app.schedule import period_repository as period_repo
 from app.schedule import plan as plan_mod
@@ -209,6 +210,79 @@ def _account_performance_text(perf: dict, breakeven: tuple[float | None, str]) -
         "方案的 summary 與 reasoning 要引用上面的數字：指名哪一則廣告、哪個數字、這一期要"
         "把它推到多少。"
     )
+    return "\n".join(out)
+
+
+_HISTORY_COORDINATE_HEADER = "座標（受眾／痛點／切角／鉤子／證明／優惠／格式）"
+_HISTORY_CLOSING_LINE = (
+    "投放史是起點，不是答案：說明這一期哪些座標值得再試、哪些不必重走，並指名是哪一則"
+    "廣告的哪個數字讓你這樣判斷。"
+)
+
+
+def _history_coordinate_cell(coordinates: dict, labels: dict) -> str:
+    """跟 `_coordinate_cell()` 同一個標籤查法（`labels.get((dimension, key), key)`，缺的
+    印 `—`），但 `history.tagged_history()` 的 item 形狀是 `{dimension: key}`，不是
+    `node_result["coordinates_json"]` 那種 `{dimension}_key`——不能直接呼叫
+    `_coordinate_cell()`，另開一支比改那支的輸入形狀便宜（那支還有 smart-loop 03 的呼叫端）。"""
+    return "／".join(
+        "—" if coordinates.get(d) is None else labels.get((d, coordinates[d]), coordinates[d])
+        for d in repository.COORDINATE_KEYS
+    )
+
+
+def _history_text(items: list[dict], labels: dict, breakeven: tuple[float | None, str]) -> str:
+    """票 past-ads/05（ADR 0067 §1.10）：`history.tagged_history()` 的輸出 → `schedule_plan()`
+    prompt 的最後一節【投放史】——系統接手之前這個帳戶自己投過、owner 親自標了座標的廣告，
+    數字＋座標＋owner 自己的一句話。空清單 → `""`（既有 `if section` join 直接跳過這一節；
+    只有 `schedule_plan()` 呼叫，`schedule_tree()`／`schedule_creative()` 都不呼叫，ADR 0067
+    §1.10：那兩個 prompt 這一期還沒有節點名字／文案可以對照老廣告）。
+
+    打平線那一行沿用 `_account_performance_text()` 字面同一句（那支自己沒把它拆成共用
+    函式，這裡不為了兩個呼叫端去改一支矛盾檢查段沒有點名要動的既有函式，ceiling）；
+    `roas_coverage` 沿用同一支既有的 `.0%` 格式（`diagnosis_mod._pct()` 是「花費 / 總花費」
+    那種兩個金額相除，這裡已經是 `_bucket()` 算好的比率，套 `_pct(x, 1)` 只是繞一圈拿到
+    一模一樣的字串，這裡不繞）。"""
+    if not items:
+        return ""
+
+    first = min(item["first_seen_date"] for item in items)
+    last = max(item["last_seen_date"] for item in items)
+    roas, source = breakeven
+    breakeven_line = (
+        f"打平線 {roas:.2f}x，來自{source}" if roas is not None else f"算不出打平線：{source}"
+    )
+
+    by_currency: dict[str, list[dict]] = {}
+    for item in items:
+        by_currency.setdefault(item["currency"], []).append(item)
+
+    out = [
+        "【投放史】（系統接手之前，這個帳戶自己投過、老闆親自標了座標的廣告；"
+        f"{first.isoformat()}–{last.isoformat()}）",
+        breakeven_line,
+        diagnosis_mod.DIRECTIONAL_ONLY_NOTE,
+    ]
+    for currency, cur_items in sorted(by_currency.items()):
+        out.append(f"# 幣別 {currency}")
+        out.append(
+            f"| 廣告 | 投放期間 | 花費 | 保守 ROAS | 樂觀 ROAS | 追蹤覆蓋率 | "
+            f"{_HISTORY_COORDINATE_HEADER} | 老闆的話 |"
+        )
+        out.append("|---|---|---|---|---|---|---|---|")
+        for item in cur_items:
+            note_cell = (item["owner_note"] or "").replace("|", "｜")
+            out.append(
+                f"| {item['name']} |"
+                f" {item['first_seen_date'].isoformat()}–{item['last_seen_date'].isoformat()} |"
+                f" {item['spend']:,.0f} |"
+                f" {diagnosis_mod._roas_text(item['roas_conservative'])} |"
+                f" {diagnosis_mod._roas_text(item['roas'])} |"
+                f" {item['roas_coverage']:.0%} |"
+                f" {_history_coordinate_cell(item['coordinates'], labels)} |"
+                f" {note_cell} |"
+            )
+    out.append(_HISTORY_CLOSING_LINE)
     return "\n".join(out)
 
 
@@ -398,10 +472,19 @@ def schedule_plan(org_id: str, brand_id: str, product_ids: list, platform: str, 
         last_period_text = _last_period_text(
             _last_period(conn, org_id, brand_id), conn, org_id, brand_id
         )
+        # 票 past-ads/05（ADR 0067 §1.10）：只有 schedule_plan() 拿——sched_tree／
+        # schedule_creative 這一期還沒有節點名字／文案可以對照老廣告。位置排在
+        # last_period_text 之後、整份 prompt 最後一段（docs/contracts/schedule.md「Position
+        # in the prompt decides」）；打平線跟 performance_text 同一份 breakeven，不重算。
+        history_text = _history_text(
+            history_mod.tagged_history(conn, org_id, brand_id),
+            performance_mod._coordinate_labels(conn, org_id, brand_id),
+            breakeven,
+        )
         prompt = "\n\n".join(
             section for section in
             (department_text, methodology_result.text, params_text, brand_context,
-             performance_text, last_period_text) if section
+             performance_text, last_period_text, history_text) if section
         )
 
         context = gateway.TaskContext(

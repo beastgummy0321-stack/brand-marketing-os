@@ -13,6 +13,9 @@
    整組回 None（done-check 3；ADR 0057 §7 明講不能重用 `spend_summary` 的 `bool_and` 規則）。
 4. 改名不會悄悄轉嫁金額：綁定當下的節點名字跟現在這棵樹的名字對不上，這筆錢要落進
    `untagged`，不能繼續掛在舊候選的座標下面（done-check 5；ADR 0055 §4 的讀時否決票）。
+5. 票 past-ads/05（ADR 0067 §1.3）：綁定碰不到任何一個維度的花費列，退而查
+   `imported_ad`——`coordinates_status == 'tagged'` 的那些列補進來當候選，`pending` 的
+   不算數；同一個實體有綁定就是綁定贏，不查 `imported_ad`（ticket done-check 1）。
 
 不透過 HTTP／`require_actor`：這裡驗的是 `performance.brand_creative_performance()` 這支
 純讀取函式本身的算法，跟 `test_meta_daily_spend.py` 的 `LevelNeverSumsTest`／`CpaMappingTest`
@@ -161,6 +164,29 @@ class _PerformanceTestBase(unittest.TestCase):
             ads=[{"node_key": node_key, "coordinates": full, "visual_tone": None,
                   "visual_concept": None, "fields": [{"label": "文案", "value": ["測試"]}]}],
         )
+
+    def _create_imported_ad(self, org_id: str, brand_id: str, external_id: str, day: date,
+                             *, keys: dict, status: str) -> None:
+        """票 past-ads/05：直接用 repository 造一列 `imported_ad`（不走 `history.tag_
+        imported_ad()` 的 GET-first 驗證，那是 `test_past_ads_history.py` 的範圍）——這裡
+        要控制的是 `coordinates_status` 本身，包括 `pending` 但已經有座標值那個矛盾檢查段
+        點名的邊角案例（`update_imported_ad_tags()` 的 `status` 是呼叫端傳的，不是自己從
+        `keys` 推算，跟 `history.tag_imported_ad()` 那支不同）。"""
+        channel_id = schedule_repo.ensure_meta_channel(web.conn, org_id)
+        schedule_repo.upsert_imported_ad(
+            web.conn, org_id=org_id, brand_id=brand_id, ad_channel_id=channel_id,
+            external_id=external_id, external_name=external_id,
+            first_seen_date=day, last_seen_date=day, creative_body=None, creative_title=None,
+            creative_image_url=None, creative_fetched_at=None, coordinates_status="pending",
+        )
+        full = {"audience": None, "pain": None, "angle": None, "hook": None,
+                "proof": None, "offer": None, "format": None}
+        full.update(keys)
+        schedule_repo.update_imported_ad_tags(
+            web.conn, org_id, brand_id, external_id, keys=full, owner_note=None,
+            status=status, actor="測試員",
+        )
+        web.conn.commit()
 
     def _month_start(self, org_id: str) -> date:
         return coresettings.today_for_org(web.conn, org_id=org_id).replace(day=1)
@@ -396,3 +422,81 @@ class AdPerformanceTest(_PerformanceTestBase):
         empty_brand = self._make_brand(empty_org)
         empty_result = performance.ad_performance(web.conn, empty_org, empty_brand)
         self.assertEqual(empty_result["currencies"], [])
+
+
+class ImportedAdFallbackTest(_PerformanceTestBase):
+    """票 past-ads/05 done-check 1（ADR 0067 §1.3）：綁定碰不到任何維度的花費列，退而查
+    `imported_ad`；`coordinates_status == 'tagged'` 才算數，綁定永遠贏，`pending` 的列不
+    改變任何金額。"""
+
+    def test_imported_row_fills_the_dimension_when_no_binding_reaches_it(self):
+        org_id = self._make_org("imported_no_binding")
+        brand_id = self._make_brand(org_id)
+        account_id = self._connect_and_bind_account(org_id, brand_id, "act-1")
+        day = self._month_start(org_id)
+
+        # ad-old-1 有花費，這個月沒有任何一棵樹綁過它——`_reaches_any` 對它的候選一定是
+        # False（`row_candidate` 裡它對應 `candidates.get(None)` = None）。
+        self._seed_ad_spend(org_id, account_id, "ad-old-1", day, spend=400.0)
+        self._create_imported_ad(
+            org_id, brand_id, "ad-old-1", day, keys={"angle": "convenience"}, status="tagged",
+        )
+
+        result = performance.brand_creative_performance(web.conn, org_id, brand_id)
+        currency = result["currencies"][0]
+        angle = next(d for d in currency["dimensions"] if d["dimension"] == "angle")
+        values_by_key = {v["key"]: v["spend"] for v in angle["values"]}
+        self.assertAlmostEqual(values_by_key.get("convenience", 0.0), 400.0, places=2)
+        self.assertAlmostEqual(angle["untagged"]["spend"], 0.0, places=2)
+        self.assertAlmostEqual(currency["untagged"]["spend"], 0.0, places=2)
+        # 既有不變式（done-check 1 承接自票 T5）：逐維度 untagged + values 加總等於
+        # total_spend，這支票沒有動過那個裁決。
+        for dim in currency["dimensions"]:
+            values_spend = sum(v["spend"] for v in dim["values"])
+            self.assertAlmostEqual(
+                dim["untagged"]["spend"] + values_spend, currency["total_spend"], places=2,
+            )
+
+    def test_binding_wins_over_imported_row_for_the_same_entity(self):
+        org_id = self._make_org("imported_binding_wins")
+        brand_id = self._make_brand(org_id)
+        account_id = self._connect_and_bind_account(org_id, brand_id, "act-1")
+        day = self._month_start(org_id)
+
+        tree_task_id = self._insert_succeeded_tree_row(org_id, brand_id, _two_path_tree())
+        schedule_repo.create_coordinate(web.conn, org_id, brand_id, "angle", "自訂角度A", None)
+        self._seed_ad_spend(org_id, account_id, "ad-old-1", day, spend=400.0)
+        self._bind_ad(org_id, brand_id, "1.1.1", "單元1", "ad-old-1", tree_task_id)
+        self._tag_ad(org_id, brand_id, tree_task_id, "1.1.1", {"angle": "自訂角度A"})
+        # 同一個 external_id 也標了一列 imported_ad，值不一樣——綁定要贏，這個值不准出現。
+        self._create_imported_ad(
+            org_id, brand_id, "ad-old-1", day, keys={"angle": "convenience"}, status="tagged",
+        )
+
+        result = performance.brand_creative_performance(web.conn, org_id, brand_id)
+        currency = result["currencies"][0]
+        angle = next(d for d in currency["dimensions"] if d["dimension"] == "angle")
+        self.assertEqual({v["key"] for v in angle["values"]} & {"convenience"}, set())
+        binding_value = next(v for v in angle["values"] if v["label"] == "自訂角度A")
+        self.assertAlmostEqual(binding_value["spend"], 400.0, places=2)
+
+    def test_pending_imported_row_stays_untagged(self):
+        org_id = self._make_org("imported_pending")
+        brand_id = self._make_brand(org_id)
+        account_id = self._connect_and_bind_account(org_id, brand_id, "act-1")
+        day = self._month_start(org_id)
+
+        self._seed_ad_spend(org_id, account_id, "ad-old-1", day, spend=400.0)
+        # 已經填了 angle_key，但 status 還是 'pending'（矛盾檢查段點名的邊角案例：只憑
+        # `_reaches_any` 判斷會誤把這一列當候選拉進來，這裡逼出 `coordinates_status`
+        # 這道篩選本身有沒有生效）。
+        self._create_imported_ad(
+            org_id, brand_id, "ad-old-1", day, keys={"angle": "convenience"}, status="pending",
+        )
+
+        result = performance.brand_creative_performance(web.conn, org_id, brand_id)
+        currency = result["currencies"][0]
+        angle = next(d for d in currency["dimensions"] if d["dimension"] == "angle")
+        self.assertEqual(angle["values"], [])
+        self.assertAlmostEqual(angle["untagged"]["spend"], 400.0, places=2)
+        self.assertAlmostEqual(currency["untagged"]["spend"], 400.0, places=2)

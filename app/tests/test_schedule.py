@@ -211,6 +211,60 @@ class LargestRemainderAllocationTest(unittest.TestCase):
         self.assertEqual(sum(amounts), 1000)
 
 
+# -- 1a. 票 past-ads/05（ADR 0067 §1.10）：_history_text——純函數，桌面案例，不碰資料庫 ---
+
+def _history_item(**overrides) -> dict:
+    """`docs/contracts/schedule.md`「One coordinate has two ROAS values」那組實測數字
+    （spend 3,570／revenue 2,737.8／coverage 75% → 保守 0.767／樂觀 1.029），座標七個
+    維度只填三個，其餘留 `None` 印 `—`。"""
+    item = {
+        "name": "BP｜夏季｜輪播A", "first_seen_date": date(2026, 5, 3),
+        "last_seen_date": date(2026, 8, 31), "currency": "TWD",
+        "spend": 3570.0, "impressions": 10000, "clicks": 500, "revenue": 2737.8,
+        "roas": 1.029, "roas_conservative": 0.767, "roas_coverage": 0.75, "ad_count": 1,
+        "coordinates": {
+            "audience": "new_parents", "pain": None, "angle": "convenience", "hook": None,
+            "proof": None, "offer": "first_purchase_discount", "format": "carousel",
+        },
+        "owner_note": "媽媽群組轉貼最多，週末單量翻倍",
+    }
+    item.update(overrides)
+    return item
+
+
+_HISTORY_LABELS = {
+    ("audience", "new_parents"): "新手爸媽", ("angle", "convenience"): "省時方便",
+    ("offer", "first_purchase_discount"): "首購折扣", ("format", "carousel"): "輪播",
+}
+
+
+class HistoryTextTest(unittest.TestCase):
+    def test_empty_items_is_empty_string(self):
+        self.assertEqual(schedule_jobs._history_text([], {}, (None, "還沒有毛利率")), "")
+
+    def test_one_item_prints_the_contract_pages_numbers_and_a_verbatim_note(self):
+        text = schedule_jobs._history_text([_history_item()], _HISTORY_LABELS, (1.0, "測試打平線"))
+        self.assertIn("【投放史】", text)
+        self.assertIn("2026-05-03", text)
+        self.assertIn("2026-08-31", text)
+        self.assertIn("BP｜夏季｜輪播A", text)
+        self.assertIn("0.77x", text)  # 保守 ROAS
+        self.assertIn("1.03x", text)  # 樂觀 ROAS
+        self.assertIn("75%", text)  # 追蹤覆蓋率
+        # 座標七個維度順序固定，沒填的印 —，不是印 None 或 key 本身。
+        self.assertIn("新手爸媽／—／省時方便／—／—／首購折扣／輪播", text)
+        self.assertIn("媽媽群組轉貼最多，週末單量翻倍", text)  # owner_note 逐字附上
+        self.assertIn("打平線 1.00x，來自測試打平線", text)
+        self.assertIn(schedule_jobs.diagnosis_mod.DIRECTIONAL_ONLY_NOTE, text)
+        self.assertIn(schedule_jobs._HISTORY_CLOSING_LINE, text)
+
+    def test_pipe_in_owner_note_is_replaced_with_fullwidth_and_nothing_else_touched(self):
+        item = _history_item(owner_note="這句話 | 有一條直線")
+        text = schedule_jobs._history_text([item], _HISTORY_LABELS, (None, "還沒有毛利率"))
+        self.assertIn("這句話 ｜ 有一條直線", text)
+        self.assertNotIn("這句話 | 有一條直線", text)
+
+
 # -- 1b. 票 T3e（ADR 0055 §11）：node_level_spend——純函數，桌面案例，不碰資料庫 ---------
 
 def _period(period_id: str, start: date, end: date) -> dict:
@@ -2265,6 +2319,79 @@ class BindTreeApiContractTest(_ScheduleApiTestBase):
         self.assertEqual(len(fake.calls), 3)
         prompt = fake.calls[0]["messages"][0]["content"]
         self.assertNotIn("【預算層級】", prompt)
+
+    # -- 票 past-ads/05（ADR 0067 §1.10）：plan prompt 帶投放史 -----------------------------
+
+    def _tag_imported_ad(self, external_id: str, day: date, *, keys: dict,
+                          owner_note: str) -> None:
+        channel_id = schedule_repo.ensure_meta_channel(web.conn, coredb.DEV_ORG_ID)
+        schedule_repo.upsert_imported_ad(
+            web.conn, org_id=coredb.DEV_ORG_ID, brand_id=self.brand["id"],
+            ad_channel_id=channel_id, external_id=external_id, external_name="老廣告",
+            first_seen_date=day, last_seen_date=day, creative_body=None, creative_title=None,
+            creative_image_url=None, creative_fetched_at=None, coordinates_status="pending",
+        )
+        full = {"audience": None, "pain": None, "angle": None, "hook": None,
+                "proof": None, "offer": None, "format": None}
+        full.update(keys)
+        schedule_repo.update_imported_ad_tags(
+            web.conn, coredb.DEV_ORG_ID, self.brand["id"], external_id, keys=full,
+            owner_note=owner_note, status="tagged", actor=ACTOR,
+        )
+        web.conn.commit()
+
+    def test_history_section_is_the_last_plan_section_and_absent_from_the_tree_prompt(self):
+        """票 past-ads/05 done-check 2／3：一則老廣告被標了座標之後，`schedule_plan()`
+        prompt 最後一段是【投放史】；`schedule_tree()` 的 prompt 完全不含這一段——那支從沒
+        呼叫 `_history_text()`（ADR 0067 §1.10：這一期還沒有節點名字可以對照老廣告）。
+
+        矛盾檢查段點名的陷阱：花費特意種在**這個月之外**，逼出 `tagged_history()` 用的是
+        廣告自己的視窗，不是 `state._current_month_window()`——用錯視窗這支廣告會印成
+        全零，下面對花費日期的斷言會紅，「有沒有印出這一段」本身逮不到這個陷阱。"""
+        old_day = self.today.replace(day=1) - timedelta(days=45)
+        meta_repo.upsert_entity_spend(web.conn, coredb.DEV_ORG_ID, self.account_id, [{
+            "level": "ad", "entity_id": "ad-old-1", "entity_name": "老廣告",
+            "campaign_id": "camp-old", "adset_id": "as-old", "ad_id": "ad-old-1",
+            "spend_date": old_day, "spend": 3570.0, "impressions": 1000, "clicks": 50,
+            "roas": 2.0, "actions": None, "action_values": None,
+            "attribution_window": "7d_click,1d_view",
+        }])
+        web.conn.commit()
+        self._tag_imported_ad(
+            "ad-old-1", old_day, keys={"angle": "convenience"}, owner_note="測試備註",
+        )
+
+        fake = _fake(_fenced_plans([_one_plan()]))
+        schedule_jobs.PROVIDER = fake
+        resp = self._post(plan_count=1)
+        self.assertEqual(resp.status_code, 200, resp.text)
+        self._run_worker()
+
+        plan_prompt = fake.calls[0]["messages"][0]["content"]
+        self.assertIn("【投放史】", plan_prompt)
+        self.assertIn("老廣告", plan_prompt)
+        self.assertIn(old_day.isoformat(), plan_prompt)
+        # 數字必須來自花費列自己的視窗，不是本月：3,570 只存在於 45 天前那一列（review 05
+        # 抓到的漏洞——名字與日期都來自 imported_ad 那一列，沒有這一句，錯的視窗也能綠）。
+        self.assertIn("3,570", plan_prompt)
+        self.assertTrue(plan_prompt.rstrip().endswith(schedule_jobs._HISTORY_CLOSING_LINE))
+
+        tree_fake = _fake(_tree_fenced(_one_tree_nodes()))
+        schedule_jobs.PROVIDER = tree_fake
+        resp = self.client.post(
+            f"/api/schedule/brands/{self.brand['id']}/tree", json={"plan_index": 0}
+        )
+        self.assertEqual(resp.status_code, 200, resp.text)
+        self._run_worker()
+        self.assertNotIn("投放史", tree_fake.calls[0]["messages"][0]["content"])
+
+    def test_history_section_absent_when_nothing_is_tagged(self):
+        fake = _fake(_fenced_plans([_one_plan()]))
+        schedule_jobs.PROVIDER = fake
+        resp = self._post(plan_count=1)
+        self.assertEqual(resp.status_code, 200, resp.text)
+        self._run_worker()
+        self.assertNotIn("投放史", fake.calls[0]["messages"][0]["content"])
 
 
 class CreativeApiContractTest(_ScheduleApiTestBase):

@@ -278,3 +278,50 @@ def tag_imported_ad(conn, org_id: str, brand_id: str, external_id: str, *,
 
 def imported_ad_count(conn, org_id: str, brand_id: str) -> int:
     return schedule_repo.count_imported_ads(conn, org_id, brand_id)
+
+
+def tagged_history(conn, org_id: str, brand_id: str) -> list[dict]:
+    """票 past-ads/05（ADR 0067 §1.10）：owner 標過座標的老廣告，各自接上自己的真實花費
+    數字，供 `jobs._history_text()` 組進 `schedule_plan()` prompt 的最後一節。沒有任何一支
+    LLM 呼叫——本檔檔頭的 ADR 0067 rule 1 一樣守著這支。
+
+    每一列的花費視窗是**它自己**的 `[first_seen_date, last_seen_date + 1 day)`，不是這個月
+    的窗口（ticket 矛盾檢查段點名的「最便宜的錯法」：一則老廣告這個月可能完全沒有花費，
+    套用 `state._current_month_window()` 會把它印成全零）。`_bucket()` 借用
+    `performance` 模組既有的那支，不重寫（跟 `_rank_cards()` 同一個既有慣例）。"""
+    tagged = [
+        row for row in schedule_repo.imported_ads_for_brand(conn, org_id, brand_id).values()
+        if row["coordinates_status"] == "tagged"
+    ]
+    if not tagged:
+        return []
+
+    account_ids = meta_repo.bound_account_ids_for_brand(conn, org_id, brand_id)
+    since = min(row["first_seen_date"] for row in tagged)
+    until = max(row["last_seen_date"] for row in tagged) + timedelta(days=1)
+    daily_rows = meta_repo.daily_entity_spend(conn, org_id, account_ids, since, until, level="ad")
+    rows_by_entity: dict[str, list[dict]] = {}
+    for row in daily_rows:
+        rows_by_entity.setdefault(row["entity_id"], []).append(row)
+
+    items = []
+    for row in tagged:
+        ad_rows = rows_by_entity.get(row["external_id"], [])
+        if not ad_rows:
+            # 標過座標但現在一列花費都讀不到（帳戶解綁、或補拉還沒跑）：沒有數字就沒有
+            # 話好講，不進【投放史】；也避免 `currency=None` 跟字串排序相撞（review 05）。
+            continue
+        currency = ad_rows[0]["currency"]
+        items.append({
+            "name": row["external_name"],
+            "first_seen_date": row["first_seen_date"],
+            "last_seen_date": row["last_seen_date"],
+            "currency": currency,
+            **performance_mod._bucket(ad_rows),
+            "coordinates": _coordinates_from_row(row),
+            "owner_note": row["owner_note"],
+        })
+    # 逐幣別各自照花費由大到小排（票面「ordered by spend descending, per currency」）——
+    # 幣別當主鍵讓同一幣別的卡片連在一起，呼叫端不必自己再分組一次。
+    items.sort(key=lambda item: (item["currency"], -item["spend"]))
+    return items

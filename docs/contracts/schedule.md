@@ -174,6 +174,8 @@ Module-local and reversible, decided here rather than in an ADR:
   T3d's ticket demanded a global positional zip instead, which is not implementable
   against this module's own reordering test; the reviewer returned `blocked-upstream` and this
   line is the corrected rule.
+- **The plan prompt ends with 【投放史】 (ticket past-ads 05)**: `history.tagged_history()` →
+  `jobs._history_text()`; absent when no imported ad is tagged.
 
 ## Diagnosis (T6c) — frozen shape
 

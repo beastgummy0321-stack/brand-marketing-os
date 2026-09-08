@@ -1313,7 +1313,19 @@ class CoordinateDimensionSyncTest(unittest.TestCase):
 #      量對了，round 2 沒有再動這一筆。
 #   4. 本段理由註解自己（含上面「這道棘輪在落地前就已經在漏」那一段，done-check 5 點名的
 #      新要求）。
-TEST_LINES_CEILING = 22480  # Ticket past-ads 04 round 2 (fork dialog, history screen, guide
+TEST_LINES_CEILING = 22735  # past-ads 05 review note (2026-09-08): 22726 -> 22735 — one assertIn
+# in test_schedule.py (the prompt must carry the spend figure, so a wrong window goes red) plus
+# the two reason comments. Previous was 22726 --
+# Ticket past-ads 05 (docs/issues/past-ads/05-second-entrance-and-
+# plan-history-section.md, 2026-09-08): 22480 -> 22726 (+246), measured (`_line_totals()`),
+# no slack. `test_schedule_performance.py`'s `ImportedAdFallbackTest` (done-check 1: binding
+# wins, tagged fallback fills the dimension, pending row stays untagged) plus a helper;
+# `test_schedule.py`'s `HistoryTextTest` (done-check 2: `_history_text([])` is `""`, one item
+# using the contract page's numbers, the pipe-in-note replacement) and `BindTreeApiContractTest`'s
+# two new tests (done-check 2/3: the plan prompt ends with 【投放史】, the tree prompt never
+# gets it, the section is absent when nothing is tagged) plus their shared `_tag_imported_ad`
+# helper; and this reason comment's and the `KNOWN_MODULE_SIZES["app/schedule"]` reason
+# comment's own lines. Previous was 22480 -- Ticket past-ads 04 round 2 (fork dialog, history screen, guide
 # card, docs/issues/past-ads/04-fork-dialog-and-history-screen.md ## Rejected, 2026-09-08):
 # 22470 -> 22480, measured (`_line_totals()`), no slack. `PastAdsPendingRuleTest`'s ordering
 # case rewritten (`test_intake_in_progress_outranks_it` -> `test_outranks_intake_in_progress_
@@ -1820,7 +1832,19 @@ KNOWN_MODULE_SIZES = {
     "app/orders": 1423,  # 票 12：channel_revenue 一張表取代三張（刪掉藥局專屬那一整組
                           # 之後仍淨增）——官網帳本寫入路徑、channel_revenue_summary()、
                           # 通用手動登錄（含「官網不能手動登錄」那道錢的守門）
-    "app/schedule": 5135,  # Ticket past-ads 03 (docs/issues/past-ads/03-history-read-and-tag.md,
+    "app/schedule": 5285,  # past-ads 05 review note (2026-09-08): 5281 -> 5285, `history.py`
+                           # `tagged_history` skips a tagged ad with no spend rows (currency None
+                           # crashed the prompt's sort). Previous was 5281 --
+                           # Ticket past-ads 05 (docs/issues/past-ads/05-second-entrance-and-
+                  # plan-history-section.md, 2026-09-08): 5135 -> 5281 (+146), measured
+                  # (`_module_sizes()`), no slack. `performance.py`'s
+                  # `brand_creative_performance()` gains the `imported_ad` fallback lookup
+                  # (ADR 0067 §1.3: a binding that reaches nothing falls back to a `tagged`
+                  # imported row, binding always wins); `history.py` gains `tagged_history()`
+                  # (no LLM call, reuses `performance._bucket()`); `jobs.py` gains
+                  # `_history_coordinate_cell()`/`_history_text()` and the two new constants,
+                  # plus wiring `schedule_plan()`'s prompt join to end with 【投放史】.
+                  # Previous was 5135 -- Ticket past-ads 03 (docs/issues/past-ads/03-history-read-and-tag.md,
                   # 2026-09-08): 4741 -> 5135 (+394), measured (`_module_sizes()`), no slack.
                   # New `history.py` (the ticket's own work: `history_cards()`/
                   # `tag_imported_ad()`/`imported_ad_count()`, ranking + creative-cache

@@ -221,6 +221,26 @@ def brand_creative_performance(conn, org_id: str, brand_id: str) -> dict:
         for row in daily_rows
     }
 
+    # 票 past-ads/05（ADR 0067 §1.3）：綁定碰不到任何一個維度的花費列，退而查
+    # `imported_ad`——owner 自己標過座標（`coordinates_status == 'tagged'`）的老廣告，用
+    # `entity_id` 對 `external_id`。那一列本身已經帶七個 `*_key` 欄位，形狀跟
+    # `creative_candidate` 一樣，`_currency_view()` 不必知道候選是哪一種列。綁定贏
+    # （`_reaches_any` 為真就不查）——`未標座標`桶子跟綁定否決票都不用改。
+    tagged_imported = {
+        row["external_id"]: row
+        for row in schedule_repo.imported_ads_for_brand(conn, org_id, brand_id).values()
+        if row["coordinates_status"] == "tagged"
+    }
+    if tagged_imported:
+        row_candidate = {
+            key: (
+                tagged_imported[key[0]]
+                if not _reaches_any(candidate) and key[0] in tagged_imported
+                else candidate
+            )
+            for key, candidate in row_candidate.items()
+        }
+
     rows_by_currency: dict = {}
     for row in daily_rows:
         rows_by_currency.setdefault(row["currency"], []).append(row)

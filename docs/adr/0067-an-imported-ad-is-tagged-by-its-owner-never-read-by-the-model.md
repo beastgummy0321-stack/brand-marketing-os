@@ -86,8 +86,10 @@ because it belongs to no period.
    expansion). Cached on the `imported_ad` row. An ad whose creative is not returned shows "Meta 現在回不出
    這則的素材".
 10. **The plan prompt gains one program-built section, 【投放史】**: the tagged imported ads with their
-    coordinates and numbers, placed after 【上一期】 and before the role text, because position decides
-    whether a section is read (`docs/contracts/schedule.md`, "Position in the prompt decides").
+    coordinates and numbers, placed **last**, after 【上一期】 (the plan prompt has no trailing role
+    text; the department file opens it), because position decides whether a section is read
+    (`docs/contracts/schedule.md`, "Position in the prompt decides"). Wording corrected at ticket 05's
+    review, 2026-09-08.
 
 ## 2. Considered and rejected
 
