@@ -36,7 +36,7 @@ from app.schedule import tree as tree_mod
 # （不另開一份清單）——`performance._coordinate_labels()` 給的是座標**值**的 label，這裡是
 # 維度本身的 label，兩者不是同一件事。
 DIMENSION_LABELS = {
-    "audience": "受眾", "pain": "痛點", "angle": "角度", "hook": "鉤子",
+    "audience": "受眾", "pain": "痛點", "angle": "切角", "hook": "鉤子",
     "proof": "證明", "offer": "優惠", "format": "格式",
 }
 

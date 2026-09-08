@@ -12,7 +12,7 @@ export type CoordinateDimension = "audience" | "pain" | "angle" | "hook" | "proo
 export const COORDINATE_DIMENSIONS: [CoordinateDimension, string][] = [
   ["audience", "受眾"],
   ["pain", "痛點"],
-  ["angle", "角度"],
+  ["angle", "切角"],
   ["hook", "鉤子"],
   ["proof", "證明"],
   ["offer", "優惠"],

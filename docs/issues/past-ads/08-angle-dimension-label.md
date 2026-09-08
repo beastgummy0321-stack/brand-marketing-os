@@ -12,9 +12,10 @@ Change the label of the `angle` dimension from 「角度」 to 「切角」 in e
 
 ```
 frontend/src/lib/coordinatesApi.ts:15            ["angle", "角度"]  → ["angle", "切角"]
-frontend/src/components/schedule/CampaignTree.tsx:11   same pair
+frontend/src/components/schedule/CampaignTree.tsx:10-13   the local COORDINATE_LABELS list is DELETED; the component reads
+                                                   `COORDINATE_DIMENSIONS` from `@/lib/coordinatesApi` instead (amended, see ## Blocked)
 app/schedule/diagnosis.py:39                     DIMENSION_LABELS["angle"] = "角度" → "切角"
-app/departments/creative/ad_creative.md:29       `angle`（角度） → `angle`（切角）   (a prompt part; the user authorised it 2026-09-08)
+app/departments/creative/ad_creative.md:29,31    `angle`（角度） → `angle`（切角）; the example on :31 「例如角度填」 → 「例如切角填」 (a prompt part; the user authorised it 2026-09-08)
 ```
 
 Tests that assert the old word follow the code (grep hits in `app/tests/test_past_ads_history.py`,
@@ -36,7 +37,10 @@ Literal example — the seven dimension labels after this ticket, in order:
    prints nothing; `grep -n "角度" app/departments/creative/ad_creative.md` prints nothing.
 3. **The prompt is consistent**: `jobs._history_text`'s header already says 切角 (ticket 05); after this
    ticket `diagnosis_mod.DIMENSION_LABELS["angle"]` is the same word, so the diagnosis prompt and the
-   plan prompt no longer carry two names for one dimension — `grep -rn "角度" app/schedule` prints nothing.
+   plan prompt no longer carry two names for one dimension — `grep -rn '"角度"' app/schedule` (quoted
+   string, labels only; prose in comments stays) prints nothing.
+4. **The shell vocabulary gate stays green**: `uv run pytest app/tests/test_schedule.py -q -k CampaignTreeVocabularyGateTest`
+   passes — `CampaignTree.tsx` contains neither 角度 nor 切角 as a literal; the label comes from `coordinatesApi`.
 
 ## Shared files touched
 
@@ -58,3 +62,14 @@ app/tests/test_past_ads_history.py, app/tests/test_schedule.py, app/tests/test_s
   break it: a comment containing the quoted string — none exists today (the scan above).
 - **Cheapest wrong implementation that leaves every check green**: renaming the label in the frontend
   only — check 1's Python tests and check 3's `app/schedule` grep catch it.
+
+## Blocked
+
+2026-09-09, implementer round 1: `CONTEXT.md` 「外殼」 forbids the literal 切角 in shell code and
+`test_schedule.py::CampaignTreeVocabularyGateTest` (`_BANNED_WORDS`) enforces it on `CampaignTree.tsx`,
+while `CONTEXT.md` 「廣告素材」 lists 角度 under _Avoid_ — the ticket's "change the pair in CampaignTree"
+could satisfy neither. Ruling (main chat): the shell does not own the word; `CampaignTree.tsx` drops its
+own `COORDINATE_LABELS` list and reads `COORDINATE_DIMENSIONS` from `frontend/src/lib/coordinatesApi.ts`
+(one label source, the gate scans the component's own text and stays green). Done-check 3 narrowed to a
+quoted-string grep (the ticket's "19 hits" scan counted prose; prose stays). `ad_creative.md:31`'s example
+follows line 29. Round 2 = those two edits; the three already-changed sites stand.

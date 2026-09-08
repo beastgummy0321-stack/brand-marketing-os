@@ -5,12 +5,8 @@ import { EmptyState } from "@/components/layout/EmptyState";
 import { Button } from "@/components/layout/ui/button";
 import { Badge } from "@/components/layout/ui/badge";
 import { formatCurrency } from "@/lib/format";
-import type { CampaignTreeNode, CampaignTreeResult, CreativeAd, CreativeCoordinates, CreativeResult, ScheduleApproval } from "@/lib/scheduleApi";
-
-const COORDINATE_LABELS: [keyof CreativeCoordinates, string][] = [
-  ["audience", "受眾"], ["pain", "痛點"], ["angle", "角度"], ["hook", "鉤子"],
-  ["proof", "證明"], ["offer", "優惠"], ["format", "格式"],
-];
+import type { CampaignTreeNode, CampaignTreeResult, CreativeAd, CreativeResult, ScheduleApproval } from "@/lib/scheduleApi";
+import { COORDINATE_DIMENSIONS } from "@/lib/coordinatesApi";
 
 interface NodeEntry { node: CampaignTreeNode; path: string; depth: number }
 function flattenNodes(nodes: CampaignTreeNode[], parent = "", depth = 0): NodeEntry[] {
@@ -104,7 +100,7 @@ function NodeDetail({ entry, levels, ad, onSelectChild }: { entry: NodeEntry; le
     {node.children.length > 0 && <div className="border-t border-border pt-5"><h3 className="mb-3 text-sm">下層節點</h3><div className="flex flex-col gap-2">{node.children.map((child, index) => <Button key={index} type="button" variant="outline" className="h-auto justify-between whitespace-normal py-3 text-left" onClick={() => onSelectChild(index)}><span>{child.name}</span><ChevronRight className="size-4" aria-hidden="true" /></Button>)}</div></div>}
     {ad && <div className="flex flex-col gap-5 border-t border-border pt-5">
       <div className="flex flex-wrap items-center justify-between gap-3"><h3 className="flex items-center gap-2 text-sm"><Layers3 className="size-4" aria-hidden="true" />節點內容</h3><Button type="button" variant="ghost" size="sm" onClick={() => setCoordinatesOpen(!coordinatesOpen)} aria-expanded={coordinatesOpen}>{coordinatesOpen ? "收起座標" : "這則內容打的座標"}</Button></div>
-      {coordinatesOpen && <dl className="grid grid-cols-2 gap-3 rounded-lg bg-muted/50 p-4">{COORDINATE_LABELS.map(([key, label]) => <div key={key}><dt className="text-xs text-muted-foreground">{label}</dt><dd className="mt-1 text-sm">{ad.coordinates[key] ?? "—"}</dd></div>)}</dl>}
+      {coordinatesOpen && <dl className="grid grid-cols-2 gap-3 rounded-lg bg-muted/50 p-4">{COORDINATE_DIMENSIONS.map(([key, label]) => <div key={key}><dt className="text-xs text-muted-foreground">{label}</dt><dd className="mt-1 text-sm">{ad.coordinates[key] ?? "—"}</dd></div>)}</dl>}
       {ad.fields.map((field, index) => <div key={index} className="flex flex-col gap-2"><h4 className="text-xs text-muted-foreground">{field.label}</h4>{field.value.map((variant, variantIndex) => <div key={variantIndex} className="flex items-start gap-3 border-b border-border pb-3 last:border-b-0"><p className="min-w-0 flex-1 whitespace-pre-wrap text-sm leading-7">{variant}</p><CopyIconButton getText={() => variant} ariaLabel={`複製${field.label}第${variantIndex + 1}個變體`} /></div>)}</div>)}
       {ad.warnings.length > 0 && <ul className="list-disc space-y-2 rounded-lg bg-warning/5 py-3 pl-8 pr-4 text-sm leading-6 text-warning">{ad.warnings.map((warning, index) => <li key={index}>{warning}</li>)}</ul>}
     </div>}
