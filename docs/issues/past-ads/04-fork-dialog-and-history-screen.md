@@ -68,6 +68,16 @@ title 「把過去的廣告帶進來」, description 「數字是 Meta 的，座
 `index.ts` for `intake/` is not needed: `App.tsx` may import a component path directly
 (`.dependency-cruiser.cjs:35`), and nothing outside `intake/` imports these files.
 
+Literal examples of the three things this ticket sends or shows:
+
+```json
+{"dialog_press": {"request": "PUT /api/library/brands/brd_x/advertising-history", "body": {"value": "has_history"}},
+ "guide_card": {"title": "你說這個品牌投放過廣告——把過去的廣告帶進來，方案才用得上", "action_url": "/app/brands/brd_x/intake/history"},
+ "card_save": {"request": "PUT /api/schedule/brands/brd_x/history/120212345678901234",
+               "body": {"coordinates": {"audience": "new_parents", "pain": null, "angle": "convenience", "hook": null, "proof": null, "offer": "first_order_discount", "format": "carousel"},
+                        "owner_note": "媽媽群組轉貼最多，週末單量翻倍"}}}
+```
+
 ### 5. e2e
 
 `frontend/e2e/width-overflow.spec.ts` gains `/brands/:brandId/intake/history` (`assertNoOverflow`, same
