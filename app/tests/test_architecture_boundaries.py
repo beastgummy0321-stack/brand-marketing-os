@@ -1322,7 +1322,13 @@ class CoordinateDimensionSyncTest(unittest.TestCase):
 # before INSERT) — file grows 338 -> 371 lines (+33) plus this reason comment's and the
 # `KNOWN_MODULE_SIZES["app/workbench"]` reason comment's own line-count deltas — measured
 # (`_line_totals()`), no slack.
-TEST_LINES_CEILING = 23265  # Previous: 23222 --
+# ticket workbench/03 (2026-09-09): new file app/tests/test_workbench_api.py (349 lines, the
+# ticket's own six done-check cases) plus app/tests/test_workbench.py 371 -> 383 (+12,
+# `on_image_texts` added to three ticket-02 fixtures that submit `kind='image_prompt'` now
+# that `submit_brief` requires it) plus this reason comment's and the
+# `KNOWN_MODULE_SIZES["app/workbench"]` reason comment's own line-count deltas — measured
+# (`_line_totals()`), no slack.
+TEST_LINES_CEILING = 23638  # Previous: 23265 --
 # ticket workbench/02 round 1: test_workbench.py 338 lines (new file, done-check 2's five
 # cases) plus this table's own required edits (LAYER_ORDER entry, KNOWN_MODULE_SIZES
 # app/workbench row and the app row's reason-comment update) — measured (`_line_totals()`),
@@ -2241,11 +2247,17 @@ KNOWN_MODULE_SIZES = {
                           # 讀數字）＋_fill_node_spend()／_current_month_window()（把票 05
                           # 的當月花費補到綁定節點上）＋tree.py 三個新欄位。前一次是票
                           # 10-feedback-entries 的 POST .../reject（784）
-    "app/workbench": 856,  # 票 workbench/02 round 2（## Blocked amendment）：`repository.py`
-                            # 補 product_id 跨品牌擁有權檢查＋一段型別註解（conn 留白吃
-                            # ConnProxy，同 schedule/routes.py 慣例），844→856（+12）。量到
-                            # 的數字，不留餘裕。前一次是票 workbench/02 round 1（ADR 0068）：
-                            # 新套件，量到的數字，不留餘裕。
+    "app/workbench": 1291,  # 票 workbench/03：新檔 routes.py（184 行——`/api/workbench/*`
+                            # 的 HTTP 面）；repository.py 補 list_briefs／brief_detail／
+                            # run_part／adopt_output_for_brief／close_brief／reopen_brief／
+                            # delete_brief／create_brief 八支，加上 submit_brief 的
+                            # image_prompt_count 範圍檢查與 on_image_texts 檢查，
+                            # 280→523（+243）；jobs.py 的 on_image_texts 後備規則，
+                            # 215→226（+11）；__init__.py 的 router 搬進 routes.py，
+                            # 81→78（-3）。856→1291（+435 = 184+243+11-3）。量到的數字，
+                            # 不留餘裕。前一次是票 workbench/02 round 2（## Blocked
+                            # amendment）：`repository.py` 補 product_id 跨品牌擁有權檢查＋
+                            # 一段型別註解，844→856（+12）。
     "app/shared": 450,
     "app/storage": 163,  # 票 storage-01：新模組——put／get／delete／delete_prefix 四函式，
                           # 對 Supabase Storage 的 assets bucket（ADR 0043）。

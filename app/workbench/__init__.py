@@ -1,18 +1,16 @@
 """app/workbench/__init__.py — single entry point (container contract §1, ticket
-workbench/02, ADR 0068).
+workbench/02/03, ADR 0068).
 
 Shapes other modules may use:
-    register(app: FastAPI) -> None       # mounts /api/workbench/* (no routes yet — ticket 03
-                                          # adds them; this router exists today so app/main.py's
-                                          # register loop can include it)
+    register(app: FastAPI) -> None       # mounts /api/workbench/* (routes.py, ticket 03)
     register_tasks() -> None             # idempotently registers `background.workbench_generate`
                                           # against the current app.background.app()
     submit_brief(conn, org_id, brand_id, brief: dict, *, created_by: str) -> str
     briefs_for_source(conn, org_id, brand_id, source_kind: str, source_ref: dict) -> list[dict]
     adopted_output(conn, org_id, brand_id, brief_id: str, part: str) -> dict | None
 
-Everything else in this package (`repository.py`, `jobs.py`, `prompts.py`, `validate.py`, and
-`routes.py` once ticket 03 lands it) is private — nothing outside this package imports them.
+Everything else in this package (`repository.py`, `jobs.py`, `prompts.py`, `validate.py`,
+`routes.py`) is private — nothing outside this package imports them.
 Callers: `app/main.py`'s register loop (first two, called once right after the loop, same spot
 as `schedule_module.register_tasks()`) and `app/tests` (which call `register_tasks()` again
 after they get their own test module's fresh `background.app()` — same reason `app/schedule/
@@ -37,16 +35,15 @@ and `product_tables` is an explicit empty `frozenset()` (see `app/core/cleanup.p
 docstring for why "explicit None" and "omitted" are not the same thing here).
 """
 
-from fastapi import APIRouter, FastAPI
-
-router = APIRouter(prefix="/api/workbench")  # 票 03 才會掛路由；先掛空 router 讓 app/main.py
-                                              # 的登記迴圈可以照既有慣例呼叫 register()
+from fastapi import FastAPI
 
 
 def register(app: FastAPI) -> None:
-    """掛 /api/workbench/*——目前這個 router 一支路由都沒有（票 03 補），先掛上讓
-    app/main.py 的登記迴圈可以照既有慣例呼叫。"""
-    app.include_router(router)
+    """掛 /api/workbench/* 路由（機械式，比照 app/schedule/__init__.py 的延遲 import
+    慣例）。票 03：router 搬進 routes.py 本身，這裡只負責掛。"""
+    from app.workbench import routes as workbench_routes
+
+    app.include_router(workbench_routes.router)
 
 
 def register_tasks() -> None:

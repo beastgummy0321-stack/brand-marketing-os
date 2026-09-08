@@ -1,6 +1,6 @@
 """app/workbench/repository.py — private DB access for `workbench_brief`/`workbench_output`
-(ticket workbench/02, ADR 0068 §1). Private to app/workbench (container contract §1): only
-`jobs.py` and `__init__.py` import this; nothing outside the package does.
+(ticket workbench/02/03, ADR 0068 §1). Private to app/workbench (container contract §1): only
+`jobs.py`, `__init__.py` and `routes.py` import this; nothing outside the package does.
 
 `list_coordinate_vocabulary()` reads `brand_coordinate`/`feedback` — tables `app.schedule`
 owns — by raw SQL, never by importing `app.schedule` (contract "Must not import or touch":
@@ -51,6 +51,19 @@ def _parts_for(kind: str, request: dict) -> list:
     return parts
 
 
+def _validate_on_image_texts(request: dict) -> None:
+    """票 03 §2：`kind='image_prompt'` 手動送出時，圖上文字沒有 copy 輸出可以接——
+    必須是使用者自己填的 1～5 則、每則 27 字以內（creative-matrix.md §3.1：「」文字
+    必須來自使用者，不是模型現編）。"""
+    texts = request.get("on_image_texts")
+    valid = (
+        isinstance(texts, list) and 1 <= len(texts) <= 5
+        and all(isinstance(t, str) and 0 < len(t) <= 27 for t in texts)
+    )
+    if not valid:
+        raise ValueError("on_image_texts_required")
+
+
 def submit_brief(conn, org_id: str, brand_id: str, brief: dict, *,
                   created_by: str) -> str:
     """寫一列 `workbench_brief`（`status='queued'`），依 `_parts_for()` 排進
@@ -72,6 +85,15 @@ def submit_brief(conn, org_id: str, brand_id: str, brief: dict, *,
         raise ValueError("product_unknown")
     coordinates = brief.get("coordinates") or {}
     request = brief.get("request") or {}
+    image_prompt_count = request.get("image_prompt_count")
+    if image_prompt_count is not None and not (
+        isinstance(image_prompt_count, int) and 1 <= image_prompt_count <= 30
+    ):
+        # 票 03 §2：範圍檢查在送出當下就做，不留到 worker 才發現——不管 kind 是什麼，
+        # 只要 image_prompt_count 有值就會排 image_prompt part（`_parts_for()` 檔頭）。
+        raise ValueError("count_out_of_range")
+    if brief["kind"] == "image_prompt":
+        _validate_on_image_texts(request)
     brief_id = new_id("wbb")
 
     conn.execute(
@@ -99,6 +121,20 @@ def submit_brief(conn, org_id: str, brand_id: str, brief: dict, *,
         )
     conn.commit()
     return brief_id
+
+
+_CREATABLE_KINDS = frozenset({"copy", "image_prompt", "video_script", "free"})
+
+
+def create_brief(conn, org_id: str, brand_id: str, brief: dict, *, created_by: str) -> str:
+    """`POST /briefs`（票 03）專屬入口：`kind='ad_creative'` 是 `app.schedule` 那邊
+    （票 05 之後）直接呼叫 `submit_brief()` 才用的 kind，這支 HTTP 端點不開放
+    （契約頁「Routes」）——`submit_brief()` 本身的簽章與行為對其他呼叫端保持不變，不
+    在那裡加這道檢查。其餘驗證（style_key／product_id／image_prompt_count／
+    on_image_texts）都在 `submit_brief()` 裡，這裡不重複。"""
+    if brief.get("kind") not in _CREATABLE_KINDS:
+        raise ValueError("kind_unknown")
+    return submit_brief(conn, org_id, brand_id, brief, created_by=created_by)
 
 
 def get_brief(conn: _AnyConn, org_id: str, brand_id: str, brief_id: str) -> dict | None:
@@ -244,6 +280,213 @@ def list_coordinate_vocabulary(conn: _AnyConn, org_id: str, brand_id: str) -> li
          "rejected": bool(r["rejected"])}
         for r in (dict(row) for row in rows)
     ]
+
+
+# ---------------------------------------------------------------------------
+# 票 03：routes.py 專用——list/detail/mutate。跟上面 `briefs_for_source()`／
+# `adopted_output()`（app.schedule 之後會呼叫）不是同一組：這裡的 `parts` 形狀是給
+# 這個模組自己的畫面（latest_round／adopted_round／running），那兩支是給排程模組的
+# 摘要（latest_round／adopted bool）——兩邊各自的呼叫端要的東西不一樣，不合併。
+# ---------------------------------------------------------------------------
+
+_LIST_STATUS_FILTERS = {
+    "active": "closed_at IS NULL", "closed": "closed_at IS NOT NULL", "all": "TRUE",
+}
+
+
+def _part_summaries(conn: _AnyConn, org_id: str, brand_id: str, brief_id: str,
+                     status: str) -> dict:
+    rows = conn.execute(
+        "SELECT part, MAX(generation_round) AS latest_round,"
+        " MAX(generation_round) FILTER (WHERE adopted_at IS NOT NULL) AS adopted_round"
+        " FROM workbench_output WHERE org_id = %s AND brand_id = %s AND brief_id = %s"
+        " GROUP BY part",
+        (org_id, brand_id, brief_id),
+    ).fetchall()
+    # 沒有每個 part 自己的狀態欄（一張 brief 只有一個 status），round_running 也是照
+    # brief 這個欄位判斷（`run_part()` 檔頭）——這裡老實回報同一個值，不假裝有更細的
+    # 顆粒度。
+    running = status in ("queued", "running")
+    return {
+        r["part"]: {"latest_round": r["latest_round"], "adopted_round": r["adopted_round"],
+                     "running": running}
+        for r in (dict(row) for row in rows)
+    }
+
+
+def _brief_summary(conn, brand_id: str, row: dict) -> dict:
+    # `conn` 這裡不標 `_AnyConn`，理由跟 `submit_brief()` 檔頭一樣：`bi_repo.get_product()`
+    # 簽章吃 `Conn`（非 `ConnProxy`），留白讓 pyright 用型別不定（Unknown）通過。
+    product_id = row["product_id"]
+    product = bi_repo.get_product(conn, brand_id, product_id) if product_id else None
+    return {
+        "id": row["id"], "kind": row["kind"], "source_kind": row["source_kind"],
+        "source_ref": row["source_ref"], "product_id": product_id,
+        "product_name": product["name"] if product else None,
+        "style_key": row["style_key"], "status": row["status"],
+        "last_error": row["last_error"], "closed_at": row["closed_at"],
+        "created_at": row["created_at"],
+        "parts": _part_summaries(conn, row["org_id"], brand_id, row["id"], row["status"]),
+    }
+
+
+def list_briefs(conn: _AnyConn, org_id: str, brand_id: str, status: str = "active") -> list:
+    """`GET /briefs?status=`（票 03）：`ValueError("status_unknown")` for anything other
+    than active／closed／all. 「有沒有關閉」讀 `closed_at`（不是 `status`）——`reopen_brief()`
+    兩欄一起改，這裡才對得上（票面 contradiction check 第二條）。"""
+    if status not in _LIST_STATUS_FILTERS:
+        raise ValueError("status_unknown")
+    rows = conn.execute(
+        f"SELECT * FROM workbench_brief WHERE org_id = %s AND brand_id = %s"
+        f" AND {_LIST_STATUS_FILTERS[status]} ORDER BY created_at DESC",
+        (org_id, brand_id),
+    ).fetchall()
+    return [_brief_summary(conn, brand_id, dict(r)) for r in rows]
+
+
+def brief_detail(conn: _AnyConn, org_id: str, brand_id: str, brief_id: str) -> dict | None:
+    """`GET /briefs/{id}`（票 03）：summary 加上全部輪次的 outputs，找不到回 `None`
+    （路由把 `None` 轉成 404 `brief_unknown`）。"""
+    row = get_brief(conn, org_id, brand_id, brief_id)
+    if row is None:
+        return None
+    detail = _brief_summary(conn, brand_id, row)
+    detail["coordinates"] = row["coordinates_snapshot_json"]
+    detail["visual_tone"] = row["visual_tone"]
+    detail["visual_concept"] = row["visual_concept"]
+    detail["request"] = row["request_json"]
+    output_rows = conn.execute(
+        "SELECT * FROM workbench_output WHERE org_id = %s AND brand_id = %s AND brief_id = %s"
+        " ORDER BY part, generation_round",
+        (org_id, brand_id, brief_id),
+    ).fetchall()
+    detail["outputs"] = [
+        {"id": r["id"], "part": r["part"], "generation_round": r["generation_round"],
+         "adopted_at": r["adopted_at"], "body_json": r["body_json"],
+         "coordinates_json": r["coordinates_json"], "llm_task_id": r["llm_task_id"],
+         "created_at": r["created_at"]}
+        for r in (dict(rr) for rr in output_rows)
+    ]
+    return detail
+
+
+_PARTS_BY_KIND = {
+    "ad_creative": frozenset({"copy", "image_prompt"}), "copy": frozenset({"copy"}),
+    "image_prompt": frozenset({"image_prompt"}), "video_script": frozenset({"video_script"}),
+    "free": frozenset({"free"}),
+}
+
+
+def run_part(conn: _AnyConn, org_id: str, brand_id: str, brief_id: str, part: str, *,
+             count: int | None = None) -> None:
+    """`POST .../parts/{part}/run`（票 03 §2）：`submit_brief()` 排隊那一半的重跑版——
+    這裡跟它共用同一個 lock 字串（`workbench:{brief_id}:{part}`）跟 `queued` 寫法，一個
+    地方決定。`ValueError`：`brief_unknown`／`part_unknown`／`brief_closed`／
+    `round_running`／`count_out_of_range`／`on_image_texts_required`（routes.py 逐一
+    對照成 HTTP 狀態碼）。
+
+    `round_running` 只看 brief 這一欄 `status`（不是「這個 part 有沒有活躍的鎖」）——
+    一張 brief 只有一個 status 欄，這裡老實照它判斷；一個 job 卡在 running 沒有寫回
+    failed（例如 process 被殺）會讓這張 brief 再也跑不了下一輪，是已知、未在這張票修的
+    缺口（票面 contradiction check 第一條，日後才加逾時）。"""
+    from app.background import enqueue as background_enqueue
+
+    brief = get_brief(conn, org_id, brand_id, brief_id)
+    if brief is None:
+        raise ValueError("brief_unknown")
+    if part not in _PARTS_BY_KIND.get(brief["kind"], frozenset()):
+        raise ValueError("part_unknown")
+    if brief["closed_at"] is not None:
+        raise ValueError("brief_closed")
+    if brief["status"] in ("queued", "running"):
+        raise ValueError("round_running")
+    if part == "image_prompt":
+        if count is None or not (1 <= count <= 30):
+            raise ValueError("count_out_of_range")
+        headlines_output = adopted_output(conn, org_id, brand_id, brief_id, "copy")
+        headlines = (headlines_output or {}).get("body_json", {}).get("headlines") or []
+        on_image_texts = (brief.get("request_json") or {}).get("on_image_texts") or []
+        if not headlines and not on_image_texts:
+            # 跟 jobs.py `_run()` 同一條規則（票 03 §3），但這裡先擋在 enqueue 之前——
+            # 不花那通一定會被拒絕的 LLM 呼叫的錢。
+            raise ValueError("on_image_texts_required")
+    mark_brief_status(conn, org_id, brand_id, brief_id, "queued")
+    background_enqueue(
+        "background.workbench_generate", org_id=org_id,
+        lock=f"workbench:{brief_id}:{part}",
+        brand_id=brand_id, brief_id=brief_id, part=part, count=count,
+    )
+
+
+def adopt_output_for_brief(conn: _AnyConn, org_id: str, brand_id: str, brief_id: str,
+                            output_id: str) -> None:
+    """`POST .../outputs/{output_id}/adopt`（票 03）：確認 brief 存在、未關閉、
+    output 真的屬於這張 brief，才呼叫既有 `adopt_output()`（票 02，簽章與行為不
+    變——`app/tests/test_workbench.py` 直接呼叫它）做真正的 UPDATE。`ValueError`：
+    `brief_unknown`／`brief_closed`／`output_unknown`。"""
+    brief = get_brief(conn, org_id, brand_id, brief_id)
+    if brief is None:
+        raise ValueError("brief_unknown")
+    if brief["closed_at"] is not None:
+        raise ValueError("brief_closed")
+    output = conn.execute(
+        "SELECT id FROM workbench_output WHERE org_id = %s AND brand_id = %s"
+        " AND brief_id = %s AND id = %s",
+        (org_id, brand_id, brief_id, output_id),
+    ).fetchone()
+    if output is None:
+        raise ValueError("output_unknown")
+    adopt_output(conn, org_id, brand_id, output_id)
+
+
+def close_brief(conn: _AnyConn, org_id: str, brand_id: str, brief_id: str) -> None:
+    """`POST .../close`（票 03）：關閉，隱藏在預設列表外（`list_briefs` 的 active 濾
+    器）；已採用的內容仍算數（契約頁「Module-local」段）。`ValueError("brief_unknown")`
+    when not found."""
+    row = conn.execute(
+        "UPDATE workbench_brief SET status = 'closed', closed_at = now(), updated_at = now()"
+        " WHERE org_id = %s AND brand_id = %s AND id = %s RETURNING id",
+        (org_id, brand_id, brief_id),
+    ).fetchone()
+    conn.commit()
+    if row is None:
+        raise ValueError("brief_unknown")
+
+
+def reopen_brief(conn: _AnyConn, org_id: str, brand_id: str, brief_id: str) -> None:
+    """`POST .../reopen`（票 03）：清 `closed_at`；關閉前的 status 沒有存下來，所以
+    ——票面決定，可逆——這張 brief 有任何 output 就回 `'done'`，否則 `'failed'`
+    （`last_error` 不動）。兩欄（`status`／`closed_at`）一起改，`list_briefs()` 的
+    `active` 濾器只看 `closed_at` 才會對得上（票面 contradiction check 第二條）。
+    `ValueError("brief_unknown")` when not found."""
+    brief = get_brief(conn, org_id, brand_id, brief_id)
+    if brief is None:
+        raise ValueError("brief_unknown")
+    exists_row = conn.execute(
+        "SELECT EXISTS (SELECT 1 FROM workbench_output"
+        " WHERE org_id = %s AND brand_id = %s AND brief_id = %s) AS e",
+        (org_id, brand_id, brief_id),
+    ).fetchone()
+    has_output = bool(exists_row["e"]) if exists_row is not None else False
+    conn.execute(
+        "UPDATE workbench_brief SET status = %s, closed_at = NULL, updated_at = now()"
+        " WHERE org_id = %s AND brand_id = %s AND id = %s",
+        ("done" if has_output else "failed", org_id, brand_id, brief_id),
+    )
+    conn.commit()
+
+
+def delete_brief(conn: _AnyConn, org_id: str, brand_id: str, brief_id: str) -> None:
+    """`DELETE /briefs/{id}`（票 03）：outputs 靠 `ON DELETE CASCADE`（migration）跟著
+    刪，這裡不用另外下一次 DELETE。`ValueError("brief_unknown")` when not found."""
+    row = conn.execute(
+        "DELETE FROM workbench_brief WHERE org_id = %s AND brand_id = %s AND id = %s"
+        " RETURNING id",
+        (org_id, brand_id, brief_id),
+    ).fetchone()
+    conn.commit()
+    if row is None:
+        raise ValueError("brief_unknown")
 
 
 _CHILD_TABLES = (

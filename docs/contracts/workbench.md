@@ -40,7 +40,8 @@ Callers: `app/main.py`'s register loop (first two); `app.schedule.jobs` (`submit
 deepest node after a tree succeeds); `app.schedule.state` / `app.schedule.performance`
 (`briefs_for_source`, `adopted_output`).
 
-Routes (all under `/api/workbench/brands/{brand_id}`): `GET /briefs?status=` list; `POST /briefs`
+Routes: `GET /api/workbench/styles` (no `brand_id`, list the capture styles verbatim). All
+others under `/api/workbench/brands/{brand_id}`: `GET /briefs?status=` list; `POST /briefs`
 manual brief; `GET /briefs/{id}` detail with all rounds; `POST /briefs/{id}/parts/{part}/run`
 body `{"count": int}` for `image_prompt` (the user's count, no default), empty for others — enqueues
 one round; `POST /briefs/{id}/outputs/{output_id}/adopt`; `POST /briefs/{id}/close` and
@@ -53,6 +54,18 @@ Route errors are `web.ApiError(status, code, message)`: `brief_unknown` 404, `pa
 `round_running` 409 when that part already has a running round. Generation failures are not
 raised: they land on the `llm_task` row and the output row's absence; the brief's `status` reads
 `failed` with the task's error text.
+
+Ticket 03 adds (`POST /briefs`'s own validation, ahead of the generic ones above):
+`status_unknown` 400 (`?status=` on the list route is not `active`/`closed`/`all`), `kind_unknown`
+400 (`POST /briefs` only creates `copy`/`image_prompt`/`video_script`/`free` — `ad_creative` is
+`app.schedule`'s own kind, created by calling `submit_brief()` directly, never through this
+route), `style_unknown` 400 (`style_key` not in `image_styles.json`), `product_unknown` 404
+(`product_id` doesn't belong to this brand), `output_unknown` 404 (the adopt target doesn't
+belong to this brief). `on_image_texts_required` is two different status codes depending on
+which check raised it: 400 at `POST /briefs` (the manual case — the user must have typed the
+on-image text at submission), 409 at `POST .../parts/{part}/run` (the `ad_creative` case — no
+adopted/latest `copy` output's headlines and no `request.on_image_texts` either, so the job would
+have nothing to draw on and is refused before it is ever enqueued).
 
 ## Must not import or touch
 

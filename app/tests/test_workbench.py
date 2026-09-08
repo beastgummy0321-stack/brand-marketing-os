@@ -185,7 +185,12 @@ class ProseWrappedReplyTest(_WorkbenchTestBase):
 
 class ImagePromptFixRoundTest(_WorkbenchTestBase):
     def test_second_item_fix_runs_once_and_reports_honestly(self):
-        brief_id = self._submit(kind="image_prompt", request={"image_prompt_count": 3})
+        # 票 03：`submit_brief()` 現在要求 `kind='image_prompt'` 手動送出時帶
+        # `on_image_texts`（沒有 copy 輸出可以接）——`image_prompt_count` 本身的意思沒變。
+        brief_id = self._submit(
+            kind="image_prompt",
+            request={"image_prompt_count": 3, "on_image_texts": ["一杯搞定早餐"]},
+        )
 
         initial_reply = json.dumps({
             "fixed": IMAGE_FIXED,
@@ -247,7 +252,11 @@ class ImagePromptFixRoundTest(_WorkbenchTestBase):
 
 class ImagePromptRoundsAndAdoptionTest(_WorkbenchTestBase):
     def test_second_round_and_single_row_adoption(self):
-        brief_id = self._submit(kind="image_prompt", request={"image_prompt_count": 2})
+        # 票 03：同上一個案例，`on_image_texts` 是手動 image_prompt 工單的新必填欄。
+        brief_id = self._submit(
+            kind="image_prompt",
+            request={"image_prompt_count": 2, "on_image_texts": ["一杯搞定早餐"]},
+        )
         reply = json.dumps({
             "fixed": IMAGE_FIXED,
             "prompts": [_image_variable(1), _image_variable(2)],
@@ -313,16 +322,19 @@ class SourceIsolationTest(_WorkbenchTestBase):
 
         # kind='image_prompt' 沒給 image_prompt_count：parts=[]，不排任何 job（ADR 0068 §7
         # 沒有預設張數）——這支測試只驗讀取面的租戶隔離，不需要、也不該碰佇列。
+        # 票 03：`on_image_texts` 是手動 image_prompt 工單的新必填欄（submit 就會擋），跟
+        # 這支測試要驗的隔離無關，給一則最小值滿足它就好。
         source_ref = {"source_tree_task_id": "llm_shared_task_id_123"}
         self._submit(
             kind="image_prompt", source_kind="schedule_node", source_ref=source_ref,
-            request={},
+            request={"on_image_texts": ["一杯搞定早餐"]},
         )
         workbench_module.submit_brief(
             web.conn, org_b, brand_b["id"],
             {"kind": "image_prompt", "source_kind": "schedule_node", "source_ref": source_ref,
              "product_id": None, "coordinates": {}, "visual_tone": None,
-             "visual_concept": None, "style_key": "ugc", "request": {}},
+             "visual_concept": None, "style_key": "ugc",
+             "request": {"on_image_texts": ["一杯搞定早餐"]}},
             created_by=ACTOR,
         )
 
