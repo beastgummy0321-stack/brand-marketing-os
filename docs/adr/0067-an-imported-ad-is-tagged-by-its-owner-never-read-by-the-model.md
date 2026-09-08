@@ -84,7 +84,10 @@ because it belongs to no period.
    field, developers.facebook.com/docs/marketing-api/reference/adgroup/; AdCreative fields
    developers.facebook.com/docs/marketing-api/reference/ad-creative/; nested expansion is Graph API field
    expansion). Cached on the `imported_ad` row. An ad whose creative is not returned shows "Meta 現在回不出
-   這則的素材".
+   這則的素材". **Amended 2026-09-08 (ticket past-ads 09)**: a `None` answer is retried — on the next
+   history read once 24 hours have passed, and at once when the owner presses 「重新抓素材」 — because the
+   first real look at the screen hit a transient failure frozen as "never"; a deleted ad simply answers
+   `None` again, at most 15 calls a read.
 10. **The plan prompt gains one program-built section, 【投放史】**: the tagged imported ads with their
     coordinates and numbers, placed **last**, after 【上一期】 (the plan prompt has no trailing role
     text; the department file opens it), because position decides whether a section is read

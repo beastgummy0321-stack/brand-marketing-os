@@ -268,9 +268,12 @@ Retired (deleted 2026-09-07, old look, zero importers): `FluidCard`, `StatBig`, 
 
 ## 7. Data display
 
-- **Formats**: money `NT$ 28,860` (no decimals, thousands separator, space after `NT$`);
-  counts `1,332,500`; rate `1.91%`; ROAS `3.21x`; every number tabular. Format in one place
-  (`number()` in `DashboardWidgets.tsx`); do not re-implement per screen.
+- **Formats**: money `NT$ 28,860` (no decimals, thousands separator, space after `NT$`) for the
+  system's own TWD figures (budgets, own-site orders); **money that came from a platform row carries
+  that row's currency** — `28,860 TWD`, `1,250 USD` (`formatMoney(value, currency)`, ticket past-ads 07,
+  2026-09-08) — because one brand may bind accounts in two currencies (ADR 0057 §4) and `NT$` on a USD
+  row is a wrong label; counts `1,332,500`; rate `1.91%`; ROAS `3.21x`; every number tabular. Format in
+  one place (`number()` in `DashboardWidgets.tsx`, `format.ts`); do not re-implement per screen.
 - **Caption every number**: what window (本月累計), what source (平台回報), what basis (保守／樂觀).
 - **Two-basis ROAS** is drawn as a dumbbell: filled dot conservative (chart 1), hollow dot optimistic
   (chart 4), joined by a line; a dashed vertical breakeven line in `--color-warning` labelled
