@@ -38,7 +38,9 @@ generating an image; the image-generation seat stays reserved (see "What we look
      `provider_status`. `UNIQUE (brief_id, part, generation_round)`.
 2. **Dependency direction is one-way: schedule → workbench.** `app.schedule` imports
    `app.workbench` (its `__init__`), calls `submit_brief()` once per deepest tree node when a
-   tree succeeds, and reads `adopted_output()` when it shows a node or scores spend. The
+   tree succeeds — **carrying that node's seven coordinates as the brief's snapshot (ADR 0069,
+   2026-09-09; before that the handoff passed `None` and the copy model invented them)** — and
+   reads `adopted_output()` when it shows a node or scores spend. The
    workbench imports nothing from schedule and knows no tree; a brief from a schedule node is,
    to it, a brief with a `source_ref` it stores and never interprets.
 3. **`creative_slot` / `creative_candidate` / `creative_candidate_item` stay with schedule.**
@@ -50,7 +52,10 @@ generating an image; the image-generation seat stays reserved (see "What we look
    reads a node whose brief has a `copy` output — **the one `adopted_output()` returns: adopted,
    else the latest round (amended 2026-09-09 after drill 2: only 2 of 33 outputs were ever adopted,
    so "adopted only" left about nine tenths (阿明, 4,870/5,300 recomputed) to all (Vivian) of spend 未標座標 and the diagnosis blind)** — it upserts the
-   `creative_candidate` row from it, idempotent on the output's `llm_task_id` (the column `creative_candidate.llm_task_id`
+   `creative_candidate` row from it — **its coordinates are the brief's snapshot (the tree's,
+   ADR 0069); the copy model's `coordinates_json` only fills a dimension the snapshot left empty
+   (amended 2026-09-09 after drill 3: 沿用 node 01A was scored on different coordinates in two
+   periods)** — idempotent on the output's `llm_task_id` (the column `creative_candidate.llm_task_id`
    already exists and `persist_creative_result` already keys on it) — a read that seeds its own
    cache, the precedent being `GET .../history` (schedule contract, decisions in force). The
    workbench never writes a schedule table.
