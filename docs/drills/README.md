@@ -89,6 +89,22 @@ Two of the drill's own defects produced findings that were not the product's:
 Both were caught because the operator went and checked the database instead of believing the
 report. A persona's report is a symptom; the cause is never theirs to name.
 
+3. **Second drill (2026-09-09): Orca `type-text` garbles Chinese.** The first persona driven
+   through the user's own Chrome with Orca computer-use typed 「常春健康」 and the database
+   received 「8%e愆」, the products 「吰?」／「??」 — the drill tool's synthetic key delivery, not
+   the product. `set-value --element-index N --value "…"` delivers Chinese intact (verified on the
+   product-name field before re-running). Every persona prompt now says: text fields only via
+   `set-value`, never `type-text`; re-read the field's `Value:` before moving on. Data written by
+   the garbled run (org of `aming2@example.com`) is junk to delete after the drill.
+
+4. **Second drill: Orca cannot pick an option in a native `<select>`.** Chrome opens the list
+   as a separate 463×220 window whose accessibility tree is three empty panes; keyboard Down/Return,
+   `set-value` on the combobox and coordinate clicks inside the popup all left the value at
+   「請選擇」, and while the popup is open the main window drops out of `list-windows`. Every
+   form here uses native selects (來源, 種類, 平台, 風格…), so the persona driver switched to
+   `playwright-cli` (headed window; `select <ref> <值>` works) from 阿明 step 4 on. Orca stays
+   the tool for "look at the user's own Chrome", not for driving forms.
+
 ## Results, first drill (2026-09-06)
 
 Three personas, two full cycles each, three separate orgs. No malignant stop condition was hit.
