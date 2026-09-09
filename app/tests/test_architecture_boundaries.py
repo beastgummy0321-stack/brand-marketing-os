@@ -1353,13 +1353,18 @@ class CoordinateDimensionSyncTest(unittest.TestCase):
 # helper's new `visual_tone` parameter, plus this table's own required edits (KNOWN_MODULE_SIZES
 # app/schedule and app/workbench rows' reason comments) -- measured (`_line_totals()`), no slack.
 # 23314 -> 23360.
+# ticket workbench-2/01 (sync adopted else latest, ADR 0068 §3 amendment, drill 2): test_schedule.py's
+# CreativeCandidateSyncTest gains one case (`test_unadopted_round_still_syncs_to_creative_candidate`),
+# plus this table's own required edits (KNOWN_MODULE_SIZES app/schedule row's reason comment, this
+# reason comment's own lines) -- measured (`_line_totals()`), no slack.
+# 23471 -> 23521.
 # ticket workbench/06 (free briefs, video scripts, flexible format, closing): test_workbench.py
 # gains two new classes (VideoScriptRoundTripTest, FreeRoundTripTest, done-check 2's cases a/b)
 # and test_schedule.py's CoordinateSeedTest is updated for the new `format` seed (33 -> 34 rows),
 # plus this table's own required edits (KNOWN_MODULE_SIZES app/schedule and app/workbench rows'
 # reason comments, this reason comment's own lines) -- measured (`_line_totals()`), no slack.
 # 23360 -> 23471.
-TEST_LINES_CEILING = 23471  # Previous: 23360 --
+TEST_LINES_CEILING = 23521  # Previous: 23471 --
 # ticket workbench/02 round 1: test_workbench.py 338 lines (new file, done-check 2's five
 # cases) plus this table's own required edits (LAYER_ORDER entry, KNOWN_MODULE_SIZES
 # app/workbench row and the app row's reason-comment update) — measured (`_line_totals()`),
@@ -1896,7 +1901,13 @@ KNOWN_MODULE_SIZES = {
     "app/orders": 1423,  # 票 12：channel_revenue 一張表取代三張（刪掉藥局專屬那一整組
                           # 之後仍淨增）——官網帳本寫入路徑、channel_revenue_summary()、
                           # 通用手動登錄（含「官網不能手動登錄」那道錢的守門）
-    "app/schedule": 5113,  # ticket workbench/06: `repository.py`'s `_SEED_COORDINATES["format"]`
+    "app/schedule": 5117,  # ticket workbench-2/01: `state.py`'s `_briefs_for_tree` sync condition
+                           # drops `and copy["is_adopted"]` (ADR 0068 §3 amendment, drill 2 — sync
+                           # whatever `adopted_output()` returns, adopted else latest) plus its own
+                           # comment lines (the ADR reference and a `ponytail:` note on the
+                           # unadopted-round-becomes-newest ceiling). 5113 -> 5117 (+4), measured
+                           # (`_module_sizes()`), no slack.
+                           # Previous was 5113 -- ticket workbench/06: `repository.py`'s `_SEED_COORDINATES["format"]`
                            # gains one row (`flexible`／彈性格式, ADR 0068's numbers table).
                            # 5111 -> 5113 (+2), measured (`_module_sizes()`), no slack.
                            # Previous was 5111 -- ticket workbench/05 fix round (2026-09-09 reject): `state.py` gains

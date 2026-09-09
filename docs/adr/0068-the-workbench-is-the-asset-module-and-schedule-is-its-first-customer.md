@@ -47,16 +47,16 @@ generating an image; the image-generation seat stays reserved (see "What we look
    05**: not needed and not added. The slot is already located by `(node_key,
    source_tree_task_id)` and the brief's `source_ref` carries exactly those two keys, so the join
    is data the two modules already share; a column would be a second copy (rule 7). When schedule
-   reads a node whose brief has an adopted `copy` output, it upserts the `creative_candidate` row
-   from it, idempotent on the output's `llm_task_id` (the column `creative_candidate.llm_task_id`
+   reads a node whose brief has a `copy` output — **the one `adopted_output()` returns: adopted,
+   else the latest round (amended 2026-09-09 after drill 2: only 2 of 33 outputs were ever adopted,
+   so "adopted only" left about nine tenths (阿明, 4,870/5,300 recomputed) to all (Vivian) of spend 未標座標 and the diagnosis blind)** — it upserts the
+   `creative_candidate` row from it, idempotent on the output's `llm_task_id` (the column `creative_candidate.llm_task_id`
    already exists and `persist_creative_result` already keys on it) — a read that seeds its own
    cache, the precedent being `GET .../history` (schedule contract, decisions in force). The
    workbench never writes a schedule table.
-4. **Copy is made in the workbench and taken from the schedule page.** The 素材準備 stage of
-   檔期規劃 (`docs/design-system.md` §5.1, already assigned "creative list · content, coordinates,
-   copy actions") shows every deepest node's 投放包 — the adopted copy with a copy button per
-   field — read through `adopted_output()`. Changing version, re-running a round, producing image
-   prompts and free generation happen in the workbench. One producer, two counters.
+4. **Copy is made in the workbench and taken from the schedule page**: 素材準備 shows each deepest
+   node's 投放包 read through `adopted_output()`; everything else happens in the workbench
+   (shortened 2026-09-09, ablation: zero references to this section).
 5. **The 產素材 button is removed.** A successful tree submits its briefs and enqueues the copy
    part itself. The `schedule_creative` task type, `app/departments/creative/ad_creative.md` and
    the parsing half of `app/schedule/creative.py` retire once their callers reach zero

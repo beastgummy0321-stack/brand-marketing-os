@@ -227,7 +227,11 @@ def _briefs_for_tree(conn, org_id: str, brand_id: str, tree_row: dict | None) ->
             continue
         copy_output = workbench.adopted_output(conn, org_id, brand_id, brief["id"], "copy")
         copy = _copy_summary(copy_output)
-        if copy_output is not None and copy is not None and copy["is_adopted"]:
+        # ADR 0068 §3 amendment（drill 2）：同步 adopted_output() 本身的結果（已採用，否則
+        # 最新一輪），不再只挑已採用。ponytail：未採用輪先當「最新」同步，之後補採更舊輪不會
+        # 把 creative_candidates_for_brand() 的「最新一輪」指標移回去——可接受上限，真要動
+        # 就讓那支查 selected_at。
+        if copy_output is not None and copy is not None:
             _sync_creative_candidate(
                 conn, org_id, brand_id, tree_row["id"], leaf["node_key"], copy_output, copy,
             )

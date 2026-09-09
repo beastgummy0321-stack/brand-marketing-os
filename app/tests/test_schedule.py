@@ -2426,6 +2426,45 @@ class CreativeCandidateSyncTest(_ScheduleApiTestBase):
         ).fetchone()["n"]
         self.assertEqual(count, 1)
 
+    def test_unadopted_round_still_syncs_to_creative_candidate(self):
+        """票 workbench-2/01（ADR 0068 §3 amended，drill 2）：同步跟 `adopted_output()`
+        本身的「已採用，否則最新一輪」語意走，不再只挑已採用的——drill 2 量到 33 份輸出
+        只有 2 份被採用，只同步已採用會讓大半花費永遠讀不到座標。"""
+        brief = self._tree_leaf_brief()
+        round1_task_id = self._write_copy_round(brief["id"], 1, "稀缺性行銷")
+
+        get_resp = self.client.get(f"/api/schedule/brands/{self.brand['id']}")
+        self.assertEqual(get_resp.status_code, 200, get_resp.text)
+
+        candidates = web.conn.execute(
+            "SELECT * FROM creative_candidate WHERE brand_id = %s", (self.brand["id"],),
+        ).fetchall()
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0]["llm_task_id"], round1_task_id)
+
+        # 讀第二次不多寫一份。
+        get_resp_2 = self.client.get(f"/api/schedule/brands/{self.brand['id']}")
+        self.assertEqual(get_resp_2.status_code, 200, get_resp_2.text)
+        count = web.conn.execute(
+            "SELECT COUNT(*) AS n FROM creative_candidate WHERE brand_id = %s",
+            (self.brand["id"],),
+        ).fetchone()["n"]
+        self.assertEqual(count, 1)
+
+        # 之後採用同一輪——仍然冪等，不多寫一份。
+        output_1 = web.conn.execute(
+            "SELECT id FROM workbench_output WHERE brief_id = %s AND generation_round = 1",
+            (brief["id"],),
+        ).fetchone()
+        workbench_repo.adopt_output(web.conn, coredb.DEV_ORG_ID, self.brand["id"], output_1["id"])
+        get_resp_3 = self.client.get(f"/api/schedule/brands/{self.brand['id']}")
+        self.assertEqual(get_resp_3.status_code, 200, get_resp_3.text)
+        count = web.conn.execute(
+            "SELECT COUNT(*) AS n FROM creative_candidate WHERE brand_id = %s",
+            (self.brand["id"],),
+        ).fetchone()["n"]
+        self.assertEqual(count, 1)
+
     def test_bad_visual_tone_in_body_json_does_not_crash_the_sync(self):
         """票 05 fix round（2026-09-09 reject）：`body_json.visual_tone` 不是兩個合法值
         之一（這裡直接寫壞值，模擬 workbench 修好之前留下的舊資料，或任何繞過 sanitise

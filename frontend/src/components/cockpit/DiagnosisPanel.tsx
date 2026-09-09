@@ -171,7 +171,7 @@ function DiagnosisReadout({ diagnosis, panel }: { diagnosis: Diagnosis; panel: D
       {suggestions.length === 0 ? (
         <p className="text-sm text-muted-foreground">
           {noTaggedSpend
-            ? "這個月的花費全部沒有座標可對，要先讓系統產的素材真的花到錢。"
+            ? "這個月的花費都還對不到座標：綁定的節點還沒有文案（到檔期規劃→素材準備看進度），或花費還沒拉回來。"
             : "有座標，但這一輪判讀沒有給出建議。"}
         </p>
       ) : (
