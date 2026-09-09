@@ -1,22 +1,27 @@
-"""app/schedule/jobs.py — the three schedule generations' actual LLM work, private to this
+"""app/schedule/jobs.py — the schedule generations' actual LLM work, private to this
 package (only app/schedule/__init__.py exports anything from here, container contract §1).
 
-票 05-1：`app/schedule/routes.py`'s three POST endpoints no longer call the LLM inside the
+票 05-1：`app/schedule/routes.py`'s POST endpoints no longer call the LLM inside the
 HTTP request (see that file's docstring for why — a two-to-six-minute blocking POST that a
 killed process leaves stuck `running` forever). They validate, then
 `background.enqueue("background.<task_type>", ...)` and return immediately. The actual prompt
-assembly and `gateway.run_task()` call — what `routes.py`'s `_run_plan`/`_run_tree`/
-`_run_creative` used to do after validation — lives here instead, as three procrastinate task
+assembly and `gateway.run_task()` call — what `routes.py`'s `_run_plan`/`_run_tree`
+used to do after validation — lives here instead, as procrastinate task
 bodies with the frozen signatures the ticket names:
 
     schedule_plan(org_id, brand_id, product_ids, platform, objective, promotion_note, plan_count)
     schedule_tree(org_id, brand_id, plan_index)
-    schedule_creative(org_id, brand_id)
+
+票 05（ADR 0068 §2）：`schedule_tree()` no longer discards the row after `gateway.run_task()` —
+on a successful expansion it submits one workbench brief per deepest node
+(`app.workbench.submit_brief`, entry point only); the workbench now owns copy generation and
+the third generation task body this module used to run has no callers left (retired this
+ticket, see git history for its shape).
 
 Each opens its own `app.core.db.connection()` — a worker job never inherits a request's
-connection. `org_id` is a required first parameter on all three (ADR 0038 gate,
+connection. `org_id` is a required first parameter on all of them (ADR 0038 gate,
 `app/tests/test_background.py::TaskSignatureOrgIdGateTest`, scoped to `background.`-prefixed
-task names — these three register under exactly that prefix, see `register_tasks()` below).
+task names — these register under exactly that prefix, see `register_tasks()` below).
 
 Freely imports `routes.py`'s private helpers (`_latest_task_row`, `_load_platform_data`, the
 task-type constants) — both files live inside the same `app.schedule` package, so this is an
@@ -35,8 +40,9 @@ time, and frozen decision 3 (one run at a time per brand per task type) means no
 have changed the picture out from under it before the worker gets to it.
 """
 
-import json
+import logging
 
+from app import workbench  # module entry point only (docs/contracts/workbench.md)
 from app.background import app as background_app
 from app.brand_intelligence import repository as bi_repo
 from app.core import rule_cards
@@ -51,8 +57,8 @@ from app.schedule import plan as plan_mod
 from app.schedule import repository, routes, state
 from app.schedule import scoring as scoring_mod
 
-# 唯一的供應商實例：這三支 task body 現在是全站唯一真的打代理的地方（routes.py 的三支 POST
-# 端點自己不再打），比照 routes.py 搬過來之前的既有寫法——測試用
+# 唯一的供應商實例：這些 task body 現在是全站唯一真的打代理的地方（routes.py 的生成端點
+# 自己不再打），比照 routes.py 搬過來之前的既有寫法——測試用
 # `mock.patch.object(jobs, "PROVIDER", FakeProvider(...))` 換掉。
 PROVIDER = providers.AnthropicProvider()
 
@@ -105,53 +111,6 @@ def _tree_params_text(platform_label: str, plan_index: int, chosen_plan: dict) -
             f"每日 {split['daily_amount']} 元（{split['why']}）"
         )
     return "\n".join(lines)
-
-
-def _creative_params_text(tree: dict) -> str:
-    body = {"levels": tree["levels"], "nodes": tree["nodes"]}
-    return "\n".join([
-        "## 這次要產文案的活動結構",
-        json.dumps(body, ensure_ascii=False, indent=2),
-    ])
-
-
-def _coordinate_vocabulary_text(coordinates: list[dict]) -> str:
-    """票 T8b：把這個品牌的座標詞彙表變成 prompt 的一節。
-
-    為什麼非有這一節不可：落地時 `repository._resolve_coordinates()` 拿代理回的字串去比對
-    `brand_coordinate.label`，比對不到就寫 `NULL`。所以只在部門任務檔改一句「七維都要填」而
-    不附這份清單，代理會自己造詞、七格照樣全是 NULL——畫面上卻長得像功能已經動了。
-
-    清單從資料庫讀、不是從 `repository._SEED_COORDINATES` 讀：使用者在「創意座標」分頁停用
-    掉的詞（`routes.disable_brand_coordinate`）與自己加的詞（`create_brand_coordinate`）都要
-    算數，代理不該挑一個使用者已經劃掉的值。被 `feedback` 否決過的（`rejected`）同樣不給。
-    維度順序照 `COORDINATE_KEYS`，跟部門任務檔列的七個鍵同一個順序。"""
-    by_dimension: dict[str, list[str]] = {}
-    for row in coordinates:
-        if row["disabled_at"] is not None or row["rejected"]:
-            continue
-        situation = (row["attributes"] or {}).get("situation") or ""
-        by_dimension.setdefault(row["dimension"], []).append(
-            f"- {row['label']}" + (f"——{situation}" if situation else "")
-        )
-    sections = [
-        f"### {dimension}\n" + "\n".join(by_dimension[dimension])
-        for dimension in repository.COORDINATE_KEYS if by_dimension.get(dimension)
-    ]
-    if not sections:
-        return ""
-    # 這一節排在整份 prompt 的**最後**，而且自己帶一句短提醒——不是為了好看，是量出來的
-    # （票 T8b 實機驗收，2026-09-04）：同一顆模型、同一份詞彙表，2,210 字的小 prompt 七格
-    # 全填對；21,679 字的正式 prompt 只填得出 `angle`。差別不在措辭（「七個都要填」加了、
-    # 拿掉、換成長解釋各試過一輪，都是 1/7），在於座標指令被 8,300 字方法論與 8,600 字
-    # 活動樹推到兩萬字之前。**改這裡的順序前先讀這段**：把它搬回中間就會退回 1/7。
-    return "\n\n".join([
-        "## 這個品牌的座標詞彙表",
-        "上面每一則內容的 `coordinates` 七個鍵**都要填**，值就是下面各段列出的 label 原文"
-        "（破折號後面是這個值什麼時候用，是說明、不是值的一部分）。"
-        "沒放證明填「無證明」、沒給優惠填「無優惠」——那是值，不是 `null`。",
-        *sections,
-    ])
 
 
 def _cpa_cell(cpa: float | None, conversion_goal: str | None) -> str:
@@ -235,8 +194,8 @@ def _history_text(items: list[dict], labels: dict, breakeven: tuple[float | None
     """票 past-ads/05（ADR 0067 §1.10）：`history.tagged_history()` 的輸出 → `schedule_plan()`
     prompt 的最後一節【投放史】——系統接手之前這個帳戶自己投過、owner 親自標了座標的廣告，
     數字＋座標＋owner 自己的一句話。空清單 → `""`（既有 `if section` join 直接跳過這一節；
-    只有 `schedule_plan()` 呼叫，`schedule_tree()`／`schedule_creative()` 都不呼叫，ADR 0067
-    §1.10：那兩個 prompt 這一期還沒有節點名字／文案可以對照老廣告）。
+    只有 `schedule_plan()` 呼叫，`schedule_tree()` 不呼叫，ADR 0067 §1.10：那份 prompt
+    這一期還沒有節點名字／文案可以對照老廣告）。
 
     打平線那一行沿用 `_account_performance_text()` 字面同一句（那支自己沒把它拆成共用
     函式，這裡不為了兩個呼叫端去改一支矛盾檢查段沒有點名要動的既有函式，ceiling）；
@@ -472,8 +431,8 @@ def schedule_plan(org_id: str, brand_id: str, product_ids: list, platform: str, 
         last_period_text = _last_period_text(
             _last_period(conn, org_id, brand_id), conn, org_id, brand_id
         )
-        # 票 past-ads/05（ADR 0067 §1.10）：只有 schedule_plan() 拿——sched_tree／
-        # schedule_creative 這一期還沒有節點名字／文案可以對照老廣告。位置排在
+        # 票 past-ads/05（ADR 0067 §1.10）：只有 schedule_plan() 拿——schedule_tree() 那份
+        # prompt 這一期還沒有節點名字／文案可以對照老廣告。位置排在
         # last_period_text 之後、整份 prompt 最後一段（docs/contracts/schedule.md「Position
         # in the prompt decides」）；打平線跟 performance_text 同一份 breakeven，不重算。
         history_text = _history_text(
@@ -563,7 +522,7 @@ def schedule_tree(org_id: str, brand_id: str, plan_index: int, plan_task_id: str
             brand_version=brand_version,
             product_version=None,
         )
-        gateway.run_task(
+        row = gateway.run_task(
             conn, PROVIDER, brand_id=brand_id, task_type=state.TREE_TASK_TYPE,
             prompt_template_id=state.TREE_TASK_TYPE, prompt_template_version="v1",
             system=None, messages=[{"role": "user", "content": prompt}], context=context,
@@ -571,70 +530,34 @@ def schedule_tree(org_id: str, brand_id: str, plan_index: int, plan_task_id: str
             campaign_period_id=campaign_period_id,
         )
 
-
-def schedule_creative(org_id: str, brand_id: str, tree_task_id: str,
-                       campaign_period_id: str | None = None) -> None:
-    """procrastinate task body（`background.schedule_creative`）——見 `schedule_plan()` 檔頭。
-
-    fix round 1：`tree_task_id` 是 `routes._run_creative()` enqueue 當下釘住的那一列 id，
-    理由跟 `schedule_tree()` 的 `plan_task_id` 一模一樣——這個 job 排隊等執行時，使用者可能
-    已經又按了「展開活動樹」，插進一列新的 running `schedule_tree`；重讀『這個品牌最新一次
-    schedule_tree』會撿到那一列還在跑、`tree_from_task_row()` 對 running 列回
-    `levels: []`／`nodes: []` 不拋例外（app/schedule/tree.py），這支 job 會照著一個空活動樹
-    組 prompt、照樣打代理——花了錢，產出跟任何廣告節點對不上。同一個既有的 `source_plan_task_id`
-    釘法（見下面 `plan_scope`）已經對過一層，這裡是把同一個模式套用到再上一層。"""
-    with connection() as conn:
-        tree_row = gateway.get_task(conn, tree_task_id)
-        # routes.py 的 _run_creative() 在 enqueue 之前已經驗證過這一列存在且 succeeded；
-        # 列從不刪除，這裡讀回來的就是釘住的那一列本身。
-        assert tree_row is not None
-        tree = binding_mod.tree_with_bindings(conn, tree_row, org_id, brand_id)
-
-        plan_scope = tree_row.get("context_scope_json") or {}
-        plan_row = gateway.get_task(conn, plan_scope.get("source_plan_task_id") or "")
-        plan_row_scope = (plan_row.get("context_scope_json") or {}) if plan_row else {}
-        product_ids = plan_row_scope.get("product_ids", [])
-
-        brand_context, knowledge_item_ids, brand_version = _compile_brand_context(
-            conn, brand_id, product_ids
-        )
-        department_text = state.CREATIVE_DEPARTMENT_FILE.read_text(encoding="utf-8")
-        # 票 T1：跟 schedule_plan／schedule_tree 一樣接方法論——這支 job 過去沒有這一段，
-        # `creative-matrix.md`（35 個角度）與 `meta-format-specs.md`（5 個變體、字數上限）
-        # 都沒有真的貼進 prompt，代理只能自己亂猜。票 T1 站③收尾：改用自己專屬一張清單
-        # （見 state.CREATIVE_METHODOLOGY_TASK_LABELS 的理由註解），不再跟計畫／活動樹共用。
-        methodology_result = methodology.compile(
-            conn, state.CREATIVE_METHODOLOGY_TASK_LABELS, brand_id=brand_id
-        )
-        # 票 T8b：座標詞彙表放**最後**一段，理由與量到的數字見 `_coordinate_vocabulary_text()`
-        # 的檔頭註解——它是這份 prompt 裡唯一「寫完文案之後才要回答」的東西，排在兩萬字
-        # 之前就會被淹掉。
-        coordinate_text = _coordinate_vocabulary_text(
-            repository.list_coordinates(conn, org_id, brand_id)
-        )
-        params_text = _creative_params_text(tree)
-        prompt = "\n\n".join(
-            section for section in
-            (department_text, methodology_result.text, params_text, brand_context,
-             coordinate_text) if section
-        )
-
-        context = gateway.TaskContext(
-            context_scope={
-                "brand_id": brand_id, "source_tree_task_id": tree_row["id"],
-                "plan_index": tree["plan_index"],
-            },
-            knowledge_item_ids=knowledge_item_ids,
-            brand_version=brand_version,
-            product_version=None,
-        )
-        gateway.run_task(
-            conn, PROVIDER, brand_id=brand_id, task_type=state.CREATIVE_TASK_TYPE,
-            prompt_template_id=state.CREATIVE_TASK_TYPE, prompt_template_version="v1",
-            system=None, messages=[{"role": "user", "content": prompt}], context=context,
-            options=gateway.TaskOptions(max_tokens=24000, timeout_s=480.0),
-            campaign_period_id=campaign_period_id,
-        )
+        # 票 05（ADR 0068 §2／§5 amendment）：展開成功就替每個最深層節點各提交一份工作檯
+        # 工單——素材工作檯接手文案（含隨文案回的 visual_tone／visual_concept），這個模組
+        # 退休自己的內容生成任務。重建這棵樹、取文件順序的最深層節點兩步，跟這個模組過去
+        # 產內容那一步用的是同一組讀法：`tree_with_bindings()`＋`_leaf_ad_nodes()`。逐節點
+        # 各自 try/except：一個節點的 submit_brief 失敗只記一行 log，不影響其他節點，也不
+        # 回頭動這一列已經 commit 的樹（tree row 由 `run_task()` 自己落地，brief 是它的
+        # 下游，不是它的一部分）。
+        if row["status"] == "succeeded":
+            tree = binding_mod.tree_with_bindings(conn, row, org_id, brand_id)
+            leaves = state._leaf_ad_nodes(tree["nodes"]) if tree["failure"] is None else []
+            for leaf in leaves:
+                try:
+                    workbench.submit_brief(conn, org_id, brand_id, {
+                        "kind": "ad_creative", "source_kind": "schedule_node",
+                        "source_ref": {
+                            "node_key": leaf["node_key"], "source_tree_task_id": row["id"],
+                            "node_name": leaf["name"],
+                        },
+                        "product_id": product_ids[0] if product_ids else None,
+                        "coordinates": None, "visual_tone": None, "visual_concept": None,
+                        "style_key": "ugc",
+                        "request": {"use_brand_knowledge": True, "product_ids": product_ids},
+                    }, created_by="system")
+                except Exception:
+                    logging.getLogger(__name__).exception(
+                        "workbench.submit_brief 失敗：tree_task_id=%s node_key=%s",
+                        row["id"], leaf["node_key"],
+                    )
 
 
 def schedule_diagnosis(org_id: str, brand_id: str) -> None:
@@ -722,7 +645,6 @@ def schedule_diagnosis(org_id: str, brand_id: str) -> None:
 _JOBS = {
     state.TASK_TYPE: schedule_plan,
     state.TREE_TASK_TYPE: schedule_tree,
-    state.CREATIVE_TASK_TYPE: schedule_creative,
     state.DIAGNOSIS_TASK_TYPE: schedule_diagnosis,
 }
 

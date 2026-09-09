@@ -322,11 +322,12 @@ def persist_creative_result(conn: _AnyConn, org_id: str, brand_id: str, task_id:
                              source_tree_task_id: str | None, ads: list) -> None:
     """票 01 的 `schedule_creative` 任務成功之後，把每個廣告節點的內容落地成
     `creative_slot` + `creative_candidate` + `creative_candidate_item`——冪等，靠
-    `llm_task_id` 判斷這個任務是不是已經落過地，讀第二次不會多寫一份（呼叫端：
-    `routes._brand_response()`，每次 GET 成功的 creative 都會呼叫一次，跟 35 個座標種子
-    同一套「讀的時候順手確保落地」寫法）。v1 一格一個候選：`generation_round` 取這個
-    slot 目前最大值 +1，不是寫死 1——同一個 slot 之後真的重跑（draw-again，非本票範圍）
-    不會撞 `UNIQUE(slot_id, generation_round)`。"""
+    `llm_task_id` 判斷這個任務是不是已經落過地，讀第二次不會多寫一份。票 05（ADR 0068 §3）：
+    呼叫端換成 `state._sync_creative_candidate()`（`state._briefs_for_tree()` 逐節點呼叫，
+    只在那個節點的採用版文案存在時才呼叫一次），跟 35 個座標種子同一套「讀的時候順手確保
+    落地」寫法，`task_id` 現在是那份工作檯輸出自己的 `llm_task_id`。v1 一格一個候選：
+    `generation_round` 取這個 slot 目前最大值 +1，不是寫死 1——同一個 slot 之後真的重跑
+    （draw-again，非本票範圍）不會撞 `UNIQUE(slot_id, generation_round)`。"""
     already = conn.execute(
         "SELECT 1 FROM creative_candidate WHERE llm_task_id = %s LIMIT 1", (task_id,)
     ).fetchone()

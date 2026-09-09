@@ -46,6 +46,7 @@ from app.schedule import plan as plan_mod
 from app.schedule import repository as schedule_repo
 from app.schedule import state as schedule_state
 from app.schedule import tree as tree_mod
+from app.workbench import repository as workbench_repo
 
 from .identity_test_helpers import mint_hs256
 
@@ -140,36 +141,6 @@ def _two_top_nodes(name_a: str, name_b: str, shares: tuple = (0.5, 0.5)) -> list
                                         "warnings": [], "children": []}]}],
         }
     return [branch(name_a, shares[0]), branch(name_b, shares[1])]
-
-
-def _creative_fenced(creatives: list) -> str:
-    body = json.dumps({"creatives": creatives}, ensure_ascii=False)
-    return f"這是一段給老闆看的說明文字。\n\n```json\n{body}\n```"
-
-
-def _nodes(*names: str) -> list[dict]:
-    """票 T3d：`build_creative()` 的 `ad_nodes` 參數——`BuildCreativeTest` 只測名稱比對，
-    不看 `node_key` 內容，序號頂著即可。"""
-    return [{"node_key": str(i + 1), "name": name} for i, name in enumerate(names)]
-
-
-def _one_creative(node: str, **overrides) -> dict:
-    creative = {
-        "node": node,
-        # 票 T1 站③收尾：預設帶上座標，讓 CreativeApiContractTest 對座標不是零斷言——
-        # 之前這裡沒有這個鍵，API 契約測試全走「沒有這個鍵 → 補七個 null」那條路。
-        "coordinates": {
-            "angle": "測試角度", "audience": None, "pain": None, "hook": None,
-            "proof": None, "offer": None, "format": None,
-        },
-        "fields": [
-            {"label": "主要文字", "value": "測試內容"},
-            {"label": "圖片提示詞", "value": "測試提示詞"},
-        ],
-        "warnings": [],
-    }
-    creative.update(overrides)
-    return creative
 
 
 def _fake(rendered_output: str, search_sources: list | None = None) -> providers.FakeProvider:
@@ -477,100 +448,6 @@ class BuildTreeTest(unittest.TestCase):
         self.assertTrue(failure)
 
 
-# -- 2c. 票 T1（docs/issues/T1-creative-fingerprint/ticket.md）：build_creative() 純函數 ---
-
-class BuildCreativeTest(unittest.TestCase):
-    """decision 3 收窄（多認得一個手足鍵 `coordinates`）、decision 4 不動（node 逐一對上
-    樹）、`fields.value` 收 `string | string[]`——直接測 `creative.build_creative()`，
-    不必經過 API／worker。"""
-
-    def test_coordinates_survive_the_shell(self):
-        """票 T1 唯一要問的問題：代理回覆裡的 `coordinates.angle` 撐得過外殼，原封不動地
-        出現在回傳值裡。"""
-        creative = _one_creative("單元1", coordinates={
-            "angle": "疑慮 Q&A 連發", "audience": None, "pain": None, "hook": None,
-            "proof": None, "offer": None, "format": None,
-        })
-        ads, failure = creative_mod.build_creative(_creative_fenced([creative]), _nodes("單元1"))
-        self.assertIsNone(failure)
-        self.assertEqual(ads[0]["coordinates"]["angle"], "疑慮 Q&A 連發")
-
-    def test_bad_coordinate_values_fall_back_to_null_and_copy_still_ships(self):
-        """票 T1 站③收尾第 2 條：座標是診斷用中繼資料不是交付物。個別維度給 `""`／數字，
-        或整個 `coordinates` 給錯形狀，都退回 null，文案照樣交付——不整批失敗（那次生成
-        的錢已經花掉了，整批作廢等於白燒）。"""
-        creative = _one_creative(
-            "單元1", coordinates={"angle": "", "pain": 3, "hook": "真的鉤子"}
-        )
-        ads, failure = creative_mod.build_creative(_creative_fenced([creative]), _nodes("單元1"))
-        self.assertIsNone(failure)
-        self.assertIsNone(ads[0]["coordinates"]["angle"])
-        self.assertIsNone(ads[0]["coordinates"]["pain"])
-        self.assertEqual(ads[0]["coordinates"]["hook"], "真的鉤子")
-        self.assertEqual(ads[0]["fields"][0]["value"], ["測試內容"])
-
-        # 整個 coordinates 給錯形狀（list）也一樣：七維全 null，文案照交。
-        creative = _one_creative("單元1", coordinates=["不是 dict"])
-        ads, failure = creative_mod.build_creative(_creative_fenced([creative]), _nodes("單元1"))
-        self.assertIsNone(failure)
-        self.assertEqual(
-            ads[0]["coordinates"], {key: None for key in creative_mod.COORDINATE_KEYS}
-        )
-        self.assertEqual(ads[0]["fields"][0]["value"], ["測試內容"])
-
-    def test_decision_4_still_holds(self):
-        # node 對不上樹裡任何一個最深層節點，整批失敗——加 coordinates 沒有放寬這一條。
-        ads, failure = creative_mod.build_creative(
-            _creative_fenced([_one_creative("不存在的節點")]), _nodes("單元1")
-        )
-        self.assertEqual(ads, [])
-        self.assertEqual(failure, creative_mod.NODE_MISMATCH_MESSAGE)
-
-    def test_field_value_accepts_list_and_string(self):
-        creative = _one_creative("單元1", fields=[
-            {"label": "主要文字", "value": "單一字串"},
-            {"label": "標題", "value": ["變體一", "變體二"]},
-        ])
-        ads, failure = creative_mod.build_creative(_creative_fenced([creative]), _nodes("單元1"))
-        self.assertIsNone(failure)
-        self.assertEqual(ads[0]["fields"], [
-            {"label": "主要文字", "value": ["單一字串"]},
-            {"label": "標題", "value": ["變體一", "變體二"]},
-        ])
-
-    def test_unknown_coordinate_key_is_dropped(self):
-        creative = _one_creative(
-            "單元1", coordinates={"angle": "測試角度", "not_a_real_key": "不該出現"}
-        )
-        ads, failure = creative_mod.build_creative(_creative_fenced([creative]), _nodes("單元1"))
-        self.assertIsNone(failure)
-        self.assertNotIn("not_a_real_key", ads[0]["coordinates"])
-        self.assertEqual(set(ads[0]["coordinates"]), set(creative_mod.COORDINATE_KEYS))
-
-    def test_node_key_decides_which_same_name_node_gets_which_copy(self):
-        """資料正確性，規則見 `docs/contracts/schedule.md`「Decisions in force」（2026-09-04
-        根治）：兩個最深層節點同名時名稱帶不出任何資訊，`node_key` 是唯一分得出來的依據。
-        代理倒著答（先 "2" 後 "1"）→ 照編號配（舊版照回覆順序排隊會拿到「第一段」，所以
-        這支分得出兩種行為）；漏答、或答了樹上沒有的編號 → 退回既有的名稱排隊，不整批重產
-        （那一次呼叫已經花過錢）。"""
-        def first_node_copy(*keys: str | None) -> list:
-            creatives = [
-                _one_creative("單元", fields=[{"label": "主要文字", "value": marker}])
-                | ({"node_key": key} if key else {})
-                for marker, key in zip(("第一段", "第二段"), keys, strict=True)
-            ]
-            ads, failure = creative_mod.build_creative(
-                _creative_fenced(creatives), _nodes("單元", "單元")
-            )
-            self.assertIsNone(failure)
-            self.assertEqual([a["node_key"] for a in ads], ["1", "2"])
-            return ads[0]["fields"][0]["value"]
-
-        self.assertEqual(first_node_copy("2", "1"), ["第二段"])      # 照編號配
-        self.assertEqual(first_node_copy(None, None), ["第一段"])    # 漏答 → 名稱排隊
-        self.assertEqual(first_node_copy("9.9.9", "1"), ["第一段"])  # 答錯 → 名稱排隊
-
-
 # -- 2d. 票 09 settled 段第 8 點：活動樹元件不得寫死通路詞彙 ---------------------------
 
 class CampaignTreeVocabularyGateTest(unittest.TestCase):
@@ -579,7 +456,7 @@ class CampaignTreeVocabularyGateTest(unittest.TestCase):
     `CampaignTree`（大寫 C），跟清單裡小寫的 `campaign` 不是同一個字串，不誤判。
 
     票 01：這個元件延伸到 CONTEXT.md「外殼認得的業務詞只有三個」那條界線——切角／主題／
-    素材檔／創意簡報／一條學習全部下放給 `app/departments/creative/ad_creative.md`，一併
+    素材檔／創意簡報／一條學習全部下放給素材工作檯自己的部門任務檔，一併
     加進這裡的清單（這支元件現在也渲染最深層節點的內容）。"""
 
     _BANNED_WORDS = [
@@ -601,7 +478,7 @@ class CampaignTreeVocabularyGateTest(unittest.TestCase):
     # （切角／主題／素材檔／創意簡報／一條學習），不套用平台詞彙清單——`routes.py` 的註解
     # 本來就會提到 Meta／Google／TikTok 這類平台名稱解釋歷史決定（例如 46 行「campaign_plan」
     # 改名的由來），那從來不是這道閘門要抓的東西；但這五個創意詞彙沒有任何理由出現在後端
-    # 程式碼的任何角落，包含註解——它們的定義只准活在 `ad_creative.md` 這份任務檔裡。
+    # 程式碼的任何角落，包含註解——它們的定義只准活在素材工作檯自己的部門任務檔裡。
     _CREATIVE_WORDS = ["切角", "主題", "素材檔", "創意簡報", "一條學習"]
     _BACKEND_SCANNED_PATHS = [
         ("app", "schedule", "routes.py"),
@@ -872,22 +749,23 @@ class QueuedGenerationTest(_ScheduleApiTestBase):
         self._run_worker()
         self.assertEqual(len(fake.calls), 1, "worker 真的跑過一次，代理才被打")
 
-    def test_creative_job_uses_the_tree_pinned_at_enqueue_not_a_later_running_row(self):
-        """fix round 1（money）：`schedule_creative` 過去在 job 執行時用
-        `_latest_task_row()` 重讀「這個品牌最新一次 schedule_tree」——frozen decision 3
-        的「一次一個」是按 task type 算的，擋不住這段情境：使用者按了「產素材」（排進
-        佇列，還沒跑）之後又按了一次「展開活動樹」，插進一列新的 running schedule_tree。
-        job 真的跑的時候重讀「最新」會撿到那一列還在跑的——`tree_from_task_row()` 對
-        running 列回空樹（`levels: []`／`nodes: []`），不拋例外，job 照著空樹組 prompt、
-        照樣打代理，花錢的結果卻對不上任何廣告節點。修法：enqueue 當下把
-        `tree_row["id"]` 釘進 job 參數，job 只認這個 id，不重讀「最新」。"""
+    def test_tree_success_submits_one_brief_per_leaf_and_stays_queued(self):
+        """票 05（ADR 0068 §2）：`schedule_tree()` 成功後，每個最深層節點各提交一份工作檯
+        工單，讀出來是 `status='queued'`。
+
+        契約：這個測試模組（`conftest.py` 每個測試模組自己一份 schema／`background.app()`）
+        故意不呼叫 `workbench` 的 `register_tasks()`——`background.workbench_generate`
+        在這裡的 `background.app()` 上沒有註冊，worker 真的撿到那個 job 時是 procrastinate
+        自己的 `TaskNotFound`（在呼叫任務本體之前發生），本體第一行
+        `mark_brief_status(..., "running")` 完全沒機會跑，`workbench_brief.status` 因此停在
+        `submit_brief()` 寫入當下的 `'queued'`——一次 worker pass（展開活動樹那一次）就看得到
+        這個狀態，不必刻意分兩次呼叫，也不會真的打到任何供應商（不管是 FakeProvider 還是
+        真的 `AnthropicProvider`）。真正跑完文案生成、驗證輸出形狀是
+        test_workbench.py／test_workbench_api.py 的事，這裡不重測一次。"""
         schedule_jobs.PROVIDER = _fake(_fenced_plans([_one_plan()]))
         resp = self._post(plan_count=1)
         self.assertEqual(resp.status_code, 200, resp.text)
         self._run_worker()
-        succeeded_plan_id = schedule_state._latest_task_row(
-            web.conn, self.brand["id"], schedule_state.TASK_TYPE
-        )["id"]
 
         schedule_jobs.PROVIDER = _fake(_tree_fenced(_one_tree_nodes()))
         resp = self.client.post(
@@ -895,40 +773,31 @@ class QueuedGenerationTest(_ScheduleApiTestBase):
         )
         self.assertEqual(resp.status_code, 200, resp.text)
         self._run_worker()
-        succeeded_tree_id = schedule_state._latest_task_row(
+
+        tree_row = schedule_state._latest_task_row(
             web.conn, self.brand["id"], schedule_state.TREE_TASK_TYPE
-        )["id"]
-
-        fake = _fake(_creative_fenced([_one_creative("單元1"), _one_creative("單元2")]))
-        schedule_jobs.PROVIDER = fake
-        resp = self.client.post(f"/api/schedule/brands/{self.brand['id']}/creative", json={})
-        self.assertEqual(resp.status_code, 200, resp.text)
-
-        # 產素材已經排進佇列（釘住上面那棵成功的樹），使用者這時又按了一次展開活動樹，
-        # 插進一列「更新」的 running schedule_tree——worker 還沒跑到 creative job。這一列
-        # 帶著真的 source_plan_task_id（跟真正的 schedule_tree job 會寫的一樣），才會真的
-        # 讓舊版重讀「最新」的 bug 打到代理、燒錢產出空樹的內容，不是隨便崩潰在別的地方。
-        self._insert_running_row(
-            schedule_state.TREE_TASK_TYPE,
-            context_scope={
-                "brand_id": self.brand["id"], "plan_index": 0, "daily_budget": 3000.0,
-                "source_plan_task_id": succeeded_plan_id,
-            },
         )
+        self.assertEqual(tree_row["status"], "succeeded")
 
-        self._run_worker()
+        rows = web.conn.execute(
+            "SELECT source_ref, status FROM workbench_brief WHERE brand_id = %s"
+            " ORDER BY created_at", (self.brand["id"],),
+        ).fetchall()
+        # `_one_tree_nodes()`（預設引數）固定兩個最深層節點：「單元1」node_key "1.1.1"，
+        # 「單元2」node_key "1.2.1"（跟既有其他測試同一個固定映射）。
+        self.assertEqual(len(rows), 2)
+        self.assertTrue(all(r["status"] == "queued" for r in rows))
+        self.assertEqual({r["source_ref"]["node_key"] for r in rows}, {"1.1.1", "1.2.1"})
+        self.assertTrue(all(
+            r["source_ref"]["source_tree_task_id"] == tree_row["id"] for r in rows
+        ))
 
-        creative_row = schedule_state._latest_task_row(
-            web.conn, self.brand["id"], schedule_state.CREATIVE_TASK_TYPE
-        )
-        self.assertEqual(
-            creative_row["context_scope_json"]["source_tree_task_id"], succeeded_tree_id,
-            "creative job 必須用 enqueue 當下釘住的那棵樹，不是後來插隊、還在跑的那一列",
-        )
-        self.assertEqual(len(fake.calls), 1)
-        prompt_text = fake.calls[0]["messages"][0]["content"]
-        self.assertIn("單元1", prompt_text)
-        self.assertIn("單元2", prompt_text)
+        get_resp = self.client.get(f"/api/schedule/brands/{self.brand['id']}")
+        self.assertEqual(get_resp.status_code, 200, get_resp.text)
+        briefs = get_resp.json()["briefs"]
+        self.assertEqual({b["node_key"] for b in briefs}, {"1.1.1", "1.2.1"})
+        self.assertTrue(all(b["status"] == "queued" for b in briefs))
+        self.assertTrue(all(b["copy"] is None and b["image_prompts"] is None for b in briefs))
 
 
 class RejectApiContractTest(_ScheduleApiTestBase):
@@ -2394,199 +2263,6 @@ class BindTreeApiContractTest(_ScheduleApiTestBase):
         self.assertNotIn("投放史", fake.calls[0]["messages"][0]["content"])
 
 
-class CreativeApiContractTest(_ScheduleApiTestBase):
-    """票 01（`.scratch/creative-slice/issues/01-ad-creative-per-ad-node.md`）：POST
-    .../creative——活動樹每個最深層節點各配一份內容。這裡的最深層節點固定是 `_one_tree_nodes()`
-    產生的「單元1」「單元2」（見本檔頂部），照文件順序。"""
-
-    _LEAF_NODE_NAMES = ["單元1", "單元2"]
-
-    def _succeed_plan_and_tree(self) -> None:
-        schedule_jobs.PROVIDER = _fake(_fenced_plans([_one_plan()]))
-        resp = self._post(plan_count=1)
-        self.assertEqual(resp.status_code, 200, resp.text)
-        self._run_worker()
-        schedule_jobs.PROVIDER = _fake(_tree_fenced(_one_tree_nodes()))
-        resp = self.client.post(
-            f"/api/schedule/brands/{self.brand['id']}/tree", json={"plan_index": 0}
-        )
-        self.assertEqual(resp.status_code, 200, resp.text)
-        self._run_worker()
-
-    def _generate(self):
-        return self.client.post(f"/api/schedule/brands/{self.brand['id']}/creative", json={})
-
-    def test_post_creative_returns_one_ad_per_leaf_node_and_prompt_carries_department_file(self):
-        self._succeed_plan_and_tree()
-        # 代理故意回覆「反過來」的順序——用來證明回應真的是照樹的文件順序重排，不是原樣
-        # 照抄代理回覆的順序（代理不保證照樹的順序回覆）。
-        reversed_names = list(reversed(self._LEAF_NODE_NAMES))
-        fake = _fake(_creative_fenced([_one_creative(name) for name in reversed_names]))
-        schedule_jobs.PROVIDER = fake
-
-        resp = self._generate()
-        self.assertEqual(resp.status_code, 200, resp.text)
-        self._run_worker()
-        creative = self.client.get(f"/api/schedule/brands/{self.brand['id']}").json()["creative"]
-        self.assertIsNone(creative["failure"])
-        # 樹的文件順序（單元1、單元2），不是代理回覆的順序（單元2、單元1）。
-        self.assertEqual([ad["node"] for ad in creative["ads"]], self._LEAF_NODE_NAMES)
-        # 票 T1：`value` 一律正規化成陣列——`_one_creative()` 給的是單一字串，撐過外殼之後
-        # 變成單元素陣列（既有的單字串回覆照樣能用，只是形狀換了）。
-        self.assertEqual(
-            creative["ads"][0]["fields"],
-            [
-                {"label": "主要文字", "value": ["測試內容"]},
-                {"label": "圖片提示詞", "value": ["測試提示詞"]},
-            ],
-        )
-        # 票 T1 站③收尾：座標撐得過 API 層，不只撐得過 build_creative() 這支純函式。
-        self.assertEqual(creative["ads"][0]["coordinates"]["angle"], "測試角度")
-
-        # ADR 0029：部門任務檔原樣貼進 prompt——用檔案裡的識別行證明真的貼進去了。
-        self.assertEqual(len(fake.calls), 1)
-        prompt_text = fake.calls[0]["messages"][0]["content"]
-        self.assertIn("AD-CREATIVE-TASK-V1", prompt_text)
-
-    def test_creative_task_gets_methodology(self):
-        """票 T1 第 4 節：`jobs.schedule_creative()` 過去沒有接方法論，代理看不到 35 個
-        創意角度、也看不到 Meta 版位字數規格。紅法：把 `app/methodology/README.md` 的
-        「廣告內容生成」那一列拿掉，`methodology.compile()` 就找不到這兩份檔案，prompt
-        裡不會再出現這兩句斷言字串。"""
-        self._succeed_plan_and_tree()
-        fake = _fake(_creative_fenced([_one_creative(name) for name in self._LEAF_NODE_NAMES]))
-        schedule_jobs.PROVIDER = fake
-
-        resp = self._generate()
-        self.assertEqual(resp.status_code, 200, resp.text)
-        self._run_worker()
-
-        self.assertEqual(len(fake.calls), 1)
-        prompt_text = fake.calls[0]["messages"][0]["content"]
-        self.assertIn("【方法論：creative-matrix.md】", prompt_text)
-        self.assertIn("【方法論：meta-format-specs.md】", prompt_text)
-
-    def test_creative_prompt_carries_the_brand_coordinate_vocabulary(self):
-        """票 T8b：七維座標的詞彙表要真的進 prompt。落地時
-        `repository._resolve_coordinates()` 拿代理回的字串比對 `brand_coordinate.label`，
-        比對不到就寫 NULL——所以少了這一節，代理只會造詞，六維照樣全空，而且外面看起來像
-        功能已經動了。停用掉的詞不給代理挑（使用者在畫面上劃掉的值不該再被填回來）。
-        紅法：把 `jobs.schedule_creative()` 那行 `coordinate_text` 從 prompt 的 join 裡拿掉。"""
-        self._succeed_plan_and_tree()
-        brand_id = self.brand["id"]
-        listed = self.client.get(f"/api/schedule/brands/{brand_id}/coordinates")
-        self.assertEqual(listed.status_code, 200, listed.text)
-        disabled = next(
-            c for c in listed.json()["coordinates"] if c["dimension"] == "offer"
-        )
-        off = self.client.post(
-            f"/api/schedule/brands/{brand_id}/coordinates/{disabled['id']}/disable",
-            json={"disabled": True},
-        )
-        self.assertEqual(off.status_code, 200, off.text)
-        fake = _fake(_creative_fenced([_one_creative(name) for name in self._LEAF_NODE_NAMES]))
-        schedule_jobs.PROVIDER = fake
-
-        resp = self._generate()
-        self.assertEqual(resp.status_code, 200, resp.text)
-        self._run_worker()
-
-        self.assertEqual(len(fake.calls), 1)
-        prompt_text = fake.calls[0]["messages"][0]["content"]
-        self.assertIn("## 這個品牌的座標詞彙表", prompt_text)
-        # 七個維度各自一段，順序照 COORDINATE_KEYS。
-        for dimension in creative_mod.COORDINATE_KEYS:
-            self.assertIn(f"### {dimension}", prompt_text)
-        # 「無證明」是 proof 維度真的有的值（票 T8a 裁決③：沒放證明也要有 key）。
-        self.assertIn("無證明", prompt_text)
-        # 停用掉的那個值不出現——代理挑不到使用者已經劃掉的詞。
-        self.assertNotIn(disabled["label"], prompt_text)
-
-    def test_get_after_post_returns_identical_creative(self):
-        self._succeed_plan_and_tree()
-        schedule_jobs.PROVIDER = _fake(_creative_fenced(
-            [_one_creative(name) for name in self._LEAF_NODE_NAMES]
-        ))
-        resp = self._generate()
-        self.assertEqual(resp.status_code, 200, resp.text)
-        self._run_worker()
-        get_resp_1 = self.client.get(f"/api/schedule/brands/{self.brand['id']}")
-        get_resp_2 = self.client.get(f"/api/schedule/brands/{self.brand['id']}")
-        self.assertEqual(get_resp_1.json()["creative"], get_resp_2.json()["creative"])
-
-    def test_no_succeeded_tree_is_rejected_before_calling_agent(self):
-        fake = _fake(_creative_fenced([_one_creative("單元1")]))
-        schedule_jobs.PROVIDER = fake
-        resp = self._generate()
-        self.assertEqual(resp.status_code, 400)
-        self.assertEqual(fake.calls, [])
-
-    def test_missing_node_fails_the_whole_run(self):
-        self._succeed_plan_and_tree()
-        # 少一份：「單元2」沒有配到內容。
-        schedule_jobs.PROVIDER = _fake(_creative_fenced([_one_creative("單元1")]))
-        resp = self._generate()
-        self.assertEqual(resp.status_code, 200, resp.text)
-        self._run_worker()
-        creative = self.client.get(f"/api/schedule/brands/{self.brand['id']}").json()["creative"]
-        self.assertTrue(creative["failure"])
-        self.assertEqual(creative["ads"], [])
-
-    def test_duplicate_node_fails_the_whole_run(self):
-        self._succeed_plan_and_tree()
-        schedule_jobs.PROVIDER = _fake(_creative_fenced(
-            [_one_creative("單元1"), _one_creative("單元1"), _one_creative("單元2")]
-        ))
-        resp = self._generate()
-        self.assertEqual(resp.status_code, 200, resp.text)
-        self._run_worker()
-        creative = self.client.get(f"/api/schedule/brands/{self.brand['id']}").json()["creative"]
-        self.assertTrue(creative["failure"])
-        self.assertEqual(creative["ads"], [])
-
-    def test_unknown_node_fails_the_whole_run(self):
-        self._succeed_plan_and_tree()
-        schedule_jobs.PROVIDER = _fake(_creative_fenced(
-            [_one_creative("單元1"), _one_creative("不存在的節點")]
-        ))
-        resp = self._generate()
-        self.assertEqual(resp.status_code, 200, resp.text)
-        self._run_worker()
-        creative = self.client.get(f"/api/schedule/brands/{self.brand['id']}").json()["creative"]
-        self.assertTrue(creative["failure"])
-        self.assertEqual(creative["ads"], [])
-
-    def test_running_creative_renders_as_running_not_failure(self):
-        self._succeed_plan_and_tree()
-        tree_row = schedule_state._latest_task_row(
-            web.conn, self.brand["id"], schedule_state.TREE_TASK_TYPE
-        )
-        web.conn.execute(
-            "INSERT INTO llm_task (id, org_id, brand_id, task_type, context_scope_json,"
-            " input_context_ids_json, input_context_hash, knowledge_item_ids_json,"
-            " brand_version, prompt_template_id, prompt_template_version, provider, model,"
-            " status, attempt_no, started_at)"
-            " VALUES (%s, %s, %s, %s, %s, '[]', '', '[]', 1, 'p', 'v1', 'seed', 'seed',"
-            " 'running', 1, %s)",
-            (
-                coredb.new_id("llm"), coredb.DEV_ORG_ID, self.brand["id"],
-                schedule_state.CREATIVE_TASK_TYPE,
-                coredb.jsonb({
-                    "brand_id": self.brand["id"], "source_tree_task_id": tree_row["id"],
-                    "plan_index": 0,
-                }),
-                coredb.now_iso(),
-            ),
-        )
-        web.conn.commit()
-
-        resp = self.client.get(f"/api/schedule/brands/{self.brand['id']}")
-        self.assertEqual(resp.status_code, 200, resp.text)
-        creative = resp.json()["creative"]
-        self.assertTrue(creative["running"])
-        self.assertIsNone(creative["failure"])
-
-
 class CoordinateSeedTest(_ScheduleApiTestBase):
     """票 T1b done-check：一個品牌的座標第一次被讀出時，剛好 35 個 `dimension='angle'`；
     讀第二次不會多出 70 個（`ensure_coordinates_seeded` 冪等）。票 T8a 擴充：另外六個維度
@@ -2646,15 +2322,17 @@ class CoordinateTenantIsolationTest(_ScheduleApiTestBase):
         self.assertIsNone(b_target["disabled_at"])  # 品牌 A 停用不影響品牌 B 自己那一列
 
 
-class CreativePersistenceTest(_ScheduleApiTestBase):
-    """票 T1b done-check：`schedule_creative` 任務成功後落地
-    `creative_slot`／`creative_candidate`／`creative_candidate_item`，候選的七個 `*_key`
-    撐得住代理回覆，查無此字的座標退回 `*_key = NULL`／`coordinates_status = 'pending'`，
-    文案照樣回傳；讀第二次不會多寫一份（同一支 `llm_task_id` 擋掉）。"""
+class CreativeCandidateSyncTest(_ScheduleApiTestBase):
+    """票 05（ADR 0068 §3）：排程讀自己這棵樹時，把「已採用」的文案同步進
+    `creative_candidate`——排程自己的記憶（座標種子、成效分組讀這張表），跟 workbench 完全
+    分開，讀時同步、不是 workbench 回呼。這裡直接用 `workbench` 的寫入函式組出「一個
+    brief 已經有兩輪、採用第一輪」的狀態，不必真的跑 LLM——這條路徑要驗的是同步邏輯本身
+    （用哪一輪、擋不擋重複寫入），不是文案生成本身（那是 test_workbench.py／
+    test_workbench_api.py 的事）。"""
 
-    _LEAF_NODE_NAMES = ["單元1", "單元2"]
-
-    def _succeed_plan_and_tree(self) -> None:
+    def _tree_leaf_brief(self) -> dict:
+        """展開一棵最小的活動樹，回傳最深層節點「單元1」（node_key 固定 "1.1.1"，跟既有
+        其他測試同一個固定映射）自動提交的那份 workbench_brief。"""
         schedule_jobs.PROVIDER = _fake(_fenced_plans([_one_plan()]))
         resp = self._post(plan_count=1)
         self.assertEqual(resp.status_code, 200, resp.text)
@@ -2665,133 +2343,117 @@ class CreativePersistenceTest(_ScheduleApiTestBase):
         )
         self.assertEqual(resp.status_code, 200, resp.text)
         self._run_worker()
+        row = web.conn.execute(
+            "SELECT id FROM workbench_brief WHERE brand_id = %s"
+            " AND source_ref ->> 'node_key' = '1.1.1'", (self.brand["id"],),
+        ).fetchone()
+        return dict(row)
 
-    def test_success_persists_resolved_and_unresolved_coordinates_copy_still_returned(self):
-        self._succeed_plan_and_tree()
-        matched = _one_creative("單元1", coordinates={
-            "angle": "稀缺性行銷", "audience": None, "pain": None, "hook": None,
+    def _write_copy_round(self, brief_id: str, round_no: int, angle_label: str,
+                           visual_tone: str = "暖調生活") -> str:
+        """直接寫一輪 `workbench_output`（含它自己的 `llm_task` 列）——回傳這一輪的
+        `llm_task_id`，供斷言「同步用的是哪一輪」。`visual_tone` 可覆寫，供壞值測試用
+        （票 05 fix round：`body_json` 裡不是兩個合法值之一的情況）。"""
+        llm_task_id = coredb.new_id("llm")
+        web.conn.execute(
+            "INSERT INTO llm_task (id, org_id, brand_id, task_type, context_scope_json,"
+            " input_context_ids_json, input_context_hash, knowledge_item_ids_json,"
+            " brand_version, prompt_template_id, prompt_template_version, provider, model,"
+            " status, attempt_no, started_at)"
+            " VALUES (%s, %s, %s, 'workbench_copy', '{}', '[]', '', '[]', 1, 'p', 'v1',"
+            " 'seed', 'seed', 'succeeded', 1, %s)",
+            (llm_task_id, coredb.DEV_ORG_ID, self.brand["id"], coredb.now_iso()),
+        )
+        coordinates = {
+            "audience": None, "pain": None, "angle": angle_label, "hook": None,
             "proof": None, "offer": None, "format": None,
-        })
-        # 「單元2」沿用 _one_creative() 預設座標「測試角度」——查無此字，35 個種子裡沒有它。
-        unmatched = _one_creative("單元2")
-        schedule_jobs.PROVIDER = _fake(_creative_fenced([matched, unmatched]))
-        resp = self.client.post(f"/api/schedule/brands/{self.brand['id']}/creative", json={})
-        self.assertEqual(resp.status_code, 200, resp.text)
-        self._run_worker()
+        }
+        body = {
+            "coordinates": coordinates, "short": ["短版"], "medium": ["中版"],
+            "long": ["長版"], "headlines": ["標題"], "descriptions": ["說明"],
+            "visual_tone": visual_tone, "visual_concept": f"第 {round_no} 輪的畫面概念",
+            "warnings": [], "validation": [],
+        }
+        workbench_repo.write_output(
+            web.conn, org_id=coredb.DEV_ORG_ID, brand_id=self.brand["id"], brief_id=brief_id,
+            part="copy", generation_round=round_no, body_json=body,
+            coordinates_json=coordinates, llm_task_id=llm_task_id,
+        )
+        return llm_task_id
+
+    def test_adopted_round_not_latest_syncs_to_creative_candidate_idempotently(self):
+        brief = self._tree_leaf_brief()
+        round1_task_id = self._write_copy_round(brief["id"], 1, "稀缺性行銷")
+        output_1 = web.conn.execute(
+            "SELECT id FROM workbench_output WHERE brief_id = %s AND generation_round = 1",
+            (brief["id"],),
+        ).fetchone()
+        workbench_repo.adopt_output(web.conn, coredb.DEV_ORG_ID, self.brand["id"], output_1["id"])
+        # 第二輪：真的存在，但沒被採用——同步邏輯要挑第一輪，不是「最新一輪」。
+        self._write_copy_round(brief["id"], 2, "限時福利")
 
         get_resp = self.client.get(f"/api/schedule/brands/{self.brand['id']}")
         self.assertEqual(get_resp.status_code, 200, get_resp.text)
-        creative = get_resp.json()["creative"]
-        self.assertIsNone(creative["failure"])
-        self.assertEqual(len(creative["ads"]), 2)  # 查無此字的座標不讓文案跟著作廢
 
-        slots = web.conn.execute(
-            "SELECT * FROM creative_slot WHERE brand_id = %s", (self.brand["id"],),
-        ).fetchall()
         candidates = web.conn.execute(
             "SELECT * FROM creative_candidate WHERE brand_id = %s", (self.brand["id"],),
         ).fetchall()
-        items = web.conn.execute(
-            "SELECT * FROM creative_candidate_item WHERE brand_id = %s", (self.brand["id"],),
-        ).fetchall()
-        self.assertEqual(len(slots), 2)      # 一個廣告節點一個 slot
-        self.assertEqual(len(candidates), 2)  # 一個 slot 一個候選
-        self.assertEqual(len(items), 2)       # 一個候選一個 item（v1）
+        self.assertEqual(len(candidates), 1)
+        candidate = candidates[0]
+        # 用的是採用的那一輪（第一輪的 llm_task_id），不是最新一輪。
+        self.assertEqual(candidate["llm_task_id"], round1_task_id)
+        self.assertEqual(candidate["angle_key"], "scarcity_marketing")
+        self.assertEqual(candidate["coordinates_status"], "tagged")
+        self.assertEqual(candidate["visual_tone"], "暖調生活")
+        self.assertEqual(candidate["visual_concept"], "第 1 輪的畫面概念")
 
-        # 票 T3d：鍵是 node_key，不是名稱——「單元1」在 _one_tree_nodes() 固定是 "1.1.1"，
-        # 「單元2」固定是 "1.2.1"。
-        by_node = {
-            next(s for s in slots if s["id"] == c["slot_id"])["node_key"]: c
-            for c in candidates
-        }
-        self.assertEqual(by_node["1.1.1"]["angle_key"], "scarcity_marketing")
-        self.assertEqual(by_node["1.1.1"]["coordinates_status"], "tagged")
-        self.assertIsNone(by_node["1.1.1"]["pain_key"])
+        item = web.conn.execute(
+            "SELECT fields_json FROM creative_candidate_item WHERE candidate_id = %s",
+            (candidate["id"],),
+        ).fetchone()
+        self.assertEqual(
+            {f["label"] for f in item["fields_json"]},
+            {"主要文字（短）", "主要文字（中）", "主要文字（長）", "標題", "說明"},
+        )
 
-        self.assertIsNone(by_node["1.2.1"]["angle_key"])
-        self.assertEqual(by_node["1.2.1"]["coordinates_status"], "pending")
-
-        # 讀第二次不會多寫一份（llm_task_id 擋掉重複落地）。
+        # 讀第二次不多寫一份（llm_task_id 擋掉重複落地）。
         self.client.get(f"/api/schedule/brands/{self.brand['id']}")
         count = web.conn.execute(
             "SELECT COUNT(*) AS n FROM creative_candidate WHERE brand_id = %s",
             (self.brand["id"],),
         ).fetchone()["n"]
-        self.assertEqual(count, 2)
+        self.assertEqual(count, 1)
 
-    def test_visual_tone_round_trips_and_bad_value_degrades_to_null_without_failing_the_batch(self):
-        """票 T1b wave 3 done-check：`visual_tone` 兩個合法值之一原樣落地；不合法值（DB
-        `CHECK` 只收兩個字串）退回 NULL——跟座標同一條規則，壞值不讓這批文案跟著整批作廢，
-        也不能讓 INSERT 整批失敗。"""
-        self._succeed_plan_and_tree()
-        good = _one_creative("單元1", visual_tone="暖調生活", visual_concept="測試視覺概念")
-        bad = _one_creative("單元2", visual_tone="螢光粉", visual_concept="測試視覺概念")
-        schedule_jobs.PROVIDER = _fake(_creative_fenced([good, bad]))
-        resp = self.client.post(f"/api/schedule/brands/{self.brand['id']}/creative", json={})
-        self.assertEqual(resp.status_code, 200, resp.text)
-        self._run_worker()
-
-        get_resp = self.client.get(f"/api/schedule/brands/{self.brand['id']}")
-        self.assertEqual(get_resp.status_code, 200, get_resp.text)
-        creative = get_resp.json()["creative"]
-        self.assertIsNone(creative["failure"])  # 壞值不讓整批作廢
-        self.assertEqual(len(creative["ads"]), 2)
-
-        slots = web.conn.execute(
-            "SELECT * FROM creative_slot WHERE brand_id = %s", (self.brand["id"],),
-        ).fetchall()
-        candidates = web.conn.execute(
-            "SELECT * FROM creative_candidate WHERE brand_id = %s", (self.brand["id"],),
-        ).fetchall()
-        # 票 T3d：鍵是 node_key，不是名稱——同上一個測試的固定映射。
-        by_node = {
-            next(s for s in slots if s["id"] == c["slot_id"])["node_key"]: c
-            for c in candidates
-        }
-        self.assertEqual(by_node["1.1.1"]["visual_tone"], "暖調生活")
-        self.assertIsNone(by_node["1.2.1"]["visual_tone"])  # 不合法值退回 NULL，不炸整批 INSERT
-
-    def test_two_same_name_leaves_under_different_parents_produce_two_slots_and_two_candidates(
-        self,
-    ):
-        """票 T3d done-check 2（ADR 0055 §1）：舊版拿 `ad_node_name` 當鍵，兩個同名的最深層
-        節點會撞成一個 slot；新版鍵是 `node_key`，各自成為獨立的 slot 跟候選——`_two_top_nodes`
-        兩個分支底下的最深層節點固定都叫「單元」，node_key 各自是 "1.1.1"／"2.1.1"，這是舊版
-        （`set()`／單一名稱 dict）表達不出來的狀態。"""
-        schedule_jobs.PROVIDER = _fake(_fenced_plans([_one_plan()]))
-        resp = self._post(plan_count=1)
-        self.assertEqual(resp.status_code, 200, resp.text)
-        self._run_worker()
-        schedule_jobs.PROVIDER = _fake(_tree_fenced(_two_top_nodes("活動A", "活動B")))
-        resp = self.client.post(
-            f"/api/schedule/brands/{self.brand['id']}/tree", json={"plan_index": 0}
-        )
-        self.assertEqual(resp.status_code, 200, resp.text)
-        self._run_worker()
-
-        schedule_jobs.PROVIDER = _fake(_creative_fenced(
-            [_one_creative("單元"), _one_creative("單元")]
-        ))
-        resp = self.client.post(f"/api/schedule/brands/{self.brand['id']}/creative", json={})
-        self.assertEqual(resp.status_code, 200, resp.text)
-        self._run_worker()
+    def test_bad_visual_tone_in_body_json_does_not_crash_the_sync(self):
+        """票 05 fix round（2026-09-09 reject）：`body_json.visual_tone` 不是兩個合法值
+        之一（這裡直接寫壞值，模擬 workbench 修好之前留下的舊資料，或任何繞過 sanitise
+        的寫入路徑）——同步要退回 `None`，不能讓 `creative_candidate` 的 CHECK 炸掉整支
+        排程 GET。"""
+        brief = self._tree_leaf_brief()
+        self._write_copy_round(brief["id"], 1, "稀缺性行銷", visual_tone="紫色")
+        output_1 = web.conn.execute(
+            "SELECT id FROM workbench_output WHERE brief_id = %s AND generation_round = 1",
+            (brief["id"],),
+        ).fetchone()
+        workbench_repo.adopt_output(web.conn, coredb.DEV_ORG_ID, self.brand["id"], output_1["id"])
 
         get_resp = self.client.get(f"/api/schedule/brands/{self.brand['id']}")
         self.assertEqual(get_resp.status_code, 200, get_resp.text)
-        creative = get_resp.json()["creative"]
-        self.assertIsNone(creative["failure"])
-        self.assertEqual(len(creative["ads"]), 2)
 
-        slots = web.conn.execute(
-            "SELECT * FROM creative_slot WHERE brand_id = %s", (self.brand["id"],),
-        ).fetchall()
-        candidates = web.conn.execute(
-            "SELECT * FROM creative_candidate WHERE brand_id = %s", (self.brand["id"],),
-        ).fetchall()
-        self.assertEqual(len(slots), 2)  # 同名的兩個節點，不是撞成一個
-        self.assertEqual({s["node_key"] for s in slots}, {"1.1.1", "2.1.1"})
-        self.assertEqual(len(candidates), 2)  # 每個 slot 各自一個候選，不是同一份重複算兩次
-        self.assertEqual({c["slot_id"] for c in candidates}, {s["id"] for s in slots})
+        candidate = web.conn.execute(
+            "SELECT visual_tone FROM creative_candidate WHERE brand_id = %s",
+            (self.brand["id"],),
+        ).fetchone()
+        self.assertIsNone(candidate["visual_tone"])
+
+        # 讀第二次不多寫一份，也不再次撞到同一個壞值。
+        get_resp_2 = self.client.get(f"/api/schedule/brands/{self.brand['id']}")
+        self.assertEqual(get_resp_2.status_code, 200, get_resp_2.text)
+        count = web.conn.execute(
+            "SELECT COUNT(*) AS n FROM creative_candidate WHERE brand_id = %s",
+            (self.brand["id"],),
+        ).fetchone()["n"]
+        self.assertEqual(count, 1)
 
 
 class SearchSourcesReadbackTest(_ScheduleApiTestBase):

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { CalendarRange, GitCompareArrows, Network, LoaderCircle } from "lucide-react";
+import { CalendarRange, GitCompareArrows, Network, LoaderCircle, Layers3 } from "lucide-react";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { PageTabs } from "@/components/layout/PageTabs";
 import { EmptyState } from "@/components/layout/EmptyState";
@@ -10,10 +10,11 @@ import { fetchProductList, type ProductListItem } from "@/lib/productsApi";
 import { saveRuleCard } from "@/lib/settingsApi";
 import {
   approveScheduleTree, bindScheduleTree, createSchedulePlan, expandPlanIntoTree, fetchSchedule,
-  generateCreative, rejectSchedulePlans, revokeScheduleApproval, SCHEDULE_REJECT_CATEGORIES,
+  rejectSchedulePlans, revokeScheduleApproval, SCHEDULE_REJECT_CATEGORIES,
   settleSchedulePeriod, type RejectEntryInput, type ScheduleState,
 } from "@/lib/scheduleApi";
 import { CampaignTree } from "./CampaignTree";
+import { CreativePackList } from "./CreativePackList";
 import { PeriodPanel } from "./PeriodPanel";
 import { PlanComparison, type FeedbackEntry } from "./PlanComparison";
 import { ScheduleSetup, type ScheduleDraft } from "./ScheduleSetup";
@@ -24,6 +25,7 @@ const stageTabs = [
   { value: "setup", label: "設定檔期", icon: <CalendarRange className="size-4" aria-hidden="true" /> },
   { value: "plans", label: "方案比較", icon: <GitCompareArrows className="size-4" aria-hidden="true" /> },
   { value: "tree", label: "投放結構", icon: <Network className="size-4" aria-hidden="true" /> },
+  { value: "assets", label: "素材準備", icon: <Layers3 className="size-4" aria-hidden="true" /> },
 ] as const;
 type ScheduleTab = (typeof stageTabs)[number]["value"];
 
@@ -56,8 +58,6 @@ export function SchedulePage({ brandId }: { brandId: string }) {
   const [approveError, setApproveError] = useState<string | null>(null);
   const [revoking, setRevoking] = useState(false);
   const [revokeError, setRevokeError] = useState<string | null>(null);
-  const [generatingCreative, setGeneratingCreative] = useState(false);
-  const [creativeError, setCreativeError] = useState<string | null>(null);
   const [adoptingBudget, setAdoptingBudget] = useState(false);
   const [adoptBudgetError, setAdoptBudgetError] = useState<string | null>(null);
   const [feedbackByPlan, setFeedbackByPlan] = useState<Record<number, FeedbackEntry[]>>({});
@@ -152,7 +152,6 @@ export function SchedulePage({ brandId }: { brandId: string }) {
       setRefreshError(null);
       setSubmitting(false);
       setExpandingIndex(null);
-      setGeneratingCreative(false);
     } catch (err) {
       if (requestId.current !== id) return;
       const message = err instanceof Error ? err.message : "讀取失敗，請稍後再試。";
@@ -177,9 +176,15 @@ export function SchedulePage({ brandId }: { brandId: string }) {
     finally { pendingActions.current -= 1; requestId.current += 1; }
   }
 
+  // 票 05：素材工作檯工單沒有自己的 running 輪詢旗標——一份 brief 還在 queued／running
+  // 就代表這一期還有背景工作在跑，跟 plan／tree 的 running 欄同一條規則（既有 2 秒輪詢
+  // 順便把它覆蓋掉，不必另開一條）。
+  const briefsRunning = state.status === "ready" && state.schedule.briefs.some(
+    (b) => b.status === "queued" || b.status === "running",
+  );
   const runningNow = state.status === "ready" && Boolean(
-    submitting || expandingIndex !== null || generatingCreative || rejecting
-    || state.schedule.plan?.running || state.schedule.tree?.running || state.schedule.creative?.running,
+    submitting || expandingIndex !== null || rejecting || briefsRunning
+    || state.schedule.plan?.running || state.schedule.tree?.running,
   );
   useEffect(() => {
     if (!runningNow) return;
@@ -259,18 +264,6 @@ export function SchedulePage({ brandId }: { brandId: string }) {
     }
   }
 
-  async function handleGenerateCreative() {
-    setGeneratingCreative(true);
-    setCreativeError(null);
-    try {
-      const schedule = await trackAction(() => generateCreative(brandId));
-      setState((prev) => (prev.status === "ready" ? { ...prev, schedule } : prev));
-    } catch (err) {
-      setCreativeError(err instanceof Error ? err.message : "產出失敗，請稍後再試。");
-      setGeneratingCreative(false); // 票 05-1：理由同 handleStart 的 catch
-    }
-  }
-
   async function handleAdoptBudget() {
     const suggestion = state.status === "ready" ? state.schedule.next_period_suggestion : null;
     if (!suggestion) return;
@@ -313,7 +306,6 @@ export function SchedulePage({ brandId }: { brandId: string }) {
   const schedule = state.status === "ready" ? state.schedule : null;
   const planRunning = Boolean(submitting || schedule?.plan?.running || rejecting);
   const treeRunning = Boolean(expandingIndex !== null || schedule?.tree?.running);
-  const creativeRunning = Boolean(generatingCreative || schedule?.creative?.running);
 
   return <div className="flex flex-col gap-5">
     <PageHeader title="檔期規劃" description="設定產品與目標、比較方案，再整理本期的投放結構與素材。" />
@@ -323,15 +315,20 @@ export function SchedulePage({ brandId }: { brandId: string }) {
     {schedule && state.status === "ready" && <>
       {refreshError && <div role="alert" className="flex items-center justify-between gap-4 rounded-lg border border-danger/25 bg-danger/5 p-4"><p className="text-sm">背景更新失敗：{refreshError} 目前保留上次讀取的內容。</p><Button type="button" variant="outline" onClick={() => { void load(); }}>重新載入</Button></div>}
       {schedule.period && <PeriodPanel period={schedule.period} settling={settling} settleError={settleError} onSettle={handleSettle} />}
-      {(planRunning || treeRunning || creativeRunning) && <div role="status" className="flex items-start gap-3 rounded-lg border border-primary/15 bg-accent/60 px-4 py-3">
+      {(planRunning || treeRunning || briefsRunning) && <div role="status" className="flex items-start gap-3 rounded-lg border border-primary/15 bg-accent/60 px-4 py-3">
         <LoaderCircle className="mt-0.5 size-4 animate-spin text-primary" aria-hidden="true" /><div><p className="text-sm font-medium">{planRunning ? "出方案中…" : treeRunning ? "展開中…" : "素材產出中…"}</p><p className="mt-1 text-xs leading-5 text-muted-foreground">這一步可能需要幾分鐘；可以先離開，回來後會接續顯示。背景更新會保留目前的表單與意見。</p></div>
       </div>}
-      <div hidden={tab !== "setup"}><ScheduleSetup brandId={brandId} schedule={schedule} products={state.products} draft={{ selectedIds, platform, objective, promotionNote, planCount, startDate, endDate }} onChange={updateDraft} confirming={confirming} onConfirm={setConfirming} submitting={submitting} submitError={submitError} onStart={handleStart} busy={planRunning || treeRunning || creativeRunning} onAdoptBudget={handleAdoptBudget} adoptingBudget={adoptingBudget} adoptBudgetError={adoptBudgetError} /></div>
+      <div hidden={tab !== "setup"}><ScheduleSetup brandId={brandId} schedule={schedule} products={state.products} draft={{ selectedIds, platform, objective, promotionNote, planCount, startDate, endDate }} onChange={updateDraft} confirming={confirming} onConfirm={setConfirming} submitting={submitting} submitError={submitError} onStart={handleStart} busy={planRunning || treeRunning || briefsRunning} onAdoptBudget={handleAdoptBudget} adoptingBudget={adoptingBudget} adoptBudgetError={adoptBudgetError} /></div>
       <div hidden={tab !== "plans"}>
-        {schedule.plan ? <PlanComparison key={schedule.plan.task_id} plan={schedule.plan} expandingIndex={expandingIndex} expandError={expandError} onExpand={handleExpand} feedbackByPlan={feedbackByPlan} onAddFeedback={addFeedbackEntry} onUpdateFeedback={updateFeedbackEntry} onRemoveFeedback={removeFeedbackEntry} onReject={handleReject} rejecting={rejecting} rejectError={rejectError} busy={planRunning || treeRunning || creativeRunning} /> : <div className="surface"><EmptyState title="先建立本期方案" description="選擇產品、目標與檔期後，開始排程即可在這裡比較方案。" actionLabel="前往設定檔期" onAction={() => changeTab("setup")} /></div>}
+        {schedule.plan ? <PlanComparison key={schedule.plan.task_id} plan={schedule.plan} expandingIndex={expandingIndex} expandError={expandError} onExpand={handleExpand} feedbackByPlan={feedbackByPlan} onAddFeedback={addFeedbackEntry} onUpdateFeedback={updateFeedbackEntry} onRemoveFeedback={removeFeedbackEntry} onReject={handleReject} rejecting={rejecting} rejectError={rejectError} busy={planRunning || treeRunning || briefsRunning} /> : <div className="surface"><EmptyState title="先建立本期方案" description="選擇產品、目標與檔期後，開始排程即可在這裡比較方案。" actionLabel="前往設定檔期" onAction={() => changeTab("setup")} /></div>}
       </div>
       <div hidden={tab !== "tree"}>
-        {schedule.tree && !schedule.tree.running ? <CampaignTree key={schedule.tree.task_id} tree={schedule.tree} binding={binding} bindError={bindError} onBind={handleBind} approving={approving} approveError={approveError} onApprove={handleApprove} revoking={revoking} revokeError={revokeError} onRevoke={handleRevoke} creative={schedule.creative} generatingCreative={generatingCreative} creativeError={creativeError} onGenerateCreative={handleGenerateCreative} /> : <div className="surface"><EmptyState title={treeRunning ? "正在整理投放結構" : "尚未展開投放結構"} description={treeRunning ? "完成後會顯示節點、預算與內容，可以先到其他階段工作。" : "先在方案比較中選擇一個方案，再展開成投放結構。"} actionLabel={treeRunning ? undefined : "前往方案比較"} onAction={treeRunning ? undefined : () => changeTab("plans")} /></div>}
+        {schedule.tree && !schedule.tree.running ? <CampaignTree key={schedule.tree.task_id} tree={schedule.tree} binding={binding} bindError={bindError} onBind={handleBind} approving={approving} approveError={approveError} onApprove={handleApprove} revoking={revoking} revokeError={revokeError} onRevoke={handleRevoke} briefs={schedule.briefs} onGoToAssets={() => changeTab("assets")} /> : <div className="surface"><EmptyState title={treeRunning ? "正在整理投放結構" : "尚未展開投放結構"} description={treeRunning ? "完成後會顯示節點、預算與內容，可以先到其他階段工作。" : "先在方案比較中選擇一個方案，再展開成投放結構。"} actionLabel={treeRunning ? undefined : "前往方案比較"} onAction={treeRunning ? undefined : () => changeTab("plans")} /></div>}
+      </div>
+      <div hidden={tab !== "assets"}>
+        {schedule.tree && !schedule.tree.running
+          ? <CreativePackList brandId={brandId} briefs={schedule.briefs} />
+          : <div className="surface"><EmptyState title="先展開投放結構" description="投放結構展開成功後，這裡會自動出現每個廣告節點的素材工單。" actionLabel="前往投放結構" onAction={() => changeTab("tree")} /></div>}
       </div>
     </>}
   </div>;

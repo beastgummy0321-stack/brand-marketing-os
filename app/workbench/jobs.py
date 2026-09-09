@@ -45,6 +45,28 @@ _METHODOLOGY_LABELS = {
 _PATH_RE = re.compile(r"^([a-z_]+)(?:\[(\d+)\]|\.([a-z_]+))?$")
 
 
+def _compile_brand_context(conn, brand_id: str, product_ids: list) -> tuple:
+    """票 05：對 `request_json.product_ids`（落回單一 `product_id` 的呼叫端見 `_run()`）
+    每個 id 各跑一次 `context_compiler.compile()`，用空行接起來；`knowledge_item_ids` 取
+    聯集、保留原順序去重。複製自 `app.schedule.jobs._compile_brand_context`（不 import，
+    app.schedule 私有，container contract 規則 5 允許複製）——一張 `ad_creative` 工單的
+    `product_id` 只是方案的第一個產品，真正的品牌上下文要照方案全部產品組，跟排程模組退休
+    前自己產內容那支 task body 同一份讀法。回傳 (prompt 片段, knowledge_item_ids, brand_version)。
+    """
+    texts, knowledge_item_ids, seen = [], [], set()
+    brand_version = None
+    for product_id in product_ids:
+        text, ids, brand_version, _product_version = context_compiler.compile(
+            conn, brand_id, product_id
+        )
+        texts.append(text)
+        for kid in ids:
+            if kid not in seen:
+                seen.add(kid)
+                knowledge_item_ids.append(kid)
+    return "\n\n".join(texts), knowledge_item_ids, brand_version
+
+
 def _replacement_ok(original, value) -> bool:
     """型別守門（票 workbench/04 walk round 2 amendment）：回覆的 `value` 型別要跟原欄位
     一模一樣（物件對物件、字串對字串），原欄位是物件的話，物件的每個鍵都要在——不合就讓
@@ -185,9 +207,10 @@ def _run(conn, org_id: str, brand_id: str, brief_id: str, part: str, count) -> N
     style = repository.get_style(brief["style_key"])
     request = brief.get("request_json") or {}
 
-    if request.get("use_brand_knowledge") and product_id:
-        brand_context, knowledge_item_ids, brand_version, _product_version = (
-            context_compiler.compile(conn, brand_id, product_id)
+    product_ids = request.get("product_ids") or ([product_id] if product_id else [])
+    if request.get("use_brand_knowledge") and product_ids:
+        brand_context, knowledge_item_ids, brand_version = _compile_brand_context(
+            conn, brand_id, product_ids
         )
     else:
         brand_context, knowledge_item_ids = "", []
@@ -271,8 +294,29 @@ def _run(conn, org_id: str, brand_id: str, brief_id: str, part: str, count) -> N
         # 印 ❌，不再問第二次。
         results, rendered = _validate(part, data, vocabulary=vocabulary, count=count)
 
+    if part == "copy":
+        # 票 05（ADR 0068 §5 amendment）：文案任務跟著回視覺方向——寫角度的人順手命名畫面。
+        # 壞值（不是兩個合法字串之一）退回 None，跟 `validate.check_copy` 同一條規則：
+        # `workbench_brief.visual_tone` 的 DB CHECK 只收那兩個字串，寫壞值會讓整筆 UPDATE
+        # 失敗，這裡不讓一格壞資料炸掉整個 job。
+        # 票 05 fix round（2026-09-09 reject）：這個 sanitise 過的值也要寫回 `body_json`
+        # 那份（下面 `body["visual_tone"]`）——之前只寫 `update_brief_visual` 那一份，
+        # `body_json` 留著原始壞值，讓 `schedule/state.py` 讀到壞值又轉手塞進
+        # `creative_candidate` 的 CHECK，炸掉整支排程 GET。一份值只有一個真身。
+        visual_tone = data.get("visual_tone")
+        if visual_tone not in validate.VISUAL_TONE_VALUES:
+            visual_tone = None
+        visual_concept = data.get("visual_concept")
+        if not isinstance(visual_concept, str) or not visual_concept:
+            visual_concept = None
+        repository.update_brief_visual(
+            conn, org_id, brand_id, brief_id, visual_tone, visual_concept,
+        )
+
     round_no = repository.next_round(conn, org_id, brand_id, brief_id, part)
     body = dict(data)
+    if part == "copy":
+        body["visual_tone"] = visual_tone
     body["validation"] = [
         ("✅ " if r["ok"] else "❌ ") + f"{r['path']}：{r['message']}" for r in results
     ]

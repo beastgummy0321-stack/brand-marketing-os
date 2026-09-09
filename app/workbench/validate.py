@@ -26,6 +26,10 @@ PROMPT_MIN, PROMPT_MAX = 200, 250
 FIXED_KEYS = ("format", "capture_style", "human", "must_keep", "forbidden")
 VARIABLE_KEYS = ("index", "theme", "text", "environment", "subject", "relation", "authenticity")
 
+# ADR 0047「`visual_tone`：一個欄位、兩個值」——`creative_candidate.visual_tone` 的 DB CHECK
+# 逐字沿用這兩個字串；這支模組不發明第三個值。
+VISUAL_TONE_VALUES = ("暗調強對比", "暖調生活")
+
 
 def _char_len(text: str) -> int:
     """字數量法：不含換行符號，標點算在內（票 01 的用詞決定，可逆）。"""
@@ -97,6 +101,20 @@ def check_copy(data, vocabulary: dict) -> list:
         ]
         msg = "全部合格" if not bad_dims else f"對不到：{bad_dims}"
         results.append({"path": "coordinates", "ok": not bad_dims, "message": msg})
+
+    # ADR 0068 §5 amendment（票 05）：文案任務跟著回視覺方向，寫角度的人順手命名畫面。
+    visual_tone = data.get("visual_tone")
+    tone_ok = visual_tone is None or visual_tone in VISUAL_TONE_VALUES
+    results.append({
+        "path": "visual_tone", "ok": tone_ok,
+        "message": "符合" if tone_ok else f"不是兩個合法值之一或 null：{visual_tone!r}",
+    })
+    visual_concept = data.get("visual_concept")
+    concept_ok = isinstance(visual_concept, str) and bool(visual_concept)
+    results.append({
+        "path": "visual_concept", "ok": concept_ok,
+        "message": "符合" if concept_ok else "缺欄位或空字串",
+    })
     return results
 
 

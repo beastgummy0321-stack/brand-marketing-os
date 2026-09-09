@@ -7,7 +7,7 @@
 
 import { apiFetch } from "./http";
 
-export type ActiveJobKind = "scan" | "question" | "paste_fix" | "persona" | "product_research" | "library_convert" | "brand_report" | "schedule_plan" | "schedule_tree" | "schedule_creative";
+export type ActiveJobKind = "scan" | "question" | "paste_fix" | "persona" | "product_research" | "library_convert" | "brand_report" | "schedule_plan" | "schedule_tree" | "workbench_generate";
 export type ActiveJobStatus = "waiting" | "running" | "done" | "failed";
 
 export interface ActiveJob {
@@ -30,7 +30,7 @@ export const ACTIVE_JOB_KIND_LABELS: Record<ActiveJobKind, string> = {
   brand_report: "顧問分析報告",
   schedule_plan: "出方案",
   schedule_tree: "展開活動樹",
-  schedule_creative: "產素材",
+  workbench_generate: "素材生成",
 };
 
 interface Envelope<T> {

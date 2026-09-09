@@ -48,7 +48,7 @@ class DashboardJobsBoundaryTest(unittest.TestCase):
         # 一個都不在這份聚合裡——按下「產素材」的同時鈴鐺寫「目前沒有進行中的背景工作」。
         _seed_running_queue_job(DEV_ORG_ID, brand_id, "schedule_plan", {"brand_id": brand_id})
         _seed_running_queue_job(DEV_ORG_ID, brand_id, "schedule_tree", {"brand_id": brand_id})
-        _seed_running_queue_job(DEV_ORG_ID, brand_id, "schedule_creative", {"brand_id": brand_id})
+        _seed_running_queue_job(DEV_ORG_ID, brand_id, "workbench_copy", {"brand_id": brand_id})
 
         response = self.client.get("/api/jobs/active")
 
@@ -60,7 +60,7 @@ class DashboardJobsBoundaryTest(unittest.TestCase):
         self.assertEqual(
             {job["kind"] for job in jobs},
             {"scan", "product_research", "library_convert", "brand_report", "persona",
-             "schedule_plan", "schedule_tree", "schedule_creative"},
+             "schedule_plan", "schedule_tree", "workbench_generate"},
         )
         self.assertTrue(all(job["status"] in {"running", "waiting"} for job in jobs))
         self.assertTrue(all(job["brand_name"] == "進行中工作測試品牌" for job in jobs))
@@ -83,7 +83,7 @@ class DashboardJobsBoundaryTest(unittest.TestCase):
         self.assertEqual(next(job for job in jobs if job["kind"] == "brand_report")["stage"], "正在整理五章")
         self.assertEqual(next(job for job in jobs if job["kind"] == "persona")["stage"], "整理人物誌")
         self.assertEqual(
-            next(job for job in jobs if job["kind"] == "schedule_creative")["stage"], "產素材中")
+            next(job for job in jobs if job["kind"] == "workbench_generate")["stage"], "素材生成中")
 
 
 class DashboardJobsTenantIsolationTest(unittest.TestCase):

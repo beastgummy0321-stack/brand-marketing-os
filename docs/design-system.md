@@ -214,7 +214,7 @@ A long flow is a sequence of stages, each one screen, never one page that grows:
 | 基本設定 | product, goal, dates | pinned budget and settings summary |
 | 方案比較 | plan summaries as a list | the selected plan, readable; side-by-side only when structured fields exist |
 | 投放結構 | collapsible hierarchy tree | the selected node's budget and content (replaces nested cards) |
-| 素材準備 | creative list | content, coordinates, copy actions |
+| 素材準備 | one card per deepest node | copy tabs 短／中／長 with the fixed hint, headlines, descriptions, copy buttons; image-prompt count + link to 素材工作檯 |
 
 - 配對、核准、撤回、結算 live in the stage they belong to and are enabled by **backend state**, never by
   the stage number the frontend is on.

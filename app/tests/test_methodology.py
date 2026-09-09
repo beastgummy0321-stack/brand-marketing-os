@@ -387,16 +387,6 @@ class Adr0047VisualDirectionGateTest(unittest.TestCase):
             "ADR 0047 的圖片方向閘門抓到違規：\n" + "\n".join(problems),
         )
 
-        # 票 T1b wave 3：ad_creative.md 真的問了 visual_tone 兩個值，且視覺方向只問一次
-        # ——不再借 fields 的「視覺方向」欄位重問一次（那是這道閘門存在之前的舊契約）。
-        ad_creative = (
-            REPO_ROOT / "app" / "departments" / "creative" / "ad_creative.md"
-        ).read_text(encoding="utf-8")
-        self.assertIn("暗調強對比", ad_creative)
-        self.assertIn("暖調生活", ad_creative)
-        self.assertNotIn('"視覺方向"', ad_creative)
-        self.assertEqual(ad_creative.count('"visual_concept"'), 1)
-
 
 if __name__ == "__main__":
     unittest.main()

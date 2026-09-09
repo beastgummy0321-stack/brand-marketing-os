@@ -12,15 +12,14 @@ CLI 驅動也照樣需要，所以它們是工作，不是端點。
 import json
 from datetime import timedelta
 
+from app import workbench  # module entry point only (docs/contracts/workbench.md)
 from app.brand_intelligence import personas
 from app.brand_intelligence import repository as bi_repo
 from app.core import rule_cards
 from app.core import settings as coresettings
 from app.core.db import APP_DIR
-from app.llm import gateway
 from app.meta import repository as meta_repo
 from app.schedule import binding as binding_mod
-from app.schedule import creative as creative_mod
 from app.schedule import period as period_mod
 from app.schedule import plan as plan_mod
 from app.schedule import repository as schedule_repo
@@ -31,28 +30,24 @@ from app.schedule import tree_approval
 TASK_TYPE = "schedule_plan"
 # 票 09：選定一個方案之後展開成三層活動樹，第二個 task_type，同一支 llm_task 表。
 TREE_TASK_TYPE = "schedule_tree"
-# 票 01（`.scratch/creative-slice/issues/01-ad-creative-per-ad-node.md`）：把展開好的活動樹
-# 每個最深層節點各配一份內容，第三個 task_type，同一支 llm_task 表（frozen decision 1）。
-CREATIVE_TASK_TYPE = "schedule_creative"
 # 對照 app/methodology/README.md 既有的「檔期計畫生成」列，不新增列——展開活動樹用的到的
 # 平台知識（帳戶結構、AB 測試分流）跟出方案是同一批，沒有真的用到才新增專屬列（維護規則
 # 「只按消費拉動萃取」）。
 METHODOLOGY_TASK_LABELS = ["檔期計畫生成"]
-# 票 01（T6c）：成效判讀，第四個 task_type——決定 7，用既有的 `performance_reading`
+# 票 01（T6c）：成效判讀，第三個 task_type——決定 7，用既有的 `performance_reading`
 # （`app/llm/providers.py` 已註冊、原本零呼叫者）。方法論走既有對照表「成效判讀／下期草案」
 # 那一列（`ab-testing.md`＋`ads-core.md`＋`ads-commerce.md`），這張票是接線不是寫方法論
 # ——不新增部門任務檔，prompt 組法見 `app/schedule/diagnosis.py`。
 DIAGNOSIS_TASK_TYPE = "performance_reading"
 DIAGNOSIS_METHODOLOGY_TASK_LABELS = ["成效判讀／下期草案"]
-# 票 T1 站③收尾：曾經跟上面共用一張清單餵給三支 job，副作用是計畫／活動樹的方法論區塊
-# 平白多讀到創意矩陣、Meta 版位格式規格這兩份不相干的檔案（21,432 → 38,074 字，＋78%）。
-# 改成 schedule_creative 專屬一張清單，計畫／活動樹維持只吃「檔期計畫生成」。
-CREATIVE_METHODOLOGY_TASK_LABELS = ["廣告內容生成"]
+# 票 05 fix round（ADR 0047「一個欄位、兩個值」）：`creative_candidate.visual_tone` 的 DB
+# CHECK 只收這兩個字串或 null。字面值照抄自那條 CHECK（`supabase/migrations/
+# 20260901000002…sql:60`）與 `app/workbench/validate.py::VISUAL_TONE_VALUES`，不 import
+# workbench internals（docs/contracts/workbench.md）——`_sync_creative_candidate` 拿它做
+# 最後一道防呆，workbench 那邊已經 sanitise 過，這裡是縱深防禦，不是唯一防線。
+VISUAL_TONE_VALUES = ("暗調強對比", "暖調生活")
 DEPARTMENT_FILE = APP_DIR / "departments" / "ads" / "schedule.md"
 TREE_DEPARTMENT_FILE = APP_DIR / "departments" / "ads" / "campaign_tree.md"
-# 票 01 frozen decision 2：這是創意部門的第一個任務檔，`app/departments/` 底下新增一個
-# 資料夾，程式一行不改（ADR 0028）——這裡只是讀檔路徑，不是新的 Python 套件。
-CREATIVE_DEPARTMENT_FILE = APP_DIR / "departments" / "creative" / "ad_creative.md"
 # 通路目錄資料檔（票 08 §3；票 T4／ADR 0056 改名並加上通路能力旗標）：改這個檔案不必
 # 重新部署程式；每次讀都重新讀檔（不快取到模組層），比照 DEPARTMENT_FILE 既有的讀法。
 PLATFORM_DATA_FILE = APP_DIR / "schedule" / "channel_catalogue.json"
@@ -142,17 +137,107 @@ def _leaf_ad_nodes(nodes: list) -> list[dict]:
     return result
 
 
-def _creative_ad_nodes(conn, creative_row: dict, org_id: str, brand_id: str) -> list[dict]:
-    """從這一列內容任務凍結的 `source_tree_task_id` 找回當時的那棵樹，重算最深層節點——
-    frozen decision 5：只能讀凍結住的那一列，不能讀「最新一次的樹」。"""
-    source_tree_task_id = (creative_row.get("context_scope_json") or {}).get("source_tree_task_id")
-    if not source_tree_task_id:
-        return []
-    tree_row = gateway.get_task(conn, source_tree_task_id)
+def _copy_summary(output: dict | None) -> dict | None:
+    """票 05：`workbench.adopted_output(..., "copy")` 的一列 → 排程頁要的扁平形狀——
+    `body_json` 本身就是文案任務的整份回覆（含 `_run()` 寫回去之前就有的
+    `visual_tone`／`visual_concept`，ADR 0068 §5 amendment），這裡攤平成一層，畫面不必
+    知道 workbench 的列形狀。`None`：這個 part 從沒產出過。"""
+    if output is None:
+        return None
+    body = output.get("body_json") or {}
+    return {
+        "is_adopted": output["is_adopted"], "generation_round": output["generation_round"],
+        "short": body.get("short", []), "medium": body.get("medium", []),
+        "long": body.get("long", []), "headlines": body.get("headlines", []),
+        "descriptions": body.get("descriptions", []),
+        "visual_tone": body.get("visual_tone"), "visual_concept": body.get("visual_concept"),
+        "validation": body.get("validation", []),
+    }
+
+
+def _image_prompt_summary(output: dict | None) -> dict | None:
+    """票 05：同上，但只留輪次與張數——排程頁只需要知道「有沒有」、「幾條」，完整內容
+    在工作檯看（ADR 0068「一個產出者」）。`rendered` 是渲染完的清單，缺欄位就退回
+    `prompts`（同一份計數，`check_image_prompts` 兩者長度必然相同）。"""
+    if output is None:
+        return None
+    body = output.get("body_json") or {}
+    items = body.get("rendered")
+    if not isinstance(items, list):
+        items = body.get("prompts")
+    return {
+        "generation_round": output["generation_round"],
+        "count": len(items) if isinstance(items, list) else 0,
+    }
+
+
+def _sync_creative_candidate(conn, org_id: str, brand_id: str, tree_task_id: str,
+                              node_key: str, copy_output: dict, copy: dict) -> None:
+    """ADR 0068 §3：一個節點的採用版文案 → `creative_candidate`（排程自己的記憶，見
+    `docs/adr/0068-…md` 決定 3）。讀時同步、不是 workbench 回呼——保持依賴單向。
+    `persist_creative_result` 靠 `task_id`（= 這份輸出自己的 `llm_task_id`）擋重複寫入，
+    一個節點一次呼叫，不跟其他節點的輸出共用同一個 `task_id`（idempotency 的鍵）。
+    `visual_tone` 退回 `VISUAL_TONE_VALUES` 兩個值或 `None`——縱深防禦（workbench 已經
+    sanitise 過寫進 `body_json` 的值，這裡不信任那份保證，壞值不能讓 `creative_candidate`
+    的 CHECK 炸掉整支排程 GET）。"""
+    visual_tone = copy["visual_tone"]
+    if visual_tone not in VISUAL_TONE_VALUES:
+        visual_tone = None
+    schedule_repo.persist_creative_result(
+        conn, org_id, brand_id, task_id=copy_output["llm_task_id"],
+        source_tree_task_id=tree_task_id,
+        ads=[{
+            "node_key": node_key, "coordinates": copy_output.get("coordinates_json") or {},
+            "visual_tone": visual_tone, "visual_concept": copy["visual_concept"],
+            "fields": [
+                {"label": "主要文字（短）", "value": copy["short"]},
+                {"label": "主要文字（中）", "value": copy["medium"]},
+                {"label": "主要文字（長）", "value": copy["long"]},
+                {"label": "標題", "value": copy["headlines"]},
+                {"label": "說明", "value": copy["descriptions"]},
+            ],
+        }],
+    )
+
+
+def _briefs_for_tree(conn, org_id: str, brand_id: str, tree_row: dict | None) -> list[dict]:
+    """票 05（ADR 0068 §2）：目前這棵樹每個最深層節點的工作檯工單——一個節點一列，順序照
+    樹的文件順序。`tree_row` 是 `None`（從沒展開過活動樹）→ `[]`。重新展開過的舊樹留下的
+    工單不在這裡出現（`briefs_for_source()` 已經用 `source_tree_task_id` 篩過，只留這一棵
+    樹自己的）；這一棵樹的最深層節點還沒有工單（提交失敗、或是比對不到自己的
+    `source_ref.node_key`）就顯示 `brief_id: null`、`status: "missing"`，不是靜悄悄漏掉。"""
     if tree_row is None:
         return []
+    briefs = workbench.briefs_for_source(
+        conn, org_id, brand_id, "schedule_node", {"source_tree_task_id": tree_row["id"]},
+    )
+    by_node_key = {b["source_ref"].get("node_key"): b for b in briefs}
+
     tree = binding_mod.tree_with_bindings(conn, tree_row, org_id, brand_id)
-    return _leaf_ad_nodes(tree["nodes"])
+    leaves = _leaf_ad_nodes(tree["nodes"]) if tree["failure"] is None else []
+
+    entries = []
+    for leaf in leaves:
+        brief = by_node_key.get(leaf["node_key"])
+        if brief is None:
+            entries.append({
+                "node_key": leaf["node_key"], "node_name": leaf["name"], "brief_id": None,
+                "status": "missing", "last_error": None, "copy": None, "image_prompts": None,
+            })
+            continue
+        copy_output = workbench.adopted_output(conn, org_id, brand_id, brief["id"], "copy")
+        copy = _copy_summary(copy_output)
+        if copy_output is not None and copy is not None and copy["is_adopted"]:
+            _sync_creative_candidate(
+                conn, org_id, brand_id, tree_row["id"], leaf["node_key"], copy_output, copy,
+            )
+        image_output = workbench.adopted_output(conn, org_id, brand_id, brief["id"], "image_prompt")
+        entries.append({
+            "node_key": leaf["node_key"], "node_name": leaf["name"], "brief_id": brief["id"],
+            "status": brief["status"], "last_error": brief["last_error"],
+            "copy": copy, "image_prompts": _image_prompt_summary(image_output),
+        })
+    return entries
 
 
 def _knowledge_gaps(conn, brand_id: str) -> list[str]:
@@ -186,22 +271,6 @@ def _brand_response(conn, brand_id: str, org_id: str) -> dict:
     if tree is not None:
         _fill_node_spend(conn, org_id, brand_id, tree)
         tree_approval._fill_approval(conn, org_id, brand_id, tree)
-    creative_row, creative_running = _display_task_row(conn, brand_id, CREATIVE_TASK_TYPE)
-    creative = None
-    if creative_row is not None:
-        ad_nodes = _creative_ad_nodes(conn, creative_row, org_id, brand_id)
-        creative = creative_mod.creative_from_task_row(creative_row, ad_nodes)
-        if creative_running:
-            creative["running"] = True
-        # 票 T1b：內容一旦成功就落地成 creative_slot／creative_candidate／
-        # creative_candidate_item——跟 35 個座標種子同一套「讀的時候順手確保落地」寫法，
-        # 冪等（見 schedule_repo.persist_creative_result 檔頭），這裡不判斷「是不是第一次
-        # 讀」，每次成功讀都呼叫一次，函式自己用 llm_task_id 擋掉重複寫入。
-        if creative["failure"] is None and not creative["running"]:
-            schedule_repo.persist_creative_result(
-                conn, org_id, brand_id, creative["task_id"],
-                creative["source_tree_task_id"], creative["ads"],
-            )
     return {
         "daily_budget": current_daily_budget,
         "plan_count_min": plan_count_min,
@@ -211,7 +280,7 @@ def _brand_response(conn, brand_id: str, org_id: str) -> dict:
         "objectives": data["objectives"],
         "plan": plan,
         "tree": tree,
-        "creative": creative,
+        "briefs": _briefs_for_tree(conn, org_id, brand_id, tree_row),
         "period": period_mod.brand_period_response(conn, org_id, brand_id),
         "next_period_suggestion": period_mod.next_period_suggestion(conn, org_id, brand_id),
     }

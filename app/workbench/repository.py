@@ -171,6 +171,19 @@ def mark_brief_failed(conn: _AnyConn, org_id: str, brand_id: str, brief_id: str,
     conn.commit()
 
 
+def update_brief_visual(conn: _AnyConn, org_id: str, brand_id: str, brief_id: str,
+                         visual_tone: str | None, visual_concept: str | None) -> None:
+    """票 05（ADR 0068 §5 amendment）：文案任務跟著回 `visual_tone`／`visual_concept`——
+    寫角度的人順手命名畫面。一份有效回覆寫回這兩欄，讓之後重新產出的 `prompts.brief_text()`
+    看得到延續語氣的既有視覺方向（跟既有座標欄同一套「工單記得上一輪」慣例）。"""
+    conn.execute(
+        "UPDATE workbench_brief SET visual_tone = %s, visual_concept = %s, updated_at = now()"
+        " WHERE org_id = %s AND brand_id = %s AND id = %s",
+        (visual_tone, visual_concept, org_id, brand_id, brief_id),
+    )
+    conn.commit()
+
+
 def next_round(conn: _AnyConn, org_id: str, brand_id: str, brief_id: str, part: str) -> int:
     """這個 brief 這個 part 目前最大的 `generation_round` + 1（第一次是 1）。"""
     row = conn.execute(

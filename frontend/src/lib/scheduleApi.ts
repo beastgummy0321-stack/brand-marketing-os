@@ -64,6 +64,9 @@ export interface CampaignTreeField {
 
 export interface CampaignTreeNode {
   name: string;
+  /** ADR 0055 §1：這個節點在活動結構裡的位置路徑（"1.1.1" 這種），身分認的是這個，不是
+   * `name`——票 05 起，排程頁靠它把節點對回 `ScheduleBrief.node_key`。 */
+  node_key: string;
   fields: CampaignTreeField[];
   share: number | null;
   daily_amount: number | null;
@@ -120,43 +123,37 @@ export interface CampaignTreeResult {
   approval: ScheduleApproval | null;
 }
 
-/** 票 01：活動樹每個最深層節點各配一份內容——`label`／`value` 都是後端部門任務檔
- * （`app/departments/creative/ad_creative.md`）的決定，這裡的型別一樣不知道任何具體欄位
- * 叫什麼名字，跟 `CampaignTreeField` 同一個道理。票 T1：`value` 收 `string | string[]`，
- * 後端一律正規化成陣列（`app/schedule/creative.py` `_valid_creative_fields`），這裡不再是
- * 單一字串。 */
-export interface CreativeField {
-  label: string;
-  value: string[];
+/** 票 05（ADR 0068）：活動樹每個最深層節點自動提交的一份工作檯工單摘要——文案／圖片
+ * 提示詞的產出與型別都在 `app.workbench`，這裡只讀 `adopted_output()` 攤平後的形狀
+ * （`app/schedule/state.py` `_copy_summary`／`_image_prompt_summary`）。`status`：
+ * 這份工單自己的狀態（`queued`／`running`／`done`／`failed`／`closed`），或 `"missing"`
+ * ——這個最深層節點還沒有工單（舊樹留下的、或提交失敗）。 */
+export interface ScheduleBriefCopy {
+  is_adopted: boolean;
+  generation_round: number;
+  short: string[];
+  medium: string[];
+  long: string[];
+  headlines: string[];
+  descriptions: string[];
+  visual_tone: "暗調強對比" | "暖調生活" | null;
+  visual_concept: string | null;
+  validation: string[];
 }
 
-/** 票 T1：`CONSTITUTION.md` 規則 5 簽下的七個維度名稱——這則內容產出當下選定的座標，值是
- * 非空字串或 `null`（vocabulary 驗證留給 T1b，這裡的型別不知道每個值合不合法）。 */
-export interface CreativeCoordinates {
-  audience: string | null;
-  pain: string | null;
-  angle: string | null;
-  hook: string | null;
-  proof: string | null;
-  offer: string | null;
-  format: string | null;
+export interface ScheduleBriefImagePrompts {
+  generation_round: number;
+  count: number;
 }
 
-export interface CreativeAd {
-  node: string;
-  coordinates: CreativeCoordinates;
-  fields: CreativeField[];
-  warnings: string[];
-}
-
-export interface CreativeResult {
-  task_id: string;
-  created_at: string;
-  source_tree_task_id: string;
-  ads: CreativeAd[];
-  narrative: string;
-  failure: string | null;
-  running: boolean;
+export interface ScheduleBrief {
+  node_key: string;
+  node_name: string;
+  brief_id: string | null;
+  status: string;
+  last_error: string | null;
+  copy: ScheduleBriefCopy | null;
+  image_prompts: ScheduleBriefImagePrompts | null;
 }
 
 /** 票 T2b（ADR 0053）：檔期——誕生在表單，結算靠使用者按鍵。`settled` 是 `null` 代表
@@ -236,7 +233,7 @@ export interface ScheduleState {
   objectives: ScheduleObjectiveOption[];
   plan: SchedulePlan | null;
   tree: CampaignTreeResult | null;
-  creative: CreativeResult | null;
+  briefs: ScheduleBrief[];
   period: SchedulePeriod | null;
   next_period_suggestion: NextPeriodSuggestion | null;
 }
@@ -408,28 +405,6 @@ export async function revokeScheduleApproval(brandId: string): Promise<ScheduleS
   );
   if (!res.ok) {
     let message = `撤回失敗（狀態碼 ${res.status}）`;
-    try {
-      const data = (await res.json()) as { error?: { message?: string } };
-      message = errorMessageFrom(data, message);
-    } catch {
-      // 回應不是 JSON，用預設訊息。
-    }
-    throw new Error(message);
-  }
-  return (await res.json()) as ScheduleState;
-}
-
-/** 票 01：把已展開的活動樹每個最深層節點各配一份內容——比對規則、儲存位置全部凍結在
- * 後端，這裡只負責打那支端點，回傳整個 `ScheduleState`（跟其他三支端點一樣，`creative`
- * 欄位換新）。 */
-export async function generateCreative(brandId: string): Promise<ScheduleState> {
-  const res = await apiFetch(`/api/schedule/brands/${encodeURIComponent(brandId)}/creative`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({}),
-  });
-  if (!res.ok) {
-    let message = `產出失敗（狀態碼 ${res.status}）`;
     try {
       const data = (await res.json()) as { error?: { message?: string } };
       message = errorMessageFrom(data, message);

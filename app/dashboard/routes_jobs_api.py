@@ -31,13 +31,19 @@ _QUEUE_JOB_KINDS = {
     "intake_question": ("question", "正在準備下一題"),
     "intake_paste_fix": ("paste_fix", "正在請 AI 整理格式"),
     "intake_persona": ("persona", "整理人物誌"),
-    # issue jobs-bell-blind-to-schedule-jobs（2026-09-06 演練）：產品裡最慢的三個工作
-    # （實測出方案 43–53 秒、展開 46–59 秒、產素材 73–110 秒）本來一個都不在這份對照表裡，
-    # 排程頁自己有行內進度，全站這顆鈴鐺對它們是瞎的——按下「產素材」的同時，右上角寫著
-    # 「目前沒有進行中的背景工作」。stage 文字跟排程頁自己那句等待字對齊，不另編一句。
+    # issue jobs-bell-blind-to-schedule-jobs（2026-09-06 演練）：產品裡最慢的工作（實測出
+    # 方案 43–53 秒、展開活動樹 46–59 秒）本來一個都不在這份對照表裡，排程頁自己有行內
+    # 進度，全站這顆鈴鐺對它們是瞎的。stage 文字跟排程頁自己那句等待字對齊，不另編一句。
     "schedule_plan": ("schedule_plan", "出方案中"),
     "schedule_tree": ("schedule_tree", "展開活動樹中"),
-    "schedule_creative": ("schedule_creative", "產素材中"),
+    # 票 05（ADR 0068）：排程樹展開後的內容生成搬進 `app.workbench`——那裡的
+    # `llm_task.task_type` 是 `workbench_copy`／`workbench_image_prompt`／…（procrastinate
+    # 的任務名 `background.workbench_generate` 只是佇列裡的一個名字，不是這張表要比對的
+    # `task_type`），每一種各自一列，都指到同一個鈴鐺 kind：使用者不用分辨背後是哪個 part。
+    "workbench_copy": ("workbench_generate", "素材生成中"),
+    "workbench_image_prompt": ("workbench_generate", "素材生成中"),
+    "workbench_video_script": ("workbench_generate", "素材生成中"),
+    "workbench_free": ("workbench_generate", "素材生成中"),
 }
 
 
@@ -61,7 +67,7 @@ def _queue_active_jobs(conn) -> list[dict]:
             action_url = f"/app/brands/{brand_id}/library"
         elif kind in ("scan", "question", "paste_fix"):
             action_url = f"/app/brands/{brand_id}/intake"
-        elif kind in ("schedule_plan", "schedule_tree", "schedule_creative"):
+        elif kind in ("schedule_plan", "schedule_tree", "workbench_generate"):
             action_url = f"/app/brands/{brand_id}/schedule"
         else:
             action_url = f"/app/brands/{brand_id}/report"

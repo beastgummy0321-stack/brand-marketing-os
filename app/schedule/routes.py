@@ -9,10 +9,9 @@ ADR 0028／0029／0032／0033：部門是 repo 裡的一個資料夾
 這裡不重寫第二個。money 由 `plan.py` 的純函數算，代理只給比例。票 10-feedback-entries
 （ADR 0037）：拒絕一批方案＝把每條意見寫成 `rule` 表的一列（呼叫既有的
 `bi_repo.create_rule()`，不自己下 SQL），再用最新一次成功的 `schedule_plan` 凍結參數重跑，
-沒有第二條把回饋文字塞進 prompt 的路徑。票 01（`.scratch/creative-slice/issues/`）：
-`app/departments/creative/ad_creative.md` 是創意部門的第一個任務檔（ADR 0028 加的第二個
-部門資料夾），把展開好的活動樹每個最深層節點各配一份內容，`task_type = "schedule_creative"`
-——外殼一樣不解析這份任務檔，也不認得任何一個具體欄位名稱（見 `app/schedule/creative.py`）。
+沒有第二條把回饋文字塞進 prompt 的路徑。票 05（ADR 0068）：展開活動樹成功之後，每個最深層
+節點各配一份內容改由 `app.workbench` 負責——`schedule_tree()` 成功時自己提交工作檯工單
+（見 `app/schedule/jobs.py`），這支模組不再有自己的「產素材」端點。
 
 平台／行銷目標不是外殼的業務詞（CONTEXT.md：外殼只認得檔期／核准／預算上限），一律從
 `channel_catalogue.json` 這份資料檔讀出來，不寫死成 Python 常數或畫面 label（票 08；
@@ -180,7 +179,6 @@ def _validate_plan_count(conn, brand_id: str, plan_count: int) -> None:
 
 NO_PLAN_TO_EXPAND_MESSAGE = "還沒有成功產生的方案可以展開，請先完成排程。"
 PLAN_INDEX_OUT_OF_RANGE_MESSAGE = "找不到這個方案編號，請重新選擇。"
-NO_TREE_TO_GENERATE_CREATIVE_MESSAGE = "還沒有成功展開的活動樹可以產出內容，請先展開活動樹。"
 
 
 def _run_tree(conn, brand_id: str, org_id: str, body: "TreeRequest") -> dict:
@@ -211,35 +209,6 @@ def _run_tree(conn, brand_id: str, org_id: str, body: "TreeRequest") -> dict:
         lock=f"{state.TREE_TASK_TYPE}:{brand_id}",
         brand_id=brand_id, plan_index=body.plan_index, plan_task_id=plan_row["id"],
         campaign_period_id=period["id"] if period else None,
-    ):
-        raise _already_running_error()
-    return state._brand_response(conn, brand_id, org_id)
-
-
-def _run_creative(conn, brand_id: str, org_id: str) -> dict:
-    """票 01：把已展開的活動樹每個最深層節點各配一份內容。票 05-1：這裡只做驗證——重讀
-    最新一次成功的 `schedule_tree` 那列，確認它至少有一個最深層節點；找不到成功的樹、或
-    樹沒有任何最深層節點，都在 enqueue 之前回人話 400（比照 `_run_tree` 的
-    「先驗證、後花錢」次序）。真正產內容、把來源樹的 id 凍結進 `context_scope_json`
-    （frozen decision 5）在 `app/schedule/jobs.py` 的 `schedule_creative()`——`tree_row["id"]`
-    同樣在這裡釘進 job 參數，理由見 `_run_tree()` 的 fix round 1 註解。"""
-    tree_row = state._latest_task_row(conn, brand_id, state.TREE_TASK_TYPE)
-    if tree_row is None or tree_row["status"] != "succeeded":
-        raise web.ApiError(400, "no_tree", NO_TREE_TO_GENERATE_CREATIVE_MESSAGE)
-    tree = binding_mod.tree_with_bindings(conn, tree_row, org_id, brand_id)
-    ad_nodes = state._leaf_ad_nodes(tree["nodes"]) if tree["failure"] is None else []
-    if not ad_nodes:
-        raise web.ApiError(400, "no_tree", NO_TREE_TO_GENERATE_CREATIVE_MESSAGE)
-
-    gateway.check_spend_cap(conn, org_id=org_id)
-    if state._display_task_row(conn, brand_id, state.CREATIVE_TASK_TYPE)[1]:
-        raise _already_running_error()
-    current_period = period_repo.get_latest_period(conn, org_id, brand_id)
-    if not background_enqueue(
-        f"background.{state.CREATIVE_TASK_TYPE}", org_id=org_id,
-        lock=f"{state.CREATIVE_TASK_TYPE}:{brand_id}", brand_id=brand_id,
-        tree_task_id=tree_row["id"],
-        campaign_period_id=current_period["id"] if current_period else None,
     ):
         raise _already_running_error()
     return state._brand_response(conn, brand_id, org_id)
@@ -484,13 +453,6 @@ def create_reject(request: Request, brand_id: str, body: RejectRequest):
     return _run_reject(web.conn, brand_id, actor, body)
 
 
-@router.post("/brands/{brand_id}/creative")
-def create_creative(request: Request, brand_id: str):
-    actor = web.require_actor(request)
-    web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
-    return _run_creative(web.conn, brand_id, actor.org_id)
-
-
 @router.post("/brands/{brand_id}/periods/{period_id}/settle")
 def settle_period(request: Request, brand_id: str, period_id: str):
     actor = web.require_actor(request)
@@ -508,7 +470,7 @@ def get_creative_performance(request: Request, brand_id: str):
 
 
 def _run_diagnosis(conn, brand_id: str, org_id: str) -> dict:
-    """票 01（T6c）：跑一次成效判讀。比照既有 `_run_creative` 的形狀——這裡只做「還有沒有
+    """票 01（T6c）：跑一次成效判讀。比照既有其他生成端點的形狀——這裡只做「還有沒有
     在跑」的檢查＋`gateway.check_spend_cap()`＋enqueue，真正壓縮資料、打三次代理、收斂在
     `app/schedule/jobs.py` 的 `schedule_diagnosis()`（worker 執行）。沒有「有沒有東西可以
     診斷」這道前置驗證：花費為零、七維全部沒有座標可對，都是誠實的判讀結果之一，不是擋在

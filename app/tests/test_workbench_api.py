@@ -234,6 +234,8 @@ class RoundTripAdoptionTest(_WorkbenchApiTestBase):
             "long": [_cjk(950) for _ in range(2)],
             "headlines": [_cjk(10) for _ in range(5)],
             "descriptions": [_cjk(15) for _ in range(5)],
+            # 票 05（ADR 0068 §5 amendment）：文案回覆現在也帶視覺方向。
+            "visual_tone": "暖調生活", "visual_concept": "測試視覺概念",
             "warnings": [],
         }, ensure_ascii=False)
 

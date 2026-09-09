@@ -37,7 +37,6 @@
 | 影片腳本生成 | `creative-matrix.md`、`copywriting.md` |
 | 成效判讀／下期草案 | `ab-testing.md`、`ads-core.md`、`ads-commerce.md`（需要：有商品） |
 | 期中檢查點 | `ab-testing.md`（禁判勝負節） |
-| 廣告內容生成 | `creative-matrix.md`、`meta-format-specs.md` |
 | 素材工作檯文案 | `copywriting.md`、`humanizer-zh-tw.md`、`customer-voice.md`、`meta-format-specs.md` |
 | 素材工作檯圖片提示詞 | `creative-matrix.md`、`image-prompt-template.md` |
 | 素材工作檯影片腳本 | `creative-matrix.md`、`copywriting.md`、`humanizer-zh-tw.md` |

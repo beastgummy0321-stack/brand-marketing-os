@@ -134,7 +134,6 @@ EFFORT_SUPPORTED_MODELS = {"claude-opus-5", "claude-sonnet-5", "claude-fable-5"}
 TASK_TYPE_LABELS = {
     "schedule_plan": "檔期規劃（出方案）",
     "schedule_tree": "檔期規劃（展開活動樹，票 09）",
-    "schedule_creative": "檔期規劃（產出節點內容，票 01）",
     "workbench_copy": "素材工作檯：文案",
     "workbench_image_prompt": "素材工作檯：圖片提示詞",
     "workbench_video_script": "素材工作檯：影片腳本",
@@ -156,7 +155,6 @@ TASK_DEFAULTS = {
     # 規劃：較高思考
     "schedule_plan": {"model": None, "thinking": "high"},
     "schedule_tree": {"model": None, "thinking": "high"},
-    "schedule_creative": {"model": None, "thinking": "high"},
     # 素材工作檯：文案較高思考，其餘三個中等思考（票 workbench/02，ADR 0068 §9）
     "workbench_copy": {"model": None, "thinking": "high"},
     "workbench_image_prompt": {"model": None, "thinking": "medium"},

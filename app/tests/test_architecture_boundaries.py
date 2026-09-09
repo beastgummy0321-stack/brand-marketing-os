@@ -742,19 +742,21 @@ class CoordinateDimensionSyncTest(unittest.TestCase):
             f"  python: {python_keys}\n  coordinatesApi.ts: {coordinates_api_keys}",
         )
         # 票 past-ads/08（2026-09-09，主對話台裁決）：CampaignTree.tsx 不再有自己那份
-        # COORDINATE_LABELS——它從 coordinatesApi 讀 COORDINATE_DIMENSIONS（外殼不擁有創意
-        # 詞彙，只顯示資料層給的字；`CampaignTreeVocabularyGateTest` 掃的是這個元件自己的文字）。
-        # 三份變兩份，這道閘門守的東西沒變：第三份不准悄悄長回來，而且來源必須是那個 import。
+        # COORDINATE_LABELS——七維標籤只准有一個前端來源（coordinatesApi.ts 的
+        # COORDINATE_DIMENSIONS）。這條檢查仍然有效：檔案不准再長出自己的座標標籤字典。
+        #
+        # 票 05（ADR 0068，2026-09-09）amendment：per-ad 座標畫面（曾經讀 `COORDINATE_
+        # DIMENSIONS` 逐格印出）搬去素材工作檯——`ScheduleBrief.copy` 這個新形狀本來就不帶
+        # 座標值（app/schedule/state.py `_copy_summary`），CampaignTree.tsx 因此不再需要、
+        # 也不再 import 那個常數；留著會是一個沒有使用者的 import（tsc/eslint 會紅）。原本
+        # 「必須 import COORDINATE_DIMENSIONS」那條斷言跟著這個畫面一起退休，上面「不准自己
+        # 定義 COORDINATE_LABELS」那條閘門原樣保留（不管座標畫在哪裡，都不准另開一份詞彙）。
         tree_text = (REPO_ROOT / "frontend/src/components/schedule/CampaignTree.tsx").read_text(
             encoding="utf-8")
         self.assertEqual(
             len(list(_TS_COORDINATE_LABELS_BLOCK.finditer(tree_text))), 0,
             "CampaignTree.tsx 又長出自己的 COORDINATE_LABELS——七維標籤只准有一個前端來源"
             "（coordinatesApi.ts 的 COORDINATE_DIMENSIONS，票 past-ads/08）。",
-        )
-        self.assertIn(
-            'import { COORDINATE_DIMENSIONS } from "@/lib/coordinatesApi"', tree_text,
-            "CampaignTree.tsx 必須從 @/lib/coordinatesApi 讀 COORDINATE_DIMENSIONS（票 past-ads/08）。",
         )
 
 
@@ -1339,7 +1341,19 @@ class CoordinateDimensionSyncTest(unittest.TestCase):
 # untouched. 386 -> 412 (+26), plus this reason comment's and the
 # `KNOWN_MODULE_SIZES["app/workbench"]` reason comment's own line-count deltas — measured
 # (`_line_totals()`), no slack.
-TEST_LINES_CEILING = 23688  # Previous: 23638 --
+# ticket workbench/05 (schedule handoff, ADR 0068 secs 2/5): deleted BuildCreativeTest,
+# CreativeApiContractTest and CreativePersistenceTest's three cases (the module they tested
+# retired), rewrote them as one CreativeCandidateSyncTest case plus one new queued-state case
+# in QueuedGenerationTest; this table's own required edits (KNOWN_MODULE_SIZES app/schedule and
+# app/llm rows lowered, app/workbench raised with a reason, MODULES_WITHOUT_CONTRACT's dashboard
+# line dropped, CoordinateDimensionSyncTest's now-obsolete import assertion retired) also net
+# into this count -- measured (`_line_totals()`), no slack. Net down.
+# ticket workbench/05 fix round (2026-09-09 reject, CreativeCandidateSyncTest new case): one
+# case (`test_bad_visual_tone_in_body_json_does_not_crash_the_sync`) plus the `_write_copy_round`
+# helper's new `visual_tone` parameter, plus this table's own required edits (KNOWN_MODULE_SIZES
+# app/schedule and app/workbench rows' reason comments) -- measured (`_line_totals()`), no slack.
+# 23314 -> 23360.
+TEST_LINES_CEILING = 23360  # Previous: 23314 --
 # ticket workbench/02 round 1: test_workbench.py 338 lines (new file, done-check 2's five
 # cases) plus this table's own required edits (LAYER_ORDER entry, KNOWN_MODULE_SIZES
 # app/workbench row and the app row's reason-comment update) — measured (`_line_totals()`),
@@ -1764,7 +1778,10 @@ KNOWN_MODULE_SIZES = {
                           # 缺陷 1：intake_question 改走強制工具結構化輸出，新增
                           # _QUESTION_TOOL／_CHOICE_SCHEMA schema（散文裡的 JSON 格式
                           # 說明同時刪掉，仍淨增）。前一次是 3548
-    "app/llm": 1498,  # 2026-09-06 issue adopted-advice-can-invert：`context_compiler.py` 把規則
+    "app/llm": 1496,  # 票 05（workbench handoff）：`providers.py` 的 `TASK_TYPE_LABELS`／
+                  # `TASK_DEFAULTS` 各刪一行——排程模組退休的那個內容生成 task_type（內容生成
+                  # 搬進 app.workbench），1498→1496。量到的數字，down 永遠允許。前一次是
+                  # 1498——2026-09-06 issue adopted-advice-can-invert：`context_compiler.py` 把規則
                   # 拆成【限制】與【本期要測的】兩段（含理由註解），1482→1498。量到的數字，
                   # 不留餘裕。前一次是 1482——票 S2：providers.py 的 TASK_TYPE_LABELS／TASK_DEFAULTS 各補一行
                        # "onboarding_read"（跟既有三個排程任務同一組 thinking="high"，理由見
@@ -1873,7 +1890,20 @@ KNOWN_MODULE_SIZES = {
     "app/orders": 1423,  # 票 12：channel_revenue 一張表取代三張（刪掉藥局專屬那一整組
                           # 之後仍淨增）——官網帳本寫入路徑、channel_revenue_summary()、
                           # 通用手動登錄（含「官網不能手動登錄」那道錢的守門）
-    "app/schedule": 5348,  # ticket past-ads/09 (docs/issues/past-ads/09-creative-retry.md,
+    "app/schedule": 5111,  # ticket workbench/05 fix round (2026-09-09 reject): `state.py` gains
+                           # the module-level `VISUAL_TONE_VALUES` constant (ADR 0047, literal
+                           # copy, no workbench import) and a defensive guard in
+                           # `_sync_creative_candidate` that falls a bad `visual_tone` back to
+                           # `None` before `persist_creative_result`. 5099 -> 5111 (+12), measured.
+                           # Previous was 5099 -- ticket workbench/05 (ADR 0068 §2/§5): the third generation task
+                           # body this package used to run, its two route-layer functions, and
+                           # the reply-parsing half of `creative.py` all retire (content
+                           # generation moves to `app.workbench`); `schedule_tree()` gains a
+                           # short per-leaf brief submission, `state.py` gains the brief-sync
+                           # read in their place, and `repository.py`'s `persist_creative_result`
+                           # docstring is corrected to name its new caller. Net -249, measured.
+                           # Down is always allowed.
+                           # Previous was 5348 -- ticket past-ads/09 (docs/issues/past-ads/09-creative-retry.md,
                            # 2026-09-09): 5285 -> 5348 (+63), measured. `history.py`:
                            # `CREATIVE_RETRY_AFTER` constant, `_needs_creative_fetch()` gains the
                            # 24h-stale-and-both-columns-null retry read, `clear_creative_cache()`.
@@ -2258,7 +2288,17 @@ KNOWN_MODULE_SIZES = {
                           # 讀數字）＋_fill_node_spend()／_current_month_window()（把票 05
                           # 的當月花費補到綁定節點上）＋tree.py 三個新欄位。前一次是票
                           # 10-feedback-entries 的 POST .../reject（784）
-    "app/workbench": 1390,  # 票 workbench/04 walk round 2（`docs/issues/workbench/
+    "app/workbench": 1465,  # 票 05 fix round（2026-09-09 reject）：`jobs.py` 把 sanitise 過的
+                            # `visual_tone` 也寫回 `body_json`（`update_brief_visual` 那份跟
+                            # `body_json` 那份原本各存各的、一份乾淨一份髒），一份真身。
+                            # 1460→1465（+5）。量到的數字，不留餘裕。前一次是票 05
+                            # （schedule handoff，ADR 0068 §5 amendment）：文案回覆多帶
+                            # `visual_tone`／`visual_concept`——`validate.py` 補兩條驗證＋一個
+                            # 複製來的兩值常數（+18）；`repository.py` 補 `update_brief_visual`
+                            # （+11）；`jobs.py` 補 `_compile_brand_context`（品牌上下文照方案
+                            # 全部產品組，不只一個）＋寫回這兩欄（+41）。1390→1460（+70）。
+                            # 量到的數字，不留餘裕。前一次是票 workbench/04 walk round 2
+                            # （`docs/issues/workbench/
                             # 04-workbench-screen.md` ## Walk result, round 2 的
                             # amendment）：`jobs.py` 修正輪 `_fix_call` 帶工單段／每個失敗
                             # 欄位的原值／精確回覆形狀（新增 `_replacement_ok`／
@@ -2362,8 +2402,9 @@ ALL_MODULE_DIRS = {
 
 MODULES_WITHOUT_CONTRACT = {
     # 票 09 前置：intake 出列（docs/contracts/intake.md，2026-09-05）——動到某模組的
-    # route C 票先補那個模組的頁。這張清單只准變短。
-    "dashboard", "departments", "llm",
+    # route C 票先補那個模組的頁。這張清單只准變短。票 05（workbench）：dashboard 出列
+    # （docs/contracts/dashboard.md，2026-09-09，這張票自己動到它的 jobs 表）。
+    "departments", "llm",
     "methodology", "orders", "shared", "storage", "tools",
 }
 

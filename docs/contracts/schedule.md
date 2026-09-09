@@ -84,7 +84,10 @@ period. `app.orders` imports only `brand_intelligence`, `core` and `shared`, so 
 cycle, and `app.dashboard` already depends on it the same way. Ticket 01 (T6c) reads a second
 function off the same already-allowed module, `sku_margins()`, to compute this month's actual
 gross margin rate for the diagnosis break-even line (`app/schedule/diagnosis.py`) — same
-read-only direction, no new edge in the layer graph.
+read-only direction, no new edge in the layer graph. Ticket 05 (ADR 0068 §2) adds `app.workbench`
+— entry point only (`submit_brief`, `briefs_for_source`, `adopted_output`), one-way: schedule
+calls workbench, workbench never calls back. `LAYER_ORDER` already places `app.workbench` before
+`app.schedule` (ticket workbench/02), so this closes no cycle.
 
 ## Decisions in force
 
@@ -170,6 +173,10 @@ Module-local and reversible, decided here rather than in an ADR:
   spend split was Meta's optimiser choice, not the user's experiment (`ab-testing.md:72-75`);
   the section sits after `reminders`/`【上一期】` and before `role_text(lens)` — last still wins
   (the "Position in the prompt decides" measurement below).
+- **Retired 2026-09-09 (ticket workbench/05)**: the matching problem below no longer exists —
+  each schedule-node brief is submitted for exactly one node (`source_ref.node_key`), never a
+  batch reply the shell has to zip back onto a tree. Left here as history, not as a rule anything
+  reads today.
 - **How a creative reply is matched to a tree node** — ticket T3d, settled by the user; **amended
   2026-09-04, again by the user** (overturning their own 2026-09-03 "leave it until it
   bites"; the ticket is gone, this line is the rule). The agent now also echoes

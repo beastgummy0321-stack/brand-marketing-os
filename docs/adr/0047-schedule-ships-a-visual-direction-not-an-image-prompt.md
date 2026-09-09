@@ -1,12 +1,22 @@
 ---
 id: 0047
-decision: The schedule module emits one visual direction per ad node, never a finished image prompt; prompts belong to assets.
-applies-to: [app/methodology/, app/departments/creative/, app/schedule/]
+decision: One visual direction per ad node travels with its copy from the workbench; a finished image prompt exists only there.
+applies-to: [app/methodology/, app/workbench/, app/schedule/]
 supersedes: none
 status: in-force
 ---
 
 # The schedule module ships a visual direction, not an image prompt
+
+**Amended 2026-09-09 (ticket workbench/05, ADR 0068 §5).** The producer of the visual direction
+moved: it used to be `schedule_creative`'s own generation call in `app/schedule/`, and is now the
+workbench's copy call (`app/departments/workbench/copy.md`), which returns `visual_tone` and
+`visual_concept` beside the copy text — the writer who chose the angle names the picture. The
+rule this ADR states survives unchanged with its producer moved: still exactly one direction per
+node, still one to two sentences, still never a finished prompt outside the asset module. This
+ADR's own gate test (`Adr0047VisualDirectionGateTest`) keeps scanning `app/methodology/` and
+`app/departments/` for more than one image direction per node; only its assertions naming the
+now-deleted `ad_creative.md` retired with that file.
 
 2026-09-01, ticket T1a. Module-boundary decision (constitution rule 2). Amends
 `app/methodology/meta-format-specs.md` and `app/methodology/creative-matrix.md` §2.
