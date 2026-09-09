@@ -53,7 +53,9 @@ Route errors are `web.ApiError(status, code, message)`: `brief_unknown` 404, `pa
 `count_out_of_range` 400 (image prompts: 1–30), `brief_closed` 409 on run/adopt of a closed brief,
 `round_running` 409 when that part already has a running round. Generation failures are not
 raised: they land on the `llm_task` row and the output row's absence; the brief's `status` reads
-`failed` with the task's error text.
+`failed` with the task's error text. A brief with no part to run is created `done` with no
+output (`kind='image_prompt'` submitted without `image_prompt_count`, ADR 0068 §7's no-default
+rule) — it is idle, not waiting on a queue.
 
 Ticket 03 adds (`POST /briefs`'s own validation, ahead of the generic ones above):
 `status_unknown` 400 (`?status=` on the list route is not `active`/`closed`/`all`), `kind_unknown`

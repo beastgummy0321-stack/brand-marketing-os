@@ -56,6 +56,11 @@ test("走完切片後活下來的主要畫面", async ({ page }) => {
   await expect(page).toHaveURL(new RegExp(`/app/brands/${brandId}/schedule$`));
   await expect(page.getByRole("heading", { name: "檔期規劃", exact: true })).toBeVisible();
 
+  // --- 素材工作檯（票 workbench/04，ADR 0068）--------------------------------
+  await page.goto(`/app/brands/${brandId}/workbench`);
+  await expect(page.getByRole("heading", { name: "素材工作檯", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "新工單" })).toBeVisible();
+
   // --- 產品 -----------------------------------------------------------------
   await page.goto(`/app/brands/${brandId}/products`);
   await expect(page.getByRole("heading", { name: "產品", exact: true })).toBeVisible();

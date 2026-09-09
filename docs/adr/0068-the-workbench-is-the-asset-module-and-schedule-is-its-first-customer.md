@@ -1,7 +1,7 @@
 ---
 id: 0068
 decision: The workbench module owns briefs and outputs; schedule submits briefs and reads adopted outputs, never the reverse.
-applies-to: [app/schedule/, supabase/migrations/, frontend/src/components/schedule/, app/methodology/, app/departments/, app/workbench/, app/departments/workbench/]
+applies-to: [app/schedule/, supabase/migrations/, frontend/src/components/schedule/, app/methodology/, app/departments/, app/workbench/, app/departments/workbench/, frontend/src/components/workbench/]
 supersedes: none
 status: in-force
 ---

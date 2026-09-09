@@ -140,7 +140,7 @@ Tablet and phone are out of scope; do not add media queries below 1024.
 │   ├── Logo + 行銷駕駛艙 wordmark
 │   ├── Brand switcher card: avatar initials · brand name · 目前品牌 · chevron
 │   ├── 工作區:    品牌總覽 · 收件匣 (count badge)
-│   ├── 品牌經營:  經營概況 · 檔期規劃 · 訂單與顧客
+│   ├── 品牌經營:  經營概況 · 檔期規劃 · 素材工作檯 · 訂單與顧客
 │   ├── 品牌資料:  產品 · 品牌智庫 · 顧問分析報告
 │   └── footer:    設定 · user card (avatar · role · chevron → org menu)
 └── .app-workspace
@@ -163,7 +163,7 @@ Navigation reads 工作區 → 品牌 → 功能:
   through TanStack Query with cache keys that include org and brand, so a switch never shows the previous
   object's data.
 - Breadcrumb inside the page (`nav[aria-label="麵包屑"]`) is hidden; the topbar carries 當前位置.
-- The 14 routes and the `/app` basename are fixed; all of the above is done with in-page tabs and layout.
+- The 15 routes (素材工作檯 added 2026-09-09, ADR 0068) and the `/app` basename are fixed; all of the above is done with in-page tabs and layout.
 
 ---
 
@@ -230,6 +230,7 @@ A long flow is a sequence of stages, each one screen, never one page that grows:
 | 品牌總覽 (跨品牌) | one brand: its own layout; many brands: health, revenue and next step compared; brand entry and task entry separated |
 | 收件匣 | compact list + detail pane; 待處理／已處理 toggle; brand and severity legible at a glance |
 | 品牌智庫 | workspace split: vertical categories with counts, list in the middle, detail on the right; never two rows of horizontal tabs. 官方素材 browses thumbnails; 事實／規則／宣稱 are lists |
+| 素材工作檯 | workspace split: brief list left (進行中／已關閉／全部), brief detail right — copy tabs 短／中／長 with one fixed line each, image prompts with the user's count and the 1.5× grey line, rounds, 採用；新工單 in the side panel |
 | 產品清單 | comparison table; product name, 待確認 count and cost status emphasised |
 | 產品詳情 | product title + the same `PageTabs`; 再次調研 behind an explicit action |
 | 訂單與顧客 | tabs 概況・訂單・商品毛利・通路營收・口徑紀錄 |
@@ -312,7 +313,7 @@ range; appearance is never added ahead of data.
 - Terms keep their industry name (ROAS, 曝光, 點擊率); the one-line analogy for a beginner lives in
   the `?` tooltip, not in the label. Beginner-friendly means the conventional word, not a sentence
   explaining the button.
-- Status words: 處理中 · 完成 · 失敗 · 未追蹤 · 累積中 · 待補登 · 待裁決. Sample data: 示意資料.
+- Status words: 處理中 · 完成 · 失敗 · 未追蹤 · 累積中 · 待補登 · 待裁決 · 待產出. Sample data: 示意資料.
 - Traditional Chinese throughout; Latin only for units and product names (Meta Ads, ROAS, NT$).
 
 ---

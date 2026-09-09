@@ -100,6 +100,15 @@ def check_copy(data, vocabulary: dict) -> list:
     return results
 
 
+def fixed_block_chars(fixed: dict) -> int:
+    """固定段（含外殼補的 `prompts.SUBJECT_PREFIX`、模板本身的標籤文字如「場景：」）在渲染
+    結果裡占幾字——修正輪（`jobs._fix_call`）用這個數字告訴模型「你要寫的變動段」該落在
+    `PROMPT_MIN/MAX` 扣掉這個數字之後的範圍，不讓模型自己猜或用整段 200～250 字誤導。拿
+    `render_image_prompt` 對全空的變動段跑一次算出來——模板只有這一份，這裡不重刻。"""
+    blank = {k: "" for k in VARIABLE_KEYS}
+    return _char_len(render_image_prompt(fixed, blank))
+
+
 def check_image_prompts(data, count: int) -> tuple:
     """回傳 `(結果清單, 渲染好的提示詞清單)`——跟 `scripts/workbench_probe.py::
     validate_image_prompts` 同一套檢查邏輯（未改行為：字數帶＋固定欄位逐字出現），結果

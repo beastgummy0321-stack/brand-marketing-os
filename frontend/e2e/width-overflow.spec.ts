@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-/** 殼寬回歸閘門（票 u2-fluid-shell-to-1920，ADR 0051 rule 4／Consequences）：14 條路由
+/** 殼寬回歸閘門（票 u2-fluid-shell-to-1920，ADR 0051 rule 4／Consequences）：15 條路由
  * 在 1280 寬時，殼不能橫向溢出視窗——這是 ADR 0051 量過的那件事（固定 1440px 殼在
  * 1280 時把頂欄控制項推出視窗外）改成流體殼之後，不能再退回去。
  *
@@ -17,12 +17,12 @@ import { expect, test } from "@playwright/test";
  * AI），逐路由 `goto` 量測，不逐頁斷言畫面內容——這支測試只守寬度，內容行為歸
  * `smoke.spec.ts`。
  *
- * `/accept-invite` 不在這 13 條路由裡：它要另一個角色先發邀請信才進得去，
+ * `/accept-invite` 不在這 14 條路由裡：它要另一個角色先發邀請信才進得去，
  * `smoke.spec.ts` 也沒有這條路徑可以免費重現。`/login` 因為不需要登入即可到達，量到了。
- * 14 條路由（`App.tsx`）扣掉 `/accept-invite`，共測 13 條。 */
+ * 15 條路由（`App.tsx`）扣掉 `/accept-invite`，共測 14 條。 */
 test.use({ viewport: { width: 1280, height: 800 } });
 
-test("14 條路由（扣 /accept-invite）在 1280 寬不橫向溢出", async ({ page }) => {
+test("15 條路由（扣 /accept-invite）在 1280 寬不橫向溢出", async ({ page }) => {
   const stamp = Date.now();
   const email = `width-${stamp}@example.com`;
   const password = `width-pw-${stamp}`;
@@ -105,6 +105,10 @@ test("14 條路由（扣 /accept-invite）在 1280 寬不橫向溢出", async ({
   // --- /brands/:brandId/schedule ------------------------------------------------
   await page.goto(`/app/brands/${brandId}/schedule`);
   await assertNoOverflow("/brands/:brandId/schedule");
+
+  // --- /brands/:brandId/workbench（票 workbench/04，ADR 0068）---------------------
+  await page.goto(`/app/brands/${brandId}/workbench`);
+  await assertNoOverflow("/brands/:brandId/workbench");
 
   // --- /inbox -------------------------------------------------------------------
   await page.goto("/app/inbox");

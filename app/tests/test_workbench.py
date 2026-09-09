@@ -189,19 +189,30 @@ class ImagePromptFixRoundTest(_WorkbenchTestBase):
         # `on_image_texts`（沒有 copy 輸出可以接）——`image_prompt_count` 本身的意思沒變。
         brief_id = self._submit(
             kind="image_prompt",
-            request={"image_prompt_count": 3, "on_image_texts": ["一杯搞定早餐"]},
+            request={"image_prompt_count": 4, "on_image_texts": ["一杯搞定早餐"]},
         )
 
+        # 第 1／4 則是票 workbench/04 walk round 2 amendment 的新案例（原文點名
+        # `prompts[1]` 那個型別守門案例），兩個都是「真實資料缺陷」（不靠渲染 mock，換幾次
+        # 都不會自己好）：第 1 則字數帶本身超標，第 4 則整個物件缺一個鍵。第 2 則沿用原本的
+        # 案例（固定段缺欄位，靠渲染 mock 只咬第一次渲染）。
+        item1_initial = _image_variable(1, environment=LONG_ENVIRONMENT)
+        item4_initial = {k: v for k, v in _image_variable(4).items() if k != "authenticity"}
         initial_reply = json.dumps({
             "fixed": IMAGE_FIXED,
-            "prompts": [_image_variable(1), _image_variable(2), _image_variable(3)],
+            "prompts": [item1_initial, _image_variable(2), _image_variable(3), item4_initial],
             "warnings": [],
         }, ensure_ascii=False)
-        # 修正輪回覆：第 2 則的變動段整個換掉，換成一個真的超過 250 字的版本——證明「修正過
-        # 還是不合格」時老實印 ❌，而不是被吞掉或再問第三次。
+        # 修正輪回覆：第 1 則回一個型別不對的字串（票 workbench/04 walk round 2 那次真實壞掉
+        # 的樣子：修正輪的回覆把物件換成一段散文）——型別守門要讓它被安靜跳過，原本超字的
+        # 物件原封不動留著、依舊 ❌。第 2 則（沿用原案例）整個換掉、換成一個真的超過 250 字
+        # 的版本——證明「修正過還是不合格」時老實印 ❌，不再問第三次。第 4 則回一個型別、鍵
+        # 都合格的物件（補回被拿掉的鍵）——套用後應該轉 ✅。
         fix_reply = json.dumps({
             "replacements": [
+                {"path": "prompts[1]", "value": "一段模型亂寫的散文，不是原本要的物件形狀"},
                 {"path": "prompts[2]", "value": _image_variable(2, environment=LONG_ENVIRONMENT)},
+                {"path": "prompts[4]", "value": _image_variable(4)},
             ],
         }, ensure_ascii=False)
         provider = _SequenceProvider([initial_reply, fix_reply])
@@ -229,10 +240,15 @@ class ImagePromptFixRoundTest(_WorkbenchTestBase):
 
         self.assertEqual(len(provider.calls), 2, "只准問一次修正，不准第三通")
         fix_prompt = provider.calls[1]["messages"][0]["content"]
+        self.assertIn("prompts[1]", fix_prompt)
         self.assertIn("prompts[2]", fix_prompt)
-        self.assertNotIn("prompts[1]", fix_prompt)
+        self.assertIn("prompts[4]", fix_prompt)
         self.assertNotIn("prompts[3]", fix_prompt)
         self.assertNotIn("WORKBENCH-IMAGE-PROMPT-TASK-V1", fix_prompt)  # 不重貼整份部門任務檔
+        self.assertIn("## 這張工單", fix_prompt)  # 工單段重貼一次：每通呼叫都是無狀態的
+        self.assertIn(json.dumps(item1_initial, ensure_ascii=False), fix_prompt)  # 原值原文
+        self.assertIn(json.dumps(item4_initial, ensure_ascii=False), fix_prompt)  # 原值原文
+        self.assertIn("回一個物件，鍵與原值相同", fix_prompt)  # 精確回覆形狀，數字用程式算
 
         brief = workbench_repo.get_brief(web.conn, self.org_id, self.brand_id, brief_id)
         self.assertEqual(brief["status"], "done")
@@ -240,12 +256,22 @@ class ImagePromptFixRoundTest(_WorkbenchTestBase):
         rows = self._outputs(brief_id, "image_prompt")
         self.assertEqual(len(rows), 1)
         validation = rows[0]["body_json"]["validation"]
-        line2 = next(line for line in validation if line.split("：", 1)[0].endswith("prompts[2]"))
+
+        def _line(n: int) -> str:
+            return next(
+                line for line in validation if line.split("：", 1)[0].endswith(f"prompts[{n}]")
+            )
+
+        line1 = _line(1)
+        self.assertTrue(line1.startswith("❌"), line1)
+        # 型別不對被安靜跳過：原本超字的物件原封不動，問題描述還是原本那句，不是換成一句
+        # 「缺欄位」或別的——這行紅了就代表型別守門被拿掉、字串真的蓋過了原本的物件。
+        self.assertIn("超出 200～250 字範圍", line1)
+        line2 = _line(2)
         self.assertTrue(line2.startswith("❌"), line2)
-        line1 = next(line for line in validation if line.split("：", 1)[0].endswith("prompts[1]"))
-        self.assertTrue(line1.startswith("✅"), line1)
-        line3 = next(line for line in validation if line.split("：", 1)[0].endswith("prompts[3]"))
-        self.assertTrue(line3.startswith("✅"), line3)
+        self.assertTrue(_line(3).startswith("✅"), _line(3))
+        line4 = _line(4)
+        self.assertTrue(line4.startswith("✅"), line4)  # 型別、鍵都合格，套用後轉綠
 
 
 # -- 案例 4：第二輪寫 generation_round=2；採用第一輪只標到那一列；adopted_output() 讀回 ---
@@ -344,6 +370,9 @@ class SourceIsolationTest(_WorkbenchTestBase):
         self.assertEqual(len(found), 1)
         self.assertEqual(found[0]["brand_id"], self.brand_id)
         self.assertEqual(found[0]["org_id"], self.org_id)
+        # 沒給 image_prompt_count -> parts=[] -> 沒有東西在排隊，brief 直接是 done（票 04
+        # amendment 第 1 點；repository.py `submit_brief()` 不再一律寫 'queued'）。
+        self.assertEqual(found[0]["status"], "done")
 
 
 # -- 案例 6：product_id 指到別的組織 -> submit_brief 在 INSERT 之前就炸，沒有殘留列 --------

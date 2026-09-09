@@ -13,6 +13,7 @@ import {
   Plus,
   Settings,
   Users,
+  Wand2,
 } from "lucide-react";
 import { useWorkspace } from "./WorkspaceContext";
 import { Logo } from "./Logo";
@@ -29,6 +30,7 @@ import { cn } from "@/lib/utils";
 const BRAND_NAV = [
   { label: "經營概況", suffix: "", icon: BarChart3 },
   { label: "檔期規劃", suffix: "/schedule", icon: CalendarDays },
+  { label: "素材工作檯", suffix: "/workbench", icon: Wand2 },
   { label: "訂單與顧客", suffix: "/orders", icon: Users },
   { label: "產品", suffix: "/products", icon: Package },
   { label: "品牌智庫", suffix: "/library", icon: BookOpen },
@@ -167,7 +169,7 @@ export function Sidebar({
           <>
             {!collapsed && <p className="nav-group-label">品牌經營</p>}
             <div className={cn("space-y-1", collapsed && "mt-4")}>
-              {BRAND_NAV.slice(0, 3).map((n) =>
+              {BRAND_NAV.slice(0, 4).map((n) =>
                 nav(
                   `/brands/${selected.brand_id}${n.suffix}`,
                   n.label,
@@ -178,7 +180,7 @@ export function Sidebar({
             </div>
             {!collapsed && <p className="nav-group-label">品牌資料</p>}
             <div className={cn("space-y-1", collapsed && "mt-4")}>
-              {BRAND_NAV.slice(3).map((n) =>
+              {BRAND_NAV.slice(4).map((n) =>
                 nav(`/brands/${selected.brand_id}${n.suffix}`, n.label, n.icon),
               )}
             </div>

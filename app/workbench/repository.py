@@ -66,8 +66,9 @@ def _validate_on_image_texts(request: dict) -> None:
 
 def submit_brief(conn, org_id: str, brand_id: str, brief: dict, *,
                   created_by: str) -> str:
-    """寫一列 `workbench_brief`（`status='queued'`），依 `_parts_for()` 排進
-    `background.workbench_generate`，回傳 brief id（契約頁 Exported shapes）。
+    """寫一列 `workbench_brief`（`_parts_for()` 排到東西才 `status='queued'`，沒排到
+    就是 `'done'`——沒有 part 要跑的 brief 是閒置的，不是在等佇列），依 `_parts_for()`
+    排進 `background.workbench_generate`，回傳 brief id（契約頁 Exported shapes）。
 
     `conn` 這裡不標 `_AnyConn`：`bi_repo.get_product()` 簽章吃 `Conn`（非
     `ConnProxy`），比照 `app/schedule/routes.py:29-33` 既有寫法——`conn` 參數留白
@@ -95,6 +96,11 @@ def submit_brief(conn, org_id: str, brand_id: str, brief: dict, *,
     if brief["kind"] == "image_prompt":
         _validate_on_image_texts(request)
     brief_id = new_id("wbb")
+    parts = _parts_for(brief["kind"], request)
+    # 沒有 part 要跑（例如 kind='image_prompt' 沒給 image_prompt_count）就沒有東西在排隊——
+    # 這種 brief 是閒置的，不是「等佇列」，寫 'queued' 會讓 UI 顯示處理中卻永遠不會翻狀態
+    # （walk 04 步驟 4：`round_running` 也會誤擋使用者第一次按產出）。
+    status = "queued" if parts else "done"
 
     conn.execute(
         "INSERT INTO workbench_brief (id, org_id, brand_id, kind, source_kind, source_ref,"
@@ -102,17 +108,17 @@ def submit_brief(conn, org_id: str, brand_id: str, brief: dict, *,
         " format_key, coordinates_snapshot_json, visual_tone, visual_concept, style_key,"
         " request_json, status, created_by)"
         " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,"
-        " %s, 'queued', %s)",
+        " %s, %s, %s)",
         (
             brief_id, org_id, brand_id, brief["kind"], brief["source_kind"],
             jsonb(brief.get("source_ref") or {}), product_id,
             coordinates.get("audience"), coordinates.get("pain"), coordinates.get("angle"),
             coordinates.get("hook"), coordinates.get("proof"), coordinates.get("offer"),
             coordinates.get("format"), jsonb(coordinates), brief.get("visual_tone"),
-            brief.get("visual_concept"), style_key, jsonb(request), created_by,
+            brief.get("visual_concept"), style_key, jsonb(request), status, created_by,
         ),
     )
-    for part in _parts_for(brief["kind"], request):
+    for part in parts:
         count = request.get("image_prompt_count") if part == "image_prompt" else None
         background_enqueue(
             "background.workbench_generate", org_id=org_id,

@@ -1328,7 +1328,18 @@ class CoordinateDimensionSyncTest(unittest.TestCase):
 # that `submit_brief` requires it) plus this reason comment's and the
 # `KNOWN_MODULE_SIZES["app/workbench"]` reason comment's own line-count deltas — measured
 # (`_line_totals()`), no slack.
-TEST_LINES_CEILING = 23638  # Previous: 23265 --
+# ticket workbench/04 walk round 1 (docs/issues/workbench/04-workbench-screen.md ## Walk result's
+# amendment, 2026-09-09): test_workbench.py's SourceIsolationTest gains one assertion (submit_brief
+# with no image_prompt_count enqueues nothing -> brief.status == 'done'), 383 -> 386 (+3).
+# ticket workbench/04 walk round 2 (same file's ## Walk result, round 2 amendment, 2026-09-09):
+# test_workbench.py's ImagePromptFixRoundTest extended: `prompts[1]` (a genuine out-of-band
+# environment, not a render mock) proves `_apply_replacements`'s new type guard — a string reply
+# for it is skipped and its original stays ❌ — and `prompts[4]` (a genuine missing-key dict) proves
+# a correct dict reply is applied and turns ✅; `prompts[2]`'s original render-mock case is
+# untouched. 386 -> 412 (+26), plus this reason comment's and the
+# `KNOWN_MODULE_SIZES["app/workbench"]` reason comment's own line-count deltas — measured
+# (`_line_totals()`), no slack.
+TEST_LINES_CEILING = 23688  # Previous: 23638 --
 # ticket workbench/02 round 1: test_workbench.py 338 lines (new file, done-check 2's five
 # cases) plus this table's own required edits (LAYER_ORDER entry, KNOWN_MODULE_SIZES
 # app/workbench row and the app row's reason-comment update) — measured (`_line_totals()`),
@@ -2247,7 +2258,17 @@ KNOWN_MODULE_SIZES = {
                           # 讀數字）＋_fill_node_spend()／_current_month_window()（把票 05
                           # 的當月花費補到綁定節點上）＋tree.py 三個新欄位。前一次是票
                           # 10-feedback-entries 的 POST .../reject（784）
-    "app/workbench": 1291,  # 票 workbench/03：新檔 routes.py（184 行——`/api/workbench/*`
+    "app/workbench": 1390,  # 票 workbench/04 walk round 2（`docs/issues/workbench/
+                            # 04-workbench-screen.md` ## Walk result, round 2 的
+                            # amendment）：`jobs.py` 修正輪 `_fix_call` 帶工單段／每個失敗
+                            # 欄位的原值／精確回覆形狀（新增 `_replacement_ok`／
+                            # `_original_value`／`_shape_hint`／`_fix_item_block`），
+                            # `_apply_replacements` 加型別守門，226→310（+84）；`validate.py`
+                            # 新增 `fixed_block_chars()`，170→179（+9）。前一次是 round 1
+                            # （## Walk result 的 amendment）：`repository.py` `submit_brief`
+                            # 沒有 part 要跑時寫 `status='done'`，523→529（+6）。
+                            # 1291→1297→1390（+99 = 6+84+9）。量到的數字，不留餘裕。前一次是
+                            # 票 workbench/03：新檔 routes.py（184 行——`/api/workbench/*`
                             # 的 HTTP 面）；repository.py 補 list_briefs／brief_detail／
                             # run_part／adopt_output_for_brief／close_brief／reopen_brief／
                             # delete_brief／create_brief 八支，加上 submit_brief 的

@@ -18,6 +18,7 @@ task registered once at import time silently stops being live after a DSN change
 caller that gets a fresh `background.app()` (each test module) must call this again.
 """
 
+import json
 import re
 
 from app.background import app as background_app
@@ -44,10 +45,76 @@ _METHODOLOGY_LABELS = {
 _PATH_RE = re.compile(r"^([a-z_]+)(?:\[(\d+)\]|\.([a-z_]+))?$")
 
 
+def _replacement_ok(original, value) -> bool:
+    """型別守門（票 workbench/04 walk round 2 amendment）：回覆的 `value` 型別要跟原欄位
+    一模一樣（物件對物件、字串對字串），原欄位是物件的話，物件的每個鍵都要在——不合就讓
+    呼叫端跳過，原值連同它的 ❌ 留著，不讓一段散文（型別不對）或缺鍵的半成品蓋掉一個
+    原本結構完整的欄位。"""
+    if type(value) is not type(original):
+        return False
+    if isinstance(original, dict) and not set(original.keys()) <= set(value.keys()):
+        return False
+    return True
+
+
+def _original_value(data: dict, path: str):
+    """讀出某個 `path`（跟下面 `_apply_replacements` 同一套定址規則）在 `data` 裡現在的值
+    ——修正輪的 prompt 要把它連同問題描述一起附上，模型才知道「原本」長什麼樣子，不是
+    憑空發明（票 workbench/04 walk round 2 amendment）。讀不到回傳 `None`。"""
+    match = _PATH_RE.match(path) if isinstance(path, str) else None
+    if not match:
+        return None
+    key, index, subkey = match.groups()
+    if index is not None:
+        items = data.get(key)
+        i = int(index) - 1
+        return items[i] if isinstance(items, list) and 0 <= i < len(items) else None
+    if subkey is not None:
+        obj = data.get(key)
+        return obj.get(subkey) if isinstance(obj, dict) else None
+    return data.get(key)
+
+
+def _shape_hint(path: str, *, fixed_chars: int | None) -> str:
+    """修正輪要附的「精確回覆形狀」一句話——數字／鍵名一律用程式算，不讓模型自己猜字數帶
+    或欄位鍵（票 workbench/04 walk round 2 amendment）。只覆蓋兩種形狀：`prompts[N]`
+    （物件，鍵照舊，字數帶要扣掉固定段）與 `short[N]`／`medium[N]`／`long[N]`（字串＋原字數
+    帶）；其他 path 沿用 `fix.md` 本來就有的通用 JSON schema，不多加一句。"""
+    match = _PATH_RE.match(path) if isinstance(path, str) else None
+    if not match:
+        return ""
+    key, index, _subkey = match.groups()
+    if key == "prompts" and index is not None and fixed_chars is not None:
+        keys = ", ".join(validate.VARIABLE_KEYS)
+        lo, hi = validate.PROMPT_MIN - fixed_chars, validate.PROMPT_MAX - fixed_chars
+        return (
+            f"回一個物件，鍵與原值相同（{keys}），外殼會組成 9 行並計字；"
+            f"固定段已占 {fixed_chars} 字，變動段合計須落在 {lo}～{hi} 字"
+        )
+    if key in validate.BODY_BANDS and index is not None:
+        lo, hi, _count = validate.BODY_BANDS[key]
+        return f"回一個字串，{lo}～{hi} 字"
+    return ""
+
+
+def _fix_item_block(item: dict, *, original, fixed_chars: int | None) -> str:
+    lines = [
+        f"- path: {item['path']}",
+        f"  原值：{json.dumps(original, ensure_ascii=False)}",
+        f"  問題：{item['message']}",
+    ]
+    shape = _shape_hint(item["path"], fixed_chars=fixed_chars)
+    if shape:
+        lines.append(f"  形狀：{shape}")
+    return "\n".join(lines)
+
+
 def _apply_replacements(data: dict, replacements) -> None:
     """把修正輪回覆的 `replacements` 套進原始資料——只認得到的 path 才套，套不出來的
     （model 亂寫的 path）安靜跳過，不炸掉整個修正輪。`fixed` 整段鎖死：ADR 0068 §7，固定段
-    一份 brief 只產一次、逐則比對用，修正輪不准動它，不管回覆點名哪個 path。"""
+    一份 brief 只產一次、逐則比對用，修正輪不准動它，不管回覆點名哪個 path。型別對不上原欄位
+    的、或物件缺了原欄位的鍵的，也安靜跳過（`_replacement_ok`，票 workbench/04 walk round 2
+    amendment）——原值連同它的 ❌ 留著，不給第二次機會。"""
     for item in replacements or []:
         if not isinstance(item, dict):
             continue
@@ -62,13 +129,13 @@ def _apply_replacements(data: dict, replacements) -> None:
         if index is not None:
             items = data.get(key)
             i = int(index) - 1
-            if isinstance(items, list) and 0 <= i < len(items):
+            if isinstance(items, list) and 0 <= i < len(items) and _replacement_ok(items[i], value):
                 items[i] = value
         elif subkey is not None:
             obj = data.get(key)
-            if isinstance(obj, dict):
+            if isinstance(obj, dict) and subkey in obj and _replacement_ok(obj[subkey], value):
                 obj[subkey] = value
-        else:
+        elif key in data and _replacement_ok(data[key], value):
             data[key] = value
 
 
@@ -85,12 +152,21 @@ def _validate(part: str, data, *, vocabulary: dict, count) -> tuple:
                       # 或格式規則），只驗過 JSON-only 就算數
 
 
-def _fix_call(conn, brand_id: str, context, task_type: str, failing: list) -> dict:
-    """ADR 0068 §6：失敗項目一次問完、只問失敗的那幾項——prompt 只點名 `failing` 裡的
-    path，不重貼原本的部門任務檔／工單／方法論（那些內容模型已經看過一次，批次不重生）。"""
+def _fix_call(conn, brand_id: str, context, task_type: str, failing: list, *,
+               brief_section: str, original: dict, fixed_chars: int | None) -> dict:
+    """ADR 0068 §6：失敗項目一次問完、只問失敗的那幾項——prompt 不重貼原本的部門任務檔／
+    方法論（那些內容模型已經看過一次，批次不重生），但每一通 `gateway.run_task` 都是全新
+    的無狀態呼叫（ADR 0032）：模型沒有上一通的記憶，所以工單段（`brief_section`，跟第一次
+    生成時同一段文字）與每個失敗欄位的原值、問題描述、精確回覆形狀都要重貼一次，不然模型
+    只能自己編（票 workbench/04 walk round 2 amendment，修的就是這個）。"""
     fix_text = (DEPARTMENTS_DIR / "fix.md").read_text(encoding="utf-8")
-    listing = "\n".join(f"- path: {item['path']}\n  問題：{item['message']}" for item in failing)
-    prompt = "\n\n".join([fix_text, "## 這些欄位沒有通過驗證，只重新回答這些", listing])
+    listing = "\n".join(
+        _fix_item_block(item, original=original.get(item["path"]), fixed_chars=fixed_chars)
+        for item in failing
+    )
+    prompt = "\n\n".join([
+        fix_text, brief_section, "## 這些欄位沒有通過驗證，只重新回答這些", listing,
+    ])
     return gateway.run_task(
         conn, PROVIDER, brand_id=brand_id, task_type=task_type,
         prompt_template_id=f"{task_type}_fix", prompt_template_version="v1",
@@ -178,7 +254,15 @@ def _run(conn, org_id: str, brand_id: str, brief_id: str, part: str, count) -> N
     results, rendered = _validate(part, data, vocabulary=vocabulary, count=count)
     failing = [r for r in results if not r["ok"]]
     if failing:
-        fix_row = _fix_call(conn, brand_id, context, task_type, failing)
+        fixed_block = data.get("fixed")
+        fixed_chars = (
+            validate.fixed_block_chars(fixed_block) if isinstance(fixed_block, dict) else None
+        )
+        original = {item["path"]: _original_value(data, item["path"]) for item in failing}
+        fix_row = _fix_call(
+            conn, brand_id, context, task_type, failing,
+            brief_section=brief_section, original=original, fixed_chars=fixed_chars,
+        )
         if fix_row["status"] == "succeeded":
             fix_data = validate.parse_json_only(fix_row.get("rendered_output") or "")
             if fix_data is not None:

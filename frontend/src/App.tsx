@@ -25,6 +25,7 @@ import { BrandReportPage } from "@/components/report/BrandReportPage";
 import { OrdersPage } from "@/components/orders/OrdersPage";
 import { SchedulePage } from "@/components/schedule/SchedulePage";
 import { SettingsPage } from "@/components/settings/SettingsPage";
+import { WorkbenchPage } from "@/components/workbench";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   WorkspaceProvider,
@@ -60,6 +61,7 @@ function App() {
         <Route path="/brands/:brandId/intake" element={<IntakeRoute />} />
         <Route path="/brands/:brandId/intake/history" element={<HistoryRoute />} />
         <Route path="/brands/:brandId/library" element={<LibraryRoute />} />
+        <Route path="/brands/:brandId/workbench" element={<WorkbenchRoute />} />
         <Route
           path="/brands/:brandId/products"
           element={<ProductListRoute />}
@@ -234,6 +236,16 @@ function LibraryRoute() {
   return (
     <>
       <LibraryPage brandId={brandId ?? ""} />
+    </>
+  );
+}
+
+/** 素材工作檯（S16，票 workbench/04，ADR 0068）：文案、圖片提示詞與腳本在這裡生成。 */
+function WorkbenchRoute() {
+  const { brandId } = useParams<{ brandId: string }>();
+  return (
+    <>
+      <WorkbenchPage brandId={brandId ?? ""} />
     </>
   );
 }
