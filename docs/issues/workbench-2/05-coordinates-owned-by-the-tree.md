@@ -14,7 +14,7 @@ the brief `"coordinates": None` and `state.py:194` took the copy model's guess.
 
 - Every **third-layer** node gains `coordinates`: an object with the seven dimension keys
   `audience/pain/angle/hook/proof/offer/format`, each value the **label 原文** from the brand's
-  vocabulary (or `null` when a dimension does not apply). The reply skeleton (`campaign_tree.md:66-90`)
+  vocabulary (or `null` when a dimension does not apply). The reply skeleton (`campaign_tree.md:62-92`)
   shows it on the third-layer node only. Layers 1–2 never carry it.
 - The tree prompt gains the brand's coordinate vocabulary as its **last** section (the same
   "vocabulary last" order the copy prompt uses, ADR 0068 §6): `jobs.py` builds it from
