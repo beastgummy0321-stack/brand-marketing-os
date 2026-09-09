@@ -105,6 +105,13 @@ report. A persona's report is a symptom; the cause is never theirs to name.
    `playwright-cli` (headed window; `select <ref> <值>` works) from 阿明 step 4 on. Orca stays
    the tool for "look at the user's own Chrome", not for driving forms.
 
+5. **Third drill (2026-09-09): playwright-cli "screenshots" saved as text.** Three of the persona's
+   `stepNN-….png` files were 331-byte ASCII (the CLI's markdown reply pointing at
+   `.playwright-cli/page-*.png`), and that folder is deleted at clean-up — the settle screens left
+   no image. Every persona prompt now says: after `screenshot`, copy the file the CLI names into
+   `.scratch/<drill>/` and run `file` on it before writing the path into run.md; a path that is
+   not `PNG image data` is a missing screenshot, not evidence.
+
 ## Results, first drill (2026-09-06)
 
 Three personas, two full cycles each, three separate orgs. No malignant stop condition was hit.
