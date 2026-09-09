@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import { ChevronRight } from "lucide-react";
 import { EmptyState } from "@/components/layout/EmptyState";
 import { Button } from "@/components/layout/ui/button";
@@ -12,6 +13,15 @@ function flattenNodes(nodes: CampaignTreeNode[], parent = "", depth = 0): NodeEn
     const path = parent ? `${parent}.${index}` : String(index);
     return [{ node, path, depth }, ...flattenNodes(node.children, path, depth + 1)];
   });
+}
+
+/** 票 workbench-2/03（issue-settings-detour-has-no-link）：配對失敗訊息裡提到「設定」的
+ * 那段（`NO_ACCOUNT_BOUND`）沒有連結，使用者要自己在選單裡找設定頁。只把「設定」兩個字
+ * 換成連結，句子其餘部分不動。 */
+function withSettingsLink(text: string) {
+  const idx = text.indexOf("設定");
+  if (idx === -1) return text;
+  return <>{text.slice(0, idx)}<Link to="/settings" className="underline underline-offset-4">設定</Link>{text.slice(idx + 2)}</>;
 }
 
 // 票 05：一個最深層節點的素材狀態，畫在節點詳情右側——文字跟徽章顏色照工單狀態，
@@ -31,6 +41,8 @@ export function CampaignTree({ tree, binding, bindError, onBind, approving, appr
 }) {
   const [selectedPath, setSelectedPath] = useState("0");
   const entries = flattenNodes(tree.nodes);
+  // 票 workbench-2/03：還沒配過（0 個對上）就不畫計數，免得一開頁就寫「配對完成：0／M」。
+  const boundCount = entries.filter((entry) => entry.node.bound_external_id !== null).length;
   const selected = entries.find((entry) => entry.path === selectedPath) ?? entries[0];
   const briefByNodeKey = new Map(briefs.map((b) => [b.node_key, b]));
   const busy = binding || approving || revoking;
@@ -48,7 +60,11 @@ export function CampaignTree({ tree, binding, bindError, onBind, approving, appr
         </div>
       </div>
       <div className="surface-body flex flex-col gap-3">
-        {(bindError ?? tree.bind_failure) && <p role="alert" className="text-sm text-danger">{bindError ?? tree.bind_failure}</p>}
+        {(bindError ?? tree.bind_failure)
+          ? <p role="alert" className="text-sm text-danger">{withSettingsLink(bindError ?? tree.bind_failure ?? "")}</p>
+          : boundCount > 0 && <p role="status" className="text-sm text-muted-foreground">
+              配對完成：{boundCount}／{entries.length} 個節點對上
+            </p>}
         {tree.budget_note && <p role="status" className="text-xs leading-6 text-warning">{tree.budget_note}</p>}
         {approveError && <p role="alert" className="text-sm text-danger">{approveError}</p>}
         {revokeError && <p role="alert" className="text-sm text-danger">{revokeError}</p>}

@@ -5,7 +5,7 @@ import { Input } from "@/components/layout/ui/input";
 import { Textarea } from "@/components/layout/ui/textarea";
 import { formatCurrency } from "@/lib/format";
 import type { ProductListItem } from "@/lib/productsApi";
-import type { NextPeriodSuggestion, ScheduleState } from "@/lib/scheduleApi";
+import type { NextPeriodSuggestion, SchedulePeriod, ScheduleState } from "@/lib/scheduleApi";
 
 export interface ScheduleDraft {
   selectedIds: string[];
@@ -43,7 +43,7 @@ export function ScheduleSetup({ brandId, schedule, products, draft, onChange, co
   const canConfirm = draft.selectedIds.length > 0 && draft.platform !== "" && draft.objective !== "" && validDates && !busy;
 
   return <div className="flex flex-col gap-5">
-    <NextPeriodSuggestionCard suggestion={schedule.next_period_suggestion} currentDailyBudget={schedule.daily_budget} onAdopt={onAdoptBudget} adopting={adoptingBudget} adoptError={adoptBudgetError} />
+    <NextPeriodSuggestionCard suggestion={schedule.next_period_suggestion} period={schedule.period} currentDailyBudget={schedule.daily_budget} onAdopt={onAdoptBudget} adopting={adoptingBudget} adoptError={adoptBudgetError} />
     <div className="grid grid-cols-[minmax(0,1fr)_280px] items-start gap-5">
     <section className="surface">
       <div className="surface-header"><h2>這期要投放哪些產品</h2><span className="text-xs text-muted-foreground">已選 {selectedNames.length} 項</span></div>
@@ -103,19 +103,30 @@ function Summary({ label, value }: { label: string; value: string }) {
 }
 
 /** 票 smart-loop 05：讀時現算的下一期建議（`period.next_period_suggestion()`）——沒有上一期
- * 結算過就是 `null`，畫面只講一句話、不給按鈕。 */
-function NextPeriodSuggestionCard({ suggestion, currentDailyBudget, onAdopt, adopting, adoptError }: {
+ * 結算過就是 `null`，畫面只講一句話、不給按鈕。
+ * 票 workbench-2/03（drill 2）：`suggestion === null` 原本一律講「這是第一期」，即使當下
+ * 有一期還在跑或早就結束沒結算——那兩種都不是「第一期」，使用者看了會以為系統壞了。改成
+ * 照 `schedule.period.status` 分岔；沒有期、或期已 settled（下一輪還沒 next_period_suggestion
+ * 追上來），才是原句。結算本身仍是 `PeriodPanel.tsx` 的手動按鈕（ADR 0053），這裡只換文字。*/
+function NextPeriodSuggestionCard({ suggestion, period, currentDailyBudget, onAdopt, adopting, adoptError }: {
   suggestion: NextPeriodSuggestion | null;
+  period: SchedulePeriod | null;
   currentDailyBudget: number;
   onAdopt: () => void;
   adopting: boolean;
   adoptError: string | null;
 }) {
+  const noSuggestionText =
+    period?.status === "running"
+      ? `這期還在進行（到 ${period.end_date}）；結束後到檔期面板按「結算這期」，下一期的建議會出現在這裡。`
+      : period?.status === "awaiting_data"
+      ? "這期已結束，先到檔期面板按「結算這期」。"
+      : "這是第一期，還沒有上一期可以參考。";
   return <section className="surface">
     <div className="surface-header"><h2>建議下一期</h2></div>
     <div className="surface-body flex flex-col gap-3">
       {suggestion === null
-        ? <p className="text-sm text-muted-foreground">這是第一期，還沒有上一期可以參考。</p>
+        ? <p className="text-sm text-muted-foreground">{noSuggestionText}</p>
         : <>
           <p className="text-sm">{suggestion.start_date} ～ {suggestion.end_date}</p>
           <p className="text-sm">

@@ -1371,7 +1371,14 @@ class CoordinateDimensionSyncTest(unittest.TestCase):
 # required edits (KNOWN_MODULE_SIZES app/schedule and app/workbench rows' reason comments, this
 # reason comment's own lines) -- measured (`_line_totals()`), no slack.
 # 23521 -> 23592.
-TEST_LINES_CEILING = 23592  # Previous: 23521 --
+# ticket workbench-2/03 (loop guardrails): test_schedule.py's BindTreeApiContractTest gains one
+# case (`test_no_bound_account_returns_the_guard_message_and_calls_nothing`, done-check 2's new
+# case: a brand with a succeeded tree and no bound account gets `NO_ACCOUNT_BOUND` verbatim, zero
+# `channel_entity_map` rows, zero `list_campaigns` calls) plus this reason comment's and the
+# `KNOWN_MODULE_SIZES["app/schedule"]` reason comment's own lines -- measured (`_line_totals()`),
+# no slack.
+# 23592 -> 23632.
+TEST_LINES_CEILING = 23632  # Previous: 23592 --
 # ticket workbench/02 round 1: test_workbench.py 338 lines (new file, done-check 2's five
 # cases) plus this table's own required edits (LAYER_ORDER entry, KNOWN_MODULE_SIZES
 # app/workbench row and the app row's reason-comment update) — measured (`_line_totals()`),
@@ -1908,7 +1915,14 @@ KNOWN_MODULE_SIZES = {
     "app/orders": 1423,  # 票 12：channel_revenue 一張表取代三張（刪掉藥局專屬那一整組
                           # 之後仍淨增）——官網帳本寫入路徑、channel_revenue_summary()、
                           # 通用手動登錄（含「官網不能手動登錄」那道錢的守門）
-    "app/schedule": 5121,  # ticket workbench-2/02 (ablation): `state.py`'s `_copy_summary()` gains
+    "app/schedule": 5135,  # ticket workbench-2/03 (loop guardrails): `binding.py` gains the
+                           # `NO_ACCOUNT_BOUND` constant (module-level, beside `NO_TREE_TO_BIND_
+                           # MESSAGE`) plus the pre-loop guard in `bind_tree()` (returns
+                           # `[NO_ACCOUNT_BOUND]` before the node loop when
+                           # `bound_account_ids_for_brand()` is empty, binding nothing) and the
+                           # early-return in `bind_failure_message()` for that single-failure case.
+                           # 5121 -> 5135 (+14), measured (`_module_sizes()`), no slack.
+                           # Previous was 5121 -- ticket workbench-2/02 (ablation): `state.py`'s `_copy_summary()` gains
                            # the `warnings` key (filtered to strings) and `jobs.py` drops the
                            # `created_by="system"` keyword off its `workbench.submit_brief()` call
                            # (§1, `created_by` retired). 5117 -> 5121 (+4), measured

@@ -269,6 +269,19 @@ function ImagePromptPartCard({
     requestedCountValue >= 1 && requestedCountValue <= 30;
   const runDisabled =
     busy || localBusy || noSourceForText || !validRequestedCount || brief.closed_at !== null;
+  // 票 workbench-2/03（issue-image-prompt-button-disabled-with-no-reason）：`title` 屬性
+  // 只在滑鼠停留時才看得到，而且原本只講 `noSourceForText` 一種原因——按鈕灰掉的另外三種
+  // 情況（工單關了、上一輪還沒完、條數沒填對）完全沒有說法。改成畫面上永遠看得到的一行字，
+  // 四個原因照這個優先順序，第一個成立的原因就是使用者現在真正卡住的那個。
+  const runDisabledReason = brief.closed_at !== null
+    ? "工單已關閉，重新開啟後才能產"
+    : busy || localBusy
+    ? "等目前這輪完成"
+    : noSourceForText
+    ? "先產文案，或在工單填圖上文字"
+    : !validRequestedCount
+    ? "填 1～30 的條數"
+    : null;
 
   async function handleRun() {
     setLocalBusy(true);
@@ -324,11 +337,13 @@ function ImagePromptPartCard({
             type="button"
             onClick={() => void handleRun()}
             disabled={runDisabled}
-            title={noSourceForText ? "先產文案，或在工單填圖上文字" : undefined}
           >
             {BUTTON_LABELS.runImagePrompt}
           </Button>
         </div>
+        {runDisabledReason && (
+          <p className="text-xs text-muted-foreground">{runDisabledReason}</p>
+        )}
 
         {actionError && (
           <p role="alert" className="text-sm text-danger">
@@ -482,6 +497,16 @@ function VideoScriptPartCard({
     requestedCount !== "" && Number.isInteger(requestedCountValue) &&
     requestedCountValue >= 1 && requestedCountValue <= 5;
   const runDisabled = busy || localBusy || !validRequestedCount || brief.closed_at !== null;
+  // 票 workbench-2/03：跟圖片提示詞卡同一個道理（issue-image-prompt-button-disabled-with-no-reason），
+  // 少一個 `noSourceForText`（影片腳本沒有這個來源限制）；條數上限是這張卡自己的 1～5
+  // （上面 `validRequestedCount` 的邊界），不是圖片提示詞卡的 1～30。
+  const runDisabledReason = brief.closed_at !== null
+    ? "工單已關閉，重新開啟後才能產"
+    : busy || localBusy
+    ? "等目前這輪完成"
+    : !validRequestedCount
+    ? "填 1～5 的條數"
+    : null;
 
   async function handleRun() {
     setLocalBusy(true);
@@ -597,6 +622,9 @@ function VideoScriptPartCard({
             {BUTTON_LABELS.runAgain}
           </Button>
         </div>
+        {runDisabledReason && (
+          <p className="text-xs text-muted-foreground">{runDisabledReason}</p>
+        )}
       </div>
     </div>
   );

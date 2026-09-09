@@ -1086,6 +1086,32 @@ class BindTreeApiContractTest(_ScheduleApiTestBase):
         ).fetchall()
         return [dict(r) for r in rows]
 
+    # -- 沒有綁定帳戶 -> 擋在節點迴圈之前，原文回傳，不叫 Meta --------------------------
+
+    def test_no_bound_account_returns_the_guard_message_and_calls_nothing(self):
+        """票 workbench-2/03，drill 2（2026-09-09）：沒綁帳戶就配對，舊行為是每個節點都
+        跑完名稱比對、各自讀回「在 Meta 上找不到」——零次 Graph 呼叫也照樣顯示成名稱問題。
+        這裡驗證新的擋法：`bind_tree` 在進節點迴圈之前就回傳 `NO_ACCOUNT_BOUND` 原文，不寫
+        `channel_entity_map`、不呼叫 `list_campaigns`。"""
+        meta_repo.unbind(web.conn, coredb.DEV_ORG_ID, self.brand["id"], self.account_id)
+        web.conn.commit()
+        self._succeed_plan_and_tree()
+
+        calls: list = []
+
+        def fake_list_campaigns(_token: str, account_id: str) -> list[dict]:
+            calls.append(account_id)
+            return []
+
+        with mock.patch.object(meta_graph, "list_campaigns", fake_list_campaigns):
+            resp = self._bind()
+
+        self.assertEqual(resp.status_code, 200, resp.text)
+        tree = resp.json()["tree"]
+        self.assertEqual(tree["bind_failure"], binding_mod.NO_ACCOUNT_BOUND)
+        self.assertEqual(self._channel_entity_map_rows(), [])
+        self.assertEqual(calls, [])
+
     # -- 資料正確性：綁一次之後，平台端改名不斷線，花費／ROAS 照樣讀得到 -----------------
 
     def test_exact_match_binds_once_and_survives_a_rename(self):

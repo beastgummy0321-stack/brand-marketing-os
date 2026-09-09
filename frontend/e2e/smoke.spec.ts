@@ -100,4 +100,11 @@ test("走完切片後活下來的主要畫面", async ({ page }) => {
   // 證明畫面到得了、空狀態文案對——真的拉 Meta 資料歸驗收，不歸這支煙霧測試 -----------
   await page.goto(`/app/brands/${brandId}/intake/history`);
   await expect(page.getByText("還沒接上 Meta 廣告帳戶")).toBeVisible();
+
+  // --- 未知網址落在殼層裡的 404，不是空白頁（票 workbench-2/03，
+  // issue-unknown-url-renders-a-blank-page）--------------------------------------------
+  await page.goto(`/app/brands/${brandId}/nothing`);
+  await expect(page.getByRole("heading", { name: "找不到這一頁" })).toBeVisible();
+  await page.getByRole("link", { name: "回品牌總覽" }).click();
+  await expect(page.getByRole("heading", { name: "品牌總覽" })).toBeVisible();
 });

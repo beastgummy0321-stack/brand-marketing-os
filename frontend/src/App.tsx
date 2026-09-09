@@ -73,6 +73,7 @@ function App() {
         <Route path="/brands/:brandId/orders" element={<OrdersRoute />} />
         <Route path="/brands/:brandId/report" element={<BrandReportRoute />} />
         <Route path="/brands/:brandId/schedule" element={<ScheduleRoute />} />
+        <Route path="*" element={<NotFoundRoute />} />
       </Route>
     </Routes>
   );
@@ -163,6 +164,22 @@ function SettingsRoute() {
     <>
       <SettingsPage />
     </>
+  );
+}
+
+/** 未知網址（票 workbench-2/03，issue-unknown-url-renders-a-blank-page）：`<Routes>` 找不到
+ * 更早的路由時落到這裡——放在 `RequireSession` 群組最後一個子路由，殼層與登入守門照樣套用
+ * （不是獨立掛在 `RequireSession` 外面的一條路由，那樣未登入使用者打一個打錯的網址會看到
+ * 沒有殼、沒有登入檢查的畫面）。 */
+function NotFoundRoute() {
+  return (
+    <EmptyState
+      title="找不到這一頁"
+      description="網址可能過期或打錯了。"
+      actionHref="/"
+      actionLabel="回品牌總覽"
+      actionInternal
+    />
   );
 }
 

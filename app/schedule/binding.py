@@ -20,6 +20,11 @@ from app.schedule import repository as schedule_repo
 from app.schedule import tree as tree_mod
 
 NO_TREE_TO_BIND_MESSAGE = "還沒有成功產生的活動樹可以綁定，請先展開活動樹。"
+# 票 workbench-2/03：drill 2（2026-09-09）——沒綁帳戶就配對，每個節點事後都讀「在 Meta 上
+# 找不到」（零次 Graph 呼叫也一樣），使用者看到的是名稱問題，其實是完全沒有帳戶可比對。
+# `bind_tree()` 在進節點迴圈之前就擋下來，回傳這一句原文，`bind_failure_message()` 遇到它
+# 是唯一的失敗時原文回傳（不接「名稱要一字不差」的尾巴——那句對這個情況是錯的建議）。
+NO_ACCOUNT_BOUND = "還沒綁廣告帳戶：到「設定 → Meta 廣告連線」貼權杖並勾選這個品牌，再回來配對。"
 
 # 票 05（plan-quality）：使用者 2026-09-08 裁決——樹一律照 `budget_level` 分配，實際預算
 # 掛在哪一層是讀 Meta 才知道的事，不寫進任何表。兩層都是平台自己叫的名字
@@ -39,6 +44,10 @@ def bind_failure_message(failures: list[str]) -> str:
     或把名字改成一字不差；找到兩個是去 Meta 把重複的改名。**只講「有失敗」等於沒講。**
 
     仍然保留「一次講完整批」這件事（不是每個節點各跳一個錯誤），ADR 0055 §4 要的是這個。"""
+    # 票 workbench-2/03：沒綁帳戶是唯一的失敗時，原文回傳——「名稱要一字不差」對這個情況
+    # 是錯的建議（沒有帳戶可比對，不是名稱對不上）。
+    if failures == [NO_ACCOUNT_BOUND]:
+        return NO_ACCOUNT_BOUND
     # 去重保序：同一份方案裡兩個節點可以取一樣的名字，那會產生兩句一模一樣的原因
     # （`test_two_depth_two_siblings_same_name_both_stay_unbound` 就是這個形狀）。
     # 兩個節點都沒綁上這件事不因為訊息合併而改變，重複講一次只是雜訊。
@@ -133,6 +142,11 @@ def bind_tree(conn, tree_row: dict, org_id: str, brand_id: str) -> list[str]:
         conn, org_id, brand_id, CHANNEL_KEY, tree_row["id"]
     )
     account_ids = meta_repo.bound_account_ids_for_brand(conn, org_id, brand_id)
+    if not account_ids:
+        # 票 workbench-2/03：沒有帳戶可比對，進迴圈只會把每個節點都問成「找不到」——
+        # 那是名稱問題的說法，這裡是帳戶問題。在進節點迴圈之前就擋下來，不綁、不寫、
+        # 不叫 Meta（drill 2 量到的零 Graph 呼叫）。
+        return [NO_ACCOUNT_BOUND]
     # 票 T3e（ADR 0055 §11）：深度 2（扛預算）節點綁定成功時，順手記一列
     # `period_node_membership`——「品牌當下的檔期」用模組既有的同一條讀
     # （`period_repo.get_latest_period`），不是另開一條。沒有檔期（這個品牌從沒出過

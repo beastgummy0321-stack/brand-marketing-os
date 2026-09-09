@@ -136,6 +136,20 @@ export function NewBriefPanel({
     setOnImageTexts((prev) => prev.map((t, i) => (i === index ? value.slice(0, ON_IMAGE_TEXT_MAX) : t)));
   }
 
+  // 票 workbench-2/03（issue-angle-select-lists-thirty-five-options）：切角原本是一長串
+  // 三十五個選項的平的 `<select>`，找不到分類。用 `coordinatesApi.ts` 已經帶的 `category`
+  // 分組——原生 `<optgroup>`，design-system §6 說的「用既有的，不手刻下拉」。沒有分類的
+  // （`category === null`）併進「其他」，排在最後；每組內部維持 API 回傳的原順序。
+  const ANGLE_OTHER_CATEGORY = "其他";
+  const angleGroups = angleCoordinates.reduce((groups, c) => {
+    const key = c.category ?? ANGLE_OTHER_CATEGORY;
+    const group = groups.find(([label]) => label === key);
+    if (group) group[1].push(c);
+    else groups.push([key, [c]]);
+    return groups;
+  }, [] as [string, Coordinate[]][]);
+  angleGroups.sort((a, b) => Number(a[0] === ANGLE_OTHER_CATEGORY) - Number(b[0] === ANGLE_OTHER_CATEGORY));
+
   return (
     <SidePanel ariaLabel="新工單" onClose={onClose}>
       <div className="flex items-start justify-between gap-3 border-b border-border pb-4">
@@ -220,10 +234,14 @@ export function NewBriefPanel({
             className="rounded-md border border-border px-3 py-2 text-sm text-foreground"
           >
             <option value="">不指定</option>
-            {angleCoordinates.map((c) => (
-              <option key={c.id} value={c.label}>
-                {c.label}
-              </option>
+            {angleGroups.map(([category, coords]) => (
+              <optgroup key={category} label={category}>
+                {coords.map((c) => (
+                  <option key={c.id} value={c.label}>
+                    {c.label}
+                  </option>
+                ))}
+              </optgroup>
             ))}
           </select>
         </label>
