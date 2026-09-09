@@ -120,6 +120,9 @@ calls workbench, workbench never calls back. `LAYER_ORDER` already places `app.w
   New brands get it from `_SEED_COORDINATES["format"]`; brands that already had `format` rows are
   back-filled once by a data migration (`ensure_coordinates_seeded` skips a dimension once any row
   of it exists).
+- ADR 0069 — a tree node's seven coordinates are owned by the tree; a continued node's are
+  enforced by the program (last period's, converted to labels), never left to the model; the
+  brief snapshot and `creative_candidate` both read them.
 
 Module-local and reversible, decided here rather than in an ADR:
 
@@ -161,6 +164,16 @@ Module-local and reversible, decided here rather than in an ADR:
   the latest settled period — read-time, not stored, and independent of verdict (the overlay is
   name/depth matching only; which names *should* be kept is the prompt's job, not this
   overlay's).
+- **A third-layer tree node carries `coordinates`** (ticket 05, ADR 0069): the seven dimensions
+  `audience/pain/angle/hook/proof/offer/format`, each the vocabulary's label string or `null`;
+  layers 1–2 are always `null`. The tree prompt's own last section, 「## 座標詞彙表」
+  (`jobs._coordinate_vocabulary_text()`), lists the brand's available labels per dimension so
+  the model has something to copy from. `binding.tree_with_bindings()` overwrites a
+  `continued_from_node_key`-matched depth-3 node's coordinates with last period's
+  `period_node_result.coordinates_json` converted key → label (fallback: the key itself; a
+  `null` key stays `null`) — the model's own answer for that node is discarded, never merged;
+  a depth-3 node with no match keeps whatever the model wrote. `submit_brief()` receives the
+  leaf's non-null coordinates as `workbench_brief.coordinates_snapshot_json`.
 - **Next-period suggestion is read-time** (ticket smart-loop 05): `period.next_period_suggestion()`
   — nothing stored, nothing new to migrate. Baseline is the settled period's own `daily_budget`
   (frozen at creation, ADR 0053), not the rule card's current value and not `approval.latest()`

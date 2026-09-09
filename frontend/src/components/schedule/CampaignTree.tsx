@@ -4,6 +4,7 @@ import { ChevronRight } from "lucide-react";
 import { EmptyState } from "@/components/layout/EmptyState";
 import { Button } from "@/components/layout/ui/button";
 import { Badge } from "@/components/layout/ui/badge";
+import { COORDINATE_DIMENSIONS } from "@/lib/coordinatesApi";
 import { formatCurrency } from "@/lib/format";
 import type { CampaignTreeNode, CampaignTreeResult, ScheduleApproval, ScheduleBrief } from "@/lib/scheduleApi";
 
@@ -112,6 +113,7 @@ function NodeDetail({ entry, levels, brief, onSelectChild, onGoToAssets }: {
       {node.share !== null && node.daily_amount !== null && <div><dt className="text-xs text-muted-foreground">每日金額</dt><dd className="mt-1 text-xl font-semibold numeric">{formatCurrency(node.daily_amount)}</dd></div>}
       {depth === 0 && node.bound_external_id !== null && <><div><dt className="text-xs text-muted-foreground">花費</dt><dd className="mt-1 text-xl font-semibold numeric">{formatCurrency(node.spend)}</dd></div><div><dt className="text-xs text-muted-foreground">ROAS</dt><dd className="mt-1 text-xl font-semibold numeric">{node.roas === null ? "未追蹤" : `${node.roas.toFixed(2)}x`}</dd></div></>}
     </dl>}
+    {node.coordinates !== null && <dl><div><dt className="mb-1 text-xs text-muted-foreground">座標</dt><dd className="text-sm leading-7">{COORDINATE_DIMENSIONS.map(([key]) => node.coordinates?.[key] ?? "—").join("／")}</dd></div></dl>}
     {node.fields.length > 0 && <dl className="flex flex-col gap-4">{node.fields.map((field, index) => <div key={index}><dt className="mb-1 text-xs text-muted-foreground">{field.label}</dt><dd className="whitespace-pre-wrap text-sm leading-7">{field.value}</dd></div>)}</dl>}
     {node.warnings.length > 0 && <div className="rounded-lg bg-warning/5 p-4"><h3 className="mb-2 text-sm text-warning">節點提醒</h3><ul className="list-disc space-y-2 pl-4 text-sm leading-6 text-warning">{node.warnings.map((warning, index) => <li key={index}>{warning}</li>)}</ul></div>}
     {node.children.length > 0 && <div className="border-t border-border pt-5"><h3 className="mb-3 text-sm">下層節點</h3><div className="flex flex-col gap-2">{node.children.map((child, index) => <Button key={index} type="button" variant="outline" className="h-auto justify-between whitespace-normal py-3 text-left" onClick={() => onSelectChild(index)}><span>{child.name}</span><ChevronRight className="size-4" aria-hidden="true" /></Button>)}</div></div>}

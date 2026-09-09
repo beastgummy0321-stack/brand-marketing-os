@@ -95,12 +95,15 @@ def _tree_fenced(nodes: list, levels: list | None = None, budget_level: int = 2)
 
 def _one_tree_nodes(
     shares: tuple = (0.7, 0.3), name: str = "活動一",
-    child_names: tuple = ("組合1", "組合2"),
+    child_names: tuple = ("組合1", "組合2"), coordinates: dict | None = None,
 ) -> list:
     """三層節點，扛預算的是第二層（比照 Meta：行銷活動／廣告組合／廣告，預算在第 2 層）。
     `name`：票 T3b 的重綁測試需要重新展開之後第一層節點換一個名字。`child_names`：票
     T3c 的第二層測試需要換第二層節點的名字（改名顯示未綁定、兩個同名手足）——預設值跟
-    原本的 f"組合{i+1}" 一樣，既有呼叫端不用改。"""
+    原本的 f"組合{i+1}" 一樣，既有呼叫端不用改。`coordinates`：票 05——`None`（預設）不帶
+    這個欄位，跟這支 fixture 原本的形狀一模一樣（`CreativeCandidateSyncTest` 的既有測試
+    靠這一點維持綠燈，見票面「§6 vs. 既有 idempotent 測試」矛盾檢查）；帶了就套用到兩個
+    第三層節點（`單元1`／`單元2`）身上，同一份。"""
     return [
         {
             "name": name,
@@ -120,6 +123,7 @@ def _one_tree_nodes(
                             "share": None,
                             "warnings": [],
                             "children": [],
+                            **({"coordinates": coordinates} if coordinates is not None else {}),
                         }
                     ],
                 }
@@ -447,6 +451,39 @@ class BuildTreeTest(unittest.TestCase):
         self.assertEqual(body, {})
         self.assertTrue(failure)
 
+    # -- 票 05（ADR 0069 §2）：第三層節點的 coordinates ------------------------------------
+
+    def test_third_layer_coordinates_unknown_dropped_non_string_none(self):
+        """done-check 1：未知維度丟棄、非字串值變 None、代理給的 null 原樣留 None、
+        完全沒給的維度補 None——四種輸入落在同一個第三層節點上，各自的處理不能混。"""
+        nodes = _one_tree_nodes()
+        nodes[0]["children"][0]["children"][0]["coordinates"] = {
+            "audience": "陌生・知道問題", "pain": 123, "angle": None,
+            "unknown_dim": "亂寫的維度",
+            # hook／proof／offer／format 完全沒給。
+        }
+        body, failure = tree_mod.build_tree(_tree_fenced(nodes), daily_budget=1000)
+        self.assertIsNone(failure)
+        leaf = body["nodes"][0]["children"][0]["children"][0]
+        self.assertEqual(leaf["coordinates"], {
+            "audience": "陌生・知道問題", "pain": None, "angle": None, "hook": None,
+            "proof": None, "offer": None, "format": None,
+        })
+
+    def test_tree_without_coordinates_field_gets_all_seven_none_and_still_succeeds(self):
+        """done-check 1：舊樹（代理沒回 `coordinates`）不是拒絕條件——第三層補七個
+        `None`，第一、二層一律 `None`，`build_tree` 照樣成功。Red proof：把 tree.py 對
+        缺 `coordinates` 的處理改成跟 `fields`／`share` 一樣的 `return None`（拒絕），
+        這支測試先紅。"""
+        body, failure = tree_mod.build_tree(_tree_fenced(_one_tree_nodes()), daily_budget=1000)
+        self.assertIsNone(failure)
+        top = body["nodes"][0]
+        self.assertIsNone(top["coordinates"])  # 第一層
+        combo = top["children"][0]
+        self.assertIsNone(combo["coordinates"])  # 第二層
+        leaf = combo["children"][0]
+        self.assertEqual(leaf["coordinates"], dict.fromkeys(creative_mod.COORDINATE_KEYS))
+
 
 # -- 2d. 票 09 settled 段第 8 點：活動樹元件不得寫死通路詞彙 ---------------------------
 
@@ -767,7 +804,15 @@ class QueuedGenerationTest(_ScheduleApiTestBase):
         self.assertEqual(resp.status_code, 200, resp.text)
         self._run_worker()
 
-        schedule_jobs.PROVIDER = _fake(_tree_fenced(_one_tree_nodes()))
+        # 票 05（ADR 0069 §3）：兩個最深層節點都帶座標——angle／format 兩個維度沒填，
+        # 交棒時要被濾掉，不是整批落成 None。
+        leaf_coordinates = {
+            "audience": "陌生・知道問題", "pain": "太麻煩", "angle": None, "hook": None,
+            "proof": None, "offer": None, "format": None,
+        }
+        schedule_jobs.PROVIDER = _fake(
+            _tree_fenced(_one_tree_nodes(coordinates=leaf_coordinates))
+        )
         resp = self.client.post(
             f"/api/schedule/brands/{self.brand['id']}/tree", json={"plan_index": 0}
         )
@@ -780,8 +825,8 @@ class QueuedGenerationTest(_ScheduleApiTestBase):
         self.assertEqual(tree_row["status"], "succeeded")
 
         rows = web.conn.execute(
-            "SELECT source_ref, status FROM workbench_brief WHERE brand_id = %s"
-            " ORDER BY created_at", (self.brand["id"],),
+            "SELECT source_ref, status, coordinates_snapshot_json FROM workbench_brief"
+            " WHERE brand_id = %s ORDER BY created_at", (self.brand["id"],),
         ).fetchall()
         # `_one_tree_nodes()`（預設引數）固定兩個最深層節點：「單元1」node_key "1.1.1"，
         # 「單元2」node_key "1.2.1"（跟既有其他測試同一個固定映射）。
@@ -790,6 +835,13 @@ class QueuedGenerationTest(_ScheduleApiTestBase):
         self.assertEqual({r["source_ref"]["node_key"] for r in rows}, {"1.1.1", "1.2.1"})
         self.assertTrue(all(
             r["source_ref"]["source_tree_task_id"] == tree_row["id"] for r in rows
+        ))
+        # done-check 3：每份工單的 coordinates_snapshot_json 等於它那個節點的非空座標——
+        # 空維度（angle／hook／proof／offer／format）被濾掉，不是整批落成 None。
+        # Red proof：把 jobs.py 那行改回 `"coordinates": None`，這裡先紅。
+        self.assertTrue(all(
+            r["coordinates_snapshot_json"] == {"audience": "陌生・知道問題", "pain": "太麻煩"}
+            for r in rows
         ))
 
         get_resp = self.client.get(f"/api/schedule/brands/{self.brand['id']}")
@@ -1995,6 +2047,15 @@ class BindTreeApiContractTest(_ScheduleApiTestBase):
         self.assertNotIn("- 組合：A", replace_section)
         self.assertNotIn("- 組合：C", replace_section)
 
+        # 票 05（ADR 0069 §1）：座標詞彙表是這份 prompt 的最後一段，緊接在【延續】之後
+        # （ADR 0068 §6「vocabulary last」同一條規則）。Red proof：把 `schedule_tree()`
+        # 的 prompt tuple 裡 `coordinate_vocabulary_text` 拿掉，這個 assertIn 先紅。
+        self.assertIn("## 座標詞彙表", tree_prompt)
+        self.assertGreater(tree_prompt.index("## 座標詞彙表"), tree_prompt.index("【延續】"))
+        # 新版 `_CONTINUITY_CLOSING_LINE`——red proof：把它改回舊文字（只有 name 不能動），
+        # 這個 assertIn 先紅。
+        self.assertIn("name 與 coordinates 都不能動", tree_prompt)
+
     def test_continuity_overlay_matches_by_depth_and_name_not_position(self):
         """done-check 2：overlay 只認 `(depth, name)`，不認 `node_key`——沿用節點在新樹裡
         的 node_key（"1.1"）跟上一期記分列的 node_key（刻意設成不同的 "9.9"）不一樣，照樣
@@ -2053,6 +2114,82 @@ class BindTreeApiContractTest(_ScheduleApiTestBase):
         depth3_a = node_a_space["children"][0]
         self.assertEqual(depth3_a["name"], "A")
         self.assertIsNone(depth3_a["continued_from_node_key"])  # 名字對，深度不對
+
+    def test_continuity_overlay_overwrites_coordinates_with_last_periods_labels(self):
+        """done-check 2（ADR 0069 §2／§3）：深度 3 沿用節點的座標由程式蓋成上一期
+        `period_node_result.coordinates_json` 轉出來的 label，不管代理這次寫了什麼——
+        矛盾檢查 check 1 點名的正是這個案例（本地模型抄錯座標，一個字都不該讓它蒙混過關，
+        故意讓代理的 hook 跟上一期不一樣）。沒配對到的第三層節點維持模型自己寫的座標。"""
+        channel_id = schedule_repo.ensure_meta_channel(web.conn, coredb.DEV_ORG_ID)
+        node_rows = [{
+            "source_tree_task_id": "tsk_coord_overlay", "channel_id": channel_id,
+            "node_key": "9.9.9", "depth": 3, "node_name": "01A",
+            "external_id": "ad-01a", "approved_share": None, "approved_daily_amount": None,
+            "actual_spend": 500.0, "revenue_tracked": 1000.0, "roas_conservative": 1.5,
+            "roas_optimistic": 2.0, "roas_coverage": 1.0, "breakeven_roas": 1.0,
+            "breakeven_source": "測試打平線", "verdict": "win",
+            "coordinates_json": {
+                "audience_key": None, "pain_key": "effort", "angle_key": None,
+                "hook_key": "outcome_led", "proof_key": None, "offer_key": None,
+                "format_key": None,
+            },
+            "settled_at": datetime.now(UTC),
+        }]
+        self._write_scored_period(
+            start=date(2026, 7, 1), end=date(2026, 7, 14), daily_budget=2000.0,
+            settled_spend=500.0, settled_revenue=1000.0, node_rows=node_rows,
+        )
+
+        schedule_jobs.PROVIDER = _fake(_fenced_plans([_one_plan()]))
+        resp = self._post(plan_count=1)
+        self.assertEqual(resp.status_code, 200, resp.text)
+        self._run_worker()
+
+        custom_nodes = [{
+            "name": "根", "fields": [], "share": None, "warnings": [],
+            "children": [
+                {"name": "組合", "fields": [], "share": 1.0, "warnings": [],
+                 "children": [
+                     {"name": "01A", "fields": [], "share": None, "warnings": [],
+                      "children": [],
+                      # 模型抄錯：hook 打成別的字，證明程式蓋掉它、不是照抄它。
+                      "coordinates": {
+                          "audience": None, "pain": "用起來不舒服", "angle": None,
+                          "hook": "痛點提問", "proof": None, "offer": None, "format": None,
+                      }},
+                     {"name": "沒配對到的節點", "fields": [], "share": None, "warnings": [],
+                      "children": [],
+                      "coordinates": {
+                          "audience": None, "pain": None, "angle": "UGC 偽裝", "hook": None,
+                          "proof": None, "offer": None, "format": None,
+                      }},
+                 ]},
+            ],
+        }]
+        schedule_jobs.PROVIDER = _fake(_tree_fenced(custom_nodes))
+        resp = self.client.post(
+            f"/api/schedule/brands/{self.brand['id']}/tree", json={"plan_index": 0}
+        )
+        self.assertEqual(resp.status_code, 200, resp.text)
+        self._run_worker()
+
+        get_resp = self.client.get(f"/api/schedule/brands/{self.brand['id']}")
+        self.assertEqual(get_resp.status_code, 200, get_resp.text)
+        combo = get_resp.json()["tree"]["nodes"][0]["children"][0]
+        node_01a, node_unmatched = combo["children"]
+
+        self.assertEqual(node_01a["name"], "01A")
+        self.assertEqual(node_01a["continued_from_node_key"], "9.9.9")
+        # Red proof：拿掉 binding._apply_continuity() 對深度 3 的 coordinates 覆蓋，
+        # 這兩個 assertEqual 先紅（回到模型寫的「用起來不舒服」／「痛點提問」）。
+        self.assertEqual(node_01a["coordinates"]["pain"], "太麻煩")
+        self.assertEqual(node_01a["coordinates"]["hook"], "結果導向")
+        # 模型寫的其他維度沒被上一期記過分（None），程式不會用 key 本身頂替，維持 None。
+        self.assertIsNone(node_01a["coordinates"]["audience"])
+
+        self.assertIsNone(node_unmatched["continued_from_node_key"])
+        self.assertEqual(node_unmatched["name"], "沒配對到的節點")
+        self.assertEqual(node_unmatched["coordinates"]["angle"], "UGC 偽裝")
 
     def test_continuity_overlay_is_none_for_every_node_when_nothing_settled(self):
         """done-check 2 子案：這個品牌從沒結算過任何檔期 → 每個節點都是 None，但鍵要在
@@ -2358,14 +2495,20 @@ class CreativeCandidateSyncTest(_ScheduleApiTestBase):
     （用哪一輪、擋不擋重複寫入），不是文案生成本身（那是 test_workbench.py／
     test_workbench_api.py 的事）。"""
 
-    def _tree_leaf_brief(self) -> dict:
+    def _tree_leaf_brief(self, coordinates: dict | None = None) -> dict:
         """展開一棵最小的活動樹，回傳最深層節點「單元1」（node_key 固定 "1.1.1"，跟既有
-        其他測試同一個固定映射）自動提交的那份 workbench_brief。"""
+        其他測試同一個固定映射）自動提交的那份 workbench_brief。`coordinates`：`None`
+        （預設）不帶這個欄位——`test_adopted_round_not_latest_syncs_to_creative_candidate_
+        idempotently` 靠這一點維持綠燈（票面矛盾檢查 §6：那支測試斷言模型的答案落地，
+        前提是這裡的快照是空的）；帶了就是這個節點的 `coordinates_snapshot_json`（票 05，
+        ADR 0069 §4）。"""
         schedule_jobs.PROVIDER = _fake(_fenced_plans([_one_plan()]))
         resp = self._post(plan_count=1)
         self.assertEqual(resp.status_code, 200, resp.text)
         self._run_worker()
-        schedule_jobs.PROVIDER = _fake(_tree_fenced(_one_tree_nodes()))
+        schedule_jobs.PROVIDER = _fake(
+            _tree_fenced(_one_tree_nodes(coordinates=coordinates))
+        )
         resp = self.client.post(
             f"/api/schedule/brands/{self.brand['id']}/tree", json={"plan_index": 0}
         )
@@ -2378,11 +2521,14 @@ class CreativeCandidateSyncTest(_ScheduleApiTestBase):
         return dict(row)
 
     def _write_copy_round(self, brief_id: str, round_no: int, angle_label: str,
-                           visual_tone: str = "暖調生活", warnings: list | None = None) -> str:
+                           visual_tone: str = "暖調生活", warnings: list | None = None,
+                           hook_label: str | None = None) -> str:
         """直接寫一輪 `workbench_output`（含它自己的 `llm_task` 列）——回傳這一輪的
         `llm_task_id`，供斷言「同步用的是哪一輪」。`visual_tone` 可覆寫，供壞值測試用
         （票 05 fix round：`body_json` 裡不是兩個合法值之一的情況）。`warnings` 可覆寫，
-        預設 `[]`（票 workbench-2/02 ablation §4：`_copy_summary()` 的過濾測試用）。"""
+        預設 `[]`（票 workbench-2/02 ablation §4：`_copy_summary()` 的過濾測試用）。
+        `hook_label` 可覆寫（票 05，ADR 0069 §4：快照贏過模型逐維度合併測試需要模型自己
+        也填一個 `hook`）。"""
         llm_task_id = coredb.new_id("llm")
         web.conn.execute(
             "INSERT INTO llm_task (id, org_id, brand_id, task_type, context_scope_json,"
@@ -2394,7 +2540,7 @@ class CreativeCandidateSyncTest(_ScheduleApiTestBase):
             (llm_task_id, coredb.DEV_ORG_ID, self.brand["id"], coredb.now_iso()),
         )
         coordinates = {
-            "audience": None, "pain": None, "angle": angle_label, "hook": None,
+            "audience": None, "pain": None, "angle": angle_label, "hook": hook_label,
             "proof": None, "offer": None, "format": None,
         }
         body = {
@@ -2411,6 +2557,11 @@ class CreativeCandidateSyncTest(_ScheduleApiTestBase):
         return llm_task_id
 
     def test_adopted_round_not_latest_syncs_to_creative_candidate_idempotently(self):
+        # 票 05（ADR 0069 §4）矛盾檢查：`_tree_leaf_brief()` 不帶 `coordinates`，這個
+        # brief 的 `coordinates_snapshot_json` 因此是 `{}`——底下 `angle_key ==
+        # "scarcity_marketing"` 這條斷言的綠燈靠的正是「快照空，模型的答案沒被蓋掉」；
+        # 這支測試不能改成帶座標的 fixture，那是 `test_snapshot_wins_per_dimension_
+        # over_model_coordinates` 的事。
         brief = self._tree_leaf_brief()
         round1_task_id = self._write_copy_round(brief["id"], 1, "稀缺性行銷")
         output_1 = web.conn.execute(
@@ -2452,6 +2603,32 @@ class CreativeCandidateSyncTest(_ScheduleApiTestBase):
             (self.brand["id"],),
         ).fetchone()["n"]
         self.assertEqual(count, 1)
+
+    def test_snapshot_wins_per_dimension_over_model_coordinates(self):
+        """done-check 4（ADR 0069 §4）：`angle` 這個維度快照有值，蓋過模型的答案；
+        `hook` 快照沒填，模型的答案補上——逐維度合併，不是整份二選一。Red proof：把
+        `_sync_creative_candidate()` 的合併改回只用 `copy_output.get("coordinates_json")`
+        （拿掉快照），`angle_key` 那個 assertEqual 先紅。"""
+        brief = self._tree_leaf_brief(coordinates={
+            "audience": None, "pain": None, "angle": "UGC 偽裝", "hook": None,
+            "proof": None, "offer": None, "format": None,
+        })
+        self._write_copy_round(brief["id"], 1, "稀缺行銷", hook_label="痛點提問")
+        output_1 = web.conn.execute(
+            "SELECT id FROM workbench_output WHERE brief_id = %s AND generation_round = 1",
+            (brief["id"],),
+        ).fetchone()
+        workbench_repo.adopt_output(web.conn, coredb.DEV_ORG_ID, self.brand["id"], output_1["id"])
+
+        get_resp = self.client.get(f"/api/schedule/brands/{self.brand['id']}")
+        self.assertEqual(get_resp.status_code, 200, get_resp.text)
+
+        candidate = web.conn.execute(
+            "SELECT angle_key, hook_key FROM creative_candidate WHERE brand_id = %s",
+            (self.brand["id"],),
+        ).fetchone()
+        self.assertEqual(candidate["angle_key"], "ugc_disguise")  # 快照贏過模型的「稀缺行銷」
+        self.assertEqual(candidate["hook_key"], "pain_question")  # 快照沒填，模型的答案補上
 
     def test_unadopted_round_still_syncs_to_creative_candidate(self):
         """票 workbench-2/01（ADR 0068 §3 amended，drill 2）：同步跟 `adopted_output()`

@@ -337,10 +337,16 @@ _CONTINUITY_KEEP_HEADER = (
     "（系統靠名稱把它接回同一個 Meta 物件，改一個字就接不回去）："
 )
 _CONTINUITY_REPLACE_HEADER = (
-    "上一期判決「賠」的節點不要沿用：換座標、換名字，並在該節點的 warnings 寫一句"
-    "「取代上一期的 <舊名>」："
+    "上一期判決「賠」的節點不要沿用：換名字、換座標（七個維度至少一個跟舊的不同），並在"
+    "該節點的 warnings 寫一句「取代上一期的 <舊名>」："
 )
-_CONTINUITY_CLOSING_LINE = "沿用的節點可以改 share、fields、children；只有 name 不能動。"
+# 票 05（ADR 0069 §2）：程式會把沿用節點的座標蓋成上一期表格裡那一列的座標欄
+# （`binding._apply_continuity()`），不管代理這次寫了什麼——這句話只是讓代理少猜一次，
+# 蓋不蓋是程式決定的，不是這句話決定的。
+_CONTINUITY_CLOSING_LINE = (
+    "沿用的節點可以改 share、fields、children；name 與 coordinates 都不能動——"
+    "coordinates 照【上一期】表的座標欄逐字抄。"
+)
 
 
 def _continuity_campaign_names(
@@ -398,6 +404,26 @@ def _continuity_text(node_results: list[dict], campaign_names: list[str]) -> str
         )
     out.append(_CONTINUITY_CLOSING_LINE)
     return "\n".join(out)
+
+
+def _coordinate_vocabulary_text(conn, org_id: str, brand_id: str) -> str:
+    """票 05（ADR 0069 §1）：活動樹 prompt 的**最後**一段——七個維度各自可用的座標
+    label，跟 copy prompt 既有的「vocabulary last」順序同一條規則（ADR 0068 §6，T8b
+    量到的：「答完再照做」這種指令放最後才會被照做）。停用／被否決的 label 都不列（票面
+    原文，兩個條件都濾——`history.py` 只濾 `disabled_at`，不是同一條規則）；維度中文名
+    沿用 `diagnosis.DIMENSION_LABELS`，不另開一份。只讀 `repository.list_coordinates()`
+    （schedule 自己的表），不 import workbench（只准 import `__init__`，ADR 0068 §2）。"""
+    labels_by_dimension: dict[str, list[str]] = {dim: [] for dim in repository.COORDINATE_KEYS}
+    for row in repository.list_coordinates(conn, org_id, brand_id):
+        if row["disabled_at"] is not None or row["rejected"]:
+            continue
+        labels_by_dimension[row["dimension"]].append(row["label"])
+    lines = ["## 座標詞彙表"]
+    lines.extend(
+        f"{diagnosis_mod.DIMENSION_LABELS[dimension]}：{'、'.join(labels_by_dimension[dimension])}"
+        for dimension in repository.COORDINATE_KEYS
+    )
+    return "\n".join(lines)
 
 
 def schedule_plan(org_id: str, brand_id: str, product_ids: list, platform: str, objective: str,
@@ -507,10 +533,11 @@ def schedule_tree(org_id: str, brand_id: str, plan_index: int, plan_task_id: str
         node_results = last_period[1] if last_period else []
         campaign_names = _continuity_campaign_names(conn, org_id, brand_id, node_results)
         continuity_text = _continuity_text(node_results, campaign_names)
+        coordinate_vocabulary_text = _coordinate_vocabulary_text(conn, org_id, brand_id)
         prompt = "\n\n".join(
             section for section in
             (department_text, methodology_result.text, params_text, brand_context,
-             last_period_text, continuity_text) if section
+             last_period_text, continuity_text, coordinate_vocabulary_text) if section
         )
 
         context = gateway.TaskContext(
@@ -549,7 +576,15 @@ def schedule_tree(org_id: str, brand_id: str, plan_index: int, plan_task_id: str
                             "node_name": leaf["name"],
                         },
                         "product_id": product_ids[0] if product_ids else None,
-                        "coordinates": None, "visual_tone": None, "visual_concept": None,
+                        # 票 05（ADR 0069 §3）：這個節點的座標（含沿用節點被程式蓋過的
+                        # 那一份，binding.tree_with_bindings() 讀時 overlay 已經疊上）
+                        # 隨工單交棒——空維度丟棄，舊樹（沒有 coordinates 欄位）的節點
+                        # 一律得到 `{}`。這是這棵樹展開當下那一刻的值（下一次結算之後
+                        # 畫面重讀會不會不一樣，見 docs/contracts/workbench.md 那條已知落差）。
+                        "coordinates": {
+                            k: v for k, v in (leaf.get("coordinates") or {}).items() if v
+                        },
+                        "visual_tone": None, "visual_concept": None,
                         "style_key": "ugc",
                         "request": {"use_brand_knowledge": True, "product_ids": product_ids},
                     })

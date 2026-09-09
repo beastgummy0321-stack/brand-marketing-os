@@ -93,6 +93,8 @@ Allowed dependencies: `app.core`, `app.background`, `app.llm`, `app.shared.web`,
 - ADR 0028 / 0029 — task files under `app/departments/workbench/` are prompt parts the shell cats
   in and never parses.
 - ADR 0032 — every LLM call goes through `gateway.run_task()`.
+- ADR 0069 — the tree owns a node's seven coordinates; `submit_brief()`'s `coordinates` is the
+  tree's snapshot, and the copy prompt states it as what to write for, not as a reference.
 
 Module-local and reversible, decided here rather than in an ADR:
 
@@ -106,6 +108,11 @@ Module-local and reversible, decided here rather than in an ADR:
   coordinate keys are read from `coordinates_snapshot_json` instead, and nothing reads the eighth;
   the columns stay (nullable, no migration this ticket) — drop them in the next workbench
   migration that touches the table.
+- **`coordinates_snapshot_json` is frozen at the moment `submit_brief()` runs** (ADR 0069 §3):
+  `app.schedule` fills it from the tree node's coordinates at that `tree_with_bindings()` call.
+  The schedule screen's own coordinate overlay is recomputed on every read against the latest
+  settled period, so after a later settlement the screen and an already-submitted brief's
+  snapshot can show different values for the same node — a known ceiling, not fixed by any code.
 
 - A closed brief is hidden from the default list and excluded from the schedule page's 投放包 only
   if it has no adopted copy; adoption survives closing.

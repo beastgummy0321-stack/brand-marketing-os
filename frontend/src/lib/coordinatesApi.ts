@@ -4,9 +4,10 @@
  * `{data, generated_at}` 信封，直接照抄路由回傳的欄位。 */
 import { apiFetch, errorMessageFromResponse } from "./http";
 
-/** `CONSTITUTION.md` 規則 5 的七個維度鍵名——跟 `components/schedule/CampaignTree.tsx` 的
- * `COORDINATE_LABELS` 是同一份中文翻譯的另一份鏡射（container contract 規則 5：重複比
- * 跨模組互相 import 便宜，兩邊各自維護）。 */
+/** `CONSTITUTION.md` 規則 5 的七個維度鍵名。`components/schedule/CampaignTree.tsx`（票 05）
+ * 直接 import 下面的 `COORDINATE_DIMENSIONS` 顯示節點座標，不另開一份鏡射——那個元件已經
+ * 有機器閘門守著不得寫死通路／創意詞彙（`CampaignTreeVocabularyGateTest`），這份共用維度
+ * 標籤不算那條規則要擋的東西。 */
 export type CoordinateDimension = "audience" | "pain" | "angle" | "hook" | "proof" | "offer" | "format";
 
 export const COORDINATE_DIMENSIONS: [CoordinateDimension, string][] = [

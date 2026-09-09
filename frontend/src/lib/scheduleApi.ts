@@ -79,6 +79,10 @@ export interface CampaignTreeNode {
   /** 票 04：讀時 overlay，名字＋層跟上一個已結算檔期的某個記分節點對上時是那一列的
    * node_key，否則 null（第一層一律 null，從沒被記過分）。 */
   continued_from_node_key: string | null;
+  /** 票 05（ADR 0069）：只有第三層節點有值（七個維度各自一個 label 或 null，某個維度
+   * 不適用就是 null），第一、二層一律 null。沿用節點（`continued_from_node_key` 非
+   * null）的座標是程式蓋成上一期的，不是代理這次寫的。 */
+  coordinates: Partial<Record<CoordinateDimension, string | null>> | null;
 }
 
 /** 票 01（ADR 0040）：核准——花錢煞車。`spend_to_date` 是 null 代表這棵樹還沒有任何節點

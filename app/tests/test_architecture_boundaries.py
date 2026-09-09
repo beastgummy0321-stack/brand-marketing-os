@@ -1377,8 +1377,15 @@ class CoordinateDimensionSyncTest(unittest.TestCase):
 # `channel_entity_map` rows, zero `list_campaigns` calls) plus this reason comment's and the
 # `KNOWN_MODULE_SIZES["app/schedule"]` reason comment's own lines -- measured (`_line_totals()`),
 # no slack.
-# 23592 -> 23632.
-TEST_LINES_CEILING = 23632  # Previous: 23592 --
+# 23632 -> 23856 (+224). ticket workbench-2/05 (ADR 0069, coordinates owned by the tree):
+# test_schedule.py gains BuildTreeTest's two coordinate-parsing cases, the continuity-overlay
+# coordinates-override case, the coordinate-vocabulary/closing-line assertions folded into the
+# existing continuity-section test, the brief-snapshot assertions folded into the existing
+# submits-one-brief-per-leaf test, and CreativeCandidateSyncTest's snapshot-wins-per-dimension
+# case; test_workbench.py gains BriefCoordinatesTextTest's two pure-function cases. Plus this
+# reason comment's and the KNOWN_MODULE_SIZES["app/schedule"]/["app/workbench"] reason
+# comments' own lines -- measured (`_line_totals()`), no slack.
+TEST_LINES_CEILING = 23856  # Previous: 23632 --
 # ticket workbench/02 round 1: test_workbench.py 338 lines (new file, done-check 2's five
 # cases) plus this table's own required edits (LAYER_ORDER entry, KNOWN_MODULE_SIZES
 # app/workbench row and the app row's reason-comment update) — measured (`_line_totals()`),
@@ -1915,7 +1922,17 @@ KNOWN_MODULE_SIZES = {
     "app/orders": 1423,  # 票 12：channel_revenue 一張表取代三張（刪掉藥局專屬那一整組
                           # 之後仍淨增）——官網帳本寫入路徑、channel_revenue_summary()、
                           # 通用手動登錄（含「官網不能手動登錄」那道錢的守門）
-    "app/schedule": 5135,  # ticket workbench-2/03 (loop guardrails): `binding.py` gains the
+    "app/schedule": 5235,  # ticket workbench-2/05 (ADR 0069, coordinates owned by the tree):
+                           # `tree.py` gains `_node_coordinates()` and the `coordinates` node-dict
+                           # field (+19); `binding.py` gains `_coordinate_labels()` and the
+                           # `_continuity_map()`/`_apply_continuity()`/`tree_with_bindings()`
+                           # rewrite that overlays a continued depth-3 node's coordinates (+29);
+                           # `jobs.py` gains `_coordinate_vocabulary_text()`, the two continuity
+                           # constants' new wording, and the tree-prompt/submit_brief coordinate
+                           # wiring (+35); `state.py` gains `_sync_creative_candidate()`'s snapshot
+                           # merge and `_leaf_ad_nodes()`'s `coordinates` field (+17). 5135 -> 5235
+                           # (+100), measured (`_module_sizes()`), no slack. Previous was
+                           # 5135 -- ticket workbench-2/03 (loop guardrails): `binding.py` gains the
                            # `NO_ACCOUNT_BOUND` constant (module-level, beside `NO_TREE_TO_BIND_
                            # MESSAGE`) plus the pre-loop guard in `bind_tree()` (returns
                            # `[NO_ACCOUNT_BOUND]` before the node loop when
@@ -2334,7 +2351,10 @@ KNOWN_MODULE_SIZES = {
                           # 讀數字）＋_fill_node_spend()／_current_month_window()（把票 05
                           # 的當月花費補到綁定節點上）＋tree.py 三個新欄位。前一次是票
                           # 10-feedback-entries 的 POST .../reject（784）
-    "app/workbench": 1536,  # 票 workbench-2/02（ablation）：`repository.py` 的 INSERT 跟兩個
+    "app/workbench": 1538,  # 票 workbench-2/05（ADR 0069）：`prompts.py` 的 `brief_text()`
+                            # 座標那行文字改成「文案照這組座標寫」。1536 -> 1538（+2），
+                            # 量到的數字，不留餘裕。前一次是
+                            # 1536 -- 票 workbench-2/02（ablation）：`repository.py` 的 INSERT 跟兩個
                             # 函式簽章拿掉八個死欄位／`created_by`；`prompts.py` 的風格行多讀
                             # `capture_line`。淨減：1543→1536（-7）。量到的數字，不留餘裕，
                             # 縮小後不強制回調（同一份 ponytail：見本檔上方

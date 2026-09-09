@@ -139,6 +139,33 @@ class _WorkbenchTestBase(unittest.TestCase):
         return [dict(r) for r in rows]
 
 
+# -- 票 05（ADR 0069 §3）：`brief_text()` 是純函式，不需要 DB fixture -------------------
+
+class BriefCoordinatesTextTest(unittest.TestCase):
+    _STYLE = {"key": "ugc", "label": "UGC", "capture_line": "手機直式實拍",
+              "authenticity_hint": "低"}
+
+    def test_states_the_coordinates_when_a_snapshot_is_present(self):
+        text = workbench_prompts.brief_text(
+            {"coordinates_snapshot_json": {"angle": "UGC 偽裝"}, "visual_tone": None,
+             "visual_concept": None, "request_json": {}},
+            "測試產品", self._STYLE,
+        )
+        self.assertIn("這個節點的座標（文案照這組座標寫）：", text)
+        self.assertIn(json.dumps({"angle": "UGC 偽裝"}, ensure_ascii=False), text)
+
+    def test_says_nothing_about_coordinates_without_a_snapshot(self):
+        """沒有快照（`coordinates_snapshot_json` 是 `None`）就不印這一行——跟舊語意共用
+        「座標」兩字，分開斷言才擋得住只改一半的復原。"""
+        text = workbench_prompts.brief_text(
+            {"coordinates_snapshot_json": None, "visual_tone": None,
+             "visual_concept": None, "request_json": {}},
+            "測試產品", self._STYLE,
+        )
+        self.assertNotIn("這個節點的座標", text)
+        self.assertNotIn("既有座標", text)
+
+
 # -- 案例 1：手動 copy 工單，走完整條 enqueue -> worker -> 一列 workbench_output --------
 
 class ManualCopyBriefTest(_WorkbenchTestBase):

@@ -18,6 +18,7 @@ from app.meta import repository as meta_repo
 from app.schedule import period_repository as period_repo
 from app.schedule import repository as schedule_repo
 from app.schedule import tree as tree_mod
+from app.schedule.creative import COORDINATE_KEYS
 
 NO_TREE_TO_BIND_MESSAGE = "還沒有成功產生的活動樹可以綁定，請先展開活動樹。"
 # 票 workbench-2/03：drill 2（2026-09-09）——沒綁帳戶就配對，每個節點事後都讀「在 Meta 上
@@ -74,27 +75,51 @@ def _apply_bindings(nodes: list, bindings: dict) -> None:
 
 
 def _continuity_map(conn, org_id: str, brand_id: str) -> dict:
-    """票 04：最近一次已結算檔期的逐節點記分列，轉成 `(depth, node_name) -> node_key`——
-    `tree_with_bindings()` 疊 `continued_from_node_key` 用的查表。跟判決無關（`win`／`lose`／
-    `unclear` 都在表裡；哪些名字「該」沿用是 `jobs._continuity_text()` 那段 prompt 的事，
-    這裡純粹是「這一期的名字，對不對得上上一期記過分的某個節點」）。沒有已結算檔期或零筆
-    記分列 → 空字典（每個節點都疊 `None`）。只查一次（ticket §2「Read the results once per
-    call」）。"""
+    """票 04：最近一次已結算檔期的逐節點記分列，轉成 `(depth, node_name) -> (node_key,
+    coordinates_json)`——`tree_with_bindings()` 疊 `continued_from_node_key`（票 04）與
+    `coordinates`（票 05，ADR 0069 §2）用的查表。跟判決無關（`win`／`lose`／`unclear` 都在
+    表裡；哪些名字「該」沿用是 `jobs._continuity_text()` 那段 prompt 的事，這裡純粹是
+    「這一期的名字，對不對得上上一期記過分的某個節點」）。沒有已結算檔期或零筆記分列 →
+    空字典（每個節點都疊 `None`）。只查一次（ticket §2「Read the results once per call」）。"""
     period = period_repo.latest_settled_period(conn, org_id, brand_id)
     if period is None:
         return {}
     results = period_repo.period_node_results(conn, org_id, brand_id, period["id"])
-    return {(r["depth"], r["node_name"]): r["node_key"] for r in results}
+    return {
+        (r["depth"], r["node_name"]): (r["node_key"], r["coordinates_json"]) for r in results
+    }
 
 
-def _apply_continuity(nodes: list, depth: int, continuity: dict) -> None:
+def _coordinate_labels(conn, org_id: str, brand_id: str) -> dict:
+    """`(dimension, key) -> label`——跟 `performance._coordinate_labels()` 同一個讀法
+    （`list_coordinates()`），但不能 import 那支：`performance.py` 已經 import 這個檔案
+    （`app/schedule/performance.py:38`），import 回去會成環，`FileImportCycleScanTest`
+    （`test_architecture_boundaries.py:460-475`）沒有容忍清單。"""
+    return {
+        (c["dimension"], c["key"]): c["label"]
+        for c in schedule_repo.list_coordinates(conn, org_id, brand_id)
+    }
+
+
+def _apply_continuity(nodes: list, depth: int, continuity: dict, labels: dict) -> None:
     """遞迴每一層疊 `continued_from_node_key`——第一層（`depth == 1`）從來沒被記過分，
-    一律 `None`；第二、三層照 `(depth, name)` 查表，查不到一樣是 `None`。"""
+    一律 `None`；第二、三層照 `(depth, name)` 查表，查不到一樣是 `None`。票 05（ADR 0069
+    §2／§3）：深度 3 配對到的節點，`coordinates` 再被上一期記分列的 `coordinates_json`
+    （`{dimension}_key` → label，查不到 label 就印 key 本身，`None` 的 key 留 `None`）蓋掉
+    ——不管代理這次寫了什麼，蓋掉是程式做的，不是提示詞做的（ADR 0069 rejected 選項
+    「prompt-only continuity」的理由）。深度 2 配對到的節點只疊 `continued_from_node_key`，
+    不動 `coordinates`（那一層的 `coordinates` 一律是 `None`，`tree.py` 定的形狀）。"""
     for node in nodes:
-        node["continued_from_node_key"] = (
-            None if depth == 1 else continuity.get((depth, node["name"]))
-        )
-        _apply_continuity(node["children"], depth + 1, continuity)
+        match = None if depth == 1 else continuity.get((depth, node["name"]))
+        node["continued_from_node_key"] = None if match is None else match[0]
+        if depth == 3 and match is not None:
+            coordinates_json = match[1] or {}
+            overlay = {}
+            for dimension in COORDINATE_KEYS:
+                key = coordinates_json.get(f"{dimension}_key")
+                overlay[dimension] = None if key is None else labels.get((dimension, key), key)
+            node["coordinates"] = overlay
+        _apply_continuity(node["children"], depth + 1, continuity, labels)
 
 
 def tree_with_bindings(conn, tree_row: dict, org_id: str, brand_id: str) -> dict:
@@ -102,12 +127,16 @@ def tree_with_bindings(conn, tree_row: dict, org_id: str, brand_id: str) -> dict
     位置（`node_key`）配對，名字不符就顯示未綁定。票 04：再疊一層讀時 overlay——
     `continued_from_node_key`，跟綁定完全獨立的另一件事（綁定認 `node_key`，這個認
     `(depth, name)`；一個節點可以「延續」但因為換了位置還沒綁定，反之亦然，ADR 0064）。
+    票 05（ADR 0069）：同一個 overlay 再疊深度 3 節點的 `coordinates`——`labels` 只查一次，
+    不管這棵樹有沒有任何沿用節點都查（跟 `jobs._last_period_text()` 既有的
+    `performance_mod._coordinate_labels()` 呼叫同一個簡單原則，不為了省一次查詢分岔）。
     讀從不寫。"""
     tree = tree_mod.tree_from_task_row(tree_row)
     bindings = schedule_repo.bindings_by_node_key(conn, org_id, brand_id, CHANNEL_KEY)
     _apply_bindings(tree["nodes"], bindings)
     continuity = _continuity_map(conn, org_id, brand_id)
-    _apply_continuity(tree["nodes"], 1, continuity)
+    labels = _coordinate_labels(conn, org_id, brand_id)
+    _apply_continuity(tree["nodes"], 1, continuity, labels)
     return tree
 
 

@@ -21,6 +21,7 @@ Private to app/schedule/（集裝箱憲章第一節）：只有 app/schedule/rou
    （票 10-feedback-entries 帶著票 09 review 的小修正，見票 10 settled 段第 6 點）。
 """
 
+from app.schedule.creative import COORDINATE_KEYS
 from app.schedule.plan import (
     _SHARE_SUM_TOLERANCE,
     _extract_last_json_block,
@@ -52,6 +53,20 @@ def _valid_warnings(raw_warnings) -> list[str] | None:
     if not isinstance(raw_warnings, list) or not all(isinstance(w, str) for w in raw_warnings):
         return None
     return list(raw_warnings)
+
+
+def _node_coordinates(raw_coordinates) -> dict:
+    """票 05（ADR 0069 §2）：深度 3 節點的七維座標，label 原文——這不是拒絕條件（舊樹
+    一律沒有這個欄位，還是要能渲染），所以永遠回一個字典，不回 `None`。`raw_coordinates`
+    不是 dict（缺欄位、或代理沒照格式給）就當空字典處理；未知的維度丟棄，非字串值變
+    `None`，缺的維度補 `None`。"""
+    if not isinstance(raw_coordinates, dict):
+        raw_coordinates = {}
+    result = {}
+    for dimension in COORDINATE_KEYS:
+        value = raw_coordinates.get(dimension)
+        result[dimension] = value if isinstance(value, str) else None
+    return result
 
 
 def _collect_nodes(
@@ -121,6 +136,10 @@ def _collect_nodes(
             # 讀時 overlay 疊上——形狀不因為有沒有疊圖而變。
             "bound_external_id": None, "spend": None, "roas": None,
             "continued_from_node_key": None,
+            # 票 05（ADR 0069 §2）：座標只在第三層有意義，第一、二層一律 None——跟
+            # continued_from_node_key 同一種形狀（binding.tree_with_bindings() 會疊上
+            # 沿用節點的座標，但那是讀時 overlay，這裡永遠是代理自己回的）。
+            "coordinates": _node_coordinates(raw.get("coordinates")) if depth == 3 else None,
         }
         if depth == budget_level:
             share_bucket.append(node)

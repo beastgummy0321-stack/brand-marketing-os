@@ -126,14 +126,19 @@ def _fill_node_spend(conn, org_id: str, brand_id: str, tree: dict) -> None:
 
 def _leaf_ad_nodes(nodes: list) -> list[dict]:
     """活動樹最深層（沒有 `children` 的）節點，照文件順序（深度優先、前序）——票 01：
-    內容跟這一層的節點一一對應，不是每一層都配一份。每個元素 `{"node_key", "name"}`
-    （票 T3d，ADR 0055 §1：身分是 `node_key`，`name` 只給代理比對用）。"""
+    內容跟這一層的節點一一對應，不是每一層都配一份。每個元素 `{"node_key", "name",
+    "coordinates"}`（票 T3d，ADR 0055 §1：身分是 `node_key`，`name` 只給代理比對用；票 05，
+    ADR 0069 §3：`coordinates` 帶著讓 `jobs.schedule_tree()` 交棒進 brief 的快照——最深層
+    節點一定是第三層，`tree_with_bindings()` 已經把沿用節點的座標蓋成上一期的）。"""
     result = []
     for node in nodes:
         if node["children"]:
             result.extend(_leaf_ad_nodes(node["children"]))
         else:
-            result.append({"node_key": node["node_key"], "name": node["name"]})
+            result.append({
+                "node_key": node["node_key"], "name": node["name"],
+                "coordinates": node["coordinates"],
+            })
     return result
 
 
@@ -176,22 +181,33 @@ def _image_prompt_summary(output: dict | None) -> dict | None:
 
 
 def _sync_creative_candidate(conn, org_id: str, brand_id: str, tree_task_id: str,
-                              node_key: str, copy_output: dict, copy: dict) -> None:
-    """ADR 0068 §3：一個節點的採用版文案 → `creative_candidate`（排程自己的記憶，見
-    `docs/adr/0068-…md` 決定 3）。讀時同步、不是 workbench 回呼——保持依賴單向。
+                              node_key: str, copy_output: dict, copy: dict,
+                              brief: dict) -> None:
+    """ADR 0068 §3（amended by ADR 0069 §4）：一個節點的採用版文案 → `creative_candidate`
+    （排程自己的記憶）。讀時同步、不是 workbench 回呼——保持依賴單向。
     `persist_creative_result` 靠 `task_id`（= 這份輸出自己的 `llm_task_id`）擋重複寫入，
     一個節點一次呼叫，不跟其他節點的輸出共用同一個 `task_id`（idempotency 的鍵）。
     `visual_tone` 退回 `VISUAL_TONE_VALUES` 兩個值或 `None`——縱深防禦（workbench 已經
     sanitise 過寫進 `body_json` 的值，這裡不信任那份保證，壞值不能讓 `creative_candidate`
-    的 CHECK 炸掉整支排程 GET）。"""
+    的 CHECK 炸掉整支排程 GET）。
+
+    座標：`brief["coordinates_snapshot_json"]`（樹的座標，ADR 0069 §3）逐維度贏過文案模型
+    自己回的 `copy_output["coordinates_json"]`——快照有值的維度用快照，快照沒填的維度才用
+    模型的答案。沒有快照的手動 brief（`coordinates_snapshot_json` 是 `None`）保留今天的
+    行為：全部用模型的答案。"""
     visual_tone = copy["visual_tone"]
     if visual_tone not in VISUAL_TONE_VALUES:
         visual_tone = None
+    snapshot = brief["coordinates_snapshot_json"] or {}
+    coordinates = {
+        **(copy_output.get("coordinates_json") or {}),
+        **{k: v for k, v in snapshot.items() if v},
+    }
     schedule_repo.persist_creative_result(
         conn, org_id, brand_id, task_id=copy_output["llm_task_id"],
         source_tree_task_id=tree_task_id,
         ads=[{
-            "node_key": node_key, "coordinates": copy_output.get("coordinates_json") or {},
+            "node_key": node_key, "coordinates": coordinates,
             "visual_tone": visual_tone, "visual_concept": copy["visual_concept"],
             "fields": [
                 {"label": "主要文字（短）", "value": copy["short"]},
@@ -238,6 +254,7 @@ def _briefs_for_tree(conn, org_id: str, brand_id: str, tree_row: dict | None) ->
         if copy_output is not None and copy is not None:
             _sync_creative_candidate(
                 conn, org_id, brand_id, tree_row["id"], leaf["node_key"], copy_output, copy,
+                brief,
             )
         image_output = workbench.adopted_output(conn, org_id, brand_id, brief["id"], "image_prompt")
         entries.append({

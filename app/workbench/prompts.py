@@ -27,8 +27,10 @@ def brief_text(brief: dict, product_name: str | None, style: dict) -> str:
     coordinates = brief.get("coordinates_snapshot_json") or {}
     lines = ["## 這張工單", f"產品：{product_name or '（無）'}"]
     if coordinates:
+        # 票 05（ADR 0069 §3）：這組座標是樹交下來的，文案要照這組座標寫，不是可改可不改
+        # 的參考——舊版那句只當語氣延續參考、非必須照抄的講法，在座標歸樹之後不再成立。
         lines.append(
-            "既有座標（延續語氣參考用，非必須照抄）：" + json.dumps(coordinates, ensure_ascii=False)
+            "這個節點的座標（文案照這組座標寫）：" + json.dumps(coordinates, ensure_ascii=False)
         )
     lines.append(f"visual_tone：{brief.get('visual_tone') or '（無）'}")
     lines.append(f"visual_concept：{brief.get('visual_concept') or '（無）'}")
