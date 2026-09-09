@@ -37,14 +37,16 @@ def _parts_for(kind: str, request: dict) -> list:
     """哪些 part 現在就要排隊生成（票 §2）：`ad_creative`／`copy` 排 `copy`；
     `request_json.image_prompt_count` 有值就排 `image_prompt`（跟 kind 是不是
     `image_prompt` 無關——一張 `ad_creative` 工單同時要文案跟圖時，兩個 part 都排）；
-    `video_script`／`free` 各自的 kind 排自己那個 part。沒有給張數的 `image_prompt` 工單
-    先不排任何 job（ADR 0068 §7：張數是使用者的，沒有預設值）。"""
+    `request_json.video_script_count` 有值就排 `video_script`（票 workbench/06，同一條
+    規則——鏡 `image_prompt_count`，張數是使用者的，沒有預設值）；`free` 照 kind 排自己
+    那個 part（自由生成沒有張數這個概念）。沒有給張數的 `image_prompt`／`video_script`
+    工單先不排任何 job（ADR 0068 §7）。"""
     parts = []
     if kind in ("ad_creative", "copy"):
         parts.append("copy")
     if request.get("image_prompt_count"):
         parts.append("image_prompt")
-    if kind == "video_script":
+    if request.get("video_script_count"):
         parts.append("video_script")
     if kind == "free":
         parts.append("free")
@@ -93,6 +95,13 @@ def submit_brief(conn, org_id: str, brand_id: str, brief: dict, *,
         # 票 03 §2：範圍檢查在送出當下就做，不留到 worker 才發現——不管 kind 是什麼，
         # 只要 image_prompt_count 有值就會排 image_prompt part（`_parts_for()` 檔頭）。
         raise ValueError("count_out_of_range")
+    video_script_count = request.get("video_script_count")
+    if video_script_count is not None and not (
+        isinstance(video_script_count, int) and 1 <= video_script_count <= 5
+    ):
+        # 票 workbench/06：跟上面 image_prompt_count 同一條規則，鏡它的範圍檢查——只要
+        # video_script_count 有值就會排 video_script part（`_parts_for()` 檔頭）。
+        raise ValueError("count_out_of_range")
     if brief["kind"] == "image_prompt":
         _validate_on_image_texts(request)
     brief_id = new_id("wbb")
@@ -119,7 +128,12 @@ def submit_brief(conn, org_id: str, brand_id: str, brief: dict, *,
         ),
     )
     for part in parts:
-        count = request.get("image_prompt_count") if part == "image_prompt" else None
+        if part == "image_prompt":
+            count = request.get("image_prompt_count")
+        elif part == "video_script":
+            count = request.get("video_script_count")
+        else:
+            count = None
         background_enqueue(
             "background.workbench_generate", org_id=org_id,
             lock=f"workbench:{brief_id}:{part}",
@@ -137,7 +151,7 @@ def create_brief(conn, org_id: str, brand_id: str, brief: dict, *, created_by: s
     （票 05 之後）直接呼叫 `submit_brief()` 才用的 kind，這支 HTTP 端點不開放
     （契約頁「Routes」）——`submit_brief()` 本身的簽章與行為對其他呼叫端保持不變，不
     在那裡加這道檢查。其餘驗證（style_key／product_id／image_prompt_count／
-    on_image_texts）都在 `submit_brief()` 裡，這裡不重複。"""
+    video_script_count／on_image_texts）都在 `submit_brief()` 裡，這裡不重複。"""
     if brief.get("kind") not in _CREATABLE_KINDS:
         raise ValueError("kind_unknown")
     return submit_brief(conn, org_id, brand_id, brief, created_by=created_by)
@@ -429,6 +443,11 @@ def run_part(conn: _AnyConn, org_id: str, brand_id: str, brief_id: str, part: st
             # 跟 jobs.py `_run()` 同一條規則（票 03 §3），但這裡先擋在 enqueue 之前——
             # 不花那通一定會被拒絕的 LLM 呼叫的錢。
             raise ValueError("on_image_texts_required")
+    if part == "video_script":
+        # 票 workbench/06 §3：跟 image_prompt 一樣，張數是使用者的、沒有預設值——
+        # 「再產一輪」重跑一樣要帶（同一個表單欄位、同一條規則）。
+        if count is None or not (1 <= count <= 5):
+            raise ValueError("count_out_of_range")
     mark_brief_status(conn, org_id, brand_id, brief_id, "queued")
     background_enqueue(
         "background.workbench_generate", org_id=org_id,

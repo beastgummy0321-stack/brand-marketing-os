@@ -33,13 +33,14 @@ DEPARTMENTS_DIR = APP_DIR / "departments" / "workbench"
 # `mock.patch.object(jobs, "PROVIDER", FakeProvider(...))` 換掉。
 PROVIDER = providers.AnthropicProvider()
 
-# 任務型別 -> 方法論對照表列名（app/methodology/README.md，ADR 0068 §9）。`free`
-# 沒有自己的方法論列、也沒有 app/departments/workbench/free.md——跟 video_script 一樣，
-# 這個 part 在這張票是休眠的（沒有路由、沒有測試案例呼叫它），留給之後補上任務檔的票。
+# 任務型別 -> 方法論對照表列名（app/methodology/README.md，ADR 0068 §9；`free` 那一列
+# 票 workbench/06 補：ADR 0068 §9 只點名前三個，`free` 沒有格式規則、只借
+# humanizer-zh-tw.md 去 AI 味）。
 _METHODOLOGY_LABELS = {
     "copy": "素材工作檯文案",
     "image_prompt": "素材工作檯圖片提示詞",
     "video_script": "素材工作檯影片腳本",
+    "free": "素材工作檯自由生成",
 }
 
 _PATH_RE = re.compile(r"^([a-z_]+)(?:\[(\d+)\]|\.([a-z_]+))?$")
@@ -170,8 +171,7 @@ def _validate(part: str, data, *, vocabulary: dict, count) -> tuple:
         return validate.check_image_prompts(data, count)
     if part == "video_script":
         return validate.check_video_script(data, count), None
-    return [], None  # 'free'：自由生成沒有格式驗證器（ADR 0068 §9 沒有這個 part 的方法論
-                      # 或格式規則），只驗過 JSON-only 就算數
+    return validate.check_free(data), None  # 'free'
 
 
 def _fix_call(conn, brand_id: str, context, task_type: str, failing: list, *,
@@ -250,9 +250,12 @@ def _run(conn, org_id: str, brand_id: str, brief_id: str, part: str, count) -> N
         prompt = prompts.image_prompt_prompt(
             department_text, methodology_text, brief_section, brand_context, headlines, count
         )
+    elif part == "video_script":
+        prompt = prompts.video_script_prompt(
+            department_text, methodology_text, brief_section, brand_context, count
+        )
     else:
-        # video_script／free：跟 copy 同一種組法，少座標詞彙表（這兩個 part 不用回答七維
-        # 座標）。
+        # free：跟 copy 同一種組法，少座標詞彙表、少張數（自由生成沒有則數這個概念）。
         prompt = prompts.copy_prompt(
             department_text, methodology_text, brief_section, brand_context, ""
         )

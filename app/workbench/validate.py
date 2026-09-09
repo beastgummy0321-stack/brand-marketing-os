@@ -180,18 +180,65 @@ def check_image_prompts(data, count: int) -> tuple:
 
 
 def check_video_script(data, count: int) -> list:
-    """`count == request`，每則非空——沒有字數帶（`meta-format-specs.md:52-53` 沒有給影片
-    腳本字數上限，ADR 0047：影片腳本不設字數帶）。"""
+    """`scripts` 長度 == request，每支至少 3 個 beats、`framework` 非空——沒有字數帶
+    （`meta-format-specs.md:52-53` 沒有給影片腳本字數上限，ADR 0047：影片腳本不設字數
+    帶）。`hook_pool` 長度至少等於 count 但不逐項比對內容——模型自己挑哪個 hook 配哪支
+    腳本，程式只驗「池子夠大」。"""
     if not isinstance(data, dict):
         return [{"path": "_root", "ok": False, "message": "頂層不是物件"}]
     scripts = data.get("scripts")
     if not isinstance(scripts, list) or len(scripts) != count:
         got = len(scripts) if isinstance(scripts, list) else "缺欄位"
-        return [{"path": "scripts", "ok": False, "message": f"要 {count} 則，實際 {got}"}]
-    results = [{"path": "scripts", "ok": True, "message": f"{count} 則"}]
-    for i, text in enumerate(scripts, start=1):
-        ok = isinstance(text, str) and bool(text.strip())
+        return [{"path": "scripts", "ok": False, "message": f"要 {count} 支，實際 {got}"}]
+    results = [{"path": "scripts", "ok": True, "message": f"{count} 支"}]
+    for i, script in enumerate(scripts, start=1):
+        if not isinstance(script, dict):
+            results.append({"path": f"scripts[{i}]", "ok": False, "message": "不是物件"})
+            continue
+        framework = script.get("framework")
+        framework_ok = isinstance(framework, str) and bool(framework.strip())
+        beats = script.get("beats")
+        beats_ok = isinstance(beats, list) and len(beats) >= 3
+        ok = framework_ok and beats_ok
+        if ok:
+            msg = "符合"
+        elif not framework_ok and not beats_ok:
+            msg = "framework 空白，beats 不足 3 個"
+        elif not framework_ok:
+            msg = "framework 空白"
+        else:
+            n = len(beats) if isinstance(beats, list) else "缺欄位"
+            msg = f"beats 應至少 3 個，實際 {n}"
+        results.append({"path": f"scripts[{i}]", "ok": ok, "message": msg})
+    hook_pool = data.get("hook_pool")
+    pool_ok = isinstance(hook_pool, list) and len(hook_pool) >= count
+    got = len(hook_pool) if isinstance(hook_pool, list) else "缺欄位"
+    results.append({
+        "path": "hook_pool", "ok": pool_ok,
+        "message": "符合" if pool_ok else f"至少要 {count} 個，實際 {got}",
+    })
+    return results
+
+
+def check_free(data) -> list:
+    """`items` 非空清單，每則 `{label, value}` 都要是非空字串——ADR 0068 §9 沒有給
+    `free` 自己的方法論或格式規則，這是它唯一的驗證（票 workbench/06 contradiction
+    check 第三條：型別對但是空字串不算合格，那不是使用者能用的內容）。"""
+    if not isinstance(data, dict):
+        return [{"path": "_root", "ok": False, "message": "頂層不是物件"}]
+    items = data.get("items")
+    if not isinstance(items, list) or not items:
+        got = len(items) if isinstance(items, list) else "缺欄位"
+        return [{"path": "items", "ok": False, "message": f"至少要 1 則，實際 {got}"}]
+    results = [{"path": "items", "ok": True, "message": f"{len(items)} 則"}]
+    for i, item in enumerate(items, start=1):
+        ok = (
+            isinstance(item, dict)
+            and isinstance(item.get("label"), str) and bool(item["label"])
+            and isinstance(item.get("value"), str) and bool(item["value"])
+        )
         results.append({
-            "path": f"scripts[{i}]", "ok": ok, "message": "符合" if ok else "空白或非字串",
+            "path": f"items[{i}]", "ok": ok,
+            "message": "符合" if ok else "缺欄位、型別不對，或 label／value 是空字串",
         })
     return results

@@ -26,6 +26,7 @@ export interface NewBriefRequest {
   use_brand_knowledge: boolean;
   free_text: string | null;
   image_prompt_count: number | null;
+  video_script_count: number | null;
   on_image_texts: string[] | null;
 }
 

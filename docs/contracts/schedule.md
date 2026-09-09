@@ -114,6 +114,12 @@ calls workbench, workbench never calls back. `LAYER_ORDER` already places `app.w
   owner tags; no model infers why it worked. First reader/writer is ticket past-ads/03
   (`app/schedule/history.py`): `history_cards()` ranks and reads, `tag_imported_ad()` writes
   the owner's seven keys and note. No LLM call anywhere in that file.
+- The `format` coordinate dimension carries a fourth value, `flexible`／「彈性格式」, since
+  2026-09-09 (ticket workbench/06, ADR 0068's "Numbers and their sources" table): 1–10 images at
+  one coordinate, under Meta's asset_feed_spec ≤10-image ceiling. `single_image` is not deleted.
+  New brands get it from `_SEED_COORDINATES["format"]`; brands that already had `format` rows are
+  back-filled once by a data migration (`ensure_coordinates_seeded` skips a dimension once any row
+  of it exists).
 
 Module-local and reversible, decided here rather than in an ADR:
 

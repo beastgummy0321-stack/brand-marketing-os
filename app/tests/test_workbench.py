@@ -410,5 +410,99 @@ class ProductOwnershipTest(_WorkbenchTestBase):
         self.assertIsNotNone(brief_id)
 
 
+# -- 案例 7：影片腳本，count=2 全數綠燈；回覆只給 1 支 -> 修正輪不補齊 -> 老實印 ❌ ------
+
+def _video_script(title: str) -> dict:
+    return {
+        "title": title, "framework": "PAS", "hook": "還在為早餐麻煩？",
+        "beats": [
+            {"t": "0-3s", "visual": "特寫商品", "voice": "口白一", "text": "字卡一"},
+            {"t": "3-10s", "visual": "沖泡過程", "voice": "口白二", "text": "字卡二"},
+            {"t": "10-20s", "visual": "飲用畫面", "voice": "口白三", "text": "字卡三"},
+        ],
+        "cta": "立即選購",
+    }
+
+
+class VideoScriptRoundTripTest(_WorkbenchTestBase):
+    def test_count_2_round_trip_all_green(self):
+        brief_id = self._submit(kind="video_script", request={"video_script_count": 2})
+        reply = json.dumps({
+            "scripts": [_video_script("腳本一"), _video_script("腳本二")],
+            "hook_pool": ["hook1", "hook2"], "warnings": [],
+        }, ensure_ascii=False)
+        workbench_jobs.PROVIDER = _fake(reply)
+        self._run_worker()
+
+        brief = workbench_repo.get_brief(web.conn, self.org_id, self.brand_id, brief_id)
+        self.assertEqual(brief["status"], "done")
+        rows = self._outputs(brief_id, "video_script")
+        self.assertEqual(len(rows), 1)
+        validation = rows[0]["body_json"]["validation"]
+        self.assertTrue(validation)
+        self.assertTrue(all(line.startswith("✅") for line in validation), validation)
+
+    def test_short_reply_stays_red_after_a_fix_round_that_does_not_add_one(self):
+        """票面 contradiction check 第二條：修正輪回覆刻意不補第二支（`replacements: []`），
+        證明「批次不重生」——不是靠假設修正輪一定會把數量補齊才轉綠。"""
+        brief_id = self._submit(kind="video_script", request={"video_script_count": 2})
+        initial_reply = json.dumps({
+            "scripts": [_video_script("腳本一")], "hook_pool": ["hook1", "hook2"], "warnings": [],
+        }, ensure_ascii=False)
+        fix_reply = json.dumps({"replacements": []}, ensure_ascii=False)
+        provider = _SequenceProvider([initial_reply, fix_reply])
+        workbench_jobs.PROVIDER = provider
+        self._run_worker()
+
+        self.assertEqual(len(provider.calls), 2, "只准問一次修正，不准第三通")
+        brief = workbench_repo.get_brief(web.conn, self.org_id, self.brand_id, brief_id)
+        self.assertEqual(brief["status"], "done")
+        rows = self._outputs(brief_id, "video_script")
+        validation = rows[0]["body_json"]["validation"]
+        fail = next(line for line in validation if line.split("：", 1)[0].endswith("scripts"))
+        self.assertTrue(fail.startswith("❌"), fail)
+
+
+# -- 案例 8：自由生成，items 回存；空清單 -> 修正輪換成非空但空字串 -> 逐項驗證仍是 ❌ ------
+
+class FreeRoundTripTest(_WorkbenchTestBase):
+    def test_items_round_trip_all_green(self):
+        brief_id = self._submit(kind="free", request={"free_text": "寫三句 IG 限動貼文"})
+        items = [{"label": "第一句", "value": "文案一"}, {"label": "第二句", "value": "文案二"}]
+        reply = json.dumps({"items": items, "warnings": []}, ensure_ascii=False)
+        workbench_jobs.PROVIDER = _fake(reply)
+        self._run_worker()
+
+        brief = workbench_repo.get_brief(web.conn, self.org_id, self.brand_id, brief_id)
+        self.assertEqual(brief["status"], "done")
+        rows = self._outputs(brief_id, "free")
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["body_json"]["items"], items)
+        validation = rows[0]["body_json"]["validation"]
+        self.assertTrue(validation)
+        self.assertTrue(all(line.startswith("✅") for line in validation), validation)
+
+    def test_empty_list_then_empty_strings_both_stay_red(self):
+        """票面 contradiction check 第三條：最便宜的錯誤實作是收 `{"label": "", "value": ""}`
+        （型別對、非空清單，但內容是空字串）——修正輪刻意換成這種形狀，驗證程式檢查的是
+        內容而不只是清單長度。"""
+        brief_id = self._submit(kind="free", request={"free_text": "寫三句 IG 限動貼文"})
+        initial_reply = json.dumps({"items": [], "warnings": []}, ensure_ascii=False)
+        fix_reply = json.dumps({
+            "replacements": [{"path": "items", "value": [{"label": "", "value": ""}]}],
+        }, ensure_ascii=False)
+        provider = _SequenceProvider([initial_reply, fix_reply])
+        workbench_jobs.PROVIDER = provider
+        self._run_worker()
+
+        self.assertEqual(len(provider.calls), 2, "只准問一次修正，不准第三通")
+        brief = workbench_repo.get_brief(web.conn, self.org_id, self.brand_id, brief_id)
+        self.assertEqual(brief["status"], "done")
+        rows = self._outputs(brief_id, "free")
+        validation = rows[0]["body_json"]["validation"]
+        fail = next(line for line in validation if line.split("：", 1)[0].endswith("items[1]"))
+        self.assertTrue(fail.startswith("❌"), fail)
+
+
 if __name__ == "__main__":
     unittest.main()

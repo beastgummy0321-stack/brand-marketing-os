@@ -372,6 +372,8 @@ function ImagePromptPartCard({
   );
 }
 
+// 自由生成（free）唯一的呼叫端——items[] 是 {label, value} 物件（app/departments/workbench/
+// free.md），不是任意鍵值，所以直接照這個形狀畫標籤區塊，不再猜 body_json 有哪些鍵。
 function FreeformPartCard({
   brandId, brief, part, title, busy, onChanged,
 }: {
@@ -383,7 +385,7 @@ function FreeformPartCard({
   const [localBusy, setLocalBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const body = (output?.body_json ?? {}) as Record<string, unknown>;
-  const entries = Object.entries(body).filter(([key]) => key !== "validation");
+  const items = Array.isArray(body.items) ? body.items : [];
 
   async function handleRunAgain() {
     setLocalBusy(true);
@@ -407,16 +409,21 @@ function FreeformPartCard({
         {!output ? (
           <p className="text-sm text-muted-foreground">還沒有產出。</p>
         ) : (
-          entries.flatMap(([key, value]) => {
-            const items = Array.isArray(value) ? value.map(String) : [String(value)];
-            return items.map((text, i) => (
-              <div key={`${key}-${i}`} className="flex flex-col gap-1">
+          items.map((item, i) => {
+            const record = (item ?? {}) as Record<string, unknown>;
+            const label = typeof record.label === "string" ? record.label : "";
+            const value = typeof record.value === "string" ? record.value : "";
+            return (
+              <div key={i} className="flex flex-col gap-1 rounded-md border border-border p-3">
                 <div className="flex items-start justify-between gap-2">
-                  <p className="whitespace-pre-wrap text-sm">{text}</p>
-                  <CopyIconButton ariaLabel={`複製 ${key} ${i + 1}`} getText={() => text} />
+                  <div className="flex flex-col gap-1">
+                    <span className="text-xs font-medium text-muted-foreground">{label}</span>
+                    <p className="whitespace-pre-wrap text-sm">{value}</p>
+                  </div>
+                  <CopyIconButton ariaLabel={`複製${label ? `「${label}」` : ""}`} getText={() => value} />
                 </div>
               </div>
-            ));
+            );
           })
         )}
         {actionError && (
@@ -429,6 +436,144 @@ function FreeformPartCard({
             type="button" variant="outline" onClick={() => void handleRunAgain()}
             disabled={busy || localBusy}
           >
+            {BUTTON_LABELS.runAgain}
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function VideoScriptPartCard({
+  brandId, brief, busy, onChanged,
+}: { brandId: string; brief: BriefDetailData; busy: boolean; onChanged: () => void }) {
+  const outputs = outputsFor(brief, "video_script");
+  const [selectedRound, setSelectedRound] = useState<number | null>(null);
+  const [requestedCount, setRequestedCount] = useState("");
+  const [localBusy, setLocalBusy] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const round = selectedRound ?? latestRound(outputs);
+  const output = outputs.find((o) => o.generation_round === round);
+  const body = (output?.body_json ?? {}) as Record<string, unknown>;
+  const validation = body.validation;
+  const scripts = Array.isArray(body.scripts) ? body.scripts : [];
+  const hookPool = Array.isArray(body.hook_pool) ? body.hook_pool.map(String) : [];
+
+  const requestedCountValue = Number(requestedCount);
+  const validRequestedCount =
+    requestedCount !== "" && Number.isInteger(requestedCountValue) &&
+    requestedCountValue >= 1 && requestedCountValue <= 5;
+  const runDisabled = busy || localBusy || !validRequestedCount || brief.closed_at !== null;
+
+  async function handleRun() {
+    setLocalBusy(true);
+    setActionError(null);
+    try {
+      await runPart(brandId, brief.id, "video_script", requestedCountValue);
+      onChanged();
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : "產出失敗，請稍後再試。");
+    } finally {
+      setLocalBusy(false);
+    }
+  }
+
+  return (
+    <div className="surface">
+      <div className="surface-header">
+        <h2>影片腳本</h2>
+        {output && output.adopted_at !== null && <Badge variant="secondary">已採用</Badge>}
+        <RoundSwitcher outputs={outputs} selected={round} onSelect={setSelectedRound} />
+      </div>
+      <div className="surface-body flex flex-col gap-4">
+        {!output ? (
+          <p className="text-sm text-muted-foreground">還沒有產出。</p>
+        ) : (
+          scripts.map((script, i) => {
+            const record = (script ?? {}) as Record<string, unknown>;
+            const scriptTitle = typeof record.title === "string" ? record.title : "";
+            const framework = typeof record.framework === "string" ? record.framework : "";
+            const hook = typeof record.hook === "string" ? record.hook : "";
+            const cta = typeof record.cta === "string" ? record.cta : "";
+            const beats = Array.isArray(record.beats) ? record.beats : [];
+            const fail = failLine(validation, `scripts[${i + 1}]`);
+            return (
+              <div key={i} className="flex flex-col gap-2 rounded-md border border-border p-3">
+                <div className="flex items-start justify-between gap-2">
+                  <span className="text-sm font-medium text-foreground">
+                    {scriptTitle || `第 ${i + 1} 支`}
+                  </span>
+                  <CopyIconButton
+                    ariaLabel={`複製第 ${i + 1} 支腳本`}
+                    getText={() => JSON.stringify(record, null, 2)}
+                  />
+                </div>
+                <span className="text-xs text-muted-foreground">框架：{framework}</span>
+                <p className="text-sm">鉤子：{hook}</p>
+                {beats.length > 0 && (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-xs">
+                      <thead>
+                        <tr className="text-left text-muted-foreground">
+                          <th className="pr-2 font-medium">時間</th>
+                          <th className="pr-2 font-medium">畫面</th>
+                          <th className="pr-2 font-medium">口白</th>
+                          <th className="font-medium">字卡</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {beats.map((beat, bi) => {
+                          const b = (beat ?? {}) as Record<string, unknown>;
+                          return (
+                            <tr key={bi} className="align-top">
+                              <td className="pr-2">{String(b.t ?? "")}</td>
+                              <td className="pr-2">{String(b.visual ?? "")}</td>
+                              <td className="pr-2">{String(b.voice ?? "")}</td>
+                              <td>{String(b.text ?? "")}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+                <p className="text-sm">CTA：{cta}</p>
+                {fail && <p className="text-xs text-danger">{fail}</p>}
+              </div>
+            );
+          })
+        )}
+
+        {hookPool.length > 0 && (
+          <div className="flex flex-col gap-2">
+            <span className="text-xs font-medium text-muted-foreground">Hook pool</span>
+            {hookPool.map((text, i) => (
+              <div key={i} className="flex items-center justify-between gap-2 text-sm">
+                <span>{text}</span>
+                <CopyIconButton ariaLabel={`複製第 ${i + 1} 個 hook`} getText={() => text} />
+              </div>
+            ))}
+          </div>
+        )}
+
+        {actionError && (
+          <p role="alert" className="text-sm text-danger">
+            {actionError}
+          </p>
+        )}
+        <div className="flex flex-wrap items-end gap-3">
+          <label className="flex flex-col gap-1 text-sm">
+            <span className="font-medium text-foreground">要幾支腳本</span>
+            <Input
+              type="number"
+              min={1}
+              max={5}
+              value={requestedCount}
+              onChange={(e) => setRequestedCount(e.target.value)}
+              className="w-24 numeric"
+            />
+          </label>
+          <Button type="button" onClick={() => void handleRun()} disabled={runDisabled}>
             {BUTTON_LABELS.runAgain}
           </Button>
         </div>
@@ -547,10 +692,7 @@ export function BriefDetail({
         <ImagePromptPartCard brandId={brandId} brief={brief} busy={busy} onChanged={onChanged} />
       )}
       {parts.includes("video_script") && (
-        <FreeformPartCard
-          brandId={brandId} brief={brief} part="video_script" title="影片腳本" busy={busy}
-          onChanged={onChanged}
-        />
+        <VideoScriptPartCard brandId={brandId} brief={brief} busy={busy} onChanged={onChanged} />
       )}
       {parts.includes("free") && (
         <FreeformPartCard

@@ -1353,7 +1353,13 @@ class CoordinateDimensionSyncTest(unittest.TestCase):
 # helper's new `visual_tone` parameter, plus this table's own required edits (KNOWN_MODULE_SIZES
 # app/schedule and app/workbench rows' reason comments) -- measured (`_line_totals()`), no slack.
 # 23314 -> 23360.
-TEST_LINES_CEILING = 23360  # Previous: 23314 --
+# ticket workbench/06 (free briefs, video scripts, flexible format, closing): test_workbench.py
+# gains two new classes (VideoScriptRoundTripTest, FreeRoundTripTest, done-check 2's cases a/b)
+# and test_schedule.py's CoordinateSeedTest is updated for the new `format` seed (33 -> 34 rows),
+# plus this table's own required edits (KNOWN_MODULE_SIZES app/schedule and app/workbench rows'
+# reason comments, this reason comment's own lines) -- measured (`_line_totals()`), no slack.
+# 23360 -> 23471.
+TEST_LINES_CEILING = 23471  # Previous: 23360 --
 # ticket workbench/02 round 1: test_workbench.py 338 lines (new file, done-check 2's five
 # cases) plus this table's own required edits (LAYER_ORDER entry, KNOWN_MODULE_SIZES
 # app/workbench row and the app row's reason-comment update) — measured (`_line_totals()`),
@@ -1890,7 +1896,10 @@ KNOWN_MODULE_SIZES = {
     "app/orders": 1423,  # 票 12：channel_revenue 一張表取代三張（刪掉藥局專屬那一整組
                           # 之後仍淨增）——官網帳本寫入路徑、channel_revenue_summary()、
                           # 通用手動登錄（含「官網不能手動登錄」那道錢的守門）
-    "app/schedule": 5111,  # ticket workbench/05 fix round (2026-09-09 reject): `state.py` gains
+    "app/schedule": 5113,  # ticket workbench/06: `repository.py`'s `_SEED_COORDINATES["format"]`
+                           # gains one row (`flexible`／彈性格式, ADR 0068's numbers table).
+                           # 5111 -> 5113 (+2), measured (`_module_sizes()`), no slack.
+                           # Previous was 5111 -- ticket workbench/05 fix round (2026-09-09 reject): `state.py` gains
                            # the module-level `VISUAL_TONE_VALUES` constant (ADR 0047, literal
                            # copy, no workbench import) and a defensive guard in
                            # `_sync_creative_candidate` that falls a bad `visual_tone` back to
@@ -2288,7 +2297,13 @@ KNOWN_MODULE_SIZES = {
                           # 讀數字）＋_fill_node_spend()／_current_month_window()（把票 05
                           # 的當月花費補到綁定節點上）＋tree.py 三個新欄位。前一次是票
                           # 10-feedback-entries 的 POST .../reject（784）
-    "app/workbench": 1465,  # 票 05 fix round（2026-09-09 reject）：`jobs.py` 把 sanitise 過的
+    "app/workbench": 1543,  # 票 workbench/06：`validate.py` 補 `check_free`／完成
+                            # `check_video_script`（原本只驗字串，改驗物件的
+                            # framework／beats）；`repository.py`／`jobs.py` 補
+                            # `video_script_count` 的判斷、驗證、enqueue；`prompts.py`
+                            # 補 `video_script_prompt`。1465→1543（+78）。量到的數字，
+                            # 不留餘裕。前一次是票 05 fix round（2026-09-09 reject）：
+                            # `jobs.py` 把 sanitise 過的
                             # `visual_tone` 也寫回 `body_json`（`update_brief_visual` 那份跟
                             # `body_json` 那份原本各存各的、一份乾淨一份髒），一份真身。
                             # 1460→1465（+5）。量到的數字，不留餘裕。前一次是票 05

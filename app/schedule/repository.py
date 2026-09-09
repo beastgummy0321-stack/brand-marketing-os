@@ -167,6 +167,8 @@ _SEED_COORDINATES: dict = {
     ),
     "format": (
         ("single_image", "Meta 版位", "單圖", "4:5，1080×1350（查證日 2026-08-07）"),
+        ("flexible", "Meta 版位", "彈性格式",
+         "1～10 張同座標圖；asset_feed_spec images ≤10，2026-09-09 查證"),
         ("carousel", "Meta 版位", "輪播", "多卡，每卡連結由組裝時帶入"),
         ("video", "Meta 版位", "影片", "每主題媒體上限 1（主題＝腳本）"),
     ),

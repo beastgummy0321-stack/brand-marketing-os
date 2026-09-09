@@ -2266,7 +2266,8 @@ class BindTreeApiContractTest(_ScheduleApiTestBase):
 class CoordinateSeedTest(_ScheduleApiTestBase):
     """票 T1b done-check：一個品牌的座標第一次被讀出時，剛好 35 個 `dimension='angle'`；
     讀第二次不會多出 70 個（`ensure_coordinates_seeded` 冪等）。票 T8a 擴充：另外六個維度
-    也要種進去（35＋33＝68），讀第二次一樣不會變成 136 個。"""
+    也要種進去（35＋33＝68），讀第二次一樣不會變成 136 個。票 workbench/06：`format`
+    維度多一個 `flexible` 種子（彈性格式），六個維度的種子總數 33→34，35＋34＝69。"""
 
     def test_first_read_seeds_35_angles_second_read_does_not_duplicate(self):
         resp1 = self.client.get(f"/api/schedule/brands/{self.brand['id']}/coordinates")
@@ -2275,14 +2276,15 @@ class CoordinateSeedTest(_ScheduleApiTestBase):
         angles1 = [c for c in coordinates1 if c["dimension"] == "angle"]
         self.assertEqual(len(angles1), 35)
 
-        # 票 T8a done-check 1：七個維度都有座標，六個新維度加總 33 個。
+        # 票 T8a done-check 1：七個維度都有座標，六個新維度加總 34 個（票 workbench/06 之前
+        # 是 33，`format` 多了 `flexible` 一筆）。
         seven_dims = creative_mod.COORDINATE_KEYS
         self.assertEqual(
             {c["dimension"] for c in coordinates1}, set(seven_dims),
             "第一次讀完應該七個維度都有座標",
         )
         other_six = [c for c in coordinates1 if c["dimension"] != "angle"]
-        self.assertEqual(len(other_six), 33)
+        self.assertEqual(len(other_six), 34)
 
         resp2 = self.client.get(f"/api/schedule/brands/{self.brand['id']}/coordinates")
         self.assertEqual(resp2.status_code, 200, resp2.text)
@@ -2290,7 +2292,7 @@ class CoordinateSeedTest(_ScheduleApiTestBase):
         angles2 = [c for c in coordinates2 if c["dimension"] == "angle"]
         self.assertEqual(len(angles2), 35)
         other_six2 = [c for c in coordinates2 if c["dimension"] != "angle"]
-        self.assertEqual(len(other_six2), 33)
+        self.assertEqual(len(other_six2), 34)
 
 
 class CoordinateTenantIsolationTest(_ScheduleApiTestBase):

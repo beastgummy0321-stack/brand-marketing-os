@@ -40,6 +40,7 @@
 | 素材工作檯文案 | `copywriting.md`、`humanizer-zh-tw.md`、`customer-voice.md`、`meta-format-specs.md` |
 | 素材工作檯圖片提示詞 | `creative-matrix.md`、`image-prompt-template.md` |
 | 素材工作檯影片腳本 | `creative-matrix.md`、`copywriting.md`、`humanizer-zh-tw.md` |
+| 素材工作檯自由生成 | `humanizer-zh-tw.md` |
 
 ## 平台中立值 → Meta 標準事件對照
 

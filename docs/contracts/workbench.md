@@ -43,9 +43,10 @@ deepest node after a tree succeeds); `app.schedule.state` / `app.schedule.perfor
 Routes: `GET /api/workbench/styles` (no `brand_id`, list the capture styles verbatim). All
 others under `/api/workbench/brands/{brand_id}`: `GET /briefs?status=` list; `POST /briefs`
 manual brief; `GET /briefs/{id}` detail with all rounds; `POST /briefs/{id}/parts/{part}/run`
-body `{"count": int}` for `image_prompt` (the user's count, no default), empty for others — enqueues
-one round; `POST /briefs/{id}/outputs/{output_id}/adopt`; `POST /briefs/{id}/close` and
-`/reopen`; `DELETE /briefs/{id}`.
+body `{"count": int}`, required for `image_prompt` (1–30) and, since ticket workbench/06,
+`video_script` (1–5) — the user's count, no default, same rule on every re-run — empty for
+others; enqueues one round; `POST /briefs/{id}/outputs/{output_id}/adopt`; `POST
+/briefs/{id}/close` and `/reopen`; `DELETE /briefs/{id}`.
 
 ## Error shapes
 
@@ -104,3 +105,9 @@ Module-local and reversible, decided here rather than in an ADR:
   if it has no adopted copy; adoption survives closing.
 - The "when to use" one-liners for the three lengths are frontend copy (design-system §8), not
   generated and not stored.
+- **The backend half of the container-contract pull-out test (§6) is not expected to pass, and is
+  not run** (ticket workbench/06): `app.schedule` imports `app.workbench` by design (ADR 0068 §2
+  — the customer depends on the factory), so deleting `app/workbench/` cannot leave `app.schedule`
+  loading. Only the frontend half runs: deleting `frontend/src/components/workbench/`, its route
+  and its `BRAND_NAV` row leaves `npm run build` passing and the e2e `smoke` spec still opening
+  經營概況.

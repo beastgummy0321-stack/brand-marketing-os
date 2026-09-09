@@ -52,6 +52,7 @@ export function NewBriefPanel({
   const [useBrandKnowledge, setUseBrandKnowledge] = useState(true);
   const [onImageTexts, setOnImageTexts] = useState<string[]>([""]);
   const [imagePromptCount, setImagePromptCount] = useState("");
+  const [videoScriptCount, setVideoScriptCount] = useState("");
   const [fieldError, setFieldError] = useState<string | null>(null);
 
   const [products, setProducts] = useState<ProductListItem[]>([]);
@@ -89,6 +90,10 @@ export function NewBriefPanel({
         // 張數沒有預設值），沒填就是「先建工單，之後在詳情頁按產提示詞再給張數」。
         image_prompt_count:
           kind === "image_prompt" && imagePromptCount.trim() !== "" ? Number(imagePromptCount) : null,
+        // 「要幾支腳本」票面標 required（跟圖上文字同一句話），送出前 handleSubmit 已經擋掉
+        // 空值，這裡直接轉數字。
+        video_script_count:
+          kind === "video_script" && videoScriptCount.trim() !== "" ? Number(videoScriptCount) : null,
         on_image_texts:
           kind === "image_prompt" ? onImageTexts.map((t) => t.trim()).filter(Boolean) : null,
       },
@@ -113,6 +118,15 @@ export function NewBriefPanel({
           setFieldError("要幾條提示詞須介於 1 到 30 之間。");
           return;
         }
+      }
+    }
+    if (kind === "video_script") {
+      // 「要幾支腳本」是必填（票面 §3，跟圖片提示詞的「要幾條提示詞」不是同一條規則）：
+      // 空著就擋在這裡，連 API 都不打。
+      const count = Number(videoScriptCount);
+      if (videoScriptCount.trim() === "" || !Number.isInteger(count) || count < 1 || count > 5) {
+        setFieldError("要幾支腳本須介於 1 到 5 之間。");
+        return;
       }
     }
     void form.submit();
@@ -232,6 +246,20 @@ export function NewBriefPanel({
           />
           帶品牌資料
         </label>
+
+        {kind === "video_script" && (
+          <label className="flex flex-col gap-1 text-sm">
+            <span className="font-medium text-foreground">要幾支腳本</span>
+            <Input
+              type="number"
+              min={1}
+              max={5}
+              value={videoScriptCount}
+              onChange={(e) => setVideoScriptCount(e.target.value)}
+              className="w-32 numeric"
+            />
+          </label>
+        )}
 
         {kind === "image_prompt" && (
           <>

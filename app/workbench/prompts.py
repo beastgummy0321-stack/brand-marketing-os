@@ -62,6 +62,15 @@ def image_prompt_prompt(department_text: str, methodology_text: str, brief_secti
     return "\n\n".join(filter(None, [department_text, methodology_text, worksheet, brand_context]))
 
 
+def video_script_prompt(department_text: str, methodology_text: str, brief_section: str,
+                         brand_context: str, count: int) -> str:
+    """跟 `copy_prompt` 同一個組法，少座標詞彙表（影片腳本不用七維座標），工單段多帶
+    「這張工單要幾支」一行——`validate.check_video_script` 用工單本身的 count 比對，模型
+    看得到才填得出這個數字（票 workbench/06，同 `image_prompt_prompt` 那招）。"""
+    worksheet = f"{brief_section}\n這張工單要幾支影片腳本：工單指定的支數＝{count}。"
+    return "\n\n".join(filter(None, [department_text, methodology_text, worksheet, brand_context]))
+
+
 def coordinate_vocabulary_text(coordinates: list) -> str:
     """複製自 `app/schedule/jobs.py::_coordinate_vocabulary_text`（票 T8b；不 import，
     app.schedule 私有，container contract 規則 5 允許複製）。座標詞彙表放整份 prompt 的
