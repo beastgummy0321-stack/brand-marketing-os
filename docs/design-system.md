@@ -1,5 +1,7 @@
 # Design system — 行銷駕駛艙
 
+> 2026-09-10: ADR numbers below are git history (`docs/adr/` was removed with the skeleton-slice workflow); the constitution is gone, this document is the frontend rule on its own.
+
 **Status: in force since 2026-09-07. This is the only frontend rule document.**
 Decision record: ADR 0065. Reference image: `docs/design-system.png` (the dashboard the user approved
 2026-09-07; its numbers are sample data, its look is the standard). Token source of truth:

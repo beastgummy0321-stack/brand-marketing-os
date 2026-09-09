@@ -1,5 +1,7 @@
 # Brand Marketing OS
 
+> 2026-09-10：本檔提到的 ADR 編號都已入 git 歷史（`docs/adr/` 已隨 skeleton-slice 工作流移除）；現行定案寫在 `ARCHITECTURE.md`。
+
 品牌行銷作業系統的共同語彙。只收這個專案特有、且容易被講混的詞。
 
 ## 帳戶與租戶（2026-08-26 grill 定案，ADR 0027）
