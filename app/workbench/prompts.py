@@ -32,7 +32,7 @@ def brief_text(brief: dict, product_name: str | None, style: dict) -> str:
         )
     lines.append(f"visual_tone：{brief.get('visual_tone') or '（無）'}")
     lines.append(f"visual_concept：{brief.get('visual_concept') or '（無）'}")
-    lines.append(f"風格：{style['label']}（{style['authenticity_hint']}）")
+    lines.append(f"風格：{style['label']}（{style['authenticity_hint']}）；攝影形式：{style['capture_line']}")
     free_text = (brief.get("request_json") or {}).get("free_text")
     if free_text:
         lines.append(f"自由指示：{free_text}")

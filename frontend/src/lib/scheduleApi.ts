@@ -139,6 +139,7 @@ export interface ScheduleBriefCopy {
   visual_tone: "暗調強對比" | "暖調生活" | null;
   visual_concept: string | null;
   validation: string[];
+  warnings: string[];
 }
 
 export interface ScheduleBriefImagePrompts {

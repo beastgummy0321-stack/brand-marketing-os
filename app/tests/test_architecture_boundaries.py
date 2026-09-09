@@ -1364,7 +1364,14 @@ class CoordinateDimensionSyncTest(unittest.TestCase):
 # plus this table's own required edits (KNOWN_MODULE_SIZES app/schedule and app/workbench rows'
 # reason comments, this reason comment's own lines) -- measured (`_line_totals()`), no slack.
 # 23360 -> 23471.
-TEST_LINES_CEILING = 23521  # Previous: 23471 --
+# ticket workbench-2/02 (ablation, drop dead columns, show warnings, done-check 2): test_workbench.py
+# gains one new class (CopyWarningsSummaryTest, done-check 2's case); test_schedule.py's
+# CreativeCandidateSyncTest gains one case (test_copy_warnings_reach_the_brand_response) and its
+# `_write_copy_round` helper gains one optional parameter (`warnings`), plus this table's own
+# required edits (KNOWN_MODULE_SIZES app/schedule and app/workbench rows' reason comments, this
+# reason comment's own lines) -- measured (`_line_totals()`), no slack.
+# 23521 -> 23592.
+TEST_LINES_CEILING = 23592  # Previous: 23521 --
 # ticket workbench/02 round 1: test_workbench.py 338 lines (new file, done-check 2's five
 # cases) plus this table's own required edits (LAYER_ORDER entry, KNOWN_MODULE_SIZES
 # app/workbench row and the app row's reason-comment update) — measured (`_line_totals()`),
@@ -1901,7 +1908,12 @@ KNOWN_MODULE_SIZES = {
     "app/orders": 1423,  # 票 12：channel_revenue 一張表取代三張（刪掉藥局專屬那一整組
                           # 之後仍淨增）——官網帳本寫入路徑、channel_revenue_summary()、
                           # 通用手動登錄（含「官網不能手動登錄」那道錢的守門）
-    "app/schedule": 5117,  # ticket workbench-2/01: `state.py`'s `_briefs_for_tree` sync condition
+    "app/schedule": 5121,  # ticket workbench-2/02 (ablation): `state.py`'s `_copy_summary()` gains
+                           # the `warnings` key (filtered to strings) and `jobs.py` drops the
+                           # `created_by="system"` keyword off its `workbench.submit_brief()` call
+                           # (§1, `created_by` retired). 5117 -> 5121 (+4), measured
+                           # (`_module_sizes()`), no slack.
+                           # Previous was 5117 -- ticket workbench-2/01: `state.py`'s `_briefs_for_tree` sync condition
                            # drops `and copy["is_adopted"]` (ADR 0068 §3 amendment, drill 2 — sync
                            # whatever `adopted_output()` returns, adopted else latest) plus its own
                            # comment lines (the ADR reference and a `ponytail:` note on the
@@ -2308,7 +2320,12 @@ KNOWN_MODULE_SIZES = {
                           # 讀數字）＋_fill_node_spend()／_current_month_window()（把票 05
                           # 的當月花費補到綁定節點上）＋tree.py 三個新欄位。前一次是票
                           # 10-feedback-entries 的 POST .../reject（784）
-    "app/workbench": 1543,  # 票 workbench/06：`validate.py` 補 `check_free`／完成
+    "app/workbench": 1536,  # 票 workbench-2/02（ablation）：`repository.py` 的 INSERT 跟兩個
+                            # 函式簽章拿掉八個死欄位／`created_by`；`prompts.py` 的風格行多讀
+                            # `capture_line`。淨減：1543→1536（-7）。量到的數字，不留餘裕，
+                            # 縮小後不強制回調（同一份 ponytail：見本檔上方
+                            # `KNOWN_MODULE_SIZES["app/brand_intelligence"]` 那筆的既有慣例）。
+                            # 前一次是 1543——票 workbench/06：`validate.py` 補 `check_free`／完成
                             # `check_video_script`（原本只驗字串，改驗物件的
                             # framework／beats）；`repository.py`／`jobs.py` 補
                             # `video_script_count` 的判斷、驗證、enqueue；`prompts.py`

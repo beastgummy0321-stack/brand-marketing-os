@@ -152,6 +152,10 @@ def _copy_summary(output: dict | None) -> dict | None:
         "descriptions": body.get("descriptions", []),
         "visual_tone": body.get("visual_tone"), "visual_concept": body.get("visual_concept"),
         "validation": body.get("validation", []),
+        # 票 workbench-2/02（ablation §4）：文案任務的誠實 warnings 一路帶到素材準備畫面——
+        # 過濾非字串元素，不信任模型回傳的原始形狀（同一份防守，見本函式檔頭「不信任那份
+        # 保證」的既有慣例）。
+        "warnings": [w for w in body.get("warnings") or [] if isinstance(w, str)],
     }
 
 

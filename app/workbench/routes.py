@@ -76,9 +76,7 @@ def create_brief(request: Request, brand_id: str, body: NewBriefRequest):
         "style_key": body.style_key, "request": body.request,
     }
     try:
-        brief_id = repository.create_brief(
-            web.conn, actor.org_id, brand_id, brief, created_by=str(actor.user_id),
-        )
+        brief_id = repository.create_brief(web.conn, actor.org_id, brand_id, brief)
     except ValueError as exc:
         raise _error(exc, _CREATE_BRIEF_ERRORS) from exc
     return {"brief": repository.brief_detail(web.conn, actor.org_id, brand_id, brief_id)}

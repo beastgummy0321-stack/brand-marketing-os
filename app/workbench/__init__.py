@@ -5,7 +5,7 @@ Shapes other modules may use:
     register(app: FastAPI) -> None       # mounts /api/workbench/* (routes.py, ticket 03)
     register_tasks() -> None             # idempotently registers `background.workbench_generate`
                                           # against the current app.background.app()
-    submit_brief(conn, org_id, brand_id, brief: dict, *, created_by: str) -> str
+    submit_brief(conn, org_id, brand_id, brief: dict) -> str
     briefs_for_source(conn, org_id, brand_id, source_kind: str, source_ref: dict) -> list[dict]
     adopted_output(conn, org_id, brand_id, brief_id: str, part: str) -> dict | None
 
@@ -53,12 +53,12 @@ def register_tasks() -> None:
     workbench_jobs.register_tasks()
 
 
-def submit_brief(conn, org_id: str, brand_id: str, brief: dict, *, created_by: str) -> str:
+def submit_brief(conn, org_id: str, brand_id: str, brief: dict) -> str:
     """寫一列 `workbench_brief`，依 `brief["kind"]`／`brief["request"]` 排進要生成的
     part，回傳 brief id。見 `docs/contracts/workbench.md` Exported shapes。"""
     from app.workbench import repository as workbench_repo
 
-    return workbench_repo.submit_brief(conn, org_id, brand_id, brief, created_by=created_by)
+    return workbench_repo.submit_brief(conn, org_id, brand_id, brief)
 
 
 def briefs_for_source(conn, org_id: str, brand_id: str, source_kind: str,

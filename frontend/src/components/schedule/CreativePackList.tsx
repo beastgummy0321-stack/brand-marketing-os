@@ -63,6 +63,17 @@ function CopyTabs({ copy }: { copy: NonNullable<ScheduleBrief["copy"]> }) {
         ))}
       </Tabs>
 
+      {copy.warnings.length > 0 && (
+        <div className="flex flex-col gap-1 text-sm text-muted-foreground">
+          <span className="text-xs font-medium">模型的提醒</span>
+          <ul className="list-disc pl-5">
+            {copy.warnings.map((text, i) => (
+              <li key={i}>{text}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       <div className="flex flex-col gap-2">
         <span className="text-xs font-medium text-muted-foreground">標題</span>
         {copy.headlines.map((text, i) => (

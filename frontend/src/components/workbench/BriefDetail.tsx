@@ -43,6 +43,29 @@ function failLine(validation: unknown, path: string): string | null {
   return typeof hit === "string" ? hit : null;
 }
 
+// 票 workbench-2/02（ablation §4）：每個任務檔都會請模型回 `warnings`（誠實的「這是佔位，
+// 投放前核對」句子）——防守讀法跟 `app/schedule/state.py::_copy_summary` 同一條（過濾非字串
+// 元素，不是「全部都是字串才收」）。
+function modelWarnings(body: Record<string, unknown>): string[] {
+  return Array.isArray(body.warnings)
+    ? body.warnings.filter((w): w is string => typeof w === "string")
+    : [];
+}
+
+function WarningsList({ warnings }: { warnings: string[] }) {
+  if (warnings.length === 0) return null;
+  return (
+    <div className="flex flex-col gap-1 text-sm text-muted-foreground">
+      <span className="text-xs font-medium">模型的提醒</span>
+      <ul className="list-disc pl-5">
+        {warnings.map((text, i) => (
+          <li key={i}>{text}</li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 function outputsFor(brief: BriefDetailData, part: string): WorkbenchOutput[] {
   return brief.outputs
     .filter((o) => o.part === part)
@@ -103,6 +126,7 @@ function CopyPartCard({
   const validation = body.validation;
   const headlines = Array.isArray(body.headlines) ? body.headlines.map(String) : [];
   const descriptions = Array.isArray(body.descriptions) ? body.descriptions.map(String) : [];
+  const warnings = modelWarnings(body);
   const disabled = busy || localBusy || brief.closed_at !== null;
 
   async function run(action: () => Promise<unknown>) {
@@ -182,6 +206,7 @@ function CopyPartCard({
             <div>
               <CopyIconButton getText={copyAllText} label={BUTTON_LABELS.copyAll} ariaLabel="全部複製" />
             </div>
+            <WarningsList warnings={warnings} />
           </>
         )}
         {actionError && (
@@ -216,7 +241,6 @@ function ImagePromptPartCard({
 }: { brandId: string; brief: BriefDetailData; busy: boolean; onChanged: () => void }) {
   const outputs = outputsFor(brief, "image_prompt");
   const [selectedRound, setSelectedRound] = useState<number | null>(null);
-  const [targetCount, setTargetCount] = useState("");
   const [requestedCount, setRequestedCount] = useState("");
   const [localBusy, setLocalBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -226,6 +250,7 @@ function ImagePromptPartCard({
   const body = (output?.body_json ?? {}) as Record<string, unknown>;
   const validation = body.validation;
   const rendered = Array.isArray(body.rendered) ? body.rendered.map(String) : [];
+  const warnings = modelWarnings(body);
 
   useEffect(() => {
     fetchLibrary(brandId).then((data) => setAssets(data.assets)).catch(() => {});
@@ -282,20 +307,6 @@ function ImagePromptPartCard({
           </div>
         )}
 
-        <div className="flex flex-wrap items-end gap-4">
-          <label className="flex flex-col gap-1 text-sm">
-            <span className="font-medium text-foreground">目標張數</span>
-            <Input
-              type="number"
-              min={1}
-              max={10}
-              value={targetCount}
-              onChange={(e) => setTargetCount(e.target.value)}
-              className="w-24 numeric"
-            />
-          </label>
-          <span className="max-w-xs text-xs text-muted-foreground">{IMAGE_PROMPT_ADVISORY}</span>
-        </div>
         <div className="flex flex-wrap items-end gap-3">
           <label className="flex flex-col gap-1 text-sm">
             <span className="font-medium text-foreground">要幾條提示詞</span>
@@ -308,6 +319,7 @@ function ImagePromptPartCard({
               className="w-24 numeric"
             />
           </label>
+          <span className="max-w-xs text-xs text-muted-foreground">{IMAGE_PROMPT_ADVISORY}</span>
           <Button
             type="button"
             onClick={() => void handleRun()}
@@ -367,6 +379,7 @@ function ImagePromptPartCard({
             </div>
           </div>
         )}
+        {output && <WarningsList warnings={warnings} />}
       </div>
     </div>
   );
@@ -386,6 +399,7 @@ function FreeformPartCard({
   const [actionError, setActionError] = useState<string | null>(null);
   const body = (output?.body_json ?? {}) as Record<string, unknown>;
   const items = Array.isArray(body.items) ? body.items : [];
+  const warnings = modelWarnings(body);
 
   async function handleRunAgain() {
     setLocalBusy(true);
@@ -409,22 +423,25 @@ function FreeformPartCard({
         {!output ? (
           <p className="text-sm text-muted-foreground">還沒有產出。</p>
         ) : (
-          items.map((item, i) => {
-            const record = (item ?? {}) as Record<string, unknown>;
-            const label = typeof record.label === "string" ? record.label : "";
-            const value = typeof record.value === "string" ? record.value : "";
-            return (
-              <div key={i} className="flex flex-col gap-1 rounded-md border border-border p-3">
-                <div className="flex items-start justify-between gap-2">
-                  <div className="flex flex-col gap-1">
-                    <span className="text-xs font-medium text-muted-foreground">{label}</span>
-                    <p className="whitespace-pre-wrap text-sm">{value}</p>
+          <>
+            {items.map((item, i) => {
+              const record = (item ?? {}) as Record<string, unknown>;
+              const label = typeof record.label === "string" ? record.label : "";
+              const value = typeof record.value === "string" ? record.value : "";
+              return (
+                <div key={i} className="flex flex-col gap-1 rounded-md border border-border p-3">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex flex-col gap-1">
+                      <span className="text-xs font-medium text-muted-foreground">{label}</span>
+                      <p className="whitespace-pre-wrap text-sm">{value}</p>
+                    </div>
+                    <CopyIconButton ariaLabel={`複製${label ? `「${label}」` : ""}`} getText={() => value} />
                   </div>
-                  <CopyIconButton ariaLabel={`複製${label ? `「${label}」` : ""}`} getText={() => value} />
                 </div>
-              </div>
-            );
-          })
+              );
+            })}
+            <WarningsList warnings={warnings} />
+          </>
         )}
         {actionError && (
           <p role="alert" className="text-sm text-danger">
@@ -458,6 +475,7 @@ function VideoScriptPartCard({
   const validation = body.validation;
   const scripts = Array.isArray(body.scripts) ? body.scripts : [];
   const hookPool = Array.isArray(body.hook_pool) ? body.hook_pool.map(String) : [];
+  const warnings = modelWarnings(body);
 
   const requestedCountValue = Number(requestedCount);
   const validRequestedCount =
@@ -555,6 +573,8 @@ function VideoScriptPartCard({
             ))}
           </div>
         )}
+
+        {output && <WarningsList warnings={warnings} />}
 
         {actionError && (
           <p role="alert" className="text-sm text-danger">

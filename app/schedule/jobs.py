@@ -552,7 +552,7 @@ def schedule_tree(org_id: str, brand_id: str, plan_index: int, plan_task_id: str
                         "coordinates": None, "visual_tone": None, "visual_concept": None,
                         "style_key": "ugc",
                         "request": {"use_brand_knowledge": True, "product_ids": product_ids},
-                    }, created_by="system")
+                    })
                 except Exception:
                     logging.getLogger(__name__).exception(
                         "workbench.submit_brief 失敗：tree_task_id=%s node_key=%s",

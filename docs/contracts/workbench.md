@@ -19,7 +19,7 @@ outside reader is `app.schedule`, and it reads only through the functions below.
 register(app: FastAPI) -> None          # mounts /api/workbench/*
 register_tasks() -> None                # idempotently registers the generation tasks
                                         # against the current app.background.app()
-submit_brief(conn, org_id, brand_id, brief: dict, *, created_by: str) -> str
+submit_brief(conn, org_id, brand_id, brief: dict) -> str
                                         # writes one workbench_brief row, enqueues the
                                         # parts brief["parts"] names (copy today), returns
                                         # the brief id. brief = {"kind", "source_kind",
@@ -98,8 +98,14 @@ Module-local and reversible, decided here rather than in an ADR:
 
 - **Capture styles live in `app/workbench/image_styles.json`** — `[{"key","label","capture_line",
   "authenticity_hint"}]`, default entry `ugc`; `GET /api/workbench/styles` returns it verbatim for
-  the 新工單 form; `prompts.py` pastes the chosen entry into the 工單 text. Adding a style is one
-  entry, no code (ADR 0068 §7).
+  the 新工單 form; `prompts.py` pastes the chosen entry into the 工單 text, and its `capture_line`
+  is what the fixed block's 攝影形式 line is rendered from (ticket workbench-2/02, ablation §3).
+  Adding a style is one entry, no code (ADR 0068 §7).
+- `workbench_brief.audience_key`／`pain_key`／`angle_key`／`hook_key`／`proof_key`／`offer_key`／
+  `format_key`／`created_by` unused since 2026-09-09 (ticket workbench-2/02, ablation): the seven
+  coordinate keys are read from `coordinates_snapshot_json` instead, and nothing reads the eighth;
+  the columns stay (nullable, no migration this ticket) — drop them in the next workbench
+  migration that touches the table.
 
 - A closed brief is hidden from the default list and excluded from the schedule page's 投放包 only
   if it has no adopted copy; adoption survives closing.

@@ -2352,10 +2352,11 @@ class CreativeCandidateSyncTest(_ScheduleApiTestBase):
         return dict(row)
 
     def _write_copy_round(self, brief_id: str, round_no: int, angle_label: str,
-                           visual_tone: str = "暖調生活") -> str:
+                           visual_tone: str = "暖調生活", warnings: list | None = None) -> str:
         """直接寫一輪 `workbench_output`（含它自己的 `llm_task` 列）——回傳這一輪的
         `llm_task_id`，供斷言「同步用的是哪一輪」。`visual_tone` 可覆寫，供壞值測試用
-        （票 05 fix round：`body_json` 裡不是兩個合法值之一的情況）。"""
+        （票 05 fix round：`body_json` 裡不是兩個合法值之一的情況）。`warnings` 可覆寫，
+        預設 `[]`（票 workbench-2/02 ablation §4：`_copy_summary()` 的過濾測試用）。"""
         llm_task_id = coredb.new_id("llm")
         web.conn.execute(
             "INSERT INTO llm_task (id, org_id, brand_id, task_type, context_scope_json,"
@@ -2374,7 +2375,7 @@ class CreativeCandidateSyncTest(_ScheduleApiTestBase):
             "coordinates": coordinates, "short": ["短版"], "medium": ["中版"],
             "long": ["長版"], "headlines": ["標題"], "descriptions": ["說明"],
             "visual_tone": visual_tone, "visual_concept": f"第 {round_no} 輪的畫面概念",
-            "warnings": [], "validation": [],
+            "warnings": warnings if warnings is not None else [], "validation": [],
         }
         workbench_repo.write_output(
             web.conn, org_id=coredb.DEV_ORG_ID, brand_id=self.brand["id"], brief_id=brief_id,
@@ -2495,6 +2496,25 @@ class CreativeCandidateSyncTest(_ScheduleApiTestBase):
             (self.brand["id"],),
         ).fetchone()["n"]
         self.assertEqual(count, 1)
+
+    def test_copy_warnings_reach_the_brand_response(self):
+        """票 workbench-2/02（ablation §4）：`_copy_summary()` 過濾出來的 `warnings` 一路
+        帶到排程頁 `briefs[].copy.warnings`（純函式那一段在 test_workbench.py 驗，這裡驗
+        端到端的那一段——經 GET /api/schedule/brands/{brand_id} 真的讀得到）。混一個非字串
+        元素，確認被濾掉、不是整批丟棄。"""
+        brief = self._tree_leaf_brief()
+        self._write_copy_round(
+            brief["id"], 1, "稀缺性行銷",
+            warnings=["3 顆體驗包的價格是佔位，投放前請核對。", "另一句提醒。", 123],
+        )
+
+        get_resp = self.client.get(f"/api/schedule/brands/{self.brand['id']}")
+        self.assertEqual(get_resp.status_code, 200, get_resp.text)
+        target = next(b for b in get_resp.json()["briefs"] if b["node_key"] == "1.1.1")
+        self.assertEqual(
+            target["copy"]["warnings"],
+            ["3 顆體驗包的價格是佔位，投放前請核對。", "另一句提醒。"],
+        )
 
 
 class SearchSourcesReadbackTest(_ScheduleApiTestBase):

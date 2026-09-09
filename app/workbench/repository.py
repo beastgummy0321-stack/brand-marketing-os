@@ -66,8 +66,7 @@ def _validate_on_image_texts(request: dict) -> None:
         raise ValueError("on_image_texts_required")
 
 
-def submit_brief(conn, org_id: str, brand_id: str, brief: dict, *,
-                  created_by: str) -> str:
+def submit_brief(conn, org_id: str, brand_id: str, brief: dict) -> str:
     """寫一列 `workbench_brief`（`_parts_for()` 排到東西才 `status='queued'`，沒排到
     就是 `'done'`——沒有 part 要跑的 brief 是閒置的，不是在等佇列），依 `_parts_for()`
     排進 `background.workbench_generate`，回傳 brief id（契約頁 Exported shapes）。
@@ -113,18 +112,14 @@ def submit_brief(conn, org_id: str, brand_id: str, brief: dict, *,
 
     conn.execute(
         "INSERT INTO workbench_brief (id, org_id, brand_id, kind, source_kind, source_ref,"
-        " product_id, audience_key, pain_key, angle_key, hook_key, proof_key, offer_key,"
-        " format_key, coordinates_snapshot_json, visual_tone, visual_concept, style_key,"
-        " request_json, status, created_by)"
-        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,"
-        " %s, %s, %s)",
+        " product_id, coordinates_snapshot_json, visual_tone, visual_concept, style_key,"
+        " request_json, status)"
+        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
         (
             brief_id, org_id, brand_id, brief["kind"], brief["source_kind"],
             jsonb(brief.get("source_ref") or {}), product_id,
-            coordinates.get("audience"), coordinates.get("pain"), coordinates.get("angle"),
-            coordinates.get("hook"), coordinates.get("proof"), coordinates.get("offer"),
-            coordinates.get("format"), jsonb(coordinates), brief.get("visual_tone"),
-            brief.get("visual_concept"), style_key, jsonb(request), status, created_by,
+            jsonb(coordinates), brief.get("visual_tone"),
+            brief.get("visual_concept"), style_key, jsonb(request), status,
         ),
     )
     for part in parts:
@@ -146,7 +141,7 @@ def submit_brief(conn, org_id: str, brand_id: str, brief: dict, *,
 _CREATABLE_KINDS = frozenset({"copy", "image_prompt", "video_script", "free"})
 
 
-def create_brief(conn, org_id: str, brand_id: str, brief: dict, *, created_by: str) -> str:
+def create_brief(conn, org_id: str, brand_id: str, brief: dict) -> str:
     """`POST /briefs`（票 03）專屬入口：`kind='ad_creative'` 是 `app.schedule` 那邊
     （票 05 之後）直接呼叫 `submit_brief()` 才用的 kind，這支 HTTP 端點不開放
     （契約頁「Routes」）——`submit_brief()` 本身的簽章與行為對其他呼叫端保持不變，不
@@ -154,7 +149,7 @@ def create_brief(conn, org_id: str, brand_id: str, brief: dict, *, created_by: s
     video_script_count／on_image_texts）都在 `submit_brief()` 裡，這裡不重複。"""
     if brief.get("kind") not in _CREATABLE_KINDS:
         raise ValueError("kind_unknown")
-    return submit_brief(conn, org_id, brand_id, brief, created_by=created_by)
+    return submit_brief(conn, org_id, brand_id, brief)
 
 
 def get_brief(conn: _AnyConn, org_id: str, brand_id: str, brief_id: str) -> dict | None:

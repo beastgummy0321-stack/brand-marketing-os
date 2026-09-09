@@ -179,6 +179,16 @@ Module-local and reversible, decided here rather than in an ADR:
   spend split was Meta's optimiser choice, not the user's experiment (`ab-testing.md:72-75`);
   the section sits after `reminders`/`【上一期】` and before `role_text(lens)` — last still wins
   (the "Position in the prompt decides" measurement below).
+- **The per-node copy summary in the brand response (`briefs[].copy`, `state._copy_summary()`)
+  carries the copy task's own `warnings`** (ticket workbench-2/02, ablation §4) — the honest
+  「這是佔位，投放前核對」 lines every workbench task file already asks the model for, filtered to
+  strings (a non-string element is dropped, not the whole list), `[]` when the reply carried
+  none. Shown under 素材準備 as 「模型的提醒」, the same vocabulary `BriefDetail.tsx` uses for the
+  same field read straight off `workbench_output.body_json` (design-system §8). Literal:
+  ```json
+  {"copy": {"is_adopted": false, "generation_round": 1,
+            "warnings": ["3 顆體驗包的價格是佔位，投放前請核對。"], "short": ["…"]}}
+  ```
 - **Retired 2026-09-09 (ticket workbench/05)**: the matching problem below no longer exists —
   each schedule-node brief is submitted for exactly one node (`source_ref.node_key`), never a
   batch reply the shell has to zip back onto a tree. Left here as history, not as a rule anything

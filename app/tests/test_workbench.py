@@ -16,6 +16,7 @@ from app.brand_intelligence import repository as bi_repo
 from app.core import db as coredb
 from app.llm import providers
 from app.schedule import repository as schedule_repo
+from app.schedule import state as schedule_state
 from app.workbench import jobs as workbench_jobs
 from app.workbench import prompts as workbench_prompts
 from app.workbench import repository as workbench_repo
@@ -115,9 +116,7 @@ class _WorkbenchTestBase(unittest.TestCase):
             "visual_concept": None, "style_key": "ugc", "request": {},
         }
         brief.update(overrides)
-        return workbench_module.submit_brief(
-            web.conn, self.org_id, self.brand_id, brief, created_by=ACTOR,
-        )
+        return workbench_module.submit_brief(web.conn, self.org_id, self.brand_id, brief)
 
     def _copy_reply(self) -> dict:
         return {
@@ -363,7 +362,6 @@ class SourceIsolationTest(_WorkbenchTestBase):
              "product_id": None, "coordinates": {}, "visual_tone": None,
              "visual_concept": None, "style_key": "ugc",
              "request": {"on_image_texts": ["一杯搞定早餐"]}},
-            created_by=ACTOR,
         )
 
         found = workbench_module.briefs_for_source(
@@ -502,6 +500,42 @@ class FreeRoundTripTest(_WorkbenchTestBase):
         validation = rows[0]["body_json"]["validation"]
         fail = next(line for line in validation if line.split("：", 1)[0].endswith("items[1]"))
         self.assertTrue(fail.startswith("❌"), fail)
+
+
+# -- 案例 9：copy 回覆的 warnings 過濾成純字串；完全沒有這個鍵退回空清單 -----------------
+
+class CopyWarningsSummaryTest(_WorkbenchTestBase):
+    def test_mixed_and_missing_warnings(self):
+        """票 workbench-2/02（ablation §4）：`app/schedule/state.py::_copy_summary()` 把
+        `body_json.warnings` 過濾成純字串清單——混進來的非字串元素被濾掉（不是「全部都是
+        字串才收」，也不是整批丟棄），完全沒有這個鍵的回覆退回空清單，不是缺鍵炸掉。直接
+        呼叫 `_copy_summary()`（不是重測 `submit_brief`／worker 那條路徑，那條路徑其他七支
+        案例已經驗過），證明它讀的是這個模組自己寫出來的 `workbench_output` 列。先證過紅：
+        把 `warnings` 那一行從 `_copy_summary()` 拿掉，這支立刻兩個斷言都紅
+        （`KeyError`／`AssertionError`）。"""
+        brief_id = self._submit(kind="copy")
+        reply = self._copy_reply()
+        reply["warnings"] = ["3 顆體驗包的價格是佔位，投放前請核對。", "另一句提醒。", 123]
+        workbench_jobs.PROVIDER = _fake(json.dumps(reply, ensure_ascii=False))
+        self._run_worker()
+        output = workbench_module.adopted_output(
+            web.conn, self.org_id, self.brand_id, brief_id, "copy"
+        )
+        summary = schedule_state._copy_summary(output)
+        self.assertEqual(
+            summary["warnings"],
+            ["3 顆體驗包的價格是佔位，投放前請核對。", "另一句提醒。"],
+        )
+
+        brief_id_2 = self._submit(kind="copy")
+        reply_2 = self._copy_reply()
+        del reply_2["warnings"]
+        workbench_jobs.PROVIDER = _fake(json.dumps(reply_2, ensure_ascii=False))
+        self._run_worker()
+        output_2 = workbench_module.adopted_output(
+            web.conn, self.org_id, self.brand_id, brief_id_2, "copy"
+        )
+        self.assertEqual(schedule_state._copy_summary(output_2)["warnings"], [])
 
 
 if __name__ == "__main__":
