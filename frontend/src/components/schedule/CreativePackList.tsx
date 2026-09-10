@@ -1,10 +1,8 @@
-import { useState } from "react";
 import { Link } from "react-router-dom";
 import { CopyIconButton } from "@/components/layout/CopyIconButton";
 import { EmptyState } from "@/components/layout/EmptyState";
 import { Skeleton } from "@/components/layout/Skeleton";
 import { Badge } from "@/components/layout/ui/badge";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/layout/ui/tabs";
 import { LENGTH_HINTS, LENGTH_LABELS } from "@/lib/workbenchApi";
 import type { ScheduleBrief } from "@/lib/scheduleApi";
 
@@ -31,37 +29,26 @@ function failLine(validation: string[], path: string): string | null {
 }
 
 function CopyTabs({ copy }: { copy: NonNullable<ScheduleBrief["copy"]> }) {
-  const [tab, setTab] = useState<"short" | "medium" | "long">("short");
-  const bodies: Record<"short" | "medium" | "long", string[]> = {
-    short: copy.short, medium: copy.medium, long: copy.long,
-  };
+  const key = copy.copy_length;
   return (
     <div className="flex flex-col gap-4">
-      <Tabs value={tab} onValueChange={(v) => setTab(v as typeof tab)}>
-        <TabsList>
-          <TabsTrigger value="short">{LENGTH_LABELS.short}</TabsTrigger>
-          <TabsTrigger value="medium">{LENGTH_LABELS.medium}</TabsTrigger>
-          <TabsTrigger value="long">{LENGTH_LABELS.long}</TabsTrigger>
-        </TabsList>
-        {(["short", "medium", "long"] as const).map((key) => (
-          <TabsContent key={key} value={key} className="flex flex-col gap-3">
-            <p className="text-xs text-muted-foreground">{LENGTH_HINTS[key]}</p>
-            {bodies[key].map((text, i) => {
-              const fail = failLine(copy.validation, `${key}[${i + 1}]`);
-              return (
-                <div key={i} className="flex flex-col gap-1 rounded-md border border-border p-3">
-                  <div className="flex items-start justify-between gap-2">
-                    <p className="whitespace-pre-wrap text-sm">{text}</p>
-                    <CopyIconButton ariaLabel={`複製第 ${i + 1} 則`} getText={() => text} />
-                  </div>
-                  <span className="numeric text-xs text-muted-foreground">{charCount(text)} 字</span>
-                  {fail && <p className="text-xs text-danger">{fail}</p>}
-                </div>
-              );
-            })}
-          </TabsContent>
-        ))}
-      </Tabs>
+      <div className="flex flex-col gap-3">
+        <p className="text-sm font-medium">{LENGTH_LABELS[key]}</p>
+        <p className="text-xs text-muted-foreground">{LENGTH_HINTS[key]}</p>
+        {copy.bodies.map((text, i) => {
+          const fail = failLine(copy.validation, `${key}[${i + 1}]`);
+          return (
+            <div key={i} className="flex flex-col gap-1 rounded-md border border-border p-3">
+              <div className="flex items-start justify-between gap-2">
+                <p className="whitespace-pre-wrap text-sm">{text}</p>
+                <CopyIconButton ariaLabel={`複製第 ${i + 1} 則`} getText={() => text} />
+              </div>
+              <span className="numeric text-xs text-muted-foreground">{charCount(text)} 字</span>
+              {fail && <p className="text-xs text-danger">{fail}</p>}
+            </div>
+          );
+        })}
+      </div>
 
       {copy.warnings.length > 0 && (
         <div className="flex flex-col gap-1 text-sm text-muted-foreground">
@@ -135,7 +122,7 @@ function CreativePackCard({ brandId, brief }: { brandId: string; brief: Schedule
             {brief.copy ? <CopyTabs copy={brief.copy} /> : <p className="text-sm text-muted-foreground">還沒有文案。</p>}
             <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border pt-3 text-sm">
               <span className="text-muted-foreground">
-                圖片提示詞：{brief.image_prompts ? `已產 ${brief.image_prompts.count} 條` : "尚未產"}
+                圖片提示詞：{brief.image_prompts ? `已產第 ${brief.image_prompts.generation_round} 輪` : "尚未產"}
               </span>
               <Link to={workbenchHref} className="text-primary underline-offset-4 hover:underline">
                 到工作檯
