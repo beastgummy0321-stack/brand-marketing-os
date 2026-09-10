@@ -852,6 +852,40 @@ class QueuedGenerationTest(_ScheduleApiTestBase):
         self.assertTrue(all(b["copy"] is None and b["image_prompts"] is None for b in briefs))
 
 
+class TreeDispatchRequestTest(_ScheduleApiTestBase):
+    """票 F01-T02-I04：`schedule_tree()` 展開成功後交給工作檯的 `request_json`，每個最深層
+    節點自己的 `copy_length`（沒填就落成 `"short"`）跟這一期的 `promotion_note` 都要原樣
+    帶到——`app/schedule/jobs.py:589-593` 已經這樣寫，這裡是那段程式的真的跑一次證據。"""
+
+    def test_dispatched_brief_request_carries_node_copy_length_and_promotion_note(self):
+        schedule_jobs.PROVIDER = _fake(_fenced_plans([_one_plan()]))
+        resp = self._post(plan_count=1, promotion_note="滿799免運\n新品九折")
+        self.assertEqual(resp.status_code, 200, resp.text)
+        self._run_worker()
+
+        nodes = _one_tree_nodes()
+        nodes[0]["children"][0]["children"][0]["copy_length"] = "long"
+        schedule_jobs.PROVIDER = _fake(_tree_fenced(nodes))
+        resp = self.client.post(
+            f"/api/schedule/brands/{self.brand['id']}/tree", json={"plan_index": 0}
+        )
+        self.assertEqual(resp.status_code, 200, resp.text)
+        self._run_worker()
+
+        rows = web.conn.execute(
+            "SELECT source_ref, request_json FROM workbench_brief WHERE brand_id = %s",
+            (self.brand["id"],),
+        ).fetchall()
+        self.assertEqual(len(rows), 2)
+        by_node_key = {r["source_ref"]["node_key"]: r["request_json"] for r in rows}
+        self.assertEqual(by_node_key.keys(), {"1.1.1", "1.2.1"})
+        self.assertEqual(by_node_key["1.1.1"]["copy_length"], "long")
+        self.assertEqual(by_node_key["1.2.1"]["copy_length"], "short")
+        for request in by_node_key.values():
+            self.assertEqual(request["parts"], ["copy"])
+            self.assertEqual(request["promotion_note"], "滿799免運\n新品九折")
+
+
 class RejectApiContractTest(_ScheduleApiTestBase):
     """票 10-feedback-entries（ADR 0037）：POST .../reject——每條意見變一列 rule，
     再用凍結參數重新排程。"""
