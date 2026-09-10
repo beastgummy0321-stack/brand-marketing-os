@@ -1,18 +1,15 @@
 import { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { PageHeader } from "@/components/layout/PageHeader";
-import { Button } from "@/components/layout/ui/button";
 import { EmptyState } from "@/components/layout/EmptyState";
 import { Skeleton } from "@/components/layout/Skeleton";
 import { useWorkspace } from "@/components/layout/WorkspaceContext";
 import {
   fetchBrief, fetchBriefs, type BriefDetail as BriefDetailData, type BriefSummary,
-  type WorkbenchBriefStatus,
 } from "@/lib/workbenchApi";
-import { BriefList } from "./BriefList";
+import { BriefList, type BriefPart } from "./BriefList";
 import { BriefDetail } from "./BriefDetail";
 import { NewBriefPanel } from "./NewBriefPanel";
-import { BUTTON_LABELS } from "./copy";
 
 type ListState =
   | { status: "loading" }
@@ -37,10 +34,9 @@ export function WorkbenchPage({ brandId }: { brandId: string }) {
   const { brands } = useWorkspace();
   const brand = brands.find((b) => b.brand_id === brandId);
   const [params, setParams] = useSearchParams();
-  const [filter, setFilter] = useState<WorkbenchBriefStatus>("active");
   const [listState, setListState] = useState<ListState>({ status: "loading" });
   const [detailState, setDetailState] = useState<DetailState>({ status: "none" });
-  const [panelOpen, setPanelOpen] = useState(false);
+  const [newBriefPart, setNewBriefPart] = useState<BriefPart | null>(null);
   const listRequestId = useRef(0);
   const detailRequestId = useRef(0);
 
@@ -55,10 +51,17 @@ export function WorkbenchPage({ brandId }: { brandId: string }) {
     });
   }
 
-  function loadList(status: WorkbenchBriefStatus) {
+  function startPart(part: BriefPart) {
+    setNewBriefPart(part);
+    selectBrief(null);
+  }
+
+  // 左欄「派工任務／工單」清單全部走 `status=all`，開／關的分界在元件內用 `closed_at`
+  // 判斷（票面 §1：「全部」要含已關閉，分界不再交給後端的 status 篩選）。
+  function loadList() {
     const id = ++listRequestId.current;
     setListState({ status: "loading" });
-    fetchBriefs(brandId, status)
+    fetchBriefs(brandId, "all")
       .then((briefs) => {
         if (id === listRequestId.current) setListState({ status: "ready", briefs });
       })
@@ -94,16 +97,11 @@ export function WorkbenchPage({ brandId }: { brandId: string }) {
       });
   }
 
-  // 換品牌：篩選回到預設「進行中」，清單／詳情各自的載入 effect 會因為 brandId 變動重打。
   useEffect(() => {
-    setFilter("active");
-  }, [brandId]);
-
-  useEffect(() => {
-    loadList(filter);
-    // brandId 或 filter 任一變動都要重打；loadList 本身穩定（只讀閉包裡的 brandId）。
+    loadList();
+    // brandId 變動要重打；loadList 本身穩定（只讀閉包裡的 brandId）。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [brandId, filter]);
+  }, [brandId]);
 
   useEffect(() => {
     detailRequestId.current += 1; // 品牌或選取換了，作廢還沒回來的舊請求
@@ -113,7 +111,7 @@ export function WorkbenchPage({ brandId }: { brandId: string }) {
   }, [brandId, selectedId]);
 
   function refreshAfterAction() {
-    loadList(filter);
+    loadList();
     if (selectedId) loadDetail(selectedId, true);
   }
 
@@ -123,10 +121,10 @@ export function WorkbenchPage({ brandId }: { brandId: string }) {
 
   useEffect(() => {
     if (!anyRunning) return;
-    const timer = setInterval(() => loadList(filter), POLL_LIST_MS);
+    const timer = setInterval(() => loadList(), POLL_LIST_MS);
     return () => clearInterval(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [anyRunning, filter, brandId]);
+  }, [anyRunning, brandId]);
 
   useEffect(() => {
     if (!anyRunning || !selectedId) return;
@@ -143,26 +141,28 @@ export function WorkbenchPage({ brandId }: { brandId: string }) {
           (brand ? `${brand.brand_name} · ` : "") +
           "文案、圖片提示詞與腳本在這裡生成；投放時到檔期規劃複製"
         }
-        actions={
-          <Button type="button" onClick={() => setPanelOpen(true)}>{BUTTON_LABELS.newBrief}</Button>
-        }
       />
       <div className="workspace-split">
         <BriefList
           status={listState.status}
           briefs={listState.status === "ready" ? listState.briefs : []}
           errorMessage={listState.status === "error" ? listState.message : undefined}
-          filter={filter}
-          onFilterChange={setFilter}
           selectedId={selectedId}
-          onSelect={selectBrief}
-          onReload={() => loadList(filter)}
+          onSelectBrief={selectBrief}
+          onStartPart={startPart}
+          activePart={newBriefPart}
+          onReload={loadList}
         />
         <div className="workspace-content flex flex-col gap-4">
           {detailState.status === "none" && (
-            <EmptyState
-              title="選一張工單"
-              description="左側清單是這個品牌的工單；還沒有就按右上角新工單"
+            <NewBriefPanel
+              brandId={brandId}
+              initialPart={newBriefPart}
+              onCreated={(id) => {
+                setNewBriefPart(null);
+                selectBrief(id);
+                loadList();
+              }}
             />
           )}
           {detailState.status === "loading" && <Skeleton className="h-96" />}
@@ -181,23 +181,12 @@ export function WorkbenchPage({ brandId }: { brandId: string }) {
               onChanged={refreshAfterAction}
               onDeleted={() => {
                 selectBrief(null);
-                loadList(filter);
+                loadList();
               }}
             />
           )}
         </div>
       </div>
-      {panelOpen && (
-        <NewBriefPanel
-          brandId={brandId}
-          onClose={() => setPanelOpen(false)}
-          onCreated={(id) => {
-            setPanelOpen(false);
-            selectBrief(id);
-            loadList(filter);
-          }}
-        />
-      )}
     </div>
   );
 }

@@ -27,15 +27,16 @@ export interface NewBriefRequest {
   free_text: string | null;
   image_prompt_count: number | null;
   video_script_count: number | null;
-  on_image_texts: string[] | null;
+  // 只有 `BriefDetail.request` 的讀回形狀還在用這個鍵（`BriefDetail.tsx:263`）；新表單
+  // （票 04）不再送這欄，改成 optional 讓兩邊共用同一個型別不用各自宣告一份
+  // （票面「Not touched」段落，鍵與讀者留給 F01-T04-I02 一起刪）。
+  on_image_texts?: string[] | null;
+  parts: string[];
+  copy_length: "short" | "medium" | "long";
 }
 
 export interface NewBrief {
-  kind: string;
   product_id: string | null;
-  coordinates: WorkbenchCoordinates | null;
-  visual_tone: "暗調強對比" | "暖調生活" | null;
-  visual_concept: string | null;
   style_key: string;
   request: NewBriefRequest;
 }
