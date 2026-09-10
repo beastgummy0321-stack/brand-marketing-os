@@ -170,8 +170,8 @@
     "app/tests/identity_test_helpers.py"
   ],
   "verify": {
-    "test": "uv run pytest app/tests -q -n 8 --dist loadfile",
-    "typecheck": "uv run ruff check app && uv run pyright && cd frontend && npx tsc -b --noEmit && npm run depcruise",
+    "test": "uv run python -m pytest app/tests -q -n 8 --dist loadfile",
+    "typecheck": "uv run ruff check app && uv run python -m pyright && cd frontend && npx tsc -b --noEmit && npm run depcruise",
     "build": "cd frontend && npm run build",
     "smoke": "cd frontend && npm run e2e"
   },
