@@ -7,25 +7,24 @@ import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/layout/ui/dialog";
 import { Input } from "@/components/layout/ui/input";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/layout/ui/tabs";
 import { fetchLibrary, type LibraryAsset } from "@/lib/libraryApi";
 import { useAuthedImage } from "@/lib/useAuthedImage";
 import {
   adoptOutput, closeBrief, deleteBrief, fetchStyles, reopenBrief, runPart,
   type BriefDetail as BriefDetailData, type ImageStyle, type WorkbenchOutput,
 } from "@/lib/workbenchApi";
-import { BUTTON_LABELS, IMAGE_PROMPT_ADVISORY, KIND_LABELS, LENGTH_HINTS, LENGTH_LABELS } from "./copy";
+import {
+  BUTTON_LABELS, GENERATE_IMAGE_SEAT_LABEL, GENERATE_IMAGE_SEAT_TOOLTIP, IMAGE_PROMPT_ADVISORY,
+  IMAGE_PROMPT_HERO_HINT, KIND_LABELS, LENGTH_HINTS, LENGTH_LABELS,
+} from "./copy";
 import { StatusBadge } from "./BriefList";
 
-// app/workbench/repository.py `_PARTS_BY_KIND`（verified 2026-09-09）：哪個 kind 能跑哪個
-// part——`ad_creative`（排程節點）兩個都能，其餘 kind 各自只有自己那個。
-const PARTS_FOR_KIND: Record<string, string[]> = {
-  ad_creative: ["copy", "image_prompt"],
-  copy: ["copy"],
-  image_prompt: ["image_prompt"],
-  video_script: ["video_script"],
-  free: ["free"],
-};
+// 哪張 brief 有哪些卡片：不再照 `kind` 猜（`ad_creative` 以外的 kind 過去跟 part 一對一，
+// 這條假設在自由生成／多 part 工單上不成立）——排程節點固定文案＋圖片提示詞兩張，其餘
+// 照 `request.parts`（票 F01-T04-I02，ARCHITECTURE.md §5.4）。
+function partsFor(brief: BriefDetailData): string[] {
+  return brief.source_kind === "schedule_node" ? ["copy", "image_prompt"] : brief.request.parts;
+}
 
 // app/workbench/validate.py `_char_len()`：字數不算換行——跟伺服器 validation 訊息的字數
 // 對得上（票面 contradiction check 第三條點名的陷阱）。
@@ -80,7 +79,7 @@ function latestRound(outputs: WorkbenchOutput[]): number {
  * ponytail: 猜「還沒有任何產出的 part」；多 part 的 kind（`ad_creative`）若失敗前已經有
  * 一個 part 產出過，這裡可能猜錯，日後真的需要再加一欄記錄「上次跑的是哪個 part」。 */
 function failedPart(brief: BriefDetailData): string {
-  const candidates = PARTS_FOR_KIND[brief.kind] ?? [];
+  const candidates = partsFor(brief);
   return (
     candidates.find((p) => !brief.parts[p] || brief.parts[p].latest_round === 0) ??
     candidates[0] ??
@@ -117,13 +116,17 @@ function CopyPartCard({
 }: { brandId: string; brief: BriefDetailData; busy: boolean; onChanged: () => void }) {
   const outputs = outputsFor(brief, "copy");
   const [selectedRound, setSelectedRound] = useState<number | null>(null);
-  const [lengthTab, setLengthTab] = useState<"short" | "medium" | "long">("short");
   const [localBusy, setLocalBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const round = selectedRound ?? latestRound(outputs);
   const output = outputs.find((o) => o.generation_round === round);
   const body = (output?.body_json ?? {}) as Record<string, unknown>;
   const validation = body.validation;
+  // 一張 brief 只有一個長度（`jobs.py` 寫回 `body.copy_length`），不是使用者切換的三選一。
+  const length = (
+    body.copy_length === "medium" || body.copy_length === "long" ? body.copy_length : "short"
+  );
+  const bodies = Array.isArray(body[length]) ? body[length].map(String) : [];
   const headlines = Array.isArray(body.headlines) ? body.headlines.map(String) : [];
   const descriptions = Array.isArray(body.descriptions) ? body.descriptions.map(String) : [];
   const warnings = modelWarnings(body);
@@ -143,8 +146,7 @@ function CopyPartCard({
   }
 
   function copyAllText(): string {
-    const variants = Array.isArray(body[lengthTab]) ? body[lengthTab].map(String) : [];
-    return [...variants, ...headlines, ...descriptions].join("\n\n");
+    return [...bodies, ...headlines, ...descriptions].join("\n\n");
   }
 
   return (
@@ -159,31 +161,25 @@ function CopyPartCard({
           <p className="text-sm text-muted-foreground">還沒有產出。</p>
         ) : (
           <>
-            <Tabs value={lengthTab} onValueChange={(v) => setLengthTab(v as typeof lengthTab)}>
-              <TabsList>
-                <TabsTrigger value="short">{LENGTH_LABELS.short}</TabsTrigger>
-                <TabsTrigger value="medium">{LENGTH_LABELS.medium}</TabsTrigger>
-                <TabsTrigger value="long">{LENGTH_LABELS.long}</TabsTrigger>
-              </TabsList>
-              {(["short", "medium", "long"] as const).map((key) => (
-                <TabsContent key={key} value={key} className="flex flex-col gap-3">
-                  <p className="text-xs text-muted-foreground">{LENGTH_HINTS[key]}</p>
-                  {(Array.isArray(body[key]) ? body[key].map(String) : []).map((text, i) => {
-                    const fail = failLine(validation, `${key}[${i + 1}]`);
-                    return (
-                      <div key={i} className="flex flex-col gap-1 rounded-md border border-border p-3">
-                        <div className="flex items-start justify-between gap-2">
-                          <p className="whitespace-pre-wrap text-sm">{text}</p>
-                          <CopyIconButton ariaLabel={`複製第 ${i + 1} 則`} getText={() => text} />
-                        </div>
-                        <span className="numeric text-xs text-muted-foreground">{charCount(text)} 字</span>
-                        {fail && <p className="text-xs text-danger">{fail}</p>}
-                      </div>
-                    );
-                  })}
-                </TabsContent>
-              ))}
-            </Tabs>
+            <div className="flex flex-col gap-3">
+              <div>
+                <span className="text-sm font-medium text-foreground">{LENGTH_LABELS[length]}</span>
+                <p className="text-xs text-muted-foreground">{LENGTH_HINTS[length]}</p>
+              </div>
+              {bodies.map((text, i) => {
+                const fail = failLine(validation, `${length}[${i + 1}]`);
+                return (
+                  <div key={i} className="flex flex-col gap-1 rounded-md border border-border p-3">
+                    <div className="flex items-start justify-between gap-2">
+                      <p className="whitespace-pre-wrap text-sm">{text}</p>
+                      <CopyIconButton ariaLabel={`複製第 ${i + 1} 則`} getText={() => text} />
+                    </div>
+                    <span className="numeric text-xs text-muted-foreground">{charCount(text)} 字</span>
+                    {fail && <p className="text-xs text-danger">{fail}</p>}
+                  </div>
+                );
+              })}
+            </div>
 
             <div className="flex flex-col gap-2">
               <span className="text-xs font-medium text-muted-foreground">標題</span>
@@ -236,49 +232,47 @@ function CopyPartCard({
   );
 }
 
+// `brief.coordinates?.format`：「彈性格式」需要多張角度探索，其餘格式（含未指定）通常
+// 只需要主圖＋一批變體，3 條夠起手（票 F01-T04-I02）。
+function defaultImagePromptCount(brief: BriefDetailData): number {
+  return brief.coordinates?.format === "彈性格式" ? 10 : 3;
+}
+
 function ImagePromptPartCard({
   brandId, brief, busy, onChanged,
 }: { brandId: string; brief: BriefDetailData; busy: boolean; onChanged: () => void }) {
   const outputs = outputsFor(brief, "image_prompt");
   const [selectedRound, setSelectedRound] = useState<number | null>(null);
-  const [requestedCount, setRequestedCount] = useState("");
+  const [requestedCount, setRequestedCount] = useState(() => String(defaultImagePromptCount(brief)));
   const [localBusy, setLocalBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [assets, setAssets] = useState<LibraryAsset[]>([]);
   const round = selectedRound ?? latestRound(outputs);
   const output = outputs.find((o) => o.generation_round === round);
   const body = (output?.body_json ?? {}) as Record<string, unknown>;
-  const validation = body.validation;
-  const rendered = Array.isArray(body.rendered) ? body.rendered.map(String) : [];
+  const mode = body.mode === "variant" ? "variant" : "exploration";
+  const rendered = (body.rendered ?? {}) as Record<string, unknown>;
+  const heroText = typeof rendered.hero === "string" ? rendered.hero : "";
+  const variantText = typeof rendered.variant === "string" ? rendered.variant : "";
+  const explorationText = typeof rendered.exploration === "string" ? rendered.exploration : "";
   const warnings = modelWarnings(body);
 
   useEffect(() => {
     fetchLibrary(brandId).then((data) => setAssets(data.assets)).catch(() => {});
   }, [brandId]);
 
-  const copyOutputs = outputsFor(brief, "copy");
-  const sourceCopy = copyOutputs.find((o) => o.adopted_at !== null) ?? copyOutputs[copyOutputs.length - 1];
-  const sourceHeadlines = sourceCopy && Array.isArray(sourceCopy.body_json.headlines)
-    ? sourceCopy.body_json.headlines : [];
-  const onImageTexts = brief.request.on_image_texts ?? [];
-  const noSourceForText = sourceHeadlines.length === 0 && onImageTexts.length === 0;
-
   const requestedCountValue = Number(requestedCount);
   const validRequestedCount =
     requestedCount !== "" && Number.isInteger(requestedCountValue) &&
     requestedCountValue >= 1 && requestedCountValue <= 30;
-  const runDisabled =
-    busy || localBusy || noSourceForText || !validRequestedCount || brief.closed_at !== null;
+  const runDisabled = busy || localBusy || !validRequestedCount || brief.closed_at !== null;
   // 票 workbench-2/03（issue-image-prompt-button-disabled-with-no-reason）：`title` 屬性
-  // 只在滑鼠停留時才看得到，而且原本只講 `noSourceForText` 一種原因——按鈕灰掉的另外三種
-  // 情況（工單關了、上一輪還沒完、條數沒填對）完全沒有說法。改成畫面上永遠看得到的一行字，
-  // 四個原因照這個優先順序，第一個成立的原因就是使用者現在真正卡住的那個。
+  // 只在滑鼠停留時才看得到——改成畫面上永遠看得到的一行字，三個原因照這個優先順序，
+  // 第一個成立的原因就是使用者現在真正卡住的那個。
   const runDisabledReason = brief.closed_at !== null
     ? "工單已關閉，重新開啟後才能產"
     : busy || localBusy
     ? "等目前這輪完成"
-    : noSourceForText
-    ? "先產文案，或在工單填圖上文字"
     : !validRequestedCount
     ? "填 1～30 的條數"
     : null;
@@ -309,17 +303,6 @@ function ImagePromptPartCard({
         <RoundSwitcher outputs={outputs} selected={round} onSelect={setSelectedRound} />
       </div>
       <div className="surface-body flex flex-col gap-4">
-        {brief.kind === "image_prompt" && brief.source_kind === "manual" && onImageTexts.length > 0 && (
-          <div className="flex flex-col gap-1 text-sm">
-            <span className="text-xs font-medium text-muted-foreground">圖上文字</span>
-            <ul className="list-disc pl-5">
-              {onImageTexts.map((text, i) => (
-                <li key={i}>{text}</li>
-              ))}
-            </ul>
-          </div>
-        )}
-
         <div className="flex flex-wrap items-end gap-3">
           <label className="flex flex-col gap-1 text-sm">
             <span className="font-medium text-foreground">要幾條提示詞</span>
@@ -354,19 +337,51 @@ function ImagePromptPartCard({
         {output && (
           <div className="flex gap-4">
             <div className="flex flex-1 flex-col gap-3">
-              {rendered.map((text, i) => {
-                const fail = failLine(validation, `prompts[${i + 1}]`);
-                return (
-                  <div key={i} className="flex flex-col gap-1 rounded-md border border-border p-3">
+              {mode === "variant" ? (
+                <>
+                  <div className="flex flex-col gap-1 rounded-md border border-border p-3">
                     <div className="flex items-start justify-between gap-2">
-                      <pre className="whitespace-pre-wrap font-sans text-xs">{text}</pre>
-                      <CopyIconButton ariaLabel={`複製第 ${i + 1} 則提示詞`} getText={() => text} />
+                      <pre className="whitespace-pre-wrap font-sans text-xs">{heroText}</pre>
+                      <CopyIconButton
+                        label="① 主圖提示詞" ariaLabel="複製主圖提示詞" getText={() => heroText}
+                      />
                     </div>
-                    <span className="numeric text-xs text-muted-foreground">{charCount(text)} 字</span>
-                    {fail && <p className="text-xs text-danger">{fail}</p>}
+                    <p className="text-xs text-muted-foreground">{IMAGE_PROMPT_HERO_HINT}</p>
                   </div>
-                );
-              })}
+                  <div className="flex flex-col gap-1 rounded-md border border-border p-3">
+                    <div className="flex items-start justify-between gap-2">
+                      <pre className="whitespace-pre-wrap font-sans text-xs">{variantText}</pre>
+                      <CopyIconButton
+                        label="② 變體提示詞" ariaLabel="複製變體提示詞" getText={() => variantText}
+                      />
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="flex flex-col gap-1 rounded-md border border-border p-3">
+                    <div className="flex items-start justify-between gap-2">
+                      <pre className="whitespace-pre-wrap font-sans text-xs">{explorationText}</pre>
+                      <CopyIconButton
+                        label="③ 探索提示詞" ariaLabel="複製探索提示詞" getText={() => explorationText}
+                      />
+                    </div>
+                  </div>
+                  <div className="flex flex-col gap-1 rounded-md border border-border p-3">
+                    <div className="flex items-start justify-between gap-2">
+                      <pre className="whitespace-pre-wrap font-sans text-xs">{variantText}</pre>
+                      <CopyIconButton
+                        label="② 變體提示詞" ariaLabel="複製變體提示詞" getText={() => variantText}
+                      />
+                    </div>
+                  </div>
+                </>
+              )}
+              <div>
+                <Button type="button" variant="outline" disabled title={GENERATE_IMAGE_SEAT_TOOLTIP}>
+                  {GENERATE_IMAGE_SEAT_LABEL}
+                </Button>
+              </div>
             </div>
             <div className="w-32 shrink-0">
               {photo ? (
@@ -644,7 +659,7 @@ export function BriefDetail({
 
   const busy = brief.status === "queued" || brief.status === "running";
   const styleLabel = styles.find((s) => s.key === brief.style_key)?.label ?? brief.style_key;
-  const parts = PARTS_FOR_KIND[brief.kind] ?? [];
+  const parts = partsFor(brief);
 
   async function handleToggleClose() {
     setHeaderBusy(true);
