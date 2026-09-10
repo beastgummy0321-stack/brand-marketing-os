@@ -98,10 +98,9 @@ class _WorkbenchApiTestBase(unittest.TestCase):
 
     def _new_brief_body(self, **overrides) -> dict:
         body = {
-            "kind": "copy", "product_id": self.product["id"], "coordinates": None,
+            "product_id": self.product["id"], "coordinates": None,
             "visual_tone": None, "visual_concept": None, "style_key": "ugc",
-            "request": {"use_brand_knowledge": False, "free_text": None,
-                        "image_prompt_count": None, "on_image_texts": None},
+            "request": {"use_brand_knowledge": False, "free_text": None, "parts": ["copy"]},
         }
         body.update(overrides)
         return body
@@ -117,7 +116,7 @@ class _WorkbenchApiTestBase(unittest.TestCase):
 
 class CreateAndListBriefsTest(_WorkbenchApiTestBase):
     def test_create_then_default_and_closed_filters(self):
-        resp = self._create(kind="copy")
+        resp = self._create()
         self.assertEqual(resp.status_code, 201)
         brief = resp.json()["brief"]
         self.assertEqual(brief["status"], "queued")
@@ -145,15 +144,37 @@ class CreateBriefValidationTest(_WorkbenchApiTestBase):
         self.assertEqual(resp.status_code, 400)
         self.assertEqual(resp.json()["error"]["code"], "style_unknown")
 
-    def test_ad_creative_kind_is_kind_unknown(self):
-        resp = self._create(kind="ad_creative")
-        self.assertEqual(resp.status_code, 400)
-        self.assertEqual(resp.json()["error"]["code"], "kind_unknown")
+    def test_multi_part_request_derives_ad_creative_kind(self):
+        # `kind` 不再是端點的守門條件——多個 part 一起請求時，`submit_brief()` 衍生
+        # `kind='ad_creative'`（ARCHITECTURE.md §5.4），這支端點照樣接受。
+        resp = self._create(request={
+            "use_brand_knowledge": False, "free_text": None,
+            "parts": ["copy", "image_prompt"], "image_prompt_count": 2,
+        })
+        self.assertEqual(resp.status_code, 201)
+        self.assertEqual(resp.json()["brief"]["kind"], "ad_creative")
 
-    def test_image_prompt_without_on_image_texts_is_rejected(self):
-        resp = self._create(kind="image_prompt")
+    def test_image_prompt_without_count_is_out_of_range(self):
+        resp = self._create(request={
+            "use_brand_knowledge": False, "free_text": None, "parts": ["image_prompt"],
+        })
         self.assertEqual(resp.status_code, 400)
-        self.assertEqual(resp.json()["error"]["code"], "on_image_texts_required")
+        self.assertEqual(resp.json()["error"]["code"], "count_out_of_range")
+
+    def test_empty_parts_is_parts_unknown(self):
+        resp = self._create(request={
+            "use_brand_knowledge": False, "free_text": None, "parts": [],
+        })
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(resp.json()["error"]["code"], "parts_unknown")
+
+    def test_unknown_copy_length_is_copy_length_unknown(self):
+        resp = self._create(request={
+            "use_brand_knowledge": False, "free_text": None, "parts": ["copy"],
+            "copy_length": "extra_long",
+        })
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(resp.json()["error"]["code"], "copy_length_unknown")
 
     def test_status_unknown_on_list(self):
         resp = self.client.get(f"/api/workbench/brands/{self.brand_id}/briefs?status=bogus")
@@ -165,15 +186,12 @@ class CreateBriefValidationTest(_WorkbenchApiTestBase):
 
 class RunPartValidationTest(_WorkbenchApiTestBase):
     def _image_prompt_brief(self, *, status: str = "done") -> str:
-        """票 02 的 `submit_brief()` INSERT 一律寫 `status='queued'`（不管
-        `_parts_for()` 有沒有真的排東西）——這支工單沒給 `image_prompt_count`，不會有
-        worker 幫它翻到別的狀態，所以這裡用一行 UPDATE 模擬「送出那一輪已經跑完」，
-        才測得到 count/closed 這幾條（`status` 卡在 queued/running 會先被
-        `round_running` 擋下，那是另一個案例）。"""
+        """`submit_brief()` INSERT 一律寫 `status='queued'`——這裡用一行 UPDATE 模擬
+        「送出那一輪已經跑完」，才測得到 count/closed 這幾條（`status` 卡在
+        queued/running 會先被 `round_running` 擋下，那是另一個案例）。"""
         resp = self._create(
-            kind="image_prompt",
             request={"use_brand_knowledge": False, "free_text": None,
-                     "image_prompt_count": None, "on_image_texts": ["一杯搞定早餐"]},
+                     "parts": ["image_prompt"], "image_prompt_count": 3},
         )
         self.assertEqual(resp.status_code, 201)
         brief_id = resp.json()["brief"]["id"]
@@ -240,7 +258,7 @@ class RoundTripAdoptionTest(_WorkbenchApiTestBase):
         }, ensure_ascii=False)
 
     def test_run_output_adopt_then_second_round_keeps_adoption(self):
-        create_resp = self._create(kind="copy")
+        create_resp = self._create()
         self.assertEqual(create_resp.status_code, 201)
         brief_id = create_resp.json()["brief"]["id"]
 
@@ -330,7 +348,7 @@ class CrossTenantTest(_WorkbenchApiTestBase):
 
 class DeleteBriefTest(_WorkbenchApiTestBase):
     def test_delete_cascades_outputs(self):
-        create_resp = self._create(kind="copy")
+        create_resp = self._create()
         brief_id = create_resp.json()["brief"]["id"]
         workbench_repo.write_output(
             web.conn, org_id=self.org_id, brand_id=self.brand_id, brief_id=brief_id,

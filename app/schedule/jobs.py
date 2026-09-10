@@ -570,7 +570,7 @@ def schedule_tree(org_id: str, brand_id: str, plan_index: int, plan_task_id: str
             for leaf in leaves:
                 try:
                     workbench.submit_brief(conn, org_id, brand_id, {
-                        "kind": "ad_creative", "source_kind": "schedule_node",
+                        "source_kind": "schedule_node",
                         "source_ref": {
                             "node_key": leaf["node_key"], "source_tree_task_id": row["id"],
                             "node_name": leaf["name"],
@@ -586,7 +586,10 @@ def schedule_tree(org_id: str, brand_id: str, plan_index: int, plan_task_id: str
                         },
                         "visual_tone": None, "visual_concept": None,
                         "style_key": "ugc",
-                        "request": {"use_brand_knowledge": True, "product_ids": product_ids},
+                        "request": {
+                            "parts": ["copy"], "use_brand_knowledge": True,
+                            "product_ids": product_ids,
+                        },
                     })
                 except Exception:
                     logging.getLogger(__name__).exception(

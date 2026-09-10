@@ -33,43 +33,16 @@ def get_style(style_key: str) -> dict:
     raise ValueError("style_unknown")
 
 
-def _parts_for(kind: str, request: dict) -> list:
-    """哪些 part 現在就要排隊生成（票 §2）：`ad_creative`／`copy` 排 `copy`；
-    `request_json.image_prompt_count` 有值就排 `image_prompt`（跟 kind 是不是
-    `image_prompt` 無關——一張 `ad_creative` 工單同時要文案跟圖時，兩個 part 都排）；
-    `request_json.video_script_count` 有值就排 `video_script`（票 workbench/06，同一條
-    規則——鏡 `image_prompt_count`，張數是使用者的，沒有預設值）；`free` 照 kind 排自己
-    那個 part（自由生成沒有張數這個概念）。沒有給張數的 `image_prompt`／`video_script`
-    工單先不排任何 job（ADR 0068 §7）。"""
-    parts = []
-    if kind in ("ad_creative", "copy"):
-        parts.append("copy")
-    if request.get("image_prompt_count"):
-        parts.append("image_prompt")
-    if request.get("video_script_count"):
-        parts.append("video_script")
-    if kind == "free":
-        parts.append("free")
-    return parts
-
-
-def _validate_on_image_texts(request: dict) -> None:
-    """票 03 §2：`kind='image_prompt'` 手動送出時，圖上文字沒有 copy 輸出可以接——
-    必須是使用者自己填的 1～5 則、每則 27 字以內（creative-matrix.md §3.1：「」文字
-    必須來自使用者，不是模型現編）。"""
-    texts = request.get("on_image_texts")
-    valid = (
-        isinstance(texts, list) and 1 <= len(texts) <= 5
-        and all(isinstance(t, str) and 0 < len(t) <= 27 for t in texts)
-    )
-    if not valid:
-        raise ValueError("on_image_texts_required")
+_PART_NAMES = frozenset({"copy", "image_prompt", "video_script", "free"})
+_COPY_LENGTHS = frozenset({"short", "medium", "long"})
 
 
 def submit_brief(conn, org_id: str, brand_id: str, brief: dict) -> str:
-    """寫一列 `workbench_brief`（`_parts_for()` 排到東西才 `status='queued'`，沒排到
-    就是 `'done'`——沒有 part 要跑的 brief 是閒置的，不是在等佇列），依 `_parts_for()`
-    排進 `background.workbench_generate`，回傳 brief id（契約頁 Exported shapes）。
+    """寫一列 `workbench_brief`。`request["parts"]` 是唯一權威來源（ARCHITECTURE.md
+    §5.4）：非空列表，`_PART_NAMES` 的子集，缺欄／空／不是 list／有未知名稱一律
+    `ValueError("parts_unknown")`。`kind` 在這裡衍生（多於一個 part -> `"ad_creative"`，
+    否則就是那個唯一的 part 名），只為顯示而寫進欄位，`create_brief`／`run_part` 都不
+    再靠它做決定。`parts` 永遠非空，所以 status 永遠是 `"queued"`。
 
     `conn` 這裡不標 `_AnyConn`：`bi_repo.get_product()` 簽章吃 `Conn`（非
     `ConnProxy`），比照 `app/schedule/routes.py:29-33` 既有寫法——`conn` 參數留白
@@ -87,28 +60,27 @@ def submit_brief(conn, org_id: str, brand_id: str, brief: dict) -> str:
         raise ValueError("product_unknown")
     coordinates = brief.get("coordinates") or {}
     request = brief.get("request") or {}
+    parts = request.get("parts")
+    if not isinstance(parts, list) or not parts or any(p not in _PART_NAMES for p in parts):
+        raise ValueError("parts_unknown")
+    copy_length = request.get("copy_length", "short")
+    if copy_length not in _COPY_LENGTHS:
+        raise ValueError("copy_length_unknown")
     image_prompt_count = request.get("image_prompt_count")
-    if image_prompt_count is not None and not (
+    if "image_prompt" in parts and not (
         isinstance(image_prompt_count, int) and 1 <= image_prompt_count <= 30
     ):
-        # 票 03 §2：範圍檢查在送出當下就做，不留到 worker 才發現——不管 kind 是什麼，
-        # 只要 image_prompt_count 有值就會排 image_prompt part（`_parts_for()` 檔頭）。
+        # 票 03 §2：範圍檢查在送出當下就做，不留到 worker 才發現。
         raise ValueError("count_out_of_range")
     video_script_count = request.get("video_script_count")
-    if video_script_count is not None and not (
+    if "video_script" in parts and not (
         isinstance(video_script_count, int) and 1 <= video_script_count <= 5
     ):
-        # 票 workbench/06：跟上面 image_prompt_count 同一條規則，鏡它的範圍檢查——只要
-        # video_script_count 有值就會排 video_script part（`_parts_for()` 檔頭）。
+        # 票 workbench/06：跟上面 image_prompt_count 同一條規則，鏡它的範圍檢查。
         raise ValueError("count_out_of_range")
-    if brief["kind"] == "image_prompt":
-        _validate_on_image_texts(request)
     brief_id = new_id("wbb")
-    parts = _parts_for(brief["kind"], request)
-    # 沒有 part 要跑（例如 kind='image_prompt' 沒給 image_prompt_count）就沒有東西在排隊——
-    # 這種 brief 是閒置的，不是「等佇列」，寫 'queued' 會讓 UI 顯示處理中卻永遠不會翻狀態
-    # （walk 04 步驟 4：`round_running` 也會誤擋使用者第一次按產出）。
-    status = "queued" if parts else "done"
+    kind = "ad_creative" if len(parts) > 1 else parts[0]
+    status = "queued"
 
     conn.execute(
         "INSERT INTO workbench_brief (id, org_id, brand_id, kind, source_kind, source_ref,"
@@ -116,7 +88,7 @@ def submit_brief(conn, org_id: str, brand_id: str, brief: dict) -> str:
         " request_json, status)"
         " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
         (
-            brief_id, org_id, brand_id, brief["kind"], brief["source_kind"],
+            brief_id, org_id, brand_id, kind, brief["source_kind"],
             jsonb(brief.get("source_ref") or {}), product_id,
             jsonb(coordinates), brief.get("visual_tone"),
             brief.get("visual_concept"), style_key, jsonb(request), status,
@@ -138,17 +110,11 @@ def submit_brief(conn, org_id: str, brand_id: str, brief: dict) -> str:
     return brief_id
 
 
-_CREATABLE_KINDS = frozenset({"copy", "image_prompt", "video_script", "free"})
-
-
 def create_brief(conn, org_id: str, brand_id: str, brief: dict) -> str:
-    """`POST /briefs`（票 03）專屬入口：`kind='ad_creative'` 是 `app.schedule` 那邊
-    （票 05 之後）直接呼叫 `submit_brief()` 才用的 kind，這支 HTTP 端點不開放
-    （契約頁「Routes」）——`submit_brief()` 本身的簽章與行為對其他呼叫端保持不變，不
-    在那裡加這道檢查。其餘驗證（style_key／product_id／image_prompt_count／
-    video_script_count／on_image_texts）都在 `submit_brief()` 裡，這裡不重複。"""
-    if brief.get("kind") not in _CREATABLE_KINDS:
-        raise ValueError("kind_unknown")
+    """`POST /briefs`（票 03）專屬入口：`kind` 不再由呼叫端決定什麼可以建立——`kind`
+    是 `submit_brief()` 從 `request["parts"]` 衍生的顯示欄位，這裡不檢查、也不理會
+    `brief` 裡任何 `kind` 值。其餘驗證（style_key／product_id／parts／copy_length／
+    image_prompt_count／video_script_count）都在 `submit_brief()` 裡，這裡不重複。"""
     return submit_brief(conn, org_id, brand_id, brief)
 
 
@@ -398,20 +364,15 @@ def brief_detail(conn: _AnyConn, org_id: str, brand_id: str, brief_id: str) -> d
     return detail
 
 
-_PARTS_BY_KIND = {
-    "ad_creative": frozenset({"copy", "image_prompt"}), "copy": frozenset({"copy"}),
-    "image_prompt": frozenset({"image_prompt"}), "video_script": frozenset({"video_script"}),
-    "free": frozenset({"free"}),
-}
-
-
 def run_part(conn: _AnyConn, org_id: str, brand_id: str, brief_id: str, part: str, *,
              count: int | None = None) -> None:
     """`POST .../parts/{part}/run`（票 03 §2）：`submit_brief()` 排隊那一半的重跑版——
     這裡跟它共用同一個 lock 字串（`workbench:{brief_id}:{part}`）跟 `queued` 寫法，一個
-    地方決定。`ValueError`：`brief_unknown`／`part_unknown`／`brief_closed`／
-    `round_running`／`count_out_of_range`／`on_image_texts_required`（routes.py 逐一
-    對照成 HTTP 狀態碼）。
+    地方決定。任何一個 part 名（`_PART_NAMES`）都可以重跑，不再照 `kind` 篩——一張
+    brief 可能產出它當初沒請求過的 part，那筆 output 就是紀錄本身。`ValueError`：
+    `brief_unknown`／`part_unknown`／`brief_closed`／`round_running`／
+    `count_out_of_range`（routes.py 逐一對照成 HTTP 狀態碼）。這裡不改
+    `request_json.parts`——它記的是「當初請求了什麼」，不是「現在跑過什麼」。
 
     `round_running` 只看 brief 這一欄 `status`（不是「這個 part 有沒有活躍的鎖」）——
     一張 brief 只有一個 status 欄，這裡老實照它判斷；一個 job 卡在 running 沒有寫回
@@ -422,7 +383,7 @@ def run_part(conn: _AnyConn, org_id: str, brand_id: str, brief_id: str, part: st
     brief = get_brief(conn, org_id, brand_id, brief_id)
     if brief is None:
         raise ValueError("brief_unknown")
-    if part not in _PARTS_BY_KIND.get(brief["kind"], frozenset()):
+    if part not in _PART_NAMES:
         raise ValueError("part_unknown")
     if brief["closed_at"] is not None:
         raise ValueError("brief_closed")
@@ -431,13 +392,6 @@ def run_part(conn: _AnyConn, org_id: str, brand_id: str, brief_id: str, part: st
     if part == "image_prompt":
         if count is None or not (1 <= count <= 30):
             raise ValueError("count_out_of_range")
-        headlines_output = adopted_output(conn, org_id, brand_id, brief_id, "copy")
-        headlines = (headlines_output or {}).get("body_json", {}).get("headlines") or []
-        on_image_texts = (brief.get("request_json") or {}).get("on_image_texts") or []
-        if not headlines and not on_image_texts:
-            # 跟 jobs.py `_run()` 同一條規則（票 03 §3），但這裡先擋在 enqueue 之前——
-            # 不花那通一定會被拒絕的 LLM 呼叫的錢。
-            raise ValueError("on_image_texts_required")
     if part == "video_script":
         # 票 workbench/06 §3：跟 image_prompt 一樣，張數是使用者的、沒有預設值——
         # 「再產一輪」重跑一樣要帶（同一個表單欄位、同一條規則）。
