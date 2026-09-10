@@ -45,6 +45,12 @@ function failLine(validation: unknown, path: string): string | null {
 // 票 workbench-2/02（ablation §4）：每個任務檔都會請模型回 `warnings`（誠實的「這是佔位，
 // 投放前核對」句子）——防守讀法跟 `app/schedule/state.py::_copy_summary` 同一條（過濾非字串
 // 元素，不是「全部都是字串才收」）。
+// 圖片提示詞卡：只揪 ❌ 那幾行（`✅ ...` 不顯示），形狀同 `failLine` 的來源陣列。
+function failLines(validation: unknown): string[] {
+  if (!Array.isArray(validation)) return [];
+  return validation.filter((v): v is string => typeof v === "string" && v.startsWith("❌ "));
+}
+
 function modelWarnings(body: Record<string, unknown>): string[] {
   return Array.isArray(body.warnings)
     ? body.warnings.filter((w): w is string => typeof w === "string")
@@ -256,6 +262,7 @@ function ImagePromptPartCard({
   const variantText = typeof rendered.variant === "string" ? rendered.variant : "";
   const explorationText = typeof rendered.exploration === "string" ? rendered.exploration : "";
   const warnings = modelWarnings(body);
+  const validationFailLines = failLines(body.validation);
 
   useEffect(() => {
     fetchLibrary(brandId).then((data) => setAssets(data.assets)).catch(() => {});
@@ -347,6 +354,9 @@ function ImagePromptPartCard({
                       />
                     </div>
                     <p className="text-xs text-muted-foreground">{IMAGE_PROMPT_HERO_HINT}</p>
+                    {validationFailLines.map((line, i) => (
+                      <p key={i} className="text-xs text-danger">{line}</p>
+                    ))}
                   </div>
                   <div className="flex flex-col gap-1 rounded-md border border-border p-3">
                     <div className="flex items-start justify-between gap-2">
@@ -366,6 +376,9 @@ function ImagePromptPartCard({
                         label="③ 探索提示詞" ariaLabel="複製探索提示詞" getText={() => explorationText}
                       />
                     </div>
+                    {validationFailLines.map((line, i) => (
+                      <p key={i} className="text-xs text-danger">{line}</p>
+                    ))}
                   </div>
                   <div className="flex flex-col gap-1 rounded-md border border-border p-3">
                     <div className="flex items-start justify-between gap-2">
