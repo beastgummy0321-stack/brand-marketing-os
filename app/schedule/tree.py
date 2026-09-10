@@ -69,6 +69,14 @@ def _node_coordinates(raw_coordinates) -> dict:
     return result
 
 
+def _node_copy_length(raw_copy_length) -> str:
+    """深度 3 節點的文案長度（ARCHITECTURE.md §5.5）：`short`／`medium`／`long`，其他值或
+    缺欄位一律 `short`——這不是拒絕條件，舊樹（沒有這個欄位）還是要能渲染。"""
+    if raw_copy_length in ("short", "medium", "long"):
+        return raw_copy_length
+    return "short"
+
+
 def _collect_nodes(
     raw_nodes, depth: int, budget_level: int, share_bucket: list, parent_key: str
 ) -> list[dict] | None:
@@ -140,6 +148,7 @@ def _collect_nodes(
             # continued_from_node_key 同一種形狀（binding.tree_with_bindings() 會疊上
             # 沿用節點的座標，但那是讀時 overlay，這裡永遠是代理自己回的）。
             "coordinates": _node_coordinates(raw.get("coordinates")) if depth == 3 else None,
+            "copy_length": _node_copy_length(raw.get("copy_length")) if depth == 3 else None,
         }
         if depth == budget_level:
             share_bucket.append(node)
