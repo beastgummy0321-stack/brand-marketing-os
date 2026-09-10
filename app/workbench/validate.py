@@ -1,6 +1,6 @@
 """app/workbench/validate.py — program-side validation, no tokens (ADR 0068 §6): character
 ranges, variant counts, coordinates in the vocabulary, headline/description limits, image-prompt
-character band and fixed-block presence. Private to app/workbench (container contract §1).
+field shape and the on-image number rule. Private to app/workbench (container contract §1).
 
 Moved here unchanged in behaviour from `scripts/workbench_probe.py` (ticket 01's probe, now
 deleted by ticket 02 — its purpose, one node's output read by a human, is served by this
@@ -16,8 +16,9 @@ prose both before *and after* it and defeat the rule it is supposed to enforce.
 """
 
 import json
+import re
 
-from app.workbench.prompts import COORDINATE_KEYS, render_image_prompt
+from app.workbench.prompts import COORDINATE_KEYS
 
 BODY_BANDS = {"short": (100, 150, 5), "medium": (300, 500, 3), "long": (800, 1000, 2)}
 # 中文標籤，只在這裡打一次——`prompts.copy_prompt` 用 lazy import 讀這兩個字典（見該檔
@@ -25,9 +26,10 @@ BODY_BANDS = {"short": (100, 150, 5), "medium": (300, 500, 3), "long": (800, 100
 BAND_LABELS = {"short": "短版", "medium": "中版", "long": "長版"}
 HEADLINE_MAX = 27
 DESCRIPTION_MAX = 30
-PROMPT_MIN, PROMPT_MAX = 200, 250
-FIXED_KEYS = ("format", "capture_style", "human", "must_keep", "forbidden")
-VARIABLE_KEYS = ("index", "theme", "text", "environment", "subject", "relation", "authenticity")
+
+# 票 F01-T03-I02：圖上數字規則（ARCHITECTURE.md §5.6-§5.9）——一個數字連續段，逗號、
+# 小數點都算在同一段裡。
+_NUMBER_RE = re.compile(r"\d[\d,.]*")
 
 # ADR 0047「`visual_tone`：一個欄位、兩個值」——`creative_candidate.visual_tone` 的 DB CHECK
 # 逐字沿用這兩個字串；這支模組不發明第三個值。
@@ -123,65 +125,80 @@ def check_copy(data, vocabulary: dict, copy_length: str) -> list:
     return results
 
 
-def fixed_block_chars(fixed: dict) -> int:
-    """固定段（含外殼補的 `prompts.SUBJECT_PREFIX`、模板本身的標籤文字如「場景：」）在渲染
-    結果裡占幾字——修正輪（`jobs._fix_call`）用這個數字告訴模型「你要寫的變動段」該落在
-    `PROMPT_MIN/MAX` 扣掉這個數字之後的範圍，不讓模型自己猜或用整段 200～250 字誤導。拿
-    `render_image_prompt` 對全空的變動段跑一次算出來——模板只有這一份，這裡不重刻。"""
-    blank = {k: "" for k in VARIABLE_KEYS}
-    return _char_len(render_image_prompt(fixed, blank))
+def _number_rule_item(path: str, text: str, quotable_text: str) -> dict:
+    """圖上數字規則（ARCHITECTURE.md §5.6-§5.9）：`text` 裡每一段連續數字都要逐字出現在
+    `quotable_text`（促銷說明的非空行＋品牌上下文）裡，否則整個欄位不合格；訊息只點名
+    第一個違規的數字段，不列出全部。"""
+    for match in _NUMBER_RE.finditer(text):
+        n = match.group(0)
+        if n not in quotable_text:
+            return {"path": path, "ok": False, "message": f"數字「{n}」未出現在可用字句或品牌資料"}
+    return {"path": path, "ok": True, "message": "符合"}
 
 
-def check_image_prompts(data, count: int) -> tuple:
-    """回傳 `(結果清單, 渲染好的提示詞清單)`——跟 `scripts/workbench_probe.py::
-    validate_image_prompts` 同一套檢查邏輯（未改行為：字數帶＋固定欄位逐字出現），結果
-    清單換成 `{"path", "ok", "message"}`。`fixed` 只驗一次、不逐則重複（ADR 0068 §7：
-    固定段整份 brief 只產一次，每一則提示詞的檢查是「這份固定段的逐字內容有沒有出現在
-    這一則的渲染結果裡」，不是「這一則自己有沒有另一份固定段」——回覆的形狀本來就只有
-    一份頂層 `fixed`，沒有逐則欄位）。渲染呼叫 `prompts.render_image_prompt`——渲染邏輯
-    只有一份，這裡不重複實作。"""
+def _on_image_field_item(path: str, value, quotable_text: str, *, required: bool) -> dict:
+    """一個圖上文字欄位（`headline`／`subhead`／`on_image_line`）只出一個 `{"path", "ok",
+    "message"}`：形狀不對就是形狀那條訊息，形狀對了再過數字規則——不讓同一個 `path` 出現
+    兩筆結果（`jobs.py` 的修正輪照 `path` 定址，一個 path 兩筆會讓它讀到不確定的那一筆）。
+    `required=False`（`subhead`）允許 `None`；`required=True`（`headline`／
+    `on_image_line`）要求非空字串。"""
+    if required:
+        if not (isinstance(value, str) and value):
+            return {"path": path, "ok": False, "message": "缺欄位或空字串"}
+    elif value is None:
+        return {"path": path, "ok": True, "message": "符合"}
+    elif not isinstance(value, str):
+        return {"path": path, "ok": False, "message": "型別必須是字串或 null"}
+    return _number_rule_item(path, value, quotable_text)
+
+
+def check_image_prompt(data, *, mode: str, count: int, quotable_text: str) -> list:
+    """回傳 `[{"path", "ok", "message"}, ...]`——票 F01-T03-I02 的新形狀：變體模式驗
+    `hero`（`scene`／`person`／`subject_position`／`headline` 非空字串，`subhead` 字串或
+    `null`），探索模式驗 `angles`（剛好 `count` 個物件，各自 `name`／`brief`／
+    `on_image_line` 非空字串）；`headline`／`subhead`／`on_image_line` 這三個圖上文字欄位
+    形狀通過後再過一次數字規則（`_on_image_field_item`），一個 path 只出一筆結果。"""
     if not isinstance(data, dict):
-        return [{"path": "_root", "ok": False, "message": "頂層不是物件"}], []
+        return [{"path": "_root", "ok": False, "message": "頂層不是物件"}]
 
-    fixed = data.get("fixed")
-    if not isinstance(fixed, dict) or any(
-        not isinstance(fixed.get(k), str) or not fixed.get(k) for k in FIXED_KEYS
-    ):
-        return [{"path": "fixed", "ok": False, "message": "缺欄位或有空值"}], []
-
-    prompts = data.get("prompts")
-    if not isinstance(prompts, list) or len(prompts) != count:
-        got = len(prompts) if isinstance(prompts, list) else "缺欄位"
-        return (
-            [{"path": "prompts", "ok": False, "message": f"要 {count} 則，實際 {got}"}],
-            [],
+    results: list = []
+    if mode == "variant":
+        hero = data.get("hero")
+        if not isinstance(hero, dict):
+            return [{"path": "hero", "ok": False, "message": "缺欄位或型別不對"}]
+        for key in ("scene", "person", "subject_position"):
+            value = hero.get(key)
+            ok = isinstance(value, str) and bool(value)
+            results.append({
+                "path": f"hero.{key}", "ok": ok, "message": "符合" if ok else "缺欄位或空字串",
+            })
+        results.append(_on_image_field_item(
+            "hero.headline", hero.get("headline"), quotable_text, required=True,
+        ))
+        results.append(
+            _on_image_field_item("hero.subhead", hero.get("subhead"), quotable_text, required=False)
         )
+        return results
 
-    results = [
-        {"path": "fixed", "ok": True, "message": "齊全"},
-        {"path": "prompts", "ok": True, "message": f"{count} 則"},
-    ]
-    rendered = []
-    for i, item in enumerate(prompts, start=1):
-        if not isinstance(item, dict) or any(k not in item for k in VARIABLE_KEYS):
-            results.append({"path": f"prompts[{i}]", "ok": False, "message": "缺欄位"})
-            rendered.append("")
+    angles = data.get("angles")
+    if not isinstance(angles, list) or len(angles) != count:
+        got = len(angles) if isinstance(angles, list) else "缺欄位"
+        return [{"path": "angles", "ok": False, "message": f"要 {count} 個，實際 {got}"}]
+    for i, angle in enumerate(angles, start=1):
+        if not isinstance(angle, dict):
+            results.append({"path": f"angles[{i}]", "ok": False, "message": "不是物件"})
             continue
-        text = render_image_prompt(fixed, item)
-        rendered.append(text)
-        n = _char_len(text)
-        missing = [k for k in FIXED_KEYS if fixed[k] not in text]
-        if missing:
-            msg = f"{n} 字；缺少固定欄位逐字內容：{missing}"
-            ok = False
-        elif not (PROMPT_MIN <= n <= PROMPT_MAX):
-            msg = f"{n} 字，超出 {PROMPT_MIN}～{PROMPT_MAX} 字範圍"
-            ok = False
-        else:
-            msg = f"{n} 字，符合"
-            ok = True
-        results.append({"path": f"prompts[{i}]", "ok": ok, "message": msg})
-    return results, rendered
+        for key in ("name", "brief"):
+            value = angle.get(key)
+            ok = isinstance(value, str) and bool(value)
+            results.append({
+                "path": f"angles[{i}].{key}", "ok": ok,
+                "message": "符合" if ok else "缺欄位或空字串",
+            })
+        results.append(_on_image_field_item(
+            f"angles[{i}].on_image_line", angle.get("on_image_line"), quotable_text, required=True,
+        ))
+    return results
 
 
 def check_video_script(data, count: int) -> list:

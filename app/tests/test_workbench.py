@@ -8,7 +8,6 @@ isolation are the other two of the全域 CLAUDE.md test four categories this fil
 import json
 import unittest
 from pathlib import Path
-from unittest import mock
 
 import app.background as background_module
 import app.shared.web as web
@@ -27,30 +26,6 @@ TEMPLATE_PATH = REPO_ROOT / "app" / "methodology" / "image-prompt-template.md"
 DEPARTMENT_PATH = REPO_ROOT / "app" / "departments" / "workbench" / "image_prompt.md"
 
 ACTOR = "測試員"
-
-IMAGE_FIXED = {
-    "format": "4:5｜Meta 動態消息", "capture_style": "UGC 手機實拍，現場光",
-    "human": "一位女性，居家便服", "must_keep": "商品輪廓、Logo", "forbidden": "卡通感、AI 感",
-}
-# 校準過（scripts/workbench_probe.py 的渲染函式量出來）：204 字，落在 200～250 字範圍內。
-_BASE_ENVIRONMENT = "台灣公寓廚房，晨光斜射進來，桌上還有沒收的早報與購物清單，窗邊掛著曬乾的抹布"
-# 265 字，超出 200～250 字範圍——修正輪「還是不合格」那條分支用的真實（非造假）超字版本。
-LONG_ENVIRONMENT = (
-    "台灣公寓廚房，晨光斜射進來，桌上還有沒收的早報，流理台旁堆著昨晚的碗盤與購物袋，"
-    "冰箱門上貼著小孩畫的圖畫紙與購物清單便利貼，還有一疊還沒拆開的網購包裹紙箱堆在牆角，"
-    "牆上時鐘指著七點半，窗簾只拉開一半"
-)
-
-
-def _image_variable(index: int, environment: str | None = None) -> dict:
-    return {
-        "index": index, "theme": "早晨廚房", "text": "一杯搞定早餐",
-        "environment": environment or _BASE_ENVIRONMENT,
-        "subject": "置中，中景，焦點在商品，畫面留白給文字，背景略為模糊",
-        "relation": "咖啡杯在右前景，手部從畫面外伸入",
-        "authenticity": "流理台有使用痕跡、杯緣有水漬、抹布隨手一放",
-    }
-
 
 def _cjk(n: int) -> str:
     """n 個中文字（不含換行）——灌出剛好落在某個字數帶的假文案，不必手動數字數。"""
@@ -329,111 +304,30 @@ class ProseWrappedReplyTest(_WorkbenchTestBase):
         self.assertEqual(self._outputs(brief_id, "copy"), [])
 
 
-# -- 案例 3：image_prompt，第二則同時壞在固定段與字數 -> 修正輪只問一次、只點名它 --------
-
-class ImagePromptFixRoundTest(_WorkbenchTestBase):
-    def test_second_item_fix_runs_once_and_reports_honestly(self):
-        # `request["parts"]` 是唯一權威（ARCHITECTURE.md §5.4）：`on_image_texts` 不在
-        # 合約裡，`image_prompt_count` 是 `"image_prompt"` 在 `parts` 裡時的必填欄。
-        brief_id = self._submit(
-            request={"parts": ["image_prompt"], "image_prompt_count": 4},
-        )
-
-        # 第 1／4 則是票 workbench/04 walk round 2 amendment 的新案例（原文點名
-        # `prompts[1]` 那個型別守門案例），兩個都是「真實資料缺陷」（不靠渲染 mock，換幾次
-        # 都不會自己好）：第 1 則字數帶本身超標，第 4 則整個物件缺一個鍵。第 2 則沿用原本的
-        # 案例（固定段缺欄位，靠渲染 mock 只咬第一次渲染）。
-        item1_initial = _image_variable(1, environment=LONG_ENVIRONMENT)
-        item4_initial = {k: v for k, v in _image_variable(4).items() if k != "authenticity"}
-        initial_reply = json.dumps({
-            "fixed": IMAGE_FIXED,
-            "prompts": [item1_initial, _image_variable(2), _image_variable(3), item4_initial],
-            "warnings": [],
-        }, ensure_ascii=False)
-        # 修正輪回覆：第 1 則回一個型別不對的字串（票 workbench/04 walk round 2 那次真實壞掉
-        # 的樣子：修正輪的回覆把物件換成一段散文）——型別守門要讓它被安靜跳過，原本超字的
-        # 物件原封不動留著、依舊 ❌。第 2 則（沿用原案例）整個換掉、換成一個真的超過 250 字
-        # 的版本——證明「修正過還是不合格」時老實印 ❌，不再問第三次。第 4 則回一個型別、鍵
-        # 都合格的物件（補回被拿掉的鍵）——套用後應該轉 ✅。
-        fix_reply = json.dumps({
-            "replacements": [
-                {"path": "prompts[1]", "value": "一段模型亂寫的散文，不是原本要的物件形狀"},
-                {"path": "prompts[2]", "value": _image_variable(2, environment=LONG_ENVIRONMENT)},
-                {"path": "prompts[4]", "value": _image_variable(4)},
-            ],
-        }, ensure_ascii=False)
-        provider = _SequenceProvider([initial_reply, fix_reply])
-        workbench_jobs.PROVIDER = provider
-
-        # 第一次回覆的固定段其實逐字一致（同一個 `fixed`，見 ADR 0068 §7：固定段整份 brief
-        # 只產一次、逐則比對）——「第二則的固定段被換掉」這件事在真實 JSON 形狀下造不出來，
-        # 這裡改成在渲染那一層動手腳一次（只動第 2 則第一次被渲染的那一次，等長替換，長度
-        # 帶不受影響，乾淨隔離「固定欄位逐字出現」這條規則），比照
-        # `scripts/workbench_probe.py::_run_selftest` fixture 3 的手法。
-        real_render = workbench_prompts.render_image_prompt
-        call_state = {"item2_seen": 0}
-
-        def corrupting_render(fixed, variable):
-            text = real_render(fixed, variable)
-            if variable.get("index") == 2:
-                call_state["item2_seen"] += 1
-                if call_state["item2_seen"] == 1:
-                    return text.replace(fixed["human"], "＊" * len(fixed["human"]), 1)
-            return text
-
-        with mock.patch("app.workbench.validate.render_image_prompt",
-                         side_effect=corrupting_render):
-            self._run_worker()
-
-        self.assertEqual(len(provider.calls), 2, "只准問一次修正，不准第三通")
-        fix_prompt = provider.calls[1]["messages"][0]["content"]
-        self.assertIn("prompts[1]", fix_prompt)
-        self.assertIn("prompts[2]", fix_prompt)
-        self.assertIn("prompts[4]", fix_prompt)
-        self.assertNotIn("prompts[3]", fix_prompt)
-        self.assertNotIn("WORKBENCH-IMAGE-PROMPT-TASK-V1", fix_prompt)  # 不重貼整份部門任務檔
-        self.assertIn("## 這張工單", fix_prompt)  # 工單段重貼一次：每通呼叫都是無狀態的
-        self.assertIn(json.dumps(item1_initial, ensure_ascii=False), fix_prompt)  # 原值原文
-        self.assertIn(json.dumps(item4_initial, ensure_ascii=False), fix_prompt)  # 原值原文
-        self.assertIn("回一個物件，鍵與原值相同", fix_prompt)  # 精確回覆形狀，數字用程式算
-
-        brief = workbench_repo.get_brief(web.conn, self.org_id, self.brand_id, brief_id)
-        self.assertEqual(brief["status"], "done")
-
-        rows = self._outputs(brief_id, "image_prompt")
-        self.assertEqual(len(rows), 1)
-        validation = rows[0]["body_json"]["validation"]
-
-        def _line(n: int) -> str:
-            return next(
-                line for line in validation if line.split("：", 1)[0].endswith(f"prompts[{n}]")
-            )
-
-        line1 = _line(1)
-        self.assertTrue(line1.startswith("❌"), line1)
-        # 型別不對被安靜跳過：原本超字的物件原封不動，問題描述還是原本那句，不是換成一句
-        # 「缺欄位」或別的——這行紅了就代表型別守門被拿掉、字串真的蓋過了原本的物件。
-        self.assertIn("超出 200～250 字範圍", line1)
-        line2 = _line(2)
-        self.assertTrue(line2.startswith("❌"), line2)
-        self.assertTrue(_line(3).startswith("✅"), _line(3))
-        line4 = _line(4)
-        self.assertTrue(line4.startswith("✅"), line4)  # 型別、鍵都合格，套用後轉綠
-
+# -- 案例 3：image_prompt 修正輪與渲染的完整跑一次（票 F01-T03-I02 的新形狀由
+# `DispatchedImagePromptRunTest` 與 `test_workbench_image_prompt.py` 覆蓋）；本檔留下的
+# 案例 4 換成新的 exploration 模式回覆形狀，驗證回合數／採用邏輯不受形狀變更影響。
 
 # -- 案例 4：第二輪寫 generation_round=2；採用第一輪只標到那一列；adopted_output() 讀回 ---
+
+def _exploration_reply(*angle_names: str) -> str:
+    return json.dumps({
+        "angles": [
+            {"name": name, "brief": f"{name} 場景", "on_image_line": f"{name}文案"}
+            for name in angle_names
+        ],
+        "warnings": [],
+    }, ensure_ascii=False)
+
 
 class ImagePromptRoundsAndAdoptionTest(_WorkbenchTestBase):
     def test_second_round_and_single_row_adoption(self):
         # 同上一個案例：`image_prompt_count` 是 `"image_prompt"` 在 `parts` 裡時的必填欄。
+        # 預設 `source_kind="manual"` -> 探索模式，`angles` 項數等於 count。
         brief_id = self._submit(
             request={"parts": ["image_prompt"], "image_prompt_count": 2},
         )
-        reply = json.dumps({
-            "fixed": IMAGE_FIXED,
-            "prompts": [_image_variable(1), _image_variable(2)],
-            "warnings": [],
-        }, ensure_ascii=False)
+        reply = _exploration_reply("省時", "健康")
 
         workbench_jobs.PROVIDER = _fake(reply)
         self._run_worker()
@@ -687,6 +581,42 @@ class CopyWarningsSummaryTest(_WorkbenchTestBase):
             web.conn, self.org_id, self.brand_id, brief_id_2, "copy"
         )
         self.assertEqual(schedule_state._copy_summary(output_2)["warnings"], [])
+
+
+# -- 案例 10（票 F01-T03-I02）：schedule_node 派工的 image_prompt，沒有已採用文案 -------
+# 也能跑完整條 submit -> worker -> 一列 workbench_output，寫出變體模式的 hero／variant 渲染。
+
+class DispatchedImagePromptRunTest(_WorkbenchTestBase):
+    def test_image_prompt_run_without_adopted_copy_renders_hero_and_variant(self):
+        brief_id = self._submit(
+            source_kind="schedule_node",
+            source_ref={"node_key": "1.1.1", "source_tree_task_id": "llm_runtime_test"},
+            request={"parts": ["image_prompt"], "image_prompt_count": 1},
+        )
+        reply = json.dumps({
+            "hero": {
+                "scene": "台灣公寓廚房的晨光", "person": "一位女性，居家便服，露出笑容",
+                "subject_position": "商品置中，中景，畫面留白給文字",
+                "headline": "早晨也能好好吃", "subhead": "一杯搞定忙碌早晨",
+            },
+            "warnings": [],
+        }, ensure_ascii=False)
+        workbench_jobs.PROVIDER = _fake(reply)
+        self._run_worker()
+
+        brief = workbench_repo.get_brief(web.conn, self.org_id, self.brand_id, brief_id)
+        self.assertEqual(brief["status"], "done")
+
+        rows = self._outputs(brief_id, "image_prompt")
+        self.assertEqual(len(rows), 1)
+        body = rows[0]["body_json"]
+        self.assertEqual(body["mode"], "variant")
+        rendered = body["rendered"]
+        self.assertNotIn("exploration", rendered)
+        self.assertIsInstance(rendered["hero"], str)
+        self.assertTrue(rendered["hero"])
+        self.assertIsInstance(rendered["variant"], str)
+        self.assertTrue(rendered["variant"])
 
 
 if __name__ == "__main__":
