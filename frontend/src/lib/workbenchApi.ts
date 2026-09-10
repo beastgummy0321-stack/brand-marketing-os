@@ -84,8 +84,7 @@ export interface BriefDetail extends BriefSummary {
 export interface ImageStyle {
   key: string;
   label: string;
-  capture_line: string;
-  authenticity_hint: string;
+  style_block: string;
 }
 
 /** 三個固定長度的「什麼時候用」一句話——設計系統 §8：前端文案，不生成、不落地

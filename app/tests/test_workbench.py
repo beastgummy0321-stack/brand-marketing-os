@@ -7,6 +7,7 @@ isolation are the other two of the全域 CLAUDE.md test four categories this fil
 
 import json
 import unittest
+from pathlib import Path
 from unittest import mock
 
 import app.background as background_module
@@ -20,6 +21,10 @@ from app.schedule import state as schedule_state
 from app.workbench import jobs as workbench_jobs
 from app.workbench import prompts as workbench_prompts
 from app.workbench import repository as workbench_repo
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+TEMPLATE_PATH = REPO_ROOT / "app" / "methodology" / "image-prompt-template.md"
+DEPARTMENT_PATH = REPO_ROOT / "app" / "departments" / "workbench" / "image_prompt.md"
 
 ACTOR = "測試員"
 
@@ -142,8 +147,7 @@ class _WorkbenchTestBase(unittest.TestCase):
 # -- 票 05（ADR 0069 §3）：`brief_text()` 是純函式，不需要 DB fixture -------------------
 
 class BriefCoordinatesTextTest(unittest.TestCase):
-    _STYLE = {"key": "ugc", "label": "UGC", "capture_line": "手機直式實拍",
-              "authenticity_hint": "低"}
+    _STYLE = {"key": "ugc", "label": "UGC", "style_block": "手機直式實拍，低真實感提示"}
 
     def test_states_the_coordinates_when_a_snapshot_is_present(self):
         text = workbench_prompts.brief_text(
@@ -164,6 +168,122 @@ class BriefCoordinatesTextTest(unittest.TestCase):
         )
         self.assertNotIn("這個節點的座標", text)
         self.assertNotIn("既有座標", text)
+
+
+# -- 票 F01-T03-I01：方法論＋部門任務檔的圖片提示詞形狀，讀檔即可，不用 DB ---------------
+
+# Fixed text 1（issue 原文）：圖上文字與數字規則，逐字在兩份檔各出現一次。
+_RULE_BLOCK_LINES = (
+    "1. 工作單上的「可用的大標（可用可不用）」只是參考：可以沿用、改寫或不用；"
+    "沒有這一行時，回覆照樣完整。",
+    "2. 大標、副標與每張圖的圖上文字，都是為這張圖新寫的文案；可用字句不是用字清單，"
+    "不限制怎麼寫。唯一的限制是第 3 條。",
+    "3. 圖上的數字與事實（價格、折扣、規格、認證）必須逐字出現在可用字句或品牌上下文裡，"
+    "兩處都找不到的數字不上圖；工作單沒有可用字句這一行時，品牌上下文裡逐字出現的數字"
+    "照樣可用。",
+    "4. 回傳的大標、副標與圖上文字不加「」，外殼組提示詞時會加上。",
+)
+
+# Fixed text 2（issue 原文）：模板檔的開場段。
+_TEMPLATE_INTRO = (
+    "外殼組出每一則提示詞，模型只回欄位。模式看工單來源：檔期派工的工單走變體模式"
+    "（先 ① 再 ②），手動開的工單走探索模式（先 ③ 再 ②）；沒有內容的行整行不出現。"
+)
+
+# 三個提示詞骨架的每一行（issue「Done」段落逐字給的 fenced block）。
+_SKELETON_LINES = (
+    "【風格】<style_block>",
+    "【商品】<商品句>",
+    "【受眾】<受眾>；痛點：<痛點>",
+    "【這則的訴求】切角：<切角>——<切角說明>；標題公式：<標題公式>——<標題公式說明>",
+    "【可用字句（逐字，不得改）】<可用字句，以／相連>",
+    "【畫面】<scene>／<person>／<subject_position>",
+    "【圖上文字】大標：「<headline>」；副標：「<subhead>」；文字純色填滿，數字獨立成行",
+    "【輸出】<格式>（<格式說明>），一張",
+    "以附上的這張圖為基底，分別生成 <N> 個完全不同風格排版與人物的圖片，主要訴求保持不變。"
+    "一次一張。",
+    "不變：訴求「<訴求句>」、可用字句「<可用字句，以／相連>」（數字逐字）、商品外型與 Logo、"
+    "<輸出句>。",
+    "可變：場景、人物、構圖、文字排版位置、配色。",
+    "【目的與對象】<目的與對象>",
+    "【任務】分別給我 <N> 張圖，每張一個不同的說服切角，排版與風格彼此差異要大：",
+    "1. <name>｜<brief>｜圖上文字：「<on_image_line>」",
+    "<N>. <name>｜<brief>｜圖上文字：「<on_image_line>」",
+    "【圖上文字】每張圖只出現它自己那一行字；文字純色填滿，數字獨立成行",
+)
+
+# Fixed text 3（issue 原文）：image_prompt.md 的「## 回覆」段，逐字比對。
+_REPLY_SECTION = "\n".join((
+    "## 回覆——依工單的模式只回下面其中一個物件，物件前後不加任何文字或符號",
+    "",
+    "變體模式時，整段回覆就是這個形狀的物件：",
+    "",
+    "{",
+    '  "hero": {',
+    '    "scene": "……一句話的場景……",',
+    '    "person": "……照受眾座標寫：是誰、在做什麼、露不露臉……",',
+    '    "subject_position": "……商品或人物的位置、畫面佔比、鏡位、留白……",',
+    '    "headline": "……這張圖的大標……",',
+    '    "subhead": "……這張圖的副標……"',
+    "  },",
+    '  "warnings": []',
+    "}",
+    "",
+    "沒有副標時，subhead 填 JSON 的 null。",
+    "",
+    "探索模式時，整段回覆就是這個形狀的物件，angles 的項數等於工單的角度數：",
+    "",
+    "{",
+    '  "angles": [',
+    '    {"name": "……creative-matrix.md 第一節的一個切角……", "brief": '
+    '"……一句話的場景與排版……", "on_image_line": "……這張圖上唯一的一行字……"},',
+    '    {"name": "……另一個切角……", "brief": "……排版和上一張差很多……", '
+    '"on_image_line": "……這張圖上唯一的一行字……"}',
+    "  ],",
+    '  "warnings": []',
+    "}",
+))
+
+
+class ImagePromptMethodologyShapeTest(unittest.TestCase):
+    def test_image_prompt_methodology_shapes(self):
+        template_text = TEMPLATE_PATH.read_text(encoding="utf-8")
+        department_text = DEPARTMENT_PATH.read_text(encoding="utf-8")
+
+        for line in _SKELETON_LINES:
+            self.assertIn(line, template_text)
+
+        for line in _RULE_BLOCK_LINES:
+            self.assertEqual(template_text.count(line), 1, line)
+            self.assertEqual(department_text.count(line), 1, line)
+
+        self.assertIn(_TEMPLATE_INTRO, template_text)
+        intro_zone = template_text.split("# 圖片提示詞模板", 1)[1].split("## 1.", 1)[0]
+        self.assertNotIn("座標", intro_zone)
+
+        self.assertIn("來源:", template_text)
+        self.assertIn("最後查證日: 2026-09-10", template_text)
+        for forbidden in (
+            "来源", "逐字取自", "200～250", "固定段", "禁止：", "visual_tone",
+            "視覺調性", "视觉调性", "【角度數量】", "有節點座標",
+        ):
+            self.assertNotIn(forbidden, template_text, forbidden)
+
+        self.assertIn("模式：變體模式", department_text)
+        self.assertIn("模式：探索模式；角度數：", department_text)
+        self.assertIn("可用的大標（可用可不用）", department_text)
+        for forbidden in (
+            "附上的標題", "逐字取自", "visual_tone", "視覺調性", "视觉调性", "用「」包",
+        ):
+            self.assertNotIn(forbidden, department_text, forbidden)
+        pre_deliverable = department_text.split("## 你拿到什麼", 1)[0]
+        self.assertNotIn("座標", pre_deliverable)
+
+        self.assertEqual(department_text.count("## 回覆"), 1)
+        reply_zone = "## 回覆" + department_text.split("## 回覆", 1)[1]
+        self.assertEqual(reply_zone.strip(), _REPLY_SECTION.strip())
+
+        self.assertEqual(department_text.count("```"), 1)
 
 
 # -- 案例 1：手動 copy 工單，走完整條 enqueue -> worker -> 一列 workbench_output --------
