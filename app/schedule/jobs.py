@@ -587,8 +587,10 @@ def schedule_tree(org_id: str, brand_id: str, plan_index: int, plan_task_id: str
                         "visual_tone": None, "visual_concept": None,
                         "style_key": "ugc",
                         "request": {
-                            "parts": ["copy"], "use_brand_knowledge": True,
-                            "product_ids": product_ids,
+                            "use_brand_knowledge": True, "product_ids": product_ids,
+                            "parts": ["copy"],
+                            "copy_length": leaf.get("copy_length") or "short",
+                            "promotion_note": plan_scope.get("promotion_note"),
                         },
                     })
                 except Exception:
