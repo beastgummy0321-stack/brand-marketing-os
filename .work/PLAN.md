@@ -3,5 +3,5 @@
 - F01
   - F01-T01 工單契約：一張工單多個部件，文案只出一種長度 [closed]
   - F01-T02 檔期交棒：樹決定文案長度，工作檯只做那一種 [open] F01-T02-I01:done F01-T02-I02:done F01-T02-I03:done F01-T02-I04:done
-  - F01-T03 圖片提示詞：派工走主圖→變體，手動走探索→變體，只給要的不給禁止 [open] F01-T03-I02:ready F01-T03-I03:ready F01-T03-I01:done
-  - F01-T04 素材工作檯頁面：creation-first 的 layout C [open] F01-T04-I02:ready F01-T04-I01:done
+  - F01-T03 圖片提示詞：派工走主圖→變體，手動走探索→變體，只給要的不給禁止 [open] F01-T03-I03:ready F01-T03-I04:ready F01-T03-I01:done F01-T03-I02:done
+  - F01-T04 素材工作檯頁面：creation-first 的 layout C [open] F01-T04-I03:ready F01-T04-I01:done F01-T04-I02:done
