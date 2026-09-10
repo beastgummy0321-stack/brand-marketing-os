@@ -46,8 +46,9 @@ def list_styles(request: Request):
 
 class NewBriefRequest(BaseModel):
     # 租戶界線先於欄位驗證（`app/schedule/routes.py` 既有慣例，見該檔 `PlanRequest` 檔頭）：
-    # 全部給預設值，真正的驗證在 `repository.create_brief()`／`submit_brief()`。
-    kind: str = ""
+    # 全部給預設值，真正的驗證在 `repository.create_brief()`／`submit_brief()`。`kind` 不是
+    # 這個請求的欄位——它是 `submit_brief()` 從 `request["parts"]` 衍生的顯示欄位
+    # （ARCHITECTURE.md §5.4）。
     product_id: str | None = None
     coordinates: dict[str, str | None] | None = None
     visual_tone: str | None = None
@@ -57,11 +58,11 @@ class NewBriefRequest(BaseModel):
 
 
 _CREATE_BRIEF_ERRORS = {
-    "kind_unknown": (400, "這個類型不能用這支端點建立。"),
+    "parts_unknown": (400, "請選擇至少一種要生成的內容。"),
+    "copy_length_unknown": (400, "文案長度只能是短版／中版／長版。"),
     "style_unknown": (400, "找不到這個風格。"),
     "product_unknown": (404, "找不到這個產品。"),
     "count_out_of_range": (400, "圖片提示詞張數需介於 1 到 30 之間。"),
-    "on_image_texts_required": (400, "請填圖上文字（1 到 5 則，每則不超過 27 字）。"),
 }
 
 
@@ -70,7 +71,7 @@ def create_brief(request: Request, brand_id: str, body: NewBriefRequest):
     actor = web.require_actor(request)
     web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
     brief = {
-        "kind": body.kind, "source_kind": "manual", "source_ref": {},
+        "source_kind": "manual", "source_ref": {},
         "product_id": body.product_id, "coordinates": body.coordinates,
         "visual_tone": body.visual_tone, "visual_concept": body.visual_concept,
         "style_key": body.style_key, "request": body.request,
@@ -116,7 +117,6 @@ _RUN_PART_ERRORS = {
     "count_out_of_range": (400, "圖片提示詞張數需介於 1 到 30 之間。"),
     "brief_closed": (409, "這張工單已經關閉。"),
     "round_running": (409, "上一輪還在跑，請等它跑完再按。"),
-    "on_image_texts_required": (409, "沒有圖上文字可用：先產文案，或在工單填圖上文字。"),
 }
 
 

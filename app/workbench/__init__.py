@@ -54,8 +54,17 @@ def register_tasks() -> None:
 
 
 def submit_brief(conn, org_id: str, brand_id: str, brief: dict) -> str:
-    """寫一列 `workbench_brief`，依 `brief["kind"]`／`brief["request"]` 排進要生成的
-    part，回傳 brief id。見 `docs/contracts/workbench.md` Exported shapes。"""
+    """寫一列 `workbench_brief`，回傳 brief id。`brief["request"]["parts"]` 是這份 brief
+    要什麼的唯一權威（ARCHITECTURE.md §5.4）——非空列表，`"copy"／"image_prompt"／
+    "video_script"／"free"` 的子集，缺欄／空／不是 list／未知名稱都是
+    `ValueError("parts_unknown")`；每個列出的 part 各排一個
+    `background.workbench_generate` job。`brief["request"]["copy_length"]`（`"short"`／
+    `"medium"`／`"long"`，缺省 `"short"`）只在 `"copy"` 在 `parts` 裡時有意義；
+    `image_prompt_count`（1–30）在 `"image_prompt"` 在 `parts` 裡時必填，
+    `video_script_count`（1–5）同理必填於 `"video_script"`。`request["kind"]`（若有）
+    不讀：`kind` 欄位由這裡從 `parts` 衍生（多於一個 part -> `"ad_creative"`，否則就是
+    那個唯一的 part 名），只為顯示，不回饋任何驗證或排程決定。`on_image_texts` 已不在
+    合約裡：不寫、不讀。"""
     from app.workbench import repository as workbench_repo
 
     return workbench_repo.submit_brief(conn, org_id, brand_id, brief)

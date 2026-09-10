@@ -111,9 +111,9 @@ class _WorkbenchTestBase(unittest.TestCase):
 
     def _submit(self, **overrides) -> str:
         brief = {
-            "kind": "copy", "source_kind": "manual", "source_ref": {},
+            "source_kind": "manual", "source_ref": {},
             "product_id": self.product["id"], "coordinates": {}, "visual_tone": None,
-            "visual_concept": None, "style_key": "ugc", "request": {},
+            "visual_concept": None, "style_key": "ugc", "request": {"parts": ["copy"]},
         }
         brief.update(overrides)
         return workbench_module.submit_brief(web.conn, self.org_id, self.brand_id, brief)
@@ -170,7 +170,7 @@ class BriefCoordinatesTextTest(unittest.TestCase):
 
 class ManualCopyBriefTest(_WorkbenchTestBase):
     def test_submit_then_worker_writes_one_all_green_output(self):
-        brief_id = self._submit(kind="copy")
+        brief_id = self._submit()
 
         self.assertTrue(background_module.is_active(f"workbench:{brief_id}:copy"))
         brief = workbench_repo.get_brief(web.conn, self.org_id, self.brand_id, brief_id)
@@ -195,7 +195,7 @@ class ManualCopyBriefTest(_WorkbenchTestBase):
 
 class ProseWrappedReplyTest(_WorkbenchTestBase):
     def test_prose_around_json_fails_the_brief(self):
-        brief_id = self._submit(kind="copy")
+        brief_id = self._submit()
         payload = (
             "以下是文案：" + json.dumps(self._copy_reply(), ensure_ascii=False)
             + "\n以上供您參考。"
@@ -213,11 +213,10 @@ class ProseWrappedReplyTest(_WorkbenchTestBase):
 
 class ImagePromptFixRoundTest(_WorkbenchTestBase):
     def test_second_item_fix_runs_once_and_reports_honestly(self):
-        # 票 03：`submit_brief()` 現在要求 `kind='image_prompt'` 手動送出時帶
-        # `on_image_texts`（沒有 copy 輸出可以接）——`image_prompt_count` 本身的意思沒變。
+        # `request["parts"]` 是唯一權威（ARCHITECTURE.md §5.4）：`on_image_texts` 不在
+        # 合約裡，`image_prompt_count` 是 `"image_prompt"` 在 `parts` 裡時的必填欄。
         brief_id = self._submit(
-            kind="image_prompt",
-            request={"image_prompt_count": 4, "on_image_texts": ["一杯搞定早餐"]},
+            request={"parts": ["image_prompt"], "image_prompt_count": 4},
         )
 
         # 第 1／4 則是票 workbench/04 walk round 2 amendment 的新案例（原文點名
@@ -306,10 +305,9 @@ class ImagePromptFixRoundTest(_WorkbenchTestBase):
 
 class ImagePromptRoundsAndAdoptionTest(_WorkbenchTestBase):
     def test_second_round_and_single_row_adoption(self):
-        # 票 03：同上一個案例，`on_image_texts` 是手動 image_prompt 工單的新必填欄。
+        # 同上一個案例：`image_prompt_count` 是 `"image_prompt"` 在 `parts` 裡時的必填欄。
         brief_id = self._submit(
-            kind="image_prompt",
-            request={"image_prompt_count": 2, "on_image_texts": ["一杯搞定早餐"]},
+            request={"parts": ["image_prompt"], "image_prompt_count": 2},
         )
         reply = json.dumps({
             "fixed": IMAGE_FIXED,
@@ -374,21 +372,19 @@ class SourceIsolationTest(_WorkbenchTestBase):
         )
         web.conn.commit()
 
-        # kind='image_prompt' 沒給 image_prompt_count：parts=[]，不排任何 job（ADR 0068 §7
-        # 沒有預設張數）——這支測試只驗讀取面的租戶隔離，不需要、也不該碰佇列。
-        # 票 03：`on_image_texts` 是手動 image_prompt 工單的新必填欄（submit 就會擋），跟
-        # 這支測試要驗的隔離無關，給一則最小值滿足它就好。
+        # 這支測試只驗讀取面的租戶隔離，`parts`／`image_prompt_count` 給最小合法值滿足
+        # `submit_brief()` 的驗證就好，跟隔離本身無關。
         source_ref = {"source_tree_task_id": "llm_shared_task_id_123"}
         self._submit(
-            kind="image_prompt", source_kind="schedule_node", source_ref=source_ref,
-            request={"on_image_texts": ["一杯搞定早餐"]},
+            source_kind="schedule_node", source_ref=source_ref,
+            request={"parts": ["image_prompt"], "image_prompt_count": 1},
         )
         workbench_module.submit_brief(
             web.conn, org_b, brand_b["id"],
-            {"kind": "image_prompt", "source_kind": "schedule_node", "source_ref": source_ref,
+            {"source_kind": "schedule_node", "source_ref": source_ref,
              "product_id": None, "coordinates": {}, "visual_tone": None,
              "visual_concept": None, "style_key": "ugc",
-             "request": {"on_image_texts": ["一杯搞定早餐"]}},
+             "request": {"parts": ["image_prompt"], "image_prompt_count": 1}},
         )
 
         found = workbench_module.briefs_for_source(
@@ -397,9 +393,9 @@ class SourceIsolationTest(_WorkbenchTestBase):
         self.assertEqual(len(found), 1)
         self.assertEqual(found[0]["brand_id"], self.brand_id)
         self.assertEqual(found[0]["org_id"], self.org_id)
-        # 沒給 image_prompt_count -> parts=[] -> 沒有東西在排隊，brief 直接是 done（票 04
-        # amendment 第 1 點；repository.py `submit_brief()` 不再一律寫 'queued'）。
-        self.assertEqual(found[0]["status"], "done")
+        # `parts` 永遠非空，所以剛送出的 brief 一律 'queued'（repository.py
+        # `submit_brief()`：沒有「沒有 part 要跑」這個分支了）。
+        self.assertEqual(found[0]["status"], "queued")
 
 
 # -- 案例 6：product_id 指到別的組織 -> submit_brief 在 INSERT 之前就炸，沒有殘留列 --------
@@ -451,7 +447,9 @@ def _video_script(title: str) -> dict:
 
 class VideoScriptRoundTripTest(_WorkbenchTestBase):
     def test_count_2_round_trip_all_green(self):
-        brief_id = self._submit(kind="video_script", request={"video_script_count": 2})
+        brief_id = self._submit(
+            request={"parts": ["video_script"], "video_script_count": 2},
+        )
         reply = json.dumps({
             "scripts": [_video_script("腳本一"), _video_script("腳本二")],
             "hook_pool": ["hook1", "hook2"], "warnings": [],
@@ -470,7 +468,9 @@ class VideoScriptRoundTripTest(_WorkbenchTestBase):
     def test_short_reply_stays_red_after_a_fix_round_that_does_not_add_one(self):
         """票面 contradiction check 第二條：修正輪回覆刻意不補第二支（`replacements: []`），
         證明「批次不重生」——不是靠假設修正輪一定會把數量補齊才轉綠。"""
-        brief_id = self._submit(kind="video_script", request={"video_script_count": 2})
+        brief_id = self._submit(
+            request={"parts": ["video_script"], "video_script_count": 2},
+        )
         initial_reply = json.dumps({
             "scripts": [_video_script("腳本一")], "hook_pool": ["hook1", "hook2"], "warnings": [],
         }, ensure_ascii=False)
@@ -492,7 +492,9 @@ class VideoScriptRoundTripTest(_WorkbenchTestBase):
 
 class FreeRoundTripTest(_WorkbenchTestBase):
     def test_items_round_trip_all_green(self):
-        brief_id = self._submit(kind="free", request={"free_text": "寫三句 IG 限動貼文"})
+        brief_id = self._submit(
+            request={"parts": ["free"], "free_text": "寫三句 IG 限動貼文"},
+        )
         items = [{"label": "第一句", "value": "文案一"}, {"label": "第二句", "value": "文案二"}]
         reply = json.dumps({"items": items, "warnings": []}, ensure_ascii=False)
         workbench_jobs.PROVIDER = _fake(reply)
@@ -511,7 +513,9 @@ class FreeRoundTripTest(_WorkbenchTestBase):
         """票面 contradiction check 第三條：最便宜的錯誤實作是收 `{"label": "", "value": ""}`
         （型別對、非空清單，但內容是空字串）——修正輪刻意換成這種形狀，驗證程式檢查的是
         內容而不只是清單長度。"""
-        brief_id = self._submit(kind="free", request={"free_text": "寫三句 IG 限動貼文"})
+        brief_id = self._submit(
+            request={"parts": ["free"], "free_text": "寫三句 IG 限動貼文"},
+        )
         initial_reply = json.dumps({"items": [], "warnings": []}, ensure_ascii=False)
         fix_reply = json.dumps({
             "replacements": [{"path": "items", "value": [{"label": "", "value": ""}]}],
@@ -540,7 +544,7 @@ class CopyWarningsSummaryTest(_WorkbenchTestBase):
         案例已經驗過），證明它讀的是這個模組自己寫出來的 `workbench_output` 列。先證過紅：
         把 `warnings` 那一行從 `_copy_summary()` 拿掉，這支立刻兩個斷言都紅
         （`KeyError`／`AssertionError`）。"""
-        brief_id = self._submit(kind="copy")
+        brief_id = self._submit()
         reply = self._copy_reply()
         reply["warnings"] = ["3 顆體驗包的價格是佔位，投放前請核對。", "另一句提醒。", 123]
         workbench_jobs.PROVIDER = _fake(json.dumps(reply, ensure_ascii=False))
@@ -554,7 +558,7 @@ class CopyWarningsSummaryTest(_WorkbenchTestBase):
             ["3 顆體驗包的價格是佔位，投放前請核對。", "另一句提醒。"],
         )
 
-        brief_id_2 = self._submit(kind="copy")
+        brief_id_2 = self._submit()
         reply_2 = self._copy_reply()
         del reply_2["warnings"]
         workbench_jobs.PROVIDER = _fake(json.dumps(reply_2, ensure_ascii=False))
