@@ -27,10 +27,6 @@ export interface NewBriefRequest {
   free_text: string | null;
   image_prompt_count: number | null;
   video_script_count: number | null;
-  // 只有 `BriefDetail.request` 的讀回形狀還在用這個鍵（`BriefDetail.tsx:263`）；新表單
-  // （票 04）不再送這欄，改成 optional 讓兩邊共用同一個型別不用各自宣告一份
-  // （票面「Not touched」段落，鍵與讀者留給 F01-T04-I02 一起刪）。
-  on_image_texts?: string[] | null;
   parts: string[];
   copy_length: "short" | "medium" | "long";
 }
@@ -61,6 +57,21 @@ export interface BriefSummary {
   created_at: string;
   parts: Record<string, WorkbenchPartSummary>;
 }
+
+/** `image_prompt` 輸出的 `body_json.rendered` 形狀（`app/workbench/jobs.py::_render_image_prompt`）：
+ * `variant` 模式回 `{hero, variant}`，`exploration` 模式回 `{exploration, variant}`——`mode` 那欄
+ * 就是 `body_json.mode`，兩者一起決定卡片要顯示哪些複製鈕、順序為何（票 F01-T04-I02）。 */
+export interface ImagePromptRenderedVariant {
+  hero: string;
+  variant: string;
+}
+
+export interface ImagePromptRenderedExploration {
+  exploration: string;
+  variant: string;
+}
+
+export type ImagePromptRendered = ImagePromptRenderedVariant | ImagePromptRenderedExploration;
 
 export interface WorkbenchOutput {
   id: string;

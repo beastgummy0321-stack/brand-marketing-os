@@ -63,3 +63,8 @@ export const SOURCE_LABELS = {
 
 /** ADR 0068 §7 使用者原話，逐字。 */
 export const IMAGE_PROMPT_ADVISORY = "AI 生圖有不確定性，建議多產幾條備用，建議目標張數的 1.5 倍";
+
+/** 圖片提示詞卡（票 F01-T04-I02）：① 主圖底下的固定說明，跟「生成圖片」保留席位的文字。 */
+export const IMAGE_PROMPT_HERO_HINT = "主圖先產一張，滿意了再用 ② 產變體";
+export const GENERATE_IMAGE_SEAT_LABEL = "生成圖片（席位保留）";
+export const GENERATE_IMAGE_SEAT_TOOLTIP = "站內生圖之後接上就在這個位置";
