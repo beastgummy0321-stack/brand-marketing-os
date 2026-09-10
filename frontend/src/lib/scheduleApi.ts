@@ -135,9 +135,8 @@ export interface CampaignTreeResult {
 export interface ScheduleBriefCopy {
   is_adopted: boolean;
   generation_round: number;
-  short: string[];
-  medium: string[];
-  long: string[];
+  copy_length: "short" | "medium" | "long";
+  bodies: string[];
   headlines: string[];
   descriptions: string[];
   visual_tone: "暗調強對比" | "暖調生活" | null;
@@ -148,7 +147,6 @@ export interface ScheduleBriefCopy {
 
 export interface ScheduleBriefImagePrompts {
   generation_round: number;
-  count: number;
 }
 
 export interface ScheduleBrief {
