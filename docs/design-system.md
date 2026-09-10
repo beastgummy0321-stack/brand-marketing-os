@@ -232,7 +232,7 @@ A long flow is a sequence of stages, each one screen, never one page that grows:
 | 品牌總覽 (跨品牌) | one brand: its own layout; many brands: health, revenue and next step compared; brand entry and task entry separated |
 | 收件匣 | compact list + detail pane; 待處理／已處理 toggle; brand and severity legible at a glance |
 | 品牌智庫 | workspace split: vertical categories with counts, list in the middle, detail on the right; never two rows of horizontal tabs. 官方素材 browses thumbnails; 事實／規則／宣稱 are lists |
-| 素材工作檯 | workspace split: brief list left (進行中／已關閉／全部), brief detail right — copy tabs 短／中／長 with one fixed line each, image prompts with the user's count and the 1.5× grey line, rounds, 採用；新工單 in the side panel |
+| 素材工作檯 | workspace split: left rail 開始生成（文案／圖片提示詞／影片腳本／自由生成）・派工任務 by source（檔期／網站／品牌內容, empty 「尚無任務」）・工單（全部／已採用，已關閉收合在全部裡）; right work area holds the new-brief form or the selected brief |
 | 產品清單 | comparison table; product name, 待確認 count and cost status emphasised |
 | 產品詳情 | product title + the same `PageTabs`; 再次調研 behind an explicit action |
 | 訂單與顧客 | tabs 概況・訂單・商品毛利・通路營收・口徑紀錄 |

@@ -30,7 +30,8 @@ export const STATUS_LABELS = {
 
 /** 按鈕文字（票面 §8 逐字列出的清單）。 */
 export const BUTTON_LABELS = {
-  newBrief: "新工單",
+  startGenerating: "開始生成",
+  noTasks: "尚無任務",
   createBrief: "建立工單",
   runImagePrompt: "產提示詞",
   runAgain: "再產一輪",
@@ -41,6 +42,23 @@ export const BUTTON_LABELS = {
   delete: "刪除",
   retry: "重新產出",
   toSchedule: "到檔期規劃",
+} as const;
+
+/** 左欄「開始生成」四個入口的標籤（票 04 §1）——跟 `KIND_LABELS` 分開宣告：`KIND_LABELS`
+ * 標的是既存工單的種類（含 `ad_creative`），這裡標的是「要開始生成哪一種」的四個按鈕，
+ * 兩者用途不同、不共用同一份常數。 */
+export const PART_LABELS = {
+  copy: "文案",
+  image_prompt: "圖片提示詞",
+  video_script: "影片腳本",
+  free: "自由生成",
+} as const;
+
+/** 左欄「派工任務」三個來源分組的標籤（票 04 §1）。 */
+export const SOURCE_LABELS = {
+  schedule: "檔期",
+  website: "網站",
+  brandContent: "品牌內容",
 } as const;
 
 /** ADR 0068 §7 使用者原話，逐字。 */
