@@ -2544,8 +2544,8 @@ class CreativeCandidateSyncTest(_ScheduleApiTestBase):
             "proof": None, "offer": None, "format": None,
         }
         body = {
-            "coordinates": coordinates, "short": ["短版"], "medium": ["中版"],
-            "long": ["長版"], "headlines": ["標題"], "descriptions": ["說明"],
+            "coordinates": coordinates, "copy_length": "short", "short": ["短版"],
+            "headlines": ["標題"], "descriptions": ["說明"],
             "visual_tone": visual_tone, "visual_concept": f"第 {round_no} 輪的畫面概念",
             "warnings": warnings if warnings is not None else [], "validation": [],
         }
@@ -2593,7 +2593,7 @@ class CreativeCandidateSyncTest(_ScheduleApiTestBase):
         ).fetchone()
         self.assertEqual(
             {f["label"] for f in item["fields_json"]},
-            {"主要文字（短）", "主要文字（中）", "主要文字（長）", "標題", "說明"},
+            {"主要文字（短）", "標題", "說明"},
         )
 
         # 讀第二次不多寫一份（llm_task_id 擋掉重複落地）。

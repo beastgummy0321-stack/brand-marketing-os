@@ -46,6 +46,11 @@ DIAGNOSIS_METHODOLOGY_TASK_LABELS = ["成效判讀／下期草案"]
 # workbench internals（docs/contracts/workbench.md）——`_sync_creative_candidate` 拿它做
 # 最後一道防呆，workbench 那邊已經 sanitise 過，這裡是縱深防禦，不是唯一防線。
 VISUAL_TONE_VALUES = ("暗調強對比", "暖調生活")
+# 票 F01-T02-I02：一次生成只出一個長度帶（`copy_length`），`_sync_creative_candidate()`
+# 拿它挑 `creative_candidate.fields` 該印哪個中文標籤——字面沿用改版前三個各自的標籤。
+_COPY_LENGTH_FIELD_LABELS = {
+    "short": "主要文字（短）", "medium": "主要文字（中）", "long": "主要文字（長）",
+}
 DEPARTMENT_FILE = APP_DIR / "departments" / "ads" / "schedule.md"
 TREE_DEPARTMENT_FILE = APP_DIR / "departments" / "ads" / "campaign_tree.md"
 # 通路目錄資料檔（票 08 §3；票 T4／ADR 0056 改名並加上通路能力旗標）：改這個檔案不必
@@ -127,9 +132,10 @@ def _fill_node_spend(conn, org_id: str, brand_id: str, tree: dict) -> None:
 def _leaf_ad_nodes(nodes: list) -> list[dict]:
     """活動樹最深層（沒有 `children` 的）節點，照文件順序（深度優先、前序）——票 01：
     內容跟這一層的節點一一對應，不是每一層都配一份。每個元素 `{"node_key", "name",
-    "coordinates"}`（票 T3d，ADR 0055 §1：身分是 `node_key`，`name` 只給代理比對用；票 05，
-    ADR 0069 §3：`coordinates` 帶著讓 `jobs.schedule_tree()` 交棒進 brief 的快照——最深層
-    節點一定是第三層，`tree_with_bindings()` 已經把沿用節點的座標蓋成上一期的）。"""
+    "coordinates", "copy_length"}`（票 T3d，ADR 0055 §1：身分是 `node_key`，`name` 只給
+    代理比對用；票 05，ADR 0069 §3：`coordinates` 帶著讓 `jobs.schedule_tree()` 交棒進
+    brief 的快照——最深層節點一定是第三層，`tree_with_bindings()` 已經把沿用節點的座標
+    蓋成上一期的；`copy_length` 同理隨快照交棒給 brief 的 request，見 `jobs.py`）。"""
     result = []
     for node in nodes:
         if node["children"]:
@@ -137,23 +143,28 @@ def _leaf_ad_nodes(nodes: list) -> list[dict]:
         else:
             result.append({
                 "node_key": node["node_key"], "name": node["name"],
-                "coordinates": node["coordinates"],
+                "coordinates": node["coordinates"], "copy_length": node["copy_length"],
             })
     return result
 
 
 def _copy_summary(output: dict | None) -> dict | None:
-    """票 05：`workbench.adopted_output(..., "copy")` 的一列 → 排程頁要的扁平形狀——
-    `body_json` 本身就是文案任務的整份回覆（含 `_run()` 寫回去之前就有的
+    """票 F01-T02-I02：`workbench.adopted_output(..., "copy")` 的一列 → 排程頁要的扁平
+    形狀——`body_json` 本身就是文案任務的整份回覆（含 `_run()` 寫回去之前就有的
     `visual_tone`／`visual_concept`，ADR 0068 §5 amendment），這裡攤平成一層，畫面不必
-    知道 workbench 的列形狀。`None`：這個 part 從沒產出過。"""
+    知道 workbench 的列形狀。`None`：這個 part 從沒產出過。
+
+    一次生成只出一個長度帶（`copy_length`，票 F01-T01-I02）：`body_json` 不再有
+    `short`／`medium`／`long` 三把鑰匙，只有 `body_json["copy_length"]` 指名的那一把——
+    這裡讀那一把出來當 `bodies`，`copy_length` 本身缺欄位（舊輸出）落回 `"short"`。"""
     if output is None:
         return None
     body = output.get("body_json") or {}
+    copy_length = body.get("copy_length") or "short"
     return {
         "is_adopted": output["is_adopted"], "generation_round": output["generation_round"],
-        "short": body.get("short", []), "medium": body.get("medium", []),
-        "long": body.get("long", []), "headlines": body.get("headlines", []),
+        "copy_length": copy_length, "bodies": body.get(copy_length, []),
+        "headlines": body.get("headlines", []),
         "descriptions": body.get("descriptions", []),
         "visual_tone": body.get("visual_tone"), "visual_concept": body.get("visual_concept"),
         "validation": body.get("validation", []),
@@ -165,19 +176,14 @@ def _copy_summary(output: dict | None) -> dict | None:
 
 
 def _image_prompt_summary(output: dict | None) -> dict | None:
-    """票 05：同上，但只留輪次與張數——排程頁只需要知道「有沒有」、「幾條」，完整內容
-    在工作檯看（ADR 0068「一個產出者」）。`rendered` 是渲染完的清單，缺欄位就退回
-    `prompts`（同一份計數，`check_image_prompts` 兩者長度必然相同）。"""
+    """票 F01-T02-I02：同上，但只留輪次——排程頁只需要知道「有沒有」，完整內容在工作檯
+    看（ADR 0068「一個產出者」）。`count` 拿掉了：工作檯即將把 `body_json.rendered` 寫成
+    一個物件（主圖／變體或探索／變體），不再是 N 條 prompt 文字的清單，「幾張圖」不再是
+    這個清單的長度——這支不再看 `rendered` 裡面長什麼樣，改動 `rendered` 的形狀不影響
+    這裡。"""
     if output is None:
         return None
-    body = output.get("body_json") or {}
-    items = body.get("rendered")
-    if not isinstance(items, list):
-        items = body.get("prompts")
-    return {
-        "generation_round": output["generation_round"],
-        "count": len(items) if isinstance(items, list) else 0,
-    }
+    return {"generation_round": output["generation_round"]}
 
 
 def _sync_creative_candidate(conn, org_id: str, brand_id: str, tree_task_id: str,
@@ -210,9 +216,7 @@ def _sync_creative_candidate(conn, org_id: str, brand_id: str, tree_task_id: str
             "node_key": node_key, "coordinates": coordinates,
             "visual_tone": visual_tone, "visual_concept": copy["visual_concept"],
             "fields": [
-                {"label": "主要文字（短）", "value": copy["short"]},
-                {"label": "主要文字（中）", "value": copy["medium"]},
-                {"label": "主要文字（長）", "value": copy["long"]},
+                {"label": _COPY_LENGTH_FIELD_LABELS[copy["copy_length"]], "value": copy["bodies"]},
                 {"label": "標題", "value": copy["headlines"]},
                 {"label": "說明", "value": copy["descriptions"]},
             ],
