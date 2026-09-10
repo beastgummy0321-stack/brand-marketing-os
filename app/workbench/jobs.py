@@ -8,9 +8,7 @@ together, in one follow-up call (`fix.md`) whose prompt names only the failing p
 whole brief again -> write `workbench_output` -> brief `done`. A failed `llm_task`, a
 non-JSON-only reply, or any other exception all become a `RuntimeError` that the outer wrapper
 turns into `brief.status='failed'` + `last_error`, then re-raises — the exception is not
-swallowed (ticket workbench/02 §2). Ticket 03 §3 adds one no-call exit: an `image_prompt` run
-with neither an adopted/latest `copy` output's `headlines` nor `request_json.on_image_texts`
-raises before `gateway.run_task()` is ever reached — zero LLM calls, not one.
+swallowed (ticket workbench/02 §2).
 
 `register_tasks()` follows the exact pattern of `app/schedule/jobs.py::register_tasks()` /
 `app/meta/daily_pull.py::register_task()`: `app.background.app()`'s DSN-keyed rebuild means a
@@ -239,16 +237,6 @@ def _run(conn, org_id: str, brand_id: str, brief_id: str, part: str, count) -> N
     elif part == "image_prompt":
         headlines_output = repository.adopted_output(conn, org_id, brand_id, brief_id, "copy")
         headlines = (headlines_output or {}).get("body_json", {}).get("headlines") or []
-        if not headlines:
-            # 票 03 §3：手動 image_prompt 工單在 submit 就會被擋（repository.py
-            # `_validate_on_image_texts`），會走到這裡的是 ad_creative 工單——copy／
-            # image_prompt 兩個 part 一起排隊，這個 job 先跑到、copy 那個還沒寫出
-            # headlines。
-            headlines = request.get("on_image_texts") or []
-        if not headlines:
-            # 兩邊都沒有：不花錢打一通注定被規則擋下的 LLM 呼叫（ADR 0068 §6 money
-            # 線），直接讓外層 workbench_generate() 的 except 寫 failed + 這句 last_error。
-            raise RuntimeError("沒有圖上文字可用：先產文案，或在工單填圖上文字。")
         prompt = prompts.image_prompt_prompt(
             department_text, methodology_text, brief_section, brand_context, headlines, count
         )
