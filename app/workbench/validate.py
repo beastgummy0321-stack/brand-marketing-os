@@ -20,6 +20,9 @@ import json
 from app.workbench.prompts import COORDINATE_KEYS, render_image_prompt
 
 BODY_BANDS = {"short": (100, 150, 5), "medium": (300, 500, 3), "long": (800, 1000, 2)}
+# 中文標籤，只在這裡打一次——`prompts.copy_prompt` 用 lazy import 讀這兩個字典（見該檔
+# `copy_prompt` 檔頭註解：避免跟這支模組的 module-level import 互相循環）。
+BAND_LABELS = {"short": "短版", "medium": "中版", "long": "長版"}
 HEADLINE_MAX = 27
 DESCRIPTION_MAX = 30
 PROMPT_MIN, PROMPT_MAX = 200, 250
@@ -58,20 +61,22 @@ def vocabulary_by_dimension(coordinates: list) -> dict:
     return by_dim
 
 
-def check_copy(data, vocabulary: dict) -> list:
+def check_copy(data, vocabulary: dict, copy_length: str) -> list:
     """回傳 `[{"path", "ok", "message"}, ...]`，一個項目一個可定址的欄位（band 內每一則
     各自一項，供 `jobs.py` 的修正輪只重問失敗的那幾則，ADR 0068 §6「單則重問，批次不重
-    生」）。"""
+    生」）。票 workbench/T01-02：一次只出 `copy_length` 指定的那一個長度帶——回覆裡若
+    夾帶其他 band 的鍵，安靜略過，不報告、不算它壞。"""
     if not isinstance(data, dict):
         return [{"path": "_root", "ok": False, "message": "頂層不是物件"}]
 
     results = []
-    for band, (lo, hi, count) in BODY_BANDS.items():
-        items = data.get(band)
-        if not isinstance(items, list) or len(items) != count:
-            got = len(items) if isinstance(items, list) else "缺欄位"
-            results.append({"path": band, "ok": False, "message": f"數量應為 {count}，實際 {got}"})
-            continue
+    band = copy_length
+    lo, hi, count = BODY_BANDS[band]
+    items = data.get(band)
+    if not isinstance(items, list) or len(items) != count:
+        got = len(items) if isinstance(items, list) else "缺欄位"
+        results.append({"path": band, "ok": False, "message": f"數量應為 {count}，實際 {got}"})
+    else:
         for i, text in enumerate(items, start=1):
             ok = isinstance(text, str) and lo <= _char_len(text) <= hi
             n = _char_len(text) if isinstance(text, str) else 0
