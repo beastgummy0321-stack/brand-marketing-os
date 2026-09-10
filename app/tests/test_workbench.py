@@ -119,11 +119,11 @@ class _WorkbenchTestBase(unittest.TestCase):
         return workbench_module.submit_brief(web.conn, self.org_id, self.brand_id, brief)
 
     def _copy_reply(self) -> dict:
+        """票 T01-02：一次只出一個長度帶——預設工單沒給 `copy_length`，`jobs._run` 落回
+        `"short"`，這裡就只帶 `short` 那一個長度鍵，跟新合約一致。"""
         return {
             "coordinates": dict(self.coordinates),
             "short": [_cjk(140) for _ in range(5)],
-            "medium": [_cjk(450) for _ in range(3)],
-            "long": [_cjk(950) for _ in range(2)],
             "headlines": [_cjk(10) for _ in range(5)],
             "descriptions": [_cjk(15) for _ in range(5)],
             # 票 05（ADR 0068 §5 amendment）：文案回覆現在也帶視覺方向。

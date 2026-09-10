@@ -42,11 +42,23 @@ def brief_text(brief: dict, product_name: str | None, style: dict) -> str:
 
 
 def copy_prompt(department_text: str, methodology_text: str, brief_section: str,
-                 brand_context: str, coordinate_text: str) -> str:
+                 brand_context: str, coordinate_text: str, copy_length: str | None = None) -> str:
     """票 workbench/02 §2 的組法：copy.md · methodology · 工單文字 · 品牌上下文 ·
-    座標詞彙表**最後**。"""
+    座標詞彙表**最後**。票 T01-02：`copy_length` 給了值就在工單文字多帶一行「本次要出的
+    長度」，數字讀自 `validate.BODY_BANDS`／`validate.BAND_LABELS`，不在這裡另打一份——
+    `import` 放在函式內（lazy import）：`validate.py` 在 module level `from
+    app.workbench.prompts import COORDINATE_KEYS, render_image_prompt`，兩檔互相在
+    module level import 會循環失敗，延到呼叫期兩邊都已載完就沒事。`copy_length` 是
+    `None` 時（`free` part 借用這個組法，沒有長度帶這個概念）不加這一行。"""
+    length_line = ""
+    if copy_length is not None:
+        from app.workbench.validate import BAND_LABELS, BODY_BANDS
+
+        lo, hi, count = BODY_BANDS[copy_length]
+        length_line = f"本次要出的長度：{BAND_LABELS[copy_length]}（{lo}～{hi} 字，{count} 則）"
+    worksheet = "\n\n".join(filter(None, [brief_section, length_line]))
     return "\n\n".join(filter(None, [
-        department_text, methodology_text, brief_section, brand_context, coordinate_text,
+        department_text, methodology_text, worksheet, brand_context, coordinate_text,
     ]))
 
 

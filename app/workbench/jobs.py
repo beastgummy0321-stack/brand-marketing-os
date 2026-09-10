@@ -162,11 +162,11 @@ def _apply_replacements(data: dict, replacements) -> None:
             data[key] = value
 
 
-def _validate(part: str, data, *, vocabulary: dict, count) -> tuple:
+def _validate(part: str, data, *, vocabulary: dict, count, copy_length: str = "short") -> tuple:
     """回傳 `(結果清單, 渲染清單或 None)`——只有 `image_prompt` 有渲染清單要存進
     `body_json.rendered`。"""
     if part == "copy":
-        return validate.check_copy(data, vocabulary), None
+        return validate.check_copy(data, vocabulary, copy_length), None
     if part == "image_prompt":
         return validate.check_image_prompts(data, count)
     if part == "video_script":
@@ -226,13 +226,15 @@ def _run(conn, org_id: str, brand_id: str, brief_id: str, part: str, count) -> N
     ).text
     brief_section = prompts.brief_text(brief, (product or {}).get("name"), style)
 
+    copy_length = request.get("copy_length") or "short"
     vocabulary: dict = {}
     if part == "copy":
         coordinate_rows = repository.list_coordinate_vocabulary(conn, org_id, brand_id)
         vocabulary = validate.vocabulary_by_dimension(coordinate_rows)
         coordinate_text = prompts.coordinate_vocabulary_text(coordinate_rows)
         prompt = prompts.copy_prompt(
-            department_text, methodology_text, brief_section, brand_context, coordinate_text
+            department_text, methodology_text, brief_section, brand_context, coordinate_text,
+            copy_length,
         )
     elif part == "image_prompt":
         headlines_output = repository.adopted_output(conn, org_id, brand_id, brief_id, "copy")
@@ -277,7 +279,9 @@ def _run(conn, org_id: str, brand_id: str, brief_id: str, part: str, count) -> N
     if data is None:
         raise RuntimeError("代理沒有回傳純 JSON，請重新產出一次。")
 
-    results, rendered = _validate(part, data, vocabulary=vocabulary, count=count)
+    results, rendered = _validate(
+        part, data, vocabulary=vocabulary, count=count, copy_length=copy_length
+    )
     failing = [r for r in results if not r["ok"]]
     if failing:
         fixed_block = data.get("fixed")
@@ -295,7 +299,9 @@ def _run(conn, org_id: str, brand_id: str, brief_id: str, part: str, count) -> N
                 _apply_replacements(data, fix_data.get("replacements"))
         # 批次不重生（ADR 0068 §6）：不管修正輪成不成功都只重跑一次驗證，還不合格就老實
         # 印 ❌，不再問第二次。
-        results, rendered = _validate(part, data, vocabulary=vocabulary, count=count)
+        results, rendered = _validate(
+            part, data, vocabulary=vocabulary, count=count, copy_length=copy_length
+        )
 
     if part == "copy":
         # 票 05（ADR 0068 §5 amendment）：文案任務跟著回視覺方向——寫角度的人順手命名畫面。
@@ -320,6 +326,7 @@ def _run(conn, org_id: str, brand_id: str, brief_id: str, part: str, count) -> N
     body = dict(data)
     if part == "copy":
         body["visual_tone"] = visual_tone
+        body["copy_length"] = copy_length
     body["validation"] = [
         ("✅ " if r["ok"] else "❌ ") + f"{r['path']}：{r['message']}" for r in results
     ]
