@@ -41,7 +41,9 @@ _METHODOLOGY_LABELS = {
     "free": "素材工作檯自由生成",
 }
 
-_PATH_RE = re.compile(r"^([a-z_]+)(?:\[(\d+)\]|\.([a-z_]+))?$")
+_PATH_RE = re.compile(r"^([a-z_]+)(?:\[(\d+)\])?(?:\.([a-z_]+))?$")
+
+NO_PHOTO_LINE = "無參考商品照，畫面以情境與人物為主，不畫商品特寫。"
 
 
 def _compile_brand_context(conn, brand_id: str, product_ids: list) -> tuple:
@@ -79,9 +81,10 @@ def _replacement_ok(original, value) -> bool:
 
 
 def _original_value(data: dict, path: str):
-    """讀出某個 `path`（跟下面 `_apply_replacements` 同一套定址規則）在 `data` 裡現在的值
-    ——修正輪的 prompt 要把它連同問題描述一起附上，模型才知道「原本」長什麼樣子，不是
-    憑空發明（票 workbench/04 walk round 2 amendment）。讀不到回傳 `None`。"""
+    """讀出某個 `path`（跟下面 `_apply_replacements` 同一套定址規則，含
+    `angles[3].on_image_line` 這種索引後接子鍵的形狀）在 `data` 裡現在的值——修正輪的
+    prompt 要把它連同問題描述一起附上，模型才知道「原本」長什麼樣子，不是憑空發明（票
+    workbench/04 walk round 2 amendment）。讀不到回傳 `None`。"""
     match = _PATH_RE.match(path) if isinstance(path, str) else None
     if not match:
         return None
@@ -89,42 +92,40 @@ def _original_value(data: dict, path: str):
     if index is not None:
         items = data.get(key)
         i = int(index) - 1
-        return items[i] if isinstance(items, list) and 0 <= i < len(items) else None
+        if not (isinstance(items, list) and 0 <= i < len(items)):
+            return None
+        item = items[i]
+        if subkey is not None:
+            return item.get(subkey) if isinstance(item, dict) else None
+        return item
     if subkey is not None:
         obj = data.get(key)
         return obj.get(subkey) if isinstance(obj, dict) else None
     return data.get(key)
 
 
-def _shape_hint(path: str, *, fixed_chars: int | None) -> str:
+def _shape_hint(path: str) -> str:
     """修正輪要附的「精確回覆形狀」一句話——數字／鍵名一律用程式算，不讓模型自己猜字數帶
-    或欄位鍵（票 workbench/04 walk round 2 amendment）。只覆蓋兩種形狀：`prompts[N]`
-    （物件，鍵照舊，字數帶要扣掉固定段）與 `short[N]`／`medium[N]`／`long[N]`（字串＋原字數
-    帶）；其他 path 沿用 `fix.md` 本來就有的通用 JSON schema，不多加一句。"""
+    （票 workbench/04 walk round 2 amendment）。只覆蓋一種形狀：`short[N]`／`medium[N]`／
+    `long[N]`（字串＋原字數帶）；其他 path（含 `hero.*`、`angles[n].*`）沿用 `fix.md` 本來
+    就有的通用 JSON schema，不多加一句。"""
     match = _PATH_RE.match(path) if isinstance(path, str) else None
     if not match:
         return ""
     key, index, _subkey = match.groups()
-    if key == "prompts" and index is not None and fixed_chars is not None:
-        keys = ", ".join(validate.VARIABLE_KEYS)
-        lo, hi = validate.PROMPT_MIN - fixed_chars, validate.PROMPT_MAX - fixed_chars
-        return (
-            f"回一個物件，鍵與原值相同（{keys}），外殼會組成 9 行並計字；"
-            f"固定段已占 {fixed_chars} 字，變動段合計須落在 {lo}～{hi} 字"
-        )
     if key in validate.BODY_BANDS and index is not None:
         lo, hi, _count = validate.BODY_BANDS[key]
         return f"回一個字串，{lo}～{hi} 字"
     return ""
 
 
-def _fix_item_block(item: dict, *, original, fixed_chars: int | None) -> str:
+def _fix_item_block(item: dict, *, original) -> str:
     lines = [
         f"- path: {item['path']}",
         f"  原值：{json.dumps(original, ensure_ascii=False)}",
         f"  問題：{item['message']}",
     ]
-    shape = _shape_hint(item["path"], fixed_chars=fixed_chars)
+    shape = _shape_hint(item["path"])
     if shape:
         lines.append(f"  形狀：{shape}")
     return "\n".join(lines)
@@ -150,7 +151,13 @@ def _apply_replacements(data: dict, replacements) -> None:
         if index is not None:
             items = data.get(key)
             i = int(index) - 1
-            if isinstance(items, list) and 0 <= i < len(items) and _replacement_ok(items[i], value):
+            if not (isinstance(items, list) and 0 <= i < len(items)):
+                continue
+            if subkey is not None:
+                obj = items[i]
+                if isinstance(obj, dict) and subkey in obj and _replacement_ok(obj[subkey], value):
+                    obj[subkey] = value
+            elif _replacement_ok(items[i], value):
                 items[i] = value
         elif subkey is not None:
             obj = data.get(key)
@@ -160,20 +167,57 @@ def _apply_replacements(data: dict, replacements) -> None:
             data[key] = value
 
 
-def _validate(part: str, data, *, vocabulary: dict, count, copy_length: str = "short") -> tuple:
-    """回傳 `(結果清單, 渲染清單或 None)`——只有 `image_prompt` 有渲染清單要存進
-    `body_json.rendered`。"""
+def _validate(part: str, data, *, vocabulary: dict, count, copy_length: str = "short",
+              mode: str | None = None, quotable_text: str = "") -> tuple:
+    """回傳 `(結果清單, 渲染清單或 None)`——`image_prompt` 的渲染不從這裡出來，見
+    `_render_image_prompt()`；這裡第二個值一律 `None`。"""
     if part == "copy":
         return validate.check_copy(data, vocabulary, copy_length), None
     if part == "image_prompt":
-        return validate.check_image_prompts(data, count)
+        assert mode is not None  # 呼叫端（`_run`）永遠帶 mode，這裡只是讓型別檢查放行
+        return (
+            validate.check_image_prompt(data, mode=mode, count=count, quotable_text=quotable_text),
+            None,
+        )
     if part == "video_script":
         return validate.check_video_script(data, count), None
     return validate.check_free(data), None  # 'free'
 
 
+def _product_line(conn, brand_id: str, product_id: str | None, product: dict | None) -> str:
+    """『這則圖片提示詞【商品】那一行寫什麼』的唯一判斷規則（票 F01-T03-I02）：這張工單
+    有 `product_id`，且 `bi_repo.list_official_assets()` 至少有一列 `asset_kind ==
+    "product_photo"` 且 `product_id` 跟這張工單的相同——兩個條件都成立才敢說「有參考商品
+    照」，其他情況（沒有 product_id、或有 product_id 但找不到那張商品的產品照）一律回
+    `NO_PHOTO_LINE`，不去猜模型看不到的東西。這個讀取不包 try/except：同一條連線
+    （`app/core/db.py` `connection()`）上一個失敗的敘述會讓整條交易中止，吞掉例外只會
+    藏住第一個真正的原因，讓後面的敘述跟著失敗卻看不出來是為什麼。"""
+    if product_id is None:
+        return NO_PHOTO_LINE
+    assets = bi_repo.list_official_assets(conn, brand_id)
+    has_photo = any(
+        row["asset_kind"] == "product_photo" and row["product_id"] == product_id
+        for row in assets
+    )
+    if not has_photo:
+        return NO_PHOTO_LINE
+    name = (product or {}).get("name") or ""
+    return f"見參考商品照：{name}。不重述外觀。"
+
+
+def _vocabulary_phrase(rows: list, dimension: str, label: str) -> str:
+    """`<label>——<situation>`；那個 label 在詞彙表裡沒有 `situation` 說明時只回 label
+    本身。用在【這則的訴求】與【輸出】兩行，跟 `prompts.coordinate_vocabulary_text` 同一條
+    「破折號後面是說明」規則。"""
+    for row in rows:
+        if row["dimension"] == dimension and row["label"] == label:
+            situation = (row["attributes"] or {}).get("situation") or ""
+            return f"{label}——{situation}" if situation else label
+    return label
+
+
 def _fix_call(conn, brand_id: str, context, task_type: str, failing: list, *,
-               brief_section: str, original: dict, fixed_chars: int | None) -> dict:
+               brief_section: str, original: dict) -> dict:
     """ADR 0068 §6：失敗項目一次問完、只問失敗的那幾項——prompt 不重貼原本的部門任務檔／
     方法論（那些內容模型已經看過一次，批次不重生），但每一通 `gateway.run_task` 都是全新
     的無狀態呼叫（ADR 0032）：模型沒有上一通的記憶，所以工單段（`brief_section`，跟第一次
@@ -181,8 +225,7 @@ def _fix_call(conn, brand_id: str, context, task_type: str, failing: list, *,
     只能自己編（票 workbench/04 walk round 2 amendment，修的就是這個）。"""
     fix_text = (DEPARTMENTS_DIR / "fix.md").read_text(encoding="utf-8")
     listing = "\n".join(
-        _fix_item_block(item, original=original.get(item["path"]), fixed_chars=fixed_chars)
-        for item in failing
+        _fix_item_block(item, original=original.get(item["path"])) for item in failing
     )
     prompt = "\n\n".join([
         fix_text, brief_section, "## 這些欄位沒有通過驗證，只重新回答這些", listing,
@@ -193,6 +236,36 @@ def _fix_call(conn, brand_id: str, context, task_type: str, failing: list, *,
         system=None, messages=[{"role": "user", "content": prompt}], context=context,
         options=gateway.TaskOptions(max_tokens=16000, timeout_s=480.0),
     )
+
+
+def _render_image_prompt(data: dict, *, mode: str, style_block: str, product_line: str,
+                          audience_line: str, appeal_line: str, appeal_sentence: str,
+                          quotable_lines: list, output_line: str, purpose_line: str,
+                          count: int) -> dict:
+    """`image_prompt` 的渲染不從這裡出來——`_run` 在修正輪結束後一律呼叫
+    `_render_image_prompt()`，不論驗證是否通過；沒過的項目照樣渲染，❌ 記在
+    `body_json.validation`（票 F01-T03-I02）。渲染邏輯只有一份，`prompts.render_*` 對
+    缺欄位容忍，這裡不重複實作、也不擋壞資料。"""
+    variant_prompt = prompts.render_variant_prompt(
+        count=count, appeal_sentence=appeal_sentence, quotable_lines=quotable_lines,
+        output_line=output_line if mode == "variant" else "", style_block=style_block,
+    )
+    if mode == "variant":
+        hero_raw = data.get("hero")
+        hero: dict = hero_raw if isinstance(hero_raw, dict) else {}
+        hero_prompt = prompts.render_hero_prompt(
+            hero, style_block=style_block, product_line=product_line,
+            audience_line=audience_line, appeal_line=appeal_line,
+            quotable_lines=quotable_lines, output_line=output_line,
+        )
+        return {"hero": hero_prompt, "variant": variant_prompt}
+    angles_raw = data.get("angles")
+    angles: list = angles_raw if isinstance(angles_raw, list) else []
+    exploration_prompt = prompts.render_exploration_prompt(
+        angles, style_block=style_block, product_line=product_line,
+        purpose_line=purpose_line, quotable_lines=quotable_lines, count=count,
+    )
+    return {"exploration": exploration_prompt, "variant": variant_prompt}
 
 
 def _run(conn, org_id: str, brand_id: str, brief_id: str, part: str, count) -> None:
@@ -226,6 +299,8 @@ def _run(conn, org_id: str, brand_id: str, brief_id: str, part: str, count) -> N
 
     copy_length = request.get("copy_length") or "short"
     vocabulary: dict = {}
+    image_prompt_ctx: dict = {}
+    image_prompt_quotable_text = ""
     if part == "copy":
         coordinate_rows = repository.list_coordinate_vocabulary(conn, org_id, brand_id)
         vocabulary = validate.vocabulary_by_dimension(coordinate_rows)
@@ -235,10 +310,53 @@ def _run(conn, org_id: str, brand_id: str, brief_id: str, part: str, count) -> N
             copy_length,
         )
     elif part == "image_prompt":
+        # 模式只看工單來源，其他都不決定（票 F01-T03-I02）。
+        mode = "variant" if brief.get("source_kind") == "schedule_node" else "exploration"
+        coordinate_rows = repository.list_coordinate_vocabulary(conn, org_id, brand_id)
+        coordinates_snapshot = brief.get("coordinates_snapshot_json") or {}
+        audience = coordinates_snapshot.get("audience") or ""
+        pain = coordinates_snapshot.get("pain") or ""
+        audience_line = f"{audience}；痛點：{pain}" if (audience or pain) else ""
+        angle_label = coordinates_snapshot.get("angle") or ""
+        hook_label = coordinates_snapshot.get("hook") or ""
+        appeal_parts = []
+        if angle_label:
+            angle_phrase = _vocabulary_phrase(coordinate_rows, "angle", angle_label)
+            appeal_parts.append(f"切角：{angle_phrase}")
+        if hook_label:
+            hook_phrase = _vocabulary_phrase(coordinate_rows, "hook", hook_label)
+            appeal_parts.append(f"標題公式：{hook_phrase}")
+        appeal_line = "；".join(appeal_parts)
+        format_label = coordinates_snapshot.get("format") or ""
+        if format_label:
+            format_phrase = _vocabulary_phrase(coordinate_rows, "format", format_label)
+            output_line = f"{format_phrase}，一張"
+        else:
+            output_line = "一張"
+        appeal_sentence = (
+            angle_label if (mode == "variant" and angle_label) else "以這張圖原本的主訴求為準"
+        )
+        purpose_line = request.get("free_text") or "未指定"
+        promotion_note = request.get("promotion_note") or ""
+        quotable_lines = [line for line in promotion_note.split("\n") if line.strip()]
+        image_prompt_quotable_text = "\n".join(quotable_lines) + "\n" + brand_context
+        product_line = _product_line(conn, brand_id, product_id, product)
+
+        headline_hint = None
         headlines_output = repository.adopted_output(conn, org_id, brand_id, brief_id, "copy")
         headlines = (headlines_output or {}).get("body_json", {}).get("headlines") or []
+        if headlines:
+            headline_hint = headlines[0]
+
+        image_prompt_ctx = {
+            "mode": mode, "style_block": style["style_block"], "product_line": product_line,
+            "audience_line": audience_line, "appeal_line": appeal_line,
+            "appeal_sentence": appeal_sentence, "quotable_lines": quotable_lines,
+            "output_line": output_line, "purpose_line": purpose_line,
+        }
         prompt = prompts.image_prompt_prompt(
-            department_text, methodology_text, brief_section, brand_context, headlines, count
+            department_text, methodology_text, brief_section, brand_context,
+            mode=mode, count=count, quotable_lines=quotable_lines, headline_hint=headline_hint,
         )
     elif part == "video_script":
         prompt = prompts.video_script_prompt(
@@ -267,19 +385,20 @@ def _run(conn, org_id: str, brand_id: str, brief_id: str, part: str, count) -> N
     if data is None:
         raise RuntimeError("代理沒有回傳純 JSON，請重新產出一次。")
 
+    validate_kwargs = (
+        {"mode": image_prompt_ctx["mode"], "quotable_text": image_prompt_quotable_text}
+        if part == "image_prompt" else {}
+    )
     results, rendered = _validate(
-        part, data, vocabulary=vocabulary, count=count, copy_length=copy_length
+        part, data, vocabulary=vocabulary, count=count, copy_length=copy_length,
+        **validate_kwargs,
     )
     failing = [r for r in results if not r["ok"]]
     if failing:
-        fixed_block = data.get("fixed")
-        fixed_chars = (
-            validate.fixed_block_chars(fixed_block) if isinstance(fixed_block, dict) else None
-        )
         original = {item["path"]: _original_value(data, item["path"]) for item in failing}
         fix_row = _fix_call(
             conn, brand_id, context, task_type, failing,
-            brief_section=brief_section, original=original, fixed_chars=fixed_chars,
+            brief_section=brief_section, original=original,
         )
         if fix_row["status"] == "succeeded":
             fix_data = validate.parse_json_only(fix_row.get("rendered_output") or "")
@@ -288,8 +407,15 @@ def _run(conn, org_id: str, brand_id: str, brief_id: str, part: str, count) -> N
         # 批次不重生（ADR 0068 §6）：不管修正輪成不成功都只重跑一次驗證，還不合格就老實
         # 印 ❌，不再問第二次。
         results, rendered = _validate(
-            part, data, vocabulary=vocabulary, count=count, copy_length=copy_length
+            part, data, vocabulary=vocabulary, count=count, copy_length=copy_length,
+            **validate_kwargs,
         )
+
+    if part == "image_prompt":
+        # 渲染不論驗證是否通過都跑一次（`_render_image_prompt` 檔頭），不放進上面的
+        # `_validate`——渲染跟驗證是兩件事，`rendered` 的形狀（`hero`/`exploration` 一個 +
+        # `variant` 一個）跟驗證結果清單完全獨立。
+        rendered = _render_image_prompt(data, count=count, **image_prompt_ctx)
 
     if part == "copy":
         # 票 05（ADR 0068 §5 amendment）：文案任務跟著回視覺方向——寫角度的人順手命名畫面。
@@ -315,6 +441,8 @@ def _run(conn, org_id: str, brand_id: str, brief_id: str, part: str, count) -> N
     if part == "copy":
         body["visual_tone"] = visual_tone
         body["copy_length"] = copy_length
+    if part == "image_prompt":
+        body["mode"] = image_prompt_ctx["mode"]
     body["validation"] = [
         ("✅ " if r["ok"] else "❌ ") + f"{r['path']}：{r['message']}" for r in results
     ]
