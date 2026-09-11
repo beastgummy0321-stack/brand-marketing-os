@@ -4,6 +4,13 @@
     "ignoreFiles": [
       ".scratch/grill/*.html"
     ],
-    "ignoreValues": []
+    "ignoreValues": [
+      {
+        "rule": "overused-font",
+        "value": "inter",
+        "createdAt": "2026-09-11T14:21:55.193Z",
+        "reason": "same: project font, lowercase variant in Google Fonts URL"
+      }
+    ]
   }
 }

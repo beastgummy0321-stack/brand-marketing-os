@@ -46,6 +46,14 @@
     }
   },
   "resources": {
+    "workbench_pack": {
+      "owner": "workbench",
+      "kind": "sql-table",
+      "definition": [
+        "supabase/migrations/*_workbench_*.sql"
+      ],
+      "symbol": "workbench_pack"
+    },
     "workbench_brief": {
       "owner": "workbench",
       "kind": "sql-table",
@@ -249,8 +257,8 @@ whichever ticket changes it.
 
 ## 3. Data ownership
 
-`workbench_brief` and `workbench_output` belong to `workbench`; the campaign/period tables belong
-to `schedule`. Physical definitions live in the shared `supabase/migrations/` directory, one file
+`workbench_pack`, `workbench_brief` and `workbench_output` belong to `workbench`; the
+campaign/period tables belong to `schedule`. Physical definitions live in the shared `supabase/migrations/` directory, one file
 per module prefix (`<timestamp>_<module>_<desc>.sql`); an applied migration is never edited, a
 correction is a new file.
 
@@ -265,99 +273,142 @@ a third one without a planner decision.
 
 品牌建檔精靈 (`intake`) fills 品牌智庫 (`brand_intelligence`) → 檔期規劃 (`schedule`) produces a
 plan, then expands the chosen plan into a three-level campaign tree whose deepest nodes each carry
-the seven coordinates (audience · pain · angle · hook · proof · offer · format) → each deepest node
-dispatches one brief into 素材工作檯 (`workbench`) → the workbench generates copy, image prompts and
-video scripts; the user adopts one round → the schedule page reads the adopted output back for the
-投放包 → Meta binding, spend pull (`meta`), diagnosis and settlement close the period.
+the seven coordinates (audience · pain · angle · hook · proof · offer · format) → the expansion dispatches
+one 任務包 into 素材工作檯 (`workbench`), one 素材組 per deepest node (§5.4) → the workbench
+generates copy, image prompts and video scripts; the user 選定 one version per required 產物 and
+核准整包 → the schedule page reads the selected output back for the 投放包 → Meta binding, spend pull (`meta`), diagnosis and settlement close the period.
 
 The dependency is one-way: `schedule` imports `workbench`'s public entry, never the reverse. The
 workbench knows no tree — it stores `source_kind` + `source_ref` and compares them, never
 interprets them.
 
-## 5. 素材工作檯 — settled decisions (2026-09-10)
+## 5. 素材工作檯 — settled decisions (2026-09-12 reset)
 
-These are decided. A worker implements them; it does not re-open them.
+These are decided. A worker implements them; it does not re-open them. This revision replaces the
+2026-09-10 list where they conflict — the IA (old 1–4), the copy contract (old 5) and the reserved
+image seat (old 10) are rewritten below; the image-prompt decisions are carried over unchanged as
+§5.7–§5.10. The old text is in git. The visual source of truth is the four reference images listed
+in `.work/features/F02.md`; where a prototype and an image differ, the image wins.
 
-1. **The workbench is a multi-upstream hub with a standalone front door.** Upstream modules
-   dispatch briefs (檔期 today; 網站 and 品牌內容 later). Anyone who needs brand or product content
-   also starts here without an upstream. Adding an upstream = a new `source_kind` value plus the
-   shape of its `source_ref`; it never restructures the page.
-2. **Source is a facet, not a page.** One brief list, filtered by `source_kind`. 派工任務 are
-   grouped by source (檔期／網站／品牌內容) and are always visible, never an inbox that collapses;
-   the empty state reads 「尚無任務」.
-3. **Layout C (creation-first).** The page is the existing `.workspace-split` pattern
-   (`docs/design-system.md` §5): a left rail with three groups — 開始生成 (文案／圖片提示詞／影片
-   腳本／自由生成), 派工任務 by source, 工單 (全部／已採用) — and the work area on the right. 工單／全部 is
-   every brief of the brand whatever its state (queued and failed included), with closed briefs in a
-   collapsed 「已關閉」 section so closing and re-opening stay reachable; 已採用 is the briefs with at
-   least one adopted round. Three groups, no fourth. No new layout pattern is introduced;
-   `docs/design-system.md` §5.2's 素材工作檯 row is rewritten to this and §5.1's 素材準備 row loses the
-   短／中／長 tabs.
-4. **One brief, several parts.** `request_json.parts` (a list of `copy` / `image_prompt` /
-   `video_script` / `free`) is the authority for what a brief **asks for**, and it is never rewritten
-   afterwards; what a brief actually **produced** is recorded by `workbench_output.part`.
-   `workbench_brief.kind` stays as a display label derived at submit time (`ad_creative` when more
-   than one part is requested, otherwise the single part name) — nothing branches on `kind` any more,
-   and no migration is needed. A manual brief is product (optional) + parts (multi-select) + free
-   text; the seven coordinates arrive only from a schedule node. Which cards the work area shows is
-   decided by source, not by `kind` or by what already exists: a dispatched brief always offers 文案
-   and 圖片提示詞 (the schedule asks for copy, the user adds the image prompt with its own count when
-   they want it), a manual brief offers exactly the parts it requested. The `on_image_texts` key is
-   retired with this round — no writer, no reader.
-5. **One copy length, chosen by the tree.** The plan-expansion AI decides a copy length per deepest
-   node and writes `copy_length` (`short` / `medium` / `long`) on the node; the schedule hands it to
-   the workbench inside `submit_brief`'s `request`; the workbench generates that length only. The
-   length vocabulary is unchanged (短 100–150 / 中 300–500 / 長 800–1000 characters) and so are the
-   per-length body counts (短 5 / 中 3 / 長 2). Generating all three lengths at once is retired:
-   `validate.BODY_BANDS` keeps the bands but is applied to one band per brief, `jobs.py` asks for one
-   band, `schedule/state.py::_copy_summary` returns one list, and the 素材準備 stage shows one
-   length with its hint instead of three tabs. A node with no usable `copy_length` falls back to
-   `short`.
-6. **Image prompts: hero → approve → N variants.** One image-prompt card, mode taken from the
+1. **任務包 → 素材組 → 產物 → 版本.** One 任務包 (pack) holds one or more 素材組 (sets); a set
+   holds one 產物 (product) per required content type (文案／圖片／腳本, extensible); a product
+   holds 版本 (versions). Display vocabulary only — code and DB names do not change
+   (`workbench_brief` is a set, `workbench_output` is a version, `part` is a product type,
+   `generation_round` is which round a version came from). The physical pack is one new table,
+   `workbench_pack`; every brief carries `pack_id`. 產物類型 are generation parameters, never
+   navigation: adding a type must not change the IA and must not add a page.
+2. **Rounds are history, never navigation.** A product shows its versions newest round first;
+   there is no round switcher and no 建議組合 pool. A version is one selectable artifact and one
+   `workbench_output` row (`version_index` inside its round): a copy round writes 5 rows, an
+   image-prompt round writes 1 row (the ①＋② prompt pair it renders), a script round writes one
+   row per script.
+3. **States are derived, never stored twice.** product: 未生成 (no version) ／待選定 (versions
+   exist, fewer selected than required) ／已選定 (selected count ≥ required). set: 待開始 (no
+   product has a version) ／等待決定 ／已完成 (every required product 已選定). pack: 待處理 (no
+   set started) ／進行中 ／待核准 (every set 已完成, not yet approved) ／已完成 (approved). The
+   only stored pack state is `approved_at` plus the completion ticks. A set-table cell reads
+   `已選定／需要` (e.g. 2／5), reads 未生成 when no version exists, and reads 「—」 when the set
+   does not require that type — one rule, no other spellings. That rule lives in the repository
+   derivation and the cell text ships with the API (`cells[].text`); the browser renders the string
+   it is given and never re-spells it. Same for the reserved-seat line (§5.11).
+4. **The upstream handoff contract.** An upstream module hands over one pack in one call,
+   `submit_pack(conn, org_id, brand_id, pack)`; the workbench never learns how the upstream works
+   and still only stores and compares `source_ref`, never interprets it. `pack` carries: `source`
+   (`source_kind` ＋ opaque `source_ref`), `name`, `context` (brand／product／campaign ids),
+   `summary` (the 摘要 shown read-only on the pack page: 情境／角度／風格／目標受眾／重點訊息／
+   參考連結), `sets` (each: name, opaque `source_ref`, coordinates, product_id, style_key,
+   `required_outputs` = `{產物類型: 需要選定的版本數}`, and the per-type generation counts), and
+   `constraints` (e.g. `copy_length`, `promotion_note`). 完成條件 is not sent by the upstream: it
+   is §5.5's fixed three-item checklist. 檔期規劃 dispatches one pack per expanded tree, one set
+   per deepest node, with `required_outputs = {"copy": 1, "image_prompt": 1}` — one node is one
+   ad, so it needs one selected copy and one selected image prompt. `submit_brief` stops being a
+   public entry: a set only exists inside a pack.
+   `required_outputs[type]` (how many versions must be 選定 before the product is 已完成) and the
+   per-type generation count (how many versions one round writes) are **two different fields**;
+   neither defaults to the other. 自由創作 fills both from its parse (§5.12): the count the user
+   asked for, 1 per requested type when they said none.
+   `free` is **not** a valid `required_outputs` key — it is a legacy part name
+   (`repository._PART_NAMES`, `app/departments/workbench/free.md`) whose rows predate packs and are
+   unreachable from the new screens; the pack's own origin is `source_kind = "free_job"`, so the
+   two words never collide. New packs ask only for `copy`／`image_prompt`／`video_script`, and the
+   API owns the one label map (文案／圖片／腳本).
+5. **核准整包 never blocks anyone.** 完成條件 is three checks: 「完成所有素材組的必要文案與圖片」
+   (computed from §5.3), 「確認內容符合品牌規範」 and 「可核准整包並回報上游」 (human ticks). The
+   computed check may be overridden by a person; the override warns, and the warning is skippable.
+   Approving sets the pack to 已完成 and locks its selections. The upstream reads the approval as
+   state — `pack_for_source(conn, org_id, brand_id, source_kind, source_ref)` — never as a
+   callback, so the dependency stays one-way. 檔期規劃 shows 「素材製作完，可以開始追蹤成效」 when
+   the pack is approved, and may still run its own next step without it behind a small skippable
+   warning 「還沒製作素材」.
+6. **One copy round = 5 complete sets.** A 文案 round returns `sets`: exactly 5 objects of
+   `{body, headline, description}` — 主文 in the band `copy_length` names (短 100–150 ／中 300–500
+   ／長 800–1000 中文字元), 標題 ≤27 字, 說明 ≤30 字 — and each object is one selectable version.
+   The 2026-09-09 copy decisions are void: no per-length body counts (5／3／2), no separate
+   `headlines`／`descriptions` pools, no 建議組合. `copy_length` still comes from the node
+   (`short` fallback) and still decides the band only.
+   The 5 is written once, as `validate.COPY_SET_COUNT`; `validate.BODY_BANDS` carries the band
+   `(lo, hi)` only and no count, and every other reader (the copy prompt's 長度 line, the fix
+   round's shape hint, a round's version rows) reads the constant.
+   `app/departments/workbench/copy.md` and
+   `validate.check_copy` carry the shape; `schedule/state.py::_copy_summary` keeps its flat
+   `bodies`／`headlines`／`descriptions` lists, now index-aligned from `sets`, so the 素材準備
+   stage does not change.
+7. **Image prompts: hero → approve → N variants.** One image-prompt card, mode taken from the
    brief's `source_kind`:
    - dispatched (`schedule_node`) → **變體模式**: ① 主圖提示詞 (one image, built from the node's
      coordinates) then ② 變體提示詞 (paste with the approved hero attached).
    - manual → **探索模式**: ③ 探索提示詞 (N angles picked from `creative-matrix.md` §1's 35-angle
      matrix, one paste) then ② 變體提示詞.
-   Prompt ② is a constant plus slots — no model call. N is the existing `image_prompt_count` (1–30),
-   user-entered, prefilled in the UI from the node's `format` coordinate (彈性格式 → 10, otherwise 3).
-   This round the variants are text only; there is no image provider and no reference image in the
-   system, so there is no 「主圖已確認」 state to store.
-7. **The shell renders, the model returns fields.** Unchanged architecture, new object. The model
-   returns `{"hero": {scene, person, subject_position, headline, subhead}}` in 變體模式 and
+   Prompt ② is a constant plus slots — no model call. N is the existing `image_prompt_count`
+   (1–30), user-entered, prefilled in the UI from the node's `format` coordinate (彈性格式 → 10,
+   otherwise 3).
+8. **The shell renders, the model returns fields.** The model returns
+   `{"hero": {scene, person, subject_position, headline, subhead}}` in 變體模式 and
    `{"angles": [{name, brief, on_image_line}] × N}` in 探索模式; the shell assembles the text.
    Prompt ① is, in order — every line dropped when it has no content:
-   `【風格】` (style block) · `【商品】` (見參考商品照：<product>。不重述外觀。 / 無參考商品照，畫面以情境與
-   人物為主，不畫商品特寫。) · `【受眾】<audience>；痛點：<pain>` · `【這則的訴求】切角：<angle>——<說明>；
-   標題公式：<hook>——<說明>` · `【可用字句（逐字，不得改）】` (the promotion note's lines) · `【畫面】` (the
-   model's three sentences) · `【圖上文字】大標：「…」；副標：「…」；文字純色填滿，數字獨立成行` ·
-   `【輸出】<format label>（<format 說明>），一張`. Coordinate labels and their descriptions come from
-   the coordinate vocabulary the workbench already reads; the format line's 說明 is that label's own
-   `situation` text, so no platform spec is hard-coded in the shell.
-   `app/methodology/image-prompt-template.md` is rewritten to the ①②③ shapes and replaces the 9-line
-   template, the 200–250 character band, the 固定段／變動段 split and the 「圖上文字逐字取自標題」 rule. An
-   adopted copy headline is an optional hint, never a constraint, so an image prompt can run before
-   any copy is adopted.
-8. **Positive prompts only.** No prohibition lines anywhere in a generated prompt — no 禁止 line, no
-   保留｜禁止 line, no 「未列出的…」 wording. `creative-matrix.md` §3 rule 4 is amended accordingly. The
-   surviving guard is positive: 【圖上文字】 lists every string that will appear on the image and that
-   list is the whole of it; a number or claim may only be a verbatim string from the brief's
-   quotable text — the period's `promotion_note`, handed down on the brief, plus the compiled brand
-   knowledge the prompt already carries. When there is none, the 可用字句 line is absent and no number
-   may appear on the image; the machine check is that every digit run in an on-image string occurs
-   in that quotable text. 硬事實 is not a concept in the system and gets no field of its own.
-9. **The style entry is photographic only.** `app/workbench/image_styles.json` holds `key`, `label`
-   and one `style_block` — the capture style (iPhone 原生抓拍、未修圖、輕微晃動模糊、雜亂背景、不均勻光線、
-   文字純色填滿, plus the generic realism rule 東亞日常面孔、非廣告選角). `style_block` replaces
-   `capture_line` and `authenticity_hint`, which existed only to fill two lines of the retired 9-line
-   template; their read sites (`prompts.brief_text`, the `ImageStyle` type, the test fixture) move
-   with them in the same issue. Who appears in the picture is derived from the node's `audience`
-   coordinate, never baked into the style. The 商品 line is conditional and product-scoped: it says 見參考商品照 only when the brief has a
-   `product_id` and that product has an `official_asset` row of kind `product_photo`; a brand-level
-   asset, another asset kind or a brief with no product directs the image to 情境與人物 instead.
-10. **Image generation stays a reserved seat.** `workbench_output`'s provider columns remain
-    unwritten and the 生成圖片 button ships grey and disabled — 席位保留, never phrased as a refusal.
-    No provider, no cost, no automation this round.
+   `【風格】` (style block) · `【商品】` (見參考商品照：<product>。不重述外觀。 / 無參考商品照，畫面以
+   情境與人物為主，不畫商品特寫。) · `【受眾】<audience>；痛點：<pain>` · `【這則的訴求】切角：
+   <angle>——<說明>；標題公式：<hook>——<說明>` · `【可用字句（逐字，不得改）】` (the promotion
+   note's lines) · `【畫面】` (the model's three sentences) · `【圖上文字】大標：「…」；副標：「…」；
+   文字純色填滿，數字獨立成行` · `【輸出】<format label>（<format 說明>），一張`. Coordinate labels
+   and their descriptions come from the coordinate vocabulary the workbench already reads; the
+   format line's 說明 is that label's own `situation` text, so no platform spec is hard-coded in
+   the shell. A selected copy headline is an optional hint, never a constraint, so an image prompt
+   can run before any copy is selected.
+9. **Positive prompts only.** No prohibition lines anywhere in a generated prompt — no 禁止 line,
+   no 保留｜禁止 line, no 「未列出的…」 wording. The surviving guard is positive: 【圖上文字】 lists
+   every string that will appear on the image and that list is the whole of it; a number or claim
+   may only be a verbatim string from the brief's quotable text — the period's `promotion_note`
+   plus the compiled brand knowledge the prompt already carries. When there is none, the 可用字句
+   line is absent and no number may appear on the image; the machine check is that every digit run
+   in an on-image string occurs in that quotable text.
+10. **The style entry is photographic only.** `app/workbench/image_styles.json` holds `key`,
+    `label` and one `style_block` — the capture style (iPhone 原生抓拍、未修圖、輕微晃動模糊、雜亂
+    背景、不均勻光線、文字純色填滿, plus 東亞日常面孔、非廣告選角). Who appears in the picture is
+    derived from the node's `audience` coordinate, never baked into the style. The 商品 line is
+    conditional and product-scoped: 見參考商品照 only when the brief has a `product_id` and that
+    product has an `official_asset` row of kind `product_photo`.
+11. **In-site image generation is a reserved port, not a feature.** `app/workbench/image_port.py`
+    is one module with one stub: no provider, no key, no cost, no billing, no automation. It
+    reports 未接上 and the API repeats that, so the 圖片 tab defaults to the prompt view.
+    「顯示提示詞」 is a permanent toggle, not a fallback: the same version cards render as
+    plain-text prompt cards (① 主圖／② 變體) with a copy button each plus 「複製全部」. When a
+    provider is connected the image view is the same component fed by the port. 席位保留 is never
+    phrased as a refusal, and nothing in the product asks the user to run live ads to see a result.
+12. **Four screens, one IA.** 素材工作檯 (入口: search ＋ status pills ＋ pack cards ＋ 最近使用 ＋
+    快速開始) → 任務包 (pack-local left rail 總覽＋sets, 完成進度, 素材組進度 table, 摘要, 完成條件,
+    核准整包) → 素材組 (studio: tabs = that set's required product types in dispatch order, version
+    cards, 生成設定, 查看 Prompt, 完成此素材組) → 自由創作 (natural-language front door, two clicks:
+    解析 then 建立). 自由創作 creates a pack named 自由工作 #n through the same contract an upstream
+    uses, with 品牌 and 商品 both allowed to be 不指定. The 「AI 解析結果」 is **one real model
+    call** on the first click (never while typing): `POST /api/workbench/brands/{b}/parse` →
+    `free_parse.py` → `gateway.run_task` with an empty context and the department task file
+    `app/departments/workbench/free_parse.md` (no `app/methodology/**` change). It returns the spec
+    fields 專案主題／需要產出（含張數）／風格設定／投放平台／尺寸／目標受眾／主要訴求, and the
+    second click submits them as `required_outputs`. A failed, timed-out or unparseable call is
+    never a dead end: it returns the caller's defaults with `parsed: false` and the user continues. Rails inside the workbench are pack-local or
+    set-local; the OS sidebar is untouched. The old `.workspace-split` workbench page (開始生成／
+    派工任務／工單 rail) is retired with this revision.
 
 ## 6. Verification
 
