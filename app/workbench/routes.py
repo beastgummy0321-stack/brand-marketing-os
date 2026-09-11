@@ -107,8 +107,10 @@ def create_free_pack(request: Request, brand_id: str, body: NewFreePackRequest):
 
 
 class CompletionRequest(BaseModel):
-    key: str
-    checked: bool
+    # 租戶界線先於欄位驗證（既有慣例）：全部給預設值，真正的驗證在下面的 handler／
+    # `repository.set_pack_completion()`。
+    key: str | None = None
+    checked: bool | None = None
 
 
 _COMPLETION_ERRORS = {
@@ -121,9 +123,11 @@ _COMPLETION_ERRORS = {
 def set_pack_completion(request: Request, brand_id: str, pack_id: str, body: CompletionRequest):
     actor = web.require_actor(request)
     web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
+    if body.checked is None:
+        raise web.ApiError(400, "checked_invalid", "請指定要勾選或取消。")
     try:
         pack = repository.set_pack_completion(
-            web.conn, actor.org_id, brand_id, pack_id, body.key, body.checked,
+            web.conn, actor.org_id, brand_id, pack_id, body.key or "", body.checked,
         )
     except ValueError as exc:
         raise _error(exc, _COMPLETION_ERRORS) from exc
@@ -159,7 +163,8 @@ def close_pack(request: Request, brand_id: str, pack_id: str):
 
 
 class ParseFreeTextRequest(BaseModel):
-    free_text: str
+    # 租戶界線先於欄位驗證（既有慣例）：全部給預設值，真正的驗證在下面的 handler。
+    free_text: str | None = None
     defaults: dict = {}
 
 
