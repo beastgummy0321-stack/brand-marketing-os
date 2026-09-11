@@ -1073,6 +1073,57 @@ def _generation_settings(part: str, request_json: dict | None) -> dict:
     return {}
 
 
+def _generation_settings_rows(
+    conn, brand_id: str, brief: dict, chips: dict,
+    image_prompt_versions: list, pack_row: dict,
+) -> list:
+    """§5.13: 素材組 studio 的右欄「生成設定」——always these seven `{label, text}` rows,
+    in this order, `—` for anything empty. A read-only mirror of what already produced the
+    current prompts, never a second query for values not already on hand.
+
+    `conn` left untyped (same as `submit_brief` above): `bi_repo.get_product()` wants a
+    `Conn`, callers here pass `web.conn` (`ConnProxy`) — pyright would flag `_AnyConn`."""
+    brand = bi_repo.get_brand(conn, brand_id)
+    brand_name = brand["name"] if brand else "—"
+    product_id = brief.get("product_id")
+    product = bi_repo.get_product(conn, brand_id, product_id) if product_id else None
+    product_name = product["name"] if product else "不指定"
+
+    hero = None
+    if image_prompt_versions:
+        # `_slice_body()` returns `body_json` unchanged for parts other than
+        # copy/video_script, so `versions[0]["body"]` here already *is* the round's raw reply.
+        latest_body = image_prompt_versions[0].get("body")
+        if isinstance(latest_body, dict) and isinstance(latest_body.get("hero"), dict):
+            hero = latest_body["hero"]
+    person = hero.get("person") if hero else None
+    scene = hero.get("scene") if hero else None
+    if not isinstance(person, str) or not person:
+        person = None
+    if not isinstance(scene, str) or not scene:
+        scene = None
+
+    summary = pack_row["summary_json"] or {}
+    key_message = summary.get("重點訊息") if isinstance(summary, dict) else None
+    key_message_text = None
+    if isinstance(key_message, str) and key_message:
+        lines = [line.strip() for line in key_message.split("\n") if line.strip()]
+        key_message_text = "；".join(lines) if lines else None
+
+    def _text(value) -> str:
+        return value if isinstance(value, str) and value else "—"
+
+    return [
+        {"label": "品牌／商品", "text": f"{brand_name} · {product_name}"},
+        {"label": "平台", "text": _text(chips.get("platform"))},
+        {"label": "尺寸", "text": _text(chips.get("size"))},
+        {"label": "風格", "text": _text(chips.get("style"))},
+        {"label": "人物", "text": _text(person)},
+        {"label": "場景", "text": _text(scene)},
+        {"label": "主要訊息", "text": _text(key_message_text)},
+    ]
+
+
 def set_detail(conn: _AnyConn, org_id: str, brand_id: str, set_id: str) -> dict | None:
     """`GET /sets/{s}`. `image_generation.connected` reads `image_port.connected()` — always
     `False` today, the port is reserved, not filled (§5.11); `image_generation.reason` carries
@@ -1116,15 +1167,20 @@ def set_detail(conn: _AnyConn, org_id: str, brand_id: str, set_id: str) -> dict 
         }
         for part in required_parts
     }
+    chips = {
+        "platform": pack_row["context_json"].get("platform")
+        if pack_row["context_json"] else None,
+        "style": style["label"] if style else brief["style_key"],
+        "size": coordinates.get("format"),
+    }
     return {
         "id": brief["id"], "pack_id": pack_row["id"], "pack_name": pack_row["name"],
         "name": brief["name"], "status": set_state(required_outputs, versions_by_part),
-        "chips": {
-            "platform": pack_row["context_json"].get("platform")
-            if pack_row["context_json"] else None,
-            "style": style["label"] if style else brief["style_key"],
-            "size": coordinates.get("format"),
-        },
+        "chips": chips,
+        "generation_settings": _generation_settings_rows(
+            conn, brand_id, brief, chips,
+            (products.get("image_prompt") or {}).get("versions") or [], pack_row,
+        ),
         "siblings": siblings, "required_parts": required_parts, "products": products,
         "image_generation": {
             "connected": image_port.connected(),
