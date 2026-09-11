@@ -409,6 +409,20 @@ in `.work/features/F02.md`; where a prototype and an image differ, the image win
     never a dead end: it returns the caller's defaults with `parsed: false` and the user continues. Rails inside the workbench are pack-local or
     set-local; the OS sidebar is untouched. The old `.workspace-split` workbench page (開始生成／
     派工任務／工單 rail) is retired with this revision.
+13. **The 生成設定 table is shipped as text, like `cells[].text`.** `SetDetail.generation_settings`
+    is a backend-derived **ordered list of `{label, text}`** — 品牌／商品, 平台, 尺寸, 風格, 人物,
+    場景, 主要訊息 — and the 圖片 tab's right column renders it verbatim, row by row, with no
+    per-label branch in the browser (§5.3's rule: text the user reads is produced once, by the side
+    that owns the rule). Every row is always present; a row with nothing to say reads 「—」, and the
+    商品 half of row 1 reads 「不指定」 when the set has no `product_id`. Sources: brand and product
+    names from `brand`／`product` via the set's `product_id`; 平台／尺寸／風格 are the same three
+    values as `chips`; 人物 and 場景 are the **latest image-prompt round's structured reply**
+    `body_json["hero"]["person"]／["scene"]` (the model's fields, §5.8 — not the rendered prompt
+    string, and absent in 探索模式, which is a 「—」); 主要訊息 is the pack summary's 重點訊息. It is
+    a **read-only mirror of what produced the current prompts**, never an input form and never a
+    second endpoint fetch. `SetDetail.products[<part>].generation_settings` is a different field
+    with a different shape (the per-product run parameters `copy_length`／`count`) and keeps its
+    meaning; the table is the top-level one.
 
 ## 6. Verification
 
