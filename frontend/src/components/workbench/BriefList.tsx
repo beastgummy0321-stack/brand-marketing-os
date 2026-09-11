@@ -121,7 +121,7 @@ export function BriefList({
   const adoptedBriefs = briefs.filter((b) => Object.values(b.parts).some((p) => p.adopted_round !== null));
 
   return (
-    <nav className="workspace-subnav" aria-label="工作項目">
+    <nav className="workspace-subnav max-h-[calc(100vh-112px)]" aria-label="工作項目">
       <p className="nav-group-label">開始生成</p>
       {(Object.keys(PART_LABELS) as BriefPart[]).map((part) => (
         <button
@@ -135,79 +135,83 @@ export function BriefList({
       ))}
 
       <p className="nav-group-label">派工任務</p>
-      {status === "loading" && (
-        <div className="flex flex-col gap-2 p-2">
-          <Skeleton className="h-14" />
-        </div>
-      )}
-      {status === "error" && (
-        <div className="p-2">
-          <EmptyState
-            title="讀取失敗"
-            description={errorMessage ?? "請稍後再試。"}
-            onAction={onReload}
-            actionLabel="重新載入"
-          />
-        </div>
-      )}
-      {status === "ready" && (
-        <>
-          <SourceGroup
-            label={SOURCE_LABELS.schedule}
-            briefs={scheduleBriefs}
-            selectedId={selectedId}
-            onSelectBrief={onSelectBrief}
-          />
-          {/* 網站／品牌內容還沒有對應的 source_kind（票面 §1），永遠是空狀態；分組先在
-              左欄佔位，等後端有了來源就自然接得上。 */}
-          <SourceGroup label={SOURCE_LABELS.website} briefs={[]} selectedId={selectedId} onSelectBrief={onSelectBrief} />
-          <SourceGroup
-            label={SOURCE_LABELS.brandContent}
-            briefs={[]}
-            selectedId={selectedId}
-            onSelectBrief={onSelectBrief}
-          />
-        </>
-      )}
+      <div className="flex min-h-0 flex-col gap-1 overflow-y-auto">
+        {status === "loading" && (
+          <div className="flex flex-col gap-2 p-2">
+            <Skeleton className="h-14" />
+          </div>
+        )}
+        {status === "error" && (
+          <div className="p-2">
+            <EmptyState
+              title="讀取失敗"
+              description={errorMessage ?? "請稍後再試。"}
+              onAction={onReload}
+              actionLabel="重新載入"
+            />
+          </div>
+        )}
+        {status === "ready" && (
+          <>
+            <SourceGroup
+              label={SOURCE_LABELS.schedule}
+              briefs={scheduleBriefs}
+              selectedId={selectedId}
+              onSelectBrief={onSelectBrief}
+            />
+            {/* 網站／品牌內容還沒有對應的 source_kind（票面 §1），永遠是空狀態；分組先在
+                左欄佔位，等後端有了來源就自然接得上。 */}
+            <SourceGroup label={SOURCE_LABELS.website} briefs={[]} selectedId={selectedId} onSelectBrief={onSelectBrief} />
+            <SourceGroup
+              label={SOURCE_LABELS.brandContent}
+              briefs={[]}
+              selectedId={selectedId}
+              onSelectBrief={onSelectBrief}
+            />
+          </>
+        )}
+      </div>
 
       <p className="nav-group-label">工單</p>
-      {status === "ready" && (
-        <>
-          <p className="px-3 pt-2 text-xs font-medium text-muted-foreground">全部</p>
-          {briefs.length === 0 ? (
-            <p className="px-3 pb-1 text-xs text-muted-foreground">{WORK_ORDER_EMPTY}</p>
-          ) : (
-            <>
-              {openBriefs.map((b) => (
+      <div className="flex min-h-0 flex-col gap-1 overflow-y-auto">
+        {status === "ready" && (
+          <>
+            <p className="px-3 pt-2 text-xs font-medium text-muted-foreground">全部</p>
+            {briefs.length === 0 ? (
+              <p className="px-3 pb-1 text-xs text-muted-foreground">{WORK_ORDER_EMPTY}</p>
+            ) : (
+              <>
+                {openBriefs.map((b) => (
+                  <BriefRow key={b.id} brief={b} selected={selectedId === b.id} onSelect={() => onSelectBrief(b.id)} />
+                ))}
+                {closedBriefs.length > 0 && (
+                  <details>
+                    <summary className="cursor-pointer px-3 py-2 text-xs text-muted-foreground">已關閉</summary>
+                    <div className="flex flex-col gap-1 pl-2">
+                      {closedBriefs.map((b) => (
+                        <BriefRow
+                          key={b.id}
+                          brief={b}
+                          selected={selectedId === b.id}
+                          onSelect={() => onSelectBrief(b.id)}
+                        />
+                      ))}
+                    </div>
+                  </details>
+                )}
+              </>
+            )}
+            <p className="px-3 pt-2 text-xs font-medium text-muted-foreground">已採用</p>
+            {adoptedBriefs.length === 0 ? (
+              <p className="px-3 pb-1 text-xs text-muted-foreground">{WORK_ORDER_EMPTY}</p>
+            ) : (
+              adoptedBriefs.map((b) => (
                 <BriefRow key={b.id} brief={b} selected={selectedId === b.id} onSelect={() => onSelectBrief(b.id)} />
-              ))}
-              {closedBriefs.length > 0 && (
-                <details>
-                  <summary className="cursor-pointer px-3 py-2 text-xs text-muted-foreground">已關閉</summary>
-                  <div className="flex flex-col gap-1 pl-2">
-                    {closedBriefs.map((b) => (
-                      <BriefRow
-                        key={b.id}
-                        brief={b}
-                        selected={selectedId === b.id}
-                        onSelect={() => onSelectBrief(b.id)}
-                      />
-                    ))}
-                  </div>
-                </details>
-              )}
-            </>
-          )}
-          <p className="px-3 pt-2 text-xs font-medium text-muted-foreground">已採用</p>
-          {adoptedBriefs.length === 0 ? (
-            <p className="px-3 pb-1 text-xs text-muted-foreground">{WORK_ORDER_EMPTY}</p>
-          ) : (
-            adoptedBriefs.map((b) => (
-              <BriefRow key={b.id} brief={b} selected={selectedId === b.id} onSelect={() => onSelectBrief(b.id)} />
-            ))
-          )}
-        </>
-      )}
+              ))
+            )}
+          </>
+        )}
+      </div>
     </nav>
   );
 }
