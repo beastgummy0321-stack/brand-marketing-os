@@ -12,17 +12,18 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/workbenchApi", async () => {
   const actual = await vi.importActual<typeof import("@/lib/workbenchApi")>("@/lib/workbenchApi");
-  return { ...actual, getSet: vi.fn() };
+  return { ...actual, getSet: vi.fn(), runProduct: vi.fn() };
 });
 vi.mock("@/components/layout/WorkspaceContext", () => ({
   useWorkspace: () => ({ brands: [{ brand_id: "brd_1", brand_name: "測試品牌" }] }),
 }));
 
 import type { SetDetail } from "@/lib/workbenchApi";
-import { getSet } from "@/lib/workbenchApi";
+import { getSet, runProduct } from "@/lib/workbenchApi";
 import { SetStudioPage } from "./SetStudioPage";
 
 const mockGetSet = vi.mocked(getSet);
+const mockRunProduct = vi.mocked(runProduct);
 
 afterEach(() => {
   vi.clearAllMocks();
@@ -63,6 +64,8 @@ function setDetail(overrides: Partial<SetDetail> = {}): SetDetail {
     },
     generation_settings: [],
     image_generation: { connected: true, reason: RESERVED_SEAT_REASON },
+    source_kind: "free_job",
+    lock: { locked: false, reason: null },
     ...overrides,
   };
 }
@@ -120,5 +123,79 @@ describe("SetStudioPage 圖片 tab（F02-I13）", () => {
 
     await waitFor(() => expect(screen.getByText("還沒有生成過")).toBeTruthy());
     expect(screen.queryByText("①主圖")).toBeNull();
+  });
+});
+
+const LOCK_REASON = "測試用鎖定理由，不是元件裡打死的字串";
+
+describe("SetStudioPage 四個控制（F02-I17）", () => {
+  it("已核准（schedule_node + locked）：顯示到檔期規劃連結、顯示鎖定理由、選定按鈕全部停用", async () => {
+    mockGetSet.mockResolvedValue(
+      setDetail({ source_kind: "schedule_node", lock: { locked: true, reason: LOCK_REASON } }),
+    );
+    renderStudio();
+
+    const link = await screen.findByRole("link", { name: /到檔期規劃/ });
+    expect(link.getAttribute("href")).toBe("/brands/brd_1/schedule");
+    expect(screen.getByText(LOCK_REASON)).toBeTruthy();
+    expect(
+      (screen.getByRole("button", { name: "選定" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+  });
+
+  it("未核准（free_job + unlocked）：不顯示到檔期規劃連結、按鈕可點", async () => {
+    mockGetSet.mockResolvedValue(
+      setDetail({ source_kind: "free_job", lock: { locked: false, reason: null } }),
+    );
+    renderStudio();
+
+    await screen.findByRole("button", { name: "選定" });
+    expect(screen.queryByRole("link", { name: /到檔期規劃/ })).toBeNull();
+    expect(
+      (screen.getByRole("button", { name: "選定" }) as HTMLButtonElement).disabled,
+    ).toBe(false);
+  });
+
+  it("相似版本：用該版本產出的數量呼叫 runProduct 一次", async () => {
+    mockRunProduct.mockResolvedValue(setDetail());
+    mockGetSet.mockResolvedValue(
+      setDetail({
+        products: {
+          image_prompt: {
+            state: "未生成",
+            selected: 0,
+            required: 1,
+            generation_settings: { count: 6 },
+            versions: [
+              {
+                id: "ver_1",
+                version_index: 1,
+                generation_round: 1,
+                selected_at: null,
+                body: null,
+                prompt_cards: [{ label: "①主圖", text: "文字" }],
+              },
+            ],
+          },
+        },
+      }),
+    );
+    renderStudio();
+
+    const similarButton = await screen.findByRole("button", { name: "相似版本" });
+    await userEvent.click(similarButton);
+
+    expect(mockRunProduct).toHaveBeenCalledTimes(1);
+    expect(mockRunProduct).toHaveBeenCalledWith("brd_1", "set_1", "image_prompt", 6);
+  });
+
+  it("修改需求：切到精準控制，出現產出數量輸入框", async () => {
+    mockGetSet.mockResolvedValue(setDetail());
+    renderStudio();
+
+    const editButton = await screen.findByRole("button", { name: "修改需求" });
+    expect(screen.queryByLabelText("產出數量")).toBeNull();
+    await userEvent.click(editButton);
+    expect(screen.getByLabelText("產出數量")).toBeTruthy();
   });
 });

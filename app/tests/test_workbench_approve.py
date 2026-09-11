@@ -171,5 +171,50 @@ class PackForSourceApprovalTest(_WorkbenchApproveTestBase):
         self.assertIsNone(other_org)
 
 
+# -- 案例 4：F02-I17，`GET /sets/{s}` 的 `source_kind`／`lock` ------------------------------
+
+class SetDetailSourceKindAndLockTest(_WorkbenchApproveTestBase):
+    def test_set_detail_reports_source_kind_and_lock(self):
+        pack_id = self._submit_pack([self._one_set("1", {"copy": 1})])
+        brief = self._briefs(pack_id)[0]
+
+        before = self.client.get(
+            f"/api/workbench/brands/{self.brand_id}/sets/{brief['id']}"
+        ).json()["set"]
+        self.assertEqual(before["source_kind"], "schedule_node")
+        self.assertFalse(before["lock"]["locked"])
+        self.assertIsNone(before["lock"]["reason"])
+
+        self._tick(pack_id, "brand_rules_checked", True)
+        self._tick(pack_id, "ready_to_report", True)
+        # copy 沒有選定版本也可以核准——這個案例只在乎鎖定訊號，不是完成條件。
+        self._tick(pack_id, "required_outputs_met", True)
+        self.assertEqual(self._approve(pack_id).status_code, 200)
+
+        after = self.client.get(
+            f"/api/workbench/brands/{self.brand_id}/sets/{brief['id']}"
+        ).json()["set"]
+        self.assertTrue(after["lock"]["locked"])
+        self.assertEqual(after["lock"]["reason"], workbench_repo.PACK_APPROVED_MESSAGE)
+
+    def test_free_job_set_reports_free_job_source_kind(self):
+        pack = self.client.post(
+            f"/api/workbench/brands/{self.brand_id}/packs",
+            json={
+                "name": "自由工作測試", "free_text": "測試",
+                "sets": [{
+                    "name": "唯一素材組", "coordinates": {}, "style_key": "ugc",
+                    "required_outputs": {"copy": 1}, "request": {"copy_length": "short"},
+                }],
+                "summary": {},
+            },
+        ).json()["pack"]
+        brief = self._briefs(pack["id"])[0]
+        detail = self.client.get(
+            f"/api/workbench/brands/{self.brand_id}/sets/{brief['id']}"
+        ).json()["set"]
+        self.assertEqual(detail["source_kind"], "free_job")
+
+
 if __name__ == "__main__":
     unittest.main()
