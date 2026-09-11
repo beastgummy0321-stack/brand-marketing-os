@@ -84,6 +84,7 @@ class NewFreePackRequest(BaseModel):
     style_key: str | None = None
     sets: list[dict] = []
     summary: dict = {}
+    context: dict = {}
 
 
 _CREATE_FREE_PACK_ERRORS = {

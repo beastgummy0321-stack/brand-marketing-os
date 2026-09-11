@@ -49,4 +49,14 @@ describe("specToCreateBody（F02-I10 唯一的分支邏輯）", () => {
     expect(body.sets[0].required_outputs).toEqual({ image_prompt: 5, copy: 1 });
     expect(body.product_id).toBe("prod_1");
   });
+
+  it("platform 有值：進 context.platform（F02-I18）", () => {
+    const body = specToCreateBody(spec({ platform: "Meta" }), { text: "夜跑廣告", productId: null });
+    expect(body.context?.platform).toBe("Meta");
+  });
+
+  it("platform 是 null：不送 context.platform 這個鍵", () => {
+    const body = specToCreateBody(spec({ platform: null }), { text: "夜跑廣告", productId: null });
+    expect(body.context).not.toHaveProperty("platform");
+  });
 });

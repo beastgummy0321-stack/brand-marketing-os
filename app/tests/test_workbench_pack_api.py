@@ -283,6 +283,27 @@ class CreateFreePackTest(_WorkbenchPackApiTestBase):
         self.assertEqual(resp.status_code, 400)
         self.assertEqual(resp.json()["error"]["code"], "part_retired")
 
+    def test_context_platform_is_written_and_read_by_both_screens(self):
+        """F02-I18 falsifier: `POST /packs` with `context.platform` reaches `PackDetail.meta.
+        platform` and, through the set's `chips.platform`, the 生成設定 平台 row's `text` —
+        both readers of the one field nobody used to write."""
+        created = self.client.post(
+            f"/api/workbench/brands/{self.brand_id}/packs",
+            json=self._body(context={"platform": "Meta 廣告"}),
+        )
+        self.assertEqual(created.status_code, 201)
+        pack_id = created.json()["pack"]["id"]
+
+        pack_resp = self.client.get(f"/api/workbench/brands/{self.brand_id}/packs/{pack_id}")
+        self.assertEqual(pack_resp.json()["pack"]["meta"]["platform"], "Meta 廣告")
+
+        set_id = pack_resp.json()["pack"]["sets"][0]["id"]
+        set_resp = self.client.get(f"/api/workbench/brands/{self.brand_id}/sets/{set_id}")
+        set_data = set_resp.json()["set"]
+        self.assertEqual(set_data["chips"]["platform"], "Meta 廣告")
+        settings = {row["label"]: row["text"] for row in set_data["generation_settings"]}
+        self.assertEqual(settings["平台"], "Meta 廣告")
+
 
 # -- 案例 6：一份剛送出的 pack，還沒生成任何版本 -> cell 讀「未生成」 ----------------------------
 
