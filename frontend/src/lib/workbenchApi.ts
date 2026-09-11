@@ -263,7 +263,8 @@ export async function parseFreeText(
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ free_text: freeText, defaults }),
   });
-  return parseJsonOrThrow<FreeParseResult>(res, "AI 解析失敗，請稍後再試。");
+  const data = await parseJsonOrThrow<{ parse: FreeParseResult }>(res, "AI 解析失敗，請稍後再試。");
+  return data.parse;
 }
 
 export async function createFreePack(
