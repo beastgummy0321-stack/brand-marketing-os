@@ -1,10 +1,10 @@
-"""app/tests/test_workbench_parts.py — F01-T01-I01: `request_json.parts` is the single
-authority for what a brief asks for; `workbench_brief.kind` is derived for display only
-(ARCHITECTURE.md §5.4). Workbench-only fixture (`workbench.may_depend_on` is `[]` — no
-`app.schedule` import, see the issue's own note on why `schedule_module.register_tasks()`
-and `ensure_coordinates_seeded()` are both unnecessary here: briefs are submitted with
-`"coordinates": {}` and `source_ref: {}`, and every case here is pure route validation or a
-manual `status` UPDATE, never a coordinate read).
+"""app/tests/test_workbench_parts.py — F02-I15: the brief-shaped `POST /briefs` route this
+file used to exercise was removed by F02-I03 (`app/workbench/routes.py`); `kind` derivation
+and the `parts_unknown` cases moved to (or were already proven at) `test_workbench_pack.py`
+and `test_workbench_pack_api.py`. What remains is the **dispatch contract**
+(`submit_pack` -> `request_json.parts` -> one job per required 產物類型) and the two
+request-level validations that live nowhere else: `copy_length_unknown`, and that an
+image-prompt round may run before any copy is selected (ARCHITECTURE.md §5.8).
 """
 
 import unittest
@@ -17,6 +17,7 @@ import app.shared.web as web
 import app.workbench as workbench_module
 from app.brand_intelligence import repository as bi_repo
 from app.core import db as coredb
+from app.workbench import repository as workbench_repo
 
 ACTOR = "測試員"
 
@@ -31,107 +32,86 @@ class _WorkbenchPartsTestBase(unittest.TestCase):
             actor=ACTOR,
         )
         self.brand_id = self.brand["id"]
-        self.product = bi_repo.create_product(
-            web.conn, self.brand_id, name="測試產品：parts 合約", actor=ACTOR,
-        )
         web.conn.commit()
 
-    def _new_brief_body(self, **overrides) -> dict:
-        body = {
-            "product_id": self.product["id"], "coordinates": None,
-            "visual_tone": None, "visual_concept": None, "style_key": "ugc",
-            "request": {"parts": ["copy"]},
+    def _submit_pack(self, sets: list, **overrides) -> str:
+        pack = {
+            "source_kind": "schedule_node", "source_ref": {"source_tree_task_id": "tree_1"},
+            "name": "測試任務包", "summary": {"情境": "測試"}, "sets": sets,
         }
-        body.update(overrides)
-        return body
+        pack.update(overrides)
+        return workbench_repo.submit_pack(web.conn, self.org_id, self.brand_id, pack)
 
-    def _create(self, **overrides):
-        return self.client.post(
-            f"/api/workbench/brands/{self.brand_id}/briefs",
-            json=self._new_brief_body(**overrides),
-        )
+    def _one_set(self, node_key: str, required_outputs: dict, **request_overrides) -> dict:
+        request = {"copy_length": "short", "image_prompt_count": 3}
+        request.update(request_overrides)
+        return {
+            "name": f"單元 {node_key}", "source_ref": {"node_key": node_key},
+            "coordinates": {}, "style_key": "ugc", "required_outputs": required_outputs,
+            "request": request,
+        }
 
-
-# -- 多個 part -> kind='ad_creative'，每個 part 各自排一個 job -----------------------------
-
-class MultiPartDerivesAdCreativeTest(_WorkbenchPartsTestBase):
-    def test_two_parts_derive_ad_creative_and_enqueue_both(self):
-        resp = self._create(request={
-            "parts": ["copy", "image_prompt"], "image_prompt_count": 3,
-        })
-        self.assertEqual(resp.status_code, 201)
-        brief = resp.json()["brief"]
-        self.assertEqual(brief["kind"], "ad_creative")
-        brief_id = brief["id"]
-        self.assertTrue(background_module.is_active(f"workbench:{brief_id}:copy"))
-        self.assertTrue(background_module.is_active(f"workbench:{brief_id}:image_prompt"))
+    def _briefs(self, pack_id: str) -> list:
+        rows = web.conn.execute(
+            "SELECT * FROM workbench_brief WHERE org_id = %s AND brand_id = %s"
+            " AND pack_id = %s ORDER BY created_at",
+            (self.org_id, self.brand_id, pack_id),
+        ).fetchall()
+        return [dict(r) for r in rows]
 
 
-# -- 單一 part -> kind 就是那個 part 名 -----------------------------------------------------
+# -- 案例 1：dispatch 跟 required_outputs 的 key 一對一，每個 key 各自排一個 job --------------
 
-class SinglePartDerivesItsOwnKindTest(_WorkbenchPartsTestBase):
-    def test_video_script_only_derives_video_script_kind(self):
-        resp = self._create(request={"parts": ["video_script"], "video_script_count": 2})
-        self.assertEqual(resp.status_code, 201)
-        brief = resp.json()["brief"]
-        self.assertEqual(brief["kind"], "video_script")
-        self.assertTrue(
-            background_module.is_active(f"workbench:{brief['id']}:video_script")
-        )
-
-
-# -- parts_unknown／copy_length_unknown 是 400 ----------------------------------------------
-
-class PartsAndCopyLengthValidationTest(_WorkbenchPartsTestBase):
-    def test_missing_parts_is_parts_unknown(self):
-        resp = self._create(request={})
-        self.assertEqual(resp.status_code, 400)
-        self.assertEqual(resp.json()["error"]["code"], "parts_unknown")
-
-    def test_empty_parts_list_is_parts_unknown(self):
-        resp = self._create(request={"parts": []})
-        self.assertEqual(resp.status_code, 400)
-        self.assertEqual(resp.json()["error"]["code"], "parts_unknown")
-
-    def test_unknown_part_name_is_parts_unknown(self):
-        resp = self._create(request={"parts": ["copy", "typo_part"]})
-        self.assertEqual(resp.status_code, 400)
-        self.assertEqual(resp.json()["error"]["code"], "parts_unknown")
-
-    def test_unknown_copy_length_is_copy_length_unknown(self):
-        resp = self._create(request={"parts": ["copy"], "copy_length": "extra_long"})
-        self.assertEqual(resp.status_code, 400)
-        self.assertEqual(resp.json()["error"]["code"], "copy_length_unknown")
+class DispatchFollowsRequiredOutputsKeysTest(_WorkbenchPartsTestBase):
+    def test_two_required_parts_enqueue_both_jobs(self):
+        pack_id = self._submit_pack([
+            self._one_set("1", {"copy": 1, "image_prompt": 1}),
+        ])
+        brief = self._briefs(pack_id)[0]
+        self.assertEqual(brief["request_json"]["parts"], ["copy", "image_prompt"])
+        self.assertTrue(background_module.is_active(f"workbench:{brief['id']}:copy"))
+        self.assertTrue(background_module.is_active(f"workbench:{brief['id']}:image_prompt"))
 
 
-# -- run_part("image_prompt") on a copy-only brief with no adopted output enqueues, does not
-# -- raise, and never rewrites request_json.parts (it records what was requested, not what
-# -- was produced) --------------------------------------------------------------------------
+# -- 案例 2：copy_length_unknown 讓 submit_pack 整包不落 -------------------------------------
 
-class RunPartWithoutAdoptedCopyTest(_WorkbenchPartsTestBase):
-    def test_run_image_prompt_on_copy_only_brief_enqueues_and_leaves_parts_unchanged(self):
-        create_resp = self._create(request={"parts": ["copy"]})
-        self.assertEqual(create_resp.status_code, 201)
-        brief_id = create_resp.json()["brief"]["id"]
+class CopyLengthUnknownTest(_WorkbenchPartsTestBase):
+    def test_unknown_copy_length_raises(self):
+        with self.assertRaises(ValueError) as ctx:
+            self._submit_pack([
+                self._one_set("1", {"copy": 1}, copy_length="extra_long"),
+            ])
+        self.assertEqual(str(ctx.exception), "copy_length_unknown")
 
-        # 模擬「送出那一輪已經跑完」（比照 test_workbench_api.py 同名手法）——這裡只驗
-        # `run_part()` 本身的行為，不需要真的跑一輪 worker。
+
+# -- 案例 3：image_prompt 這一輪可以在還沒選定任何 copy 之前先跑 ------------------------------
+
+class RunImagePromptWithoutAdoptedCopyTest(_WorkbenchPartsTestBase):
+    def test_run_image_prompt_before_copy_selected_leaves_parts_unchanged(self):
+        pack_id = self._submit_pack([
+            self._one_set("1", {"copy": 1, "image_prompt": 1}),
+        ])
+        brief = self._briefs(pack_id)[0]
+        set_id = brief["id"]
+
+        # 模擬「送出那一輪已經跑完」——這裡只驗 `run_product()` 本身的行為，不需要真的
+        # 跑一輪 worker（比照舊測試手法）。
         web.conn.execute(
-            "UPDATE workbench_brief SET status = 'done' WHERE id = %s", (brief_id,)
+            "UPDATE workbench_brief SET status = 'done' WHERE id = %s", (set_id,)
         )
         web.conn.commit()
 
         run_resp = self.client.post(
-            f"/api/workbench/brands/{self.brand_id}/briefs/{brief_id}/parts/image_prompt/run",
+            f"/api/workbench/brands/{self.brand_id}/sets/{set_id}/products/image_prompt/run",
             json={"count": 2},
         )
         self.assertEqual(run_resp.status_code, 200)
-        self.assertTrue(background_module.is_active(f"workbench:{brief_id}:image_prompt"))
+        self.assertTrue(background_module.is_active(f"workbench:{set_id}:image_prompt"))
 
-        detail = self.client.get(
-            f"/api/workbench/brands/{self.brand_id}/briefs/{brief_id}"
-        ).json()["brief"]
-        self.assertEqual(detail["request"]["parts"], ["copy"])
+        row = web.conn.execute(
+            "SELECT request_json FROM workbench_brief WHERE id = %s", (set_id,)
+        ).fetchone()
+        self.assertEqual(row["request_json"]["parts"], ["copy", "image_prompt"])
 
 
 if __name__ == "__main__":
