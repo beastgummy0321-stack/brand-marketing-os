@@ -1,1 +1,1 @@
-export { WorkbenchPage } from "./WorkbenchPage";
+export { WorkbenchHomePage } from "./WorkbenchHomePage";

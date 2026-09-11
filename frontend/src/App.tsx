@@ -25,7 +25,7 @@ import { BrandReportPage } from "@/components/report/BrandReportPage";
 import { OrdersPage } from "@/components/orders/OrdersPage";
 import { SchedulePage } from "@/components/schedule/SchedulePage";
 import { SettingsPage } from "@/components/settings/SettingsPage";
-import { WorkbenchPage } from "@/components/workbench";
+import { WorkbenchHomePage } from "@/components/workbench";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   WorkspaceProvider,
@@ -257,12 +257,15 @@ function LibraryRoute() {
   );
 }
 
-/** 素材工作檯（S16，票 workbench/04，ADR 0068）：文案、圖片提示詞與腳本在這裡生成。 */
+/** 素材工作檯入口（F02-I07，`ARCHITECTURE.md` §5.1-§5.3）：任務包 → 素材組 → 產物 → 版本
+ * 四層 IA 的第一頁。`…/workbench/new`／`…/workbench/packs/:packId`／
+ * `…/workbench/packs/:packId/sets/:setId` 三條路由由 F02-I10／I08／I09 各自加上，
+ * 這支只加自己這一條（F02-I07 → I08 → I09 → I10 是一條鏈，同一批檔案不並行）。 */
 function WorkbenchRoute() {
   const { brandId } = useParams<{ brandId: string }>();
   return (
     <>
-      <WorkbenchPage brandId={brandId ?? ""} />
+      <WorkbenchHomePage brandId={brandId ?? ""} />
     </>
   );
 }
