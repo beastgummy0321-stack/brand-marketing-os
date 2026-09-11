@@ -17,7 +17,7 @@ from fastapi import APIRouter, Request
 from pydantic import BaseModel
 
 import app.shared.web as web
-from app.workbench import repository
+from app.workbench import free_parse, repository
 
 router = APIRouter(prefix="/api/workbench")
 
@@ -156,6 +156,27 @@ def close_pack(request: Request, brand_id: str, pack_id: str):
     except ValueError as exc:
         raise _error(exc, _PACK_UNKNOWN_ERRORS) from exc
     return {"pack": pack}
+
+
+class ParseFreeTextRequest(BaseModel):
+    free_text: str
+    defaults: dict = {}
+
+
+@router.post("/brands/{brand_id}/parse")
+def parse_free_text(request: Request, brand_id: str, body: ParseFreeTextRequest):
+    """F02-I06：自由創作「AI 解析結果」——使用者按「建立自由工作」時打的那**一次**
+    `gateway.run_task`。永不 500：失敗、逾時、非 JSON 或形狀不合都在 `free_parse.parse()`
+    內部回退成 `parsed: false` + 使用者填的 `defaults`，這裡沒有例外要接。"""
+    actor = web.require_actor(request)
+    web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
+    free_text = body.free_text or ""
+    if not free_text or len(free_text) > 1000:
+        raise web.ApiError(400, "free_text_invalid", "請輸入 1～1000 字的描述。")
+    parsed = free_parse.parse(
+        web.conn, brand_id=brand_id, free_text=free_text, defaults=body.defaults,
+    )
+    return {"parse": parsed}
 
 
 # -- 素材組（SetDetail）／產物／版本 -----------------------------------------------------
