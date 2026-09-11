@@ -1,95 +1,129 @@
-/** 素材工作檯 API 型別與呼叫（票 workbench/03）。對應 `app/workbench/routes.py`。
- * 錯誤處理跟 `scheduleApi.ts` 的 `createSchedulePlan`（307-340 行）同一個寫法：`apiFetch`
- * 之後檢查 `res.ok`，不行就試著解析 `{"error": {...}}` 信封餵給 `errorMessageFrom`，
- * 解不出來就用預設訊息——這裡把那段抽成 `parseJsonOrThrow`/`ensureOk` 兩個小工具，8 支
- * 呼叫共用，不是換一套錯誤處理方式。
- *
- * 這支檔案只是型別＋fetch，還沒有任何畫面 import 它（ticket 04 才會）——
- * `.dependency-cruiser.cjs` 的規則只管 `src/components/<功能>/`，`lib/` 不算功能資料夾，
- * 沒有新規則要顧。 */
+/** 素材工作檯 API 型別與呼叫（F02-I07，取代舊版 brief 形狀）。對應 `app/workbench/routes.py`
+ * F02-I03 之後的介面：任務包 → 素材組 → 產物 → 版本。錯誤處理沿用既有寫法：`apiFetch` 之後
+ * 檢查 `res.ok`，不行就試著解析 `{"error": {...}}` 信封餵給 `errorMessageFrom`，解不出來就用
+ * 預設訊息——`parseJsonOrThrow`/`ensureOk` 兩個小工具全部呼叫共用。 */
 import { apiFetch, errorMessageFrom } from "./http";
 
-export type WorkbenchBriefStatus = "active" | "closed" | "all";
+export type PackStatus = "pending" | "running" | "awaiting_approval" | "done";
+export type PackListStatus = "all" | PackStatus;
+export type PackSort = "updated" | "created" | "progress";
+export type ProductPart = "copy" | "image_prompt" | "video_script";
 
-/** CONSTITUTION.md 規則 5 的七個維度——這裡不生成、不驗證，照後端回什麼存什麼。 */
-export interface WorkbenchCoordinates {
-  audience?: string | null;
-  pain?: string | null;
-  angle?: string | null;
-  hook?: string | null;
-  proof?: string | null;
-  offer?: string | null;
-  format?: string | null;
+export interface PackNextStep {
+  set_id: string;
+  set_name: string;
+  part: ProductPart;
+  label: string;
 }
 
-export interface NewBriefRequest {
-  use_brand_knowledge: boolean;
-  free_text: string | null;
-  image_prompt_count: number | null;
-  video_script_count: number | null;
-  parts: string[];
-  copy_length: "short" | "medium" | "long";
+export interface PackCount {
+  part: ProductPart;
+  label: string;
+  selected: number;
+  required: number;
 }
 
-export interface NewBrief {
-  product_id: string | null;
-  style_key: string;
-  request: NewBriefRequest;
-}
-
-export interface WorkbenchPartSummary {
-  latest_round: number;
-  adopted_round: number | null;
-  running: boolean;
-}
-
-export interface BriefSummary {
+/** `GET /packs` 一張卡、`入口` 頁 pack 卡片與 list view 共用（`.work/tickets/F02-I07.md`
+ * "list = table rows...same data, no new fields"）。 */
+export interface PackCard {
   id: string;
-  kind: string;
+  name: string;
+  subtitle: string;
   source_kind: string;
-  source_ref: Record<string, unknown>;
-  product_id: string | null;
-  product_name: string | null;
-  style_key: string;
-  status: string;
-  last_error: string | null;
-  closed_at: string | null;
-  created_at: string;
-  parts: Record<string, WorkbenchPartSummary>;
+  source_label: string;
+  status: PackStatus;
+  sets_total: number;
+  sets_done: number;
+  progress_pct: number;
+  next_step: PackNextStep | null;
+  counts: PackCount[];
+  updated_at: string;
 }
 
-/** `image_prompt` 輸出的 `body_json.rendered` 形狀（`app/workbench/jobs.py::_render_image_prompt`）：
- * `variant` 模式回 `{hero, variant}`，`exploration` 模式回 `{exploration, variant}`——`mode` 那欄
- * 就是 `body_json.mode`，兩者一起決定卡片要顯示哪些複製鈕、順序為何（票 F01-T04-I02）。 */
-export interface ImagePromptRenderedVariant {
-  hero: string;
-  variant: string;
+export interface PackCompletionItem {
+  key: string;
+  label: string;
+  ok: boolean;
+  overridden: boolean;
 }
 
-export interface ImagePromptRenderedExploration {
-  exploration: string;
-  variant: string;
+export interface PackSetCell {
+  part: ProductPart;
+  label: string;
+  state: string;
+  selected: number;
+  required: number | null;
+  text: string;
 }
 
-export type ImagePromptRendered = ImagePromptRenderedVariant | ImagePromptRenderedExploration;
-
-export interface WorkbenchOutput {
+export interface PackSetRow {
   id: string;
-  part: string;
-  generation_round: number;
-  adopted_at: string | null;
-  body_json: Record<string, unknown>;
-  coordinates_json: Record<string, unknown> | null;
-  llm_task_id: string | null;
-  created_at: string;
+  name: string;
+  status: string;
+  cells: PackSetCell[];
 }
 
-export interface BriefDetail extends BriefSummary {
-  coordinates: WorkbenchCoordinates | null;
-  visual_tone: string | null;
-  visual_concept: string | null;
-  request: NewBriefRequest;
-  outputs: WorkbenchOutput[];
+export interface PackDetail extends PackCard {
+  created_at: string;
+  source_ref: Record<string, unknown>;
+  meta: { platform: string | null; goal: string | null; sets_required: number };
+  summary: Partial<{
+    situation: string;
+    angle: string;
+    style: string;
+    audience: string;
+    key_messages: string;
+    reference_link: string;
+  }>;
+  completion: PackCompletionItem[];
+  can_approve: boolean;
+  blocking_text: string;
+  sets: PackSetRow[];
+}
+
+export interface VersionBody {
+  body?: unknown;
+  headline?: unknown;
+  description?: unknown;
+  validation?: unknown;
+  warnings?: unknown;
+  [key: string]: unknown;
+}
+
+export interface ProductVersion {
+  id: string;
+  version_index: number;
+  generation_round: number;
+  selected_at: string | null;
+  body: VersionBody | null;
+}
+
+export interface SetProduct {
+  state: string;
+  selected: number;
+  required: number;
+  generation_settings: Record<string, unknown>;
+  versions: ProductVersion[];
+}
+
+export interface SetSibling {
+  id: string;
+  name: string;
+  angle: string | null;
+  status: string;
+}
+
+export interface SetDetail {
+  id: string;
+  pack_id: string;
+  pack_name: string;
+  name: string;
+  status: string;
+  chips: { platform: string | null; style: string; size: string | null };
+  siblings: SetSibling[];
+  required_parts: ProductPart[];
+  products: Partial<Record<ProductPart, SetProduct>>;
+  image_generation: { connected: boolean; reason: string };
 }
 
 export interface ImageStyle {
@@ -98,10 +132,30 @@ export interface ImageStyle {
   style_block: string;
 }
 
+export interface FreePackSetInput {
+  name?: string;
+  source_ref?: Record<string, unknown>;
+  coordinates?: Record<string, unknown>;
+  product_id?: string | null;
+  style_key?: string;
+  required_outputs: Partial<Record<ProductPart, number>>;
+  request?: Record<string, unknown>;
+}
+
+export interface NewFreePackRequest {
+  name?: string | null;
+  free_text?: string | null;
+  product_id?: string | null;
+  style_key?: string | null;
+  sets: FreePackSetInput[];
+  summary?: Record<string, unknown>;
+}
+
 /** 三個固定長度的「什麼時候用」一句話——設計系統 §8：前端文案，不生成、不落地
- * （契約頁「Module-local」段）。工作檯（ticket 04）跟排程（ticket 05）兩個 feature
- * 資料夾都要顯示這句話，彼此不 import，所以放在 `lib/` 這個兩邊都能拿的地方，各自
- * 從這裡 import 一份，不是各自寫死一份。 */
+ * （契約頁「Module-local」段）。工作檯與排程兩個 feature 資料夾都要顯示這句話，彼此不
+ * import，所以放在 `lib/` 這個兩邊都能拿的地方，各自從這裡 import 一份，不是各自寫死一份。
+ * `components/schedule/CreativePackList.tsx:6` 是它們僅存的呼叫端——F02 不動那支檔案，
+ * 所以這兩個常數留在這裡（F02-I07 Done）。 */
 export const LENGTH_HINTS = {
   short: "折疊前一口氣講完，適合再行銷、已認識品牌的人",
   medium: "痛點→證明→優惠，適合第一次看到你的人",
@@ -135,43 +189,94 @@ export async function fetchStyles(): Promise<ImageStyle[]> {
   return data.styles;
 }
 
-export async function fetchBriefs(
+export async function listPacks(
   brandId: string,
-  status: WorkbenchBriefStatus = "active",
-): Promise<BriefSummary[]> {
+  opts: { status?: PackListStatus; q?: string; sort?: PackSort } = {},
+): Promise<PackCard[]> {
+  const params = new URLSearchParams();
+  params.set("status", opts.status ?? "all");
+  if (opts.q) params.set("q", opts.q);
+  params.set("sort", opts.sort ?? "updated");
   const res = await apiFetch(
-    `${BASE}/brands/${encodeURIComponent(brandId)}/briefs?status=${encodeURIComponent(status)}`,
+    `${BASE}/brands/${encodeURIComponent(brandId)}/packs?${params.toString()}`,
   );
-  const data = await parseJsonOrThrow<{ briefs: BriefSummary[] }>(res, "讀取工單清單失敗。");
-  return data.briefs;
+  const data = await parseJsonOrThrow<{ packs: PackCard[] }>(res, "讀取任務包清單失敗。");
+  return data.packs;
 }
 
-export async function createBrief(brandId: string, input: NewBrief): Promise<BriefDetail> {
-  const res = await apiFetch(`${BASE}/brands/${encodeURIComponent(brandId)}/briefs`, {
+export async function getPack(brandId: string, packId: string): Promise<PackDetail> {
+  const res = await apiFetch(
+    `${BASE}/brands/${encodeURIComponent(brandId)}/packs/${encodeURIComponent(packId)}`,
+  );
+  const data = await parseJsonOrThrow<{ pack: PackDetail }>(res, "讀取任務包失敗。");
+  return data.pack;
+}
+
+export async function createFreePack(
+  brandId: string,
+  input: NewFreePackRequest,
+): Promise<PackDetail> {
+  const res = await apiFetch(`${BASE}/brands/${encodeURIComponent(brandId)}/packs`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(input),
   });
-  const data = await parseJsonOrThrow<{ brief: BriefDetail }>(res, "建立工單失敗。");
-  return data.brief;
+  const data = await parseJsonOrThrow<{ pack: PackDetail }>(res, "建立自由創作失敗。");
+  return data.pack;
 }
 
-export async function fetchBrief(brandId: string, id: string): Promise<BriefDetail> {
-  const res = await apiFetch(
-    `${BASE}/brands/${encodeURIComponent(brandId)}/briefs/${encodeURIComponent(id)}`,
-  );
-  const data = await parseJsonOrThrow<{ brief: BriefDetail }>(res, "讀取工單失敗。");
-  return data.brief;
-}
-
-export async function runPart(
+export async function setPackCompletion(
   brandId: string,
-  id: string,
-  part: string,
-  count?: number,
-): Promise<BriefDetail> {
+  packId: string,
+  key: string,
+  checked: boolean,
+): Promise<PackDetail> {
   const res = await apiFetch(
-    `${BASE}/brands/${encodeURIComponent(brandId)}/briefs/${encodeURIComponent(id)}/parts/`
+    `${BASE}/brands/${encodeURIComponent(brandId)}/packs/${encodeURIComponent(packId)}/completion`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ key, checked }),
+    },
+  );
+  const data = await parseJsonOrThrow<{ pack: PackDetail }>(res, "更新完成條件失敗。");
+  return data.pack;
+}
+
+export async function approvePack(brandId: string, packId: string): Promise<PackDetail> {
+  const res = await apiFetch(
+    `${BASE}/brands/${encodeURIComponent(brandId)}/packs/${encodeURIComponent(packId)}/approve`,
+    { method: "POST" },
+  );
+  const data = await parseJsonOrThrow<{ pack: PackDetail }>(res, "核准整包失敗。");
+  return data.pack;
+}
+
+export async function closePack(brandId: string, packId: string): Promise<PackDetail> {
+  const res = await apiFetch(
+    `${BASE}/brands/${encodeURIComponent(brandId)}/packs/${encodeURIComponent(packId)}/close`,
+    { method: "POST" },
+  );
+  const data = await parseJsonOrThrow<{ pack: PackDetail }>(res, "關閉任務包失敗。");
+  return data.pack;
+}
+
+export async function getSet(brandId: string, setId: string): Promise<SetDetail> {
+  const res = await apiFetch(
+    `${BASE}/brands/${encodeURIComponent(brandId)}/sets/${encodeURIComponent(setId)}`,
+  );
+  const data = await parseJsonOrThrow<{ set: SetDetail }>(res, "讀取素材組失敗。");
+  return data.set;
+}
+
+export async function runProduct(
+  brandId: string,
+  setId: string,
+  part: ProductPart,
+  count?: number,
+): Promise<SetDetail> {
+  const res = await apiFetch(
+    `${BASE}/brands/${encodeURIComponent(brandId)}/sets/${encodeURIComponent(setId)}/products/`
       + `${encodeURIComponent(part)}/run`,
     {
       method: "POST",
@@ -179,46 +284,34 @@ export async function runPart(
       body: JSON.stringify(count === undefined ? {} : { count }),
     },
   );
-  const data = await parseJsonOrThrow<{ brief: BriefDetail }>(res, "產出失敗。");
-  return data.brief;
+  const data = await parseJsonOrThrow<{ set: SetDetail }>(res, "產出失敗。");
+  return data.set;
 }
 
-export async function adoptOutput(
+export async function selectVersion(
   brandId: string,
-  id: string,
-  outputId: string,
-): Promise<BriefDetail> {
+  setId: string,
+  versionId: string,
+): Promise<SetDetail> {
   const res = await apiFetch(
-    `${BASE}/brands/${encodeURIComponent(brandId)}/briefs/${encodeURIComponent(id)}/outputs/`
-      + `${encodeURIComponent(outputId)}/adopt`,
+    `${BASE}/brands/${encodeURIComponent(brandId)}/sets/${encodeURIComponent(setId)}/versions/`
+      + `${encodeURIComponent(versionId)}/select`,
     { method: "POST" },
   );
-  const data = await parseJsonOrThrow<{ brief: BriefDetail }>(res, "採用失敗。");
-  return data.brief;
+  const data = await parseJsonOrThrow<{ set: SetDetail }>(res, "選定失敗。");
+  return data.set;
 }
 
-export async function closeBrief(brandId: string, id: string): Promise<BriefDetail> {
+export async function deselectVersion(
+  brandId: string,
+  setId: string,
+  versionId: string,
+): Promise<SetDetail> {
   const res = await apiFetch(
-    `${BASE}/brands/${encodeURIComponent(brandId)}/briefs/${encodeURIComponent(id)}/close`,
-    { method: "POST" },
-  );
-  const data = await parseJsonOrThrow<{ brief: BriefDetail }>(res, "關閉失敗。");
-  return data.brief;
-}
-
-export async function reopenBrief(brandId: string, id: string): Promise<BriefDetail> {
-  const res = await apiFetch(
-    `${BASE}/brands/${encodeURIComponent(brandId)}/briefs/${encodeURIComponent(id)}/reopen`,
-    { method: "POST" },
-  );
-  const data = await parseJsonOrThrow<{ brief: BriefDetail }>(res, "重啟失敗。");
-  return data.brief;
-}
-
-export async function deleteBrief(brandId: string, id: string): Promise<void> {
-  const res = await apiFetch(
-    `${BASE}/brands/${encodeURIComponent(brandId)}/briefs/${encodeURIComponent(id)}`,
+    `${BASE}/brands/${encodeURIComponent(brandId)}/sets/${encodeURIComponent(setId)}/versions/`
+      + `${encodeURIComponent(versionId)}/select`,
     { method: "DELETE" },
   );
-  await ensureOk(res, "刪除失敗。");
+  const data = await parseJsonOrThrow<{ set: SetDetail }>(res, "取消選定失敗。");
+  return data.set;
 }
