@@ -656,19 +656,22 @@ def _pack_sets_full(conn: _AnyConn, org_id: str, brand_id: str, pack_id: str) ->
 
 
 def _pack_counts(sets: list) -> list:
+    """入口 tile = 版本，不是素材組（planner review, 2026-09-12）：`required` 是這個 pack
+    底下每個要求這個產物類型的 set 之 `required_outputs[type]` 加總——多少個版本要被
+    選定；`selected` 是那些 set 裡已選定版本數的加總。跟 §5.3 cell 的 `已選定／需要`
+    同一個單位，一個素材組要 5 張圖時 tile 要看到 5，不是 1。"""
     counts = []
     for part in _PART_ORDER:
         relevant = [s for s in sets if part in s["required_outputs"]]
         if not relevant:
             continue
+        required = sum(s["required_outputs"][part] for s in relevant)
         selected = sum(
-            1 for s in relevant if product_state(
-                s["required_outputs"][part], s["versions_by_part"].get(part) or [],
-            ) == "已選定"
+            sum(1 for a in (s["versions_by_part"].get(part) or []) if a) for s in relevant
         )
         counts.append({
             "part": part, "label": _PART_LABELS[part], "selected": selected,
-            "required": len(relevant),
+            "required": required,
         })
     return counts
 
@@ -723,8 +726,11 @@ def list_packs(conn: _AnyConn, org_id: str, brand_id: str, *, status: str = "all
         raise ValueError("status_unknown")
     if sort not in _LIST_SORT_VALUES:
         raise ValueError("sort_unknown")
+    # planner review, 2026-09-12：關閉的任務包離開入口（`GET /packs` 不列），
+    # `GET /packs/{p}` 仍然開得到（`pack_detail()` 不看 `closed_at`）——既有連結不 404。
     rows = conn.execute(
-        "SELECT * FROM workbench_pack WHERE org_id = %s AND brand_id = %s",
+        "SELECT * FROM workbench_pack WHERE org_id = %s AND brand_id = %s"
+        " AND closed_at IS NULL",
         (org_id, brand_id),
     ).fetchall()
     entries = []
@@ -735,8 +741,9 @@ def list_packs(conn: _AnyConn, org_id: str, brand_id: str, *, status: str = "all
             continue
         if q:
             q_lower = q.lower()
-            haystack = [card["name"], *(s["name"] for s in sets)]
-            haystack += [str(v) for v in (row["summary_json"] or {}).values() if v]
+            # 「pack name, set name and the pack's context labels」(票面 Done)：context
+            # labels = `card["subtitle"]`（`summary.情境`），不是整個 summary_json。
+            haystack = [card["name"], card["subtitle"], *(s["name"] for s in sets)]
             if not any(q_lower in h.lower() for h in haystack if h):
                 continue
         entries.append((row, card))
@@ -894,12 +901,14 @@ def _next_free_pack_name(conn: _AnyConn, org_id: str, brand_id: str) -> str:
     return f"自由工作 #{(row['n'] if row is not None else 0) + 1}"
 
 
-def create_free_pack(conn: _AnyConn, org_id: str, brand_id: str, body: dict) -> str:
-    """`POST /packs`（自由創作 only）— goes through `submit_pack()`, no second write path
-    (`.work/features/F02.md` "自由創作's 「AI 解析結果」..."). `source_kind` is forced to
-    `"free_job"` here; a client may not pick it. Per-part generation counts default to the
-    same number as `required_outputs[type]` (user ruling 2026-09-12: 「五張」 asks for 5
-    required *and* one round of 5) unless the set's own `request` already names a count."""
+def create_free_pack(conn: _AnyConn, org_id: str, brand_id: str, body: dict) -> dict:
+    """`POST /packs`（自由創作 only，routes.py 的唯一一次 repository 呼叫）— goes through
+    `submit_pack()`, no second write path (`.work/features/F02.md` "自由創作's 「AI 解析
+    結果」..."). `source_kind` is forced to `"free_job"` here; a client may not pick it.
+    Per-part generation counts default to the same number as `required_outputs[type]`
+    (user ruling 2026-09-12: 「五張」 asks for 5 required *and* one round of 5) unless the
+    set's own `request` already names a count. Returns the freshly assembled `PackDetail`
+    itself, not just the id — the route wraps it directly."""
     sets_in = body.get("sets")
     if not isinstance(sets_in, list) or not sets_in:
         raise ValueError("sets_unknown")
@@ -925,7 +934,10 @@ def create_free_pack(conn: _AnyConn, org_id: str, brand_id: str, body: dict) -> 
         "source_kind": "free_job", "source_ref": {"free_text": body.get("free_text")},
         "name": name, "summary": body.get("summary") or {}, "sets": pack_sets,
     }
-    return submit_pack(conn, org_id, brand_id, pack)
+    pack_id = submit_pack(conn, org_id, brand_id, pack)
+    detail = pack_detail(conn, org_id, brand_id, pack_id)
+    assert detail is not None
+    return detail
 
 
 def run_product(conn: _AnyConn, org_id: str, brand_id: str, set_id: str, part: str, *,
@@ -939,6 +951,40 @@ def run_product(conn: _AnyConn, org_id: str, brand_id: str, set_id: str, part: s
         if pack_row is not None and pack_row["approved_at"] is not None:
             raise ValueError("pack_approved")
     run_part(conn, org_id, brand_id, set_id, part, count=count)
+    detail = set_detail(conn, org_id, brand_id, set_id)
+    assert detail is not None
+    return detail
+
+
+def select_version_for_set(conn: _AnyConn, org_id: str, brand_id: str, set_id: str,
+                            output_id: str) -> dict:
+    """`POST /sets/{s}/versions/{v}/select`（routes.py 唯一呼叫，one repository call —
+    planner review 2026-09-12）. Containment check first: a `version_id` that does not belong
+    to this `set_id` in the URL is `ValueError("output_unknown")` → 404 **before** any write
+    (`_output_with_brief()` only SELECTs). Reuses the unscoped `select_version()`'s errors
+    (`brief_closed`／`pack_approved`) on top."""
+    output = _output_with_brief(conn, org_id, brand_id, output_id)
+    if output["brief_id"] != set_id:
+        raise ValueError("output_unknown")
+    adopt_output(conn, org_id, brand_id, output_id)
+    detail = set_detail(conn, org_id, brand_id, set_id)
+    assert detail is not None
+    return detail
+
+
+def deselect_version_for_set(conn: _AnyConn, org_id: str, brand_id: str, set_id: str,
+                              output_id: str) -> dict:
+    """`DELETE /sets/{s}/versions/{v}/select`。Same containment check as
+    `select_version_for_set()`, see that function's docstring."""
+    output = _output_with_brief(conn, org_id, brand_id, output_id)
+    if output["brief_id"] != set_id:
+        raise ValueError("output_unknown")
+    conn.execute(
+        "UPDATE workbench_output SET adopted_at = NULL"
+        " WHERE org_id = %s AND brand_id = %s AND id = %s",
+        (org_id, brand_id, output_id),
+    )
+    conn.commit()
     detail = set_detail(conn, org_id, brand_id, set_id)
     assert detail is not None
     return detail

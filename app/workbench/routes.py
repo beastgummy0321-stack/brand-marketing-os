@@ -100,10 +100,10 @@ def create_free_pack(request: Request, brand_id: str, body: NewFreePackRequest):
     actor = web.require_actor(request)
     web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
     try:
-        pack_id = repository.create_free_pack(web.conn, actor.org_id, brand_id, body.model_dump())
+        pack = repository.create_free_pack(web.conn, actor.org_id, brand_id, body.model_dump())
     except ValueError as exc:
         raise _error(exc, _CREATE_FREE_PACK_ERRORS) from exc
-    return {"pack": repository.pack_detail(web.conn, actor.org_id, brand_id, pack_id)}
+    return {"pack": pack}
 
 
 class CompletionRequest(BaseModel):
@@ -199,10 +199,9 @@ def run_product(request: Request, brand_id: str, set_id: str, part: str,
 
 
 _SELECT_ERRORS = {
-    # ponytail: `select_version`/`deselect_version` key off `output_id` alone (票 02 既有
-    # 簽章，`app/tests/test_workbench_pack.py` 直接呼叫它，不能改) — a mismatched `set_id`
-    # in the URL is not cross-checked against the output's own brief_id here. Add that
-    # containment check if a set-scoped token ever needs to matter.
+    # `output_unknown` now also covers a `version_id` that exists but belongs to a different
+    # `set_id` in the URL — `select_version_for_set()`/`deselect_version_for_set()` check
+    # containment before any write (planner review, 2026-09-12).
     "output_unknown": (404, "找不到這個版本。"),
     "brief_closed": (409, "這個素材組已經關閉。"),
     "pack_approved": (409, "這個任務包已核准，選定已鎖定。"),
@@ -214,12 +213,11 @@ def select_version(request: Request, brand_id: str, set_id: str, version_id: str
     actor = web.require_actor(request)
     web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
     try:
-        repository.select_version(web.conn, actor.org_id, brand_id, version_id)
+        detail = repository.select_version_for_set(
+            web.conn, actor.org_id, brand_id, set_id, version_id,
+        )
     except ValueError as exc:
         raise _error(exc, _SELECT_ERRORS) from exc
-    detail = repository.set_detail(web.conn, actor.org_id, brand_id, set_id)
-    if detail is None:
-        raise web.ApiError(404, "set_unknown", SET_UNKNOWN_MESSAGE)
     return {"set": detail}
 
 
@@ -228,10 +226,9 @@ def deselect_version(request: Request, brand_id: str, set_id: str, version_id: s
     actor = web.require_actor(request)
     web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
     try:
-        repository.deselect_version(web.conn, actor.org_id, brand_id, version_id)
+        detail = repository.deselect_version_for_set(
+            web.conn, actor.org_id, brand_id, set_id, version_id,
+        )
     except ValueError as exc:
         raise _error(exc, _SELECT_ERRORS) from exc
-    detail = repository.set_detail(web.conn, actor.org_id, brand_id, set_id)
-    if detail is None:
-        raise web.ApiError(404, "set_unknown", SET_UNKNOWN_MESSAGE)
     return {"set": detail}

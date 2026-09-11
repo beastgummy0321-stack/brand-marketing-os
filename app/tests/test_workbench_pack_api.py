@@ -299,5 +299,97 @@ class FreshPackCellTextTest(_WorkbenchPackApiTestBase):
                 self.assertEqual(cell["text"], "—")
 
 
+# -- 案例 7：入口 tile 是版本數加總，不是素材組數 ------------------------------------------
+# planner review 2026-09-12：一個 set 要 5 張圖時，`counts[]` 要看到 5，不是 1；跟
+# `cells[].required` 同一個單位。
+
+class PackCardCountsAreVersionSumsTest(_WorkbenchPackApiTestBase):
+    def test_free_job_five_images_reads_0_of_5_not_0_of_1(self):
+        pack_id = self._submit_pack([self._one_set("1", {"image_prompt": 5})])
+        resp = self.client.get(f"/api/workbench/brands/{self.brand_id}/packs/{pack_id}")
+        self.assertEqual(resp.status_code, 200)
+        counts = {c["part"]: c for c in resp.json()["pack"]["counts"]}
+        self.assertEqual(counts["image_prompt"]["required"], 5)
+        self.assertEqual(counts["image_prompt"]["selected"], 0)
+
+    def test_two_sets_each_needing_copy_sum_to_two_required(self):
+        pack_id = self._submit_pack([
+            self._one_set("1", {"copy": 1}), self._one_set("2", {"copy": 1}),
+        ])
+        brief = self._briefs(pack_id)[0]
+        outputs = workbench_repo.write_output(
+            web.conn, org_id=self.org_id, brand_id=self.brand_id, brief_id=brief["id"],
+            part="copy", generation_round=1, body_json=[{"sets": []}],
+            coordinates_json=None, llm_task_id=None,
+        )
+        workbench_repo.select_version(web.conn, self.org_id, self.brand_id, outputs[0]["id"])
+
+        resp = self.client.get(f"/api/workbench/brands/{self.brand_id}/packs/{pack_id}")
+        counts = {c["part"]: c for c in resp.json()["pack"]["counts"]}
+        self.assertEqual(counts["copy"]["required"], 2)
+        self.assertEqual(counts["copy"]["selected"], 1)
+
+        # 素材組層的 cell 跟入口 tile 同一個衍生、同一個單位，不會兜不起來。
+        list_resp = self.client.get(f"/api/workbench/brands/{self.brand_id}/packs")
+        card = next(p for p in list_resp.json()["packs"] if p["id"] == pack_id)
+        self.assertEqual(card["counts"], resp.json()["pack"]["counts"])
+
+
+# -- 案例 8：關閉任務包離開入口，但詳情頁仍開得到 --------------------------------------------
+
+class ClosePackLeavesEntranceTest(_WorkbenchPackApiTestBase):
+    def test_closed_pack_disappears_from_list_but_detail_still_opens(self):
+        pack_id = self._submit_pack([self._one_set("1", {"copy": 1})])
+        listed_before = self.client.get(f"/api/workbench/brands/{self.brand_id}/packs")
+        self.assertIn(pack_id, [p["id"] for p in listed_before.json()["packs"]])
+
+        close_resp = self.client.post(
+            f"/api/workbench/brands/{self.brand_id}/packs/{pack_id}/close"
+        )
+        self.assertEqual(close_resp.status_code, 200)
+
+        listed_after = self.client.get(f"/api/workbench/brands/{self.brand_id}/packs")
+        self.assertNotIn(pack_id, [p["id"] for p in listed_after.json()["packs"]])
+        listed_all_status = self.client.get(
+            f"/api/workbench/brands/{self.brand_id}/packs?status=all"
+        )
+        self.assertNotIn(pack_id, [p["id"] for p in listed_all_status.json()["packs"]])
+
+        detail_resp = self.client.get(f"/api/workbench/brands/{self.brand_id}/packs/{pack_id}")
+        self.assertEqual(detail_resp.status_code, 200)
+        self.assertEqual(detail_resp.json()["pack"]["id"], pack_id)
+
+
+# -- 案例 9：select 一個不屬於這個 set 的 version_id -> 404，且不寫入 ---------------------------
+
+class SelectMismatchedSetIs404WithoutWriteTest(_WorkbenchPackApiTestBase):
+    def test_select_version_from_another_set_is_404_and_does_not_adopt(self):
+        pack_id = self._submit_pack([
+            self._one_set("1", {"copy": 1}), self._one_set("2", {"copy": 1}),
+        ])
+        briefs = self._briefs(pack_id)
+        set_a, set_b = briefs[0], briefs[1]
+        outputs_a = workbench_repo.write_output(
+            web.conn, org_id=self.org_id, brand_id=self.brand_id, brief_id=set_a["id"],
+            part="copy", generation_round=1, body_json=[{"sets": []}],
+            coordinates_json=None, llm_task_id=None,
+        )
+        output_a_id = outputs_a[0]["id"]
+
+        # 拿 set A 的 version_id，打在 set B 的 URL 上。
+        mismatched_url = (
+            f"/api/workbench/brands/{self.brand_id}/sets/{set_b['id']}"
+            f"/versions/{output_a_id}/select"
+        )
+        resp = self.client.post(mismatched_url)
+        self.assertEqual(resp.status_code, 404)
+        self.assertEqual(resp.json()["error"]["code"], "output_unknown")
+
+        row = web.conn.execute(
+            "SELECT adopted_at FROM workbench_output WHERE id = %s", (output_a_id,),
+        ).fetchone()
+        self.assertIsNone(row["adopted_at"])
+
+
 if __name__ == "__main__":
     unittest.main()
