@@ -18,6 +18,7 @@ from pathlib import Path
 from app.brand_intelligence import repository as bi_repo
 from app.core import cleanup
 from app.core.db import Conn, ConnProxy, jsonb, new_id
+from app.workbench import image_port
 
 _AnyConn = Conn | ConnProxy
 
@@ -1020,13 +1021,34 @@ def _slice_body(part: str, body_json, version_index: int):
     return body_json
 
 
+def _prompt_cards(body_json) -> list:
+    """F02-I05 (ARCHITECTURE.md §5.11): reads the ①/②/③ prompt pair straight out of the
+    round's already-rendered `body_json["rendered"]` (written once, in `jobs.py`'s
+    `_render_image_prompt()`) — never re-renders. `body_json["mode"]` picks the order:
+    變體模式 -> `① 主圖` then `② 變體`; 探索模式 -> `③ 探索` then `② 變體`. Missing/malformed
+    input -> `[]`, never a crash (mirrors `_slice_body`'s tolerance)."""
+    if not isinstance(body_json, dict):
+        return []
+    rendered = body_json.get("rendered")
+    if not isinstance(rendered, dict):
+        return []
+    if body_json.get("mode") == "exploration":
+        order = [("exploration", "③ 探索"), ("variant", "② 變體")]
+    else:
+        order = [("hero", "① 主圖"), ("variant", "② 變體")]
+    return [
+        {"label": label, "text": rendered[key]}
+        for key, label in order if isinstance(rendered.get(key), str)
+    ]
+
+
 def _part_versions(conn: _AnyConn, org_id: str, brand_id: str, brief_id: str, part: str) -> list:
     rows = conn.execute(
         "SELECT * FROM workbench_output WHERE org_id = %s AND brand_id = %s AND brief_id = %s"
         " AND part = %s ORDER BY generation_round DESC, version_index ASC",
         (org_id, brand_id, brief_id, part),
     ).fetchall()
-    return [
+    versions = [
         {
             "id": r["id"], "version_index": r["version_index"],
             "generation_round": r["generation_round"], "selected_at": r["adopted_at"],
@@ -1034,6 +1056,10 @@ def _part_versions(conn: _AnyConn, org_id: str, brand_id: str, brief_id: str, pa
         }
         for r in (dict(row) for row in rows)
     ]
+    if part == "image_prompt":
+        for version, r in zip(versions, (dict(row) for row in rows), strict=True):
+            version["prompt_cards"] = _prompt_cards(r["body_json"])
+    return versions
 
 
 def _generation_settings(part: str, request_json: dict | None) -> dict:
@@ -1048,9 +1074,9 @@ def _generation_settings(part: str, request_json: dict | None) -> dict:
 
 
 def set_detail(conn: _AnyConn, org_id: str, brand_id: str, set_id: str) -> dict | None:
-    """`GET /sets/{s}`. `image_generation.connected` is hard `False` here — the port is
-    reserved, not filled (§5.11); `image_generation.reason` carries the shipped-text reserved-
-    seat line so the browser never re-spells it."""
+    """`GET /sets/{s}`. `image_generation.connected` reads `image_port.connected()` — always
+    `False` today, the port is reserved, not filled (§5.11); `image_generation.reason` carries
+    the shipped-text reserved-seat line so the browser never re-spells it."""
     brief = get_brief(conn, org_id, brand_id, set_id)
     if brief is None or brief["pack_id"] is None:
         return None
@@ -1101,7 +1127,7 @@ def set_detail(conn: _AnyConn, org_id: str, brand_id: str, set_id: str) -> dict 
         },
         "siblings": siblings, "required_parts": required_parts, "products": products,
         "image_generation": {
-            "connected": False,
+            "connected": image_port.connected(),
             "reason": "圖片生成服務未接上，這裡先保留席位；接上後同一個畫面直接顯示成果。",
         },
     }
