@@ -20,10 +20,13 @@ import re
 
 from app.workbench.prompts import COORDINATE_KEYS
 
-BODY_BANDS = {"short": (100, 150, 5), "medium": (300, 500, 3), "long": (800, 1000, 2)}
+BODY_BANDS = {"short": (100, 150), "medium": (300, 500), "long": (800, 1000)}
 # 中文標籤，只在這裡打一次——`prompts.copy_prompt` 用 lazy import 讀這兩個字典（見該檔
 # `copy_prompt` 檔頭註解：避免跟這支模組的 module-level import 互相循環）。
 BAND_LABELS = {"short": "短版", "medium": "中版", "long": "長版"}
+# ARCHITECTURE.md §5.6：一輪文案是 5 組完整廣告（body+headline+description），不是
+# 三個長度各給不同則數的三個池子——這是「一輪 5 組」唯一寫死的地方，band 本身不再帶數量。
+COPY_SET_COUNT = 5
 HEADLINE_MAX = 27
 DESCRIPTION_MAX = 30
 
@@ -64,38 +67,39 @@ def vocabulary_by_dimension(coordinates: list) -> dict:
 
 
 def check_copy(data, vocabulary: dict, copy_length: str) -> list:
-    """回傳 `[{"path", "ok", "message"}, ...]`，一個項目一個可定址的欄位（band 內每一則
-    各自一項，供 `jobs.py` 的修正輪只重問失敗的那幾則，ADR 0068 §6「單則重問，批次不重
-    生」）。票 workbench/T01-02：一次只出 `copy_length` 指定的那一個長度帶——回覆裡若
-    夾帶其他 band 的鍵，安靜略過，不報告、不算它壞。"""
+    """回傳 `[{"path", "ok", "message"}, ...]`，一個項目一個可定址的欄位——`sets` 裡每組的
+    `body`／`headline`／`description` 各自一項，供 `jobs.py` 的修正輪只重問失敗的那幾項
+    （ADR 0068 §6「單則重問，批次不重生」）。ARCHITECTURE.md §5.6：一輪是 `COPY_SET_COUNT`
+    組完整廣告，每組落在 `copy_length` 指定的那一個長度帶（`BODY_BANDS`，band 本身不再帶
+    數量）。"""
     if not isinstance(data, dict):
         return [{"path": "_root", "ok": False, "message": "頂層不是物件"}]
 
     results = []
-    band = copy_length
-    lo, hi, count = BODY_BANDS[band]
-    items = data.get(band)
-    if not isinstance(items, list) or len(items) != count:
-        got = len(items) if isinstance(items, list) else "缺欄位"
-        results.append({"path": band, "ok": False, "message": f"數量應為 {count}，實際 {got}"})
+    lo, hi = BODY_BANDS[copy_length]
+    sets = data.get("sets")
+    if not isinstance(sets, list) or len(sets) != COPY_SET_COUNT:
+        got = len(sets) if isinstance(sets, list) else "缺欄位"
+        results.append({
+            "path": "sets", "ok": False, "message": f"數量應為 {COPY_SET_COUNT}，實際 {got}",
+        })
     else:
-        for i, text in enumerate(items, start=1):
-            ok = isinstance(text, str) and lo <= _char_len(text) <= hi
-            n = _char_len(text) if isinstance(text, str) else 0
-            msg = "符合" if ok else f"{n} 字，超出 {lo}～{hi} 字範圍"
-            results.append({"path": f"{band}[{i}]", "ok": ok, "message": msg})
+        for i, item in enumerate(sets, start=1):
+            if not isinstance(item, dict):
+                results.append({"path": f"sets[{i}]", "ok": False, "message": "不是物件"})
+                continue
+            body = item.get("body")
+            body_ok = isinstance(body, str) and lo <= _char_len(body) <= hi
+            n = _char_len(body) if isinstance(body, str) else 0
+            body_msg = "符合" if body_ok else f"{n} 字，超出 {lo}～{hi} 字範圍"
+            results.append({"path": f"sets[{i}].body", "ok": body_ok, "message": body_msg})
 
-    for label, max_len in (("headlines", HEADLINE_MAX), ("descriptions", DESCRIPTION_MAX)):
-        items = data.get(label)
-        if not isinstance(items, list) or len(items) != 5:
-            got = len(items) if isinstance(items, list) else "缺欄位"
-            results.append({"path": label, "ok": False, "message": f"數量應為 5，實際 {got}"})
-            continue
-        for i, text in enumerate(items, start=1):
-            n = _char_len(text) if isinstance(text, str) else 0
-            ok = isinstance(text, str) and n <= max_len
-            msg = "符合" if ok else f"{n} 字，超過 {max_len} 字上限"
-            results.append({"path": f"{label}[{i}]", "ok": ok, "message": msg})
+            for key, max_len in (("headline", HEADLINE_MAX), ("description", DESCRIPTION_MAX)):
+                text = item.get(key)
+                n = _char_len(text) if isinstance(text, str) else 0
+                ok = isinstance(text, str) and n <= max_len
+                msg = "符合" if ok else f"{n} 字，超過 {max_len} 字上限"
+                results.append({"path": f"sets[{i}].{key}", "ok": ok, "message": msg})
 
     coordinates = data.get("coordinates")
     if not isinstance(coordinates, dict):
