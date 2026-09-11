@@ -467,9 +467,23 @@ def _run(conn, org_id: str, brand_id: str, brief_id: str, part: str, count) -> N
     ]
     if rendered is not None:
         body["rendered"] = rendered
+
+    # F02-I02（ARCHITECTURE.md §5.2）：一輪寫幾列版本，逐 part 決定——copy 一輪
+    # `COPY_SET_COUNT`（5）版，`video_script` 一輪一支腳本一版（回覆的 `scripts` 沒過
+    # `COPY_SET_COUNT`/count 也照實際收到的支數寫，紅燈那一支不假裝湊出使用者要的張數），
+    # 其他（`image_prompt`／`free`）一輪 1 版。每一版的 `body_json` 是同一份整輪回覆——
+    # `schedule/state.py::_copy_summary()` 讀 `body_json["sets"]` 要看到全部 5 組，不是
+    # 只看到那一版自己的那一組（那份契約不在這張票改，見 ARCHITECTURE.md §5.6）。
+    if part == "copy":
+        version_count = validate.COPY_SET_COUNT
+    elif part == "video_script":
+        scripts = body.get("scripts")
+        version_count = len(scripts) if isinstance(scripts, list) and scripts else 1
+    else:
+        version_count = 1
     repository.write_output(
         conn, org_id=org_id, brand_id=brand_id, brief_id=brief_id, part=part,
-        generation_round=round_no, body_json=body,
+        generation_round=round_no, body_json=[body] * version_count,
         coordinates_json=data.get("coordinates") if part == "copy" else None,
         llm_task_id=task_row["id"],
     )

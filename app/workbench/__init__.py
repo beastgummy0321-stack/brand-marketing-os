@@ -5,20 +5,27 @@ Shapes other modules may use:
     register(app: FastAPI) -> None       # mounts /api/workbench/* (routes.py, ticket 03)
     register_tasks() -> None             # idempotently registers `background.workbench_generate`
                                           # against the current app.background.app()
-    submit_brief(conn, org_id, brand_id, brief: dict) -> str
+    submit_pack(conn, org_id, brand_id, pack: dict) -> str
+    pack_for_source(conn, org_id, brand_id, source_kind: str, source_ref: dict) -> dict | None
     briefs_for_source(conn, org_id, brand_id, source_kind: str, source_ref: dict) -> list[dict]
     adopted_output(conn, org_id, brand_id, brief_id: str, part: str) -> dict | None
 
 Everything else in this package (`repository.py`, `jobs.py`, `prompts.py`, `validate.py`,
-`routes.py`) is private — nothing outside this package imports them.
+`routes.py`) is private — nothing outside this package imports them. F02-I02 (ARCHITECTURE.md
+§5.1-§5.4, 2026-09-12 reset): `submit_brief` is **not** a public entry any more — a 素材組 only
+exists inside a 任務包 (`workbench_pack`), so the one way in for an upstream is
+`submit_pack(conn, org_id, brand_id, pack)`, one call, one or more `sets` (ARCHITECTURE.md §5.4
+names the pack/set shape). `pack_for_source` is the read the upstream uses to learn "is this
+pack approved yet" — a state read, never a callback (ARCHITECTURE.md §5.5), same JSONB
+containment match as `briefs_for_source`.
 Callers: `app/main.py`'s register loop (first two, called once right after the loop, same spot
 as `schedule_module.register_tasks()`) and `app/tests` (which call `register_tasks()` again
 after they get their own test module's fresh `background.app()` — same reason `app/schedule/
-jobs.py`'s `register_tasks()` docstring already documents). `app.schedule.jobs` becomes a caller
-of `submit_brief` (once per deepest tree node after a tree succeeds) and `app.schedule.state`/
-`app.schedule.performance` of `briefs_for_source`/`adopted_output` once ticket 05 lands the
-schedule handoff (ADR 0068 rule 2: dependency is one-way, schedule imports workbench, never the
-reverse).
+jobs.py`'s `register_tasks()` docstring already documents). `app.schedule.jobs` is the first
+caller of `submit_pack` (once per expanded tree, one set per deepest node) and `app.schedule.
+state`/`app.schedule.performance` of `briefs_for_source`/`adopted_output`; `app.schedule.state`
+(and 檔期規劃's approval button, once that lands) becomes a caller of `pack_for_source` (ADR
+0068 rule 2: dependency is one-way, schedule imports workbench, never the reverse).
 
 Depends on `app.core`, `app.background`, `app.llm`, `app.shared.web`, `app.identity`,
 `app.brand_intelligence.repository` (read-only) — docs/contracts/workbench.md "Allowed
@@ -29,7 +36,8 @@ reads `app.schedule`'s `brand_coordinate`/`feedback` tables by raw SQL, not by i
 package — container contract rule 5 allows duplicating a query across modules.
 
 `app.core.cleanup` registration (this ticket): `repository.py`'s module tail registers
-「素材工作檯」, covering `workbench_brief`/`workbench_output`; brand dimension only — this
+「素材工作檯」, covering `workbench_brief`/`workbench_output`/`workbench_pack`; brand
+dimension only — this
 module has no product-layer data, so `count_product`/`delete_product` are explicitly `None`
 and `product_tables` is an explicit empty `frozenset()` (see `app/core/cleanup.py`'s own
 docstring for why "explicit None" and "omitted" are not the same thing here).
@@ -53,21 +61,28 @@ def register_tasks() -> None:
     workbench_jobs.register_tasks()
 
 
-def submit_brief(conn, org_id: str, brand_id: str, brief: dict) -> str:
-    """寫一列 `workbench_brief`，回傳 brief id。`brief["request"]["parts"]` 是這份 brief
-    要什麼的唯一權威（ARCHITECTURE.md §5.4）——非空列表，`"copy"／"image_prompt"／
-    "video_script"／"free"` 的子集，缺欄／空／不是 list／未知名稱都是
-    `ValueError("parts_unknown")`；每個列出的 part 各排一個
-    `background.workbench_generate` job。`brief["request"]["copy_length"]`（`"short"`／
-    `"medium"`／`"long"`，缺省 `"short"`）只在 `"copy"` 在 `parts` 裡時有意義；
-    `image_prompt_count`（1–30）在 `"image_prompt"` 在 `parts` 裡時必填，
-    `video_script_count`（1–5）同理必填於 `"video_script"`。`request["kind"]`（若有）
-    不讀：`kind` 欄位由這裡從 `parts` 衍生（多於一個 part -> `"ad_creative"`，否則就是
-    那個唯一的 part 名），只為顯示，不回饋任何驗證或排程決定。`on_image_texts` 已不在
-    合約裡：不寫、不讀。"""
+def submit_pack(conn, org_id: str, brand_id: str, pack: dict) -> str:
+    """寫一份任務包（一個 `workbench_pack` 列 + 每個 `pack["sets"]` 一份
+    `workbench_brief`），回傳 pack id。ARCHITECTURE.md §5.4：`pack` 帶 `source`
+    （`source_kind` ＋不解讀的 `source_ref`）、`name`、`context`、`summary`（摘要）、
+    `sets`（每個：`name`／`source_ref`／`coordinates`／`product_id`／`style_key`／
+    `required_outputs`＝`{產物類型: 需要選定的版本數}`／每種產出的生成參數放在
+    `request`）。`required_outputs` 只收 `copy`／`image_prompt`／`video_script`——
+    `free` 是退休的舊 part，出現在這裡一律 `ValueError("part_retired")`（那是自由創作
+    用 `source_kind="free_job"` 標識自己，兩者不撞名）。一個 set 沒過驗證，這支整個
+    不寫任何一列（見 `repository.submit_pack` 檔頭的完整錯誤代碼清單）。"""
     from app.workbench import repository as workbench_repo
 
-    return workbench_repo.submit_brief(conn, org_id, brand_id, brief)
+    return workbench_repo.submit_pack(conn, org_id, brand_id, pack)
+
+
+def pack_for_source(conn, org_id: str, brand_id: str, source_kind: str, source_ref: dict):
+    """那個 `source_ref`（JSONB containment，包含給定 dict 全部鍵）最新的一個 pack，附上
+    `sets_total`／`sets_done`／`state`，找不到回 `None`。ARCHITECTURE.md §5.5：上游讀
+    「核准了沒」用這支——狀態讀取，不是 callback，工作檯完全不知道上游是誰。"""
+    from app.workbench import repository as workbench_repo
+
+    return workbench_repo.pack_for_source(conn, org_id, brand_id, source_kind, source_ref)
 
 
 def briefs_for_source(conn, org_id: str, brand_id: str, source_kind: str,
