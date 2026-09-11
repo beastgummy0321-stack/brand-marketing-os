@@ -524,6 +524,12 @@ def schedule_tree(org_id: str, brand_id: str, plan_index: int, plan_task_id: str
         platform_label = next(
             (p["label"] for p in data["platforms"] if p["id"] == platform), platform
         )
+        objective = plan_scope.get("objective", "")
+        objective_label = next(
+            (o["label"] for o in data["objectives"]
+             if o["platform"] == platform and o["value"] == objective),
+            objective,
+        )
 
         brand_context, knowledge_item_ids, brand_version = _compile_brand_context(
             conn, brand_id, product_ids
@@ -592,7 +598,11 @@ def schedule_tree(org_id: str, brand_id: str, plan_index: int, plan_task_id: str
                             "情境": chosen_plan.get("summary"),
                             "重點訊息": promotion_note,
                         },
-                        "context": {"product_ids": product_ids},
+                        "context": {
+                            "product_ids": product_ids,
+                            "platform": platform_label,
+                            "goal": objective_label,
+                        },
                         "sets": [
                             {
                                 "name": leaf["name"],

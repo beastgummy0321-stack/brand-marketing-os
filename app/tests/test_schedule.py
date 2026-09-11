@@ -57,6 +57,11 @@ ACTOR = "測試員"
 _DATA = schedule_state._load_platform_data()
 VALID_PLATFORM = next(p["id"] for p in _DATA["platforms"] if p["enabled"])
 VALID_OBJECTIVE = next(o["value"] for o in _DATA["objectives"] if o["platform"] == VALID_PLATFORM)
+VALID_PLATFORM_LABEL = next(p["label"] for p in _DATA["platforms"] if p["id"] == VALID_PLATFORM)
+VALID_OBJECTIVE_LABEL = next(
+    o["label"] for o in _DATA["objectives"]
+    if o["platform"] == VALID_PLATFORM and o["value"] == VALID_OBJECTIVE
+)
 DISABLED_PLATFORM = next(p["id"] for p in _DATA["platforms"] if not p["enabled"])
 
 
@@ -891,6 +896,15 @@ class TreeDispatchRequestTest(_ScheduleApiTestBase):
             self.assertEqual(request["promotion_note"], "滿799免運\n新品九折")
         for required_outputs in required_by_node_key.values():
             self.assertEqual(required_outputs, {"copy": 1, "image_prompt": 1})
+
+        pack_row = web.conn.execute(
+            "SELECT context_json FROM workbench_pack WHERE brand_id = %s", (self.brand["id"],),
+        ).fetchone()
+        # F02-I19：`context` 是 §5.4 契約欄位，`schedule_tree()` 過去只填 `product_ids`，
+        # 平台／目標的標籤（不是 id／value）要一起帶到，否則 §5.13 的「平台」列跟
+        # `PackDetail.meta.platform`／`goal` 永遠是「—」／null。
+        self.assertEqual(pack_row["context_json"]["platform"], VALID_PLATFORM_LABEL)
+        self.assertEqual(pack_row["context_json"]["goal"], VALID_OBJECTIVE_LABEL)
 
 
 class RejectApiContractTest(_ScheduleApiTestBase):
