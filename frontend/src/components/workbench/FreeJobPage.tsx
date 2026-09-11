@@ -46,7 +46,7 @@ export const PART_LABEL: Record<ProductPart, string> = {
  * `spec` 本身（人物欄位對應 `spec.audience`、主要訴求對應 `spec.key_message`，§F02-I10
  * 「the mapping is the one piece of logic on this page」之外的欄位只影響這支表單本身，
  * 見票面「人物／場景 have no spec field」）。`scene`（場景）不在 `spec` 七個鍵裡，純本頁
- * 欄位，不送出——跟圖片生成港口一樣先保留席位，之後有地方接再接。 */
+ * 欄位，不送出——跟圖片生成港口一樣是保留的港口，下方欄位自己的提示文字說明這件事。 */
 interface PreciseControl {
   part: ProductPart;
   count: number;
@@ -107,8 +107,8 @@ function specToControl(spec: FreeParseSpec, fallback: PreciseControl): PreciseCo
  * `required_outputs[part]` = 解析出來的張數（沒給就是 1），同一個數字也是這一輪的生成數量
  * ——一輪就能滿足這個任務包（2026-09-12 使用者裁決）。素材組層的 `coordinates`／`request`
  * 帶入 `spec` 其餘欄位，落在 `jobs.py` 既有讀得到的鍵上：`audience`／`format`／
- * `free_text`／`promotion_note`；沒有對應鍵的（`platform`）目前 `POST /packs` 沒有欄位可
- * 承接，只留在畫面上顯示，不是這支頁面的錯（見 F02-I03 的 `NewFreePackRequest` 形狀）。 */
+ * `free_text`／`promotion_note`；`platform` 走 pack 層的 `context.platform`
+ * （F02-I18，`ARCHITECTURE.md` §5.4 handoff contract，`PackDetail.meta.platform` 讀回）。 */
 export function specToCreateBody(
   spec: FreeParseSpec,
   form: { text: string; productId: string | null },
@@ -127,6 +127,8 @@ export function specToCreateBody(
   const coordinates: Record<string, unknown> = {};
   if (spec.audience) coordinates.audience = spec.audience;
   if (spec.size) coordinates.format = spec.size;
+  const context: Record<string, unknown> = {};
+  if (spec.platform) context.platform = spec.platform;
 
   return {
     free_text: form.text,
@@ -138,6 +140,7 @@ export function specToCreateBody(
       "目標受眾": spec.audience ?? "",
       "重點訊息": spec.key_message ?? "",
     },
+    context,
   };
 }
 
@@ -384,6 +387,9 @@ export function FreeJobPage({ brandId }: { brandId: string }) {
               </label>
             )}
             {fileError && <p className="text-xs text-destructive">{fileError}</p>}
+            <p className="text-xs text-muted-foreground">
+              參考圖還沒接上生成流程，這裡先保留席位；接上後同一張圖直接派上用場。
+            </p>
           </div>
 
           <div className="flex flex-col gap-3 rounded-md border border-border p-3">
@@ -459,6 +465,9 @@ export function FreeJobPage({ brandId }: { brandId: string }) {
                     placeholder="例：夜跑／城市"
                     className="h-9 w-full rounded-md border border-border bg-card px-2 text-sm"
                   />
+                  <span className="text-[11px] text-muted-foreground">
+                    場景還沒接上生成流程，這裡先保留席位；接上後同一個欄位直接生效。
+                  </span>
                 </Field>
                 <Field label="主要訴求">
                   <input

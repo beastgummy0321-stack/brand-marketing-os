@@ -193,6 +193,7 @@ export interface NewFreePackRequest {
   style_key?: string | null;
   sets: FreePackSetInput[];
   summary?: Record<string, unknown>;
+  context?: Record<string, unknown>;
 }
 
 /** 三個固定長度的「什麼時候用」一句話——設計系統 §8：前端文案，不生成、不落地

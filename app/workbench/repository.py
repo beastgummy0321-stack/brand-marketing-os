@@ -937,7 +937,8 @@ def create_free_pack(conn: _AnyConn, org_id: str, brand_id: str, body: dict) -> 
         })
     pack = {
         "source_kind": "free_job", "source_ref": {"free_text": body.get("free_text")},
-        "name": name, "summary": body.get("summary") or {}, "sets": pack_sets,
+        "name": name, "summary": body.get("summary") or {},
+        "context": body.get("context") or {}, "sets": pack_sets,
     }
     pack_id = submit_pack(conn, org_id, brand_id, pack)
     detail = pack_detail(conn, org_id, brand_id, pack_id)
