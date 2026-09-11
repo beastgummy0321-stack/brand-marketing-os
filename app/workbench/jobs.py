@@ -242,7 +242,7 @@ def _render_image_prompt(data: dict, *, mode: str, style_block: str, product_lin
                           audience_line: str, appeal_line: str, appeal_sentence: str,
                           quotable_lines: list, output_line: str, purpose_line: str,
                           count: int) -> dict:
-    """`image_prompt` 的渲染不從這裡出來——`_run` 在修正輪結束後一律呼叫
+    """`image_prompt` 的渲染只從這裡出來——`_run` 在修正輪結束後一律呼叫
     `_render_image_prompt()`，不論驗證是否通過；沒過的項目照樣渲染，❌ 記在
     `body_json.validation`（票 F01-T03-I02）。渲染邏輯只有一份，`prompts.render_*` 對
     缺欄位容忍，這裡不重複實作、也不擋壞資料。"""
