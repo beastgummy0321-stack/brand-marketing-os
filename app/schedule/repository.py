@@ -166,9 +166,10 @@ _SEED_COORDINATES: dict = {
          "稀缺與急迫——只在真的限時限量時用，捏造見禁用手法"),
     ),
     "format": (
-        ("single_image", "Meta 版位", "單圖", "4:5，1080×1350（查證日 2026-08-07）"),
-        ("flexible", "Meta 版位", "彈性格式",
-         "1～10 張同座標圖；asset_feed_spec images ≤10，2026-09-09 查證"),
+        # 4:5 1080x1350, verified 2026-08-07
+        ("single_image", "Meta 版位", "單圖", "4:5，1080×1350"),
+        # Meta asset_feed_spec images <= 10, verified 2026-09-09
+        ("flexible", "Meta 版位", "彈性格式", "1～10 張同座標圖"),
         ("carousel", "Meta 版位", "輪播", "多卡，每卡連結由組裝時帶入"),
         ("video", "Meta 版位", "影片", "每主題媒體上限 1（主題＝腳本）"),
     ),
