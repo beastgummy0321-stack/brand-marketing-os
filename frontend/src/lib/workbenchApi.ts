@@ -147,6 +147,29 @@ export interface ImageStyle {
   style_block: string;
 }
 
+/** F02-I06 的 `spec` 七個鍵，逐字對照 §5「AI 解析結果」表格列——不多不少
+ * （`app/workbench/free_parse.py::_validate_reply`）。 */
+export interface FreeParseOutput {
+  part: ProductPart;
+  count: number;
+}
+
+export interface FreeParseSpec {
+  topic: string | null;
+  outputs: FreeParseOutput[];
+  style_hint: string | null;
+  platform: string | null;
+  size: string | null;
+  audience: string | null;
+  key_message: string | null;
+}
+
+export interface FreeParseResult {
+  parsed: boolean;
+  note: string | null;
+  spec: FreeParseSpec;
+}
+
 export interface FreePackSetInput {
   name?: string;
   source_ref?: Record<string, unknown>;
@@ -225,6 +248,22 @@ export async function getPack(brandId: string, packId: string): Promise<PackDeta
   );
   const data = await parseJsonOrThrow<{ pack: PackDetail }>(res, "讀取任務包失敗。");
   return data.pack;
+}
+
+/** `POST /parse`（F02-I06）：使用者按「建立自由工作」時的**一次** AI 解析。`defaults` 用
+ * `FreeParseSpec` 同一組七個鍵，失敗／逾時／解析不出來時後端原樣回傳這份 `defaults`
+ * （`parsed: false`）——呼叫端永遠拿得到一份可以直接建立的 spec。 */
+export async function parseFreeText(
+  brandId: string,
+  freeText: string,
+  defaults: Partial<FreeParseSpec>,
+): Promise<FreeParseResult> {
+  const res = await apiFetch(`${BASE}/brands/${encodeURIComponent(brandId)}/parse`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ free_text: freeText, defaults }),
+  });
+  return parseJsonOrThrow<FreeParseResult>(res, "AI 解析失敗，請稍後再試。");
 }
 
 export async function createFreePack(
