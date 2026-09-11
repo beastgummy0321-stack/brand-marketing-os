@@ -56,17 +56,11 @@ test("走完切片後活下來的主要畫面", async ({ page }) => {
   await expect(page).toHaveURL(new RegExp(`/app/brands/${brandId}/schedule$`));
   await expect(page.getByRole("heading", { name: "檔期規劃", exact: true })).toBeVisible();
 
-  // --- 素材工作檯（票 workbench/04，ADR 0068）：左欄 layout C——「新工單」按鈕沒了，
-  // 開始生成／派工任務兩個常駐分組取代；剛建的品牌沒有任何工單，三個派工任務來源分組
-  // （檔期／網站／品牌內容）都該落回「尚無任務」空狀態。--------------------------
+  // --- 素材工作檯（F02 大重置，ARCHITECTURE.md §5.12）：舊 `.workspace-split` 左欄
+  // （開始生成／派工任務分組）跟著舊頁一起退休——這支只留 heading 檢查過渡，四個畫面
+  // 的真正走查是 F02-I11 的 e2e（`.work/features/F02.md` "Also"）。 --------------------
   await page.goto(`/app/brands/${brandId}/workbench`);
   await expect(page.getByRole("heading", { name: "素材工作檯", exact: true })).toBeVisible();
-  const rail = page.locator(".workspace-subnav");
-  await expect(rail.getByRole("button", { name: "文案", exact: true })).toBeVisible();
-  for (const source of ["檔期", "網站", "品牌內容"]) {
-    await expect(rail.getByText(source, { exact: true })).toBeVisible();
-  }
-  await expect(rail.getByText("尚無任務", { exact: true })).toHaveCount(3);
 
   // --- 產品 -----------------------------------------------------------------
   await page.goto(`/app/brands/${brandId}/products`);

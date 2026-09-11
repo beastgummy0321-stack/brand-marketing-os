@@ -16,6 +16,7 @@ from app.brand_intelligence import repository as bi_repo
 from app.core import db as coredb
 from app.llm import providers
 from app.workbench import jobs as workbench_jobs
+from app.workbench import repository as workbench_repo
 
 ACTOR = "測試員"
 
@@ -67,7 +68,7 @@ class _CopyLengthTestBase(unittest.TestCase):
             "visual_concept": None, "style_key": "ugc",
             "request": {"parts": ["copy"], "copy_length": copy_length},
         }
-        return workbench_module.submit_brief(web.conn, self.org_id, self.brand_id, brief)
+        return workbench_repo.create_brief(web.conn, self.org_id, self.brand_id, brief)
 
     def _run_worker(self) -> None:
         web.conn.commit()

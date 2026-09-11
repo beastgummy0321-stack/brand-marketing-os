@@ -1,20 +1,19 @@
 """app/workbench/routes.py — /api/workbench/*. Private: only app/workbench/__init__.py
-imports this (container contract §1); it is only ever loaded via `register()`. Ticket
-workbench/03 (docs/contracts/workbench.md "Routes" / "Error shapes").
+imports this (container contract §1); it is only ever loaded via `register()`.
 
-Shape (container contract §7, this ticket's own quote of it): every handler is
-`require_actor` -> (`require_brand`, every route but `/styles`) -> one repository function ->
-wrap. Nothing here decides anything: every `ValueError` a repository function raises is looked
-up in this file's small per-route tables and turned into `web.ApiError` — that lookup is
-translation of an already-made decision, not a new one (the decision happened in
-`repository.py`). A handler that also needs the refreshed `BriefDetail` for its reply calls
-`repository.brief_detail()` a second time after the one mutating call — that second call is the
-"wrap" step assembling the JSON envelope, the same shape `app/schedule/routes.py`'s `_run_*`
-helpers use when they finish with `state._brand_response(...)`.
+F02-I03 (ARCHITECTURE.md §5.1-§5.5, `.work/features/F02.md` "API surface"): the brief-shaped
+endpoints (`/briefs`, `/briefs/{id}/outputs/{output_id}/adopt`, ...) are **replaced**, not kept
+in parallel — their only consumer was the retired `.workspace-split` page. This file now
+speaks 任務包 (pack) → 素材組 (set) → 產物 (product) → 版本 (version).
+
+Shape (container contract §7, unchanged): every handler is `require_actor` -> (`require_brand`,
+every route but `/styles`) -> one repository function -> wrap. Nothing here decides anything:
+every `ValueError` a repository function raises is looked up in this file's small per-route
+tables and turned into `web.ApiError` — that lookup is translation of an already-made decision,
+not a new one (the decision happened in `repository.py`).
 """
 
 from fastapi import APIRouter, Request
-from fastapi.responses import Response
 from pydantic import BaseModel
 
 import app.shared.web as web
@@ -22,15 +21,15 @@ from app.workbench import repository
 
 router = APIRouter(prefix="/api/workbench")
 
-BRIEF_UNKNOWN_MESSAGE = "找不到這張工單。"
-_BRIEF_UNKNOWN_ERRORS = {"brief_unknown": (404, BRIEF_UNKNOWN_MESSAGE)}
+PACK_UNKNOWN_MESSAGE = "找不到這個任務包。"
+SET_UNKNOWN_MESSAGE = "找不到這個素材組。"
+_PACK_UNKNOWN_ERRORS = {"pack_unknown": (404, PACK_UNKNOWN_MESSAGE)}
 
 
 def _error(exc: ValueError, table: dict) -> web.ApiError:
     """把 repository 丟出來的 `ValueError(code)` 對照成這個端點自己的錯誤表——同一個
-    code 在不同端點是不同的 HTTP 狀態碼（例如 `on_image_texts_required` 送出時是 400、
-    重跑時是 409，見票面「Literal shapes」上面那張表），所以每支端點自己一張表，不共用
-    一張全域表。"""
+    code 在不同端點是不同的 HTTP 狀態碼，所以每支端點自己一張表，不共用一張全域表
+    （沿用票 03 原本的規則，見 git 歷史那份檔頭）。"""
     code = str(exc)
     status, message = table.get(code, (400, code))
     return web.ApiError(status, code, message)
@@ -38,145 +37,201 @@ def _error(exc: ValueError, table: dict) -> web.ApiError:
 
 @router.get("/styles")
 def list_styles(request: Request):
-    """唯一不吃 `brand_id`、不呼叫 `require_brand` 的端點（票面「What」§1 開頭那句）——
-    仍然要登入（`require_actor`），只是不用挑品牌。"""
+    """唯一不吃 `brand_id`、不呼叫 `require_brand` 的端點——仍然要登入
+    （`require_actor`），只是不用挑品牌。"""
     web.require_actor(request)
     return {"styles": repository.STYLES}
 
 
-class NewBriefRequest(BaseModel):
-    # 租戶界線先於欄位驗證（`app/schedule/routes.py` 既有慣例，見該檔 `PlanRequest` 檔頭）：
-    # 全部給預設值，真正的驗證在 `repository.create_brief()`／`submit_brief()`。`kind` 不是
-    # 這個請求的欄位——它是 `submit_brief()` 從 `request["parts"]` 衍生的顯示欄位
-    # （ARCHITECTURE.md §5.4）。
-    product_id: str | None = None
-    coordinates: dict[str, str | None] | None = None
-    visual_tone: str | None = None
-    visual_concept: str | None = None
-    style_key: str = "ugc"
-    request: dict = {}
+# -- 任務包（PackCard／PackDetail） -----------------------------------------------------
 
-
-_CREATE_BRIEF_ERRORS = {
-    "parts_unknown": (400, "請選擇至少一種要生成的內容。"),
-    "copy_length_unknown": (400, "文案長度只能是短版／中版／長版。"),
-    "style_unknown": (400, "找不到這個風格。"),
-    "product_unknown": (404, "找不到這個產品。"),
-    "count_out_of_range": (400, "圖片提示詞張數需介於 1 到 30 之間。"),
+_LIST_PACKS_ERRORS = {
+    "status_unknown": (400, "status 參數只能是 all／pending／running／awaiting_approval／done。"),
+    "sort_unknown": (400, "sort 參數只能是 updated／created／progress。"),
 }
 
 
-@router.post("/brands/{brand_id}/briefs", status_code=201)
-def create_brief(request: Request, brand_id: str, body: NewBriefRequest):
-    actor = web.require_actor(request)
-    web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
-    brief = {
-        "source_kind": "manual", "source_ref": {},
-        "product_id": body.product_id, "coordinates": body.coordinates,
-        "visual_tone": body.visual_tone, "visual_concept": body.visual_concept,
-        "style_key": body.style_key, "request": body.request,
-    }
-    try:
-        brief_id = repository.create_brief(web.conn, actor.org_id, brand_id, brief)
-    except ValueError as exc:
-        raise _error(exc, _CREATE_BRIEF_ERRORS) from exc
-    return {"brief": repository.brief_detail(web.conn, actor.org_id, brand_id, brief_id)}
-
-
-_LIST_BRIEFS_ERRORS = {"status_unknown": (400, "status 參數只能是 active／closed／all。")}
-
-
-@router.get("/brands/{brand_id}/briefs")
-def list_briefs(request: Request, brand_id: str, status: str = "active"):
+@router.get("/brands/{brand_id}/packs")
+def list_packs(request: Request, brand_id: str, status: str = "all", q: str | None = None,
+                sort: str = "updated"):
     actor = web.require_actor(request)
     web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
     try:
-        briefs = repository.list_briefs(web.conn, actor.org_id, brand_id, status)
+        packs = repository.list_packs(web.conn, actor.org_id, brand_id, status=status, q=q,
+                                       sort=sort)
     except ValueError as exc:
-        raise _error(exc, _LIST_BRIEFS_ERRORS) from exc
-    return {"briefs": briefs}
+        raise _error(exc, _LIST_PACKS_ERRORS) from exc
+    return {"packs": packs}
 
 
-@router.get("/brands/{brand_id}/briefs/{brief_id}")
-def get_brief(request: Request, brand_id: str, brief_id: str):
+@router.get("/brands/{brand_id}/packs/{pack_id}")
+def get_pack(request: Request, brand_id: str, pack_id: str):
     actor = web.require_actor(request)
     web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
-    detail = repository.brief_detail(web.conn, actor.org_id, brand_id, brief_id)
+    pack = repository.pack_detail(web.conn, actor.org_id, brand_id, pack_id)
+    if pack is None:
+        raise web.ApiError(404, "pack_unknown", PACK_UNKNOWN_MESSAGE)
+    return {"pack": pack}
+
+
+class NewFreePackRequest(BaseModel):
+    # 租戶界線先於欄位驗證（既有慣例）：全部給預設值，真正的驗證在
+    # `repository.create_free_pack()`／`submit_pack()`。`source_kind` 不是這個請求的欄位
+    # ——伺服器端強制 `"free_job"`（票面「自由創作 only」）。
+    name: str | None = None
+    free_text: str | None = None
+    product_id: str | None = None
+    style_key: str | None = None
+    sets: list[dict] = []
+    summary: dict = {}
+
+
+_CREATE_FREE_PACK_ERRORS = {
+    "sets_unknown": (400, "請至少加入一個素材組。"),
+    "required_outputs_unknown": (400, "每個素材組至少要選一種要生成的內容。"),
+    "part_retired": (400, "free 已經退休，自由創作不能用它當必要產出。"),
+    "parts_unknown": (400, "必要產出只能是文案／圖片／腳本。"),
+    "count_out_of_range": (400, "需要選定的版本數必須是至少 1 的整數。"),
+}
+
+
+@router.post("/brands/{brand_id}/packs", status_code=201)
+def create_free_pack(request: Request, brand_id: str, body: NewFreePackRequest):
+    actor = web.require_actor(request)
+    web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
+    try:
+        pack_id = repository.create_free_pack(web.conn, actor.org_id, brand_id, body.model_dump())
+    except ValueError as exc:
+        raise _error(exc, _CREATE_FREE_PACK_ERRORS) from exc
+    return {"pack": repository.pack_detail(web.conn, actor.org_id, brand_id, pack_id)}
+
+
+class CompletionRequest(BaseModel):
+    key: str
+    checked: bool
+
+
+_COMPLETION_ERRORS = {
+    "key_unknown": (400, "不認得這個完成條件。"),
+    "pack_unknown": (404, PACK_UNKNOWN_MESSAGE),
+}
+
+
+@router.post("/brands/{brand_id}/packs/{pack_id}/completion")
+def set_pack_completion(request: Request, brand_id: str, pack_id: str, body: CompletionRequest):
+    actor = web.require_actor(request)
+    web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
+    try:
+        pack = repository.set_pack_completion(
+            web.conn, actor.org_id, brand_id, pack_id, body.key, body.checked,
+        )
+    except ValueError as exc:
+        raise _error(exc, _COMPLETION_ERRORS) from exc
+    return {"pack": pack}
+
+
+_APPROVE_ERRORS = {
+    "pack_unknown": (404, PACK_UNKNOWN_MESSAGE),
+    "completion_incomplete": (409, "還有完成條件沒有滿足。"),
+}
+
+
+@router.post("/brands/{brand_id}/packs/{pack_id}/approve")
+def approve_pack(request: Request, brand_id: str, pack_id: str):
+    actor = web.require_actor(request)
+    web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
+    try:
+        pack = repository.approve_pack(web.conn, actor.org_id, brand_id, pack_id)
+    except ValueError as exc:
+        raise _error(exc, _APPROVE_ERRORS) from exc
+    return {"pack": pack}
+
+
+@router.post("/brands/{brand_id}/packs/{pack_id}/close")
+def close_pack(request: Request, brand_id: str, pack_id: str):
+    actor = web.require_actor(request)
+    web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
+    try:
+        pack = repository.close_pack(web.conn, actor.org_id, brand_id, pack_id)
+    except ValueError as exc:
+        raise _error(exc, _PACK_UNKNOWN_ERRORS) from exc
+    return {"pack": pack}
+
+
+# -- 素材組（SetDetail）／產物／版本 -----------------------------------------------------
+
+@router.get("/brands/{brand_id}/sets/{set_id}")
+def get_set(request: Request, brand_id: str, set_id: str):
+    actor = web.require_actor(request)
+    web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
+    detail = repository.set_detail(web.conn, actor.org_id, brand_id, set_id)
     if detail is None:
-        raise web.ApiError(404, "brief_unknown", BRIEF_UNKNOWN_MESSAGE)
-    return {"brief": detail}
+        raise web.ApiError(404, "set_unknown", SET_UNKNOWN_MESSAGE)
+    return {"set": detail}
 
 
-class RunPartRequest(BaseModel):
+class RunProductRequest(BaseModel):
     count: int | None = None
 
 
-_RUN_PART_ERRORS = {
-    "brief_unknown": (404, BRIEF_UNKNOWN_MESSAGE),
-    "part_unknown": (400, "這個 part 不適用於這張工單的類型。"),
-    "count_out_of_range": (400, "圖片提示詞張數需介於 1 到 30 之間。"),
-    "brief_closed": (409, "這張工單已經關閉。"),
+_RUN_PRODUCT_ERRORS = {
+    "brief_unknown": (404, SET_UNKNOWN_MESSAGE),
+    "part_unknown": (400, "這個產物類型不適用於這個素材組。"),
+    "count_out_of_range": (400, "版本張數超出範圍。"),
+    "brief_closed": (409, "這個素材組已經關閉。"),
     "round_running": (409, "上一輪還在跑，請等它跑完再按。"),
+    "pack_approved": (409, "這個任務包已核准，選定已鎖定。"),
 }
 
 
-@router.post("/brands/{brand_id}/briefs/{brief_id}/parts/{part}/run")
-def run_part(request: Request, brand_id: str, brief_id: str, part: str, body: RunPartRequest):
+@router.post("/brands/{brand_id}/sets/{set_id}/products/{part}/run")
+def run_product(request: Request, brand_id: str, set_id: str, part: str,
+                 body: RunProductRequest):
     actor = web.require_actor(request)
     web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
     try:
-        repository.run_part(web.conn, actor.org_id, brand_id, brief_id, part, count=body.count)
+        result = repository.run_product(
+            web.conn, actor.org_id, brand_id, set_id, part, count=body.count,
+        )
     except ValueError as exc:
-        raise _error(exc, _RUN_PART_ERRORS) from exc
-    return {"brief": repository.brief_detail(web.conn, actor.org_id, brand_id, brief_id)}
+        raise _error(exc, _RUN_PRODUCT_ERRORS) from exc
+    return {"set": result}
 
 
-_ADOPT_ERRORS = {
-    "brief_unknown": (404, BRIEF_UNKNOWN_MESSAGE),
-    "brief_closed": (409, "這張工單已經關閉。"),
-    "output_unknown": (404, "找不到這個產出。"),
+_SELECT_ERRORS = {
+    # ponytail: `select_version`/`deselect_version` key off `output_id` alone (票 02 既有
+    # 簽章，`app/tests/test_workbench_pack.py` 直接呼叫它，不能改) — a mismatched `set_id`
+    # in the URL is not cross-checked against the output's own brief_id here. Add that
+    # containment check if a set-scoped token ever needs to matter.
+    "output_unknown": (404, "找不到這個版本。"),
+    "brief_closed": (409, "這個素材組已經關閉。"),
+    "pack_approved": (409, "這個任務包已核准，選定已鎖定。"),
 }
 
 
-@router.post("/brands/{brand_id}/briefs/{brief_id}/outputs/{output_id}/adopt")
-def adopt_output(request: Request, brand_id: str, brief_id: str, output_id: str):
+@router.post("/brands/{brand_id}/sets/{set_id}/versions/{version_id}/select")
+def select_version(request: Request, brand_id: str, set_id: str, version_id: str):
     actor = web.require_actor(request)
     web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
     try:
-        repository.adopt_output_for_brief(web.conn, actor.org_id, brand_id, brief_id, output_id)
+        repository.select_version(web.conn, actor.org_id, brand_id, version_id)
     except ValueError as exc:
-        raise _error(exc, _ADOPT_ERRORS) from exc
-    return {"brief": repository.brief_detail(web.conn, actor.org_id, brand_id, brief_id)}
+        raise _error(exc, _SELECT_ERRORS) from exc
+    detail = repository.set_detail(web.conn, actor.org_id, brand_id, set_id)
+    if detail is None:
+        raise web.ApiError(404, "set_unknown", SET_UNKNOWN_MESSAGE)
+    return {"set": detail}
 
 
-@router.post("/brands/{brand_id}/briefs/{brief_id}/close")
-def close_brief(request: Request, brand_id: str, brief_id: str):
+@router.delete("/brands/{brand_id}/sets/{set_id}/versions/{version_id}/select")
+def deselect_version(request: Request, brand_id: str, set_id: str, version_id: str):
     actor = web.require_actor(request)
     web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
     try:
-        repository.close_brief(web.conn, actor.org_id, brand_id, brief_id)
+        repository.deselect_version(web.conn, actor.org_id, brand_id, version_id)
     except ValueError as exc:
-        raise _error(exc, _BRIEF_UNKNOWN_ERRORS) from exc
-    return {"brief": repository.brief_detail(web.conn, actor.org_id, brand_id, brief_id)}
-
-
-@router.post("/brands/{brand_id}/briefs/{brief_id}/reopen")
-def reopen_brief(request: Request, brand_id: str, brief_id: str):
-    actor = web.require_actor(request)
-    web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
-    try:
-        repository.reopen_brief(web.conn, actor.org_id, brand_id, brief_id)
-    except ValueError as exc:
-        raise _error(exc, _BRIEF_UNKNOWN_ERRORS) from exc
-    return {"brief": repository.brief_detail(web.conn, actor.org_id, brand_id, brief_id)}
-
-
-@router.delete("/brands/{brand_id}/briefs/{brief_id}")
-def delete_brief(request: Request, brand_id: str, brief_id: str):
-    actor = web.require_actor(request)
-    web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
-    try:
-        repository.delete_brief(web.conn, actor.org_id, brand_id, brief_id)
-    except ValueError as exc:
-        raise _error(exc, _BRIEF_UNKNOWN_ERRORS) from exc
-    return Response(status_code=204)
+        raise _error(exc, _SELECT_ERRORS) from exc
+    detail = repository.set_detail(web.conn, actor.org_id, brand_id, set_id)
+    if detail is None:
+        raise web.ApiError(404, "set_unknown", SET_UNKNOWN_MESSAGE)
+    return {"set": detail}
