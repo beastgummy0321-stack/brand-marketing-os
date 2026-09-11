@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { ChevronDown, Link as LinkIcon } from "lucide-react";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { EmptyState } from "@/components/layout/EmptyState";
@@ -254,12 +254,12 @@ function SetHeader({ brandId, set }: { brandId: string; set: SetDetail }) {
         </div>
         <div className="flex items-center gap-2">
           {set.source_kind === "schedule_node" && (
-            <a
-              href={`/brands/${brandId}/schedule`}
+            <Link
+              to={`/brands/${brandId}/schedule`}
               className="text-xs text-primary hover:underline"
             >
               到檔期規劃 ↗
-            </a>
+            </Link>
           )}
           <Badge className={SET_STATUS_TONE[set.status] ?? "bg-muted text-muted-foreground"}>
             {set.status}
@@ -449,7 +449,7 @@ function VersionBadge({
         {selected ? "✓ 已選定" : "選定"}
       </Button>
       {onSimilar && (
-        <Button size="sm" variant="outline" onClick={onSimilar}>
+        <Button size="sm" variant="outline" disabled={disabled} onClick={onSimilar}>
           相似版本
         </Button>
       )}
