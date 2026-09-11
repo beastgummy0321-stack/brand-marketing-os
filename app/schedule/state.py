@@ -154,18 +154,23 @@ def _copy_summary(output: dict | None) -> dict | None:
     `visual_tone`／`visual_concept`，ADR 0068 §5 amendment），這裡攤平成一層，畫面不必
     知道 workbench 的列形狀。`None`：這個 part 從沒產出過。
 
-    一次生成只出一個長度帶（`copy_length`，票 F01-T01-I02）：`body_json` 不再有
-    `short`／`medium`／`long` 三把鑰匙，只有 `body_json["copy_length"]` 指名的那一把——
-    這裡讀那一把出來當 `bodies`，`copy_length` 本身缺欄位（舊輸出）落回 `"short"`。"""
+    一輪文案是 5 組完整廣告（ARCHITECTURE.md §5.6）：`body_json["sets"]` 是
+    `[{body, headline, description}, ...]`，這裡拆成三個 index-aligned 清單——
+    `CreativePackList.tsx`／素材準備 stage 讀的還是 `bodies`／`headlines`／`descriptions`
+    這個舊形狀，這支只換讀法，不換輸出契約（§5.6 明講：那兩處這次不動）。`sets` 缺欄位
+    或不是清單（舊輸出）一律落回空清單，跟舊版對缺欄位的容忍一致。"""
     if output is None:
         return None
     body = output.get("body_json") or {}
     copy_length = body.get("copy_length") or "short"
+    sets = body.get("sets")
+    sets = sets if isinstance(sets, list) else []
     return {
         "is_adopted": output["is_adopted"], "generation_round": output["generation_round"],
-        "copy_length": copy_length, "bodies": body.get(copy_length, []),
-        "headlines": body.get("headlines", []),
-        "descriptions": body.get("descriptions", []),
+        "copy_length": copy_length,
+        "bodies": [s.get("body") for s in sets if isinstance(s, dict)],
+        "headlines": [s.get("headline") for s in sets if isinstance(s, dict)],
+        "descriptions": [s.get("description") for s in sets if isinstance(s, dict)],
         "visual_tone": body.get("visual_tone"), "visual_concept": body.get("visual_concept"),
         "validation": body.get("validation", []),
         # 票 workbench-2/02（ablation §4）：文案任務的誠實 warnings 一路帶到素材準備畫面——

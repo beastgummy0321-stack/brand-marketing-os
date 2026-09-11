@@ -2578,8 +2578,8 @@ class CreativeCandidateSyncTest(_ScheduleApiTestBase):
             "proof": None, "offer": None, "format": None,
         }
         body = {
-            "coordinates": coordinates, "copy_length": "short", "short": ["短版"],
-            "headlines": ["標題"], "descriptions": ["說明"],
+            "coordinates": coordinates, "copy_length": "short",
+            "sets": [{"body": "短版", "headline": "標題", "description": "說明"}],
             "visual_tone": visual_tone, "visual_concept": f"第 {round_no} 輪的畫面概念",
             "warnings": warnings if warnings is not None else [], "validation": [],
         }

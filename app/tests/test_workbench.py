@@ -99,13 +99,14 @@ class _WorkbenchTestBase(unittest.TestCase):
         return workbench_module.submit_brief(web.conn, self.org_id, self.brand_id, brief)
 
     def _copy_reply(self) -> dict:
-        """票 T01-02：一次只出一個長度帶——預設工單沒給 `copy_length`，`jobs._run` 落回
-        `"short"`，這裡就只帶 `short` 那一個長度鍵，跟新合約一致。"""
+        """ARCHITECTURE.md §5.6：一輪 5 組完整廣告——預設工單沒給 `copy_length`，`jobs._run`
+        落回 `"short"`，這裡 5 組的 `body` 都落在短版字數帶。"""
         return {
             "coordinates": dict(self.coordinates),
-            "short": [_cjk(140) for _ in range(5)],
-            "headlines": [_cjk(10) for _ in range(5)],
-            "descriptions": [_cjk(15) for _ in range(5)],
+            "sets": [
+                {"body": _cjk(140), "headline": _cjk(10), "description": _cjk(15)}
+                for _ in range(5)
+            ],
             # 票 05（ADR 0068 §5 amendment）：文案回覆現在也帶視覺方向。
             "visual_tone": "暖調生活", "visual_concept": "測試視覺概念",
             "warnings": [],
@@ -581,6 +582,27 @@ class CopyWarningsSummaryTest(_WorkbenchTestBase):
             web.conn, self.org_id, self.brand_id, brief_id_2, "copy"
         )
         self.assertEqual(schedule_state._copy_summary(output_2)["warnings"], [])
+
+
+# -- 案例 9b（票 F02-I01）：`_copy_summary()` 從 `sets` 拆出 index-aligned 的三個舊清單 -----
+
+class CopySummaryReadsIndexAlignedListsFromSetsTest(unittest.TestCase):
+    def test_five_sets_become_three_index_aligned_lists(self):
+        output = {
+            "is_adopted": True, "generation_round": 1,
+            "body_json": {
+                "copy_length": "short",
+                "sets": [
+                    {"body": "身1", "headline": "標1", "description": "說1"},
+                    {"body": "身2", "headline": "標2", "description": "說2"},
+                ],
+                "visual_tone": None, "visual_concept": "概念", "warnings": [], "validation": [],
+            },
+        }
+        summary = schedule_state._copy_summary(output)
+        self.assertEqual(summary["bodies"], ["身1", "身2"])
+        self.assertEqual(summary["headlines"], ["標1", "標2"])
+        self.assertEqual(summary["descriptions"], ["說1", "說2"])
 
 
 # -- 案例 10（票 F01-T03-I02）：schedule_node 派工的 image_prompt，沒有已採用文案 -------

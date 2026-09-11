@@ -32,11 +32,15 @@ def _fake(rendered_output: str) -> providers.FakeProvider:
     ))
 
 
-_BODIES = {
-    "short": lambda: [_cjk(140) for _ in range(5)],
-    "medium": lambda: [_cjk(450) for _ in range(3)],
-    "long": lambda: [_cjk(950) for _ in range(2)],
-}
+_BAND_BODY_LEN = {"short": 140, "medium": 450, "long": 950}
+
+
+def _sets(copy_length: str) -> list:
+    """ARCHITECTURE.md §5.6: 一輪 5 組完整廣告，每組的 body 落在 `copy_length` 那個長度帶。"""
+    n = _BAND_BODY_LEN[copy_length]
+    return [
+        {"body": _cjk(n), "headline": _cjk(10), "description": _cjk(15)} for _ in range(5)
+    ]
 
 
 class _CopyLengthTestBase(unittest.TestCase):
@@ -77,7 +81,7 @@ class _CopyLengthTestBase(unittest.TestCase):
         return dict(row)
 
 
-# -- 三個長度各自送一次，回覆只帶那一個長度鍵 -> 全綠、body_json.copy_length 記對長度 -----
+# -- 三個長度各自送一次，5 組的 body 都落在那個長度帶 -> 全綠、body_json.copy_length 記對 ---
 
 class EachLengthRoundTripTest(_CopyLengthTestBase):
     def test_each_length_passes_and_records_itself(self):
@@ -85,9 +89,7 @@ class EachLengthRoundTripTest(_CopyLengthTestBase):
             with self.subTest(copy_length=copy_length):
                 brief_id = self._submit(copy_length)
                 reply = {
-                    "coordinates": {}, copy_length: _BODIES[copy_length](),
-                    "headlines": [_cjk(10) for _ in range(5)],
-                    "descriptions": [_cjk(15) for _ in range(5)],
+                    "coordinates": {}, "sets": _sets(copy_length),
                     "visual_tone": None, "visual_concept": "測試視覺概念", "warnings": [],
                 }
                 workbench_jobs.PROVIDER = _fake(json.dumps(reply, ensure_ascii=False))
@@ -101,15 +103,13 @@ class EachLengthRoundTripTest(_CopyLengthTestBase):
                 self.assertTrue(all(line.startswith("✅") for line in validation), validation)
 
 
-# -- 回覆帶錯的長度鍵（工單要 medium，回覆只有 short）-> 失敗項目的 path 就是要求的長度 -----
+# -- 工單要 medium，回覆的 5 組 body 卻是 short 帶字數 -> 5 組全在 sets[i].body 各自失敗 -----
 
-class WrongLengthKeyFailsAtRequestedPathTest(_CopyLengthTestBase):
-    def test_wrong_band_fails_with_item_at_requested_path(self):
+class BodiesInWrongBandFailAtEachSetsBodyPathTest(_CopyLengthTestBase):
+    def test_wrong_band_fails_every_item_at_its_own_body_path(self):
         brief_id = self._submit("medium")
         reply = {
-            "coordinates": {}, "short": _BODIES["short"](),  # 工單要 medium，回覆只給 short
-            "headlines": [_cjk(10) for _ in range(5)],
-            "descriptions": [_cjk(15) for _ in range(5)],
+            "coordinates": {}, "sets": _sets("short"),  # 工單要 medium，回覆卻是短版字數
             "visual_tone": None, "visual_concept": "測試視覺概念", "warnings": [],
         }
         workbench_jobs.PROVIDER = _fake(json.dumps(reply, ensure_ascii=False))
@@ -119,8 +119,9 @@ class WrongLengthKeyFailsAtRequestedPathTest(_CopyLengthTestBase):
         body = output["body_json"]
         self.assertEqual(body["copy_length"], "medium")
         validation = body["validation"]
-        fail = next(line for line in validation if line.split("：", 1)[0].endswith("medium"))
-        self.assertTrue(fail.startswith("❌"), fail)
+        body_fails = [line for line in validation if "sets[" in line and "].body：" in line]
+        self.assertEqual(len(body_fails), 5)
+        self.assertTrue(all(line.startswith("❌") for line in body_fails), body_fails)
 
 
 if __name__ == "__main__":

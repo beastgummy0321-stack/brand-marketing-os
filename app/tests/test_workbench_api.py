@@ -247,11 +247,10 @@ class RoundTripAdoptionTest(_WorkbenchApiTestBase):
         }
         return json.dumps({
             "coordinates": coordinates,
-            "short": [_cjk(140) for _ in range(5)],
-            "medium": [_cjk(450) for _ in range(3)],
-            "long": [_cjk(950) for _ in range(2)],
-            "headlines": [_cjk(10) for _ in range(5)],
-            "descriptions": [_cjk(15) for _ in range(5)],
+            "sets": [
+                {"body": _cjk(140), "headline": _cjk(10), "description": _cjk(15)}
+                for _ in range(5)
+            ],
             # 票 05（ADR 0068 §5 amendment）：文案回覆現在也帶視覺方向。
             "visual_tone": "暖調生活", "visual_concept": "測試視覺概念",
             "warnings": [],
@@ -352,7 +351,7 @@ class DeleteBriefTest(_WorkbenchApiTestBase):
         brief_id = create_resp.json()["brief"]["id"]
         workbench_repo.write_output(
             web.conn, org_id=self.org_id, brand_id=self.brand_id, brief_id=brief_id,
-            part="copy", generation_round=1, body_json={"headlines": []},
+            part="copy", generation_round=1, body_json={"sets": []},
             coordinates_json=None, llm_task_id=None,
         )
         delete_resp = self.client.delete(

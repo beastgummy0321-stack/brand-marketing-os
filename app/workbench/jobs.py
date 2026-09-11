@@ -104,28 +104,33 @@ def _original_value(data: dict, path: str):
     return data.get(key)
 
 
-def _shape_hint(path: str) -> str:
+def _shape_hint(path: str, copy_length: str | None) -> str:
     """修正輪要附的「精確回覆形狀」一句話——數字／鍵名一律用程式算，不讓模型自己猜字數帶
-    （票 workbench/04 walk round 2 amendment）。只覆蓋一種形狀：`short[N]`／`medium[N]`／
-    `long[N]`（字串＋原字數帶）；其他 path（含 `hero.*`、`angles[n].*`）沿用 `fix.md` 本來
-    就有的通用 JSON schema，不多加一句。"""
+    （票 workbench/04 walk round 2 amendment）。`sets[i].body` 讀 `copy_length` 對應的字數
+    帶；`sets[i].headline`／`sets[i].description` 讀固定上限。其他 path（含 `hero.*`、
+    `angles[n].*`、非文案 part）沿用 `fix.md` 本來就有的通用 JSON schema，不多加一句。"""
     match = _PATH_RE.match(path) if isinstance(path, str) else None
     if not match:
         return ""
-    key, index, _subkey = match.groups()
-    if key in validate.BODY_BANDS and index is not None:
-        lo, hi, _count = validate.BODY_BANDS[key]
-        return f"回一個字串，{lo}～{hi} 字"
+    key, index, subkey = match.groups()
+    if key == "sets" and index is not None and copy_length is not None:
+        if subkey == "body":
+            lo, hi = validate.BODY_BANDS[copy_length]
+            return f"回一個字串，{lo}～{hi} 字"
+        if subkey == "headline":
+            return f"回一個字串，{validate.HEADLINE_MAX} 字以內"
+        if subkey == "description":
+            return f"回一個字串，{validate.DESCRIPTION_MAX} 字以內"
     return ""
 
 
-def _fix_item_block(item: dict, *, original) -> str:
+def _fix_item_block(item: dict, *, original, copy_length: str | None) -> str:
     lines = [
         f"- path: {item['path']}",
         f"  原值：{json.dumps(original, ensure_ascii=False)}",
         f"  問題：{item['message']}",
     ]
-    shape = _shape_hint(item["path"])
+    shape = _shape_hint(item["path"], copy_length)
     if shape:
         lines.append(f"  形狀：{shape}")
     return "\n".join(lines)
@@ -231,15 +236,17 @@ def _output_line(rows: list, format_label: str) -> str:
 
 
 def _fix_call(conn, brand_id: str, context, task_type: str, failing: list, *,
-               brief_section: str, original: dict) -> dict:
+               brief_section: str, original: dict, copy_length: str | None = None) -> dict:
     """ADR 0068 §6：失敗項目一次問完、只問失敗的那幾項——prompt 不重貼原本的部門任務檔／
     方法論（那些內容模型已經看過一次，批次不重生），但每一通 `gateway.run_task` 都是全新
     的無狀態呼叫（ADR 0032）：模型沒有上一通的記憶，所以工單段（`brief_section`，跟第一次
     生成時同一段文字）與每個失敗欄位的原值、問題描述、精確回覆形狀都要重貼一次，不然模型
-    只能自己編（票 workbench/04 walk round 2 amendment，修的就是這個）。"""
+    只能自己編（票 workbench/04 walk round 2 amendment，修的就是這個）。`copy_length` 只有
+    文案任務會傳非 `None`——`sets[i].body` 的字數帶形狀要靠它才算得出來。"""
     fix_text = (DEPARTMENTS_DIR / "fix.md").read_text(encoding="utf-8")
     listing = "\n".join(
-        _fix_item_block(item, original=original.get(item["path"])) for item in failing
+        _fix_item_block(item, original=original.get(item["path"]), copy_length=copy_length)
+        for item in failing
     )
     prompt = "\n\n".join([
         fix_text, brief_section, "## 這些欄位沒有通過驗證，只重新回答這些", listing,
@@ -353,9 +360,12 @@ def _run(conn, org_id: str, brand_id: str, brief_id: str, part: str, count) -> N
 
         headline_hint = None
         headlines_output = repository.adopted_output(conn, org_id, brand_id, brief_id, "copy")
-        headlines = (headlines_output or {}).get("body_json", {}).get("headlines") or []
-        if headlines:
-            headline_hint = headlines[0]
+        copy_sets = (headlines_output or {}).get("body_json", {}).get("sets") or []
+        for copy_set in copy_sets:
+            headline = (copy_set or {}).get("headline") if isinstance(copy_set, dict) else None
+            if headline:
+                headline_hint = headline
+                break
 
         image_prompt_ctx = {
             "mode": mode, "style_block": style["style_block"], "product_line": product_line,
@@ -407,7 +417,7 @@ def _run(conn, org_id: str, brand_id: str, brief_id: str, part: str, count) -> N
         original = {item["path"]: _original_value(data, item["path"]) for item in failing}
         fix_row = _fix_call(
             conn, brand_id, context, task_type, failing,
-            brief_section=brief_section, original=original,
+            brief_section=brief_section, original=original, copy_length=copy_length,
         )
         if fix_row["status"] == "succeeded":
             fix_data = validate.parse_json_only(fix_row.get("rendered_output") or "")
