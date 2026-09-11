@@ -25,7 +25,7 @@ import { BrandReportPage } from "@/components/report/BrandReportPage";
 import { OrdersPage } from "@/components/orders/OrdersPage";
 import { SchedulePage } from "@/components/schedule/SchedulePage";
 import { SettingsPage } from "@/components/settings/SettingsPage";
-import { PackPage, WorkbenchHomePage } from "@/components/workbench";
+import { PackPage, SetStudioPage, WorkbenchHomePage } from "@/components/workbench";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   WorkspaceProvider,
@@ -65,6 +65,10 @@ function App() {
         <Route
           path="/brands/:brandId/workbench/packs/:packId"
           element={<WorkbenchPackRoute />}
+        />
+        <Route
+          path="/brands/:brandId/workbench/packs/:packId/sets/:setId"
+          element={<WorkbenchSetRoute />}
         />
         <Route
           path="/brands/:brandId/products"
@@ -281,6 +285,21 @@ function WorkbenchPackRoute() {
   return (
     <>
       <PackPage brandId={brandId ?? ""} packId={packId ?? ""} />
+    </>
+  );
+}
+
+/** 素材組 studio（F02-I09）：`…/workbench/packs/:packId/sets/:setId` 最後一條，鏈到此結束
+ * （F02-I10 是 `…/workbench/new`，不再碰這三支檔案的這段）。 */
+function WorkbenchSetRoute() {
+  const { brandId, packId, setId } = useParams<{
+    brandId: string;
+    packId: string;
+    setId: string;
+  }>();
+  return (
+    <>
+      <SetStudioPage brandId={brandId ?? ""} packId={packId ?? ""} setId={setId ?? ""} />
     </>
   );
 }

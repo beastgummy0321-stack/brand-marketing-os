@@ -90,12 +90,20 @@ export interface VersionBody {
   [key: string]: unknown;
 }
 
+export interface PromptCard {
+  label: string;
+  text: string;
+}
+
 export interface ProductVersion {
   id: string;
   version_index: number;
   generation_round: number;
   selected_at: string | null;
   body: VersionBody | null;
+  /** 只有 `image_prompt` 版本有這欄（`_prompt_cards`，§5.11）：①主圖／②變體（或探索模式）
+   * 的純文字提示詞卡，圖片 tab 未接港口時原樣顯示。 */
+  prompt_cards?: PromptCard[];
 }
 
 export interface SetProduct {
@@ -113,6 +121,11 @@ export interface SetSibling {
   status: string;
 }
 
+export interface GenerationSettingRow {
+  label: string;
+  text: string;
+}
+
 export interface SetDetail {
   id: string;
   pack_id: string;
@@ -123,6 +136,8 @@ export interface SetDetail {
   siblings: SetSibling[];
   required_parts: ProductPart[];
   products: Partial<Record<ProductPart, SetProduct>>;
+  /** §5.13：右欄「生成設定」表，永遠七列，`{label, text}` 逐列照給的順序原樣渲染。 */
+  generation_settings: GenerationSettingRow[];
   image_generation: { connected: boolean; reason: string };
 }
 
