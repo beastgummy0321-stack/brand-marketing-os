@@ -25,7 +25,7 @@ import { BrandReportPage } from "@/components/report/BrandReportPage";
 import { OrdersPage } from "@/components/orders/OrdersPage";
 import { SchedulePage } from "@/components/schedule/SchedulePage";
 import { SettingsPage } from "@/components/settings/SettingsPage";
-import { WorkbenchHomePage } from "@/components/workbench";
+import { PackPage, WorkbenchHomePage } from "@/components/workbench";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   WorkspaceProvider,
@@ -62,6 +62,10 @@ function App() {
         <Route path="/brands/:brandId/intake/history" element={<HistoryRoute />} />
         <Route path="/brands/:brandId/library" element={<LibraryRoute />} />
         <Route path="/brands/:brandId/workbench" element={<WorkbenchRoute />} />
+        <Route
+          path="/brands/:brandId/workbench/packs/:packId"
+          element={<WorkbenchPackRoute />}
+        />
         <Route
           path="/brands/:brandId/products"
           element={<ProductListRoute />}
@@ -266,6 +270,17 @@ function WorkbenchRoute() {
   return (
     <>
       <WorkbenchHomePage brandId={brandId ?? ""} />
+    </>
+  );
+}
+
+/** 任務包頁（F02-I08）：`…/workbench/packs/:packId` 一條路由，鏈上的下一支
+ * （F02-I09，`…/workbench/packs/:packId/sets/:setId`）之後才加。 */
+function WorkbenchPackRoute() {
+  const { brandId, packId } = useParams<{ brandId: string; packId: string }>();
+  return (
+    <>
+      <PackPage brandId={brandId ?? ""} packId={packId ?? ""} />
     </>
   );
 }

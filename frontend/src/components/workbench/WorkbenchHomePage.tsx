@@ -33,14 +33,14 @@ const STATUS_PILLS: { value: PackListStatus; label: string }[] = [
   { value: "done", label: "已完成" },
 ];
 
-const STATUS_LABEL: Record<PackCard["status"], string> = {
+export const STATUS_LABEL: Record<PackCard["status"], string> = {
   pending: "待處理",
   running: "進行中",
   awaiting_approval: "待核准",
   done: "已完成",
 };
 
-const STATUS_TONE: Record<PackCard["status"], string> = {
+export const STATUS_TONE: Record<PackCard["status"], string> = {
   pending: "bg-muted text-muted-foreground",
   running: "bg-warning/10 text-warning",
   awaiting_approval: "bg-warning/10 text-warning",
@@ -65,7 +65,8 @@ const QUICK_START: { part: ProductPart; label: string; hint: string }[] = [
   { part: "video_script", label: "腳本", hint: "短影音腳本、分鏡、拍攝企劃" },
 ];
 
-function updatedLabel(iso: string): string {
+/** 相對時間（<24h）／絕對時間，工作檯入口與任務包頁共用一份規則（F02-I08 沿用，不重寫）。 */
+export function updatedLabel(iso: string): string {
   const elapsedHours = (Date.now() - new Date(iso).getTime()) / 3_600_000;
   return elapsedHours < 24 ? formatRelativeHours(iso) : formatSyncTime(iso);
 }
