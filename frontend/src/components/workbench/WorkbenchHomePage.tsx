@@ -350,7 +350,9 @@ export function WorkbenchHomePage({ brandId }: { brandId: string }) {
   );
 }
 
-function PackCardTile({
+/** 匯出給 F02-I10 自由創作頁「預覽將建立的工作項目」重用——同一張卡，不是第二份設計
+ * （票面 Done 那句話）。預覽情境沒有真正的 pack，呼叫端自己包一層擋掉點擊即可。 */
+export function PackCardTile({
   pack,
   brandId,
   onClose,

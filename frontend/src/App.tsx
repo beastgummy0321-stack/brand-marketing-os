@@ -25,7 +25,7 @@ import { BrandReportPage } from "@/components/report/BrandReportPage";
 import { OrdersPage } from "@/components/orders/OrdersPage";
 import { SchedulePage } from "@/components/schedule/SchedulePage";
 import { SettingsPage } from "@/components/settings/SettingsPage";
-import { PackPage, SetStudioPage, WorkbenchHomePage } from "@/components/workbench";
+import { FreeJobPage, PackPage, SetStudioPage, WorkbenchHomePage } from "@/components/workbench";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   WorkspaceProvider,
@@ -62,6 +62,7 @@ function App() {
         <Route path="/brands/:brandId/intake/history" element={<HistoryRoute />} />
         <Route path="/brands/:brandId/library" element={<LibraryRoute />} />
         <Route path="/brands/:brandId/workbench" element={<WorkbenchRoute />} />
+        <Route path="/brands/:brandId/workbench/new" element={<WorkbenchNewRoute />} />
         <Route
           path="/brands/:brandId/workbench/packs/:packId"
           element={<WorkbenchPackRoute />}
@@ -274,6 +275,17 @@ function WorkbenchRoute() {
   return (
     <>
       <WorkbenchHomePage brandId={brandId ?? ""} />
+    </>
+  );
+}
+
+/** 自由創作（F02-I10）：鏈的最後一支，`…/workbench/new`。`?type=` 由入口「快速開始」帶進來
+ * 預選素材類型，頁面自己讀 `useSearchParams`，這裡只傳 `brandId`。 */
+function WorkbenchNewRoute() {
+  const { brandId } = useParams<{ brandId: string }>();
+  return (
+    <>
+      <FreeJobPage brandId={brandId ?? ""} />
     </>
   );
 }
