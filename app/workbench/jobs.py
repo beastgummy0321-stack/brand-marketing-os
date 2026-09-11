@@ -216,6 +216,20 @@ def _vocabulary_phrase(rows: list, dimension: str, label: str) -> str:
     return label
 
 
+def _output_line(rows: list, format_label: str) -> str:
+    """【輸出】那一行，跟隨 ARCHITECTURE.md §5.7／image-prompt-template.md §2 的形狀
+    `<format label>（<format 說明>），一張`，不是 `_vocabulary_phrase` 用的破折號寫法。"""
+    if not format_label:
+        return "一張"
+    for row in rows:
+        if row["dimension"] == "format" and row["label"] == format_label:
+            situation = (row["attributes"] or {}).get("situation") or ""
+            if situation:
+                return f"{format_label}（{situation}），一張"
+            break
+    return f"{format_label}，一張"
+
+
 def _fix_call(conn, brand_id: str, context, task_type: str, failing: list, *,
                brief_section: str, original: dict) -> dict:
     """ADR 0068 §6：失敗項目一次問完、只問失敗的那幾項——prompt 不重貼原本的部門任務檔／
@@ -327,12 +341,7 @@ def _run(conn, org_id: str, brand_id: str, brief_id: str, part: str, count) -> N
             hook_phrase = _vocabulary_phrase(coordinate_rows, "hook", hook_label)
             appeal_parts.append(f"標題公式：{hook_phrase}")
         appeal_line = "；".join(appeal_parts)
-        format_label = coordinates_snapshot.get("format") or ""
-        if format_label:
-            format_phrase = _vocabulary_phrase(coordinate_rows, "format", format_label)
-            output_line = f"{format_phrase}，一張"
-        else:
-            output_line = "一張"
+        output_line = _output_line(coordinate_rows, coordinates_snapshot.get("format") or "")
         appeal_sentence = (
             angle_label if (mode == "variant" and angle_label) else "以這張圖原本的主訴求為準"
         )
