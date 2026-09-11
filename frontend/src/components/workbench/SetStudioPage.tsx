@@ -149,7 +149,13 @@ export function SetStudioPage({
         <SetRail brandId={brandId} packId={packId} set={set} onOpen={goToSet} />
 
         <div className="flex flex-col gap-4 min-w-0">
-          <SetHeader set={set} />
+          <SetHeader brandId={brandId} set={set} />
+
+          {set.lock.locked && (
+            <div className="rounded-md bg-muted px-3 py-2 text-xs text-muted-foreground">
+              {set.lock.reason}
+            </div>
+          )}
 
           {activePart && (
             <Tabs value={activePart} onValueChange={(v) => setActivePart(v as ProductPart)}>
@@ -229,7 +235,7 @@ function SetRail({
   );
 }
 
-function SetHeader({ set }: { set: SetDetail }) {
+function SetHeader({ brandId, set }: { brandId: string; set: SetDetail }) {
   const chips = [set.chips.platform, set.chips.style, set.chips.size].filter(
     (v): v is string => Boolean(v),
   );
@@ -246,9 +252,19 @@ function SetHeader({ set }: { set: SetDetail }) {
             ))}
           </div>
         </div>
-        <Badge className={SET_STATUS_TONE[set.status] ?? "bg-muted text-muted-foreground"}>
-          {set.status}
-        </Badge>
+        <div className="flex items-center gap-2">
+          {set.source_kind === "schedule_node" && (
+            <a
+              href={`/brands/${brandId}/schedule`}
+              className="text-xs text-primary hover:underline"
+            >
+              到檔期規劃 ↗
+            </a>
+          )}
+          <Badge className={SET_STATUS_TONE[set.status] ?? "bg-muted text-muted-foreground"}>
+            {set.status}
+          </Badge>
+        </div>
       </div>
     </div>
   );
@@ -317,6 +333,20 @@ function ProductPanel({
   const allDone = set.required_parts.every(
     (p) => (set.products[p] as SetProduct | undefined)?.state === "已選定",
   );
+  const locked = set.lock.locked;
+
+  function similarCount(): number {
+    return (product?.generation_settings.count as number | undefined) ?? count;
+  }
+
+  function handleSimilar() {
+    void handleRun(similarCount());
+  }
+
+  function handleEdit() {
+    setCount(similarCount());
+    setMode("precise");
+  }
 
   return (
     <div className="flex flex-col gap-4">
@@ -356,7 +386,7 @@ function ProductPanel({
           />
         )}
 
-        <Button disabled={running} onClick={() => void handleRun()}>
+        <Button disabled={running || locked} onClick={() => void handleRun()}>
           {running ? "生成中…" : `再生成 ${count} 張`}
         </Button>
       </div>
@@ -372,16 +402,21 @@ function ProductPanel({
           onSelect={handleSelect}
           onSwitchPart={onSwitchPart}
           imageGeneration={set.image_generation}
+          locked={locked}
+          onSimilar={handleSimilar}
+          onEdit={handleEdit}
         />
       )}
-      {part === "copy" && <CopyPart product={product} onSelect={handleSelect} />}
-      {part === "video_script" && <VideoScriptPart product={product} onSelect={handleSelect} />}
+      {part === "copy" && <CopyPart product={product} onSelect={handleSelect} locked={locked} />}
+      {part === "video_script" && (
+        <VideoScriptPart product={product} onSelect={handleSelect} locked={locked} />
+      )}
 
       <div className="surface flex items-center justify-between p-3">
-        <Button variant="outline" disabled={running} onClick={() => void handleRun()}>
+        <Button variant="outline" disabled={running || locked} onClick={() => void handleRun()}>
           再生成 {count} 張
         </Button>
-        <Button disabled={!allDone} onClick={onFinish}>
+        <Button disabled={!allDone || locked} onClick={onFinish}>
           完成此素材組
         </Button>
       </div>
@@ -394,16 +429,23 @@ function VersionBadge({
   onSelect,
   onSimilar,
   onEdit,
+  disabled,
 }: {
   version: ProductVersion;
   onSelect: () => void;
   onSimilar?: () => void;
   onEdit?: () => void;
+  disabled?: boolean;
 }) {
   const selected = Boolean(version.selected_at);
   return (
     <div className="flex flex-wrap items-center gap-2">
-      <Button size="sm" variant={selected ? "default" : "outline"} onClick={onSelect}>
+      <Button
+        size="sm"
+        variant={selected ? "default" : "outline"}
+        disabled={disabled}
+        onClick={onSelect}
+      >
         {selected ? "✓ 已選定" : "選定"}
       </Button>
       {onSimilar && (
@@ -426,15 +468,20 @@ function ImagePart({
   onSelect,
   onSwitchPart,
   imageGeneration,
+  locked,
+  onSimilar,
+  onEdit,
 }: {
   set: SetDetail;
   product: SetProduct;
   onSelect: (versionId: string, selected: boolean) => void;
   onSwitchPart: (part: ProductPart) => void;
   imageGeneration: SetDetail["image_generation"];
+  locked: boolean;
+  onSimilar: () => void;
+  onEdit: () => void;
 }) {
   const [showPrompt, setShowPrompt] = useState(!imageGeneration.connected);
-  const [preciseFor, setPreciseFor] = useState<string | null>(null);
   const [promptOpen, setPromptOpen] = useState(false);
 
   const latest = product.versions[0];
@@ -502,8 +549,9 @@ function ImagePart({
                 <VersionBadge
                   version={version}
                   onSelect={() => onSelect(version.id, selected)}
-                  onSimilar={() => undefined}
-                  onEdit={() => setPreciseFor(version.id)}
+                  onSimilar={onSimilar}
+                  onEdit={onEdit}
+                  disabled={locked}
                 />
               </div>
             );
@@ -522,11 +570,6 @@ function ImagePart({
             ariaLabel="複製全部提示詞"
             className="w-fit"
           />
-        )}
-        {preciseFor && (
-          <div className="rounded-md border border-border bg-accent/40 p-3 text-xs text-muted-foreground">
-            精準控制（版本 {preciseFor} 的修改需求）尚未接上表單，先用上方「精準控制」重新設定產出數量。
-          </div>
         )}
       </div>
 
@@ -595,16 +638,18 @@ function ImagePart({
 function CopyPart({
   product,
   onSelect,
+  locked,
 }: {
   product: SetProduct;
   onSelect: (versionId: string, selected: boolean) => void;
+  locked: boolean;
 }) {
   const rounds = groupRounds(product.versions);
   return (
     <div className="flex flex-col gap-4">
       {rounds.length === 0 && <EmptyState title="還沒有生成過" description="按上方「再生成」開始第一輪。" />}
       {rounds.map((group) => (
-        <CopyRoundCard key={group.round} group={group} onSelect={onSelect} />
+        <CopyRoundCard key={group.round} group={group} onSelect={onSelect} locked={locked} />
       ))}
     </div>
   );
@@ -613,9 +658,11 @@ function CopyPart({
 function CopyRoundCard({
   group,
   onSelect,
+  locked,
 }: {
   group: RoundGroup;
   onSelect: (versionId: string, selected: boolean) => void;
+  locked: boolean;
 }) {
   const [index, setIndex] = useState(0);
   const version = group.items[index];
@@ -644,7 +691,11 @@ function CopyRoundCard({
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <VersionBadge version={version} onSelect={() => onSelect(version.id, selected)} />
+          <VersionBadge
+            version={version}
+            onSelect={() => onSelect(version.id, selected)}
+            disabled={locked}
+          />
           <Button
             size="sm"
             variant="outline"
@@ -661,16 +712,18 @@ function CopyRoundCard({
 function VideoScriptPart({
   product,
   onSelect,
+  locked,
 }: {
   product: SetProduct;
   onSelect: (versionId: string, selected: boolean) => void;
+  locked: boolean;
 }) {
   const rounds = groupRounds(product.versions);
   return (
     <div className="flex flex-col gap-4">
       {rounds.length === 0 && <EmptyState title="還沒有生成過" description="按上方「再生成」開始第一輪。" />}
       {rounds.map((group) => (
-        <ScriptRoundCard key={group.round} group={group} onSelect={onSelect} />
+        <ScriptRoundCard key={group.round} group={group} onSelect={onSelect} locked={locked} />
       ))}
     </div>
   );
@@ -679,9 +732,11 @@ function VideoScriptPart({
 function ScriptRoundCard({
   group,
   onSelect,
+  locked,
 }: {
   group: RoundGroup;
   onSelect: (versionId: string, selected: boolean) => void;
+  locked: boolean;
 }) {
   const [index, setIndex] = useState(0);
   const version = group.items[index];
@@ -712,7 +767,11 @@ function ScriptRoundCard({
           {beats.length === 0 && <p className="text-sm text-muted-foreground">還沒有節拍。</p>}
         </div>
         <div className="flex items-center gap-2">
-          <VersionBadge version={version} onSelect={() => onSelect(version.id, selected)} />
+          <VersionBadge
+            version={version}
+            onSelect={() => onSelect(version.id, selected)}
+            disabled={locked}
+          />
           <Button
             size="sm"
             variant="outline"

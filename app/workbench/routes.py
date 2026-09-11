@@ -206,7 +206,7 @@ _RUN_PRODUCT_ERRORS = {
     "count_out_of_range": (400, "版本張數超出範圍。"),
     "brief_closed": (409, "這個素材組已經關閉。"),
     "round_running": (409, "上一輪還在跑，請等它跑完再按。"),
-    "pack_approved": (409, "這個任務包已核准，選定已鎖定。"),
+    "pack_approved": (409, repository.PACK_APPROVED_MESSAGE),
 }
 
 
@@ -230,7 +230,7 @@ _SELECT_ERRORS = {
     # containment before any write (planner review, 2026-09-12).
     "output_unknown": (404, "找不到這個版本。"),
     "brief_closed": (409, "這個素材組已經關閉。"),
-    "pack_approved": (409, "這個任務包已核准，選定已鎖定。"),
+    "pack_approved": (409, repository.PACK_APPROVED_MESSAGE),
 }
 
 

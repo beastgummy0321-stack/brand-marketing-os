@@ -38,6 +38,10 @@ def get_style(style_key: str) -> dict:
 _PART_NAMES = frozenset({"copy", "image_prompt", "video_script", "free"})
 _COPY_LENGTHS = frozenset({"short", "medium", "long"})
 
+# §5.5: one definition, three readers — `routes.py`'s `_RUN_PRODUCT_ERRORS`/`_SELECT_ERRORS`
+# (409 message) and `set_detail()`'s `lock.reason` below all read this same string.
+PACK_APPROVED_MESSAGE = "這個任務包已核准，選定已鎖定。"
+
 
 def submit_brief(conn, org_id: str, brand_id: str, brief: dict, *, pack_id: str,
                   name: str | None = None, required_outputs: dict | None = None) -> str:
@@ -1176,6 +1180,11 @@ def set_detail(conn: _AnyConn, org_id: str, brand_id: str, set_id: str) -> dict 
     return {
         "id": brief["id"], "pack_id": pack_row["id"], "pack_name": pack_row["name"],
         "name": brief["name"], "status": set_state(required_outputs, versions_by_part),
+        "source_kind": pack_row["source_kind"],
+        "lock": {
+            "locked": pack_row["approved_at"] is not None,
+            "reason": PACK_APPROVED_MESSAGE if pack_row["approved_at"] is not None else None,
+        },
         "chips": chips,
         "generation_settings": _generation_settings_rows(
             conn, brand_id, brief, chips,

@@ -132,6 +132,12 @@ export interface SetDetail {
   pack_name: string;
   name: string;
   status: string;
+  /** F02-I17: `workbench_pack.source_kind` 原樣傳過來，工作檯不解讀——只用來決定要不要
+   * 顯示「到檔期規劃」連結。 */
+  source_kind: string;
+  /** F02-I17: 任務包核准後鎖住選定，跟 `image_generation.reason` 同一條規則——文字由後端
+   * 產生一次，前端只原樣顯示，不重講規則。 */
+  lock: { locked: boolean; reason: string | null };
   chips: { platform: string | null; style: string; size: string | null };
   siblings: SetSibling[];
   required_parts: ProductPart[];
