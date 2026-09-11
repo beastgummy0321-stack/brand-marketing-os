@@ -66,6 +66,53 @@ class RenderHeroPromptTest(unittest.TestCase):
         self.assertNotIn("禁止", text)
 
 
+# -- 【輸出】行組裝：workbench_jobs._output_line ------------------------------------------
+
+class OutputLineTest(unittest.TestCase):
+    def test_format_with_situation(self):
+        rows = [{
+            "dimension": "format", "label": "彈性格式",
+            "attributes": {"situation": "1～10 張同座標圖"},
+        }]
+        self.assertEqual(
+            workbench_jobs._output_line(rows, "彈性格式"), "彈性格式（1～10 張同座標圖），一張",
+        )
+
+    def test_single_image_with_situation(self):
+        rows = [{
+            "dimension": "format", "label": "單圖",
+            "attributes": {"situation": "4:5，1080×1350"},
+        }]
+        self.assertEqual(
+            workbench_jobs._output_line(rows, "單圖"), "單圖（4:5，1080×1350），一張",
+        )
+
+    def test_empty_label(self):
+        self.assertEqual(workbench_jobs._output_line([], ""), "一張")
+
+    def test_label_not_in_vocabulary(self):
+        self.assertEqual(workbench_jobs._output_line([], "輪播"), "輪播，一張")
+
+    def test_end_to_end_hero_prompt_output_line(self):
+        rows = [{
+            "dimension": "format", "label": "彈性格式",
+            "attributes": {"situation": "1～10 張同座標圖"},
+        }]
+        text = prompts.render_hero_prompt(
+            {
+                "scene": "廚房晨光", "person": "一位女性，居家便服",
+                "subject_position": "置中，中景", "headline": "早晨也能好好吃",
+                "subhead": None,
+            },
+            style_block="UGC 手機直式實拍", product_line="見參考商品照：晨光咖啡豆。不重述外觀。",
+            audience_line="上班族；痛點：沒時間做早餐", appeal_line="切角：省時——早上時間寶貴",
+            quotable_lines=["滿799免運"],
+            output_line=workbench_jobs._output_line(rows, "彈性格式"),
+        )
+        lines = text.split("\n")
+        self.assertEqual(lines[-1], "【輸出】彈性格式（1～10 張同座標圖），一張")
+
+
 # -- 渲染：② 變體提示詞（兩模式共用） ---------------------------------------------------
 
 class RenderVariantPromptTest(unittest.TestCase):
