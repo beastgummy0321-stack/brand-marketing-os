@@ -13,10 +13,15 @@ bodies with the frozen signatures the ticket names:
     schedule_tree(org_id, brand_id, plan_index)
 
 票 05（ADR 0068 §2）：`schedule_tree()` no longer discards the row after `gateway.run_task()` —
-on a successful expansion it submits one workbench brief per deepest node
-(`app.workbench.submit_brief`, entry point only); the workbench now owns copy generation and
-the third generation task body this module used to run has no callers left (retired this
-ticket, see git history for its shape).
+on a successful expansion it submits one workbench brief per deepest node; the workbench now
+owns copy generation and the third generation task body this module used to run has no callers
+left (retired this ticket, see git history for its shape).
+
+F02-I02（ARCHITECTURE.md §5.4，2026-09-12 reset）：the per-leaf loop now hands the whole
+expanded tree to the workbench in **one call**, `app.workbench.submit_pack` (entry point only)
+— one pack per tree, one set per deepest node, `required_outputs = {"copy": 1,
+"image_prompt": 1}` (one node is one ad, it needs one selected copy and one selected image
+prompt). The old per-leaf entry point is retired; `submit_pack` is the only door in.
 
 Each opens its own `app.core.db.connection()` — a worker job never inherits a request's
 connection. `org_id` is a required first parameter on all of them (ADR 0038 gate,
@@ -557,46 +562,77 @@ def schedule_tree(org_id: str, brand_id: str, plan_index: int, plan_task_id: str
             campaign_period_id=campaign_period_id,
         )
 
-        # 票 05（ADR 0068 §2／§5 amendment）：展開成功就替每個最深層節點各提交一份工作檯
-        # 工單——素材工作檯接手文案（含隨文案回的 visual_tone／visual_concept），這個模組
-        # 退休自己的內容生成任務。重建這棵樹、取文件順序的最深層節點兩步，跟這個模組過去
-        # 產內容那一步用的是同一組讀法：`tree_with_bindings()`＋`_leaf_ad_nodes()`。逐節點
-        # 各自 try/except：一個節點的 submit_brief 失敗只記一行 log，不影響其他節點，也不
-        # 回頭動這一列已經 commit 的樹（tree row 由 `run_task()` 自己落地，brief 是它的
-        # 下游，不是它的一部分）。
+        # F02-I02（ARCHITECTURE.md §5.4）：展開成功就把整棵樹交棒成**一個**任務包——一個
+        # pack 一次 `submit_pack()` 呼叫，一個最深層節點一個 set，`required_outputs =
+        # {"copy": 1, "image_prompt": 1}`（一個節點就是一則廣告，需要一份選定文案、一份
+        # 選定圖片提示詞）。重建這棵樹、取文件順序的最深層節點兩步，跟票 05 過去
+        # 產內容那一步用的是同一組讀法：`tree_with_bindings()`＋`_leaf_ad_nodes()`。整包
+        # 一次 try/except：一次失敗的交棒只記一行 log，不影響已經 commit 的樹（tree row 由
+        # `run_task()` 自己落地，pack 是它的下游，不是它的一部分）——不逐節點各自
+        # try/except，pack 本來就是一次性寫入（`submit_pack()` 檔頭）。
         if row["status"] == "succeeded":
             tree = binding_mod.tree_with_bindings(conn, row, org_id, brand_id)
             leaves = state._leaf_ad_nodes(tree["nodes"]) if tree["failure"] is None else []
-            for leaf in leaves:
+            if leaves:
+                period_row = (
+                    period_repo.get_period(conn, org_id, brand_id, campaign_period_id)
+                    if campaign_period_id else None
+                )
+                pack_name = (
+                    period_row["name"] if period_row
+                    else f"{platform_label} 方案 {plan_index + 1}"
+                )
+                promotion_note = plan_scope.get("promotion_note")
                 try:
-                    workbench.submit_brief(conn, org_id, brand_id, {
+                    workbench.submit_pack(conn, org_id, brand_id, {
                         "source_kind": "schedule_node",
-                        "source_ref": {
-                            "node_key": leaf["node_key"], "source_tree_task_id": row["id"],
-                            "node_name": leaf["name"],
+                        "source_ref": {"source_tree_task_id": row["id"]},
+                        "name": pack_name,
+                        "summary": {
+                            "情境": chosen_plan.get("summary"),
+                            "重點訊息": promotion_note,
                         },
-                        "product_id": product_ids[0] if product_ids else None,
-                        # 票 05（ADR 0069 §3）：這個節點的座標（含沿用節點被程式蓋過的
-                        # 那一份，binding.tree_with_bindings() 讀時 overlay 已經疊上）
-                        # 隨工單交棒——空維度丟棄，舊樹（沒有 coordinates 欄位）的節點
-                        # 一律得到 `{}`。這是這棵樹展開當下那一刻的值（下一次結算之後
-                        # 畫面重讀會不會不一樣，見 docs/contracts/workbench.md 那條已知落差）。
-                        "coordinates": {
-                            k: v for k, v in (leaf.get("coordinates") or {}).items() if v
-                        },
-                        "visual_tone": None, "visual_concept": None,
-                        "style_key": "ugc",
-                        "request": {
-                            "use_brand_knowledge": True, "product_ids": product_ids,
-                            "parts": ["copy"],
-                            "copy_length": leaf.get("copy_length") or "short",
-                            "promotion_note": plan_scope.get("promotion_note"),
-                        },
+                        "context": {"product_ids": product_ids},
+                        "sets": [
+                            {
+                                "name": leaf["name"],
+                                "source_ref": {
+                                    "node_key": leaf["node_key"],
+                                    "source_tree_task_id": row["id"],
+                                    "node_name": leaf["name"],
+                                },
+                                "product_id": product_ids[0] if product_ids else None,
+                                # 票 05（ADR 0069 §3）：這個節點的座標（含沿用節點被程式
+                                # 蓋過的那一份，binding.tree_with_bindings() 讀時 overlay
+                                # 已經疊上）隨 set 交棒——空維度丟棄，舊樹（沒有
+                                # coordinates 欄位）的節點一律得到 `{}`。這是這棵樹展開
+                                # 當下那一刻的值（下一次結算之後畫面重讀會不會不一樣，見
+                                # docs/contracts/workbench.md 那條已知落差）。
+                                "coordinates": {
+                                    k: v for k, v in (leaf.get("coordinates") or {}).items() if v
+                                },
+                                "style_key": "ugc",
+                                "required_outputs": {"copy": 1, "image_prompt": 1},
+                                "request": {
+                                    "use_brand_knowledge": True, "product_ids": product_ids,
+                                    "copy_length": leaf.get("copy_length") or "short",
+                                    "promotion_note": promotion_note,
+                                    # `required_outputs["image_prompt"]` 進了 `parts`
+                                    # （`submit_pack()` 從 `required_outputs.keys()`
+                                    # 衍生），工作檯就要求這欄 1–30（ARCHITECTURE.md
+                                    # §5.7 的 UI 預帶值同一條規則：彈性格式 -> 10，否則 3）。
+                                    "image_prompt_count": (
+                                        10 if (leaf.get("coordinates") or {}).get("format")
+                                        == "彈性格式" else 3
+                                    ),
+                                },
+                            }
+                            for leaf in leaves
+                        ],
                     })
                 except Exception:
                     logging.getLogger(__name__).exception(
-                        "workbench.submit_brief 失敗：tree_task_id=%s node_key=%s",
-                        row["id"], leaf["node_key"],
+                        "workbench.submit_pack 失敗：tree_task_id=%s", row["id"],
                     )
 
 

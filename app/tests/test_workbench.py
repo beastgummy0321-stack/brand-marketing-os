@@ -90,13 +90,16 @@ class _WorkbenchTestBase(unittest.TestCase):
         background_module.app().run_worker(wait=False)
 
     def _submit(self, **overrides) -> str:
+        # F02-I02：`submit_brief` 不再是公開入口（一份素材組一定屬於一個 pack，
+        # ARCHITECTURE.md §5.4）——`create_brief()` 幫這條舊路徑自動開一個單組任務包，
+        # 行為跟之前直接呼叫 `workbench_module.submit_brief` 相容。
         brief = {
             "source_kind": "manual", "source_ref": {},
             "product_id": self.product["id"], "coordinates": {}, "visual_tone": None,
             "visual_concept": None, "style_key": "ugc", "request": {"parts": ["copy"]},
         }
         brief.update(overrides)
-        return workbench_module.submit_brief(web.conn, self.org_id, self.brand_id, brief)
+        return workbench_repo.create_brief(web.conn, self.org_id, self.brand_id, brief)
 
     def _copy_reply(self) -> dict:
         """ARCHITECTURE.md §5.6：一輪 5 組完整廣告——預設工單沒給 `copy_length`，`jobs._run`
@@ -115,7 +118,7 @@ class _WorkbenchTestBase(unittest.TestCase):
     def _outputs(self, brief_id: str, part: str) -> list:
         rows = web.conn.execute(
             "SELECT * FROM workbench_output WHERE brief_id = %s AND part = %s"
-            " ORDER BY generation_round", (brief_id, part),
+            " ORDER BY generation_round, version_index", (brief_id, part),
         ).fetchall()
         return [dict(r) for r in rows]
 
@@ -279,9 +282,13 @@ class ManualCopyBriefTest(_WorkbenchTestBase):
         brief = workbench_repo.get_brief(web.conn, self.org_id, self.brand_id, brief_id)
         self.assertEqual(brief["status"], "done")
 
+        # F02-I02（ARCHITECTURE.md §5.2）：一輪 copy 寫 `COPY_SET_COUNT`（5）列版本，
+        # `version_index` 1..5，每一列的 `body_json` 都是同一份整輪回覆（`schedule/
+        # state.py::_copy_summary()` 讀任何一列的 `sets` 都要看到全部 5 組）。
         rows = self._outputs(brief_id, "copy")
-        self.assertEqual(len(rows), 1)
-        self.assertEqual(rows[0]["generation_round"], 1)
+        self.assertEqual(len(rows), 5)
+        self.assertTrue(all(r["generation_round"] == 1 for r in rows))
+        self.assertEqual([r["version_index"] for r in rows], [1, 2, 3, 4, 5])
         validation = rows[0]["body_json"]["validation"]
         self.assertTrue(validation)
         self.assertTrue(all(line.startswith("✅") for line in validation), validation)
@@ -394,7 +401,7 @@ class SourceIsolationTest(_WorkbenchTestBase):
             source_kind="schedule_node", source_ref=source_ref,
             request={"parts": ["image_prompt"], "image_prompt_count": 1},
         )
-        workbench_module.submit_brief(
+        workbench_repo.create_brief(
             web.conn, org_b, brand_b["id"],
             {"source_kind": "schedule_node", "source_ref": source_ref,
              "product_id": None, "coordinates": {}, "visual_tone": None,
@@ -474,8 +481,10 @@ class VideoScriptRoundTripTest(_WorkbenchTestBase):
 
         brief = workbench_repo.get_brief(web.conn, self.org_id, self.brand_id, brief_id)
         self.assertEqual(brief["status"], "done")
+        # F02-I02（ARCHITECTURE.md §5.2）：一輪 video_script 一支腳本一列版本——這裡兩支
+        # 都綠燈，所以是兩列。
         rows = self._outputs(brief_id, "video_script")
-        self.assertEqual(len(rows), 1)
+        self.assertEqual(len(rows), 2)
         validation = rows[0]["body_json"]["validation"]
         self.assertTrue(validation)
         self.assertTrue(all(line.startswith("✅") for line in validation), validation)
