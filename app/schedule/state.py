@@ -274,6 +274,27 @@ def _briefs_for_tree(conn, org_id: str, brand_id: str, tree_row: dict | None) ->
     return entries
 
 
+def _creative_pack_for_tree(conn, org_id: str, brand_id: str, tree_row: dict | None) -> dict | None:
+    """F02-I04（ARCHITECTURE.md §5.5）：這棵樹的任務包核准信號——狀態讀取，不是
+    callback，工作檯完全不知道上游是誰。`tree_row` 是 `None`（從沒展開過）或這棵樹
+    還沒有 pack → `None`。`state` 是 `pack_for_source` 回的中文字（待處理／進行中／
+    待核准／已完成），原樣透傳，這支不翻譯。"""
+    if tree_row is None:
+        return None
+    pack = workbench.pack_for_source(
+        conn, org_id, brand_id, "schedule_node", {"source_tree_task_id": tree_row["id"]},
+    )
+    if pack is None:
+        return None
+    return {
+        "pack_id": pack["id"],
+        "state": pack["state"],
+        "approved_at": pack["approved_at"],
+        "sets_total": pack["sets_total"],
+        "sets_done": pack["sets_done"],
+    }
+
+
 def _knowledge_gaps(conn, brand_id: str) -> list[str]:
     """票 plan-quality/03：哪些品牌檔案分類是空的——讀跟 `context_compiler.compile()`
     同一批查詢（品牌事實只算 confirmed、宣稱不分產品），通知才不會跟 plan prompt 的內容
@@ -315,6 +336,7 @@ def _brand_response(conn, brand_id: str, org_id: str) -> dict:
         "plan": plan,
         "tree": tree,
         "briefs": _briefs_for_tree(conn, org_id, brand_id, tree_row),
+        "creative_pack": _creative_pack_for_tree(conn, org_id, brand_id, tree_row),
         "period": period_mod.brand_period_response(conn, org_id, brand_id),
         "next_period_suggestion": period_mod.next_period_suggestion(conn, org_id, brand_id),
     }
