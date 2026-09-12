@@ -417,6 +417,7 @@ async def api_settings_ai_monthly_cost_limit_post(request: Request):
 # Router 註冊
 # ---------------------------------------------------------------------------
 
+from app import ads as ads_module  # noqa: E402
 from app import brand_web as brand_web_module  # noqa: E402
 from app import dashboard as dashboard_module  # noqa: E402
 from app import identity as identity_module  # noqa: E402
@@ -433,7 +434,8 @@ from app import workbench as workbench_module  # noqa: E402
 # 了——在這個迴圈之前、`_load_dotenv()` 後面就先跑過一次（見上面），不管 identity
 # 排在這個 tuple 第幾個都一樣早炸。
 for _module in (brand_web_module, intake_module, meta_module, orders_module,
-                 schedule_module, workbench_module, dashboard_module, identity_module):
+                 schedule_module, workbench_module, ads_module, dashboard_module,
+                 identity_module):
     _module.register(app)
 
 # 票 05：掛每日 Meta 花費拉取的 procrastinate task（冪等，見 app/meta/daily_pull.py
