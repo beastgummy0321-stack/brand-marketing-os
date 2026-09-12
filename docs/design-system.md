@@ -165,10 +165,9 @@ Navigation reads 工作區 → 品牌 → 功能:
   through TanStack Query with cache keys that include org and brand, so a switch never shows the previous
   object's data.
 - Breadcrumb inside the page (`nav[aria-label="麵包屑"]`) is hidden; the topbar carries 當前位置.
-- The routes are **18, stated as an interim** (F03-I13, 2026-09-12): `/brands/:id/schedule` (檔期規劃)
-  is being retired alongside `/brands/:id/ads` and its two sibling routes (投放中心 清單頁／建立
-  Campaign／Campaign 工作區) landing side by side with it; F03-I17 removes `/schedule` and settles the
-  count at 17. The `/app` basename is fixed; all of the above is done with in-page tabs and layout.
+- The routes are **17** (F03-I17, 2026-09-13): `/brands/:id/schedule` (檔期規劃) is retired, replaced
+  by `/brands/:id/ads` and its two sibling routes (投放中心 清單頁／建立 Campaign／Campaign 工作區).
+  The `/app` basename is fixed; all of the above is done with in-page tabs and layout.
 
 ---
 
@@ -176,7 +175,7 @@ Navigation reads 工作區 → 品牌 → 功能:
 
 Every routed screen, top to bottom:
 
-1. **`PageHeader`** — `h1` noun phrase (經營概況、檔期規劃、產品), muted subtitle (brand name +
+1. **`PageHeader`** — `h1` noun phrase (經營概況、投放中心、產品), muted subtitle (brand name +
    tagline or one-line purpose), right-aligned actions (`Button variant="outline"` with icon,
    optional 示意資料 `Badge variant="secondary"`).
 2. **`PageTabs`** — segmented control, left; the same row's right side holds context
@@ -331,7 +330,7 @@ range; appearance is never added ahead of data.
 4. Real-browser acceptance on a **fresh browser session and a restarted backend**; a cached bundle
    shows old code. Check 1024 and 1920, and the loading / empty / error states, not only the happy path.
 5. A new gate is proven red once before it counts.
-6. The three representative screens — 經營概況 (data), 檔期規劃 (flow), 品牌智庫 (data management) —
+6. The three representative screens — 經營概況 (data), 投放中心 (flow), 品牌智庫 (data management) —
    are the acceptance set for any change to the kit or the shell, each in **empty, normal and heavy
    data**. Empty screenshots alone never prove a layout.
 

@@ -258,10 +258,10 @@ function SetHeader({ brandId, set }: { brandId: string; set: SetDetail }) {
         <div className="flex items-center gap-2">
           {set.source_kind === "schedule_node" && (
             <Link
-              to={`/brands/${brandId}/schedule`}
+              to={`/brands/${brandId}/ads`}
               className="text-xs text-primary hover:underline"
             >
-              到檔期規劃 ↗
+              到投放中心 ↗
             </Link>
           )}
           <Badge className={SET_STATUS_TONE[set.status] ?? "bg-muted text-muted-foreground"}>

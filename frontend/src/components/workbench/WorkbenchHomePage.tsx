@@ -131,7 +131,7 @@ export function WorkbenchHomePage({ brandId }: { brandId: string }) {
     content = (
       <EmptyState
         title="目前沒有任務包"
-        description="＋ 自由創作 自己開一個工作；或到檔期規劃派工，讓排程送任務包過來。"
+        description="＋ 自由創作 自己開一個工作；或到投放中心派工，讓排程送任務包過來。"
         actionLabel="＋ 自由創作"
         onAction={() => navigate(`/brands/${brandId}/workbench/new`)}
       />
