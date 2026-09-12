@@ -12,7 +12,7 @@ from fastapi import APIRouter, Request
 from pydantic import BaseModel
 
 import app.shared.web as web
-from app.ads import brief, repository
+from app.ads import brief, repository, strategy
 
 router = APIRouter(prefix="/api/ads")
 
@@ -107,3 +107,59 @@ def patch_campaign(request: Request, brand_id: str, campaign_id: str, body: Patc
         status, message = _PATCH_CAMPAIGN_ERRORS.get(code, (400, code))
         raise web.ApiError(status, code, message) from exc
     return {"campaign": repository.campaign_detail(web.conn, actor.org_id, brand_id, campaign_id)}
+
+
+_STRATEGY_ERRORS = {
+    "campaign_unknown": (404, CAMPAIGN_UNKNOWN_MESSAGE),
+    "strategy_failed": (502, strategy.STRATEGY_FAILED_MESSAGE),
+    "strategy_already_adopted": (400, "這個 Campaign 已經採用過策略，不能重新產生。"),
+}
+
+
+@router.post("/brands/{brand_id}/campaigns/{campaign_id}/strategy")
+def generate_strategy(request: Request, brand_id: str, campaign_id: str):
+    """F03-I05：組 context、打模型、套預算情境，整包寫進 `budget_basis_json`。"""
+    actor = web.require_actor(request)
+    web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
+    try:
+        campaign = strategy.generate(
+            web.conn, actor.org_id, brand_id, campaign_id, actor=str(actor.user_id),
+        )
+    except ValueError as exc:
+        code = str(exc)
+        status, message = _STRATEGY_ERRORS.get(code, (400, code))
+        raise web.ApiError(status, code, message) from exc
+    return {"campaign": campaign}
+
+
+class SelectScenarioRequest(BaseModel):
+    scenario_key: str
+    custom_total: float | None = None
+
+
+_SELECT_SCENARIO_ERRORS = {
+    "campaign_unknown": (404, CAMPAIGN_UNKNOWN_MESSAGE),
+    "strategy_not_generated": (400, "請先產生策略，才能選預算情境。"),
+    "scenario_unknown": (400, "找不到這個預算情境。"),
+    "custom_total_invalid": (400, "手打的總額必須大於 0。"),
+}
+
+
+@router.post("/brands/{brand_id}/campaigns/{campaign_id}/strategy/scenario")
+def select_strategy_scenario(
+    request: Request, brand_id: str, campaign_id: str, body: SelectScenarioRequest,
+):
+    """F03-I05：採用最低／推薦／積極其中一個情境，或手打一個總額——寫 `budget_planned`。"""
+    actor = web.require_actor(request)
+    web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
+    try:
+        campaign = strategy.select_scenario(
+            web.conn, actor.org_id, brand_id, campaign_id,
+            scenario_key=body.scenario_key, custom_total=body.custom_total,
+            actor=str(actor.user_id),
+        )
+    except ValueError as exc:
+        code = str(exc)
+        status, message = _SELECT_SCENARIO_ERRORS.get(code, (400, code))
+        raise web.ApiError(status, code, message) from exc
+    return {"campaign": campaign}

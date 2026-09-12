@@ -100,7 +100,9 @@ export interface CampaignDetail extends EntityBinding {
   status: CampaignStatus;
   budget_planned: number | null;
   budget_scenario: string | null;
-  budget_basis_json: Record<string, unknown>;
+  /** 產生策略前是 `{}`；F03-I05 起是 `AdsBudgetBasisJson`——畫面在讀前先檢查
+   * `budget_basis_json.strategy` 存不存在。 */
+  budget_basis_json: Partial<AdsBudgetBasisJson>;
   budget_total: number | null;
   context_json: Record<string, unknown>;
   constraints_json: Record<string, unknown>;
@@ -141,6 +143,89 @@ export interface PatchCampaignInput {
   end_date?: string;
   constraints_json?: Record<string, unknown>;
   product_ids?: string[];
+}
+
+// -- F03-I05：策略（POST .../strategy 與 .../strategy/scenario）------------------------------
+
+export type BudgetScenarioMode = "cold_start" | "history";
+export type BudgetScenarioKey = "minimum" | "recommended" | "aggressive" | "conservative";
+
+export interface BudgetScenarioRow {
+  key: string;
+  label: string;
+  daily: number | null;
+  total: number | null;
+  caption: string;
+}
+
+/** `app/ads/budget.py::scenarios()` 的整包回傳——程式算的，AI 只預填百分比。 */
+export interface BudgetScenarios {
+  mode: BudgetScenarioMode;
+  scenarios: BudgetScenarioRow[];
+  recommended: string;
+  basis: Record<string, unknown>;
+}
+
+export type StrategyRole = "new" | "retarget" | "explore";
+
+export interface StrategyAllocationItem {
+  role: StrategyRole;
+  label: string;
+  pct: number;
+  rationale: string | null;
+  /** 已套用 `budget.split()` 的金額，跟 `total` 精準加總——冷啟動沒有依據時是 `null`。 */
+  amount: number | null;
+}
+
+export interface StrategyPayload {
+  allocation: StrategyAllocationItem[];
+  why: string[];
+  unknowns: string[];
+  alternatives: unknown[];
+}
+
+export interface StrategyBasisFact {
+  id: string;
+  label: string;
+  updated_at: string;
+}
+
+export interface StrategyBasisPrice {
+  product_id: string;
+  price: number | null;
+  effective_from: string | null;
+  stale: boolean;
+}
+
+export interface StrategyBasisLearning {
+  id: string;
+  text: string;
+  level: string;
+  needs_revalidation: boolean;
+}
+
+/** 查看策略依據：這個策略用到哪些品牌事實／商品價格／學習／llm_task，畫面照這個列。 */
+export interface StrategyBasis {
+  knowledge_item_ids: string[];
+  llm_task_id: string;
+  input_context_hash: string;
+  brand_facts: StrategyBasisFact[];
+  prices: StrategyBasisPrice[];
+  learnings: StrategyBasisLearning[];
+  estimated_fields: string[];
+}
+
+/** `ads_campaign.budget_basis_json` 的形狀（F03-I05 起）：策略＋預算情境＋依據，整包存在
+ * Campaign 這一列，沒有另開表。 */
+export interface AdsBudgetBasisJson {
+  strategy: StrategyPayload;
+  scenarios: BudgetScenarios;
+  basis: StrategyBasis;
+}
+
+export interface SelectScenarioInput {
+  scenario_key: string;
+  custom_total?: number | null;
 }
 
 async function ensureOk(res: Response, fallback: string): Promise<void> {
@@ -199,5 +284,27 @@ export async function patchCampaign(
     { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input) },
   );
   const data = await parseJsonOrThrow<{ campaign: CampaignDetail }>(res, "更新 Campaign 失敗。");
+  return data.campaign;
+}
+
+export async function generateStrategy(brandId: string, campaignId: string): Promise<CampaignDetail> {
+  const res = await apiFetch(
+    `${BASE}/brands/${encodeURIComponent(brandId)}/campaigns/${encodeURIComponent(campaignId)}/strategy`,
+    { method: "POST" },
+  );
+  const data = await parseJsonOrThrow<{ campaign: CampaignDetail }>(res, "產生策略失敗。");
+  return data.campaign;
+}
+
+export async function selectScenario(
+  brandId: string,
+  campaignId: string,
+  input: SelectScenarioInput,
+): Promise<CampaignDetail> {
+  const res = await apiFetch(
+    `${BASE}/brands/${encodeURIComponent(brandId)}/campaigns/${encodeURIComponent(campaignId)}/strategy/scenario`,
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input) },
+  );
+  const data = await parseJsonOrThrow<{ campaign: CampaignDetail }>(res, "選擇預算情境失敗。");
   return data.campaign;
 }
