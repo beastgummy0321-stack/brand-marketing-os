@@ -639,3 +639,23 @@ export async function ingestOutcome(
   );
   return parseJsonOrThrow<CampaignPerformance>(res, "更新成效失敗。");
 }
+
+// -- F03-I12：結案 -----------------------------------------------------------------------------
+
+/** 提前手動結案；自動路徑（end+7d）在後端背景工作，寫的是同一個 verdict/verdict_json 形狀。 */
+export async function closeCampaign(
+  brandId: string,
+  campaignId: string,
+  reason?: string,
+): Promise<CampaignDetail> {
+  const res = await apiFetch(
+    `${BASE}/brands/${encodeURIComponent(brandId)}/campaigns/${encodeURIComponent(campaignId)}/close`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reason: reason ?? null }),
+    },
+  );
+  const data = await parseJsonOrThrow<{ campaign: CampaignDetail }>(res, "結案失敗。");
+  return data.campaign;
+}

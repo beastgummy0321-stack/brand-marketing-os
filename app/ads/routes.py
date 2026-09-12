@@ -15,7 +15,7 @@ from pydantic import BaseModel
 
 import app.shared.web as web
 from app import workbench
-from app.ads import adapters, assets, brief, outcome, plan, repository, strategy
+from app.ads import adapters, assets, brief, closeout, outcome, plan, repository, strategy
 from app.ads.adapters import simulated
 from app.core import settings as coresettings
 
@@ -570,3 +570,36 @@ def ingest_outcome(request: Request, brand_id: str, campaign_id: str):
         status, message = _OUTCOME_ERRORS.get(code, (400, code))
         raise web.ApiError(status, code, message) from exc
     return result
+
+
+# -- F03-I12：結案——對自己的成功條件判 verdict，寫一條學習 -----------------------------------
+
+
+class CloseCampaignRequest(BaseModel):
+    reason: str | None = None
+
+
+@router.post("/brands/{brand_id}/campaigns/{campaign_id}/close")
+def close_campaign(request: Request, brand_id: str, campaign_id: str,
+                    body: CloseCampaignRequest):
+    """提前手動結案——自動路徑（end+7d）在 `app/ads/jobs.py`，兩邊都走
+    `app/ads/closeout.py::close()`，寫一樣的 verdict 跟學習。"""
+    actor = web.require_actor(request)
+    web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
+    try:
+        closeout.close(
+            web.conn, actor.org_id, brand_id, campaign_id, actor=str(actor.user_id),
+            reason=body.reason,
+        )
+    except ValueError as exc:
+        code = str(exc)
+        status, message = _OUTCOME_ERRORS.get(code, (400, code))
+        raise web.ApiError(status, code, message) from exc
+    # 回傳跟 GET 一樣的形狀（campaign_detail + asset_readiness）——`closeout.close` 可以繼續回
+    # 陽春的 ads_campaign 列，前端的 CampaignDetail 型別要的是這一份（§0 re-cut correction 1）。
+    campaign = repository.campaign_detail(web.conn, actor.org_id, brand_id, campaign_id)
+    if campaign is not None:
+        campaign["asset_readiness"] = assets.readiness_summary(
+            assets.readiness(web.conn, actor.org_id, brand_id, campaign_id),
+        )
+    return {"campaign": campaign}
