@@ -876,6 +876,63 @@ def confirm_product_economics(conn: Conn, brand_id: str, product_id: str, *,
 
 
 # ---------------------------------------------------------------------------
+# Learning Ledger（append-only；寫入端見 F03-I02——結案與「採用」各寫一條，見呼叫端 `ads`）
+# ---------------------------------------------------------------------------
+
+_LEARNING_CONFIDENCE = ("observed", "likely", "validated")
+
+
+def record_learning(conn: Conn, brand_id: str, *, actor: str, learning_text: str,
+                     applicability_scope: str, confidence: str, sample_size: str,
+                     source_cycle_id: str | None = None, product_id: str | None = None,
+                     platform: str | None = None, needs_revalidation: bool = False,
+                     learned_at=None) -> dict:
+    _require(actor, "actor 為必填")
+    _require(learning_text, "learning_ledger.learning_text 為必填")
+    _require(applicability_scope, "learning_ledger.applicability_scope 為必填")
+    if confidence not in _LEARNING_CONFIDENCE:
+        raise ValueError(f"learning_ledger.confidence 只能是 {_LEARNING_CONFIDENCE} 之一")
+    org_id = _org_id_for_brand(conn, brand_id)
+    ts = now_utc()
+    row = {
+        "id": new_id("lrn"), "org_id": org_id, "brand_id": brand_id, "product_id": product_id,
+        "platform": platform, "learning_text": learning_text,
+        "applicability_scope": applicability_scope, "source_cycle_id": source_cycle_id,
+        "sample_size": sample_size, "confidence": confidence,
+        "needs_revalidation": needs_revalidation, "learned_at": learned_at or ts,
+        "created_by": actor, "created_at": ts,
+    }
+    conn.execute(
+        "INSERT INTO learning_ledger (id, org_id, brand_id, product_id, platform, learning_text,"
+        " applicability_scope, source_cycle_id, sample_size, confidence, needs_revalidation,"
+        " learned_at, created_by, created_at)"
+        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+        (row["id"], row["org_id"], row["brand_id"], row["product_id"], row["platform"],
+         row["learning_text"], row["applicability_scope"], row["source_cycle_id"],
+         row["sample_size"], row["confidence"], row["needs_revalidation"], row["learned_at"],
+         row["created_by"], row["created_at"]),
+    )
+    write_audit(conn, org_id=org_id, brand_id=brand_id, entity_type="learning_ledger",
+                entity_id=row["id"], action="create", actor=actor, before=None, after=row)
+    conn.commit()
+    return row
+
+
+def list_learnings(conn: Conn, brand_id: str, *, product_id: str | None = None,
+                    include_expired: bool = False, limit: int = 50) -> list:
+    sql = "SELECT * FROM learning_ledger WHERE brand_id = %s"
+    params = [brand_id]
+    if product_id is not None:
+        sql += " AND product_id = %s"
+        params.append(product_id)
+    if not include_expired:
+        sql += " AND expired = false"
+    sql += " ORDER BY learned_at DESC LIMIT %s"
+    params.append(limit)
+    return _rows(conn.execute(sql, tuple(params)))
+
+
+# ---------------------------------------------------------------------------
 # Rule
 # ---------------------------------------------------------------------------
 
