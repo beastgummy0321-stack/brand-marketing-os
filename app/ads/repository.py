@@ -12,8 +12,10 @@ later issues (publish, bind, outcome ingest). This issue is the shared read cont
 """
 
 import statistics
-from datetime import timedelta
+from datetime import date, timedelta
+from typing import cast
 
+from app.brand_intelligence import repository as bi_repo
 from app.core import cleanup
 from app.core import settings as coresettings
 from app.core.db import Conn, ConnProxy, jsonb, new_id
@@ -113,6 +115,28 @@ def update_campaign(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str
         ):
             raise ValueError("success_target_unknown")
 
+    # F03-I19: dates validated on the *merged* row — a patch may move only one of the two, so
+    # checking the payload alone would miss `end < start` when only `end_date` is sent (§0 "The
+    # draft PATCH cannot create a state the create path refuses").
+    def _merged_date(key):
+        if key in updates:
+            value = updates[key]
+            return date.fromisoformat(value) if isinstance(value, str) else value
+        return campaign.get(key)
+
+    merged_start = _merged_date("start_date")
+    merged_end = _merged_date("end_date")
+    if merged_start is not None and merged_end is not None and merged_end < merged_start:
+        raise ValueError("end_before_start")
+
+    # A bound campaign's identity is not a field edit (§0): the name is exactly what exact-name
+    # matching resolves against, and a change to a bound node has to leave an `ads_action`
+    # instead (§6.5) — this endpoint never writes one.
+    if campaign.get("local_state") != "unbound" and (
+        "name" in updates or "start_date" in updates or "end_date" in updates
+    ):
+        raise ValueError("campaign_bound")
+
     set_clauses = []
     params: list = []
     for column in _PATCHABLE_COLUMNS:
@@ -123,8 +147,15 @@ def update_campaign(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str
         set_clauses.append("constraints_json = %s")
         params.append(jsonb(updates["constraints_json"] or {}))
     if "product_ids" in updates:
+        product_ids = updates["product_ids"] or []
+        # `bi_repo.list_products` is typed `Conn`-only; `ads` routes are handed the `ConnProxy`
+        # the rest of this module already treats as interchangeable (`_AnyConn`).
+        brand_product_ids = {p["id"] for p in bi_repo.list_products(cast(Conn, conn), brand_id)}
+        for product_id in product_ids:
+            if product_id not in brand_product_ids:
+                raise ValueError("product_unknown")
         context_json = dict(campaign.get("context_json") or {})
-        context_json["product_ids"] = updates["product_ids"] or []
+        context_json["product_ids"] = product_ids
         set_clauses.append("context_json = %s")
         params.append(jsonb(context_json))
 

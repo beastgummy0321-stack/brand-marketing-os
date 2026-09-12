@@ -10,6 +10,8 @@ import unittest
 
 import app.shared.web as web
 from app.ads import brief
+from app.ads import repository as ads_repo
+from app.ads import routes as ads_routes
 from app.brand_intelligence import repository as bi_repo
 from app.core import db as coredb
 from app.llm import providers
@@ -125,8 +127,79 @@ class BadDatesTest(_BriefTestBase):
         brief.PROVIDER = _fake("{}")
         with self.assertRaises(ValueError) as ctx:
             self._create(start_date="2026-10-31", end_date="2026-10-01")
-        self.assertEqual(str(ctx.exception), brief.END_BEFORE_START_MESSAGE)
+        # F03-I19: brief.py raises the machine token now; `ads_routes` is where the token turns
+        # into the readable sentence — still `brief.END_BEFORE_START_MESSAGE`, asserted here.
+        self.assertEqual(str(ctx.exception), "end_before_start")
+        self.assertEqual(
+            ads_routes._CREATE_CAMPAIGN_ERRORS[str(ctx.exception)],
+            (400, brief.END_BEFORE_START_MESSAGE),
+        )
         self.assertEqual(self._task_count(), 0)  # 沒過驗證就不該打模型、不該花錢
+
+
+class PatchEndBeforeStartOnMergedRowTest(_BriefTestBase):
+    def test_moving_only_end_date_before_stored_start_is_refused(self):
+        brief.PROVIDER = _fake("{}")
+        detail = self._create(start_date="2026-10-01", end_date="2026-10-31")
+
+        with self.assertRaises(ValueError) as ctx:
+            ads_repo.update_campaign(
+                web.conn, self.org_id, self.brand_id, detail["id"],
+                {"end_date": "2026-09-01"},
+            )
+        self.assertEqual(str(ctx.exception), "end_before_start")
+
+        unchanged = ads_repo.get_campaign(web.conn, self.org_id, self.brand_id, detail["id"])
+        self.assertEqual(unchanged["end_date"].isoformat(), "2026-10-31")
+
+
+class PatchBoundCampaignTest(_BriefTestBase):
+    def test_bound_campaign_refuses_name_but_accepts_success_target(self):
+        brief.PROVIDER = _fake("{}")
+        detail = self._create()
+        web.conn.execute(
+            "UPDATE ads_campaign SET local_state = 'bound' WHERE id = %s", (detail["id"],),
+        )
+        web.conn.commit()
+
+        with self.assertRaises(ValueError) as ctx:
+            ads_repo.update_campaign(
+                web.conn, self.org_id, self.brand_id, detail["id"], {"name": "改個名字"},
+            )
+        self.assertEqual(str(ctx.exception), "campaign_bound")
+
+        updated = ads_repo.update_campaign(
+            web.conn, self.org_id, self.brand_id, detail["id"], {"success_target": 250},
+        )
+        self.assertEqual(updated["success_target"], 250)
+
+
+class ForeignProductIdDroppedOnParseTest(_BriefTestBase):
+    def test_model_named_product_id_not_in_brand_is_dropped_silently(self):
+        reply = json.dumps({
+            "objective": "購買", "success_metric": "cpa", "success_target": 500,
+            "success_basis": "AI 掰的商品 id",
+            "product_ids": ["prd_not_this_brand"], "audience_hint": None, "notes": None,
+        }, ensure_ascii=False)
+        brief.PROVIDER = _fake(reply)
+
+        detail = self._create()
+
+        self.assertTrue(detail["parsed"])
+        self.assertEqual(detail["context_json"]["product_ids"], [])
+
+
+class PatchForeignProductIdRefusedTest(_BriefTestBase):
+    def test_patch_with_foreign_product_id_is_refused(self):
+        brief.PROVIDER = _fake("{}")
+        detail = self._create()
+
+        with self.assertRaises(ValueError) as ctx:
+            ads_repo.update_campaign(
+                web.conn, self.org_id, self.brand_id, detail["id"],
+                {"product_ids": ["prd_not_this_brand"]},
+            )
+        self.assertEqual(str(ctx.exception), "product_unknown")
 
 
 if __name__ == "__main__":

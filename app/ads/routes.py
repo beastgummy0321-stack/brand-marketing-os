@@ -53,8 +53,8 @@ class CreateCampaignRequest(BaseModel):
 
 _CREATE_CAMPAIGN_ERRORS = {
     "goal_text_required": (400, "請輸入這次投放的目標句子。"),
-    brief.DATES_REQUIRED_MESSAGE: (400, brief.DATES_REQUIRED_MESSAGE),
-    brief.END_BEFORE_START_MESSAGE: (400, brief.END_BEFORE_START_MESSAGE),
+    "dates_required": (400, brief.DATES_REQUIRED_MESSAGE),
+    "end_before_start": (400, brief.END_BEFORE_START_MESSAGE),
 }
 
 
@@ -96,6 +96,14 @@ _PATCH_CAMPAIGN_ERRORS = {
     "objective_unknown": (400, "目標不能是空白。"),
     "success_metric_unknown": (400, "成功指標只能是 cpa／roas／purchases。"),
     "success_target_unknown": (400, "成功條件的目標值必須是數字。"),
+    "dates_required": (400, brief.DATES_REQUIRED_MESSAGE),
+    "end_before_start": (400, brief.END_BEFORE_START_MESSAGE),
+    "campaign_bound": (
+        400,
+        "這個 Campaign 已經跟平台配對過了，名稱／投放期間要改的話請走異動流程，"
+        "才會留下異動紀錄。",
+    ),
+    "product_unknown": (400, "這個商品不屬於這個品牌。"),
 }
 
 

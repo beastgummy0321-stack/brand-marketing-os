@@ -144,6 +144,11 @@ def _validate_reply(data) -> dict | None:
         # 回覆的百分比沒有大致加總到 100，或帶負數——`budget.split()` 的餘數規則會把落差整個
         # 塞進佔比最大的那一項，畫面卻照樣印模型回的原始百分比，兩邊會對不起來。
         return None
+    roles = [row["role"] for row in validated_allocation]
+    if len(roles) != len(set(roles)):
+        # 同一個 role 出現兩次：`plan.adopt_strategy` 用 role 當 key 塞金額，重複的 role 會
+        # 讓其中一列的金額悄悄消失，group 日預算加總就會少於 budget_planned（§0）。
+        return None
 
     def _str_list(value):
         return [v for v in value if isinstance(v, str)] if isinstance(value, list) else []
