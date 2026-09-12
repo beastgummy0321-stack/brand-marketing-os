@@ -190,12 +190,12 @@ class GroupEditActionTraceTest(PlanTestBase):
 
 class BudgetCeilingTest(PlanTestBase):
     def test_a_raise_above_the_approved_ceiling_is_refused(self):
+        campaign = self._create_adopted_campaign()  # daily_total 2144 > 核准上限 100
         approval_mod.approve(
             web.conn, org_id=self.org_id, brand_id=self.brand_id,
-            scope_type=plan.APPROVAL_SCOPE_TYPE, scope_ref="whatever",
+            scope_type=plan.APPROVAL_SCOPE_TYPE, scope_ref=campaign["id"],
             content_hash="whatever", amount=100, max_daily_amount=100, actor=ACTOR,
         )
-        campaign = self._create_adopted_campaign()  # daily_total 2144 > 核准上限 100
         plan.PROVIDER = _fake(_VALID_PLAN_REPLY)
 
         with self.assertRaises(ValueError) as ctx:
