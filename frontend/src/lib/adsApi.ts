@@ -253,6 +253,24 @@ export interface SelectScenarioInput {
   custom_total?: number | null;
 }
 
+/** F03-I23: mirrors `app/ads/repository.py::_budget_total` exactly (days inclusive of both
+ * ends, `null` when either date is missing or `days <= 0`). The browser re-derives this
+ * instead of reading `campaign.budget_total` because that field is the value at load time —
+ * `patchGroup` returns only the edited group, so after an edit the payload field goes stale
+ * while `c.groups` (updated by the caller) stays current. */
+export function currentBudgetTotal(
+  c: CampaignDetail,
+): { dailySum: number; days: number | null; total: number | null } {
+  const dailySum = c.groups.reduce((sum, g) => sum + g.daily_budget, 0);
+  if (!c.start_date || !c.end_date) return { dailySum, days: null, total: null };
+  const days =
+    Math.round(
+      (new Date(c.end_date).getTime() - new Date(c.start_date).getTime()) / 86_400_000,
+    ) + 1;
+  if (days <= 0) return { dailySum, days: null, total: null };
+  return { dailySum, days, total: Math.round(dailySum * days) };
+}
+
 async function ensureOk(res: Response, fallback: string): Promise<void> {
   if (res.ok) return;
   let message = fallback;

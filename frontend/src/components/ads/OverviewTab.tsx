@@ -1,7 +1,7 @@
 import { Check, Sparkles } from "lucide-react";
 import { Button } from "@/components/layout/ui/button";
-import { formatCurrency, formatCount, formatRoas } from "@/lib/format";
-import type { ActionRow, CampaignDetail } from "@/lib/adsApi";
+import { formatCurrency } from "@/lib/format";
+import { currentBudgetTotal, type ActionRow, type CampaignDetail } from "@/lib/adsApi";
 
 const STAGE_LABELS = ["草稿", "策略", "投放結構", "素材", "投放中", "結案"] as const;
 type WorkspaceTab = "overview" | "strategy" | "structure" | "assets" | "performance";
@@ -62,21 +62,51 @@ export function OverviewTab({
 }) {
   const idx = currentStageIndex(c);
   const published = idx >= 4;
-  const roas = c.outcome.spend > 0 ? c.outcome.revenue / c.outcome.spend : null;
   const next = nextActionFor(c, idx);
+  const t = currentBudgetTotal(c);
+  const hasOutcome = c.outcome.spend > 0 || c.outcome.purchases > 0 || c.outcome.revenue > 0;
+
+  const budgetTile = {
+    label: "目前投放組合計",
+    value: t.total !== null ? formatCurrency(t.total) : "尚未設定",
+    caption:
+      t.total !== null
+        ? `日預算 ${formatCurrency(t.dailySum)}／天 × ${t.days} 天`
+        : "還沒設定投放起訖日",
+  };
+  const planTile = {
+    label: "採用時的計畫",
+    value: c.budget_planned !== null ? formatCurrency(c.budget_planned) : "尚未設定",
+    caption: c.budget_planned !== null ? "採用策略時的情境金額" : "還沒採用預算情境",
+  };
 
   const tiles = published
     ? [
-        { label: "花費", value: formatCurrency(c.outcome.spend) },
-        { label: "購買", value: formatCount(c.outcome.purchases) },
-        { label: "ROAS", value: formatRoas(roas) },
-      ]
-    : [
-        { label: "建議總預算", value: formatCurrency(c.budget_total ?? c.budget_planned) },
-        { label: "投放平台", value: c.groups.length > 0 ? [...new Set(c.groups.map((g) => g.channel_key))].join("・") : "尚未設定" },
+        {
+          label: "花費",
+          value: hasOutcome ? formatCurrency(c.outcome.spend) : "還沒有成效資料",
+          caption: hasOutcome ? "累計花費・平台回報" : "發布後才會有花費資料",
+        },
+        budgetTile,
+        planTile,
         {
           label: "投放期間",
           value: c.start_date && c.end_date ? `${c.start_date} ~ ${c.end_date}` : "尚未設定",
+          caption: t.days !== null ? `共 ${t.days} 天` : "還沒設定起訖日",
+        },
+      ]
+    : [
+        {
+          label: "投放平台",
+          value: c.groups.length > 0 ? [...new Set(c.groups.map((g) => g.channel_key))].join("・") : "尚未設定",
+          caption: c.groups.length > 0 ? "已建立的投放組通路" : "採用策略後才會建立",
+        },
+        budgetTile,
+        planTile,
+        {
+          label: "投放期間",
+          value: c.start_date && c.end_date ? `${c.start_date} ~ ${c.end_date}` : "尚未設定",
+          caption: t.days !== null ? `共 ${t.days} 天` : "還沒設定起訖日",
         },
       ];
 
@@ -113,14 +143,18 @@ export function OverviewTab({
         </div>
       </div>
 
-      <div className="grid grid-cols-3 gap-4">
-        {tiles.map((t) => (
-          <article className="surface p-5" key={t.label}>
-            <div className="mb-3 text-xs text-muted-foreground">{t.label}</div>
-            <p className="metric-number">{t.value}</p>
+      <div className="grid grid-cols-4 gap-4">
+        {tiles.map((tile) => (
+          <article className="surface p-5" key={tile.label}>
+            <div className="mb-3 text-xs text-muted-foreground">{tile.label}</div>
+            <p className="metric-number">{tile.value}</p>
+            <div className="mt-1 text-xs text-muted-foreground">{tile.caption}</div>
           </article>
         ))}
       </div>
+      <p className="text-xs text-muted-foreground">
+        購買、CPA、ROAS 等成效數字在成效分頁——那裡分得出「未追蹤」與 0。
+      </p>
 
       <div className="surface">
         <div className="surface-header">
