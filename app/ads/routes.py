@@ -8,12 +8,16 @@ Shape (container contract §7): every handler is `require_actor` -> `require_bra
 repository/brief function -> wrap.
 """
 
+from datetime import timedelta
+
 from fastapi import APIRouter, Request
 from pydantic import BaseModel
 
 import app.shared.web as web
 from app import workbench
-from app.ads import adapters, assets, brief, plan, repository, strategy
+from app.ads import adapters, assets, brief, outcome, plan, repository, strategy
+from app.ads.adapters import simulated
+from app.core import settings as coresettings
 
 router = APIRouter(prefix="/api/ads")
 
@@ -513,5 +517,56 @@ def bind_campaign(request: Request, brand_id: str, campaign_id: str):
     except ValueError as exc:
         code = str(exc)
         status, message = _PUBLISH_ERRORS.get(code, (400, code))
+        raise web.ApiError(status, code, message) from exc
+    return result
+
+
+# -- F03-I11：成效——Meta 花費灌進來 + 模擬通路補天數，一個 ingest 端點兩邊派工 ------------------
+
+_OUTCOME_ERRORS = {
+    "campaign_unknown": (404, CAMPAIGN_UNKNOWN_MESSAGE),
+}
+
+
+@router.get("/brands/{brand_id}/campaigns/{campaign_id}/performance")
+def get_performance(request: Request, brand_id: str, campaign_id: str):
+    """F03-I11：成效分頁的整包 payload——`app/ads/outcome.py::summary()`。"""
+    actor = web.require_actor(request)
+    web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
+    try:
+        result = outcome.summary(web.conn, actor.org_id, brand_id, campaign_id)
+    except ValueError as exc:
+        code = str(exc)
+        status, message = _OUTCOME_ERRORS.get(code, (400, code))
+        raise web.ApiError(status, code, message) from exc
+    return result
+
+
+@router.post("/brands/{brand_id}/campaigns/{campaign_id}/ingest")
+def ingest_outcome(request: Request, brand_id: str, campaign_id: str):
+    """F03-I11：一個端點，依這個 Campaign 是怎麼發布的派工——模擬通路（`external_id` 帶
+    `sim_` 前綴，`app/ads/adapters/simulated.py::_fake_external_id`）補到今天為止缺的天數；
+    其餘（含手動配對進來的 Meta 綁定）拉既有每日拉取已經存好的 `meta_entity_spend`，這裡
+    不多打一次 Meta（6 小時排程跟更新鈕是 F04）。"""
+    actor = web.require_actor(request)
+    web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
+    campaign = repository.get_campaign(web.conn, actor.org_id, brand_id, campaign_id)
+    if campaign is None:
+        raise web.ApiError(404, "campaign_unknown", CAMPAIGN_UNKNOWN_MESSAGE)
+    try:
+        external_id = campaign.get("external_id") or ""
+        if external_id.startswith("sim_"):
+            simulated.generate_outcomes(web.conn, actor.org_id, brand_id, campaign_id)
+        else:
+            today = coresettings.today_for_org(web.conn, org_id=actor.org_id)
+            start = campaign.get("start_date") or today
+            outcome.ingest_meta(
+                web.conn, actor.org_id, brand_id, campaign_id, start=start,
+                end=today + timedelta(days=1),
+            )
+        result = outcome.summary(web.conn, actor.org_id, brand_id, campaign_id)
+    except ValueError as exc:
+        code = str(exc)
+        status, message = _OUTCOME_ERRORS.get(code, (400, code))
         raise web.ApiError(status, code, message) from exc
     return result

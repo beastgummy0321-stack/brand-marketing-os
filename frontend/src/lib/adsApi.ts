@@ -565,3 +565,77 @@ export async function bindCampaign(brandId: string, campaignId: string): Promise
   );
   return parseJsonOrThrow<BindResponse>(res, "配對失敗。");
 }
+
+// -- F03-I11：成效 -----------------------------------------------------------------------------
+
+/** 一列聚合數字——campaign 層總計、每日序列、每投放組／每廣告都是同一個形狀。`purchases`／
+ * `revenue`／`cpa`／`ctr`／`roas`／`roas_conservative` 全部可能是 `null`——代表未追蹤，不是
+ * 0（§0「never a percentage / never 0」的同一條精神）。 */
+export interface OutcomeBucket {
+  spend: number;
+  impressions: number;
+  clicks: number;
+  purchases: number | null;
+  revenue: number | null;
+  cpa: number | null;
+  ctr: number | null;
+  /** 樂觀值——分母只算有追蹤到營收的花費。 */
+  roas: number | null;
+  /** 保守值——分母是這一組全部花費。兩個都給，畫面自己決定怎麼放大小字。 */
+  roas_conservative: number | null;
+}
+
+export interface OutcomeDailyPoint extends OutcomeBucket {
+  day: string;
+}
+
+export interface OutcomeGroupRow extends OutcomeBucket {
+  group_id: string;
+  name: string;
+  spend_share: number | null;
+}
+
+export interface OutcomeAdRow extends OutcomeBucket {
+  ad_id: string;
+  name: string;
+  spend_share: number | null;
+}
+
+export interface OutcomeCoverage {
+  expected: number;
+  missing: number;
+}
+
+/** `GET/POST .../performance` 與 `.../ingest` 共用的回應形狀（一個 action，兩邊派工，
+ * §0「One endpoint」）。 */
+export interface CampaignPerformance {
+  totals: OutcomeBucket;
+  daily: OutcomeDailyPoint[];
+  groups: OutcomeGroupRow[];
+  ads: OutcomeAdRow[];
+  coverage: OutcomeCoverage;
+  last_data_at: string | null;
+}
+
+export async function getPerformance(
+  brandId: string,
+  campaignId: string,
+): Promise<CampaignPerformance> {
+  const res = await apiFetch(
+    `${BASE}/brands/${encodeURIComponent(brandId)}/campaigns/${encodeURIComponent(campaignId)}/performance`,
+  );
+  return parseJsonOrThrow<CampaignPerformance>(res, "讀取成效失敗。");
+}
+
+/** 依這個 Campaign 怎麼發布的派工：模擬通路補到今天缺的天數；其餘拉既有的 Meta 每日拉取
+ * 結果，不多打一次 Meta。回傳跟 `getPerformance` 同一份 payload。 */
+export async function ingestOutcome(
+  brandId: string,
+  campaignId: string,
+): Promise<CampaignPerformance> {
+  const res = await apiFetch(
+    `${BASE}/brands/${encodeURIComponent(brandId)}/campaigns/${encodeURIComponent(campaignId)}/ingest`,
+    { method: "POST" },
+  );
+  return parseJsonOrThrow<CampaignPerformance>(res, "更新成效失敗。");
+}
