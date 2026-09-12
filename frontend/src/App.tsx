@@ -24,7 +24,6 @@ import { ProductDetailPage } from "@/components/products/ProductDetailPage";
 import { ProductListPage } from "@/components/products/ProductListPage";
 import { BrandReportPage } from "@/components/report/BrandReportPage";
 import { OrdersPage } from "@/components/orders/OrdersPage";
-import { SchedulePage } from "@/components/schedule/SchedulePage";
 import { SettingsPage } from "@/components/settings/SettingsPage";
 import { FreeJobPage, PackPage, SetStudioPage, WorkbenchHomePage } from "@/components/workbench";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -82,7 +81,6 @@ function App() {
         />
         <Route path="/brands/:brandId/orders" element={<OrdersRoute />} />
         <Route path="/brands/:brandId/report" element={<BrandReportRoute />} />
-        <Route path="/brands/:brandId/schedule" element={<ScheduleRoute />} />
         <Route path="/brands/:brandId/ads" element={<AdsHomeRoute />} />
         <Route path="/brands/:brandId/ads/new" element={<AdsNewRoute />} />
         <Route
@@ -351,16 +349,6 @@ function OrdersRoute() {
   return (
     <>
       <OrdersPage brandId={brandId ?? ""} />
-    </>
-  );
-}
-
-/** 檔期規劃（票 07：最薄路徑）。 */
-function ScheduleRoute() {
-  const { brandId } = useParams<{ brandId: string }>();
-  return (
-    <>
-      <SchedulePage brandId={brandId ?? ""} />
     </>
   );
 }
