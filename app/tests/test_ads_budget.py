@@ -91,6 +91,19 @@ class ScenariosTest(unittest.TestCase):
         self.assertEqual(result["basis"]["cpa"], 280)
         self.assertEqual(result["basis"]["sample_days"], 27)
         self.assertEqual(result["basis"]["sample_ads"], 4)
+        for row in result["scenarios"]:
+            self.assertIn("上一期日預算", row["caption"])
+            self.assertNotIn("中位數", row["caption"])
+
+    def test_history_caption_never_mentions_cpa_median_when_cpa_absent(self):
+        history = {"last_daily_budget": 1000, "sample_days": 5, "sample_ads": 1}
+        result = budget.scenarios(
+            web.conn, self.org_id, self.brand_id, product_ids=[self.product_id], days=7,
+            history=history,
+        )
+        for row in result["scenarios"]:
+            self.assertNotIn("中位數", row["caption"])
+            self.assertNotIn("CPA", row["caption"])
 
 
 class SplitTest(unittest.TestCase):

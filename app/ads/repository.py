@@ -11,7 +11,11 @@ Write shape (this issue): only `create_campaign` — groups/ads/actions/outcomes
 later issues (publish, bind, outcome ingest). This issue is the shared read contract.
 """
 
+import statistics
+from datetime import timedelta
+
 from app.core import cleanup
+from app.core import settings as coresettings
 from app.core.db import Conn, ConnProxy, jsonb, new_id
 
 _AnyConn = Conn | ConnProxy
@@ -224,6 +228,86 @@ def campaign_detail(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str
     detail["actions"] = [dict(a) for a in latest_actions]
     detail["outcome"] = _outcome_totals(conn, org_id, brand_id, campaign_id)
     return detail
+
+
+def budget_history(conn: _AnyConn, org_id: str, brand_id: str) -> dict | None:
+    """F03-I05: `app.ads.budget.scenarios()` 要吃的 `history` dict，`None` 代表這個品牌還沒有
+    足夠的已結算花費——冷啟動，不是給一個缺 `cpa` 的半吊子 dict（§0「Never pass a partial
+    dict」）。`cpa` = 近 30 天每日 CPA 的中位數（只算 `entity_kind='group'` 的列，跟
+    `_outcome_totals` 同一條「money totals belong to the group level」規則），
+    `last_daily_budget` = 最近一個 `status='closed'` Campaign 的投放組日預算合計。用
+    `coresettings.today_for_org` 而非機器的 `date.today()`（`app/core/settings.py:293`）。"""
+    today = coresettings.today_for_org(conn, org_id=org_id)
+    since = today - timedelta(days=30)
+    daily_rows = conn.execute(
+        "SELECT day, SUM(spend) AS spend, SUM(purchases) AS purchases FROM ads_outcome_daily"
+        " WHERE org_id = %s AND brand_id = %s AND entity_kind = 'group' AND day >= %s"
+        " GROUP BY day",
+        (org_id, brand_id, since),
+    ).fetchall()
+    daily_cpas = [
+        float(row["spend"]) / float(row["purchases"])
+        for row in daily_rows if row["purchases"]
+    ]
+    if not daily_cpas:
+        return None
+
+    closed = conn.execute(
+        "SELECT id FROM ads_campaign WHERE org_id = %s AND brand_id = %s AND status = 'closed'"
+        " ORDER BY closed_at DESC NULLS LAST, created_at DESC LIMIT 1",
+        (org_id, brand_id),
+    ).fetchone()
+    if closed is None:
+        return None
+    total_row = conn.execute(
+        "SELECT COALESCE(SUM(daily_budget), 0) AS total FROM ads_delivery_group"
+        " WHERE org_id = %s AND campaign_id = %s",
+        (org_id, closed["id"]),
+    ).fetchone()
+    sample_ads_row = conn.execute(
+        "SELECT COUNT(DISTINCT a.id) AS n FROM ads_ad a WHERE a.org_id = %s"
+        " AND a.brand_id = %s AND a.local_state = 'bound' AND a.campaign_id IN ("
+        "   SELECT DISTINCT campaign_id FROM ads_outcome_daily"
+        "   WHERE org_id = %s AND brand_id = %s AND entity_kind = 'group' AND day >= %s"
+        "   AND purchases > 0)",
+        (org_id, brand_id, org_id, brand_id, since),
+    ).fetchone()
+    assert total_row is not None and sample_ads_row is not None  # 都是聚合查詢，永遠有一列
+    return {
+        "cpa": statistics.median(daily_cpas),
+        "last_daily_budget": float(total_row["total"]),
+        "sample_days": len(daily_cpas),
+        "sample_ads": sample_ads_row["n"],
+    }
+
+
+def save_strategy(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str, *,
+                   budget_basis_json: dict) -> dict:
+    """F03-I05: 策略＋預算情境＋依據整包寫進 `ads_campaign.budget_basis_json`——沒有新表
+    （§0「strategy JSON stored in the campaign row」）。"""
+    conn.execute(
+        "UPDATE ads_campaign SET budget_basis_json = %s"
+        " WHERE org_id = %s AND brand_id = %s AND id = %s",
+        (jsonb(budget_basis_json), org_id, brand_id, campaign_id),
+    )
+    row = get_campaign(conn, org_id, brand_id, campaign_id)
+    assert row is not None
+    return row
+
+
+def select_scenario(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str, *,
+                     scenario_key: str, budget_planned: float, budget_basis_json: dict) -> dict:
+    """F03-I05: 使用者採用的情境（或手改的總額）——寫 `budget_planned`／`budget_scenario`；
+    這之後 group 日預算才是錢的真相（§0「One source of truth for money after 採用」），這裡
+    寫的是「採用當下記錄」，永不被重算覆寫。"""
+    conn.execute(
+        "UPDATE ads_campaign SET budget_planned = %s, budget_scenario = %s,"
+        " budget_basis_json = %s WHERE org_id = %s AND brand_id = %s AND id = %s",
+        (budget_planned, scenario_key, jsonb(budget_basis_json), org_id, brand_id, campaign_id),
+    )
+    row = get_campaign(conn, org_id, brand_id, campaign_id)
+    assert row is not None
+    return row
 
 
 # -- app.core.cleanup 登記（品牌刪除連鎖清資料，ARCHITECTURE.md §4） -------------------------

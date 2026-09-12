@@ -107,7 +107,9 @@ def _history_scenarios(history: dict, days: int) -> dict:
         total = round(daily * days) if days else None
         scenario_rows.append({
             "key": key, "label": label, "daily": daily, "total": total,
-            "caption": f"近 30 天 CPA 中位數 x {label}（上一期日預算 x{mult}）",
+            # F03-I05 corrects this caption: the multiplication is 上一期日預算 x0.6/1/1.6 —
+            # the 30-day median CPA is context in `basis`, never a factor in this arithmetic.
+            "caption": f"上一期日預算 NT${round(last_daily)} ×{mult:g}",
         })
     basis = {
         "mode": "history", "cpa": cpa,
