@@ -8,7 +8,7 @@ import { Badge } from "@/components/layout/ui/badge";
 import { formatCurrency } from "@/lib/format";
 import { listCampaigns, type CampaignCard, type CampaignStatus } from "@/lib/adsApi";
 
-const STATUS_LABEL: Record<CampaignStatus, string> = {
+export const STATUS_LABEL: Record<CampaignStatus, string> = {
   draft: "草稿",
   ready: "待發布",
   live: "投放中",
@@ -16,7 +16,7 @@ const STATUS_LABEL: Record<CampaignStatus, string> = {
   closed: "已結案",
 };
 
-const STATUS_TONE: Record<CampaignStatus, "secondary" | "default" | "outline"> = {
+export const STATUS_TONE: Record<CampaignStatus, "secondary" | "default" | "outline"> = {
   draft: "secondary",
   ready: "outline",
   live: "default",
@@ -102,8 +102,20 @@ export function AdsHomePage({ brandId }: { brandId: string }) {
                   {c.start_date && c.end_date ? `${c.start_date} ~ ${c.end_date}` : "未設定"}
                 </td>
                 <td className="whitespace-nowrap px-3 py-2 text-foreground">{c.objective}</td>
-                <td className="whitespace-nowrap px-3 py-2 text-right numeric text-foreground">
-                  {formatCurrency(c.budget_total ?? c.budget_planned)}
+                <td className="whitespace-nowrap px-3 py-2 text-right text-foreground">
+                  {c.budget_total === null && c.budget_planned === null ? (
+                    <span className="text-muted-foreground">尚未設定</span>
+                  ) : (
+                    <div className="flex flex-col items-end">
+                      <span className="numeric">
+                        {c.budget_total !== null ? formatCurrency(c.budget_total) : "－"}
+                      </span>
+                      <span className="text-xs text-muted-foreground">
+                        投放組日預算 × 天數
+                        {c.budget_planned !== null ? `・採用情境 ${formatCurrency(c.budget_planned)}` : ""}
+                      </span>
+                    </div>
+                  )}
                 </td>
                 <td className="whitespace-nowrap px-3 py-2 text-right numeric text-foreground">
                   {formatCurrency(c.outcome.spend)}

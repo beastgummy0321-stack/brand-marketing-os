@@ -8,7 +8,7 @@ import {
   useParams,
   useSearchParams,
 } from "react-router-dom";
-import { AdsHomePage, CampaignWorkspacePlaceholder, NewCampaignPage } from "@/components/ads";
+import { AdsHomePage, CampaignWorkspace, NewCampaignPage } from "@/components/ads";
 import { AppShell } from "@/components/layout/AppShell";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { EmptyState } from "@/components/layout/EmptyState";
@@ -390,7 +390,7 @@ function AdsCampaignRoute() {
   const { brandId, campaignId } = useParams<{ brandId: string; campaignId: string }>();
   return (
     <>
-      <CampaignWorkspacePlaceholder brandId={brandId ?? ""} campaignId={campaignId ?? ""} />
+      <CampaignWorkspace brandId={brandId ?? ""} campaignId={campaignId ?? ""} />
     </>
   );
 }
