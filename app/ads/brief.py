@@ -43,27 +43,30 @@ _FALLBACK_PARSED = {
 
 def _validate_dates(start_date: str, end_date: str) -> tuple[date, date]:
     """`(start_date, end_date)` 讀成 `date`；`start_date > end_date` 一律 `ValueError`
-    ——這支檔案自己驗（不 import `app.schedule`：`ads` 不依賴 `schedule`，§0）。"""
+    ——這支檔案自己驗（不 import `app.schedule`：`ads` 不依賴 `schedule`，§0）。錯誤一律用
+    snake_case 代碼（F03-I19「Error codes are machine tokens」）；`routes.py` 把代碼翻成
+    `DATES_REQUIRED_MESSAGE`／`END_BEFORE_START_MESSAGE` 這兩個常數當 `message`。"""
     if not start_date or not end_date:
-        raise ValueError(DATES_REQUIRED_MESSAGE)
+        raise ValueError("dates_required")
     try:
         start = date.fromisoformat(start_date)
         end = date.fromisoformat(end_date)
     except ValueError as exc:
-        raise ValueError(DATES_REQUIRED_MESSAGE) from exc
+        raise ValueError("dates_required") from exc
     if end < start:
-        raise ValueError(END_BEFORE_START_MESSAGE)
+        raise ValueError("end_before_start")
     return start, end
 
 
-def _products_context(conn, org_id: str, brand_id: str) -> tuple[str, list[str]]:
+def _products_context(conn, org_id: str, brand_id: str) -> tuple[str, list[str], list[str]]:
     """商品清單＋今天有效的 `product_economics`，供 prompt 用；回傳 (prompt 文字段落,
-    實際引用到的 economics id 清單)——過期的價格（`effective_to` 已經過去）照樣列出，只是
-    標「已過期」，絕不悄悄當成現在有效的價格用（§0「a price whose effective window has
-    passed is passed in labelled stale」）。"""
+    實際引用到的 economics id 清單, 這個品牌自己的商品 id 清單)——過期的價格（`effective_to`
+    已經過去）照樣列出，只是標「已過期」，絕不悄悄當成現在有效的價格用（§0「a price whose
+    effective window has passed is passed in labelled stale」）。商品 id 清單同時是
+    `create_draft` 過濾模型瞎掰的 `product_ids` 用的唯一名單（F03-I19，別重複收集一次）。"""
     products = bi_repo.list_products(conn, brand_id)
     if not products:
-        return "【商品清單】（品牌還沒有任何商品）", []
+        return "【商品清單】（品牌還沒有任何商品）", [], []
 
     today = coresettings.today_for_org(conn, org_id=org_id)
     lines = []
@@ -84,7 +87,7 @@ def _products_context(conn, org_id: str, brand_id: str) -> tuple[str, list[str]]
         if stale:
             price_text += "（已過期，僅供參考，不當成現在的價格）"
         lines.append(f"- {product['id']}｜{product['name']}｜{price_text}")
-    return "【商品清單】\n" + "\n".join(lines), economics_ids
+    return "【商品清單】\n" + "\n".join(lines), economics_ids, [p["id"] for p in products]
 
 
 def _validate_reply(data) -> dict | None:
@@ -136,7 +139,7 @@ def create_draft(conn, org_id: str, brand_id: str, *, goal_text: str, start_date
     brand_text, knowledge_item_ids, brand_version, _product_version = context_compiler.compile(
         conn, brand_id, include_personas=False,
     )
-    products_text, economics_ids = _products_context(conn, org_id, brand_id)
+    products_text, economics_ids, brand_product_ids = _products_context(conn, org_id, brand_id)
 
     department_text = DEPARTMENT_PATH.read_text(encoding="utf-8")
     prompt = (
@@ -168,7 +171,8 @@ def create_draft(conn, org_id: str, brand_id: str, *, goal_text: str, start_date
             parsed_ok = True
             fields = validated
 
-    product_ids = [p for p in fields["product_ids"] if p] or None
+    brand_product_id_set = set(brand_product_ids)
+    product_ids = [p for p in fields["product_ids"] if p and p in brand_product_id_set] or None
     campaign = {
         "name": _draft_name(goal_text),
         "goal_text": goal_text,

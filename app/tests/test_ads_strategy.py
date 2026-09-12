@@ -187,6 +187,29 @@ class BadPctSumTest(StrategyTestBase):
         self.assertEqual(str(ctx.exception), "strategy_failed")
 
 
+_DUPLICATE_ROLE_REPLY = json.dumps({
+    "allocation": [
+        {"role": "new", "label": "新客 A", "pct": 40, "rationale": "x"},
+        {"role": "new", "label": "新客 B", "pct": 40, "rationale": "x"},
+        {"role": "explore", "label": "探索", "pct": 20, "rationale": "x"},
+    ],
+    "why": [], "unknowns": [], "alternatives": [],
+}, ensure_ascii=False)
+
+
+class DuplicateRoleTest(StrategyTestBase):
+    def test_reply_with_duplicate_role_raises_strategy_failed(self):
+        """F03-I19：`plan.adopt_strategy` 用 role 當 key 塞金額，同一個 role 出現兩次會讓
+        其中一列的金額悄悄消失，group 日預算加總就會少於 budget_planned——即使百分比加總到
+        100，也不能讓這個分配活到採用那一步。"""
+        self.campaign = self._create_campaign()
+        strategy.PROVIDER = _fake(_DUPLICATE_ROLE_REPLY)
+
+        with self.assertRaises(ValueError) as ctx:
+            self._generate()
+        self.assertEqual(str(ctx.exception), "strategy_failed")
+
+
 class AlreadyAdoptedTest(StrategyTestBase):
     def test_regenerating_after_budget_planned_is_set_is_refused(self):
         """再產生一次會照*推薦*情境重新 split，讓存的分配金額悄悄跟已採用的
