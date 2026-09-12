@@ -8,6 +8,7 @@ import {
   useParams,
   useSearchParams,
 } from "react-router-dom";
+import { AdsHomePage, CampaignWorkspacePlaceholder, NewCampaignPage } from "@/components/ads";
 import { AppShell } from "@/components/layout/AppShell";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { EmptyState } from "@/components/layout/EmptyState";
@@ -82,6 +83,12 @@ function App() {
         <Route path="/brands/:brandId/orders" element={<OrdersRoute />} />
         <Route path="/brands/:brandId/report" element={<BrandReportRoute />} />
         <Route path="/brands/:brandId/schedule" element={<ScheduleRoute />} />
+        <Route path="/brands/:brandId/ads" element={<AdsHomeRoute />} />
+        <Route path="/brands/:brandId/ads/new" element={<AdsNewRoute />} />
+        <Route
+          path="/brands/:brandId/ads/campaigns/:campaignId"
+          element={<AdsCampaignRoute />}
+        />
         <Route path="*" element={<NotFoundRoute />} />
       </Route>
     </Routes>
@@ -354,6 +361,36 @@ function ScheduleRoute() {
   return (
     <>
       <SchedulePage brandId={brandId ?? ""} />
+    </>
+  );
+}
+
+/** 投放中心首頁（F03-I13）：Campaign 清單＋建立入口，取代檔期規劃。 */
+function AdsHomeRoute() {
+  const { brandId } = useParams<{ brandId: string }>();
+  return (
+    <>
+      <AdsHomePage brandId={brandId ?? ""} />
+    </>
+  );
+}
+
+/** 建立 Campaign（F03-I13）：一句話描述目標 → 行銷駕駛艙規劃初版策略。 */
+function AdsNewRoute() {
+  const { brandId } = useParams<{ brandId: string }>();
+  return (
+    <>
+      <NewCampaignPage brandId={brandId ?? ""} />
+    </>
+  );
+}
+
+/** Campaign 五分頁工作區（F03-I13 起占位，F03-I14 起是真的內容）。 */
+function AdsCampaignRoute() {
+  const { brandId, campaignId } = useParams<{ brandId: string; campaignId: string }>();
+  return (
+    <>
+      <CampaignWorkspacePlaceholder brandId={brandId ?? ""} campaignId={campaignId ?? ""} />
     </>
   );
 }

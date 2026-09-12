@@ -43,18 +43,18 @@ test("走完切片後活下來的主要畫面", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "這個品牌以前投放過廣告嗎？" })).toBeVisible();
   await page.getByRole("button", { name: "完全沒投放過" }).click();
 
-  // --- 品牌頁：外殼切片後是品牌標題，右上角是進檔期的入口（缺陷 3）-------------
+  // --- 品牌頁：外殼切片後是品牌標題，右上角是進投放中心的入口（缺陷 3）-------------
   await expect(page).toHaveURL(/\/app\/brands\/brd_/);
   await expect(page.getByRole("heading", { name: "經營概況", exact: true })).toBeVisible();
   await expect(page.getByText(brandName, {exact:true}).first()).toBeVisible();
-  await expect(page.getByRole("link", { name: "排這期的檔期" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "前往投放中心" })).toBeVisible();
 
   const brandId = new URL(page.url()).pathname.split("/")[3];
 
-  // --- 檔期：缺陷 3 —— 品牌頁要有真的入口，不是只能手打網址 -------------------
-  await page.getByRole("link", { name: "排這期的檔期" }).click();
-  await expect(page).toHaveURL(new RegExp(`/app/brands/${brandId}/schedule$`));
-  await expect(page.getByRole("heading", { name: "檔期規劃", exact: true })).toBeVisible();
+  // --- 投放中心：缺陷 3 —— 品牌頁要有真的入口，不是只能手打網址 -------------------
+  await page.getByRole("link", { name: "前往投放中心" }).click();
+  await expect(page).toHaveURL(new RegExp(`/app/brands/${brandId}/ads$`));
+  await expect(page.getByRole("heading", { name: "投放中心", exact: true })).toBeVisible();
 
   // --- 素材工作檯（F02 大重置，ARCHITECTURE.md §5.1-§5.3）：入口 → 自由創作 → 任務包頁 →
   // 素材組 studio 的完整走查（F02-I11）。跑在沒有 worker、沒有 provider key 的 e2e 後端上

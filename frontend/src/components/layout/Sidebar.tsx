@@ -29,7 +29,7 @@ import { cn } from "@/lib/utils";
 
 const BRAND_NAV = [
   { label: "經營概況", suffix: "", icon: BarChart3 },
-  { label: "檔期規劃", suffix: "/schedule", icon: CalendarDays },
+  { label: "投放中心", suffix: "/ads", icon: CalendarDays },
   { label: "素材工作檯", suffix: "/workbench", icon: Wand2 },
   { label: "訂單與顧客", suffix: "/orders", icon: Users },
   { label: "產品", suffix: "/products", icon: Package },
