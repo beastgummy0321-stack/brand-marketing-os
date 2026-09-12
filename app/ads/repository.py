@@ -310,6 +310,182 @@ def select_scenario(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str
     return row
 
 
+# -- F03-I06: 採用策略寫投放組／廣告，以及後續編輯 ------------------------------------------
+
+
+def set_campaign_status(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str,
+                         status: str) -> None:
+    conn.execute(
+        "UPDATE ads_campaign SET status = %s WHERE org_id = %s AND brand_id = %s AND id = %s",
+        (status, org_id, brand_id, campaign_id),
+    )
+
+
+def coordinate_vocabulary(conn: _AnyConn, org_id: str, brand_id: str) -> list:
+    """F03-I06 §0 blocked-if：跟 `app/workbench/repository.py::list_coordinate_vocabulary`
+    同一份查法，複製而非 import（container contract 規則 5；不 import `app.schedule`／
+    `app.workbench`，也不寫這張表）。只回七維座標，不回 `feedback` 拒絕標記——這裡只是
+    prompt 要用的詞彙表，不是工作檯的挑選清單。"""
+    rows = conn.execute(
+        "SELECT dimension, key, label FROM brand_coordinate"
+        " WHERE org_id = %s AND brand_id = %s AND disabled_at IS NULL"
+        " ORDER BY dimension, label",
+        (org_id, brand_id),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def create_group(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str, *,
+                  channel_key: str, name: str, role: str, daily_budget: float,
+                  start_date=None, end_date=None) -> dict:
+    group_id = new_id("adg")
+    conn.execute(
+        "INSERT INTO ads_delivery_group (id, org_id, brand_id, campaign_id, channel_key, name,"
+        " role, daily_budget, start_date, end_date)"
+        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+        (group_id, org_id, brand_id, campaign_id, channel_key, name, role, daily_budget,
+         start_date, end_date),
+    )
+    row = get_group(conn, org_id, brand_id, group_id)
+    assert row is not None
+    return row
+
+
+def get_group(conn: _AnyConn, org_id: str, brand_id: str, group_id: str) -> dict | None:
+    row = conn.execute(
+        "SELECT * FROM ads_delivery_group WHERE org_id = %s AND brand_id = %s AND id = %s",
+        (org_id, brand_id, group_id),
+    ).fetchone()
+    return dict(row) if row is not None else None
+
+
+_GROUP_PATCHABLE = ("name", "role", "daily_budget", "start_date", "end_date")
+
+
+def update_group_fields(conn: _AnyConn, org_id: str, brand_id: str, group_id: str,
+                         updates: dict) -> dict:
+    """單純欄位寫入——業務規則（金額核准煞車、`ads_action` 留痕）在 `app/ads/plan.py`，
+    這裡只管落地，跟 `update_campaign` 同一個分層。"""
+    set_clauses = []
+    params: list = []
+    for column in _GROUP_PATCHABLE:
+        if column in updates:
+            set_clauses.append(f"{column} = %s")
+            params.append(updates[column])
+    if set_clauses:
+        params.extend([org_id, brand_id, group_id])
+        conn.execute(
+            f"UPDATE ads_delivery_group SET {', '.join(set_clauses)}"
+            " WHERE org_id = %s AND brand_id = %s AND id = %s",
+            tuple(params),
+        )
+    row = get_group(conn, org_id, brand_id, group_id)
+    assert row is not None
+    return row
+
+
+def delete_group(conn: _AnyConn, org_id: str, brand_id: str, group_id: str) -> None:
+    conn.execute(
+        "DELETE FROM ads_delivery_group WHERE org_id = %s AND brand_id = %s AND id = %s",
+        (org_id, brand_id, group_id),
+    )
+
+
+def group_budget_total(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str) -> float:
+    """這個 Campaign 目前所有投放組日預算合計——核准煞車比對的就是這個數字（§0）。"""
+    row = conn.execute(
+        "SELECT COALESCE(SUM(daily_budget), 0) AS total FROM ads_delivery_group"
+        " WHERE org_id = %s AND brand_id = %s AND campaign_id = %s",
+        (org_id, brand_id, campaign_id),
+    ).fetchone()
+    return float(row["total"]) if row is not None else 0.0
+
+
+_AD_COORDINATE_COLUMNS = {
+    "audience": "audience_key", "pain": "pain_key", "angle": "angle_key",
+    "hook": "hook_key", "proof": "proof_key", "offer": "offer_key", "format": "format_key",
+}
+
+
+def create_ad(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str, group_id: str, *,
+              name: str, coordinates: dict, coordinates_snapshot: dict) -> dict:
+    ad_id = new_id("ada")
+    conn.execute(
+        "INSERT INTO ads_ad (id, org_id, brand_id, campaign_id, group_id, name, audience_key,"
+        " pain_key, angle_key, hook_key, proof_key, offer_key, format_key,"
+        " coordinates_snapshot_json)"
+        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+        (ad_id, org_id, brand_id, campaign_id, group_id, name,
+         coordinates.get("audience"), coordinates.get("pain"), coordinates.get("angle"),
+         coordinates.get("hook"), coordinates.get("proof"), coordinates.get("offer"),
+         coordinates.get("format"), jsonb(coordinates_snapshot)),
+    )
+    row = get_ad(conn, org_id, brand_id, ad_id)
+    assert row is not None
+    return row
+
+
+def get_ad(conn: _AnyConn, org_id: str, brand_id: str, ad_id: str) -> dict | None:
+    row = conn.execute(
+        "SELECT * FROM ads_ad WHERE org_id = %s AND brand_id = %s AND id = %s",
+        (org_id, brand_id, ad_id),
+    ).fetchone()
+    return dict(row) if row is not None else None
+
+
+def update_ad_fields(conn: _AnyConn, org_id: str, brand_id: str, ad_id: str,
+                      updates: dict) -> dict:
+    """`updates` 是 `{"name": ..., "coordinates": {"audience": ..., ...}}`——`coordinates`
+    只送使用者真的改過的維度，其餘維度保持原樣（跟 `update_campaign` 的 `exclude_unset`
+    同一條慣例）。"""
+    set_clauses = []
+    params: list = []
+    if "name" in updates:
+        set_clauses.append("name = %s")
+        params.append(updates["name"])
+    if "coordinates" in updates:
+        for dim, column in _AD_COORDINATE_COLUMNS.items():
+            if dim in updates["coordinates"]:
+                set_clauses.append(f"{column} = %s")
+                params.append(updates["coordinates"][dim])
+    if set_clauses:
+        params.extend([org_id, brand_id, ad_id])
+        conn.execute(
+            f"UPDATE ads_ad SET {', '.join(set_clauses)}"
+            " WHERE org_id = %s AND brand_id = %s AND id = %s",
+            tuple(params),
+        )
+    row = get_ad(conn, org_id, brand_id, ad_id)
+    assert row is not None
+    return row
+
+
+def delete_ad(conn: _AnyConn, org_id: str, brand_id: str, ad_id: str) -> None:
+    conn.execute(
+        "DELETE FROM ads_ad WHERE org_id = %s AND brand_id = %s AND id = %s",
+        (org_id, brand_id, ad_id),
+    )
+
+
+def record_action(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str, *,
+                   target_kind: str, target_id: str, kind: str, before: dict, after: dict,
+                   approved_by: str, sync_state: str = "pending_manual") -> dict:
+    """每一次碰到已綁定節點的改動留一列 `ads_action`（§0「every platform-bound change is an
+    ads_action row」）。`approved_at` 跟這一列同時寫——這裡的「核准」是使用者在畫面上按下
+    這次編輯的那一刻，不是另一支獨立的核准端點。"""
+    action_id = new_id("adx")
+    conn.execute(
+        "INSERT INTO ads_action (id, org_id, brand_id, campaign_id, target_kind, target_id,"
+        " kind, before_json, after_json, approved_by, approved_at, sync_state)"
+        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now(), %s)",
+        (action_id, org_id, brand_id, campaign_id, target_kind, target_id, kind,
+         jsonb(before), jsonb(after), approved_by, sync_state),
+    )
+    row = conn.execute("SELECT * FROM ads_action WHERE id = %s", (action_id,)).fetchone()
+    assert row is not None
+    return dict(row)
+
+
 # -- app.core.cleanup 登記（品牌刪除連鎖清資料，ARCHITECTURE.md §4） -------------------------
 
 _CHILD_TABLES = (

@@ -308,3 +308,123 @@ export async function selectScenario(
   const data = await parseJsonOrThrow<{ campaign: CampaignDetail }>(res, "選擇預算情境失敗。");
   return data.campaign;
 }
+
+// -- F03-I06：採用策略 -> 投放組／廣告，以及後續編輯 ------------------------------------------
+
+/** `POST .../campaigns/{id}/plan` — 把已採用的策略角色分配展開成投放組／廣告，草稿 -> `ready`。
+ * 沒有請求體：策略跟預算都已經存在 Campaign 自己身上，這支不再重新問使用者。 */
+export async function adoptStrategy(brandId: string, campaignId: string): Promise<CampaignDetail> {
+  const res = await apiFetch(
+    `${BASE}/brands/${encodeURIComponent(brandId)}/campaigns/${encodeURIComponent(campaignId)}/plan`,
+    { method: "POST" },
+  );
+  const data = await parseJsonOrThrow<{ campaign: CampaignDetail }>(res, "展開投放結構失敗。");
+  return data.campaign;
+}
+
+export interface CreateGroupInput {
+  name: string;
+  role: StrategyRole;
+  daily_budget: number;
+  start_date?: string | null;
+  end_date?: string | null;
+}
+
+export async function createGroup(
+  brandId: string,
+  campaignId: string,
+  input: CreateGroupInput,
+): Promise<DeliveryGroupRow> {
+  const res = await apiFetch(
+    `${BASE}/brands/${encodeURIComponent(brandId)}/campaigns/${encodeURIComponent(campaignId)}/groups`,
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input) },
+  );
+  const data = await parseJsonOrThrow<{ group: DeliveryGroupRow }>(res, "新增投放組失敗。");
+  return data.group;
+}
+
+/** `PATCH .../groups/{id}` — 預算只在投放組層；改到已綁定節點的任何欄位會留一列 `ads_action`。 */
+export interface PatchGroupInput {
+  name?: string;
+  role?: StrategyRole;
+  daily_budget?: number;
+  start_date?: string | null;
+  end_date?: string | null;
+}
+
+export async function patchGroup(
+  brandId: string,
+  groupId: string,
+  input: PatchGroupInput,
+): Promise<DeliveryGroupRow> {
+  const res = await apiFetch(
+    `${BASE}/brands/${encodeURIComponent(brandId)}/groups/${encodeURIComponent(groupId)}`,
+    { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input) },
+  );
+  const data = await parseJsonOrThrow<{ group: DeliveryGroupRow }>(res, "更新投放組失敗。");
+  return data.group;
+}
+
+export async function deleteGroup(brandId: string, groupId: string): Promise<void> {
+  const res = await apiFetch(
+    `${BASE}/brands/${encodeURIComponent(brandId)}/groups/${encodeURIComponent(groupId)}`,
+    { method: "DELETE" },
+  );
+  await ensureOk(res, "刪除投放組失敗。");
+}
+
+/** 七維座標——值一律是 `brand_coordinate.key`，不是 `label`。 */
+export interface AdCoordinates {
+  audience: string;
+  pain: string;
+  angle: string;
+  hook: string;
+  proof: string;
+  offer: string;
+  format: string;
+}
+
+export interface CreateAdInput {
+  group_id: string;
+  name: string;
+  coordinates: AdCoordinates;
+}
+
+export async function createAd(
+  brandId: string,
+  campaignId: string,
+  input: CreateAdInput,
+): Promise<AdRow> {
+  const res = await apiFetch(
+    `${BASE}/brands/${encodeURIComponent(brandId)}/campaigns/${encodeURIComponent(campaignId)}/ads`,
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input) },
+  );
+  const data = await parseJsonOrThrow<{ ad: AdRow }>(res, "新增廣告失敗。");
+  return data.ad;
+}
+
+export interface PatchAdInput {
+  name?: string;
+  coordinates?: Partial<AdCoordinates>;
+}
+
+export async function patchAd(
+  brandId: string,
+  adId: string,
+  input: PatchAdInput,
+): Promise<AdRow> {
+  const res = await apiFetch(
+    `${BASE}/brands/${encodeURIComponent(brandId)}/ads/${encodeURIComponent(adId)}`,
+    { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input) },
+  );
+  const data = await parseJsonOrThrow<{ ad: AdRow }>(res, "更新廣告失敗。");
+  return data.ad;
+}
+
+export async function deleteAd(brandId: string, adId: string): Promise<void> {
+  const res = await apiFetch(
+    `${BASE}/brands/${encodeURIComponent(brandId)}/ads/${encodeURIComponent(adId)}`,
+    { method: "DELETE" },
+  );
+  await ensureOk(res, "刪除廣告失敗。");
+}
