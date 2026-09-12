@@ -25,7 +25,7 @@ import { BrandReportPage } from "@/components/report/BrandReportPage";
 import { OrdersPage } from "@/components/orders/OrdersPage";
 import { SchedulePage } from "@/components/schedule/SchedulePage";
 import { SettingsPage } from "@/components/settings/SettingsPage";
-import { WorkbenchPage } from "@/components/workbench";
+import { FreeJobPage, PackPage, SetStudioPage, WorkbenchHomePage } from "@/components/workbench";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   WorkspaceProvider,
@@ -62,6 +62,15 @@ function App() {
         <Route path="/brands/:brandId/intake/history" element={<HistoryRoute />} />
         <Route path="/brands/:brandId/library" element={<LibraryRoute />} />
         <Route path="/brands/:brandId/workbench" element={<WorkbenchRoute />} />
+        <Route path="/brands/:brandId/workbench/new" element={<WorkbenchNewRoute />} />
+        <Route
+          path="/brands/:brandId/workbench/packs/:packId"
+          element={<WorkbenchPackRoute />}
+        />
+        <Route
+          path="/brands/:brandId/workbench/packs/:packId/sets/:setId"
+          element={<WorkbenchSetRoute />}
+        />
         <Route
           path="/brands/:brandId/products"
           element={<ProductListRoute />}
@@ -257,12 +266,52 @@ function LibraryRoute() {
   );
 }
 
-/** 素材工作檯（S16，票 workbench/04，ADR 0068）：文案、圖片提示詞與腳本在這裡生成。 */
+/** 素材工作檯入口（F02-I07，`ARCHITECTURE.md` §5.1-§5.3）：任務包 → 素材組 → 產物 → 版本
+ * 四層 IA 的第一頁。`…/workbench/new`／`…/workbench/packs/:packId`／
+ * `…/workbench/packs/:packId/sets/:setId` 三條路由由 F02-I10／I08／I09 各自加上，
+ * 這支只加自己這一條（F02-I07 → I08 → I09 → I10 是一條鏈，同一批檔案不並行）。 */
 function WorkbenchRoute() {
   const { brandId } = useParams<{ brandId: string }>();
   return (
     <>
-      <WorkbenchPage brandId={brandId ?? ""} />
+      <WorkbenchHomePage brandId={brandId ?? ""} />
+    </>
+  );
+}
+
+/** 自由創作（F02-I10）：鏈的最後一支，`…/workbench/new`。`?type=` 由入口「快速開始」帶進來
+ * 預選素材類型，頁面自己讀 `useSearchParams`，這裡只傳 `brandId`。 */
+function WorkbenchNewRoute() {
+  const { brandId } = useParams<{ brandId: string }>();
+  return (
+    <>
+      <FreeJobPage brandId={brandId ?? ""} />
+    </>
+  );
+}
+
+/** 任務包頁（F02-I08）：`…/workbench/packs/:packId` 一條路由，鏈上的下一支
+ * （F02-I09，`…/workbench/packs/:packId/sets/:setId`）之後才加。 */
+function WorkbenchPackRoute() {
+  const { brandId, packId } = useParams<{ brandId: string; packId: string }>();
+  return (
+    <>
+      <PackPage brandId={brandId ?? ""} packId={packId ?? ""} />
+    </>
+  );
+}
+
+/** 素材組 studio（F02-I09）：`…/workbench/packs/:packId/sets/:setId` 最後一條，鏈到此結束
+ * （F02-I10 是 `…/workbench/new`，不再碰這三支檔案的這段）。 */
+function WorkbenchSetRoute() {
+  const { brandId, packId, setId } = useParams<{
+    brandId: string;
+    packId: string;
+    setId: string;
+  }>();
+  return (
+    <>
+      <SetStudioPage brandId={brandId ?? ""} packId={packId ?? ""} setId={setId ?? ""} />
     </>
   );
 }

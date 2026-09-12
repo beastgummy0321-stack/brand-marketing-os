@@ -56,17 +56,50 @@ test("走完切片後活下來的主要畫面", async ({ page }) => {
   await expect(page).toHaveURL(new RegExp(`/app/brands/${brandId}/schedule$`));
   await expect(page.getByRole("heading", { name: "檔期規劃", exact: true })).toBeVisible();
 
-  // --- 素材工作檯（票 workbench/04，ADR 0068）：左欄 layout C——「新工單」按鈕沒了，
-  // 開始生成／派工任務兩個常駐分組取代；剛建的品牌沒有任何工單，三個派工任務來源分組
-  // （檔期／網站／品牌內容）都該落回「尚無任務」空狀態。--------------------------
+  // --- 素材工作檯（F02 大重置，ARCHITECTURE.md §5.1-§5.3）：入口 → 自由創作 → 任務包頁 →
+  // 素材組 studio 的完整走查（F02-I11）。跑在沒有 worker、沒有 provider key 的 e2e 後端上
+  // （F02 Decisions「e2e asserts only what runs with no worker and no provider key」），所以
+  // 圖片 tab 停在「還沒有生成過」的空狀態，「AI 解析結果」也走 `parsed: false` 的失敗分支——
+  // 兩者都是這支測試要證明活得下去的行為，不是意外。 --------------------------------------
   await page.goto(`/app/brands/${brandId}/workbench`);
   await expect(page.getByRole("heading", { name: "素材工作檯", exact: true })).toBeVisible();
-  const rail = page.locator(".workspace-subnav");
-  await expect(rail.getByRole("button", { name: "文案", exact: true })).toBeVisible();
-  for (const source of ["檔期", "網站", "品牌內容"]) {
-    await expect(rail.getByText(source, { exact: true })).toBeVisible();
-  }
-  await expect(rail.getByText("尚無任務", { exact: true })).toHaveCount(3);
+  await expect(page.getByText("目前沒有任務包")).toBeVisible();
+
+  await page.getByRole("button", { name: "＋ 自由創作" }).first().click();
+  await expect(page).toHaveURL(new RegExp(`/app/brands/${brandId}/workbench/new$`));
+
+  // 精準控制：選 圖片 當素材類型，讓建出來的任務包要求 `image_prompt`。
+  await page.getByRole("button", { name: "精準控制" }).click();
+  await page.getByLabel("素材類型").selectOption("image_prompt");
+  await page.getByLabel("告訴 AI 你想創作什麼").fill("幫這個品牌做一張活動宣傳圖");
+
+  // 第一次點擊：真的打一次 `/parse`；CI 的 8720 後端沒有 provider key，模型呼叫會失敗，
+  // 但「一次失敗的解析不是死路」——落回 `defaults`，`parsed: false`，畫面照樣往下走。
+  await page.getByRole("button", { name: "建立自由工作" }).click();
+  await expect(page.getByRole("button", { name: "確認並生成" })).toBeVisible();
+  await expect(page.getByText("需要產出")).toBeVisible();
+
+  // 第二次點擊：`POST /packs`，落地到剛建立的任務包頁。
+  await page.getByRole("button", { name: "確認並生成" }).click();
+  await expect(page).toHaveURL(new RegExp(`/app/brands/${brandId}/workbench/packs/[^/]+$`));
+
+  await expect(page.getByText("任務包", { exact: true })).toBeVisible();
+  await expect(page.getByText("總覽", { exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "完成進度" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "素材組進度" })).toBeVisible();
+
+  // API 自己出的字：`未生成`（`cells[].text`）——`frontend/src` 底下沒有這個字面，出現在
+  // 畫面上只可能是後端給的（F02 Decisions）。剛建的任務包還沒生成過，所以圖片欄是這個字。
+  await expect(page.getByRole("cell", { name: "未生成", exact: true })).toBeVisible();
+
+  // 打開這個素材組的 studio。
+  await page.getByRole("cell", { name: "未生成", exact: true }).locator("..").click();
+  await expect(page).toHaveURL(
+    new RegExp(`/app/brands/${brandId}/workbench/packs/[^/]+/sets/[^/]+$`),
+  );
+  await expect(page.getByRole("tab", { name: "圖片" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "顯示提示詞" })).toBeVisible();
+  await expect(page.getByText("還沒有生成過")).toBeVisible();
 
   // --- 產品 -----------------------------------------------------------------
   await page.goto(`/app/brands/${brandId}/products`);

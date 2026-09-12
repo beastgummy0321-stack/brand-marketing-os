@@ -227,6 +227,18 @@ export interface NextPeriodSuggestion {
   overlaps: string[];
 }
 
+/** F02-I04 (ARCHITECTURE.md §5.5): the "可以下一步" signal, a state read through
+ * `workbench.pack_for_source` -- never a callback. `state` is the Chinese word
+ * `pack_for_source` returns (待處理／進行中／待核准／已完成), passed through untranslated.
+ * `null` when the tree has no pack yet. */
+export interface CreativePackSignal {
+  pack_id: string;
+  state: string;
+  approved_at: string | null;
+  sets_total: number;
+  sets_done: number;
+}
+
 export interface ScheduleState {
   daily_budget: number;
   plan_count_min: number;
@@ -237,6 +249,7 @@ export interface ScheduleState {
   plan: SchedulePlan | null;
   tree: CampaignTreeResult | null;
   briefs: ScheduleBrief[];
+  creative_pack: CreativePackSignal | null;
   period: SchedulePeriod | null;
   next_period_suggestion: NextPeriodSuggestion | null;
 }

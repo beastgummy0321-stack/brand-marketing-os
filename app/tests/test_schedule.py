@@ -57,6 +57,11 @@ ACTOR = "測試員"
 _DATA = schedule_state._load_platform_data()
 VALID_PLATFORM = next(p["id"] for p in _DATA["platforms"] if p["enabled"])
 VALID_OBJECTIVE = next(o["value"] for o in _DATA["objectives"] if o["platform"] == VALID_PLATFORM)
+VALID_PLATFORM_LABEL = next(p["label"] for p in _DATA["platforms"] if p["id"] == VALID_PLATFORM)
+VALID_OBJECTIVE_LABEL = next(
+    o["label"] for o in _DATA["objectives"]
+    if o["platform"] == VALID_PLATFORM and o["value"] == VALID_OBJECTIVE
+)
 DISABLED_PLATFORM = next(p["id"] for p in _DATA["platforms"] if not p["enabled"])
 
 
@@ -853,9 +858,11 @@ class QueuedGenerationTest(_ScheduleApiTestBase):
 
 
 class TreeDispatchRequestTest(_ScheduleApiTestBase):
-    """票 F01-T02-I04：`schedule_tree()` 展開成功後交給工作檯的 `request_json`，每個最深層
-    節點自己的 `copy_length`（沒填就落成 `"short"`）跟這一期的 `promotion_note` 都要原樣
-    帶到——`app/schedule/jobs.py:589-593` 已經這樣寫，這裡是那段程式的真的跑一次證據。"""
+    """票 F01-T02-I04（F02-I02 更新）：`schedule_tree()` 展開成功後交給工作檯的
+    `request_json`，每個最深層節點自己的 `copy_length`（沒填就落成 `"short"`）跟這一期的
+    `promotion_note` 都要原樣帶到。F02-I02：`parts` 現在從 `required_outputs.keys()`
+    衍生（ARCHITECTURE.md §5.4）——一個節點一次交棒 copy 跟 image_prompt 兩個 part，不再
+    只有 copy，`required_outputs_json` 也要能看到 `{"copy": 1, "image_prompt": 1}`。"""
 
     def test_dispatched_brief_request_carries_node_copy_length_and_promotion_note(self):
         schedule_jobs.PROVIDER = _fake(_fenced_plans([_one_plan()]))
@@ -873,17 +880,31 @@ class TreeDispatchRequestTest(_ScheduleApiTestBase):
         self._run_worker()
 
         rows = web.conn.execute(
-            "SELECT source_ref, request_json FROM workbench_brief WHERE brand_id = %s",
-            (self.brand["id"],),
+            "SELECT source_ref, request_json, required_outputs_json FROM workbench_brief"
+            " WHERE brand_id = %s", (self.brand["id"],),
         ).fetchall()
         self.assertEqual(len(rows), 2)
         by_node_key = {r["source_ref"]["node_key"]: r["request_json"] for r in rows}
+        required_by_node_key = {
+            r["source_ref"]["node_key"]: r["required_outputs_json"] for r in rows
+        }
         self.assertEqual(by_node_key.keys(), {"1.1.1", "1.2.1"})
         self.assertEqual(by_node_key["1.1.1"]["copy_length"], "long")
         self.assertEqual(by_node_key["1.2.1"]["copy_length"], "short")
         for request in by_node_key.values():
-            self.assertEqual(request["parts"], ["copy"])
+            self.assertEqual(set(request["parts"]), {"copy", "image_prompt"})
             self.assertEqual(request["promotion_note"], "滿799免運\n新品九折")
+        for required_outputs in required_by_node_key.values():
+            self.assertEqual(required_outputs, {"copy": 1, "image_prompt": 1})
+
+        pack_row = web.conn.execute(
+            "SELECT context_json FROM workbench_pack WHERE brand_id = %s", (self.brand["id"],),
+        ).fetchone()
+        # F02-I19：`context` 是 §5.4 契約欄位，`schedule_tree()` 過去只填 `product_ids`，
+        # 平台／目標的標籤（不是 id／value）要一起帶到，否則 §5.13 的「平台」列跟
+        # `PackDetail.meta.platform`／`goal` 永遠是「—」／null。
+        self.assertEqual(pack_row["context_json"]["platform"], VALID_PLATFORM_LABEL)
+        self.assertEqual(pack_row["context_json"]["goal"], VALID_OBJECTIVE_LABEL)
 
 
 class RejectApiContractTest(_ScheduleApiTestBase):
@@ -2578,8 +2599,8 @@ class CreativeCandidateSyncTest(_ScheduleApiTestBase):
             "proof": None, "offer": None, "format": None,
         }
         body = {
-            "coordinates": coordinates, "copy_length": "short", "short": ["短版"],
-            "headlines": ["標題"], "descriptions": ["說明"],
+            "coordinates": coordinates, "copy_length": "short",
+            "sets": [{"body": "短版", "headline": "標題", "description": "說明"}],
             "visual_tone": visual_tone, "visual_concept": f"第 {round_no} 輪的畫面概念",
             "warnings": warnings if warnings is not None else [], "validation": [],
         }

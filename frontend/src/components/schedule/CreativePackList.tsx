@@ -4,7 +4,7 @@ import { EmptyState } from "@/components/layout/EmptyState";
 import { Skeleton } from "@/components/layout/Skeleton";
 import { Badge } from "@/components/layout/ui/badge";
 import { LENGTH_HINTS, LENGTH_LABELS } from "@/lib/workbenchApi";
-import type { ScheduleBrief } from "@/lib/scheduleApi";
+import type { CreativePackSignal, ScheduleBrief } from "@/lib/scheduleApi";
 
 // ADR 0060：這個元件屬於 schedule 這個功能資料夾，不 import 任何
 // `frontend/src/components/workbench/` 底下的東西——`LENGTH_HINTS`／`LENGTH_LABELS`
@@ -138,7 +138,9 @@ function CreativePackCard({ brandId, brief }: { brandId: string; brief: Schedule
 /** 票 05（design-system §5.1 素材準備 stage）：一個最深層節點一張卡——文案在這裡讀、複製；
  * 換版本、重新產一輪、產圖片提示詞都在素材工作檯做（ADR 0068「一個產出者」，這裡不重複那些
  * 控制項）。`briefs` 已經是活動樹的文件順序（`app/schedule/state.py` `_briefs_for_tree`）。 */
-export function CreativePackList({ brandId, briefs }: { brandId: string; briefs: ScheduleBrief[] }) {
+export function CreativePackList({ brandId, briefs, creativePack }: {
+  brandId: string; briefs: ScheduleBrief[]; creativePack: CreativePackSignal | null;
+}) {
   if (briefs.length === 0) {
     return (
       <div className="surface">
@@ -148,6 +150,9 @@ export function CreativePackList({ brandId, briefs }: { brandId: string; briefs:
   }
   return (
     <div className="flex flex-col gap-5">
+      {creativePack?.approved_at != null && (
+        <p role="status" className="text-sm text-muted-foreground">素材製作完，可以開始追蹤成效</p>
+      )}
       {briefs.map((brief) => (
         <CreativePackCard key={brief.node_key} brandId={brandId} brief={brief} />
       ))}

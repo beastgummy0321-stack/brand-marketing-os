@@ -1,12 +1,28 @@
 import { useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { ChevronRight } from "lucide-react";
 import { EmptyState } from "@/components/layout/EmptyState";
 import { Button } from "@/components/layout/ui/button";
 import { Badge } from "@/components/layout/ui/badge";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogTitle,
+} from "@/components/layout/ui/dialog";
 import { COORDINATE_DIMENSIONS } from "@/lib/coordinatesApi";
 import { formatCurrency } from "@/lib/format";
-import type { CampaignTreeNode, CampaignTreeResult, ScheduleApproval, ScheduleBrief } from "@/lib/scheduleApi";
+import type {
+  CampaignTreeNode, CampaignTreeResult, CreativePackSignal, ScheduleApproval, ScheduleBrief,
+} from "@/lib/scheduleApi";
+
+// F02-I04：跳過確認的選擇是每個品牌自己記一次（同 CockpitPage.tsx 的 per-brand
+// localStorage 慣例），一旦 pack 核准了對話框本來就不會再跳出來，這個旗標只在
+// 「還沒核准就先按核准」這條路上有意義。
+function nagDismissedKey(brandId: string): string {
+  return `brand-os:workbench-approve-nag-dismissed:${brandId}`;
+}
 
 interface NodeEntry { node: CampaignTreeNode; path: string; depth: number }
 function flattenNodes(nodes: CampaignTreeNode[], parent = "", depth = 0): NodeEntry[] {
@@ -33,14 +49,16 @@ const BRIEF_STATUS_LABELS: Record<string, string> = {
 };
 
 /** 層級與欄位名稱完全由服務提供；只以節點路徑管理選取與收合。 */
-export function CampaignTree({ tree, binding, bindError, onBind, approving, approveError, onApprove, revoking, revokeError, onRevoke, briefs, onGoToAssets }: {
+export function CampaignTree({ tree, binding, bindError, onBind, approving, approveError, onApprove, revoking, revokeError, onRevoke, briefs, creativePack, brandId, onGoToAssets }: {
   tree: CampaignTreeResult;
   binding: boolean; bindError: string | null; onBind: () => void;
   approving: boolean; approveError: string | null; onApprove: () => void;
   revoking: boolean; revokeError: string | null; onRevoke: () => void;
-  briefs: ScheduleBrief[]; onGoToAssets: () => void;
+  briefs: ScheduleBrief[]; creativePack: CreativePackSignal | null; brandId: string; onGoToAssets: () => void;
 }) {
   const [selectedPath, setSelectedPath] = useState("0");
+  const [nagOpen, setNagOpen] = useState(false);
+  const navigate = useNavigate();
   const entries = flattenNodes(tree.nodes);
   // 票 workbench-2/03：還沒配過（0 個對上）就不畫計數，免得一開頁就寫「配對完成：0／M」。
   const boundCount = entries.filter((entry) => entry.node.bound_external_id !== null).length;
@@ -48,15 +66,37 @@ export function CampaignTree({ tree, binding, bindError, onBind, approving, appr
   const briefByNodeKey = new Map(briefs.map((b) => [b.node_key, b]));
   const busy = binding || approving || revoking;
 
+  // F02-I04（§5.5）：核准不被這個提醒卡住——`creativePack` 沒核准時先跳一次確認，除非
+  // 使用者這個品牌已經勾過「不再提醒」，或這棵樹的素材包已經核准過。
+  function handleApproveClick() {
+    const packApproved = creativePack?.approved_at != null;
+    const dismissed = localStorage.getItem(nagDismissedKey(brandId)) === "1";
+    if (packApproved || dismissed) { onApprove(); return; }
+    setNagOpen(true);
+  }
+  function goToAssets() {
+    setNagOpen(false);
+    navigate(creativePack
+      ? `/brands/${encodeURIComponent(brandId)}/workbench/packs/${encodeURIComponent(creativePack.pack_id)}`
+      : `/brands/${encodeURIComponent(brandId)}/workbench`);
+  }
+
   if (tree.failure) return <div role="alert" className="surface p-5"><h2 className="mb-2 text-base">展開結果</h2><p className="text-sm text-danger">{tree.failure}</p><p className="mt-3 text-sm text-muted-foreground">回到方案比較，可重新選擇方案並展開。</p></div>;
 
   return <div className="flex flex-col gap-5">
+    <ApproveWithoutAssetsDialog
+      open={nagOpen}
+      brandId={brandId}
+      onOpenChange={setNagOpen}
+      onApproveAnyway={() => { setNagOpen(false); onApprove(); }}
+      onGoToAssets={goToAssets}
+    />
     <section className="surface">
       <div className="surface-header flex-wrap">
         <h2>展開結果</h2>
         <div className="flex flex-wrap items-center gap-2">
           <Button type="button" variant="outline" onClick={onBind} disabled={busy}>{binding ? "配對中…" : "配對"}</Button>
-          {(tree.approval === null || !tree.approval.matches_current_tree || !tree.approval.within_approved_ceiling) && <Button type="button" variant="outline" onClick={onApprove} disabled={busy}>{approving ? "核准中…" : tree.approval === null ? "核准" : "重新核准"}</Button>}
+          {(tree.approval === null || !tree.approval.matches_current_tree || !tree.approval.within_approved_ceiling) && <Button type="button" variant="outline" onClick={handleApproveClick} disabled={busy}>{approving ? "核准中…" : tree.approval === null ? "核准" : "重新核准"}</Button>}
           <label title="尚未開放：確認送出結構之前一律由人工操作" className="ml-2 flex items-center gap-2 text-xs text-muted-foreground"><input type="checkbox" disabled />自動送出尚未開放</label>
         </div>
       </div>
@@ -81,6 +121,35 @@ export function CampaignTree({ tree, binding, bindError, onBind, approving, appr
       <div className="min-w-0">{selected && <NodeDetail key={selected.path} entry={selected} levels={tree.levels} brief={selected.node.children.length === 0 ? briefByNodeKey.get(selected.node.node_key) : undefined} onSelectChild={(index) => setSelectedPath(`${selected.path}.${index}`)} onGoToAssets={onGoToAssets} />}</div>
     </div>}
   </div>;
+}
+
+/** F02-I04：按核准時 `creative_pack` 是 `null` 或還沒核准就先問一次，不擋核准本身——
+ * 兩顆按鈕都會把使用者帶到終點（核准，或去素材工作檯），「不再提醒」記在這個品牌名下。 */
+function ApproveWithoutAssetsDialog({ open, brandId, onOpenChange, onApproveAnyway, onGoToAssets }: {
+  open: boolean; brandId: string; onOpenChange: (open: boolean) => void;
+  onApproveAnyway: () => void; onGoToAssets: () => void;
+}) {
+  const [dontRemind, setDontRemind] = useState(false);
+  function confirm(action: () => void) {
+    if (dontRemind) localStorage.setItem(nagDismissedKey(brandId), "1");
+    action();
+  }
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogTitle>還沒製作素材</DialogTitle>
+        <DialogDescription>現在核准，投放結構會定案，但這一期的素材可能還沒準備好可以上線。</DialogDescription>
+        <label className="flex items-center gap-2 text-sm text-muted-foreground">
+          <input type="checkbox" checked={dontRemind} onChange={(e) => setDontRemind(e.target.checked)} />
+          不再提醒
+        </label>
+        <DialogFooter>
+          <Button type="button" variant="outline" onClick={() => confirm(onGoToAssets)}>先去做素材</Button>
+          <Button type="button" onClick={() => confirm(onApproveAnyway)}>仍要核准</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
 }
 
 function NodeBranch({ node, path, depth, levels, selectedPath, onSelect }: {

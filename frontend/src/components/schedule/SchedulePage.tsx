@@ -323,11 +323,11 @@ export function SchedulePage({ brandId }: { brandId: string }) {
         {schedule.plan ? <PlanComparison key={schedule.plan.task_id} plan={schedule.plan} expandingIndex={expandingIndex} expandError={expandError} onExpand={handleExpand} feedbackByPlan={feedbackByPlan} onAddFeedback={addFeedbackEntry} onUpdateFeedback={updateFeedbackEntry} onRemoveFeedback={removeFeedbackEntry} onReject={handleReject} rejecting={rejecting} rejectError={rejectError} busy={planRunning || treeRunning || briefsRunning} /> : <div className="surface"><EmptyState title="先建立本期方案" description="選擇產品、目標與檔期後，開始排程即可在這裡比較方案。" actionLabel="前往設定檔期" onAction={() => changeTab("setup")} /></div>}
       </div>
       <div hidden={tab !== "tree"}>
-        {schedule.tree && !schedule.tree.running ? <CampaignTree key={schedule.tree.task_id} tree={schedule.tree} binding={binding} bindError={bindError} onBind={handleBind} approving={approving} approveError={approveError} onApprove={handleApprove} revoking={revoking} revokeError={revokeError} onRevoke={handleRevoke} briefs={schedule.briefs} onGoToAssets={() => changeTab("assets")} /> : <div className="surface"><EmptyState title={treeRunning ? "正在整理投放結構" : "尚未展開投放結構"} description={treeRunning ? "完成後會顯示節點、預算與內容，可以先到其他階段工作。" : "先在方案比較中選擇一個方案，再展開成投放結構。"} actionLabel={treeRunning ? undefined : "前往方案比較"} onAction={treeRunning ? undefined : () => changeTab("plans")} /></div>}
+        {schedule.tree && !schedule.tree.running ? <CampaignTree key={schedule.tree.task_id} tree={schedule.tree} binding={binding} bindError={bindError} onBind={handleBind} approving={approving} approveError={approveError} onApprove={handleApprove} revoking={revoking} revokeError={revokeError} onRevoke={handleRevoke} briefs={schedule.briefs} creativePack={schedule.creative_pack} brandId={brandId} onGoToAssets={() => changeTab("assets")} /> : <div className="surface"><EmptyState title={treeRunning ? "正在整理投放結構" : "尚未展開投放結構"} description={treeRunning ? "完成後會顯示節點、預算與內容，可以先到其他階段工作。" : "先在方案比較中選擇一個方案，再展開成投放結構。"} actionLabel={treeRunning ? undefined : "前往方案比較"} onAction={treeRunning ? undefined : () => changeTab("plans")} /></div>}
       </div>
       <div hidden={tab !== "assets"}>
         {schedule.tree && !schedule.tree.running
-          ? <CreativePackList brandId={brandId} briefs={schedule.briefs} />
+          ? <CreativePackList brandId={brandId} briefs={schedule.briefs} creativePack={schedule.creative_pack} />
           : <div className="surface"><EmptyState title="先展開投放結構" description="投放結構展開成功後，這裡會自動出現每個廣告節點的素材工單。" actionLabel="前往投放結構" onAction={() => changeTab("tree")} /></div>}
       </div>
     </>}

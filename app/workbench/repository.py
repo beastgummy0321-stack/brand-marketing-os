@@ -12,11 +12,13 @@ should trigger as a side effect of reading.
 """
 
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 
 from app.brand_intelligence import repository as bi_repo
 from app.core import cleanup
 from app.core.db import Conn, ConnProxy, jsonb, new_id
+from app.workbench import image_port
 
 _AnyConn = Conn | ConnProxy
 
@@ -36,13 +38,23 @@ def get_style(style_key: str) -> dict:
 _PART_NAMES = frozenset({"copy", "image_prompt", "video_script", "free"})
 _COPY_LENGTHS = frozenset({"short", "medium", "long"})
 
+# §5.5: one definition, three readers — `routes.py`'s `_RUN_PRODUCT_ERRORS`/`_SELECT_ERRORS`
+# (409 message) and `set_detail()`'s `lock.reason` below all read this same string.
+PACK_APPROVED_MESSAGE = "這個任務包已核准，選定已鎖定。"
 
-def submit_brief(conn, org_id: str, brand_id: str, brief: dict) -> str:
+
+def submit_brief(conn, org_id: str, brand_id: str, brief: dict, *, pack_id: str,
+                  name: str | None = None, required_outputs: dict | None = None) -> str:
     """寫一列 `workbench_brief`。`request["parts"]` 是唯一權威來源（ARCHITECTURE.md
     §5.4）：非空列表，`_PART_NAMES` 的子集，缺欄／空／不是 list／有未知名稱一律
     `ValueError("parts_unknown")`。`kind` 在這裡衍生（多於一個 part -> `"ad_creative"`，
     否則就是那個唯一的 part 名），只為顯示而寫進欄位，`create_brief`／`run_part` 都不
     再靠它做決定。`parts` 永遠非空，所以 status 永遠是 `"queued"`。
+
+    F02-I02：私有——「a set only exists inside a pack」(ARCHITECTURE.md §5.4)，呼叫端
+    (`create_brief()`／`submit_pack()`) 一定要帶 `pack_id`。`name`／`required_outputs`
+    是任務包重置新加的兩欄（`workbench_brief.name`／`required_outputs_json`），沒帶就落成
+    `None`／`{}`——`create_brief()` 走舊的單一 part 路徑，這兩欄本來就沒有意義。
 
     `conn` 這裡不標 `_AnyConn`：`bi_repo.get_product()` 簽章吃 `Conn`（非
     `ConnProxy`），比照 `app/schedule/routes.py:29-33` 既有寫法——`conn` 參數留白
@@ -85,13 +97,14 @@ def submit_brief(conn, org_id: str, brand_id: str, brief: dict) -> str:
     conn.execute(
         "INSERT INTO workbench_brief (id, org_id, brand_id, kind, source_kind, source_ref,"
         " product_id, coordinates_snapshot_json, visual_tone, visual_concept, style_key,"
-        " request_json, status)"
-        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+        " request_json, status, pack_id, name, required_outputs_json)"
+        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
         (
             brief_id, org_id, brand_id, kind, brief["source_kind"],
             jsonb(brief.get("source_ref") or {}), product_id,
             jsonb(coordinates), brief.get("visual_tone"),
             brief.get("visual_concept"), style_key, jsonb(request), status,
+            pack_id, name, jsonb(required_outputs or {}),
         ),
     )
     for part in parts:
@@ -110,12 +123,105 @@ def submit_brief(conn, org_id: str, brand_id: str, brief: dict) -> str:
     return brief_id
 
 
+_REQUIRED_PART_NAMES = frozenset({"copy", "image_prompt", "video_script"})
+
+
+def create_pack(conn, org_id: str, brand_id: str, pack: dict) -> str:
+    """寫一列 `workbench_pack`，不驗證 `sets`（那是 `submit_pack()` 的事）——單純的列
+    寫入，讓 `create_brief()`（舊的單一素材組入口）跟 `submit_pack()` 共用同一支寫法。"""
+    pack_id = new_id("wbp")
+    conn.execute(
+        "INSERT INTO workbench_pack (id, org_id, brand_id, name, source_kind, source_ref,"
+        " summary_json, context_json, constraints_json)"
+        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
+        (
+            pack_id, org_id, brand_id, pack.get("name") or "",
+            pack["source_kind"], jsonb(pack.get("source_ref") or {}),
+            jsonb(pack.get("summary") or {}), jsonb(pack.get("context") or {}),
+            jsonb(pack.get("constraints") or {}),
+        ),
+    )
+    conn.commit()
+    return pack_id
+
+
+def submit_pack(conn, org_id: str, brand_id: str, pack: dict) -> str:
+    """ARCHITECTURE.md §5.4：上游一次交棒一整個任務包——`pack["sets"]` 每一項是一份
+    `workbench_brief`（素材組）；`required_outputs`（那個 part 要選定幾版才算完成）跟
+    `request` 裡的產出數量是兩件事，這裡不混：`request["parts"]` 由
+    `required_outputs.keys()` 衍生，不是呼叫端自己列。全部 set 先驗證完才落筆——
+    任何一個 set 不合格，這支不寫任何一列：`sets_unknown`（空／不是 list）、
+    `required_outputs_unknown`（缺欄／空／不是 dict）、`part_retired`（`free` 出現在
+    `required_outputs`——`free` 是舊 part，新 pack 一律不收，見 repository.py 檔頭與
+    `app/departments/workbench/free.md`）、`parts_unknown`（不是 copy／image_prompt／
+    video_script）、`count_out_of_range`（非 ≥1 整數）。"""
+    sets = pack.get("sets")
+    if not isinstance(sets, list) or not sets:
+        raise ValueError("sets_unknown")
+    for s in sets:
+        if not isinstance(s, dict):
+            raise ValueError("sets_unknown")
+        required_outputs = s.get("required_outputs")
+        if not isinstance(required_outputs, dict) or not required_outputs:
+            raise ValueError("required_outputs_unknown")
+        for part, count in required_outputs.items():
+            if part == "free":
+                raise ValueError("part_retired")
+            if part not in _REQUIRED_PART_NAMES:
+                raise ValueError("parts_unknown")
+            if not isinstance(count, int) or count < 1:
+                raise ValueError("count_out_of_range")
+
+    # F02-I03 fix：`workbench_brief.source_kind` 跟 `workbench_pack.source_kind` 是兩套不同
+    # 的 CHECK 詞彙（brief 只收 `schedule_node`／`manual`，pack 只收 `schedule_node`／
+    # `free_job`）——直接把 pack 的值原樣塞給 brief 在 `source_kind="free_job"` 時會炸
+    # `workbench_brief_source_kind_check`（自由創作的 pack 之前沒有測試路徑走到這裡）。
+    # `free_job` pack 底下的 set 沒有樹可言，對 brief 這一層就是 `manual`。
+    brief_source_kind = "schedule_node" if pack["source_kind"] == "schedule_node" else "manual"
+    pack_id = create_pack(conn, org_id, brand_id, pack)
+    for s in sets:
+        required_outputs = s["required_outputs"]
+        request = dict(s.get("request") or {})
+        request["parts"] = list(required_outputs.keys())
+        brief = {
+            "source_kind": brief_source_kind, "source_ref": s.get("source_ref") or {},
+            "product_id": s.get("product_id"), "coordinates": s.get("coordinates") or {},
+            "visual_tone": s.get("visual_tone"), "visual_concept": s.get("visual_concept"),
+            "style_key": s.get("style_key") or "ugc", "request": request,
+        }
+        submit_brief(
+            conn, org_id, brand_id, brief, pack_id=pack_id, name=s.get("name"),
+            required_outputs=required_outputs,
+        )
+    return pack_id
+
+
 def create_brief(conn, org_id: str, brand_id: str, brief: dict) -> str:
     """`POST /briefs`（票 03）專屬入口：`kind` 不再由呼叫端決定什麼可以建立——`kind`
     是 `submit_brief()` 從 `request["parts"]` 衍生的顯示欄位，這裡不檢查、也不理會
     `brief` 裡任何 `kind` 值。其餘驗證（style_key／product_id／parts／copy_length／
-    image_prompt_count／video_script_count）都在 `submit_brief()` 裡，這裡不重複。"""
-    return submit_brief(conn, org_id, brand_id, brief)
+    image_prompt_count／video_script_count）都在 `submit_brief()` 裡，這裡不重複。
+
+    F02-I02：一份 brief 現在一定屬於一個 pack（「a set only exists inside a pack」，
+    ARCHITECTURE.md §5.4）——這裡先開一個只裝這一組的任務包，讓這條舊路徑（含 `free`，
+    `submit_pack()` 不收的那個 legacy part）繼續運作，`required_outputs` 就是
+    `request["parts"]` 各自需要選定 1 版（沒有更細的『幾版才算完成』設定，跟
+    `submit_pack()` 的嚴格檢查不是同一條路）。`workbench_pack.source_kind` 只收
+    `schedule_node`／`free_job` 兩個值（migration CHECK），這條舊路徑的 `manual`
+    briefs 落在 `free_job`（沒有上游樹，概念上最接近自由創作）。"""
+    request = brief.get("request") or {}
+    parts = request.get("parts")
+    required_outputs = {p: 1 for p in parts} if isinstance(parts, list) else {}
+    pack_source_kind = (
+        "schedule_node" if brief.get("source_kind") == "schedule_node" else "free_job"
+    )
+    pack_id = create_pack(conn, org_id, brand_id, {
+        "source_kind": pack_source_kind, "source_ref": brief.get("source_ref") or {},
+        "name": "工作檯工單",
+    })
+    return submit_brief(
+        conn, org_id, brand_id, brief, pack_id=pack_id, required_outputs=required_outputs,
+    )
 
 
 def get_brief(conn: _AnyConn, org_id: str, brand_id: str, brief_id: str) -> dict | None:
@@ -170,26 +276,39 @@ def next_round(conn: _AnyConn, org_id: str, brand_id: str, brief_id: str, part: 
 
 
 def write_output(conn: _AnyConn, *, org_id: str, brand_id: str, brief_id: str, part: str,
-                  generation_round: int, body_json: dict, coordinates_json: dict | None,
-                  llm_task_id: str | None) -> dict:
-    output_id = new_id("wbo")
-    conn.execute(
-        "INSERT INTO workbench_output (id, org_id, brand_id, brief_id, part, generation_round,"
-        " body_json, coordinates_json, llm_task_id)"
-        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
-        (
-            output_id, org_id, brand_id, brief_id, part, generation_round,
-            jsonb(body_json), jsonb(coordinates_json) if coordinates_json is not None else None,
-            llm_task_id,
-        ),
-    )
+                  generation_round: int, body_json: dict | list, coordinates_json: dict | None,
+                  llm_task_id: str | None):
+    """F02-I02（ARCHITECTURE.md §5.2）：version-aware——`body_json` 是一個 dict 就寫一列
+    （`version_index=1`，跟舊呼叫端相容：`app/tests/test_workbench_api.py`／
+    `test_schedule.py` 的既有直接呼叫都還是單一 dict），是一個 list 就一項一列，
+    `version_index` 按清單順序 1..n（`jobs.py` 這裡傳一輪的每一版：copy 一輪 5 版、
+    image_prompt 一輪 1 版、video_script 一輪一支腳本一版）。回傳型別跟著輸入：單一
+    dict 進來回單一 dict，list 進來回 list（依 `version_index` 排序）。"""
+    single = isinstance(body_json, dict)
+    bodies = [body_json] if single else list(body_json)
+    output_ids = []
+    for version_index, body in enumerate(bodies, start=1):
+        output_id = new_id("wbo")
+        conn.execute(
+            "INSERT INTO workbench_output (id, org_id, brand_id, brief_id, part,"
+            " generation_round, version_index, body_json, coordinates_json, llm_task_id)"
+            " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            (
+                output_id, org_id, brand_id, brief_id, part, generation_round, version_index,
+                jsonb(body), jsonb(coordinates_json) if coordinates_json is not None else None,
+                llm_task_id,
+            ),
+        )
+        output_ids.append(output_id)
     conn.commit()
-    row = conn.execute(
-        "SELECT * FROM workbench_output WHERE org_id = %s AND brand_id = %s AND id = %s",
-        (org_id, brand_id, output_id),
-    ).fetchone()
-    assert row is not None  # 剛寫進去的那一列，找不到代表資料庫壞了，不是正常分支
-    return dict(row)
+    rows = conn.execute(
+        "SELECT * FROM workbench_output WHERE org_id = %s AND brand_id = %s"
+        " AND id = ANY(%s) ORDER BY version_index",
+        (org_id, brand_id, output_ids),
+    ).fetchall()
+    assert len(rows) == len(output_ids)  # 剛寫進去的那幾列，找不到代表資料庫壞了
+    result = [dict(r) for r in rows]
+    return result[0] if single else result
 
 
 def adopt_output(conn: _AnyConn, org_id: str, brand_id: str, output_id: str) -> dict | None:
@@ -207,6 +326,59 @@ def adopt_output(conn: _AnyConn, org_id: str, brand_id: str, output_id: str) -> 
         (org_id, brand_id, output_id),
     ).fetchone()
     return dict(row) if row is not None else None
+
+
+def _output_with_brief(conn: _AnyConn, org_id: str, brand_id: str, output_id: str) -> dict:
+    """`select_version`／`deselect_version` 共用的守門讀取：output 找不到
+    `ValueError("output_unknown")`；brief 已關閉 `ValueError("brief_closed")`；brief 所屬的
+    pack 已核准 `ValueError("pack_approved")`（ARCHITECTURE.md §5.5：核准後鎖住選定）。"""
+    row = conn.execute(
+        "SELECT o.*, b.closed_at AS brief_closed_at, b.pack_id AS brief_pack_id"
+        " FROM workbench_output o JOIN workbench_brief b ON b.id = o.brief_id"
+        " WHERE o.org_id = %s AND o.brand_id = %s AND o.id = %s",
+        (org_id, brand_id, output_id),
+    ).fetchone()
+    if row is None:
+        raise ValueError("output_unknown")
+    output = dict(row)
+    if output["brief_closed_at"] is not None:
+        raise ValueError("brief_closed")
+    pack_id = output["brief_pack_id"]
+    if pack_id is not None:
+        pack = conn.execute(
+            "SELECT approved_at FROM workbench_pack WHERE org_id = %s AND brand_id = %s"
+            " AND id = %s", (org_id, brand_id, pack_id),
+        ).fetchone()
+        if pack is not None and pack["approved_at"] is not None:
+            raise ValueError("pack_approved")
+    return output
+
+
+def select_version(conn: _AnyConn, org_id: str, brand_id: str, output_id: str) -> dict:
+    """`POST .../versions/{v}/select`（F02-I03）：那一版標成已選定。`ValueError`：
+    `output_unknown`／`brief_closed`／`pack_approved`（§5.5：核准整包之後鎖住選定）。"""
+    _output_with_brief(conn, org_id, brand_id, output_id)
+    result = adopt_output(conn, org_id, brand_id, output_id)
+    assert result is not None
+    return result
+
+
+def deselect_version(conn: _AnyConn, org_id: str, brand_id: str, output_id: str) -> dict:
+    """`DELETE .../versions/{v}/select`（F02-I03）：清那一版的已選定。同
+    `select_version()` 的守門，見那支檔頭。"""
+    _output_with_brief(conn, org_id, brand_id, output_id)
+    conn.execute(
+        "UPDATE workbench_output SET adopted_at = NULL"
+        " WHERE org_id = %s AND brand_id = %s AND id = %s",
+        (org_id, brand_id, output_id),
+    )
+    conn.commit()
+    row = conn.execute(
+        "SELECT * FROM workbench_output WHERE org_id = %s AND brand_id = %s AND id = %s",
+        (org_id, brand_id, output_id),
+    ).fetchone()
+    assert row is not None
+    return dict(row)
 
 
 def briefs_for_source(conn: _AnyConn, org_id: str, brand_id: str, source_kind: str,
@@ -236,18 +408,23 @@ def briefs_for_source(conn: _AnyConn, org_id: str, brand_id: str, source_kind: s
 
 def adopted_output(conn: _AnyConn, org_id: str, brand_id: str, brief_id: str,
                     part: str) -> dict | None:
-    """契約頁 Exported shapes：那個 part 已採用的一列，否則最新一輪，否則 `None`；回傳值
-    是那一列本身外加 `is_adopted`。"""
+    """契約頁 Exported shapes：那個 part **最早被選定**的一列（`adopted_at` 最早），否則
+    最新一輪最新一版，否則 `None`；回傳值是那一列本身外加 `is_adopted`。F02-I02（多選
+    版本，ARCHITECTURE.md §5.4「Multi-select 不改 `adopted_output` 的意義跟形狀」）：一輪
+    現在可能有不只一列（`version_index`），選定不再保證整輪只有一列被標記——這裡的
+    「最早」讀 `adopted_at` 時間戳本身，不是 `generation_round`，這樣不管哪一輪被選、
+    選了幾版，排程模組讀到的永遠是同一列（先選的那個），跟舊版單列時期的行為相容。"""
     row = conn.execute(
         "SELECT * FROM workbench_output WHERE org_id = %s AND brand_id = %s AND brief_id = %s"
-        " AND part = %s AND adopted_at IS NOT NULL ORDER BY generation_round DESC LIMIT 1",
+        " AND part = %s AND adopted_at IS NOT NULL ORDER BY adopted_at ASC LIMIT 1",
         (org_id, brand_id, brief_id, part),
     ).fetchone()
     is_adopted = row is not None
     if row is None:
         row = conn.execute(
             "SELECT * FROM workbench_output WHERE org_id = %s AND brand_id = %s"
-            " AND brief_id = %s AND part = %s ORDER BY generation_round DESC LIMIT 1",
+            " AND brief_id = %s AND part = %s"
+            " ORDER BY generation_round DESC, version_index DESC LIMIT 1",
             (org_id, brand_id, brief_id, part),
         ).fetchone()
     if row is None:
@@ -277,91 +454,113 @@ def list_coordinate_vocabulary(conn: _AnyConn, org_id: str, brand_id: str) -> li
 
 
 # ---------------------------------------------------------------------------
-# 票 03：routes.py 專用——list/detail/mutate。跟上面 `briefs_for_source()`／
-# `adopted_output()`（app.schedule 之後會呼叫）不是同一組：這裡的 `parts` 形狀是給
-# 這個模組自己的畫面（latest_round／adopted_round／running），那兩支是給排程模組的
-# 摘要（latest_round／adopted bool）——兩邊各自的呼叫端要的東西不一樣，不合併。
+# 狀態衍生 —— ARCHITECTURE.md §5.3：product／set／pack 的狀態一律衍生，不另存第二份。
+# 只有這裡算一次，F02-I03 的 API／F02-I04 的排程讀都呼叫這裡，不各自重寫規則。
 # ---------------------------------------------------------------------------
 
-_LIST_STATUS_FILTERS = {
-    "active": "closed_at IS NULL", "closed": "closed_at IS NOT NULL", "all": "TRUE",
-}
 
-
-def _part_summaries(conn: _AnyConn, org_id: str, brand_id: str, brief_id: str,
-                     status: str) -> dict:
+def _versions_by_part(conn: _AnyConn, org_id: str, brand_id: str, brief_id: str) -> dict:
+    """那份 brief 目前每一列版本，依 part 分組——只帶 `product_state`／`set_table_cell`
+    要用的欄位（有沒有被選定），不是完整的 output 列。"""
     rows = conn.execute(
-        "SELECT part, MAX(generation_round) AS latest_round,"
-        " MAX(generation_round) FILTER (WHERE adopted_at IS NOT NULL) AS adopted_round"
-        " FROM workbench_output WHERE org_id = %s AND brand_id = %s AND brief_id = %s"
-        " GROUP BY part",
+        "SELECT part, adopted_at FROM workbench_output"
+        " WHERE org_id = %s AND brand_id = %s AND brief_id = %s",
         (org_id, brand_id, brief_id),
     ).fetchall()
-    # 沒有每個 part 自己的狀態欄（一張 brief 只有一個 status），round_running 也是照
-    # brief 這個欄位判斷（`run_part()` 檔頭）——這裡老實回報同一個值，不假裝有更細的
-    # 顆粒度。
-    running = status in ("queued", "running")
-    return {
-        r["part"]: {"latest_round": r["latest_round"], "adopted_round": r["adopted_round"],
-                     "running": running}
-        for r in (dict(row) for row in rows)
-    }
+    grouped: dict = {}
+    for row in rows:
+        grouped.setdefault(row["part"], []).append(bool(row["adopted_at"]))
+    return grouped
 
 
-def _brief_summary(conn, brand_id: str, row: dict) -> dict:
-    # `conn` 這裡不標 `_AnyConn`，理由跟 `submit_brief()` 檔頭一樣：`bi_repo.get_product()`
-    # 簽章吃 `Conn`（非 `ConnProxy`），留白讓 pyright 用型別不定（Unknown）通過。
-    product_id = row["product_id"]
-    product = bi_repo.get_product(conn, brand_id, product_id) if product_id else None
-    return {
-        "id": row["id"], "kind": row["kind"], "source_kind": row["source_kind"],
-        "source_ref": row["source_ref"], "product_id": product_id,
-        "product_name": product["name"] if product else None,
-        "style_key": row["style_key"], "status": row["status"],
-        "last_error": row["last_error"], "closed_at": row["closed_at"],
-        "created_at": row["created_at"],
-        "parts": _part_summaries(conn, row["org_id"], brand_id, row["id"], row["status"]),
-    }
+def product_state(required: int, adopted_flags: list) -> str:
+    """ARCHITECTURE.md §5.3：`未生成`（沒有版本）／`待選定`（有版本，選定數 < 需要）／
+    `已選定`（選定數 ≥ 需要）。`adopted_flags`：那個 part 每一列版本是否已選定的清單。"""
+    if not adopted_flags:
+        return "未生成"
+    selected = sum(1 for a in adopted_flags if a)
+    return "已選定" if selected >= required else "待選定"
 
 
-def list_briefs(conn: _AnyConn, org_id: str, brand_id: str, status: str = "active") -> list:
-    """`GET /briefs?status=`（票 03）：`ValueError("status_unknown")` for anything other
-    than active／closed／all. 「有沒有關閉」讀 `closed_at`（不是 `status`）——`reopen_brief()`
-    兩欄一起改，這裡才對得上（票面 contradiction check 第二條）。"""
-    if status not in _LIST_STATUS_FILTERS:
-        raise ValueError("status_unknown")
-    rows = conn.execute(
-        f"SELECT * FROM workbench_brief WHERE org_id = %s AND brand_id = %s"
-        f" AND {_LIST_STATUS_FILTERS[status]} ORDER BY created_at DESC",
-        (org_id, brand_id),
-    ).fetchall()
-    return [_brief_summary(conn, brand_id, dict(r)) for r in rows]
+def set_table_cell(required_outputs: dict, versions_by_part: dict, part: str) -> dict:
+    """ARCHITECTURE.md §5.3：任務包頁「素材組進度」表格的一格——`{"state", "text"}`，
+    `text` 就是畫面直接渲染的字串（沒有第二份拼字規則）：這個 set 不需要這個 part -> `「—」`；
+    需要但沒有版本 -> `未生成`；否則 `已選定／需要`（例：`2／5`）。"""
+    if part not in required_outputs:
+        return {"state": "not_required", "text": "—"}
+    required = required_outputs[part]
+    adopted_flags = versions_by_part.get(part) or []
+    state = product_state(required, adopted_flags)
+    if state == "未生成":
+        return {"state": state, "text": "未生成"}
+    selected = sum(1 for a in adopted_flags if a)
+    return {"state": state, "text": f"{selected}／{required}"}
 
 
-def brief_detail(conn: _AnyConn, org_id: str, brand_id: str, brief_id: str) -> dict | None:
-    """`GET /briefs/{id}`（票 03）：summary 加上全部輪次的 outputs，找不到回 `None`
-    （路由把 `None` 轉成 404 `brief_unknown`）。"""
-    row = get_brief(conn, org_id, brand_id, brief_id)
+def set_state(required_outputs: dict, versions_by_part: dict) -> str:
+    """ARCHITECTURE.md §5.3：`待開始`（沒有一個 product 有版本）／`等待決定`（部分產出中）／
+    `已完成`（每個 required product 都已選定）。"""
+    states = [
+        product_state(required_outputs[part], versions_by_part.get(part) or [])
+        for part in required_outputs
+    ]
+    if states and all(s == "已選定" for s in states):
+        return "已完成"
+    if any(s != "未生成" for s in states):
+        return "等待決定"
+    return "待開始"
+
+
+def pack_state(approved_at, set_states: list) -> str:
+    """ARCHITECTURE.md §5.3：`待處理`（沒有一個 set 開始）／`進行中`／`待核准`（每個 set 都
+    已完成，還沒核准）／`已完成`（已核准）。"""
+    if approved_at is not None:
+        return "已完成"
+    if set_states and all(s == "已完成" for s in set_states):
+        return "待核准"
+    if any(s != "待開始" for s in set_states):
+        return "進行中"
+    return "待處理"
+
+
+def pack_for_source(conn: _AnyConn, org_id: str, brand_id: str, source_kind: str,
+                     source_ref: dict) -> dict | None:
+    """契約頁 Exported shapes（ARCHITECTURE.md §5.5）：上游讀「這個 pack 現在怎麼樣」的
+    狀態查詢，不是 callback——`source_ref` 包含給定 dict 全部鍵（JSONB containment，
+    `@>`）的最新一個 pack，附上 `sets_total`／`sets_done`／`state`；找不到回 `None`。"""
+    row = conn.execute(
+        "SELECT * FROM workbench_pack WHERE org_id = %s AND brand_id = %s"
+        " AND source_kind = %s AND source_ref @> %s ORDER BY created_at DESC LIMIT 1",
+        (org_id, brand_id, source_kind, jsonb(source_ref)),
+    ).fetchone()
     if row is None:
         return None
-    detail = _brief_summary(conn, brand_id, row)
-    detail["coordinates"] = row["coordinates_snapshot_json"]
-    detail["visual_tone"] = row["visual_tone"]
-    detail["visual_concept"] = row["visual_concept"]
-    detail["request"] = row["request_json"]
-    output_rows = conn.execute(
-        "SELECT * FROM workbench_output WHERE org_id = %s AND brand_id = %s AND brief_id = %s"
-        " ORDER BY part, generation_round",
-        (org_id, brand_id, brief_id),
+    pack = dict(row)
+    set_rows = conn.execute(
+        "SELECT id, required_outputs_json FROM workbench_brief"
+        " WHERE org_id = %s AND brand_id = %s AND pack_id = %s",
+        (org_id, brand_id, pack["id"]),
     ).fetchall()
-    detail["outputs"] = [
-        {"id": r["id"], "part": r["part"], "generation_round": r["generation_round"],
-         "adopted_at": r["adopted_at"], "body_json": r["body_json"],
-         "coordinates_json": r["coordinates_json"], "llm_task_id": r["llm_task_id"],
-         "created_at": r["created_at"]}
-        for r in (dict(rr) for rr in output_rows)
+    set_states = [
+        set_state(
+            s["required_outputs_json"] or {},
+            _versions_by_part(conn, org_id, brand_id, s["id"]),
+        )
+        for s in set_rows
     ]
-    return detail
+    pack["sets_total"] = len(set_states)
+    pack["sets_done"] = sum(1 for s in set_states if s == "已完成")
+    pack["state"] = pack_state(pack["approved_at"], set_states)
+    return pack
+
+
+# ---------------------------------------------------------------------------
+# F02-I03: routes.py 專用——`run_part` is the mutate-a-part primitive shared by the pack/set
+# API's `run_product()` below (it adds the `pack_approved` lock on top). The brief-shaped
+# list/detail/adopt/close/reopen/delete functions this section used to hold are retired with
+# their endpoints (`.work/features/F02.md` Decisions: "replaced, not kept in parallel") — their
+# only caller was the old `routes.py`, which no longer exists in this shape.
+# ---------------------------------------------------------------------------
 
 
 def run_part(conn: _AnyConn, org_id: str, brand_id: str, brief_id: str, part: str, *,
@@ -405,80 +604,605 @@ def run_part(conn: _AnyConn, org_id: str, brand_id: str, brief_id: str, part: st
     )
 
 
-def adopt_output_for_brief(conn: _AnyConn, org_id: str, brand_id: str, brief_id: str,
-                            output_id: str) -> None:
-    """`POST .../outputs/{output_id}/adopt`（票 03）：確認 brief 存在、未關閉、
-    output 真的屬於這張 brief，才呼叫既有 `adopt_output()`（票 02，簽章與行為不
-    變——`app/tests/test_workbench.py` 直接呼叫它）做真正的 UPDATE。`ValueError`：
-    `brief_unknown`／`brief_closed`／`output_unknown`。"""
-    brief = get_brief(conn, org_id, brand_id, brief_id)
-    if brief is None:
-        raise ValueError("brief_unknown")
-    if brief["closed_at"] is not None:
-        raise ValueError("brief_closed")
-    output = conn.execute(
-        "SELECT id FROM workbench_output WHERE org_id = %s AND brand_id = %s"
-        " AND brief_id = %s AND id = %s",
-        (org_id, brand_id, brief_id, output_id),
-    ).fetchone()
-    if output is None:
-        raise ValueError("output_unknown")
-    adopt_output(conn, org_id, brand_id, output_id)
+# ---------------------------------------------------------------------------
+# F02-I03: the pack/set/product/version JSON surface (ARCHITECTURE.md §5.1-§5.5, `.work/
+# features/F02.md` "API surface"/"Shapes"). Every field here is assembled from the state
+# derivations above (`product_state`/`set_state`/`pack_state`/`set_table_cell`) — no second
+# copy of any rule, `routes.py` just wraps whatever this returns.
+# ---------------------------------------------------------------------------
+
+_PART_LABELS = {"copy": "文案", "image_prompt": "圖片", "video_script": "腳本"}
+_PART_ORDER = ("copy", "image_prompt", "video_script")
+_STATE_TO_STATUS = {
+    "待處理": "pending", "進行中": "running", "待核准": "awaiting_approval", "已完成": "done",
+}
+_LIST_STATUS_VALUES = frozenset({"all", "pending", "running", "awaiting_approval", "done"})
+_LIST_SORT_VALUES = frozenset({"updated", "created", "progress"})
+_COMPLETION_ITEMS = (
+    ("required_outputs_met", "完成所有素材組的必要文案與圖片"),
+    ("brand_rules_checked", "確認內容符合品牌規範"),
+    ("ready_to_report", "可核准整包並回報上游"),
+)
+_COMPLETION_KEYS = frozenset(key for key, _label in _COMPLETION_ITEMS)
 
 
-def close_brief(conn: _AnyConn, org_id: str, brand_id: str, brief_id: str) -> None:
-    """`POST .../close`（票 03）：關閉，隱藏在預設列表外（`list_briefs` 的 active 濾
-    器）；已採用的內容仍算數（契約頁「Module-local」段）。`ValueError("brief_unknown")`
-    when not found."""
+def _now_iso() -> str:
+    return datetime.now(UTC).isoformat()
+
+
+def _get_pack_row(conn: _AnyConn, org_id: str, brand_id: str, pack_id: str) -> dict | None:
     row = conn.execute(
-        "UPDATE workbench_brief SET status = 'closed', closed_at = now(), updated_at = now()"
-        " WHERE org_id = %s AND brand_id = %s AND id = %s RETURNING id",
-        (org_id, brand_id, brief_id),
+        "SELECT * FROM workbench_pack WHERE org_id = %s AND brand_id = %s AND id = %s",
+        (org_id, brand_id, pack_id),
     ).fetchone()
-    conn.commit()
+    return dict(row) if row is not None else None
+
+
+def _pack_sets_full(conn: _AnyConn, org_id: str, brand_id: str, pack_id: str) -> list:
+    """Every set of a pack with its `required_outputs`／`versions_by_part`／derived `state` —
+    the one shared read `_pack_card_and_sets()`／`pack_detail()`／completion／approve all build
+    on, so the set-state rule (§5.3) is computed once per call, not re-derived per screen."""
+    rows = conn.execute(
+        "SELECT id, name, required_outputs_json FROM workbench_brief"
+        " WHERE org_id = %s AND brand_id = %s AND pack_id = %s ORDER BY created_at",
+        (org_id, brand_id, pack_id),
+    ).fetchall()
+    sets = []
+    for row in rows:
+        row = dict(row)
+        required_outputs = row["required_outputs_json"] or {}
+        versions_by_part = _versions_by_part(conn, org_id, brand_id, row["id"])
+        sets.append({
+            "id": row["id"], "name": row["name"], "required_outputs": required_outputs,
+            "versions_by_part": versions_by_part,
+            "state": set_state(required_outputs, versions_by_part),
+        })
+    return sets
+
+
+def _pack_counts(sets: list) -> list:
+    """入口 tile = 版本，不是素材組（planner review, 2026-09-12）：`required` 是這個 pack
+    底下每個要求這個產物類型的 set 之 `required_outputs[type]` 加總——多少個版本要被
+    選定；`selected` 是那些 set 裡已選定版本數的加總。跟 §5.3 cell 的 `已選定／需要`
+    同一個單位，一個素材組要 5 張圖時 tile 要看到 5，不是 1。"""
+    counts = []
+    for part in _PART_ORDER:
+        relevant = [s for s in sets if part in s["required_outputs"]]
+        if not relevant:
+            continue
+        required = sum(s["required_outputs"][part] for s in relevant)
+        selected = sum(
+            sum(1 for a in (s["versions_by_part"].get(part) or []) if a) for s in relevant
+        )
+        counts.append({
+            "part": part, "label": _PART_LABELS[part], "selected": selected,
+            "required": required,
+        })
+    return counts
+
+
+def _pack_next_step(sets: list) -> dict | None:
+    for s in sets:
+        if s["state"] == "已完成":
+            continue
+        for part in _PART_ORDER:
+            if part not in s["required_outputs"]:
+                continue
+            adopted_flags = s["versions_by_part"].get(part) or []
+            state = product_state(s["required_outputs"][part], adopted_flags)
+            if state == "已選定":
+                continue
+            suffix = "待生成" if state == "未生成" else "待選定"
+            return {
+                "set_id": s["id"], "set_name": s["name"], "part": part,
+                "label": f"{_PART_LABELS[part]}{suffix}",
+            }
+    return None
+
+
+def _pack_card_and_sets(conn: _AnyConn, org_id: str, brand_id: str, pack_row: dict) -> tuple:
+    sets = _pack_sets_full(conn, org_id, brand_id, pack_row["id"])
+    set_states = [s["state"] for s in sets]
+    state = pack_state(pack_row["approved_at"], set_states)
+    sets_total = len(sets)
+    sets_done = sum(1 for s in set_states if s == "已完成")
+    pct = round(sets_done / sets_total * 100) if sets_total else 0
+    summary = pack_row["summary_json"] or {}
+    card = {
+        "id": pack_row["id"], "name": pack_row["name"],
+        "subtitle": summary.get("情境") or "",
+        "source_kind": pack_row["source_kind"],
+        "source_label": "廣告排程" if pack_row["source_kind"] == "schedule_node" else "自由創作",
+        "status": _STATE_TO_STATUS[state],
+        "sets_total": sets_total, "sets_done": sets_done, "progress_pct": pct,
+        "next_step": _pack_next_step(sets), "counts": _pack_counts(sets),
+        "updated_at": pack_row["updated_at"],
+    }
+    return card, sets
+
+
+def list_packs(conn: _AnyConn, org_id: str, brand_id: str, *, status: str = "all",
+                q: str | None = None, sort: str = "updated") -> list:
+    """`GET /packs?status=&q=&sort=`. `ValueError("status_unknown"/"sort_unknown")` for
+    anything outside the enums. Filtering/sorting happen in Python, not SQL — a brand's pack
+    count is small (one workbench, one screen) and every field is a derivation, not a column
+    (ponytail: revisit with a SQL WHERE/ORDER BY if a brand ever has hundreds of packs)."""
+    if status not in _LIST_STATUS_VALUES:
+        raise ValueError("status_unknown")
+    if sort not in _LIST_SORT_VALUES:
+        raise ValueError("sort_unknown")
+    # planner review, 2026-09-12：關閉的任務包離開入口（`GET /packs` 不列），
+    # `GET /packs/{p}` 仍然開得到（`pack_detail()` 不看 `closed_at`）——既有連結不 404。
+    rows = conn.execute(
+        "SELECT * FROM workbench_pack WHERE org_id = %s AND brand_id = %s"
+        " AND closed_at IS NULL",
+        (org_id, brand_id),
+    ).fetchall()
+    entries = []
+    for row in rows:
+        row = dict(row)
+        card, sets = _pack_card_and_sets(conn, org_id, brand_id, row)
+        if status != "all" and card["status"] != status:
+            continue
+        if q:
+            q_lower = q.lower()
+            # 「pack name, set name and the pack's context labels」(票面 Done)：context
+            # labels = `card["subtitle"]`（`summary.情境`），不是整個 summary_json。
+            haystack = [card["name"], card["subtitle"], *(s["name"] for s in sets)]
+            if not any(q_lower in h.lower() for h in haystack if h):
+                continue
+        entries.append((row, card))
+    if sort == "created":
+        entries.sort(key=lambda e: e[0]["created_at"], reverse=True)
+    elif sort == "progress":
+        entries.sort(key=lambda e: e[1]["progress_pct"], reverse=True)
+    else:
+        entries.sort(key=lambda e: e[0]["updated_at"], reverse=True)
+    return [card for _row, card in entries]
+
+
+def _pack_completion(pack_row: dict, sets_done: int, sets_total: int) -> tuple:
+    stored = pack_row["completion_json"] or {}
+    computed_ok = sets_total > 0 and sets_done == sets_total
+    items = []
+    for key, label in _COMPLETION_ITEMS:
+        entry = stored.get(key) or {}
+        checked = bool(entry.get("checked"))
+        if key == "required_outputs_met":
+            ok = computed_ok or checked
+            overridden = checked and not computed_ok
+        else:
+            ok = checked
+            overridden = False
+        items.append({"key": key, "label": label, "ok": ok, "overridden": overridden})
+    can_approve = all(item["ok"] for item in items)
+    missing = sets_total - sets_done
+    blocking_text = f"尚有 {missing} 個素材組未完成" if missing > 0 else ""
+    return items, can_approve, blocking_text
+
+
+def pack_detail(conn: _AnyConn, org_id: str, brand_id: str, pack_id: str) -> dict | None:
+    """`GET /packs/{p}`. `.work/features/F02.md` "Shapes": 摘要 only renders the keys 檔期規劃
+    actually fills（情境／重點訊息 today）— empty keys are omitted, never placeholder text."""
+    row = _get_pack_row(conn, org_id, brand_id, pack_id)
     if row is None:
-        raise ValueError("brief_unknown")
+        return None
+    card, sets = _pack_card_and_sets(conn, org_id, brand_id, row)
+    context = row["context_json"] or {}
+    summary_raw = row["summary_json"] or {}
+    completion, can_approve, blocking_text = _pack_completion(
+        row, card["sets_done"], card["sets_total"],
+    )
+    detail = dict(card)
+    detail["created_at"] = row["created_at"]
+    detail["source_ref"] = row["source_ref"]
+    detail["meta"] = {
+        "platform": context.get("platform"), "goal": context.get("goal"),
+        "sets_required": card["sets_total"],
+    }
+    summary_map = {
+        "situation": summary_raw.get("情境"), "angle": summary_raw.get("角度"),
+        "style": summary_raw.get("風格"), "audience": summary_raw.get("目標受眾"),
+        "key_messages": summary_raw.get("重點訊息"), "reference_link": summary_raw.get("參考連結"),
+    }
+    detail["summary"] = {k: v for k, v in summary_map.items() if v}
+    detail["completion"] = completion
+    detail["can_approve"] = can_approve
+    detail["blocking_text"] = blocking_text
+    detail["sets"] = [
+        {
+            "id": s["id"], "name": s["name"], "status": s["state"],
+            "cells": [_cell(s["required_outputs"], s["versions_by_part"], part)
+                      for part in _PART_ORDER],
+        }
+        for s in sets
+    ]
+    return detail
 
 
-def reopen_brief(conn: _AnyConn, org_id: str, brand_id: str, brief_id: str) -> None:
-    """`POST .../reopen`（票 03）：清 `closed_at`；關閉前的 status 沒有存下來，所以
-    ——票面決定，可逆——這張 brief 有任何 output 就回 `'done'`，否則 `'failed'`
-    （`last_error` 不動）。兩欄（`status`／`closed_at`）一起改，`list_briefs()` 的
-    `active` 濾器只看 `closed_at` 才會對得上（票面 contradiction check 第二條）。
-    `ValueError("brief_unknown")` when not found."""
-    brief = get_brief(conn, org_id, brand_id, brief_id)
-    if brief is None:
-        raise ValueError("brief_unknown")
-    exists_row = conn.execute(
-        "SELECT EXISTS (SELECT 1 FROM workbench_output"
-        " WHERE org_id = %s AND brand_id = %s AND brief_id = %s) AS e",
-        (org_id, brand_id, brief_id),
-    ).fetchone()
-    has_output = bool(exists_row["e"]) if exists_row is not None else False
+def _cell(required_outputs: dict, versions_by_part: dict, part: str) -> dict:
+    base = set_table_cell(required_outputs, versions_by_part, part)
+    adopted_flags = versions_by_part.get(part) or []
+    return {
+        "part": part, "label": _PART_LABELS[part], "state": base["state"],
+        "selected": sum(1 for a in adopted_flags if a),
+        "required": required_outputs.get(part), "text": base["text"],
+    }
+
+
+def set_pack_completion(conn: _AnyConn, org_id: str, brand_id: str, pack_id: str, key: str,
+                         checked: bool) -> dict:
+    """`POST /packs/{p}/completion`. `ValueError`：`key_unknown`（400）／`pack_unknown`
+    （404）。Ticking `required_outputs_met` while it is computed-false records an override —
+    the warning that produces is the frontend's job (F02-I08), this just remembers the fact."""
+    if key not in _COMPLETION_KEYS:
+        raise ValueError("key_unknown")
+    row = _get_pack_row(conn, org_id, brand_id, pack_id)
+    if row is None:
+        raise ValueError("pack_unknown")
+    completion = dict(row["completion_json"] or {})
+    entry: dict = {"checked": bool(checked), "at": _now_iso()}
+    if key == "required_outputs_met" and checked:
+        sets = _pack_sets_full(conn, org_id, brand_id, pack_id)
+        computed_ok = bool(sets) and all(s["state"] == "已完成" for s in sets)
+        if not computed_ok:
+            entry["overridden"] = True
+    completion[key] = entry
     conn.execute(
-        "UPDATE workbench_brief SET status = %s, closed_at = NULL, updated_at = now()"
+        "UPDATE workbench_pack SET completion_json = %s, updated_at = now()"
         " WHERE org_id = %s AND brand_id = %s AND id = %s",
-        ("done" if has_output else "failed", org_id, brand_id, brief_id),
+        (jsonb(completion), org_id, brand_id, pack_id),
     )
     conn.commit()
+    detail = pack_detail(conn, org_id, brand_id, pack_id)
+    assert detail is not None
+    return detail
 
 
-def delete_brief(conn: _AnyConn, org_id: str, brand_id: str, brief_id: str) -> None:
-    """`DELETE /briefs/{id}`（票 03）：outputs 靠 `ON DELETE CASCADE`（migration）跟著
-    刪，這裡不用另外下一次 DELETE。`ValueError("brief_unknown")` when not found."""
+def approve_pack(conn: _AnyConn, org_id: str, brand_id: str, pack_id: str) -> dict:
+    """`POST /packs/{p}/approve`. `ValueError`：`pack_unknown`（404）／`completion_incomplete`
+    （409，「還有完成條件沒有滿足。」）. Approving twice is idempotent — no un-approve
+    (§5.5, nobody has asked for one)."""
+    row = _get_pack_row(conn, org_id, brand_id, pack_id)
+    if row is None:
+        raise ValueError("pack_unknown")
+    if row["approved_at"] is None:
+        detail = pack_detail(conn, org_id, brand_id, pack_id)
+        assert detail is not None
+        if not detail["can_approve"]:
+            raise ValueError("completion_incomplete")
+        conn.execute(
+            "UPDATE workbench_pack SET approved_at = now(), updated_at = now()"
+            " WHERE org_id = %s AND brand_id = %s AND id = %s",
+            (org_id, brand_id, pack_id),
+        )
+        conn.commit()
+    detail = pack_detail(conn, org_id, brand_id, pack_id)
+    assert detail is not None
+    return detail
+
+
+def close_pack(conn: _AnyConn, org_id: str, brand_id: str, pack_id: str) -> dict:
+    """`POST /packs/{p}/close`（⋯ 選單的「關閉任務包」）. `ValueError("pack_unknown")`."""
     row = conn.execute(
-        "DELETE FROM workbench_brief WHERE org_id = %s AND brand_id = %s AND id = %s"
-        " RETURNING id",
-        (org_id, brand_id, brief_id),
+        "UPDATE workbench_pack SET closed_at = now(), updated_at = now()"
+        " WHERE org_id = %s AND brand_id = %s AND id = %s RETURNING id",
+        (org_id, brand_id, pack_id),
     ).fetchone()
     conn.commit()
     if row is None:
-        raise ValueError("brief_unknown")
+        raise ValueError("pack_unknown")
+    detail = pack_detail(conn, org_id, brand_id, pack_id)
+    assert detail is not None
+    return detail
+
+
+def _next_free_pack_name(conn: _AnyConn, org_id: str, brand_id: str) -> str:
+    row = conn.execute(
+        "SELECT count(*) AS n FROM workbench_pack WHERE org_id = %s AND brand_id = %s"
+        " AND source_kind = 'free_job'",
+        (org_id, brand_id),
+    ).fetchone()
+    return f"自由工作 #{(row['n'] if row is not None else 0) + 1}"
+
+
+def create_free_pack(conn: _AnyConn, org_id: str, brand_id: str, body: dict) -> dict:
+    """`POST /packs`（自由創作 only，routes.py 的唯一一次 repository 呼叫）— goes through
+    `submit_pack()`, no second write path (`.work/features/F02.md` "自由創作's 「AI 解析
+    結果」..."). `source_kind` is forced to `"free_job"` here; a client may not pick it.
+    Per-part generation counts default to the same number as `required_outputs[type]`
+    (user ruling 2026-09-12: 「五張」 asks for 5 required *and* one round of 5) unless the
+    set's own `request` already names a count. Returns the freshly assembled `PackDetail`
+    itself, not just the id — the route wraps it directly."""
+    sets_in = body.get("sets")
+    if not isinstance(sets_in, list) or not sets_in:
+        raise ValueError("sets_unknown")
+    name = body.get("name") or _next_free_pack_name(conn, org_id, brand_id)
+    pack_sets = []
+    for s in sets_in:
+        if not isinstance(s, dict):
+            raise ValueError("sets_unknown")
+        required_outputs = s.get("required_outputs") or {}
+        request = dict(s.get("request") or {})
+        if "image_prompt" in required_outputs:
+            request.setdefault("image_prompt_count", required_outputs["image_prompt"])
+        if "video_script" in required_outputs:
+            request.setdefault("video_script_count", required_outputs["video_script"])
+        pack_sets.append({
+            "name": s.get("name"), "source_ref": s.get("source_ref") or {},
+            "coordinates": s.get("coordinates") or {},
+            "product_id": s.get("product_id", body.get("product_id")),
+            "style_key": s.get("style_key") or body.get("style_key") or "ugc",
+            "required_outputs": required_outputs, "request": request,
+        })
+    pack = {
+        "source_kind": "free_job", "source_ref": {"free_text": body.get("free_text")},
+        "name": name, "summary": body.get("summary") or {},
+        "context": body.get("context") or {}, "sets": pack_sets,
+    }
+    pack_id = submit_pack(conn, org_id, brand_id, pack)
+    detail = pack_detail(conn, org_id, brand_id, pack_id)
+    assert detail is not None
+    return detail
+
+
+def run_product(conn: _AnyConn, org_id: str, brand_id: str, set_id: str, part: str, *,
+                 count: int | None = None) -> dict:
+    """`POST /sets/{s}/products/{part}/run`. Reuses `run_part()`'s errors and adds
+    `pack_approved`（409，「這個任務包已核准，選定已鎖定。」）on top — §5.5 locks selections
+    once a pack is approved."""
+    brief = get_brief(conn, org_id, brand_id, set_id)
+    if brief is not None and brief["pack_id"] is not None:
+        pack_row = _get_pack_row(conn, org_id, brand_id, brief["pack_id"])
+        if pack_row is not None and pack_row["approved_at"] is not None:
+            raise ValueError("pack_approved")
+    run_part(conn, org_id, brand_id, set_id, part, count=count)
+    detail = set_detail(conn, org_id, brand_id, set_id)
+    assert detail is not None
+    return detail
+
+
+def select_version_for_set(conn: _AnyConn, org_id: str, brand_id: str, set_id: str,
+                            output_id: str) -> dict:
+    """`POST /sets/{s}/versions/{v}/select`（routes.py 唯一呼叫，one repository call —
+    planner review 2026-09-12）. Containment check first: a `version_id` that does not belong
+    to this `set_id` in the URL is `ValueError("output_unknown")` → 404 **before** any write
+    (`_output_with_brief()` only SELECTs). Reuses the unscoped `select_version()`'s errors
+    (`brief_closed`／`pack_approved`) on top."""
+    output = _output_with_brief(conn, org_id, brand_id, output_id)
+    if output["brief_id"] != set_id:
+        raise ValueError("output_unknown")
+    adopt_output(conn, org_id, brand_id, output_id)
+    detail = set_detail(conn, org_id, brand_id, set_id)
+    assert detail is not None
+    return detail
+
+
+def deselect_version_for_set(conn: _AnyConn, org_id: str, brand_id: str, set_id: str,
+                              output_id: str) -> dict:
+    """`DELETE /sets/{s}/versions/{v}/select`。Same containment check as
+    `select_version_for_set()`, see that function's docstring."""
+    output = _output_with_brief(conn, org_id, brand_id, output_id)
+    if output["brief_id"] != set_id:
+        raise ValueError("output_unknown")
+    conn.execute(
+        "UPDATE workbench_output SET adopted_at = NULL"
+        " WHERE org_id = %s AND brand_id = %s AND id = %s",
+        (org_id, brand_id, output_id),
+    )
+    conn.commit()
+    detail = set_detail(conn, org_id, brand_id, set_id)
+    assert detail is not None
+    return detail
+
+
+def _slice_body(part: str, body_json, version_index: int):
+    """A copy round's `body_json` is the whole round's reply shared by all 5 rows (`sets`
+    array); a video_script round shares `scripts` the same way (`.work/features/F02.md`
+    "Shapes"). This slices out version *i*'s own piece, once, here — the browser never
+    indexes into a round. Out-of-range/missing -> `None`, not a crash."""
+    if not isinstance(body_json, dict):
+        return None
+    if part == "copy":
+        items = body_json.get("sets") or []
+        idx = version_index - 1
+        if not (0 <= idx < len(items)) or not isinstance(items[idx], dict):
+            return None
+        item = items[idx]
+        return {
+            "body": item.get("body"), "headline": item.get("headline"),
+            "description": item.get("description"),
+            "validation": body_json.get("validation"), "warnings": body_json.get("warnings"),
+        }
+    if part == "video_script":
+        items = body_json.get("scripts") or []
+        idx = version_index - 1
+        if not (0 <= idx < len(items)):
+            return None
+        item = items[idx]
+        result = dict(item) if isinstance(item, dict) else {"script": item}
+        result["validation"] = body_json.get("validation")
+        return result
+    return body_json
+
+
+def _prompt_cards(body_json) -> list:
+    """F02-I05 (ARCHITECTURE.md §5.11): reads the ①/②/③ prompt pair straight out of the
+    round's already-rendered `body_json["rendered"]` (written once, in `jobs.py`'s
+    `_render_image_prompt()`) — never re-renders. `body_json["mode"]` picks the order:
+    變體模式 -> `① 主圖` then `② 變體`; 探索模式 -> `③ 探索` then `② 變體`. Missing/malformed
+    input -> `[]`, never a crash (mirrors `_slice_body`'s tolerance)."""
+    if not isinstance(body_json, dict):
+        return []
+    rendered = body_json.get("rendered")
+    if not isinstance(rendered, dict):
+        return []
+    if body_json.get("mode") == "exploration":
+        order = [("exploration", "③ 探索"), ("variant", "② 變體")]
+    else:
+        order = [("hero", "① 主圖"), ("variant", "② 變體")]
+    return [
+        {"label": label, "text": rendered[key]}
+        for key, label in order if isinstance(rendered.get(key), str)
+    ]
+
+
+def _part_versions(conn: _AnyConn, org_id: str, brand_id: str, brief_id: str, part: str) -> list:
+    rows = conn.execute(
+        "SELECT * FROM workbench_output WHERE org_id = %s AND brand_id = %s AND brief_id = %s"
+        " AND part = %s ORDER BY generation_round DESC, version_index ASC",
+        (org_id, brand_id, brief_id, part),
+    ).fetchall()
+    versions = [
+        {
+            "id": r["id"], "version_index": r["version_index"],
+            "generation_round": r["generation_round"], "selected_at": r["adopted_at"],
+            "body": _slice_body(part, r["body_json"], r["version_index"]),
+        }
+        for r in (dict(row) for row in rows)
+    ]
+    if part == "image_prompt":
+        for version, r in zip(versions, (dict(row) for row in rows), strict=True):
+            version["prompt_cards"] = _prompt_cards(r["body_json"])
+    return versions
+
+
+def _generation_settings(part: str, request_json: dict | None) -> dict:
+    request_json = request_json or {}
+    if part == "copy":
+        return {"copy_length": request_json.get("copy_length", "short")}
+    if part == "image_prompt":
+        return {"count": request_json.get("image_prompt_count")}
+    if part == "video_script":
+        return {"count": request_json.get("video_script_count")}
+    return {}
+
+
+def _generation_settings_rows(
+    conn, brand_id: str, brief: dict, chips: dict,
+    image_prompt_versions: list, pack_row: dict,
+) -> list:
+    """§5.13: 素材組 studio 的右欄「生成設定」——always these seven `{label, text}` rows,
+    in this order, `—` for anything empty. A read-only mirror of what already produced the
+    current prompts, never a second query for values not already on hand.
+
+    `conn` left untyped (same as `submit_brief` above): `bi_repo.get_product()` wants a
+    `Conn`, callers here pass `web.conn` (`ConnProxy`) — pyright would flag `_AnyConn`."""
+    brand = bi_repo.get_brand(conn, brand_id)
+    brand_name = brand["name"] if brand else "—"
+    product_id = brief.get("product_id")
+    product = bi_repo.get_product(conn, brand_id, product_id) if product_id else None
+    product_name = product["name"] if product else "不指定"
+
+    hero = None
+    if image_prompt_versions:
+        # `_slice_body()` returns `body_json` unchanged for parts other than
+        # copy/video_script, so `versions[0]["body"]` here already *is* the round's raw reply.
+        latest_body = image_prompt_versions[0].get("body")
+        if isinstance(latest_body, dict) and isinstance(latest_body.get("hero"), dict):
+            hero = latest_body["hero"]
+    person = hero.get("person") if hero else None
+    scene = hero.get("scene") if hero else None
+    if not isinstance(person, str) or not person:
+        person = None
+    if not isinstance(scene, str) or not scene:
+        scene = None
+
+    summary = pack_row["summary_json"] or {}
+    key_message = summary.get("重點訊息") if isinstance(summary, dict) else None
+    key_message_text = None
+    if isinstance(key_message, str) and key_message:
+        lines = [line.strip() for line in key_message.split("\n") if line.strip()]
+        key_message_text = "；".join(lines) if lines else None
+
+    def _text(value) -> str:
+        return value if isinstance(value, str) and value else "—"
+
+    return [
+        {"label": "品牌／商品", "text": f"{brand_name} · {product_name}"},
+        {"label": "平台", "text": _text(chips.get("platform"))},
+        {"label": "尺寸", "text": _text(chips.get("size"))},
+        {"label": "風格", "text": _text(chips.get("style"))},
+        {"label": "人物", "text": _text(person)},
+        {"label": "場景", "text": _text(scene)},
+        {"label": "主要訊息", "text": _text(key_message_text)},
+    ]
+
+
+def set_detail(conn: _AnyConn, org_id: str, brand_id: str, set_id: str) -> dict | None:
+    """`GET /sets/{s}`. `image_generation.connected` reads `image_port.connected()` — always
+    `False` today, the port is reserved, not filled (§5.11); `image_generation.reason` carries
+    the shipped-text reserved-seat line so the browser never re-spells it."""
+    brief = get_brief(conn, org_id, brand_id, set_id)
+    if brief is None or brief["pack_id"] is None:
+        return None
+    pack_row = _get_pack_row(conn, org_id, brand_id, brief["pack_id"])
+    if pack_row is None:
+        return None
+    required_outputs = brief["required_outputs_json"] or {}
+    versions_by_part = _versions_by_part(conn, org_id, brand_id, set_id)
+    coordinates = brief["coordinates_snapshot_json"] or {}
+    try:
+        style = get_style(brief["style_key"])
+    except ValueError:
+        style = None
+    sibling_rows = conn.execute(
+        "SELECT id, name, coordinates_snapshot_json, required_outputs_json"
+        " FROM workbench_brief WHERE org_id = %s AND brand_id = %s AND pack_id = %s"
+        " ORDER BY created_at",
+        (org_id, brand_id, brief["pack_id"]),
+    ).fetchall()
+    siblings = []
+    for r in sibling_rows:
+        r = dict(r)
+        sib_versions = _versions_by_part(conn, org_id, brand_id, r["id"])
+        siblings.append({
+            "id": r["id"], "name": r["name"],
+            "angle": (r["coordinates_snapshot_json"] or {}).get("angle"),
+            "status": set_state(r["required_outputs_json"] or {}, sib_versions),
+        })
+    required_parts = [part for part in _PART_ORDER if part in required_outputs]
+    products = {
+        part: {
+            "state": product_state(required_outputs[part], versions_by_part.get(part) or []),
+            "selected": sum(1 for a in (versions_by_part.get(part) or []) if a),
+            "required": required_outputs[part],
+            "generation_settings": _generation_settings(part, brief["request_json"]),
+            "versions": _part_versions(conn, org_id, brand_id, set_id, part),
+        }
+        for part in required_parts
+    }
+    chips = {
+        "platform": pack_row["context_json"].get("platform")
+        if pack_row["context_json"] else None,
+        "style": style["label"] if style else brief["style_key"],
+        "size": coordinates.get("format"),
+    }
+    return {
+        "id": brief["id"], "pack_id": pack_row["id"], "pack_name": pack_row["name"],
+        "name": brief["name"], "status": set_state(required_outputs, versions_by_part),
+        "source_kind": pack_row["source_kind"],
+        "lock": {
+            "locked": pack_row["approved_at"] is not None,
+            "reason": PACK_APPROVED_MESSAGE if pack_row["approved_at"] is not None else None,
+        },
+        "chips": chips,
+        "generation_settings": _generation_settings_rows(
+            conn, brand_id, brief, chips,
+            (products.get("image_prompt") or {}).get("versions") or [], pack_row,
+        ),
+        "siblings": siblings, "required_parts": required_parts, "products": products,
+        "image_generation": {
+            "connected": image_port.connected(),
+            "reason": "圖片生成服務未接上，這裡先保留席位；接上後同一個畫面直接顯示成果。",
+        },
+    }
 
 
 _CHILD_TABLES = (
     ("workbench_output", "工作檯產出"),
     ("workbench_brief", "工作檯工單"),
+    ("workbench_pack", "工作檯任務包"),
 )
 
 
@@ -503,7 +1227,7 @@ cleanup.register(
     "素材工作檯",
     count_brand=_count_brand,
     delete_brand=_delete_brand,
-    brand_tables=frozenset({"workbench_brief", "workbench_output"}),
+    brand_tables=frozenset({"workbench_brief", "workbench_output", "workbench_pack"}),
     count_product=None,
     delete_product=None,
     product_tables=frozenset(),

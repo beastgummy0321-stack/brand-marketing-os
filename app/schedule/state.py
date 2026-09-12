@@ -154,18 +154,23 @@ def _copy_summary(output: dict | None) -> dict | None:
     `visual_tone`／`visual_concept`，ADR 0068 §5 amendment），這裡攤平成一層，畫面不必
     知道 workbench 的列形狀。`None`：這個 part 從沒產出過。
 
-    一次生成只出一個長度帶（`copy_length`，票 F01-T01-I02）：`body_json` 不再有
-    `short`／`medium`／`long` 三把鑰匙，只有 `body_json["copy_length"]` 指名的那一把——
-    這裡讀那一把出來當 `bodies`，`copy_length` 本身缺欄位（舊輸出）落回 `"short"`。"""
+    一輪文案是 5 組完整廣告（ARCHITECTURE.md §5.6）：`body_json["sets"]` 是
+    `[{body, headline, description}, ...]`，這裡拆成三個 index-aligned 清單——
+    `CreativePackList.tsx`／素材準備 stage 讀的還是 `bodies`／`headlines`／`descriptions`
+    這個舊形狀，這支只換讀法，不換輸出契約（§5.6 明講：那兩處這次不動）。`sets` 缺欄位
+    或不是清單（舊輸出）一律落回空清單，跟舊版對缺欄位的容忍一致。"""
     if output is None:
         return None
     body = output.get("body_json") or {}
     copy_length = body.get("copy_length") or "short"
+    sets = body.get("sets")
+    sets = sets if isinstance(sets, list) else []
     return {
         "is_adopted": output["is_adopted"], "generation_round": output["generation_round"],
-        "copy_length": copy_length, "bodies": body.get(copy_length, []),
-        "headlines": body.get("headlines", []),
-        "descriptions": body.get("descriptions", []),
+        "copy_length": copy_length,
+        "bodies": [s.get("body") for s in sets if isinstance(s, dict)],
+        "headlines": [s.get("headline") for s in sets if isinstance(s, dict)],
+        "descriptions": [s.get("description") for s in sets if isinstance(s, dict)],
         "visual_tone": body.get("visual_tone"), "visual_concept": body.get("visual_concept"),
         "validation": body.get("validation", []),
         # 票 workbench-2/02（ablation §4）：文案任務的誠實 warnings 一路帶到素材準備畫面——
@@ -269,6 +274,27 @@ def _briefs_for_tree(conn, org_id: str, brand_id: str, tree_row: dict | None) ->
     return entries
 
 
+def _creative_pack_for_tree(conn, org_id: str, brand_id: str, tree_row: dict | None) -> dict | None:
+    """F02-I04（ARCHITECTURE.md §5.5）：這棵樹的任務包核准信號——狀態讀取，不是
+    callback，工作檯完全不知道上游是誰。`tree_row` 是 `None`（從沒展開過）或這棵樹
+    還沒有 pack → `None`。`state` 是 `pack_for_source` 回的中文字（待處理／進行中／
+    待核准／已完成），原樣透傳，這支不翻譯。"""
+    if tree_row is None:
+        return None
+    pack = workbench.pack_for_source(
+        conn, org_id, brand_id, "schedule_node", {"source_tree_task_id": tree_row["id"]},
+    )
+    if pack is None:
+        return None
+    return {
+        "pack_id": pack["id"],
+        "state": pack["state"],
+        "approved_at": pack["approved_at"],
+        "sets_total": pack["sets_total"],
+        "sets_done": pack["sets_done"],
+    }
+
+
 def _knowledge_gaps(conn, brand_id: str) -> list[str]:
     """票 plan-quality/03：哪些品牌檔案分類是空的——讀跟 `context_compiler.compile()`
     同一批查詢（品牌事實只算 confirmed、宣稱不分產品），通知才不會跟 plan prompt 的內容
@@ -310,6 +336,7 @@ def _brand_response(conn, brand_id: str, org_id: str) -> dict:
         "plan": plan,
         "tree": tree,
         "briefs": _briefs_for_tree(conn, org_id, brand_id, tree_row),
+        "creative_pack": _creative_pack_for_tree(conn, org_id, brand_id, tree_row),
         "period": period_mod.brand_period_response(conn, org_id, brand_id),
         "next_period_suggestion": period_mod.next_period_suggestion(conn, org_id, brand_id),
     }

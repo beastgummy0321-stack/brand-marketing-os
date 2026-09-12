@@ -106,9 +106,29 @@ test("15 條路由（扣 /accept-invite）在 1280 寬不橫向溢出", async ({
   await page.goto(`/app/brands/${brandId}/schedule`);
   await assertNoOverflow("/brands/:brandId/schedule");
 
-  // --- /brands/:brandId/workbench（票 workbench/04，ADR 0068）---------------------
+  // --- /brands/:brandId/workbench（票 workbench/04，ADR 0068；F02 四個畫面加三條）-------
   await page.goto(`/app/brands/${brandId}/workbench`);
   await assertNoOverflow("/brands/:brandId/workbench");
+
+  // --- /brands/:brandId/workbench/new：走一次真的自由創作，量後面兩條路由才有 pack 可用。
+  await page.goto(`/app/brands/${brandId}/workbench/new`);
+  await assertNoOverflow("/brands/:brandId/workbench/new");
+  await page.getByLabel("告訴 AI 你想創作什麼").fill("寬度測試用的自由創作文字");
+  await page.getByRole("button", { name: "建立自由工作" }).click();
+  await expect(page.getByRole("button", { name: "確認並生成" })).toBeVisible();
+  await page.getByRole("button", { name: "確認並生成" }).click();
+  await expect(page).toHaveURL(new RegExp(`/app/brands/${brandId}/workbench/packs/[^/]+$`));
+
+  // --- /brands/:brandId/workbench/packs/:packId ---------------------------------------
+  await assertNoOverflow("/brands/:brandId/workbench/packs/:packId");
+  const packId = new URL(page.url()).pathname.split("/").pop()!;
+
+  // --- /brands/:brandId/workbench/packs/:packId/sets/:setId ---------------------------
+  await page.getByRole("cell", { name: "未生成", exact: true }).locator("..").click();
+  await expect(page).toHaveURL(
+    new RegExp(`/app/brands/${brandId}/workbench/packs/${packId}/sets/[^/]+$`),
+  );
+  await assertNoOverflow("/brands/:brandId/workbench/packs/:packId/sets/:setId");
 
   // --- /inbox -------------------------------------------------------------------
   await page.goto("/app/inbox");
