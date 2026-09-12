@@ -114,6 +114,35 @@ export interface CampaignDetail extends EntityBinding {
   outcome: CampaignOutcomeTotals;
 }
 
+/** `POST /campaigns` 的回應：`CampaignDetail` 加一個 transient 的 `parsed` 旗標（F03-I03）——
+ * AI 有沒有解析出這次投放的目標；`false` 時欄位仍然是一組可用的預設值，不落地，只存在這次
+ * 回應裡，畫面用它決定要不要提示使用者檢查一下 AI 填的內容。 */
+export interface CampaignDraft extends CampaignDetail {
+  parsed: boolean;
+}
+
+/** `POST /campaigns` 的請求體——一句話＋投放期間＋選填的額外限制。 */
+export interface CreateCampaignInput {
+  goal_text: string;
+  start_date: string;
+  end_date: string;
+  constraints?: Record<string, unknown>;
+}
+
+/** `PATCH /campaigns/{id}` 的請求體——草稿欄位的一般編輯，不是 `ads_action`。所有欄位選填，
+ * 沒帶到的欄位維持原樣；`success_target`／`success_basis` 可以明確傳 `null` 清空。 */
+export interface PatchCampaignInput {
+  name?: string;
+  objective?: string;
+  success_metric?: SuccessMetric;
+  success_target?: number | null;
+  success_basis?: string | null;
+  start_date?: string;
+  end_date?: string;
+  constraints_json?: Record<string, unknown>;
+  product_ids?: string[];
+}
+
 async function ensureOk(res: Response, fallback: string): Promise<void> {
   if (res.ok) return;
   let message = fallback;
@@ -144,5 +173,31 @@ export async function getCampaign(brandId: string, campaignId: string): Promise<
     `${BASE}/brands/${encodeURIComponent(brandId)}/campaigns/${encodeURIComponent(campaignId)}`,
   );
   const data = await parseJsonOrThrow<{ campaign: CampaignDetail }>(res, "讀取 Campaign 失敗。");
+  return data.campaign;
+}
+
+export async function createCampaign(
+  brandId: string,
+  input: CreateCampaignInput,
+): Promise<CampaignDraft> {
+  const res = await apiFetch(`${BASE}/brands/${encodeURIComponent(brandId)}/campaigns`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  const data = await parseJsonOrThrow<{ campaign: CampaignDraft }>(res, "建立 Campaign 失敗。");
+  return data.campaign;
+}
+
+export async function patchCampaign(
+  brandId: string,
+  campaignId: string,
+  input: PatchCampaignInput,
+): Promise<CampaignDetail> {
+  const res = await apiFetch(
+    `${BASE}/brands/${encodeURIComponent(brandId)}/campaigns/${encodeURIComponent(campaignId)}`,
+    { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input) },
+  );
+  const data = await parseJsonOrThrow<{ campaign: CampaignDetail }>(res, "更新 Campaign 失敗。");
   return data.campaign;
 }
