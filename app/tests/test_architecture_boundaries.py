@@ -618,22 +618,30 @@ class AiKeySourceSingleSourceOfTruthTest(unittest.TestCase):
 
 
 # ---- 票 T8a：七維座標詞彙同步閘門 ----
-# 七個維度名稱（CONSTITUTION.md 規則 5）活在三個地方——`app/schedule/creative.py` 的
+# 七個維度名稱（CONSTITUTION.md 規則 5）活在多個地方——`app/schedule/creative.py` 的
 # `COORDINATE_KEYS`（唯一權威）、`frontend/src/lib/coordinatesApi.ts` 的
-# `COORDINATE_DIMENSIONS`、`frontend/src/components/schedule/CampaignTree.tsx` 的
-# `COORDINATE_LABELS`——過去沒有任何機器比對過三邊是否一致。跟 `_tenant_tables()`／
+# `COORDINATE_DIMENSIONS`，加上 `app/ads/*.py` 自己的幾份 `_COORDINATE_DIMENSIONS`
+# tuple——過去沒有任何機器比對過這幾邊是否一致。跟 `_tenant_tables()`／
 # `AiKeySourceSingleSourceOfTruthTest` 同一種既有天花板：純文字 regex 掃描，不接 TS
 # parser（`app/tests` 不能 import 前端，repo 裡也沒有能解析 TypeScript 的依賴——
 # ponytail：正則字面比對，真的需要更嚴謹時再升級）。
+#
+# F03-I22（2026-09-13）：CampaignTree.tsx 被 F03-I17 刪除，原本釘死在它身上的
+# 「七維標籤只准有一個前端來源」改成掃整個 frontend/src（零個 COORDINATE_LABELS
+# 宣告），不再依賴那一個檔案存在；同時把 `app/ads/*.py` 的三份 `_COORDINATE_DIMENSIONS`
+# 也納入跟憲法比對，不再只是「存在但沒人比對」的孤兒常數。
 
 _PY_COORDINATE_KEYS = re.compile(r"COORDINATE_KEYS\s*=\s*\(([^)]*)\)")
 _TS_COORDINATE_DIMENSIONS_BLOCK = re.compile(
     r"COORDINATE_DIMENSIONS\s*:[^=]*=\s*\[(.*?)\n\];", re.DOTALL
 )
 _TS_COORDINATE_LABELS_BLOCK = re.compile(
-    r"COORDINATE_LABELS\s*:[^=]*=\s*\[(.*?)\n\];", re.DOTALL
+    r"COORDINATE_LABELS\s*(?::[^=\n]*)?=\s*[\[{]"
 )
 _TS_TUPLE_FIRST_KEY = re.compile(r'\["([a-z_]+)",')
+_PY_ADS_COORDINATE_DIMENSIONS = re.compile(
+    r"_COORDINATE_DIMENSIONS\s*=\s*\(([^)]*)\)", re.DOTALL
+)
 
 # 憲法規則 5 逐字抄下來的那七個，順序照抄。這是權威，不是「其中一份原始碼」——
 # 2026-09-04 補：原本三份只互相比對，於是三份同時清空也會全綠（空清單彼此相等）。
@@ -644,13 +652,19 @@ CONSTITUTION_COORDINATE_KEYS = [
 
 
 class CoordinateDimensionSyncTest(unittest.TestCase):
-    """票 T8a：三邊的七個維度鍵名跟順序要一致，而且都等於憲法規則 5 那七個。
-    全部當純文字讀，不執行、不 import（TS 那兩份是前端程式碼，這支測試檔跑在 Python 這邊）。
+    """票 T8a：Python／TS 的七個維度鍵名跟順序要一致，而且都等於憲法規則 5 那七個。
+    全部當純文字讀，不執行、不 import（TS 那份是前端程式碼，這支測試檔跑在 Python 這邊）。
 
     2026-09-04 補強：本測試原本只找「第一個同名宣告」，T8a 的審查因此騙過它——在真正的
     `export const COORDINATE_DIMENSIONS` 前面插一個同名、七鍵正確的假宣告（合法 TS，不同
     作用域），再把真的那份弄壞，閘門全綠。現在改成「同名宣告只准有一個」，那一招當場紅。
     這仍然不是 TS parser（票面禁裝，也沒有這個依賴），但它擋掉的不再只是手滑。
+
+    F03-I22（2026-09-13）：`app/ads/*.py` 長出自己的三份 `_COORDINATE_DIMENSIONS`
+    tuple，原本沒有機器比對——`test_all_three_equal_the_constitution` 現在把它們也
+    拿去跟憲法比對。「七維標籤只准有一個前端來源」不再釘死 `CampaignTree.tsx`（F03-I17
+    刪掉了這個檔案），改成掃整個 `frontend/src` 找 `COORDINATE_LABELS` 宣告，
+    `coordinatesApi.ts` 的 `COORDINATE_DIMENSIONS` 仍是唯一允許的前端來源。
     """
 
     def _one_declaration(self, text: str, pattern: re.Pattern, rel: str, const_name: str):
@@ -675,14 +689,45 @@ class CoordinateDimensionSyncTest(unittest.TestCase):
         match = self._one_declaration(text, block_pattern, rel, const_name)
         return _TS_TUPLE_FIRST_KEY.findall(match.group(1))
 
+    def _ads_coordinate_dimensions(self) -> list:
+        """app/ads/*.py 裡每一份 `_COORDINATE_DIMENSIONS = ( … )`，各自跟憲法比對。
+        `learning.py` 那份存的是欄名（`audience_key` 等），跟其他兩份的裸鍵名不同形狀——
+        比對前一律剝掉尾巴的 `_key`。"""
+        results = []
+        for path in sorted((APP_DIR / "ads").glob("*.py")):
+            text = path.read_text(encoding="utf-8")
+            matches = list(_PY_ADS_COORDINATE_DIMENSIONS.finditer(text))
+            if not matches:
+                continue
+            rel = f"app/ads/{path.name}"
+            match = self._one_declaration(text, _PY_ADS_COORDINATE_DIMENSIONS, rel,
+                                           "_COORDINATE_DIMENSIONS")
+            keys = [k.removesuffix("_key") for k in re.findall(r'"([a-z_]+)"', match.group(1))]
+            results.append((f"{rel} _COORDINATE_DIMENSIONS", keys))
+        return results
+
     def test_all_three_equal_the_constitution(self):
-        """三份都要等於憲法那七個。少了這條，三份同時被清空或同時被改錯也會全綠。"""
-        for label, keys in (
+        """每一份宣告都要等於憲法那七個。少了這條，任何一份同時被清空或同時被改錯也會全綠。"""
+        checks = [
             ("app/schedule/creative.py COORDINATE_KEYS", self._python_keys()),
             ("frontend/src/lib/coordinatesApi.ts COORDINATE_DIMENSIONS", self._ts_keys(
                 "frontend/src/lib/coordinatesApi.ts",
                 _TS_COORDINATE_DIMENSIONS_BLOCK, "COORDINATE_DIMENSIONS")),
-        ):
+        ]
+        ads_checks = self._ads_coordinate_dimensions()
+        self.assertEqual(
+            {label for label, _ in ads_checks},
+            {
+                "app/ads/plan.py _COORDINATE_DIMENSIONS",
+                "app/ads/assets.py _COORDINATE_DIMENSIONS",
+                "app/ads/learning.py _COORDINATE_DIMENSIONS",
+            },
+            "app/ads/*.py 的三份 _COORDINATE_DIMENSIONS 少了一份——常數被改名或搬走時，"
+            "空掃描結果會讓下面的比對『沒東西可比＝全部相等』悄悄放行，跟 2026-09-04 "
+            "修過的『空清單彼此相等』是同一種洞。",
+        )
+        checks.extend(ads_checks)
+        for label, keys in checks:
             self.assertEqual(
                 keys, CONSTITUTION_COORDINATE_KEYS,
                 f"{label} 跟 CONSTITUTION.md 規則 5 的七維對不上（鍵名或順序）：\n"
@@ -701,20 +746,38 @@ class CoordinateDimensionSyncTest(unittest.TestCase):
             "（frontend/src/lib/coordinatesApi.ts）的七個鍵名或順序對不上：\n"
             f"  python: {python_keys}\n  coordinatesApi.ts: {coordinates_api_keys}",
         )
-        # 票 past-ads/08（2026-09-09，主對話台裁決）：CampaignTree.tsx 不再有自己那份
-        # COORDINATE_LABELS——七維標籤只准有一個前端來源（coordinatesApi.ts 的
-        # COORDINATE_DIMENSIONS）。這條檢查仍然有效：檔案不准再長出自己的座標標籤字典。
+        # 票 past-ads/08（2026-09-09，主對話台裁決）：七維標籤只准有一個前端來源
+        # （coordinatesApi.ts 的 COORDINATE_DIMENSIONS）。原本這條檢查釘死在
+        # CampaignTree.tsx 一個檔案上——F03-I17 把那個檔案刪了（campaign tree 畫面
+        # 退場），釘死的檢查因此讀不到檔案，FileNotFoundError。
         #
-        # 票 05（ADR 0068，2026-09-09）amendment：per-ad 座標畫面（曾經讀 `COORDINATE_
-        # DIMENSIONS` 逐格印出）搬去素材工作檯——`ScheduleBrief.copy` 這個新形狀本來就不帶
-        # 座標值（app/schedule/state.py `_copy_summary`），CampaignTree.tsx 因此不再需要、
-        # 也不再 import 那個常數；留著會是一個沒有使用者的 import（tsc/eslint 會紅）。原本
-        # 「必須 import COORDINATE_DIMENSIONS」那條斷言跟著這個畫面一起退休，上面「不准自己
-        # 定義 COORDINATE_LABELS」那條閘門原樣保留（不管座標畫在哪裡，都不准另開一份詞彙）。
-        tree_text = (REPO_ROOT / "frontend/src/components/schedule/CampaignTree.tsx").read_text(
-            encoding="utf-8")
+        # F03-I22（2026-09-13）：規則本身沒變，只是不該再綁著某一個檔案的生死——改成掃
+        # 整個 frontend/src 底下所有 .ts／.tsx（略過 node_modules、dist、*.test.tsx），
+        # 一個 COORDINATE_LABELS 宣告都不准有。2026-09-13 實測：ads 前端
+        # （DeliveryTab.tsx）走的是 import COORDINATE_DIMENSIONS from coordinatesApi.ts，
+        # 沒有自己另開一份，這道掃描目前是綠的，而且不再綁著任何一個檔案是否存在。
+        violations = []
+        scanned = []
+        for path in (REPO_ROOT / "frontend" / "src").rglob("*"):
+            if path.suffix not in (".ts", ".tsx"):
+                continue
+            if "node_modules" in path.parts or "dist" in path.parts:
+                continue
+            if path.name.endswith(".test.tsx"):
+                continue
+            rel = str(path.relative_to(REPO_ROOT)).replace("\\", "/")
+            scanned.append(rel)
+            text = path.read_text(encoding="utf-8")
+            if _TS_COORDINATE_LABELS_BLOCK.search(text):
+                violations.append(rel)
+        self.assertIn(
+            "frontend/src/lib/coordinatesApi.ts", scanned,
+            "掃描沒看到 coordinatesApi.ts——frontend/src 被搬走或改名了，這個掃描就失去"
+            "了它唯一允許的前端來源可以比對，不能悄悄放行。",
+        )
         self.assertEqual(
-            len(list(_TS_COORDINATE_LABELS_BLOCK.finditer(tree_text))), 0,
-            "CampaignTree.tsx 又長出自己的 COORDINATE_LABELS——七維標籤只准有一個前端來源"
-            "（coordinatesApi.ts 的 COORDINATE_DIMENSIONS，票 past-ads/08）。",
+            violations, [],
+            "以下檔案自己定義了 COORDINATE_LABELS——七維標籤只准有一個前端來源"
+            "（frontend/src/lib/coordinatesApi.ts 的 COORDINATE_DIMENSIONS，票 "
+            "past-ads/08）：\n" + "\n".join(violations),
         )

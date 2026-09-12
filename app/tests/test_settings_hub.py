@@ -84,11 +84,14 @@ class SettingsAdsPageTest(unittest.TestCase):
 
     def test_page_renders_all_three_cards_with_seed_values(self):
         # dead-code-sweep 票 04（2026-08-30）刪了「規則有效期」卡（規則不再過期），剩三張。
+        # F03-I17：預算搬進投放中心（ruling 4），設定頁不再有「檔期日預算」這張卡——
+        # 卡片定義沒刪（get_value 照常可用），只是從設定頁清單藏起來。
         cards = _cards(self.client, self.bid)
         titles = {card["title"] for card in cards.values()}
-        for title in ("品牌智庫規則上限", "檔期日預算", "檔期方案數量上下限"):
+        for title in ("品牌智庫規則上限", "毛利率（打平線用）", "檔期方案數量上下限"):
             self.assertIn(title, titles)
         self.assertNotIn("規則有效期", titles)
+        self.assertNotIn("檔期日預算", titles)
         self.assertEqual(_field(cards, "schedule_plan_count", "plan_count_max")["value"], 5.0)
 
     def test_no_customized_badge_when_untouched(self):
