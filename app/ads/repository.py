@@ -467,6 +467,40 @@ def delete_ad(conn: _AnyConn, org_id: str, brand_id: str, ad_id: str) -> None:
     )
 
 
+def list_ads_for_campaign(conn: _AnyConn, org_id: str, brand_id: str,
+                           campaign_id: str) -> list:
+    """F03-I08：這個 Campaign 底下所有廣告的平面清單（不掛在投放組下），供
+    `app/ads/assets.py` 派工／讀就緒狀態用——跟 `campaign_detail()` 的 `ad_rows` 同一個
+    查法，複製一份而非要求呼叫端拆解巢狀結構。"""
+    rows = conn.execute(
+        "SELECT * FROM ads_ad WHERE org_id = %s AND brand_id = %s AND campaign_id = %s"
+        " ORDER BY created_at",
+        (org_id, brand_id, campaign_id),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def set_ad_asset_ready(conn: _AnyConn, org_id: str, brand_id: str, ad_id: str, *,
+                        actor: str | None, ready: bool) -> dict:
+    """F03-I08：使用者手動勾／取消勾「素材已就位」——不是 `ads_action`（沒有東西碰到平台，
+    §0「It is not an ads_action」），單純這一列自己的事實。"""
+    if ready:
+        conn.execute(
+            "UPDATE ads_ad SET asset_ready_source = 'manual', asset_ready_by = %s,"
+            " asset_ready_at = now() WHERE org_id = %s AND brand_id = %s AND id = %s",
+            (actor, org_id, brand_id, ad_id),
+        )
+    else:
+        conn.execute(
+            "UPDATE ads_ad SET asset_ready_source = NULL, asset_ready_by = NULL,"
+            " asset_ready_at = NULL WHERE org_id = %s AND brand_id = %s AND id = %s",
+            (org_id, brand_id, ad_id),
+        )
+    row = get_ad(conn, org_id, brand_id, ad_id)
+    assert row is not None
+    return row
+
+
 def record_action(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str, *,
                    target_kind: str, target_id: str, kind: str, before: dict, after: dict,
                    approved_by: str, sync_state: str = "pending_manual") -> dict:
