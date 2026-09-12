@@ -88,6 +88,24 @@ class CampaignRoundTripTest(_AdsModelTestBase):
         self.assertEqual(detail["budget_total"], 5000)
         self.assertIsNone(detail["budget_planned"])
 
+    def test_null_success_target_round_trips(self):
+        campaign = ads_repo.create_campaign(
+            web.conn, self.org_id, self.brand_id,
+            _campaign_payload(success_target=None), created_by=ACTOR,
+        )
+        web.conn.commit()
+
+        detail = ads_repo.campaign_detail(web.conn, self.org_id, self.brand_id, campaign["id"])
+        self.assertIsNone(detail["success_target"])
+
+    def test_non_numeric_success_target_rejected(self):
+        with self.assertRaises(ValueError) as ctx:
+            ads_repo.create_campaign(
+                web.conn, self.org_id, self.brand_id,
+                _campaign_payload(success_target="便宜一點"), created_by=ACTOR,
+            )
+        self.assertEqual(str(ctx.exception), "success_target_unknown")
+
 
 class BrandIsolationTest(_AdsModelTestBase):
     def test_campaign_never_crosses_brand(self):
