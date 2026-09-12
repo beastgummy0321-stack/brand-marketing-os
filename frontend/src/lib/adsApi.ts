@@ -114,6 +114,31 @@ export interface CampaignDetail extends EntityBinding {
   groups: DeliveryGroupRow[];
   actions: ActionRow[];
   outcome: CampaignOutcomeTotals;
+  /** F03-I08：素材 tab 跟發布畫面共用同一組數字。 */
+  asset_readiness: AssetReadinessSummary;
+}
+
+// -- F03-I08：素材就緒 -----------------------------------------------------------------------
+
+export type AssetReadinessState =
+  | "ready_workbench"
+  | "ready_manual"
+  | "in_progress"
+  | "not_started";
+
+export interface AssetReadinessRow {
+  ad_id: string;
+  state: AssetReadinessState;
+  pack_id: string | null;
+  brief_id: string | null;
+  source: "workbench" | "manual" | null;
+  by: string | null;
+  at: string | null;
+}
+
+export interface AssetReadinessSummary {
+  ready_count: number;
+  total: number;
 }
 
 /** `POST /campaigns` 的回應：`CampaignDetail` 加一個 transient 的 `parsed` 旗標（F03-I03）——
@@ -427,4 +452,41 @@ export async function deleteAd(brandId: string, adId: string): Promise<void> {
     { method: "DELETE" },
   );
   await ensureOk(res, "刪除廣告失敗。");
+}
+
+// -- F03-I08：素材就緒 -- 交棒工作檯任務包／讀就緒狀態／手動勾「素材已就位」 -------------------
+
+/** `POST .../campaigns/{id}/pack` — 把這個 Campaign 底下所有廣告一次交棒成一個素材工作檯
+ * 任務包，回傳新建的 pack id。已經交棒過會回 400（`pack_already_exists`）。 */
+export async function dispatchPack(brandId: string, campaignId: string): Promise<string> {
+  const res = await apiFetch(
+    `${BASE}/brands/${encodeURIComponent(brandId)}/campaigns/${encodeURIComponent(campaignId)}/pack`,
+    { method: "POST" },
+  );
+  const data = await parseJsonOrThrow<{ pack_id: string }>(res, "交棒素材工作檯失敗。");
+  return data.pack_id;
+}
+
+export interface AssetsResponse extends AssetReadinessSummary {
+  assets: AssetReadinessRow[];
+}
+
+export async function getAssets(brandId: string, campaignId: string): Promise<AssetsResponse> {
+  const res = await apiFetch(
+    `${BASE}/brands/${encodeURIComponent(brandId)}/campaigns/${encodeURIComponent(campaignId)}/assets`,
+  );
+  return parseJsonOrThrow<AssetsResponse>(res, "讀取素材就緒狀態失敗。");
+}
+
+export async function setAssetReady(
+  brandId: string,
+  adId: string,
+  ready: boolean,
+): Promise<AdRow> {
+  const res = await apiFetch(
+    `${BASE}/brands/${encodeURIComponent(brandId)}/ads/${encodeURIComponent(adId)}/asset-ready`,
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ready }) },
+  );
+  const data = await parseJsonOrThrow<{ ad: AdRow }>(res, "更新素材就位狀態失敗。");
+  return data.ad;
 }

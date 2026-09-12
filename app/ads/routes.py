@@ -12,7 +12,7 @@ from fastapi import APIRouter, Request
 from pydantic import BaseModel
 
 import app.shared.web as web
-from app.ads import brief, plan, repository, strategy
+from app.ads import assets, brief, plan, repository, strategy
 
 router = APIRouter(prefix="/api/ads")
 
@@ -36,6 +36,10 @@ def get_campaign(request: Request, brand_id: str, campaign_id: str):
     campaign = repository.campaign_detail(web.conn, actor.org_id, brand_id, campaign_id)
     if campaign is None:
         raise web.ApiError(404, "campaign_unknown", CAMPAIGN_UNKNOWN_MESSAGE)
+    # F03-I08：素材 tab 跟發布畫面共用同一組 ready_count/total（§0）。
+    campaign["asset_readiness"] = assets.readiness_summary(
+        assets.readiness(web.conn, actor.org_id, brand_id, campaign_id),
+    )
     return {"campaign": campaign}
 
 
@@ -332,3 +336,54 @@ def delete_ad(request: Request, brand_id: str, ad_id: str):
         status, message = _AD_EDIT_ERRORS.get(code, (400, code))
         raise web.ApiError(status, code, message) from exc
     return {"ok": True}
+
+
+# -- F03-I08：素材就緒 -- 交棒工作檯任務包／讀就緒狀態／手動勾「素材已就位」 -------------------
+
+_PACK_ERRORS = {
+    "campaign_unknown": (404, CAMPAIGN_UNKNOWN_MESSAGE),
+    "pack_already_exists": (400, assets.PACK_ALREADY_EXISTS_MESSAGE),
+}
+
+
+@router.post("/brands/{brand_id}/campaigns/{campaign_id}/pack")
+def dispatch_pack(request: Request, brand_id: str, campaign_id: str):
+    """F03-I08：把這個 Campaign 底下所有廣告一次交棒成一個素材工作檯任務包。"""
+    actor = web.require_actor(request)
+    web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
+    try:
+        pack_id = assets.dispatch_pack(web.conn, actor.org_id, brand_id, campaign_id)
+    except ValueError as exc:
+        code = str(exc)
+        status, message = _PACK_ERRORS.get(code, (400, code))
+        raise web.ApiError(status, code, message) from exc
+    return {"pack_id": pack_id}
+
+
+@router.get("/brands/{brand_id}/campaigns/{campaign_id}/assets")
+def get_assets(request: Request, brand_id: str, campaign_id: str):
+    """F03-I08：每支廣告的素材就緒狀態，加上 `ready_count`／`total` 小計。"""
+    actor = web.require_actor(request)
+    web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
+    rows = assets.readiness(web.conn, actor.org_id, brand_id, campaign_id)
+    return {"assets": rows, **assets.readiness_summary(rows)}
+
+
+class AssetReadyRequest(BaseModel):
+    ready: bool
+
+
+@router.post("/brands/{brand_id}/ads/{ad_id}/asset-ready")
+def set_asset_ready(request: Request, brand_id: str, ad_id: str, body: AssetReadyRequest):
+    """F03-I08：手動勾／取消勾「素材已就位」。"""
+    actor = web.require_actor(request)
+    web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
+    try:
+        ad = assets.mark_ready(
+            web.conn, actor.org_id, brand_id, ad_id, actor=str(actor.user_id), ready=body.ready,
+        )
+    except ValueError as exc:
+        code = str(exc)
+        status, message = _AD_EDIT_ERRORS.get(code, (400, code))
+        raise web.ApiError(status, code, message) from exc
+    return {"ad": ad}
