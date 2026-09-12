@@ -310,7 +310,10 @@ Everything else under `app/` (core, shared, llm, identity, meta, brand_intellige
 intake, orders, dashboard, storage, background, tools) plus `scripts/` is **legacy**: it works, it
 is not governed by the container checker, and it may shrink but never grow. A managed module
 reaches legacy code only through a file listed in `legacy_facades` (in practice: the package entry
-or the module's `repository.py` / `gateway.py`). New capability never lands in legacy; moving a
+or the module's `repository.py` / `gateway.py`). `may_depend_on` governs **managed modules only**:
+importing a legacy facade is not an entry there and never needs one — `ads`' `may_depend_on:
+["workbench"]` does not forbid `app/ads/repository.py` importing `app.brand_intelligence.repository`
+(it is a declared facade; F03-I19 review). New capability never lands in legacy; moving a
 caller out of legacy is a `legacy_migration: true` issue with `review: planner`. There is no
 clean-up-first round and no tolerance ledger.
 
