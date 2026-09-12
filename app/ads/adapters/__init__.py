@@ -10,16 +10,16 @@ three functions) or `None` when the name is unknown. `auto_meta` is a reserved t
 400, never a 500. Private to app/ads (container contract §1): only `routes.py` imports this.
 """
 
-from app.ads.adapters import manual
+from app.ads.adapters import manual, simulated
 
 AUTO_META_NOT_CONNECTED_MESSAGE = "自動發布未接上"
 
 # 給前端列選單用（決策 1：一般路徑「發布 Campaign」顯示「自動發布未接上」；進階選單才是
-# 「手動發布」）——`simulated`（F03-I10：演練／驗收用）之後在這裡加一行，不改這個檔案的
-# 其餘部分。
+# 「手動發布」）——`simulated`（F03-I10：演練／驗收用）只加這一行，不改這個檔案的其餘部分。
 ADAPTERS = [
     {"key": "manual", "label": "手動發布"},
     {"key": "auto_meta", "label": "自動發布（未接上）"},
+    {"key": "simulated", "label": "模擬發布（演練用）"},
 ]
 
 
@@ -41,9 +41,10 @@ class _AutoMetaAdapter:
 _ADAPTERS = {
     "manual": manual,
     "auto_meta": _AutoMetaAdapter(),
+    "simulated": simulated,
 }
 
 
 def get_adapter(name: str):
-    """`manual`／`auto_meta`（這張票）or `None`（未知名字——F03-I10 再加 `simulated`）。"""
+    """`manual`／`auto_meta`／`simulated` or `None`（未知名字）。"""
     return _ADAPTERS.get(name)
