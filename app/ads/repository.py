@@ -76,6 +76,66 @@ def create_campaign(conn: _AnyConn, org_id: str, brand_id: str, campaign: dict, 
     return row
 
 
+_PATCHABLE_COLUMNS = (
+    "name", "objective", "success_metric", "success_target", "success_basis",
+    "start_date", "end_date",
+)
+
+
+def update_campaign(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str,
+                     updates: dict) -> dict:
+    """F03-I03: plain editing of a `status='draft'` campaign's own fields — not an `ads_action`
+    (nothing is bound to a platform yet, §0). `updates` only ever contains keys the caller
+    (`routes.py`) explicitly received; unknown keys are ignored so callers can pass a raw
+    `dict(exclude_unset=True)` straight through. Same field rules as `create_campaign` for any
+    key that's present. `constraints_json` replaces whole; `product_ids` merges into the
+    existing `context_json` (the one nested field this issue lets the user correct — §0
+    "PATCH ... for context_json.product_ids" — the rest of `context_json` is untouched)."""
+    campaign = get_campaign(conn, org_id, brand_id, campaign_id)
+    if campaign is None:
+        raise ValueError("campaign_unknown")
+
+    for field in ("name", "objective"):
+        if field in updates:
+            value = updates[field]
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f"{field}_unknown")
+    if "success_metric" in updates and updates["success_metric"] not in _SUCCESS_METRICS:
+        raise ValueError("success_metric_unknown")
+    if "success_target" in updates:
+        success_target = updates["success_target"]
+        if success_target is not None and (
+            isinstance(success_target, bool) or not isinstance(success_target, (int, float))
+        ):
+            raise ValueError("success_target_unknown")
+
+    set_clauses = []
+    params: list = []
+    for column in _PATCHABLE_COLUMNS:
+        if column in updates:
+            set_clauses.append(f"{column} = %s")
+            params.append(updates[column])
+    if "constraints_json" in updates:
+        set_clauses.append("constraints_json = %s")
+        params.append(jsonb(updates["constraints_json"] or {}))
+    if "product_ids" in updates:
+        context_json = dict(campaign.get("context_json") or {})
+        context_json["product_ids"] = updates["product_ids"] or []
+        set_clauses.append("context_json = %s")
+        params.append(jsonb(context_json))
+
+    if set_clauses:
+        params.extend([org_id, brand_id, campaign_id])
+        conn.execute(
+            f"UPDATE ads_campaign SET {', '.join(set_clauses)}"
+            " WHERE org_id = %s AND brand_id = %s AND id = %s",
+            tuple(params),
+        )
+    row = get_campaign(conn, org_id, brand_id, campaign_id)
+    assert row is not None
+    return row
+
+
 def get_campaign(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str) -> dict | None:
     row = conn.execute(
         "SELECT * FROM ads_campaign WHERE org_id = %s AND brand_id = %s AND id = %s",
