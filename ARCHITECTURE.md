@@ -370,8 +370,12 @@ Two cross-module raw-SQL reads exist and are deliberate, pre-dating the manifest
 dependency direction. They are recorded here rather than declared as owned resources; the layer
 scan in `app/tests/test_architecture_boundaries.py` remains the tripwire for new ones.
 
-A third one is granted, 2026-09-12, for the same reason: `ads` reads `brand_coordinate` read-only
-for the seven-coordinate vocabulary and its labels. `brand_coordinate` is brand vocabulary that
+A third one is granted, 2026-09-12, for the same reason, and shipped in F03-I06 as
+`app/ads/repository.py::coordinate_vocabulary` (`SELECT dimension, key, label FROM
+brand_coordinate WHERE org_id/brand_id AND disabled_at IS NULL`) — the one copy inside `ads`:
+`ads` reads `brand_coordinate` read-only for the seven-coordinate vocabulary and its labels, and
+every later ads issue that needs the vocabulary calls that function instead of writing its own
+query. `brand_coordinate` is brand vocabulary that
 outlives the module that happens to hold it today — when `schedule` retires (§4) the table moves to
 `ads`, and until then importing `app.schedule` from `ads` would build a dependency we are about to
 delete. `ads` writes nothing there and reads nothing else of schedule's. Do not add a fourth
