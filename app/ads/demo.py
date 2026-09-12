@@ -3,8 +3,8 @@ Meta 真的跑一支廣告（鐵律：不要求、不提醒使用者實機投放
 示範 Campaign、用 `app.ads.adapters.simulated` 發布它、把成效補到今天——三步都做完才印結果，
 所以跑完這支腳本，直接開瀏覽器就能看到有資料的成效分頁。
 
-CLI：`uv run python -m app.ads.demo --org <org> --brand <brand> [--days 14]`。只准在
-`BRAND_OS_ENV != production` 執行——跟 `app/tools/simulate_meta_spend.py` 同一條既有環境宣告。
+CLI：`uv run --env-file .env python -m app.ads.demo --org <org> --brand <brand> [--days 14]`。
+只准在 `BRAND_OS_ENV != production` 執行——跟 `app/tools/simulate_meta_spend.py` 同一條既有環境宣告。
 """
 
 import argparse
@@ -67,9 +67,8 @@ def run(org_id: str, brand_id: str, *, days: int = 14) -> dict:
 
 
 if __name__ == "__main__":
-    # `import app.main` 觸發 `.env` 載入＋完整組裝（比照 `app/tools/simulate_meta_spend.py`
-    # 既有慣例）——BRAND_OS_ENV 要讀得到 `.env` 裡的值，非先做這一步不可。
-    import app.main  # noqa: F401 — 觸發完整組裝與 .env 載入，不需要 app 物件本身
+    # `.env` 靠 `uv run --env-file .env` 載入，不 `import app.main`：A4 憲法禁止
+    # `app/ads/**` 匯入組裝根（`test_no_branch_imports_app_main.py` 掃 __main__ 匯入）。
     from app.core.config import settings
 
     if settings().brand_os_env == "production":
@@ -79,7 +78,7 @@ if __name__ == "__main__":
         )
 
     _parser = argparse.ArgumentParser(
-        prog="python -m app.ads.demo",
+        prog="uv run --env-file .env python -m app.ads.demo",
         description="示範投放中心整個閉環：建（或沿用）一個 Campaign、模擬發布、補齊成效。",
     )
     _parser.add_argument("--org", required=True, help="組織 id，例如 org_bughunt")
