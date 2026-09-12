@@ -451,6 +451,10 @@ schedule_module.register_tasks()
 # app/workbench/jobs.py register_tasks() 檔頭。
 workbench_module.register_tasks()
 
+# 票 F03-I12：掛結案的自動路徑（7 天後自動結案＋寫學習），同一個「DSN 換了要重掛」的理由，見
+# app/ads/jobs.py register_tasks() 檔頭。
+ads_module.register_tasks()
+
 # 啟動斷言（第 2 刀「清理登記處」）：確認刪品牌時該連鎖清資料的模組都有登記進
 # app.core.cleanup，少一個就不讓服務起來，避免又漏掉誰。
 from app.core import cleanup as core_cleanup  # noqa: E402
