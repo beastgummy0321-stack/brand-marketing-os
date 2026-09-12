@@ -4,6 +4,7 @@ import { Button } from "@/components/layout/ui/button";
 import { Badge } from "@/components/layout/ui/badge";
 import { Input } from "@/components/layout/ui/input";
 import { EmptyState } from "@/components/layout/EmptyState";
+import { formatCurrency } from "@/lib/format";
 import {
   Dialog,
   DialogContent,
@@ -23,6 +24,7 @@ import {
   adoptStrategy,
   createAd,
   createGroup,
+  currentBudgetTotal,
   deleteAd,
   deleteGroup,
   patchAd,
@@ -181,8 +183,54 @@ export function DeliveryTab({
     ? c.groups.flatMap((g) => g.ads).find((a) => `ad:${a.id}` === effectiveSelected) ?? null
     : null;
 
+  const t = currentBudgetTotal(c);
+  const diff = t.total !== null && c.budget_planned !== null ? t.total - c.budget_planned : null;
+
   return (
-    <div className="grid grid-cols-[minmax(260px,0.9fr)_minmax(0,1.4fr)] items-start gap-4">
+    <div className="flex flex-col gap-4">
+      <div className="surface">
+        <div className="surface-header">
+          <h2>預算（這個 Campaign）</h2>
+        </div>
+        <div className="surface-body grid grid-cols-3 gap-4">
+          <div>
+            <div className="text-xs text-muted-foreground">目前投放組合計</div>
+            <p className="metric-number">{t.total !== null ? formatCurrency(t.total) : "尚未設定"}</p>
+            <div className="text-xs text-muted-foreground">
+              {t.total !== null
+                ? `各投放組日預算 ${formatCurrency(t.dailySum)}／天 × ${t.days} 天（${c.start_date} ~ ${c.end_date}）`
+                : "還沒設定投放起訖日，算不出總預算"}
+            </div>
+          </div>
+          <div>
+            <div className="text-xs text-muted-foreground">採用時的計畫</div>
+            <p className="metric-number">
+              {c.budget_planned !== null ? formatCurrency(c.budget_planned) : "尚未設定"}
+            </p>
+            <div className="text-xs text-muted-foreground">
+              {c.budget_planned !== null
+                ? `採用策略時的情境金額${c.budget_scenario ? `（${c.budget_scenario}）` : ""}，不會跟著日預算改`
+                : "還沒採用預算情境"}
+            </div>
+          </div>
+          <div>
+            <div className="text-xs text-muted-foreground">差額</div>
+            <p className="metric-number">
+              {diff === null
+                ? "算不出來"
+                : diff === 0
+                  ? "持平"
+                  : diff > 0
+                    ? `＋${formatCurrency(diff)}`
+                    : `－${formatCurrency(Math.abs(diff))}`}
+            </p>
+            <div className="text-xs text-muted-foreground">
+              {diff !== null ? "目前投放組合計 − 採用時的計畫" : "兩邊都有金額才算得出差額"}
+            </div>
+          </div>
+        </div>
+      </div>
+      <div className="grid grid-cols-[minmax(260px,0.9fr)_minmax(0,1.4fr)] items-start gap-4">
       <div className="surface">
         <div className="surface-header">
           <h2>投放結構</h2>
@@ -274,6 +322,7 @@ export function DeliveryTab({
           onDelete={() => setDeleteTarget({ kind: "ad", row: selectedAd })}
         />
       )}
+      </div>
 
       {addGroupOpen && (
         <AddGroupDialog
