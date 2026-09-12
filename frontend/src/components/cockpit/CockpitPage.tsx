@@ -155,8 +155,8 @@ export function CockpitPage({ brandId }: { brandId: string }) {
         actions={
           <>
             <Button asChild variant="outline">
-              <Link to={`/brands/${encodeURIComponent(brandId)}/schedule`}>
-                排這期的檔期
+              <Link to={`/brands/${encodeURIComponent(brandId)}/ads`}>
+                前往投放中心
               </Link>
             </Button>
             <Button
