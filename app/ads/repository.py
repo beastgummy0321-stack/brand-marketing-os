@@ -34,9 +34,11 @@ def _budget_total(start_date, end_date, groups: list[dict]) -> float | None:
 
 def create_campaign(conn: _AnyConn, org_id: str, brand_id: str, campaign: dict, *,
                      created_by: str | None = None) -> dict:
-    """寫一列 `ads_campaign`。`name`／`goal_text`／`objective`／`success_metric`／
-    `success_target` 都是必填——`ValueError("field_unknown")` 帶欄位名在缺欄／空字串時；
-    `success_metric` 不在 CPA／ROAS／購買數之外一律 `ValueError("success_metric_unknown")`。
+    """寫一列 `ads_campaign`。`name`／`goal_text`／`objective`／`success_metric` 都是必填——
+    `ValueError("field_unknown")` 帶欄位名在缺欄／空字串時；`success_metric` 不在
+    CPA／ROAS／購買數之外一律 `ValueError("success_metric_unknown")`；`success_target` 可以是
+    `None`（模型說不出有根據的數字），但若有值就必須是數字，非數字一律
+    `ValueError("success_target_unknown")`。
     """
     for field in ("name", "goal_text", "objective"):
         value = campaign.get(field)
@@ -46,7 +48,9 @@ def create_campaign(conn: _AnyConn, org_id: str, brand_id: str, campaign: dict, 
     if success_metric not in _SUCCESS_METRICS:
         raise ValueError("success_metric_unknown")
     success_target = campaign.get("success_target")
-    if not isinstance(success_target, (int, float)):
+    if success_target is not None and (
+        isinstance(success_target, bool) or not isinstance(success_target, (int, float))
+    ):
         raise ValueError("success_target_unknown")
 
     campaign_id = new_id("adc")

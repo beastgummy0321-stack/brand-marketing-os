@@ -93,7 +93,7 @@ export interface CampaignDetail extends EntityBinding {
   goal_text: string;
   objective: string;
   success_metric: SuccessMetric;
-  success_target: number;
+  success_target: number | null;
   success_basis: string | null;
   start_date: string | null;
   end_date: string | null;
