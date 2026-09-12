@@ -48,6 +48,12 @@ def get_campaign(request: Request, brand_id: str, campaign_id: str):
     return {"campaign": campaign}
 
 
+# F03-I20：租戶界線先於欄位驗證（既有慣例，同 app/workbench/routes.py）：這個檔案裡每一個
+# request model 的每個欄位都要有預設值，真正的必填檢查留給下面的 handler／domain function 做。
+# 一個沒有預設值的欄位會讓 FastAPI 在 `require_actor`／`require_brand` 跑之前就先回 422，
+# 對沒登入的呼叫者洩漏「這個路由存在、body 長這樣」，也讓租戶界線的掃描測試測不到這條路由。
+
+
 class CreateCampaignRequest(BaseModel):
     goal_text: str | None = None
     start_date: str | None = None
@@ -152,7 +158,7 @@ def generate_strategy(request: Request, brand_id: str, campaign_id: str):
 
 
 class SelectScenarioRequest(BaseModel):
-    scenario_key: str
+    scenario_key: str = ""
     custom_total: float | None = None
 
 
@@ -224,9 +230,9 @@ _GROUP_EDIT_ERRORS = {
 
 
 class CreateGroupRequest(BaseModel):
-    name: str
-    role: str
-    daily_budget: float
+    name: str = ""
+    role: str = ""
+    daily_budget: float | None = None
     start_date: str | None = None
     end_date: str | None = None
 
@@ -237,6 +243,10 @@ def create_group(
 ):
     actor = web.require_actor(request)
     web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
+    if body.daily_budget is None:
+        code = "daily_budget_invalid"
+        status, message = _GROUP_EDIT_ERRORS[code]
+        raise web.ApiError(status, code, message)
     try:
         group = plan.create_group(
             web.conn, actor.org_id, brand_id, campaign_id, name=body.name, role=body.role,
@@ -292,13 +302,14 @@ _AD_EDIT_ERRORS = {
     "name_unknown": (400, "名稱不能是空白。"),
     "coordinates_incomplete": (400, "七個座標維度都要填，不能留空。"),
     "ad_bound": (400, "這支廣告已經綁定平台，不能直接刪除。"),
+    "ready_invalid": (400, "請指定要勾選或取消。"),
 }
 
 
 class CreateAdRequest(BaseModel):
-    group_id: str
-    name: str
-    coordinates: dict
+    group_id: str = ""
+    name: str = ""
+    coordinates: dict = {}
 
 
 @router.post("/brands/{brand_id}/campaigns/{campaign_id}/ads")
@@ -383,7 +394,7 @@ def get_assets(request: Request, brand_id: str, campaign_id: str):
 
 
 class AssetReadyRequest(BaseModel):
-    ready: bool
+    ready: bool | None = None
 
 
 @router.post("/brands/{brand_id}/ads/{ad_id}/asset-ready")
@@ -391,6 +402,10 @@ def set_asset_ready(request: Request, brand_id: str, ad_id: str, body: AssetRead
     """F03-I08：手動勾／取消勾「素材已就位」。"""
     actor = web.require_actor(request)
     web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
+    if body.ready is None:
+        code = "ready_invalid"
+        status, message = _AD_EDIT_ERRORS[code]
+        raise web.ApiError(status, code, message)
     try:
         ad = assets.mark_ready(
             web.conn, actor.org_id, brand_id, ad_id, actor=str(actor.user_id), ready=body.ready,
