@@ -67,7 +67,10 @@ def submit_pack(conn, org_id: str, brand_id: str, pack: dict) -> str:
     （`source_kind` ＋不解讀的 `source_ref`）、`name`、`context`、`summary`（摘要）、
     `sets`（每個：`name`／`source_ref`／`coordinates`／`product_id`／`style_key`／
     `required_outputs`＝`{產物類型: 需要選定的版本數}`／每種產出的生成參數放在
-    `request`）。`required_outputs` 只收 `copy`／`image_prompt`／`video_script`——
+    `request`）。`context` 可以帶 `origin_label`（例如「投放中心 → Beast Gummy｜9 月
+    新客開發 → Meta → 新客｜Broad」）跟 `origin_href`（app 內相對路徑）——兩者皆選填、
+    原樣存在既有的 `context_json` 欄位，工作檯不解讀，只在 `pack_detail`／`set_detail`
+    原樣吐回（F03-I07）。`required_outputs` 只收 `copy`／`image_prompt`／`video_script`——
     `free` 是退休的舊 part，出現在這裡一律 `ValueError("part_retired")`（那是自由創作
     用 `source_kind="free_job"` 標識自己，兩者不撞名）。一個 set 沒過驗證，這支整個
     不寫任何一列（見 `repository.submit_pack` 檔頭的完整錯誤代碼清單）。"""

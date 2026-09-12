@@ -66,6 +66,10 @@ export interface PackSetRow {
 export interface PackDetail extends PackCard {
   created_at: string;
   source_ref: Record<string, unknown>;
+  /** F03-I07: upstream-supplied, rendered verbatim — absent when the pack has no upstream
+   * origin (自由創作), in which case `source_label` is used instead. */
+  origin_label?: string | null;
+  origin_href?: string | null;
   meta: { platform: string | null; goal: string | null; sets_required: number };
   summary: Partial<{
     situation: string;
@@ -135,6 +139,9 @@ export interface SetDetail {
   /** F02-I17: `workbench_pack.source_kind` 原樣傳過來，工作檯不解讀——只用來決定要不要
    * 顯示「到檔期規劃」連結。 */
   source_kind: string;
+  /** F03-I07: same origin fields as `PackDetail`, rendered above the set name. */
+  origin_label?: string | null;
+  origin_href?: string | null;
   /** F02-I17: 任務包核准後鎖住選定，跟 `image_generation.reason` 同一條規則——文字由後端
    * 產生一次，前端只原樣顯示，不重講規則。 */
   lock: { locked: boolean; reason: string | null };

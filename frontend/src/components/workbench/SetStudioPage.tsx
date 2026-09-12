@@ -243,6 +243,9 @@ function SetHeader({ brandId, set }: { brandId: string; set: SetDetail }) {
     <div className="surface flex flex-col gap-3 p-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="flex flex-col gap-1">
+          {set.origin_label && (
+            <span className="text-xs text-muted-foreground">來源：{set.origin_label}</span>
+          )}
           <h1 className="text-xl font-semibold text-foreground">{set.name}</h1>
           <div className="flex flex-wrap items-center gap-1.5">
             {chips.map((c) => (
