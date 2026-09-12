@@ -9,6 +9,8 @@ import { getCampaign, type CampaignDetail } from "@/lib/adsApi";
 import { STATUS_LABEL, STATUS_TONE } from "./AdsHomePage";
 import { OverviewTab } from "./OverviewTab";
 import { StrategyTab } from "./StrategyTab";
+import { DeliveryTab } from "./DeliveryTab";
+import { AssetsTab } from "./AssetsTab";
 
 type WorkspaceTab = "overview" | "strategy" | "structure" | "assets" | "performance";
 
@@ -24,8 +26,8 @@ function periodLabel(c: CampaignDetail): string {
   return c.start_date && c.end_date ? `${c.start_date} ~ ${c.end_date}` : "投放期間尚未設定";
 }
 
-/** Campaign 五分頁工作區（F03-I14）：換掉 F03-I13 的占位骨架。總覽／策略兩分頁是真的內容；
- * 投放結構／素材／成效還沒補（各自的票補上），先用「誠實的空狀態＋下一步」頂著——
+/** Campaign 五分頁工作區（F03-I14／I15）：總覽／策略／投放結構／素材四分頁是真的內容；
+ * 成效還沒補（自己的票補上），先用「誠實的空狀態＋下一步」頂著——
  * 規則沿用 §4.2：分頁沒資料不做成禁用分頁。 */
 export function CampaignWorkspace({
   brandId,
@@ -101,6 +103,18 @@ export function CampaignWorkspace({
         <OverviewTab campaign={campaign} onChangeTab={changeTab} />
       ) : tab === "strategy" ? (
         <StrategyTab
+          brandId={brandId}
+          campaign={campaign}
+          onCampaignChange={(next) => setState({ status: "ready", campaign: next })}
+        />
+      ) : tab === "structure" ? (
+        <DeliveryTab
+          brandId={brandId}
+          campaign={campaign}
+          onCampaignChange={(next) => setState({ status: "ready", campaign: next })}
+        />
+      ) : tab === "assets" ? (
+        <AssetsTab
           brandId={brandId}
           campaign={campaign}
           onCampaignChange={(next) => setState({ status: "ready", campaign: next })}
