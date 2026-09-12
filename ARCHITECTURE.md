@@ -436,7 +436,13 @@ in `.work/features/F02.md`; where a prototype and an image differ, the image win
 4. **The upstream handoff contract.** An upstream module hands over one pack in one call,
    `submit_pack(conn, org_id, brand_id, pack)`; the workbench never learns how the upstream works
    and still only stores and compares `source_ref`, never interprets it. `pack` carries: `source`
-   (`source_kind` ＋ opaque `source_ref`), `name`, `context` (brand／product／campaign ids),
+   (`source_kind` ＋ opaque `source_ref`), `name`, `context` (brand／product／campaign ids, plus
+   the two optional display strings `origin_label` and `origin_href` — 2026-09-12: the upstream
+   supplies the origin line and the in-app path back to itself, both stored verbatim in the
+   existing `context_json` and returned verbatim by `pack_detail`／`set_detail`; the workbench
+   renders them and never parses them, so removing the upstream just removes the line.
+   `origin_href` is a router path *without* the `/app` basename, e.g.
+   `/brands/<brand>/ads/campaigns/<id>?tab=assets`, and both values must be plain strings),
    `summary` (the 摘要 shown read-only on the pack page: 情境／角度／風格／目標受眾／重點訊息／
    參考連結), `sets` (each: name, opaque `source_ref`, coordinates, product_id, style_key,
    `required_outputs` = `{產物類型: 需要選定的版本數}`, and the per-type generation counts), and
