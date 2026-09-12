@@ -568,11 +568,16 @@ visual reference for all three Ads V2 features is the prototype
    breakeven × 0.7. No spend history → 日預算 = target CPA × 每天想要的購買數 (最低 2 ／推薦 5 ／
    積極 10), labelled 冷啟動估算; with history → 近 30 天 CPA 中位數, scenarios ×0.6 ／×1 ／×1.6.
    Every number is editable; the AI only prefills. The 設定 page's 檔期日預算 card goes away.
+   After 採用策略 the **group daily budgets are the single source of truth**; the campaign row keeps
+   the adopted scenario amount as `budget_planned` for the record, and the total on screen is
+   `sum(daily) × days`, derived in one place.
 4. **Channel adapters, one interface.** `manual` (checklist with copy buttons → the user builds on
-   the platform → 配對 by exact name, the existing algorithm) and `simulated` (creates bound fake
-   entities and daily outcome rows; this is what drills and acceptance walk) ship now; the auto-Meta
-   adapter is a reserved third that reports 未接上. Nothing in the product ever asks the user to run
-   live ads to see a result.
+   the platform → 配對 by exact name, the existing algorithm) and `simulated` (publishing binds fake
+   entities **and** writes the daily outcome rows for the days already elapsed, so a walkthrough
+   reaches 成效 in the browser with no command line) ship now; the auto-Meta adapter is a reserved
+   third that reports 未接上. Binding columns live on all three levels (campaign, group, ad) because
+   the platform's name lookups are hierarchical, and the campaign node is bound first. Nothing in
+   the product ever asks the user to run live ads to see a result.
 5. **Every platform-bound change is an `ads_action` row** — what changed, before, after, who
    approved, sync state (`pending_manual` / `confirmed_manual` / `auto_synced`), platform ref,
    reversible by a reverse action. It replaces `campaign_period_budget_version`. Budget raises still
