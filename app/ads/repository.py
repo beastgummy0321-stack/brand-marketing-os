@@ -503,21 +503,56 @@ def set_ad_asset_ready(conn: _AnyConn, org_id: str, brand_id: str, ad_id: str, *
 
 def record_action(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str, *,
                    target_kind: str, target_id: str, kind: str, before: dict, after: dict,
-                   approved_by: str, sync_state: str = "pending_manual") -> dict:
+                   approved_by: str, sync_state: str = "pending_manual",
+                   platform_ref: str | None = None) -> dict:
     """每一次碰到已綁定節點的改動留一列 `ads_action`（§0「every platform-bound change is an
     ads_action row」）。`approved_at` 跟這一列同時寫——這裡的「核准」是使用者在畫面上按下
-    這次編輯的那一刻，不是另一支獨立的核准端點。"""
+    這次編輯的那一刻，不是另一支獨立的核准端點。`platform_ref`（F03-I09）：`bind` 寫的每一
+    列帶上比對到的平台 id，其餘 kind 維持 `None`。"""
     action_id = new_id("adx")
     conn.execute(
         "INSERT INTO ads_action (id, org_id, brand_id, campaign_id, target_kind, target_id,"
-        " kind, before_json, after_json, approved_by, approved_at, sync_state)"
-        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now(), %s)",
+        " kind, before_json, after_json, approved_by, approved_at, sync_state, platform_ref)"
+        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now(), %s, %s)",
         (action_id, org_id, brand_id, campaign_id, target_kind, target_id, kind,
-         jsonb(before), jsonb(after), approved_by, sync_state),
+         jsonb(before), jsonb(after), approved_by, sync_state, platform_ref),
     )
     row = conn.execute("SELECT * FROM ads_action WHERE id = %s", (action_id,)).fetchone()
     assert row is not None
     return dict(row)
+
+
+# -- F03-I09: 手動發布／配對 -- 綁定欄位落地、campaign 狀態 ready -> live --------------------
+
+
+def bind_campaign(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str, *,
+                   external_id: str, external_name: str, external_status: str | None) -> None:
+    conn.execute(
+        "UPDATE ads_campaign SET external_id = %s, external_name = %s, external_status = %s,"
+        " local_state = 'bound', bound_at = now()"
+        " WHERE org_id = %s AND brand_id = %s AND id = %s",
+        (external_id, external_name, external_status, org_id, brand_id, campaign_id),
+    )
+
+
+def bind_group(conn: _AnyConn, org_id: str, brand_id: str, group_id: str, *,
+               external_id: str, external_name: str, external_status: str | None) -> None:
+    conn.execute(
+        "UPDATE ads_delivery_group SET external_id = %s, external_name = %s,"
+        " external_status = %s, local_state = 'bound', bound_at = now()"
+        " WHERE org_id = %s AND brand_id = %s AND id = %s",
+        (external_id, external_name, external_status, org_id, brand_id, group_id),
+    )
+
+
+def bind_ad(conn: _AnyConn, org_id: str, brand_id: str, ad_id: str, *,
+            external_id: str, external_name: str, external_status: str | None) -> None:
+    conn.execute(
+        "UPDATE ads_ad SET external_id = %s, external_name = %s, external_status = %s,"
+        " local_state = 'bound', bound_at = now()"
+        " WHERE org_id = %s AND brand_id = %s AND id = %s",
+        (external_id, external_name, external_status, org_id, brand_id, ad_id),
+    )
 
 
 # -- app.core.cleanup 登記（品牌刪除連鎖清資料，ARCHITECTURE.md §4） -------------------------

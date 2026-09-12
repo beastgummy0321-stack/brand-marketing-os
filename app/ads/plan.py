@@ -39,11 +39,15 @@ def _days(start_date, end_date) -> int:
     return max((end_date - start_date).days + 1, 0)
 
 
-def _check_budget_ceiling(conn, org_id: str, brand_id: str, new_daily_total: float) -> None:
+def _check_budget_ceiling(
+    conn, org_id: str, brand_id: str, campaign_id: str, new_daily_total: float,
+) -> None:
     """沒有核准過就沒有煞車（跟 `app/schedule/tree_approval.py` 同一條「approval 可以是
-    None」慣例）；核准過就不准悄悄超過那次核准當時定的每日上限。"""
+    None」慣例）；核准過就不准悄悄超過那次核准當時定的每日上限。**煞車是逐 Campaign 的**
+    （F03-I09 修正）：傳 `scope_ref=campaign_id`，A 的核准不會拿來判 B 的預算。"""
     approval_row = approval_mod.latest(
         conn, org_id=org_id, brand_id=brand_id, scope_type=APPROVAL_SCOPE_TYPE,
+        scope_ref=campaign_id,
     )
     if approval_row is None:
         return
@@ -136,7 +140,7 @@ def adopt_strategy(conn, org_id: str, brand_id: str, campaign_id: str, *, actor:
     if days <= 0:
         raise ValueError("dates_required")
     daily_total = round(float(campaign["budget_planned"]) / days)
-    _check_budget_ceiling(conn, org_id, brand_id, daily_total)
+    _check_budget_ceiling(conn, org_id, brand_id, campaign_id, daily_total)
 
     vocabulary_rows = ads_repo.coordinate_vocabulary(conn, org_id, brand_id)
     vocab_lookup = _vocabulary_lookup(vocabulary_rows)
@@ -237,7 +241,7 @@ def update_group(conn, org_id: str, brand_id: str, group_id: str, updates: dict,
                 ads_repo.group_budget_total(conn, org_id, brand_id, group["campaign_id"])
                 - float(group["daily_budget"])
             )
-            _check_budget_ceiling(conn, org_id, brand_id, other_total + value)
+            _check_budget_ceiling(conn, org_id, brand_id, group["campaign_id"], other_total + value)
     for field in ("start_date", "end_date"):
         if field in updates and updates[field] is not None:
             updates[field] = _parse_date(updates[field])
@@ -270,7 +274,7 @@ def create_group(conn, org_id: str, brand_id: str, campaign_id: str, *, name: st
     if campaign is None:
         raise ValueError("campaign_unknown")
     other_total = ads_repo.group_budget_total(conn, org_id, brand_id, campaign_id)
-    _check_budget_ceiling(conn, org_id, brand_id, other_total + daily_budget)
+    _check_budget_ceiling(conn, org_id, brand_id, campaign_id, other_total + daily_budget)
     return ads_repo.create_group(
         conn, org_id, brand_id, campaign_id, channel_key="meta", name=name.strip(), role=role,
         daily_budget=daily_budget, start_date=_parse_date(start_date),

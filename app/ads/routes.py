@@ -12,7 +12,8 @@ from fastapi import APIRouter, Request
 from pydantic import BaseModel
 
 import app.shared.web as web
-from app.ads import assets, brief, plan, repository, strategy
+from app import workbench
+from app.ads import adapters, assets, brief, plan, repository, strategy
 
 router = APIRouter(prefix="/api/ads")
 
@@ -387,3 +388,122 @@ def set_asset_ready(request: Request, brand_id: str, ad_id: str, body: AssetRead
         status, message = _AD_EDIT_ERRORS.get(code, (400, code))
         raise web.ApiError(status, code, message) from exc
     return {"ad": ad}
+
+
+# -- F03-I09：手動發布／配對 -- 一個 describe 路徑，GET／POST 都用它（修正 3：POST 以前用
+# 沒有工作檯內容的原始 campaign_detail 建清單，跟 GET 看到的不是同一份） -----------------------
+
+def _enriched_campaign(conn, org_id: str, brand_id: str, campaign_id: str) -> dict | None:
+    """`campaign_detail` 再疊工作檯已採用的文案／圖片提示詞（`copy_text`／`image_prompt_text`，
+    只有工作檯真的產出過才有值，否則是 `None`）——`describe()` 的清單要印的是使用者已經選定
+    的內容，不是叫他自己去工作檯找。只透過工作檯既有的公開入口讀（`pack_for_source`／
+    `briefs_for_source`／`adopted_output`），不碰 `workbench_*` 表（跟 `app/ads/assets.py` 同一
+    條規矩）。"""
+    detail = repository.campaign_detail(conn, org_id, brand_id, campaign_id)
+    if detail is None:
+        return None
+    source_ref = {"ads_campaign_id": campaign_id}
+    pack = workbench.pack_for_source(conn, org_id, brand_id, assets.PACK_SOURCE_KIND, source_ref)
+    briefs_by_ad_id: dict = {}
+    if pack is not None:
+        for item in workbench.briefs_for_source(
+            conn, org_id, brand_id, assets.PACK_SOURCE_KIND, source_ref,
+        ):
+            ad_id = (item.get("source_ref") or {}).get("ads_ad_id")
+            if ad_id:
+                briefs_by_ad_id[ad_id] = item
+
+    for group in detail["groups"]:
+        for ad in group["ads"]:
+            ad["copy_text"] = None
+            ad["image_prompt_text"] = None
+            ad_brief = briefs_by_ad_id.get(ad["id"])
+            if ad_brief is None:
+                continue
+            copy_output = workbench.adopted_output(conn, org_id, brand_id, ad_brief["id"], "copy")
+            if copy_output is not None:
+                sets = (copy_output.get("body_json") or {}).get("sets")
+                if isinstance(sets, list) and sets and isinstance(sets[0], dict):
+                    ad["copy_text"] = sets[0].get("body")
+            image_output = workbench.adopted_output(
+                conn, org_id, brand_id, ad_brief["id"], "image_prompt",
+            )
+            if image_output is not None:
+                rendered = (image_output.get("body_json") or {}).get("rendered")
+                if isinstance(rendered, str):
+                    ad["image_prompt_text"] = rendered
+                elif isinstance(rendered, list) and rendered:
+                    first = rendered[0]
+                    if isinstance(first, str):
+                        ad["image_prompt_text"] = first
+                    elif isinstance(first, dict):
+                        ad["image_prompt_text"] = first.get("prompt")
+    return detail
+
+
+_PUBLISH_ERRORS = {
+    "campaign_unknown": (404, CAMPAIGN_UNKNOWN_MESSAGE),
+    "adapter_unknown": (400, "找不到這個發布方式。"),
+    "auto_meta_not_connected": (400, adapters.AUTO_META_NOT_CONNECTED_MESSAGE),
+    "no_groups_to_publish": (400, "這個活動還沒有投放組，先採用策略產出投放組再發布。"),
+}
+
+
+@router.get("/brands/{brand_id}/campaigns/{campaign_id}/publish")
+def get_publish(request: Request, brand_id: str, campaign_id: str, adapter: str = "manual"):
+    """F03-I09：發布方式清單 + 選定那個 adapter 的 `describe`。"""
+    actor = web.require_actor(request)
+    web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
+    enriched = _enriched_campaign(web.conn, actor.org_id, brand_id, campaign_id)
+    if enriched is None:
+        raise web.ApiError(404, "campaign_unknown", CAMPAIGN_UNKNOWN_MESSAGE)
+    chosen = adapters.get_adapter(adapter)
+    if chosen is None:
+        raise web.ApiError(400, "adapter_unknown", "找不到這個發布方式。")
+    return {
+        "adapters": adapters.ADAPTERS, "adapter": adapter, "describe": chosen.describe(enriched),
+    }
+
+
+class PublishRequest(BaseModel):
+    adapter: str = "manual"
+
+
+@router.post("/brands/{brand_id}/campaigns/{campaign_id}/publish")
+def publish_campaign(request: Request, brand_id: str, campaign_id: str, body: PublishRequest):
+    """F03-I09：決策 1「一般路徑顯示自動發布未接上，進階選單才是手動發布」——這裡只管落地，
+    哪個 adapter 由呼叫端選。回傳跟 GET 同一份 `describe`（修正 3：同一條 enrichment 路徑）。"""
+    actor = web.require_actor(request)
+    web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
+    chosen = adapters.get_adapter(body.adapter)
+    if chosen is None:
+        raise web.ApiError(400, "adapter_unknown", "找不到這個發布方式。")
+    try:
+        chosen.publish(web.conn, actor.org_id, brand_id, campaign_id, actor=str(actor.user_id))
+    except ValueError as exc:
+        code = str(exc)
+        status, message = _PUBLISH_ERRORS.get(code, (400, code))
+        raise web.ApiError(status, code, message) from exc
+    enriched = _enriched_campaign(web.conn, actor.org_id, brand_id, campaign_id)
+    if enriched is None:
+        raise web.ApiError(404, "campaign_unknown", CAMPAIGN_UNKNOWN_MESSAGE)
+    return chosen.describe(enriched)
+
+
+@router.post("/brands/{brand_id}/campaigns/{campaign_id}/bind")
+def bind_campaign(request: Request, brand_id: str, campaign_id: str):
+    """F03-I09：手動路徑的「配對」——精準名稱比對，逐節點由上往下（`app/ads/adapters/
+    manual.py::bind`）。"""
+    actor = web.require_actor(request)
+    web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
+    manual_adapter = adapters.get_adapter("manual")
+    assert manual_adapter is not None  # 這是固定登記過的 key，永遠找得到
+    try:
+        result = manual_adapter.bind(
+            web.conn, actor.org_id, brand_id, campaign_id, actor=str(actor.user_id),
+        )
+    except ValueError as exc:
+        code = str(exc)
+        status, message = _PUBLISH_ERRORS.get(code, (400, code))
+        raise web.ApiError(status, code, message) from exc
+    return result

@@ -490,3 +490,78 @@ export async function setAssetReady(
   const data = await parseJsonOrThrow<{ ad: AdRow }>(res, "更新素材就位狀態失敗。");
   return data.ad;
 }
+
+// -- F03-I09：手動發布／配對 -------------------------------------------------------------------
+
+export type AdapterKey = "manual" | "auto_meta" | "simulated";
+
+export interface AdapterOption {
+  key: AdapterKey;
+  label: string;
+}
+
+/** 逐節點清單的一列——campaign 節點打頭，然後每個投放組，再來是它底下每支廣告。 */
+export interface PublishChecklistField {
+  label: string;
+  value: string | number;
+  reason: string;
+}
+
+export interface PublishChecklistNode {
+  level: "campaign" | "group" | "ad";
+  id: string;
+  name: string;
+  fields: PublishChecklistField[];
+}
+
+/** `describe`：`message` 非 `null` 時（例如 `auto_meta` 的「自動發布未接上」）沒有清單可看。 */
+export interface PublishDescribe {
+  adapter: AdapterKey;
+  message: string | null;
+  checklist: PublishChecklistNode[];
+}
+
+export interface PublishGetResponse {
+  adapters: AdapterOption[];
+  adapter: AdapterKey;
+  describe: PublishDescribe;
+}
+
+export async function getPublish(
+  brandId: string,
+  campaignId: string,
+  adapter: AdapterKey = "manual",
+): Promise<PublishGetResponse> {
+  const res = await apiFetch(
+    `${BASE}/brands/${encodeURIComponent(brandId)}/campaigns/${encodeURIComponent(campaignId)}`
+    + `/publish?adapter=${encodeURIComponent(adapter)}`,
+  );
+  return parseJsonOrThrow<PublishGetResponse>(res, "讀取發布方式失敗。");
+}
+
+export async function publishCampaign(
+  brandId: string,
+  campaignId: string,
+  adapter: AdapterKey = "manual",
+): Promise<PublishDescribe> {
+  const res = await apiFetch(
+    `${BASE}/brands/${encodeURIComponent(brandId)}/campaigns/${encodeURIComponent(campaignId)}/publish`,
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ adapter }) },
+  );
+  return parseJsonOrThrow<PublishDescribe>(res, "發布失敗。");
+}
+
+/** `POST .../bind` — 手動路徑的「配對」：精準名稱比對，逐節點由上往下。`message` 是
+ * `null`（整批都配對成功）或一句話（哪些節點沒配上，§0「一次講完整批」）。 */
+export interface BindResponse {
+  message: string | null;
+  campaign: CampaignDetail;
+}
+
+export async function bindCampaign(brandId: string, campaignId: string): Promise<BindResponse> {
+  const res = await apiFetch(
+    `${BASE}/brands/${encodeURIComponent(brandId)}/campaigns/${encodeURIComponent(campaignId)}/bind`,
+    { method: "POST" },
+  );
+  return parseJsonOrThrow<BindResponse>(res, "配對失敗。");
+}
