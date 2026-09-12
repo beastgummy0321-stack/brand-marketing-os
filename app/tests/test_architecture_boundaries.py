@@ -501,6 +501,11 @@ LAYER_ORDER = [
                                 # app.schedule 前面
     "app.workbench",           # 票 workbench/02（ADR 0068 §2）：只依賴上面幾層，排在
                                 # app.schedule 前面——契約單向 schedule -> workbench。
+    "app.ads",                 # 投放中心，只依賴 app.core／app.shared，其餘走 legacy facade
+                                # （app.meta／app.brand_intelligence）；排在 app.schedule 前面
+                                # 是因為 ARCHITECTURE.md §2 規定 ads 不得 import app.schedule，
+                                # 這個順位讓那條規則被測試守住（manifest 的 may_depend_on 只有
+                                # workbench，而 workbench 已排在前面）
     "app.schedule",            # 票 07：檔期規劃最薄路徑，依賴 app.core／app.llm／app.shared／
                                 # app.brand_intelligence／app.meta；票 T2b（ADR 0053，
                                 # docs/contracts/schedule.md 2026-09-02）起也依賴
