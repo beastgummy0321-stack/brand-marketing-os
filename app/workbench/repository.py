@@ -781,6 +781,13 @@ def _pack_completion(pack_row: dict, sets_done: int, sets_total: int) -> tuple:
     return items, can_approve, blocking_text
 
 
+def _origin_fields(context: dict | None) -> tuple[str | None, str | None]:
+    """F03-I07: `pack["context"]`'s two upstream-supplied, verbatim-rendered keys — the
+    workbench never interprets them, only stores and returns them (ARCHITECTURE.md §5.4)."""
+    context = context or {}
+    return context.get("origin_label"), context.get("origin_href")
+
+
 def pack_detail(conn: _AnyConn, org_id: str, brand_id: str, pack_id: str) -> dict | None:
     """`GET /packs/{p}`. `.work/features/F02.md` "Shapes": 摘要 only renders the keys 檔期規劃
     actually fills（情境／重點訊息 today）— empty keys are omitted, never placeholder text."""
@@ -796,6 +803,7 @@ def pack_detail(conn: _AnyConn, org_id: str, brand_id: str, pack_id: str) -> dic
     detail = dict(card)
     detail["created_at"] = row["created_at"]
     detail["source_ref"] = row["source_ref"]
+    detail["origin_label"], detail["origin_href"] = _origin_fields(context)
     detail["meta"] = {
         "platform": context.get("platform"), "goal": context.get("goal"),
         "sets_required": card["sets_total"],
@@ -1178,10 +1186,12 @@ def set_detail(conn: _AnyConn, org_id: str, brand_id: str, set_id: str) -> dict 
         "style": style["label"] if style else brief["style_key"],
         "size": coordinates.get("format"),
     }
+    origin_label, origin_href = _origin_fields(pack_row["context_json"])
     return {
         "id": brief["id"], "pack_id": pack_row["id"], "pack_name": pack_row["name"],
         "name": brief["name"], "status": set_state(required_outputs, versions_by_part),
         "source_kind": pack_row["source_kind"],
+        "origin_label": origin_label, "origin_href": origin_href,
         "lock": {
             "locked": pack_row["approved_at"] is not None,
             "reason": PACK_APPROVED_MESSAGE if pack_row["approved_at"] is not None else None,
