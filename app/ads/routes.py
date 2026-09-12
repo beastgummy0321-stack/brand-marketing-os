@@ -12,11 +12,13 @@ from fastapi import APIRouter, Request
 from pydantic import BaseModel
 
 import app.shared.web as web
-from app.ads import brief, repository, strategy
+from app.ads import brief, plan, repository, strategy
 
 router = APIRouter(prefix="/api/ads")
 
 CAMPAIGN_UNKNOWN_MESSAGE = "找不到這個 Campaign。"
+GROUP_UNKNOWN_MESSAGE = "找不到這個投放組。"
+AD_UNKNOWN_MESSAGE = "找不到這支廣告。"
 
 
 @router.get("/brands/{brand_id}/campaigns")
@@ -163,3 +165,170 @@ def select_strategy_scenario(
         status, message = _SELECT_SCENARIO_ERRORS.get(code, (400, code))
         raise web.ApiError(status, code, message) from exc
     return {"campaign": campaign}
+
+
+# -- F03-I06: 採用策略 -> 投放組／廣告，以及後續編輯 ------------------------------------------
+
+_PLAN_ERRORS = {
+    "campaign_unknown": (404, CAMPAIGN_UNKNOWN_MESSAGE),
+    "plan_already_adopted": (400, "這個 Campaign 已經展開過投放結構，不能重新展開。"),
+    "strategy_not_adopted": (400, "請先採用一個預算情境，才能展開投放結構。"),
+    "dates_required": (400, brief.DATES_REQUIRED_MESSAGE),
+    "budget_exceeds_approval": (400, plan.BUDGET_EXCEEDS_APPROVAL_MESSAGE),
+    "delivery_plan_failed": (502, plan.PLAN_FAILED_MESSAGE),
+}
+
+
+@router.post("/brands/{brand_id}/campaigns/{campaign_id}/plan")
+def adopt_strategy(request: Request, brand_id: str, campaign_id: str):
+    """F03-I06：把已採用的策略角色分配展開成投放組／廣告，草稿 -> `ready`。"""
+    actor = web.require_actor(request)
+    web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
+    try:
+        campaign = plan.adopt_strategy(
+            web.conn, actor.org_id, brand_id, campaign_id, actor=str(actor.user_id),
+        )
+    except ValueError as exc:
+        code = str(exc)
+        status, message = _PLAN_ERRORS.get(code, (400, code))
+        raise web.ApiError(status, code, message) from exc
+    return {"campaign": campaign}
+
+
+_GROUP_EDIT_ERRORS = {
+    "group_unknown": (404, GROUP_UNKNOWN_MESSAGE),
+    "campaign_unknown": (404, CAMPAIGN_UNKNOWN_MESSAGE),
+    "name_unknown": (400, "名稱不能是空白。"),
+    "role_unknown": (400, "角色只能是新客／再行銷／探索。"),
+    "daily_budget_invalid": (400, "日預算必須大於 0。"),
+    "budget_exceeds_approval": (400, plan.BUDGET_EXCEEDS_APPROVAL_MESSAGE),
+    "group_bound": (400, "這個投放組已經綁定平台，不能直接刪除。"),
+}
+
+
+class CreateGroupRequest(BaseModel):
+    name: str
+    role: str
+    daily_budget: float
+    start_date: str | None = None
+    end_date: str | None = None
+
+
+@router.post("/brands/{brand_id}/campaigns/{campaign_id}/groups")
+def create_group(
+    request: Request, brand_id: str, campaign_id: str, body: CreateGroupRequest,
+):
+    actor = web.require_actor(request)
+    web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
+    try:
+        group = plan.create_group(
+            web.conn, actor.org_id, brand_id, campaign_id, name=body.name, role=body.role,
+            daily_budget=body.daily_budget, start_date=body.start_date, end_date=body.end_date,
+        )
+    except ValueError as exc:
+        code = str(exc)
+        status, message = _GROUP_EDIT_ERRORS.get(code, (400, code))
+        raise web.ApiError(status, code, message) from exc
+    return {"group": group}
+
+
+class PatchGroupRequest(BaseModel):
+    name: str | None = None
+    role: str | None = None
+    daily_budget: float | None = None
+    start_date: str | None = None
+    end_date: str | None = None
+
+
+@router.patch("/brands/{brand_id}/groups/{group_id}")
+def patch_group(request: Request, brand_id: str, group_id: str, body: PatchGroupRequest):
+    actor = web.require_actor(request)
+    web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
+    updates = body.model_dump(exclude_unset=True)
+    try:
+        group = plan.update_group(
+            web.conn, actor.org_id, brand_id, group_id, updates, actor=str(actor.user_id),
+        )
+    except ValueError as exc:
+        code = str(exc)
+        status, message = _GROUP_EDIT_ERRORS.get(code, (400, code))
+        raise web.ApiError(status, code, message) from exc
+    return {"group": group}
+
+
+@router.delete("/brands/{brand_id}/groups/{group_id}")
+def delete_group(request: Request, brand_id: str, group_id: str):
+    actor = web.require_actor(request)
+    web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
+    try:
+        plan.delete_group(web.conn, actor.org_id, brand_id, group_id)
+    except ValueError as exc:
+        code = str(exc)
+        status, message = _GROUP_EDIT_ERRORS.get(code, (400, code))
+        raise web.ApiError(status, code, message) from exc
+    return {"ok": True}
+
+
+_AD_EDIT_ERRORS = {
+    "ad_unknown": (404, AD_UNKNOWN_MESSAGE),
+    "group_unknown": (404, GROUP_UNKNOWN_MESSAGE),
+    "name_unknown": (400, "名稱不能是空白。"),
+    "coordinates_incomplete": (400, "七個座標維度都要填，不能留空。"),
+    "ad_bound": (400, "這支廣告已經綁定平台，不能直接刪除。"),
+}
+
+
+class CreateAdRequest(BaseModel):
+    group_id: str
+    name: str
+    coordinates: dict
+
+
+@router.post("/brands/{brand_id}/campaigns/{campaign_id}/ads")
+def create_ad(request: Request, brand_id: str, campaign_id: str, body: CreateAdRequest):
+    actor = web.require_actor(request)
+    web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
+    try:
+        ad = plan.create_ad(
+            web.conn, actor.org_id, brand_id, campaign_id, body.group_id, name=body.name,
+            coordinates=body.coordinates,
+        )
+    except ValueError as exc:
+        code = str(exc)
+        status, message = _AD_EDIT_ERRORS.get(code, (400, code))
+        raise web.ApiError(status, code, message) from exc
+    return {"ad": ad}
+
+
+class PatchAdRequest(BaseModel):
+    name: str | None = None
+    coordinates: dict | None = None
+
+
+@router.patch("/brands/{brand_id}/ads/{ad_id}")
+def patch_ad(request: Request, brand_id: str, ad_id: str, body: PatchAdRequest):
+    actor = web.require_actor(request)
+    web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
+    updates = body.model_dump(exclude_unset=True)
+    try:
+        ad = plan.update_ad(
+            web.conn, actor.org_id, brand_id, ad_id, updates, actor=str(actor.user_id),
+        )
+    except ValueError as exc:
+        code = str(exc)
+        status, message = _AD_EDIT_ERRORS.get(code, (400, code))
+        raise web.ApiError(status, code, message) from exc
+    return {"ad": ad}
+
+
+@router.delete("/brands/{brand_id}/ads/{ad_id}")
+def delete_ad(request: Request, brand_id: str, ad_id: str):
+    actor = web.require_actor(request)
+    web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
+    try:
+        plan.delete_ad(web.conn, actor.org_id, brand_id, ad_id)
+    except ValueError as exc:
+        code = str(exc)
+        status, message = _AD_EDIT_ERRORS.get(code, (400, code))
+        raise web.ApiError(status, code, message) from exc
+    return {"ok": True}
