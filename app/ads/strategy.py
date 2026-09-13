@@ -12,8 +12,9 @@ of what the user adopted — after 採用策略 the group daily budgets are the 
 ever recomputes `budget_planned` from them (F03.md "One source of truth for money").
 """
 
-from app.ads import budget
+from app.ads import budget, judgment
 from app.ads import repository as ads_repo
+from app.brand_intelligence import benchmarks
 from app.brand_intelligence import repository as bi_repo
 from app.core import rule_cards
 from app.core import settings as coresettings
@@ -131,6 +132,8 @@ def _products_section(
             basis.append({
                 "product_id": product_id, "price": price,
                 "effective_from": economics.get("effective_from"), "stale": stale,
+                "assumptions": list(economics.get("assumptions_json") or []),
+                "sell_way_name": display,
             })
         sell_way_overflow = len(sell_way_ids) - _MAX_SELL_WAYS
         sell_way_text = "／".join(sell_way_pieces)
@@ -141,6 +144,30 @@ def _products_section(
 
     text = "【商品】\n" + "\n".join(lines) if lines else "【商品】（沒有可用的價格資料）"
     return text, basis
+
+
+# product_economics.assumptions_json 的欄位名 -> app.brand_intelligence.benchmarks 的 key
+# （ruling 17：假設值的名稱與百分比一律從那份對照表取，這裡不重寫一份文字）。
+_ASSUMPTION_BENCHMARK_KEYS = {
+    "cost": "gross_margin", "shipping": "shipping_cost", "close_rate": "close_rate",
+}
+
+
+def _assumption_note(prices_basis: list[dict]) -> str | None:
+    """一個都沒有假設值就回 `None`（呼叫端不落地這個鍵）；否則印「用的是假設：<賣法>的
+    <label、label>——之後用真實數字取代」，名稱與百分比全部來自 `benchmarks.get()`。"""
+    parts = []
+    for row in prices_basis:
+        fields = row.get("assumptions") or []
+        labels = [
+            benchmarks.get(_ASSUMPTION_BENCHMARK_KEYS[f])["label"]
+            for f in fields if f in _ASSUMPTION_BENCHMARK_KEYS
+        ]
+        if labels:
+            parts.append(f"{row.get('sell_way_name') or row['product_id']}的" + "、".join(labels))
+    if not parts:
+        return None
+    return f"用的是假設：{'；'.join(parts)}——之後用真實數字取代。"
 
 
 def _learnings_section(conn, brand_id: str) -> tuple[str, list[dict]]:
@@ -262,10 +289,15 @@ def generate(conn, org_id: str, brand_id: str, campaign_id: str, *, actor: str) 
     products_text, prices_basis = _products_section(conn, org_id, brand_id, product_ids)
     learnings_text, learnings_basis = _learnings_section(conn, brand_id)
 
+    brand = bi_repo.get_brand(conn, brand_id)
+    assert brand is not None  # 已經讀得到這個品牌的 campaign，品牌本身一定還在
+    labels = judgment.conversion_labels(brand.get("conversion_goal"))
+
     history = ads_repo.budget_history(conn, org_id, brand_id)
     days = _days(campaign["start_date"], campaign["end_date"])
     scenario_result = budget.scenarios(
         conn, org_id, brand_id, product_ids=product_ids, days=days, history=history,
+        conversion_label=labels["conversion"],
     )
     scenarios_text = _scenarios_section(scenario_result)
 
@@ -274,8 +306,6 @@ def generate(conn, org_id: str, brand_id: str, campaign_id: str, *, actor: str) 
         + [p["product_id"] for p in prices_basis]
         + [row["id"] for row in learnings_basis]
     )
-    brand = bi_repo.get_brand(conn, brand_id)
-    assert brand is not None  # 已經讀得到這個品牌的 campaign，品牌本身一定還在
 
     department_text = DEPARTMENT_PATH.read_text(encoding="utf-8")
     prompt = (
@@ -323,6 +353,9 @@ def generate(conn, org_id: str, brand_id: str, campaign_id: str, *, actor: str) 
         "brand_facts": facts_basis, "prices": prices_basis, "learnings": learnings_basis,
         "estimated_fields": estimated_fields,
     }
+    assumption_note = _assumption_note(prices_basis)
+    if assumption_note is not None:
+        basis["assumption_note"] = assumption_note
     budget_basis_json = {"strategy": strategy_payload, "scenarios": scenario_result, "basis": basis}
     ads_repo.save_strategy(conn, org_id, brand_id, campaign_id, budget_basis_json=budget_basis_json)
     detail = ads_repo.campaign_detail(conn, org_id, brand_id, campaign_id)

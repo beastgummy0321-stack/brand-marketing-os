@@ -1,8 +1,12 @@
 """app/ads/judgment.py — F04-I08: 首頁四塊與 Campaign 清單頁要印的每一句判斷，全部在這裡組成
 字串，隨 payload 出去、瀏覽器原樣印（ARCHITECTURE.md §6.1 第 10 條）。純函式：沒有 SQL、沒有
 LLM、沒有 `datetime.now()`（今天的日期一律由呼叫端傳進來，同 `app/core/settings.py::
-today_for_org` 的慣例）。私有：只有 `repository.py`／`routes.py` import 這個檔案
-（container contract §1）。
+today_for_org` 的慣例）。私有：`app/ads/` 自己的檔案（`repository.py`／`routes.py`／
+`closeout.py`／`strategy.py`）import 這個檔案（container contract §1），外部只透過
+`app.ads.__init__` 的公開入口。
+
+`conversion_labels`（F05-I12）：這個品牌的「購買」該叫什麼——「每筆名單成本」與 CPA 是同一個
+算式（花費÷轉換數）的兩個名字，不新增 `success_metric` 的值（ARCHITECTURE.md §8 第 4 條）。
 
 `campaign_judgment` 吃的是「一整列 campaign row，外加呼叫端算好的 `budget_total`／`spend`」，
 不是重新去 DB 查——`repository.py` 已經把這兩個數字算出來一次（`_budget_total`／
@@ -155,6 +159,24 @@ def brand_headline(counts: dict[str, int]) -> dict:
     else:
         parts.append("目前沒有需要你決定的事")
     return {"text": text, "facts": "・".join(parts)}
+
+
+# F05-I12：「每筆名單成本」與 CPA 是同一個算式（花費÷轉換數）的兩個名字——不新增
+# success_metric 的值，只換 label（§8 第 4 條）。`purchase`／`None`／未知值一律落在購買這行。
+_CONVERSION_LABELS = {
+    "purchase": {"conversion": "購買", "count": "購買數", "cpa": "每次購買成本"},
+    "lead": {"conversion": "名單", "count": "名單數", "cpa": "每筆名單成本"},
+    "booking": {"conversion": "預約", "count": "預約數", "cpa": "每次預約成本"},
+    "awareness": {"conversion": "成效", "count": "成效次數", "cpa": "每次成效成本"},
+}
+
+
+def conversion_labels(conversion_goal: str | None) -> dict:
+    """品牌 `conversion_goal` -> 這個品牌的投放中心該用哪三個詞。未知值退回購買（原本
+    F05 之前唯一的行為，不是猜——沒設定就是還沒設定，購買是安全的預設印法）。"""
+    if conversion_goal is None:
+        return _CONVERSION_LABELS["purchase"]
+    return _CONVERSION_LABELS.get(conversion_goal, _CONVERSION_LABELS["purchase"])
 
 
 def _format_field_value(key: str, value: Any) -> str:

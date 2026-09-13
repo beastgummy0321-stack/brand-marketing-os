@@ -154,5 +154,34 @@ class AdsHomeRouteTest(unittest.TestCase):
         self.assertEqual(home["counts"]["needs_decision"], 0)
 
 
+class ConversionLabelsTest(unittest.TestCase):
+    """F05-I12：「每筆名單成本」與 CPA 是同一個算式的兩個名字——只換 label，不新增
+    `success_metric` 的值（§8 第 4 條）。"""
+
+    def test_purchase_goal(self):
+        labels = judgment.conversion_labels("purchase")
+        self.assertEqual(labels, {"conversion": "購買", "count": "購買數", "cpa": "每次購買成本"})
+
+    def test_lead_goal(self):
+        labels = judgment.conversion_labels("lead")
+        self.assertEqual(labels, {"conversion": "名單", "count": "名單數", "cpa": "每筆名單成本"})
+
+    def test_booking_goal(self):
+        labels = judgment.conversion_labels("booking")
+        self.assertEqual(labels, {"conversion": "預約", "count": "預約數", "cpa": "每次預約成本"})
+
+    def test_awareness_goal(self):
+        labels = judgment.conversion_labels("awareness")
+        self.assertEqual(labels, {"conversion": "成效", "count": "成效次數", "cpa": "每次成效成本"})
+
+    def test_none_falls_back_to_purchase(self):
+        self.assertEqual(judgment.conversion_labels(None), judgment.conversion_labels("purchase"))
+
+    def test_unknown_string_falls_back_to_purchase(self):
+        self.assertEqual(
+            judgment.conversion_labels("something_new"), judgment.conversion_labels("purchase"),
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

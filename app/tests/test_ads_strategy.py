@@ -236,6 +236,37 @@ class StalePriceTest(StrategyTestBase):
         self.assertTrue(prices[0]["stale"])
 
 
+class AssumptionNoteTest(StrategyTestBase):
+    """F05-I12：使用者在精靈點過「不知道」的數字，策略頁的依據要看得出是假設值——句子由
+    程式組，名稱與百分比一律從 `app.brand_intelligence.benchmarks` 取。"""
+
+    def test_economics_with_assumptions_yields_a_note_naming_them(self):
+        bi_repo.save_product_economics(
+            web.conn, self.brand_id, self.product["id"], actor=ACTOR,
+            selling_price=1000, currency="TWD", confirmed_by=ACTOR,
+            unit_variable_cost=300, shipping_cost=100, close_rate=0.2,
+            assumptions=["close_rate"],
+        )
+        self.campaign = self._create_campaign()
+        strategy.PROVIDER = _fake(_VALID_REPLY)
+
+        detail = self._generate()
+
+        basis = detail["budget_basis_json"]["basis"]
+        self.assertIn("assumption_note", basis)
+        self.assertIn("假設", basis["assumption_note"])
+        self.assertIn("成交率假設 20%", basis["assumption_note"])
+
+    def test_economics_without_assumptions_has_no_note(self):
+        self.campaign = self._create_campaign()
+        strategy.PROVIDER = _fake(_VALID_REPLY)
+
+        detail = self._generate()
+
+        basis = detail["budget_basis_json"]["basis"]
+        self.assertNotIn("assumption_note", basis)
+
+
 _BAD_SUM_REPLY = json.dumps({
     "allocation": [
         {"role": "new", "label": "新客", "pct": 10, "rationale": "x"},
