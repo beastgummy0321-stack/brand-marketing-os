@@ -143,6 +143,21 @@ describe("OverviewTab（F03-I23）", () => {
     expect(screen.queryByText(/daily_budget/)).toBeNull();
   });
 
+  it("labels 是名單時：Campaign 目標與提示句改印「名單」「每筆名單成本」，不是寫死的「購買」", () => {
+    render(
+      <OverviewTab
+        campaign={campaign({
+          success_metric: "cpa", success_target: 300,
+          labels: { conversion: "名單", count: "名單數", cpa: "每筆名單成本" },
+        })}
+        onChangeTab={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText(/每筆名單成本 目標/)).toBeTruthy();
+    expect(screen.getByText(/名單、每筆名單成本、ROAS 等成效數字/)).toBeTruthy();
+  });
+
   it("佔位卡與需要你決定的空狀態都在畫面上", () => {
     render(<OverviewTab campaign={campaign()} onChangeTab={vi.fn()} />);
 

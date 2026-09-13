@@ -86,25 +86,29 @@ def _economics_for(
 
 
 def scenarios(conn, org_id, brand_id, *, product_ids: list[str] | None, days: int,
-              history: dict | None) -> dict:
+              history: dict | None, conversion_label: str = "購買") -> dict:
     """Three budget scenarios for the strategy tab. `history` truthy (has a `last_daily_budget`)
     means this brand has settled spend to scale from; otherwise cold start applies (ruling 4: "沒
-    投放過" falls back to target-CPA x purchase-count, even if `history` is passed but empty)."""
+    投放過" falls back to target-CPA x purchase-count, even if `history` is passed but empty).
+    `conversion_label` 是這個品牌的「購買」該叫什麼（`judgment.conversion_labels()["conversion"]`）
+    ——只換冷啟動 caption 裡的名詞，算式一個字都不動。"""
     if history and history.get("last_daily_budget") is not None:
         return _history_scenarios(history, days)
     economics, product_id = _economics_for(conn, brand_id, product_ids)
     target = target_cpa(breakeven_cpa(economics))
-    return _cold_start_scenarios(target, product_id, days)
+    return _cold_start_scenarios(target, product_id, days, conversion_label)
 
 
-def _cold_start_scenarios(target: float | None, product_id: str | None, days: int) -> dict:
+def _cold_start_scenarios(
+    target: float | None, product_id: str | None, days: int, conversion_label: str,
+) -> dict:
     scenario_rows = []
     for key, label, events in _COLD_START_EVENTS:
         daily = _round_money(target * events) if target is not None else None
         total = _round_money(daily * days) if daily is not None and days else None
         scenario_rows.append({
             "key": key, "label": label, "daily": daily, "total": total,
-            "caption": f"冷啟動估算：目標 CPA x 每天 {events} 個購買",
+            "caption": f"冷啟動估算：目標 CPA x 每天 {events} 筆{conversion_label}",
         })
     basis = {
         "mode": "cold_start", "product_id": product_id, "target_cpa": target,

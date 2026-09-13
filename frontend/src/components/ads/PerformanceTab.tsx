@@ -20,11 +20,20 @@ import {
   getPerformance,
   ingestOutcome,
   type CampaignDetail,
+  type CampaignLabels,
   type CampaignPerformance,
   type SuccessMetric,
 } from "@/lib/adsApi";
 
-const METRIC_LABELS: Record<SuccessMetric, string> = { cpa: "CPA", roas: "ROAS", purchases: "購買數" };
+// F05-I12：後端一律回傳 `campaign.labels`；預設值只在舊測試 fixture 沒帶這個欄位時頂上
+// （同 `OverviewTab.tsx`／`StrategyTab.tsx` 的先例）。
+const DEFAULT_LABELS: CampaignLabels = { conversion: "購買", count: "購買數", cpa: "每次購買成本" };
+
+function metricLabel(metric: SuccessMetric, labels: CampaignLabels): string {
+  if (metric === "cpa") return labels.cpa;
+  if (metric === "purchases") return labels.count;
+  return "ROAS";
+}
 
 /** Meta 來源的購買／CPA 這版永遠未追蹤（§0「Meta purchases are 未追蹤 for the whole of F03」）
  * ——跟一般數字的「累積中」（之後會有）是不同的事實，所以不能借 format.ts 現成的
@@ -57,7 +66,7 @@ interface AdsVerdictJson {
 function learningSentence(c: CampaignDetail): string | null {
   if (!c.verdict) return null;
   const vj = c.verdict_json as AdsVerdictJson;
-  const label = METRIC_LABELS[c.success_metric] ?? c.success_metric;
+  const label = metricLabel(c.success_metric, c.labels ?? DEFAULT_LABELS);
   const sample = vj.sample_bucket ?? "";
   if (c.verdict === "看不出") {
     return `「${c.name}」這次投放${vj.missing ?? ""}（樣本${sample}），${label} 目標暫時看不出達成與否。`;
@@ -150,6 +159,7 @@ export function PerformanceTab({
   onCampaignChange: (campaign: CampaignDetail) => void;
 }) {
   const published = c.status === "live" || c.status === "ended" || c.status === "closed";
+  const labels = c.labels ?? DEFAULT_LABELS;
   const today = new Date().toLocaleDateString("sv-SE");
 
   const [state, setState] = useState<
@@ -204,7 +214,7 @@ export function PerformanceTab({
     return (
       <EmptyState
         title="還沒有成效資料"
-        description="Campaign 上線後，這裡會顯示每日花費、購買與 ROAS 趨勢，以及結案時的判定。"
+        description={`Campaign 上線後，這裡會顯示每日花費、${labels.conversion}與 ROAS 趨勢，以及結案時的判定。`}
       />
     );
   }
@@ -218,7 +228,7 @@ export function PerformanceTab({
       ) : state.status === "error" ? (
         <EmptyState title="讀取失敗" description={state.message} onAction={load} actionLabel="重新載入" />
       ) : (
-        <PerformanceReady data={state.data} refreshing={refreshing} onRefresh={() => void handleRefresh()} />
+        <PerformanceReady data={state.data} labels={labels} refreshing={refreshing} onRefresh={() => void handleRefresh()} />
       )}
 
       {(c.status === "live" || c.status === "ended") && (
@@ -270,10 +280,12 @@ export function PerformanceTab({
 
 function PerformanceReady({
   data,
+  labels,
   refreshing,
   onRefresh,
 }: {
   data: CampaignPerformance;
+  labels: CampaignLabels;
   refreshing: boolean;
   onRefresh: () => void;
 }) {
@@ -282,8 +294,8 @@ function PerformanceReady({
     <>
       <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-6">
         <Kpi label="花費" value={formatCurrency(t.spend)} caption="累計花費・平台回報" />
-        <Kpi label="購買" value={fmtPurchases(t.purchases)} caption="累計購買・平台回報" />
-        <Kpi label="CPA" value={fmtCpa(t.cpa)} caption="花費 ÷ 購買" />
+        <Kpi label={labels.count} value={fmtPurchases(t.purchases)} caption={`累計${labels.conversion}・平台回報`} />
+        <Kpi label="CPA" value={fmtCpa(t.cpa)} caption={`花費 ÷ ${labels.conversion}`} />
         <Kpi label="ROAS" value={formatMetaRoas(t.roas_conservative)} caption={`保守值・樂觀 ${formatMetaRoas(t.roas)}`} />
         <Kpi label="點擊率" value={formatPercent(t.ctr)} caption="累計點擊 ÷ 曝光" />
         <Kpi label="曝光" value={formatCount(t.impressions)} caption="累計曝光・平台回報" />
@@ -324,7 +336,7 @@ function PerformanceReady({
               <tr>
                 <th className="px-3 py-2 font-medium">投放組</th>
                 <th className="px-3 py-2 font-medium">花費</th>
-                <th className="px-3 py-2 font-medium">購買</th>
+                <th className="px-3 py-2 font-medium">{labels.count}</th>
                 <th className="px-3 py-2 font-medium">CPA</th>
                 <th className="px-3 py-2 font-medium">ROAS（保守／樂觀）</th>
                 <th className="px-3 py-2 font-medium">點擊率</th>
@@ -411,7 +423,7 @@ function VerdictCard({ brandId, campaign: c }: { brandId: string; campaign: Camp
         <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
           <div className="field-card">
             <div className="text-xs text-muted-foreground">判定指標</div>
-            <div className="text-sm font-semibold">{METRIC_LABELS[c.success_metric] ?? c.success_metric}</div>
+            <div className="text-sm font-semibold">{metricLabel(c.success_metric, c.labels ?? DEFAULT_LABELS)}</div>
           </div>
           <div className="field-card">
             <div className="text-xs text-muted-foreground">目標</div>

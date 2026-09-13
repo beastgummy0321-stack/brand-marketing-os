@@ -130,4 +130,15 @@ describe("PerformanceTab 結案卡片（F04-I23）", () => {
     expect(screen.queryByText("立即結案")).toBeNull();
     expect(screen.getByText("還沒有成效資料")).toBeTruthy();
   });
+
+  it("labels 是名單時：draft 空狀態說明與已發布的 KPI 標籤都改印「名單」，不是寫死的「購買」", async () => {
+    const labels = { conversion: "名單", count: "名單數", cpa: "每筆名單成本" };
+    renderTab(campaign({ status: "draft", labels }));
+    expect(screen.getByText(/每日花費、名單與 ROAS 趨勢/)).toBeTruthy();
+
+    renderTab(campaign({ status: "live", end_date: "2099-12-31", labels }));
+    await screen.findByText("花費 ÷ 名單");
+    expect(screen.getAllByText("名單數").length).toBeGreaterThan(0);
+    expect(screen.getByText("花費 ÷ 名單")).toBeTruthy();
+  });
 });

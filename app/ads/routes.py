@@ -29,6 +29,7 @@ from app.ads import (
     strategy,
 )
 from app.ads.adapters import simulated
+from app.brand_intelligence import repository as bi_repo
 from app.core import settings as coresettings
 
 router = APIRouter(prefix="/api/ads")
@@ -38,14 +39,22 @@ GROUP_UNKNOWN_MESSAGE = "找不到這個投放組。"
 AD_UNKNOWN_MESSAGE = "找不到這支廣告。"
 
 
+def _conversion_labels(brand_id: str) -> dict:
+    """F05-I12：每個 Campaign payload 跟著出去的一份對照表——畫面上的「購買」／「名單」等
+    詞從這個品牌自己的 `conversion_goal` 來，不寫死（`app.ads.judgment.conversion_labels`）。"""
+    brand = bi_repo.get_brand(web.conn, brand_id)
+    return judgment.conversion_labels(brand.get("conversion_goal") if brand else None)
+
+
 def _with_readiness(actor, brand_id: str, campaign: dict | None) -> dict | None:
-    """每一條回 Campaign 的路由都跟 GET 回同一個形狀（`campaign_detail` + `asset_readiness`）。
-    少一個欄位，瀏覽器就是白畫面（F04-I24，演練四）。"""
+    """每一條回 Campaign 的路由都跟 GET 回同一個形狀（`campaign_detail` + `asset_readiness`
+    + `labels`）。少一個欄位，瀏覽器就是白畫面（F04-I24，演練四）。"""
     if campaign is None:
         return None
     campaign["asset_readiness"] = assets.readiness_summary(
         assets.readiness(web.conn, actor.org_id, brand_id, campaign["id"]),
     )
+    campaign["labels"] = _conversion_labels(brand_id)
     return campaign
 
 
@@ -70,6 +79,9 @@ def list_campaigns(request: Request, brand_id: str):
     actor = web.require_actor(request)
     web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
     campaigns = repository.list_campaigns(web.conn, actor.org_id, brand_id)
+    labels = _conversion_labels(brand_id)
+    for c in campaigns:
+        c["labels"] = labels
     return {"campaigns": campaigns}
 
 
@@ -85,6 +97,9 @@ def get_home(request: Request, brand_id: str):
     actor = web.require_actor(request)
     web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
     campaigns = repository.list_campaigns(web.conn, actor.org_id, brand_id)
+    labels = _conversion_labels(brand_id)
+    for c in campaigns:
+        c["labels"] = labels
     counts = {
         "running": sum(1 for c in campaigns if c["status"] == "live"),
         "upcoming": sum(1 for c in campaigns if c["status"] in ("draft", "ready")),
