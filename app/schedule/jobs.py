@@ -687,12 +687,17 @@ def schedule_diagnosis(org_id: str, brand_id: str) -> None:
         round_id = new_id("dgr")
         raw_outputs: list[dict] = []
         row = None
+        # 票 F04-I05：三個 lens 共用的前四段（methodology／compressed／reminders／budget）
+        # 逐字相同，只算一次（本來每一圈重算），標上 cache_control 讓 Anthropic 第二三次
+        # 用讀取價（0.1 倍）取代重新輸入——這是全站唯一一個「同樣的 bytes 在幾秒內故意送三次」
+        # 的呼叫點；其他呼叫點每次 prompt 都不同，加快取只會多付 25% 寫入費（ARCHITECTURE.md §1）。
+        # `app/llm/providers.py::_build_codex_prompt` 已經會把 list content 攤平、只取
+        # type == "text" 的 block，cache_control 這個鍵它看都不看，本機 codex 線路不受影響。
+        shared_prefix = "\n\n".join(
+            section for section in (methodology_result.text, compressed, reminders, budget_section)
+            if section
+        )
         for lens in diagnosis_mod.LENSES:
-            prompt = "\n\n".join(
-                section for section in
-                (methodology_result.text, compressed, reminders, budget_section,
-                 diagnosis_mod.role_text(lens)) if section
-            )
             context = gateway.TaskContext(
                 context_scope={"brand_id": brand_id, "round_id": round_id, "lens": lens},
                 knowledge_item_ids=[], brand_version=brand_version, product_version=None,
@@ -700,7 +705,13 @@ def schedule_diagnosis(org_id: str, brand_id: str) -> None:
             row = gateway.run_task(
                 conn, PROVIDER, brand_id=brand_id, task_type=state.DIAGNOSIS_TASK_TYPE,
                 prompt_template_id=state.DIAGNOSIS_TASK_TYPE, prompt_template_version="v1",
-                system=None, messages=[{"role": "user", "content": prompt}], context=context,
+                system=None,
+                messages=[{"role": "user", "content": [
+                    {"type": "text", "text": shared_prefix,
+                     "cache_control": {"type": "ephemeral"}},
+                    {"type": "text", "text": "\n\n" + diagnosis_mod.role_text(lens)},
+                ]}],
+                context=context,
             )
             parsed = plan_mod._extract_last_json_block(row.get("rendered_output") or "")
             raw = (parsed or {}).get("suggestions") if isinstance(parsed, dict) else None
