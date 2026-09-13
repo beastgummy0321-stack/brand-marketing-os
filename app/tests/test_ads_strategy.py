@@ -142,6 +142,50 @@ class AmountsSumToScenarioTotalTest(StrategyTestBase):
         self.assertEqual(detail["budget_planned"], 12345)
 
 
+class ScenarioAmountUnknownTest(StrategyTestBase):
+    """F04-I25: `scenario_unknown`（情境鍵不存在）跟 `scenario_amount_unknown`
+    （情境存在但算不出金額）是兩件事，不准共用同一個錯誤碼。"""
+
+    def setUp(self):
+        super().setUp()
+        self.campaign = self._create_campaign()
+        strategy.PROVIDER = _fake(_VALID_REPLY)
+        detail = self._generate()
+        budget_basis_json = dict(detail["budget_basis_json"])
+        scenarios = dict(budget_basis_json["scenarios"])
+        scenarios["scenarios"] = [
+            {**row, "daily": None, "total": None} for row in scenarios["scenarios"]
+        ]
+        budget_basis_json["scenarios"] = scenarios
+        ads_repo.save_strategy(
+            web.conn, self.org_id, self.brand_id, self.campaign["id"],
+            budget_basis_json=budget_basis_json,
+        )
+
+    def test_scenario_with_null_amount_raises_scenario_amount_unknown(self):
+        with self.assertRaises(ValueError) as ctx:
+            strategy.select_scenario(
+                web.conn, self.org_id, self.brand_id, self.campaign["id"],
+                scenario_key="recommended", actor=ACTOR,
+            )
+        self.assertEqual(str(ctx.exception), "scenario_amount_unknown")
+
+    def test_unknown_scenario_key_still_raises_scenario_unknown(self):
+        with self.assertRaises(ValueError) as ctx:
+            strategy.select_scenario(
+                web.conn, self.org_id, self.brand_id, self.campaign["id"],
+                scenario_key="nope", actor=ACTOR,
+            )
+        self.assertEqual(str(ctx.exception), "scenario_unknown")
+
+    def test_custom_total_still_works_when_scenario_amounts_are_unknown(self):
+        detail = strategy.select_scenario(
+            web.conn, self.org_id, self.brand_id, self.campaign["id"],
+            scenario_key="custom", custom_total=28000, actor=ACTOR,
+        )
+        self.assertEqual(detail["budget_planned"], 28000)
+
+
 class LearningInPromptAndBasisTest(StrategyTestBase):
     def test_a_learning_reaches_both_the_prompt_and_the_basis(self):
         bi_repo.record_learning(

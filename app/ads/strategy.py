@@ -307,8 +307,10 @@ def select_scenario(conn, org_id: str, brand_id: str, campaign_id: str, *,
         row = next(
             (r for r in scenario_result["scenarios"] if r["key"] == scenario_key), None,
         )
-        if row is None or row["total"] is None:
+        if row is None:
             raise ValueError("scenario_unknown")
+        if row["total"] is None:
+            raise ValueError("scenario_amount_unknown")
         total = row["total"]
 
     strategy_payload = dict(strategy_payload)

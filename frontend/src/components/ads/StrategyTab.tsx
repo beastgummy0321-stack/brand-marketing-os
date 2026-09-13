@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import { ArrowRight, Calendar, HelpCircle, Image as ImageIcon, Lightbulb, PieChart, Radio, Sparkles, Target, Wallet } from "lucide-react";
 import { Button } from "@/components/layout/ui/button";
 import { Input } from "@/components/layout/ui/input";
@@ -86,10 +87,12 @@ export function StrategyTab({
   const [allocationError, setAllocationError] = useState<string | null>(null);
   const [primaryBusy, setPrimaryBusy] = useState(false);
   const [primaryError, setPrimaryError] = useState<string | null>(null);
+  const [budgetHelpOpen, setBudgetHelpOpen] = useState(false);
 
   const strategy = c.budget_basis_json.strategy;
   const scenarios = c.budget_basis_json.scenarios;
   const basis = c.budget_basis_json.basis;
+  const amountsUnknown = !!scenarios && scenarios.scenarios.every((s) => s.total === null);
 
   async function handleGenerate() {
     setGenerating(true);
@@ -123,8 +126,15 @@ export function StrategyTab({
   const total = c.budget_planned ?? selectedRow?.total ?? null;
   const hasGroups = c.groups.length > 0;
   const days = campaignDays(c.start_date, c.end_date);
+  const constraintBudget = typeof c.constraints_json.budget === "number" ? c.constraints_json.budget : null;
 
   async function handlePrimary() {
+    if (c.budget_scenario === null && amountsUnknown) {
+      setBudgetHelpOpen(true);
+      setCustomOpen(true);
+      if (!customValue && constraintBudget !== null) setCustomValue(String(constraintBudget));
+      return;
+    }
     setPrimaryBusy(true);
     setPrimaryError(null);
     try {
@@ -225,6 +235,14 @@ export function StrategyTab({
     },
   ];
 
+  const productIds = Array.isArray(c.context_json.product_ids)
+    ? c.context_json.product_ids.filter((id): id is string => typeof id === "string")
+    : [];
+  const productId = productIds[0] ?? null;
+  const productEconomicsHref = productId
+    ? `/brands/${brandId}/products/${productId}?tab=economics-view`
+    : `/brands/${brandId}/products`;
+
   const estimatedPurchases =
     c.success_metric === "cpa" && c.success_target !== null && c.success_target > 0 && total !== null
       ? Math.floor(total / c.success_target)
@@ -306,7 +324,13 @@ export function StrategyTab({
 
       <div className="flex flex-col gap-1.5">
         <Button className="w-full" variant={hasGroups ? "outline" : "default"} onClick={() => void handlePrimary()} disabled={primaryBusy}>
-          {primaryBusy ? "處理中…" : hasGroups ? "前往投放結構" : "照這個方式進行 →"}
+          {primaryBusy
+            ? "處理中…"
+            : hasGroups
+              ? "前往投放結構"
+              : c.budget_scenario === null && amountsUnknown
+                ? "先設定預算 →"
+                : "照這個方式進行 →"}
         </Button>
         {primaryError && <p className="text-sm text-danger">{primaryError}</p>}
       </div>
@@ -320,7 +344,11 @@ export function StrategyTab({
           </Button>
         </p>
       ) : (
-        <Disclosure label="調整建議">
+        // `Disclosure` 是 uncontrolled（只有 `defaultOpen`），用 `key` remount 展開它，
+        // 不改 `patterns/Disclosure`（do_not_touch）——換 key 整塊會重新掛載，
+        // 所以不把任何狀態搬進這個子樹（ponytail: allocationPct／customOpen／customValue
+        // 仍在 StrategyTab 自己身上才成立）。
+        <Disclosure key={budgetHelpOpen ? "open" : "closed"} label="調整建議" defaultOpen={budgetHelpOpen}>
           <div className="flex flex-col gap-5">
             <div>
               <h3 className="mb-2 text-sm font-medium">預算分配</h3>
@@ -391,6 +419,14 @@ export function StrategyTab({
                     );
                   })}
                 </div>
+                {amountsUnknown && (
+                  <p className="mt-3 text-sm text-muted-foreground">
+                    要估金額需要商品的售價與成本{" "}
+                    <Link to={productEconomicsHref} className="text-primary hover:underline">
+                      去補商品數字
+                    </Link>
+                  </p>
+                )}
                 {customOpen ? (
                   <div className="mt-3 flex items-center gap-2">
                     <Input
@@ -400,6 +436,7 @@ export function StrategyTab({
                       value={customValue}
                       onChange={(e) => setCustomValue(e.target.value)}
                       className="max-w-56"
+                      autoFocus
                     />
                     <Button
                       variant="outline"

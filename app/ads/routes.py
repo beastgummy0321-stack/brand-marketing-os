@@ -212,6 +212,9 @@ _SELECT_SCENARIO_ERRORS = {
     "campaign_unknown": (404, CAMPAIGN_UNKNOWN_MESSAGE),
     "strategy_not_generated": (400, "請先產生策略，才能選預算情境。"),
     "scenario_unknown": (400, "找不到這個預算情境。"),
+    "scenario_amount_unknown": (
+        400, "這個情境還算不出金額：請先補上商品的售價與成本，或自訂預算。",
+    ),
     "custom_total_invalid": (400, "手打的總額必須大於 0。"),
 }
 
