@@ -1,10 +1,23 @@
-import { Check, Sparkles } from "lucide-react";
+import { Check, Sparkles, Target, Wallet, BarChart2, Settings, Image as ImageIcon, TrendingUp, AlertTriangle, Clock } from "lucide-react";
 import { Button } from "@/components/layout/ui/button";
-import { formatCurrency } from "@/lib/format";
-import { currentBudgetTotal, type ActionRow, type CampaignDetail } from "@/lib/adsApi";
+import { formatCurrency, formatCount, formatRoas } from "@/lib/format";
+import { currentBudgetTotal, type CampaignDetail, type SuccessMetric } from "@/lib/adsApi";
+import { JudgmentBand, ReservedSlotCard, DecisionCard, ActionTimeline, KpiStrip, type KpiCell, type TimelineItem } from "./patterns";
 
 const STAGE_LABELS = ["草稿", "策略", "投放結構", "素材", "投放中", "結案"] as const;
 type WorkspaceTab = "overview" | "strategy" | "structure" | "assets" | "performance";
+
+const METRIC_LABEL: Record<SuccessMetric, string> = {
+  cpa: "CPA",
+  roas: "ROAS",
+  purchases: "購買數",
+};
+
+function formatTarget(metric: SuccessMetric, value: number): string {
+  if (metric === "cpa") return formatCurrency(value);
+  if (metric === "roas") return formatRoas(value);
+  return formatCount(value);
+}
 
 /** 依「backend state」推出目前走到哪一階段：每個條件只會把 idx 往前推，不回退——
  * 沿著 草稿→策略→投放結構→素材→投放中→結案 的既定順序。 */
@@ -16,29 +29,6 @@ function currentStageIndex(c: CampaignDetail): number {
   if (c.status === "live" || c.status === "ended") idx = 4;
   if (c.status === "closed") idx = 5;
   return idx;
-}
-
-const ACTION_KIND_LABEL: Record<ActionRow["kind"], string> = {
-  publish: "發布",
-  bind: "配對",
-  budget: "預算",
-  date: "日期",
-  pause: "暫停",
-  creative: "素材",
-};
-
-const SYNC_STATE_LABEL: Record<ActionRow["sync_state"], string> = {
-  pending_manual: "待手動同步",
-  confirmed_manual: "已手動同步",
-  auto_synced: "自動同步",
-};
-
-function diffSummary(action: ActionRow): string {
-  const keys = Object.keys(action.after_json);
-  if (keys.length === 0) return "－";
-  return keys
-    .map((key) => `${key}：${String(action.before_json[key] ?? "－")} → ${String(action.after_json[key] ?? "－")}`)
-    .join("、");
 }
 
 function nextActionFor(c: CampaignDetail, idx: number): { text: string; tab: WorkspaceTab; label: string } {
@@ -53,6 +43,8 @@ function nextActionFor(c: CampaignDetail, idx: number): { text: string; tab: Wor
   return { text: "先確認推薦策略與預算情境。", tab: "strategy", label: "前往策略" };
 }
 
+const JUDGMENT_ICON = { good: TrendingUp, warn: AlertTriangle, neutral: Clock } as const;
+
 export function OverviewTab({
   campaign: c,
   onChangeTab,
@@ -61,57 +53,85 @@ export function OverviewTab({
   onChangeTab: (tab: WorkspaceTab) => void;
 }) {
   const idx = currentStageIndex(c);
-  const published = idx >= 4;
   const next = nextActionFor(c, idx);
   const t = currentBudgetTotal(c);
   const hasOutcome = c.outcome.spend > 0 || c.outcome.purchases > 0 || c.outcome.revenue > 0;
+  const pct = t.total !== null && t.total > 0 ? Math.round((c.outcome.spend / t.total) * 100) : null;
 
-  const budgetTile = {
-    label: "目前投放組合計",
-    value: t.total !== null ? formatCurrency(t.total) : "尚未設定",
-    caption:
-      t.total !== null
-        ? `日預算 ${formatCurrency(t.dailySum)}／天 × ${t.days} 天`
-        : "還沒設定投放起訖日",
-  };
-  const planTile = {
-    label: "採用時的計畫",
-    value: c.budget_planned !== null ? formatCurrency(c.budget_planned) : "尚未設定",
-    caption: c.budget_planned !== null ? "採用策略時的情境金額" : "還沒採用預算情境",
-  };
+  const budgetCaption =
+    (t.total !== null ? `日預算 ${formatCurrency(t.dailySum)}／天 × ${t.days} 天` : "還沒設定投放起訖日") +
+    (c.budget_planned !== null ? `・採用情境 ${formatCurrency(c.budget_planned)}` : "");
 
-  const tiles = published
-    ? [
-        {
-          label: "花費",
-          value: hasOutcome ? formatCurrency(c.outcome.spend) : "還沒有成效資料",
-          caption: hasOutcome ? "累計花費・平台回報" : "發布後才會有花費資料",
-        },
-        budgetTile,
-        planTile,
-        {
-          label: "投放期間",
-          value: c.start_date && c.end_date ? `${c.start_date} ~ ${c.end_date}` : "尚未設定",
-          caption: t.days !== null ? `共 ${t.days} 天` : "還沒設定起訖日",
-        },
-      ]
-    : [
-        {
-          label: "投放平台",
-          value: c.groups.length > 0 ? [...new Set(c.groups.map((g) => g.channel_key))].join("・") : "尚未設定",
-          caption: c.groups.length > 0 ? "已建立的投放組通路" : "採用策略後才會建立",
-        },
-        budgetTile,
-        planTile,
-        {
-          label: "投放期間",
-          value: c.start_date && c.end_date ? `${c.start_date} ~ ${c.end_date}` : "尚未設定",
-          caption: t.days !== null ? `共 ${t.days} 天` : "還沒設定起訖日",
-        },
-      ];
+  const kpiCells: KpiCell[] = [
+    {
+      icon: Target,
+      label: "Campaign 目標",
+      value: c.objective,
+      caption:
+        c.success_target !== null
+          ? `${METRIC_LABEL[c.success_metric]} 目標 ${formatTarget(c.success_metric, c.success_target)}`
+          : "未設定成功條件",
+    },
+    {
+      icon: Wallet,
+      label: "總預算",
+      value: t.total !== null ? formatCurrency(t.total) : "尚未設定",
+      caption: budgetCaption,
+    },
+    {
+      icon: BarChart2,
+      label: "已花費",
+      value: hasOutcome ? formatCurrency(c.outcome.spend) : "還沒有成效資料",
+      caption: hasOutcome
+        ? t.total !== null
+          ? `佔總預算 ${pct}%・平台回報`
+          : "累計花費・平台回報"
+        : "發布後才會有花費資料",
+    },
+  ];
+
+  const judgmentTone = c.judgment?.tone ?? "neutral";
+  const timelineItems: TimelineItem[] = (c.action_lines ?? []).map((a, i) => ({
+    id: `${a.campaign_id}_${i}`,
+    time: a.time_text,
+    title: a.title,
+    detail: a.detail,
+  }));
+
+  const shortcuts: { icon: typeof BarChart2; title: string; detail: string; tab: WorkspaceTab }[] = [
+    { icon: BarChart2, title: "查看成效", detail: "瀏覽關鍵指標與走勢圖", tab: "performance" },
+    { icon: Settings, title: "查看投放設定", detail: "受眾、預算、排程等設定", tab: "structure" },
+    { icon: ImageIcon, title: "查看素材", detail: "所有素材與表現數據", tab: "assets" },
+    { icon: Sparkles, title: "查看策略", detail: "推薦策略與預算情境", tab: "strategy" },
+  ];
 
   return (
     <div className="flex flex-col gap-4">
+      <KpiStrip cells={kpiCells} />
+      <p className="text-xs text-muted-foreground">
+        購買、CPA、ROAS 等成效數字在成效分頁——那裡分得出「未追蹤」與 0。
+      </p>
+
+      {c.judgment && (
+        <JudgmentBand
+          icon={JUDGMENT_ICON[judgmentTone]}
+          sentence={c.judgment.text}
+          facts={c.judgment.detail}
+          tone={judgmentTone}
+        />
+      )}
+
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+        <div className="lg:col-span-2">
+          <ReservedSlotCard
+            title="行銷駕駛艙為你執行中"
+            description="接上自動執行之後，這裡會列出系統正在做的事與下一步；現在所有調整都由你確認後才發生。"
+            tag="自動執行接上後開放"
+          />
+        </div>
+        <DecisionCard items={[]} />
+      </div>
+
       <div className="surface">
         <div className="surface-header">
           <h2>狀態時間軸</h2>
@@ -143,19 +163,6 @@ export function OverviewTab({
         </div>
       </div>
 
-      <div className="grid grid-cols-4 gap-4">
-        {tiles.map((tile) => (
-          <article className="surface p-5" key={tile.label}>
-            <div className="mb-3 text-xs text-muted-foreground">{tile.label}</div>
-            <p className="metric-number">{tile.value}</p>
-            <div className="mt-1 text-xs text-muted-foreground">{tile.caption}</div>
-          </article>
-        ))}
-      </div>
-      <p className="text-xs text-muted-foreground">
-        購買、CPA、ROAS 等成效數字在成效分頁——那裡分得出「未追蹤」與 0。
-      </p>
-
       <div className="surface">
         <div className="surface-header">
           <h2 className="flex items-center gap-1.5">
@@ -172,24 +179,36 @@ export function OverviewTab({
 
       <div className="surface">
         <div className="surface-header">
-          <h2>近期異動紀錄</h2>
+          <h2>最近做了什麼</h2>
         </div>
         <div className="surface-body">
-          {c.actions.length === 0 ? (
-            <p className="py-6 text-center text-sm text-muted-foreground">還沒有異動紀錄。</p>
-          ) : (
-            c.actions.map((a) => (
-              <div key={a.id} className="flex flex-col gap-1 border-t border-border py-2 first:border-t-0">
-                <div className="flex flex-wrap items-center gap-2 text-sm">
-                  <span className="font-medium">{ACTION_KIND_LABEL[a.kind]}</span>
-                  <span className="text-muted-foreground">{diffSummary(a)}</span>
+          <ActionTimeline items={timelineItems} emptyText="這個 Campaign 還沒有異動紀錄。" />
+        </div>
+      </div>
+
+      <div>
+        <h2 className="mb-1 text-base font-semibold">更多 Campaign 資訊</h2>
+        <p className="mb-3 text-sm text-muted-foreground">查看詳細數據與設定，隨時掌握投放進度。</p>
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          {shortcuts.map((s) => {
+            const Icon = s.icon;
+            return (
+              <button
+                key={s.title}
+                type="button"
+                onClick={() => onChangeTab(s.tab)}
+                className="surface flex items-center gap-3 p-4 text-left transition-colors hover:bg-accent/60"
+              >
+                <div className="flex size-9 shrink-0 items-center justify-center rounded-full bg-accent">
+                  <Icon className="size-4 text-primary" />
                 </div>
-                <div className="text-xs text-muted-foreground">
-                  {a.approved_by ?? "系統"} ・ {SYNC_STATE_LABEL[a.sync_state]} ・ {a.created_at}
+                <div className="flex-1">
+                  <p className="text-sm font-semibold">{s.title}</p>
+                  <p className="text-xs text-muted-foreground">{s.detail}</p>
                 </div>
-              </div>
-            ))
-          )}
+              </button>
+            );
+          })}
         </div>
       </div>
     </div>
