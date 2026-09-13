@@ -120,6 +120,9 @@ def compile(conn: Conn, brand_id: str, product_id: str | None = None, *,
         product = repo.get_product(conn, brand_id, product_id)
         if product is None:
             raise ValueError(f"找不到產品：{product_id}（或不屬於品牌 {brand_id}）")
+        # 知識掛母產品、金額掛賣法（ARCHITECTURE.md §8 第 1 條）：往上找母產品的事實／宣稱／規則，
+        # 賣法本身沒有自己的一份知識。
+        product_id = repo.knowledge_product_id(conn, brand_id, product_id)
 
     # 事實／宣稱共用同一張卡的上限（ARCHITECTURE.md §1：上限只寫在一個地方）；讀一次，
     # 底下三份清單各自截斷，不對同一張卡再呼叫三次。

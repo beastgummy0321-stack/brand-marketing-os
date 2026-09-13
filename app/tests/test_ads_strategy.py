@@ -10,7 +10,7 @@ import json
 import unittest
 
 import app.shared.web as web
-from app.ads import plan, strategy
+from app.ads import budget, plan, strategy
 from app.ads import repository as ads_repo
 from app.brand_intelligence import repository as bi_repo
 from app.core import db as coredb
@@ -510,6 +510,83 @@ class SetAllocationTest(StrategyTestBase):
                 actor=ACTOR,
             )
         self.assertEqual(str(ctx.exception), "plan_already_adopted")
+
+
+class ProductsSectionSellWaysTest(StrategyTestBase):
+    """F05-I02: knowledge groups by mother product, money stays per sell way
+    (ARCHITECTURE.md §8 item 1)."""
+
+    def setUp(self):
+        super().setUp()
+        self.mother = bi_repo.create_product(web.conn, self.brand_id, name="薑黃錠", actor=ACTOR)
+
+    def _sell_way(self, name: str, price: int) -> dict:
+        child = bi_repo.create_product(
+            web.conn, self.brand_id, name=f"薑黃錠 · {name}", actor=ACTOR,
+            parent_id=self.mother["id"],
+        )
+        bi_repo.save_product_economics(
+            web.conn, self.brand_id, child["id"], actor=ACTOR,
+            selling_price=price, currency="TWD", confirmed_by=ACTOR,
+            unit_variable_cost=100, shipping_cost=50,
+        )
+        return child
+
+    def test_one_fact_block_and_three_priced_sell_ways(self):
+        a = self._sell_way("單瓶", 1200)
+        b = self._sell_way("3 入組", 3200)
+        c = self._sell_way("5 入組", 5000)
+        product_ids = [a["id"], b["id"], c["id"]]
+
+        text, basis = strategy._products_section(
+            web.conn, self.org_id, self.brand_id, product_ids)
+
+        self.assertEqual(text.count("事實："), 1)
+        self.assertIn("單瓶 NT$1200", text)
+        self.assertIn("3 入組 NT$3200", text)
+        self.assertIn("5 入組 NT$5000", text)
+        self.assertEqual(len(basis), 3)
+        self.assertEqual({b["product_id"] for b in basis}, set(product_ids))
+
+    def test_nine_sell_ways_capped_at_eight_with_overflow_note(self):
+        product_ids = [self._sell_way(f"賣法{i}", 100 + i)["id"] for i in range(9)]
+
+        text, basis = strategy._products_section(
+            web.conn, self.org_id, self.brand_id, product_ids)
+
+        self.assertIn("另有 1 種賣法沒有列出", text)
+        self.assertEqual(len(basis), 8)
+
+    def test_sell_way_without_economics_still_prints_no_price_data(self):
+        priced = self._sell_way("單瓶", 1200)
+        unpriced = bi_repo.create_product(
+            web.conn, self.brand_id, name="薑黃錠 · 隨身包", actor=ACTOR,
+            parent_id=self.mother["id"],
+        )
+
+        text, basis = strategy._products_section(
+            web.conn, self.org_id, self.brand_id, [priced["id"], unpriced["id"]])
+
+        self.assertIn("隨身包 沒有價格資料", text)
+        self.assertEqual(len(basis), 1)
+
+
+class BudgetUsesFirstSellWayForMotherProductTest(StrategyTestBase):
+    def test_campaign_on_mother_product_computes_from_first_sell_way(self):
+        mother = bi_repo.create_product(web.conn, self.brand_id, name="薑黃錠", actor=ACTOR)
+        first = bi_repo.create_product(
+            web.conn, self.brand_id, name="薑黃錠 · 單瓶", actor=ACTOR, parent_id=mother["id"])
+        bi_repo.save_product_economics(
+            web.conn, self.brand_id, first["id"], actor=ACTOR,
+            selling_price=1200, currency="TWD", confirmed_by=ACTOR,
+            unit_variable_cost=200, shipping_cost=50,
+        )
+
+        economics, product_id = budget._economics_for(
+            web.conn, self.brand_id, [mother["id"]])
+
+        self.assertIsNotNone(economics)
+        self.assertEqual(product_id, first["id"])
 
 
 if __name__ == "__main__":
