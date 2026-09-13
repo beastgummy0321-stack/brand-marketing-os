@@ -81,6 +81,30 @@ class TaskOptions:
     tools: list | None = None
 
 
+# 大 prompt 的字元門檻（約 8k tokens 的保守換算）。超過這個門檻就不自動重試——重送同樣的
+# 內容多半得到同樣的結果，卻要再付一整份輸入的錢。gateway 拿不到 tokenizer（沒有掛任何一家
+# 供應商的 tokenizer 依賴），字元數是保守的下界，而且這裡只需要分辨「大」與「小」，不需要
+# 精確 token 數。
+LARGE_PROMPT_CHARS = 24000
+
+LARGE_PROMPT_NO_RETRY_SUFFIX = (
+    "（輸入過長，這次不自動重試——重送同樣的內容會再付一次同樣的錢，請直接再按一次。）"
+)
+
+
+def _message_text_chars(messages: list) -> int:
+    total = 0
+    for message in messages:
+        content = message.get("content") if isinstance(message, dict) else None
+        if isinstance(content, str):
+            total += len(content)
+        elif isinstance(content, list):
+            for part in content:
+                if isinstance(part, dict) and part.get("type") == "text":
+                    total += len(part.get("text") or "")
+    return total
+
+
 def get_task(conn: db.Conn, task_id: str) -> dict | None:
     row = conn.execute("SELECT * FROM llm_task WHERE id = %s", (task_id,)).fetchone()
     return dict(row) if row is not None else None
@@ -249,7 +273,9 @@ def run_task(
     provider_accepts_tools = "tools" in accepted
     provider_accepts_org_id = "org_id" in accepted
 
-    max_attempts = 1 + max(opts.max_retries, 0)
+    input_chars = len(system or "") + _message_text_chars(messages)
+    is_large_prompt = input_chars > LARGE_PROMPT_CHARS
+    max_attempts = 1 if is_large_prompt else 1 + max(opts.max_retries, 0)
     row = None
     for attempt_no in range(1, max_attempts + 1):
         row = _insert_running_row(
@@ -271,11 +297,17 @@ def run_task(
                 complete_kwargs["org_id"] = org_id
             response = provider.complete(**complete_kwargs)
         except ProviderTimeoutError as exc:
-            _mark_failed(conn, row["id"], status="timeout", error=str(exc))
+            error = str(exc)
+            if is_large_prompt:
+                error = f"{error}{LARGE_PROMPT_NO_RETRY_SUFFIX}"
+            _mark_failed(conn, row["id"], status="timeout", error=error)
             row = get_task(conn, row["id"])
             continue
         except ProviderError as exc:
-            _mark_failed(conn, row["id"], status="failed", error=str(exc))
+            error = str(exc)
+            if is_large_prompt:
+                error = f"{error}{LARGE_PROMPT_NO_RETRY_SUFFIX}"
+            _mark_failed(conn, row["id"], status="failed", error=error)
             row = get_task(conn, row["id"])
             continue
 
