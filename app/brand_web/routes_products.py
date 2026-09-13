@@ -114,6 +114,8 @@ def _economics_shape(economics: dict) -> dict:
         "currency": economics["currency"],
         "effective_from": economics["effective_from"], "status": economics["status"],
         "confirmed_by": economics["confirmed_by"],
+        "close_rate": economics["close_rate"],
+        "assumptions": economics.get("assumptions_json") or [],
     }
 
 
@@ -139,6 +141,7 @@ def _product_list_item(brand_id: str, product: dict) -> dict:
     economics = repo.get_product_economics(web.conn, brand_id, product["id"])
     return {
         "id": product["id"], "name": product["name"], "status": product["status"],
+        "parent_id": product["parent_id"],
         "fact_count": len(facts), "pending_fact_count": pending,
         "economics_status": economics["status"] if economics else "none",
     }
@@ -476,12 +479,29 @@ async def economics_save(request: Request, brand_id: str, product_id: str):
     confirmed_by = clean(_str_field(body, "confirmed_by"))
     if not confirmed_by:
         return _error(400, "請填寫確認人是誰。")
-    repo.save_product_economics(
-        web.conn, brand_id, product_id, actor=str(actor.user_id),
-        selling_price=price_val, currency=currency, confirmed_by=confirmed_by,
-        fixed_cost=fixed_val, unit_variable_cost=unit_val, shipping_cost=ship_val,
-        effective_from=clean(_str_field(body, "effective_from")) or None,
-    )
+    close_rate_raw = body.get("close_rate")
+    close_rate_val = None
+    if close_rate_raw is not None:
+        if isinstance(close_rate_raw, bool) or not isinstance(close_rate_raw, (int, float)) \
+                or not (0 < close_rate_raw <= 1):
+            return _error(400, "成交率請填 0 到 1 之間的數字，例如 0.2 代表五筆名單成交一筆。")
+        close_rate_val = float(close_rate_raw)
+    assumptions_raw = body.get("assumptions")
+    assumptions_val = None
+    if assumptions_raw is not None:
+        if not isinstance(assumptions_raw, list) or not all(isinstance(v, str) for v in assumptions_raw):
+            return _error(400, "assumptions 格式不對。")
+        assumptions_val = assumptions_raw
+    try:
+        repo.save_product_economics(
+            web.conn, brand_id, product_id, actor=str(actor.user_id),
+            selling_price=price_val, currency=currency, confirmed_by=confirmed_by,
+            fixed_cost=fixed_val, unit_variable_cost=unit_val, shipping_cost=ship_val,
+            effective_from=clean(_str_field(body, "effective_from")) or None,
+            close_rate=close_rate_val, assumptions=assumptions_val,
+        )
+    except ValueError as exc:
+        return _error(400, str(exc))
     return Response(status_code=204)
 
 
