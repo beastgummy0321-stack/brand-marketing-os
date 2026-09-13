@@ -29,13 +29,18 @@ _SUCCESS_METRICS = frozenset({"cpa", "roas", "purchases"})
 def _budget_total(start_date, end_date, groups: list[dict]) -> float | None:
     """`sum(group.daily_budget) x days`, one definition (§0). `days` is inclusive of both
     ends (a one-day campaign still spends one day's budget); `None` when either bound is
-    missing — there is nothing to derive a total from yet."""
+    missing — there is nothing to derive a total from yet. Same rule when there are no ad
+    groups (or their daily budgets sum to <= 0): nothing to derive a total from, so `None`,
+    not `0.0` — a Campaign that hasn't adopted a strategy yet has no budget, it doesn't have
+    a zero budget (F04 decision 12, same honesty rule applied to the total-budget field)."""
     if start_date is None or end_date is None:
         return None
     days = (end_date - start_date).days + 1
     if days <= 0:
         return None
     daily_sum = sum(float(g["daily_budget"]) for g in groups)
+    if daily_sum <= 0:
+        return None
     return round(daily_sum * days, 2)
 
 
