@@ -105,6 +105,24 @@ class ScenariosTest(unittest.TestCase):
             self.assertNotIn("中位數", row["caption"])
             self.assertNotIn("CPA", row["caption"])
 
+    def test_history_caption_names_the_source_when_given_and_amount_is_unchanged(self):
+        """F05-I11: `source_text` 只換 caption 開頭那句話，三張卡的金額不動。"""
+        history = {
+            "cpa": 280, "last_daily_budget": 1000, "sample_days": 30, "sample_ads": None,
+            "source": "meta_account", "source_text": "Meta 近 30 天平均日花費",
+        }
+        result = budget.scenarios(
+            web.conn, self.org_id, self.brand_id, product_ids=[self.product_id], days=7,
+            history=history,
+        )
+        by_key = {row["key"]: row for row in result["scenarios"]}
+        self.assertEqual(by_key["conservative"]["daily"], 600)
+        self.assertEqual(by_key["recommended"]["daily"], 1000)
+        self.assertEqual(by_key["aggressive"]["daily"], 1600)
+        for row in result["scenarios"]:
+            self.assertIn("Meta 近 30 天平均日花費", row["caption"])
+        self.assertEqual(result["basis"]["source"], "meta_account")
+
 
 class SplitTest(unittest.TestCase):
     def test_split_sums_exactly_to_total_for_an_awkward_amount(self):

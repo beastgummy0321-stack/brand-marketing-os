@@ -4,12 +4,19 @@ label, never as a hard-coded branch anywhere else in `app/ads`. Private to app/a
 contract §1): only `routes.py` and `readiness.py` import this module's functions.
 """
 
+from datetime import timedelta
+
 from app.background import is_active as background_is_active
+from app.core import settings as coresettings
 from app.meta import daily_pull as meta_daily_pull
 from app.meta import repository as meta_repo
 
 CONNECTED = "connected"
 NOT_CONNECTED = "未接上"
+
+# F05-I11: budget_history 的退路來源名字——住在這裡，repository.py 只引用這個常數
+# （§0「平台名字只准住在 channels.py」，test_ads_no_platform_literal.py 逐字檔案掃過）。
+ACCOUNT_SOURCE = "meta_account"
 
 # F03 決策 6：通路清單不等於「已接上的通路」——這版只有 meta 真的接得上，其餘四個原樣列出、
 # 一律回報「未接上」，不是從畫面藏起來（§0「every other channel reports 未接上 from data」）。
@@ -76,4 +83,34 @@ def account_state(conn, org_id: str, brand_id: str) -> dict | None:
     return {
         "channel_key": "meta", "label": "Meta",
         "backfill_done": done, "backfill_running": running,
+    }
+
+
+def account_spend_history(
+    conn, org_id: str, brand_id: str, conversion_goal: str | None,
+) -> dict | None:
+    """F05-I11: 這個品牌自己綁的廣告帳戶近 30 天真實花費——`app.ads.repository.budget_history`
+    在迴圈自己沒有已結案花費時的退路（§8 第 5 條、演練四 V-13：「投放過」不該在系統眼裡等於
+    「沒投放過」）。沒綁帳號，或這 30 天總花費是 0（沒補拉，或補拉完但真的沒花）→ `None`，
+    誠實冷啟動；不用 ROAS 或客單價反推 CPA（呼叫端只認 `total["cpa"]` 原樣穿過）。
+    `conversion_goal` 由呼叫端讀好傳進來（別的模組的表，容器規範不在這裡查），
+    `spend_summary` 的 `level="campaign"` 語意就是這裡回的「帳戶層級」加總。
+    「今天」用 `app.core.settings.today_for_org`，不是機器的 `date.today()`。"""
+    account_ids = meta_repo.bound_account_ids_for_brand(conn, org_id, brand_id)
+    if not account_ids:
+        return None
+    today = coresettings.today_for_org(conn, org_id=org_id)
+    since = today - timedelta(days=30)
+    summary = meta_repo.spend_summary(
+        conn, org_id, account_ids, since, today + timedelta(days=1),
+        level="campaign", conversion_goal=conversion_goal,
+    )
+    total = summary["total"]
+    if not total["spend"]:
+        return None
+    return {
+        "cpa": total["cpa"],
+        "daily_spend": total["spend"] / 30,
+        "days": 30,
+        "channel_label": "Meta",
     }

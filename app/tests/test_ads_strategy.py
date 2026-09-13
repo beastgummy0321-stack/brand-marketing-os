@@ -8,13 +8,17 @@ campaign in `draft` with no half-written strategy.
 
 import json
 import unittest
+from datetime import timedelta
+from uuid import uuid4
 
 import app.shared.web as web
 from app.ads import budget, plan, strategy
 from app.ads import repository as ads_repo
 from app.brand_intelligence import repository as bi_repo
 from app.core import db as coredb
+from app.core import settings as coresettings
 from app.llm import providers
+from app.meta import repository as meta_repo
 
 ACTOR = "測試員"
 
@@ -353,6 +357,50 @@ class BudgetHistoryTest(StrategyTestBase):
         self.assertEqual(history["last_daily_budget"], 400)
         self.assertEqual(history["sample_days"], 2)
         self.assertEqual(history["sample_ads"], 1)
+        self.assertEqual(history["source"], "ads_loop")
+
+    def _connect_and_bind_account(self, account_id: str) -> str:
+        meta_repo.save_token(web.conn, self.org_id, "tok")
+        meta_repo.upsert_accounts(web.conn, self.org_id, [
+            {"account_id": account_id, "name": account_id, "currency": "TWD"},
+        ])
+        web.conn.commit()
+        local_id = next(
+            a["id"] for a in meta_repo.list_accounts(web.conn, self.org_id)
+            if a["account_id"] == account_id
+        )
+        meta_repo.bind(web.conn, self.org_id, self.brand_id, local_id)
+        web.conn.commit()
+        return local_id
+
+    def test_no_loop_history_falls_back_to_bound_account_recent_spend(self):
+        """F05-I11／演練四 V-13：迴圈自己沒有已結案花費，但品牌綁了廣告帳戶且帳戶近 30 天
+        有真花費——退回讀帳戶歷史，不是誤判成沒投放過。"""
+        account_id = self._connect_and_bind_account(f"act_{uuid4().hex[:8]}")
+        today = coresettings.today_for_org(web.conn, org_id=self.org_id)
+        for offset, spend in ((5, 300), (10, 600)):
+            meta_repo.upsert_entity_spend(web.conn, self.org_id, account_id, [{
+                "level": "campaign", "entity_id": "camp-1", "entity_name": "camp-1",
+                "campaign_id": "camp-1", "adset_id": None, "ad_id": None,
+                "spend_date": today - timedelta(days=offset), "spend": spend,
+                "impressions": 100, "clicks": 10, "roas": None,
+                "actions": None, "action_values": None,
+                "attribution_window": "7d_click,1d_view",
+            }])
+        web.conn.commit()
+
+        history = ads_repo.budget_history(web.conn, self.org_id, self.brand_id)
+        self.assertIsNotNone(history)
+        self.assertEqual(history["source"], "meta_account")
+        self.assertEqual(history["last_daily_budget"], round(900 / 30))
+        self.assertIsNone(history["cpa"])  # 沒追蹤到轉換事件，不是 0
+        self.assertEqual(history["sample_days"], 30)
+        self.assertIsNone(history["sample_ads"])
+
+    def test_bound_account_with_zero_recent_spend_is_still_cold_start(self):
+        """帳戶接了，但 30 天內沒有任何花費——誠實冷啟動，不假裝有歷史。"""
+        self._connect_and_bind_account(f"act_{uuid4().hex[:8]}")
+        self.assertIsNone(ads_repo.budget_history(web.conn, self.org_id, self.brand_id))
 
 
 class ProviderFailureTest(StrategyTestBase):
