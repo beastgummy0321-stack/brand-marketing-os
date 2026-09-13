@@ -1,13 +1,19 @@
 /** frontend/src/components/ads/StrategyTab.test.tsx — F04-I14: 策略分頁重做成一張建議卡
  * ＋一顆主要按鈕，其餘全部收在 Disclosure 裡（R9）。這支測試是「預設看不到進階內容」的
  * 機器證明，以及主要按鈕依 `budget_scenario` 走對 API 順序。 */
+import type { ReactElement } from "react";
 import { render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import userEvent from "@testing-library/user-event";
+import { MemoryRouter } from "react-router-dom";
 
 import type { CampaignDetail, DeliveryGroupRow } from "@/lib/adsApi";
 import { adoptStrategy, selectScenario } from "@/lib/adsApi";
 import { StrategyTab } from "./StrategyTab";
+
+function renderWithRouter(ui: ReactElement) {
+  return render(<MemoryRouter>{ui}</MemoryRouter>);
+}
 
 vi.mock("@/lib/adsApi", async () => {
   const actual = await vi.importActual<typeof import("@/lib/adsApi")>("@/lib/adsApi");
@@ -111,7 +117,7 @@ function campaign(overrides: Partial<CampaignDetail> = {}): CampaignDetail {
 }
 
 function renderTab(c: CampaignDetail, onCampaignChange = vi.fn(), onChangeTab = vi.fn()) {
-  return { onCampaignChange, onChangeTab, ...render(
+  return { onCampaignChange, onChangeTab, ...renderWithRouter(
     <StrategyTab brandId="brd_1" campaign={c} onCampaignChange={onCampaignChange} onChangeTab={onChangeTab} />,
   ) };
 }
@@ -157,7 +163,7 @@ describe("StrategyTab（F04-I14）", () => {
   });
 
   it("cpa／300／30000：印「預估購買 100 筆」與推估說明；roas 時改印算不出推估購買", () => {
-    const { rerender } = render(
+    const { rerender } = renderWithRouter(
       <StrategyTab
         brandId="brd_1"
         campaign={campaign({ success_metric: "cpa", success_target: 300, budget_planned: 30000 })}
@@ -169,12 +175,14 @@ describe("StrategyTab（F04-I14）", () => {
     expect(screen.getByText("推估（CPA 不變的算術）")).toBeTruthy();
 
     rerender(
-      <StrategyTab
-        brandId="brd_1"
-        campaign={campaign({ success_metric: "roas", success_target: 3, budget_planned: 30000 })}
-        onCampaignChange={vi.fn()}
-        onChangeTab={vi.fn()}
-      />,
+      <MemoryRouter>
+        <StrategyTab
+          brandId="brd_1"
+          campaign={campaign({ success_metric: "roas", success_target: 3, budget_planned: 30000 })}
+          onCampaignChange={vi.fn()}
+          onChangeTab={vi.fn()}
+        />
+      </MemoryRouter>,
     );
     expect(screen.queryByText(/預估購買/)).toBeNull();
     expect(screen.getByText("目標不是 CPA，或還沒有總預算，算不出推估購買。")).toBeTruthy();
@@ -182,7 +190,7 @@ describe("StrategyTab（F04-I14）", () => {
 
   it("learning_goals 空陣列印「這一輪沒有設定學習目標」；有三條時三條都在畫面上", () => {
     const c = campaign();
-    const { rerender } = render(
+    const { rerender } = renderWithRouter(
       <StrategyTab brandId="brd_1" campaign={c} onCampaignChange={vi.fn()} onChangeTab={vi.fn()} />,
     );
     expect(screen.getByText("這一輪沒有設定學習目標")).toBeTruthy();
@@ -196,7 +204,11 @@ describe("StrategyTab（F04-I14）", () => {
         },
       },
     });
-    rerender(<StrategyTab brandId="brd_1" campaign={withGoals} onCampaignChange={vi.fn()} onChangeTab={vi.fn()} />);
+    rerender(
+      <MemoryRouter>
+        <StrategyTab brandId="brd_1" campaign={withGoals} onCampaignChange={vi.fn()} onChangeTab={vi.fn()} />
+      </MemoryRouter>,
+    );
     expect(screen.getByText("學習目標一")).toBeTruthy();
     expect(screen.getByText("學習目標二")).toBeTruthy();
     expect(screen.getByText("學習目標三")).toBeTruthy();
@@ -225,5 +237,58 @@ describe("StrategyTab（F04-I14）", () => {
     expect(screen.queryByRole("button", { name: "調整建議" })).toBeNull();
     expect(screen.getByText(/投放結構已經建立，預算改在投放結構分頁的每個投放組日預算。/)).toBeTruthy();
     expect(screen.getAllByRole("button", { name: "前往投放結構" }).length).toBeGreaterThan(0);
+  });
+
+  function campaignWithUnknownAmounts(overrides: Partial<CampaignDetail> = {}): CampaignDetail {
+    const c = campaign();
+    return campaign({
+      budget_scenario: null,
+      context_json: { product_ids: ["prd_1"] },
+      constraints_json: { budget: 28000 },
+      budget_basis_json: {
+        ...c.budget_basis_json,
+        scenarios: {
+          ...c.budget_basis_json.scenarios!,
+          scenarios: c.budget_basis_json.scenarios!.scenarios.map((s) => ({ ...s, daily: null, total: null })),
+        },
+      },
+      ...overrides,
+    });
+  }
+
+  it("三個情境都算不出金額：按主要按鈕不打 API，展開自訂預算框並預填 constraints_json.budget", async () => {
+    const user = userEvent.setup();
+    const { onChangeTab } = renderTab(campaignWithUnknownAmounts());
+
+    await user.click(screen.getByRole("button", { name: "先設定預算 →" }));
+
+    expect(selectScenario).not.toHaveBeenCalled();
+    expect(adoptStrategy).not.toHaveBeenCalled();
+    expect(onChangeTab).not.toHaveBeenCalled();
+    const input = screen.getByPlaceholderText("輸入自訂預算") as HTMLInputElement;
+    expect(input.value).toBe("28000");
+    expect(document.activeElement).toBe(input);
+  });
+
+  it("算不出金額時看得到補商品數字的提示與連到商品頁的連結", async () => {
+    const user = userEvent.setup();
+    renderTab(campaignWithUnknownAmounts());
+
+    await user.click(screen.getByRole("button", { name: "先設定預算 →" }));
+
+    expect(screen.getByText("要估金額需要商品的售價與成本")).toBeTruthy();
+    const link = screen.getByRole("link", { name: "去補商品數字" });
+    expect(link.getAttribute("href")).toContain("/products/");
+  });
+
+  it("budget_scenario 是 custom：主要按鈕直接 adoptStrategy，不重新 selectScenario", async () => {
+    const user = userEvent.setup();
+    vi.mocked(adoptStrategy).mockResolvedValue(campaign({ budget_scenario: "custom", groups: [group()] }));
+    renderTab(campaignWithUnknownAmounts({ budget_scenario: "custom", budget_planned: 28000 }));
+
+    await user.click(screen.getByRole("button", { name: "照這個方式進行 →" }));
+
+    expect(adoptStrategy).toHaveBeenCalledWith("brd_1", "cmp_1");
+    expect(selectScenario).not.toHaveBeenCalled();
   });
 });
