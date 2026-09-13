@@ -14,6 +14,20 @@ export interface CampaignOutcomeTotals {
   revenue: number;
 }
 
+/** F04-I08：`app/ads/judgment.py::campaign_judgment()` 的回傳形狀——程式組好的一句判斷，
+ * 瀏覽器原樣印，不重拼。 */
+export interface CampaignJudgment {
+  tone: "neutral" | "good" | "warn";
+  text: string;
+  detail: string;
+}
+
+export interface CampaignBudgetProgress {
+  spent: number | null;
+  total: number | null;
+  pct: number | null;
+}
+
 /** `GET /campaigns` 一列。`budget_total` 是後端推導出來的（`sum(投放組.daily_budget) x 天數`），
  * `budget_planned` 是使用者採用的情境金額——兩者可能因為天數捨入而略有出入，畫面上要分開標。 */
 export interface CampaignCard {
@@ -23,8 +37,12 @@ export interface CampaignCard {
   start_date: string | null;
   end_date: string | null;
   objective: string;
+  created_at: string;
+  created_by: string | null;
   budget_planned: number | null;
   budget_total: number | null;
+  budget_progress: CampaignBudgetProgress;
+  judgment: CampaignJudgment;
   outcome: CampaignOutcomeTotals;
 }
 
@@ -116,6 +134,23 @@ export interface CampaignDetail extends EntityBinding {
   outcome: CampaignOutcomeTotals;
   /** F03-I08：素材 tab 跟發布畫面共用同一組數字。 */
   asset_readiness: AssetReadinessSummary;
+  /** F04-I08：跟 `CampaignCard.judgment` 同一支規則（`campaign_judgment()`）——後端一律回傳，
+   * 選填只是為了不逼著每一個既有的手寫測試 fixture（`do_not_touch`：
+   * `frontend/src/components/**`）都補上這兩個新欄位。 */
+  judgment?: CampaignJudgment;
+  /** F04-I08：`actions` 每一列跑過 `judgment.action_line()` 的三句話——`actions` 本身保留
+   * 不刪，別的分頁還在讀原始欄位。 */
+  action_lines?: AdsActionLine[];
+}
+
+/** F04-I08：`app/ads/judgment.py::action_line()` 的回傳形狀，加上呼叫端補的 campaign
+ * 資訊——首頁的時間軸跨 Campaign，需要知道這一列屬於哪一個。 */
+export interface AdsActionLine {
+  campaign_id: string;
+  campaign_name: string;
+  time_text: string;
+  title: string;
+  detail: string;
 }
 
 // -- F03-I08：素材就緒 -----------------------------------------------------------------------
@@ -676,4 +711,28 @@ export async function closeCampaign(
   );
   const data = await parseJsonOrThrow<{ campaign: CampaignDetail }>(res, "結案失敗。");
   return data.campaign;
+}
+
+// -- F04-I08：首頁四塊 -------------------------------------------------------------------------
+
+export interface AdsHomeCounts {
+  running: number;
+  upcoming: number;
+  ended: number;
+  needs_decision: number;
+}
+
+/** `GET /home` 的整包 payload——一句整體判斷、四個計數、進行中的 Campaign（最多 6 張）、
+ * 最近做了什麼（最多 6 筆）。不含成效、不打模型。 */
+export interface AdsHome {
+  headline: { text: string; facts: string };
+  counts: AdsHomeCounts;
+  campaigns: CampaignCard[];
+  actions: AdsActionLine[];
+}
+
+export async function getAdsHome(brandId: string): Promise<AdsHome> {
+  const res = await apiFetch(`${BASE}/brands/${encodeURIComponent(brandId)}/home`);
+  const data = await parseJsonOrThrow<{ home: AdsHome }>(res, "讀取投放中心首頁失敗。");
+  return data.home;
 }
