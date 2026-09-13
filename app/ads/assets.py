@@ -78,6 +78,27 @@ def _origin(brand_id: str, brand_name: str, campaign: dict, groups: list) -> dic
     return {"origin_label": origin_label, "origin_href": origin_href}
 
 
+def _ad_set(ad: dict, campaign_id: str, fallback_product_id: str | None) -> dict:
+    # 一則廣告只打一個商品（ARCHITECTURE §5.4）；用同一個 product_id 決定 set 欄位與
+    # request.product_ids，不各算一次——否則工作檯 (jobs.py:49-68) 會替 Campaign 裡的每個
+    # 商品各編一次品牌上下文，重複付 N 份品牌層知識的錢（ARCHITECTURE.md §1 第 1 條）。
+    product_id = ad.get("product_id") or fallback_product_id
+    return {
+        "name": ad["name"],
+        "source_ref": _set_source_ref(campaign_id, ad["id"]),
+        "product_id": product_id,
+        "coordinates": _coordinates(ad),
+        "style_key": "ugc",  # 沒有品牌預設風格這件事（見票面），沿用其他派工同值
+        "required_outputs": {"copy": 1, "image_prompt": 1},
+        "request": {
+            "copy_length": _copy_length(ad),
+            "image_prompt_count": _image_prompt_count(ad),
+            "use_brand_knowledge": True,
+            "product_ids": [product_id] if product_id else [],
+        },
+    }
+
+
 def dispatch_pack(conn, org_id: str, brand_id: str, campaign_id: str) -> str:
     """一個 Campaign 一個任務包、一個 `ads_ad` 一個 set；回傳 pack id。`ValueError`：
     `campaign_unknown`、`pack_already_exists`（再交棒一次——已經有一份了）；其餘（
@@ -115,21 +136,7 @@ def dispatch_pack(conn, org_id: str, brand_id: str, campaign_id: str) -> str:
         "summary": summary,
         "context": _origin(brand_id, brand_name, campaign, groups),
         "sets": [
-            {
-                "name": ad["name"],
-                "source_ref": _set_source_ref(campaign_id, ad["id"]),
-                "product_id": ad.get("product_id") or fallback_product_id,
-                "coordinates": _coordinates(ad),
-                "style_key": "ugc",  # 沒有品牌預設風格這件事（見票面），沿用其他派工同值
-                "required_outputs": {"copy": 1, "image_prompt": 1},
-                "request": {
-                    "copy_length": _copy_length(ad),
-                    "image_prompt_count": _image_prompt_count(ad),
-                    "use_brand_knowledge": True,
-                    "product_ids": campaign_product_ids,
-                },
-            }
-            for ad in ads
+            _ad_set(ad, campaign_id, fallback_product_id) for ad in ads
         ],
     }
     return workbench.submit_pack(conn, org_id, brand_id, pack)
