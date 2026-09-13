@@ -111,20 +111,25 @@ class _Base(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# S4.9 陽春路徑：三欄皆空只 create_brand，不建草稿（JSON／HTML 舊表單共用同一支函式）
+# 2026-09-14：草稿永遠建立——三欄皆空只是沒東西可掃，第 3／4／5 步跟掃描無關
+# （S4.9 時代「陽春路徑不建草稿」的假設已不成立，見 F05-I15）
 # ---------------------------------------------------------------------------
 
 class QuickPathTest(_Base):
-    def test_json_only_name_is_quick_no_draft(self):
+    def test_json_only_name_still_creates_draft_at_step_3(self):
         name = self._brand_name()
         resp = self.client.post("/api/intake/brands", data={"brand_name": name})
         self.assertEqual(resp.status_code, 200)
         body = resp.json()
-        self.assertTrue(body["quick"])
-        self.assertIsNone(state.get_draft(body["brand_id"]))
+        self.assertFalse(body["quick"])
+        draft = state.get_draft(body["brand_id"])
+        self.assertIsNotNone(draft)
+        self.assertEqual(draft["step"], 3)
+        self.assertTrue(draft["scan_done"])
+        self.assertEqual(draft["cost_items"], [])
         # 品牌真的建了
         draft_resp = self.client.get(f"/api/intake/brands/{body['brand_id']}/draft")
-        self.assertEqual(draft_resp.status_code, 404)
+        self.assertEqual(draft_resp.status_code, 200)
 
     def test_json_with_description_creates_draft(self):
         bid = self._create_full()
@@ -142,7 +147,7 @@ class QuickPathTest(_Base):
         })
         self.assertEqual(resp.status_code, 400)  # COPY trim：精確中文文案不測
 
-    def test_restart_quick_when_no_new_data_and_no_prior_photos(self):
+    def test_restart_still_creates_draft_at_step_3_when_no_new_data(self):
         bid = self._create_full()
         self._poll(bid, "scan")  # 讓草稿完成初掃，之後手動完成它才能重新調研
         draft = state.get_draft(bid)
@@ -151,8 +156,10 @@ class QuickPathTest(_Base):
         state.complete_draft(draft)
         resp = self.client.post(f"/api/intake/brands/{bid}/restart", data={})
         self.assertEqual(resp.status_code, 200)
-        self.assertTrue(resp.json()["quick"])
-        self.assertIsNone(state.get_draft(bid))
+        self.assertFalse(resp.json()["quick"])
+        restarted = state.get_draft(bid)
+        self.assertIsNotNone(restarted)
+        self.assertEqual(restarted["step"], 3)
 
     def test_restart_blocked_when_draft_already_running(self):
         bid = self._create_full()
@@ -182,8 +189,9 @@ class PhotoUploadTest(_Base):
         resp = self.client.post("/api/intake/brands", data={
             "brand_name": name, "photo_tokens": body["token"],
         })
-        self.assertFalse(resp.json()["quick"])  # 有照片 -> 非陽春路徑
+        self.assertFalse(resp.json()["quick"])  # 照片路徑仍從初掃步（第 2 步）開始
         draft = state.get_draft(resp.json()["brand_id"])
+        self.assertEqual(draft["step"], 2)
         self.assertEqual(len(draft["photos"]), 1)
         self.assertEqual(draft["photos"][0]["name"], "t.jpg")
 
