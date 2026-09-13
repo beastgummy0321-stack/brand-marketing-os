@@ -142,7 +142,7 @@ Tablet and phone are out of scope; do not add media queries below 1024.
 │   ├── Logo + 行銷駕駛艙 wordmark
 │   ├── Brand switcher card: avatar initials · brand name · 目前品牌 · chevron
 │   ├── 工作區:    品牌總覽 · 收件匣 (count badge)
-│   ├── 品牌經營:  經營概況 · 檔期規劃 · 素材工作檯 · 訂單與顧客
+│   ├── 品牌經營:  經營概況 · 投放中心 · 素材工作檯 · 訂單與顧客
 │   ├── 品牌資料:  產品 · 品牌智庫 · 顧問分析報告
 │   └── footer:    設定 · user card (avatar · role · chevron → org menu)
 └── .app-workspace
@@ -165,7 +165,9 @@ Navigation reads 工作區 → 品牌 → 功能:
   through TanStack Query with cache keys that include org and brand, so a switch never shows the previous
   object's data.
 - Breadcrumb inside the page (`nav[aria-label="麵包屑"]`) is hidden; the topbar carries 當前位置.
-- The 15 routes (素材工作檯 added 2026-09-09, ADR 0068) and the `/app` basename are fixed; all of the above is done with in-page tabs and layout.
+- The routes are **17** (F03-I17, 2026-09-13): `/brands/:id/schedule` (檔期規劃) is retired, replaced
+  by `/brands/:id/ads` and its two sibling routes (投放中心 清單頁／建立 Campaign／Campaign 工作區).
+  The `/app` basename is fixed; all of the above is done with in-page tabs and layout.
 
 ---
 
@@ -173,7 +175,7 @@ Navigation reads 工作區 → 品牌 → 功能:
 
 Every routed screen, top to bottom:
 
-1. **`PageHeader`** — `h1` noun phrase (經營概況、檔期規劃、產品), muted subtitle (brand name +
+1. **`PageHeader`** — `h1` noun phrase (經營概況、投放中心、產品), muted subtitle (brand name +
    tagline or one-line purpose), right-aligned actions (`Button variant="outline"` with icon,
    optional 示意資料 `Badge variant="secondary"`).
 2. **`PageTabs`** — segmented control, left; the same row's right side holds context
@@ -205,24 +207,20 @@ block is first, and the same ordering applies inside tabs.
 Width caps are readability caps, not bugs: a 68ch paragraph or a 760px form beside white space is
 correct. Cards that carry data use the full grid cell.
 
-### 5.1 Staged workspace (檔期規劃)
+### 5.1 投放中心：清單頁 ＋ Campaign 工作區
 
-A long flow is a sequence of stages, each one screen, never one page that grows:
+投放中心：清單頁 ＋ Campaign 工作區（五個分頁：總覽／策略/投放結構/素材/成效，分頁狀態在查詢字串）。
+`/brands/:id/ads` 是清單頁（Campaign 清單 + 建立 Campaign），`/brands/:id/ads/campaigns/:id` 是工作區。
+同樣的規則沿用自舊版的 staged workspace：
 
-基本設定 → 方案比較 → 投放結構 → 素材準備
-
-| Stage | Left / main | Right |
-|---|---|---|
-| 基本設定 | product, goal, dates | pinned budget and settings summary |
-| 方案比較 | plan summaries as a list | the selected plan, readable; side-by-side only when structured fields exist |
-| 投放結構 | collapsible hierarchy tree | the selected node's budget and content (replaces nested cards) |
-| 素材準備 | one card per deepest node | the node's one copy length with its fixed hint, headlines, descriptions, copy buttons; the image-prompt round and a link to 素材工作檯 |
-
-- 配對、核准、撤回、結算 live in the stage they belong to and are enabled by **backend state**, never by
-  the stage number the frontend is on.
+- 發布、配對、核准、撤回、結算 live in the tab they belong to and are enabled by **backend state**, never
+  by which tab the frontend is on.
 - 核准 keeps its meaning: the button must not look like it publishes an ad (`CONSTITUTION.md` rule 9).
-- Background work shows the stage being processed, success or failure, and a retry; leaving and returning
+- Background work shows what is being processed, success or failure, and a retry; leaving and returning
   restores it. No percentage bar without real progress data.
+
+（F03 分期 A：五分頁陽春；F03-I13 只立殼與清單頁，內容分頁由後續票補上。原型的工作佇列／建議卡／
+發布前檢查／批次操作／Inspector／完整清單頁屬於 F04／F05，不在這裡。）
 
 ### 5.2 Screen assignments
 
@@ -232,6 +230,7 @@ A long flow is a sequence of stages, each one screen, never one page that grows:
 | 品牌總覽 (跨品牌) | one brand: its own layout; many brands: health, revenue and next step compared; brand entry and task entry separated |
 | 收件匣 | compact list + detail pane; 待處理／已處理 toggle; brand and severity legible at a glance |
 | 品牌智庫 | workspace split: vertical categories with counts, list in the middle, detail on the right; never two rows of horizontal tabs. 官方素材 browses thumbnails; 事實／規則／宣稱 are lists |
+| 投放中心 | 清單頁：`.table-surface` of Campaign（name, status pill, dates, objective, budget, spend so far）+ 建立 Campaign; 工作區：五個 `PageTabs`（總覽／策略/投放結構/素材/成效），分頁狀態在查詢字串。F03 分期 A 只做五分頁陽春，工作佇列／建議／本月預算卡是 F04 |
 | 素材工作檯 | four screens, one IA: 入口（pack card grid／list, search ＋ status pills ＋ 最近使用 ＋ 快速開始） → 任務包（meta strip・摘要・完成條件・素材組 table） → 素材組 studio（tabs per 產物類型, versions as history, 生成設定） → 自由創作（AI 解析 free text → editable sets, two-click flow）. The pack rail and set rail are pack-local／set-local, not the OS sidebar, not a new shared kit component |
 | 產品清單 | comparison table; product name, 待確認 count and cost status emphasised |
 | 產品詳情 | product title + the same `PageTabs`; 再次調研 behind an explicit action |
@@ -285,8 +284,8 @@ Retired (deleted 2026-09-07, old look, zero importers): `FluidCard`, `StatBig`, 
   total row separated by a hairline, footnote states the sort and the cap (「依花費排序，最多顯示 5 個活動」).
 - **Charts** answer one question each and exist for glance-legibility, not as filler; an information-dense
   overview may carry many. Axis labels and legends use muted text; no 3D, no gradients on data marks
-  except the approved bar gradient, no chart junk. ECharts only for the coordinate quadrant; everything
-  else is HTML/CSS.
+  except the approved bar gradient, no chart junk. ECharts 用於座標象限與投放中心的成效趨勢圖，其餘一律
+  HTML/CSS。
 - **Empty and partial**: 「未追蹤」 for a channel not connected, 「累積中」 for a window not closed,
   「成本還沒登記，算不出毛利（3 個 SKU）」 for a blocked derivation. Never fabricate a date range,
   organic metric or profit figure the API does not return.
@@ -331,7 +330,7 @@ range; appearance is never added ahead of data.
 4. Real-browser acceptance on a **fresh browser session and a restarted backend**; a cached bundle
    shows old code. Check 1024 and 1920, and the loading / empty / error states, not only the happy path.
 5. A new gate is proven red once before it counts.
-6. The three representative screens — 經營概況 (data), 檔期規劃 (flow), 品牌智庫 (data management) —
+6. The three representative screens — 經營概況 (data), 投放中心 (flow), 品牌智庫 (data management) —
    are the acceptance set for any change to the kit or the shell, each in **empty, normal and heavy
    data**. Empty screenshots alone never prove a layout.
 

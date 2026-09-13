@@ -102,9 +102,19 @@ test("15 條路由（扣 /accept-invite）在 1280 寬不橫向溢出", async ({
   await page.goto(`/app/brands/${brandId}/report`);
   await assertNoOverflow("/brands/:brandId/report");
 
-  // --- /brands/:brandId/schedule ------------------------------------------------
-  await page.goto(`/app/brands/${brandId}/schedule`);
-  await assertNoOverflow("/brands/:brandId/schedule");
+  // --- /brands/:brandId/ads（投放中心首頁，F03-I17 取代 /schedule）--------------------
+  await page.goto(`/app/brands/${brandId}/ads`);
+  await assertNoOverflow("/brands/:brandId/ads");
+
+  // --- /brands/:brandId/ads/new：建 Campaign，量表單頁再量出來的工作區頁 ----------------
+  await page.getByRole("link", { name: "建立 Campaign" }).click();
+  await assertNoOverflow("/brands/:brandId/ads/new");
+  await page.getByLabel("你這次想做到什麼？").fill("寬度測試用的一句話目標，預算大約三萬。");
+  await page.getByRole("button", { name: "讓行銷駕駛艙規劃", exact: true }).click();
+
+  // --- /brands/:brandId/ads/campaigns/:campaignId ---------------------------------
+  await expect(page).toHaveURL(new RegExp(`/app/brands/${brandId}/ads/campaigns/[^/]+`));
+  await assertNoOverflow("/brands/:brandId/ads/campaigns/:campaignId");
 
   // --- /brands/:brandId/workbench（票 workbench/04，ADR 0068；F02 四個畫面加三條）-------
   await page.goto(`/app/brands/${brandId}/workbench`);

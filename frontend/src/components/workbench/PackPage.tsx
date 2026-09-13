@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { ChevronRight, MoreHorizontal } from "lucide-react";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { EmptyState } from "@/components/layout/EmptyState";
@@ -131,7 +131,20 @@ export function PackPage({ brandId, packId }: { brandId: string; packId: string 
           <div className="surface flex flex-col gap-3 p-4">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div className="flex flex-col gap-1">
-                <Badge variant="outline" className="w-fit">{pack.source_label}</Badge>
+                {pack.origin_label ? (
+                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                    <span>
+                      {pack.status === "done" ? `已同步至 ${pack.origin_label}` : `來源：${pack.origin_label}`}
+                    </span>
+                    {pack.origin_href && (
+                      <Link to={pack.origin_href} className="text-primary hover:underline">
+                        回到投放中心
+                      </Link>
+                    )}
+                  </div>
+                ) : (
+                  <Badge variant="outline" className="w-fit">{pack.source_label}</Badge>
+                )}
                 <div className="flex items-center gap-2">
                   <h1 className="text-xl font-semibold text-foreground">{pack.name}</h1>
                   <Badge className={STATUS_TONE[pack.status]}>{STATUS_LABEL[pack.status]}</Badge>

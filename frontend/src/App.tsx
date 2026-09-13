@@ -8,6 +8,7 @@ import {
   useParams,
   useSearchParams,
 } from "react-router-dom";
+import { AdsHomePage, CampaignWorkspace, NewCampaignPage } from "@/components/ads";
 import { AppShell } from "@/components/layout/AppShell";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { EmptyState } from "@/components/layout/EmptyState";
@@ -23,7 +24,6 @@ import { ProductDetailPage } from "@/components/products/ProductDetailPage";
 import { ProductListPage } from "@/components/products/ProductListPage";
 import { BrandReportPage } from "@/components/report/BrandReportPage";
 import { OrdersPage } from "@/components/orders/OrdersPage";
-import { SchedulePage } from "@/components/schedule/SchedulePage";
 import { SettingsPage } from "@/components/settings/SettingsPage";
 import { FreeJobPage, PackPage, SetStudioPage, WorkbenchHomePage } from "@/components/workbench";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -81,7 +81,12 @@ function App() {
         />
         <Route path="/brands/:brandId/orders" element={<OrdersRoute />} />
         <Route path="/brands/:brandId/report" element={<BrandReportRoute />} />
-        <Route path="/brands/:brandId/schedule" element={<ScheduleRoute />} />
+        <Route path="/brands/:brandId/ads" element={<AdsHomeRoute />} />
+        <Route path="/brands/:brandId/ads/new" element={<AdsNewRoute />} />
+        <Route
+          path="/brands/:brandId/ads/campaigns/:campaignId"
+          element={<AdsCampaignRoute />}
+        />
         <Route path="*" element={<NotFoundRoute />} />
       </Route>
     </Routes>
@@ -348,12 +353,32 @@ function OrdersRoute() {
   );
 }
 
-/** 檔期規劃（票 07：最薄路徑）。 */
-function ScheduleRoute() {
+/** 投放中心首頁（F03-I13）：Campaign 清單＋建立入口，取代檔期規劃。 */
+function AdsHomeRoute() {
   const { brandId } = useParams<{ brandId: string }>();
   return (
     <>
-      <SchedulePage brandId={brandId ?? ""} />
+      <AdsHomePage brandId={brandId ?? ""} />
+    </>
+  );
+}
+
+/** 建立 Campaign（F03-I13）：一句話描述目標 → 行銷駕駛艙規劃初版策略。 */
+function AdsNewRoute() {
+  const { brandId } = useParams<{ brandId: string }>();
+  return (
+    <>
+      <NewCampaignPage brandId={brandId ?? ""} />
+    </>
+  );
+}
+
+/** Campaign 五分頁工作區（F03-I13 起占位，F03-I14 起是真的內容）。 */
+function AdsCampaignRoute() {
+  const { brandId, campaignId } = useParams<{ brandId: string; campaignId: string }>();
+  return (
+    <>
+      <CampaignWorkspace brandId={brandId ?? ""} campaignId={campaignId ?? ""} />
     </>
   );
 }

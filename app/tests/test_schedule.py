@@ -493,34 +493,12 @@ class BuildTreeTest(unittest.TestCase):
 # -- 2d. 票 09 settled 段第 8 點：活動樹元件不得寫死通路詞彙 ---------------------------
 
 class CampaignTreeVocabularyGateTest(unittest.TestCase):
-    """加一個通路＝加一個部門任務檔（`app/departments/ads/campaign_tree.md`），不是改這支
-    前端元件——這道閘門逐字掃過去確保沒人偷懶寫死。字面比對區分大小寫：元件本身叫
-    `CampaignTree`（大寫 C），跟清單裡小寫的 `campaign` 不是同一個字串，不誤判。
+    """票 01 done-check 最後一條：「不要寫死」延伸到 Python 那一側。這裡只掃創意詞彙
+    （切角／主題／素材檔／創意簡報／一條學習），不套用平台詞彙清單——`routes.py` 的註解
+    本來就會提到 Meta／Google／TikTok 這類平台名稱解釋歷史決定（例如 46 行「campaign_plan」
+    改名的由來），那從來不是這道閘門要抓的東西；但這五個創意詞彙沒有任何理由出現在後端
+    程式碼的任何角落，包含註解——它們的定義只准活在素材工作檯自己的部門任務檔裡。"""
 
-    票 01：這個元件延伸到 CONTEXT.md「外殼認得的業務詞只有三個」那條界線——切角／主題／
-    素材檔／創意簡報／一條學習全部下放給素材工作檯自己的部門任務檔，一併
-    加進這裡的清單（這支元件現在也渲染最深層節點的內容）。"""
-
-    _BANNED_WORDS = [
-        "Meta", "Facebook", "Instagram", "Google", "TikTok",
-        "campaign", "adset", "ad set", "行銷活動", "廣告組合", "廣告",
-        "切角", "主題", "素材檔", "創意簡報", "一條學習",
-    ]
-
-    def test_component_has_no_platform_or_creative_vocabulary(self):
-        path = (
-            Path(__file__).resolve().parents[2]
-            / "frontend" / "src" / "components" / "schedule" / "CampaignTree.tsx"
-        )
-        text = path.read_text(encoding="utf-8")
-        hits = [word for word in self._BANNED_WORDS if word in text]
-        self.assertEqual(hits, [], f"CampaignTree.tsx 含通路或創意詞彙：{hits}")
-
-    # 票 01 done-check 最後一條：「不要寫死」延伸到 Python 那一側。這裡只掃創意詞彙
-    # （切角／主題／素材檔／創意簡報／一條學習），不套用平台詞彙清單——`routes.py` 的註解
-    # 本來就會提到 Meta／Google／TikTok 這類平台名稱解釋歷史決定（例如 46 行「campaign_plan」
-    # 改名的由來），那從來不是這道閘門要抓的東西；但這五個創意詞彙沒有任何理由出現在後端
-    # 程式碼的任何角落，包含註解——它們的定義只准活在素材工作檯自己的部門任務檔裡。
     _CREATIVE_WORDS = ["切角", "主題", "素材檔", "創意簡報", "一條學習"]
     _BACKEND_SCANNED_PATHS = [
         ("app", "schedule", "routes.py"),

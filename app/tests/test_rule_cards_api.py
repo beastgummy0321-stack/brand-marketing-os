@@ -35,8 +35,10 @@ class RuleCardsApiTest(unittest.TestCase):
         cards = body["data"]["cards"]
         # 2026-08-29 刪掉六張沒有消費端的卡剩四張；dead-code-sweep 票 04（2026-08-30）
         # 再刪 rule_expiry（規則不再過期），剩三張。票 01（T6c 成效判讀）加回第四張
-        # `gross_margin`（打平線用的毛利率，決定 1b）。
-        self.assertEqual(len(cards), 4)
+        # `gross_margin`（打平線用的毛利率，決定 1b）。F03-I17（使用者裁決 4：預算搬進
+        # 投放中心）把 `schedule_budget` 從設定頁清單藏起來，回到 3 張。
+        self.assertEqual(len(cards), 3)
+        self.assertNotIn("schedule_budget", {c["key"] for c in cards})
         card = next(c for c in cards if c["key"] == "rule_prompt_cap")
         self.assertEqual(set(card.keys()), {"key", "title", "description", "fields"})
         field = card["fields"][0]

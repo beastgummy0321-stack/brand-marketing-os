@@ -417,6 +417,7 @@ async def api_settings_ai_monthly_cost_limit_post(request: Request):
 # Router 註冊
 # ---------------------------------------------------------------------------
 
+from app import ads as ads_module  # noqa: E402
 from app import brand_web as brand_web_module  # noqa: E402
 from app import dashboard as dashboard_module  # noqa: E402
 from app import identity as identity_module  # noqa: E402
@@ -433,7 +434,8 @@ from app import workbench as workbench_module  # noqa: E402
 # 了——在這個迴圈之前、`_load_dotenv()` 後面就先跑過一次（見上面），不管 identity
 # 排在這個 tuple 第幾個都一樣早炸。
 for _module in (brand_web_module, intake_module, meta_module, orders_module,
-                 schedule_module, workbench_module, dashboard_module, identity_module):
+                 schedule_module, workbench_module, ads_module, dashboard_module,
+                 identity_module):
     _module.register(app)
 
 # 票 05：掛每日 Meta 花費拉取的 procrastinate task（冪等，見 app/meta/daily_pull.py
@@ -448,6 +450,10 @@ schedule_module.register_tasks()
 # 票 workbench/02：掛一個生成 task（素材工作檯），同一個「DSN 換了要重掛」的理由，見
 # app/workbench/jobs.py register_tasks() 檔頭。
 workbench_module.register_tasks()
+
+# 票 F03-I12：掛結案的自動路徑（7 天後自動結案＋寫學習），同一個「DSN 換了要重掛」的理由，見
+# app/ads/jobs.py register_tasks() 檔頭。
+ads_module.register_tasks()
 
 # 啟動斷言（第 2 刀「清理登記處」）：確認刪品牌時該連鎖清資料的模組都有登記進
 # app.core.cleanup，少一個就不讓服務起來，避免又漏掉誰。

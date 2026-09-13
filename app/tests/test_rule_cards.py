@@ -66,15 +66,23 @@ class RuleCardValueTest(unittest.TestCase):
         cards = rule_cards.list_cards(self.conn, BID_A)
         # 2026-08-29 刪掉六張沒有消費端的卡剩四張；dead-code-sweep 票 04（2026-08-30）
         # 再刪 rule_expiry（規則不再過期），剩三張。票 01（T6c 成效判讀）加回第四張
-        # `gross_margin`（打平線用的毛利率，決定 1b）。
-        self.assertEqual(len(cards), 4)
+        # `gross_margin`（打平線用的毛利率，決定 1b）。F03-I17（使用者裁決 4：預算搬進
+        # 投放中心）把 `schedule_budget` 從設定頁清單藏起來，`list_cards` 回到 3 張——
+        # 卡片定義沒刪，`get_value` 照常可用（舊 schedule 程式碼還在讀）。
+        self.assertEqual(len(cards), 3)
         by_key = {c["key"]: c for c in cards}
+        self.assertNotIn("schedule_budget", by_key)
         self.assertIn("規則", by_key["rule_prompt_cap"]["title"])
         for c in cards:
             self.assertTrue(c["description"])  # 「這個門檻管什麼」說明不可空
             for f in c["fields"]:
                 self.assertTrue(f["label"])
                 self.assertTrue(f["help"])
+        # 藏起來 ≠ 刪掉：get_value 仍能讀 schedule_budget 的預設值。
+        self.assertEqual(
+            rule_cards.get_value(self.conn, BID_A, "schedule_budget", "daily_budget"),
+            rule_cards.CARDS["schedule_budget"]["fields"]["daily_budget"]["default"],
+        )
 
     def test_rule_prompt_cap_default_matches_adr_0012(self):
         """票 02-prompt-cap-and-overflow-list：進生成提示詞的規則上限，系統預設 20 條

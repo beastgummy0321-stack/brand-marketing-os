@@ -25,6 +25,21 @@
         "supabase/migrations/*_workbench_*.sql"
       ]
     },
+    "ads": {
+      "root": "app/ads",
+      "public": "app/ads/__init__.py",
+      "may_depend_on": [
+        "workbench"
+      ],
+      "owns": [
+        "app/ads/**",
+        "app/departments/ads/**",
+        "app/tests/test_ads*.py",
+        "frontend/src/components/ads/**",
+        "frontend/src/lib/adsApi.ts",
+        "supabase/migrations/*_ads_*.sql"
+      ]
+    },
     "schedule": {
       "root": "app/schedule",
       "public": "app/schedule/__init__.py",
@@ -33,7 +48,6 @@
       ],
       "owns": [
         "app/schedule/**",
-        "app/departments/ads/**",
         "app/tests/test_schedule*.py",
         "app/tests/test_approval.py",
         "app/tests/test_imported_ad_schema.py",
@@ -69,6 +83,46 @@
         "supabase/migrations/*_workbench_*.sql"
       ],
       "symbol": "workbench_output"
+    },
+    "ads_campaign": {
+      "owner": "ads",
+      "kind": "sql-table",
+      "definition": [
+        "supabase/migrations/*_ads_*.sql"
+      ],
+      "symbol": "ads_campaign"
+    },
+    "ads_delivery_group": {
+      "owner": "ads",
+      "kind": "sql-table",
+      "definition": [
+        "supabase/migrations/*_ads_*.sql"
+      ],
+      "symbol": "ads_delivery_group"
+    },
+    "ads_ad": {
+      "owner": "ads",
+      "kind": "sql-table",
+      "definition": [
+        "supabase/migrations/*_ads_*.sql"
+      ],
+      "symbol": "ads_ad"
+    },
+    "ads_action": {
+      "owner": "ads",
+      "kind": "sql-table",
+      "definition": [
+        "supabase/migrations/*_ads_*.sql"
+      ],
+      "symbol": "ads_action"
+    },
+    "ads_outcome_daily": {
+      "owner": "ads",
+      "kind": "sql-table",
+      "definition": [
+        "supabase/migrations/*_ads_*.sql"
+      ],
+      "symbol": "ads_outcome_daily"
     },
     "campaign_period": {
       "owner": "schedule",
@@ -195,6 +249,37 @@ Traditional-Chinese vocabulary for every business term is in `CONTEXT.md`; front
 `docs/design-system.md`. This file is the only place where module boundaries, data ownership and
 settled decisions live. Previous versions are in git.
 
+## 0. What this system is for, and what failure looks like
+
+MarketingOS owns one thing: the brand's decision flow —
+goal → context → decision → strategy → artifact → action → outcome → learning → next goal.
+Success is whether that chain closes for one brand, not how many modules exist.
+
+Before cutting any issue the planner answers five questions:
+1. Which link of the chain does this serve? No answer = an isolated feature.
+2. Where does its input come from? Existing brand / product / campaign / history rows — never re-asking the user.
+3. Where does its output go? Into the next link as structured data, not a screen the user copies from.
+4. What trace does it leave? Why, what, which data, who approved, what happened.
+5. If removed, does the OS still hold? Yes = pluggable module. No = core.
+
+Golden path (prove this before any new module): brand → offering → goal (the brief) → strategy →
+delivery plan → pack → artifacts → publish (manual or simulated) + bind → outcome → verdict against
+the campaign's success criterion → learning → the next campaign's strategy reads the learning.
+
+Stop signals — any one means stop adding features and re-check the architecture:
+- a module keeps its own copy of brand data · one product fact lives in two places
+- the user copies between screens · a step cannot see what the previous step did
+- an outcome cannot find its campaign · a learning cannot show its evidence · a suggestion cannot say why
+- one feature touches many modules · every feature adds system prompt · the user must know module
+  names to finish a simple job · features grow but the full job still does not complete
+
+Autonomy is earned: observe → recommend → act with approval → bounded autonomy. Today: recommend,
+manual or simulated execution, zero writes to a live platform. Learning keeps its uncertainty:
+「看不出」 is a valid verdict and a correlation is never reported as a cause.
+
+Every feature close answers one sentence: did this make the OS better at understanding, deciding,
+executing, learning and handing over — or did it add a feature?
+
 ## 1. Shape
 
 Python 3.12 + FastAPI backend (`app/`), Postgres through Supabase (Postgres / Auth / Storage /
@@ -210,16 +295,25 @@ Branches: `saas` is the developed line; `master` is the retired single-machine S
 
 ## 2. Managed modules and the legacy surface
 
-Managed modules today are `workbench` and `schedule` — the two packages this round changes. They
-follow the container rules: one root, one public entry (`app/<module>/__init__.py`), declared
-dependencies, no cycles, no import of the app shell. The machine check is
-`tools/check_architecture.py`, driven by the manifest above.
+Managed modules today are `workbench`, `schedule` and `ads`. They follow the container rules: one
+root, one public entry (`app/<module>/__init__.py`), declared dependencies, no cycles, no import of
+the app shell. The machine check is `tools/check_architecture.py`, driven by the manifest above.
+
+`ads` (投放中心) is the module added 2026-09-12 for the Ads V2 loop (§6). It depends on `workbench`
+only; everything else it needs it reaches through legacy facades — `app/meta/repository.py` (bound
+accounts, exact-name entity lookup, `daily_entity_spend`), `app/brand_intelligence/repository.py`
+(brand facts, product economics, the learning ledger), `app/core/*`, `app/llm/*`, `app/shared/web.py`,
+`app/background/__init__.py`. It never imports `app.schedule` and never names another module's table
+in a string literal.
 
 Everything else under `app/` (core, shared, llm, identity, meta, brand_intelligence, brand_web,
 intake, orders, dashboard, storage, background, tools) plus `scripts/` is **legacy**: it works, it
 is not governed by the container checker, and it may shrink but never grow. A managed module
 reaches legacy code only through a file listed in `legacy_facades` (in practice: the package entry
-or the module's `repository.py` / `gateway.py`). New capability never lands in legacy; moving a
+or the module's `repository.py` / `gateway.py`). `may_depend_on` governs **managed modules only**:
+importing a legacy facade is not an entry there and never needs one — `ads`' `may_depend_on:
+["workbench"]` does not forbid `app/ads/repository.py` importing `app.brand_intelligence.repository`
+(it is a declared facade; F03-I19 review). New capability never lands in legacy; moving a
 caller out of legacy is a `legacy_migration: true` issue with `review: planner`. There is no
 clean-up-first round and no tolerance ledger.
 
@@ -258,29 +352,64 @@ whichever ticket changes it.
 ## 3. Data ownership
 
 `workbench_pack`, `workbench_brief` and `workbench_output` belong to `workbench`; the
-campaign/period tables belong to `schedule`. Physical definitions live in the shared `supabase/migrations/` directory, one file
+campaign/period tables belong to `schedule`; `ads_campaign`, `ads_delivery_group`, `ads_ad`,
+`ads_action` and `ads_outcome_daily` belong to `ads`. Physical definitions live in the shared `supabase/migrations/` directory, one file
 per module prefix (`<timestamp>_<module>_<desc>.sql`); an applied migration is never edited, a
 correction is a new file.
+
+`learning_ledger` stays where it is — in `brand_intelligence`, which is legacy. It is brand
+knowledge shown in 品牌智庫, not ads bookkeeping, so `ads` does not own it and does not write it
+with SQL: `app/brand_intelligence/repository.py` (already a legacy facade, already registered for
+brand/product deletion) gains `record_learning` / `list_learnings` and `ads` calls those. The
+capability — when a learning is written, at what level, when it needs revalidation — lives in
+`ads`; the facade only stores and reads rows of the table its own package already owns. The four
+other dead tables (`decision`, `strategy_hypothesis`, `campaign_period_budget_version`,
+`brand_dismissed_calendar_category`) stay in `docs/backlog/issue-five-live-tables-zero-code.md`;
+dropping them is not part of building the loop.
 
 Two cross-module raw-SQL reads exist and are deliberate, pre-dating the manifest:
 `app/workbench/repository.py::list_coordinate_vocabulary` reads `brand_coordinate`/`feedback`
 (schedule's tables) read-only rather than importing `app.schedule`, which would reverse the
 dependency direction. They are recorded here rather than declared as owned resources; the layer
-scan in `app/tests/test_architecture_boundaries.py` remains the tripwire for new ones. Do not add
-a third one without a planner decision.
+scan in `app/tests/test_architecture_boundaries.py` remains the tripwire for new ones.
+
+A third one is granted, 2026-09-12, for the same reason, and shipped in F03-I06 as
+`app/ads/repository.py::coordinate_vocabulary` (`SELECT dimension, key, label FROM
+brand_coordinate WHERE org_id/brand_id AND disabled_at IS NULL`) — the one copy inside `ads`:
+`ads` reads `brand_coordinate` read-only for the seven-coordinate vocabulary and its labels, and
+every later ads issue that needs the vocabulary calls that function instead of writing its own
+query. `brand_coordinate` is brand vocabulary that
+outlives the module that happens to hold it today — when `schedule` retires (§4) the table moves to
+`ads`, and until then importing `app.schedule` from `ads` would build a dependency we are about to
+delete. `ads` writes nothing there and reads nothing else of schedule's. Do not add a fourth
+without a planner decision.
 
 ## 4. The loop, end to end
 
-品牌建檔精靈 (`intake`) fills 品牌智庫 (`brand_intelligence`) → 檔期規劃 (`schedule`) produces a
-plan, then expands the chosen plan into a three-level campaign tree whose deepest nodes each carry
-the seven coordinates (audience · pain · angle · hook · proof · offer · format) → the expansion dispatches
-one 任務包 into 素材工作檯 (`workbench`), one 素材組 per deepest node (§5.4) → the workbench
-generates copy, image prompts and video scripts; the user 選定 one version per required 產物 and
-核准整包 → the schedule page reads the selected output back for the 投放包 → Meta binding, spend pull (`meta`), diagnosis and settlement close the period.
+品牌建檔精靈 (`intake`) fills 品牌智庫 (`brand_intelligence`) → the user describes one goal in one
+sentence in 投放中心 (`ads`), which derives a draft Campaign carrying 為什麼做 (`goal_text`), 目標
+(`objective`) and 成功條件 (`success_criterion`) plus the ids of the brand and product rows it used
+→ one recommended 策略 (新客／再行銷／探索 split, budget scenarios) → 採用策略 writes the delivery
+plan as real rows, Campaign → 通路 → 投放組 → 廣告, each deepest row carrying the seven coordinates
+(audience · pain · angle · hook · proof · offer · format) → the plan dispatches one 任務包 into
+素材工作檯 (`workbench`), one 素材組 per 廣告 (§5.4) → the workbench generates copy and image
+prompts; the user 選定 one version per required 產物 and 核准整包 → 投放中心 reads readiness back
+through the workbench's public entry, or the user ticks 「素材已就位」 → 發布 goes through a channel
+adapter (`manual` 手動清單＋配對, `simulated` 演練用, auto-Meta reserved and 未接上) which binds the
+rows to platform entities → daily outcome rows are attributed by the bound entity → 結案 judges the
+outcome against the campaign's own 成功條件 → a learning row goes into `learning_ledger` → the next
+campaign's strategy prompt reads it. Every change meant to reach a platform is an `ads_action` row
+(what, before, after, who approved, sync state, reversible).
 
-The dependency is one-way: `schedule` imports `workbench`'s public entry, never the reverse. The
-workbench knows no tree — it stores `source_kind` + `source_ref` and compares them, never
-interprets them.
+The dependency is one-way: `ads` and `schedule` import `workbench`'s public entry, never the
+reverse. The workbench knows no tree — it stores `source_kind` + `source_ref` and compares them,
+never interprets them, and the 來源 line it shows is a string the upstream handed it.
+
+`schedule` (檔期規劃) is what 投放中心 replaces. Its four-stage page, its route and its sidebar entry
+retire with the Ads V2 loop; its package stays because 經營概況 still reads its 判讀 surfaces
+(creative-performance, diagnosis, coordinates, 舊廣告 history) and those are entangled with
+`plan.py`／`state.py`. The package retires when those readers move — not before, and no new work
+lands in it.
 
 ## 5. 素材工作檯 — settled decisions (2026-09-12 reset)
 
@@ -314,7 +443,13 @@ in `.work/features/F02.md`; where a prototype and an image differ, the image win
 4. **The upstream handoff contract.** An upstream module hands over one pack in one call,
    `submit_pack(conn, org_id, brand_id, pack)`; the workbench never learns how the upstream works
    and still only stores and compares `source_ref`, never interprets it. `pack` carries: `source`
-   (`source_kind` ＋ opaque `source_ref`), `name`, `context` (brand／product／campaign ids),
+   (`source_kind` ＋ opaque `source_ref`), `name`, `context` (brand／product／campaign ids, plus
+   the two optional display strings `origin_label` and `origin_href` — 2026-09-12: the upstream
+   supplies the origin line and the in-app path back to itself, both stored verbatim in the
+   existing `context_json` and returned verbatim by `pack_detail`／`set_detail`; the workbench
+   renders them and never parses them, so removing the upstream just removes the line.
+   `origin_href` is a router path *without* the `/app` basename, e.g.
+   `/brands/<brand>/ads/campaigns/<id>?tab=assets`, and both values must be plain strings),
    `summary` (the 摘要 shown read-only on the pack page: 情境／角度／風格／目標受眾／重點訊息／
    參考連結), `sets` (each: name, opaque `source_ref`, coordinates, product_id, style_key,
    `required_outputs` = `{產物類型: 需要選定的版本數}`, and the per-type generation counts), and
@@ -424,7 +559,56 @@ in `.work/features/F02.md`; where a prototype and an image differ, the image win
     with a different shape (the per-product run parameters `copy_length`／`count`) and keeps its
     meaning; the table is the top-level one.
 
-## 6. Verification
+## 6. 投放中心 (Ads V2) — settled decisions (2026-09-12)
+
+These are decided. A worker implements them; it does not re-open them. The user's rulings are in
+`.harness/scratch/ads-v2-summary.md` (23 items) and are quoted in `.work/features/F03.md`; the
+visual reference for all three Ads V2 features is the prototype
+`.harness/scratch/prototype/ads-v2/index.html`.
+
+1. **New module, not a reshape.** The thing being replaced is the model itself — today's plan and
+   tree live as JSON inside `llm_task` rows and 93 tests in `test_schedule.py` are coupled to those
+   shapes. `ads` therefore starts clean with real rows; `schedule` is not patched. What is reused is
+   reached through legacy facades (`app/meta/repository.py` for exact-name binding and daily spend,
+   `app/brand_intelligence/repository.py` for facts, product economics and learnings), not by
+   importing `app.schedule`.
+2. **Four levels, three tables.** Campaign → 通路 → 投放組 → 廣告 is the model; the 通路 level is a
+   column on the 投放組, not a table — it has no state of its own. Nothing is platform-specific:
+   a channel is a key with a label (Meta, Google Ads, TikTok, 蝦皮, momo…); only Meta is connected,
+   the rest read 未接上, and no platform name is baked into a column name or a CHECK.
+3. **Budget lives in 投放中心.** Money is allocated at the 投放組 level only; the 廣告 level shows
+   observed spend share. Breakeven CPA = 售價 − 單位成本 − 運費 (`product_economics`), target CPA =
+   breakeven × 0.7. No spend history → 日預算 = target CPA × 每天想要的購買數 (最低 2 ／推薦 5 ／
+   積極 10), labelled 冷啟動估算; with history → 近 30 天 CPA 中位數, scenarios ×0.6 ／×1 ／×1.6.
+   Every number is editable; the AI only prefills. The 設定 page's 檔期日預算 card goes away.
+   After 採用策略 the **group daily budgets are the single source of truth**; the campaign row keeps
+   the adopted scenario amount as `budget_planned` for the record, and the total on screen is
+   `sum(daily) × days`, derived in one place.
+4. **Channel adapters, one interface.** `manual` (checklist with copy buttons → the user builds on
+   the platform → 配對 by exact name, the existing algorithm) and `simulated` (publishing binds fake
+   entities **and** writes the daily outcome rows for the days already elapsed, so a walkthrough
+   reaches 成效 in the browser with no command line) ship now; the auto-Meta adapter is a reserved
+   third that reports 未接上. Binding columns live on all three levels (campaign, group, ad) because
+   the platform's name lookups are hierarchical, and the campaign node is bound first. Nothing in
+   the product ever asks the user to run live ads to see a result.
+5. **Every platform-bound change is an `ads_action` row** — what changed, before, after, who
+   approved, sync state (`pending_manual` / `confirmed_manual` / `auto_synced`), platform ref,
+   reversible by a reverse action. It replaces `campaign_period_budget_version`. Budget raises still
+   pass through `app/core/approval.py` (`max_daily_amount` stays the brake).
+6. **Outcome attribution is by bound entity.** One `ads_outcome_daily` row per (entity, day), fed
+   either by the Meta ingest (read `meta_entity_spend` through `app.meta.repository`) or by the
+   simulated adapter. 重疊分帳 (ADR 0053's day-splitting between overlapping 檔期) does not come
+   along; a campaign owns the entities bound to it.
+7. **Learning is inference, never a brand fact.** Written at 結案 (and at 採用建議, from F04) into
+   `learning_ledger` through the brand_intelligence facade; level by fixed rule — 1 campaign =
+   已觀察, ≥2 same-direction = 可能成立, 已驗證 needs a same-period comparison or ≥3 campaigns (a
+   human tick also counts); `needs_revalidation` when older than 180 days or the source offering's
+   price changed. Adopting a suggestion never writes a `rule` row — only the user's own typed
+   feedback does.
+8. **Confidence is a sample bucket (低／中／高), never a percentage**, and no model reads raw ad
+   history (ADR 0067): evidence tables are program-computed.
+
+## 7. Verification
 
 `verify.typecheck` runs ruff, pyright, the frontend type build and dependency-cruiser; `verify.test`
 is the full pytest suite with `-n 8 --dist loadfile` (`-n auto` exhausts Postgres connections, see

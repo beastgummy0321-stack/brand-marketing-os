@@ -214,8 +214,12 @@ _Avoid_: 擋下、審核
 _（本節原本還有「補件重判」「切角改名」兩條，依據 ADR 0022 與 `experiment_cell` 表，
 兩者都已作廢／刪除，於 2026-09-02 移除。）_
 
-**檔期**（ADR 0053，T2 起是真的實體）：一段有起訖日的投放期間，在排程頁按「出方案」那一刻誕生。表是 `campaign_period`（schedule）。**它是篩選條件不是資料夾**（憲法第 6 條）——同一組廣告可以同時被兩個檔期認領。四個狀態：規劃中／進行中／已結束需人工確認／已結算。
-_Avoid_: 活動週期、campaign cycle（`campaign_cycle` 表已刪）、檔期資料夾
+**Campaign**（`ads_campaign`，F03 起，取代檔期規劃的核心物件）：投放中心工作區的實體——帶著
+`goal_text`（為什麼做）、`objective`（目標）、`success_metric`／`success_target`／`success_basis`
+（成功條件，`success_target` 可以是 null——AI 沒把握就不編數字）；Campaign → 通路 → 投放組 → 廣告
+是它的投放結構。五個狀態：草稿／待發布／投放中／已結束／已結案。
+_Avoid_: 檔期、檔期規劃、重疊分帳——這三個是退場語彙，只留給 legacy `schedule` package（`schedule`
+還在跑是因為經營概況仍讀它的判讀表面，不是因為它還是外殼的詞彙）。
 
 **結算**（ADR 0053）：使用者按下按鈕，把這期的花費與營收**當下的數字**拍成快照存進檔期（`settled_spend`／`settled_revenue`／`settled_at`）。快照之後不會自己變；晚到的錢照樣入庫，畫面另外標差額，要更新就再按一次（舊值進稽核紀錄）。過了結束日系統只會自己轉成「已結束，需人工確認」，**不會自己結算**。
 _Avoid_: 關檔、封存、自動結算

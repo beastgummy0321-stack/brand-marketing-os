@@ -103,6 +103,11 @@ CARDS = {
 }
 
 
+# F03-I17：檔期規劃退場，預算搬進投放中心（使用者裁決 4）——設定頁不再列這張卡，
+# 卡片定義本身不刪（舊 schedule 程式碼還在讀 daily_budget，get_card/get_value 照常可用）。
+HIDDEN_IN_SETTINGS = {"schedule_budget"}
+
+
 def _field_def(card_key: str, field_key: str) -> dict:
     try:
         return CARDS[card_key]["fields"][field_key]
@@ -138,7 +143,7 @@ def get_card(conn: Conn | ConnProxy, brand_id: str, card_key: str) -> dict:
 
 
 def list_cards(conn: Conn | ConnProxy, brand_id: str) -> list:
-    return [get_card(conn, brand_id, key) for key in CARDS]
+    return [get_card(conn, brand_id, key) for key in CARDS if key not in HIDDEN_IN_SETTINGS]
 
 
 def set_value(conn: Conn | ConnProxy, brand_id: str, card_key: str, field_key: str,

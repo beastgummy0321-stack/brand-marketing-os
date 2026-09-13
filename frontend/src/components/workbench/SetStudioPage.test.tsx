@@ -129,28 +129,28 @@ describe("SetStudioPage 圖片 tab（F02-I13）", () => {
 const LOCK_REASON = "測試用鎖定理由，不是元件裡打死的字串";
 
 describe("SetStudioPage 四個控制（F02-I17）", () => {
-  it("已核准（schedule_node + locked）：顯示到檔期規劃連結、顯示鎖定理由、選定按鈕全部停用", async () => {
+  it("已核准（schedule_node + locked）：顯示到投放中心連結、顯示鎖定理由、選定按鈕全部停用", async () => {
     mockGetSet.mockResolvedValue(
       setDetail({ source_kind: "schedule_node", lock: { locked: true, reason: LOCK_REASON } }),
     );
     renderStudio();
 
-    const link = await screen.findByRole("link", { name: /到檔期規劃/ });
-    expect(link.getAttribute("href")).toBe("/brands/brd_1/schedule");
+    const link = await screen.findByRole("link", { name: /到投放中心/ });
+    expect(link.getAttribute("href")).toBe("/brands/brd_1/ads");
     expect(screen.getByText(LOCK_REASON)).toBeTruthy();
     expect(
       (screen.getByRole("button", { name: "選定" }) as HTMLButtonElement).disabled,
     ).toBe(true);
   });
 
-  it("未核准（free_job + unlocked）：不顯示到檔期規劃連結、按鈕可點", async () => {
+  it("未核准（free_job + unlocked）：不顯示到投放中心連結、按鈕可點", async () => {
     mockGetSet.mockResolvedValue(
       setDetail({ source_kind: "free_job", lock: { locked: false, reason: null } }),
     );
     renderStudio();
 
     await screen.findByRole("button", { name: "選定" });
-    expect(screen.queryByRole("link", { name: /到檔期規劃/ })).toBeNull();
+    expect(screen.queryByRole("link", { name: /到投放中心/ })).toBeNull();
     expect(
       (screen.getByRole("button", { name: "選定" }) as HTMLButtonElement).disabled,
     ).toBe(false);
