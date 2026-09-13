@@ -202,5 +202,36 @@ class PatchForeignProductIdRefusedTest(_BriefTestBase):
         self.assertEqual(str(ctx.exception), "product_unknown")
 
 
+class ManyProductsCappedTest(_BriefTestBase):
+    """F04-I03: 30 個商品的品牌只送前 20 個進 prompt，但白名單仍是全部 30 個——第 25 個商品
+    的 id 是模型「瞎掰」也照樣被接受，因為它其實存在，只是沒被列進 prompt。"""
+
+    def test_prompt_lists_only_20_but_whitelist_keeps_all_products(self):
+        extra_products = [
+            bi_repo.create_product(web.conn, self.brand_id, name=f"商品{i:02d}", actor=ACTOR)
+            for i in range(30)
+        ]
+        provider = _fake("{}")
+        brief.PROVIDER = provider
+
+        detail = self._create()
+
+        sent_prompt = provider.calls[0]["messages"][0]["content"]
+        # `list_products` 依名稱排序（app/brand_intelligence/repository.py）；補零讓字串排序
+        # 等於數字排序，前 20 個是「商品00」~「商品19」，其餘 11 個（「商品20」~「商品29」
+        # 加上 setUp 建的「夜跑背心」）都被截掉。
+        self.assertIn("（這個品牌另有 11 個商品沒有列出）", sent_prompt)
+
+        beyond_cap_id = extra_products[24]["id"]
+        reply = json.dumps({
+            "objective": "購買", "success_metric": "cpa", "success_target": 500,
+            "success_basis": "測試", "product_ids": [beyond_cap_id],
+            "audience_hint": None, "notes": None,
+        }, ensure_ascii=False)
+        brief.PROVIDER = _fake(reply)
+        detail = self._create()
+        self.assertEqual(detail["context_json"]["product_ids"], [beyond_cap_id])
+
+
 if __name__ == "__main__":
     unittest.main()

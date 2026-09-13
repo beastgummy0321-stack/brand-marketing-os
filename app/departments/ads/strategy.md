@@ -2,7 +2,7 @@
 
 任務代號：ADS-STRATEGY-TASK-V1（本行是這份任務檔的識別行，請照樣保留，不要在回覆裡重複貼出）。
 
-下面會給你這次投放的目標句子、目標與成功條件、投放期間、品牌已知的事實（附更新時間）、
+下面會給你這次投放的目標句子、目標與成功條件、投放期間、品牌已知的事實、
 這次投放涉及的商品與今天有效的價格、過去的學習記錄、以及程式已經算好的預算情境。你的工作
 是把「錢要怎麼分配在新客／再行銷／探索三種角色之間」講清楚——不是幫他重新算預算金額，
 金額全部由程式計算，你只回百分比。
@@ -20,9 +20,9 @@ markdown fence 包起來、物件前後不留一個字。**
 
 ## 交付內容
 
-- `allocation`：一個陣列，每一項是 `{"role", "label", "pct", "rationale"}`：
-  - `role`：`new`／`retarget`／`explore` 三選一（英文，程式要拿去對照）。
-  - `label`：這個角色的中文名稱，例如「新客」「再行銷」「探索」。
+- `allocation`：一個陣列，每一項是 `{"role", "pct", "rationale"}`：
+  - `role`：`new`／`retarget`／`explore` 三選一（英文，程式要拿去對照；中文名稱由程式自己填，
+    不用你回）。
   - `pct`：這個角色分到的百分比（0～100 的數字，全部項目加起來約等於 100）。
   - `rationale`：一句話說明為什麼這樣分，引用下面給的品牌事實／商品／學習依據。
 - `why`：這個策略整體的理由，字串陣列，每條都要能指出用了下面哪一段資料。
@@ -33,9 +33,9 @@ markdown fence 包起來、物件前後不留一個字。**
 
 {
   "allocation": [
-    {"role": "new", "label": "新客", "pct": 50, "rationale": "……"},
-    {"role": "retarget", "label": "再行銷", "pct": 30, "rationale": "……"},
-    {"role": "explore", "label": "探索", "pct": 20, "rationale": "……"}
+    {"role": "new", "pct": 50, "rationale": "……"},
+    {"role": "retarget", "pct": 30, "rationale": "……"},
+    {"role": "explore", "pct": 20, "rationale": "……"}
   ],
   "why": ["……"],
   "unknowns": ["……"],

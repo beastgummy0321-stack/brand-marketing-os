@@ -40,6 +40,9 @@ _FALLBACK_PARSED = {
     "success_basis": NOT_PARSED_BASIS, "product_ids": [], "audience_hint": None, "notes": None,
 }
 
+# prompt 裡最多列幾個商品——大品牌可能有幾百個 SKU，全部塞進去是傾印不是判斷（F04-I03）。
+_MAX_PRODUCTS = 20
+
 
 def _validate_dates(start_date: str, end_date: str) -> tuple[date, date]:
     """`(start_date, end_date)` 讀成 `date`；`start_date > end_date` 一律 `ValueError`
@@ -68,10 +71,15 @@ def _products_context(conn, org_id: str, brand_id: str) -> tuple[str, list[str],
     if not products:
         return "【商品清單】（品牌還沒有任何商品）", [], []
 
+    # 白名單一律是這個品牌「全部」商品 id，不是被截斷後的那 20 個——這是拿來過濾模型瞎掰的
+    # `product_ids` 用的，不是 prompt 內容，截了會讓合法的商品被當成瞎掰（F04-I03）。
+    brand_product_ids = [p["id"] for p in products]
+    kept, omitted = products[:_MAX_PRODUCTS], products[_MAX_PRODUCTS:]
+
     today = coresettings.today_for_org(conn, org_id=org_id)
     lines = []
     economics_ids = []
-    for product in products:
+    for product in kept:
         economics = bi_repo.get_product_economics(conn, brand_id, product["id"])
         if economics is None:
             lines.append(f"- {product['id']}｜{product['name']}｜沒有價格資料")
@@ -87,7 +95,9 @@ def _products_context(conn, org_id: str, brand_id: str) -> tuple[str, list[str],
         if stale:
             price_text += "（已過期，僅供參考，不當成現在的價格）"
         lines.append(f"- {product['id']}｜{product['name']}｜{price_text}")
-    return "【商品清單】\n" + "\n".join(lines), economics_ids, [p["id"] for p in products]
+    if omitted:
+        lines.append(f"（這個品牌另有 {len(omitted)} 個商品沒有列出）")
+    return "【商品清單】\n" + "\n".join(lines), economics_ids, brand_product_ids
 
 
 def _validate_reply(data) -> dict | None:
