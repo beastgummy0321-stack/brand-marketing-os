@@ -98,7 +98,7 @@ export interface IntakeDraft {
   id: string;
   brand_id: string;
   brand_name: string;
-  step: 1 | 2 | 3 | 4 | 5;
+  step: 1 | 2 | 3 | 4;
   completed: boolean;
   is_restart: boolean;
 
@@ -387,4 +387,52 @@ export function raiseBudgetAndRetry(
 
 export function skipRemainingAi(brandId: string): Promise<void> {
   return postJson(`/api/intake/brands/${encodeURIComponent(brandId)}/skip-remaining-ai`);
+}
+
+// ---- 賣什麼與數字 ----
+
+export type OfferingAssumptionField = "cost" | "shipping" | "close_rate";
+
+export interface Offering {
+  product_id: string;
+  name: string;
+  parent_id: string | null;
+  selling_price: number | null;
+  unit_variable_cost: number | null;
+  shipping_cost: number | null;
+  close_rate: number | null;
+  assumptions: OfferingAssumptionField[];
+}
+
+export interface OfferingBenchmark {
+  value: number;
+  source_text: string;
+}
+
+export interface OfferingsData {
+  offerings: Offering[];
+  benchmarks: Record<"gross_margin" | "shipping_cost" | "close_rate", OfferingBenchmark>;
+}
+
+export function fetchOfferings(brandId: string): Promise<OfferingsData> {
+  return getJson(`/api/intake/brands/${encodeURIComponent(brandId)}/offerings`);
+}
+
+export interface OfferingVariantInput {
+  product_id?: string;
+  label: string;
+  selling_price: number | null;
+  unit_variable_cost: number | null;
+  shipping_cost: number | null;
+  close_rate?: number | null;
+  assumptions?: OfferingAssumptionField[];
+}
+
+export interface OfferingInput {
+  parent: { product_id?: string; name: string };
+  variants: OfferingVariantInput[];
+}
+
+export function saveOfferings(brandId: string, offerings: OfferingInput[]): Promise<void> {
+  return postJson(`/api/intake/brands/${encodeURIComponent(brandId)}/offerings`, { offerings });
 }
