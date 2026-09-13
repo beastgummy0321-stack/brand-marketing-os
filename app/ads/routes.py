@@ -621,6 +621,7 @@ def bind_campaign(request: Request, brand_id: str, campaign_id: str):
         code = str(exc)
         status, message = _PUBLISH_ERRORS.get(code, (400, code))
         raise web.ApiError(status, code, message) from exc
+    result["campaign"] = _with_readiness(actor, brand_id, result["campaign"])
     return result
 
 
