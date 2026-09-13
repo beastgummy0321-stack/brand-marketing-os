@@ -98,11 +98,12 @@ class ProductListTest(_BaseProductsApiTest):
         item = data[0]
         self.assertEqual(
             set(item.keys()),
-            {"id", "name", "status", "fact_count", "pending_fact_count", "economics_status"},
+            {"id", "name", "status", "fact_count", "pending_fact_count", "economics_status", "parent_id"},
         )
         self.assertEqual(item["fact_count"], 2)
         self.assertEqual(item["pending_fact_count"], 1)
         self.assertEqual(item["economics_status"], "none")
+        self.assertIsNone(item["parent_id"])
 
 
 class ProductCreateTest(_BaseProductsApiTest):
