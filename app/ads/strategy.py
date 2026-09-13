@@ -15,6 +15,7 @@ ever recomputes `budget_planned` from them (F03.md "One source of truth for mone
 from app.ads import budget
 from app.ads import repository as ads_repo
 from app.brand_intelligence import repository as bi_repo
+from app.core import rule_cards
 from app.core import settings as coresettings
 from app.core.db import APP_DIR
 from app.llm import gateway, providers
@@ -27,6 +28,13 @@ PROVIDER = providers.AnthropicProvider()
 
 _ROLES = frozenset({"new", "retarget", "explore"})
 
+# role -> 中文名稱：程式自己填 label，不再叫模型回一個我們已經知道的答案（F04-I03）。
+_ROLE_LABELS = {"new": "新客", "retarget": "再行銷", "explore": "探索"}
+
+# 這段的上限跟 `list_learnings` 的上限一樣是模組層常數：不是可調規則卡（那是給使用者調的
+# 門檻），這裡只是「prompt 別灌爆」的成本上限。
+_MAX_LEARNINGS = 10
+
 STRATEGY_FAILED_MESSAGE = "AI 沒能整理出一個可信的策略，請再試一次。"
 
 
@@ -37,11 +45,21 @@ def _days(start_date, end_date) -> int:
 
 
 def _brand_facts_section(conn, brand_id: str) -> tuple[str, list[dict]]:
+    """事實太多會把 prompt 灌到失焦——跟 `app/llm/context_compiler.py` 同一張規則卡
+    （`rule_prompt_cap.max_active_rules`），只是這裡挑的是新到舊的事實，不是規則。
+    `basis` 只收真的進 prompt 的那幾筆：查看策略依據要等於模型真的看過的東西。"""
     facts = bi_repo.list_brand_facts(conn, brand_id, status="confirmed")
     if not facts:
         return "【品牌事實】（尚無確認過的事實）", []
-    lines = [f"- {f['label']}：{f['value']}（更新於 {f['updated_at']}）" for f in facts]
-    basis = [{"id": f["id"], "label": f["label"], "updated_at": f["updated_at"]} for f in facts]
+    cap = int(rule_cards.get_value(conn, brand_id, "rule_prompt_cap", "max_active_rules"))
+    facts = sorted(
+        facts, key=lambda f: f.get("confirmed_at") or f.get("created_at"), reverse=True,
+    )
+    kept, omitted = facts[:cap], facts[cap:]
+    lines = [f"- {f['label']}：{f['value']}" for f in kept]
+    if omitted:
+        lines.append(f"（另有 {len(omitted)} 筆較舊的品牌事實沒有列出）")
+    basis = [{"id": f["id"], "label": f["label"], "updated_at": f["updated_at"]} for f in kept]
     return "【品牌事實】\n" + "\n".join(lines), basis
 
 
@@ -84,7 +102,7 @@ def _products_section(
 def _learnings_section(conn, brand_id: str) -> tuple[str, list[dict]]:
     """`list_learnings(conn, brand_id)`——不帶 `product_id`：那是等值過濾，帶了會把幾乎所有
     品牌層學習都濾掉（F03.md 對 F03-I05 的明確警告）。"""
-    learnings = bi_repo.list_learnings(conn, brand_id)
+    learnings = bi_repo.list_learnings(conn, brand_id, limit=_MAX_LEARNINGS)
     if not learnings:
         return "【過去的學習】（這個品牌還沒有任何學習記錄）", []
     lines = [
@@ -127,15 +145,14 @@ def _validate_reply(data) -> dict | None:
         role = item.get("role")
         if role not in _ROLES:
             return None
-        label = item.get("label")
-        if not isinstance(label, str) or not label.strip():
-            return None
         pct = item.get("pct")
         if isinstance(pct, bool) or not isinstance(pct, (int, float)):
             return None
         rationale = item.get("rationale")
+        # `label` 由程式對照 `_ROLE_LABELS` 填，不再要求模型回——那是花錢買一個我們已經知道
+        # 的答案（F04-I03）。模型舊行為回了 `label` 也不理會，一律以程式的對照表為準。
         validated_allocation.append({
-            "role": role, "label": label, "pct": float(pct),
+            "role": role, "label": _ROLE_LABELS[role], "pct": float(pct),
             "rationale": rationale if isinstance(rationale, str) else None,
         })
 

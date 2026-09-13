@@ -304,5 +304,54 @@ class ProviderFailureTest(StrategyTestBase):
         self.assertEqual(campaign["budget_basis_json"], {})
 
 
+class PromptCapsTest(StrategyTestBase):
+    """F04-I03: prompt 別傾印——45 條事實只送前 20 條（新到舊）、25 條學習只送前 10 條；
+    `basis` 只收真的進 prompt 的那些筆數；prompt 裡不再帶「更新於」。"""
+
+    def test_facts_and_learnings_are_capped_and_basis_matches_the_prompt(self):
+        for i in range(45):
+            bi_repo.create_brand_fact(
+                web.conn, self.brand_id, actor=ACTOR, fact_type="other",
+                label=f"事實{i}", value=f"值{i}", status="confirmed", confirmed_by=ACTOR,
+            )
+        for i in range(25):
+            bi_repo.record_learning(
+                web.conn, self.brand_id, actor=ACTOR, learning_text=f"學習{i}",
+                applicability_scope="brand", confidence="likely", sample_size="1 個活動",
+            )
+        self.campaign = self._create_campaign()
+        provider = _fake(_VALID_REPLY)
+        strategy.PROVIDER = provider
+
+        detail = self._generate()
+
+        sent_prompt = provider.calls[0]["messages"][0]["content"]
+        self.assertNotIn("更新於", sent_prompt)
+        self.assertIn("（另有 25 筆較舊的品牌事實沒有列出）", sent_prompt)
+
+        basis = detail["budget_basis_json"]["basis"]
+        self.assertEqual(len(basis["brand_facts"]), 20)
+        self.assertEqual(len(basis["learnings"]), 10)
+
+
+class LabelFilledByProgramTest(StrategyTestBase):
+    def test_reply_without_label_gets_label_filled_from_role(self):
+        reply = json.dumps({
+            "allocation": [
+                {"role": "new", "pct": 50, "rationale": "打平 CPA 還沒驗證過新客"},
+                {"role": "retarget", "pct": 30, "rationale": "有過去購買資料"},
+                {"role": "explore", "pct": 20, "rationale": "測試新素材角度"},
+            ],
+            "why": [], "unknowns": [], "alternatives": [],
+        }, ensure_ascii=False)
+        self.campaign = self._create_campaign()
+        strategy.PROVIDER = _fake(reply)
+
+        detail = self._generate()
+
+        allocation = detail["budget_basis_json"]["strategy"]["allocation"]
+        self.assertEqual(allocation[0]["label"], "新客")
+
+
 if __name__ == "__main__":
     unittest.main()
