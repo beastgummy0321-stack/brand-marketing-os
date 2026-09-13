@@ -16,7 +16,7 @@ A persona **may not read source, query the database, read `docs/`, or ask anyone
 A persona that knows where the button is has stopped being a user. Root cause is the operator's
 job — the persona reports the symptom and the evidence, nothing more.
 
-The operator **fixes nothing while a drill is running.** A fix between two personas means the
+The operator **fixes nothing while a drill is running** — with one exception, proven necessary in drill 4: a defect that trips a stop condition and would block every persona at the same station is fixed, the blocked persona restarts from that station on the fixed build, and the results section says so. Anything less than that waits. A fix between two personas means the
 second persona never meets the same defect and the two reports stop being comparable.
 
 ## Scoring
