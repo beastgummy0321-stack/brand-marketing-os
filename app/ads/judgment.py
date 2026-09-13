@@ -199,9 +199,8 @@ def action_line(action: dict[str, Any], *, campaign_name: str, target_name: str 
     if kind in ("budget", "date"):
         detail = _change_detail(action.get("before_json") or {}, action.get("after_json") or {})
     if detail is None:
-        approved_by = action.get("approved_by") or "系統"
         sync_text = _SYNC_STATE_TEXT.get(str(action.get("sync_state") or ""), "")
-        detail = f"{approved_by}・{sync_text}"
+        detail = sync_text or "已記錄"
 
     return {
         "time_text": _time_text(action["created_at"], today=today),

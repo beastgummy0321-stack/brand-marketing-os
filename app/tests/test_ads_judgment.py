@@ -86,6 +86,17 @@ class ActionLineTest(unittest.TestCase):
         self.assertIn("調整了", result["title"])
         self.assertIn("NT$ 1,000 → NT$ 1,500", result["detail"])
 
+    def test_detail_never_prints_approved_by_id(self):
+        action = {
+            "kind": "publish", "approved_by": "b0a57eef-0000-4000-8000-000000000123",
+            "sync_state": "pending_manual", "created_at": date(2026, 9, 12),
+        }
+        result = judgment.action_line(
+            action, campaign_name="活動一", target_name=None, today=date(2026, 9, 12),
+        )
+        self.assertEqual(result["detail"], "待手動同步")
+        self.assertNotIn("b0a57eef", result["detail"])
+
 
 class CampaignDetailJudgmentTest(unittest.TestCase):
     def test_campaign_detail_has_judgment_and_action_lines_and_keeps_actions(self):

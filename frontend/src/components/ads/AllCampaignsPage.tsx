@@ -224,9 +224,6 @@ export function AllCampaignsPage({ brandId }: { brandId: string }) {
                       </td>
                       <td className="whitespace-nowrap px-3 py-2">
                         <p>{formatDate(c.created_at)}</p>
-                        {c.created_by && (
-                          <p className="text-xs text-muted-foreground">由 {c.created_by} 建立</p>
-                        )}
                       </td>
                       <td className="px-3 py-2">
                         <Button
