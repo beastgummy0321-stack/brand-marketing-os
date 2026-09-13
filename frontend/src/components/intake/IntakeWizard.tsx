@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { useWorkspace } from "@/components/layout/WorkspaceContext";
 import { EmptyState } from "@/components/layout/EmptyState";
 import { TaskFlowShell } from "@/components/layout/TaskFlowShell";
@@ -24,6 +24,7 @@ type LoadState = { status: "loading" } | { status: "error"; message: string } | 
  * 產品頁「整包讀」同一個決定，不切成逐步驟各自的 GET）。 */
 export function IntakeWizard({ brandId }: { brandId: string | null }) {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const { refreshBrands } = useWorkspace();
   const [state, setState] = useState<LoadState>(brandId ? { status: "loading" } : { status: "ready", draft: null as unknown as IntakeDraft });
   const [viewStep, setViewStep] = useState(1);
@@ -77,24 +78,50 @@ export function IntakeWizard({ brandId }: { brandId: string | null }) {
 
   const { draft } = state;
 
-  if (draft.completed) {
+  const jumpStep = draft.completed ? parseStepParam(searchParams.get("step")) : null;
+
+  if (draft.completed && jumpStep === null) {
     return <IntakeCompletedPage brandId={brandId} onRestart={() => setState({ status: "notfound" })} />;
   }
+
+  const backToCompleted = `/brands/${encodeURIComponent(brandId)}/intake`;
+  const current = jumpStep ?? viewStep;
+  const reachableThrough = jumpStep !== null ? STEP_LABELS.length : Math.max(viewStep, draft.step);
+  const onSelect =
+    jumpStep !== null
+      ? (step: number) => navigate(`${backToCompleted}?step=${step}`)
+      : (step: number) => step <= Math.max(viewStep, draft.step) && setViewStep(step);
+  const next =
+    jumpStep !== null ? () => navigate(backToCompleted) : () => setViewStep((s) => Math.min(STEP_LABELS.length, s + 1));
 
   return (
     <>
       <TaskFlowShell
         steps={STEP_LABELS}
-        current={viewStep}
-        reachableThrough={Math.max(viewStep, draft.step)}
-        onSelect={(step) => step <= Math.max(viewStep, draft.step) && setViewStep(step)}
+        current={current}
+        reachableThrough={reachableThrough}
+        onSelect={onSelect}
         rightRail={<CostGauge draft={draft} onAdjust={() => setBudgetOpen(true)} />}
       >
-        {renderStep(viewStep, brandId, draft, refresh, () => setViewStep((s) => Math.min(STEP_LABELS.length, s + 1)))}
+        {jumpStep !== null && (
+          <Link to={backToCompleted} className="self-start text-sm text-muted-foreground hover:underline">
+            回到完成畫面
+          </Link>
+        )}
+        {renderStep(current, brandId, draft, refresh, next)}
       </TaskFlowShell>
       {budgetOpen && <BudgetPanel brandId={brandId} draft={draft} onClose={() => setBudgetOpen(false)} onSaved={refresh} />}
     </>
   );
+}
+
+/** 已完成品牌的 `?step=N` 深連結：不是 1..STEP_LABELS.length 之間的整數就當沒給
+ * （F05-I14：壞掉的參數不報錯，退回完成畫面）。 */
+function parseStepParam(raw: string | null): number | null {
+  if (raw === null) return null;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 1 || n > STEP_LABELS.length) return null;
+  return n;
 }
 
 function renderStep(step: number, brandId: string, draft: IntakeDraft, refresh: () => void, next: () => void) {

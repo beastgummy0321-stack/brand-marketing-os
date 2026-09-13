@@ -98,7 +98,7 @@ export interface IntakeDraft {
   id: string;
   brand_id: string;
   brand_name: string;
-  step: 1 | 2 | 3 | 4;
+  step: number;
   completed: boolean;
   is_restart: boolean;
 
