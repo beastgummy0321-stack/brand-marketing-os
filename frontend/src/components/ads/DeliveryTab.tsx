@@ -32,6 +32,7 @@ import {
   type AdCoordinates,
   type AdRow,
   type CampaignDetail,
+  type CampaignStatus,
   type CreateAdInput,
   type DeliveryGroupRow,
   type StrategyRole,
@@ -318,6 +319,7 @@ export function DeliveryTab({
           brandId={brandId}
           ad={selectedAd}
           vocabulary={vocabulary}
+          campaignStatus={c.status}
           onSaved={replaceAd}
           onDelete={() => setDeleteTarget({ kind: "ad", row: selectedAd })}
         />
@@ -496,12 +498,14 @@ function AdPanel({
   brandId,
   ad: a,
   vocabulary,
+  campaignStatus,
   onSaved,
   onDelete,
 }: {
   brandId: string;
   ad: AdRow;
   vocabulary: Coordinate[];
+  campaignStatus: CampaignStatus;
   onSaved: (ad: AdRow) => void;
   onDelete: () => void;
 }) {
@@ -558,9 +562,12 @@ function AdPanel({
         </div>
         <div className="flex flex-col gap-1 text-sm">
           <span className="text-xs text-muted-foreground">實際花費占比（觀察值）</span>
-          {/* ponytail: ads_ad／ads_outcome_daily 目前沒有回傳每支廣告的花費占比欄位，
-              成效資料接上前（F03-I11 之後）誠實顯示「尚未追蹤」，不是編一個數字。 */}
-          <span>尚未追蹤</span>
+          {/* ponytail: 花費占比的單一出處是成效分頁的表（F03-I16），這一頁不重算、也不再多一支請求。 */}
+          {campaignStatus === "live" || campaignStatus === "ended" || campaignStatus === "closed" ? (
+            <span>在成效分頁看得到每則廣告的花費占比</span>
+          ) : (
+            <span>還沒發布，沒有花費可以分。</span>
+          )}
         </div>
         {error && <p className="text-sm text-danger">{error}</p>}
         <div>
