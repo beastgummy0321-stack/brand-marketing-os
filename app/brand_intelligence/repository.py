@@ -297,23 +297,30 @@ def delete_brand(conn: Conn, brand_id: str, *, actor: str) -> dict:
 # Product
 # ---------------------------------------------------------------------------
 
-def create_product(conn: Conn, brand_id: str, *, name: str, actor: str) -> dict:
+def create_product(conn: Conn, brand_id: str, *, name: str, actor: str,
+                    parent_id: str | None = None) -> dict:
     _require(name, "product.name 為必填")
     _require(actor, "actor 為必填")
     if get_brand(conn, brand_id) is None:
         raise ValueError(f"找不到品牌：{brand_id}")
+    if parent_id is not None:
+        parent = get_product(conn, brand_id, parent_id)
+        if parent is None:
+            raise ValueError(f"找不到母產品：{parent_id}")
+        if parent["parent_id"] is not None:
+            raise ValueError("賣法只能掛在母產品底下，不能再往下一層")
     product_id = new_id("prd")
     ts = now_utc()
     row = {
         "id": product_id, "brand_id": brand_id, "name": name, "status": "active",
-        "knowledge_version": 1, "created_at": ts, "updated_at": ts,
+        "knowledge_version": 1, "created_at": ts, "updated_at": ts, "parent_id": parent_id,
     }
     org_id = _org_id_for_brand(conn, brand_id)
     conn.execute(
-        "INSERT INTO product (id, org_id, brand_id, name, status, knowledge_version, created_at, updated_at) "
-        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+        "INSERT INTO product (id, org_id, brand_id, name, status, knowledge_version, created_at, "
+        "updated_at, parent_id) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
         (row["id"], org_id, row["brand_id"], row["name"], row["status"], row["knowledge_version"],
-         row["created_at"], row["updated_at"]),
+         row["created_at"], row["updated_at"], row["parent_id"]),
     )
     write_audit(conn, org_id=org_id, brand_id=brand_id, entity_type="product", entity_id=product_id,
                 action="create", actor=actor, before=None, after=row)
@@ -330,6 +337,16 @@ def get_product(conn: Conn, brand_id: str, product_id: str) -> dict | None:
 
 def list_products(conn: Conn, brand_id: str) -> list:
     return _rows(conn.execute("SELECT * FROM product WHERE brand_id = %s ORDER BY name", (brand_id,)))
+
+
+def knowledge_product_id(conn: Conn, brand_id: str, product_id: str) -> str:
+    """產品知識（事實、宣稱、商品照、座標）掛母產品，金額掛賣法——這支是唯一的解析器
+    （ARCHITECTURE.md §8 第 1 條），回 `COALESCE(parent_id, id)`；找不到這顆產品就原樣回傳
+    `product_id`（呼叫端自己決定怎麼處理「找不到」，這裡不代為判斷）。"""
+    product = get_product(conn, brand_id, product_id)
+    if product is None:
+        return product_id
+    return product["parent_id"] or product_id
 
 
 def update_product(conn: Conn, brand_id: str, product_id: str, *,
@@ -712,18 +729,27 @@ def get_product_economics(conn: Conn, brand_id: str, product_id: str) -> dict | 
     ).fetchone())
 
 
+_ASSUMPTION_FIELDS = frozenset({"cost", "shipping", "close_rate"})
+
+
 def save_product_economics(conn: Conn, brand_id: str, product_id: str, *, actor: str,
                             selling_price: float, currency: str, confirmed_by: str,
                             fixed_cost: float | None = None,
                             unit_variable_cost: float | None = None,
                             shipping_cost: float | None = None,
                             effective_from: str | None = None,
-                            effective_to: str | None = None) -> dict:
+                            effective_to: str | None = None,
+                            close_rate: float | None = None,
+                            assumptions: list[str] | None = None) -> dict:
     _require(currency, "product_economics.currency 為必填")
     _require(confirmed_by, "confirmed_by 為必填")
     _require(actor, "actor 為必填")
     if selling_price is None:
         raise ValueError("product_economics.selling_price 為必填")
+    if close_rate is not None and not (0 < close_rate <= 1):
+        raise ValueError("product_economics.close_rate 必須介於 0（不含）到 1（含）之間")
+    if assumptions is not None and not set(assumptions) <= _ASSUMPTION_FIELDS:
+        raise ValueError(f"product_economics.assumptions 只能是 {sorted(_ASSUMPTION_FIELDS)}")
     before = get_product_economics(conn, brand_id, product_id)
     ts = now_utc()
     org_id = _org_id_for_brand(conn, brand_id)
@@ -736,6 +762,7 @@ def save_product_economics(conn: Conn, brand_id: str, product_id: str, *, actor:
         "source_reference_id": before["source_reference_id"] if before else None,
         "confirmed_by": confirmed_by, "confirmed_at": ts,
         "created_at": before["created_at"] if before else ts, "updated_at": ts,
+        "close_rate": close_rate, "assumptions_json": list(assumptions) if assumptions else None,
     }
     # ADR 0053 §5：成本一改就是新的一版，只能從今天生效、絕不回溯——關掉這個產品目前開著
     # 的那一版（若有），開一筆新的、從組織自己的今天生效（today_for_org，不是 date.today()：
@@ -757,33 +784,37 @@ def save_product_economics(conn: Conn, brand_id: str, product_id: str, *, actor:
     conn.execute(
         "INSERT INTO product_economics_version (id, org_id, brand_id, product_id, version,"
         " selling_price, fixed_cost, unit_variable_cost, shipping_cost, currency,"
-        " effective_from, effective_to, created_by, created_at)"
-        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NULL, %s, %s)",
+        " effective_from, effective_to, created_by, created_at, close_rate, assumptions_json)"
+        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NULL, %s, %s, %s, %s)",
         (new_id("pev"), org_id, brand_id, product_id,
          (open_version["version"] if open_version else 0) + 1,
          selling_price, fixed_cost, unit_variable_cost, shipping_cost, currency,
-         today, actor, ts),
+         today, actor, ts, row["close_rate"], jsonb(row["assumptions_json"])),
     )
     if before:
         conn.execute(
             "UPDATE product_economics SET selling_price = %s, fixed_cost = %s, unit_variable_cost = %s, "
             "shipping_cost = %s, currency = %s, effective_from = %s, effective_to = %s, "
-            "status = %s, confirmed_by = %s, confirmed_at = %s, updated_at = %s WHERE id = %s",
+            "status = %s, confirmed_by = %s, confirmed_at = %s, updated_at = %s, close_rate = %s, "
+            "assumptions_json = %s WHERE id = %s",
             (row["selling_price"], row["fixed_cost"], row["unit_variable_cost"], row["shipping_cost"],
              row["currency"], row["effective_from"], row["effective_to"],
-             row["status"], row["confirmed_by"], row["confirmed_at"], row["updated_at"], row["id"]),
+             row["status"], row["confirmed_by"], row["confirmed_at"], row["updated_at"],
+             row["close_rate"], jsonb(row["assumptions_json"]), row["id"]),
         )
         action = "update"
     else:
         conn.execute(
             "INSERT INTO product_economics (id, org_id, product_id, brand_id, selling_price, fixed_cost, "
             "unit_variable_cost, shipping_cost, currency, effective_from, effective_to, "
-            "status, source_reference_id, confirmed_by, confirmed_at, created_at, updated_at) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            "status, source_reference_id, confirmed_by, confirmed_at, created_at, updated_at, "
+            "close_rate, assumptions_json) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
             (row["id"], org_id, row["product_id"], row["brand_id"], row["selling_price"], row["fixed_cost"],
              row["unit_variable_cost"], row["shipping_cost"], row["currency"],
              row["effective_from"], row["effective_to"], row["status"], row["source_reference_id"],
-             row["confirmed_by"], row["confirmed_at"], row["created_at"], row["updated_at"]),
+             row["confirmed_by"], row["confirmed_at"], row["created_at"], row["updated_at"],
+             row["close_rate"], jsonb(row["assumptions_json"])),
         )
         action = "create"
     write_audit(conn, org_id=org_id, brand_id=brand_id, entity_type="product_economics", entity_id=row["id"],

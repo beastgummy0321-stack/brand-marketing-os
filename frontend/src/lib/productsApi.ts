@@ -18,6 +18,8 @@ export interface ProductListItem {
   id: string;
   name: string;
   status: "active" | "archived";
+  // 選填：舊呼叫端（例如其他 feature 建構假資料）不見得帶這欄，缺值一律當「沒有母產品」。
+  parent_id?: string | null;
   fact_count: number;
   pending_fact_count: number;
   economics_status: "confirmed" | "pending" | "none";
@@ -51,6 +53,8 @@ export interface ProductFact {
   source_reference: string | null;
 }
 
+export type AssumptionField = "cost" | "shipping" | "close_rate";
+
 export interface ProductEconomics {
   selling_price: number;
   fixed_cost: number | null;
@@ -60,6 +64,8 @@ export interface ProductEconomics {
   effective_from: string | null;
   status: "confirmed" | "pending";
   confirmed_by: string | null;
+  close_rate: number | null;
+  assumptions: AssumptionField[];
 }
 
 export interface ProductRule {
@@ -291,6 +297,8 @@ export function saveProductEconomics(
     currency: string;
     effective_from: string;
     confirmed_by: string;
+    close_rate?: number | null;
+    assumptions?: AssumptionField[];
   },
 ): Promise<void> {
   return postJson(

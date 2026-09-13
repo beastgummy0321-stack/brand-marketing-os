@@ -1,7 +1,12 @@
 import { useState } from "react";
 import { X } from "lucide-react";
 import { SidePanel } from "@/components/layout/SidePanel";
-import { CURRENCIES, saveProductEconomics, type ProductEconomics } from "@/lib/productsApi";
+import {
+  CURRENCIES,
+  saveProductEconomics,
+  type AssumptionField,
+  type ProductEconomics,
+} from "@/lib/productsApi";
 import { useFormSubmit } from "@/lib/useFormSubmit";
 import { PanelSaveButton } from "../shared/PanelSaveButton";
 
@@ -26,6 +31,12 @@ export function EconomicsPanel({
   const [shippingCost, setShippingCost] = useState(String(economics?.shipping_cost ?? 0));
   const [currency, setCurrency] = useState(economics?.currency ?? CURRENCIES[0][0]);
   const [confirmedBy, setConfirmedBy] = useState(economics?.confirmed_by ?? "");
+  const [closeRate, setCloseRate] = useState(economics?.close_rate == null ? "" : String(economics.close_rate));
+  // 使用者手改一個欄位時，那一欄不再是假設值（decision 17）——編輯任何欄位都會把它從
+  // assumptions 移掉，不分是不是「假設值」原本掛的那個欄位，因為使用者已經看過並確認過整組數字。
+  const [assumptions, setAssumptions] = useState<AssumptionField[]>(economics?.assumptions ?? []);
+  const dropAssumption = (field: AssumptionField) =>
+    setAssumptions((prev) => prev.filter((f) => f !== field));
 
   const form = useFormSubmit(async () => {
     await saveProductEconomics(brandId, productId, {
@@ -37,6 +48,8 @@ export function EconomicsPanel({
       // ADR 0053 §5：生效日一律是今天，這裡不再收使用者輸入，固定送空字串（後端視為未填）。
       effective_from: "",
       confirmed_by: confirmedBy,
+      close_rate: closeRate.trim() === "" ? null : Number(closeRate),
+      assumptions,
     });
     onSaved();
   });
@@ -89,7 +102,10 @@ export function EconomicsPanel({
               type="number"
               step="0.01"
               value={unitVariableCost}
-              onChange={(e) => setUnitVariableCost(e.target.value)}
+              onChange={(e) => {
+                setUnitVariableCost(e.target.value);
+                dropAssumption("cost");
+              }}
               className="rounded-md border border-border px-3 py-2 text-sm text-foreground"
             />
           </label>
@@ -100,9 +116,30 @@ export function EconomicsPanel({
             type="number"
             step="0.01"
             value={shippingCost}
-            onChange={(e) => setShippingCost(e.target.value)}
+            onChange={(e) => {
+              setShippingCost(e.target.value);
+              dropAssumption("shipping");
+            }}
             className="rounded-md border border-border px-3 py-2 text-sm text-foreground"
           />
+        </label>
+        <label className="flex flex-col gap-1 text-sm">
+          <span className="font-medium text-foreground">成交率（選填）</span>
+          <input
+            type="number"
+            step="0.01"
+            min="0.01"
+            max="1"
+            value={closeRate}
+            onChange={(e) => {
+              setCloseRate(e.target.value);
+              dropAssumption("close_rate");
+            }}
+            className="rounded-md border border-border px-3 py-2 text-sm text-foreground"
+          />
+          <span className="text-xs text-muted-foreground">
+            留空＝賣一次算一次轉換。0.2 代表五筆名單成交一筆。
+          </span>
         </label>
         <label className="flex flex-col gap-1 text-sm">
           <span className="font-medium text-foreground">幣別</span>
