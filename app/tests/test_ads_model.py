@@ -188,6 +188,24 @@ class BudgetDerivationTest(_AdsModelTestBase):
         self.assertEqual(second["budget_planned"], 4000)
 
 
+class NoGroupsMeansNoTotalTest(_AdsModelTestBase):
+    def test_no_groups_means_no_total_not_zero(self):
+        """A draft Campaign with a start/end date but no adopted delivery group has nothing
+        to derive a budget total from — `budget_total` must be `None`, not `0.0` (F04-I21)."""
+        campaign = ads_repo.create_campaign(
+            web.conn, self.org_id, self.brand_id, _campaign_payload(), created_by=ACTOR,
+        )
+        web.conn.commit()
+
+        detail = ads_repo.campaign_detail(web.conn, self.org_id, self.brand_id, campaign["id"])
+        self.assertIsNone(detail["budget_total"])
+
+        entries = ads_repo.list_campaigns(web.conn, self.org_id, self.brand_id)
+        entry = next(e for e in entries if e["id"] == campaign["id"])
+        self.assertIsNone(entry["budget_progress"]["total"])
+        self.assertIsNone(entry["budget_progress"]["pct"])
+
+
 class OutcomeTotalsGroupOnlyTest(_AdsModelTestBase):
     def test_campaign_total_sums_group_rows_only_not_ad_rows(self):
         """`entity_kind = 'ad'` rows exist for per-ad 花費占比 and must never be summed into
