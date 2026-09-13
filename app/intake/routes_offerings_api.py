@@ -151,5 +151,6 @@ async def offerings_post(request: Request, brand_id: str):
                 return _error(400, f"「{display_name}」{exc}")
 
     draft = state.require_draft(brand_id, conn=conn)
-    state.touch(draft, f"/brands/{brand_id}/intake/offerings", 3, conn=conn)
+    if draft["step"] < 3:
+        state.touch(draft, f"/brands/{brand_id}/intake/offerings", 3, conn=conn)
     return Response(status_code=204)

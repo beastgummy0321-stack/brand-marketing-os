@@ -64,6 +64,18 @@ class BrandNewBrandTest(ReadinessTestBase):
         self.assertIsNotNone(result["secondary"])
         self.assertEqual(result["secondary"]["label"], "還是要先建立")
 
+    def test_fix_href_names_the_wizard_step_that_fixes_it(self):
+        result = readiness.launch_readiness(web.conn, self.org_id, self.brand_id)
+        by_key = {item["key"]: item for item in result["items"]}
+        self.assertTrue(by_key["offering"]["fix_href"].endswith("/intake?step=3"))
+        self.assertTrue(by_key["goal"]["fix_href"].endswith("/intake?step=4"))
+        self.assertTrue(by_key["channel"]["fix_href"].endswith("/intake?step=4"))
+
+    def test_red_primary_jumps_to_the_worst_rows_own_step(self):
+        result = readiness.launch_readiness(web.conn, self.org_id, self.brand_id)
+        offering = next(i for i in result["items"] if i["key"] == "offering")
+        self.assertEqual(result["primary"]["href"], offering["fix_href"])
+
     def test_notes_report_zero_confirmed_facts_without_blocking(self):
         result = readiness.launch_readiness(web.conn, self.org_id, self.brand_id)
         self.assertIn("0", result["notes"][0]["text"])

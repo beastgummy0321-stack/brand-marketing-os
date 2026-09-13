@@ -32,7 +32,7 @@ def _offering_item(conn, brand_id: str) -> dict:
         if breakeven_cpa(economics) is not None and best_economics is None:
             best_economics = economics
 
-    fix = {"label": "賣的東西與數字", "fix_href": f"/brands/{brand_id}/intake"}
+    fix = {"label": "賣的東西與數字", "fix_href": f"/brands/{brand_id}/intake?step=3"}
     if best_economics is None:
         return {
             "key": "offering", "state": "red",
@@ -57,7 +57,7 @@ def _goal_item(brand: dict, brand_id: str) -> dict:
     goal = brand.get("conversion_goal")
     fix = {
         "label": "成效目標", "fix_label": "去設定成效目標",
-        "fix_href": f"/brands/{brand_id}/intake",
+        "fix_href": f"/brands/{brand_id}/intake?step=4",
     }
     if not goal:
         return {"key": "goal", "state": "red", "reason": "還沒設定成效目標。", **fix}
@@ -66,7 +66,7 @@ def _goal_item(brand: dict, brand_id: str) -> dict:
 
 
 def _channel_item(conn, org_id: str, brand_id: str) -> dict:
-    fix_href = f"/brands/{brand_id}/intake"
+    fix_href = f"/brands/{brand_id}/intake?step=4"
     account = channels.account_state(conn, org_id, brand_id)
     if account is None:
         return {
@@ -116,7 +116,8 @@ def launch_readiness(conn, org_id: str, brand_id: str) -> dict:
     primary = {"label": _PRIMARY_BY_STATE[state], "href": ads_href}
     secondary = None
     if state == "red":
-        primary = {"label": "先補齊地基", "href": f"/brands/{brand_id}/intake"}
+        worst = max(items, key=lambda item: _STATE_RANK[item["state"]])
+        primary = {"label": "先補齊地基", "href": worst["fix_href"]}
         secondary = {"label": "還是要先建立", "href": f"/brands/{brand_id}/ads/new"}
 
     return {
