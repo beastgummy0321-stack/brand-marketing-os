@@ -132,7 +132,7 @@ describe("StrategyTab（F04-I14）", () => {
     const user = userEvent.setup();
     vi.mocked(selectScenario).mockResolvedValue(campaign({ budget_scenario: "recommended" }));
     vi.mocked(adoptStrategy).mockResolvedValue(campaign({ budget_scenario: "recommended", groups: [group()] }));
-    renderTab(campaign({ budget_scenario: null }));
+    const { onChangeTab } = renderTab(campaign({ budget_scenario: null }));
 
     await user.click(screen.getByRole("button", { name: "照這個方式進行 →" }));
 
@@ -141,6 +141,8 @@ describe("StrategyTab（F04-I14）", () => {
     const scenarioOrder = vi.mocked(selectScenario).mock.invocationCallOrder[0];
     const adoptOrder = vi.mocked(adoptStrategy).mock.invocationCallOrder[0];
     expect(scenarioOrder).toBeLessThan(adoptOrder);
+    expect(onChangeTab).toHaveBeenCalledTimes(1);
+    expect(onChangeTab).toHaveBeenCalledWith("structure");
   });
 
   it("budget_scenario 已經是 recommended：按下主要按鈕不呼叫 selectScenario", async () => {
@@ -204,6 +206,18 @@ describe("StrategyTab（F04-I14）", () => {
     renderTab(campaign());
     expect(screen.queryByText("採用流程將在下一步開放")).toBeNull();
     expect(screen.queryByText("採用策略（建立投放結構）")).toBeNull();
+  });
+
+  it("budget_planned 與 scenarios 都是 null：預算格印「尚未設定」，不印「累積中」", () => {
+    const c = campaign();
+    renderTab(
+      campaign({
+        budget_planned: null,
+        budget_basis_json: { ...c.budget_basis_json, scenarios: undefined },
+      }),
+    );
+    expect(screen.getByText("尚未設定")).toBeTruthy();
+    expect(screen.queryByText("累積中")).toBeNull();
   });
 
   it("有一個投放組：不出現「調整建議」收合，改印預算改在投放結構分頁；主要按鈕是前往投放結構", () => {
