@@ -6,7 +6,7 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import type { CampaignDetail, DeliveryGroupRow } from "@/lib/adsApi";
+import type { AdsActionLine, CampaignDetail, CampaignJudgment, DeliveryGroupRow } from "@/lib/adsApi";
 import { OverviewTab } from "./OverviewTab";
 
 function group(overrides: Partial<DeliveryGroupRow> = {}): DeliveryGroupRow {
@@ -56,6 +56,8 @@ function campaign(overrides: Partial<CampaignDetail> = {}): CampaignDetail {
     actions: [],
     outcome: { spend: 0, purchases: 0, revenue: 0 },
     asset_readiness: { ready_count: 0, total: 0 },
+    judgment: { tone: "neutral", text: "投放中", detail: "還沒有花費資料" },
+    action_lines: [],
     external_id: null,
     external_name: null,
     external_status: null,
@@ -107,5 +109,44 @@ describe("OverviewTab（F03-I23）", () => {
 
     expect(screen.getAllByText("尚未設定").length).toBeGreaterThan(0);
     expect(screen.queryByText(/累積中/)).toBeNull();
+  });
+
+  it("judgment 是後端組好的句子：畫面原樣印，前端不重拼", () => {
+    const judgment: CampaignJudgment = {
+      tone: "warn",
+      text: "投放中，預算花得比時間快",
+      detail: "第 3／10 天，已花費佔預算 45%",
+    };
+    render(<OverviewTab campaign={campaign({ judgment })} onChangeTab={vi.fn()} />);
+
+    expect(screen.getByText("投放中，預算花得比時間快")).toBeTruthy();
+  });
+
+  it("action_lines 是空陣列：印誠實空狀態，且原始 JSON 鍵值不外洩", () => {
+    render(<OverviewTab campaign={campaign({ action_lines: [] })} onChangeTab={vi.fn()} />);
+
+    expect(screen.getByText("這個 Campaign 還沒有異動紀錄。")).toBeTruthy();
+    expect(screen.queryByText(/daily_budget/)).toBeNull();
+  });
+
+  it("有異動紀錄時印後端組好的三句話", () => {
+    const line: AdsActionLine = {
+      campaign_id: "cmp_1",
+      campaign_name: "測試 Campaign",
+      time_text: "3 小時前",
+      title: "調整了每日預算",
+      detail: "從 NT$ 1,000 調整為 NT$ 1,500",
+    };
+    render(<OverviewTab campaign={campaign({ action_lines: [line] })} onChangeTab={vi.fn()} />);
+
+    expect(screen.getByText("調整了每日預算")).toBeTruthy();
+    expect(screen.queryByText(/daily_budget/)).toBeNull();
+  });
+
+  it("佔位卡與需要你決定的空狀態都在畫面上", () => {
+    render(<OverviewTab campaign={campaign()} onChangeTab={vi.fn()} />);
+
+    expect(screen.getByText("自動執行接上後開放")).toBeTruthy();
+    expect(screen.getByText("目前沒有需要你決定的事")).toBeTruthy();
   });
 });
