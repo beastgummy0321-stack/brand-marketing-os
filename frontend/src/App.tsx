@@ -8,7 +8,7 @@ import {
   useParams,
   useSearchParams,
 } from "react-router-dom";
-import { AdsHomePage, CampaignWorkspace, ConfirmBriefPage, NewCampaignPage } from "@/components/ads";
+import { AdsHomePage, AllCampaignsPage, CampaignWorkspace, ConfirmBriefPage, NewCampaignPage } from "@/components/ads";
 import { AppShell } from "@/components/layout/AppShell";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { EmptyState } from "@/components/layout/EmptyState";
@@ -84,6 +84,7 @@ function App() {
         <Route path="/brands/:brandId/ads" element={<AdsHomeRoute />} />
         <Route path="/brands/:brandId/ads/new" element={<AdsNewRoute />} />
         <Route path="/brands/:brandId/ads/new/:campaignId" element={<AdsConfirmBriefRoute />} />
+        <Route path="/brands/:brandId/ads/campaigns" element={<AllCampaignsRoute />} />
         <Route
           path="/brands/:brandId/ads/campaigns/:campaignId"
           element={<AdsCampaignRoute />}
@@ -382,6 +383,12 @@ function AdsConfirmBriefRoute() {
       <ConfirmBriefPage brandId={brandId ?? ""} campaignId={campaignId ?? ""} />
     </>
   );
+}
+
+/** 所有 Campaign 清單（F04-I10）。 */
+function AllCampaignsRoute() {
+  const { brandId } = useParams<{ brandId: string }>();
+  return <AllCampaignsPage brandId={brandId ?? ""} />;
 }
 
 /** Campaign 五分頁工作區（F03-I13 起占位，F03-I14 起是真的內容）。 */
