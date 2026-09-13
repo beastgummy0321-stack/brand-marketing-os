@@ -227,6 +227,45 @@ def select_strategy_scenario(
     return {"campaign": campaign}
 
 
+class AllocationItem(BaseModel):
+    role: str = ""
+    pct: float = 0.0
+
+
+class SetAllocationRequest(BaseModel):
+    allocation: list[AllocationItem] = []
+
+
+_ALLOCATION_ERRORS = {
+    "campaign_unknown": (404, CAMPAIGN_UNKNOWN_MESSAGE),
+    "strategy_not_generated": (400, "請先產生策略。"),
+    "plan_already_adopted": (
+        400,
+        "投放結構已經建立，預算分配請到投放結構分頁改每個投放組的日預算。",
+    ),
+    "allocation_invalid": (400, "三個角色的百分比要加起來等於 100，而且不能是負數。"),
+}
+
+
+@router.post("/brands/{brand_id}/campaigns/{campaign_id}/strategy/allocation")
+def set_strategy_allocation(
+    request: Request, brand_id: str, campaign_id: str, body: SetAllocationRequest,
+):
+    """F04-I13：採用之前調整三個角色的百分比，金額由 `strategy.set_allocation` 重算。"""
+    actor = web.require_actor(request)
+    web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
+    try:
+        campaign = strategy.set_allocation(
+            web.conn, actor.org_id, brand_id, campaign_id,
+            allocation=[item.model_dump() for item in body.allocation], actor=str(actor.user_id),
+        )
+    except ValueError as exc:
+        code = str(exc)
+        status, message = _ALLOCATION_ERRORS.get(code, (400, code))
+        raise web.ApiError(status, code, message) from exc
+    return {"campaign": campaign}
+
+
 # -- F03-I06: 採用策略 -> 投放組／廣告，以及後續編輯 ------------------------------------------
 
 _PLAN_ERRORS = {

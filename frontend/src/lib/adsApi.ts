@@ -256,6 +256,8 @@ export interface StrategyPayload {
   why: string[];
   unknowns: string[];
   alternatives: unknown[];
+  /** F04-I13：這一輪想學到什麼，最多 3 條；舊資料沒有這個鍵時當空陣列讀，可選。 */
+  learning_goals?: string[];
 }
 
 export interface StrategyBasisFact {
@@ -398,6 +400,21 @@ export async function selectScenario(
     { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input) },
   );
   const data = await parseJsonOrThrow<{ campaign: CampaignDetail }>(res, "選擇預算情境失敗。");
+  return data.campaign;
+}
+
+/** F04-I13：採用之前調整三個角色的百分比——金額由後端 `budget.split()` 重算，這裡只送
+ * `role`／`pct`。角色集合必須跟既有策略一模一樣，不是新增角色的入口。 */
+export async function setAllocation(
+  brandId: string,
+  campaignId: string,
+  allocation: { role: string; pct: number }[],
+): Promise<CampaignDetail> {
+  const res = await apiFetch(
+    `${BASE}/brands/${encodeURIComponent(brandId)}/campaigns/${encodeURIComponent(campaignId)}/strategy/allocation`,
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ allocation }) },
+  );
+  const data = await parseJsonOrThrow<{ campaign: CampaignDetail }>(res, "調整預算分配失敗。");
   return data.campaign;
 }
 
