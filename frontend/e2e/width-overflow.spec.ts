@@ -106,6 +106,10 @@ test("15 條路由（扣 /accept-invite）在 1280 寬不橫向溢出", async ({
   await page.goto(`/app/brands/${brandId}/ads`);
   await assertNoOverflow("/brands/:brandId/ads");
 
+  // --- /brands/:brandId/ads/campaigns（所有 Campaign 清單，F04-I10）------------------
+  await page.goto(`/app/brands/${brandId}/ads/campaigns`);
+  await assertNoOverflow("/brands/:brandId/ads/campaigns");
+
   // --- /brands/:brandId/ads/new：建 Campaign 兩步流程（F04-I12）——步驟一填目標、
   // 步驟二「理解如下」確認欄位、按「產生策略建議」才進工作區頁 ----------------------
   await page.getByRole("link", { name: "建立 Campaign" }).click();
