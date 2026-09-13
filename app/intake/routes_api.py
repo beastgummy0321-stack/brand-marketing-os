@@ -475,7 +475,7 @@ async def budget_raise(request: Request, brand_id: str):
     require_brand(brand_id, actor)
     draft = state.require_draft(brand_id)
     body = await _json_body(request)
-    kind = body.get("kind") if body.get("kind") in ("scan", "question", "paste_fix") else "scan"
+    kind = body.get("kind") if body.get("kind") in ("scan", "question", "paste_fix", "research") else "scan"
     draft["budget_limit"] = round(draft["budget_limit"] + 30, 2)
     state.save(draft)
     if kind == "scan" and not draft["scan_done"]:
@@ -484,6 +484,10 @@ async def budget_raise(request: Request, brand_id: str):
         _start("question", brand_id, actor.org_id)
     elif kind == "paste_fix":
         _start("paste_fix", brand_id, actor.org_id)
+    elif kind == "research":
+        research._start_research(brand_id, actor.org_id, "standard")
+    if kind == "research":
+        return {"job": research.job_state(draft)}
     return {"job": _job_state(draft, kind)}
 
 
@@ -711,6 +715,7 @@ async def review_item_post(request: Request, brand_id: str, i: int):
 
 
 # T2 新端點拆在小檔；本檔已接近 800 行，不再把新功能直接塞進來。
+from app.intake import research  # noqa: E402
 from app.intake.routes_offerings_api import router as offerings_router  # noqa: E402
 from app.intake.routes_t2_api import router as t2_router  # noqa: E402
 from app.intake.routes_tools_api import router as tools_router  # noqa: E402
@@ -718,3 +723,4 @@ from app.intake.routes_tools_api import router as tools_router  # noqa: E402
 router.include_router(t2_router)
 router.include_router(offerings_router)
 router.include_router(tools_router)
+router.include_router(research.router)
