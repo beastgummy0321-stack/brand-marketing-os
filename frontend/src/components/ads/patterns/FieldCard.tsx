@@ -37,9 +37,11 @@ export function FieldCard({
         </div>
         {editing ? children : <p className="text-[15px] font-semibold">{value || emptyText}</p>}
       </div>
-      <Button variant="ghost" size="sm" onClick={onEdit}>
-        <Pencil />
-      </Button>
+      {onEdit && (
+        <Button variant="ghost" size="sm" onClick={onEdit}>
+          <Pencil />
+        </Button>
+      )}
     </div>
   );
 }

@@ -8,7 +8,7 @@ import {
   useParams,
   useSearchParams,
 } from "react-router-dom";
-import { AdsHomePage, CampaignWorkspace, NewCampaignPage } from "@/components/ads";
+import { AdsHomePage, CampaignWorkspace, ConfirmBriefPage, NewCampaignPage } from "@/components/ads";
 import { AppShell } from "@/components/layout/AppShell";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { EmptyState } from "@/components/layout/EmptyState";
@@ -83,6 +83,7 @@ function App() {
         <Route path="/brands/:brandId/report" element={<BrandReportRoute />} />
         <Route path="/brands/:brandId/ads" element={<AdsHomeRoute />} />
         <Route path="/brands/:brandId/ads/new" element={<AdsNewRoute />} />
+        <Route path="/brands/:brandId/ads/new/:campaignId" element={<AdsConfirmBriefRoute />} />
         <Route
           path="/brands/:brandId/ads/campaigns/:campaignId"
           element={<AdsCampaignRoute />}
@@ -369,6 +370,16 @@ function AdsNewRoute() {
   return (
     <>
       <NewCampaignPage brandId={brandId ?? ""} />
+    </>
+  );
+}
+
+/** 建立 Campaign 步驟二（F04-I12）：理解如下，確認欄位才花第二次模型錢。 */
+function AdsConfirmBriefRoute() {
+  const { brandId, campaignId } = useParams<{ brandId: string; campaignId: string }>();
+  return (
+    <>
+      <ConfirmBriefPage brandId={brandId ?? ""} campaignId={campaignId ?? ""} />
     </>
   );
 }
