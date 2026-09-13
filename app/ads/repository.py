@@ -89,6 +89,25 @@ _PATCHABLE_COLUMNS = (
 )
 
 
+# F04-I11：使用者改過的那一格，`context_json.field_sources` 要跟著翻成「你說的」
+# （ARCHITECTURE.md §6.1 第 11 條）——`updates` 這個鍵有出現，就代表使用者親手做了決定，
+# 就算他把值清空也一樣。`platform`／`budget` 藏在 `constraints_json` 裡，要跟舊值比過才算數。
+def _touched_field_sources(updates: dict, old_constraints: dict) -> set[str]:
+    touched: set[str] = set()
+    if "product_ids" in updates:
+        touched.add("product")
+    if "objective" in updates:
+        touched.add("objective")
+    if "start_date" in updates or "end_date" in updates:
+        touched.add("dates")
+    if "constraints_json" in updates:
+        new_constraints = updates["constraints_json"] or {}
+        for constraints_key, source_key in (("platform", "platform"), ("budget", "budget")):
+            if new_constraints.get(constraints_key) != old_constraints.get(constraints_key):
+                touched.add(source_key)
+    return touched
+
+
 def update_campaign(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str,
                      updates: dict) -> dict:
     """F03-I03: plain editing of a `status='draft'` campaign's own fields — not an `ads_action`
@@ -97,7 +116,11 @@ def update_campaign(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str
     `dict(exclude_unset=True)` straight through. Same field rules as `create_campaign` for any
     key that's present. `constraints_json` replaces whole; `product_ids` merges into the
     existing `context_json` (the one nested field this issue lets the user correct — §0
-    "PATCH ... for context_json.product_ids" — the rest of `context_json` is untouched)."""
+    "PATCH ... for context_json.product_ids" — the rest of `context_json` is untouched).
+
+    F04-I11: any key in `updates` that maps to a `context_json.field_sources` slot flips that
+    slot to `"user"` — the user editing the confirmation screen is itself "you said it", even
+    when they clear the value (`_touched_field_sources`)."""
     campaign = get_campaign(conn, org_id, brand_id, campaign_id)
     if campaign is None:
         raise ValueError("campaign_unknown")
@@ -147,6 +170,8 @@ def update_campaign(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str
     if "constraints_json" in updates:
         set_clauses.append("constraints_json = %s")
         params.append(jsonb(updates["constraints_json"] or {}))
+    context_json = dict(campaign.get("context_json") or {})
+    context_json_changed = False
     if "product_ids" in updates:
         product_ids = updates["product_ids"] or []
         # `bi_repo.list_products` is typed `Conn`-only; `ads` routes are handed the `ConnProxy`
@@ -155,8 +180,19 @@ def update_campaign(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str
         for product_id in product_ids:
             if product_id not in brand_product_ids:
                 raise ValueError("product_unknown")
-        context_json = dict(campaign.get("context_json") or {})
         context_json["product_ids"] = product_ids
+        context_json_changed = True
+
+    old_constraints = campaign.get("constraints_json") or {}
+    touched_sources = _touched_field_sources(updates, old_constraints)
+    if touched_sources:
+        field_sources = dict(context_json.get("field_sources") or {})
+        for source_key in touched_sources:
+            field_sources[source_key] = "user"
+        context_json["field_sources"] = field_sources
+        context_json_changed = True
+
+    if context_json_changed:
         set_clauses.append("context_json = %s")
         params.append(jsonb(context_json))
 

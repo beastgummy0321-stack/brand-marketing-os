@@ -183,11 +183,25 @@ export interface CampaignDraft extends CampaignDetail {
   parsed: boolean;
 }
 
-/** `POST /campaigns` 的請求體——一句話＋投放期間＋選填的額外限制。 */
+/** F04-I11：`context_json.field_sources` 的六格——`"user"`＝你說的，`"system"`＝行銷駕駛艙
+ * 沒聽到就幫你補的（ARCHITECTURE.md §6.1 第 11 條）。 */
+export type FieldSource = "user" | "system";
+
+export interface CampaignFieldSources {
+  product: FieldSource;
+  objective: FieldSource;
+  platform: FieldSource;
+  budget: FieldSource;
+  dates: FieldSource;
+  audience: FieldSource;
+}
+
+/** `POST /campaigns` 的請求體——一句話＋選填的投放期間（兩個都留空讓行銷駕駛艙從句子判斷）
+ * ＋選填的額外限制。 */
 export interface CreateCampaignInput {
   goal_text: string;
-  start_date: string;
-  end_date: string;
+  start_date?: string;
+  end_date?: string;
   constraints?: Record<string, unknown>;
 }
 

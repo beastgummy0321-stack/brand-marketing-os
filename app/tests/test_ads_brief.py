@@ -5,6 +5,7 @@ never loses the user's sentence, never invents a `success_target`, never dead-en
 error, and refuses dates outside `start <= end` with a readable message.
 """
 
+import datetime
 import json
 import unittest
 
@@ -14,6 +15,7 @@ from app.ads import repository as ads_repo
 from app.ads import routes as ads_routes
 from app.brand_intelligence import repository as bi_repo
 from app.core import db as coredb
+from app.core import settings as coresettings
 from app.llm import providers
 
 ACTOR = "測試員"
@@ -137,6 +139,15 @@ class BadDatesTest(_BriefTestBase):
         self.assertEqual(self._task_count(), 0)  # 沒過驗證就不該打模型、不該花錢
 
 
+class OnlyOneDateGivenTest(_BriefTestBase):
+    def test_only_start_date_given_is_refused(self):
+        brief.PROVIDER = _fake("{}")
+        with self.assertRaises(ValueError) as ctx:
+            self._create(start_date="2026-10-01", end_date="")
+        self.assertEqual(str(ctx.exception), "dates_required")
+        self.assertEqual(self._task_count(), 0)  # 沒過驗證就不該打模型、不該花錢
+
+
 class PatchEndBeforeStartOnMergedRowTest(_BriefTestBase):
     def test_moving_only_end_date_before_stored_start_is_refused(self):
         brief.PROVIDER = _fake("{}")
@@ -231,6 +242,113 @@ class ManyProductsCappedTest(_BriefTestBase):
         brief.PROVIDER = _fake(reply)
         detail = self._create()
         self.assertEqual(detail["context_json"]["product_ids"], [beyond_cap_id])
+
+
+class ResolvePeriodTest(unittest.TestCase):
+    """F04-I11: pure function, no DB — day-of-month arithmetic belongs in the program (R7),
+    not in the model's reply."""
+
+    def test_month_in_the_past_rolls_to_next_year(self):
+        start, end = brief._resolve_period(
+            {"kind": "month", "month": 3}, today=datetime.date(2026, 9, 13),
+        )
+        self.assertEqual(start, datetime.date(2027, 3, 1))
+        self.assertEqual(end, datetime.date(2027, 3, 31))
+
+    def test_month_still_ahead_this_year_stays_this_year(self):
+        start, end = brief._resolve_period(
+            {"kind": "month", "month": 12}, today=datetime.date(2026, 9, 13),
+        )
+        self.assertEqual(start, datetime.date(2026, 12, 1))
+        self.assertEqual(end, datetime.date(2026, 12, 31))
+
+    def test_none_period_resolves_to_none(self):
+        self.assertEqual(
+            brief._resolve_period(None, today=datetime.date(2026, 9, 13)), (None, None),
+        )
+
+
+class BriefBudgetTargetFromSentenceTest(_BriefTestBase):
+    """F04-I11 (backlog: `docs/backlog/issue-brief-parse-drops-explicit-target.md`, verbatim):
+    「9 月推 Beast Gummy 高咖啡因軟糖給上班族，目標是購買，希望 CPA 在 300 以內，預算三萬。」
+    used to lose both `success_target` and the budget — this locks the fix in."""
+
+    GOAL_TEXT = (
+        "9 月推 Beast Gummy 高咖啡因軟糖給上班族，目標是購買，希望 CPA 在 300 以內，預算三萬。"
+    )
+
+    def test_numbers_land_on_the_fields_they_modify_and_period_resolves(self):
+        reply = json.dumps({
+            "objective": "購買", "success_metric": "cpa", "success_target": 300,
+            "success_basis": "使用者直接說出的 CPA 上限", "product_ids": [self.product["id"]],
+            "budget_cap": 30000, "platform": None,
+            "period": {"kind": "month", "month": 9},
+            "audience_hint": "上班族", "notes": None,
+        }, ensure_ascii=False)
+        brief.PROVIDER = _fake(reply)
+        today = coresettings.today_for_org(web.conn, org_id=self.org_id)
+        expected_start, expected_end = brief._resolve_period(
+            {"kind": "month", "month": 9}, today=today,
+        )
+
+        detail = self._create(goal_text=self.GOAL_TEXT, start_date="", end_date="")
+
+        self.assertEqual(detail["success_target"], 300)
+        self.assertEqual(detail["constraints_json"]["budget"], 30000)
+        self.assertEqual(detail["start_date"], expected_start)
+        self.assertEqual(detail["end_date"], expected_end)
+        self.assertEqual(detail["context_json"]["field_sources"]["dates"], "user")
+        self.assertEqual(detail["context_json"]["field_sources"]["budget"], "user")
+
+    def test_unparseable_period_falls_back_to_today_plus_30_and_is_system(self):
+        reply = json.dumps({
+            "objective": "購買", "success_metric": "cpa", "success_target": 300,
+            "success_basis": "使用者直接說出的 CPA 上限", "product_ids": [],
+            "budget_cap": 30000, "platform": None, "period": None,
+            "audience_hint": None, "notes": None,
+        }, ensure_ascii=False)
+        brief.PROVIDER = _fake(reply)
+        today = coresettings.today_for_org(web.conn, org_id=self.org_id)
+
+        detail = self._create(goal_text=self.GOAL_TEXT, start_date="", end_date="")
+
+        self.assertEqual(detail["start_date"], today)
+        self.assertEqual(detail["end_date"], today + datetime.timedelta(days=30))
+        self.assertEqual(detail["context_json"]["field_sources"]["dates"], "system")
+
+
+class UserBudgetChipBeatsModelTest(_BriefTestBase):
+    def test_user_supplied_constraint_wins_over_model_parsed_budget(self):
+        reply = json.dumps({
+            "objective": "購買", "success_metric": "cpa", "success_target": 300,
+            "success_basis": "測試", "product_ids": [], "budget_cap": 30000,
+            "platform": None, "period": None, "audience_hint": None, "notes": None,
+        }, ensure_ascii=False)
+        brief.PROVIDER = _fake(reply)
+
+        detail = self._create(constraints={"budget": "5000"})
+
+        self.assertEqual(detail["constraints_json"]["budget"], "5000")
+        self.assertEqual(detail["context_json"]["field_sources"]["budget"], "user")
+
+
+class UpdateCampaignFlipsFieldSourceToUserTest(_BriefTestBase):
+    def test_patching_a_system_sourced_field_flips_it_to_user(self):
+        brief.PROVIDER = _fake("{}")
+        detail = self._create()
+        self.assertEqual(detail["context_json"]["field_sources"]["budget"], "system")
+        before_sources = dict(detail["context_json"]["field_sources"])
+
+        updated = ads_repo.update_campaign(
+            web.conn, self.org_id, self.brand_id, detail["id"],
+            {"constraints_json": {**detail["constraints_json"], "budget": 30000}},
+        )
+
+        after_sources = updated["context_json"]["field_sources"]
+        self.assertEqual(after_sources["budget"], "user")
+        for key, value in before_sources.items():
+            if key != "budget":
+                self.assertEqual(after_sources[key], value)
 
 
 if __name__ == "__main__":
