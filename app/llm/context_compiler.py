@@ -13,6 +13,11 @@
 5. 規則進 prompt 上限（決策 0012 第二、三節）：hard 規則全部保留；soft 規則依
    `confirmed_at` 新到舊排序，兩者合計超過上限（`rule_cards`「rule_prompt_cap」卡）時，
    排比較後面的 soft 規則不進 prompt。
+6. 事實（品牌／產品）與可以講的宣稱各自截斷到 `rule_prompt_cap`「max_active_rules」同一張卡
+   （ARCHITECTURE.md §1：每一個進 prompt 的清單，上限只寫在一個地方）：依 `confirmed_at`
+   （沒有就 `created_at`）新到舊排序取前 cap 筆；`forbidden` 宣稱是絕對不能講的安全邊界，
+   不是成本，全部保留、不受這個上限限制。被截斷時尾端補一行講出「還有更舊的」，不靜默消失
+   （模型看到「還有更舊的」跟看到「就這些」會做出不同推論）。
 
 dead-code-sweep 票 04（2026-08-30 使用者裁決）：【已驗證的學習】（learning_ledger）與
 【尚未驗證的猜想】（strategy_hypothesis）兩段已整段刪除——兩張表的唯一寫入端都掛在已刪除的
@@ -57,7 +62,7 @@ def _select_rules_for_prompt(conn: Conn, brand_id: str, rules: list) -> tuple:
     return hard + soft_sorted[:remaining], soft_sorted[remaining:]
 
 
-def format_claims(claims: list) -> list:
+def format_claims(claims: list, *, usable_overflow: int = 0) -> list:
     """宣稱依 claim_type 拆成「可以講」與「絕對不能講」兩個標題明確的區塊（決策 0034 第 6 點）。
 
     改前的格式是 `- [forbidden] 內容`，整份 prompt 沒有一句話說明 forbidden 是不准講——
@@ -65,6 +70,9 @@ def format_claims(claims: list) -> list:
     一律不進 prompt；forbidden 獨立成「絕對不能講（連近義改寫也不行）」區塊；
     approved／high_risk 併入「可以講」區塊，high_risk 額外附風險提醒（不得被靜默併成一般可用宣稱）。
     回傳區塊清單（0～2 段），供 compile() 直接併進 sections。
+
+    `usable_overflow`：「可以講」那一段在 compile() 截斷前被砍掉的筆數，>0 時附加一行說明；
+    forbidden 是安全邊界、compile() 不截斷它，所以這裡沒有 forbidden 的 overflow 參數。
     """
     usable = [c for c in claims if c["claim_type"] != "forbidden"]
     forbidden = [c for c in claims if c["claim_type"] == "forbidden"]
@@ -75,13 +83,22 @@ def format_claims(claims: list) -> list:
             + ("（高風險：使用前務必先確認佐證）" if c["claim_type"] == "high_risk" else "")
             for c in usable
         ]
-        blocks.append("【可以講】宣稱\n" + "\n".join(lines))
+        block = "【可以講】宣稱\n" + "\n".join(lines)
+        if usable_overflow:
+            block += f"\n（另有 {usable_overflow} 筆較舊的宣稱沒有列出）"
+        blocks.append(block)
     if forbidden:
         blocks.append(
             "【絕對不能講（連近義改寫也不行）】宣稱\n"
             + "\n".join(f"- {c['claim_text']}" for c in forbidden)
         )
     return blocks
+
+
+def _truncate_by_recency(rows: list, cap: int) -> tuple[list, int]:
+    """依 `confirmed_at`（沒有就 `created_at`）新到舊排序取前 cap 筆。回傳 (kept, overflow_count)。"""
+    ordered = sorted(rows, key=lambda r: r.get("confirmed_at") or r["created_at"], reverse=True)
+    return ordered[:cap], max(len(ordered) - cap, 0)
 
 
 def compile(conn: Conn, brand_id: str, product_id: str | None = None, *,
@@ -104,23 +121,38 @@ def compile(conn: Conn, brand_id: str, product_id: str | None = None, *,
         if product is None:
             raise ValueError(f"找不到產品：{product_id}（或不屬於品牌 {brand_id}）")
 
-    brand_facts = repo.list_brand_facts(conn, brand_id, status="confirmed")
+    # 事實／宣稱共用同一張卡的上限（ARCHITECTURE.md §1：上限只寫在一個地方）；讀一次，
+    # 底下三份清單各自截斷，不對同一張卡再呼叫三次。
+    fact_claim_cap = int(rule_cards.get_value(conn, brand_id, "rule_prompt_cap", "max_active_rules"))
+
+    brand_facts, brand_fact_overflow = _truncate_by_recency(
+        repo.list_brand_facts(conn, brand_id, status="confirmed"), fact_claim_cap
+    )
     persona_rows = (
         personas.list_personas(conn, brand_id, limit=PERSONA_PROMPT_CAP)
         if include_personas else []
     )
-    product_facts = (
-        repo.list_product_facts(conn, brand_id, product_id, status="confirmed")
-        if product_id is not None else []
+    product_facts, product_fact_overflow = (
+        _truncate_by_recency(
+            repo.list_product_facts(conn, brand_id, product_id, status="confirmed"), fact_claim_cap
+        )
+        if product_id is not None else ([], 0)
     )
 
     if product_id is not None:
         rules_all = repo.list_rules_for_product(conn, brand_id, product_id)
-        claims = repo.list_claims_for_product(conn, brand_id, product_id)
+        claims_all = repo.list_claims_for_product(conn, brand_id, product_id)
     else:
         rules_all = [r for r in repo.list_rules_for_brand(conn, brand_id) if r["product_id"] is None]
-        claims = [c for c in repo.list_claims_for_brand(conn, brand_id) if c["product_id"] is None]
+        claims_all = [c for c in repo.list_claims_for_brand(conn, brand_id) if c["product_id"] is None]
     rules, _overflow_rules = _select_rules_for_prompt(conn, brand_id, rules_all)
+
+    # forbidden 是安全邊界不截斷；「可以講」的宣稱依同一張卡截斷（決策：見檔頭硬性規則 6）。
+    forbidden_claims = [c for c in claims_all if c["claim_type"] == "forbidden"]
+    usable_claims, claim_overflow = _truncate_by_recency(
+        [c for c in claims_all if c["claim_type"] != "forbidden"], fact_claim_cap
+    )
+    claims = usable_claims + forbidden_claims
 
     knowledge_item_ids = (
         [r["id"] for r in rules]
@@ -142,15 +174,17 @@ def compile(conn: Conn, brand_id: str, product_id: str | None = None, *,
         sections.append(
             "【限制】規則\n" + "\n".join(f"- {r['content']}" for r in constraint_rules)
         )
-    sections.extend(format_claims(claims))
+    sections.extend(format_claims(claims, usable_overflow=claim_overflow))
     if brand_facts:
-        sections.append(
-            "【事實】品牌事實\n" + "\n".join(f"- {f['label']}：{f['value']}" for f in brand_facts)
-        )
+        text_block = "【事實】品牌事實\n" + "\n".join(f"- {f['label']}：{f['value']}" for f in brand_facts)
+        if brand_fact_overflow:
+            text_block += f"\n（另有 {brand_fact_overflow} 筆較舊的品牌事實沒有列出）"
+        sections.append(text_block)
     if product_facts:
-        sections.append(
-            "【事實】產品事實\n" + "\n".join(f"- {f['label']}：{f['value']}" for f in product_facts)
-        )
+        text_block = "【事實】產品事實\n" + "\n".join(f"- {f['label']}：{f['value']}" for f in product_facts)
+        if product_fact_overflow:
+            text_block += f"\n（另有 {product_fact_overflow} 筆較舊的產品事實沒有列出）"
+        sections.append(text_block)
     if persona_rows:
         sections.append(
             "【典型客人】\n" + "\n".join(
