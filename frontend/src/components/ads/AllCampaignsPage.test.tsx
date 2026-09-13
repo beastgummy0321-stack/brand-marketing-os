@@ -90,4 +90,21 @@ describe("AllCampaignsPage（F04-I10）", () => {
     expect(await screen.findByText("尚未設定總預算")).toBeTruthy();
     expect(screen.queryByText("0%")).toBeNull();
   });
+
+  it("不印建立者 uuid（F04-I22）", async () => {
+    vi.mocked(listCampaigns).mockResolvedValue([
+      campaignCard({
+        id: "l1",
+        name: "有建立者的 Campaign",
+        status: "live",
+        created_by: "b0a57eef-0000-4000-8000-000000000123",
+      }),
+    ]);
+
+    renderPage();
+
+    expect(await screen.findByText("有建立者的 Campaign")).toBeTruthy();
+    expect(screen.queryByText(/由 .* 建立/)).toBeNull();
+    expect(document.body.textContent).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-/);
+  });
 });
