@@ -5,6 +5,7 @@ import {
   Outlet,
   Route,
   Routes,
+  useLocation,
   useParams,
   useSearchParams,
 } from "react-router-dom";
@@ -12,6 +13,7 @@ import { AdsHomePage, AllCampaignsPage, CampaignWorkspace, ConfirmBriefPage, New
 import { AppShell } from "@/components/layout/AppShell";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { EmptyState } from "@/components/layout/EmptyState";
+import { ErrorBoundary } from "@/components/layout/ErrorBoundary";
 import { AcceptInvitePage } from "@/components/auth/AcceptInvitePage";
 import { LoginPage } from "@/components/auth/LoginPage";
 import { CockpitPage } from "@/components/cockpit/CockpitPage";
@@ -117,11 +119,14 @@ function AuthenticatedWorkspace() {
         defaultOptions: { queries: { retry: 1, staleTime: 30000 } },
       }),
   );
+  const location = useLocation();
   return (
     <QueryClientProvider client={client}>
       <WorkspaceProvider>
         <AppShell>
-          <Outlet />
+          <ErrorBoundary key={location.pathname}>
+            <Outlet />
+          </ErrorBoundary>
         </AppShell>
       </WorkspaceProvider>
     </QueryClientProvider>

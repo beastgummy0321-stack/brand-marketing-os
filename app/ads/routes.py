@@ -36,6 +36,17 @@ GROUP_UNKNOWN_MESSAGE = "找不到這個投放組。"
 AD_UNKNOWN_MESSAGE = "找不到這支廣告。"
 
 
+def _with_readiness(actor, brand_id: str, campaign: dict | None) -> dict | None:
+    """每一條回 Campaign 的路由都跟 GET 回同一個形狀（`campaign_detail` + `asset_readiness`）。
+    少一個欄位，瀏覽器就是白畫面（F04-I24，演練四）。"""
+    if campaign is None:
+        return None
+    campaign["asset_readiness"] = assets.readiness_summary(
+        assets.readiness(web.conn, actor.org_id, brand_id, campaign["id"]),
+    )
+    return campaign
+
+
 @router.get("/brands/{brand_id}/campaigns")
 def list_campaigns(request: Request, brand_id: str):
     actor = web.require_actor(request)
@@ -79,10 +90,7 @@ def get_campaign(request: Request, brand_id: str, campaign_id: str):
     if campaign is None:
         raise web.ApiError(404, "campaign_unknown", CAMPAIGN_UNKNOWN_MESSAGE)
     # F03-I08：素材 tab 跟發布畫面共用同一組 ready_count/total（§0）。
-    campaign["asset_readiness"] = assets.readiness_summary(
-        assets.readiness(web.conn, actor.org_id, brand_id, campaign_id),
-    )
-    return {"campaign": campaign}
+    return {"campaign": _with_readiness(actor, brand_id, campaign)}
 
 
 # F03-I20：租戶界線先於欄位驗證（既有慣例，同 app/workbench/routes.py）：這個檔案裡每一個
@@ -122,7 +130,7 @@ def create_campaign(request: Request, brand_id: str, body: CreateCampaignRequest
         code = str(exc)
         status, message = _CREATE_CAMPAIGN_ERRORS.get(code, (400, code))
         raise web.ApiError(status, code, message) from exc
-    return {"campaign": campaign}
+    return {"campaign": _with_readiness(actor, brand_id, campaign)}
 
 
 class PatchCampaignRequest(BaseModel):
@@ -168,7 +176,8 @@ def patch_campaign(request: Request, brand_id: str, campaign_id: str, body: Patc
         code = str(exc)
         status, message = _PATCH_CAMPAIGN_ERRORS.get(code, (400, code))
         raise web.ApiError(status, code, message) from exc
-    return {"campaign": repository.campaign_detail(web.conn, actor.org_id, brand_id, campaign_id)}
+    campaign = repository.campaign_detail(web.conn, actor.org_id, brand_id, campaign_id)
+    return {"campaign": _with_readiness(actor, brand_id, campaign)}
 
 
 _STRATEGY_ERRORS = {
@@ -191,7 +200,7 @@ def generate_strategy(request: Request, brand_id: str, campaign_id: str):
         code = str(exc)
         status, message = _STRATEGY_ERRORS.get(code, (400, code))
         raise web.ApiError(status, code, message) from exc
-    return {"campaign": campaign}
+    return {"campaign": _with_readiness(actor, brand_id, campaign)}
 
 
 class SelectScenarioRequest(BaseModel):
@@ -224,7 +233,7 @@ def select_strategy_scenario(
         code = str(exc)
         status, message = _SELECT_SCENARIO_ERRORS.get(code, (400, code))
         raise web.ApiError(status, code, message) from exc
-    return {"campaign": campaign}
+    return {"campaign": _with_readiness(actor, brand_id, campaign)}
 
 
 class AllocationItem(BaseModel):
@@ -263,7 +272,7 @@ def set_strategy_allocation(
         code = str(exc)
         status, message = _ALLOCATION_ERRORS.get(code, (400, code))
         raise web.ApiError(status, code, message) from exc
-    return {"campaign": campaign}
+    return {"campaign": _with_readiness(actor, brand_id, campaign)}
 
 
 # -- F03-I06: 採用策略 -> 投放組／廣告，以及後續編輯 ------------------------------------------
@@ -291,7 +300,7 @@ def adopt_strategy(request: Request, brand_id: str, campaign_id: str):
         code = str(exc)
         status, message = _PLAN_ERRORS.get(code, (400, code))
         raise web.ApiError(status, code, message) from exc
-    return {"campaign": campaign}
+    return {"campaign": _with_readiness(actor, brand_id, campaign)}
 
 
 _GROUP_EDIT_ERRORS = {
@@ -689,8 +698,4 @@ def close_campaign(request: Request, brand_id: str, campaign_id: str,
     # 回傳跟 GET 一樣的形狀（campaign_detail + asset_readiness）——`closeout.close` 可以繼續回
     # 陽春的 ads_campaign 列，前端的 CampaignDetail 型別要的是這一份（§0 re-cut correction 1）。
     campaign = repository.campaign_detail(web.conn, actor.org_id, brand_id, campaign_id)
-    if campaign is not None:
-        campaign["asset_readiness"] = assets.readiness_summary(
-            assets.readiness(web.conn, actor.org_id, brand_id, campaign_id),
-        )
-    return {"campaign": campaign}
+    return {"campaign": _with_readiness(actor, brand_id, campaign)}
