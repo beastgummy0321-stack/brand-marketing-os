@@ -7,6 +7,7 @@ in Pydantic (no default) still fires from inside the handler, against a real cam
 caller's own brand.
 """
 
+import json
 import re
 import unittest
 from uuid import uuid4
@@ -15,8 +16,12 @@ from fastapi.testclient import TestClient
 
 import app.main as main
 import app.shared.web as web
+from app.ads import brief as ads_brief
+from app.ads import plan as ads_plan
 from app.ads import repository as ads_repo
+from app.ads import strategy as ads_strategy
 from app.brand_intelligence import repository as bi_repo
+from app.llm import providers
 
 from .identity_test_helpers import flatten_routes, mint_hs256
 
@@ -176,6 +181,145 @@ class AdsRoutesValidationStillFiresTest(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.json()["error"]["code"], "ready_invalid")
+
+
+def _fake(rendered_output: str) -> providers.FakeProvider:
+    return providers.FakeProvider(response=providers.ProviderResponse(
+        output_text=rendered_output, structured=None,
+        usage=providers.Usage(input_tokens=100, output_tokens=50), stop_reason="end_turn",
+    ))
+
+
+_BRIEF_REPLY = json.dumps({
+    "objective": "購買", "success_metric": "cpa", "success_target": 500,
+    "success_basis": "依過去 CPA 推算", "product_ids": [], "audience_hint": None, "notes": None,
+}, ensure_ascii=False)
+
+_STRATEGY_REPLY = json.dumps({
+    "allocation": [
+        {"role": "new", "label": "新客", "pct": 50, "rationale": "打平 CPA 還沒驗證過新客"},
+        {"role": "retarget", "label": "再行銷", "pct": 30, "rationale": "有過去購買資料"},
+        {"role": "explore", "label": "探索", "pct": 20, "rationale": "測試新素材角度"},
+    ],
+    "why": ["依品牌事實與過去學習分配"], "unknowns": ["新受眾的實際轉換率"], "alternatives": [],
+}, ensure_ascii=False)
+
+
+def _coordinates(tag: str) -> dict:
+    return {
+        "audience": f"aud_{tag}", "pain": f"pain_{tag}", "angle": f"angle_{tag}",
+        "hook": f"hook_{tag}", "proof": f"proof_{tag}", "offer": f"offer_{tag}",
+        "format": f"format_{tag}",
+    }
+
+
+_PLAN_REPLY = json.dumps({
+    "groups": [
+        {"role": "new", "name": "新客組", "ads": [
+            {"name": "新客-廣告一", "coordinates": _coordinates("new1")},
+        ]},
+        {"role": "retarget", "name": "再行銷組", "ads": [
+            {"name": "再行銷-廣告一", "coordinates": _coordinates("rt1")},
+        ]},
+        {"role": "explore", "name": "探索組", "ads": [
+            {"name": "探索-廣告一", "coordinates": _coordinates("ex1")},
+        ]},
+    ],
+}, ensure_ascii=False)
+
+
+class AdsRoutesShapeStaysConsistentTest(unittest.TestCase):
+    """F04-I24 falsifier: every route that returns `{"campaign": ...}` returns the same shape as
+    GET — `campaign_detail` + `asset_readiness` — never a bare `campaign_detail` missing the
+    field `StrategyTab.tsx` reads unconditionally (drill 4, custom-budget scenario -> white
+    screen)."""
+
+    def setUp(self):
+        self.client = TestClient(main.app)
+        user = uuid4()
+        self.token = mint_hs256(sub=str(user), email=f"adsd-{user.hex[:8]}@example.com")
+        me = self.client.get("/api/identity/me", headers={"Authorization": f"Bearer {self.token}"})
+        self.org_id = me.json()["org"]["id"]
+        self.brand_id = bi_repo.create_brand(
+            web.conn, org_id=self.org_id, name="測試品牌：投放中心形狀守門", client_name=None,
+            actor=ACTOR,
+        )["id"]
+        web.conn.commit()
+        self.headers = {"Authorization": f"Bearer {self.token}"}
+
+        self._orig_brief_provider = ads_brief.PROVIDER
+        self._orig_strategy_provider = ads_strategy.PROVIDER
+        self._orig_plan_provider = ads_plan.PROVIDER
+        ads_brief.PROVIDER = _fake(_BRIEF_REPLY)
+        ads_strategy.PROVIDER = _fake(_STRATEGY_REPLY)
+        ads_plan.PROVIDER = _fake(_PLAN_REPLY)
+
+    def tearDown(self):
+        ads_brief.PROVIDER = self._orig_brief_provider
+        ads_strategy.PROVIDER = self._orig_strategy_provider
+        ads_plan.PROVIDER = self._orig_plan_provider
+
+    def _assert_shape(self, response):
+        self.assertEqual(response.status_code, 200, response.text)
+        readiness = response.json()["campaign"]["asset_readiness"]
+        self.assertIsInstance(readiness["total"], int)
+        self.assertIsInstance(readiness["ready_count"], int)
+
+    def test_every_route_back_to_campaign_carries_asset_readiness(self):
+        create = self.client.post(
+            f"/api/ads/brands/{self.brand_id}/campaigns",
+            json={
+                "goal_text": "幫夜跑背心做一波購買導向的投放",
+                "start_date": "2026-10-01", "end_date": "2026-10-31",
+            },
+            headers=self.headers,
+        )
+        self._assert_shape(create)
+        campaign_id = create.json()["campaign"]["id"]
+
+        patch = self.client.patch(
+            f"/api/ads/brands/{self.brand_id}/campaigns/{campaign_id}",
+            json={"success_target": 400}, headers=self.headers,
+        )
+        self._assert_shape(patch)
+
+        generate = self.client.post(
+            f"/api/ads/brands/{self.brand_id}/campaigns/{campaign_id}/strategy",
+            headers=self.headers,
+        )
+        self._assert_shape(generate)
+
+        # 阿明走查白畫面的那一下：自訂總額情境。
+        scenario = self.client.post(
+            f"/api/ads/brands/{self.brand_id}/campaigns/{campaign_id}/strategy/scenario",
+            json={"scenario_key": "custom", "custom_total": 28000}, headers=self.headers,
+        )
+        self._assert_shape(scenario)
+
+        allocation = self.client.post(
+            f"/api/ads/brands/{self.brand_id}/campaigns/{campaign_id}/strategy/allocation",
+            json={"allocation": [
+                {"role": "new", "pct": 50}, {"role": "retarget", "pct": 30},
+                {"role": "explore", "pct": 20},
+            ]},
+            headers=self.headers,
+        )
+        self._assert_shape(allocation)
+
+        adopt = self.client.post(
+            f"/api/ads/brands/{self.brand_id}/campaigns/{campaign_id}/plan", headers=self.headers,
+        )
+        self._assert_shape(adopt)
+
+        get = self.client.get(
+            f"/api/ads/brands/{self.brand_id}/campaigns/{campaign_id}", headers=self.headers,
+        )
+        self._assert_shape(get)
+
+        bind = self.client.post(
+            f"/api/ads/brands/{self.brand_id}/campaigns/{campaign_id}/bind", headers=self.headers,
+        )
+        self._assert_shape(bind)
 
 
 if __name__ == "__main__":

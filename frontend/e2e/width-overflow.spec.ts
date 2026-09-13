@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-/** 殼寬回歸閘門（票 u2-fluid-shell-to-1920，ADR 0051 rule 4／Consequences）：15 條路由
+/** 殼寬回歸閘門（票 u2-fluid-shell-to-1920，ADR 0051 rule 4／Consequences）：16 條路由
  * 在 1280 寬時，殼不能橫向溢出視窗——這是 ADR 0051 量過的那件事（固定 1440px 殼在
  * 1280 時把頂欄控制項推出視窗外）改成流體殼之後，不能再退回去。
  *
@@ -17,9 +17,9 @@ import { expect, test } from "@playwright/test";
  * AI），逐路由 `goto` 量測，不逐頁斷言畫面內容——這支測試只守寬度，內容行為歸
  * `smoke.spec.ts`。
  *
- * `/accept-invite` 不在這 14 條路由裡：它要另一個角色先發邀請信才進得去，
+ * `/accept-invite` 不在這 16 條路由裡：它要另一個角色先發邀請信才進得去，
  * `smoke.spec.ts` 也沒有這條路徑可以免費重現。`/login` 因為不需要登入即可到達，量到了。
- * 15 條路由（`App.tsx`）扣掉 `/accept-invite`，共測 14 條。 */
+ * 16 條路由（`App.tsx`）扣掉 `/accept-invite`，共測 15 條。 */
 test.use({ viewport: { width: 1280, height: 800 } });
 
 test("15 條路由（扣 /accept-invite）在 1280 寬不橫向溢出", async ({ page }) => {
@@ -106,14 +106,28 @@ test("15 條路由（扣 /accept-invite）在 1280 寬不橫向溢出", async ({
   await page.goto(`/app/brands/${brandId}/ads`);
   await assertNoOverflow("/brands/:brandId/ads");
 
-  // --- /brands/:brandId/ads/new：建 Campaign，量表單頁再量出來的工作區頁 ----------------
+  // --- /brands/:brandId/ads/campaigns（所有 Campaign 清單，F04-I10）------------------
+  await page.goto(`/app/brands/${brandId}/ads/campaigns`);
+  await assertNoOverflow("/brands/:brandId/ads/campaigns");
+
+  // --- /brands/:brandId/ads/new：建 Campaign 兩步流程（F04-I12）——步驟一填目標、
+  // 步驟二「理解如下」確認欄位、按「產生策略建議」才進工作區頁 ----------------------
   await page.getByRole("link", { name: "建立 Campaign" }).click();
   await assertNoOverflow("/brands/:brandId/ads/new");
   await page.getByLabel("你這次想做到什麼？").fill("寬度測試用的一句話目標，預算大約三萬。");
-  await page.getByRole("button", { name: "讓行銷駕駛艙規劃", exact: true }).click();
+  await page.getByRole("button", { name: "產生建議", exact: true }).click();
+
+  // --- /brands/:brandId/ads/new/:campaignId（理解如下）-----------------------------
+  await expect(page).toHaveURL(new RegExp(`/app/brands/${brandId}/ads/new/[^/]+$`));
+  await expect(page.getByText("你的行銷需求")).toBeVisible();
+  await assertNoOverflow("/brands/:brandId/ads/new/:campaignId");
+  await page.getByRole("button", { name: "產生策略建議 →" }).click();
 
   // --- /brands/:brandId/ads/campaigns/:campaignId ---------------------------------
-  await expect(page).toHaveURL(new RegExp(`/app/brands/${brandId}/ads/campaigns/[^/]+`));
+  await expect(page).toHaveURL(
+    new RegExp(`/app/brands/${brandId}/ads/campaigns/[^/?]+\\?tab=strategy`),
+    { timeout: 30000 },
+  );
   await assertNoOverflow("/brands/:brandId/ads/campaigns/:campaignId");
 
   // --- /brands/:brandId/workbench（票 workbench/04，ADR 0068；F02 四個畫面加三條）-------

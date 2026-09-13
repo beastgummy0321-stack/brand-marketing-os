@@ -293,6 +293,26 @@ department task files (`app/departments/<department>/*.md`) plus methodology fil
 
 Branches: `saas` is the developed line; `master` is the retired single-machine SQLite build.
 
+**What an external model is allowed to cost** (2026-09-13, F04). The model is asked for judgment
+only: arithmetic, fixed text and label mapping are the program's job, and no prompt ships bulk rows
+or a long parameter list. Three rules hold everywhere, not per call site:
+1. **Every list that goes into a prompt has a cap in one place.** `app/llm/context_compiler.py`
+   caps rules, claims and brand facts against the same `rule_cards` 「rule_prompt_cap」 value —
+   one guard for every caller rather than one per department. A caller that assembles its own
+   list (learnings, products, coordinate vocabulary) caps it where it builds it and says in the
+   prompt how many were left out; a truncated list is never silently truncated.
+2. **The same bytes are never sent twice by accident.** `gateway.run_task` does not resend a large
+   prompt on retry (above the threshold in `gateway.py` a failed attempt is final, because a
+   16k-token resend costs more than the failure); a call site that deliberately sends the same
+   prefix several times in a row (`performance_reading`'s three lenses) marks that prefix with
+   Anthropic `cache_control`, which the dev-only codex route flattens away harmlessly.
+3. **The cost column is the billing truth.** `llm_task.cost` is `numeric(14,6)`; the monthly cap
+   sums it, so a sub-cent call must not round to `0.00`.
+The coordinate vocabulary keeps its `label` column in prompts — `key` is an English slug and the
+label is its meaning; dropping it would save tokens by making the model guess. `app/schedule`'s
+`schedule_plan`／`schedule_tree` prompts are **not** capped: no screen has reached them since
+檔期規劃 retired (F03), so their uncapped tables cost nothing and capping dead code buys nothing.
+
 ## 2. Managed modules and the legacy surface
 
 Managed modules today are `workbench`, `schedule` and `ads`. They follow the container rules: one
@@ -608,6 +628,51 @@ visual reference for all three Ads V2 features is the prototype
 8. **Confidence is a sample bucket (低／中／高), never a percentage**, and no model reads raw ad
    history (ADR 0067): evidence tables are program-computed.
 
+### 6.1 Second round — 基座 (settled 2026-09-13, F04)
+
+The visual source of truth for 投放中心 is now `docs/design/ads/01-home.png` … `10-strategy-advanced.png`
+(01 首頁, 02 所有 Campaign, 03 建立投放計畫, 04 理解如下, 05 推薦策略, 06 Campaign 工作區總覽,
+07 素材交接 = F05, 08 發布前檢查 = F06, 10 進階設定). `09-performance-overview-not-built.png` is
+recorded as **not built**: suggestions live inside 投放中心, not behind a new nav item. Where an
+image and the 09-12 prototype differ, the image wins; the prototype is history.
+
+9. **One page, two depths.** Every screen shows the simple face by default — a recommendation, one
+   primary button, an honest sentence — and the expert's knobs live in a collapsible *inside that
+   same page*, closed until opened. Never a mode switch, never a second page, never a second data
+   model (rows are the truth; simple and advanced are two projections of them), and never a layout
+   that reads like another Meta/Google console.
+10. **The judgment sentences are the program's, not the model's.** 一句整體判斷 (home), the
+    per-campaign 一句判斷 (list, 總覽) and every 最近做了什麼 line are composed in
+    `app/ads/judgment.py` from status, dates, budget progress and `ads_action` rows, shipped as
+    text with the payload, and rendered verbatim by the browser (the §5.3 rule: text the user
+    reads is produced once, by the side that owns the rule). No LLM call is made to write them,
+    and a correlation is still never reported as a cause (§0).
+11. **Two model calls per new Campaign, no third.** 建立投放計畫 parses the sentence
+    (`ads_brief_parse`) into 商品／目標/平台／預算／時間／受眾方向 with a 數字優先 rule — a number
+    in the sentence becomes that field, `null` only when the sentence has none — and 理解如下 is a
+    confirm screen over those six editable field cards, each labelled 你說的 or 系統帶入
+    (`context_json.field_sources`). Only 「產生策略建議」 spends the second call (`ads_strategy`).
+    Editing a card is a `PATCH`, never a re-parse. Dates are optional input: when the sentence has
+    none the system fills today…+30 天 and labels them 系統帶入. Parsed 預算上限 and 平台 live in
+    the existing `constraints_json`; no column is added for them.
+12. **「這輪想學到什麼」 ships with the strategy.** `strategy.md` returns `learning_goals[]`
+    (≤3 sentences) next to `why[]` and `unknowns[]`, stored inside `budget_basis_json.strategy`,
+    rendered as the strategy page's third column so F05's 結案 can answer it. 預估購買 =
+    採用總額 ÷ 目標 CPA, captioned 推估（CPA 不變的算術）, computed in code, never 預估觸及.
+13. **Reserved seats are named, not built.** 「MarketingOS 為你執行中」 (home + 總覽) and
+    「進階設定」 (策略頁: 平台結構／受眾／版位／出價／優化事件／歸因／追蹤／UTM) are grey
+    placeholder cards reading 「自動執行接上後開放」／「自動發布接上後開放」 — never phrased as a
+    refusal. Their future readers are recorded here and created nowhere else: the execution feed
+    will read `ads_action` rows with `sync_state = 'auto_synced'`, and the advanced panel will
+    write `platform_settings_json` on `ads_delivery_group` — **that column does not exist and is
+    not created until an adapter writes it.** 「需要你決定」 has no producer in F04 (suggestions are
+    F05) and renders its honest empty 「目前沒有需要你決定的事」.
+14. **The strategy page's buttons do what they say.** 照這個方式進行 = adopt the recommended
+    scenario if none is chosen, adopt the strategy, land on 投放結構 — one click from a newcomer's
+    point of view. 調整建議 = edit the allocation percentages inline before adopting (sum 100, the
+    program re-splits the money). 查看完整判斷 = the existing 查看策略依據 panel. The permanently
+    disabled 採用 button is gone.
+
 ## 7. Verification
 
 `verify.typecheck` runs ruff, pyright, the frontend type build and dependency-cruiser; `verify.test`
@@ -617,3 +682,11 @@ is the full pytest suite with `-n 8 --dist loadfile` (`-n auto` exhausts Postgre
 migration change additionally runs the tenant-isolation and boundary trio named in `CLAUDE.md`.
 Real-browser acceptance happens on a restarted backend at 1024 and 1920 in empty, normal and heavy
 states (`docs/design-system.md` §9/§10).
+
+A UI issue additionally carries a **visual gate** (2026-09-13, F04): it names its reference image
+under `docs/design/ads/`, the worker invokes `impeccable:impeccable` with that image before writing
+the screen, and the issue is not done until a screenshot of the built screen has been compared
+against that image side by side. The shared patterns those screens compose — 頁首判斷帶, 決定卡,
+Campaign 卡, 數字條, 時間軸, 佔位卡, 步驟指示, 摘要欄位卡 — are specified in
+`docs/design-system.md` §5.3 and implemented once in `frontend/src/components/ads/patterns/`;
+a page issue composes them and does not re-invent one.

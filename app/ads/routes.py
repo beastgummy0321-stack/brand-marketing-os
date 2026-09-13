@@ -15,7 +15,17 @@ from pydantic import BaseModel
 
 import app.shared.web as web
 from app import workbench
-from app.ads import adapters, assets, brief, closeout, outcome, plan, repository, strategy
+from app.ads import (
+    adapters,
+    assets,
+    brief,
+    closeout,
+    judgment,
+    outcome,
+    plan,
+    repository,
+    strategy,
+)
 from app.ads.adapters import simulated
 from app.core import settings as coresettings
 
@@ -26,12 +36,50 @@ GROUP_UNKNOWN_MESSAGE = "找不到這個投放組。"
 AD_UNKNOWN_MESSAGE = "找不到這支廣告。"
 
 
+def _with_readiness(actor, brand_id: str, campaign: dict | None) -> dict | None:
+    """每一條回 Campaign 的路由都跟 GET 回同一個形狀（`campaign_detail` + `asset_readiness`）。
+    少一個欄位，瀏覽器就是白畫面（F04-I24，演練四）。"""
+    if campaign is None:
+        return None
+    campaign["asset_readiness"] = assets.readiness_summary(
+        assets.readiness(web.conn, actor.org_id, brand_id, campaign["id"]),
+    )
+    return campaign
+
+
 @router.get("/brands/{brand_id}/campaigns")
 def list_campaigns(request: Request, brand_id: str):
     actor = web.require_actor(request)
     web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
     campaigns = repository.list_campaigns(web.conn, actor.org_id, brand_id)
     return {"campaigns": campaigns}
+
+
+@router.get("/brands/{brand_id}/home")
+def get_home(request: Request, brand_id: str):
+    """F04-I08：首頁四塊——一句整體判斷、四個計數、進行中的 Campaign 卡片（最多 6 張）、
+    最近做了什麼（最多 6 筆）。不 fetch 成效、不打模型、不寫任何東西。
+
+    `list_campaigns()` 沒有分頁，拿到的就是這個品牌的全部，所以在這裡數三行計數就是準的；
+    哪天它加了分頁，這裡要跟著改成 SQL COUNT（§0：多一句 `COUNT(*) FILTER (...)` 只是同一件
+    事的第二份寫法，先不寫）。
+    """
+    actor = web.require_actor(request)
+    web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
+    campaigns = repository.list_campaigns(web.conn, actor.org_id, brand_id)
+    counts = {
+        "running": sum(1 for c in campaigns if c["status"] == "live"),
+        "upcoming": sum(1 for c in campaigns if c["status"] in ("draft", "ready")),
+        "ended": sum(1 for c in campaigns if c["status"] in ("ended", "closed")),
+        "needs_decision": 0,  # 建議的產生端是 F05；F04 回誠實的空狀態，不是猜出來的數字。
+    }
+    home = {
+        "headline": judgment.brand_headline(counts),
+        "counts": counts,
+        "campaigns": [c for c in campaigns if c["status"] == "live"][:6],
+        "actions": repository.recent_actions(web.conn, actor.org_id, brand_id, limit=6),
+    }
+    return {"home": home}
 
 
 @router.get("/brands/{brand_id}/campaigns/{campaign_id}")
@@ -42,10 +90,7 @@ def get_campaign(request: Request, brand_id: str, campaign_id: str):
     if campaign is None:
         raise web.ApiError(404, "campaign_unknown", CAMPAIGN_UNKNOWN_MESSAGE)
     # F03-I08：素材 tab 跟發布畫面共用同一組 ready_count/total（§0）。
-    campaign["asset_readiness"] = assets.readiness_summary(
-        assets.readiness(web.conn, actor.org_id, brand_id, campaign_id),
-    )
-    return {"campaign": campaign}
+    return {"campaign": _with_readiness(actor, brand_id, campaign)}
 
 
 # F03-I20：租戶界線先於欄位驗證（既有慣例，同 app/workbench/routes.py）：這個檔案裡每一個
@@ -85,7 +130,7 @@ def create_campaign(request: Request, brand_id: str, body: CreateCampaignRequest
         code = str(exc)
         status, message = _CREATE_CAMPAIGN_ERRORS.get(code, (400, code))
         raise web.ApiError(status, code, message) from exc
-    return {"campaign": campaign}
+    return {"campaign": _with_readiness(actor, brand_id, campaign)}
 
 
 class PatchCampaignRequest(BaseModel):
@@ -131,7 +176,8 @@ def patch_campaign(request: Request, brand_id: str, campaign_id: str, body: Patc
         code = str(exc)
         status, message = _PATCH_CAMPAIGN_ERRORS.get(code, (400, code))
         raise web.ApiError(status, code, message) from exc
-    return {"campaign": repository.campaign_detail(web.conn, actor.org_id, brand_id, campaign_id)}
+    campaign = repository.campaign_detail(web.conn, actor.org_id, brand_id, campaign_id)
+    return {"campaign": _with_readiness(actor, brand_id, campaign)}
 
 
 _STRATEGY_ERRORS = {
@@ -154,7 +200,7 @@ def generate_strategy(request: Request, brand_id: str, campaign_id: str):
         code = str(exc)
         status, message = _STRATEGY_ERRORS.get(code, (400, code))
         raise web.ApiError(status, code, message) from exc
-    return {"campaign": campaign}
+    return {"campaign": _with_readiness(actor, brand_id, campaign)}
 
 
 class SelectScenarioRequest(BaseModel):
@@ -166,6 +212,9 @@ _SELECT_SCENARIO_ERRORS = {
     "campaign_unknown": (404, CAMPAIGN_UNKNOWN_MESSAGE),
     "strategy_not_generated": (400, "請先產生策略，才能選預算情境。"),
     "scenario_unknown": (400, "找不到這個預算情境。"),
+    "scenario_amount_unknown": (
+        400, "這個情境還算不出金額：請先補上商品的售價與成本，或自訂預算。",
+    ),
     "custom_total_invalid": (400, "手打的總額必須大於 0。"),
 }
 
@@ -187,7 +236,46 @@ def select_strategy_scenario(
         code = str(exc)
         status, message = _SELECT_SCENARIO_ERRORS.get(code, (400, code))
         raise web.ApiError(status, code, message) from exc
-    return {"campaign": campaign}
+    return {"campaign": _with_readiness(actor, brand_id, campaign)}
+
+
+class AllocationItem(BaseModel):
+    role: str = ""
+    pct: float = 0.0
+
+
+class SetAllocationRequest(BaseModel):
+    allocation: list[AllocationItem] = []
+
+
+_ALLOCATION_ERRORS = {
+    "campaign_unknown": (404, CAMPAIGN_UNKNOWN_MESSAGE),
+    "strategy_not_generated": (400, "請先產生策略。"),
+    "plan_already_adopted": (
+        400,
+        "投放結構已經建立，預算分配請到投放結構分頁改每個投放組的日預算。",
+    ),
+    "allocation_invalid": (400, "三個角色的百分比要加起來等於 100，而且不能是負數。"),
+}
+
+
+@router.post("/brands/{brand_id}/campaigns/{campaign_id}/strategy/allocation")
+def set_strategy_allocation(
+    request: Request, brand_id: str, campaign_id: str, body: SetAllocationRequest,
+):
+    """F04-I13：採用之前調整三個角色的百分比，金額由 `strategy.set_allocation` 重算。"""
+    actor = web.require_actor(request)
+    web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
+    try:
+        campaign = strategy.set_allocation(
+            web.conn, actor.org_id, brand_id, campaign_id,
+            allocation=[item.model_dump() for item in body.allocation], actor=str(actor.user_id),
+        )
+    except ValueError as exc:
+        code = str(exc)
+        status, message = _ALLOCATION_ERRORS.get(code, (400, code))
+        raise web.ApiError(status, code, message) from exc
+    return {"campaign": _with_readiness(actor, brand_id, campaign)}
 
 
 # -- F03-I06: 採用策略 -> 投放組／廣告，以及後續編輯 ------------------------------------------
@@ -215,7 +303,7 @@ def adopt_strategy(request: Request, brand_id: str, campaign_id: str):
         code = str(exc)
         status, message = _PLAN_ERRORS.get(code, (400, code))
         raise web.ApiError(status, code, message) from exc
-    return {"campaign": campaign}
+    return {"campaign": _with_readiness(actor, brand_id, campaign)}
 
 
 _GROUP_EDIT_ERRORS = {
@@ -533,6 +621,7 @@ def bind_campaign(request: Request, brand_id: str, campaign_id: str):
         code = str(exc)
         status, message = _PUBLISH_ERRORS.get(code, (400, code))
         raise web.ApiError(status, code, message) from exc
+    result["campaign"] = _with_readiness(actor, brand_id, result["campaign"])
     return result
 
 
@@ -613,8 +702,4 @@ def close_campaign(request: Request, brand_id: str, campaign_id: str,
     # 回傳跟 GET 一樣的形狀（campaign_detail + asset_readiness）——`closeout.close` 可以繼續回
     # 陽春的 ads_campaign 列，前端的 CampaignDetail 型別要的是這一份（§0 re-cut correction 1）。
     campaign = repository.campaign_detail(web.conn, actor.org_id, brand_id, campaign_id)
-    if campaign is not None:
-        campaign["asset_readiness"] = assets.readiness_summary(
-            assets.readiness(web.conn, actor.org_id, brand_id, campaign_id),
-        )
-    return {"campaign": campaign}
+    return {"campaign": _with_readiness(actor, brand_id, campaign)}

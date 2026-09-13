@@ -183,6 +183,60 @@ class LLMGatewayTest(unittest.TestCase):
         rows = self._rows_for_brand()
         self.assertTrue(all(r["status"] == "timeout" for r in rows))
 
+    def test_large_prompt_is_not_retried_even_with_max_retries_set(self):
+        # 輸入長度 > LARGE_PROMPT_CHARS（24000）＋一定逾時的 provider：重送同樣的大 prompt
+        # 只會再付一次同樣的錢，所以這個 brand_id 下只能多出 1 列，不是 max_retries+1 列。
+        provider = FakeProvider(exception=ProviderTimeoutError("AI 服務逾時未回應"), fail_first_n=0)
+
+        row = gateway.run_task(
+            self.conn, provider,
+            brand_id=self.brand["id"], task_type="analyzePerformance",
+            prompt_template_id="tpl_perf", prompt_template_version="v1",
+            system=None, messages=[{"role": "user", "content": "x" * (gateway.LARGE_PROMPT_CHARS + 1)}],
+            context=self._context(), options=gateway.TaskOptions(max_retries=2),
+        )
+
+        self.assertEqual(row["status"], "timeout")
+        self.assertEqual(row["attempt_no"], 1)
+        self.assertIn("不自動重試", row["error"])
+
+        rows = self._rows_for_brand()
+        self.assertEqual(len(rows), 1)
+
+    def test_small_prompt_retry_behaviour_unchanged(self):
+        # 對照組：短 message ＋ max_retries=1 ＋一定逾時的 provider → 照舊 2 列，
+        # 錯誤訊息一個字不變（不含「不自動重試」）。
+        provider = FakeProvider(exception=ProviderTimeoutError("AI 服務逾時未回應"), fail_first_n=0)
+
+        row = gateway.run_task(
+            self.conn, provider,
+            brand_id=self.brand["id"], task_type="analyzePerformance",
+            prompt_template_id="tpl_perf", prompt_template_version="v1",
+            system=None, messages=[{"role": "user", "content": "判讀成效"}],
+            context=self._context(), options=gateway.TaskOptions(max_retries=1),
+        )
+
+        self.assertEqual(row["status"], "timeout")
+        self.assertEqual(row["error"], "AI 服務逾時未回應")
+
+        rows = self._rows_for_brand()
+        self.assertEqual(len(rows), 2)
+
+    def test_llm_task_cost_stores_sub_cent_precision(self):
+        # numeric(14,2) 會把不到半分錢的呼叫記成 0.00；migration 20260913000003 改成
+        # numeric(14,6) 之後這裡必須讀回原值，不是被四捨五入成 0。
+        row = gateway._insert_running_row(
+            self.conn, org_id=db.DEV_ORG_ID, brand_id=self.brand["id"], task_type="analyzeBrandContext",
+            context=self._context(), prompt_template_id="tpl_brand_context", prompt_template_version="v1",
+            provider_name="fake", model="claude-opus-5", attempt_no=1,
+        )
+        gateway._mark_succeeded(
+            self.conn, row["id"], structured_output=None, rendered_output="x",
+            usage={"input_tokens": 1, "output_tokens": 1}, cost=0.000123,
+        )
+        stored = gateway.get_task(self.conn, row["id"])
+        self.assertEqual(float(stored["cost"]), 0.000123)
+
 
 class AnthropicStructuredToolTest(unittest.TestCase):
     def test_forced_tool_input_becomes_structured_response(self):
@@ -630,6 +684,83 @@ class ContextCompilerPromptCapTest(unittest.TestCase):
         for r in product_rules:
             self.assertIn(r["content"], text)
         self.assertNotIn(brand_soft[0]["content"], text)
+
+
+class FactClaimPromptCapTest(unittest.TestCase):
+    """票 F04-I01：事實／宣稱各自讀 rule_prompt_cap 同一張卡截斷，forbidden 不截斷、
+    截斷時尾端補一行講出「還有更舊的」。"""
+
+    def setUp(self):
+        self.conn = db.current()
+        self.brand = repo.create_brand(self.conn, name="品牌G（事實宣稱上限測試）",
+                                       client_name=None, actor="小陳", org_id=db.DEV_ORG_ID)
+
+    def _make_brand_facts(self, brand_id, count):
+        base = datetime.now(UTC) - timedelta(minutes=1)
+        facts = []
+        for i in range(1, count + 1):
+            fact = repo.create_brand_fact(
+                self.conn, brand_id, fact_type="positioning", label=f"事實{i:02d}",
+                value=f"品牌事實內容{i:02d}", status="confirmed", confirmed_by="小陳", actor="小陳",
+            )
+            confirmed_at = (base + timedelta(seconds=i)).isoformat()
+            self.conn.execute("UPDATE brand_fact SET confirmed_at = %s WHERE id = %s",
+                              (confirmed_at, fact["id"]))
+            self.conn.commit()
+            facts.append(fact)
+        return facts
+
+    def _make_claims(self, brand_id, claim_type, count):
+        base = datetime.now(UTC) - timedelta(minutes=1)
+        claims = []
+        for i in range(1, count + 1):
+            claim = repo.create_claim(
+                self.conn, brand_id, claim_text=f"{claim_type}宣稱{i:02d}",
+                claim_type=claim_type, actor="小陳",
+            )
+            created_at = (base + timedelta(seconds=i)).isoformat()
+            self.conn.execute("UPDATE claim SET created_at = %s WHERE id = %s",
+                              (created_at, claim["id"]))
+            self.conn.commit()
+            claims.append(claim)
+        return claims
+
+    def test_45_brand_facts_top_20_newest_enter_prompt_with_overflow_note(self):
+        facts = self._make_brand_facts(self.brand["id"], 45)
+        text, _ids, _bv, _pv = context_compiler.compile(self.conn, self.brand["id"])
+
+        newest_20 = facts[-20:]
+        oldest_25 = facts[:25]
+        for f in newest_20:
+            self.assertIn(f["value"], text)
+        for f in oldest_25:
+            self.assertNotIn(f["value"], text)
+        self.assertIn("（另有 25 筆較舊的品牌事實沒有列出）", text)
+
+    def test_30_approved_claims_capped_but_3_forbidden_all_kept(self):
+        approved = self._make_claims(self.brand["id"], "approved", 30)
+        forbidden = self._make_claims(self.brand["id"], "forbidden", 3)
+
+        text, _ids, _bv, _pv = context_compiler.compile(self.conn, self.brand["id"])
+
+        newest_20 = approved[-20:]
+        oldest_10 = approved[:10]
+        for c in newest_20:
+            self.assertIn(c["claim_text"], text)
+        for c in oldest_10:
+            self.assertNotIn(c["claim_text"], text)
+        for c in forbidden:
+            self.assertIn(c["claim_text"], text)
+        self.assertIn("（另有 10 筆較舊的宣稱沒有列出）", text)
+
+    def test_15_facts_under_cap_no_overflow_note_and_all_ids_present(self):
+        facts = self._make_brand_facts(self.brand["id"], 15)
+        text, knowledge_item_ids, _bv, _pv = context_compiler.compile(self.conn, self.brand["id"])
+
+        for f in facts:
+            self.assertIn(f["value"], text)
+            self.assertIn(f["id"], knowledge_item_ids)
+        self.assertNotIn("沒有列出", text)
 
 
 class CostCeilingTest(unittest.TestCase):

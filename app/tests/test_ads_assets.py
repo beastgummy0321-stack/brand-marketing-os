@@ -10,6 +10,7 @@ public entries — `pack_for_source`/`briefs_for_source`/`submit_pack` — never
 
 import json
 import unittest
+from unittest import mock
 
 from fastapi.testclient import TestClient
 
@@ -213,6 +214,61 @@ class DispatchedUnapprovedManualTickTest(AssetsTestBase):
             self.assertIs(brief["request_json"]["use_brand_knowledge"], True)
             self.assertEqual(brief["request_json"]["product_ids"], [product["id"]])
         self.assertTrue(all(b.get("pack_id") == pack_id for b in briefs))
+
+
+# -- 案例 6：派工只送那一則廣告自己的商品，不送整個 Campaign 的商品目錄（F04-I04）------------
+
+class DispatchSendsOnlyTheAdsOwnProductTest(AssetsTestBase):
+    def _set_ad_product_id(self, ad_id: str, product_id: str | None) -> None:
+        web.conn.execute(
+            "UPDATE ads_ad SET product_id = %s WHERE org_id = %s AND brand_id = %s AND id = %s",
+            (product_id, self.org_id, self.brand_id, ad_id),
+        )
+
+    def test_ad_with_its_own_product_id_sends_only_that_one(self):
+        products = [
+            bi_repo.create_product(web.conn, self.brand_id, name=f"商品{i}", actor=ACTOR)
+            for i in range(3)
+        ]
+        web.conn.commit()
+        product_ids = [p["id"] for p in products]
+        campaign = self._adopted_campaign(product_ids=product_ids)
+        ads = [ad for group in campaign["groups"] for ad in group["ads"]]
+        self._set_ad_product_id(ads[0]["id"], product_ids[1])
+        web.conn.commit()
+
+        with mock.patch.object(
+            assets.workbench, "submit_pack", wraps=assets.workbench.submit_pack,
+        ) as submit_pack:
+            assets.dispatch_pack(web.conn, self.org_id, self.brand_id, campaign["id"])
+
+        pack = submit_pack.call_args.args[-1]
+        target_set = next(s for s in pack["sets"] if s["source_ref"]["ads_ad_id"] == ads[0]["id"])
+        self.assertEqual(target_set["request"]["product_ids"], [product_ids[1]])
+        self.assertEqual(len(target_set["request"]["product_ids"]), 1)
+
+    def test_ad_without_product_id_falls_back_to_campaigns_first_product(self):
+        products = [
+            bi_repo.create_product(web.conn, self.brand_id, name=f"商品{i}", actor=ACTOR)
+            for i in range(2)
+        ]
+        web.conn.commit()
+        product_ids = [p["id"] for p in products]
+        campaign = self._adopted_campaign(product_ids=product_ids)
+        ads = [ad for group in campaign["groups"] for ad in group["ads"]]
+        # ads_ad.product_id 沒被寫過（create_ad 從不寫這欄），這裡確認它確實是 None。
+        self._set_ad_product_id(ads[0]["id"], None)
+        web.conn.commit()
+
+        with mock.patch.object(
+            assets.workbench, "submit_pack", wraps=assets.workbench.submit_pack,
+        ) as submit_pack:
+            assets.dispatch_pack(web.conn, self.org_id, self.brand_id, campaign["id"])
+
+        pack = submit_pack.call_args.args[-1]
+        target_set = next(s for s in pack["sets"] if s["source_ref"]["ads_ad_id"] == ads[0]["id"])
+        self.assertEqual(target_set["request"]["product_ids"], [product_ids[0]])
+        self.assertEqual(len(target_set["request"]["product_ids"]), 1)
 
 
 if __name__ == "__main__":

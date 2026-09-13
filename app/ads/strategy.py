@@ -15,6 +15,7 @@ ever recomputes `budget_planned` from them (F03.md "One source of truth for mone
 from app.ads import budget
 from app.ads import repository as ads_repo
 from app.brand_intelligence import repository as bi_repo
+from app.core import rule_cards
 from app.core import settings as coresettings
 from app.core.db import APP_DIR
 from app.llm import gateway, providers
@@ -27,6 +28,13 @@ PROVIDER = providers.AnthropicProvider()
 
 _ROLES = frozenset({"new", "retarget", "explore"})
 
+# role -> 中文名稱：程式自己填 label，不再叫模型回一個我們已經知道的答案（F04-I03）。
+_ROLE_LABELS = {"new": "新客", "retarget": "再行銷", "explore": "探索"}
+
+# 這段的上限跟 `list_learnings` 的上限一樣是模組層常數：不是可調規則卡（那是給使用者調的
+# 門檻），這裡只是「prompt 別灌爆」的成本上限。
+_MAX_LEARNINGS = 10
+
 STRATEGY_FAILED_MESSAGE = "AI 沒能整理出一個可信的策略，請再試一次。"
 
 
@@ -37,11 +45,21 @@ def _days(start_date, end_date) -> int:
 
 
 def _brand_facts_section(conn, brand_id: str) -> tuple[str, list[dict]]:
+    """事實太多會把 prompt 灌到失焦——跟 `app/llm/context_compiler.py` 同一張規則卡
+    （`rule_prompt_cap.max_active_rules`），只是這裡挑的是新到舊的事實，不是規則。
+    `basis` 只收真的進 prompt 的那幾筆：查看策略依據要等於模型真的看過的東西。"""
     facts = bi_repo.list_brand_facts(conn, brand_id, status="confirmed")
     if not facts:
         return "【品牌事實】（尚無確認過的事實）", []
-    lines = [f"- {f['label']}：{f['value']}（更新於 {f['updated_at']}）" for f in facts]
-    basis = [{"id": f["id"], "label": f["label"], "updated_at": f["updated_at"]} for f in facts]
+    cap = int(rule_cards.get_value(conn, brand_id, "rule_prompt_cap", "max_active_rules"))
+    facts = sorted(
+        facts, key=lambda f: f.get("confirmed_at") or f.get("created_at"), reverse=True,
+    )
+    kept, omitted = facts[:cap], facts[cap:]
+    lines = [f"- {f['label']}：{f['value']}" for f in kept]
+    if omitted:
+        lines.append(f"（另有 {len(omitted)} 筆較舊的品牌事實沒有列出）")
+    basis = [{"id": f["id"], "label": f["label"], "updated_at": f["updated_at"]} for f in kept]
     return "【品牌事實】\n" + "\n".join(lines), basis
 
 
@@ -84,7 +102,7 @@ def _products_section(
 def _learnings_section(conn, brand_id: str) -> tuple[str, list[dict]]:
     """`list_learnings(conn, brand_id)`——不帶 `product_id`：那是等值過濾，帶了會把幾乎所有
     品牌層學習都濾掉（F03.md 對 F03-I05 的明確警告）。"""
-    learnings = bi_repo.list_learnings(conn, brand_id)
+    learnings = bi_repo.list_learnings(conn, brand_id, limit=_MAX_LEARNINGS)
     if not learnings:
         return "【過去的學習】（這個品牌還沒有任何學習記錄）", []
     lines = [
@@ -114,6 +132,17 @@ def _scenarios_section(scenario_result: dict) -> str:
     return header + "\n" + "\n".join(lines)
 
 
+def _str_list(value) -> list[str]:
+    return [v for v in value if isinstance(v, str)] if isinstance(value, list) else []
+
+
+def _pct_sum_valid(allocation: list[dict]) -> bool:
+    """同一條「加總落在 99～101、不能是負數」的規則，`_validate_reply` 跟
+    `set_allocation` 共用（F04-I13）——理由見下面 `_validate_reply` 那段。"""
+    pct_sum = sum(row["pct"] for row in allocation)
+    return (99 <= pct_sum <= 101) and all(row["pct"] >= 0 for row in allocation)
+
+
 def _validate_reply(data) -> dict | None:
     if not isinstance(data, dict):
         return None
@@ -127,20 +156,18 @@ def _validate_reply(data) -> dict | None:
         role = item.get("role")
         if role not in _ROLES:
             return None
-        label = item.get("label")
-        if not isinstance(label, str) or not label.strip():
-            return None
         pct = item.get("pct")
         if isinstance(pct, bool) or not isinstance(pct, (int, float)):
             return None
         rationale = item.get("rationale")
+        # `label` 由程式對照 `_ROLE_LABELS` 填，不再要求模型回——那是花錢買一個我們已經知道
+        # 的答案（F04-I03）。模型舊行為回了 `label` 也不理會，一律以程式的對照表為準。
         validated_allocation.append({
-            "role": role, "label": label, "pct": float(pct),
+            "role": role, "label": _ROLE_LABELS[role], "pct": float(pct),
             "rationale": rationale if isinstance(rationale, str) else None,
         })
 
-    pct_sum = sum(row["pct"] for row in validated_allocation)
-    if not (99 <= pct_sum <= 101) or any(row["pct"] < 0 for row in validated_allocation):
+    if not _pct_sum_valid(validated_allocation):
         # 回覆的百分比沒有大致加總到 100，或帶負數——`budget.split()` 的餘數規則會把落差整個
         # 塞進佔比最大的那一項，畫面卻照樣印模型回的原始百分比，兩邊會對不起來。
         return None
@@ -150,15 +177,13 @@ def _validate_reply(data) -> dict | None:
         # 讓其中一列的金額悄悄消失，group 日預算加總就會少於 budget_planned（§0）。
         return None
 
-    def _str_list(value):
-        return [v for v in value if isinstance(v, str)] if isinstance(value, list) else []
-
     alternatives = data.get("alternatives")
     return {
         "allocation": validated_allocation,
         "why": _str_list(data.get("why")),
         "unknowns": _str_list(data.get("unknowns")),
         "alternatives": alternatives if isinstance(alternatives, list) else [],
+        "learning_goals": _str_list(data.get("learning_goals"))[:3],
     }
 
 
@@ -282,8 +307,10 @@ def select_scenario(conn, org_id: str, brand_id: str, campaign_id: str, *,
         row = next(
             (r for r in scenario_result["scenarios"] if r["key"] == scenario_key), None,
         )
-        if row is None or row["total"] is None:
+        if row is None:
             raise ValueError("scenario_unknown")
+        if row["total"] is None:
+            raise ValueError("scenario_amount_unknown")
         total = row["total"]
 
     strategy_payload = dict(strategy_payload)
@@ -293,6 +320,66 @@ def select_scenario(conn, org_id: str, brand_id: str, campaign_id: str, *,
         conn, org_id, brand_id, campaign_id, scenario_key=scenario_key,
         budget_planned=total, budget_basis_json=budget_basis_json,
     )
+    detail = ads_repo.campaign_detail(conn, org_id, brand_id, campaign_id)
+    assert detail is not None
+    return detail
+
+
+def set_allocation(conn, org_id: str, brand_id: str, campaign_id: str, *,
+                    allocation: list[dict], actor: str) -> dict:
+    """F04-I13：採用之前調整三個角色的百分比——`rationale`／`label` 沿用模型當初那一項的值
+    （角色的理由是模型寫的，使用者改的只是比例），金額一律 `_apply_amounts()` 重算，不自己
+    乘除（§0「模型只回百分比，金額一律 `budget.split()`」）。"""
+    campaign = ads_repo.get_campaign(conn, org_id, brand_id, campaign_id)
+    if campaign is None:
+        raise ValueError("campaign_unknown")
+    budget_basis_json = campaign.get("budget_basis_json") or {}
+    strategy_payload = budget_basis_json.get("strategy")
+    if not strategy_payload:
+        raise ValueError("strategy_not_generated")
+
+    detail = ads_repo.campaign_detail(conn, org_id, brand_id, campaign_id)
+    assert detail is not None
+    if detail["groups"]:
+        # 投放組已經展開——group 日預算才是採用後的真相（F03 決策 3），這裡不准回頭改分配。
+        raise ValueError("plan_already_adopted")
+
+    existing_by_role = {row["role"]: row for row in strategy_payload["allocation"]}
+    validated_allocation = []
+    for item in allocation:
+        role = item.get("role") if isinstance(item, dict) else None
+        if role not in existing_by_role:
+            raise ValueError("allocation_invalid")
+        pct = item.get("pct")
+        if isinstance(pct, bool) or not isinstance(pct, (int, float)):
+            raise ValueError("allocation_invalid")
+        existing = existing_by_role[role]
+        validated_allocation.append({
+            "role": role, "label": existing["label"], "pct": float(pct),
+            "rationale": existing["rationale"],
+        })
+
+    roles = [row["role"] for row in validated_allocation]
+    if set(roles) != set(existing_by_role) or len(roles) != len(set(roles)):
+        # 不是新增角色的入口——角色集合必須跟既有策略一模一樣，重複的角色一樣會讓
+        # `plan.adopt_strategy` 用 role 當 key 塞金額時悄悄少一項。
+        raise ValueError("allocation_invalid")
+    if not _pct_sum_valid(validated_allocation):
+        raise ValueError("allocation_invalid")
+
+    total = campaign.get("budget_planned")
+    if total is None:
+        scenario_result = budget_basis_json.get("scenarios") or {}
+        recommended_row = next(
+            (r for r in scenario_result.get("scenarios", [])
+             if r["key"] == scenario_result.get("recommended")), None,
+        )
+        total = recommended_row["total"] if recommended_row else None
+
+    strategy_payload = dict(strategy_payload)
+    strategy_payload["allocation"] = _apply_amounts(validated_allocation, total)
+    budget_basis_json = {**budget_basis_json, "strategy": strategy_payload}
+    ads_repo.save_strategy(conn, org_id, brand_id, campaign_id, budget_basis_json=budget_basis_json)
     detail = ads_repo.campaign_detail(conn, org_id, brand_id, campaign_id)
     assert detail is not None
     return detail

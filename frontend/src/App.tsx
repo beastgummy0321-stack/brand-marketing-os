@@ -5,13 +5,15 @@ import {
   Outlet,
   Route,
   Routes,
+  useLocation,
   useParams,
   useSearchParams,
 } from "react-router-dom";
-import { AdsHomePage, CampaignWorkspace, NewCampaignPage } from "@/components/ads";
+import { AdsHomePage, AllCampaignsPage, CampaignWorkspace, ConfirmBriefPage, NewCampaignPage } from "@/components/ads";
 import { AppShell } from "@/components/layout/AppShell";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { EmptyState } from "@/components/layout/EmptyState";
+import { ErrorBoundary } from "@/components/layout/ErrorBoundary";
 import { AcceptInvitePage } from "@/components/auth/AcceptInvitePage";
 import { LoginPage } from "@/components/auth/LoginPage";
 import { CockpitPage } from "@/components/cockpit/CockpitPage";
@@ -83,6 +85,8 @@ function App() {
         <Route path="/brands/:brandId/report" element={<BrandReportRoute />} />
         <Route path="/brands/:brandId/ads" element={<AdsHomeRoute />} />
         <Route path="/brands/:brandId/ads/new" element={<AdsNewRoute />} />
+        <Route path="/brands/:brandId/ads/new/:campaignId" element={<AdsConfirmBriefRoute />} />
+        <Route path="/brands/:brandId/ads/campaigns" element={<AllCampaignsRoute />} />
         <Route
           path="/brands/:brandId/ads/campaigns/:campaignId"
           element={<AdsCampaignRoute />}
@@ -115,11 +119,14 @@ function AuthenticatedWorkspace() {
         defaultOptions: { queries: { retry: 1, staleTime: 30000 } },
       }),
   );
+  const location = useLocation();
   return (
     <QueryClientProvider client={client}>
       <WorkspaceProvider>
         <AppShell>
-          <Outlet />
+          <ErrorBoundary key={location.pathname}>
+            <Outlet />
+          </ErrorBoundary>
         </AppShell>
       </WorkspaceProvider>
     </QueryClientProvider>
@@ -371,6 +378,22 @@ function AdsNewRoute() {
       <NewCampaignPage brandId={brandId ?? ""} />
     </>
   );
+}
+
+/** 建立 Campaign 步驟二（F04-I12）：理解如下，確認欄位才花第二次模型錢。 */
+function AdsConfirmBriefRoute() {
+  const { brandId, campaignId } = useParams<{ brandId: string; campaignId: string }>();
+  return (
+    <>
+      <ConfirmBriefPage brandId={brandId ?? ""} campaignId={campaignId ?? ""} />
+    </>
+  );
+}
+
+/** 所有 Campaign 清單（F04-I10）。 */
+function AllCampaignsRoute() {
+  const { brandId } = useParams<{ brandId: string }>();
+  return <AllCampaignsPage brandId={brandId ?? ""} />;
 }
 
 /** Campaign 五分頁工作區（F03-I13 起占位，F03-I14 起是真的內容）。 */

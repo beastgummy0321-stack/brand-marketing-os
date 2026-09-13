@@ -10,8 +10,8 @@ import json
 import unittest
 
 import app.shared.web as web
+from app.ads import plan, strategy
 from app.ads import repository as ads_repo
-from app.ads import strategy
 from app.brand_intelligence import repository as bi_repo
 from app.core import db as coredb
 from app.llm import providers
@@ -24,6 +24,29 @@ def _fake(rendered_output: str) -> providers.FakeProvider:
         output_text=rendered_output, structured=None,
         usage=providers.Usage(input_tokens=100, output_tokens=50), stop_reason="end_turn",
     ))
+
+
+def _coordinates(tag: str) -> dict:
+    return {
+        "audience": f"aud_{tag}", "pain": f"pain_{tag}", "angle": f"angle_{tag}",
+        "hook": f"hook_{tag}", "proof": f"proof_{tag}", "offer": f"offer_{tag}",
+        "format": f"format_{tag}",
+    }
+
+
+_VALID_PLAN_REPLY = json.dumps({
+    "groups": [
+        {"role": "new", "name": "新客組", "ads": [
+            {"name": "新客-廣告一", "coordinates": _coordinates("new1")},
+        ]},
+        {"role": "retarget", "name": "再行銷組", "ads": [
+            {"name": "再行銷-廣告一", "coordinates": _coordinates("rt1")},
+        ]},
+        {"role": "explore", "name": "探索組", "ads": [
+            {"name": "探索-廣告一", "coordinates": _coordinates("ex1")},
+        ]},
+    ],
+}, ensure_ascii=False)
 
 
 _VALID_REPLY = json.dumps({
@@ -117,6 +140,50 @@ class AmountsSumToScenarioTotalTest(StrategyTestBase):
         total = sum(item["amount"] for item in strategy_payload["allocation"])
         self.assertEqual(total, 12345)
         self.assertEqual(detail["budget_planned"], 12345)
+
+
+class ScenarioAmountUnknownTest(StrategyTestBase):
+    """F04-I25: `scenario_unknown`（情境鍵不存在）跟 `scenario_amount_unknown`
+    （情境存在但算不出金額）是兩件事，不准共用同一個錯誤碼。"""
+
+    def setUp(self):
+        super().setUp()
+        self.campaign = self._create_campaign()
+        strategy.PROVIDER = _fake(_VALID_REPLY)
+        detail = self._generate()
+        budget_basis_json = dict(detail["budget_basis_json"])
+        scenarios = dict(budget_basis_json["scenarios"])
+        scenarios["scenarios"] = [
+            {**row, "daily": None, "total": None} for row in scenarios["scenarios"]
+        ]
+        budget_basis_json["scenarios"] = scenarios
+        ads_repo.save_strategy(
+            web.conn, self.org_id, self.brand_id, self.campaign["id"],
+            budget_basis_json=budget_basis_json,
+        )
+
+    def test_scenario_with_null_amount_raises_scenario_amount_unknown(self):
+        with self.assertRaises(ValueError) as ctx:
+            strategy.select_scenario(
+                web.conn, self.org_id, self.brand_id, self.campaign["id"],
+                scenario_key="recommended", actor=ACTOR,
+            )
+        self.assertEqual(str(ctx.exception), "scenario_amount_unknown")
+
+    def test_unknown_scenario_key_still_raises_scenario_unknown(self):
+        with self.assertRaises(ValueError) as ctx:
+            strategy.select_scenario(
+                web.conn, self.org_id, self.brand_id, self.campaign["id"],
+                scenario_key="nope", actor=ACTOR,
+            )
+        self.assertEqual(str(ctx.exception), "scenario_unknown")
+
+    def test_custom_total_still_works_when_scenario_amounts_are_unknown(self):
+        detail = strategy.select_scenario(
+            web.conn, self.org_id, self.brand_id, self.campaign["id"],
+            scenario_key="custom", custom_total=28000, actor=ACTOR,
+        )
+        self.assertEqual(detail["budget_planned"], 28000)
 
 
 class LearningInPromptAndBasisTest(StrategyTestBase):
@@ -302,6 +369,147 @@ class ProviderFailureTest(StrategyTestBase):
         campaign = ads_repo.get_campaign(web.conn, self.org_id, self.brand_id, self.campaign["id"])
         self.assertEqual(campaign["status"], "draft")
         self.assertEqual(campaign["budget_basis_json"], {})
+
+
+class PromptCapsTest(StrategyTestBase):
+    """F04-I03: prompt 別傾印——45 條事實只送前 20 條（新到舊）、25 條學習只送前 10 條；
+    `basis` 只收真的進 prompt 的那些筆數；prompt 裡不再帶「更新於」。"""
+
+    def test_facts_and_learnings_are_capped_and_basis_matches_the_prompt(self):
+        for i in range(45):
+            bi_repo.create_brand_fact(
+                web.conn, self.brand_id, actor=ACTOR, fact_type="other",
+                label=f"事實{i}", value=f"值{i}", status="confirmed", confirmed_by=ACTOR,
+            )
+        for i in range(25):
+            bi_repo.record_learning(
+                web.conn, self.brand_id, actor=ACTOR, learning_text=f"學習{i}",
+                applicability_scope="brand", confidence="likely", sample_size="1 個活動",
+            )
+        self.campaign = self._create_campaign()
+        provider = _fake(_VALID_REPLY)
+        strategy.PROVIDER = provider
+
+        detail = self._generate()
+
+        sent_prompt = provider.calls[0]["messages"][0]["content"]
+        self.assertNotIn("更新於", sent_prompt)
+        self.assertIn("（另有 25 筆較舊的品牌事實沒有列出）", sent_prompt)
+
+        basis = detail["budget_basis_json"]["basis"]
+        self.assertEqual(len(basis["brand_facts"]), 20)
+        self.assertEqual(len(basis["learnings"]), 10)
+
+
+class LabelFilledByProgramTest(StrategyTestBase):
+    def test_reply_without_label_gets_label_filled_from_role(self):
+        reply = json.dumps({
+            "allocation": [
+                {"role": "new", "pct": 50, "rationale": "打平 CPA 還沒驗證過新客"},
+                {"role": "retarget", "pct": 30, "rationale": "有過去購買資料"},
+                {"role": "explore", "pct": 20, "rationale": "測試新素材角度"},
+            ],
+            "why": [], "unknowns": [], "alternatives": [],
+        }, ensure_ascii=False)
+        self.campaign = self._create_campaign()
+        strategy.PROVIDER = _fake(reply)
+
+        detail = self._generate()
+
+        allocation = detail["budget_basis_json"]["strategy"]["allocation"]
+        self.assertEqual(allocation[0]["label"], "新客")
+
+
+_REPLY_WITH_4_LEARNING_GOALS = json.dumps({
+    "allocation": [
+        {"role": "new", "label": "新客", "pct": 50, "rationale": "打平 CPA 還沒驗證過新客"},
+        {"role": "retarget", "label": "再行銷", "pct": 30, "rationale": "有過去購買資料"},
+        {"role": "explore", "label": "探索", "pct": 20, "rationale": "測試新素材角度"},
+    ],
+    "why": [], "unknowns": [], "alternatives": [],
+    "learning_goals": ["問題一", "問題二", "問題三", "問題四"],
+}, ensure_ascii=False)
+
+
+class LearningGoalsTest(StrategyTestBase):
+    def test_more_than_3_learning_goals_are_truncated_to_3(self):
+        self.campaign = self._create_campaign()
+        strategy.PROVIDER = _fake(_REPLY_WITH_4_LEARNING_GOALS)
+
+        detail = self._generate()
+
+        learning_goals = detail["budget_basis_json"]["strategy"]["learning_goals"]
+        self.assertEqual(len(learning_goals), 3)
+        self.assertEqual(learning_goals, ["問題一", "問題二", "問題三"])
+
+    def test_reply_without_learning_goals_yields_empty_list_and_keeps_old_shape(self):
+        self.campaign = self._create_campaign()
+        strategy.PROVIDER = _fake(_VALID_REPLY)
+
+        detail = self._generate()
+
+        strategy_payload = detail["budget_basis_json"]["strategy"]
+        self.assertEqual(strategy_payload["learning_goals"], [])
+        self.assertEqual(len(strategy_payload["allocation"]), 3)
+
+
+class SetAllocationTest(StrategyTestBase):
+    def setUp(self):
+        super().setUp()
+        self.campaign = self._create_campaign()
+        strategy.PROVIDER = _fake(_VALID_REPLY)
+        self._generate()
+        strategy.select_scenario(
+            web.conn, self.org_id, self.brand_id, self.campaign["id"],
+            scenario_key="custom", custom_total=30000, actor=ACTOR,
+        )
+
+    def test_amounts_sum_exactly_and_rationale_is_unchanged(self):
+        detail = strategy.set_allocation(
+            web.conn, self.org_id, self.brand_id, self.campaign["id"],
+            allocation=[
+                {"role": "new", "pct": 50}, {"role": "retarget", "pct": 30},
+                {"role": "explore", "pct": 20},
+            ],
+            actor=ACTOR,
+        )
+        allocation = detail["budget_basis_json"]["strategy"]["allocation"]
+        self.assertEqual(sum(item["amount"] for item in allocation), 30000)
+        by_role = {item["role"]: item for item in allocation}
+        self.assertEqual(by_role["new"]["rationale"], "打平 CPA 還沒驗證過新客")
+
+    def test_bad_sum_raises_allocation_invalid(self):
+        with self.assertRaises(ValueError) as ctx:
+            strategy.set_allocation(
+                web.conn, self.org_id, self.brand_id, self.campaign["id"],
+                allocation=[
+                    {"role": "new", "pct": 50}, {"role": "retarget", "pct": 30},
+                    {"role": "explore", "pct": 10},
+                ],
+                actor=ACTOR,
+            )
+        self.assertEqual(str(ctx.exception), "allocation_invalid")
+
+    def test_after_plan_adopted_raises_plan_already_adopted(self):
+        orig_plan_provider = plan.PROVIDER
+        plan.PROVIDER = _fake(_VALID_PLAN_REPLY)
+        try:
+            plan.adopt_strategy(
+                web.conn, self.org_id, self.brand_id, self.campaign["id"], actor=ACTOR,
+            )
+        finally:
+            plan.PROVIDER = orig_plan_provider
+
+        with self.assertRaises(ValueError) as ctx:
+            strategy.set_allocation(
+                web.conn, self.org_id, self.brand_id, self.campaign["id"],
+                allocation=[
+                    {"role": "new", "pct": 50}, {"role": "retarget", "pct": 30},
+                    {"role": "explore", "pct": 20},
+                ],
+                actor=ACTOR,
+            )
+        self.assertEqual(str(ctx.exception), "plan_already_adopted")
 
 
 if __name__ == "__main__":

@@ -125,21 +125,47 @@ def install() -> None:
 # ---------------------------------------------------------------------------
 
 def _tree_nodes(brand_id: str) -> tuple[str, list]:
-    """(org_id, top-level tree nodes) for the brand's current tree task."""
+    """(org_id, top-level tree nodes) for the brand's campaigns that are waiting to be built
+    on the platform. Drill 4 (2026-09-13): 投放中心 (F03/F04) keeps the tree as rows —
+    `ads_campaign` → `ads_delivery_group` → `ads_ad` — so the mirror reads those; the campaign
+    node is the Campaign itself (the manual path binds all three levels by exact name). Every
+    `ready`/`live` campaign of the brand that is not yet bound becomes a platform campaign.
+    Falls back to the retired schedule tree only when the brand has no ads campaign at all."""
     import app.main  # noqa: F401 — .env load + assembly, same reason as daily_pull's __main__
     from app.core.db import connection
-    from app.schedule import state as schedule_state
-    from app.schedule import tree as tree_mod
 
     with connection() as conn:
         row = conn.execute("SELECT org_id FROM brand WHERE id = %s", (brand_id,)).fetchone()
         if row is None:
             raise SystemExit(f"找不到品牌 {brand_id}")
         org_id = row["org_id"]
+        campaigns = conn.execute(
+            "SELECT id, name FROM ads_campaign WHERE org_id = %s AND brand_id = %s"
+            " AND status IN ('ready', 'live') AND local_state = 'unbound'"
+            " ORDER BY created_at", (org_id, brand_id)).fetchall()
+        if campaigns:
+            nodes = []
+            for campaign in campaigns:
+                groups = conn.execute(
+                    "SELECT id, name FROM ads_delivery_group WHERE campaign_id = %s"
+                    " ORDER BY created_at", (campaign["id"],)).fetchall()
+                children = []
+                for group in groups:
+                    ads = conn.execute(
+                        "SELECT name FROM ads_ad WHERE group_id = %s ORDER BY created_at",
+                        (group["id"],)).fetchall()
+                    children.append({"name": group["name"],
+                                     "children": [{"name": a["name"], "children": []}
+                                                  for a in ads]})
+                nodes.append({"name": campaign["name"], "children": children})
+            return org_id, nodes
+        from app.schedule import state as schedule_state
+        from app.schedule import tree as tree_mod
         task_row, _running = schedule_state._display_task_row(
             conn, brand_id, schedule_state.TREE_TASK_TYPE)
         if task_row is None:
-            raise SystemExit(f"品牌 {brand_id} 還沒有展開活動樹，沒有東西可以鏡射")
+            raise SystemExit(
+                f"品牌 {brand_id} 沒有待鏡射的 Campaign（要先「手動發布」），也沒有舊的活動樹")
         return org_id, tree_mod.tree_from_task_row(task_row)["nodes"]
 
 
@@ -171,7 +197,11 @@ def cmd_mirror(brand_id: str, append: bool = False) -> None:
     state = load()
     if not state["accounts"]:
         state["accounts"] = list(DRILL_ACCOUNTS)
-    account_id = _bound_account_id(brand_id) or state["accounts"][0]["account_id"]
+    account_id = _bound_account_id(brand_id)
+    if account_id is None:
+        # Drill 4 (J-3): falling back to accounts[0] put one persona's campaigns under another
+        # persona's account. A brand with no bound account has nowhere to build; refuse.
+        raise SystemExit(f"品牌 {brand_id} 還沒有指定廣告帳戶，先在產品裡把帳號勾給品牌再鏡射")
     seq = [0]
 
     existing = len([e for e in state["campaigns"] + state["adsets"] + state["ads"]

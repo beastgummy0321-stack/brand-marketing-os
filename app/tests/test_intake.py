@@ -138,6 +138,74 @@ class IntakeWizardTest(unittest.TestCase):
 
 
 
+    # -- 成本上限（F04-I06） --------------------------------------------------
+
+    def test_photo_scan_capped_at_max(self):
+        """15 張照片只打 12 次模型；第 13 張起卡片標成 skipped、不呼叫。"""
+        brand_id = self._new_wizard_brand()
+        draft = state.get_draft(brand_id, conn=web.conn)
+        draft["photos"] = [
+            {"token": f"tok{i}", "storage_key": f"{coredb.DEV_ORG_ID}/dummy{i}.jpg",
+             "name": f"p{i}.jpg", "size_mb": 0.1}
+            for i in range(15)
+        ]
+        calls = []
+
+        def fake_run(conn, draft, **kwargs):
+            calls.append(kwargs["task_type"])
+            return {"status": "succeeded", "structured_output_json": {
+                "readable": True, "name": "產品", "specification": "規格",
+                "selling_points": [], "gaps": [],
+            }}
+
+        with mock.patch.object(intake_ai, "_run", side_effect=fake_run), \
+             mock.patch.object(storage, "get", return_value=(b"x", "image/jpeg")):
+            cards = intake_ai._read_photo_products(web.conn, draft)
+
+        self.assertEqual(len(calls), intake_ai.MAX_PHOTO_SCANS)
+        self.assertEqual(len(cards), 15)
+        skipped = cards[intake_ai.MAX_PHOTO_SCANS:]
+        self.assertEqual(len(skipped), 3)
+        self.assertTrue(all(c["status"] == "skipped" for c in skipped))
+        self.assertIn("一次最多讀 12 張照片", skipped[0]["message"])
+        self.assertEqual(len(draft["product_card_drafts"]), 15)
+
+    def test_question_context_truncated_to_recent(self):
+        """出題只帶最近 8 條初步印象、最近 3 題問答，並補上截斷說明。"""
+        brand_id = self._new_wizard_brand()
+        draft = state.get_draft(brand_id, conn=web.conn)
+        draft["scan_done"] = True
+        draft["scan_impressions"] = [
+            {"looks_like": "產品線", "title": f"印象{i}", "content": f"內容{i}", "basis": "推測"}
+            for i in range(12)
+        ]
+        draft["answers"] = [
+            {"question": f"問題{i}", "choice_label": f"選項{i}", "note": ""}
+            for i in range(6)
+        ]
+        draft["qa"] = [{"aspect": "產品線", "question": "q", "suggested": {}, "branches": []}]
+
+        captured = {}
+
+        def fake_run(conn, draft, *, task_type, purpose, system, user_text, options=None,
+                     content_blocks=None):
+            captured["user_text"] = user_text
+            return {"status": "succeeded", "id": "llt_fake", "structured_output_json": {"done": False,
+                    "aspect": "價格帶", "question": "下一題", "suggested": {"label": "a", "desc": "b"}}}
+
+        with mock.patch.object(intake_ai, "_run", side_effect=fake_run):
+            intake_ai.run_next_question(web.conn, draft)
+
+        user_text = captured["user_text"]
+        self.assertEqual(user_text.count("已問過："), intake_ai.MAX_ANSWER_LINES)
+        self.assertEqual(
+            sum(1 for line in user_text.split("\n") if line.startswith("初步印象（")),
+            intake_ai.MAX_IMPRESSION_LINES,
+        )
+        self.assertIn("另有 4 條初步印象沒有列出。", user_text)
+        self.assertIn("更早的問答已收斂成下面的「已覆蓋面向」。", user_text)
+        self.assertIn("未覆蓋面向：", user_text)
+
     # -- 引導問答 ------------------------------------------------------------
 
 

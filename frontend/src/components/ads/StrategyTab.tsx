@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { ArrowRight, Sparkles } from "lucide-react";
+import { Link } from "react-router-dom";
+import { ArrowRight, Calendar, HelpCircle, Image as ImageIcon, Lightbulb, PieChart, Radio, Sparkles, Target, Wallet } from "lucide-react";
 import { Button } from "@/components/layout/ui/button";
 import { Input } from "@/components/layout/ui/input";
 import { Textarea } from "@/components/layout/ui/textarea";
@@ -8,12 +9,20 @@ import { EmptyState } from "@/components/layout/EmptyState";
 import { SidePanel } from "@/components/layout/SidePanel";
 import { formatCurrency, formatCount, formatRoas } from "@/lib/format";
 import {
+  adoptStrategy,
   generateStrategy,
   patchCampaign,
   selectScenario,
+  setAllocation,
   type CampaignDetail,
+  type StrategyRole,
   type SuccessMetric,
 } from "@/lib/adsApi";
+import { Disclosure, JudgmentBand, KpiStrip, ReservedSlotCard, type KpiCell } from "./patterns";
+
+// F04-I15：`OverviewTab.tsx` 有同一份 `WorkspaceTab`／`METRIC_LABEL`／`formatTarget`——兩邊都在
+// `do_not_touch`，抽共用要動 `index.ts` 與邊界，貴過幾行重複（ARCHITECTURE.md 決策 11b）。
+type WorkspaceTab = "overview" | "strategy" | "structure" | "assets" | "performance";
 
 const METRIC_LABEL: Record<SuccessMetric, string> = {
   cpa: "CPA（每筆訂單成本）",
@@ -21,23 +30,49 @@ const METRIC_LABEL: Record<SuccessMetric, string> = {
   purchases: "購買數",
 };
 
+// 通路字典跟 `app/ads/channels.py::CHANNELS` 是同一份中文對照——不寫死平台邏輯，只是把
+// key 換成使用者看得懂的字（跟 `DeliveryTab.tsx` 的 `CHANNEL_LABEL` 同一份，一樣的
+// do_not_touch 重複理由）。
+const PLATFORM_LABEL: Record<string, string> = {
+  meta: "Meta",
+  google_ads: "Google Ads",
+  tiktok: "TikTok",
+  shopee: "蝦皮",
+  momo: "momo",
+};
+
+const ROLE_LABEL: Record<StrategyRole, string> = { new: "新客", retarget: "再行銷", explore: "探索" };
+
 function formatTarget(metric: SuccessMetric, value: number): string {
   if (metric === "cpa") return formatCurrency(value);
   if (metric === "roas") return formatRoas(value);
   return formatCount(value);
 }
 
-/** 策略 tab（F03-I14）：推薦策略卡＋三情境選擇＋為什麼／哪些是推估＋成功條件卡＋查看策略依據。
- * 金額一律照後端回傳（`budget.split()` 算好的），這裡不重算——只有「哪個情境現在被選中」
- * 這種畫面狀態留在本地。 */
+/** ISO 日期（`YYYY-MM-DD`）→ `MM/DD`，只給這個分頁的日期 KPI 格用。 */
+function mmdd(iso: string): string {
+  const [, m, d] = iso.split("-");
+  return `${m}/${d}`;
+}
+
+function campaignDays(start: string | null, end: string | null): number | null {
+  if (!start || !end) return null;
+  const days = Math.round((new Date(end).getTime() - new Date(start).getTime()) / 86_400_000) + 1;
+  return days > 0 ? days : null;
+}
+
+/** 策略 tab（F04-I14）：一張建議卡＋一顆主要按鈕，其餘全部收在三個 `Disclosure` 裡（R9）。
+ * 判斷句、金額、推估購買一律讀後端算好的欄位，這裡不重拼、不重算。 */
 export function StrategyTab({
   brandId,
   campaign: c,
   onCampaignChange,
+  onChangeTab,
 }: {
   brandId: string;
   campaign: CampaignDetail;
   onCampaignChange: (campaign: CampaignDetail) => void;
+  onChangeTab: (tab: WorkspaceTab) => void;
 }) {
   const [generating, setGenerating] = useState(false);
   const [generateError, setGenerateError] = useState<string | null>(null);
@@ -47,10 +82,17 @@ export function StrategyTab({
   const [customValue, setCustomValue] = useState("");
   const [basisOpen, setBasisOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
+  const [allocationPct, setAllocationPct] = useState<Record<string, string> | null>(null);
+  const [allocationSaving, setAllocationSaving] = useState(false);
+  const [allocationError, setAllocationError] = useState<string | null>(null);
+  const [primaryBusy, setPrimaryBusy] = useState(false);
+  const [primaryError, setPrimaryError] = useState<string | null>(null);
+  const [budgetHelpOpen, setBudgetHelpOpen] = useState(false);
 
   const strategy = c.budget_basis_json.strategy;
   const scenarios = c.budget_basis_json.scenarios;
   const basis = c.budget_basis_json.basis;
+  const amountsUnknown = !!scenarios && scenarios.scenarios.every((s) => s.total === null);
 
   async function handleGenerate() {
     setGenerating(true);
@@ -82,14 +124,69 @@ export function StrategyTab({
   const selectedKey = c.budget_scenario ?? scenarios?.recommended ?? null;
   const selectedRow = scenarios?.scenarios.find((s) => s.key === selectedKey);
   const total = c.budget_planned ?? selectedRow?.total ?? null;
+  const hasGroups = c.groups.length > 0;
+  const days = campaignDays(c.start_date, c.end_date);
+  const constraintBudget = typeof c.constraints_json.budget === "number" ? c.constraints_json.budget : null;
 
-  const adoptDisabledReason = !strategy
-    ? "尚未產生策略，無法採用"
-    : "採用流程將在下一步開放";
+  async function handlePrimary() {
+    if (c.budget_scenario === null && amountsUnknown) {
+      setBudgetHelpOpen(true);
+      setCustomOpen(true);
+      if (!customValue && constraintBudget !== null) setCustomValue(String(constraintBudget));
+      return;
+    }
+    setPrimaryBusy(true);
+    setPrimaryError(null);
+    try {
+      if (hasGroups) {
+        onChangeTab("structure");
+        return;
+      }
+      let next = c;
+      if (next.budget_scenario === null && scenarios) {
+        next = await selectScenario(brandId, c.id, { scenario_key: scenarios.recommended, custom_total: null });
+        onCampaignChange(next);
+      }
+      next = await adoptStrategy(brandId, c.id);
+      onCampaignChange(next);
+      onChangeTab("structure");
+    } catch (err) {
+      setPrimaryError(err instanceof Error ? err.message : "展開投放結構失敗，請稍後再試。");
+    } finally {
+      setPrimaryBusy(false);
+    }
+  }
 
-  return (
-    <div className="flex flex-col gap-4">
-      {!strategy ? (
+  function startAllocationEdit() {
+    if (!strategy) return;
+    const initial: Record<string, string> = {};
+    for (const item of strategy.allocation) initial[item.role] = String(item.pct);
+    setAllocationPct(initial);
+    setAllocationError(null);
+  }
+
+  const allocationSum = allocationPct
+    ? Object.values(allocationPct).reduce((sum, v) => sum + (Number(v) || 0), 0)
+    : 0;
+
+  async function handleAllocationApply() {
+    if (!allocationPct) return;
+    setAllocationSaving(true);
+    setAllocationError(null);
+    try {
+      const payload = Object.entries(allocationPct).map(([role, pct]) => ({ role, pct: Number(pct) }));
+      onCampaignChange(await setAllocation(brandId, c.id, payload));
+      setAllocationPct(null);
+    } catch (err) {
+      setAllocationError(err instanceof Error ? err.message : "調整預算分配失敗，請稍後再試。");
+    } finally {
+      setAllocationSaving(false);
+    }
+  }
+
+  if (!strategy) {
+    return (
+      <div className="flex flex-col gap-4">
         <EmptyState
           title="這個 Campaign 還沒有策略建議"
           description={generateError ?? "讓行銷駕駛艙依商品與品牌資料規劃第一版策略。"}
@@ -97,60 +194,208 @@ export function StrategyTab({
           onAction={handleGenerate}
           actionDisabled={generating}
         />
-      ) : (
-        <>
-          <div className="grid grid-cols-3 gap-4">
-            <article className="surface p-5">
-              <div className="mb-2 text-xs text-muted-foreground">投放期間</div>
-              <p className="text-base font-semibold">
-                {c.start_date && c.end_date ? `${c.start_date} ~ ${c.end_date}` : "尚未設定"}
-              </p>
-            </article>
-            <article className="surface p-5">
-              <div className="mb-2 text-xs text-muted-foreground">建議總預算</div>
-              <p className="metric-number">{formatCurrency(total)}</p>
-              {selectedRow && <p className="mt-1 text-xs text-muted-foreground">{selectedRow.caption}</p>}
-            </article>
-            <article className="surface p-5">
-              <div className="mb-2 text-xs text-muted-foreground">投放平台</div>
-              <p className="text-base font-semibold">Meta</p>
-            </article>
-          </div>
+      </div>
+    );
+  }
 
-          <div className="surface">
-            <div className="surface-header">
-              <h2 className="flex items-center gap-1.5">
-                <Sparkles size={15} /> 行銷駕駛艙推薦策略
-              </h2>
-              <button
-                type="button"
-                className="text-sm text-primary hover:underline"
-                onClick={() => setBasisOpen(true)}
-              >
-                查看策略依據 <ArrowRight size={12} className="inline" />
-              </button>
-            </div>
-            <div className="surface-body flex flex-col gap-3">
-              {strategy.allocation.map((item) => (
-                <div key={item.role} className="flex items-center justify-between gap-3 text-sm">
-                  <span>{item.label}</span>
-                  <span className="text-muted-foreground">{item.pct}%</span>
-                  <span className="numeric font-medium">
-                    {item.amount !== null ? formatCurrency(item.amount) : "累積中"}
-                  </span>
-                </div>
-              ))}
-            </div>
-          </div>
+  const platformKey = typeof c.constraints_json.platform === "string" ? c.constraints_json.platform : null;
+  const allocationSummary = strategy.allocation.map((item) => `${item.label} ${item.pct}%`).join(" / ");
+  const readyCount = c.asset_readiness.total > 0 ? `${c.asset_readiness.ready_count}／${c.asset_readiness.total} 已準備` : "採用策略後才知道";
 
-          {scenarios && scenarios.scenarios.length > 0 && (
-            <div className="surface">
-              <div className="surface-header">
-                <h2>預算情境選擇</h2>
-                <span className="text-sm text-muted-foreground">依你的目標與資源，選擇最適合的預算規模。</span>
+  const kpiCells: KpiCell[] = [
+    {
+      icon: Radio,
+      label: "平台",
+      value: platformKey ? PLATFORM_LABEL[platformKey] ?? platformKey : "尚未指定",
+      caption: "採用後會建立對應的投放組",
+    },
+    {
+      icon: Wallet,
+      label: "預算",
+      value: total !== null ? formatCurrency(total) : "尚未設定",
+      caption: c.budget_planned !== null ? "你採用的情境金額" : "推薦情境（可調整）",
+    },
+    {
+      icon: PieChart,
+      label: "配置",
+      value: allocationSummary,
+      caption: "按角色分配預算",
+    },
+    {
+      icon: Calendar,
+      label: "時間",
+      value: c.start_date && c.end_date ? `${mmdd(c.start_date)} – ${mmdd(c.end_date)}` : "未設定",
+      caption: days !== null ? `共 ${days} 天` : "未設定",
+    },
+    {
+      icon: ImageIcon,
+      label: "需要素材",
+      value: readyCount,
+      caption: "每則廣告需要文案與圖片",
+    },
+  ];
+
+  const productIds = Array.isArray(c.context_json.product_ids)
+    ? c.context_json.product_ids.filter((id): id is string => typeof id === "string")
+    : [];
+  const productId = productIds[0] ?? null;
+  const productEconomicsHref = productId
+    ? `/brands/${brandId}/products/${productId}?tab=economics-view`
+    : `/brands/${brandId}/products`;
+
+  const estimatedPurchases =
+    c.success_metric === "cpa" && c.success_target !== null && c.success_target > 0 && total !== null
+      ? Math.floor(total / c.success_target)
+      : null;
+
+  return (
+    <div className="flex flex-col gap-4">
+      <JudgmentBand
+        icon={Sparkles}
+        sentence="行銷駕駛艙建議這樣投"
+        facts={strategy.why[0] ?? allocationSummary}
+      />
+
+      <div className="surface">
+        <div className="surface-header">
+          <h2>目標：{c.objective}</h2>
+          <span className="text-sm text-muted-foreground">
+            這是根據你的資料整理的建議，可以直接使用，也可以調整。
+          </span>
+        </div>
+        <div className="surface-body flex flex-col gap-4">
+          <KpiStrip cells={kpiCells} />
+          <p className="text-sm text-muted-foreground">
+            {estimatedPurchases !== null ? (
+              <>
+                預估購買 {estimatedPurchases} 筆
+                <span className="ml-1">推估（CPA 不變的算術）</span>
+              </>
+            ) : (
+              "目標不是 CPA，或還沒有總預算，算不出推估購買。"
+            )}
+          </p>
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+            <div>
+              <div className="mb-1.5 flex items-center gap-1.5 text-sm font-medium">
+                <Lightbulb size={14} /> 主要原因
               </div>
-              <div className="surface-body flex flex-col gap-3">
-                {scenarioError && <p className="text-sm text-danger">{scenarioError}</p>}
+              {strategy.why.length === 0 ? (
+                <p className="text-sm text-muted-foreground">這一輪沒有列出</p>
+              ) : (
+                <ul className="list-disc space-y-1 pl-5 text-sm">
+                  {strategy.why.map((line, i) => (
+                    <li key={i}>{line}</li>
+                  ))}
+                </ul>
+              )}
+            </div>
+            <div>
+              <div className="mb-1.5 flex items-center gap-1.5 text-sm font-medium">
+                <HelpCircle size={14} /> 目前最大的未知
+              </div>
+              {strategy.unknowns.length === 0 ? (
+                <p className="text-sm text-muted-foreground">沒有列出未知</p>
+              ) : (
+                <ul className="list-disc space-y-1 pl-5 text-sm">
+                  {strategy.unknowns.map((line, i) => (
+                    <li key={i}>{line}</li>
+                  ))}
+                </ul>
+              )}
+            </div>
+            <div>
+              <div className="mb-1.5 flex items-center gap-1.5 text-sm font-medium">
+                <Target size={14} /> 這輪想學到什麼
+              </div>
+              {(strategy.learning_goals ?? []).length === 0 ? (
+                <p className="text-sm text-muted-foreground">這一輪沒有設定學習目標</p>
+              ) : (
+                <ul className="list-disc space-y-1 pl-5 text-sm">
+                  {(strategy.learning_goals ?? []).map((line, i) => (
+                    <li key={i}>{line}</li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="flex flex-col gap-1.5">
+        <Button className="w-full" variant={hasGroups ? "outline" : "default"} onClick={() => void handlePrimary()} disabled={primaryBusy}>
+          {primaryBusy
+            ? "處理中…"
+            : hasGroups
+              ? "前往投放結構"
+              : c.budget_scenario === null && amountsUnknown
+                ? "先設定預算 →"
+                : "照這個方式進行 →"}
+        </Button>
+        {primaryError && <p className="text-sm text-danger">{primaryError}</p>}
+      </div>
+
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+      {hasGroups ? (
+        <p className="text-sm text-muted-foreground sm:col-span-3">
+          投放結構已經建立，預算改在投放結構分頁的每個投放組日預算。{" "}
+          <Button variant="link" className="h-auto p-0" onClick={() => onChangeTab("structure")}>
+            前往投放結構
+          </Button>
+        </p>
+      ) : (
+        // `Disclosure` 是 uncontrolled（只有 `defaultOpen`），用 `key` remount 展開它，
+        // 不改 `patterns/Disclosure`（do_not_touch）——換 key 整塊會重新掛載，
+        // 所以不把任何狀態搬進這個子樹（ponytail: allocationPct／customOpen／customValue
+        // 仍在 StrategyTab 自己身上才成立）。
+        <Disclosure key={budgetHelpOpen ? "open" : "closed"} label="調整建議" defaultOpen={budgetHelpOpen}>
+          <div className="flex flex-col gap-5">
+            <div>
+              <h3 className="mb-2 text-sm font-medium">預算分配</h3>
+              {allocationPct === null ? (
+                <Button variant="outline" size="sm" onClick={startAllocationEdit}>
+                  調整分配
+                </Button>
+              ) : (
+                <div className="flex flex-col gap-2">
+                  {strategy.allocation.map((item) => (
+                    <div key={item.role} className="flex items-center gap-3 text-sm">
+                      <span className="w-16">{ROLE_LABEL[item.role]}</span>
+                      <Input
+                        type="number"
+                        className="max-w-24"
+                        value={allocationPct[item.role] ?? ""}
+                        onChange={(e) => setAllocationPct({ ...allocationPct, [item.role]: e.target.value })}
+                      />
+                      <span className="text-muted-foreground">%</span>
+                    </div>
+                  ))}
+                  <p className="text-sm">合計 {allocationSum}%</p>
+                  {allocationSum !== 100 && (
+                    <p className="text-sm text-muted-foreground">三個角色加起來要剛好 100%</p>
+                  )}
+                  {allocationError && <p className="text-sm text-danger">{allocationError}</p>}
+                  <div className="flex gap-2">
+                    <Button
+                      size="sm"
+                      disabled={allocationSum !== 100 || allocationSaving}
+                      onClick={() => void handleAllocationApply()}
+                    >
+                      {allocationSaving ? "套用中…" : "套用"}
+                    </Button>
+                    <Button variant="outline" size="sm" onClick={() => setAllocationPct(null)} disabled={allocationSaving}>
+                      取消
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {scenarios && scenarios.scenarios.length > 0 && (
+              <div>
+                <h3 className="mb-2 text-sm font-medium">預算情境選擇</h3>
+                <p className="mb-2 text-sm text-muted-foreground">依你的目標與資源，選擇最適合的預算規模。</p>
+                {scenarioError && <p className="mb-2 text-sm text-danger">{scenarioError}</p>}
                 <div className="grid grid-cols-3 gap-3">
                   {scenarios.scenarios.map((s) => {
                     const active = selectedKey === s.key;
@@ -174,8 +419,16 @@ export function StrategyTab({
                     );
                   })}
                 </div>
+                {amountsUnknown && (
+                  <p className="mt-3 text-sm text-muted-foreground">
+                    要估金額需要商品的售價與成本{" "}
+                    <Link to={productEconomicsHref} className="text-primary hover:underline">
+                      去補商品數字
+                    </Link>
+                  </p>
+                )}
                 {customOpen ? (
-                  <div className="flex items-center gap-2">
+                  <div className="mt-3 flex items-center gap-2">
                     <Input
                       type="number"
                       step={1000}
@@ -183,6 +436,7 @@ export function StrategyTab({
                       value={customValue}
                       onChange={(e) => setCustomValue(e.target.value)}
                       className="max-w-56"
+                      autoFocus
                     />
                     <Button
                       variant="outline"
@@ -194,78 +448,59 @@ export function StrategyTab({
                     </Button>
                   </div>
                 ) : (
-                  <button type="button" className="w-fit text-sm text-primary hover:underline" onClick={() => setCustomOpen(true)}>
+                  <button
+                    type="button"
+                    className="mt-2 w-fit text-sm text-primary hover:underline"
+                    onClick={() => setCustomOpen(true)}
+                  >
                     自訂預算
                   </button>
                 )}
               </div>
-            </div>
-          )}
+            )}
 
-          <div className="grid grid-cols-2 gap-4">
-            <div className="surface">
-              <div className="surface-header">
-                <h2>為什麼</h2>
+            <div>
+              <div className="mb-2 flex items-center justify-between">
+                <h3 className="text-sm font-medium">成功條件</h3>
+                <Button variant="ghost" size="sm" onClick={() => setEditOpen(true)}>
+                  編輯
+                </Button>
               </div>
-              <div className="surface-body">
-                <ul className="list-disc space-y-1.5 pl-5 text-sm">
-                  {strategy.why.map((line, i) => (
-                    <li key={i}>{line}</li>
-                  ))}
-                </ul>
-              </div>
-            </div>
-            <div className="surface">
-              <div className="surface-header">
-                <h2>哪些是推估</h2>
-              </div>
-              <div className="surface-body">
-                {basis?.estimated_fields.length ? (
-                  <ul className="list-disc space-y-1.5 pl-5 text-sm">
-                    {basis.estimated_fields.map((field, i) => (
-                      <li key={i}>{field}</li>
-                    ))}
-                  </ul>
-                ) : (
-                  <p className="text-sm text-muted-foreground">
-                    {basis ? "這個策略沒有標記推估欄位。" : "資料不完整（缺策略依據），請重新產生策略。"}
+              {c.success_target === null ? (
+                <div>
+                  <p className="text-sm font-medium">尚未設定成功條件</p>
+                  <p className="mt-1 text-sm text-muted-foreground">{c.success_basis ?? "AI 沒有足夠依據推出一個數字。"}</p>
+                </div>
+              ) : (
+                <div>
+                  <p className="text-base font-semibold">
+                    {METRIC_LABEL[c.success_metric]} 目標 {formatTarget(c.success_metric, c.success_target)}
                   </p>
-                )}
-              </div>
+                  {c.success_basis && <p className="mt-1 text-sm text-muted-foreground">{c.success_basis}</p>}
+                </div>
+              )}
             </div>
           </div>
-
-          <div>
-            <Button variant="outline" disabled title={adoptDisabledReason}>
-              採用策略（建立投放結構）
-            </Button>
-            <p className="mt-1 text-xs text-muted-foreground">{adoptDisabledReason}</p>
-          </div>
-        </>
+        </Disclosure>
       )}
 
-      <div className="surface">
-        <div className="surface-header">
-          <h2>成功條件</h2>
-          <Button variant="ghost" size="sm" onClick={() => setEditOpen(true)}>
-            編輯
+      <Disclosure label="查看完整判斷">
+        <div className="flex flex-col gap-2">
+          <p className="text-sm text-muted-foreground">品牌事實、商品價格、用到的學習</p>
+          <Button variant="outline" size="sm" className="w-fit" onClick={() => setBasisOpen(true)}>
+            查看策略依據 <ArrowRight size={12} className="ml-1 inline" />
           </Button>
         </div>
-        <div className="surface-body">
-          {c.success_target === null ? (
-            <div>
-              <p className="text-sm font-medium">尚未設定成功條件</p>
-              <p className="mt-1 text-sm text-muted-foreground">{c.success_basis ?? "AI 沒有足夠依據推出一個數字。"}</p>
-            </div>
-          ) : (
-            <div>
-              <p className="text-base font-semibold">
-                {METRIC_LABEL[c.success_metric]} 目標 {formatTarget(c.success_metric, c.success_target)}
-              </p>
-              {c.success_basis && <p className="mt-1 text-sm text-muted-foreground">{c.success_basis}</p>}
-            </div>
-          )}
-        </div>
+      </Disclosure>
+
+      <Disclosure label="進階設定">
+        <ReservedSlotCard
+          title="進階投放設定"
+          description="這些設定會在自動發布接上之後開放，屆時可以在這裡微調；現在的投放結構仍然可以手動調整。"
+          tag="自動發布接上後開放"
+          bullets={["平台結構", "受眾設定", "版位設定", "出價策略", "優化事件", "歸因設定", "追蹤設定", "UTM 參數"]}
+        />
+      </Disclosure>
       </div>
 
       {basisOpen && basis && (
