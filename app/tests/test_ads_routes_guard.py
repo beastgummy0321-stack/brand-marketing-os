@@ -316,6 +316,11 @@ class AdsRoutesShapeStaysConsistentTest(unittest.TestCase):
         )
         self._assert_shape(get)
 
+        bind = self.client.post(
+            f"/api/ads/brands/{self.brand_id}/campaigns/{campaign_id}/bind", headers=self.headers,
+        )
+        self._assert_shape(bind)
+
 
 if __name__ == "__main__":
     unittest.main()
