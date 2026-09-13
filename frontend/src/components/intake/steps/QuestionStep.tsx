@@ -48,13 +48,13 @@ export function QuestionStep({
     return (
       <div className="flex flex-col gap-3 rounded-lg border border-dashed border-border bg-card p-6 text-sm">
         <p className="font-medium text-foreground">沒有需要再問的問題了</p>
-        <p className="text-muted-foreground">你提供的資料已經夠組出交接包了。</p>
+        <p className="text-muted-foreground">資料夠了，系統可以開始整理品牌知識。</p>
         <button
           type="button"
           onClick={onNext}
           className="self-start rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90"
         >
-          前往交接包
+          開始整理品牌知識
         </button>
       </div>
     );
@@ -70,7 +70,7 @@ export function QuestionStep({
           actions={[
             { label: "再試一次（預估 US$0.10）", onClick: () => void retry() },
             { label: "跳過這一題", onClick: () => void handleAnswer(brandId, "skip", "", onRefresh) },
-            { label: "不問了，直接去交接包", onClick: () => void handleSkipQuestionRemaining() },
+            { label: "不問了，直接開始整理", onClick: () => void handleSkipQuestionRemaining() },
             { label: "前往設定頁", onClick: () => window.location.assign("/app/settings") },
           ]}
         />
@@ -104,12 +104,13 @@ function QuestionForm({
   question: NonNullable<IntakeDraft["current_q"]>;
   onRefresh: () => void;
 }) {
-  const [choice, setChoice] = useState<string>("suggested");
+  const [choice, setChoice] = useState<string | null>(null);
   const [note, setNote] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
   async function submit() {
+    if (!choice) return;
     if (choice === "other" && !note.trim()) {
       setError("你選了「我自己說」，請在補充欄寫一句你的想法。");
       return;
@@ -143,15 +144,15 @@ function QuestionForm({
       <p className="text-sm text-foreground">{question.question}</p>
 
       <div className="flex flex-col gap-2">
-        <ChoiceOption
-          selected={choice === "suggested"}
-          onSelect={() => setChoice("suggested")}
-          label={question.suggested.label}
-          desc={question.suggested.desc}
-          badge="AI 建議"
-        />
-        {question.branches.map((b, i) => (
-          <ChoiceOption key={i} selected={choice === `branch_${i}`} onSelect={() => setChoice(`branch_${i}`)} label={b.label} desc={b.desc} />
+        {dedupeChoiceOptions(question).map((opt) => (
+          <ChoiceOption
+            key={opt.key}
+            selected={choice === opt.key}
+            onSelect={() => setChoice(opt.key)}
+            label={opt.label}
+            desc={opt.desc}
+            badge={opt.badge}
+          />
         ))}
         <ChoiceOption selected={choice === "other"} onSelect={() => setChoice("other")} label="以上都不是，我自己說" desc="" />
       </div>
@@ -173,7 +174,7 @@ function QuestionForm({
       <div className="flex gap-2">
         <button
           type="button"
-          disabled={saving}
+          disabled={saving || !choice}
           onClick={() => void submit()}
           className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
         >
@@ -190,6 +191,24 @@ function QuestionForm({
       </div>
     </div>
   );
+}
+
+/** RC-H：AI 建議與某個分支選項一字不差時、或分支之間彼此重複時只渲染一次
+ * （V-2／V 站 1 演練實測抓到的重複選項），建議只保留成旁邊的小標籤。 */
+function dedupeChoiceOptions(
+  question: NonNullable<IntakeDraft["current_q"]>,
+): { key: string; label: string; desc: string; badge?: string }[] {
+  const options: { key: string; label: string; desc: string; badge?: string }[] = [];
+  const seen = new Set<string>();
+  function push(key: string, label: string, desc: string, badge?: string) {
+    const sig = label.trim();
+    if (seen.has(sig)) return;
+    seen.add(sig);
+    options.push({ key, label, desc, badge });
+  }
+  push("suggested", question.suggested.label, question.suggested.desc, "AI 建議");
+  question.branches.forEach((b, i) => push(`branch_${i}`, b.label, b.desc));
+  return options;
 }
 
 function ChoiceOption({

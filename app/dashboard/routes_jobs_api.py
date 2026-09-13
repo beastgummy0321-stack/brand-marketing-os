@@ -30,6 +30,7 @@ _QUEUE_JOB_KINDS = {
     "intake_scan": ("scan", "讀取網址中"),
     "intake_question": ("question", "正在準備下一題"),
     "intake_paste_fix": ("paste_fix", "正在請 AI 整理格式"),
+    "intake_research": ("research", "正在整理品牌知識"),
     "intake_persona": ("persona", "整理人物誌"),
     # issue jobs-bell-blind-to-schedule-jobs（2026-09-06 演練）：產品裡最慢的工作（實測出
     # 方案 43–53 秒、展開活動樹 46–59 秒）本來一個都不在這份對照表裡，排程頁自己有行內
@@ -65,7 +66,7 @@ def _queue_active_jobs(conn) -> list[dict]:
             action_url = f"/app/brands/{brand_id}/products/{scope.get('product_id', '')}"
         elif kind in ("library_convert", "persona"):
             action_url = f"/app/brands/{brand_id}/library"
-        elif kind in ("scan", "question", "paste_fix"):
+        elif kind in ("scan", "question", "paste_fix", "research"):
             action_url = f"/app/brands/{brand_id}/intake"
         elif kind in ("schedule_plan", "schedule_tree", "workbench_generate"):
             action_url = f"/app/brands/{brand_id}/schedule"

@@ -9,7 +9,7 @@
 
 import { apiFetch, errorMessageFromResponse } from "./http";
 
-export type IntakeJobKind = "scan" | "question" | "paste_fix";
+export type IntakeJobKind = "scan" | "question" | "paste_fix" | "research";
 export type IntakeJobStatus = "waiting" | "running" | "done" | "failed";
 
 export interface IntakeJobState {
@@ -146,6 +146,8 @@ export const COST_SCAN = 0.3;
 export const COST_QUESTION = 0.1;
 export const COST_PASTE_FIX = 0.5;
 export const DEFAULT_BUDGET = 30.0;
+/** 逐字對照 `app/intake/script.py` 的 COST_RESEARCH_STANDARD／COST_RESEARCH_DEEP。 */
+export const COST_RESEARCH_STANDARD = 0.6;
 
 export const REVIEW_KIND_OPTIONS: IntakeReviewKind[] = ["品牌事實", "產品事實", "限制規則", "宣稱"];
 
@@ -303,6 +305,16 @@ export function answerQuestion(
 
 export function skipQuestionRemaining(brandId: string): Promise<void> {
   return postJson(`/api/intake/brands/${encodeURIComponent(brandId)}/question/skip-remaining`);
+}
+
+// ---- 品牌知識：系統自己跑的調研（F05-I09） ----
+
+export function startResearch(brandId: string): Promise<{ limit_block: LimitBlock | null }> {
+  return postJson(`/api/intake/brands/${encodeURIComponent(brandId)}/research/start`, { depth: "standard" });
+}
+
+export function fetchResearchStatus(brandId: string): Promise<IntakeJobState> {
+  return getJson(`/api/intake/brands/${encodeURIComponent(brandId)}/research/status`);
 }
 
 // ---- 交接包 ----
