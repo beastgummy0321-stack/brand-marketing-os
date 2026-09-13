@@ -149,7 +149,7 @@ export function SetStudioPage({
         <SetRail brandId={brandId} packId={packId} set={set} onOpen={goToSet} />
 
         <div className="flex flex-col gap-4 min-w-0">
-          <SetHeader brandId={brandId} set={set} />
+          <SetHeader set={set} />
 
           {set.lock.locked && (
             <div className="rounded-md bg-muted px-3 py-2 text-xs text-muted-foreground">
@@ -235,7 +235,7 @@ function SetRail({
   );
 }
 
-function SetHeader({ brandId, set }: { brandId: string; set: SetDetail }) {
+function SetHeader({ set }: { set: SetDetail }) {
   const chips = [set.chips.platform, set.chips.style, set.chips.size].filter(
     (v): v is string => Boolean(v),
   );
@@ -256,12 +256,12 @@ function SetHeader({ brandId, set }: { brandId: string; set: SetDetail }) {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          {set.source_kind === "schedule_node" && (
+          {set.origin_href && (
             <Link
-              to={`/brands/${brandId}/ads`}
+              to={set.origin_href}
               className="text-xs text-primary hover:underline"
             >
-              到投放中心 ↗
+              回到投放中心 ↗
             </Link>
           )}
           <Badge className={SET_STATUS_TONE[set.status] ?? "bg-muted text-muted-foreground"}>
