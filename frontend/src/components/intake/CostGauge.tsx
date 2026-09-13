@@ -13,7 +13,7 @@ export function CostGauge({ draft, onAdjust }: { draft: IntakeDraft | null; onAd
 
   return (
     <div className="flex flex-col gap-3 rounded-lg border border-border bg-card p-4 shadow-[var(--shadow-card)]">
-      <p className="text-sm font-medium text-foreground">這次建檔的花費</p>
+      <p className="text-sm font-medium text-foreground">這次建檔的 AI 花費（美元計價）</p>
       <p className="text-lg font-semibold text-foreground">
         US$ {spent.toFixed(2)}
         <span className="ml-1 text-sm font-normal text-muted-foreground">／ US$ {limit.toFixed(2)} 上限</span>

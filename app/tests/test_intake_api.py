@@ -405,7 +405,7 @@ class QuestionBackgroundTest(_Base):
         self.assertEqual(status["status"], "done")
 
         draft = state.get_draft(bid)
-        self.assertEqual(draft["step"], 3)
+        self.assertEqual(draft["step"], 4)
         self.assertIsNotNone(draft["current_q"])
         self.assertEqual(draft["current_q"]["question"], script.QUESTIONS[0]["question"])
 

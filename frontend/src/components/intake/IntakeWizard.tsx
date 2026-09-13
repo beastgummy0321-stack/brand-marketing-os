@@ -8,13 +8,12 @@ import { fetchIntakeDraft } from "@/lib/intakeApi";
 import { BudgetPanel } from "./BudgetPanel";
 import { CostGauge } from "./CostGauge";
 import { IntakeCompletedPage } from "./IntakeCompletedPage";
-import { HandoffStep } from "./steps/HandoffStep";
-import { PasteStep } from "./steps/PasteStep";
-import { QuestionStep } from "./steps/QuestionStep";
+import { KnowledgeStep } from "./steps/KnowledgeStep";
+import { OfferingsStep } from "./steps/OfferingsStep";
 import { ScanStep } from "./steps/ScanStep";
 import { StartStep } from "./steps/StartStep";
 
-const STEP_LABELS = ["起始輸入", "初步印象", "引導問答", "交接包", "貼回"];
+const STEP_LABELS = ["起始輸入", "初步印象", "賣什麼與數字", "品牌知識"];
 
 type LoadState = { status: "loading" } | { status: "error"; message: string } | { status: "notfound" } | { status: "ready"; draft: IntakeDraft };
 
@@ -90,7 +89,7 @@ export function IntakeWizard({ brandId }: { brandId: string | null }) {
         onSelect={(step) => step <= Math.max(viewStep, draft.step) && setViewStep(step)}
         rightRail={<CostGauge draft={draft} onAdjust={() => setBudgetOpen(true)} />}
       >
-        {renderStep(viewStep, brandId, draft, refresh, () => setViewStep((s) => Math.min(5, s + 1)))}
+        {renderStep(viewStep, brandId, draft, refresh, () => setViewStep((s) => Math.min(STEP_LABELS.length, s + 1)))}
       </TaskFlowShell>
       {budgetOpen && <BudgetPanel brandId={brandId} draft={draft} onClose={() => setBudgetOpen(false)} onSaved={refresh} />}
     </>
@@ -104,14 +103,9 @@ function renderStep(step: number, brandId: string, draft: IntakeDraft, refresh: 
     case 2:
       return <ScanStep brandId={brandId} draft={draft} onRefresh={refresh} onNext={next} />;
     case 3:
-      // key={question_index}：每答完一題 index 就 +1，強制重掛 QuestionStep，讓
-      // useIntakeJob 的 startedRef 跟著重置，第 2 題起才會真的自動出題（不然同一個
-      // 元件實例一路活到步驟結束，startedRef 只會在第 1 題觸發過一次）。
-      return <QuestionStep key={draft.question_index} brandId={brandId} draft={draft} onRefresh={refresh} onNext={next} />;
+      return <OfferingsStep brandId={brandId} draft={draft} onRefresh={refresh} onNext={next} />;
     case 4:
-      return <HandoffStep brandId={brandId} draft={draft} onRefresh={refresh} onNext={next} />;
-    case 5:
     default:
-      return <PasteStep brandId={brandId} draft={draft} onRefresh={refresh} />;
+      return <KnowledgeStep brandId={brandId} draft={draft} onRefresh={refresh} />;
   }
 }
