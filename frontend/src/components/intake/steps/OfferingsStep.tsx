@@ -93,7 +93,7 @@ function deriveFromOfferings(offerings: Offering[]): { products: ProductGroup[];
     } else {
       products.push({
         productId: parent.product_id,
-        name: variants.length > 0 ? parent.name : "",
+        name: parent.name,
         variants: rows.map((r) => ({
           productId: variants.length > 0 ? r.product_id : undefined,
           label: variants.length > 0 ? labelFromName(parent.name, r.name) : "單品",
