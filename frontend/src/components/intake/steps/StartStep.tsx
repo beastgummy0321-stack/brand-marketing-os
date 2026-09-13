@@ -1,7 +1,10 @@
 import { useEffect, useState } from "react";
 import type { IntakeDraft, IntakePhoto } from "@/lib/intakeApi";
 import { fetchIntakeDraft, submitIntakeRestart, submitIntakeStart, uploadIntakePhoto } from "@/lib/intakeApi";
+import { setAdvertisingHistory } from "@/lib/libraryApi";
 import { useFormSubmit } from "@/lib/useFormSubmit";
+
+type PastAds = "has_history" | "none";
 
 const URL_COUNT = 5;
 const PHOTO_ACCEPT = ".jpg,.jpeg,.png,.webp";
@@ -28,6 +31,7 @@ export function StartStep({
   const [photos, setPhotos] = useState<IntakePhoto[]>([]);
   const [photoError, setPhotoError] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [pastAds, setPastAds] = useState<PastAds | null>(null);
 
   useEffect(() => {
     if (!isRestart || !brandId) return;
@@ -64,6 +68,7 @@ export function StartStep({
       onSubmitted({ brand_id: brandId, quick: res.quick });
     } else {
       if (!brandName.trim()) throw new Error("請填寫品牌名稱。");
+      if (!pastAds) throw new Error("請選擇是否曾經投放過網路廣告。");
       const res = await submitIntakeStart({
         brand_name: brandName.trim(),
         client_name: clientName.trim(),
@@ -71,6 +76,7 @@ export function StartStep({
         urls: trimmedUrls,
         photo_tokens: photoTokens,
       });
+      await setAdvertisingHistory(res.brand_id, pastAds);
       onSubmitted(res);
     }
   });
@@ -182,11 +188,39 @@ export function StartStep({
           )}
         </div>
 
+        {!isRestart && (
+          <div className="flex flex-col gap-2 text-sm">
+            <span className="font-medium text-foreground">是否曾經投放過網路廣告</span>
+            <div className="flex gap-2">
+              <label
+                className={`flex flex-1 cursor-pointer flex-col gap-0.5 rounded-md border p-3 ${pastAds === "has_history" ? "border-primary bg-primary/5" : "border-border"}`}
+              >
+                <span className="flex items-center gap-2">
+                  <input type="radio" name="past-ads" checked={pastAds === "has_history"} onChange={() => setPastAds("has_history")} />
+                  <span className="font-medium text-foreground">投放過</span>
+                </span>
+              </label>
+              <label
+                className={`flex flex-1 cursor-pointer flex-col gap-0.5 rounded-md border p-3 ${pastAds === "none" ? "border-primary bg-primary/5" : "border-border"}`}
+              >
+                <span className="flex items-center gap-2">
+                  <input type="radio" name="past-ads" checked={pastAds === "none"} onChange={() => setPastAds("none")} />
+                  <span className="font-medium text-foreground">完全沒投放過</span>
+                </span>
+              </label>
+            </div>
+            {pastAds === "has_history" && (
+              <p className="text-xs text-muted-foreground">接工具那一步綁好廣告帳戶後，系統會拉近 37 個月花費當預算依據。</p>
+            )}
+            {pastAds === "none" && <p className="text-xs text-muted-foreground">系統會用你的售價與成本算一筆試驗預算。</p>}
+          </div>
+        )}
+
         {error && <p className="text-sm text-danger">{error}</p>}
 
         <button
           type="submit"
-          disabled={saving || uploading}
+          disabled={saving || uploading || (!isRestart && (!pastAds || !brandName.trim()))}
           className="self-start rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
         >
           {saving ? "處理中…" : isRestart ? "開始這一輪調研" : "建立品牌並開始初掃"}

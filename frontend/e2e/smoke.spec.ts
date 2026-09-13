@@ -36,12 +36,11 @@ test("走完切片後活下來的主要畫面", async ({ page }) => {
   await page.getByRole("link", { name: "新增品牌" }).first().click();
   await expect(page.getByText("品牌名稱（必填）")).toBeVisible();
   await page.getByLabel("品牌名稱（必填）").fill(brandName);
-  await page.getByRole("button", { name: "建立品牌並開始初掃" }).click();
 
-  // --- 投放史分岔（票 past-ads/04，ADR 0067 §1.6）：新品牌送出第一步之後，導頁之前先
-  // 問一次；這裡選「完全沒投放過」，陽春路徑不牽涉背景補拉。--------------------
-  await expect(page.getByRole("heading", { name: "這個品牌以前投放過廣告嗎？" })).toBeVisible();
-  await page.getByRole("button", { name: "完全沒投放過" }).click();
+  // --- 投放史二選一（F05-I06）：做在步驟一表單裡，沒選不能往下；這裡選「完全沒投放過」，
+  // 陽春路徑不牽涉背景補拉。--------------------------------------------------
+  await page.getByRole("radio", { name: "完全沒投放過" }).check();
+  await page.getByRole("button", { name: "建立品牌並開始初掃" }).click();
 
   // --- 品牌頁：外殼切片後是品牌標題，右上角是進投放中心的入口（缺陷 3）-------------
   await expect(page).toHaveURL(/\/app\/brands\/brd_/);

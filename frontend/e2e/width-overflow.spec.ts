@@ -59,13 +59,11 @@ test("15 條路由（扣 /accept-invite）在 1280 寬不橫向溢出", async ({
   await assertNoOverflow("/intake/new");
   await expect(page.getByText("品牌名稱（必填）")).toBeVisible();
   await page.getByLabel("品牌名稱（必填）").fill(brandName);
-  await page.getByRole("button", { name: "建立品牌並開始初掃" }).click();
 
-  // --- 投放史分岔（票 past-ads/04，ADR 0067 §1.6）：導頁之前的兩顆按鈕 dialog，量它
-  // 自己的寬度，再選一顆過去 -----------------------------------------------------
-  await expect(page.getByRole("heading", { name: "這個品牌以前投放過廣告嗎？" })).toBeVisible();
-  await assertNoOverflow("/intake/new（投放史 dialog）");
-  await page.getByRole("button", { name: "完全沒投放過" }).click();
+  // --- 投放史二選一（F05-I06）：做在步驟一表單裡，量選完後的表單寬度，再送出 --------
+  await page.getByRole("radio", { name: "完全沒投放過" }).check();
+  await assertNoOverflow("/intake/new（投放史二選一）");
+  await page.getByRole("button", { name: "建立品牌並開始初掃" }).click();
 
   await expect(page).toHaveURL(/\/app\/brands\/brd_/);
   const brandId = new URL(page.url()).pathname.split("/")[3];
