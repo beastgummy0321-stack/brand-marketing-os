@@ -632,6 +632,83 @@ class ContextCompilerPromptCapTest(unittest.TestCase):
         self.assertNotIn(brand_soft[0]["content"], text)
 
 
+class FactClaimPromptCapTest(unittest.TestCase):
+    """票 F04-I01：事實／宣稱各自讀 rule_prompt_cap 同一張卡截斷，forbidden 不截斷、
+    截斷時尾端補一行講出「還有更舊的」。"""
+
+    def setUp(self):
+        self.conn = db.current()
+        self.brand = repo.create_brand(self.conn, name="品牌G（事實宣稱上限測試）",
+                                       client_name=None, actor="小陳", org_id=db.DEV_ORG_ID)
+
+    def _make_brand_facts(self, brand_id, count):
+        base = datetime.now(UTC) - timedelta(minutes=1)
+        facts = []
+        for i in range(1, count + 1):
+            fact = repo.create_brand_fact(
+                self.conn, brand_id, fact_type="positioning", label=f"事實{i:02d}",
+                value=f"品牌事實內容{i:02d}", status="confirmed", confirmed_by="小陳", actor="小陳",
+            )
+            confirmed_at = (base + timedelta(seconds=i)).isoformat()
+            self.conn.execute("UPDATE brand_fact SET confirmed_at = %s WHERE id = %s",
+                              (confirmed_at, fact["id"]))
+            self.conn.commit()
+            facts.append(fact)
+        return facts
+
+    def _make_claims(self, brand_id, claim_type, count):
+        base = datetime.now(UTC) - timedelta(minutes=1)
+        claims = []
+        for i in range(1, count + 1):
+            claim = repo.create_claim(
+                self.conn, brand_id, claim_text=f"{claim_type}宣稱{i:02d}",
+                claim_type=claim_type, actor="小陳",
+            )
+            created_at = (base + timedelta(seconds=i)).isoformat()
+            self.conn.execute("UPDATE claim SET created_at = %s WHERE id = %s",
+                              (created_at, claim["id"]))
+            self.conn.commit()
+            claims.append(claim)
+        return claims
+
+    def test_45_brand_facts_top_20_newest_enter_prompt_with_overflow_note(self):
+        facts = self._make_brand_facts(self.brand["id"], 45)
+        text, _ids, _bv, _pv = context_compiler.compile(self.conn, self.brand["id"])
+
+        newest_20 = facts[-20:]
+        oldest_25 = facts[:25]
+        for f in newest_20:
+            self.assertIn(f["value"], text)
+        for f in oldest_25:
+            self.assertNotIn(f["value"], text)
+        self.assertIn("（另有 25 筆較舊的品牌事實沒有列出）", text)
+
+    def test_30_approved_claims_capped_but_3_forbidden_all_kept(self):
+        approved = self._make_claims(self.brand["id"], "approved", 30)
+        forbidden = self._make_claims(self.brand["id"], "forbidden", 3)
+
+        text, _ids, _bv, _pv = context_compiler.compile(self.conn, self.brand["id"])
+
+        newest_20 = approved[-20:]
+        oldest_10 = approved[:10]
+        for c in newest_20:
+            self.assertIn(c["claim_text"], text)
+        for c in oldest_10:
+            self.assertNotIn(c["claim_text"], text)
+        for c in forbidden:
+            self.assertIn(c["claim_text"], text)
+        self.assertIn("（另有 10 筆較舊的宣稱沒有列出）", text)
+
+    def test_15_facts_under_cap_no_overflow_note_and_all_ids_present(self):
+        facts = self._make_brand_facts(self.brand["id"], 15)
+        text, knowledge_item_ids, _bv, _pv = context_compiler.compile(self.conn, self.brand["id"])
+
+        for f in facts:
+            self.assertIn(f["value"], text)
+            self.assertIn(f["id"], knowledge_item_ids)
+        self.assertNotIn("沒有列出", text)
+
+
 class CostCeilingTest(unittest.TestCase):
     """票 M2：呼叫前保守天花板——沒有真實用量校準資料的呼叫端（廣告分支）用這個攔花費上限。"""
 
