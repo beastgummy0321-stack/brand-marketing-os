@@ -197,7 +197,11 @@ def cmd_mirror(brand_id: str, append: bool = False) -> None:
     state = load()
     if not state["accounts"]:
         state["accounts"] = list(DRILL_ACCOUNTS)
-    account_id = _bound_account_id(brand_id) or state["accounts"][0]["account_id"]
+    account_id = _bound_account_id(brand_id)
+    if account_id is None:
+        # Drill 4 (J-3): falling back to accounts[0] put one persona's campaigns under another
+        # persona's account. A brand with no bound account has nowhere to build; refuse.
+        raise SystemExit(f"品牌 {brand_id} 還沒有指定廣告帳戶，先在產品裡把帳號勾給品牌再鏡射")
     seq = [0]
 
     existing = len([e for e in state["campaigns"] + state["adsets"] + state["ads"]

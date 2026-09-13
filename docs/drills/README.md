@@ -120,3 +120,24 @@ Two money-correctness defects, both reproduced independently in more than one or
 
 What the drill could not answer, and no drill can: whether the judgement is any good. The
 stand-in's ROAS numbers are invented. Only real spend answers that.
+
+## Results, fourth drill (2026-09-13) — the final internal test before release
+
+Three personas (阿明／Sonnet, 小杰／Haiku then Sonnet from station 6, Vivian／Opus), two full loops each, three
+separate orgs, the Meta stand-in for publish/bind/spend. Plan: `drill-4-final-internal-test.md`. Everything durable
+is in `drill-4/`: `synthesis.md` (eight root causes with causal chains, the 7-stations × 3-personas verdict table,
+the six pass criteria, the F05 shape and the rulings the user must make), `findings-<persona>.md` (operator-verified
+DB evidence per station). Raw run logs and screenshots were scratch.
+
+Golden Path: every station reached and evidenced for all three; the learning written at 結案 is read by the next
+campaign's strategy (learning ids in `budget_basis_json.basis.learnings`, allocation moved, Vivian's loop-2 strategy
+refused to over-weight on a low sample and was right). But all six closes judged 「看不出」, because the sample
+bucket is tied to a purchase count the Meta path never stores — the loop transmits, it does not yet learn.
+One stop condition fired (阿明, station 5: blank page after 自訂預算) and was fixed mid-drill (F04-I24–I26) —
+a deliberate deviation from the no-fixes rule, recorded here; 阿明 resumed from station 5 on the fixed build.
+Money invariants held in every one of the six settlements; no cross-tenant data; no HTTP 5xx observed.
+
+What the drill cost the fixture this time: `fake_meta mirror` mirrored the ads-module tree (it used to read the
+retired schedule tree), and its fallback to `accounts[0]` when a brand had no bound account put one persona's
+campaigns under another persona's account — now it refuses instead. Loop-2 campaigns dated in the future were
+time-shifted by SQL so outcomes could exist (a fixture step, noted in each run).
