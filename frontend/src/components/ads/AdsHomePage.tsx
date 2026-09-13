@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, type NavigateFunction } from "react-router-dom";
 import { BarChart3, Plus } from "lucide-react";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { EmptyState } from "@/components/layout/EmptyState";
@@ -7,7 +7,8 @@ import { Skeleton } from "@/components/layout/Skeleton";
 import { Button } from "@/components/layout/ui/button";
 import { formatCurrency } from "@/lib/format";
 import { getAdsHome, type AdsHome, type CampaignStatus } from "@/lib/adsApi";
-import { JudgmentBand, DecisionCard, CampaignTile, ActionTimeline, ReservedSlotCard } from "./patterns";
+import { fetchLaunchReadiness, type LaunchReadiness } from "@/lib/adsLaunchApi";
+import { JudgmentBand, DecisionCard, CampaignTile, ActionTimeline, ReservedSlotCard, ReadinessList } from "./patterns";
 
 export const STATUS_LABEL: Record<CampaignStatus, string> = {
   draft: "草稿",
@@ -32,8 +33,14 @@ type LoadState =
 
 /** 投放中心首頁（F04-I09）：四塊判斷（整體判斷／需要你決定／進行中的 Campaign／最近做了什麼），
  * 照 `docs/design/ads/01-home.png`。所有判斷句與數字都來自 `getAdsHome`——這支不算數、不重拼。 */
+type ReadinessLoadState =
+  | { status: "loading" }
+  | { status: "error" }
+  | { status: "ready"; readiness: LaunchReadiness };
+
 export function AdsHomePage({ brandId }: { brandId: string }) {
   const [state, setState] = useState<LoadState>({ status: "loading" });
+  const [readinessState, setReadinessState] = useState<ReadinessLoadState>({ status: "loading" });
   const navigate = useNavigate();
 
   function load() {
@@ -46,6 +53,10 @@ export function AdsHomePage({ brandId }: { brandId: string }) {
           message: err instanceof Error ? err.message : "讀取失敗，請稍後再試。",
         }),
       );
+    setReadinessState({ status: "loading" });
+    fetchLaunchReadiness(brandId)
+      .then((readiness) => setReadinessState({ status: "ready", readiness }))
+      .catch(() => setReadinessState({ status: "error" }));
   }
 
   useEffect(load, [brandId]);
@@ -119,22 +130,7 @@ export function AdsHomePage({ brandId }: { brandId: string }) {
               </div>
             </div>
 
-            <div className="surface flex items-center justify-between gap-4 border-dashed p-5">
-              <div className="flex items-center gap-3">
-                <div className="flex size-11 shrink-0 items-center justify-center rounded-full bg-accent">
-                  <Plus className="size-5 text-primary" />
-                </div>
-                <div>
-                  <p className="text-[15px] font-semibold">建立新的 Campaign</p>
-                  <p className="text-sm text-muted-foreground">
-                    告訴行銷駕駛艙你的目標，它會幫你完成後續設定。
-                  </p>
-                </div>
-              </div>
-              <Button variant="outline" onClick={() => navigate(`/brands/${brandId}/ads/new`)}>
-                開始建立
-              </Button>
-            </div>
+            <NewCampaignCard brandId={brandId} readinessState={readinessState} navigate={navigate} />
           </div>
 
           <div className="flex flex-col gap-4">
@@ -178,6 +174,70 @@ export function AdsHomePage({ brandId }: { brandId: string }) {
         }
       />
       {content}
+    </div>
+  );
+}
+
+/** 「建立新的 Campaign」卡（F05-I10）：綠燈畫面跟原本一模一樣，其餘顏色多印檢查表，
+ * 句子與按鈕文字都來自 `fetchLaunchReadiness`，這支不重判斷、不擋路由。 */
+function NewCampaignCard({
+  brandId,
+  readinessState,
+  navigate,
+}: {
+  brandId: string;
+  readinessState: ReadinessLoadState;
+  navigate: NavigateFunction;
+}) {
+  const isBlocking =
+    readinessState.status === "ready" && readinessState.readiness.state !== "green";
+
+  if (!isBlocking) {
+    return (
+      <div className="surface flex items-center justify-between gap-4 border-dashed p-5">
+        <div className="flex items-center gap-3">
+          <div className="flex size-11 shrink-0 items-center justify-center rounded-full bg-accent">
+            <Plus className="size-5 text-primary" />
+          </div>
+          <div>
+            <p className="text-[15px] font-semibold">建立新的 Campaign</p>
+            <p className="text-sm text-muted-foreground">
+              告訴行銷駕駛艙你的目標，它會幫你完成後續設定。
+            </p>
+          </div>
+        </div>
+        <Button variant="outline" onClick={() => navigate(`/brands/${brandId}/ads/new`)}>
+          開始建立
+        </Button>
+      </div>
+    );
+  }
+
+  const { readiness } = readinessState;
+  const missing = readiness.items.filter((item) => item.state !== "green").length;
+
+  return (
+    <div className="surface flex flex-col gap-4 border-dashed p-5">
+      <div className="flex items-center gap-3">
+        <div className="flex size-11 shrink-0 items-center justify-center rounded-full bg-accent">
+          <Plus className="size-5 text-primary" />
+        </div>
+        <div>
+          <p className="text-[15px] font-semibold">建立新的 Campaign</p>
+          <p className="text-sm text-muted-foreground">
+            還缺 {missing} 項，補齊之後系統才算得出預算與成效。
+          </p>
+        </div>
+      </div>
+      <ReadinessList readiness={readiness} />
+      <div className="flex gap-3">
+        <Button onClick={() => navigate(readiness.primary.href)}>{readiness.primary.label}</Button>
+        {readiness.secondary && (
+          <Button variant="outline" onClick={() => navigate(readiness.secondary?.href ?? "")}>
+            {readiness.secondary.label}
+          </Button>
+        )}
+      </div>
     </div>
   );
 }
