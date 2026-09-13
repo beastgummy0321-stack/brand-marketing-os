@@ -50,7 +50,7 @@ export function LoginPage() {
             都在同一個工作區。
           </h2>
           <p className="mt-6 max-w-sm leading-7 text-muted-foreground">
-            整合廣告成效、產品知識與檔期規劃，讓經營判斷有資料可以依據。
+            整合廣告成效、產品知識與投放中心，讓經營判斷有資料可以依據。
           </p>
           <div className="mt-10 flex flex-wrap gap-3 text-xs text-primary">
             <span className="rounded-lg border border-primary/15 px-4 py-3">
