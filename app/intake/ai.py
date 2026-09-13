@@ -29,6 +29,11 @@ fetch_url = net.fetch_url
 PARSE_FAIL_MESSAGE = "AI 有回覆，但格式讀不成預期的樣子。可以再試一次。"
 QUESTION_ASPECTS = ("產品線", "價格帶", "客群", "語調", "法規風險")
 
+# 成本上限（F04-I06）：使用者能無限拖照片／問答輪數往上疊，模型呼叫不能照樣無限跟漲。
+MAX_PHOTO_SCANS = 12  # 第 13 張起不打模型，卡片標成 skipped
+MAX_IMPRESSION_LINES = 8  # 出題只帶最近 8 條初步印象
+MAX_ANSWER_LINES = 3  # 出題只帶最近 3 題問答；更早的已收斂進「已覆蓋面向」
+
 
 _parse_json_reply = gateway.parse_json_reply  # 搬到 gateway.py 公開，這裡留別名（行為零變化）
 
@@ -143,7 +148,16 @@ def _read_photo_product(conn, draft: dict, photo: dict, purpose: str) -> dict:
 def _read_photo_products(conn, draft: dict) -> list:
     cards = []
     for index, photo in enumerate(draft["photos"], start=1):
-        card = _read_photo_product(conn, draft, photo, f"讀取第 {index} 張照片")
+        if index > MAX_PHOTO_SCANS:
+            card = _photo_card(
+                photo, status="skipped",
+                message=(
+                    f"一次最多讀 {MAX_PHOTO_SCANS} 張照片，這張沒有讀；"
+                    "照片產品卡可以自己填，或先完成這批再上傳。"
+                ),
+            )
+        else:
+            card = _read_photo_product(conn, draft, photo, f"讀取第 {index} 張照片")
         cards.append(card)
         draft["product_card_drafts"] = list(cards)
         ready_names = [c["name"] for c in cards if c["status"] == "ready" and c["name"]]
@@ -296,7 +310,11 @@ def run_next_question(conn, draft: dict) -> tuple:
         return True, None
     covered, missing = question_coverage(draft)
     lines = [f"品牌名稱：{draft['brand_name']}", f"業主描述：{draft['description']}"]
-    for imp in draft["scan_impressions"]:
+    impressions = draft["scan_impressions"]
+    shown_impressions = impressions[-MAX_IMPRESSION_LINES:]
+    if len(impressions) > MAX_IMPRESSION_LINES:
+        lines.append(f"另有 {len(impressions) - MAX_IMPRESSION_LINES} 條初步印象沒有列出。")
+    for imp in shown_impressions:
         lines.append(f"初步印象（{imp['looks_like']}）{imp['title']}：{imp['content']}")
     photo_gaps = []
     for card in draft.get("product_card_drafts") or []:
@@ -307,7 +325,10 @@ def run_next_question(conn, draft: dict) -> tuple:
             photo_gaps.append(f"{card.get('name') or '讀不出品名的照片'}：{'、'.join(gaps)}")
     if photo_gaps:
         lines.append("照片產品卡缺口（優先補問）：" + "；".join(photo_gaps))
-    for a in draft["answers"]:
+    answers = draft["answers"]
+    if len(answers) > MAX_ANSWER_LINES:
+        lines.append("更早的問答已收斂成下面的「已覆蓋面向」。")  # 摘要已存在，不必逐字重送
+    for a in answers[-MAX_ANSWER_LINES:]:
         note = f"（補充：{a['note']}）" if a["note"] else ""
         lines.append(f"已問過：{a['question']}／業主選：{a['choice_label']}{note}")
     lines.append(f"已覆蓋面向：{'、'.join(covered) if covered else '無'}")
