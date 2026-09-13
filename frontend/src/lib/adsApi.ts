@@ -334,12 +334,12 @@ async function ensureOk(res: Response, fallback: string): Promise<void> {
   throw new Error(message);
 }
 
-async function parseJsonOrThrow<T>(res: Response, fallback: string): Promise<T> {
+export async function parseJsonOrThrow<T>(res: Response, fallback: string): Promise<T> {
   await ensureOk(res, fallback);
   return (await res.json()) as T;
 }
 
-const BASE = "/api/ads";
+export const BASE = "/api/ads";
 
 export async function listCampaigns(brandId: string): Promise<CampaignCard[]> {
   const res = await apiFetch(`${BASE}/brands/${encodeURIComponent(brandId)}/campaigns`);
@@ -766,41 +766,4 @@ export async function getAdsHome(brandId: string): Promise<AdsHome> {
   const res = await apiFetch(`${BASE}/brands/${encodeURIComponent(brandId)}/home`);
   const data = await parseJsonOrThrow<{ home: AdsHome }>(res, "讀取投放中心首頁失敗。");
   return data.home;
-}
-
-/** F05-I04：可投放檢查表——`app/ads/readiness.py::launch_readiness()` 的回傳形狀，瀏覽器逐字印
- * 每一列的 `reason`，不重拼句子。三色沒有第四種狀態、`items` 固定三列固定順序。 */
-export type ReadinessState = "green" | "yellow" | "red";
-
-export interface ReadinessItem {
-  key: string;
-  label: string;
-  state: ReadinessState;
-  reason: string;
-  fix_label: string;
-  fix_href: string;
-}
-
-export interface ReadinessNote {
-  key: string;
-  text: string;
-}
-
-export interface ReadinessAction {
-  label: string;
-  href: string;
-}
-
-export interface LaunchReadiness {
-  state: ReadinessState;
-  items: ReadinessItem[];
-  notes: ReadinessNote[];
-  primary: ReadinessAction;
-  secondary: ReadinessAction | null;
-}
-
-export async function fetchLaunchReadiness(brandId: string): Promise<LaunchReadiness> {
-  const res = await apiFetch(`${BASE}/brands/${encodeURIComponent(brandId)}/readiness`);
-  const data = await parseJsonOrThrow<{ readiness: LaunchReadiness }>(res, "讀取可投放檢查表失敗。");
-  return data.readiness;
 }

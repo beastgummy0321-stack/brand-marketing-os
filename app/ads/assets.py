@@ -12,6 +12,7 @@ workbench public entry for per-set counts (§0 "Workbench handoff", feature-3 fi
 """
 
 from app import workbench
+from app.ads import channels
 from app.ads import repository as ads_repo
 from app.brand_intelligence import repository as bi_repo
 
@@ -21,12 +22,8 @@ PACK_SOURCE_KIND = "schedule_node"
 
 _COORDINATE_DIMENSIONS = ("audience", "pain", "angle", "hook", "proof", "offer", "format")
 
-# F03 決策 6「不寫死平台」：這裡只是顯示用的通路標籤，不是白名單——沒列到的 channel_key
-# 原樣顯示。
-_CHANNEL_LABELS = {
-    "meta": "Meta", "google_ads": "Google Ads", "tiktok": "TikTok",
-    "shopee": "蝦皮", "momo": "momo",
-}
+# F05-I05：通路標籤只住在 channels.py（§0「不寫死平台」）——沒列到的 channel_key 原樣顯示。
+_CHANNEL_LABELS = {c["key"]: c["label"] for c in channels.CHANNELS}
 
 PACK_ALREADY_EXISTS_MESSAGE = "這個 Campaign 已經交棒過素材任務包了。"
 

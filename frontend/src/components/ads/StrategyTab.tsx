@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { ArrowRight, Calendar, HelpCircle, Image as ImageIcon, Lightbulb, PieChart, Radio, Sparkles, Target, Wallet } from "lucide-react";
 import { Button } from "@/components/layout/ui/button";
@@ -18,6 +18,7 @@ import {
   type StrategyRole,
   type SuccessMetric,
 } from "@/lib/adsApi";
+import { fetchChannels, type Channel } from "@/lib/adsLaunchApi";
 import { Disclosure, JudgmentBand, KpiStrip, ReservedSlotCard, type KpiCell } from "./patterns";
 
 // F04-I15：`OverviewTab.tsx` 有同一份 `WorkspaceTab`／`METRIC_LABEL`／`formatTarget`——兩邊都在
@@ -28,17 +29,6 @@ const METRIC_LABEL: Record<SuccessMetric, string> = {
   cpa: "CPA（每筆訂單成本）",
   roas: "ROAS（廣告投報率）",
   purchases: "購買數",
-};
-
-// 通路字典跟 `app/ads/channels.py::CHANNELS` 是同一份中文對照——不寫死平台邏輯，只是把
-// key 換成使用者看得懂的字（跟 `DeliveryTab.tsx` 的 `CHANNEL_LABEL` 同一份，一樣的
-// do_not_touch 重複理由）。
-const PLATFORM_LABEL: Record<string, string> = {
-  meta: "Meta",
-  google_ads: "Google Ads",
-  tiktok: "TikTok",
-  shopee: "蝦皮",
-  momo: "momo",
 };
 
 const ROLE_LABEL: Record<StrategyRole, string> = { new: "新客", retarget: "再行銷", explore: "探索" };
@@ -88,6 +78,21 @@ export function StrategyTab({
   const [primaryBusy, setPrimaryBusy] = useState(false);
   const [primaryError, setPrimaryError] = useState<string | null>(null);
   const [budgetHelpOpen, setBudgetHelpOpen] = useState(false);
+  const [channels, setChannels] = useState<Channel[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchChannels(brandId)
+      .then((rows) => {
+        if (!cancelled) setChannels(rows);
+      })
+      .catch(() => {
+        /* 靜默：讀失敗就顯示 platform key 原樣，不是整頁壞掉 */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [brandId]);
 
   const strategy = c.budget_basis_json.strategy;
   const scenarios = c.budget_basis_json.scenarios;
@@ -206,7 +211,7 @@ export function StrategyTab({
     {
       icon: Radio,
       label: "平台",
-      value: platformKey ? PLATFORM_LABEL[platformKey] ?? platformKey : "尚未指定",
+      value: platformKey ? channels.find((ch) => ch.key === platformKey)?.label ?? platformKey : "尚未指定",
       caption: "採用後會建立對應的投放組",
     },
     {
