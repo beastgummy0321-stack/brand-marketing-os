@@ -306,8 +306,8 @@ def background_intake_paste_fix(org_id: str, brand_id: str) -> None:
                 # 留在草稿讓使用者手改（S4.54）——這裡的 ok 只代表 AI 呼叫本身有沒有成功。
                 n = state.apply_paste(draft, result, conn=conn)
                 draft = state.require_draft(brand_id, conn=conn)
-                if n is not None and draft["step"] < 4:
-                    state.touch(draft, f"/brands/{brand_id}/intake/paste", 4, conn=conn)
+                if n is not None and draft["step"] < 5:
+                    state.touch(draft, f"/brands/{brand_id}/intake/paste", 5, conn=conn)
         except Exception:  # noqa: BLE001 — worker 最後一道防線，不能讓例外憑空消失
             ok = False
         _notify_step_done(conn, brand_id, brand_name, ok,
@@ -388,8 +388,8 @@ def question_start(request: Request, brand_id: str):
     actor = require_actor(request)
     require_brand(brand_id, actor)
     draft = state.require_draft(brand_id)
-    if draft["step"] < 4:
-        state.touch(draft, f"/brands/{brand_id}/intake/question", 4)
+    if draft["step"] < 5:
+        state.touch(draft, f"/brands/{brand_id}/intake/question", 5)
     if draft["qa_done"] or draft["current_q"] is not None:
         return {"limit_block": None}
     if state.would_exceed(draft, script.COST_QUESTION):
@@ -499,7 +499,7 @@ def skip_remaining_ai(request: Request, brand_id: str):
         draft["product_card_drafts"] = []
         draft["url_results"] = []
     state.mark_qa_done(draft)
-    draft["step"] = 4
+    draft["step"] = 5
     state.save(draft)
     return Response(status_code=204)
 
@@ -522,8 +522,8 @@ async def handoff_generate(request: Request, brand_id: str):
                                       existing=ir.existing_confirmed_data(web.conn, brand_id))
     ir.update_draft(web.conn, brand_id, draft["id"], handoff_depth=depth,
                     handoff_prompt=prompt_text, handoff_generated_at=now_utc())
-    if draft["step"] < 4:
-        state.touch(draft, f"/brands/{brand_id}/intake/handoff", 4)
+    if draft["step"] < 5:
+        state.touch(draft, f"/brands/{brand_id}/intake/handoff", 5)
     return {"prompt_text": prompt_text}
 
 
@@ -556,8 +556,8 @@ async def paste_validate(request: Request, brand_id: str):
     if not raw_text.strip():
         return _error(400, "請先貼上 AI 給你的表格內容。")
     n = state.apply_paste(draft, raw_text, conn=web.conn)
-    if n is not None and draft["step"] < 4:
-        state.touch(draft, f"/brands/{brand_id}/intake/paste", 4)
+    if n is not None and draft["step"] < 5:
+        state.touch(draft, f"/brands/{brand_id}/intake/paste", 5)
     return _paste_result(draft)
 
 
@@ -576,8 +576,8 @@ async def paste_resolve_scope(request: Request, brand_id: str):
     else:
         draft["paste_raw"] = paste_parse.rewrite_scope(draft["paste_raw"], scope_name, "整個品牌")
     n = state.apply_paste(draft, draft["paste_raw"], conn=web.conn)
-    if n is not None and draft["step"] < 4:
-        state.touch(draft, f"/brands/{brand_id}/intake/paste", 4)
+    if n is not None and draft["step"] < 5:
+        state.touch(draft, f"/brands/{brand_id}/intake/paste", 5)
     return _paste_result(draft)
 
 
@@ -713,6 +713,8 @@ async def review_item_post(request: Request, brand_id: str, i: int):
 # T2 新端點拆在小檔；本檔已接近 800 行，不再把新功能直接塞進來。
 from app.intake.routes_offerings_api import router as offerings_router  # noqa: E402
 from app.intake.routes_t2_api import router as t2_router  # noqa: E402
+from app.intake.routes_tools_api import router as tools_router  # noqa: E402
 
 router.include_router(t2_router)
 router.include_router(offerings_router)
+router.include_router(tools_router)

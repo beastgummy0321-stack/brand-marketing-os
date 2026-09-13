@@ -436,3 +436,26 @@ export interface OfferingInput {
 export function saveOfferings(brandId: string, offerings: OfferingInput[]): Promise<void> {
   return postJson(`/api/intake/brands/${encodeURIComponent(brandId)}/offerings`, { offerings });
 }
+
+// ---- 精靈第 4 步：接工具（F05-I08） ----
+
+export interface ConversionGoalOption {
+  key: string;
+  label: string;
+}
+
+export interface IntakeToolsData {
+  conversion_goal: string | null;
+  conversion_goal_options: ConversionGoalOption[];
+  bound_account_ids: string[];
+}
+
+export function fetchIntakeTools(brandId: string): Promise<IntakeToolsData> {
+  return getJson(`/api/intake/brands/${encodeURIComponent(brandId)}/tools`);
+}
+
+export function saveConversionGoal(brandId: string, conversionGoal: string): Promise<void> {
+  return postJson(`/api/intake/brands/${encodeURIComponent(brandId)}/conversion-goal`, {
+    conversion_goal: conversionGoal,
+  });
+}

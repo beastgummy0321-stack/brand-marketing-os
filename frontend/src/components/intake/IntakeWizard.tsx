@@ -12,8 +12,9 @@ import { KnowledgeStep } from "./steps/KnowledgeStep";
 import { OfferingsStep } from "./steps/OfferingsStep";
 import { ScanStep } from "./steps/ScanStep";
 import { StartStep } from "./steps/StartStep";
+import { ToolsStep } from "./steps/ToolsStep";
 
-const STEP_LABELS = ["起始輸入", "初步印象", "賣什麼與數字", "品牌知識"];
+const STEP_LABELS = ["起始輸入", "初步印象", "賣什麼與數字", "接工具", "品牌知識"];
 
 type LoadState = { status: "loading" } | { status: "error"; message: string } | { status: "notfound" } | { status: "ready"; draft: IntakeDraft };
 
@@ -105,6 +106,8 @@ function renderStep(step: number, brandId: string, draft: IntakeDraft, refresh: 
     case 3:
       return <OfferingsStep brandId={brandId} draft={draft} onRefresh={refresh} onNext={next} />;
     case 4:
+      return <ToolsStep brandId={brandId} onNext={next} />;
+    case 5:
     default:
       return <KnowledgeStep brandId={brandId} draft={draft} onRefresh={refresh} />;
   }
