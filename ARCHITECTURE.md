@@ -303,9 +303,10 @@ type, user role or outcome source. Those are **keys on rows** — `ads_delivery_
 `brand.conversion_goal` (`purchase`／`lead`／`booking`／`awareness`), a `product_economics` row's own
 numbers. Platform differences live in `app/ads/adapters/**` and in `app/ads/channels.py`, the one
 registry allowed to know a platform's name; anywhere else in `app/ads` a platform name in a string
-literal is a bug, machine-checked by `app/tests/test_ads_no_platform_literal.py` (`channels.py` and
-the whole of `outcome.py` are the two named exceptions — `outcome.py` until F06's RC-D removes the
-`source = 'meta'` rule, `channels.py` for good; the test and this sentence must name the same two).
+literal is a bug, machine-checked by `app/tests/test_ads_no_platform_literal.py`. It has exactly
+three exemptions — `channels.py`, the whole of `outcome.py`, and the whole `adapters/` directory;
+`outcome.py` only until F06's RC-D removes the `source = 'meta'` rule, the other two for good. The
+test and this sentence must name the same three.
 Nouns on screen come from the data's own labels — the channel's `label`, the conversion goal's label
 — shipped as text by the side that owns the rule (§5.3) and never re-spelled in the browser. There
 is no platform abstraction layer, no role system and no second data model: 「使用者」 is an identity
