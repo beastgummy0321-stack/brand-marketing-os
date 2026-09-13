@@ -23,6 +23,7 @@ from app.ads import (
     judgment,
     outcome,
     plan,
+    readiness,
     repository,
     strategy,
 )
@@ -45,6 +46,14 @@ def _with_readiness(actor, brand_id: str, campaign: dict | None) -> dict | None:
         assets.readiness(web.conn, actor.org_id, brand_id, campaign["id"]),
     )
     return campaign
+
+
+@router.get("/brands/{brand_id}/readiness")
+def get_readiness(request: Request, brand_id: str):
+    """F05-I04：可投放檢查表——精靈最後一頁與投放中心「建立 Campaign」入口讀同一份。"""
+    actor = web.require_actor(request)
+    web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
+    return {"readiness": readiness.launch_readiness(web.conn, actor.org_id, brand_id)}
 
 
 @router.get("/brands/{brand_id}/campaigns")
