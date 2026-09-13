@@ -15,6 +15,7 @@ import statistics
 from datetime import date, timedelta
 from typing import cast
 
+from app.ads import judgment
 from app.brand_intelligence import repository as bi_repo
 from app.core import cleanup
 from app.core import settings as coresettings
@@ -189,7 +190,10 @@ def _groups_for_campaign(conn: _AnyConn, org_id: str, brand_id: str, campaign_id
 
 
 def list_campaigns(conn: _AnyConn, org_id: str, brand_id: str) -> list:
-    """`GET /campaigns` 列表：每筆帶 `budget_total`（推導）跟一句成效摘要。"""
+    """`GET /campaigns` 列表：每筆帶 `budget_total`（推導）、`budget_progress`、一句成效摘要
+    跟 F04-I08 的 `judgment`。沒有分頁——`routes.py` 的首頁路由靠這一點在原地數計數（見那邊
+    的註解）。"""
+    today = coresettings.today_for_org(conn, org_id=org_id)
     rows = conn.execute(
         "SELECT * FROM ads_campaign WHERE org_id = %s AND brand_id = %s ORDER BY created_at DESC",
         (org_id, brand_id),
@@ -199,13 +203,24 @@ def list_campaigns(conn: _AnyConn, org_id: str, brand_id: str) -> list:
         row = dict(row)
         groups = _groups_for_campaign(conn, org_id, brand_id, row["id"])
         outcome = _outcome_totals(conn, org_id, brand_id, row["id"])
+        budget_total = _budget_total(row["start_date"], row["end_date"], groups)
+        spend = float(outcome["spend"]) if outcome["row_count"] else None
+        pct = (
+            round(spend / float(budget_total) * 100)
+            if spend is not None and budget_total else None
+        )
         entries.append({
             "id": row["id"], "name": row["name"], "status": row["status"],
             "start_date": row["start_date"], "end_date": row["end_date"],
             "objective": row["objective"],
+            "created_at": row["created_at"], "created_by": row["created_by"],
             "budget_planned": row["budget_planned"],
-            "budget_total": _budget_total(row["start_date"], row["end_date"], groups),
+            "budget_total": budget_total,
+            "budget_progress": {"spent": spend, "total": budget_total, "pct": pct},
+            "spend": spend,
             "outcome": outcome,
+            "judgment": judgment.campaign_judgment({**row, "budget_total": budget_total,
+                                                     "spend": spend}, today=today),
         })
     return entries
 
@@ -217,23 +232,67 @@ def _outcome_totals(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str
     group level")."""
     row = conn.execute(
         "SELECT COALESCE(SUM(spend), 0) AS spend, COALESCE(SUM(purchases), 0) AS purchases,"
-        " COALESCE(SUM(revenue), 0) AS revenue"
+        " COALESCE(SUM(revenue), 0) AS revenue, COUNT(*) AS row_count"
         " FROM ads_outcome_daily WHERE org_id = %s AND brand_id = %s AND campaign_id = %s"
         " AND entity_kind = 'group'",
         (org_id, brand_id, campaign_id),
     ).fetchone()
-    return dict(row) if row is not None else {"spend": 0, "purchases": 0, "revenue": 0}
+    return dict(row) if row is not None else {
+        "spend": 0, "purchases": 0, "revenue": 0, "row_count": 0,
+    }
+
+
+def _target_name(conn: _AnyConn, org_id: str, brand_id: str, action: dict,
+                  *, campaign_name: str) -> str | None:
+    """`ads_action.target_kind` 是 campaign／group／ad——只有 group／ad 需要另外查名字
+    （campaign 自己就是 `campaign_name`）。N+1（每個 action 一次查詢）在 `limit=20` 之下可以
+    接受，換一支 join 查詢不會讓程式碼變簡單。
+    ponytail: N+1 lookup, batch-join if the actions list grows past ~20."""
+    if action["target_kind"] == "campaign":
+        return campaign_name
+    table = "ads_delivery_group" if action["target_kind"] == "group" else "ads_ad"
+    row = conn.execute(
+        f"SELECT name FROM {table} WHERE org_id = %s AND brand_id = %s AND id = %s",
+        (org_id, brand_id, action["target_id"]),
+    ).fetchone()
+    return row["name"] if row is not None else None
+
+
+def recent_actions(conn: _AnyConn, org_id: str, brand_id: str, *, limit: int = 20) -> list:
+    """F04-I08：這個品牌**跨 Campaign** 的最近操作——首頁「最近做了什麼」時間軸。每一列帶
+    `campaign_id`／`campaign_name`（JOIN `ads_campaign`）跟 `judgment.action_line()` 組好的
+    三個字串。"""
+    today = coresettings.today_for_org(conn, org_id=org_id)
+    rows = conn.execute(
+        "SELECT a.*, c.name AS campaign_name FROM ads_action a"
+        " JOIN ads_campaign c ON c.id = a.campaign_id"
+        " WHERE a.org_id = %s AND a.brand_id = %s ORDER BY a.created_at DESC LIMIT %s",
+        (org_id, brand_id, limit),
+    ).fetchall()
+    entries = []
+    for row in rows:
+        row = dict(row)
+        target_name = _target_name(conn, org_id, brand_id, row, campaign_name=row["campaign_name"])
+        line = judgment.action_line(
+            row, campaign_name=row["campaign_name"], target_name=target_name, today=today,
+        )
+        entries.append({
+            "campaign_id": row["campaign_id"], "campaign_name": row["campaign_name"], **line,
+        })
+    return entries
 
 
 def campaign_detail(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str) -> dict | None:
     """`GET /campaigns/{c}`：整個五分頁工作區要讀的一份 dict——campaign 本身 + 投放組 +
-    廣告（掛在各自的投放組下）+ 每個節點最新一筆 action + 成效小計。`budget_total` 是這裡
-    推導的第二個地方跟 `list_campaigns` 共用同一個 `_budget_total()`，不重算第二套邏輯。
+    廣告（掛在各自的投放組下）+ 每個節點最新一筆 action + 成效小計 + F04-I08 的
+    `judgment`／`action_lines`。`budget_total` 是這裡推導的第二個地方跟 `list_campaigns`
+    共用同一個 `_budget_total()`，不重算第二套邏輯。
     """
     campaign = get_campaign(conn, org_id, brand_id, campaign_id)
     if campaign is None:
         return None
 
+    today = coresettings.today_for_org(conn, org_id=org_id)
     groups = _groups_for_campaign(conn, org_id, brand_id, campaign_id)
     ad_rows = conn.execute(
         "SELECT * FROM ads_ad WHERE org_id = %s AND brand_id = %s AND campaign_id = %s"
@@ -252,12 +311,29 @@ def campaign_detail(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str
         " ORDER BY created_at DESC LIMIT 20",
         (org_id, brand_id, campaign_id),
     ).fetchall()
+    outcome = _outcome_totals(conn, org_id, brand_id, campaign_id)
+    budget_total = _budget_total(campaign["start_date"], campaign["end_date"], groups)
 
     detail = dict(campaign)
     detail["groups"] = groups
-    detail["budget_total"] = _budget_total(campaign["start_date"], campaign["end_date"], groups)
+    detail["budget_total"] = budget_total
     detail["actions"] = [dict(a) for a in latest_actions]
-    detail["outcome"] = _outcome_totals(conn, org_id, brand_id, campaign_id)
+    detail["outcome"] = outcome
+    detail_spend = float(outcome["spend"]) if outcome["row_count"] else None
+    detail["judgment"] = judgment.campaign_judgment(
+        {**campaign, "budget_total": budget_total, "spend": detail_spend}, today=today,
+    )
+    detail["action_lines"] = [
+        {
+            "campaign_id": a["campaign_id"], "campaign_name": campaign["name"],
+            **judgment.action_line(
+                a, campaign_name=campaign["name"],
+                target_name=_target_name(conn, org_id, brand_id, a, campaign_name=campaign["name"]),
+                today=today,
+            ),
+        }
+        for a in detail["actions"]
+    ]
     return detail
 
 

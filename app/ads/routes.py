@@ -15,7 +15,17 @@ from pydantic import BaseModel
 
 import app.shared.web as web
 from app import workbench
-from app.ads import adapters, assets, brief, closeout, outcome, plan, repository, strategy
+from app.ads import (
+    adapters,
+    assets,
+    brief,
+    closeout,
+    judgment,
+    outcome,
+    plan,
+    repository,
+    strategy,
+)
 from app.ads.adapters import simulated
 from app.core import settings as coresettings
 
@@ -32,6 +42,33 @@ def list_campaigns(request: Request, brand_id: str):
     web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
     campaigns = repository.list_campaigns(web.conn, actor.org_id, brand_id)
     return {"campaigns": campaigns}
+
+
+@router.get("/brands/{brand_id}/home")
+def get_home(request: Request, brand_id: str):
+    """F04-I08：首頁四塊——一句整體判斷、四個計數、進行中的 Campaign 卡片（最多 6 張）、
+    最近做了什麼（最多 6 筆）。不 fetch 成效、不打模型、不寫任何東西。
+
+    `list_campaigns()` 沒有分頁，拿到的就是這個品牌的全部，所以在這裡數三行計數就是準的；
+    哪天它加了分頁，這裡要跟著改成 SQL COUNT（§0：多一句 `COUNT(*) FILTER (...)` 只是同一件
+    事的第二份寫法，先不寫）。
+    """
+    actor = web.require_actor(request)
+    web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
+    campaigns = repository.list_campaigns(web.conn, actor.org_id, brand_id)
+    counts = {
+        "running": sum(1 for c in campaigns if c["status"] == "live"),
+        "upcoming": sum(1 for c in campaigns if c["status"] in ("draft", "ready")),
+        "ended": sum(1 for c in campaigns if c["status"] in ("ended", "closed")),
+        "needs_decision": 0,  # 建議的產生端是 F05；F04 回誠實的空狀態，不是猜出來的數字。
+    }
+    home = {
+        "headline": judgment.brand_headline(counts),
+        "counts": counts,
+        "campaigns": [c for c in campaigns if c["status"] == "live"][:6],
+        "actions": repository.recent_actions(web.conn, actor.org_id, brand_id, limit=6),
+    }
+    return {"home": home}
 
 
 @router.get("/brands/{brand_id}/campaigns/{campaign_id}")
