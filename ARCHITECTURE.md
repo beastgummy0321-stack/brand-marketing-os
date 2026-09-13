@@ -57,6 +57,21 @@
         "frontend/src/lib/scheduleApi.ts",
         "supabase/migrations/*_schedule_*.sql"
       ]
+    },
+    "intake": {
+      "root": "app/intake",
+      "public": "app/intake/__init__.py",
+      "may_depend_on": [
+        "ads"
+      ],
+      "owns": [
+        "app/intake/**",
+        "app/tests/test_intake*.py",
+        "frontend/src/components/intake/**",
+        "frontend/src/lib/intakeApi.ts",
+        "frontend/src/lib/intakeT2Api.ts",
+        "supabase/migrations/*_intake_*.sql"
+      ]
     }
   },
   "resources": {
@@ -167,7 +182,6 @@
     "app/core/**",
     "app/dashboard/**",
     "app/identity/**",
-    "app/intake/**",
     "app/llm/**",
     "app/meta/**",
     "app/orders/**",
@@ -191,7 +205,9 @@
     "scripts/**",
     "archive/**",
     ".scratch/**",
-    ".worktrees/**"
+    ".worktrees/**",
+    "app/tests/test_brand_delete.py",
+    "app/tests/test_dashboard_guide_card_links.py"
   ],
   "legacy_facades": [
     "app/__init__.py",
@@ -229,7 +245,11 @@
     "app/shared/logging.py",
     "app/storage/__init__.py",
     "app/tests/conftest.py",
-    "app/tests/identity_test_helpers.py"
+    "app/tests/identity_test_helpers.py",
+    "app/core/net.py",
+    "app/brand_intelligence/background_job.py",
+    "app/brand_intelligence/customer_voice.py",
+    "app/llm/pricing.py"
   ],
   "verify": {
     "test": "uv run python -m pytest app/tests -q -n 8 --dist loadfile",
@@ -277,6 +297,18 @@ Autonomy is earned: observe → recommend → act with approval → bounded auto
 manual or simulated execution, zero writes to a live platform. Learning keeps its uncertainty:
 「看不出」 is a valid verdict and a correlation is never reported as a cause.
 
+**「不預設」 (settled 2026-09-14, F05).** The core loop carries no branch on platform, customer
+type, user role or outcome source. Those are **keys on rows** — `ads_delivery_group.channel_key`,
+`brand.conversion_goal` (`purchase`／`lead`／`booking`／`awareness`), a `product_economics` row's own
+numbers. Platform differences live in `app/ads/adapters/**` and in `app/ads/channels.py`, the one
+registry allowed to know a platform's name; anywhere else in `app/ads` a platform name in a string
+literal is a bug, machine-checked by `app/tests/test_ads_no_platform_literal.py` (`channels.py` and
+`outcome.ingest_meta` are the two named exceptions until they move behind the adapter interface).
+Nouns on screen come from the data's own labels — the channel's `label`, the conversion goal's label
+— shipped as text by the side that owns the rule (§5.3) and never re-spelled in the browser. There
+is no platform abstraction layer, no role system and no second data model: 「使用者」 is an identity
+(老闆／行銷／代理商), not a role, and the copy says 你.
+
 Every feature close answers one sentence: did this make the OS better at understanding, deciding,
 executing, learning and handing over — or did it add a feature?
 
@@ -315,7 +347,7 @@ label is its meaning; dropping it would save tokens by making the model guess. `
 
 ## 2. Managed modules and the legacy surface
 
-Managed modules today are `workbench`, `schedule` and `ads`. They follow the container rules: one
+Managed modules today are `workbench`, `schedule`, `ads` and `intake`. They follow the container rules: one
 root, one public entry (`app/<module>/__init__.py`), declared dependencies, no cycles, no import of
 the app shell. The machine check is `tools/check_architecture.py`, driven by the manifest above.
 
@@ -326,8 +358,20 @@ accounts, exact-name entity lookup, `daily_entity_spend`), `app/brand_intelligen
 `app/background/__init__.py`. It never imports `app.schedule` and never names another module's table
 in a string literal.
 
+`intake` (品牌建檔精靈) is promoted out of legacy on 2026-09-14 (F05) for one reason: it owns the
+**first link of the golden path**, so「legacy may shrink but never grow」would have forbidden the
+foundation work the product actually needs. The promotion was measured before it was made — with
+`intake` declared, `tools/check_architecture.py` reported seven violations, all of them imports that
+already existed and were simply undeclared: `app/core/net.py`, `app/brand_intelligence/background_job.py`,
+`app/brand_intelligence/customer_voice.py` and `app/llm/pricing.py` are now named legacy facades, and
+`test_brand_delete.py`／`test_dashboard_guide_card_links.py` join the individually-listed legacy tests
+(they reach into intake internals to seed rows). No code moved. Declaring those four facades records
+what was already true; it is not permission for `ads`／`workbench`／`schedule` to start reaching for
+them. `intake` reaches `ads` (`may_depend_on`) for one thing only — the 可投放檢查表 (§8) — and today
+that call is made by the browser, not by a Python import.
+
 Everything else under `app/` (core, shared, llm, identity, meta, brand_intelligence, brand_web,
-intake, orders, dashboard, storage, background, tools) plus `scripts/` is **legacy**: it works, it
+orders, dashboard, storage, background, tools) plus `scripts/` is **legacy**: it works, it
 is not governed by the container checker, and it may shrink but never grow. A managed module
 reaches legacy code only through a file listed in `legacy_facades` (in practice: the package entry
 or the module's `repository.py` / `gateway.py`). `may_depend_on` governs **managed modules only**:
@@ -366,8 +410,8 @@ owned by the backend module of the same capability (see `owns` above) and their 
 enforced by `frontend/.dependency-cruiser.cjs` (feature folders talk to each other only through
 `index.ts`; `layout/` is the shared kit), which runs inside the `verify.typecheck` command.
 `frontend/src/lib/**` is app shell except the per-module API clients (`workbenchApi.ts`,
-`scheduleApi.ts`), which each module owns; `frontend/e2e/**` is acceptance code that belongs to
-whichever ticket changes it.
+`scheduleApi.ts`, `adsApi.ts`, `intakeApi.ts`, `intakeT2Api.ts`), which each module owns;
+`frontend/e2e/**` is acceptance code that belongs to whichever ticket changes it.
 
 ## 3. Data ownership
 
@@ -376,6 +420,12 @@ campaign/period tables belong to `schedule`; `ads_campaign`, `ads_delivery_group
 `ads_action` and `ads_outcome_daily` belong to `ads`. Physical definitions live in the shared `supabase/migrations/` directory, one file
 per module prefix (`<timestamp>_<module>_<desc>.sql`); an applied migration is never edited, a
 correction is a new file.
+
+`product_economics` (and its `product_economics_version` history) stays in `brand_intelligence` and
+is the **one home of「一次轉換值多少錢」** for every kind of offering (§8). `intake` and `brand_web`
+both write it through `app.brand_intelligence.repository.save_product_economics`, never with their
+own SQL, and `ads` reads it through `get_product_economics`. No second table for services and no
+per-offering-type table: the kind of thing being sold is a row's numbers, not a schema.
 
 `learning_ledger` stays where it is — in `brand_intelligence`, which is legacy. It is brand
 knowledge shown in 品牌智庫, not ads bookkeeping, so `ads` does not own it and does not write it
@@ -406,7 +456,9 @@ without a planner decision.
 
 ## 4. The loop, end to end
 
-品牌建檔精靈 (`intake`) fills 品牌智庫 (`brand_intelligence`) → the user describes one goal in one
+品牌建檔精靈 (`intake`) fills 品牌智庫 (`brand_intelligence`) — five steps since F05 (2026-09-14):
+1 起始輸入 · 2 初步印象 · 3 賣什麼與數字 · 4 接工具 · 5 品牌知識, ending on the 可投放檢查表 (§8) →
+the user describes one goal in one
 sentence in 投放中心 (`ads`), which derives a draft Campaign carrying 為什麼做 (`goal_text`), 目標
 (`objective`) and 成功條件 (`success_criterion`) plus the ids of the brand and product rows it used
 → one recommended 策略 (新客／再行銷／探索 split, budget scenarios) → 採用策略 writes the delivery
@@ -690,3 +742,53 @@ against that image side by side. The shared patterns those screens compose — �
 Campaign 卡, 數字條, 時間軸, 佔位卡, 步驟指示, 摘要欄位卡 — are specified in
 `docs/design-system.md` §5.3 and implemented once in `frontend/src/components/ads/patterns/`;
 a page issue composes them and does not re-invent one.
+
+## 8. 品牌地基與可投放檢查表 — settled decisions (2026-09-14, F05)
+
+These are decided. A worker implements them; it does not re-open them.
+
+1. **One conversion value, one home.** Every offering — 商品 or 服務／名單 — is a `product` row with
+   one `product_economics` row. 「一次轉換值多少錢」 = `(售價 − 單位變動成本 − 運費) × 成交率`, and
+   成交率 is the new nullable `product_economics.close_rate` (NULL = 一次轉換就是一次成交, so a
+   goods row computes exactly as it did before F05). `app/ads/budget.py::breakeven_cpa` is the one
+   place that multiplication happens. 服務 declares 成交率 and 每單毛利; 運費 is 0, never NULL,
+   because「沒有運費」and「不知道運費」are different facts. There is **no brand-level 業務類型
+   column**: 商品／服務／兩者 is a control on the wizard's step 3 that decides which fields are
+   shown, and the durable answer is the offering rows themselves (`brand.industry` was dropped in
+   2026-08-29 for having no reader; this would have had one).
+2. **成效來源 is `brand.conversion_goal`**, which already exists (`purchase`／`lead`／`booking`／
+   `awareness`) and already maps to platform events in one place
+   (`app.meta.repository._CONVERSION_ACTION_PRIORITY`). The wizard's step 4 sets it; nothing else
+   asks. `ads_outcome_daily.purchases` therefore means 「這個品牌的成效目標被達成幾次」 — the column
+   keeps its name (its migration is applied), and every screen label for it comes from the brand's
+   conversion goal, so a 名單 brand reads 每筆名單成本 where a 購買 brand reads 每次購買成本. A new
+   `success_metric` value for leads would have been the same arithmetic under a second name, so
+   there is none: the metric stays `cpa`／`roas`／`purchases` and only its **label** varies (§0
+   「不預設」).
+3. **可投放檢查表 belongs to `ads`.** `app/ads/readiness.py`, exported as
+   `app.ads.launch_readiness(conn, org_id, brand_id)` from the module's public entry and served at
+   `GET /api/ads/brands/{brand_id}/readiness`. `ads` is the owner because it is the module that
+   answers「能不能投」 and it already reads all three inputs through declared facades
+   (`brand_intelligence` for offerings and economics, `channels.py` for the bound ad account,
+   `brand` for the conversion goal); the reverse — the wizard owning it — would need `ads` to import
+   `app.intake`, which LAYER_ORDER forbids. Three blocking items (至少一項要賣的東西且填了數字 ·
+   廣告目標已設定 · 廣告帳戶已接上並指定給這個品牌) and one non-blocking line (品牌知識條數). Every
+   line's text and its 下一步 link ship from the backend and are rendered verbatim (§5.3). Two
+   consumers: the wizard's completion screen and 投放中心's 建立 Campaign entry. **It never refuses**
+   — when something is missing the primary button becomes 「先補齊地基」 and 「還是要先建立」 stays.
+   No「N 條 confirmed 事實」threshold: facts affect copy quality, not whether money can be spent.
+4. **The wizard writes the facts it collects.** Measured 2026-09-14 on the drill data: the only
+   caller of `repository.create_items` is `state.py:284`, fed by the paste step — so **the external
+   AI paste is the single writer of `brand_fact`／`product_fact`**, and a user who stops before it
+   ends with zero knowledge however many questions they answered (常春健康: paste done → 11 items,
+   4 brand_fact + 3 product_fact confirmed, 0 `product_economics`; MOVE Daily: stopped at step 3,
+   0 items, 0 facts, economics only because the user found the product page herself). F05 closes
+   this by having the system run the research itself through the same prompt (`script.build_prompt`)
+   and the same parser (`paste_parse`), with the external-AI handoff kept as a collapsed advanced
+   option. No new prompt corpus, no second parser, no new fact writer.
+5. **沒有迴圈歷史時，預算讀廣告帳戶的歷史.** `ads.repository.budget_history` returns
+   `{"source": "ads_loop"|"meta_account", ...}`: when no closed ads-loop campaign has settled spend,
+   it falls back to the brand's own connected ad account (近 30 天每日花費 + CPA, read through
+   `channels.py` → `app.meta.repository.spend_summary` with the brand's `conversion_goal`). The
+   caption names which one it used. Nothing tracked → honest cold start, unchanged. **No model reads
+   ad history** (ADR 0067): every number here is program-computed and the model only phrases it.
