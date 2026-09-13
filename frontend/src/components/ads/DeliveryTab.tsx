@@ -18,7 +18,6 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/layout/ui/dropdown-menu";
-import { fetchMetaAccounts } from "@/lib/metaApi";
 import { COORDINATE_DIMENSIONS, fetchCoordinates, type Coordinate, type CoordinateDimension } from "@/lib/coordinatesApi";
 import {
   adoptStrategy,
@@ -37,6 +36,7 @@ import {
   type DeliveryGroupRow,
   type StrategyRole,
 } from "@/lib/adsApi";
+import { fetchChannels, type Channel } from "@/lib/adsLaunchApi";
 
 const ROLE_LABEL: Record<StrategyRole, string> = { new: "新客", retarget: "再行銷", explore: "探索" };
 const LOCAL_STATE_LABEL: Record<string, string> = {
@@ -44,13 +44,6 @@ const LOCAL_STATE_LABEL: Record<string, string> = {
   bound: "已綁定",
   detached: "已解除",
   retired: "已停用",
-};
-const CHANNEL_LABEL: Record<string, string> = {
-  meta: "Meta",
-  google_ads: "Google Ads",
-  tiktok: "TikTok",
-  shopee: "蝦皮",
-  momo: "momo",
 };
 
 type SelectedKey = `group:${string}` | `ad:${string}`;
@@ -75,7 +68,7 @@ export function DeliveryTab({
   const [adoptError, setAdoptError] = useState<string | null>(null);
   const [selected, setSelected] = useState<SelectedKey | null>(null);
   const [vocabulary, setVocabulary] = useState<Coordinate[]>([]);
-  const [metaConnected, setMetaConnected] = useState<boolean | null>(null);
+  const [channelInfo, setChannelInfo] = useState<Channel[]>([]);
   const [addGroupOpen, setAddGroupOpen] = useState(false);
   const [addAdOpen, setAddAdOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<
@@ -86,12 +79,11 @@ export function DeliveryTab({
 
   useEffect(() => {
     fetchCoordinates(brandId).then(setVocabulary).catch(() => setVocabulary([]));
-    // 通路是否「已接上」只有 Meta 查得到（`app/ads/channels.py`）；沒有把它接進
-    // Campaign 的 payload 裡，這裡改讀既有的 `/api/meta/accounts`（設定頁同一支），
-    // 不碰 app/ads 後端。
-    fetchMetaAccounts()
-      .then((data) => setMetaConnected(data.accounts.some((a) => a.bound_brand_ids.includes(brandId))))
-      .catch(() => setMetaConnected(null));
+    // F05-I05：通路清單／連線狀態一律讀 app/ads/channels.py，不再繞去 /api/meta/accounts
+    // （§0「不預設」：畫面不准自己判斷哪個通路查得到連線狀態）。
+    fetchChannels(brandId)
+      .then(setChannelInfo)
+      .catch(() => setChannelInfo([]));
   }, [brandId]);
 
   const firstGroupId = c.groups[0]?.id;
@@ -176,7 +168,7 @@ export function DeliveryTab({
     );
   }
 
-  const channels = [...new Set(c.groups.map((g) => g.channel_key))];
+  const channelKeys = [...new Set(c.groups.map((g) => g.channel_key))];
   const selectedGroup = effectiveSelected?.startsWith("group:")
     ? c.groups.find((g) => `group:${g.id}` === effectiveSelected) ?? null
     : null;
@@ -256,20 +248,17 @@ export function DeliveryTab({
           <div className="flex items-center gap-2 py-2 text-sm font-semibold">
             <Layers size={14} /> {c.name}
           </div>
-          {channels.map((key) => (
-            <div key={key} className="flex items-center gap-2 py-1.5 pl-4 text-sm text-muted-foreground">
-              <span>Ⓜ {CHANNEL_LABEL[key] ?? key}</span>
-              {key === "meta" ? (
-                metaConnected === null ? null : (
-                  <Badge variant={metaConnected ? "default" : "outline"}>
-                    {metaConnected ? "已接上" : "未接上"}
-                  </Badge>
-                )
-              ) : (
-                <Badge variant="outline">未接上</Badge>
-              )}
-            </div>
-          ))}
+          {channelKeys.map((key) => {
+            const info = channelInfo.find((c2) => c2.key === key);
+            return (
+              <div key={key} className="flex items-center gap-2 py-1.5 pl-4 text-sm text-muted-foreground">
+                <span>{info?.label ?? key}</span>
+                {info && (
+                  <Badge variant={info.connected ? "default" : "outline"}>{info.state_text}</Badge>
+                )}
+              </div>
+            );
+          })}
           {c.groups.map((g) => (
             <div key={g.id}>
               <button
@@ -310,6 +299,7 @@ export function DeliveryTab({
         <GroupPanel
           brandId={brandId}
           group={selectedGroup}
+          channels={channelInfo}
           onSaved={replaceGroup}
           onDelete={() => setDeleteTarget({ kind: "group", row: selectedGroup })}
         />
@@ -392,11 +382,13 @@ function BoundNotice({ localState }: { localState: string }) {
 function GroupPanel({
   brandId,
   group: g,
+  channels,
   onSaved,
   onDelete,
 }: {
   brandId: string;
   group: DeliveryGroupRow;
+  channels: Channel[];
   onSaved: (group: DeliveryGroupRow) => void;
   onDelete: () => void;
 }) {
@@ -471,7 +463,7 @@ function GroupPanel({
           <label className="flex flex-col gap-1 text-sm">
             投放平台
             <span className="flex h-9 items-center text-sm text-muted-foreground">
-              {CHANNEL_LABEL[g.channel_key] ?? g.channel_key}
+              {channels.find((c2) => c2.key === g.channel_key)?.label ?? g.channel_key}
             </span>
           </label>
           <label className="flex flex-col gap-1 text-sm">

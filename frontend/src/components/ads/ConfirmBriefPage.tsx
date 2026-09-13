@@ -26,16 +26,7 @@ import {
   type CampaignDetail,
   type CampaignFieldSources,
 } from "@/lib/adsApi";
-
-/** F04-I12：`constraints_json.platform` 的中文對照——刻意不重用 `DeliveryTab.tsx` 的
- * `CHANNEL_LABEL`（規劃師裁決：小對照表寫死在各自的檔案裡，不跨檔案 import 增加耦合）。 */
-const PLATFORM_OPTIONS: { key: string; label: string }[] = [
-  { key: "meta", label: "Meta" },
-  { key: "google_ads", label: "Google Ads" },
-  { key: "tiktok", label: "TikTok" },
-  { key: "shopee", label: "蝦皮" },
-  { key: "momo", label: "momo" },
-];
+import { fetchChannels, type Channel } from "@/lib/adsLaunchApi";
 
 const OBJECTIVE_OPTIONS = ["購買", "加購物車", "名單", "流量", "知名度"];
 
@@ -76,6 +67,7 @@ export function ConfirmBriefPage({ brandId, campaignId }: { brandId: string; cam
   const location = useLocation() as { state?: { parseWarning?: string } };
   const [campaign, setCampaign] = useState<CampaignDetail | null>(null);
   const [products, setProducts] = useState<ProductListItem[]>([]);
+  const [channels, setChannels] = useState<Channel[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [editing, setEditing] = useState<FieldKey | null>(null);
@@ -97,6 +89,14 @@ export function ConfirmBriefPage({ brandId, campaignId }: { brandId: string; cam
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
+      });
+    // 通路清單讀失敗只讓「平台」欄位沒有下拉可選、顯示現值——不拖垮整頁（Done 5）。
+    fetchChannels(brandId)
+      .then((rows) => {
+        if (!cancelled) setChannels(rows);
+      })
+      .catch(() => {
+        /* 靜默：channels 維持空陣列，平台欄位不給編輯 */
       });
     return () => {
       cancelled = true;
@@ -212,15 +212,15 @@ export function ConfirmBriefPage({ brandId, campaignId }: { brandId: string; cam
           <FieldCard
             icon={Megaphone}
             label="平台"
-            value={PLATFORM_OPTIONS.find((p) => p.key === constraints.platform)?.label ?? ""}
+            value={channels.find((c) => c.key === constraints.platform)?.label ?? constraints.platform ?? ""}
             emptyText="尚未指定"
             source={sources.platform}
             editing={editing === "platform"}
-            onEdit={() => setEditing("platform")}
+            onEdit={channels.length > 0 ? () => setEditing("platform") : undefined}
           >
             <SelectField
-              options={PLATFORM_OPTIONS}
-              initial={constraints.platform ?? ""}
+              options={channels.map((c) => ({ key: c.key, label: c.label }))}
+              initial={constraints.platform ?? channels[0]?.key ?? ""}
               onCancel={() => setEditing(null)}
               onSave={(value) => save({ constraints_json: { ...constraints, platform: value } })}
             />

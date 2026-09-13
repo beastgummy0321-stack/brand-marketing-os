@@ -8,7 +8,7 @@ Private to app/ads (container contract §1): only `routes.py` imports this modul
 
 from datetime import date
 
-from app.ads import budget
+from app.ads import budget, channels
 from app.ads import repository as ads_repo
 from app.core import approval as approval_mod
 from app.core.db import APP_DIR
@@ -185,11 +185,14 @@ def adopt_strategy(conn, org_id: str, brand_id: str, campaign_id: str, *, actor:
     }
     groups_by_role = {group["role"]: group for group in validated_groups}
 
+    declared_platform = (campaign.get("constraints_json") or {}).get("platform")
+    channel_key = channels.default_channel_key(conn, org_id, brand_id, declared_platform)
+
     for role in roles:
         plan_group = groups_by_role[role]
         group_row = ads_repo.create_group(
-            conn, org_id, brand_id, campaign_id, channel_key="meta", name=plan_group["name"],
-            role=role, daily_budget=amount_by_role[role],
+            conn, org_id, brand_id, campaign_id, channel_key=channel_key,
+            name=plan_group["name"], role=role, daily_budget=amount_by_role[role],
         )
         for ad in plan_group["ads"]:
             snapshot = {
@@ -275,9 +278,11 @@ def create_group(conn, org_id: str, brand_id: str, campaign_id: str, *, name: st
         raise ValueError("campaign_unknown")
     other_total = ads_repo.group_budget_total(conn, org_id, brand_id, campaign_id)
     _check_budget_ceiling(conn, org_id, brand_id, campaign_id, other_total + daily_budget)
+    declared_platform = (campaign.get("constraints_json") or {}).get("platform")
+    channel_key = channels.default_channel_key(conn, org_id, brand_id, declared_platform)
     return ads_repo.create_group(
-        conn, org_id, brand_id, campaign_id, channel_key="meta", name=name.strip(), role=role,
-        daily_budget=daily_budget, start_date=_parse_date(start_date),
+        conn, org_id, brand_id, campaign_id, channel_key=channel_key, name=name.strip(),
+        role=role, daily_budget=daily_budget, start_date=_parse_date(start_date),
         end_date=_parse_date(end_date),
     )
 

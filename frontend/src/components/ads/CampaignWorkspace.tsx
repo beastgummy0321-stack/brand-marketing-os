@@ -14,6 +14,7 @@ import {
 } from "@/components/layout/ui/dropdown-menu";
 import { useWorkspace } from "@/components/layout/WorkspaceContext";
 import { getCampaign, type AdapterKey, type CampaignDetail } from "@/lib/adsApi";
+import { fetchChannels, type Channel } from "@/lib/adsLaunchApi";
 import { STATUS_LABEL, STATUS_TONE } from "./AdsHomePage";
 import { OverviewTab } from "./OverviewTab";
 import { StrategyTab } from "./StrategyTab";
@@ -57,6 +58,21 @@ export function CampaignWorkspace({
     { status: "loading" } | { status: "error"; message: string } | { status: "ready"; campaign: CampaignDetail }
   >({ status: "loading" });
   const [publishAdapter, setPublishAdapter] = useState<AdapterKey | null>(null);
+  const [channels, setChannels] = useState<Channel[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchChannels(brandId)
+      .then((rows) => {
+        if (!cancelled) setChannels(rows);
+      })
+      .catch(() => {
+        /* 靜默：讀失敗就不印通路徽章，不是整頁壞掉 */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [brandId]);
 
   const load = useCallback(() => {
     setState({ status: "loading" });
@@ -146,7 +162,13 @@ export function CampaignWorkspace({
             {campaign && (
               <div className="flex items-center gap-2 text-sm text-muted-foreground">
                 <span>{periodLabel(campaign)}</span>
-                <Badge variant="outline">● Meta</Badge>
+                {campaign.groups[0] && (
+                  <Badge variant="outline">
+                    ●{" "}
+                    {channels.find((c) => c.key === campaign.groups[0].channel_key)?.label
+                      ?? campaign.groups[0].channel_key}
+                  </Badge>
+                )}
               </div>
             )}
           </div>

@@ -33,6 +33,33 @@ def connection_state(conn, org_id: str, brand_id: str, channel_key: str) -> str:
     return NOT_CONNECTED
 
 
+def list_channels(conn, org_id: str, brand_id: str) -> list[dict]:
+    """F05-I05：畫面要的通路清單——順序照 `CHANNELS`，每一列帶 `connected`（bool）與
+    `state_text`（「已接上」／「未接上」，逐字給畫面印，不必知道平台名字）。"""
+    result = []
+    for channel in CHANNELS:
+        state = connection_state(conn, org_id, brand_id, channel["key"])
+        result.append({
+            "key": channel["key"], "label": channel["label"],
+            "connected": state == CONNECTED,
+            "state_text": "已接上" if state == CONNECTED else "未接上",
+        })
+    return result
+
+
+def default_channel_key(conn, org_id: str, brand_id: str, declared: str | None) -> str:
+    """F05-I05：`app/ads/plan.py` 展開投放組時要一個通路 key，但不准自己寫死 `"meta"`。
+    `declared`（Campaign 的 `constraints_json.platform`）在 `CHANNELS` 裡就用它；否則用這個
+    品牌已接上的第一個通路；都沒有就退回 `CHANNELS[0]`（平台名字只准住在這個檔）。"""
+    valid_keys = {c["key"] for c in CHANNELS}
+    if declared in valid_keys:
+        return declared
+    for channel in CHANNELS:
+        if connection_state(conn, org_id, brand_id, channel["key"]) == CONNECTED:
+            return channel["key"]
+    return CHANNELS[0]["key"]
+
+
 def account_state(conn, org_id: str, brand_id: str) -> dict | None:
     """F05-I04：可投放檢查表要問「這個品牌有沒有一個接上的廣告帳戶」而不必知道是哪個平台。
     目前只有 `meta` 真的接得上（同 `connection_state`），其餘四個通路沒有帳戶資料，回 `None`

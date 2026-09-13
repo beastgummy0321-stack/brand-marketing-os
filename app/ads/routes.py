@@ -19,6 +19,7 @@ from app.ads import (
     adapters,
     assets,
     brief,
+    channels,
     closeout,
     judgment,
     outcome,
@@ -54,6 +55,14 @@ def get_readiness(request: Request, brand_id: str):
     actor = web.require_actor(request)
     web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
     return {"readiness": readiness.launch_readiness(web.conn, actor.org_id, brand_id)}
+
+
+@router.get("/brands/{brand_id}/channels")
+def get_channels(request: Request, brand_id: str):
+    """F05-I05：通路清單——畫面不准自己寫死平台名字，一律讀這支。"""
+    actor = web.require_actor(request)
+    web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
+    return {"channels": channels.list_channels(web.conn, actor.org_id, brand_id)}
 
 
 @router.get("/brands/{brand_id}/campaigns")
@@ -568,7 +577,6 @@ def _enriched_campaign(conn, org_id: str, brand_id: str, campaign_id: str) -> di
 _PUBLISH_ERRORS = {
     "campaign_unknown": (404, CAMPAIGN_UNKNOWN_MESSAGE),
     "adapter_unknown": (400, "找不到這個發布方式。"),
-    "auto_meta_not_connected": (400, adapters.AUTO_META_NOT_CONNECTED_MESSAGE),
     "no_groups_to_publish": (400, "這個活動還沒有投放組，先採用策略產出投放組再發布。"),
 }
 
@@ -606,7 +614,11 @@ def publish_campaign(request: Request, brand_id: str, campaign_id: str, body: Pu
         chosen.publish(web.conn, actor.org_id, brand_id, campaign_id, actor=str(actor.user_id))
     except ValueError as exc:
         code = str(exc)
-        status, message = _PUBLISH_ERRORS.get(code, (400, code))
+        # 唯一沒進 `_PUBLISH_ERRORS` 的例外碼是 `auto_meta` adapter 保留位置的那個（F03-I09），
+        # 這裡不重複那個字面字串（§0：平台名字只准住在 channels.py／adapters/**）——直接問
+        # adapter 自己保留的訊息。
+        fallback = (400, adapters.AUTO_META_NOT_CONNECTED_MESSAGE)
+        status, message = _PUBLISH_ERRORS.get(code, fallback)
         raise web.ApiError(status, code, message) from exc
     enriched = _enriched_campaign(web.conn, actor.org_id, brand_id, campaign_id)
     if enriched is None:
