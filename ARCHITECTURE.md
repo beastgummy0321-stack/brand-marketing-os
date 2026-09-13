@@ -217,6 +217,7 @@
     "app/brand_intelligence/__init__.py",
     "app/brand_intelligence/repository.py",
     "app/brand_intelligence/personas.py",
+    "app/brand_intelligence/benchmarks.py",
     "app/core/__init__.py",
     "app/core/db.py",
     "app/core/config.py",
