@@ -35,9 +35,11 @@ from app.core import db as coredb
 from app.core import rule_cards, vocab
 from app.core import settings as coresettings
 from app.identity import ActorContext
+from app.llm import methodology, providers
 from app.orders import repository as orders_repo
 from app.schedule import creative as creative_mod
 from app.schedule import diagnosis
+from app.schedule import jobs as schedule_jobs
 from app.schedule import routes as schedule_routes
 from app.schedule import state as schedule_state
 
@@ -368,6 +370,78 @@ class AdoptSuggestionTest(unittest.TestCase):
         self.assertEqual(rule["severity"], "soft")
         self.assertIsNone(rule["source_reference_id"])
         self.assertIn(started_at.date().isoformat(), rule["content"])  # 來源日期那句
+
+
+class DiagnosisPromptCachingTest(unittest.TestCase):
+    """票 F04-I05：三個 lens 共用的前四段標上 `cache_control`，只算一次，逐字內容跟改動前
+    完全相同——省的是 Anthropic 快取的錢，不是 prompt 的內容。"""
+
+    def _new_brand(self) -> tuple[str, str]:
+        org_id = f"org_diag_cache_{uuid4().hex[:8]}"
+        web.conn.execute(
+            "INSERT INTO organisation (id, name, kind) VALUES (%s, %s, 'personal')"
+            " ON CONFLICT (id) DO NOTHING",
+            (org_id, org_id),
+        )
+        web.conn.commit()
+        brand_id = bi_repo.create_brand(
+            web.conn, org_id=org_id, name=f"測試品牌{uuid4().hex[:6]}",
+            client_name=None, actor="測試員",
+        )["id"]
+        return org_id, brand_id
+
+    def test_shared_prefix_is_cached_and_byte_identical_to_the_old_single_string_prompt(self):
+        org_id, brand_id = self._new_brand()
+        fake = providers.FakeProvider(providers.ProviderResponse(
+            output_text="這是一段判讀說明。\n\n```json\n{\"suggestions\": []}\n```",
+            structured=None, usage=providers.Usage(input_tokens=1, output_tokens=1),
+            stop_reason="end_turn",
+        ))
+        original_provider = schedule_jobs.PROVIDER
+        schedule_jobs.PROVIDER = fake
+        try:
+            schedule_jobs.schedule_diagnosis(org_id, brand_id)
+        finally:
+            schedule_jobs.PROVIDER = original_provider
+
+        self.assertEqual(len(fake.calls), 3)  # 三個 lens 各打一次
+
+        # 斷言 1：三次呼叫共用前綴 [0]["text"] 逐字相同、都帶 cache_control；[1]["text"]
+        # （role_text(lens)）三次各不相同。
+        shared_texts = [call["messages"][0]["content"][0]["text"] for call in fake.calls]
+        self.assertEqual(len(set(shared_texts)), 1, "三次呼叫的共用前綴必須逐字相同")
+        for call in fake.calls:
+            block = call["messages"][0]["content"][0]
+            self.assertEqual(block["cache_control"], {"type": "ephemeral"})
+        role_texts = [call["messages"][0]["content"][1]["text"] for call in fake.calls]
+        self.assertEqual(len(set(role_texts)), 3, "三個 lens 的角色段必須各不相同")
+
+        # 斷言 2：攤平後的全文跟改動前「一段字串」的 prompt 逐字相同——證明省的是錢不是內容。
+        performance_mod_result = _performance_via_schedule(org_id, brand_id)
+        compressed = diagnosis.compress(performance_mod_result, diagnosis.breakeven_roas(
+            web.conn, org_id, brand_id,
+        ))
+        reminders = diagnosis.reminders_text(diagnosis.tree_reminders(web.conn, brand_id))
+        methodology_result = methodology.compile(
+            web.conn, schedule_state.DIAGNOSIS_METHODOLOGY_TASK_LABELS, brand_id=brand_id
+        )
+        for lens, call in zip(diagnosis.LENSES, fake.calls, strict=True):
+            expected = "\n\n".join(
+                section for section in
+                (methodology_result.text, compressed, reminders, None,
+                 diagnosis.role_text(lens)) if section
+            )
+            flattened = "".join(
+                block["text"] for block in call["messages"][0]["content"]
+            )
+            self.assertEqual(flattened, expected)
+
+
+def _performance_via_schedule(org_id: str, brand_id: str) -> dict:
+    """跟 `jobs.schedule_diagnosis()` 讀同一支——不重造第二份，讀 `app.schedule.performance`
+    的既有公開函式。"""
+    from app.schedule import performance as performance_mod
+    return performance_mod.brand_creative_performance(web.conn, org_id, brand_id)
 
 
 if __name__ == "__main__":
