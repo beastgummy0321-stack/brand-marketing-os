@@ -9,7 +9,6 @@ import { Button } from "./ui/button";
 const LABELS: Record<string, string> = {
   library: "品牌智庫",
   products: "產品",
-  schedule: "檔期規劃",
   ads: "投放中心",
   workbench: "素材工作檯",
   orders: "訂單與顧客",
