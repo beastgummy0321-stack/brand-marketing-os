@@ -100,9 +100,11 @@ async def brand_start(request: Request):
     client_name = clean(str(form.get("client_name") or ""))
     brand = repo.create_brand(web.conn, org_id=actor.org_id, name=brand_name,
                                client_name=client_name or None, actor=str(actor.user_id))
-    draft = state.start_or_quick(web.conn, brand["id"], brand_name, description=description,
-                                 urls=urls, photos=photos, actor=str(actor.user_id))
-    return {"brand_id": brand["id"], "quick": draft is None}
+    state.start_draft(web.conn, brand["id"], brand_name, description=description,
+                      urls=urls, photos=photos, actor=str(actor.user_id))
+    # quick 恆為 False（2026-09-14 起草稿永遠建立）；留著這個鍵只因為
+    # frontend/src/lib/intakeApi.ts 還在讀它，那個檔另有票在動，不在這張票拿掉。
+    return {"brand_id": brand["id"], "quick": False}
 
 
 @router.post("/api/intake/brands/{brand_id}/restart")
@@ -120,9 +122,9 @@ async def brand_restart(request: Request, brand_id: str):
     new_photos = state.resolve_photo_tokens([str(t) for t in form.getlist("photo_tokens")])
     carried = state.prev_photos(ir.get_latest_completed_draft(web.conn, brand_id))
     photos = carried + new_photos
-    draft = state.start_or_quick(web.conn, brand_id, brand["name"], description=description,
-                                 urls=urls, photos=photos, actor=str(actor.user_id))
-    return {"quick": draft is None}
+    state.start_draft(web.conn, brand_id, brand["name"], description=description,
+                      urls=urls, photos=photos, actor=str(actor.user_id))
+    return {"quick": False}
 
 
 def _is_restart(brand_id: str, draft: dict) -> bool:
@@ -351,11 +353,7 @@ def scan_skip(request: Request, brand_id: str):
     actor = require_actor(request)
     require_brand(brand_id, actor)
     draft = state.require_draft(brand_id)
-    draft["scan_done"] = True
-    draft["scan_impressions"] = []
-    draft["scan_products"] = []
-    draft["product_card_drafts"] = []
-    draft["url_results"] = []
+    state.skip_scan(draft)
     state.save(draft)
     return Response(status_code=204)
 

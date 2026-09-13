@@ -242,15 +242,31 @@ def prev_photos(last_draft_row: dict | None) -> list:
     ]
 
 
-def start_or_quick(conn, brand_id: str, brand_name: str, *, description: str, urls: list,
-                    photos: list, actor: str) -> dict | None:
-    """S4.9／S4.10 共用判斷：描述／網址／照片三者皆空＝陽春路徑，不建草稿（回傳 None）；
-    否則建立草稿並回傳。呼叫端（HTML 表單／JSON API）先各自建好／取得品牌，這裡只管
-    「建不建草稿」這一刀，不重複寫兩次（CLAUDE.md 第五節：同一能力只准一條代碼路徑）。"""
+def skip_scan(draft: dict) -> None:
+    """把初掃標成做完，不留任何偵測結果——不呼叫模型（`/scan/skip` 端點與『起始輸入
+    沒東西可掃』共用同一組賦值，CLAUDE.md 第五節：同一能力只准一條代碼路徑）。"""
+    draft["scan_done"] = True
+    draft["scan_impressions"] = []
+    draft["scan_products"] = []
+    draft["product_card_drafts"] = []
+    draft["url_results"] = []
+
+
+def start_draft(conn, brand_id: str, brand_name: str, *, description: str, urls: list,
+                photos: list, actor: str) -> dict:
+    """S4.9／S4.10 共用判斷：草稿永遠建立（2026-09-14 修法——F05 之後精靈第 3／4／5 步
+    （賣什麼與數字／接工具／品牌知識）跟掃描無關，『沒東西可掃』不再等於『沒事做』，
+    S4.9 時代『陽春路徑不建草稿』的假設已經不成立）。描述／網址／照片三者皆空時，建完
+    草稿後照 `skip_scan` 把初掃標成做完、停在第 3 步；這條路徑上不准有任何模型呼叫，
+    『不花錢』的性質原封不動保住。呼叫端（JSON API）先各自建好／取得品牌，這裡只管
+    「建了草稿之後要不要略過初掃」這一刀，不重複寫兩次。"""
+    draft = new_draft(brand_id, brand_name, description=description, urls=urls, photos=photos,
+                      actor=actor, conn=conn)
     if not description and not urls and not photos:
-        return None
-    return new_draft(brand_id, brand_name, description=description, urls=urls, photos=photos,
-                     actor=actor, conn=conn)
+        skip_scan(draft)
+        draft["step"] = 3
+        save(draft, conn)
+    return draft
 
 
 def apply_paste(draft: dict, paste_input, conn=None) -> int | None:

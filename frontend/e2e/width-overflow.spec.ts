@@ -65,13 +65,16 @@ test("15 條路由（扣 /accept-invite）在 1280 寬不橫向溢出", async ({
   await assertNoOverflow("/intake/new（投放史二選一）");
   await page.getByRole("button", { name: "建立品牌並開始初掃" }).click();
 
-  await expect(page).toHaveURL(/\/app\/brands\/brd_/);
+  // 沒東西可掃，草稿直接停在精靈第 3 步，網址是 /intake 不是品牌頁根。
+  await expect(page).toHaveURL(/\/app\/brands\/brd_.+\/intake/);
   const brandId = new URL(page.url()).pathname.split("/")[3];
-  await assertNoOverflow("/brands/:brandId");
 
   // --- /brands/:brandId/intake ------------------------------------------------
-  await page.goto(`/app/brands/${brandId}/intake`);
   await assertNoOverflow("/brands/:brandId/intake");
+
+  // --- /brands/:brandId --------------------------------------------------------
+  await page.goto(`/app/brands/${brandId}`);
+  await assertNoOverflow("/brands/:brandId");
 
   // --- /brands/:brandId/intake/history（票 past-ads/04，ADR 0067）------------------
   await page.goto(`/app/brands/${brandId}/intake/history`);
