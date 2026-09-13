@@ -37,6 +37,7 @@
         "app/tests/test_ads*.py",
         "frontend/src/components/ads/**",
         "frontend/src/lib/adsApi.ts",
+        "frontend/src/lib/adsLaunchApi.ts",
         "supabase/migrations/*_ads_*.sql"
       ]
     },
@@ -413,7 +414,10 @@ owned by the backend module of the same capability (see `owns` above) and their 
 enforced by `frontend/.dependency-cruiser.cjs` (feature folders talk to each other only through
 `index.ts`; `layout/` is the shared kit), which runs inside the `verify.typecheck` command.
 `frontend/src/lib/**` is app shell except the per-module API clients (`workbenchApi.ts`,
-`scheduleApi.ts`, `adsApi.ts`, `intakeApi.ts`, `intakeT2Api.ts`), which each module owns;
+`scheduleApi.ts`, `adsApi.ts`, `adsLaunchApi.ts`, `intakeApi.ts`, `intakeT2Api.ts`), which each
+module owns — `adsLaunchApi.ts` is `ads`' second client (F05-I05 split it out when `adsApi.ts`
+passed the 800-line convention; a module may own more than one client, and `intake` reads it
+because `intake.may_depend_on = ["ads"]`);
 `frontend/e2e/**` is acceptance code that belongs to whichever ticket changes it.
 
 ## 3. Data ownership
