@@ -15,7 +15,7 @@ import statistics
 from datetime import date, timedelta
 from typing import cast
 
-from app.ads import judgment
+from app.ads import channels, judgment
 from app.brand_intelligence import repository as bi_repo
 from app.core import cleanup
 from app.core import settings as coresettings
@@ -379,12 +379,17 @@ def campaign_detail(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str
 
 
 def budget_history(conn: _AnyConn, org_id: str, brand_id: str) -> dict | None:
-    """F03-I05: `app.ads.budget.scenarios()` 要吃的 `history` dict，`None` 代表這個品牌還沒有
-    足夠的已結算花費——冷啟動，不是給一個缺 `cpa` 的半吊子 dict（§0「Never pass a partial
-    dict」）。`cpa` = 近 30 天每日 CPA 的中位數（只算 `entity_kind='group'` 的列，跟
+    """F03-I05／F05-I11: `app.ads.budget.scenarios()` 要吃的 `history` dict，`None` 代表這個
+    品牌完全沒有花費可以參考——冷啟動，不是給一個缺 `cpa` 的半吊子 dict（§0「Never pass a
+    partial dict」）。`cpa` = 近 30 天每日 CPA 的中位數（只算 `entity_kind='group'` 的列，跟
     `_outcome_totals` 同一條「money totals belong to the group level」規則），
     `last_daily_budget` = 最近一個 `status='closed'` Campaign 的投放組日預算合計。用
-    `coresettings.today_for_org` 而非機器的 `date.today()`（`app/core/settings.py:293`）。"""
+    `coresettings.today_for_org` 而非機器的 `date.today()`（`app/core/settings.py:293`）。
+
+    F05-I11：這個品牌自己的迴圈（`ads_outcome_daily`）沒有已結案的花費時，退回讀它綁的廣告
+    帳戶近 30 天真實花費（`app.ads.channels.account_spend_history`，平台名字只住在
+    `channels.py`）——「投放過但還沒在新迴圈裡結案」不等於「沒投放過」（演練四 V-13）。帳戶
+    也沒有花費才是誠實冷啟動。"""
     today = coresettings.today_for_org(conn, org_id=org_id)
     since = today - timedelta(days=30)
     daily_rows = conn.execute(
@@ -398,7 +403,7 @@ def budget_history(conn: _AnyConn, org_id: str, brand_id: str) -> dict | None:
         for row in daily_rows if row["purchases"]
     ]
     if not daily_cpas:
-        return None
+        return _account_history(conn, org_id, brand_id)
 
     closed = conn.execute(
         "SELECT id FROM ads_campaign WHERE org_id = %s AND brand_id = %s AND status = 'closed'"
@@ -406,7 +411,7 @@ def budget_history(conn: _AnyConn, org_id: str, brand_id: str) -> dict | None:
         (org_id, brand_id),
     ).fetchone()
     if closed is None:
-        return None
+        return _account_history(conn, org_id, brand_id)
     total_row = conn.execute(
         "SELECT COALESCE(SUM(daily_budget), 0) AS total FROM ads_delivery_group"
         " WHERE org_id = %s AND campaign_id = %s",
@@ -426,6 +431,27 @@ def budget_history(conn: _AnyConn, org_id: str, brand_id: str) -> dict | None:
         "last_daily_budget": float(total_row["total"]),
         "sample_days": len(daily_cpas),
         "sample_ads": sample_ads_row["n"],
+        "source": "ads_loop",
+        "source_text": "上一期日預算",
+    }
+
+
+def _account_history(conn: _AnyConn, org_id: str, brand_id: str) -> dict | None:
+    """F05-I11: 迴圈自己沒有已結案花費時的退路——讀這個品牌綁的廣告帳戶近 30 天真實花費。
+    `conversion_goal` 只在這裡讀一次（`app.brand_intelligence.repository.get_brand` 既有
+    facade），CPA 該用哪個轉換事件由它決定。"""
+    brand = bi_repo.get_brand(conn, brand_id)
+    conversion_goal = brand["conversion_goal"] if brand else None
+    hist = channels.account_spend_history(conn, org_id, brand_id, conversion_goal)
+    if hist is None or hist["daily_spend"] <= 0:
+        return None
+    return {
+        "last_daily_budget": round(hist["daily_spend"]),
+        "cpa": hist["cpa"],
+        "sample_days": 30,
+        "sample_ads": None,
+        "source": channels.ACCOUNT_SOURCE,
+        "source_text": f"{hist['channel_label']} 近 30 天平均日花費",
     }
 
 

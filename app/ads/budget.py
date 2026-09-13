@@ -119,18 +119,21 @@ def _cold_start_scenarios(target: float | None, product_id: str | None, days: in
 def _history_scenarios(history: dict, days: int) -> dict:
     last_daily = float(history["last_daily_budget"])
     cpa = history.get("cpa")
+    base_text = history.get("source_text") or "上一期日預算"
     scenario_rows = []
     for key, label, mult in _HISTORY_MULTIPLIERS:
         daily = round(last_daily * mult)
         total = round(daily * days) if days else None
         scenario_rows.append({
             "key": key, "label": label, "daily": daily, "total": total,
-            # F03-I05 corrects this caption: the multiplication is 上一期日預算 x0.6/1/1.6 —
-            # the 30-day median CPA is context in `basis`, never a factor in this arithmetic.
-            "caption": f"上一期日預算 NT${round(last_daily)} ×{mult:g}",
+            # F03-I05 corrects this caption: the multiplication is base x0.6/1/1.6 — the
+            # 30-day median CPA is context in `basis`, never a factor in this arithmetic.
+            # F05-I11: `base_text` names where the base number came from (this brand's own
+            # 迴圈 or its bound ad account) — never a hard-coded platform name here.
+            "caption": f"{base_text} NT${round(last_daily)} ×{mult:g}",
         })
     basis = {
-        "mode": "history", "cpa": cpa,
+        "mode": "history", "cpa": cpa, "source": history.get("source"),
         "sample_days": history.get("sample_days"), "sample_ads": history.get("sample_ads"),
     }
     return {
