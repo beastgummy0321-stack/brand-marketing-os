@@ -303,7 +303,8 @@ type, user role or outcome source. Those are **keys on rows** — `ads_delivery_
 numbers. Platform differences live in `app/ads/adapters/**` and in `app/ads/channels.py`, the one
 registry allowed to know a platform's name; anywhere else in `app/ads` a platform name in a string
 literal is a bug, machine-checked by `app/tests/test_ads_no_platform_literal.py` (`channels.py` and
-`outcome.ingest_meta` are the two named exceptions until they move behind the adapter interface).
+the whole of `outcome.py` are the two named exceptions — `outcome.py` until F06's RC-D removes the
+`source = 'meta'` rule, `channels.py` for good; the test and this sentence must name the same two).
 Nouns on screen come from the data's own labels — the channel's `label`, the conversion goal's label
 — shipped as text by the side that owns the rule (§5.3) and never re-spelled in the browser. There
 is no platform abstraction layer, no role system and no second data model: 「使用者」 is an identity
@@ -783,9 +784,17 @@ These are decided. A worker implements them; it does not re-open them.
    ends with zero knowledge however many questions they answered (常春健康: paste done → 11 items,
    4 brand_fact + 3 product_fact confirmed, 0 `product_economics`; MOVE Daily: stopped at step 3,
    0 items, 0 facts, economics only because the user found the product page herself). F05 closes
-   this by having the system run the research itself through the same prompt (`script.build_prompt`)
-   and the same parser (`paste_parse`), with the external-AI handoff kept as a collapsed advanced
-   option. No new prompt corpus, no second parser, no new fact writer.
+   this by having the system run the research itself and feed the reply to **the same parser**
+   (`state.apply_paste` → `paste_parse` → `create_items`), with the external-AI handoff kept as a
+   collapsed advanced option. No second parser, no new fact writer. The in-system run gets its
+   **own** prompt, assembled in `app/intake/research.py` the way `ai.run_scan` already does:
+   `script.build_prompt` is written for a web-enabled external AI (it demands sourced URLs and
+   verbatim customer quotes) and this path has **no web search** — `gateway.TaskOptions.tools`
+   defaults to `None` and no production call site enables `providers.WEB_SEARCH_TOOL` (ADR 0048
+   deferred it; it bills per search). The program fetches the user's own URLs through
+   `app.core.net.fetch_url` and hands the text over; the prompt forbids inventing a source, and
+   顧客原話 stays an honest 累積中 unless the user takes the advanced paste path. Opening web search
+   is a user ruling, not a worker's.
 5. **沒有迴圈歷史時，預算讀廣告帳戶的歷史.** `ads.repository.budget_history` returns
    `{"source": "ads_loop"|"meta_account", ...}`: when no closed ads-loop campaign has settled spend,
    it falls back to the brand's own connected ad account (近 30 天每日花費 + CPA, read through
