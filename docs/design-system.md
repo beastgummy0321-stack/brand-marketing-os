@@ -44,6 +44,11 @@ where attention belongs.
    ROAS) both are drawn; the interface never hides uncertainty to look simpler.
 5. **Calm surface.** Cool grey ground, white cards, one violet accent, one typeface family, restrained
    motion. Nothing decorative that does not carry information.
+6. 照顧新手與老手，一個頁面預設顯示簡單化面，進階配置才給熟手。預設版面配置永遠乾淨簡潔，
+   照顧新手使用者優先，新手可以基本輕鬆上手，AI 丟數個建議讓使用者參考，使用者看完沒問題基本
+   只管點下一步就可以無壓力排程廣告；老手也可以針對 AI 給的建議去做細部調整（但都是預設在
+   原始頁面下，不點開是不會看到），不要把版面做的像是另外一個 meta 後台／google 後台。
+   進階設定一律是同一頁裡的收合區塊（`Disclosure`），不是模式切換、不是第二頁、不是第二份資料模型。
 
 ---
 
@@ -219,8 +224,9 @@ correct. Cards that carry data use the full grid cell.
 - Background work shows what is being processed, success or failure, and a retry; leaving and returning
   restores it. No percentage bar without real progress data.
 
-（F03 分期 A：五分頁陽春；F03-I13 只立殼與清單頁，內容分頁由後續票補上。原型的工作佇列／建議卡／
-發布前檢查／批次操作／Inspector／完整清單頁屬於 F04／F05，不在這裡。）
+F04 現況：首頁四塊（判斷帶／需要你決定／進行中的 Campaign／最近做了什麼）、清單頁、
+「理解如下」確認畫面、策略頁按鈕、工作區總覽都在 F04 做；建議卡的**產生端**（真的有東西可決定）
+仍是 F05——F04 這裡只有元件與空狀態。發布前檢查／批次操作／Inspector 不在這裡。
 
 ### 5.2 Screen assignments
 
@@ -230,7 +236,7 @@ correct. Cards that carry data use the full grid cell.
 | 品牌總覽 (跨品牌) | one brand: its own layout; many brands: health, revenue and next step compared; brand entry and task entry separated |
 | 收件匣 | compact list + detail pane; 待處理／已處理 toggle; brand and severity legible at a glance |
 | 品牌智庫 | workspace split: vertical categories with counts, list in the middle, detail on the right; never two rows of horizontal tabs. 官方素材 browses thumbnails; 事實／規則／宣稱 are lists |
-| 投放中心 | 清單頁：`.table-surface` of Campaign（name, status pill, dates, objective, budget, spend so far）+ 建立 Campaign; 工作區：五個 `PageTabs`（總覽／策略/投放結構/素材/成效），分頁狀態在查詢字串。F03 分期 A 只做五分頁陽春，工作佇列／建議／本月預算卡是 F04 |
+| 投放中心 | 首頁：判斷帶＋需要你決定＋進行中的 Campaign（`CampaignTile` 卡片）＋最近做了什麼＋建立 Campaign; 清單頁：`.table-surface` of Campaign（name, status pill, dates, objective, budget, spend so far）; 建立 Campaign 先過「理解如下」確認畫面（`StepIndicator`＋`FieldCard`）才花第二次模型錢; 工作區：五個 `PageTabs`（總覽／策略/投放結構/素材/成效），分頁狀態在查詢字串，策略頁按鈕真的會動 |
 | 素材工作檯 | four screens, one IA: 入口（pack card grid／list, search ＋ status pills ＋ 最近使用 ＋ 快速開始） → 任務包（meta strip・摘要・完成條件・素材組 table） → 素材組 studio（tabs per 產物類型, versions as history, 生成設定） → 自由創作（AI 解析 free text → editable sets, two-click flow）. The pack rail and set rail are pack-local／set-local, not the OS sidebar, not a new shared kit component |
 | 產品清單 | comparison table; product name, 待確認 count and cost status emphasised |
 | 產品詳情 | product title + the same `PageTabs`; 再次調研 behind an explicit action |
@@ -239,6 +245,24 @@ correct. Cards that carry data use the full grid cell.
 | 建檔精靈 | resumable steps; external AI research as 複製交接內容 → 等待結果 → 貼回驗證 |
 | 顧問分析報告 | reading and print layout, plus a section index, data version and stale state |
 | 登入／接受邀請 | auth split; return to the invitation after login |
+
+### 5.3 投放中心的版面樣式
+
+視覺真相是 `docs/design/ads/*.png`；原型與圖不一致時以圖為準。
+
+| 樣式 | 元件 | 形狀 | 出現在哪一張參考圖 |
+|---|---|---|---|
+| 判斷帶 | `JudgmentBand` | 整寬 tinted band，左圖示圓盤、右一句判斷＋一行事實 | 01-home, 05-strategy, 06-workspace-overview |
+| 決定卡 | `DecisionCard` | `surface`，header 帶件數 badge，每列圖示＋標題＋理由＋三顆按鈕 | 01-home, 06-workspace-overview |
+| Campaign 卡 | `CampaignTile` | `surface` 可點，名稱／狀態、花費進度條、底部 tinted 判斷區塊 | 01-home, 02-campaign-list |
+| 數字條 | `KpiStrip` | 一張 `surface` 裡 3–5 等寬格，格間 1px 直線 | 05-strategy, 06-workspace-overview |
+| 時間軸 | `ActionTimeline` | 垂直線＋小圓點，每筆時間／標題／說明 | 01-home, 06-workspace-overview |
+| 佔位卡 | `ReservedSlotCard` | `surface` 全灰階、不可點、右上 tag badge | 01-home, 06-workspace-overview, 10-strategy-advanced |
+| 步驟指示 | `StepIndicator` | 水平三步，圓圈＋連接線 | 04-understood |
+| 摘要欄位卡 | `FieldCard` | `surface` 一格，圖示＋label＋value＋編輯鈕 | 04-understood |
+
+`Disclosure`（進階收合）不是版面樣式而是規則載體：R9「不點開是不會看到」的機器實作，見上方
+§1 第 6 條。
 
 ---
 
