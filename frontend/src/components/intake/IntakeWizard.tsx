@@ -5,7 +5,6 @@ import { EmptyState } from "@/components/layout/EmptyState";
 import { TaskFlowShell } from "@/components/layout/TaskFlowShell";
 import type { IntakeDraft } from "@/lib/intakeApi";
 import { fetchIntakeDraft } from "@/lib/intakeApi";
-import { AdvertisingHistoryDialog } from "./AdvertisingHistoryDialog";
 import { BudgetPanel } from "./BudgetPanel";
 import { CostGauge } from "./CostGauge";
 import { IntakeCompletedPage } from "./IntakeCompletedPage";
@@ -29,8 +28,6 @@ export function IntakeWizard({ brandId }: { brandId: string | null }) {
   const [state, setState] = useState<LoadState>(brandId ? { status: "loading" } : { status: "ready", draft: null as unknown as IntakeDraft });
   const [viewStep, setViewStep] = useState(1);
   const [budgetOpen, setBudgetOpen] = useState(false);
-  // 票 past-ads/04（ADR 0067 §1.6）：新品牌送出第一步之後、導頁之前，先問一次投放史分岔。
-  const [pendingNewBrand, setPendingNewBrand] = useState<{ brand_id: string; quick: boolean } | null>(null);
 
   function refresh() {
     if (!brandId) return;
@@ -52,21 +49,15 @@ export function IntakeWizard({ brandId }: { brandId: string | null }) {
 
   if (!brandId) {
     return (
-      <>
-        <TaskFlowShell steps={STEP_LABELS} current={1} onSelect={() => {}} rightRail={<CostGauge draft={null} onAdjust={() => {}} />}>
-          <StartStep brandId={null} onSubmitted={(res) => setPendingNewBrand(res)} />
-        </TaskFlowShell>
-        {pendingNewBrand && (
-          <AdvertisingHistoryDialog
-            brandId={pendingNewBrand.brand_id}
-            onChosen={() => {
-              const res = pendingNewBrand;
-              refreshBrands();
-              navigate(res.quick ? `/brands/${res.brand_id}` : `/brands/${res.brand_id}/intake`);
-            }}
-          />
-        )}
-      </>
+      <TaskFlowShell steps={STEP_LABELS} current={1} onSelect={() => {}} rightRail={<CostGauge draft={null} onAdjust={() => {}} />}>
+        <StartStep
+          brandId={null}
+          onSubmitted={(res) => {
+            refreshBrands();
+            navigate(res.quick ? `/brands/${res.brand_id}` : `/brands/${res.brand_id}/intake`);
+          }}
+        />
+      </TaskFlowShell>
     );
   }
 
