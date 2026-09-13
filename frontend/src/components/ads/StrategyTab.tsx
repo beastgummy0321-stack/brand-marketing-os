@@ -71,10 +71,7 @@ export function StrategyTab({
   brandId: string;
   campaign: CampaignDetail;
   onCampaignChange: (campaign: CampaignDetail) => void;
-  /** F04-I14：`CampaignWorkspace.tsx` 在 `do_not_touch` 裡，還沒把這個 prop 接給這個分頁——
-   * 選填＋早退，等它有票要動再一起補上必填（跟 `adsApi.ts` 的 `judgment?`／`action_lines?`
-   * 同一個理由，ARCHITECTURE.md 決策 11）。 */
-  onChangeTab?: (tab: WorkspaceTab) => void;
+  onChangeTab: (tab: WorkspaceTab) => void;
 }) {
   const [generating, setGenerating] = useState(false);
   const [generateError, setGenerateError] = useState<string | null>(null);
@@ -132,7 +129,7 @@ export function StrategyTab({
     setPrimaryError(null);
     try {
       if (hasGroups) {
-        onChangeTab?.("structure");
+        onChangeTab("structure");
         return;
       }
       let next = c;
@@ -142,7 +139,7 @@ export function StrategyTab({
       }
       next = await adoptStrategy(brandId, c.id);
       onCampaignChange(next);
-      onChangeTab?.("structure");
+      onChangeTab("structure");
     } catch (err) {
       setPrimaryError(err instanceof Error ? err.message : "展開投放結構失敗，請稍後再試。");
     } finally {
@@ -205,7 +202,7 @@ export function StrategyTab({
     {
       icon: Wallet,
       label: "預算",
-      value: formatCurrency(total),
+      value: total !== null ? formatCurrency(total) : "尚未設定",
       caption: c.budget_planned !== null ? "你採用的情境金額" : "推薦情境（可調整）",
     },
     {
@@ -318,7 +315,7 @@ export function StrategyTab({
       {hasGroups ? (
         <p className="text-sm text-muted-foreground sm:col-span-3">
           投放結構已經建立，預算改在投放結構分頁的每個投放組日預算。{" "}
-          <Button variant="link" className="h-auto p-0" onClick={() => onChangeTab?.("structure")}>
+          <Button variant="link" className="h-auto p-0" onClick={() => onChangeTab("structure")}>
             前往投放結構
           </Button>
         </p>
