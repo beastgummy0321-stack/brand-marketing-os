@@ -63,39 +63,83 @@ def _brand_facts_section(conn, brand_id: str) -> tuple[str, list[dict]]:
     return "【品牌事實】\n" + "\n".join(lines), basis
 
 
+# 一個母產品最多印幾種賣法（ARCHITECTURE.md §1：每個進 prompt 的清單都要 cap）。
+_MAX_SELL_WAYS = 8
+
+
+def _sell_way_display_name(full_name: str) -> str:
+    """賣法的顯示名已經是「<母產品名> · <賣法>」，這裡只印「 · 」後半段；找不到分隔就整個印。"""
+    return full_name.split(" · ", 1)[-1]
+
+
 def _products_section(
     conn, org_id: str, brand_id: str, product_ids: list[str],
 ) -> tuple[str, list[dict]]:
     """這個 Campaign 自己的商品（`context_json.product_ids`，已由 F03-I19 的 PATCH 過濾過只
     會是這個品牌自己的商品）；今天有效的價格，過期一律標出來，絕不悄悄當現在的價格用
-    （跟 `app/ads/brief.py::_products_context` 同一條規則）。"""
+    （跟 `app/ads/brief.py::_products_context` 同一條規則）。
+
+    一個產品、很多賣法（ARCHITECTURE.md §8 第 1 條）：知識掛母產品、金額掛賣法。這裡先按
+    `bi_repo.knowledge_product_id()` 分組，一個母產品一個事實區塊＋一行賣法價格清單；
+    `basis` 仍然一個賣法一筆，畫面的「查看策略依據」對得起來。"""
     if not product_ids:
         return "【商品】（這個 Campaign 沒有指定商品）", []
     today = coresettings.today_for_org(conn, org_id=org_id)
-    lines: list[str] = []
-    basis: list[dict] = []
+    fact_cap = int(rule_cards.get_value(conn, brand_id, "rule_prompt_cap", "max_active_rules"))
+
+    groups: dict[str, list[str]] = {}
     for product_id in product_ids:
         product = bi_repo.get_product(conn, brand_id, product_id)
         if product is None:
             continue  # 存的 id 對不到現存商品——不編一個不存在的商品進 prompt
-        economics = bi_repo.get_product_economics(conn, brand_id, product_id)
-        if economics is None:
-            lines.append(f"- {product['name']}｜沒有價格資料")
-            continue
-        effective_to = economics.get("effective_to")
-        stale = effective_to is not None and effective_to < today
-        price = economics.get("selling_price")
-        line = f"- {product['name']}｜售價 {price}"
-        if stale:
-            line += "（價格可能過期，僅供參考）"
-        lines.append(line)
-        basis.append({
-            "product_id": product_id, "price": price,
-            "effective_from": economics.get("effective_from"), "stale": stale,
-        })
-    text = (
-        "【商品與今天的價格】\n" + "\n".join(lines) if lines else "【商品】（沒有可用的價格資料）"
-    )
+        mother_id = bi_repo.knowledge_product_id(conn, brand_id, product_id)
+        groups.setdefault(mother_id, []).append(product_id)
+
+    lines: list[str] = []
+    basis: list[dict] = []
+    for mother_id, sell_way_ids in groups.items():
+        mother = bi_repo.get_product(conn, brand_id, mother_id)
+        mother_name = mother["name"] if mother else mother_id
+
+        facts = sorted(
+            bi_repo.list_product_facts(conn, brand_id, mother_id, status="confirmed"),
+            key=lambda f: f.get("confirmed_at") or f["created_at"], reverse=True,
+        )
+        kept_facts, omitted_facts = facts[:fact_cap], facts[fact_cap:]
+        fact_text = (
+            "；".join(f"{f['label']}：{f['value']}" for f in kept_facts)
+            if kept_facts else "尚無確認過的事實"
+        )
+        if omitted_facts:
+            fact_text += f"（另有 {len(omitted_facts)} 筆較舊的事實沒有列出）"
+
+        sell_way_pieces: list[str] = []
+        for product_id in sell_way_ids[:_MAX_SELL_WAYS]:
+            sell_way = bi_repo.get_product(conn, brand_id, product_id)
+            display = _sell_way_display_name(sell_way["name"]) if sell_way else product_id
+            economics = bi_repo.get_product_economics(conn, brand_id, product_id)
+            if economics is None:
+                sell_way_pieces.append(f"{display} 沒有價格資料")
+                continue
+            effective_to = economics.get("effective_to")
+            stale = effective_to is not None and effective_to < today
+            price = economics.get("selling_price")
+            piece = f"{display} NT${price}"
+            if stale:
+                piece += "（價格可能過期，僅供參考）"
+            sell_way_pieces.append(piece)
+            basis.append({
+                "product_id": product_id, "price": price,
+                "effective_from": economics.get("effective_from"), "stale": stale,
+            })
+        sell_way_overflow = len(sell_way_ids) - _MAX_SELL_WAYS
+        sell_way_text = "／".join(sell_way_pieces)
+        if sell_way_overflow > 0:
+            sell_way_text += f"（另有 {sell_way_overflow} 種賣法沒有列出）"
+
+        lines.append(f"- {mother_name}｜事實：{fact_text}\n  賣法：{sell_way_text}")
+
+    text = "【商品】\n" + "\n".join(lines) if lines else "【商品】（沒有可用的價格資料）"
     return text, basis
 
 

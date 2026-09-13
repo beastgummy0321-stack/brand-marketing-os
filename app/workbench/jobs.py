@@ -199,9 +199,11 @@ def _product_line(conn, brand_id: str, product_id: str | None, product: dict | N
     藏住第一個真正的原因，讓後面的敘述跟著失敗卻看不出來是為什麼。"""
     if product_id is None:
         return NO_PHOTO_LINE
+    # 賣法沒有自己的商品照，往上找母產品（ARCHITECTURE.md §8 第 1 條：知識掛母產品）。
+    knowledge_id = bi_repo.knowledge_product_id(conn, brand_id, product_id)
     assets = bi_repo.list_official_assets(conn, brand_id)
     has_photo = any(
-        row["asset_kind"] == "product_photo" and row["product_id"] == product_id
+        row["asset_kind"] == "product_photo" and row["product_id"] == knowledge_id
         for row in assets
     )
     if not has_photo:
