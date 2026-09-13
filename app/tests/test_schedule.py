@@ -2343,7 +2343,8 @@ class BindTreeApiContractTest(_ScheduleApiTestBase):
             schedule_jobs.schedule_diagnosis(coredb.DEV_ORG_ID, self.brand["id"])
 
         self.assertEqual(len(fake.calls), 3)  # 三個 lens 各打一次
-        prompt = fake.calls[0]["messages"][0]["content"]
+        # content 是 block 陣列（共用前綴 + role_text(lens)，見 F04-I05），攤平成單一字串比對
+        prompt = "".join(b["text"] for b in fake.calls[0]["messages"][0]["content"])
         self.assertIn("【預算層級】", prompt)
         self.assertIn(
             binding_mod.BUDGET_LEVEL_NOTE.format(actual="行銷活動", expected="廣告組合"),
@@ -2382,7 +2383,8 @@ class BindTreeApiContractTest(_ScheduleApiTestBase):
             schedule_jobs.schedule_diagnosis(coredb.DEV_ORG_ID, self.brand["id"])
 
         self.assertEqual(len(fake.calls), 3)
-        prompt = fake.calls[0]["messages"][0]["content"]
+        # content 是 block 陣列（共用前綴 + role_text(lens)，見 F04-I05），攤平成單一字串比對
+        prompt = "".join(b["text"] for b in fake.calls[0]["messages"][0]["content"])
         self.assertNotIn("【預算層級】", prompt)
 
     # -- 票 past-ads/05（ADR 0067 §1.10）：plan prompt 帶投放史 -----------------------------
