@@ -1,0 +1,133 @@
+/** frontend/src/components/ads/PerformanceTab.test.tsx — F04-I23: 結案卡片今天只在
+ * `status === "ended"` 出現，但那個狀態沒有任何程式會寫——這支測試證明 `live` 也看得到
+ * 結案卡、看得到提前結案的說明句，以及確認對話框裡同一句話也在。 */
+import { render, screen } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import userEvent from "@testing-library/user-event";
+
+import type { CampaignDetail, CampaignPerformance } from "@/lib/adsApi";
+import { closeCampaign, getPerformance } from "@/lib/adsApi";
+import { PerformanceTab } from "./PerformanceTab";
+
+vi.mock("@/lib/adsApi", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/adsApi")>("@/lib/adsApi");
+  return {
+    ...actual,
+    getPerformance: vi.fn(),
+    ingestOutcome: vi.fn(),
+    closeCampaign: vi.fn(),
+  };
+});
+
+function performance(): CampaignPerformance {
+  return {
+    totals: {
+      spend: 0,
+      impressions: 0,
+      clicks: 0,
+      purchases: null,
+      revenue: null,
+      cpa: null,
+      ctr: null,
+      roas: null,
+      roas_conservative: null,
+    },
+    daily: [],
+    groups: [],
+    ads: [],
+    coverage: { expected: 0, missing: 0 },
+    last_data_at: null,
+  };
+}
+
+function campaign(overrides: Partial<CampaignDetail> = {}): CampaignDetail {
+  return {
+    id: "cmp_1",
+    name: "測試 Campaign",
+    goal_text: "想在雙十一衝一波業績",
+    objective: "增加新客購買",
+    success_metric: "cpa",
+    success_target: null,
+    success_basis: null,
+    start_date: "2026-01-01",
+    end_date: "2099-12-31",
+    status: "live",
+    budget_planned: null,
+    budget_scenario: null,
+    budget_basis_json: {},
+    budget_total: null,
+    context_json: {},
+    constraints_json: {},
+    verdict: null,
+    verdict_json: {},
+    closed_at: null,
+    created_by: null,
+    created_at: "2026-01-01T00:00:00Z",
+    groups: [],
+    actions: [],
+    outcome: { spend: 0, purchases: 0, revenue: 0 },
+    asset_readiness: { ready_count: 0, total: 0 },
+    judgment: { tone: "neutral", text: "投放中", detail: "還沒有花費資料" },
+    action_lines: [],
+    external_id: null,
+    external_name: null,
+    external_status: null,
+    local_state: "unbound",
+    bound_at: null,
+    ...overrides,
+  };
+}
+
+function renderTab(c: CampaignDetail, onCampaignChange = vi.fn()) {
+  return { onCampaignChange, ...render(
+    <PerformanceTab brandId="brd_1" campaign={c} onCampaignChange={onCampaignChange} />,
+  ) };
+}
+
+describe("PerformanceTab 結案卡片（F04-I23）", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(getPerformance).mockResolvedValue(performance());
+  });
+
+  it("live ＋ end_date 在未來：看得到立即結案按鈕與提前結案說明", async () => {
+    renderTab(campaign({ status: "live", end_date: "2099-12-31" }));
+
+    expect(await screen.findByRole("button", { name: "立即結案" })).toBeTruthy();
+    expect(screen.getByText(/提前結案會用到目前為止的成效判定/)).toBeTruthy();
+    expect(screen.getByText(/投放期間到 2099-12-31，現在結案等於提前結束/)).toBeTruthy();
+  });
+
+  it("點立即結案：對話框也看得到同一句，確認結案會呼叫 closeCampaign 與 onCampaignChange", async () => {
+    const user = userEvent.setup();
+    const c = campaign({ status: "live", end_date: "2099-12-31" });
+    const updated = campaign({ status: "closed" });
+    vi.mocked(closeCampaign).mockResolvedValue(updated);
+    const { onCampaignChange } = renderTab(c);
+
+    await screen.findByRole("button", { name: "立即結案" });
+    await user.click(screen.getByRole("button", { name: "立即結案" }));
+
+    expect(screen.getAllByText(/提前結案會用到目前為止的成效判定/).length).toBeGreaterThan(1);
+
+    await user.click(screen.getByRole("button", { name: "確認結案" }));
+
+    expect(closeCampaign).toHaveBeenCalledWith("brd_1", c.id);
+    expect(onCampaignChange).toHaveBeenCalledWith(updated);
+  });
+
+  it("ended：維持原句，不顯示「現在結案等於提前結束」", async () => {
+    renderTab(campaign({ status: "ended", end_date: "2099-12-31" }));
+
+    expect(await screen.findByRole("button", { name: "立即結案" })).toBeTruthy();
+    expect(screen.getByText("投放已結束，7 天後系統會自動結案，也可以現在提前手動結案。")).toBeTruthy();
+    expect(screen.queryByText(/現在結案等於提前結束/)).toBeNull();
+  });
+
+  it("draft：結案卡不存在，畫面是空狀態", () => {
+    renderTab(campaign({ status: "draft" }));
+
+    expect(screen.queryByText("立即結案")).toBeNull();
+    expect(screen.getByText("還沒有成效資料")).toBeTruthy();
+  });
+});

@@ -66,6 +66,9 @@ function learningSentence(c: CampaignDetail): string | null {
   return `「${c.name}」${label} 目標 ${vj.target ?? "－"}，實際 ${actual ?? "－"}，結果${c.verdict}（樣本${sample}）。`;
 }
 
+/** F04-I23：結案卡與確認對話框共用同一句，`live` 時都要看到——只宣告一次，不抽成新元件。 */
+const EARLY_CLOSE_SENTENCE = "提前結案會用到目前為止的成效判定，判定後這個 Campaign 不再更新成效";
+
 const VERDICT_TONE: Record<string, "default" | "destructive" | "outline"> = {
   達成: "default",
   未達成: "destructive",
@@ -147,6 +150,7 @@ export function PerformanceTab({
   onCampaignChange: (campaign: CampaignDetail) => void;
 }) {
   const published = c.status === "live" || c.status === "ended" || c.status === "closed";
+  const today = new Date().toLocaleDateString("sv-SE");
 
   const [state, setState] = useState<
     | { status: "loading" }
@@ -217,14 +221,23 @@ export function PerformanceTab({
         <PerformanceReady data={state.data} refreshing={refreshing} onRefresh={() => void handleRefresh()} />
       )}
 
-      {c.status === "ended" && (
+      {(c.status === "live" || c.status === "ended") && (
         <div className="surface">
           <div className="surface-header">
             <h2>結案</h2>
           </div>
           <div className="surface-body flex items-center justify-between gap-4">
-            <span className="text-sm text-muted-foreground">
-              投放已結束，7 天後系統會自動結案，也可以現在提前手動結案。
+            <span className="flex flex-col gap-1 text-sm text-muted-foreground">
+              <span>
+                {c.status === "ended"
+                  ? "投放已結束，7 天後系統會自動結案，也可以現在提前手動結案。"
+                  : EARLY_CLOSE_SENTENCE}
+              </span>
+              {c.status === "live" && c.end_date && c.end_date > today && (
+                <span className="text-xs text-muted-foreground">
+                  投放期間到 {c.end_date}，現在結案等於提前結束
+                </span>
+              )}
             </span>
             <Button onClick={() => setCloseOpen(true)}>立即結案</Button>
           </div>
@@ -238,6 +251,7 @@ export function PerformanceTab({
           <DialogTitle>結案</DialogTitle>
           <DialogDescription>
             結案後會對照成功條件寫下判定，並在品牌智庫留一條學習，Campaign 之後會被鎖定，不能再改。
+            {c.status === "live" && ` ${EARLY_CLOSE_SENTENCE}`}
           </DialogDescription>
           {closeError && <p className="text-sm text-danger">{closeError}</p>}
           <DialogFooter>
