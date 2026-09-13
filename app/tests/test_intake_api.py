@@ -405,7 +405,7 @@ class QuestionBackgroundTest(_Base):
         self.assertEqual(status["status"], "done")
 
         draft = state.get_draft(bid)
-        self.assertEqual(draft["step"], 4)
+        self.assertEqual(draft["step"], 5)
         self.assertIsNotNone(draft["current_q"])
         self.assertEqual(draft["current_q"]["question"], script.QUESTIONS[0]["question"])
 
@@ -568,7 +568,7 @@ class BudgetTest(_Base):
         draft = state.get_draft(bid)
         self.assertTrue(draft["scan_done"])
         self.assertTrue(draft["qa_done"])
-        self.assertEqual(draft["step"], 4)
+        self.assertEqual(draft["step"], 5)
 
 
 # ---------------------------------------------------------------------------
@@ -583,7 +583,7 @@ class HandoffTest(_Base):
         self.assertIn("prompt_text", resp.json())
         draft = state.get_draft(bid)
         self.assertEqual(draft["handoff_depth"], "standard")  # depth 有沒有生效看這行，不看文案
-        self.assertGreaterEqual(draft["step"], 4)
+        self.assertGreaterEqual(draft["step"], 5)
 
         card = self.client.get(f"/api/intake/brands/{bid}/handoff/claude").json()["data"]
         self.assertIn("title", card)  # COPY trim：卡片標題精確中文文案不測
