@@ -173,7 +173,7 @@ def _assumption_note(prices_basis: list[dict]) -> str | None:
 def _learnings_section(conn, brand_id: str) -> tuple[str, list[dict]]:
     """`list_learnings(conn, brand_id)`——不帶 `product_id`：那是等值過濾，帶了會把幾乎所有
     品牌層學習都濾掉（F03.md 對 F03-I05 的明確警告）。"""
-    learnings = bi_repo.list_learnings(conn, brand_id, limit=_MAX_LEARNINGS)
+    learnings = bi_repo.list_learnings(conn, brand_id, limit=_MAX_LEARNINGS, source_track="ads")
     if not learnings:
         return "【過去的學習】（這個品牌還沒有任何學習記錄）", []
     lines = [

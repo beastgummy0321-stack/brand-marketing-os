@@ -52,6 +52,52 @@ class LearningLedgerTest(unittest.TestCase):
         self.assertEqual(len(visible), 1)
         self.assertEqual(visible[0]["id"], row["id"])
 
+    def test_source_track_filters_and_defaults_to_ads(self):
+        row_visual = repo.record_learning(self.conn, self.bid_a, actor="測試員",
+                                           learning_text="視覺學習：手機原生抓拍",
+                                           applicability_scope="brand",
+                                           confidence="observed", sample_size="1",
+                                           source_track="visual")
+        row_ads = repo.record_learning(self.conn, self.bid_a, actor="測試員",
+                                        learning_text="投放學習：早鳥受眾轉換較高",
+                                        applicability_scope="brand",
+                                        confidence="observed", sample_size="1")
+        self.assertEqual(row_ads["source_track"], "ads")
+
+        visual_rows = repo.list_learnings(self.conn, self.bid_a, source_track="visual")
+        ads_rows = repo.list_learnings(self.conn, self.bid_a, source_track="ads")
+        all_rows = repo.list_learnings(self.conn, self.bid_a, source_track=None)
+
+        self.assertEqual([r["id"] for r in visual_rows], [row_visual["id"]])
+        self.assertEqual([r["id"] for r in ads_rows], [row_ads["id"]])
+        self.assertEqual({r["id"] for r in all_rows}, {row_visual["id"], row_ads["id"]})
+
+    def test_expire_learning_hides_row_and_is_idempotent(self):
+        row = repo.record_learning(self.conn, self.bid_a, actor="測試員",
+                                    learning_text="要被降級的學習", applicability_scope="brand",
+                                    confidence="likely", sample_size="1")
+
+        expired = repo.expire_learning(self.conn, self.bid_a, row["id"], actor="測試員")
+        self.assertTrue(expired["expired"])
+        self.assertEqual(repo.list_learnings(self.conn, self.bid_a), [])
+        visible = repo.list_learnings(self.conn, self.bid_a, include_expired=True)
+        self.assertEqual(len(visible), 1)
+        self.assertTrue(visible[0]["expired"])
+
+        again = repo.expire_learning(self.conn, self.bid_a, row["id"], actor="測試員")
+        self.assertTrue(again["expired"])
+
+    def test_expire_learning_wrong_brand_returns_none_and_changes_nothing(self):
+        row = repo.record_learning(self.conn, self.bid_a, actor="測試員",
+                                    learning_text="不該被別品牌降級", applicability_scope="brand",
+                                    confidence="likely", sample_size="1")
+
+        result = repo.expire_learning(self.conn, self.bid_b, row["id"], actor="測試員")
+        self.assertIsNone(result)
+        rows = repo.list_learnings(self.conn, self.bid_a)
+        self.assertEqual(len(rows), 1)
+        self.assertFalse(rows[0]["expired"])
+
     def test_deleting_brand_removes_learning_rows(self):
         repo.record_learning(self.conn, self.bid_a, actor="測試員",
                               learning_text="要被刪掉的學習", applicability_scope="brand",

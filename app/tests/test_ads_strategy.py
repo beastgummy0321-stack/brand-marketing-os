@@ -209,6 +209,33 @@ class LearningInPromptAndBasisTest(StrategyTestBase):
         self.assertEqual(len(learnings), 1)
         self.assertEqual(learnings[0]["text"], "再行銷受眾對折扣文案反應特別好")
 
+    def test_visual_track_learnings_never_leak_into_the_ads_prompt(self):
+        """F07-I01：`learning_ledger` 有兩條軌（ads／visual），策略只讀 `ads`——視覺學習
+        絕不能出現在投放策略的 prompt 或 basis 裡（ARCHITECTURE.md §3「兩條軌、一張表」）。"""
+        bi_repo.record_learning(
+            web.conn, self.brand_id, actor=ACTOR,
+            learning_text="再行銷受眾對折扣文案反應特別好", applicability_scope="brand",
+            confidence="likely", sample_size="2 個活動",
+        )
+        bi_repo.record_learning(
+            web.conn, self.brand_id, actor=ACTOR,
+            learning_text="手機原生抓拍風格轉換較高", applicability_scope="brand",
+            confidence="likely", sample_size="3 張圖", source_track="visual",
+        )
+        self.campaign = self._create_campaign()
+        provider = _fake(_VALID_REPLY)
+        strategy.PROVIDER = provider
+
+        detail = self._generate()
+
+        sent_prompt = provider.calls[0]["messages"][0]["content"]
+        self.assertIn("再行銷受眾對折扣文案反應特別好", sent_prompt)
+        self.assertNotIn("手機原生抓拍風格轉換較高", sent_prompt)
+        learnings = detail["budget_basis_json"]["basis"]["learnings"]
+        texts = [row["text"] for row in learnings]
+        self.assertIn("再行銷受眾對折扣文案反應特別好", texts)
+        self.assertNotIn("手機原生抓拍風格轉換較高", texts)
+
     def test_no_learnings_yields_empty_basis_and_no_fabricated_sentence(self):
         self.campaign = self._create_campaign()
         strategy.PROVIDER = _fake(_VALID_REPLY)
