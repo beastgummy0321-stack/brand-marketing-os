@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { AlertTriangle, ArrowRight, CheckCircle2, ChevronLeft } from "lucide-react";
+import { AlertCircle, AlertTriangle, ArrowRight, CheckCircle2, ChevronLeft } from "lucide-react";
 import { Button } from "@/components/layout/ui/button";
 import { Badge } from "@/components/layout/ui/badge";
 import { CopyIconButton } from "@/components/layout/CopyIconButton";
@@ -20,6 +20,7 @@ import {
   type PublishChecklistNode,
   type PublishDescribe,
 } from "@/lib/adsApi";
+import { StepButton } from "./nextStep";
 
 /** 逐節點是否已經全部綁定——用來算「配對完成：n／m」，不去解析後端訊息字串
  * （§0「the browser must not re-word it」，訊息只能原樣印）。 */
@@ -69,6 +70,8 @@ export function PublishPage({
   onCampaignChange,
   onClose,
   onViewPerformance,
+  onChangeAdapter,
+  onGoToAssets,
 }: {
   brandId: string;
   campaign: CampaignDetail;
@@ -76,6 +79,8 @@ export function PublishPage({
   onCampaignChange: (campaign: CampaignDetail) => void;
   onClose: () => void;
   onViewPerformance: () => void;
+  onChangeAdapter: (adapter: AdapterKey) => void;
+  onGoToAssets: () => void;
 }) {
   const [state, setState] = useState<
     | { status: "loading" }
@@ -103,7 +108,8 @@ export function PublishPage({
 
   useEffect(load, [load]);
 
-  const title = adapter === "manual" ? "手動發布（進階）" : adapter === "simulated" ? "模擬發布（演練用）" : "發布 Campaign";
+  const title = adapter === "manual" ? "手動發布" : adapter === "simulated" ? "模擬發布（演練）" : "發布 Campaign";
+  const missing = c.asset_readiness.total - c.asset_readiness.ready_count;
 
   return (
     <div className="flex flex-col gap-4">
@@ -114,6 +120,19 @@ export function PublishPage({
         <span className="text-muted-foreground">/</span>
         <span className="font-semibold">{title}</span>
       </div>
+
+      {adapter !== "simulated" && missing > 0 && (
+        <div className="flex items-center justify-between gap-3 rounded-md border border-danger/30 bg-danger/5 p-4">
+          <div className="flex items-start gap-3">
+            <AlertCircle size={18} className="mt-0.5 shrink-0 text-danger" />
+            <div className="flex flex-col gap-0.5">
+              <p className="font-semibold text-danger">還有 {missing} 則廣告沒有素材</p>
+              <p className="text-sm text-muted-foreground">現在照清單建，這幾則會是空廣告。</p>
+            </div>
+          </div>
+          <Button onClick={onGoToAssets}>回到素材</Button>
+        </div>
+      )}
 
       {state.status === "loading" ? (
         <div className="surface">
@@ -141,8 +160,22 @@ export function PublishPage({
         />
       ) : (
         <div className="surface">
-          <div className="surface-body py-10 text-center text-sm text-muted-foreground">
-            {state.describe.message ?? "自動發布未接上"}
+          <div className="surface-body flex flex-col gap-4 py-10">
+            <p className="text-center text-sm text-muted-foreground">
+              {state.describe.message ?? "自動發布未接上"}
+            </p>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="flex flex-col gap-1">
+                <StepButton onClick={() => onChangeAdapter("manual")}>手動發布</StepButton>
+                <p className="text-center text-xs text-muted-foreground">照清單自己在平台上建好，再回來配對</p>
+              </div>
+              <div className="flex flex-col gap-1">
+                <StepButton variant="outline" onClick={() => onChangeAdapter("simulated")}>
+                  模擬發布（演練）
+                </StepButton>
+                <p className="text-center text-xs text-muted-foreground">演練用，產生示意成效，不會真的投放</p>
+              </div>
+            </div>
           </div>
         </div>
       )}
