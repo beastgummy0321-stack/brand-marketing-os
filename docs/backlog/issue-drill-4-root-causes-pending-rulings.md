@@ -1,7 +1,7 @@
 # Drill 4（上線前最終內測，2026-09-13）：八條根因與八題待裁決 — F05 /dig 的第一份輸入
 
 Status: **2026-09-14 八題全部裁決**（見文末「已裁決」一節）。F05 只吸收了第 6 題（建檔地基）
-與第 2 題的歷史來源那一半；**其餘是 F06 閉環修正的輸入，這一檔不要刪**。完整證據與因果鏈在
+與第 2 題的歷史來源那一半；**其餘是閉環 feature 的輸入，這一檔不要刪**。完整證據與因果鏈在
 `docs/drills/drill-4/synthesis.md`（根因 RC-A1…RC-H、七站×三人證據表、通過標準、F05 形狀）與
 `docs/drills/drill-4/findings-{aming,jay,vivian}.md`（每站資料庫證據）。這一檔只是入口，被 /carve 消化即刪。
 
@@ -50,27 +50,27 @@ RC-D → RC-A1‖RC-C → RC-A2 → RC-B → RC-F（三修法）→ RC-G → RC-
 1. **RC-D**：廢掉「Meta 購買一律當未追蹤」這條 §0 Blocked-if。照建議——新開 migration 讓
    `ads_outcome_daily.purchases` 可以是 NULL（NULL＝未追蹤、0＝真的是零），`daily_entity_spend`
    沿用既有的 `_CONVERSIONS_LATERAL` 多回 `conversions`，`ingest_meta` 寫真的數字，刪掉
-   `outcome.py:168` 的 `source != "meta"` 過濾。「看不出」必須帶數字。樣本等級的定義不動。→ **F06**
+   `outcome.py:168` 的 `source != "meta"` 過濾。「看不出」必須帶數字。樣本等級的定義不動。→ **閉環 feature**
 2. **RC-B**：目標 CPA 改由成功條件推導（ROAS → 客單價 ÷ 目標 ROAS；CPA → 它自己），沒有宣告才
    回到「打平 × 0.7」；推薦金額不得超過 `constraints_json.budget`，會超就在 basis 說明。
-   這條**改寫 2026-09-12 裁決 4**。→ **F06**（歷史來源那一半已在 F05-I08）
+   這條**改寫 2026-09-12 裁決 4**。→ **閉環 feature**（歷史來源那一半已在 F05-I08）
 3. **RC-E／V-10**：廣告層顯示觀察到的 ROAS／CTR（資料 `_bucket` 早就算好），但預算**仍然只分配
-   到投放組**——「不分配預算」與「不給看數字」是兩件事。這條改寫 ARCHITECTURE §6 第 3 條。→ **F06**
+   到投放組**——「不分配預算」與「不給看數字」是兩件事。這條改寫 ARCHITECTURE §6 第 3 條。→ **閉環 feature**
 4. **RC-E 範圍：選 B**。角度比較做在投放中心的成效 tab（把 `_bucket` 的每則廣告按
    `ads_ad.coordinates` 分組），刪掉經營概況的「素材成效比較」面板與它那支 schedule 端點；
    不開新端點、`app/schedule` 不加任何新程式。套件這一輪**不退場**，§4 要改寫成「四個讀者搬走了
-   第一個」。→ **F06**
+   第一個」。→ **閉環 feature**
 5. **RC-C**：`ensure_coordinates_seeded` 把六個促銷 offer key 種成 `disabled_at = now()`，只留
    `none` 啟用；品牌真的有優惠就去既有的座標畫面開啟。既有測試品牌用一次性 UPDATE 修（測試資料）。
-   → **F06**
+   → **閉環 feature**
 6. **RC-A1／A2**：精靈收售價／成本／運費；「最低可投放集合」＝至少一項要賣的東西＋經濟數字＋
    已指定的廣告帳戶（＋成效目標），不設「N 條事實」門檻，改修精靈的事實寫入者。
    → **F05 已吸收**（F05-I01／I02／I04／I05／I06／I07；`ARCHITECTURE.md` §8）
 7. **RC-G(4)**：只做一行版——理解如下的目標格印「購買・CPA ≤ 300」（`success_target` 早就在
-   payload 裡）。六格不變成七格，欄位清單**不**改由後端給，§6.1 第 11 條不動。→ **F06**
+   payload 裡）。六格不變成七格，欄位清單**不**改由後端給，§6.1 第 11 條不動。→ **閉環 feature**
 8. **F04 note 13／14**：`ended` 狀態**刪掉**（live → closed，「已過期待結案」改成 `judgment.py`
    從 `end_date` 組的一句話）；`closed` 之後成效**凍結**（`ingest_meta` 遇到 closed 直接 no-op，
-   讓「結案後判斷不再變」這句話變成真的）。→ **F06**
+   讓「結案後判斷不再變」這句話變成真的）。→ **閉環 feature**
 
-F06 的依賴順序沿用 `docs/drills/drill-4/synthesis.md` §D，但 RC-A1／RC-A2 那兩層拿掉（F05 做完了）：
+閉環 feature 的依賴順序沿用 `docs/drills/drill-4/synthesis.md` §D，但 RC-A1／RC-A2 那兩層拿掉（F05 做完了）：
 RC-D → RC-C → RC-B → RC-F（三修法）→ RC-G → RC-E。

@@ -306,7 +306,7 @@ numbers. Platform differences live in `app/ads/adapters/**` and in `app/ads/chan
 registry allowed to know a platform's name; anywhere else in `app/ads` a platform name in a string
 literal is a bug, machine-checked by `app/tests/test_ads_no_platform_literal.py`. It has exactly
 three exemptions — `channels.py`, the whole of `outcome.py`, and the whole `adapters/` directory;
-`outcome.py` only until F06's RC-D removes the `source = 'meta'` rule, the other two for good. The
+`outcome.py` only until the 閉環 feature's RC-D removes the `source = 'meta'` rule, the other two for good. The
 test and this sentence must name the same three.
 Nouns on screen come from the data's own labels — the channel's `label`, the conversion goal's label
 — shipped as text by the side that owns the rule (§5.3) and never re-spelled in the browser. There
@@ -691,7 +691,8 @@ visual reference for all three Ads V2 features is the prototype
 
 The visual source of truth for 投放中心 is now `docs/design/ads/01-home.png` … `10-strategy-advanced.png`
 (01 首頁, 02 所有 Campaign, 03 建立投放計畫, 04 理解如下, 05 推薦策略, 06 Campaign 工作區總覽,
-07 素材交接 = F05, 08 發布前檢查 = F06, 10 進階設定). `09-performance-overview-not-built.png` is
+07 素材交接 = F05, 08 發布前檢查 = the 閉環 feature — F06 borrows only its warning band, §6.2 —
+10 進階設定). `09-performance-overview-not-built.png` is
 recorded as **not built**: suggestions live inside 投放中心, not behind a new nav item. Where an
 image and the 09-12 prototype differ, the image wins; the prototype is history.
 
@@ -731,6 +732,53 @@ image and the 09-12 prototype differ, the image wins; the prototype is history.
     point of view. 調整建議 = edit the allocation percentages inline before adopting (sum 100, the
     program re-splits the money). 查看完整判斷 = the existing 查看策略依據 panel. The permanently
     disabled 採用 button is gone.
+
+### 6.2 Third round — 工作區的快樂路徑 (settled 2026-09-14, F06)
+
+Measured on a live campaign: after 策略 → 投放結構 the user did not know what to do next. The
+next-step rule had one producer, rendered on 總覽 only, and its 「素材已就位」 target pointed at a
+tab with no publish affordance; 投放結構 and 素材 ended with no next step, and the header's
+發布 Campaign only printed 自動發布未接上 while the working paths hid in a ⋯ menu.
+
+15. **One next-step rule, every tab.** `frontend/src/components/ads/nextStep.tsx::nextStep(campaign)`
+    is the only producer of 「下一步」 in the Campaign workspace: 總覽's 下一步 card and 狀態時間軸,
+    and the full-width primary button at the end of 策略／投放結構／素材／成效 all read it. Order:
+    closed／live／ended → 成效; no strategy or no groups → 策略; groups but not a single ad →
+    投放結構 (新增廣告); every ad ready → 發布; no pack yet → 投放結構 (開始做素材); pack dispatched
+    but not every ad ready → 素材. A tab whose own step is the answer shows that step's in-place
+    action instead, chosen by the step's `id` (策略 照這個方式進行, 投放結構 新增廣告／開始做素材,
+    素材 前往素材工作檯). **It is navigation, not a judgment sentence** — decision 10 is unchanged:
+    its output is a tab and a button label, its inputs are fields the server already ships
+    (`budget_basis_json.strategy`, `groups`, `status`, `asset_readiness`), the tabs exist only in
+    the browser, and its sentences name the step without judging the campaign or re-spelling a
+    server rule (總覽's old next-step line 「投放已結束，7 天後自動結案…」 is replaced by the rule's
+    sentence; 成效's own 結案 card is not a next step and keeps its copy). Whether a pack exists is
+    a server fact read **from the pack itself** — `asset_readiness.pack_id` via `assets.pack_id()`,
+    the same `pack_for_source` lookup `dispatch_pack` guards with — never derived from readiness
+    rows (an ad added after the handoff has no set, so every row can be empty while the pack
+    exists), never a second request, never a parsed 400.
+16. **投放結構 stays on the newcomer path, in the strategy page's shape** (`05-strategy.png`). The
+    default face is a plain summary of what the system built (投放組, 廣告, 每日合計, 投放期間),
+    「不用改也可以」 and one full-width 「開始做素材 →」 that dispatches the pack (the existing
+    `POST .../campaigns/{id}/pack`) and lands on 素材 — offered only while no pack exists, so the
+    handoff never repeats; with no ad at all the button is 「新增廣告 →」 and opens the existing add
+    dialog. An ad added after the handoff is not in the pack (adding sets to an existing pack is not
+    built): 素材 says so on its row and the 素材已就位 tick makes it ready. The tree, the group／ad panels, add／delete
+    and the budget comparison live in 「調整結構（進階）」, closed by default (decision 9). Inside
+    it a blank group date reads 「跟活動同期間」 (blank already means the campaign's dates —
+    `repository._budget_total`, `adapters/manual.py::_group_field`), 「儲存變更」 appears only
+    while a panel has unsaved edits, and binding badges appear only once the campaign is published.
+    Dispatching from 素材 is gone: the handoff has one button, on 投放結構; 素材 keeps its
+    「查看素材任務包」 link.
+17. **Readiness warns, never blocks** (F03's rule kept). The publish screen, for every adapter
+    except 模擬發布, shows 「還有 N 則廣告沒有素材」 in the red band of `08-preflight.png` with
+    「回到素材」; nothing is disabled. 模擬發布 is a drill and carries no warning. The band is
+    composed inline on the publish screen; it becomes a shared pattern only when a second screen
+    needs it.
+18. **The auto-publish screen is not a dead sentence.** While auto publish is not connected it
+    prints the adapter's own message verbatim and offers 手動發布 and 模擬發布（演練） as buttons
+    (decision 1: "not connected", never a refusal). The header's ⋯ menu is gone — the publish
+    screen is the one place the path is chosen.
 
 ## 7. Verification
 
@@ -789,7 +837,7 @@ These are decided. A worker implements them; it does not re-open them.
    `.harness/scratch/research-onboarding.md`). **No model ever supplies one of these numbers**, and
    the screen always prints where it came from (「美國 2025 基準，起點用 · 來源：…」). There is no
    Taiwan primary source for any of them — that is said on screen, not hidden. They are replaced by
-   the brand's own closed-campaign numbers (F06), not by a better blog post. `cpa_roas_basis` was
+   the brand's own closed-campaign numbers (the 閉環 feature), not by a better blog post. `cpa_roas_basis` was
    **not** reused for this: that column was dropped in `20260903000004`, and its name says something
    else.
 4. **成效來源 is `brand.conversion_goal`**, which already exists (`purchase`／`lead`／`booking`／
