@@ -154,7 +154,7 @@ export const CHANNEL_TYPES: [string, string][] = [
 
 export const ASSET_KINDS: [string, string][] = [
   ["logo", "Logo"],
-  ["product_photo", "產品照"],
+  ["product_photo", "商品參考照"],
   ["packaging", "包裝"],
   ["other", "其他"],
 ];

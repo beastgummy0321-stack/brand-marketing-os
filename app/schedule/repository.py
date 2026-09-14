@@ -6,7 +6,8 @@ Five tables (supabase/migrations/20260901000002_schedule_creative_coordinates.sq
     brand_coordinate        — the seven-dimension vocabulary (constitution rule 5), one row
                                per (brand, dimension, key); the 35 angle seeds are
                                transcribed from app/methodology/creative-matrix.md, and the
-                               33 seeds across the other six dimensions (ticket T8a) from
+                               33 seeds across the other six dimensions (ticket T8a; format's
+                               `flexible` seed retired by F07-I03) from
                                that ticket's own vocabulary tables — never change key once
                                minted (T5 groups performance by it).
     creative_slot            — one row per ad node × source tree: "what this slot wants now".
@@ -115,7 +116,10 @@ _SEED_ANGLES: tuple = (
 # 票 T8a：另外六個維度共 33 個種子，逐字對照
 # docs/issues/t8a-six-dimension-vocabulary/ticket.md 的六張表（hook 那張本身逐字對照
 # app/methodology/copywriting.md:35-43，format 那張逐字對照
-# app/methodology/meta-format-specs.md:16,34,49）。跟 `_SEED_ANGLES` 一樣，SQL migration 版
+# app/methodology/meta-format-specs.md:16,34,49）。format 的 `flexible` 種子已由
+# supabase/migrations/20260915000001_schedule_brand_coordinate_disable_flexible.sql 停用並移除
+# （F07-I03：Meta 已無彈性格式，排程再排它視為 BUG），format 剩 3 個、六維總數 33 個。
+# 跟 `_SEED_ANGLES` 一樣，SQL migration 版
 # 活在 supabase/migrations/20260904000002_schedule_brand_coordinate_six_dimensions.sql，兩邊
 # 手動同步（SQL migration 叫不到這支 Python 模組）。
 # 每個維度一個 tuple，裡面每列一個 4-tuple：(key, category, label, situation)——`category`
@@ -168,8 +172,6 @@ _SEED_COORDINATES: dict = {
     "format": (
         # 4:5 1080x1350, verified 2026-08-07
         ("single_image", "Meta 版位", "單圖", "4:5，1080×1350"),
-        # Meta asset_feed_spec images <= 10, verified 2026-09-09
-        ("flexible", "Meta 版位", "彈性格式", "1～10 張同座標圖"),
         ("carousel", "Meta 版位", "輪播", "多卡，每卡連結由組裝時帶入"),
         ("video", "Meta 版位", "影片", "每主題媒體上限 1（主題＝腳本）"),
     ),

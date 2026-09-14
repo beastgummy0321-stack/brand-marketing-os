@@ -71,7 +71,7 @@ CHANNEL_TYPES = [
 
 ASSET_KINDS = [
     ("logo", "Logo"),
-    ("product_photo", "產品照"),
+    ("product_photo", "商品參考照"),
     ("packaging", "包裝"),
     ("other", "其他"),
 ]
