@@ -21,7 +21,7 @@ import {
 } from "@/lib/adsApi";
 import { fetchChannels, type Channel } from "@/lib/adsLaunchApi";
 import { Disclosure, JudgmentBand, KpiStrip, ReservedSlotCard, type KpiCell } from "./patterns";
-import { nextStep, NextStepButton, type StepTarget } from "./nextStep";
+import { nextStep, NextStepButton, StepButton, type StepTarget } from "./nextStep";
 
 // F05-I12：後端一律回傳 `campaign.labels`；預設值只在舊測試 fixture 沒帶這個欄位時頂上
 // （同 `OverviewTab.tsx`／`PerformanceTab.tsx` 的先例）。
@@ -332,13 +332,13 @@ export function StrategyTab({
         {hasGroups ? (
           <NextStepButton step={nextStep(c)} onChangeTab={onChangeTab} />
         ) : (
-          <Button className="w-full" onClick={() => void handlePrimary()} disabled={primaryBusy}>
+          <StepButton onClick={() => void handlePrimary()} disabled={primaryBusy}>
             {primaryBusy
               ? "處理中…"
               : c.budget_scenario === null && amountsUnknown
                 ? "先設定預算 →"
                 : "照這個方式進行 →"}
-          </Button>
+          </StepButton>
         )}
         {primaryError && <p className="text-sm text-danger">{primaryError}</p>}
       </div>
