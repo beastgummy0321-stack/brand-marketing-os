@@ -4,6 +4,7 @@
 全程只用 FakeProvider，不發出任何真實網路請求。
 """
 
+import os
 import unittest
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -12,7 +13,7 @@ from unittest import mock
 import anthropic
 
 from app.brand_intelligence import repository as repo
-from app.core import db, rule_cards, vocab
+from app.core import config, db, rule_cards, vocab
 from app.core import settings as coresettings
 from app.llm import context_compiler, gateway, pricing, providers
 from app.llm.providers import (
@@ -971,6 +972,67 @@ class FailInterruptedTasksTest(unittest.TestCase):
         succeeded_row = gateway.get_task(self.conn, succeeded_id)
         self.assertEqual(succeeded_row["status"], "succeeded")
         self.assertIsNone(succeeded_row["error"])
+
+
+class ScriptedProviderTest(unittest.TestCase):
+    """`BRAND_OS_LLM_PROVIDER=scripted`（F06-I05，e2e 後端專用）：select_provider() 換上
+    ScriptedProvider，不理會呼叫端傳進來的 provider；沒有腳本的 task_type 大聲丟 LookupError，
+    不留孤兒 `running` 列。"""
+
+    def setUp(self):
+        self.conn = db.current()
+        self.brand = repo.create_brand(
+            self.conn, name="品牌B（Scripted測試）", client_name=None, actor="小陳",
+            org_id=db.DEV_ORG_ID,
+        )
+        config.settings.cache_clear()
+        self._patcher = mock.patch.dict(os.environ, {"BRAND_OS_LLM_PROVIDER": "scripted"})
+        self._patcher.start()
+        config.settings.cache_clear()
+        self.addCleanup(self._patcher.stop)
+        self.addCleanup(config.settings.cache_clear)
+
+    def _context(self):
+        return gateway.TaskContext(
+            context_scope={"brand_id": self.brand["id"]},
+            knowledge_item_ids=[], brand_version=self.brand["knowledge_version"],
+            product_version=None,
+        )
+
+    def _rows_for_brand(self):
+        return [
+            dict(r) for r in self.conn.execute(
+                "SELECT * FROM llm_task WHERE brand_id = %s ORDER BY attempt_no", (self.brand["id"],)
+            ).fetchall()
+        ]
+
+    def test_scripted_reply_used_fake_provider_never_called(self):
+        fake = FakeProvider()
+        row = gateway.run_task(
+            self.conn, fake, brand_id=self.brand["id"], task_type="ads_brief_parse",
+            prompt_template_id="tpl", prompt_template_version="v1",
+            system="sys", messages=[{"role": "user", "content": "hi"}],
+            context=self._context(),
+        )
+        self.assertEqual(row["status"], "succeeded")
+        self.assertEqual(row["provider"], "scripted")
+        self.assertEqual(
+            gateway.parse_json_reply(row["rendered_output"]),
+            providers.SCRIPTED_REPLIES["ads_brief_parse"],
+        )
+        self.assertEqual(fake.calls, [])
+
+    def test_unknown_task_type_raises_lookup_error_no_orphan_row(self):
+        fake = FakeProvider()
+        with self.assertRaises(LookupError) as cm:
+            gateway.run_task(
+                self.conn, fake, brand_id=self.brand["id"], task_type="not_scripted",
+                prompt_template_id="tpl", prompt_template_version="v1",
+                system="sys", messages=[{"role": "user", "content": "hi"}],
+                context=self._context(),
+            )
+        self.assertIn("not_scripted", str(cm.exception))
+        self.assertEqual(self._rows_for_brand(), [])
 
 
 class ParseJsonReplyShapeTest(unittest.TestCase):
