@@ -136,8 +136,9 @@ class ApprovalFlipsReadinessTest(AssetsTestBase):
 
         after = assets.readiness(web.conn, self.org_id, self.brand_id, campaign["id"])
         self.assertEqual({row["state"] for row in after}, {"ready_workbench"})
-        summary = assets.readiness_summary(after)
-        self.assertEqual(summary, {"ready_count": 2, "total": 2})
+        current_pack_id = assets.pack_id(web.conn, self.org_id, self.brand_id, campaign["id"])
+        summary = assets.readiness_summary(after, current_pack_id)
+        self.assertEqual(summary, {"ready_count": 2, "total": 2, "pack_id": pack_id})
 
 
 # -- 案例 3：手動勾「素材已就位」——不進工作檯的廣告一樣可以就緒 -------------------------------
@@ -162,6 +163,7 @@ class ManualTickTest(AssetsTestBase):
         self.assertEqual(row["state"], "ready_manual")
         self.assertEqual(row["by"], ACTOR)
         self.assertIsNotNone(row["at"])
+        self.assertIsNone(assets.pack_id(web.conn, self.org_id, self.brand_id, campaign["id"]))
 
         untucked = assets.mark_ready(
             web.conn, self.org_id, self.brand_id, ad["id"], actor=ACTOR, ready=False,
@@ -269,6 +271,33 @@ class DispatchSendsOnlyTheAdsOwnProductTest(AssetsTestBase):
         target_set = next(s for s in pack["sets"] if s["source_ref"]["ads_ad_id"] == ads[0]["id"])
         self.assertEqual(target_set["request"]["product_ids"], [product_ids[0]])
         self.assertEqual(len(target_set["request"]["product_ids"]), 1)
+
+
+# -- 案例 7：交棒後新增的廣告沒有自己的 set，但 pack 本身還在——asset_readiness.pack_id
+# 要從 pack 讀，不是從逐列 briefs 推（§6.2 決議 15） ------------------------------------------
+
+class PackIdSurvivesRebuiltAdsTest(AssetsTestBase):
+    def test_pack_id_survives_deleting_and_recreating_every_ad(self):
+        campaign = self._adopted_campaign()
+        group_id = campaign["groups"][0]["id"]
+        ad_ids = [ad["id"] for ad in campaign["groups"][0]["ads"]]
+
+        pack_id = assets.dispatch_pack(web.conn, self.org_id, self.brand_id, campaign["id"])
+
+        for ad_id in ad_ids:
+            plan.delete_ad(web.conn, self.org_id, self.brand_id, ad_id)
+        plan.create_ad(
+            web.conn, self.org_id, self.brand_id, campaign["id"], group_id,
+            name="新廣告-交棒後才加", coordinates=_coordinates("later"),
+        )
+        web.conn.commit()
+
+        resp = self.client.get(f"/api/ads/brands/{self.brand_id}/campaigns/{campaign['id']}")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(
+            resp.json()["campaign"]["asset_readiness"],
+            {"ready_count": 0, "total": 1, "pack_id": pack_id},
+        )
 
 
 if __name__ == "__main__":

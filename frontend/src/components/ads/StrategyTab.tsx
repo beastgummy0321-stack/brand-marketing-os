@@ -21,10 +21,7 @@ import {
 } from "@/lib/adsApi";
 import { fetchChannels, type Channel } from "@/lib/adsLaunchApi";
 import { Disclosure, JudgmentBand, KpiStrip, ReservedSlotCard, type KpiCell } from "./patterns";
-
-// F04-I15：`OverviewTab.tsx` 有同一份 `WorkspaceTab`／`formatTarget`——兩邊都在
-// `do_not_touch`，抽共用要動 `index.ts` 與邊界，貴過幾行重複（ARCHITECTURE.md 決策 11b）。
-type WorkspaceTab = "overview" | "strategy" | "structure" | "assets" | "performance";
+import { nextStep, NextStepButton, type StepTarget } from "./nextStep";
 
 // F05-I12：後端一律回傳 `campaign.labels`；預設值只在舊測試 fixture 沒帶這個欄位時頂上
 // （同 `OverviewTab.tsx`／`PerformanceTab.tsx` 的先例）。
@@ -69,7 +66,7 @@ export function StrategyTab({
   brandId: string;
   campaign: CampaignDetail;
   onCampaignChange: (campaign: CampaignDetail) => void;
-  onChangeTab: (tab: WorkspaceTab) => void;
+  onChangeTab: (target: StepTarget) => void;
 }) {
   const [generating, setGenerating] = useState(false);
   const [generateError, setGenerateError] = useState<string | null>(null);
@@ -151,10 +148,6 @@ export function StrategyTab({
     setPrimaryBusy(true);
     setPrimaryError(null);
     try {
-      if (hasGroups) {
-        onChangeTab("structure");
-        return;
-      }
       let next = c;
       if (next.budget_scenario === null && scenarios) {
         next = await selectScenario(brandId, c.id, { scenario_key: scenarios.recommended, custom_total: null });
@@ -336,25 +329,24 @@ export function StrategyTab({
       </div>
 
       <div className="flex flex-col gap-1.5">
-        <Button className="w-full" variant={hasGroups ? "outline" : "default"} onClick={() => void handlePrimary()} disabled={primaryBusy}>
-          {primaryBusy
-            ? "處理中…"
-            : hasGroups
-              ? "前往投放結構"
+        {hasGroups ? (
+          <NextStepButton step={nextStep(c)} onChangeTab={onChangeTab} />
+        ) : (
+          <Button className="w-full" onClick={() => void handlePrimary()} disabled={primaryBusy}>
+            {primaryBusy
+              ? "處理中…"
               : c.budget_scenario === null && amountsUnknown
                 ? "先設定預算 →"
                 : "照這個方式進行 →"}
-        </Button>
+          </Button>
+        )}
         {primaryError && <p className="text-sm text-danger">{primaryError}</p>}
       </div>
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
       {hasGroups ? (
         <p className="text-sm text-muted-foreground sm:col-span-3">
-          投放結構已經建立，預算改在投放結構分頁的每個投放組日預算。{" "}
-          <Button variant="link" className="h-auto p-0" onClick={() => onChangeTab("structure")}>
-            前往投放結構
-          </Button>
+          投放結構已經建立，預算改在投放結構分頁的每個投放組日預算。
         </p>
       ) : (
         // `Disclosure` 是 uncontrolled（只有 `defaultOpen`），用 `key` remount 展開它，
