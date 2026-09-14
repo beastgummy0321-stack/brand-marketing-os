@@ -34,16 +34,50 @@ MISSING_KEY_MESSAGE = "尚未設定 AI 金鑰，請到「設定」頁填入後�
 # ---------------------------------------------------------------------------
 CODEX_CLI_MODEL = "gpt-5.6-luna"
 
+# ---------------------------------------------------------------------------
+# 罐頭回覆線路（e2e 後端專用，F06-I05）：BRAND_OS_LLM_PROVIDER=scripted 時，每一次 AI 呼叫
+# 都回這張表裡按 task_type 對應的固定 JSON，不打任何真實模型。只收 e2e 請求路徑上真的會打的
+# 三種 task_type；沒有腳本的 task_type 在 select_provider() 選供應商時就丟 LookupError，
+# 讓請求 500、e2e 當場紅，不會掉進「解析失敗改用預設值」那條安靜的退路。
+# ---------------------------------------------------------------------------
+SCRIPTED_REPLIES: dict[str, dict] = {
+    "ads_brief_parse": {
+        "objective": "購買", "success_metric": "roas", "success_target": None,
+        "success_basis": "e2e scripted reply", "product_ids": [], "audience_hint": None,
+        "notes": None, "budget_cap": None, "platform": None, "period": None,
+    },
+    "ads_strategy": {
+        "allocation": [
+            {"role": "new", "pct": 50, "rationale": "e2e scripted reply"},
+            {"role": "retarget", "pct": 30, "rationale": "e2e scripted reply"},
+            {"role": "explore", "pct": 20, "rationale": "e2e scripted reply"},
+        ],
+        "why": ["e2e scripted reply"], "unknowns": [], "alternatives": [], "learning_goals": [],
+    },
+    "workbench_free_parse": {
+        "topic": None, "outputs": [{"part": "image_prompt", "count": 1}], "style_hint": None,
+        "platform": None, "size": None, "audience": None, "key_message": None,
+    },
+}
+
 
 def codex_cli_enabled() -> bool:
     """環境變數開著＝這次呼叫要換走本機 Codex CLI 線路，不用猜也不用查其他旗標。"""
     return config.settings().brand_os_llm_provider == "codex_cli"
 
 
-def select_provider(provider: Provider) -> Provider:
-    """codex_cli_enabled() 開著時換成 CodexCliProvider，否則原樣回傳既有 provider——
-    給每個呼叫端（gateway.run_task、設定頁測試連線、intake 操作卡實測工具）共用同一個
-    切換點，不必各自重寫判斷式。"""
+def select_provider(provider: Provider, task_type: str | None = None) -> Provider:
+    """codex_cli_enabled() 開著時換成 CodexCliProvider，`BRAND_OS_LLM_PROVIDER=scripted` 時
+    換成 ScriptedProvider（e2e 後端專用，F06-I05），否則原樣回傳既有 provider——給每個呼叫端
+    （gateway.run_task、設定頁測試連線、intake 操作卡實測工具）共用同一個切換點，不必各自
+    重寫判斷式。"""
+    if config.settings().brand_os_llm_provider == "scripted":
+        if task_type not in SCRIPTED_REPLIES:
+            raise LookupError(
+                f"scripted provider has no reply for task_type {task_type!r}; "
+                "add one to SCRIPTED_REPLIES in app/llm/providers.py"
+            )
+        return ScriptedProvider(SCRIPTED_REPLIES[task_type])
     if codex_cli_enabled():
         return CodexCliProvider()
     return provider
@@ -714,6 +748,38 @@ class CodexCliProvider:
                 raw=usage_event,
                 search_sources=[],
             )
+
+
+class ScriptedProvider:
+    """罐頭回覆線路（e2e 後端專用，見本檔開頭 SCRIPTED_REPLIES 區塊）：實作跟 AnthropicProvider
+    一樣的 Provider 介面，靠 select_provider() 換上。`structured` 一律回 None——每個呼叫端都是
+    透過 gateway.parse_json_reply() 讀 rendered_output，走跟真實回覆一樣的解析路徑，不是抄捷徑
+    直接塞 structured dict。"""
+
+    name = "scripted"
+
+    def __init__(self, reply: dict):
+        self._reply = reply
+
+    def complete(
+        self,
+        *,
+        model: str,
+        system: str | None,
+        messages: list,
+        max_tokens: int,
+        timeout_s: float = 120.0,
+        effort: str | None = None,
+        tools: list | None = None,
+        org_id: str | None = None,
+    ) -> ProviderResponse:
+        return ProviderResponse(
+            output_text=json.dumps(self._reply, ensure_ascii=False),
+            structured=None,
+            usage=Usage(input_tokens=0, output_tokens=0),
+            stop_reason="end_turn",
+            search_sources=[],
+        )
 
 
 class FakeProvider:

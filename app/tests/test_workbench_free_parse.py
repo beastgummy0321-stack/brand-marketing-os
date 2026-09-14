@@ -123,5 +123,22 @@ class ProviderTimeoutTest(_FreeParseTestBase):
         self.assertEqual(self._task_count(), 1)
 
 
+class ScriptedReplyParsesTest(_FreeParseTestBase):
+    """形狀絆線（F06-I05）：`providers.SCRIPTED_REPLIES["workbench_free_parse"]` 必須通過
+    `free_parse.parse` 自己的驗證，e2e 才不會在這裡默默掉進 parsed=False 的退路。"""
+
+    def test_scripted_reply_parses(self):
+        reply = json.dumps(providers.SCRIPTED_REPLIES["workbench_free_parse"], ensure_ascii=False)
+        free_parse.PROVIDER = _fake(reply)
+
+        result = free_parse.parse(
+            web.conn, brand_id=self.brand_id, free_text="做一些東西",
+            defaults=self.defaults,
+        )
+
+        self.assertTrue(result["parsed"])
+        self.assertEqual(result["spec"]["outputs"], [{"part": "image_prompt", "count": 1}])
+
+
 if __name__ == "__main__":
     unittest.main()

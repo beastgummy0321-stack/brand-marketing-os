@@ -23,9 +23,10 @@ touches only its own organisation") has no other machine check. It can't prove a
 import inspect
 import os
 import unittest
+from unittest import mock
 
 import app.background as background_module
-from app.core import db
+from app.core import config, db
 from app.llm import gateway
 
 
@@ -218,6 +219,40 @@ class IsActiveTest(unittest.TestCase):
             background_module.is_active(lock),
             "a finished job must not block a user from re-running their own feature",
         )
+
+
+class MemoryQueueTest(unittest.TestCase):
+    """`BRAND_OS_JOB_QUEUE=memory`（F06-I05，e2e 後端專用）：`enqueue()`／`is_active()` 完全
+    不碰 procrastinate，job 永遠不會落地在 `<schema>__queue.procrastinate_jobs`。"""
+
+    def setUp(self):
+        config.settings.cache_clear()
+        self._patcher = mock.patch.dict(os.environ, {"BRAND_OS_JOB_QUEUE": "memory"})
+        self._patcher.start()
+        config.settings.cache_clear()
+        self.addCleanup(self._patcher.stop)
+        self.addCleanup(config.settings.cache_clear)
+        self.addCleanup(background_module._memory_locks.clear)
+
+    def test_enqueue_and_is_active_never_touch_the_queue(self):
+        lock = f"memory_queue_test:{db.new_id('lock')}"
+
+        self.assertTrue(
+            background_module.enqueue("background.noop", org_id=db.DEV_ORG_ID, lock=lock)
+        )
+        self.assertFalse(
+            background_module.enqueue("background.noop", org_id=db.DEV_ORG_ID, lock=lock)
+        )
+
+        self.assertTrue(background_module.is_active(lock))
+        self.assertFalse(background_module.is_active("never-enqueued"))
+
+        schema = db.current().execute("SELECT current_schema() AS s").fetchone()["s"]
+        count = db.current().execute(
+            f'SELECT count(*) AS c FROM "{schema}__queue".procrastinate_jobs '
+            "WHERE queueing_lock = %s", (lock,),
+        ).fetchone()["c"]
+        self.assertEqual(count, 0)
 
 
 class TaskSignatureOrgIdGateTest(unittest.TestCase):

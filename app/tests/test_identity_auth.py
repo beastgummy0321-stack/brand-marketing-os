@@ -342,5 +342,52 @@ class CodexCliProviderIsLocalOnlyTest(unittest.TestCase):
             self.assertEqual(config.settings().brand_os_llm_provider, "anthropic")
 
 
+class E2eSwitchesAreLocalOnlyTest(unittest.TestCase):
+    """`BRAND_OS_LLM_PROVIDER=scripted` 與 `BRAND_OS_JOB_QUEUE=memory`（F06-I05）都只是
+    e2e 後端的驗證接縫，不是產品功能——production 設下去要炸，`BRAND_OS_ENV=local` 要讀得回來。"""
+
+    def setUp(self):
+        self.addCleanup(config.settings.cache_clear)
+
+    def test_scripted_provider_forbidden_outside_local(self):
+        base = {
+            "BRAND_OS_ENV": "production",
+            "DATABASE_URL": "postgresql://x/y",
+            "SUPABASE_URL": "https://x",
+            "SUPABASE_SERVICE_ROLE_KEY": "k",
+            "IDENTITY_DEV_TOKEN": "", "IDENTITY_ALLOW_HS256": "", "BRAND_OS_TODAY": "",
+        }
+        with mock.patch.dict(os.environ, {**base, "BRAND_OS_LLM_PROVIDER": "scripted"}):
+            config.settings.cache_clear()
+            with self.assertRaises(RuntimeError) as cm:
+                config.settings()
+        self.assertIn("BRAND_OS_LLM_PROVIDER", str(cm.exception))
+
+    def test_memory_job_queue_forbidden_outside_local(self):
+        base = {
+            "BRAND_OS_ENV": "production",
+            "DATABASE_URL": "postgresql://x/y",
+            "SUPABASE_URL": "https://x",
+            "SUPABASE_SERVICE_ROLE_KEY": "k",
+            "IDENTITY_DEV_TOKEN": "", "IDENTITY_ALLOW_HS256": "", "BRAND_OS_TODAY": "",
+        }
+        with mock.patch.dict(os.environ, {**base, "BRAND_OS_JOB_QUEUE": "memory"}):
+            config.settings.cache_clear()
+            with self.assertRaises(RuntimeError) as cm:
+                config.settings()
+        self.assertIn("BRAND_OS_JOB_QUEUE", str(cm.exception))
+
+    def test_both_switches_read_back_under_local(self):
+        with mock.patch.dict(os.environ, {
+            "BRAND_OS_ENV": "local",
+            "BRAND_OS_LLM_PROVIDER": "scripted",
+            "BRAND_OS_JOB_QUEUE": "memory",
+        }):
+            config.settings.cache_clear()
+            settings = config.settings()
+        self.assertEqual(settings.brand_os_llm_provider, "scripted")
+        self.assertEqual(settings.brand_os_job_queue, "memory")
+
+
 if __name__ == "__main__":
     unittest.main()

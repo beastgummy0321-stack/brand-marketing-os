@@ -259,7 +259,8 @@ def run_task(
     opts = options or TaskOptions()
     model = providers.resolve_model(opts.model, task_type=task_type, conn=conn, brand_id=brand_id)
     thinking = providers.resolve_thinking(opts.thinking, task_type=task_type)
-    provider = providers.select_provider(provider)  # 開發用 codex_cli 開關，見 providers.py 開頭
+    provider = providers.select_provider(provider, task_type=task_type)  # 開發用 codex_cli／
+    # e2e 用 scripted 開關，見 providers.py 開頭
     provider_name = getattr(provider, "name", "unknown")
 
     # 思考等級（票 #27）、工具（ADR 0005）、org_id（票 04-0：AnthropicProvider 讀 DB 金鑰
