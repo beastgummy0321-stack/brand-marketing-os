@@ -821,6 +821,31 @@ Campaign 卡, 數字條, 時間軸, 佔位卡, 步驟指示, 摘要欄位卡 —
 `docs/design-system.md` §5.3 and implemented once in `frontend/src/components/ads/patterns/`;
 a page issue composes them and does not re-invent one.
 
+**How the visual gate is performed** (2026-09-14, after F06-I01 blocked on a helper script written into
+`frontend/`). The worker captures; the planner compares. Nobody writes a helper file, anywhere.
+- **Tool:** the global `playwright-cli` (needs no repo file and no `node_modules`). Its session folder
+  `.playwright-cli/` is gitignored, so the scope diff never sees it.
+- **Code under test:** the worktree's own code, served on the port the issue names (8731 and up; never 8710,
+  never e2e's 8720). From the worktree run `cd frontend && npm run build`. Then, from the worktree root and
+  in the background, run `BRAND_OS_LLM_PROVIDER=scripted BRAND_OS_JOB_QUEUE=memory uv run python -m uvicorn app.main:app --port <port>`.
+- **Sign-in:** the `/app/login` form with the seed account `123@example.com` / `123456` (brand `brd_bughunt`).
+  No forged token, no saved storage-state file.
+- **Commands:**
+  1. `mkdir -p C:/Users/User/AppData/Local/Temp/harness-shots/<issue>`
+  2. `playwright-cli -s=<issue> open http://localhost:<port>/app/login`
+  3. `playwright-cli -s=<issue> resize <w> <h>` (1024 800, then 1920 1080)
+  4. `snapshot`, then `fill` Email and 密碼, then `click` the 登入 button
+  5. `goto` the screen
+  6. `screenshot --full-page --filename C:/Users/User/AppData/Local/Temp/harness-shots/<issue>/<name>-<w>.png`
+  7. `close`
+  8. Stop the server: `netstat -ano | grep ":<port> .*LISTENING"`, then `taskkill //PID <pid> //F`.
+- **Output:** images live outside the repo, in that `harness-shots/<issue>/` folder. The finish note lists each
+  image's absolute path, the worktree path and the port.
+- **Screen state:** reach whatever state the screen needs through that server's UI; dev data is test data.
+- **If capture fails:** do not work around it with a file. Say so in the finish note.
+- **Comparison:** happens at `review: planner`. The planner reads each PNG beside its reference image and takes
+  any missing shot the same way. Approval is the gate.
+
 ## 8. 品牌地基與可投放檢查表 — settled decisions (2026-09-14, F05)
 
 These are decided. A worker implements them; it does not re-open them.
