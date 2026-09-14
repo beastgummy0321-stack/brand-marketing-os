@@ -668,5 +668,22 @@ class BudgetUsesFirstSellWayForMotherProductTest(StrategyTestBase):
         self.assertEqual(product_id, first["id"])
 
 
+class ScriptedReplyValidatesTest(StrategyTestBase):
+    """形狀絆線（F06-I05）：`providers.SCRIPTED_REPLIES["ads_strategy"]` 必須通過
+    `strategy.generate` 自己的驗證，e2e 才不會在這裡默默掉進 provider 失敗分支。"""
+
+    def setUp(self):
+        super().setUp()
+        self.campaign = self._create_campaign()
+        strategy.PROVIDER = _fake(
+            json.dumps(providers.SCRIPTED_REPLIES["ads_strategy"], ensure_ascii=False)
+        )
+
+    def test_scripted_reply_generates_and_saves_expected_roles(self):
+        detail = self._generate()
+        allocation = detail["budget_basis_json"]["strategy"]["allocation"]
+        self.assertEqual([item["role"] for item in allocation], ["new", "retarget", "explore"])
+
+
 if __name__ == "__main__":
     unittest.main()

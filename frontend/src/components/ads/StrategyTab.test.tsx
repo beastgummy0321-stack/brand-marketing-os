@@ -7,7 +7,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 
-import type { CampaignDetail, DeliveryGroupRow } from "@/lib/adsApi";
+import type { AdRow, CampaignDetail, DeliveryGroupRow } from "@/lib/adsApi";
 import { adoptStrategy, selectScenario } from "@/lib/adsApi";
 import { StrategyTab } from "./StrategyTab";
 
@@ -38,6 +38,33 @@ function group(overrides: Partial<DeliveryGroupRow> = {}): DeliveryGroupRow {
     start_date: null,
     end_date: null,
     ads: [],
+    external_id: null,
+    external_name: null,
+    external_status: null,
+    local_state: "unbound",
+    bound_at: null,
+    ...overrides,
+  };
+}
+
+function ad(overrides: Partial<AdRow> = {}): AdRow {
+  return {
+    id: "ad_1",
+    campaign_id: "cmp_1",
+    group_id: "grp_1",
+    name: "廣告一",
+    audience_key: null,
+    pain_key: null,
+    angle_key: null,
+    hook_key: null,
+    proof_key: null,
+    offer_key: null,
+    format_key: null,
+    coordinates_snapshot_json: {},
+    product_id: null,
+    asset_ready_source: null,
+    asset_ready_by: null,
+    asset_ready_at: null,
     external_id: null,
     external_name: null,
     external_status: null,
@@ -278,11 +305,17 @@ describe("StrategyTab（F04-I14）", () => {
     expect(screen.queryByText("累積中")).toBeNull();
   });
 
-  it("有一個投放組：不出現「調整建議」收合，改印預算改在投放結構分頁；主要按鈕是前往投放結構", () => {
-    renderTab(campaign({ groups: [group()] }));
+  it("有一個投放組、一則廣告、還沒交棒：不出現「調整建議」收合，改印預算改在投放結構分頁；" +
+     "主要按鈕是「前往投放結構 →」，按下去呼叫 onChangeTab(\"structure\")", async () => {
+    const user = userEvent.setup();
+    const { onChangeTab } = renderTab(
+      campaign({ groups: [group({ ads: [ad()] })], asset_readiness: { ready_count: 0, total: 1 } }),
+    );
     expect(screen.queryByRole("button", { name: "調整建議" })).toBeNull();
     expect(screen.getByText(/投放結構已經建立，預算改在投放結構分頁的每個投放組日預算。/)).toBeTruthy();
-    expect(screen.getAllByRole("button", { name: "前往投放結構" }).length).toBeGreaterThan(0);
+    const button = screen.getByRole("button", { name: "前往投放結構 →" });
+    await user.click(button);
+    expect(onChangeTab).toHaveBeenCalledWith("structure");
   });
 
   function campaignWithUnknownAmounts(overrides: Partial<CampaignDetail> = {}): CampaignDetail {
@@ -336,5 +369,18 @@ describe("StrategyTab（F04-I14）", () => {
 
     expect(adoptStrategy).toHaveBeenCalledWith("brd_1", "cmp_1");
     expect(selectScenario).not.toHaveBeenCalled();
+  });
+
+  it("status live、沒投放組：規則的答案是查看成效，不是採用；沒有「照這個方式進行 →」與「調整建議」", async () => {
+    const user = userEvent.setup();
+    const { onChangeTab } = renderTab(campaign({ status: "live", groups: [] }));
+
+    const button = screen.getByRole("button", { name: "查看成效 →" });
+    expect(screen.queryByRole("button", { name: "照這個方式進行 →" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "調整建議" })).toBeNull();
+
+    await user.click(button);
+
+    expect(onChangeTab).toHaveBeenCalledWith("performance");
   });
 });

@@ -1,17 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
 import { useLocation, useSearchParams } from "react-router-dom";
-import { MoreHorizontal } from "lucide-react";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { PageTabs } from "@/components/layout/PageTabs";
 import { EmptyState } from "@/components/layout/EmptyState";
 import { Badge } from "@/components/layout/ui/badge";
 import { Button } from "@/components/layout/ui/button";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/layout/ui/dropdown-menu";
 import { useWorkspace } from "@/components/layout/WorkspaceContext";
 import { getCampaign, type AdapterKey, type CampaignDetail } from "@/lib/adsApi";
 import { fetchChannels, type Channel } from "@/lib/adsLaunchApi";
@@ -22,8 +15,7 @@ import { DeliveryTab } from "./DeliveryTab";
 import { AssetsTab } from "./AssetsTab";
 import { PerformanceTab } from "./PerformanceTab";
 import { PublishPage } from "./PublishPage";
-
-type WorkspaceTab = "overview" | "strategy" | "structure" | "assets" | "performance";
+import type { StepTarget, WorkspaceTab } from "./nextStep";
 
 const TABS: { value: WorkspaceTab; label: string }[] = [
   { value: "overview", label: "總覽" },
@@ -97,6 +89,12 @@ export function CampaignWorkspace({
     });
   }
 
+  // §6.2 決議 15：規則回的 target 可能是 "publish"，不是分頁——這裡把它接到既有的發布入口。
+  function go(target: StepTarget) {
+    if (target === "publish") setPublishAdapter("auto_meta");
+    else changeTab(target);
+  }
+
   const campaign = state.status === "ready" ? state.campaign : null;
   // 已經投放中／結束／結案不再需要發布動作——只在草稿／待發布時給這個入口。
   const canPublish = campaign ? campaign.status === "draft" || campaign.status === "ready" : false;
@@ -115,26 +113,9 @@ export function CampaignWorkspace({
             <div className="flex items-center gap-2">
               <Badge variant={STATUS_TONE[campaign.status]}>{STATUS_LABEL[campaign.status]}</Badge>
               {canPublish && (
-                <>
-                  <Button size="sm" onClick={() => setPublishAdapter("auto_meta")}>
-                    發布 Campaign
-                  </Button>
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <Button variant="outline" size="icon" aria-label="更多發布方式">
-                        <MoreHorizontal size={16} />
-                      </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end">
-                      <DropdownMenuItem onSelect={() => setPublishAdapter("manual")}>
-                        手動發布（進階）
-                      </DropdownMenuItem>
-                      <DropdownMenuItem onSelect={() => setPublishAdapter("simulated")}>
-                        模擬發布（演練用）
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                </>
+                <Button size="sm" onClick={() => setPublishAdapter("auto_meta")}>
+                  發布 Campaign
+                </Button>
               )}
             </div>
           ) : undefined
@@ -153,6 +134,11 @@ export function CampaignWorkspace({
           onViewPerformance={() => {
             setPublishAdapter(null);
             changeTab("performance");
+          }}
+          onChangeAdapter={setPublishAdapter}
+          onGoToAssets={() => {
+            setPublishAdapter(null);
+            changeTab("assets");
           }}
         />
       ) : (
@@ -179,20 +165,20 @@ export function CampaignWorkspace({
               <div className="surface-body py-10 text-center text-sm text-muted-foreground">讀取中…</div>
             </div>
           ) : tab === "overview" ? (
-            <OverviewTab campaign={campaign} onChangeTab={changeTab} />
+            <OverviewTab campaign={campaign} onChangeTab={go} />
           ) : tab === "strategy" ? (
             <StrategyTab
               brandId={brandId}
               campaign={campaign}
               onCampaignChange={updateCampaign}
-              onChangeTab={changeTab}
+              onChangeTab={go}
             />
           ) : tab === "structure" ? (
-            <DeliveryTab brandId={brandId} campaign={campaign} onCampaignChange={updateCampaign} />
+            <DeliveryTab brandId={brandId} campaign={campaign} onCampaignChange={updateCampaign} onChangeTab={go} />
           ) : tab === "assets" ? (
-            <AssetsTab brandId={brandId} campaign={campaign} onCampaignChange={updateCampaign} />
+            <AssetsTab brandId={brandId} campaign={campaign} onCampaignChange={updateCampaign} onChangeTab={go} />
           ) : (
-            <PerformanceTab brandId={brandId} campaign={campaign} onCampaignChange={updateCampaign} />
+            <PerformanceTab brandId={brandId} campaign={campaign} onCampaignChange={updateCampaign} onChangeTab={go} />
           )}
         </>
       )}

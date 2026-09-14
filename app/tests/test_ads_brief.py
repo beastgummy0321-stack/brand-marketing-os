@@ -351,5 +351,18 @@ class UpdateCampaignFlipsFieldSourceToUserTest(_BriefTestBase):
                 self.assertEqual(after_sources[key], value)
 
 
+class ScriptedReplyParsesTest(_BriefTestBase):
+    """形狀絆線（F06-I05）：`providers.SCRIPTED_REPLIES["ads_brief_parse"]` 必須通過
+    `brief.create_draft` 自己的驗證，e2e 才不會在這裡默默掉進 parsed=False。"""
+
+    def test_scripted_reply_parses(self):
+        reply = json.dumps(providers.SCRIPTED_REPLIES["ads_brief_parse"], ensure_ascii=False)
+        brief.PROVIDER = _fake(reply)
+
+        detail = self._create()
+
+        self.assertTrue(detail["parsed"])
+
+
 if __name__ == "__main__":
     unittest.main()

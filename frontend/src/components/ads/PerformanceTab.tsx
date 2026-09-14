@@ -24,6 +24,7 @@ import {
   type CampaignPerformance,
   type SuccessMetric,
 } from "@/lib/adsApi";
+import { nextStep, NextStepButton, type StepTarget } from "./nextStep";
 
 // F05-I12：後端一律回傳 `campaign.labels`；預設值只在舊測試 fixture 沒帶這個欄位時頂上
 // （同 `OverviewTab.tsx`／`StrategyTab.tsx` 的先例）。
@@ -153,10 +154,12 @@ export function PerformanceTab({
   brandId,
   campaign: c,
   onCampaignChange,
+  onChangeTab,
 }: {
   brandId: string;
   campaign: CampaignDetail;
   onCampaignChange: (campaign: CampaignDetail) => void;
+  onChangeTab: (target: StepTarget) => void;
 }) {
   const published = c.status === "live" || c.status === "ended" || c.status === "closed";
   const labels = c.labels ?? DEFAULT_LABELS;
@@ -212,10 +215,13 @@ export function PerformanceTab({
 
   if (!published) {
     return (
-      <EmptyState
-        title="還沒有成效資料"
-        description={`Campaign 上線後，這裡會顯示每日花費、${labels.conversion}與 ROAS 趨勢，以及結案時的判定。`}
-      />
+      <div className="flex flex-col gap-4">
+        <EmptyState
+          title="還沒有成效資料"
+          description={`Campaign 上線後，這裡會顯示每日花費、${labels.conversion}與 ROAS 趨勢，以及結案時的判定。`}
+        />
+        <NextStepButton step={nextStep(c)} onChangeTab={onChangeTab} />
+      </div>
     );
   }
 

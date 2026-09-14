@@ -85,6 +85,14 @@ shell `list_jobs`／`list_locks` 指令同一個公開 API，不是繞過它自�
 `queueing_lock` 名下還有列卡在 `todo` 或 `doing`，就代表這件事還沒結束——擋不擋、擋完
 回什麼狀態碼，仍然是呼叫端的事（`app/schedule/routes.py`／`app/brand_web/routes_products.py`
 ／`app/brand_web/routes_report_api.py` 各自的 409／400），這裡只負責回答問題。
+
+記憶體佇列模式（`BRAND_OS_JOB_QUEUE=memory`，e2e 後端專用，F06-I05）：開發用資料庫的
+`public__queue` 是共用的——使用者自己一直開著的 `python -m app.worker`（真 Codex、舊程式）
+會從那裡撿走 e2e 建出來的 job 去跑，8720 的環境變數碰不到那支獨立行程。這個模式下
+`enqueue()`／`is_active()` 完全不碰 procrastinate、不寫任何一列：job 永遠不會執行。e2e 本來
+就只斷言「沒有 worker 也成立」的行為（F02 Decisions），job 不跑正是它宣稱的前提。由
+`app/core/config.py` 的 `_FORBIDDEN_VALUES_OUTSIDE_LOCAL` 擋住，只有 `BRAND_OS_ENV=local`
+才能設。
 """
 
 import asyncio
@@ -95,7 +103,7 @@ from urllib.parse import quote, urlsplit, urlunsplit
 import procrastinate
 from procrastinate.exceptions import AlreadyEnqueued
 
-from app.core import db
+from app.core import config, db
 
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
@@ -106,6 +114,7 @@ _app: procrastinate.App | None = None
 _app_dsn: str | None = None
 _sync_app: procrastinate.App | None = None  # 票 05-1：enqueue() 專用，見模組檔頭
 _sync_app_dsn: str | None = None
+_memory_locks: set[str] = set()  # 記憶體佇列模式（F06-I05）：只記 lock，job 永遠不真的跑
 
 
 def _noop(org_id: str) -> None:
@@ -165,6 +174,11 @@ def enqueue(task_name: str, *, org_id: str, lock: str, **kwargs) -> bool:
     the tenant travels in the args, not in a procrastinate column). `lock` becomes
     procrastinate's `queueing_lock`: `False` when a job with this lock is already waiting in
     `todo` — see module docstring for exactly how much that window covers."""
+    if config.settings().brand_os_job_queue == "memory":
+        if lock in _memory_locks:
+            return False
+        _memory_locks.add(lock)
+        return True
     deferrer = _sync_app_for_defer().configure_task(task_name, queueing_lock=lock)
     try:
         deferrer.defer(org_id=org_id, **kwargs)
@@ -191,6 +205,8 @@ def is_active(lock: str) -> bool:
     Goes through `job_manager.list_jobs(queueing_lock=..., status=...)` — procrastinate's own
     public query surface (its `shell` CLI's `list_jobs`/`list_locks` commands take the same
     `status=` string), not a hand-rolled SQL query against `procrastinate_jobs`."""
+    if config.settings().brand_os_job_queue == "memory":
+        return lock in _memory_locks
     job_manager = _sync_app_for_defer().job_manager
     return bool(job_manager.list_jobs(queueing_lock=lock, status="todo")) or bool(
         job_manager.list_jobs(queueing_lock=lock, status="doing")

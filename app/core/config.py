@@ -56,6 +56,11 @@ _FORBIDDEN_VALUES_OUTSIDE_LOCAL = (
     ("brand_os_llm_provider", "BRAND_OS_LLM_PROVIDER", "codex_cli",
      "codex_cli 是本機那支 CLI（ADR 0032），雲端主機上沒有這支程式，"
      "設下去每一次 AI 呼叫都會安靜失敗"),
+    ("brand_os_llm_provider", "BRAND_OS_LLM_PROVIDER", "scripted",
+     "scripted 是 e2e 後端專用的罐頭回覆（F06-I05），不是真的模型，"
+     "設下去每一次 AI 呼叫都回固定的假資料"),
+    ("brand_os_job_queue", "BRAND_OS_JOB_QUEUE", "memory",
+     "memory 是 e2e 後端專用（F06-I05），背景工作會被直接丟掉、永遠不會執行"),
 )
 
 
@@ -81,6 +86,7 @@ class Settings(BaseSettings):
     anthropic_api_key: str = ""
     brand_os_llm_model: str = ""
     brand_os_llm_provider: str = ""
+    brand_os_job_queue: str = ""
 
     @property
     def is_local(self) -> bool:

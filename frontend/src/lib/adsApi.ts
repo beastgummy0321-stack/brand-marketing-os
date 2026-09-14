@@ -188,6 +188,10 @@ export interface AssetReadinessRow {
 export interface AssetReadinessSummary {
   ready_count: number;
   total: number;
+  /** 這個 Campaign 交棒過的任務包 id，讀自 pack 本身，不是從逐列 briefs 推（§6.2 決議 15）。
+   * 後端一律回傳，選填只是為了不逼著每一個既有的手寫測試 fixture都補上這個新欄位
+   * （precedent：`CampaignDetail.labels` 上面的同一句話）。 */
+  pack_id?: string | null;
 }
 
 /** `POST /campaigns` 的回應：`CampaignDetail` 加一個 transient 的 `parsed` 旗標（F03-I03）——

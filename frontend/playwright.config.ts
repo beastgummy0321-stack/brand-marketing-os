@@ -42,5 +42,10 @@ export default defineConfig({
         reuseExistingServer: false,
         // 冷啟動要等連線池接上 Postgres；`啟動行銷系統.bat` 也是等到 60 秒。
         timeout: 120_000,
+        // e2e 不再打真模型、不再把 job 交給另一個行程（F06-I05，e2e 不再打真模型 Decisions）：
+        // 沒有一個 job 會真的跑。Playwright 把這個 env 疊在 process.env 上
+        // （node_modules/playwright/lib/runner/index.js:858-862），`app/main.py::_load_dotenv`
+        // 不覆蓋已經有值的變數，所以 .env 的 codex_cli 贏不了。
+        env: { BRAND_OS_LLM_PROVIDER: "scripted", BRAND_OS_JOB_QUEUE: "memory" },
       },
 });

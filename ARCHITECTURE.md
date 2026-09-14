@@ -255,7 +255,7 @@
   ],
   "verify": {
     "test": "uv run python -m pytest app/tests -q -n 8 --dist loadfile",
-    "typecheck": "uv run ruff check app && uv run python -m pyright && cd frontend && npx tsc -b --noEmit && npm run depcruise",
+    "typecheck": "uv run ruff check app && uv run python -m pyright && cd frontend && npx tsc -b --noEmit && npm run depcruise && npx vitest run src/architectureBoundaries.test.ts",
     "build": "cd frontend && npm run build",
     "smoke": "cd frontend && npm run e2e"
   },
@@ -306,7 +306,7 @@ numbers. Platform differences live in `app/ads/adapters/**` and in `app/ads/chan
 registry allowed to know a platform's name; anywhere else in `app/ads` a platform name in a string
 literal is a bug, machine-checked by `app/tests/test_ads_no_platform_literal.py`. It has exactly
 three exemptions — `channels.py`, the whole of `outcome.py`, and the whole `adapters/` directory;
-`outcome.py` only until F06's RC-D removes the `source = 'meta'` rule, the other two for good. The
+`outcome.py` only until the 閉環 feature's RC-D removes the `source = 'meta'` rule, the other two for good. The
 test and this sentence must name the same three.
 Nouns on screen come from the data's own labels — the channel's `label`, the conversion goal's label
 — shipped as text by the side that owns the rule (§5.3) and never re-spelled in the browser. There
@@ -381,7 +381,7 @@ reaches legacy code only through a file listed in `legacy_facades` (in practice:
 or the module's `repository.py` / `gateway.py`). `may_depend_on` governs **managed modules only**:
 importing a legacy facade is not an entry there and never needs one — `ads`' `may_depend_on:
 ["workbench"]` does not forbid `app/ads/repository.py` importing `app.brand_intelligence.repository`
-(it is a declared facade; F03-I19 review). New capability never lands in legacy; moving a
+(it is a declared facade; F03-I19 review). New capability never lands in legacy (one test-only exception: the e2e seam in §7); moving a
 caller out of legacy is a `legacy_migration: true` issue with `review: planner`. There is no
 clean-up-first round and no tolerance ledger.
 
@@ -412,7 +412,8 @@ those edits carry `review: planner`.
 The front end is not a separate harness module: `frontend/src/components/<feature>/` folders are
 owned by the backend module of the same capability (see `owns` above) and their import boundary is
 enforced by `frontend/.dependency-cruiser.cjs` (feature folders talk to each other only through
-`index.ts`; `layout/` is the shared kit), which runs inside the `verify.typecheck` command.
+`index.ts`; `layout/` is the shared kit), which runs inside the `verify.typecheck` command together
+with the 800-line file cap `frontend/src/architectureBoundaries.test.ts`.
 `frontend/src/lib/**` is app shell except the per-module API clients (`workbenchApi.ts`,
 `scheduleApi.ts`, `adsApi.ts`, `adsLaunchApi.ts`, `intakeApi.ts`, `intakeT2Api.ts`), which each
 module owns — `adsLaunchApi.ts` is `ads`' second client (F05-I05 split it out when `adsApi.ts`
@@ -691,7 +692,8 @@ visual reference for all three Ads V2 features is the prototype
 
 The visual source of truth for 投放中心 is now `docs/design/ads/01-home.png` … `10-strategy-advanced.png`
 (01 首頁, 02 所有 Campaign, 03 建立投放計畫, 04 理解如下, 05 推薦策略, 06 Campaign 工作區總覽,
-07 素材交接 = F05, 08 發布前檢查 = F06, 10 進階設定). `09-performance-overview-not-built.png` is
+07 素材交接 = F05, 08 發布前檢查 = the 閉環 feature — F06 borrows only its warning band, §6.2 —
+10 進階設定). `09-performance-overview-not-built.png` is
 recorded as **not built**: suggestions live inside 投放中心, not behind a new nav item. Where an
 image and the 09-12 prototype differ, the image wins; the prototype is history.
 
@@ -732,15 +734,91 @@ image and the 09-12 prototype differ, the image wins; the prototype is history.
     program re-splits the money). 查看完整判斷 = the existing 查看策略依據 panel. The permanently
     disabled 採用 button is gone.
 
+### 6.2 Third round — 工作區的快樂路徑 (settled 2026-09-14, F06)
+
+Measured on a live campaign: after 策略 → 投放結構 the user did not know what to do next. The
+next-step rule had one producer, rendered on 總覽 only, and its 「素材已就位」 target pointed at a
+tab with no publish affordance; 投放結構 and 素材 ended with no next step, and the header's
+發布 Campaign only printed 自動發布未接上 while the working paths hid in a ⋯ menu.
+
+15. **One next-step rule, every tab.** `frontend/src/components/ads/nextStep.tsx::nextStep(campaign)`
+    is the only producer of 「下一步」 in the Campaign workspace: 總覽's 下一步 card and 狀態時間軸,
+    and the full-width primary button at the end of 策略／投放結構／素材／成效 all read it. Order:
+    closed／live／ended → 成效; no strategy or no groups → 策略; groups but not a single ad →
+    投放結構 (新增廣告); every ad ready → 發布; no pack yet → 投放結構 (開始做素材); pack dispatched
+    but not every ad ready → 素材. A tab whose own step is the answer shows that step's in-place
+    action instead, chosen by the step's `id` (策略 照這個方式進行, 投放結構 新增廣告／開始做素材,
+    素材 前往素材工作檯). **It is navigation, not a judgment sentence** — decision 10 is unchanged:
+    its output is a tab and a button label, its inputs are fields the server already ships
+    (`budget_basis_json.strategy`, `groups`, `status`, `asset_readiness`), the tabs exist only in
+    the browser, and its sentences name the step without judging the campaign or re-spelling a
+    server rule (總覽's old next-step line 「投放已結束，7 天後自動結案…」 is replaced by the rule's
+    sentence; 成效's own 結案 card is not a next step and keeps its copy). Whether a pack exists is
+    a server fact read **from the pack itself** — `asset_readiness.pack_id` via `assets.pack_id()`,
+    the same `pack_for_source` lookup `dispatch_pack` guards with — never derived from readiness
+    rows (an ad added after the handoff has no set, so every row can be empty while the pack
+    exists), never a second request, never a parsed 400.
+16. **投放結構 stays on the newcomer path, in the strategy page's shape** (`05-strategy.png`). The
+    default face is a plain summary of what the system built (投放組, 廣告, 每日合計, 投放期間),
+    「不用改也可以」 and one full-width 「開始做素材 →」 that dispatches the pack (the existing
+    `POST .../campaigns/{id}/pack`) and lands on 素材 — offered only while no pack exists, so the
+    handoff never repeats; with no ad at all the button is 「新增廣告 →」 and opens the existing add
+    dialog. An ad added after the handoff is not in the pack (adding sets to an existing pack is not
+    built): 素材 says so on its row and the 素材已就位 tick makes it ready. The tree, the group／ad panels, add／delete
+    and the budget comparison live in 「調整結構（進階）」, closed by default (decision 9). Inside
+    it a blank group date reads 「跟活動同期間」 (blank already means the campaign's dates —
+    `repository._budget_total`, `adapters/manual.py::_group_field`), 「儲存變更」 appears only
+    while a panel has unsaved edits, and binding badges appear only once the campaign is published.
+    Dispatching from 素材 is gone: the handoff has one button, on 投放結構; 素材 keeps its
+    「查看素材任務包」 link.
+17. **Readiness warns, never blocks** (F03's rule kept). The publish screen, for every adapter
+    except 模擬發布, shows 「還有 N 則廣告沒有素材」 in the red band of `08-preflight.png` with
+    「回到素材」; nothing is disabled. 模擬發布 is a drill and carries no warning. The band is
+    composed inline on the publish screen; it becomes a shared pattern only when a second screen
+    needs it.
+18. **The auto-publish screen is not a dead sentence.** While auto publish is not connected it
+    prints the adapter's own message verbatim and offers 手動發布 and 模擬發布（演練） as buttons
+    (decision 1: "not connected", never a refusal). The header's ⋯ menu is gone — the publish
+    screen is the one place the path is chosen.
+
 ## 7. Verification
 
-`verify.typecheck` runs ruff, pyright, the frontend type build and dependency-cruiser; `verify.test`
+`verify.typecheck` runs ruff, pyright, the frontend type build, dependency-cruiser and the frontend
+800-line file cap (`src/architectureBoundaries.test.ts`, ~2 s). The cap sits here, not in an issue's
+own verify, because harness runs `verify.typecheck` at every issue finish while the whole `npm test`
+runs only at feature integration (2026-09-14: F06-I02 grew `DeliveryTab.tsx` to 931 lines unseen until
+integrate). Structural gates belong in `verify.typecheck`; behaviour tests stay targeted per issue. `verify.test`
 is the full pytest suite with `-n 8 --dist loadfile` (`-n auto` exhausts Postgres connections, see
 `CONTEXT.md`); `verify.smoke` is the Playwright end-to-end suite, which starts its own backend on
 8720 — the reason acceptance must never be judged on the long-running 8710 process. A schema or
 migration change additionally runs the tenant-isolation and boundary trio named in `CLAUDE.md`.
 Real-browser acceptance happens on a restarted backend at 1024 and 1920 in empty, normal and heavy
 states (`docs/design-system.md` §9/§10).
+
+**e2e never calls a model and never hands a job to another process** (2026-09-14, F06).
+`verify.smoke`'s backend runs with `BRAND_OS_LLM_PROVIDER=scripted` and `BRAND_OS_JOB_QUEUE=memory`, both set
+in `frontend/playwright.config.ts`'s `webServer.env`. Both values are refused outside `BRAND_OS_ENV=local`.
+- **`scripted`** makes `app/llm/providers.select_provider` answer from `SCRIPTED_REPLIES`, keyed by
+  `task_type`.
+  - A task type with no reply raises `LookupError` at selection, before `gateway.run_task` writes its `running`
+    row. The gateway does not catch it.
+  - So a request-path model call without a reply fails loudly, instead of sliding into a caller's parse-failed
+    fallback.
+- **`memory`** makes `app/background.enqueue()` write no queue at all. It only remembers the queueing lock in
+  process memory, and `is_active()` reads that set.
+  - The dev database's `public__queue` is shared with the long-running `python -m app.worker`.
+  - Without this, that worker would run e2e jobs with its own provider and its own, possibly old, code.
+  - Limit: no background job runs under e2e. A spec step that needs a job's result is not possible under this
+    seam; it would time out with no `LookupError`. Such a step needs a planner decision first.
+- **The replies live in legacy `app/llm/providers.py`** because the switch point does. This is the one sanctioned
+  growth of legacy for test infrastructure: a local-only verification seam, not product capability, cut as a
+  `legacy_migration: true` issue under planner review (F06-I05). The seam grew four legacy files and no others:
+  `app/llm/providers.py` (the replies), `app/llm/gateway.py` (selection before the `running` row),
+  `app/background/__init__.py` (the `memory` queue) and `app/core/config.py` (the local-only refusal).
+  - Each reply's shape is pinned by a test in the module that owns the shape (`test_ads_brief.py`,
+    `test_ads_strategy.py`, `test_workbench_free_parse.py`).
+  - An e2e path that needs a new model call adds its reply there, under that issue's plan.
+- **Consequence:** a red e2e is a real failure. An upstream model outage can no longer turn it red.
 
 A UI issue additionally carries a **visual gate** (2026-09-13, F04): it names its reference image
 under `docs/design/ads/`, the worker invokes `impeccable:impeccable` with that image before writing
@@ -749,6 +827,31 @@ against that image side by side. The shared patterns those screens compose — �
 Campaign 卡, 數字條, 時間軸, 佔位卡, 步驟指示, 摘要欄位卡 — are specified in
 `docs/design-system.md` §5.3 and implemented once in `frontend/src/components/ads/patterns/`;
 a page issue composes them and does not re-invent one.
+
+**How the visual gate is performed** (2026-09-14, after F06-I01 blocked on a helper script written into
+`frontend/`). The worker captures; the planner compares. Nobody writes a helper file, anywhere.
+- **Tool:** the global `playwright-cli` (needs no repo file and no `node_modules`). Its session folder
+  `.playwright-cli/` is gitignored, so the scope diff never sees it.
+- **Code under test:** the worktree's own code, served on the port the issue names (8731 and up; never 8710,
+  never e2e's 8720). From the worktree run `cd frontend && npm run build`. Then, from the worktree root and
+  in the background, run `BRAND_OS_LLM_PROVIDER=scripted BRAND_OS_JOB_QUEUE=memory uv run python -m uvicorn app.main:app --port <port>`.
+- **Sign-in:** the `/app/login` form with the seed account `123@example.com` / `123456` (brand `brd_bughunt`).
+  No forged token, no saved storage-state file.
+- **Commands:**
+  1. `mkdir -p C:/Users/User/AppData/Local/Temp/harness-shots/<issue>`
+  2. `playwright-cli -s=<issue> open http://localhost:<port>/app/login`
+  3. `playwright-cli -s=<issue> resize <w> <h>` (1024 800, then 1920 1080)
+  4. `snapshot`, then `fill` Email and 密碼, then `click` the 登入 button
+  5. `goto` the screen
+  6. `screenshot --full-page --filename C:/Users/User/AppData/Local/Temp/harness-shots/<issue>/<name>-<w>.png`
+  7. `close`
+  8. Stop the server: `netstat -ano | grep ":<port> .*LISTENING"`, then `taskkill //PID <pid> //F`.
+- **Output:** images live outside the repo, in that `harness-shots/<issue>/` folder. The finish note lists each
+  image's absolute path, the worktree path and the port.
+- **Screen state:** reach whatever state the screen needs through that server's UI; dev data is test data.
+- **If capture fails:** do not work around it with a file. Say so in the finish note.
+- **Comparison:** happens at `review: planner`. The planner reads each PNG beside its reference image and takes
+  any missing shot the same way. Approval is the gate.
 
 ## 8. 品牌地基與可投放檢查表 — settled decisions (2026-09-14, F05)
 
@@ -789,7 +892,7 @@ These are decided. A worker implements them; it does not re-open them.
    `.harness/scratch/research-onboarding.md`). **No model ever supplies one of these numbers**, and
    the screen always prints where it came from (「美國 2025 基準，起點用 · 來源：…」). There is no
    Taiwan primary source for any of them — that is said on screen, not hidden. They are replaced by
-   the brand's own closed-campaign numbers (F06), not by a better blog post. `cpa_roas_basis` was
+   the brand's own closed-campaign numbers (the 閉環 feature), not by a better blog post. `cpa_roas_basis` was
    **not** reused for this: that column was dropped in `20260903000004`, and its name says something
    else.
 4. **成效來源 is `brand.conversion_goal`**, which already exists (`purchase`／`lead`／`booking`／

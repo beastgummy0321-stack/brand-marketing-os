@@ -3,9 +3,9 @@ import { Button } from "@/components/layout/ui/button";
 import { formatCurrency, formatCount, formatRoas } from "@/lib/format";
 import { currentBudgetTotal, type CampaignDetail, type CampaignLabels, type SuccessMetric } from "@/lib/adsApi";
 import { JudgmentBand, ReservedSlotCard, DecisionCard, ActionTimeline, KpiStrip, type KpiCell, type TimelineItem } from "./patterns";
+import { nextStep, type StepTarget, type WorkspaceTab } from "./nextStep";
 
 const STAGE_LABELS = ["草稿", "策略", "投放結構", "素材", "投放中", "結案"] as const;
-type WorkspaceTab = "overview" | "strategy" | "structure" | "assets" | "performance";
 
 // F05-I12：後端一律回傳 `campaign.labels`；這裡的預設值只在舊測試 fixture 沒帶這個欄位時
 // 頂上（同 `judgment` 選填的先例），跟 `app/ads/judgment.py::_CONVERSION_LABELS["purchase"]`
@@ -24,30 +24,6 @@ function formatTarget(metric: SuccessMetric, value: number): string {
   return formatCount(value);
 }
 
-/** 依「backend state」推出目前走到哪一階段：每個條件只會把 idx 往前推，不回退——
- * 沿著 草稿→策略→投放結構→素材→投放中→結案 的既定順序。 */
-function currentStageIndex(c: CampaignDetail): number {
-  let idx = 0;
-  if (c.budget_basis_json.strategy) idx = 1;
-  if (c.groups.length > 0) idx = 2;
-  if (c.asset_readiness.total > 0 && c.asset_readiness.ready_count >= c.asset_readiness.total) idx = 3;
-  if (c.status === "live" || c.status === "ended") idx = 4;
-  if (c.status === "closed") idx = 5;
-  return idx;
-}
-
-function nextActionFor(c: CampaignDetail, idx: number): { text: string; tab: WorkspaceTab; label: string } {
-  if (idx === 5) return { text: "Campaign 已結案，學習已寫入品牌智庫。", tab: "performance", label: "查看成效紀錄" };
-  if (idx === 4) {
-    return c.status === "ended"
-      ? { text: "投放已結束，7 天後自動結案，也可以提前手動結案。", tab: "performance", label: "查看最終成效" }
-      : { text: "查看成效與投放狀況。", tab: "performance", label: "查看成效" };
-  }
-  if (idx === 3) return { text: "素材已就位，接下來完成發布前的檢查與發布。", tab: "structure", label: "前往投放結構" };
-  if (idx === 2) return { text: "投放結構已建立，交棒素材或勾選素材已就位。", tab: "assets", label: "前往素材" };
-  return { text: "先確認推薦策略與預算情境。", tab: "strategy", label: "前往策略" };
-}
-
 const JUDGMENT_ICON = { good: TrendingUp, warn: AlertTriangle, neutral: Clock } as const;
 
 export function OverviewTab({
@@ -55,11 +31,11 @@ export function OverviewTab({
   onChangeTab,
 }: {
   campaign: CampaignDetail;
-  onChangeTab: (tab: WorkspaceTab) => void;
+  onChangeTab: (target: StepTarget) => void;
 }) {
   const labels = c.labels ?? DEFAULT_LABELS;
-  const idx = currentStageIndex(c);
-  const next = nextActionFor(c, idx);
+  const step = nextStep(c);
+  const idx = step.stageIndex;
   const t = currentBudgetTotal(c);
   const hasOutcome = c.outcome.spend > 0 || c.outcome.purchases > 0 || c.outcome.revenue > 0;
   const pct = t.total !== null && t.total > 0 ? Math.round((c.outcome.spend / t.total) * 100) : null;
@@ -176,9 +152,9 @@ export function OverviewTab({
           </h2>
         </div>
         <div className="surface-body flex items-center justify-between gap-4">
-          <span className="text-sm">{next.text}</span>
-          <Button variant="outline" size="sm" onClick={() => onChangeTab(next.tab)}>
-            {next.label}
+          <span className="text-sm">{step.sentence}</span>
+          <Button size="sm" onClick={() => onChangeTab(step.target)}>
+            {step.label}
           </Button>
         </div>
       </div>

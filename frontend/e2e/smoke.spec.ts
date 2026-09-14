@@ -63,9 +63,11 @@ test("走完切片後活下來的主要畫面", async ({ page }) => {
 
   // --- 素材工作檯（F02 大重置，ARCHITECTURE.md §5.1-§5.3）：入口 → 自由創作 → 任務包頁 →
   // 素材組 studio 的完整走查（F02-I11）。跑在沒有 worker、沒有 provider key 的 e2e 後端上
-  // （F02 Decisions「e2e asserts only what runs with no worker and no provider key」），所以
-  // 圖片 tab 停在「還沒有生成過」的空狀態，「AI 解析結果」也走 `parsed: false` 的失敗分支——
-  // 兩者都是這支測試要證明活得下去的行為，不是意外。 --------------------------------------
+  // （F02 Decisions「e2e asserts only what runs with no worker and no provider key」）——
+  // 現在是 BRAND_OS_LLM_PROVIDER=scripted、BRAND_OS_JOB_QUEUE=memory（F06-I05）：
+  // 「AI 解析結果」由罐頭回覆回答 workbench_free_parse（parsed: true，一則 image_prompt），
+  // 但它的生成 job 從沒被排進佇列、永遠不會跑，所以圖片 tab 仍停在「還沒有生成過」的空狀態。
+  // ------------------------------------------------------------------------------------
   await page.goto(`/app/brands/${brandId}/workbench`);
   await expect(page.getByRole("heading", { name: "素材工作檯", exact: true })).toBeVisible();
   await expect(page.getByText("目前沒有任務包")).toBeVisible();
@@ -78,8 +80,8 @@ test("走完切片後活下來的主要畫面", async ({ page }) => {
   await page.getByLabel("素材類型").selectOption("image_prompt");
   await page.getByLabel("告訴 AI 你想創作什麼").fill("幫這個品牌做一張活動宣傳圖");
 
-  // 第一次點擊：真的打一次 `/parse`；CI 的 8720 後端沒有 provider key，模型呼叫會失敗，
-  // 但「一次失敗的解析不是死路」——落回 `defaults`，`parsed: false`，畫面照樣往下走。
+  // 第一次點擊：真的打一次 `/parse`；e2e 後端回罐頭回覆（workbench_free_parse，parsed:
+  // true），但「精準控制」已經明講素材類型是 image_prompt，畫面照樣往下走。
   await page.getByRole("button", { name: "建立自由工作" }).click();
   await expect(page.getByRole("button", { name: "確認並生成" })).toBeVisible();
   await expect(page.getByText("需要產出")).toBeVisible();
