@@ -12,13 +12,14 @@ import {
   DialogTitle,
 } from "@/components/layout/ui/dialog";
 import {
-  dispatchPack,
   getAssets,
+  getCampaign,
   setAssetReady,
   type AssetReadinessRow,
   type AssetReadinessState,
   type CampaignDetail,
 } from "@/lib/adsApi";
+import { nextStep, NextStepButton, StepButton, type StepTarget } from "./nextStep";
 
 const STATE_LABEL: Record<AssetReadinessState, string> = {
   ready_workbench: "已就位（工作檯）",
@@ -40,18 +41,18 @@ export function AssetsTab({
   brandId,
   campaign: c,
   onCampaignChange,
+  onChangeTab,
 }: {
   brandId: string;
   campaign: CampaignDetail;
   onCampaignChange: (campaign: CampaignDetail) => void;
+  onChangeTab: (target: StepTarget) => void;
 }) {
   const [state, setState] = useState<
     | { status: "loading" }
     | { status: "error"; message: string }
     | { status: "ready"; rows: AssetReadinessRow[]; readyCount: number; total: number }
   >({ status: "loading" });
-  const [dispatching, setDispatching] = useState(false);
-  const [dispatchError, setDispatchError] = useState<string | null>(null);
   const [confirmAd, setConfirmAd] = useState<{ id: string; name: string; next: boolean } | null>(null);
   const [confirmBusy, setConfirmBusy] = useState(false);
 
@@ -67,15 +68,15 @@ export function AssetsTab({
   useEffect(load, [load]);
 
   const ads = c.groups.flatMap((g) => g.ads.map((a) => ({ ad: a, groupName: g.name })));
+  const step = nextStep(c);
 
   if (ads.length === 0) {
     return (
       <EmptyState
-        title="這個 Campaign 還沒有素材組"
-        description="先在策略頁採用一個策略，系統會自動建立投放組與素材組。"
-        actionLabel="前往策略"
-        actionHref={`/brands/${brandId}/ads/campaigns/${c.id}?tab=strategy`}
-        actionInternal
+        title="這個 Campaign 還沒有廣告"
+        description={step.sentence}
+        actionLabel={step.label}
+        onAction={() => onChangeTab(step.target)}
       />
     );
   }
@@ -92,31 +93,14 @@ export function AssetsTab({
   }
 
   const rowsByAdId = new Map(state.rows.map((r) => [r.ad_id, r]));
-  const canDispatch = state.rows.every((r) => r.pack_id === null);
-  const packId = state.rows.find((r) => r.pack_id !== null)?.pack_id ?? null;
-
-  async function handleDispatch() {
-    setDispatching(true);
-    setDispatchError(null);
-    try {
-      await dispatchPack(brandId, c.id);
-      load();
-    } catch (err) {
-      setDispatchError(err instanceof Error ? err.message : "交棒素材工作檯失敗，請稍後再試。");
-    } finally {
-      setDispatching(false);
-    }
-  }
+  const packId = c.asset_readiness.pack_id ?? null;
 
   async function handleConfirmReady() {
     if (!confirmAd) return;
     setConfirmBusy(true);
     try {
-      const ad = await setAssetReady(brandId, confirmAd.id, confirmAd.next);
-      onCampaignChange({
-        ...c,
-        groups: c.groups.map((g) => ({ ...g, ads: g.ads.map((a) => (a.id === ad.id ? ad : a)) })),
-      });
+      await setAssetReady(brandId, confirmAd.id, confirmAd.next);
+      onCampaignChange(await getCampaign(brandId, c.id));
       setConfirmAd(null);
       load();
     } catch {
@@ -131,20 +115,13 @@ export function AssetsTab({
       <div className="surface">
         <div className="surface-header">
           <h2>{state.readyCount}／{state.total} 則已就位</h2>
-          {canDispatch ? (
-            <Button variant="outline" size="sm" onClick={() => void handleDispatch()} disabled={dispatching}>
-              {dispatching ? "交棒中…" : "派工到素材工作檯"}
+          {packId && (
+            <Button variant="outline" size="sm" asChild>
+              <Link to={`/brands/${brandId}/workbench/packs/${packId}`}>查看素材任務包</Link>
             </Button>
-          ) : (
-            packId && (
-              <Button variant="outline" size="sm" asChild>
-                <Link to={`/brands/${brandId}/workbench/packs/${packId}`}>查看素材任務包</Link>
-              </Button>
-            )
           )}
         </div>
         <div className="surface-body flex flex-col gap-3">
-          {dispatchError && <p className="text-sm text-danger">{dispatchError}</p>}
           <div className="table-surface">
             <table className="w-full text-left text-sm">
               <thead className="bg-muted text-muted-foreground">
@@ -170,6 +147,11 @@ export function AssetsTab({
                           <span className="ml-2 text-xs text-muted-foreground">
                             {row.by} 於 {row.at}
                           </span>
+                        )}
+                        {packId && !row?.brief_id && rowState !== "ready_manual" && rowState !== "ready_workbench" && (
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            交棒之後才新增的，不在素材任務包裡；做好後勾「素材已就位」。
+                          </p>
                         )}
                       </td>
                       <td className="px-3 py-2 text-muted-foreground">{row?.at ?? "－"}</td>
@@ -204,6 +186,14 @@ export function AssetsTab({
           </div>
         </div>
       </div>
+
+      {step.id === "make_assets" ? (
+        <StepButton asChild>
+          <Link to={`/brands/${brandId}/workbench/packs/${c.asset_readiness.pack_id}`}>前往素材工作檯 →</Link>
+        </StepButton>
+      ) : (
+        <NextStepButton step={step} onChangeTab={onChangeTab} />
+      )}
 
       <Dialog open={confirmAd !== null} onOpenChange={(open) => !open && setConfirmAd(null)}>
         <DialogContent>

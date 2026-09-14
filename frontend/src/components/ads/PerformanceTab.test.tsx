@@ -5,7 +5,7 @@ import { render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import userEvent from "@testing-library/user-event";
 
-import type { CampaignDetail, CampaignPerformance } from "@/lib/adsApi";
+import type { AdRow, CampaignDetail, CampaignPerformance, DeliveryGroupRow } from "@/lib/adsApi";
 import { closeCampaign, getPerformance } from "@/lib/adsApi";
 import { PerformanceTab } from "./PerformanceTab";
 
@@ -37,6 +37,53 @@ function performance(): CampaignPerformance {
     ads: [],
     coverage: { expected: 0, missing: 0 },
     last_data_at: null,
+  };
+}
+
+function group(overrides: Partial<DeliveryGroupRow> = {}): DeliveryGroupRow {
+  return {
+    id: "grp_1",
+    campaign_id: "cmp_1",
+    channel_key: "meta",
+    name: "投放組",
+    role: "new",
+    daily_budget: 1000,
+    start_date: null,
+    end_date: null,
+    ads: [],
+    external_id: null,
+    external_name: null,
+    external_status: null,
+    local_state: "unbound",
+    bound_at: null,
+    ...overrides,
+  };
+}
+
+function ad(overrides: Partial<AdRow> = {}): AdRow {
+  return {
+    id: "ad_1",
+    campaign_id: "cmp_1",
+    group_id: "grp_1",
+    name: "廣告一",
+    audience_key: null,
+    pain_key: null,
+    angle_key: null,
+    hook_key: null,
+    proof_key: null,
+    offer_key: null,
+    format_key: null,
+    coordinates_snapshot_json: {},
+    product_id: null,
+    asset_ready_source: null,
+    asset_ready_by: null,
+    asset_ready_at: null,
+    external_id: null,
+    external_name: null,
+    external_status: null,
+    local_state: "unbound",
+    bound_at: null,
+    ...overrides,
   };
 }
 
@@ -78,9 +125,9 @@ function campaign(overrides: Partial<CampaignDetail> = {}): CampaignDetail {
   };
 }
 
-function renderTab(c: CampaignDetail, onCampaignChange = vi.fn()) {
-  return { onCampaignChange, ...render(
-    <PerformanceTab brandId="brd_1" campaign={c} onCampaignChange={onCampaignChange} />,
+function renderTab(c: CampaignDetail, onCampaignChange = vi.fn(), onChangeTab = vi.fn()) {
+  return { onCampaignChange, onChangeTab, ...render(
+    <PerformanceTab brandId="brd_1" campaign={c} onCampaignChange={onCampaignChange} onChangeTab={onChangeTab} />,
   ) };
 }
 
@@ -129,6 +176,20 @@ describe("PerformanceTab 結案卡片（F04-I23）", () => {
 
     expect(screen.queryByText("立即結案")).toBeNull();
     expect(screen.getByText("還沒有成效資料")).toBeTruthy();
+  });
+
+  it("ready、素材都就位：空狀態下面看得到規則按鈕「發布 →」", () => {
+    renderTab(
+      campaign({
+        status: "ready",
+        budget_basis_json: { strategy: { allocation: [], why: [], unknowns: [], alternatives: [] } },
+        groups: [group({ ads: [ad()] })],
+        asset_readiness: { ready_count: 1, total: 1, pack_id: "pk_1" },
+      }),
+    );
+
+    expect(screen.getByText("還沒有成效資料")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "發布 →" })).toBeTruthy();
   });
 
   it("labels 是名單時：draft 空狀態說明與已發布的 KPI 標籤都改印「名單」，不是寫死的「購買」", async () => {
