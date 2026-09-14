@@ -2,11 +2,16 @@
 
 只測 Anthropic input_schema → OpenAI strict schema 的轉換邏輯本身，不連網、不打
 本機 codex CLI（那條路要真的打網路、慢、吃訂閱額度，規格明講不寫）。
+
+CodexCliProviderCommandTest 額外測 complete() 組出來的指令列本身（effort 對映、六個
+--disable，票 F07-I02）：一樣不連網、不打真的 codex，用假 subprocess.Popen 只錄 cmd。
 """
 
+import json
 import unittest
+from unittest import mock
 
-from app.llm.providers import to_strict_schema
+from app.llm.providers import TASK_DEFAULTS, CodexCliProvider, to_strict_schema
 
 
 class ToStrictSchemaTest(unittest.TestCase):
@@ -114,6 +119,75 @@ class ToStrictSchemaTest(unittest.TestCase):
         snapshot = copy.deepcopy(original)
         to_strict_schema(original)
         self.assertEqual(original, snapshot)
+
+
+class _FakeCodexPopen:
+    """假 subprocess.Popen：錄下組出來的 cmd，寫一個最小可解析的輸出檔＋JSONL，
+    不真的跑 codex（票 F07-I02，不連網、不打真的 codex 行程）。"""
+
+    def __init__(self, cmd, *, cwd=None, stdin=None, stdout=None, stderr=None,
+                 text=None, encoding=None, errors=None):
+        self.cmd = cmd
+        self.returncode = 0
+        # -o 後面那個檔案路徑：complete() 只從這個檔案讀最終文字，這裡先寫個佔位值。
+        output_index = cmd.index("-o") + 1
+        from pathlib import Path
+        Path(cmd[output_index]).write_text("{}", encoding="utf-8")
+
+    def communicate(self, input=None, timeout=None):
+        usage_line = json.dumps({
+            "type": "turn.completed",
+            "usage": {"input_tokens": 1, "output_tokens": 1},
+        })
+        return usage_line + "\n", ""
+
+    def wait(self):
+        return self.returncode
+
+
+class CodexCliProviderCommandTest(unittest.TestCase):
+    """`complete()` 組出來的指令列（票 F07-I02，ARCHITECTURE.md §1 rule 4）。"""
+
+    def _run(self, **kwargs):
+        recorded = {}
+
+        def fake_popen(cmd, **popen_kwargs):
+            proc = _FakeCodexPopen(cmd, **popen_kwargs)
+            recorded["cmd"] = cmd
+            return proc
+
+        with mock.patch("app.llm.providers.subprocess.Popen", side_effect=fake_popen):
+            CodexCliProvider().complete(
+                model="gpt-5.6-luna", system=None,
+                messages=[{"role": "user", "content": "hi"}], max_tokens=100,
+                **kwargs,
+            )
+        return recorded["cmd"]
+
+    def test_effort_medium_appends_reasoning_effort_and_all_six_disables(self):
+        cmd = self._run(effort="medium")
+        self.assertIn('model_reasoning_effort="medium"', cmd)
+        for name in ("shell_tool", "browser_use", "computer_use", "apps",
+                     "image_generation", "in_app_browser"):
+            self.assertIn(name, cmd)
+        self.assertEqual(cmd.count("--disable"), 6)
+
+    def test_effort_max_maps_to_xhigh(self):
+        cmd = self._run(effort="max")
+        self.assertIn('model_reasoning_effort="xhigh"', cmd)
+
+    def test_effort_none_appends_no_reasoning_effort(self):
+        cmd = self._run(effort=None)
+        self.assertNotIn("model_reasoning_effort", " ".join(cmd))
+
+    def test_web_search_tool_still_present_with_effort_set(self):
+        from app.llm.providers import WEB_SEARCH_TOOL
+        cmd = self._run(effort="high", tools=[WEB_SEARCH_TOOL])
+        self.assertIn("tools.web_search=true", cmd)
+        self.assertIn('model_reasoning_effort="high"', cmd)
+
+    def test_workbench_derive_identity_task_default_is_medium_thinking(self):
+        self.assertEqual(TASK_DEFAULTS["workbench_derive_identity"]["thinking"], "medium")
 
 
 if __name__ == "__main__":

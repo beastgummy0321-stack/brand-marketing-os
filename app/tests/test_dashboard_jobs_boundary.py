@@ -49,6 +49,9 @@ class DashboardJobsBoundaryTest(unittest.TestCase):
         _seed_running_queue_job(DEV_ORG_ID, brand_id, "schedule_plan", {"brand_id": brand_id})
         _seed_running_queue_job(DEV_ORG_ID, brand_id, "schedule_tree", {"brand_id": brand_id})
         _seed_running_queue_job(DEV_ORG_ID, brand_id, "workbench_copy", {"brand_id": brand_id})
+        # 票 F07-I02：品牌視覺推導在圖片回合裡跑，鈴鐺要看得到它，不能只看得到外層的
+        # workbench_image_prompt。
+        _seed_running_queue_job(DEV_ORG_ID, brand_id, "workbench_derive_identity", {"brand_id": brand_id})
 
         response = self.client.get("/api/jobs/active")
 

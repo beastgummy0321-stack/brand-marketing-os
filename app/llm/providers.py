@@ -172,6 +172,7 @@ TASK_TYPE_LABELS = {
     "workbench_image_prompt": "素材工作檯：圖片提示詞",
     "workbench_video_script": "素材工作檯：影片腳本",
     "workbench_free": "素材工作檯：自由生成",
+    "workbench_derive_identity": "素材工作檯：品牌視覺推導",
     "intake_scan": "建檔精靈：讀取網址",
     "intake_photo_scan": "建檔精靈：讀取照片",
     "intake_persona": "建檔精靈：整理人物誌",
@@ -195,6 +196,7 @@ TASK_DEFAULTS = {
     "workbench_image_prompt": {"model": None, "thinking": "medium"},
     "workbench_video_script": {"model": None, "thinking": "medium"},
     "workbench_free": {"model": None, "thinking": "medium"},
+    "workbench_derive_identity": {"model": None, "thinking": "medium"},
     # 機械性小任務：低思考
     "intake_scan": {"model": None, "thinking": "low"},
     "intake_photo_scan": {"model": None, "thinking": "low"},
@@ -659,6 +661,21 @@ class CodexCliProvider:
             cmd = [
                 "codex", "exec", "--ignore-user-config", "--skip-git-repo-check", "--ephemeral",
                 "-s", "read-only", "-m", model, "--json", "-o", str(output_file),
+            ]
+            # 思考等級（ARCHITECTURE.md §1 rule 4）：codex CLI 沒有 max 檔，比照
+            # resolve_thinking 的五檔對齊到 CLI 的 model_reasoning_effort；max 沒有對應
+            # 選項所以摺到 xhigh（最高檔），None／不在表內一律不送、讓 CLI 用自己的預設。
+            codex_effort = {"low": "low", "medium": "medium", "high": "high",
+                             "xhigh": "xhigh", "max": "xhigh"}.get(effort)
+            if codex_effort is not None:
+                cmd += ["-c", f'model_reasoning_effort="{codex_effort}"']
+            # 探測結果（票內容）：shell 工具開著時，3/10 次會在任務中途另外跑一次指令、
+            # 把整段 prompt 重送一遍（17.5k → 40k input）；這條路線只需要文字任務，六個
+            # 工具全關，不做事件或回合計數（§1 rule 4 說明為何不必）。
+            cmd += [
+                "--disable", "shell_tool", "--disable", "browser_use",
+                "--disable", "computer_use", "--disable", "apps",
+                "--disable", "image_generation", "--disable", "in_app_browser",
             ]
             if structured_tool is not None:
                 schema_file = tmp_path / "schema.json"
