@@ -87,6 +87,11 @@ class DashboardJobsBoundaryTest(unittest.TestCase):
         self.assertEqual(next(job for job in jobs if job["kind"] == "persona")["stage"], "整理人物誌")
         self.assertEqual(
             next(job for job in jobs if job["kind"] == "workbench_generate")["stage"], "素材生成中")
+        # 兩列（workbench_copy、workbench_derive_identity）都要落到 workbench_generate；
+        # 只留其中一列也會讓上面兩個斷言通過，所以另外點名數量，讓少收一個 kind 這種
+        # 半調閘門露出來。
+        self.assertEqual(
+            sum(1 for job in jobs if job["kind"] == "workbench_generate"), 2)
 
 
 class DashboardJobsTenantIsolationTest(unittest.TestCase):
