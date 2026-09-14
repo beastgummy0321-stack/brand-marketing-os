@@ -1,17 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
 import { useLocation, useSearchParams } from "react-router-dom";
-import { MoreHorizontal } from "lucide-react";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { PageTabs } from "@/components/layout/PageTabs";
 import { EmptyState } from "@/components/layout/EmptyState";
 import { Badge } from "@/components/layout/ui/badge";
 import { Button } from "@/components/layout/ui/button";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/layout/ui/dropdown-menu";
 import { useWorkspace } from "@/components/layout/WorkspaceContext";
 import { getCampaign, type AdapterKey, type CampaignDetail } from "@/lib/adsApi";
 import { fetchChannels, type Channel } from "@/lib/adsLaunchApi";
@@ -120,26 +113,9 @@ export function CampaignWorkspace({
             <div className="flex items-center gap-2">
               <Badge variant={STATUS_TONE[campaign.status]}>{STATUS_LABEL[campaign.status]}</Badge>
               {canPublish && (
-                <>
-                  <Button size="sm" onClick={() => setPublishAdapter("auto_meta")}>
-                    發布 Campaign
-                  </Button>
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <Button variant="outline" size="icon" aria-label="更多發布方式">
-                        <MoreHorizontal size={16} />
-                      </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end">
-                      <DropdownMenuItem onSelect={() => setPublishAdapter("manual")}>
-                        手動發布（進階）
-                      </DropdownMenuItem>
-                      <DropdownMenuItem onSelect={() => setPublishAdapter("simulated")}>
-                        模擬發布（演練用）
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                </>
+                <Button size="sm" onClick={() => setPublishAdapter("auto_meta")}>
+                  發布 Campaign
+                </Button>
               )}
             </div>
           ) : undefined
@@ -158,6 +134,11 @@ export function CampaignWorkspace({
           onViewPerformance={() => {
             setPublishAdapter(null);
             changeTab("performance");
+          }}
+          onChangeAdapter={setPublishAdapter}
+          onGoToAssets={() => {
+            setPublishAdapter(null);
+            changeTab("assets");
           }}
         />
       ) : (
