@@ -134,7 +134,7 @@ export function StrategyTab({
   const selectedKey = c.budget_scenario ?? scenarios?.recommended ?? null;
   const selectedRow = scenarios?.scenarios.find((s) => s.key === selectedKey);
   const total = c.budget_planned ?? selectedRow?.total ?? null;
-  const hasGroups = c.groups.length > 0;
+  const step = nextStep(c);
   const days = campaignDays(c.start_date, c.end_date);
   const constraintBudget = typeof c.constraints_json.budget === "number" ? c.constraints_json.budget : null;
 
@@ -329,9 +329,7 @@ export function StrategyTab({
       </div>
 
       <div className="flex flex-col gap-1.5">
-        {hasGroups ? (
-          <NextStepButton step={nextStep(c)} onChangeTab={onChangeTab} />
-        ) : (
+        {step.id === "strategy_adopt" ? (
           <StepButton onClick={() => void handlePrimary()} disabled={primaryBusy}>
             {primaryBusy
               ? "處理中…"
@@ -339,12 +337,14 @@ export function StrategyTab({
                 ? "先設定預算 →"
                 : "照這個方式進行 →"}
           </StepButton>
+        ) : (
+          <NextStepButton step={step} onChangeTab={onChangeTab} />
         )}
         {primaryError && <p className="text-sm text-danger">{primaryError}</p>}
       </div>
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-      {hasGroups ? (
+      {step.id !== "strategy_adopt" ? (
         <p className="text-sm text-muted-foreground sm:col-span-3">
           投放結構已經建立，預算改在投放結構分頁的每個投放組日預算。
         </p>
