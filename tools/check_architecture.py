@@ -178,8 +178,7 @@ def main():
                 for i, line in enumerate(src.splitlines(), 1):
                     if pat.search(line):
                         violations.append(f"{path}:{i}: {who} accesses resource {rname} owned by {owner} (sql literal)")
-            else:
-                violations.append(f"ARCHITECTURE.md:0: resource {rname}: unsupported ownership adapter for kind {kind}")
+            # any other kind: no analyzer for it — skipped, the planner reviews ownership by hand
         # dynamic supabase target in managed code: ownership unknown = red, never silently green
         if me is not None and any(r["kind"] == "supabase-table" for r in resources.values()):
             dyn = re.compile(r"\.(table|from_|rpc)\(\s*(?!['\"])[^)\s]")

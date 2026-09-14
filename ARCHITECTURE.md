@@ -20,6 +20,7 @@
         "app/workbench/**",
         "app/departments/workbench/**",
         "app/tests/test_workbench*.py",
+        "app/tests/fixtures/workbench/**",
         "frontend/src/components/workbench/**",
         "frontend/src/lib/workbenchApi.ts",
         "supabase/migrations/*_workbench_*.sql"
@@ -99,6 +100,14 @@
         "supabase/migrations/*_workbench_*.sql"
       ],
       "symbol": "workbench_output"
+    },
+    "workbench_visual_identity": {
+      "owner": "workbench",
+      "kind": "sql-table",
+      "definition": [
+        "supabase/migrations/*_workbench_*.sql"
+      ],
+      "symbol": "workbench_visual_identity"
     },
     "ads_campaign": {
       "owner": "ads",
@@ -344,6 +353,19 @@ or a long parameter list. Three rules hold everywhere, not per call site:
    Anthropic `cache_control`, which the dev-only codex route flattens away harmlessly.
 3. **The cost column is the billing truth.** `llm_task.cost` is `numeric(14,6)`; the monthly cap
    sums it, so a sub-cent call must not round to `0.00`.
+4. **Effort is explicit and an external agent gets only the tools the task needs** (2026-09-15,
+   F07). The per-task thinking table in `app/llm/providers.py` reaches every provider: the dev-only
+   `CodexCliProvider` passes it as `-c model_reasoning_effort=<level>` (`max` → `xhigh`) — before
+   F07 `--ignore-user-config` silently dropped it — and always runs with
+   `--disable shell_tool --disable browser_use --disable computer_use --disable apps
+   --disable image_generation --disable in_app_browser`; `-c tools.web_search=true` is still added
+   when the caller asked for web search. Measured on the image-prompt probe: with the shell tool on,
+   3 of 10 runs executed a command mid-task and re-sent the whole prompt (17.5k → 40k input
+   tokens); tools off cut input to 14.3k. No event or turn counting is stored. Probe v4 still saw
+   one generation at 32.2k input with tools off (5 others at ~13.4k), so extra turns are not only
+   shell use — but the probe never recorded what the extra turn was, a counter of an unknown event
+   would be a guess, and `usage_json.input_tokens` already flags the run. Add a count when a
+   recorded codex event stream shows which event marks the extra turn.
 The coordinate vocabulary keeps its `label` column in prompts — `key` is an English slug and the
 label is its meaning; dropping it would save tokens by making the model guess. `app/schedule`'s
 `schedule_plan`／`schedule_tree` prompts are **not** capped: no screen has reached them since
@@ -423,7 +445,9 @@ because `intake.may_depend_on = ["ads"]`);
 
 ## 3. Data ownership
 
-`workbench_pack`, `workbench_brief` and `workbench_output` belong to `workbench`; the
+`workbench_pack`, `workbench_brief`, `workbench_output` and `workbench_visual_identity` (the
+derived brand visual identity cache, one row per brand knowledge version, §5.9 — a cache of what
+the brand facts imply, not a second brand data model) belong to `workbench`; the
 campaign/period tables belong to `schedule`; `ads_campaign`, `ads_delivery_group`, `ads_ad`,
 `ads_action` and `ads_outcome_daily` belong to `ads`. Physical definitions live in the shared `supabase/migrations/` directory, one file
 per module prefix (`<timestamp>_<module>_<desc>.sql`); an applied migration is never edited, a
@@ -440,7 +464,14 @@ knowledge shown in 品牌智庫, not ads bookkeeping, so `ads` does not own it a
 with SQL: `app/brand_intelligence/repository.py` (already a legacy facade, already registered for
 brand/product deletion) gains `record_learning` / `list_learnings` and `ads` calls those. The
 capability — when a learning is written, at what level, when it needs revalidation — lives in
-`ads`; the facade only stores and reads rows of the table its own package already owns. The four
+`ads`; the facade only stores and reads rows of the table its own package already owns.
+**Two tracks, one ledger** (2026-09-15, F07): the existing `learning_ledger.source_track` column
+(`NOT NULL DEFAULT 'ads'`) separates campaign verdicts (`ads`, read by the strategy prompt) from
+visual learnings (`visual`, written at 結案 by §6.3 and read by the image-prompt call).
+`record_learning(..., source_track="ads")` and `list_learnings(..., source_track=None)` carry it;
+`None` means every track. No second table, no migration. `expire_learning(conn, brand_id,
+learning_id, *, actor)` sets the existing `expired` flag (audited) — the one write §6.3 item 19
+needs to downgrade a visual winner that later loses; the rule of when lives in `ads`. The four
 other dead tables (`decision`, `strategy_hypothesis`, `campaign_period_budget_version`,
 `brand_dismissed_calendar_category`) stay in `docs/backlog/issue-five-live-tables-zero-code.md`;
 dropping them is not part of building the loop.
@@ -461,6 +492,18 @@ outlives the module that happens to hold it today — when `schedule` retires (�
 `ads`, and until then importing `app.schedule` from `ads` would build a dependency we are about to
 delete. `ads` writes nothing there and reads nothing else of schedule's. Do not add a fourth
 without a planner decision.
+**Coordinate labels are everyday words** (2026-09-15, F07, user ruling). `brand_coordinate` keys are
+permanent (performance groups by them). Labels and situations are the words a shop owner reads —
+互動過・沒買、已購・回購、太貴、怕買錯、免運、保證退換、買家視角 — and are never replaced by an abstract or
+jargon term to make them "neutral" or "simpler" (an F07 draft did that on a main-conversation call and
+was retired: 「不要把已經很簡單的詞彙再嘗試換種說法讓他更簡單」). Fitting an industry is the prompt's job:
+on-image copy uses the words that industry's customers say (a coach's copy says 選錯, not 買錯), at
+the level of the probe outputs the user accepted, and only classification jargon is kept off the
+image (§5.8). The seeds live in a schedule migration plus the lazy seeder
+`app/schedule/repository.py::_SEED_COORDINATES`／`_SEED_ANGLES`, kept in sync by hand. Meta has no
+彈性 option any more: the `format`
+value `flexible` is disabled for every brand and no longer seeded (「若排程仍然說這期要排彈性圖片，
+則視為BUG」); a stored `flexible` reads as 單圖.
 
 ## 4. The loop, end to end
 
@@ -495,8 +538,9 @@ lands in it.
 
 These are decided. A worker implements them; it does not re-open them. This revision replaces the
 2026-09-10 list where they conflict — the IA (old 1–4), the copy contract (old 5) and the reserved
-image seat (old 10) are rewritten below; the image-prompt decisions are carried over unchanged as
-§5.7–§5.10. The old text is in git. The visual source of truth is the four reference images listed
+image seat (old 10) are rewritten below. §5.7–§5.10 (image prompts) and the image parts of §5.2,
+§5.11–§5.13 were rewritten on 2026-09-15 by F07; the 2026-09-09 【】 8-module template they
+replaced is in git. The visual source of truth is the four reference images listed
 in `.work/features/F02.md`; where a prototype and an image differ, the image wins.
 
 1. **任務包 → 素材組 → 產物 → 版本.** One 任務包 (pack) holds one or more 素材組 (sets); a set
@@ -509,8 +553,8 @@ in `.work/features/F02.md`; where a prototype and an image differ, the image win
 2. **Rounds are history, never navigation.** A product shows its versions newest round first;
    there is no round switcher and no 建議組合 pool. A version is one selectable artifact and one
    `workbench_output` row (`version_index` inside its round): a copy round writes 5 rows, an
-   image-prompt round writes 1 row (the ①＋② prompt pair it renders), a script round writes one
-   row per script.
+   image-prompt round writes 10 rows (one per prompt; a 輪播 round writes 2 rows, one per concept of
+   5 cards — §5.7), a script round writes one row per script.
 3. **States are derived, never stored twice.** product: 未生成 (no version) ／待選定 (versions
    exist, fewer selected than required) ／已選定 (selected count ≥ required). set: 待開始 (no
    product has a version) ／等待決定 ／已完成 (every required product 已選定). pack: 待處理 (no
@@ -531,8 +575,12 @@ in `.work/features/F02.md`; where a prototype and an image differ, the image win
    `origin_href` is a router path *without* the `/app` basename, e.g.
    `/brands/<brand>/ads/campaigns/<id>?tab=assets`, and both values must be plain strings),
    `summary` (the 摘要 shown read-only on the pack page: 情境／角度／風格／目標受眾／重點訊息／
-   參考連結), `sets` (each: name, opaque `source_ref`, coordinates, product_id, style_key,
-   `required_outputs` = `{產物類型: 需要選定的版本數}`, and the per-type generation counts), and
+   參考連結), `sets` (each: name, opaque `source_ref`, coordinates, product_id,
+   `required_outputs` = `{產物類型: 需要選定的版本數}`, and the per-type generation counts — since
+   F07 a set's `style_key` and `request.image_prompt_count` are accepted and ignored — an image
+   round is always §5.7's fixed shape and its looks come from §5.9 — and `request.variant_count`
+   (integer 0–9) is how many ② 變體 the upstream plan wants for that set: the workbench renders that
+   count and never computes it, missing or invalid reads 0), and
    `constraints` (e.g. `copy_length`, `promotion_note`). 完成條件 is not sent by the upstream: it
    is §5.5's fixed three-item checklist. 檔期規劃 dispatches one pack per expanded tree, one set
    per deepest node, with `required_outputs = {"copy": 1, "image_prompt": 1}` — one node is one
@@ -568,47 +616,213 @@ in `.work/features/F02.md`; where a prototype and an image differ, the image win
    `validate.check_copy` carry the shape; `schedule/state.py::_copy_summary` keeps its flat
    `bodies`／`headlines`／`descriptions` lists, now index-aligned from `sets`, so the 素材準備
    stage does not change.
-7. **Image prompts: hero → approve → N variants.** One image-prompt card, mode taken from the
-   brief's `source_kind`:
-   - dispatched (`schedule_node`) → **變體模式**: ① 主圖提示詞 (one image, built from the node's
-     coordinates) then ② 變體提示詞 (paste with the approved hero attached).
-   - manual → **探索模式**: ③ 探索提示詞 (N angles picked from `creative-matrix.md` §1's 35-angle
-     matrix, one paste) then ② 變體提示詞.
-   Prompt ② is a constant plus slots — no model call. N is the existing `image_prompt_count`
-   (1–30), user-entered, prefilled in the UI from the node's `format` coordinate (彈性格式 → 10,
-   otherwise 3).
-8. **The shell renders, the model returns fields.** The model returns
-   `{"hero": {scene, person, subject_position, headline, subhead}}` in 變體模式 and
-   `{"angles": [{name, brief, on_image_line}] × N}` in 探索模式; the shell assembles the text.
-   Prompt ① is, in order — every line dropped when it has no content:
-   `【風格】` (style block) · `【商品】` (見參考商品照：<product>。不重述外觀。 / 無參考商品照，畫面以
-   情境與人物為主，不畫商品特寫。) · `【受眾】<audience>；痛點：<pain>` · `【這則的訴求】切角：
-   <angle>——<說明>；標題公式：<hook>——<說明>` · `【可用字句（逐字，不得改）】` (the promotion
-   note's lines) · `【畫面】` (the model's three sentences) · `【圖上文字】大標：「…」；副標：「…」；
-   文字純色填滿，數字獨立成行` · `【輸出】<format label>（<format 說明>），一張`. Coordinate labels
-   and their descriptions come from the coordinate vocabulary the workbench already reads; the
-   format line's 說明 is that label's own `situation` text, so no platform spec is hard-coded in
-   the shell. A selected copy headline is an optional hint, never a constraint, so an image prompt
-   can run before any copy is selected.
-9. **Positive prompts only.** No prohibition lines anywhere in a generated prompt — no 禁止 line,
-   no 保留｜禁止 line, no 「未列出的…」 wording. The surviving guard is positive: 【圖上文字】 lists
-   every string that will appear on the image and that list is the whole of it; a number or claim
-   may only be a verbatim string from the brief's quotable text — the period's `promotion_note`
-   plus the compiled brand knowledge the prompt already carries. When there is none, the 可用字句
-   line is absent and no number may appear on the image; the machine check is that every digit run
-   in an on-image string occurs in that quotable text.
-10. **The style entry is photographic only.** `app/workbench/image_styles.json` holds `key`,
-    `label` and one `style_block` — the capture style (iPhone 原生抓拍、未修圖、輕微晃動模糊、雜亂
-    背景、不均勻光線、文字純色填滿, plus 東亞日常面孔、非廣告選角). Who appears in the picture is
-    derived from the node's `audience` coordinate, never baked into the style. The 商品 line is
-    conditional and product-scoped: 見參考商品照 only when the brief has a `product_id` and that
-    product has an `official_asset` row of kind `product_photo`.
+7. **Image prompts: one round = one GPT paste of up to 10 images** (settled 2026-09-15, F07;
+   re-planned the same day after probes v3/v4). The bar, in the user's words: 「若系統真的能看行業/風格
+   等自適應產出這個Prompt，那真的十分完美。但前提是，系統真得能自己生，而不是靠使用者調適、選風格、下指令。」
+   The image engine is GPT (「統一GPT。已經不會變動」). One round is **one model call that writes
+   exactly 10 complete natural-language prompts** — GPT chat's per-message image cap. No mode, no
+   style pick, no count input: `style_key` and `image_prompt_count` are accepted and ignored, the
+   圖片 tab's 「再生成一輪（10 張）」 always asks for one more round, and a new round receives the
+   previous round's titles. The shape follows the set's `format` coordinate (key or label, §5.8):
+   - **單圖** (`single_image`; a stored `flexible` — Meta has no 彈性 option any more, §3 — reads as
+     單圖; also a free pack or no format): 10 independent prompts, one version row each.
+   - **輪播** (`carousel`): 2 concepts × 5 cards in the same paste; a concept shares one device,
+     layout, look and person; card 1 carries the hook, card 5 the offer/CTA; one version row per
+     concept. No variants.
+   - **影片** (`video`): no image prompts (「影片廣告不用出圖」). 投放中心 asks a video ad for copy +
+     video script (§6.3 item 21). A video set that runs 圖片 anyway gets the 單圖 shape.
+   The ratio sentence comes from one table in `app/workbench/visual.py`, copied from
+   `app/methodology/meta-format-specs.md`: 單圖 「4:5 直式單圖廣告，1080×1350」 · 輪播 「1:1 輪播卡片，
+   1080×1080」.
+
+   **One craft grammar for every industry and style** — `app/departments/workbench/image_prompt.md`,
+   built from `.harness/scratch/probes/image-prompt-v4/task_v4.md` (the v2 file's aespa-surface
+   examples do not come back): visual device → first sentence names ratio and use → a real layout
+   and its typesetting language → at least two concrete details flavoured by the slot's look →
+   the subject from the offering's reference → designed typography (every on-image string in 「」,
+   tiers, share of frame, one or two colours, position) → a closing sentence of intent from the
+   image task. Classification jargon (full audience labels, angle and hook names, task names) never
+   goes on the image, and an everyday word is never rewritten into a more abstract one; on-image
+   copy uses that industry's customers' own words. A prompt holds only picture and on-image text,
+   never a worksheet instruction.
+
+   **What each image must achieve is decided by the system, not by a button**
+   (「我需要的是系統自己決定這張圖主訴是什麼自己去給圖，而不是做成按鈕」). The image-task table lives
+   once, in `visual.py`. The set's audience key picks the row; `brand.conversion_goal` fills
+   `{close}` (purchase 下單 · booking 預約 · lead 留下資料或報名 · awareness 進一步了解 · null 下單);
+   only that row is sent:
+
+   | audience | task key · label | 畫面怎麼做 | `subject_role` allowed |
+   |---|---|---|---|
+   | `cold_unaware` | `stop_relate` 讓人停下來、有共鳴 | 情境反差、比喻、生活觀察，不推銷 | absent, incidental |
+   | `cold_problem_aware` | `believe_solution` 讓人相信有解法 | 使用情境、前後對照、把效果或服務現場畫出來（不畫效果數字） | clear, hero |
+   | `warm_engaged` | `convert` 讓猶豫的人{close} | 主角主視覺、誘因與截止、打消疑慮 | clear, hero |
+   | `customer_repeat` | `come_again` 讓用過的人再{close}一次 | 補齊、時間感、成套 | clear, hero |
+   | `lapsed` | `win_back` 讓很久沒回來的人想起來 | 給回來的理由、有什麼不一樣了 | clear |
+
+   `persuasion` allowed = `none` ∪ offer-derived ∪ proof-derived, except `stop_relate` → `none`
+   only. Offer: `discount` → offer_headline, price_breakdown · `limited_time` → offer_headline,
+   countdown · `bundle`／`trial_sample`／`guarantee`／`free_shipping` → offer_headline · `none` or a
+   brand-made key → nothing. Proof: `customer_review` → testimonial, before_after ·
+   `founder_voice` → testimonial · `expert_endorsement`／`lab_report`／`media_coverage` → credential
+   · `sales_numbers` → data_proof · `none` or a brand-made key → nothing. A set with no audience
+   (自由創作) — or with an audience value the table does not know (a brand-made key, or a label
+   that matches no vocabulary row) — gets the whole table and returns
+   one top-level `image_task`; every item is checked against that row, no visual learnings are read
+   for it, and `round.audience_key` stores the value as given. The table changes only by a planner-reviewed code edit.
+
+   **Visual fingerprint.** Every item returns `title` (≤10 characters, for people), `headline` (1–2
+   strings, each ≤14 characters, each quoted verbatim in the prompt), `device` (`contrast` 對照／
+   `metaphor` 誇張比喻／`borrowed_format` 借用格式／`frozen_moment` 定格瞬間／`demonstration` 直接示範／
+   `testimony` 人物證言／`data_visual` 數據具象), `layout` (`candid_scene` 情境畫面／`portrait_focus`
+   人物特寫／`subject_focus` 主角特寫／`split_compare` 分割對照／`flat_lay` 俯拍陳列／`magazine_cover`
+   雜誌封面／`newspaper_editorial` 報紙編輯／`zine_collage` 拼貼／`infographic` 資訊圖表／
+   `social_screenshot` 社群截圖／`screen_mockup` 畫面示意／`type_poster` 大字海報), `look` (the slot's,
+   §5.9), `subject_role` (`absent` 不出現／`incidental` 順手帶到／`clear` 清楚出現／`hero` 主角),
+   `persuasion` (`none` 無／`offer_headline` 優惠大字／`price_breakdown` 價格拆解／`countdown` 倒數／
+   `testimonial` 顧客證言／`credential` 資格背書／`data_proof` 數據證明／`before_after` 前後對比) and
+   `prompt`. The fingerprint is image_task + device + layout + look + subject_role + persuasion +
+   slot (`exploit` 主力／`explore` 探索). It is stored, shown small, read by 結案 (§6.3), and never
+   pasted to GPT.
+
+   **The offering's reference, whatever is sold.** No new asset kinds (「KOL要賣自己，則自己=商品參考。
+   講師要賣課，則課的截圖、畫面、教材等=商品參考，牙醫診所要賣預約，則牙醫診所本身照片、案例=商品」):
+   `official_asset.asset_kind = 'product_photo'` is labelled 商品參考照 (key unchanged) and its
+   `title` is the description. The 商品參考 line lists up to 3 descriptions of the set's knowledge
+   product's 商品參考照, else the brand-level ones (`product_id IS NULL`); a missing title reads as
+   the product name, else 參考照. The prompt then writes 「主角外型依附上的參考照：<說明>」. No
+   reference → the line says so, and the prompt describes only visible traits, never an invented
+   package, logo or face.
+
+   **② 變體 — 單圖 only, count from the plan** (「變體只是作主體不變、圖片其他部分些許改變」;
+   「依照排程決定，不一定每期每組每個素材都要10張變體」). Rendered at read time from the selected
+   version, no model call. `N` = the set's `request.variant_count` (§5.4); missing, invalid or 0 →
+   no ②. It keeps subject, person, ratio, text tiers and **every 「」 string of that item verbatim**,
+   then lists the first N of nine fixed changes: 1 背景色調 · 2 取景遠近 · 3 文字位置 · 4 強調色 ·
+   5 姿勢或表情 · 6 光線時段 · 7 景深 · 8 背景色調＋強調色 · 9 取景遠近＋文字位置. Variants are not
+   learned (Meta groups near-identical creatives into one entity; small deltas are noise).
+8. **The model writes the prompts; the program plans, appends and checks.** Prompt, in order:
+   `image_prompt.md` · the 工作單 — 用途 and ratio; 商品參考; 品牌視覺規範 (the identity text, §5.9);
+   每則風格分配, one line per slot 「第 N 則：<look key>（<look label>）」; audience／pain／angle／hook／
+   proof／offer as `label（situation）`; 這張圖的任務 with the allowed subject_role and persuasion;
+   這一輪手法清單順序, the seven devices shuffled by the program every round (probe v3: an unshuffled
+   list put `contrast` first in 6 of 6 brands); 可用字句; 題材 from the pack summary's 情境／重點訊息;
+   自由指示; the previous round's titles; 已知的視覺學習 (§5.9) — · the compiled brand context
+   (`context_compiler.compile`, as-is). No `app/methodology/**` file is fed. **Coordinate lookup
+   matches key or label**: 投放中心 hands keys, 檔期規劃 handed labels; before F07 every
+   ads-dispatched prompt carried raw English keys and no ratio.
+   The reply shape is requested by one `input_schema` tool in `gateway.TaskOptions.tools` (the
+   `app/intake/ai.py` pattern) at thinking `medium`, with per-set enums (`look` = the plan's looks,
+   `subject_role`／`persuasion` = the derived row). The schema is a request, not a guarantee —
+   Anthropic tool use is not strict and the fix round sends no tools — so every schema rule is also
+   a program check, run on the first reply and again on fix-round replacements.
+   Program checks, no tokens, per item (輪播: item fields on the concept, text rules per card):
+   - `look` equals its slot's look; `device`／`layout` in their lists; `subject_role` and
+     `persuasion` inside the derived row;
+   - the ratio token in the first sentence; no `【`; no English code
+     (`(?<![A-Za-z])[a-z]+_[a-z_]+`);
+   - `headline`: 1–2 strings, each ≤14 characters, each verbatim as a 「」 string in the prompt;
+   - every 「」 string ≤22 characters and holds no nested 「; ≤6 「」 strings;
+   - **no jargon leak**: no 「」 string contains the set's full audience label (the whole `A・B`
+     string, never a half), its angle or hook name, 無證明 (the proof label when proof is `none`), or
+     the task label. Everyday words are never flagged — pain and offer labels and halves of audience
+     labels (太貴、怕買錯、回購、免運、陌生…) — and a term that occurs in the quotable text is exempt
+     (滿799免運). Probe v4's 「還在怕選錯理財方法？」 is customer wording and passes.
+   - every **fact number** inside a 「」 string occurs verbatim in the quotable text (the set's
+     promotion note, the pack's 重點訊息, the compiled brand context); numbers outside 「」, clock
+     times and dates are not checked; efficacy numbers never go on the image;
+   - at most one negative phrase (the pattern never matches 要不要).
+   Per round: more than 10 trimmed, fewer ❌; `headline[0]`'s first 3 characters at most twice;
+   ≥5 layouts; ≥4 devices; the 2 輪播 concepts use different layouts. A failing item is re-asked
+   once, as a whole item, in the existing fix round; a round-level failure shows ❌. The recorded
+   probe outputs are the fixtures (`app/tests/fixtures/workbench/`); CI never calls a model.
+   **Each version row stores its own item** — `body_json` = `{title, headline, prompt, text,
+   fingerprint, cards, round, validation, warnings}`:
+   - `text` = prompt + blank line + `品牌視覺規範：<identity text>` + newline + `風格規範：<look
+     texture>`. A carousel concept's `text` is its 5 card texts, each with that tail, joined by a
+     blank line;
+   - `fingerprint` = `{image_task, device, layout, look, subject_role, persuasion, slot}`, each
+     `{key, label}`;
+   - `cards` = `null`, or for 輪播 5 × `{headline, prompt, text}`;
+   - `round` = `{format, audience_key, image_task, identity_id, identity_text, plan: [{look, slot}],
+     look_order: {exploit, explore}, recommended_index, recommended_slot, learning_ids}` — `plan`
+     is in slot (shuffled) order; `look_order` keeps the 主力 looks in pool order and the 探索 looks in
+     exploration order; `audience_key` is the resolved key, or the value as given when it has no task
+     row.
+   This is the contract `ads` reads through `adopted_output` (§6.3), using only `fingerprint` and
+   `text` — no second export.
+9. **The system derives the brand's look, a program allocates it, learnings steer, nothing is
+   excluded by a guess.** Reverses the earlier "one look per brand, no style library" call: probe
+   v3 proved looks make industries read differently, probe v4 proved the system can derive them
+   from facts alone — and that a derived exclusion list is harmful.
+   - **Look catalogue** (code, `app/workbench/looks.py`): twelve texture-only families, key →
+     (label, texture), texture text from `.harness/scratch/probes/image-prompt-v4/run_v4.py::LOOKS`:
+     `phone_raw` 手機原生抓拍 · `flash_snapshot` 直閃快照 · `documentary` 紀實自然光 ·
+     `soft_lifestyle` 柔光生活 · `clean_bright` 明亮乾淨 · `studio_hero` 棚拍主視覺 · `dark_luxury`
+     暗調精品 · `cinematic` 電影感 · `bold_graphic` 平面大字 · `ui_render` 介面畫面 · `illustration`
+     插畫 · `editorial_portrait` 人物專訪. A texture names light, camera and rendering only — never
+     who, which colours or which words.
+   - **Brand visual identity** (derived and cached; nobody fills anything). One model call,
+     `workbench_visual_identity` (`app/departments/workbench/visual_identity.md`, thinking
+     `medium`), reads the compiled brand-level context and the catalogue and returns `identity`
+     (80–150 characters: casting, palette, type personality, mood — no light, camera or bans),
+     `fit_looks` (3–5 catalogue keys, ranked) and `excluded_looks` (0–3 × `{look, fact}`). The
+     program keeps an exclusion only when its `fact` occurs verbatim in the context it sent: a look
+     is excluded only when brand facts say so. (Probe v4 derived 手機原生抓拍 as never-use for Beast
+     Gummy from 中高價＋力量感 — the style the user had proven.) The result is one
+     `workbench_visual_identity` row per (brand, `brand.knowledge_version`); a fact edit bumps the
+     version and the next round re-derives. Two cold rounds in parallel may both call; the first
+     insert wins (`ON CONFLICT DO NOTHING`) and both read the stored row, so a pack never mixes
+     identities.
+   - **Brand-provided look.** Confirmed `visual_base` facts, values joined by a newline, become the
+     look `brand_spec` 品牌規範 — ranked first, never excluded, texture = that text verbatim. No
+     `visual_base` is a normal state, not a warning. More than 2 negative phrases in it → one
+     warning in 品牌智庫 → 品牌事實, shipped as text by
+     `GET /api/workbench/brands/{brand_id}/visual-spec` → `{warnings: [{text, href}]}`, which the
+     browser calls (no Python import from legacy).
+   - **Slot plan** (program, `looks.allocate`, no model). Per round of 10, 7 主力 slots cycle
+     through the learned winners — `visual` rows at likely/validated, same audience, scope
+     `look=<key>`, not expired, learned within 180 days — or, with none, through the fit ranking
+     (`brand_spec` first). 3 探索 slots take the least-tried non-excluded looks outside the 主力
+     pool, ordered by adopted items with that look (brand + audience), then items offered with that
+     look, then fit rank, then catalogue order. Slots are shuffled for the prompt only (`round.look_order` keeps display order). 輪播: concept 1 = the first 主力
+     look, concept 2 = the first 探索 look. The derived ranking is a starting guess; every
+     non-excluded look stays reachable (「假設系統今天丟了5個風格，回收回來的前3名被放到品牌成功區，而
+     系統之後只會走快樂路徑，不去找其他可能，永遠都在這三個風格繞」).
+   - **Exploration reaches the test.** The user picks the hero, so an exploration look is tested
+     only if picked. Each round recommends one item (「建議選這張」): a 探索 item when
+     `explore_recommendations_so_far + 1 ≤ 0.3 × (brand_image_rounds_so_far + 1)`, else the first
+     主力 item; the 探索 pick is the first item holding the least-tried 探索 look. About 3 in 10
+     sets therefore recommend exploration whatever the pack size. The pack page warns when fewer
+     than 30% of its sets' adopted image rows are 探索. Never a gate — §5.5's 核准整包 never blocks.
+   - **Learnings read.** The worksheet carries ≤5 `learning_text` lines of this audience's
+     non-expired `visual` rows at likely/validated, not 看不出, within 180 days, newest first, plus
+     「另有 N 條沒列出」 (§1 rule 1). Look winners act through the slot plan, not through the model. No
+     audience, or an audience value the table does not know → no learnings and the cold-start plan.
+   - **Negatives are tiny.** A model-written prompt carries at most one negative sentence naming a
+     specific visual thing (「除此之外不放其他文字」); never a legal line, a brand red line or a broad
+     ban (「可以有negative prompt，但不能長篇大論或是為了法規限制、品牌紅線等限制創作力」). Red lines stay
+     text-side: 絕對不能講 in the brand context and the fact-number check. The appended identity and
+     look texture are exempt.
+10. **The old style library retires; the look catalogue is code.** `app/workbench/image_styles.json`,
+    `repository.STYLES`／`get_style`, `GET /api/workbench/styles`, 自由創作's style dropdown and
+    style mapping, the 【】 template `app/methodology/image-prompt-template.md`,
+    `prompts.render_hero_prompt`／`render_variant_prompt`／`render_exploration_prompt`, and the
+    neutral default spec with its warning retire. `workbench_brief.style_key` stays (applied
+    migration), unread. Nobody picks a look; the catalogue changes only by a planner-reviewed code
+    edit.
 11. **In-site image generation is a reserved port, not a feature.** `app/workbench/image_port.py`
     is one module with one stub: no provider, no key, no cost, no billing, no automation. It
     reports 未接上 and the API repeats that, so the 圖片 tab defaults to the prompt view.
     「顯示提示詞」 is a permanent toggle, not a fallback: the same version cards render as
-    plain-text prompt cards (① 主圖／② 變體) with a copy button each plus 「複製全部」. When a
-    provider is connected the image view is the same component fed by the port. 席位保留 is never
+    plain-text prompt cards with a copy button each plus 「複製全部」. Since F07 each image version
+    ships `prompt_cards` = `[{label: "NN｜<title>", text: body.text}]` plus, on a **selected**
+    單圖-shape version of a set whose `variant_count` > 0, `{label: "② 變體", text}` (§5.7); a
+    `fingerprint_text` line (look · layout · device · persuasion labels); and `badges` (「主力」 or
+    「探索」, then 「建議選這張」 on the round's recommended item);
+    「複製全部」 copies `SetDetail.products.image_prompt.copy_all_text`, the latest round's paste
+    block built once by the backend (a lead line, then `第 N 張` + each text). When a provider is
+    connected the image view is the same component fed by the port. 席位保留 is never
     phrased as a refusal, and nothing in the product asks the user to run live ads to see a result.
 12. **Four screens, one IA.** 素材工作檯 (入口: search ＋ status pills ＋ pack cards ＋ 最近使用 ＋
     快速開始) → 任務包 (pack-local left rail 總覽＋sets, 完成進度, 素材組進度 table, 摘要, 完成條件,
@@ -619,21 +833,23 @@ in `.work/features/F02.md`; where a prototype and an image differ, the image win
     call** on the first click (never while typing): `POST /api/workbench/brands/{b}/parse` →
     `free_parse.py` → `gateway.run_task` with an empty context and the department task file
     `app/departments/workbench/free_parse.md` (no `app/methodology/**` change). It returns the spec
-    fields 專案主題／需要產出（含張數）／風格設定／投放平台／尺寸／目標受眾／主要訴求, and the
+    fields 專案主題／需要產出（含張數）／投放平台／尺寸／目標受眾／主要訴求 (風格設定 retired with the
+    style library, §5.10 — the reply's `style_hint` key is kept and is always `null`), and the
     second click submits them as `required_outputs`. A failed, timed-out or unparseable call is
     never a dead end: it returns the caller's defaults with `parsed: false` and the user continues. Rails inside the workbench are pack-local or
     set-local; the OS sidebar is untouched. The old `.workspace-split` workbench page (開始生成／
     派工任務／工單 rail) is retired with this revision.
 13. **The 生成設定 table is shipped as text, like `cells[].text`.** `SetDetail.generation_settings`
-    is a backend-derived **ordered list of `{label, text}`** — 品牌／商品, 平台, 尺寸, 風格, 人物,
-    場景, 主要訊息 — and the 圖片 tab's right column renders it verbatim, row by row, with no
+    is a backend-derived **ordered list of `{label, text}`** — since F07: 品牌／商品, 平台, 尺寸,
+    品牌視覺, 這張圖的任務, 風格分配, 視覺學習, 主要訊息 — and the 圖片 tab's right column renders it verbatim, row by row, with no
     per-label branch in the browser (§5.3's rule: text the user reads is produced once, by the side
     that owns the rule). Every row is always present; a row with nothing to say reads 「—」, and the
     商品 half of row 1 reads 「不指定」 when the set has no `product_id`. Sources: brand and product
-    names from `brand`／`product` via the set's `product_id`; 平台／尺寸／風格 are the same three
-    values as `chips`; 人物 and 場景 are the **latest image-prompt round's structured reply**
-    `body_json["hero"]["person"]／["scene"]` (the model's fields, §5.8 — not the rendered prompt
-    string, and absent in 探索模式, which is a 「—」); 主要訊息 is the pack summary's 重點訊息. It is
+    names from `brand`／`product` via the set's `product_id`; 平台／尺寸 are the same values as
+    `chips` (`chips.style` is `null` since F07 — nobody picks a style); 品牌視覺 is the latest image
+    round's `round.identity_text`; 這張圖的任務 is that round's `image_task` label; 風格分配 reads
+    「主力：<look labels>；探索：<look labels>」 from `round.look_order` (主力 in pool order, so a
+    brand-provided look comes first; 探索 in exploration order); 視覺學習 is 「N 條」 from `round.learning_ids` or 「無」 (no round → 「—」 for these four); 主要訊息 is the pack summary's 重點訊息. It is
     a **read-only mirror of what produced the current prompts**, never an input form and never a
     second endpoint fetch. `SetDetail.products[<part>].generation_settings` is a different field
     with a different shape (the per-product run parameters `copy_length`／`count`) and keeps its
@@ -780,6 +996,62 @@ tab with no publish affordance; 投放結構 and 素材 ended with no next step,
     prints the adapter's own message verbatim and offers 手動發布 and 模擬發布（演練） as buttons
     (decision 1: "not connected", never a refusal). The header's ⋯ menu is gone — the publish
     screen is the one place the path is chosen.
+
+### 6.3 Fourth round — image work and visual learning (settled 2026-09-15, F07)
+
+Prompts do not rewrite themselves. What evolves is (a) the visual learnings the image-prompt call
+reads — the slot plan and ≤5 lines (§5.9) — and (b) the image-task table, only by a
+planner-reviewed edit once a learning is 已驗證. The traces that cannot be retrofitted ship with
+F07: the fingerprint on every item (§5.7) and which item became the hero (the 選定 on its row).
+
+19. **Visual learning is written at 結案, by fingerprint, inside one audience.** After the campaign
+    learning, `closeout.close` groups the campaign's ads by `audience_key`. Only ads whose image set
+    has an adopted row count — `workbench.adopted_output(...)["is_adopted"]` must be true, because
+    that entry falls back to the latest round when nothing is selected, and a fallback is not a
+    hero. Within one audience, for each of `look`, `device`, `layout`, `subject_role` and
+    `persuasion` that has ≥2 distinct values, the ads are grouped by value. Each group's ad-level
+    outcome rows go through `outcome._bucket`, the campaign's own success metric is applied (ROAS =
+    the conservative value, §6 item 8), and `outcome.sample_bucket(purchases, days)` labels the
+    sample. A group at 低 or with the metric untracked is listed, not compared.
+    - Two or more comparable groups with a strict best → one row, scope
+      `visual；audience=<audience_key>；<dimension>=<value_key>`.
+    - Anything else → one row, scope `visual；audience=<audience_key>；<dimension>=看不出`, at
+      `observed`.
+    Confidence reuses §6 item 7's count: prior non-expired `visual` rows with the identical scope
+    from other campaigns, plus this one — 1 `observed`, 2 `likely`, ≥3 `validated`; 看不出 is always
+    `observed`. `needs_revalidation` follows the campaign learning's rule; readers also ignore rows
+    learned more than 180 days ago.
+    **A winner that later loses is downgraded.** When this campaign has a strict best B in one
+    audience and dimension, every other compared value A that has non-expired prior rows with scope
+    `…；<dimension>=A` loses its newest such row (`bi_repo.expire_learning`). Confidence is the
+    stored value of the newest surviving row, so each contradicting campaign lowers A one step
+    (validated → likely → observed, and below likely the image prompt stops reading it).
+    The sentence is built by the program from labels — audience labels from
+    `ads.repository.coordinate_vocabulary`, value labels from the fingerprint's own `{key, label}`.
+    It names the numbers, counts and sample buckets, and says the result is a correlation, not a
+    cause (§0). No model call. It is written through `record_learning(..., source_track="visual")`.
+20. **Why inside one audience.** The image task is derived from the audience (§5.7). Comparing
+    fingerprints across audiences would learn audience effects as look or layout effects, so the
+    audience is the stratum and never a compared dimension.
+    Not learned:
+    - variants (one entity to Meta; small deltas are noise);
+    - 自由創作 organic posts — no post-insights source exists, and PRODUCT.md forbids fabricated
+      sources. Both are backlog entries.
+    Early samples are mostly 低, so early rows are mostly 看不出. That is honest and is what the
+    image prompt then does not read; the slot plan keeps exploring regardless.
+21. **The dispatch decides the image work, the workbench renders it.** `app/ads/assets.py::_ad_set`
+    sends, per ad, by `format_key`:
+    - `single_image` (and a stored `flexible`): `required_outputs = {copy: 1, image_prompt: 1}` and
+      `request.variant_count` = run days ≤7 → 3, 8–21 → 6, >21 → 9; +3 when the group's `role` is
+      `retarget`; capped at 9. Run days come from the group's dates, else the campaign's
+      (`plan._days`); no dates → 6.
+    - `carousel`: `{copy: 1, image_prompt: 1}`, `variant_count` 0.
+    - `video`: `{copy: 1, video_script: 1}` with `request.video_script_count` 3
+      (`meta-format-specs.md` §3: 3 scripts per angle), no `image_prompt`. Script generation itself
+      is unchanged (「影片廣告要產投放時需要的影片本體的腳本與資訊欄位的主要文案、說明、標題欄位(Meta來說)，
+      和圖片廣告是一樣的邏輯」).
+    No `style_key`, no `image_prompt_count`. The manual checklist's 圖片提示詞 is the adopted row's
+    `body_json.text`, only when `is_adopted`.
 
 ## 7. Verification
 
