@@ -812,7 +812,9 @@ in `frontend/playwright.config.ts`'s `webServer.env`. Both values are refused ou
     seam; it would time out with no `LookupError`. Such a step needs a planner decision first.
 - **The replies live in legacy `app/llm/providers.py`** because the switch point does. This is the one sanctioned
   growth of legacy for test infrastructure: a local-only verification seam, not product capability, cut as a
-  `legacy_migration: true` issue under planner review (F06-I05).
+  `legacy_migration: true` issue under planner review (F06-I05). The seam grew four legacy files and no others:
+  `app/llm/providers.py` (the replies), `app/llm/gateway.py` (selection before the `running` row),
+  `app/background/__init__.py` (the `memory` queue) and `app/core/config.py` (the local-only refusal).
   - Each reply's shape is pinned by a test in the module that owns the shape (`test_ads_brief.py`,
     `test_ads_strategy.py`, `test_workbench_free_parse.py`).
   - An e2e path that needs a new model call adds its reply there, under that issue's plan.
