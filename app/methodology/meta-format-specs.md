@@ -15,8 +15,6 @@
 
 ## 1. 單圖 single_image
 
-彈性格式＝同一座標 1～10 張，走 `flexible` 座標值。
-
 - 比例 4:5，1080×1350（查證日 2026-08-07）
 - 視覺方向：每個廣告節點 1 份，不分品項變體另產（ADR 0047）。內容＝七維座標＋一個
   `visual_tone`＋一到兩句話的畫面概念，由文案任務決定（`app/departments/workbench/copy.md`，
@@ -25,8 +23,7 @@
 - `title`：5 個，27 字。Meta 顯示截斷約 27–40 依版位而異，取最嚴 27 當品質預算
 - `description`：5 個，30 字
 
-每主題媒體上限：`sales` = **10**（彈性格式）；`awareness` / `traffic` / `engagement` / `leads`
-= **1**（文字仍出 5 個，走多文字最佳化）。
+每主題媒體上限：五種目標皆 **1**（文字仍出 5 個，走多文字最佳化）。
 
 來源：
 - https://developers.facebook.com/docs/marketing-api/flexible-ad-format/ （2026-08-07）
