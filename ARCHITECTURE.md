@@ -452,6 +452,11 @@ campaign/period tables belong to `schedule`; `ads_campaign`, `ads_delivery_group
 `ads_action` and `ads_outcome_daily` belong to `ads`. Physical definitions live in the shared `supabase/migrations/` directory, one file
 per module prefix (`<timestamp>_<module>_<desc>.sql`); an applied migration is never edited, a
 correction is a new file.
+**A table name is never reused as another identifier** (2026-09-15, F07-I02 block). The checker's
+`sql-table` analyzer is textual: an owned table's name inside any string literal outside its owner
+counts as access. A task type, job kind, prompt id or dict key therefore never equals a declared
+table's name — the identity derivation's task type is `workbench_derive_identity`, not the table
+`workbench_visual_identity`. Rename the new identifier; never narrow the analyzer to make a name pass.
 
 `product_economics` (and its `product_economics_version` history) stays in `brand_intelligence` and
 is the **one home of「一次轉換值多少錢」** for every kind of offering (§8). `intake` and `brand_web`
@@ -763,7 +768,7 @@ in `.work/features/F02.md`; where a prototype and an image differ, the image win
      插畫 · `editorial_portrait` 人物專訪. A texture names light, camera and rendering only — never
      who, which colours or which words.
    - **Brand visual identity** (derived and cached; nobody fills anything). One model call,
-     `workbench_visual_identity` (`app/departments/workbench/visual_identity.md`, thinking
+     task type `workbench_derive_identity` (`app/departments/workbench/visual_identity.md`, thinking
      `medium`), reads the compiled brand-level context and the catalogue and returns `identity`
      (80–150 characters: casting, palette, type personality, mood — no light, camera or bans),
      `fit_looks` (3–5 catalogue keys, ranked) and `excluded_looks` (0–3 × `{look, fact}`). The
