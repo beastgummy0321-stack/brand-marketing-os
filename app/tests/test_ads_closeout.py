@@ -153,6 +153,70 @@ class MetaUntrackedPurchasesCloseInconclusiveNamingUntrackedTest(CloseoutTestBas
         self.assertNotIn("樣本太小", learnings[0]["learning_text"])
 
 
+class LeadGoalPrintsLeadLabelsTest(CloseoutTestBase):
+    """F05-I12：`conversion_goal='lead'` 的品牌結案要印「每筆名單成本」／「名單數」，不是
+    寫死的「購買」——換的只是 label，`_judge` 的算式一個字沒動。"""
+
+    def test_lead_brand_missed_cpa_target_prints_lead_labels(self):
+        bi_repo.set_brand_switches(
+            self.conn, self.brand_id, market_region=None, conversion_goal="lead", actor=ACTOR,
+        )
+        start = self.today - timedelta(days=2)
+        campaign = self._campaign(metric="cpa", target=300, start_date=start, end_date=self.today)
+        group = self._group(campaign["id"])
+        for offset in range(3):
+            self._outcome_row(
+                campaign["id"], group["id"], start + timedelta(days=offset),
+                spend=2000.0, purchases=5, revenue=1000.0,
+            )
+
+        closed = closeout.close(self.conn, self.org_id, self.brand_id, campaign["id"], actor=ACTOR)
+
+        self.assertEqual(closed["verdict"], "未達成")
+        learnings = bi_repo.list_learnings(self.conn, self.brand_id)
+        self.assertIn("每筆名單成本", learnings[0]["learning_text"])
+        self.assertNotIn("購買", learnings[0]["learning_text"])
+
+    def test_lead_brand_untracked_metric_names_lead_count_untracked(self):
+        bi_repo.set_brand_switches(
+            self.conn, self.brand_id, market_region=None, conversion_goal="lead", actor=ACTOR,
+        )
+        start = self.today - timedelta(days=6)
+        campaign = self._campaign(
+            metric="purchases", target=50, start_date=start, end_date=self.today,
+        )
+        group = self._group(campaign["id"])
+        for offset in range(7):
+            self._outcome_row(
+                campaign["id"], group["id"], start + timedelta(days=offset),
+                spend=5000.0, purchases=0, revenue=0.0, source="meta",
+            )
+
+        closed = closeout.close(self.conn, self.org_id, self.brand_id, campaign["id"], actor=ACTOR)
+
+        self.assertEqual(closed["verdict"], "看不出")
+        self.assertIn("名單數未追蹤", closed["verdict_json"]["missing"])
+
+
+class PurchaseGoalKeepsExistingStringsTest(CloseoutTestBase):
+    """既有斷言不准改壞（Done 5）：品牌沒設 `conversion_goal`（`None`）維持原本的購買字串。"""
+
+    def test_default_brand_still_prints_purchase_labels(self):
+        start = self.today - timedelta(days=2)
+        campaign = self._campaign(metric="cpa", target=300, start_date=start, end_date=self.today)
+        group = self._group(campaign["id"])
+        for offset in range(3):
+            self._outcome_row(
+                campaign["id"], group["id"], start + timedelta(days=offset),
+                spend=2000.0, purchases=5, revenue=1000.0,
+            )
+
+        closeout.close(self.conn, self.org_id, self.brand_id, campaign["id"], actor=ACTOR)
+
+        learnings = bi_repo.list_learnings(self.conn, self.brand_id)
+        self.assertIn("每次購買成本", learnings[0]["learning_text"])
+
+
 class SecondCampaignSameDirectionUpgradesLearningTest(CloseoutTestBase):
     def test_second_campaign_in_the_same_direction_makes_the_next_learning_likely(self):
         def _achieved_campaign():

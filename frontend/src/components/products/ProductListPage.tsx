@@ -22,6 +22,31 @@ type LoadState =
   | { status: "error"; message: string }
   | { status: "ready"; items: ProductListItem[] };
 
+/** 母產品接著它自己的賣法排（決策 16：母＝知識、子＝賣法），母產品保持既有順序；找不到
+ * 母產品的孤兒列（例如母產品被搜尋篩掉）當成一般列排在最後，不是消失。 */
+function orderByParent(items: ProductListItem[]): ProductListItem[] {
+  const byId = new Map(items.map((item) => [item.id, item]));
+  const childrenOf = new Map<string, ProductListItem[]>();
+  const orphans: ProductListItem[] = [];
+  for (const item of items) {
+    if (item.parent_id && byId.has(item.parent_id)) {
+      const list = childrenOf.get(item.parent_id) ?? [];
+      list.push(item);
+      childrenOf.set(item.parent_id, list);
+    } else if (!item.parent_id) {
+      // parent, handled below
+    } else {
+      orphans.push(item);
+    }
+  }
+  const ordered: ProductListItem[] = [];
+  for (const item of items) {
+    if (item.parent_id) continue;
+    ordered.push(item, ...(childrenOf.get(item.id) ?? []));
+  }
+  return [...ordered, ...orphans];
+}
+
 /** 產品清單（S6，票 B2-products）：品牌智庫底下第二層資料——舊版 `hub_products.html` 表格
  * 改成這裡的清單，點名稱去詳情頁（下一步，符合五鐵則①）。 */
 export function ProductListPage({ brandId }: { brandId: string }) {
@@ -29,7 +54,10 @@ export function ProductListPage({ brandId }: { brandId: string }) {
   const [newPanelOpen, setNewPanelOpen] = useState(false);
   const navigate = useNavigate();
   const [search, setSearch] = useState("");
-  const items = state.status === "ready" ? state.items.filter(item => item.name.toLowerCase().includes(search.toLowerCase())) : [];
+  const items =
+    state.status === "ready"
+      ? orderByParent(state.items.filter((item) => item.name.toLowerCase().includes(search.toLowerCase())))
+      : [];
   const { page, pageCount, totalCount, pageItems, goToPage, topRef } = usePagination(items);
 
   function load() {
@@ -83,6 +111,7 @@ export function ProductListPage({ brandId }: { brandId: string }) {
               {pageItems.map((item) => (
                 <tr key={item.id} className="border-t border-border">
                   <td className="px-3 py-2">
+                    {item.parent_id && <span className="pl-4 text-muted-foreground">└</span>}
                     <button
                       type="button"
                       onClick={() => navigate(`/brands/${brandId}/products/${item.id}`)}

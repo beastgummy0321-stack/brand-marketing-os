@@ -66,7 +66,7 @@ class PlanTestBase(unittest.TestCase):
 
     def _create_adopted_campaign(
         self, *, budget_planned: float = 30001, start_date: str = "2026-10-01",
-        end_date: str = "2026-10-14",
+        end_date: str = "2026-10-14", platform: str | None = None,
     ) -> dict:
         """14 天（含頭尾）、50／30／20 的角色分配——刻意選 30001／14 這種除不整的數字：
         naive `total / groups` 會漏掉餘數，`budget.split()` 才會精準加總（Done 第一句）。"""
@@ -82,6 +82,8 @@ class PlanTestBase(unittest.TestCase):
             "budget_planned": budget_planned, "budget_scenario": "recommended",
             "budget_basis_json": {"strategy": {"allocation": allocation}},
         }
+        if platform is not None:
+            campaign["constraints_json"] = {"platform": platform}
         return ads_repo.create_campaign(web.conn, self.org_id, self.brand_id, campaign,
                                          created_by=ACTOR)
 
@@ -136,6 +138,20 @@ class AdCoordinatesAndNamesTest(PlanTestBase):
                 for dim in ("audience", "pain", "angle", "hook", "proof", "offer", "format"):
                     self.assertTrue(ad[f"{dim}_key"], f"{dim} 不該是空的")
         self.assertEqual(len(names), len(set(names)))
+
+
+class DeclaredPlatformDrivesChannelKeyTest(PlanTestBase):
+    def test_adopt_uses_the_campaigns_declared_platform_not_meta(self):
+        """F05-I05：`constraints_json.platform = "google_ads"` 的 Campaign 採用策略後，
+        投放組的 channel_key 是 google_ads，不是寫死的 meta（§0「不預設」）。"""
+        campaign = self._create_adopted_campaign(platform="google_ads")
+        plan.PROVIDER = _fake(_VALID_PLAN_REPLY)
+
+        detail = self._adopt(campaign["id"])
+
+        self.assertTrue(detail["groups"])
+        for group in detail["groups"]:
+            self.assertEqual(group["channel_key"], "google_ads")
 
 
 class AdoptTwiceRefusedTest(PlanTestBase):

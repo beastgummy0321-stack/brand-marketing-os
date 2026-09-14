@@ -28,16 +28,18 @@ def register(app) -> None:  # 掛路由（票 03-1）＋掛四個背景 task（�
 
     from app.background import app as background_app
     from app.intake.persona_generation import background_intake_persona
+    from app.intake.research import background_intake_research
     from app.intake.routes_api import (
         background_intake_paste_fix,
         background_intake_question,
         background_intake_scan,
     )
 
-    a = background_app()  # 四支簽章相同，可以迴圈註冊（跟 brand_web 三支簽章互異、逐支手寫不同）
+    a = background_app()  # 簽章相同的可以迴圈註冊（跟 brand_web 三支簽章互異、逐支手寫不同）
     for name, func in (("background.intake_scan", background_intake_scan),
                        ("background.intake_question", background_intake_question),
                        ("background.intake_paste_fix", background_intake_paste_fix),
-                       ("background.intake_persona", background_intake_persona)):
+                       ("background.intake_persona", background_intake_persona),
+                       ("background.intake_research", background_intake_research)):
         if name not in a.tasks:
             a.task(name=name)(func)

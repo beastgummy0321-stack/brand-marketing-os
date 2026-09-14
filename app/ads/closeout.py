@@ -17,11 +17,12 @@ guard stays status='closed' on the campaign row; do not query the ledger for it"
 
 from app.ads import learning as ads_learning
 from app.ads import outcome, repository
+from app.ads.judgment import conversion_labels
+from app.brand_intelligence import repository as bi_repo
 from app.core.db import Conn, ConnProxy, jsonb
 
 _AnyConn = Conn | ConnProxy
 
-_METRIC_LABELS = {"cpa": "CPA", "roas": "ROAS", "purchases": "購買數"}
 # CPA 是花費/購買，越低越好；ROAS／購買數是越高越好——兩種比對方向,不是同一個算子。
 _LOWER_IS_BETTER = frozenset({"cpa"})
 
@@ -40,12 +41,14 @@ def _metric_value(metric: str, totals: dict) -> float | None:
     return totals["purchases"]
 
 
-def _judge(campaign: dict, totals: dict, sample_bucket: str) -> tuple[str, dict]:
+def _judge(campaign: dict, totals: dict, sample_bucket: str, labels: dict) -> tuple[str, dict]:
     """回傳 (verdict, verdict_json)。`verdict_json` 一律帶 `metric`／`target`／`actual`／
-    `window`／`sample_bucket`；只有 `看不出` 才多一個 `missing`，說清楚少了什麼。"""
+    `window`／`sample_bucket`；只有 `看不出` 才多一個 `missing`，說清楚少了什麼。`labels` 是
+    `judgment.conversion_labels()` 的回傳——這個品牌的「購買」該叫什麼名字。"""
     metric = campaign["success_metric"]
     target = campaign["success_target"]
     actual = _metric_value(metric, totals)
+    metric_labels = {"cpa": labels["cpa"], "roas": "ROAS", "purchases": labels["count"]}
     verdict_json = {
         "metric": metric, "target": target, "actual": actual,
         "window": {"start": campaign["start_date"], "end": campaign["end_date"]},
@@ -55,7 +58,7 @@ def _judge(campaign: dict, totals: dict, sample_bucket: str) -> tuple[str, dict]
         verdict_json["missing"] = "success_target 沒有設定，成功條件本身沒有數字可比對"
         return "看不出", verdict_json
     if actual is None:
-        verdict_json["missing"] = f"{_METRIC_LABELS.get(metric, metric)}未追蹤，沒有數字可以比對"
+        verdict_json["missing"] = f"{metric_labels.get(metric, metric)}未追蹤，沒有數字可以比對"
         return "看不出", verdict_json
     if sample_bucket == "低":
         verdict_json["missing"] = "樣本太小（低），比對出來的結果不可靠"
@@ -76,6 +79,9 @@ def close(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str, *, actor
     if campaign["status"] == "closed":
         return campaign
 
+    brand = bi_repo.get_brand(conn, brand_id)
+    labels = conversion_labels(brand.get("conversion_goal") if brand else None)
+
     result = outcome.summary(conn, org_id, brand_id, campaign_id)
     totals = result["totals"]
     days = _days(campaign["start_date"], campaign["end_date"])
@@ -84,12 +90,12 @@ def close(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str, *, actor
     purchases_for_bucket = totals["purchases"] if totals["purchases"] is not None else 0
     sample_bucket = outcome.sample_bucket(purchases_for_bucket, days)
 
-    verdict, verdict_json = _judge(campaign, totals, sample_bucket)
+    verdict, verdict_json = _judge(campaign, totals, sample_bucket, labels)
     if reason:
         verdict_json["close_reason"] = reason
 
     learning_row = ads_learning.write_learning(
-        conn, org_id, brand_id, campaign_id, verdict, verdict_json, actor=actor,
+        conn, org_id, brand_id, campaign_id, verdict, verdict_json, actor=actor, labels=labels,
     )
     verdict_json["learning_ids"] = [learning_row["id"]]
 

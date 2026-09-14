@@ -1,17 +1,22 @@
 import { Check, Sparkles, Target, Wallet, BarChart2, Settings, Image as ImageIcon, TrendingUp, AlertTriangle, Clock } from "lucide-react";
 import { Button } from "@/components/layout/ui/button";
 import { formatCurrency, formatCount, formatRoas } from "@/lib/format";
-import { currentBudgetTotal, type CampaignDetail, type SuccessMetric } from "@/lib/adsApi";
+import { currentBudgetTotal, type CampaignDetail, type CampaignLabels, type SuccessMetric } from "@/lib/adsApi";
 import { JudgmentBand, ReservedSlotCard, DecisionCard, ActionTimeline, KpiStrip, type KpiCell, type TimelineItem } from "./patterns";
 
 const STAGE_LABELS = ["草稿", "策略", "投放結構", "素材", "投放中", "結案"] as const;
 type WorkspaceTab = "overview" | "strategy" | "structure" | "assets" | "performance";
 
-const METRIC_LABEL: Record<SuccessMetric, string> = {
-  cpa: "CPA",
-  roas: "ROAS",
-  purchases: "購買數",
-};
+// F05-I12：後端一律回傳 `campaign.labels`；這裡的預設值只在舊測試 fixture 沒帶這個欄位時
+// 頂上（同 `judgment` 選填的先例），跟 `app/ads/judgment.py::_CONVERSION_LABELS["purchase"]`
+// 同一組字。
+const DEFAULT_LABELS: CampaignLabels = { conversion: "購買", count: "購買數", cpa: "每次購買成本" };
+
+function metricLabel(metric: SuccessMetric, labels: CampaignLabels): string {
+  if (metric === "cpa") return labels.cpa;
+  if (metric === "purchases") return labels.count;
+  return "ROAS";
+}
 
 function formatTarget(metric: SuccessMetric, value: number): string {
   if (metric === "cpa") return formatCurrency(value);
@@ -52,6 +57,7 @@ export function OverviewTab({
   campaign: CampaignDetail;
   onChangeTab: (tab: WorkspaceTab) => void;
 }) {
+  const labels = c.labels ?? DEFAULT_LABELS;
   const idx = currentStageIndex(c);
   const next = nextActionFor(c, idx);
   const t = currentBudgetTotal(c);
@@ -69,7 +75,7 @@ export function OverviewTab({
       value: c.objective,
       caption:
         c.success_target !== null
-          ? `${METRIC_LABEL[c.success_metric]} 目標 ${formatTarget(c.success_metric, c.success_target)}`
+          ? `${metricLabel(c.success_metric, labels)} 目標 ${formatTarget(c.success_metric, c.success_target)}`
           : "未設定成功條件",
     },
     {
@@ -109,7 +115,7 @@ export function OverviewTab({
     <div className="flex flex-col gap-4">
       <KpiStrip cells={kpiCells} />
       <p className="text-xs text-muted-foreground">
-        購買、CPA、ROAS 等成效數字在成效分頁——那裡分得出「未追蹤」與 0。
+        {labels.conversion}、{labels.cpa}、ROAS 等成效數字在成效分頁——那裡分得出「未追蹤」與 0。
       </p>
 
       {c.judgment && (

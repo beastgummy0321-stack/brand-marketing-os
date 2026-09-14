@@ -15,14 +15,14 @@ from app.core.db import Conn, ConnProxy
 
 _AnyConn = Conn | ConnProxy
 
-_METRIC_LABELS = {"cpa": "CPA", "roas": "ROAS", "purchases": "購買數"}
 _COORDINATE_DIMENSIONS = (
     "audience_key", "pain_key", "angle_key", "hook_key", "proof_key", "offer_key", "format_key",
 )
 
 
-def _sentence(campaign: dict, verdict: str, verdict_json: dict) -> str:
-    label = _METRIC_LABELS.get(campaign["success_metric"], campaign["success_metric"])
+def _sentence(campaign: dict, verdict: str, verdict_json: dict, labels: dict) -> str:
+    metric_labels = {"cpa": labels["cpa"], "roas": "ROAS", "purchases": labels["count"]}
+    label = metric_labels.get(campaign["success_metric"], campaign["success_metric"])
     name = campaign["name"]
     sample = verdict_json.get("sample_bucket")
     if verdict == "看不出":
@@ -89,18 +89,19 @@ def _confidence(conn: _AnyConn, org_id: str, brand_id: str, campaign: dict, verd
 
 
 def write_learning(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str, verdict: str,
-                    verdict_json: dict, *, actor: str) -> dict:
+                    verdict_json: dict, *, actor: str, labels: dict) -> dict:
     """結案（或自動結案）寫的那一條學習。`campaign_id` 而非整包 `campaign` dict：這裡自己
     重讀 `campaign_detail`（要投放組／廣告的座標湊 `applicability_scope`），呼叫端
     （`closeout.close`）已經有的那份 dict 只到 campaign 欄位，不值得為了少一次查詢多傳一個
-    尚未組好的大 dict。"""
+    尚未組好的大 dict。`labels` 是呼叫端（`closeout.close`）已經算好的 `judgment
+    .conversion_labels()`——這裡不重查一次品牌。"""
     from app.ads import repository as ads_repo  # 延遲 import 避免循環（closeout.py 已是入口）
 
     detail = ads_repo.campaign_detail(conn, org_id, brand_id, campaign_id)
     if detail is None:
         raise ValueError("campaign_unknown")
 
-    text = _sentence(detail, verdict, verdict_json)
+    text = _sentence(detail, verdict, verdict_json, labels)
     confidence = _confidence(conn, org_id, brand_id, detail, verdict)
     needs_revalidation = _needs_revalidation(conn, brand_id, detail)
 

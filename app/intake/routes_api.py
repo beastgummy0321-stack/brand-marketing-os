@@ -100,9 +100,11 @@ async def brand_start(request: Request):
     client_name = clean(str(form.get("client_name") or ""))
     brand = repo.create_brand(web.conn, org_id=actor.org_id, name=brand_name,
                                client_name=client_name or None, actor=str(actor.user_id))
-    draft = state.start_or_quick(web.conn, brand["id"], brand_name, description=description,
-                                 urls=urls, photos=photos, actor=str(actor.user_id))
-    return {"brand_id": brand["id"], "quick": draft is None}
+    state.start_draft(web.conn, brand["id"], brand_name, description=description,
+                      urls=urls, photos=photos, actor=str(actor.user_id))
+    # quick 恆為 False（2026-09-14 起草稿永遠建立）；留著這個鍵只因為
+    # frontend/src/lib/intakeApi.ts 還在讀它，那個檔另有票在動，不在這張票拿掉。
+    return {"brand_id": brand["id"], "quick": False}
 
 
 @router.post("/api/intake/brands/{brand_id}/restart")
@@ -120,9 +122,9 @@ async def brand_restart(request: Request, brand_id: str):
     new_photos = state.resolve_photo_tokens([str(t) for t in form.getlist("photo_tokens")])
     carried = state.prev_photos(ir.get_latest_completed_draft(web.conn, brand_id))
     photos = carried + new_photos
-    draft = state.start_or_quick(web.conn, brand_id, brand["name"], description=description,
-                                 urls=urls, photos=photos, actor=str(actor.user_id))
-    return {"quick": draft is None}
+    state.start_draft(web.conn, brand_id, brand["name"], description=description,
+                      urls=urls, photos=photos, actor=str(actor.user_id))
+    return {"quick": False}
 
 
 def _is_restart(brand_id: str, draft: dict) -> bool:
@@ -351,11 +353,7 @@ def scan_skip(request: Request, brand_id: str):
     actor = require_actor(request)
     require_brand(brand_id, actor)
     draft = state.require_draft(brand_id)
-    draft["scan_done"] = True
-    draft["scan_impressions"] = []
-    draft["scan_products"] = []
-    draft["product_card_drafts"] = []
-    draft["url_results"] = []
+    state.skip_scan(draft)
     state.save(draft)
     return Response(status_code=204)
 
@@ -388,8 +386,8 @@ def question_start(request: Request, brand_id: str):
     actor = require_actor(request)
     require_brand(brand_id, actor)
     draft = state.require_draft(brand_id)
-    if draft["step"] < 3:
-        state.touch(draft, f"/brands/{brand_id}/intake/question", 3)
+    if draft["step"] < 5:
+        state.touch(draft, f"/brands/{brand_id}/intake/question", 5)
     if draft["qa_done"] or draft["current_q"] is not None:
         return {"limit_block": None}
     if state.would_exceed(draft, script.COST_QUESTION):
@@ -475,7 +473,7 @@ async def budget_raise(request: Request, brand_id: str):
     require_brand(brand_id, actor)
     draft = state.require_draft(brand_id)
     body = await _json_body(request)
-    kind = body.get("kind") if body.get("kind") in ("scan", "question", "paste_fix") else "scan"
+    kind = body.get("kind") if body.get("kind") in ("scan", "question", "paste_fix", "research") else "scan"
     draft["budget_limit"] = round(draft["budget_limit"] + 30, 2)
     state.save(draft)
     if kind == "scan" and not draft["scan_done"]:
@@ -484,6 +482,10 @@ async def budget_raise(request: Request, brand_id: str):
         _start("question", brand_id, actor.org_id)
     elif kind == "paste_fix":
         _start("paste_fix", brand_id, actor.org_id)
+    elif kind == "research":
+        research._start_research(brand_id, actor.org_id, "standard")
+    if kind == "research":
+        return {"job": research.job_state(draft)}
     return {"job": _job_state(draft, kind)}
 
 
@@ -499,7 +501,7 @@ def skip_remaining_ai(request: Request, brand_id: str):
         draft["product_card_drafts"] = []
         draft["url_results"] = []
     state.mark_qa_done(draft)
-    draft["step"] = 4
+    draft["step"] = 5
     state.save(draft)
     return Response(status_code=204)
 
@@ -522,8 +524,8 @@ async def handoff_generate(request: Request, brand_id: str):
                                       existing=ir.existing_confirmed_data(web.conn, brand_id))
     ir.update_draft(web.conn, brand_id, draft["id"], handoff_depth=depth,
                     handoff_prompt=prompt_text, handoff_generated_at=now_utc())
-    if draft["step"] < 4:
-        state.touch(draft, f"/brands/{brand_id}/intake/handoff", 4)
+    if draft["step"] < 5:
+        state.touch(draft, f"/brands/{brand_id}/intake/handoff", 5)
     return {"prompt_text": prompt_text}
 
 
@@ -711,6 +713,12 @@ async def review_item_post(request: Request, brand_id: str, i: int):
 
 
 # T2 新端點拆在小檔；本檔已接近 800 行，不再把新功能直接塞進來。
+from app.intake import research  # noqa: E402
+from app.intake.routes_offerings_api import router as offerings_router  # noqa: E402
 from app.intake.routes_t2_api import router as t2_router  # noqa: E402
+from app.intake.routes_tools_api import router as tools_router  # noqa: E402
 
 router.include_router(t2_router)
+router.include_router(offerings_router)
+router.include_router(tools_router)
+router.include_router(research.router)

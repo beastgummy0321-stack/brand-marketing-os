@@ -19,14 +19,17 @@ from app.ads import (
     adapters,
     assets,
     brief,
+    channels,
     closeout,
     judgment,
     outcome,
     plan,
+    readiness,
     repository,
     strategy,
 )
 from app.ads.adapters import simulated
+from app.brand_intelligence import repository as bi_repo
 from app.core import settings as coresettings
 
 router = APIRouter(prefix="/api/ads")
@@ -36,15 +39,39 @@ GROUP_UNKNOWN_MESSAGE = "找不到這個投放組。"
 AD_UNKNOWN_MESSAGE = "找不到這支廣告。"
 
 
+def _conversion_labels(brand_id: str) -> dict:
+    """F05-I12：每個 Campaign payload 跟著出去的一份對照表——畫面上的「購買」／「名單」等
+    詞從這個品牌自己的 `conversion_goal` 來，不寫死（`app.ads.judgment.conversion_labels`）。"""
+    brand = bi_repo.get_brand(web.conn, brand_id)
+    return judgment.conversion_labels(brand.get("conversion_goal") if brand else None)
+
+
 def _with_readiness(actor, brand_id: str, campaign: dict | None) -> dict | None:
-    """每一條回 Campaign 的路由都跟 GET 回同一個形狀（`campaign_detail` + `asset_readiness`）。
-    少一個欄位，瀏覽器就是白畫面（F04-I24，演練四）。"""
+    """每一條回 Campaign 的路由都跟 GET 回同一個形狀（`campaign_detail` + `asset_readiness`
+    + `labels`）。少一個欄位，瀏覽器就是白畫面（F04-I24，演練四）。"""
     if campaign is None:
         return None
     campaign["asset_readiness"] = assets.readiness_summary(
         assets.readiness(web.conn, actor.org_id, brand_id, campaign["id"]),
     )
+    campaign["labels"] = _conversion_labels(brand_id)
     return campaign
+
+
+@router.get("/brands/{brand_id}/readiness")
+def get_readiness(request: Request, brand_id: str):
+    """F05-I04：可投放檢查表——精靈最後一頁與投放中心「建立 Campaign」入口讀同一份。"""
+    actor = web.require_actor(request)
+    web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
+    return {"readiness": readiness.launch_readiness(web.conn, actor.org_id, brand_id)}
+
+
+@router.get("/brands/{brand_id}/channels")
+def get_channels(request: Request, brand_id: str):
+    """F05-I05：通路清單——畫面不准自己寫死平台名字，一律讀這支。"""
+    actor = web.require_actor(request)
+    web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
+    return {"channels": channels.list_channels(web.conn, actor.org_id, brand_id)}
 
 
 @router.get("/brands/{brand_id}/campaigns")
@@ -52,6 +79,9 @@ def list_campaigns(request: Request, brand_id: str):
     actor = web.require_actor(request)
     web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
     campaigns = repository.list_campaigns(web.conn, actor.org_id, brand_id)
+    labels = _conversion_labels(brand_id)
+    for c in campaigns:
+        c["labels"] = labels
     return {"campaigns": campaigns}
 
 
@@ -67,6 +97,9 @@ def get_home(request: Request, brand_id: str):
     actor = web.require_actor(request)
     web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
     campaigns = repository.list_campaigns(web.conn, actor.org_id, brand_id)
+    labels = _conversion_labels(brand_id)
+    for c in campaigns:
+        c["labels"] = labels
     counts = {
         "running": sum(1 for c in campaigns if c["status"] == "live"),
         "upcoming": sum(1 for c in campaigns if c["status"] in ("draft", "ready")),
@@ -559,7 +592,6 @@ def _enriched_campaign(conn, org_id: str, brand_id: str, campaign_id: str) -> di
 _PUBLISH_ERRORS = {
     "campaign_unknown": (404, CAMPAIGN_UNKNOWN_MESSAGE),
     "adapter_unknown": (400, "找不到這個發布方式。"),
-    "auto_meta_not_connected": (400, adapters.AUTO_META_NOT_CONNECTED_MESSAGE),
     "no_groups_to_publish": (400, "這個活動還沒有投放組，先採用策略產出投放組再發布。"),
 }
 
@@ -597,7 +629,11 @@ def publish_campaign(request: Request, brand_id: str, campaign_id: str, body: Pu
         chosen.publish(web.conn, actor.org_id, brand_id, campaign_id, actor=str(actor.user_id))
     except ValueError as exc:
         code = str(exc)
-        status, message = _PUBLISH_ERRORS.get(code, (400, code))
+        # 唯一沒進 `_PUBLISH_ERRORS` 的例外碼是 `auto_meta` adapter 保留位置的那個（F03-I09），
+        # 這裡不重複那個字面字串（§0：平台名字只准住在 channels.py／adapters/**）——直接問
+        # adapter 自己保留的訊息。
+        fallback = (400, adapters.AUTO_META_NOT_CONNECTED_MESSAGE)
+        status, message = _PUBLISH_ERRORS.get(code, fallback)
         raise web.ApiError(status, code, message) from exc
     enriched = _enriched_campaign(web.conn, actor.org_id, brand_id, campaign_id)
     if enriched is None:

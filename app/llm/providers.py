@@ -143,6 +143,7 @@ TASK_TYPE_LABELS = {
     "intake_persona": "建檔精靈：整理人物誌",
     "intake_question": "建檔精靈：追問",
     "intake_paste_fix": "建檔精靈：貼上格式修復",
+    "intake_research": "建檔精靈：系統自動調研",
     "product_scan": "產品建檔：讀取網址",
     "product_handoff_fix": "產品交接：格式修復",
     "brand_report": "品牌智庫報告",
@@ -166,6 +167,7 @@ TASK_DEFAULTS = {
     "intake_persona": {"model": None, "thinking": "medium"},
     "intake_question": {"model": None, "thinking": "low"},
     "intake_paste_fix": {"model": None, "thinking": "low"},
+    "intake_research": {"model": None, "thinking": "high"},
     "product_scan": {"model": None, "thinking": "low"},
     "product_handoff_fix": {"model": None, "thinking": "low"},
     # 分析型任務：不確定，留中檔

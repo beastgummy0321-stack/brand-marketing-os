@@ -12,8 +12,9 @@ of what the user adopted — after 採用策略 the group daily budgets are the 
 ever recomputes `budget_planned` from them (F03.md "One source of truth for money").
 """
 
-from app.ads import budget
+from app.ads import budget, judgment
 from app.ads import repository as ads_repo
+from app.brand_intelligence import benchmarks
 from app.brand_intelligence import repository as bi_repo
 from app.core import rule_cards
 from app.core import settings as coresettings
@@ -63,40 +64,110 @@ def _brand_facts_section(conn, brand_id: str) -> tuple[str, list[dict]]:
     return "【品牌事實】\n" + "\n".join(lines), basis
 
 
+# 一個母產品最多印幾種賣法（ARCHITECTURE.md §1：每個進 prompt 的清單都要 cap）。
+_MAX_SELL_WAYS = 8
+
+
+def _sell_way_display_name(full_name: str) -> str:
+    """賣法的顯示名已經是「<母產品名> · <賣法>」，這裡只印「 · 」後半段；找不到分隔就整個印。"""
+    return full_name.split(" · ", 1)[-1]
+
+
 def _products_section(
     conn, org_id: str, brand_id: str, product_ids: list[str],
 ) -> tuple[str, list[dict]]:
     """這個 Campaign 自己的商品（`context_json.product_ids`，已由 F03-I19 的 PATCH 過濾過只
     會是這個品牌自己的商品）；今天有效的價格，過期一律標出來，絕不悄悄當現在的價格用
-    （跟 `app/ads/brief.py::_products_context` 同一條規則）。"""
+    （跟 `app/ads/brief.py::_products_context` 同一條規則）。
+
+    一個產品、很多賣法（ARCHITECTURE.md §8 第 1 條）：知識掛母產品、金額掛賣法。這裡先按
+    `bi_repo.knowledge_product_id()` 分組，一個母產品一個事實區塊＋一行賣法價格清單；
+    `basis` 仍然一個賣法一筆，畫面的「查看策略依據」對得起來。"""
     if not product_ids:
         return "【商品】（這個 Campaign 沒有指定商品）", []
     today = coresettings.today_for_org(conn, org_id=org_id)
-    lines: list[str] = []
-    basis: list[dict] = []
+    fact_cap = int(rule_cards.get_value(conn, brand_id, "rule_prompt_cap", "max_active_rules"))
+
+    groups: dict[str, list[str]] = {}
     for product_id in product_ids:
         product = bi_repo.get_product(conn, brand_id, product_id)
         if product is None:
             continue  # 存的 id 對不到現存商品——不編一個不存在的商品進 prompt
-        economics = bi_repo.get_product_economics(conn, brand_id, product_id)
-        if economics is None:
-            lines.append(f"- {product['name']}｜沒有價格資料")
-            continue
-        effective_to = economics.get("effective_to")
-        stale = effective_to is not None and effective_to < today
-        price = economics.get("selling_price")
-        line = f"- {product['name']}｜售價 {price}"
-        if stale:
-            line += "（價格可能過期，僅供參考）"
-        lines.append(line)
-        basis.append({
-            "product_id": product_id, "price": price,
-            "effective_from": economics.get("effective_from"), "stale": stale,
-        })
-    text = (
-        "【商品與今天的價格】\n" + "\n".join(lines) if lines else "【商品】（沒有可用的價格資料）"
-    )
+        mother_id = bi_repo.knowledge_product_id(conn, brand_id, product_id)
+        groups.setdefault(mother_id, []).append(product_id)
+
+    lines: list[str] = []
+    basis: list[dict] = []
+    for mother_id, sell_way_ids in groups.items():
+        mother = bi_repo.get_product(conn, brand_id, mother_id)
+        mother_name = mother["name"] if mother else mother_id
+
+        facts = sorted(
+            bi_repo.list_product_facts(conn, brand_id, mother_id, status="confirmed"),
+            key=lambda f: f.get("confirmed_at") or f["created_at"], reverse=True,
+        )
+        kept_facts, omitted_facts = facts[:fact_cap], facts[fact_cap:]
+        fact_text = (
+            "；".join(f"{f['label']}：{f['value']}" for f in kept_facts)
+            if kept_facts else "尚無確認過的事實"
+        )
+        if omitted_facts:
+            fact_text += f"（另有 {len(omitted_facts)} 筆較舊的事實沒有列出）"
+
+        sell_way_pieces: list[str] = []
+        for product_id in sell_way_ids[:_MAX_SELL_WAYS]:
+            sell_way = bi_repo.get_product(conn, brand_id, product_id)
+            display = _sell_way_display_name(sell_way["name"]) if sell_way else product_id
+            economics = bi_repo.get_product_economics(conn, brand_id, product_id)
+            if economics is None:
+                sell_way_pieces.append(f"{display} 沒有價格資料")
+                continue
+            effective_to = economics.get("effective_to")
+            stale = effective_to is not None and effective_to < today
+            price = economics.get("selling_price")
+            piece = f"{display} NT${price}"
+            if stale:
+                piece += "（價格可能過期，僅供參考）"
+            sell_way_pieces.append(piece)
+            basis.append({
+                "product_id": product_id, "price": price,
+                "effective_from": economics.get("effective_from"), "stale": stale,
+                "assumptions": list(economics.get("assumptions_json") or []),
+                "sell_way_name": display,
+            })
+        sell_way_overflow = len(sell_way_ids) - _MAX_SELL_WAYS
+        sell_way_text = "／".join(sell_way_pieces)
+        if sell_way_overflow > 0:
+            sell_way_text += f"（另有 {sell_way_overflow} 種賣法沒有列出）"
+
+        lines.append(f"- {mother_name}｜事實：{fact_text}\n  賣法：{sell_way_text}")
+
+    text = "【商品】\n" + "\n".join(lines) if lines else "【商品】（沒有可用的價格資料）"
     return text, basis
+
+
+# product_economics.assumptions_json 的欄位名 -> app.brand_intelligence.benchmarks 的 key
+# （ruling 17：假設值的名稱與百分比一律從那份對照表取，這裡不重寫一份文字）。
+_ASSUMPTION_BENCHMARK_KEYS = {
+    "cost": "gross_margin", "shipping": "shipping_cost", "close_rate": "close_rate",
+}
+
+
+def _assumption_note(prices_basis: list[dict]) -> str | None:
+    """一個都沒有假設值就回 `None`（呼叫端不落地這個鍵）；否則印「用的是假設：<賣法>的
+    <label、label>——之後用真實數字取代」，名稱與百分比全部來自 `benchmarks.get()`。"""
+    parts = []
+    for row in prices_basis:
+        fields = row.get("assumptions") or []
+        labels = [
+            benchmarks.get(_ASSUMPTION_BENCHMARK_KEYS[f])["label"]
+            for f in fields if f in _ASSUMPTION_BENCHMARK_KEYS
+        ]
+        if labels:
+            parts.append(f"{row.get('sell_way_name') or row['product_id']}的" + "、".join(labels))
+    if not parts:
+        return None
+    return f"用的是假設：{'；'.join(parts)}——之後用真實數字取代。"
 
 
 def _learnings_section(conn, brand_id: str) -> tuple[str, list[dict]]:
@@ -218,10 +289,15 @@ def generate(conn, org_id: str, brand_id: str, campaign_id: str, *, actor: str) 
     products_text, prices_basis = _products_section(conn, org_id, brand_id, product_ids)
     learnings_text, learnings_basis = _learnings_section(conn, brand_id)
 
+    brand = bi_repo.get_brand(conn, brand_id)
+    assert brand is not None  # 已經讀得到這個品牌的 campaign，品牌本身一定還在
+    labels = judgment.conversion_labels(brand.get("conversion_goal"))
+
     history = ads_repo.budget_history(conn, org_id, brand_id)
     days = _days(campaign["start_date"], campaign["end_date"])
     scenario_result = budget.scenarios(
         conn, org_id, brand_id, product_ids=product_ids, days=days, history=history,
+        conversion_label=labels["conversion"],
     )
     scenarios_text = _scenarios_section(scenario_result)
 
@@ -230,8 +306,6 @@ def generate(conn, org_id: str, brand_id: str, campaign_id: str, *, actor: str) 
         + [p["product_id"] for p in prices_basis]
         + [row["id"] for row in learnings_basis]
     )
-    brand = bi_repo.get_brand(conn, brand_id)
-    assert brand is not None  # 已經讀得到這個品牌的 campaign，品牌本身一定還在
 
     department_text = DEPARTMENT_PATH.read_text(encoding="utf-8")
     prompt = (
@@ -279,6 +353,9 @@ def generate(conn, org_id: str, brand_id: str, campaign_id: str, *, actor: str) 
         "brand_facts": facts_basis, "prices": prices_basis, "learnings": learnings_basis,
         "estimated_fields": estimated_fields,
     }
+    assumption_note = _assumption_note(prices_basis)
+    if assumption_note is not None:
+        basis["assumption_note"] = assumption_note
     budget_basis_json = {"strategy": strategy_payload, "scenarios": scenario_result, "basis": basis}
     ads_repo.save_strategy(conn, org_id, brand_id, campaign_id, budget_basis_json=budget_basis_json)
     detail = ads_repo.campaign_detail(conn, org_id, brand_id, campaign_id)

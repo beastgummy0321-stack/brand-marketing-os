@@ -188,6 +188,52 @@ describe("StrategyTab（F04-I14）", () => {
     expect(screen.getByText("目標不是 CPA，或還沒有總預算，算不出推估購買。")).toBeTruthy();
   });
 
+  it("labels 是名單時：預估文字改印「名單」，不是寫死的「購買」", () => {
+    renderTab(
+      campaign({
+        success_metric: "cpa", success_target: 300, budget_planned: 30000,
+        labels: { conversion: "名單", count: "名單數", cpa: "每筆名單成本" },
+      }),
+    );
+
+    expect(screen.getByText(/預估名單 100 筆/)).toBeTruthy();
+    expect(screen.queryByText(/預估購買/)).toBeNull();
+  });
+
+  it("labels 是名單時：編輯成功條件的下拉選單印「每筆名單成本（CPA）」", async () => {
+    const user = userEvent.setup();
+    renderTab(
+      campaign({
+        success_metric: "cpa", success_target: 300, budget_planned: 30000,
+        labels: { conversion: "名單", count: "名單數", cpa: "每筆名單成本" },
+      }),
+    );
+
+    await user.click(screen.getByRole("button", { name: "調整建議" }));
+    await user.click(screen.getByRole("button", { name: "編輯" }));
+    expect(screen.getByText("每筆名單成本（CPA）")).toBeTruthy();
+  });
+
+  it("有假設值時：策略依據面板印出 assumption_note 那句話", async () => {
+    const user = userEvent.setup();
+    const base = campaign();
+    renderTab(
+      campaign({
+        budget_basis_json: {
+          ...base.budget_basis_json,
+          basis: {
+            ...base.budget_basis_json.basis!,
+            assumption_note: "用的是假設：單品的成交率假設 20%——之後用真實數字取代。",
+          },
+        },
+      }),
+    );
+
+    await user.click(screen.getByRole("button", { name: "查看完整判斷" }));
+    await user.click(screen.getByRole("button", { name: /查看策略依據/ }));
+    expect(screen.getByText(/用的是假設：單品的成交率假設 20%/)).toBeTruthy();
+  });
+
   it("learning_goals 空陣列印「這一輪沒有設定學習目標」；有三條時三條都在畫面上", () => {
     const c = campaign();
     const { rerender } = renderWithRouter(

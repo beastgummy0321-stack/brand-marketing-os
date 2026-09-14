@@ -30,8 +30,10 @@ _HISTORY_MULTIPLIERS = (
 
 
 def breakeven_cpa(economics: dict | None) -> float | None:
-    """打平 CPA = 售價 − 單位成本 − 運費，from one `product_economics` row. `None` when the row
-    is missing or `unit_variable_cost` is `None` — an unknown cost stays unknown, never a guessed
+    """打平 CPA＝一次轉換的價值 = (售價 − 單位成本 − 運費) x 成交率，from one `product_economics`
+    row. 商品（`close_rate` 是 `None`）不帶成交率，一次轉換就是一次成交，行為與 F05 之前完全
+    相同；服務／名單型帶 `close_rate`，值是每筆名單／每次成交的期望毛利。`None` when the row is
+    missing or `unit_variable_cost` is `None` — an unknown cost stays unknown, never a guessed
     margin (Blocked-if: no fallback to the `gross_margin` rule card)."""
     if not economics:
         return None
@@ -40,7 +42,9 @@ def breakeven_cpa(economics: dict | None) -> float | None:
     if price is None or unit_cost is None:
         return None
     shipping = economics.get("shipping_cost") or 0
-    return float(price) - float(unit_cost) - float(shipping)
+    value = float(price) - float(unit_cost) - float(shipping)
+    close_rate = economics.get("close_rate")
+    return value if close_rate is None else value * float(close_rate)
 
 
 def target_cpa(breakeven: float | None) -> float | None:
@@ -59,34 +63,52 @@ def _economics_for(
 ) -> tuple[dict | None, str | None]:
     """First `product_id` (in order) whose economics yields a breakeven CPA. Multiple products on
     one campaign is a later-issue shape; picking the first computable one is the minimal, honest
-    choice for this issue — the `basis` always names which product it used."""
+    choice for this issue — the `basis` always names which product it used.
+
+    一個產品、很多賣法（ARCHITECTURE.md §8 第 1 條）：金額掛賣法，母產品自己沒有
+    `product_economics`。選到母產品時取它的第一個賣法（`list_products` 的既有順序，精靈先寫
+    「單品」所以第一個就是單品），`basis` 記下實際用的那個賣法的 id，不是母產品的 id。"""
     for product_id in product_ids or []:
         economics = bi_repo.get_product_economics(conn, brand_id, product_id)
         if breakeven_cpa(economics) is not None:
             return economics, product_id
+        if economics is None:
+            children = [
+                p for p in bi_repo.list_products(conn, brand_id)
+                if p["parent_id"] == product_id
+            ]
+            if children:
+                sell_way_id = children[0]["id"]
+                sell_way_economics = bi_repo.get_product_economics(conn, brand_id, sell_way_id)
+                if breakeven_cpa(sell_way_economics) is not None:
+                    return sell_way_economics, sell_way_id
     return None, None
 
 
 def scenarios(conn, org_id, brand_id, *, product_ids: list[str] | None, days: int,
-              history: dict | None) -> dict:
+              history: dict | None, conversion_label: str = "購買") -> dict:
     """Three budget scenarios for the strategy tab. `history` truthy (has a `last_daily_budget`)
     means this brand has settled spend to scale from; otherwise cold start applies (ruling 4: "沒
-    投放過" falls back to target-CPA x purchase-count, even if `history` is passed but empty)."""
+    投放過" falls back to target-CPA x purchase-count, even if `history` is passed but empty).
+    `conversion_label` 是這個品牌的「購買」該叫什麼（`judgment.conversion_labels()["conversion"]`）
+    ——只換冷啟動 caption 裡的名詞，算式一個字都不動。"""
     if history and history.get("last_daily_budget") is not None:
         return _history_scenarios(history, days)
     economics, product_id = _economics_for(conn, brand_id, product_ids)
     target = target_cpa(breakeven_cpa(economics))
-    return _cold_start_scenarios(target, product_id, days)
+    return _cold_start_scenarios(target, product_id, days, conversion_label)
 
 
-def _cold_start_scenarios(target: float | None, product_id: str | None, days: int) -> dict:
+def _cold_start_scenarios(
+    target: float | None, product_id: str | None, days: int, conversion_label: str,
+) -> dict:
     scenario_rows = []
     for key, label, events in _COLD_START_EVENTS:
         daily = _round_money(target * events) if target is not None else None
         total = _round_money(daily * days) if daily is not None and days else None
         scenario_rows.append({
             "key": key, "label": label, "daily": daily, "total": total,
-            "caption": f"冷啟動估算：目標 CPA x 每天 {events} 個購買",
+            "caption": f"冷啟動估算：目標 CPA x 每天 {events} 筆{conversion_label}",
         })
     basis = {
         "mode": "cold_start", "product_id": product_id, "target_cpa": target,
@@ -101,18 +123,21 @@ def _cold_start_scenarios(target: float | None, product_id: str | None, days: in
 def _history_scenarios(history: dict, days: int) -> dict:
     last_daily = float(history["last_daily_budget"])
     cpa = history.get("cpa")
+    base_text = history.get("source_text") or "上一期日預算"
     scenario_rows = []
     for key, label, mult in _HISTORY_MULTIPLIERS:
         daily = round(last_daily * mult)
         total = round(daily * days) if days else None
         scenario_rows.append({
             "key": key, "label": label, "daily": daily, "total": total,
-            # F03-I05 corrects this caption: the multiplication is 上一期日預算 x0.6/1/1.6 —
-            # the 30-day median CPA is context in `basis`, never a factor in this arithmetic.
-            "caption": f"上一期日預算 NT${round(last_daily)} ×{mult:g}",
+            # F03-I05 corrects this caption: the multiplication is base x0.6/1/1.6 — the
+            # 30-day median CPA is context in `basis`, never a factor in this arithmetic.
+            # F05-I11: `base_text` names where the base number came from (this brand's own
+            # 迴圈 or its bound ad account) — never a hard-coded platform name here.
+            "caption": f"{base_text} NT${round(last_daily)} ×{mult:g}",
         })
     basis = {
-        "mode": "history", "cpa": cpa,
+        "mode": "history", "cpa": cpa, "source": history.get("source"),
         "sample_days": history.get("sample_days"), "sample_ads": history.get("sample_ads"),
     }
     return {

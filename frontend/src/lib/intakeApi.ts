@@ -9,7 +9,7 @@
 
 import { apiFetch, errorMessageFromResponse } from "./http";
 
-export type IntakeJobKind = "scan" | "question" | "paste_fix";
+export type IntakeJobKind = "scan" | "question" | "paste_fix" | "research";
 export type IntakeJobStatus = "waiting" | "running" | "done" | "failed";
 
 export interface IntakeJobState {
@@ -98,7 +98,7 @@ export interface IntakeDraft {
   id: string;
   brand_id: string;
   brand_name: string;
-  step: 1 | 2 | 3 | 4 | 5;
+  step: number;
   completed: boolean;
   is_restart: boolean;
 
@@ -146,6 +146,8 @@ export const COST_SCAN = 0.3;
 export const COST_QUESTION = 0.1;
 export const COST_PASTE_FIX = 0.5;
 export const DEFAULT_BUDGET = 30.0;
+/** 逐字對照 `app/intake/script.py` 的 COST_RESEARCH_STANDARD／COST_RESEARCH_DEEP。 */
+export const COST_RESEARCH_STANDARD = 0.6;
 
 export const REVIEW_KIND_OPTIONS: IntakeReviewKind[] = ["品牌事實", "產品事實", "限制規則", "宣稱"];
 
@@ -305,6 +307,16 @@ export function skipQuestionRemaining(brandId: string): Promise<void> {
   return postJson(`/api/intake/brands/${encodeURIComponent(brandId)}/question/skip-remaining`);
 }
 
+// ---- 品牌知識：系統自己跑的調研（F05-I09） ----
+
+export function startResearch(brandId: string): Promise<{ limit_block: LimitBlock | null }> {
+  return postJson(`/api/intake/brands/${encodeURIComponent(brandId)}/research/start`, { depth: "standard" });
+}
+
+export function fetchResearchStatus(brandId: string): Promise<IntakeJobState> {
+  return getJson(`/api/intake/brands/${encodeURIComponent(brandId)}/research/status`);
+}
+
 // ---- 交接包 ----
 
 export function generateHandoff(brandId: string, depth: "standard" | "deep"): Promise<{ prompt_text: string }> {
@@ -387,4 +399,75 @@ export function raiseBudgetAndRetry(
 
 export function skipRemainingAi(brandId: string): Promise<void> {
   return postJson(`/api/intake/brands/${encodeURIComponent(brandId)}/skip-remaining-ai`);
+}
+
+// ---- 賣什麼與數字 ----
+
+export type OfferingAssumptionField = "cost" | "shipping" | "close_rate";
+
+export interface Offering {
+  product_id: string;
+  name: string;
+  parent_id: string | null;
+  selling_price: number | null;
+  unit_variable_cost: number | null;
+  shipping_cost: number | null;
+  close_rate: number | null;
+  assumptions: OfferingAssumptionField[];
+}
+
+export interface OfferingBenchmark {
+  value: number;
+  source_text: string;
+}
+
+export interface OfferingsData {
+  offerings: Offering[];
+  benchmarks: Record<"gross_margin" | "shipping_cost" | "close_rate", OfferingBenchmark>;
+}
+
+export function fetchOfferings(brandId: string): Promise<OfferingsData> {
+  return getJson(`/api/intake/brands/${encodeURIComponent(brandId)}/offerings`);
+}
+
+export interface OfferingVariantInput {
+  product_id?: string;
+  label: string;
+  selling_price: number | null;
+  unit_variable_cost: number | null;
+  shipping_cost: number | null;
+  close_rate?: number | null;
+  assumptions?: OfferingAssumptionField[];
+}
+
+export interface OfferingInput {
+  parent: { product_id?: string; name: string };
+  variants: OfferingVariantInput[];
+}
+
+export function saveOfferings(brandId: string, offerings: OfferingInput[]): Promise<void> {
+  return postJson(`/api/intake/brands/${encodeURIComponent(brandId)}/offerings`, { offerings });
+}
+
+// ---- 精靈第 4 步：接工具（F05-I08） ----
+
+export interface ConversionGoalOption {
+  key: string;
+  label: string;
+}
+
+export interface IntakeToolsData {
+  conversion_goal: string | null;
+  conversion_goal_options: ConversionGoalOption[];
+  bound_account_ids: string[];
+}
+
+export function fetchIntakeTools(brandId: string): Promise<IntakeToolsData> {
+  return getJson(`/api/intake/brands/${encodeURIComponent(brandId)}/tools`);
+}
+
+export function saveConversionGoal(brandId: string, conversionGoal: string): Promise<void> {
+  return postJson(`/api/intake/brands/${encodeURIComponent(brandId)}/conversion-goal`, {
+    conversion_goal: conversionGoal,
+  });
 }

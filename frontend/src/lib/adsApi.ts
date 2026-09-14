@@ -28,6 +28,14 @@ export interface CampaignBudgetProgress {
   pct: number | null;
 }
 
+/** F05-I12：`app/ads/judgment.py::conversion_labels()`——這個品牌的「購買」該叫什麼名字。
+ * 每一個 Campaign payload（列表／詳情）都跟著出去，畫面不再自己寫死「購買」。 */
+export interface CampaignLabels {
+  conversion: string;
+  count: string;
+  cpa: string;
+}
+
 /** `GET /campaigns` 一列。`budget_total` 是後端推導出來的（`sum(投放組.daily_budget) x 天數`），
  * `budget_planned` 是使用者採用的情境金額——兩者可能因為天數捨入而略有出入，畫面上要分開標。 */
 export interface CampaignCard {
@@ -44,6 +52,9 @@ export interface CampaignCard {
   budget_progress: CampaignBudgetProgress;
   judgment: CampaignJudgment;
   outcome: CampaignOutcomeTotals;
+  /** F05-I12：後端一律回傳；選填只是為了不逼著既有的手寫測試 fixture（`AdsHomePage.test.tsx`
+   * ／`AllCampaignsPage.test.tsx`，`do_not_touch`）都補上這個新欄位——同 `judgment` 的先例。 */
+  labels?: CampaignLabels;
 }
 
 /** Shared by all three binding levels (campaign / group / ad) — same five columns,
@@ -141,6 +152,9 @@ export interface CampaignDetail extends EntityBinding {
   /** F04-I08：`actions` 每一列跑過 `judgment.action_line()` 的三句話——`actions` 本身保留
    * 不刪，別的分頁還在讀原始欄位。 */
   action_lines?: AdsActionLine[];
+  /** F05-I12：同 `CampaignCard.labels`——選填是為了不逼 `ConfirmBriefPage.test.tsx`
+   * （`do_not_touch`）補新欄位，不是後端真的會漏。 */
+  labels?: CampaignLabels;
 }
 
 /** F04-I08：`app/ads/judgment.py::action_line()` 的回傳形狀，加上呼叫端補的 campaign
@@ -271,6 +285,9 @@ export interface StrategyBasisPrice {
   price: number | null;
   effective_from: string | null;
   stale: boolean;
+  /** F05-I12：`product_economics.assumptions_json`——非空代表這筆價格用的是假設值。 */
+  assumptions: string[];
+  sell_way_name: string;
 }
 
 export interface StrategyBasisLearning {
@@ -289,6 +306,8 @@ export interface StrategyBasis {
   prices: StrategyBasisPrice[];
   learnings: StrategyBasisLearning[];
   estimated_fields: string[];
+  /** F05-I12：一個都沒有假設值時這個鍵不存在（後端不落地空字串）。 */
+  assumption_note?: string;
 }
 
 /** `ads_campaign.budget_basis_json` 的形狀（F03-I05 起）：策略＋預算情境＋依據，整包存在
@@ -334,12 +353,12 @@ async function ensureOk(res: Response, fallback: string): Promise<void> {
   throw new Error(message);
 }
 
-async function parseJsonOrThrow<T>(res: Response, fallback: string): Promise<T> {
+export async function parseJsonOrThrow<T>(res: Response, fallback: string): Promise<T> {
   await ensureOk(res, fallback);
   return (await res.json()) as T;
 }
 
-const BASE = "/api/ads";
+export const BASE = "/api/ads";
 
 export async function listCampaigns(brandId: string): Promise<CampaignCard[]> {
   const res = await apiFetch(`${BASE}/brands/${encodeURIComponent(brandId)}/campaigns`);

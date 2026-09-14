@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { ArrowRight, Calendar, HelpCircle, Image as ImageIcon, Lightbulb, PieChart, Radio, Sparkles, Target, Wallet } from "lucide-react";
 import { Button } from "@/components/layout/ui/button";
@@ -15,31 +15,28 @@ import {
   selectScenario,
   setAllocation,
   type CampaignDetail,
+  type CampaignLabels,
   type StrategyRole,
   type SuccessMetric,
 } from "@/lib/adsApi";
+import { fetchChannels, type Channel } from "@/lib/adsLaunchApi";
 import { Disclosure, JudgmentBand, KpiStrip, ReservedSlotCard, type KpiCell } from "./patterns";
 
-// F04-I15：`OverviewTab.tsx` 有同一份 `WorkspaceTab`／`METRIC_LABEL`／`formatTarget`——兩邊都在
+// F04-I15：`OverviewTab.tsx` 有同一份 `WorkspaceTab`／`formatTarget`——兩邊都在
 // `do_not_touch`，抽共用要動 `index.ts` 與邊界，貴過幾行重複（ARCHITECTURE.md 決策 11b）。
 type WorkspaceTab = "overview" | "strategy" | "structure" | "assets" | "performance";
 
-const METRIC_LABEL: Record<SuccessMetric, string> = {
-  cpa: "CPA（每筆訂單成本）",
-  roas: "ROAS（廣告投報率）",
-  purchases: "購買數",
-};
+// F05-I12：後端一律回傳 `campaign.labels`；預設值只在舊測試 fixture 沒帶這個欄位時頂上
+// （同 `OverviewTab.tsx`／`PerformanceTab.tsx` 的先例）。
+const DEFAULT_LABELS: CampaignLabels = { conversion: "購買", count: "購買數", cpa: "每次購買成本" };
 
-// 通路字典跟 `app/ads/channels.py::CHANNELS` 是同一份中文對照——不寫死平台邏輯，只是把
-// key 換成使用者看得懂的字（跟 `DeliveryTab.tsx` 的 `CHANNEL_LABEL` 同一份，一樣的
-// do_not_touch 重複理由）。
-const PLATFORM_LABEL: Record<string, string> = {
-  meta: "Meta",
-  google_ads: "Google Ads",
-  tiktok: "TikTok",
-  shopee: "蝦皮",
-  momo: "momo",
-};
+function metricLabel(metric: SuccessMetric, labels: CampaignLabels): string {
+  if (metric === "cpa") return `${labels.cpa}（CPA）`;
+  if (metric === "purchases") return labels.count;
+  return "ROAS（廣告投報率）";
+}
+
+const SUCCESS_METRICS: SuccessMetric[] = ["cpa", "roas", "purchases"];
 
 const ROLE_LABEL: Record<StrategyRole, string> = { new: "新客", retarget: "再行銷", explore: "探索" };
 
@@ -88,10 +85,26 @@ export function StrategyTab({
   const [primaryBusy, setPrimaryBusy] = useState(false);
   const [primaryError, setPrimaryError] = useState<string | null>(null);
   const [budgetHelpOpen, setBudgetHelpOpen] = useState(false);
+  const [channels, setChannels] = useState<Channel[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchChannels(brandId)
+      .then((rows) => {
+        if (!cancelled) setChannels(rows);
+      })
+      .catch(() => {
+        /* 靜默：讀失敗就顯示 platform key 原樣，不是整頁壞掉 */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [brandId]);
 
   const strategy = c.budget_basis_json.strategy;
   const scenarios = c.budget_basis_json.scenarios;
   const basis = c.budget_basis_json.basis;
+  const labels = c.labels ?? DEFAULT_LABELS;
   const amountsUnknown = !!scenarios && scenarios.scenarios.every((s) => s.total === null);
 
   async function handleGenerate() {
@@ -206,7 +219,7 @@ export function StrategyTab({
     {
       icon: Radio,
       label: "平台",
-      value: platformKey ? PLATFORM_LABEL[platformKey] ?? platformKey : "尚未指定",
+      value: platformKey ? channels.find((ch) => ch.key === platformKey)?.label ?? platformKey : "尚未指定",
       caption: "採用後會建立對應的投放組",
     },
     {
@@ -268,7 +281,7 @@ export function StrategyTab({
           <p className="text-sm text-muted-foreground">
             {estimatedPurchases !== null ? (
               <>
-                預估購買 {estimatedPurchases} 筆
+                預估{labels.conversion} {estimatedPurchases} 筆
                 <span className="ml-1">推估（CPA 不變的算術）</span>
               </>
             ) : (
@@ -474,7 +487,7 @@ export function StrategyTab({
               ) : (
                 <div>
                   <p className="text-base font-semibold">
-                    {METRIC_LABEL[c.success_metric]} 目標 {formatTarget(c.success_metric, c.success_target)}
+                    {metricLabel(c.success_metric, labels)} 目標 {formatTarget(c.success_metric, c.success_target)}
                   </p>
                   {c.success_basis && <p className="mt-1 text-sm text-muted-foreground">{c.success_basis}</p>}
                 </div>
@@ -539,6 +552,9 @@ export function StrategyTab({
                   ))}
                 </ul>
               )}
+              {basis.assumption_note && (
+                <p className="mt-2 text-sm text-warning">{basis.assumption_note}</p>
+              )}
             </section>
             <section>
               <h4 className="mb-2 text-sm font-medium">用到的學習</h4>
@@ -588,6 +604,7 @@ function SuccessCriterionEditor({
   onClose: () => void;
   onSaved: (campaign: CampaignDetail) => void;
 }) {
+  const labels = c.labels ?? DEFAULT_LABELS;
   const [metric, setMetric] = useState<SuccessMetric>(c.success_metric);
   const [target, setTarget] = useState(c.success_target === null ? "" : String(c.success_target));
   const [basisText, setBasisText] = useState(c.success_basis ?? "");
@@ -625,9 +642,9 @@ function SuccessCriterionEditor({
             value={metric}
             onChange={(e) => setMetric(e.target.value as SuccessMetric)}
           >
-            {(Object.keys(METRIC_LABEL) as SuccessMetric[]).map((key) => (
+            {SUCCESS_METRICS.map((key) => (
               <option key={key} value={key}>
-                {METRIC_LABEL[key]}
+                {metricLabel(key, labels)}
               </option>
             ))}
           </select>

@@ -1,21 +1,20 @@
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { useWorkspace } from "@/components/layout/WorkspaceContext";
 import { EmptyState } from "@/components/layout/EmptyState";
 import { TaskFlowShell } from "@/components/layout/TaskFlowShell";
 import type { IntakeDraft } from "@/lib/intakeApi";
 import { fetchIntakeDraft } from "@/lib/intakeApi";
-import { AdvertisingHistoryDialog } from "./AdvertisingHistoryDialog";
 import { BudgetPanel } from "./BudgetPanel";
 import { CostGauge } from "./CostGauge";
 import { IntakeCompletedPage } from "./IntakeCompletedPage";
-import { HandoffStep } from "./steps/HandoffStep";
-import { PasteStep } from "./steps/PasteStep";
-import { QuestionStep } from "./steps/QuestionStep";
+import { KnowledgeStep } from "./steps/KnowledgeStep";
+import { OfferingsStep } from "./steps/OfferingsStep";
 import { ScanStep } from "./steps/ScanStep";
 import { StartStep } from "./steps/StartStep";
+import { ToolsStep } from "./steps/ToolsStep";
 
-const STEP_LABELS = ["起始輸入", "初步印象", "引導問答", "交接包", "貼回"];
+const STEP_LABELS = ["起始輸入", "初步印象", "賣什麼與數字", "接工具", "品牌知識"];
 
 type LoadState = { status: "loading" } | { status: "error"; message: string } | { status: "notfound" } | { status: "ready"; draft: IntakeDraft };
 
@@ -25,12 +24,11 @@ type LoadState = { status: "loading" } | { status: "error"; message: string } | 
  * 產品頁「整包讀」同一個決定，不切成逐步驟各自的 GET）。 */
 export function IntakeWizard({ brandId }: { brandId: string | null }) {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const { refreshBrands } = useWorkspace();
   const [state, setState] = useState<LoadState>(brandId ? { status: "loading" } : { status: "ready", draft: null as unknown as IntakeDraft });
   const [viewStep, setViewStep] = useState(1);
   const [budgetOpen, setBudgetOpen] = useState(false);
-  // 票 past-ads/04（ADR 0067 §1.6）：新品牌送出第一步之後、導頁之前，先問一次投放史分岔。
-  const [pendingNewBrand, setPendingNewBrand] = useState<{ brand_id: string; quick: boolean } | null>(null);
 
   function refresh() {
     if (!brandId) return;
@@ -52,21 +50,15 @@ export function IntakeWizard({ brandId }: { brandId: string | null }) {
 
   if (!brandId) {
     return (
-      <>
-        <TaskFlowShell steps={STEP_LABELS} current={1} onSelect={() => {}} rightRail={<CostGauge draft={null} onAdjust={() => {}} />}>
-          <StartStep brandId={null} onSubmitted={(res) => setPendingNewBrand(res)} />
-        </TaskFlowShell>
-        {pendingNewBrand && (
-          <AdvertisingHistoryDialog
-            brandId={pendingNewBrand.brand_id}
-            onChosen={() => {
-              const res = pendingNewBrand;
-              refreshBrands();
-              navigate(res.quick ? `/brands/${res.brand_id}` : `/brands/${res.brand_id}/intake`);
-            }}
-          />
-        )}
-      </>
+      <TaskFlowShell steps={STEP_LABELS} current={1} onSelect={() => {}} rightRail={<CostGauge draft={null} onAdjust={() => {}} />}>
+        <StartStep
+          brandId={null}
+          onSubmitted={(res) => {
+            refreshBrands();
+            navigate(res.quick ? `/brands/${res.brand_id}` : `/brands/${res.brand_id}/intake`);
+          }}
+        />
+      </TaskFlowShell>
     );
   }
 
@@ -86,24 +78,50 @@ export function IntakeWizard({ brandId }: { brandId: string | null }) {
 
   const { draft } = state;
 
-  if (draft.completed) {
+  const jumpStep = draft.completed ? parseStepParam(searchParams.get("step")) : null;
+
+  if (draft.completed && jumpStep === null) {
     return <IntakeCompletedPage brandId={brandId} onRestart={() => setState({ status: "notfound" })} />;
   }
+
+  const backToCompleted = `/brands/${encodeURIComponent(brandId)}/intake`;
+  const current = jumpStep ?? viewStep;
+  const reachableThrough = jumpStep !== null ? STEP_LABELS.length : Math.max(viewStep, draft.step);
+  const onSelect =
+    jumpStep !== null
+      ? (step: number) => navigate(`${backToCompleted}?step=${step}`)
+      : (step: number) => step <= Math.max(viewStep, draft.step) && setViewStep(step);
+  const next =
+    jumpStep !== null ? () => navigate(backToCompleted) : () => setViewStep((s) => Math.min(STEP_LABELS.length, s + 1));
 
   return (
     <>
       <TaskFlowShell
         steps={STEP_LABELS}
-        current={viewStep}
-        reachableThrough={Math.max(viewStep, draft.step)}
-        onSelect={(step) => step <= Math.max(viewStep, draft.step) && setViewStep(step)}
+        current={current}
+        reachableThrough={reachableThrough}
+        onSelect={onSelect}
         rightRail={<CostGauge draft={draft} onAdjust={() => setBudgetOpen(true)} />}
       >
-        {renderStep(viewStep, brandId, draft, refresh, () => setViewStep((s) => Math.min(5, s + 1)))}
+        {jumpStep !== null && (
+          <Link to={backToCompleted} className="self-start text-sm text-muted-foreground hover:underline">
+            回到完成畫面
+          </Link>
+        )}
+        {renderStep(current, brandId, draft, refresh, next)}
       </TaskFlowShell>
       {budgetOpen && <BudgetPanel brandId={brandId} draft={draft} onClose={() => setBudgetOpen(false)} onSaved={refresh} />}
     </>
   );
+}
+
+/** 已完成品牌的 `?step=N` 深連結：不是 1..STEP_LABELS.length 之間的整數就當沒給
+ * （F05-I14：壞掉的參數不報錯，退回完成畫面）。 */
+function parseStepParam(raw: string | null): number | null {
+  if (raw === null) return null;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 1 || n > STEP_LABELS.length) return null;
+  return n;
 }
 
 function renderStep(step: number, brandId: string, draft: IntakeDraft, refresh: () => void, next: () => void) {
@@ -113,14 +131,11 @@ function renderStep(step: number, brandId: string, draft: IntakeDraft, refresh: 
     case 2:
       return <ScanStep brandId={brandId} draft={draft} onRefresh={refresh} onNext={next} />;
     case 3:
-      // key={question_index}：每答完一題 index 就 +1，強制重掛 QuestionStep，讓
-      // useIntakeJob 的 startedRef 跟著重置，第 2 題起才會真的自動出題（不然同一個
-      // 元件實例一路活到步驟結束，startedRef 只會在第 1 題觸發過一次）。
-      return <QuestionStep key={draft.question_index} brandId={brandId} draft={draft} onRefresh={refresh} onNext={next} />;
+      return <OfferingsStep brandId={brandId} draft={draft} onRefresh={refresh} onNext={next} />;
     case 4:
-      return <HandoffStep brandId={brandId} draft={draft} onRefresh={refresh} onNext={next} />;
+      return <ToolsStep brandId={brandId} onNext={next} />;
     case 5:
     default:
-      return <PasteStep brandId={brandId} draft={draft} onRefresh={refresh} />;
+      return <KnowledgeStep brandId={brandId} draft={draft} onRefresh={refresh} />;
   }
 }

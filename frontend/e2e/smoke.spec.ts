@@ -11,8 +11,9 @@ import { expect, test } from "@playwright/test";
  * （`ClipboardHonestyScanTest`／`ReviewStepSettleRefetchWiringTest`）——那兩支
  * 斷言的都是畫面行為，存在的唯一原因是這個專案沒有煙霧測試。
  *
- * 不花錢：品牌只填名稱、描述與網址留空，`app/intake/state.start_or_quick()` 走
- * 「陽春路徑」不建草稿、不呼叫 AI。改動這支時務必維持這個性質。
+ * 不花錢：品牌只填名稱、描述與網址留空，一樣進精靈，但沒東西可掃所以
+ * `app/intake/state.start_draft()` 直接把草稿停在第 3 步、不呼叫 AI。
+ * 改動這支時務必維持這個性質。
  */
 test("走完切片後活下來的主要畫面", async ({ page }) => {
   // 每次跑用一個新帳號：本機 Supabase 關掉了信箱驗證（supabase/config.toml
@@ -36,20 +37,24 @@ test("走完切片後活下來的主要畫面", async ({ page }) => {
   await page.getByRole("link", { name: "新增品牌" }).first().click();
   await expect(page.getByText("品牌名稱（必填）")).toBeVisible();
   await page.getByLabel("品牌名稱（必填）").fill(brandName);
+
+  // --- 投放史二選一（F05-I06）：做在步驟一表單裡，沒選不能往下；這裡選「完全沒投放過」，
+  // 陽春路徑不牽涉背景補拉。--------------------------------------------------
+  await page.getByRole("radio", { name: "完全沒投放過" }).check();
   await page.getByRole("button", { name: "建立品牌並開始初掃" }).click();
 
-  // --- 投放史分岔（票 past-ads/04，ADR 0067 §1.6）：新品牌送出第一步之後，導頁之前先
-  // 問一次；這裡選「完全沒投放過」，陽春路徑不牽涉背景補拉。--------------------
-  await expect(page.getByRole("heading", { name: "這個品牌以前投放過廣告嗎？" })).toBeVisible();
-  await page.getByRole("button", { name: "完全沒投放過" }).click();
+  // --- 沒東西可掃，草稿直接停在第 3 步：驗證這一段沒有跑過模型（US$ 0.00）---------
+  await expect(page).toHaveURL(/\/app\/brands\/brd_.+\/intake/);
+  await expect(page.getByRole("heading", { name: "你賣的是什麼、一次成交值多少" })).toBeVisible();
+  await expect(page.getByText("US$ 0.00").first()).toBeVisible();
+
+  const brandId = new URL(page.url()).pathname.split("/")[3];
 
   // --- 品牌頁：外殼切片後是品牌標題，右上角是進投放中心的入口（缺陷 3）-------------
-  await expect(page).toHaveURL(/\/app\/brands\/brd_/);
+  await page.goto(`/app/brands/${brandId}`);
   await expect(page.getByRole("heading", { name: "經營概況", exact: true })).toBeVisible();
   await expect(page.getByText(brandName, {exact:true}).first()).toBeVisible();
   await expect(page.getByRole("link", { name: "前往投放中心" })).toBeVisible();
-
-  const brandId = new URL(page.url()).pathname.split("/")[3];
 
   // --- 投放中心：缺陷 3 —— 品牌頁要有真的入口，不是只能手打網址 -------------------
   await page.getByRole("link", { name: "前往投放中心" }).click();

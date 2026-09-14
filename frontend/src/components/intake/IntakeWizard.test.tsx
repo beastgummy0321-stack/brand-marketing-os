@@ -9,7 +9,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/intakeApi", async () => {
   const actual = await vi.importActual<typeof import("@/lib/intakeApi")>("@/lib/intakeApi");
-  return { ...actual, fetchIntakeDraft: vi.fn() };
+  return { ...actual, fetchIntakeDraft: vi.fn(), fetchOfferings: vi.fn() };
 });
 vi.mock("@/lib/intakeT2Api", async () => {
   const actual = await vi.importActual<typeof import("@/lib/intakeT2Api")>("@/lib/intakeT2Api");
@@ -20,20 +20,21 @@ vi.mock("@/components/layout/WorkspaceContext", () => ({
 }));
 
 import type { IntakeDraft } from "@/lib/intakeApi";
-import { fetchIntakeDraft } from "@/lib/intakeApi";
+import { fetchIntakeDraft, fetchOfferings } from "@/lib/intakeApi";
 import { fetchTruthCard } from "@/lib/intakeT2Api";
 import { IntakeWizard } from "./IntakeWizard";
 
 const mockFetchIntakeDraft = vi.mocked(fetchIntakeDraft);
+const mockFetchOfferings = vi.mocked(fetchOfferings);
 const mockFetchTruthCard = vi.mocked(fetchTruthCard);
 
 afterEach(() => {
   vi.clearAllMocks();
 });
 
-function renderWizard(brandId: string) {
+function renderWizard(brandId: string, initialEntry?: string) {
   return render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={initialEntry ? [initialEntry] : ["/"]}>
       <IntakeWizard brandId={brandId} />
     </MemoryRouter>,
   );
@@ -59,5 +60,45 @@ describe("IntakeWizard", () => {
     await userEvent.click(restartButton);
 
     await waitFor(() => expect(screen.getByText("開始這一輪調研")).toBeTruthy());
+  });
+
+  it("建檔已完成但網址帶 ?step=3 時顯示第 3 步而不是完成畫面，且有「回到完成畫面」", async () => {
+    mockFetchIntakeDraft.mockResolvedValue({ completed: true, brand_name: "測試品牌", step: 5, photos: [], cost_items: [] } as unknown as IntakeDraft);
+    mockFetchOfferings.mockResolvedValue({ offerings: [], benchmarks: {} } as never);
+
+    renderWizard("brd_done", "/brands/brd_done/intake?step=3");
+
+    await waitFor(() => expect(screen.getByText("你賣的是什麼、一次成交值多少")).toBeTruthy());
+    expect(screen.getByText("回到完成畫面")).toBeTruthy();
+    expect(screen.queryByText("再跑一次調研")).toBeNull();
+  });
+
+  it("建檔已完成、走 ?step=3 深連結時按「調整上限」看得到預算面板", async () => {
+    mockFetchIntakeDraft.mockResolvedValue({
+      completed: true,
+      brand_name: "測試品牌",
+      step: 5,
+      photos: [],
+      cost_items: [],
+      cost_spent: 0,
+      budget_limit: 5,
+    } as unknown as IntakeDraft);
+    mockFetchOfferings.mockResolvedValue({ offerings: [], benchmarks: {} } as never);
+
+    renderWizard("brd_done", "/brands/brd_done/intake?step=3");
+
+    await waitFor(() => expect(screen.getByText("你賣的是什麼、一次成交值多少")).toBeTruthy());
+    await userEvent.click(screen.getByText("調整上限"));
+
+    expect(await screen.findByText("這次建檔最多可以花多少？")).toBeTruthy();
+  });
+
+  it("建檔已完成且網址不帶 step 參數時仍然是完成畫面", async () => {
+    mockFetchIntakeDraft.mockResolvedValue({ completed: true, brand_name: "測試品牌", step: 5, photos: [] } as unknown as IntakeDraft);
+    mockFetchTruthCard.mockResolvedValue({ accepted: [], needs_confirmation: [], forbidden: [] });
+
+    renderWizard("brd_done");
+
+    await waitFor(() => expect(screen.getByText("再跑一次調研")).toBeTruthy());
   });
 });

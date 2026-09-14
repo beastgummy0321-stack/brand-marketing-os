@@ -1,8 +1,23 @@
 import { useState } from "react";
 import { EmptyState } from "@/components/layout/EmptyState";
-import { confirmProductEconomics, CURRENCY_SYMBOLS, type ProductEconomics } from "@/lib/productsApi";
+import {
+  confirmProductEconomics,
+  CURRENCY_SYMBOLS,
+  type AssumptionField,
+  type ProductEconomics,
+} from "@/lib/productsApi";
 import { Badge } from "../shared/Badge";
 import { EconomicsPanel } from "../panels/EconomicsPanel";
+
+/** 假設值 chip：黃色小標籤，掛在還在用基準值的欄位旁邊（decision 17／18）。 */
+function AssumptionChip({ field, assumptions }: { field: AssumptionField; assumptions: AssumptionField[] }) {
+  if (!assumptions.includes(field)) return null;
+  return (
+    <span className="ml-1 rounded-full bg-warning/15 px-1.5 py-0.5 text-[10px] font-medium text-warning">
+      假設
+    </span>
+  );
+}
 
 /** 產品經濟數字分頁（契約 S6.32–S6.35）。 */
 export function EconomicsTab({
@@ -60,10 +75,17 @@ export function EconomicsTab({
             <dt className="text-muted-foreground">單位變動成本</dt>
             <dd className="text-foreground">
               {economics.unit_variable_cost === null ? "—" : `${symbol}${economics.unit_variable_cost}`}
+              <AssumptionChip field="cost" assumptions={economics.assumptions} />
             </dd>
             <dt className="text-muted-foreground">運費</dt>
             <dd className="text-foreground">
               {economics.shipping_cost === null ? "—" : `${symbol}${economics.shipping_cost}`}
+              <AssumptionChip field="shipping" assumptions={economics.assumptions} />
+            </dd>
+            <dt className="text-muted-foreground">成交率</dt>
+            <dd className="text-foreground">
+              {economics.close_rate === null ? "未設定" : economics.close_rate}
+              <AssumptionChip field="close_rate" assumptions={economics.assumptions} />
             </dd>
             <dt className="text-muted-foreground">幣別</dt>
             <dd className="text-foreground">{economics.currency}</dd>
