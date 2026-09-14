@@ -255,7 +255,7 @@
   ],
   "verify": {
     "test": "uv run python -m pytest app/tests -q -n 8 --dist loadfile",
-    "typecheck": "uv run ruff check app && uv run python -m pyright && cd frontend && npx tsc -b --noEmit && npm run depcruise",
+    "typecheck": "uv run ruff check app && uv run python -m pyright && cd frontend && npx tsc -b --noEmit && npm run depcruise && npx vitest run src/architectureBoundaries.test.ts",
     "build": "cd frontend && npm run build",
     "smoke": "cd frontend && npm run e2e"
   },
@@ -412,7 +412,8 @@ those edits carry `review: planner`.
 The front end is not a separate harness module: `frontend/src/components/<feature>/` folders are
 owned by the backend module of the same capability (see `owns` above) and their import boundary is
 enforced by `frontend/.dependency-cruiser.cjs` (feature folders talk to each other only through
-`index.ts`; `layout/` is the shared kit), which runs inside the `verify.typecheck` command.
+`index.ts`; `layout/` is the shared kit), which runs inside the `verify.typecheck` command together
+with the 800-line file cap `frontend/src/architectureBoundaries.test.ts`.
 `frontend/src/lib/**` is app shell except the per-module API clients (`workbenchApi.ts`,
 `scheduleApi.ts`, `adsApi.ts`, `adsLaunchApi.ts`, `intakeApi.ts`, `intakeT2Api.ts`), which each
 module owns — `adsLaunchApi.ts` is `ads`' second client (F05-I05 split it out when `adsApi.ts`
@@ -782,7 +783,11 @@ tab with no publish affordance; 投放結構 and 素材 ended with no next step,
 
 ## 7. Verification
 
-`verify.typecheck` runs ruff, pyright, the frontend type build and dependency-cruiser; `verify.test`
+`verify.typecheck` runs ruff, pyright, the frontend type build, dependency-cruiser and the frontend
+800-line file cap (`src/architectureBoundaries.test.ts`, ~2 s). The cap sits here, not in an issue's
+own verify, because harness runs `verify.typecheck` at every issue finish while the whole `npm test`
+runs only at feature integration (2026-09-14: F06-I02 grew `DeliveryTab.tsx` to 931 lines unseen until
+integrate). Structural gates belong in `verify.typecheck`; behaviour tests stay targeted per issue. `verify.test`
 is the full pytest suite with `-n 8 --dist loadfile` (`-n auto` exhausts Postgres connections, see
 `CONTEXT.md`); `verify.smoke` is the Playwright end-to-end suite, which starts its own backend on
 8720 — the reason acceptance must never be judged on the long-running 8710 process. A schema or
