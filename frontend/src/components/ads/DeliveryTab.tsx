@@ -19,7 +19,6 @@ import {
 } from "@/components/layout/ui/dropdown-menu";
 import { fetchCoordinates, type Coordinate } from "@/lib/coordinatesApi";
 import {
-  adoptStrategy,
   currentBudgetTotal,
   deleteAd,
   deleteGroup,
@@ -64,8 +63,6 @@ export function DeliveryTab({
   onCampaignChange: (campaign: CampaignDetail) => void;
   onChangeTab: (target: StepTarget) => void;
 }) {
-  const [adopting, setAdopting] = useState(false);
-  const [adoptError, setAdoptError] = useState<string | null>(null);
   const [selected, setSelected] = useState<SelectedKey | null>(null);
   const [vocabulary, setVocabulary] = useState<Coordinate[]>([]);
   const [channelInfo, setChannelInfo] = useState<Channel[]>([]);
@@ -87,18 +84,6 @@ export function DeliveryTab({
       .then(setChannelInfo)
       .catch(() => setChannelInfo([]));
   }, [brandId]);
-
-  async function handleAdopt() {
-    setAdopting(true);
-    setAdoptError(null);
-    try {
-      onCampaignChange(await adoptStrategy(brandId, c.id));
-    } catch (err) {
-      setAdoptError(err instanceof Error ? err.message : "建立投放結構失敗，請稍後再試。");
-    } finally {
-      setAdopting(false);
-    }
-  }
 
   function replaceGroup(next: DeliveryGroupRow) {
     onCampaignChange({
@@ -170,26 +155,14 @@ export function DeliveryTab({
     }
   }
 
+  const step = nextStep(c);
+
   if (c.groups.length === 0) {
-    if (!c.budget_basis_json.strategy) {
-      return (
-        <EmptyState
-          title="這個 Campaign 還沒有投放結構"
-          description="先在策略頁採用一個策略，系統會自動建立投放組與廣告。"
-          actionLabel="前往策略"
-          actionHref={`/brands/${brandId}/ads/campaigns/${c.id}?tab=strategy`}
-          actionInternal
-        />
-      );
-    }
     return (
-      <EmptyState
-        title="這個 Campaign 還沒有投放結構"
-        description={adoptError ?? "已經有策略了，採用後會自動建立投放組與廣告。"}
-        actionLabel={adopting ? "建立中…" : "採用策略（建立投放結構）"}
-        onAction={handleAdopt}
-        actionDisabled={adopting}
-      />
+      <div className="flex flex-col gap-4">
+        <EmptyState title="這個 Campaign 還沒有投放結構" description={step.sentence} />
+        <NextStepButton step={step} onChangeTab={onChangeTab} />
+      </div>
     );
   }
 
@@ -204,7 +177,6 @@ export function DeliveryTab({
   const t = currentBudgetTotal(c);
   const diff = t.total !== null && c.budget_planned !== null ? t.total - c.budget_planned : null;
   const adCount = c.groups.reduce((sum, g) => sum + g.ads.length, 0);
-  const step = nextStep(c);
   // 同 `PublishPage.tsx` 的判斷：已投放過 or 已經有一筆 campaign 層級的發布動作，兩種都算「綁定過」。
   const published =
     ["live", "ended", "closed"].includes(c.status) ||

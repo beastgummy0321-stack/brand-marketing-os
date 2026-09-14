@@ -8,7 +8,7 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 
 import type { AdRow, CampaignDetail, DeliveryGroupRow } from "@/lib/adsApi";
-import { dispatchPack, getCampaign } from "@/lib/adsApi";
+import { adoptStrategy, dispatchPack, getCampaign } from "@/lib/adsApi";
 import { DeliveryTab } from "./DeliveryTab";
 
 function renderWithRouter(ui: ReactElement) {
@@ -19,6 +19,7 @@ vi.mock("@/lib/adsApi", async () => {
   const actual = await vi.importActual<typeof import("@/lib/adsApi")>("@/lib/adsApi");
   return {
     ...actual,
+    adoptStrategy: vi.fn(),
     dispatchPack: vi.fn(),
     getCampaign: vi.fn(),
     patchGroup: vi.fn(),
@@ -191,6 +192,32 @@ describe("DeliveryTab（F06-I02）", () => {
 
     expect(onChangeTab).toHaveBeenCalledWith("assets");
     expect(dispatchPack).not.toHaveBeenCalled();
+  });
+
+  it("有策略、沒投放組：讀規則不自己採用，按「前往策略 →」跳策略分頁", async () => {
+    const user = userEvent.setup();
+    const { onChangeTab } = renderTab(campaign({ groups: [], status: "draft", budget_scenario: null }));
+
+    expect(screen.getByText("策略已產生，確認後系統會建立投放結構。")).toBeTruthy();
+    const button = screen.getByRole("button", { name: "前往策略 →" });
+    expect(button.className).toContain("h-12");
+    expect(screen.queryByRole("button", { name: "採用策略（建立投放結構）" })).toBeNull();
+
+    await user.click(button);
+
+    expect(onChangeTab).toHaveBeenCalledWith("strategy");
+    expect(adoptStrategy).not.toHaveBeenCalled();
+  });
+
+  it("沒有策略、沒投放組：按「前往策略 →」跳策略分頁", async () => {
+    const user = userEvent.setup();
+    const { onChangeTab } = renderTab(campaign({ groups: [], budget_basis_json: {} }));
+
+    expect(screen.getByText("還沒有策略，先產生策略建議。")).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: "前往策略 →" }));
+
+    expect(onChangeTab).toHaveBeenCalledWith("strategy");
   });
 
   it("沒有廣告：按鈕是「新增廣告 →」，按下去開新增廣告對話框", async () => {

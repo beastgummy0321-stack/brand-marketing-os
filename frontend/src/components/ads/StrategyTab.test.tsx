@@ -370,4 +370,17 @@ describe("StrategyTab（F04-I14）", () => {
     expect(adoptStrategy).toHaveBeenCalledWith("brd_1", "cmp_1");
     expect(selectScenario).not.toHaveBeenCalled();
   });
+
+  it("status live、沒投放組：規則的答案是查看成效，不是採用；沒有「照這個方式進行 →」與「調整建議」", async () => {
+    const user = userEvent.setup();
+    const { onChangeTab } = renderTab(campaign({ status: "live", groups: [] }));
+
+    const button = screen.getByRole("button", { name: "查看成效 →" });
+    expect(screen.queryByRole("button", { name: "照這個方式進行 →" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "調整建議" })).toBeNull();
+
+    await user.click(button);
+
+    expect(onChangeTab).toHaveBeenCalledWith("performance");
+  });
 });
