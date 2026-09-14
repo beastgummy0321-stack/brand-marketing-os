@@ -193,7 +193,7 @@ export function CampaignWorkspace({
               onChangeTab={go}
             />
           ) : tab === "structure" ? (
-            <DeliveryTab brandId={brandId} campaign={campaign} onCampaignChange={updateCampaign} />
+            <DeliveryTab brandId={brandId} campaign={campaign} onCampaignChange={updateCampaign} onChangeTab={go} />
           ) : tab === "assets" ? (
             <AssetsTab brandId={brandId} campaign={campaign} onCampaignChange={updateCampaign} />
           ) : (

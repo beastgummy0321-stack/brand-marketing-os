@@ -167,7 +167,10 @@ describe("nextStep（F06-I01）", () => {
     const step = nextStep(campaign({ budget_basis_json: {} }));
     render(<NextStepButton step={step} onChangeTab={onChangeTab} />);
 
-    await user.click(screen.getByRole("button", { name: step.label }));
+    const button = screen.getByRole("button", { name: step.label });
+    expect(button.className).toContain("h-12");
+    expect(button.className).toContain("w-full");
+    await user.click(button);
     expect(onChangeTab).toHaveBeenCalledWith(step.target);
   });
 });
