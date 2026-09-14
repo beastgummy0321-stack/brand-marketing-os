@@ -49,6 +49,9 @@ class DashboardJobsBoundaryTest(unittest.TestCase):
         _seed_running_queue_job(DEV_ORG_ID, brand_id, "schedule_plan", {"brand_id": brand_id})
         _seed_running_queue_job(DEV_ORG_ID, brand_id, "schedule_tree", {"brand_id": brand_id})
         _seed_running_queue_job(DEV_ORG_ID, brand_id, "workbench_copy", {"brand_id": brand_id})
+        # 票 F07-I02：品牌視覺推導在圖片回合裡跑，鈴鐺要看得到它，不能只看得到外層的
+        # workbench_image_prompt。
+        _seed_running_queue_job(DEV_ORG_ID, brand_id, "workbench_derive_identity", {"brand_id": brand_id})
 
         response = self.client.get("/api/jobs/active")
 
@@ -84,6 +87,11 @@ class DashboardJobsBoundaryTest(unittest.TestCase):
         self.assertEqual(next(job for job in jobs if job["kind"] == "persona")["stage"], "整理人物誌")
         self.assertEqual(
             next(job for job in jobs if job["kind"] == "workbench_generate")["stage"], "素材生成中")
+        # 兩列（workbench_copy、workbench_derive_identity）都要落到 workbench_generate；
+        # 只留其中一列也會讓上面兩個斷言通過，所以另外點名數量，讓少收一個 kind 這種
+        # 半調閘門露出來。
+        self.assertEqual(
+            sum(1 for job in jobs if job["kind"] == "workbench_generate"), 2)
 
 
 class DashboardJobsTenantIsolationTest(unittest.TestCase):

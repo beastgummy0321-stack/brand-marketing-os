@@ -45,6 +45,7 @@ _QUEUE_JOB_KINDS = {
     "workbench_image_prompt": ("workbench_generate", "素材生成中"),
     "workbench_video_script": ("workbench_generate", "素材生成中"),
     "workbench_free": ("workbench_generate", "素材生成中"),
+    "workbench_derive_identity": ("workbench_generate", "素材生成中"),
 }
 
 
