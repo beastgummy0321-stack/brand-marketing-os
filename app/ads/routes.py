@@ -53,6 +53,7 @@ def _with_readiness(actor, brand_id: str, campaign: dict | None) -> dict | None:
         return None
     campaign["asset_readiness"] = assets.readiness_summary(
         assets.readiness(web.conn, actor.org_id, brand_id, campaign["id"]),
+        assets.pack_id(web.conn, actor.org_id, brand_id, campaign["id"]),
     )
     campaign["labels"] = _conversion_labels(brand_id)
     return campaign
@@ -511,7 +512,8 @@ def get_assets(request: Request, brand_id: str, campaign_id: str):
     actor = web.require_actor(request)
     web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
     rows = assets.readiness(web.conn, actor.org_id, brand_id, campaign_id)
-    return {"assets": rows, **assets.readiness_summary(rows)}
+    pack_id = assets.pack_id(web.conn, actor.org_id, brand_id, campaign_id)
+    return {"assets": rows, **assets.readiness_summary(rows, pack_id)}
 
 
 class AssetReadyRequest(BaseModel):

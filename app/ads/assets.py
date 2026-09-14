@@ -96,6 +96,16 @@ def _ad_set(ad: dict, campaign_id: str, fallback_product_id: str | None) -> dict
     }
 
 
+def pack_id(conn, org_id: str, brand_id: str, campaign_id: str) -> str | None:
+    """這個 Campaign 交棒過的任務包 id，從 pack 本身讀（不是從逐列 briefs 推）——交棒後新增
+    的廣告沒有自己的 set，逐列推會把「交棒過」誤判成「沒交棒」（§6.2 決議 15：repro 是
+    交棒 A、B → 刪 A、B → 加 C，pack 還在但每一列的 pack_id 都是 null）。"""
+    pack = workbench.pack_for_source(
+        conn, org_id, brand_id, PACK_SOURCE_KIND, _pack_source_ref(campaign_id),
+    )
+    return pack["id"] if pack is not None else None
+
+
 def dispatch_pack(conn, org_id: str, brand_id: str, campaign_id: str) -> str:
     """一個 Campaign 一個任務包、一個 `ads_ad` 一個 set；回傳 pack id。`ValueError`：
     `campaign_unknown`、`pack_already_exists`（再交棒一次——已經有一份了）；其餘（
@@ -104,9 +114,7 @@ def dispatch_pack(conn, org_id: str, brand_id: str, campaign_id: str) -> str:
     campaign = ads_repo.get_campaign(conn, org_id, brand_id, campaign_id)
     if campaign is None:
         raise ValueError("campaign_unknown")
-    if workbench.pack_for_source(
-        conn, org_id, brand_id, PACK_SOURCE_KIND, _pack_source_ref(campaign_id),
-    ) is not None:
+    if pack_id(conn, org_id, brand_id, campaign_id) is not None:
         raise ValueError("pack_already_exists")
 
     detail = ads_repo.campaign_detail(conn, org_id, brand_id, campaign_id)
@@ -197,10 +205,12 @@ def readiness(conn, org_id: str, brand_id: str, campaign_id: str) -> list:
     return rows
 
 
-def readiness_summary(rows: list) -> dict:
-    """`ready_count`／`total`——素材 tab 跟發布畫面共用同一組數字（§0）。"""
+def readiness_summary(rows: list, pack_id: str | None) -> dict:
+    """`ready_count`／`total`——素材 tab 跟發布畫面共用同一組數字（§0）。`pack_id` 是交棒過
+    的任務包 id（讀自 pack 本身，見 `pack_id()`），不是從 `rows` 推——這是唯一一條總覽的
+    下一步規則需要的後端事實（§6.2 決議 15）。"""
     ready = sum(1 for r in rows if r["state"] in ("ready_workbench", "ready_manual"))
-    return {"ready_count": ready, "total": len(rows)}
+    return {"ready_count": ready, "total": len(rows), "pack_id": pack_id}
 
 
 def mark_ready(conn, org_id: str, brand_id: str, ad_id: str, *, actor: str,

@@ -4,6 +4,7 @@
  * 購買, and 目前投放組合計／採用時的計畫 must stay two separately-labelled numbers instead of
  * blending into one. */
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
 import type { AdsActionLine, CampaignDetail, CampaignJudgment, DeliveryGroupRow } from "@/lib/adsApi";
@@ -163,5 +164,46 @@ describe("OverviewTab（F03-I23）", () => {
 
     expect(screen.getByText("自動執行接上後開放")).toBeTruthy();
     expect(screen.getByText("目前沒有需要你決定的事")).toBeTruthy();
+  });
+
+  it("策略已產生、一個投放組兩則廣告、素材 2/2 就位、status ready：下一步按鈕是「發布 →」，按下去呼叫 onChangeTab(\"publish\")", async () => {
+    const user = userEvent.setup();
+    const onChangeTab = vi.fn();
+    render(
+      <OverviewTab
+        campaign={campaign({
+          status: "ready",
+          budget_basis_json: {
+            strategy: { allocation: [{ role: "new", label: "新客", pct: 100, rationale: null, amount: null }], why: [], unknowns: [], alternatives: [], learning_goals: [] },
+          },
+          groups: [
+            group({
+              ads: [
+                {
+                  id: "ad_1", campaign_id: "cmp_1", group_id: "grp_1", name: "廣告一",
+                  audience_key: null, pain_key: null, angle_key: null, hook_key: null,
+                  proof_key: null, offer_key: null, format_key: null, coordinates_snapshot_json: {},
+                  product_id: null, asset_ready_source: null, asset_ready_by: null, asset_ready_at: null,
+                  external_id: null, external_name: null, external_status: null, local_state: "unbound", bound_at: null,
+                },
+                {
+                  id: "ad_2", campaign_id: "cmp_1", group_id: "grp_1", name: "廣告二",
+                  audience_key: null, pain_key: null, angle_key: null, hook_key: null,
+                  proof_key: null, offer_key: null, format_key: null, coordinates_snapshot_json: {},
+                  product_id: null, asset_ready_source: null, asset_ready_by: null, asset_ready_at: null,
+                  external_id: null, external_name: null, external_status: null, local_state: "unbound", bound_at: null,
+                },
+              ],
+            }),
+          ],
+          asset_readiness: { ready_count: 2, total: 2, pack_id: "pack_1" },
+        })}
+        onChangeTab={onChangeTab}
+      />,
+    );
+
+    const button = screen.getByRole("button", { name: "發布 →" });
+    await user.click(button);
+    expect(onChangeTab).toHaveBeenCalledWith("publish");
   });
 });

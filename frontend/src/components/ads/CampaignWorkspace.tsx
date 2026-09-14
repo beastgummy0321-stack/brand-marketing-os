@@ -22,8 +22,7 @@ import { DeliveryTab } from "./DeliveryTab";
 import { AssetsTab } from "./AssetsTab";
 import { PerformanceTab } from "./PerformanceTab";
 import { PublishPage } from "./PublishPage";
-
-type WorkspaceTab = "overview" | "strategy" | "structure" | "assets" | "performance";
+import type { StepTarget, WorkspaceTab } from "./nextStep";
 
 const TABS: { value: WorkspaceTab; label: string }[] = [
   { value: "overview", label: "總覽" },
@@ -95,6 +94,12 @@ export function CampaignWorkspace({
       params.set("tab", next);
       return params;
     });
+  }
+
+  // §6.2 決議 15：規則回的 target 可能是 "publish"，不是分頁——這裡把它接到既有的發布入口。
+  function go(target: StepTarget) {
+    if (target === "publish") setPublishAdapter("auto_meta");
+    else changeTab(target);
   }
 
   const campaign = state.status === "ready" ? state.campaign : null;
@@ -179,13 +184,13 @@ export function CampaignWorkspace({
               <div className="surface-body py-10 text-center text-sm text-muted-foreground">讀取中…</div>
             </div>
           ) : tab === "overview" ? (
-            <OverviewTab campaign={campaign} onChangeTab={changeTab} />
+            <OverviewTab campaign={campaign} onChangeTab={go} />
           ) : tab === "strategy" ? (
             <StrategyTab
               brandId={brandId}
               campaign={campaign}
               onCampaignChange={updateCampaign}
-              onChangeTab={changeTab}
+              onChangeTab={go}
             />
           ) : tab === "structure" ? (
             <DeliveryTab brandId={brandId} campaign={campaign} onCampaignChange={updateCampaign} />
