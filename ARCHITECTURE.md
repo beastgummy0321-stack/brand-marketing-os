@@ -381,7 +381,7 @@ reaches legacy code only through a file listed in `legacy_facades` (in practice:
 or the module's `repository.py` / `gateway.py`). `may_depend_on` governs **managed modules only**:
 importing a legacy facade is not an entry there and never needs one — `ads`' `may_depend_on:
 ["workbench"]` does not forbid `app/ads/repository.py` importing `app.brand_intelligence.repository`
-(it is a declared facade; F03-I19 review). New capability never lands in legacy; moving a
+(it is a declared facade; F03-I19 review). New capability never lands in legacy (one test-only exception: the e2e seam in §7); moving a
 caller out of legacy is a `legacy_migration: true` issue with `review: planner`. There is no
 clean-up-first round and no tolerance ledger.
 
@@ -789,6 +789,29 @@ is the full pytest suite with `-n 8 --dist loadfile` (`-n auto` exhausts Postgre
 migration change additionally runs the tenant-isolation and boundary trio named in `CLAUDE.md`.
 Real-browser acceptance happens on a restarted backend at 1024 and 1920 in empty, normal and heavy
 states (`docs/design-system.md` §9/§10).
+
+**e2e never calls a model and never hands a job to another process** (2026-09-14, F06).
+`verify.smoke`'s backend runs with `BRAND_OS_LLM_PROVIDER=scripted` and `BRAND_OS_JOB_QUEUE=memory`, both set
+in `frontend/playwright.config.ts`'s `webServer.env`. Both values are refused outside `BRAND_OS_ENV=local`.
+- **`scripted`** makes `app/llm/providers.select_provider` answer from `SCRIPTED_REPLIES`, keyed by
+  `task_type`.
+  - A task type with no reply raises `LookupError` at selection, before `gateway.run_task` writes its `running`
+    row. The gateway does not catch it.
+  - So a request-path model call without a reply fails loudly, instead of sliding into a caller's parse-failed
+    fallback.
+- **`memory`** makes `app/background.enqueue()` write no queue at all. It only remembers the queueing lock in
+  process memory, and `is_active()` reads that set.
+  - The dev database's `public__queue` is shared with the long-running `python -m app.worker`.
+  - Without this, that worker would run e2e jobs with its own provider and its own, possibly old, code.
+  - Limit: no background job runs under e2e. A spec step that needs a job's result is not possible under this
+    seam; it would time out with no `LookupError`. Such a step needs a planner decision first.
+- **The replies live in legacy `app/llm/providers.py`** because the switch point does. This is the one sanctioned
+  growth of legacy for test infrastructure: a local-only verification seam, not product capability, cut as a
+  `legacy_migration: true` issue under planner review (F06-I05).
+  - Each reply's shape is pinned by a test in the module that owns the shape (`test_ads_brief.py`,
+    `test_ads_strategy.py`, `test_workbench_free_parse.py`).
+  - An e2e path that needs a new model call adds its reply there, under that issue's plan.
+- **Consequence:** a red e2e is a real failure. An upstream model outage can no longer turn it red.
 
 A UI issue additionally carries a **visual gate** (2026-09-13, F04): it names its reference image
 under `docs/design/ads/`, the worker invokes `impeccable:impeccable` with that image before writing
