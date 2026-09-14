@@ -454,6 +454,51 @@ def list_coordinate_vocabulary(conn: _AnyConn, org_id: str, brand_id: str) -> li
 
 
 # ---------------------------------------------------------------------------
+# F07-I04（ARCHITECTURE.md §5.9）：`looks.allocate()`／`looks.recommend()` 要用的兩份
+# 讀——本模組自己表的兩個聚合查詢，讀 F07-I07 寫的 `round`／`fingerprint` 形狀
+# （§5.8）。放這裡而不是 `looks.py`：跟這個檔案其餘的讀函式同一種寫法（`_AnyConn`、
+# 手動 org/brand 範圍），`looks.py` 保持純函式、不碰連線。
+# ---------------------------------------------------------------------------
+
+
+def look_history(conn: _AnyConn, org_id: str, brand_id: str,
+                  audience_key: str | None) -> dict:
+    """那個受眾（`None` 比對 SQL NULL）目前每個風格被排過幾次、被選定幾次——
+    `looks.allocate()` 的探索排序要用。沒有風格鍵的列（尚未走過 F07-I07 的舊列）忽略。"""
+    rows = conn.execute(
+        "SELECT body_json->'fingerprint'->'look'->>'key' AS look,"
+        " COUNT(*) FILTER (WHERE adopted_at IS NOT NULL) AS adopted,"
+        " COUNT(*) AS offered"
+        " FROM workbench_output"
+        " WHERE org_id = %s AND brand_id = %s AND part = 'image_prompt'"
+        " AND body_json->'round'->>'audience_key' IS NOT DISTINCT FROM %s"
+        " AND body_json->'fingerprint'->'look'->>'key' IS NOT NULL"
+        " GROUP BY body_json->'fingerprint'->'look'->>'key'",
+        (org_id, brand_id, audience_key),
+    ).fetchall()
+    return {r["look"]: {"adopted": r["adopted"], "offered": r["offered"]} for r in rows}
+
+
+def image_round_history(conn: _AnyConn, org_id: str, brand_id: str) -> dict:
+    """這個品牌跑過幾輪圖片提示詞、其中幾輪的建議落在探索格——`looks.recommend()` 的
+    3-in-10 比例要看的分母／分子。只算 `version_index = 1`（一輪一列代表），只算已經帶
+    `round` 欄位的列（F07-I07 之前寫的舊列沒有這個鍵，不計入）。"""
+    row = conn.execute(
+        "SELECT COUNT(*) AS rounds,"
+        " COUNT(*) FILTER (WHERE body_json->'round'->>'recommended_slot' = 'explore')"
+        " AS explore_recommended"
+        " FROM workbench_output"
+        " WHERE org_id = %s AND brand_id = %s AND part = 'image_prompt'"
+        " AND version_index = 1 AND (body_json->'round') IS NOT NULL",
+        (org_id, brand_id),
+    ).fetchone()
+    return {
+        "rounds": row["rounds"] if row is not None else 0,
+        "explore_recommended": row["explore_recommended"] if row is not None else 0,
+    }
+
+
+# ---------------------------------------------------------------------------
 # 狀態衍生 —— ARCHITECTURE.md §5.3：product／set／pack 的狀態一律衍生，不另存第二份。
 # 只有這裡算一次，F02-I03 的 API／F02-I04 的排程讀都呼叫這裡，不各自重寫規則。
 # ---------------------------------------------------------------------------
