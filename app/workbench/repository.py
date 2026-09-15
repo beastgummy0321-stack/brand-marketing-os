@@ -454,6 +454,42 @@ def list_coordinate_vocabulary(conn: _AnyConn, org_id: str, brand_id: str) -> li
 
 
 # ---------------------------------------------------------------------------
+# F07-I05（ARCHITECTURE.md §5.9, Decision 20）：`workbench_visual_identity` 的讀寫——
+# `app/workbench/identity.py::ensure_identity()` 的快取層，一個 (brand_id,
+# knowledge_version) 只算一次。
+# ---------------------------------------------------------------------------
+
+
+def get_visual_identity(conn: _AnyConn, org_id: str, brand_id: str,
+                         knowledge_version: int) -> dict | None:
+    row = conn.execute(
+        "SELECT * FROM workbench_visual_identity WHERE org_id = %s AND brand_id = %s"
+        " AND knowledge_version = %s",
+        (org_id, brand_id, knowledge_version),
+    ).fetchone()
+    return dict(row) if row is not None else None
+
+
+def insert_visual_identity(conn: _AnyConn, *, org_id: str, brand_id: str,
+                            knowledge_version: int, identity_text: str, fit_looks: list,
+                            excluded_looks: list, brand_spec_text: str | None,
+                            llm_task_id: str | None) -> None:
+    """`ON CONFLICT DO NOTHING`：first insert wins when two rounds derive at the same version
+    at once (Decision 20) — the caller re-reads via `get_visual_identity()` afterwards."""
+    conn.execute(
+        "INSERT INTO workbench_visual_identity (id, org_id, brand_id, knowledge_version,"
+        " identity_text, fit_looks, excluded_looks, brand_spec_text, llm_task_id)"
+        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)"
+        " ON CONFLICT (brand_id, knowledge_version) DO NOTHING",
+        (
+            new_id("wvi"), org_id, brand_id, knowledge_version, identity_text,
+            jsonb(fit_looks), jsonb(excluded_looks), brand_spec_text, llm_task_id,
+        ),
+    )
+    conn.commit()
+
+
+# ---------------------------------------------------------------------------
 # F07-I04（ARCHITECTURE.md §5.9）：`looks.allocate()`／`looks.recommend()` 要用的兩份
 # 讀——本模組自己表的兩個聚合查詢，讀 F07-I07 寫的 `round`／`fingerprint` 形狀
 # （§5.8）。放這裡而不是 `looks.py`：跟這個檔案其餘的讀函式同一種寫法（`_AnyConn`、
@@ -1255,6 +1291,7 @@ def set_detail(conn: _AnyConn, org_id: str, brand_id: str, set_id: str) -> dict 
 
 
 _CHILD_TABLES = (
+    ("workbench_visual_identity", "工作檯品牌視覺"),
     ("workbench_output", "工作檯產出"),
     ("workbench_brief", "工作檯工單"),
     ("workbench_pack", "工作檯任務包"),
@@ -1282,7 +1319,9 @@ cleanup.register(
     "素材工作檯",
     count_brand=_count_brand,
     delete_brand=_delete_brand,
-    brand_tables=frozenset({"workbench_brief", "workbench_output", "workbench_pack"}),
+    brand_tables=frozenset({
+        "workbench_brief", "workbench_output", "workbench_pack", "workbench_visual_identity",
+    }),
     count_product=None,
     delete_product=None,
     product_tables=frozenset(),
