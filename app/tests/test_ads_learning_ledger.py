@@ -84,6 +84,29 @@ class LearningLedgerTest(unittest.TestCase):
         self.assertEqual(len(visible), 1)
         self.assertTrue(visible[0]["expired"])
 
+        # F07-I13 item 1: expire_learning must write exactly one audit row for this entity
+        # (app/brand_intelligence/repository.py:986-987's write_audit call).
+        audit_rows = [
+            dict(r) for r in self.conn.execute(
+                "SELECT * FROM audit_log WHERE entity_type = 'learning_ledger'"
+                " AND entity_id = %s", (row["id"],),
+            ).fetchall()
+        ]
+        update_rows = [r for r in audit_rows if r["action"] == "update"]
+        self.assertEqual(len(update_rows), 1)
+        audit_row = update_rows[0]
+        self.assertEqual(audit_row["actor"], "測試員")
+        self.assertFalse(audit_row["before_json"]["expired"])
+        self.assertTrue(audit_row["after_json"]["expired"])
+
+        # F07-I13 item 2: expire_learning must commit (repository.py:988) so a second pooled
+        # connection sees the change immediately, not just this test's own connection.
+        with db.pool().connection() as other:
+            other_row = other.execute(
+                "SELECT expired FROM learning_ledger WHERE id = %s", (row["id"],),
+            ).fetchone()
+            self.assertTrue(other_row["expired"])
+
         again = repo.expire_learning(self.conn, self.bid_a, row["id"], actor="測試員")
         self.assertTrue(again["expired"])
 
@@ -97,6 +120,11 @@ class LearningLedgerTest(unittest.TestCase):
         rows = repo.list_learnings(self.conn, self.bid_a)
         self.assertEqual(len(rows), 1)
         self.assertFalse(rows[0]["expired"])
+        no_update = self.conn.execute(
+            "SELECT COUNT(*) AS n FROM audit_log WHERE entity_type = 'learning_ledger'"
+            " AND entity_id = %s AND action = 'update'", (row["id"],),
+        ).fetchone()
+        self.assertEqual(no_update["n"], 0)
 
     def test_deleting_brand_removes_learning_rows(self):
         repo.record_learning(self.conn, self.bid_a, actor="測試員",

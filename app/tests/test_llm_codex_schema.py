@@ -170,15 +170,42 @@ class CodexCliProviderCommandTest(unittest.TestCase):
         for name in ("shell_tool", "browser_use", "computer_use", "apps",
                      "image_generation", "in_app_browser"):
             self.assertIn(name, cmd)
+            # F07-I13 item 7: each disabled tool name must be immediately preceded by its own
+            # "--disable" flag (bare assertIn passes even if the pairs are shifted).
+            self.assertEqual(cmd[cmd.index(name) - 1], "--disable")
         self.assertEqual(cmd.count("--disable"), 6)
+
+    def test_effort_levels_map_to_themselves(self):
+        # F07-I13 item 3: every named level must round-trip to itself (kills the "low"->"medium",
+        # "xhigh"->"high" mutant at app/llm/providers.py:668).
+        for level in ("low", "medium", "high", "xhigh"):
+            with self.subTest(level=level):
+                cmd = self._run(effort=level)
+                self.assertIn(f'model_reasoning_effort="{level}"', cmd)
+                # F07-I13 item 4: the "-c" flag must sit right before the reasoning-effort arg.
+                idx = cmd.index(f'model_reasoning_effort="{level}"')
+                self.assertEqual(cmd[idx - 1], "-c")
 
     def test_effort_max_maps_to_xhigh(self):
         cmd = self._run(effort="max")
         self.assertIn('model_reasoning_effort="xhigh"', cmd)
+        idx = cmd.index('model_reasoning_effort="xhigh"')
+        self.assertEqual(cmd[idx - 1], "-c")
+
+    def test_unknown_effort_appends_no_reasoning_effort(self):
+        # F07-I13 item 5: an effort not in the map must not fall back to itself
+        # (`.get(effort)` vs `.get(effort, effort)` at app/llm/providers.py:669).
+        cmd = self._run(effort="bogus")
+        self.assertNotIn("model_reasoning_effort", " ".join(cmd))
 
     def test_effort_none_appends_no_reasoning_effort(self):
         cmd = self._run(effort=None)
         self.assertNotIn("model_reasoning_effort", " ".join(cmd))
+        # F07-I13 item 6: the six --disable pairs must still be present with no effort set.
+        for name in ("shell_tool", "browser_use", "computer_use", "apps",
+                     "image_generation", "in_app_browser"):
+            self.assertIn(name, cmd)
+            self.assertEqual(cmd[cmd.index(name) - 1], "--disable")
 
     def test_web_search_tool_still_present_with_effort_set(self):
         from app.llm.providers import WEB_SEARCH_TOOL
@@ -187,7 +214,18 @@ class CodexCliProviderCommandTest(unittest.TestCase):
         self.assertIn('model_reasoning_effort="high"', cmd)
 
     def test_workbench_derive_identity_task_default_is_medium_thinking(self):
-        self.assertEqual(TASK_DEFAULTS["workbench_derive_identity"]["thinking"], "medium")
+        # F07-I13 item 8: the task default must not carry a model id
+        # (app/llm/providers.py:199).
+        self.assertEqual(
+            TASK_DEFAULTS["workbench_derive_identity"], {"model": None, "thinking": "medium"}
+        )
+
+    def test_workbench_derive_identity_task_label(self):
+        # F07-I13 item 9: kills deletion of the TASK_TYPE_LABELS row (app/llm/providers.py:175).
+        from app.llm.providers import TASK_TYPE_LABELS
+        self.assertEqual(
+            TASK_TYPE_LABELS["workbench_derive_identity"], "素材工作檯：品牌視覺推導"
+        )
 
 
 if __name__ == "__main__":
