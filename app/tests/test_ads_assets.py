@@ -82,6 +82,43 @@ class AssetsTestBase(unittest.TestCase):
         plan.PROVIDER = _fake(_VALID_PLAN_REPLY)
         return plan.adopt_strategy(web.conn, self.org_id, self.brand_id, row["id"], actor=ACTOR)
 
+    def _direct_campaign(self, *, campaign_start, campaign_end, group_role: str = "new",
+                          group_start=None, group_end=None,
+                          format_key: str | None = "single_image"):
+        """F07-I10：繞過 LLM 展開，直接建一個 Campaign／一個投放組／一支廣告，讓天數與
+        format_key 完全可控（`_variant_count` 的落點測試用）。"""
+        campaign = {
+            "name": "測試 Campaign", "goal_text": "衝購買", "objective": "購買",
+            "success_metric": "cpa", "success_target": 300,
+            "start_date": campaign_start, "end_date": campaign_end, "status": "draft",
+            "budget_planned": 1400, "budget_scenario": "recommended",
+            "budget_basis_json": {"strategy": {"allocation": [
+                {"role": "new", "label": "新客", "pct": 100, "rationale": None},
+            ]}},
+        }
+        campaign_row = ads_repo.create_campaign(
+            web.conn, self.org_id, self.brand_id, campaign, created_by=ACTOR,
+        )
+        group = ads_repo.create_group(
+            web.conn, self.org_id, self.brand_id, campaign_row["id"], channel_key="meta",
+            name="投放組", role=group_role, daily_budget=100,
+            start_date=group_start, end_date=group_end,
+        )
+        coordinates = {"format": format_key} if format_key is not None else {}
+        ad = ads_repo.create_ad(
+            web.conn, self.org_id, self.brand_id, campaign_row["id"], group["id"],
+            name="廣告", coordinates=coordinates, coordinates_snapshot={},
+        )
+        web.conn.commit()
+        return campaign_row, group, ad
+
+    def _dispatched_set(self, campaign_id: str) -> dict:
+        with mock.patch.object(
+            assets.workbench, "submit_pack", wraps=assets.workbench.submit_pack,
+        ) as submit_pack:
+            assets.dispatch_pack(web.conn, self.org_id, self.brand_id, campaign_id)
+        return submit_pack.call_args.args[-1]["sets"][0]
+
     def _tick_all(self, pack_id: str) -> None:
         for key in ("required_outputs_met", "brand_rules_checked", "ready_to_report"):
             resp = self.client.post(
@@ -298,6 +335,183 @@ class PackIdSurvivesRebuiltAdsTest(AssetsTestBase):
             resp.json()["campaign"]["asset_readiness"],
             {"ready_count": 0, "total": 1, "pack_id": pack_id},
         )
+
+
+# -- 案例 8：F07-I10 派工不再送 style_key／image_prompt_count -----------------------------------
+
+class NoStyleOrCountKeyTest(AssetsTestBase):
+    def test_sets_carry_no_style_key_or_image_prompt_count(self):
+        campaign = self._adopted_campaign()
+
+        with mock.patch.object(
+            assets.workbench, "submit_pack", wraps=assets.workbench.submit_pack,
+        ) as submit_pack:
+            assets.dispatch_pack(web.conn, self.org_id, self.brand_id, campaign["id"])
+
+        pack = submit_pack.call_args.args[-1]
+        for s in pack["sets"]:
+            self.assertNotIn("style_key", s)
+            self.assertNotIn("image_prompt_count", s["request"])
+
+
+# -- 案例 9：單圖 ② 變體張數依排程天數（D03-D09, D12） --------------------------------------------
+
+class VariantCountByDaySpanTest(AssetsTestBase):
+    def test_new_group_variant_count_by_campaign_day_span(self):
+        cases = [
+            ("2026-10-01", "2026-10-07", 3),   # 7 天（含頭尾）→ 3
+            ("2026-10-01", "2026-10-08", 6),   # 8 天 → 6
+            ("2026-10-01", "2026-10-21", 6),   # 21 天 → 6
+            ("2026-10-01", "2026-10-22", 9),   # 22 天 → 9
+        ]
+        for start, end, expected in cases:
+            with self.subTest(start=start, end=end):
+                campaign_row, _group, _ad = self._direct_campaign(
+                    campaign_start=start, campaign_end=end,
+                )
+                target_set = self._dispatched_set(campaign_row["id"])
+                self.assertEqual(target_set["request"]["variant_count"], expected)
+
+    def test_retarget_group_adds_three_and_caps_at_nine(self):
+        cases = [
+            ("2026-10-01", "2026-10-07", 6),   # 3 + 3
+            ("2026-10-01", "2026-10-08", 9),   # 6 + 3
+            ("2026-10-01", "2026-10-21", 9),   # 6 + 3
+            ("2026-10-01", "2026-10-22", 9),   # 9 + 3 = 12，封頂 9
+        ]
+        for start, end, expected in cases:
+            with self.subTest(start=start, end=end):
+                campaign_row, _group, _ad = self._direct_campaign(
+                    campaign_start=start, campaign_end=end, group_role="retarget",
+                )
+                target_set = self._dispatched_set(campaign_row["id"])
+                self.assertEqual(target_set["request"]["variant_count"], expected)
+
+    def test_no_dates_anywhere_defaults_to_six_new_nine_retarget(self):
+        campaign_row, _group, _ad = self._direct_campaign(
+            campaign_start=None, campaign_end=None,
+        )
+        self.assertEqual(self._dispatched_set(campaign_row["id"])["request"]["variant_count"], 6)
+
+        campaign_row, _group, _ad = self._direct_campaign(
+            campaign_start=None, campaign_end=None, group_role="retarget",
+        )
+        self.assertEqual(self._dispatched_set(campaign_row["id"])["request"]["variant_count"], 9)
+
+
+# -- 案例 10：投放組自己的天數贏過 Campaign 的天數（D10、D11） ------------------------------------
+
+class GroupDatesWinOverCampaignDatesTest(AssetsTestBase):
+    def test_group_dates_win_over_campaign_dates(self):
+        # 投放組只有 7 天，Campaign 開了 30 天——結果要照投放組的 7 天算（3），不是 30 天。
+        campaign_row, _group, _ad = self._direct_campaign(
+            campaign_start="2026-10-01", campaign_end="2026-10-30",
+            group_start="2026-11-01", group_end="2026-11-07",
+        )
+        self.assertEqual(self._dispatched_set(campaign_row["id"])["request"]["variant_count"], 3)
+
+    def test_group_with_only_one_date_falls_back_to_campaign_dates(self):
+        # 投放組只填了開始日期——`plan._days` 兩邊缺一是 0，退回 Campaign 的 30 天 → 9。
+        campaign_row, _group, _ad = self._direct_campaign(
+            campaign_start="2026-10-01", campaign_end="2026-10-30",
+            group_start="2026-11-01", group_end=None,
+        )
+        self.assertEqual(self._dispatched_set(campaign_row["id"])["request"]["variant_count"], 9)
+
+
+# -- 案例 11：每支廣告用自己那個投放組的天數與角色（D13） -----------------------------------------
+
+class EachAdUsesItsOwnGroupTest(AssetsTestBase):
+    def test_each_ad_uses_its_own_groups_dates_and_role(self):
+        campaign = {
+            "name": "測試 Campaign", "goal_text": "衝購買", "objective": "購買",
+            "success_metric": "cpa", "success_target": 300,
+            "start_date": "2026-10-01", "end_date": "2026-10-01", "status": "draft",
+            "budget_planned": 1400, "budget_scenario": "recommended",
+            "budget_basis_json": {"strategy": {"allocation": [
+                {"role": "new", "label": "新客", "pct": 50, "rationale": None},
+                {"role": "retarget", "label": "再行銷", "pct": 50, "rationale": None},
+            ]}},
+        }
+        campaign_row = ads_repo.create_campaign(
+            web.conn, self.org_id, self.brand_id, campaign, created_by=ACTOR,
+        )
+        group_new = ads_repo.create_group(
+            web.conn, self.org_id, self.brand_id, campaign_row["id"], channel_key="meta",
+            name="新客組", role="new", daily_budget=100,
+            start_date="2026-10-01", end_date="2026-10-07",  # 7 天 → 3
+        )
+        group_rt = ads_repo.create_group(
+            web.conn, self.org_id, self.brand_id, campaign_row["id"], channel_key="meta",
+            name="再行銷組", role="retarget", daily_budget=100,
+            start_date="2026-10-01", end_date="2026-10-22",  # 22 天 +3 封頂 → 9
+        )
+        ad_new = ads_repo.create_ad(
+            web.conn, self.org_id, self.brand_id, campaign_row["id"], group_new["id"],
+            name="新客廣告", coordinates={"format": "single_image"}, coordinates_snapshot={},
+        )
+        ad_rt = ads_repo.create_ad(
+            web.conn, self.org_id, self.brand_id, campaign_row["id"], group_rt["id"],
+            name="再行銷廣告", coordinates={"format": "single_image"}, coordinates_snapshot={},
+        )
+        web.conn.commit()
+
+        with mock.patch.object(
+            assets.workbench, "submit_pack", wraps=assets.workbench.submit_pack,
+        ) as submit_pack:
+            assets.dispatch_pack(web.conn, self.org_id, self.brand_id, campaign_row["id"])
+        pack = submit_pack.call_args.args[-1]
+        sets_by_ad_id = {s["source_ref"]["ads_ad_id"]: s for s in pack["sets"]}
+        self.assertEqual(sets_by_ad_id[ad_new["id"]]["request"]["variant_count"], 3)
+        self.assertEqual(sets_by_ad_id[ad_rt["id"]]["request"]["variant_count"], 9)
+
+
+# -- 案例 12：格式決定 required_outputs／request（D14-D17） --------------------------------------
+
+class FormatKeyDrivesRequiredOutputsTest(AssetsTestBase):
+    def test_carousel_gets_no_image_variants(self):
+        campaign_row, _group, _ad = self._direct_campaign(
+            campaign_start="2026-10-01", campaign_end="2026-10-07", format_key="carousel",
+        )
+        target_set = self._dispatched_set(campaign_row["id"])
+        self.assertEqual(target_set["required_outputs"], {"copy": 1, "image_prompt": 1})
+        self.assertEqual(target_set["request"]["variant_count"], 0)
+
+    def test_video_gets_copy_and_video_script_no_image(self):
+        campaign_row, _group, _ad = self._direct_campaign(
+            campaign_start="2026-10-01", campaign_end="2026-10-07", format_key="video",
+        )
+        target_set = self._dispatched_set(campaign_row["id"])
+        self.assertEqual(target_set["required_outputs"], {"copy": 1, "video_script": 1})
+        self.assertEqual(target_set["request"]["video_script_count"], 3)
+        self.assertNotIn("variant_count", target_set["request"])
+        self.assertNotIn("image_prompt", target_set["required_outputs"])
+
+    def test_stored_flexible_follows_single_image_rule(self):
+        campaign_row, _group, _ad = self._direct_campaign(
+            campaign_start="2026-10-01", campaign_end="2026-10-07", format_key="flexible",
+        )
+        target_set = self._dispatched_set(campaign_row["id"])
+        self.assertEqual(target_set["required_outputs"], {"copy": 1, "image_prompt": 1})
+        self.assertEqual(target_set["request"]["variant_count"], 3)
+
+    def test_none_format_and_brand_made_key_follow_single_image_rule(self):
+        for format_key in (None, "brand_made_key"):
+            with self.subTest(format_key=format_key):
+                campaign_row, _group, _ad = self._direct_campaign(
+                    campaign_start="2026-10-01", campaign_end="2026-10-07", format_key=format_key,
+                )
+                target_set = self._dispatched_set(campaign_row["id"])
+                self.assertEqual(target_set["required_outputs"], {"copy": 1, "image_prompt": 1})
+                self.assertEqual(target_set["request"]["variant_count"], 3)
+
+    def test_dispatch_pack_succeeds_end_to_end_for_video(self):
+        # 工作檯要接得住 video_script_count=3、沒有 image_prompt_count（D19）。
+        campaign_row, _group, _ad = self._direct_campaign(
+            campaign_start="2026-10-01", campaign_end="2026-10-07", format_key="video",
+        )
+        pack_id = assets.dispatch_pack(web.conn, self.org_id, self.brand_id, campaign_row["id"])
+        self.assertIsNotNone(pack_id)
 
 
 if __name__ == "__main__":

@@ -571,24 +571,30 @@ def _enriched_campaign(conn, org_id: str, brand_id: str, campaign_id: str) -> di
             if ad_brief is None:
                 continue
             copy_output = workbench.adopted_output(conn, org_id, brand_id, ad_brief["id"], "copy")
-            if copy_output is not None:
-                sets = (copy_output.get("body_json") or {}).get("sets")
-                if isinstance(sets, list) and sets and isinstance(sets[0], dict):
-                    ad["copy_text"] = sets[0].get("body")
+            ad["copy_text"] = _adopted_copy_text(copy_output)
             image_output = workbench.adopted_output(
                 conn, org_id, brand_id, ad_brief["id"], "image_prompt",
             )
-            if image_output is not None:
-                rendered = (image_output.get("body_json") or {}).get("rendered")
-                if isinstance(rendered, str):
-                    ad["image_prompt_text"] = rendered
-                elif isinstance(rendered, list) and rendered:
-                    first = rendered[0]
-                    if isinstance(first, str):
-                        ad["image_prompt_text"] = first
-                    elif isinstance(first, dict):
-                        ad["image_prompt_text"] = first.get("prompt")
+            ad["image_prompt_text"] = _adopted_image_prompt_text(image_output)
     return detail
+
+
+def _adopted_copy_text(copy_output: dict | None) -> str | None:
+    if copy_output is None:
+        return None
+    sets = (copy_output.get("body_json") or {}).get("sets")
+    if isinstance(sets, list) and sets and isinstance(sets[0], dict):
+        return sets[0].get("body")
+    return None
+
+
+def _adopted_image_prompt_text(image_output: dict | None) -> str | None:
+    """§5.8：已採用的圖片提示詞列印出來的字——只讀 `text`（品牌視覺規範／風格規範已經
+    接在尾巴），不是舊的 `rendered`（F07-I10）。"""
+    if image_output is None or not image_output.get("is_adopted"):
+        return None
+    text = (image_output.get("body_json") or {}).get("text")
+    return text if isinstance(text, str) and text else None
 
 
 _PUBLISH_ERRORS = {
