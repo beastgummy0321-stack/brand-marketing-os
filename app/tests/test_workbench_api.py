@@ -5,8 +5,10 @@ endpoints this file used to cover (`/briefs`, run-a-part, adopt, close/reopen, d
 retired with the page that was their only consumer — see git history for the old six-case
 suite. Their replacements (pack/set list/detail, run-a-product, select/deselect, completion,
 approve, close) are covered by `test_workbench_pack_api.py` and `test_workbench_approve.py`.
-This file keeps only what is unaffected by the reset: `GET /styles`, the one endpoint that
-does not belong to a brand and stays exactly as it was.
+
+F07-I09 (ARCHITECTURE.md §5.10, F07 Decision 25): `GET /styles` — the last endpoint this file
+covered — retires with the global style library. This file now only guards that the route stays
+gone (Y01: registering it again in memory must turn this red).
 """
 
 import unittest
@@ -16,17 +18,13 @@ from fastapi.testclient import TestClient
 import app.main as main
 
 
-class StylesTest(unittest.TestCase):
+class StylesRouteRetiredTest(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(main.app)
 
-    def test_list_styles(self):
+    def test_styles_route_is_gone(self):
         resp = self.client.get("/api/workbench/styles")
-        self.assertEqual(resp.status_code, 200)
-        styles = resp.json()["styles"]
-        self.assertTrue(styles)
-        self.assertIn("key", styles[0])
-        self.assertIn("label", styles[0])
+        self.assertEqual(resp.status_code, 404)
 
 
 if __name__ == "__main__":

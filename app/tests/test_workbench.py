@@ -197,13 +197,11 @@ class _WorkbenchTestBase(unittest.TestCase):
 # -- 票 05（ADR 0069 §3）：`brief_text()` 是純函式，不需要 DB fixture -------------------
 
 class BriefCoordinatesTextTest(unittest.TestCase):
-    _STYLE = {"key": "ugc", "label": "UGC", "style_block": "手機直式實拍，低真實感提示"}
-
     def test_states_the_coordinates_when_a_snapshot_is_present(self):
         text = workbench_prompts.brief_text(
             {"coordinates_snapshot_json": {"angle": "UGC 偽裝"}, "visual_tone": None,
              "visual_concept": None, "request_json": {}},
-            "測試產品", self._STYLE,
+            "測試產品",
         )
         self.assertIn("這個節點的座標（文案照這組座標寫）：", text)
         self.assertIn(json.dumps({"angle": "UGC 偽裝"}, ensure_ascii=False), text)
@@ -214,10 +212,20 @@ class BriefCoordinatesTextTest(unittest.TestCase):
         text = workbench_prompts.brief_text(
             {"coordinates_snapshot_json": None, "visual_tone": None,
              "visual_concept": None, "request_json": {}},
-            "測試產品", self._STYLE,
+            "測試產品",
         )
         self.assertNotIn("這個節點的座標", text)
         self.assertNotIn("既有座標", text)
+
+    def test_carries_no_style_line(self):
+        """F07-I09（Decision 25）：舊全域風格庫退休，`brief_text()` 不再帶「風格：」那一行
+        （Y08：把它加回去要讓這條紅）。"""
+        text = workbench_prompts.brief_text(
+            {"coordinates_snapshot_json": None, "visual_tone": None,
+             "visual_concept": None, "request_json": {}},
+            "測試產品",
+        )
+        self.assertNotIn("風格", text)
 
 
 # -- 案例 1：手動 copy 工單，走完整條 enqueue -> worker -> 一列 workbench_output --------
@@ -574,6 +582,69 @@ class DispatchedImagePromptRunTest(_WorkbenchTestBase):
         self.assertIn("風格規範：", body["text"])
         validation = body["validation"]
         self.assertTrue(all(line.startswith("✅") for line in validation), validation)
+
+
+# -- 案例 9（F07-I09 Done 9）：舊全域風格庫退休——`style_key` 接了就丟，非預設值
+# 「no_such_style」全程不炸、不影響輸出，也不出現在送給模型的 prompt 裡 -----------------------
+
+class StyleKeyIgnoredTest(_WorkbenchTestBase):
+    def test_submit_brief_with_unknown_style_key_does_not_raise(self):
+        """Y02：`submit_brief()`（經 `_submit`／`create_brief` 轉呼叫）接了就丟，不驗證
+        `style_key`——非預設值不炸。"""
+        brief_id = self._submit(style_key="no_such_style")
+        self.assertIsNotNone(brief_id)
+
+    def test_stored_style_key_is_always_the_column_default(self):
+        """Y05：INSERT 不列 `style_key`，欄位的 DEFAULT 'ugc' 填——即使呼叫端送了別的值。"""
+        brief_id = self._submit(style_key="no_such_style")
+        row = web.conn.execute(
+            "SELECT style_key FROM workbench_brief WHERE id = %s", (brief_id,),
+        ).fetchone()
+        self.assertEqual(row["style_key"], "ugc")
+
+    def test_submit_pack_with_unknown_style_key_does_not_raise(self):
+        """Y03：`submit_pack()` 裡每個 set 的 `style_key` 一樣接了就丟。"""
+        pack_id = workbench_repo.submit_pack(web.conn, self.org_id, self.brand_id, {
+            "source_kind": "schedule_node", "source_ref": {}, "name": "測試任務包",
+            "sets": [{
+                "name": "單元 1", "source_ref": {}, "coordinates": {},
+                "style_key": "no_such_style", "required_outputs": {"copy": 1},
+                "request": {"copy_length": "short"},
+            }],
+        })
+        self.assertIsNotNone(pack_id)
+
+    def test_briefs_with_unknown_style_key_still_write_output_and_leak_nothing(self):
+        """Y07／Y09：一份 copy 工單、一份 video_script 工單，事後把儲存的 `style_key` 改成
+        非預設值——兩份都照樣寫出結果列（Y07），送給模型的 prompt 也完全沒有「風格：」這個
+        殘留欄位（Y09）。"""
+        copy_brief_id = self._submit()
+        web.conn.execute(
+            "UPDATE workbench_brief SET style_key = %s WHERE id = %s",
+            ("no_such_style", copy_brief_id),
+        )
+        video_brief_id = self._submit(
+            request={"parts": ["video_script"], "video_script_count": 2},
+        )
+        web.conn.execute(
+            "UPDATE workbench_brief SET style_key = %s WHERE id = %s",
+            ("no_such_style", video_brief_id),
+        )
+        web.conn.commit()
+
+        provider = _SequenceProvider([
+            json.dumps(self._copy_reply(), ensure_ascii=False),
+            json.dumps({
+                "scripts": [_video_script("腳本一"), _video_script("腳本二")],
+                "hook_pool": ["hook1", "hook2"], "warnings": [],
+            }, ensure_ascii=False),
+        ])
+        workbench_jobs.PROVIDER = provider
+        self._run_worker()
+
+        self.assertEqual(len(self._outputs(copy_brief_id, "copy")), 5)
+        self.assertEqual(len(self._outputs(video_brief_id, "video_script")), 2)
+        self.assertNotIn("風格：", str(provider.calls))
 
 
 if __name__ == "__main__":

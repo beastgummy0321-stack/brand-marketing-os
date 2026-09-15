@@ -675,7 +675,6 @@ def _run(conn, org_id: str, brand_id: str, brief_id: str, part: str, count) -> N
 
     product_id = brief.get("product_id")
     product = bi_repo.get_product(conn, brand_id, product_id) if product_id else None
-    style = repository.get_style(brief["style_key"])
     request = brief.get("request_json") or {}
 
     product_ids = request.get("product_ids") or ([product_id] if product_id else [])
@@ -706,7 +705,7 @@ def _run(conn, org_id: str, brand_id: str, brief_id: str, part: str, count) -> N
         )
         return
 
-    brief_section = prompts.brief_text(brief, (product or {}).get("name"), style)
+    brief_section = prompts.brief_text(brief, (product or {}).get("name"))
     copy_length = request.get("copy_length") or "short"
     vocabulary: dict = {}
     if part == "copy":

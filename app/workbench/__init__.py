@@ -65,10 +65,12 @@ def submit_pack(conn, org_id: str, brand_id: str, pack: dict) -> str:
     """寫一份任務包（一個 `workbench_pack` 列 + 每個 `pack["sets"]` 一份
     `workbench_brief`），回傳 pack id。ARCHITECTURE.md §5.4：`pack` 帶 `source`
     （`source_kind` ＋不解讀的 `source_ref`）、`name`、`context`、`summary`（摘要）、
-    `sets`（每個：`name`／`source_ref`／`coordinates`／`product_id`／`style_key`／
+    `sets`（每個：`name`／`source_ref`／`coordinates`／`product_id`／
     `required_outputs`＝`{產物類型: 需要選定的版本數}`／每種產出的生成參數放在
-    `request`）。`context` 可以帶 `origin_label`（例如「投放中心 → Beast Gummy｜9 月
-    新客開發 → Meta → 新客｜Broad」）跟 `origin_href`（app 內相對路徑）——兩者皆選填、
+    `request`；`request.variant_count`＝②變體要另外生成幾張，F07-I09 之後 `style_key`
+    這個鍵接了就丟，不再是有意義的欄位）。`context` 可以帶 `origin_label`
+    （例如「投放中心 → Beast Gummy｜9 月新客開發 → Meta → 新客｜Broad」）跟
+    `origin_href`（app 內相對路徑）——兩者皆選填、
     原樣存在既有的 `context_json` 欄位，工作檯不解讀，只在 `pack_detail`／`set_detail`
     原樣吐回（F03-I07）。`required_outputs` 只收 `copy`／`image_prompt`／`video_script`——
     `free` 是退休的舊 part，出現在這裡一律 `ValueError("part_retired")`（那是自由創作

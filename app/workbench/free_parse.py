@@ -15,7 +15,6 @@
 from app.brand_intelligence import repository as bi_repo
 from app.core.db import APP_DIR
 from app.llm import gateway, providers
-from app.workbench import repository as workbench_repo
 
 DEPARTMENT_PATH = APP_DIR / "departments" / "workbench" / "free_parse.md"
 
@@ -46,17 +45,6 @@ def _valid_outputs(outputs) -> list | None:
     return result
 
 
-def _valid_style_hint(style_hint):
-    """對應到 `image_styles.json` 既有的 key——對不上（模型自己發明的風格名稱）一律
-    `None`，不讓 `submit_pack` 收到一個不存在的 `style_key`（票面「不要猜」那條規則）。"""
-    if not isinstance(style_hint, str) or not style_hint:
-        return None
-    for style in workbench_repo.STYLES:
-        if style_hint in (style["key"], style["label"]):
-            return style["key"]
-    return None
-
-
 def _string_or_none(value):
     return value if isinstance(value, str) and value else None
 
@@ -70,7 +58,9 @@ def _validate_reply(data) -> dict | None:
     return {
         "topic": _string_or_none(data.get("topic")),
         "outputs": outputs,
-        "style_hint": _valid_style_hint(data.get("style_hint")),
+        # F07-I09（Decision 25）：舊全域風格庫退休，這個鍵永遠是 `None`——保留鍵本身只是
+        # 因為腳本化的 e2e 回覆還帶著它，`_merged_spec()` 才有東西可以合併。
+        "style_hint": None,
         "platform": _string_or_none(data.get("platform")),
         "size": _string_or_none(data.get("size")),
         "audience": _string_or_none(data.get("audience")),

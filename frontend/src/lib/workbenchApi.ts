@@ -162,12 +162,6 @@ export interface SetDetail {
   image_generation: { connected: boolean; reason: string };
 }
 
-export interface ImageStyle {
-  key: string;
-  label: string;
-  style_block: string;
-}
-
 /** F02-I06 的 `spec` 七個鍵，逐字對照 §5「AI 解析結果」表格列——不多不少
  * （`app/workbench/free_parse.py::_validate_reply`）。 */
 export interface FreeParseOutput {
@@ -242,12 +236,6 @@ async function parseJsonOrThrow<T>(res: Response, fallback: string): Promise<T> 
 }
 
 const BASE = "/api/workbench";
-
-export async function fetchStyles(): Promise<ImageStyle[]> {
-  const res = await apiFetch(`${BASE}/styles`);
-  const data = await parseJsonOrThrow<{ styles: ImageStyle[] }>(res, "讀取風格清單失敗。");
-  return data.styles;
-}
 
 export interface VisualSpecWarning {
   text: string;
