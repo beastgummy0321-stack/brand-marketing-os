@@ -295,6 +295,23 @@ class CreateFreePackTest(_WorkbenchPackApiTestBase):
         )
         self.assertEqual(resp.status_code, 201)
 
+    def test_image_prompt_count_never_defaulted_video_script_count_still_is(self):
+        """F07-I14 (Decision 28): `image_prompt` no longer gets an `image_prompt_count`
+        default — one round is always 10 — while `video_script_count` still defaults
+        from `required_outputs`."""
+        resp = self.client.post(
+            f"/api/workbench/brands/{self.brand_id}/packs",
+            json=self._body(sets=[self._one_set(
+                "free-1", {"image_prompt": 5, "video_script": 2},
+                request={"copy_length": "short"},
+            )]),
+        )
+        self.assertEqual(resp.status_code, 201)
+        pack_id = resp.json()["pack"]["id"]
+        brief = self._briefs(pack_id)[0]
+        self.assertNotIn("image_prompt_count", brief["request_json"])
+        self.assertEqual(brief["request_json"]["video_script_count"], 2)
+
     def test_context_platform_is_written_and_read_by_both_screens(self):
         """F02-I18 falsifier: `POST /packs` with `context.platform` reaches `PackDetail.meta.
         platform` and, through the set's `chips.platform`, the 生成設定 平台 row's `text` —

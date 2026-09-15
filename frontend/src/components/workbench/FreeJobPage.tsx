@@ -103,10 +103,12 @@ function specToControl(spec: FreeParseSpec, fallback: PreciseControl): PreciseCo
 
 /** 這支頁面唯一的分支邏輯（票面「real falsifier」）：`spec.outputs` 的每一項
  * `required_outputs[part]` = 解析出來的張數（沒給就是 1），同一個數字也是這一輪的生成數量
- * ——一輪就能滿足這個任務包（2026-09-12 使用者裁決）。素材組層的 `coordinates`／`request`
- * 帶入 `spec` 其餘欄位，落在 `jobs.py` 既有讀得到的鍵上：`audience`／`format`／
- * `free_text`／`promotion_note`；`platform` 走 pack 層的 `context.platform`
- * （F02-I18，`ARCHITECTURE.md` §5.4 handoff contract，`PackDetail.meta.platform` 讀回）。 */
+ * ——一輪就能滿足這個任務包（2026-09-12 使用者裁決，`copy`／`video_script` 適用）。素材組層的
+ * `coordinates`／`request` 帶入 `spec` 其餘欄位，落在 `jobs.py` 既有讀得到的鍵上：
+ * `audience`／`format`／`free_text`／`promotion_note`；`platform` 走 pack 層的 `context.platform`
+ * （F02-I18，`ARCHITECTURE.md` §5.4 handoff contract，`PackDetail.meta.platform` 讀回）。
+ * `image_prompt` 不適用：一輪固定 10 張、只選一版，`required_outputs.image_prompt` 恆為 `1`，
+ * 解析出的張數不帶進 `request`（F07 Decision 28）。 */
 export function specToCreateBody(
   spec: FreeParseSpec,
   form: { text: string; productId: string | null },
@@ -117,6 +119,10 @@ export function specToCreateBody(
     ? spec.outputs
     : [{ part: "image_prompt", count: 1 }];
   for (const output of outputs) {
+    if (output.part === "image_prompt") {
+      requiredOutputs[output.part] = 1;
+      continue;
+    }
     const count = output.count ?? 1;
     requiredOutputs[output.part] = count;
     request[`${output.part}_count`] = count;
@@ -255,7 +261,8 @@ export function FreeJobPage({ brandId }: { brandId: string }) {
     progress_pct: 0,
     next_step: null,
     counts: previewOutputs.map((o) => ({
-      part: o.part, label: PART_LABEL[o.part], selected: 0, required: o.count ?? 1,
+      part: o.part, label: PART_LABEL[o.part], selected: 0,
+      required: o.part === "image_prompt" ? 1 : (o.count ?? 1),
     })),
     updated_at: new Date().toISOString(),
   };
@@ -463,16 +470,18 @@ export function FreeJobPage({ brandId }: { brandId: string }) {
                     className="h-9 w-full rounded-md border border-border bg-card px-2 text-sm"
                   />
                 </Field>
-                <Field label="產出數量">
-                  <input
-                    type="number"
-                    min={1}
-                    max={30}
-                    value={control.count}
-                    onChange={(e) => updateControl({ count: Math.max(1, Number(e.target.value) || 1) })}
-                    className="h-9 w-full rounded-md border border-border bg-card px-2 text-sm"
-                  />
-                </Field>
+                {control.part !== "image_prompt" && (
+                  <Field label="產出數量">
+                    <input
+                      type="number"
+                      min={1}
+                      max={30}
+                      value={control.count}
+                      onChange={(e) => updateControl({ count: Math.max(1, Number(e.target.value) || 1) })}
+                      className="h-9 w-full rounded-md border border-border bg-card px-2 text-sm"
+                    />
+                  </Field>
+                )}
               </div>
             )}
           </div>
@@ -507,7 +516,9 @@ export function FreeJobPage({ brandId }: { brandId: string }) {
                 <Row label="需要產出">
                   <div className="flex flex-wrap gap-1">
                     {spec.outputs.map((o, i) => (
-                      <Badge key={i} variant="outline">{PART_LABEL[o.part]} {o.count} 份</Badge>
+                      <Badge key={i} variant="outline">
+                        {o.part === "image_prompt" ? "圖片（一輪 10 張）" : `${PART_LABEL[o.part]} ${o.count} 份`}
+                      </Badge>
                     ))}
                   </div>
                 </Row>

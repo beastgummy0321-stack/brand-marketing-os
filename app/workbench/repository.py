@@ -1080,9 +1080,12 @@ def create_free_pack(conn: _AnyConn, org_id: str, brand_id: str, body: dict) -> 
     `submit_pack()`, no second write path (`.work/features/F02.md` "自由創作's 「AI 解析
     結果」..."). `source_kind` is forced to `"free_job"` here; a client may not pick it.
     Per-part generation counts default to the same number as `required_outputs[type]`
-    (user ruling 2026-09-12: 「五張」 asks for 5 required *and* one round of 5) unless the
-    set's own `request` already names a count. Returns the freshly assembled `PackDetail`
-    itself, not just the id — the route wraps it directly."""
+    for `copy`／`video_script` (user ruling 2026-09-12: 「五張」 asks for 5 required *and*
+    one round of 5) unless the set's own `request` already names a count. `image_prompt`
+    is exempt: one round is always 10 prompts (F07 Decision 28), so no `image_prompt_count`
+    default is added; a payload that still sends one is accepted and ignored elsewhere.
+    Returns the freshly assembled `PackDetail` itself, not just the id — the route wraps
+    it directly."""
     sets_in = body.get("sets")
     if not isinstance(sets_in, list) or not sets_in:
         raise ValueError("sets_unknown")
@@ -1093,8 +1096,6 @@ def create_free_pack(conn: _AnyConn, org_id: str, brand_id: str, body: dict) -> 
             raise ValueError("sets_unknown")
         required_outputs = s.get("required_outputs") or {}
         request = dict(s.get("request") or {})
-        if "image_prompt" in required_outputs:
-            request.setdefault("image_prompt_count", required_outputs["image_prompt"])
         if "video_script" in required_outputs:
             request.setdefault("video_script_count", required_outputs["video_script"])
         pack_sets.append({
