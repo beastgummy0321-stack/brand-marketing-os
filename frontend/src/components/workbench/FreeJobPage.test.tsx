@@ -158,4 +158,24 @@ describe("精準控制的產出數量欄位（F07-I14）", () => {
     await waitFor(() => expect(screen.getByText("圖片（一輪 10 張）")).toBeTruthy());
     expect(screen.queryByText("圖片 5 份")).toBeNull();
   });
+
+  it("預覽卡的要選幾版：image_prompt 恆為 1，其他 part 仍用解析出的張數（F09）", async () => {
+    mockParseFreeText.mockResolvedValue({
+      parsed: true, note: null,
+      spec: spec({ outputs: [{ part: "image_prompt", count: 5 }, { part: "video_script", count: 3 }] }),
+    });
+
+    render(
+      <MemoryRouter>
+        <FreeJobPage brandId="brd_1" />
+      </MemoryRouter>,
+    );
+
+    await userEvent.type(screen.getByLabelText("告訴 AI 你想創作什麼"), "測試文字");
+    await userEvent.click(screen.getByRole("button", { name: "建立自由工作 →" }));
+
+    await waitFor(() => expect(screen.getByText("0／1")).toBeTruthy());
+    expect(screen.getByText("0／3")).toBeTruthy();
+    expect(screen.queryByText("0／5")).toBeNull();
+  });
 });
