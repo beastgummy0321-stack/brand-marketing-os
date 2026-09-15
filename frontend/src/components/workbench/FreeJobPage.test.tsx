@@ -1,6 +1,24 @@
-import { describe, expect, it } from "vitest";
-import { specToCreateBody } from "./FreeJobPage";
+import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { MemoryRouter } from "react-router-dom";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("@/lib/productsApi", () => ({
+  fetchProductList: vi.fn().mockResolvedValue([]),
+}));
+vi.mock("@/lib/workbenchApi", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/workbenchApi")>("@/lib/workbenchApi");
+  return { ...actual, parseFreeText: vi.fn(), createFreePack: vi.fn() };
+});
+vi.mock("@/components/layout/WorkspaceContext", () => ({
+  useWorkspace: () => ({ brands: [{ brand_id: "brd_1", brand_name: "測試品牌" }] }),
+}));
+
+import { parseFreeText } from "@/lib/workbenchApi";
+import { FreeJobPage, specToCreateBody } from "./FreeJobPage";
 import type { FreeParseSpec } from "@/lib/workbenchApi";
+
+const mockParseFreeText = vi.mocked(parseFreeText);
 
 function spec(overrides: Partial<FreeParseSpec> = {}): FreeParseSpec {
   return {
@@ -58,5 +76,42 @@ describe("specToCreateBody（F02-I10 唯一的分支邏輯）", () => {
   it("platform 是 null：不送 context.platform 這個鍵", () => {
     const body = specToCreateBody(spec({ platform: null }), { text: "夜跑廣告", productId: null });
     expect(body.context).not.toHaveProperty("platform");
+  });
+});
+
+// F07-I09（Decision 25，Y13）：舊全域風格庫退場——精準控制不再有風格選單，AI 解析結果不再
+// 有「風格設定」列，畫面也從不打 `/styles`（那支路由已經 404，見 test_workbench_api.py）。
+describe("FreeJobPage 不再讀風格（F07-I09）", () => {
+  const originalFetch = global.fetch;
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+    vi.clearAllMocks();
+  });
+
+  it("精準控制沒有風格欄位、AI 解析結果沒有風格設定列、且從不打 /styles", async () => {
+    const fetchSpy = vi.fn().mockResolvedValue(new Response("{}"));
+    global.fetch = fetchSpy as unknown as typeof fetch;
+    mockParseFreeText.mockResolvedValue({
+      parsed: true, note: null, spec: spec({ style_hint: "ugc" }),
+    });
+
+    render(
+      <MemoryRouter>
+        <FreeJobPage brandId="brd_1" />
+      </MemoryRouter>,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "精準控制" }));
+    expect(screen.queryByRole("combobox", { name: "風格" })).toBeNull();
+
+    await userEvent.type(screen.getByLabelText("告訴 AI 你想創作什麼"), "測試文字");
+    await userEvent.click(screen.getByRole("button", { name: "建立自由工作 →" }));
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "確認並生成" })).toBeTruthy());
+    expect(screen.queryByText("風格設定")).toBeNull();
+
+    const calledPaths = fetchSpy.mock.calls.map((call) => String(call[0]));
+    expect(calledPaths.some((path) => path.includes("/styles"))).toBe(false);
   });
 });

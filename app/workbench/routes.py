@@ -9,8 +9,8 @@ speaks 任務包 (pack) → 素材組 (set) → 產物 (product) → 版本 (ver
 F07-I08 adds `/brands/{brand_id}/visual-spec` (ARCHITECTURE.md §5.9's 品牌事實 negatives
 warning): same actor/brand guard as every other brand route, no set/pack involved.
 
-Shape (container contract §7, unchanged): every handler is `require_actor` -> (`require_brand`,
-every route but `/styles`) -> one repository function -> wrap. Nothing here decides anything:
+Shape (container contract §7, unchanged): every handler is `require_actor` -> `require_brand`
+-> one repository function -> wrap. Nothing here decides anything:
 every `ValueError` a repository function raises is looked up in this file's small per-route
 tables and turned into `web.ApiError` — that lookup is translation of an already-made decision,
 not a new one (the decision happened in `repository.py`).
@@ -44,14 +44,6 @@ def get_visual_spec(request: Request, brand_id: str):
     web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
     spec_text = identity.brand_spec_text(web.conn, brand_id)
     return {"warnings": visual.spec_warnings(brand_id, spec_text)}
-
-
-@router.get("/styles")
-def list_styles(request: Request):
-    """唯一不吃 `brand_id`、不呼叫 `require_brand` 的端點——仍然要登入
-    （`require_actor`），只是不用挑品牌。"""
-    web.require_actor(request)
-    return {"styles": repository.STYLES}
 
 
 # -- 任務包（PackCard／PackDetail） -----------------------------------------------------

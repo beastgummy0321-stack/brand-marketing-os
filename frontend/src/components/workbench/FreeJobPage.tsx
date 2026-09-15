@@ -11,11 +11,9 @@ import { cn } from "@/lib/utils";
 import { fetchProductList, type ProductListItem } from "@/lib/productsApi";
 import {
   createFreePack,
-  fetchStyles,
   parseFreeText,
   type FreeParseOutput,
   type FreeParseSpec,
-  type ImageStyle,
   type NewFreePackRequest,
   type PackCard,
   type ProductPart,
@@ -155,7 +153,6 @@ export function FreeJobPage({ brandId }: { brandId: string }) {
   const [useBrand, setUseBrand] = useState(true);
   const [productId, setProductId] = useState<string | null>(null);
   const [products, setProducts] = useState<ProductListItem[]>([]);
-  const [styles, setStyles] = useState<ImageStyle[]>([]);
   const [file, setFile] = useState<File | null>(null);
   const [fileError, setFileError] = useState<string | null>(null);
   const [precise, setPrecise] = useState(false);
@@ -171,7 +168,6 @@ export function FreeJobPage({ brandId }: { brandId: string }) {
 
   useEffect(() => {
     fetchProductList(brandId).then(setProducts).catch(() => setProducts([]));
-    fetchStyles().then(setStyles).catch(() => setStyles([]));
   }, [brandId]);
 
   function updateControl(patch: Partial<PreciseControl>) {
@@ -440,16 +436,6 @@ export function FreeJobPage({ brandId }: { brandId: string }) {
                     {SIZE_OPTIONS.map((v) => <option key={v} value={v}>{v}</option>)}
                   </select>
                 </Field>
-                <Field label="風格">
-                  <select
-                    value={control.styleKey}
-                    onChange={(e) => updateControl({ styleKey: e.target.value })}
-                    className="h-9 w-full rounded-md border border-border bg-card px-2 text-sm"
-                  >
-                    <option value="">{NOT_SPECIFIED}</option>
-                    {styles.map((s) => <option key={s.key} value={s.key}>{s.label}</option>)}
-                  </select>
-                </Field>
                 <Field label="人物">
                   <input
                     value={control.person}
@@ -524,9 +510,6 @@ export function FreeJobPage({ brandId }: { brandId: string }) {
                       <Badge key={i} variant="outline">{PART_LABEL[o.part]} {o.count} 份</Badge>
                     ))}
                   </div>
-                </Row>
-                <Row label="風格設定">
-                  {styles.find((s) => s.key === spec.style_hint)?.label || spec.style_hint || "—"}
                 </Row>
                 <Row label="投放平台">{spec.platform || "—"}</Row>
                 <Row label="尺寸">{spec.size || "—"}</Row>

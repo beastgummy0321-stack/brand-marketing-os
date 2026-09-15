@@ -4,7 +4,6 @@ empty. Fixture shape borrowed from `test_workbench_image_port.py`."""
 
 import unittest
 import uuid
-from unittest import mock
 
 from fastapi.testclient import TestClient
 
@@ -161,20 +160,24 @@ class SetGenerationSettingsTest(unittest.TestCase):
         by_label = {r["label"]: r["text"] for r in detail["generation_settings"]}
         self.assertEqual(by_label["品牌視覺"], "新識別文字")
 
-    def test_set_detail_never_calls_get_style(self):
-        # S10: `get_style` must not be called any more — recompiling it to raise proves
-        # `set_detail` never reaches it.
+    def test_set_detail_reads_no_style_library(self):
+        # F07-I09 (Y10/Y17): the old global style library is gone end to end — `set_detail`
+        # never reads a style, even for a brief whose stored `style_key` is a value that
+        # would have been `style_unknown` under the retired lookup.
+        self.assertFalse(hasattr(workbench_repo, "get_style"))
+        self.assertFalse(hasattr(workbench_repo, "STYLES"))
         pack_id = self._submit_pack([{
             "name": "單元 S10", "source_ref": {"node_key": "s10"}, "coordinates": {},
-            "style_key": "ugc", "required_outputs": {"copy": 1},
+            "required_outputs": {"copy": 1},
             "request": {"copy_length": "short"},
         }])
         brief_id = self._one_brief_id(pack_id)
-        with mock.patch.object(
-            workbench_repo, "get_style",
-            side_effect=AssertionError("get_style must not be called by set_detail"),
-        ):
-            detail = self._get_set(brief_id)
+        web.conn.execute(
+            "UPDATE workbench_brief SET style_key = %s WHERE id = %s",
+            ("no_such_style", brief_id),
+        )
+        web.conn.commit()
+        detail = self._get_set(brief_id)
         self.assertIsNone(detail["chips"]["style"])
 
     def test_without_product_or_image_round(self):

@@ -70,6 +70,18 @@ class ValidReplyTest(_FreeParseTestBase):
         self.assertEqual(result["spec"]["platform"], "Meta")
         self.assertEqual(self._task_count(), 1)
 
+    def test_validate_reply_never_reads_the_models_style_hint(self):
+        # F07-I09（Decision 25，Y11）：舊全域風格庫退休——`_validate_reply` 的 `style_hint`
+        # 永遠是 `None`，即使模型送了「ugc」（改回讀模型的值要讓這條紅），鍵本身仍在（給腳本化
+        # 的 e2e 回覆合併，drop 掉這個鍵要讓下面的 `assertIn` 紅）。
+        validated = free_parse._validate_reply({
+            "topic": "夜跑廣告", "outputs": [{"part": "image_prompt", "count": 5}],
+            "style_hint": "ugc",
+        })
+        self.assertIsNotNone(validated)
+        self.assertIn("style_hint", validated)
+        self.assertIsNone(validated["style_hint"])
+
 
 class UnknownPartTest(_FreeParseTestBase):
     def test_unknown_part_falls_back_to_defaults(self):
@@ -138,6 +150,25 @@ class ScriptedReplyParsesTest(_FreeParseTestBase):
 
         self.assertTrue(result["parsed"])
         self.assertEqual(result["spec"]["outputs"], [{"part": "image_prompt", "count": 1}])
+
+
+class NoStyleQuestionInPromptTest(_FreeParseTestBase):
+    def test_prompt_never_asks_the_model_to_map_an_existing_style(self):
+        """Y12（F07-I09）：舊 `free_parse.md` 曾要模型把描述「對應到哪一種既有風格」——
+        風格庫退休後，送給模型的 prompt 不再問這件事。"""
+        reply = json.dumps({
+            "topic": "夜跑廣告", "outputs": [{"part": "image_prompt", "count": 5}],
+            "style_hint": "ugc", "platform": "Meta", "size": "4:5",
+            "audience": None, "key_message": None,
+        }, ensure_ascii=False)
+        provider = _fake(reply)
+        free_parse.PROVIDER = provider
+
+        free_parse.parse(
+            web.conn, brand_id=self.brand_id, free_text="幫我做幾張圖", defaults=self.defaults,
+        )
+
+        self.assertNotIn("既有風格", str(provider.calls))
 
 
 if __name__ == "__main__":

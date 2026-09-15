@@ -11,9 +11,7 @@ seeding a brand's coordinate vocabulary is schedule's job, not something a promp
 should trigger as a side effect of reading.
 """
 
-import json
 from datetime import UTC, datetime
-from pathlib import Path
 
 from app.brand_intelligence import repository as bi_repo
 from app.core import cleanup
@@ -22,19 +20,6 @@ from app.workbench import image_cards, image_port
 from app.workbench import looks as looks_mod
 
 _AnyConn = Conn | ConnProxy
-
-_STYLES_PATH = Path(__file__).resolve().parent / "image_styles.json"
-STYLES: list = json.loads(_STYLES_PATH.read_text(encoding="utf-8"))
-
-
-def get_style(style_key: str) -> dict:
-    """`ValueError("style_unknown")` for a key not in `image_styles.json`
-    (routes.py maps it to 400 in ticket 03)."""
-    for style in STYLES:
-        if style["key"] == style_key:
-            return style
-    raise ValueError("style_unknown")
-
 
 _PART_NAMES = frozenset({"copy", "image_prompt", "video_script", "free"})
 _COPY_LENGTHS = frozenset({"short", "medium", "long"})
@@ -63,8 +48,8 @@ def submit_brief(conn, org_id: str, brand_id: str, brief: dict, *, pack_id: str,
     `web.conn`（`ConnProxy`）或一條真的 `Conn`。"""
     from app.background import enqueue as background_enqueue
 
-    style_key = brief.get("style_key") or "ugc"
-    get_style(style_key)  # 未知 style_key 在這裡就炸，不留到生成 job 才發現
+    # F07-I09（Decision 25）：舊全域風格庫退休——`style_key` 這個鍵接了就丟，不驗證、
+    # 不寫進 INSERT 的欄位清單，欄位本身的 DEFAULT 'ugc' 直接填。
     product_id = brief.get("product_id")
     if product_id is not None and bi_repo.get_product(conn, brand_id, product_id) is None:
         # 租戶界線先於資料寫入：product_id 指向別的品牌就在這裡炸，不留到 INSERT
@@ -94,14 +79,14 @@ def submit_brief(conn, org_id: str, brand_id: str, brief: dict, *, pack_id: str,
 
     conn.execute(
         "INSERT INTO workbench_brief (id, org_id, brand_id, kind, source_kind, source_ref,"
-        " product_id, coordinates_snapshot_json, visual_tone, visual_concept, style_key,"
+        " product_id, coordinates_snapshot_json, visual_tone, visual_concept,"
         " request_json, status, pack_id, name, required_outputs_json)"
-        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
         (
             brief_id, org_id, brand_id, kind, brief["source_kind"],
             jsonb(brief.get("source_ref") or {}), product_id,
             jsonb(coordinates), brief.get("visual_tone"),
-            brief.get("visual_concept"), style_key, jsonb(request), status,
+            brief.get("visual_concept"), jsonb(request), status,
             pack_id, name, jsonb(required_outputs or {}),
         ),
     )
@@ -198,7 +183,7 @@ def submit_pack(conn, org_id: str, brand_id: str, pack: dict) -> str:
 def create_brief(conn, org_id: str, brand_id: str, brief: dict) -> str:
     """`POST /briefs`（票 03）專屬入口：`kind` 不再由呼叫端決定什麼可以建立——`kind`
     是 `submit_brief()` 從 `request["parts"]` 衍生的顯示欄位，這裡不檢查、也不理會
-    `brief` 裡任何 `kind` 值。其餘驗證（style_key／product_id／parts／copy_length／
+    `brief` 裡任何 `kind` 值。其餘驗證（product_id／parts／copy_length／
     image_prompt_count／video_script_count）都在 `submit_brief()` 裡，這裡不重複。
 
     F02-I02：一份 brief 現在一定屬於一個 pack（「a set only exists inside a pack」，

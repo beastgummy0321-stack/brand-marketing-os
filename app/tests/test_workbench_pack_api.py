@@ -283,6 +283,18 @@ class CreateFreePackTest(_WorkbenchPackApiTestBase):
         self.assertEqual(resp.status_code, 400)
         self.assertEqual(resp.json()["error"]["code"], "part_retired")
 
+    def test_unknown_style_key_top_level_and_per_set_still_creates(self):
+        """Y04a／Y04c（F07-I09）：舊全域風格庫退休——`style_key` 不管在 pack 的頂層還是
+        單一 set 裡都接了就丟，非預設值「no_such_style」不擋建立。"""
+        resp = self.client.post(
+            f"/api/workbench/brands/{self.brand_id}/packs",
+            json=self._body(
+                style_key="no_such_style",
+                sets=[self._one_set("free-1", {"image_prompt": 5}, style_key="no_such_style")],
+            ),
+        )
+        self.assertEqual(resp.status_code, 201)
+
     def test_context_platform_is_written_and_read_by_both_screens(self):
         """F02-I18 falsifier: `POST /packs` with `context.platform` reaches `PackDetail.meta.
         platform` and, through the set's `chips.platform`, the 生成設定 平台 row's `text` —

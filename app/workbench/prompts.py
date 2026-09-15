@@ -28,10 +28,12 @@ IMAGE_COORDINATE_LABELS = {
 }
 
 
-def brief_text(brief: dict, product_name: str | None, style: dict) -> str:
+def brief_text(brief: dict, product_name: str | None) -> str:
     """組『這張工單』段——比照 `scripts/workbench_probe.py::_worksheet_text`，改吃
     `workbench_brief` 列（工作檯的來源是一張工單，不是活動樹節點）。長度／變體數／字數帶
-    已經寫在 `copy.md`／`image_prompt.md` 本身，這裡不重複。"""
+    已經寫在 `copy.md`／`image_prompt.md` 本身，這裡不重複。F07-I09（Decision 25）：舊全域
+    風格庫退休，這裡不再帶「風格：」那一行——看圖片提示詞怎麼決定視覺是 §5.9 的事，這支只服務
+    copy／video_script。"""
     coordinates = brief.get("coordinates_snapshot_json") or {}
     lines = ["## 這張工單", f"產品：{product_name or '（無）'}"]
     if coordinates:
@@ -42,7 +44,6 @@ def brief_text(brief: dict, product_name: str | None, style: dict) -> str:
         )
     lines.append(f"visual_tone：{brief.get('visual_tone') or '（無）'}")
     lines.append(f"visual_concept：{brief.get('visual_concept') or '（無）'}")
-    lines.append(f"風格：{style['label']}；{style['style_block']}")
     free_text = (brief.get("request_json") or {}).get("free_text")
     if free_text:
         lines.append(f"自由指示：{free_text}")
