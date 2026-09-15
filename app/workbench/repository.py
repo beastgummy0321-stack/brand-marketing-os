@@ -78,12 +78,9 @@ def submit_brief(conn, org_id: str, brand_id: str, brief: dict, *, pack_id: str,
     copy_length = request.get("copy_length", "short")
     if copy_length not in _COPY_LENGTHS:
         raise ValueError("copy_length_unknown")
-    image_prompt_count = request.get("image_prompt_count")
-    if "image_prompt" in parts and not (
-        isinstance(image_prompt_count, int) and 1 <= image_prompt_count <= 30
-    ):
-        # 票 03 §2：範圍檢查在送出當下就做，不留到 worker 才發現。
-        raise ValueError("count_out_of_range")
+    # F07-I07（Decision 25／30）：一輪圖片提示詞永遠是程式決定的固定張數
+    # （`visual.IMAGE_PROMPT_COUNT`／輪播 2 概念），不再由使用者指定「這輪要幾張」——
+    # `image_prompt_count` 保留只為相容舊呼叫端仍會送這個鍵，接了就丟，`_run()` 不讀它。
     video_script_count = request.get("video_script_count")
     if "video_script" in parts and not (
         isinstance(video_script_count, int) and 1 <= video_script_count <= 5
@@ -109,7 +106,8 @@ def submit_brief(conn, org_id: str, brand_id: str, brief: dict, *, pack_id: str,
     )
     for part in parts:
         if part == "image_prompt":
-            count = request.get("image_prompt_count")
+            # F07-I07：張數不再是使用者輸入，`jobs.py` 自己從 shape 算，這裡一律排 `None`。
+            count = None
         elif part == "video_script":
             count = request.get("video_script_count")
         else:
@@ -446,11 +444,75 @@ def list_coordinate_vocabulary(conn: _AnyConn, org_id: str, brand_id: str) -> li
         (org_id, brand_id),
     ).fetchall()
     return [
-        {"dimension": r["dimension"], "label": r["label"],
+        {"dimension": r["dimension"], "key": r["key"], "label": r["label"],
          "attributes": r["attributes_json"] or {}, "disabled_at": r["disabled_at"],
          "rejected": bool(r["rejected"])}
         for r in (dict(row) for row in rows)
     ]
+
+
+# ---------------------------------------------------------------------------
+# F07-I07（ARCHITECTURE.md §5.7）：the worksheet's pure, DB-free pieces (reference line) plus
+# the two small reads `jobs.py`'s image-prompt path needs on top of what F07-I04/I05/I06
+# already added below (`look_history`／`image_round_history`／visual identity).
+# ---------------------------------------------------------------------------
+
+NO_REFERENCE_LINE = "商品參考：沒有參考照"
+_MAX_REFERENCE_TITLES = 3
+
+
+def reference_line(assets: list, knowledge_product_id: str | None,
+                    product_name: str | None) -> str:
+    """Decision 13：這個素材組自己商品的 `product_photo` 優先，沒有就退到品牌層級的
+    （`product_id is None`）；`assets` 已經是 `bi_repo.list_official_assets()` 的原始順序
+    （newest first）——這裡只篩選、不重排。最多 3 則，缺 `title` 用商品名，商品名也沒有
+    才落回「參考照」。"""
+    def _photos(product_id):
+        return [
+            a for a in assets
+            if a.get("asset_kind") == "product_photo" and a.get("product_id") == product_id
+        ]
+
+    matched = _photos(knowledge_product_id) if knowledge_product_id else []
+    if not matched:
+        matched = _photos(None)
+    if not matched:
+        return NO_REFERENCE_LINE
+    descriptions = [
+        a.get("title") or product_name or "參考照" for a in matched[:_MAX_REFERENCE_TITLES]
+    ]
+    return f"商品參考：{'、'.join(descriptions)}（有參考照）"
+
+
+def get_pack_summary(conn: _AnyConn, org_id: str, brand_id: str,
+                      pack_id: str | None) -> dict:
+    """那個素材組所屬任務包的 `summary_json`——`prompts.image_worksheet()` 的「題材」一行
+    要讀 情境／重點訊息。`pack_id` 是 `None`（理論上不會，一份 brief 一定屬於一個 pack）
+    或找不到都回 `{}`，不炸整個生成。"""
+    if pack_id is None:
+        return {}
+    row = conn.execute(
+        "SELECT summary_json FROM workbench_pack WHERE org_id = %s AND brand_id = %s"
+        " AND id = %s", (org_id, brand_id, pack_id),
+    ).fetchone()
+    return (row["summary_json"] or {}) if row is not None else {}
+
+
+def previous_round_titles(conn: _AnyConn, org_id: str, brand_id: str, brief_id: str,
+                           part: str) -> list:
+    """這個 part 目前最新一輪（重新生成之前，就是「上一輪」）每一列 `body_json.title`，
+    依 `version_index` 排序——`image_worksheet()` 的「上一輪的標題」一行。第一輪（還沒有
+    任何一輪）回 `[]`。"""
+    latest = next_round(conn, org_id, brand_id, brief_id, part) - 1
+    if latest < 1:
+        return []
+    rows = conn.execute(
+        "SELECT body_json->>'title' AS title FROM workbench_output"
+        " WHERE org_id = %s AND brand_id = %s AND brief_id = %s AND part = %s"
+        " AND generation_round = %s ORDER BY version_index",
+        (org_id, brand_id, brief_id, part, latest),
+    ).fetchall()
+    return [r["title"] for r in rows if r["title"]]
 
 
 # ---------------------------------------------------------------------------
@@ -669,9 +731,9 @@ def run_part(conn: _AnyConn, org_id: str, brand_id: str, brief_id: str, part: st
         raise ValueError("brief_closed")
     if brief["status"] in ("queued", "running"):
         raise ValueError("round_running")
-    if part == "image_prompt":
-        if count is None or not (1 <= count <= 30):
-            raise ValueError("count_out_of_range")
+    # F07-I07（Decision 25／30）：image_prompt 不再要求呼叫端帶張數——一輪的張數由
+    # `jobs.py`／`visual.py` 依 shape 決定，任何 count（含 None）都放行、原樣往下傳
+    # （`_run()` 不讀 image_prompt 的 count）。
     if part == "video_script":
         # 票 workbench/06 §3：跟 image_prompt 一樣，張數是使用者的、沒有預設值——
         # 「再產一輪」重跑一樣要帶（同一個表單欄位、同一條規則）。

@@ -6,6 +6,7 @@ isolation are the other two of the全域 CLAUDE.md test four categories this fil
 """
 
 import json
+import re
 import unittest
 from pathlib import Path
 
@@ -20,10 +21,9 @@ from app.schedule import state as schedule_state
 from app.workbench import jobs as workbench_jobs
 from app.workbench import prompts as workbench_prompts
 from app.workbench import repository as workbench_repo
+from app.workbench import visual
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-TEMPLATE_PATH = REPO_ROOT / "app" / "methodology" / "image-prompt-template.md"
-DEPARTMENT_PATH = REPO_ROOT / "app" / "departments" / "workbench" / "image_prompt.md"
 
 ACTOR = "測試員"
 
@@ -58,6 +58,77 @@ class _SequenceProvider:
             output_text=text, structured=None,
             usage=providers.Usage(input_tokens=500, output_tokens=200), stop_reason="end_turn",
         )
+
+
+_LOOK_LINE_RE = re.compile(r"- 第 (\d+) 則：([a-zA-Z_]+)（")
+
+_DEVICE_CYCLE = list(visual.DEVICES)
+_LAYOUT_CYCLE = list(visual.LAYOUTS)
+
+
+def _image_item(i: int, look: str) -> dict:
+    headline = f"文案{i}號"
+    return {
+        "title": f"點子{i}", "device": _DEVICE_CYCLE[i % len(_DEVICE_CYCLE)],
+        "layout": _LAYOUT_CYCLE[i % len(_LAYOUT_CYCLE)], "look": look,
+        "subject_role": "clear", "persuasion": "none", "headline": [headline],
+        "prompt": (
+            f"4:5 直式單圖廣告，情境示意畫面第 {i} 則，人物在明亮廚房裡拿著商品。"
+            f"主標「{headline}」置中，純色填滿，不放其他文字。"
+        ),
+    }
+
+
+def _image_reply() -> dict:
+    return {"image_task": "believe_solution", "warnings": [], "items": [
+        _image_item(i, "soft_lifestyle") for i in range(1, 11)
+    ]}
+
+
+class _ImageRoundProvider:
+    """F07-I07：一個假供應商同時扮兩顆模型——`workbench_derive_identity`（`identity.py`
+    先呼叫一次、之後讀快取）跟 `workbench_image_prompt`（每一輪一次，或加一次修正輪）。
+    靠 prompt 內容分辨是哪一通：`identity.py` 的部門檔開頭是「品牌視覺總監」，修正輪的
+    `fix.md` 固定帶「這些欄位沒有通過驗證，只重新回答這些」；其餘就是圖片提示詞正輪，
+    讀 worksheet 的「- 第 N 則：<look>」那幾行，把系統分配的風格原樣填回每一項的 `look`
+    （票面 Done：「reading each 「第 N 則：<key>」 line from the prompt and writing that
+    key into item N's `look`」）。"""
+
+    name = "fake"
+
+    def __init__(self, *, identity: dict, fix: dict | None = None):
+        self._identity = identity
+        self._fix = fix
+        self.calls: list = []
+
+    def complete(self, *, model, system, messages, max_tokens, timeout_s=120.0,
+                 effort=None, tools=None, org_id=None) -> providers.ProviderResponse:
+        text = messages[0]["content"]
+        self.calls.append(text)
+        if "品牌視覺總監" in text:
+            structured, output_text = self._identity, ""
+        elif "這些欄位沒有通過驗證，只重新回答這些" in text and self._fix is not None:
+            structured, output_text = None, json.dumps(self._fix, ensure_ascii=False)
+        else:
+            plan = {int(n): look for n, look in _LOOK_LINE_RE.findall(text)}
+            reply = _image_reply()
+            for i, item in enumerate(reply["items"], start=1):
+                item["look"] = plan.get(i, item["look"])
+            structured, output_text = reply, ""
+        return providers.ProviderResponse(
+            output_text=output_text, structured=structured,
+            usage=providers.Usage(input_tokens=500, output_tokens=200), stop_reason="end_turn",
+        )
+
+
+def _identity_reply(**overrides) -> dict:
+    base = {
+        "identity": "都會生活感，人物二十到三十五歲，配色暖米大地色，情緒放鬆自在。",
+        "fit_looks": ["soft_lifestyle", "documentary", "clean_bright"],
+        "excluded_looks": [], "reason": "依品牌事實推導。",
+    }
+    base.update(overrides)
+    return base
 
 
 class _WorkbenchTestBase(unittest.TestCase):
@@ -149,122 +220,6 @@ class BriefCoordinatesTextTest(unittest.TestCase):
         self.assertNotIn("既有座標", text)
 
 
-# -- 票 F01-T03-I01：方法論＋部門任務檔的圖片提示詞形狀，讀檔即可，不用 DB ---------------
-
-# Fixed text 1（issue 原文）：圖上文字與數字規則，逐字在兩份檔各出現一次。
-_RULE_BLOCK_LINES = (
-    "1. 工作單上的「可用的大標（可用可不用）」只是參考：可以沿用、改寫或不用；"
-    "沒有這一行時，回覆照樣完整。",
-    "2. 大標、副標與每張圖的圖上文字，都是為這張圖新寫的文案；可用字句不是用字清單，"
-    "不限制怎麼寫。唯一的限制是第 3 條。",
-    "3. 圖上的數字與事實（價格、折扣、規格、認證）必須逐字出現在可用字句或品牌上下文裡，"
-    "兩處都找不到的數字不上圖；工作單沒有可用字句這一行時，品牌上下文裡逐字出現的數字"
-    "照樣可用。",
-    "4. 回傳的大標、副標與圖上文字不加「」，外殼組提示詞時會加上。",
-)
-
-# Fixed text 2（issue 原文）：模板檔的開場段。
-_TEMPLATE_INTRO = (
-    "外殼組出每一則提示詞，模型只回欄位。模式看工單來源：檔期派工的工單走變體模式"
-    "（先 ① 再 ②），手動開的工單走探索模式（先 ③ 再 ②）；沒有內容的行整行不出現。"
-)
-
-# 三個提示詞骨架的每一行（issue「Done」段落逐字給的 fenced block）。
-_SKELETON_LINES = (
-    "【風格】<style_block>",
-    "【商品】<商品句>",
-    "【受眾】<受眾>；痛點：<痛點>",
-    "【這則的訴求】切角：<切角>——<切角說明>；標題公式：<標題公式>——<標題公式說明>",
-    "【可用字句（逐字，不得改）】<可用字句，以／相連>",
-    "【畫面】<scene>／<person>／<subject_position>",
-    "【圖上文字】大標：「<headline>」；副標：「<subhead>」；文字純色填滿，數字獨立成行",
-    "【輸出】<格式>（<格式說明>），一張",
-    "以附上的這張圖為基底，分別生成 <N> 個完全不同風格排版與人物的圖片，主要訴求保持不變。"
-    "一次一張。",
-    "不變：訴求「<訴求句>」、可用字句「<可用字句，以／相連>」（數字逐字）、商品外型與 Logo、"
-    "<輸出句>。",
-    "可變：場景、人物、構圖、文字排版位置、配色。",
-    "【目的與對象】<目的與對象>",
-    "【任務】分別給我 <N> 張圖，每張一個不同的說服切角，排版與風格彼此差異要大：",
-    "1. <name>｜<brief>｜圖上文字：「<on_image_line>」",
-    "<N>. <name>｜<brief>｜圖上文字：「<on_image_line>」",
-    "【圖上文字】每張圖只出現它自己那一行字；文字純色填滿，數字獨立成行",
-)
-
-# Fixed text 3（issue 原文）：image_prompt.md 的「## 回覆」段，逐字比對。
-_REPLY_SECTION = "\n".join((
-    "## 回覆——依工單的模式只回下面其中一個物件，物件前後不加任何文字或符號",
-    "",
-    "變體模式時，整段回覆就是這個形狀的物件：",
-    "",
-    "{",
-    '  "hero": {',
-    '    "scene": "……一句話的場景……",',
-    '    "person": "……照受眾座標寫：是誰、在做什麼、露不露臉……",',
-    '    "subject_position": "……商品或人物的位置、畫面佔比、鏡位、留白……",',
-    '    "headline": "……這張圖的大標……",',
-    '    "subhead": "……這張圖的副標……"',
-    "  },",
-    '  "warnings": []',
-    "}",
-    "",
-    "沒有副標時，subhead 填 JSON 的 null。",
-    "",
-    "探索模式時，整段回覆就是這個形狀的物件，angles 的項數等於工單的角度數：",
-    "",
-    "{",
-    '  "angles": [',
-    '    {"name": "……creative-matrix.md 第一節的一個切角……", "brief": '
-    '"……一句話的場景與排版……", "on_image_line": "……這張圖上唯一的一行字……"},',
-    '    {"name": "……另一個切角……", "brief": "……排版和上一張差很多……", '
-    '"on_image_line": "……這張圖上唯一的一行字……"}',
-    "  ],",
-    '  "warnings": []',
-    "}",
-))
-
-
-class ImagePromptMethodologyShapeTest(unittest.TestCase):
-    def test_image_prompt_methodology_shapes(self):
-        template_text = TEMPLATE_PATH.read_text(encoding="utf-8")
-        department_text = DEPARTMENT_PATH.read_text(encoding="utf-8")
-
-        for line in _SKELETON_LINES:
-            self.assertIn(line, template_text)
-
-        for line in _RULE_BLOCK_LINES:
-            self.assertEqual(template_text.count(line), 1, line)
-            self.assertEqual(department_text.count(line), 1, line)
-
-        self.assertIn(_TEMPLATE_INTRO, template_text)
-        intro_zone = template_text.split("# 圖片提示詞模板", 1)[1].split("## 1.", 1)[0]
-        self.assertNotIn("座標", intro_zone)
-
-        self.assertIn("來源:", template_text)
-        self.assertIn("最後查證日: 2026-09-10", template_text)
-        for forbidden in (
-            "来源", "逐字取自", "200～250", "固定段", "禁止：", "visual_tone",
-            "視覺調性", "视觉调性", "【角度數量】", "有節點座標",
-        ):
-            self.assertNotIn(forbidden, template_text, forbidden)
-
-        self.assertIn("模式：變體模式", department_text)
-        self.assertIn("模式：探索模式；角度數：", department_text)
-        self.assertIn("可用的大標（可用可不用）", department_text)
-        for forbidden in (
-            "附上的標題", "逐字取自", "visual_tone", "視覺調性", "视觉调性", "用「」包",
-        ):
-            self.assertNotIn(forbidden, department_text, forbidden)
-        pre_deliverable = department_text.split("## 你拿到什麼", 1)[0]
-        self.assertNotIn("座標", pre_deliverable)
-
-        self.assertEqual(department_text.count("## 回覆"), 1)
-        reply_zone = "## 回覆" + department_text.split("## 回覆", 1)[1]
-        self.assertEqual(reply_zone.strip(), _REPLY_SECTION.strip())
-
-        self.assertEqual(department_text.count("```"), 1)
-
-
 # -- 案例 1：手動 copy 工單，走完整條 enqueue -> worker -> 一列 workbench_output --------
 
 class ManualCopyBriefTest(_WorkbenchTestBase):
@@ -312,69 +267,48 @@ class ProseWrappedReplyTest(_WorkbenchTestBase):
         self.assertEqual(self._outputs(brief_id, "copy"), [])
 
 
-# -- 案例 3：image_prompt 修正輪與渲染的完整跑一次（票 F01-T03-I02 的新形狀由
-# `DispatchedImagePromptRunTest` 與 `test_workbench_image_prompt.py` 覆蓋）；本檔留下的
-# 案例 4 換成新的 exploration 模式回覆形狀，驗證回合數／採用邏輯不受形狀變更影響。
-
-# -- 案例 4：第二輪寫 generation_round=2；採用第一輪只標到那一列；adopted_output() 讀回 ---
-
-def _exploration_reply(*angle_names: str) -> str:
-    return json.dumps({
-        "angles": [
-            {"name": name, "brief": f"{name} 場景", "on_image_line": f"{name}文案"}
-            for name in angle_names
-        ],
-        "warnings": [],
-    }, ensure_ascii=False)
-
+# -- 案例 3／4（F07-I07 重寫）：一輪寫 10 列；第二輪 identity 讀快取不再問模型；採用其中
+# 一列，`adopted_output()` 讀回那一列，其餘列不受影響 --------------------------------------
 
 class ImagePromptRoundsAndAdoptionTest(_WorkbenchTestBase):
-    def test_second_round_and_single_row_adoption(self):
-        # 同上一個案例：`image_prompt_count` 是 `"image_prompt"` 在 `parts` 裡時的必填欄。
-        # 預設 `source_kind="manual"` -> 探索模式，`angles` 項數等於 count。
-        brief_id = self._submit(
-            request={"parts": ["image_prompt"], "image_prompt_count": 2},
-        )
-        reply = _exploration_reply("省時", "健康")
+    def test_second_round_reuses_identity_and_one_row_can_be_adopted(self):
+        brief_id = self._submit(request={"parts": ["image_prompt"]})
 
-        workbench_jobs.PROVIDER = _fake(reply)
+        workbench_jobs.PROVIDER = _ImageRoundProvider(identity=_identity_reply())
         self._run_worker()
         rows = self._outputs(brief_id, "image_prompt")
-        self.assertEqual([r["generation_round"] for r in rows], [1])
-        round1_id = rows[0]["id"]
+        self.assertEqual(len(rows), 10)
+        self.assertTrue(all(r["generation_round"] == 1 for r in rows))
+        round1_row_id = rows[0]["id"]
 
-        # 第二輪：票 03 之後真的會做的「重新產出」——同一把 lock 已經處理完（狀態不再是
-        # todo），background 契約的唯一索引只蓋 status='todo'，可以再排一次。
+        # 第二輪：同一把 lock 已經處理完，可以再排一次。
         background_module.enqueue(
             "background.workbench_generate", org_id=self.org_id,
             lock=f"workbench:{brief_id}:image_prompt",
-            brand_id=self.brand_id, brief_id=brief_id, part="image_prompt", count=2,
+            brand_id=self.brand_id, brief_id=brief_id, part="image_prompt", count=None,
         )
-        workbench_jobs.PROVIDER = _fake(reply)
+        round2_provider = _ImageRoundProvider(identity=_identity_reply())
+        workbench_jobs.PROVIDER = round2_provider
         self._run_worker()
         rows = self._outputs(brief_id, "image_prompt")
-        self.assertEqual([r["generation_round"] for r in rows], [1, 2])
-        round2_id = rows[1]["id"]
+        self.assertEqual(len(rows), 20)
+        self.assertEqual(sorted({r["generation_round"] for r in rows}), [1, 2])
+        # Decision 20：一個 (brand, knowledge_version) 只推導一次——第二輪的這顆 provider
+        # 完全沒被問過視覺識別，代表 `ensure_identity()` 讀的是快取。
+        self.assertFalse(any("品牌視覺總監" in c for c in round2_provider.calls))
 
-        # 還沒有人採用：回最新一輪（round 2）。
         before = workbench_module.adopted_output(
-            web.conn, self.org_id, self.brand_id, brief_id, "image_prompt"
+            web.conn, self.org_id, self.brand_id, brief_id, "image_prompt",
         )
-        self.assertEqual(before["id"], round2_id)
         self.assertFalse(before["is_adopted"])
 
-        adopted = workbench_repo.adopt_output(web.conn, self.org_id, self.brand_id, round1_id)
+        adopted = workbench_repo.adopt_output(web.conn, self.org_id, self.brand_id, round1_row_id)
         self.assertIsNotNone(adopted["adopted_at"])
 
-        # round 2 本身沒被動過。
-        rows_after = self._outputs(brief_id, "image_prompt")
-        round2_row = next(r for r in rows_after if r["id"] == round2_id)
-        self.assertIsNone(round2_row["adopted_at"])
-
         after = workbench_module.adopted_output(
-            web.conn, self.org_id, self.brand_id, brief_id, "image_prompt"
+            web.conn, self.org_id, self.brand_id, brief_id, "image_prompt",
         )
-        self.assertEqual(after["id"], round1_id)
+        self.assertEqual(after["id"], round1_row_id)
         self.assertTrue(after["is_adopted"])
 
 
@@ -618,36 +552,28 @@ class CopySummaryReadsIndexAlignedListsFromSetsTest(unittest.TestCase):
 # 也能跑完整條 submit -> worker -> 一列 workbench_output，寫出變體模式的 hero／variant 渲染。
 
 class DispatchedImagePromptRunTest(_WorkbenchTestBase):
-    def test_image_prompt_run_without_adopted_copy_renders_hero_and_variant(self):
+    def test_dispatched_set_without_adopted_copy_still_writes_ten_rows(self):
+        """F07-I07：`source_kind` 不再決定變體／探索模式（那個二分法整個退休）——一張排程
+        派工的工單，就算還沒有任何已採用的 copy，一樣正常走完整條 10 列的生成。"""
         brief_id = self._submit(
             source_kind="schedule_node",
             source_ref={"node_key": "1.1.1", "source_tree_task_id": "llm_runtime_test"},
-            request={"parts": ["image_prompt"], "image_prompt_count": 1},
+            request={"parts": ["image_prompt"]},
         )
-        reply = json.dumps({
-            "hero": {
-                "scene": "台灣公寓廚房的晨光", "person": "一位女性，居家便服，露出笑容",
-                "subject_position": "商品置中，中景，畫面留白給文字",
-                "headline": "早晨也能好好吃", "subhead": "一杯搞定忙碌早晨",
-            },
-            "warnings": [],
-        }, ensure_ascii=False)
-        workbench_jobs.PROVIDER = _fake(reply)
+        workbench_jobs.PROVIDER = _ImageRoundProvider(identity=_identity_reply())
         self._run_worker()
 
         brief = workbench_repo.get_brief(web.conn, self.org_id, self.brand_id, brief_id)
         self.assertEqual(brief["status"], "done")
 
         rows = self._outputs(brief_id, "image_prompt")
-        self.assertEqual(len(rows), 1)
+        self.assertEqual(len(rows), 10)
         body = rows[0]["body_json"]
-        self.assertEqual(body["mode"], "variant")
-        rendered = body["rendered"]
-        self.assertNotIn("exploration", rendered)
-        self.assertIsInstance(rendered["hero"], str)
-        self.assertTrue(rendered["hero"])
-        self.assertIsInstance(rendered["variant"], str)
-        self.assertTrue(rendered["variant"])
+        self.assertIsNone(body["cards"])
+        self.assertIn("品牌視覺規範：", body["text"])
+        self.assertIn("風格規範：", body["text"])
+        validation = body["validation"]
+        self.assertTrue(all(line.startswith("✅") for line in validation), validation)
 
 
 if __name__ == "__main__":

@@ -1,48 +1,70 @@
-"""app/tests/test_workbench_product_line.py — F05-I02: sell ways have no photo of their own,
-they borrow the mother product's (ARCHITECTURE.md §8 item 1: knowledge lives on the mother
-product). This file is workbench code (owns `app/tests/test_workbench*.py`); it obeys
-`workbench.may_depend_on == []`.
+"""app/tests/test_workbench_product_line.py — F07-I07 (ARCHITECTURE.md §5.7 Decision 13):
+`repository.reference_line()` — the pure, DB-free rule for the worksheet's `商品參考` line.
+No DB, no model call.
 """
 
 import unittest
 
-import app.shared.web as web
-from app.brand_intelligence import repository as bi_repo
-from app.core import db as coredb
-from app.workbench import jobs as workbench_jobs
-
-ACTOR = "測試員"
+from app.workbench import repository
 
 
-class SellWayBorrowsMotherPhotoTest(unittest.TestCase):
-    def setUp(self):
-        self.brand = bi_repo.create_brand(
-            web.conn, org_id=coredb.DEV_ORG_ID, name="測試品牌：賣法商品照", client_name=None,
-            actor=ACTOR,
-        )
-        self.mother = bi_repo.create_product(
-            web.conn, self.brand["id"], name="薑黃錠", actor=ACTOR,
-        )
-        self.sell_way = bi_repo.create_product(
-            web.conn, self.brand["id"], name="薑黃錠 · 單瓶", actor=ACTOR,
-            parent_id=self.mother["id"],
-        )
+def _asset(product_id, title=None, asset_kind="product_photo"):
+    return {"product_id": product_id, "title": title, "asset_kind": asset_kind}
 
-    def test_sell_way_reports_has_photo_when_mother_has_one(self):
-        bi_repo.create_official_asset(
-            web.conn, self.brand["id"], actor=ACTOR, asset_kind="product_photo",
-            storage_key="test/mother.jpg", product_id=self.mother["id"],
-        )
-        line = workbench_jobs._product_line(
-            web.conn, self.brand["id"], self.sell_way["id"], self.sell_way,
-        )
-        self.assertIn("見參考商品照", line)
 
-    def test_sell_way_has_no_photo_line_when_mother_has_none(self):
-        line = workbench_jobs._product_line(
-            web.conn, self.brand["id"], self.sell_way["id"], self.sell_way,
-        )
-        self.assertEqual(line, workbench_jobs.NO_PHOTO_LINE)
+class ReferenceLineTest(unittest.TestCase):
+    def test_own_product_photo_with_title_wins(self):
+        assets = [
+            _asset("prd_brand", title="品牌形象照"),
+            _asset("prd_1", title="這顆商品的照片"),
+        ]
+        line = repository.reference_line(assets, "prd_1", "晨光咖啡豆")
+        self.assertEqual(line, "商品參考：這顆商品的照片（有參考照）")
+
+    def test_falls_back_to_brand_level_photo_when_product_has_none(self):
+        assets = [_asset(None, title="品牌形象照"), _asset("prd_other", title="別顆商品")]
+        line = repository.reference_line(assets, "prd_1", "晨光咖啡豆")
+        self.assertEqual(line, "商品參考：品牌形象照（有參考照）")
+
+    def test_no_photo_at_all(self):
+        none = repository.NO_REFERENCE_LINE
+        self.assertEqual(repository.reference_line([], "prd_1", "晨光咖啡豆"), none)
+        self.assertEqual(repository.reference_line([], None, None), none)
+
+    def test_missing_title_falls_back_to_product_name(self):
+        assets = [_asset("prd_1", title=None)]
+        line = repository.reference_line(assets, "prd_1", "晨光咖啡豆")
+        self.assertEqual(line, "商品參考：晨光咖啡豆（有參考照）")
+
+    def test_missing_title_and_product_name_falls_back_to_generic_word(self):
+        assets = [_asset("prd_1", title=None)]
+        line = repository.reference_line(assets, "prd_1", None)
+        self.assertEqual(line, "商品參考：參考照（有參考照）")
+
+    def test_up_to_three_titles_newest_first_order_preserved(self):
+        assets = [_asset("prd_1", title=f"照片{i}") for i in range(1, 6)]
+        line = repository.reference_line(assets, "prd_1", None)
+        self.assertEqual(line, "商品參考：照片1、照片2、照片3（有參考照）")
+
+    def test_non_product_photo_assets_are_ignored(self):
+        assets = [_asset("prd_1", title="Logo", asset_kind="logo")]
+        line = repository.reference_line(assets, "prd_1", None)
+        self.assertEqual(line, repository.NO_REFERENCE_LINE)
+
+    def test_no_knowledge_product_id_goes_straight_to_brand_level(self):
+        assets = [_asset(None, title="品牌形象照")]
+        line = repository.reference_line(assets, None, None)
+        self.assertEqual(line, "商品參考：品牌形象照（有參考照）")
+
+    def test_four_photos_lists_three(self):
+        assets = [_asset("prd_1", title=f"照片{i}") for i in range(1, 5)]
+        line = repository.reference_line(assets, "prd_1", None)
+        self.assertEqual(line, "商品參考：照片1、照片2、照片3（有參考照）")
+
+    def test_product_level_photo_wins_over_brand_level(self):
+        assets = [_asset(None, title="品牌形象照"), _asset("prd_1", title="商品照")]
+        line = repository.reference_line(assets, "prd_1", None)
+        self.assertEqual(line, "商品參考：商品照（有參考照）")
 
 
 if __name__ == "__main__":

@@ -17,15 +17,23 @@ caller that gets a fresh `background.app()` (each test module) must call this ag
 """
 
 import json
+import random
 import re
+from datetime import UTC, datetime
 
 from app.background import app as background_app
 from app.brand_intelligence import repository as bi_repo
 from app.core.db import APP_DIR, connection
 from app.llm import context_compiler, gateway, methodology, providers
-from app.workbench import prompts, repository, validate
+from app.workbench import identity as identity_mod
+from app.workbench import looks as looks_mod
+from app.workbench import prompts, repository, validate, visual
 
 DEPARTMENTS_DIR = APP_DIR / "departments" / "workbench"
+
+# F07-I07（Decision 12）：這一輪的手法清單順序由程式洗牌——測試把它換成 `random.Random(0)`
+# 拿到可重現的順序。獨立的 `Random` 實例，不動全域 `random` 模組的狀態。
+RNG = random.Random()
 
 # 唯一的供應商實例，比照 app/schedule/jobs.py：測試用
 # `mock.patch.object(jobs, "PROVIDER", FakeProvider(...))` 換掉。
@@ -36,14 +44,11 @@ PROVIDER = providers.AnthropicProvider()
 # humanizer-zh-tw.md 去 AI 味）。
 _METHODOLOGY_LABELS = {
     "copy": "素材工作檯文案",
-    "image_prompt": "素材工作檯圖片提示詞",
     "video_script": "素材工作檯影片腳本",
     "free": "素材工作檯自由生成",
 }
 
 _PATH_RE = re.compile(r"^([a-z_]+)(?:\[(\d+)\])?(?:\.([a-z_]+))?$")
-
-NO_PHOTO_LINE = "無參考商品照，畫面以情境與人物為主，不畫商品特寫。"
 
 
 def _compile_brand_context(conn, brand_id: str, product_ids: list) -> tuple:
@@ -172,69 +177,15 @@ def _apply_replacements(data: dict, replacements) -> None:
             data[key] = value
 
 
-def _validate(part: str, data, *, vocabulary: dict, count, copy_length: str = "short",
-              mode: str | None = None, quotable_text: str = "") -> tuple:
-    """回傳 `(結果清單, 渲染清單或 None)`——`image_prompt` 的渲染不從這裡出來，見
-    `_render_image_prompt()`；這裡第二個值一律 `None`。"""
+def _validate(part: str, data, *, vocabulary: dict, count, copy_length: str = "short") -> tuple:
+    """回傳 `(結果清單, 渲染清單或 None)`——`image_prompt` 不經過這裡，見
+    `_run_image_prompt()`：它的檢查（`validate.check_image_reply`）要吃 `plan`／`allowed`
+    這些跟這支函式其餘 part 完全無關的東西，混進同一個介面只會逼其他呼叫端也傳這些參數。"""
     if part == "copy":
         return validate.check_copy(data, vocabulary, copy_length), None
-    if part == "image_prompt":
-        assert mode is not None  # 呼叫端（`_run`）永遠帶 mode，這裡只是讓型別檢查放行
-        return (
-            validate.check_image_prompt(data, mode=mode, count=count, quotable_text=quotable_text),
-            None,
-        )
     if part == "video_script":
         return validate.check_video_script(data, count), None
     return validate.check_free(data), None  # 'free'
-
-
-def _product_line(conn, brand_id: str, product_id: str | None, product: dict | None) -> str:
-    """『這則圖片提示詞【商品】那一行寫什麼』的唯一判斷規則（票 F01-T03-I02）：這張工單
-    有 `product_id`，且 `bi_repo.list_official_assets()` 至少有一列 `asset_kind ==
-    "product_photo"` 且 `product_id` 跟這張工單的相同——兩個條件都成立才敢說「有參考商品
-    照」，其他情況（沒有 product_id、或有 product_id 但找不到那張商品的產品照）一律回
-    `NO_PHOTO_LINE`，不去猜模型看不到的東西。這個讀取不包 try/except：同一條連線
-    （`app/core/db.py` `connection()`）上一個失敗的敘述會讓整條交易中止，吞掉例外只會
-    藏住第一個真正的原因，讓後面的敘述跟著失敗卻看不出來是為什麼。"""
-    if product_id is None:
-        return NO_PHOTO_LINE
-    # 賣法沒有自己的商品照，往上找母產品（ARCHITECTURE.md §8 第 1 條：知識掛母產品）。
-    knowledge_id = bi_repo.knowledge_product_id(conn, brand_id, product_id)
-    assets = bi_repo.list_official_assets(conn, brand_id)
-    has_photo = any(
-        row["asset_kind"] == "product_photo" and row["product_id"] == knowledge_id
-        for row in assets
-    )
-    if not has_photo:
-        return NO_PHOTO_LINE
-    name = (product or {}).get("name") or ""
-    return f"見參考商品照：{name}。不重述外觀。"
-
-
-def _vocabulary_phrase(rows: list, dimension: str, label: str) -> str:
-    """`<label>——<situation>`；那個 label 在詞彙表裡沒有 `situation` 說明時只回 label
-    本身。用在【這則的訴求】與【輸出】兩行，跟 `prompts.coordinate_vocabulary_text` 同一條
-    「破折號後面是說明」規則。"""
-    for row in rows:
-        if row["dimension"] == dimension and row["label"] == label:
-            situation = (row["attributes"] or {}).get("situation") or ""
-            return f"{label}——{situation}" if situation else label
-    return label
-
-
-def _output_line(rows: list, format_label: str) -> str:
-    """【輸出】那一行，跟隨 ARCHITECTURE.md §5.7／image-prompt-template.md §2 的形狀
-    `<format label>（<format 說明>），一張`，不是 `_vocabulary_phrase` 用的破折號寫法。"""
-    if not format_label:
-        return "一張"
-    for row in rows:
-        if row["dimension"] == "format" and row["label"] == format_label:
-            situation = (row["attributes"] or {}).get("situation") or ""
-            if situation:
-                return f"{format_label}（{situation}），一張"
-            break
-    return f"{format_label}，一張"
 
 
 def _fix_call(conn, brand_id: str, context, task_type: str, failing: list, *,
@@ -261,34 +212,460 @@ def _fix_call(conn, brand_id: str, context, task_type: str, failing: list, *,
     )
 
 
-def _render_image_prompt(data: dict, *, mode: str, style_block: str, product_line: str,
-                          audience_line: str, appeal_line: str, appeal_sentence: str,
-                          quotable_lines: list, output_line: str, purpose_line: str,
-                          count: int) -> dict:
-    """`image_prompt` 的渲染只從這裡出來——`_run` 在修正輪結束後一律呼叫
-    `_render_image_prompt()`，不論驗證是否通過；沒過的項目照樣渲染，❌ 記在
-    `body_json.validation`（票 F01-T03-I02）。渲染邏輯只有一份，`prompts.render_*` 對
-    缺欄位容忍，這裡不重複實作、也不擋壞資料。"""
-    variant_prompt = prompts.render_variant_prompt(
-        count=count, appeal_sentence=appeal_sentence, quotable_lines=quotable_lines,
-        output_line=output_line if mode == "variant" else "", style_block=style_block,
+# ---------------------------------------------------------------------------
+# F07-I07（ARCHITECTURE.md §5.7-§5.10）：一輪圖片提示詞——程式先決定每一格要用哪個風格
+# （`looks.allocate()`），模型只填格子；一個 path 只出一筆結果，跟其餘 part 共用
+# `_fix_call`／`_apply_replacements`／`_original_value` 的定址規則（`items[n]`／
+# `concepts[n]`，一個索引後面可以再接一個子鍵）。
+# ---------------------------------------------------------------------------
+
+_IMAGE_COORDINATE_DIMS = ("audience", "pain", "angle", "hook", "proof", "offer")
+
+
+def _resolve_coordinate(rows: list, dimension: str, value: str | None) -> str | None:
+    """票面 bug #4：`coordinates_snapshot` 存的值可能是 `key` 也可能是舊資料留下的
+    `label`——兩個都試著比對這個品牌的詞彙表，比對到就回它的 `key`；比對不到（品牌自建的
+    座標、或一個詞彙表裡已經沒有的舊 label）原樣把 `value` 當一個不透明的 key 傳回去，讓
+    呼叫端自己決定：`visual.TASKS`／`OFFER_PERSUASION`／`PROOF_PERSUASION` 對一個不認得的
+    key 都只會回「沒有」，不會意外放寬什麼。"""
+    if not value:
+        return None
+    for row in rows:
+        if row["dimension"] == dimension and (row.get("key") == value or row["label"] == value):
+            return row.get("key")
+    return value
+
+
+def _coordinate_label(rows: list, dimension: str, value: str | None) -> tuple[str | None, str]:
+    """回 `(label, situation)`——`value` 解不出詞彙表列時，`label` 就是 `value` 本身、
+    `situation` 是空字串（工作單照樣看得懂一個品牌自建的座標值，只是沒有補充說明）。"""
+    if not value:
+        return None, ""
+    for row in rows:
+        if row["dimension"] == dimension and (row.get("key") == value or row["label"] == value):
+            return row["label"], (row["attributes"] or {}).get("situation") or ""
+    return value, ""
+
+
+def _image_task_context(conn, org_id: str, brand_id: str, brand: dict, brief: dict) -> dict:
+    """組出這一輪要問模型「這張圖的任務」需要的一切：受眾解析、允許的 subject_role／
+    persuasion，以及沒有受眾（或受眾解不出任務表）時整張任務表要怎麼呈現（Decision 11）。"""
+    coordinate_rows = repository.list_coordinate_vocabulary(conn, org_id, brand_id)
+    snapshot = brief.get("coordinates_snapshot_json") or {}
+    audience_raw = snapshot.get("audience")
+    audience_key = _resolve_coordinate(coordinate_rows, "audience", audience_raw)
+    offer_key = _resolve_coordinate(coordinate_rows, "offer", snapshot.get("offer"))
+    proof_key = _resolve_coordinate(coordinate_rows, "proof", snapshot.get("proof"))
+    task_row = visual.task_row(audience_key, brand.get("conversion_goal"))
+
+    if task_row is not None:
+        allowed: dict | None = {
+            "subject_role": task_row["subject_roles"],
+            "persuasion": visual.allowed_persuasion(task_row["key"], offer_key, proof_key),
+        }
+        task_rows_all: dict = {}
+        round_audience_key = audience_key
+        learnings_audience_key = audience_key
+    else:
+        allowed = None
+        task_rows_all = visual.all_task_rows(brand.get("conversion_goal"), offer_key, proof_key)
+        round_audience_key = audience_raw
+        learnings_audience_key = None
+
+    audience_label, _situation = _coordinate_label(coordinate_rows, "audience", audience_raw)
+    angle_label, _s = _coordinate_label(coordinate_rows, "angle", snapshot.get("angle"))
+    hook_label, _s = _coordinate_label(coordinate_rows, "hook", snapshot.get("hook"))
+    proof_label, _s = _coordinate_label(coordinate_rows, "proof", snapshot.get("proof"))
+    leak_terms = visual.leak_terms(
+        audience_label=audience_label, angle_label=angle_label, hook_label=hook_label,
+        proof_none_label=proof_label if proof_key == "none" else None,
+        task_label=task_row["label"] if task_row is not None else None,
     )
-    if mode == "variant":
-        hero_raw = data.get("hero")
-        hero: dict = hero_raw if isinstance(hero_raw, dict) else {}
-        hero_prompt = prompts.render_hero_prompt(
-            hero, style_block=style_block, product_line=product_line,
-            audience_line=audience_line, appeal_line=appeal_line,
-            quotable_lines=quotable_lines, output_line=output_line,
+    return {
+        "coordinate_rows": coordinate_rows, "snapshot": snapshot, "task_row": task_row,
+        "allowed": allowed, "task_rows_all": task_rows_all,
+        "round_audience_key": round_audience_key, "learnings_audience_key": learnings_audience_key,
+        "leak_terms": leak_terms,
+    }
+
+
+def _image_coordinate_lines(coordinate_rows: list, snapshot: dict) -> list:
+    lines = []
+    for dim in _IMAGE_COORDINATE_DIMS:
+        raw = snapshot.get(dim)
+        if not raw:
+            continue
+        label, situation = _coordinate_label(coordinate_rows, dim, raw)
+        text = f"{label}（{situation}）" if situation else str(label)
+        lines.append(f"- {prompts.IMAGE_COORDINATE_LABELS[dim]}：{text}")
+    return lines
+
+
+def _image_task_lines(ctx: dict) -> tuple[str, list]:
+    task_row = ctx["task_row"]
+    if task_row is not None:
+        allowed = ctx["allowed"]
+        subject_text = "／".join(task_row["subject_roles"])
+        persuasion_text = "／".join(allowed["persuasion"])
+        task_line = (
+            f"這張圖的任務：{task_row['label']}——{task_row['how']}"
+            f"（subject_role 只能 {subject_text}；persuasion 只能 {persuasion_text}）"
         )
-        return {"hero": hero_prompt, "variant": variant_prompt}
-    angles_raw = data.get("angles")
-    angles: list = angles_raw if isinstance(angles_raw, list) else []
-    exploration_prompt = prompts.render_exploration_prompt(
-        angles, style_block=style_block, product_line=product_line,
-        purpose_line=purpose_line, quotable_lines=quotable_lines, count=count,
+        return task_line, []
+    task_line = "這張圖的任務：先從下表選一個，回在 image_task"
+    rows_lines = [
+        f"- {key}：{row['label']}——{row['how']}"
+        f"（subject_role 只能 {'／'.join(row['subject_role'])}；persuasion 只能 {'／'.join(row['persuasion'])}）"  # noqa: E501
+        for key, row in ctx["task_rows_all"].items()
+    ]
+    return task_line, rows_lines
+
+
+def _image_tool_schema(shape: str, plan: list, ctx: dict) -> dict:
+    plan_looks = list(dict.fromkeys(look for look, _slot in plan))
+    if ctx["allowed"] is not None:
+        subject_choices = ctx["allowed"]["subject_role"]
+        persuasion_choices = ctx["allowed"]["persuasion"]
+    else:
+        rows = ctx["task_rows_all"].values()
+        subject_choices = sorted({r for row in rows for r in row["subject_role"]})
+        persuasion_choices = sorted({p for row in rows for p in row["persuasion"]})
+
+    item_props = {
+        "title": {"type": "string"},
+        "device": {"type": "string", "enum": list(visual.DEVICES)},
+        "layout": {"type": "string", "enum": list(visual.LAYOUTS)},
+        "look": {"type": "string", "enum": plan_looks},
+        "subject_role": {"type": "string", "enum": subject_choices},
+        "persuasion": {"type": "string", "enum": persuasion_choices},
+        "headline": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 2},
+        "prompt": {"type": "string"},
+    }
+    if shape == "single":
+        item_schema = {
+            "type": "object", "properties": item_props, "required": list(item_props),
+            "additionalProperties": False,
+        }
+        root_props = {
+            "items": {
+                "type": "array", "items": item_schema,
+                "minItems": visual.IMAGE_PROMPT_COUNT, "maxItems": visual.IMAGE_PROMPT_COUNT,
+            },
+            "warnings": {"type": "array", "items": {"type": "string"}},
+        }
+        root_required = ["items", "warnings"]
+    else:
+        card_schema = {
+            "type": "object",
+            "properties": {"headline": item_props["headline"], "prompt": {"type": "string"}},
+            "required": ["headline", "prompt"], "additionalProperties": False,
+        }
+        concept_props = {k: v for k, v in item_props.items() if k not in ("headline", "prompt")}
+        concept_props["cards"] = {
+            "type": "array", "items": card_schema, "minItems": 5, "maxItems": 5,
+        }
+        concept_schema = {
+            "type": "object", "properties": concept_props, "required": list(concept_props),
+            "additionalProperties": False,
+        }
+        root_props = {
+            "concepts": {"type": "array", "items": concept_schema, "minItems": 2, "maxItems": 2},
+            "warnings": {"type": "array", "items": {"type": "string"}},
+        }
+        root_required = ["concepts", "warnings"]
+    if ctx["allowed"] is None:
+        root_props["image_task"] = {"type": "string", "enum": list(ctx["task_rows_all"])}
+        root_required = ["image_task", *root_required]
+    return {
+        "name": "workbench_image_prompt",
+        "description": "提交這一輪的圖片提示詞，look 一定要用工作單分配的那一個。",
+        "input_schema": {
+            "type": "object", "properties": root_props, "required": root_required,
+            "additionalProperties": False,
+        },
+    }
+
+
+_IMAGE_ITEM_PATH_RE = re.compile(r"^(items|concepts)\[(\d+)\]")
+
+
+def _image_failing_items(results: list) -> dict:
+    """把逐欄位的失敗 path（`items[3].look`、`concepts[1].cards[2].headline`⋯）收斂成
+    「整項重問」（`items[3]`／`concepts[1]`），一項可能對到好幾條失敗訊息全部列出；沒有索引
+    的整輪失敗（`items_layouts`、`image_task` 等）不收在這裡——那些是 ❌ 留著，不重問
+    （票面 Done：「a round-level failure stays ❌」）。"""
+    grouped: dict = {}
+    for r in results:
+        if r["ok"]:
+            continue
+        match = _IMAGE_ITEM_PATH_RE.match(r["path"])
+        if not match:
+            continue
+        key = f"{match.group(1)}[{match.group(2)}]"
+        grouped.setdefault(key, []).append(f"{r['path']}：{r['message']}")
+    return grouped
+
+
+def _image_shape_line(path: str, plan: list, ctx: dict) -> str:
+    match = re.match(r"^(items|concepts)\[(\d+)\]$", path)
+    assert match is not None  # 呼叫端只會傳 `_image_failing_items()` 產生的 path
+    key, index = match.group(1), int(match.group(2))
+    look = plan[index - 1][0] if index - 1 <= len(plan) - 1 else None
+    if key == "items":
+        keys_text = "title、headline、device、layout、look、subject_role、persuasion、prompt"
+    else:
+        keys_text = (
+            "title、device、layout、look、subject_role、persuasion、"
+            "cards（5 張，各自 headline／prompt）"
+        )
+    if ctx["allowed"] is not None:
+        allow_text = (
+            f"subject_role∈{ctx['allowed']['subject_role']}；persuasion∈{ctx['allowed']['persuasion']}"
+        )
+    else:
+        allow_text = "subject_role／persuasion 依這一輪已經選定的 image_task 那一列"
+    return f"回一個物件，鍵：{keys_text}；look 固定回 {look}；{allow_text}"
+
+
+def _image_fix_call(conn, brand_id: str, context, worksheet: str, data: dict, grouped: dict,
+                     plan: list, ctx: dict) -> dict:
+    fix_text = (DEPARTMENTS_DIR / "fix.md").read_text(encoding="utf-8")
+    blocks = []
+    for path, messages in grouped.items():
+        original = _original_value(data, path)
+        blocks.append("\n".join([
+            f"- path: {path}",
+            f"  原值：{json.dumps(original, ensure_ascii=False)}",
+            f"  問題：{'；'.join(messages)}",
+            f"  形狀：{_image_shape_line(path, plan, ctx)}",
+        ]))
+    prompt = "\n\n".join([
+        fix_text, worksheet, "## 這些欄位沒有通過驗證，只重新回答這些", "\n\n".join(blocks),
+    ])
+    return gateway.run_task(
+        conn, PROVIDER, brand_id=brand_id, task_type="workbench_image_prompt",
+        prompt_template_id="workbench_image_prompt_fix", prompt_template_version="v1",
+        system=None, messages=[{"role": "user", "content": prompt}], context=context,
+        options=gateway.TaskOptions(max_tokens=16000, timeout_s=480.0),
     )
-    return {"exploration": exploration_prompt, "variant": variant_prompt}
+
+
+def _image_tail(identity: dict, look: str | None) -> str:
+    texture = looks_mod.look_texture(look, identity["brand_spec_text"]) if look else ""
+    return f"品牌視覺規範：{identity['identity_text']}\n風格規範：{texture}"
+
+
+def _fingerprint(*, image_task_key, image_task_label, device: str | None, layout: str | None,
+                  look: str | None, subject_role: str | None, persuasion: str | None,
+                  slot: str | None) -> dict:
+    return {
+        "image_task": {"key": image_task_key, "label": image_task_label},
+        "device": {"key": device, "label": visual.DEVICES.get(device or "", device)},
+        "layout": {"key": layout, "label": visual.LAYOUTS.get(layout or "", layout)},
+        "look": {"key": look, "label": looks_mod.look_label(look) if look else None},
+        "subject_role": {
+            "key": subject_role,
+            "label": visual.SUBJECT_ROLES.get(subject_role or "", subject_role),
+        },
+        "persuasion": {
+            "key": persuasion, "label": visual.PERSUASIONS.get(persuasion or "", persuasion),
+        },
+        "slot": {"key": slot, "label": visual.SLOTS.get(slot or "", slot)},
+    }
+
+
+def _run_image_prompt(conn, org_id: str, brand_id: str, brief_id: str, brief: dict,
+                       product: dict | None, product_id: str | None,
+                       department_text: str, methodology_text: str, brand_context: str,
+                       knowledge_item_ids: list, brand_version: int) -> None:
+    brand = bi_repo.get_brand(conn, brand_id)
+    assert brand is not None
+    request = brief.get("request_json") or {}
+
+    format_key = _resolve_coordinate(
+        repository.list_coordinate_vocabulary(conn, org_id, brand_id), "format",
+        (brief.get("coordinates_snapshot_json") or {}).get("format"),
+    )
+    shape = visual.shape_for(format_key)
+    n = visual.IMAGE_PROMPT_COUNT if shape == "single" else 2
+
+    ctx = _image_task_context(conn, org_id, brand_id, brand, brief)
+    identity = identity_mod.ensure_identity(conn, org_id, brand_id, PROVIDER)
+    today = datetime.now(UTC)
+    learn = looks_mod.visual_learnings(conn, brand_id, ctx["learnings_audience_key"], today=today)
+    history = repository.look_history(conn, org_id, brand_id, ctx["round_audience_key"])
+    alloc = looks_mod.allocate(
+        n, fit_looks=identity["fit_looks"],
+        excluded=[e["look"] for e in identity["excluded_looks"]],
+        winners=learn["winners"], history=history, rng=RNG,
+    )
+    plan = alloc["plan"]
+    round_history = repository.image_round_history(conn, org_id, brand_id)
+    recommended_index = looks_mod.recommend(
+        plan, alloc["explore_first"], rounds=round_history["rounds"],
+        explore_recommended=round_history["explore_recommended"],
+    )
+
+    knowledge_id = (
+        bi_repo.knowledge_product_id(conn, brand_id, product_id) if product_id else None
+    )
+    assets = bi_repo.list_official_assets(conn, brand_id)
+    reference = repository.reference_line(assets, knowledge_id, (product or {}).get("name"))
+
+    promotion_note = request.get("promotion_note") or ""
+    quotable_lines = [line for line in promotion_note.split("\n") if line.strip()]
+    summary = repository.get_pack_summary(conn, org_id, brand_id, brief.get("pack_id"))
+    situation = summary.get("情境") or ""
+    key_messages_raw = summary.get("重點訊息")
+    key_messages = (
+        "、".join(key_messages_raw) if isinstance(key_messages_raw, list)
+        else (key_messages_raw or "")
+    )
+    quotable_text = "\n".join([*quotable_lines, key_messages, brand_context])
+
+    devices = list(visual.DEVICES)
+    RNG.shuffle(devices)
+    task_line, task_rows_lines = _image_task_lines(ctx)
+    prior_titles = repository.previous_round_titles(
+        conn, org_id, brand_id, brief_id, "image_prompt",
+    )
+    coordinate_lines = _image_coordinate_lines(ctx["coordinate_rows"], ctx["snapshot"])
+
+    worksheet = prompts.image_worksheet(
+        shape=shape, reference_line=reference, identity_text=identity["identity_text"],
+        plan=plan, coordinate_lines=coordinate_lines,
+        task_line=task_line, task_rows_lines=task_rows_lines, device_order=devices,
+        quotable_lines=quotable_lines, situation=situation, key_messages=key_messages,
+        free_text=request.get("free_text"), prior_titles=prior_titles,
+        learning_lines=learn["lines"], learning_omitted=learn["omitted"],
+    )
+    prompt = "\n\n".join(
+        filter(None, [department_text, methodology_text, worksheet, brand_context])
+    )
+
+    context = gateway.TaskContext(
+        context_scope={"brand_id": brand_id, "brief_id": brief_id, "part": "image_prompt"},
+        knowledge_item_ids=knowledge_item_ids, brand_version=brand_version, product_version=None,
+    )
+    tool_schema = _image_tool_schema(shape, plan, ctx)
+    task_row = gateway.run_task(
+        conn, PROVIDER, brand_id=brand_id, task_type="workbench_image_prompt",
+        prompt_template_id="workbench_image_prompt", prompt_template_version="v1",
+        system=None, messages=[{"role": "user", "content": prompt}], context=context,
+        options=gateway.TaskOptions(max_tokens=16000, timeout_s=480.0, tools=[tool_schema]),
+    )
+    if task_row["status"] != "succeeded":
+        raise RuntimeError(task_row.get("error") or "生成失敗。")
+
+    data = task_row.get("structured_output_json")
+    if data is None:
+        data = validate.parse_json_only(task_row.get("rendered_output") or "")
+    if data is None:
+        raise RuntimeError("代理沒有回傳純 JSON，請重新產出一次。")
+
+    validate.trim_image_reply(data, shape)
+    task_rows_for_check = ctx["task_rows_all"] if ctx["allowed"] is None else {}
+    results = validate.check_image_reply(
+        data, shape=shape, plan=plan, allowed=ctx["allowed"], task_rows=task_rows_for_check,
+        leak_terms=ctx["leak_terms"], quotable_text=quotable_text,
+    )
+    grouped = _image_failing_items(results)
+    if grouped:
+        fix_row = _image_fix_call(conn, brand_id, context, worksheet, data, grouped, plan, ctx)
+        if fix_row["status"] == "succeeded":
+            fix_data = validate.parse_json_only(fix_row.get("rendered_output") or "")
+            if fix_data is not None:
+                _apply_replacements(data, fix_data.get("replacements"))
+        validate.trim_image_reply(data, shape)
+        results = validate.check_image_reply(
+            data, shape=shape, plan=plan, allowed=ctx["allowed"], task_rows=task_rows_for_check,
+            leak_terms=ctx["leak_terms"], quotable_text=quotable_text,
+        )
+
+    if ctx["allowed"] is not None:
+        image_task_key = ctx["task_row"]["key"]
+        image_task_label = ctx["task_row"]["label"]
+    else:
+        image_task_key = data.get("image_task")
+        image_task_label = ctx["task_rows_all"].get(image_task_key, {}).get("label", image_task_key)
+
+    round_dict = {
+        "format": format_key, "audience_key": ctx["round_audience_key"],
+        "image_task": image_task_key, "identity_id": identity["id"],
+        "identity_text": identity["identity_text"],
+        "plan": [{"look": look, "slot": slot} for look, slot in plan],
+        "look_order": {"exploit": alloc["exploit_looks"], "explore": alloc["explore_looks"]},
+        "recommended_index": recommended_index,
+        "recommended_slot": plan[recommended_index - 1][1] if plan else None,
+        "learning_ids": learn["ids"],
+    }
+    validation_lines = [
+        ("✅ " if r["ok"] else "❌ ") + f"{r['path']}：{r['message']}" for r in results
+    ]
+    warnings = data.get("warnings") if isinstance(data.get("warnings"), list) else []
+
+    bodies = []
+    if shape == "single":
+        items_raw = data.get("items")
+        items: list = items_raw if isinstance(items_raw, list) else []
+        for i in range(1, n + 1):
+            raw_item = items[i - 1] if i - 1 < len(items) else None
+            item = raw_item if isinstance(raw_item, dict) else {}
+            look, slot = plan[i - 1] if i - 1 < len(plan) else (None, None)
+            tail = _image_tail(identity, look)
+            prompt_text = item.get("prompt") or ""
+            bodies.append({
+                "title": item.get("title"), "headline": item.get("headline"),
+                "prompt": prompt_text, "text": f"{prompt_text}\n\n{tail}",
+                "fingerprint": _fingerprint(
+                    image_task_key=image_task_key, image_task_label=image_task_label,
+                    device=item.get("device"), layout=item.get("layout"), look=look,
+                    subject_role=item.get("subject_role"), persuasion=item.get("persuasion"),
+                    slot=slot,
+                ),
+                "cards": None, "round": round_dict, "validation": validation_lines,
+                "warnings": warnings,
+            })
+    else:
+        concepts_raw = data.get("concepts")
+        concepts: list = concepts_raw if isinstance(concepts_raw, list) else []
+        for c in range(1, 3):
+            raw_concept = concepts[c - 1] if c - 1 < len(concepts) else None
+            concept = raw_concept if isinstance(raw_concept, dict) else {}
+            look, slot = plan[c - 1] if c - 1 < len(plan) else (None, None)
+            tail = _image_tail(identity, look)
+            cards_value = concept.get("cards")
+            cards_raw: list = cards_value if isinstance(cards_value, list) else []
+            cards, card_texts = [], []
+            for card_raw in cards_raw:
+                card_raw = card_raw if isinstance(card_raw, dict) else {}
+                card_prompt = card_raw.get("prompt") or ""
+                card_text = f"{card_prompt}\n\n{tail}"
+                cards.append({
+                    "headline": card_raw.get("headline"), "prompt": card_prompt, "text": card_text,
+                })
+                card_texts.append(card_text)
+            first_card = cards[0] if cards else {}
+            bodies.append({
+                "title": concept.get("title"), "headline": first_card.get("headline"),
+                "prompt": first_card.get("prompt"), "text": "\n\n".join(card_texts),
+                "fingerprint": _fingerprint(
+                    image_task_key=image_task_key, image_task_label=image_task_label,
+                    device=concept.get("device"), layout=concept.get("layout"), look=look,
+                    subject_role=concept.get("subject_role"), persuasion=concept.get("persuasion"),
+                    slot=slot,
+                ),
+                "cards": cards, "round": round_dict, "validation": validation_lines,
+                "warnings": warnings,
+            })
+
+    round_no = repository.next_round(conn, org_id, brand_id, brief_id, "image_prompt")
+    repository.write_output(
+        conn, org_id=org_id, brand_id=brand_id, brief_id=brief_id, part="image_prompt",
+        generation_round=round_no, body_json=bodies, coordinates_json=None,
+        llm_task_id=task_row["id"],
+    )
+    repository.mark_brief_status(conn, org_id, brand_id, brief_id, "done")
 
 
 def _run(conn, org_id: str, brand_id: str, brief_id: str, part: str, count) -> None:
@@ -318,12 +695,20 @@ def _run(conn, org_id: str, brand_id: str, brief_id: str, part: str, count) -> N
     methodology_text = methodology.compile(
         conn, [methodology_label] if methodology_label else [], brand_id=brand_id
     ).text
-    brief_section = prompts.brief_text(brief, (product or {}).get("name"), style)
 
+    if part == "image_prompt":
+        # F07-I07：一輪圖片提示詞完全是自己的形狀（程式分配風格、一輪一次模型呼叫寫出
+        # 剛好 10 則或 2 組），跟這支函式其餘 part 共用的「一個 body、一份驗證」尾段合不
+        # 起來——`_run_image_prompt()` 自己收尾（`write_output`／`mark_brief_status`）。
+        _run_image_prompt(
+            conn, org_id, brand_id, brief_id, brief, product, product_id,
+            department_text, methodology_text, brand_context, knowledge_item_ids, brand_version,
+        )
+        return
+
+    brief_section = prompts.brief_text(brief, (product or {}).get("name"), style)
     copy_length = request.get("copy_length") or "short"
     vocabulary: dict = {}
-    image_prompt_ctx: dict = {}
-    image_prompt_quotable_text = ""
     if part == "copy":
         coordinate_rows = repository.list_coordinate_vocabulary(conn, org_id, brand_id)
         vocabulary = validate.vocabulary_by_dimension(coordinate_rows)
@@ -331,53 +716,6 @@ def _run(conn, org_id: str, brand_id: str, brief_id: str, part: str, count) -> N
         prompt = prompts.copy_prompt(
             department_text, methodology_text, brief_section, brand_context, coordinate_text,
             copy_length,
-        )
-    elif part == "image_prompt":
-        # 模式只看工單來源，其他都不決定（票 F01-T03-I02）。
-        mode = "variant" if brief.get("source_kind") == "schedule_node" else "exploration"
-        coordinate_rows = repository.list_coordinate_vocabulary(conn, org_id, brand_id)
-        coordinates_snapshot = brief.get("coordinates_snapshot_json") or {}
-        audience = coordinates_snapshot.get("audience") or ""
-        pain = coordinates_snapshot.get("pain") or ""
-        audience_line = f"{audience}；痛點：{pain}" if (audience or pain) else ""
-        angle_label = coordinates_snapshot.get("angle") or ""
-        hook_label = coordinates_snapshot.get("hook") or ""
-        appeal_parts = []
-        if angle_label:
-            angle_phrase = _vocabulary_phrase(coordinate_rows, "angle", angle_label)
-            appeal_parts.append(f"切角：{angle_phrase}")
-        if hook_label:
-            hook_phrase = _vocabulary_phrase(coordinate_rows, "hook", hook_label)
-            appeal_parts.append(f"標題公式：{hook_phrase}")
-        appeal_line = "；".join(appeal_parts)
-        output_line = _output_line(coordinate_rows, coordinates_snapshot.get("format") or "")
-        appeal_sentence = (
-            angle_label if (mode == "variant" and angle_label) else "以這張圖原本的主訴求為準"
-        )
-        purpose_line = request.get("free_text") or "未指定"
-        promotion_note = request.get("promotion_note") or ""
-        quotable_lines = [line for line in promotion_note.split("\n") if line.strip()]
-        image_prompt_quotable_text = "\n".join(quotable_lines) + "\n" + brand_context
-        product_line = _product_line(conn, brand_id, product_id, product)
-
-        headline_hint = None
-        headlines_output = repository.adopted_output(conn, org_id, brand_id, brief_id, "copy")
-        copy_sets = (headlines_output or {}).get("body_json", {}).get("sets") or []
-        for copy_set in copy_sets:
-            headline = (copy_set or {}).get("headline") if isinstance(copy_set, dict) else None
-            if headline:
-                headline_hint = headline
-                break
-
-        image_prompt_ctx = {
-            "mode": mode, "style_block": style["style_block"], "product_line": product_line,
-            "audience_line": audience_line, "appeal_line": appeal_line,
-            "appeal_sentence": appeal_sentence, "quotable_lines": quotable_lines,
-            "output_line": output_line, "purpose_line": purpose_line,
-        }
-        prompt = prompts.image_prompt_prompt(
-            department_text, methodology_text, brief_section, brand_context,
-            mode=mode, count=count, quotable_lines=quotable_lines, headline_hint=headline_hint,
         )
     elif part == "video_script":
         prompt = prompts.video_script_prompt(
@@ -406,13 +744,8 @@ def _run(conn, org_id: str, brand_id: str, brief_id: str, part: str, count) -> N
     if data is None:
         raise RuntimeError("代理沒有回傳純 JSON，請重新產出一次。")
 
-    validate_kwargs = (
-        {"mode": image_prompt_ctx["mode"], "quotable_text": image_prompt_quotable_text}
-        if part == "image_prompt" else {}
-    )
     results, rendered = _validate(
         part, data, vocabulary=vocabulary, count=count, copy_length=copy_length,
-        **validate_kwargs,
     )
     failing = [r for r in results if not r["ok"]]
     if failing:
@@ -429,14 +762,7 @@ def _run(conn, org_id: str, brand_id: str, brief_id: str, part: str, count) -> N
         # 印 ❌，不再問第二次。
         results, rendered = _validate(
             part, data, vocabulary=vocabulary, count=count, copy_length=copy_length,
-            **validate_kwargs,
         )
-
-    if part == "image_prompt":
-        # 渲染不論驗證是否通過都跑一次（`_render_image_prompt` 檔頭），不放進上面的
-        # `_validate`——渲染跟驗證是兩件事，`rendered` 的形狀（`hero`/`exploration` 一個 +
-        # `variant` 一個）跟驗證結果清單完全獨立。
-        rendered = _render_image_prompt(data, count=count, **image_prompt_ctx)
 
     if part == "copy":
         # 票 05（ADR 0068 §5 amendment）：文案任務跟著回視覺方向——寫角度的人順手命名畫面。
@@ -462,8 +788,6 @@ def _run(conn, org_id: str, brand_id: str, brief_id: str, part: str, count) -> N
     if part == "copy":
         body["visual_tone"] = visual_tone
         body["copy_length"] = copy_length
-    if part == "image_prompt":
-        body["mode"] = image_prompt_ctx["mode"]
     body["validation"] = [
         ("✅ " if r["ok"] else "❌ ") + f"{r['path']}：{r['message']}" for r in results
     ]
@@ -473,9 +797,10 @@ def _run(conn, org_id: str, brand_id: str, brief_id: str, part: str, count) -> N
     # F02-I02（ARCHITECTURE.md §5.2）：一輪寫幾列版本，逐 part 決定——copy 一輪
     # `COPY_SET_COUNT`（5）版，`video_script` 一輪一支腳本一版（回覆的 `scripts` 沒過
     # `COPY_SET_COUNT`/count 也照實際收到的支數寫，紅燈那一支不假裝湊出使用者要的張數），
-    # 其他（`image_prompt`／`free`）一輪 1 版。每一版的 `body_json` 是同一份整輪回覆——
-    # `schedule/state.py::_copy_summary()` 讀 `body_json["sets"]` 要看到全部 5 組，不是
-    # 只看到那一版自己的那一組（那份契約不在這張票改，見 ARCHITECTURE.md §5.6）。
+    # `free` 一輪 1 版（`image_prompt` 有自己的整套寫法，見 `_run_image_prompt()`，不會
+    # 走到這裡）。每一版的 `body_json` 是同一份整輪回覆——`schedule/state.py::
+    # _copy_summary()` 讀 `body_json["sets"]` 要看到全部 5 組，不是只看到那一版自己的
+    # 那一組（那份契約不在這張票改，見 ARCHITECTURE.md §5.6）。
     if part == "copy":
         version_count = validate.COPY_SET_COUNT
     elif part == "video_script":
