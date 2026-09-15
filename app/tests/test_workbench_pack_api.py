@@ -412,5 +412,308 @@ class SelectMismatchedSetIs404WithoutWriteTest(_WorkbenchPackApiTestBase):
         self.assertIsNone(row["adopted_at"])
 
 
+# -- 案例 10：image_prompt 一輪 10 版（§5.8 shape）：卡片／複製全部／② 變體 ------------------
+# F07-I08.
+
+def _image_fingerprint(*, slot="exploit", slot_label="主力"):
+    return {
+        "image_task": {"key": "convert", "label": "讓猶豫的人下單"},
+        "device": {"key": "contrast", "label": "對照"},
+        "layout": {"key": "candid_scene", "label": "情境畫面"},
+        "look": {"key": "phone_raw", "label": "手機原生抓拍"},
+        "subject_role": {"key": "hero", "label": "主角"},
+        "persuasion": {"key": "none", "label": "無"},
+        "slot": {"key": slot, "label": slot_label},
+    }
+
+
+def _image_round(*, recommended_index=1):
+    return {
+        "format": "single_image", "audience_key": "warm_engaged", "image_task": "convert",
+        "identity_id": "wvi_1", "identity_text": "品牌識別文字",
+        "plan": [{"look": "phone_raw", "slot": "exploit"}] * 10,
+        "look_order": {"exploit": ["phone_raw"], "explore": []},
+        "recommended_index": recommended_index, "recommended_slot": "exploit",
+        "learning_ids": [],
+    }
+
+
+def _image_body(i: int, **overrides) -> dict:
+    prompt = f"這是第 {i} 則畫面描述，「主標{i}」放在畫面上方。"
+    body = {
+        "title": f"點子{i}", "headline": f"主標{i}",
+        "prompt": prompt, "text": f"{prompt}\n\n品牌視覺規範：X\n風格規範：Y",
+        "fingerprint": _image_fingerprint(), "cards": None, "round": _image_round(),
+        "validation": [], "warnings": [],
+    }
+    body.update(overrides)
+    return body
+
+
+class ImagePromptRoundApiTest(_WorkbenchPackApiTestBase):
+    def test_ten_row_round_has_badges_copy_all_text_and_variant_on_selected(self):
+        pack_id = self._submit_pack([{
+            "name": "單元 1", "source_ref": {"node_key": "1"}, "coordinates": {},
+            "style_key": "ugc", "required_outputs": {"image_prompt": 1},
+            "request": {"variant_count": 6},
+        }])
+        brief = self._briefs(pack_id)[0]
+        outputs = workbench_repo.write_output(
+            web.conn, org_id=self.org_id, brand_id=self.brand_id, brief_id=brief["id"],
+            part="image_prompt", generation_round=1,
+            body_json=[_image_body(i) for i in range(1, 11)],
+            coordinates_json=None, llm_task_id=None,
+        )
+        workbench_repo.select_version(web.conn, self.org_id, self.brand_id, outputs[0]["id"])
+
+        resp = self.client.get(f"/api/workbench/brands/{self.brand_id}/sets/{brief['id']}")
+        self.assertEqual(resp.status_code, 200)
+        image_product = resp.json()["set"]["products"]["image_prompt"]
+        versions = image_product["versions"]
+        self.assertEqual(len(versions), 10)
+        for version in versions:
+            self.assertEqual(version["badges"][0], "主力")
+            selected = version["version_index"] == 1
+            expected_cards = 2 if selected else 1
+            self.assertEqual(len(version["prompt_cards"]), expected_cards)
+            if selected:
+                self.assertEqual(version["prompt_cards"][1]["label"], "② 變體")
+
+        copy_all_text = image_product["copy_all_text"]
+        assert copy_all_text is not None
+        self.assertTrue(copy_all_text.startswith("請一次生成 10 張圖，每張只照下面對應的那一段"))
+        for i in range(1, 11):
+            self.assertIn(f"第 {i} 張\n{_image_body(i)['text']}", copy_all_text)
+
+    def test_copy_all_text_reads_only_the_max_round(self):
+        # A07: seeding two 10-row rounds must not double the blocks.
+        pack_id = self._submit_pack([{
+            "name": "單元 A07", "source_ref": {"node_key": "a07"}, "coordinates": {},
+            "style_key": "ugc", "required_outputs": {"image_prompt": 1},
+            "request": {},
+        }])
+        def _round_body(i: int, tag: str) -> dict:
+            prompt = f"這是第 {i} 則畫面描述（{tag}），「主標{i}」放在畫面上方。"
+            return _image_body(i, prompt=prompt, text=f"{prompt}\n\n品牌視覺規範：X\n風格規範：Y")
+
+        brief = self._briefs(pack_id)[0]
+        workbench_repo.write_output(
+            web.conn, org_id=self.org_id, brand_id=self.brand_id, brief_id=brief["id"],
+            part="image_prompt", generation_round=1,
+            body_json=[_round_body(i, "舊輪") for i in range(1, 11)],
+            coordinates_json=None, llm_task_id=None,
+        )
+        workbench_repo.write_output(
+            web.conn, org_id=self.org_id, brand_id=self.brand_id, brief_id=brief["id"],
+            part="image_prompt", generation_round=2,
+            body_json=[_round_body(i, "新輪") for i in range(1, 11)],
+            coordinates_json=None, llm_task_id=None,
+        )
+        resp = self.client.get(f"/api/workbench/brands/{self.brand_id}/sets/{brief['id']}")
+        copy_all_text = resp.json()["set"]["products"]["image_prompt"]["copy_all_text"]
+        assert copy_all_text is not None
+        self.assertEqual(copy_all_text.count("第 1 張"), 1)
+        self.assertNotIn("舊輪", copy_all_text)
+        self.assertIn("新輪", copy_all_text)
+
+
+# -- 案例 11：pack 的探索風格佔比提醒 -----------------------------------------------------
+# F07-I08 (ARCHITECTURE.md §5.9 Decision 29).
+
+class ImageExplorationWarningTest(_WorkbenchPackApiTestBase):
+    def _pack_with_adopted_slots(self, slots: list[str]) -> str:
+        sets = [self._one_set(str(i), {"image_prompt": 1}) for i in range(len(slots))]
+        pack_id = self._submit_pack(sets)
+        for brief, slot in zip(self._briefs(pack_id), slots, strict=True):
+            outputs = workbench_repo.write_output(
+                web.conn, org_id=self.org_id, brand_id=self.brand_id, brief_id=brief["id"],
+                part="image_prompt", generation_round=1,
+                body_json=[_image_body(1, fingerprint=_image_fingerprint(
+                    slot=slot, slot_label="探索" if slot == "explore" else "主力",
+                ))],
+                coordinates_json=None, llm_task_id=None,
+            )
+            workbench_repo.select_version(web.conn, self.org_id, self.brand_id, outputs[0]["id"])
+        return pack_id
+
+    def test_all_exploit_gives_warning_and_does_not_touch_can_approve(self):
+        # W07b: the warning must not leak into `blocking_text` — compare against a pack in
+        # the same completion state (all 4 sets adopted) that has no warning.
+        pack_id = self._pack_with_adopted_slots(["exploit"] * 4)
+        resp = self.client.get(f"/api/workbench/brands/{self.brand_id}/packs/{pack_id}")
+        pack = resp.json()["pack"]
+        self.assertEqual(
+            pack["image_exploration_warning"],
+            "這包選定的圖裡，探索風格只有 0／4 張（少於三成），新風格很難被測到。"
+            "可以在標著「建議選這張」的探索圖改選。",
+        )
+        self.assertIsInstance(pack["can_approve"], bool)  # this field never touches it
+
+        no_warning_pack_id = self._pack_with_adopted_slots(
+            ["explore", "explore", "exploit", "exploit"]
+        )
+        no_warning_resp = self.client.get(
+            f"/api/workbench/brands/{self.brand_id}/packs/{no_warning_pack_id}"
+        )
+        no_warning_pack = no_warning_resp.json()["pack"]
+        self.assertIsNone(no_warning_pack["image_exploration_warning"])
+        self.assertEqual(pack["blocking_text"], no_warning_pack["blocking_text"])
+        self.assertNotIn("探索風格", pack["blocking_text"])
+
+    def test_two_of_four_explore_is_none(self):
+        pack_id = self._pack_with_adopted_slots(["explore", "explore", "exploit", "exploit"])
+        resp = self.client.get(f"/api/workbench/brands/{self.brand_id}/packs/{pack_id}")
+        pack = resp.json()["pack"]
+        self.assertIn("image_exploration_warning", pack)  # W06: key always present
+        self.assertIsNone(pack["image_exploration_warning"])
+
+    def test_one_of_four_explore_still_warns(self):
+        # W04: 1/4 = 25% < 30% must still warn.
+        pack_id = self._pack_with_adopted_slots(["explore", "exploit", "exploit", "exploit"])
+        resp = self.client.get(f"/api/workbench/brands/{self.brand_id}/packs/{pack_id}")
+        self.assertIsNotNone(resp.json()["pack"]["image_exploration_warning"])
+
+    def test_unadopted_explore_row_does_not_count(self):
+        # W02: M/N only count `is_adopted` rows — an unselected explore row in the same pack
+        # as 4 adopted-exploit sets must not move the ratio.
+        sets = [self._one_set(str(i), {"image_prompt": 1}) for i in range(5)]
+        pack_id = self._submit_pack(sets)
+        briefs = self._briefs(pack_id)
+        for brief in briefs[:4]:
+            outputs = workbench_repo.write_output(
+                web.conn, org_id=self.org_id, brand_id=self.brand_id, brief_id=brief["id"],
+                part="image_prompt", generation_round=1,
+                body_json=[_image_body(1, fingerprint=_image_fingerprint(slot="exploit"))],
+                coordinates_json=None, llm_task_id=None,
+            )
+            workbench_repo.select_version(web.conn, self.org_id, self.brand_id, outputs[0]["id"])
+        workbench_repo.write_output(
+            web.conn, org_id=self.org_id, brand_id=self.brand_id, brief_id=briefs[4]["id"],
+            part="image_prompt", generation_round=1,
+            body_json=[_image_body(1, fingerprint=_image_fingerprint(
+                slot="explore", slot_label="探索",
+            ))],
+            coordinates_json=None, llm_task_id=None,
+        )
+        # not selected — stays unadopted.
+        resp = self.client.get(f"/api/workbench/brands/{self.brand_id}/packs/{pack_id}")
+        self.assertEqual(
+            resp.json()["pack"]["image_exploration_warning"],
+            "這包選定的圖裡，探索風格只有 0／4 張（少於三成），新風格很難被測到。"
+            "可以在標著「建議選這張」的探索圖改選。",
+        )
+
+    def test_adopted_pre_f07_row_does_not_count(self):
+        # W03: M only counts rows carrying `fingerprint.slot` — a pre-F07 adopted row
+        # elsewhere in the pack must not raise M.
+        sets = [self._one_set(str(i), {"image_prompt": 1}) for i in range(5)]
+        pack_id = self._submit_pack(sets)
+        briefs = self._briefs(pack_id)
+        for brief in briefs[:4]:
+            outputs = workbench_repo.write_output(
+                web.conn, org_id=self.org_id, brand_id=self.brand_id, brief_id=brief["id"],
+                part="image_prompt", generation_round=1,
+                body_json=[_image_body(1, fingerprint=_image_fingerprint(slot="exploit"))],
+                coordinates_json=None, llm_task_id=None,
+            )
+            workbench_repo.select_version(web.conn, self.org_id, self.brand_id, outputs[0]["id"])
+        pre_f07_outputs = workbench_repo.write_output(
+            web.conn, org_id=self.org_id, brand_id=self.brand_id, brief_id=briefs[4]["id"],
+            part="image_prompt", generation_round=1,
+            body_json=[{"mode": "variant", "rendered": {"hero": "x", "variant": "y"}}],
+            coordinates_json=None, llm_task_id=None,
+        )
+        workbench_repo.select_version(
+            web.conn, self.org_id, self.brand_id, pre_f07_outputs[0]["id"],
+        )
+        resp = self.client.get(f"/api/workbench/brands/{self.brand_id}/packs/{pack_id}")
+        self.assertEqual(
+            resp.json()["pack"]["image_exploration_warning"],
+            "這包選定的圖裡，探索風格只有 0／4 張（少於三成），新風格很難被測到。"
+            "可以在標著「建議選這張」的探索圖改選。",
+        )
+
+    def test_exactly_30_percent_does_not_warn_but_20_percent_does(self):
+        # W05: strict `<`, not `<=` — exactly 3 of 10 (30%) must not warn; 2 of 10 (20%) must.
+        exact_30 = self._pack_with_adopted_slots(["explore"] * 3 + ["exploit"] * 7)
+        resp = self.client.get(f"/api/workbench/brands/{self.brand_id}/packs/{exact_30}")
+        self.assertIsNone(resp.json()["pack"]["image_exploration_warning"])
+
+        below_30 = self._pack_with_adopted_slots(["explore"] * 2 + ["exploit"] * 8)
+        resp = self.client.get(f"/api/workbench/brands/{self.brand_id}/packs/{below_30}")
+        self.assertIsNotNone(resp.json()["pack"]["image_exploration_warning"])
+
+    def test_warning_never_blocks_approval(self):
+        # W07: a pack with the warning still approves once its own completion conditions
+        # are met.
+        pack_id = self._pack_with_adopted_slots(["exploit"] * 4)
+        resp = self.client.get(f"/api/workbench/brands/{self.brand_id}/packs/{pack_id}")
+        self.assertIsNotNone(resp.json()["pack"]["image_exploration_warning"])
+        for key in ("brand_rules_checked", "ready_to_report"):
+            comp = self.client.post(
+                f"/api/workbench/brands/{self.brand_id}/packs/{pack_id}/completion",
+                json={"key": key, "checked": True},
+            )
+            self.assertEqual(comp.status_code, 200)
+        pre_approve = self.client.get(f"/api/workbench/brands/{self.brand_id}/packs/{pack_id}")
+        self.assertIs(pre_approve.json()["pack"]["can_approve"], True)
+        approve = self.client.post(
+            f"/api/workbench/brands/{self.brand_id}/packs/{pack_id}/approve"
+        )
+        self.assertEqual(approve.status_code, 200)
+
+
+# -- 案例 12：GET /visual-spec 品牌事實負面用語警告 -----------------------------------------
+# F07-I08 (ARCHITECTURE.md §5.9 Decision 24).
+
+class VisualSpecWarningTest(_WorkbenchPackApiTestBase):
+    def test_three_negatives_give_one_warning(self):
+        bi_repo.create_brand_fact(
+            web.conn, self.brand_id, actor=ACTOR, fact_type="visual_base",
+            label="視覺基礎", value="不要出現競品\n避免使用紅色\n禁止出現真人",
+            status="confirmed", confirmed_by=ACTOR,
+        )
+        web.conn.commit()
+        resp = self.client.get(f"/api/workbench/brands/{self.brand_id}/visual-spec")
+        self.assertEqual(resp.status_code, 200)
+        warnings = resp.json()["warnings"]
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("3 句", warnings[0]["text"])
+        self.assertEqual(warnings[0]["href"], f"/brands/{self.brand_id}/library?tab=facts")
+
+    def test_other_orgs_brand_is_404(self):
+        org_b, _token_b = self._make_org("visual-spec")
+        brand_b = bi_repo.create_brand(
+            web.conn, org_id=org_b, name="測試品牌 B：視覺基礎隔離", client_name=None,
+            actor=ACTOR,
+        )
+        web.conn.commit()
+        resp = self.client.get(f"/api/workbench/brands/{brand_b['id']}/visual-spec")
+        self.assertEqual(resp.status_code, 404)
+
+    def test_exactly_two_negatives_gives_no_warning(self):
+        # G04: `<= 2` must not warn.
+        bi_repo.create_brand_fact(
+            web.conn, self.brand_id, actor=ACTOR, fact_type="visual_base",
+            label="視覺基礎", value="不要出現競品\n避免使用紅色",
+            status="confirmed", confirmed_by=ACTOR,
+        )
+        web.conn.commit()
+        resp = self.client.get(f"/api/workbench/brands/{self.brand_id}/visual-spec")
+        self.assertEqual(resp.json()["warnings"], [])
+
+    def test_pending_fact_is_not_counted(self):
+        # G03: only confirmed facts feed `brand_spec_text` — a pending fact with three
+        # negatives must not warn.
+        bi_repo.create_brand_fact(
+            web.conn, self.brand_id, actor=ACTOR, fact_type="visual_base",
+            label="視覺基礎", value="不要出現競品\n避免使用紅色\n禁止出現真人",
+            status="pending",
+        )
+        web.conn.commit()
+        resp = self.client.get(f"/api/workbench/brands/{self.brand_id}/visual-spec")
+        self.assertEqual(resp.json()["warnings"], [])
+
+
 if __name__ == "__main__":
     unittest.main()

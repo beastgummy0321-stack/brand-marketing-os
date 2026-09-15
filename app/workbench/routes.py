@@ -6,6 +6,9 @@ endpoints (`/briefs`, `/briefs/{id}/outputs/{output_id}/adopt`, ...) are **repla
 in parallel — their only consumer was the retired `.workspace-split` page. This file now
 speaks 任務包 (pack) → 素材組 (set) → 產物 (product) → 版本 (version).
 
+F07-I08 adds `/brands/{brand_id}/visual-spec` (ARCHITECTURE.md §5.9's 品牌事實 negatives
+warning): same actor/brand guard as every other brand route, no set/pack involved.
+
 Shape (container contract §7, unchanged): every handler is `require_actor` -> (`require_brand`,
 every route but `/styles`) -> one repository function -> wrap. Nothing here decides anything:
 every `ValueError` a repository function raises is looked up in this file's small per-route
@@ -17,7 +20,7 @@ from fastapi import APIRouter, Request
 from pydantic import BaseModel
 
 import app.shared.web as web
-from app.workbench import free_parse, repository
+from app.workbench import free_parse, identity, repository, visual
 
 router = APIRouter(prefix="/api/workbench")
 
@@ -33,6 +36,14 @@ def _error(exc: ValueError, table: dict) -> web.ApiError:
     code = str(exc)
     status, message = table.get(code, (400, code))
     return web.ApiError(status, code, message)
+
+
+@router.get("/brands/{brand_id}/visual-spec")
+def get_visual_spec(request: Request, brand_id: str):
+    actor = web.require_actor(request)
+    web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
+    spec_text = identity.brand_spec_text(web.conn, brand_id)
+    return {"warnings": visual.spec_warnings(brand_id, spec_text)}
 
 
 @router.get("/styles")

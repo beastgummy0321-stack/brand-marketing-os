@@ -83,6 +83,8 @@ export interface PackDetail extends PackCard {
   can_approve: boolean;
   blocking_text: string;
   sets: PackSetRow[];
+  /** F07 Decision 29：探索風格佔比過低的提醒，永不影響 `can_approve`／`blocking_text`。 */
+  image_exploration_warning?: string | null;
 }
 
 export interface VersionBody {
@@ -105,9 +107,13 @@ export interface ProductVersion {
   generation_round: number;
   selected_at: string | null;
   body: VersionBody | null;
-  /** 只有 `image_prompt` 版本有這欄（`_prompt_cards`，§5.11）：①主圖／②變體（或探索模式）
-   * 的純文字提示詞卡，圖片 tab 未接港口時原樣顯示。 */
+  /** 只有 `image_prompt` 版本有這欄（`image_cards.prompt_cards`，§5.7／§5.11）：這一版的
+   * 卡片，選定且是單圖時再加一張 ② 變體卡，圖片 tab 未接港口時原樣顯示。 */
   prompt_cards?: PromptCard[];
+  /** F07-I08：look·layout·device·persuasion 標籤，`null` 表示 pre-F07 版本。 */
+  fingerprint_text?: string | null;
+  /** F07-I08：`["主力"／"探索"]` 加「建議選這張」，`[]` 表示 pre-F07 版本。 */
+  badges?: string[];
 }
 
 export interface SetProduct {
@@ -116,6 +122,8 @@ export interface SetProduct {
   required: number;
   generation_settings: Record<string, unknown>;
   versions: ProductVersion[];
+  /** F07-I08：`image_prompt` 的「複製全部」文字，其餘產物固定 `null`。 */
+  copy_all_text?: string | null;
 }
 
 export interface SetSibling {
@@ -145,11 +153,11 @@ export interface SetDetail {
   /** F02-I17: 任務包核准後鎖住選定，跟 `image_generation.reason` 同一條規則——文字由後端
    * 產生一次，前端只原樣顯示，不重講規則。 */
   lock: { locked: boolean; reason: string | null };
-  chips: { platform: string | null; style: string; size: string | null };
+  chips: { platform: string | null; style: string | null; size: string | null };
   siblings: SetSibling[];
   required_parts: ProductPart[];
   products: Partial<Record<ProductPart, SetProduct>>;
-  /** §5.13：右欄「生成設定」表，永遠七列，`{label, text}` 逐列照給的順序原樣渲染。 */
+  /** §5.13：右欄「生成設定」表，永遠八列，`{label, text}` 逐列照給的順序原樣渲染。 */
   generation_settings: GenerationSettingRow[];
   image_generation: { connected: boolean; reason: string };
 }
@@ -239,6 +247,18 @@ export async function fetchStyles(): Promise<ImageStyle[]> {
   const res = await apiFetch(`${BASE}/styles`);
   const data = await parseJsonOrThrow<{ styles: ImageStyle[] }>(res, "讀取風格清單失敗。");
   return data.styles;
+}
+
+export interface VisualSpecWarning {
+  text: string;
+  href: string;
+}
+
+export async function getVisualSpec(
+  brandId: string,
+): Promise<{ warnings: VisualSpecWarning[] }> {
+  const res = await apiFetch(`${BASE}/brands/${encodeURIComponent(brandId)}/visual-spec`);
+  return parseJsonOrThrow<{ warnings: VisualSpecWarning[] }>(res, "讀取品牌視覺基礎失敗。");
 }
 
 export async function listPacks(

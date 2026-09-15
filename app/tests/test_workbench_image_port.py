@@ -1,8 +1,8 @@
-"""app/tests/test_workbench_image_port.py — F02-I05 (ARCHITECTURE.md §5.11): the reserved
-image-generation seat. `image_port` never spends money (`connected()` is `False`,
-`generate()` raises); `SetDetail.products.image_prompt.versions[].prompt_cards` reads the
-①/②/③ pair straight out of `prompts.py`'s already-rendered `body_json["rendered"]`, never
-re-rendering. Fixture shape borrowed from `test_workbench_pack_api.py`."""
+"""app/tests/test_workbench_image_port.py — F02-I05 (ARCHITECTURE.md §5.11) and F07-I08
+(§5.7/§5.11 rework): the reserved image-generation seat, and
+`SetDetail.products.image_prompt.versions[].prompt_cards` reading the §5.8 row shape through
+`app/workbench/image_cards.py`, never re-rendering. Fixture shape borrowed from
+`test_workbench_pack_api.py`."""
 
 import unittest
 import uuid
@@ -25,6 +25,41 @@ class ImagePortTest(unittest.TestCase):
         self.assertFalse(image_port.connected())
         with self.assertRaises(NotImplementedError):
             image_port.generate()
+
+
+def _fingerprint(*, slot="exploit", slot_label="主力"):
+    return {
+        "image_task": {"key": "convert", "label": "讓猶豫的人下單"},
+        "device": {"key": "contrast", "label": "對照"},
+        "layout": {"key": "candid_scene", "label": "情境畫面"},
+        "look": {"key": "phone_raw", "label": "手機原生抓拍"},
+        "subject_role": {"key": "hero", "label": "主角"},
+        "persuasion": {"key": "none", "label": "無"},
+        "slot": {"key": slot, "label": slot_label},
+    }
+
+
+def _round(*, recommended_index=1):
+    return {
+        "format": "single_image", "audience_key": "warm_engaged", "image_task": "convert",
+        "identity_id": "wvi_1", "identity_text": "品牌識別文字",
+        "plan": [{"look": "phone_raw", "slot": "exploit"}],
+        "look_order": {"exploit": ["phone_raw"], "explore": []},
+        "recommended_index": recommended_index, "recommended_slot": "exploit",
+        "learning_ids": [],
+    }
+
+
+def _body(**overrides):
+    prompt = "這是一張畫面描述，「主標」放在畫面上方。"
+    body = {
+        "title": "情境對照", "headline": "主標",
+        "prompt": prompt, "text": f"{prompt}\n\n品牌視覺規範：X\n風格規範：Y",
+        "fingerprint": _fingerprint(), "cards": None, "round": _round(),
+        "validation": [], "warnings": [],
+    }
+    body.update(overrides)
+    return body
 
 
 class SetDetailPromptCardsTest(unittest.TestCase):
@@ -60,68 +95,109 @@ class SetDetailPromptCardsTest(unittest.TestCase):
         self.assertEqual(resp.status_code, 200)
         return resp.json()["set"]
 
-    def test_variant_mode_cards_match_rendered_text(self):
+    def test_selected_single_gets_variant_card_and_badges(self):
         pack_id = self._submit_pack([{
             "name": "單元 1", "source_ref": {"node_key": "1"}, "coordinates": {},
+            "style_key": "ugc", "required_outputs": {"image_prompt": 1},
+            "request": {"image_prompt_count": 1, "variant_count": 3},
+        }])
+        brief_id = self._one_brief_id(pack_id)
+        outputs = workbench_repo.write_output(
+            web.conn, org_id=self.org_id, brand_id=self.brand_id, brief_id=brief_id,
+            part="image_prompt", generation_round=1, body_json=[_body()],
+            coordinates_json=None, llm_task_id=None,
+        )
+        workbench_repo.select_version(web.conn, self.org_id, self.brand_id, outputs[0]["id"])
+
+        detail = self._get_set(brief_id)
+        versions = detail["products"]["image_prompt"]["versions"]
+        self.assertEqual(len(versions), 1)
+        cards = versions[0]["prompt_cards"]
+        self.assertEqual(cards[0], {"label": "01｜情境對照", "text": _body()["text"]})
+        self.assertEqual(cards[1]["label"], "② 變體")
+        self.assertEqual(versions[0]["badges"], ["主力", "建議選這張"])
+        self.assertEqual(versions[0]["fingerprint_text"], "手機原生抓拍 · 情境畫面 · 對照")
+
+    def test_generation_settings_for_image_prompt_is_empty_dict(self):
+        # P06: `_generation_settings("image_prompt", …) == {}` — the legacy `{"count": …}`
+        # shape is gone (§5.13 moved everything into the top-level `generation_settings` rows).
+        pack_id = self._submit_pack([{
+            "name": "單元 P06", "source_ref": {"node_key": "p06"}, "coordinates": {},
             "style_key": "ugc", "required_outputs": {"image_prompt": 1},
             "request": {"image_prompt_count": 1},
         }])
         brief_id = self._one_brief_id(pack_id)
-        hero_text = "hero prompt text"
-        variant_text = "variant prompt text"
+        detail = self._get_set(brief_id)
+        self.assertEqual(detail["products"]["image_prompt"]["generation_settings"], {})
+
+    def test_missing_out_of_range_or_string_variant_count_defaults_to_0(self):
+        # P02: `variant_count` is only an int 0-9 from `request_json`; anything else -> 0 (no ②).
+        cases = [
+            ("missing", {"image_prompt_count": 1}),
+            ("out_of_range", {"image_prompt_count": 1, "variant_count": 10}),
+            ("string", {"image_prompt_count": 1, "variant_count": "6"}),
+        ]
+        for label, request in cases:
+            pack_id = self._submit_pack([{
+                "name": f"單元 P02 {label}", "source_ref": {"node_key": f"p02-{label}"},
+                "coordinates": {}, "style_key": "ugc",
+                "required_outputs": {"image_prompt": 1}, "request": request,
+            }])
+            brief_id = self._one_brief_id(pack_id)
+            outputs = workbench_repo.write_output(
+                web.conn, org_id=self.org_id, brand_id=self.brand_id, brief_id=brief_id,
+                part="image_prompt", generation_round=1, body_json=[_body()],
+                coordinates_json=None, llm_task_id=None,
+            )
+            workbench_repo.select_version(web.conn, self.org_id, self.brand_id, outputs[0]["id"])
+
+            detail = self._get_set(brief_id)
+            versions = detail["products"]["image_prompt"]["versions"]
+            self.assertEqual(len(versions[0]["prompt_cards"]), 1, label)
+
+    def test_unselected_has_no_variant_card(self):
+        pack_id = self._submit_pack([{
+            "name": "單元 2", "source_ref": {"node_key": "2"}, "coordinates": {},
+            "style_key": "ugc", "required_outputs": {"image_prompt": 1},
+            "request": {"image_prompt_count": 1, "variant_count": 3},
+        }])
+        brief_id = self._one_brief_id(pack_id)
+        workbench_repo.write_output(
+            web.conn, org_id=self.org_id, brand_id=self.brand_id, brief_id=brief_id,
+            part="image_prompt", generation_round=1, body_json=[_body()],
+            coordinates_json=None, llm_task_id=None,
+        )
+
+        detail = self._get_set(brief_id)
+        versions = detail["products"]["image_prompt"]["versions"]
+        self.assertEqual(len(versions[0]["prompt_cards"]), 1)
+
+    def test_pre_f07_row_renders_no_cards_and_no_crash(self):
+        pack_id = self._submit_pack([{
+            "name": "單元 3", "source_ref": {"node_key": "3"}, "coordinates": {},
+            "style_key": "ugc", "required_outputs": {"image_prompt": 1},
+            "request": {"image_prompt_count": 1},
+        }])
+        brief_id = self._one_brief_id(pack_id)
         workbench_repo.write_output(
             web.conn, org_id=self.org_id, brand_id=self.brand_id, brief_id=brief_id,
             part="image_prompt", generation_round=1,
             body_json=[{
                 "mode": "variant",
-                "rendered": {"hero": hero_text, "variant": variant_text},
+                "rendered": {"hero": "hero text", "variant": "variant text"},
             }],
             coordinates_json=None, llm_task_id=None,
         )
 
         detail = self._get_set(brief_id)
         versions = detail["products"]["image_prompt"]["versions"]
-        self.assertEqual(len(versions), 1)
-        self.assertEqual(
-            versions[0]["prompt_cards"],
-            [
-                {"label": "① 主圖", "text": hero_text},
-                {"label": "② 變體", "text": variant_text},
-            ],
-        )
-
-    def test_exploration_mode_cards_are_ordered_探索_then_變體(self):
-        pack_id = self._submit_pack([{
-            "name": "單元 2", "source_ref": {"node_key": "2"}, "coordinates": {},
-            "style_key": "ugc", "required_outputs": {"image_prompt": 1},
-            "request": {"image_prompt_count": 1},
-        }])
-        brief_id = self._one_brief_id(pack_id)
-        exploration_text = "exploration prompt text"
-        variant_text = "variant prompt text"
-        workbench_repo.write_output(
-            web.conn, org_id=self.org_id, brand_id=self.brand_id, brief_id=brief_id,
-            part="image_prompt", generation_round=1,
-            body_json=[{
-                "mode": "exploration",
-                "rendered": {"exploration": exploration_text, "variant": variant_text},
-            }],
-            coordinates_json=None, llm_task_id=None,
-        )
-
-        detail = self._get_set(brief_id)
-        versions = detail["products"]["image_prompt"]["versions"]
-        self.assertEqual(
-            versions[0]["prompt_cards"],
-            [
-                {"label": "③ 探索", "text": exploration_text},
-                {"label": "② 變體", "text": variant_text},
-            ],
-        )
+        self.assertEqual(versions[0]["prompt_cards"], [])
+        self.assertIsNone(versions[0]["fingerprint_text"])
+        self.assertEqual(versions[0]["badges"], [])
 
     def test_no_image_round_is_empty_list_and_未生成(self):
         pack_id = self._submit_pack([{
-            "name": "單元 3", "source_ref": {"node_key": "3"}, "coordinates": {},
+            "name": "單元 4", "source_ref": {"node_key": "4"}, "coordinates": {},
             "style_key": "ugc", "required_outputs": {"image_prompt": 1},
             "request": {"image_prompt_count": 1},
         }])
@@ -131,6 +207,7 @@ class SetDetailPromptCardsTest(unittest.TestCase):
         product = detail["products"]["image_prompt"]
         self.assertEqual(product["versions"], [])
         self.assertEqual(product["state"], "未生成")
+        self.assertIsNone(product["copy_all_text"])
         self.assertEqual(detail["image_generation"], {
             "connected": False,
             "reason": "圖片生成服務未接上，這裡先保留席位；接上後同一個畫面直接顯示成果。",
