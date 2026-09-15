@@ -557,7 +557,11 @@ COORDINATE_LABEL_REQUIRED_MESSAGE = "請填寫座標名稱。"
 def list_brand_coordinates(request: Request, brand_id: str):
     actor = web.require_actor(request)
     web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
-    return {"coordinates": schedule_repo.list_coordinates(web.conn, actor.org_id, brand_id)}
+    return {
+        "coordinates": schedule_repo.list_coordinates(
+            web.conn, actor.org_id, brand_id, include_retired=False,
+        ),
+    }
 
 
 @router.post("/brands/{brand_id}/coordinates")

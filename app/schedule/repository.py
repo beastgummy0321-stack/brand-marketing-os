@@ -177,6 +177,12 @@ _SEED_COORDINATES: dict = {
     ),
 }
 
+# F07 Decision 33: `format/flexible` is disabled-not-deleted (old tagged data keeps its label
+# for internal readers), but the screen it feeds must act like the row does not exist —
+# migration 20260915000001_schedule_brand_coordinate_disable_flexible.sql disables the row,
+# this set hides it from the list/toggle surface `list_brand_coordinates` reads.
+RETIRED_COORDINATES: frozenset[tuple[str, str]] = frozenset({("format", "flexible")})
+
 
 def ensure_coordinates_seeded(conn: _AnyConn, org_id: str, brand_id: str) -> None:
     """讀座標之前先確認七個維度的種子都下過——逐維度探測，不是只認 `dimension='angle'`
@@ -227,7 +233,8 @@ _REJECTED_SUBQUERY = (
 )
 
 
-def list_coordinates(conn: _AnyConn, org_id: str, brand_id: str) -> list[dict]:
+def list_coordinates(conn: _AnyConn, org_id: str, brand_id: str, *,
+                      include_retired: bool = True) -> list[dict]:
     ensure_coordinates_seeded(conn, org_id, brand_id)
     rows = conn.execute(
         f"SELECT c.*, {_REJECTED_SUBQUERY} FROM brand_coordinate c"
@@ -235,7 +242,10 @@ def list_coordinates(conn: _AnyConn, org_id: str, brand_id: str) -> list[dict]:
         " ORDER BY c.dimension, c.category NULLS LAST, c.label",
         (org_id, brand_id),
     ).fetchall()
-    return [_coordinate_view(dict(r)) for r in rows]
+    views = [_coordinate_view(dict(r)) for r in rows]
+    if include_retired:
+        return views
+    return [v for v in views if (v["dimension"], v["key"]) not in RETIRED_COORDINATES]
 
 
 def get_coordinate(conn: _AnyConn, org_id: str, brand_id: str, coordinate_id: str) -> dict | None:
@@ -267,6 +277,9 @@ def create_coordinate(conn: _AnyConn, org_id: str, brand_id: str, dimension: str
 
 def set_coordinate_disabled(conn: _AnyConn, org_id: str, brand_id: str, coordinate_id: str,
                              disabled: bool) -> dict | None:
+    existing = get_coordinate(conn, org_id, brand_id, coordinate_id)
+    if existing is not None and (existing["dimension"], existing["key"]) in RETIRED_COORDINATES:
+        return None  # F07 Decision 33: a retired coordinate is not found, not writable
     conn.execute(
         "UPDATE brand_coordinate SET disabled_at = %s, updated_at = now()"
         " WHERE id = %s AND org_id = %s AND brand_id = %s",
