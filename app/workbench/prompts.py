@@ -12,10 +12,20 @@ decides" (ADR/measurement T8b): the coordinate vocabulary is the one instruction
 
 import json
 
+from app.workbench import looks, visual
+
 # CONSTITUTION.md 規則 5 簽下的七個維度名稱（同一份清單也活在 app.workbench.validate，
 # 那邊複製、不 import 這裡——兩檔互不依賴，各自從 app.schedule.creative 複製一份，
 # container contract 規則 5 允許）。
 COORDINATE_KEYS = ("audience", "pain", "angle", "hook", "proof", "offer", "format")
+
+# F07-I07：這則廣告的座標——`image_worksheet()` 只列六維（不含 format，那一維另外算
+# ratio／platform），每一維一句中文名稱。`jobs.py` 用這份表把 `coordinates_snapshot_json`
+# 的每一維組成一行（公開常數，不加底線：跨模組讀，不是這個檔案的實作細節）。
+IMAGE_COORDINATE_LABELS = {
+    "audience": "受眾", "pain": "痛點", "angle": "切角",
+    "hook": "標題公式", "proof": "證明", "offer": "誘因",
+}
 
 
 def brief_text(brief: dict, product_name: str | None, style: dict) -> str:
@@ -63,21 +73,67 @@ def copy_prompt(department_text: str, methodology_text: str, brief_section: str,
     ]))
 
 
-def image_prompt_prompt(department_text: str, methodology_text: str, brief_section: str,
-                         brand_context: str, *, mode: str, count: int, quotable_lines: list,
-                         headline_hint: str | None) -> str:
-    """跟 `copy_prompt` 同一個組法，少座標詞彙表（圖片提示詞不用七維座標）。工單段
-    （`brief_section`）後面接三行，各自在內容是空的時候整行不出現（票 F01-T03-I02，
-    ARCHITECTURE.md §5.6-§5.9）：模式（含探索模式的角度數）、可用字句、可用的大標——
-    後兩行取代舊版「這張工單要幾則」／「已採用的標題」那兩行。"""
-    mode_line = "模式：變體模式" if mode == "variant" else f"模式：探索模式；角度數：{count}"
-    lines = [brief_section, mode_line]
-    if quotable_lines:
-        lines.append(f"可用字句（逐字，不得改）：{'／'.join(quotable_lines)}")
-    if headline_hint:
-        lines.append(f"可用的大標（可用可不用）：「{headline_hint}」")
-    worksheet = "\n".join(lines)
-    return "\n\n".join(filter(None, [department_text, methodology_text, worksheet, brand_context]))
+def image_worksheet(
+    *, shape: str, reference_line: str, identity_text: str, plan: list,
+    coordinate_lines: list, task_line: str, task_rows_lines: list, device_order: list,
+    quotable_lines: list, situation: str, key_messages: str, free_text: str | None,
+    prior_titles: list, learning_lines: list, learning_omitted: int,
+) -> str:
+    """F07-I07（ARCHITECTURE.md §5.7 Decision 9-11／§5.9-§5.10）：一輪圖片提示詞的工作單，
+    純函式，不含品牌上下文（那段由 `jobs.py` 接在這個字串後面，跟 `copy_prompt` 同一種
+    組法）。`plan` 是 `looks.allocate()["plan"]` 的 `(look, slot)` tuple 清單，項數等於這輪
+    要出的則數（單圖 10）或概念數（輪播 2）——每一項各自的風格分配寫成一行，不能讓模型自己
+    挑。一行只在內容真的存在時才出現。"""
+    unit = "則" if shape == "single" else "組"
+    platform = "Meta 單圖廣告" if shape == "single" else "Meta 輪播廣告"
+    ratio_sentence = visual.RATIO[shape][1]
+
+    groups: list[list[str]] = []
+
+    groups.append([f"用途：{ratio_sentence}（{platform}）"])
+    groups.append([reference_line, f"品牌視覺規範：{identity_text}"])
+
+    plan_lines = [
+        f"- 第 {i} {unit}：{look}（{looks.look_label(look)}）"
+        for i, (look, _slot) in enumerate(plan, 1)
+    ]
+    groups.append(["每則風格分配：", *plan_lines])
+
+    if coordinate_lines:
+        groups.append(["這則廣告的座標：", *coordinate_lines])
+
+    groups.append([task_line, *task_rows_lines])
+
+    groups.append([f"這一輪手法清單順序（可任選，不必照順序）：{'、'.join(device_order)}"])
+
+    quotable_line = (
+        f"可用字句（逐字，不得改）：{'／'.join(quotable_lines)}" if quotable_lines
+        else "可用字句（逐字，不得改）：（無）"
+    )
+    groups.append([quotable_line])
+
+    subject_group: list[str] = []
+    if situation and key_messages:
+        subject_group.append(f"題材：{situation}；{key_messages}")
+    elif situation or key_messages:
+        subject_group.append(f"題材：{situation or key_messages}")
+    if free_text:
+        subject_group.append(f"自由指示：{free_text}")
+    if prior_titles:
+        subject_group.append("上一輪的標題：" + "、".join(prior_titles))
+    if subject_group:
+        groups.append(subject_group)
+
+    if learning_lines:
+        learning_group = ["已知的視覺學習：", *[f"- {line}" for line in learning_lines]]
+        if learning_omitted:
+            learning_group.append(f"另有 {learning_omitted} 條沒列出")
+    else:
+        learning_group = ["已知的視覺學習：（無）"]
+    groups.append(learning_group)
+
+    body = "\n\n".join("\n".join(group) for group in groups if group)
+    return "## 工作單\n\n" + body
 
 
 def video_script_prompt(department_text: str, methodology_text: str, brief_section: str,
@@ -117,68 +173,5 @@ def coordinate_vocabulary_text(coordinates: list) -> str:
     ])
 
 
-def render_hero_prompt(fields: dict, *, style_block: str, product_line: str,
-                        audience_line: str, appeal_line: str, quotable_lines: list,
-                        output_line: str) -> str:
-    """`image-prompt-template.md` §2——① 主圖提示詞（變體模式）。外殼渲染，模型只回
-    `fields`（`hero` 物件）；`jobs.py` 的渲染入口不論驗證通不通過都會呼叫這裡一次，
-    所以這裡對缺欄位一律容忍（`.get(..., "")`），不假設 `fields` 已經合格。"""
-    lines = [f"【風格】{style_block}", f"【商品】{product_line}"]
-    if audience_line:
-        lines.append(f"【受眾】{audience_line}")
-    if appeal_line:
-        lines.append(f"【這則的訴求】{appeal_line}")
-    if quotable_lines:
-        lines.append(f"【可用字句（逐字，不得改）】{'／'.join(quotable_lines)}")
-    lines.append(
-        f"【畫面】{fields.get('scene', '')}／{fields.get('person', '')}／"
-        f"{fields.get('subject_position', '')}"
-    )
-    text_line = f"【圖上文字】大標：「{fields.get('headline', '')}」"
-    if fields.get("subhead"):
-        text_line += f"；副標：「{fields['subhead']}」"
-    text_line += "；文字純色填滿，數字獨立成行"
-    lines.append(text_line)
-    lines.append(f"【輸出】{output_line}")
-    return "\n".join(lines)
-
-
-def render_variant_prompt(*, count: int, appeal_sentence: str, quotable_lines: list,
-                           output_line: str, style_block: str) -> str:
-    """`image-prompt-template.md` §3——② 變體提示詞，兩種模式共用，不呼叫模型，純函式
-    組字串。"""
-    lines = [
-        f"以附上的這張圖為基底，分別生成 {count} 個完全不同風格排版與人物的圖片，"
-        "主要訴求保持不變。一次一張。"
-    ]
-    parts = [f"訴求「{appeal_sentence}」"]
-    if quotable_lines:
-        parts.append(f"可用字句「{'／'.join(quotable_lines)}」（數字逐字）")
-    parts.append("商品外型與 Logo")
-    if output_line:
-        parts.append(output_line)
-    lines.append("不變：" + "、".join(parts) + "。")
-    lines.append("可變：場景、人物、構圖、文字排版位置、配色。")
-    lines.append(f"【風格】{style_block}")
-    return "\n".join(lines)
-
-
-def render_exploration_prompt(angles: list, *, style_block: str, product_line: str,
-                               purpose_line: str, quotable_lines: list, count: int) -> str:
-    """`image-prompt-template.md` §4——③ 探索提示詞（探索模式）。跟 `render_hero_prompt`
-    一樣對 `angles` 裡每一項缺欄位容忍：驗證沒過也要照樣渲染。"""
-    lines = [f"【風格】{style_block}", f"【商品】{product_line}", f"【目的與對象】{purpose_line}"]
-    if quotable_lines:
-        lines.append(f"【可用字句（逐字，不得改）】{'／'.join(quotable_lines)}")
-    task_lines = [
-        f"【任務】分別給我 {count} 張圖，每張一個不同的說服切角，排版與風格彼此差異要大："
-    ]
-    for i, angle in enumerate(angles, start=1):
-        angle = angle if isinstance(angle, dict) else {}
-        task_lines.append(
-            f"{i}. {angle.get('name', '')}｜{angle.get('brief', '')}｜"
-            f"圖上文字：「{angle.get('on_image_line', '')}」"
-        )
-    lines.append("\n".join(task_lines))
-    lines.append("【圖上文字】每張圖只出現它自己那一行字；文字純色填滿，數字獨立成行")
-    return "\n".join(lines)
+# F07-I07：`render_hero_prompt`／`render_variant_prompt`／`render_exploration_prompt`
+# 連同它們的模式（變體／探索）一起退休——`image_worksheet()` 是唯一的圖片提示詞組法。

@@ -20,7 +20,6 @@
 | `meta-format-specs.md` | Meta 版位格式規格表：單圖／輪播／影片的比例、欄位數、字數預算、每主題媒體上限（自 `app/creative/format_specs.py` 移出） |
 | `customer-voice.md` | 顧客原話抽取規則、台灣在地管道 |
 | `humanizer-zh-tw.md` | 去 AI 味規則：核心速查、個性與靈魂、14 個內容／語言模式改寫前後對照 |
-| `image-prompt-template.md` | 圖片提示詞模板：①主圖／②變體／③探索三種提示詞骨架、每行由誰填、圖上文字與數字規則、風格來源 |
 
 ## 任務型別 → 必讀方法論檔對照表
 
@@ -38,7 +37,6 @@
 | 成效判讀／下期草案 | `ab-testing.md`、`ads-core.md`、`ads-commerce.md`（需要：有商品） |
 | 期中檢查點 | `ab-testing.md`（禁判勝負節） |
 | 素材工作檯文案 | `copywriting.md`、`humanizer-zh-tw.md`、`customer-voice.md`、`meta-format-specs.md` |
-| 素材工作檯圖片提示詞 | `creative-matrix.md`、`image-prompt-template.md` |
 | 素材工作檯影片腳本 | `creative-matrix.md`、`copywriting.md`、`humanizer-zh-tw.md` |
 | 素材工作檯自由生成 | `humanizer-zh-tw.md` |
 
