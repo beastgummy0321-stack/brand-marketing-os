@@ -16,7 +16,7 @@ guard stays status='closed' on the campaign row; do not query the ledger for it"
 """
 
 from app.ads import learning as ads_learning
-from app.ads import outcome, repository
+from app.ads import outcome, repository, visual_learning
 from app.ads.judgment import conversion_labels
 from app.brand_intelligence import repository as bi_repo
 from app.core.db import Conn, ConnProxy, jsonb
@@ -97,7 +97,10 @@ def close(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str, *, actor
     learning_row = ads_learning.write_learning(
         conn, org_id, brand_id, campaign_id, verdict, verdict_json, actor=actor, labels=labels,
     )
-    verdict_json["learning_ids"] = [learning_row["id"]]
+    visual_rows = visual_learning.write_visual_learnings(
+        conn, org_id, brand_id, campaign_id, actor=actor, days=days, labels=labels,
+    )
+    verdict_json["learning_ids"] = [learning_row["id"], *[r["id"] for r in visual_rows]]
 
     conn.execute(
         "UPDATE ads_campaign SET verdict = %s, verdict_json = %s, status = 'closed',"
