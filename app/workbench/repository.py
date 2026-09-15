@@ -18,7 +18,8 @@ from pathlib import Path
 from app.brand_intelligence import repository as bi_repo
 from app.core import cleanup
 from app.core.db import Conn, ConnProxy, jsonb, new_id
-from app.workbench import image_port
+from app.workbench import image_cards, image_port
+from app.workbench import looks as looks_mod
 
 _AnyConn = Conn | ConnProxy
 
@@ -968,7 +969,39 @@ def pack_detail(conn: _AnyConn, org_id: str, brand_id: str, pack_id: str) -> dic
         }
         for s in sets
     ]
+    detail["image_exploration_warning"] = _image_exploration_warning(
+        conn, org_id, brand_id, sets,
+    )
     return detail
+
+
+def _image_exploration_warning(conn: _AnyConn, org_id: str, brand_id: str,
+                                sets: list) -> str | None:
+    """F07 Decision 29: over the pack's sets that require `image_prompt`, M = sets whose
+    adopted image row carries a `fingerprint.slot`, N = those slotted `explore`; a warning
+    when M >= 1 and fewer than three in ten of them are 探索, else `None`. Never a gate."""
+    m = 0
+    n = 0
+    for s in sets:
+        if "image_prompt" not in s["required_outputs"]:
+            continue
+        output = adopted_output(conn, org_id, brand_id, s["id"], "image_prompt")
+        if output is None or not output["is_adopted"]:
+            continue
+        body = output["body_json"]
+        fingerprint = body.get("fingerprint") if isinstance(body, dict) else None
+        slot = fingerprint.get("slot") if isinstance(fingerprint, dict) else None
+        if not isinstance(slot, dict):
+            continue
+        m += 1
+        if slot.get("key") == "explore":
+            n += 1
+    if m >= 1 and 10 * n < 3 * m:
+        return (
+            f"這包選定的圖裡，探索風格只有 {n}／{m} 張（少於三成），新風格很難被測到。"
+            "可以在標著「建議選這張」的探索圖改選。"
+        )
+    return None
 
 
 def _cell(required_outputs: dict, versions_by_part: dict, part: str) -> dict:
@@ -1177,28 +1210,14 @@ def _slice_body(part: str, body_json, version_index: int):
     return body_json
 
 
-def _prompt_cards(body_json) -> list:
-    """F02-I05 (ARCHITECTURE.md §5.11): reads the ①/②/③ prompt pair straight out of the
-    round's already-rendered `body_json["rendered"]` (written once, in `jobs.py`'s
-    `_render_image_prompt()`) — never re-renders. `body_json["mode"]` picks the order:
-    變體模式 -> `① 主圖` then `② 變體`; 探索模式 -> `③ 探索` then `② 變體`. Missing/malformed
-    input -> `[]`, never a crash (mirrors `_slice_body`'s tolerance)."""
-    if not isinstance(body_json, dict):
-        return []
-    rendered = body_json.get("rendered")
-    if not isinstance(rendered, dict):
-        return []
-    if body_json.get("mode") == "exploration":
-        order = [("exploration", "③ 探索"), ("variant", "② 變體")]
-    else:
-        order = [("hero", "① 主圖"), ("variant", "② 變體")]
-    return [
-        {"label": label, "text": rendered[key]}
-        for key, label in order if isinstance(rendered.get(key), str)
-    ]
+def _image_variant_count(request_json: dict | None) -> int:
+    request_json = request_json or {}
+    count = request_json.get("variant_count")
+    return count if isinstance(count, int) and 0 <= count <= 9 else 0
 
 
-def _part_versions(conn: _AnyConn, org_id: str, brand_id: str, brief_id: str, part: str) -> list:
+def _part_versions(conn: _AnyConn, org_id: str, brand_id: str, brief_id: str, part: str,
+                    request_json: dict | None = None) -> list:
     rows = conn.execute(
         "SELECT * FROM workbench_output WHERE org_id = %s AND brand_id = %s AND brief_id = %s"
         " AND part = %s ORDER BY generation_round DESC, version_index ASC",
@@ -1213,8 +1232,15 @@ def _part_versions(conn: _AnyConn, org_id: str, brand_id: str, brief_id: str, pa
         for r in (dict(row) for row in rows)
     ]
     if part == "image_prompt":
+        variant_count = _image_variant_count(request_json)
         for version, r in zip(versions, (dict(row) for row in rows), strict=True):
-            version["prompt_cards"] = _prompt_cards(r["body_json"])
+            body = r["body_json"]
+            version["prompt_cards"] = image_cards.prompt_cards(
+                body, version_index=version["version_index"],
+                selected=version["selected_at"] is not None, variant_count=variant_count,
+            )
+            version["fingerprint_text"] = image_cards.fingerprint_text(body)
+            version["badges"] = image_cards.badges(body, version["version_index"])
     return versions
 
 
@@ -1223,7 +1249,7 @@ def _generation_settings(part: str, request_json: dict | None) -> dict:
     if part == "copy":
         return {"copy_length": request_json.get("copy_length", "short")}
     if part == "image_prompt":
-        return {"count": request_json.get("image_prompt_count")}
+        return {}
     if part == "video_script":
         return {"count": request_json.get("video_script_count")}
     return {}
@@ -1231,11 +1257,13 @@ def _generation_settings(part: str, request_json: dict | None) -> dict:
 
 def _generation_settings_rows(
     conn, brand_id: str, brief: dict, chips: dict,
-    image_prompt_versions: list, pack_row: dict,
+    image_prompt_bodies: list, pack_row: dict,
 ) -> list:
-    """§5.13: 素材組 studio 的右欄「生成設定」——always these seven `{label, text}` rows,
-    in this order, `—` for anything empty. A read-only mirror of what already produced the
-    current prompts, never a second query for values not already on hand.
+    """§5.13: 素材組 studio 的右欄「生成設定」——always these eight `{label, text}` rows,
+    in this order, `—`／「無」 for anything empty. A read-only mirror of what already
+    produced the current prompts, never a second query for values not already on hand.
+    `image_prompt_bodies` is the latest image round's rows (§5.8 shape) in `version_index`
+    order — this only ever reads the first one, the round-level fields are shared.
 
     `conn` left untyped (same as `submit_brief` above): `bi_repo.get_product()` wants a
     `Conn`, callers here pass `web.conn` (`ConnProxy`) — pyright would flag `_AnyConn`."""
@@ -1245,19 +1273,29 @@ def _generation_settings_rows(
     product = bi_repo.get_product(conn, brand_id, product_id) if product_id else None
     product_name = product["name"] if product else "不指定"
 
-    hero = None
-    if image_prompt_versions:
-        # `_slice_body()` returns `body_json` unchanged for parts other than
-        # copy/video_script, so `versions[0]["body"]` here already *is* the round's raw reply.
-        latest_body = image_prompt_versions[0].get("body")
-        if isinstance(latest_body, dict) and isinstance(latest_body.get("hero"), dict):
-            hero = latest_body["hero"]
-    person = hero.get("person") if hero else None
-    scene = hero.get("scene") if hero else None
-    if not isinstance(person, str) or not person:
-        person = None
-    if not isinstance(scene, str) or not scene:
-        scene = None
+    first_body = image_prompt_bodies[0] if image_prompt_bodies else None
+    round_ = first_body.get("round") if isinstance(first_body, dict) else None
+    round_ = round_ if isinstance(round_, dict) else None
+
+    identity_text = round_.get("identity_text") if round_ else None
+    image_task_label = None
+    fingerprint = first_body.get("fingerprint") if isinstance(first_body, dict) else None
+    if isinstance(fingerprint, dict):
+        image_task = fingerprint.get("image_task")
+        if isinstance(image_task, dict):
+            image_task_label = image_task.get("label")
+
+    look_order = round_.get("look_order") if round_ else None
+    style_plan_text = None
+    if isinstance(look_order, dict):
+        style_plan_text = looks_mod.plan_text(
+            look_order.get("exploit") or [], look_order.get("explore") or [],
+        )
+
+    learning_ids = round_.get("learning_ids") if round_ else None
+    learning_text = f"{len(learning_ids)} 條" if learning_ids else "無"
+    if round_ is None:
+        learning_text = "—"
 
     summary = pack_row["summary_json"] or {}
     key_message = summary.get("重點訊息") if isinstance(summary, dict) else None
@@ -1273,9 +1311,10 @@ def _generation_settings_rows(
         {"label": "品牌／商品", "text": f"{brand_name} · {product_name}"},
         {"label": "平台", "text": _text(chips.get("platform"))},
         {"label": "尺寸", "text": _text(chips.get("size"))},
-        {"label": "風格", "text": _text(chips.get("style"))},
-        {"label": "人物", "text": _text(person)},
-        {"label": "場景", "text": _text(scene)},
+        {"label": "品牌視覺", "text": _text(identity_text)},
+        {"label": "這張圖的任務", "text": _text(image_task_label)},
+        {"label": "風格分配", "text": _text(style_plan_text)},
+        {"label": "視覺學習", "text": learning_text},
         {"label": "主要訊息", "text": _text(key_message_text)},
     ]
 
@@ -1293,10 +1332,6 @@ def set_detail(conn: _AnyConn, org_id: str, brand_id: str, set_id: str) -> dict 
     required_outputs = brief["required_outputs_json"] or {}
     versions_by_part = _versions_by_part(conn, org_id, brand_id, set_id)
     coordinates = brief["coordinates_snapshot_json"] or {}
-    try:
-        style = get_style(brief["style_key"])
-    except ValueError:
-        style = None
     sibling_rows = conn.execute(
         "SELECT id, name, coordinates_snapshot_json, required_outputs_json"
         " FROM workbench_brief WHERE org_id = %s AND brand_id = %s AND pack_id = %s"
@@ -1313,20 +1348,29 @@ def set_detail(conn: _AnyConn, org_id: str, brand_id: str, set_id: str) -> dict 
             "status": set_state(r["required_outputs_json"] or {}, sib_versions),
         })
     required_parts = [part for part in _PART_ORDER if part in required_outputs]
-    products = {
-        part: {
+    products = {}
+    image_prompt_bodies: list = []
+    for part in required_parts:
+        versions = _part_versions(conn, org_id, brand_id, set_id, part, brief["request_json"])
+        copy_all_text = None
+        if part == "image_prompt" and versions:
+            max_round = versions[0]["generation_round"]
+            image_prompt_bodies = [
+                v["body"] for v in versions if v["generation_round"] == max_round
+            ]
+            copy_all_text = image_cards.copy_all_text(image_prompt_bodies)
+        products[part] = {
             "state": product_state(required_outputs[part], versions_by_part.get(part) or []),
             "selected": sum(1 for a in (versions_by_part.get(part) or []) if a),
             "required": required_outputs[part],
             "generation_settings": _generation_settings(part, brief["request_json"]),
-            "versions": _part_versions(conn, org_id, brand_id, set_id, part),
+            "versions": versions,
+            "copy_all_text": copy_all_text,
         }
-        for part in required_parts
-    }
     chips = {
         "platform": pack_row["context_json"].get("platform")
         if pack_row["context_json"] else None,
-        "style": style["label"] if style else brief["style_key"],
+        "style": None,
         "size": coordinates.get("format"),
     }
     origin_label, origin_href = _origin_fields(pack_row["context_json"])
@@ -1341,8 +1385,7 @@ def set_detail(conn: _AnyConn, org_id: str, brand_id: str, set_id: str) -> dict 
         },
         "chips": chips,
         "generation_settings": _generation_settings_rows(
-            conn, brand_id, brief, chips,
-            (products.get("image_prompt") or {}).get("versions") or [], pack_row,
+            conn, brand_id, brief, chips, image_prompt_bodies, pack_row,
         ),
         "siblings": siblings, "required_parts": required_parts, "products": products,
         "image_generation": {
