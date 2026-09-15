@@ -34,10 +34,10 @@ function spec(overrides: Partial<FreeParseSpec> = {}): FreeParseSpec {
 }
 
 describe("specToCreateBody（F02-I10 唯一的分支邏輯）", () => {
-  it("count 有給值：required_outputs 跟同一輪的產出數量用同一個數字", () => {
+  it("image_prompt 恆為 1、不帶 image_prompt_count（F07 Decision 28）", () => {
     const body = specToCreateBody(spec(), { text: "幫我做五張夜跑廣告", productId: null });
-    expect(body.sets[0].required_outputs).toEqual({ image_prompt: 5 });
-    expect(body.sets[0].request?.image_prompt_count).toBe(5);
+    expect(body.sets[0].required_outputs).toEqual({ image_prompt: 1 });
+    expect(body.sets[0].request).not.toHaveProperty("image_prompt_count");
   });
 
   it("outputs 沒給 count：預設 1", () => {
@@ -55,7 +55,7 @@ describe("specToCreateBody（F02-I10 唯一的分支邏輯）", () => {
     });
     const body = specToCreateBody(fallback, { text: "隨便做點什麼", productId: null });
     expect(body.free_text).toBe("隨便做點什麼");
-    expect(body.sets[0].required_outputs).toEqual({ image_prompt: 5 });
+    expect(body.sets[0].required_outputs).toEqual({ image_prompt: 1 });
     expect(body.style_key).toBeNull();
   });
 
@@ -64,8 +64,17 @@ describe("specToCreateBody（F02-I10 唯一的分支邏輯）", () => {
       spec({ outputs: [{ part: "image_prompt", count: 5 }, { part: "copy", count: 1 }] }),
       { text: "混合任務", productId: "prod_1" },
     );
-    expect(body.sets[0].required_outputs).toEqual({ image_prompt: 5, copy: 1 });
+    expect(body.sets[0].required_outputs).toEqual({ image_prompt: 1, copy: 1 });
     expect(body.product_id).toBe("prod_1");
+  });
+
+  it("video_script：required_outputs 跟 request.video_script_count 用同一個數字", () => {
+    const body = specToCreateBody(
+      spec({ outputs: [{ part: "video_script", count: 3 }] }),
+      { text: "腳本", productId: null },
+    );
+    expect(body.sets[0].required_outputs).toEqual({ video_script: 3 });
+    expect(body.sets[0].request?.video_script_count).toBe(3);
   });
 
   it("platform 有值：進 context.platform（F02-I18）", () => {
@@ -113,5 +122,40 @@ describe("FreeJobPage 不再讀風格（F07-I09）", () => {
 
     const calledPaths = fetchSpy.mock.calls.map((call) => String(call[0]));
     expect(calledPaths.some((path) => path.includes("/styles"))).toBe(false);
+  });
+});
+
+// F07-I14（Decision 28）：一輪固定 10 張，精準控制不再問圖片要幾張。
+describe("精準控制的產出數量欄位（F07-I14）", () => {
+  it("素材類型選圖片：不顯示產出數量；選文案：顯示產出數量", async () => {
+    render(
+      <MemoryRouter>
+        <FreeJobPage brandId="brd_1" />
+      </MemoryRouter>,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "精準控制" }));
+    expect(screen.queryByLabelText("產出數量")).toBeNull();
+
+    await userEvent.selectOptions(screen.getByRole("combobox", { name: "素材類型" }), "文案");
+    expect(screen.getByLabelText("產出數量")).toBeTruthy();
+  });
+
+  it("AI 解析結果的需要產出：image_prompt 顯示「圖片（一輪 10 張）」，不顯示份數", async () => {
+    mockParseFreeText.mockResolvedValue({
+      parsed: true, note: null, spec: spec({ outputs: [{ part: "image_prompt", count: 5 }] }),
+    });
+
+    render(
+      <MemoryRouter>
+        <FreeJobPage brandId="brd_1" />
+      </MemoryRouter>,
+    );
+
+    await userEvent.type(screen.getByLabelText("告訴 AI 你想創作什麼"), "測試文字");
+    await userEvent.click(screen.getByRole("button", { name: "建立自由工作 →" }));
+
+    await waitFor(() => expect(screen.getByText("圖片（一輪 10 張）")).toBeTruthy());
+    expect(screen.queryByText("圖片 5 份")).toBeNull();
   });
 });
