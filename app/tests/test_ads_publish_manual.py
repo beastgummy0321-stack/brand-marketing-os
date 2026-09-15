@@ -20,7 +20,7 @@ import uuid
 from unittest import mock
 
 import app.shared.web as web
-from app.ads import adapters, plan
+from app.ads import adapters, assets, plan, routes
 from app.ads import repository as ads_repo
 from app.ads.adapters import manual as manual_adapter
 from app.brand_intelligence import repository as bi_repo
@@ -400,6 +400,98 @@ class ClosedCampaignNotRevivedTest(PublishTestBase):
 
         self.assertIsNone(result["message"])
         self.assertEqual(result["campaign"]["status"], "closed")
+
+
+# -- F07-I10：手動配對清單的圖片提示詞欄位讀 §5.8 的 `text`，不是舊的 `rendered` -------------
+
+class ImagePromptTextOnManualChecklistTest(PublishTestBase):
+    def _dispatched_ad(self):
+        detail = self._adopted_campaign()
+        assets.dispatch_pack(web.conn, self.org_id, self.brand_id, detail["id"])
+        ad = detail["groups"][0]["ads"][0]
+        return detail, ad
+
+    def _ad_field(self, enriched: dict, ad_id: str) -> dict:
+        described = manual_adapter.describe(enriched)
+        node = next(n for n in described["checklist"] if n["id"] == ad_id)
+        return next((f for f in node["fields"] if f["label"] == "圖片提示詞"), None)
+
+    def test_adopted_row_checklist_value_is_text_not_prompt(self):
+        detail, ad = self._dispatched_ad()
+        body = {"text": "品牌視覺規範：...\n風格規範：...", "prompt": "舊欄位不該被讀到"}
+
+        def fake_adopted_output(_conn, _org_id, _brand_id, _brief_id, part):
+            return {"body_json": body, "is_adopted": True} if part == "image_prompt" else None
+
+        with mock.patch.object(routes.workbench, "adopted_output", fake_adopted_output):
+            enriched = routes._enriched_campaign(web.conn, self.org_id, self.brand_id, detail["id"])
+
+        field = self._ad_field(enriched, ad["id"])
+        self.assertIsNotNone(field)
+        self.assertEqual(field["value"], body["text"])
+
+    def test_non_adopted_row_has_no_field(self):
+        detail, ad = self._dispatched_ad()
+        body = {"text": "還沒選定這張"}
+
+        def fake_adopted_output(_conn, _org_id, _brand_id, _brief_id, part):
+            return {"body_json": body, "is_adopted": False} if part == "image_prompt" else None
+
+        with mock.patch.object(routes.workbench, "adopted_output", fake_adopted_output):
+            enriched = routes._enriched_campaign(web.conn, self.org_id, self.brand_id, detail["id"])
+
+        self.assertIsNone(self._ad_field(enriched, ad["id"]))
+
+    def test_text_missing_or_not_a_string_has_no_field(self):
+        detail, ad = self._dispatched_ad()
+        for body in ({}, {"text": ["not", "a", "string"]}, {"text": ""}):
+            with self.subTest(body=body):
+                def fake_adopted_output(_conn, _org_id, _brand_id, _brief_id, part, body=body):
+                    if part == "image_prompt":
+                        return {"body_json": body, "is_adopted": True}
+                    return None
+
+                with mock.patch.object(routes.workbench, "adopted_output", fake_adopted_output):
+                    enriched = routes._enriched_campaign(
+                        web.conn, self.org_id, self.brand_id, detail["id"],
+                    )
+                self.assertIsNone(self._ad_field(enriched, ad["id"]))
+
+    def test_old_rendered_shape_is_no_longer_read(self):
+        detail, ad = self._dispatched_ad()
+        body = {"rendered": "舊提示詞（F07 之前的欄位）"}
+
+        def fake_adopted_output(_conn, _org_id, _brand_id, _brief_id, part):
+            return {"body_json": body, "is_adopted": True} if part == "image_prompt" else None
+
+        with mock.patch.object(routes.workbench, "adopted_output", fake_adopted_output):
+            enriched = routes._enriched_campaign(web.conn, self.org_id, self.brand_id, detail["id"])
+
+        self.assertIsNone(self._ad_field(enriched, ad["id"]))
+
+    def test_no_adopted_output_has_no_field_and_does_not_crash(self):
+        detail, ad = self._dispatched_ad()
+
+        with mock.patch.object(routes.workbench, "adopted_output", lambda *a, **k: None):
+            enriched = routes._enriched_campaign(web.conn, self.org_id, self.brand_id, detail["id"])
+
+        self.assertIsNone(self._ad_field(enriched, ad["id"]))
+
+    def test_copy_branch_is_unchanged(self):
+        detail, ad = self._dispatched_ad()
+
+        def fake_adopted_output(_conn, _org_id, _brand_id, _brief_id, part):
+            if part == "copy":
+                return {"body_json": {"sets": [{"body": "測試文案"}]}, "is_adopted": True}
+            return None
+
+        with mock.patch.object(routes.workbench, "adopted_output", fake_adopted_output):
+            enriched = routes._enriched_campaign(web.conn, self.org_id, self.brand_id, detail["id"])
+
+        described = manual_adapter.describe(enriched)
+        node = next(n for n in described["checklist"] if n["id"] == ad["id"])
+        field = next(f for f in node["fields"] if f["label"] == "文案")
+        self.assertEqual(field["value"], "測試文案")
 
 
 if __name__ == "__main__":

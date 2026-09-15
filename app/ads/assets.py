@@ -12,7 +12,7 @@ workbench public entry for per-set counts (§0 "Workbench handoff", feature-3 fi
 """
 
 from app import workbench
-from app.ads import channels
+from app.ads import channels, plan
 from app.ads import repository as ads_repo
 from app.brand_intelligence import repository as bi_repo
 
@@ -42,13 +42,24 @@ def _coordinates(ad: dict) -> dict:
     }
 
 
-def _image_prompt_count(ad: dict) -> int:
-    """跟舊派工（`app/schedule/jobs.py`）同一條規則：格式是「彈性格式」給 10 張，其餘給
-    3 張——這裡讀 `coordinates_snapshot_json` 裡的 label（廣告座標欄存的是 key，label 才是
-    這句中文，見 `app/ads/plan.py::create_ad` 怎麼存 snapshot）。"""
-    snapshot = ad.get("coordinates_snapshot_json") or {}
-    format_label = (snapshot.get("format") or {}).get("label")
-    return 10 if format_label == "彈性格式" else 3
+def _variant_count(group: dict, campaign: dict) -> int:
+    """F07-I10（ARCHITECTURE.md §6.3 item 21）：② 變體張數看排程，不是使用者調的固定值——
+    投放組自己的天數優先，沒排期才退回 Campaign 的天數（`plan._days` 兩邊缺一就是 0，剛好
+    是「退回」的判斷式）；`retarget` 加碼，最後封頂 9 張（GPT 生圖單次上限）。"""
+    days = plan._days(group.get("start_date"), group.get("end_date")) or plan._days(
+        campaign.get("start_date"), campaign.get("end_date"),
+    )
+    if days == 0:
+        count = 6
+    elif days <= 7:
+        count = 3
+    elif days <= 21:
+        count = 6
+    else:
+        count = 9
+    if group.get("role") == "retarget":
+        count += 3
+    return min(count, 9)
 
 
 def _copy_length(_ad: dict) -> str:
@@ -75,24 +86,36 @@ def _origin(brand_id: str, brand_name: str, campaign: dict, groups: list) -> dic
     return {"origin_label": origin_label, "origin_href": origin_href}
 
 
-def _ad_set(ad: dict, campaign_id: str, fallback_product_id: str | None) -> dict:
+def _ad_set(ad: dict, group: dict, campaign: dict, campaign_id: str,
+            fallback_product_id: str | None) -> dict:
     # 一則廣告只打一個商品（ARCHITECTURE §5.4）；用同一個 product_id 決定 set 欄位與
     # request.product_ids，不各算一次——否則工作檯 (jobs.py:49-68) 會替 Campaign 裡的每個
     # 商品各編一次品牌上下文，重複付 N 份品牌層知識的錢（ARCHITECTURE.md §1 第 1 條）。
     product_id = ad.get("product_id") or fallback_product_id
+    format_key = ad.get("format_key")
+    request = {
+        "copy_length": _copy_length(ad),
+        "use_brand_knowledge": True,
+        "product_ids": [product_id] if product_id else [],
+    }
+    if format_key == "video":
+        required_outputs = {"copy": 1, "video_script": 1}
+        request["video_script_count"] = 3
+    elif format_key == "carousel":
+        required_outputs = {"copy": 1, "image_prompt": 1}
+        request["variant_count"] = 0
+    else:
+        # 單圖、儲存的 `flexible`、`None`、或品牌自建的格式鍵——都走單圖規則（F07-I10
+        # 票面：「anything else」；F07-I03 已經讓那個格式失去「彈性」這個選項）。
+        required_outputs = {"copy": 1, "image_prompt": 1}
+        request["variant_count"] = _variant_count(group, campaign)
     return {
         "name": ad["name"],
         "source_ref": _set_source_ref(campaign_id, ad["id"]),
         "product_id": product_id,
         "coordinates": _coordinates(ad),
-        "style_key": "ugc",  # 沒有品牌預設風格這件事（見票面），沿用其他派工同值
-        "required_outputs": {"copy": 1, "image_prompt": 1},
-        "request": {
-            "copy_length": _copy_length(ad),
-            "image_prompt_count": _image_prompt_count(ad),
-            "use_brand_knowledge": True,
-            "product_ids": [product_id] if product_id else [],
-        },
+        "required_outputs": required_outputs,
+        "request": request,
     }
 
 
@@ -120,7 +143,6 @@ def dispatch_pack(conn, org_id: str, brand_id: str, campaign_id: str) -> str:
     detail = ads_repo.campaign_detail(conn, org_id, brand_id, campaign_id)
     assert detail is not None
     groups = detail["groups"]
-    ads = [ad for group in groups for ad in group["ads"]]
 
     brand = bi_repo.get_brand(conn, brand_id)
     brand_name = brand["name"] if brand else brand_id
@@ -141,7 +163,8 @@ def dispatch_pack(conn, org_id: str, brand_id: str, campaign_id: str) -> str:
         "summary": summary,
         "context": _origin(brand_id, brand_name, campaign, groups),
         "sets": [
-            _ad_set(ad, campaign_id, fallback_product_id) for ad in ads
+            _ad_set(ad, group, campaign, campaign_id, fallback_product_id)
+            for group in groups for ad in group["ads"]
         ],
     }
     return workbench.submit_pack(conn, org_id, brand_id, pack)
