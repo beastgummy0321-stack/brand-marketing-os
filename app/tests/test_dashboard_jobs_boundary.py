@@ -93,6 +93,22 @@ class DashboardJobsBoundaryTest(unittest.TestCase):
         self.assertEqual(
             sum(1 for job in jobs if job["kind"] == "workbench_generate"), 2)
 
+    def test_workbench_derive_identity_alone_maps_to_generate_stage(self):
+        # F07-I13：上面那個測試同時塞了 workbench_copy 和 workbench_derive_identity，
+        # `next(...)` 只看到排第一個的那列，改錯 routes_jobs_api.py 裡
+        # workbench_derive_identity 對應的 stage 字串不會讓上面的斷言變紅。這裡只塞
+        # 一列 workbench_derive_identity，單獨盯住它的 stage。
+        brand_id = self.brand["id"]
+        _seed_running_queue_job(DEV_ORG_ID, brand_id, "workbench_derive_identity", {"brand_id": brand_id})
+
+        response = self.client.get("/api/jobs/active")
+
+        self.assertEqual(response.status_code, 200)
+        jobs = [job for job in response.json()["data"] if job["brand_id"] == brand_id]
+        self.assertEqual(len(jobs), 1)
+        self.assertEqual(jobs[0]["kind"], "workbench_generate")
+        self.assertEqual(jobs[0]["stage"], "素材生成中")
+
 
 class DashboardJobsTenantIsolationTest(unittest.TestCase):
     """票 03-1 r1 defect 2：intake 的行程內 registry 沒有 org_id 概念，過濾改在聚合端點做

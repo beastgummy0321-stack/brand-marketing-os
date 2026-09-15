@@ -273,5 +273,22 @@ class LibraryWriteApiTest(unittest.TestCase):
         self.assertEqual(resp.status_code, 404)
 
 
+class AssetKindLabelTest(unittest.TestCase):
+    """F07-I13 item 14: `product_photo` 的人話標籤要在後端與前端一致（app/core/vocab.py:74，
+    frontend/src/lib/libraryApi.ts:157）——沒有既有測試讀過任一邊，改回 `產品照` 仍全綠。"""
+
+    def test_backend_label_is_reference_photo(self):
+        from app.core import vocab
+        self.assertEqual(dict(vocab.ASSET_KINDS)["product_photo"], "商品參考照")
+
+    def test_frontend_label_is_reference_photo(self):
+        import pathlib
+        text = (
+            pathlib.Path(__file__).resolve().parents[2]
+            / "frontend" / "src" / "lib" / "libraryApi.ts"
+        ).read_text(encoding="utf-8")
+        self.assertEqual(text.count('["product_photo", "商品參考照"]'), 1)
+
+
 if __name__ == "__main__":
     unittest.main()
