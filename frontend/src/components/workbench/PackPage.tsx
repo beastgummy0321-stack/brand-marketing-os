@@ -174,6 +174,9 @@ export function PackPage({ brandId, packId }: { brandId: string; packId: string 
                   {pack.status !== "done" && pack.blocking_text && (
                     <span className="text-xs text-muted-foreground">{pack.blocking_text}</span>
                   )}
+                  {pack.image_exploration_warning && (
+                    <span className="text-xs text-muted-foreground">{pack.image_exploration_warning}</span>
+                  )}
                   {approveError && <span className="text-xs text-destructive">{approveError}</span>}
                 </div>
               </div>

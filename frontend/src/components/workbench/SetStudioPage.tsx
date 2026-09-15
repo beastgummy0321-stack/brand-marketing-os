@@ -1,13 +1,12 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { ChevronDown, Link as LinkIcon } from "lucide-react";
+import { Link as LinkIcon } from "lucide-react";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { EmptyState } from "@/components/layout/EmptyState";
 import { Skeleton } from "@/components/layout/Skeleton";
 import { Button } from "@/components/layout/ui/button";
 import { Badge } from "@/components/layout/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/layout/ui/tabs";
-import { CopyIconButton } from "@/components/layout/CopyIconButton";
 import { useWorkspace } from "@/components/layout/WorkspaceContext";
 import { cn } from "@/lib/utils";
 import {
@@ -20,6 +19,7 @@ import {
   type SetDetail,
   type SetProduct,
 } from "@/lib/workbenchApi";
+import { ImagePart } from "./ImagePart";
 
 const PART_LABEL: Record<ProductPart, string> = {
   copy: "文案",
@@ -312,7 +312,9 @@ function ProductPanel({
     setRunning(true);
     setError(null);
     try {
-      const next = await runProduct(brandId, set.id, part, runCount ?? count);
+      // 圖片：Decision 28，永遠不帶數量——一輪固定 10 張，由後端決定。
+      const arg = part === "image_prompt" ? undefined : (runCount ?? count);
+      const next = await runProduct(brandId, set.id, part, arg);
       onUpdated(next);
     } catch (err) {
       setError(err instanceof Error ? err.message : "產出失敗，請稍後再試。");
@@ -346,30 +348,27 @@ function ProductPanel({
     void handleRun(similarCount());
   }
 
-  function handleEdit() {
-    setCount(similarCount());
-    setMode("precise");
-  }
-
   return (
     <div className="flex flex-col gap-4">
       <div className="surface flex flex-wrap items-center gap-3 p-3">
-        <div className="inline-flex overflow-hidden rounded-md border border-border">
-          <button
-            type="button"
-            onClick={() => setMode("quick")}
-            className={cn("px-2.5 py-1.5 text-xs font-medium", mode === "quick" ? "bg-accent" : "bg-card")}
-          >
-            快速生成
-          </button>
-          <button
-            type="button"
-            onClick={() => setMode("precise")}
-            className={cn("px-2.5 py-1.5 text-xs font-medium", mode === "precise" ? "bg-accent" : "bg-card")}
-          >
-            精準控制
-          </button>
-        </div>
+        {part !== "image_prompt" && (
+          <div className="inline-flex overflow-hidden rounded-md border border-border">
+            <button
+              type="button"
+              onClick={() => setMode("quick")}
+              className={cn("px-2.5 py-1.5 text-xs font-medium", mode === "quick" ? "bg-accent" : "bg-card")}
+            >
+              快速生成
+            </button>
+            <button
+              type="button"
+              onClick={() => setMode("precise")}
+              className={cn("px-2.5 py-1.5 text-xs font-medium", mode === "precise" ? "bg-accent" : "bg-card")}
+            >
+              精準控制
+            </button>
+          </div>
+        )}
 
         {summaryLine && (
           <div className="flex min-w-0 flex-1 items-center gap-1.5 text-xs text-muted-foreground">
@@ -378,7 +377,7 @@ function ProductPanel({
           </div>
         )}
 
-        {mode === "precise" && (
+        {part !== "image_prompt" && mode === "precise" && (
           <input
             type="number"
             min={1}
@@ -390,7 +389,7 @@ function ProductPanel({
         )}
 
         <Button disabled={running || locked} onClick={() => void handleRun()}>
-          {running ? "生成中…" : `再生成 ${count} 張`}
+          {running ? "生成中…" : part === "image_prompt" ? "再生成一輪（10 張）" : `再生成 ${count} 張`}
         </Button>
       </div>
 
@@ -407,7 +406,6 @@ function ProductPanel({
           imageGeneration={set.image_generation}
           locked={locked}
           onSimilar={handleSimilar}
-          onEdit={handleEdit}
         />
       )}
       {part === "copy" && <CopyPart product={product} onSelect={handleSelect} locked={locked} />}
@@ -417,7 +415,7 @@ function ProductPanel({
 
       <div className="surface flex items-center justify-between p-3">
         <Button variant="outline" disabled={running || locked} onClick={() => void handleRun()}>
-          再生成 {count} 張
+          {part === "image_prompt" ? "再生成一輪（10 張）" : `再生成 ${count} 張`}
         </Button>
         <Button disabled={!allDone || locked} onClick={onFinish}>
           完成此素材組
@@ -427,7 +425,9 @@ function ProductPanel({
   );
 }
 
-function VersionBadge({
+/** `CopyRoundCard`／`ScriptRoundCard`（下面）與 `ImagePart.tsx` 共用；同資料夾內部匯入，不走
+ * `index.ts`（ADR 0060 只管跨功能夾）。 */
+export function VersionBadge({
   version,
   onSelect,
   onSimilar,
@@ -461,179 +461,6 @@ function VersionBadge({
           修改需求
         </Button>
       )}
-    </div>
-  );
-}
-
-function ImagePart({
-  set,
-  product,
-  onSelect,
-  onSwitchPart,
-  imageGeneration,
-  locked,
-  onSimilar,
-  onEdit,
-}: {
-  set: SetDetail;
-  product: SetProduct;
-  onSelect: (versionId: string, selected: boolean) => void;
-  onSwitchPart: (part: ProductPart) => void;
-  imageGeneration: SetDetail["image_generation"];
-  locked: boolean;
-  onSimilar: () => void;
-  onEdit: () => void;
-}) {
-  const [showPrompt, setShowPrompt] = useState(!imageGeneration.connected);
-  const [promptOpen, setPromptOpen] = useState(false);
-
-  const latest = product.versions[0];
-  const selectedOrLatest = product.versions.find((v) => v.selected_at) ?? latest;
-  const promptCards = selectedOrLatest?.prompt_cards ?? [];
-
-  const copyProduct = set.products.copy;
-  const selectedCopy = copyProduct?.versions.find((v) => v.selected_at);
-  const selectedCopyIndex = selectedCopy
-    ? (copyProduct?.versions ?? [])
-        .filter((v) => v.generation_round === selectedCopy.generation_round)
-        .indexOf(selectedCopy) + 1
-    : null;
-
-  return (
-    <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1fr_320px]">
-      <div className="flex flex-col gap-4">
-        <div className="flex items-center justify-between">
-          <Button size="sm" variant="outline" onClick={() => setShowPrompt((v) => !v)}>
-            顯示提示詞
-          </Button>
-        </div>
-
-        {product.versions.length === 0 && (
-          <EmptyState title="還沒有生成過" description="按上方「再生成」開始第一輪。" />
-        )}
-
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          {product.versions.map((version, i) => {
-            const selected = Boolean(version.selected_at);
-            return (
-              <div
-                key={version.id}
-                className={cn(
-                  "surface flex flex-col gap-2 p-3",
-                  selected && "ring-2 ring-primary",
-                )}
-              >
-                <div className="flex items-center justify-between">
-                  <span className="flex size-6 items-center justify-center rounded-full bg-muted text-xs font-semibold text-foreground">
-                    {i + 1}
-                  </span>
-                  {selected && <Badge className="bg-primary/10 text-primary">已選定</Badge>}
-                </div>
-                {showPrompt || !imageGeneration.connected ? (
-                  <div className="flex flex-col gap-2">
-                    {(version.prompt_cards ?? []).map((card) => (
-                      <div key={card.label} className="rounded-md border border-border p-2 text-xs">
-                        <div className="mb-1 flex items-center justify-between gap-2">
-                          <span className="font-medium text-foreground">{card.label}</span>
-                          <CopyIconButton getText={() => card.text} ariaLabel={`複製${card.label}`} />
-                        </div>
-                        <p className="whitespace-pre-wrap text-muted-foreground">{card.text}</p>
-                      </div>
-                    ))}
-                    {(version.prompt_cards ?? []).length === 0 && (
-                      <p className="text-xs text-muted-foreground">{imageGeneration.reason}</p>
-                    )}
-                  </div>
-                ) : (
-                  <div className="flex h-40 items-center justify-center rounded-md bg-muted text-xs text-muted-foreground">
-                    {imageGeneration.reason}
-                  </div>
-                )}
-                <VersionBadge
-                  version={version}
-                  onSelect={() => onSelect(version.id, selected)}
-                  onSimilar={onSimilar}
-                  onEdit={onEdit}
-                  disabled={locked}
-                />
-              </div>
-            );
-          })}
-        </div>
-
-        {product.versions.length > 0 && (
-          <CopyIconButton
-            getText={() =>
-              product.versions
-                .flatMap((v) => v.prompt_cards ?? [])
-                .map((c) => `${c.label}\n${c.text}`)
-                .join("\n\n")
-            }
-            label="複製全部"
-            ariaLabel="複製全部提示詞"
-            className="w-fit"
-          />
-        )}
-      </div>
-
-      <div className="flex flex-col gap-4">
-        <div className="surface">
-          <div className="surface-header">
-            <h2>生成設定</h2>
-          </div>
-          <div className="surface-body flex flex-col gap-2">
-            {set.generation_settings.map((row) => (
-              <div key={row.label} className="flex items-start justify-between gap-3 text-sm">
-                <span className="shrink-0 text-muted-foreground">{row.label}</span>
-                <span className="text-right text-foreground">{row.text}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        <div className="surface">
-          <button
-            type="button"
-            onClick={() => setPromptOpen((v) => !v)}
-            className="surface-header flex w-full items-center justify-between text-left"
-          >
-            <h2>查看 Prompt</h2>
-            <ChevronDown className={cn("size-4 transition-transform", promptOpen && "rotate-180")} />
-          </button>
-          {promptOpen && (
-            <div className="surface-body flex flex-col gap-2">
-              {promptCards.length === 0 && (
-                <p className="text-sm text-muted-foreground">還沒有提示詞。</p>
-              )}
-              {promptCards.map((card) => (
-                <div key={card.label} className="text-sm">
-                  <p className="font-medium text-foreground">{card.label}</p>
-                  <p className="whitespace-pre-wrap text-muted-foreground">{card.text}</p>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-
-        {copyProduct && selectedCopy && (
-          <div className="surface">
-            <div className="surface-header">
-              <h2>已選文案（第 {selectedCopyIndex} 版）</h2>
-              <button
-                type="button"
-                onClick={() => onSwitchPart("copy")}
-                className="text-xs text-primary hover:underline"
-              >
-                更換版本 ↗
-              </button>
-            </div>
-            <div className="surface-body flex flex-col gap-1 text-sm">
-              <p className="text-foreground">{String(selectedCopy.body?.headline ?? "")}</p>
-              <p className="text-muted-foreground">{String(selectedCopy.body?.description ?? "")}</p>
-            </div>
-          </div>
-        )}
-      </div>
     </div>
   );
 }

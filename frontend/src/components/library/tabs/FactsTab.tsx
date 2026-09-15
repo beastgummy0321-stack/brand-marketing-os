@@ -1,6 +1,7 @@
 import { useMemo, useState, type ReactNode } from "react";
 import { EmptyState } from "@/components/layout/EmptyState";
 import { Pager } from "@/components/layout/Pager";
+import { VisualSpecWarnings } from "@/components/workbench";
 import { deleteFact, type LibraryBrandFact } from "@/lib/libraryApi";
 import { usePagination } from "@/lib/usePagination";
 import { cn } from "@/lib/utils";
@@ -50,6 +51,8 @@ export function FactsTab({
 
   return (
     <div className="flex flex-col gap-6">
+      <VisualSpecWarnings brandId={brandId} />
+
       <div className="flex items-center justify-between">
         <h2 className="font-display text-lg text-foreground">品牌事實</h2>
         <button
