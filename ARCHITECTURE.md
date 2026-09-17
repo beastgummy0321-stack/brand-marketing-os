@@ -263,7 +263,7 @@
     "app/llm/pricing.py"
   ],
   "verify": {
-    "test": "uv run python -m pytest app/tests -q -n 8 --dist loadfile && cd frontend && npm test",
+    "test": "uv run python -m pytest app/tests -q -n 4 --dist loadfile && cd frontend && npm test",
     "typecheck": "uv run ruff check app && uv run python -m pyright && cd frontend && npm run lint && npm run depcruise && npx vitest run src/architectureBoundaries.test.ts",
     "build": "cd frontend && npm run build",
     "build_outputs": ["frontend/dist"],

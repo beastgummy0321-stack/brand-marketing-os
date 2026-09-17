@@ -41,6 +41,8 @@ def brief_text(brief: dict, product_name: str | None) -> str:
         # 的參考——舊版那句只當語氣延續參考、非必須照抄的講法，在座標歸樹之後不再成立。
         lines.append(
             "這個節點的座標（文案照這組座標寫）：" + json.dumps(coordinates, ensure_ascii=False)
+            + "\n例外：優惠與證明分類不是已確認事實；須另有已確認來源，"
+            "否則使用無優惠／無證明。"
         )
     lines.append(f"visual_tone：{brief.get('visual_tone') or '（無）'}")
     lines.append(f"visual_concept：{brief.get('visual_concept') or '（無）'}")
