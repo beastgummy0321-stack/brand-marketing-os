@@ -14,8 +14,8 @@ from datetime import UTC, datetime
 
 from fastapi import APIRouter, Request
 
-from app.brand_intelligence import repository as bi
 from app import workbench
+from app.brand_intelligence import repository as bi
 from app.shared import web
 from app.shared.web import require_actor
 
