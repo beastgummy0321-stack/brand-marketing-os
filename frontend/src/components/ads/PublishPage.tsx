@@ -9,11 +9,21 @@ import {
   getPublish,
   publishCampaign,
   type AdapterKey,
+  type AdapterOption,
   type CampaignDetail,
   type PublishChecklistNode,
   type PublishDescribe,
 } from "@/lib/adsApi";
+import { fetchChannels, type Channel } from "@/lib/adsLaunchApi";
 import { StepButton } from "./nextStep";
+import { Disclosure } from "./patterns";
+
+const OPTIONAL_HANDOFF_FIELDS = new Set([
+  "平台活動 ID（手動紀錄）",
+  "平台投放組 ID（手動紀錄）",
+  "廣告對應（每行：系統廣告 ID = 平台廣告 ID）",
+  "實際執行差異與核對紀錄",
+]);
 
 /** 逐節點是否已經全部綁定——用來算「配對完成：n／m」，不去解析後端訊息字串
  * （§0「the browser must not re-word it」，訊息只能原樣印）。 */
@@ -29,6 +39,20 @@ function bindCounts(c: CampaignDetail): { matched: number; total: number } {
 }
 
 function NodeCard({ node }: { node: PublishChecklistNode }) {
+  const essential = node.fields.filter((field) => !OPTIONAL_HANDOFF_FIELDS.has(field.label));
+  const optional = node.fields.filter((field) => OPTIONAL_HANDOFF_FIELDS.has(field.label));
+  const fields = (rows: PublishChecklistNode["fields"]) => rows.map((field) => (
+    <div key={field.label} className="border-t border-border py-2 first:border-t-0">
+      <div className="flex items-center gap-2">
+        <span className="w-28 shrink-0 text-xs text-muted-foreground">{field.label}</span>
+        <span className="flex-1 truncate text-sm">{String(field.value)}</span>
+        <CopyIconButton ariaLabel={`複製${field.label}`} getText={() => String(field.value)} />
+      </div>
+      {(String(field.value) === "尚未填寫" || field.label === "人工上架設定狀態") && (
+        <p className="mt-1 pl-28 text-xs text-warning">{field.reason}</p>
+      )}
+    </div>
+  ));
   return (
     <div className="surface" style={node.level === "ad" ? { marginLeft: 24 } : undefined}>
       <div className="surface-header">
@@ -40,13 +64,10 @@ function NodeCard({ node }: { node: PublishChecklistNode }) {
             <AlertTriangle size={12} /> 名稱要一字不差，配對靠它
           </p>
         )}
-        {node.fields.map((f) => (
-          <div key={f.label} className="flex items-center gap-2 border-t border-border py-1.5 first:border-t-0">
-            <span className="w-24 shrink-0 text-xs text-muted-foreground">{f.label}</span>
-            <span className="flex-1 truncate text-sm">{String(f.value)}</span>
-            <CopyIconButton ariaLabel={`複製${f.label}`} getText={() => String(f.value)} />
-          </div>
-        ))}
+        {fields(essential)}
+        {optional.length > 0 && <Disclosure label="選填 ID 與核對紀錄">
+          {fields(optional)}
+        </Disclosure>}
       </div>
     </div>
   );
@@ -78,14 +99,14 @@ export function PublishPage({
   const [state, setState] = useState<
     | { status: "loading" }
     | { status: "error"; message: string }
-    | { status: "ready"; describe: PublishDescribe }
+    | { status: "ready"; adapters: AdapterOption[]; describe: PublishDescribe }
   >({ status: "loading" });
+  const [channels, setChannels] = useState<Channel[] | null>(null);
 
   const load = useCallback(() => {
     setState({ status: "loading" });
-    const request = getPublish(brandId, c.id, adapter).then((res) => res.describe);
-    request
-      .then((describe) => setState({ status: "ready", describe }))
+    getPublish(brandId, c.id, adapter)
+      .then((response) => setState({ status: "ready", adapters: response.adapters, describe: response.describe }))
       .catch((err: unknown) =>
         setState({ status: "error", message: err instanceof Error ? err.message : "讀取發布方式失敗。" }),
       );
@@ -93,8 +114,22 @@ export function PublishPage({
 
   useEffect(load, [load]);
 
-  const title = adapter === "manual" ? "手動上架準備" : adapter === "simulated" ? "模擬發布（演練）" : "選擇上架方式";
+  useEffect(() => {
+    let cancelled = false;
+    setChannels(null);
+    fetchChannels(brandId)
+      .then((rows) => { if (!cancelled) setChannels(rows); })
+      .catch(() => { /* 平台資料未知時不阻斷既有手動清單。 */ });
+    return () => { cancelled = true; };
+  }, [brandId]);
+
+  const adapterLabel = state.status === "ready" ? state.adapters.find((item) => item.key === adapter)?.label : null;
+  const title = adapter === "manual" ? `${adapterLabel ?? "手動上架"}準備` : adapter === "simulated" ? "模擬發布（演練）" : "選擇上架方式";
   const missing = c.asset_readiness.total - c.asset_readiness.ready_count;
+  const platformRows = [...new Set(c.groups.map((group) => group.channel_key))].map((key) => {
+    const channel = channels?.find((item) => item.key === key);
+    return { key, label: channel?.label ?? key, connected: channel?.connected ?? null, state: channel?.state_text ?? "連線狀態未知" };
+  });
 
   return (
     <div className="flex flex-col gap-4">
@@ -132,6 +167,14 @@ export function PublishPage({
           brandId={brandId}
           campaign={c}
           describe={state.describe}
+          adapterLabel={state.adapters.find((item) => item.key === "manual")?.label ?? "手動發布"}
+          platforms={platformRows}
+          pairingPlatform={{
+            key: "meta",
+            label: channels?.find((item) => item.key === "meta")?.label ?? "Meta",
+            connected: channels?.find((item) => item.key === "meta")?.connected ?? null,
+            state: channels?.find((item) => item.key === "meta")?.state_text ?? "連線狀態未知",
+          }}
           onCampaignChange={onCampaignChange}
           onViewPerformance={onViewPerformance}
         />
@@ -149,18 +192,15 @@ export function PublishPage({
             <p className="text-center text-sm text-muted-foreground">
               {state.describe.message ?? "自動發布未接上"}
             </p>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="flex flex-col gap-1">
-                <StepButton onClick={() => onChangeAdapter("manual")}>手動上架準備</StepButton>
-                <p className="text-center text-xs text-muted-foreground">照清單自己在平台上建好，再回來配對</p>
-              </div>
-              <div className="flex flex-col gap-1">
-                <StepButton variant="outline" onClick={() => onChangeAdapter("simulated")}>
-                  模擬發布（演練）
-                </StepButton>
-                <p className="text-center text-xs text-muted-foreground">演練用，產生示意成效，不會真的投放</p>
-              </div>
-            </div>
+            <p className="text-center text-sm">
+              平台：{platformRows.length ? platformRows.map((row) => `${row.label}（${row.state}）`).join("、") : "尚未建立投放組"}
+            </p>
+            {state.adapters.some((item) => item.key === "manual") ? <div className="flex flex-col gap-1">
+              <StepButton onClick={() => onChangeAdapter("manual")}>
+                {state.adapters.find((item) => item.key === "manual")?.label ?? "手動發布"}準備
+              </StepButton>
+              <p className="text-center text-xs text-muted-foreground">照清單在平台完成設定，再回來配對；目前只記錄準備，不代表已上線。</p>
+            </div> : <p className="text-center text-sm text-warning">目前回傳的上架方式不包含手動準備。</p>}
           </div>
         </div>
       )}
@@ -172,12 +212,18 @@ function ManualPublish({
   brandId,
   campaign: c,
   describe,
+  adapterLabel,
+  platforms,
+  pairingPlatform,
   onCampaignChange,
   onViewPerformance,
 }: {
   brandId: string;
   campaign: CampaignDetail;
   describe: PublishDescribe;
+  adapterLabel: string;
+  platforms: { key: string; label: string; connected: boolean | null; state: string }[];
+  pairingPlatform: { key: string; label: string; connected: boolean | null; state: string };
   onCampaignChange: (campaign: CampaignDetail) => void;
   onViewPerformance: () => void;
 }) {
@@ -191,6 +237,10 @@ function ManualPublish({
 
   const counts = bindCounts(c);
   const allBound = attempted && bindMessage === null && counts.matched === counts.total;
+  const campaignUsesPairingPlatform = Boolean(platforms.length > 0
+    && platforms.every((platform) => platform.key === pairingPlatform.key));
+  const connectedForPairing = pairingPlatform.connected === true && campaignUsesPairingPlatform;
+  const platformNames = platforms.map((platform) => platform.label).join("、") || "平台";
 
   async function confirmPreparation() {
     setConfirming(true);
@@ -205,6 +255,7 @@ function ManualPublish({
   }
 
   async function handleBind() {
+    if (!connectedForPairing) return;
     setBinding(true);
     setBindError(null);
     try {
@@ -222,9 +273,9 @@ function ManualPublish({
   return (
     <div className="flex flex-col gap-3">
       <div className="surface p-4 text-sm space-y-2">
-        <p className="font-semibold">確認手動上架準備</p>
-        <p>只在本系統記錄手動上架意圖與預算核准，不會在 Meta 建立廣告或花費廣告費，也不代表已上線。</p>
-        <p>平台：Meta；此步驟不選擇或寫入任何廣告帳戶。之後配對會查詢這個品牌已綁定的帳戶。</p>
+        <p className="font-semibold">1. 記錄{adapterLabel}準備</p>
+        <p>只在本系統記錄手動上架意圖與預算核准，不會在平台建立廣告或花費廣告費，也不代表已上線。</p>
+        <p>平台：{platforms.length ? platforms.map((platform) => `${platform.label}（${platform.state}）`).join("、") : "尚未建立投放組"}。此步驟不選擇或寫入任何廣告帳戶。</p>
         <p>期間：{c.start_date || "未設定"} ～ {c.end_date || "未設定"}；每日預算合計：{c.groups.reduce((sum, g) => sum + g.daily_budget, 0).toLocaleString()}；期間總預算：{c.budget_total?.toLocaleString() ?? "未設定"}。</p>
         <p>確認後，本系統會以目前預算作為後續調整的核准上限。</p>
         {!confirmed ? <Button disabled={confirming} onClick={() => void confirmPreparation()}>{confirming ? "記錄中…" : "確認並記錄手動上架準備"}</Button> : <p role="status">已記錄手動上架準備；請在平台完成設定後再配對。</p>}
@@ -233,12 +284,35 @@ function ManualPublish({
         <NodeCard key={`${node.level}:${node.id}`} node={node} />
       ))}
 
+      <div className="surface p-4 text-sm">
+        <p className="font-semibold">2. 在{platformNames}完成必要設定</p>
+        <p className="mt-1 text-muted-foreground">逐項使用上方名稱、素材、預算與追蹤設定。完成平台操作不會自動改成本系統的已上線狀態。</p>
+      </div>
+
       <div className="surface">
         <div className="surface-body flex flex-col items-center gap-2 py-6 text-center">
+          <p className="font-semibold">3. 回到系統配對</p>
+          <p className="text-sm text-muted-foreground">
+            目前僅支援與 {pairingPlatform.label} 配對；其他平台目前可使用準備清單。
+          </p>
           {bindError && <p className="text-sm text-danger">{bindError}</p>}
+          {pairingPlatform.connected === false && <div className="flex flex-col items-center gap-2">
+            <p className="text-sm text-warning">
+              {pairingPlatform.label} 顯示{pairingPlatform.state}；先完成 Meta 廣告連線，才能開始配對。
+            </p>
+            <Button variant="outline" asChild>
+              <a href="/settings?tab=meta">前往 Meta 廣告連線</a>
+            </Button>
+          </div>}
+          {pairingPlatform.connected == null && campaignUsesPairingPlatform && <p className="text-sm text-warning">
+            {pairingPlatform.label} 連線狀態目前無法確認，暫時不能配對。
+          </p>}
+          {platforms.length > 0 && !campaignUsesPairingPlatform && <p className="text-sm text-warning">
+            這個 Campaign 的平台目前不能使用 {pairingPlatform.label} 配對；仍可使用上方準備清單。
+          </p>}
           {!attempted ? (
-            <Button onClick={() => void handleBind()} disabled={binding || !confirmed}>
-              {binding ? "配對中…" : "我已在 Meta 建好，開始配對"}
+            <Button onClick={() => void handleBind()} disabled={binding || !confirmed || !connectedForPairing}>
+              {binding ? "配對中…" : `我已在${pairingPlatform.label}建好，開始配對`}
             </Button>
           ) : allBound ? (
             <>
@@ -260,7 +334,7 @@ function ManualPublish({
                   <p className="text-sm">{bindMessage}</p>
                 </div>
               )}
-              <Button onClick={() => void handleBind()} disabled={binding || !confirmed}>
+              <Button onClick={() => void handleBind()} disabled={binding || !confirmed || !connectedForPairing}>
                 {binding ? "配對中…" : "重新配對"}
               </Button>
             </div>

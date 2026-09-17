@@ -10,6 +10,12 @@ vi.mock("@/lib/adsApi", () => ({ createCampaign: vi.fn() }));
 function view(brandId: string) { return render(<MemoryRouter><NewCampaignPage brandId={brandId} /></MemoryRouter>); }
 beforeEach(() => { sessionStorage.clear(); });
 describe("campaign draft", () => {
+  it("建立頁只保留一次流程說明與必要輸入", () => {
+    view("simple");
+    expect(screen.getByLabelText("你這次想做到什麼？")).toBeTruthy();
+    expect(screen.getByText(/幫你整理投放策略、預算、素材與排程/)).toBeTruthy();
+    expect(screen.queryByText("行銷駕駛艙會自動幫你整理")).toBeNull();
+  });
   it("restores fields after leaving and isolates another brand", async () => {
     const user = userEvent.setup();
     const first = view("a");

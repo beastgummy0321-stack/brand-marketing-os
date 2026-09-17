@@ -248,6 +248,7 @@ export function StrategyTab({
   const productEconomicsHref = productId
     ? `/brands/${brandId}/products/${productId}?tab=economics-view`
     : `/brands/${brandId}/products`;
+  const missingHandoff = c.manual_handoff?.groups.filter((group) => group.missing.length > 0) ?? [];
 
   const estimatedPurchases =
     c.success_metric === "cpa" && c.success_target !== null && c.success_target > 0 && total !== null
@@ -281,22 +282,7 @@ export function StrategyTab({
               "目標不是 CPA，或還沒有總預算，算不出推估購買。"
             )}
           </p>
-          <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-            <div>
-              <div className="mb-1.5 flex items-center gap-1.5 text-sm font-medium">
-                <Lightbulb size={14} /> 主要原因
-              </div>
-              {strategy.why.length === 0 ? (
-                <p className="text-sm text-muted-foreground">這一輪沒有列出</p>
-              ) : (
-                <ul className="list-disc space-y-1 pl-5 text-sm">
-                  {strategy.why.map((line, i) => (
-                    <li key={i}>{line}</li>
-                  ))}
-                </ul>
-              )}
-            </div>
-            <div>
+          <div>
               <div className="mb-1.5 flex items-center gap-1.5 text-sm font-medium">
                 <HelpCircle size={14} /> 目前最大的未知
               </div>
@@ -309,24 +295,19 @@ export function StrategyTab({
                   ))}
                 </ul>
               )}
-            </div>
-            <div>
-              <div className="mb-1.5 flex items-center gap-1.5 text-sm font-medium">
-                <Target size={14} /> 這輪想學到什麼
-              </div>
-              {(strategy.learning_goals ?? []).length === 0 ? (
-                <p className="text-sm text-muted-foreground">這一輪沒有設定學習目標</p>
-              ) : (
-                <ul className="list-disc space-y-1 pl-5 text-sm">
-                  {(strategy.learning_goals ?? []).map((line, i) => (
-                    <li key={i}>{line}</li>
-                  ))}
-                </ul>
-              )}
-            </div>
           </div>
         </div>
       </div>
+
+      {missingHandoff.length > 0 && <div className="surface p-4 flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <p className="text-sm font-medium">人工上架設定仍有必填資料待補</p>
+          {missingHandoff.map((group) => <p key={group.id} className="text-xs text-muted-foreground">
+            {group.name}：{group.missing.join("、")}
+          </p>)}
+        </div>
+        <Button variant="outline" onClick={() => onChangeTab("structure")}>前往投放結構補齊</Button>
+      </div>}
 
       <div className="flex flex-col gap-1.5">
         {step.id === "strategy_adopt" ? (
@@ -502,7 +483,29 @@ export function StrategyTab({
       )}
 
       <Disclosure label="查看完整判斷">
-        <div className="flex flex-col gap-2">
+        <div className="flex flex-col gap-4">
+          <div>
+            <div className="mb-1.5 flex items-center gap-1.5 text-sm font-medium">
+              <Lightbulb size={14} /> 主要原因
+            </div>
+            {strategy.why.length === 0 ? <p className="text-sm text-muted-foreground">這一輪沒有列出</p> : (
+              <ul className="list-disc space-y-1 pl-5 text-sm">
+                {strategy.why.map((line, i) => <li key={i}>{line}</li>)}
+              </ul>
+            )}
+          </div>
+          <div>
+            <div className="mb-1.5 flex items-center gap-1.5 text-sm font-medium">
+              <Target size={14} /> 這輪想學到什麼
+            </div>
+            {(strategy.learning_goals ?? []).length === 0 ? (
+              <p className="text-sm text-muted-foreground">這一輪沒有設定學習目標</p>
+            ) : (
+              <ul className="list-disc space-y-1 pl-5 text-sm">
+                {(strategy.learning_goals ?? []).map((line, i) => <li key={i}>{line}</li>)}
+              </ul>
+            )}
+          </div>
           <p className="text-sm text-muted-foreground">品牌事實、商品價格、用到的學習</p>
           <Button variant="outline" size="sm" className="w-fit" onClick={() => setBasisOpen(true)}>
             查看策略依據 <ArrowRight size={12} className="ml-1 inline" />
