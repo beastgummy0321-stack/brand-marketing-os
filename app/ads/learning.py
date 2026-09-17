@@ -102,6 +102,8 @@ def write_learning(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str,
         raise ValueError("campaign_unknown")
 
     text = _sentence(detail, verdict, verdict_json, labels)
+    if verdict_json.get("data_source") == "isolated_simulation":
+        text = "【隔離模擬，非市場實證】" + text
     confidence = _confidence(conn, org_id, brand_id, detail, verdict)
     needs_revalidation = _needs_revalidation(conn, brand_id, detail)
 

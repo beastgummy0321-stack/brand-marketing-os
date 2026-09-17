@@ -165,6 +165,9 @@ def generate_outcomes(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: s
     detail = ads_repo.campaign_detail(conn, org_id, brand_id, campaign_id)
     if detail is None:
         raise ValueError("campaign_unknown")
+    recovery = (detail.get("context_json") or {}).get("simulation_recovery")
+    if detail["status"] == "closed" or recovery:
+        return
     start_date = detail["start_date"]
     if start_date is None:
         return  # 沒有排期的 Campaign——沒有天數可以補

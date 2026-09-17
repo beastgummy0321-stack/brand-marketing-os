@@ -118,6 +118,7 @@ export interface ActionRow {
 /** `GET /campaigns/{c}` — 五分頁工作區共用的一份 dict：Campaign 本身欄位 + 推導出來的
  * `budget_total` + 投放組（各自掛著廣告）+ 最新的操作紀錄 + 成效小計。 */
 export interface CampaignDetail extends EntityBinding {
+  simulation_mode?: boolean;
   manual_handoff?: ManualHandoff;
   id: string;
   name: string;

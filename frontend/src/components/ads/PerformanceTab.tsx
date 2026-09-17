@@ -24,6 +24,8 @@ import {
   type CampaignPerformance,
   type SuccessMetric,
 } from "@/lib/adsApi";
+import { ExperimentPlan } from "./ExperimentPlan";
+import { SimulationRecovery } from "./SimulationRecovery";
 import { nextStep, NextStepButton, type StepTarget } from "./nextStep";
 
 // F05-I12：後端一律回傳 `campaign.labels`；預設值只在舊測試 fixture 沒帶這個欄位時頂上
@@ -213,6 +215,9 @@ export function PerformanceTab({
     }
   }
 
+  const comparison = <ExperimentPlan key={`${c.id}:${c.status}`} brandId={brandId} campaignId={c.id} refreshKey={state} onViewPlan={() => onChangeTab("structure")} />;
+  const recovery = <SimulationRecovery key={c.id} brandId={brandId} campaign={c} onChanged={onCampaignChange} onSaved={load} />;
+
   if (!published) {
     return (
       <div className="flex flex-col gap-4">
@@ -221,12 +226,16 @@ export function PerformanceTab({
           description={`Campaign 上線後，這裡會顯示每日花費、${labels.conversion}與 ROAS 趨勢，以及結案時的判定。`}
         />
         <NextStepButton step={nextStep(c)} onChangeTab={onChangeTab} />
+        {recovery}
+        {comparison}
       </div>
     );
   }
 
   return (
     <div className="flex flex-col gap-4">
+      {recovery}
+      {comparison}
       {state.status === "loading" ? (
         <div className="surface">
           <div className="surface-body py-10 text-center text-sm text-muted-foreground">讀取中…</div>
@@ -234,7 +243,7 @@ export function PerformanceTab({
       ) : state.status === "error" ? (
         <EmptyState title="讀取失敗" description={state.message} onAction={load} actionLabel="重新載入" />
       ) : (
-        <PerformanceReady data={state.data} labels={labels} refreshing={refreshing} onRefresh={() => void handleRefresh()} />
+        <PerformanceReady simulated={!!c.simulation_mode || !!c.external_id?.startsWith("sim_")} data={state.data} labels={labels} refreshing={refreshing} onRefresh={() => void handleRefresh()} />
       )}
 
       {(c.status === "live" || c.status === "ended") && (
@@ -285,26 +294,29 @@ export function PerformanceTab({
 }
 
 function PerformanceReady({
+  simulated,
   data,
   labels,
   refreshing,
   onRefresh,
 }: {
+  simulated: boolean;
   data: CampaignPerformance;
   labels: CampaignLabels;
   refreshing: boolean;
   onRefresh: () => void;
 }) {
   const t = data.totals;
+  const source = simulated ? "模擬回收" : "平台回報";
   return (
     <>
       <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-6">
-        <Kpi label="花費" value={formatCurrency(t.spend)} caption="累計花費・平台回報" />
-        <Kpi label={labels.count} value={fmtPurchases(t.purchases)} caption={`累計${labels.conversion}・平台回報`} />
+        <Kpi label="花費" value={formatCurrency(t.spend)} caption={`累計花費・${source}`} />
+        <Kpi label={labels.count} value={fmtPurchases(t.purchases)} caption={`累計${labels.conversion}・${source}`} />
         <Kpi label="CPA" value={fmtCpa(t.cpa)} caption={`花費 ÷ ${labels.conversion}`} />
         <Kpi label="ROAS" value={formatMetaRoas(t.roas_conservative)} caption={`保守值・樂觀 ${formatMetaRoas(t.roas)}`} />
         <Kpi label="點擊率" value={formatPercent(t.ctr)} caption="累計點擊 ÷ 曝光" />
-        <Kpi label="曝光" value={formatCount(t.impressions)} caption="累計曝光・平台回報" />
+        <Kpi label="曝光" value={formatCount(t.impressions)} caption={`累計曝光・${source}`} />
       </div>
 
       <div className="surface">
@@ -453,7 +465,7 @@ function VerdictCard({ brandId, campaign: c }: { brandId: string; campaign: Camp
         {sentence && (
           <div className="field-card">
             <div className="text-xs text-muted-foreground">學習</div>
-            <p className="text-sm">{sentence}</p>
+            <p className="text-sm">{c.simulation_mode && "【隔離模擬，非市場實證】"}{sentence}</p>
             <Link to={`/brands/${brandId}/library`} className="text-xs text-primary hover:underline">
               查看品牌智庫 →
             </Link>
