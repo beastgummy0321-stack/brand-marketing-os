@@ -105,6 +105,7 @@ export function CampaignWorkspace({
 
   return (
     <div className="flex flex-col gap-4">
+      {campaign?.simulation_mode && <p role="status" className="rounded-md bg-warning/10 p-3 text-sm">隔離模擬品牌：成效與學習只供演練，不代表真實投放。</p>}
       <PageHeader
         title={campaign ? campaign.name : "Campaign"}
         description={campaign ? `${brandName} ・ ${periodLabel(campaign)}` : undefined}
