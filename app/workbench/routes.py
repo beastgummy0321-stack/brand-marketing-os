@@ -20,7 +20,7 @@ from fastapi import APIRouter, Request
 from pydantic import BaseModel
 
 import app.shared.web as web
-from app.workbench import free_parse, identity, repository, visual
+from app.workbench import claims, free_parse, identity, repository, visual
 
 router = APIRouter(prefix="/api/workbench")
 
@@ -141,6 +141,7 @@ def set_pack_completion(request: Request, brand_id: str, pack_id: str, body: Com
 _APPROVE_ERRORS = {
     "pack_unknown": (404, PACK_UNKNOWN_MESSAGE),
     "completion_incomplete": (409, "還有完成條件沒有滿足。"),
+    "claim_unconfirmed": (409, claims.MESSAGE),
 }
 
 
@@ -211,6 +212,7 @@ _RUN_PRODUCT_ERRORS = {
     "brief_closed": (409, "這個素材組已經關閉。"),
     "round_running": (409, "上一輪還在跑，請等它跑完再按。"),
     "pack_approved": (409, repository.PACK_APPROVED_MESSAGE),
+    "claim_unconfirmed": (409, claims.MESSAGE),
 }
 
 
@@ -235,6 +237,7 @@ _SELECT_ERRORS = {
     "output_unknown": (404, "找不到這個版本。"),
     "brief_closed": (409, "這個素材組已經關閉。"),
     "pack_approved": (409, repository.PACK_APPROVED_MESSAGE),
+    "claim_unconfirmed": (409, claims.MESSAGE),
 }
 
 

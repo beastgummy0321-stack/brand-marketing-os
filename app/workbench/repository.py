@@ -16,7 +16,7 @@ from datetime import UTC, datetime
 from app.brand_intelligence import repository as bi_repo
 from app.core import cleanup
 from app.core.db import Conn, ConnProxy, jsonb, new_id
-from app.workbench import image_cards, image_port
+from app.workbench import claims, image_cards, image_port
 from app.workbench import looks as looks_mod
 
 _AnyConn = Conn | ConnProxy
@@ -299,6 +299,17 @@ def adopt_output(conn: _AnyConn, org_id: str, brand_id: str, output_id: str) -> 
     """把這一列標成已採用（`adopted_at`）。這支不是五個匯出之一（契約頁只講讀
     `adopted_output()`），路由層的採用端點是票 03 的事——這裡先把寫入面備好，供票 03 的
     路由與這張票的測試（case 4：round 1 採用之後 round 2 不算數）直接呼叫。"""
+    output = conn.execute(
+        "SELECT o.*, b.product_id FROM workbench_output o"
+        " JOIN workbench_brief b ON b.id = o.brief_id"
+        " WHERE o.org_id = %s AND o.brand_id = %s AND o.id = %s",
+        (org_id, brand_id, output_id),
+    ).fetchone()
+    if output is None:
+        return None
+    candidate = _slice_body(output["part"], output["body_json"], output["version_index"])
+    if claims.unsupported(candidate, claims.sources(conn, brand_id, output["product_id"])):
+        raise ValueError("claim_unconfirmed")
     conn.execute(
         "UPDATE workbench_output SET adopted_at = now()"
         " WHERE org_id = %s AND brand_id = %s AND id = %s",
@@ -1038,6 +1049,16 @@ def approve_pack(conn: _AnyConn, org_id: str, brand_id: str, pack_id: str) -> di
     if row["approved_at"] is None:
         detail = pack_detail(conn, org_id, brand_id, pack_id)
         assert detail is not None
+        selected = conn.execute(
+            "SELECT o.*, b.product_id FROM workbench_output o"
+            " JOIN workbench_brief b ON b.id = o.brief_id"
+            " WHERE o.org_id = %s AND o.brand_id = %s AND b.pack_id = %s"
+            " AND o.adopted_at IS NOT NULL", (org_id, brand_id, pack_id),
+        ).fetchall()
+        for output in selected:
+            candidate = _slice_body(output["part"], output["body_json"], output["version_index"])
+            if claims.unsupported(candidate, claims.sources(conn, brand_id, output["product_id"])):
+                raise ValueError("claim_unconfirmed")
         if not detail["can_approve"]:
             raise ValueError("completion_incomplete")
         conn.execute(
