@@ -689,7 +689,10 @@ def _run(conn, org_id: str, brand_id: str, brief_id: str, part: str, count) -> N
         brand_version = brand_row["knowledge_version"]
 
     claim_sources = claims.sources(conn, brand_id, product_id)
-    brand_context += "\n\n" + claims.policy(claim_sources)
+    knowledge_item_ids = list(dict.fromkeys([
+        *knowledge_item_ids, *[r["id"] for r in claims.prompt_sources(claim_sources)],
+    ]))
+    brand_context = claims.policy(claim_sources) + "\n\n" + brand_context
 
     task_type = f"workbench_{part}"
     department_text = (DEPARTMENTS_DIR / f"{part}.md").read_text(encoding="utf-8")

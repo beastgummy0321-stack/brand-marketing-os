@@ -1,6 +1,6 @@
 """Manual handoff editing API; the existing campaign read returns the same record."""
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, ConfigDict
 
 import app.shared.web as web
@@ -14,12 +14,20 @@ class ManualSettingsBody(BaseModel):
     values: dict[str, str]
 
 
-@router.put("/brands/{brand_id}/campaigns/{campaign_id}/groups/{group_id}/manual-settings")
+def _guard(request: Request, brand_id: str):
+    actor = web.require_actor(request)
+    web.require_brand(brand_id, actor)
+    return actor
+
+
+@router.put(
+    "/brands/{brand_id}/campaigns/{campaign_id}/groups/{group_id}/manual-settings",
+    dependencies=[Depends(_guard)],
+)
 def put_settings(
     request: Request, brand_id: str, campaign_id: str, group_id: str, body: ManualSettingsBody
 ):
     actor = web.require_actor(request)
-    web.require_brand(brand_id, actor)
     try:
         manual_settings.save(
             web.conn,

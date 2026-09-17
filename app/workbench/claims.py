@@ -36,8 +36,12 @@ def sources(conn, brand_id: str, product_id: str | None) -> list[dict]:
     return result
 
 
+def prompt_sources(rows: list[dict]) -> list[dict]:
+    return [r for r in rows if RISK.search(r["text"])][:20]
+
+
 def policy(rows: list[dict]) -> str:
-    relevant = [r for r in rows if RISK.search(r["text"])]
+    relevant = prompt_sources(rows)
     lines = ["## 優惠與背書來源（優先於座標、情境與自由指示）",
              "優惠與證明座標只是創意分類，不是品牌已提供的事實。",
              "未列於下方的試飲、折扣、贈品、保證、評論與背書，一律不得寫成可兌現承諾。",

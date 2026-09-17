@@ -19,7 +19,7 @@
 
 - `uv sync --frozen`；pytest 前移除 shell 的 `BRAND_OS_LLM_PROVIDER=codex_cli`，避免覆蓋測試假供應商。
 - 測試 schema DDL 若遇到 PostgreSQL `DeadlockDetected`，只重試一次完整、已回滾的批次；第二次 deadlock 與其他 SQL 錯誤照常失敗。鎖循環／重試上限回歸見 `app/tests/test_schema_ddl.py`，不序列化測試本體。
-- 本機完整後端套件使用 `-n 8 --dist loadfile`：20 核主機的 auto 曾耗盡 Postgres 100 條連線；loadfile 維持各測試檔的 DB/schema 隔離。不要因此改動 CI 的環境配置。
+- 本機完整後端套件使用 `-n 4 --dist loadfile`：2026-09-17 F09 整合時 8 個程序加既有服務耗盡 Postgres 連線並逾時，因此降低本機平行數；測試案例與斷言不變。20 核主機的 auto 也曾耗盡 100 條連線。loadfile 維持各測試檔的 DB/schema 隔離，不改 CI 配置。
 - `supabase start`；migration 只在授權且確認共享 DB 沒有其他工作依赖時套用一次，放 `privileged`，不放會重跑的 verify。`supabase db reset` 會刪除 seed 外資料與帳號；本機測試資料可重建不代表 worker 可越過 touch 或干擾別人的測試。
 - seed 登入資訊與啟動方式見 [CLAUDE.md](../CLAUDE.md)。長駐 8710 不保證是本次程式，實機驗收須重啟對應後端。
 
