@@ -261,12 +261,13 @@ describe("StrategyTab（F04-I14）", () => {
     expect(screen.getByText(/用的是假設：單品的成交率假設 20%/)).toBeTruthy();
   });
 
-  it("learning_goals 空陣列印「這一輪沒有設定學習目標」；有三條時三條都在畫面上", () => {
+  it("learning_goals 收在詳情，展開後空陣列與三條內容都如實顯示", async () => {
+    const user = userEvent.setup();
     const c = campaign();
     const { rerender } = renderWithRouter(
       <StrategyTab brandId="brd_1" campaign={c} onCampaignChange={vi.fn()} onChangeTab={vi.fn()} />,
     );
-    expect(screen.getByText("這一輪沒有設定學習目標")).toBeTruthy();
+    expect(screen.queryByText("這一輪沒有設定學習目標")).toBeNull();
 
     const withGoals = campaign({
       budget_basis_json: {
@@ -282,9 +283,35 @@ describe("StrategyTab（F04-I14）", () => {
         <StrategyTab brandId="brd_1" campaign={withGoals} onCampaignChange={vi.fn()} onChangeTab={vi.fn()} />
       </MemoryRouter>,
     );
+    await user.click(screen.getByRole("button", { name: "查看完整判斷" }));
     expect(screen.getByText("學習目標一")).toBeTruthy();
     expect(screen.getByText("學習目標二")).toBeTruthy();
     expect(screen.getByText("學習目標三")).toBeTruthy();
+  });
+
+  it("主要原因與學習目標收在完整判斷；影響判讀的未知直接顯示", async () => {
+    const user = userEvent.setup();
+    renderTab(campaign());
+    expect(screen.getByText("新受眾的實際轉換率仍需驗證")).toBeTruthy();
+    expect(screen.queryByText("主要原因")).toBeNull();
+    expect(screen.queryByText("這一輪沒有設定學習目標")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "查看完整判斷" }));
+    expect(screen.getByText("主要原因")).toBeTruthy();
+    expect(screen.getByText("這一輪沒有設定學習目標")).toBeTruthy();
+  });
+
+  it("人工上架必填缺漏直接列出 entity 與欄位，按鈕只承諾前往投放結構", async () => {
+    const user = userEvent.setup();
+    const { onChangeTab } = renderTab(campaign({
+      manual_handoff: {
+        fields: [], pending_count: 1,
+        groups: [{ id: "grp_1", name: "新客組", values: {}, missing: ["版位", "歸因期間"],
+          status: "待補", saved_at: null, saved_by: null, ads: [] }],
+      },
+    }));
+    expect(screen.getByText("新客組：版位、歸因期間")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "前往投放結構補齊" }));
+    expect(onChangeTab).toHaveBeenCalledWith("structure");
   });
 
   it("已刪掉的永遠 disabled 採用按鈕不再出現", () => {
