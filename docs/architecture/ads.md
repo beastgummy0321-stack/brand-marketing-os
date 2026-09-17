@@ -26,8 +26,11 @@ git history (retired F03 plan). Current visual references are in `docs/design/ad
 3. **Budget lives in 投放中心.** Money is allocated at the 投放組 level only; the 廣告 level shows
    observed spend share. Breakeven CPA uses the conversion-value formula in `docs/architecture/intake.md` §8.2
    (goods omit close_rate; services multiply by it), target CPA =
-   breakeven × 0.7. No spend history → 日預算 = target CPA × 每天想要的購買數 (最低 2 ／推薦 5 ／
+   breakeven × 0.7. No spend history → 日預算 = Campaign 目前明確設定的 CPA × 每天想要的購買數 (最低 2 ／推薦 5 ／
    積極 10), labelled 冷啟動估算; with history → 近 30 天 CPA 中位數, scenarios ×0.6 ／×1 ／×1.6.
+   F09: 商品損益推算可供設定目標參考，但不能冒充 Campaign 已確認的 CPA。成功條件或日期改變時，
+   情境讀取與選用皆重算；沒有有效 CPA 就回未知。已選 `budget_planned` 與投放組預算不自動改動。
+   畫面列出公式、天數、原選金額與超出上限的情境。歷史模式保留原日預算依據，只重算期間總額。
    Every number is editable; the AI only prefills. The 設定 page's 檔期日預算 card goes away.
    After 採用策略 the **group daily budgets are the single source of truth**; the campaign row keeps
    the adopted scenario amount as `budget_planned` for the record, and the total on screen is
@@ -88,14 +91,10 @@ image and the 09-12 prototype differ, the image wins; the prototype is history.
     (≤3 sentences) next to `why[]` and `unknowns[]`, stored inside `budget_basis_json.strategy`,
     rendered as the strategy page's third column so F05's 結案 can answer it. 預估購買 =
     採用總額 ÷ 目標 CPA, captioned 推估（CPA 不變的算術）, computed in code, never 預估觸及.
-13. **Reserved seats are named, not built.** 「MarketingOS 為你執行中」 (home + 總覽) and
-    「進階設定」 (策略頁: 平台結構／受眾／版位／出價／優化事件／歸因／追蹤／UTM) are grey
-    placeholder cards reading 「自動執行接上後開放」／「自動發布接上後開放」 — never phrased as a
-    refusal. Their future readers are recorded here and created nowhere else: the execution feed
-    will read `ads_action` rows with `sync_state = 'auto_synced'`, and the advanced panel will
-    write `platform_settings_json` on `ads_delivery_group` — **that column does not exist and is
-    not created until an adapter writes it.** 「需要你決定」 has no producer in F04 (suggestions are
-    F05) and renders its honest empty 「目前沒有需要你決定的事」.
+13. **人工上架設定不等待自動發布（F09）**。策略頁進階區連到投放結構的「人工上架設定與平台對應」。
+    既有「MarketingOS 為你執行中」仍為自動執行預留位置。人工紀錄規則見 §6.4，
+    不新增 `ads_delivery_group.platform_settings_json`，也不代表自動 Meta 發布已接上。
+
 14. **The strategy page's buttons do what they say.** 照這個方式進行 = adopt the recommended
     scenario if none is chosen, adopt the strategy, land on 投放結構 — one click from a newcomer's
     point of view. 調整建議 = edit the allocation percentages inline before adopting (sum 100, the
@@ -205,3 +204,15 @@ F07: the fingerprint on every item (§5.7) and which item became the hero (the �
     No `style_key`, no `image_prompt_count`. The manual checklist's 圖片提示詞 is the adopted row's
     `body_json.text`, only when `is_adopted`.
 
+
+
+### 6.4 瀏覽器稽核 P1：人工上架交接（F09）
+
+- 每個 Campaign 的 `context_json.manual_delivery[group_id]` 保存該組的受眾來源與納入條件、
+  回溯、排除、受眾 ID、版位、出價、優化事件、歸因、追蹤、落地頁、UTM 及上架後差異。
+  原有投放組名稱、預算與日期是唯一來源，手動清單採用它們；不在設定另存一份。
+- 平台活動／投放組 ID 與廣告 ID 對應是手動紀錄，不能冒充 `external_id` 綁定、平台已存在或已同步。
+  廣告對應僅接受該投放組的廣告；品牌、組織、Campaign、投放組必須同屬。結案後不可改寫。
+- 欄位可先部分保存；缺漏顯示待補，再行銷額外要求受眾 ID。欄位填齊只代表「資料已填齊，待平台核對」，
+  不是系統已驗證受眾池存在或可投放。缺漏與完整紀錄一起進入既有人工發布清單。
+- 不對外寫入、不呼叫模型、不改變預算或發布／同步狀態。本輪不擴充模擬回收、正式 CSV 匯入或自動發布。

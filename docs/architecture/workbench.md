@@ -64,9 +64,18 @@ in git history (retired F02 prototype); where a prototype and an image differ, t
    unreachable from the new screens; the pack's own origin is `source_kind = "free_job"`, so the
    two words never collide. New packs ask only for `copy`／`image_prompt`／`video_script`, and the
    API owns the one label map (文案／圖片／腳本).
-5. **核准整包 never blocks anyone.** 完成條件 is three checks: 「完成所有素材組的必要文案與圖片」
+5. **核准整包：完成條件可人工覆核；承諾來源檢查不可略過（F09）。** 完成條件 is three checks: 「完成所有素材組的必要文案與圖片」
    (computed from §5.3), 「確認內容符合品牌規範」 and 「可核准整包並回報上游」 (human ticks). The
    computed check may be overridden by a person; the override warns, and the warning is skippable.
+   F09 adds a separate non-overridable promise-source check at version adoption and pack approval.
+   Creative offer/proof coordinates, pack summaries and prior model output are not evidence.
+   Copy, image and video generation receive the same source policy: use no offer/endorsement when
+   confirmed evidence is absent. The conservative deterministic guard in `app/workbench/claims.py`
+   covers common trial/discount/gift/guarantee/endorsement expressions; recognized promises require
+   exact confirmed brand/product statements or approved claims, plus a fulfilment location for offers.
+   Pending, forbidden, high-risk and other-product claims cannot authorize them. Existing outputs
+   are rechecked against current sources. This is bounded expression detection, not a universal
+   semantic fact checker; real model wording and unsupported paraphrases remain a validation limit.
    Approving sets the pack to 已完成 and locks its selections. The upstream reads the approval as
    state — `pack_for_source(conn, org_id, brand_id, source_kind, source_ref)` — never as a
    callback, so the dependency stays one-way. 檔期規劃 shows 「素材製作完，可以開始追蹤成效」 when
