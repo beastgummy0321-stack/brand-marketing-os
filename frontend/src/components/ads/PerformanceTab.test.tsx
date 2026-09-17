@@ -1,13 +1,31 @@
 /** frontend/src/components/ads/PerformanceTab.test.tsx — F04-I23: 結案卡片今天只在
  * `status === "ended"` 出現，但那個狀態沒有任何程式會寫——這支測試證明 `live` 也看得到
  * 結案卡、看得到提前結案的說明句，以及確認對話框裡同一句話也在。 */
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import userEvent from "@testing-library/user-event";
 
 import type { AdRow, CampaignDetail, CampaignPerformance, DeliveryGroupRow } from "@/lib/adsApi";
-import { closeCampaign, getPerformance } from "@/lib/adsApi";
+import { closeCampaign, getPerformance, ingestOutcome } from "@/lib/adsApi";
+import { readComparison } from "@/lib/adsExperimentApi";
+import { readSimulation } from "@/lib/adsSimulationApi";
 import { PerformanceTab } from "./PerformanceTab";
+
+vi.mock("@/components/layout/WorkspaceContext", () => ({
+  useWorkspace: () => ({ scope: "user:org" }),
+}));
+
+vi.mock("@/lib/adsExperimentApi", () => ({
+  readComparison: vi.fn(),
+  confirmComparison: vi.fn(),
+  saveComparisonSettings: vi.fn(),
+}));
+
+vi.mock("@/lib/adsSimulationApi", () => ({
+  readSimulation: vi.fn(),
+  saveSimulation: vi.fn(),
+  startSimulation: vi.fn(),
+}));
 
 vi.mock("@/lib/adsApi", async () => {
   const actual = await vi.importActual<typeof import("@/lib/adsApi")>("@/lib/adsApi");
@@ -135,6 +153,15 @@ describe("PerformanceTab 結案卡片（F04-I23）", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(getPerformance).mockResolvedValue(performance());
+    vi.mocked(ingestOutcome).mockResolvedValue(performance());
+    vi.mocked(readComparison).mockResolvedValue({
+      proposal: null, missing: "缺少合格對照", stale: false, closed: false, simulation: false,
+      confirmed: null, result: { verdict: "看不出", reason: "缺資料", values: [] },
+    });
+    vi.mocked(readSimulation).mockResolvedValue({
+      enabled: true, reason: null, started: false, day: "2026-01-01", revision: 0,
+      saved_at: null, saved_by: null, rows: [], closed: false, receipts: {},
+    });
   });
 
   it("live ＋ end_date 在未來：看得到立即結案按鈕與提前結案說明", async () => {
@@ -201,5 +228,60 @@ describe("PerformanceTab 結案卡片（F04-I23）", () => {
     await screen.findByText("花費 ÷ 名單");
     expect(screen.getAllByText("名單數").length).toBeGreaterThan(0);
     expect(screen.getByText("花費 ÷ 名單")).toBeTruthy();
+  });
+
+  it("先顯示主要成果，次要資料與素材比較都要明確展開才讀取", async () => {
+    const user = userEvent.setup();
+    renderTab(campaign({ status: "live" }));
+
+    const result = await screen.findByRole("heading", { name: "目前成果" });
+    const comparison = screen.getByRole("button", { name: "素材比較（選用）" });
+    expect(result.compareDocumentPosition(comparison) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.queryByText("點擊率")).toBeNull();
+    expect(readComparison).not.toHaveBeenCalled();
+    expect(readSimulation).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: "查看每日資料、次要指標與公式" }));
+    expect(screen.getAllByText("點擊率").length).toBeGreaterThan(0);
+    await user.click(comparison);
+    await waitFor(() => expect(readComparison).toHaveBeenCalledWith("brd_1", "cmp_1"));
+  });
+
+  it("一般 Campaign 不掛載模擬回收；隔離模擬也只在內部工具展開後讀取", async () => {
+    const ordinary = renderTab(campaign({ status: "live", simulation_mode: false }));
+    await screen.findByRole("heading", { name: "目前成果" });
+    expect(screen.queryByRole("button", { name: "內部驗收工具（隔離模擬）" })).toBeNull();
+    expect(readSimulation).not.toHaveBeenCalled();
+    ordinary.unmount();
+
+    const user = userEvent.setup();
+    renderTab(campaign({ status: "live", simulation_mode: true }));
+    await screen.findByRole("heading", { name: "目前成果" });
+    expect(readSimulation).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "內部驗收工具（隔離模擬）" }));
+    await waitFor(() => expect(readSimulation).toHaveBeenCalledTimes(1));
+  });
+
+  it("舊 sim_ adapter campaign 仍標示模擬資料，但不開放內部回收工具", async () => {
+    renderTab(campaign({ status: "live", simulation_mode: false, external_id: "sim_legacy" }));
+
+    await screen.findByRole("heading", { name: "目前成果" });
+    expect(screen.getAllByText(/模擬回收/).length).toBeGreaterThan(0);
+    expect(screen.queryByRole("button", { name: "內部驗收工具（隔離模擬）" })).toBeNull();
+    expect(readSimulation).not.toHaveBeenCalled();
+  });
+
+  it("成效重新整理後，已展開的比較同步重新讀取；未使用時仍不讀取", async () => {
+    const user = userEvent.setup();
+    renderTab(campaign({ status: "live" }));
+    await screen.findByRole("heading", { name: "目前成果" });
+    await user.click(screen.getByRole("button", { name: "重新整理成效" }));
+    await waitFor(() => expect(ingestOutcome).toHaveBeenCalledTimes(1));
+    expect(readComparison).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: "素材比較（選用）" }));
+    await waitFor(() => expect(readComparison).toHaveBeenCalledTimes(1));
+    await user.click(screen.getByRole("button", { name: "重新整理成效" }));
+    await waitFor(() => expect(readComparison).toHaveBeenCalledTimes(2));
   });
 });
